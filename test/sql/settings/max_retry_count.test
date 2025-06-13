@@ -1,0 +1,152 @@
+# name: test/sql/settings/max_retry_count.test  
+# description: Test ducklake_max_retry_count configuration reading and usage
+# group: [settings]
+
+require ducklake
+
+require parquet
+
+statement ok
+ATTACH 'ducklake:__TEST_DIR__/ducklake_retry_test.db' AS ducklake (DATA_PATH '__TEST_DIR__/ducklake_retry_test_files');
+
+statement ok
+USE ducklake
+
+# Test 1: Verify default setting
+query I
+SELECT current_setting('ducklake_max_retry_count')
+----
+5
+
+# Test 2: Set to custom value and verify
+statement ok
+SET ducklake_max_retry_count = 3;
+
+query I
+SELECT current_setting('ducklake_max_retry_count')
+----
+3
+
+# Test 3: Create table and insert data to trigger transaction logic
+statement ok
+CREATE TABLE retry_test(id INTEGER, message VARCHAR);
+
+statement ok
+INSERT INTO retry_test VALUES (1, 'test with retry count 3');
+
+# Test 4: Change setting and test again
+statement ok
+SET ducklake_max_retry_count = 7;
+
+query I
+SELECT current_setting('ducklake_max_retry_count')
+----
+7
+
+statement ok
+INSERT INTO retry_test VALUES (2, 'test with retry count 7');
+
+# Test 5: Test session scope
+statement ok
+SET SESSION ducklake_max_retry_count = 2;
+
+query I
+SELECT current_setting('ducklake_max_retry_count')
+----
+2
+
+statement ok
+INSERT INTO retry_test VALUES (3, 'test with retry count 2');
+
+# Test 6: Reset to default
+statement ok
+RESET ducklake_max_retry_count;
+
+query I
+SELECT current_setting('ducklake_max_retry_count')
+----
+5
+
+# Verify all data was inserted correctly
+query II
+SELECT * FROM retry_test ORDER BY id
+----
+1	test with retry count 3
+2	test with retry count 7
+3	test with retry count 2
+
+query I
+SELECT COUNT(*) FROM retry_test
+----
+3
+
+# Test 7: Simple retry behavior test
+statement ok
+SET ducklake_max_retry_count = 2;
+
+# Create a table for retry testing
+statement ok
+CREATE TABLE retry_behavior_test(id INTEGER, data VARCHAR);
+
+# Simple transaction with potential for retries
+statement ok
+BEGIN
+
+statement ok
+INSERT INTO retry_behavior_test VALUES (1, 'test_data_1');
+
+statement ok
+INSERT INTO retry_behavior_test VALUES (2, 'test_data_2');
+
+statement ok
+COMMIT
+
+# Verify the transaction completed successfully
+query II
+SELECT * FROM retry_behavior_test ORDER BY id;
+----
+1	test_data_1
+2	test_data_2
+
+# Test 8: Test with very low retry count
+statement ok
+SET ducklake_max_retry_count = 1;
+
+statement ok
+INSERT INTO retry_behavior_test VALUES (3, 'test_with_low_retry');
+
+# Test 9: with zero retries
+statement ok
+SET ducklake_max_retry_count = 0;
+
+statement ok
+INSERT INTO retry_behavior_test VALUES (4, 'test_with_zero_retry');
+
+# Final verification
+query I
+SELECT COUNT(*) FROM retry_behavior_test;
+----
+4
+
+# Test 10: Test retry behavior with true concurrent transaction conflicts
+statement ok
+CREATE TABLE ducklake.tbl(id INTEGER);
+
+concurrentloop i 0 5
+
+statement ok
+SET ducklake_max_retry_count = 100;
+
+statement ok
+INSERT INTO ducklake.tbl VALUES(${i});
+
+endloop
+
+query I
+SELECT COUNT() FROM ducklake.tbl;
+----
+5
+
+# Reset to default
+statement ok
+RESET ducklake_max_retry_count;

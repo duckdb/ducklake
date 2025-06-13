@@ -1320,11 +1320,18 @@ void DuckLakeTransaction::FlushChanges() {
 		// read-only transactions don't need to do anything
 		return;
 	}
-	// FIXME: this should probably be configurable
+
 	idx_t max_retry_count = 5;
+	Value max_retry_count_value;
+	auto context_ref = context.lock();
+	auto lookup_result = context_ref->TryGetCurrentSetting("ducklake_max_retry_count", max_retry_count_value);
+	if (lookup_result) {
+		max_retry_count = max_retry_count_value.GetValue<idx_t>();
+	}
+
 	auto transaction_snapshot = GetSnapshot();
 	auto transaction_changes = GetTransactionChanges();
-	for (idx_t i = 0; i < max_retry_count; i++) {
+	for (idx_t i = 0; i < max_retry_count + 1; i++) {
 		auto commit_snapshot = GetSnapshot();
 		commit_snapshot.snapshot_id++;
 		if (SchemaChangesMade()) {
