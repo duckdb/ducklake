@@ -343,6 +343,7 @@ struct DuckLakeNameMapColumnInfo {
 	idx_t column_id;
 	string source_name;
 	FieldIndex target_field_id;
+	bool hive_partition = false;
 	optional_idx parent_column;
 };
 
