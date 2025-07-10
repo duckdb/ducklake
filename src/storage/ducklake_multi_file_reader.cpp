@@ -24,6 +24,7 @@
 #include "storage/ducklake_delete.hpp"
 #include "duckdb/function/function_binder.hpp"
 #include "storage/ducklake_inlined_data_reader.hpp"
+#include "duckdb/planner/filter/constant_filter.hpp"
 
 namespace duckdb {
 
@@ -151,8 +152,49 @@ ReaderInitializeType DuckLakeMultiFileReader::InitializeReader(MultiFileReaderDa
 			reader.deletion_filter = std::move(delete_filter);
 		}
 	}
-	return MultiFileReader::InitializeReader(reader_data, bind_data, global_columns, global_column_ids, table_filters,
-	                                         context, gstate);
+	auto result = MultiFileReader::InitializeReader(reader_data, bind_data, global_columns, global_column_ids,
+	                                                table_filters, context, gstate);
+	if (file_entry.snapshot_filter.IsValid()) {
+		// we have a snapshot filter - add it to the filter list
+		// find the column we need to filter on
+		auto &reader = *reader_data.reader;
+		optional_idx snapshot_col;
+		auto snapshot_filter_constant = Value::UBIGINT(file_entry.snapshot_filter.GetIndex());
+		for (idx_t col_idx = 0; col_idx < reader.columns.size(); col_idx++) {
+			auto &col = reader.columns[col_idx];
+			if (col.identifier.type() == LogicalTypeId::INTEGER &&
+			    IntegerValue::Get(col.identifier) == LAST_UPDATED_SEQUENCE_NUMBER_ID) {
+				snapshot_col = col_idx;
+				snapshot_filter_constant = snapshot_filter_constant.DefaultCastAs(col.type);
+				break;
+			}
+		}
+		if (!snapshot_col.IsValid()) {
+			throw InvalidInputException("Snapshot filter was specified but snapshot column was not present in file");
+		}
+		idx_t snapshot_col_id = snapshot_col.GetIndex();
+		// check if the column is currently projected
+		optional_idx snapshot_local_id;
+		for (idx_t i = 0; i < reader.column_ids.size(); i++) {
+			if (reader.column_indexes[i].GetPrimaryIndex() == snapshot_col_id) {
+				snapshot_local_id = i;
+				break;
+			}
+		}
+		if (!snapshot_local_id.IsValid()) {
+			snapshot_local_id = reader.column_indexes.size();
+			reader.column_indexes.emplace_back(snapshot_col_id);
+			reader.column_ids.emplace_back(snapshot_col_id);
+		}
+		if (!reader.filters) {
+			reader.filters = make_uniq<TableFilterSet>();
+		}
+		ColumnIndex snapshot_col_idx(snapshot_local_id.GetIndex());
+		auto snapshot_filter =
+		    make_uniq<ConstantFilter>(ExpressionType::COMPARE_LESSTHANOREQUALTO, std::move(snapshot_filter_constant));
+		reader.filters->PushFilter(snapshot_col_idx, std::move(snapshot_filter));
+	}
+	return result;
 }
 
 shared_ptr<BaseFileReader> DuckLakeMultiFileReader::TryCreateInlinedDataReader(const OpenFileInfo &file) {

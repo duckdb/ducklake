@@ -106,6 +106,7 @@ public:
 	                                                                 DuckLakeSnapshot end_snapshot,
 	                                                                 const string &inlined_table_name,
 	                                                                 const vector<string> &columns_to_read);
+	virtual void DeleteInlinedData(const DuckLakeInlinedTableInfo &inlined_table);
 
 	virtual vector<DuckLakeSnapshotInfo> GetAllSnapshots(const string &filter = string());
 	virtual void DeleteSnapshots(const vector<DuckLakeSnapshotInfo> &snapshots);

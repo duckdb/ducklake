@@ -1,6 +1,6 @@
 # name: test/sql/initialize/ducklake_create_new.test
 # description: test ducklake extension
-# group: [sql]
+# group: [initialize]
 
 require ducklake
 

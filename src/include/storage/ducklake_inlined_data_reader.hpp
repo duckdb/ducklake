@@ -16,6 +16,8 @@ namespace duckdb {
 class DuckLakeFieldData;
 struct DuckLakeFunctionInfo;
 
+enum class InlinedVirtualColumn { NONE, COLUMN_ROW_ID, COLUMN_EMPTY };
+
 class DuckLakeInlinedDataReader : public BaseFileReader {
 public:
 	//! Initialize an inlined data reader over a set of data stored within a table in the metadata catalog
@@ -41,7 +43,7 @@ private:
 	string table_name;
 	shared_ptr<DuckLakeInlinedData> data;
 	bool initialized_scan = false;
-	vector<bool> is_virtual;
+	vector<InlinedVirtualColumn> virtual_columns;
 	int64_t file_row_number = 0;
 	vector<column_t> scan_column_ids;
 	ColumnDataScanState state;

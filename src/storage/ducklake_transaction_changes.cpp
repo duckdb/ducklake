@@ -12,6 +12,9 @@ enum class ChangeType {
 	DROPPED_VIEW,
 	INSERTED_INTO_TABLE,
 	DELETED_FROM_TABLE,
+	INSERTED_INTO_TABLE_INLINED,
+	DELETED_FROM_TABLE_INLINED,
+	FLUSHED_INLINE_DATA_FOR_TABLE,
 	ALTERED_TABLE,
 	ALTERED_VIEW,
 	COMPACTED_TABLE
@@ -52,6 +55,12 @@ ChangeType ParseChangeType(const string &changes_made, idx_t &pos) {
 		return ChangeType::DELETED_FROM_TABLE;
 	} else if (StringUtil::CIEquals(change_type_str, "compacted_table")) {
 		return ChangeType::COMPACTED_TABLE;
+	} else if (StringUtil::CIEquals(change_type_str, "inlined_insert")) {
+		return ChangeType::INSERTED_INTO_TABLE_INLINED;
+	} else if (StringUtil::CIEquals(change_type_str, "inlined_delete")) {
+		return ChangeType::DELETED_FROM_TABLE_INLINED;
+	} else if (StringUtil::CIEquals(change_type_str, "flushed_inlined")) {
+		return ChangeType::FLUSHED_INLINE_DATA_FOR_TABLE;
 	} else {
 		throw InvalidInputException("Unsupported change type %s", change_type_str);
 	}
@@ -145,6 +154,15 @@ SnapshotChangeInformation SnapshotChangeInformation::ParseChangesMade(const stri
 			break;
 		case ChangeType::COMPACTED_TABLE:
 			result.tables_compacted.insert(TableIndex(StringUtil::ToUnsigned(entry.change_value)));
+			break;
+		case ChangeType::INSERTED_INTO_TABLE_INLINED:
+			result.tables_inserted_inlined.insert(TableIndex(StringUtil::ToUnsigned(entry.change_value)));
+			break;
+		case ChangeType::DELETED_FROM_TABLE_INLINED:
+			result.tables_deleted_inlined.insert(TableIndex(StringUtil::ToUnsigned(entry.change_value)));
+			break;
+		case ChangeType::FLUSHED_INLINE_DATA_FOR_TABLE:
+			result.tables_flushed_inlined.insert(TableIndex(StringUtil::ToUnsigned(entry.change_value)));
 			break;
 		default:
 			throw InternalException("Unsupported change type in ParseChangesMade");

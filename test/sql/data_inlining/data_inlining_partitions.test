@@ -1,0 +1,95 @@
+# name: test/sql/data_inlining/data_inlining_partitions.test
+# description: Test data inlining with partitions
+# group: [data_inlining]
+
+require ducklake
+
+require parquet
+
+# partitioning based on a column
+statement ok
+ATTACH 'ducklake:__TEST_DIR__/ducklake_inlining_partitions.db' AS ducklake (DATA_PATH '__TEST_DIR__/ducklake_inlining_partitions', METADATA_CATALOG 'ducklake_metadata', DATA_INLINING_ROW_LIMIT 1000)
+
+statement ok
+USE ducklake
+
+statement ok
+CREATE TABLE partitioned_tbl(id INTEGER, ts TIMESTAMP, values VARCHAR);
+
+statement ok
+ALTER TABLE partitioned_tbl SET PARTITIONED BY (year(ts), month(ts));
+
+loop i 0 10
+
+statement ok
+INSERT INTO partitioned_tbl SELECT i, TIMESTAMP '2020-01-01' + interval (i) hours, concat('thisisastring_', i) FROM range(1000 * ${i}, 1000 * (${i} + 1)) t(i)
+
+endloop
+
+# all data is inlined
+query I
+SELECT COUNT(*) FROM GLOB('__TEST_DIR__/ducklake_inlining_partitions/main/partitioned_tbl/**')
+----
+0
+
+query IIII
+SELECT year(ts), COUNT(*), MIN(values), MAX(values) FROM partitioned_tbl GROUP BY year(ts)
+----
+2020	8784	thisisastring_0	thisisastring_999
+2021	1216	thisisastring_8784	thisisastring_9999
+
+query IIII
+SELECT year(ts), COUNT(*), MIN(values), MAX(values) FROM partitioned_tbl AT (version => 4) GROUP BY year(ts)
+----
+2020	2000	thisisastring_0	thisisastring_999
+
+query I
+SELECT COUNT(*) FROM partitioned_tbl WHERE year(ts) = 2021
+----
+1216
+
+# flush the inlined data
+statement ok
+CALL ducklake_flush_inlined_data('ducklake')
+
+# we now have 14 files
+query I
+SELECT COUNT(*) FROM GLOB('__TEST_DIR__/ducklake_inlining_partitions/main/partitioned_tbl/**')
+----
+14
+
+query IIII
+SELECT year(ts), COUNT(*), MIN(values), MAX(values) FROM partitioned_tbl GROUP BY year(ts)
+----
+2020	8784	thisisastring_0	thisisastring_999
+2021	1216	thisisastring_8784	thisisastring_9999
+
+query IIII
+SELECT year(ts), COUNT(*), MIN(values), MAX(values) FROM partitioned_tbl AT (version => 4) GROUP BY year(ts)
+----
+2020	2000	thisisastring_0	thisisastring_999
+
+query I
+SELECT COUNT(*) FROM partitioned_tbl WHERE year(ts) = 2021
+----
+1216
+
+# verify the result data is partitioned
+query II
+SELECT regexp_extract(path, '.*year=([0-9]+)[/\\].*', 1)::INT AS year_part, regexp_extract(path, '.*month=([0-9]+)[/\\].*', 1)::INT AS month_part
+FROM glob('__TEST_DIR__/ducklake_inlining_partitions/**') t(path) ORDER BY ALL
+----
+2020	1
+2020	2
+2020	3
+2020	4
+2020	5
+2020	6
+2020	7
+2020	8
+2020	9
+2020	10
+2020	11
+2020	12
+2021	1
+2021	2

@@ -89,7 +89,7 @@ COMMIT
 statement error con2
 COMMIT
 ----
-has been dropped by another transaction
+another transaction has dropped it
 
 statement ok
 CREATE TABLE ducklake.test AS FROM range(1000) t(i)
@@ -115,4 +115,4 @@ COMMIT
 statement error con2
 COMMIT
 ----
-has been altered by another transaction
+another transaction has altered it

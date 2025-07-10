@@ -70,6 +70,11 @@ public:
 	DuckLakeExpireSnapshotsFunction();
 };
 
+class DuckLakeFlushInlinedDataFunction : public TableFunction {
+public:
+	DuckLakeFlushInlinedDataFunction();
+};
+
 class DuckLakeSetOptionFunction : public TableFunction {
 public:
 	DuckLakeSetOptionFunction();

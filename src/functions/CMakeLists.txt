@@ -4,6 +4,7 @@ add_library(
   ducklake_add_data_files.cpp
   ducklake_cleanup_old_files.cpp
   ducklake_expire_snapshots.cpp
+  ducklake_flush_inlined_data.cpp
   ducklake_list_files.cpp
   ducklake_snapshots.cpp
   ducklake_merge_adjacent_files.cpp

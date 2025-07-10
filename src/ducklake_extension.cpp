@@ -47,6 +47,9 @@ static void LoadInternal(DatabaseInstance &instance) {
 	DuckLakeExpireSnapshotsFunction expire_snapshots;
 	ExtensionUtil::RegisterFunction(instance, expire_snapshots);
 
+	DuckLakeFlushInlinedDataFunction flush_inlined_data;
+	ExtensionUtil::RegisterFunction(instance, flush_inlined_data);
+
 	DuckLakeSetOptionFunction set_options;
 	ExtensionUtil::RegisterFunction(instance, set_options);
 

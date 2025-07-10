@@ -115,7 +115,7 @@ COMMIT
 statement error con2
 COMMIT
 ----
-altered by another transaction
+another transaction has altered it
 
 query I
 SELECT comment FROM duckdb_views WHERE view_name='comment_view'

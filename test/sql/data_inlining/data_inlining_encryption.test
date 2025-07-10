@@ -1,0 +1,46 @@
+# name: test/sql/data_inlining/data_inlining_encryption.test
+# description: Test ducklake data inlining with encryption
+# group: [data_inlining]
+
+require ducklake
+
+require parquet
+
+statement ok
+ATTACH 'ducklake:__TEST_DIR__/ducklake_inlining_encryption.db' AS ducklake (DATA_PATH '__TEST_DIR__/ducklake_inlining_encryption_files', ENCRYPTED, DATA_INLINING_ROW_LIMIT 10000)
+
+statement ok
+CREATE TABLE ducklake.test AS SELECT i id FROM range(1000) t(i);
+
+query II
+SELECT COUNT(*), SUM(id) FROM ducklake.test
+----
+1000	499500
+
+# data is inlined
+query I
+SELECT COUNT(*) FROM GLOB('__TEST_DIR__/ducklake_inlining_encryption_files/main/test/**')
+----
+0
+
+# we can flush the data
+statement ok
+CALL ducklake_flush_inlined_data('ducklake')
+
+# now we have a file
+query I
+SELECT COUNT(*) FROM GLOB('__TEST_DIR__/ducklake_inlining_encryption_files/main/test/**')
+----
+1
+
+# that file is encrypted
+statement error
+SELECT * FROM '__TEST_DIR__/ducklake_inlining_encryption_files/main/test/*.parquet'
+----
+encrypted
+
+# but we can read it
+query II
+SELECT COUNT(*), SUM(id) FROM ducklake.test
+----
+1000	499500

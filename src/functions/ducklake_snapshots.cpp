@@ -48,6 +48,16 @@ void DuckLakeSnapshotsFunction::GetSnapshotTypes(vector<LogicalType> &return_typ
 	return_types.emplace_back(LogicalType::MAP(LogicalType::VARCHAR, LogicalType::LIST(LogicalType::VARCHAR)));
 }
 
+template <class T>
+void PushIDChangeList(vector<Value> &change_keys, vector<Value> &change_values, const set<T> &id_list,
+                      const char *key) {
+	if (id_list.empty()) {
+		return;
+	}
+	change_keys.emplace_back(key);
+	change_values.push_back(IDListToValue(id_list));
+}
+
 vector<Value> DuckLakeSnapshotsFunction::GetSnapshotValues(const DuckLakeSnapshotInfo &snapshot) {
 	vector<Value> row_values;
 	row_values.push_back(Value::BIGINT(NumericCast<int64_t>(snapshot.id)));
@@ -61,10 +71,8 @@ vector<Value> DuckLakeSnapshotsFunction::GetSnapshotValues(const DuckLakeSnapsho
 		change_keys.emplace_back("schemas_created");
 		change_values.push_back(NameListToValue(other_changes.created_schemas));
 	}
-	if (!other_changes.dropped_schemas.empty()) {
-		change_keys.emplace_back("schemas_dropped");
-		change_values.push_back(IDListToValue(other_changes.dropped_schemas));
-	}
+	PushIDChangeList(change_keys, change_values, other_changes.dropped_schemas, "schemas_dropped");
+
 	case_insensitive_map_t<case_insensitive_set_t> created_tables;
 	case_insensitive_map_t<case_insensitive_set_t> created_views;
 	for (auto &entry : other_changes.created_tables) {
@@ -85,30 +93,15 @@ vector<Value> DuckLakeSnapshotsFunction::GetSnapshotValues(const DuckLakeSnapsho
 		change_keys.emplace_back("views_created");
 		change_values.push_back(CatalogListToValue(created_views));
 	}
-	if (!other_changes.dropped_tables.empty()) {
-		change_keys.emplace_back("tables_dropped");
-		change_values.push_back(IDListToValue(other_changes.dropped_tables));
-	}
-	if (!other_changes.altered_tables.empty()) {
-		change_keys.emplace_back("tables_altered");
-		change_values.push_back(IDListToValue(other_changes.altered_tables));
-	}
-	if (!other_changes.inserted_tables.empty()) {
-		change_keys.emplace_back("tables_inserted_into");
-		change_values.push_back(IDListToValue(other_changes.inserted_tables));
-	}
-	if (!other_changes.tables_deleted_from.empty()) {
-		change_keys.emplace_back("tables_deleted_from");
-		change_values.push_back(IDListToValue(other_changes.tables_deleted_from));
-	}
-	if (!other_changes.dropped_views.empty()) {
-		change_keys.emplace_back("views_dropped");
-		change_values.push_back(IDListToValue(other_changes.dropped_views));
-	}
-	if (!other_changes.altered_views.empty()) {
-		change_keys.emplace_back("views_altered");
-		change_values.push_back(IDListToValue(other_changes.altered_views));
-	}
+	PushIDChangeList(change_keys, change_values, other_changes.dropped_tables, "tables_dropped");
+	PushIDChangeList(change_keys, change_values, other_changes.altered_tables, "tables_altered");
+	PushIDChangeList(change_keys, change_values, other_changes.inserted_tables, "tables_inserted_into");
+	PushIDChangeList(change_keys, change_values, other_changes.tables_deleted_from, "tables_deleted_from");
+	PushIDChangeList(change_keys, change_values, other_changes.dropped_views, "views_dropped");
+	PushIDChangeList(change_keys, change_values, other_changes.altered_views, "views_altered");
+	PushIDChangeList(change_keys, change_values, other_changes.tables_inserted_inlined, "inlined_insert");
+	PushIDChangeList(change_keys, change_values, other_changes.tables_deleted_inlined, "inlined_delete");
+	PushIDChangeList(change_keys, change_values, other_changes.tables_flushed_inlined, "flushed_inlined");
 	row_values.push_back(Value::MAP(LogicalType::VARCHAR, LogicalType::LIST(LogicalType::VARCHAR),
 	                                std::move(change_keys), std::move(change_values)));
 	return row_values;

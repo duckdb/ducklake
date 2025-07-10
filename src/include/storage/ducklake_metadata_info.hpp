@@ -107,6 +107,7 @@ struct DuckLakeFileInfo {
 	optional_idx row_id_start;
 	optional_idx partition_id;
 	optional_idx begin_snapshot;
+	optional_idx max_partial_file_snapshot;
 	string encryption_key;
 	MappingIndex mapping_id;
 	vector<DuckLakeColumnStatsInfo> column_stats;
@@ -152,17 +153,17 @@ struct DuckLakePartitionInfo {
 struct DuckLakeGlobalColumnStatsInfo {
 	FieldIndex column_id;
 
-	bool contains_null;
-	bool has_contains_null;
+	bool contains_null = false;
+	bool has_contains_null = false;
 
-	bool contains_nan;
-	bool has_contains_nan;
+	bool contains_nan = false;
+	bool has_contains_nan = false;
 
 	string min_val;
-	bool has_min;
+	bool has_min = false;
 
 	string max_val;
-	bool has_max;
+	bool has_max = false;
 };
 
 struct DuckLakeGlobalStatsInfo {
@@ -246,6 +247,7 @@ struct DuckLakeFileListEntry {
 	optional_idx row_id_start;
 	optional_idx snapshot_id;
 	optional_idx max_row_count;
+	optional_idx snapshot_filter;
 	MappingIndex mapping_id;
 	DuckLakeDataType data_type = DuckLakeDataType::DATA_FILE;
 };

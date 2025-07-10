@@ -1,0 +1,97 @@
+# name: test/sql/transaction/transaction_conflict_inlining.test
+# description: Test ducklake transaction conflicts with data inlining
+# group: [transaction]
+
+require ducklake
+
+require parquet
+
+statement ok
+ATTACH 'ducklake:__TEST_DIR__/ducklake_inlining_encryption.db' AS ducklake (DATA_PATH '__TEST_DIR__/ducklake_inlining_encryption_files', ENCRYPTED, DATA_INLINING_ROW_LIMIT 10000)
+
+statement ok
+SET immediate_transaction_mode=true
+
+statement ok
+CREATE TABLE ducklake.test AS SELECT i id FROM range(1000) t(i);
+
+# two transactions try to flush the inlined data
+statement ok con1
+BEGIN
+
+statement ok con2
+BEGIN
+
+statement ok con1
+CALL ducklake_flush_inlined_data('ducklake')
+
+statement error con2
+CALL ducklake_flush_inlined_data('ducklake')
+----
+Conflict
+
+statement ok con1
+COMMIT
+
+statement ok con2
+COMMIT
+
+statement ok
+DROP TABLE ducklake.test
+
+# one transaction updates inlined data; the other flushes it
+statement ok
+CREATE TABLE ducklake.test2(id INTEGER);
+
+statement ok
+INSERT INTO ducklake.test2 FROM range(1000);
+
+statement ok con1
+BEGIN
+
+statement ok con2
+BEGIN
+
+statement ok con1
+UPDATE ducklake.test2 SET id=id+1000
+
+statement ok con2
+CALL ducklake_flush_inlined_data('ducklake')
+
+statement ok con1
+COMMIT
+
+statement error con2
+COMMIT
+----
+conflict
+
+statement ok
+DROP TABLE ducklake.test2
+
+# one transaction flushes inlined data; the other updates it
+statement ok
+CREATE TABLE ducklake.test3(id INTEGER);
+
+statement ok
+INSERT INTO ducklake.test3 FROM range(1000);
+
+statement ok con1
+BEGIN
+
+statement ok con2
+BEGIN
+
+statement ok con1
+CALL ducklake_flush_inlined_data('ducklake')
+
+statement ok con2
+UPDATE ducklake.test3 SET id=id+1000
+
+statement ok con1
+COMMIT
+
+statement error con2
+COMMIT
+----
+conflict

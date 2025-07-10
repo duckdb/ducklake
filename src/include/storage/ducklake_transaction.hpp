@@ -35,6 +35,16 @@ struct NewNameMapInfo;
 struct CompactionInformation;
 struct DuckLakePath;
 
+struct LocalTableDataChanges {
+	vector<DuckLakeDataFile> new_data_files;
+	unique_ptr<DuckLakeInlinedData> new_inlined_data;
+	unordered_map<string, DuckLakeDeleteFile> new_delete_files;
+	unordered_map<string, unique_ptr<DuckLakeInlinedDataDeletes>> new_inlined_data_deletes;
+	vector<DuckLakeCompactionEntry> compactions;
+
+	bool IsEmpty() const;
+};
+
 class DuckLakeTransaction : public Transaction, public enable_shared_from_this<DuckLakeTransaction> {
 public:
 	DuckLakeTransaction(DuckLakeCatalog &ducklake_catalog, TransactionManager &manager, ClientContext &context);
@@ -98,10 +108,10 @@ public:
 	void DropFile(TableIndex table_id, DataFileIndex data_file_id, string path);
 
 	void DeleteSnapshots(const vector<DuckLakeSnapshotInfo> &snapshots);
+	void DeleteInlinedData(const DuckLakeInlinedTableInfo &inlined_table);
 
 	bool SchemaChangesMade();
 	bool ChangesMade();
-	bool PerformedCompaction();
 	idx_t GetLocalCatalogId();
 	static bool IsTransactionLocal(idx_t id) {
 		return id >= DuckLakeConstants::TRANSACTION_LOCAL_ID_START;
@@ -165,6 +175,8 @@ private:
 
 	void AlterEntryInternal(DuckLakeTableEntry &old_entry, unique_ptr<CatalogEntry> new_entry);
 	void AlterEntryInternal(DuckLakeViewEntry &old_entry, unique_ptr<CatalogEntry> new_entry);
+	void AddTableChanges(TableIndex table_id, const LocalTableDataChanges &table_changes,
+	                     TransactionChangeInformation &changes);
 
 private:
 	DuckLakeCatalog &ducklake_catalog;
@@ -185,17 +197,9 @@ private:
 	//! Schemas added by this transaction
 	unique_ptr<DuckLakeCatalogSet> new_schemas;
 	map<SchemaIndex, reference<DuckLakeSchemaEntry>> dropped_schemas;
-	//! Data files added by this transaction
-	map<TableIndex, vector<DuckLakeDataFile>> new_data_files;
-	//! Inlined data, added by this transaction
-	map<TableIndex, unique_ptr<DuckLakeInlinedData>> new_inlined_data;
-	//! New deletes added by this transaction
-	map<TableIndex, unordered_map<string, DuckLakeDeleteFile>> new_delete_files;
-	//! New deletes performed on inlined rows by this transaction
-	map<TableIndex, unordered_map<string, unique_ptr<DuckLakeInlinedDataDeletes>>> new_inlined_data_deletes;
-	//! Compactions performed by this transaction
-	mutex compaction_lock;
-	map<TableIndex, vector<DuckLakeCompactionEntry>> compactions;
+	//! Local changes made to tables
+	mutex table_data_changes_lock;
+	map<TableIndex, LocalTableDataChanges> table_data_changes;
 	//! Snapshot cache for the AT (...) conditions that are referenced in the transaction
 	value_map_t<DuckLakeSnapshot> snapshot_cache;
 	//! New set of transaction-local name maps

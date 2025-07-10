@@ -94,7 +94,7 @@ DuckLakeColumnStats DuckLakeInsert::ParseColumnStats(const LogicalType &type, co
 }
 
 void DuckLakeInsert::AddWrittenFiles(DuckLakeInsertGlobalState &global_state, DataChunk &chunk,
-                                     const string &encryption_key, optional_idx partition_id) {
+                                     const string &encryption_key, optional_idx partition_id, bool set_snapshot_id) {
 	for (idx_t r = 0; r < chunk.size(); r++) {
 		DuckLakeDataFile data_file;
 		data_file.file_name = chunk.GetValue(0, r).GetValue<string>();
@@ -116,7 +116,20 @@ void DuckLakeInsert::AddWrittenFiles(DuckLakeInsertGlobalState &global_state, Da
 			auto &col_stats = MapValue::GetChildren(struct_children[1]);
 			auto column_names = DuckLakeUtil::ParseQuotedList(col_name, '.');
 			// FIXME: this should be checked differently
-			if (column_names[0] == "_ducklake_internal_row_id" || column_names[0] == "_ducklake_internal_snapshot_id") {
+			if (column_names[0] == "_ducklake_internal_snapshot_id") {
+				if (set_snapshot_id) {
+					// set start snapshot id based on the minimum written to the file
+					auto snapshot_stats = ParseColumnStats(LogicalType::UBIGINT, col_stats);
+					if (snapshot_stats.has_min) {
+						data_file.begin_snapshot = StringUtil::ToUnsigned(snapshot_stats.min);
+					}
+					if (snapshot_stats.has_max) {
+						data_file.max_partial_file_snapshot = StringUtil::ToUnsigned(snapshot_stats.max);
+					}
+				}
+				continue;
+			}
+			if (column_names[0] == "_ducklake_internal_row_id") {
 				continue;
 			}
 
@@ -144,6 +157,9 @@ void DuckLakeInsert::AddWrittenFiles(DuckLakeInsertGlobalState &global_state, Da
 				file_partition_info.partition_value = part_value;
 				data_file.partition_values.push_back(std::move(file_partition_info));
 			}
+		}
+		if (set_snapshot_id && !data_file.begin_snapshot.IsValid()) {
+			throw InvalidInputException("Did not find written snapshot id - but operation requires it to be set");
 		}
 
 		global_state.written_files.push_back(std::move(data_file));
@@ -294,6 +310,161 @@ void StripTrailingSeparator(FileSystem &fs, string &path) {
 	path = path.substr(0, path.size() - sep.size());
 }
 
+const DuckLakeFieldId &GetTopLevelColumn(DuckLakeCopyInput &copy_input, FieldIndex field_id, optional_idx &index) {
+	if (!copy_input.field_data) {
+		throw InvalidInputException("Partitioning requires field ids");
+	}
+	auto entry = copy_input.field_data->GetByFieldIndex(field_id);
+	if (!entry) {
+		throw InvalidInputException("Partitioned column not found");
+	}
+	auto &top_level_field_ids = copy_input.field_data->GetFieldIds();
+	for (idx_t col_idx = 0; col_idx < top_level_field_ids.size(); col_idx++) {
+		if (top_level_field_ids[col_idx].get() == entry.get()) {
+			index = col_idx;
+			return *entry;
+		}
+	}
+	throw InvalidInputException("Partitioning is only supported on top-level columns");
+}
+
+unique_ptr<Expression> CreateColumnReference(DuckLakeCopyInput &copy_input, const LogicalType &type,
+                                             idx_t column_index) {
+	if (copy_input.get_table_index.IsValid()) {
+		// logical plan generation: generate a bound column ref
+		ColumnBinding column_binding(copy_input.get_table_index.GetIndex(), column_index);
+		return make_uniq<BoundColumnRefExpression>(type, column_binding);
+	}
+	// physical plan generation: generate a reference directly
+	return make_uniq<BoundReferenceExpression>(type, column_index);
+}
+
+unique_ptr<Expression> GetColumnReference(DuckLakeCopyInput &copy_input, FieldIndex field_id) {
+	optional_idx index;
+	auto &column_field_id = GetTopLevelColumn(copy_input, field_id, index);
+	return CreateColumnReference(copy_input, column_field_id.Type(), index.GetIndex());
+}
+
+unique_ptr<Expression> GetFunction(ClientContext &context, DuckLakeCopyInput &copy_input, const string &function_name,
+                                   FieldIndex field_id) {
+	vector<unique_ptr<Expression>> children;
+	children.push_back(GetColumnReference(copy_input, field_id));
+
+	ErrorData error;
+	FunctionBinder binder(context);
+	auto function = binder.BindScalarFunction(DEFAULT_SCHEMA, function_name, std::move(children), error, false);
+	if (!function) {
+		error.Throw();
+	}
+	return function;
+}
+
+unique_ptr<Expression> GetPartitionExpression(ClientContext &context, DuckLakeCopyInput &copy_input,
+                                              const DuckLakePartitionField &field) {
+	switch (field.transform.type) {
+	case DuckLakeTransformType::IDENTITY:
+		return GetColumnReference(copy_input, field.field_id);
+	case DuckLakeTransformType::YEAR:
+		return GetFunction(context, copy_input, "year", field.field_id);
+	case DuckLakeTransformType::MONTH:
+		return GetFunction(context, copy_input, "month", field.field_id);
+	case DuckLakeTransformType::DAY:
+		return GetFunction(context, copy_input, "day", field.field_id);
+	case DuckLakeTransformType::HOUR:
+		return GetFunction(context, copy_input, "hour", field.field_id);
+	default:
+		throw NotImplementedException("Unsupported partition transform type in GetPartitionExpression");
+	}
+}
+
+string GetPartitionExpressionName(DuckLakeCopyInput &copy_input, const DuckLakePartitionField &field,
+                                  case_insensitive_set_t &names) {
+	auto field_id = copy_input.field_data->GetByFieldIndex(field.field_id);
+	string prefix;
+	switch (field.transform.type) {
+	case DuckLakeTransformType::IDENTITY:
+		return field_id->Name();
+	case DuckLakeTransformType::YEAR:
+		prefix = "year";
+		break;
+	case DuckLakeTransformType::MONTH:
+		prefix = "month";
+		break;
+	case DuckLakeTransformType::DAY:
+		prefix = "day";
+		break;
+	case DuckLakeTransformType::HOUR:
+		prefix = "hour";
+		break;
+	default:
+		throw NotImplementedException("Unsupported partition transform type in GetPartitionExpressionName");
+	}
+	if (names.find(prefix) == names.end()) {
+		// prefer only the transform (e.g. year)
+		return prefix;
+	}
+	return prefix + "_" + field_id->Name();
+}
+
+void GeneratePartitionExpressions(ClientContext &context, DuckLakeCopyInput &copy_input,
+                                  DuckLakeCopyOptions &copy_options) {
+	bool all_identity = true;
+	for (auto &field : copy_input.partition_data->fields) {
+		if (field.transform.type != DuckLakeTransformType::IDENTITY) {
+			all_identity = false;
+			break;
+		}
+	}
+	if (all_identity) {
+		// all transforms are identity transforms - we can partition on the columns directly
+		// just set up the correct references to the partition columns
+		for (auto &field : copy_input.partition_data->fields) {
+			optional_idx col_idx;
+			GetTopLevelColumn(copy_input, field.field_id, col_idx);
+			copy_options.partition_columns.push_back(col_idx.GetIndex());
+		}
+		return;
+	}
+	idx_t virtual_column_count;
+	switch (copy_input.virtual_columns) {
+	case InsertVirtualColumns::WRITE_ROW_ID:
+	case InsertVirtualColumns::WRITE_SNAPSHOT_ID:
+		virtual_column_count = 1;
+		break;
+	case InsertVirtualColumns::WRITE_ROW_ID_AND_SNAPSHOT_ID:
+		virtual_column_count = 2;
+		break;
+	default:
+		virtual_column_count = 0;
+		break;
+	}
+	// if we have partition columns that are NOT identity we need to compute them separately, and NOT write them
+	idx_t partition_column_start = copy_input.columns.PhysicalColumnCount() + virtual_column_count;
+	for (idx_t part_idx = 0; part_idx < copy_input.partition_data->fields.size(); part_idx++) {
+		copy_options.partition_columns.push_back(partition_column_start++);
+	}
+	copy_options.write_partition_columns = false;
+
+	// push the columns
+	idx_t col_idx = 0;
+	for (auto &col : copy_input.columns.Physical()) {
+		copy_options.projection_list.push_back(CreateColumnReference(copy_input, col.Type(), col_idx++));
+	}
+	// push any projected virtual columns
+	for (idx_t i = 0; i < virtual_column_count; i++) {
+		copy_options.projection_list.push_back(CreateColumnReference(copy_input, LogicalType::BIGINT, col_idx++));
+	}
+	// push the partition expressions
+	case_insensitive_set_t names;
+	for (auto &field : copy_input.partition_data->fields) {
+		auto expr = GetPartitionExpression(context, copy_input, field);
+		copy_options.names.push_back(GetPartitionExpressionName(copy_input, field, names));
+		names.insert(copy_options.names.back());
+		copy_options.expected_types.push_back(expr->return_type);
+		copy_options.projection_list.push_back(std::move(expr));
+	}
+}
+
 DuckLakeCopyOptions DuckLakeInsert::GetCopyOptions(ClientContext &context, DuckLakeCopyInput &copy_input) {
 	auto info = make_uniq<CopyInfo>();
 	auto &catalog = copy_input.catalog;
@@ -396,141 +567,23 @@ DuckLakeCopyOptions DuckLakeInsert::GetCopyOptions(ClientContext &context, DuckL
 	result.return_type = CopyFunctionReturnType::WRITTEN_FILE_STATISTICS;
 	result.names = names_to_write;
 	result.expected_types = types_to_write;
+
+	if (copy_input.partition_data) {
+		// we are partitioning - generate partition expressions (if any)
+		GeneratePartitionExpressions(context, copy_input, result);
+	}
 	return result;
 }
 
-const DuckLakeFieldId &GetTopLevelColumn(DuckLakeCopyInput &copy_input, FieldIndex field_id, optional_idx &index) {
-	if (!copy_input.field_data) {
-		throw InvalidInputException("Partitioning requires field ids");
-	}
-	auto entry = copy_input.field_data->GetByFieldIndex(field_id);
-	if (!entry) {
-		throw InvalidInputException("Partitioned column not found");
-	}
-	auto &top_level_field_ids = copy_input.field_data->GetFieldIds();
-	for (idx_t col_idx = 0; col_idx < top_level_field_ids.size(); col_idx++) {
-		if (top_level_field_ids[col_idx].get() == entry.get()) {
-			index = col_idx;
-			return *entry;
-		}
-	}
-	throw InvalidInputException("Partitioning is only supported on top-level columns");
-}
-
-unique_ptr<Expression> GetColumnReference(DuckLakeCopyInput &copy_input, FieldIndex field_id) {
-	optional_idx index;
-	auto &column_field_id = GetTopLevelColumn(copy_input, field_id, index);
-	return make_uniq<BoundReferenceExpression>(column_field_id.Type(), index.GetIndex());
-}
-
-unique_ptr<Expression> GetFunction(ClientContext &context, DuckLakeCopyInput &copy_input, const string &function_name,
-                                   FieldIndex field_id) {
-	vector<unique_ptr<Expression>> children;
-	children.push_back(GetColumnReference(copy_input, field_id));
-
-	ErrorData error;
-	FunctionBinder binder(context);
-	auto function = binder.BindScalarFunction(DEFAULT_SCHEMA, function_name, std::move(children), error, false);
-	if (!function) {
-		error.Throw();
-	}
-	return function;
-}
-
-unique_ptr<Expression> GetPartitionExpression(ClientContext &context, DuckLakeCopyInput &copy_input,
-                                              const DuckLakePartitionField &field) {
-	switch (field.transform.type) {
-	case DuckLakeTransformType::IDENTITY:
-		return GetColumnReference(copy_input, field.field_id);
-	case DuckLakeTransformType::YEAR:
-		return GetFunction(context, copy_input, "year", field.field_id);
-	case DuckLakeTransformType::MONTH:
-		return GetFunction(context, copy_input, "month", field.field_id);
-	case DuckLakeTransformType::DAY:
-		return GetFunction(context, copy_input, "day", field.field_id);
-	case DuckLakeTransformType::HOUR:
-		return GetFunction(context, copy_input, "hour", field.field_id);
-	default:
-		throw NotImplementedException("Unsupported partition transform type in GetPartitionExpression");
-	}
-}
-
-string GetPartitionExpressionName(DuckLakeCopyInput &copy_input, const DuckLakePartitionField &field,
-                                  case_insensitive_set_t &names) {
-	auto field_id = copy_input.field_data->GetByFieldIndex(field.field_id);
-	string prefix;
-	switch (field.transform.type) {
-	case DuckLakeTransformType::IDENTITY:
-		return field_id->Name();
-	case DuckLakeTransformType::YEAR:
-		prefix = "year";
-		break;
-	case DuckLakeTransformType::MONTH:
-		prefix = "month";
-		break;
-	case DuckLakeTransformType::DAY:
-		prefix = "day";
-		break;
-	case DuckLakeTransformType::HOUR:
-		prefix = "hour";
-		break;
-	default:
-		throw NotImplementedException("Unsupported partition transform type in GetPartitionExpressionName");
-	}
-	if (names.find(prefix) == names.end()) {
-		// prefer only the transform (e.g. year)
-		return prefix;
-	}
-	return prefix + "_" + field_id->Name();
-}
-
-void GeneratePartitionedInsert(ClientContext &context, PhysicalPlanGenerator &planner, DuckLakeCopyInput &copy_input,
-                               DuckLakeCopyOptions &copy_options, optional_ptr<PhysicalOperator> &plan) {
-	bool all_identity = true;
-	for (auto &field : copy_input.partition_data->fields) {
-		if (field.transform.type != DuckLakeTransformType::IDENTITY) {
-			all_identity = false;
-			break;
-		}
-	}
-	if (all_identity) {
-		// all transforms are identity transforms - we can partition on the columns directly
-		// just set up the correct references to the partition columns
-		for (auto &field : copy_input.partition_data->fields) {
-			optional_idx col_idx;
-			GetTopLevelColumn(copy_input, field.field_id, col_idx);
-			copy_options.partition_columns.push_back(col_idx.GetIndex());
-		}
-		return;
-	}
-	// if we have partition columns that are NOT identity we need to compute them separately, and NOT write them
-	idx_t partition_column_start = copy_input.columns.PhysicalColumnCount();
-	for (auto &_ : copy_input.partition_data->fields) {
-		copy_options.partition_columns.push_back(partition_column_start++);
-	}
-	copy_options.write_partition_columns = false;
-
+void GenerateProjection(ClientContext &context, PhysicalPlanGenerator &planner, DuckLakeCopyOptions &copy_options,
+                        optional_ptr<PhysicalOperator> &plan) {
 	// push the projection
 	vector<LogicalType> types;
-	vector<unique_ptr<Expression>> select_list;
-	// push the columns
-	idx_t col_idx = 0;
-	for (auto &col : copy_input.columns.Physical()) {
-		types.push_back(col.Type());
-		select_list.push_back(make_uniq<BoundReferenceExpression>(col.Type(), col_idx++));
-	}
-	// push the partition expressions
-	case_insensitive_set_t names;
-	for (auto &field : copy_input.partition_data->fields) {
-		auto expr = GetPartitionExpression(context, copy_input, field);
-		copy_options.names.push_back(GetPartitionExpressionName(copy_input, field, names));
-		names.insert(copy_options.names.back());
-		copy_options.expected_types.push_back(expr->return_type);
+	for (auto &expr : copy_options.projection_list) {
 		types.push_back(expr->return_type);
-		select_list.push_back(std::move(expr));
 	}
-	auto &proj =
-	    planner.Make<PhysicalProjection>(std::move(types), std::move(select_list), plan->estimated_cardinality);
+	auto &proj = planner.Make<PhysicalProjection>(std::move(types), std::move(copy_options.projection_list),
+	                                              plan->estimated_cardinality);
 	proj.children.push_back(*plan);
 	plan = proj;
 }
@@ -541,9 +594,9 @@ PhysicalOperator &DuckLakeInsert::PlanCopyForInsert(ClientContext &context, Phys
 	bool is_encrypted = !copy_input.encryption_key.empty();
 	auto copy_options = GetCopyOptions(context, copy_input);
 
-	if (copy_input.partition_data) {
-		// we are partitioning - generate the partitioned columns
-		GeneratePartitionedInsert(context, planner, copy_input, copy_options, plan);
+	if (!copy_options.projection_list.empty()) {
+		// generate a projection
+		GenerateProjection(context, planner, copy_options, plan);
 	}
 	auto copy_return_types = GetCopyFunctionReturnLogicalTypes(CopyFunctionReturnType::WRITTEN_FILE_STATISTICS);
 	auto &physical_copy = planner
@@ -597,7 +650,7 @@ string DuckLakeCatalog::GenerateEncryptionKey(ClientContext &context) const {
 	auto &engine = RandomEngine::Get(context);
 	static constexpr const idx_t ENCRYPTION_KEY_SIZE = 16;
 	data_t bytes[ENCRYPTION_KEY_SIZE];
-	for (int i = 0; i < ENCRYPTION_KEY_SIZE; i += 4) {
+	for (idx_t i = 0; i < ENCRYPTION_KEY_SIZE; i += 4) {
 		*reinterpret_cast<uint32_t *>(bytes + i) = engine.NextRandomInteger();
 	}
 	return string(char_ptr_cast(bytes), ENCRYPTION_KEY_SIZE);

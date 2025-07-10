@@ -76,13 +76,15 @@ bool DuckLakeInlinedDataReader::TryInitializeScan(ClientContext &context, Global
 			// set-up the scan to emit the row-id column, but to ignore it in the final result
 			for (idx_t i = 0; i < columns_to_read.size(); i++) {
 				scan_column_ids.push_back(i);
-				is_virtual.push_back(false);
+				virtual_columns.push_back(InlinedVirtualColumn::NONE);
 			}
 			columns_to_read.push_back("row_id");
+			virtual_columns.emplace_back(InlinedVirtualColumn::COLUMN_EMPTY);
 		}
 		if (columns_to_read.empty()) {
-			// COUNT(*) - read row-id column
+			// COUNT(*) - read row_id but don't emit
 			columns_to_read.push_back("row_id");
+			virtual_columns.emplace_back(InlinedVirtualColumn::COLUMN_EMPTY);
 		}
 		switch (read_info.scan_type) {
 		case DuckLakeScanType::SCAN_TABLE:
@@ -99,10 +101,11 @@ bool DuckLakeInlinedDataReader::TryInitializeScan(ClientContext &context, Global
 		default:
 			throw InternalException("Unknown DuckLake scan type");
 		}
-		if (deletion_filter) {
+		if (!virtual_columns.empty()) {
 			auto scan_types = data->data->Types();
 			scan_chunk.Initialize(context, scan_types);
-
+		}
+		if (deletion_filter) {
 			// map the deleted row-ids to the deleted ordinals to obtain the correct deleted rows
 			auto &filter = reinterpret_cast<DuckLakeDeleteFilter &>(*deletion_filter);
 			vector<idx_t> deleted_ordinals;
@@ -133,12 +136,12 @@ bool DuckLakeInlinedDataReader::TryInitializeScan(ClientContext &context, Global
 			auto &column_id = column_indexes[i];
 			auto col_id = column_id.GetPrimaryIndex();
 			if (col_id >= types.size()) {
-				is_virtual.push_back(true);
+				virtual_columns.emplace_back(InlinedVirtualColumn::COLUMN_ROW_ID);
 				continue;
 			}
 			scan_types.push_back(types[col_id]);
 			scan_column_ids.push_back(col_id);
-			is_virtual.push_back(false);
+			virtual_columns.emplace_back(InlinedVirtualColumn::NONE);
 		}
 		if (!scan_types.empty()) {
 			scan_types.push_back(types[0]);
@@ -153,21 +156,28 @@ bool DuckLakeInlinedDataReader::TryInitializeScan(ClientContext &context, Global
 
 void DuckLakeInlinedDataReader::Scan(ClientContext &context, GlobalTableFunctionState &global_state,
                                      LocalTableFunctionState &local_state, DataChunk &chunk) {
-	if (!is_virtual.empty()) {
+	if (!virtual_columns.empty()) {
 		scan_chunk.Reset();
 		data->data->Scan(state, scan_chunk);
 
 		idx_t source_idx = 0;
-		for (idx_t c = 0; c < is_virtual.size(); c++) {
-			if (is_virtual[c]) {
+		for (idx_t c = 0; c < virtual_columns.size(); c++) {
+			switch (virtual_columns[c]) {
+			case InlinedVirtualColumn::NONE: {
+				auto column_id = source_idx++;
+				chunk.data[c].Reference(scan_chunk.data[column_id]);
+				break;
+			}
+			case InlinedVirtualColumn::COLUMN_ROW_ID: {
 				auto row_id_data = FlatVector::GetData<int64_t>(chunk.data[c]);
 				for (idx_t r = 0; r < scan_chunk.size(); r++) {
 					row_id_data[r] = NumericCast<int64_t>(file_row_number + r);
 				}
 				continue;
 			}
-			auto column_id = source_idx++;
-			chunk.data[c].Reference(scan_chunk.data[column_id]);
+			case InlinedVirtualColumn::COLUMN_EMPTY:
+				break;
+			}
 		}
 		chunk.SetCardinality(scan_chunk.size());
 	} else {

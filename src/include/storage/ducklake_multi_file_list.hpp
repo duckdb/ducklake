@@ -24,9 +24,10 @@ class DuckLakeMultiFileList : public MultiFileList {
 	    "__ducklake_inlined_transaction_local_data";
 
 public:
-	explicit DuckLakeMultiFileList(DuckLakeFunctionInfo &read_info, vector<DuckLakeDataFile> transaction_local_files,
-	                               shared_ptr<DuckLakeInlinedData> transaction_local_data, string filter = string());
-	explicit DuckLakeMultiFileList(DuckLakeFunctionInfo &read_info, vector<DuckLakeFileListEntry> files_to_scan);
+	DuckLakeMultiFileList(DuckLakeFunctionInfo &read_info, vector<DuckLakeDataFile> transaction_local_files,
+	                      shared_ptr<DuckLakeInlinedData> transaction_local_data, string filter = string());
+	DuckLakeMultiFileList(DuckLakeFunctionInfo &read_info, vector<DuckLakeFileListEntry> files_to_scan);
+	DuckLakeMultiFileList(DuckLakeFunctionInfo &read_info, const DuckLakeInlinedTableInfo &inlined_table);
 
 	unique_ptr<MultiFileList> ComplexFilterPushdown(ClientContext &context, const MultiFileOptions &options,
 	                                                MultiFilePushdownInfo &info,
@@ -72,6 +73,8 @@ private:
 	vector<DuckLakeDataFile> transaction_local_files;
 	//! Inlined transaction-local data
 	shared_ptr<DuckLakeInlinedData> transaction_local_data;
+	//! Inlined data tables
+	vector<DuckLakeInlinedTableInfo> inlined_data_tables;
 	//! The set of delete scans, only used when scanning deleted tuples using ducklake_table_deletions
 	vector<DuckLakeDeleteScanEntry> delete_scans;
 	//! The filter to apply

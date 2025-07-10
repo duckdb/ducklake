@@ -22,11 +22,13 @@ jobs:
 
   duckdb-stable-build:
     name: Build extension binaries
-    uses: duckdb/extension-ci-tools/.github/workflows/_extension_distribution.yml@main
+    uses: ./.github/workflows/TestWorkflow.yml
     with:
       duckdb_version: v1.3.2
       ci_tools_version: main
       extension_name: ducklake
+      build_type: debug
+      fail_fast: false
 
   duckdb-stable-deploy:
     name: Deploy extension binaries
