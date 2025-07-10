@@ -7,6 +7,8 @@
 
 namespace duckdb {
 
+enum class HivePartitioningType { AUTOMATIC, YES, NO };
+
 struct DuckLakeAddDataFilesData : public TableFunctionData {
 	DuckLakeAddDataFilesData(Catalog &catalog, DuckLakeTableEntry &table) : catalog(catalog), table(table) {
 	}
@@ -16,6 +18,7 @@ struct DuckLakeAddDataFilesData : public TableFunctionData {
 	vector<string> globs;
 	bool allow_missing = false;
 	bool ignore_extra_columns = false;
+	HivePartitioningType hive_partitioning = HivePartitioningType::AUTOMATIC;
 };
 
 static unique_ptr<FunctionData> DuckLakeAddDataFilesBind(ClientContext &context, TableFunctionBindInput &input,
@@ -42,6 +45,9 @@ static unique_ptr<FunctionData> DuckLakeAddDataFilesBind(ClientContext &context,
 			result->allow_missing = BooleanValue::Get(entry.second);
 		} else if (lower == "ignore_extra_columns") {
 			result->ignore_extra_columns = BooleanValue::Get(entry.second);
+		} else if (lower == "hive_partitioning") {
+			result->hive_partitioning =
+			    BooleanValue::Get(entry.second) ? HivePartitioningType::YES : HivePartitioningType::NO;
 		} else {
 			throw InternalException("Unknown named parameter %s for add_files", entry.first);
 		}
@@ -93,7 +99,7 @@ struct DuckLakeFileProcessor {
 public:
 	DuckLakeFileProcessor(DuckLakeTransaction &transaction, const DuckLakeAddDataFilesData &bind_data)
 	    : transaction(transaction), table(bind_data.table), allow_missing(bind_data.allow_missing),
-	      ignore_extra_columns(bind_data.ignore_extra_columns) {
+	      ignore_extra_columns(bind_data.ignore_extra_columns), hive_partitioning(bind_data.hive_partitioning) {
 	}
 
 	vector<DuckLakeDataFile> AddFiles(const vector<string> &globs);
@@ -109,6 +115,8 @@ private:
 	                                                    vector<unique_ptr<ParquetColumn>> &parquet_columns,
 	                                                    const vector<unique_ptr<DuckLakeFieldId>> &field_ids,
 	                                                    DuckLakeDataFile &result, const string &prefix = string());
+	unique_ptr<DuckLakeNameMapEntry> MapHiveColumn(ParquetFileMetadata &file_metadata, const DuckLakeFieldId &field_id,
+	                                               DuckLakeDataFile &result, Value hive_value);
 
 	Value GetStatsValue(string name, Value val);
 	void CheckMatchingType(const LogicalType &type, ParquetColumn &column);
@@ -118,6 +126,8 @@ private:
 	DuckLakeTableEntry &table;
 	bool allow_missing;
 	bool ignore_extra_columns;
+	map<string, string> hive_partitions;
+	HivePartitioningType hive_partitioning;
 	unordered_map<string, unique_ptr<ParquetFileMetadata>> parquet_files;
 };
 
@@ -690,6 +700,46 @@ unique_ptr<DuckLakeNameMapEntry> DuckLakeFileProcessor::MapColumn(ParquetFileMet
 	return map_entry;
 }
 
+bool SupportsHivePartitioning(const LogicalType &type) {
+	if (type.IsNested()) {
+		return false;
+	}
+	return true;
+}
+
+unique_ptr<DuckLakeNameMapEntry> DuckLakeFileProcessor::MapHiveColumn(ParquetFileMetadata &file_metadata,
+                                                                      const DuckLakeFieldId &field_id,
+                                                                      DuckLakeDataFile &file, Value hive_value) {
+	auto &target_type = field_id.Type();
+	auto target_field_id = field_id.GetFieldIndex();
+
+	if (!SupportsHivePartitioning(target_type)) {
+		throw InvalidInputException("Type \"%s\" is not supported for hive partitioning", target_type);
+	}
+
+	string error;
+	Value cast_result;
+	if (!hive_value.DefaultTryCastAs(target_type, cast_result, &error)) {
+		throw InvalidInputException("Column \"%s\" exists as a hive partition with value \"%s\", but this value cannot "
+		                            "be cast to the column type \"%s\"",
+		                            field_id.Name(), hive_value.ToString(), field_id.Type());
+	}
+	// push stats for the partitioned column
+	DuckLakeColumnStats column_stats(field_id.Type());
+	column_stats.min = column_stats.max = hive_value.ToString();
+	column_stats.has_min = column_stats.has_max = true;
+	column_stats.has_null_count = true;
+
+	file.column_stats.emplace(target_field_id, std::move(column_stats));
+
+	// return the map - the name is empty on purpose to signal this comes from a partition
+	auto result = make_uniq<DuckLakeNameMapEntry>();
+	result->source_name = field_id.Name();
+	result->target_field_id = target_field_id;
+	result->hive_partition = true;
+	return result;
+}
+
 vector<unique_ptr<DuckLakeNameMapEntry>> DuckLakeFileProcessor::MapColumns(
     ParquetFileMetadata &file_metadata, vector<unique_ptr<ParquetColumn>> &parquet_columns,
     const vector<unique_ptr<DuckLakeFieldId>> &field_ids, DuckLakeDataFile &result, const string &prefix) {
@@ -714,8 +764,17 @@ vector<unique_ptr<DuckLakeNameMapEntry>> DuckLakeFileProcessor::MapColumns(
 		column_maps.push_back(MapColumn(file_metadata, *col, entry->second.get(), result, prefix));
 		field_id_map.erase(entry);
 	}
-	if (!allow_missing) {
-		for (auto &entry : field_id_map) {
+	for (auto &entry : field_id_map) {
+		auto &field_id = entry.second.get();
+		// column does not exist in the file - check hive partitions
+		auto hive_entry = hive_partitions.find(field_id.Name());
+		if (hive_entry != hive_partitions.end()) {
+			// the column exists in the hive partitions - check if the type matches
+			column_maps.push_back(MapHiveColumn(file_metadata, field_id, result, Value(hive_entry->second)));
+			continue;
+		}
+		// column does not exist - check if we are ignoring missing columns
+		if (!allow_missing) {
 			throw InvalidInputException(
 			    "Column \"%s%s\" exists in table \"%s\" but was not found in file \"%s\"\n* Set "
 			    "allow_missing => true to allow missing fields and columns",
@@ -734,6 +793,10 @@ DuckLakeDataFile DuckLakeFileProcessor::AddFileToTable(ParquetFileMetadata &file
 	// map columns from the file to the table
 	auto &field_data = table.GetFieldData();
 	auto &field_ids = field_data.GetFieldIds();
+	if (hive_partitioning != HivePartitioningType::NO) {
+		// we are mapping hive partitions - check if there are any hive partitioned columns
+		hive_partitions = HivePartitioning::Parse(file.filename);
+	}
 
 	auto name_map = make_uniq<DuckLakeNameMap>();
 	name_map->table_id = table.GetTableId();
@@ -784,6 +847,7 @@ DuckLakeAddDataFilesFunction::DuckLakeAddDataFilesFunction()
                     DuckLakeAddDataFilesExecute, DuckLakeAddDataFilesBind, DuckLakeAddDataFilesInit) {
 	named_parameters["allow_missing"] = LogicalType::BOOLEAN;
 	named_parameters["ignore_extra_columns"] = LogicalType::BOOLEAN;
+	named_parameters["hive_partitioning"] = LogicalType::BOOLEAN;
 }
 
 } // namespace duckdb

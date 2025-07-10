@@ -23,6 +23,7 @@ namespace duckdb {
 struct DuckLakeNameMapEntry {
 	string source_name;
 	FieldIndex target_field_id;
+	bool hive_partition = false;
 	vector<unique_ptr<DuckLakeNameMapEntry>> child_entries;
 
 	hash_t GetHash() const;

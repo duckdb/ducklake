@@ -1,0 +1,58 @@
+# name: test/sql/add_files/add_files_hive_mismatch.test
+# description: test ducklake adding hive-partitioned files with type mismatch
+# group: [add_files]
+
+require ducklake
+
+require parquet
+
+statement ok
+ATTACH 'ducklake:__TEST_DIR__/ducklake_add_files_hive_mismatch.db' AS ducklake (DATA_PATH '__TEST_DIR__/ducklake_add_files_hive_mismatch/', METADATA_CATALOG 'metadata');
+
+statement ok
+CREATE TABLE partitioned_tbl(part_key VARCHAR, part_key2 INT, val VARCHAR);
+
+statement ok
+INSERT INTO partitioned_tbl VALUES ('p1', 10, 'hello'), ('p2', 10, 'world'), ('p2', 20, 'abc')
+
+statement ok
+COPY partitioned_tbl TO '__TEST_DIR__/ducklake_add_files_hive_mismatch/' (FORMAT PARQUET, PARTITION_BY(part_key, part_key2));
+
+statement ok
+CREATE TABLE ducklake.test(part_key INT, part_key2 INT, val VARCHAR);
+
+# value "p1" cannot be cast to integer
+statement error
+CALL ducklake_add_data_files('ducklake', 'test', '__TEST_DIR__/ducklake_add_files_hive_mismatch/**/*.parquet', hive_partitioning => true)
+----
+cannot be cast to the column type
+
+statement ok
+CREATE OR REPLACE TABLE ducklake.test(part_key VARCHAR, part_key2 INT, val VARCHAR);
+
+statement ok
+CALL ducklake_add_data_files('ducklake', 'test', '__TEST_DIR__/ducklake_add_files_hive_mismatch/**/*.parquet', hive_partitioning => true)
+
+query III
+FROM ducklake.test ORDER BY ALL
+----
+p1	10	hello
+p2	10	world
+p2	20	abc
+
+# add non-hive partitioned file
+
+# now add non-hive partitioned column
+statement ok
+COPY (SELECT 'p1' part_key, 10 part_key2, 'non_partitioned' val) TO '__TEST_DIR__/ducklake_add_files_hive_mismatch/non_partitioned_file.parquet'
+
+statement ok
+CALL ducklake_add_data_files('ducklake', 'test', '__TEST_DIR__/ducklake_add_files_hive_mismatch/non_partitioned_file.parquet')
+
+query III
+FROM ducklake.test ORDER BY ALL
+----
+p1	10	hello
+p1	10	non_partitioned
+p2	10	world
+p2	20	abc

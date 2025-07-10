@@ -41,6 +41,9 @@ bool DuckLakeNameMapEntry::IsCompatibleWith(const DuckLakeNameMapEntry &other) c
 	if (target_field_id != other.target_field_id) {
 		return false;
 	}
+	if (hive_partition != other.hive_partition) {
+		return false;
+	}
 	return ListIsCompatible(child_entries, other.child_entries);
 }
 
