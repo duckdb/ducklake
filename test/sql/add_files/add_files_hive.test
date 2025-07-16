@@ -1,0 +1,89 @@
+# name: test/sql/add_files/add_files_hive.test
+# description: test ducklake adding hive-partitioned files directly
+# group: [add_files]
+
+require ducklake
+
+require parquet
+
+statement ok
+ATTACH 'ducklake:__TEST_DIR__/ducklake_add_files_hive.db' AS ducklake (DATA_PATH '__TEST_DIR__/ducklake_add_files_hive/', METADATA_CATALOG 'metadata');
+
+statement ok
+CREATE TABLE partitioned_tbl(part_key INT, part_key2 INT, val VARCHAR);
+
+statement ok
+INSERT INTO partitioned_tbl VALUES (1, 10, 'hello'), (2, 10, 'world'), (2, 20, 'abc')
+
+statement ok
+COPY partitioned_tbl TO '__TEST_DIR__/ducklake_add_files_hive/' (FORMAT PARQUET, PARTITION_BY(part_key, part_key2));
+
+statement ok
+CREATE TABLE ducklake.test(part_key INT, part_key2 INT, val VARCHAR);
+
+# we need the hive partition columns
+statement error
+CALL ducklake_add_data_files('ducklake', 'test', '__TEST_DIR__/ducklake_add_files_hive/**/*.parquet', hive_partitioning => false)
+----
+allow_missing
+
+statement ok
+CALL ducklake_add_data_files('ducklake', 'test', '__TEST_DIR__/ducklake_add_files_hive/**/*.parquet', hive_partitioning => true)
+
+query III
+SELECT part_key, part_key2, val FROM ducklake.test ORDER BY ALL
+----
+1	10	hello
+2	10	world
+2	20	abc
+
+# test pushdown into stats
+query II
+EXPLAIN ANALYZE SELECT COUNT(*) FROM ducklake.test WHERE part_key=1
+----
+analyzed_plan	<REGEX>:.*Total Files Read: 1.*
+
+# rename the hive partition
+statement ok
+ALTER TABLE ducklake.test RENAME part_key TO new_part_key
+
+query III
+SELECT new_part_key, part_key2, val FROM ducklake.test ORDER BY ALL
+----
+1	10	hello
+2	10	world
+2	20	abc
+
+# add new values post-rename
+statement ok
+COPY (FROM (VALUES (1, 10, 'new value')) t(new_part_key, part_key2, val)) TO '__TEST_DIR__/ducklake_add_files_hive/' (FORMAT PARQUET, PARTITION_BY(new_part_key, part_key2), APPEND);
+
+# hive partitioning is automatically detected by default
+statement ok
+CALL ducklake_add_data_files('ducklake', 'test', '__TEST_DIR__/ducklake_add_files_hive/new_part_key=*/**/*.parquet')
+
+query III
+SELECT new_part_key, part_key2, val FROM ducklake.test ORDER BY ALL
+----
+1	10	hello
+1	10	new value
+2	10	world
+2	20	abc
+
+# test pushdown into stats
+query II
+EXPLAIN ANALYZE SELECT COUNT(*) FROM ducklake.test WHERE new_part_key=1
+----
+analyzed_plan	<REGEX>:.*Total Files Read: 2.*
+
+# type promotion
+statement ok
+ALTER TABLE ducklake.test ALTER new_part_key SET TYPE BIGINT
+
+query III
+SELECT new_part_key, part_key2, val FROM ducklake.test ORDER BY ALL
+----
+1	10	hello
+1	10	new value
+2	10	world
+2	20	abc

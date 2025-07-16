@@ -1078,6 +1078,7 @@ void ConvertNameMapColumn(const DuckLakeNameMapEntry &name_map_entry, MappingInd
 	column_info.column_id = column_id;
 	column_info.source_name = name_map_entry.source_name;
 	column_info.target_field_id = name_map_entry.target_field_id;
+	column_info.hive_partition = name_map_entry.hive_partition;
 	column_info.parent_column = parent_idx;
 	result.map_columns.push_back(std::move(column_info));
 

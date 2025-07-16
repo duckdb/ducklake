@@ -152,8 +152,12 @@ void DuckLakeInitializer::LoadExistingDuckLake(DuckLakeTransaction &transaction)
 				metadata_manager.MigrateV01();
 				version = "0.2";
 			}
-			if (version != "0.2") {
-				throw NotImplementedException("Only DuckLake versions 0.1 and 0.2 are supported");
+			if (version == "0.2") {
+				metadata_manager.MigrateV02();
+				version = "0.3-dev1";
+			}
+			if (version != "0.3-dev1") {
+				throw NotImplementedException("Only DuckLake versions 0.1, 0.2 and 0.3-dev1 are supported");
 			}
 		}
 		if (tag.key == "data_path") {

@@ -380,6 +380,7 @@ unique_ptr<DuckLakeNameMap> ConvertNameMap(DuckLakeColumnMappingInfo column_mapp
 		auto map_entry = make_uniq<DuckLakeNameMapEntry>();
 		map_entry->source_name = std::move(col.source_name);
 		map_entry->target_field_id = col.target_field_id;
+		map_entry->hive_partition = col.hive_partition;
 		// add the column id -> entry mapping
 		column_id_map.emplace(col.column_id, *map_entry);
 		if (!col.parent_column.IsValid()) {

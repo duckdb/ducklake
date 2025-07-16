@@ -69,10 +69,10 @@ CREATE TABLE {METADATA_CATALOG}.ducklake_file_partition_value(data_file_id BIGIN
 CREATE TABLE {METADATA_CATALOG}.ducklake_files_scheduled_for_deletion(data_file_id BIGINT, path VARCHAR, path_is_relative BOOLEAN, schedule_start TIMESTAMPTZ);
 CREATE TABLE {METADATA_CATALOG}.ducklake_inlined_data_tables(table_id BIGINT, table_name VARCHAR, schema_version BIGINT);
 CREATE TABLE {METADATA_CATALOG}.ducklake_column_mapping(mapping_id BIGINT, table_id BIGINT, type VARCHAR);
-CREATE TABLE {METADATA_CATALOG}.ducklake_name_mapping(mapping_id BIGINT, column_id BIGINT, source_name VARCHAR, target_field_id BIGINT, parent_column BIGINT);
+CREATE TABLE {METADATA_CATALOG}.ducklake_name_mapping(mapping_id BIGINT, column_id BIGINT, source_name VARCHAR, target_field_id BIGINT, parent_column BIGINT, is_partition BOOLEAN);
 INSERT INTO {METADATA_CATALOG}.ducklake_snapshot VALUES (0, NOW(), 0, 1, 0);
 INSERT INTO {METADATA_CATALOG}.ducklake_snapshot_changes VALUES (0, 'created_schema:"main"');
-INSERT INTO {METADATA_CATALOG}.ducklake_metadata (key, value) VALUES ('version', '0.2'), ('created_by', 'DuckDB %s'), ('data_path', %s), ('encrypted', '%s');
+INSERT INTO {METADATA_CATALOG}.ducklake_metadata (key, value) VALUES ('version', '0.3-dev1'), ('created_by', 'DuckDB %s'), ('data_path', %s), ('encrypted', '%s');
 INSERT INTO {METADATA_CATALOG}.ducklake_schema VALUES (0, UUID(), 0, NULL, 'main', 'main/', true);
 	)",
 	                                       DuckDB::SourceID(), SQLString(data_path), encryption_str);
@@ -103,6 +103,17 @@ UPDATE {METADATA_CATALOG}.ducklake_metadata SET value = '0.2' WHERE key = 'versi
 	auto result = transaction.Query(migrate_query);
 	if (result->HasError()) {
 		result->GetErrorObject().Throw("Failed to migrate DuckLake from v0.1 to v0.2:");
+	}
+}
+
+void DuckLakeMetadataManager::MigrateV02() {
+	string migrate_query = R"(
+ALTER TABLE {METADATA_CATALOG}.ducklake_name_mapping ADD COLUMN is_partition BOOLEAN DEFAULT false;
+UPDATE {METADATA_CATALOG}.ducklake_metadata SET value = '0.3-dev1' WHERE key = 'version';
+	)";
+	auto result = transaction.Query(migrate_query);
+	if (result->HasError()) {
+		result->GetErrorObject().Throw("Failed to migrate DuckLake from v0.2 to v0.3:");
 	}
 }
 
@@ -1576,7 +1587,7 @@ vector<DuckLakeColumnMappingInfo> DuckLakeMetadataManager::GetColumnMappings(opt
 		filter = "WHERE mapping_id >= " + to_string(start_from.GetIndex());
 	}
 	auto result = transaction.Query(StringUtil::Format(R"(
-SELECT mapping_id, table_id, type, column_id, source_name, target_field_id, parent_column
+SELECT mapping_id, table_id, type, column_id, source_name, target_field_id, parent_column, is_partition
 FROM {METADATA_CATALOG}.ducklake_column_mapping
 JOIN {METADATA_CATALOG}.ducklake_name_mapping USING (mapping_id)
 %s
@@ -1601,6 +1612,7 @@ ORDER BY mapping_id, parent_column NULLS FIRST
 		if (!row.IsNull(6)) {
 			name_map_column.parent_column = row.GetValue<idx_t>(6);
 		}
+		name_map_column.hive_partition = row.GetValue<bool>(7);
 		mapping_info.map_columns.push_back(std::move(name_map_column));
 	}
 	return column_maps;
@@ -1623,9 +1635,11 @@ void DuckLakeMetadataManager::WriteNewColumnMappings(DuckLakeSnapshot commit_sna
 			}
 			string parent_column =
 			    name_map_column.parent_column.IsValid() ? to_string(name_map_column.parent_column.GetIndex()) : "NULL";
-			name_map_insert_query += StringUtil::Format(
-			    "(%d, %d, %s, %d, %s)", column_mapping.mapping_id.index, name_map_column.column_id,
-			    SQLString(name_map_column.source_name), name_map_column.target_field_id.index, parent_column);
+			string is_partition = name_map_column.hive_partition ? "true" : "false";
+			name_map_insert_query +=
+			    StringUtil::Format("(%d, %d, %s, %d, %s, %s)", column_mapping.mapping_id.index,
+			                       name_map_column.column_id, SQLString(name_map_column.source_name),
+			                       name_map_column.target_field_id.index, parent_column, is_partition);
 		}
 	}
 	column_mapping_insert_query =
