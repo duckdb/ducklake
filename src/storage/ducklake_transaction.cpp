@@ -1156,9 +1156,21 @@ struct CompactionInformation {
 void DuckLakeTransaction::CommitChanges(DuckLakeCommitState &commit_state,
                                         TransactionChangeInformation &transaction_changes) {
 	auto &commit_snapshot = commit_state.commit_snapshot;
+
+	for (const auto &val : dropped_tables) {
+	    if (renamed_tables.find(val) == renamed_tables.end()) {
+	        real_dropped_tables.insert(val);
+	    }
+	}
+	
 	// drop entries
 	if (!dropped_tables.empty()) {
-		metadata_manager->DropTables(commit_snapshot, dropped_tables);
+		if (!renamed_tables.empty()){
+			metadata_manager->DropTables(commit_snapshot, dropped_tables, true);
+		} 
+		if (!real_dropped_tables.empty()) {
+			metadata_manager->DropTables(commit_snapshot, dropped_tables, false);
+		}
 	}
 	if (!dropped_views.empty()) {
 		metadata_manager->DropViews(commit_snapshot, dropped_views);
@@ -1863,6 +1875,7 @@ void DuckLakeTransaction::AlterEntryInternal(DuckLakeTableEntry &table, unique_p
 			// table is not transaction local - add to drop list
 			auto table_id = table.GetTableId();
 			dropped_tables.insert(table_id);
+			renamed_tables.insert(table_id);
 		}
 		break;
 	}

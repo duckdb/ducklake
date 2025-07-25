@@ -59,7 +59,7 @@ public:
 	virtual vector<DuckLakeFileScheduledForCleanup> GetFilesScheduledForCleanup(const string &filter);
 	virtual void RemoveFilesScheduledForCleanup(const vector<DuckLakeFileScheduledForCleanup> &cleaned_up_files);
 	virtual void DropSchemas(DuckLakeSnapshot commit_snapshot, const set<SchemaIndex> &ids);
-	virtual void DropTables(DuckLakeSnapshot commit_snapshot, const set<TableIndex> &ids);
+	virtual void DropTables(DuckLakeSnapshot commit_snapshot, const set<TableIndex> &ids, bool renamed);
 	virtual void DropViews(DuckLakeSnapshot commit_snapshot, const set<TableIndex> &ids);
 	virtual void WriteNewSchemas(DuckLakeSnapshot commit_snapshot, const vector<DuckLakeSchemaInfo> &new_schemas);
 	virtual void WriteNewTables(DuckLakeSnapshot commit_snapshot, const vector<DuckLakeTableInfo> &new_tables);
