@@ -1,0 +1,34 @@
+# name: test/sql/add_files/add_removed_files.test
+# description: test ducklake adding files that were previously removed
+# group: [add_files]
+
+require ducklake
+
+require parquet
+
+statement ok
+ATTACH 'ducklake:__TEST_DIR__/ducklake_add_removed_files.db' AS ducklake;
+
+statement ok
+CREATE TABLE ducklake.test(col1 INTEGER, col2 VARCHAR);
+
+statement ok
+INSERT INTO ducklake.test VALUES (100, 'hello');
+
+statement ok
+SET VARIABLE parquet_files = (SELECT LIST(data_file) FROM ducklake_list_files('ducklake', 'test'))
+
+statement ok
+DROP TABLE ducklake.test
+
+# Now we create the table again
+statement ok
+CREATE TABLE ducklake.test(col1 INTEGER, col2 VARCHAR);
+
+statement ok
+CALL ducklake_add_data_files('ducklake', 'test', getvariable('parquet_files')[1])
+
+query II
+FROM ducklake.test
+----
+100	hello

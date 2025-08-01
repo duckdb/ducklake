@@ -646,9 +646,6 @@ unique_ptr<DuckLakeNameMapEntry> DuckLakeFileProcessor::MapColumn(ParquetFileMet
 	DuckLakeParquetTypeChecker type_checker(table, file_metadata, field_id.Type(), column, prefix);
 	type_checker.CheckMatchingType();
 
-	if (column.field_id.IsValid()) {
-		throw InvalidInputException("File has field ids defined - only mapping by name is supported currently");
-	}
 	if (!prefix.empty()) {
 		prefix += ".";
 	}
