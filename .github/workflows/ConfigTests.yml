@@ -1,0 +1,66 @@
+name: Config Tests
+on: [push, pull_request,repository_dispatch]
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ github.head_ref || '' }}-${{ github.base_ref || '' }}-${{ github.ref != 'refs/heads/main' || github.sha }}
+  cancel-in-progress: true
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  ducklake-config-tests:
+    name: DuckDB Tests with DuckLake + DuckDB Back-End
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        # Add commits/tags to build against other DuckDB versions
+        duckdb_version: [ '<submodule_version>' ]
+        arch: ['linux_amd64']
+        vcpkg_version: [ '2023.04.15' ]
+        include:
+          - arch: 'linux_amd64'
+            vcpkg_triplet: 'x64-linux'
+
+    env:
+      VCPKG_TARGET_TRIPLET: ${{ matrix.vcpkg_triplet }}
+      GEN: Ninja
+      VCPKG_TOOLCHAIN_PATH: ${{ github.workspace }}/vcpkg/scripts/buildsystems/vcpkg.cmake
+
+    steps:
+    - name: Install required ubuntu packages
+      run: |
+        sudo apt-get update -y -qq
+        sudo apt-get install -y -qq build-essential cmake ninja-build ccache python3
+
+    - uses: actions/checkout@v3
+      with:
+        fetch-depth: 0
+        submodules: 'true'
+
+    - name: Checkout DuckDB to version
+      if: ${{ matrix.duckdb_version != '<submodule_version>'}}
+      run: |
+        cd duckdb
+        git checkout ${{ matrix.duckdb_version }}
+
+    - name: Setup Ccache
+      uses: hendrikmuhs/ccache-action@main
+      with:
+        key: ${{ github.job }}
+        save: ${{ github.ref == 'refs/heads/main' || github.repository != 'duckdb/duckdb-postgres' }}
+
+    - name: Setup vcpkg
+      uses: lukka/run-vcpkg@v11.1
+      with:
+        vcpkgGitCommitId: a42af01b72c28a8e1d7b48107b33e4f286a55ef6
+
+    - name: Build extension
+      env:
+        GEN: ninja
+        STATIC_LIBCPP: 1
+      run: |
+        make reldebug
+
+    - name: Test extension
+      run: |
+        build/reldebug/test/unittest --test-config test/configs/attach_ducklake.json --test-dir duckdb
