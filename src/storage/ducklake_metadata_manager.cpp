@@ -586,7 +586,6 @@ WHERE data.table_id=%d AND {SNAPSHOT_ID} >= data.begin_snapshot AND ({SNAPSHOT_I
 	if (!filter.empty()) {
 		query += "\nAND " + filter;
 	}
-
 	auto result = transaction.Query(snapshot, query);
 	if (result->HasError()) {
 		result->GetErrorObject().Throw("Failed to get data file list from DuckLake: ");
@@ -786,16 +785,25 @@ WHERE data.table_id=%d AND {SNAPSHOT_ID} >= data.begin_snapshot AND ({SNAPSHOT_I
 vector<DuckLakeCompactionFileEntry> DuckLakeMetadataManager::GetFilesForCompaction(DuckLakeTableEntry &table) {
 	auto table_id = table.GetTableId();
 	string data_select_list = "data.data_file_id, data.record_count, data.row_id_start, data.begin_snapshot, "
-	                          "data.end_snapshot, data.mapping_id, snapshot.schema_version, data.partial_file_info, "
+	                          "data.end_snapshot, data.mapping_id, sr.schema_version , data.partial_file_info, "
 	                          "data.partition_id, partition_info.keys, " +
 	                          GetFileSelectList("data");
 	string delete_select_list =
 	    "del.data_file_id, del.delete_count, del.begin_snapshot, del.end_snapshot, " + GetFileSelectList("del");
 	string select_list = data_select_list + ", " + delete_select_list;
 	auto query = StringUtil::Format(R"(
+WITH snapshot_ranges AS (
+  SELECT
+    MIN(snapshot_id) AS min_snapshot_id,
+    MAX(snapshot_id) AS max_snapshot_id,
+    schema_version
+  FROM {METADATA_CATALOG}.ducklake_snapshot
+  GROUP BY schema_version
+)
 SELECT %s,
 FROM {METADATA_CATALOG}.ducklake_data_file data
-JOIN {METADATA_CATALOG}.ducklake_snapshot snapshot ON (data.begin_snapshot = snapshot.snapshot_id)
+JOIN snapshot_ranges sr
+  ON data.begin_snapshot BETWEEN sr.min_snapshot_id AND sr.max_snapshot_id
 LEFT JOIN (
 	SELECT *
     FROM {METADATA_CATALOG}.ducklake_delete_file
