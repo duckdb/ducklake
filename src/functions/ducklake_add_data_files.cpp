@@ -51,7 +51,7 @@ static unique_ptr<FunctionData> DuckLakeAddDataFilesBind(ClientContext &context,
 		} else if (lower == "hive_partitioning") {
 			result->hive_partitioning =
 			    BooleanValue::Get(entry.second) ? HivePartitioningType::YES : HivePartitioningType::NO;
-		}  else if (lower != "schema") {
+		} else if (lower != "schema") {
 			throw InternalException("Unknown named parameter %s for add_files", entry.first);
 		}
 	}
