@@ -57,7 +57,7 @@ static unique_ptr<FunctionData> DuckLakeTableChangesBind(ClientContext &context,
 	auto &function_info = input.table_function.function_info->Cast<DuckLakeFunctionInfo>();
 	names = function_info.column_names;
 	return_types = function_info.column_types;
-	function_info.start_snapshot = make_uniq<DuckLakeSnapshot>(transaction.GetSnapshot(start_at_clause));
+	function_info.start_snapshot = make_uniq<DuckLakeSnapshot>(transaction.GetSnapshot(start_at_clause, true));
 	function_info.scan_type = scan_type;
 	return bind_data;
 }
