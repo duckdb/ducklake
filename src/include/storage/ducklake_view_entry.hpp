@@ -12,6 +12,7 @@
 #include "duckdb/common/mutex.hpp"
 #include "common/index.hpp"
 #include "common/local_change.hpp"
+#include "duckdb/parser/parsed_data/create_view_info.hpp"
 
 namespace duckdb {
 struct SetCommentInfo;
@@ -35,6 +36,9 @@ public:
 	LocalChange GetLocalChange() const {
 		return local_change;
 	}
+	bool IsBound() const;
+
+	void Bind(ClientContext &context);
 
 public:
 	unique_ptr<CatalogEntry> AlterEntry(ClientContext &context, AlterInfo &info) override;
@@ -62,6 +66,7 @@ private:
 	string view_uuid;
 	string query_sql;
 	LocalChange local_change;
+	bool is_bound = false;
 };
 
 } // namespace duckdb

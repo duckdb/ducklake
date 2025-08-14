@@ -242,6 +242,16 @@ void DuckLakeSchemaEntry::Scan(ClientContext &context, CatalogType type,
 			// this entry exists in both the local and global set - emit only the transaction-local entry
 			continue;
 		}
+		if (entry.second->type == CatalogType::VIEW_ENTRY) {
+			auto view_entry = dynamic_cast<DuckLakeViewEntry *>(entry.second.get());
+			if (!view_entry->IsBound()) {
+				try {
+					view_entry->Bind(context);
+				} catch (...) {
+					//
+				}
+			}
+		}
 		callback(*entry.second);
 	}
 }

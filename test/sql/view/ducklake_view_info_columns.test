@@ -1,0 +1,78 @@
+# name: test/sql/view/ducklake_view_info_columns.test
+# description: test ducklake view info columns
+# group: [view]
+
+require ducklake
+
+require parquet
+
+statement ok
+ATTACH 'ducklake:__TEST_DIR__/ducklake_view_info_columns.db' AS ducklake (DATA_PATH '__TEST_DIR__/ducklake_view_info_columns')
+
+statement ok
+use ducklake;
+
+statement ok
+create or replace table t as select 1 as id;
+
+statement ok
+create or replace view v as select * from t;
+
+query II
+select table_name, column_name  from information_schema.columns where table_catalog = current_database() order by all;
+----
+t	id
+v	id
+
+# What if we alter our view?
+statement ok
+ALTER VIEW ducklake.v RENAME TO v2
+
+query II
+select table_name, column_name from information_schema.columns where table_catalog = current_database() order by all;
+----
+t	id
+v2	id
+
+# What if we drop our view
+statement ok
+DROP VIEW ducklake.v2;
+
+query II
+select table_name, column_name from information_schema.columns where table_catalog = current_database();
+----
+t	id
+
+# Let's try a more complex view
+statement ok
+create or replace table t_2 as select 1 as id, 'Oogie' as name, 2 as salary, 3 as dividends;
+
+# Also try with the same name as in-code
+query I
+create view mock_view_name_lake as select name, salary+dividends as fortune from t inner join t_2 on (t.id = t_2.id);
+
+query II
+select table_name, column_name from information_schema.columns where table_catalog = current_database() and table_name = 'mock_view_name_lake'  order by all;
+----
+mock_view_name_lake	fortune
+mock_view_name_lake	name
+
+# We can also time travel
+
+statement ok
+use memory;
+
+statement ok
+DETACH ducklake;
+
+statement ok
+ATTACH 'ducklake:__TEST_DIR__/ducklake_view_info_columns.db' AS ducklake (SNAPSHOT_VERSION 2);
+
+statement ok
+use ducklake;
+
+query II
+select table_name, column_name from information_schema.columns where table_catalog = current_database() order by all;
+----
+t	id
+v	id
