@@ -1,0 +1,91 @@
+# name: test/sql/compaction/compaction_hive_structure.test
+# description: test compaction keeps hive structure
+# group: [compaction]
+
+require ducklake
+
+require parquet
+
+statement ok
+ATTACH 'ducklake:__TEST_DIR__/ducklake_compaction_hive.db' AS ducklake
+
+statement ok
+use ducklake
+
+statement ok
+CREATE TABLE sales (
+      id INTEGER,
+      product STRING,
+      amount DOUBLE,
+      sale_date DATE
+  );
+
+statement ok
+ALTER TABLE sales SET PARTITIONED BY (sale_date);
+
+statement ok
+INSERT INTO sales
+  VALUES
+      (1, 'Product A', 100.0, '2023-07-01'),
+      (2, 'Product B', 150.0, '2023-07-01');
+
+statement ok
+INSERT INTO sales
+  VALUES
+      (3, 'Product A', 100.0, '2023-07-02'),
+      (4, 'Product B', 150.0, '2023-07-02');
+
+statement ok
+INSERT INTO sales
+  VALUES
+      (5, 'Product C', 300.0, '2023-07-02'),
+      (6, 'Product B', 150.0, '2023-07-02');
+
+statement ok
+CALL merge_adjacent_files();
+
+statement ok
+CALL ducklake_cleanup_old_files('ducklake', cleanup_all => true);
+
+query I
+SELECT count(*) FROM ducklake_list_files('ducklake', 'sales') where data_file like '%sale_date%'
+----
+2
+
+query IIII
+FROM sales
+----
+1	Product A	100.0	2023-07-01
+2	Product B	150.0	2023-07-01
+3	Product A	100.0	2023-07-02
+4	Product B	150.0	2023-07-02
+5	Product C	300.0	2023-07-02
+6	Product B	150.0	2023-07-02
+
+statement ok
+CREATE TABLE test_table AS SELECT 1 as partition_col, random() as value LIMIT 0;
+
+statement ok
+ALTER TABLE test_table SET PARTITIONED BY (partition_col);
+
+statement ok
+INSERT INTO test_table SELECT 1 as partition_col, random() as value;
+
+statement ok
+INSERT INTO test_table SELECT 2 as partition_col, random() as value;
+
+query I
+SELECT count(*) FROM ducklake_list_files('ducklake', 'test_table') where data_file like '%partition_col%'
+----
+2
+
+statement ok
+ALTER TABLE test_table RENAME TO test_table_renamed;
+
+statement ok
+INSERT INTO test_table_renamed SELECT 2 as partition_col, random() as value;
+
+query I
+SELECT count(*)  FROM ducklake_list_files('ducklake', 'test_table_renamed') where data_file like '%partition_col%';
+----
+3

@@ -128,7 +128,7 @@ struct DuckLakeCopyOptions {
 };
 
 struct DuckLakeCopyInput {
-	explicit DuckLakeCopyInput(ClientContext &context, DuckLakeTableEntry &table);
+	explicit DuckLakeCopyInput(ClientContext &context, DuckLakeTableEntry &table, string hive_partition = "");
 	DuckLakeCopyInput(ClientContext &context, DuckLakeSchemaEntry &schema, const ColumnList &columns,
 	                  const string &data_path_p);
 
@@ -136,7 +136,7 @@ struct DuckLakeCopyInput {
 	optional_ptr<DuckLakePartition> partition_data;
 	optional_ptr<DuckLakeFieldData> field_data;
 	const ColumnList &columns;
-	const string &data_path;
+	const string data_path;
 	string encryption_key;
 	SchemaIndex schema_id;
 	TableIndex table_id;

@@ -282,8 +282,9 @@ DuckLakeCopyOptions::DuckLakeCopyOptions(unique_ptr<CopyInfo> info_p, CopyFuncti
     : info(std::move(info_p)), copy_function(std::move(copy_function_p)) {
 }
 
-DuckLakeCopyInput::DuckLakeCopyInput(ClientContext &context, DuckLakeTableEntry &table)
-    : catalog(table.ParentCatalog().Cast<DuckLakeCatalog>()), columns(table.GetColumns()), data_path(table.DataPath()) {
+DuckLakeCopyInput::DuckLakeCopyInput(ClientContext &context, DuckLakeTableEntry &table, string hive_partition)
+    : catalog(table.ParentCatalog().Cast<DuckLakeCatalog>()), columns(table.GetColumns()),
+      data_path(table.DataPath() + hive_partition) {
 	partition_data = table.GetPartitionData();
 	optional_idx partition_id;
 	if (partition_data) {
