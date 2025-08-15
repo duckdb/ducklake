@@ -543,7 +543,7 @@ unique_ptr<CatalogEntry> DuckLakeTableEntry::AlterTable(DuckLakeTransaction &tra
 	ColumnList new_columns;
 	for (auto &col : columns.Logical()) {
 		auto copy = col.Copy();
-		if (copy.Name() == info.removed_column) {
+		if (StringUtil::CIEquals(copy.Name(), info.removed_column)) {
 			continue;
 		}
 		new_columns.AddColumn(std::move(copy));

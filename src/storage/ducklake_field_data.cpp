@@ -1,4 +1,6 @@
 #include "storage/ducklake_field_data.hpp"
+
+#include "duckdb/common/exception/catalog_exception.hpp"
 #include "duckdb/parser/column_list.hpp"
 #include "duckdb/parser/expression/constant_expression.hpp"
 
@@ -172,7 +174,7 @@ unique_ptr<DuckLakeFieldId> DuckLakeFieldId::AddField(const vector<string> &colu
 	vector<unique_ptr<DuckLakeFieldId>> new_children;
 	if (depth >= column_path.size()) {
 		// leaf - add the column at this level
-		// copy over all of the other columns as-is
+		// copy over all the other columns as-is
 		for (auto &child : children) {
 			new_children.push_back(child->Copy());
 		}
@@ -207,6 +209,13 @@ unique_ptr<DuckLakeFieldId> DuckLakeFieldId::RemoveField(const vector<string> &c
 	for (idx_t child_idx = 0; child_idx < children.size(); child_idx++) {
 		auto &child = *children[child_idx];
 		if (StringUtil::CIEquals(child.Name(), column_path[depth])) {
+			if (depth == 1 && column_path.size() == 2 &&
+			    ((type.id() == LogicalTypeId::MAP &&
+			      (StringUtil::CIEquals(child.Name(), "key") || StringUtil::CIEquals(child.Name(), "value"))) ||
+			     (type.id() == LogicalTypeId::LIST && StringUtil::CIEquals(child.Name(), "element")))) {
+				throw CatalogException("Cannot drop field '%s' from column '%s' - it's not a struct", child.Name(),
+				                       name);
+			}
 			// found it!
 			found = true;
 			if (depth + 1 >= column_path.size()) {
