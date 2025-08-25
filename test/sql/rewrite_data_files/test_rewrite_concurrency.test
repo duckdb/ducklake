@@ -1,0 +1,63 @@
+# name: test/sql/rewrite_data_files/test_rewrite_concurrency.test
+# description: test concurrent rewrites
+# group: [rewrite_data_files]
+
+require ducklake
+
+require parquet
+
+require notwindows
+
+statement ok
+ATTACH 'ducklake:__TEST_DIR__/ducklake_concurrent_rewrite.db' AS ducklake (DATA_PATH '__TEST_DIR__/ducklake_concurrent_rewrite', METADATA_CATALOG 'ducklake_metadata')
+
+statement ok
+SET ducklake_retry_wait_ms=100
+
+statement ok
+SET ducklake_retry_backoff=2.0
+
+statement ok
+use ducklake
+
+# Start off with simple case
+statement ok
+CREATE TABLE test(key INTEGER, values VARCHAR);
+
+statement ok
+INSERT INTO test SELECT i, concat('thisisastring_', i) FROM range(100) t(i)
+
+# Let's do three rounds of deletions
+statement ok
+DELETE FROM test
+WHERE key < 39;
+
+statement ok
+DELETE FROM test
+WHERE key > 90;
+
+statement ok
+DELETE FROM test
+WHERE key > 41;
+
+concurrentloop i 0 2
+
+statement maybe
+CALL ducklake_rewrite_data_files('ducklake', 'test', delete_threshold => 0);
+----
+attempting to compact table with index "1" - but another transaction has compacted it
+
+endloop
+
+query II
+FROM test
+----
+39	thisisastring_39
+40	thisisastring_40
+41	thisisastring_41
+
+query III
+SELECT data_file_id, begin_snapshot, end_snapshot FROM ducklake_metadata.ducklake_data_file
+----
+0	2	5
+4	5	NULL

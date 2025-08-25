@@ -1237,25 +1237,44 @@ void DuckLakeTransaction::CommitChanges(DuckLakeCommitState &commit_state,
 		metadata_manager->WriteNewInlinedDeletes(commit_snapshot, inlined_deletes);
 
 		// write compactions
-		auto compaction_changes = GetCompactionChanges(commit_snapshot);
-		metadata_manager->WriteCompactions(compaction_changes.compacted_files);
-		metadata_manager->WriteNewDataFiles(commit_snapshot, compaction_changes.new_files);
+		auto compaction_merge_adjacent_changes = GetCompactionChanges(commit_snapshot, MERGE_ADJACENT_TABLES);
+		metadata_manager->WriteCompactions(compaction_merge_adjacent_changes.compacted_files, MERGE_ADJACENT_TABLES);
+		metadata_manager->WriteNewDataFiles(commit_snapshot, compaction_merge_adjacent_changes.new_files);
+
+		auto compaction_rewrite_delete_changes = GetCompactionChanges(commit_snapshot, REWRITE_DELETES);
+		metadata_manager->WriteNewDataFiles(commit_snapshot, compaction_rewrite_delete_changes.new_files);
+		metadata_manager->WriteCompactions(compaction_rewrite_delete_changes.compacted_files, REWRITE_DELETES);
 	}
 }
 
-CompactionInformation DuckLakeTransaction::GetCompactionChanges(DuckLakeSnapshot &commit_snapshot) {
+CompactionInformation DuckLakeTransaction::GetCompactionChanges(DuckLakeSnapshot &commit_snapshot,
+                                                                CompactionType type) {
 	CompactionInformation result;
 	for (auto &entry : table_data_changes) {
 		auto table_id = entry.first;
 		auto &table_changes = entry.second;
 		for (auto &compaction : table_changes.compactions) {
+			if (type != compaction.type) {
+				continue;
+			}
 			auto new_file = GetNewDataFile(compaction.written_file, commit_snapshot, table_id, compaction.row_id_start);
-			new_file.begin_snapshot = compaction.source_files[0].file.begin_snapshot;
+			switch (type) {
+			case REWRITE_DELETES:
+				new_file.begin_snapshot = compaction.source_files[0].delete_files.back().begin_snapshot;
+				break;
+			case MERGE_ADJACENT_TABLES:
+				new_file.begin_snapshot = compaction.source_files[0].file.begin_snapshot;
+				break;
+			default:
+				throw InternalException("DuckLakeTransaction::GetCompactionChanges Compaction type is invalid");
+			}
 
 			idx_t row_id_limit = 0;
 			for (auto &compacted_file : compaction.source_files) {
 				row_id_limit += compacted_file.file.row_count;
-
+				if (!compacted_file.delete_files.empty()) {
+					row_id_limit -= compacted_file.delete_files.back().row_count;
+				}
 				if (!compacted_file.partial_files.empty()) {
 					// first process any partial file info that already existed for this file
 					if (!new_file.partial_file_info.empty()) {
@@ -1272,6 +1291,15 @@ CompactionInformation DuckLakeTransaction::GetCompactionChanges(DuckLakeSnapshot
 				file_info.path = compacted_file.file.data.path;
 				file_info.source_id = compacted_file.file.id;
 				file_info.new_id = new_file.id;
+
+				if (!compacted_file.delete_files.empty()) {
+					file_info.delete_file_path = compacted_file.delete_files.back().data.path;
+					file_info.delete_file_id = compacted_file.delete_files.back().delete_file_id;
+					file_info.start_snapshot = compacted_file.file.begin_snapshot;
+					file_info.table_index = entry.first;
+					file_info.delete_file_start_snapshot = compacted_file.delete_files.back().begin_snapshot;
+					file_info.delete_file_end_snapshot = compacted_file.delete_files.back().end_snapshot;
+				}
 				if (row_id_limit > new_file.row_count) {
 					throw InternalException("Compaction error - row id limit is larger than the row count of the file");
 				}

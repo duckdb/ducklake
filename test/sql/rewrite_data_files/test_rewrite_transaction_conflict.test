@@ -1,0 +1,118 @@
+# name: test/sql/rewrite_data_files/test_rewrite_transaction_conflict.test
+# description: test transaction conflict on delete rewrites
+# group: [rewrite_data_files]
+
+require ducklake
+
+require parquet
+
+statement ok
+ATTACH 'ducklake:__TEST_DIR__/ducklake_conflict_rewrite.db' AS ducklake (DATA_PATH '__TEST_DIR__/ducklake_conflict_rewrite', METADATA_CATALOG 'ducklake_metadata')
+
+statement ok
+SET immediate_transaction_mode=true
+
+statement ok
+CREATE TABLE ducklake.test(i INTEGER);
+
+statement ok
+INSERT INTO ducklake.test  FROM range(100) t(i)
+
+statement ok
+DELETE FROM ducklake.TEST WHERE i <10
+
+# try to commit a delete after a compaction: conflict
+statement ok con1
+BEGIN
+
+statement ok con2
+BEGIN
+
+statement ok con1
+CALL ducklake_rewrite_data_files('ducklake', 'test', delete_threshold => 0);
+
+statement ok con2
+DELETE FROM ducklake.test
+
+statement ok con1
+COMMIT
+
+statement error con2
+COMMIT
+----
+
+statement ok
+DELETE FROM ducklake.TEST WHERE i <20
+
+# try to commit a compaction after a deletion: conflict
+statement ok con1
+BEGIN
+
+statement ok con2
+BEGIN
+
+statement ok con1
+DELETE FROM ducklake.TEST WHERE i <30
+
+statement ok con2
+CALL ducklake_rewrite_data_files('ducklake', 'test', delete_threshold => 0);
+
+statement ok con1
+COMMIT
+
+statement error con2
+COMMIT
+----
+
+statement ok
+DELETE FROM ducklake.TEST WHERE i <40
+
+# two transactions both try to compact: conflict
+statement ok con1
+BEGIN
+
+statement ok con2
+BEGIN
+
+statement ok con1
+CALL ducklake_rewrite_data_files('ducklake', 'test', delete_threshold => 0);
+
+statement ok con2
+CALL ducklake_rewrite_data_files('ducklake', 'test', delete_threshold => 0);
+
+statement ok con1
+COMMIT
+
+statement error con2
+COMMIT
+----
+
+statement ok
+INSERT INTO ducklake.test VALUES (7);
+
+statement ok
+INSERT INTO ducklake.test VALUES (8);
+
+# compaction and insert: no conflict
+statement ok con1
+BEGIN
+
+statement ok con2
+BEGIN
+
+statement ok con1
+CALL ducklake_rewrite_data_files('ducklake', 'test', delete_threshold => 0);
+
+statement ok con2
+INSERT INTO ducklake.test VALUES (9);
+
+statement ok con1
+COMMIT
+
+statement ok con2
+COMMIT
+
+query I
+SELECT count(*) FROM ducklake.test ORDER BY ALL
+----
+63

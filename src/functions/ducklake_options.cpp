@@ -12,7 +12,7 @@ struct DuckLakeOptionMetadata {
 	const char *description;
 };
 
-using ducklake_option_array = std::array<DuckLakeOptionMetadata, 13>;
+using ducklake_option_array = std::array<DuckLakeOptionMetadata, 14>;
 
 static constexpr const ducklake_option_array DUCKLAKE_OPTIONS = {
     {{"data_inlining_row_limit", "Maximum amount of rows to inline in a single insert"},
@@ -28,6 +28,8 @@ static constexpr const ducklake_option_array DUCKLAKE_OPTIONS = {
      {"created_by", "Tool used to write the DuckLake"},
      {"data_path", "Path to data files"},
      {"require_commit_message", "If an explicit commit message is required for a snapshot commit."},
+     {"compaction_delete_threshold_rewrite", "A threshold that determines the minimum amount of data that must be "
+                                             "removed from a file before a rewrite is warranted. From 0 - 1."},
      {"encrypted", "Whether or not to encrypt Parquet files written to the data path"}}};
 
 struct DuckLakeOptionsData : public TableFunctionData {
