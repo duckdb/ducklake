@@ -71,6 +71,12 @@ static unique_ptr<FunctionData> DuckLakeSetOptionBind(ClientContext &context, Ta
 		value = to_string(data_inlining_row_limit);
 	} else if (option == "require_commit_message") {
 		value = val.GetValue<bool>() ? "true" : "false";
+	} else if (option == "rewrite_delete_threshold") {
+		double threshold = val.GetValue<double>();
+		if (threshold < 0 || threshold > 1) {
+			throw BinderException("The rewrite_delete_threshold must be between 0 and 1");
+		}
+		value = to_string(val.GetValue<double>());
 	} else {
 		throw NotImplementedException("Unsupported option %s", option);
 	}

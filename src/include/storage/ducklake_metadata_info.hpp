@@ -21,6 +21,15 @@
 
 namespace duckdb {
 
+//===--------------------------------------------------------------------===//
+// Compaction Type
+//===--------------------------------------------------------------------===//
+
+enum class CompactionType {
+	MERGE_ADJACENT_TABLES, // Merge adjacent tables
+	REWRITE_DELETES        // Rewrite deletes that delete more than a % of the table, might also do merge of files.
+};
+
 struct DuckLakeTag {
 	string key;
 	string value;
@@ -297,9 +306,19 @@ struct DuckLakeCompactionFileData : public DuckLakeCompactionBaseFileData {
 	vector<string> partition_values;
 };
 
-struct DuckLakeCompactionDeleteFileData : public DuckLakeCompactionBaseFileData {};
+struct DuckLakeCompactionDeleteFileData : public DuckLakeCompactionBaseFileData {
+	DataFileIndex delete_file_id;
+};
 
 struct DuckLakeCompactionFileEntry {
+	DuckLakeCompactionFileData file;
+	// optional_idx
+	vector<DuckLakeCompactionDeleteFileData> delete_files;
+	vector<DuckLakePartialFileInfo> partial_files;
+	idx_t schema_version;
+};
+
+struct DuckLakeRewriteFileEntry {
 	DuckLakeCompactionFileData file;
 	vector<DuckLakeCompactionDeleteFileData> delete_files;
 	vector<DuckLakePartialFileInfo> partial_files;
@@ -310,12 +329,20 @@ struct DuckLakeCompactionEntry {
 	vector<DuckLakeCompactionFileEntry> source_files;
 	DuckLakeDataFile written_file;
 	optional_idx row_id_start;
+	CompactionType type;
 };
 
 struct DuckLakeCompactedFileInfo {
 	string path;
 	DataFileIndex source_id;
 	DataFileIndex new_id;
+	//! Info on delete files, in case the compaction is a delete-rewrite
+	string delete_file_path;
+	DataFileIndex delete_file_id;
+	optional_idx start_snapshot;
+	TableIndex table_index;
+	optional_idx delete_file_start_snapshot;
+	optional_idx delete_file_end_snapshot;
 };
 
 struct DuckLakeTableSizeInfo {

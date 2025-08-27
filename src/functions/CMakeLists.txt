@@ -6,7 +6,7 @@ add_library(
   ducklake_expire_snapshots.cpp
   ducklake_list_files.cpp
   ducklake_snapshots.cpp
-  ducklake_merge_adjacent_files.cpp
+  ducklake_compaction_functions.cpp
   ducklake_set_commit_message.cpp
   ducklake_current_snapshot.cpp
   ducklake_last_committed_snapshot.cpp

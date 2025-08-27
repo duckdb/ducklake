@@ -1,0 +1,39 @@
+# name: test/sql/rewrite_data_files/insert_delete_loop.test
+# description: Test rewrite deletes in a insert delete loop
+# group: [rewrite_data_files]
+
+require ducklake
+
+require parquet
+
+statement ok
+ATTACH 'ducklake:__TEST_DIR__/insert_delete_loop.db' AS ducklake (DATA_PATH '__TEST_DIR__/insert_delete_loop', METADATA_CATALOG 'ducklake_metadata')
+
+statement ok
+USE ducklake
+
+statement ok
+CREATE TABLE tbl(i INTEGER);
+
+loop i 1 10
+
+statement ok
+INSERT INTO tbl FROM range(${i} * 1000, ${i} * 1000 + 1000);
+
+statement ok
+DELETE FROM tbl WHERE i BETWEEN ${i} * 1000 AND ${i} * 1000 + 950
+
+query I
+SELECT COUNT(*) = ${i} * 49 FROM tbl
+----
+true
+
+statement ok
+CALL ducklake_rewrite_data_files('ducklake', 'tbl');
+
+query I
+SELECT COUNT(*) = ${i} * 49 FROM tbl
+----
+true
+
+endloop

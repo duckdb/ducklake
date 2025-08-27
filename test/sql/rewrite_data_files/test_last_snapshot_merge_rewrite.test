@@ -1,0 +1,162 @@
+# name: test/sql/rewrite_data_files/test_last_snapshot_merge_rewrite.test
+# description: Test deletion works in combination with merge
+# group: [rewrite_data_files]
+
+require ducklake
+
+require parquet
+
+statement ok
+ATTACH 'ducklake:__TEST_DIR__/ducklake_last_merge_rewrite.db' AS ducklake (DATA_PATH '__TEST_DIR__/ducklake_last_merge_rewrite', METADATA_CATALOG 'ducklake_metadata')
+
+statement ok
+USE ducklake
+
+loop i 0 2
+
+statement ok
+CREATE TABLE test(key INTEGER, values VARCHAR);
+
+# 2	{tables_inserted_into=[1]}
+statement ok
+INSERT INTO test SELECT i, concat('thisisastring_', i) FROM range(100) t(i)
+
+# Let's do a few insertions interleaved with deletions
+# 3	{tables_deleted_from=[1]}
+statement ok
+DELETE FROM test
+WHERE key < 50;
+
+# 4	{tables_inserted_into=[1]}
+statement ok
+INSERT INTO test SELECT i, concat('thisisastring_', i) FROM range(100,200) t(i)
+
+# 5	{tables_deleted_from=[1]}
+statement ok
+DELETE FROM test
+WHERE key < 80;
+
+# 6	{tables_deleted_from=[1]}
+statement ok
+DELETE FROM test
+WHERE key  = 120;
+
+# 7	{tables_inserted_into=[1]}
+statement ok
+INSERT INTO test SELECT i, concat('thisisastring_', i) FROM range(200,300) t(i)
+
+# 8	{tables_deleted_from=[1]}
+statement ok
+DELETE FROM test
+WHERE key  > 200 and key < 250;
+
+skipif i=1
+query I
+SELECT COUNT(*) FROM GLOB('__TEST_DIR__/ducklake_last_merge_rewrite/**/*')
+----
+7
+
+skipif i=0
+query I
+SELECT COUNT(*) FROM GLOB('__TEST_DIR__/ducklake_last_merge_rewrite/**/*')
+----
+14
+
+
+skipif i=0
+statement ok
+CALL ducklake_merge_adjacent_files('ducklake');
+
+skipif i=1
+statement ok
+CALL ducklake_rewrite_data_files('ducklake', 'test', delete_threshold => 0);
+
+statement ok
+CALL ducklake_cleanup_old_files('ducklake', cleanup_all => true);
+
+skipif i=0
+query I
+SELECT COUNT(*) FROM GLOB('__TEST_DIR__/ducklake_last_merge_rewrite/**/*')
+----
+14
+
+skipif i=1
+query I
+SELECT COUNT(*) FROM GLOB('__TEST_DIR__/ducklake_last_merge_rewrite/**/*')
+----
+7
+
+skipif i=0
+statement ok
+CALL ducklake_rewrite_data_files('ducklake', 'test', delete_threshold => 0);
+
+skipif i=1
+statement ok
+CALL ducklake_merge_adjacent_files('ducklake');
+
+skipif i=0
+query I
+SELECT COUNT(*) FROM GLOB('__TEST_DIR__/ducklake_last_merge_rewrite/**/*')
+----
+15
+
+skipif i=1
+query I
+SELECT COUNT(*) FROM GLOB('__TEST_DIR__/ducklake_last_merge_rewrite/**/*')
+----
+7
+
+statement ok
+CALL ducklake_cleanup_old_files('ducklake', cleanup_all => true);
+
+skipif i=1
+query I
+SELECT COUNT(*) FROM GLOB('__TEST_DIR__/ducklake_last_merge_rewrite/**/*')
+----
+7
+
+skipif i=0
+query I
+SELECT COUNT(*) FROM GLOB('__TEST_DIR__/ducklake_last_merge_rewrite/**/*')
+----
+14
+
+query I
+select count(*) from test;
+----
+170
+
+query I
+select count(*) from test AT (VERSION => 3);
+----
+50
+
+query I
+select count(*) from test AT (VERSION => 4);
+----
+150
+
+query I
+select count(*) from test AT (VERSION => 5);
+----
+120
+
+query I
+select count(*) from test AT (VERSION => 6);
+----
+119
+
+query I
+select count(*) from test AT (VERSION => 7);
+----
+219
+
+query I
+select count(*) from test AT (VERSION => 8);
+----
+170
+
+statement ok
+drop table test;
+
+endloop

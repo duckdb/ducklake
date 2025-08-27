@@ -65,6 +65,11 @@ public:
 	DuckLakeCleanupOldFilesFunction();
 };
 
+class DuckLakeRewriteDataFilesFunction : public TableFunction {
+public:
+	static TableFunctionSet GetFunctions();
+};
+
 class DuckLakeExpireSnapshotsFunction : public TableFunction {
 public:
 	DuckLakeExpireSnapshotsFunction();

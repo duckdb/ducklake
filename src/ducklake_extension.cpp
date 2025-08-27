@@ -41,6 +41,9 @@ static void LoadInternal(DatabaseInstance &instance) {
 	DuckLakeMergeAdjacentFilesFunction merge_adjacent_files;
 	ExtensionUtil::RegisterFunction(instance, merge_adjacent_files);
 
+	auto rewrite_files = DuckLakeRewriteDataFilesFunction::GetFunctions();
+	ExtensionUtil::RegisterFunction(instance, rewrite_files);
+
 	DuckLakeCleanupOldFilesFunction cleanup_old_files;
 	ExtensionUtil::RegisterFunction(instance, cleanup_old_files);
 
