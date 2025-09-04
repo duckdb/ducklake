@@ -405,6 +405,7 @@ DuckLakeCompactor::GenerateCompactionCommand(vector<DuckLakeCompactionFileEntry>
 	auto ducklake_scan =
 	    make_uniq<LogicalGet>(table_idx, std::move(scan_function), std::move(bind_data), copy_options.expected_types,
 	                          copy_options.names, std::move(virtual_columns));
+
 	auto &column_ids = ducklake_scan->GetMutableColumnIds();
 	for (idx_t i = 0; i < columns.PhysicalColumnCount(); i++) {
 		column_ids.emplace_back(i);
@@ -413,6 +414,16 @@ DuckLakeCompactor::GenerateCompactionCommand(vector<DuckLakeCompactionFileEntry>
 		column_ids.emplace_back(COLUMN_IDENTIFIER_ROW_ID);
 	}
 	column_ids.emplace_back(DuckLakeMultiFileReader::COLUMN_IDENTIFIER_SNAPSHOT_ID);
+
+	// Resolve types so we can check if we need casts
+	ducklake_scan->ResolveOperatorTypes();
+
+	// Insert a cast projection if necessary
+	auto root = unique_ptr_cast<LogicalGet, LogicalOperator>(std::move(ducklake_scan));
+
+	if (DuckLakeInsert::RequireCasts(root->types)) {
+		root = DuckLakeInsert::InsertCasts(binder, root);
+	}
 
 	// generate the LogicalCopyToFile
 	auto copy = make_uniq<LogicalCopyToFile>(std::move(copy_options.copy_function), std::move(copy_options.bind_data),
@@ -438,8 +449,7 @@ DuckLakeCompactor::GenerateCompactionCommand(vector<DuckLakeCompactionFileEntry>
 	copy->preserve_order = PreserveOrderType::PRESERVE_ORDER;
 	copy->file_size_bytes = optional_idx();
 	copy->rotate = false;
-
-	copy->children.push_back(std::move(ducklake_scan));
+	copy->children.push_back(std::move(root));
 
 	optional_idx target_row_id_start;
 	if (files_are_adjacent) {
@@ -457,8 +467,8 @@ DuckLakeCompactor::GenerateCompactionCommand(vector<DuckLakeCompactionFileEntry>
 //===--------------------------------------------------------------------===//
 // Function
 //===--------------------------------------------------------------------===//
-unique_ptr<LogicalOperator> GenerateCompactionOperator(TableFunctionBindInput &input, idx_t bind_index,
-                                                       vector<unique_ptr<LogicalOperator>> &compactions) {
+static unique_ptr<LogicalOperator> GenerateCompactionOperator(TableFunctionBindInput &input, idx_t bind_index,
+                                                              vector<unique_ptr<LogicalOperator>> &compactions) {
 	if (compactions.empty()) {
 		// nothing to compact - generate an empty result
 		vector<ColumnBinding> bindings;
@@ -476,8 +486,8 @@ unique_ptr<LogicalOperator> GenerateCompactionOperator(TableFunctionBindInput &i
 	return union_op;
 }
 
-unique_ptr<LogicalOperator> MergeAdjacentFilesBind(ClientContext &context, TableFunctionBindInput &input,
-                                                   idx_t bind_index, vector<string> &return_names) {
+static unique_ptr<LogicalOperator> MergeAdjacentFilesBind(ClientContext &context, TableFunctionBindInput &input,
+                                                          idx_t bind_index, vector<string> &return_names) {
 	// gather a list of files to compact
 	auto &catalog = BaseMetadataFunction::GetCatalog(context, input.inputs[0]);
 	auto &ducklake_catalog = catalog.Cast<DuckLakeCatalog>();
@@ -503,8 +513,8 @@ DuckLakeMergeAdjacentFilesFunction::DuckLakeMergeAdjacentFilesFunction()
 	bind_operator = MergeAdjacentFilesBind;
 }
 
-unique_ptr<LogicalOperator> RewriteFilesBind(ClientContext &context, TableFunctionBindInput &input, idx_t bind_index,
-                                             vector<string> &return_names) {
+static unique_ptr<LogicalOperator> RewriteFilesBind(ClientContext &context, TableFunctionBindInput &input,
+                                                    idx_t bind_index, vector<string> &return_names) {
 
 	// gather a list of files to compact
 	auto &catalog = BaseMetadataFunction::GetCatalog(context, input.inputs[0]);

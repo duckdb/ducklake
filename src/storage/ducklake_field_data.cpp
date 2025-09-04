@@ -40,7 +40,7 @@ DuckLakeFieldId::DuckLakeFieldId(DuckLakeColumnData column_data_p, string name_p
 	}
 }
 
-Value ExtractDefaultValue(optional_ptr<const ParsedExpression> default_expr, const LogicalType &type) {
+static Value ExtractDefaultValue(optional_ptr<const ParsedExpression> default_expr, const LogicalType &type) {
 	if (!default_expr) {
 		return Value(type);
 	}

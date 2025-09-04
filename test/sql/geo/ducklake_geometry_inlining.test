@@ -1,0 +1,53 @@
+# name: test/sql/geo/ducklake_geometry_inlining.test
+# group: [geo]
+
+require ducklake
+
+require parquet
+
+require spatial
+
+statement ok
+ATTACH 'ducklake:__TEST_DIR__/ducklake.db' AS ducklake (
+	DATA_PATH '__TEST_DIR__/ducklake_files',
+	METADATA_CATALOG 'ducklake_meta',
+	DATA_INLINING_ROW_LIMIT 5
+)
+
+statement ok
+USE ducklake;
+
+statement ok
+create table t1 (g GEOMETRY);
+
+statement ok
+insert into t1 VALUES (ST_POINT(1,2));
+
+query I
+select * from t1;
+----
+POINT (1 2)
+
+# Inspect file stats, none cause its all inlined
+query I
+select extra_stats from ducklake_meta.ducklake_file_column_statistics;
+----
+
+# Force a flush
+statement ok
+insert into t1 (SELECT ST_POINT(x, y) FROM range(5) AS r1(x), range(5) AS r2(y));
+
+# Inspect file stats, now there should be one
+query I
+select extra_stats from ducklake_meta.ducklake_file_column_statistics;
+----
+{"bbox": {"xmin": 0.000000, "xmax": 4.000000, "ymin": 0.000000, "ymax": 4.000000, "zmin": null, "zmax": null, "mmin": null, "mmax": null}, "types": ["point"]}
+
+
+# insert another geometry
+statement ok
+insert into t1 VALUES ('LINESTRING Z (5 5 5, 10 10 10)'::GEOMETRY);
+
+# Now do a force flush
+statement ok
+CALL ducklake_flush_inlined_data('ducklake');

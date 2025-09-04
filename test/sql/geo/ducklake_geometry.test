@@ -1,0 +1,68 @@
+# name: test/sql/geo/ducklake_geometry.test
+# group: [geo]
+
+require ducklake
+
+require parquet
+
+require spatial
+
+statement ok
+ATTACH 'ducklake:__TEST_DIR__/ducklake.db' AS ducklake (DATA_PATH '__TEST_DIR__/ducklake_files', METADATA_CATALOG 'ducklake_meta')
+
+statement ok
+USE ducklake;
+
+statement ok
+create table t1 (g GEOMETRY);
+
+statement ok
+insert into t1 VALUES (ST_POINT(1,2));
+
+query I
+select * from t1;
+----
+POINT (1 2)
+
+# Inspect file stats
+query I
+select extra_stats from ducklake_meta.ducklake_file_column_statistics;
+----
+{"bbox": {"xmin": 1.000000, "xmax": 1.000000, "ymin": 2.000000, "ymax": 2.000000, "zmin": null, "zmax": null, "mmin": null, "mmax": null}, "types": ["point"]}
+
+query I
+select extra_stats from ducklake_meta.ducklake_table_column_stats;
+----
+{"bbox": {"xmin": 1.000000, "xmax": 1.000000, "ymin": 2.000000, "ymax": 2.000000, "zmin": null, "zmax": null, "mmin": null, "mmax": null}, "types": ["point"]}
+
+statement ok
+insert into t1 VALUES ('LINESTRING Z (5 5 5, 10 10 10)'::GEOMETRY);
+
+query I
+select * from t1;
+----
+POINT (1 2)
+LINESTRING Z (5 5 5, 10 10 10)
+
+# Inspect file stats - should be separate for each file
+query I
+select extra_stats from ducklake_meta.ducklake_file_column_statistics order by all;
+----
+{"bbox": {"xmin": 1.000000, "xmax": 1.000000, "ymin": 2.000000, "ymax": 2.000000, "zmin": null, "zmax": null, "mmin": null, "mmax": null}, "types": ["point"]}
+{"bbox": {"xmin": 5.000000, "xmax": 10.000000, "ymin": 5.000000, "ymax": 10.000000, "zmin": 5.000000, "zmax": 10.000000, "mmin": null, "mmax": null}, "types": ["linestring_z"]}
+
+# Check table stats are a union of the two files
+query I
+select extra_stats from ducklake_meta.ducklake_table_column_stats order by all;
+----
+{"bbox": {"xmin": 1.000000, "xmax": 10.000000, "ymin": 2.000000, "ymax": 10.000000, "zmin": 5.000000, "zmax": 10.000000, "mmin": null, "mmax": null}, "types": ["linestring_z", "point"]}
+
+# Merge files into a single file and check stats remain the same
+statement ok
+CALL ducklake_merge_adjacent_files('ducklake')
+
+query I
+select extra_stats from ducklake_meta.ducklake_file_column_statistics order by all;
+----
+{"bbox": {"xmin": 1.000000, "xmax": 10.000000, "ymin": 2.000000, "ymax": 10.000000, "zmin": 5.000000, "zmax": 10.000000, "mmin": null, "mmax": null}, "types": ["linestring_z", "point"]}
+

@@ -1,0 +1,38 @@
+# name: test/sql/geo/ducklake_geometry_add_files.test
+# group: [geo]
+
+require ducklake
+
+require parquet
+
+require spatial
+
+statement ok
+ATTACH 'ducklake:__TEST_DIR__/ducklake.db' AS ducklake (
+	DATA_PATH '__TEST_DIR__/ducklake_files',
+	METADATA_CATALOG 'ducklake_meta'
+)
+
+# Copy over a test parquet file with geometry column
+statement ok
+COPY (select st_point(5, 5) as g) TO '__TEST_DIR__/points.parquet' (FORMAT PARQUET);
+
+statement ok
+USE ducklake;
+
+statement ok
+create table t1 (g GEOMETRY);
+
+# Now add the file
+statement ok
+CALL ducklake_add_data_files('ducklake', 't1', '__TEST_DIR__/points.parquet');
+
+query I
+select * from t1;
+----
+POINT (5 5)
+
+query I
+select extra_stats from ducklake_meta.ducklake_file_column_statistics order by all;
+----
+{"bbox": {"xmin": 5.000000, "xmax": 5.000000, "ymin": 5.000000, "ymax": 5.000000, "zmin": null, "zmax": null, "mmin": null, "mmax": null}, "types": ["point"]}

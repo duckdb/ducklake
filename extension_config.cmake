@@ -2,7 +2,7 @@
 
 # Extension from this repo
 duckdb_extension_load(ducklake
-    SOURCE_DIR ${CMAKE_CURRENT_LIST_DIR}
+        SOURCE_DIR ${CMAKE_CURRENT_LIST_DIR}
 )
 
 duckdb_extension_load(icu)

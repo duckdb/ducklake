@@ -16,9 +16,55 @@
 namespace duckdb {
 class BaseStatistics;
 
+struct DuckLakeColumnExtraStats {
+	virtual ~DuckLakeColumnExtraStats() = default;
+
+	virtual void Merge(const DuckLakeColumnExtraStats &new_stats) = 0;
+	virtual unique_ptr<DuckLakeColumnExtraStats> Copy() const = 0;
+
+	// Convert the stats into a string representation for storage (e.g. JSON)
+	virtual string Serialize() const = 0;
+	// Parse the stats from a string
+	virtual void Deserialize(const string &stats) = 0;
+
+	template <class TARGET>
+	TARGET &Cast() {
+		DynamicCastCheck<TARGET>(this);
+		return reinterpret_cast<TARGET &>(*this);
+	}
+	template <class TARGET>
+	const TARGET &Cast() const {
+		DynamicCastCheck<TARGET>(this);
+		return reinterpret_cast<const TARGET &>(*this);
+	}
+};
+
+struct DuckLakeColumnGeoStats final : public DuckLakeColumnExtraStats {
+
+	DuckLakeColumnGeoStats();
+	void Merge(const DuckLakeColumnExtraStats &new_stats) override;
+	unique_ptr<DuckLakeColumnExtraStats> Copy() const override;
+
+	string Serialize() const override;
+	void Deserialize(const string &stats) override;
+
+public:
+	double xmin, xmax, ymin, ymax, zmin, zmax, mmin, mmax;
+	set<string> geo_types;
+};
+
 struct DuckLakeColumnStats {
 	explicit DuckLakeColumnStats(LogicalType type_p) : type(std::move(type_p)) {
+		if (type.id() == LogicalTypeId::BLOB && type.HasAlias() && type.GetAlias() == "GEOMETRY") {
+			extra_stats = make_uniq<DuckLakeColumnGeoStats>();
+		}
 	}
+
+	// Copy constructor
+	DuckLakeColumnStats(const DuckLakeColumnStats &other);
+	DuckLakeColumnStats &operator=(const DuckLakeColumnStats &other);
+	DuckLakeColumnStats(DuckLakeColumnStats &&other) noexcept = default;
+	DuckLakeColumnStats &operator=(DuckLakeColumnStats &&other) noexcept = default;
 
 	LogicalType type;
 	string min;
@@ -32,9 +78,12 @@ struct DuckLakeColumnStats {
 	bool any_valid = true;
 	bool has_contains_nan = false;
 
+	unique_ptr<DuckLakeColumnExtraStats> extra_stats;
+
 public:
 	unique_ptr<BaseStatistics> ToStats() const;
 	void MergeStats(const DuckLakeColumnStats &new_stats);
+	DuckLakeColumnStats Copy() const;
 
 private:
 	unique_ptr<BaseStatistics> CreateNumericStats() const;

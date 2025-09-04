@@ -184,14 +184,19 @@ unique_ptr<LogicalOperator> DuckLakeDataFlusher::GenerateFlushCommand() {
 	column_ids.emplace_back(COLUMN_IDENTIFIER_ROW_ID);
 	column_ids.emplace_back(DuckLakeMultiFileReader::COLUMN_IDENTIFIER_SNAPSHOT_ID);
 
-	unique_ptr<LogicalOperator> root;
-	root = std::move(ducklake_scan);
+	auto root = unique_ptr_cast<LogicalGet, LogicalOperator>(std::move(ducklake_scan));
 
 	if (!copy_options.projection_list.empty()) {
 		// push a projection
 		auto proj = make_uniq<LogicalProjection>(binder.GenerateTableIndex(), std::move(copy_options.projection_list));
 		proj->children.push_back(std::move(root));
 		root = std::move(proj);
+	}
+
+	// Add another projection with casts if necessary
+	root->ResolveOperatorTypes();
+	if (DuckLakeInsert::RequireCasts(root->types)) {
+		root = DuckLakeInsert::InsertCasts(binder, root);
 	}
 
 	// generate the LogicalCopyToFile
@@ -227,8 +232,8 @@ unique_ptr<LogicalOperator> DuckLakeDataFlusher::GenerateFlushCommand() {
 //===--------------------------------------------------------------------===//
 // Function
 //===--------------------------------------------------------------------===//
-unique_ptr<LogicalOperator> FlushInlinedDataBind(ClientContext &context, TableFunctionBindInput &input,
-                                                 idx_t bind_index, vector<string> &return_names) {
+static unique_ptr<LogicalOperator> FlushInlinedDataBind(ClientContext &context, TableFunctionBindInput &input,
+                                                        idx_t bind_index, vector<string> &return_names) {
 	// gather a list of files to compact
 	auto &catalog = BaseMetadataFunction::GetCatalog(context, input.inputs[0]);
 	auto &ducklake_catalog = catalog.Cast<DuckLakeCatalog>();

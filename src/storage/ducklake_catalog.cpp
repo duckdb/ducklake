@@ -63,7 +63,7 @@ void DuckLakeCatalog::FinalizeLoad(optional_ptr<ClientContext> context) {
 	initialized = true;
 }
 
-bool CanGeneratePathFromName(const string &name) {
+static bool CanGeneratePathFromName(const string &name) {
 	for (auto c : name) {
 		if (StringUtil::CharacterIsAlphaNumeric(c)) {
 			continue;
@@ -178,7 +178,7 @@ DuckLakeCatalogSet &DuckLakeCatalog::GetSchemaForSnapshot(DuckLakeTransaction &t
 	return result;
 }
 
-unique_ptr<DuckLakeFieldId> TransformColumnType(DuckLakeColumnInfo &col) {
+static unique_ptr<DuckLakeFieldId> TransformColumnType(DuckLakeColumnInfo &col) {
 	DuckLakeColumnData col_data;
 	col_data.id = col.id;
 	if (col.children.empty()) {
@@ -367,7 +367,7 @@ DuckLakeStats &DuckLakeCatalog::GetStatsForSnapshot(DuckLakeTransaction &transac
 	return result;
 }
 
-unique_ptr<DuckLakeNameMap> ConvertNameMap(DuckLakeColumnMappingInfo column_mapping) {
+static unique_ptr<DuckLakeNameMap> ConvertNameMap(DuckLakeColumnMappingInfo column_mapping) {
 	if (column_mapping.map_type != "map_by_name") {
 		throw InvalidInputException("Unsupported column mapping type \"%s\"", column_mapping.map_type);
 	}
@@ -484,6 +484,11 @@ unique_ptr<DuckLakeStats> DuckLakeCatalog::LoadStatsForSnapshot(DuckLakeTransact
 			column_stats.has_max = col_stats.has_max;
 			if (column_stats.has_max) {
 				column_stats.max = col_stats.max_val;
+			}
+			if (col_stats.has_extra_stats && column_stats.extra_stats) {
+				// The extra_stats should already be allocated in the constructor
+				// if the logical type requires extra stats.
+				column_stats.extra_stats->Deserialize(col_stats.extra_stats);
 			}
 			table_stats->column_stats.insert(make_pair(col_stats.column_id, std::move(column_stats)));
 		}

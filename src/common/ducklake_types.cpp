@@ -42,19 +42,27 @@ static constexpr const ducklake_type_array DUCKLAKE_TYPES {{{"boolean", LogicalT
                                                             {"blob", LogicalTypeId::BLOB},
                                                             {"uuid", LogicalTypeId::UUID}}};
 
-LogicalType ParseBaseType(const string &str) {
+static LogicalType ParseBaseType(const string &str) {
 	for (auto &ducklake_type : DUCKLAKE_TYPES) {
 		if (StringUtil::CIEquals(str, ducklake_type.name)) {
 			return ducklake_type.id;
 		}
 	}
+
 	if (StringUtil::CIEquals(str, "json")) {
 		return LogicalType::JSON();
 	}
+
+	if (StringUtil::CIEquals(str, "geometry")) {
+		LogicalType geo_type(LogicalTypeId::BLOB);
+		geo_type.SetAlias("GEOMETRY");
+		return geo_type;
+	}
+
 	throw InvalidInputException("Failed to parse DuckLake type - unsupported type '%s'", str);
 }
 
-string ToStringBaseType(const LogicalType &type) {
+static string ToStringBaseType(const LogicalType &type) {
 	for (auto &ducklake_type : DUCKLAKE_TYPES) {
 		if (type.id() == ducklake_type.id) {
 			return ducklake_type.name;
@@ -82,6 +90,9 @@ string DuckLakeTypes::ToString(const LogicalType &type) {
 	if (type.HasAlias()) {
 		if (type.IsJSONType()) {
 			return "json";
+		}
+		if (type.GetAlias() == "GEOMETRY" && type.id() == LogicalTypeId::BLOB) {
+			return "geometry";
 		}
 		throw InvalidInputException("Unsupported user-defined type");
 	}

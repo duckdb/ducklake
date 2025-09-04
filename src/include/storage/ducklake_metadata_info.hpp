@@ -99,6 +99,7 @@ struct DuckLakeColumnStatsInfo {
 	string min_val;
 	string max_val;
 	string contains_nan;
+	string extra_stats;
 };
 
 struct DuckLakeFilePartitionInfo {
@@ -195,6 +196,9 @@ struct DuckLakeGlobalColumnStatsInfo {
 
 	string max_val;
 	bool has_max = false;
+
+	string extra_stats;
+	bool has_extra_stats = false;
 };
 
 struct DuckLakeGlobalStatsInfo {

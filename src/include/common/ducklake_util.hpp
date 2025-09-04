@@ -28,7 +28,7 @@ public:
 	static string SQLIdentifierToString(const string &text);
 	static string SQLLiteralToString(const string &text);
 	static string StatsToString(const string &text);
-	static string ValueToSQL(const Value &val);
+	static string ValueToSQL(ClientContext &context, const Value &val);
 
 	static ParsedCatalogEntry ParseCatalogEntry(const string &input);
 	static string JoinPath(FileSystem &fs, const string &a, const string &b);

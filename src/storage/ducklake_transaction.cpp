@@ -899,6 +899,12 @@ void DuckLakeTransaction::UpdateGlobalTableStats(TableIndex table_id, const Duck
 		if (column_stats.has_max) {
 			col_stats.max_val = column_stats.max;
 		}
+		if (column_stats.extra_stats) {
+			col_stats.has_extra_stats = true;
+			col_stats.extra_stats = column_stats.extra_stats->Serialize();
+		} else {
+			col_stats.has_extra_stats = false;
+		}
 		stats.column_stats.push_back(std::move(col_stats));
 	}
 	stats.record_count = new_stats.record_count;
@@ -946,6 +952,11 @@ DuckLakeFileInfo DuckLakeTransaction::GetNewDataFile(DuckLakeDataFile &file, Duc
 			column_stats.contains_nan = stats.contains_nan ? "true" : "false";
 		} else {
 			column_stats.contains_nan = "NULL";
+		}
+		if (stats.extra_stats) {
+			column_stats.extra_stats = stats.extra_stats->Serialize();
+		} else {
+			column_stats.extra_stats = "NULL";
 		}
 
 		data_file.column_stats.push_back(std::move(column_stats));

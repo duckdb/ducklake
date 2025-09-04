@@ -89,7 +89,7 @@ string DuckLakeUtil::StatsToString(const string &text) {
 	return DuckLakeUtil::SQLLiteralToString(text);
 }
 
-string DuckLakeUtil::ValueToSQL(const Value &val) {
+string DuckLakeUtil::ValueToSQL(ClientContext &context, const Value &val) {
 	// FIXME: this should be upstreamed
 	if (val.IsNull()) {
 		return val.ToSQLString();
@@ -143,6 +143,14 @@ string DuckLakeUtil::ValueToSQL(const Value &val) {
 		}
 		ret += "])";
 		return ret;
+	}
+	case LogicalTypeId::BLOB: {
+		if (val.type().HasAlias() && val.type().GetAlias() == "GEOMETRY") {
+			// geometry - cast to string
+			auto str_val = val.CastAs(context, LogicalType::VARCHAR);
+			return DuckLakeUtil::ValueToSQL(context, str_val);
+		}
+		return val.ToSQLString();
 	}
 	default:
 		return val.ToSQLString();
