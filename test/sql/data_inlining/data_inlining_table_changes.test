@@ -6,8 +6,12 @@ require ducklake
 
 require parquet
 
+test-env DUCKLAKE_CONNECTION __TEST_DIR__/
+
+test-env DUCKLAKE_CATALOG_DB ducklake_inlining_table_changes.db
+
 statement ok
-ATTACH 'ducklake:__TEST_DIR__/ducklake_inlining_table_changes.db' AS ducklake (DATA_PATH '__TEST_DIR__/ducklake_inlining_table_changes_files', DATA_INLINING_ROW_LIMIT 10)
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}${DUCKLAKE_CATALOG_DB}' AS ducklake (DATA_PATH '__TEST_DIR__/ducklake_inlining_table_changes_files', DATA_INLINING_ROW_LIMIT 10)
 
 # snapshot 1
 statement ok

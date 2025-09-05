@@ -6,8 +6,12 @@ require ducklake
 
 require parquet
 
+test-env DUCKLAKE_CONNECTION __TEST_DIR__/
+
+test-env DUCKLAKE_CATALOG_DB ducklake_filter_pushdown.db
+
 statement ok
-ATTACH 'ducklake:__TEST_DIR__/ducklake_filter_pushdown.db' AS ducklake (DATA_PATH '__TEST_DIR__/ducklake_filter_pushdown_files')
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}${DUCKLAKE_CATALOG_DB}' AS ducklake (DATA_PATH '__TEST_DIR__/ducklake_filter_pushdown_files')
 
 statement ok
 CREATE TABLE ducklake.filter_pushdown(v INTEGER, i INTEGER, d DATE, k DECIMAL(9, 3), s VARCHAR);

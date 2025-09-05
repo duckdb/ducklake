@@ -5,8 +5,12 @@ require ducklake
 
 require parquet
 
+test-env DUCKLAKE_CONNECTION __TEST_DIR__/
+
+test-env DUCKLAKE_CATALOG_DB mixed_alter2.db
+
 statement ok
-ATTACH 'ducklake:__TEST_DIR__/mixed_alter2.db' AS ducklake (DATA_PATH '__TEST_DIR__/mixed_alter2_files');
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}${DUCKLAKE_CATALOG_DB}' AS ducklake (DATA_PATH '__TEST_DIR__/mixed_alter2_files');
 
 statement ok
 USE ducklake;

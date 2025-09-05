@@ -6,8 +6,12 @@ require ducklake
 
 require parquet
 
+test-env DUCKLAKE_CONNECTION __TEST_DIR__/
+
+test-env DUCKLAKE_CATALOG_DB add_file_specific_schema.db
+
 statement ok
-ATTACH 'ducklake:__TEST_DIR__/add_file_specific_schema.db' AS ducklake (DATA_PATH '__TEST_DIR__/add_file_specific_schema/', METADATA_CATALOG 'metadata');
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}${DUCKLAKE_CATALOG_DB}' AS ducklake (DATA_PATH '__TEST_DIR__/add_file_specific_schema/', METADATA_CATALOG 'metadata');
 
 statement ok
 USE ducklake;

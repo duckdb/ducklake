@@ -6,8 +6,12 @@ require ducklake
 
 require parquet
 
+test-env DUCKLAKE_CONNECTION __TEST_DIR__/
+
+test-env DUCKLAKE_CATALOG_DB ducklake_inlining_large.db
+
 statement ok
-ATTACH 'ducklake:__TEST_DIR__/ducklake_inlining_large.db' AS ducklake (DATA_PATH '__TEST_DIR__/ducklake_inlining_large_files', METADATA_CATALOG 'ducklake_meta', DATA_INLINING_ROW_LIMIT 999999)
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}${DUCKLAKE_CATALOG_DB}' AS ducklake (DATA_PATH '__TEST_DIR__/ducklake_inlining_large_files', METADATA_CATALOG 'ducklake_meta', DATA_INLINING_ROW_LIMIT 999999)
 
 statement ok
 CREATE TABLE bigtbl AS FROM range(1000000) t(i);

@@ -9,8 +9,12 @@ require parquet
 statement ok
 SET preserve_insertion_order=false;
 
+test-env DUCKLAKE_CONNECTION __TEST_DIR__/
+
+test-env DUCKLAKE_CATALOG_DB per_thread.db
+
 statement ok
-ATTACH 'ducklake:__TEST_DIR__/per_thread.db' AS ducklake (DATA_PATH '__TEST_DIR__/per_thread_data')
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}${DUCKLAKE_CATALOG_DB}' AS ducklake (DATA_PATH '__TEST_DIR__/per_thread_data')
 
 statement ok
 CALL ducklake.set_option('per_thread_output', 'true')

@@ -8,8 +8,12 @@ require parquet
 
 require notwindows
 
+test-env DUCKLAKE_CONNECTION __TEST_DIR__/
+
+test-env DUCKLAKE_CATALOG_DB ducklake_concurrent_rewrite.db
+
 statement ok
-ATTACH 'ducklake:__TEST_DIR__/ducklake_concurrent_rewrite.db' AS ducklake (DATA_PATH '__TEST_DIR__/ducklake_concurrent_rewrite', METADATA_CATALOG 'ducklake_metadata')
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}${DUCKLAKE_CATALOG_DB}' AS ducklake (DATA_PATH '__TEST_DIR__/ducklake_concurrent_rewrite', METADATA_CATALOG 'ducklake_metadata')
 
 statement ok
 SET ducklake_retry_wait_ms=100

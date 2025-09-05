@@ -6,8 +6,12 @@ require ducklake
 
 require parquet
 
+test-env DUCKLAKE_CONNECTION __TEST_DIR__/
+
+test-env DUCKLAKE_CATALOG_DB ducklake_inlining.db
+
 statement ok
-ATTACH 'ducklake:__TEST_DIR__/ducklake_inlining.db' AS ducklake (DATA_PATH '__TEST_DIR__/ducklake_inlining_files', METADATA_CATALOG 'ducklake_meta', DATA_INLINING_ROW_LIMIT 10)
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}${DUCKLAKE_CATALOG_DB}' AS ducklake (DATA_PATH '__TEST_DIR__/basic_ducklake_inlining_files', METADATA_CATALOG 'ducklake_meta', DATA_INLINING_ROW_LIMIT 10)
 
 statement ok
 CREATE TABLE ducklake.test(i INTEGER, j INTEGER);
@@ -87,7 +91,7 @@ SELECT * FROM ducklake.test WHERE i=1
 
 # all data is inlined - so we have no files
 query I
-SELECT COUNT(*) FROM GLOB('__TEST_DIR__/ducklake_inlining_files/**')
+SELECT COUNT(*) FROM GLOB('__TEST_DIR__/basic_ducklake_inlining_files/**')
 ----
 0
 
@@ -104,6 +108,6 @@ SELECT COUNT(*), SUM(i), SUM(j) FROM ducklake.test
 
 # now we have a file
 query I
-SELECT COUNT(*) FROM GLOB('__TEST_DIR__/ducklake_inlining_files/**')
+SELECT COUNT(*) FROM GLOB('__TEST_DIR__/basic_ducklake_inlining_files/**')
 ----
 1

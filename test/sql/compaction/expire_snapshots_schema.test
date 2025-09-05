@@ -6,8 +6,12 @@ require ducklake
 
 require parquet
 
+test-env DUCKLAKE_CONNECTION __TEST_DIR__/
+
+test-env DUCKLAKE_CATALOG_DB ducklake_expire_snapshots_schema.db
+
 statement ok
-ATTACH 'ducklake:__TEST_DIR__/ducklake_expire_snapshots_schema.db' AS ducklake (DATA_PATH '__TEST_DIR__/ducklake_expire_snapshots_schema_files', METADATA_CATALOG 'metadata')
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}${DUCKLAKE_CATALOG_DB}' AS ducklake (DATA_PATH '__TEST_DIR__/ducklake_expire_snapshots_schema_files', METADATA_CATALOG 'metadata')
 
 # snapshot 1
 statement ok

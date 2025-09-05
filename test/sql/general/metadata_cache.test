@@ -9,8 +9,12 @@ require parquet
 statement ok
 SET parquet_metadata_cache=true;
 
+test-env DUCKLAKE_CONNECTION __TEST_DIR__/
+
+test-env DUCKLAKE_CATALOG_DB ducklake_pq_metadata_cache.db
+
 statement ok
-ATTACH 'ducklake:__TEST_DIR__/ducklake_pq_metadata_cache.db' AS ducklake (DATA_PATH '__TEST_DIR__/ducklake_pq_metadata_cache_files')
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}${DUCKLAKE_CATALOG_DB}' AS ducklake (DATA_PATH '__TEST_DIR__/ducklake_pq_metadata_cache_files')
 
 statement ok
 CREATE TABLE ducklake.tbl AS FROM range(1000) t(i);

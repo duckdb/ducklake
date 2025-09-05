@@ -6,14 +6,18 @@ require ducklake
 
 require parquet
 
+test-env DUCKLAKE_CONNECTION __TEST_DIR__/
+
+test-env DUCKLAKE_CATALOG_DB ducklake_detach.db
+
 statement ok
-ATTACH 'ducklake:__TEST_DIR__/ducklake_detach.db' AS ducklake (DATA_PATH '__TEST_DIR__/ducklake_detach_files', METADATA_CATALOG 'ducklake_metadata')
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}${DUCKLAKE_CATALOG_DB}' AS ducklake (DATA_PATH '__TEST_DIR__/ducklake_detach_files', METADATA_CATALOG 'ducklake_metadata')
 
 statement ok
 DETACH ducklake
 
 statement ok
-ATTACH 'ducklake:__TEST_DIR__/ducklake_detach.db' AS ducklake (DATA_PATH '__TEST_DIR__/ducklake_detach_files', METADATA_CATALOG 'ducklake_metadata')
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}${DUCKLAKE_CATALOG_DB}' AS ducklake (DATA_PATH '__TEST_DIR__/ducklake_detach_files', METADATA_CATALOG 'ducklake_metadata')
 
 # what happens if we detach the metadata catalog?
 statement ok

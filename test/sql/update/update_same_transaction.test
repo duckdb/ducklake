@@ -6,8 +6,12 @@ require ducklake
 
 require parquet
 
+test-env DUCKLAKE_CONNECTION __TEST_DIR__/
+
+test-env DUCKLAKE_CATALOG_DB update_same_transaction.db
+
 statement ok
-ATTACH 'ducklake:__TEST_DIR__/update_same_transaction.db' AS ducklake (DATA_PATH '__TEST_DIR__/update_same_transaction', METADATA_CATALOG 'ducklake_metadata')
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}${DUCKLAKE_CATALOG_DB}' AS ducklake (DATA_PATH '__TEST_DIR__/update_same_transaction', METADATA_CATALOG 'ducklake_metadata')
 
 statement ok
 BEGIN TRANSACTION;

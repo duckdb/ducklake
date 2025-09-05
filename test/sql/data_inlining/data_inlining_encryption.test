@@ -6,8 +6,12 @@ require ducklake
 
 require parquet
 
+test-env DUCKLAKE_CONNECTION __TEST_DIR__/
+
+test-env DUCKLAKE_CATALOG_DB ducklake_inlining_encryption.db
+
 statement ok
-ATTACH 'ducklake:__TEST_DIR__/ducklake_inlining_encryption.db' AS ducklake (DATA_PATH '__TEST_DIR__/ducklake_inlining_encryption_files', ENCRYPTED, DATA_INLINING_ROW_LIMIT 10000)
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}${DUCKLAKE_CATALOG_DB}' AS ducklake (DATA_PATH '__TEST_DIR__/ducklake_inlining_encryption_files', ENCRYPTED, DATA_INLINING_ROW_LIMIT 10000)
 
 statement ok
 CREATE TABLE ducklake.test AS SELECT i id FROM range(1000) t(i);

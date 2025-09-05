@@ -9,6 +9,7 @@ require parquet
 # windows doesn't like these paths
 require notwindows
 
+# SQLite databases do not support creating new schemas
 statement ok
 ATTACH 'ducklake:__TEST_DIR__/ducklake ''quoted'' "db".db' AS ducklake (DATA_PATH '__TEST_DIR__/ducklake ''quoted'' "path"', METADATA_CATALOG '''quoted'' catalog "name"', METADATA_SCHEMA '''quoted'' catalog "schema"')
 

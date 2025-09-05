@@ -1,0 +1,59 @@
+{
+  "description": "Run DuckLake tests using Postgres as a catalog DBMS.",
+  "on_init": "SET extension_directory = 'build/release/repository'; ATTACH 'dbname=ducklakedb' AS pg (TYPE postgres); USE pg; DROP SCHEMA public CASCADE; DROP SCHEMA IF EXISTS metadata_s1 CASCADE; DROP SCHEMA IF EXISTS metadata_s2 CASCADE; CREATE SCHEMA public;USE memory; DETACH pg;",
+  "statically_loaded_extensions": [
+    "core_functions",
+    "parquet",
+    "ducklake",
+    "postgres_scanner"
+  ],
+    "test_env": [{
+      "env_name":  "DUCKLAKE_CONNECTION",
+      "env_value": "postgres:"
+   },
+    {
+      "env_name":  "DUCKLAKE_CATALOG_DB",
+      "env_value": "dbname=ducklakedb"
+   }],
+  "skip_tests": [
+   {
+      "reason": "Data Inlining Not Supported",
+      "paths": [
+        "test/sql/data_inlining/basic_data_inlining.test",
+        "test/sql/concurrent/concurrent_insert_conflict.test",
+        "test/sql/concurrent/concurrent_insert_data_inlining.test",
+        "test/sql/data_inlining/data_inlining_alter.test",
+        "test/sql/data_inlining/data_inlining_constraints.test",
+        "test/sql/data_inlining/data_inlining_delete.test",
+        "test/sql/data_inlining/data_inlining_encryption.test",
+        "test/sql/data_inlining/data_inlining_flush.test",
+        "test/sql/data_inlining/data_inlining_flush_schema.test",
+        "test/sql/data_inlining/data_inlining_large.test",
+        "test/sql/data_inlining/data_inlining_option.test",
+        "test/sql/data_inlining/data_inlining_option_transaction_local.test",
+        "test/sql/data_inlining/data_inlining_partitions.test",
+        "test/sql/data_inlining/data_inlining_table_changes.test",
+        "test/sql/data_inlining/data_inlining_transaction_local_alter.test",
+        "test/sql/data_inlining/data_inlining_transaction_local_delete.test",
+        "test/sql/data_inlining/data_inlining_types.test",
+        "test/sql/data_inlining/data_inlining_update.test",
+        "test/sql/transaction/transaction_conflict_inlining.test"
+      ]
+    },
+    {
+      "reason": "Tests only for DuckDB as a catalog",
+      "paths": [
+        "test/sql/general/missing_parquet.test",
+        "test/sql/general/paths.test",
+        "test/sql/general/default_path.test"
+      ]
+    },
+    {
+      "reason": "Migration",
+      "paths": [
+        "test/sql/migration/v01_partitioned.test",
+        "test/sql/migration/v01.test"
+      ]
+    }
+  ]
+}

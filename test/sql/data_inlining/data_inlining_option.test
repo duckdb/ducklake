@@ -6,8 +6,12 @@ require ducklake
 
 require parquet
 
+test-env DUCKLAKE_CONNECTION __TEST_DIR__/
+
+test-env DUCKLAKE_CATALOG_DB ducklake_inlining_setting.db
+
 statement ok
-ATTACH 'ducklake:__TEST_DIR__/ducklake_inlining_setting.db' AS ducklake (DATA_PATH '__TEST_DIR__/ducklake_inlining_setting_files', METADATA_CATALOG 'ducklake_metadata')
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}${DUCKLAKE_CATALOG_DB}' AS ducklake (DATA_PATH '__TEST_DIR__/ducklake_inlining_setting_files', METADATA_CATALOG 'ducklake_metadata')
 
 statement ok
 CREATE TABLE ducklake.test(i INTEGER, j INTEGER);
@@ -35,7 +39,7 @@ DETACH ducklake;
 
 # the option is persisted across restarts
 statement ok
-ATTACH 'ducklake:__TEST_DIR__/ducklake_inlining_setting.db' AS ducklake
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}${DUCKLAKE_CATALOG_DB}' AS ducklake
 
 statement ok
 INSERT INTO ducklake.test VALUES (5, 5);

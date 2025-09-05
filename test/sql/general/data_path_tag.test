@@ -6,8 +6,12 @@ require ducklake
 
 require parquet
 
+test-env DUCKLAKE_CONNECTION __TEST_DIR__/
+
+test-env DUCKLAKE_CATALOG_DB ducklake_duckdb_tag_data_path.db
+
 statement ok
-ATTACH 'ducklake:__TEST_DIR__/ducklake_duckdb_tag_data_path.db' AS ducklake (DATA_PATH '__TEST_DIR__/ducklake_duckdb_tables_files', METADATA_CATALOG 'ducklake_meta')
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}${DUCKLAKE_CATALOG_DB}' AS ducklake (DATA_PATH '__TEST_DIR__/ducklake_duckdb_tables_files', METADATA_CATALOG 'ducklake_meta')
 
 statement ok
 CREATE TABLE ducklake.test(i INTEGER);
@@ -31,7 +35,7 @@ statement ok
 DETACH ducklake;
 
 statement ok
-ATTACH 'ducklake:__TEST_DIR__/ducklake_duckdb_tag_data_path.db' AS ducklake;
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}${DUCKLAKE_CATALOG_DB}' AS ducklake;
 
 ### Existing DuckLake with no DATA_PATH, returns the one from the metadata catalog
 
@@ -43,8 +47,9 @@ SELECT count(*) FROM (SELECT tags['data_path'] as data_path FROM duckdb_database
 statement ok
 DETACH ducklake;
 
+
 statement ok
-ATTACH 'ducklake:__TEST_DIR__/ducklake_duckdb_tag_data_path.db' AS ducklake (DATA_PATH something_else);
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}${DUCKLAKE_CATALOG_DB}' AS ducklake (DATA_PATH something_else);
 
 ### Existing DuckLake with different DATA_PATH, returns the currently provided one
 
@@ -62,7 +67,7 @@ statement ok
 DETACH ducklake;
 
 statement ok
-ATTACH 'ducklake:__TEST_DIR__/ducklake_duckdb_tag_data_path.db' AS ducklake;
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}${DUCKLAKE_CATALOG_DB}' AS ducklake;
 
 ### Existing DuckLake with no DATA_PATH, returns the one from the metadata catalog (the original one, not the overridden one)
 

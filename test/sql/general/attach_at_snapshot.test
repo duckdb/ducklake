@@ -6,8 +6,12 @@ require ducklake
 
 require parquet
 
+test-env DUCKLAKE_CONNECTION __TEST_DIR__/
+
+test-env DUCKLAKE_CATALOG_DB ducklake_attach_at_snapshot.db
+
 statement ok
-ATTACH 'ducklake:__TEST_DIR__/ducklake_attach_at_snapshot.db' AS ducklake (DATA_PATH '__TEST_DIR__/ducklake_files_attach_at_snapshot')
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}${DUCKLAKE_CATALOG_DB}' AS ducklake (DATA_PATH '__TEST_DIR__/ducklake_files_attach_at_snapshot')
 
 # snapshot 1
 statement ok
@@ -22,7 +26,7 @@ DETACH ducklake
 
 # attach at snapshot
 statement ok
-ATTACH 'ducklake:__TEST_DIR__/ducklake_attach_at_snapshot.db' AS ducklake (SNAPSHOT_VERSION 1)
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}${DUCKLAKE_CATALOG_DB}' AS ducklake (SNAPSHOT_VERSION 1)
 
 query II
 FROM ducklake.test

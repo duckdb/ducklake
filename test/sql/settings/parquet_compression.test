@@ -6,8 +6,12 @@ require ducklake
 
 require parquet
 
+test-env DUCKLAKE_CONNECTION __TEST_DIR__/
+
+test-env DUCKLAKE_CATALOG_DB ducklake_parquet_compression.db
+
 statement ok
-ATTACH 'ducklake:__TEST_DIR__/ducklake_parquet_compression.db' AS ducklake (DATA_PATH '__TEST_DIR__/ducklake_parquet_compression')
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}${DUCKLAKE_CATALOG_DB}' AS ducklake (DATA_PATH '__TEST_DIR__/ducklake_parquet_compression')
 
 statement ok
 CALL ducklake.set_option('parquet_compression', 'zstd')
@@ -42,7 +46,7 @@ statement ok
 DETACH ducklake
 
 statement ok
-ATTACH 'ducklake:__TEST_DIR__/ducklake_parquet_compression.db' AS ducklake (DATA_PATH '__TEST_DIR__/ducklake_parquet_compression')
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}${DUCKLAKE_CATALOG_DB}' AS ducklake (DATA_PATH '__TEST_DIR__/ducklake_parquet_compression')
 
 statement ok
 INSERT INTO ducklake.tbl VALUES (42, 'hello world');

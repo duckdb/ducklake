@@ -7,8 +7,12 @@ require ducklake
 require parquet
 
 # store multiple DuckLake catalogs in the same metadata store (with different schemas)
+test-env DUCKLAKE_CONNECTION __TEST_DIR__/
+
+test-env DUCKLAKE_CATALOG_DB ducklake_schema.db
+
 statement ok
-ATTACH 'ducklake:__TEST_DIR__/ducklake_schema.db' AS ducklake_1 (DATA_PATH '__TEST_DIR__/ducklake_files_s1', METADATA_SCHEMA 'metadata_s1')
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}${DUCKLAKE_CATALOG_DB}' AS ducklake_1 (DATA_PATH '__TEST_DIR__/ducklake_files_s1', METADATA_SCHEMA 'metadata_s1')
 
 statement ok
 CREATE TABLE ducklake_1.tbl(i INTEGER);
@@ -20,7 +24,7 @@ statement ok
 DETACH ducklake_1
 
 statement ok
-ATTACH 'ducklake:__TEST_DIR__/ducklake_schema.db' AS ducklake_2 (DATA_PATH '__TEST_DIR__/ducklake_files_s2', METADATA_SCHEMA 'metadata_s2')
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}${DUCKLAKE_CATALOG_DB}' AS ducklake_2 (DATA_PATH '__TEST_DIR__/ducklake_files_s2', METADATA_SCHEMA 'metadata_s2')
 
 statement ok
 CREATE TABLE ducklake_2.tbl(s VARCHAR);

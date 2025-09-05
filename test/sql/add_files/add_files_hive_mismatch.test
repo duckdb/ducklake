@@ -6,8 +6,12 @@ require ducklake
 
 require parquet
 
+test-env DUCKLAKE_CONNECTION __TEST_DIR__/
+
+test-env DUCKLAKE_CATALOG_DB ducklake_add_files_hive_mismatch.db
+
 statement ok
-ATTACH 'ducklake:__TEST_DIR__/ducklake_add_files_hive_mismatch.db' AS ducklake (DATA_PATH '__TEST_DIR__/ducklake_add_files_hive_mismatch/', METADATA_CATALOG 'metadata');
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}${DUCKLAKE_CATALOG_DB}' AS ducklake (DATA_PATH '__TEST_DIR__/ducklake_add_files_hive_mismatch/', METADATA_CATALOG 'metadata');
 
 statement ok
 CREATE TABLE partitioned_tbl(part_key VARCHAR, part_key2 INT, val VARCHAR);

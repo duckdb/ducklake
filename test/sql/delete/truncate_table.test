@@ -6,8 +6,12 @@ require ducklake
 
 require parquet
 
+test-env DUCKLAKE_CONNECTION __TEST_DIR__/
+
+test-env DUCKLAKE_CATALOG_DB ducklake_truncate.db
+
 statement ok
-ATTACH 'ducklake:__TEST_DIR__/ducklake_truncate.db' AS ducklake (DATA_PATH '__TEST_DIR__/ducklake_truncate_files')
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}${DUCKLAKE_CATALOG_DB}' AS ducklake (DATA_PATH '__TEST_DIR__/ducklake_truncate_files')
 
 # transaction local truncate
 statement ok

@@ -6,8 +6,12 @@ require ducklake
 
 require parquet
 
+test-env DUCKLAKE_CONNECTION __TEST_DIR__/
+
+test-env DUCKLAKE_CATALOG_DB ducklake_add_files_transaction_local.db
+
 statement ok
-ATTACH 'ducklake:__TEST_DIR__/ducklake_add_files_transaction_local.db' AS ducklake (DATA_PATH '__TEST_DIR__/ducklake_add_files_transaction_local');
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}${DUCKLAKE_CATALOG_DB}' AS ducklake (DATA_PATH '__TEST_DIR__/ducklake_add_files_transaction_local');
 
 statement ok
 BEGIN

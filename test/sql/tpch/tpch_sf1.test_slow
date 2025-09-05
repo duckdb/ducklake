@@ -13,8 +13,12 @@ mode skip
 statement ok
 CALL dbgen(sf=1);
 
+test-env DUCKLAKE_CONNECTION __TEST_DIR__/
+
+test-env DUCKLAKE_CATALOG_DB ducklake_tpch.db
+
 statement ok
-ATTACH 'ducklake:__TEST_DIR__/ducklake_tpch.db' AS ducklake (DATA_PATH '__TEST_DIR__/ducklake_tpch_files')
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}${DUCKLAKE_CATALOG_DB}' AS ducklake (DATA_PATH '__TEST_DIR__/ducklake_tpch_files')
 
 statement ok
 COPY FROM DATABASE memory TO ducklake

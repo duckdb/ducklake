@@ -6,8 +6,12 @@ require ducklake
 
 require parquet
 
+test-env DUCKLAKE_CONNECTION __TEST_DIR__/
+
+test-env DUCKLAKE_CATALOG_DB ducklake_struct_evolution_alter_map.db
+
 statement ok
-ATTACH 'ducklake:__TEST_DIR__/ducklake_struct_evolution_alter_map.db' AS ducklake (DATA_PATH '__TEST_DIR__/ducklake_struct_evolution_alter_map_files')
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}${DUCKLAKE_CATALOG_DB}' AS ducklake (DATA_PATH '__TEST_DIR__/ducklake_struct_evolution_alter_map_files')
 
 statement ok
 CREATE TABLE ducklake.test(col1 MAP(INT, STRUCT(i INT, j INT)));

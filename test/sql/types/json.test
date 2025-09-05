@@ -8,8 +8,12 @@ require parquet
 
 require json
 
+test-env DUCKLAKE_CONNECTION __TEST_DIR__/
+
+test-env DUCKLAKE_CATALOG_DB ducklake_json.db
+
 statement ok
-ATTACH 'ducklake:__TEST_DIR__/ducklake_json.db' AS ducklake (DATA_PATH '__TEST_DIR__/ducklake_json_files')
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}${DUCKLAKE_CATALOG_DB}' AS ducklake (DATA_PATH '__TEST_DIR__/ducklake_json_files')
 
 statement ok
 CREATE TABLE ducklake.test(l JSON);
@@ -35,7 +39,7 @@ statement ok
 DETACH ducklake
 
 statement ok
-ATTACH 'ducklake:__TEST_DIR__/ducklake_json.db' AS ducklake (DATA_PATH '__TEST_DIR__/ducklake_json_files')
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}${DUCKLAKE_CATALOG_DB}' AS ducklake (DATA_PATH '__TEST_DIR__/ducklake_json_files')
 
 query I
 SELECT * FROM ducklake.test

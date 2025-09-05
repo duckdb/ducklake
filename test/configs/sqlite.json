@@ -1,0 +1,106 @@
+{
+  "description": "Run DuckLake tests using SQLite as a catalog DBMS.",
+  "on_init": "SET extension_directory = 'build/release/repository';",
+  "statically_loaded_extensions": [
+    "core_functions",
+    "parquet",
+    "ducklake",
+    "sqlite_scanner"
+  ],
+  "test_env": [{
+      "env_name":  "DUCKLAKE_CONNECTION",
+      "env_value": "sqlite:__TEST_DIR__/"
+   }],
+  "skip_tests": [
+    {
+      "reason": "Not implemented Error: Unsupported catalog type for duckdb_columns",
+      "paths": [
+        "test/sql/ducklake_basic.test"
+      ]
+    },
+    {
+      "reason": "SQLite databases do not support creating new schemas",
+      "paths": [
+        "test/sql/catalog/quoted_identifiers.test"
+      ]
+    },
+    {
+      "reason": "Failed to execute query COMMIT: database is locked",
+      "paths": [
+        "test/sql/compaction/compaction_delete_conflict.test",
+        "test/sql/concurrent/concurrent_insert_conflict.test",
+        "test/sql/concurrent/concurrent_insert_data_inlining.test",
+        "test/sql/rewrite_data_files/test_rewrite_concurrency.test",
+        "test/sql/rewrite_data_files/test_rewrite_transaction_conflict.test",
+        "test/sql/settings/max_retry_count.test",
+        "test/sql/snapshot_info/ducklake_current_commit.test",
+        "test/sql/snapshot_info/ducklake_last_commit.test",
+        "test/sql/stats/global_stats_transactions.test",
+        "test/sql/transaction/concurrent_table_creation.test",
+        "test/sql/transaction/transaction_conflict_cleanup.test",
+        "test/sql/transaction/transaction_conflicts.test",
+        "test/sql/transaction/transaction_conflicts_delete.test",
+        "test/sql/transaction/transaction_conflicts_view.test"
+      ]
+    },
+    {
+      "reason": "Data Inlining Not Supported",
+      "paths": [
+        "test/sql/data_inlining/basic_data_inlining.test",
+        "test/sql/concurrent/concurrent_insert_conflict.test",
+        "test/sql/concurrent/concurrent_insert_data_inlining.test",
+        "test/sql/data_inlining/data_inlining_alter.test",
+        "test/sql/data_inlining/data_inlining_constraints.test",
+        "test/sql/data_inlining/data_inlining_delete.test",
+        "test/sql/data_inlining/data_inlining_encryption.test",
+        "test/sql/data_inlining/data_inlining_flush.test",
+        "test/sql/data_inlining/data_inlining_flush_schema.test",
+        "test/sql/data_inlining/data_inlining_large.test",
+        "test/sql/data_inlining/data_inlining_option.test",
+        "test/sql/data_inlining/data_inlining_option_transaction_local.test",
+        "test/sql/data_inlining/data_inlining_partitions.test",
+        "test/sql/data_inlining/data_inlining_table_changes.test",
+        "test/sql/data_inlining/data_inlining_transaction_local_alter.test",
+        "test/sql/data_inlining/data_inlining_transaction_local_delete.test",
+        "test/sql/data_inlining/data_inlining_types.test",
+        "test/sql/data_inlining/data_inlining_update.test",
+        "test/sql/transaction/transaction_conflict_inlining.test"
+      ]
+    },
+    {
+      "reason": "Require DATA_PATH",
+      "paths": [
+        "test/sql/general/default_path.test",
+        "test/sql/general/metadata_parameters.test"
+      ]
+    },
+    {
+      "reason": "Tests only for DuckDB as a catalog",
+      "paths": [
+        "test/sql/general/missing_parquet.test",
+        "test/sql/general/paths.test",
+        "test/sql/secrets/ducklake_secrets.test"
+      ]
+    },
+     {
+      "reason": "SELECT name FROM sqlite_master WHERE length(sql) > 0 AND type='table'",
+      "paths": [
+        "test/sql/initialize/read_only_mode.test",
+        "test/sql/migration/v01.test",
+        "test/sql/migration/v01_partitioned.test"
+      ]
+    },
+    {
+      "reason": "Wrong query result",
+      "paths": [
+        "test/sql/time_travel/basic_time_travel.test"
+      ]
+    },
+    {
+      "reason": "SQLite databases do not support creating new schemas",
+      "paths": [
+        "test/sql/transaction/transaction_schema.test"
+      ]
+    }
+  ]
+}

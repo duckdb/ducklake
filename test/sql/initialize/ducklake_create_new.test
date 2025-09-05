@@ -8,17 +8,22 @@ require parquet
 
 # when CREATE_IF_NOT_EXISTS is specified we cannot connect to a non-existent ducklake
 statement error
-ATTACH 'ducklake:__TEST_DIR__/ducklake_non_existent.db' AS ducklake (CREATE_IF_NOT_EXISTS false)
+ATTACH 'ducklake:__TEST_DIR__/ducklake_non_existent.db' AS ducklake (CREATE_IF_NOT_EXISTS false, DATA_PATH '__TEST_DIR__/ducklake_existent')
 ----
 creating a new DuckLake is explicitly disabled
 
 # create a new one
+test-env DUCKLAKE_CONNECTION __TEST_DIR__/
+
+test-env DUCKLAKE_CATALOG_DB ducklake_existent.db
+
 statement ok
-ATTACH 'ducklake:__TEST_DIR__/ducklake_existent.db' AS ducklake (CREATE_IF_NOT_EXISTS true)
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}${DUCKLAKE_CATALOG_DB}' AS ducklake (CREATE_IF_NOT_EXISTS true, DATA_PATH '__TEST_DIR__/ducklake_existent')
 
 statement ok
 DETACH ducklake;
 
 # we can attach to an existing ducklake
+
 statement ok
-ATTACH 'ducklake:__TEST_DIR__/ducklake_existent.db' AS ducklake (CREATE_IF_NOT_EXISTS false)
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}${DUCKLAKE_CATALOG_DB}' AS ducklake (CREATE_IF_NOT_EXISTS false, DATA_PATH '__TEST_DIR__/ducklake_existent')

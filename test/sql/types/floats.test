@@ -9,8 +9,12 @@ require parquet
 statement ok
 PRAGMA enable_verification
 
+test-env DUCKLAKE_CONNECTION __TEST_DIR__/
+
+test-env DUCKLAKE_CATALOG_DB ducklake_float.db
+
 statement ok
-ATTACH 'ducklake:__TEST_DIR__/ducklake_float.db' AS ducklake (DATA_PATH '__TEST_DIR__/ducklake_float_files')
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}${DUCKLAKE_CATALOG_DB}' AS ducklake (DATA_PATH '__TEST_DIR__/ducklake_float_files')
 
 foreach type FLOAT DOUBLE
 

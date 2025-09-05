@@ -6,8 +6,12 @@ require ducklake
 
 require parquet
 
+test-env DUCKLAKE_CONNECTION __TEST_DIR__/
+
+test-env DUCKLAKE_CATALOG_DB ducklake_view_info_columns.db
+
 statement ok
-ATTACH 'ducklake:__TEST_DIR__/ducklake_view_info_columns.db' AS ducklake (DATA_PATH '__TEST_DIR__/ducklake_view_info_columns')
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}${DUCKLAKE_CATALOG_DB}' AS ducklake (DATA_PATH '__TEST_DIR__/ducklake_view_info_columns')
 
 statement ok
 use ducklake;
@@ -65,8 +69,9 @@ use memory;
 statement ok
 DETACH ducklake;
 
+
 statement ok
-ATTACH 'ducklake:__TEST_DIR__/ducklake_view_info_columns.db' AS ducklake (SNAPSHOT_VERSION 2);
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}${DUCKLAKE_CATALOG_DB}' AS ducklake (SNAPSHOT_VERSION 2);
 
 statement ok
 use ducklake;

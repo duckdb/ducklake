@@ -6,8 +6,12 @@ require ducklake
 
 require parquet
 
+test-env DUCKLAKE_CONNECTION __TEST_DIR__/
+
+test-env DUCKLAKE_CATALOG_DB ducklake_inlining_setting_tl.db
+
 statement ok
-ATTACH 'ducklake:__TEST_DIR__/ducklake_inlining_setting_tl.db' AS ducklake (DATA_PATH '__TEST_DIR__/ducklake_inlining_setting_tl_files', METADATA_CATALOG 'ducklake_metadata')
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}${DUCKLAKE_CATALOG_DB}' AS ducklake (DATA_PATH '__TEST_DIR__/ducklake_inlining_setting_tl_files', METADATA_CATALOG 'ducklake_metadata')
 
 # transaction local ctable
 statement ok

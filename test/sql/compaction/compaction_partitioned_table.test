@@ -6,8 +6,12 @@ require ducklake
 
 require parquet
 
+test-env DUCKLAKE_CONNECTION __TEST_DIR__/
+
+test-env DUCKLAKE_CATALOG_DB ducklake_partitioned_compact.db
+
 statement ok
-ATTACH 'ducklake:__TEST_DIR__/ducklake_partitioned_compact.db' AS ducklake (DATA_PATH '__TEST_DIR__/ducklake_partitioned_compact_files', METADATA_CATALOG 'ducklake_metadata')
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}${DUCKLAKE_CATALOG_DB}' AS ducklake (DATA_PATH '__TEST_DIR__/ducklake_partitioned_compact_files', METADATA_CATALOG 'ducklake_metadata')
 
 statement ok
 CREATE TABLE ducklake.partitioned(part_key INTEGER, value INTEGER);

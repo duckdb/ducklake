@@ -8,5 +8,17 @@ duckdb_extension_load(ducklake
 duckdb_extension_load(icu)
 duckdb_extension_load(json)
 duckdb_extension_load(tpch)
-# Any extra extensions that should be built
-# e.g.: duckdb_extension_load(json)
+
+duckdb_extension_load(sqlite_scanner
+        DONT_LINK
+        APPLY_PATCHES
+        GIT_URL https://github.com/duckdb/duckdb-sqlite
+        GIT_TAG 801922e968dd9b72b055ed0f9857cd7421200e6f
+)
+
+duckdb_extension_load(postgres_scanner
+        DONT_LINK
+        APPLY_PATCHES
+        GIT_URL https://github.com/duckdb/duckdb-postgres
+        GIT_TAG e58cd1dfed98a04ce3e928d5b941e5e2c533ba12
+)

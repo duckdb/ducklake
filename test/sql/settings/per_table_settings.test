@@ -6,8 +6,12 @@ require ducklake
 
 require parquet
 
+test-env DUCKLAKE_CONNECTION __TEST_DIR__/
+
+test-env DUCKLAKE_CATALOG_DB ducklake_per_table_settings.db
+
 statement ok
-ATTACH 'ducklake:__TEST_DIR__/ducklake_per_table_settings.db' AS ducklake (DATA_PATH '__TEST_DIR__/ducklake_per_table_settings_files');
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}${DUCKLAKE_CATALOG_DB}' AS ducklake (DATA_PATH '__TEST_DIR__/ducklake_per_table_settings_files');
 
 # test different settings per schema/table
 statement ok
@@ -103,7 +107,7 @@ statement ok
 DETACH ducklake
 
 statement ok
-ATTACH 'ducklake:__TEST_DIR__/ducklake_per_table_settings.db' AS ducklake (DATA_PATH '__TEST_DIR__/ducklake_per_table_settings_files');
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}${DUCKLAKE_CATALOG_DB}' AS ducklake (DATA_PATH '__TEST_DIR__/ducklake_per_table_settings_files');
 
 endloop
 

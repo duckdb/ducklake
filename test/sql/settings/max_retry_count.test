@@ -6,8 +6,12 @@ require ducklake
 
 require parquet
 
+test-env DUCKLAKE_CONNECTION __TEST_DIR__/
+
+test-env DUCKLAKE_CATALOG_DB ducklake_retry_test.db
+
 statement ok
-ATTACH 'ducklake:__TEST_DIR__/ducklake_retry_test.db' AS ducklake (DATA_PATH '__TEST_DIR__/ducklake_retry_test_files');
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}${DUCKLAKE_CATALOG_DB}' AS ducklake (DATA_PATH '__TEST_DIR__/ducklake_retry_test_files');
 
 statement ok
 USE ducklake

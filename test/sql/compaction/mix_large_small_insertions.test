@@ -6,8 +6,12 @@ require ducklake
 
 require parquet
 
+test-env DUCKLAKE_CONNECTION __TEST_DIR__/
+
+test-env DUCKLAKE_CATALOG_DB ducklake_compaction_mix.db
+
 statement ok
-ATTACH 'ducklake:__TEST_DIR__/ducklake_compaction_mix.db' AS ducklake (DATA_PATH '__TEST_DIR__/ducklake_compaction_mix_files', METADATA_CATALOG 'metadata')
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}${DUCKLAKE_CATALOG_DB}' AS ducklake (DATA_PATH '__TEST_DIR__/ducklake_compaction_mix_files', METADATA_CATALOG 'metadata')
 
 # set target file size very small
 statement ok

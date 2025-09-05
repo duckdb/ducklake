@@ -6,7 +6,11 @@ require ducklake
 
 require parquet
 
+test-env DUCKLAKE_CONNECTION __TEST_DIR__/
+
+test-env DUCKLAKE_CATALOG_DB ducklake_recursive.db
+
 statement error
-ATTACH 'ducklake:__TEST_DIR__/ducklake_recursive.db' AS ducklake (DATA_PATH '__TEST_DIR__/ducklake_recursive_files', METADATA_CATALOG 'ducklake')
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}${DUCKLAKE_CATALOG_DB}' AS ducklake (DATA_PATH '__TEST_DIR__/ducklake_recursive_files', METADATA_CATALOG 'ducklake')
 ----
 

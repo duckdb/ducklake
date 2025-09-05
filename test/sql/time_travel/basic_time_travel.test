@@ -8,8 +8,12 @@ require parquet
 
 require icu
 
+test-env DUCKLAKE_CONNECTION __TEST_DIR__/
+
+test-env DUCKLAKE_CATALOG_DB ducklake_time_travel.db
+
 statement ok
-ATTACH 'ducklake:__TEST_DIR__/ducklake_time_travel.db' AS ducklake (DATA_PATH '__TEST_DIR__/ducklake_time_travel_files')
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}${DUCKLAKE_CATALOG_DB}' AS ducklake (DATA_PATH '__TEST_DIR__/ducklake_time_travel_files')
 
 statement ok
 CREATE TABLE ducklake.test(s STRUCT(i INTEGER, j INTEGER));

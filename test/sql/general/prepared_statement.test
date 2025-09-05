@@ -12,8 +12,12 @@ SET parquet_metadata_cache=true;
 # FIXME: succeeds on v1.3 branch but fails on v1.3.0 release
 mode skip
 
+test-env DUCKLAKE_CONNECTION __TEST_DIR__/
+
+test-env DUCKLAKE_CATALOG_DB ducklake_prepared.db
+
 statement ok
-ATTACH 'ducklake:__TEST_DIR__/ducklake_prepared.db' AS ducklake (DATA_PATH '__TEST_DIR__/ducklake_prepared_files')
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}${DUCKLAKE_CATALOG_DB}' AS ducklake (DATA_PATH '__TEST_DIR__/ducklake_prepared_files')
 
 statement ok
 CREATE TABLE ducklake.tbl AS FROM range(1000) t(i);

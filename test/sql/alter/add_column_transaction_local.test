@@ -6,8 +6,12 @@ require ducklake
 
 require parquet
 
+test-env DUCKLAKE_CONNECTION __TEST_DIR__/
+
+test-env DUCKLAKE_CATALOG_DB ducklake_add_col_tl.db
+
 statement ok
-ATTACH 'ducklake:__TEST_DIR__/ducklake_add_col_tl.db' AS ducklake (DATA_PATH '__TEST_DIR__/ducklake_add_col_tl_files')
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}${DUCKLAKE_CATALOG_DB}' AS ducklake (DATA_PATH '__TEST_DIR__/ducklake_add_col_tl_files')
 
 statement ok
 CREATE TABLE ducklake.test(col1 INTEGER);
