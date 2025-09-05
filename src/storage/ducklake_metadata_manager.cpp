@@ -58,7 +58,7 @@ CREATE TABLE ducklake_view(view_id BIGINT, view_uuid UUID, begin_snapshot BIGINT
 CREATE TABLE ducklake_tag(object_id BIGINT, begin_snapshot BIGINT, end_snapshot BIGINT, key VARCHAR, value VARCHAR);
 CREATE TABLE ducklake_column_tag(table_id BIGINT, column_id BIGINT, begin_snapshot BIGINT, end_snapshot BIGINT, key VARCHAR, value VARCHAR);
 CREATE TABLE ducklake_data_file(data_file_id BIGINT PRIMARY KEY, table_id BIGINT, begin_snapshot BIGINT, end_snapshot BIGINT, file_order BIGINT, path VARCHAR, path_is_relative BOOLEAN, file_format VARCHAR, record_count BIGINT, file_size_bytes BIGINT, footer_size BIGINT, row_id_start BIGINT, partition_id BIGINT, encryption_key VARCHAR, partial_file_info VARCHAR, mapping_id BIGINT);
-CREATE TABLE ducklake_file_column_statistics(data_file_id BIGINT, table_id BIGINT, column_id BIGINT, column_size_bytes BIGINT, value_count BIGINT, null_count BIGINT, min_value VARCHAR, max_value VARCHAR, contains_nan BOOLEAN);
+CREATE TABLE ducklake_file_column_stats(data_file_id BIGINT, table_id BIGINT, column_id BIGINT, column_size_bytes BIGINT, value_count BIGINT, null_count BIGINT, min_value VARCHAR, max_value VARCHAR, contains_nan BOOLEAN);
 CREATE TABLE ducklake_delete_file(delete_file_id BIGINT PRIMARY KEY, table_id BIGINT, begin_snapshot BIGINT, end_snapshot BIGINT, data_file_id BIGINT, path VARCHAR, path_is_relative BOOLEAN, format VARCHAR, delete_count BIGINT, file_size_bytes BIGINT, footer_size BIGINT, encryption_key VARCHAR);
 CREATE TABLE ducklake_column(column_id BIGINT, begin_snapshot BIGINT, end_snapshot BIGINT, table_id BIGINT, column_order BIGINT, column_name VARCHAR, column_type VARCHAR, initial_default VARCHAR, default_value VARCHAR, nulls_allowed BOOLEAN, parent_column BIGINT);
 CREATE TABLE ducklake_table_stats(table_id BIGINT, record_count BIGINT, next_row_id BIGINT, file_size_bytes BIGINT);
@@ -116,6 +116,7 @@ ALTER TABLE ducklake_snapshot_changes ADD COLUMN commit_extra_info VARCHAR DEFAU
 UPDATE ducklake_metadata SET value = '0.3-dev1' WHERE key = 'version';
 CREATE TABLE ducklake_schema_versions(begin_snapshot BIGINT, schema_version BIGINT);
 INSERT INTO ducklake_schema_versions SELECT MIN(snapshot_id), schema_version FROM ducklake_snapshot GROUP BY schema_version ORDER BY schema_version;
+ALTER TABLE ducklake_file_column_statistics RENAME TO ducklake_file_column_stats;
 	)";
 	auto result = transaction.Query(migrate_query);
 	if (result->HasError()) {
@@ -1556,7 +1557,7 @@ void DuckLakeMetadataManager::WriteNewDataFiles(DuckLakeSnapshot commit_snapshot
 	}
 	// insert the column stats
 	column_stats_insert_query =
-	    StringUtil::Format("INSERT INTO ducklake_file_column_statistics VALUES %s", column_stats_insert_query);
+	    StringUtil::Format("INSERT INTO ducklake_file_column_stats VALUES %s", column_stats_insert_query);
 	result = transaction.Query(commit_snapshot, column_stats_insert_query);
 	if (result->HasError()) {
 		result->GetErrorObject().Throw("Failed to write column stats information to DuckLake: ");
@@ -2245,8 +2246,8 @@ void DuckLakeMetadataManager::WriteMergeAdjacent(const vector<DuckLakeCompactedF
 	}
 	// for each file that has been compacted - delete it from the list of data files entirely
 	// including all other info (stats, delete files, partition values, etc)
-	vector<string> tables_to_delete_from {"ducklake_data_file", "ducklake_file_column_statistics",
-	                                      "ducklake_delete_file", "ducklake_file_partition_value"};
+	vector<string> tables_to_delete_from {"ducklake_data_file", "ducklake_file_column_stats", "ducklake_delete_file",
+	                                      "ducklake_file_partition_value"};
 	for (auto &delete_from_tbl : tables_to_delete_from) {
 		auto result = transaction.Query(StringUtil::Format(R"(
 DELETE FROM %s
@@ -2456,7 +2457,7 @@ WHERE %s (end_snapshot IS NOT NULL AND NOT EXISTS(
 		}
 
 		// delete the data files
-		tables_to_delete_from = {"ducklake_data_file", "ducklake_file_column_statistics"};
+		tables_to_delete_from = {"ducklake_data_file", "ducklake_file_column_stats"};
 		for (auto &delete_tbl : tables_to_delete_from) {
 			result = transaction.Query(StringUtil::Format(R"(
 DELETE FROM %s

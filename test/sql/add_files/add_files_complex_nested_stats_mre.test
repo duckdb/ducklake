@@ -35,7 +35,7 @@ statement ok
 CALL ducklake_add_data_files('ducklake', 'test_table', '__TEST_DIR__/file1.parquet')
 
 query III
-SELECT column_id, min_value, max_value FROM metadata.ducklake_file_column_statistics ORDER BY data_file_id, column_id
+SELECT column_id, min_value, max_value FROM metadata.ducklake_file_column_stats ORDER BY data_file_id, column_id
 ----
 2	1.0	2.0
 5	status	status
@@ -55,7 +55,7 @@ statement ok
 CALL ducklake_add_data_files('ducklake', 'test_table', '__TEST_DIR__/file2.parquet')
 
 query IIII
-SELECT data_file_id, column_id, min_value, max_value FROM metadata.ducklake_file_column_statistics ORDER BY data_file_id, column_id
+SELECT data_file_id, column_id, min_value, max_value FROM metadata.ducklake_file_column_stats ORDER BY data_file_id, column_id
 ----
 1	2	1.0	2.0
 1	5	status	status
