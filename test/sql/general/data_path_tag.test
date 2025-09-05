@@ -44,7 +44,7 @@ statement ok
 DETACH ducklake;
 
 statement ok
-ATTACH 'ducklake:__TEST_DIR__/ducklake_duckdb_tag_data_path.db' AS ducklake (DATA_PATH something_else);
+ATTACH 'ducklake:__TEST_DIR__/ducklake_duckdb_tag_data_path.db' AS ducklake (DATA_PATH something_else, OVERRIDE_DATA_PATH TRUE);
 
 ### Existing DuckLake with different DATA_PATH, returns the currently provided one
 

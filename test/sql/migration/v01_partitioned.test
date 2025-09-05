@@ -9,7 +9,7 @@ require parquet
 unzip data/old_ducklake/v01_partitioned.db.gz __TEST_DIR__/v01_partitioned.db
 
 statement ok
-ATTACH 'ducklake:__TEST_DIR__/v01_partitioned.db' AS ducklake (DATA_PATH '__TEST_DIR__/ducklake_migrate_v01_partitioned', METADATA_CATALOG 'ducklake_metadata')
+ATTACH 'ducklake:__TEST_DIR__/v01_partitioned.db' AS ducklake (DATA_PATH '__TEST_DIR__/ducklake_migrate_v01_partitioned', METADATA_CATALOG 'ducklake_metadata', OVERRIDE_DATA_PATH TRUE)
 
 statement ok
 INSERT INTO ducklake.partitioned_tbl SELECT NULL, i%2, concat('thisisastring_', i) FROM range(10000) t(i)

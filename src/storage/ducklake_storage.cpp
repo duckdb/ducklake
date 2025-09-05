@@ -11,6 +11,8 @@ static void HandleDuckLakeOption(DuckLakeOptions &options, const string &option,
 	auto lcase = StringUtil::Lower(option);
 	if (lcase == "data_path") {
 		options.data_path = value.ToString();
+	} else if (lcase == "override_data_path") {
+		options.override_data_path = value.GetValue<bool>();
 	} else if (lcase == "metadata_schema") {
 		options.metadata_schema = value.ToString();
 	} else if (lcase == "metadata_catalog") {

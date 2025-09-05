@@ -1,0 +1,36 @@
+# name: test/sql/attach/different_paths.test
+# description: test attach of ducklake when providing different paths
+# group: [attach]
+
+require ducklake
+
+require parquet
+
+statement ok
+ATTACH 'ducklake:__TEST_DIR__/some.db' AS a_ducklake (DATA_PATH '__TEST_DIR__/some/');
+
+statement ok
+USE a_ducklake;
+
+statement ok
+CREATE TABLE t AS SELECT range a FROM range(10);
+
+statement ok
+USE memory;
+
+statement ok
+DETACH a_ducklake;
+
+statement error
+ATTACH 'ducklake:__TEST_DIR__/some.db' AS other_ducklake (DATA_PATH '__TEST_DIR__/other_path/');
+----
+does not match existing data path in the catalog
+
+statement ok
+ATTACH 'ducklake:__TEST_DIR__/some.db' AS other_ducklake (DATA_PATH '__TEST_DIR__/other_path/', OVERRIDE_DATA_PATH TRUE);
+
+# This will obviously not work
+statement error
+FROM other_ducklake.t;
+----
+No such file or directory

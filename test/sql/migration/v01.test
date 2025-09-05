@@ -9,7 +9,7 @@ require parquet
 unzip data/old_ducklake/v01.db.gz __TEST_DIR__/v01.db
 
 statement ok
-ATTACH 'ducklake:__TEST_DIR__/v01.db' AS ducklake (DATA_PATH '__TEST_DIR__/ducklake_migrate_v01')
+ATTACH 'ducklake:__TEST_DIR__/v01.db' AS ducklake (DATA_PATH '__TEST_DIR__/ducklake_migrate_v01', OVERRIDE_DATA_PATH TRUE)
 
 statement ok
 INSERT INTO ducklake.test VALUES (42);
@@ -42,7 +42,7 @@ statement ok
 DETACH ducklake
 
 statement ok
-ATTACH 'ducklake:__TEST_DIR__/v01.db' AS ducklake (DATA_PATH '__TEST_DIR__/ducklake_migrate_v01')
+ATTACH 'ducklake:__TEST_DIR__/v01.db' AS ducklake (DATA_PATH '__TEST_DIR__/ducklake_migrate_v01', OVERRIDE_DATA_PATH TRUE)
 
 query I
 FROM ducklake.test

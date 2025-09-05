@@ -175,6 +175,14 @@ void DuckLakeInitializer::LoadExistingDuckLake(DuckLakeTransaction &transaction)
 				// load the correct path from the metadata manager
 				// we need to do this after InitializeDataPath() because that sets up the correct separator
 				options.data_path = metadata_manager.LoadPath(options.data_path);
+			} else {
+				// verify that they match if override_data_path is not set to true
+				if (options.data_path != tag.value && !options.override_data_path) {
+					throw InvalidConfigurationException(
+					    "DATA_PATH parameter \"%s\" does not match existing data path in the catalog \"%s\".\nYou can "
+					    "override the DATA_PATH by setting OVERRIDE_DATA_PATH to True.",
+					    options.data_path, tag.value);
+				}
 			}
 		}
 		if (tag.key == "encrypted") {
