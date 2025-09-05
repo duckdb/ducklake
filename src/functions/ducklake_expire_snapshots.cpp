@@ -1,6 +1,7 @@
 #include "functions/ducklake_table_functions.hpp"
 #include "duckdb/main/attached_database.hpp"
 #include "duckdb/main/database_manager.hpp"
+#include "storage/ducklake_catalog.hpp"
 #include "storage/ducklake_transaction.hpp"
 
 namespace duckdb {
@@ -12,6 +13,7 @@ struct ExpireSnapshotsBindData : public TableFunctionData {
 	Catalog &catalog;
 	vector<DuckLakeSnapshotInfo> snapshots;
 	bool dry_run = false;
+	bool valid = true;
 };
 
 static unique_ptr<FunctionData> DuckLakeExpireSnapshotsBind(ClientContext &context, TableFunctionBindInput &input,
@@ -22,6 +24,11 @@ static unique_ptr<FunctionData> DuckLakeExpireSnapshotsBind(ClientContext &conte
 	string snapshot_list;
 	bool has_timestamp = false;
 	bool has_versions = false;
+	auto &ducklake_catalog = reinterpret_cast<DuckLakeCatalog &>(catalog);
+	DuckLakeSnapshotsFunction::GetSnapshotTypes(return_types, names);
+
+	const auto older_than_default = ducklake_catalog.GetConfigOption<string>("expire_older_than", {}, {}, "");
+
 	for (auto &entry : input.named_parameters) {
 		if (StringUtil::CIEquals(entry.first, "dry_run")) {
 			result->dry_run = BooleanValue::Get(entry.second);
@@ -40,15 +47,20 @@ static unique_ptr<FunctionData> DuckLakeExpireSnapshotsBind(ClientContext &conte
 			throw InternalException("Unsupported named parameter for ducklake_expire_snapshots");
 		}
 	}
-	if (has_versions == has_timestamp) {
-		throw InvalidInputException("ducklake_expire_snapshots: either versions OR older_than must be specified");
+	if ((has_versions == has_timestamp && has_versions == true) ||
+	    (has_versions == has_timestamp && has_versions == false && older_than_default.empty())) {
+		result->valid = false;
+		return std::move(result);
 	}
+
 	string filter;
 	// we can never delete the most recent snapshot
 	filter = "snapshot_id != (SELECT MAX(snapshot_id) FROM ducklake_snapshot) AND ";
 	if (has_timestamp) {
 		auto ts = Timestamp::ToString(timestamp_t(from_timestamp.value));
 		filter += StringUtil::Format("snapshot_time < '%s'", ts);
+	} else if (!has_versions && !older_than_default.empty()) {
+		filter += StringUtil::Format("snapshot_time < NOW() - INTERVAL '%s'", older_than_default);
 	} else {
 		filter += StringUtil::Format("snapshot_id IN (%s)", snapshot_list);
 	}
@@ -56,7 +68,6 @@ static unique_ptr<FunctionData> DuckLakeExpireSnapshotsBind(ClientContext &conte
 	auto &metadata_manager = transaction.GetMetadataManager();
 	result->snapshots = metadata_manager.GetAllSnapshots(filter);
 
-	DuckLakeSnapshotsFunction::GetSnapshotTypes(return_types, names);
 	return std::move(result);
 }
 
@@ -76,6 +87,9 @@ unique_ptr<GlobalTableFunctionState> DuckLakeExpireSnapshotsInit(ClientContext &
 
 void DuckLakeExpireSnapshotsExecute(ClientContext &context, TableFunctionInput &data_p, DataChunk &output) {
 	auto &data = data_p.bind_data->Cast<ExpireSnapshotsBindData>();
+	if (!data.valid) {
+		return;
+	}
 	auto &state = data_p.global_state->Cast<DuckLakeExpireSnapshotsData>();
 	if (state.offset >= data.snapshots.size()) {
 		return;

@@ -236,8 +236,10 @@ unique_ptr<LogicalOperator> FlushInlinedDataBind(ClientContext &context, TableFu
 
 	auto &named_parameters = input.named_parameters;
 
-	string schema;
-	string table;
+	// Get their default values from ducklake options
+	auto schema = ducklake_catalog.GetConfigOption<string>("compaction_schema", {}, {}, "");
+	auto table = ducklake_catalog.GetConfigOption<string>("compaction_table", {}, {}, "");
+
 	auto schema_entry = named_parameters.find("schema_name");
 	if (schema_entry != named_parameters.end()) {
 		// specific schema

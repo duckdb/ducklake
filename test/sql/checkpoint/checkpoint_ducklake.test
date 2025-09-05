@@ -1,0 +1,100 @@
+# name: test/sql/checkpoint/checkpoint_ducklake.test
+# description: Test checkpoint in ducklake
+# group: [checkpoint]
+
+require ducklake
+
+require parquet
+
+require icu
+
+statement ok
+ATTACH 'ducklake:__TEST_DIR__/checkpoint_ducklake.db' AS ducklake (DATA_PATH '__TEST_DIR__/checkpoint_ducklake', DATA_INLINING_ROW_LIMIT 5)
+
+statement ok
+use ducklake
+
+# Create table with expire_snapshot/delete old_file
+statement ok
+CREATE TABLE test(i INTEGER)
+
+statement ok
+INSERT INTO test FROM range(1000)
+
+statement ok
+DELETE FROM test
+
+statement ok
+DROP TABLE test
+
+statement ok
+CALL ducklake_expire_snapshots('ducklake', dry_run => false, versions => [2])
+
+# Create table with inlined and merge adjacent possibility
+statement ok
+create table t (a integer )
+
+statement ok
+insert into t values (1), (2)
+
+statement ok
+insert into t values (2),(3)
+
+statement ok
+insert into t values (4)
+
+# Create table with data rewrite
+statement ok
+create table t_2 (a integer )
+
+statement ok
+INSERT INTO t_2  SELECT i FROM range(100) t(i)
+
+statement ok
+DELETE FROM t_2
+WHERE a < 98;
+
+# Create orphan file
+statement ok
+COPY t_2 to '__TEST_DIR__/checkpoint_ducklake/main/t/bla.parquet';
+
+query II
+SELECT data_file_id, table_id FROM __ducklake_metadata_ducklake.ducklake_data_file
+----
+4	3
+
+query II
+SELECT delete_file_id, table_id FROM __ducklake_metadata_ducklake.ducklake_delete_file
+----
+5	3
+
+# t has the orphan, all data is inlined, t_2 has the data, and deletion, test has the data, we have 4 files in total.
+query I
+SELECT COUNT(*) FROM GLOB('__TEST_DIR__/checkpoint_ducklake/main/**')
+----
+4
+
+statement ok
+CALL ducklake.set_option('delete_older_than', '1 millisecond');
+
+statement ok
+CHECKPOINT;
+
+
+query II
+SELECT data_file_id, table_id FROM __ducklake_metadata_ducklake.ducklake_data_file
+----
+4	3
+6	2
+7	3
+
+query II
+SELECT delete_file_id, table_id FROM __ducklake_metadata_ducklake.ducklake_delete_file
+----
+
+query I
+SELECT COUNT(*)
+FROM GLOB('__TEST_DIR__/checkpoint_ducklake/main/**')
+WHERE file LIKE '%bla%';
+----
+0

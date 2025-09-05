@@ -1,6 +1,7 @@
 #include "duckdb/catalog/default/default_table_functions.hpp"
 #include "storage/ducklake_schema_entry.hpp"
 #include "duckdb/catalog/catalog_entry/table_macro_catalog_entry.hpp"
+#include "storage/ducklake_transaction_manager.hpp"
 
 namespace duckdb {
 

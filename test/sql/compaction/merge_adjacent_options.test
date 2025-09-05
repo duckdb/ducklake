@@ -1,0 +1,115 @@
+# name: test/sql/compaction/merge_adjacent_options.test
+# description: test ducklake merge adjacent files options
+# group: [compaction]
+
+require ducklake
+
+require parquet
+
+statement ok
+ATTACH 'ducklake:__TEST_DIR__/merge_adjacent_options.db' AS ducklake
+
+statement ok
+USE ducklake;
+
+# Create one Table with two files
+statement ok
+CREATE TABLE example (key VARCHAR, value VARCHAR);
+
+statement ok
+INSERT INTO example (key, value) VALUES ('foo', 'bar');
+
+statement ok
+INSERT INTO example (key, value) VALUES ('baz', 'qux');
+
+# Create another Table with two files
+statement ok
+CREATE TABLE example_2 (key VARCHAR, value VARCHAR);
+
+statement ok
+INSERT INTO example_2 (key, value) VALUES ('foo', 'bar');
+
+statement ok
+INSERT INTO example_2 (key, value) VALUES ('baz', 'qux');
+
+# Different schema with another table with two files
+statement ok
+CREATE SCHEMA s1;
+
+statement ok
+CREATE TABLE s1.example (key VARCHAR, value VARCHAR);
+
+statement ok
+INSERT INTO s1.example (key, value) VALUES ('foo', 'bar');
+
+statement ok
+INSERT INTO s1.example (key, value) VALUES ('baz', 'qux');
+
+statement ok
+CREATE TABLE s1.example_2 (key VARCHAR, value VARCHAR);
+
+statement ok
+INSERT INTO s1.example_2 (key, value) VALUES ('foo', 'bar');
+
+statement ok
+INSERT INTO s1.example_2 (key, value) VALUES ('baz', 'qux');
+
+query II
+SELECT data_file_id, table_id FROM __ducklake_metadata_ducklake.ducklake_data_file
+----
+0	1
+1	1
+2	2
+3	2
+4	4
+5	4
+6	5
+7	5
+
+# We define a table_name but not a schema name so we should be able to merge from example_2
+statement ok
+CALL ducklake_merge_adjacent_files('ducklake', 'example_2');
+
+# We write a new file for table id 2
+query II
+SELECT data_file_id, table_id FROM __ducklake_metadata_ducklake.ducklake_data_file
+----
+0	1
+1	1
+4	4
+5	4
+6	5
+7	5
+8	2
+
+
+# If we define the schema we do table id 5
+statement ok
+CALL ducklake_merge_adjacent_files('ducklake', 'example_2', schema=>'s1');
+
+query II
+SELECT data_file_id, table_id FROM __ducklake_metadata_ducklake.ducklake_data_file
+----
+0	1
+1	1
+4	4
+5	4
+8	2
+9	5
+
+# If we call with nothing, all tables, schemas go in, so we compress both remaining tables
+statement ok
+CALL ducklake_merge_adjacent_files('ducklake');
+
+query II
+SELECT data_file_id, table_id FROM __ducklake_metadata_ducklake.ducklake_data_file
+----
+8	2
+9	5
+10	1
+11	4
+
+statement error
+CALL ducklake_merge_adjacent_files('ducklake', 'example_2', schema=>'bogus');
+----
+Did you mean "main.example_2 or s1.example_2"?

@@ -79,20 +79,19 @@ static unique_ptr<FunctionData> DuckLakeSetOptionBind(ClientContext &context, Ta
 		value = to_string(val.GetValue<double>());
 	} else if (option == "hive_file_pattern") {
 		value = val.GetValue<bool>() ? "true" : "false";
-	} else if (option == "rewrite_delete_threshold") {
-		double threshold = val.GetValue<double>();
-		if (threshold < 0 || threshold > 1) {
-			throw BinderException("The rewrite_delete_threshold must be between 0 and 1");
-		}
-		value = to_string(val.GetValue<double>());
-	} else if (option == "orphan_file_delete_older_than") {
+	} else if (option == "delete_older_than" || option == "expire_older_than") {
 		auto interval_value = val.ToString();
 		if (!interval_value.empty()) {
 			// Let's verify this is actually an interval
 			interval_t result;
 			if (!Interval::FromString(val.ToString(), result)) {
-				throw BinderException("orphan_file_delete_older_than is not a valid interval value.");
+				throw BinderException("%s is not a valid interval value.", option);
 			}
+		}
+		value = val.ToString();
+	} else if (option == "compaction_schema" || option == "compaction_table") {
+		if (val.IsNull()) {
+			throw BinderException("The %s option can't be null.", option.c_str());
 		}
 		value = val.ToString();
 	} else if (option == "per_thread_output") {

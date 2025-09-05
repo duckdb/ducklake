@@ -530,21 +530,13 @@ string PartialFileInfoToString(const vector<DuckLakePartialFileInfo> &partial_fi
 	return result;
 }
 
-vector<DuckLakePartialFileInfo> ParsePartialFileInfo(const string &str) {
-	auto splits = StringUtil::Split(str, "|");
-	vector<DuckLakePartialFileInfo> result;
-	for (auto &split : splits) {
-		auto partial_split = StringUtil::Split(split, ":");
-		DuckLakePartialFileInfo file_info;
-		file_info.snapshot_id = StringUtil::ToUnsigned(partial_split[0]);
-		file_info.max_row_count = StringUtil::ToUnsigned(partial_split[1]);
-		result.push_back(file_info);
-	}
-	return result;
-}
+enum class PartialFileInfoType { PARTIAL_MAX, SPLITS };
+
+vector<DuckLakePartialFileInfo> ParsePartialFileInfo(const string &str, PartialFileInfoType type,
+                                                     DuckLakeSnapshot snapshot);
 
 idx_t GetMaxRowCount(DuckLakeSnapshot snapshot, const string &partial_file_info_str) {
-	auto partial_file_info = ParsePartialFileInfo(partial_file_info_str);
+	auto partial_file_info = ParsePartialFileInfo(partial_file_info_str, PartialFileInfoType::SPLITS, snapshot);
 	idx_t max_row_count = 0;
 	for (auto &info : partial_file_info) {
 		if (info.snapshot_id <= snapshot.snapshot_id) {
@@ -552,6 +544,38 @@ idx_t GetMaxRowCount(DuckLakeSnapshot snapshot, const string &partial_file_info_
 		}
 	}
 	return max_row_count;
+}
+
+vector<DuckLakePartialFileInfo> ParsePartialFileInfo(const string &str, PartialFileInfoType type,
+                                                     DuckLakeSnapshot snapshot) {
+	vector<DuckLakePartialFileInfo> result;
+	switch (type) {
+	case PartialFileInfoType::PARTIAL_MAX: {
+		auto max_partial_file_snapshot = StringUtil::ToUnsigned(str.substr(12));
+		DuckLakePartialFileInfo file_info;
+		if (max_partial_file_snapshot <= snapshot.snapshot_id) {
+			// all snapshot ids are included for this snapshot - skip reading partial file info
+			return result;
+		}
+		file_info.snapshot_id = snapshot.snapshot_id;
+		result.push_back(file_info);
+		return result;
+	}
+	case PartialFileInfoType::SPLITS: {
+		auto splits = StringUtil::Split(str, "|");
+
+		for (auto &split : splits) {
+			auto partial_split = StringUtil::Split(split, ":");
+			DuckLakePartialFileInfo file_info;
+			file_info.snapshot_id = StringUtil::ToUnsigned(partial_split[0]);
+			file_info.max_row_count = StringUtil::ToUnsigned(partial_split[1]);
+			result.push_back(file_info);
+		}
+		return result;
+	}
+	default:
+		throw InternalException("Invalid PartialFileInfoType for ParsePartialFileInfo(...)");
+	}
 }
 
 void ParsePartialFileInfo(DuckLakeSnapshot snapshot, const string &partial_file_info_str,
@@ -787,7 +811,8 @@ WHERE data.table_id=%d AND {SNAPSHOT_ID} >= data.begin_snapshot AND ({SNAPSHOT_I
 
 vector<DuckLakeCompactionFileEntry> DuckLakeMetadataManager::GetFilesForCompaction(DuckLakeTableEntry &table,
                                                                                    CompactionType type,
-                                                                                   double deletion_threshold) {
+                                                                                   double deletion_threshold,
+                                                                                   DuckLakeSnapshot snapshot) {
 	auto table_id = table.GetTableId();
 	string data_select_list = "data.data_file_id, data.record_count, data.row_id_start, data.begin_snapshot, "
 	                          "data.end_snapshot, data.mapping_id, sr.schema_version , data.partial_file_info, "
@@ -858,7 +883,13 @@ ORDER BY data.begin_snapshot, data.row_id_start, data.data_file_id, del.begin_sn
 		if (!row.IsNull(col_idx)) {
 			// parse the partial file info
 			auto partial_file_info = row.GetValue<string>(col_idx);
-			new_entry.partial_files = ParsePartialFileInfo(partial_file_info);
+			if (StringUtil::Contains(partial_file_info, "partial_max")) {
+				new_entry.partial_files =
+				    ParsePartialFileInfo(partial_file_info, PartialFileInfoType::PARTIAL_MAX, snapshot);
+			} else {
+				new_entry.partial_files =
+				    ParsePartialFileInfo(partial_file_info, PartialFileInfoType::SPLITS, snapshot);
+			}
 		}
 		col_idx++;
 		new_entry.file.partition_id = row.IsNull(col_idx) ? optional_idx() : row.GetValue<idx_t>(col_idx);

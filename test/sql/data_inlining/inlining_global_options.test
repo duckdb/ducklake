@@ -1,0 +1,125 @@
+# name: test/sql/data_inlining/inlining_global_options.test
+# description: Test global options for the inlining function ducklake_flush_inlined_data
+# group: [data_inlining]
+
+require ducklake
+
+require parquet
+
+statement ok
+ATTACH 'ducklake:__TEST_DIR__/inlining_global_options.db' AS ducklake (DATA_PATH '__TEST_DIR__/inlining_global_options', DATA_INLINING_ROW_LIMIT 2)
+
+statement ok
+use ducklake
+
+# Create one Table with two files
+statement ok
+CREATE TABLE example (key VARCHAR, value VARCHAR);
+
+statement ok
+INSERT INTO example (key, value) VALUES ('foo', 'bar');
+
+statement ok
+INSERT INTO example (key, value) VALUES ('baz', 'qux');
+
+# Create another Table with two files
+statement ok
+CREATE TABLE example_2 (key VARCHAR, value VARCHAR);
+
+statement ok
+INSERT INTO example_2 (key, value) VALUES ('foo', 'bar');
+
+statement ok
+INSERT INTO example_2 (key, value) VALUES ('baz', 'qux');
+
+# Different schema with another table with two files
+statement ok
+CREATE SCHEMA s1;
+
+statement ok
+CREATE TABLE s1.example (key VARCHAR, value VARCHAR);
+
+statement ok
+INSERT INTO s1.example (key, value) VALUES ('foo', 'bar');
+
+statement ok
+INSERT INTO s1.example (key, value) VALUES ('baz', 'qux');
+
+statement ok
+CREATE TABLE s1.example_2 (key VARCHAR, value VARCHAR);
+
+statement ok
+INSERT INTO s1.example_2 (key, value) VALUES ('foo', 'bar');
+
+statement ok
+INSERT INTO s1.example_2 (key, value) VALUES ('baz', 'qux');
+
+statement ok
+CREATE TABLE s1.example_3 (key VARCHAR, value VARCHAR);
+
+statement ok
+INSERT INTO s1.example_3 (key, value) VALUES ('foo', 'bar');
+
+statement ok
+INSERT INTO s1.example_3 (key, value) VALUES ('baz', 'qux');
+
+query II
+SELECT data_file_id, table_id FROM __ducklake_metadata_ducklake.ducklake_data_file
+----
+
+# We define a table_name but not a schema name so we should be able to merge from example_2
+statement ok
+CALL ducklake.set_option('compaction_table', 'example_2')
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake');
+
+# We write a new file for table id 2
+query II
+SELECT data_file_id, table_id FROM __ducklake_metadata_ducklake.ducklake_data_file
+----
+10	2
+
+# If we set the schema we also get the other table
+statement ok
+CALL ducklake.set_option('compaction_schema', 's1')
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake');
+
+query II
+SELECT data_file_id, table_id FROM __ducklake_metadata_ducklake.ducklake_data_file
+----
+10	2
+11	5
+
+# If we set table to empty we should get the whole schema
+statement ok
+CALL ducklake.set_option('compaction_table', '')
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake');
+
+query II
+SELECT data_file_id, table_id FROM __ducklake_metadata_ducklake.ducklake_data_file
+----
+10	2
+11	5
+12	4
+13	6
+
+# If we set the schema to empty we do it all
+statement ok
+CALL ducklake.set_option('compaction_schema', '')
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake');
+
+query II
+SELECT data_file_id, table_id FROM __ducklake_metadata_ducklake.ducklake_data_file
+----
+10	2
+11	5
+12	4
+13	6
+14	1

@@ -38,7 +38,7 @@ SELECT COUNT(*) FROM GLOB('__TEST_DIR__/remove_orphaned_files/main/test/*')
 4
 
 statement ok
-CALL ducklake.set_option('orphan_file_delete_older_than', '1 week')
+CALL ducklake.set_option('delete_older_than', '1 week')
 
 # Check preference of manually set option
 query I
@@ -48,7 +48,7 @@ SELECT count(*) FROM ducklake_delete_orphaned_files('ducklake', cleanup_all => t
 
 
 statement ok
-CALL ducklake.set_option('orphan_file_delete_older_than', '1 millisecond')
+CALL ducklake.set_option('delete_older_than', '1 millisecond')
 
 query I
 SELECT count(*) FROM ducklake_delete_orphaned_files('ducklake', dry_run => true);
@@ -57,12 +57,12 @@ SELECT count(*) FROM ducklake_delete_orphaned_files('ducklake', dry_run => true)
 
 # Test invalid
 statement error
-CALL ducklake.set_option('orphan_file_delete_older_than', 'pedro')
+CALL ducklake.set_option('delete_older_than', 'pedro')
 ----
-orphan_file_delete_older_than is not a valid interval value.
+delete_older_than is not a valid interval value.
 
 statement ok
-CALL ducklake.set_option('orphan_file_delete_older_than', '')
+CALL ducklake.set_option('delete_older_than', '')
 
 query I
 SELECT ends_with(path,'bla.parquet') FROM ducklake_delete_orphaned_files('ducklake', cleanup_all => true, dry_run => true);

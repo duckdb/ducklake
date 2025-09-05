@@ -1,0 +1,42 @@
+# name: test/sql/compaction/expire_snapshot_global_option.test
+# description: Test global options for the inlining function ducklake_expire_snapshots
+# group: [compaction]
+
+require ducklake
+
+require parquet
+
+require icu
+
+statement ok
+ATTACH 'ducklake:__TEST_DIR__/expire_snapshot_global_option.db' AS ducklake (DATA_PATH '__TEST_DIR__/expire_snapshot_global_option')
+
+# delete all values in a table
+# snapshot 1
+statement ok
+CREATE TABLE ducklake.test(i INTEGER)
+
+# snapshot 2
+statement ok
+INSERT INTO ducklake.test FROM range(10)
+
+statement ok
+CALL ducklake.set_option('expire_older_than', '1 millisecond')
+
+query I
+SELECT count(*) FROM ducklake_expire_snapshots('ducklake', dry_run => true)
+----
+2
+
+statement ok
+CALL ducklake.set_option('expire_older_than', '1 week')
+
+query I
+SELECT count(*) FROM ducklake_expire_snapshots('ducklake', dry_run => true)
+----
+0
+
+query I
+SELECT count(*) FROM ducklake_expire_snapshots('ducklake', dry_run => true, versions => [1])
+----
+1
