@@ -32,7 +32,7 @@ SELECT COUNT(*) FROM GLOB('__TEST_DIR__/ducklake_inlining_partitions/main/partit
 ----
 0
 
-query IIII
+query IIII rowsort
 SELECT year(ts), COUNT(*), MIN(values), MAX(values) FROM partitioned_tbl GROUP BY year(ts)
 ----
 2020	8784	thisisastring_0	thisisastring_999
@@ -58,7 +58,7 @@ SELECT COUNT(*) FROM GLOB('__TEST_DIR__/ducklake_inlining_partitions/main/partit
 ----
 14
 
-query IIII
+query IIII rowsort
 SELECT year(ts), COUNT(*), MIN(values), MAX(values) FROM partitioned_tbl GROUP BY year(ts)
 ----
 2020	8784	thisisastring_0	thisisastring_999
