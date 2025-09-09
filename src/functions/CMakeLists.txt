@@ -15,6 +15,7 @@ add_library(
   ducklake_options.cpp
   ducklake_table_changes.cpp
   ducklake_table_info.cpp
+  ducklake_static_backup.cpp
   ducklake_table_insertions.cpp)
 set(ALL_OBJECT_FILES
     ${ALL_OBJECT_FILES} $<TARGET_OBJECTS:ducklake_functions>
