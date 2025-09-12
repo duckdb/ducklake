@@ -1,0 +1,6 @@
+# name: benchmark/ingest/add_files_lineitem.benchmark
+# description: Benchmark adding TPCH lineitem table files using ducklake_add_data_files
+# group: [add_files]
+
+template benchmark/ingest/add_files.benchmark.in
+table_name=lineitem

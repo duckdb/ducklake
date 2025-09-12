@@ -74,10 +74,6 @@ static unique_ptr<GlobalTableFunctionState> DuckLakeAddDataFilesInit(ClientConte
 	return make_uniq<DuckLakeAddDataFilesState>();
 }
 
-struct ParquetColumnStats {
-	vector<Value> column_stats;
-};
-
 struct ParquetColumn {
 	idx_t column_id;
 	string name;
@@ -87,7 +83,7 @@ struct ParquetColumn {
 	optional_idx precision;
 	optional_idx field_id;
 	string logical_type;
-	vector<ParquetColumnStats> column_stats;
+	vector<DuckLakeColumnStats> column_stats;
 
 	vector<unique_ptr<ParquetColumn>> child_columns;
 };
@@ -124,7 +120,6 @@ private:
 	unique_ptr<DuckLakeNameMapEntry> MapHiveColumn(ParquetFileMetadata &file_metadata, const DuckLakeFieldId &field_id,
 	                                               DuckLakeDataFile &result, const Value &hive_value);
 
-	Value GetStatsValue(string name, Value val);
 	void CheckMatchingType(const LogicalType &type, ParquetColumn &column);
 
 private:
@@ -137,10 +132,24 @@ private:
 	unordered_map<string, unique_ptr<ParquetFileMetadata>> parquet_files;
 };
 
+inline DuckLakeColumnGeoStats &MaybeInitializeStats(DuckLakeColumnStats &stats) {
+	if (!stats.extra_stats) {
+		stats.extra_stats = make_uniq<DuckLakeColumnGeoStats>();
+	}
+	return stats.extra_stats->Cast<DuckLakeColumnGeoStats>();
+}
+
 void DuckLakeFileProcessor::ReadParquetSchema(const string &glob) {
 	auto result = transaction.Query(StringUtil::Format(R"(
-SELECT file_name, name, type, num_children, converted_type, scale, precision, field_id, logical_type
-FROM parquet_schema(%s)
+WITH base AS (
+  SELECT file_name, name, type, num_children, converted_type, scale, precision, field_id, logical_type
+  FROM parquet_schema(%s)
+),
+ordered AS (SELECT *, row_number() OVER () AS rn FROM base),
+partitioned AS (SELECT * EXCLUDE (rn), row_number() OVER (PARTITION BY file_name ORDER BY rn) - 1 AS flattened_column_id FROM ordered)
+SELECT * EXCLUDE (flattened_column_id)
+FROM partitioned
+ORDER BY file_name, flattened_column_id;
 )",
 	                                                   SQLString(glob)));
 	if (result->HasError()) {
@@ -233,16 +242,9 @@ FROM parquet_schema(%s)
 	}
 }
 
-Value DuckLakeFileProcessor::GetStatsValue(string name, Value val) {
-	child_list_t<Value> children;
-	children.emplace_back("key", Value(std::move(name)));
-	children.emplace_back("value", std::move(val));
-	return Value::STRUCT(std::move(children));
-}
-
 void DuckLakeFileProcessor::ReadParquetStats(const string &glob) {
 	auto result = transaction.Query(StringUtil::Format(R"(
-SELECT file_name, column_id, num_values, coalesce(stats_min, stats_min_value), coalesce(stats_max, stats_max_value), stats_null_count, total_compressed_size, geo_bbox, geo_types
+SELECT file_name, column_id, coalesce(stats_min, stats_min_value), coalesce(stats_max, stats_max_value), stats_null_count, total_compressed_size, geo_bbox, geo_types
 FROM parquet_metadata(%s)
 )",
 	                                                   SQLString(glob)));
@@ -264,26 +266,26 @@ FROM parquet_metadata(%s)
 			throw InvalidInputException("Column id not found in Parquet map?");
 		}
 		auto &column = column_entry->second.get();
-		ParquetColumnStats stats;
+		DuckLakeColumnStats stats(LogicalType::SQLNULL); // FIXME: Use the correct type here
 
 		if (!row.IsNull(2)) {
-			// stats.column_stats.push_back(GetStatsValue("value_count", row.GetValue<string>(2)));
+			stats.has_min = true;
+			stats.min = row.GetValue<string>(2);
 		}
 		if (!row.IsNull(3)) {
-			stats.column_stats.push_back(GetStatsValue("min", row.GetValue<string>(3)));
+			stats.has_max = true;
+			stats.max = row.GetValue<string>(3);
 		}
 		if (!row.IsNull(4)) {
-			stats.column_stats.push_back(GetStatsValue("max", row.GetValue<string>(4)));
+			stats.has_null_count = true;
+			stats.null_count = StringUtil::ToUnsigned(row.GetValue<string>(4));
 		}
 		if (!row.IsNull(5)) {
-			stats.column_stats.push_back(GetStatsValue("null_count", row.GetValue<string>(5)));
+			stats.column_size_bytes = StringUtil::ToUnsigned(row.GetValue<string>(5));
 		}
 		if (!row.IsNull(6)) {
-			stats.column_stats.push_back(GetStatsValue("column_size_bytes", row.GetValue<string>(6)));
-		}
-		if (!row.IsNull(7)) {
 			// Split the bbox struct into individual entries
-			auto bbox_value = row.iterator.chunk->GetValue(7, row.row);
+			auto bbox_value = row.iterator.chunk->GetValue(6, row.row);
 			auto &bbox_type = bbox_value.type();
 
 			auto &bbox_child_types = StructType::GetChildTypes(bbox_type);
@@ -293,13 +295,35 @@ FROM parquet_metadata(%s)
 				auto &name = bbox_child_types[child_idx].first;
 				auto &value = bbox_child_values[child_idx];
 				if (!value.IsNull()) {
-					stats.column_stats.push_back(GetStatsValue("bbox_" + name, value));
+					auto &geo_stats = MaybeInitializeStats(stats);
+					if (name == "xmax") {
+						geo_stats.xmax = value.DefaultCastAs(LogicalType::DOUBLE).GetValue<double>();
+					} else if (name == "xmin") {
+						geo_stats.xmin = value.DefaultCastAs(LogicalType::DOUBLE).GetValue<double>();
+					} else if (name == "ymax") {
+						geo_stats.ymax = value.DefaultCastAs(LogicalType::DOUBLE).GetValue<double>();
+					} else if (name == "ymin") {
+						geo_stats.ymin = value.DefaultCastAs(LogicalType::DOUBLE).GetValue<double>();
+					} else if (name == "zmax") {
+						geo_stats.zmax = value.DefaultCastAs(LogicalType::DOUBLE).GetValue<double>();
+					} else if (name == "zmin") {
+						geo_stats.zmin = value.DefaultCastAs(LogicalType::DOUBLE).GetValue<double>();
+					} else if (name == "mmax") {
+						geo_stats.mmax = value.DefaultCastAs(LogicalType::DOUBLE).GetValue<double>();
+					} else if (name == "mmin") {
+						geo_stats.mmin = value.DefaultCastAs(LogicalType::DOUBLE).GetValue<double>();
+					} else {
+						throw InternalException("Unknown bbox child name %s", name);
+					}
 				}
 			}
 		}
-		if (!row.IsNull(8)) {
-			auto list_value = row.iterator.chunk->GetValue(8, row.row);
-			stats.column_stats.push_back(GetStatsValue("geo_types", std::move(list_value)));
+		if (!row.IsNull(7)) {
+			auto list_value = row.iterator.chunk->GetValue(7, row.row);
+			auto &geo_stats = MaybeInitializeStats(stats);
+			for (const auto &child : ListValue::GetChildren(list_value)) {
+				geo_stats.geo_types.insert(StringValue::Get(child));
+			}
 		}
 
 		column.column_stats.push_back(std::move(stats));
@@ -705,18 +729,14 @@ unique_ptr<DuckLakeNameMapEntry> DuckLakeFileProcessor::MapColumn(ParquetFileMet
 		}
 	}
 	// parse the per row-group stats
-	vector<DuckLakeColumnStats> row_group_stats_list;
-	for (auto &stats : column.column_stats) {
-		auto row_group_stats = DuckLakeInsert::ParseColumnStats(field_id.Type(), stats.column_stats);
-		row_group_stats_list.push_back(std::move(row_group_stats));
-	}
-	// merge all stats into the first one
-	for (idx_t i = 1; i < row_group_stats_list.size(); i++) {
-		row_group_stats_list[0].MergeStats(row_group_stats_list[i]);
-	}
-	// add the final stats of this column to the file
-	if (!row_group_stats_list.empty()) {
-		file.column_stats.emplace(field_id.GetFieldIndex(), std::move(row_group_stats_list[0]));
+	if (!column.column_stats.empty()) {
+		auto base_stats = column.column_stats[0];
+		base_stats.type = field_id.Type();
+		for (idx_t i = 1; i < column.column_stats.size(); i++) {
+			column.column_stats[i].type = field_id.Type();
+			base_stats.MergeStats(column.column_stats[i]);
+		}
+		file.column_stats.emplace(field_id.GetFieldIndex(), std::move(base_stats));
 	}
 	return map_entry;
 }
