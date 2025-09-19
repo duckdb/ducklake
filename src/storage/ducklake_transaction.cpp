@@ -377,6 +377,8 @@ void DuckLakeTransaction::WriteSnapshotChanges(DuckLakeCommitState &commit_state
 
 void DuckLakeTransaction::CleanupFiles() {
 	// remove any files that were written
+	// auto &fs = FileSystem::GetFileSystem(db);
+	auto context_ref = context.lock();
 	auto &fs = FileSystem::GetFileSystem(db);
 	for (auto &entry : table_data_changes) {
 		auto &table_changes = entry.second;
@@ -1620,12 +1622,13 @@ void DuckLakeTransaction::DropTransactionLocalFile(TableIndex table_id, const st
 	}
 	auto &table_changes = entry->second;
 	auto &table_files = table_changes.new_data_files;
+	auto context_ref = context.lock();
+	auto &fs = FileSystem::GetFileSystem(*context_ref);
 	for (idx_t i = 0; i < table_files.size(); i++) {
 		auto &file = table_files[i];
 		if (file.file_name == path) {
 			// found the file - delete it from the table list and from disk
 			table_files.erase_at(i);
-			auto &fs = FileSystem::GetFileSystem(db);
 			fs.RemoveFile(path);
 			if (table_changes.IsEmpty()) {
 				// no more files remaining
@@ -1757,8 +1760,9 @@ void DuckLakeTransaction::AddDeletes(TableIndex table_id, vector<DuckLakeDeleteF
 		}
 		auto existing_entry = table_delete_map.find(data_file_path);
 		if (existing_entry != table_delete_map.end()) {
+			auto context_ref = context.lock();
+			auto &fs = FileSystem::GetFileSystem(*context_ref);
 			// we have a transaction-local delete for this file already - delete it
-			auto &fs = FileSystem::GetFileSystem(db);
 			fs.RemoveFile(existing_entry->second.file_name);
 			// write the new file
 			existing_entry->second = std::move(file);
@@ -1811,7 +1815,9 @@ void DuckLakeTransaction::TransactionLocalDelete(TableIndex table_id, const stri
 		if (file.file_name == data_file_path) {
 			if (file.delete_file) {
 				// this file already has a transaction-local delete file - delete it
-				auto &fs = FileSystem::GetFileSystem(db);
+				// auto &fs = FileSystem::GetFileSystem(db);
+				auto context_ref = context.lock();
+				auto &fs = FileSystem::GetFileSystem(*context_ref);
 				fs.RemoveFile(file.delete_file->file_name);
 			}
 			file.delete_file = make_uniq<DuckLakeDeleteFile>(std::move(delete_file));
@@ -1862,7 +1868,8 @@ void DuckLakeTransaction::DropTable(DuckLakeTableEntry &table) {
 		auto table_entry = table_data_changes.find(table_id);
 		if (table_entry != table_data_changes.end()) {
 			auto &table_changes = table_entry->second;
-			auto &fs = FileSystem::GetFileSystem(db);
+			auto context_ref = context.lock();
+			auto &fs = FileSystem::GetFileSystem(*context_ref);
 			for (auto &file : table_changes.new_data_files) {
 				fs.RemoveFile(file.file_name);
 			}

@@ -1,0 +1,60 @@
+# name: test/sql/cloud/test_cloud_cases.test
+# description: test ducklake extension
+# group: [sql]
+
+require-env CLOUD_TESTS_READY
+
+require-env AWS_KEY_ID
+
+require-env AWS_SECRET_KEY
+
+require-env AWS_REGION
+
+require ducklake
+
+require parquet
+
+require httpfs
+
+statement ok
+set s3_region='${AWS_REGION}';
+
+statement ok
+create secret foo (
+    type s3,
+    key_id '${AWS_KEY_ID}',
+    secret '${AWS_SECRET_KEY}'
+);
+
+statement ok
+attach 'ducklake:duckdb:' as lake (data_path 's3://test-ducklake-pedro/');
+
+statement ok
+use lake;
+
+statement ok
+CREATE TABLE test AS FROM range (10) t(i);
+
+statement ok
+START;
+
+statement ok
+DELETE FROM test where i = 1;
+
+statement ok
+DELETE FROM test where i = 2;
+
+statement ok
+COMMIT;
+
+statement ok
+select * from test order by all;
+----
+0
+3
+4
+5
+6
+7
+8
+9
