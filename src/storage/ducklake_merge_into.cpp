@@ -11,6 +11,7 @@
 #include "duckdb/planner/expression/bound_reference_expression.hpp"
 #include "duckdb/parallel/thread_context.hpp"
 #include "duckdb/catalog/catalog_entry/table_catalog_entry.hpp"
+#include "duckdb/execution/operator/projection/physical_projection.hpp"
 
 namespace duckdb {
 
@@ -205,6 +206,12 @@ unique_ptr<MergeIntoOperator> DuckLakePlanMergeIntoAction(DuckLakeCatalog &catal
 		result->expressions = std::move(action.expressions);
 		auto &insert = catalog.PlanInsert(context, planner, insert_op, child_plan);
 		auto &copy = insert.children[0].get();
+		if (!RefersToSameObject(copy.children[0].get(), child_plan)) {
+			auto &proj = copy.children[0].get().Cast<PhysicalProjection>();
+			for (idx_t i = result->expressions.size(); i < proj.select_list.size(); i++) {
+				result->expressions.push_back(std::move(proj.select_list[i]));
+			}
+		}
 		result->op = planner.Make<DuckLakeMergeInsert>(insert.types, insert, copy);
 		break;
 	}

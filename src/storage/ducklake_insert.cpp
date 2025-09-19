@@ -470,7 +470,7 @@ static void GeneratePartitionExpressions(ClientContext &context, DuckLakeCopyInp
 		virtual_column_count = 0;
 		break;
 	}
-	// if we have partition columns that are NOT identity we need to compute them separately, and NOT write them
+	// if we have partition columns that are NOT identity, we need to compute them separately, and NOT write them
 	idx_t partition_column_start = copy_input.columns.PhysicalColumnCount() + virtual_column_count;
 	for (idx_t part_idx = 0; part_idx < copy_input.partition_data->fields.size(); part_idx++) {
 		copy_options.partition_columns.push_back(partition_column_start++);
