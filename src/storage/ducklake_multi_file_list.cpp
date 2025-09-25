@@ -514,12 +514,12 @@ string GenerateFilterPushdown(const TableFilter &filter, unordered_set<string> &
 		auto &conjunction_and_filter = filter.Cast<ConjunctionAndFilter>();
 		string result;
 		for (auto &child_filter : conjunction_and_filter.child_filters) {
-			if (!result.empty()) {
-				result += " AND ";
-			}
 			string child_str = GenerateFilterPushdown(*child_filter, referenced_stats);
 			if (child_str.empty()) {
-				return string();
+				continue; // skip this child, we can still restrict based on other children
+			}
+			if (!result.empty()) {
+				result += " AND ";
 			}
 			result += child_str;
 		}
