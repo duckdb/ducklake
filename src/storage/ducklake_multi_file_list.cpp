@@ -11,6 +11,10 @@
 #include "duckdb/main/secret/secret_manager.hpp"
 #include "duckdb/optimizer/filter_combiner.hpp"
 #include "duckdb/parser/expression/function_expression.hpp"
+#include "duckdb/planner/expression/bound_conjunction_expression.hpp"
+#include "duckdb/planner/expression/bound_comparison_expression.hpp"
+#include "duckdb/planner/expression/bound_columnref_expression.hpp"
+#include "duckdb/execution/expression_executor.hpp"
 #include "duckdb/planner/table_filter.hpp"
 #include "duckdb/planner/operator/logical_get.hpp"
 #include "duckdb/planner/filter/constant_filter.hpp"
@@ -47,10 +51,310 @@ DuckLakeMultiFileList::DuckLakeMultiFileList(DuckLakeFunctionInfo &read_info,
 	inlined_data_tables.push_back(inlined_table);
 }
 
+struct ComplexFilterPushdownResult {
+	bool can_pushdown = false;
+	bool is_unsatisfiable = false;
+	string sql_condition;
+
+	ComplexFilterPushdownResult() : can_pushdown(false), is_unsatisfiable(false) {
+	}
+};
+
+static ComplexFilterPushdownResult ProcessAndConjunction(const BoundConjunctionExpression &and_expr,
+                                                         const vector<column_t> &column_ids, ClientContext &context,
+                                                         const DuckLakeFunctionInfo &read_info);
+
+static ComplexFilterPushdownResult ProcessOrDisjunction(const BoundConjunctionExpression &or_expr,
+                                                        const vector<column_t> &column_ids, ClientContext &context,
+                                                        const DuckLakeFunctionInfo &read_info);
+
+static ComplexFilterPushdownResult ProcessComplexFilter(const Expression &filter, const vector<column_t> &column_ids,
+                                                        ClientContext &context, const DuckLakeFunctionInfo &read_info);
+
+static string ConvertTableFilterSetToSQL(const TableFilterSet &table_filters, const vector<column_t> &column_ids,
+                                         const DuckLakeFunctionInfo &read_info);
+
+static string GenerateFilterPushdown(const TableFilter &filter, unordered_set<string> &referenced_stats);
+
+static ComplexFilterPushdownResult ProcessComplexFilter(const Expression &filter, const vector<column_t> &column_ids,
+                                                        ClientContext &context, const DuckLakeFunctionInfo &read_info) {
+	ComplexFilterPushdownResult result;
+
+	FilterCombiner combiner(context);
+	auto filter_result = combiner.AddFilter(filter.Copy());
+
+	if (filter_result == FilterResult::UNSATISFIABLE) {
+		result.can_pushdown = true;
+		result.is_unsatisfiable = true;
+		return result;
+	}
+
+	vector<FilterPushdownResult> pushdown_results;
+	vector<ColumnIndex> dummy_column_indexes;
+	for (idx_t i = 0; i < column_ids.size(); i++) {
+		dummy_column_indexes.push_back(ColumnIndex(i));
+	}
+
+	auto table_filters = combiner.GenerateTableScanFilters(dummy_column_indexes, pushdown_results);
+
+	bool has_remaining_filters = false;
+	combiner.GenerateFilters([&](unique_ptr<Expression> filter) { has_remaining_filters = true; });
+
+	if (!has_remaining_filters) {
+		string sql_condition = ConvertTableFilterSetToSQL(table_filters, column_ids, read_info);
+		if (!sql_condition.empty()) {
+			result.can_pushdown = true;
+			result.sql_condition = sql_condition;
+			return result;
+		}
+	}
+
+	// FilterCombiner couldn't handle the entire expression, fall back to recursive processing
+	switch (filter.GetExpressionType()) {
+	case ExpressionType::CONJUNCTION_AND: {
+		auto &and_expr = filter.Cast<BoundConjunctionExpression>();
+		return ProcessAndConjunction(and_expr, column_ids, context, read_info);
+	}
+	case ExpressionType::CONJUNCTION_OR: {
+		auto &or_expr = filter.Cast<BoundConjunctionExpression>();
+		return ProcessOrDisjunction(or_expr, column_ids, context, read_info);
+	}
+	case ExpressionType::COMPARE_EQUAL:
+	case ExpressionType::COMPARE_GREATERTHAN:
+	case ExpressionType::COMPARE_GREATERTHANOREQUALTO:
+	case ExpressionType::COMPARE_LESSTHAN:
+	case ExpressionType::COMPARE_LESSTHANOREQUALTO:
+	case ExpressionType::COMPARE_NOTEQUAL:
+	default:
+		result.can_pushdown = false;
+		return result;
+	}
+}
+
+static string ConvertTableFilterSetToSQL(const TableFilterSet &table_filters, const vector<column_t> &column_ids,
+                                         const DuckLakeFunctionInfo &read_info) {
+	string conditions;
+
+	// Process each column's filters directly
+	for (auto &entry : table_filters.filters) {
+		auto column_index_val = entry.first;
+		idx_t column_idx = column_index_val;
+
+		if (column_idx >= column_ids.size()) {
+			continue;
+		}
+
+		auto column_id = column_ids[column_idx];
+
+		if (IsVirtualColumn(column_id)) {
+			continue;
+		}
+
+		unordered_set<string> referenced_stats;
+		auto filter_condition = GenerateFilterPushdown(*entry.second, referenced_stats);
+		if (filter_condition.empty()) {
+			continue;
+		}
+
+		auto column_index = PhysicalIndex(column_id);
+		auto &root_id = read_info.table.GetFieldId(column_index);
+
+		string final_filter = "table_id=" + to_string(read_info.table_id.index);
+		final_filter += " AND ";
+		final_filter += "column_id=" + to_string(root_id.GetFieldIndex().index);
+		final_filter += " AND ";
+		final_filter += "(";
+
+		for (auto &stats_name : referenced_stats) {
+			final_filter += stats_name + " IS NULL OR ";
+		}
+
+		final_filter += filter_condition + ")";
+
+		if (!conditions.empty()) {
+			conditions += " AND ";
+		}
+		conditions += StringUtil::Format(
+		    "data_file_id IN (SELECT data_file_id FROM {METADATA_CATALOG}.ducklake_file_column_stats WHERE %s)",
+		    final_filter);
+	}
+
+	return conditions;
+}
+
+static ComplexFilterPushdownResult ProcessAndConjunction(const BoundConjunctionExpression &and_expr,
+                                                         const vector<column_t> &column_ids, ClientContext &context,
+                                                         const DuckLakeFunctionInfo &read_info) {
+	ComplexFilterPushdownResult result;
+
+	FilterCombiner group_combiner(context);
+
+	for (idx_t i = 0; i < and_expr.children.size(); i++) {
+		auto filter_result = group_combiner.AddFilter(and_expr.children[i]->Copy());
+		if (filter_result == FilterResult::UNSATISFIABLE) {
+			// If any expression makes the AND unsatisfiable then the entire AND is unsatisfiable
+			result.can_pushdown = true;
+			result.is_unsatisfiable = true;
+			return result;
+		}
+	}
+
+	vector<string> and_conditions;
+	vector<unique_ptr<Expression>> remaining_filters;
+
+	vector<FilterPushdownResult> pushdown_results;
+	vector<ColumnIndex> dummy_column_indexes;
+	for (idx_t i = 0; i < column_ids.size(); i++) {
+		dummy_column_indexes.push_back(ColumnIndex(i));
+	}
+
+	auto grouped_table_filters = group_combiner.GenerateTableScanFilters(dummy_column_indexes, pushdown_results);
+
+	if (!grouped_table_filters.filters.empty()) {
+		string grouped_sql = ConvertTableFilterSetToSQL(grouped_table_filters, column_ids, read_info);
+		if (!grouped_sql.empty()) {
+			and_conditions.push_back(grouped_sql);
+		}
+	}
+
+	// Now recursively process only the expressions that FilterCombiner couldn't handle
+	group_combiner.GenerateFilters(
+	    [&](unique_ptr<Expression> filter) { remaining_filters.push_back(std::move(filter)); });
+	for (auto &remaining_filter : remaining_filters) {
+		auto child_result = ProcessComplexFilter(*remaining_filter, column_ids, context, read_info);
+
+		if (child_result.can_pushdown) {
+			if (child_result.is_unsatisfiable) {
+				result.can_pushdown = true;
+				result.is_unsatisfiable = true;
+				return result;
+			} else if (!child_result.sql_condition.empty()) {
+				and_conditions.push_back(child_result.sql_condition);
+			}
+		}
+	}
+
+	if (!and_conditions.empty()) {
+		string combined_and;
+		for (idx_t i = 0; i < and_conditions.size(); i++) {
+			if (i > 0) {
+				combined_and += " AND ";
+			}
+			combined_and += "(" + and_conditions[i] + ")";
+		}
+
+		result.can_pushdown = true;
+		result.sql_condition = combined_and;
+	} else {
+		result.can_pushdown = false;
+	}
+
+	return result;
+}
+
+static ComplexFilterPushdownResult ProcessOrDisjunction(const BoundConjunctionExpression &or_expr,
+                                                        const vector<column_t> &column_ids, ClientContext &context,
+                                                        const DuckLakeFunctionInfo &read_info) {
+	ComplexFilterPushdownResult result;
+
+	vector<idx_t> satisfiable_children;
+
+	for (idx_t i = 0; i < or_expr.children.size(); i++) {
+		FilterCombiner child_combiner(context);
+		auto child_filter_result = child_combiner.AddFilter(or_expr.children[i]->Copy());
+
+		if (child_filter_result == FilterResult::UNSATISFIABLE) {
+			// Skip unsatisfiable children - they don't contribute to the OR
+			continue;
+		}
+
+		satisfiable_children.push_back(i);
+	}
+
+	// If no children are satisfiable, the entire OR is unsatisfiable
+	if (satisfiable_children.empty()) {
+		result.can_pushdown = true;
+		result.is_unsatisfiable = true;
+		return result;
+	}
+
+	// If only one child is satisfiable, process it directly
+	if (satisfiable_children.size() == 1) {
+		idx_t child_idx = satisfiable_children[0];
+		return ProcessComplexFilter(*or_expr.children[child_idx], column_ids, context, read_info);
+	}
+
+	vector<string> or_conditions;
+	for (auto child_idx : satisfiable_children) {
+		auto child_result = ProcessComplexFilter(*or_expr.children[child_idx], column_ids, context, read_info);
+
+		if (child_result.can_pushdown) {
+			if (child_result.is_unsatisfiable) {
+				// Skip unsatisfiable children - they don't contribute to the OR
+				continue;
+			} else if (!child_result.sql_condition.empty()) {
+				or_conditions.push_back(child_result.sql_condition);
+			}
+		} else {
+			// If any satisfiable child cannot be pushed down, we cannot optimize the entire OR
+			// because we might miss data that should match the unpushable condition
+			result.can_pushdown = false;
+			return result;
+		}
+	}
+
+	// If all satisfiable children could be pushed down, create the OR condition
+	if (!or_conditions.empty()) {
+		string combined_or;
+		for (idx_t i = 0; i < or_conditions.size(); i++) {
+			if (i > 0) {
+				combined_or += " OR ";
+			}
+			combined_or += "(" + or_conditions[i] + ")";
+		}
+
+		result.can_pushdown = true;
+		result.sql_condition = combined_or;
+	} else if (satisfiable_children.size() > 0) {
+		// We had satisfiable children but none produced SQL conditions - they must all be unsatisfiable
+		result.can_pushdown = true;
+		result.is_unsatisfiable = true;
+	} else {
+		result.can_pushdown = false;
+	}
+
+	return result;
+}
+
 unique_ptr<MultiFileList> DuckLakeMultiFileList::ComplexFilterPushdown(ClientContext &context,
                                                                        const MultiFileOptions &options,
                                                                        MultiFilePushdownInfo &info,
                                                                        vector<unique_ptr<Expression>> &filters) {
+	if (filters.empty()) {
+		return nullptr;
+	}
+
+	// Create a fictitious AND expression from all input filters
+	// This allows us to leverage the existing ProcessAndConjunction logic
+	auto and_expr = make_uniq<BoundConjunctionExpression>(ExpressionType::CONJUNCTION_AND);
+
+	for (auto &filter : filters) {
+		and_expr->children.push_back(filter->Copy());
+	}
+
+	auto result = ProcessAndConjunction(*and_expr, info.column_ids, context, read_info);
+
+	if (result.can_pushdown) {
+		if (result.is_unsatisfiable) {
+			// Filters are unsatisfiable - return empty file list
+			return make_uniq<DuckLakeMultiFileList>(read_info, vector<DuckLakeFileListEntry>());
+		} else if (!result.sql_condition.empty()) {
+			// Normal case - return file list with filter condition
+			return make_uniq<DuckLakeMultiFileList>(read_info, transaction_local_files, transaction_local_data,
+			                                        std::move(result.sql_condition));
+		}
+	}
+
 	return nullptr;
 }
 
@@ -255,43 +559,8 @@ DuckLakeMultiFileList::DynamicFilterPushdown(ClientContext &context, const Multi
 		// filter pushdown is only supported when scanning full tables
 		return nullptr;
 	}
-	string filter;
-	for (auto &entry : filters.filters) {
-		auto column_id = entry.first;
-		if (IsVirtualColumn(column_ids[column_id])) {
-			// skip pushing filters on virtual columns
-			continue;
-		}
-		// FIXME: handle structs
-		auto column_index = PhysicalIndex(column_ids[column_id]);
-		auto &root_id = read_info.table.GetFieldId(column_index);
-		unordered_set<string> referenced_stats;
-		auto new_filter = GenerateFilterPushdown(*entry.second, referenced_stats);
-		if (new_filter.empty()) {
-			// failed to generate filter for this column
-			continue;
-		}
-		// generate the final filter for this column
-		string final_filter;
-		final_filter = "table_id=" + to_string(read_info.table_id.index);
-		final_filter += " AND ";
-		final_filter += "column_id=" + to_string(root_id.GetFieldIndex().index);
-		final_filter += " AND ";
-		final_filter += "(";
-		// if any of the referenced stats are NULL we cannot prune
-		for (auto &stats_name : referenced_stats) {
-			final_filter += stats_name + " IS NULL OR ";
-		}
-		// finally add the filter
-		final_filter += "(" + new_filter + "))";
-		// add the filter to the list of filters
-		if (!filter.empty()) {
-			filter += " AND ";
-		}
-		filter += StringUtil::Format(
-		    "data_file_id IN (SELECT data_file_id FROM {METADATA_CATALOG}.ducklake_file_column_stats WHERE %s)",
-		    final_filter);
-	}
+	string filter = ConvertTableFilterSetToSQL(filters, column_ids, read_info);
+
 	if (!filter.empty()) {
 		return make_uniq<DuckLakeMultiFileList>(read_info, transaction_local_files, transaction_local_data,
 		                                        std::move(filter));
