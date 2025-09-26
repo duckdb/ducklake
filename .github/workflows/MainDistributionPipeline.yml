@@ -28,6 +28,18 @@ jobs:
       ci_tools_version: main
       extension_name: ducklake
 
+  duckdb-next-deploy:
+    name: Deploy extension binaries
+    needs: duckdb-next-build
+    uses: duckdb/extension-ci-tools/.github/workflows/_extension_deploy.yml@main
+    secrets: inherit
+    with:
+      extension_name: ducklake
+      duckdb_version: v1.4-andium
+      ci_tools_version: main
+      deploy_latest: ${{ startsWith(github.ref, 'refs/heads/v') || github.ref == 'refs/heads/main' }}
+      deploy_versioned: ${{ startsWith(github.ref, 'refs/heads/v') || github.ref == 'refs/heads/main' }}
+
   duckdb-stable-deploy:
     name: Deploy extension binaries
     needs: duckdb-stable-build
