@@ -25,7 +25,8 @@ class DuckLakeMultiFileList : public MultiFileList {
 
 public:
 	DuckLakeMultiFileList(DuckLakeFunctionInfo &read_info, vector<DuckLakeDataFile> transaction_local_files,
-	                      shared_ptr<DuckLakeInlinedData> transaction_local_data, string filter = string());
+	                      shared_ptr<DuckLakeInlinedData> transaction_local_data, string filter = string(),
+	                      string cte_section = string());
 	DuckLakeMultiFileList(DuckLakeFunctionInfo &read_info, vector<DuckLakeFileListEntry> files_to_scan);
 	DuckLakeMultiFileList(DuckLakeFunctionInfo &read_info, const DuckLakeInlinedTableInfo &inlined_table);
 
@@ -79,6 +80,8 @@ private:
 	vector<DuckLakeDeleteScanEntry> delete_scans;
 	//! The filter to apply
 	string filter;
+	//! CTE section for optimized filter queries
+	string cte_section;
 };
 
 } // namespace duckdb

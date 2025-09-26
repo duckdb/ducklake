@@ -612,13 +612,21 @@ static void ParsePartialFileInfo(DuckLakeSnapshot snapshot, const string &partia
 	}
 }
 
-vector<DuckLakeFileListEntry>
-DuckLakeMetadataManager::GetFilesForTable(DuckLakeTableEntry &table, DuckLakeSnapshot snapshot, const string &filter) {
+vector<DuckLakeFileListEntry> DuckLakeMetadataManager::GetFilesForTable(DuckLakeTableEntry &table,
+                                                                        DuckLakeSnapshot snapshot,
+                                                                        const string &cte_section,
+                                                                        const string &where_filter) {
 	auto table_id = table.GetTableId();
 	string select_list = GetFileSelectList("data") +
 	                     ", data.row_id_start, data.begin_snapshot, data.partial_file_info, data.mapping_id, " +
 	                     GetFileSelectList("del");
-	auto query = StringUtil::Format(R"(
+
+	string query;
+	if (!cte_section.empty()) {
+		query = cte_section;
+	}
+
+	query += StringUtil::Format(R"(
 SELECT %s
 FROM {METADATA_CATALOG}.ducklake_data_file data
 LEFT JOIN (
@@ -629,10 +637,12 @@ LEFT JOIN (
     ) del USING (data_file_id)
 WHERE data.table_id=%d AND {SNAPSHOT_ID} >= data.begin_snapshot AND ({SNAPSHOT_ID} < data.end_snapshot OR data.end_snapshot IS NULL)
 		)",
-	                                select_list, table_id.index, table_id.index);
-	if (!filter.empty()) {
-		query += "\nAND " + filter;
+	                            select_list, table_id.index, table_id.index);
+
+	if (!where_filter.empty()) {
+		query += "\nAND " + where_filter;
 	}
+
 	auto result = transaction.Query(snapshot, query);
 	if (result->HasError()) {
 		result->GetErrorObject().Throw("Failed to get data file list from DuckLake: ");
@@ -786,10 +796,17 @@ USING (data_file_id), (
 
 vector<DuckLakeFileListExtendedEntry> DuckLakeMetadataManager::GetExtendedFilesForTable(DuckLakeTableEntry &table,
                                                                                         DuckLakeSnapshot snapshot,
-                                                                                        const string &filter) {
+                                                                                        const string &cte_section,
+                                                                                        const string &where_filter) {
 	auto table_id = table.GetTableId();
 	string select_list = GetFileSelectList("data") + ", data.row_id_start, " + GetFileSelectList("del");
-	auto query = StringUtil::Format(R"(
+
+	string query;
+	if (!cte_section.empty()) {
+		query = cte_section;
+	}
+
+	query += StringUtil::Format(R"(
 SELECT data.data_file_id, del.delete_file_id, data.record_count, %s
 FROM {METADATA_CATALOG}.ducklake_data_file data
 LEFT JOIN (
@@ -800,9 +817,10 @@ LEFT JOIN (
     ) del USING (data_file_id)
 WHERE data.table_id=%d AND {SNAPSHOT_ID} >= data.begin_snapshot AND ({SNAPSHOT_ID} < data.end_snapshot OR data.end_snapshot IS NULL)
 		)",
-	                                select_list, table_id.index, table_id.index);
-	if (!filter.empty()) {
-		query += "\nAND " + filter;
+	                            select_list, table_id.index, table_id.index);
+
+	if (!where_filter.empty()) {
+		query += "\nAND " + where_filter;
 	}
 
 	auto result = transaction.Query(snapshot, query);
