@@ -16,7 +16,7 @@ class DuckLakeUpdate : public PhysicalOperator {
 public:
 	DuckLakeUpdate(PhysicalPlan &physical_plan, DuckLakeTableEntry &table, vector<PhysicalIndex> columns,
 	               PhysicalOperator &child, PhysicalOperator &copy_op, PhysicalOperator &delete_op,
-	               PhysicalOperator &insert_op);
+	               PhysicalOperator &insert_op, vector<unique_ptr<Expression>> &expressions);
 
 	//! The table to update
 	DuckLakeTableEntry &table;
@@ -30,6 +30,9 @@ public:
 	PhysicalOperator &insert_op;
 	//! The row-id-index
 	idx_t row_id_index;
+	vector<unique_ptr<Expression>> expressions;
+	//! Extra Projections
+	vector<unique_ptr<Expression>> extra_projections;
 
 public:
 	// // Source interface

@@ -1,0 +1,51 @@
+# name: test/sql/merge/merge_update_insert.test
+# description: Test merge into with update/insert
+# group: [merge]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+
+statement ok
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '__TEST_DIR__/merge_update_insert', METADATA_CATALOG 'ducklake_meta')
+
+statement ok
+USE ducklake
+
+statement ok
+CREATE TABLE Stock(item_id int, balance int);
+
+statement ok
+insert into stock values (10,2200), (20,1900)
+
+statement ok
+CREATE TABLE Buy(item_id int, volume int);
+
+statement ok
+INSERT INTO Buy values(10, 1000);
+
+statement ok
+INSERT INTO Buy values(30, 300);
+
+query II
+FROM Stock ORDER BY item_id
+----
+10	2200
+20	1900
+
+# update and insert
+query I
+MERGE INTO Stock AS s USING Buy AS b ON s.item_id = b.item_id
+WHEN MATCHED THEN UPDATE SET balance = balance + b.volume
+WHEN NOT MATCHED THEN INSERT VALUES (b.item_id, b.volume)
+----
+2
+
+query II
+FROM Stock ORDER BY item_id
+----
+10	3200
+20	1900
+30	300

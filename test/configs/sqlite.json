@@ -70,7 +70,9 @@
         "test/sql/transaction/transaction_conflict_inlining.test",
         "test/sql/data_inlining/inlining_global_options.test",
         "test/sql/checkpoint/checkpoint_updates_interleaved.test",
-        "test/sql/checkpoint/checkpoint_ducklake.test"
+        "test/sql/checkpoint/checkpoint_ducklake.test",
+        "test/sql/checkpoint/many_inserts_transaction.test",
+        "test/sql/data_inlining/insert_inlining_concurrent.test"
       ]
     },
     {

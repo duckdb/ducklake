@@ -1,0 +1,28 @@
+# name: test/sql/update/test_update_expression.test
+# description: Test ducklake updates
+# group: [update]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+
+test-env DATA_PATH __TEST_DIR__
+
+
+statement ok
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/test_update_expression');
+
+statement ok
+use ducklake
+
+statement ok
+CREATE TABLE monthly_sales(empid INT, amount INT, month TEXT, status TEXT);
+
+statement ok
+INSERT INTO monthly_sales VALUES
+    (1, 10000, '1-JAN', 'regular')
+
+statement ok
+UPDATE monthly_sales SET status=CASE WHEN amount >= 10000 THEN 'important' ELSE 'regular' END

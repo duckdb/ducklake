@@ -305,6 +305,13 @@ OperatorFinalResultType DuckLakeInlineData::OperatorFinalize(Pipeline &pipeline,
 		// no inlined data, we are done
 		return OperatorFinalResultType::FINISHED;
 	}
+	{
+		auto cinsert = const_cast<DuckLakeInsert *>(insert.get());
+		lock_guard<mutex> lock(cinsert->lock);
+		if (!cinsert->sink_state) {
+			cinsert->sink_state = insert->GetGlobalSinkState(context);
+		}
+	}
 	auto &insert_gstate = insert->sink_state->Cast<DuckLakeInsertGlobalState>();
 	if (insert_gstate.total_insert_count != 0) {
 		throw InternalException("Inlining rows but also inserting rows through a file");

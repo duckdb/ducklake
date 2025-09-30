@@ -470,7 +470,7 @@ static void GeneratePartitionExpressions(ClientContext &context, DuckLakeCopyInp
 		virtual_column_count = 0;
 		break;
 	}
-	// if we have partition columns that are NOT identity we need to compute them separately, and NOT write them
+	// if we have partition columns that are NOT identity, we need to compute them separately, and NOT write them
 	idx_t partition_column_start = copy_input.columns.PhysicalColumnCount() + virtual_column_count;
 	for (idx_t part_idx = 0; part_idx < copy_input.partition_data->fields.size(); part_idx++) {
 		copy_options.partition_columns.push_back(partition_column_start++);
@@ -690,7 +690,7 @@ PhysicalOperator &DuckLakeInsert::PlanCopyForInsert(ClientContext &context, Phys
 		// Insert a cast projection
 		if (plan) {
 			InsertCasts(copy_options.expected_types, context, planner, plan);
-			// Update the expected types to match the casted types
+			// Update the expected types to match the cast types
 			copy_options.expected_types = plan->types;
 		} else {
 			// Still update types. If there is no child-plan node, we expect that whoever inserts chunks (e.g.

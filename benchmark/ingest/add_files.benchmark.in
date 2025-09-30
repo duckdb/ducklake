@@ -1,0 +1,37 @@
+# name: ${FILE_PATH}
+# description: Benchmark adding TPCH data files using ducklake_add_data_files
+# group: [add_files_sf${sf}]
+
+argument sf 1
+argument table_name lineitem
+
+name DuckLake Add Files SF${sf}
+group tpch_add_files
+subgroup sf${sf}
+
+require ducklake
+require parquet
+require tpch
+
+load
+ATTACH ':memory:' AS mem;
+USE mem;
+CALL dbgen(sf=${sf});
+SET preserve_insertion_order=False;
+EXPORT DATABASE '${BENCHMARK_DIR}/add_files_sf${sf}_export' (
+    FORMAT PARQUET, 
+    ROW_GROUP_SIZE 2048, 
+    ROW_GROUPS_PER_FILE 100, 
+    PER_THREAD_OUTPUT,
+    OVERWRITE
+);
+ATTACH 'ducklake:${BENCHMARK_DIR}/add_files_sf${sf}_ducklake.db' AS ducklake (DATA_PATH '${BENCHMARK_DIR}/add_files_sf${sf}_ducklake_files', METADATA_CATALOG 'metadata');
+USE ducklake;
+DETACH mem;
+
+reload
+ATTACH 'ducklake:${BENCHMARK_DIR}/add_files_sf${sf}_ducklake.db' AS ducklake (METADATA_CATALOG 'metadata');
+
+run
+CREATE TABLE IF NOT EXISTS ducklake.${table_name} AS (FROM '${BENCHMARK_DIR}/add_files_sf${sf}_export/${table_name}.parquet/**/*.parquet' LIMIT 0);
+CALL ducklake_add_data_files('ducklake', '${table_name}', '${BENCHMARK_DIR}/add_files_sf${sf}_export/${table_name}.parquet/**/*.parquet');

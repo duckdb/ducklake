@@ -11,6 +11,7 @@
 #include "duckdb/planner/expression/bound_reference_expression.hpp"
 #include "duckdb/parallel/thread_context.hpp"
 #include "duckdb/catalog/catalog_entry/table_catalog_entry.hpp"
+#include "duckdb/execution/operator/projection/physical_projection.hpp"
 
 namespace duckdb {
 
@@ -26,9 +27,11 @@ public:
 	PhysicalOperator &copy;
 	//! The final insert operator
 	PhysicalOperator &insert;
+	//! Extra Projections
+	vector<unique_ptr<Expression>> extra_projections;
 
 public:
-	// // Source interface
+	// Source interface
 	SourceResultType GetData(ExecutionContext &context, DataChunk &chunk, OperatorSourceInput &input) const override;
 
 	bool IsSource() const override {
@@ -66,33 +69,44 @@ SourceResultType DuckLakeMergeInsert::GetData(ExecutionContext &context, DataChu
 //===--------------------------------------------------------------------===//
 // Sink
 //===--------------------------------------------------------------------===//
-
-struct DuckLakeMergeInsertLocalState : public LocalSinkState {
-	unique_ptr<LocalSinkState> copy_local_state;
+class DuckLakeMergeIntoLocalState : public LocalSinkState {
+public:
+	unique_ptr<LocalSinkState> copy_sink_state;
+	//! Used if we have extra projections
 	DataChunk cast_chunk;
+	DataChunk chunk;
+	unique_ptr<ExpressionExecutor> expression_executor;
 };
 
 SinkResultType DuckLakeMergeInsert::Sink(ExecutionContext &context, DataChunk &chunk, OperatorSinkInput &input) const {
-	auto &lstate = input.local_state.Cast<DuckLakeMergeInsertLocalState>();
-	OperatorSinkInput sink_input {*copy.sink_state, *lstate.copy_local_state, input.interrupt_state};
+	auto &local_state = input.local_state.Cast<DuckLakeMergeIntoLocalState>();
+	OperatorSinkInput sink_input {*copy.sink_state, *local_state.copy_sink_state, input.interrupt_state};
+	reference<DataChunk> chunk_ref = chunk;
+	if (!extra_projections.empty()) {
+		// We have extra projections, we need to execute them
+		local_state.chunk.Reset();
+		local_state.expression_executor->Execute(chunk, local_state.chunk);
+		chunk_ref = local_state.chunk;
+	}
 
 	// Cast the chunk if needed
 	auto &copy_types = copy.Cast<PhysicalCopyToFile>().expected_types;
-	for (idx_t i = 0; i < chunk.ColumnCount(); i++) {
-		if (chunk.data[i].GetType() != copy_types[i]) {
-			VectorOperations::Cast(context.client, chunk.data[i], lstate.cast_chunk.data[i], chunk.size());
+	for (idx_t i = 0; i < chunk_ref.get().ColumnCount(); i++) {
+		if (chunk_ref.get().data[i].GetType() != copy_types[i]) {
+			VectorOperations::Cast(context.client, chunk_ref.get().data[i], local_state.cast_chunk.data[i],
+			                       chunk_ref.get().size());
 		} else {
-			lstate.cast_chunk.data[i].Reference(chunk.data[i]);
+			local_state.cast_chunk.data[i].Reference(chunk_ref.get().data[i]);
 		}
 	}
-	lstate.cast_chunk.SetCardinality(chunk.size());
+	local_state.cast_chunk.SetCardinality(chunk_ref.get().size());
 
-	return copy.Sink(context, lstate.cast_chunk, sink_input);
+	return copy.Sink(context, local_state.cast_chunk, sink_input);
 }
 
 SinkCombineResultType DuckLakeMergeInsert::Combine(ExecutionContext &context, OperatorSinkCombineInput &input) const {
-	auto &lstate = input.local_state.Cast<DuckLakeMergeInsertLocalState>();
-	OperatorSinkCombineInput combine_input {*copy.sink_state, *lstate.copy_local_state, input.interrupt_state};
+	auto &local_state = input.local_state.Cast<DuckLakeMergeIntoLocalState>();
+	OperatorSinkCombineInput combine_input {*copy.sink_state, *local_state.copy_sink_state, input.interrupt_state};
 	return copy.Combine(context, combine_input);
 }
 
@@ -153,11 +167,19 @@ unique_ptr<GlobalSinkState> DuckLakeMergeInsert::GetGlobalSinkState(ClientContex
 }
 
 unique_ptr<LocalSinkState> DuckLakeMergeInsert::GetLocalSinkState(ExecutionContext &context) const {
-	auto result = make_uniq<DuckLakeMergeInsertLocalState>();
-	result->copy_local_state = copy.GetLocalSinkState(context);
+	auto result = make_uniq<DuckLakeMergeIntoLocalState>();
+	result->copy_sink_state = copy.GetLocalSinkState(context);
+	if (!extra_projections.empty()) {
+		result->expression_executor = make_uniq<ExpressionExecutor>(context.client, extra_projections);
+		vector<LogicalType> insert_types;
+		for (auto &expr : result->expression_executor->expressions) {
+			insert_types.push_back(expr->return_type);
+		}
+		result->chunk.Initialize(context.client, insert_types);
+	}
 	result->cast_chunk.Initialize(context.client, copy.Cast<PhysicalCopyToFile>().expected_types);
 
-	return std::move(result);
+	return result;
 }
 
 //===--------------------------------------------------------------------===//
@@ -187,8 +209,15 @@ static unique_ptr<MergeIntoOperator> DuckLakePlanMergeIntoAction(DuckLakeCatalog
 		update.expressions = std::move(action.expressions);
 		update.columns = std::move(action.columns);
 		update.update_is_del_and_insert = action.update_is_del_and_insert;
-		result->op = catalog.PlanUpdate(context, planner, update, child_plan);
+		auto &update_plan = catalog.PlanUpdate(context, planner, update, child_plan);
+		result->op = update_plan;
 		auto &dl_update = result->op->Cast<DuckLakeUpdate>();
+		if (!RefersToSameObject(result->op->GetChildren()[0].get(), dl_update.copy_op.children[0].get())) {
+			auto &copy_proj = dl_update.copy_op.children[0].get().Cast<PhysicalProjection>();
+			for (auto &expr : copy_proj.select_list) {
+				dl_update.extra_projections.push_back(expr->Copy());
+			}
+		}
 		dl_update.row_id_index = child_plan.types.size() - 1;
 		break;
 	}
@@ -231,6 +260,12 @@ static unique_ptr<MergeIntoOperator> DuckLakePlanMergeIntoAction(DuckLakeCatalog
 		auto &insert = catalog.PlanInsert(context, planner, insert_op, child_plan);
 		auto &copy = insert.children[0].get();
 		result->op = planner.Make<DuckLakeMergeInsert>(insert.types, insert, copy);
+		if (!RefersToSameObject(copy.children[0].get(), child_plan)) {
+			auto &proj = copy.children[0].get().Cast<PhysicalProjection>();
+			for (auto &expression : proj.select_list) {
+				result->op->Cast<DuckLakeMergeInsert>().extra_projections.push_back(expression->Copy());
+			}
+		}
 		break;
 	}
 	case MergeActionType::MERGE_ERROR:
