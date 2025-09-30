@@ -173,9 +173,13 @@ void DuckLakeMultiFileList::EvaluateDeferredFilters() {
 	}
 
 	// Process complex filters if any
-	if (pending_complex_filters && !pending_complex_filters->children.empty()) {
-		auto complex_result =
-		    ProcessAndConjunction(*pending_complex_filters, deferred_column_ids, *deferred_context, read_info);
+	if (!pending_complex_filters.empty()) {
+		// Construct AND conjunction from the vector of expressions
+		auto and_expr = make_uniq<BoundConjunctionExpression>(ExpressionType::CONJUNCTION_AND);
+		for (auto &filter : pending_complex_filters) {
+			and_expr->children.push_back(filter->Copy());
+		}
+		auto complex_result = ProcessAndConjunction(*and_expr, deferred_column_ids, *deferred_context, read_info);
 
 		if (complex_result.can_pushdown) {
 			if (complex_result.is_unsatisfiable) {
@@ -477,6 +481,28 @@ unique_ptr<MultiFileList> DuckLakeMultiFileList::ComplexFilterPushdown(ClientCon
 		return nullptr;
 	}
 
+	// Check for duplicates while building the new filter list
+	vector<unique_ptr<Expression>> new_filters_to_add;
+	bool has_new_filters = false;
+
+	for (auto &filter : filters) {
+		bool is_duplicate = false;
+		for (auto &existing_filter : pending_complex_filters) {
+			if (filter->Equals(*existing_filter)) {
+				is_duplicate = true;
+				break;
+			}
+		}
+		if (!is_duplicate) {
+			new_filters_to_add.push_back(filter->Copy());
+			has_new_filters = true;
+		}
+	}
+
+	if (!has_new_filters) {
+		return Copy();
+	}
+
 	// Create a copy of the current MultiFileList with deferred filter evaluation
 	auto result = make_uniq<DuckLakeMultiFileList>(read_info, transaction_local_files, transaction_local_data, filter,
 	                                               cte_section);
@@ -488,20 +514,19 @@ unique_ptr<MultiFileList> DuckLakeMultiFileList::ComplexFilterPushdown(ClientCon
 		result->processed_table_filters.filters[entry.first] = entry.second->Copy();
 	}
 
-	if (pending_complex_filters) {
-		result->pending_complex_filters = make_uniq<BoundConjunctionExpression>(ExpressionType::CONJUNCTION_AND);
-		for (auto &child : pending_complex_filters->children) {
-			result->pending_complex_filters->children.push_back(child->Copy());
-		}
+	// Copy existing complex filters and add new ones directly
+	for (auto &filter : pending_complex_filters) {
+		result->pending_complex_filters.push_back(filter->Copy());
+	}
+	for (auto &filter : new_filters_to_add) {
+		result->pending_complex_filters.push_back(filter->Copy());
 	}
 
 	FilterCombiner combiner(context);
-	if (pending_complex_filters) {
-		for (auto &existing_filter : pending_complex_filters->children) {
-			combiner.AddFilter(existing_filter->Copy());
-		}
+	for (auto &existing_filter : pending_complex_filters) {
+		combiner.AddFilter(existing_filter->Copy());
 	}
-	for (auto &filter : filters) {
+	for (auto &filter : new_filters_to_add) {
 		combiner.AddFilter(filter->Copy());
 	}
 
@@ -516,14 +541,6 @@ unique_ptr<MultiFileList> DuckLakeMultiFileList::ComplexFilterPushdown(ClientCon
 
 	for (auto &entry : simple_table_filters.filters) {
 		result->processed_table_filters.filters[entry.first] = entry.second->Copy();
-	}
-
-	if (!result->pending_complex_filters) {
-		result->pending_complex_filters = make_uniq<BoundConjunctionExpression>(ExpressionType::CONJUNCTION_AND);
-	}
-
-	for (auto &filter : filters) {
-		result->pending_complex_filters->children.push_back(filter->Copy());
 	}
 
 	return std::move(result);
@@ -742,11 +759,9 @@ DuckLakeMultiFileList::DynamicFilterPushdown(ClientContext &context, const Multi
 	result->deferred_context = &context;
 	result->deferred_column_ids = column_ids;
 
-	if (pending_complex_filters) {
-		result->pending_complex_filters = make_uniq<BoundConjunctionExpression>(ExpressionType::CONJUNCTION_AND);
-		for (auto &child : pending_complex_filters->children) {
-			result->pending_complex_filters->children.push_back(child->Copy());
-		}
+	// Copy existing complex filters (no need for deduplication here as they're already unique)
+	for (auto &filter : pending_complex_filters) {
+		result->pending_complex_filters.push_back(filter->Copy());
 	}
 
 	for (auto &entry : processed_table_filters.filters) {
@@ -876,11 +891,9 @@ unique_ptr<MultiFileList> DuckLakeMultiFileList::Copy() {
 	result->deferred_context = deferred_context;
 	result->deferred_column_ids = deferred_column_ids;
 
-	if (pending_complex_filters) {
-		result->pending_complex_filters = make_uniq<BoundConjunctionExpression>(ExpressionType::CONJUNCTION_AND);
-		for (auto &child : pending_complex_filters->children) {
-			result->pending_complex_filters->children.push_back(child->Copy());
-		}
+	// Copy complex filters
+	for (auto &filter : pending_complex_filters) {
+		result->pending_complex_filters.push_back(filter->Copy());
 	}
 
 	// Copy dynamic filters
@@ -925,7 +938,6 @@ DuckLakeFileData GetDeleteData(const DuckLakeDataFile &file) {
 
 vector<DuckLakeFileListExtendedEntry> DuckLakeMultiFileList::GetFilesExtended() {
 	lock_guard<mutex> l(file_lock);
-	// Evaluate any deferred filters before retrieving files
 	EvaluateDeferredFilters();
 
 	vector<DuckLakeFileListExtendedEntry> result;
@@ -999,7 +1011,6 @@ vector<DuckLakeFileListExtendedEntry> DuckLakeMultiFileList::GetFilesExtended() 
 }
 
 void DuckLakeMultiFileList::GetFilesForTable() {
-	// Evaluate any deferred filters before retrieving files
 	EvaluateDeferredFilters();
 
 	auto transaction_ref = read_info.GetTransaction();

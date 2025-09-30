@@ -88,8 +88,8 @@ private:
 	string cte_section;
 	//! Deferred filter evaluation state
 	mutable bool filters_evaluated = false;
-	//! Complex filters stored as AND expression for deferred evaluation
-	mutable unique_ptr<BoundConjunctionExpression> pending_complex_filters;
+	//! Complex filters stored as vector of expressions for deferred evaluation
+	mutable vector<unique_ptr<Expression>> pending_complex_filters;
 	//! Dynamic filters stored as TableFilterSet for deferred evaluation
 	mutable TableFilterSet pending_dynamic_filters;
 	//! Column information for deferred filter evaluation
