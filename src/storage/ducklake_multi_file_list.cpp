@@ -193,13 +193,11 @@ void DuckLakeMultiFileList::EvaluateDeferredFilters() {
 				} else {
 					combined_filter = complex_result.sql_condition;
 				}
-				// Merge CTE requirements using shared utility function
 				MergeCTERequirementsMap(all_required_ctes, complex_result.required_ctes);
 			}
 		}
 	}
 
-	// Update the filter and cte_section with the combined results
 	if (!combined_filter.empty()) {
 		filter = combined_filter;
 		cte_section = GenerateCTESectionFromRequirements(all_required_ctes, read_info);
@@ -293,6 +291,7 @@ static FilterSQLResult ConvertTableFilterSetToSQL(const TableFilterSet &table_fi
 			continue;
 		}
 
+		// FIXME: handle structs
 		auto column_index = PhysicalIndex(column_id);
 		auto &root_id = read_info.table.GetFieldId(column_index);
 		auto field_index = root_id.GetFieldIndex().index;
@@ -477,6 +476,11 @@ unique_ptr<MultiFileList> DuckLakeMultiFileList::ComplexFilterPushdown(ClientCon
                                                                        const MultiFileOptions &options,
                                                                        MultiFilePushdownInfo &info,
                                                                        vector<unique_ptr<Expression>> &filters) {
+	if (read_info.scan_type != DuckLakeScanType::SCAN_TABLE) {
+		// filter pushdown is only supported when scanning full tables
+		return nullptr;
+	}
+
 	if (filters.empty()) {
 		return nullptr;
 	}
@@ -499,25 +503,12 @@ unique_ptr<MultiFileList> DuckLakeMultiFileList::ComplexFilterPushdown(ClientCon
 		}
 	}
 
+	auto result = CreateCopyWithDeferredEvaluation(context, info.column_ids);
+
 	if (!has_new_filters) {
-		return Copy();
+		return std::move(result);
 	}
 
-	// Create a copy of the current MultiFileList with deferred filter evaluation
-	auto result = make_uniq<DuckLakeMultiFileList>(read_info, transaction_local_files, transaction_local_data, filter,
-	                                               cte_section);
-	result->filters_evaluated = false;
-	result->deferred_context = &context;
-	result->deferred_column_ids = info.column_ids;
-
-	for (auto &entry : processed_table_filters.filters) {
-		result->processed_table_filters.filters[entry.first] = entry.second->Copy();
-	}
-
-	// Copy existing complex filters and add new ones directly
-	for (auto &filter : pending_complex_filters) {
-		result->pending_complex_filters.push_back(filter->Copy());
-	}
 	for (auto &filter : new_filters_to_add) {
 		result->pending_complex_filters.push_back(filter->Copy());
 	}
@@ -752,21 +743,7 @@ DuckLakeMultiFileList::DynamicFilterPushdown(ClientContext &context, const Multi
 		return nullptr;
 	}
 
-	// Create a copy of the current MultiFileList with deferred filter evaluation
-	auto result = make_uniq<DuckLakeMultiFileList>(read_info, transaction_local_files, transaction_local_data, filter,
-	                                               cte_section);
-	result->filters_evaluated = false;
-	result->deferred_context = &context;
-	result->deferred_column_ids = column_ids;
-
-	// Copy existing complex filters (no need for deduplication here as they're already unique)
-	for (auto &filter : pending_complex_filters) {
-		result->pending_complex_filters.push_back(filter->Copy());
-	}
-
-	for (auto &entry : processed_table_filters.filters) {
-		result->processed_table_filters.filters[entry.first] = entry.second->Copy();
-	}
+	auto result = CreateCopyWithDeferredEvaluation(context, column_ids);
 
 	for (auto &entry : filters.filters) {
 		auto column_idx = entry.first;
@@ -783,6 +760,26 @@ DuckLakeMultiFileList::DynamicFilterPushdown(ClientContext &context, const Multi
 	}
 
 	return std::move(result);
+}
+
+unique_ptr<DuckLakeMultiFileList>
+DuckLakeMultiFileList::CreateCopyWithDeferredEvaluation(ClientContext &context,
+                                                        const vector<column_t> &column_ids) const {
+	auto result = make_uniq<DuckLakeMultiFileList>(read_info, transaction_local_files, transaction_local_data, filter,
+	                                               cte_section);
+	result->filters_evaluated = false;
+	result->deferred_context = &context;
+	result->deferred_column_ids = column_ids;
+
+	for (auto &filter : pending_complex_filters) {
+		result->pending_complex_filters.push_back(filter->Copy());
+	}
+
+	for (auto &entry : processed_table_filters.filters) {
+		result->processed_table_filters.filters[entry.first] = entry.second->Copy();
+	}
+
+	return result;
 }
 
 vector<OpenFileInfo> DuckLakeMultiFileList::GetAllFiles() {

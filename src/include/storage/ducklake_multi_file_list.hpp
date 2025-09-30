@@ -65,6 +65,8 @@ private:
 	void GetFilesForTable();
 	void GetTableInsertions();
 	void GetTableDeletions();
+	unique_ptr<DuckLakeMultiFileList> CreateCopyWithDeferredEvaluation(ClientContext &context,
+	                                                                   const vector<column_t> &column_ids) const;
 
 private:
 	void EvaluateDeferredFilters();
