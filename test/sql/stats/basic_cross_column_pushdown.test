@@ -1,0 +1,48 @@
+# name: test/sql/stats/basic_cross_column_pushdown.test
+# description: Basic cross-column OR conditions that trigger complex filter pushdown
+# group: [stats]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+
+test-env DATA_PATH __TEST_DIR__
+
+
+statement ok
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/basic_pushdown_files')
+
+statement ok
+CREATE TABLE ducklake.test_table(id INTEGER, category INTEGER);
+
+# file 1: id=1-100, category=1
+statement ok
+INSERT INTO ducklake.test_table
+SELECT i, 1 FROM range(1, 101) t(i);
+
+# file 2: id=101-200, category=2  
+statement ok
+INSERT INTO ducklake.test_table
+SELECT i, 2 FROM range(101, 201) t(i);
+
+# file 3: id=201-300, category=3
+statement ok
+INSERT INTO ducklake.test_table
+SELECT i, 3 FROM range(201, 301) t(i);
+
+query II
+EXPLAIN ANALYZE SELECT COUNT(*) FROM ducklake.test_table WHERE id = 50 OR category = 3;
+----
+analyzed_plan	<REGEX>:.*Total Files Read: 2.*
+
+query I
+SELECT COUNT(*) FROM ducklake.test_table WHERE id = 150 OR category = 1;
+----
+101
+
+query II
+EXPLAIN ANALYZE SELECT COUNT(*) FROM ducklake.test_table WHERE id = 150 OR category = 1;
+----
+analyzed_plan	<REGEX>:.*Total Files Read: 2.*

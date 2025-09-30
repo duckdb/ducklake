@@ -9,6 +9,8 @@
 #pragma once
 
 #include "duckdb/common/multi_file/multi_file_reader.hpp"
+#include "duckdb/planner/table_filter.hpp"
+#include "duckdb/planner/expression/bound_conjunction_expression.hpp"
 #include "storage/ducklake_scan.hpp"
 #include "storage/ducklake_transaction.hpp"
 #include "storage/ducklake_metadata_info.hpp"
@@ -65,6 +67,8 @@ private:
 	void GetTableDeletions();
 
 private:
+	void EvaluateDeferredFilters();
+
 	mutex file_lock;
 	DuckLakeFunctionInfo &read_info;
 	//! The set of files to read
@@ -82,6 +86,18 @@ private:
 	string filter;
 	//! CTE section for optimized filter queries
 	string cte_section;
+	//! Deferred filter evaluation state
+	mutable bool filters_evaluated = false;
+	//! Complex filters stored as AND expression for deferred evaluation
+	mutable unique_ptr<BoundConjunctionExpression> pending_complex_filters;
+	//! Dynamic filters stored as TableFilterSet for deferred evaluation
+	mutable TableFilterSet pending_dynamic_filters;
+	//! Column information for deferred filter evaluation
+	mutable vector<column_t> deferred_column_ids;
+	//! ClientContext for deferred filter evaluation
+	mutable ClientContext *deferred_context = nullptr;
+	//! Table filters that have already been processed by ComplexFilterPushdown
+	mutable TableFilterSet processed_table_filters;
 };
 
 } // namespace duckdb

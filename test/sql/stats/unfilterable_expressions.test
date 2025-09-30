@@ -1,0 +1,95 @@
+# name: test/sql/stats/unfilterable_expressions.test
+# description: Test unfilterable expressions with partial pushdown optimization
+# group: [stats]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+
+test-env DATA_PATH __TEST_DIR__
+
+
+statement ok
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/unfilterable_files')
+
+statement ok
+CREATE TABLE ducklake.test_table(id INTEGER, category INTEGER, name VARCHAR);
+
+statement ok
+INSERT INTO ducklake.test_table
+SELECT i, 1, 'name_' || (i % 10) FROM range(1, 101) t(i);
+
+statement ok
+INSERT INTO ducklake.test_table
+SELECT i, 2, 'name_' || (i % 10) FROM range(101, 201) t(i);
+
+statement ok
+INSERT INTO ducklake.test_table
+SELECT i, 3, 'name_' || (i % 10) FROM range(201, 301) t(i);
+
+# AND with unfilterable LIKE (partial pushdown)
+query I
+SELECT COUNT(*) FROM ducklake.test_table WHERE id = 50 AND name LIKE '%pattern';
+----
+0
+
+query II
+EXPLAIN ANALYZE SELECT COUNT(*) FROM ducklake.test_table WHERE id = 50 AND name LIKE '%pattern';
+----
+analyzed_plan	<REGEX>:.*Total Files Read: 1.*
+
+query I
+SELECT COUNT(*) FROM ducklake.test_table WHERE category = 2 AND name LIKE '%xyz';
+----
+0
+
+query II
+EXPLAIN ANALYZE SELECT COUNT(*) FROM ducklake.test_table WHERE category = 2 AND name LIKE '%xyz';
+----
+analyzed_plan	<REGEX>:.*Total Files Read: 1.*
+
+# OR with unfilterable LIKE (cannot optimize)
+query I
+SELECT COUNT(*) FROM ducklake.test_table WHERE id = 50 OR name LIKE '%pattern';
+----
+1
+
+query II
+EXPLAIN ANALYZE SELECT COUNT(*) FROM ducklake.test_table WHERE id = 50 OR name LIKE '%pattern';
+----
+analyzed_plan	<REGEX>:.*Total Files Read: 3.*
+
+# cross-column OR with unfilterable expression (requires complex filtering)
+query I
+SELECT COUNT(*) FROM ducklake.test_table WHERE (id = 50 OR category = 3) AND name LIKE '%pattern';
+----
+0
+
+query II
+EXPLAIN ANALYZE SELECT COUNT(*) FROM ducklake.test_table WHERE (id = 50 OR category = 3) AND name LIKE '%pattern';
+----
+analyzed_plan	<REGEX>:.*Total Files Read: 2.*
+
+# nested: cross-column OR AND (filterable OR unfilterable) - tests complex nested handling
+query I
+SELECT COUNT(*) FROM ducklake.test_table WHERE (id = 150 OR category = 1) AND (id > 100 OR name LIKE '%xyz');
+----
+1
+
+query II
+EXPLAIN ANALYZE SELECT COUNT(*) FROM ducklake.test_table WHERE (id = 150 OR category = 1) AND (id > 100 OR name LIKE '%xyz');
+----
+analyzed_plan	<REGEX>:.*Total Files Read: 2.*
+
+# filterable LIKE patterns
+query I
+SELECT COUNT(*) FROM ducklake.test_table WHERE name LIKE 'name_1%' OR category = 3;
+----
+120
+
+query II
+EXPLAIN ANALYZE SELECT COUNT(*) FROM ducklake.test_table WHERE name LIKE 'name_1%' OR category = 3;
+----
+analyzed_plan	<REGEX>:.*Total Files Read: 3.*

@@ -1,0 +1,56 @@
+# name: test/sql/stats/equality_propagation.test
+# description: Test equality propagation in filter pushdown
+# group: [stats]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+
+test-env DATA_PATH __TEST_DIR__
+
+
+statement ok
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/propagation_files')
+
+statement ok
+CREATE TABLE ducklake.test_table(id INTEGER, duplicate_id INTEGER);
+
+# file 1: id=1-100, duplicate_id equals id for even numbers only
+statement ok
+INSERT INTO ducklake.test_table
+SELECT i, CASE WHEN i % 2 = 0 THEN i ELSE 999 END FROM range(1, 101) t(i);
+
+# file 2: id=101-200, duplicate_id equals id for odd numbers only
+statement ok
+INSERT INTO ducklake.test_table
+SELECT i, CASE WHEN i % 2 = 1 THEN i ELSE 999 END FROM range(101, 201) t(i);
+
+# file 3: id=201-300, duplicate_id never equals id  
+statement ok
+INSERT INTO ducklake.test_table
+SELECT i, 999 FROM range(201, 301) t(i);
+
+# basic equality propagation: id = 50 AND id = duplicate_id
+query I
+SELECT COUNT(*) FROM ducklake.test_table WHERE id = 50 AND id = duplicate_id;
+----
+1
+
+query II
+EXPLAIN ANALYZE SELECT COUNT(*) FROM ducklake.test_table WHERE id = 50 AND id = duplicate_id;
+----
+analyzed_plan	<REGEX>:.*Total Files Read: 1.*
+
+# range propagation: id > 100 AND id = duplicate_id  
+query I
+SELECT COUNT(*) FROM ducklake.test_table WHERE id > 100 AND id = duplicate_id;
+----
+50
+
+# Here we look at 2 files even though with more sophisticated filters because id is always less than duplicate_id
+query II
+EXPLAIN ANALYZE SELECT COUNT(*) FROM ducklake.test_table WHERE id > 100 AND id = duplicate_id;
+----
+analyzed_plan	<REGEX>:.*Total Files Read: 2.*

@@ -1,0 +1,73 @@
+# name: test/sql/stats/unsatisfiable_conditions.test
+# description: Test unsatisfiable conditions resulting in EMPTY_RESULT and branch pruning
+# group: [stats]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+
+test-env DATA_PATH __TEST_DIR__
+
+
+statement ok
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/unsatisfiable_files')
+
+statement ok
+CREATE TABLE ducklake.test_table(id INTEGER, category INTEGER);
+
+statement ok
+INSERT INTO ducklake.test_table
+SELECT i, 1 FROM range(1, 101) t(i);
+
+statement ok
+INSERT INTO ducklake.test_table
+SELECT i, 2 FROM range(101, 201) t(i);
+
+statement ok
+INSERT INTO ducklake.test_table
+SELECT i, 3 FROM range(201, 301) t(i);
+
+# basic unsatisfiable conditions
+query I
+SELECT COUNT(*) FROM ducklake.test_table WHERE id = 50 AND id = 150;
+----
+0
+
+query II
+EXPLAIN ANALYZE SELECT COUNT(*) FROM ducklake.test_table WHERE id = 50 AND id = 150;
+----
+analyzed_plan	<REGEX>:.*EMPTY_RESULT.*
+
+query I
+SELECT COUNT(*) FROM ducklake.test_table WHERE category = 1 AND category = 3;
+----
+0
+
+query II
+EXPLAIN ANALYZE SELECT COUNT(*) FROM ducklake.test_table WHERE category = 1 AND category = 3;
+----
+analyzed_plan	<REGEX>:.*EMPTY_RESULT.*
+
+# OR with unsatisfiable branches
+
+query I
+SELECT COUNT(*) FROM ducklake.test_table WHERE id = 50 OR (id = 150 AND id = 200);
+----
+1
+
+query II
+EXPLAIN ANALYZE SELECT COUNT(*) FROM ducklake.test_table WHERE id = 50 OR (id = 150 AND id = 200);
+----
+analyzed_plan	<REGEX>:.*Total Files Read: 1.*
+
+query I
+SELECT COUNT(*) FROM ducklake.test_table WHERE (category = 1 AND category = 4) OR id = 2;
+----
+1
+
+query II
+EXPLAIN ANALYZE SELECT COUNT(*) FROM ducklake.test_table WHERE (category = 1 AND category = 4) OR id = 2;
+----
+analyzed_plan	<REGEX>:.*Total Files Read: 1.*
