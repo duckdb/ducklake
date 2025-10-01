@@ -309,7 +309,7 @@ static FilterSQLResult ConvertTableFilterSetToSQL(const TableFilterSet &table_fi
 			conditions += " AND ";
 		}
 		// finally add the filter
-		conditions += StringUtil::Format("data_file_id IN (SELECT data_file_id FROM %s WHERE %s%s)", cte_name,
+		conditions += StringUtil::Format("data_file_id IN (SELECT data_file_id FROM %s WHERE %s(%s))", cte_name,
 		                                 null_checks, filter_condition);
 		// Add the CTE requirement for this column
 		CTERequirement req(field_index, referenced_stats);
@@ -487,7 +487,6 @@ unique_ptr<MultiFileList> DuckLakeMultiFileList::ComplexFilterPushdown(ClientCon
 
 	// Check for duplicates while building the new filter list
 	vector<unique_ptr<Expression>> new_filters_to_add;
-	bool has_new_filters = false;
 
 	for (auto &filter : filters) {
 		bool is_duplicate = false;
@@ -499,13 +498,12 @@ unique_ptr<MultiFileList> DuckLakeMultiFileList::ComplexFilterPushdown(ClientCon
 		}
 		if (!is_duplicate) {
 			new_filters_to_add.push_back(filter->Copy());
-			has_new_filters = true;
 		}
 	}
 
 	auto result = CreateCopyWithDeferredEvaluation(context, info.column_ids);
 
-	if (!has_new_filters) {
+	if (new_filters_to_add.empty()) {
 		return std::move(result);
 	}
 
@@ -577,8 +575,9 @@ string GenerateConstantFilter(const ConstantFilter &constant_filter, const Logic
 	case ExpressionType::COMPARE_NOTEQUAL:
 		// x <> constant
 		// this can only be false if "constant = min AND constant = max" (i.e. min = max = constant)
-		// skip this for now
-		return string();
+		referenced_stats.insert("min_value");
+		referenced_stats.insert("max_value");
+		return StringUtil::Format("NOT (%s = %s AND %s = %s)", min_value, constant_str, max_value, constant_str);
 	case ExpressionType::COMPARE_GREATERTHANOREQUALTO:
 		// x >= constant
 		// this can only be true if "max >= C"
@@ -634,7 +633,7 @@ string GenerateConstantFilterDouble(const ConstantFilter &constant_filter, const
 		}
 		// since NaN is bigger than anything - we also need to check for contains_nan
 		referenced_stats.insert("contains_nan");
-		return filter + " OR contains_nan";
+		return "(" + filter + ") OR contains_nan";
 	}
 	case ExpressionType::COMPARE_NOTEQUAL:
 	case ExpressionType::COMPARE_LESSTHANOREQUALTO:
@@ -685,7 +684,7 @@ string GenerateFilterPushdown(const TableFilter &filter, unordered_set<string> &
 			if (child_str.empty()) {
 				return string();
 			}
-			result += child_str;
+			result += "(" + child_str + ")";
 		}
 		return result;
 	}
@@ -700,7 +699,7 @@ string GenerateFilterPushdown(const TableFilter &filter, unordered_set<string> &
 			if (!result.empty()) {
 				result += " AND ";
 			}
-			result += child_str;
+			result += "(" + child_str + ")";
 		}
 		return result;
 	}
@@ -720,7 +719,7 @@ string GenerateFilterPushdown(const TableFilter &filter, unordered_set<string> &
 			if (next_filter.empty()) {
 				return string();
 			}
-			result += next_filter;
+			result += "(" + next_filter + ")";
 		}
 		return result;
 	}
