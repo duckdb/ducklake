@@ -18,6 +18,29 @@
 
 namespace duckdb {
 
+//! Manages deferred filter evaluation for DuckLake multi-file operations.
+//! Deferred filters are filters that are collected during the planning phase but not
+//! immediately evaluated. Instead, they are stored and evaluated later when the actual
+//! file list is needed, allowing for better optimization and avoiding redundant work.
+//! This is useful for when we receive more filters after the initial planning phase,
+//! such as from dynamic filter pushdown of joins.
+struct DeferredFilters {
+	//! Whether the deferred filters have been evaluated and converted to SQL
+	bool evaluated = false;
+	//! Complex filters stored as vector of expressions for deferred evaluation
+	vector<unique_ptr<Expression>> pending_complex_filters;
+	//! Dynamic filters stored as TableFilterSet for deferred evaluation
+	TableFilterSet pending_dynamic_filters;
+	//! Column information for deferred filter evaluation
+	vector<column_t> column_ids;
+	//! ClientContext for deferred filter evaluation
+	optional_ptr<ClientContext> context = nullptr;
+	//! Table filters that have already been processed by ComplexFilterPushdown
+	TableFilterSet processed_table_filters;
+
+	DeferredFilters Copy() const;
+};
+
 //! The DuckLakeMultiFileList implements the MultiFileList API to allow injecting it into the regular DuckDB parquet
 //! scan
 class DuckLakeMultiFileList : public MultiFileList {
@@ -27,8 +50,8 @@ class DuckLakeMultiFileList : public MultiFileList {
 
 public:
 	DuckLakeMultiFileList(DuckLakeFunctionInfo &read_info, vector<DuckLakeDataFile> transaction_local_files,
-	                      shared_ptr<DuckLakeInlinedData> transaction_local_data, string filter = string(),
-	                      string cte_section = string());
+	                      shared_ptr<DuckLakeInlinedData> transaction_local_data, string filter = "",
+	                      string cte_section = "");
 	DuckLakeMultiFileList(DuckLakeFunctionInfo &read_info, vector<DuckLakeFileListEntry> files_to_scan);
 	DuckLakeMultiFileList(DuckLakeFunctionInfo &read_info, const DuckLakeInlinedTableInfo &inlined_table);
 
@@ -89,17 +112,7 @@ private:
 	//! CTE section for optimized filter queries
 	string cte_section;
 	//! Deferred filter evaluation state
-	mutable bool filters_evaluated = false;
-	//! Complex filters stored as vector of expressions for deferred evaluation
-	mutable vector<unique_ptr<Expression>> pending_complex_filters;
-	//! Dynamic filters stored as TableFilterSet for deferred evaluation
-	mutable TableFilterSet pending_dynamic_filters;
-	//! Column information for deferred filter evaluation
-	mutable vector<column_t> deferred_column_ids;
-	//! ClientContext for deferred filter evaluation
-	mutable ClientContext *deferred_context = nullptr;
-	//! Table filters that have already been processed by ComplexFilterPushdown
-	mutable TableFilterSet processed_table_filters;
+	DeferredFilters deferred_filters;
 };
 
 } // namespace duckdb

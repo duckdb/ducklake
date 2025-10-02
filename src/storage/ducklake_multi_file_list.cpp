@@ -26,6 +26,31 @@
 
 namespace duckdb {
 
+// DeferredFilters implementation
+DeferredFilters DeferredFilters::Copy() const {
+	DeferredFilters result;
+	result.evaluated = evaluated;
+	result.column_ids = column_ids;
+	result.context = context;
+
+	// Copy complex filters
+	for (auto &filter : pending_complex_filters) {
+		result.pending_complex_filters.push_back(filter->Copy());
+	}
+
+	// Copy dynamic filters
+	for (auto &entry : pending_dynamic_filters.filters) {
+		result.pending_dynamic_filters.filters[entry.first] = entry.second->Copy();
+	}
+
+	// Copy processed table filters
+	for (auto &entry : processed_table_filters.filters) {
+		result.processed_table_filters.filters[entry.first] = entry.second->Copy();
+	}
+
+	return result;
+}
+
 DuckLakeMultiFileList::DuckLakeMultiFileList(DuckLakeFunctionInfo &read_info,
                                              vector<DuckLakeDataFile> transaction_local_files_p,
                                              shared_ptr<DuckLakeInlinedData> transaction_local_data_p, string filter_p,
@@ -33,19 +58,21 @@ DuckLakeMultiFileList::DuckLakeMultiFileList(DuckLakeFunctionInfo &read_info,
     : MultiFileList(vector<OpenFileInfo> {}, FileGlobOptions::ALLOW_EMPTY), read_info(read_info), read_file_list(false),
       transaction_local_files(std::move(transaction_local_files_p)),
       transaction_local_data(std::move(transaction_local_data_p)), filter(std::move(filter_p)),
-      cte_section(std::move(cte_section_p)), filters_evaluated(!filter.empty() || !cte_section.empty()) {
+      cte_section(std::move(cte_section_p)) {
+	deferred_filters.evaluated = !filter.empty() || !cte_section.empty();
 }
 
 DuckLakeMultiFileList::DuckLakeMultiFileList(DuckLakeFunctionInfo &read_info,
                                              vector<DuckLakeFileListEntry> files_to_scan)
     : MultiFileList(vector<OpenFileInfo> {}, FileGlobOptions::ALLOW_EMPTY), read_info(read_info),
-      files(std::move(files_to_scan)), read_file_list(true), filters_evaluated(true) {
+      files(std::move(files_to_scan)), read_file_list(true) {
+	deferred_filters.evaluated = true;
 }
 
 DuckLakeMultiFileList::DuckLakeMultiFileList(DuckLakeFunctionInfo &read_info,
                                              const DuckLakeInlinedTableInfo &inlined_table)
-    : MultiFileList(vector<OpenFileInfo> {}, FileGlobOptions::ALLOW_EMPTY), read_info(read_info), read_file_list(true),
-      filters_evaluated(true) {
+    : MultiFileList(vector<OpenFileInfo> {}, FileGlobOptions::ALLOW_EMPTY), read_info(read_info), read_file_list(true) {
+	deferred_filters.evaluated = true;
 	DuckLakeFileListEntry file_entry;
 	file_entry.file.path = inlined_table.table_name;
 	file_entry.row_id_start = 0;
@@ -96,11 +123,13 @@ struct ComplexFilterPushdownResult {
 
 static ComplexFilterPushdownResult ProcessAndConjunction(const BoundConjunctionExpression &and_expr,
                                                          const vector<column_t> &column_ids, ClientContext &context,
-                                                         const DuckLakeFunctionInfo &read_info);
+                                                         const DuckLakeFunctionInfo &read_info,
+                                                         const vector<ColumnIndex> &column_indexes);
 
 static ComplexFilterPushdownResult ProcessOrDisjunction(const BoundConjunctionExpression &or_expr,
                                                         const vector<column_t> &column_ids, ClientContext &context,
-                                                        const DuckLakeFunctionInfo &read_info);
+                                                        const DuckLakeFunctionInfo &read_info,
+                                                        const vector<ColumnIndex> &column_indexes);
 
 struct FilterSQLResult {
 	string where_conditions;                            // WHERE clause using CTEs
@@ -112,7 +141,8 @@ struct FilterSQLResult {
 };
 
 static ComplexFilterPushdownResult ProcessComplexFilter(const Expression &filter, const vector<column_t> &column_ids,
-                                                        ClientContext &context, const DuckLakeFunctionInfo &read_info);
+                                                        ClientContext &context, const DuckLakeFunctionInfo &read_info,
+                                                        const vector<ColumnIndex> &column_indexes);
 
 static FilterSQLResult ConvertTableFilterSetToSQL(const TableFilterSet &table_filters,
                                                   const vector<column_t> &column_ids,
@@ -156,7 +186,7 @@ static string GenerateCTESectionFromRequirements(const unordered_map<idx_t, CTER
 }
 
 void DuckLakeMultiFileList::EvaluateDeferredFilters() {
-	if (filters_evaluated || !deferred_context) {
+	if (deferred_filters.evaluated || !deferred_filters.context) {
 		return;
 	}
 
@@ -164,8 +194,9 @@ void DuckLakeMultiFileList::EvaluateDeferredFilters() {
 	unordered_map<idx_t, CTERequirement> all_required_ctes;
 
 	// Process dynamic filters first (simple table filters)
-	if (!pending_dynamic_filters.filters.empty()) {
-		auto dynamic_result = ConvertTableFilterSetToSQL(pending_dynamic_filters, deferred_column_ids, read_info);
+	if (!deferred_filters.pending_dynamic_filters.filters.empty()) {
+		auto dynamic_result = ConvertTableFilterSetToSQL(deferred_filters.pending_dynamic_filters,
+		                                                 deferred_filters.column_ids, read_info);
 		if (!dynamic_result.where_conditions.empty()) {
 			combined_filter = dynamic_result.where_conditions;
 			all_required_ctes = std::move(dynamic_result.required_ctes);
@@ -173,14 +204,19 @@ void DuckLakeMultiFileList::EvaluateDeferredFilters() {
 	}
 
 	// Process complex filters if any
-	if (!pending_complex_filters.empty()) {
+	if (!deferred_filters.pending_complex_filters.empty()) {
 		// Construct AND conjunction from the vector of expressions
 		auto and_expr = make_uniq<BoundConjunctionExpression>(ExpressionType::CONJUNCTION_AND);
-		for (auto &filter : pending_complex_filters) {
+		for (auto &filter : deferred_filters.pending_complex_filters) {
 			and_expr->children.push_back(filter->Copy());
 		}
-		auto complex_result = ProcessAndConjunction(*and_expr, deferred_column_ids, *deferred_context, read_info);
-
+		// Create column indexes from column IDs
+		vector<ColumnIndex> column_indexes;
+		for (idx_t i = 0; i < deferred_filters.column_ids.size(); i++) {
+			column_indexes.push_back(ColumnIndex(i));
+		}
+		auto complex_result = ProcessAndConjunction(*and_expr, deferred_filters.column_ids, *deferred_filters.context,
+		                                            read_info, column_indexes);
 		if (complex_result.can_pushdown) {
 			if (complex_result.is_unsatisfiable) {
 				// Filters are unsatisfiable
@@ -203,11 +239,12 @@ void DuckLakeMultiFileList::EvaluateDeferredFilters() {
 		cte_section = GenerateCTESectionFromRequirements(all_required_ctes, read_info);
 	}
 
-	filters_evaluated = true;
+	deferred_filters.evaluated = true;
 }
 
 static ComplexFilterPushdownResult ProcessComplexFilter(const Expression &filter, const vector<column_t> &column_ids,
-                                                        ClientContext &context, const DuckLakeFunctionInfo &read_info) {
+                                                        ClientContext &context, const DuckLakeFunctionInfo &read_info,
+                                                        const vector<ColumnIndex> &column_indexes) {
 	ComplexFilterPushdownResult result;
 
 	FilterCombiner combiner(context);
@@ -220,15 +257,9 @@ static ComplexFilterPushdownResult ProcessComplexFilter(const Expression &filter
 	}
 
 	vector<FilterPushdownResult> pushdown_results;
-	vector<ColumnIndex> dummy_column_indexes;
-	for (idx_t i = 0; i < column_ids.size(); i++) {
-		dummy_column_indexes.push_back(ColumnIndex(i));
-	}
+	auto table_filters = combiner.GenerateTableScanFilters(column_indexes, pushdown_results);
 
-	auto table_filters = combiner.GenerateTableScanFilters(dummy_column_indexes, pushdown_results);
-
-	bool has_remaining_filters = false;
-	combiner.GenerateFilters([&](unique_ptr<Expression> filter) { has_remaining_filters = true; });
+	bool has_remaining_filters = combiner.HasFilters();
 
 	if (!has_remaining_filters) {
 		auto filter_result = ConvertTableFilterSetToSQL(table_filters, column_ids, read_info);
@@ -244,18 +275,12 @@ static ComplexFilterPushdownResult ProcessComplexFilter(const Expression &filter
 	switch (filter.GetExpressionType()) {
 	case ExpressionType::CONJUNCTION_AND: {
 		auto &and_expr = filter.Cast<BoundConjunctionExpression>();
-		return ProcessAndConjunction(and_expr, column_ids, context, read_info);
+		return ProcessAndConjunction(and_expr, column_ids, context, read_info, column_indexes);
 	}
 	case ExpressionType::CONJUNCTION_OR: {
 		auto &or_expr = filter.Cast<BoundConjunctionExpression>();
-		return ProcessOrDisjunction(or_expr, column_ids, context, read_info);
+		return ProcessOrDisjunction(or_expr, column_ids, context, read_info, column_indexes);
 	}
-	case ExpressionType::COMPARE_EQUAL:
-	case ExpressionType::COMPARE_GREATERTHAN:
-	case ExpressionType::COMPARE_GREATERTHANOREQUALTO:
-	case ExpressionType::COMPARE_LESSTHAN:
-	case ExpressionType::COMPARE_LESSTHANOREQUALTO:
-	case ExpressionType::COMPARE_NOTEQUAL:
 	default:
 		result.can_pushdown = false;
 		return result;
@@ -271,11 +296,6 @@ static FilterSQLResult ConvertTableFilterSetToSQL(const TableFilterSet &table_fi
 	for (auto &entry : table_filters.filters) {
 		auto column_index_val = entry.first;
 		idx_t column_idx = column_index_val;
-
-		if (column_idx >= column_ids.size()) {
-			// Don't go out of bounds
-			continue;
-		}
 
 		auto column_id = column_ids[column_idx];
 
@@ -323,7 +343,8 @@ static FilterSQLResult ConvertTableFilterSetToSQL(const TableFilterSet &table_fi
 
 static ComplexFilterPushdownResult ProcessAndConjunction(const BoundConjunctionExpression &and_expr,
                                                          const vector<column_t> &column_ids, ClientContext &context,
-                                                         const DuckLakeFunctionInfo &read_info) {
+                                                         const DuckLakeFunctionInfo &read_info,
+                                                         const vector<ColumnIndex> &column_indexes) {
 	ComplexFilterPushdownResult result;
 
 	FilterCombiner group_combiner(context);
@@ -342,12 +363,7 @@ static ComplexFilterPushdownResult ProcessAndConjunction(const BoundConjunctionE
 	vector<unique_ptr<Expression>> remaining_filters;
 
 	vector<FilterPushdownResult> pushdown_results;
-	vector<ColumnIndex> dummy_column_indexes;
-	for (idx_t i = 0; i < column_ids.size(); i++) {
-		dummy_column_indexes.push_back(ColumnIndex(i));
-	}
-
-	auto grouped_table_filters = group_combiner.GenerateTableScanFilters(dummy_column_indexes, pushdown_results);
+	auto grouped_table_filters = group_combiner.GenerateTableScanFilters(column_indexes, pushdown_results);
 
 	if (!grouped_table_filters.filters.empty()) {
 		auto filter_result = ConvertTableFilterSetToSQL(grouped_table_filters, column_ids, read_info);
@@ -365,8 +381,7 @@ static ComplexFilterPushdownResult ProcessAndConjunction(const BoundConjunctionE
 	group_combiner.GenerateFilters(
 	    [&](unique_ptr<Expression> filter) { remaining_filters.push_back(std::move(filter)); });
 	for (auto &remaining_filter : remaining_filters) {
-		auto child_result = ProcessComplexFilter(*remaining_filter, column_ids, context, read_info);
-
+		auto child_result = ProcessComplexFilter(*remaining_filter, column_ids, context, read_info, column_indexes);
 		if (child_result.can_pushdown) {
 			if (child_result.is_unsatisfiable) {
 				result.can_pushdown = true;
@@ -399,7 +414,8 @@ static ComplexFilterPushdownResult ProcessAndConjunction(const BoundConjunctionE
 
 static ComplexFilterPushdownResult ProcessOrDisjunction(const BoundConjunctionExpression &or_expr,
                                                         const vector<column_t> &column_ids, ClientContext &context,
-                                                        const DuckLakeFunctionInfo &read_info) {
+                                                        const DuckLakeFunctionInfo &read_info,
+                                                        const vector<ColumnIndex> &column_indexes) {
 	ComplexFilterPushdownResult result;
 
 	vector<idx_t> satisfiable_children;
@@ -426,13 +442,13 @@ static ComplexFilterPushdownResult ProcessOrDisjunction(const BoundConjunctionEx
 	// If only one child is satisfiable, process it directly
 	if (satisfiable_children.size() == 1) {
 		idx_t child_idx = satisfiable_children[0];
-		return ProcessComplexFilter(*or_expr.children[child_idx], column_ids, context, read_info);
+		return ProcessComplexFilter(*or_expr.children[child_idx], column_ids, context, read_info, column_indexes);
 	}
 
 	vector<string> or_conditions;
 	for (auto child_idx : satisfiable_children) {
-		auto child_result = ProcessComplexFilter(*or_expr.children[child_idx], column_ids, context, read_info);
-
+		auto child_result =
+		    ProcessComplexFilter(*or_expr.children[child_idx], column_ids, context, read_info, column_indexes);
 		if (child_result.can_pushdown) {
 			if (child_result.is_unsatisfiable) {
 				// Skip unsatisfiable children - they don't contribute to the OR
@@ -476,12 +492,8 @@ unique_ptr<MultiFileList> DuckLakeMultiFileList::ComplexFilterPushdown(ClientCon
                                                                        const MultiFileOptions &options,
                                                                        MultiFilePushdownInfo &info,
                                                                        vector<unique_ptr<Expression>> &filters) {
-	if (read_info.scan_type != DuckLakeScanType::SCAN_TABLE) {
+	if (read_info.scan_type != DuckLakeScanType::SCAN_TABLE || filters.empty()) {
 		// filter pushdown is only supported when scanning full tables
-		return nullptr;
-	}
-
-	if (filters.empty()) {
 		return nullptr;
 	}
 
@@ -490,7 +502,7 @@ unique_ptr<MultiFileList> DuckLakeMultiFileList::ComplexFilterPushdown(ClientCon
 
 	for (auto &filter : filters) {
 		bool is_duplicate = false;
-		for (auto &existing_filter : pending_complex_filters) {
+		for (auto &existing_filter : deferred_filters.pending_complex_filters) {
 			if (filter->Equals(*existing_filter)) {
 				is_duplicate = true;
 				break;
@@ -508,11 +520,11 @@ unique_ptr<MultiFileList> DuckLakeMultiFileList::ComplexFilterPushdown(ClientCon
 	}
 
 	for (auto &filter : new_filters_to_add) {
-		result->pending_complex_filters.push_back(filter->Copy());
+		result->deferred_filters.pending_complex_filters.push_back(filter->Copy());
 	}
 
 	FilterCombiner combiner(context);
-	for (auto &existing_filter : pending_complex_filters) {
+	for (auto &existing_filter : deferred_filters.pending_complex_filters) {
 		combiner.AddFilter(existing_filter->Copy());
 	}
 	for (auto &filter : new_filters_to_add) {
@@ -520,16 +532,11 @@ unique_ptr<MultiFileList> DuckLakeMultiFileList::ComplexFilterPushdown(ClientCon
 	}
 
 	// Generate column indexes for table filter extraction
-	vector<ColumnIndex> dummy_column_indexes;
-	for (idx_t i = 0; i < info.column_ids.size(); i++) {
-		dummy_column_indexes.push_back(ColumnIndex(i));
-	}
-
 	vector<FilterPushdownResult> pushdown_results;
-	auto simple_table_filters = combiner.GenerateTableScanFilters(dummy_column_indexes, pushdown_results);
+	auto simple_table_filters = combiner.GenerateTableScanFilters(info.column_indexes, pushdown_results);
 
 	for (auto &entry : simple_table_filters.filters) {
-		result->processed_table_filters.filters[entry.first] = entry.second->Copy();
+		result->deferred_filters.processed_table_filters.filters[entry.first] = entry.second->Copy();
 	}
 
 	return std::move(result);
@@ -733,12 +740,8 @@ unique_ptr<MultiFileList>
 DuckLakeMultiFileList::DynamicFilterPushdown(ClientContext &context, const MultiFileOptions &options,
                                              const vector<string> &names, const vector<LogicalType> &types,
                                              const vector<column_t> &column_ids, TableFilterSet &filters) const {
-	if (read_info.scan_type != DuckLakeScanType::SCAN_TABLE) {
+	if (read_info.scan_type != DuckLakeScanType::SCAN_TABLE || filters.filters.empty()) {
 		// filter pushdown is only supported when scanning full tables
-		return nullptr;
-	}
-
-	if (filters.filters.empty()) {
 		return nullptr;
 	}
 
@@ -748,14 +751,14 @@ DuckLakeMultiFileList::DynamicFilterPushdown(ClientContext &context, const Multi
 		auto column_idx = entry.first;
 		auto &new_filter = entry.second;
 
-		auto processed_it = result->processed_table_filters.filters.find(column_idx);
-		if (processed_it != result->processed_table_filters.filters.end()) {
+		auto processed_it = result->deferred_filters.processed_table_filters.filters.find(column_idx);
+		if (processed_it != result->deferred_filters.processed_table_filters.filters.end()) {
 			if (new_filter->Equals(*processed_it->second)) {
 				continue;
 			}
 		}
 
-		result->pending_dynamic_filters.filters[column_idx] = new_filter->Copy();
+		result->deferred_filters.pending_dynamic_filters.filters[column_idx] = new_filter->Copy();
 	}
 
 	return std::move(result);
@@ -766,17 +769,12 @@ DuckLakeMultiFileList::CreateCopyWithDeferredEvaluation(ClientContext &context,
                                                         const vector<column_t> &column_ids) const {
 	auto result = make_uniq<DuckLakeMultiFileList>(read_info, transaction_local_files, transaction_local_data, filter,
 	                                               cte_section);
-	result->filters_evaluated = false;
-	result->deferred_context = &context;
-	result->deferred_column_ids = column_ids;
 
-	for (auto &filter : pending_complex_filters) {
-		result->pending_complex_filters.push_back(filter->Copy());
-	}
-
-	for (auto &entry : processed_table_filters.filters) {
-		result->processed_table_filters.filters[entry.first] = entry.second->Copy();
-	}
+	// Copy all deferred filter state and override specific fields for deferred evaluation
+	result->deferred_filters = deferred_filters.Copy();
+	result->deferred_filters.evaluated = false;
+	result->deferred_filters.context = &context;
+	result->deferred_filters.column_ids = column_ids;
 
 	return result;
 }
@@ -882,25 +880,7 @@ unique_ptr<MultiFileList> DuckLakeMultiFileList::Copy() {
 	result->read_file_list = read_file_list;
 	result->delete_scans = delete_scans;
 
-	// Copy deferred filter state
-	result->filters_evaluated = filters_evaluated;
-	result->deferred_context = deferred_context;
-	result->deferred_column_ids = deferred_column_ids;
-
-	// Copy complex filters
-	for (auto &filter : pending_complex_filters) {
-		result->pending_complex_filters.push_back(filter->Copy());
-	}
-
-	// Copy dynamic filters
-	for (auto &entry : pending_dynamic_filters.filters) {
-		result->pending_dynamic_filters.filters[entry.first] = entry.second->Copy();
-	}
-
-	// Copy processed table filters
-	for (auto &entry : processed_table_filters.filters) {
-		result->processed_table_filters.filters[entry.first] = entry.second->Copy();
-	}
+	result->deferred_filters = deferred_filters.Copy();
 
 	return std::move(result);
 }
