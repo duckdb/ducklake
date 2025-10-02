@@ -483,10 +483,10 @@
       ]
     },
     {
-        "reason": "Assumes ordering of rowids that is not guaranteed in DuckLake",
-        "paths": [
-            "test/sql/projection/test_row_id_expression.test"
-        ]
+      "reason": "Assumes ordering of rowids that is not guaranteed in DuckLake",
+      "paths": [
+          "test/sql/projection/test_row_id_expression.test"
+      ]
     }
   ]
 }

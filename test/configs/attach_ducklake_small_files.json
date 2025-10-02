@@ -483,10 +483,18 @@
       ]
     },
     {
-        "reason": "Assumes ordering of rowids that is not guaranteed in DuckLake",
-        "paths": [
-            "test/sql/projection/test_row_id_expression.test"
-        ]
+      "reason": "Assumes ordering of rowids that is not guaranteed in DuckLake",
+      "paths": [
+          "test/sql/projection/test_row_id_expression.test"
+      ]
+    },
+    {
+      "reason": "Attaches database readonly, changing the setting for file size violates that",
+      "paths": [
+          "test/sql/create/create_objects_readonly.test",
+          "test/sql/pragma/pragma_database_size_readonly.test",
+          "test/sql/tpch/dbgen_readonly.test"
+      ]
     }
   ]
 }
