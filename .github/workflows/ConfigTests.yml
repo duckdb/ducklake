@@ -63,3 +63,7 @@ jobs:
     - name: Test extension
       run: |
         build/release/test/unittest --test-config test/configs/attach_ducklake.json --test-dir duckdb
+
+    - name: Test extension with small files
+      run: |
+        build/release/test/unittest --test-config test/configs/attach_ducklake_small_files.json --test-dir duckdb

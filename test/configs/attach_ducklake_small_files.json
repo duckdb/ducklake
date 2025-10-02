@@ -1,0 +1,486 @@
+{
+  "description": "Run on DuckLake database as storage with very small file sizes for testing file pushdown handling.",
+  "on_init": "ATTACH 'ducklake:{TEST_DIR}/{BASE_TEST_NAME}__ducklake.db' AS dl; SET timezone = 'UTC'; CALL dl.set_option('target_file_size', '10KB');",
+  "on_new_connection": "USE dl;",
+  "skip_compiled": "true",
+  "sort_style": "rowsort",
+  "statically_loaded_extensions": [
+    "core_functions",
+    "parquet",
+    "icu",
+    "ducklake"
+  ],
+  "skip_error_messages": [
+    "MERGE INTO with DuckLake only supports a single UPDATE/DELETE action currently",
+    "dbgen is only supported for DuckDB database files",
+    "PRIMARY KEY/UNIQUE constraints are not supported in DuckLake",
+    "RETURNING is not implemented for DuckLake yet",
+    "SET DEFAULT is not yet supported for updates of a DuckLake table",
+    "DuckLake does not support indexes",
+    "DuckLake does not support generated columns",
+    "RETURNING clause",
+    "DuckLake does not support sequences",
+    "DuckLake does not support functions",
+    "DuckLake does not support user-defined types",
+    "Parquet files do not support negative intervals",
+    "The same row was updated multiple times - this is not (yet) supported in DuckLake",
+    "Failed to convert DuckDB type to DuckLake - unsupported type",
+    "Collations are not supported in DuckLake storage",
+    "Cascade Drop not supported in DuckLake",
+    "CHECK constraints are not supported in DuckLake",
+    "Defining a compression type for a column is not supported in DuckLake",
+    "FOREIGN KEY constraints are not supported in DuckLake",
+    "Only literals (e.g. 42 or 'hello world') are supported as default values",
+    "Column type cannot be modified using an expression",
+    "Default value for STRUCT type not supported",
+    "Default value for LIST type not supported",
+    "only widening type promotions are allowed",
+    "the table has transaction-local changes or no stats are available",
+    "Adding indexes or constraints is not supported in DuckLake",
+    "Only rename on top-level struct fields is supported currently"
+  ],
+  "skip_tests": [
+    {
+      "reason": "Contains explicit use of the memory catalog.",
+      "paths": [
+        "test/sql/show_select/test_describe_all.test",
+        "test/sql/catalog/function/attached_macro.test",
+        "test/sql/catalog/test_temporary.test",
+        "test/sql/pragma/test_show_tables_temp_views.test",
+        "test/sql/pg_catalog/system_functions.test",
+        "test/sql/pg_catalog/sqlalchemy.test",
+        "test/sql/attach/attach_table_info.test",
+        "test/sql/attach/attach_defaults.test",
+        "test/sql/attach/attach_did_you_mean.test",
+        "test/sql/attach/attach_default_table.test",
+        "test/sql/attach/attach_show_all_tables.test",
+        "test/sql/attach/attach_issue7711.test",
+        "test/sql/attach/attach_issue_7660.test",
+        "test/sql/attach/show_databases.test",
+        "test/sql/attach/attach_views.test",
+        "test/sql/copy_database/copy_table_with_sequence.test",
+        "test/fuzzer/sqlsmith/current_schemas_null.test",
+        "test/sql/settings/drop_set_schema.test",
+        "test/sql/catalog/test_set_search_path.test",
+        "test/sql/attach/attach_table_constraints.test",
+        "test/sql/table_function/database_oid.test",
+        "test/sql/table_function/duckdb_schemas.test",
+        "test/sql/table_function/duckdb_tables.test",
+        "test/sql/table_function/test_information_schema_columns.test",
+        "test/sql/settings/setting_preserve_identifier_case.test",
+        "test/sql/pragma/test_pragma_database_list.test",
+        "test/sql/index/art/storage/test_art_duckdb_versions.test",
+        "test/sql/copy_database/copy_database_with_index.test",
+        "test/sql/table_function/information_schema.test",
+        "test/sql/table_function/duckdb_databases.test",
+        "test/sql/table_function/sqlite_master.test",
+        "test/sql/table_function/duckdb_columns.test",
+        "test/sql/table_function/sqlite_master_quotes.test"
+      ]
+    },
+    {
+      "reason": "Serialization unsupported",
+      "paths": [
+        "test/sql/json/test_json_serialize_plan.test",
+        "test/sql/json/test_json_serialize_sql.test"
+      ]
+    },
+    {
+      "reason": "Parquet Included",
+      "paths": [
+        "test/sql/copy/csv/zstd_crash.test"
+      ]
+    },
+    {
+      "reason": "Unknown CSV issue?",
+      "paths": [
+        "test/sql/copy/csv/test_glob_type.test"
+      ]
+    },
+    {
+      "reason": "Extra logging",
+      "paths": [
+        "test/sql/logging/logging_context_ids.test",
+        "test/sql/logging/test_logging_function.test",
+        "test/sql/logging/logging_types.test",
+        "test/sql/logging/logging.test",
+        "test/sql/logging/logging_csv.test"
+      ]
+    },
+    {
+      "reason": "User-Defined Type",
+      "paths": [
+        "test/extension/test_alias_point.test",
+        "test/issues/general/test_9384.test"
+      ]
+    },
+    {
+      "reason": "Different plans in Optimizer",
+      "paths": [
+        "test/optimizer/statistics/statistics_null_comparison.test",
+        "test/optimizer/pushdown/pushdown_unnest_into_cte.test",
+        "test/optimizer/pushdown/timestamp_to_date_pushdown.test",
+        "test/optimizer/pushdown/table_or_pushdown.test",
+        "test/optimizer/test_sum_rewrite.test",
+        "test/optimizer/prefer_final_projected_columns_on_probe_side.test",
+        "test/optimizer/sampling_pushdown.test",
+        "test/sql/explain/explain_execute.test",
+        "test/optimizer/pushdown/pushdown_filter_on_coalesced_equal_outer_join_keys.test"
+      ]
+    },
+    {
+      "reason": "Bitstring Type",
+      "paths": [
+        "test/fuzzer/sqlsmith/bitstring_agg_overflow.test",
+        "test/sql/aggregate/aggregates/test_bitstring_agg.test"
+      ]
+    },
+    {
+      "reason": "Eager Default Binding",
+      "paths": [
+        "test/issues/rigger/test_709.test",
+        "test/sql/join/natural/natural_join.test"
+      ]
+    },
+    {
+      "reason": "Different Concurrency Behavior",
+      "paths": [
+        "test/sql/parallelism/interquery/concurrent_force_checkpoint.test",
+        "test/sql/update/test_update_delete_same_tuple.test",
+        "test/sql/catalog/dependencies/test_concurrent_schema_creation.test",
+        "test/sql/transactions/test_interleaved_versions.test",
+        "test/fuzzer/pedro/concurrent_catalog_usage.test",
+        "test/fuzzer/pedro/concurrent_set_threads.test",
+        "test/sql/update/test_update_same_value.test",
+        "test/sql/delete/cleanup_delete_on_conflict.test",
+        "test/sql/alter/add_col/test_add_col_transactions.test",
+        "test/sql/alter/drop_col/test_drop_col_transactions.test"
+
+      ]
+    },
+    {
+      "reason": "Different Error Message",
+      "paths": [
+        "test/fuzzer/pedro/alter_table_rowid.test",
+        "test/sql/catalog/dependencies/test_schema_dependency.test",
+        "test/sql/catalog/view/test_view.test",
+        "test/sql/parser/table_at_clause.test",
+        "test/sql/alter/map/add_column_in_struct.test",
+        "test/sql/alter/struct/rename_col_struct.test",
+        "test/sql/alter/struct/add_col_struct.test",
+        "test/sql/alter/struct/add_col_nested_struct.test",
+        "test/sql/alter/list/add_column_in_struct.test",
+        "test/sql/transactions/conflict_drop_then_delete.test",
+        "test/sql/transactions/test_create_drop_conflict.test",
+        "test/sql/transactions/test_create_drop_conflict_variation1.test"
+      ]
+    },
+    {
+      "reason": "Supported in DuckLake, not supported in Core",
+      "paths": [
+        "test/sql/alter/alter_table_set_partitioned_by.test"
+      ]
+    },
+    {
+      "reason": "FIXME: Drop the last column of a struct?",
+      "paths": [
+        "test/sql/alter/struct/drop_col_struct.test"
+      ]
+    },
+    {
+      "reason": "No Catalog Dependencies",
+      "paths": [
+        "test/fuzzer/pedro/view_not_rebound_error.test",
+        "test/sql/aggregate/qualify/test_qualify_view.test",
+        "test/sql/catalog/dependencies/add_column_to_table_referenced_by_view.test",
+        "test/sql/catalog/test_schema_conflict.test",
+        "test/sql/catalog/view/test_view_schema_change_with_dependencies.test",
+        "test/sql/catalog/view/recursive_view_with_dependencies.test",
+        "test/sql/catalog/view/test_view_sql_with_dependencies.test",
+        "test/sql/catalog/view/test_view_schema_change.test",
+        "test/sql/catalog/test_standard_schema.test"
+      ]
+    },
+    {
+      "reason": "FIXME: View Columns",
+      "paths": [
+        "test/sql/storage/wal/wal_view_storage_no_view_dependencies.test",
+        "test/sql/storage/wal/wal_view_storage.test",
+        "test/sql/storage/catalog/test_view_explicit_aliases.test",
+        "test/sql/storage/catalog/test_view_storage_no_view_dependencies.test",
+        "test/sql/storage/catalog/test_view_storage.test",
+        "test/sql/catalog/view/test_view_sql.test"
+      ]
+    },
+    {
+      "reason": "Hugeint is unsupported",
+      "paths": [
+        "test/sql/types/hugeint/test_hugeint_aggregates.test",
+        "test/sql/function/numeric/test_bit_count.test",
+        "test/sql/function/list/aggregates/hugeint.test",
+        "test/sql/storage/types/test_hugeint_storage.test",
+        "test/sql/storage/wal/wal_hugeint_storage.test",
+        "test/sql/storage/wal/wal_uhugeint_storage.test",
+        "test/sql/transactions/types/test_uhugeint_transactions.test",
+        "test/sql/transactions/types/test_hugeint_transactions.test",
+        "test/sql/types/hugeint/test_hugeint_ops.test"
+      ]
+    },
+    {
+      "reason": "Secret Manager Instantiation",
+      "paths": [
+        "test/sql/secrets/create_secret_hffs_autoload.test",
+        "test/sql/secrets/create_secret_persistence_no_client_context.test"
+      ]
+    },
+    {
+      "reason": "Comment On View Column unsupported",
+      "paths": [
+        "test/sql/catalog/comment_on_pg_description.test",
+        "test/sql/catalog/comment_on_column.test"
+      ]
+    },
+    {
+      "reason": "Memory Limit Differences",
+      "paths": [
+        "test/sql/pragma/test_memory_limit.test",
+        "test/sql/storage/temp_directory/max_swap_space_persistent.test",
+        "test/sql/storage/temp_directory/max_swap_space_explicit.test",
+        "test/sql/storage/temp_directory/max_swap_space_inmemory.test",
+        "test/sql/storage/temp_directory/max_swap_space_error.test",
+        "test/sql/copy/parquet/writer/parquet_write_memory_usage.test",
+        "test/fuzzer/sqlsmith/nullif_map_with_config.test",
+        "test/sql/storage/buffer_manager_temp_dir.test",
+        "test/issues/internal/test_5457.test"
+      ]
+    },
+    {
+      "reason": "Database Size Differences",
+      "paths": [
+        "test/sql/storage/partial_blocks/many_columns_validity.test",
+        "test/sql/storage/partial_blocks/many_columns_rle.test",
+        "test/sql/storage/partial_blocks/many_columns_strings.test",
+        "test/sql/storage/partial_blocks/many_columns_storage.test",
+        "test/sql/index/art/storage/test_art_auto_checkpoint.test"
+      ]
+    },
+    {
+      "reason": "Interval Differences",
+      "paths": [
+        "test/sql/function/interval/test_date_part.test",
+        "test/sql/function/interval/test_extract.test",
+        "test/sql/function/timetz/test_date_part.test",
+        "test/sql/function/operator/test_date_arithmetic.test"
+      ]
+    },
+    {
+      "reason": "Load Related",
+      "paths": [
+        "test/sql/storage/optimistic_write/optimistic_write_large_strings.test",
+        "test/sql/storage/optimistic_write/optimistic_write_nulls.test",
+        "test/sql/settings/allowed_directories.test",
+        "test/sql/function/list/lambdas/test_lambda_storage.test",
+        "test/sql/storage/wal/test_wal_bc.test",
+        "test/sql/storage/bc/test_view_v092.test",
+        "test/sql/storage/bc/internal_schemas_0102.test",
+        "test/sql/storage/unzip.test",
+        "test/sql/storage/icu_collation.test",
+        "test/sql/attach/attach_read_only.test"
+      ]
+    },
+    {
+      "reason": "FIXME: Vacuum does not check DuckDB Table correctly (bug in core)",
+      "paths": [
+        "test/fuzzer/pedro/vacuum_unsupported_type.test",
+        "test/fuzzer/afl/analyze_empty_table.test",
+        "test/sql/vacuum/test_analyze.test"
+      ]
+    },
+    {
+      "reason": "FIXME: Drop Null/Not Null Not Checked in DuckDB? Bug in core?",
+      "paths": [
+        "test/sql/alter/alter_col/test_drop_not_null.test",
+        "test/sql/alter/alter_col/test_set_not_null.test"
+      ]
+    },
+    {
+      "reason": "FIXME: TIMETZ",
+      "paths": [
+        "test/sql/types/time/test_time_tz.test",
+        "test/sql/types/time/test_time_tz_collate.test",
+        "test/sql/types/time/test_time_tz_icu.test",
+        "test/sql/types/timestamp/test_timestamp_to_tz_cast.test",
+        "test/sql/timezone/test_icu_timezone.test"
+      ]
+    },
+    {
+      "reason": "FIXME: Nested Stats",
+      "paths": [
+        "test/sql/types/list/list_stats.test"
+      ]
+    },
+    {
+      "reason": "FIXME: List NULL issues?",
+      "paths": [
+        "test/sql/function/list/list_cosine_similarity.test",
+        "test/sql/function/list/list_inner_product.test",
+        "test/sql/function/list/list_distance.test"
+      ]
+    },
+    {
+      "reason": "FIXME: BUGS? Weird behavior around CTEs",
+      "paths": [
+        "test/sql/join/semianti/antijoin.test",
+        "test/sql/subquery/scalar/test_scalar_subquery_cte.test"
+      ]
+    },
+    {
+      "reason": "FIXME: Immediate transaction mode not respected",
+      "paths": [
+        "test/sql/update/test_update_many_updaters_nulls.test",
+        "test/sql/update/test_update_many_updaters.test",
+        "test/sql/delete/test_using_delete_duplicates.test"
+      ]
+    },
+    {
+      "reason": "FIXME: BUGS? Weird behavior around hugeint",
+      "paths": [
+        "test/fuzzer/sqlsmith/test_abs_overflow.test",
+        "test/fuzzer/duckfuzz/bitstring_agg_uhugeint.test",
+        "test/sql/order/hugeint_order_by_extremes.test",
+        "test/sql/types/numeric/uhugeint_try_cast.test",
+        "test/sql/types/numeric/hugeint_try_cast.test",
+        "test/sql/join/inner/equality_join_limits.test",
+        "test/sql/aggregate/group/group_by_limits.test",
+        "test/sql/storage/types/test_uhugeint_storage.test",
+        "test/sql/export/parquet/export_parquet_hugeint.test"
+      ]
+    },
+    {
+      "reason": "FIXME: BUGS? Uncaught/Weird exception",
+      "paths": [
+        "test/sql/delete/test_segment_deletes.test",
+        "test/sql/storage/mix/updates_deletes_persistent_segments.test"
+      ]
+    },
+    {
+      "reason": "FIXME: BUGS? Deserialization error",
+      "paths": [
+        "test/sql/storage/catalog/test_drop_table.test",
+        "test/sql/storage/compression/bitpacking/struct_bitpacking.test",
+        "test/sql/storage/delete/test_unchanged_deletes_large.test",
+        "test/sql/window/test_window_range.test"
+      ]
+    },
+    {
+      "reason": "FIXME: BUGS? Unnamed structs should not be supported",
+      "paths": [
+        "test/issues/general/test_5072.test",
+        "test/sql/types/struct/struct_different_names.test"
+      ]
+    },
+    {
+      "reason": "FIXME: Pushdown NULL byte?",
+      "paths": [
+        "test/sql/function/string/null_byte.test",
+        "test/sql/storage/null_byte_storage.test"
+      ]
+    },
+    {
+      "reason": "FIXME: Nested struct storage metadata load?",
+      "paths": [
+        "test/sql/storage/types/struct/nested_struct_storage.test"
+      ]
+    },
+    {
+      "reason": "FEATURE: SORTED BY not supported",
+      "paths": [
+        "test/sql/alter/alter_table_set_sorted_by.test"
+      ]
+    },
+    {
+      "reason": "FIXME: Bugs? Cannot commit transaction local files",
+      "paths": [
+        "test/sql/transactions/conflict_rename_append.test",
+        "test/sql/logging/file_system_logging_attach_deadlock.test"
+      ]
+    },
+    {
+      "reason": "FIXME: BUGS? Incorrect rename + re-create behavior",
+      "paths": [
+        "test/sql/catalog/dependencies/test_write_after_rename.test",
+        "test/sql/alter/rename_table/test_rename_table_chain_rollback.test",
+        "test/sql/alter/rename_table/test_rename_table_chain_commit.test",
+        "test/sql/alter/rename_table/test_rename_table_incorrect.test",
+        "test/sql/alter/rename_table/test_rename_table_transactions.test",
+        "test/sql/alter/rename_table/test_rename_table.test",
+        "test/sql/alter/rename_table/test_rename_table_collision.test"
+      ]
+    },
+    {
+      "reason": "FIXME: Unstable OID",
+      "paths": [
+        "test/sql/pg_catalog/pg_namespace.test"
+      ]
+    },
+    {
+      "reason": "FIXME: Statement differs from original result!",
+      "paths": [
+        "test/sql/types/nested/map/test_map_subscript.test",
+        "test/sql/types/nested/map/test_map_subscript_composite.test",
+        "test/sql/subquery/scalar/test_scalar_subquery.test",
+        "test/sql/json/test_json_macros.test"
+      ]
+    },
+    {
+      "reason": "FIXME: Transaction Conflict Error",
+      "paths": [
+        "test/sql/transactions/test_from_update_conflict.test"
+      ]
+    },
+    {
+      "reason": "Checkpoint in DuckLake doesn't produce expected result. Notice these are not ducklake bugs just tests that do not fit.",
+      "paths": [
+        "test/fuzzer/pedro/incomplete_checkpoint.test",
+        "test/sql/copy/csv/rejects/csv_rejects_read.test",
+        "test/sql/copy/csv/test_csv_timestamp_tz.test",
+        "test/sql/copy/csv/test_timestamptz_12926.test",
+        "test/sql/error/extension_function_error.test",
+        "test/sql/storage/compression/bitpacking/bitpacking_delta_for.test",
+        "test/sql/storage/compression/bitpacking/bitpacking_hugeint.test",
+        "test/sql/storage/compression/bitpacking/bitpacking_simple.test",
+        "test/sql/storage/compression/bitpacking/bitpacking_simple_hugeint.test",
+        "test/sql/storage/compression/bitpacking/bitpacking_storage_info.test",
+        "test/sql/storage/compression/bitpacking/bitpacking_uhugeint.test",
+        "test/sql/storage/compression/bitpacking/force_bitpacking.test",
+        "test/sql/storage/compression/compression_selection.test",
+        "test/sql/storage/compression/compression_selection_dict_fsst.test",
+        "test/sql/storage/compression/dict_fsst/dictionary_covers_validity.test",
+        "test/sql/storage/compression/dict_fsst/dictionary_storage_info.test",
+        "test/sql/storage/compression/dict_fsst/fetch_row.test",
+        "test/sql/storage/compression/dict_fsst/force_dictionary.test",
+        "test/sql/storage/compression/dict_fsst/fsst_storage_info.test",
+        "test/sql/storage/compression/dictionary/dictionary_storage_info.test",
+        "test/sql/storage/compression/dictionary/fetch_row.test",
+        "test/sql/storage/compression/dictionary/force_dictionary.test",
+        "test/sql/storage/compression/fsst/fsst_disable_compression.test",
+        "test/sql/storage/compression/fsst/fsst_storage_info.test",
+        "test/sql/storage/compression/rle/force_rle.test",
+        "test/sql/storage/compression/rle/rle_constant.test",
+        "test/sql/storage/compression/rle/rle_storage_info.test",
+        "test/sql/storage/compression/roaring/roaring_analyze_array.test",
+        "test/sql/storage/compression/roaring/roaring_analyze_bitset.test",
+        "test/sql/storage/compression/roaring/roaring_analyze_run.test",
+        "test/sql/storage/compression/string/medium.test",
+        "test/sql/storage/compression/string/struct.test",
+        "test/sql/storage/compression/string/table_copy.test",
+        "test/sql/storage/compression/zstd/zstd_force_compression.test",
+        "test/sql/storage/multiple_clients_checkpoint_pending_updates.test",
+        "test/sql/storage/optimistic_write/optimistic_write_temp_table.test",
+        "test/sql/timezone/disable_timestamptz_casts.test",
+        "test/sql/types/timestamp/test_timestamp_tz.test",
+        "test/sql/update/test_cascading_updates.test"
+      ]
+    }
+  ]
+}
