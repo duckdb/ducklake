@@ -481,6 +481,12 @@
         "test/sql/types/timestamp/test_timestamp_tz.test",
         "test/sql/update/test_cascading_updates.test"
       ]
+    },
+    {
+        "reason": "Assumes ordering of rowids that is not guaranteed in DuckLake",
+        "paths": [
+            "test/sql/projection/test_row_id_expression.test"
+        ]
     }
   ]
 }
