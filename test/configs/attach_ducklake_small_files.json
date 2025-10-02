@@ -1,6 +1,6 @@
 {
   "description": "Run on DuckLake database as storage with very small file sizes for testing file pushdown handling.",
-  "on_init": "ATTACH 'ducklake:{TEST_DIR}/{BASE_TEST_NAME}__ducklake.db' AS dl; SET timezone = 'UTC'; CALL dl.set_option('target_file_size', '10KB');",
+  "on_init": "ATTACH 'ducklake:{TEST_DIR}/{BASE_TEST_NAME}__ducklake.db' AS dl; SET timezone = 'UTC'; CALL dl.set_option('target_file_size', '1KB');",
   "on_new_connection": "USE dl;",
   "skip_compiled": "true",
   "sort_style": "rowsort",
