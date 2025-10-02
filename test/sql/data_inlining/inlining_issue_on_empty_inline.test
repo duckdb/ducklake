@@ -1,0 +1,46 @@
+# name: test/sql/data_inlining/inlining_issue_on_empty_inline.test
+# description: test ducklake extension
+# group: [data_inlining]
+
+require ducklake
+
+require parquet
+
+test-env DATA_PATH __TEST_DIR__
+
+statement ok
+ATTACH 'ducklake:__TEST_DIR__/inlining_issue_on_empty_inline.db' AS inlining (DATA_PATH '${DATA_PATH}/inlining_issue_on_empty_inline', DATA_INLINING_ROW_LIMIT 10);
+
+statement ok
+use inlining;
+
+statement ok
+CREATE TABLE tbl(col INTEGER);
+
+statement ok
+INSERT INTO tbl VALUES (1), (2), (3);
+
+statement ok
+CALL ducklake_flush_inlined_data('inlining');
+
+statement ok
+create table test (id integer);
+
+statement ok
+ALTER TABLE test
+ADD COLUMN k INTEGER;
+
+statement ok
+use memory;
+
+statement ok
+detach inlining
+
+statement ok
+ATTACH 'ducklake:__TEST_DIR__/inlining_issue_on_empty_inline.db' AS inlining (DATA_PATH '${DATA_PATH}/inlining_issue_on_empty_inline', DATA_INLINING_ROW_LIMIT 10);
+
+statement ok
+use inlining;
+
+statement ok
+CALL ducklake_flush_inlined_data('inlining');

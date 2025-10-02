@@ -64,6 +64,7 @@ public:
 	virtual vector<DuckLakeCompactionFileEntry> GetFilesForCompaction(DuckLakeTableEntry &table, CompactionType type,
 	                                                                  double deletion_threshold,
 	                                                                  DuckLakeSnapshot snapshot);
+	virtual idx_t GetCatalogIdForSchema(idx_t schema_id);
 	virtual vector<DuckLakeFileForCleanup> GetOldFilesForCleanup(const string &filter);
 	virtual vector<DuckLakeFileForCleanup> GetOrphanFilesForCleanup(const string &filter, const string &separator);
 	virtual vector<DuckLakeFileForCleanup> GetFilesForCleanup(const string &filter, CleanupType type,

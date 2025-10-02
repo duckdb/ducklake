@@ -316,10 +316,6 @@ DuckLakeCopyInput::DuckLakeCopyInput(ClientContext &context, DuckLakeTableEntry 
     : catalog(table.ParentCatalog().Cast<DuckLakeCatalog>()), columns(table.GetColumns()),
       data_path(table.DataPath() + hive_partition) {
 	partition_data = table.GetPartitionData();
-	optional_idx partition_id;
-	if (partition_data) {
-		partition_id = partition_data->partition_id;
-	}
 	field_data = table.GetFieldData();
 	schema_id = table.ParentSchema().Cast<DuckLakeSchemaEntry>().GetSchemaId();
 	table_id = table.GetTableId();
@@ -477,7 +473,6 @@ static void GeneratePartitionExpressions(ClientContext &context, DuckLakeCopyInp
 	}
 	copy_options.write_partition_columns = false;
 
-	// push the columns
 	idx_t col_idx = 0;
 	for (auto &col : copy_input.columns.Physical()) {
 		copy_options.projection_list.push_back(CreateColumnReference(copy_input, col.Type(), col_idx++));
@@ -681,7 +676,7 @@ PhysicalOperator &DuckLakeInsert::PlanCopyForInsert(ClientContext &context, Phys
 	bool is_encrypted = !copy_input.encryption_key.empty();
 	auto copy_options = GetCopyOptions(context, copy_input);
 
-	if (!copy_options.projection_list.empty()) {
+	if (!copy_options.projection_list.empty() && plan) {
 		// generate a projection
 		GenerateProjection(context, planner, copy_options.projection_list, plan);
 	}

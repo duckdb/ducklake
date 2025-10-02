@@ -157,6 +157,7 @@ public:
 
 	optional_ptr<const DuckLakeNameMap> TryGetMappingById(DuckLakeTransaction &transaction, MappingIndex mapping_id);
 	MappingIndex TryGetCompatibleNameMap(DuckLakeTransaction &transaction, const DuckLakeNameMap &name_map);
+	idx_t GetSnapshotForSchema(idx_t schema_id, DuckLakeTransaction &transaction);
 
 private:
 	void DropSchema(ClientContext &context, DropInfo &info) override;

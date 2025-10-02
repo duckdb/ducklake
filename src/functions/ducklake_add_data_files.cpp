@@ -800,7 +800,6 @@ void DuckLakeFileProcessor::MapColumnStats(ParquetFileMetadata &file_metadata, D
 		}
 		auto &column = column_entry->second.get();
 		auto field_index = entry.second.first;
-		auto &field_type = entry.second.second;
 
 		if (!column.column_stats.empty()) {
 			auto base_stats = column.column_stats[0];

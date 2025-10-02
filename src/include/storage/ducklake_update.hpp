@@ -31,8 +31,6 @@ public:
 	//! The row-id-index
 	idx_t row_id_index;
 	vector<unique_ptr<Expression>> expressions;
-	//! Extra Projections
-	vector<unique_ptr<Expression>> extra_projections;
 
 public:
 	// // Source interface

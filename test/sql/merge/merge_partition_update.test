@@ -1,0 +1,49 @@
+# name: test/sql/merge/merge_partition_update.test
+# description: Test merge into with partitions
+# group: [merge]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+
+test-env DATA_PATH __TEST_DIR__
+
+statement ok
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/merge_partition_update', METADATA_CATALOG 'ducklake_meta')
+
+statement ok
+USE ducklake
+
+statement ok
+CREATE TABLE my_timeseries (ts TIMESTAMP, x DOUBLE PRECISION);
+
+statement ok
+ALTER TABLE my_timeseries SET PARTITIONED BY (year(ts));
+
+statement ok
+INSERT INTO my_timeseries VALUES ('2025-09-17'::TIMESTAMP, 42::DOUBLE PRECISION);
+
+
+statement ok
+MERGE INTO my_timeseries
+    USING (
+        SELECT
+            '2025-09-17'::TIMESTAMP as ts,
+            43::DOUBLE PRECISION as x
+    ) AS timeseries_updates
+    ON my_timeseries.ts = timeseries_updates.ts
+    WHEN MATCHED THEN UPDATE;
+
+query I
+SELECT COUNT(*) FROM GLOB('${DATA_PATH}/merge_partition_update/**/*')
+----
+2
+
+
+
+statement ok
+UPDATE my_timeseries
+SET x = 43::DOUBLE PRECISION
+WHERE ts = '2025-09-17'::TIMESTAMP;
