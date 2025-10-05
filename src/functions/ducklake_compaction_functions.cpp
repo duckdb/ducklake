@@ -16,6 +16,10 @@
 #include "duckdb/planner/operator/logical_empty_result.hpp"
 #include "fmt/format.h"
 
+#include "duckdb/planner/operator/logical_order.hpp"
+#include "duckdb/planner/operator/logical_projection.hpp"
+#include "duckdb/common/printer.hpp"
+
 namespace duckdb {
 
 //===--------------------------------------------------------------------===//
@@ -427,6 +431,70 @@ DuckLakeCompactor::GenerateCompactionCommand(vector<DuckLakeCompactionFileEntry>
 		root = DuckLakeInsert::InsertCasts(binder, root);
 	}
 
+	// I think I should sort here, after the casts, so that sorting uses the right data types
+	Printer::Print("Can I print something here?");
+
+	Printer::Print(table.ColumnNamesToSQL(table.GetColumns()));
+
+	vector<BoundOrderByNode> orders;
+	auto bindings = root->GetColumnBindings();
+	
+	for (auto &column_binding : bindings) {
+		Printer::Print(column_binding.ToString());
+	}
+	// BoundColumnRefExpression(string alias, LogicalType type, ColumnBinding binding, idx_t depth = 0);
+	// string alias = "sort_key_1";
+	// ColumnBinding binding = bindings[1]; 
+	auto example_expr = make_uniq<BoundColumnRefExpression>(LogicalType::BIGINT, bindings[1], 0);
+	orders.emplace_back(OrderType::ASCENDING, OrderByNullType::NULLS_LAST, std::move(example_expr));
+
+	auto example_expr_2 = make_uniq<BoundColumnRefExpression>(LogicalType::VARCHAR, bindings[2], 0);
+	orders.emplace_back(OrderType::ASCENDING, OrderByNullType::NULLS_LAST, std::move(example_expr_2));
+
+	for (auto &order_item : orders) {
+		Printer::Print(order_item.ToString());
+	}
+
+	auto order = make_uniq<LogicalOrder>(std::move(orders));
+	Printer::Print(order->ToString());
+	// order->projection_map = {0, 1, 2, 3};
+
+	order->children.push_back(std::move(root));
+
+	order->PrintColumnBindings();
+
+	// Somehow this got us noqhere... 
+	// auto cast_order = unique_ptr_cast<LogicalOrder, LogicalOperator>(std::move(order));
+	// cast_order = DuckLakeInsert::InsertCasts(binder, cast_order);
+	
+	// Printer::Print("cast_order PrintColumnBindings():");
+	// cast_order->PrintColumnBindings();
+
+	// The extra columns are added in the optimizer:
+	//Users/alex/Documents/DuckDB/ducklake/duckdb/src/main/client_context.cpp line 397:
+	//logical_plan = optimizer.Optimize(std::move(logical_plan));	
+	
+	// TODO: Try to do the projection directly without any casts and see if that helps
+
+	vector<unique_ptr<Expression>> cast_expressions;
+	order->ResolveOperatorTypes();
+	
+	auto &types = order->types;
+	auto order_bindings = order->GetColumnBindings();
+
+	for (idx_t col_idx = 0; col_idx < types.size(); col_idx++) {
+		auto &type = types[col_idx];
+		auto &binding = order_bindings[col_idx];
+		auto ref_expr = make_uniq<BoundColumnRefExpression>(type, binding);
+		cast_expressions.push_back(std::move(ref_expr));
+	}
+
+	auto projected = make_uniq<LogicalProjection>(binder.GenerateTableIndex(), std::move(cast_expressions));
+	projected->children.push_back(std::move(order));
+
+	Printer::Print("projected->PrintColumnBindings()");
+	projected->PrintColumnBindings();
+
 	// generate the LogicalCopyToFile
 	auto copy = make_uniq<LogicalCopyToFile>(std::move(copy_options.copy_function), std::move(copy_options.bind_data),
 	                                         std::move(copy_options.info));
@@ -451,7 +519,8 @@ DuckLakeCompactor::GenerateCompactionCommand(vector<DuckLakeCompactionFileEntry>
 	copy->preserve_order = PreserveOrderType::PRESERVE_ORDER;
 	copy->file_size_bytes = optional_idx();
 	copy->rotate = false;
-	copy->children.push_back(std::move(root));
+	// copy->children.push_back(std::move(root));
+	copy->children.push_back(std::move(projected));
 
 	optional_idx target_row_id_start;
 	if (files_are_adjacent) {
@@ -463,6 +532,7 @@ DuckLakeCompactor::GenerateCompactionCommand(vector<DuckLakeCompactionFileEntry>
 	    binder.GenerateTableIndex(), table, std::move(actionable_source_files), std::move(copy_input.encryption_key),
 	    partition_id, std::move(partition_values), target_row_id_start, type);
 	compaction->children.push_back(std::move(copy));
+	compaction->Print();
 	return std::move(compaction);
 }
 
