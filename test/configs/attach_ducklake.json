@@ -493,6 +493,12 @@
         "test/sql/storage/compression/string/blob.test",
         "test/sql/storage/compression/string/empty.test"
       ]
+    },
+    {
+      "reason": "Postgres as a catalog specific",
+      "paths": [
+        "test/sql/transaction/transaction_conflict_inlining_postgres.test"
+      ]
     }
   ]
 }

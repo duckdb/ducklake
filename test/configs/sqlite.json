@@ -126,6 +126,12 @@
         "test/sql/autoloading/autoload_data_path.test",
         "test/sql/general/metadata_parameters.test"
       ]
+    },
+    {
+      "reason": "Postgres as a catalog specific",
+      "paths": [
+        "test/sql/transaction/transaction_conflict_inlining_postgres.test"
+      ]
     }
   ]
 }

@@ -13,12 +13,19 @@
     "icu",
     "httpfs",
     "json"
-  ],   "skip_tests": [
+  ], 
+  "skip_tests": [
    {
       "reason": "Extension Loading tests, not relevant to remote files.",
       "paths": [
         "test/sql/general/missing_parquet.test",
         "test/sql/autoloading/autoload_data_path.test"
+      ]
+    },
+    {
+      "reason": "Postgres as a catalog specific",
+      "paths": [
+        "test/sql/transaction/transaction_conflict_inlining_postgres.test"
       ]
     }
   ]
