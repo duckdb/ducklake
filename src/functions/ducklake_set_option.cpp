@@ -18,7 +18,6 @@ struct DuckLakeSetOptionData : public TableFunctionData {
 static unique_ptr<FunctionData> DuckLakeSetOptionBind(ClientContext &context, TableFunctionBindInput &input,
                                                       vector<LogicalType> &return_types, vector<string> &names) {
 	auto &catalog = BaseMetadataFunction::GetCatalog(context, input.inputs[0]);
-	auto &ducklake_catalog = catalog.Cast<DuckLakeCatalog>();
 	DuckLakeConfigOption config_option;
 	auto &option = config_option.option.key;
 	auto &value = config_option.option.value;

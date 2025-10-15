@@ -14,9 +14,6 @@ test-env DATA_PATH __TEST_DIR__
 statement ok
 ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/ducklake_inlining_types_files', METADATA_CATALOG 'ducklake_meta', DATA_INLINING_ROW_LIMIT 10)
 
-statement ok
-SET pg_null_byte_replacement=''
-
 # duckdb types in testing_all_types() that are not supported:
 # unsigned integer
 # structs
