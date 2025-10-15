@@ -1,0 +1,55 @@
+# name: test/sql/data_inlining/data_inlining_types.test
+# description: test data inlining with different data types
+# group: [data_inlining]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+
+test-env DATA_PATH __TEST_DIR__
+
+
+statement ok
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/ducklake_inlining_types_files', METADATA_CATALOG 'ducklake_meta', DATA_INLINING_ROW_LIMIT 10)
+
+statement ok
+SET pg_null_byte_replacement=''
+
+# duckdb types in testing_all_types() that are not supported:
+# unsigned integer
+# structs
+# null bytes in varchar and blob
+# dates are out of range
+statement ok
+CREATE VIEW all_types AS SELECT 
+true AS bool,
+-123::int8 AS int8,
+'2025-01-01'::date AS date,
+'08:30'::time AS time,
+'2025-01-01T08:30:00Z'::timestamp AS timestamp,
+1.23::float AS float,
+1.23::decimal(3,2) AS decimal,
+array_value(1, 2)::int8[] AS int_array;
+
+query I nosort alltypes
+FROM all_types
+----
+
+statement ok
+BEGIN
+
+statement ok
+CREATE TABLE ducklake.data_types AS FROM all_types
+
+query I nosort alltypes
+FROM ducklake.data_types
+----
+
+statement ok
+COMMIT
+
+query I nosort alltypes
+FROM ducklake.data_types
+----

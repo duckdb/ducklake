@@ -497,6 +497,7 @@
     {
       "reason": "Postgres as a catalog specific",
       "paths": [
+        "test/sql/data_inlining/data_inlining_types_postgres.test",
         "test/sql/transaction/transaction_conflict_inlining_postgres.test"
       ]
     }

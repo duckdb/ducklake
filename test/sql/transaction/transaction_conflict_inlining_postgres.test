@@ -96,7 +96,7 @@ UPDATE ducklake.test3 SET id=id+1000
 statement ok con1
 COMMIT
 
-statement ok con2
+statement error con2
 COMMIT
 ----
 conflict
