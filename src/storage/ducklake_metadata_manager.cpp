@@ -1544,14 +1544,14 @@ shared_ptr<DuckLakeInlinedData> DuckLakeMetadataManager::TransformInlinedData(Qu
 	// Process each deserialized chunk and build the requested columns
 	for (auto &row : all_rows) {
 		auto &source_chunk = *row.data;
-		idx_t row_id = NumericCast<idx_t>(row.first_row_id);
+		idx_t first_row_id = NumericCast<idx_t>(row.first_row_id);
 		
 		// Filter out deleted rows using a selection vector
 		SelectionVector sel(source_chunk.size());
 		idx_t selected_rows = 0;
 		
 		for (idx_t i = 0; i < source_chunk.size(); i++) {
-			idx_t current_row_id = row_id + i;
+			idx_t current_row_id = first_row_id + i;
 			bool is_deleted = deleted_row_end_snapshots.find(current_row_id) != deleted_row_end_snapshots.end();
 			if ((is_deletion_scan && is_deleted) || (!is_deletion_scan && !is_deleted)) {
 				// Row is included in the result - include it
@@ -1578,7 +1578,7 @@ shared_ptr<DuckLakeInlinedData> DuckLakeMetadataManager::TransformInlinedData(Qu
 				auto row_id_data = FlatVector::GetData<int64_t>(target_chunk.data[target_col]);
 				for (idx_t i = 0; i < selected_rows; i++) {
 					idx_t source_idx = sel.get_index(i);
-					row_id_data[i] = NumericCast<int64_t>(row_id + source_idx);
+					row_id_data[i] = NumericCast<int64_t>(first_row_id + source_idx);
 				}
 			} else if (column_name == "begin_snapshot") {
 				// Fill in begin_snapshot column
@@ -1587,11 +1587,10 @@ shared_ptr<DuckLakeInlinedData> DuckLakeMetadataManager::TransformInlinedData(Qu
 					snapshot_data[i] = row.begin_snapshot;
 				}
 			} else if (column_name == "end_snapshot") {
-				// Fill in end_snapshot column (should be NULL for data rows)
 				auto snapshot_data = FlatVector::GetData<int64_t>(target_chunk.data[target_col]);
 				for (idx_t i = 0; i < selected_rows; i++) {
 					idx_t source_idx = sel.get_index(i);
-					idx_t current_row_id = row_id + source_idx;
+					idx_t current_row_id = first_row_id + source_idx;
 					snapshot_data[i] = deleted_row_end_snapshots[current_row_id];
 				}
 			} else {
