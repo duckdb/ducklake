@@ -7,9 +7,17 @@
 #include "common/ducklake_types.hpp"
 #include "storage/ducklake_schema_entry.hpp"
 #include "storage/ducklake_table_entry.hpp"
-#include "duckdb.hpp"
+#include "duckdb/common/file_system.hpp"
+#include "duckdb/main/database.hpp"
 #include "metadata_manager/postgres_metadata_manager.hpp"
 #include "duckdb/main/attached_database.hpp"
+#include "storage/ducklake_insert.hpp"
+#include "storage/ducklake_scan.hpp"
+#include "duckdb/common/serializer/memory_stream.hpp"
+#include "duckdb/common/serializer/binary_serializer.hpp"
+#include "duckdb/common/serializer/binary_deserializer.hpp"
+#include "duckdb/common/exception.hpp"
+#include <string>
 
 namespace duckdb {
 
@@ -1068,17 +1076,10 @@ string DuckLakeMetadataManager::GetColumnType(const DuckLakeColumnInfo &col) {
 }
 
 string DuckLakeMetadataManager::GetInlinedTableQuery(const DuckLakeTableInfo &table, const string &table_name) {
-	string columns;
-
-	for (auto &col : table.columns) {
-		if (!columns.empty()) {
-			columns += ", ";
-		}
-		columns += StringUtil::Format("%s %s", SQLIdentifier(col.name), GetColumnType(col));
-	}
-	return StringUtil::Format("CREATE TABLE IF NOT EXISTS {METADATA_CATALOG}.%s(row_id BIGINT, begin_snapshot BIGINT, "
-	                          "end_snapshot BIGINT, %s);",
-	                          SQLIdentifier(table_name), columns);
+	// One row per chunk, storing first_row_id, a serialized data blob of the chunk, and column names
+	return StringUtil::Format(
+		"CREATE TABLE IF NOT EXISTS {METADATA_CATALOG}.%s(first_row_id BIGINT, begin_snapshot BIGINT, end_snapshot BIGINT, data_blob BLOB, column_names TEXT[]);",
+		SQLIdentifier(table_name));
 }
 
 void DuckLakeMetadataManager::WriteNewTables(DuckLakeSnapshot commit_snapshot,
@@ -1288,31 +1289,54 @@ WHERE table_id = %d AND schema_version=(
 			ExecuteInlinedTableQueries(commit_snapshot, inlined_tables, inlined_table_queries);
 		}
 
-		// append the data
-		// FIXME: we can do a much faster append than this
-		string values;
-		idx_t row_id = entry.row_id_start;
-		for (auto &chunk : entry.data->data->Chunks()) {
-			for (idx_t r = 0; r < chunk.size(); r++) {
-				if (!values.empty()) {
-					values += ", ";
-				}
-				values += "(";
-				values += to_string(row_id);
-				values += ", {SNAPSHOT_ID}, NULL";
-				for (idx_t c = 0; c < chunk.ColumnCount(); c++) {
-					values += ", ";
-					values += DuckLakeUtil::ValueToSQL(context, chunk.GetValue(c, r));
-				}
-				values += ")";
-				row_id++;
+		// write DataChunks to serialized data blobs, then base64 encode them
+		idx_t current_row_id = entry.row_id_start;
+		
+		// Get the column names from the table schema
+		vector<string> column_names;
+		auto table_entry = transaction.GetCatalog().GetEntryById(transaction, commit_snapshot, entry.table_id);
+		if (table_entry) {
+			auto &table = table_entry->Cast<DuckLakeTableEntry>();
+			auto &field_data = table.GetFieldData();
+			for (idx_t i = 0; i < field_data.GetColumnCount(); i++) {
+				const auto &field_id = field_data.GetByRootIndex(PhysicalIndex(i));
+				column_names.push_back(field_id.Name());
 			}
 		}
-		string append_query = StringUtil::Format("INSERT INTO {METADATA_CATALOG}.%s VALUES %s",
-		                                         SQLIdentifier(inlined_table_name), values);
-		result = transaction.Query(commit_snapshot, append_query);
-		if (result->HasError()) {
-			result->GetErrorObject().Throw("Failed to write inlined data to DuckLake: ");
+		
+		for (auto &chunk : entry.data->data->Chunks()) {
+			// Serialize the chunk directly to memory using DataChunk::Serialize
+			MemoryStream mem_stream(Allocator::Get(context));
+			BinarySerializer serializer(mem_stream);
+			
+			serializer.Begin();
+			chunk.Serialize(serializer);
+			serializer.End();
+			
+			// Get the serialized data
+			auto data_ptr = mem_stream.GetData();
+			auto data_size = mem_stream.GetPosition();
+			
+			// Convert to base64
+			string blob_data_str(reinterpret_cast<const char*>(data_ptr), data_size);
+			auto serialized_blob_base64 = Blob::ToBase64(string_t(blob_data_str));
+			
+			// Create column names array for SQL
+			string column_names_sql = "ARRAY[";
+			for (idx_t i = 0; i < column_names.size(); i++) {
+				if (i > 0) column_names_sql += ", ";
+				column_names_sql += "'" + column_names[i] + "'";
+			}
+			column_names_sql += "]";
+						
+			string insert_query = StringUtil::Format("INSERT INTO {METADATA_CATALOG}.%s VALUES (%d, {SNAPSHOT_ID}, NULL, '%s', %s)",
+													SQLIdentifier(inlined_table_name), (int)current_row_id, serialized_blob_base64, column_names_sql);
+			result = transaction.Query(commit_snapshot, insert_query);
+			if (result->HasError()) {
+				result->GetErrorObject().Throw("Failed to write inlined data to DuckLake: ");
+			}
+			
+			current_row_id += chunk.size();
 		}
 	}
 }
@@ -1322,100 +1346,337 @@ void DuckLakeMetadataManager::WriteNewInlinedDeletes(DuckLakeSnapshot commit_sna
 	if (new_deletes.empty()) {
 		return;
 	}
+	
+	auto context_ptr = transaction.context.lock();
+	auto &context = *context_ptr;
+	
 	for (auto &entry : new_deletes) {
-		// get a list of all deleted row-ids for this table
-		string row_id_list;
-		for (auto &deleted_id : entry.deleted_row_ids) {
-			if (!row_id_list.empty()) {
-				row_id_list += ", ";
-			}
-			row_id_list += StringUtil::Format("(%d)", deleted_id);
+		if (entry.deleted_row_ids.empty()) {
+			continue;
 		}
-		// overwrite the snapshot for the old tags
-		auto result = transaction.Query(commit_snapshot, StringUtil::Format(R"(
-WITH deleted_row_list(deleted_row_id) AS (
-VALUES %s
-)
-UPDATE {METADATA_CATALOG}.%s
-SET end_snapshot = {SNAPSHOT_ID}
-FROM deleted_row_list
-WHERE row_id=deleted_row_id
-)",
-		                                                                    row_id_list, entry.table_name));
-		if (result->HasError()) {
-			result->GetErrorObject().Throw("Failed to write inlined delete information in DuckLake: ");
+		
+		// Create a DataChunk with deleted row_ids
+		vector<LogicalType> delete_types = {LogicalType::BIGINT};
+		DataChunk delete_chunk;
+		delete_chunk.Initialize(context, delete_types);
+		
+		// Process delete chunks directly without storing in vector
+		idx_t first_deleted_row_id = entry.deleted_row_ids.empty() ? 0 : *entry.deleted_row_ids.begin();
+		
+		// Process deleted row IDs in chunks
+		idx_t processed_count = 0;
+		while (processed_count < entry.deleted_row_ids.size()) {
+			idx_t chunk_size = std::min(static_cast<size_t>(entry.deleted_row_ids.size() - processed_count), static_cast<size_t>(STANDARD_VECTOR_SIZE));
+			delete_chunk.SetCardinality(chunk_size);
+			
+			auto row_data = FlatVector::GetData<int64_t>(delete_chunk.data[0]);
+			idx_t i = 0;
+			
+			// Fill this chunk
+			for (idx_t j = processed_count; j < processed_count + chunk_size; j++) {
+				row_data[i++] = NumericCast<int64_t>(entry.deleted_row_ids[j]);
+			}
+			
+			// Serialize the chunk directly to memory using DataChunk::Serialize
+			MemoryStream mem_stream(Allocator::Get(context));
+			BinarySerializer serializer(mem_stream);
+			
+			serializer.Begin();
+			delete_chunk.Serialize(serializer);
+			serializer.End();
+			
+			// Get the serialized data
+			auto data_ptr = mem_stream.GetData();
+			auto data_size = mem_stream.GetPosition();
+			
+			// Convert to base64
+			string blob_data_str(reinterpret_cast<const char*>(data_ptr), data_size);
+			auto serialized_blob_base64 = Blob::ToBase64(string_t(blob_data_str));
+			string insert_query = StringUtil::Format("INSERT INTO {METADATA_CATALOG}.%s VALUES (%d, {SNAPSHOT_ID}, {SNAPSHOT_ID}, '%s', ARRAY['row_id'])",
+													SQLIdentifier(entry.table_name), (int)first_deleted_row_id, serialized_blob_base64);
+			
+			// Insert delete row with first_deleted_row_id and end_snapshot to mark it as a delete row
+			auto result = transaction.Query(commit_snapshot, insert_query);
+			if (result->HasError()) {
+				result->GetErrorObject().Throw("Failed to write inlined delete information in DuckLake: ");
+			}
+			
+			processed_count += chunk_size;
 		}
 	}
 }
 
-shared_ptr<DuckLakeInlinedData> DuckLakeMetadataManager::TransformInlinedData(QueryResult &result) {
+shared_ptr<DuckLakeInlinedData> DuckLakeMetadataManager::TransformInlinedData(QueryResult &result, const vector<string> &columns_to_read) {
 	if (result.HasError()) {
 		result.GetErrorObject().Throw("Failed to read inlined data from DuckLake: ");
 	}
 
 	auto context = transaction.context.lock();
-	auto data = make_uniq<ColumnDataCollection>(*context, result.types);
+	
+	// The stored blob only contains actual table columns, not virtual columns like row_id/snapshot_id
+	// We need to deserialize the data and add the virtual columns from the inlined data table rows
+	struct DeserializedRow {
+		int64_t first_row_id;
+		int64_t begin_snapshot;
+		unique_ptr<DataChunk> data;
+		vector<string> column_names;
+	};
+	vector<DeserializedRow> all_rows;
+	
+	// Check if we're doing a deletion scan by looking for end_snapshot in columns_to_read
+	bool is_deletion_scan = false;
+	for (const auto &column_name : columns_to_read) {
+		if (column_name == "end_snapshot") {
+			is_deletion_scan = true;
+			break;
+		}
+	}
+	
+	// For deletion scans, we need to reconstruct the original data that was deleted
+	// We'll allow all columns but need to handle them specially
+	
+	// First pass: collect deleted row IDs and their end_snapshots from delete chunks
+	map<idx_t, int64_t> deleted_row_end_snapshots; // Map row_id to end_snapshot
+	
 	while (true) {
 		auto chunk = result.Fetch();
 		if (!chunk) {
 			break;
 		}
-		data->Append(*chunk);
+		
+		for (idx_t r = 0; r < chunk->size(); r++) {
+			auto first_row_id = chunk->GetValue(0, r).GetValue<int64_t>();
+			auto serialized_blob_base64 = chunk->GetValue(1, r).GetValue<string>();
+			auto begin_snapshot = chunk->GetValue(2, r).GetValue<int64_t>();
+			auto end_snapshot = chunk->GetValue(3, r);
+			auto column_names_value = chunk->GetValue(4, r);
+						
+			// Convert from base64 to binary data
+			auto blob_data = Blob::FromBase64(string_t(serialized_blob_base64));
+			
+			// Deserialize the DataChunk directly from the blob data
+			auto chunk_ptr = make_uniq<DataChunk>();
+			
+			// Copy blob data to a writable buffer for MemoryStream (needs to outlive deserializer)
+			auto blob_size = blob_data.size();
+			auto blob_buffer = make_unsafe_uniq_array<data_t>(blob_size);
+			memcpy(blob_buffer.get(), blob_data.data(), blob_size);
+			
+			{
+				// Create memory stream from the blob data
+				MemoryStream mem_stream(blob_buffer.get(), blob_size);
+				BinaryDeserializer deserializer(mem_stream);
+				
+				deserializer.Begin();
+				chunk_ptr->Deserialize(deserializer);
+				deserializer.End();
+			}
+			
+			// Parse column names from the value
+			vector<string> chunk_column_names;
+			if (!column_names_value.IsNull()) {
+				auto &list_value = ListValue::GetChildren(column_names_value);
+				for (const auto &name_value : list_value) {
+					chunk_column_names.push_back(StringValue::Get(name_value));
+				}
+			}
+			
+			// Check if this is a delete chunk (has end_snapshot)
+			if (!end_snapshot.IsNull()) {
+				// This is a delete chunk - extract the deleted row IDs
+				// The delete chunk contains row_id values that should be deleted
+				if (chunk_ptr->ColumnCount() > 0) {
+					auto &row_id_vector = chunk_ptr->data[0];
+					auto row_id_data = FlatVector::GetData<int64_t>(row_id_vector);
+					for (idx_t i = 0; i < chunk_ptr->size(); i++) {
+						idx_t row_id = NumericCast<idx_t>(row_id_data[i]);
+						deleted_row_end_snapshots[row_id] = end_snapshot.GetValue<int64_t>();
+					}
+				}
+			} else {
+				// This is a data chunk - store it for processing
+				all_rows.push_back({first_row_id, begin_snapshot, std::move(chunk_ptr), std::move(chunk_column_names)});
+			}
+		}
 	}
+	
+	// Combine all chunks into a ColumnDataCollection with virtual columns added
+	if (all_rows.empty()) {
+		// No data chunks, create empty collection with placeholder types
+		vector<LogicalType> placeholder_types = {LogicalType::BIGINT};
+		auto data = make_uniq<ColumnDataCollection>(*context, placeholder_types);
+		auto inlined_data = make_shared_ptr<DuckLakeInlinedData>();
+		inlined_data->data = std::move(data);
+		return inlined_data;
+	}
+	
+	// Find the most recent chunk by max begin_snapshot to get the latest schema
+	auto most_recent_chunk = std::max_element(all_rows.begin(), all_rows.end(),
+		[](const DeserializedRow &a, const DeserializedRow &b) {
+			return a.begin_snapshot < b.begin_snapshot;
+		});
+	// Build the final types based on what columns are actually requested
+	vector<LogicalType> final_types;
+	for (const auto &column_name : columns_to_read) {
+		if (column_name == "row_id") {
+			final_types.push_back(LogicalType::BIGINT);
+		} else if (column_name == "begin_snapshot" || column_name == "end_snapshot") {
+			final_types.push_back(LogicalType::BIGINT);
+		} else {
+			// This is an actual table column - use the type from the deserialized data
+			bool found = false;
+			// Map column names to types using the most recent chunk's schema
+			for (idx_t i = 0; i < most_recent_chunk->column_names.size() && i < most_recent_chunk->data->ColumnCount(); i++) {
+				if (StringUtil::CIEquals(most_recent_chunk->column_names[i], column_name)) {
+					final_types.push_back(most_recent_chunk->data->GetTypes()[i]);
+					found = true;
+					break;
+				}
+			}
+			if (!found) {
+				throw InvalidInputException("Column '%s' not found in the data schema", column_name);
+			}
+		}
+	}
+	
+	auto data = make_uniq<ColumnDataCollection>(*context, final_types);
+	
+	// Process each deserialized chunk and build the requested columns
+	for (auto &row : all_rows) {
+		auto &source_chunk = *row.data;
+		idx_t row_id = NumericCast<idx_t>(row.first_row_id);
+		
+		// Filter out deleted rows using a selection vector
+		SelectionVector sel(source_chunk.size());
+		idx_t selected_rows = 0;
+		
+		for (idx_t i = 0; i < source_chunk.size(); i++) {
+			idx_t current_row_id = row_id + i;
+			bool is_deleted = deleted_row_end_snapshots.find(current_row_id) != deleted_row_end_snapshots.end();
+			if ((is_deletion_scan && is_deleted) || (!is_deletion_scan && !is_deleted)) {
+				// Row is included in the result - include it
+				sel.set_index(selected_rows++, i);
+			}
+		}
+		
+		if (selected_rows == 0) {
+			// All rows in this chunk are deleted - skip it
+			continue;
+		}
+		
+		// Create a new chunk with only the requested columns and non-deleted rows
+		DataChunk target_chunk;
+		target_chunk.Initialize(Allocator::Get(*context), final_types);
+		target_chunk.SetCardinality(selected_rows);
+		
+		// Map column names to their positions in the target chunk
+		idx_t target_col = 0;
+		
+		for (const auto &column_name : columns_to_read) {
+			if (column_name == "row_id") {
+				// Fill in row_id column (incrementing from first_row_id)
+				auto row_id_data = FlatVector::GetData<int64_t>(target_chunk.data[target_col]);
+				for (idx_t i = 0; i < selected_rows; i++) {
+					idx_t source_idx = sel.get_index(i);
+					row_id_data[i] = NumericCast<int64_t>(row_id + source_idx);
+				}
+			} else if (column_name == "begin_snapshot") {
+				// Fill in begin_snapshot column
+				auto snapshot_data = FlatVector::GetData<int64_t>(target_chunk.data[target_col]);
+				for (idx_t i = 0; i < selected_rows; i++) {
+					snapshot_data[i] = row.begin_snapshot;
+				}
+			} else if (column_name == "end_snapshot") {
+				// Fill in end_snapshot column (should be NULL for data rows)
+				auto snapshot_data = FlatVector::GetData<int64_t>(target_chunk.data[target_col]);
+				for (idx_t i = 0; i < selected_rows; i++) {
+					idx_t source_idx = sel.get_index(i);
+					idx_t current_row_id = row_id + source_idx;
+					snapshot_data[i] = deleted_row_end_snapshots[current_row_id];
+				}
+			} else {
+				// This is an actual table column - we need to find its position in the source chunk
+				// Use the column names to map the current column to the source column position
+				bool column_found = false;
+				idx_t source_col_idx = 0;
+				
+				// Find the column in the source chunk by name
+				for (idx_t i = 0; i < row.column_names.size() && i < source_chunk.ColumnCount(); i++) {
+					if (StringUtil::CIEquals(row.column_names[i], column_name)) {
+						source_col_idx = i;
+						column_found = true;
+						break;
+					}
+				}
+				
+				if (column_found) {
+					// Column exists in this chunk - copy the data with type conversion if needed
+					auto &source_vector = source_chunk.data[source_col_idx];
+					auto &target_vector = target_chunk.data[target_col];
+					
+					// Create a temporary vector with only the selected rows
+					Vector temp_vector(source_vector.GetType());
+					temp_vector.Slice(source_vector, sel, selected_rows);
+					
+					if (temp_vector.GetType() == target_vector.GetType()) {
+						// Same type - direct copy
+						VectorOperations::Copy(temp_vector, target_vector, selected_rows, 0, 0);
+					} else {
+						// Different types - cast directly to the target vector
+						VectorOperations::Cast(*context, temp_vector, target_vector, selected_rows);
+					}
+				} else {
+					// Column doesn't exist in this chunk - set to NULL
+					target_chunk.data[target_col].SetVectorType(VectorType::CONSTANT_VECTOR);
+					ConstantVector::SetNull(target_chunk.data[target_col], true);
+				}
+			}
+			target_col++;
+		}
+		
+		data->Append(target_chunk);
+	}
+	
 	auto inlined_data = make_shared_ptr<DuckLakeInlinedData>();
 	inlined_data->data = std::move(data);
 	return inlined_data;
 }
 
-static string GetProjection(const vector<string> &columns_to_read) {
-	string result;
-	for (auto &entry : columns_to_read) {
-		if (!result.empty()) {
-			result += ", ";
-		}
-		result += KeywordHelper::WriteOptionallyQuoted(entry);
-	}
-	return result;
-}
-
 shared_ptr<DuckLakeInlinedData> DuckLakeMetadataManager::ReadInlinedData(DuckLakeSnapshot snapshot,
                                                                          const string &inlined_table_name,
                                                                          const vector<string> &columns_to_read) {
-	auto projection = GetProjection(columns_to_read);
 	auto result = transaction.Query(snapshot, StringUtil::Format(R"(
-SELECT %s
+SELECT first_row_id, data_blob, begin_snapshot, end_snapshot, column_names
 FROM {METADATA_CATALOG}.%s inlined_data
-WHERE {SNAPSHOT_ID} >= begin_snapshot AND ({SNAPSHOT_ID} < end_snapshot OR end_snapshot IS NULL);)",
-	                                                             projection, inlined_table_name));
-	return TransformInlinedData(*result);
+WHERE inlined_data.begin_snapshot <= {SNAPSHOT_ID};)",
+	                                                       inlined_table_name));
+	return TransformInlinedData(*result, columns_to_read);
 }
 
 shared_ptr<DuckLakeInlinedData>
 DuckLakeMetadataManager::ReadInlinedDataInsertions(DuckLakeSnapshot start_snapshot, DuckLakeSnapshot end_snapshot,
                                                    const string &inlined_table_name,
                                                    const vector<string> &columns_to_read) {
-	auto projection = GetProjection(columns_to_read);
 	auto result =
 	    transaction.Query(end_snapshot, StringUtil::Format(R"(
-SELECT %s
+SELECT first_row_id, data_blob, begin_snapshot, end_snapshot, column_names
 FROM {METADATA_CATALOG}.%s inlined_data
-WHERE inlined_data.begin_snapshot >= %d AND inlined_data.begin_snapshot <= {SNAPSHOT_ID};)",
-	                                                       projection, inlined_table_name, start_snapshot.snapshot_id));
-	return TransformInlinedData(*result);
+WHERE inlined_data.begin_snapshot >= %d AND inlined_data.begin_snapshot <= {SNAPSHOT_ID} AND inlined_data.end_snapshot IS NULL;)",
+	                                                       inlined_table_name, start_snapshot.snapshot_id));
+	return TransformInlinedData(*result, columns_to_read);
 }
 
 shared_ptr<DuckLakeInlinedData>
 DuckLakeMetadataManager::ReadInlinedDataDeletions(DuckLakeSnapshot start_snapshot, DuckLakeSnapshot end_snapshot,
                                                   const string &inlined_table_name,
                                                   const vector<string> &columns_to_read) {
-	auto projection = GetProjection(columns_to_read);
 	auto result =
 	    transaction.Query(end_snapshot, StringUtil::Format(R"(
-SELECT %s
+SELECT first_row_id, data_blob, begin_snapshot, end_snapshot, column_names
 FROM {METADATA_CATALOG}.%s inlined_data
-WHERE inlined_data.end_snapshot >= %d AND inlined_data.end_snapshot <= {SNAPSHOT_ID};)",
-	                                                       projection, inlined_table_name, start_snapshot.snapshot_id));
-	return TransformInlinedData(*result);
+WHERE (inlined_data.end_snapshot >= %d AND inlined_data.end_snapshot <= {SNAPSHOT_ID}) OR inlined_data.end_snapshot IS NULL;)",
+	                                                       inlined_table_name, start_snapshot.snapshot_id));
+	return TransformInlinedData(*result, columns_to_read);
 }
 
 string DuckLakeMetadataManager::GetPathForSchema(SchemaIndex schema_id) {

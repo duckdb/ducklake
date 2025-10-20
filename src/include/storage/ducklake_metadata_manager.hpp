@@ -142,7 +142,7 @@ protected:
 protected:
 	string GetInlinedTableQuery(const DuckLakeTableInfo &table, const string &table_name);
 	string GetColumnType(const DuckLakeColumnInfo &col);
-	shared_ptr<DuckLakeInlinedData> TransformInlinedData(QueryResult &result);
+	shared_ptr<DuckLakeInlinedData> TransformInlinedData(QueryResult &result, const vector<string> &columns_to_read);
 
 	//! Get path relative to catalog path
 	DuckLakePath GetRelativePath(const string &path);

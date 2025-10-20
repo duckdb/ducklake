@@ -149,6 +149,10 @@ ReaderInitializeType DuckLakeMultiFileReader::InitializeReader(MultiFileReaderDa
 			auto delete_filter = make_uniq<DuckLakeDeleteFilter>();
 			delete_filter->Initialize(context, delete_entry);
 			reader.deletion_filter = std::move(delete_filter);
+		} else if (file_entry.data_type == DuckLakeDataType::INLINED_DATA) {
+			// For inlined data deletions, we don't need a deletion filter
+			// The inlined data reader will handle the deletion scan directly
+			// by calling ReadInlinedDataDeletions with the appropriate scan type
 		}
 	}
 	auto result = MultiFileReader::InitializeReader(reader_data, bind_data, global_columns, global_column_ids,
