@@ -15,9 +15,8 @@
    }],
   "skip_tests": [
    {
-      "reason": "Data Inlining Not Supported",
+      "reason": "Errors are thrown in different ways for Postgres as a catalog",
       "paths": [
-        "test/sql/data_inlining/data_inlining_types.test",
         "test/sql/transaction/transaction_conflict_inlining.test"
       ]
     },
