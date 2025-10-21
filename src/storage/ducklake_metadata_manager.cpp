@@ -1324,7 +1324,9 @@ WHERE table_id = %d AND schema_version=(
 			// Create column names array for SQL
 			string column_names_sql = "ARRAY[";
 			for (idx_t i = 0; i < column_names.size(); i++) {
-				if (i > 0) column_names_sql += ", ";
+				if (i > 0) {
+					column_names_sql += ", ";
+				}
 				column_names_sql += "'" + column_names[i] + "'";
 			}
 			column_names_sql += "]";
@@ -1432,9 +1434,6 @@ shared_ptr<DuckLakeInlinedData> DuckLakeMetadataManager::TransformInlinedData(Qu
 		}
 	}
 	
-	// For deletion scans, we need to reconstruct the original data that was deleted
-	// We'll allow all columns but need to handle them specially
-	
 	// First pass: collect deleted row IDs and their end_snapshots from delete chunks
 	map<idx_t, int64_t> deleted_row_end_snapshots; // Map row_id to end_snapshot
 	
@@ -1454,23 +1453,17 @@ shared_ptr<DuckLakeInlinedData> DuckLakeMetadataManager::TransformInlinedData(Qu
 			// Convert from base64 to binary data
 			auto blob_data = Blob::FromBase64(string_t(serialized_blob_base64));
 			
+			// Create owning memory stream and write blob data directly to it
+			MemoryStream mem_stream(blob_data.size());
+			mem_stream.WriteData(const_data_ptr_cast(blob_data.data()), blob_data.size());
+			mem_stream.Rewind(); // Reset position to beginning for reading
+			
 			// Deserialize the DataChunk directly from the blob data
 			auto chunk_ptr = make_uniq<DataChunk>();
-			
-			// Copy blob data to a writable buffer for MemoryStream (needs to outlive deserializer)
-			auto blob_size = blob_data.size();
-			auto blob_buffer = make_unsafe_uniq_array<data_t>(blob_size);
-			memcpy(blob_buffer.get(), blob_data.data(), blob_size);
-			
-			{
-				// Create memory stream from the blob data
-				MemoryStream mem_stream(blob_buffer.get(), blob_size);
-				BinaryDeserializer deserializer(mem_stream);
-				
-				deserializer.Begin();
-				chunk_ptr->Deserialize(deserializer);
-				deserializer.End();
-			}
+			BinaryDeserializer deserializer(mem_stream);			
+			deserializer.Begin();
+			chunk_ptr->Deserialize(deserializer);
+			deserializer.End();
 			
 			// Parse column names from the value
 			vector<string> chunk_column_names;
@@ -1510,11 +1503,8 @@ shared_ptr<DuckLakeInlinedData> DuckLakeMetadataManager::TransformInlinedData(Qu
 		return inlined_data;
 	}
 	
-	// Find the most recent chunk by max begin_snapshot to get the latest schema
-	auto most_recent_chunk = std::max_element(all_rows.begin(), all_rows.end(),
-		[](const DeserializedRow &a, const DeserializedRow &b) {
-			return a.begin_snapshot < b.begin_snapshot;
-		});
+	// All chunks have the same schema, so use the first chunk
+	auto &first_chunk = all_rows[0];
 	// Build the final types based on what columns are actually requested
 	vector<LogicalType> final_types;
 	for (const auto &column_name : columns_to_read) {
@@ -1525,16 +1515,16 @@ shared_ptr<DuckLakeInlinedData> DuckLakeMetadataManager::TransformInlinedData(Qu
 		} else {
 			// This is an actual table column - use the type from the deserialized data
 			bool found = false;
-			// Map column names to types using the most recent chunk's schema
-			for (idx_t i = 0; i < most_recent_chunk->column_names.size() && i < most_recent_chunk->data->ColumnCount(); i++) {
-				if (StringUtil::CIEquals(most_recent_chunk->column_names[i], column_name)) {
-					final_types.push_back(most_recent_chunk->data->GetTypes()[i]);
+			// Map column names to types using the first chunk's schema
+			for (idx_t i = 0; i < first_chunk.column_names.size() && i < first_chunk.data->ColumnCount(); i++) {
+				if (StringUtil::CIEquals(first_chunk.column_names[i], column_name)) {
+					final_types.push_back(first_chunk.data->GetTypes()[i]);
 					found = true;
 					break;
 				}
 			}
 			if (!found) {
-				throw InvalidInputException("Column '%s' not found in the data schema", column_name);
+				throw InternalException("Column '%s' not found in the data schema", column_name);
 			}
 		}
 	}
@@ -1609,21 +1599,10 @@ shared_ptr<DuckLakeInlinedData> DuckLakeMetadataManager::TransformInlinedData(Qu
 				}
 				
 				if (column_found) {
-					// Column exists in this chunk - copy the data with type conversion if needed
+					// Column exists in this chunk - copy the data for the selected rows
 					auto &source_vector = source_chunk.data[source_col_idx];
 					auto &target_vector = target_chunk.data[target_col];
-					
-					// Create a temporary vector with only the selected rows
-					Vector temp_vector(source_vector.GetType());
-					temp_vector.Slice(source_vector, sel, selected_rows);
-					
-					if (temp_vector.GetType() == target_vector.GetType()) {
-						// Same type - direct copy
-						VectorOperations::Copy(temp_vector, target_vector, selected_rows, 0, 0);
-					} else {
-						// Different types - cast directly to the target vector
-						VectorOperations::Cast(*context, temp_vector, target_vector, selected_rows);
-					}
+					VectorOperations::Copy(source_vector, target_vector, sel, selected_rows, 0, 0);
 				} else {
 					// Column doesn't exist in this chunk - set to NULL
 					target_chunk.data[target_col].SetVectorType(VectorType::CONSTANT_VECTOR);
