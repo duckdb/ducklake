@@ -60,7 +60,7 @@ SELECT data_file_id, table_id FROM __ducklake_metadata_ducklake.ducklake_data_fi
 
 # We define a table_name but not a schema name so we should be able to merge from example_2
 statement ok
-CALL ducklake_merge_adjacent_files('ducklake', 'example');
+CALL ducklake_merge_adjacent_files('ducklake', 'example', approx_order_by => 'sort_key_1 ASC,sort_key_2 ASC');
 
 query III
 FROM example
