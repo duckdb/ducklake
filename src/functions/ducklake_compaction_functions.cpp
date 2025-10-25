@@ -153,6 +153,7 @@ public:
 	                  Binder &binder, TableIndex table_id, double delete_threshold);
 	void GenerateCompactions(DuckLakeTableEntry &table, vector<unique_ptr<LogicalOperator>> &compactions);
 	unique_ptr<LogicalOperator> GenerateCompactionCommand(vector<DuckLakeCompactionFileEntry> source_files);
+	unique_ptr<LogicalOperator> InsertApproxOrderBy(Binder &binder, unique_ptr<LogicalOperator> &plan, std::string order_by);
 
 private:
 	ClientContext &context;
@@ -306,6 +307,127 @@ void DuckLakeCompactor::GenerateCompactions(DuckLakeTableEntry &table,
 	}
 }
 
+unique_ptr<LogicalOperator> DuckLakeCompactor::InsertApproxOrderBy(Binder &binder, unique_ptr<LogicalOperator> &plan, std::string order_by) {
+	Printer::Print(order_by);
+
+	// TODO:
+	// DONE: Learn how to parse a string input into the order by operation
+	// DONE: Add a setting for the ordering
+	// DONE: Add a parameter to ducklake_merge_adjacent_files for the ordering
+	// 		DONE: Make this optional
+	// Figure out how to do this for arbitrary expressions
+	// Clean up all the print statements
+
+	auto bindings = plan->GetColumnBindings();
+	
+	for (auto &column_binding : bindings) {
+		Printer::Print(column_binding.ToString());
+	}
+
+	vector<BoundOrderByNode> orders;
+
+	vector<OrderByNode> pre_bound_orders = Parser::ParseOrderList(order_by);
+	
+	auto root_get = unique_ptr_cast<LogicalOperator, LogicalGet>(std::move(plan));
+
+	Printer::Print("root_get->ToString()" + root_get->ToString());
+
+	// Build a map of the names of columns in the query plan so we can bind to them
+	case_insensitive_map_t<idx_t> alias_map;
+	for (idx_t col_idx = 0; col_idx < root_get->names.size(); col_idx++) {
+		alias_map[root_get->names[col_idx]] = col_idx;
+		Printer::Print("root_get->names[col_idx]");
+		Printer::Print(root_get->names[col_idx]);
+	}
+
+	root_get->ResolveOperatorTypes();
+	auto &root_types = root_get->types;
+
+	// TODO: handle the unhappy path where the value is not in the alias_map
+	vector<std::string> unmatching_names;
+	for (auto &pre_bound_order : pre_bound_orders) {
+		std::string name = pre_bound_order.expression->GetName();
+		Printer::Print("name: " + name);
+		auto order_idx_check = alias_map.find(name);
+		if (order_idx_check != alias_map.end()) {
+			auto order_idx = order_idx_check->second;
+			Printer::Print("order_idx:" + std::to_string(order_idx));
+			auto expr = make_uniq<BoundColumnRefExpression>(root_types[order_idx], bindings[order_idx], 0);
+			orders.emplace_back(pre_bound_order.type, pre_bound_order.null_order, std::move(expr));
+		} else {
+			// Then we did not find the column in the table
+			// We want to record all of the ones that we do not find and then throw a more informative error that includes all incorrect columns.
+			unmatching_names.push_back(name);
+		}
+	}
+
+	if (!unmatching_names.empty()) {
+		std::string error_string = "Columns in the approx_sort parameter were not found in the DuckLake table. Unmatched columns were: ";
+		for (auto &unmatching_name : unmatching_names) {
+			error_string += unmatching_name + ", ";
+		}
+		error_string.resize(error_string.length() - 2); // Remove trailing ", "
+		throw BinderException(error_string);
+	}
+
+
+	// START attempt to use OrderBinder to bind dynamically
+	// SelectBindState bind_state;
+	// auto *root_get = dynamic_cast<LogicalGet*>(root.get());
+
+	// case_insensitive_map_t<idx_t> alias_map;
+	// Printer::Print("root_get->names[col_idx]");
+	// for (idx_t col_idx = 0; col_idx < root_get->names.size(); col_idx++) {
+	// 	alias_map[root_get->names[col_idx]] = col_idx;
+	// 	Printer::Print(root_get->names[col_idx]);
+	// }
+	// bind_state.alias_map = alias_map;
+	// // TODO: Figure out why the Order By is showing 1, 2 when it used to show #[1.1], #[1.2]
+	// // (maybe I need to fill out more pieces of the bind_state?)
+	
+	// OrderBinder order_binder({binder}, bind_state);
+	// for (auto &pre_bound_order : pre_bound_orders) {
+	// 	// auto pre_bound_expression = std::move(pre_bound_order.expression);
+	// 	// duckdb::unique_ptr<duckdb::ParsedExpression> pre_bound_expression = pre_bound_order.expression;
+	// 	//BoundOrderByNode(OrderType type, OrderByNullType null_order, unique_ptr<Expression> expression);
+	// 	orders.emplace_back(pre_bound_order.type, pre_bound_order.null_order, order_binder.Bind(std::move(pre_bound_order.expression)));
+	// }
+
+	// END attempt to use OrderBinder to bind dynamically
+
+	for (auto &order_item : orders) {
+		Printer::Print(order_item.ToString());
+	}
+
+	auto order = make_uniq<LogicalOrder>(std::move(orders));
+	Printer::Print(order->ToString());
+
+	order->children.push_back(std::move(root_get));
+
+	order->PrintColumnBindings();
+
+	vector<unique_ptr<Expression>> cast_expressions;
+	order->ResolveOperatorTypes();
+	
+	auto &types = order->types;
+	auto order_bindings = order->GetColumnBindings();
+
+	for (idx_t col_idx = 0; col_idx < types.size(); col_idx++) {
+		auto &type = types[col_idx];
+		auto &binding = order_bindings[col_idx];
+		auto ref_expr = make_uniq<BoundColumnRefExpression>(type, binding);
+		cast_expressions.push_back(std::move(ref_expr));
+	}
+
+	auto projected = make_uniq<LogicalProjection>(binder.GenerateTableIndex(), std::move(cast_expressions));
+	projected->children.push_back(std::move(order));
+
+	projected->PrintColumnBindings();
+
+	return std::move(projected);
+
+}
+
 unique_ptr<LogicalOperator>
 DuckLakeCompactor::GenerateCompactionCommand(vector<DuckLakeCompactionFileEntry> source_files) {
 	// get the table entry at the specified snapshot
@@ -437,28 +559,7 @@ DuckLakeCompactor::GenerateCompactionCommand(vector<DuckLakeCompactionFileEntry>
 		root = DuckLakeInsert::InsertCasts(binder, root);
 	}
 
-	// TODO:
-	// DONE: Learn how to parse a string input into the order by operation
-	// Add a setting for the ordering
-	// Add a parameter to ducklake_merge_adjacent_files for the ordering
-	// 		Make this optional
-	// Figure out how to do this for arbitrary expressions
-	// Clean up all the print statements
-
-	Printer::Print(table.ColumnNamesToSQL(table.GetColumns()));
-
-	auto bindings = root->GetColumnBindings();
-	
-	for (auto &column_binding : bindings) {
-		Printer::Print(column_binding.ToString());
-	}
-
-
-	vector<BoundOrderByNode> orders;
-	// Parses a list as found in an ORDER BY expression (i.e. including optional ASCENDING/DESCENDING modifiers)
-	// TODO: Add a setting in addition to a parameter that is passed in
-	
-
+	// Check if approx_order_by is in use and if so, add order by and projection operators to logical plan 
 	std::string order_by;
 	if (!approx_order_by.empty() && approx_order_by.length() > 0) {
 		order_by = approx_order_by; 
@@ -471,110 +572,9 @@ DuckLakeCompactor::GenerateCompactionCommand(vector<DuckLakeCompactionFileEntry>
 	}
 	
 	if (!order_by.empty() && order_by.length() > 0) {
-		
-		Printer::Print(order_by);
-		
-
-		vector<OrderByNode> pre_bound_orders = Parser::ParseOrderList(order_by);
-		
-		auto root_get = unique_ptr_cast<LogicalOperator, LogicalGet>(std::move(root));
-
-		Printer::Print("root_get->ToString()" + root_get->ToString());
-
-		// Build a map of the names of columns in the query plan so we can bind to them
-		case_insensitive_map_t<idx_t> alias_map;
-		for (idx_t col_idx = 0; col_idx < root_get->names.size(); col_idx++) {
-			alias_map[root_get->names[col_idx]] = col_idx;
-			Printer::Print("root_get->names[col_idx]");
-			Printer::Print(root_get->names[col_idx]);
-		}
-
-		root_get->ResolveOperatorTypes();
-		auto &root_types = root_get->types;
-
-		// TODO: handle the unhappy path where the value is not in the alias_map
-		vector<std::string> unmatching_names;
-		for (auto &pre_bound_order : pre_bound_orders) {
-			std::string name = pre_bound_order.expression->GetName();
-			Printer::Print("name: " + name);
-			auto order_idx_check = alias_map.find(name);
-			if (order_idx_check != alias_map.end()) {
-				auto order_idx = order_idx_check->second;
-				Printer::Print("order_idx:" + std::to_string(order_idx));
-				auto expr = make_uniq<BoundColumnRefExpression>(root_types[order_idx], bindings[order_idx], 0);
-				orders.emplace_back(pre_bound_order.type, pre_bound_order.null_order, std::move(expr));
-			} else {
-				// Then we did not find the column in the table
-				// We want to record all of the ones that we do not find and then throw a more informative error that includes all incorrect columns.
-				unmatching_names.push_back(name);
-			}
-		}
-
-		if (!unmatching_names.empty()) {
-			std::string error_string = "Columns in the approx_sort parameter were not found in the DuckLake table. Unmatched columns were: ";
-			for (auto &unmatching_name : unmatching_names) {
-				error_string += unmatching_name + ", ";
-			}
-			error_string.resize(error_string.length() - 2); // Remove trailing ", "
-			throw BinderException(error_string);
-		}
-
-
-		// START attempt to use OrderBinder to bind dynamically
-		// SelectBindState bind_state;
-		// auto *root_get = dynamic_cast<LogicalGet*>(root.get());
-
-		// case_insensitive_map_t<idx_t> alias_map;
-		// Printer::Print("root_get->names[col_idx]");
-		// for (idx_t col_idx = 0; col_idx < root_get->names.size(); col_idx++) {
-		// 	alias_map[root_get->names[col_idx]] = col_idx;
-		// 	Printer::Print(root_get->names[col_idx]);
-		// }
-		// bind_state.alias_map = alias_map;
-		// // TODO: Figure out why the Order By is showing 1, 2 when it used to show #[1.1], #[1.2]
-		// // (maybe I need to fill out more pieces of the bind_state?)
-		
-		// OrderBinder order_binder({binder}, bind_state);
-		// for (auto &pre_bound_order : pre_bound_orders) {
-		// 	// auto pre_bound_expression = std::move(pre_bound_order.expression);
-		// 	// duckdb::unique_ptr<duckdb::ParsedExpression> pre_bound_expression = pre_bound_order.expression;
-		// 	//BoundOrderByNode(OrderType type, OrderByNullType null_order, unique_ptr<Expression> expression);
-		// 	orders.emplace_back(pre_bound_order.type, pre_bound_order.null_order, order_binder.Bind(std::move(pre_bound_order.expression)));
-		// }
-
-		// END attempt to use OrderBinder to bind dynamically
-
-		for (auto &order_item : orders) {
-			Printer::Print(order_item.ToString());
-		}
-
-		auto order = make_uniq<LogicalOrder>(std::move(orders));
-		Printer::Print(order->ToString());
-
-		order->children.push_back(std::move(root_get));
-
-		order->PrintColumnBindings();
-
-		vector<unique_ptr<Expression>> cast_expressions;
-		order->ResolveOperatorTypes();
-		
-		auto &types = order->types;
-		auto order_bindings = order->GetColumnBindings();
-
-		for (idx_t col_idx = 0; col_idx < types.size(); col_idx++) {
-			auto &type = types[col_idx];
-			auto &binding = order_bindings[col_idx];
-			auto ref_expr = make_uniq<BoundColumnRefExpression>(type, binding);
-			cast_expressions.push_back(std::move(ref_expr));
-		}
-
-		auto projected = make_uniq<LogicalProjection>(binder.GenerateTableIndex(), std::move(cast_expressions));
-		projected->children.push_back(std::move(order));
-
-		projected->PrintColumnBindings();
-
-		root = std::move(projected);
+		root = DuckLakeCompactor::InsertApproxOrderBy(binder, root, order_by);
 	}
+
 	// generate the LogicalCopyToFile
 	auto copy = make_uniq<LogicalCopyToFile>(std::move(copy_options.copy_function), std::move(copy_options.bind_data),
 	                                         std::move(copy_options.info));
