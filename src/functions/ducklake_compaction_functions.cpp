@@ -457,8 +457,21 @@ DuckLakeCompactor::GenerateCompactionCommand(vector<DuckLakeCompactionFileEntry>
 	vector<BoundOrderByNode> orders;
 	// Parses a list as found in an ORDER BY expression (i.e. including optional ASCENDING/DESCENDING modifiers)
 	// TODO: Add a setting in addition to a parameter that is passed in
+	
+
+	std::string order_by;
 	if (!approx_order_by.empty() && approx_order_by.length() > 0) {
-		std::string order_by = approx_order_by;
+		order_by = approx_order_by; 
+		Printer::Print("!approx_order_by.empty() && approx_order_by.length() > 0 " + order_by);
+	} else {
+		std::string approx_order_by_config;
+		catalog.TryGetConfigOption("approx_order_by", approx_order_by_config, table);
+		order_by = approx_order_by_config;
+		Printer::Print("catalog.TryGetConfigOption(\"approx_order_by\", approx_order_by_config, table) " + order_by);
+	}
+	
+	if (!order_by.empty() && order_by.length() > 0) {
+		
 		Printer::Print(order_by);
 		
 
@@ -498,7 +511,12 @@ DuckLakeCompactor::GenerateCompactionCommand(vector<DuckLakeCompactionFileEntry>
 		}
 
 		if (!unmatching_names.empty()) {
-			throw BinderException("Columns in the approx_sort parameter were not found in the DuckLake table. Unmatched columns were: " + std::accumulate(unmatching_names.begin(), unmatching_names.end(), std::string(", ")));
+			std::string error_string = "Columns in the approx_sort parameter were not found in the DuckLake table. Unmatched columns were: ";
+			for (auto &unmatching_name : unmatching_names) {
+				error_string += unmatching_name + ", ";
+			}
+			error_string.resize(error_string.length() - 2); // Remove trailing ", "
+			throw BinderException(error_string);
 		}
 
 

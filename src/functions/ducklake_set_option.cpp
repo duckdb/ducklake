@@ -101,6 +101,8 @@ static unique_ptr<FunctionData> DuckLakeSetOptionBind(ClientContext &context, Ta
 		value = val.ToString();
 	} else if (option == "per_thread_output") {
 		value = val.CastAs(context, LogicalType::BOOLEAN).GetValue<bool>() ? "true" : "false";
+	} else if (option == "approx_order_by") {
+		value = val.ToString();
 	} else {
 		throw NotImplementedException("Unsupported option %s", option);
 	}
