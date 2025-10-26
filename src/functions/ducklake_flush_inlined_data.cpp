@@ -17,6 +17,8 @@
 #include "storage/ducklake_flush_data.hpp"
 #include "duckdb/planner/operator/logical_projection.hpp"
 
+#include "functions/ducklake_compaction_functions.hpp"
+
 namespace duckdb {
 
 //===--------------------------------------------------------------------===//
@@ -119,7 +121,8 @@ public:
 class DuckLakeDataFlusher {
 public:
 	DuckLakeDataFlusher(ClientContext &context, DuckLakeCatalog &catalog, DuckLakeTransaction &transaction,
-	                    Binder &binder, TableIndex table_id, const DuckLakeInlinedTableInfo &inlined_table);
+	                    Binder &binder, TableIndex table_id, const DuckLakeInlinedTableInfo &inlined_table,
+						std::string approx_order_by);
 
 	unique_ptr<LogicalOperator> GenerateFlushCommand();
 
@@ -130,13 +133,14 @@ private:
 	Binder &binder;
 	TableIndex table_id;
 	const DuckLakeInlinedTableInfo &inlined_table;
+	std::string approx_order_by;
 };
 
 DuckLakeDataFlusher::DuckLakeDataFlusher(ClientContext &context, DuckLakeCatalog &catalog,
                                          DuckLakeTransaction &transaction, Binder &binder, TableIndex table_id,
-                                         const DuckLakeInlinedTableInfo &inlined_table_p)
+                                         const DuckLakeInlinedTableInfo &inlined_table_p, std::string approx_order_by_p)
     : context(context), catalog(catalog), transaction(transaction), binder(binder), table_id(table_id),
-      inlined_table(inlined_table_p) {
+      inlined_table(inlined_table_p), approx_order_by(approx_order_by_p) {
 }
 
 unique_ptr<LogicalOperator> DuckLakeDataFlusher::GenerateFlushCommand() {
@@ -199,6 +203,15 @@ unique_ptr<LogicalOperator> DuckLakeDataFlusher::GenerateFlushCommand() {
 		root = DuckLakeInsert::InsertCasts(binder, root);
 	}
 
+	// TODO: Add order by (and projection) to this location for flushing inlined data
+
+	std::string order_by = DuckLakeCompactor::GetApproxOrderBy(catalog, table, approx_order_by);
+	if (!order_by.empty() && order_by.length() > 0) {
+		root = DuckLakeCompactor::InsertApproxOrderBy(binder, root, table, order_by);
+	}
+
+
+
 	// generate the LogicalCopyToFile
 	auto copy = make_uniq<LogicalCopyToFile>(std::move(copy_options.copy_function), std::move(copy_options.bind_data),
 	                                         std::move(copy_options.info));
@@ -255,6 +268,14 @@ static unique_ptr<LogicalOperator> FlushInlinedDataBind(ClientContext &context, 
 		table = StringValue::Get(table_entry->second);
 	}
 
+	// The validity of the approx_order_by is tested later when binding to the DuckLake table columns
+	std::string approx_order_by;
+	auto approx_order_by_entry = input.named_parameters.find("approx_order_by");
+	if (approx_order_by_entry != input.named_parameters.end()) {
+		// If the user manually sets the parameter, this has priority
+		approx_order_by = StringValue::Get(approx_order_by_entry->second);
+	}
+
 	// no or table schema specified - scan all schemas
 	vector<reference<DuckLakeTableEntry>> tables;
 	if (table.empty()) {
@@ -288,7 +309,7 @@ static unique_ptr<LogicalOperator> FlushInlinedDataBind(ClientContext &context, 
 		auto &inlined_tables = table.GetInlinedDataTables();
 		for (auto &inlined_table : inlined_tables) {
 			DuckLakeDataFlusher compactor(context, ducklake_catalog, transaction, *input.binder, table.GetTableId(),
-			                              inlined_table);
+			                              inlined_table, approx_order_by);
 			flushes.push_back(compactor.GenerateFlushCommand());
 		}
 	}
@@ -314,6 +335,7 @@ DuckLakeFlushInlinedDataFunction::DuckLakeFlushInlinedDataFunction()
     : TableFunction("ducklake_flush_inlined_data", {LogicalType::VARCHAR}, nullptr, nullptr, nullptr) {
 	named_parameters["schema_name"] = LogicalType::VARCHAR;
 	named_parameters["table_name"] = LogicalType::VARCHAR;
+	named_parameters["approx_order_by"] = LogicalType::VARCHAR;
 	bind_operator = FlushInlinedDataBind;
 }
 
