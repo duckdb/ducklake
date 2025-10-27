@@ -261,8 +261,10 @@ unique_ptr<LogicalOperator> DuckLakeCompactor::InsertApproxOrderBy(Binder &binde
 	// DONE: Add a setting for the ordering
 	// DONE: Add a parameter to ducklake_merge_adjacent_files for the ordering
 	// 		DONE: Make this optional
-	// Add to flush inlined data
-	//		Add test cases to ensure this is working as expected
+	// DONE: Add to flush inlined data
+	//		DONE: Add test cases to ensure this is working as expected
+	// Test compaction when partitions are present
+	// Test flushing inlined data when partitions are present
 	// Consider moving the comparison of setting and user specified value up to a higher level (where the named_parameter value is first passed in)
 	// Figure out how to do this for arbitrary expressions
 	// Clean up all the print statements
