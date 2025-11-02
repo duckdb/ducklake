@@ -125,7 +125,7 @@ void DuckLakeInitializer::InitializeNewDuckLake(DuckLakeTransaction &transaction
 		auto &metadata_catalog = Catalog::GetCatalog(*transaction.GetConnection().context, options.metadata_database);
 		if (!metadata_catalog.IsDuckCatalog()) {
 			throw InvalidInputException(
-			    "Attempting to create a new ducklake instance but data_path is not set - set the "
+			    "Attempting to create a new DuckLake instance but DATA_PATH is not set - set the "
 			    "DATA_PATH parameter to the desired location of the data files");
 		}
 		// for DuckDB instances - use a default data path
@@ -142,17 +142,17 @@ void DuckLakeInitializer::InitializeNewDuckLake(DuckLakeTransaction &transaction
 }
 
 void DuckLakeInitializer::LoadExistingDuckLake(DuckLakeTransaction &transaction) {
-	// load the data path from the existing duck lake
+	// load the data path from the existing DuckLake
 	auto &metadata_manager = transaction.GetMetadataManager();
 	auto metadata = metadata_manager.LoadDuckLake();
 	for (auto &tag : metadata.tags) {
 		if (tag.key == "version") {
 			string version = tag.value;
 			if (version != "0.3" && !options.migrate_if_required) {
-				// Throw when Loading the Ducklake if a Migration is required and migrate_if_required option is false
-				throw InvalidInputException("DuckLake Extension requires a DuckLake Catalog version of 0.3 or "
+				// Throw when loading the DuckLake if a migration is required and MIGRATE_IF_REQUIRED option is false
+				throw InvalidInputException("The DuckLake extension requires a DuckLake catalog version of 0.3 or "
 				                            "higher, current version is %s "
-				                            "and migrate_if_required is set to false",
+				                            "and MIGRATE_IF_REQUIRED is set to false",
 				                            version);
 			}
 			if (version == "0.1") {
@@ -183,8 +183,8 @@ void DuckLakeInitializer::LoadExistingDuckLake(DuckLakeTransaction &transaction)
 				// verify that they match if override_data_path is not set to true
 				if (metadata_manager.StorePath(options.data_path) != tag.value && !options.override_data_path) {
 					throw InvalidConfigurationException(
-					    "DATA_PATH parameter \"%s\" does not match existing data path in the catalog \"%s\".\nYou can "
-					    "override the DATA_PATH by setting OVERRIDE_DATA_PATH to True.",
+					    "DATA_PATH parameter \"%s\" does not match existing DATA_PATH in the catalog \"%s\".\nYou can "
+					    "override the DATA_PATH by setting OVERRIDE_DATA_PATH to true.",
 					    options.data_path, tag.value);
 				}
 			}
