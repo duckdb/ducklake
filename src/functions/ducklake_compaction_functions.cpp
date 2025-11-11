@@ -101,9 +101,9 @@ string DuckLakeCompaction::GetName() const {
 }
 
 DuckLakeCompactor::DuckLakeCompactor(ClientContext &context, DuckLakeCatalog &catalog, DuckLakeTransaction &transaction,
-                                     Binder &binder, TableIndex table_id, const std::string &approx_order_by_p)
+                                     Binder &binder, TableIndex table_id, const std::string &local_order_by_p)
     : context(context), catalog(catalog), transaction(transaction), binder(binder), table_id(table_id),
-	approx_order_by(approx_order_by_p), type(CompactionType::MERGE_ADJACENT_TABLES) {
+	local_order_by(local_order_by_p), type(CompactionType::MERGE_ADJACENT_TABLES) {
 }
 
 DuckLakeCompactor::DuckLakeCompactor(ClientContext &context, DuckLakeCatalog &catalog, DuckLakeTransaction &transaction,
@@ -151,7 +151,7 @@ void DuckLakeCompactor::GenerateCompactions(DuckLakeTableEntry &table,
                                             vector<unique_ptr<LogicalOperator>> &compactions) {
 	auto &metadata_manager = transaction.GetMetadataManager();
 	auto snapshot = transaction.GetSnapshot();
-	// TODO: pass in the approx_order_by so that list of files is approximately sorted in the same way
+	// TODO: pass in the local_order_by so that list of files is approximately sorted in the same way
 	// (sorted by the min/max metadata)
 	auto files = metadata_manager.GetFilesForCompaction(table, type, delete_threshold, snapshot);
 
@@ -240,16 +240,16 @@ void DuckLakeCompactor::GenerateCompactions(DuckLakeTableEntry &table,
 	}
 }
 
-std::string DuckLakeCompactor::GetApproxOrderBy(DuckLakeCatalog &catalog, DuckLakeTableEntry &table, const std::string &approx_order_by) {
+std::string DuckLakeCompactor::GetApproxOrderBy(DuckLakeCatalog &catalog, DuckLakeTableEntry &table, const std::string &local_order_by) {
 	std::string order_by;
-	if (!approx_order_by.empty() && approx_order_by.length() > 0) {
-		order_by = approx_order_by; 
-		Printer::Print("!approx_order_by.empty() && approx_order_by.length() > 0 " + order_by);
+	if (!local_order_by.empty() && local_order_by.length() > 0) {
+		order_by = local_order_by; 
+		Printer::Print("!local_order_by.empty() && local_order_by.length() > 0 " + order_by);
 	} else {
-		std::string approx_order_by_config;
-		catalog.TryGetConfigOption("approx_order_by", approx_order_by_config, table);
-		order_by = approx_order_by_config;
-		Printer::Print("catalog.TryGetConfigOption(\"approx_order_by\", approx_order_by_config, table) " + order_by);
+		std::string local_order_by_config;
+		catalog.TryGetConfigOption("local_order_by", local_order_by_config, table);
+		order_by = local_order_by_config;
+		Printer::Print("catalog.TryGetConfigOption(\"local_order_by\", local_order_by_config, table) " + order_by);
 	}
 
 	return order_by;
@@ -542,7 +542,7 @@ DuckLakeCompactor::GenerateCompactionCommand(vector<DuckLakeCompactionFileEntry>
 		root = DuckLakeInsert::InsertCasts(binder, root);
 	}
 	
-	std::string order_by = DuckLakeCompactor::GetApproxOrderBy(catalog, table, approx_order_by);
+	std::string order_by = DuckLakeCompactor::GetApproxOrderBy(catalog, table, local_order_by);
 	if (!order_by.empty() && order_by.length() > 0) {
 		root = DuckLakeCompactor::InsertApproxOrderBy(binder, root, table, order_by);
 	}
@@ -612,12 +612,12 @@ static unique_ptr<LogicalOperator> GenerateCompactionOperator(TableFunctionBindI
 static void GenerateCompaction(ClientContext &context, DuckLakeTransaction &transaction,
                                DuckLakeCatalog &ducklake_catalog, TableFunctionBindInput &input,
                                DuckLakeTableEntry &cur_table, CompactionType type, double delete_threshold, 
-							   const std::string &approx_order_by,
+							   const std::string &local_order_by,
                                vector<unique_ptr<LogicalOperator>> &compactions) {
 	switch (type) {
 	case CompactionType::MERGE_ADJACENT_TABLES: {
 		DuckLakeCompactor compactor(context, ducklake_catalog, transaction, *input.binder, cur_table.GetTableId(),
-									approx_order_by);
+									local_order_by);
 		compactor.GenerateCompactions(cur_table, compactions);
 		break;
 	}
@@ -651,12 +651,12 @@ unique_ptr<LogicalOperator> BindCompaction(ClientContext &context, TableFunction
 		throw BinderException("The delete_threshold option must be between 0 and 1");
 	}
 
-	// The validity of the approx_order_by is tested later when binding to the DuckLake table columns
-	std::string approx_order_by;
-	auto approx_order_by_entry = input.named_parameters.find("approx_order_by");
-	if (approx_order_by_entry != input.named_parameters.end()) {
+	// The validity of the local_order_by is tested later when binding to the DuckLake table columns
+	std::string local_order_by;
+	auto local_order_by_entry = input.named_parameters.find("local_order_by");
+	if (local_order_by_entry != input.named_parameters.end()) {
 		// If the user manually sets the parameter, this has priority
-		approx_order_by = StringValue::Get(approx_order_by_entry->second);
+		local_order_by = StringValue::Get(local_order_by_entry->second);
 	}
 
 	vector<unique_ptr<LogicalOperator>> compactions;
@@ -668,7 +668,7 @@ unique_ptr<LogicalOperator> BindCompaction(ClientContext &context, TableFunction
 				cur_schema.get().Scan(context, CatalogType::TABLE_ENTRY, [&](CatalogEntry &entry) {
 					auto &cur_table = entry.Cast<DuckLakeTableEntry>();
 					GenerateCompaction(context, transaction, ducklake_catalog, input, cur_table, type, delete_threshold,
-					                   approx_order_by, compactions);
+					                   local_order_by, compactions);
 				});
 			}
 			return GenerateCompactionOperator(input, bind_index, compactions);
@@ -679,7 +679,7 @@ unique_ptr<LogicalOperator> BindCompaction(ClientContext &context, TableFunction
 			ducklake_schema.Scan(context, CatalogType::TABLE_ENTRY, [&](CatalogEntry &entry) {
 				auto &cur_table = entry.Cast<DuckLakeTableEntry>();
 				GenerateCompaction(context, transaction, ducklake_catalog, input, cur_table, type, delete_threshold,
-				                   approx_order_by, compactions);
+				                   local_order_by, compactions);
 			});
 			return GenerateCompactionOperator(input, bind_index, compactions);
 		}
@@ -696,7 +696,7 @@ unique_ptr<LogicalOperator> BindCompaction(ClientContext &context, TableFunction
 	auto table_entry = catalog.GetEntry(context, schema, table_lookup, OnEntryNotFound::THROW_EXCEPTION);
 	auto &ducklake_table = table_entry->Cast<DuckLakeTableEntry>();
 	GenerateCompaction(context, transaction, ducklake_catalog, input, ducklake_table, type, delete_threshold,
-	                   approx_order_by, compactions);
+	                   local_order_by, compactions);
 
 	return GenerateCompactionOperator(input, bind_index, compactions);
 }
@@ -713,7 +713,7 @@ TableFunctionSet DuckLakeMergeAdjacentFilesFunction::GetFunctions() {
 	for (auto &type : at_types) {
 		TableFunction function("ducklake_merge_adjacent_files", type, nullptr, nullptr, nullptr);
 		function.bind_operator = MergeAdjacentFilesBind;
-		function.named_parameters["approx_order_by"] = LogicalType::VARCHAR;
+		function.named_parameters["local_order_by"] = LogicalType::VARCHAR;
 		if (type.size() == 2) {
 			function.named_parameters["schema"] = LogicalType::VARCHAR;
 		}

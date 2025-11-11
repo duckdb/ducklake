@@ -1,5 +1,5 @@
 # name: test/sql/data_inlining/data_inlining_flush_sorted.test
-# description: test flushing inlined data to disk when approx_order_by is set
+# description: test flushing inlined data to disk when local_order_by is set
 # group: [data_inlining]
 
 require ducklake
@@ -80,7 +80,7 @@ BEGIN
 
 # flush inlined data
 statement ok
-CALL ducklake_flush_inlined_data('ducklake', approx_order_by => 'i DESC')
+CALL ducklake_flush_inlined_data('ducklake', local_order_by => 'i DESC')
 
 query I
 SELECT COUNT(*) FROM ducklake.test
@@ -232,7 +232,7 @@ FROM ducklake_option.table_changes('test', 3, 5) ORDER BY ALL
 5	3	insert	3
 
 statement ok
-CALL ducklake_option.set_option('approx_order_by', 'i DESC', table_name => 'test')
+CALL ducklake_option.set_option('local_order_by', 'i DESC', table_name => 'test')
 
 statement ok
 BEGIN

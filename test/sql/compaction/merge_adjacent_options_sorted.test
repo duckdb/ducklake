@@ -67,7 +67,7 @@ t.table_name = 'sort_with_parameter'
 1	1
 
 statement ok
-CALL ducklake_merge_adjacent_files('ducklake', 'sort_with_parameter', approx_order_by => 'sort_key_1 ASC,sort_key_2 ASC');
+CALL ducklake_merge_adjacent_files('ducklake', 'sort_with_parameter', local_order_by => 'sort_key_1 ASC,sort_key_2 ASC');
 
 query III
 FROM sort_with_parameter
@@ -148,7 +148,7 @@ t.table_name = 'sort_with_setting'
 4	2
 
 statement ok
-CALL ducklake.set_option('approx_order_by', 'sort_key_1 ASC ,   sort_key_2 ASC', table_name => 'sort_with_setting');
+CALL ducklake.set_option('local_order_by', 'sort_key_1 ASC ,   sort_key_2 ASC', table_name => 'sort_with_setting');
 
 statement ok
 CALL ducklake_merge_adjacent_files('ducklake', 'sort_with_setting');
@@ -184,7 +184,7 @@ t.table_name = 'sort_with_setting'
 # Column does not exist in the table #
 ######################################
 statement ok
-CALL ducklake.set_option('approx_order_by', 'WOOOOT ASC ,   BLAH ASC', table_name => 'sort_with_setting');
+CALL ducklake.set_option('local_order_by', 'WOOOOT ASC ,   BLAH ASC', table_name => 'sort_with_setting');
 
 statement ok
 INSERT INTO sort_with_setting (unique_id, sort_key_1, sort_key_2)
