@@ -122,7 +122,7 @@ class DuckLakeDataFlusher {
 public:
 	DuckLakeDataFlusher(ClientContext &context, DuckLakeCatalog &catalog, DuckLakeTransaction &transaction,
 	                    Binder &binder, TableIndex table_id, const DuckLakeInlinedTableInfo &inlined_table,
-						std::string approx_order_by);
+						const std::string &approx_order_by);
 
 	unique_ptr<LogicalOperator> GenerateFlushCommand();
 
@@ -138,7 +138,7 @@ private:
 
 DuckLakeDataFlusher::DuckLakeDataFlusher(ClientContext &context, DuckLakeCatalog &catalog,
                                          DuckLakeTransaction &transaction, Binder &binder, TableIndex table_id,
-                                         const DuckLakeInlinedTableInfo &inlined_table_p, std::string approx_order_by_p)
+                                         const DuckLakeInlinedTableInfo &inlined_table_p, const std::string &approx_order_by_p)
     : context(context), catalog(catalog), transaction(transaction), binder(binder), table_id(table_id),
       inlined_table(inlined_table_p), approx_order_by(approx_order_by_p) {
 }

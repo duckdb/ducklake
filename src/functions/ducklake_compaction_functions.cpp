@@ -20,6 +20,7 @@
 #include "duckdb/planner/operator/logical_order.hpp"
 #include "duckdb/planner/operator/logical_projection.hpp"
 #include "duckdb/parser/parser.hpp"
+#include "duckdb/parser/query_node/select_node.hpp"
 #include "duckdb/planner/expression_binder/order_binder.hpp"
 #include "duckdb/planner/expression_binder/select_bind_state.hpp"
 #include "duckdb/common/printer.hpp"
@@ -100,7 +101,7 @@ string DuckLakeCompaction::GetName() const {
 }
 
 DuckLakeCompactor::DuckLakeCompactor(ClientContext &context, DuckLakeCatalog &catalog, DuckLakeTransaction &transaction,
-                                     Binder &binder, TableIndex table_id, std::string approx_order_by_p)
+                                     Binder &binder, TableIndex table_id, const std::string &approx_order_by_p)
     : context(context), catalog(catalog), transaction(transaction), binder(binder), table_id(table_id),
 	approx_order_by(approx_order_by_p), type(CompactionType::MERGE_ADJACENT_TABLES) {
 }
@@ -239,7 +240,7 @@ void DuckLakeCompactor::GenerateCompactions(DuckLakeTableEntry &table,
 	}
 }
 
-std::string DuckLakeCompactor::GetApproxOrderBy(DuckLakeCatalog &catalog, DuckLakeTableEntry &table, std::string approx_order_by) {
+std::string DuckLakeCompactor::GetApproxOrderBy(DuckLakeCatalog &catalog, DuckLakeTableEntry &table, const std::string &approx_order_by) {
 	std::string order_by;
 	if (!approx_order_by.empty() && approx_order_by.length() > 0) {
 		order_by = approx_order_by; 
@@ -254,7 +255,7 @@ std::string DuckLakeCompactor::GetApproxOrderBy(DuckLakeCatalog &catalog, DuckLa
 	return order_by;
 }
 
-unique_ptr<LogicalOperator> DuckLakeCompactor::InsertApproxOrderBy(Binder &binder, unique_ptr<LogicalOperator> &plan, DuckLakeTableEntry &table, std::string order_by) {
+unique_ptr<LogicalOperator> DuckLakeCompactor::InsertApproxOrderBy(Binder &binder, unique_ptr<LogicalOperator> &plan, DuckLakeTableEntry &table, const std::string &order_by) {
 
 	// TODO:
 	// DONE: Learn how to parse a string input into the order by operation
@@ -265,9 +266,14 @@ unique_ptr<LogicalOperator> DuckLakeCompactor::InsertApproxOrderBy(Binder &binde
 	//		DONE: Add test cases to ensure this is working as expected
 	// Test compaction when partitions are present
 	// Test flushing inlined data when partitions are present
+	// Sort the list of files according to their min/max indexes
 	// Consider moving the comparison of setting and user specified value up to a higher level (where the named_parameter value is first passed in)
 	// Figure out how to do this for arbitrary expressions
 	// Clean up all the print statements
+	// Would local_order_by be better?
+
+	// "col1 asc, col2 desc"
+	// zorder(col1, col2) asc
 
 	Printer::Print(order_by);
 
@@ -281,6 +287,8 @@ unique_ptr<LogicalOperator> DuckLakeCompactor::InsertApproxOrderBy(Binder &binde
 
 	vector<OrderByNode> pre_bound_orders = Parser::ParseOrderList(order_by);
 	
+	//TODO: call the cast on the LogicalOperator
+	// auto& get = plan->Cast<LogicalGet>();
 	auto root_get = unique_ptr_cast<LogicalOperator, LogicalGet>(std::move(plan));
 
 	Printer::Print("root_get->ToString()" + root_get->ToString());
@@ -296,7 +304,6 @@ unique_ptr<LogicalOperator> DuckLakeCompactor::InsertApproxOrderBy(Binder &binde
 	root_get->ResolveOperatorTypes();
 	auto &root_types = root_get->types;
 
-	// TODO: handle the unhappy path where the value is not in the alias_map
 	vector<std::string> unmatching_names;
 	for (auto &pre_bound_order : pre_bound_orders) {
 		std::string name = pre_bound_order.expression->GetName();
@@ -326,24 +333,47 @@ unique_ptr<LogicalOperator> DuckLakeCompactor::InsertApproxOrderBy(Binder &binde
 
 	// START attempt to use OrderBinder to bind dynamically
 	// SelectBindState bind_state;
-	// auto *root_get = dynamic_cast<LogicalGet*>(root.get());
 
 	// case_insensitive_map_t<idx_t> alias_map;
+	// auto select_node = make_uniq<SelectNode>();
 	// Printer::Print("root_get->names[col_idx]");
 	// for (idx_t col_idx = 0; col_idx < root_get->names.size(); col_idx++) {
 	// 	alias_map[root_get->names[col_idx]] = col_idx;
 	// 	Printer::Print(root_get->names[col_idx]);
+	// 	// BindingAlias identical_alias = BindingAlias(root_get->names[col_idx]);
+	// 	// BindingAlias table_alias; // TODO: Need to put in the table name!
+
+	// 	// Printer::Print("identical_alias.ToString() " + identical_alias.ToString());
+	// 	// BindingAlias(string catalog, string schema, string alias);
+
+	// 	select_node->select_list.emplace_back(make_uniq<ColumnRefExpression>(root_get->names[col_idx], table.name));
+
 	// }
 	// bind_state.alias_map = alias_map;
 	// // TODO: Figure out why the Order By is showing 1, 2 when it used to show #[1.1], #[1.2]
 	// // (maybe I need to fill out more pieces of the bind_state?)
+	// // do I need parsed_expression_map_t<idx_t> projection_map; filled out on the bind_state?
+
+	// // I think I need to set the OrderBinder's extra_list so I think I need the SelectNode here
+	// // within the OrderBinder constructor (if a SelectNode is passed in) we have: this->extra_list = &node.select_list; 
+	// // The select_list is the only thing I need to populate on the SelectNode
+	// //! The projection list
 	
-	// OrderBinder order_binder({binder}, bind_state);
+	// // auto select_statement = make_uniq_base<QueryNode, SelectNode>();
+	// // auto &select_node = select_statement->Cast<SelectNode>();
+
+	// // TODO: Why does it still Bind as a constant? Maybe try the projection_map next?
+	// // TODO: Explore if I can pull out the code from Parser::ParseOrderList to build a SelectNode that actually points to the right table not a dummy table
+
+	// OrderBinder order_binder({binder}, *select_node, bind_state);
 	// for (auto &pre_bound_order : pre_bound_orders) {
 	// 	// auto pre_bound_expression = std::move(pre_bound_order.expression);
 	// 	// duckdb::unique_ptr<duckdb::ParsedExpression> pre_bound_expression = pre_bound_order.expression;
 	// 	//BoundOrderByNode(OrderType type, OrderByNullType null_order, unique_ptr<Expression> expression);
-	// 	orders.emplace_back(pre_bound_order.type, pre_bound_order.null_order, order_binder.Bind(std::move(pre_bound_order.expression)));
+		
+	// 	auto duckdb_expression = order_binder.Bind(std::move(pre_bound_order.expression));
+	// 	BoundOrderByNode bound_order = BoundOrderByNode(pre_bound_order.type, pre_bound_order.null_order, std::move(duckdb_expression));
+	// 	orders.emplace_back(std::move(bound_order));
 	// }
 
 	// END attempt to use OrderBinder to bind dynamically
@@ -582,7 +612,7 @@ static unique_ptr<LogicalOperator> GenerateCompactionOperator(TableFunctionBindI
 static void GenerateCompaction(ClientContext &context, DuckLakeTransaction &transaction,
                                DuckLakeCatalog &ducklake_catalog, TableFunctionBindInput &input,
                                DuckLakeTableEntry &cur_table, CompactionType type, double delete_threshold, 
-							   std::string approx_order_by,
+							   const std::string &approx_order_by,
                                vector<unique_ptr<LogicalOperator>> &compactions) {
 	switch (type) {
 	case CompactionType::MERGE_ADJACENT_TABLES: {
@@ -621,7 +651,6 @@ unique_ptr<LogicalOperator> BindCompaction(ClientContext &context, TableFunction
 		throw BinderException("The delete_threshold option must be between 0 and 1");
 	}
 
-	// TODO: Also add a configuration option for approx_order_by
 	// The validity of the approx_order_by is tested later when binding to the DuckLake table columns
 	std::string approx_order_by;
 	auto approx_order_by_entry = input.named_parameters.find("approx_order_by");
