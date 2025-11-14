@@ -241,7 +241,6 @@ void DuckLakeColumnGeoStats::Merge(const DuckLakeColumnExtraStats &new_stats) {
 }
 
 string DuckLakeColumnGeoStats::Serialize() const {
-
 	// Format as JSON
 	auto xmin_val = xmin == NumericLimits<double>::Maximum() ? "null" : std::to_string(xmin);
 	auto xmax_val = xmax == NumericLimits<double>::Minimum() ? "null" : std::to_string(xmax);

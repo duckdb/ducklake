@@ -7,7 +7,6 @@
 namespace duckdb {
 
 struct CleanupBindData : public TableFunctionData {
-
 	explicit CleanupBindData(Catalog &catalog, CleanupType type) : catalog(catalog), type(type) {
 	}
 

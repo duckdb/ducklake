@@ -74,6 +74,7 @@ private:
 	string schema_uuid;
 	string data_path;
 	DuckLakeCatalogSet tables;
+	DuckLakeCatalogSet macros;
 	mutex default_function_lock;
 	case_insensitive_map_t<unique_ptr<CatalogEntry>> default_function_map;
 };

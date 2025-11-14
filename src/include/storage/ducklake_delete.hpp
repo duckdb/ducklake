@@ -18,7 +18,6 @@ class DuckLakeDeleteGlobalState;
 class DuckLakeTransaction;
 
 struct DuckLakeDeleteMap {
-
 	void AddExtendedFileInfo(DuckLakeFileListExtendedEntry file_entry) {
 		auto filename = file_entry.file.path;
 		file_map.emplace(std::move(filename), std::move(file_entry));

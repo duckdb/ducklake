@@ -145,6 +145,8 @@ public:
 	virtual void WriteNewInlinedTables(DuckLakeSnapshot commit_snapshot, const vector<DuckLakeTableInfo> &tables);
 	virtual string GetInlinedTableQueries(DuckLakeSnapshot commit_snapshot, const DuckLakeTableInfo &table,
 	                                      string &inlined_tables, string &inlined_table_queries);
+	void WriteNewMacros(DuckLakeSnapshot commit_snapshot, const vector<DuckLakeMacroInfo> &new_macros);
+	void CreateMacro(DuckLakeSnapshot snapshot, MacroIndex index);
 	virtual void ExecuteInlinedTableQueries(DuckLakeSnapshot commit_snapshot, string &inlined_tables,
 	                                        const string &inlined_table_queries);
 	virtual void DropDataFiles(DuckLakeSnapshot commit_snapshot, const set<DataFileIndex> &dropped_files);
@@ -188,6 +190,8 @@ public:
 
 	virtual void MigrateV01();
 	virtual void MigrateV02(bool allow_failures = false);
+	virtual void MigrateV03(bool allow_failures = false);
+	virtual void ExecuteMigration(string migrate_query, bool allow_failures);
 
 	string LoadPath(string path);
 	string StorePath(string path);

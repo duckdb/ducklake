@@ -1,6 +1,7 @@
 #include "storage/ducklake_catalog.hpp"
 
 #include "common/ducklake_types.hpp"
+#include "duckdb/catalog/catalog_entry/macro_catalog_entry.hpp"
 #include "duckdb/catalog/catalog_entry/schema_catalog_entry.hpp"
 #include "duckdb/catalog/catalog_entry/table_catalog_entry.hpp"
 #include "duckdb/main/attached_database.hpp"
@@ -17,8 +18,12 @@
 #include "storage/ducklake_transaction_manager.hpp"
 #include "storage/ducklake_view_entry.hpp"
 #include "duckdb/main/database_path_and_type.hpp"
+#include "duckdb/parser/parser.hpp"
 #include "duckdb/parser/parsed_data/create_index_info.hpp"
 #include "duckdb/parser/parsed_data/alter_table_info.hpp"
+#include "duckdb/parser/parsed_data/create_macro_info.hpp"
+#include "duckdb/function/macro_function.hpp"
+#include "duckdb/function/scalar_macro_function.hpp"
 
 namespace duckdb {
 
@@ -232,6 +237,48 @@ static unique_ptr<DuckLakeFieldId> TransformColumnType(DuckLakeColumnInfo &col) 
 	throw InvalidInputException("Unrecognized nested type \"%s\"", col.type);
 }
 
+unique_ptr<CreateMacroInfo> CreateMacroInfoFromDucklake(DuckLakeMacroInfo &macro, string schema_name) {
+	CatalogType type;
+	if (macro.implementations.front().type == "scalar") {
+		type = CatalogType::MACRO_ENTRY;
+	} else {
+		throw NotImplementedException("Macro type %s is not implemented", macro.implementations.front().type);
+	}
+	auto macro_info = make_uniq<CreateMacroInfo>(type);
+	macro_info->name = macro.macro_name;
+	macro_info->schema = schema_name;
+	macro_info->temporary = true;
+	macro_info->internal = true;
+	for (auto &impl : macro.implementations) {
+		unique_ptr<MacroFunction> macro_function;
+		if (impl.type == "scalar") {
+			auto sql_expr = Parser::ParseExpressionList(impl.sql);
+			if (sql_expr.size() != 1) {
+				throw InternalException("Expected a single expression");
+			}
+			macro_function = make_uniq<ScalarMacroFunction>(std::move(sql_expr[0]));
+		} else if (impl.type == "table") {
+			throw NotImplementedException("dont have table macro yet");
+		} else if (impl.type == "void") {
+			throw NotImplementedException("dont have void macro yet");
+		} else {
+			throw InternalException("Unrecognized macro type %s in CreateMacroInfoFromDucklake", impl.type);
+		}
+		vector<unique_ptr<ParsedExpression>> expr_list;
+		for (auto &param : impl.parameters) {
+			expr_list = Parser::ParseExpressionList(param.default_value.ToSQLString());
+			if (expr_list.size() != 1) {
+				throw InternalException("Expected a single expression");
+			}
+			macro_function->parameters.push_back(make_uniq<ColumnRefExpression>(param.parameter_name));
+			macro_function->default_parameters.insert(make_pair(param.parameter_name, std::move(expr_list[0])));
+			macro_function->types.push_back(DuckLakeTypes::FromString(param.parameter_type));
+		}
+		macro_info->macros.push_back(std::move(macro_function));
+	}
+	return macro_info;
+}
+
 unique_ptr<DuckLakeCatalogSet> DuckLakeCatalog::LoadSchemaForSnapshot(DuckLakeTransaction &transaction,
                                                                       DuckLakeSnapshot snapshot) {
 	auto &metadata_manager = transaction.GetMetadataManager();
@@ -322,6 +369,20 @@ unique_ptr<DuckLakeCatalogSet> DuckLakeCatalog::LoadSchemaForSnapshot(DuckLakeTr
 		    make_uniq<DuckLakeViewEntry>(*this, schema_entry, *create_view_info, view.id, std::move(view.uuid),
 		                                 std::move(view.sql), LocalChangeType::NONE);
 		schema_set->AddEntry(schema_entry, view.id, std::move(view_entry));
+	}
+
+	// load the macros
+	for (auto &macro : catalog.macros) {
+		auto entry = schema_id_map.find(macro.schema_id);
+		if (entry == schema_id_map.end()) {
+			throw InvalidInputException(
+			    "Failed to load DuckLake - could not find schema that corresponds to the macro entry \"%s\"",
+			    macro.macro_name);
+		}
+		auto &schema_entry = entry->second.get();
+		auto create_macro = CreateMacroInfoFromDucklake(macro, schema_entry.name);
+		auto macro_catalog_entry = make_uniq<MacroCatalogEntry>(*this, schema_entry, *create_macro);
+		schema_set->AddEntry(schema_entry, macro.macro_id, std::move(macro_catalog_entry));
 	}
 
 	// load the partition entries

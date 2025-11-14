@@ -1,0 +1,70 @@
+# name: test/sql/macros/test_simple_macro.test
+# description: test simple macros with ducklake
+# group: [macros]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+
+test-env DATA_PATH __TEST_DIR__
+
+statement ok
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/test_simple_macro');
+
+statement ok
+use ducklake
+
+statement ok
+create table t (a integer, b integer)
+
+statement ok
+insert into t values (1,1)
+
+statement ok
+CREATE MACRO add_values(a, b) AS a + b;
+
+# Check Macro Tables
+query III
+FROM __ducklake_metadata_ducklake.ducklake_macro;
+----
+0	2	add_values
+
+query IIIII
+FROM __ducklake_metadata_ducklake.ducklake_macro_impl;
+----
+2	0	duckdb	(a + b)	scalar
+
+query IIIIII
+FROM __ducklake_metadata_ducklake.ducklake_macro_parameters;
+----
+2	0	0	a	UNKNOWN	NULL
+2	0	1	b	UNKNOWN	NULL
+
+# Test Macro
+query I
+SELECT add_values(a,b) from t
+----
+2
+
+query II
+select snapshot_id, changes FROM snapshots()
+----
+0	{schemas_created=[main]}
+1	{tables_created=[main.t]}
+2	{tables_inserted_into=[1]}
+3	{macros_created=[main.add_values]}
+
+
+# If we move back to a prior snapshot, it should fail
+# query I
+# SELECT add_values(a,b) FROM t AT (VERSION => 2);
+# ----
+
+# If we move to the right snapshot it should work
+
+# Now let's try dropping it
+
+# Move to a prior snapshot before dropping
+

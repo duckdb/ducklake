@@ -63,4 +63,10 @@ void DuckLakeCatalogSet::AddEntry(DuckLakeSchemaEntry &schema, TableIndex id, un
 	schema.AddEntry(catalog_type, std::move(entry));
 }
 
+void DuckLakeCatalogSet::AddEntry(DuckLakeSchemaEntry &schema, MacroIndex id, unique_ptr<CatalogEntry> entry) {
+	auto catalog_type = entry->type;
+	macro_entry_map.insert(make_pair(id, reference<CatalogEntry>(*entry)));
+	schema.AddEntry(catalog_type, std::move(entry));
+}
+
 } // namespace duckdb

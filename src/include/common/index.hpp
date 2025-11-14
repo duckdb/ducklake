@@ -69,6 +69,32 @@ struct TableIndex {
 	}
 };
 
+struct MacroIndex {
+	MacroIndex() : index(DConstants::INVALID_INDEX) {
+	}
+	explicit MacroIndex(idx_t index) : index(index) {
+	}
+
+	idx_t index;
+
+	inline bool operator==(const MacroIndex &rhs) const {
+		return index == rhs.index;
+	};
+	inline bool operator!=(const MacroIndex &rhs) const {
+		return index != rhs.index;
+	};
+	inline bool operator<(const MacroIndex &rhs) const {
+		return index < rhs.index;
+	};
+	bool IsValid() const {
+		return index != DConstants::INVALID_INDEX;
+	}
+	bool IsTransactionLocal() const {
+		D_ASSERT(IsValid());
+		return index >= DuckLakeConstants::TRANSACTION_LOCAL_ID_START;
+	}
+};
+
 struct FieldIndex {
 	FieldIndex() : index(DConstants::INVALID_INDEX) {
 	}

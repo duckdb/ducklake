@@ -20,10 +20,12 @@ struct SnapshotChangeInformation {
 	case_insensitive_set_t created_schemas;
 	set<SchemaIndex> dropped_schemas;
 	case_insensitive_map_t<case_insensitive_map_t<string>> created_tables;
+	case_insensitive_map_t<case_insensitive_map_t<string>> created_macros;
 	set<TableIndex> altered_tables;
 	set<TableIndex> altered_views;
 	set<TableIndex> dropped_tables;
 	set<TableIndex> dropped_views;
+	set<MacroIndex> dropped_macros;
 	set<TableIndex> inserted_tables;
 	set<TableIndex> tables_deleted_from;
 	set<TableIndex> tables_compacted;

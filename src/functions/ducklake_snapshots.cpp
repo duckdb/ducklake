@@ -84,12 +84,23 @@ vector<Value> DuckLakeSnapshotsFunction::GetSnapshotValues(const DuckLakeSnapsho
 
 	case_insensitive_map_t<case_insensitive_set_t> created_tables;
 	case_insensitive_map_t<case_insensitive_set_t> created_views;
+	case_insensitive_map_t<case_insensitive_set_t> created_macros;
+
 	for (auto &entry : other_changes.created_tables) {
 		for (auto &sub_entry : entry.second) {
 			if (sub_entry.second == "table") {
 				created_tables[entry.first].insert(sub_entry.first);
 			} else {
 				created_views[entry.first].insert(sub_entry.first);
+			}
+		}
+	}
+	for (auto &entry : other_changes.created_macros) {
+		for (auto &sub_entry : entry.second) {
+			if (sub_entry.second == "macro") {
+				created_macros[entry.first].insert(sub_entry.first);
+			} else {
+				throw InternalException("Unexpected type for macro in GetSnapshotValues");
 			}
 		}
 	}
@@ -101,6 +112,10 @@ vector<Value> DuckLakeSnapshotsFunction::GetSnapshotValues(const DuckLakeSnapsho
 	if (!created_views.empty()) {
 		change_keys.emplace_back("views_created");
 		change_values.push_back(CatalogListToValue(created_views));
+	}
+	if (!created_macros.empty()) {
+		change_keys.emplace_back("macros_created");
+		change_values.push_back(CatalogListToValue(created_macros));
 	}
 	PushIDChangeList(change_keys, change_values, other_changes.dropped_tables, "tables_dropped");
 	PushIDChangeList(change_keys, change_values, other_changes.altered_tables, "tables_altered");

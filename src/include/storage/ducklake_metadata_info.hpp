@@ -91,6 +91,29 @@ struct DuckLakeTableInfo {
 	vector<DuckLakeInlinedTableInfo> inlined_data_tables;
 };
 
+//! Stores the information on macro parameters
+struct DuckLakeMacroParameters {
+	string parameter_name;
+	string parameter_type;
+	Value default_value;
+};
+
+//! Stores information on macro implementations, since one macro can have multiple implementations
+struct DuckLakeMacroImplementation {
+	string dialect;
+	string sql;
+	string type;
+	vector<DuckLakeMacroParameters> parameters;
+};
+
+//! Stores the actual macro info
+struct DuckLakeMacroInfo {
+	SchemaIndex schema_id;
+	MacroIndex macro_id;
+	string macro_name;
+	vector<DuckLakeMacroImplementation> implementations;
+};
+
 struct DuckLakeColumnStatsInfo {
 	FieldIndex column_id;
 	string value_count;
@@ -267,6 +290,7 @@ struct DuckLakeCatalogInfo {
 	vector<DuckLakeSchemaInfo> schemas;
 	vector<DuckLakeTableInfo> tables;
 	vector<DuckLakeViewInfo> views;
+	vector<DuckLakeMacroInfo> macros;
 	vector<DuckLakePartitionInfo> partitions;
 };
 

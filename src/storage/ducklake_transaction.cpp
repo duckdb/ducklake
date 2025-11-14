@@ -3,7 +3,9 @@
 #include "common/ducklake_types.hpp"
 #include "common/ducklake_util.hpp"
 #include "duckdb/common/thread.hpp"
+#include "duckdb/catalog/catalog_entry/scalar_macro_catalog_entry.hpp"
 #include "duckdb/common/types/uuid.hpp"
+#include "duckdb/function/scalar_macro_function.hpp"
 #include "duckdb/main/attached_database.hpp"
 #include "duckdb/main/client_data.hpp"
 #include "duckdb/main/database_manager.hpp"
@@ -86,7 +88,7 @@ Connection &DuckLakeTransaction::GetConnection() {
 
 bool DuckLakeTransaction::SchemaChangesMade() {
 	return !new_tables.empty() || !dropped_tables.empty() || new_schemas || !dropped_schemas.empty() ||
-	       !dropped_views.empty();
+	       !dropped_views.empty() || !new_macros.empty() || !dropped_macros.empty();
 }
 
 bool DuckLakeTransaction::ChangesMade() {
@@ -98,10 +100,13 @@ struct TransactionChangeInformation {
 	case_insensitive_set_t created_schemas;
 	map<SchemaIndex, reference<DuckLakeSchemaEntry>> dropped_schemas;
 	case_insensitive_map_t<reference_set_t<CatalogEntry>> created_tables;
+	case_insensitive_map_t<reference_set_t<CatalogEntry>> created_macros;
+
 	set<TableIndex> altered_tables;
 	set<TableIndex> altered_views;
 	set<TableIndex> dropped_tables;
 	set<TableIndex> dropped_views;
+	set<MacroIndex> dropped_macros;
 	set<TableIndex> tables_inserted_into;
 	set<TableIndex> tables_deleted_from;
 	set<TableIndex> tables_inserted_inlined;
@@ -190,6 +195,9 @@ TransactionChangeInformation DuckLakeTransaction::GetTransactionChanges() {
 	for (auto &dropped_view_idx : dropped_views) {
 		changes.dropped_views.insert(dropped_view_idx);
 	}
+	for (auto &dropped_macro_idx : dropped_macros) {
+		changes.dropped_macros.insert(dropped_macro_idx);
+	}
 	for (auto &entry : dropped_schemas) {
 		changes.dropped_schemas.insert(entry);
 	}
@@ -197,6 +205,20 @@ TransactionChangeInformation DuckLakeTransaction::GetTransactionChanges() {
 		for (auto &entry : new_schemas->GetEntries()) {
 			auto &schema_entry = entry.second->Cast<DuckLakeSchemaEntry>();
 			changes.created_schemas.insert(schema_entry.name);
+		}
+	}
+	for (auto &schema_entry : new_macros) {
+		for (auto &entry : schema_entry.second->GetEntries()) {
+			switch (entry.second->type) {
+			case CatalogType::MACRO_ENTRY: {
+				auto &macro = *entry.second;
+				auto &schema = macro.ParentSchema().Cast<DuckLakeSchemaEntry>();
+				changes.created_macros[schema.name].insert(macro);
+				break;
+			}
+			default:
+				throw InternalException("Unsupported type found in new_macros");
+			}
 		}
 	}
 	for (auto &schema_entry : new_tables) {
@@ -354,6 +376,28 @@ void DuckLakeTransaction::WriteSnapshotChanges(DuckLakeCommitState &commit_state
 			change_info.changes_made += schema_prefix + KeywordHelper::WriteQuoted(created_table.get().name, '"');
 		}
 	}
+
+	for (auto &entry : changes.created_macros) {
+		auto &schema = entry.first;
+		auto schema_prefix = KeywordHelper::WriteQuoted(schema, '"') + ".";
+		for (auto &created_macro : entry.second) {
+			if (!change_info.changes_made.empty()) {
+				change_info.changes_made += ",";
+			}
+			change_info.changes_made += "created_macro:";
+			change_info.changes_made += schema_prefix + KeywordHelper::WriteQuoted(created_macro.get().name, '"');
+		}
+	}
+
+	for (auto &entry : changes.dropped_macros) {
+		if (!change_info.changes_made.empty()) {
+			change_info.changes_made += ",";
+		}
+		// auto id = commit_state.GetMacroId(entry);
+		change_info.changes_made += "dropped_macro:";
+		// change_info.changes_made += to_string(id.index);
+	}
+
 	AddChangeInfo(commit_state, change_info, changes.tables_inserted_into, "inserted_into_table");
 	AddChangeInfo(commit_state, change_info, changes.tables_deleted_from, "deleted_from_table");
 	AddChangeInfo(commit_state, change_info, changes.altered_tables, "altered_table");
@@ -531,7 +575,6 @@ void DuckLakeTransaction::CheckForConflicts(const TransactionChangeInformation &
 
 void DuckLakeTransaction::CheckForConflicts(DuckLakeSnapshot transaction_snapshot,
                                             const TransactionChangeInformation &changes) {
-
 	// get all changes made to the system after the current snapshot was started
 	auto changes_made = metadata_manager->GetChangesMadeAfterSnapshot(transaction_snapshot);
 	// parse changes made by other transactions
@@ -671,6 +714,10 @@ struct NewTableInfo {
 	vector<DuckLakeDroppedColumn> dropped_columns;
 	vector<DuckLakeNewColumn> new_columns;
 	vector<DuckLakeTableInfo> new_inlined_data_tables;
+};
+
+struct NewMacroInfo {
+	vector<DuckLakeMacroInfo> new_macros;
 };
 
 void HandleChangedFields(TableIndex table_id, const ColumnChangeInfo &change_info, NewTableInfo &result) {
@@ -829,6 +876,43 @@ DuckLakeViewInfo DuckLakeTransaction::GetNewView(DuckLakeCommitState &commit_sta
 	return view_entry;
 }
 
+void DuckLakeTransaction::GetNewMacroInfo(DuckLakeCommitState &commit_state, reference<CatalogEntry> entry,
+                                          NewMacroInfo &result) {
+	DuckLakeMacroInfo new_macro_info;
+	auto &macro_entry = entry.get().Cast<ScalarMacroCatalogEntry>();
+	auto &ducklake_schema = macro_entry.schema.Cast<DuckLakeSchemaEntry>();
+
+	new_macro_info.macro_id = MacroIndex(commit_state.commit_snapshot.next_catalog_id++);
+	new_macro_info.macro_name = macro_entry.name;
+	new_macro_info.schema_id = ducklake_schema.GetSchemaId();
+	// Let's do the implementations
+	for (const auto &impl : macro_entry.macros) {
+		DuckLakeMacroImplementation macro_impl;
+		macro_impl.dialect = "duckdb";
+		switch (impl->type) {
+		case MacroType::SCALAR_MACRO:
+			macro_impl.type = "scalar";
+			break;
+		default:
+			throw NotImplementedException("Unsupported macro type");
+		}
+		auto &scalar_macro = impl->Cast<ScalarMacroFunction>();
+		macro_impl.sql = scalar_macro.expression->ToString();
+		// Let's do the parameters
+		for (idx_t i = 0; i < impl->parameters.size(); i++) {
+			DuckLakeMacroParameters parameter;
+			parameter.parameter_name = impl->parameters[i]->GetName();
+			if (impl->default_parameters.find(parameter.parameter_name) != impl->default_parameters.end()) {
+				parameter.default_value = impl->default_parameters[parameter.parameter_name]->ToString();
+			}
+			parameter.parameter_type = impl->types[i].ToString();
+			macro_impl.parameters.push_back(std::move(parameter));
+		}
+		new_macro_info.implementations.push_back(std::move(macro_impl));
+	}
+	result.new_macros.push_back(std::move(new_macro_info));
+}
+
 void DuckLakeTransaction::GetNewViewInfo(DuckLakeCommitState &commit_state, DuckLakeCatalogSet &catalog_set,
                                          reference<CatalogEntry> view_entry, NewTableInfo &result,
                                          TransactionChangeInformation &transaction_changes) {
@@ -889,6 +973,23 @@ NewTableInfo DuckLakeTransaction::GetNewTables(DuckLakeCommitState &commit_state
 				break;
 			default:
 				throw InternalException("Unknown type in new_tables");
+			}
+		}
+	}
+	return result;
+}
+
+NewMacroInfo DuckLakeTransaction::GetNewMacros(DuckLakeCommitState &commit_state,
+                                               TransactionChangeInformation &transaction_changes) {
+	NewMacroInfo result;
+	for (auto &schema_entry : new_macros) {
+		for (auto &entry : schema_entry.second->GetEntries()) {
+			switch (entry.second->type) {
+			case CatalogType::MACRO_ENTRY:
+				GetNewMacroInfo(commit_state, *entry.second, result);
+				break;
+			default:
+				throw InternalException("Unknown type in GetNewMacros");
 			}
 		}
 	}
@@ -1194,7 +1295,6 @@ struct CompactionInformation {
 
 void DuckLakeTransaction::CommitChanges(DuckLakeCommitState &commit_state,
                                         TransactionChangeInformation &transaction_changes) {
-
 	auto &commit_snapshot = commit_state.commit_snapshot;
 
 	if (ducklake_catalog.IsCommitInfoRequired() && !commit_info.is_commit_info_set) {
@@ -1240,6 +1340,11 @@ void DuckLakeTransaction::CommitChanges(DuckLakeCommitState &commit_state,
 		metadata_manager->WriteDroppedColumns(commit_snapshot, result.dropped_columns);
 		metadata_manager->WriteNewColumns(commit_snapshot, result.new_columns);
 		metadata_manager->WriteNewInlinedTables(commit_snapshot, result.new_inlined_data_tables);
+	}
+
+	if (!new_macros.empty()) {
+		auto result = GetNewMacros(commit_state, transaction_changes);
+		metadata_manager->WriteNewMacros(commit_snapshot, result.new_macros);
 	}
 
 	// write new name maps
@@ -1917,6 +2022,9 @@ void DuckLakeTransaction::DropEntry(CatalogEntry &entry) {
 	case CatalogType::VIEW_ENTRY:
 		DropView(entry.Cast<DuckLakeViewEntry>());
 		break;
+	case CatalogType::MACRO_ENTRY:
+		throw NotImplementedException("bla");
+		break;
 	case CatalogType::SCHEMA_ENTRY:
 		DropSchema(entry.Cast<DuckLakeSchemaEntry>());
 		break;
@@ -1935,6 +2043,13 @@ bool DuckLakeTransaction::IsDeleted(CatalogEntry &entry) {
 		auto &view_entry = entry.Cast<DuckLakeViewEntry>();
 		return dropped_views.find(view_entry.GetViewId()) != dropped_views.end();
 	}
+	case CatalogType::MACRO_ENTRY: {
+		// auto &macro_entry = entry.Cast<MacroCatalogEntry>();
+		// return dropped_views.find(macro_entry.) != dropped_views.end();
+		// dropped_macros
+		// throw NotImplementedException("bla");
+		return false;
+	}
 	case CatalogType::SCHEMA_ENTRY: {
 		auto &schema_entry = entry.Cast<DuckLakeSchemaEntry>();
 		return dropped_schemas.find(schema_entry.GetSchemaId()) != dropped_schemas.end();
@@ -1951,6 +2066,7 @@ bool DuckLakeTransaction::IsRenamed(CatalogEntry &entry) {
 		return renamed_tables.find(table_entry.GetTableId()) != renamed_tables.end();
 	}
 	case CatalogType::VIEW_ENTRY:
+	case CatalogType::MACRO_ENTRY:
 	case CatalogType::SCHEMA_ENTRY: {
 		return false;
 	}
@@ -2054,6 +2170,12 @@ DuckLakeCatalogSet &DuckLakeTransaction::GetOrCreateTransactionLocalEntries(Cata
 		new_tables.insert(make_pair(schema_name, std::move(new_table_list)));
 		return result;
 	}
+	case CatalogType::MACRO_ENTRY: {
+		auto new_macro_list = make_uniq<DuckLakeCatalogSet>();
+		auto &result = *new_macro_list;
+		new_macros.insert(make_pair(schema_name, std::move(new_macro_list)));
+		return result;
+	}
 	default:
 		throw InternalException("Catalog type not supported for transaction local storage");
 	}
@@ -2080,6 +2202,13 @@ optional_ptr<DuckLakeCatalogSet> DuckLakeTransaction::GetTransactionLocalEntries
 	case CatalogType::VIEW_ENTRY: {
 		auto entry = new_tables.find(schema_name);
 		if (entry == new_tables.end()) {
+			return nullptr;
+		}
+		return entry->second;
+	}
+	case CatalogType::MACRO_ENTRY: {
+		auto entry = new_macros.find(schema_name);
+		if (entry == new_macros.end()) {
 			return nullptr;
 		}
 		return entry->second;

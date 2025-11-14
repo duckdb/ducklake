@@ -1,5 +1,4 @@
 #include "storage/ducklake_schema_entry.hpp"
-
 #include "duckdb/common/types/uuid.hpp"
 #include "duckdb/parser/parsed_data/comment_on_column_info.hpp"
 #include "duckdb/parser/parsed_data/create_view_info.hpp"
@@ -9,6 +8,8 @@
 #include "storage/ducklake_table_entry.hpp"
 #include "storage/ducklake_transaction.hpp"
 #include "storage/ducklake_view_entry.hpp"
+#include "duckdb/parser/parsed_data/create_function_info.hpp"
+#include "duckdb/catalog/catalog_entry/scalar_macro_catalog_entry.hpp"
 
 namespace duckdb {
 
@@ -87,6 +88,7 @@ bool DuckLakeSchemaEntry::CatalogTypeIsSupported(CatalogType type) {
 	switch (type) {
 	case CatalogType::TABLE_ENTRY:
 	case CatalogType::VIEW_ENTRY:
+	case CatalogType::SCALAR_FUNCTION_ENTRY:
 		return true;
 	default:
 		return false;
@@ -95,7 +97,21 @@ bool DuckLakeSchemaEntry::CatalogTypeIsSupported(CatalogType type) {
 
 optional_ptr<CatalogEntry> DuckLakeSchemaEntry::CreateFunction(CatalogTransaction transaction,
                                                                CreateFunctionInfo &info) {
-	throw NotImplementedException("DuckLake does not support functions");
+	if (info.type != CatalogType::MACRO_ENTRY) {
+		throw NotImplementedException("DuckLake does not support %s functions", CatalogTypeToString(info.type));
+	}
+	// We check if there is a conflict, as multi-macro implementations are only supported if they do not exist yet
+	if (!HandleCreateConflict(transaction, info.type, info.name, info.on_conflict)) {
+		return nullptr;
+	}
+	auto &create_macro_info = info.Cast<CreateMacroInfo>();
+	auto &duck_transaction = transaction.transaction->Cast<DuckLakeTransaction>();
+
+	auto macro_entry = make_uniq<ScalarMacroCatalogEntry>(ParentCatalog(), *this, create_macro_info);
+
+	auto result = macro_entry.get();
+	duck_transaction.CreateEntry(std::move(macro_entry));
+	return result;
 }
 
 optional_ptr<CatalogEntry> DuckLakeSchemaEntry::CreateIndex(CatalogTransaction transaction, CreateIndexInfo &info,
@@ -268,6 +284,9 @@ void DuckLakeSchemaEntry::Scan(ClientContext &context, CatalogType type,
 				}
 			}
 		}
+		if (entry.second->type == CatalogType::MACRO_ENTRY) {
+			idx_t i = 0;
+		}
 		callback(*entry.second);
 	}
 }
@@ -353,6 +372,9 @@ void DuckLakeSchemaEntry::TryDropSchema(DuckLakeTransaction &transaction, bool c
 					add_dependent = true;
 				}
 			} break;
+			case CatalogType::MACRO_ENTRY: {
+				throw InternalException("bla");
+			} break;
 			default:
 				throw InternalException(
 				    "Unexpected catalog type %s for GetDroppedTables() in DuckLakeSchemaEntry::TryDropSchema()",
@@ -386,6 +408,9 @@ DuckLakeCatalogSet &DuckLakeSchemaEntry::GetCatalogSet(CatalogType type) {
 	case CatalogType::TABLE_ENTRY:
 	case CatalogType::VIEW_ENTRY:
 		return tables;
+	case CatalogType::MACRO_ENTRY:
+	case CatalogType::SCALAR_FUNCTION_ENTRY:
+		return macros;
 	default:
 		throw NotImplementedException("Unsupported catalog type %s for DuckLake", CatalogTypeToString(type));
 	}

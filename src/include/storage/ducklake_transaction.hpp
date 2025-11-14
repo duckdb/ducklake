@@ -19,6 +19,7 @@
 #include "storage/ducklake_metadata_manager.hpp"
 
 namespace duckdb {
+struct NewMacroInfo;
 class DuckLakeCatalog;
 class DuckLakeCatalogSet;
 class DuckLakeMetadataManager;
@@ -163,6 +164,7 @@ private:
 	               unordered_set<idx_t> &dropped_entries);
 	vector<DuckLakeSchemaInfo> GetNewSchemas(DuckLakeCommitState &commit_state);
 	NewTableInfo GetNewTables(DuckLakeCommitState &commit_state, TransactionChangeInformation &transaction_changes);
+	NewMacroInfo GetNewMacros(DuckLakeCommitState &commit_state, TransactionChangeInformation &transaction_changes);
 	DuckLakePartitionInfo GetNewPartitionKey(DuckLakeCommitState &commit_state, DuckLakeTableEntry &tabletable_id);
 	DuckLakeTableInfo GetNewTable(DuckLakeCommitState &commit_state, DuckLakeTableEntry &table);
 	DuckLakeViewInfo GetNewView(DuckLakeCommitState &commit_state, DuckLakeViewEntry &view);
@@ -182,6 +184,7 @@ private:
 	void GetNewTableInfo(DuckLakeCommitState &commit_state, DuckLakeCatalogSet &catalog_set,
 	                     reference<CatalogEntry> table_entry, NewTableInfo &result,
 	                     TransactionChangeInformation &transaction_changes);
+	void GetNewMacroInfo(DuckLakeCommitState &commit_state, reference<CatalogEntry> macro_entry, NewMacroInfo &result);
 	void GetNewViewInfo(DuckLakeCommitState &commit_state, DuckLakeCatalogSet &catalog_set,
 	                    reference<CatalogEntry> table_entry, NewTableInfo &result,
 	                    TransactionChangeInformation &transaction_changes);
@@ -206,6 +209,10 @@ private:
 	//! New tables added by this transaction
 	case_insensitive_map_t<unique_ptr<DuckLakeCatalogSet>> new_tables;
 	set<TableIndex> dropped_tables;
+
+	//! New macros added by this transaction
+	case_insensitive_map_t<unique_ptr<DuckLakeCatalogSet>> new_macros;
+	set<MacroIndex> dropped_macros;
 
 	set<TableIndex> renamed_tables;
 	set<TableIndex> dropped_views;

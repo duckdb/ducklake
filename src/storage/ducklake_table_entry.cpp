@@ -706,7 +706,6 @@ const LogicalType &GetNestedChildType(const LogicalType &type, idx_t index) {
 unique_ptr<DuckLakeFieldId> DuckLakeTableEntry::GetNestedEvolution(const DuckLakeFieldId &source_id,
                                                                    const LogicalType &target, ColumnChangeInfo &result,
                                                                    optional_idx parent_idx) {
-
 	auto &source_type = source_id.Type();
 	if (source_type.id() != target.id()) {
 		throw NotImplementedException("Type evolution is not supported from type %s to type %s", source_type, target);

@@ -17,7 +17,9 @@ enum class ChangeType {
 	FLUSHED_INLINE_DATA_FOR_TABLE,
 	ALTERED_TABLE,
 	ALTERED_VIEW,
-	COMPACTED_TABLE
+	COMPACTED_TABLE,
+	CREATED_MACRO,
+	DROPPED_MACRO
 };
 
 struct ChangeInfo {
@@ -37,6 +39,8 @@ ChangeType ParseChangeType(const string &changes_made, idx_t &pos) {
 		return ChangeType::CREATED_TABLE;
 	} else if (StringUtil::CIEquals(change_type_str, "created_view")) {
 		return ChangeType::CREATED_VIEW;
+	} else if (StringUtil::CIEquals(change_type_str, "created_macro")) {
+		return ChangeType::CREATED_MACRO;
 	} else if (StringUtil::CIEquals(change_type_str, "created_schema")) {
 		return ChangeType::CREATED_SCHEMA;
 	} else if (StringUtil::CIEquals(change_type_str, "dropped_schema")) {
@@ -47,6 +51,8 @@ ChangeType ParseChangeType(const string &changes_made, idx_t &pos) {
 		return ChangeType::DROPPED_VIEW;
 	} else if (StringUtil::CIEquals(change_type_str, "inserted_into_table")) {
 		return ChangeType::INSERTED_INTO_TABLE;
+	} else if (StringUtil::CIEquals(change_type_str, "dropped_macro")) {
+		return ChangeType::DROPPED_MACRO;
 	} else if (StringUtil::CIEquals(change_type_str, "altered_table")) {
 		return ChangeType::ALTERED_TABLE;
 	} else if (StringUtil::CIEquals(change_type_str, "altered_view")) {
@@ -118,6 +124,11 @@ SnapshotChangeInformation SnapshotChangeInformation::ParseChangesMade(const stri
 		case ChangeType::CREATED_TABLE: {
 			auto catalog_value = DuckLakeUtil::ParseCatalogEntry(entry.change_value);
 			result.created_tables[catalog_value.schema].insert(make_pair(std::move(catalog_value.name), "table"));
+			break;
+		}
+		case ChangeType::CREATED_MACRO: {
+			auto catalog_value = DuckLakeUtil::ParseCatalogEntry(entry.change_value);
+			result.created_macros[catalog_value.schema].insert(make_pair(std::move(catalog_value.name), "macro"));
 			break;
 		}
 		case ChangeType::CREATED_VIEW: {

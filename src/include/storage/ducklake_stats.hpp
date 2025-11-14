@@ -41,7 +41,6 @@ struct DuckLakeColumnExtraStats {
 };
 
 struct DuckLakeColumnGeoStats final : public DuckLakeColumnExtraStats {
-
 	DuckLakeColumnGeoStats();
 	void Merge(const DuckLakeColumnExtraStats &new_stats) override;
 	unique_ptr<DuckLakeColumnExtraStats> Copy() const override;
