@@ -62,10 +62,19 @@ shared_ptr<MultiFileList> DuckLakeMultiFileReader::CreateFileList(ClientContext 
 MultiFileColumnDefinition CreateColumnFromFieldId(const DuckLakeFieldId &field_id, bool emit_key_value) {
 	MultiFileColumnDefinition column(field_id.Name(), field_id.Type());
 	auto &column_data = field_id.GetColumnData();
-	if (column_data.initial_default.IsNull()) {
-		column.default_expression = make_uniq<ConstantExpression>(Value(field_id.Type()));
+	if (column_data.initial_default) {
+		bool is_null = false;
+		if (column_data.initial_default->type == ExpressionType::VALUE_CONSTANT) {
+			auto &constant_expression = column_data.initial_default->Cast<ConstantExpression>();
+			is_null = constant_expression.value.IsNull();
+		}
+		if (is_null) {
+			column.default_expression = make_uniq<ConstantExpression>(Value(field_id.Type()));
+		} else {
+			column.default_expression = column_data.initial_default->Copy();
+		}
 	} else {
-		column.default_expression = make_uniq<ConstantExpression>(column_data.initial_default);
+		column.default_expression = make_uniq<ConstantExpression>(Value(field_id.Type()));
 	}
 	column.identifier = Value::INTEGER(NumericCast<int32_t>(field_id.GetFieldIndex().index));
 	for (auto &child : field_id.Children()) {

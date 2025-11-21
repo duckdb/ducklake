@@ -18,6 +18,7 @@
 #include "common/ducklake_data_file.hpp"
 #include "common/ducklake_name_map.hpp"
 #include "storage/ducklake_inlined_data.hpp"
+#include "duckdb/parser/parsed_expression.hpp"
 
 namespace duckdb {
 
@@ -68,11 +69,44 @@ struct DuckLakeColumnInfo {
 	FieldIndex id;
 	string name;
 	string type;
-	Value initial_default;
-	Value default_value;
+	unique_ptr<ParsedExpression> initial_default;
+	unique_ptr<ParsedExpression> default_value;
 	bool nulls_allowed {};
 	vector<DuckLakeColumnInfo> children;
 	vector<DuckLakeTag> tags;
+	DuckLakeColumnInfo() {
+	}
+
+	DuckLakeColumnInfo(const DuckLakeColumnInfo &other)
+	    : id(other.id), name(other.name), type(other.type), nulls_allowed(other.nulls_allowed),
+	      children(other.children), tags(other.tags) {
+		if (other.initial_default) {
+			initial_default = other.initial_default->Copy();
+		}
+		if (other.default_value) {
+			default_value = other.default_value->Copy();
+		}
+	}
+
+	DuckLakeColumnInfo &operator=(const DuckLakeColumnInfo &other) {
+		if (this != &other) {
+			id = other.id;
+			name = other.name;
+			type = other.type;
+			nulls_allowed = other.nulls_allowed;
+			children = other.children;
+			tags = other.tags;
+
+			if (other.initial_default) {
+				initial_default = other.initial_default->Copy();
+			}
+
+			if (other.default_value) {
+				default_value = other.default_value->Copy();
+			}
+		}
+		return *this;
+	}
 };
 
 struct DuckLakeInlinedTableInfo {

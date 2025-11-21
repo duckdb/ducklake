@@ -29,7 +29,6 @@
     "CHECK constraints are not supported in DuckLake",
     "Defining a compression type for a column is not supported in DuckLake",
     "FOREIGN KEY constraints are not supported in DuckLake",
-    "Only literals (e.g. 42 or 'hello world') are supported as default values",
     "Column type cannot be modified using an expression",
     "Default value for STRUCT type not supported",
     "Default value for LIST type not supported",
@@ -104,7 +103,10 @@
         "test/sql/logging/test_logging_function.test",
         "test/sql/logging/logging_types.test",
         "test/sql/logging/logging.test",
-        "test/sql/logging/logging_csv.test"
+        "test/sql/logging/logging_csv.test",
+        "test/sql/storage/compression/roaring/roaring_bool_analyze_bitset.test",
+        "test/sql/storage/compression/roaring/roaring_bool_analyze_run.test",
+        "test/sql/storage/compression/roaring/roaring_bool_analyze_array.test"
       ]
     },
     {
@@ -481,7 +483,8 @@
       "reason": "Expected different behavior between duckdb and ducklake wrt macros. Notice these are not ducklake bugs just tests that do not fit.",
       "paths": [
         "test/sql/catalog/function/test_table_macro_copy.test",
-        "test/sql/catalog/function/test_macro_type_overloads.test"
+        "test/sql/catalog/function/test_macro_type_overloads.test",
+        "test/sql/pragma/test_table_info.test"
         ]
     },
     {

@@ -12,6 +12,7 @@
 #include "duckdb/common/case_insensitive_map.hpp"
 #include "duckdb/common/types/value.hpp"
 #include "common/index.hpp"
+#include "duckdb/parser/parsed_expression.hpp"
 
 namespace duckdb {
 struct AlterTableInfo;
@@ -22,8 +23,19 @@ class ColumnList;
 
 struct DuckLakeColumnData {
 	FieldIndex id;
-	Value initial_default;
-	Value default_value;
+	unique_ptr<ParsedExpression> initial_default;
+	unique_ptr<ParsedExpression> default_value;
+	DuckLakeColumnData Copy() const {
+		DuckLakeColumnData copy;
+		copy.id = id;
+		if (initial_default) {
+			copy.initial_default = initial_default->Copy();
+		}
+		if (default_value) {
+			copy.default_value = default_value->Copy();
+		}
+		return copy;
+	}
 };
 
 class DuckLakeFieldId {

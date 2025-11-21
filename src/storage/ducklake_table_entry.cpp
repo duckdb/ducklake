@@ -852,8 +852,12 @@ void AddNewColumns(const DuckLakeFieldId &field_id, vector<DuckLakeNewColumn> &n
 	new_col.column_info.id = col_data.id;
 	new_col.column_info.name = field_id.Name();
 	new_col.column_info.type = DuckLakeTypes::ToString(field_id.Type());
-	new_col.column_info.initial_default = col_data.initial_default;
-	new_col.column_info.default_value = col_data.default_value;
+	if (col_data.initial_default) {
+		new_col.column_info.initial_default = col_data.initial_default->Copy();
+	}
+	if (col_data.default_value) {
+		new_col.column_info.default_value = col_data.default_value->Copy();
+	}
 	new_col.parent_idx = parent_idx.index;
 	new_fields.push_back(std::move(new_col));
 	for (auto &child : field_id.Children()) {
@@ -1099,8 +1103,12 @@ DuckLakeColumnInfo DuckLakeTableEntry::GetColumnInfo(FieldIndex field_index) con
 	result.id = field_index;
 	result.name = col.Name();
 	result.type = DuckLakeTypes::ToString(col.Type());
-	result.initial_default = col_data.initial_default;
-	result.default_value = col_data.default_value;
+	if (col_data.initial_default) {
+		result.initial_default = col_data.initial_default->Copy();
+	}
+	if (col_data.default_value) {
+		result.default_value = col_data.default_value->Copy();
+	}
 	result.nulls_allowed = GetNotNullFields().count(col.Name()) == 0;
 	return result;
 }
@@ -1141,8 +1149,12 @@ DuckLakeColumnInfo DuckLakeTableEntry::ConvertColumn(const string &name, const L
 	}
 	default: {
 		auto &column_data = field_id.GetColumnData();
-		column_entry.initial_default = column_data.initial_default;
-		column_entry.default_value = column_data.default_value;
+		if (column_data.initial_default) {
+			column_entry.initial_default = column_data.initial_default->Copy();
+		}
+		if (column_data.default_value) {
+			column_entry.default_value = column_data.default_value->Copy();
+		}
 		break;
 	}
 	}

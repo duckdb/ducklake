@@ -195,8 +195,12 @@ static unique_ptr<DuckLakeFieldId> TransformColumnType(DuckLakeColumnInfo &col) 
 	col_data.id = col.id;
 	if (col.children.empty()) {
 		auto col_type = DuckLakeTypes::FromString(col.type);
-		col_data.initial_default = col.initial_default.DefaultCastAs(col_type);
-		col_data.default_value = col.default_value.DefaultCastAs(col_type);
+		if (col.initial_default) {
+			col_data.initial_default = col.initial_default->Copy();
+		}
+		if (col.default_value) {
+			col_data.default_value = col.default_value->Copy();
+		}
 		return make_uniq<DuckLakeFieldId>(std::move(col_data), col.name, std::move(col_type));
 	}
 	if (StringUtil::CIEquals(col.type, "struct")) {

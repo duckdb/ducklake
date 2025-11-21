@@ -40,15 +40,21 @@ DuckLakeFieldId::DuckLakeFieldId(DuckLakeColumnData column_data_p, string name_p
 	}
 }
 
-static Value ExtractDefaultValue(optional_ptr<const ParsedExpression> default_expr, const LogicalType &type) {
+static unique_ptr<ParsedExpression> ExtractDefaultValue(optional_ptr<const ParsedExpression> default_expr,
+                                                        const LogicalType &type) {
 	if (!default_expr) {
-		return Value(type);
+		return make_uniq<ConstantExpression>(Value(type));
 	}
-	if (default_expr->type != ExpressionType::VALUE_CONSTANT) {
-		throw NotImplementedException("Only literals (e.g. 42 or 'hello world') are supported as default values");
+	switch (default_expr->type) {
+	case ExpressionType::VALUE_CONSTANT:
+	case ExpressionType::FUNCTION:
+	case ExpressionType::COLUMN_REF:
+	case ExpressionType::OPERATOR_CAST:
+		return default_expr->Copy();
+	default:
+		throw NotImplementedException(
+		    "Only literals (e.g. 42 or 'hello world') and expressions (e.g., 'NOW()') are supported as default values");
 	}
-	auto &const_default = default_expr->Cast<ConstantExpression>();
-	return const_default.value.DefaultCastAs(type);
 }
 
 unique_ptr<DuckLakeFieldId> DuckLakeFieldId::FieldIdFromType(const string &name, const LogicalType &type,
@@ -91,19 +97,14 @@ unique_ptr<DuckLakeFieldId> DuckLakeFieldId::FieldIdFromType(const string &name,
 		break;
 	}
 	column_data.initial_default = ExtractDefaultValue(default_expr, type);
-	column_data.default_value = column_data.initial_default;
+	column_data.default_value = ExtractDefaultValue(default_expr, type);
 	return make_uniq<DuckLakeFieldId>(std::move(column_data), name, type, std::move(field_children));
 }
 
 unique_ptr<ParsedExpression> DuckLakeFieldId::GetDefault() const {
-	if (children.empty()) {
-		if (column_data.default_value.IsNull()) {
-			// no default value defined
-			return nullptr;
-		}
-		return make_uniq<ConstantExpression>(column_data.default_value);
+	if (column_data.default_value) {
+		return column_data.default_value->Copy();
 	}
-	// FIXME: default not supported for entries with children
 	return nullptr;
 }
 
@@ -132,7 +133,7 @@ unique_ptr<DuckLakeFieldId> DuckLakeFieldId::Copy() const {
 	for (auto &child : children) {
 		new_children.push_back(child->Copy());
 	}
-	return make_uniq<DuckLakeFieldId>(column_data, name, type, std::move(new_children));
+	return make_uniq<DuckLakeFieldId>(column_data.Copy(), name, type, std::move(new_children));
 }
 
 unique_ptr<DuckLakeFieldId> DuckLakeFieldId::Rename(const DuckLakeFieldId &field_id, const string &new_name) {
@@ -200,7 +201,7 @@ unique_ptr<DuckLakeFieldId> DuckLakeFieldId::AddField(const vector<string> &colu
 		}
 	}
 	LogicalType new_type = GetNewNestedType(type, new_children);
-	return make_uniq<DuckLakeFieldId>(column_data, Name(), std::move(new_type), std::move(new_children));
+	return make_uniq<DuckLakeFieldId>(column_data.Copy(), Name(), std::move(new_type), std::move(new_children));
 }
 
 unique_ptr<DuckLakeFieldId> DuckLakeFieldId::RemoveField(const vector<string> &column_path, idx_t depth) const {
@@ -231,7 +232,7 @@ unique_ptr<DuckLakeFieldId> DuckLakeFieldId::RemoveField(const vector<string> &c
 		throw InternalException("DuckLakeFieldId::AddField - child not found in struct path");
 	}
 	LogicalType new_type = GetNewNestedType(type, new_children);
-	return make_uniq<DuckLakeFieldId>(column_data, Name(), std::move(new_type), std::move(new_children));
+	return make_uniq<DuckLakeFieldId>(column_data.Copy(), Name(), std::move(new_type), std::move(new_children));
 }
 
 unique_ptr<DuckLakeFieldId> DuckLakeFieldId::RenameField(const vector<string> &column_path, const string &new_name,
@@ -248,8 +249,8 @@ unique_ptr<DuckLakeFieldId> DuckLakeFieldId::RenameField(const vector<string> &c
 				// leaf - rename the column at this level
 				auto copied_entry = child.Copy();
 				auto renamed_entry =
-				    make_uniq<DuckLakeFieldId>(copied_entry->column_data, new_name, std::move(copied_entry->type),
-				                               std::move(copied_entry->children));
+				    make_uniq<DuckLakeFieldId>(copied_entry->column_data.Copy(), new_name,
+				                               std::move(copied_entry->type), std::move(copied_entry->children));
 				new_children.push_back(std::move(renamed_entry));
 			} else {
 				// not the leaf - find the child to rename it and recurse
@@ -264,7 +265,7 @@ unique_ptr<DuckLakeFieldId> DuckLakeFieldId::RenameField(const vector<string> &c
 		throw InternalException("DuckLakeFieldId::AddField - child not found in struct path");
 	}
 	auto new_type = GetStructType(new_children);
-	return make_uniq<DuckLakeFieldId>(column_data, Name(), std::move(new_type), std::move(new_children));
+	return make_uniq<DuckLakeFieldId>(column_data.Copy(), Name(), std::move(new_type), std::move(new_children));
 }
 
 shared_ptr<DuckLakeFieldData> DuckLakeFieldData::RenameColumn(const DuckLakeFieldData &field_data,
