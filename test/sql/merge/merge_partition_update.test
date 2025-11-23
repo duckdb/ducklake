@@ -37,7 +37,7 @@ MERGE INTO my_timeseries
     WHEN MATCHED THEN UPDATE;
 
 query I
-SELECT COUNT(*) FROM GLOB('${DATA_PATH}/merge_partition_update/**/*')
+SELECT COUNT(*) FROM GLOB('${DATA_PATH}/merge_partition_update/**/year=2025/*')
 ----
 2
 
@@ -47,3 +47,8 @@ statement ok
 UPDATE my_timeseries
 SET x = 43::DOUBLE PRECISION
 WHERE ts = '2025-09-17'::TIMESTAMP;
+
+query I
+SELECT COUNT(*) FROM GLOB('${DATA_PATH}/merge_partition_update/**/year=2025/*')
+----
+3
