@@ -629,7 +629,7 @@ static bool TypePromotionIsAllowedUSmallint(const LogicalType &to) {
 	}
 }
 bool TypePromotionIsAllowed(const LogicalType &source, const LogicalType &target) {
-	// FIXME: support DECIMAL, and DATE -> TIMESTAMP
+	// FIXME: Rework to use DUCKDB_API static LogicalType MaxLogicalType
 	switch (source.id()) {
 	case LogicalTypeId::TINYINT:
 		return TypePromotionIsAllowedTinyint(target);
@@ -649,6 +649,8 @@ bool TypePromotionIsAllowed(const LogicalType &source, const LogicalType &target
 		return false;
 	case LogicalTypeId::FLOAT:
 		return target.id() == LogicalTypeId::DOUBLE;
+	case LogicalTypeId::TIMESTAMP:
+		return target.id() == LogicalTypeId::TIMESTAMP_TZ;
 	default:
 		return false;
 	}
