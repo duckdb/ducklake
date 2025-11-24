@@ -19,3 +19,6 @@ CREATE TABLE ducklake.test(col1 TIMESTAMP);
 
 statement ok
 ALTER TABLE ducklake.test ALTER COLUMN col1 TYPE TIMESTAMPTZ;
+
+statement ok
+INSERT INTO ducklake.test VALUES ('2025-01-15 12:30:45'::TIMESTAMPTZ)
