@@ -2688,7 +2688,8 @@ WHERE table_id=tid AND column_id=cid
 
 template <class T>
 static timestamp_tz_t GetTimestampTZFromRow(ClientContext &context, const T &row, idx_t col_idx) {
-	auto val = row.iterator.chunk->GetValue(col_idx, row.row);
+	auto &chunk = row.GetChunk();
+	auto val = chunk.GetValue(col_idx, row.GetRowInChunk());
 	return val.CastAs(context, LogicalType::TIMESTAMP_TZ).template GetValue<timestamp_tz_t>();
 }
 
@@ -2713,9 +2714,11 @@ ORDER BY snapshot_id
 		snapshot_info.time = GetTimestampTZFromRow(*context, row, 1);
 		snapshot_info.schema_version = row.GetValue<idx_t>(2);
 		snapshot_info.change_info.changes_made = row.IsNull(3) ? string() : row.GetValue<string>(3);
-		snapshot_info.author = row.iterator.chunk->GetValue(4, row.row);
-		snapshot_info.commit_message = row.iterator.chunk->GetValue(5, row.row);
-		snapshot_info.commit_extra_info = row.iterator.chunk->GetValue(6, row.row);
+		auto &chunk = row.GetChunk();
+		auto chunk_row = row.GetRowInChunk();
+		snapshot_info.author = chunk.GetValue(4, chunk_row);
+		snapshot_info.commit_message = chunk.GetValue(5, chunk_row);
+		snapshot_info.commit_extra_info = chunk.GetValue(6, chunk_row);
 		snapshots.push_back(std::move(snapshot_info));
 	}
 	return snapshots;
