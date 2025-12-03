@@ -23,7 +23,6 @@
 #include "duckdb/parser/query_node/select_node.hpp"
 #include "duckdb/planner/expression_binder/order_binder.hpp"
 #include "duckdb/planner/expression_binder/select_bind_state.hpp"
-#include "duckdb/common/printer.hpp"
 
 namespace duckdb {
 
@@ -240,65 +239,33 @@ void DuckLakeCompactor::GenerateCompactions(DuckLakeTableEntry &table,
 	}
 }
 
-std::string DuckLakeCompactor::GetApproxOrderBy(DuckLakeCatalog &catalog, DuckLakeTableEntry &table, const std::string &local_order_by) {
+std::string DuckLakeCompactor::GetLocalOrderBy(DuckLakeCatalog &catalog, DuckLakeTableEntry &table, const std::string &local_order_by) {
 	std::string order_by;
 	if (!local_order_by.empty() && local_order_by.length() > 0) {
 		order_by = local_order_by; 
-		Printer::Print("!local_order_by.empty() && local_order_by.length() > 0 " + order_by);
 	} else {
 		std::string local_order_by_config;
 		catalog.TryGetConfigOption("local_order_by", local_order_by_config, table);
 		order_by = local_order_by_config;
-		Printer::Print("catalog.TryGetConfigOption(\"local_order_by\", local_order_by_config, table) " + order_by);
 	}
 
 	return order_by;
 }
 
-unique_ptr<LogicalOperator> DuckLakeCompactor::InsertApproxOrderBy(Binder &binder, unique_ptr<LogicalOperator> &plan, DuckLakeTableEntry &table, const std::string &order_by) {
-
-	// TODO:
-	// DONE: Learn how to parse a string input into the order by operation
-	// DONE: Add a setting for the ordering
-	// DONE: Add a parameter to ducklake_merge_adjacent_files for the ordering
-	// 		DONE: Make this optional
-	// DONE: Add to flush inlined data
-	//		DONE: Add test cases to ensure this is working as expected
-	// Test compaction when partitions are present
-	// Test flushing inlined data when partitions are present
-	// Sort the list of files according to their min/max indexes
-	// Consider moving the comparison of setting and user specified value up to a higher level (where the named_parameter value is first passed in)
-	// Figure out how to do this for arbitrary expressions
-	// Clean up all the print statements
-	// Would local_order_by be better?
-
-	// "col1 asc, col2 desc"
-	// zorder(col1, col2) asc
-
-	Printer::Print(order_by);
+unique_ptr<LogicalOperator> DuckLakeCompactor::InsertLocalOrderBy(Binder &binder, unique_ptr<LogicalOperator> &plan, DuckLakeTableEntry &table, const std::string &order_by) {
 
 	auto bindings = plan->GetColumnBindings();
-	
-	for (auto &column_binding : bindings) {
-		Printer::Print(column_binding.ToString());
-	}
 
 	vector<BoundOrderByNode> orders;
 
 	vector<OrderByNode> pre_bound_orders = Parser::ParseOrderList(order_by);
 	
-	//TODO: call the cast on the LogicalOperator
-	// auto& get = plan->Cast<LogicalGet>();
 	auto root_get = unique_ptr_cast<LogicalOperator, LogicalGet>(std::move(plan));
-
-	Printer::Print("root_get->ToString()" + root_get->ToString());
 
 	// Build a map of the names of columns in the query plan so we can bind to them
 	case_insensitive_map_t<idx_t> alias_map;
 	for (idx_t col_idx = 0; col_idx < root_get->names.size(); col_idx++) {
 		alias_map[root_get->names[col_idx]] = col_idx;
-		Printer::Print("root_get->names[col_idx]");
-		Printer::Print(root_get->names[col_idx]);
 	}
 
 	root_get->ResolveOperatorTypes();
@@ -307,11 +274,9 @@ unique_ptr<LogicalOperator> DuckLakeCompactor::InsertApproxOrderBy(Binder &binde
 	vector<std::string> unmatching_names;
 	for (auto &pre_bound_order : pre_bound_orders) {
 		std::string name = pre_bound_order.expression->GetName();
-		Printer::Print("name: " + name);
 		auto order_idx_check = alias_map.find(name);
 		if (order_idx_check != alias_map.end()) {
 			auto order_idx = order_idx_check->second;
-			Printer::Print("order_idx:" + std::to_string(order_idx));
 			auto expr = make_uniq<BoundColumnRefExpression>(root_types[order_idx], bindings[order_idx], 0);
 			orders.emplace_back(pre_bound_order.type, pre_bound_order.null_order, std::move(expr));
 		} else {
@@ -330,64 +295,9 @@ unique_ptr<LogicalOperator> DuckLakeCompactor::InsertApproxOrderBy(Binder &binde
 		throw BinderException(error_string);
 	}
 
-
-	// START attempt to use OrderBinder to bind dynamically
-	// SelectBindState bind_state;
-
-	// case_insensitive_map_t<idx_t> alias_map;
-	// auto select_node = make_uniq<SelectNode>();
-	// Printer::Print("root_get->names[col_idx]");
-	// for (idx_t col_idx = 0; col_idx < root_get->names.size(); col_idx++) {
-	// 	alias_map[root_get->names[col_idx]] = col_idx;
-	// 	Printer::Print(root_get->names[col_idx]);
-	// 	// BindingAlias identical_alias = BindingAlias(root_get->names[col_idx]);
-	// 	// BindingAlias table_alias; // TODO: Need to put in the table name!
-
-	// 	// Printer::Print("identical_alias.ToString() " + identical_alias.ToString());
-	// 	// BindingAlias(string catalog, string schema, string alias);
-
-	// 	select_node->select_list.emplace_back(make_uniq<ColumnRefExpression>(root_get->names[col_idx], table.name));
-
-	// }
-	// bind_state.alias_map = alias_map;
-	// // TODO: Figure out why the Order By is showing 1, 2 when it used to show #[1.1], #[1.2]
-	// // (maybe I need to fill out more pieces of the bind_state?)
-	// // do I need parsed_expression_map_t<idx_t> projection_map; filled out on the bind_state?
-
-	// // I think I need to set the OrderBinder's extra_list so I think I need the SelectNode here
-	// // within the OrderBinder constructor (if a SelectNode is passed in) we have: this->extra_list = &node.select_list; 
-	// // The select_list is the only thing I need to populate on the SelectNode
-	// //! The projection list
-	
-	// // auto select_statement = make_uniq_base<QueryNode, SelectNode>();
-	// // auto &select_node = select_statement->Cast<SelectNode>();
-
-	// // TODO: Why does it still Bind as a constant? Maybe try the projection_map next?
-	// // TODO: Explore if I can pull out the code from Parser::ParseOrderList to build a SelectNode that actually points to the right table not a dummy table
-
-	// OrderBinder order_binder({binder}, *select_node, bind_state);
-	// for (auto &pre_bound_order : pre_bound_orders) {
-	// 	// auto pre_bound_expression = std::move(pre_bound_order.expression);
-	// 	// duckdb::unique_ptr<duckdb::ParsedExpression> pre_bound_expression = pre_bound_order.expression;
-	// 	//BoundOrderByNode(OrderType type, OrderByNullType null_order, unique_ptr<Expression> expression);
-		
-	// 	auto duckdb_expression = order_binder.Bind(std::move(pre_bound_order.expression));
-	// 	BoundOrderByNode bound_order = BoundOrderByNode(pre_bound_order.type, pre_bound_order.null_order, std::move(duckdb_expression));
-	// 	orders.emplace_back(std::move(bound_order));
-	// }
-
-	// END attempt to use OrderBinder to bind dynamically
-
-	for (auto &order_item : orders) {
-		Printer::Print(order_item.ToString());
-	}
-
 	auto order = make_uniq<LogicalOrder>(std::move(orders));
-	Printer::Print(order->ToString());
 
 	order->children.push_back(std::move(root_get));
-
-	order->PrintColumnBindings();
 
 	vector<unique_ptr<Expression>> cast_expressions;
 	order->ResolveOperatorTypes();
@@ -404,8 +314,6 @@ unique_ptr<LogicalOperator> DuckLakeCompactor::InsertApproxOrderBy(Binder &binde
 
 	auto projected = make_uniq<LogicalProjection>(binder.GenerateTableIndex(), std::move(cast_expressions));
 	projected->children.push_back(std::move(order));
-
-	projected->PrintColumnBindings();
 
 	return std::move(projected);
 
@@ -542,9 +450,10 @@ DuckLakeCompactor::GenerateCompactionCommand(vector<DuckLakeCompactionFileEntry>
 		root = DuckLakeInsert::InsertCasts(binder, root);
 	}
 	
-	std::string order_by = DuckLakeCompactor::GetApproxOrderBy(catalog, table, local_order_by);
+	// If compaction should be ordered, add Order By (and projection) to logical plan
+	std::string order_by = DuckLakeCompactor::GetLocalOrderBy(catalog, table, local_order_by);
 	if (!order_by.empty() && order_by.length() > 0) {
-		root = DuckLakeCompactor::InsertApproxOrderBy(binder, root, table, order_by);
+		root = DuckLakeCompactor::InsertLocalOrderBy(binder, root, table, order_by);
 	}
 
 	// generate the LogicalCopyToFile
@@ -583,7 +492,6 @@ DuckLakeCompactor::GenerateCompactionCommand(vector<DuckLakeCompactionFileEntry>
 	    binder.GenerateTableIndex(), table, std::move(actionable_source_files), std::move(copy_input.encryption_key),
 	    partition_id, std::move(partition_values), target_row_id_start, type);
 	compaction->children.push_back(std::move(copy));
-	compaction->Print();
 	return std::move(compaction);
 }
 

@@ -203,14 +203,11 @@ unique_ptr<LogicalOperator> DuckLakeDataFlusher::GenerateFlushCommand() {
 		root = DuckLakeInsert::InsertCasts(binder, root);
 	}
 
-	// TODO: Add order by (and projection) to this location for flushing inlined data
-
-	std::string order_by = DuckLakeCompactor::GetApproxOrderBy(catalog, table, local_order_by);
+	// If flush should be ordered, add Order By (and projection) to logical plan
+	std::string order_by = DuckLakeCompactor::GetLocalOrderBy(catalog, table, local_order_by);
 	if (!order_by.empty() && order_by.length() > 0) {
-		root = DuckLakeCompactor::InsertApproxOrderBy(binder, root, table, order_by);
+		root = DuckLakeCompactor::InsertLocalOrderBy(binder, root, table, order_by);
 	}
-
-
 
 	// generate the LogicalCopyToFile
 	auto copy = make_uniq<LogicalCopyToFile>(std::move(copy_options.copy_function), std::move(copy_options.bind_data),

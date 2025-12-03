@@ -1,5 +1,5 @@
-# name: test/sql/compaction/merge_adjacent_options.test
-# description: test ducklake merge adjacent files options
+# name: test/sql/compaction/merge_adjacent_options_sorted.test
+# description: test ducklake merge adjacent files with local_order_by sorting
 # group: [compaction]
 
 require ducklake
@@ -71,9 +71,6 @@ CALL ducklake_merge_adjacent_files('ducklake', 'sort_with_parameter', local_orde
 
 query III
 FROM sort_with_parameter
---ORDER BY 
---    sort_key_1 ASC,
---    sort_key_2 ASC
 ----
 0	0	woot0
 2	0	woot2
@@ -155,9 +152,6 @@ CALL ducklake_merge_adjacent_files('ducklake', 'sort_with_setting');
 
 query III
 FROM sort_with_setting
---ORDER BY 
---    sort_key_1 ASC,
---    sort_key_2 ASC
 ----
 0	0	woot0
 2	0	woot2
@@ -196,3 +190,13 @@ CALL ducklake_merge_adjacent_files('ducklake', 'sort_with_setting');
 Binder Error: Columns in the approx_sort parameter were not found in the DuckLake table. Unmatched columns were: WOOOOT, BLAH
 
 
+###################################################
+# Expressions are not supported, only column refs #
+###################################################
+statement ok
+CALL ducklake.set_option('local_order_by', 'concat(sort_key_1, ''_'', sort_key_2) ASC', table_name => 'sort_with_setting');
+
+statement error
+CALL ducklake_merge_adjacent_files('ducklake', 'sort_with_setting');
+----
+Binder Error: Columns in the approx_sort parameter were not found in the DuckLake table. Unmatched columns were: concat(sort_key_1, '_', sort_key_2)
