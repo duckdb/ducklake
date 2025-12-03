@@ -1,6 +1,7 @@
 #include "storage/ducklake_catalog.hpp"
 
 #include "common/ducklake_types.hpp"
+#include "duckdb/catalog/catalog_entry/macro_catalog_entry.hpp"
 #include "duckdb/catalog/catalog_entry/schema_catalog_entry.hpp"
 #include "duckdb/catalog/catalog_entry/table_catalog_entry.hpp"
 #include "duckdb/main/attached_database.hpp"
@@ -17,8 +18,14 @@
 #include "storage/ducklake_transaction_manager.hpp"
 #include "storage/ducklake_view_entry.hpp"
 #include "duckdb/main/database_path_and_type.hpp"
+#include "duckdb/parser/parser.hpp"
 #include "duckdb/parser/parsed_data/create_index_info.hpp"
 #include "duckdb/parser/parsed_data/alter_table_info.hpp"
+#include "duckdb/parser/parsed_data/create_macro_info.hpp"
+#include "duckdb/function/macro_function.hpp"
+#include "duckdb/function/scalar_macro_function.hpp"
+#include "duckdb/function/table_macro_function.hpp"
+#include "storage/ducklake_macro_entry.hpp"
 
 namespace duckdb {
 
@@ -164,6 +171,11 @@ optional_ptr<CatalogEntry> DuckLakeCatalog::GetEntryById(DuckLakeTransaction &tr
 	return schema.GetEntryById(table_id);
 }
 
+idx_t DuckLakeCatalog::GetSnapshotForSchema(idx_t schema_id, DuckLakeTransaction &transaction) {
+	auto &metadata_manager = transaction.GetMetadataManager();
+	return metadata_manager.GetCatalogIdForSchema(schema_id);
+}
+
 DuckLakeCatalogSet &DuckLakeCatalog::GetSchemaForSnapshot(DuckLakeTransaction &transaction, DuckLakeSnapshot snapshot) {
 	lock_guard<mutex> guard(schemas_lock);
 	auto entry = schemas.find(snapshot.schema_version);
@@ -184,7 +196,21 @@ static unique_ptr<DuckLakeFieldId> TransformColumnType(DuckLakeColumnInfo &col) 
 	if (col.children.empty()) {
 		auto col_type = DuckLakeTypes::FromString(col.type);
 		col_data.initial_default = col.initial_default.DefaultCastAs(col_type);
-		col_data.default_value = col.default_value.DefaultCastAs(col_type);
+		if (col.default_value.IsNull()) {
+			col_data.default_value = make_uniq<ConstantExpression>(Value());
+		} else {
+			if (col.default_value_type == "literal") {
+				col_data.default_value = make_uniq<ConstantExpression>(col.default_value);
+			} else if (col.default_value_type == "expression") {
+				auto sql_expr = Parser::ParseExpressionList(col.default_value.GetValue<string>());
+				if (sql_expr.size() != 1) {
+					throw InternalException("Expected a single expression");
+				}
+				col_data.default_value = std::move(sql_expr[0]);
+			} else {
+				throw NotImplementedException("Column type %s is not supported", col.default_value_type);
+			}
+		}
 		return make_uniq<DuckLakeFieldId>(std::move(col_data), col.name, std::move(col_type));
 	}
 	if (StringUtil::CIEquals(col.type, "struct")) {
@@ -225,6 +251,60 @@ static unique_ptr<DuckLakeFieldId> TransformColumnType(DuckLakeColumnInfo &col) 
 		                                  std::move(child_fields));
 	}
 	throw InvalidInputException("Unrecognized nested type \"%s\"", col.type);
+}
+
+unique_ptr<CreateMacroInfo> CreateMacroInfoFromDucklake(ClientContext &context, DuckLakeMacroInfo &macro,
+                                                        string schema_name) {
+	CatalogType type;
+	if (macro.implementations.front().type == "scalar") {
+		type = CatalogType::MACRO_ENTRY;
+	} else if (macro.implementations.front().type == "table") {
+		type = CatalogType::TABLE_MACRO_ENTRY;
+	} else {
+		throw NotImplementedException("Macro type %s is not implemented", macro.implementations.front().type);
+	}
+	auto macro_info = make_uniq<CreateMacroInfo>(type);
+	macro_info->name = macro.macro_name;
+	macro_info->schema = schema_name;
+	macro_info->temporary = false;
+	macro_info->internal = false;
+	for (auto &impl : macro.implementations) {
+		unique_ptr<MacroFunction> macro_function;
+		if (impl.type == "scalar") {
+			auto sql_expr = Parser::ParseExpressionList(impl.sql);
+			if (sql_expr.size() != 1) {
+				throw InternalException("Expected a single expression");
+			}
+			macro_function = make_uniq<ScalarMacroFunction>(std::move(sql_expr[0]));
+		} else if (impl.type == "table") {
+			Parser parser;
+			parser.ParseQuery(impl.sql);
+			if (parser.statements.size() != 1 || parser.statements[0]->type != StatementType::SELECT_STATEMENT) {
+				throw InternalException("Expected a single select statement");
+			}
+			auto node = std::move(parser.statements[0]->Cast<SelectStatement>().node);
+			macro_function = make_uniq<TableMacroFunction>(std::move(node));
+		} else {
+			throw InternalException("Unrecognized macro type %s in CreateMacroInfoFromDucklake", impl.type);
+		}
+		vector<unique_ptr<ParsedExpression>> expr_list;
+		for (auto &param : impl.parameters) {
+			expr_list = Parser::ParseExpressionList(param.default_value.ToSQLString());
+			if (expr_list.size() != 1) {
+				throw InternalException("Expected a single expression");
+			}
+			macro_function->parameters.push_back(make_uniq<ColumnRefExpression>(param.parameter_name));
+			auto &expression = expr_list[0]->Cast<ConstantExpression>();
+			auto expr_type = DuckLakeTypes::FromString(param.default_value_type);
+			if (expr_type.id() != LogicalTypeId::UNKNOWN) {
+				expression.value = expression.value.CastAs(context, expr_type);
+				macro_function->default_parameters.insert(make_pair(param.parameter_name, std::move(expr_list[0])));
+			}
+			macro_function->types.push_back(DuckLakeTypes::FromString(param.parameter_type));
+		}
+		macro_info->macros.push_back(std::move(macro_function));
+	}
+	return macro_info;
 }
 
 unique_ptr<DuckLakeCatalogSet> DuckLakeCatalog::LoadSchemaForSnapshot(DuckLakeTransaction &transaction,
@@ -317,6 +397,29 @@ unique_ptr<DuckLakeCatalogSet> DuckLakeCatalog::LoadSchemaForSnapshot(DuckLakeTr
 		    make_uniq<DuckLakeViewEntry>(*this, schema_entry, *create_view_info, view.id, std::move(view.uuid),
 		                                 std::move(view.sql), LocalChangeType::NONE);
 		schema_set->AddEntry(schema_entry, view.id, std::move(view_entry));
+	}
+
+	// load the macros
+	for (auto &macro : catalog.macros) {
+		auto entry = schema_id_map.find(macro.schema_id);
+		if (entry == schema_id_map.end()) {
+			throw InvalidInputException(
+			    "Failed to load DuckLake - could not find schema that corresponds to the macro entry \"%s\"",
+			    macro.macro_name);
+		}
+		auto &schema_entry = entry->second.get();
+		auto create_macro = CreateMacroInfoFromDucklake(*transaction.context.lock(), macro, schema_entry.name);
+		if (macro.implementations.front().type == "scalar") {
+			auto macro_catalog_entry =
+			    make_uniq<DuckLakeScalarMacroEntry>(*this, schema_entry, *create_macro, macro.macro_id);
+			schema_set->AddEntry(schema_entry, macro.macro_id, std::move(macro_catalog_entry));
+		} else if (macro.implementations.front().type == "table") {
+			auto macro_catalog_entry =
+			    make_uniq<DuckLakeTableMacroEntry>(*this, schema_entry, *create_macro, macro.macro_id);
+			schema_set->AddEntry(schema_entry, macro.macro_id, std::move(macro_catalog_entry));
+		} else {
+			throw InvalidInputException("Macro type %s is not accepted", macro.implementations.front().type);
+		}
 	}
 
 	// load the partition entries

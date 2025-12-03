@@ -1,0 +1,48 @@
+# name: test/sql/macros/test_attach_timetravel.test
+# description: test attach timetravel
+# group: [macros]
+
+require ducklake
+
+require parquet
+
+statement ok
+ATTACH 'ducklake:__TEST_DIR__/test_attach_timetravel.db' AS ducklake (DATA_PATH '__TEST_DIR__/test_attach_timetravel');
+
+statement ok
+use ducklake
+
+statement ok
+CREATE MACRO simple(a) AS a;
+
+statement ok
+DROP MACRO simple
+
+query II
+select snapshot_id, changes FROM snapshots()
+----
+0	{schemas_created=[main]}
+1	{scalar_macros_created=['main."simple"']}
+2	{scalar_macros_dropped=[1]}
+
+statement error
+select simple(1)
+----
+Scalar Function with name simple does not exist!
+
+statement ok
+USE memory
+
+statement ok
+DETACH ducklake
+
+statement ok
+ATTACH 'ducklake:__TEST_DIR__/test_attach_timetravel.db' AS ducklake (DATA_PATH '__TEST_DIR__/test_attach_timetravel', SNAPSHOT_VERSION 1);
+
+statement ok
+use ducklake
+
+query I
+select simple(1)
+----
+1

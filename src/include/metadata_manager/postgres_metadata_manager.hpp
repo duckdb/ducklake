@@ -16,6 +16,8 @@ class PostgresMetadataManager : public DuckLakeMetadataManager {
 public:
 	explicit PostgresMetadataManager(DuckLakeTransaction &transaction);
 
+	bool TypeIsNativelySupported(const LogicalType &type) override;
+
 protected:
 	string GetLatestSnapshotQuery() const override;
 };

@@ -18,7 +18,6 @@ struct DuckLakeSetOptionData : public TableFunctionData {
 static unique_ptr<FunctionData> DuckLakeSetOptionBind(ClientContext &context, TableFunctionBindInput &input,
                                                       vector<LogicalType> &return_types, vector<string> &names) {
 	auto &catalog = BaseMetadataFunction::GetCatalog(context, input.inputs[0]);
-	auto &ducklake_catalog = catalog.Cast<DuckLakeCatalog>();
 	DuckLakeConfigOption config_option;
 	auto &option = config_option.option.key;
 	auto &value = config_option.option.value;
@@ -68,10 +67,6 @@ static unique_ptr<FunctionData> DuckLakeSetOptionBind(ClientContext &context, Ta
 		auto target_file_size_bytes = DBConfig::ParseMemoryLimit(val.ToString());
 		value = to_string(target_file_size_bytes);
 	} else if (option == "data_inlining_row_limit") {
-		auto &metadata_catalog = Catalog::GetCatalog(context, ducklake_catalog.MetadataDatabaseName());
-		if (!metadata_catalog.IsDuckCatalog()) {
-			throw NotImplementedException("Data Inlining is currently only implemented for DuckDB as a DBMS");
-		}
 		auto data_inlining_row_limit = val.DefaultCastAs(LogicalType::UBIGINT).GetValue<idx_t>();
 		value = to_string(data_inlining_row_limit);
 	} else if (option == "require_commit_message") {

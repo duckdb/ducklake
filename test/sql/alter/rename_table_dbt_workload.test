@@ -1,0 +1,77 @@
+# name: test/sql/alter/rename_table_dbt_workload.test
+# description: Test renaming tables in DuckLake
+# group: [alter]
+
+require parquet
+
+require ducklake
+
+test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+
+test-env DATA_PATH __TEST_DIR__
+
+statement ok
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS my_ducklake (DATA_PATH '${DATA_PATH}/ducklake_rename_files', METADATA_CATALOG 'ducklake_meta')
+
+statement ok
+USE my_ducklake;
+
+statement ok
+CREATE TABLE my_table AS FROM range(42);
+
+statement ok
+BEGIN TRANSACTION;
+
+statement ok
+CREATE TABLE my_table_tmp AS FROM range(84);
+
+statement ok
+ALTER TABLE my_table RENAME TO my_table_backup;
+
+statement ok
+ALTER TABLE my_table_tmp RENAME TO my_table;
+
+query I
+SELECT COUNT(*) AS count FROM my_table;
+----
+84
+
+query I
+SELECT COUNT(*) AS count FROM my_table_backup;
+----
+42
+
+statement error
+SELECT COUNT(*) AS count FROM my_table_tmp;
+----
+Catalog Error: Table with name my_table_tmp does not exist!
+
+query I
+SELECT table_name FROM duckdb_tables() WHERE database_name = 'my_ducklake' ORDER BY table_name; 
+----
+my_table
+my_table_backup
+
+statement ok
+COMMIT
+
+query I
+SELECT COUNT(*) AS count FROM my_table;
+----
+84
+
+query I
+SELECT COUNT(*) AS count FROM my_table_backup;
+----
+42
+
+statement error
+SELECT COUNT(*) AS count FROM my_table_tmp;
+----
+Catalog Error: Table with name my_table_tmp does not exist!
+
+query I
+SELECT table_name FROM duckdb_tables() WHERE database_name = 'my_ducklake' ORDER BY table_name; 
+----
+my_table
+my_table_backup

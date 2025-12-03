@@ -1,0 +1,42 @@
+# name: test/sql/rowid/ducklake_row_id_update.test
+# description: test ducklake row-id tracking over partition and updates
+# group: [rowid]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+
+test-env DATA_PATH __TEST_DIR__
+
+statement ok
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/ducklake_row_id_update_2', METADATA_CATALOG 'ducklake_meta')
+
+statement ok
+USE ducklake;
+
+statement ok
+CREATE OR REPLACE TABLE test(i INTEGER, j INTEGER);
+
+statement ok
+ALTER TABLE test SET PARTITIONED BY (i);
+
+statement ok
+INSERT INTO test VALUES (1,5), (2,5)
+
+statement ok
+MERGE INTO test
+    USING (
+        SELECT
+            1 as i,
+            5 as j
+    ) AS test_updates
+    ON test.j = test_updates.j
+    WHEN MATCHED THEN UPDATE;
+
+query III
+SELECT rowid,i,j FROM test order by rowid
+----
+0	1	5
+1	1	5

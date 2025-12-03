@@ -1,0 +1,97 @@
+# name: test/sql/alter/expire_snapshot_bug.test
+# description: test an issue that would delete files from a renamed table when expiring the OG table
+# group: [alter]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+
+test-env DATA_PATH __TEST_DIR__
+
+statement ok
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/expire_snapshot_bug', METADATA_CATALOG 'ducklake_meta')
+
+statement ok
+USE ducklake;
+
+statement ok
+create table a(i integer);
+
+statement ok
+insert into a values(0);
+
+statement ok
+alter table a rename to b;
+
+statement ok
+insert into b values(1);
+
+
+query II
+SELECT snapshot_id, changes FROM snapshots();
+----
+0	{schemas_created=[main]}
+1	{tables_created=[main.a]}
+2	{tables_inserted_into=[1]}
+3	{tables_created=[main.b]}
+4	{tables_inserted_into=[1]}
+
+statement ok
+CALL ducklake_expire_snapshots('ducklake', versions => [0,1,2])
+
+query I
+FROM b;
+----
+0
+1
+
+statement ok
+CALL ducklake_expire_snapshots('ducklake', versions => [3])
+
+query I
+FROM b;
+----
+0
+1
+
+statement ok
+alter table b rename to c;
+
+query II
+SELECT snapshot_id, changes FROM snapshots();
+----
+4	{tables_inserted_into=[1]}
+5	{tables_created=[main.c]}
+
+query I
+FROM c;
+----
+0
+1
+
+statement ok
+CALL ducklake_expire_snapshots('ducklake', versions => [4,5])
+
+query I
+FROM c;
+----
+0
+1
+
+statement ok
+DROP TABLE c;
+
+statement ok
+CALL ducklake_expire_snapshots('ducklake', versions => [5])
+
+# all traces of the table are gone
+foreach tbl ducklake_table ducklake_column ducklake_table_stats ducklake_table_column_stats ducklake_data_file ducklake_delete_file
+
+query I
+SELECT COUNT(*) FROM ducklake_meta.${tbl}
+----
+0
+
+endloop

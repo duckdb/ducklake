@@ -1,0 +1,87 @@
+# name: test/sql/default/default_expressions.test
+# description: Test adding a column with default expression with DuckLake
+# group: [default]
+
+require ducklake
+
+require parquet
+
+require icu
+
+test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+
+test-env DATA_PATH __TEST_DIR__
+
+statement ok
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/default_expressions', METADATA_CATALOG 'xx')
+
+statement ok
+use ducklake
+
+statement ok
+create table t (id integer, created_at timestamp default now());
+
+statement ok
+insert into t(id) values(1);
+
+query I
+select created_at < NOW() from t;
+----
+true
+
+# Lets now create a table with
+statement ok
+create table t_1 (id integer, id_plus integer default 1);
+
+statement ok
+insert into t_1(id) values (0);
+
+query II
+FROM t_1
+----
+0	1
+
+statement ok
+ALTER TABLE t_1 ALTER id_plus SET DEFAULT round(pi())
+
+statement ok
+insert into t_1(id) values (1);
+
+query II
+FROM t_1
+----
+0	1
+1	3
+
+
+# Try literal with function name
+statement ok
+create table t_2 (a integer, b varchar);
+
+statement ok
+ALTER TABLE t_2 ALTER b SET DEFAULT 'random()';
+
+statement ok
+insert into t_2(a) values (1)
+
+query II
+FROM t_2
+----
+1	random()
+
+query IIIII
+SELECT table_id, column_id, default_value, default_value_type, default_value_dialect FROM xx.ducklake_column
+----
+1	1	NULL	literal	duckdb
+1	2	now()	expression	duckdb
+2	1	NULL	literal	duckdb
+2	2	1	literal	duckdb
+2	2	round(pi())	expression	duckdb
+3	1	NULL	literal	duckdb
+3	2	NULL	literal	duckdb
+3	2	random()	literal	duckdb
+
+statement error
+ALTER TABLE t_2 ADD COLUMN j INTEGER DEFAULT RANDOM()
+----
+We cannot add a column with a non-literal default value. Add the column and then explicitly set the default for new values using "ALTER ... SET DEFAULT"

@@ -1,0 +1,60 @@
+# name: test/sql/macros/test_default_parameter.test
+# description: test macro with a default parameter
+# group: [macros]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+
+test-env DATA_PATH __TEST_DIR__
+
+statement ok
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/test_default_parameter');
+
+statement ok
+use ducklake
+
+statement ok
+CREATE MACRO add_default(a, b := 5) AS a + b;
+
+# Check Macro Tables
+query IIIII
+FROM __ducklake_metadata_ducklake.ducklake_macro;
+----
+0	1	add_default	1	NULL
+
+query IIIII
+FROM __ducklake_metadata_ducklake.ducklake_macro_impl;
+----
+1	0	duckdb	(a + b)	scalar
+
+query IIIIIII
+FROM __ducklake_metadata_ducklake.ducklake_macro_parameters;
+----
+1	0	0	a	unknown	NULL	unknown
+1	0	1	b	unknown	5	int32
+
+query I
+select add_default(1)
+----
+6
+
+query I
+select add_default(1,3)
+----
+4
+
+statement ok
+CREATE MACRO add_default_sec(a :=5) AS a;
+
+query I
+select add_default_sec('a')
+----
+a
+
+query I
+select add_default_sec()
+----
+5

@@ -1,0 +1,33 @@
+# name: test/sql/geo/ducklake_geometry_nested.test
+# group: [geo]
+
+require ducklake
+
+require parquet
+
+require spatial
+
+test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+
+test-env DATA_PATH __TEST_DIR__
+
+statement ok
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '__TEST_DIR__/ducklake_files', METADATA_CATALOG 'ducklake_meta')
+
+statement ok
+USE ducklake;
+
+statement error
+create table t1 (g GEOMETRY[]);
+----
+Invalid Input Error: GEOMETRY type is only supported as a top-level type
+
+statement error
+create table t2 (g struct(a GEOMETRY));
+----
+Invalid Input Error: GEOMETRY type is only supported as a top-level type
+
+statement error
+create table t3 (g map(int, GEOMETRY));
+----
+Invalid Input Error: GEOMETRY type is only supported as a top-level type

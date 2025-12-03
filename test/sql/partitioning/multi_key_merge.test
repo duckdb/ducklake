@@ -1,0 +1,41 @@
+# name: test/sql/partitioning/multi_key_merge.test
+# description: Test partitioning by multy keys with a merge adjacent
+# group: [partitioning]
+
+require ducklake
+
+require parquet
+
+# partitioning based on a column
+test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+
+test-env DATA_PATH __TEST_DIR__
+
+statement ok
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/multi_key_merge', METADATA_CATALOG 'ducklake_metadata')
+
+statement ok
+USE ducklake
+
+statement ok
+CREATE TABLE sales_data (
+    sale_id INTEGER,
+    product_name VARCHAR,
+    country VARCHAR,
+);
+
+statement ok
+ALTER TABLE sales_data SET PARTITIONED BY (product_name, country);
+
+statement ok
+INSERT INTO sales_data VALUES
+    (1, 'Laptop', 'UK'),
+    (2, 'Mouse', 'GR');
+
+statement ok
+INSERT INTO sales_data VALUES
+    (3, 'Monitor', 'ES'),
+    (4, 'Laptop', 'UK');
+
+statement ok
+CALL merge_adjacent_files();

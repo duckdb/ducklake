@@ -1,0 +1,51 @@
+# name: test/sql/transaction/transaction_inlining.test
+# description: Test inlining support within a transaction
+# group: [transaction]
+
+require ducklake
+
+require parquet
+
+require icu
+
+test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+
+test-env DATA_PATH __TEST_DIR__
+
+statement ok
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/transaction_inlining', DATA_INLINING_ROW_LIMIT 1000 )
+
+statement ok
+USE ducklake
+
+statement ok
+BEGIN TRANSACTION;
+
+statement ok
+CREATE TABLE repro_table (yr int );
+
+statement ok
+ALTER TABLE repro_table SET PARTITIONED BY (yr);
+
+statement ok
+INSERT INTO repro_table values (2025), (2026), (2027)
+
+statement ok
+COMMIT;
+
+query I
+FROM repro_table;
+----
+2025
+2026
+2027
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake')
+
+query I
+FROM repro_table;
+----
+2025
+2026
+2027

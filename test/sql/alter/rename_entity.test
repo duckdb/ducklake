@@ -1,0 +1,57 @@
+# name: test/sql/alter/rename_entity.test
+# description: Make sure, that renamed entities do not show up in the list of entities
+# group: [alter]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+
+test-env DATA_PATH __TEST_DIR__
+
+
+statement ok
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/ducklake_rename_files', METADATA_CATALOG 'ducklake_meta')
+
+statement ok
+CREATE TABLE ducklake.view_base_table AS FROM range(42);
+
+statement ok
+CREATE TABLE ducklake.original_table AS FROM range(84);
+
+statement ok
+CREATE VIEW ducklake.original_view AS FROM ducklake.view_base_table;
+
+statement ok
+BEGIN
+
+statement ok
+ALTER TABLE ducklake.original_table RENAME TO new_table_name
+
+statement ok
+ALTER VIEW ducklake.original_view RENAME TO new_view_name
+
+query I
+SELECT table_name FROM duckdb_tables() WHERE database_name='ducklake' ORDER BY table_name;
+----
+new_table_name
+view_base_table
+
+query I
+SELECT view_name FROM duckdb_views() WHERE database_name='ducklake' ORDER BY view_name
+----
+new_view_name
+
+query I
+SELECT count(*) from ducklake.new_view_name;
+----
+42
+
+query I
+SELECT count(*) from ducklake.new_table_name;
+----
+84
+
+statement ok
+COMMIT

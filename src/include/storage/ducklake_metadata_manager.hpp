@@ -22,6 +22,7 @@
 #include "common/ducklake_encryption.hpp"
 #include "common/ducklake_options.hpp"
 #include "common/index.hpp"
+#include "duckdb/planner/table_filter.hpp"
 
 namespace duckdb {
 class DuckLakeCatalogSet;
@@ -31,8 +32,62 @@ class DuckLakeTransaction;
 class BoundAtClause;
 class QueryResult;
 class FileSystem;
+class ConstantFilter;
 
 enum class SnapshotBound { LOWER_BOUND, UPPER_BOUND };
+
+struct CTERequirement {
+	idx_t column_field_index;
+	unordered_set<string> referenced_stats;
+	idx_t reference_count = 1;
+
+	CTERequirement(idx_t col_idx, unordered_set<string> stats)
+	    : column_field_index(col_idx), referenced_stats(std::move(stats)) {
+	}
+};
+
+struct FilterSQLResult {
+	string where_conditions;
+	unordered_map<idx_t, CTERequirement> required_ctes;
+
+	FilterSQLResult() = default;
+	FilterSQLResult(string conditions) : where_conditions(std::move(conditions)) {
+	}
+};
+
+struct ColumnFilterInfo {
+	idx_t column_field_index;
+	LogicalType column_type;
+	unique_ptr<TableFilter> table_filter;
+
+	ColumnFilterInfo(idx_t col_idx, LogicalType type, unique_ptr<TableFilter> filter)
+	    : column_field_index(col_idx), column_type(std::move(type)), table_filter(std::move(filter)) {
+	}
+
+	ColumnFilterInfo(const ColumnFilterInfo &other)
+	    : column_field_index(other.column_field_index), column_type(other.column_type),
+	      table_filter(other.table_filter->Copy()) {
+	}
+};
+
+struct FilterPushdownInfo {
+	unordered_map<idx_t, ColumnFilterInfo> column_filters;
+
+	FilterPushdownInfo() = default;
+
+	unique_ptr<FilterPushdownInfo> Copy() const {
+		auto result = make_uniq<FilterPushdownInfo>();
+		for (const auto &entry : column_filters) {
+			result->column_filters.emplace(entry.first, entry.second);
+		}
+		return result;
+	}
+};
+
+struct FilterPushdownQueryComponents {
+	string cte_section;
+	string where_clause;
+};
 
 //! The DuckLake metadata manger is the communication layer between the system and the metadata catalog
 class DuckLakeMetadataManager {
@@ -41,6 +96,8 @@ public:
 	virtual ~DuckLakeMetadataManager();
 
 	static unique_ptr<DuckLakeMetadataManager> Create(DuckLakeTransaction &transaction);
+
+	virtual bool TypeIsNativelySupported(const LogicalType &type);
 
 	DuckLakeMetadataManager &Get(DuckLakeTransaction &transaction);
 
@@ -51,16 +108,18 @@ public:
 	virtual DuckLakeCatalogInfo GetCatalogForSnapshot(DuckLakeSnapshot snapshot);
 	virtual vector<DuckLakeGlobalStatsInfo> GetGlobalTableStats(DuckLakeSnapshot snapshot);
 	virtual vector<DuckLakeFileListEntry> GetFilesForTable(DuckLakeTableEntry &table, DuckLakeSnapshot snapshot,
-	                                                       const string &filter);
+	                                                       const FilterPushdownInfo *filter_info = nullptr);
 	virtual vector<DuckLakeFileListEntry> GetTableInsertions(DuckLakeTableEntry &table, DuckLakeSnapshot start_snapshot,
 	                                                         DuckLakeSnapshot snapshot);
 	virtual vector<DuckLakeDeleteScanEntry>
 	GetTableDeletions(DuckLakeTableEntry &table, DuckLakeSnapshot start_snapshot, DuckLakeSnapshot snapshot);
 	virtual vector<DuckLakeFileListExtendedEntry>
-	GetExtendedFilesForTable(DuckLakeTableEntry &table, DuckLakeSnapshot snapshot, const string &filter);
+	GetExtendedFilesForTable(DuckLakeTableEntry &table, DuckLakeSnapshot snapshot,
+	                         const FilterPushdownInfo *filter_info = nullptr);
 	virtual vector<DuckLakeCompactionFileEntry> GetFilesForCompaction(DuckLakeTableEntry &table, CompactionType type,
 	                                                                  double deletion_threshold,
 	                                                                  DuckLakeSnapshot snapshot);
+	virtual idx_t GetCatalogIdForSchema(idx_t schema_id);
 	virtual vector<DuckLakeFileForCleanup> GetOldFilesForCleanup(const string &filter);
 	virtual vector<DuckLakeFileForCleanup> GetOrphanFilesForCleanup(const string &filter, const string &separator);
 	virtual vector<DuckLakeFileForCleanup> GetFilesForCleanup(const string &filter, CleanupType type,
@@ -70,6 +129,7 @@ public:
 	virtual void DropSchemas(DuckLakeSnapshot commit_snapshot, const set<SchemaIndex> &ids);
 	virtual void DropTables(DuckLakeSnapshot commit_snapshot, const set<TableIndex> &ids, bool renamed);
 	virtual void DropViews(DuckLakeSnapshot commit_snapshot, const set<TableIndex> &ids);
+	virtual void DropMacros(DuckLakeSnapshot commit_snapshot, const set<MacroIndex> &ids);
 	virtual void WriteNewSchemas(DuckLakeSnapshot commit_snapshot, const vector<DuckLakeSchemaInfo> &new_schemas);
 	virtual void WriteNewTables(DuckLakeSnapshot commit_snapshot, const vector<DuckLakeTableInfo> &new_tables);
 	virtual void WriteNewViews(DuckLakeSnapshot commit_snapshot, const vector<DuckLakeViewInfo> &new_views);
@@ -88,6 +148,7 @@ public:
 	virtual void WriteNewInlinedTables(DuckLakeSnapshot commit_snapshot, const vector<DuckLakeTableInfo> &tables);
 	virtual string GetInlinedTableQueries(DuckLakeSnapshot commit_snapshot, const DuckLakeTableInfo &table,
 	                                      string &inlined_tables, string &inlined_table_queries);
+	void WriteNewMacros(DuckLakeSnapshot commit_snapshot, const vector<DuckLakeMacroInfo> &new_macros);
 	virtual void ExecuteInlinedTableQueries(DuckLakeSnapshot commit_snapshot, string &inlined_tables,
 	                                        const string &inlined_table_queries);
 	virtual void DropDataFiles(DuckLakeSnapshot commit_snapshot, const set<DataFileIndex> &dropped_files);
@@ -131,6 +192,8 @@ public:
 
 	virtual void MigrateV01();
 	virtual void MigrateV02(bool allow_failures = false);
+	virtual void MigrateV03(bool allow_failures = false);
+	virtual void ExecuteMigration(string migrate_query, bool allow_failures);
 
 	string LoadPath(string path);
 	string StorePath(string path);
@@ -166,7 +229,23 @@ private:
 
 	bool IsEncrypted() const;
 	string GetFileSelectList(const string &prefix);
+	FilterPushdownQueryComponents GenerateFilterPushdownComponents(const FilterPushdownInfo &filter_info,
+	                                                               TableIndex table_id);
+	virtual FilterSQLResult ConvertFilterPushdownToSQL(const FilterPushdownInfo &filter_info);
+	virtual string GenerateCTESectionFromRequirements(const unordered_map<idx_t, CTERequirement> &requirements,
+	                                                  TableIndex table_id);
+	virtual string GenerateFilterFromTableFilter(const TableFilter &filter, const LogicalType &type,
+	                                             unordered_set<string> &referenced_stats);
+	virtual bool ValueIsFinite(const Value &val);
+	virtual string CastValueToTarget(const Value &val, const LogicalType &type);
+	virtual string CastStatsToTarget(const string &stats, const LogicalType &type);
+	virtual string GenerateConstantFilter(const ConstantFilter &constant_filter, const LogicalType &type,
+	                                      unordered_set<string> &referenced_stats);
+	virtual string GenerateConstantFilterDouble(const ConstantFilter &constant_filter, const LogicalType &type,
+	                                            unordered_set<string> &referenced_stats);
+	virtual string GenerateFilterPushdown(const TableFilter &filter, unordered_set<string> &referenced_stats);
 
+private:
 protected:
 	DuckLakeTransaction &transaction;
 	mutex paths_lock;

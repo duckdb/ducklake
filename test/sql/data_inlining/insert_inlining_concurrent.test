@@ -1,0 +1,34 @@
+# name: test/sql/data_inlining/insert_inlining_concurrent.test
+# description: test ducklake threaded inlining
+# group: [data_inlining]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+
+test-env DATA_PATH __TEST_DIR__
+
+statement ok
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/insert_inlining_concurrent', DATA_INLINING_ROW_LIMIT 10)
+
+statement ok
+set threads to 10
+
+statement ok
+CREATE TABLE ducklake.test(i INTEGER)
+
+statement ok
+INSERT INTO ducklake.test VALUES (1)
+
+query I
+FROM ducklake.test
+----
+1
+
+statement ok
+DROP TABLE ducklake.test;
+
+statement ok
+DETACH ducklake

@@ -1,0 +1,54 @@
+# name: test/sql/macros/test_macro_tables.test
+# description: test table macros
+# group: [macros]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+
+test-env DATA_PATH __TEST_DIR__
+
+statement ok
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/test_defined_types');
+
+statement ok
+USE ducklake;
+
+statement ok
+CREATE TABLE test_tbl (id INT, name string);
+
+statement ok
+INSERT INTO test_tbl VALUES (1,'tom'), (2,'dick'),(3,'harry'), (4,'mary'), (5,'mungo'), (6,'midge');
+
+statement ok
+CREATE MACRO xt(a,_name) as TABLE SELECT * FROM test_tbl WHERE(id>=a or name=_name);
+
+# Check Macro Tables
+query IIIII
+FROM __ducklake_metadata_ducklake.ducklake_macro;
+----
+0	2	xt	3	NULL
+
+query IIIII
+FROM __ducklake_metadata_ducklake.ducklake_macro_impl;
+----
+2	0	duckdb	SELECT * FROM test_tbl WHERE ((id >= a) OR ("name" = _name))	table
+
+
+query IIIIIII
+FROM __ducklake_metadata_ducklake.ducklake_macro_parameters;
+----
+2	0	0	a	unknown	NULL	unknown
+2	0	1	_name	unknown	NULL	unknown
+
+query II
+FROM xt(5,'tom');
+----
+1	tom
+5	mungo
+6	midge
+
+statement ok
+DROP MACRO TABLE xt;

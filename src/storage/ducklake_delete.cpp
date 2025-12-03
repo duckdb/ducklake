@@ -21,6 +21,7 @@
 #include "duckdb/parallel/thread_context.hpp"
 #include "duckdb/execution/operator/scan/physical_table_scan.hpp"
 #include "storage/ducklake_multi_file_reader.hpp"
+#include "duckdb/common/types/column/column_data_collection.hpp"
 #include "common/ducklake_util.hpp"
 
 namespace duckdb {
@@ -65,23 +66,52 @@ public:
 	unordered_map<string, DuckLakeDeleteFile> written_files;
 	unordered_map<string, WrittenColumnInfo> written_columns;
 	idx_t total_deleted_count = 0;
-	unordered_map<uint64_t, vector<idx_t>> deleted_rows;
+	unordered_map<uint64_t, unique_ptr<ColumnDataCollection>> deleted_rows;
 	unordered_map<idx_t, string> filenames;
 
-	void Flush(DuckLakeDeleteLocalState &local_state) {
+	void Flush(ClientContext &context, DuckLakeDeleteLocalState &local_state) {
 		auto &local_entry = local_state.file_row_numbers;
 		if (local_entry.empty()) {
 			return;
 		}
 		lock_guard<mutex> guard(lock);
-		auto &global_entry = deleted_rows[local_state.current_file_index.GetIndex()];
-		global_entry.insert(global_entry.end(), local_entry.begin(), local_entry.end());
+		auto deleted_row_idx = local_state.current_file_index.GetIndex();
+		auto global_entry = deleted_rows.find(deleted_row_idx);
+		DataChunk file_row_id_chunk;
+		vector<LogicalType> row_id_types {LogicalType::UBIGINT};
+		file_row_id_chunk.Initialize(context, row_id_types);
+
+		optional_ptr<ColumnDataCollection> deleted_row_collection;
+		if (global_entry == deleted_rows.end()) {
+			auto collection = make_uniq<ColumnDataCollection>(context, row_id_types);
+			deleted_row_collection = collection.get();
+			deleted_rows[deleted_row_idx] = std::move(collection);
+		} else {
+			deleted_row_collection = global_entry->second.get();
+		}
+		ColumnDataAppendState append_state;
+		deleted_row_collection->InitializeAppend(append_state);
+		auto data = FlatVector::GetData<uint64_t>(file_row_id_chunk.data[0]);
+		idx_t chunk_size = 0;
+		for (idx_t r = 0; r < local_entry.size(); ++r) {
+			data[chunk_size++] = local_entry[r];
+			if (chunk_size == STANDARD_VECTOR_SIZE) {
+				file_row_id_chunk.SetCardinality(chunk_size);
+				deleted_row_collection->Append(append_state, file_row_id_chunk);
+				chunk_size = 0;
+			}
+		}
+		if (chunk_size > 0) {
+			file_row_id_chunk.SetCardinality(chunk_size);
+			deleted_row_collection->Append(append_state, file_row_id_chunk);
+			chunk_size = 0;
+		}
 		total_deleted_count += local_entry.size();
 		local_entry.clear();
 	}
 
-	void FinalFlush(DuckLakeDeleteLocalState &local_state) {
-		Flush(local_state);
+	void FinalFlush(ClientContext &context, DuckLakeDeleteLocalState &local_state) {
+		Flush(context, local_state);
 		// flush the file names to the global state
 		lock_guard<mutex> guard(lock);
 		for (auto &entry : local_state.filenames) {
@@ -129,7 +159,7 @@ SinkResultType DuckLakeDelete::Sink(ExecutionContext &context, DataChunk &chunk,
 		auto file_index = file_index_data[file_idx];
 		if (!local_state.current_file_index.IsValid() || file_index != local_state.current_file_index.GetIndex()) {
 			// file has changed - flush
-			global_state.Flush(local_state);
+			global_state.Flush(context.client, local_state);
 			local_state.current_file_index = file_index;
 			// insert the file name for the file if it has not yet been inserted
 			auto entry = local_state.filenames.find(file_index);
@@ -154,7 +184,7 @@ SinkResultType DuckLakeDelete::Sink(ExecutionContext &context, DataChunk &chunk,
 SinkCombineResultType DuckLakeDelete::Combine(ExecutionContext &context, OperatorSinkCombineInput &input) const {
 	auto &global_state = input.global_state.Cast<DuckLakeDeleteGlobalState>();
 	auto &local_state = input.local_state.Cast<DuckLakeDeleteLocalState>();
-	global_state.FinalFlush(local_state);
+	global_state.FinalFlush(context.client, local_state);
 	return SinkCombineResultType::FINISHED;
 }
 
@@ -163,16 +193,19 @@ SinkCombineResultType DuckLakeDelete::Combine(ExecutionContext &context, Operato
 //===--------------------------------------------------------------------===//
 void DuckLakeDelete::FlushDelete(DuckLakeTransaction &transaction, ClientContext &context,
                                  DuckLakeDeleteGlobalState &global_state, const string &filename,
-                                 vector<idx_t> &deleted_rows) const {
+                                 ColumnDataCollection &deleted_rows) const {
 	// find the matching data file for the deletion
 	auto data_file_info = delete_map->GetExtendedFileInfo(filename);
 
 	// sort and duplicate eliminate the deletes
 	set<idx_t> sorted_deletes;
-	for (auto &row_idx : deleted_rows) {
-		sorted_deletes.insert(row_idx);
+	for (auto &chunk : deleted_rows.Chunks()) {
+		auto row_data = FlatVector::GetData<uint64_t>(chunk.data[0]);
+		for (idx_t r = 0; r < chunk.size(); r++) {
+			sorted_deletes.insert(row_data[r]);
+		}
 	}
-	if (sorted_deletes.size() != deleted_rows.size() && !allow_duplicates) {
+	if (sorted_deletes.size() != deleted_rows.Count() && !allow_duplicates) {
 		throw NotImplementedException("The same row was updated multiple times - this is not (yet) supported in "
 		                              "DuckLake. Eliminate duplicate matches prior to running the UPDATE");
 	}
@@ -344,7 +377,7 @@ SinkFinalizeType DuckLakeDelete::Finalize(Pipeline &pipeline, Event &event, Clie
 		if (filename_entry == global_state.filenames.end()) {
 			throw InternalException("Filename not found for file index");
 		}
-		FlushDelete(transaction, context, global_state, filename_entry->second, entry.second);
+		FlushDelete(transaction, context, global_state, filename_entry->second, *entry.second);
 	}
 	vector<DuckLakeDeleteFile> delete_files;
 	for (auto &entry : global_state.written_files) {
@@ -366,8 +399,8 @@ SinkFinalizeType DuckLakeDelete::Finalize(Pipeline &pipeline, Event &event, Clie
 //===--------------------------------------------------------------------===//
 // GetData
 //===--------------------------------------------------------------------===//
-SourceResultType DuckLakeDelete::GetData(ExecutionContext &context, DataChunk &chunk,
-                                         OperatorSourceInput &input) const {
+SourceResultType DuckLakeDelete::GetDataInternal(ExecutionContext &context, DataChunk &chunk,
+                                                 OperatorSourceInput &input) const {
 	auto &global_state = sink_state->Cast<DuckLakeDeleteGlobalState>();
 	auto value = Value::BIGINT(NumericCast<int64_t>(global_state.total_deleted_count));
 	chunk.SetCardinality(1);

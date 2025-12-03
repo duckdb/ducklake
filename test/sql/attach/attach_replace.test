@@ -1,0 +1,17 @@
+# name: test/sql/attach/attach_replace.test
+# description: test attach replace with ducklake
+# group: [attach]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+
+test-env DATA_PATH __TEST_DIR__
+
+statement ok
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/attach_replace', METADATA_CATALOG 'x')
+
+statement ok
+ATTACH OR REPLACE'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/attach_replace_2', METADATA_CATALOG 'xx')

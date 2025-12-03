@@ -42,6 +42,6 @@ statement ok
 INSERT INTO ducklake.test_special_values (i) VALUES (100)
 
 query III
-SELECT * FROM ducklake.test_special_values WHERE s2 IS NOT NULL
+SELECT * FROM ducklake.test_special_values WHERE s2 IS NULL
 ----
 100	(empty)	NULL

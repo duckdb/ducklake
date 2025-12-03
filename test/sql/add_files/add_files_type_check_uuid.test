@@ -1,0 +1,28 @@
+# name: test/sql/add_files/add_files_type_check_uuid.test
+# description: test ducklake adding files with UUID
+# group: [add_files]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+
+test-env DATA_PATH __TEST_DIR__
+
+statement ok
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/ducklake_add_files_uuid')
+
+statement ok
+COPY (SELECT uuid() AS col1) TO '${DATA_PATH}/uuid.parquet';
+
+statement ok
+CREATE OR REPLACE TABLE ducklake.test(col1 UUID);
+
+statement ok
+CALL ducklake_add_data_files('ducklake', 'test', '${DATA_PATH}/uuid.parquet')
+
+query I
+SELECT uuid_extract_version(col1) FROM ducklake.test
+----
+4

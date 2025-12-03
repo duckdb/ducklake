@@ -14,6 +14,7 @@
 #include "duckdb/common/index_vector.hpp"
 #include "storage/ducklake_stats.hpp"
 #include "common/ducklake_data_file.hpp"
+#include "storage/ducklake_field_data.hpp"
 
 namespace duckdb {
 class DuckLakeCatalog;
@@ -63,13 +64,13 @@ public:
 
 public:
 	// // Source interface
-	SourceResultType GetData(ExecutionContext &context, DataChunk &chunk, OperatorSourceInput &input) const override;
+	SourceResultType GetDataInternal(ExecutionContext &context, DataChunk &chunk,
+	                                 OperatorSourceInput &input) const override;
 
 	bool IsSource() const override {
 		return true;
 	}
 
-	static bool RequireCasts(const vector<LogicalType> &types);
 	static void InsertCasts(const vector<LogicalType> &types, ClientContext &context, PhysicalPlanGenerator &planner,
 	                        optional_ptr<PhysicalOperator> &plan);
 	static unique_ptr<LogicalOperator> InsertCasts(Binder &binder, unique_ptr<LogicalOperator> &plan);
@@ -82,6 +83,9 @@ public:
 	                                    DuckLakeTableEntry &table, string encryption_key);
 	static void AddWrittenFiles(DuckLakeInsertGlobalState &gstate, DataChunk &chunk, const string &encryption_key,
 	                            optional_idx partition_id, bool set_snapshot_id = false);
+
+	static const DuckLakeFieldId &GetTopLevelColumn(DuckLakeCopyInput &copy_input, FieldIndex field_id,
+	                                                optional_idx &index);
 
 public:
 	// Sink interface

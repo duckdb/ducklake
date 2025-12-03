@@ -57,10 +57,9 @@ jobs:
     - name: Build extension
       env:
         GEN: ninja
-        STATIC_LIBCPP: 1
       run: |
-        make reldebug
+        make release
 
     - name: Test extension
       run: |
-        build/reldebug/test/unittest --test-config test/configs/attach_ducklake.json --test-dir duckdb
+        build/release/test/unittest --test-config test/configs/attach_ducklake.json --test-dir duckdb

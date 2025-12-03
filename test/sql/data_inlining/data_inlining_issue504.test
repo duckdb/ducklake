@@ -1,0 +1,26 @@
+# name: test/sql/data_inlining/data_inlining_issue504.test
+# description: test inlining with ORDER BY prior to flush
+# group: [data_inlining]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+
+test-env DATA_PATH __TEST_DIR__
+
+
+statement ok
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/ducklake_inlining_flush_data', DATA_INLINING_ROW_LIMIT 10000)
+
+statement ok
+CREATE TABLE IF NOT EXISTS ducklake.example_table (created_at TIMESTAMPTZ, version INTEGER);
+
+statement ok
+INSERT INTO ducklake.example_table (created_at, version) VALUES (now(), 1);
+
+query I
+SELECT version FROM ducklake.example_table ORDER BY created_at DESC LIMIT 1
+----
+1

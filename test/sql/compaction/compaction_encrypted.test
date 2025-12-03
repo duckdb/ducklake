@@ -6,6 +6,8 @@ require ducklake
 
 require parquet
 
+require httpfs
+
 test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
 
 test-env DATA_PATH __TEST_DIR__

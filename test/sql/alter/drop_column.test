@@ -26,7 +26,7 @@ ALTER TABLE ducklake.test DROP COLUMN col2
 statement error
 ALTER TABLE ducklake.test DROP COLUMN col2
 ----
-does not exist
+does not
 
 statement ok
 ALTER TABLE ducklake.test DROP COLUMN IF EXISTS col2

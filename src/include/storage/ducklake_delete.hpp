@@ -18,7 +18,6 @@ class DuckLakeDeleteGlobalState;
 class DuckLakeTransaction;
 
 struct DuckLakeDeleteMap {
-
 	void AddExtendedFileInfo(DuckLakeFileListExtendedEntry file_entry) {
 		auto filename = file_entry.file.path;
 		file_map.emplace(std::move(filename), std::move(file_entry));
@@ -76,7 +75,8 @@ public:
 
 public:
 	// // Source interface
-	SourceResultType GetData(ExecutionContext &context, DataChunk &chunk, OperatorSourceInput &input) const override;
+	SourceResultType GetDataInternal(ExecutionContext &context, DataChunk &chunk,
+	                                 OperatorSourceInput &input) const override;
 
 	bool IsSource() const override {
 		return true;
@@ -109,7 +109,7 @@ public:
 
 private:
 	void FlushDelete(DuckLakeTransaction &transaction, ClientContext &context, DuckLakeDeleteGlobalState &global_state,
-	                 const string &filename, vector<idx_t> &deleted_rows) const;
+	                 const string &filename, ColumnDataCollection &deleted_rows) const;
 };
 
 } // namespace duckdb

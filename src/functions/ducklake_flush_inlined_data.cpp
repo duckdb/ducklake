@@ -36,8 +36,8 @@ DuckLakeFlushData::DuckLakeFlushData(PhysicalPlan &physical_plan, const vector<L
 //===--------------------------------------------------------------------===//
 // GetData
 //===--------------------------------------------------------------------===//
-SourceResultType DuckLakeFlushData::GetData(ExecutionContext &context, DataChunk &chunk,
-                                            OperatorSourceInput &input) const {
+SourceResultType DuckLakeFlushData::GetDataInternal(ExecutionContext &context, DataChunk &chunk,
+                                                    OperatorSourceInput &input) const {
 	return SourceResultType::FINISHED;
 }
 
@@ -145,7 +145,8 @@ DuckLakeDataFlusher::DuckLakeDataFlusher(ClientContext &context, DuckLakeCatalog
 
 unique_ptr<LogicalOperator> DuckLakeDataFlusher::GenerateFlushCommand() {
 	// get the table entry at the specified snapshot
-	DuckLakeSnapshot snapshot(0, inlined_table.schema_version, 0, 0);
+	DuckLakeSnapshot snapshot(catalog.GetSnapshotForSchema(inlined_table.schema_version, transaction),
+	                          inlined_table.schema_version, 0, 0);
 
 	auto entry = catalog.GetEntryById(transaction, snapshot, table_id);
 	if (!entry) {
@@ -199,7 +200,7 @@ unique_ptr<LogicalOperator> DuckLakeDataFlusher::GenerateFlushCommand() {
 
 	// Add another projection with casts if necessary
 	root->ResolveOperatorTypes();
-	if (DuckLakeInsert::RequireCasts(root->types)) {
+	if (DuckLakeTypes::RequiresCast(root->types)) {
 		root = DuckLakeInsert::InsertCasts(binder, root);
 	}
 
@@ -289,8 +290,11 @@ static unique_ptr<LogicalOperator> FlushInlinedDataBind(ClientContext &context, 
 
 		// - scan all tables from the relevant schemas
 		for (auto &schema : schemas) {
-			schema.get().Scan(context, CatalogType::TABLE_ENTRY,
-			                  [&](CatalogEntry &entry) { tables.push_back(entry.Cast<DuckLakeTableEntry>()); });
+			schema.get().Scan(context, CatalogType::TABLE_ENTRY, [&](CatalogEntry &entry) {
+				if (entry.type == CatalogType::TABLE_ENTRY) {
+					tables.push_back(entry.Cast<DuckLakeTableEntry>());
+				}
+			});
 		}
 	} else {
 		// specific table - fetch the table

@@ -43,8 +43,8 @@ DuckLakeCompaction::DuckLakeCompaction(PhysicalPlan &physical_plan, const vector
 //===--------------------------------------------------------------------===//
 // GetData
 //===--------------------------------------------------------------------===//
-SourceResultType DuckLakeCompaction::GetData(ExecutionContext &context, DataChunk &chunk,
-                                             OperatorSourceInput &input) const {
+SourceResultType DuckLakeCompaction::GetDataInternal(ExecutionContext &context, DataChunk &chunk,
+                                                     OperatorSourceInput &input) const {
 	return SourceResultType::FINISHED;
 }
 
@@ -404,6 +404,9 @@ DuckLakeCompactor::GenerateCompactionCommand(vector<DuckLakeCompactionFileEntry>
 			// This means we have a hive partition.
 			for (idx_t i = 0; i < path_result.size() - 1; i++) {
 				data_path += path_result[i];
+				if (i != path_result.size() - 2) {
+					data_path += catalog.Separator();
+				}
 			}
 			// If we do have a hive partition, let's verify all files have the same one.
 			for (idx_t i = 1; i < actionable_source_files.size(); i++) {
@@ -446,7 +449,7 @@ DuckLakeCompactor::GenerateCompactionCommand(vector<DuckLakeCompactionFileEntry>
 	// Insert a cast projection if necessary
 	auto root = unique_ptr_cast<LogicalGet, LogicalOperator>(std::move(ducklake_scan));
 
-	if (DuckLakeInsert::RequireCasts(root->types)) {
+	if (DuckLakeTypes::RequiresCast(root->types)) {
 		root = DuckLakeInsert::InsertCasts(binder, root);
 	}
 	
@@ -574,9 +577,11 @@ unique_ptr<LogicalOperator> BindCompaction(ClientContext &context, TableFunction
 			auto schemas = ducklake_catalog.GetSchemas(context);
 			for (auto &cur_schema : schemas) {
 				cur_schema.get().Scan(context, CatalogType::TABLE_ENTRY, [&](CatalogEntry &entry) {
-					auto &cur_table = entry.Cast<DuckLakeTableEntry>();
-					GenerateCompaction(context, transaction, ducklake_catalog, input, cur_table, type, delete_threshold,
-					                   local_order_by, compactions);
+					if (entry.type == CatalogType::TABLE_ENTRY) {
+						auto &cur_table = entry.Cast<DuckLakeTableEntry>();
+						GenerateCompaction(context, transaction, ducklake_catalog, input, cur_table, type, delete_threshold,
+										 local_order_by, compactions);
+					}
 				});
 			}
 			return GenerateCompactionOperator(input, bind_index, compactions);
@@ -585,9 +590,11 @@ unique_ptr<LogicalOperator> BindCompaction(ClientContext &context, TableFunction
 			auto schema_entry = catalog.GetSchema(context, catalog.GetName(), schema, OnEntryNotFound::THROW_EXCEPTION);
 			auto &ducklake_schema = schema_entry->Cast<DuckLakeSchemaEntry>();
 			ducklake_schema.Scan(context, CatalogType::TABLE_ENTRY, [&](CatalogEntry &entry) {
-				auto &cur_table = entry.Cast<DuckLakeTableEntry>();
-				GenerateCompaction(context, transaction, ducklake_catalog, input, cur_table, type, delete_threshold,
-				                   local_order_by, compactions);
+				if (entry.type == CatalogType::TABLE_ENTRY) {
+					auto &cur_table = entry.Cast<DuckLakeTableEntry>();
+					GenerateCompaction(context, transaction, ducklake_catalog, input, cur_table, type, delete_threshold,
+									  local_order_by, compactions);
+				}
 			});
 			return GenerateCompactionOperator(input, bind_index, compactions);
 		}
@@ -632,7 +639,6 @@ TableFunctionSet DuckLakeMergeAdjacentFilesFunction::GetFunctions() {
 
 static unique_ptr<LogicalOperator> RewriteFilesBind(ClientContext &context, TableFunctionBindInput &input,
                                                     idx_t bind_index, vector<string> &return_names) {
-
 	return_names.push_back("Success");
 	return BindCompaction(context, input, bind_index, CompactionType::REWRITE_DELETES);
 }

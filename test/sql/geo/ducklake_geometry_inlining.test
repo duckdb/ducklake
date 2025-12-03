@@ -27,9 +27,10 @@ create table t1 (g GEOMETRY);
 statement error
 insert into t1 VALUES (ST_POINT(1,2));
 ----
-Not implemented Error: DuckLake does not yet support data-inlining of GEOMETRY columns
+Not implemented Error: DuckLake does not yet support data-inlining of 'GEOMETRY' columns
+
 
 statement error
 create table t2 as select ST_POINT(1,2) as g;
 ----
-Not implemented Error: DuckLake does not yet support data-inlining of GEOMETRY columns
+Not implemented Error: DuckLake does not yet support data-inlining of 'GEOMETRY' columns

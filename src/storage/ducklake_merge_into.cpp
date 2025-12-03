@@ -11,6 +11,7 @@
 #include "duckdb/planner/expression/bound_reference_expression.hpp"
 #include "duckdb/parallel/thread_context.hpp"
 #include "duckdb/catalog/catalog_entry/table_catalog_entry.hpp"
+#include "duckdb/execution/operator/projection/physical_projection.hpp"
 
 namespace duckdb {
 
@@ -26,10 +27,13 @@ public:
 	PhysicalOperator &copy;
 	//! The final insert operator
 	PhysicalOperator &insert;
+	//! Extra Projections
+	vector<unique_ptr<Expression>> extra_projections;
 
 public:
-	// // Source interface
-	SourceResultType GetData(ExecutionContext &context, DataChunk &chunk, OperatorSourceInput &input) const override;
+	// Source interface
+	SourceResultType GetDataInternal(ExecutionContext &context, DataChunk &chunk,
+	                                 OperatorSourceInput &input) const override;
 
 	bool IsSource() const override {
 		return true;
@@ -58,21 +62,52 @@ DuckLakeMergeInsert::DuckLakeMergeInsert(PhysicalPlan &physical_plan, const vect
     : PhysicalOperator(physical_plan, PhysicalOperatorType::EXTENSION, types, 1), copy(copy), insert(insert) {
 }
 
-SourceResultType DuckLakeMergeInsert::GetData(ExecutionContext &context, DataChunk &chunk,
-                                              OperatorSourceInput &input) const {
+SourceResultType DuckLakeMergeInsert::GetDataInternal(ExecutionContext &context, DataChunk &chunk,
+                                                      OperatorSourceInput &input) const {
 	return SourceResultType::FINISHED;
 }
 
 //===--------------------------------------------------------------------===//
 // Sink
 //===--------------------------------------------------------------------===//
+class DuckLakeMergeIntoLocalState : public LocalSinkState {
+public:
+	unique_ptr<LocalSinkState> copy_sink_state;
+	//! Used if we have extra projections
+	DataChunk cast_chunk;
+	DataChunk chunk;
+	unique_ptr<ExpressionExecutor> expression_executor;
+};
+
 SinkResultType DuckLakeMergeInsert::Sink(ExecutionContext &context, DataChunk &chunk, OperatorSinkInput &input) const {
-	OperatorSinkInput sink_input {*copy.sink_state, input.local_state, input.interrupt_state};
-	return copy.Sink(context, chunk, sink_input);
+	auto &local_state = input.local_state.Cast<DuckLakeMergeIntoLocalState>();
+	OperatorSinkInput sink_input {*copy.sink_state, *local_state.copy_sink_state, input.interrupt_state};
+	reference<DataChunk> chunk_ref = chunk;
+	if (!extra_projections.empty()) {
+		// We have extra projections, we need to execute them
+		local_state.chunk.Reset();
+		local_state.expression_executor->Execute(chunk, local_state.chunk);
+		chunk_ref = local_state.chunk;
+	}
+
+	// Cast the chunk if needed
+	auto &copy_types = copy.Cast<PhysicalCopyToFile>().expected_types;
+	for (idx_t i = 0; i < chunk_ref.get().ColumnCount(); i++) {
+		if (chunk_ref.get().data[i].GetType() != copy_types[i]) {
+			VectorOperations::Cast(context.client, chunk_ref.get().data[i], local_state.cast_chunk.data[i],
+			                       chunk_ref.get().size());
+		} else {
+			local_state.cast_chunk.data[i].Reference(chunk_ref.get().data[i]);
+		}
+	}
+	local_state.cast_chunk.SetCardinality(chunk_ref.get().size());
+
+	return copy.Sink(context, local_state.cast_chunk, sink_input);
 }
 
 SinkCombineResultType DuckLakeMergeInsert::Combine(ExecutionContext &context, OperatorSinkCombineInput &input) const {
-	OperatorSinkCombineInput combine_input {*copy.sink_state, input.local_state, input.interrupt_state};
+	auto &local_state = input.local_state.Cast<DuckLakeMergeIntoLocalState>();
+	OperatorSinkCombineInput combine_input {*copy.sink_state, *local_state.copy_sink_state, input.interrupt_state};
 	return copy.Combine(context, combine_input);
 }
 
@@ -133,15 +168,28 @@ unique_ptr<GlobalSinkState> DuckLakeMergeInsert::GetGlobalSinkState(ClientContex
 }
 
 unique_ptr<LocalSinkState> DuckLakeMergeInsert::GetLocalSinkState(ExecutionContext &context) const {
-	return copy.GetLocalSinkState(context);
+	auto result = make_uniq<DuckLakeMergeIntoLocalState>();
+	result->copy_sink_state = copy.GetLocalSinkState(context);
+	if (!extra_projections.empty()) {
+		result->expression_executor = make_uniq<ExpressionExecutor>(context.client, extra_projections);
+		vector<LogicalType> insert_types;
+		for (auto &expr : result->expression_executor->expressions) {
+			insert_types.push_back(expr->return_type);
+		}
+		result->chunk.Initialize(context.client, insert_types);
+	}
+	result->cast_chunk.Initialize(context.client, copy.Cast<PhysicalCopyToFile>().expected_types);
+
+	return result;
 }
 
 //===--------------------------------------------------------------------===//
 // Plan Merge Into
 //===--------------------------------------------------------------------===//
-unique_ptr<MergeIntoOperator> DuckLakePlanMergeIntoAction(DuckLakeCatalog &catalog, ClientContext &context,
-                                                          LogicalMergeInto &op, PhysicalPlanGenerator &planner,
-                                                          BoundMergeIntoAction &action, PhysicalOperator &child_plan) {
+static unique_ptr<MergeIntoOperator> DuckLakePlanMergeIntoAction(DuckLakeCatalog &catalog, ClientContext &context,
+                                                                 LogicalMergeInto &op, PhysicalPlanGenerator &planner,
+                                                                 BoundMergeIntoAction &action,
+                                                                 PhysicalOperator &child_plan) {
 	auto result = make_uniq<MergeIntoOperator>();
 
 	result->action_type = action.action_type;
@@ -162,9 +210,11 @@ unique_ptr<MergeIntoOperator> DuckLakePlanMergeIntoAction(DuckLakeCatalog &catal
 		update.expressions = std::move(action.expressions);
 		update.columns = std::move(action.columns);
 		update.update_is_del_and_insert = action.update_is_del_and_insert;
-		result->op = catalog.PlanUpdate(context, planner, update, child_plan);
+		auto &update_plan = catalog.PlanUpdate(context, planner, update, child_plan);
+		result->op = update_plan;
 		auto &dl_update = result->op->Cast<DuckLakeUpdate>();
-		dl_update.row_id_index = child_plan.types.size() - 1;
+		// The row_id comes before the deletion information, which is always the 3 last column of the chunk.
+		dl_update.row_id_index = child_plan.types.size() - DuckLakeUpdate::DELETION_INFO_SIZE - 1;
 		break;
 	}
 	case MergeActionType::MERGE_DELETE: {

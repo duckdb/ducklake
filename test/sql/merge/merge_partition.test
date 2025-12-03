@@ -1,0 +1,84 @@
+# name: test/sql/merge/merge_partition.test
+# description: Test merge into with partitions
+# group: [merge]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+
+statement ok
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '__TEST_DIR__/merge_partition', METADATA_CATALOG 'ducklake_meta')
+
+statement ok
+USE ducklake
+
+statement ok
+CREATE TABLE my_timeseries (ts TIMESTAMP, x DOUBLE PRECISION);
+
+statement ok
+ALTER TABLE my_timeseries SET PARTITIONED BY (year(ts));
+
+statement ok
+insert into my_timeseries VALUES ('2025-09-15',42)
+
+statement ok
+MERGE INTO my_timeseries
+    USING (
+        SELECT
+            '2025-09-17'::TIMESTAMP as ts,
+            42::DOUBLE PRECISION as x
+    ) AS timeseries_updates
+    ON my_timeseries.ts = timeseries_updates.ts
+    WHEN NOT MATCHED THEN INSERT;
+
+query II
+SELECT * FROM my_timeseries
+----
+2025-09-15 00:00:00	42.0
+2025-09-17 00:00:00	42.0
+
+statement ok
+MERGE INTO my_timeseries
+    USING (
+        SELECT
+            '2025-09-17'::TIMESTAMP as ts,
+            43::DOUBLE PRECISION as x
+    ) AS timeseries_updates
+ON my_timeseries.ts = timeseries_updates.ts
+WHEN MATCHED THEN UPDATE;
+
+query II
+SELECT * FROM my_timeseries
+----
+2025-09-15 00:00:00	42.0
+2025-09-17 00:00:00	43.0
+
+statement ok
+DROP TABLE my_timeseries;
+
+statement ok
+CREATE TABLE my_timeseries (ts TIMESTAMP, x DOUBLE PRECISION, y DOUBLE PRECISION);
+
+statement ok
+insert into my_timeseries VALUES ('2025-09-15', 43, 39)
+
+statement ok
+CREATE TABLE my_timeseries_new (ts TIMESTAMP, x DOUBLE PRECISION, y DOUBLE PRECISION);
+
+statement ok
+insert into my_timeseries_new VALUES ('2025-09-15', 43, 33)
+
+statement ok
+MERGE INTO my_timeseries old
+    USING my_timeseries_new new
+    USING(ts)
+WHEN MATCHED AND (
+    old.x  IS DISTINCT FROM new.y
+) THEN UPDATE;
+
+query III
+FROM my_timeseries
+----
+2025-09-15 00:00:00	43.0	33.0

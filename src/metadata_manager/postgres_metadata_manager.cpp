@@ -6,6 +6,18 @@ PostgresMetadataManager::PostgresMetadataManager(DuckLakeTransaction &transactio
     : DuckLakeMetadataManager(transaction) {
 }
 
+bool PostgresMetadataManager::TypeIsNativelySupported(const LogicalType &type) {
+	switch (type.id()) {
+	// Unnamed composite types are not supported.
+	case LogicalTypeId::STRUCT:
+	case LogicalTypeId::MAP:
+	case LogicalTypeId::LIST:
+		return false;
+	default:
+		return true;
+	}
+}
+
 string PostgresMetadataManager::GetLatestSnapshotQuery() const {
 	return R"(
 	SELECT * FROM postgres_query({METADATA_CATALOG_NAME_LITERAL},

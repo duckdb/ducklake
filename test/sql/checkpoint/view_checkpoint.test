@@ -1,0 +1,28 @@
+# name: test/sql/checkpoint/view_checkpoint.test
+# description: Test checkpoint with a view
+# group: [checkpoint]
+
+require ducklake
+
+require parquet
+
+require icu
+
+test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+
+test-env DATA_PATH __TEST_DIR__
+
+statement ok
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/view_checkpoint/')
+
+statement ok
+use ducklake
+
+statement ok
+create table t (a integer, b integer, c integer)
+
+statement ok
+create view v as select a from t;
+
+statement ok
+CHECKPOINT;

@@ -4,6 +4,7 @@
 #include "storage/ducklake_metadata_manager.hpp"
 #include "duckdb/storage/table/column_segment.hpp"
 #include "duckdb/planner/table_filter_state.hpp"
+#include "storage/ducklake_catalog.hpp"
 #include "storage/ducklake_delete_filter.hpp"
 
 namespace duckdb {
@@ -38,7 +39,7 @@ bool DuckLakeInlinedDataReader::TryInitializeScan(ClientContext &context, Global
 		// scanning data from a table - read it from the metadata catalog
 		auto transaction = read_info.GetTransaction();
 		auto &metadata_manager = transaction->GetMetadataManager();
-
+		auto &ducklake_catalog = transaction->GetCatalog();
 		// push the projections directly into the read
 		vector<string> columns_to_read;
 		for (auto &column_id : column_indexes) {
@@ -64,11 +65,16 @@ bool DuckLakeInlinedDataReader::TryInitializeScan(ClientContext &context, Global
 					break;
 				}
 				if (!virtual_column.empty()) {
-					columns_to_read.push_back(virtual_column);
+					columns_to_read.push_back(KeywordHelper::WriteOptionallyQuoted(virtual_column));
 					continue;
 				}
 			}
-			columns_to_read.push_back(columns[index].name);
+			string projected_column = KeywordHelper::WriteOptionallyQuoted(columns[index].name);
+			if (!ducklake_catalog.IsDuckCatalog()) {
+				// If it's not a duckdb catalog, we add a cast.
+				projected_column += "::" + columns[index].type.ToString();
+			}
+			columns_to_read.push_back(projected_column);
 		}
 		if (deletion_filter) {
 			// we have a deletion filter - the deletions are on row-ids, not on ordinals
@@ -78,12 +84,12 @@ bool DuckLakeInlinedDataReader::TryInitializeScan(ClientContext &context, Global
 				scan_column_ids.push_back(i);
 				virtual_columns.push_back(InlinedVirtualColumn::NONE);
 			}
-			columns_to_read.push_back("row_id");
+			columns_to_read.push_back(KeywordHelper::WriteOptionallyQuoted("row_id"));
 			virtual_columns.emplace_back(InlinedVirtualColumn::COLUMN_EMPTY);
 		}
 		if (columns_to_read.empty()) {
 			// COUNT(*) - read row_id but don't emit
-			columns_to_read.push_back("row_id");
+			columns_to_read.push_back(KeywordHelper::WriteOptionallyQuoted("row_id"));
 			virtual_columns.emplace_back(InlinedVirtualColumn::COLUMN_EMPTY);
 		}
 		switch (read_info.scan_type) {
@@ -154,12 +160,11 @@ bool DuckLakeInlinedDataReader::TryInitializeScan(ClientContext &context, Global
 	return true;
 }
 
-void DuckLakeInlinedDataReader::Scan(ClientContext &context, GlobalTableFunctionState &global_state,
-                                     LocalTableFunctionState &local_state, DataChunk &chunk) {
+AsyncResult DuckLakeInlinedDataReader::Scan(ClientContext &context, GlobalTableFunctionState &global_state,
+                                            LocalTableFunctionState &local_state, DataChunk &chunk) {
 	if (!virtual_columns.empty()) {
 		scan_chunk.Reset();
 		data->data->Scan(state, scan_chunk);
-
 		idx_t source_idx = 0;
 		for (idx_t c = 0; c < virtual_columns.size(); c++) {
 			switch (virtual_columns[c]) {
@@ -210,6 +215,7 @@ void DuckLakeInlinedDataReader::Scan(ClientContext &context, GlobalTableFunction
 		}
 	}
 	file_row_number += NumericCast<int64_t>(scan_count);
+	return chunk.size() ? AsyncResult(SourceResultType::HAVE_MORE_OUTPUT) : AsyncResult(SourceResultType::FINISHED);
 }
 
 void DuckLakeInlinedDataReader::AddVirtualColumn(column_t virtual_column_id) {

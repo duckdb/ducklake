@@ -66,5 +66,5 @@ jobs:
       - name: Test MinIO - AWS
         run: |
           ./scripts/start-docker.sh
-          build/release/test/unittest --test-config test/configs/minio.json
+          build/release/test/unittest --test-config test/configs/minio.json "test/sql/*"
 

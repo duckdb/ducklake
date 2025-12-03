@@ -14,11 +14,10 @@ DuckLakeInlineData::DuckLakeInlineData(PhysicalPlan &physical_plan, PhysicalOper
 	children.push_back(child);
 
 	for (const auto &type : types) {
-		if (TypeVisitor::Contains(type, [&](const LogicalType &typ) {
-			    return type.id() == LogicalTypeId::BLOB && type.HasAlias() && type.GetAlias() == "GEOMETRY";
-		    })) {
-			throw NotImplementedException("DuckLake does not yet support data-inlining of GEOMETRY columns");
-		};
+		if (DuckLakeTypes::RequiresCast(type)) {
+			throw NotImplementedException("DuckLake does not yet support data-inlining of '%s' columns",
+			                              type.ToString());
+		}
 	}
 }
 
@@ -305,6 +304,13 @@ OperatorFinalResultType DuckLakeInlineData::OperatorFinalize(Pipeline &pipeline,
 	if (!gstate.global_inlined_data) {
 		// no inlined data, we are done
 		return OperatorFinalResultType::FINISHED;
+	}
+	{
+		auto cinsert = const_cast<DuckLakeInsert *>(insert.get());
+		lock_guard<mutex> lock(cinsert->lock);
+		if (!cinsert->sink_state) {
+			cinsert->sink_state = insert->GetGlobalSinkState(context);
+		}
 	}
 	auto &insert_gstate = insert->sink_state->Cast<DuckLakeInsertGlobalState>();
 	if (insert_gstate.total_insert_count != 0) {

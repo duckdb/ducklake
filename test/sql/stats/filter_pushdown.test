@@ -126,3 +126,42 @@ query II
 EXPLAIN ANALYZE SELECT COUNT(*) FROM ducklake.filter_pushdown WHERE d >= DATE '2011-05-29' AND k < 50000;
 ----
 analyzed_plan	<REGEX>:.*Total Files Read: 1.*
+
+# OR filters
+query I
+SELECT COUNT(*) FROM ducklake.filter_pushdown WHERE i=527 OR i=100527;
+----
+2
+
+query II
+EXPLAIN ANALYZE SELECT COUNT(*) FROM ducklake.filter_pushdown WHERE i=527 OR i=100527;
+----
+analyzed_plan	<REGEX>:.*Total Files Read: 2.*
+
+query I
+SELECT COUNT(*) FROM ducklake.filter_pushdown WHERE i in (500, 600, 700);
+----
+3
+
+query II
+EXPLAIN ANALYZE SELECT COUNT(*) FROM ducklake.filter_pushdown WHERE i IN (500, 600, 700);
+----
+analyzed_plan	<REGEX>:.*Total Files Read: 1.*
+
+# file 4 -
+# Single row so it should be able to be pruned with != filter
+statement ok
+INSERT INTO ducklake.filter_pushdown
+SELECT i % 1000 v, i, (TIMESTAMP '1970-01-01' + interval (i) hour)::DATE, i / 10, printf('%06d', i)
+FROM range(501000, 501001) t(i);
+
+# != (not equal) pushdown - should prune file with constant value
+query I
+SELECT COUNT(*) FROM ducklake.filter_pushdown WHERE i != 501000;
+----
+3000
+
+query II
+EXPLAIN ANALYZE SELECT COUNT(*) FROM ducklake.filter_pushdown WHERE i != 501000;
+----
+analyzed_plan	<REGEX>:.*Total Files Read: 3.*

@@ -6,6 +6,7 @@
     "core_functions",
     "parquet",
     "ducklake",
+    "httpfs",
     "postgres_scanner",
     "icu"
   ],
@@ -14,39 +15,14 @@
       "env_value": "postgres:dbname=ducklakedb"
    }],
   "skip_tests": [
-   {
-      "reason": "Data Inlining Not Supported",
-      "paths": [
-        "test/sql/data_inlining/basic_data_inlining.test",
-        "test/sql/concurrent/concurrent_insert_conflict.test",
-        "test/sql/concurrent/concurrent_insert_data_inlining.test",
-        "test/sql/data_inlining/data_inlining_alter.test",
-        "test/sql/data_inlining/data_inlining_constraints.test",
-        "test/sql/data_inlining/data_inlining_delete.test",
-        "test/sql/data_inlining/data_inlining_encryption.test",
-        "test/sql/data_inlining/data_inlining_flush.test",
-        "test/sql/data_inlining/data_inlining_flush_schema.test",
-        "test/sql/data_inlining/data_inlining_large.test",
-        "test/sql/data_inlining/data_inlining_option.test",
-        "test/sql/data_inlining/data_inlining_option_transaction_local.test",
-        "test/sql/data_inlining/data_inlining_partitions.test",
-        "test/sql/data_inlining/data_inlining_table_changes.test",
-        "test/sql/data_inlining/data_inlining_transaction_local_alter.test",
-        "test/sql/data_inlining/data_inlining_transaction_local_delete.test",
-        "test/sql/data_inlining/data_inlining_types.test",
-        "test/sql/data_inlining/data_inlining_update.test",
-        "test/sql/transaction/transaction_conflict_inlining.test",
-        "test/sql/data_inlining/inlining_global_options.test",
-        "test/sql/checkpoint/checkpoint_updates_interleaved.test",
-        "test/sql/checkpoint/checkpoint_ducklake.test"
-      ]
-    },
     {
       "reason": "Tests only for DuckDB as a catalog",
       "paths": [
         "test/sql/general/missing_parquet.test",
         "test/sql/general/paths.test",
-        "test/sql/general/default_path.test"
+        "test/sql/general/default_path.test",
+        "test/sql/autoloading/autoload_data_path.test",
+        "test/sql/general/metadata_parameters.test"
       ]
     },
     {
@@ -57,10 +33,9 @@
       ]
     },
     {
-      "reason": "DuckDB as a catalog specific",
+      "reason": "Postgres Locking (Not a bug, rather PG behavior)",
       "paths": [
-        "test/sql/autoloading/autoload_data_path.test",
-        "test/sql/general/metadata_parameters.test"
+        "test/sql/transaction/transaction_conflict_inlining.test"
       ]
     }
   ]

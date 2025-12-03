@@ -16,7 +16,7 @@ class DuckLakeUpdate : public PhysicalOperator {
 public:
 	DuckLakeUpdate(PhysicalPlan &physical_plan, DuckLakeTableEntry &table, vector<PhysicalIndex> columns,
 	               PhysicalOperator &child, PhysicalOperator &copy_op, PhysicalOperator &delete_op,
-	               PhysicalOperator &insert_op);
+	               PhysicalOperator &insert_op, vector<unique_ptr<Expression>> &expressions);
 
 	//! The table to update
 	DuckLakeTableEntry &table;
@@ -30,14 +30,18 @@ public:
 	PhysicalOperator &insert_op;
 	//! The row-id-index
 	idx_t row_id_index;
+	vector<unique_ptr<Expression>> expressions;
 
 public:
 	// // Source interface
-	SourceResultType GetData(ExecutionContext &context, DataChunk &chunk, OperatorSourceInput &input) const override;
+	SourceResultType GetDataInternal(ExecutionContext &context, DataChunk &chunk,
+	                                 OperatorSourceInput &input) const override;
 
 	bool IsSource() const override {
 		return true;
 	}
+
+	static constexpr uint8_t DELETION_INFO_SIZE = 3;
 
 public:
 	// Sink interface

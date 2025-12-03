@@ -1,0 +1,37 @@
+# name: test/sql/merge/merge_timestamp.test
+# description: Test merge into with timestamp partitions
+# group: [merge]
+
+require ducklake
+
+require parquet
+
+require icu
+
+test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+
+test-env DATA_PATH __TEST_DIR__
+
+statement ok
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/merge_partition_update', METADATA_CATALOG 'ducklake_meta')
+
+statement ok
+USE ducklake
+
+statement ok
+create table t (id uuid, ts timestamptz);
+
+statement ok
+alter table t set partitioned by (year(ts), month(ts));
+
+statement ok
+merge into t
+using (select uuidv7() id, current_timestamp ts) m on (t.id = m.id)
+when matched then update set id = m.id, ts=m.ts
+when not matched then insert (id, ts) values (m.id, m.ts);
+
+query I
+SELECT count (*) FROM t;
+----
+1
+
