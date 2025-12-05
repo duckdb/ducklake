@@ -9,6 +9,7 @@
 #pragma once
 
 #include "duckdb/catalog/catalog_entry/table_catalog_entry.hpp"
+#include "duckdb/parser/parsed_data/alter_table_info.hpp"
 #include "storage/ducklake_stats.hpp"
 #include "storage/ducklake_partition_data.hpp"
 #include "common/index.hpp"
@@ -121,6 +122,7 @@ private:
 	unique_ptr<CatalogEntry> AlterTable(DuckLakeTransaction &transaction, RemoveFieldInfo &info);
 	unique_ptr<CatalogEntry> AlterTable(DuckLakeTransaction &transaction, RenameFieldInfo &info);
 	unique_ptr<CatalogEntry> AlterTable(DuckLakeTransaction &transaction, SetDefaultInfo &info);
+	unique_ptr<CatalogEntry> AlterTable(DuckLakeTransaction &transaction, SetSortedByInfo &info);
 
 	unique_ptr<DuckLakeFieldId> GetNestedEvolution(const DuckLakeFieldId &source_id, const LogicalType &target,
 	                                               ColumnChangeInfo &result, optional_idx parent_idx);

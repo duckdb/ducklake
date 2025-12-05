@@ -20,6 +20,8 @@
 #include "duckdb/common/multi_file/multi_file_reader.hpp"
 #include "storage/ducklake_multi_file_reader.hpp"
 
+#include "duckdb/common/printer.hpp"
+
 namespace duckdb {
 constexpr column_t DuckLakeMultiFileReader::COLUMN_IDENTIFIER_SNAPSHOT_ID;
 
@@ -1047,6 +1049,34 @@ unique_ptr<CatalogEntry> DuckLakeTableEntry::AlterTable(DuckLakeTransaction &tra
 	return std::move(new_entry);
 }
 
+unique_ptr<CatalogEntry> DuckLakeTableEntry::AlterTable(DuckLakeTransaction &transaction, SetSortedByInfo &info) {
+	Printer::Print("Made it into DuckLakeTableEntry::AlterTable with SetSortedByInfo");
+	Printer::Print("info.ToString(): " + info.ToString());
+	// As a placeholder, try doing nothing
+	auto create_info = GetInfo();
+	auto &table_info = create_info->Cast<CreateTableInfo>();
+	
+	auto new_entry = make_uniq<DuckLakeTableEntry>(*this, table_info, LocalChangeType::SET_SORT_KEY);
+	return std::move(new_entry);
+
+	// This is the partition logic:
+	// auto create_info = GetInfo();
+	// auto &table_info = create_info->Cast<CreateTableInfo>();
+	// // create a complete copy of this table with the partition info added
+	// auto partition_data = make_uniq<DuckLakePartition>();
+	// partition_data->partition_id = transaction.GetLocalCatalogId();
+	// for (idx_t expr_idx = 0; expr_idx < info.partition_keys.size(); expr_idx++) {
+	// 	auto &expr = *info.partition_keys[expr_idx];
+	// 	auto partition_field = GetPartitionField(*this, expr);
+	// 	partition_field.partition_key_index = expr_idx;
+	// 	partition_data->fields.push_back(partition_field);
+	// }
+
+	// auto new_entry = make_uniq<DuckLakeTableEntry>(*this, table_info, std::move(partition_data));
+	// return std::move(new_entry);
+
+}
+
 unique_ptr<CatalogEntry> DuckLakeTableEntry::Alter(DuckLakeTransaction &transaction, AlterTableInfo &info) {
 	if (transaction.HasTransactionInlinedData(GetTableId())) {
 		throw NotImplementedException("ALTER on a table with transaction-local inlined data is not supported");
@@ -1076,6 +1106,8 @@ unique_ptr<CatalogEntry> DuckLakeTableEntry::Alter(DuckLakeTransaction &transact
 		return AlterTable(transaction, info.Cast<RenameFieldInfo>());
 	case AlterTableType::SET_DEFAULT:
 		return AlterTable(transaction, info.Cast<SetDefaultInfo>());
+	case AlterTableType::SET_SORTED_BY:
+		return AlterTable(transaction, info.Cast<SetSortedByInfo>());
 	default:
 		throw BinderException("Unsupported ALTER TABLE type in DuckLake");
 	}

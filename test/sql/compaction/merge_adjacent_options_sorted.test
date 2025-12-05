@@ -67,6 +67,10 @@ t.table_name = 'sort_with_parameter'
 1	1
 
 statement ok
+ALTER TABLE sort_with_parameter SET SORTED BY (sort_key_1 ASC NULLS LAST, sort_key_2 ASC NULLS FIRST);
+
+
+statement ok
 CALL ducklake_merge_adjacent_files('ducklake', 'sort_with_parameter', local_order_by => 'sort_key_1 ASC,sort_key_2 ASC');
 
 query III

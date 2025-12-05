@@ -133,7 +133,8 @@ void GetTransactionTableChanges(reference<CatalogEntry> table_entry, Transaction
 		case LocalChangeType::ADD_COLUMN:
 		case LocalChangeType::REMOVE_COLUMN:
 		case LocalChangeType::CHANGE_COLUMN_TYPE:
-		case LocalChangeType::SET_DEFAULT: {
+		case LocalChangeType::SET_DEFAULT: 
+		case LocalChangeType::SET_SORT_KEY: {
 			// this table was altered
 			auto table_id = table.GetTableId();
 			// don't report transaction-local tables yet - these will get added later on
@@ -848,6 +849,10 @@ void DuckLakeTransaction::GetNewTableInfo(DuckLakeCommitState &commit_state, Duc
 
 			transaction_changes.altered_tables.insert(table_id);
 			column_schema_change = true;
+			break;
+		}
+		case LocalChangeType::SET_SORT_KEY: {
+			// TODO: FIXME
 			break;
 		}
 		case LocalChangeType::SET_COMMENT: {
@@ -2244,6 +2249,7 @@ void DuckLakeTransaction::AlterEntryInternal(DuckLakeTableEntry &table, unique_p
 	case LocalChangeType::REMOVE_COLUMN:
 	case LocalChangeType::CHANGE_COLUMN_TYPE:
 	case LocalChangeType::SET_DEFAULT:
+	case LocalChangeType::SET_SORT_KEY:
 		break;
 	default:
 		throw NotImplementedException("Alter type not supported in DuckLakeTransaction::AlterEntry");
