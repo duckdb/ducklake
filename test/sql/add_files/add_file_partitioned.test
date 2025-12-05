@@ -1,0 +1,56 @@
+# name: test/sql/add_files/add_file_partitioned.test
+# description: test if ducklake adds files with proper partitioning information
+# group: [add_files]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+
+test-env DATA_PATH __TEST_DIR__
+
+statement ok
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/add_file_partitioned/', METADATA_CATALOG 'metadata');
+
+statement ok
+USE ducklake;
+
+statement ok
+CREATE TABLE partitioned_t (id INT, partition_column INT);
+
+statement ok
+ALTER TABLE partitioned_t SET PARTITIONED BY (partition_column);
+
+statement ok
+INSERT INTO partitioned_t VALUES (5,1), (6,1);
+
+statement ok
+INSERT INTO partitioned_t VALUES (5,2), (6,3);
+
+statement ok
+COPY (SELECT 4 AS id) TO '${DATA_PATH}/add_file_partitioned/main/partitioned_t/partition_column=2/file.parquet' (FORMAT parquet);
+
+query IIII
+FROM metadata.ducklake_file_partition_value;
+----
+0	1	0	1
+1	1	0	2
+2	1	0	3
+
+statement ok
+CALL ducklake_add_data_files('ducklake', 'partitioned_t', '${DATA_PATH}/add_file_partitioned/main/partitioned_t/partition_column=2/file.parquet')
+
+query IIII
+FROM metadata.ducklake_file_partition_value;
+----
+0	1	0	1
+1	1	0	2
+2	1	0	3
+4	1	0	2
+
+query II
+FROM partitioned_t where partition_column = 2;
+----
+5	2
+4	2

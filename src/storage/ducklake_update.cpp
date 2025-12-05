@@ -111,7 +111,8 @@ SinkResultType DuckLakeUpdate::Sink(ExecutionContext &context, DataChunk &chunk,
 	const idx_t partition_column_count = expression_column_count - physical_column_count;
 	const idx_t insert_column_count = insert_chunk.ColumnCount();
 	D_ASSERT(insert_column_count >= expression_column_count);
-	// virtual columns (PlanUpdate sets WRITE_ROW_ID, so there is exactly one: the row id) must sit between the physical and partition columns
+	// virtual columns (PlanUpdate sets WRITE_ROW_ID, so there is exactly one: the row id) must sit between the physical
+	// and partition columns
 	const idx_t virtual_column_count = insert_column_count - expression_column_count;
 	D_ASSERT(virtual_column_count == 1);
 
@@ -123,8 +124,8 @@ SinkResultType DuckLakeUpdate::Sink(ExecutionContext &context, DataChunk &chunk,
 	insert_chunk.data[physical_column_count].Reference(chunk.data[row_id_index]);
 	// place computed partition columns after the virtual columns
 	for (idx_t part_idx = 0; part_idx < partition_column_count; part_idx++) {
-		insert_chunk.data[physical_column_count + virtual_column_count + part_idx]
-		    .Reference(update_expression_chunk.data[physical_column_count + part_idx]);
+		insert_chunk.data[physical_column_count + virtual_column_count + part_idx].Reference(
+		    update_expression_chunk.data[physical_column_count + part_idx]);
 	}
 
 	OperatorSinkInput copy_input {*copy_op.sink_state, *lstate.copy_local_state, input.interrupt_state};
