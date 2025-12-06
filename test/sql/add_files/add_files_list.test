@@ -1,0 +1,37 @@
+# name: test/sql/add_files/add_files_list.test
+# description: test ducklake adding files directly
+# group: [add_files]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+
+test-env DATA_PATH __TEST_DIR__
+
+statement ok
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/ducklake_add_files/', METADATA_CATALOG 'metadata');
+
+statement ok
+CREATE TABLE ducklake.test(col1 INTEGER, col2 VARCHAR);
+
+statement ok
+INSERT INTO ducklake.test VALUES (100, 'hello');
+
+# write a parquet file outside of DuckLake
+statement ok
+COPY (SELECT 200 col1, 'world' col2) TO '${DATA_PATH}/ducklake_add_files/main/test/my_file.parquet';
+
+statement ok
+COPY (SELECT 300 col1, '!' col2) TO '${DATA_PATH}/ducklake_add_files/main/test/my_file_2.parquet';
+
+statement ok
+CALL ducklake_add_data_files('ducklake', 'test', ['${DATA_PATH}/ducklake_add_files/main/test/my_file.parquet','${DATA_PATH}/ducklake_add_files/main/test/my_file_2.parquet'])
+
+query II
+FROM ducklake.test ORDER BY col1;
+----
+100	hello
+200	world
+300	!

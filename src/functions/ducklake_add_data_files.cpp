@@ -42,10 +42,20 @@ static unique_ptr<FunctionData> DuckLakeAddDataFilesBind(ClientContext &context,
 	auto &table = entry->Cast<DuckLakeTableEntry>();
 
 	auto result = make_uniq<DuckLakeAddDataFilesData>(catalog, table);
-	if (input.inputs[2].IsNull()) {
+	auto &file_list = input.inputs[2];
+	if (file_list.IsNull()) {
 		throw InvalidInputException("File list cannot be NULL");
 	}
-	result->globs.push_back(StringValue::Get(input.inputs[2]));
+	if (file_list.type() == LogicalType::VARCHAR) {
+		result->globs.push_back(StringValue::Get(file_list));
+	} else if (file_list.type() == LogicalType::LIST(LogicalType::VARCHAR)) {
+		auto paths = ListValue::GetChildren(file_list);
+		for (const auto &path : paths) {
+			result->globs.push_back(StringValue::Get(path));
+		}
+	} else {
+		throw InvalidInputException("File list must be a string or a list of strings");
+	}
 	for (auto &entry : input.named_parameters) {
 		auto lower = StringUtil::Lower(entry.first);
 		if (lower == "allow_missing") {
@@ -1126,13 +1136,19 @@ static void DuckLakeAddDataFilesExecute(ClientContext &context, TableFunctionInp
 	state.finished = true;
 }
 
-DuckLakeAddDataFilesFunction::DuckLakeAddDataFilesFunction()
-    : TableFunction("ducklake_add_data_files", {LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::VARCHAR},
-                    DuckLakeAddDataFilesExecute, DuckLakeAddDataFilesBind, DuckLakeAddDataFilesInit) {
-	named_parameters["allow_missing"] = LogicalType::BOOLEAN;
-	named_parameters["ignore_extra_columns"] = LogicalType::BOOLEAN;
-	named_parameters["hive_partitioning"] = LogicalType::BOOLEAN;
-	named_parameters["schema"] = LogicalType::VARCHAR;
+TableFunctionSet DuckLakeAddDataFilesFunction::GetFunctions() {
+	TableFunctionSet set("ducklake_add_data_files");
+	vector<LogicalType> at_types {LogicalType::VARCHAR, LogicalType::LIST(LogicalType::VARCHAR)};
+	for (auto &type : at_types) {
+		TableFunction function("ducklake_add_data_files", {LogicalType::VARCHAR, LogicalType::VARCHAR, type},
+		                       DuckLakeAddDataFilesExecute, DuckLakeAddDataFilesBind, DuckLakeAddDataFilesInit);
+		function.named_parameters["allow_missing"] = LogicalType::BOOLEAN;
+		function.named_parameters["ignore_extra_columns"] = LogicalType::BOOLEAN;
+		function.named_parameters["hive_partitioning"] = LogicalType::BOOLEAN;
+		function.named_parameters["schema"] = LogicalType::VARCHAR;
+		set.AddFunction(function);
+	}
+	return set;
 }
 
 } // namespace duckdb
