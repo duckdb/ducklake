@@ -245,6 +245,10 @@ void DuckLakeDelete::FlushDelete(DuckLakeTransaction &transaction, ClientContext
 		} else {
 			// transaction-local file - we can drop the file directly
 			transaction.DropTransactionLocalFile(table.GetTableId(), data_file_info.file.path);
+			// we also need to drop a delete file, if exists;
+			if (!data_file_info.delete_file.path.empty()) {
+				transaction.DropTransactionLocalDeleteFile(table.GetTableId(), data_file_info.delete_file.path);
+			}
 		}
 		return;
 	}
