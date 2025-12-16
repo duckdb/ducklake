@@ -255,22 +255,42 @@ std::string DuckLakeCompactor::GetLocalOrderBy(DuckLakeCatalog &catalog, DuckLak
 unique_ptr<LogicalOperator> DuckLakeCompactor::InsertLocalOrderBy(Binder &binder, unique_ptr<LogicalOperator> &plan, DuckLakeTableEntry &table, const std::string &order_by) {
 
 	// TODO:
-	// Create a new branch based on this one
-	// Research / understand how to intercept the SET SORTED syntax and print out something there
-	// 		Make a test for SET SORTED
-	// Research / understand how to create a new ducklake catalog table (migration?)
-	// 		Stretch goal to have this be versioned
+	// DONE Create a new branch based on this one
+	// DONE Research / understand how to intercept the SET SORTED syntax and print out something there
+	// 		DONE Make a test for SET SORTED
+	// DONE Research / understand how to create a new ducklake catalog table (ducklake_metadata_manager.cpp)
+	// 		DONE Stretch goal to have this be versioned
 	// Load data into that new catalog table in the SET SORTED call
-	// Pull that configuration out of the catalog for GetLocalOrderBy
+	//  (Seems like I need to pull from catalog, be able to set the data, and be able to get the data all at once to test it.)
+	//		DONE Create a class to hold the sort information (struct DuckLakePartitionInfo equivalent)
+	// 		DONE Create a function SetSortData 
+	// 		DONE Add logic in DuckLakeMetadataManager::GetCatalogForSnapshot to pull all the sort information
+	// 		DONE Add logic to SetSortData in DuckLakeCatalog::LoadSchemaForSnapshot
+	// 		DONE Write a DuckLakeTransaction::GetNewSortKey function
+	// 		DONE Create DuckLakeMetadataManager::WriteNewSortKeys (an equivalent of DuckLakeMetadataManager::WriteNewPartitionKeys)
+	// 		DONE Add WriteNewSortKeys to DuckLakeTransaction::CommitChanges
+	// 		DONE Finish DuckLakeTableEntry::AlterTable to actually store the SET SORTED data
 
+
+	// Pull that configuration out of the catalog for GetLocalOrderBy
+	// 		This should test that I am storing this on the Table object as I expect
+
+	// Remove all of the local_order_by option from the tests
 	// Working end to end test of compaction and inlining
 
-	// Remove all of the local_order_by option stuff
+
+	// TODO: FIGURE OUT HOW TO DROP A SORT
+	// 		ALTER TABLE tbl RESET SORTED BY;
+
+
+	// Remove all of the local_order_by option stuff from the code 
+	// Deduplicate this to make sure we only update this when it is different
+	// 		Add a test that adds the same sort order to the same table twice and validate there is only 1 catalog entry
 	// Learn how to intercept an insert into a DuckLake table and add an order by there
 	// Move the LocalOrderBy logic into DuckLakeInsert
 	// Revert the .hpp-ification of the compactor class
 	// Add an option for disabling sort_on_insert
-	
+
 
 
 

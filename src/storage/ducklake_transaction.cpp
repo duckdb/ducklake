@@ -745,6 +745,39 @@ DuckLakePartitionInfo DuckLakeTransaction::GetNewPartitionKey(DuckLakeCommitStat
 	return partition_key;
 }
 
+DuckLakeSortInfo DuckLakeTransaction::GetNewSortKey(DuckLakeCommitState &commit_state,
+                                                    DuckLakeTableEntry &table) {
+	
+	DuckLakeSortInfo sort_key;
+	sort_key.table_id = commit_state.GetTableId(table);
+	if (sort_key.table_id.IsTransactionLocal()) {
+		throw InternalException("Trying to write partition with transaction local table-id");
+	}
+
+	// insert the new sort data
+	auto sort_data = table.GetSortData();
+	if (!sort_data) {
+		// dropping sort data - insert the empty sort key data for this table
+		return sort_key;
+	}
+
+	auto sort_id = commit_state.commit_snapshot.next_catalog_id++;
+	sort_key.id = sort_id;
+	sort_data->sort_id = sort_id;
+	for (auto &field : sort_data->fields) {
+		DuckLakeSortFieldInfo sort_field;
+		sort_field.sort_key_index = field.sort_key_index;
+		sort_field.expression = field.expression;
+		sort_field.dialect = field.dialect;
+		sort_field.sort_direction = field.sort_direction;
+		sort_field.null_order = field.null_order;
+		
+		sort_key.fields.push_back(std::move(sort_field));
+	}
+	
+	return sort_key;
+}
+
 vector<DuckLakeColumnInfo> DuckLakeTableEntry::GetTableColumns() const {
 	vector<DuckLakeColumnInfo> result;
 	auto not_null_fields = GetNotNullFields();
@@ -800,6 +833,7 @@ struct NewTableInfo {
 	vector<DuckLakeDroppedColumn> dropped_columns;
 	vector<DuckLakeNewColumn> new_columns;
 	vector<DuckLakeTableInfo> new_inlined_data_tables;
+	vector<DuckLakeSortInfo> new_sort_keys;
 };
 
 struct NewMacroInfo {
@@ -852,7 +886,9 @@ void DuckLakeTransaction::GetNewTableInfo(DuckLakeCommitState &commit_state, Duc
 			break;
 		}
 		case LocalChangeType::SET_SORT_KEY: {
-			// TODO: FIXME
+			auto sort_key = GetNewSortKey(commit_state, table);
+			result.new_sort_keys.push_back(std::move(sort_key));
+			transaction_changes.altered_tables.insert(table_id);
 			break;
 		}
 		case LocalChangeType::SET_COMMENT: {
@@ -1457,6 +1493,7 @@ void DuckLakeTransaction::CommitChanges(DuckLakeCommitState &commit_state,
 		metadata_manager->WriteDroppedColumns(commit_snapshot, result.dropped_columns);
 		metadata_manager->WriteNewColumns(commit_snapshot, result.new_columns);
 		metadata_manager->WriteNewInlinedTables(commit_snapshot, result.new_inlined_data_tables);
+		metadata_manager->WriteNewSortKeys(commit_snapshot, result.new_sort_keys);
 	}
 
 	if (!new_macros.empty()) {

@@ -121,6 +121,13 @@ DuckLakeTableEntry::DuckLakeTableEntry(DuckLakeTableEntry &parent, CreateTableIn
 	partition_data = std::move(partition_data_p);
 }
 
+// ALTER TABLE SET SORT KEY
+DuckLakeTableEntry::DuckLakeTableEntry(DuckLakeTableEntry &parent, CreateTableInfo &info,
+                                       unique_ptr<DuckLakeSort> sort_data_p)
+    : DuckLakeTableEntry(parent, info, LocalChangeType::SET_SORT_KEY) {
+	sort_data = std::move(sort_data_p);
+}
+
 const DuckLakeFieldId &DuckLakeTableEntry::GetFieldId(PhysicalIndex column_index) const {
 	return field_data->GetByRootIndex(column_index);
 }
@@ -294,6 +301,10 @@ vector<column_t> DuckLakeTableEntry::GetRowIdColumns() const {
 
 void DuckLakeTableEntry::SetPartitionData(unique_ptr<DuckLakePartition> partition_data_p) {
 	partition_data = std::move(partition_data_p);
+}
+
+void DuckLakeTableEntry::SetSortData(unique_ptr<DuckLakeSort> sort_data_p) {
+	sort_data = std::move(sort_data_p);
 }
 
 const string &DuckLakeTableEntry::DataPath() const {
@@ -1052,28 +1063,29 @@ unique_ptr<CatalogEntry> DuckLakeTableEntry::AlterTable(DuckLakeTransaction &tra
 unique_ptr<CatalogEntry> DuckLakeTableEntry::AlterTable(DuckLakeTransaction &transaction, SetSortedByInfo &info) {
 	Printer::Print("Made it into DuckLakeTableEntry::AlterTable with SetSortedByInfo");
 	Printer::Print("info.ToString(): " + info.ToString());
-	// As a placeholder, try doing nothing
 	auto create_info = GetInfo();
 	auto &table_info = create_info->Cast<CreateTableInfo>();
 	
-	auto new_entry = make_uniq<DuckLakeTableEntry>(*this, table_info, LocalChangeType::SET_SORT_KEY);
+	
+	// FIXME: Save the entire expression, not just a fixed column value
+
+	// I need to populate the sort_data
+	auto sort_data = make_uniq<DuckLakeSort>();
+	sort_data->sort_id = transaction.GetLocalCatalogId();
+	for (idx_t order_node_idx = 0; order_node_idx < info.sort_keys.size(); order_node_idx++) {
+		auto &order_node = info.sort_keys[order_node_idx];
+		DuckLakeSortField sort_field;
+		sort_field.sort_key_index = order_node_idx;
+		sort_field.expression = order_node.expression->ToString();
+		sort_field.dialect = "duckdb";
+		sort_field.sort_direction = order_node.type;
+		sort_field.null_order = order_node.null_order;
+		sort_data->fields.push_back(sort_field);
+	}
+
+	auto new_entry = make_uniq<DuckLakeTableEntry>(*this, table_info, std::move(sort_data));
 	return std::move(new_entry);
 
-	// This is the partition logic:
-	// auto create_info = GetInfo();
-	// auto &table_info = create_info->Cast<CreateTableInfo>();
-	// // create a complete copy of this table with the partition info added
-	// auto partition_data = make_uniq<DuckLakePartition>();
-	// partition_data->partition_id = transaction.GetLocalCatalogId();
-	// for (idx_t expr_idx = 0; expr_idx < info.partition_keys.size(); expr_idx++) {
-	// 	auto &expr = *info.partition_keys[expr_idx];
-	// 	auto partition_field = GetPartitionField(*this, expr);
-	// 	partition_field.partition_key_index = expr_idx;
-	// 	partition_data->fields.push_back(partition_field);
-	// }
-
-	// auto new_entry = make_uniq<DuckLakeTableEntry>(*this, table_info, std::move(partition_data));
-	// return std::move(new_entry);
 
 }
 
