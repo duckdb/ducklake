@@ -76,13 +76,13 @@ public:
 class DuckLakeCompactor {
 public:
 	DuckLakeCompactor(ClientContext &context, DuckLakeCatalog &catalog, DuckLakeTransaction &transaction,
-	                  Binder &binder, TableIndex table_id, const std::string &local_order_by);
+	                  Binder &binder, TableIndex table_id);
 	DuckLakeCompactor(ClientContext &context, DuckLakeCatalog &catalog, DuckLakeTransaction &transaction,
 	                  Binder &binder, TableIndex table_id, double delete_threshold);
 	void GenerateCompactions(DuckLakeTableEntry &table, vector<unique_ptr<LogicalOperator>> &compactions);
 	unique_ptr<LogicalOperator> GenerateCompactionCommand(vector<DuckLakeCompactionFileEntry> source_files);
-	static std::string GetLocalOrderBy(DuckLakeCatalog &catalog, DuckLakeTableEntry &table, const std::string &local_order_by);
-	static unique_ptr<LogicalOperator> InsertLocalOrderBy(Binder &binder, unique_ptr<LogicalOperator> &plan, DuckLakeTableEntry &table, optional_ptr<DuckLakeSort> sort_data) ;
+	static std::string GetLocalOrderBy(DuckLakeCatalog &catalog, DuckLakeTableEntry &table);
+	static unique_ptr<LogicalOperator> InsertSort(Binder &binder, unique_ptr<LogicalOperator> &plan, DuckLakeTableEntry &table, optional_ptr<DuckLakeSort> sort_data) ;
 
 private:
 	ClientContext &context;
@@ -91,7 +91,6 @@ private:
 	Binder &binder;
 	TableIndex table_id;
 	double delete_threshold = 0.95;
-	std::string local_order_by;
 
 	CompactionType type;
 };

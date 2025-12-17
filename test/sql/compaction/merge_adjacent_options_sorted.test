@@ -1,5 +1,5 @@
 # name: test/sql/compaction/merge_adjacent_options_sorted.test
-# description: test ducklake merge adjacent files with local_order_by sorting
+# description: test ducklake merge adjacent files with SET SORTED BY metadata
 # group: [compaction]
 
 require ducklake

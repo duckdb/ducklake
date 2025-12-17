@@ -40,8 +40,7 @@ static constexpr const ducklake_option_array DUCKLAKE_OPTIONS = {
                           "'ducklake_flush_inlined_data','ducklake_merge_adjacent_files', "
                           "'ducklake_rewrite_data_files', 'ducklake_delete_orphaned_files'"},
      {"encrypted", "Whether or not to encrypt Parquet files written to the data path"},
-     {"per_thread_output", "Whether to create separate output files per thread during parallel insertion"},
-	 {"local_order_by", "Sort within the files created during compaction and when flushing inlined data to files. Not a global sort. Not sorting during insert."}
+     {"per_thread_output", "Whether to create separate output files per thread during parallel insertion"}
 	}};
 
 struct DuckLakeOptionsData : public TableFunctionData {
