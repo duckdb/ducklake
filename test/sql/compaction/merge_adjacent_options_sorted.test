@@ -7,7 +7,6 @@ require ducklake
 require parquet
 
 test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
-# test-env DUCKLAKE_CONNECTION ./duckdb_unittest_tempdir/{UUID}.db
 
 
 
@@ -17,15 +16,12 @@ ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '__TEST_DIR__/me
 statement ok
 USE ducklake;
 
-##############################################
-# Parameter in ducklake_merge_adjacent_files #
-##############################################
 # Create one Table with two files
 statement ok
-CREATE TABLE sort_with_parameter (unique_id BIGINT, sort_key_1 BIGINT, sort_key_2 VARCHAR);
+CREATE TABLE sort_on_compaction (unique_id BIGINT, sort_key_1 BIGINT, sort_key_2 VARCHAR);
 
 statement ok
-INSERT INTO sort_with_parameter (unique_id, sort_key_1, sort_key_2)
+INSERT INTO sort_on_compaction (unique_id, sort_key_1, sort_key_2)
 FROM range(4) t(i)
 SELECT 
     i AS unique_id,
@@ -36,7 +32,7 @@ ORDER BY
 ;
 
 statement ok
-INSERT INTO sort_with_parameter (unique_id, sort_key_1, sort_key_2)
+INSERT INTO sort_on_compaction (unique_id, sort_key_1, sort_key_2)
 FROM range(4) t(i)
 SELECT 
     i + 4 AS unique_id,
@@ -47,7 +43,7 @@ ORDER BY
 ;
 
 query III
-FROM sort_with_parameter
+FROM sort_on_compaction
 ----
 3	1	woot3
 2	0	woot2
@@ -64,20 +60,19 @@ FROM __ducklake_metadata_ducklake.ducklake_data_file df
 JOIN __ducklake_metadata_ducklake.ducklake_table t 
 ON df.table_id = t.table_id 
 WHERE 
-t.table_name = 'sort_with_parameter'
+t.table_name = 'sort_on_compaction'
 ----
 0	1
 1	1
 
 statement ok
-ALTER TABLE sort_with_parameter SET SORTED BY (sort_key_1 ASC NULLS LAST, sort_key_2 ASC NULLS LAST);
-
+ALTER TABLE sort_on_compaction SET SORTED BY (sort_key_1 ASC NULLS LAST, sort_key_2 ASC NULLS LAST);
 
 statement ok
-CALL ducklake_merge_adjacent_files('ducklake', 'sort_with_parameter');
+CALL ducklake_merge_adjacent_files('ducklake', 'sort_on_compaction');
 
 query III
-FROM sort_with_parameter
+FROM sort_on_compaction
 ----
 0	0	woot0
 2	0	woot2
@@ -95,104 +90,27 @@ FROM __ducklake_metadata_ducklake.ducklake_data_file df
 JOIN __ducklake_metadata_ducklake.ducklake_table t 
 ON df.table_id = t.table_id 
 WHERE 
-t.table_name = 'sort_with_parameter'
+t.table_name = 'sort_on_compaction'
 ----
 2	1
-
-################################ 
-# Configuration via set_option #
-################################
-# Create one Table with two files
-statement ok
-CREATE TABLE sort_with_setting (unique_id BIGINT, sort_key_1 BIGINT, sort_key_2 VARCHAR);
-
-statement ok
-INSERT INTO sort_with_setting (unique_id, sort_key_1, sort_key_2)
-FROM range(4) t(i)
-SELECT 
-    i AS unique_id,
-    i % 2 AS sort_key_1,
-    'woot' || i AS sort_key_2
-ORDER BY 
-    i DESC
-;
-
-statement ok
-INSERT INTO sort_with_setting (unique_id, sort_key_1, sort_key_2)
-FROM range(4) t(i)
-SELECT 
-    i + 4 AS unique_id,
-    (i + 4) % 2 AS sort_key_1,
-    'woot' || (i + 4) AS sort_key_2
-ORDER BY 
-    i DESC
-;
-
-query III
-FROM sort_with_setting
-----
-3	1	woot3
-2	0	woot2
-1	1	woot1
-0	0	woot0
-7	1	woot7
-6	0	woot6
-5	1	woot5
-4	0	woot4
-
-query II
-SELECT df.data_file_id, df.table_id 
-FROM __ducklake_metadata_ducklake.ducklake_data_file df 
-JOIN __ducklake_metadata_ducklake.ducklake_table t 
-ON df.table_id = t.table_id 
-WHERE 
-t.table_name = 'sort_with_setting'
-----
-3	2
-4	2
-
-statement ok
-CALL ducklake.set_option('local_order_by', 'sort_key_1 ASC ,   sort_key_2 ASC', table_name => 'sort_with_setting');
-
-statement ok
-CALL ducklake_merge_adjacent_files('ducklake', 'sort_with_setting');
-
-query III
-FROM sort_with_setting
-----
-0	0	woot0
-2	0	woot2
-4	0	woot4
-6	0	woot6
-1	1	woot1
-3	1	woot3
-5	1	woot5
-7	1	woot7
-
-# We write a new file for table id 2
-query II
-SELECT df.data_file_id, df.table_id 
-FROM __ducklake_metadata_ducklake.ducklake_data_file df 
-JOIN __ducklake_metadata_ducklake.ducklake_table t 
-ON df.table_id = t.table_id 
-WHERE 
-t.table_name = 'sort_with_setting'
-----
-5	2
 
 
 ######################################
 # Column does not exist in the table #
 ######################################
 statement ok
-CALL ducklake.set_option('local_order_by', 'WOOOOT ASC ,   BLAH ASC', table_name => 'sort_with_setting');
+ALTER TABLE sort_on_compaction SET SORTED BY (WOOOOT ASC ,   BLAH ASC);
 
 statement ok
-INSERT INTO sort_with_setting (unique_id, sort_key_1, sort_key_2)
+INSERT INTO sort_on_compaction (unique_id, sort_key_1, sort_key_2)
 select 1000, 1000, 'anything';
 
+statement ok
+INSERT INTO sort_on_compaction (unique_id, sort_key_1, sort_key_2)
+select 1001, 1001, 'anything else';
+
 statement error
-CALL ducklake_merge_adjacent_files('ducklake', 'sort_with_setting');
+CALL ducklake_merge_adjacent_files('ducklake', 'sort_on_compaction');
 ----
 Binder Error: Columns in the approx_sort parameter were not found in the DuckLake table. Unmatched columns were: WOOOOT, BLAH
 
@@ -201,9 +119,9 @@ Binder Error: Columns in the approx_sort parameter were not found in the DuckLak
 # Expressions are not supported, only column refs #
 ###################################################
 statement ok
-CALL ducklake.set_option('local_order_by', 'concat(sort_key_1, ''_'', sort_key_2) ASC', table_name => 'sort_with_setting');
+ALTER TABLE sort_on_compaction SET SORTED BY (concat(sort_key_1, '_', sort_key_2) ASC);
 
 statement error
-CALL ducklake_merge_adjacent_files('ducklake', 'sort_with_setting');
+CALL ducklake_merge_adjacent_files('ducklake', 'sort_on_compaction');
 ----
 Binder Error: Columns in the approx_sort parameter were not found in the DuckLake table. Unmatched columns were: concat(sort_key_1, '_', sort_key_2)
