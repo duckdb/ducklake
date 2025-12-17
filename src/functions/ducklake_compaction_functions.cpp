@@ -252,7 +252,7 @@ std::string DuckLakeCompactor::GetLocalOrderBy(DuckLakeCatalog &catalog, DuckLak
 	return order_by;
 }
 
-unique_ptr<LogicalOperator> DuckLakeCompactor::InsertLocalOrderBy(Binder &binder, unique_ptr<LogicalOperator> &plan, DuckLakeTableEntry &table, const std::string &order_by) {
+unique_ptr<LogicalOperator> DuckLakeCompactor::InsertLocalOrderBy(Binder &binder, unique_ptr<LogicalOperator> &plan, DuckLakeTableEntry &table, optional_ptr<DuckLakeSort> sort_data) {
 
 	// TODO:
 	// DONE Create a new branch based on this one
@@ -272,7 +272,7 @@ unique_ptr<LogicalOperator> DuckLakeCompactor::InsertLocalOrderBy(Binder &binder
 	// 		DONE Finish DuckLakeTableEntry::AlterTable to actually store the SET SORTED data
 
 
-	// Pull that configuration out of the catalog for GetLocalOrderBy
+	// DONE Pull that configuration out of the catalog for GetLocalOrderBy
 	// 		This should test that I am storing this on the Table object as I expect
 
 	// Remove all of the local_order_by option from the tests
@@ -298,8 +298,21 @@ unique_ptr<LogicalOperator> DuckLakeCompactor::InsertLocalOrderBy(Binder &binder
 
 	vector<BoundOrderByNode> orders;
 
-	vector<OrderByNode> pre_bound_orders = Parser::ParseOrderList(order_by);
+	vector<OrderByNode> pre_bound_orders;
+
+	for (auto &pre_bound_order : sort_data->fields) {
+		if (pre_bound_order.dialect != "duckdb") {
+			continue;
+		}
+		auto parsed_expression = Parser::ParseExpressionList(pre_bound_order.expression);
+		OrderByNode order_node(pre_bound_order.sort_direction, pre_bound_order.null_order, std::move(parsed_expression[0]));
+		pre_bound_orders.emplace_back(std::move(order_node));
+	}
 	
+	if (pre_bound_orders.empty()) {
+		// Then the sorts were not in the DuckDB dialect and we return the original plan
+		return std::move(plan);
+	}
 	auto root_get = unique_ptr_cast<LogicalOperator, LogicalGet>(std::move(plan));
 
 	// Build a map of the names of columns in the query plan so we can bind to them
@@ -494,9 +507,19 @@ DuckLakeCompactor::GenerateCompactionCommand(vector<DuckLakeCompactionFileEntry>
 	}
 	
 	// If compaction should be ordered, add Order By (and projection) to logical plan
-	std::string order_by = DuckLakeCompactor::GetLocalOrderBy(catalog, table, local_order_by);
-	if (!order_by.empty() && order_by.length() > 0) {
-		root = DuckLakeCompactor::InsertLocalOrderBy(binder, root, table, order_by);
+	// Do not pull the sort setting at the time of the creation of the files being compacted,
+	// and instead pull the latest sort setting 
+	auto latest_snapshot = transaction.GetSnapshot();
+	auto latest_entry = catalog.GetEntryById(transaction, latest_snapshot, table_id);
+	// I am assuming that to compact a table, it must still exist
+	if (!latest_entry) {
+		throw InternalException("DuckLakeCompactor: failed to find latest table entry for latest snapshot id");
+	}
+	auto &latest_table = latest_entry->Cast<DuckLakeTableEntry>();
+
+	auto sort_data = latest_table.GetSortData();
+	if (sort_data) {
+		root = DuckLakeCompactor::InsertLocalOrderBy(binder, root, table, sort_data);
 	}
 
 	// generate the LogicalCopyToFile

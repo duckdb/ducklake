@@ -7,6 +7,9 @@ require ducklake
 require parquet
 
 test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+# test-env DUCKLAKE_CONNECTION ./duckdb_unittest_tempdir/{UUID}.db
+
+
 
 statement ok
 ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '__TEST_DIR__/merge_adjacent_options_sorted/')
@@ -67,11 +70,11 @@ t.table_name = 'sort_with_parameter'
 1	1
 
 statement ok
-ALTER TABLE sort_with_parameter SET SORTED BY (sort_key_1 ASC NULLS LAST, sort_key_2 ASC NULLS FIRST);
+ALTER TABLE sort_with_parameter SET SORTED BY (sort_key_1 ASC NULLS LAST, sort_key_2 ASC NULLS LAST);
 
 
 statement ok
-CALL ducklake_merge_adjacent_files('ducklake', 'sort_with_parameter', local_order_by => 'sort_key_1 ASC,sort_key_2 ASC');
+CALL ducklake_merge_adjacent_files('ducklake', 'sort_with_parameter');
 
 query III
 FROM sort_with_parameter

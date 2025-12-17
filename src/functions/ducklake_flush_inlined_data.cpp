@@ -205,9 +205,19 @@ unique_ptr<LogicalOperator> DuckLakeDataFlusher::GenerateFlushCommand() {
 	}
 
 	// If flush should be ordered, add Order By (and projection) to logical plan
-	std::string order_by = DuckLakeCompactor::GetLocalOrderBy(catalog, table, local_order_by);
-	if (!order_by.empty() && order_by.length() > 0) {
-		root = DuckLakeCompactor::InsertLocalOrderBy(binder, root, table, order_by);
+	// Do not pull the sort setting at the time of the creation of the rows being flushed,
+	// and instead pull the latest sort setting 
+	auto latest_snapshot = transaction.GetSnapshot();
+	auto latest_entry = catalog.GetEntryById(transaction, latest_snapshot, table_id);
+	// I am assuming that to flush a table, it must still exist
+	if (!latest_entry) {
+		throw InternalException("DuckLakeDataFlusher: failed to find latest table entry for latest snapshot id");
+	}
+	auto &latest_table = latest_entry->Cast<DuckLakeTableEntry>();
+
+	auto sort_data = latest_table.GetSortData();
+	if (sort_data) {
+		root = DuckLakeCompactor::InsertLocalOrderBy(binder, root, table, sort_data);
 	}
 
 	// generate the LogicalCopyToFile
