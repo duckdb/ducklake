@@ -911,7 +911,7 @@ DuckLakeDataFile DuckLakeFileProcessor::AddFileToTable(ParquetFileMetadata &file
 	const auto partition_data = table.GetPartitionData().get();
 	if (partition_data) {
 		bool invalid_partition = false;
-		if (file.hive_partition_values.size() != partition_data->fields.size()) {
+		if (hive_partitions.size() != partition_data->fields.size()) {
 			invalid_partition = true;
 		} else {
 			for (idx_t i = 0; i < partition_data->fields.size(); i++) {

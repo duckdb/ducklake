@@ -113,4 +113,3 @@ statement error
 CALL ducklake_add_data_files('ducklake', 'partitioned_t', '${DATA_PATH}/add_file_partitioned/main/partitioned_t/partition_column=2/file.parquet')
 ----
 contains an invalid partition value for the table configuration
-

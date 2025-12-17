@@ -1,0 +1,39 @@
+# name: test/sql/add_files/add_file_partitioned_functions.test
+# description: test if ducklake adds files with proper partitioning information with time functions
+# group: [add_files]
+
+require ducklake
+
+require parquet
+
+statement ok
+ATTACH 'ducklake:__TEST_DIR__/{UUID}.db' AS ducklake (DATA_PATH 'data/add_file_partitioned/', METADATA_CATALOG 'metadata');
+
+statement ok
+USE ducklake;
+
+# Can we add a test with a partitioning over multiple columns (e.g. year, month, day)?
+statement ok
+CREATE TABLE partitioned_tbl(id INTEGER, ts TIMESTAMP, values VARCHAR);
+
+statement ok
+ALTER TABLE partitioned_tbl SET PARTITIONED BY (year(ts), month(ts), day(ts));
+
+query IIIIII
+FROM 'data/add_file_partitioned/main/partitioned_tbl/year=2020/month=1/day=1/data.parquet'  order by id limit 1
+----
+0	2020-01-01 00:00:00	thisisastring_0	1	1	2020
+
+# 1. Match the partition
+statement ok
+CALL ducklake_add_data_files('ducklake', 'partitioned_tbl', 'data/add_file_partitioned/main/partitioned_tbl/year=2020/month=1/day=1/data.parquet')
+
+query IIIIII
+FROM partitioned_tbl  order by id limit 1
+----
+0	2020-01-01 00:00:00	thisisastring_0	1	1	2020
+
+# 2. Match a subset of the partition (year, month)
+# 3. Match the partition, but in a different order (day, year, month)
+
+
