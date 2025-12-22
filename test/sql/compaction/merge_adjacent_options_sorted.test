@@ -214,3 +214,196 @@ WHERE
 t.table_name = 'reset_sorted_test'
 ----
 7	5
+
+#####################################################################################################
+# Multiple SET SORTED BY calls with the same sort should not cause duplicate entries in the catalog #
+#####################################################################################################
+statement ok
+CREATE TABLE prevent_duplicates (unique_id BIGINT, sort_key_1 BIGINT, sort_key_2 VARCHAR);
+
+statement ok
+INSERT INTO prevent_duplicates (unique_id, sort_key_1, sort_key_2)
+FROM range(4) t(i)
+SELECT 
+    i AS unique_id,
+    i % 2 AS sort_key_1,
+    'woot' || i AS sort_key_2
+ORDER BY 
+    i DESC
+;
+
+statement ok
+INSERT INTO prevent_duplicates (unique_id, sort_key_1, sort_key_2)
+FROM range(4) t(i)
+SELECT 
+    i + 4 AS unique_id,
+    (i + 4) % 2 AS sort_key_1,
+    'woot' || (i + 4) AS sort_key_2
+ORDER BY 
+    i DESC
+;
+
+query III
+FROM prevent_duplicates
+----
+3	1	woot3
+2	0	woot2
+1	1	woot1
+0	0	woot0
+7	1	woot7
+6	0	woot6
+5	1	woot5
+4	0	woot4
+
+query II
+SELECT df.data_file_id, df.table_id 
+FROM __ducklake_metadata_ducklake.ducklake_data_file df 
+JOIN __ducklake_metadata_ducklake.ducklake_table t 
+ON df.table_id = t.table_id 
+WHERE 
+t.table_name = 'prevent_duplicates'
+----
+8	8
+9	8
+
+statement ok
+ALTER TABLE ducklake.prevent_duplicates SET SORTED BY (sort_key_1 ASC NULLS LAST, sort_key_2 ASC NULLS LAST);
+
+statement ok
+ALTER TABLE ducklake.prevent_duplicates SET SORTED BY (sort_key_1 ASC NULLS LAST, sort_key_2 ASC NULLS LAST);
+
+statement ok
+CALL ducklake_merge_adjacent_files('ducklake', 'prevent_duplicates');
+
+query III
+FROM prevent_duplicates
+----
+0	0	woot0
+2	0	woot2
+4	0	woot4
+6	0	woot6
+1	1	woot1
+3	1	woot3
+5	1	woot5
+7	1	woot7
+
+# We write a new file for table id 6
+query II
+SELECT df.data_file_id, df.table_id 
+FROM __ducklake_metadata_ducklake.ducklake_data_file df 
+JOIN __ducklake_metadata_ducklake.ducklake_table t 
+ON df.table_id = t.table_id 
+WHERE 
+t.table_name = 'prevent_duplicates'
+----
+10	8
+
+# We should only have 2 rows in the metadata table for this DuckLake table
+query IIII
+SELECT 
+table_id, begin_snapshot, end_snapshot, sort_key_index
+FROM __ducklake_metadata_ducklake.ducklake_sort_key sk
+WHERE 
+sk.table_id = 8
+----
+8	20	NULL	0
+8	20	NULL	1
+
+
+################################################################################################
+# Multiple SET SORTED BY calls with different sort orders should have separate catalog entries #
+################################################################################################
+statement ok
+CREATE TABLE multiple_set_sorted (unique_id BIGINT, sort_key_1 BIGINT, sort_key_2 VARCHAR);
+
+statement ok
+INSERT INTO multiple_set_sorted (unique_id, sort_key_1, sort_key_2)
+FROM range(4) t(i)
+SELECT 
+    i AS unique_id,
+    i % 2 AS sort_key_1,
+    'woot' || i AS sort_key_2
+ORDER BY 
+    i DESC
+;
+
+statement ok
+INSERT INTO multiple_set_sorted (unique_id, sort_key_1, sort_key_2)
+FROM range(4) t(i)
+SELECT 
+    i + 4 AS unique_id,
+    (i + 4) % 2 AS sort_key_1,
+    'woot' || (i + 4) AS sort_key_2
+ORDER BY 
+    i DESC
+;
+
+query III
+FROM multiple_set_sorted
+----
+3	1	woot3
+2	0	woot2
+1	1	woot1
+0	0	woot0
+7	1	woot7
+6	0	woot6
+5	1	woot5
+4	0	woot4
+
+query II
+SELECT df.data_file_id, df.table_id 
+FROM __ducklake_metadata_ducklake.ducklake_data_file df 
+JOIN __ducklake_metadata_ducklake.ducklake_table t 
+ON df.table_id = t.table_id 
+WHERE 
+t.table_name = 'multiple_set_sorted'
+----
+11	11
+12	11
+
+statement ok
+ALTER TABLE ducklake.multiple_set_sorted SET SORTED BY (sort_key_1 DESC NULLS FIRST, sort_key_2 DESC NULLS FIRST);
+
+statement ok
+ALTER TABLE ducklake.multiple_set_sorted SET SORTED BY (sort_key_1 ASC NULLS LAST, sort_key_2 ASC NULLS LAST);
+
+statement ok
+CALL ducklake_merge_adjacent_files('ducklake', 'multiple_set_sorted');
+
+query III
+FROM multiple_set_sorted
+----
+0	0	woot0
+2	0	woot2
+4	0	woot4
+6	0	woot6
+1	1	woot1
+3	1	woot3
+5	1	woot5
+7	1	woot7
+
+# We write a new file for table id 11
+query II
+SELECT df.data_file_id, df.table_id 
+FROM __ducklake_metadata_ducklake.ducklake_data_file df 
+JOIN __ducklake_metadata_ducklake.ducklake_table t 
+ON df.table_id = t.table_id 
+WHERE 
+t.table_name = 'multiple_set_sorted'
+----
+13	11
+
+# We should have 4 rows in the metadata table for this DuckLake table
+query IIIIIIII
+SELECT 
+table_id, begin_snapshot, end_snapshot, sort_key_index,
+expression, dialect, sort_direction, null_order
+FROM __ducklake_metadata_ducklake.ducklake_sort_key sk
+WHERE 
+sk.table_id = 11
+ORDER BY table_id, begin_snapshot, end_snapshot, sort_key_index
+----
+11	26	27	0	sort_key_1	duckdb	DESC	NULLS_FIRST	
+11	26	27	1	sort_key_2	duckdb	DESC	NULLS_FIRST
+11	27	NULL	0	sort_key_1	duckdb	ASC	NULLS_LAST	
+11	27	NULL	1	sort_key_2	duckdb	ASC	NULLS_LAST

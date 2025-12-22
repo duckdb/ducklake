@@ -20,8 +20,6 @@
 #include "duckdb/common/multi_file/multi_file_reader.hpp"
 #include "storage/ducklake_multi_file_reader.hpp"
 
-#include "duckdb/common/printer.hpp"
-
 namespace duckdb {
 constexpr column_t DuckLakeMultiFileReader::COLUMN_IDENTIFIER_SNAPSHOT_ID;
 
@@ -1064,8 +1062,6 @@ unique_ptr<CatalogEntry> DuckLakeTableEntry::AlterTable(DuckLakeTransaction &tra
 }
 
 unique_ptr<CatalogEntry> DuckLakeTableEntry::AlterTable(DuckLakeTransaction &transaction, SetSortedByInfo &info) {
-	Printer::Print("Made it into DuckLakeTableEntry::AlterTable with SetSortedByInfo");
-	Printer::Print("info.ToString(): " + info.ToString());
 	auto create_info = GetInfo();
 	auto &table_info = create_info->Cast<CreateTableInfo>();
 	

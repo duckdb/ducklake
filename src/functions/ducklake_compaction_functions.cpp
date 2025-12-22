@@ -267,22 +267,23 @@ unique_ptr<LogicalOperator> DuckLakeCompactor::InsertSort(Binder &binder, unique
 
 	
 
-	// TODO: FIGURE OUT HOW TO DROP A SORT
-	// 		ALTER TABLE tbl RESET SORTED BY;
-	// 		Also make sure this is handed during a transaction as well as before a transaction
+	// DONE FIGURE OUT HOW TO DROP A SORT
+	// 		DONE Also make sure this is handed during a transaction as well as before a transaction (INLINING ONLY)
 
-	// Within same transction needs to work
-	// 		flush is working it seems. But not compaction. Documented in the tests
+	// DONE Within same transction needs to work?
+	// 		DONE flush is working it seems. But not compaction, which is expected as it is disallowed intentionally.
 
 	// DONE Remove all of the local_order_by option stuff from the code 
-	// Deduplicate this to make sure we only update this when it is different
-	// 		Add a test that adds the same sort order to the same table twice and validate there is only 1 catalog entry
+
+	// DONE Deduplicate this to make sure we only update this when it is different
+	// 		DONE Add a test that adds the same sort order to the same table twice and validate there is only 1 catalog entry
+
+	// DONE Remove the Printer::Print statements
 
 	// Learn how to intercept an insert into a DuckLake table and add an order by there
 	// Move the LocalOrderBy logic into DuckLakeInsert
 	// Revert the .hpp-ification of the compactor class
 	// Add an option for disabling sort_on_insert
-
 
 
 
@@ -359,7 +360,7 @@ unique_ptr<LogicalOperator> DuckLakeCompactor::InsertSort(Binder &binder, unique
 
 	auto projected = make_uniq<LogicalProjection>(binder.GenerateTableIndex(), std::move(cast_expressions));
 	projected->children.push_back(std::move(order));
-	
+
 	return std::move(projected);
 
 }

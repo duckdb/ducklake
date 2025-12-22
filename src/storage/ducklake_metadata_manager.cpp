@@ -2623,6 +2623,40 @@ WHERE table_id IN (%s) AND end_snapshot IS NULL)",
 	}
 }
 
+static unordered_map<idx_t, DuckLakeSortInfo>
+GetNewSorts(const vector<DuckLakeSortInfo> &old_sorts,
+                 const vector<DuckLakeSortInfo> &new_sorts) {
+	unordered_map<idx_t, DuckLakeSortInfo> new_sort_map;
+
+	for (auto &sort : new_sorts) {
+		new_sort_map[sort.table_id.index] = sort;
+	}
+
+	unordered_set<idx_t> old_sort_set;
+	for (auto &sort : old_sorts) {
+		old_sort_set.insert(sort.table_id.index);
+		if (new_sort_map.find(sort.table_id.index) != new_sort_map.end()) {
+			if (new_sort_map[sort.table_id.index] == sort) {
+				// If a new sort already exists in an old sort, it's a nop, we can remove it
+				new_sort_map.erase(sort.table_id.index);
+			}
+		}
+	}
+
+	vector<idx_t> sort_ids_to_erase;
+	for (auto &sort : new_sorts) {
+		if (old_sort_set.find(sort.table_id.index) == old_sort_set.end() && sort.fields.empty()) {
+			// If a map does not exist on the old sort and the sort has no fields, this is an reset over
+			// an empty sort definition, hence also a nop
+			sort_ids_to_erase.push_back(sort.table_id.index);
+		}
+	}
+	for (auto &id : sort_ids_to_erase) {
+		new_sort_map.erase(id);
+	}
+	return new_sort_map;
+}
+
 void DuckLakeMetadataManager::WriteNewSortKeys(DuckLakeSnapshot commit_snapshot,
                                                const vector<DuckLakeSortInfo> &new_sorts) {
 	if (new_sorts.empty()) {
@@ -2633,27 +2667,25 @@ void DuckLakeMetadataManager::WriteNewSortKeys(DuckLakeSnapshot commit_snapshot,
 	string old_sort_table_ids;
 	string new_sort_values;
 
-	// TODO: FIXME - do not update if they are the same
-
-	// auto new_partition_map = GetNewPartitions(catalog.partitions, new_partitions);
-	// if (new_partition_map.empty()) {
-	// 	return;
-	// }
-	for (auto &new_sort : new_sorts) {
+	// Do not update if they are the same
+	auto new_sort_map = GetNewSorts(catalog.sorts, new_sorts);
+	if (new_sort_map.empty()) {
+		return;
+	}
+	for (auto &new_sort : new_sort_map) {
 		// set old partition data as no longer valid
 		if (!old_sort_table_ids.empty()) {
 			old_sort_table_ids += ", ";
 		}
-		old_sort_table_ids += to_string(new_sort.table_id.index);
+		old_sort_table_ids += to_string(new_sort.second.table_id.index);
 		
-		if (!new_sort.id.IsValid()) {
+		if (!new_sort.second.id.IsValid()) {
 			// dropping sort data - we don't need to do anything
-			Printer::Print("In if (!new_sort.id.IsValid()), dropping sort data");
 			return;
 		}
-		auto sort_id = new_sort.id.GetIndex();
+		auto sort_id = new_sort.second.id.GetIndex();
 		
-		for (auto &field : new_sort.fields) {
+		for (auto &field : new_sort.second.fields) {
 			if (!new_sort_values.empty()) {
 				new_sort_values += ", ";
 			}
@@ -2662,7 +2694,7 @@ void DuckLakeMetadataManager::WriteNewSortKeys(DuckLakeSnapshot commit_snapshot,
 			std::string null_order = (field.null_order == OrderByNullType::NULLS_FIRST ? "NULLS_FIRST" : "NULLS_LAST");
 			new_sort_values +=
 		    	StringUtil::Format(R"((%d, %d, {SNAPSHOT_ID}, NULL, %d, %s, %s, %s, %s))", 
-					sort_id, new_sort.table_id.index, field.sort_key_index, SQLString(field.expression), SQLString(field.dialect), SQLString(sort_direction), SQLString(null_order));
+					sort_id, new_sort.second.table_id.index, field.sort_key_index, SQLString(field.expression), SQLString(field.dialect), SQLString(sort_direction), SQLString(null_order));
 		}
 	}
 	// update old sort information for any tables that have been altered
