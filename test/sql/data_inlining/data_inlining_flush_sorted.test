@@ -251,7 +251,7 @@ INSERT INTO ducklake.test3 VALUES (${i})
 endloop
 
 statement ok
-BEGIN
+BEGIN;
 
 statement ok
 ALTER TABLE ducklake.test3 SET SORTED BY (i DESC);
@@ -285,7 +285,7 @@ SELECT rowid, snapshot_id, * FROM ducklake.test3
 0	27	0	NULL
 
 statement ok
-COMMIT
+COMMIT;
 
 # Ordering should reflect the 'i DESC' post commit also
 query IIII
@@ -301,3 +301,71 @@ SELECT rowid, snapshot_id, * FROM ducklake.test3
 2	29	2	NULL
 1	28	1	NULL
 0	27	0	NULL
+
+
+# SET SORTED BY then RESET SORTED BY within same transaction
+statement ok
+CREATE TABLE ducklake.reset_test(i INTEGER);
+
+query I
+SELECT COUNT(*) FROM ducklake.reset_test
+----
+0
+
+loop i 0 10
+
+statement ok
+INSERT INTO ducklake.reset_test VALUES (${i})
+
+endloop
+
+statement ok
+BEGIN;
+
+statement ok
+ALTER TABLE ducklake.reset_test SET SORTED BY (i DESC);
+
+statement ok
+ALTER TABLE ducklake.reset_test RESET SORTED BY;
+
+# flush inlined data
+statement ok
+CALL ducklake_flush_inlined_data('ducklake', table_name => 'reset_test')
+
+query I
+SELECT COUNT(*) FROM ducklake.reset_test
+----
+10
+
+# Ordering should retain the original order
+query III
+SELECT rowid, snapshot_id, * FROM ducklake.reset_test
+----
+0	39	0
+1	40	1
+2	41	2
+3	42	3
+4	43	4
+5	44	5
+6	45	6
+7	46	7
+8	47	8
+9	48	9
+
+statement ok
+COMMIT;
+
+# Ordering should retain the original order post commit also
+query III
+SELECT rowid, snapshot_id, * FROM ducklake.reset_test
+----
+0	39	0
+1	40	1
+2	41	2
+3	42	3
+4	43	4
+5	44	5
+6	45	6
+7	46	7
+8	47	8
+9	48	9

@@ -129,3 +129,88 @@ statement error
 CALL ducklake_merge_adjacent_files('ducklake', 'sort_on_compaction');
 ----
 Binder Error: Columns in the approx_sort parameter were not found in the DuckLake table. Unmatched columns were: concat(sort_key_1, '_', sort_key_2)
+
+
+###########################################################
+# SET SORTED then RESET SORTED to compact in insert order #
+###########################################################
+statement ok
+CREATE TABLE reset_sorted_test (unique_id BIGINT, sort_key_1 BIGINT, sort_key_2 VARCHAR);
+
+statement ok
+INSERT INTO reset_sorted_test (unique_id, sort_key_1, sort_key_2)
+FROM range(4) t(i)
+SELECT 
+    i AS unique_id,
+    i % 2 AS sort_key_1,
+    'woot' || i AS sort_key_2
+ORDER BY 
+    i DESC
+;
+
+statement ok
+INSERT INTO reset_sorted_test (unique_id, sort_key_1, sort_key_2)
+FROM range(4) t(i)
+SELECT 
+    i + 4 AS unique_id,
+    (i + 4) % 2 AS sort_key_1,
+    'woot' || (i + 4) AS sort_key_2
+ORDER BY 
+    i DESC
+;
+
+query III
+FROM reset_sorted_test
+----
+3	1	woot3
+2	0	woot2
+1	1	woot1
+0	0	woot0
+7	1	woot7
+6	0	woot6
+5	1	woot5
+4	0	woot4
+
+query II
+SELECT df.data_file_id, df.table_id 
+FROM __ducklake_metadata_ducklake.ducklake_data_file df 
+JOIN __ducklake_metadata_ducklake.ducklake_table t 
+ON df.table_id = t.table_id 
+WHERE 
+t.table_name = 'reset_sorted_test'
+----
+5	5
+6	5
+
+statement ok
+ALTER TABLE ducklake.reset_sorted_test SET SORTED BY (sort_key_1 ASC NULLS LAST, sort_key_2 ASC NULLS LAST);
+
+statement ok
+ALTER TABLE ducklake.reset_sorted_test RESET SORTED BY;
+
+statement ok
+CALL ducklake_merge_adjacent_files('ducklake', 'reset_sorted_test');
+
+# We should receive the insertion order post compaction due to the RESET SORTED BY
+query III
+FROM reset_sorted_test
+----
+3	1	woot3
+2	0	woot2
+1	1	woot1
+0	0	woot0
+7	1	woot7
+6	0	woot6
+5	1	woot5
+4	0	woot4
+
+# We write a new file for table id 5
+query II
+SELECT df.data_file_id, df.table_id 
+FROM __ducklake_metadata_ducklake.ducklake_data_file df 
+JOIN __ducklake_metadata_ducklake.ducklake_table t 
+ON df.table_id = t.table_id 
+WHERE 
+t.table_name = 'reset_sorted_test'
+----
+7	5

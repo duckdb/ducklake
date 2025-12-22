@@ -2646,7 +2646,6 @@ void DuckLakeMetadataManager::WriteNewSortKeys(DuckLakeSnapshot commit_snapshot,
 		}
 		old_sort_table_ids += to_string(new_sort.table_id.index);
 		
-		// TODO: FIXME - Need to handle dropping a sort (ALTER TABLE tbl RESET SORTED BY;)
 		if (!new_sort.id.IsValid()) {
 			// dropping sort data - we don't need to do anything
 			Printer::Print("In if (!new_sort.id.IsValid()), dropping sort data");
