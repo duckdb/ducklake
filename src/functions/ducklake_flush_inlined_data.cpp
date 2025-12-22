@@ -205,6 +205,8 @@ unique_ptr<LogicalOperator> DuckLakeDataFlusher::GenerateFlushCommand() {
 	// If flush should be ordered, add Order By (and projection) to logical plan
 	// Do not pull the sort setting at the time of the creation of the rows being flushed,
 	// and instead pull the latest sort setting 
+	// First, see if there are transaction local changes to the table
+	// Then fall back to latest snapshot if no local changes
 	auto latest_entry = transaction.GetTransactionLocalEntry(CatalogType::TABLE_ENTRY, table.schema.name, table.name);
 	if (!latest_entry) {
 		auto latest_snapshot = transaction.GetSnapshot();

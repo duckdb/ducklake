@@ -2772,7 +2772,6 @@ string DuckLakeMetadataManager::WriteNewSortKeys(DuckLakeSnapshot commit_snapsho
 			if (!new_sort_values.empty()) {
 				new_sort_values += ", ";
 			}
-			// ducklake_sort_key(sort_id BIGINT, table_id BIGINT, begin_snapshot BIGINT, end_snapshot BIGINT, sort_key_index BIGINT, expression VARCHAR, dialect VARCHAR, sort_direction VARCHAR, null_order VARCHAR);
 			std::string sort_direction = (field.sort_direction == OrderType::DESCENDING ? "DESC" : "ASC");
 			std::string null_order = (field.null_order == OrderByNullType::NULLS_FIRST ? "NULLS_FIRST" : "NULLS_LAST");
 			new_sort_values +=
