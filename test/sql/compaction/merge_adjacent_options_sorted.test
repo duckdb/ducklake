@@ -66,22 +66,26 @@ t.table_name = 'sort_on_compaction'
 1	1
 
 statement ok
-ALTER TABLE sort_on_compaction SET SORTED BY (sort_key_1 ASC NULLS LAST, sort_key_2 ASC NULLS LAST);
+ALTER TABLE ducklake.sort_on_compaction SET SORTED BY (sort_key_1 ASC NULLS LAST, sort_key_2 ASC NULLS LAST);
+
+# Do some other kind of alter table on that table to make sure that it does not interfere
+statement ok
+ALTER TABLE sort_on_compaction ADD COLUMN new_column INTEGER;
 
 statement ok
 CALL ducklake_merge_adjacent_files('ducklake', 'sort_on_compaction');
 
-query III
+query IIII
 FROM sort_on_compaction
 ----
-0	0	woot0
-2	0	woot2
-4	0	woot4
-6	0	woot6
-1	1	woot1
-3	1	woot3
-5	1	woot5
-7	1	woot7
+0	0	woot0	NULL
+2	0	woot2	NULL
+4	0	woot4	NULL
+6	0	woot6	NULL
+1	1	woot1	NULL
+3	1	woot3	NULL
+5	1	woot5	NULL
+7	1	woot7	NULL
 
 # We write a new file for table id 2
 query II
@@ -115,9 +119,9 @@ CALL ducklake_merge_adjacent_files('ducklake', 'sort_on_compaction');
 Binder Error: Columns in the approx_sort parameter were not found in the DuckLake table. Unmatched columns were: WOOOOT, BLAH
 
 
-###################################################
-# Expressions are not supported, only column refs #
-###################################################
+##########################################################
+# FIXME: Expressions are not supported, only column refs #
+##########################################################
 statement ok
 ALTER TABLE sort_on_compaction SET SORTED BY (concat(sort_key_1, '_', sort_key_2) ASC);
 

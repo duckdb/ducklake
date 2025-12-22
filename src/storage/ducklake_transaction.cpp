@@ -751,7 +751,7 @@ DuckLakeSortInfo DuckLakeTransaction::GetNewSortKey(DuckLakeCommitState &commit_
 	DuckLakeSortInfo sort_key;
 	sort_key.table_id = commit_state.GetTableId(table);
 	if (sort_key.table_id.IsTransactionLocal()) {
-		throw InternalException("Trying to write partition with transaction local table-id");
+		throw InternalException("Trying to write sort with transaction local table-id");
 	}
 
 	// insert the new sort data

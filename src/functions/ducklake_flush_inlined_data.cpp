@@ -205,11 +205,13 @@ unique_ptr<LogicalOperator> DuckLakeDataFlusher::GenerateFlushCommand() {
 	// If flush should be ordered, add Order By (and projection) to logical plan
 	// Do not pull the sort setting at the time of the creation of the rows being flushed,
 	// and instead pull the latest sort setting 
-	auto latest_snapshot = transaction.GetSnapshot();
-	auto latest_entry = catalog.GetEntryById(transaction, latest_snapshot, table_id);
-	// I am assuming that to flush a table, it must still exist
+	auto latest_entry = transaction.GetTransactionLocalEntry(CatalogType::TABLE_ENTRY, table.schema.name, table.name);
 	if (!latest_entry) {
-		throw InternalException("DuckLakeDataFlusher: failed to find latest table entry for latest snapshot id");
+		auto latest_snapshot = transaction.GetSnapshot();
+		latest_entry = catalog.GetEntryById(transaction, latest_snapshot, table_id);
+		if (!latest_entry) {
+			throw InternalException("DuckLakeDataFlusher: failed to find latest table entry for latest snapshot id");
+		}
 	}
 	auto &latest_table = latest_entry->Cast<DuckLakeTableEntry>();
 

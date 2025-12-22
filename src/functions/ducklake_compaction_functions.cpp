@@ -265,17 +265,19 @@ unique_ptr<LogicalOperator> DuckLakeCompactor::InsertSort(Binder &binder, unique
 	// DONE Remove all of the local_order_by option from the tests
 	// DONE Working end to end test of compaction and inlining
 
+	
 
 	// TODO: FIGURE OUT HOW TO DROP A SORT
 	// 		ALTER TABLE tbl RESET SORTED BY;
+	// 		Also make sure this is handed during a transaction as well as before a transaction
 
-	// Figure out if it is expected that this be able to be set within the same transaction
-	// 		Then fix the inlining test to run within a transaction again
-
+	// Within same transction needs to work
+	// 		flush is working it seems. But not compaction. Documented in the tests
 
 	// DONE Remove all of the local_order_by option stuff from the code 
 	// Deduplicate this to make sure we only update this when it is different
 	// 		Add a test that adds the same sort order to the same table twice and validate there is only 1 catalog entry
+
 	// Learn how to intercept an insert into a DuckLake table and add an order by there
 	// Move the LocalOrderBy logic into DuckLakeInsert
 	// Revert the .hpp-ification of the compactor class
@@ -357,7 +359,7 @@ unique_ptr<LogicalOperator> DuckLakeCompactor::InsertSort(Binder &binder, unique
 
 	auto projected = make_uniq<LogicalProjection>(binder.GenerateTableIndex(), std::move(cast_expressions));
 	projected->children.push_back(std::move(order));
-
+	
 	return std::move(projected);
 
 }
@@ -499,11 +501,15 @@ DuckLakeCompactor::GenerateCompactionCommand(vector<DuckLakeCompactionFileEntry>
 	// If compaction should be ordered, add Order By (and projection) to logical plan
 	// Do not pull the sort setting at the time of the creation of the files being compacted,
 	// and instead pull the latest sort setting 
-	auto latest_snapshot = transaction.GetSnapshot();
-	auto latest_entry = catalog.GetEntryById(transaction, latest_snapshot, table_id);
-	// I am assuming that to compact a table, it must still exist
+	// First, see if there are transaction local changes to the table
+	// Then fall back to latest snapshot if no local changes
+	auto latest_entry = transaction.GetTransactionLocalEntry(CatalogType::TABLE_ENTRY, table.schema.name, table.name);
 	if (!latest_entry) {
-		throw InternalException("DuckLakeCompactor: failed to find latest table entry for latest snapshot id");
+		auto latest_snapshot = transaction.GetSnapshot();
+		latest_entry = catalog.GetEntryById(transaction, latest_snapshot, table_id);
+		if (!latest_entry) {
+			throw InternalException("DuckLakeCompactor: failed to find local table entry");
+		}
 	}
 	auto &latest_table = latest_entry->Cast<DuckLakeTableEntry>();
 
