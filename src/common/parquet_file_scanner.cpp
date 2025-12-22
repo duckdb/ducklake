@@ -5,7 +5,8 @@
 
 namespace duckdb {
 
-ParquetFileScanner::ParquetFileScanner(ClientContext &context, const DuckLakeFileData &file) : context(context) {
+ParquetFileScanner::ParquetFileScanner(ClientContext &context, const DuckLakeFileData &file)
+    : context(context), multi_file_reader_creator(nullptr) {
 	auto &instance = DatabaseInstance::GetDatabase(context);
 	ExtensionLoader loader(instance, "ducklake");
 	auto &parquet_scan_entry = loader.GetTableFunction("parquet_scan");
@@ -58,6 +59,12 @@ void ParquetFileScanner::SetColumnIds(vector<column_t> column_ids_p) {
 	column_ids = std::move(column_ids_p);
 }
 
+void ParquetFileScanner::SetMultiFileReaderCreator(table_function_get_multi_file_reader_t creator,
+                                                   shared_ptr<TableFunctionInfo> function_info_p) {
+	multi_file_reader_creator = creator;
+	function_info = std::move(function_info_p);
+}
+
 void ParquetFileScanner::InitializeScan() {
 	if (initialized) {
 		return;
@@ -67,6 +74,14 @@ void ParquetFileScanner::InitializeScan() {
 	if (column_ids.empty()) {
 		for (idx_t i = 0; i < return_types.size(); i++) {
 			column_ids.push_back(i);
+		}
+	}
+
+	// Set custom multi-file reader creator if provided
+	if (multi_file_reader_creator) {
+		parquet_scan.get_multi_file_reader = multi_file_reader_creator;
+		if (function_info) {
+			parquet_scan.function_info = function_info;
 		}
 	}
 
