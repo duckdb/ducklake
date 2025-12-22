@@ -1,10 +1,52 @@
 #include "storage/ducklake_delete_filter.hpp"
 #include "duckdb/catalog/catalog_entry/table_function_catalog_entry.hpp"
+#include "duckdb/common/multi_file/multi_file_list.hpp"
+#include "duckdb/common/multi_file/multi_file_reader.hpp"
+#include "duckdb/common/multi_file/multi_file_states.hpp"
 #include "duckdb/parser/tableref/table_function_ref.hpp"
 #include "duckdb/parallel/thread_context.hpp"
 #include "duckdb/main/database.hpp"
 
 namespace duckdb {
+
+//! FunctionInfo to pass delete file metadata to the MultiFileReader
+struct DeleteFileFunctionInfo : public TableFunctionInfo {
+	DuckLakeFileData file_data;
+};
+
+//! Custom MultiFileReader that creates a SimpleMultiFileList with extended info
+struct DeleteFileMultiFileReader : public MultiFileReader {
+	static unique_ptr<MultiFileReader> CreateInstance(const TableFunction &table_function) {
+		return make_uniq<DeleteFileMultiFileReader>(table_function);
+	}
+
+	explicit DeleteFileMultiFileReader(const TableFunction &table_function) {
+		auto &info = table_function.function_info->Cast<DeleteFileFunctionInfo>();
+		auto &delete_file = info.file_data;
+
+		OpenFileInfo file_info(delete_file.path);
+		auto extended_info = make_shared_ptr<ExtendedOpenFileInfo>();
+		extended_info->options["file_size"] = Value::UBIGINT(delete_file.file_size_bytes);
+		extended_info->options["etag"] = Value("");
+		extended_info->options["last_modified"] = Value::TIMESTAMP(timestamp_t(0));
+		if (!delete_file.encryption_key.empty()) {
+			extended_info->options["encryption_key"] = Value::BLOB_RAW(delete_file.encryption_key);
+		}
+		file_info.extended_info = std::move(extended_info);
+
+		vector<OpenFileInfo> files;
+		files.push_back(std::move(file_info));
+		file_list = make_shared_ptr<SimpleMultiFileList>(std::move(files));
+	}
+
+	shared_ptr<MultiFileList> CreateFileList(ClientContext &context, const vector<string> &paths,
+	                                         const FileGlobInput &options) override {
+		return file_list;
+	}
+
+private:
+	shared_ptr<MultiFileList> file_list;
+};
 
 DuckLakeDeleteFilter::DuckLakeDeleteFilter() : delete_data(make_shared_ptr<DuckLakeDeleteData>()) {
 }
@@ -52,7 +94,14 @@ vector<idx_t> DuckLakeDeleteFilter::ScanDeleteFile(ClientContext &context, const
 	auto &instance = DatabaseInstance::GetDatabase(context);
 	ExtensionLoader loader(instance, "ducklake");
 	auto &parquet_scan_entry = loader.GetTableFunction("parquet_scan");
-	auto &parquet_scan = parquet_scan_entry.functions.functions[0];
+	auto parquet_scan = parquet_scan_entry.functions.functions[0];
+
+	// Set up function_info with delete file metadata and custom MultiFileReader
+	// This allows the bind to use our file list with extended info (file_size, etag, last_modified)
+	auto function_info = make_shared_ptr<DeleteFileFunctionInfo>();
+	function_info->file_data = delete_file;
+	parquet_scan.function_info = std::move(function_info);
+	parquet_scan.get_multi_file_reader = DeleteFileMultiFileReader::CreateInstance;
 
 	// Prepare the inputs for the bind
 	vector<Value> children;
@@ -68,10 +117,8 @@ vector<idx_t> DuckLakeDeleteFilter::ScanDeleteFile(ClientContext &context, const
 	}
 
 	TableFunctionRef empty;
-	TableFunction dummy_table_function;
-	dummy_table_function.name = "DuckLakeDeleteScan";
-	TableFunctionBindInput bind_input(children, named_params, input_types, input_names, nullptr, nullptr,
-	                                  dummy_table_function, empty);
+	TableFunctionBindInput bind_input(children, named_params, input_types, input_names, nullptr, nullptr, parquet_scan,
+	                                  empty);
 	vector<LogicalType> return_types;
 	vector<string> return_names;
 
