@@ -1533,6 +1533,7 @@ string DuckLakeMetadataManager::DropTables(const set<TableIndex> &ids, bool rena
 		batch_query +=FlushDrop("ducklake_data_file", "table_id", ids);
 		batch_query +=FlushDrop("ducklake_delete_file", "table_id", ids);
 		batch_query +=FlushDrop("ducklake_tag", "object_id", ids);
+		batch_query +=FlushDrop("ducklake_sort_key", "table_id", ids);
 	}
 	return batch_query;
 }
@@ -2739,10 +2740,10 @@ GetNewSorts(const vector<DuckLakeSortInfo> &old_sorts,
 	return new_sort_map;
 }
 
-void DuckLakeMetadataManager::WriteNewSortKeys(DuckLakeSnapshot commit_snapshot,
+string DuckLakeMetadataManager::WriteNewSortKeys(DuckLakeSnapshot commit_snapshot,
                                                const vector<DuckLakeSortInfo> &new_sorts) {
 	if (new_sorts.empty()) {
-		return;
+		return {};
 	}
 	auto catalog = GetCatalogForSnapshot(commit_snapshot);
 
@@ -2752,7 +2753,7 @@ void DuckLakeMetadataManager::WriteNewSortKeys(DuckLakeSnapshot commit_snapshot,
 	// Do not update if they are the same
 	auto new_sort_map = GetNewSorts(catalog.sorts, new_sorts);
 	if (new_sort_map.empty()) {
-		return;
+		return {};
 	}
 	for (auto &new_sort : new_sort_map) {
 		// set old partition data as no longer valid
@@ -2763,7 +2764,7 @@ void DuckLakeMetadataManager::WriteNewSortKeys(DuckLakeSnapshot commit_snapshot,
 		
 		if (!new_sort.second.id.IsValid()) {
 			// dropping sort data - we don't need to do anything
-			return;
+			return {};
 		}
 		auto sort_id = new_sort.second.id.GetIndex();
 		
@@ -2783,19 +2784,16 @@ void DuckLakeMetadataManager::WriteNewSortKeys(DuckLakeSnapshot commit_snapshot,
 	auto update_sort_query = StringUtil::Format(R"(
 UPDATE {METADATA_CATALOG}.ducklake_sort_key
 SET end_snapshot = {SNAPSHOT_ID}
-WHERE table_id IN (%s) AND end_snapshot IS NULL)",
+WHERE table_id IN (%s) AND end_snapshot IS NULL 
+;)",
 	                                                 old_sort_table_ids);
-	auto result = transaction.Query(commit_snapshot, update_sort_query);
-	if (result->HasError()) {
-		result->GetErrorObject().Throw("Failed to update old sort information in DuckLake: ");
-	}
+	string batch_query = update_sort_query;
 	if (!new_sort_values.empty()) {
-		new_sort_values = "INSERT INTO {METADATA_CATALOG}.ducklake_sort_key VALUES " + new_sort_values;
-		auto result = transaction.Query(commit_snapshot, new_sort_values);
-		if (result->HasError()) {
-			result->GetErrorObject().Throw("Failed to insert new sort information in DuckLake: ");
-		}
+		new_sort_values = "INSERT INTO {METADATA_CATALOG}.ducklake_sort_key VALUES " + new_sort_values + ";";
+		batch_query += new_sort_values;
 	}
+
+	return batch_query;
 }
 
 string DuckLakeMetadataManager::WriteNewTags(const vector<DuckLakeTagInfo> &new_tags) {

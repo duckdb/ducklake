@@ -1534,8 +1534,7 @@ string DuckLakeTransaction::CommitChanges(DuckLakeCommitState &commit_state,
 		batch_queries += metadata_manager->WriteDroppedColumns(result.dropped_columns);
 		batch_queries += metadata_manager->WriteNewColumns(result.new_columns);
 		batch_queries += metadata_manager->WriteNewInlinedTables(commit_snapshot, result.new_inlined_data_tables);
-		// TODO: FIXME Update WriteNewSortKeys for batching
-		//metadata_manager->WriteNewSortKeys(commit_snapshot, result.new_sort_keys);
+		batch_queries += metadata_manager->WriteNewSortKeys(commit_snapshot, result.new_sort_keys);
 		new_tables_result = result.new_tables;
 		new_inlined_data_tables_result = result.new_inlined_data_tables;
 	}
