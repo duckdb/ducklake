@@ -64,9 +64,10 @@ static unique_ptr<FunctionData> CleanupBind(ClientContext &context, TableFunctio
 	bool cleanup_all = false;
 	for (auto &entry : input.named_parameters) {
 		if (StringUtil::CIEquals(entry.first, "dry_run")) {
-			result->dry_run = true;
+			result->dry_run = entry.second.GetValue<bool>();
+			;
 		} else if (StringUtil::CIEquals(entry.first, "cleanup_all")) {
-			cleanup_all = true;
+			cleanup_all = entry.second.GetValue<bool>();
 		} else if (StringUtil::CIEquals(entry.first, "older_than")) {
 			from_timestamp = entry.second.GetValue<timestamp_tz_t>();
 			has_timestamp = true;

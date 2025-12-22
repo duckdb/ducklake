@@ -42,10 +42,20 @@ static unique_ptr<FunctionData> DuckLakeAddDataFilesBind(ClientContext &context,
 	auto &table = entry->Cast<DuckLakeTableEntry>();
 
 	auto result = make_uniq<DuckLakeAddDataFilesData>(catalog, table);
-	if (input.inputs[2].IsNull()) {
+	auto &file_list = input.inputs[2];
+	if (file_list.IsNull()) {
 		throw InvalidInputException("File list cannot be NULL");
 	}
-	result->globs.push_back(StringValue::Get(input.inputs[2]));
+	if (file_list.type() == LogicalType::VARCHAR) {
+		result->globs.push_back(StringValue::Get(file_list));
+	} else if (file_list.type() == LogicalType::LIST(LogicalType::VARCHAR)) {
+		auto paths = ListValue::GetChildren(file_list);
+		for (const auto &path : paths) {
+			result->globs.push_back(StringValue::Get(path));
+		}
+	} else {
+		throw InvalidInputException("File list must be a string or a list of strings");
+	}
 	for (auto &entry : input.named_parameters) {
 		auto lower = StringUtil::Lower(entry.first);
 		if (lower == "allow_missing") {
@@ -162,6 +172,7 @@ SELECT
         stats_min := COALESCE(x.stats_min, x.stats_min_value),
         stats_max := COALESCE(x.stats_max, x.stats_max_value),
         stats_null_count := x.stats_null_count,
+		stats_num_values := x.num_values,
         total_compressed_size := x.total_compressed_size,
         geo_bbox := x.geo_bbox,
         geo_types := x.geo_types
@@ -348,20 +359,23 @@ FROM parquet_full_metadata(%s)
 		auto &stats_min_vec = *metadata_struct_children[1];
 		auto &stats_max_vec = *metadata_struct_children[2];
 		auto &stats_null_count_vec = *metadata_struct_children[3];
-		auto &total_compressed_size_vec = *metadata_struct_children[4];
-		auto &geo_bbox_vec = *metadata_struct_children[5];
-		auto &geo_types_vec = *metadata_struct_children[6];
+		auto &stats_num_values_vec = *metadata_struct_children[4];
+		auto &total_compressed_size_vec = *metadata_struct_children[5];
+		auto &geo_bbox_vec = *metadata_struct_children[6];
+		auto &geo_types_vec = *metadata_struct_children[7];
 
 		auto column_id_data = FlatVector::GetData<int64_t>(column_id_vec);
 		auto stats_min_data = FlatVector::GetData<string_t>(stats_min_vec);
 		auto stats_max_data = FlatVector::GetData<string_t>(stats_max_vec);
 		auto stats_null_count_data = FlatVector::GetData<int64_t>(stats_null_count_vec);
+		auto stats_num_values_data = FlatVector::GetData<int64_t>(stats_num_values_vec);
 		auto total_compressed_size_data = FlatVector::GetData<int64_t>(total_compressed_size_vec);
 
 		auto &column_id_validity = FlatVector::Validity(column_id_vec);
 		auto &stats_min_validity = FlatVector::Validity(stats_min_vec);
 		auto &stats_max_validity = FlatVector::Validity(stats_max_vec);
 		auto &stats_null_count_validity = FlatVector::Validity(stats_null_count_vec);
+		auto &stats_num_values_validity = FlatVector::Validity(stats_num_values_vec);
 		auto &total_compressed_size_validity = FlatVector::Validity(total_compressed_size_vec);
 		auto &geo_bbox_validity = FlatVector::Validity(geo_bbox_vec);
 		auto &geo_types_validity = FlatVector::Validity(geo_types_vec);
@@ -398,6 +412,11 @@ FROM parquet_full_metadata(%s)
 			if (stats_null_count_validity.RowIsValid(metadata_idx)) {
 				stats.has_null_count = true;
 				stats.null_count = stats_null_count_data[metadata_idx];
+			}
+
+			if (stats_num_values_validity.RowIsValid(metadata_idx)) {
+				stats.has_num_values = true;
+				stats.num_values = stats_num_values_data[metadata_idx];
 			}
 
 			if (total_compressed_size_validity.RowIsValid(metadata_idx)) {
@@ -832,12 +851,19 @@ unique_ptr<DuckLakeNameMapEntry> DuckLakeFileProcessor::MapColumn(ParquetFileMet
 			map_entry->child_entries = MapColumns(file_metadata, column.child_columns, field_id.Children(), prefix);
 			break;
 		case LogicalTypeId::LIST:
-			// for lists we don't need to do any name mapping - the child element always maps to each other
-			// (1) Parquet has an extra element in between the list and its child ("REPEATED") - strip it
-			// (2) Parquet has a different convention on how to name list children - rename them to "list" here
-			column.child_columns[0]->child_columns[0]->name = "list";
-			map_entry->child_entries.push_back(
-			    MapColumn(file_metadata, *column.child_columns[0]->child_columns[0], *field_children[0], prefix));
+			if (column.child_columns[0]->name == "array") {
+				// With legacy avro list layout, we just access directly
+				map_entry->child_entries.push_back(
+				    MapColumn(file_metadata, *column.child_columns[0], *field_children[0], prefix));
+			} else {
+				// for lists we don't need to do any name mapping - the child element always maps to each other
+				// (1) Parquet has an extra element in between the list and its child ("REPEATED") - strip it
+				// (2) Parquet has a different convention on how to name list children - rename them to "list" here
+				column.child_columns[0]->child_columns[0]->name = "list";
+				map_entry->child_entries.push_back(
+				    MapColumn(file_metadata, *column.child_columns[0]->child_columns[0], *field_children[0], prefix));
+			}
+
 			break;
 		case LogicalTypeId::MAP:
 			// for maps we don't need to do any name mapping - the child elements are always key/value
@@ -919,6 +945,13 @@ void DuckLakeFileProcessor::MapColumnStats(ParquetFileMetadata &file_metadata, D
 				} else if (aggregated.has_null_count) {
 					aggregated.null_count += stats.null_count;
 				}
+
+				if (!stats.has_num_values) {
+					aggregated.has_num_values = false;
+				} else if (aggregated.has_num_values) {
+					aggregated.num_values += stats.num_values;
+				}
+
 				aggregated.column_size_bytes += stats.column_size_bytes;
 
 				if (!stats.has_contains_nan) {
@@ -1126,13 +1159,19 @@ static void DuckLakeAddDataFilesExecute(ClientContext &context, TableFunctionInp
 	state.finished = true;
 }
 
-DuckLakeAddDataFilesFunction::DuckLakeAddDataFilesFunction()
-    : TableFunction("ducklake_add_data_files", {LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::VARCHAR},
-                    DuckLakeAddDataFilesExecute, DuckLakeAddDataFilesBind, DuckLakeAddDataFilesInit) {
-	named_parameters["allow_missing"] = LogicalType::BOOLEAN;
-	named_parameters["ignore_extra_columns"] = LogicalType::BOOLEAN;
-	named_parameters["hive_partitioning"] = LogicalType::BOOLEAN;
-	named_parameters["schema"] = LogicalType::VARCHAR;
+TableFunctionSet DuckLakeAddDataFilesFunction::GetFunctions() {
+	TableFunctionSet set("ducklake_add_data_files");
+	vector<LogicalType> at_types {LogicalType::VARCHAR, LogicalType::LIST(LogicalType::VARCHAR)};
+	for (auto &type : at_types) {
+		TableFunction function("ducklake_add_data_files", {LogicalType::VARCHAR, LogicalType::VARCHAR, type},
+		                       DuckLakeAddDataFilesExecute, DuckLakeAddDataFilesBind, DuckLakeAddDataFilesInit);
+		function.named_parameters["allow_missing"] = LogicalType::BOOLEAN;
+		function.named_parameters["ignore_extra_columns"] = LogicalType::BOOLEAN;
+		function.named_parameters["hive_partitioning"] = LogicalType::BOOLEAN;
+		function.named_parameters["schema"] = LogicalType::VARCHAR;
+		set.AddFunction(function);
+	}
+	return set;
 }
 
 } // namespace duckdb

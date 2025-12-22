@@ -31,7 +31,7 @@ struct DuckLakeOptions {
 	bool create_if_not_exists = true;
 	bool migrate_if_required = true;
 	unique_ptr<BoundAtClause> at_clause;
-	unordered_map<string, Value> metadata_parameters;
+	case_insensitive_map_t<Value> metadata_parameters;
 	option_map_t config_options;
 	map<SchemaIndex, option_map_t> schema_options;
 	map<TableIndex, option_map_t> table_options;

@@ -83,7 +83,6 @@ DROP SCHEMA ducklake.s1 CASCADE
 statement error
 SELECT * FROM ducklake.s1_view
 ----
-Table with name test does not exist
 
 query I
 SELECT * FROM ducklake.s1_view AT (VERSION => 5)

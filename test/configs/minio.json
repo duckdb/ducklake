@@ -20,6 +20,12 @@
         "test/sql/general/missing_parquet.test",
         "test/sql/autoloading/autoload_data_path.test"
       ]
+    },
+  {
+      "reason": "Test with a hardcoded file path.",
+      "paths": [
+        "test/sql/add_files/add_old_list.test"
+      ]
     }
   ]
 }

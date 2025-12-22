@@ -22,6 +22,12 @@ statement ok
 CREATE TABLE partitioned_tbl(part_key INTEGER, values VARCHAR);
 
 statement ok
+CREATE TABLE hiveless_partitioned_tbl(part_key INTEGER, values VARCHAR);
+
+statement ok
+CALL ducklake.set_option('hive_file_pattern', False, table_name => 'hiveless_partitioned_tbl')
+
+statement ok
 ALTER TABLE partitioned_tbl SET PARTITIONED BY (part_key);
 
 statement ok
@@ -36,12 +42,6 @@ FROM '${DATA_PATH}/ducklake_partition_use_hive/main/partitioned_tbl/part_key=0/*
 0	thisisastring_4
 
 statement ok
-CALL ducklake.set_option('hive_file_pattern', False)
-
-statement ok
-CREATE TABLE hiveless_partitioned_tbl(part_key INTEGER, values VARCHAR);
-
-statement ok
 ALTER TABLE hiveless_partitioned_tbl SET PARTITIONED BY (part_key);
 
 statement ok
@@ -51,6 +51,10 @@ statement error
 FROM '${DATA_PATH}/ducklake_partition_use_hive/main/hiveless_partitioned_tbl/part_key=0/*.parquet'
 ----
 No files found that match the pattern
+
+statement ok
+CALL ducklake.set_option('hive_file_pattern', False, table_name => 'partitioned_tbl')
+
 
 # What if we now insert more data into our partitioned table
 statement ok

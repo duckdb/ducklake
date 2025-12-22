@@ -1,0 +1,138 @@
+# name: test/sql/compaction/merge_adjacent_max_files.test
+# description: test ducklake merge adjacent files max_files options
+# group: [compaction]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+
+test-env DATA_PATH __TEST_DIR__
+
+statement ok
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/merge_adjacent_max_files/')
+
+statement ok
+USE ducklake;
+
+statement ok
+CREATE TABLE example (key integer);
+
+# Generate 100 files
+loop i 0 20
+
+statement ok
+INSERT INTO example VALUES (${i});
+
+endloop
+
+statement ok
+CALL ducklake_merge_adjacent_files('ducklake', 'example', max_compacted_files=>1);
+
+# We create max one file, since we use the default size limits, one file should fit all
+query II
+SELECT max(data_file_id), min (data_file_id) FROM __ducklake_metadata_ducklake.ducklake_data_file
+----
+20	20
+
+statement ok
+DROP TABLE example;
+
+statement ok
+CALL ducklake_expire_snapshots('ducklake', older_than => now());
+
+statement ok
+CALL ducklake.set_option('target_file_size', '1KB');
+
+statement ok
+CREATE TABLE example (key integer);
+
+# Generate 100 files
+loop i 0 20
+
+statement ok
+INSERT INTO example VALUES (${i});
+
+endloop
+
+query I
+SELECT count(*) FROM __ducklake_metadata_ducklake.ducklake_data_file
+----
+20
+
+statement error
+CALL ducklake_merge_adjacent_files('ducklake', 'example', max_compacted_files=>-1);
+----
+Type INT32 with value -1 can't be cast
+
+statement error
+CALL ducklake_merge_adjacent_files('ducklake', 'example', max_compacted_files=>NULL);
+----
+The max_compacted_files option must be a non-null integer
+
+statement error
+CALL ducklake_merge_adjacent_files('ducklake', 'example', max_compacted_files=>0);
+----
+The max_compacted_files option must be greater than zero.
+
+query I
+SELECT count(*) FROM __ducklake_metadata_ducklake.ducklake_data_file
+----
+20
+
+query II
+SELECT max(data_file_id), min (data_file_id) FROM __ducklake_metadata_ducklake.ducklake_data_file
+----
+40	21
+
+statement ok
+CALL ducklake_merge_adjacent_files('ducklake', 'example', max_compacted_files=>2);
+
+# We create two new files, and remove as many as necessary to create them
+query II
+SELECT max(data_file_id), min (data_file_id) > 30 FROM __ducklake_metadata_ducklake.ducklake_data_file
+----
+42	True
+
+statement ok
+CALL ducklake_merge_adjacent_files('ducklake', 'example', max_compacted_files=>1);
+
+# We create max one file
+query II
+SELECT max(data_file_id), min (data_file_id) > 31 FROM __ducklake_metadata_ducklake.ducklake_data_file
+----
+43	True
+
+statement ok
+CALL ducklake_merge_adjacent_files('ducklake', 'example', max_compacted_files=>1000);
+
+# We basically do max compaction, limiting the size set
+query II
+SELECT max(data_file_id) > 43, min (data_file_id) > 32 FROM __ducklake_metadata_ducklake.ducklake_data_file
+----
+True	True
+
+statement ok
+CALL ducklake_merge_adjacent_files('ducklake', 'example', max_compacted_files=>1000);
+
+# Calling it again, merges one more time both snapshots as they are under the size limit
+query I
+SELECT max(data_file_id) FROM __ducklake_metadata_ducklake.ducklake_data_file
+----
+46
+
+statement ok
+CALL ducklake_merge_adjacent_files('ducklake', 'example', max_compacted_files=>1000);
+
+# Calling it again, produces no changes
+query I
+SELECT max(data_file_id) BETWEEN 46 AND 48 FROM __ducklake_metadata_ducklake.ducklake_data_file
+----
+True
+
+# Check data is still correct
+query I
+select count(*) FROM example;
+----
+20

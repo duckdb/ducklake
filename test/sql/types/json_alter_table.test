@@ -1,0 +1,25 @@
+# name: test/sql/types/json_alter_table.test
+# description: test storing json in ducklake via an alter table
+# group: [types]
+
+require ducklake
+
+require parquet
+
+require json
+
+statement ok
+ATTACH 'ducklake:__TEST_DIR__/ducklake_json_alter_table.db' AS ducklake (DATA_PATH '__TEST_DIR__/json_alter_table')
+
+statement ok
+use ducklake;
+
+statement ok
+CREATE TABLE batch_transaction_finished (
+    id BIGINT,
+    status VARCHAR,
+    batch_id VARCHAR
+);
+
+statement ok
+ALTER TABLE batch_transaction_finished ADD COLUMN validation_errors JSON;

@@ -1,0 +1,33 @@
+# name: test/sql/alter/alter_timestamptz_promotion.test
+# description: test ducklake timestamp to timestamptz promotion
+# group: [alter]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+
+test-env DATA_PATH __TEST_DIR__
+
+
+statement ok
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/alter_timestamptz_promotion')
+
+statement ok
+CREATE TABLE ducklake.test(col1 TIMESTAMP);
+
+statement ok
+INSERT INTO ducklake.test VALUES ('2025-01-15 12:30:45'::TIMESTAMP)
+
+statement ok
+ALTER TABLE ducklake.test ALTER COLUMN col1 TYPE TIMESTAMPTZ;
+
+statement ok
+INSERT INTO ducklake.test VALUES ('2025-01-15 12:30:45'::TIMESTAMPTZ)
+
+query I
+FROM ducklake.test
+----
+2025-01-15 12:30:45+00
+2025-01-15 12:30:45+00

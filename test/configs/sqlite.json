@@ -7,7 +7,8 @@
     "ducklake",
     "httpfs",
     "sqlite_scanner",
-    "icu"
+    "icu",
+    "httpfs"
   ],
   "test_env": [{
       "env_name":  "DUCKLAKE_CONNECTION",

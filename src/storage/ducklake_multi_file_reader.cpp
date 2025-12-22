@@ -307,7 +307,11 @@ vector<MultiFileColumnDefinition> MapColumns(MultiFileReaderData &reader_data,
 			result_col.default_expression = make_uniq<ConstantExpression>(partition_val.DefaultCastAs(result_col.type));
 			continue;
 		}
+
 		result_col.identifier = Value(column_map->source_name);
+		if (column_map->source_name == "array") {
+			result_col.name = "list";
+		}
 		// recursively process any child nodes
 		if (!column_map->child_entries.empty()) {
 			result_col.children = MapColumns(reader_data, result_col.children, column_map->child_entries);

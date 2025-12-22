@@ -128,6 +128,12 @@ string DuckLakeTypes::ToString(const LogicalType &type) {
 		if (IsGeoType(type)) {
 			return "geometry";
 		}
+		if (type.id() == LogicalTypeId::USER) {
+			const auto type_name = UserType::GetTypeName(type);
+			if (StringUtil::Lower(type_name) == "json") {
+				return "json";
+			}
+		}
 		throw InvalidInputException("Unsupported user-defined type");
 	}
 	switch (type.id()) {

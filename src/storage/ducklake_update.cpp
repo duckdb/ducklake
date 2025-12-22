@@ -67,20 +67,24 @@ unique_ptr<LocalSinkState> DuckLakeUpdate::GetLocalSinkState(ExecutionContext &c
 	delete_types.emplace_back(LogicalType::UBIGINT);
 	delete_types.emplace_back(LogicalType::BIGINT);
 
-	vector<LogicalType> insert_types;
+	vector<LogicalType> expression_types;
 	result->expression_executor = make_uniq<ExpressionExecutor>(context.client, expressions);
 	for (auto &expr : result->expression_executor->expressions) {
-		insert_types.push_back(expr->return_type);
+		expression_types.push_back(expr->return_type);
 	}
 
-	for (auto &type : insert_types) {
+	for (auto &type : expression_types) {
 		if (DuckLakeTypes::RequiresCast(type)) {
 			type = DuckLakeTypes::GetCastedType(type);
 		}
 	}
-	result->update_expression_chunk.Initialize(context.client, insert_types);
-	// updates also write the row id to the file, so the final version needs the row_id
-	insert_types.push_back(LogicalType::BIGINT);
+	result->update_expression_chunk.Initialize(context.client, expression_types);
+	// updates also write the row id to the file, so the final version needs the row_id placed
+	// right after the physical columns (before computed partition columns).
+	vector<LogicalType> insert_types = expression_types;
+	auto physical_column_count = columns.size();
+	D_ASSERT(physical_column_count <= insert_types.size());
+	insert_types.insert(insert_types.begin() + physical_column_count, LogicalType::BIGINT);
 	result->insert_chunk.Initialize(context.client, insert_types);
 
 	result->delete_chunk.Initialize(context.client, delete_types);
@@ -101,12 +105,28 @@ SinkResultType DuckLakeUpdate::Sink(ExecutionContext &context, DataChunk &chunk,
 	insert_chunk.SetCardinality(chunk.size());
 	lstate.expression_executor->Execute(chunk, update_expression_chunk);
 
-	// We reference all columns we created in our updates
-	for (idx_t i = 0; i < update_expression_chunk.ColumnCount(); i++) {
+	const idx_t physical_column_count = columns.size();
+	const idx_t expression_column_count = update_expression_chunk.ColumnCount();
+	D_ASSERT(expression_column_count >= physical_column_count);
+	const idx_t partition_column_count = expression_column_count - physical_column_count;
+	const idx_t insert_column_count = insert_chunk.ColumnCount();
+	D_ASSERT(insert_column_count >= expression_column_count);
+	// virtual columns (PlanUpdate sets WRITE_ROW_ID, so there is exactly one: the row id) must sit between the physical
+	// and partition columns
+	const idx_t virtual_column_count = insert_column_count - expression_column_count;
+	D_ASSERT(virtual_column_count == 1);
+
+	// copy the physical columns directly
+	for (idx_t i = 0; i < physical_column_count; i++) {
 		insert_chunk.data[i].Reference(update_expression_chunk.data[i]);
 	}
-
-	insert_chunk.data[insert_chunk.data.size() - 1].Reference(chunk.data[row_id_index]);
+	// reference the row id right after the physical columns
+	insert_chunk.data[physical_column_count].Reference(chunk.data[row_id_index]);
+	// place computed partition columns after the virtual columns
+	for (idx_t part_idx = 0; part_idx < partition_column_count; part_idx++) {
+		insert_chunk.data[physical_column_count + virtual_column_count + part_idx].Reference(
+		    update_expression_chunk.data[physical_column_count + part_idx]);
+	}
 
 	OperatorSinkInput copy_input {*copy_op.sink_state, *lstate.copy_local_state, input.interrupt_state};
 	copy_op.Sink(context, insert_chunk, copy_input);
