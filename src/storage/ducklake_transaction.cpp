@@ -137,7 +137,8 @@ void GetTransactionTableChanges(reference<CatalogEntry> table_entry, Transaction
 		case LocalChangeType::ADD_COLUMN:
 		case LocalChangeType::REMOVE_COLUMN:
 		case LocalChangeType::CHANGE_COLUMN_TYPE:
-		case LocalChangeType::SET_DEFAULT: {
+		case LocalChangeType::SET_DEFAULT: 
+		case LocalChangeType::SET_SORT_KEY: {
 			// this table was altered
 			auto table_id = table.GetTableId();
 			// don't report transaction-local tables yet - these will get added later on
@@ -751,6 +752,39 @@ DuckLakePartitionInfo DuckLakeTransaction::GetNewPartitionKey(DuckLakeCommitStat
 	return partition_key;
 }
 
+DuckLakeSortInfo DuckLakeTransaction::GetNewSortKey(DuckLakeCommitState &commit_state,
+                                                    DuckLakeTableEntry &table) {
+	
+	DuckLakeSortInfo sort_key;
+	sort_key.table_id = commit_state.GetTableId(table);
+	if (sort_key.table_id.IsTransactionLocal()) {
+		throw InternalException("Trying to write sort with transaction local table-id");
+	}
+
+	// insert the new sort data
+	auto sort_data = table.GetSortData();
+	if (!sort_data) {
+		// dropping sort data - insert the empty sort key data for this table
+		return sort_key;
+	}
+
+	auto sort_id = commit_state.commit_snapshot.next_catalog_id++;
+	sort_key.id = sort_id;
+	sort_data->sort_id = sort_id;
+	for (auto &field : sort_data->fields) {
+		DuckLakeSortFieldInfo sort_field;
+		sort_field.sort_key_index = field.sort_key_index;
+		sort_field.expression = field.expression;
+		sort_field.dialect = field.dialect;
+		sort_field.sort_direction = field.sort_direction;
+		sort_field.null_order = field.null_order;
+		
+		sort_key.fields.push_back(std::move(sort_field));
+	}
+	
+	return sort_key;
+}
+
 vector<DuckLakeColumnInfo> DuckLakeTableEntry::GetTableColumns() const {
 	vector<DuckLakeColumnInfo> result;
 	auto not_null_fields = GetNotNullFields();
@@ -806,6 +840,7 @@ struct NewTableInfo {
 	vector<DuckLakeDroppedColumn> dropped_columns;
 	vector<DuckLakeNewColumn> new_columns;
 	vector<DuckLakeTableInfo> new_inlined_data_tables;
+	vector<DuckLakeSortInfo> new_sort_keys;
 };
 
 struct NewMacroInfo {
@@ -855,6 +890,12 @@ void DuckLakeTransaction::GetNewTableInfo(DuckLakeCommitState &commit_state, Duc
 
 			transaction_changes.altered_tables.insert(table_id);
 			column_schema_change = true;
+			break;
+		}
+		case LocalChangeType::SET_SORT_KEY: {
+			auto sort_key = GetNewSortKey(commit_state, table);
+			result.new_sort_keys.push_back(std::move(sort_key));
+			transaction_changes.altered_tables.insert(table_id);
 			break;
 		}
 		case LocalChangeType::SET_COMMENT: {
@@ -1493,6 +1534,7 @@ string DuckLakeTransaction::CommitChanges(DuckLakeCommitState &commit_state,
 		batch_queries += metadata_manager->WriteDroppedColumns(result.dropped_columns);
 		batch_queries += metadata_manager->WriteNewColumns(result.new_columns);
 		batch_queries += metadata_manager->WriteNewInlinedTables(commit_snapshot, result.new_inlined_data_tables);
+		batch_queries += metadata_manager->WriteNewSortKeys(commit_snapshot, result.new_sort_keys);
 		new_tables_result = result.new_tables;
 		new_inlined_data_tables_result = result.new_inlined_data_tables;
 	}
@@ -2312,6 +2354,7 @@ void DuckLakeTransaction::AlterEntryInternal(DuckLakeTableEntry &table, unique_p
 	case LocalChangeType::REMOVE_COLUMN:
 	case LocalChangeType::CHANGE_COLUMN_TYPE:
 	case LocalChangeType::SET_DEFAULT:
+	case LocalChangeType::SET_SORT_KEY:
 		break;
 	default:
 		throw NotImplementedException("Alter type not supported in DuckLakeTransaction::AlterEntry");

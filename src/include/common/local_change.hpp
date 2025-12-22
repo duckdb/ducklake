@@ -26,7 +26,8 @@ enum class LocalChangeType {
 	ADD_COLUMN,
 	REMOVE_COLUMN,
 	CHANGE_COLUMN_TYPE,
-	SET_DEFAULT
+	SET_DEFAULT,
+	SET_SORT_KEY
 };
 
 struct LocalChange {
