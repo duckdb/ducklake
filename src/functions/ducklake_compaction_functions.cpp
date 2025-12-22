@@ -262,6 +262,7 @@ unique_ptr<LogicalOperator> DuckLakeCompactor::InsertSort(Binder &binder, unique
 	}
 	auto root_get = unique_ptr_cast<LogicalOperator, LogicalGet>(std::move(plan));
 
+	// FIXME: Allow arbitrary expressions instead of just column references. (Need a dynamic bind)
 	// Build a map of the names of columns in the query plan so we can bind to them
 	case_insensitive_map_t<idx_t> alias_map;
 	for (idx_t col_idx = 0; col_idx < root_get->names.size(); col_idx++) {
