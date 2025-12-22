@@ -241,53 +241,6 @@ void DuckLakeCompactor::GenerateCompactions(DuckLakeTableEntry &table,
 }
 
 unique_ptr<LogicalOperator> DuckLakeCompactor::InsertSort(Binder &binder, unique_ptr<LogicalOperator> &plan, DuckLakeTableEntry &table, optional_ptr<DuckLakeSort> sort_data) {
-
-	// TODO:
-	// DONE Create a new branch based on this one
-	// DONE Research / understand how to intercept the SET SORTED syntax and print out something there
-	// 		DONE Make a test for SET SORTED
-	// DONE Research / understand how to create a new ducklake catalog table (ducklake_metadata_manager.cpp)
-	// 		DONE Stretch goal to have this be versioned
-	// Load data into that new catalog table in the SET SORTED call
-	//  (Seems like I need to pull from catalog, be able to set the data, and be able to get the data all at once to test it.)
-	//		DONE Create a class to hold the sort information (struct DuckLakePartitionInfo equivalent)
-	// 		DONE Create a function SetSortData 
-	// 		DONE Add logic in DuckLakeMetadataManager::GetCatalogForSnapshot to pull all the sort information
-	// 		DONE Add logic to SetSortData in DuckLakeCatalog::LoadSchemaForSnapshot
-	// 		DONE Write a DuckLakeTransaction::GetNewSortKey function
-	// 		DONE Create DuckLakeMetadataManager::WriteNewSortKeys (an equivalent of DuckLakeMetadataManager::WriteNewPartitionKeys)
-	// 		DONE Add WriteNewSortKeys to DuckLakeTransaction::CommitChanges
-	// 		DONE Finish DuckLakeTableEntry::AlterTable to actually store the SET SORTED data
-
-
-	// DONE Pull that configuration out of the catalog for GetLocalOrderBy
-	// 		DONE This should test that I am storing this on the Table object as I expect
-
-	// DONE Remove all of the local_order_by option from the tests
-	// DONE Working end to end test of compaction and inlining
-
-	
-
-	// DONE FIGURE OUT HOW TO DROP A SORT
-	// 		DONE Also make sure this is handed during a transaction as well as before a transaction (INLINING ONLY)
-
-	// DONE Within same transction needs to work?
-	// 		DONE flush is working it seems. But not compaction, which is expected as it is disallowed intentionally.
-
-	// DONE Remove all of the local_order_by option stuff from the code 
-
-	// DONE Deduplicate this to make sure we only update this when it is different
-	// 		DONE Add a test that adds the same sort order to the same table twice and validate there is only 1 catalog entry
-
-	// DONE Remove the Printer::Print statements
-
-	// Learn how to intercept an insert into a DuckLake table and add an order by there
-	// Move the LocalOrderBy logic into DuckLakeInsert
-	// Revert the .hpp-ification of the compactor class
-	// Add an option for disabling sort_on_insert
-
-
-
 	auto bindings = plan->GetColumnBindings();
 
 	vector<BoundOrderByNode> orders;
