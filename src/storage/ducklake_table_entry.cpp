@@ -1075,8 +1075,8 @@ unique_ptr<CatalogEntry> DuckLakeTableEntry::AlterTable(DuckLakeTransaction &tra
 	// I need to populate the sort_data
 	auto sort_data = make_uniq<DuckLakeSort>();
 	sort_data->sort_id = transaction.GetLocalCatalogId();
-	for (idx_t order_node_idx = 0; order_node_idx < info.sort_keys.size(); order_node_idx++) {
-		auto &order_node = info.sort_keys[order_node_idx];
+	for (idx_t order_node_idx = 0; order_node_idx < info.orders.size(); order_node_idx++) {
+		auto &order_node = info.orders[order_node_idx];
 		DuckLakeSortField sort_field;
 		sort_field.sort_key_index = order_node_idx;
 		sort_field.expression = order_node.expression->ToString();
