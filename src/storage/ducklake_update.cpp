@@ -150,8 +150,8 @@ SinkResultType DuckLakeUpdate::Sink(ExecutionContext &context, DataChunk &chunk,
 	auto &update_expression_chunk = lstate.update_expression_chunk;
 	auto &insert_chunk = lstate.insert_chunk;
 
-	update_expression_chunk.SetCardinality(sel_count);
-	insert_chunk.SetCardinality(sel_count);
+	update_expression_chunk.SetCardinality(chunk.size());
+	insert_chunk.SetCardinality(chunk.size());
 	lstate.expression_executor->Execute(chunk, update_expression_chunk);
 
 	const idx_t physical_column_count = columns.size();
