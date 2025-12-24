@@ -6,11 +6,9 @@ on:
   push:
   pull_request:
   workflow_dispatch:
-
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}-${{ github.head_ref || '' }}-${{ github.base_ref || '' }}-${{ github.ref != 'refs/heads/main' || github.sha }}
   cancel-in-progress: true
-
 jobs:
   duckdb-next-build:
     name: Build extension binaries
@@ -19,7 +17,7 @@ jobs:
       duckdb_version: main
       ci_tools_version: main
       extension_name: ducklake
-
+    if: (github.event_name != 'push' || !contains(lower(join(github.event.commits.*.message, ' ')), 'bump to')) && (github.event_name != 'pull_request' || !contains(lower(github.event.pull_request.title), 'bump to'))
   duckdb-next-deploy:
     name: Deploy extension binaries
     needs: duckdb-next-build
@@ -31,3 +29,4 @@ jobs:
       ci_tools_version: main
       deploy_latest: ${{ startsWith(github.ref, 'refs/heads/v') || github.ref == 'refs/heads/main' }}
       deploy_versioned: ${{ startsWith(github.ref, 'refs/heads/v') || github.ref == 'refs/heads/main' }}
+    if: (github.event_name != 'push' || !contains(lower(join(github.event.commits.*.message, ' ')), 'bump to')) && (github.event_name != 'pull_request' || !contains(lower(github.event.pull_request.title), 'bump to'))
