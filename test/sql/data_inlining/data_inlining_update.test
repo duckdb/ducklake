@@ -73,3 +73,25 @@ SELECT rowid, snapshot_id, * FROM ducklake.test ORDER BY rowid
 0	2	101	2
 1	1	NULL	3
 2	3	1010	20
+
+# test update with duplicate source rows on inlined data
+# 10000 duplicates spans multiple chunks, exercising the all-duplicates early return
+statement ok
+DROP TABLE ducklake.test
+
+statement ok
+CREATE TABLE ducklake.test AS SELECT 1 as id
+
+statement ok
+CREATE TEMPORARY TABLE dup_source AS SELECT 1 as update_id FROM range(10000)
+
+# despite 10000 source matches, only 1 row should be updated (deduplication)
+query I
+UPDATE ducklake.test SET id=id+1000 FROM dup_source WHERE id=dup_source.update_id
+----
+1
+
+query I
+SELECT id FROM ducklake.test
+----
+1001

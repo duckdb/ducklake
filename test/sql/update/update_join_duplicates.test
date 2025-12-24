@@ -17,27 +17,42 @@ ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/du
 statement ok
 CREATE TABLE ducklake.test AS SELECT i id FROM range(5) t(i);
 
+# Source table with duplicate update_ids (each value appears twice)
 statement ok
 CREATE TEMPORARY TABLE updated_rows AS FROM range(0, 10, 2) t(update_id) UNION ALL FROM range(0, 10, 2);
 
-# duplicate row-id updates are not yet supported
+# duplicate row-id updates now succeed with first-write-wins semantics
 statement ok
 BEGIN
 
 statement ok
 INSERT INTO ducklake.test FROM range(5, 10)
 
-statement error
+# This UPDATE has duplicates in the source - same row matched multiple times
+# With first-write-wins, only the first match is applied
+statement ok
 UPDATE ducklake.test SET id=id+1000 FROM updated_rows WHERE id=updated_rows.update_id
+
+query III
+SELECT COUNT(*), SUM(id), AVG(id) FROM ducklake.test
 ----
-The same row was updated multiple times
+10	5045	504.5
 
 statement ok
-ROLLBACK
+COMMIT
 
-# we can update through a join if we filter out the duplciate row ids
+# Verify data persists after commit
+query III
+SELECT COUNT(*), SUM(id), AVG(id) FROM ducklake.test
+----
+10	5045	504.5
+
+# Using DISTINCT still works (and gives same result)
 statement ok
-BEGIN
+DROP TABLE ducklake.test
+
+statement ok
+CREATE TABLE ducklake.test AS SELECT i id FROM range(5) t(i);
 
 statement ok
 INSERT INTO ducklake.test FROM range(5, 10)
@@ -50,12 +65,24 @@ SELECT COUNT(*), SUM(id), AVG(id) FROM ducklake.test
 ----
 10	5045	504.5
 
+# Test with many duplicates to exercise the all-duplicates early return path
+# 10000 matches for 1 row spans multiple chunks, later chunks are all duplicates
 statement ok
-COMMIT
+DROP TABLE ducklake.test
 
-query III
-SELECT COUNT(*), SUM(id), AVG(id) FROM ducklake.test
+statement ok
+CREATE TABLE ducklake.test AS SELECT 1 as id
+
+statement ok
+CREATE TEMPORARY TABLE dup_source AS SELECT 1 as update_id FROM range(10000)
+
+# despite 10000 source matches, only 1 row should be updated (deduplication)
+query I
+UPDATE ducklake.test SET id=id+1000 FROM dup_source WHERE id=dup_source.update_id
 ----
-10	5045	504.5
+1
 
-
+query I
+SELECT id FROM ducklake.test
+----
+1001
