@@ -1,6 +1,4 @@
 #include "metadata_manager/postgres_metadata_manager.hpp"
-
-#include <utility>
 #include "common/ducklake_util.hpp"
 #include "duckdb/main/database.hpp"
 #include "storage/ducklake_catalog.hpp"
