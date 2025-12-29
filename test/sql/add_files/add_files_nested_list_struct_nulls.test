@@ -1,0 +1,181 @@
+# name: test/sql/add_files/add_files_nested_list_struct_nulls.test
+# description: Test that ducklake_add_data_files handles nested List(Struct) columns with NULLs without integer underflow
+# group: [add_files]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+
+test-env DATA_PATH __TEST_DIR__
+
+statement ok
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/nested_nulls_data', METADATA_CATALOG 'metadata');
+
+# Create a table with List(Struct) structure similar to the bug report
+statement ok
+CREATE TABLE ducklake.nested_test(
+    items STRUCT(
+        id VARCHAR,
+        metadata STRUCT(
+            source VARCHAR,
+            type VARCHAR,
+            extra VARCHAR
+        ),
+        attributes STRUCT(
+            name VARCHAR,
+            code VARCHAR,
+            value DOUBLE
+        ),
+        tags VARCHAR[]
+    )[]
+);
+
+# Create parquet file with various NULL patterns:
+# - NULL lists
+# - Empty lists
+# - Lists with NULL struct fields
+# - Nested structs with NULL fields
+statement ok
+COPY (
+    SELECT items FROM (
+        -- NULL list (entire list is NULL)
+        SELECT NULL::STRUCT(id VARCHAR, metadata STRUCT(source VARCHAR, type VARCHAR, extra VARCHAR), attributes STRUCT(name VARCHAR, code VARCHAR, value DOUBLE), tags VARCHAR[])[] as items
+        UNION ALL
+        -- Empty list
+        SELECT []::STRUCT(id VARCHAR, metadata STRUCT(source VARCHAR, type VARCHAR, extra VARCHAR), attributes STRUCT(name VARCHAR, code VARCHAR, value DOUBLE), tags VARCHAR[])[]
+        UNION ALL
+        -- List with struct containing many NULL fields
+        SELECT [{
+            'id': 'item1',
+            'metadata': {'source': 'A', 'type': NULL, 'extra': NULL},
+            'attributes': {'name': NULL, 'code': NULL, 'value': NULL},
+            'tags': NULL
+        }]
+        UNION ALL
+        -- List with multiple elements, some with NULLs
+        SELECT [{
+            'id': 'item2',
+            'metadata': {'source': 'B', 'type': 'T1', 'extra': NULL},
+            'attributes': {'name': 'Test', 'code': NULL, 'value': NULL},
+            'tags': []
+        }, {
+            'id': NULL,
+            'metadata': NULL,
+            'attributes': NULL,
+            'tags': NULL
+        }]
+        UNION ALL
+        -- More NULL lists to increase null count
+        SELECT NULL::STRUCT(id VARCHAR, metadata STRUCT(source VARCHAR, type VARCHAR, extra VARCHAR), attributes STRUCT(name VARCHAR, code VARCHAR, value DOUBLE), tags VARCHAR[])[]
+        UNION ALL
+        SELECT NULL::STRUCT(id VARCHAR, metadata STRUCT(source VARCHAR, type VARCHAR, extra VARCHAR), attributes STRUCT(name VARCHAR, code VARCHAR, value DOUBLE), tags VARCHAR[])[]
+        UNION ALL
+        SELECT NULL::STRUCT(id VARCHAR, metadata STRUCT(source VARCHAR, type VARCHAR, extra VARCHAR), attributes STRUCT(name VARCHAR, code VARCHAR, value DOUBLE), tags VARCHAR[])[]
+        UNION ALL
+        -- List with all NULL struct fields
+        SELECT [{
+            'id': NULL,
+            'metadata': {'source': NULL, 'type': NULL, 'extra': NULL},
+            'attributes': {'name': NULL, 'code': NULL, 'value': NULL},
+            'tags': NULL
+        }, {
+            'id': NULL,
+            'metadata': NULL,
+            'attributes': NULL,
+            'tags': NULL
+        }, {
+            'id': NULL,
+            'metadata': {'source': NULL, 'type': NULL, 'extra': NULL},
+            'attributes': NULL,
+            'tags': NULL
+        }]
+    )
+) TO '${DATA_PATH}/nested_nulls.parquet';
+
+# This should succeed without "bigint out of range" error
+statement ok
+CALL ducklake_add_data_files('ducklake', 'nested_test', '${DATA_PATH}/nested_nulls.parquet')
+
+# Verify data can be read
+query I
+SELECT COUNT(*) FROM ducklake.nested_test
+----
+8
+
+# Verify that stats don't have unreasonably large values (underflow detection)
+# All value_count and null_count should be reasonable (less than 1000 for this small test)
+query I
+SELECT COUNT(*) FROM metadata.ducklake_file_column_stats 
+WHERE value_count IS NOT NULL AND value_count > 1000
+----
+0
+
+query I
+SELECT COUNT(*) FROM metadata.ducklake_file_column_stats 
+WHERE null_count IS NOT NULL AND null_count > 1000
+----
+0
+
+# Verify stats are consistent: null_count should not exceed value_count + null_count (total values)
+# When both are present, null_count <= value_count + null_count should always be true
+query I
+SELECT COUNT(*) FROM metadata.ducklake_file_column_stats 
+WHERE value_count IS NOT NULL 
+  AND null_count IS NOT NULL 
+  AND null_count > value_count + null_count
+----
+0
+
+# Create another file with even more complex patterns to stress test
+statement ok
+COPY (
+    SELECT items FROM (
+        SELECT generate_series AS gs,
+            CASE 
+                WHEN gs % 5 = 0 THEN NULL
+                WHEN gs % 4 = 0 THEN []::STRUCT(id VARCHAR, metadata STRUCT(source VARCHAR, type VARCHAR, extra VARCHAR), attributes STRUCT(name VARCHAR, code VARCHAR, value DOUBLE), tags VARCHAR[])[]
+                ELSE [{
+                    'id': CASE WHEN gs % 3 = 0 THEN NULL ELSE 'id_' || gs::VARCHAR END,
+                    'metadata': CASE WHEN gs % 7 = 0 THEN NULL ELSE {
+                        'source': 'src_' || gs::VARCHAR,
+                        'type': CASE WHEN gs % 6 = 0 THEN NULL ELSE 'type_' || gs::VARCHAR END,
+                        'extra': NULL
+                    } END,
+                    'attributes': {
+                        'name': CASE WHEN gs % 9 = 0 THEN NULL ELSE 'name_' || gs::VARCHAR END,
+                        'code': NULL,
+                        'value': NULL
+                    },
+                    'tags': CASE WHEN gs % 10 = 0 THEN NULL ELSE [] END
+                }]
+            END as items
+        FROM generate_series(1, 100)
+    )
+) TO '${DATA_PATH}/nested_nulls_large.parquet';
+
+# This should also succeed
+statement ok
+CALL ducklake_add_data_files('ducklake', 'nested_test', '${DATA_PATH}/nested_nulls_large.parquet')
+
+# Verify all data can be read
+query I
+SELECT COUNT(*) FROM ducklake.nested_test
+----
+108
+
+# Final verification: no stats should have values that look like integer underflow
+# (values close to 2^64 would indicate underflow)
+query I
+SELECT COUNT(*) FROM metadata.ducklake_file_column_stats 
+WHERE value_count IS NOT NULL AND value_count > 9223372036854775807
+----
+0
+
+query I
+SELECT COUNT(*) FROM metadata.ducklake_file_column_stats 
+WHERE null_count IS NOT NULL AND null_count > 9223372036854775807
+----
+0
+
