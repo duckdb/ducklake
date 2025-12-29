@@ -460,7 +460,7 @@ DuckLakeStats &DuckLakeCatalog::GetStatsForSnapshot(DuckLakeTransaction &transac
 	lock_guard<mutex> guard(schemas_lock);
 	auto entry = stats.find(snapshot.next_file_id);
 	if (entry != stats.end()) {
-		// this stats are already cached
+		// this stat is already cached
 		return *entry->second;
 	}
 	// load the stats from the metadata manager
@@ -545,12 +545,8 @@ MappingIndex DuckLakeCatalog::TryGetCompatibleNameMap(DuckLakeTransaction &trans
 	return name_maps.TryGetCompatibleNameMap(name_map);
 }
 
-unique_ptr<DuckLakeStats> DuckLakeCatalog::LoadStatsForSnapshot(DuckLakeTransaction &transaction,
-                                                                DuckLakeSnapshot snapshot, DuckLakeCatalogSet &schema) {
-	auto &metadata_manager = transaction.GetMetadataManager();
-	auto global_stats = metadata_manager.GetGlobalTableStats(snapshot);
-
-	// construct the stats map
+unique_ptr<DuckLakeStats> DuckLakeCatalog::ConstructStatsMap(vector<DuckLakeGlobalStatsInfo> &global_stats,
+                                                             DuckLakeCatalogSet &schema) {
 	auto lake_stats = make_uniq<DuckLakeStats>();
 	for (auto &stats : global_stats) {
 		// find the referenced table entry
@@ -598,6 +594,14 @@ unique_ptr<DuckLakeStats> DuckLakeCatalog::LoadStatsForSnapshot(DuckLakeTransact
 		lake_stats->table_stats.insert(make_pair(stats.table_id, std::move(table_stats)));
 	}
 	return lake_stats;
+}
+
+unique_ptr<DuckLakeStats> DuckLakeCatalog::LoadStatsForSnapshot(DuckLakeTransaction &transaction,
+                                                                DuckLakeSnapshot snapshot, DuckLakeCatalogSet &schema) {
+	auto &metadata_manager = transaction.GetMetadataManager();
+	auto global_stats = metadata_manager.GetGlobalTableStats(snapshot);
+	// construct the stats map
+	return ConstructStatsMap(global_stats, schema);
 }
 
 optional_ptr<DuckLakeTableStats> DuckLakeCatalog::GetTableStats(DuckLakeTransaction &transaction, TableIndex table_id) {

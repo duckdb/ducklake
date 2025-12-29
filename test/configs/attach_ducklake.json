@@ -130,7 +130,15 @@
         "test/optimizer/pushdown/pushdown_filter_on_coalesced_equal_outer_join_keys.test",
         "test/optimizer/topn_window_elimination.test",
         "test/optimizer/pushdown/filter_cannot_pushdown.test",
-        "test/optimizer/pushdown/filters_on_limit_optimizer.test"
+        "test/optimizer/pushdown/filters_on_limit_optimizer.test",
+        "test/sql/explain/test_explain_table_scan.test",
+        "test/sql/types/struct/struct_projection_pushdown_in_storage.test"
+      ]
+    },
+    {
+      "reason": "Profiling",
+      "paths": [
+        "test/sql/pragma/profiling/test_custom_profiling_rows_scanned.test"
       ]
     },
     {

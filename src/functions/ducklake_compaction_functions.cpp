@@ -268,14 +268,6 @@ void DuckLakeCompactor::GenerateCompactions(DuckLakeTableEntry &table,
 				}
 				auto candidate_idx = candidate_list[compaction_idx];
 				auto &candidate = files[candidate_idx];
-				if (!candidate.partial_files.empty()) {
-					// the file already has partial files - we can only accept this as a candidate if it is the first
-					// file
-					if (compaction_idx != start_idx) {
-						// not the first file - we cannot compact this file together with the existing file
-						break;
-					}
-				}
 				idx_t file_size = candidate.file.data.file_size_bytes;
 				if (file_size >= target_file_size) {
 					// don't consider merging if the file is larger than the target size
