@@ -1,0 +1,50 @@
+# name: test/sql/delete/delete_metadata.test
+# description: Test ducklake deletes
+# group: [delete]
+
+test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+
+require ducklake
+
+require parquet
+
+statement ok
+SET autoinstall_known_extensions=1;
+
+statement ok
+SET autoload_known_extensions=1;
+
+statement ok
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH 's3://mybucket')
+
+# Clean up any existing table from previous runs
+statement ok
+DROP TABLE IF EXISTS ducklake.test;
+
+statement ok
+CREATE TABLE ducklake.test AS SELECT i id FROM range(1000) t(i);
+
+statement ok
+INSERT INTO ducklake.test SELECT i id FROM range(15000, 16000) t(i)
+
+statement ok
+BEGIN
+
+query I
+DELETE FROM ducklake.test WHERE id%2=0
+----
+1000
+
+statement ok
+COMMIT
+
+query II
+EXPLAIN ANALYZE SELECT COUNT(*) FILTER(WHERE id%2=0) FROM ducklake.test
+----
+analyzed_plan	<REGEX>:.*#HEAD: 0.*
+
+# we can time travel to see the state of the table before deletes
+query II
+EXPLAIN ANALYZE SELECT COUNT(*) FILTER(WHERE id%2=0) FROM ducklake.test AT (VERSION => 2)
+----
+analyzed_plan	<REGEX>:.*#HEAD: 0.*
