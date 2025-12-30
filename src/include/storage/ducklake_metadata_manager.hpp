@@ -101,6 +101,8 @@ public:
 
 	virtual bool TypeIsNativelySupported(const LogicalType &type);
 
+	virtual string GetColumnTypeInternal(const LogicalType &column_type);
+
 	DuckLakeMetadataManager &Get(DuckLakeTransaction &transaction);
 
 	//! Initialize a new DuckLake
@@ -124,7 +126,8 @@ public:
 	                         const FilterPushdownInfo *filter_info = nullptr);
 	virtual vector<DuckLakeCompactionFileEntry> GetFilesForCompaction(DuckLakeTableEntry &table, CompactionType type,
 	                                                                  double deletion_threshold,
-	                                                                  DuckLakeSnapshot snapshot);
+	                                                                  DuckLakeSnapshot snapshot,
+	                                                                  DuckLakeFileSizeOptions options);
 	virtual idx_t GetCatalogIdForSchema(idx_t schema_id);
 	virtual vector<DuckLakeFileForCleanup> GetOldFilesForCleanup(const string &filter);
 	virtual vector<DuckLakeFileForCleanup> GetOrphanFilesForCleanup(const string &filter, const string &separator);
@@ -200,7 +203,7 @@ public:
 	virtual string GetPathForSchema(SchemaIndex schema_id, vector<DuckLakeSchemaInfo> &new_schemas_result);
 	virtual string GetPathForTable(TableIndex table_id, const vector<DuckLakeTableInfo> &new_tables,
 	                               const vector<DuckLakeSchemaInfo> &new_schemas_result);
-
+	virtual bool IsColumnCreatedWithTable(const string &table_name, const string &column_name);
 	virtual void MigrateV01();
 	virtual void MigrateV02(bool allow_failures = false);
 	virtual void MigrateV03(bool allow_failures = false);

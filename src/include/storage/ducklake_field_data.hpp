@@ -122,7 +122,7 @@ public:
 	static shared_ptr<DuckLakeFieldData> AddColumn(const DuckLakeFieldData &field_data, const ColumnDefinition &new_col,
 	                                               idx_t &next_column_id);
 	static shared_ptr<DuckLakeFieldData> SetDefault(const DuckLakeFieldData &field_data, FieldIndex field_index,
-	                                                const ColumnDefinition &new_col);
+	                                                const ColumnDefinition &new_col, bool add_column);
 
 private:
 	vector<unique_ptr<DuckLakeFieldId>> field_ids;

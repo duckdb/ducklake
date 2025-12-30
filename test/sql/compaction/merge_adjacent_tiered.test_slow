@@ -1,0 +1,87 @@
+# name: test/sql/compaction/merge_adjacent_tiered.test_slow
+# description: test tiered/lucene-like compaction using min_file_size, max_file_size and target_file_size
+# group: [compaction]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+
+test-env DATA_PATH __TEST_DIR__
+
+statement ok
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/merge_adjacent_tiered/')
+
+statement ok
+USE ducklake;
+
+statement ok
+CREATE TABLE tiered (id integer, payload varchar);
+
+# Create 512 small files upfront (~1KB each)
+loop i 0 512
+
+statement ok
+INSERT INTO tiered SELECT ${i} * 1000 + j, md5((${i} * 1000 + j)::varchar) || md5((${i} * 1000 + j + 1)::varchar) FROM range(100) t(j);
+
+endloop
+
+query I
+SELECT count(*) FROM __ducklake_metadata_ducklake.ducklake_data_file WHERE end_snapshot IS NULL
+----
+512
+
+# Tier 0 → Tier 1: merge tiny files (< 10KB) into ~50KB files
+statement ok
+CALL ducklake_set_option('ducklake', 'target_file_size', '50KB');
+
+statement ok
+CALL ducklake_merge_adjacent_files('ducklake', 'tiered', max_file_size=>10000);
+
+query I
+SELECT count(*) FROM __ducklake_metadata_ducklake.ducklake_data_file WHERE end_snapshot IS NULL
+----
+47
+
+# Tier 1 → Tier 2: merge medium files (10KB-100KB) into ~200KB files
+statement ok
+CALL ducklake_set_option('ducklake', 'target_file_size', '200KB');
+
+statement ok
+CALL ducklake_merge_adjacent_files('ducklake', 'tiered', min_file_size=>10000, max_file_size=>100000);
+
+query I
+SELECT count(*) FROM __ducklake_metadata_ducklake.ducklake_data_file WHERE end_snapshot IS NULL
+----
+10
+
+# Tier 2 → Tier 3: merge large files (100KB-500KB) into ~1MB files
+statement ok
+CALL ducklake_set_option('ducklake', 'target_file_size', '1MB');
+
+statement ok
+CALL ducklake_merge_adjacent_files('ducklake', 'tiered', min_file_size=>100000, max_file_size=>500000);
+
+query I
+SELECT count(*) FROM __ducklake_metadata_ducklake.ducklake_data_file WHERE end_snapshot IS NULL
+----
+3
+
+# Full compaction: merge everything into final large files
+statement ok
+CALL ducklake_set_option('ducklake', 'target_file_size', '10MB');
+
+statement ok
+CALL ducklake_merge_adjacent_files('ducklake', 'tiered');
+
+query I
+SELECT count(*) FROM __ducklake_metadata_ducklake.ducklake_data_file WHERE end_snapshot IS NULL
+----
+1
+
+# Verify data integrity
+query III
+SELECT count(*), min(id), max(id) FROM tiered
+----
+51200	0	511099

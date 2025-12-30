@@ -13,6 +13,7 @@
 #include "duckdb/common/types/value.hpp"
 
 namespace duckdb {
+class DuckLakeMetadataManager;
 class FileSystem;
 
 struct ParsedCatalogEntry {
@@ -28,7 +29,7 @@ public:
 	static string SQLIdentifierToString(const string &text);
 	static string SQLLiteralToString(const string &text);
 	static string StatsToString(const string &text);
-	static string ValueToSQL(ClientContext &context, const Value &val);
+	static string ValueToSQL(DuckLakeMetadataManager &metadata_manager, ClientContext &context, const Value &val);
 
 	static ParsedCatalogEntry ParseCatalogEntry(const string &input);
 	static string JoinPath(FileSystem &fs, const string &a, const string &b);
