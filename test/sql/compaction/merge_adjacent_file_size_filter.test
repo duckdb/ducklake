@@ -1,0 +1,175 @@
+# name: test/sql/compaction/merge_adjacent_file_size_filter.test
+# description: test ducklake merge adjacent files min_file_size and max_file_size options
+# group: [compaction]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+
+test-env DATA_PATH __TEST_DIR__
+
+statement ok
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/merge_adjacent_file_size_filter/')
+
+statement ok
+USE ducklake;
+
+statement ok
+CALL ducklake_set_option('ducklake', 'target_file_size', '100KB');
+
+statement ok
+CREATE TABLE example (key integer, data varchar);
+
+# Create files of varying sizes
+# Small files (~400 bytes each)
+statement ok
+INSERT INTO example SELECT i, 'small' FROM range(10) t(i);
+
+statement ok
+INSERT INTO example SELECT i + 10, 'small' FROM range(10) t(i);
+
+# Medium files (~1800 bytes each due to more data)
+statement ok
+INSERT INTO example SELECT i + 100, repeat('medium', 100) FROM range(100) t(i);
+
+statement ok
+INSERT INTO example SELECT i + 200, repeat('medium', 100) FROM range(100) t(i);
+
+# Verify we have 4 files
+query I
+SELECT count(*) FROM __ducklake_metadata_ducklake.ducklake_data_file WHERE end_snapshot IS NULL
+----
+4
+
+# Verify small files are < 1000 bytes and medium files are >= 1000 bytes
+query I
+SELECT count(*) FROM __ducklake_metadata_ducklake.ducklake_data_file WHERE end_snapshot IS NULL AND file_size_bytes < 1000
+----
+2
+
+query I
+SELECT count(*) FROM __ducklake_metadata_ducklake.ducklake_data_file WHERE end_snapshot IS NULL AND file_size_bytes >= 1000
+----
+2
+
+# Test min_file_size: only merge files >= 1000 bytes (should only merge the medium files)
+statement ok
+CALL ducklake_merge_adjacent_files('ducklake', 'example', min_file_size=>1000);
+
+# The two medium files should be merged, small files remain
+query I
+SELECT count(*) FROM __ducklake_metadata_ducklake.ducklake_data_file WHERE end_snapshot IS NULL
+----
+3
+
+# The small files should still exist (count of files < 1000 bytes should be 2)
+query I
+SELECT count(*) FROM __ducklake_metadata_ducklake.ducklake_data_file WHERE end_snapshot IS NULL AND file_size_bytes < 1000
+----
+2
+
+# Verify data is still correct
+query I
+SELECT count(*) FROM example
+----
+220
+
+# Reset: drop and recreate table
+statement ok
+DROP TABLE example;
+
+statement ok
+CALL ducklake_expire_snapshots('ducklake', older_than => now());
+
+statement ok
+CREATE TABLE example (key integer, data varchar);
+
+# Create files again
+statement ok
+INSERT INTO example SELECT i, 'small' FROM range(10) t(i);
+
+statement ok
+INSERT INTO example SELECT i + 10, 'small' FROM range(10) t(i);
+
+statement ok
+INSERT INTO example SELECT i + 100, repeat('medium', 100) FROM range(100) t(i);
+
+statement ok
+INSERT INTO example SELECT i + 200, repeat('medium', 100) FROM range(100) t(i);
+
+# Test max_file_size: only merge files < 1000 bytes (should only merge the small files)
+statement ok
+CALL ducklake_merge_adjacent_files('ducklake', 'example', max_file_size=>1000);
+
+# The two small files should be merged, medium files remain
+query I
+SELECT count(*) FROM __ducklake_metadata_ducklake.ducklake_data_file WHERE end_snapshot IS NULL
+----
+3
+
+# Medium files should still be there (files >= 1000 bytes)
+query I
+SELECT count(*) FROM __ducklake_metadata_ducklake.ducklake_data_file WHERE end_snapshot IS NULL AND file_size_bytes >= 1000
+----
+2
+
+# Verify data is still correct
+query I
+SELECT count(*) FROM example
+----
+220
+
+# Reset again
+statement ok
+DROP TABLE example;
+
+statement ok
+CALL ducklake_expire_snapshots('ducklake', older_than => now());
+
+statement ok
+CREATE TABLE example (key integer, data varchar);
+
+# Create 4 files again
+statement ok
+INSERT INTO example SELECT i, 'small' FROM range(10) t(i);
+
+statement ok
+INSERT INTO example SELECT i + 10, 'small' FROM range(10) t(i);
+
+statement ok
+INSERT INTO example SELECT i + 100, repeat('medium', 100) FROM range(100) t(i);
+
+statement ok
+INSERT INTO example SELECT i + 200, repeat('medium', 100) FROM range(100) t(i);
+
+# Test combined min_file_size and max_file_size: range that excludes all files
+# Small files are ~400-500 bytes, medium files are ~1800 bytes
+# 600-1500 range should match nothing
+statement ok
+CALL ducklake_merge_adjacent_files('ducklake', 'example', min_file_size=>600, max_file_size=>1500);
+
+# No files should be merged
+query I
+SELECT count(*) FROM __ducklake_metadata_ducklake.ducklake_data_file WHERE end_snapshot IS NULL
+----
+4
+
+# Test error handling: min_file_size >= max_file_size
+statement error
+CALL ducklake_merge_adjacent_files('ducklake', 'example', min_file_size=>1000, max_file_size=>500);
+----
+min_file_size must be less than max_file_size
+
+# Test error handling: max_file_size cannot be zero
+statement error
+CALL ducklake_merge_adjacent_files('ducklake', 'example', max_file_size=>0);
+----
+max_file_size option must be greater than zero
+
+# Verify data is still correct after all operations
+query I
+SELECT count(*) FROM example
+----
+220

@@ -2,6 +2,7 @@
 #include "duckdb/common/string_util.hpp"
 #include "duckdb/parser/keyword_helper.hpp"
 #include "duckdb/common/file_system.hpp"
+#include "storage/ducklake_metadata_manager.hpp"
 
 namespace duckdb {
 
@@ -89,7 +90,115 @@ string DuckLakeUtil::StatsToString(const string &text) {
 	return DuckLakeUtil::SQLLiteralToString(text);
 }
 
-string DuckLakeUtil::ValueToSQL(ClientContext &context, const Value &val) {
+string ToSQLString(DuckLakeMetadataManager &metadata_manager, const Value &value) {
+	if (value.IsNull()) {
+		return value.ToString();
+	}
+	string value_type = value.type().ToString();
+	if (!metadata_manager.TypeIsNativelySupported(value.type())) {
+		value_type = "VARCHAR";
+	} else {
+		value_type = metadata_manager.GetColumnTypeInternal(value.type());
+	}
+	switch (value.type().id()) {
+	case LogicalTypeId::UUID:
+	case LogicalTypeId::DATE:
+	case LogicalTypeId::TIME:
+	case LogicalTypeId::TIMESTAMP:
+	case LogicalTypeId::TIME_TZ:
+	case LogicalTypeId::TIMESTAMP_TZ:
+	case LogicalTypeId::TIMESTAMP_SEC:
+	case LogicalTypeId::TIMESTAMP_MS:
+	case LogicalTypeId::TIMESTAMP_NS:
+	case LogicalTypeId::INTERVAL:
+	case LogicalTypeId::BLOB:
+		return "'" + value.ToString() + "'::" + value_type;
+	case LogicalTypeId::VARCHAR:
+	case LogicalTypeId::ENUM: {
+		auto str_val = value.ToString();
+		if (str_val.size() == 1 && str_val[0] == '\0') {
+			return "chr(0)";
+		}
+		return "'" + StringUtil::Replace(value.ToString(), "'", "''") + "'";
+	}
+	case LogicalTypeId::VARIANT:
+	case LogicalTypeId::STRUCT: {
+		bool is_unnamed = StructType::IsUnnamed(value.type());
+		string ret = is_unnamed ? "(" : "{";
+		auto &child_types = StructType::GetChildTypes(value.type());
+		auto &struct_values = StructValue::GetChildren(value);
+		for (idx_t i = 0; i < struct_values.size(); i++) {
+			auto &name = child_types[i].first;
+			auto &child = struct_values[i];
+			if (is_unnamed) {
+				ret += child.ToSQLString();
+			} else {
+				ret += "'" + name + "': " + child.ToSQLString();
+			}
+			if (i < struct_values.size() - 1) {
+				ret += ", ";
+			}
+		}
+		ret += is_unnamed ? ")" : "}";
+		return ret;
+	}
+	case LogicalTypeId::FLOAT:
+		if (!value.FloatIsFinite(FloatValue::Get(value))) {
+			return "'" + value.ToString() + "'::" + value_type;
+		}
+		return value.ToString();
+	case LogicalTypeId::DOUBLE: {
+		double val = DoubleValue::Get(value);
+		if (!value.DoubleIsFinite(val)) {
+			if (!Value::IsNan(val)) {
+				// to infinity and beyond
+				return val < 0 ? "-1e1000" : "1e1000";
+			}
+			return "'" + value.ToString() + "'::" + value_type;
+		}
+		return value.ToString();
+	}
+	case LogicalTypeId::LIST: {
+		string ret = "[";
+		auto &list_values = ListValue::GetChildren(value);
+		for (idx_t i = 0; i < list_values.size(); i++) {
+			auto &child = list_values[i];
+			ret += child.ToSQLString();
+			if (i < list_values.size() - 1) {
+				ret += ", ";
+			}
+		}
+		ret += "]";
+		return ret;
+	}
+	case LogicalTypeId::ARRAY: {
+		string ret = "[";
+		auto &array_values = ArrayValue::GetChildren(value);
+		for (idx_t i = 0; i < array_values.size(); i++) {
+			auto &child = array_values[i];
+			ret += child.ToSQLString();
+			if (i < array_values.size() - 1) {
+				ret += ", ";
+			}
+		}
+		ret += "]";
+		return ret;
+	}
+	case LogicalTypeId::UNION: {
+		string ret = "union_value(";
+		auto union_tag = UnionValue::GetTag(value);
+		auto &tag_name = UnionType::GetMemberName(value.type(), union_tag);
+		ret += tag_name + " := ";
+		ret += UnionValue::GetValue(value).ToSQLString();
+		ret += ")";
+		return ret;
+	}
+	default:
+		return value.ToString();
+	}
+}
+
+string DuckLakeUtil::ValueToSQL(DuckLakeMetadataManager &metadata_manager, ClientContext &context, const Value &val) {
 	// FIXME: this should be upstreamed
 	if (val.IsNull()) {
 		return val.ToSQLString();
@@ -97,8 +206,9 @@ string DuckLakeUtil::ValueToSQL(ClientContext &context, const Value &val) {
 	if (val.type().HasAlias()) {
 		// extension type: cast to string
 		auto str_val = val.CastAs(context, LogicalType::VARCHAR);
-		return DuckLakeUtil::ValueToSQL(context, str_val);
+		return ValueToSQL(metadata_manager, context, str_val);
 	}
+	string result;
 	switch (val.type().id()) {
 	case LogicalTypeId::VARCHAR: {
 		auto &str_val = StringValue::Get(val);
@@ -126,32 +236,41 @@ string DuckLakeUtil::ValueToSQL(ClientContext &context, const Value &val) {
 		}
 	}
 	case LogicalTypeId::MAP: {
-		string ret = "MAP(";
-		auto &map_values = MapValue::GetChildren(val);
-		// keys
-		ret += "[";
-		for (idx_t i = 0; i < map_values.size(); i++) {
-			if (i > 0) {
-				ret += ", ";
+		if (metadata_manager.TypeIsNativelySupported(val.type())) {
+			string ret = "MAP(";
+			auto &map_values = MapValue::GetChildren(val);
+			// keys
+			ret += "[";
+			for (idx_t i = 0; i < map_values.size(); i++) {
+				if (i > 0) {
+					ret += ", ";
+				}
+				auto &map_children = StructValue::GetChildren(map_values[i]);
+				ret += ToSQLString(metadata_manager, map_children[0]);
 			}
-			auto &map_children = StructValue::GetChildren(map_values[i]);
-			ret += map_children[0].ToSQLString();
-		}
-		ret += "], [";
-		// values
-		for (idx_t i = 0; i < map_values.size(); i++) {
-			if (i > 0) {
-				ret += ", ";
+			ret += "], [";
+			// values
+			for (idx_t i = 0; i < map_values.size(); i++) {
+				if (i > 0) {
+					ret += ", ";
+				}
+				auto &map_children = StructValue::GetChildren(map_values[i]);
+				ret += ToSQLString(metadata_manager, map_children[1]);
 			}
-			auto &map_children = StructValue::GetChildren(map_values[i]);
-			ret += map_children[1].ToSQLString();
+			ret += "])";
+			result = ret;
+		} else {
+			result = ToSQLString(metadata_manager, val);
 		}
-		ret += "])";
-		return ret;
+		break;
 	}
 	default:
-		return val.ToSQLString();
+		result = ToSQLString(metadata_manager, val);
 	}
+	if (metadata_manager.TypeIsNativelySupported(val.type()) || !val.type().IsNested()) {
+		return result;
+	}
+	return StringUtil::Format("%s", SQLString(result));
 }
 
 string DuckLakeUtil::JoinPath(FileSystem &fs, const string &a, const string &b) {

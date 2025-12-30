@@ -1,0 +1,248 @@
+# name: test/sql/rewrite_data_files/test_rewrite_preserves_row_id.test
+# description: Test that ducklake_rewrite_data_files preserves row IDs (row lineage) when rewriting files with deletes
+# group: [rewrite_data_files]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+
+test-env DATA_PATH __TEST_DIR__
+
+statement ok
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/ducklake_rewrite_row_id', METADATA_CATALOG 'ducklake_metadata')
+
+statement ok
+USE ducklake
+
+# Create a simple table with sequential values
+statement ok
+CREATE TABLE test(a INTEGER, b INTEGER);
+
+statement ok
+INSERT INTO test SELECT i, i * 10 FROM range(1, 11) t(i);
+
+# Verify initial row IDs (0-9)
+query III
+SELECT rowid, a, b FROM test ORDER BY a
+----
+0	1	10
+1	2	20
+2	3	30
+3	4	40
+4	5	50
+5	6	60
+6	7	70
+7	8	80
+8	9	90
+9	10	100
+
+# Delete even rows (a = 2, 4, 6, 8, 10)
+statement ok
+DELETE FROM test WHERE a % 2 = 0;
+
+# Verify row IDs after delete - should have gaps (0, 2, 4, 6, 8)
+query III
+SELECT rowid, a, b FROM test ORDER BY a
+----
+0	1	10
+2	3	30
+4	5	50
+6	7	70
+8	9	90
+
+# Now call rewrite_data_files to compact
+statement ok
+CALL ducklake_rewrite_data_files('ducklake', 'test', delete_threshold => 0);
+
+# Verify row IDs are preserved after rewrite - should still be (0, 2, 4, 6, 8)
+query III
+SELECT rowid, a, b FROM test ORDER BY a
+----
+0	1	10
+2	3	30
+4	5	50
+6	7	70
+8	9	90
+
+# Verify the delete file has been removed (compaction succeeded)
+query I
+SELECT COUNT(*) FROM ducklake_metadata.ducklake_delete_file WHERE end_snapshot IS NULL
+----
+0
+
+# Test with a larger dataset to ensure it works at scale
+statement ok
+CREATE TABLE test_large(a INTEGER, b INTEGER);
+
+statement ok
+INSERT INTO test_large SELECT i, i * 10 FROM range(1, 201) t(i);
+
+# Verify we have 200 rows with row IDs 0-199
+query I
+SELECT COUNT(*) FROM test_large
+----
+200
+
+query II
+SELECT MIN(rowid), MAX(rowid) FROM test_large
+----
+0	199
+
+# Delete every other row
+statement ok
+DELETE FROM test_large WHERE a % 2 = 0;
+
+# Should have 100 rows left with odd row IDs (0, 2, 4, ...)
+query I
+SELECT COUNT(*) FROM test_large
+----
+100
+
+# Verify the row IDs have gaps
+query II
+SELECT MIN(rowid), MAX(rowid) FROM test_large
+----
+0	198
+
+# Verify specific row IDs are preserved (checking first and last few)
+query III
+SELECT rowid, a, b FROM test_large WHERE a <= 5 ORDER BY a
+----
+0	1	10
+2	3	30
+4	5	50
+
+query III
+SELECT rowid, a, b FROM test_large WHERE a >= 195 ORDER BY a
+----
+194	195	1950
+196	197	1970
+198	199	1990
+
+# Rewrite the data files
+statement ok
+CALL ducklake_rewrite_data_files('ducklake', 'test_large', delete_threshold => 0);
+
+# Verify row IDs are still preserved after rewrite
+query I
+SELECT COUNT(*) FROM test_large
+----
+100
+
+query II
+SELECT MIN(rowid), MAX(rowid) FROM test_large
+----
+0	198
+
+# Verify specific row IDs are still correct
+query III
+SELECT rowid, a, b FROM test_large WHERE a <= 5 ORDER BY a
+----
+0	1	10
+2	3	30
+4	5	50
+
+query III
+SELECT rowid, a, b FROM test_large WHERE a >= 195 ORDER BY a
+----
+194	195	1950
+196	197	1970
+198	199	1990
+
+# Verify all row IDs are even (since we deleted odd-indexed rows which had even 'a' values)
+query I
+SELECT COUNT(*) FROM test_large WHERE rowid % 2 != 0
+----
+0
+
+# Test multiple rounds of delete + rewrite
+statement ok
+DELETE FROM test_large WHERE a % 4 = 1;
+
+# Now we have rows where a % 4 = 3 (a = 3, 7, 11, 15, ...)
+query I
+SELECT COUNT(*) FROM test_large
+----
+50
+
+# Verify row IDs still have gaps
+query III
+SELECT rowid, a, b FROM test_large WHERE a <= 15 ORDER BY a
+----
+2	3	30
+6	7	70
+10	11	110
+14	15	150
+
+statement ok
+CALL ducklake_rewrite_data_files('ducklake', 'test_large', delete_threshold => 0);
+
+# Row IDs should still be preserved
+query III
+SELECT rowid, a, b FROM test_large WHERE a <= 15 ORDER BY a
+----
+2	3	30
+6	7	70
+10	11	110
+14	15	150
+
+query I
+SELECT COUNT(*) FROM test_large
+----
+50
+
+# Test that inserting new rows after rewrite gets correct row IDs
+statement ok
+INSERT INTO test VALUES (11, 110), (12, 120);
+
+# New rows should get row IDs starting after the max existing row ID (which was 9)
+query III
+SELECT rowid, a, b FROM test WHERE a > 10 ORDER BY a
+----
+10	11	110
+11	12	120
+
+# Test deleting and rewriting again preserves row IDs
+statement ok
+DELETE FROM test WHERE a = 3;
+
+query III
+SELECT rowid, a, b FROM test ORDER BY a
+----
+0	1	10
+4	5	50
+6	7	70
+8	9	90
+10	11	110
+11	12	120
+
+statement ok
+CALL ducklake_rewrite_data_files('ducklake', 'test', delete_threshold => 0);
+
+# Row IDs should still be preserved after second rewrite
+query III
+SELECT rowid, a, b FROM test ORDER BY a
+----
+0	1	10
+4	5	50
+6	7	70
+8	9	90
+10	11	110
+11	12	120
+
+# Cleanup old files and verify data integrity
+statement ok
+CALL ducklake_cleanup_old_files('ducklake', cleanup_all => true);
+
+# Data and row IDs should still be correct after cleanup
+query III
+SELECT rowid, a, b FROM test ORDER BY a
+----
+0	1	10
+4	5	50
+6	7	70
+8	9	90
+10	11	110
+11	12	120
