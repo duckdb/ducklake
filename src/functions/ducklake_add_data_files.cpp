@@ -907,6 +907,34 @@ DuckLakeDataFile DuckLakeFileProcessor::AddFileToTable(ParquetFileMetadata &file
 
 	// we successfully mapped this file - register the name map and refer to it in the file
 	result.mapping_id = transaction.AddNameMap(std::move(name_map));
+
+	const auto partition_data = table.GetPartitionData().get();
+	if (partition_data) {
+		bool invalid_partition = false;
+		if (file.hive_partition_values.size() != partition_data->fields.size()) {
+			invalid_partition = true;
+		} else {
+			for (idx_t i = 0; i < partition_data->fields.size(); i++) {
+				if (file.hive_partition_values[i].field_index.index != partition_data->fields[i].field_id.index) {
+					invalid_partition = true;
+					break;
+				}
+			}
+		}
+		if (invalid_partition) {
+			throw InvalidInputException("File \"%s\" contains an invalid partition value for the table configuration.",
+			                            file.filename);
+		}
+		unordered_map<idx_t, idx_t> field_partition_key_map;
+		for (auto &partition_fields : partition_data->fields) {
+			field_partition_key_map[partition_fields.field_id.index] = partition_fields.partition_key_index;
+		}
+		for (auto &hive_partition : file.hive_partition_values) {
+			result.partition_values.push_back({field_partition_key_map[hive_partition.field_index.index],
+			                                   hive_partition.hive_value.GetValue<string>()});
+		}
+		result.partition_id = partition_data->partition_id;
+	}
 	return result;
 }
 
