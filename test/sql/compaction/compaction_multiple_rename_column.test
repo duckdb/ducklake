@@ -14,10 +14,12 @@ require ducklake
 
 require parquet
 
-load __TEST_DIR__/compaction_multi_rename.db
+test-env DUCKLAKE_CONNECTION __TEST_DIR__/compaction_multiple_rename_column.db
+
+test-env DATA_PATH __TEST_DIR__
 
 statement ok
-ATTACH 'ducklake:__TEST_DIR__/compaction_multi_rename_meta.db' AS ducklake (DATA_PATH '__TEST_DIR__/ducklake_compaction_multi_rename_files')
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/compaction_multiple_rename_column')
 
 # Create table with user_id column (schema version 1)
 statement ok
@@ -48,12 +50,13 @@ INSERT INTO ducklake.test VALUES (2, 200);
 statement ok
 ALTER TABLE ducklake.test RENAME COLUMN user_id TO distinct_id;
 
-# Reload database to clear the schema cache
+# Detach catalog to clear the schema cache
 # Without this, schema version 3 would be cached from before the corruption
-load __TEST_DIR__/compaction_multi_rename.db
+statement ok
+DETACH ducklake;
 
 statement ok
-ATTACH 'ducklake:__TEST_DIR__/compaction_multi_rename_meta.db' AS ducklake (DATA_PATH '__TEST_DIR__/ducklake_compaction_multi_rename_files')
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/compaction_multiple_rename_column')
 
 # Compact the files created at schema version 3
 # This loads the corrupted schema where both 'user_id' entries are visible
