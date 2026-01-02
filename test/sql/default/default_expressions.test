@@ -41,6 +41,13 @@ FROM t_1
 ----
 0	1
 
+# query I
+# FROM xx.ducklake_table t
+# INNER JOIN xx.ducklake_column c
+#   ON c.table_id = t.table_id
+#  WHERE c.begin_snapshot = t.begin_snapshot AND c.end_snapshot IS  NULL
+# ----
+
 statement ok
 ALTER TABLE t_1 ALTER id_plus SET DEFAULT round(pi())
 

@@ -139,6 +139,8 @@ private:
 public:
 	// ! Create a DuckLakeTableEntry from an ALTER
 	DuckLakeTableEntry(DuckLakeTableEntry &parent, CreateTableInfo &info, LocalChange local_change);
+	DuckLakeTableEntry(DuckLakeTableEntry &parent, CreateTableInfo &info, SetDefaultLocalChange local_change);
+
 	// ! Create a DuckLakeTableEntry from a RENAME COLUMN
 	DuckLakeTableEntry(DuckLakeTableEntry &parent, CreateTableInfo &info, LocalChange local_change,
 	                   const string &new_name);

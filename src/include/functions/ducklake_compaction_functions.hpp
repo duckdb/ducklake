@@ -76,13 +76,13 @@ public:
 class DuckLakeCompactor {
 public:
 	DuckLakeCompactor(ClientContext &context, DuckLakeCatalog &catalog, DuckLakeTransaction &transaction,
-	                  Binder &binder, TableIndex table_id, uint64_t max_files);
+	                  Binder &binder, TableIndex table_id, DuckLakeMergeAdjacentOptions options);
 	DuckLakeCompactor(ClientContext &context, DuckLakeCatalog &catalog, DuckLakeTransaction &transaction,
 	                  Binder &binder, TableIndex table_id, double delete_threshold);
 	void GenerateCompactions(DuckLakeTableEntry &table, vector<unique_ptr<LogicalOperator>> &compactions);
 	unique_ptr<LogicalOperator> GenerateCompactionCommand(vector<DuckLakeCompactionFileEntry> source_files);
 	static unique_ptr<LogicalOperator> InsertSort(Binder &binder, unique_ptr<LogicalOperator> &plan, DuckLakeTableEntry &table, optional_ptr<DuckLakeSort> sort_data) ;
-
+	
 private:
 	ClientContext &context;
 	DuckLakeCatalog &catalog;
@@ -90,7 +90,7 @@ private:
 	Binder &binder;
 	TableIndex table_id;
 	double delete_threshold = 0.95;
-	optional_idx max_files;
+	DuckLakeMergeAdjacentOptions options;
 
 	CompactionType type;
 };

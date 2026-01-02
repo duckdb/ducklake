@@ -79,13 +79,25 @@ DuckLakeTableEntry::DuckLakeTableEntry(DuckLakeTableEntry &parent, CreateTableIn
 		idx_t next_col = next_column_id.GetIndex();
 		field_data = DuckLakeFieldData::AddColumn(*field_data, new_col, next_col);
 		next_column_id = next_col;
-	} else if (local_change.type == LocalChangeType::SET_DEFAULT) {
-		auto changed_id = local_change.field_index;
-		field_data = DuckLakeFieldData::SetDefault(*field_data, changed_id, GetColumnByFieldId(changed_id));
 	} else if (local_change.type == LocalChangeType::REMOVE_COLUMN) {
 		auto changed_id = local_change.field_index;
 		field_data = DuckLakeFieldData::DropColumn(*field_data, changed_id);
 	}
+}
+
+DuckLakeTableEntry::DuckLakeTableEntry(DuckLakeTableEntry &parent, CreateTableInfo &info,
+                                       SetDefaultLocalChange local_change)
+    : DuckLakeTableEntry(parent.ParentCatalog(), parent.ParentSchema(), info, parent.GetTableId(),
+                         parent.GetTableUUID(), parent.DataPath(), parent.field_data, parent.next_column_id,
+                         parent.inlined_data_tables, local_change) {
+	if (parent.partition_data) {
+		partition_data = make_uniq<DuckLakePartition>(*parent.partition_data);
+	}
+	CheckSupportedTypes();
+
+	auto changed_id = local_change.field_index;
+	field_data = DuckLakeFieldData::SetDefault(*field_data, changed_id, GetColumnByFieldId(changed_id),
+	                                           local_change.is_column_new);
 }
 
 // ALTER TABLE RENAME COLUMN
@@ -1057,9 +1069,10 @@ unique_ptr<CatalogEntry> DuckLakeTableEntry::AlterTable(DuckLakeTransaction &tra
 	auto &col = table_info.columns.GetColumnMutable(info.column_name);
 	auto &field_id = GetFieldId(col.Physical());
 	col.SetDefaultValue(std::move(info.expression));
+	bool new_column = !transaction.GetMetadataManager().IsColumnCreatedWithTable(table_info.table, col.GetName());
 
-	auto new_entry =
-	    make_uniq<DuckLakeTableEntry>(*this, table_info, LocalChange::SetDefault(field_id.GetFieldIndex()));
+	auto new_entry = make_uniq<DuckLakeTableEntry>(
+	    *this, table_info, SetDefaultLocalChange::SetDefault(field_id.GetFieldIndex(), new_column));
 	return std::move(new_entry);
 }
 
