@@ -302,9 +302,9 @@ t.table_name = 'prevent_duplicates'
 query IIII
 SELECT 
 table_id, begin_snapshot, end_snapshot, sort_key_index
-FROM __ducklake_metadata_ducklake.ducklake_sort_key sk
+FROM __ducklake_metadata_ducklake.ducklake_sort_info si
 WHERE 
-sk.table_id = 8
+si.table_id = 8
 ----
 8	20	NULL	0
 8	20	NULL	1
@@ -398,9 +398,9 @@ query IIIIIIII
 SELECT 
 table_id, begin_snapshot, end_snapshot, sort_key_index,
 expression, dialect, sort_direction, null_order
-FROM __ducklake_metadata_ducklake.ducklake_sort_key sk
+FROM __ducklake_metadata_ducklake.ducklake_sort_info si
 WHERE 
-sk.table_id = 11
+si.table_id = 11
 ORDER BY table_id, begin_snapshot, end_snapshot, sort_key_index
 ----
 11	26	27	0	sort_key_1	duckdb	DESC	NULLS_FIRST	
