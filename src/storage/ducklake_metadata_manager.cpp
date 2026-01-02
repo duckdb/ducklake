@@ -570,9 +570,10 @@ ORDER BY table_id, sort_key_index
 
 		std::string sort_direction_str = StringUtil::Upper(row.GetValue<string>(5));
 		sort_field.sort_direction = (sort_direction_str == "DESC" ? OrderType::DESCENDING : OrderType::ASCENDING);
-		
+
 		std::string null_order_str = StringUtil::Upper(row.GetValue<string>(6));
-		sort_field.null_order = (null_order_str == "NULLS_FIRST" ? OrderByNullType::NULLS_FIRST : OrderByNullType::NULLS_LAST);
+		sort_field.null_order =
+		    (null_order_str == "NULLS_FIRST" ? OrderByNullType::NULLS_FIRST : OrderByNullType::NULLS_LAST);
 		sort_entry.fields.push_back(std::move(sort_field));
 	}
 
@@ -2740,10 +2741,8 @@ WHERE table_id IN (%s) AND end_snapshot IS NULL
 	return batch_query;
 }
 
-
-static unordered_map<idx_t, DuckLakeSortInfo>
-GetNewSorts(const vector<DuckLakeSortInfo> &old_sorts,
-                 const vector<DuckLakeSortInfo> &new_sorts) {
+static unordered_map<idx_t, DuckLakeSortInfo> GetNewSorts(const vector<DuckLakeSortInfo> &old_sorts,
+                                                          const vector<DuckLakeSortInfo> &new_sorts) {
 	unordered_map<idx_t, DuckLakeSortInfo> new_sort_map;
 
 	for (auto &sort : new_sorts) {
@@ -2776,7 +2775,7 @@ GetNewSorts(const vector<DuckLakeSortInfo> &old_sorts,
 }
 
 string DuckLakeMetadataManager::WriteNewSortKeys(DuckLakeSnapshot commit_snapshot,
-                                               const vector<DuckLakeSortInfo> &new_sorts) {
+                                                 const vector<DuckLakeSortInfo> &new_sorts) {
 	if (new_sorts.empty()) {
 		return {};
 	}
@@ -2796,13 +2795,13 @@ string DuckLakeMetadataManager::WriteNewSortKeys(DuckLakeSnapshot commit_snapsho
 			old_sort_table_ids += ", ";
 		}
 		old_sort_table_ids += to_string(new_sort.second.table_id.index);
-		
+
 		if (!new_sort.second.id.IsValid()) {
 			// dropping sort data - we don't need to do anything
 			return {};
 		}
 		auto sort_id = new_sort.second.id.GetIndex();
-		
+
 		for (auto &field : new_sort.second.fields) {
 			if (!new_sort_values.empty()) {
 				new_sort_values += ", ";
@@ -2810,8 +2809,9 @@ string DuckLakeMetadataManager::WriteNewSortKeys(DuckLakeSnapshot commit_snapsho
 			std::string sort_direction = (field.sort_direction == OrderType::DESCENDING ? "DESC" : "ASC");
 			std::string null_order = (field.null_order == OrderByNullType::NULLS_FIRST ? "NULLS_FIRST" : "NULLS_LAST");
 			new_sort_values +=
-		    	StringUtil::Format(R"((%d, %d, {SNAPSHOT_ID}, NULL, %d, %s, %s, %s, %s))", 
-					sort_id, new_sort.second.table_id.index, field.sort_key_index, SQLString(field.expression), SQLString(field.dialect), SQLString(sort_direction), SQLString(null_order));
+			    StringUtil::Format(R"((%d, %d, {SNAPSHOT_ID}, NULL, %d, %s, %s, %s, %s))", sort_id,
+			                       new_sort.second.table_id.index, field.sort_key_index, SQLString(field.expression),
+			                       SQLString(field.dialect), SQLString(sort_direction), SQLString(null_order));
 		}
 	}
 	// update old sort information for any tables that have been altered
@@ -2820,7 +2820,7 @@ UPDATE {METADATA_CATALOG}.ducklake_sort_key
 SET end_snapshot = {SNAPSHOT_ID}
 WHERE table_id IN (%s) AND end_snapshot IS NULL 
 ;)",
-	                                                 old_sort_table_ids);
+	                                            old_sort_table_ids);
 	string batch_query = update_sort_query;
 	if (!new_sort_values.empty()) {
 		new_sort_values = "INSERT INTO {METADATA_CATALOG}.ducklake_sort_key VALUES " + new_sort_values + ";";
@@ -3442,7 +3442,7 @@ VALUES %s;
 	if (!deleted_table_ids.empty()) {
 		tables_to_delete_from = {"ducklake_table",          "ducklake_table_stats",      "ducklake_table_column_stats",
 		                         "ducklake_partition_info", "ducklake_partition_column", "ducklake_column",
-		                         "ducklake_column_tag", "ducklake_sort_key"};
+		                         "ducklake_column_tag",     "ducklake_sort_key"};
 		for (auto &delete_tbl : tables_to_delete_from) {
 			auto result = transaction.Query(StringUtil::Format(R"(
 DELETE FROM {METADATA_CATALOG}.%s

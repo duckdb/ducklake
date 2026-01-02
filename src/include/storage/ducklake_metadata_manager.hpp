@@ -146,8 +146,7 @@ public:
 	virtual string WriteNewViews(const vector<DuckLakeViewInfo> &new_views);
 	virtual string WriteNewPartitionKeys(DuckLakeSnapshot commit_snapshot,
 	                                     const vector<DuckLakePartitionInfo> &new_partitions);
-	virtual string WriteNewSortKeys(DuckLakeSnapshot commit_snapshot,
-	                                   const vector<DuckLakeSortInfo> &new_sorts);
+	virtual string WriteNewSortKeys(DuckLakeSnapshot commit_snapshot, const vector<DuckLakeSortInfo> &new_sorts);
 	virtual string WriteDroppedColumns(const vector<DuckLakeDroppedColumn> &dropped_columns);
 	virtual string WriteNewColumns(const vector<DuckLakeNewColumn> &new_columns);
 	virtual string WriteNewTags(const vector<DuckLakeTagInfo> &new_tags);

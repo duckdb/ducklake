@@ -137,7 +137,7 @@ void GetTransactionTableChanges(reference<CatalogEntry> table_entry, Transaction
 		case LocalChangeType::ADD_COLUMN:
 		case LocalChangeType::REMOVE_COLUMN:
 		case LocalChangeType::CHANGE_COLUMN_TYPE:
-		case LocalChangeType::SET_DEFAULT: 
+		case LocalChangeType::SET_DEFAULT:
 		case LocalChangeType::SET_SORT_KEY: {
 			// this table was altered
 			auto table_id = table.GetTableId();
@@ -752,9 +752,7 @@ DuckLakePartitionInfo DuckLakeTransaction::GetNewPartitionKey(DuckLakeCommitStat
 	return partition_key;
 }
 
-DuckLakeSortInfo DuckLakeTransaction::GetNewSortKey(DuckLakeCommitState &commit_state,
-                                                    DuckLakeTableEntry &table) {
-	
+DuckLakeSortInfo DuckLakeTransaction::GetNewSortKey(DuckLakeCommitState &commit_state, DuckLakeTableEntry &table) {
 	DuckLakeSortInfo sort_key;
 	sort_key.table_id = commit_state.GetTableId(table);
 	if (sort_key.table_id.IsTransactionLocal()) {
@@ -778,10 +776,10 @@ DuckLakeSortInfo DuckLakeTransaction::GetNewSortKey(DuckLakeCommitState &commit_
 		sort_field.dialect = field.dialect;
 		sort_field.sort_direction = field.sort_direction;
 		sort_field.null_order = field.null_order;
-		
+
 		sort_key.fields.push_back(std::move(sort_field));
 	}
-	
+
 	return sort_key;
 }
 

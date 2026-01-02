@@ -468,7 +468,7 @@ unique_ptr<DuckLakeCatalogSet> DuckLakeCatalog::LoadSchemaForSnapshot(DuckLakeTr
 			sort_field.dialect = field.dialect;
 			sort_field.sort_direction = field.sort_direction;
 			sort_field.null_order = field.null_order;
-			
+
 			sort->fields.push_back(sort_field);
 		}
 		auto &ducklake_table = table->Cast<DuckLakeTableEntry>();

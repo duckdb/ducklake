@@ -245,7 +245,9 @@ void DuckLakeCompactor::GenerateCompactions(DuckLakeTableEntry &table,
 	}
 }
 
-unique_ptr<LogicalOperator> DuckLakeCompactor::InsertSort(Binder &binder, unique_ptr<LogicalOperator> &plan, DuckLakeTableEntry &table, optional_ptr<DuckLakeSort> sort_data) {
+unique_ptr<LogicalOperator> DuckLakeCompactor::InsertSort(Binder &binder, unique_ptr<LogicalOperator> &plan,
+                                                          DuckLakeTableEntry &table,
+                                                          optional_ptr<DuckLakeSort> sort_data) {
 	auto bindings = plan->GetColumnBindings();
 
 	vector<BoundOrderByNode> orders;
@@ -257,10 +259,11 @@ unique_ptr<LogicalOperator> DuckLakeCompactor::InsertSort(Binder &binder, unique
 			continue;
 		}
 		auto parsed_expression = Parser::ParseExpressionList(pre_bound_order.expression);
-		OrderByNode order_node(pre_bound_order.sort_direction, pre_bound_order.null_order, std::move(parsed_expression[0]));
+		OrderByNode order_node(pre_bound_order.sort_direction, pre_bound_order.null_order,
+		                       std::move(parsed_expression[0]));
 		pre_bound_orders.emplace_back(std::move(order_node));
 	}
-	
+
 	if (pre_bound_orders.empty()) {
 		// Then the sorts were not in the DuckDB dialect and we return the original plan
 		return std::move(plan);
@@ -287,13 +290,15 @@ unique_ptr<LogicalOperator> DuckLakeCompactor::InsertSort(Binder &binder, unique
 			orders.emplace_back(pre_bound_order.type, pre_bound_order.null_order, std::move(expr));
 		} else {
 			// Then we did not find the column in the table
-			// We want to record all of the ones that we do not find and then throw a more informative error that includes all incorrect columns.
+			// We want to record all of the ones that we do not find and then throw a more informative error that
+			// includes all incorrect columns.
 			unmatching_names.push_back(name);
 		}
 	}
 
 	if (!unmatching_names.empty()) {
-		std::string error_string = "Columns in the approx_sort parameter were not found in the DuckLake table. Unmatched columns were: ";
+		std::string error_string =
+		    "Columns in the approx_sort parameter were not found in the DuckLake table. Unmatched columns were: ";
 		for (auto &unmatching_name : unmatching_names) {
 			error_string += unmatching_name + ", ";
 		}
@@ -307,7 +312,7 @@ unique_ptr<LogicalOperator> DuckLakeCompactor::InsertSort(Binder &binder, unique
 
 	vector<unique_ptr<Expression>> cast_expressions;
 	order->ResolveOperatorTypes();
-	
+
 	auto &types = order->types;
 	auto order_bindings = order->GetColumnBindings();
 
@@ -322,7 +327,6 @@ unique_ptr<LogicalOperator> DuckLakeCompactor::InsertSort(Binder &binder, unique
 	projected->children.push_back(std::move(order));
 
 	return std::move(projected);
-
 }
 
 unique_ptr<LogicalOperator>
@@ -473,10 +477,10 @@ DuckLakeCompactor::GenerateCompactionCommand(vector<DuckLakeCompactionFileEntry>
 	if (DuckLakeTypes::RequiresCast(root->types)) {
 		root = DuckLakeInsert::InsertCasts(binder, root);
 	}
-	
+
 	// If compaction should be ordered, add Order By (and projection) to logical plan
 	// Do not pull the sort setting at the time of the creation of the files being compacted,
-	// and instead pull the latest sort setting 
+	// and instead pull the latest sort setting
 	// First, see if there are transaction local changes to the table
 	// Then fall back to latest snapshot if no local changes
 	auto latest_entry = transaction.GetTransactionLocalEntry(CatalogType::TABLE_ENTRY, table.schema.name, table.name);

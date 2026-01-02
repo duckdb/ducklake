@@ -1095,8 +1095,6 @@ unique_ptr<CatalogEntry> DuckLakeTableEntry::AlterTable(DuckLakeTransaction &tra
 
 	auto new_entry = make_uniq<DuckLakeTableEntry>(*this, table_info, std::move(sort_data));
 	return std::move(new_entry);
-
-
 }
 
 unique_ptr<CatalogEntry> DuckLakeTableEntry::Alter(DuckLakeTransaction &transaction, AlterTableInfo &info) {

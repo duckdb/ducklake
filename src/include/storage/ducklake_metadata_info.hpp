@@ -217,8 +217,8 @@ struct DuckLakeSortFieldInfo {
 	OrderType sort_direction;
 	OrderByNullType null_order;
 	bool operator!=(const DuckLakeSortFieldInfo &new_field) const {
-		return expression != new_field.expression || dialect != new_field.dialect || 
-			   sort_direction != new_field.sort_direction || null_order != new_field.null_order;
+		return expression != new_field.expression || dialect != new_field.dialect ||
+		       sort_direction != new_field.sort_direction || null_order != new_field.null_order;
 	}
 };
 
