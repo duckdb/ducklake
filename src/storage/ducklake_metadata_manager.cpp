@@ -1650,7 +1650,7 @@ VALUES %s
 UPDATE {METADATA_CATALOG}.ducklake_column
 SET end_snapshot = {SNAPSHOT_ID}
 FROM dropped_cols
-WHERE table_id=tid AND column_id=cid
+WHERE table_id=tid AND column_id=cid AND end_snapshot IS NULL
 ;)",
 	                          dropped_cols);
 }
