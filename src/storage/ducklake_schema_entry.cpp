@@ -15,6 +15,17 @@
 
 namespace duckdb {
 
+// Thread-local recursion guard to prevent infinite recursion when binding views during Scan.
+// When Bind() is called, it may trigger catalog lookups (e.g., GetSimilarEntry) which call Scan() again.
+// Without this guard, this can cause stack overflow.
+static thread_local bool g_binding_views_in_scan = false;
+
+// RAII guard for exception-safe flag management
+struct BindingGuard {
+	BindingGuard() { g_binding_views_in_scan = true; }
+	~BindingGuard() { g_binding_views_in_scan = false; }
+};
+
 DuckLakeSchemaEntry::DuckLakeSchemaEntry(Catalog &catalog, CreateSchemaInfo &info, SchemaIndex schema_id,
                                          string schema_uuid, string data_path_p)
     : SchemaCatalogEntry(catalog, info), schema_id(schema_id), schema_uuid(std::move(schema_uuid)),
@@ -286,11 +297,15 @@ void DuckLakeSchemaEntry::Scan(ClientContext &context, CatalogType type,
 		}
 		if (entry.second->type == CatalogType::VIEW_ENTRY) {
 			auto &view_entry = entry.second->Cast<DuckLakeViewEntry>();
-			if (!view_entry.IsBound()) {
+			// Only attempt to bind if we're not already in a binding operation.
+			// Binding can trigger catalog lookups which recursively call Scan(),
+			// leading to stack overflow without this guard.
+			if (!view_entry.IsBound() && !g_binding_views_in_scan) {
+				BindingGuard guard;
 				try {
 					view_entry.Bind(context);
 				} catch (...) {
-					//
+					// Binding failed - view will remain unbound
 				}
 			}
 		}
