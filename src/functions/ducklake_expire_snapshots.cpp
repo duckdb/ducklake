@@ -58,8 +58,8 @@ static unique_ptr<FunctionData> DuckLakeExpireSnapshotsBind(ClientContext &conte
 	// we can never delete the most recent snapshot
 	filter = "snapshot_id != (SELECT MAX(snapshot_id) FROM {METADATA_CATALOG}.ducklake_snapshot) AND ";
 	if (has_timestamp) {
-		auto ts = Timestamp::ToString(timestamp_t(from_timestamp.value));
-		filter += StringUtil::Format("snapshot_time < '%s'", ts);
+		auto timestamp_filter = DuckLakeTableFunctionUtil::FormatTimestampISO8601(timestamp_t(from_timestamp.value));
+		filter += StringUtil::Format("snapshot_time < '%s'", timestamp_filter);
 	} else if (!has_versions && !older_than_default.empty()) {
 		interval_t interval;
 		if (!Interval::FromString(older_than_default, interval)) {
@@ -69,7 +69,7 @@ static unique_ptr<FunctionData> DuckLakeExpireSnapshotsBind(ClientContext &conte
 		auto target_timestamp =
 		    SubtractOperator::Operation<timestamp_t, interval_t, timestamp_t>(current_time, interval);
 		auto timestamp_filter = DuckLakeTableFunctionUtil::FormatTimestampISO8601(target_timestamp);
-		filter += StringUtil::Format("snapshot_time < NOW() - INTERVAL '%s'", older_than_default);
+		filter += StringUtil::Format("snapshot_time < '%s'", timestamp_filter);
 	} else {
 		filter += StringUtil::Format("snapshot_id IN (%s)", snapshot_list);
 	}
