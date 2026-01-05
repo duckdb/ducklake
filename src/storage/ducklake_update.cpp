@@ -138,7 +138,7 @@ SinkResultType DuckLakeUpdate::Sink(ExecutionContext &context, DataChunk &chunk,
 		for (idx_t i = 0; i < chunk.size(); i++) {
 			auto file_idx = file_index_data.sel->get_index(i);
 			auto row_idx = row_number_data.sel->get_index(i);
-			FileRowId key{file_indices[file_idx], row_numbers[row_idx]};
+			FileRowId key {file_indices[file_idx], row_numbers[row_idx]};
 			if (gstate.seen_rows.insert(key).second) {
 				sel.set_index(sel_count++, i);
 			}

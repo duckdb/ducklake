@@ -1,6 +1,7 @@
 # name: test/sql/compaction/compaction_multiple_rename_column.test
 # description: test compaction with multiple column renames (regression test for WriteDroppedColumns bug)
 # group: [compaction]
+
 #
 # This test verifies that WriteDroppedColumns correctly sets end_snapshot only on the
 # currently active column entry (end_snapshot IS NULL), not on historical entries.

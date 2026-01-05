@@ -11,16 +11,6 @@
 
 namespace duckdb {
 
-namespace {
-// Conform timestamp to ISO-8601 extended format with optional fractional seconds and timezone offset, e.g.:
-// "2025-12-26T06:13:30.673176+00:00" (UTC) or "2025-12-26T01:13:30.673176-05:00" (EST)
-string FormatTimestampISO8601(timestamp_t timestamp) {
-	auto ts_string = Timestamp::ToString(timestamp);
-	std::replace(ts_string.begin(), ts_string.end(), ' ', 'T');
-	return ts_string + "+00";
-}
-} // namespace
-
 struct CleanupBindData : public TableFunctionData {
 
 	explicit CleanupBindData(Catalog &catalog, CleanupType type) : catalog(catalog), type(type) {
@@ -94,15 +84,16 @@ static unique_ptr<FunctionData> CleanupBind(ClientContext &context, TableFunctio
 	}
 
 	if (has_timestamp) {
-		result->timestamp_filter = FormatTimestampISO8601(timestamp_t(from_timestamp.value));
+		result->timestamp_filter = DuckLakeTableFunctionUtil::FormatTimestampISO8601(timestamp_t(from_timestamp.value));
 	} else if (!cleanup_all && !older_than_default.empty()) {
 		interval_t interval;
 		if (!Interval::FromString(older_than_default, interval)) {
 			throw InvalidInputException("Failed to parse interval: '%s'", older_than_default);
 		}
 		auto current_time = Timestamp::GetCurrentTimestamp();
-		auto target_timestamp = SubtractOperator::Operation<timestamp_t, interval_t, timestamp_t>(current_time, interval);
-		result->timestamp_filter = FormatTimestampISO8601(target_timestamp);
+		auto target_timestamp =
+		    SubtractOperator::Operation<timestamp_t, interval_t, timestamp_t>(current_time, interval);
+		result->timestamp_filter = DuckLakeTableFunctionUtil::FormatTimestampISO8601(target_timestamp);
 	}
 
 	auto &transaction = DuckLakeTransaction::Get(context, catalog);
