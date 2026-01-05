@@ -3,6 +3,7 @@
 #include "storage/ducklake_table_entry.hpp"
 #include "storage/ducklake_catalog.hpp"
 #include "storage/ducklake_delete_filter.hpp"
+#include "common/ducklake_util.hpp"
 
 #include "duckdb/common/local_file_system.hpp"
 #include "duckdb/common/types/data_chunk.hpp"
@@ -25,6 +26,8 @@
 #include "duckdb/function/function_binder.hpp"
 #include "storage/ducklake_inlined_data_reader.hpp"
 #include "duckdb/planner/filter/constant_filter.hpp"
+#include "duckdb/planner/filter/dynamic_filter.hpp"
+#include "duckdb/planner/filter/optional_filter.hpp"
 
 namespace duckdb {
 
@@ -40,6 +43,67 @@ static void NormalizeListChildNames(vector<MultiFileColumnDefinition> &columns, 
 			NormalizeListChildNames(col.children, is_list);
 		}
 	}
+}
+
+static bool CanSkipFileByTopNDynamicFilter(const DuckLakeFileListEntry &file_entry,
+                                           const FilterPushdownInfo &filter_info, ClientContext &context) {
+	if (file_entry.data_type != DuckLakeDataType::DATA_FILE) {
+		return false;
+	}
+	for (auto &it : filter_info.column_filters) {
+		auto &col_filter = it.second;
+		auto *filter = DuckLakeUtil::GetOptionalDynamicFilter(*col_filter.table_filter);
+		if (!filter) {
+			continue;
+		}
+		ExpressionType comparison_type;
+		Value constant;
+		{
+			lock_guard<mutex> l(filter->filter_data->lock);
+			if (!filter->filter_data->initialized) {
+				return false;
+			}
+			comparison_type = filter->filter_data->filter->comparison_type;
+			constant = filter->filter_data->filter->constant;
+		}
+
+		auto mm_it = file_entry.column_min_max.find(col_filter.column_field_index);
+		if (mm_it == file_entry.column_min_max.end()) {
+			continue;
+		}
+		constant = constant.DefaultCastAs(col_filter.column_type);
+
+		switch (comparison_type) {
+		case ExpressionType::COMPARE_GREATERTHAN:
+		case ExpressionType::COMPARE_GREATERTHANOREQUALTO: {
+			const auto &max_str = mm_it->second.second;
+			if (max_str.empty()) {
+				continue;
+			}
+			auto file_max = Value(max_str).DefaultCastAs(col_filter.column_type);
+			if (comparison_type == ExpressionType::COMPARE_GREATERTHAN) {
+				return !(file_max > constant);
+			}
+			return !(file_max >= constant);
+		}
+		case ExpressionType::COMPARE_LESSTHAN:
+		case ExpressionType::COMPARE_LESSTHANOREQUALTO: {
+			const auto &min_str = mm_it->second.first;
+			if (min_str.empty()) {
+				continue;
+			}
+			auto file_min = Value(min_str).DefaultCastAs(col_filter.column_type);
+			if (comparison_type == ExpressionType::COMPARE_LESSTHAN) {
+				return !(file_min < constant);
+			}
+			return !(file_min <= constant);
+		}
+		default:
+			// nothing to prune
+			continue;
+		}
+	}
+	return false;
 }
 
 DuckLakeMultiFileReader::DuckLakeMultiFileReader(DuckLakeFunctionInfo &read_info) : read_info(read_info) {
@@ -134,6 +198,9 @@ ReaderInitializeType DuckLakeMultiFileReader::InitializeReader(MultiFileReaderDa
 	auto file_idx = reader.file_list_idx.GetIndex();
 
 	auto &file_entry = file_list.GetFileEntry(file_idx);
+	if (file_list.GetFilterInfo() && CanSkipFileByTopNDynamicFilter(file_entry, *file_list.GetFilterInfo(), context)) {
+		return ReaderInitializeType::SKIP_READING_FILE;
+	}
 	if (!file_list.IsDeleteScan()) {
 		// regular scan - read the deletes from the delete file (if any) and apply the max row count
 		if (file_entry.data_type != DuckLakeDataType::DATA_FILE) {
@@ -444,7 +511,8 @@ unique_ptr<Expression> DuckLakeMultiFileReader::GetVirtualColumnExpression(
 				continue;
 			}
 			if (col.identifier.GetValue<int32_t>() == MultiFileReader::LAST_UPDATED_SEQUENCE_NUMBER_ID) {
-				// it is! return a reference to the global snapshot id column so we can read it from the file directly
+				// it is! return a reference to the global snapshot id column so we can read it from the file
+				// directly
 				global_column_reference = snapshot_id_column.get();
 				return nullptr;
 			}
@@ -464,13 +532,15 @@ unique_ptr<Expression> DuckLakeMultiFileReader::GetVirtualColumnExpression(
 	                                                   global_column_reference);
 }
 
-void DuckLakeMultiFileReader::GatherDeletionScanSnapshots(BaseFileReader &reader, const MultiFileReaderData &reader_data,
-                                                         DataChunk &output_chunk) const {
+void DuckLakeMultiFileReader::GatherDeletionScanSnapshots(BaseFileReader &reader,
+                                                          const MultiFileReaderData &reader_data,
+                                                          DataChunk &output_chunk) const {
 	auto &delete_filter = static_cast<DuckLakeDeleteFilter &>(*reader.deletion_filter);
 	optional_idx snapshot_col_idx = deletion_scan_snapshot_col;
 	optional_idx rowid_col_idx = deletion_scan_rowid_col;
 
-	if (delete_filter.delete_data->scan_snapshot_map.empty() || !snapshot_col_idx.IsValid() || !rowid_col_idx.IsValid()) {
+	if (delete_filter.delete_data->scan_snapshot_map.empty() || !snapshot_col_idx.IsValid() ||
+	    !rowid_col_idx.IsValid()) {
 		// We don't have anything to gather
 		return;
 	}
@@ -525,7 +595,8 @@ void DuckLakeMultiFileReader::FinalizeChunk(ClientContext &context, const MultiF
 	MultiFileReader::FinalizeChunk(context, bind_data, reader, reader_data, input_chunk, output_chunk, executor,
 	                               global_state);
 
-	// We need to gather the snapshot_id information correctly for scan deletions if the files are partial deletion files.
+	// We need to gather the snapshot_id information correctly for scan deletions if the files are partial deletion
+	// files.
 	if (read_info.scan_type == DuckLakeScanType::SCAN_DELETIONS && reader.deletion_filter) {
 		GatherDeletionScanSnapshots(reader, reader_data, output_chunk);
 	}
