@@ -1,0 +1,67 @@
+# name: test/sql/stats/topn_file_pruning.test
+# description: Ensure Top-N dynamic filters prune files using min/max column stats
+# group: [stats]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+
+test-env DATA_PATH __TEST_DIR__
+
+statement ok
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/ducklake_topn_pruning')
+
+statement ok
+PRAGMA threads=1;
+
+statement ok
+CREATE TABLE ducklake.events(timestamp TIMESTAMP, user_id VARCHAR);
+
+# Create multiple data files with increasing timestamp ranges
+statement ok
+INSERT INTO ducklake.events
+SELECT TIMESTAMP '2026-01-01 00:00:00' + interval (i) second, 'a' FROM range(1000) t(i);
+
+statement ok
+INSERT INTO ducklake.events
+SELECT TIMESTAMP '2026-01-02 00:00:00' + interval (i) second, 'b' FROM range(500) t(i);
+
+statement ok
+INSERT INTO ducklake.events
+SELECT TIMESTAMP '2026-01-03 00:00:00' + interval (i) second, 'c' FROM range(200) t(i);
+
+statement ok
+INSERT INTO ducklake.events
+SELECT TIMESTAMP '2026-01-04 00:00:00' + interval (i) second, 'd' FROM range(100) t(i);
+
+# The Top-N phase should not need to read all files once the dynamic filter is initialized
+query II
+EXPLAIN ANALYZE SELECT * FROM ducklake.events ORDER BY timestamp DESC LIMIT 1
+----
+analyzed_plan	<REGEX>:.*optional: Dynamic Filter.*100 rows.*
+
+# Test ascending order Top-N
+query II
+EXPLAIN ANALYZE SELECT * FROM ducklake.events ORDER BY timestamp ASC LIMIT 1
+----
+analyzed_plan	<REGEX>:.*optional: Dynamic Filter.*1,000 rows.*
+
+# Test combined Top-N with WHERE clause - both should contribute to pruning
+query II
+EXPLAIN ANALYZE SELECT * FROM ducklake.events WHERE timestamp > TIMESTAMP '2026-01-02 00:00:00' ORDER BY timestamp DESC LIMIT 5
+----
+analyzed_plan	<REGEX>:.*optional: Dynamic Filter.*
+
+# Test with multiple sort orders - should still prune using first column
+query II
+EXPLAIN ANALYZE SELECT * FROM ducklake.events ORDER BY timestamp DESC, user_id ASC LIMIT 1
+----
+analyzed_plan	<REGEX>:.*optional: Dynamic Filter.*100 rows.*
+
+# Verify actual result is correct with multiple sort orders
+query IT
+SELECT * FROM ducklake.events ORDER BY timestamp DESC, user_id ASC LIMIT 1
+----
+2026-01-04 00:01:39	d

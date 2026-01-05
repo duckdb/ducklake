@@ -3,6 +3,8 @@
 #include "duckdb/parser/keyword_helper.hpp"
 #include "duckdb/common/file_system.hpp"
 #include "storage/ducklake_metadata_manager.hpp"
+#include "duckdb/planner/filter/optional_filter.hpp"
+#include "duckdb/planner/filter/dynamic_filter.hpp"
 
 namespace duckdb {
 
@@ -280,6 +282,21 @@ string DuckLakeUtil::JoinPath(FileSystem &fs, const string &a, const string &b) 
 	} else {
 		return a + sep + b;
 	}
+}
+
+DynamicFilter *DuckLakeUtil::GetOptionalDynamicFilter(const TableFilter &filter) {
+	if (filter.filter_type != TableFilterType::OPTIONAL_FILTER) {
+		return nullptr;
+	}
+	auto &optional = filter.Cast<OptionalFilter>();
+	if (!optional.child_filter || optional.child_filter->filter_type != TableFilterType::DYNAMIC_FILTER) {
+		return nullptr;
+	}
+	auto &dynamic = optional.child_filter->Cast<DynamicFilter>();
+	if (!dynamic.filter_data || !dynamic.filter_data->filter) {
+		return nullptr;
+	}
+	return &dynamic;
 }
 
 } // namespace duckdb

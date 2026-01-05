@@ -2,6 +2,7 @@
 #include "storage/ducklake_multi_file_reader.hpp"
 #include "storage/ducklake_table_entry.hpp"
 #include "storage/ducklake_catalog.hpp"
+#include "common/ducklake_util.hpp"
 
 #include "duckdb/common/local_file_system.hpp"
 #include "duckdb/common/types/data_chunk.hpp"
@@ -24,8 +25,71 @@
 #include "duckdb/function/function_binder.hpp"
 #include "storage/ducklake_inlined_data_reader.hpp"
 #include "duckdb/planner/filter/constant_filter.hpp"
+#include "duckdb/planner/filter/dynamic_filter.hpp"
+#include "duckdb/planner/filter/optional_filter.hpp"
 
 namespace duckdb {
+
+static bool CanSkipFileByTopNDynamicFilter(const DuckLakeFileListEntry &file_entry,
+                                           const FilterPushdownInfo &filter_info, ClientContext &context) {
+	if (file_entry.data_type != DuckLakeDataType::DATA_FILE) {
+		return false;
+	}
+	for (auto &it : filter_info.column_filters) {
+		auto &col_filter = it.second;
+		auto *filter = DuckLakeUtil::GetOptionalDynamicFilter(*col_filter.table_filter);
+		if (!filter) {
+			continue;
+		}
+		ExpressionType comparison_type;
+		Value constant;
+		{
+			lock_guard<mutex> l(filter->filter_data->lock);
+			if (!filter->filter_data->initialized) {
+				return false;
+			}
+			comparison_type = filter->filter_data->filter->comparison_type;
+			constant = filter->filter_data->filter->constant;
+		}
+
+		auto mm_it = file_entry.column_min_max.find(col_filter.column_field_index);
+		if (mm_it == file_entry.column_min_max.end()) {
+			continue;
+		}
+		constant = constant.DefaultCastAs(col_filter.column_type);
+
+		switch (comparison_type) {
+		case ExpressionType::COMPARE_GREATERTHAN:
+		case ExpressionType::COMPARE_GREATERTHANOREQUALTO: {
+			const auto &max_str = mm_it->second.second;
+			if (max_str.empty()) {
+				continue;
+			}
+			auto file_max = Value(max_str).DefaultCastAs(col_filter.column_type);
+			if (comparison_type == ExpressionType::COMPARE_GREATERTHAN) {
+				return !(file_max > constant);
+			}
+			return !(file_max >= constant);
+		}
+		case ExpressionType::COMPARE_LESSTHAN:
+		case ExpressionType::COMPARE_LESSTHANOREQUALTO: {
+			const auto &min_str = mm_it->second.first;
+			if (min_str.empty()) {
+				continue;
+			}
+			auto file_min = Value(min_str).DefaultCastAs(col_filter.column_type);
+			if (comparison_type == ExpressionType::COMPARE_LESSTHAN) {
+				return !(file_min < constant);
+			}
+			return !(file_min <= constant);
+		}
+		default:
+			// nothing to prune
+			continue;
+		}
+	}
+	return false;
+}
 
 DuckLakeMultiFileReader::DuckLakeMultiFileReader(DuckLakeFunctionInfo &read_info) : read_info(read_info) {
 	row_id_column = make_uniq<MultiFileColumnDefinition>("_ducklake_internal_row_id", LogicalType::BIGINT);
@@ -119,6 +183,9 @@ ReaderInitializeType DuckLakeMultiFileReader::InitializeReader(MultiFileReaderDa
 	auto file_idx = reader.file_list_idx.GetIndex();
 
 	auto &file_entry = file_list.GetFileEntry(file_idx);
+	if (file_list.GetFilterInfo() && CanSkipFileByTopNDynamicFilter(file_entry, *file_list.GetFilterInfo(), context)) {
+		return ReaderInitializeType::SKIP_READING_FILE;
+	}
 	if (!file_list.IsDeleteScan()) {
 		// regular scan - read the deletes from the delete file (if any) and apply the max row count
 		if (file_entry.data_type != DuckLakeDataType::DATA_FILE) {

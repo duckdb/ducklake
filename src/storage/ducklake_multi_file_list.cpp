@@ -16,6 +16,7 @@
 #include "duckdb/planner/operator/logical_get.hpp"
 #include "duckdb/planner/filter/constant_filter.hpp"
 #include "duckdb/planner/filter/conjunction_filter.hpp"
+#include "duckdb/planner/filter/dynamic_filter.hpp"
 #include "duckdb/planner/filter/null_filter.hpp"
 #include "duckdb/planner/filter/optional_filter.hpp"
 #include "duckdb/planner/filter/in_filter.hpp"
@@ -312,6 +313,62 @@ void DuckLakeMultiFileList::GetFilesForTable() {
 		// not a transaction local table - read the file list from the metadata store
 		auto &metadata_manager = transaction.GetMetadataManager();
 		files = metadata_manager.GetFilesForTable(read_info.table, read_info.snapshot, filter_info.get());
+	}
+	// If Top-N dynamic filter pushdown is present, sort files so we find a good boundary early.
+	if (filter_info && !filter_info->column_filters.empty()) {
+		for (auto &entry : filter_info->column_filters) {
+			auto &col_filter = entry.second;
+			auto *filter = DuckLakeUtil::GetOptionalDynamicFilter(*col_filter.table_filter);
+			if (!filter) {
+				continue;
+			}
+			ExpressionType comparison_type;
+			{
+				lock_guard<mutex> l(filter->filter_data->lock);
+				comparison_type = filter->filter_data->filter->comparison_type;
+			}
+			const bool seeking_high_values = comparison_type == ExpressionType::COMPARE_GREATERTHAN ||
+			                                 comparison_type == ExpressionType::COMPARE_GREATERTHANOREQUALTO;
+			const bool seeking_low_values = comparison_type == ExpressionType::COMPARE_LESSTHAN ||
+			                                comparison_type == ExpressionType::COMPARE_LESSTHANOREQUALTO;
+			if (!seeking_high_values && !seeking_low_values) {
+				continue;
+			}
+			// Sort files to prioritize those most likely to satisfy the Top-N filter based on their min/max stats
+			std::stable_sort(files.begin(), files.end(),
+			                 [&](const DuckLakeFileListEntry &a, const DuckLakeFileListEntry &b) {
+				                 auto a_it = a.column_min_max.find(col_filter.column_field_index);
+				                 auto b_it = b.column_min_max.find(col_filter.column_field_index);
+				                 const bool a_has = a_it != a.column_min_max.end();
+				                 const bool b_has = b_it != b.column_min_max.end();
+				                 if (a_has != b_has) {
+					                 return a_has;
+				                 }
+				                 if (!a_has) {
+					                 return false;
+				                 }
+				                 const auto &a_min = a_it->second.first;
+				                 const auto &a_max = a_it->second.second;
+				                 const auto &b_min = b_it->second.first;
+				                 const auto &b_max = b_it->second.second;
+				                 if (seeking_high_values) {
+					                 // Prioritize files with non-empty stats over those with empty stats
+					                 if (a_max.empty() || b_max.empty()) {
+						                 return !a_max.empty();
+					                 }
+					                 return Value(a_max).DefaultCastAs(col_filter.column_type) >
+					                        Value(b_max).DefaultCastAs(col_filter.column_type);
+				                 } else {
+					                 // Prioritize files with non-empty stats over those with empty stats
+					                 if (a_min.empty() || b_min.empty()) {
+						                 return !a_min.empty();
+					                 }
+					                 return Value(a_min).DefaultCastAs(col_filter.column_type) <
+					                        Value(b_min).DefaultCastAs(col_filter.column_type);
+				                 }
+			                 });
+			break;
+		}
 	}
 	if (transaction.HasDroppedFiles()) {
 		for (idx_t file_idx = 0; file_idx < files.size(); file_idx++) {
