@@ -65,3 +65,9 @@ query IT
 SELECT * FROM ducklake.events ORDER BY timestamp DESC, user_id ASC LIMIT 1
 ----
 2026-01-04 00:01:39	d
+
+# NULLS FIRST disables the optimization so this should read all files (see FIXME in duckdb/src/optimizer/topn_optimizer.cpp)
+query II
+EXPLAIN ANALYZE SELECT * FROM ducklake.events ORDER BY timestamp DESC NULLS FIRST LIMIT 1
+----
+analyzed_plan	<REGEX>:.*1,800 rows.*
