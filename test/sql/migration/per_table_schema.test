@@ -1,0 +1,32 @@
+# name: test/sql/migration/per_table_schema.test
+# description: test migration code that transforms ducklake_schema_versions from global to table based
+# group: [migration]
+
+require ducklake
+
+require parquet
+
+unzip data/old_ducklake/per_table_schema.db.gz __TEST_DIR__/per_table_schema.db
+
+statement ok
+ATTACH 'ducklake:__TEST_DIR__/per_table_schema.db' AS ducklake (DATA_PATH '__TEST_DIR__/ducklake_migrate_per_table_schema', OVERRIDE_DATA_PATH TRUE)
+
+# Turning the global to local is basically an explosion within the table snapshot range.
+query III
+FROM __ducklake_metadata_ducklake.ducklake_schema_versions;
+----
+1	1	1
+1	2	1
+1	3	1
+1	4	1
+1	5	1
+1	6	1
+2	2	2
+2	3	2
+2	4	2
+2	5	2
+2	6	2
+3	3	3
+3	4	3
+3	5	3
+3	6	3

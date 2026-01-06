@@ -112,13 +112,13 @@ SELECT COUNT(*) FROM ducklake_list_files('ducklake', 'another_table')
 2
 
 query II
-FROM another_table;
+FROM another_table ORDER BY ALL;
 ----
 100	NULL
 200	NULL
-300	NULL
-400	NULL
 300	1
+300	NULL
 400	2
+400	NULL
 500	1
 600	2
