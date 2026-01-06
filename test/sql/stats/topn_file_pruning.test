@@ -42,11 +42,25 @@ EXPLAIN ANALYZE SELECT * FROM ducklake.events ORDER BY timestamp DESC LIMIT 1
 ----
 analyzed_plan	<REGEX>:.*optional: Dynamic Filter.*100 rows.*
 
+# Verify correct result for timestamp DESC LIMIT 1
+query II
+SELECT * FROM ducklake.events ORDER BY timestamp DESC LIMIT 2
+----
+2026-01-04 00:01:39	d
+2026-01-04 00:01:38	d
+
 # Test ascending order Top-N
 query II
 EXPLAIN ANALYZE SELECT * FROM ducklake.events ORDER BY timestamp ASC LIMIT 1
 ----
 analyzed_plan	<REGEX>:.*optional: Dynamic Filter.*1,000 rows.*
+
+# Verify correct result for timestamp ASC LIMIT 2
+query II
+SELECT * FROM ducklake.events ORDER BY timestamp ASC LIMIT 2
+----
+2026-01-01 00:00:00	a
+2026-01-01 00:00:01	a
 
 # Test combined Top-N with WHERE clause - both should contribute to pruning
 query II
