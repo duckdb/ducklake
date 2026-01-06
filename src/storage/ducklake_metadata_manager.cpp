@@ -173,10 +173,11 @@ UPDATE {METADATA_CATALOG}.ducklake_metadata SET value = '0.4-dev1' WHERE key = '
 
 	auto migrate_schema_versions = transaction.Query(R"(
 INSERT INTO {METADATA_CATALOG}.ducklake_schema_versions (table_id, begin_snapshot, schema_version)
-SELECT DISTINCT df.table_id, sv.begin_snapshot, sv.schema_version
+SELECT t.table_id, t.begin_snapshot, sv.schema_version
 FROM {METADATA_CATALOG}.ducklake_schema_versions sv
-CROSS JOIN (SELECT DISTINCT table_id FROM {METADATA_CATALOG}.ducklake_data_file) df
-WHERE sv.table_id IS NULL;
+JOIN {METADATA_CATALOG}.ducklake_table t
+  ON sv.begin_snapshot BETWEEN t.begin_snapshot
+                           AND COALESCE(t.end_snapshot, sv.begin_snapshot);
 )");
 	if (migrate_schema_versions->HasError()) {
 		if (!allow_failures) {

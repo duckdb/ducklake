@@ -56,14 +56,10 @@ FROM ducklake.test
 42
 84
 
-# After migration, schema_versions entries are now tracked per table
-# The migration converts existing global entries to per-table entries for tables that have data files
-# Since we're using a new DATA_PATH, there are no data files initially, so schema_versions is empty after migration
-# Schema versions will be populated when tables are created or altered
-query I
-SELECT COUNT(*) FROM __ducklake_metadata_ducklake.ducklake_schema_versions;
+query II
+FROM __ducklake_metadata_ducklake.ducklake_schema_versions;
 ----
-0
+1	1	1
 
 statement ok
 DETACH ducklake;
