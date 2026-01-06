@@ -507,7 +507,7 @@ unique_ptr<CatalogEntry> DuckLakeTableEntry::AlterTable(DuckLakeTransaction &tra
 		return nullptr;
 	}
 
-	table_info.columns.AddColumn(std::move(info.new_column));
+	table_info.columns.AddColumn(info.new_column.Copy());
 
 	RequireNextColumnId(transaction);
 	auto new_entry = make_uniq<DuckLakeTableEntry>(*this, table_info, LocalChangeType::ADD_COLUMN);

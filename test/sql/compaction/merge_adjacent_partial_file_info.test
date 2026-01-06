@@ -1,0 +1,95 @@
+# name: test/sql/compaction/merge_adjacent_partial_file_info.test
+# description: Merge adjacent of two files with partial info
+# group: [compaction]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+
+test-env DATA_PATH __TEST_DIR__
+
+
+statement ok
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/reproduce_issue/')
+
+statement ok
+USE ducklake;
+
+statement ok
+CREATE TABLE t (id INTEGER, data VARCHAR);
+
+# Set small target file size to control merging behavior (VERSION 1)
+statement ok
+CALL ducklake_set_option('ducklake', 'target_file_size', '1KB');
+
+# Create small files A (VERSION 2)
+statement ok
+INSERT INTO t SELECT i, 'small1' FROM range(100) t(i);
+
+# Create small files B (VERSION 3)	
+statement ok
+INSERT INTO t SELECT i + 100, 'small2' FROM range(100) t(i);
+
+# Merge A+B into a single file (VERSION 4)
+statement ok
+CALL ducklake_merge_adjacent_files('ducklake', 't');
+
+# Create small files C (VERSION 5)
+statement ok
+INSERT INTO t SELECT i + 200, 'small3' FROM range(100) t(i);
+
+# Create small files D (VERSION 6)
+statement ok
+INSERT INTO t SELECT i + 300, 'small4' FROM range(100) t(i);
+
+# Merge C+D into a single file (VERSION 7)
+statement ok
+CALL ducklake_merge_adjacent_files('ducklake', 't');
+
+# State now:
+# - Merged AB (ids 0-199) with partial_file_info
+# - Merged CD (ids 200-399) with partial_file_info
+query III
+SELECT begin_snapshot, end_snapshot, partial_file_info FROM __ducklake_metadata_ducklake.ducklake_data_file;
+----
+2	NULL	2:100|3:200
+5	NULL	5:100|6:200
+
+# Set large target file size to merge all files
+statement ok
+CALL ducklake_set_option('ducklake', 'target_file_size', '1MB');
+
+# Merge all files into a single file (VERSION 8)
+statement ok
+CALL ducklake_merge_adjacent_files('ducklake', 't');
+
+# State now:
+# - Merged ABCD (ids 0-399) with merged partial_file_info
+query III
+SELECT begin_snapshot, end_snapshot, partial_file_info FROM __ducklake_metadata_ducklake.ducklake_data_file;
+----
+2	NULL	2:100|3:200|5:300|6:400
+
+# Ensure the time-travel works
+query II
+SELECT * FROM (
+  SELECT '01_count_after_init' as version, COUNT(*) FROM t AT (VERSION => 1)
+  UNION SELECT '02_count_after_A' as version, COUNT(*) FROM t AT (VERSION => 2)
+  UNION SELECT '03_count_after_B' as version, COUNT(*) FROM t AT (VERSION => 3)
+  UNION SELECT '04_count_after_AB' as version, COUNT(*) FROM t AT (VERSION => 4)
+  UNION SELECT '05_count_after_C' as version, COUNT(*) FROM t AT (VERSION => 5)
+  UNION SELECT '06_count_after_D' as version, COUNT(*) FROM t AT (VERSION => 6)
+  UNION SELECT '07_count_after_CD' as version, COUNT(*) FROM t AT (VERSION => 7)
+  UNION SELECT '08_count_after_ABCD' as version, COUNT(*) FROM t AT (VERSION => 8)
+) ORDER BY version ASC;
+----
+01_count_after_init	0
+02_count_after_A	100
+03_count_after_B	200
+04_count_after_AB	200
+05_count_after_C	300
+06_count_after_D	400
+07_count_after_CD	400
+08_count_after_ABCD	400

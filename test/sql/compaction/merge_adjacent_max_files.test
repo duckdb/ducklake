@@ -116,9 +116,18 @@ True	True
 statement ok
 CALL ducklake_merge_adjacent_files('ducklake', 'example', max_compacted_files=>1000);
 
-# Calling it again, produces no changes.
+# Calling it again, merges one more time both snapshots as they are under the size limit
 query I
-SELECT max(data_file_id) BETWEEN 43 AND 45  FROM __ducklake_metadata_ducklake.ducklake_data_file
+SELECT max(data_file_id) FROM __ducklake_metadata_ducklake.ducklake_data_file
+----
+46
+
+statement ok
+CALL ducklake_merge_adjacent_files('ducklake', 'example', max_compacted_files=>1000);
+
+# Calling it again, produces no changes
+query I
+SELECT max(data_file_id) BETWEEN 46 AND 48 FROM __ducklake_metadata_ducklake.ducklake_data_file
 ----
 True
 

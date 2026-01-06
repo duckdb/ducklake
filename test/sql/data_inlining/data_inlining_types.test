@@ -25,6 +25,11 @@ fixed_nested_varchar_array,
 fixed_struct_array,
 struct_of_fixed_array,
 fixed_array_of_int_list,
+double_array,
+date_array,
+timestamp_array,
+timestamptz_array,
+timestamp,
 list_of_fixed_int_array, hugeint, uhugeint, interval, time_tz, date, blob, varchar, timestamp_s, timestamp_ms, timestamp_ns,timestamp_tz) FROM test_all_types();
 
 query I nosort alltypes
@@ -56,12 +61,15 @@ CREATE TABLE extra_types (
     ts_s TIMESTAMP_S,
     ts_ms TIMESTAMP_MS,
     ts_ns TIMESTAMP_NS,
-    ts_tz TIMESTAMPTZ
+    ts_tz TIMESTAMPTZ,
+    dou_ar DOUBLE[],
+    date_ar DATE[],
+    ts TIMESTAMP,
 );
 
 statement ok
 INSERT INTO extra_types VALUES ('2025-11-12','\x48656c6c6f20576f726c64','Sample text','2025-11-12 15:30:45',
-    '2025-11-12 15:30:45.123','2025-11-12 15:30:45.123','2025-11-12 15:30:45+00');
+    '2025-11-12 15:30:45.123','2025-11-12 15:30:45.123','2025-11-12 15:30:45+00', '[0.0]', '[2025-11-12]', '2025-11-12 15:30:45');
 
 
 query I nosort extra_types

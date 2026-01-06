@@ -197,6 +197,9 @@ void DuckLakeInlinedDataReader::Scan(ClientContext &context, GlobalTableFunction
 		}
 		if (filters) {
 			for (auto &entry : filters->filters) {
+				if (entry.second->filter_type == TableFilterType::OPTIONAL_FILTER) {
+					continue;
+				}
 				auto column_id = entry.first;
 				auto &vec = chunk.data[column_id];
 

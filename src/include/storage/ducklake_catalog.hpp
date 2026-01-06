@@ -17,6 +17,7 @@
 #include "storage/ducklake_stats.hpp"
 
 namespace duckdb {
+struct DuckLakeGlobalStatsInfo;
 class ColumnList;
 class DuckLakeFieldData;
 struct DuckLakeFileListEntry;
@@ -159,11 +160,13 @@ public:
 	MappingIndex TryGetCompatibleNameMap(DuckLakeTransaction &transaction, const DuckLakeNameMap &name_map);
 	idx_t GetSnapshotForSchema(idx_t schema_id, DuckLakeTransaction &transaction);
 
-private:
-	void DropSchema(ClientContext &context, DropInfo &info) override;
-
+	static unique_ptr<DuckLakeStats> ConstructStatsMap(vector<DuckLakeGlobalStatsInfo> &global_stats,
+	                                                   DuckLakeCatalogSet &schema);
 	//! Return the schema for the given snapshot - loading it if it is not yet loaded
 	DuckLakeCatalogSet &GetSchemaForSnapshot(DuckLakeTransaction &transaction, DuckLakeSnapshot snapshot);
+
+private:
+	void DropSchema(ClientContext &context, DropInfo &info) override;
 	unique_ptr<DuckLakeCatalogSet> LoadSchemaForSnapshot(DuckLakeTransaction &transaction, DuckLakeSnapshot snapshot);
 	DuckLakeStats &GetStatsForSnapshot(DuckLakeTransaction &transaction, DuckLakeSnapshot snapshot);
 	unique_ptr<DuckLakeStats> LoadStatsForSnapshot(DuckLakeTransaction &transaction, DuckLakeSnapshot snapshot,

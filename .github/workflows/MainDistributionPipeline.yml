@@ -24,7 +24,7 @@ jobs:
     name: Build extension binaries
     uses: duckdb/extension-ci-tools/.github/workflows/_extension_distribution.yml@main
     with:
-      duckdb_version: v1.4.1
+      duckdb_version: v1.4.3
       ci_tools_version: main
       extension_name: ducklake
 
@@ -47,7 +47,7 @@ jobs:
     secrets: inherit
     with:
       extension_name: ducklake
-      duckdb_version: v1.4.1
+      duckdb_version: v1.4.3
       ci_tools_version: main
       deploy_latest: ${{ startsWith(github.ref, 'refs/heads/v') || github.ref == 'refs/heads/main' }}
       deploy_versioned: ${{ startsWith(github.ref, 'refs/heads/v') || github.ref == 'refs/heads/main' }}
