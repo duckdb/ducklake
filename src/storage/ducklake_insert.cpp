@@ -408,30 +408,7 @@ static unique_ptr<Expression> GetPartitionExpression(ClientContext &context, Duc
 static string GetPartitionExpressionName(DuckLakeCopyInput &copy_input, const DuckLakePartitionField &field,
                                          case_insensitive_set_t &names) {
 	auto field_id = copy_input.field_data->GetByFieldIndex(field.field_id);
-	string prefix;
-	switch (field.transform.type) {
-	case DuckLakeTransformType::IDENTITY:
-		return field_id->Name();
-	case DuckLakeTransformType::YEAR:
-		prefix = "year";
-		break;
-	case DuckLakeTransformType::MONTH:
-		prefix = "month";
-		break;
-	case DuckLakeTransformType::DAY:
-		prefix = "day";
-		break;
-	case DuckLakeTransformType::HOUR:
-		prefix = "hour";
-		break;
-	default:
-		throw NotImplementedException("Unsupported partition transform type in GetPartitionExpressionName");
-	}
-	if (names.find(prefix) == names.end()) {
-		// prefer only the transform (e.g. year)
-		return prefix;
-	}
-	return prefix + "_" + field_id->Name();
+	return DuckLakePartitionUtils::GetPartitionKeyName(field.transform.type, field_id->Name(), names);
 }
 
 static void GeneratePartitionExpressions(ClientContext &context, DuckLakeCopyInput &copy_input,

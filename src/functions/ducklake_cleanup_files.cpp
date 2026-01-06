@@ -101,7 +101,8 @@ static unique_ptr<FunctionData> CleanupBind(ClientContext &context, TableFunctio
 			throw InvalidInputException("Failed to parse interval: '%s'", older_than_default);
 		}
 		auto current_time = Timestamp::GetCurrentTimestamp();
-		auto target_timestamp = SubtractOperator::Operation<timestamp_t, interval_t, timestamp_t>(current_time, interval);
+		auto target_timestamp =
+		    SubtractOperator::Operation<timestamp_t, interval_t, timestamp_t>(current_time, interval);
 		result->timestamp_filter = FormatTimestampISO8601(target_timestamp);
 	}
 
