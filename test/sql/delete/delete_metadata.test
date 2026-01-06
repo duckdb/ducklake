@@ -2,6 +2,10 @@
 # description: Test ducklake deletes
 # group: [delete]
 
+require httpfs
+
+require-env S3_TEST_SERVER_AVAILABLE 1
+
 test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
 
 require ducklake
