@@ -1,3 +1,4 @@
+#include "duckdb/common/operator/subtract.hpp"
 #include "functions/ducklake_table_functions.hpp"
 #include "duckdb/main/attached_database.hpp"
 #include "duckdb/main/database_manager.hpp"
@@ -57,10 +58,18 @@ static unique_ptr<FunctionData> DuckLakeExpireSnapshotsBind(ClientContext &conte
 	// we can never delete the most recent snapshot
 	filter = "snapshot_id != (SELECT MAX(snapshot_id) FROM {METADATA_CATALOG}.ducklake_snapshot) AND ";
 	if (has_timestamp) {
-		auto ts = Timestamp::ToString(timestamp_t(from_timestamp.value));
-		filter += StringUtil::Format("snapshot_time < '%s'", ts);
+		auto timestamp_filter = DuckLakeTableFunctionUtil::FormatTimestampISO8601(timestamp_t(from_timestamp.value));
+		filter += StringUtil::Format("snapshot_time < '%s'", timestamp_filter);
 	} else if (!has_versions && !older_than_default.empty()) {
-		filter += StringUtil::Format("snapshot_time < NOW() - INTERVAL '%s'", older_than_default);
+		interval_t interval;
+		if (!Interval::FromString(older_than_default, interval)) {
+			throw InvalidInputException("Failed to parse interval: '%s'", older_than_default);
+		}
+		auto current_time = Timestamp::GetCurrentTimestamp();
+		auto target_timestamp =
+		    SubtractOperator::Operation<timestamp_t, interval_t, timestamp_t>(current_time, interval);
+		auto timestamp_filter = DuckLakeTableFunctionUtil::FormatTimestampISO8601(target_timestamp);
+		filter += StringUtil::Format("snapshot_time < '%s'", timestamp_filter);
 	} else {
 		filter += StringUtil::Format("snapshot_id IN (%s)", snapshot_list);
 	}
