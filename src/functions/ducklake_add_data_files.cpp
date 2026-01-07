@@ -134,6 +134,7 @@ private:
 	unique_ptr<DuckLakeNameMapEntry> MapHiveColumn(ParquetFileMetadata &file_metadata, const DuckLakeFieldId &field_id,
 	                                               const Value &hive_value);
 	void DetermineMapping(ParquetFileMetadata &file);
+	void MapPartitionColumns(ParquetFileMetadata &file);
 
 	void CheckMatchingType(const LogicalType &type, ParquetColumn &column);
 
@@ -884,11 +885,48 @@ DuckLakeFileProcessor::MapColumns(ParquetFileMetadata &file_metadata,
 	return column_maps;
 }
 
+void DuckLakeFileProcessor::MapPartitionColumns(ParquetFileMetadata &file) {
+	auto partition_data = table.GetPartitionData();
+	if (!partition_data) {
+		return;
+	}
+
+	const auto &field_data = table.GetFieldData();
+	case_insensitive_set_t used_names;
+
+	for (const auto &partition_field : partition_data->fields) {
+		if (partition_field.transform.type == DuckLakeTransformType::IDENTITY) {
+			// handled by MapColumns via MapHiveColumn
+			continue;
+		}
+
+		auto field_id = field_data.GetByFieldIndex(partition_field.field_id);
+		if (!field_id) {
+			continue;
+		}
+
+		string partition_key_name =
+		    DuckLakePartitionUtils::GetPartitionKeyName(partition_field.transform.type, field_id->Name(), used_names);
+		used_names.insert(partition_key_name);
+
+		auto hive_entry = hive_partitions.find(partition_key_name);
+		if (hive_entry == hive_partitions.end()) {
+			// key not found in the file path
+			continue;
+		}
+
+		file.hive_partition_values.emplace_back(
+		    HivePartition {partition_field.field_id, field_id->Type(), Value(hive_entry->second)});
+	}
+}
+
 void DuckLakeFileProcessor::DetermineMapping(ParquetFileMetadata &file) {
 	if (hive_partitioning != HivePartitioningType::NO) {
 		// we are mapping hive partitions - check if there are any hive partitioned columns
 		hive_partitions = HivePartitioning::Parse(file.filename);
 	}
+
+	MapPartitionColumns(file);
 
 	file.map_entries = MapColumns(file, file.columns, table.GetFieldData().GetFieldIds());
 }
@@ -907,6 +945,34 @@ DuckLakeDataFile DuckLakeFileProcessor::AddFileToTable(ParquetFileMetadata &file
 
 	// we successfully mapped this file - register the name map and refer to it in the file
 	result.mapping_id = transaction.AddNameMap(std::move(name_map));
+
+	const auto partition_data = table.GetPartitionData().get();
+	if (partition_data) {
+		bool invalid_partition = false;
+		if (file.hive_partition_values.size() != partition_data->fields.size()) {
+			invalid_partition = true;
+		} else {
+			for (idx_t i = 0; i < partition_data->fields.size(); i++) {
+				if (file.hive_partition_values[i].field_index.index != partition_data->fields[i].field_id.index) {
+					invalid_partition = true;
+					break;
+				}
+			}
+		}
+		if (invalid_partition) {
+			throw InvalidInputException("File \"%s\" contains an invalid partition value for the table configuration.",
+			                            file.filename);
+		}
+		unordered_map<idx_t, idx_t> field_partition_key_map;
+		for (auto &partition_fields : partition_data->fields) {
+			field_partition_key_map[partition_fields.field_id.index] = partition_fields.partition_key_index;
+		}
+		for (auto &hive_partition : file.hive_partition_values) {
+			result.partition_values.push_back({field_partition_key_map[hive_partition.field_index.index],
+			                                   hive_partition.hive_value.GetValue<string>()});
+		}
+		result.partition_id = partition_data->partition_id;
+	}
 	return result;
 }
 
