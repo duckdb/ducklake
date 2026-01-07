@@ -345,47 +345,77 @@ string GetPartitionColumnName(ColumnRefExpression &colref) {
 
 DuckLakePartitionField GetPartitionField(DuckLakeTableEntry &table, ParsedExpression &expr) {
 	string column_name;
-	DuckLakeTransformType transform_type;
+	DuckLakePartitionField field;
+
 	switch (expr.type) {
 	case ExpressionType::COLUMN_REF: {
 		auto &colref = expr.Cast<ColumnRefExpression>();
 		column_name = GetPartitionColumnName(colref);
-		transform_type = DuckLakeTransformType::IDENTITY;
+		field.transform.type = DuckLakeTransformType::IDENTITY;
 		break;
 	}
 	case ExpressionType::FUNCTION: {
 		auto &function = expr.Cast<FunctionExpression>();
 		auto name = StringUtil::Lower(function.function_name);
+
+		// BUCKET logic is different from the other transforms because it has two arguments.
+		if (name == "bucket") {
+			field.transform.type = DuckLakeTransformType::BUCKET;
+			if (function.children.size() != 2) {
+				throw NotImplementedException("Expected bucket(bucket_count, column), but got %s", expr.ToString());
+			}
+			if (function.children[0]->type != ExpressionType::VALUE_CONSTANT) {
+				throw NotImplementedException("Bucket count must be a constant integer, got %s", expr.ToString());
+			}
+			if (function.children[1]->type != ExpressionType::COLUMN_REF) {
+				throw NotImplementedException("Expected hash(column, bucket_count), but got %s", expr.ToString());
+			}
+
+			auto &bucket_expr = function.children[0]->Cast<ConstantExpression>();
+			if (!bucket_expr.value.DefaultTryCastAs(LogicalType::BIGINT)) {
+				throw NotImplementedException("Bucket count must be an integer");
+			}
+			auto bucket_count = bucket_expr.value.GetValue<int64_t>();
+			if (bucket_count <= 0) {
+				throw InvalidInputException("Bucket count must be positive");
+			}
+
+			field.transform.bucket_count = bucket_count;
+			column_name = GetPartitionColumnName(function.children[1]->Cast<ColumnRefExpression>());
+			break;
+		} 
+
+		// Other transforms have one argument.
 		if (name == "year") {
-			transform_type = DuckLakeTransformType::YEAR;
+			field.transform.type = DuckLakeTransformType::YEAR;
 		} else if (name == "month") {
-			transform_type = DuckLakeTransformType::MONTH;
+			field.transform.type = DuckLakeTransformType::MONTH;
 		} else if (name == "day") {
-			transform_type = DuckLakeTransformType::DAY;
+			field.transform.type = DuckLakeTransformType::DAY;
 		} else if (name == "hour") {
-			transform_type = DuckLakeTransformType::HOUR;
+			field.transform.type = DuckLakeTransformType::HOUR;
 		} else {
 			throw NotImplementedException(
-			    "Unsupported partition function %s - only year, month, day, hour are supported", name);
+				"Unsupported partition function %s - only year, month, day, hour, and bucket are supported", name);
 		}
+
 		if (function.children.size() != 1 || function.children[0]->type != ExpressionType::COLUMN_REF) {
 			throw NotImplementedException("Expected %s(column), but got %s", name, expr.ToString());
 		}
-		auto &colref = function.children[0]->Cast<ColumnRefExpression>();
-		column_name = GetPartitionColumnName(colref);
+
+		column_name = GetPartitionColumnName(function.children[0]->Cast<ColumnRefExpression>());
 		break;
 	}
 	default:
 		throw NotImplementedException(
-		    "Unsupported partition key %s - only identity columns and year/month/day/hour are supported",
+		    "Unsupported partition key %s - only identity columns and year/month/day/hour/bucket are supported",
 		    expr.ToString());
 	}
-	DuckLakePartitionField field;
+
 	auto &col = table.GetColumn(column_name);
 	PhysicalIndex column_index(col.StorageOid());
 	auto &field_id = table.GetFieldData().GetByRootIndex(column_index);
 	field.field_id = field_id.GetFieldIndex();
-	field.transform.type = transform_type;
 	return field;
 }
 

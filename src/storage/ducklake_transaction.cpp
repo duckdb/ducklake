@@ -733,6 +733,9 @@ DuckLakePartitionInfo DuckLakeTransaction::GetNewPartitionKey(DuckLakeCommitStat
 		case DuckLakeTransformType::HOUR:
 			partition_field.transform = "hour";
 			break;
+		case DuckLakeTransformType::BUCKET:
+			partition_field.transform = StringUtil::Format("bucket(%d)", field.transform.bucket_count);;
+			break;
 		default:
 			throw NotImplementedException("Unimplemented transform type for partition");
 		}

@@ -262,6 +262,26 @@ static unique_ptr<Expression> GetFunction(ClientContext &context, unique_ptr<Bou
 	return function;
 }
 
+static unique_ptr<Expression> GetBucketExpression(ClientContext &context,
+                                                  unique_ptr<BoundReferenceExpression> column_reference,
+                                                  const DuckLakePartitionField &field) {
+	// hash(col)
+	auto hash_expr = GetFunction(context, std::move(column_reference), "hash");
+
+	// hash_value % bucket_count
+	vector<unique_ptr<Expression>> children;
+	children.emplace_back(std::move(hash_expr));
+	children.emplace_back(make_uniq<BoundConstantExpression>(Value::BIGINT(field.transform.bucket_count)));
+
+	ErrorData error;
+	FunctionBinder binder(context);
+	auto mod_expr = binder.BindScalarFunction(DEFAULT_SCHEMA, "%", std::move(children), error, false);
+	if (!mod_expr) {
+		error.Throw();
+	}
+	return mod_expr;
+}
+
 static unique_ptr<Expression> GetPartitionExpressionForUpdate(ClientContext &context,
                                                               unique_ptr<BoundReferenceExpression> column_reference,
                                                               const DuckLakePartitionField &field) {
@@ -276,6 +296,8 @@ static unique_ptr<Expression> GetPartitionExpressionForUpdate(ClientContext &con
 		return GetFunction(context, std::move(column_reference), "day");
 	case DuckLakeTransformType::HOUR:
 		return GetFunction(context, std::move(column_reference), "hour");
+	case DuckLakeTransformType::BUCKET:
+		return GetBucketExpression(context, std::move(column_reference), field);
 	default:
 		throw NotImplementedException("Unsupported partition transform type in GetPartitionExpressionForUpdate");
 	}
