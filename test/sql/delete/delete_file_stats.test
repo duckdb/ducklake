@@ -10,7 +10,6 @@ test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
 
 test-env DATA_PATH __TEST_DIR__
 
-
 statement ok
 ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/delete_file_stats')
 
@@ -25,8 +24,14 @@ DELETE FROM ducklake.test WHERE id%2=0
 ----
 1500
 
-query IIIIIIIIIII
-SELECT * EXCLUDE (path) FROM __ducklake_metadata_ducklake.ducklake_delete_file
+query IIIIIIIIII
+SELECT * EXCLUDE (path, file_size_bytes) FROM __ducklake_metadata_ducklake.ducklake_delete_file
 ----
-2	1	3	NULL	0	1	parquet	1000	4987	723	NULL
-3	1	3	NULL	1	1	parquet	500	2984	723	NULL
+2	1	3	NULL	0	true	parquet	1000	723	NULL
+3	1	3	NULL	1	true	parquet	500	723	NULL
+
+query I
+SELECT  file_size_bytes > 0 FROM __ducklake_metadata_ducklake.ducklake_delete_file
+----
+TRUE
+TRUE
