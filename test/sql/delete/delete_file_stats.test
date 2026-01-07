@@ -1,0 +1,32 @@
+# name: test/sql/delete/delete_file_stats.test
+# description: Test ducklake delete stats
+# group: [delete]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+
+test-env DATA_PATH __TEST_DIR__
+
+
+statement ok
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/delete_file_stats')
+
+statement ok
+CREATE TABLE ducklake.test AS SELECT i id FROM range(2000) t(i);
+
+statement ok
+INSERT INTO ducklake.test SELECT i id FROM range(15000, 16000) t(i)
+
+query I
+DELETE FROM ducklake.test WHERE id%2=0
+----
+1500
+
+query IIIIIIIIIII
+SELECT * EXCLUDE (path) FROM __ducklake_metadata_ducklake.ducklake_delete_file
+----
+2	1	3	NULL	0	1	parquet	1000	4987	723	NULL
+3	1	3	NULL	1	1	parquet	500	2984	723	NULL
