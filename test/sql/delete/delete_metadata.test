@@ -13,12 +13,6 @@ require ducklake
 require parquet
 
 statement ok
-SET autoinstall_known_extensions=1;
-
-statement ok
-SET autoload_known_extensions=1;
-
-statement ok
 ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH 's3://mybucket')
 
 # Clean up any existing table from previous runs
