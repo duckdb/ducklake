@@ -1,0 +1,58 @@
+# name: test/sql/partitioning/bucket_partitioning.test
+# description: Test bucket partitioning
+# group: [partitioning]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+
+test-env DATA_PATH __TEST_DIR__
+
+statement ok
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/ducklake_bucket_partition', METADATA_CATALOG 'ducklake_metadata')
+
+statement ok
+USE ducklake
+
+# Create table with bucket partitioning
+statement ok
+CREATE TABLE bucketed_tbl(user_id VARCHAR, value INTEGER);
+
+statement ok
+ALTER TABLE bucketed_tbl SET PARTITIONED BY (bucket(4, user_id));
+
+# Insert some data
+statement ok
+INSERT INTO bucketed_tbl VALUES ('alice', 1), ('bob', 2), ('charlie', 3), ('alice', 4), ('bob', 5);
+
+# Verify data is correct
+query II
+SELECT user_id, SUM(value) FROM bucketed_tbl GROUP BY user_id ORDER BY user_id
+----
+alice	5
+bob	7
+charlie	3
+
+# Verify we have bucket partitions (should have up to 4 buckets)
+query I
+SELECT COUNT(DISTINCT regexp_extract(path, '.*bucket=([0-9]+)[/\\].*', 1)) 
+FROM glob('${DATA_PATH}/ducklake_bucket_partition/**/*.parquet') t(path)
+WHERE path LIKE '%bucket=%'
+----
+(some number <= 4)
+
+# Verify same user always goes to same bucket
+query II
+SELECT user_id, COUNT(DISTINCT regexp_extract(path, '.*bucket=([0-9]+)[/\\].*', 1)) as bucket_count
+FROM bucketed_tbl, glob('${DATA_PATH}/ducklake_bucket_partition/**/*.parquet') t(path)
+GROUP BY user_id
+----
+(each user should have bucket_count = 1)
+
+# Verify partition metadata is stored correctly
+query I
+SELECT transform FROM ducklake_metadata.ducklake_partition_column WHERE table_id = 1
+----
+bucket(4)
