@@ -301,8 +301,9 @@ t.table_name = 'prevent_duplicates'
 # We should only have 2 rows in the metadata table for this DuckLake table
 query IIII
 SELECT 
-table_id, begin_snapshot, end_snapshot, sort_key_index
+si.table_id, si.begin_snapshot, si.end_snapshot, se.sort_key_index
 FROM __ducklake_metadata_ducklake.ducklake_sort_info si
+JOIN __ducklake_metadata_ducklake.ducklake_sort_expression se USING (sort_id)
 WHERE 
 si.table_id = 8
 ----
@@ -396,12 +397,13 @@ t.table_name = 'multiple_set_sorted'
 # We should have 4 rows in the metadata table for this DuckLake table
 query IIIIIIII
 SELECT 
-table_id, begin_snapshot, end_snapshot, sort_key_index,
-expression, dialect, sort_direction, null_order
+si.table_id, si.begin_snapshot, si.end_snapshot, se.sort_key_index,
+se.expression, se.dialect, se.sort_direction, se.null_order
 FROM __ducklake_metadata_ducklake.ducklake_sort_info si
+JOIN __ducklake_metadata_ducklake.ducklake_sort_expression se USING (sort_id)
 WHERE 
 si.table_id = 11
-ORDER BY table_id, begin_snapshot, end_snapshot, sort_key_index
+ORDER BY si.table_id, si.begin_snapshot, si.end_snapshot, se.sort_key_index
 ----
 11	26	27	0	sort_key_1	duckdb	DESC	NULLS_FIRST	
 11	26	27	1	sort_key_2	duckdb	DESC	NULLS_FIRST

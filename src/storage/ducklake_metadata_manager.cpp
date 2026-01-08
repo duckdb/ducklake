@@ -88,7 +88,8 @@ CREATE TABLE {METADATA_CATALOG}.ducklake_schema_versions(begin_snapshot BIGINT, 
 CREATE TABLE {METADATA_CATALOG}.ducklake_macro(schema_id BIGINT, macro_id BIGINT, macro_name VARCHAR, begin_snapshot BIGINT, end_snapshot BIGINT);
 CREATE TABLE {METADATA_CATALOG}.ducklake_macro_impl(macro_id BIGINT, impl_id BIGINT, dialect VARCHAR, sql VARCHAR, type VARCHAR);
 CREATE TABLE {METADATA_CATALOG}.ducklake_macro_parameters(macro_id BIGINT, impl_id BIGINT,column_id BIGINT, parameter_name VARCHAR, parameter_type VARCHAR, default_value VARCHAR, default_value_type VARCHAR);
-CREATE TABLE {METADATA_CATALOG}.ducklake_sort_info(sort_id BIGINT, table_id BIGINT, begin_snapshot BIGINT, end_snapshot BIGINT, sort_key_index BIGINT, expression VARCHAR, dialect VARCHAR, sort_direction VARCHAR, null_order VARCHAR);
+CREATE TABLE {METADATA_CATALOG}.ducklake_sort_info(sort_id BIGINT, table_id BIGINT, begin_snapshot BIGINT, end_snapshot BIGINT);
+CREATE TABLE {METADATA_CATALOG}.ducklake_sort_expression(sort_id BIGINT, table_id BIGINT, sort_key_index BIGINT, expression VARCHAR, dialect VARCHAR, sort_direction VARCHAR, null_order VARCHAR);
 INSERT INTO {METADATA_CATALOG}.ducklake_snapshot VALUES (0, NOW(), 0, 1, 0);
 INSERT INTO {METADATA_CATALOG}.ducklake_snapshot_changes VALUES (0, 'created_schema:"main"',  NULL, NULL, NULL);
 INSERT INTO {METADATA_CATALOG}.ducklake_metadata (key, value) VALUES ('version', '0.4-dev1'), ('created_by', 'DuckDB %s'), ('data_path', %s), ('encrypted', '%s');
@@ -167,7 +168,8 @@ CREATE TABLE {IF_NOT_EXISTS} {METADATA_CATALOG}.ducklake_macro_impl(macro_id BIG
 CREATE TABLE {IF_NOT_EXISTS} {METADATA_CATALOG}.ducklake_macro_parameters(macro_id BIGINT, impl_id BIGINT,column_id BIGINT, parameter_name VARCHAR, parameter_type VARCHAR, default_value VARCHAR, default_value_type VARCHAR);
 ALTER TABLE {METADATA_CATALOG}.ducklake_column ADD COLUMN {IF_NOT_EXISTS} default_value_type VARCHAR DEFAULT 'literal';
 ALTER TABLE {METADATA_CATALOG}.ducklake_column ADD COLUMN {IF_NOT_EXISTS} default_value_dialect VARCHAR DEFAULT NULL;
-CREATE TABLE {IF_NOT_EXISTS} {METADATA_CATALOG}.ducklake_sort_info(sort_id BIGINT, table_id BIGINT, begin_snapshot BIGINT, end_snapshot BIGINT, sort_key_index BIGINT, expression VARCHAR, dialect VARCHAR, sort_direction VARCHAR, null_order VARCHAR);
+CREATE TABLE {IF_NOT_EXISTS} {METADATA_CATALOG}.ducklake_sort_info(sort_id BIGINT, table_id BIGINT, begin_snapshot BIGINT, end_snapshot BIGINT);
+CREATE TABLE {IF_NOT_EXISTS} {METADATA_CATALOG}.ducklake_sort_expression(sort_id BIGINT, table_id BIGINT, sort_key_index BIGINT, expression VARCHAR, dialect VARCHAR, sort_direction VARCHAR, null_order VARCHAR);
 ALTER TABLE {METADATA_CATALOG}.ducklake_schema_versions ADD COLUMN {IF_NOT_EXISTS} table_id BIGINT;
 UPDATE {METADATA_CATALOG}.ducklake_metadata SET value = '0.4-dev1' WHERE key = 'version';
 	)";
@@ -565,10 +567,11 @@ ORDER BY part.table_id, partition_id, partition_key_index
 
 	// load sort information
 	result = transaction.Query(snapshot, R"(
-SELECT sort_id, table_id, sort_key_index, expression, dialect, sort_direction, null_order
-FROM {METADATA_CATALOG}.ducklake_sort_info
-WHERE {SNAPSHOT_ID} >= begin_snapshot AND ({SNAPSHOT_ID} < end_snapshot OR end_snapshot IS NULL)
-ORDER BY table_id, sort_key_index
+SELECT sort.sort_id, sort.table_id, sort_expr.sort_key_index, sort_expr.expression, sort_expr.dialect, sort_expr.sort_direction, sort_expr.null_order
+FROM {METADATA_CATALOG}.ducklake_sort_info sort
+JOIN {METADATA_CATALOG}.ducklake_sort_expression sort_expr USING (sort_id)
+WHERE {SNAPSHOT_ID} >= sort.begin_snapshot AND ({SNAPSHOT_ID} < sort.end_snapshot OR sort.end_snapshot IS NULL)
+ORDER BY sort.table_id, sort.sort_id, sort_expr.sort_key_index
 )");
 	if (result->HasError()) {
 		result->GetErrorObject().Throw("Failed to get sort information from DuckLake: ");
@@ -2807,6 +2810,7 @@ string DuckLakeMetadataManager::WriteNewSortKeys(DuckLakeSnapshot commit_snapsho
 
 	string old_sort_table_ids;
 	string new_sort_values;
+	string new_sort_expressions;
 
 	// Do not update if they are the same
 	auto new_sort_map = GetNewSorts(catalog.sorts, new_sorts);
@@ -2826,16 +2830,22 @@ string DuckLakeMetadataManager::WriteNewSortKeys(DuckLakeSnapshot commit_snapsho
 		}
 		auto sort_id = new_sort.second.id.GetIndex();
 
+		if (!new_sort_values.empty()) {
+			new_sort_values += ", ";
+		}
+		new_sort_values +=
+		    StringUtil::Format(R"((%d, %d, {SNAPSHOT_ID}, NULL))", sort_id, new_sort.second.table_id.index);
+
 		for (auto &field : new_sort.second.fields) {
-			if (!new_sort_values.empty()) {
-				new_sort_values += ", ";
+			if (!new_sort_expressions.empty()) {
+				new_sort_expressions += ", ";
 			}
 			std::string sort_direction = (field.sort_direction == OrderType::DESCENDING ? "DESC" : "ASC");
 			std::string null_order = (field.null_order == OrderByNullType::NULLS_FIRST ? "NULLS_FIRST" : "NULLS_LAST");
-			new_sort_values +=
-			    StringUtil::Format(R"((%d, %d, {SNAPSHOT_ID}, NULL, %d, %s, %s, %s, %s))", sort_id,
-			                       new_sort.second.table_id.index, field.sort_key_index, SQLString(field.expression),
-			                       SQLString(field.dialect), SQLString(sort_direction), SQLString(null_order));
+			new_sort_expressions +=
+			    StringUtil::Format("(%d, %d, %d, %s, %s, %s, %s)", sort_id, new_sort.second.table_id.index,
+			                       field.sort_key_index, SQLString(field.expression), SQLString(field.dialect),
+			                       SQLString(sort_direction), SQLString(null_order));
 		}
 	}
 	// update old sort information for any tables that have been altered
@@ -2849,6 +2859,11 @@ WHERE table_id IN (%s) AND end_snapshot IS NULL
 	if (!new_sort_values.empty()) {
 		new_sort_values = "INSERT INTO {METADATA_CATALOG}.ducklake_sort_info VALUES " + new_sort_values + ";";
 		batch_query += new_sort_values;
+	}
+	if (!new_sort_expressions.empty()) {
+		new_sort_expressions =
+		    "INSERT INTO {METADATA_CATALOG}.ducklake_sort_expression VALUES " + new_sort_expressions + ";";
+		batch_query += new_sort_expressions;
 	}
 
 	return batch_query;
@@ -3466,7 +3481,7 @@ VALUES %s;
 	if (!deleted_table_ids.empty()) {
 		tables_to_delete_from = {"ducklake_table",          "ducklake_table_stats",      "ducklake_table_column_stats",
 		                         "ducklake_partition_info", "ducklake_partition_column", "ducklake_column",
-		                         "ducklake_column_tag",     "ducklake_sort_info"};
+		                         "ducklake_column_tag",     "ducklake_sort_info",        "ducklake_sort_expression"};
 		for (auto &delete_tbl : tables_to_delete_from) {
 			auto result = transaction.Query(StringUtil::Format(R"(
 DELETE FROM {METADATA_CATALOG}.%s
