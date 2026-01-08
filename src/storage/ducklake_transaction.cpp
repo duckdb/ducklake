@@ -1590,6 +1590,21 @@ string DuckLakeTransaction::CommitChanges(DuckLakeCommitState &commit_state,
 		batch_queries += metadata_manager->WriteCompactions(compaction_rewrite_delete_changes.compacted_files,
 		                                                    CompactionType::REWRITE_DELETES);
 	}
+
+	// Tracking for tables that had schema changes
+	set<TableIndex> tables_with_schema_changes;
+	for (auto &table_id : transaction_changes.altered_tables) {
+		if (!table_id.IsTransactionLocal()) {
+			tables_with_schema_changes.insert(table_id);
+		}
+	}
+	for (auto &new_table : new_tables_result) {
+		if (!new_table.id.IsTransactionLocal()) {
+			tables_with_schema_changes.insert(new_table.id);
+		}
+	}
+	batch_queries += metadata_manager->InsertNewSchema(commit_snapshot, tables_with_schema_changes);
+
 	return batch_queries;
 }
 
@@ -1732,10 +1747,6 @@ void DuckLakeTransaction::FlushChanges() {
 			batch_queries += metadata_manager->InsertSnapshot();
 
 			batch_queries += WriteSnapshotChanges(commit_state, transaction_changes);
-			if (SchemaChangesMade()) {
-				// Insert our new schema in our table that tracks schema changes
-				batch_queries += metadata_manager->InsertNewSchema(commit_snapshot);
-			}
 
 			auto res = metadata_manager->Execute(commit_snapshot, batch_queries);
 			if (res->HasError()) {
