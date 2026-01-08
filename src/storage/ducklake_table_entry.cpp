@@ -357,6 +357,25 @@ string GetPartitionColumnName(ColumnRefExpression &colref) {
 	return colref.GetColumnName();
 }
 
+string GetSortColumnName(DuckLakeTableEntry &table, ParsedExpression &expr) {
+	// Only allow column references, reject expressions
+	if (expr.type != ExpressionType::COLUMN_REF) {
+		throw BinderException("SET SORTED BY only supports column references, not expressions: %s", expr.ToString());
+	}
+	auto &colref = expr.Cast<ColumnRefExpression>();
+	if (colref.IsQualified()) {
+		throw InvalidInputException("Unexpected qualified column reference - only unqualified columns are supported");
+	}
+	string column_name = colref.GetColumnName();
+
+	// Validate column exists
+	if (!table.ColumnExists(column_name)) {
+		throw BinderException("Column \"%s\" does not exist in table \"%s\"", column_name, table.name);
+	}
+
+	return column_name;
+}
+
 DuckLakePartitionField GetPartitionField(DuckLakeTableEntry &table, ParsedExpression &expr) {
 	string column_name;
 	DuckLakeTransformType transform_type;
@@ -1084,9 +1103,14 @@ unique_ptr<CatalogEntry> DuckLakeTableEntry::AlterTable(DuckLakeTransaction &tra
 	sort_data->sort_id = transaction.GetLocalCatalogId();
 	for (idx_t order_node_idx = 0; order_node_idx < info.orders.size(); order_node_idx++) {
 		auto &order_node = info.orders[order_node_idx];
+
+		// FIXME: Currently must be column reference and column must exist. Want it to be an expression.
+		string column_name = GetSortColumnName(*this, *order_node.expression);
+
 		DuckLakeSortField sort_field;
 		sort_field.sort_key_index = order_node_idx;
-		sort_field.expression = order_node.expression->ToString();
+		// FIXME: convert to order_node.expression->ToString(); once expressions are supported
+		sort_field.expression = column_name;
 		sort_field.dialect = "duckdb";
 		sort_field.sort_direction = order_node.type;
 		sort_field.null_order = order_node.null_order;

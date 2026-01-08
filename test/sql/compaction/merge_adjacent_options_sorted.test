@@ -102,33 +102,19 @@ t.table_name = 'sort_on_compaction'
 ######################################
 # Column does not exist in the table #
 ######################################
-statement ok
+statement error
 ALTER TABLE sort_on_compaction SET SORTED BY (WOOOOT ASC ,   BLAH ASC);
-
-statement ok
-INSERT INTO sort_on_compaction (unique_id, sort_key_1, sort_key_2)
-select 1000, 1000, 'anything';
-
-statement ok
-INSERT INTO sort_on_compaction (unique_id, sort_key_1, sort_key_2)
-select 1001, 1001, 'anything else';
-
-statement error
-CALL ducklake_merge_adjacent_files('ducklake', 'sort_on_compaction');
 ----
-Binder Error: Columns in the approx_sort parameter were not found in the DuckLake table. Unmatched columns were: WOOOOT, BLAH
+Column "WOOOOT" does not exist in table "sort_on_compaction"
 
 
-##########################################################
-# FIXME: Expressions are not supported, only column refs #
-##########################################################
-statement ok
+#####################################################
+# Expressions are not supported, only column refs   #
+#####################################################
+statement error
 ALTER TABLE sort_on_compaction SET SORTED BY (concat(sort_key_1, '_', sort_key_2) ASC);
-
-statement error
-CALL ducklake_merge_adjacent_files('ducklake', 'sort_on_compaction');
 ----
-Binder Error: Columns in the approx_sort parameter were not found in the DuckLake table. Unmatched columns were: concat(sort_key_1, '_', sort_key_2)
+SET SORTED BY only supports column references, not expressions
 
 
 ###########################################################
@@ -172,15 +158,15 @@ FROM reset_sorted_test
 4	0	woot4
 
 query II
-SELECT df.data_file_id, df.table_id 
-FROM __ducklake_metadata_ducklake.ducklake_data_file df 
-JOIN __ducklake_metadata_ducklake.ducklake_table t 
-ON df.table_id = t.table_id 
-WHERE 
+SELECT df.data_file_id, df.table_id
+FROM __ducklake_metadata_ducklake.ducklake_data_file df
+JOIN __ducklake_metadata_ducklake.ducklake_table t
+ON df.table_id = t.table_id
+WHERE
 t.table_name = 'reset_sorted_test'
 ----
-5	5
-6	5
+3	3
+4	3
 
 statement ok
 ALTER TABLE ducklake.reset_sorted_test SET SORTED BY (sort_key_1 ASC NULLS LAST, sort_key_2 ASC NULLS LAST);
@@ -204,16 +190,16 @@ FROM reset_sorted_test
 5	1	woot5
 4	0	woot4
 
-# We write a new file for table id 5
+# We write a new file for table id 3
 query II
-SELECT df.data_file_id, df.table_id 
-FROM __ducklake_metadata_ducklake.ducklake_data_file df 
-JOIN __ducklake_metadata_ducklake.ducklake_table t 
-ON df.table_id = t.table_id 
-WHERE 
+SELECT df.data_file_id, df.table_id
+FROM __ducklake_metadata_ducklake.ducklake_data_file df
+JOIN __ducklake_metadata_ducklake.ducklake_table t
+ON df.table_id = t.table_id
+WHERE
 t.table_name = 'reset_sorted_test'
 ----
-7	5
+5	3
 
 #####################################################################################################
 # Multiple SET SORTED BY calls with the same sort should not cause duplicate entries in the catalog #
@@ -256,15 +242,15 @@ FROM prevent_duplicates
 4	0	woot4
 
 query II
-SELECT df.data_file_id, df.table_id 
-FROM __ducklake_metadata_ducklake.ducklake_data_file df 
-JOIN __ducklake_metadata_ducklake.ducklake_table t 
-ON df.table_id = t.table_id 
-WHERE 
+SELECT df.data_file_id, df.table_id
+FROM __ducklake_metadata_ducklake.ducklake_data_file df
+JOIN __ducklake_metadata_ducklake.ducklake_table t
+ON df.table_id = t.table_id
+WHERE
 t.table_name = 'prevent_duplicates'
 ----
-8	8
-9	8
+6	6
+7	6
 
 statement ok
 ALTER TABLE ducklake.prevent_duplicates SET SORTED BY (sort_key_1 ASC NULLS LAST, sort_key_2 ASC NULLS LAST);
@@ -289,26 +275,26 @@ FROM prevent_duplicates
 
 # We write a new file for table id 6
 query II
-SELECT df.data_file_id, df.table_id 
-FROM __ducklake_metadata_ducklake.ducklake_data_file df 
-JOIN __ducklake_metadata_ducklake.ducklake_table t 
-ON df.table_id = t.table_id 
-WHERE 
+SELECT df.data_file_id, df.table_id
+FROM __ducklake_metadata_ducklake.ducklake_data_file df
+JOIN __ducklake_metadata_ducklake.ducklake_table t
+ON df.table_id = t.table_id
+WHERE
 t.table_name = 'prevent_duplicates'
 ----
-10	8
+8	6
 
 # We should only have 2 rows in the metadata table for this DuckLake table
 query IIII
-SELECT 
+SELECT
 si.table_id, si.begin_snapshot, si.end_snapshot, se.sort_key_index
 FROM __ducklake_metadata_ducklake.ducklake_sort_info si
 JOIN __ducklake_metadata_ducklake.ducklake_sort_expression se USING (sort_id)
-WHERE 
-si.table_id = 8
+WHERE
+si.table_id = 6
 ----
-8	20	NULL	0
-8	20	NULL	1
+6	16	NULL	0
+6	16	NULL	1
 
 
 ################################################################################################
@@ -352,15 +338,15 @@ FROM multiple_set_sorted
 4	0	woot4
 
 query II
-SELECT df.data_file_id, df.table_id 
-FROM __ducklake_metadata_ducklake.ducklake_data_file df 
-JOIN __ducklake_metadata_ducklake.ducklake_table t 
-ON df.table_id = t.table_id 
-WHERE 
+SELECT df.data_file_id, df.table_id
+FROM __ducklake_metadata_ducklake.ducklake_data_file df
+JOIN __ducklake_metadata_ducklake.ducklake_table t
+ON df.table_id = t.table_id
+WHERE
 t.table_name = 'multiple_set_sorted'
 ----
-11	11
-12	11
+9	9
+10	9
 
 statement ok
 ALTER TABLE ducklake.multiple_set_sorted SET SORTED BY (sort_key_1 DESC NULLS FIRST, sort_key_2 DESC NULLS FIRST);
@@ -383,29 +369,29 @@ FROM multiple_set_sorted
 5	1	woot5
 7	1	woot7
 
-# We write a new file for table id 11
+# We write a new file for table id 9
 query II
-SELECT df.data_file_id, df.table_id 
-FROM __ducklake_metadata_ducklake.ducklake_data_file df 
-JOIN __ducklake_metadata_ducklake.ducklake_table t 
-ON df.table_id = t.table_id 
-WHERE 
+SELECT df.data_file_id, df.table_id
+FROM __ducklake_metadata_ducklake.ducklake_data_file df
+JOIN __ducklake_metadata_ducklake.ducklake_table t
+ON df.table_id = t.table_id
+WHERE
 t.table_name = 'multiple_set_sorted'
 ----
-13	11
+11	9
 
 # We should have 4 rows in the metadata table for this DuckLake table
 query IIIIIIII
-SELECT 
+SELECT
 si.table_id, si.begin_snapshot, si.end_snapshot, se.sort_key_index,
 se.expression, se.dialect, se.sort_direction, se.null_order
 FROM __ducklake_metadata_ducklake.ducklake_sort_info si
 JOIN __ducklake_metadata_ducklake.ducklake_sort_expression se USING (sort_id)
-WHERE 
-si.table_id = 11
+WHERE
+si.table_id = 9
 ORDER BY si.table_id, si.begin_snapshot, si.end_snapshot, se.sort_key_index
 ----
-11	26	27	0	sort_key_1	duckdb	DESC	NULLS_FIRST	
-11	26	27	1	sort_key_2	duckdb	DESC	NULLS_FIRST
-11	27	NULL	0	sort_key_1	duckdb	ASC	NULLS_LAST	
-11	27	NULL	1	sort_key_2	duckdb	ASC	NULLS_LAST
+9	22	23	0	sort_key_1	duckdb	DESC	NULLS_FIRST
+9	22	23	1	sort_key_2	duckdb	DESC	NULLS_FIRST
+9	23	NULL	0	sort_key_1	duckdb	ASC	NULLS_LAST
+9	23	NULL	1	sort_key_2	duckdb	ASC	NULLS_LAST
