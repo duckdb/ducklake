@@ -73,6 +73,9 @@ SELECT ends_with(path,'bla.parquet') FROM ducklake_delete_orphaned_files('duckla
 ----
 True
 
+statement ok
+LOAD icu
+
 # Check older_than filter
 query I
 SELECT count(*) FROM ducklake_delete_orphaned_files('ducklake', older_than => NOW() - INTERVAL '1 week', dry_run => true);
