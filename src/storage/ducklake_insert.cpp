@@ -21,6 +21,7 @@
 #include "duckdb/main/extension_helper.hpp"
 #include "duckdb/function/function_binder.hpp"
 #include "duckdb/planner/operator/logical_projection.hpp"
+#include "duckdb/planner/expression/bound_constant_expression.hpp"
 
 namespace duckdb {
 
@@ -387,6 +388,25 @@ static unique_ptr<Expression> GetFunction(ClientContext &context, DuckLakeCopyIn
 	return function;
 }
 
+static unique_ptr<Expression> GetBucketExpression(ClientContext &context, DuckLakeCopyInput &copy_input,
+                                                  const DuckLakePartitionField &field) {
+	// hash(col)
+	auto hash_expr = GetFunction(context, copy_input, "hash", field.field_id);
+
+	// hash_value % bucket_count
+	vector<unique_ptr<Expression>> children;
+	children.push_back(std::move(hash_expr));
+	children.push_back(make_uniq<BoundConstantExpression>(Value::BIGINT(field.transform.bucket_count)));
+
+	ErrorData error;
+	FunctionBinder binder(context);
+	auto mod_expr = binder.BindScalarFunction(DEFAULT_SCHEMA, "%", std::move(children), error, false);
+	if (!mod_expr) {
+		error.Throw();
+	}
+	return mod_expr;
+}
+
 static unique_ptr<Expression> GetPartitionExpression(ClientContext &context, DuckLakeCopyInput &copy_input,
                                                      const DuckLakePartitionField &field) {
 	switch (field.transform.type) {
@@ -400,6 +420,8 @@ static unique_ptr<Expression> GetPartitionExpression(ClientContext &context, Duc
 		return GetFunction(context, copy_input, "day", field.field_id);
 	case DuckLakeTransformType::HOUR:
 		return GetFunction(context, copy_input, "hour", field.field_id);
+	case DuckLakeTransformType::BUCKET: {
+		return GetBucketExpression(context, copy_input, field);}
 	default:
 		throw NotImplementedException("Unsupported partition transform type in GetPartitionExpression");
 	}
@@ -423,6 +445,9 @@ static string GetPartitionExpressionName(DuckLakeCopyInput &copy_input, const Du
 		break;
 	case DuckLakeTransformType::HOUR:
 		prefix = "hour";
+		break;
+	case DuckLakeTransformType::BUCKET:
+		prefix = "bucket";
 		break;
 	default:
 		throw NotImplementedException("Unsupported partition transform type in GetPartitionExpressionName");

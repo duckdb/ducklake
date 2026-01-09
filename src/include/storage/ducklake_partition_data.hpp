@@ -15,10 +15,11 @@
 namespace duckdb {
 class BaseStatistics;
 
-enum class DuckLakeTransformType { IDENTITY, YEAR, MONTH, DAY, HOUR };
+enum class DuckLakeTransformType { IDENTITY, BUCKET, YEAR, MONTH, DAY, HOUR };
 
 struct DuckLakeTransform {
 	DuckLakeTransformType type;
+	idx_t bucket_count = 0; // only for BUCKET
 };
 
 struct DuckLakePartitionField {
