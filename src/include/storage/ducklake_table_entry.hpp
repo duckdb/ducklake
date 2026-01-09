@@ -9,8 +9,10 @@
 #pragma once
 
 #include "duckdb/catalog/catalog_entry/table_catalog_entry.hpp"
+#include "duckdb/parser/parsed_data/alter_table_info.hpp"
 #include "storage/ducklake_stats.hpp"
 #include "storage/ducklake_partition_data.hpp"
+#include "storage/ducklake_sort_data.hpp"
 #include "common/index.hpp"
 #include "storage/ducklake_field_data.hpp"
 #include "common/local_change.hpp"
@@ -53,6 +55,9 @@ public:
 	optional_ptr<DuckLakePartition> GetPartitionData() {
 		return partition_data.get();
 	}
+	optional_ptr<DuckLakeSort> GetSortData() {
+		return sort_data.get();
+	}
 	DuckLakeFieldData &GetFieldData() {
 		return *field_data;
 	}
@@ -72,6 +77,7 @@ public:
 	//! Returns the field id of a column by a field index
 	optional_ptr<const DuckLakeFieldId> GetFieldId(FieldIndex field_index) const;
 	void SetPartitionData(unique_ptr<DuckLakePartition> partition_data);
+	void SetSortData(unique_ptr<DuckLakeSort> sort_data);
 	optional_ptr<DuckLakeTableStats> GetTableStats(ClientContext &context);
 	optional_ptr<DuckLakeTableStats> GetTableStats(DuckLakeTransaction &transaction);
 
@@ -121,6 +127,7 @@ private:
 	unique_ptr<CatalogEntry> AlterTable(DuckLakeTransaction &transaction, RemoveFieldInfo &info);
 	unique_ptr<CatalogEntry> AlterTable(DuckLakeTransaction &transaction, RenameFieldInfo &info);
 	unique_ptr<CatalogEntry> AlterTable(DuckLakeTransaction &transaction, SetDefaultInfo &info);
+	unique_ptr<CatalogEntry> AlterTable(DuckLakeTransaction &transaction, SetSortedByInfo &info);
 
 	unique_ptr<DuckLakeFieldId> GetNestedEvolution(const DuckLakeFieldId &source_id, const LogicalType &target,
 	                                               ColumnChangeInfo &result, optional_idx parent_idx);
@@ -145,6 +152,8 @@ public:
 	                   unique_ptr<ColumnChangeInfo> changed_fields, shared_ptr<DuckLakeFieldData> new_field_data);
 	// ! Create a DuckLakeTableEntry from a SET PARTITION KEY
 	DuckLakeTableEntry(DuckLakeTableEntry &parent, CreateTableInfo &info, unique_ptr<DuckLakePartition> partition_data);
+	// ! Create a DuckLakeTableEntry from a SET SORT KEY
+	DuckLakeTableEntry(DuckLakeTableEntry &parent, CreateTableInfo &info, unique_ptr<DuckLakeSort> sort_data);
 
 private:
 	TableIndex table_id;
@@ -155,6 +164,7 @@ private:
 	vector<DuckLakeInlinedTableInfo> inlined_data_tables;
 	LocalChange local_change;
 	unique_ptr<DuckLakePartition> partition_data;
+	unique_ptr<DuckLakeSort> sort_data;
 	// only set for REMOVED_COLUMN
 	unique_ptr<ColumnChangeInfo> changed_fields;
 };
