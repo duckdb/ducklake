@@ -189,6 +189,10 @@ public:
 	                                                                 DuckLakeSnapshot end_snapshot,
 	                                                                 const string &inlined_table_name,
 	                                                                 const vector<string> &columns_to_read);
+
+	virtual shared_ptr<DuckLakeInlinedData> ReadAllInlinedDataForFlush(DuckLakeSnapshot snapshot,
+	                                                                   const string &inlined_table_name,
+	                                                                   const vector<string> &columns_to_read);
 	virtual void DeleteInlinedData(const DuckLakeInlinedTableInfo &inlined_table);
 	virtual string InsertNewSchema(const DuckLakeSnapshot &snapshot);
 

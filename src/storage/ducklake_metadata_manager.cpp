@@ -1888,6 +1888,18 @@ WHERE inlined_data.end_snapshot >= %d AND inlined_data.end_snapshot <= {SNAPSHOT
 	return TransformInlinedData(*result);
 }
 
+shared_ptr<DuckLakeInlinedData>
+DuckLakeMetadataManager::ReadAllInlinedDataForFlush(DuckLakeSnapshot snapshot, const string &inlined_table_name,
+                                                    const vector<string> &columns_to_read) {
+	auto projection = GetProjection(columns_to_read);
+	auto result = transaction.Query(snapshot, StringUtil::Format(R"(
+SELECT %s
+FROM {METADATA_CATALOG}.%s inlined_data
+WHERE {SNAPSHOT_ID} >= begin_snapshot;)",
+	                                                             projection, inlined_table_name));
+	return TransformInlinedData(*result);
+}
+
 string DuckLakeMetadataManager::GetPathForSchema(SchemaIndex schema_id,
                                                  vector<DuckLakeSchemaInfo> &new_schemas_result) {
 	for (auto &schema : new_schemas_result) {
@@ -2182,10 +2194,13 @@ string DuckLakeMetadataManager::WriteNewDeleteFiles(const vector<DuckLakeDeleteF
 		auto encryption_key =
 		    file.encryption_key.empty() ? "NULL" : "'" + Blob::ToBase64(string_t(file.encryption_key)) + "'";
 		auto path = GetRelativePath(file.table_id, file.path, new_tables, new_schemas_result);
+		// Use explicit begin_snapshot if set (for flush operations), otherwise use commit snapshot
+		string begin_snapshot_str =
+		    file.begin_snapshot.IsValid() ? std::to_string(file.begin_snapshot.GetIndex()) : "{SNAPSHOT_ID}";
 		delete_file_insert_query += StringUtil::Format(
-		    "(%d, %d, {SNAPSHOT_ID}, NULL, %d, %s, %s, 'parquet', %d, %d, %d, %s)", delete_file_index, table_id,
-		    data_file_index, SQLString(path.path), path.path_is_relative ? "true" : "false", file.delete_count,
-		    file.file_size_bytes, file.footer_size, encryption_key);
+		    "(%d, %d, %s, NULL, %d, %s, %s, 'parquet', %d, %d, %d, %s)", delete_file_index, table_id,
+		    begin_snapshot_str, data_file_index, SQLString(path.path), path.path_is_relative ? "true" : "false",
+		    file.delete_count, file.file_size_bytes, file.footer_size, encryption_key);
 	}
 
 	// insert the data files

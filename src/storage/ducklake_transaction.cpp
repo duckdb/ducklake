@@ -1122,6 +1122,7 @@ DuckLakeTransaction::GetNewDeleteFiles(const DuckLakeCommitState &commit_state,
 			delete_file.file_size_bytes = file.file_size_bytes;
 			delete_file.footer_size = file.footer_size;
 			delete_file.encryption_key = file.encryption_key;
+			delete_file.begin_snapshot = file.begin_snapshot;
 			result.push_back(std::move(delete_file));
 		}
 	}

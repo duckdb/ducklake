@@ -151,6 +151,7 @@ struct DuckLakeDeleteFileInfo {
 	idx_t file_size_bytes;
 	idx_t footer_size;
 	string encryption_key;
+	optional_idx begin_snapshot;
 };
 
 struct DuckLakePartitionFieldInfo {
