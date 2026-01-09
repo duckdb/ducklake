@@ -10,6 +10,7 @@
 
 #include "duckdb/common/common.hpp"
 #include "duckdb/common/unordered_set.hpp"
+#include "duckdb/common/unordered_map.hpp"
 #include "duckdb/common/case_insensitive_map.hpp"
 #include "duckdb/common/optional_idx.hpp"
 #include "duckdb/common/reference_map.hpp"
@@ -284,6 +285,7 @@ enum class DuckLakeDataType {
 };
 
 struct DuckLakeFileListEntry {
+	optional_idx data_file_id;
 	DuckLakeFileData file;
 	DuckLakeFileData delete_file;
 	optional_idx row_id_start;
@@ -292,6 +294,7 @@ struct DuckLakeFileListEntry {
 	optional_idx snapshot_filter;
 	MappingIndex mapping_id;
 	DuckLakeDataType data_type = DuckLakeDataType::DATA_FILE;
+	unordered_map<idx_t, pair<string, string>> column_min_max;
 };
 
 struct DuckLakeDeleteScanEntry {
