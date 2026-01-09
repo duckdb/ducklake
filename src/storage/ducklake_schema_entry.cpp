@@ -354,10 +354,7 @@ SimilarCatalogEntry DuckLakeSchemaEntry::GetSimilarEntry(CatalogTransaction tran
 	auto &catalog_set = GetCatalogSet(catalog_type);
 	for (auto &entry : catalog_set.GetEntries()) {
 		if (duck_transaction.IsDeleted(*entry.second) || duck_transaction.IsRenamed(*entry.second)) {
-			continue;
-		}
-		if (local_set && local_set->GetEntry(entry.second->name)) {
-			// skip if already exists
+			// this changed
 			continue;
 		}
 		auto entry_score = StringUtil::SimilarityRating(entry.second->name, entry_name);
