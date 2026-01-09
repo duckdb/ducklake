@@ -219,7 +219,7 @@ unique_ptr<LogicalOperator> DuckLakeDataFlusher::GenerateFlushCommand() {
 
 	auto sort_data = latest_table.GetSortData();
 	if (sort_data) {
-		root = DuckLakeCompactor::InsertSort(binder, root, table, sort_data);
+		root = DuckLakeCompactor::InsertSort(binder, root, latest_table, sort_data);
 	}
 
 	// generate the LogicalCopyToFile

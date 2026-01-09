@@ -369,3 +369,43 @@ SELECT rowid, snapshot_id, * FROM ducklake.reset_test
 7	46	7
 8	47	8
 9	48	9
+
+
+###################################################################################
+# SET SORTED BY then rename columns - flush should error on missing columns       #
+###################################################################################
+statement ok
+CREATE TABLE ducklake.renamed_columns_test (unique_id INTEGER, sort_key_1 INTEGER, sort_key_2 VARCHAR);
+
+statement ok
+ALTER TABLE ducklake.renamed_columns_test SET SORTED BY (sort_key_1 ASC NULLS LAST, sort_key_2 ASC NULLS LAST);
+
+# Rename the sort columns to completely different names
+statement ok
+ALTER TABLE ducklake.renamed_columns_test RENAME COLUMN sort_key_1 TO sort_key_1_changed;
+
+statement ok
+ALTER TABLE ducklake.renamed_columns_test RENAME COLUMN sort_key_2 TO sort_key_2_changed;
+
+# Insert data (will be inlined initially)
+statement ok
+INSERT INTO ducklake.renamed_columns_test (unique_id, sort_key_1_changed, sort_key_2_changed)
+FROM range(5) t(i)
+SELECT
+    i AS unique_id,
+    i % 2 AS sort_key_1_changed,
+    'woot' || i AS sort_key_2_changed
+;
+
+# Flush should fail because the sort columns no longer exist
+statement error
+CALL ducklake_flush_inlined_data('ducklake', table_name => 'renamed_columns_test');
+----
+Columns in the approx_sort parameter were not found in the DuckLake table
+
+statement ok
+ALTER TABLE ducklake.renamed_columns_test SET SORTED BY (sort_key_1_changed ASC NULLS LAST, sort_key_2_changed ASC NULLS LAST);
+
+# Once sorting the new column names, we succeed
+statement ok
+CALL ducklake_flush_inlined_data('ducklake', table_name => 'renamed_columns_test');

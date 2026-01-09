@@ -273,8 +273,9 @@ unique_ptr<LogicalOperator> DuckLakeCompactor::InsertSort(Binder &binder, unique
 	// FIXME: Allow arbitrary expressions instead of just column references. (Need a dynamic bind)
 	// Build a map of the names of columns in the query plan so we can bind to them
 	case_insensitive_map_t<idx_t> alias_map;
-	for (idx_t col_idx = 0; col_idx < root_get->names.size(); col_idx++) {
-		alias_map[root_get->names[col_idx]] = col_idx;
+	auto current_columns = table.GetColumns().GetColumnNames();
+	for (idx_t col_idx = 0; col_idx < current_columns.size(); col_idx++) {
+		alias_map[current_columns[col_idx]] = col_idx;
 	}
 
 	root_get->ResolveOperatorTypes();
@@ -495,7 +496,7 @@ DuckLakeCompactor::GenerateCompactionCommand(vector<DuckLakeCompactionFileEntry>
 
 	auto sort_data = latest_table.GetSortData();
 	if (sort_data) {
-		root = DuckLakeCompactor::InsertSort(binder, root, table, sort_data);
+		root = DuckLakeCompactor::InsertSort(binder, root, latest_table, sort_data);
 	}
 
 	// generate the LogicalCopyToFile
