@@ -104,6 +104,9 @@ bool DuckLakeInlinedDataReader::TryInitializeScan(ClientContext &context, Global
 			data = metadata_manager.ReadInlinedDataDeletions(*read_info.start_snapshot, read_info.snapshot, table_name,
 			                                                 columns_to_read);
 			break;
+		case DuckLakeScanType::SCAN_FOR_FLUSH:
+			data = metadata_manager.ReadAllInlinedDataForFlush(read_info.snapshot, table_name, columns_to_read);
+			break;
 		default:
 			throw InternalException("Unknown DuckLake scan type");
 		}

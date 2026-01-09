@@ -28,6 +28,7 @@ struct DuckLakeDeleteFile {
 	idx_t footer_size;
 	string encryption_key;
 	bool overwrites_existing_delete = false;
+	optional_idx begin_snapshot;
 };
 
 struct DuckLakeDataFile {

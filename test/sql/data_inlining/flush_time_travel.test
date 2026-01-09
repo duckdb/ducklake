@@ -1,0 +1,96 @@
+# name: test/sql/data_inlining/flush_time_travel.test
+# description: test ducklake updating
+# group: [data_inlining]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+
+test-env DATA_PATH __TEST_DIR__
+
+statement ok
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/flush_time_travel',DATA_INLINING_ROW_LIMIT 10)
+
+statement ok
+use ducklake
+
+statement ok
+create table t1 (a integer)
+
+statement ok
+insert into t1 values (1), (2), (3);
+
+statement ok
+delete from t1 where a = 2;
+
+query I
+from t1 at (version => 2);
+----
+1
+2
+3
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake');
+
+query I
+from t1 at (version => 2);
+----
+1
+2
+3
+
+query I
+from t1
+----
+1
+3
+
+# If we do an insertion again.
+statement ok
+insert into t1 values (4), (5), (6);
+
+# and now delete from both inlining and regular
+statement ok
+delete from t1 where a = 1 OR a = 6;
+
+query I
+from t1
+----
+3
+4
+5
+
+query I
+from t1 at (version => 3);
+----
+1
+3
+
+query I
+from t1 at (version => 4);
+----
+1
+3
+
+
+query I
+from t1 at (version => 5);
+----
+1
+3
+4
+5
+6
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake');
+
+query I
+from t1
+----
+3
+4
+5
