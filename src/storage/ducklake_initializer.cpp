@@ -22,10 +22,6 @@ void DuckLakeInitializer::Initialize() {
 	auto &transaction = DuckLakeTransaction::Get(context, catalog);
 	auto &metadata_manager = transaction.GetMetadataManager();
 	bool has_explicit_schema = !options.metadata_schema.empty();
-	if (options.metadata_schema.empty()) {
-		// if the schema is not explicitly set by the user - set it to the default schema in the catalog
-		options.metadata_schema = transaction.GetDefaultSchemaName();
-	}
 	// after the metadata database is attached initialize the ducklake
 	// check if we are loading an existing DuckLake or creating a new one
 	// FIXME: verify that all tables are in the correct format instead

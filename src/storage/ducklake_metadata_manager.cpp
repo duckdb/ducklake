@@ -87,7 +87,7 @@ static string GetAttachOptions(const DuckLakeOptions &options) {
 	return " (" + result + ")";
 }
 
-bool DuckLakeMetadataManager::IsInitialized(const DuckLakeOptions &options) {
+bool DuckLakeMetadataManager::IsInitialized(DuckLakeOptions &options) {
 	auto &catalog = transaction.GetCatalog();
 	// attach the metadata database
 	auto result =
@@ -99,6 +99,11 @@ bool DuckLakeMetadataManager::IsInitialized(const DuckLakeOptions &options) {
 	}
 	// explicitly load all secrets - work-around to secret initialization bug
 	transaction.Query("FROM duckdb_secrets()");
+
+	if (options.metadata_schema.empty()) {
+		// if the schema is not explicitly set by the user - set it to the default schema in the catalog
+		options.metadata_schema = transaction.GetDefaultSchemaName();
+	}
 
 	result = transaction.Query(
 	    "SELECT COUNT(*) FROM duckdb_tables() WHERE database_name={METADATA_CATALOG_NAME_LITERAL} AND "
