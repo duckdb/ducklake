@@ -1,4 +1,5 @@
 #include "storage/ducklake_metadata_manager.hpp"
+#include "common/ducklake_options.hpp"
 #include "storage/ducklake_transaction.hpp"
 #include "common/ducklake_util.hpp"
 #include "duckdb/planner/tableref/bound_at_clause.hpp"
@@ -26,11 +27,19 @@ DuckLakeMetadataManager::~DuckLakeMetadataManager() {
 }
 optional_ptr<AttachedDatabase> GetDatabase(ClientContext &context, const string &name);
 
+unordered_map<string /* name */, DuckLakeMetadataManager::create_t> DuckLakeMetadataManager::metadata_managers = {
+    {"postgres", PostgresMetadataManager::Create}, {"postgres_scanner", PostgresMetadataManager::Create}};
+
+bool DuckLakeMetadataManager::Register(const string &name, DuckLakeMetadataManager::create_t create) {
+	return metadata_managers.emplace(name, create).second;
+}
+
 unique_ptr<DuckLakeMetadataManager> DuckLakeMetadataManager::Create(DuckLakeTransaction &transaction) {
 	auto &catalog = transaction.GetCatalog();
 	auto catalog_type = catalog.MetadataType();
-	if (catalog_type == "postgres" || catalog_type == "postgres_scanner") {
-		return make_uniq<PostgresMetadataManager>(transaction);
+	auto create = metadata_managers[catalog_type];
+	if (create) {
+		return create(transaction);
 	}
 	return make_uniq<DuckLakeMetadataManager>(transaction);
 }
@@ -47,6 +56,61 @@ FileSystem &DuckLakeMetadataManager::GetFileSystem() {
 	return FileSystem::GetFileSystem(transaction.GetCatalog().GetDatabase());
 }
 
+static string GetAttachOptions(const DuckLakeOptions &options) {
+	vector<string> attach_options;
+	if (options.access_mode != AccessMode::AUTOMATIC) {
+		switch (options.access_mode) {
+		case AccessMode::READ_ONLY:
+			attach_options.push_back("READ_ONLY");
+			break;
+		case AccessMode::READ_WRITE:
+			attach_options.push_back("READ_WRITE");
+			break;
+		default:
+			throw InternalException("Unsupported access mode in DuckLake attach");
+		}
+	}
+	for (auto &option : options.metadata_parameters) {
+		attach_options.push_back(option.first + " " + option.second.ToSQLString());
+	}
+
+	if (attach_options.empty()) {
+		return string();
+	}
+	string result;
+	for (auto &option : attach_options) {
+		if (!result.empty()) {
+			result += ", ";
+		}
+		result += option;
+	}
+	return " (" + result + ")";
+}
+
+bool DuckLakeMetadataManager::IsInitialized(const DuckLakeOptions &options) {
+	auto &catalog = transaction.GetCatalog();
+	// attach the metadata database
+	auto result =
+	    transaction.Query("ATTACH {METADATA_PATH} AS {METADATA_CATALOG_NAME_IDENTIFIER}" + GetAttachOptions(options));
+	if (result->HasError()) {
+		auto &error_obj = result->GetErrorObject();
+		error_obj.Throw("Failed to attach DuckLake MetaData \"" + catalog.MetadataDatabaseName() + "\" at path + \"" +
+		                catalog.MetadataPath() + "\"");
+	}
+	// explicitly load all secrets - work-around to secret initialization bug
+	transaction.Query("FROM duckdb_secrets()");
+
+	result = transaction.Query(
+	    "SELECT COUNT(*) FROM duckdb_tables() WHERE database_name={METADATA_CATALOG_NAME_LITERAL} AND "
+	    "schema_name={METADATA_SCHEMA_NAME_LITERAL} AND table_name LIKE 'ducklake_%'");
+	if (result->HasError()) {
+		auto &error_obj = result->GetErrorObject();
+		error_obj.Throw("Failed to load DuckLake table data");
+	}
+	auto count = result->Fetch()->GetValue(0, 0).GetValue<idx_t>();
+	return count > 0;
+}
+
 void DuckLakeMetadataManager::InitializeDuckLake(bool has_explicit_schema, DuckLakeEncryption encryption) {
 	string initialize_query;
 	if (has_explicit_schema) {
@@ -58,7 +122,9 @@ void DuckLakeMetadataManager::InitializeDuckLake(bool has_explicit_schema, DuckL
 	auto &base_data_path = ducklake_catalog.DataPath();
 	string data_path = StorePath(base_data_path);
 	string encryption_str = encryption == DuckLakeEncryption::ENCRYPTED ? "true" : "false";
-	initialize_query += StringUtil::Format(R"(
+	string initial_schema_uuid = transaction.GenerateUUID();
+	initialize_query +=
+	    StringUtil::Format(R"(
 CREATE TABLE {METADATA_CATALOG}.ducklake_metadata(key VARCHAR NOT NULL, value VARCHAR NOT NULL, scope VARCHAR, scope_id BIGINT);
 CREATE TABLE {METADATA_CATALOG}.ducklake_snapshot(snapshot_id BIGINT PRIMARY KEY, snapshot_time TIMESTAMPTZ, schema_version BIGINT, next_catalog_id BIGINT, next_file_id BIGINT);
 CREATE TABLE {METADATA_CATALOG}.ducklake_snapshot_changes(snapshot_id BIGINT PRIMARY KEY, changes_made VARCHAR, author VARCHAR, commit_message VARCHAR, commit_extra_info VARCHAR);
@@ -85,9 +151,9 @@ INSERT INTO {METADATA_CATALOG}.ducklake_schema_versions VALUES (0,0);
 INSERT INTO {METADATA_CATALOG}.ducklake_snapshot VALUES (0, NOW(), 0, 1, 0);
 INSERT INTO {METADATA_CATALOG}.ducklake_snapshot_changes VALUES (0, 'created_schema:"main"',  NULL, NULL, NULL);
 INSERT INTO {METADATA_CATALOG}.ducklake_metadata (key, value) VALUES ('version', '0.3'), ('created_by', 'DuckDB %s'), ('data_path', %s), ('encrypted', '%s');
-INSERT INTO {METADATA_CATALOG}.ducklake_schema VALUES (0, UUID(), 0, NULL, 'main', 'main/', true);
+INSERT INTO {METADATA_CATALOG}.ducklake_schema VALUES (0, '%s'::UUID, 0, NULL, 'main', 'main/', true);
 	)",
-	                                       DuckDB::SourceID(), SQLString(data_path), encryption_str);
+	                       DuckDB::SourceID(), SQLString(data_path), encryption_str, initial_schema_uuid);
 	// TODO: add
 	//	ducklake_sorting_info
 	//	ducklake_sorting_column_info
