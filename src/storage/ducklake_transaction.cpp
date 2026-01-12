@@ -389,12 +389,14 @@ void DuckLakeTransaction::CleanupFiles() {
 			if (file.created_by_ducklake) {
 				fs.TryRemoveFile(file.file_name);
 			}
-			if (file.delete_file) {
-				fs.TryRemoveFile(file.delete_file->file_name);
+			for (auto &del_file : file.delete_files) {
+				fs.TryRemoveFile(del_file.file_name);
 			}
 		}
 		for (auto &file : table_changes.new_delete_files) {
-			fs.TryRemoveFile(file.second.file_name);
+			for (auto &delete_files : file.second) {
+				fs.TryRemoveFile(delete_files.file_name);
+			}
 		}
 		table_changes.new_data_files.clear();
 		table_changes.new_delete_files.clear();
@@ -498,9 +500,10 @@ void DuckLakeTransaction::CheckForConflicts(const TransactionChangeInformation &
 			for (auto &entry : table_data_changes) {
 				auto &table_changes = entry.second;
 				for (auto &file_entry : table_changes.new_delete_files) {
-					auto &file = file_entry.second;
-					ConflictCheck(file.data_file_id, deleted_files.deleted_from_files, "delete from file",
-					              "deleted from it");
+					for (auto &file : file_entry.second) {
+						ConflictCheck(file.data_file_id, deleted_files.deleted_from_files, "delete from file",
+						              "deleted from it");
+					}
 				}
 			}
 			for (auto &file : dropped_files) {
@@ -1049,9 +1052,9 @@ NewDataInfo DuckLakeTransaction::GetNewDataFiles(string &batch_query, DuckLakeCo
 		vector<DuckLakeDeleteFile> delete_files;
 		for (auto &file : table_changes.new_data_files) {
 			auto data_file = GetNewDataFile(file, commit_state.commit_snapshot, table_id, new_stats.next_row_id);
-			if (file.delete_file) {
+			for (auto &del_file : file.delete_files) {
 				// this transaction-local file already has deletes - write them out
-				DuckLakeDeleteFile delete_file = *file.delete_file;
+				DuckLakeDeleteFile delete_file = del_file;
 				delete_file.data_file_id = data_file.id;
 				delete_files.push_back(std::move(delete_file));
 			}
@@ -1109,21 +1112,22 @@ DuckLakeTransaction::GetNewDeleteFiles(const DuckLakeCommitState &commit_state,
 		auto table_id = commit_state.GetTableId(entry.first);
 		auto &table_changes = entry.second;
 		for (auto &file_entry : table_changes.new_delete_files) {
-			auto &file = file_entry.second;
-			if (file.overwrites_existing_delete) {
-				overwritten_delete_files.insert(file.data_file_id);
+			for (auto &file : file_entry.second) {
+				if (file.overwrites_existing_delete) {
+					overwritten_delete_files.insert(file.data_file_id);
+				}
+				DuckLakeDeleteFileInfo delete_file;
+				delete_file.id = DataFileIndex(commit_state.commit_snapshot.next_file_id++);
+				delete_file.table_id = table_id;
+				delete_file.data_file_id = file.data_file_id;
+				delete_file.path = file.file_name;
+				delete_file.delete_count = file.delete_count;
+				delete_file.file_size_bytes = file.file_size_bytes;
+				delete_file.footer_size = file.footer_size;
+				delete_file.encryption_key = file.encryption_key;
+				delete_file.begin_snapshot = file.begin_snapshot;
+				result.push_back(std::move(delete_file));
 			}
-			DuckLakeDeleteFileInfo delete_file;
-			delete_file.id = DataFileIndex(commit_state.commit_snapshot.next_file_id++);
-			delete_file.table_id = table_id;
-			delete_file.data_file_id = file.data_file_id;
-			delete_file.path = file.file_name;
-			delete_file.delete_count = file.delete_count;
-			delete_file.file_size_bytes = file.file_size_bytes;
-			delete_file.footer_size = file.footer_size;
-			delete_file.encryption_key = file.encryption_key;
-			delete_file.begin_snapshot = file.begin_snapshot;
-			result.push_back(std::move(delete_file));
 		}
 	}
 	return result;
@@ -1677,10 +1681,10 @@ void DuckLakeTransaction::DropTransactionLocalFile(TableIndex table_id, const st
 	for (idx_t i = 0; i < table_files.size(); i++) {
 		auto &file = table_files[i];
 		if (file.file_name == path) {
-			if (file.delete_file) {
-				fs.RemoveFile(file.delete_file->file_name);
-				file.delete_file.reset();
+			for (auto &del_file : file.delete_files) {
+				fs.RemoveFile(del_file.file_name);
 			}
+			file.delete_files.clear();
 			// found the file - delete it from the table list and from disk
 			table_files.erase_at(i);
 			fs.RemoveFile(path);
@@ -1815,17 +1819,7 @@ void DuckLakeTransaction::AddDeletes(TableIndex table_id, vector<DuckLakeDeleteF
 		if (data_file_path.empty()) {
 			throw InternalException("Data file path needs to be set in delete");
 		}
-		auto existing_entry = table_delete_map.find(data_file_path);
-		if (existing_entry != table_delete_map.end()) {
-			auto context_ref = context.lock();
-			auto &fs = FileSystem::GetFileSystem(*context_ref);
-			// we have a transaction-local delete for this file already - delete it
-			fs.RemoveFile(existing_entry->second.file_name);
-			// write the new file
-			existing_entry->second = std::move(file);
-		} else {
-			table_delete_map.insert(make_pair(data_file_path, std::move(file)));
-		}
+		table_delete_map[data_file_path].push_back(std::move(file));
 	}
 }
 
@@ -1850,10 +1844,10 @@ void DuckLakeTransaction::GetLocalDeleteForFile(TableIndex table_id, const strin
 	}
 	auto &table_changes = entry->second;
 	auto file_entry = table_changes.new_delete_files.find(path);
-	if (file_entry == table_changes.new_delete_files.end()) {
+	if (file_entry == table_changes.new_delete_files.end() || file_entry->second.empty()) {
 		return;
 	}
-	auto &delete_file = file_entry->second;
+	auto &delete_file = file_entry->second.back();
 	result.path = delete_file.file_name;
 	result.file_size_bytes = delete_file.file_size_bytes;
 	result.footer_size = delete_file.footer_size;
@@ -1870,13 +1864,7 @@ void DuckLakeTransaction::TransactionLocalDelete(TableIndex table_id, const stri
 	auto &table_changes = entry->second;
 	for (auto &file : table_changes.new_data_files) {
 		if (file.file_name == data_file_path) {
-			if (file.delete_file) {
-				// this file already has a transaction-local delete file - delete it
-				auto context_ref = context.lock();
-				auto &fs = FileSystem::GetFileSystem(*context_ref);
-				fs.RemoveFile(file.delete_file->file_name);
-			}
-			file.delete_file = make_uniq<DuckLakeDeleteFile>(std::move(delete_file));
+			file.delete_files.push_back(std::move(delete_file));
 			return;
 		}
 	}
