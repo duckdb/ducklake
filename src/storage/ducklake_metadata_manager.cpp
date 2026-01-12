@@ -2197,9 +2197,11 @@ string DuckLakeMetadataManager::WriteNewDeleteFiles(const vector<DuckLakeDeleteF
 		// Use explicit begin_snapshot if set (for flush operations), otherwise use commit snapshot
 		string begin_snapshot_str =
 		    file.begin_snapshot.IsValid() ? std::to_string(file.begin_snapshot.GetIndex()) : "{SNAPSHOT_ID}";
+		string end_snapshot_str =
+		    file.end_snapshot.IsValid() ? std::to_string(file.end_snapshot.GetIndex()) : "NULL";
 		delete_file_insert_query += StringUtil::Format(
-		    "(%d, %d, %s, NULL, %d, %s, %s, 'parquet', %d, %d, %d, %s)", delete_file_index, table_id,
-		    begin_snapshot_str, data_file_index, SQLString(path.path), path.path_is_relative ? "true" : "false",
+		    "(%d, %d, %s, %s, %d, %s, %s, 'parquet', %d, %d, %d, %s)", delete_file_index, table_id,
+		    begin_snapshot_str, end_snapshot_str, data_file_index, SQLString(path.path), path.path_is_relative ? "true" : "false",
 		    file.delete_count, file.file_size_bytes, file.footer_size, encryption_key);
 	}
 
