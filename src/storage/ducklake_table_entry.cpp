@@ -381,6 +381,9 @@ DuckLakePartitionField GetPartitionField(DuckLakeTableEntry &table, ParsedExpres
 		    expr.ToString());
 	}
 	DuckLakePartitionField field;
+	if (!table.ColumnExists(column_name)) {
+		throw CatalogException("Unexpected partition key - column \"%s\" does not exist", column_name);
+	}
 	auto &col = table.GetColumn(column_name);
 	PhysicalIndex column_index(col.StorageOid());
 	auto &field_id = table.GetFieldData().GetByRootIndex(column_index);

@@ -1939,6 +1939,7 @@ void DuckLakeTransaction::AppendFiles(TableIndex table_id, vector<DuckLakeDataFi
 	if (files.empty()) {
 		return;
 	}
+	lock_guard<mutex> guard(table_data_changes_lock);
 	auto &table_changes = table_data_changes[table_id];
 	for (auto &file : files) {
 		table_changes.new_data_files.push_back(std::move(file));
@@ -1973,6 +1974,7 @@ void DuckLakeTransaction::AddNewInlinedDeletes(TableIndex table_id, const string
 	if (new_deletes.empty()) {
 		return;
 	}
+	lock_guard<mutex> guard(table_data_changes_lock);
 	auto &table_changes = table_data_changes[table_id];
 	auto &table_deletes = table_changes.new_inlined_data_deletes;
 	auto entry = table_deletes.find(table_name);
@@ -2046,6 +2048,7 @@ void DuckLakeTransaction::AddDeletes(TableIndex table_id, vector<DuckLakeDeleteF
 	if (files.empty()) {
 		return;
 	}
+	lock_guard<mutex> guard(table_data_changes_lock);
 	auto &table_changes = table_data_changes[table_id];
 	auto &table_delete_map = table_changes.new_delete_files;
 	for (auto &file : files) {
