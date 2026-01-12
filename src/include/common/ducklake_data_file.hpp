@@ -41,7 +41,7 @@ struct DuckLakeDataFile {
 	idx_t file_size_bytes;
 	optional_idx footer_size;
 	optional_idx partition_id;
-	unique_ptr<DuckLakeDeleteFile> delete_file;
+	vector<DuckLakeDeleteFile> delete_files;
 	map<FieldIndex, DuckLakeColumnStats> column_stats;
 	vector<DuckLakeFilePartition> partition_values;
 	string encryption_key;

@@ -24,6 +24,129 @@
 
 namespace duckdb {
 
+struct DeleteFileWriteContext {
+	ClientContext &context;
+	DuckLakeTableEntry &table;
+	const string &encryption_key;
+	DuckLakeTransaction &transaction;
+	FileSystem &fs;
+};
+
+static DuckLakeDeleteFile WriteDeleteFile(DeleteFileWriteContext &ctx, const string &data_file_path,
+                                          vector<idx_t> &positions, idx_t begin_snapshot_val) {
+	std::sort(positions.begin(), positions.end());
+
+	auto delete_file_uuid = "ducklake-" + ctx.transaction.GenerateUUID() + "-delete.parquet";
+	string delete_file_path = DuckLakeUtil::JoinPath(ctx.fs, ctx.table.DataPath(), delete_file_uuid);
+
+	auto info = make_uniq<CopyInfo>();
+	info->file_path = delete_file_path;
+	info->format = "parquet";
+	info->is_from = false;
+
+	child_list_t<Value> values;
+	values.emplace_back("file_path", Value::INTEGER(MultiFileReader::FILENAME_FIELD_ID));
+	values.emplace_back("pos", Value::INTEGER(MultiFileReader::ORDINAL_FIELD_ID));
+	auto field_ids = Value::STRUCT(std::move(values));
+	vector<Value> field_input;
+	field_input.push_back(std::move(field_ids));
+	info->options["field_ids"] = std::move(field_input);
+
+	if (!ctx.encryption_key.empty()) {
+		child_list_t<Value> enc_values;
+		enc_values.emplace_back("footer_key_value", Value::BLOB_RAW(ctx.encryption_key));
+		vector<Value> encryption_input;
+		encryption_input.push_back(Value::STRUCT(std::move(enc_values)));
+		info->options["encryption_config"] = std::move(encryption_input);
+	}
+
+	auto &copy_fun = DuckLakeFunctions::GetCopyFunction(ctx.context, "parquet");
+	CopyFunctionBindInput bind_input(*info);
+
+	vector<string> names_to_write {"file_path", "pos"};
+	vector<LogicalType> types_to_write {LogicalType::VARCHAR, LogicalType::BIGINT};
+
+	auto function_data = copy_fun.function.copy_to_bind(ctx.context, bind_input, names_to_write, types_to_write);
+
+	auto copy_return_types = GetCopyFunctionReturnLogicalTypes(CopyFunctionReturnType::WRITTEN_FILE_STATISTICS);
+	PhysicalPlan plan(Allocator::Get(ctx.context));
+	PhysicalCopyToFile copy_to_file(plan, copy_return_types, copy_fun.function, std::move(function_data), 1);
+
+	copy_to_file.use_tmp_file = false;
+	copy_to_file.file_path = delete_file_path;
+	copy_to_file.partition_output = false;
+	copy_to_file.write_empty_file = false;
+	copy_to_file.file_extension = "parquet";
+	copy_to_file.overwrite_mode = CopyOverwriteMode::COPY_OVERWRITE_OR_IGNORE;
+	copy_to_file.per_thread_output = false;
+	copy_to_file.rotate = false;
+	copy_to_file.return_type = CopyFunctionReturnType::WRITTEN_FILE_STATISTICS;
+	copy_to_file.write_partition_columns = false;
+
+	DataChunk write_chunk;
+	write_chunk.Initialize(ctx.context, types_to_write);
+	Value filename_val(data_file_path);
+	write_chunk.data[0].Reference(filename_val);
+
+	ThreadContext thread_context(ctx.context);
+	ExecutionContext execution_context(ctx.context, thread_context, nullptr);
+	InterruptState interrupt_state;
+
+	auto gstate = copy_to_file.GetGlobalSinkState(ctx.context);
+	auto lstate = copy_to_file.GetLocalSinkState(execution_context);
+
+	OperatorSinkInput sink_input {*gstate, *lstate, interrupt_state};
+	idx_t row_count = 0;
+	auto row_data = FlatVector::GetData<int64_t>(write_chunk.data[1]);
+	for (auto &pos : positions) {
+		row_data[row_count++] = NumericCast<int64_t>(pos);
+		if (row_count >= STANDARD_VECTOR_SIZE) {
+			write_chunk.SetCardinality(row_count);
+			copy_to_file.Sink(execution_context, write_chunk, sink_input);
+			row_count = 0;
+		}
+	}
+	if (row_count > 0) {
+		write_chunk.SetCardinality(row_count);
+		copy_to_file.Sink(execution_context, write_chunk, sink_input);
+	}
+
+	OperatorSinkCombineInput combine_input {*gstate, *lstate, interrupt_state};
+	copy_to_file.Combine(execution_context, combine_input);
+	copy_to_file.FinalizeInternal(ctx.context, *gstate);
+
+	copy_to_file.sink_state = std::move(gstate);
+	auto source_state = copy_to_file.GetGlobalSourceState(ctx.context);
+	auto local_state = copy_to_file.GetLocalSourceState(execution_context, *source_state);
+	DataChunk stats_chunk;
+	stats_chunk.Initialize(ctx.context, copy_to_file.types);
+
+	OperatorSourceInput source_input {*source_state, *local_state, interrupt_state};
+	copy_to_file.GetData(execution_context, stats_chunk, source_input);
+
+	DuckLakeDeleteFile delete_file;
+	delete_file.data_file_path = data_file_path;
+	delete_file.file_name = stats_chunk.GetValue(0, 0).GetValue<string>();
+	delete_file.delete_count = positions.size();
+	delete_file.file_size_bytes = stats_chunk.GetValue(2, 0).GetValue<idx_t>();
+	delete_file.footer_size = stats_chunk.GetValue(3, 0).GetValue<idx_t>();
+	delete_file.encryption_key = ctx.encryption_key;
+	delete_file.begin_snapshot = begin_snapshot_val;
+	return delete_file;
+}
+
+static void AttachDeleteFilesToWrittenFiles(vector<DuckLakeDeleteFile> &delete_files,
+                                            vector<DuckLakeDataFile> &written_files) {
+	for (auto &delete_file : delete_files) {
+		for (auto &written_file : written_files) {
+			if (written_file.file_name == delete_file.data_file_path) {
+				written_file.delete_files.push_back(std::move(delete_file));
+				break;
+			}
+		}
+	}
+}
+
 //===--------------------------------------------------------------------===//
 // Flush Data Operator
 //===--------------------------------------------------------------------===//
@@ -64,32 +187,26 @@ SinkFinalizeType DuckLakeFlushData::Finalize(Pipeline &pipeline, Event &event, C
                                              OperatorSinkFinalizeInput &input) const {
 	auto &global_state = input.global_state.Cast<DuckLakeInsertGlobalState>();
 	auto &transaction = DuckLakeTransaction::Get(context, global_state.table.catalog);
-
 	auto snapshot = transaction.GetSnapshot();
 
-	auto deleted_rows_result = transaction.Query(snapshot, StringUtil::Format(R"(
-SELECT row_id, end_snapshot
-FROM {METADATA_CATALOG}.%s
-WHERE end_snapshot IS NOT NULL
-ORDER BY row_id;)",
-	                                                                          inlined_table.table_name));
+	auto end_snapshots_result = transaction.Query(snapshot, StringUtil::Format(R"(
+		SELECT DISTINCT end_snapshot
+		FROM {METADATA_CATALOG}.%s
+		WHERE end_snapshot IS NOT NULL
+		ORDER BY end_snapshot;)",
+	                                                                           inlined_table.table_name));
 
-	unordered_map<idx_t, idx_t> deleted_row_info; // row_id -> end_snapshot
-	for (auto &row : *deleted_rows_result) {
-		auto row_id = NumericCast<idx_t>(row.GetValue<int64_t>(0));
-		auto end_snapshot = NumericCast<idx_t>(row.GetValue<int64_t>(1));
-		deleted_row_info[row_id] = end_snapshot;
+	vector<idx_t> end_snapshots;
+	for (auto &row : *end_snapshots_result) {
+		end_snapshots.push_back(NumericCast<idx_t>(row.GetValue<int64_t>(0)));
 	}
 
-	if (!deleted_row_info.empty() && !global_state.written_files.empty()) {
-
+	if (!end_snapshots.empty() && !global_state.written_files.empty()) {
 		auto &fs = FileSystem::GetFileSystem(context);
 
-		// Get the minimum row_id from the inlined table to compute the offset
-		// Row_ids in the inlined table are absolute, not starting from 0
 		auto min_row_id_result = transaction.Query(snapshot, StringUtil::Format(R"(
-SELECT MIN(row_id)
-FROM {METADATA_CATALOG}.%s;)",
+			SELECT MIN(row_id)
+			FROM {METADATA_CATALOG}.%s;)",
 		                                                                        inlined_table.table_name));
 		idx_t row_id_offset = 0;
 		for (auto &row : *min_row_id_result) {
@@ -98,151 +215,57 @@ FROM {METADATA_CATALOG}.%s;)",
 			}
 		}
 
-		unordered_map<idx_t, unordered_map<string, vector<idx_t>>> deletes_by_snapshot;
-
-		idx_t current_pos = 0;
-		for (auto &written_file : global_state.written_files) {
-			idx_t file_row_count = written_file.row_count;
-			idx_t file_start_row_id = row_id_offset + current_pos;
-
-			for (auto &deleted : deleted_row_info) {
-				idx_t row_id = deleted.first;
-				idx_t end_snapshot_val = deleted.second;
-
-				if (row_id >= file_start_row_id && row_id < file_start_row_id + file_row_count) {
-					idx_t pos_in_file = row_id - file_start_row_id;
-					deletes_by_snapshot[end_snapshot_val][written_file.file_name].push_back(pos_in_file);
-				}
-			}
-			current_pos += file_row_count;
-		}
-
+		DeleteFileWriteContext write_ctx {context, table, encryption_key, transaction, fs};
 		vector<DuckLakeDeleteFile> delete_files;
-		for (auto &snapshot_entry : deletes_by_snapshot) {
-			idx_t end_snapshot_val = snapshot_entry.first;
-			for (auto &file_entry : snapshot_entry.second) {
-				const string &data_file_path = file_entry.first;
-				auto &positions = file_entry.second;
 
-				std::sort(positions.begin(), positions.end());
+		for (auto current_snapshot : end_snapshots) {
+			auto deleted_rows_result =
+			    transaction.Query(snapshot, StringUtil::Format(R"(
+				SELECT row_id
+				FROM {METADATA_CATALOG}.%s
+				WHERE end_snapshot <= %d
+				ORDER BY row_id;)",
+			                                                   inlined_table.table_name, current_snapshot));
 
-				auto delete_file_uuid = "ducklake-" + transaction.GenerateUUID() + "-delete.parquet";
-				string delete_file_path = DuckLakeUtil::JoinPath(fs, table.DataPath(), delete_file_uuid);
+			unordered_set<idx_t> deleted_row_ids;
+			for (auto &row : *deleted_rows_result) {
+				deleted_row_ids.insert(NumericCast<idx_t>(row.GetValue<int64_t>(0)));
+			}
 
-				auto info = make_uniq<CopyInfo>();
-				info->file_path = delete_file_path;
-				info->format = "parquet";
-				info->is_from = false;
+			unordered_map<string, vector<idx_t>> deletes_by_file;
+			idx_t current_pos = 0;
+			for (auto &written_file : global_state.written_files) {
+				idx_t file_row_count = written_file.row_count;
+				idx_t file_start_row_id = row_id_offset + current_pos;
 
-				child_list_t<Value> values;
-				values.emplace_back("file_path", Value::INTEGER(MultiFileReader::FILENAME_FIELD_ID));
-				values.emplace_back("pos", Value::INTEGER(MultiFileReader::ORDINAL_FIELD_ID));
-				auto field_ids = Value::STRUCT(std::move(values));
-				vector<Value> field_input;
-				field_input.push_back(std::move(field_ids));
-				info->options["field_ids"] = std::move(field_input);
-
-				if (!encryption_key.empty()) {
-					child_list_t<Value> enc_values;
-					enc_values.emplace_back("footer_key_value", Value::BLOB_RAW(encryption_key));
-					vector<Value> encryption_input;
-					encryption_input.push_back(Value::STRUCT(std::move(enc_values)));
-					info->options["encryption_config"] = std::move(encryption_input);
-				}
-
-				auto &copy_fun = DuckLakeFunctions::GetCopyFunction(context, "parquet");
-				CopyFunctionBindInput bind_input(*info);
-
-				vector<string> names_to_write {"file_path", "pos"};
-				vector<LogicalType> types_to_write {LogicalType::VARCHAR, LogicalType::BIGINT};
-
-				auto function_data =
-				    copy_fun.function.copy_to_bind(context, bind_input, names_to_write, types_to_write);
-
-				auto copy_return_types =
-				    GetCopyFunctionReturnLogicalTypes(CopyFunctionReturnType::WRITTEN_FILE_STATISTICS);
-				PhysicalPlan plan(Allocator::Get(context));
-				PhysicalCopyToFile copy_to_file(plan, copy_return_types, copy_fun.function, std::move(function_data),
-				                                1);
-
-				copy_to_file.use_tmp_file = false;
-				copy_to_file.file_path = delete_file_path;
-				copy_to_file.partition_output = false;
-				copy_to_file.write_empty_file = false;
-				copy_to_file.file_extension = "parquet";
-				copy_to_file.overwrite_mode = CopyOverwriteMode::COPY_OVERWRITE_OR_IGNORE;
-				copy_to_file.per_thread_output = false;
-				copy_to_file.rotate = false;
-				copy_to_file.return_type = CopyFunctionReturnType::WRITTEN_FILE_STATISTICS;
-				copy_to_file.write_partition_columns = false;
-
-				DataChunk write_chunk;
-				write_chunk.Initialize(context, types_to_write);
-				Value filename_val(data_file_path);
-				write_chunk.data[0].Reference(filename_val);
-
-				ThreadContext thread_context(context);
-				ExecutionContext execution_context(context, thread_context, nullptr);
-				InterruptState interrupt_state;
-
-				auto gstate = copy_to_file.GetGlobalSinkState(context);
-				auto lstate = copy_to_file.GetLocalSinkState(execution_context);
-
-				OperatorSinkInput sink_input {*gstate, *lstate, interrupt_state};
-				idx_t row_count = 0;
-				auto row_data = FlatVector::GetData<int64_t>(write_chunk.data[1]);
-				for (auto &pos : positions) {
-					row_data[row_count++] = NumericCast<int64_t>(pos);
-					if (row_count >= STANDARD_VECTOR_SIZE) {
-						write_chunk.SetCardinality(row_count);
-						copy_to_file.Sink(execution_context, write_chunk, sink_input);
-						row_count = 0;
+				for (auto row_id : deleted_row_ids) {
+					if (row_id >= file_start_row_id && row_id < file_start_row_id + file_row_count) {
+						idx_t pos_in_file = row_id - file_start_row_id;
+						deletes_by_file[written_file.file_name].push_back(pos_in_file);
 					}
 				}
-				if (row_count > 0) {
-					write_chunk.SetCardinality(row_count);
-					copy_to_file.Sink(execution_context, write_chunk, sink_input);
-				}
+				current_pos += file_row_count;
+			}
 
-				OperatorSinkCombineInput combine_input {*gstate, *lstate, interrupt_state};
-				copy_to_file.Combine(execution_context, combine_input);
-				copy_to_file.FinalizeInternal(context, *gstate);
-
-				copy_to_file.sink_state = std::move(gstate);
-				auto source_state = copy_to_file.GetGlobalSourceState(context);
-				auto local_state = copy_to_file.GetLocalSourceState(execution_context, *source_state);
-				DataChunk stats_chunk;
-				stats_chunk.Initialize(context, copy_to_file.types);
-
-				OperatorSourceInput source_input {*source_state, *local_state, interrupt_state};
-				copy_to_file.GetData(execution_context, stats_chunk, source_input);
-
-				if (stats_chunk.size() == 1) {
-					DuckLakeDeleteFile delete_file;
-					delete_file.data_file_path = data_file_path;
-					delete_file.file_name = stats_chunk.GetValue(0, 0).GetValue<string>();
-					delete_file.delete_count = positions.size();
-					delete_file.file_size_bytes = stats_chunk.GetValue(2, 0).GetValue<idx_t>();
-					delete_file.footer_size = stats_chunk.GetValue(3, 0).GetValue<idx_t>();
-					delete_file.encryption_key = encryption_key;
-					delete_file.begin_snapshot = end_snapshot_val; // Use the original end_snapshot
-					delete_files.push_back(std::move(delete_file));
-				}
+			for (auto &file_entry : deletes_by_file) {
+				auto delete_file = WriteDeleteFile(write_ctx, file_entry.first, file_entry.second, current_snapshot);
+				delete_files.push_back(std::move(delete_file));
 			}
 		}
 
-		for (auto &delete_file : delete_files) {
-			for (auto &written_file : global_state.written_files) {
-				if (written_file.file_name == delete_file.data_file_path) {
-					written_file.delete_file = make_uniq<DuckLakeDeleteFile>(std::move(delete_file));
-					break;
-				}
-			}
+		// The last valid file, we attach it to the written files
+		if (!delete_files.empty()) {
+			// FIXME: What if we produce more than one data-file?
+			// D_ASSERT(global_state.written_files.size() == 1);
+			// auto last_file = delete_files.back();
+			// delete_files.pop_back();
+			// transaction.AddDeletes(global_state.table.GetTableId(), delete_files);
+			// global_state.written_files[0].delete_file = make_uniq<DuckLakeDeleteFile>(std::move(last_file));
+			AttachDeleteFilesToWrittenFiles(delete_files, global_state.written_files);
 		}
 	}
 
 	transaction.AppendFiles(global_state.table.GetTableId(), std::move(global_state.written_files));
-
 	transaction.DeleteInlinedData(inlined_table);
 	return SinkFinalizeType::READY;
 }
