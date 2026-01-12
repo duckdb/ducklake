@@ -30,11 +30,18 @@ optional_ptr<AttachedDatabase> GetDatabase(ClientContext &context, const string 
 unordered_map<string /* name */, DuckLakeMetadataManager::create_t> DuckLakeMetadataManager::metadata_managers = {
     {"postgres", PostgresMetadataManager::Create}, {"postgres_scanner", PostgresMetadataManager::Create}};
 
-bool DuckLakeMetadataManager::Register(const string &name, DuckLakeMetadataManager::create_t create) {
-	return metadata_managers.emplace(name, create).second;
+mutex DuckLakeMetadataManager::metadata_managers_lock;
+
+void DuckLakeMetadataManager::Register(const string &name, DuckLakeMetadataManager::create_t create) {
+	lock_guard<mutex> lock(metadata_managers_lock);
+	if (metadata_managers.find(name) != metadata_managers.end()) {
+		throw InternalException("Metadata manager with name \"%s\" already exists!", name);
+	}
+	metadata_managers[name] = create;
 }
 
 unique_ptr<DuckLakeMetadataManager> DuckLakeMetadataManager::Create(DuckLakeTransaction &transaction) {
+	lock_guard<mutex> lock(metadata_managers_lock);
 	auto &catalog = transaction.GetCatalog();
 	auto catalog_type = catalog.MetadataType();
 	auto create = metadata_managers[catalog_type];
