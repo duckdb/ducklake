@@ -326,10 +326,14 @@ shared_ptr<DuckLakeFieldData> DuckLakeFieldData::DropColumn(const DuckLakeFieldD
 }
 
 shared_ptr<DuckLakeFieldData> DuckLakeFieldData::SetDefault(const DuckLakeFieldData &field_data, FieldIndex field_index,
-                                                            const ColumnDefinition &new_col) {
+                                                            const ColumnDefinition &new_col, bool add_column) {
 	auto result = make_shared_ptr<DuckLakeFieldData>();
 	auto new_default =
 	    new_col.HasDefaultValue() ? optional_ptr<const ParsedExpression>(new_col.DefaultValue()) : nullptr;
+	if (new_default && new_default->type != ExpressionType::VALUE_CONSTANT && add_column) {
+		throw NotImplementedException("We cannot add a column with a non-literal default value. Add the column and "
+		                              "then explicitly set the default for new values using \"ALTER ... SET DEFAULT\"");
+	}
 	for (auto &existing_id : field_data.field_ids) {
 		unique_ptr<DuckLakeFieldId> field_id;
 		if (existing_id->GetFieldIndex() == field_index) {

@@ -27,6 +27,20 @@
 
 namespace duckdb {
 
+// recursively normalize LIST child names from legacy formats blame legacy Avro/Parquet formats
+static void NormalizeListChildNames(vector<MultiFileColumnDefinition> &columns, bool parent_is_list = false) {
+	for (auto &col : columns) {
+		// basically array, element becomes list
+		if (parent_is_list && (col.name == "array" || col.name == "element")) {
+			col.name = "list";
+		}
+		if (!col.children.empty()) {
+			bool is_list = col.type.id() == LogicalTypeId::LIST;
+			NormalizeListChildNames(col.children, is_list);
+		}
+	}
+}
+
 DuckLakeMultiFileReader::DuckLakeMultiFileReader(DuckLakeFunctionInfo &read_info) : read_info(read_info) {
 	row_id_column = make_uniq<MultiFileColumnDefinition>("_ducklake_internal_row_id", LogicalType::BIGINT);
 	row_id_column->identifier = Value::INTEGER(MultiFileReader::ROW_ID_FIELD_ID);
@@ -266,7 +280,8 @@ shared_ptr<BaseFileReader> DuckLakeMultiFileReader::CreateReader(ClientContext &
 
 vector<MultiFileColumnDefinition> MapColumns(MultiFileReaderData &reader_data,
                                              const vector<MultiFileColumnDefinition> &global_map,
-                                             const vector<unique_ptr<DuckLakeNameMapEntry>> &column_maps) {
+                                             const vector<unique_ptr<DuckLakeNameMapEntry>> &column_maps,
+                                             bool parent_is_list = false) {
 	// create a map of field id -> column map index for the mapping at this level
 	unordered_map<idx_t, idx_t> field_id_map;
 	for (idx_t column_map_idx = 0; column_map_idx < column_maps.size(); column_map_idx++) {
@@ -308,13 +323,16 @@ vector<MultiFileColumnDefinition> MapColumns(MultiFileReaderData &reader_data,
 			continue;
 		}
 
-		result_col.identifier = Value(column_map->source_name);
-		if (column_map->source_name == "array") {
-			result_col.name = "list";
+		auto source_name = column_map->source_name;
+		// normalize array element to list, due to old parquet formats
+		if (parent_is_list && (source_name == "array" || source_name == "element")) {
+			source_name = "list";
 		}
+		result_col.identifier = Value(source_name);
 		// recursively process any child nodes
 		if (!column_map->child_entries.empty()) {
-			result_col.children = MapColumns(reader_data, result_col.children, column_map->child_entries);
+			bool is_list = result_col.type.id() == LogicalTypeId::LIST;
+			result_col.children = MapColumns(reader_data, result_col.children, column_map->child_entries, is_list);
 		}
 	}
 	return result;
@@ -330,6 +348,8 @@ ReaderInitializeType DuckLakeMultiFileReader::CreateMapping(
     ClientContext &context, MultiFileReaderData &reader_data, const vector<MultiFileColumnDefinition> &global_columns,
     const vector<ColumnIndex> &global_column_ids, optional_ptr<TableFilterSet> filters, MultiFileList &multi_file_list,
     const MultiFileReaderBindData &bind_data, const virtual_column_map_t &virtual_columns) {
+	NormalizeListChildNames(reader_data.reader->columns);
+
 	if (reader_data.reader->file.extended_info) {
 		auto &file_options = reader_data.reader->file.extended_info->options;
 		auto entry = file_options.find("mapping_id");

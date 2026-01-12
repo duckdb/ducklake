@@ -1,0 +1,49 @@
+# name: test/sql/data_inlining/data_inlining_filter.test
+# description: Test ducklake data inlining with filter
+# group: [data_inlining]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+
+test-env DATA_PATH __TEST_DIR__
+
+statement ok
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/ducklake_inlining_encryption_files', DATA_INLINING_ROW_LIMIT 10000)
+
+statement ok
+use ducklake
+
+statement ok
+CREATE TABLE IF NOT EXISTS test_data (
+			id VARCHAR NOT NULL,
+			category VARCHAR NOT NULL,
+			created_at TIMESTAMP NOT NULL
+		);
+
+statement ok
+INSERT INTO test_data VALUES ('a_1', 'A', NOW())
+
+statement ok
+INSERT INTO test_data VALUES ('b_1', 'B', NOW())
+
+statement ok
+INSERT INTO test_data VALUES ('a_2', 'A', NOW())
+
+statement ok
+INSERT INTO test_data VALUES ('b_2', 'B', NOW())
+
+statement ok
+INSERT INTO test_data VALUES ('a_3', 'A', NOW())
+
+statement ok
+INSERT INTO test_data VALUES ('b_3', 'B', NOW())
+
+query I
+SELECT id FROM test_data WHERE category='A' ORDER BY created_at DESC LIMIT 3
+----
+a_3
+a_2
+a_1

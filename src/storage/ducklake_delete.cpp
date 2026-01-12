@@ -285,23 +285,17 @@ void DuckLakeDelete::FlushDelete(DuckLakeTransaction &transaction, ClientContext
 
 	auto function_data = copy_fun.function.copy_to_bind(context, bind_input, names_to_write, types_to_write);
 
-	// generate the physical copy to file
-	auto copy_return_types = GetCopyFunctionReturnLogicalTypes(CopyFunctionReturnType::WRITTEN_FILE_STATISTICS);
-	PhysicalPlan plan(Allocator::Get(context));
-	PhysicalCopyToFile copy_to_file(plan, copy_return_types, copy_fun.function, std::move(function_data), 1);
+	auto copy_global_state = copy_fun.function.copy_to_initialize_global(context, *function_data, delete_file_path);
 
-	copy_to_file.use_tmp_file = false;
-	copy_to_file.file_path = delete_file_path;
-	copy_to_file.partition_output = false;
-	copy_to_file.write_empty_file = false;
-	copy_to_file.file_extension = "parquet";
-	copy_to_file.overwrite_mode = CopyOverwriteMode::COPY_OVERWRITE_OR_IGNORE;
-	copy_to_file.per_thread_output = false;
-	copy_to_file.rotate = false;
-	copy_to_file.return_type = CopyFunctionReturnType::WRITTEN_FILE_STATISTICS;
-	copy_to_file.write_partition_columns = false;
+	// set up stats to get them from function
+	CopyFunctionFileStatistics stats;
+	copy_fun.function.copy_to_get_written_statistics(context, *function_data, *copy_global_state, stats);
 
-	// run the copy to file
+	ThreadContext thread_context(context);
+	ExecutionContext execution_context(context, thread_context, nullptr);
+
+	auto copy_local_state = copy_fun.function.copy_to_initialize_local(execution_context, *function_data);
+
 	vector<LogicalType> write_types;
 	write_types.push_back(LogicalType::VARCHAR);
 	write_types.push_back(LogicalType::BIGINT);
@@ -313,52 +307,31 @@ void DuckLakeDelete::FlushDelete(DuckLakeTransaction &transaction, ClientContext
 	Value filename_val(filename);
 	write_chunk.data[0].Reference(filename_val);
 
-	ThreadContext thread_context(context);
-	ExecutionContext execution_context(context, thread_context, nullptr);
-	InterruptState interrupt_state;
-
-	// run the PhysicalCopyToFile Sink pipeline
-	auto gstate = copy_to_file.GetGlobalSinkState(context);
-	auto lstate = copy_to_file.GetLocalSinkState(execution_context);
-
-	OperatorSinkInput sink_input {*gstate, *lstate, interrupt_state};
 	idx_t row_count = 0;
 	auto row_data = FlatVector::GetData<int64_t>(write_chunk.data[1]);
 	for (auto &row_idx : sorted_deletes) {
 		row_data[row_count++] = NumericCast<int64_t>(row_idx);
 		if (row_count >= STANDARD_VECTOR_SIZE) {
 			write_chunk.SetCardinality(row_count);
-			copy_to_file.Sink(execution_context, write_chunk, sink_input);
+			copy_fun.function.copy_to_sink(execution_context, *function_data, *copy_global_state, *copy_local_state,
+			                               write_chunk);
 			row_count = 0;
 		}
 	}
 	if (row_count > 0) {
 		write_chunk.SetCardinality(row_count);
-		copy_to_file.Sink(execution_context, write_chunk, sink_input);
+		copy_fun.function.copy_to_sink(execution_context, *function_data, *copy_global_state, *copy_local_state,
+		                               write_chunk);
 	}
-	OperatorSinkCombineInput combine_input {*gstate, *lstate, interrupt_state};
-	copy_to_file.Combine(execution_context, combine_input);
-	copy_to_file.FinalizeInternal(context, *gstate);
 
-	// now read the stats data
-	copy_to_file.sink_state = std::move(gstate);
-	auto source_state = copy_to_file.GetGlobalSourceState(context);
-	auto local_state = copy_to_file.GetLocalSourceState(execution_context, *source_state);
-	DataChunk stats_chunk;
-	stats_chunk.Initialize(context, copy_to_file.types);
+	copy_fun.function.copy_to_combine(execution_context, *function_data, *copy_global_state, *copy_local_state);
+	copy_fun.function.copy_to_finalize(context, *function_data, *copy_global_state);
 
-	OperatorSourceInput source_input {*source_state, *local_state, interrupt_state};
-	copy_to_file.GetData(execution_context, stats_chunk, source_input);
-
-	if (stats_chunk.size() != 1) {
-		throw InternalException("Expected a single delete file to be written here");
-	}
-	idx_t r = 0;
-	// add to the written files
-	delete_file.file_name = stats_chunk.GetValue(0, r).GetValue<string>();
-	delete_file.delete_count = stats_chunk.GetValue(1, r).GetValue<idx_t>();
-	delete_file.file_size_bytes = stats_chunk.GetValue(2, r).GetValue<idx_t>();
-	delete_file.footer_size = stats_chunk.GetValue(3, r).GetValue<idx_t>();
+	// set the stats to the delete file
+	delete_file.file_name = delete_file_path;
+	delete_file.delete_count = stats.row_count;
+	delete_file.file_size_bytes = stats.file_size_bytes;
+	delete_file.footer_size = stats.footer_size_bytes.GetValue<idx_t>();
 	delete_file.encryption_key = encryption_key;
 	global_state.written_files.emplace(filename, std::move(delete_file));
 }
