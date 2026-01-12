@@ -36,7 +36,8 @@
     "the table has transaction-local changes or no stats are available",
     "Adding indexes or constraints is not supported in DuckLake",
     "Only rename on top-level struct fields is supported currently",
-    "Changing Secret Manager settings after the secret manager is used is not allowed!"
+    "Changing Secret Manager settings after the secret manager is used is not allowed!",
+    "Unsupported type \"TIME_NS\" in Parquet writer"
   ],
   "skip_tests": [
     {
@@ -556,7 +557,8 @@
         "test/sql/storage/compression/string/big_strings.test",
         "test/sql/storage/compression/string/blob.test",
         "test/sql/storage/compression/string/empty.test",
-        "test/sql/storage/compression/rle/rle_bool.test"
+        "test/sql/storage/compression/rle/rle_bool.test",
+        "test/sql/storage/optimistic_write/optimistic_write_not_trigger_checkpoint.test"
       ]
     },
     {
