@@ -411,13 +411,21 @@ FROM parquet_full_metadata(%s)
 			}
 
 			if (stats_null_count_validity.RowIsValid(metadata_idx)) {
-				stats.has_null_count = true;
-				stats.null_count = stats_null_count_data[metadata_idx];
+				auto null_count = stats_null_count_data[metadata_idx];
+				// Guard against negative values (indicates an underflow in parquet reader)
+				if (null_count >= 0) {
+					stats.has_null_count = true;
+					stats.null_count = static_cast<idx_t>(null_count);
+				}
 			}
 
 			if (stats_num_values_validity.RowIsValid(metadata_idx)) {
-				stats.has_num_values = true;
-				stats.num_values = stats_num_values_data[metadata_idx];
+				auto num_values = stats_num_values_data[metadata_idx];
+				// Guard against negative values (indicates an underflow in parquet reader)
+				if (num_values >= 0) {
+					stats.has_num_values = true;
+					stats.num_values = static_cast<idx_t>(num_values);
+				}
 			}
 
 			if (total_compressed_size_validity.RowIsValid(metadata_idx)) {
