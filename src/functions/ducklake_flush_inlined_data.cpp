@@ -85,19 +85,32 @@ ORDER BY row_id;)",
 
 		auto &fs = FileSystem::GetFileSystem(context);
 
+		// Get the minimum row_id from the inlined table to compute the offset
+		// Row_ids in the inlined table are absolute, not starting from 0
+		auto min_row_id_result = transaction.Query(snapshot, StringUtil::Format(R"(
+SELECT MIN(row_id)
+FROM {METADATA_CATALOG}.%s;)",
+		                                                                        inlined_table.table_name));
+		idx_t row_id_offset = 0;
+		for (auto &row : *min_row_id_result) {
+			if (!row.IsNull(0)) {
+				row_id_offset = NumericCast<idx_t>(row.GetValue<int64_t>(0));
+			}
+		}
+
 		unordered_map<idx_t, unordered_map<string, vector<idx_t>>> deletes_by_snapshot;
 
 		idx_t current_pos = 0;
 		for (auto &written_file : global_state.written_files) {
 			idx_t file_row_count = written_file.row_count;
-			idx_t file_start_pos = current_pos;
+			idx_t file_start_row_id = row_id_offset + current_pos;
 
 			for (auto &deleted : deleted_row_info) {
 				idx_t row_id = deleted.first;
 				idx_t end_snapshot_val = deleted.second;
 
-				if (row_id >= file_start_pos && row_id < file_start_pos + file_row_count) {
-					idx_t pos_in_file = row_id - file_start_pos;
+				if (row_id >= file_start_row_id && row_id < file_start_row_id + file_row_count) {
+					idx_t pos_in_file = row_id - file_start_row_id;
 					deletes_by_snapshot[end_snapshot_val][written_file.file_name].push_back(pos_in_file);
 				}
 			}
