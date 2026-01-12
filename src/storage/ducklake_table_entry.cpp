@@ -360,7 +360,7 @@ string GetPartitionColumnName(ColumnRefExpression &colref) {
 string GetSortColumnName(DuckLakeTableEntry &table, ParsedExpression &expr) {
 	// Only allow column references, reject expressions
 	if (expr.type != ExpressionType::COLUMN_REF) {
-		throw BinderException("SET SORTED BY only supports column references, not expressions: %s", expr.ToString());
+		throw NotImplementedException("SET SORTED BY only supports column references, not expressions: %s", expr.ToString());
 	}
 	auto &colref = expr.Cast<ColumnRefExpression>();
 	if (colref.IsQualified()) {

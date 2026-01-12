@@ -594,12 +594,12 @@ ORDER BY sort.table_id, sort.sort_id, sort_expr.sort_key_index
 		sort_field.expression = row.GetValue<string>(3);
 		sort_field.dialect = row.GetValue<string>(4);
 
-		std::string sort_direction_str = StringUtil::Upper(row.GetValue<string>(5));
-		sort_field.sort_direction = (sort_direction_str == "DESC" ? OrderType::DESCENDING : OrderType::ASCENDING);
+		auto sort_direction_str = row.GetValue<string>(5);
+		sort_field.sort_direction = (StringUtil::CIEquals(sort_direction_str, "DESC") ? OrderType::DESCENDING : OrderType::ASCENDING);
 
-		std::string null_order_str = StringUtil::Upper(row.GetValue<string>(6));
+		auto null_order_str = row.GetValue<string>(6);
 		sort_field.null_order =
-		    (null_order_str == "NULLS_FIRST" ? OrderByNullType::NULLS_FIRST : OrderByNullType::NULLS_LAST);
+		    (StringUtil::CIEquals(null_order_str, "NULLS_FIRST") ? OrderByNullType::NULLS_FIRST : OrderByNullType::NULLS_LAST);
 		sort_entry.fields.push_back(std::move(sort_field));
 	}
 
@@ -2768,17 +2768,9 @@ WHERE table_id IN (%s) AND end_snapshot IS NULL
 	return batch_query;
 }
 
-static unordered_map<idx_t, DuckLakeSortInfo> GetNewSorts(const vector<DuckLakeSortInfo> &old_sorts,
-                                                          const vector<DuckLakeSortInfo> &new_sorts) {
-	unordered_map<idx_t, DuckLakeSortInfo> new_sort_map;
-
-	for (auto &sort : new_sorts) {
-		new_sort_map[sort.table_id.index] = sort;
-	}
-
-	unordered_set<idx_t> old_sort_set;
+void CheckTableSortEqual(const vector<DuckLakeSortInfo> &old_sorts, 
+						 unordered_map<idx_t, DuckLakeSortInfo> &new_sort_map) {
 	for (auto &sort : old_sorts) {
-		old_sort_set.insert(sort.table_id.index);
 		if (new_sort_map.find(sort.table_id.index) != new_sort_map.end()) {
 			if (new_sort_map[sort.table_id.index] == sort) {
 				// If a new sort already exists in an old sort, it's a nop, we can remove it
@@ -2786,7 +2778,9 @@ static unordered_map<idx_t, DuckLakeSortInfo> GetNewSorts(const vector<DuckLakeS
 			}
 		}
 	}
+}
 
+void CheckTableSortReset(const unordered_set<idx_t> &old_sort_set, const vector<DuckLakeSortInfo> &new_sorts, unordered_map<idx_t, DuckLakeSortInfo> &new_sort_map) {
 	vector<idx_t> sort_ids_to_erase;
 	for (auto &sort : new_sorts) {
 		if (old_sort_set.find(sort.table_id.index) == old_sort_set.end() && sort.fields.empty()) {
@@ -2798,6 +2792,21 @@ static unordered_map<idx_t, DuckLakeSortInfo> GetNewSorts(const vector<DuckLakeS
 	for (auto &id : sort_ids_to_erase) {
 		new_sort_map.erase(id);
 	}
+}
+
+static unordered_map<idx_t, DuckLakeSortInfo> GetNewSorts(const vector<DuckLakeSortInfo> &old_sorts,
+                                                          const vector<DuckLakeSortInfo> &new_sorts) {
+	unordered_map<idx_t, DuckLakeSortInfo> new_sort_map;
+	for (auto &sort : new_sorts) {
+		new_sort_map[sort.table_id.index] = sort;
+	}
+	unordered_set<idx_t> old_sort_set;
+	for (auto &sort : old_sorts) {
+		old_sort_set.insert(sort.table_id.index);
+	}
+	CheckTableSortEqual(old_sorts, new_sort_map);
+	CheckTableSortReset(old_sort_set, new_sorts, new_sort_map);
+
 	return new_sort_map;
 }
 

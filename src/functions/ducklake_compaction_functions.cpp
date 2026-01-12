@@ -283,7 +283,7 @@ unique_ptr<LogicalOperator> DuckLakeCompactor::InsertSort(Binder &binder, unique
 
 	vector<std::string> unmatching_names;
 	for (auto &pre_bound_order : pre_bound_orders) {
-		std::string name = pre_bound_order.expression->GetName();
+		auto name = pre_bound_order.expression->GetName();
 		auto order_idx_check = alias_map.find(name);
 		if (order_idx_check != alias_map.end()) {
 			auto order_idx = order_idx_check->second;
