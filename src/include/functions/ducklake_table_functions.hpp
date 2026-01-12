@@ -127,7 +127,7 @@ public:
 
 class DuckLakeAddDataFilesFunction : public TableFunction {
 public:
-	DuckLakeAddDataFilesFunction();
+	static TableFunctionSet GetFunctions();
 };
 
 } // namespace duckdb

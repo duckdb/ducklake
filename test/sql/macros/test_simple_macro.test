@@ -1,0 +1,92 @@
+# name: test/sql/macros/test_simple_macro.test
+# description: test simple macros with ducklake
+# group: [macros]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+
+test-env DATA_PATH __TEST_DIR__
+
+statement ok
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/test_simple_macro');
+
+statement ok
+use ducklake
+
+statement ok
+CREATE MACRO simple(a) AS a;
+
+query I
+select simple(1)
+----
+1
+
+# # Check Macro Tables
+query IIIII
+FROM __ducklake_metadata_ducklake.ducklake_macro;
+----
+0	1	simple	1	NULL
+
+query IIIII
+FROM __ducklake_metadata_ducklake.ducklake_macro_impl;
+----
+1	0	duckdb	a	scalar
+
+query IIIIIII
+FROM __ducklake_metadata_ducklake.ducklake_macro_parameters;
+----
+1	0	0	a	unknown	NULL	unknown
+
+statement ok
+drop macro simple;
+
+query II
+SELECT begin_snapshot, end_snapshot FROM __ducklake_metadata_ducklake.ducklake_macro;
+----
+1	2
+
+statement error
+select simple(1)
+----
+Scalar Function with name simple does not exist!
+
+
+query II
+select snapshot_id, changes FROM snapshots()
+----
+0	{schemas_created=[main]}
+1	{scalar_macros_created=['main."simple"']}
+2	{scalar_macros_dropped=[1]}
+
+# We can recreate it and that's fine
+
+statement ok
+CREATE MACRO simple(a) AS a;
+
+query I
+select simple(1)
+----
+1
+
+# It now gets a new id
+query IIIII
+FROM __ducklake_metadata_ducklake.ducklake_macro;
+----
+0	1	simple	1	2
+0	2	simple	3	NULL
+
+query II
+select snapshot_id, changes FROM snapshots()
+----
+0	{schemas_created=[main]}
+1	{scalar_macros_created=['main."simple"']}
+2	{scalar_macros_dropped=[1]}
+3	{scalar_macros_created=['main."simple"']}
+
+statement error
+CREATE MACRO simple(a) AS a;
+----
+Macro Function with name "simple" already exists

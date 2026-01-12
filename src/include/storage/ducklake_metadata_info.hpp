@@ -18,6 +18,7 @@
 #include "common/ducklake_data_file.hpp"
 #include "common/ducklake_name_map.hpp"
 #include "storage/ducklake_inlined_data.hpp"
+#include "duckdb/parser/parsed_expression.hpp"
 
 namespace duckdb {
 
@@ -70,6 +71,7 @@ struct DuckLakeColumnInfo {
 	string type;
 	Value initial_default;
 	Value default_value;
+	string default_value_type;
 	bool nulls_allowed {};
 	vector<DuckLakeColumnInfo> children;
 	vector<DuckLakeTag> tags;
@@ -89,6 +91,30 @@ struct DuckLakeTableInfo {
 	vector<DuckLakeColumnInfo> columns;
 	vector<DuckLakeTag> tags;
 	vector<DuckLakeInlinedTableInfo> inlined_data_tables;
+};
+
+//! Stores the information on macro parameters
+struct DuckLakeMacroParameters {
+	string parameter_name;
+	string parameter_type;
+	Value default_value;
+	string default_value_type;
+};
+
+//! Stores information on macro implementations, since one macro can have multiple implementations
+struct DuckLakeMacroImplementation {
+	string dialect;
+	string sql;
+	string type;
+	vector<DuckLakeMacroParameters> parameters;
+};
+
+//! Stores the actual macro info
+struct DuckLakeMacroInfo {
+	SchemaIndex schema_id;
+	MacroIndex macro_id;
+	string macro_name;
+	vector<DuckLakeMacroImplementation> implementations;
 };
 
 struct DuckLakeColumnStatsInfo {
@@ -267,6 +293,7 @@ struct DuckLakeCatalogInfo {
 	vector<DuckLakeSchemaInfo> schemas;
 	vector<DuckLakeTableInfo> tables;
 	vector<DuckLakeViewInfo> views;
+	vector<DuckLakeMacroInfo> macros;
 	vector<DuckLakePartitionInfo> partitions;
 };
 

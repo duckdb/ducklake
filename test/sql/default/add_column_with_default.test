@@ -81,6 +81,14 @@ ${finaltransaction}
 
 endloop
 
+query IIIIII
+SELECT table_id, column_id, initial_default, default_value, default_value_type, default_value_dialect FROM xx.ducklake_column
+----
+1	1	NULL	NULL	literal	duckdb
+1	2	42	42	literal	duckdb
+1	1	NULL	1000	literal	duckdb
+1	2	42	NULL	literal	duckdb
+
 statement ok
 INSERT INTO ducklake.test DEFAULT VALUES
 

@@ -142,9 +142,9 @@ void DuckLakeInitializer::LoadExistingDuckLake(DuckLakeTransaction &transaction)
 	for (auto &tag : metadata.tags) {
 		if (tag.key == "version") {
 			string version = tag.value;
-			if (version != "0.3" && !options.migrate_if_required) {
+			if (version != "0.4-dev1" && !options.migrate_if_required) {
 				// Throw when Loading the Ducklake if a Migration is required and migrate_if_required option is false
-				throw InvalidInputException("DuckLake Extension requires a DuckLake Catalog version of 0.3 or "
+				throw InvalidInputException("DuckLake Extension requires a DuckLake Catalog version of 0.4-dev1 or "
 				                            "higher, current version is %s "
 				                            "and migrate_if_required is set to false",
 				                            version);
@@ -161,8 +161,12 @@ void DuckLakeInitializer::LoadExistingDuckLake(DuckLakeTransaction &transaction)
 				metadata_manager.MigrateV02(true);
 				version = "0.3";
 			}
-			if (version != "0.3") {
-				throw NotImplementedException("Only DuckLake versions 0.1, 0.2, 0.3-dev1 and 0.3 are supported");
+			if (version == "0.3") {
+				metadata_manager.MigrateV03();
+				version = "0.4-dev1";
+			}
+			if (version != "0.4-dev1") {
+				throw NotImplementedException("Only DuckLake versions 0.1, 0.2, 0.3-dev1, 0.3, 0.4-dev1 are supported");
 			}
 		}
 		if (tag.key == "data_path") {

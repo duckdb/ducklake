@@ -126,8 +126,9 @@ public:
 		return require == "true";
 	}
 
-	bool UseHiveFilePattern(bool default_value) const {
-		auto hive_file_pattern = GetConfigOption<string>("hive_file_pattern", {}, {}, default_value ? "true" : "false");
+	bool UseHiveFilePattern(bool default_value, SchemaIndex schema_id, TableIndex table_id) const {
+		auto hive_file_pattern =
+		    GetConfigOption<string>("hive_file_pattern", schema_id, table_id, default_value ? "true" : "false");
 		return hive_file_pattern == "true";
 	}
 

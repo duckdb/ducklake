@@ -1,0 +1,106 @@
+# name: test/sql/macros/test_macro_transactions.test
+# description: test macros are transaction safe
+# group: [macros]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+
+test-env DATA_PATH __TEST_DIR__
+
+statement ok
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/test_macro_transactions');
+
+statement ok
+use ducklake
+
+# transaction-local macro drop and re-create
+statement ok
+CREATE MACRO simple(a) AS a;
+
+statement ok
+BEGIN
+
+statement error
+CREATE MACRO simple(a) AS a;
+----
+Macro Function with name "simple" already exists
+
+statement ok
+DROP MACRO simple
+
+statement error
+select simple(1)
+----
+does not exist
+
+statement ok
+CREATE MACRO simple(a) AS a;
+
+query I
+select simple(1)
+----
+1
+
+statement ok
+COMMIT
+
+query I
+select simple(1)
+----
+1
+
+# Check schema drop in transaction
+
+statement ok
+CREATE SCHEMA test;
+
+statement ok
+CREATE MACRO test.simple(a) AS a;
+
+statement ok
+BEGIN
+
+statement error
+DROP schema test;
+----
+CASCADE
+
+statement ok
+DROP MACRO test.simple
+
+statement ok
+DROP schema test;
+
+statement ok
+COMMIT
+
+# Create and drop macro in same transaction
+statement ok
+BEGIN
+
+statement error
+CREATE MACRO simple(a) AS a;
+----
+Macro Function with name "simple" already exists
+
+statement ok
+DROP MACRO simple
+
+statement error
+select simple(1)
+----
+does not exist
+
+statement ok
+CREATE MACRO simple(a) AS a;
+
+query I
+select simple(1)
+----
+1
+
+statement ok
+COMMIT

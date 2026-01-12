@@ -12,7 +12,6 @@
 namespace duckdb {
 
 struct CleanupBindData : public TableFunctionData {
-
 	explicit CleanupBindData(Catalog &catalog, CleanupType type) : catalog(catalog), type(type) {
 	}
 
@@ -138,9 +137,12 @@ void DuckLakeCleanupExecute(ClientContext &context, TableFunctionInput &data_p, 
 	if (!state.executed && !data.dry_run) {
 		// delete the files
 		auto &fs = FileSystem::GetFileSystem(context);
-		for (auto &file : data.files) {
-			fs.TryRemoveFile(file.path);
+		vector<string> paths;
+		paths.reserve(data.files.size());
+		for (const auto &file : data.files) {
+			paths.push_back(file.path);
 		}
+		fs.RemoveFiles(paths);
 		if (data.type == CleanupType::OLD_FILES) {
 			// If we are removing old files, we need to remove them from the catalog
 			auto &transaction = DuckLakeTransaction::Get(context, data.catalog);

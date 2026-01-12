@@ -20,7 +20,6 @@
     "DuckLake does not support generated columns",
     "RETURNING clause",
     "DuckLake does not support sequences",
-    "DuckLake does not support functions",
     "DuckLake does not support user-defined types",
     "Parquet files do not support negative intervals",
     "The same row was updated multiple times - this is not (yet) supported in DuckLake",
@@ -30,14 +29,15 @@
     "CHECK constraints are not supported in DuckLake",
     "Defining a compression type for a column is not supported in DuckLake",
     "FOREIGN KEY constraints are not supported in DuckLake",
-    "Only literals (e.g. 42 or 'hello world') are supported as default values",
     "Column type cannot be modified using an expression",
     "Default value for STRUCT type not supported",
     "Default value for LIST type not supported",
     "only widening type promotions are allowed",
     "the table has transaction-local changes or no stats are available",
     "Adding indexes or constraints is not supported in DuckLake",
-    "Only rename on top-level struct fields is supported currently"
+    "Only rename on top-level struct fields is supported currently",
+    "Changing Secret Manager settings after the secret manager is used is not allowed!",
+    "Unsupported type \"TIME_NS\" in Parquet writer"
   ],
   "skip_tests": [
     {
@@ -75,7 +75,8 @@
         "test/sql/table_function/duckdb_databases.test",
         "test/sql/table_function/sqlite_master.test",
         "test/sql/table_function/duckdb_columns.test",
-        "test/sql/table_function/sqlite_master_quotes.test"
+        "test/sql/table_function/sqlite_master_quotes.test",
+        "test/sql/storage/read_duckdb/read_duckdb_basic.test"
       ]
     },
     {
@@ -104,7 +105,10 @@
         "test/sql/logging/test_logging_function.test",
         "test/sql/logging/logging_types.test",
         "test/sql/logging/logging.test",
-        "test/sql/logging/logging_csv.test"
+        "test/sql/logging/logging_csv.test",
+        "test/sql/storage/compression/roaring/roaring_bool_analyze_bitset.test",
+        "test/sql/storage/compression/roaring/roaring_bool_analyze_run.test",
+        "test/sql/storage/compression/roaring/roaring_bool_analyze_array.test"
       ]
     },
     {
@@ -126,7 +130,17 @@
         "test/optimizer/sampling_pushdown.test",
         "test/sql/explain/explain_execute.test",
         "test/optimizer/pushdown/pushdown_filter_on_coalesced_equal_outer_join_keys.test",
-        "test/optimizer/pushdown/filters_on_limit_optimizer.test"
+        "test/optimizer/topn_window_elimination.test",
+        "test/optimizer/pushdown/filter_cannot_pushdown.test",
+        "test/optimizer/pushdown/filters_on_limit_optimizer.test",
+        "test/sql/explain/test_explain_table_scan.test",
+        "test/sql/types/struct/struct_projection_pushdown_in_storage.test"
+      ]
+    },
+    {
+      "reason": "Profiling",
+      "paths": [
+        "test/sql/pragma/profiling/test_custom_profiling_rows_scanned.test"
       ]
     },
     {
@@ -173,7 +187,8 @@
         "test/sql/alter/list/add_column_in_struct.test",
         "test/sql/transactions/conflict_drop_then_delete.test",
         "test/sql/transactions/test_create_drop_conflict.test",
-        "test/sql/transactions/test_create_drop_conflict_variation1.test"
+        "test/sql/transactions/test_create_drop_conflict_variation1.test",
+        "test/sql/copy/parquet/parquet_glob.test"
       ]
     },
     {
@@ -252,7 +267,8 @@
         "test/sql/copy/parquet/writer/parquet_write_memory_usage.test",
         "test/fuzzer/sqlsmith/nullif_map_with_config.test",
         "test/sql/storage/buffer_manager_temp_dir.test",
-        "test/issues/internal/test_5457.test"
+        "test/issues/internal/test_5457.test",
+        "test/sql/copy/csv/code_cov/csv_disk_reload.test"
       ]
     },
     {
@@ -286,7 +302,8 @@
         "test/sql/storage/bc/internal_schemas_0102.test",
         "test/sql/storage/unzip.test",
         "test/sql/storage/icu_collation.test",
-        "test/sql/attach/attach_read_only.test"
+        "test/sql/attach/attach_read_only.test",
+        "test/sql/storage/checkpoint/checkpoint_with_outstanding_insertions.test"
       ]
     },
     {
@@ -430,7 +447,22 @@
         "test/sql/types/nested/map/test_map_subscript.test",
         "test/sql/types/nested/map/test_map_subscript_composite.test",
         "test/sql/subquery/scalar/test_scalar_subquery.test",
-        "test/sql/json/test_json_macros.test"
+        "test/sql/json/test_json_macros.test",
+        "test/issues/monetdb/test_boolean_not.test",
+        "test/sql/join/asof/test_asof_join_filter_pushdown.test",
+        "test/sql/copy/parquet/parquet_1588.test"
+      ]
+    },
+    {
+      "reason": "FIXME: Logical Operator Copy requires the logical operator and all of its children to be serializable: DuckLakeScan not implemented",
+      "paths": [
+        "test/sql/optimizer/test_window_self_join.test"
+      ]
+    },
+    {
+      "reason": "FIXME: Wrong result",
+      "paths": [
+        "test/sql/join/positional/test_positional_join.test"
       ]
     },
     {
@@ -440,9 +472,41 @@
       ]
     },
     {
+      "reason": "RowID order - SELECT (SELECT rowid FROM a LIMIT 1) - No guarantee from DuckLake to be ordered",
+      "paths": [
+        "test/sql/projection/test_row_id_expression.test"
+      ]
+    },
+    {
       "reason": "Prepared statement differs from original result!",
       "paths": [
         "test/sql/function/generic/test_connection_count.test"
+        ]
+    },
+     {
+      "reason": "FIXME: DuckTransaction::Get called on non-DuckDB transaction",
+      "paths": [
+        "test/sql/function/timestamp/test_icu_makedate.test"
+        ]
+    },
+    {
+      "reason": "FIXME: Macros are currently not taken in for recursion",
+      "paths": [
+        "test/sql/catalog/function/test_recursive_macro.test"
+        ]
+    },
+    {
+      "reason": " Failed to parse DuckLake type - unsupported nested type",
+      "paths": [
+        "test/sql/catalog/function/test_macro_issue_13104.test"
+        ]
+    },
+    {
+      "reason": "Expected different behavior between duckdb and ducklake wrt macros. Notice these are not ducklake bugs just tests that do not fit.",
+      "paths": [
+        "test/sql/catalog/function/test_table_macro_copy.test",
+        "test/sql/catalog/function/test_macro_type_overloads.test",
+        "test/sql/pragma/test_table_info.test"
         ]
     },
     {
@@ -486,7 +550,15 @@
         "test/sql/storage/optimistic_write/optimistic_write_temp_table.test",
         "test/sql/timezone/disable_timestamptz_casts.test",
         "test/sql/types/timestamp/test_timestamp_tz.test",
-        "test/sql/update/test_cascading_updates.test"
+        "test/sql/update/test_cascading_updates.test",
+        "test/sql/storage/compression/string/simple.test",
+        "test/sql/storage/compression/string/filter_pushdown.test",
+        "test/sql/storage/compression/string/index_fetch.test",
+        "test/sql/storage/compression/string/big_strings.test",
+        "test/sql/storage/compression/string/blob.test",
+        "test/sql/storage/compression/string/empty.test",
+        "test/sql/storage/compression/rle/rle_bool.test",
+        "test/sql/storage/optimistic_write/optimistic_write_not_trigger_checkpoint.test"
       ]
     },
     {

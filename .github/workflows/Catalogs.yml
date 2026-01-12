@@ -74,11 +74,11 @@ jobs:
 
     - name: Test SQLite
       run: |
-        build/release/test/unittest --test-config test/configs/sqlite.json
+        build/release/test/unittest --test-config test/configs/sqlite.json --test-dir ./ "test/sql/*"
 
     - name: Test Postgres
       env:
         PGSERVICE: postgres
       run: |
         createdb ducklakedb
-        build/release/test/unittest --test-config test/configs/postgres.json
+        build/release/test/unittest --test-config test/configs/postgres.json --test-dir ./ "test/sql/*"

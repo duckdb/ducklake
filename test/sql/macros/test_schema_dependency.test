@@ -1,0 +1,45 @@
+# name: test/sql/macros/test_schema_dependency.test
+# group: [macros]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+
+test-env DATA_PATH __TEST_DIR__
+
+statement ok
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/test_schema_dependency');
+
+statement ok
+use ducklake
+
+statement ok
+CREATE SCHEMA test;
+
+statement ok
+CREATE MACRO test.simple(a) AS a;
+
+statement ok
+CREATE TABLE test.test_tbl (id INT, name string);
+
+statement ok
+CREATE MACRO test.xt(a,_name) as TABLE SELECT * FROM test.test_tbl WHERE(id>=a or name=_name);
+
+# Check Macro Tables
+query IIIII
+FROM __ducklake_metadata_ducklake.ducklake_macro;
+----
+1	2	simple	2	NULL
+1	4	xt	4	NULL
+
+statement ok
+DROP SCHEMA test CASCADE;
+
+# Check Macro Tables
+query IIIII
+FROM __ducklake_metadata_ducklake.ducklake_macro;
+----
+1	2	simple	2	5
+1	4	xt	4	5

@@ -138,6 +138,8 @@ public:
 	virtual string DropSchemas(const set<SchemaIndex> &ids);
 	virtual string DropTables(const set<TableIndex> &ids, bool renamed);
 	virtual string DropViews(const set<TableIndex> &ids);
+	virtual string DropMacros(const set<MacroIndex> &ids);
+
 	virtual string WriteNewSchemas(const vector<DuckLakeSchemaInfo> &new_schemas);
 	virtual string WriteNewTables(DuckLakeSnapshot commit_snapshot, const vector<DuckLakeTableInfo> &new_tables,
 	                              vector<DuckLakeSchemaInfo> &new_schemas_result);
@@ -164,6 +166,8 @@ public:
 	virtual string WriteNewDeleteFiles(const vector<DuckLakeDeleteFileInfo> &new_delete_files,
 	                                   const vector<DuckLakeTableInfo> &new_tables,
 	                                   vector<DuckLakeSchemaInfo> &new_schemas_result);
+	virtual string WriteNewMacros(const vector<DuckLakeMacroInfo> &new_macros);
+
 	virtual vector<DuckLakeColumnMappingInfo> GetColumnMappings(optional_idx start_from);
 	virtual string WriteNewColumnMappings(const vector<DuckLakeColumnMappingInfo> &new_column_mappings);
 	virtual string WriteMergeAdjacent(const vector<DuckLakeCompactedFileInfo> &compactions);
@@ -190,7 +194,7 @@ public:
 	                                                                 const string &inlined_table_name,
 	                                                                 const vector<string> &columns_to_read);
 	virtual void DeleteInlinedData(const DuckLakeInlinedTableInfo &inlined_table);
-	virtual string InsertNewSchema(const DuckLakeSnapshot &snapshot);
+	virtual string InsertNewSchema(const DuckLakeSnapshot &snapshot, const set<TableIndex> &table_ids);
 
 	virtual vector<DuckLakeSnapshotInfo> GetAllSnapshots(const string &filter = string());
 	virtual void DeleteSnapshots(const vector<DuckLakeSnapshotInfo> &snapshots);
@@ -199,9 +203,11 @@ public:
 	virtual string GetPathForSchema(SchemaIndex schema_id, vector<DuckLakeSchemaInfo> &new_schemas_result);
 	virtual string GetPathForTable(TableIndex table_id, const vector<DuckLakeTableInfo> &new_tables,
 	                               const vector<DuckLakeSchemaInfo> &new_schemas_result);
-
+	virtual bool IsColumnCreatedWithTable(const string &table_name, const string &column_name);
 	virtual void MigrateV01();
 	virtual void MigrateV02(bool allow_failures = false);
+	virtual void MigrateV03(bool allow_failures = false);
+	virtual void ExecuteMigration(string migrate_query, bool allow_failures);
 
 	string LoadPath(string path);
 	string StorePath(string path);

@@ -6,6 +6,7 @@
     "core_functions",
     "parquet",
     "ducklake",
+    "httpfs",
     "postgres_scanner",
     "icu",
     "httpfs"

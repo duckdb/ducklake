@@ -84,12 +84,32 @@ vector<Value> DuckLakeSnapshotsFunction::GetSnapshotValues(const DuckLakeSnapsho
 
 	case_insensitive_map_t<case_insensitive_set_t> created_tables;
 	case_insensitive_map_t<case_insensitive_set_t> created_views;
+	case_insensitive_map_t<case_insensitive_set_t> created_table_macros;
+	case_insensitive_map_t<case_insensitive_set_t> created_scalar_macros;
 	for (auto &entry : other_changes.created_tables) {
 		for (auto &sub_entry : entry.second) {
 			if (sub_entry.second == "table") {
 				created_tables[entry.first].insert(sub_entry.first);
 			} else {
 				created_views[entry.first].insert(sub_entry.first);
+			}
+		}
+	}
+	for (auto &entry : other_changes.created_scalar_macros) {
+		for (auto &sub_entry : entry.second) {
+			if (sub_entry.second == "scalar_macro") {
+				created_scalar_macros[entry.first].insert(sub_entry.first);
+			} else {
+				throw InternalException("Unexpected type for macro in GetSnapshotValues");
+			}
+		}
+	}
+	for (auto &entry : other_changes.created_table_macros) {
+		for (auto &sub_entry : entry.second) {
+			if (sub_entry.second == "table_macro") {
+				created_table_macros[entry.first].insert(sub_entry.first);
+			} else {
+				throw InternalException("Unexpected type for macro in GetSnapshotValues");
 			}
 		}
 	}
@@ -102,11 +122,21 @@ vector<Value> DuckLakeSnapshotsFunction::GetSnapshotValues(const DuckLakeSnapsho
 		change_keys.emplace_back("views_created");
 		change_values.push_back(CatalogListToValue(created_views));
 	}
+	if (!created_scalar_macros.empty()) {
+		change_keys.emplace_back("scalar_macros_created");
+		change_values.push_back(CatalogListToValue(created_scalar_macros));
+	}
+	if (!created_table_macros.empty()) {
+		change_keys.emplace_back("table_macros_created");
+		change_values.push_back(CatalogListToValue(created_table_macros));
+	}
 	PushIDChangeList(change_keys, change_values, other_changes.dropped_tables, "tables_dropped");
 	PushIDChangeList(change_keys, change_values, other_changes.altered_tables, "tables_altered");
 	PushIDChangeList(change_keys, change_values, other_changes.inserted_tables, "tables_inserted_into");
 	PushIDChangeList(change_keys, change_values, other_changes.tables_deleted_from, "tables_deleted_from");
 	PushIDChangeList(change_keys, change_values, other_changes.dropped_views, "views_dropped");
+	PushIDChangeList(change_keys, change_values, other_changes.dropped_scalar_macros, "scalar_macros_dropped");
+	PushIDChangeList(change_keys, change_values, other_changes.dropped_table_macros, "table_macros_dropped");
 	PushIDChangeList(change_keys, change_values, other_changes.altered_views, "views_altered");
 	PushIDChangeList(change_keys, change_values, other_changes.tables_inserted_inlined, "inlined_insert");
 	PushIDChangeList(change_keys, change_values, other_changes.tables_deleted_inlined, "inlined_delete");

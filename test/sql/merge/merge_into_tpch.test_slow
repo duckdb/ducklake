@@ -59,5 +59,3 @@ FROM ducklake.random_lineitem EXCEPT FROM lineitem
 
 statement ok
 DROP TABLE ducklake.random_lineitem
-
-endloop

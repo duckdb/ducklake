@@ -16,9 +16,11 @@ DuckLakeColumnStats::DuckLakeColumnStats(const DuckLakeColumnStats &other) {
 	min = other.min;
 	max = other.max;
 	null_count = other.null_count;
+	num_values = other.num_values;
 	column_size_bytes = other.column_size_bytes;
 	contains_nan = other.contains_nan;
 	has_null_count = other.has_null_count;
+	has_num_values = other.has_num_values;
 	has_min = other.has_min;
 	has_max = other.has_max;
 	any_valid = other.any_valid;
@@ -37,11 +39,13 @@ DuckLakeColumnStats &DuckLakeColumnStats::operator=(const DuckLakeColumnStats &o
 	min = other.min;
 	max = other.max;
 	null_count = other.null_count;
+	num_values = other.num_values;
 	column_size_bytes = other.column_size_bytes;
 	contains_nan = other.contains_nan;
 	has_null_count = other.has_null_count;
 	has_min = other.has_min;
 	has_max = other.has_max;
+	has_num_values = other.has_num_values;
 	any_valid = other.any_valid;
 	has_contains_nan = other.has_contains_nan;
 
@@ -63,6 +67,12 @@ void DuckLakeColumnStats::MergeStats(const DuckLakeColumnStats &new_stats) {
 	} else if (has_null_count) {
 		// both stats have a null count - add them up
 		null_count += new_stats.null_count;
+	}
+	if (!new_stats.has_num_values) {
+		has_num_values = false;
+	} else if (has_num_values) {
+		// both stats have a null count - add them up
+		num_values += new_stats.num_values;
 	}
 	column_size_bytes += new_stats.column_size_bytes;
 	if (!new_stats.has_contains_nan) {
@@ -241,7 +251,6 @@ void DuckLakeColumnGeoStats::Merge(const DuckLakeColumnExtraStats &new_stats) {
 }
 
 string DuckLakeColumnGeoStats::Serialize() const {
-
 	// Format as JSON
 	auto xmin_val = xmin == NumericLimits<double>::Maximum() ? "null" : std::to_string(xmin);
 	auto xmax_val = xmax == NumericLimits<double>::Minimum() ? "null" : std::to_string(xmax);

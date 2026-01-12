@@ -35,8 +35,8 @@ DuckLakeCompaction::DuckLakeCompaction(PhysicalPlan &physical_plan, const vector
 //===--------------------------------------------------------------------===//
 // GetData
 //===--------------------------------------------------------------------===//
-SourceResultType DuckLakeCompaction::GetData(ExecutionContext &context, DataChunk &chunk,
-                                             OperatorSourceInput &input) const {
+SourceResultType DuckLakeCompaction::GetDataInternal(ExecutionContext &context, DataChunk &chunk,
+                                                     OperatorSourceInput &input) const {
 	return SourceResultType::FINISHED;
 }
 
@@ -539,17 +539,16 @@ static void GenerateCompaction(ClientContext &context, DuckLakeTransaction &tran
 		throw InternalException("Compaction type not recognized");
 	}
 }
-unique_ptr<LogicalOperator> BindCompaction(ClientContext &context, TableFunctionBindInput &input, idx_t bind_index,
-                                           CompactionType type) {
-	auto &catalog = BaseMetadataFunction::GetCatalog(context, input.inputs[0]);
-	auto &ducklake_catalog = catalog.Cast<DuckLakeCatalog>();
-	auto &transaction = DuckLakeTransaction::Get(context, ducklake_catalog);
 
-	auto schema = ducklake_catalog.GetConfigOption<string>("compaction_schema", {}, {}, "");
-	auto table = ducklake_catalog.GetConfigOption<string>("compaction_table", {}, {}, "");
-
+double GetDeleteThreshold(optional_ptr<DuckLakeSchemaEntry> schema_entry, const DuckLakeTableEntry &table_entry,
+                          const DuckLakeCatalog &ducklake_catalog, const TableFunctionBindInput &input) {
+	SchemaIndex schema_index;
+	if (schema_entry) {
+		schema_index = schema_entry->GetSchemaId();
+	}
 	// By default, our delete threshold is 0.95 unless it was set in the global rewrite_delete_threshold
-	double delete_threshold = ducklake_catalog.GetConfigOption<double>("rewrite_delete_threshold", {}, {}, 0.95);
+	double delete_threshold = ducklake_catalog.GetConfigOption<double>("rewrite_delete_threshold", schema_index,
+	                                                                   table_entry.GetTableId(), 0.95);
 	auto delete_threshold_entry = input.named_parameters.find("delete_threshold");
 	if (delete_threshold_entry != input.named_parameters.end()) {
 		// If the user manually sets the parameter, this has priority
@@ -558,7 +557,15 @@ unique_ptr<LogicalOperator> BindCompaction(ClientContext &context, TableFunction
 	if (delete_threshold > 1 || delete_threshold < 0) {
 		throw BinderException("The delete_threshold option must be between 0 and 1");
 	}
+	return delete_threshold;
+}
 
+unique_ptr<LogicalOperator> BindCompaction(ClientContext &context, TableFunctionBindInput &input, idx_t bind_index,
+                                           CompactionType type) {
+	auto &catalog = BaseMetadataFunction::GetCatalog(context, input.inputs[0]);
+	auto &ducklake_catalog = catalog.Cast<DuckLakeCatalog>();
+	auto &transaction = DuckLakeTransaction::Get(context, ducklake_catalog);
+	string schema, table;
 	vector<unique_ptr<LogicalOperator>> compactions;
 	uint64_t max_files = NumericLimits<uint64_t>::Maximum() - 1;
 	auto max_files_entry = input.named_parameters.find("max_compacted_files");
@@ -599,32 +606,23 @@ unique_ptr<LogicalOperator> BindCompaction(ClientContext &context, TableFunction
 	}
 
 	if (input.inputs.size() == 1) {
-		if (schema.empty() && table.empty()) {
-			// No default schema/table, we will perform rewrites on deletes in the whole database
-			auto schemas = ducklake_catalog.GetSchemas(context);
-			for (auto &cur_schema : schemas) {
-				cur_schema.get().Scan(context, CatalogType::TABLE_ENTRY, [&](CatalogEntry &entry) {
-					if (entry.type == CatalogType::TABLE_ENTRY) {
-						auto &cur_table = entry.Cast<DuckLakeTableEntry>();
+		// No default schema/table, we will perform rewrites on deletes in the whole database
+		auto schemas = ducklake_catalog.GetSchemas(context);
+		for (auto &cur_schema : schemas) {
+			cur_schema.get().Scan(context, CatalogType::TABLE_ENTRY, [&](CatalogEntry &entry) {
+				if (entry.type == CatalogType::TABLE_ENTRY) {
+					auto &dl_cur_schema = cur_schema.get().Cast<DuckLakeSchemaEntry>();
+					auto &cur_table = entry.Cast<DuckLakeTableEntry>();
+					if (ducklake_catalog.GetConfigOption<string>("auto_compact", dl_cur_schema.GetSchemaId(),
+					                                             cur_table.GetTableId(), "true") == "true") {
+						auto delete_threshold = GetDeleteThreshold(&dl_cur_schema, cur_table, ducklake_catalog, input);
 						GenerateCompaction(context, transaction, ducklake_catalog, input, cur_table, type,
 						                   delete_threshold, max_files, min_file_size, max_file_size, compactions);
 					}
-				});
-			}
-			return GenerateCompactionOperator(input, bind_index, compactions);
-		} else if (!schema.empty() && table.empty()) {
-			// There is a default schema but not a default table, we will use that
-			auto schema_entry = catalog.GetSchema(context, catalog.GetName(), schema, OnEntryNotFound::THROW_EXCEPTION);
-			auto &ducklake_schema = schema_entry->Cast<DuckLakeSchemaEntry>();
-			ducklake_schema.Scan(context, CatalogType::TABLE_ENTRY, [&](CatalogEntry &entry) {
-				if (entry.type == CatalogType::TABLE_ENTRY) {
-					auto &cur_table = entry.Cast<DuckLakeTableEntry>();
-					GenerateCompaction(context, transaction, ducklake_catalog, input, cur_table, type, delete_threshold,
-					                   max_files, min_file_size, max_file_size, compactions);
 				}
 			});
-			return GenerateCompactionOperator(input, bind_index, compactions);
 		}
+		return GenerateCompactionOperator(input, bind_index, compactions);
 	} else if (input.inputs.size() == 2) {
 		// We have the table_name defined in our input
 		table = StringValue::Get(input.inputs[1]);
@@ -634,12 +632,27 @@ unique_ptr<LogicalOperator> BindCompaction(ClientContext &context, TableFunction
 	if (schema_entry != input.named_parameters.end()) {
 		schema = StringValue::Get(schema_entry->second);
 	}
-
-	const EntryLookupInfo table_lookup(CatalogType::TABLE_ENTRY, table, nullptr, QueryErrorContext());
+	EntryLookupInfo table_lookup(CatalogType::TABLE_ENTRY, table, nullptr, QueryErrorContext());
 	auto table_entry = catalog.GetEntry(context, schema, table_lookup, OnEntryNotFound::THROW_EXCEPTION);
 	auto &ducklake_table = table_entry->Cast<DuckLakeTableEntry>();
-	GenerateCompaction(context, transaction, ducklake_catalog, input, ducklake_table, type, delete_threshold, max_files,
-	                   min_file_size, max_file_size, compactions);
+	optional_ptr<DuckLakeSchemaEntry> dl_schema;
+	bool auto_compact;
+	if (!schema.empty()) {
+		auto schema_catalog = catalog.GetSchema(context, catalog.GetName(), schema, OnEntryNotFound::THROW_EXCEPTION);
+		dl_schema = &schema_catalog->Cast<DuckLakeSchemaEntry>();
+		auto_compact = ducklake_catalog.GetConfigOption<string>("auto_compact", dl_schema.get()->GetSchemaId(),
+		                                                        ducklake_table.GetTableId(), "true") == "true";
+
+	} else {
+		auto_compact =
+		    ducklake_catalog.GetConfigOption<string>("auto_compact", {}, ducklake_table.GetTableId(), "true") == "true";
+	}
+
+	if (auto_compact) {
+		auto delete_threshold = GetDeleteThreshold(dl_schema, ducklake_table, ducklake_catalog, input);
+		GenerateCompaction(context, transaction, ducklake_catalog, input, ducklake_table, type, delete_threshold,
+		                   max_files, min_file_size, max_file_size, compactions);
+	}
 
 	return GenerateCompactionOperator(input, bind_index, compactions);
 }
@@ -669,7 +682,6 @@ TableFunctionSet DuckLakeMergeAdjacentFilesFunction::GetFunctions() {
 
 static unique_ptr<LogicalOperator> RewriteFilesBind(ClientContext &context, TableFunctionBindInput &input,
                                                     idx_t bind_index, vector<string> &return_names) {
-
 	return_names.push_back("Success");
 	return BindCompaction(context, input, bind_index, CompactionType::REWRITE_DELETES);
 }

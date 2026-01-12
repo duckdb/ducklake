@@ -76,13 +76,25 @@ DuckLakeTableEntry::DuckLakeTableEntry(DuckLakeTableEntry &parent, CreateTableIn
 		idx_t next_col = next_column_id.GetIndex();
 		field_data = DuckLakeFieldData::AddColumn(*field_data, new_col, next_col);
 		next_column_id = next_col;
-	} else if (local_change.type == LocalChangeType::SET_DEFAULT) {
-		auto changed_id = local_change.field_index;
-		field_data = DuckLakeFieldData::SetDefault(*field_data, changed_id, GetColumnByFieldId(changed_id));
 	} else if (local_change.type == LocalChangeType::REMOVE_COLUMN) {
 		auto changed_id = local_change.field_index;
 		field_data = DuckLakeFieldData::DropColumn(*field_data, changed_id);
 	}
+}
+
+DuckLakeTableEntry::DuckLakeTableEntry(DuckLakeTableEntry &parent, CreateTableInfo &info,
+                                       SetDefaultLocalChange local_change)
+    : DuckLakeTableEntry(parent.ParentCatalog(), parent.ParentSchema(), info, parent.GetTableId(),
+                         parent.GetTableUUID(), parent.DataPath(), parent.field_data, parent.next_column_id,
+                         parent.inlined_data_tables, local_change) {
+	if (parent.partition_data) {
+		partition_data = make_uniq<DuckLakePartition>(*parent.partition_data);
+	}
+	CheckSupportedTypes();
+
+	auto changed_id = local_change.field_index;
+	field_data = DuckLakeFieldData::SetDefault(*field_data, changed_id, GetColumnByFieldId(changed_id),
+	                                           local_change.is_column_new);
 }
 
 // ALTER TABLE RENAME COLUMN
@@ -531,7 +543,7 @@ unique_ptr<CatalogEntry> DuckLakeTableEntry::AlterTable(DuckLakeTransaction &tra
 		if (info.if_column_exists) {
 			return nullptr;
 		}
-		throw CatalogException("Cannot drop column %s - it does not exist", info.removed_column);
+		throw BinderException("Table \"%s\" does not have a column with name \"%s\"", name, info.removed_column);
 	}
 
 	auto &col = table_info.columns.GetColumn(info.removed_column);
@@ -711,7 +723,6 @@ const LogicalType &GetNestedChildType(const LogicalType &type, idx_t index) {
 unique_ptr<DuckLakeFieldId> DuckLakeTableEntry::GetNestedEvolution(const DuckLakeFieldId &source_id,
                                                                    const LogicalType &target, ColumnChangeInfo &result,
                                                                    optional_idx parent_idx) {
-
 	auto &source_type = source_id.Type();
 	if (source_type.id() != target.id()) {
 		throw NotImplementedException("Type evolution is not supported from type %s to type %s", source_type, target);
@@ -735,7 +746,7 @@ unique_ptr<DuckLakeFieldId> DuckLakeTableEntry::GetNestedEvolution(const DuckLak
 			// type not found - this is a new entry
 			// first construct a new field id for this entry
 			idx_t next_col = next_column_id.GetIndex();
-			auto field_id = DuckLakeFieldId::FieldIdFromType(target_name, target_type, nullptr, next_col);
+			auto field_id = DuckLakeFieldId::FieldIdFromType(target_name, target_type, nullptr, next_col, false);
 			next_column_id = next_col;
 
 			// add the column to the list of "to-be-added" columns
@@ -810,7 +821,7 @@ unique_ptr<CatalogEntry> DuckLakeTableEntry::AlterTable(DuckLakeTransaction &tra
 	auto create_info = GetInfo();
 	auto &table_info = create_info->Cast<CreateTableInfo>();
 	if (!ColumnExists(info.column_name)) {
-		throw CatalogException("Cannot change type of column %s - it does not exist", info.column_name);
+		throw BinderException("Table \"%s\" does not have a column with name \"%s\"", name, info.column_name);
 	}
 	auto &col = table_info.columns.GetColumn(info.column_name);
 	auto &field_id = GetFieldId(col.Physical());
@@ -858,8 +869,23 @@ void AddNewColumns(const DuckLakeFieldId &field_id, vector<DuckLakeNewColumn> &n
 	new_col.column_info.id = col_data.id;
 	new_col.column_info.name = field_id.Name();
 	new_col.column_info.type = DuckLakeTypes::ToString(field_id.Type());
+
 	new_col.column_info.initial_default = col_data.initial_default;
-	new_col.column_info.default_value = col_data.default_value;
+
+	if (col_data.default_value) {
+		if (col_data.default_value->type == ExpressionType::VALUE_CONSTANT) {
+			// We extract the value directly
+			auto &constant_value = col_data.default_value->Cast<ConstantExpression>();
+			new_col.column_info.default_value = constant_value.value;
+			new_col.column_info.default_value_type = "literal";
+		} else {
+			new_col.column_info.default_value = col_data.default_value->ToString();
+			new_col.column_info.default_value_type = "expression";
+		}
+	} else {
+		new_col.column_info.default_value = Value(LogicalTypeId::VARCHAR);
+		new_col.column_info.default_value_type = "literal";
+	}
 	new_col.parent_idx = parent_idx.index;
 	new_fields.push_back(std::move(new_col));
 	for (auto &child : field_id.Children()) {
@@ -1027,14 +1053,15 @@ unique_ptr<CatalogEntry> DuckLakeTableEntry::AlterTable(DuckLakeTransaction &tra
 	auto create_info = GetInfo();
 	auto &table_info = create_info->Cast<CreateTableInfo>();
 	if (!ColumnExists(info.column_name)) {
-		throw CatalogException("Cannot set default of column %s - it does not exist", info.column_name);
+		throw BinderException("Table \"%s\" does not have a column with name \"%s\"", name, info.column_name);
 	}
 	auto &col = table_info.columns.GetColumnMutable(info.column_name);
 	auto &field_id = GetFieldId(col.Physical());
 	col.SetDefaultValue(std::move(info.expression));
+	bool new_column = !transaction.GetMetadataManager().IsColumnCreatedWithTable(table_info.table, col.GetName());
 
-	auto new_entry =
-	    make_uniq<DuckLakeTableEntry>(*this, table_info, LocalChange::SetDefault(field_id.GetFieldIndex()));
+	auto new_entry = make_uniq<DuckLakeTableEntry>(
+	    *this, table_info, SetDefaultLocalChange::SetDefault(field_id.GetFieldIndex(), new_column));
 	return std::move(new_entry);
 }
 
@@ -1106,7 +1133,21 @@ DuckLakeColumnInfo DuckLakeTableEntry::GetColumnInfo(FieldIndex field_index) con
 	result.name = col.Name();
 	result.type = DuckLakeTypes::ToString(col.Type());
 	result.initial_default = col_data.initial_default;
-	result.default_value = col_data.default_value;
+
+	if (col_data.default_value) {
+		if (col_data.default_value->type == ExpressionType::VALUE_CONSTANT) {
+			// We extract the value directly
+			auto &constant_value = col_data.default_value->Cast<ConstantExpression>();
+			result.default_value = constant_value.value;
+			result.default_value_type = "literal";
+		} else {
+			result.default_value = col_data.default_value->ToString();
+			result.default_value_type = "expression";
+		}
+	} else {
+		result.default_value = Value(LogicalTypeId::VARCHAR);
+		result.default_value_type = "literal";
+	}
 	result.nulls_allowed = GetNotNullFields().count(col.Name()) == 0;
 	return result;
 }
@@ -1147,8 +1188,21 @@ DuckLakeColumnInfo DuckLakeTableEntry::ConvertColumn(const string &name, const L
 	}
 	default: {
 		auto &column_data = field_id.GetColumnData();
+
 		column_entry.initial_default = column_data.initial_default;
-		column_entry.default_value = column_data.default_value;
+		if (column_data.default_value) {
+			if (column_data.default_value->type == ExpressionType::VALUE_CONSTANT) {
+				// We extract value directly
+				column_entry.default_value = column_data.default_value->Cast<ConstantExpression>().value;
+				column_entry.default_value_type = "literal";
+			} else {
+				column_entry.default_value = column_data.default_value->ToString();
+				column_entry.default_value_type = "expression";
+			}
+		} else {
+			column_entry.default_value = Value(LogicalTypeId::VARCHAR);
+			column_entry.default_value_type = "literal";
+		}
 		break;
 	}
 	}

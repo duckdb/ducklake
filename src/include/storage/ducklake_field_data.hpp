@@ -12,6 +12,7 @@
 #include "duckdb/common/case_insensitive_map.hpp"
 #include "duckdb/common/types/value.hpp"
 #include "common/index.hpp"
+#include "duckdb/parser/parsed_expression.hpp"
 
 namespace duckdb {
 struct AlterTableInfo;
@@ -23,7 +24,17 @@ class ColumnList;
 struct DuckLakeColumnData {
 	FieldIndex id;
 	Value initial_default;
-	Value default_value;
+	unique_ptr<ParsedExpression> default_value;
+	DuckLakeColumnData Copy() const {
+		DuckLakeColumnData copy;
+		copy.id = id;
+		copy.initial_default = initial_default;
+
+		if (default_value) {
+			copy.default_value = default_value->Copy();
+		}
+		return copy;
+	}
 };
 
 class DuckLakeFieldId {
@@ -58,10 +69,11 @@ public:
 	unique_ptr<DuckLakeFieldId> Copy() const;
 	unique_ptr<ParsedExpression> GetDefault() const;
 
-	static unique_ptr<DuckLakeFieldId> FieldIdFromColumn(const ColumnDefinition &col, idx_t &column_id);
+	static unique_ptr<DuckLakeFieldId> FieldIdFromColumn(const ColumnDefinition &col, idx_t &column_id,
+	                                                     bool add_column = false);
 	static unique_ptr<DuckLakeFieldId> FieldIdFromType(const string &name, const LogicalType &type,
 	                                                   optional_ptr<const ParsedExpression> default_expr,
-	                                                   idx_t &column_id);
+	                                                   idx_t &column_id, bool add_column);
 	static unique_ptr<DuckLakeFieldId> Rename(const DuckLakeFieldId &field_id, const string &new_name);
 	static unique_ptr<DuckLakeFieldId> SetDefault(const DuckLakeFieldId &field_id,
 	                                              optional_ptr<const ParsedExpression> default_expr);
@@ -110,7 +122,7 @@ public:
 	static shared_ptr<DuckLakeFieldData> AddColumn(const DuckLakeFieldData &field_data, const ColumnDefinition &new_col,
 	                                               idx_t &next_column_id);
 	static shared_ptr<DuckLakeFieldData> SetDefault(const DuckLakeFieldData &field_data, FieldIndex field_index,
-	                                                const ColumnDefinition &new_col);
+	                                                const ColumnDefinition &new_col, bool add_column);
 
 private:
 	vector<unique_ptr<DuckLakeFieldId>> field_ids;

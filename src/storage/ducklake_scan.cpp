@@ -51,6 +51,10 @@ void DuckLakeScanSerialize(Serializer &serializer, const optional_ptr<FunctionDa
 	throw NotImplementedException("DuckLakeScan not implemented");
 }
 
+unique_ptr<FunctionData> DuckLakeScanDeserialize(Deserializer &deserializer, TableFunction &function) {
+	throw NotImplementedException("DuckLakeScan not implemented");
+}
+
 virtual_column_map_t DuckLakeVirtualColumns(ClientContext &context, optional_ptr<FunctionData> bind_data_p) {
 	auto &bind_data = bind_data_p->Cast<MultiFileBindData>();
 	auto &file_list = bind_data.file_list->Cast<DuckLakeMultiFileList>();
@@ -87,7 +91,7 @@ TableFunction DuckLakeFunctions::GetDuckLakeScanFunction(DatabaseInstance &insta
 	// Unset all of these: they are either broken, very inefficient.
 	// TODO: implement/fix these
 	function.serialize = DuckLakeScanSerialize;
-	function.deserialize = nullptr;
+	function.deserialize = DuckLakeScanDeserialize;
 
 	function.to_string = DuckLakeFunctionToString;
 
