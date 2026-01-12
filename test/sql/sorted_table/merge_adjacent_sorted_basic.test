@@ -98,19 +98,13 @@ t.table_name = 'sort_on_compaction'
 ----
 2	1
 
-
-######################################
-# Column does not exist in the table #
-######################################
+# Column does not exist in the table
 statement error
 ALTER TABLE sort_on_compaction SET SORTED BY (WOOOOT ASC ,   BLAH ASC);
 ----
 Column "WOOOOT" does not exist in table "sort_on_compaction"
 
-
-#####################################################
-# Expressions are not supported, only column refs   #
-#####################################################
+# Expressions are not supported, only column refs
 statement error
 ALTER TABLE sort_on_compaction SET SORTED BY (concat(sort_key_1, '_', sort_key_2) ASC);
 ----

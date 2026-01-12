@@ -16,9 +16,7 @@ ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '__TEST_DIR__/me
 statement ok
 USE ducklake;
 
-###################################################################################
-# SET SORTED BY then rename columns - compaction should error on missing columns  #
-###################################################################################
+# SET SORTED BY then rename columns - compaction should error on missing columns
 statement ok
 CREATE TABLE renamed_columns_test (unique_id BIGINT, sort_key_1 BIGINT, sort_key_2 VARCHAR);
 

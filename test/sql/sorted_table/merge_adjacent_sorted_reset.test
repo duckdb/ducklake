@@ -16,9 +16,7 @@ ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '__TEST_DIR__/me
 statement ok
 USE ducklake;
 
-###########################################################
-# SET SORTED then RESET SORTED to compact in insert order #
-###########################################################
+# SET SORTED then RESET SORTED to compact in insert order
 statement ok
 CREATE TABLE reset_sorted_test (unique_id BIGINT, sort_key_1 BIGINT, sort_key_2 VARCHAR);
 
