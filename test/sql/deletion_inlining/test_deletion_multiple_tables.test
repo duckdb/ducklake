@@ -1,5 +1,5 @@
-# name: test/sql/deletion_inlining/test_deletion_from_inlined_multiple_snapshots.test
-# description: test ducklake flushing deletion on inserted inline, but we have multiple deletions over many snapshots
+# name: test/sql/deletion_inlining/test_deletion_multiple_tables.test
+# description: test ducklake flushing deletion on inserted inline, but we have multiple deletions over many snapshots in multiple tables
 # group: [deletion_inlining]
 
 require ducklake
@@ -20,7 +20,14 @@ statement ok
 create table t1 (a integer)
 
 statement ok
+create table t2 (a integer)
+
+
+statement ok
 insert into t1 values (1), (2), (3), (1), (2), (3), (5), (6);
+
+statement ok
+insert into t2 values (1), (2), (3), (1), (2), (3), (5), (6);
 
 # Let's generate deletes over multiple snapshots
 
@@ -34,7 +41,13 @@ statement ok
 delete from t1 where a = 5;
 
 statement ok
-delete from t1 where a = 6;
+delete from t2 where a = 2;
+
+statement ok
+delete from t2 where a = 1;
+
+statement ok
+delete from t2 where a = 5;
 
 statement ok
 CALL ducklake_flush_inlined_data('ducklake');
@@ -43,58 +56,23 @@ CALL ducklake_flush_inlined_data('ducklake');
 query IIIIII
 SELECT delete_file_id, table_id, begin_snapshot, end_snapshot, data_file_id, delete_count FROM __ducklake_metadata_ducklake.ducklake_delete_file
 ----
-2	1	3	4	1	2
-3	1	4	5	1	4
-4	1	5	6	1	5
-5	1	6	NULL	1	6
+4	1	5	6	2	2
+5	1	6	7	2	4
+6	1	7	NULL	2	5
+7	2	8	9	3	2
+8	2	9	10	3	4
+9	2	10	NULL	3	5
 
 query I
-FROM t1
-----
-3
-3
-
-# Test timetraveling
-query I
-FROM t1  at (version => 6);
-----
-3
-3
-
-query I
-FROM t1  at (version => 5);
+FROM t1;
 ----
 3
 3
 6
 
 query I
-FROM t1  at (version => 4);
+FROM t2;
 ----
 3
 3
-5
 6
-
-query I
-FROM t1  at (version => 3);
-----
-1
-3
-1
-3
-5
-6
-
-query I
-FROM t1  at (version => 2);
-----
-1
-2
-3
-1
-2
-3
-5
-6
-

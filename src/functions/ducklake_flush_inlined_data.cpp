@@ -33,7 +33,8 @@ struct DeleteFileWriteContext {
 };
 
 static DuckLakeDeleteFile WriteDeleteFile(DeleteFileWriteContext &ctx, const string &data_file_path,
-                                          vector<idx_t> &positions, idx_t begin_snapshot_val) {
+                                          vector<idx_t> &positions, idx_t begin_snapshot_val,
+                                          optional_idx end_snapshot_val) {
 	std::sort(positions.begin(), positions.end());
 
 	auto delete_file_uuid = "ducklake-" + ctx.transaction.GenerateUUID() + "-delete.parquet";
@@ -132,6 +133,7 @@ static DuckLakeDeleteFile WriteDeleteFile(DeleteFileWriteContext &ctx, const str
 	delete_file.footer_size = stats_chunk.GetValue(3, 0).GetValue<idx_t>();
 	delete_file.encryption_key = ctx.encryption_key;
 	delete_file.begin_snapshot = begin_snapshot_val;
+	delete_file.end_snapshot = end_snapshot_val;
 	return delete_file;
 }
 
@@ -218,7 +220,14 @@ SinkFinalizeType DuckLakeFlushData::Finalize(Pipeline &pipeline, Event &event, C
 		DeleteFileWriteContext write_ctx {context, table, encryption_key, transaction, fs};
 		vector<DuckLakeDeleteFile> delete_files;
 
-		for (auto current_snapshot : end_snapshots) {
+		for (idx_t snapshot_idx = 0; snapshot_idx < end_snapshots.size(); snapshot_idx++) {
+			auto current_snapshot = end_snapshots[snapshot_idx];
+			// end_snapshot is the next snapshot in the list, or empty for the last one
+			optional_idx next_snapshot;
+			if (snapshot_idx + 1 < end_snapshots.size()) {
+				next_snapshot = end_snapshots[snapshot_idx + 1];
+			}
+
 			auto deleted_rows_result =
 			    transaction.Query(snapshot, StringUtil::Format(R"(
 				SELECT row_id
@@ -248,7 +257,7 @@ SinkFinalizeType DuckLakeFlushData::Finalize(Pipeline &pipeline, Event &event, C
 			}
 
 			for (auto &file_entry : deletes_by_file) {
-				auto delete_file = WriteDeleteFile(write_ctx, file_entry.first, file_entry.second, current_snapshot);
+				auto delete_file = WriteDeleteFile(write_ctx, file_entry.first, file_entry.second, current_snapshot, next_snapshot);
 				delete_files.push_back(std::move(delete_file));
 			}
 		}
