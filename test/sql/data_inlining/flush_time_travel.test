@@ -94,3 +94,8 @@ from t1
 3
 4
 5
+
+#lets verify our deleted files
+query I
+FROM __ducklake_metadata_ducklake.ducklake_delete_file
+----
