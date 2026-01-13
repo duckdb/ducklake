@@ -17,125 +17,8 @@
 #include "storage/ducklake_flush_data.hpp"
 #include "duckdb/planner/operator/logical_projection.hpp"
 #include "storage/ducklake_delete.hpp"
-#include "duckdb/parallel/thread_context.hpp"
-#include "duckdb/execution/operator/persistent/physical_copy_to_file.hpp"
-#include "common/ducklake_util.hpp"
-#include "duckdb/catalog/catalog_entry/copy_function_catalog_entry.hpp"
 
 namespace duckdb {
-
-struct DeleteFileWriteContext {
-	ClientContext &context;
-	DuckLakeTableEntry &table;
-	const string &encryption_key;
-	DuckLakeTransaction &transaction;
-	FileSystem &fs;
-};
-
-static DuckLakeDeleteFile WriteDeleteFile(DeleteFileWriteContext &ctx, const string &data_file_path,
-                                          vector<idx_t> &positions, idx_t begin_snapshot_val,
-                                          optional_idx end_snapshot_val) {
-	std::sort(positions.begin(), positions.end());
-
-	auto delete_file_uuid = "ducklake-" + ctx.transaction.GenerateUUID() + "-delete.parquet";
-	string delete_file_path = DuckLakeUtil::JoinPath(ctx.fs, ctx.table.DataPath(), delete_file_uuid);
-
-	auto info = make_uniq<CopyInfo>();
-	info->file_path = delete_file_path;
-	info->format = "parquet";
-	info->is_from = false;
-
-	child_list_t<Value> values;
-	values.emplace_back("file_path", Value::INTEGER(MultiFileReader::FILENAME_FIELD_ID));
-	values.emplace_back("pos", Value::INTEGER(MultiFileReader::ORDINAL_FIELD_ID));
-	auto field_ids = Value::STRUCT(std::move(values));
-	vector<Value> field_input;
-	field_input.push_back(std::move(field_ids));
-	info->options["field_ids"] = std::move(field_input);
-
-	if (!ctx.encryption_key.empty()) {
-		child_list_t<Value> enc_values;
-		enc_values.emplace_back("footer_key_value", Value::BLOB_RAW(ctx.encryption_key));
-		vector<Value> encryption_input;
-		encryption_input.push_back(Value::STRUCT(std::move(enc_values)));
-		info->options["encryption_config"] = std::move(encryption_input);
-	}
-
-	auto &copy_fun = DuckLakeFunctions::GetCopyFunction(ctx.context, "parquet");
-	CopyFunctionBindInput bind_input(*info);
-
-	vector<string> names_to_write {"file_path", "pos"};
-	vector<LogicalType> types_to_write {LogicalType::VARCHAR, LogicalType::BIGINT};
-
-	auto function_data = copy_fun.function.copy_to_bind(ctx.context, bind_input, names_to_write, types_to_write);
-
-	auto copy_return_types = GetCopyFunctionReturnLogicalTypes(CopyFunctionReturnType::WRITTEN_FILE_STATISTICS);
-	PhysicalPlan plan(Allocator::Get(ctx.context));
-	PhysicalCopyToFile copy_to_file(plan, copy_return_types, copy_fun.function, std::move(function_data), 1);
-
-	copy_to_file.use_tmp_file = false;
-	copy_to_file.file_path = delete_file_path;
-	copy_to_file.partition_output = false;
-	copy_to_file.write_empty_file = false;
-	copy_to_file.file_extension = "parquet";
-	copy_to_file.overwrite_mode = CopyOverwriteMode::COPY_OVERWRITE_OR_IGNORE;
-	copy_to_file.per_thread_output = false;
-	copy_to_file.rotate = false;
-	copy_to_file.return_type = CopyFunctionReturnType::WRITTEN_FILE_STATISTICS;
-	copy_to_file.write_partition_columns = false;
-
-	DataChunk write_chunk;
-	write_chunk.Initialize(ctx.context, types_to_write);
-	Value filename_val(data_file_path);
-	write_chunk.data[0].Reference(filename_val);
-
-	ThreadContext thread_context(ctx.context);
-	ExecutionContext execution_context(ctx.context, thread_context, nullptr);
-	InterruptState interrupt_state;
-
-	auto gstate = copy_to_file.GetGlobalSinkState(ctx.context);
-	auto lstate = copy_to_file.GetLocalSinkState(execution_context);
-
-	OperatorSinkInput sink_input {*gstate, *lstate, interrupt_state};
-	idx_t row_count = 0;
-	auto row_data = FlatVector::GetData<int64_t>(write_chunk.data[1]);
-	for (auto &pos : positions) {
-		row_data[row_count++] = NumericCast<int64_t>(pos);
-		if (row_count >= STANDARD_VECTOR_SIZE) {
-			write_chunk.SetCardinality(row_count);
-			copy_to_file.Sink(execution_context, write_chunk, sink_input);
-			row_count = 0;
-		}
-	}
-	if (row_count > 0) {
-		write_chunk.SetCardinality(row_count);
-		copy_to_file.Sink(execution_context, write_chunk, sink_input);
-	}
-
-	OperatorSinkCombineInput combine_input {*gstate, *lstate, interrupt_state};
-	copy_to_file.Combine(execution_context, combine_input);
-	copy_to_file.FinalizeInternal(ctx.context, *gstate);
-
-	copy_to_file.sink_state = std::move(gstate);
-	auto source_state = copy_to_file.GetGlobalSourceState(ctx.context);
-	auto local_state = copy_to_file.GetLocalSourceState(execution_context, *source_state);
-	DataChunk stats_chunk;
-	stats_chunk.Initialize(ctx.context, copy_to_file.types);
-
-	OperatorSourceInput source_input {*source_state, *local_state, interrupt_state};
-	copy_to_file.GetData(execution_context, stats_chunk, source_input);
-
-	DuckLakeDeleteFile delete_file;
-	delete_file.data_file_path = data_file_path;
-	delete_file.file_name = stats_chunk.GetValue(0, 0).GetValue<string>();
-	delete_file.delete_count = positions.size();
-	delete_file.file_size_bytes = stats_chunk.GetValue(2, 0).GetValue<idx_t>();
-	delete_file.footer_size = stats_chunk.GetValue(3, 0).GetValue<idx_t>();
-	delete_file.encryption_key = ctx.encryption_key;
-	delete_file.begin_snapshot = begin_snapshot_val;
-	delete_file.end_snapshot = end_snapshot_val;
-	return delete_file;
-}
 
 static void AttachDeleteFilesToWrittenFiles(vector<DuckLakeDeleteFile> &delete_files,
                                             vector<DuckLakeDataFile> &written_files) {
@@ -217,7 +100,6 @@ SinkFinalizeType DuckLakeFlushData::Finalize(Pipeline &pipeline, Event &event, C
 			}
 		}
 
-		DeleteFileWriteContext write_ctx {context, table, encryption_key, transaction, fs};
 		vector<DuckLakeDeleteFile> delete_files;
 
 		for (idx_t snapshot_idx = 0; snapshot_idx < end_snapshots.size(); snapshot_idx++) {
@@ -236,9 +118,9 @@ SinkFinalizeType DuckLakeFlushData::Finalize(Pipeline &pipeline, Event &event, C
 				ORDER BY row_id;)",
 			                                                   inlined_table.table_name, current_snapshot));
 
-			unordered_set<idx_t> deleted_row_ids;
+			vector<idx_t> deleted_row_ids;
 			for (auto &row : *deleted_rows_result) {
-				deleted_row_ids.insert(NumericCast<idx_t>(row.GetValue<int64_t>(0)));
+				deleted_row_ids.push_back(NumericCast<idx_t>(row.GetValue<int64_t>(0)));
 			}
 
 			unordered_map<string, vector<idx_t>> deletes_by_file;
@@ -257,21 +139,15 @@ SinkFinalizeType DuckLakeFlushData::Finalize(Pipeline &pipeline, Event &event, C
 			}
 
 			for (auto &file_entry : deletes_by_file) {
-				auto delete_file = WriteDeleteFile(write_ctx, file_entry.first, file_entry.second, current_snapshot, next_snapshot);
+				WriteDeleteFileInput input {context,           transaction,      fs,
+				                            table.DataPath(),  encryption_key,   file_entry.first,
+				                            file_entry.second, current_snapshot, next_snapshot};
+				auto delete_file = DuckLakeDeleteFileWriter::WriteDeleteFile(input);
 				delete_files.push_back(std::move(delete_file));
 			}
 		}
+		AttachDeleteFilesToWrittenFiles(delete_files, global_state.written_files);
 
-		// The last valid file, we attach it to the written files
-		if (!delete_files.empty()) {
-			// FIXME: What if we produce more than one data-file?
-			// D_ASSERT(global_state.written_files.size() == 1);
-			// auto last_file = delete_files.back();
-			// delete_files.pop_back();
-			// transaction.AddDeletes(global_state.table.GetTableId(), delete_files);
-			// global_state.written_files[0].delete_file = make_uniq<DuckLakeDeleteFile>(std::move(last_file));
-			AttachDeleteFilesToWrittenFiles(delete_files, global_state.written_files);
-		}
 	}
 
 	transaction.AppendFiles(global_state.table.GetTableId(), std::move(global_state.written_files));

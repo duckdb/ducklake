@@ -11,11 +11,31 @@
 #include "storage/ducklake_insert.hpp"
 #include "storage/ducklake_delete_filter.hpp"
 #include "storage/ducklake_metadata_info.hpp"
+#include "common/ducklake_data_file.hpp"
 
 namespace duckdb {
 class DuckLakeTableEntry;
 class DuckLakeDeleteGlobalState;
 class DuckLakeTransaction;
+
+//! Input parameters for writing a delete file
+struct WriteDeleteFileInput {
+	ClientContext &context;
+	DuckLakeTransaction &transaction;
+	FileSystem &fs;
+	string data_path;
+	string encryption_key;
+	string data_file_path;
+	vector<idx_t> positions;
+	optional_idx begin_snapshot;
+	optional_idx end_snapshot;
+};
+
+//! Utility class for writing delete files
+struct DuckLakeDeleteFileWriter {
+	//! Write a delete file and return the resulting DuckLakeDeleteFile
+	static DuckLakeDeleteFile WriteDeleteFile(WriteDeleteFileInput &input);
+};
 
 struct DuckLakeDeleteMap {
 
