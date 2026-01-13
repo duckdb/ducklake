@@ -1,8 +1,8 @@
 # name: test/sql/data_inlining/inlined_data_multi_table_fresh_connection.test
-# description: Test DAT-1794 bug fix - GetCatalogIdForSchema must filter by table_id
+# description: Test inling data works when making schema changes to multiple tables in the same transaction.
 # group: [data_inlining]
 #
-# This test reproduces the DAT-1794 bug where GetCatalogIdForSchema doesn't
+# This test reproduces a bug where GetCatalogIdForSchema doesn't
 # filter by table_id. When multiple tables have inlined data at the same
 # schema_version, reading from a fresh connection can fail.
 #
