@@ -133,6 +133,7 @@ DuckLakeDeleteFile DuckLakeDeleteFileWriter::WriteDeleteFile(WriteDeleteFileInpu
 	delete_file.encryption_key = input.encryption_key;
 	delete_file.begin_snapshot = input.begin_snapshot;
 	delete_file.end_snapshot = input.end_snapshot;
+	delete_file.source = input.source;
 	return delete_file;
 }
 
@@ -367,7 +368,8 @@ void DuckLakeDelete::FlushDelete(DuckLakeTransaction &transaction, ClientContext
 	auto &fs = FileSystem::GetFileSystem(context);
 	WriteDeleteFileInput input {context,          transaction,    fs,
 	                            table.DataPath(), encryption_key, filename,
-	                            sorted_deletes,   optional_idx(), optional_idx()};
+	                            sorted_deletes,   optional_idx(), optional_idx(),
+	                            DeleteFileSource::REGULAR};
 	auto written_file = DuckLakeDeleteFileWriter::WriteDeleteFile(input);
 
 	// Copy over the additional fields
