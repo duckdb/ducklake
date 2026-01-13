@@ -647,7 +647,7 @@ unique_ptr<LogicalOperator> DuckLakeInsert::InsertCasts(Binder &binder, unique_p
 	auto result = make_uniq<LogicalProjection>(binder.GenerateTableIndex(), std::move(cast_expressions));
 	result->children.push_back(std::move(plan));
 
-	return result;
+	return std::move(result);
 }
 
 PhysicalOperator &DuckLakeInsert::PlanCopyForInsert(ClientContext &context, PhysicalPlanGenerator &planner,
