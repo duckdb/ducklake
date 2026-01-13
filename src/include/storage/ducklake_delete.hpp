@@ -26,7 +26,7 @@ struct WriteDeleteFileInput {
 	string data_path;
 	string encryption_key;
 	string data_file_path;
-	vector<idx_t> positions;
+	set<idx_t> positions;
 	optional_idx begin_snapshot;
 	optional_idx end_snapshot;
 };
