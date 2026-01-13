@@ -363,12 +363,11 @@ void DuckLakeDelete::FlushDelete(DuckLakeTransaction &transaction, ClientContext
 	}
 
 	// Convert sorted_deletes to vector for the shared function
-	vector<idx_t> positions(sorted_deletes.begin(), sorted_deletes.end());
 
 	auto &fs = FileSystem::GetFileSystem(context);
 	WriteDeleteFileInput input {context,          transaction,    fs,
 	                            table.DataPath(), encryption_key, filename,
-	                            positions,        optional_idx(), optional_idx()};
+	                            sorted_deletes,   optional_idx(), optional_idx()};
 	auto written_file = DuckLakeDeleteFileWriter::WriteDeleteFile(input);
 
 	// Copy over the additional fields
