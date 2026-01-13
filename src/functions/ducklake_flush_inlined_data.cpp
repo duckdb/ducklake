@@ -68,6 +68,17 @@ SinkResultType DuckLakeFlushData::Sink(ExecutionContext &context, DataChunk &chu
 //===--------------------------------------------------------------------===//
 // Finalize
 //===--------------------------------------------------------------------===//
+
+struct DeleteFileCount {
+	DeleteFileCount(const idx_t file_idx, const idx_t file_count): file_idx(file_idx), file_count(file_count) {
+
+	}
+	DeleteFileCount() : file_idx(0), file_count(0) {
+	}
+	idx_t file_idx;
+	idx_t file_count;
+};
+
 SinkFinalizeType DuckLakeFlushData::Finalize(Pipeline &pipeline, Event &event, ClientContext &context,
                                              OperatorSinkFinalizeInput &input) const {
 	auto &global_state = input.global_state.Cast<DuckLakeInsertGlobalState>();
@@ -101,6 +112,9 @@ SinkFinalizeType DuckLakeFlushData::Finalize(Pipeline &pipeline, Event &event, C
 		}
 
 		vector<DuckLakeDeleteFile> delete_files;
+
+		// track previous deletions per file to avoid writing duplicate delete files
+		unordered_map<string, DeleteFileCount> prev_deletes_by_file;
 
 		for (idx_t snapshot_idx = 0; snapshot_idx < end_snapshots.size(); snapshot_idx++) {
 			auto current_snapshot = end_snapshots[snapshot_idx];
@@ -139,15 +153,32 @@ SinkFinalizeType DuckLakeFlushData::Finalize(Pipeline &pipeline, Event &event, C
 			}
 
 			for (auto &file_entry : deletes_by_file) {
-				WriteDeleteFileInput input {context,           transaction,      fs,
-				                            table.DataPath(),  encryption_key,   file_entry.first,
-				                            file_entry.second, current_snapshot, next_snapshot};
-				auto delete_file = DuckLakeDeleteFileWriter::WriteDeleteFile(input);
+				auto &file_name = file_entry.first;
+				auto &current_positions = file_entry.second;
+
+				// Check if this file had deletions in the previous snapshot
+				auto prev_it = prev_deletes_by_file.find(file_name);
+				if (prev_it != prev_deletes_by_file.end()) {
+					// If the deletions are the same, just extend the previous delete file's end_snapshot
+					if (current_positions.size() == prev_it->second.file_count) {
+						auto prev_delete_idx = prev_it->second.file_idx;
+						delete_files[prev_delete_idx].end_snapshot = next_snapshot;
+						continue;
+					}
+				}
+
+				// Write a new delete file
+				WriteDeleteFileInput file_input {context,           transaction,      fs,
+				                            table.DataPath(),  encryption_key,   file_name,
+				                            current_positions, current_snapshot, next_snapshot};
+				auto delete_file = DuckLakeDeleteFileWriter::WriteDeleteFile(file_input);
+				idx_t new_file_idx = delete_files.size();
 				delete_files.push_back(std::move(delete_file));
+				// Update the tracking map
+				prev_deletes_by_file[file_name] = DeleteFileCount(new_file_idx, current_positions.size());
 			}
 		}
 		AttachDeleteFilesToWrittenFiles(delete_files, global_state.written_files);
-
 	}
 
 	transaction.AppendFiles(global_state.table.GetTableId(), std::move(global_state.written_files));
