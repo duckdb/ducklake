@@ -109,3 +109,59 @@ statement error
 ALTER TABLE sort_on_compaction SET SORTED BY (concat(sort_key_1, '_', sort_key_2) ASC);
 ----
 SET SORTED BY only supports column references, not expressions
+
+# Drop the table, then expire the snapshots, then validate that the catalog data has been removed
+
+# Pre-expiration catalog status:
+query IIIII
+SELECT
+si.table_id, si.begin_snapshot, si.end_snapshot, se.sort_key_index, se.expression
+FROM __ducklake_metadata_ducklake.ducklake_sort_info si
+JOIN __ducklake_metadata_ducklake.ducklake_sort_expression se USING (sort_id)
+JOIN __ducklake_metadata_ducklake.ducklake_table t 
+ON si.table_id = t.table_id 
+WHERE 
+t.table_name = 'sort_on_compaction'
+----
+1	4	NULL	0	sort_key_1
+1	4	NULL	1	sort_key_2
+
+
+statement ok
+drop table sort_on_compaction;
+
+# History should be present as long as the snapshots are not yet expired
+query IIIII
+SELECT
+si.table_id, si.begin_snapshot, si.end_snapshot, se.sort_key_index, se.expression
+FROM __ducklake_metadata_ducklake.ducklake_sort_info si
+JOIN __ducklake_metadata_ducklake.ducklake_sort_expression se USING (sort_id)
+JOIN __ducklake_metadata_ducklake.ducklake_table t 
+ON si.table_id = t.table_id 
+WHERE 
+t.table_name = 'sort_on_compaction'
+----
+1	4	7	0	sort_key_1
+1	4	7	1	sort_key_2
+
+statement ok
+CALL ducklake_expire_snapshots('ducklake', older_than => now());
+
+# This should be empty now that there are no snapshots remaining that rely on this table
+query IIII
+SELECT
+si.sort_id, si.table_id, si.begin_snapshot, si.end_snapshot 
+FROM __ducklake_metadata_ducklake.ducklake_sort_info si
+WHERE 
+si.table_id = 1
+----
+
+# This should be empty now that there are no snapshots remaining that rely on this table
+query IIIIIII
+SELECT
+se.sort_id, se.table_id, se.sort_key_index, se.expression, se.dialect, se.sort_direction, se.null_order
+FROM __ducklake_metadata_ducklake.ducklake_sort_expression se
+WHERE 
+se.table_id = 1
+----
+
