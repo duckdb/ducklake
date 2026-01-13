@@ -2048,7 +2048,7 @@ void DuckLakeTransaction::AddDeletes(TableIndex table_id, vector<DuckLakeDeleteF
 		if (data_file_path.empty()) {
 			throw InternalException("Data file path needs to be set in delete");
 		}
-		if (file.begin_snapshot.IsValid()) {
+		if (file.source == DeleteFileSource::FLUSH) {
 			// If we have a snapshot, this is a flushed delete file, we add it to the rooster
 			table_delete_map[data_file_path].push_back(std::move(file));
 		} else {

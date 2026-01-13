@@ -165,7 +165,8 @@ SinkFinalizeType DuckLakeFlushData::Finalize(Pipeline &pipeline, Event &event, C
 				// Write a new delete file
 				WriteDeleteFileInput file_input {context,           transaction,      fs,
 				                                 table.DataPath(),  encryption_key,   file_name,
-				                                 current_positions, current_snapshot, next_snapshot};
+				                                 current_positions, current_snapshot, next_snapshot,
+				                                 DeleteFileSource::FLUSH};
 				auto delete_file = DuckLakeDeleteFileWriter::WriteDeleteFile(file_input);
 				idx_t new_file_idx = delete_files.size();
 				delete_files.push_back(std::move(delete_file));

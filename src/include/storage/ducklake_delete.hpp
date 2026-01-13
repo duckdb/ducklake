@@ -29,6 +29,7 @@ struct WriteDeleteFileInput {
 	set<idx_t> positions;
 	optional_idx begin_snapshot;
 	optional_idx end_snapshot;
+	DeleteFileSource source;
 };
 
 //! Utility class for writing delete files
