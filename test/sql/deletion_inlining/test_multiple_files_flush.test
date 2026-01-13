@@ -1,0 +1,118 @@
+# name: test/sql/deletion_inlining/test_multiple_files_flush.test
+# description: test ducklake flushing deletion on inserted inline, but the flush produces multiple files
+# group: [deletion_inlining]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+
+test-env DATA_PATH __TEST_DIR__
+
+statement ok
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH 'test_multiple_files_flush',DATA_INLINING_ROW_LIMIT 2000000)
+
+statement ok
+use ducklake
+
+statement ok
+CREATE TABLE t1 AS SELECT range a, concat('this_is_a_large_string_yay_',range)  FROM range(200000);
+
+# # Delete from first file
+# # statement ok
+# # DELETE FROM t1 where a > 500 and a < 600;
+#
+
+query I
+select a from t1 order by a desc limit 10;
+----
+199999
+199998
+199997
+199996
+199995
+199994
+199993
+199992
+199991
+199990
+
+query I
+SELECT a from t1 where a = 199999
+----
+
+# Delete from second file
+statement ok
+DELETE FROM t1 where a = 199999;
+
+query I
+SELECT a from t1 where a = 190001
+----
+
+
+# A few mode deletions to generate some files
+# statement ok
+# DELETE FROM t1 where a > 1000 and a < 1500;
+#
+# statement ok
+# DELETE FROM t1 where a = 1
+
+# statement ok
+# DELETE FROM t1 where a % 2 = 0
+
+# This should generate more than one file
+statement ok
+CALL ducklake.set_option('target_file_size', '1K');
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake');
+
+query IIIIII
+SELECT delete_file_id, table_id, begin_snapshot, end_snapshot, data_file_id, delete_count FROM __ducklake_metadata_ducklake.ducklake_delete_file
+----
+3	1	5	NULL	2	38560
+4	1	2	3	1	99
+5	1	3	4	1	598
+6	1	4	5	1	599
+7	1	5	NULL	1	61741
+
+query I
+FROM snapshots()
+----
+
+#
+# query I
+# SELECT COUNT(*) FROM t1;
+# ----
+# 99699
+#
+# query I
+# SELECT COUNT(*) FROM t1 AT (version => 6);
+# ----
+# 99699
+#
+# query I
+# SELECT COUNT(*) FROM t1 AT (version => 5);
+# ----
+# 199401
+#
+# query I
+# SELECT COUNT(*) FROM t1 AT (version => 4);
+# ----
+# 199402
+#
+# query I
+# SELECT COUNT(*) FROM t1 AT (version => 3);
+# ----
+# 199901
+#
+# query I
+# SELECT COUNT(*) FROM t1 AT (version => 2);
+# ----
+# 199902
+#
+# query I
+# SELECT COUNT(*) FROM t1 AT (version => 1);
+# ----
+# 200000
