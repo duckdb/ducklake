@@ -165,80 +165,66 @@ bool DuckLakeInlinedDataReader::TryInitializeScan(ClientContext &context, Global
 
 AsyncResult DuckLakeInlinedDataReader::Scan(ClientContext &context, GlobalTableFunctionState &global_state,
                                             LocalTableFunctionState &local_state, DataChunk &chunk) {
-	// the multifiel reader interprets empty chunks as EOF, so we gotta be sure we still scanning if applying filters
-	while (true) {
-		if (!virtual_columns.empty()) {
-			scan_chunk.Reset();
-			data->data->Scan(state, scan_chunk);
-			idx_t source_idx = 0;
-			for (idx_t c = 0; c < virtual_columns.size(); c++) {
-				switch (virtual_columns[c]) {
-				case InlinedVirtualColumn::NONE: {
-					auto column_id = source_idx++;
-					chunk.data[c].Reference(scan_chunk.data[column_id]);
-					break;
+	if (!virtual_columns.empty()) {
+		scan_chunk.Reset();
+		data->data->Scan(state, scan_chunk);
+		idx_t source_idx = 0;
+		for (idx_t c = 0; c < virtual_columns.size(); c++) {
+			switch (virtual_columns[c]) {
+			case InlinedVirtualColumn::NONE: {
+				auto column_id = source_idx++;
+				chunk.data[c].Reference(scan_chunk.data[column_id]);
+				break;
+			}
+			case InlinedVirtualColumn::COLUMN_ROW_ID: {
+				auto row_id_data = FlatVector::GetData<int64_t>(chunk.data[c]);
+				for (idx_t r = 0; r < scan_chunk.size(); r++) {
+					row_id_data[r] = NumericCast<int64_t>(file_row_number + r);
 				}
-				case InlinedVirtualColumn::COLUMN_ROW_ID: {
-					auto row_id_data = FlatVector::GetData<int64_t>(chunk.data[c]);
-					for (idx_t r = 0; r < scan_chunk.size(); r++) {
-						row_id_data[r] = NumericCast<int64_t>(file_row_number + r);
-					}
+				continue;
+			}
+			case InlinedVirtualColumn::COLUMN_EMPTY:
+				break;
+			}
+		}
+		chunk.SetCardinality(scan_chunk.size());
+	} else {
+		data->data->Scan(state, chunk);
+	}
+	idx_t scan_count = chunk.size();
+	if (scan_count == 0) {
+		return AsyncResult(SourceResultType::FINISHED);
+	}
+	if (filters || deletion_filter) {
+		SelectionVector sel;
+		idx_t approved_tuple_count = scan_count;
+		if (deletion_filter) {
+			approved_tuple_count = deletion_filter->Filter(file_row_number, approved_tuple_count, sel);
+		}
+		if (filters) {
+			for (auto &entry : filters->filters) {
+				if (entry.second->filter_type == TableFilterType::OPTIONAL_FILTER) {
 					continue;
 				}
-				case InlinedVirtualColumn::COLUMN_EMPTY:
-					break;
-				}
+				auto column_id = entry.first;
+				auto &vec = chunk.data[column_id];
+
+				UnifiedVectorFormat vdata;
+				vec.ToUnifiedFormat(chunk.size(), vdata);
+
+				auto &filter = *entry.second;
+				auto filter_state = TableFilterState::Initialize(context, filter);
+
+				approved_tuple_count = ColumnSegment::FilterSelection(sel, vec, vdata, filter, *filter_state,
+				                                                      chunk.size(), approved_tuple_count);
 			}
-			chunk.SetCardinality(scan_chunk.size());
-		} else {
-			data->data->Scan(state, chunk);
 		}
-		idx_t scan_count = chunk.size();
-		if (scan_count == 0) {
-			// done
-			return chunk.size() ? AsyncResult(SourceResultType::HAVE_MORE_OUTPUT)
-			                    : AsyncResult(SourceResultType::FINISHED);
-		}
-		if (filters || deletion_filter) {
-			SelectionVector sel;
-			idx_t approved_tuple_count = scan_count;
-			if (deletion_filter) {
-				approved_tuple_count = deletion_filter->Filter(file_row_number, approved_tuple_count, sel);
-			}
-			if (filters) {
-				for (auto &entry : filters->filters) {
-					if (entry.second->filter_type == TableFilterType::OPTIONAL_FILTER) {
-						continue;
-					}
-					auto column_id = entry.first;
-					auto &vec = chunk.data[column_id];
-
-					UnifiedVectorFormat vdata;
-					vec.ToUnifiedFormat(chunk.size(), vdata);
-
-					auto &filter = *entry.second;
-					auto filter_state = TableFilterState::Initialize(context, filter);
-
-					approved_tuple_count = ColumnSegment::FilterSelection(sel, vec, vdata, filter, *filter_state,
-					                                                      chunk.size(), approved_tuple_count);
-				}
-			}
-			if (approved_tuple_count != chunk.size()) {
-				chunk.Slice(sel, approved_tuple_count);
-			}
-			file_row_number += NumericCast<int64_t>(scan_count);
-			if (chunk.size() > 0) {
-				// not an empty chunk, return
-				return chunk.size() ? AsyncResult(SourceResultType::HAVE_MORE_OUTPUT)
-				                    : AsyncResult(SourceResultType::FINISHED);
-			}
-			// all rows were filtered, keep going
-		} else {
-			file_row_number += NumericCast<int64_t>(scan_count);
-			return chunk.size() ? AsyncResult(SourceResultType::HAVE_MORE_OUTPUT)
-			                    : AsyncResult(SourceResultType::FINISHED);
+		if (approved_tuple_count != chunk.size()) {
+			chunk.Slice(sel, approved_tuple_count);
 		}
 	}
+	file_row_number += NumericCast<int64_t>(scan_count);
+	return AsyncResult(SourceResultType::HAVE_MORE_OUTPUT);
 }
 
 void DuckLakeInlinedDataReader::AddVirtualColumn(column_t virtual_column_id) {
