@@ -322,7 +322,7 @@ static unique_ptr<Expression> GetPartitionExpressionForUpdate(ClientContext &con
                                                               const DuckLakePartitionField &field) {
 	switch (field.transform.type) {
 	case DuckLakeTransformType::IDENTITY:
-		return column_reference;
+		return std::move(column_reference);
 	case DuckLakeTransformType::YEAR:
 		return GetFunction(context, std::move(column_reference), "year");
 	case DuckLakeTransformType::MONTH:
