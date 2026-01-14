@@ -1,0 +1,73 @@
+# name: test/sql/compaction/compaction_multiple_rename_column.test
+# description: test compaction with multiple column renames (regression test for WriteDroppedColumns bug)
+# group: [compaction]
+
+#
+# This test verifies that WriteDroppedColumns correctly sets end_snapshot only on the
+# currently active column entry (end_snapshot IS NULL), not on historical entries.
+#
+# Bug scenario: When renaming a column multiple times (A -> B -> A -> C), the last rename
+# would corrupt all historical entries for that column_id, making multiple entries visible
+# at intermediate snapshots. This caused "Column with name X already exists!" errors when
+# loading old schema versions (e.g., during compaction or time travel).
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION __TEST_DIR__/compaction_multiple_rename_column.db
+
+test-env DATA_PATH __TEST_DIR__
+
+statement ok
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/compaction_multiple_rename_column')
+
+# Create table with user_id column (schema version 1)
+statement ok
+CREATE TABLE ducklake.test(id INTEGER, user_id INTEGER);
+
+# Rename user_id -> temp (schema version 2)
+statement ok
+ALTER TABLE ducklake.test RENAME COLUMN user_id TO temp;
+
+# Rename temp -> user_id (schema version 3)
+# Now we have two historical entries with name 'user_id':
+# - Entry 1 (original): name='user_id', should end at snapshot 2
+# - Entry 2 (this rename): name='user_id', begins at snapshot 3
+statement ok
+ALTER TABLE ducklake.test RENAME COLUMN temp TO user_id;
+
+# INSERT DATA AT SCHEMA VERSION 3 - files are created at this schema version
+statement ok
+INSERT INTO ducklake.test VALUES (1, 100);
+
+statement ok
+INSERT INTO ducklake.test VALUES (2, 200);
+
+# Rename user_id -> distinct_id (schema version 4)
+# With the bug, WriteDroppedColumns sets end_snapshot on ALL entries with this column_id
+# This corrupts Entry 1's end_snapshot, making it visible at schema version 3 snapshots
+# Now at schema version 3, BOTH Entry 1 ('user_id') and Entry 2 ('user_id') are visible!
+statement ok
+ALTER TABLE ducklake.test RENAME COLUMN user_id TO distinct_id;
+
+# Detach catalog to clear the schema cache
+# Without this, schema version 3 would be cached from before the corruption
+statement ok
+DETACH ducklake;
+
+statement ok
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/compaction_multiple_rename_column')
+
+# Compact the files created at schema version 3
+# This loads the corrupted schema where both 'user_id' entries are visible
+# Without the fix, this fails with "Column with name user_id already exists!"
+statement ok
+CALL ducklake_merge_adjacent_files('ducklake', 'test');
+
+# Verify current data is correct
+query II
+SELECT id, distinct_id FROM ducklake.test ORDER BY id;
+----
+1	100
+2	200

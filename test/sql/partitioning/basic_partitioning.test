@@ -16,6 +16,12 @@ USE ducklake
 statement ok
 CREATE TABLE partitioned_tbl(part_key INTEGER, values VARCHAR);
 
+# cannot partition by a nonexistent column
+statement error
+ALTER TABLE partitioned_tbl SET PARTITIONED BY (nonexistent);
+----
+column "nonexistent" does not exist
+
 statement ok
 ALTER TABLE partitioned_tbl SET PARTITIONED BY (part_key);
 

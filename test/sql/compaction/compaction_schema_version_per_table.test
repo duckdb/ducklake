@@ -1,0 +1,124 @@
+# name: test/sql/compaction/compaction_schema_version_per_table.test
+# description: Check if our schema changes are tracked per table
+# group: [compaction]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+
+test-env DATA_PATH __TEST_DIR__
+
+statement ok
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/ducklake_schema_version_per_table')
+
+statement ok
+use ducklake
+
+statement ok
+CREATE TABLE table_to_compact AS SELECT range a FROM range(5);
+
+statement ok
+CREATE VIEW view_bumps_schema_version AS SELECT 42;
+
+statement ok
+INSERT INTO table_to_compact VALUES (5), (6);
+
+# compaction should work because the table's schema didn't change (only a view was created)
+statement ok
+CALL ducklake_merge_adjacent_files('ducklake', 'table_to_compact');
+
+# cleanup old files
+statement ok
+CALL ducklake_cleanup_old_files('ducklake', cleanup_all => true);
+
+# after cleanup we should have 1 file (all files merged together)
+query I
+SELECT COUNT(*) FROM ducklake_list_files('ducklake', 'table_to_compact')
+----
+1
+
+# verify schema evolution table
+query III
+FROM __ducklake_metadata_ducklake.ducklake_schema_versions
+----
+1	1	1
+
+
+statement ok
+CREATE TABLE ducklake.another_table (x INT);
+
+statement ok
+INSERT INTO ducklake.another_table VALUES (100), (200);
+
+statement ok
+INSERT INTO ducklake.another_table VALUES (300), (400);
+
+
+statement ok
+INSERT INTO ducklake.table_to_compact VALUES (7), (8);
+
+statement ok
+ALTER TABLE ducklake.another_table ADD COLUMN y VARCHAR;
+
+statement ok
+INSERT INTO ducklake.another_table VALUES (300, 1), (400,2);
+
+statement ok
+INSERT INTO ducklake.another_table VALUES (500, 1), (600,2);
+
+# table_to_compact (id 1)  only has one schema still
+# another_table (id 3)  has two schemas
+query III
+FROM __ducklake_metadata_ducklake.ducklake_schema_versions
+----
+1	1	1
+5	3	3
+9	4	3
+
+statement ok
+INSERT INTO ducklake.table_to_compact VALUES (9), (10);
+
+# we should have 3 data files for table_to_compact (1 merged + 2 new inserts)
+query I
+SELECT COUNT(*) FROM ducklake_list_files('ducklake', 'table_to_compact')
+----
+3
+
+# compaction should work because table_to_compact's schema didn't change
+statement ok
+CALL ducklake_merge_adjacent_files('ducklake', 'table_to_compact');
+
+# after cleanup we should have 1 file for table_to_compact
+query I
+SELECT COUNT(*) FROM ducklake_list_files('ducklake', 'table_to_compact')
+----
+1
+
+# verify another_table is unaffected
+query I
+SELECT COUNT(*) FROM ducklake_list_files('ducklake', 'another_table')
+----
+4
+
+statement ok
+CALL ducklake_merge_adjacent_files('ducklake', 'another_table');
+
+# after cleanup we should have 2 file for another_table
+query I
+SELECT COUNT(*) FROM ducklake_list_files('ducklake', 'another_table')
+----
+2
+
+query II
+FROM another_table ORDER BY ALL;
+----
+100	NULL
+200	NULL
+300	1
+300	NULL
+400	2
+400	NULL
+500	1
+600	2

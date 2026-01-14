@@ -1,7 +1,6 @@
 {
   "description": "Run DuckLake tests using MinIO.",
-  "on_init": "CREATE SECRET (TYPE S3, KEY_ID 'admin', SECRET 'password', ENDPOINT '127.0.0.1:9000', URL_STYLE 'path', USE_SSL 0); SET timezone = 'UTC';",
-  "autoloading": "all",
+  "on_init": "CREATE SECRET (TYPE S3, KEY_ID 'admin', SECRET 'password', ENDPOINT '127.0.0.1:9000', URL_STYLE 'path', USE_SSL 0);",
   "test_env": [{
       "env_name":  "DATA_PATH",
       "env_value": "s3://mybucket"
@@ -24,7 +23,12 @@
   {
       "reason": "Test with a hardcoded file path.",
       "paths": [
-        "test/sql/add_files/add_old_list.test"
+        "test/sql/add_files/add_old_list.test",
+        "test/sql/migration/migration.test",
+        "test/sql/migration/per_table_schema.test",
+        "test/sql/migration/v01_partitioned.test",
+        "test/sql/delete/delete_ignore_extra_columns.test",
+        "test/sql/add_files/add_file_with_three_level_list.test"
       ]
     }
   ]

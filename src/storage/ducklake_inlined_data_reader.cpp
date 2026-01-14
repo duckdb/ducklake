@@ -164,7 +164,7 @@ bool DuckLakeInlinedDataReader::TryInitializeScan(ClientContext &context, Global
 }
 
 AsyncResult DuckLakeInlinedDataReader::Scan(ClientContext &context, GlobalTableFunctionState &global_state,
-                                     LocalTableFunctionState &local_state, DataChunk &chunk) {
+                                            LocalTableFunctionState &local_state, DataChunk &chunk) {
 	// the multifiel reader interprets empty chunks as EOF, so we gotta be sure we still scanning if applying filters
 	while (true) {
 		if (!virtual_columns.empty()) {
@@ -196,8 +196,8 @@ AsyncResult DuckLakeInlinedDataReader::Scan(ClientContext &context, GlobalTableF
 		idx_t scan_count = chunk.size();
 		if (scan_count == 0) {
 			// done
-			return chunk.size() ? AsyncResult(SourceResultType::HAVE_MORE_OUTPUT) : AsyncResult(SourceResultType::FINISHED);
-
+			return chunk.size() ? AsyncResult(SourceResultType::HAVE_MORE_OUTPUT)
+			                    : AsyncResult(SourceResultType::FINISHED);
 		}
 		if (filters || deletion_filter) {
 			SelectionVector sel;
@@ -229,14 +229,14 @@ AsyncResult DuckLakeInlinedDataReader::Scan(ClientContext &context, GlobalTableF
 			file_row_number += NumericCast<int64_t>(scan_count);
 			if (chunk.size() > 0) {
 				// not an empty chunk, return
-				return chunk.size() ? AsyncResult(SourceResultType::HAVE_MORE_OUTPUT) : AsyncResult(SourceResultType::FINISHED);
-
+				return chunk.size() ? AsyncResult(SourceResultType::HAVE_MORE_OUTPUT)
+				                    : AsyncResult(SourceResultType::FINISHED);
 			}
 			// all rows were filtered, keep going
 		} else {
 			file_row_number += NumericCast<int64_t>(scan_count);
-			return chunk.size() ? AsyncResult(SourceResultType::HAVE_MORE_OUTPUT) : AsyncResult(SourceResultType::FINISHED);
-
+			return chunk.size() ? AsyncResult(SourceResultType::HAVE_MORE_OUTPUT)
+			                    : AsyncResult(SourceResultType::FINISHED);
 		}
 	}
 }

@@ -1,0 +1,171 @@
+# name: test/sql/add_files/add_file_partitioned.test
+# description: test if ducklake adds files with proper partitioning information
+# group: [add_files]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+
+test-env DATA_PATH __TEST_DIR__
+
+statement ok
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/add_file_partitioned/', METADATA_CATALOG 'metadata');
+
+statement ok
+USE ducklake;
+
+statement ok
+CREATE TABLE partitioned_t (id INT, partition_column INT, other_partition_column INT);
+
+statement ok
+ALTER TABLE partitioned_t SET PARTITIONED BY (partition_column);
+
+statement ok
+INSERT INTO partitioned_t VALUES (5,1,2), (6,1,2);
+
+statement ok
+INSERT INTO partitioned_t VALUES (5,2,1), (6,3,3);
+
+statement ok
+COPY (SELECT 4 AS id, 2 as other_partition_column) TO '${DATA_PATH}/add_file_partitioned/main/partitioned_t/partition_column=2/file.parquet' (FORMAT parquet);
+
+query II
+FROM read_parquet('${DATA_PATH}/add_file_partitioned/main/partitioned_t/partition_column=2/file.parquet', hive_partitioning = false)
+----
+4	2
+
+query IIII
+FROM metadata.ducklake_file_partition_value;
+----
+0	1	0	1
+1	1	0	2
+2	1	0	3
+
+query III
+SELECT data_file_id, min_value, max_value FROM metadata.ducklake_file_column_stats where column_id = 2
+----
+0	1	1
+1	2	2
+2	3	3
+
+statement ok
+CALL ducklake_add_data_files('ducklake', 'partitioned_t', '${DATA_PATH}/add_file_partitioned/main/partitioned_t/partition_column=2/file.parquet')
+
+# Added file has proper min/max
+query III
+SELECT data_file_id, min_value, max_value FROM metadata.ducklake_file_column_stats where column_id = 2
+----
+0	1	1
+1	2	2
+2	3	3
+4	2	2
+
+# Added file has partition value
+query IIII
+FROM metadata.ducklake_file_partition_value;
+----
+0	1	0	1
+1	1	0	2
+2	1	0	3
+4	1	0	2
+
+query III
+FROM partitioned_t where partition_column = 2;
+----
+5	2	1
+4	2	2
+
+statement ok
+COPY (SELECT 4 AS id, 2 as partition_column, 2 as other_partition_column) TO '${DATA_PATH}/add_file_partitioned/main/partitioned_t/file.parquet' (FORMAT parquet);
+
+statement error
+CALL ducklake_add_data_files('ducklake', 'partitioned_t', '${DATA_PATH}/add_file_partitioned/main/partitioned_t/file.parquet')
+----
+contains an invalid partition value for the table configuration
+
+
+statement ok
+CREATE TABLE other_partitioned_t (id INT, partition_column INT, other_partition_column INT);
+
+statement ok
+ALTER TABLE other_partitioned_t SET PARTITIONED BY (other_partition_column);
+
+statement ok
+INSERT INTO other_partitioned_t VALUES (5,1,2), (6,1,2);
+
+statement ok
+COPY (SELECT 4 AS id, 2 as partition_column, 2 as other_partition_column) TO '${DATA_PATH}/add_file_partitioned/main/other_partitioned_t/other_partition_column=2/file.parquet' (FORMAT parquet);
+
+statement error
+CALL ducklake_add_data_files('ducklake', 'partitioned_t', '${DATA_PATH}/add_file_partitioned/main/other_partitioned_t/other_partition_column=2/file.parquet')
+----
+contains an invalid partition value for the table configuration
+
+statement ok
+ALTER TABLE partitioned_t SET PARTITIONED BY (other_partition_column);
+
+statement ok
+INSERT INTO partitioned_t VALUES (5,1,2), (6,1,2);
+
+statement error
+CALL ducklake_add_data_files('ducklake', 'partitioned_t', '${DATA_PATH}/add_file_partitioned/main/partitioned_t/partition_column=2/file.parquet')
+----
+contains an invalid partition value for the table configuration
+
+# Test multi-column partitioning with date functions (year, month, day)
+statement ok
+CREATE TABLE multi_partition_t (id INT, value VARCHAR, dt DATE);
+
+statement ok
+ALTER TABLE multi_partition_t SET PARTITIONED BY (year(dt), month(dt), day(dt));
+
+statement ok
+INSERT INTO multi_partition_t VALUES
+    (1, 'a', '2024-01-15'),
+    (2, 'b', '2024-02-10'),
+    (3, 'c', '2024-04-20');
+
+# 1. Create a file that matches the full partition (year, month, day)
+statement ok
+COPY (SELECT 10 AS id, 'x' as value, '2024-02-10'::DATE as dt) TO '${DATA_PATH}/add_file_partitioned/main/multi_partition_t/year=2024/month=2/day=10/full_match.parquet' (FORMAT parquet);
+
+# Adding file that matches full partition should succeed
+statement ok
+CALL ducklake_add_data_files('ducklake', 'multi_partition_t', '${DATA_PATH}/add_file_partitioned/main/multi_partition_t/year=2024/month=2/day=10/full_match.parquet')
+
+query III
+FROM multi_partition_t WHERE id = 10;
+----
+10	x	2024-02-10
+
+# 2. Create a file that matches only a subset of the partition (year, month) - missing day
+statement ok
+COPY (SELECT 1 as x, 2024 as year, 3 as month) TO '${DATA_PATH}/add_file_partitioned/subset_test' (FORMAT parquet, PARTITION_BY (year, month));
+
+statement ok
+COPY (SELECT 11 AS id, 'y' as value, '2024-03-15'::DATE as dt) TO '${DATA_PATH}/add_file_partitioned/subset_test/year=2024/month=3/subset_match.parquet' (FORMAT parquet);
+
+# Adding file that matches only a subset of partitions should fail
+statement error
+CALL ducklake_add_data_files('ducklake', 'multi_partition_t', '${DATA_PATH}/add_file_partitioned/subset_test/year=2024/month=3/subset_match.parquet')
+----
+contains an invalid partition value for the table configuration
+
+# 3. Create a file that matches the partition but in a different order (day, year, month instead of year, month, day)
+statement ok
+COPY (SELECT 1 as x, 20 as day, 2024 as year, 4 as month) TO '${DATA_PATH}/add_file_partitioned/different_order_test' (FORMAT parquet, PARTITION_BY (day, year, month));
+
+statement ok
+COPY (SELECT 12 AS id, 'z' as value, '2024-04-20'::DATE as dt) TO '${DATA_PATH}/add_file_partitioned/different_order_test/day=20/year=2024/month=4/different_order.parquet' (FORMAT parquet);
+
+# Adding file with partitions in different order should succeed (order shouldn't matter as long as all partitions are present)
+statement ok
+CALL ducklake_add_data_files('ducklake', 'multi_partition_t', '${DATA_PATH}/add_file_partitioned/different_order_test/day=20/year=2024/month=4/different_order.parquet')
+
+query III
+FROM multi_partition_t WHERE day(dt) = 20 order by id;
+----
+3	c	2024-04-20
+12	z	2024-04-20

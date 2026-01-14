@@ -35,7 +35,7 @@ struct WriteDeleteFileInput {
 //! Utility class for writing delete files
 struct DuckLakeDeleteFileWriter {
 	//! Write a delete file and return the resulting DuckLakeDeleteFile
-	static DuckLakeDeleteFile WriteDeleteFile(WriteDeleteFileInput &input);
+	static DuckLakeDeleteFile WriteDeleteFile(ClientContext &context, WriteDeleteFileInput &input);
 };
 
 struct DuckLakeDeleteMap {

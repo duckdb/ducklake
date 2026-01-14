@@ -203,7 +203,7 @@ unique_ptr<MultiFileList> DuckLakeMultiFileList::Copy() {
 	result->read_file_list = read_file_list;
 	result->delete_scans = delete_scans;
 	result->inlined_data_tables = inlined_data_tables;
-	return result;
+	return std::move(result);
 }
 
 const DuckLakeFileListEntry &DuckLakeMultiFileList::GetFileEntry(idx_t file_idx) {

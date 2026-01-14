@@ -1,5 +1,8 @@
 #include "storage/ducklake_update.hpp"
 
+#include "duckdb/common/mutex.hpp"
+#include "duckdb/common/types/hash.hpp"
+#include "duckdb/common/unordered_set.hpp"
 #include "duckdb/execution/operator/projection/physical_projection.hpp"
 #include "duckdb/function/function_binder.hpp"
 #include "duckdb/planner/expression.hpp"
@@ -16,6 +19,21 @@
 #include "duckdb/planner/operator/logical_projection.hpp"
 
 namespace duckdb {
+
+struct FileRowId {
+	uint64_t file_index;
+	int64_t row_number;
+
+	bool operator==(const FileRowId &other) const {
+		return file_index == other.file_index && row_number == other.row_number;
+	}
+};
+
+struct FileRowIdHash {
+	hash_t operator()(const FileRowId &id) const {
+		return CombineHash(Hash(id.file_index), Hash(id.row_number));
+	}
+};
 
 DuckLakeUpdate::DuckLakeUpdate(PhysicalPlan &physical_plan, DuckLakeTableEntry &table, vector<PhysicalIndex> columns_p,
                                PhysicalOperator &child, PhysicalOperator &copy_op, PhysicalOperator &delete_op,
@@ -36,6 +54,10 @@ public:
 	}
 
 	atomic<idx_t> total_updated_count;
+
+	//! Duplicate row detection (first-write-wins)
+	mutex seen_rows_lock;
+	unordered_set<FileRowId, FileRowIdHash> seen_rows;
 };
 
 class DuckLakeUpdateLocalState : public LocalSinkState {
@@ -95,7 +117,41 @@ unique_ptr<LocalSinkState> DuckLakeUpdate::GetLocalSinkState(ExecutionContext &c
 // Sink
 //===--------------------------------------------------------------------===//
 SinkResultType DuckLakeUpdate::Sink(ExecutionContext &context, DataChunk &chunk, OperatorSinkInput &input) const {
+	auto &gstate = input.global_state.Cast<DuckLakeUpdateGlobalState>();
 	auto &lstate = input.local_state.Cast<DuckLakeUpdateLocalState>();
+
+	// filter duplicate row IDs using deletion info (last 3 columns)
+	idx_t delete_idx_start = chunk.ColumnCount() - DELETION_INFO_SIZE;
+	auto &file_index_vec = chunk.data[delete_idx_start + 1];
+	auto &row_number_vec = chunk.data[delete_idx_start + 2];
+
+	UnifiedVectorFormat file_index_data, row_number_data;
+	file_index_vec.ToUnifiedFormat(chunk.size(), file_index_data);
+	row_number_vec.ToUnifiedFormat(chunk.size(), row_number_data);
+	auto file_indices = UnifiedVectorFormat::GetData<uint64_t>(file_index_data);
+	auto row_numbers = UnifiedVectorFormat::GetData<int64_t>(row_number_data);
+
+	SelectionVector sel(chunk.size());
+	idx_t sel_count = 0;
+	{
+		lock_guard<mutex> guard(gstate.seen_rows_lock);
+		for (idx_t i = 0; i < chunk.size(); i++) {
+			auto file_idx = file_index_data.sel->get_index(i);
+			auto row_idx = row_number_data.sel->get_index(i);
+			FileRowId key {file_indices[file_idx], row_numbers[row_idx]};
+			if (gstate.seen_rows.insert(key).second) {
+				sel.set_index(sel_count++, i);
+			}
+		}
+	}
+
+	if (sel_count == 0) {
+		// all rows were duplicates
+		return SinkResultType::NEED_MORE_INPUT;
+	}
+
+	// slice to non-duplicate rows only
+	chunk.Slice(sel, sel_count);
 
 	// push the to-be-inserted data into the copy
 	auto &update_expression_chunk = lstate.update_expression_chunk;
@@ -134,7 +190,6 @@ SinkResultType DuckLakeUpdate::Sink(ExecutionContext &context, DataChunk &chunk,
 	// push the rowids into the delete
 	auto &delete_chunk = lstate.delete_chunk;
 	delete_chunk.SetCardinality(chunk.size());
-	idx_t delete_idx_start = chunk.ColumnCount() - DELETION_INFO_SIZE;
 	for (idx_t i = 0; i < DELETION_INFO_SIZE; i++) {
 		delete_chunk.data[i].Reference(chunk.data[delete_idx_start + i]);
 	}
@@ -267,7 +322,7 @@ static unique_ptr<Expression> GetPartitionExpressionForUpdate(ClientContext &con
                                                               const DuckLakePartitionField &field) {
 	switch (field.transform.type) {
 	case DuckLakeTransformType::IDENTITY:
-		return column_reference;
+		return std::move(column_reference);
 	case DuckLakeTransformType::YEAR:
 		return GetFunction(context, std::move(column_reference), "year");
 	case DuckLakeTransformType::MONTH:

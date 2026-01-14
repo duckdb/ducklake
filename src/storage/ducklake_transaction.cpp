@@ -1184,8 +1184,17 @@ DuckLakeFileInfo DuckLakeTransaction::GetNewDataFile(DuckLakeDataFile &file, Duc
 		column_stats.column_size_bytes = to_string(stats.column_size_bytes);
 		if (stats.has_null_count) {
 			if (stats.has_num_values) {
-				column_stats.value_count = to_string(stats.num_values);
-				column_stats.null_count = to_string(stats.null_count);
+				// value_count should be the count of non-null values: num_values - null_count
+				// Validate that null_count doesn't exceed num_values to prevent underflow
+				if (stats.null_count > stats.num_values) {
+					// Invalid stats - null_count can't exceed total values
+					// This can happen with nested columns in some parquet files
+					column_stats.value_count = "NULL";
+					column_stats.null_count = "NULL";
+				} else {
+					column_stats.value_count = to_string(stats.num_values - stats.null_count);
+					column_stats.null_count = to_string(stats.null_count);
+				}
 			} else {
 				if (stats.null_count > file.row_count) {
 					// Something went wrong with the stats, make them NULL
@@ -1556,6 +1565,21 @@ string DuckLakeTransaction::CommitChanges(DuckLakeCommitState &commit_state,
 		batch_queries += metadata_manager->WriteCompactions(compaction_rewrite_delete_changes.compacted_files,
 		                                                    CompactionType::REWRITE_DELETES);
 	}
+
+	// Tracking for tables that had schema changes
+	set<TableIndex> tables_with_schema_changes;
+	for (auto &table_id : transaction_changes.altered_tables) {
+		if (!table_id.IsTransactionLocal()) {
+			tables_with_schema_changes.insert(table_id);
+		}
+	}
+	for (auto &new_table : new_tables_result) {
+		if (!new_table.id.IsTransactionLocal()) {
+			tables_with_schema_changes.insert(new_table.id);
+		}
+	}
+	batch_queries += metadata_manager->InsertNewSchema(commit_snapshot, tables_with_schema_changes);
+
 	return batch_queries;
 }
 
@@ -1698,10 +1722,6 @@ void DuckLakeTransaction::FlushChanges() {
 			batch_queries += metadata_manager->InsertSnapshot();
 
 			batch_queries += WriteSnapshotChanges(commit_state, transaction_changes);
-			if (SchemaChangesMade()) {
-				// Insert our new schema in our table that tracks schema changes
-				batch_queries += metadata_manager->InsertNewSchema(commit_snapshot);
-			}
 
 			auto res = metadata_manager->Execute(commit_snapshot, batch_queries);
 			if (res->HasError()) {
@@ -1934,6 +1954,7 @@ void DuckLakeTransaction::AppendFiles(TableIndex table_id, vector<DuckLakeDataFi
 	if (files.empty()) {
 		return;
 	}
+	lock_guard<mutex> guard(table_data_changes_lock);
 	auto &table_changes = table_data_changes[table_id];
 	for (auto &file : files) {
 		table_changes.new_data_files.push_back(std::move(file));
@@ -1968,6 +1989,7 @@ void DuckLakeTransaction::AddNewInlinedDeletes(TableIndex table_id, const string
 	if (new_deletes.empty()) {
 		return;
 	}
+	lock_guard<mutex> guard(table_data_changes_lock);
 	auto &table_changes = table_data_changes[table_id];
 	auto &table_deletes = table_changes.new_inlined_data_deletes;
 	auto entry = table_deletes.find(table_name);
@@ -2041,6 +2063,7 @@ void DuckLakeTransaction::AddDeletes(TableIndex table_id, vector<DuckLakeDeleteF
 	if (files.empty()) {
 		return;
 	}
+	lock_guard<mutex> guard(table_data_changes_lock);
 	auto &table_changes = table_data_changes[table_id];
 	auto &table_delete_map = table_changes.new_delete_files;
 	for (auto &file : files) {

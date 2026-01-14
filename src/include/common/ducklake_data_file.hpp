@@ -21,7 +21,7 @@ struct DuckLakeFilePartition {
 
 enum class DeleteFileSource : uint8_t {
 	REGULAR, //! Regular delete file created during a DELETE operation
-	FLUSH //! Delete file created during a flush operation (flushing inlined data)
+	FLUSH    //! Delete file created during a flush operation (flushing inlined data)
 };
 
 struct DuckLakeDeleteFile {
