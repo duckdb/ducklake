@@ -15,11 +15,10 @@ namespace duckdb {
 
 struct DuckLakeDeleteData {
 	vector<idx_t> deleted_rows;
-
 	vector<idx_t> snapshot_ids;
 
-	idx_t Filter(row_t start_row_index, idx_t count, SelectionVector &result_sel) const;
-	idx_t Filter(row_t start_row_index, idx_t count, SelectionVector &result_sel, idx_t snapshot_filter) const;
+	idx_t Filter(row_t start_row_index, idx_t count, SelectionVector &result_sel,
+	             optional_idx snapshot_filter = optional_idx()) const;
 };
 
 struct DeleteFileScanResult {

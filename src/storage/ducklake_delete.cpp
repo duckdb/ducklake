@@ -26,8 +26,10 @@
 
 namespace duckdb {
 
-// FIXME: We can merge both these code paths
-DuckLakeDeleteFile DuckLakeDeleteFileWriter::WriteDeleteFile(ClientContext &context, WriteDeleteFileInput &input) {
+template <typename InputType>
+static DuckLakeDeleteFile WriteDeleteFileInternal(ClientContext &context, InputType &input) {
+	constexpr bool with_snapshots = std::is_same<InputType, WriteDeleteFileWithSnapshotsInput>::value;
+
 	auto delete_file_uuid = "ducklake-" + input.transaction.GenerateUUID() + "-delete.parquet";
 	string delete_file_path = DuckLakeUtil::JoinPath(input.fs, input.data_path, delete_file_uuid);
 
@@ -41,6 +43,11 @@ DuckLakeDeleteFile DuckLakeDeleteFileWriter::WriteDeleteFile(ClientContext &cont
 	child_list_t<Value> values;
 	values.emplace_back("file_path", Value::INTEGER(MultiFileReader::FILENAME_FIELD_ID));
 	values.emplace_back("pos", Value::INTEGER(MultiFileReader::ORDINAL_FIELD_ID));
+	if (with_snapshots) {
+		// add the snapshot_id column to track when each deletion became valid
+		values.emplace_back("_ducklake_internal_snapshot_id",
+		                    Value::INTEGER(MultiFileReader::LAST_UPDATED_SEQUENCE_NUMBER_ID));
+	}
 	auto field_ids = Value::STRUCT(std::move(values));
 	vector<Value> field_input;
 	field_input.push_back(std::move(field_ids));
@@ -60,9 +67,12 @@ DuckLakeDeleteFile DuckLakeDeleteFileWriter::WriteDeleteFile(ClientContext &cont
 
 	vector<string> names_to_write {"file_path", "pos"};
 	vector<LogicalType> types_to_write {LogicalType::VARCHAR, LogicalType::BIGINT};
+	if (with_snapshots) {
+		names_to_write.push_back("_ducklake_internal_snapshot_id");
+		types_to_write.push_back(LogicalType::BIGINT);
+	}
 
 	auto function_data = copy_fun.function.copy_to_bind(input.context, bind_input, names_to_write, types_to_write);
-
 	auto copy_global_state = copy_fun.function.copy_to_initialize_global(context, *function_data, delete_file_path);
 
 	// set up stats to get them from function
@@ -71,7 +81,6 @@ DuckLakeDeleteFile DuckLakeDeleteFileWriter::WriteDeleteFile(ClientContext &cont
 
 	ThreadContext thread_context(context);
 	ExecutionContext execution_context(context, thread_context, nullptr);
-
 	auto copy_local_state = copy_fun.function.copy_to_initialize_local(execution_context, *function_data);
 
 	DataChunk write_chunk;
@@ -80,107 +89,27 @@ DuckLakeDeleteFile DuckLakeDeleteFileWriter::WriteDeleteFile(ClientContext &cont
 	Value filename_val(input.data_file_path);
 	write_chunk.data[0].Reference(filename_val);
 
-	idx_t row_count = 0;
-	auto row_data = FlatVector::GetData<int64_t>(write_chunk.data[1]);
-	for (auto &pos : input.positions) {
-		row_data[row_count++] = NumericCast<int64_t>(pos);
-		if (row_count >= STANDARD_VECTOR_SIZE) {
-			write_chunk.SetCardinality(row_count);
-			copy_fun.function.copy_to_sink(execution_context, *function_data, *copy_global_state, *copy_local_state,
-			                               write_chunk);
-			row_count = 0;
-		}
-	}
-	if (row_count > 0) {
-		write_chunk.SetCardinality(row_count);
-		copy_fun.function.copy_to_sink(execution_context, *function_data, *copy_global_state, *copy_local_state,
-		                               write_chunk);
-	}
-
-	copy_fun.function.copy_to_combine(execution_context, *function_data, *copy_global_state, *copy_local_state);
-	copy_fun.function.copy_to_finalize(context, *function_data, *copy_global_state);
-
-	// add to the written files
-	DuckLakeDeleteFile delete_file;
-	// set the stats to the delete file
-	delete_file.data_file_path = input.data_file_path;
-	delete_file.file_name = delete_file_path;
-	delete_file.delete_count = stats.row_count;
-	delete_file.file_size_bytes = stats.file_size_bytes;
-	delete_file.footer_size = stats.footer_size_bytes.GetValue<idx_t>();
-	delete_file.encryption_key = input.encryption_key;
-	delete_file.source = input.source;
-	return delete_file;
-}
-
-DuckLakeDeleteFile DuckLakeDeleteFileWriter::WriteDeleteFileWithSnapshots(ClientContext &context,
-                                                                          WriteDeleteFileWithSnapshotsInput &input) {
-	auto delete_file_uuid = "ducklake-" + input.transaction.GenerateUUID() + "-delete.parquet";
-	string delete_file_path = DuckLakeUtil::JoinPath(input.fs, input.data_path, delete_file_uuid);
-
-	auto info = make_uniq<CopyInfo>();
-	info->file_path = delete_file_path;
-	info->format = "parquet";
-	info->is_from = false;
-
-	// generate the field ids to be written by the parquet writer
-	// these field ids follow icebergs' ids and names for the delete files
-	// additionally we add the snapshot_id column to track when each deletion became valid
-	child_list_t<Value> values;
-	values.emplace_back("file_path", Value::INTEGER(MultiFileReader::FILENAME_FIELD_ID));
-	values.emplace_back("pos", Value::INTEGER(MultiFileReader::ORDINAL_FIELD_ID));
-	values.emplace_back("_ducklake_internal_snapshot_id",
-	                    Value::INTEGER(MultiFileReader::LAST_UPDATED_SEQUENCE_NUMBER_ID));
-	auto field_ids = Value::STRUCT(std::move(values));
-	vector<Value> field_input;
-	field_input.push_back(std::move(field_ids));
-	info->options["field_ids"] = std::move(field_input);
-
-	if (!input.encryption_key.empty()) {
-		child_list_t<Value> enc_values;
-		enc_values.emplace_back("footer_key_value", Value::BLOB_RAW(input.encryption_key));
-		vector<Value> encryption_input;
-		encryption_input.push_back(Value::STRUCT(std::move(enc_values)));
-		info->options["encryption_config"] = std::move(encryption_input);
-	}
-
-	// get the actual copy function and bind it
-	auto &copy_fun = DuckLakeFunctions::GetCopyFunction(input.context, "parquet");
-	CopyFunctionBindInput bind_input(*info);
-
-	vector<string> names_to_write {"file_path", "pos", "_ducklake_internal_snapshot_id"};
-	vector<LogicalType> types_to_write {LogicalType::VARCHAR, LogicalType::BIGINT, LogicalType::BIGINT};
-
-	auto function_data = copy_fun.function.copy_to_bind(input.context, bind_input, names_to_write, types_to_write);
-
-	auto copy_global_state = copy_fun.function.copy_to_initialize_global(context, *function_data, delete_file_path);
-
-	// set up stats to get them from function
-	CopyFunctionFileStatistics stats;
-	copy_fun.function.copy_to_get_written_statistics(context, *function_data, *copy_global_state, stats);
-
-	ThreadContext thread_context(context);
-	ExecutionContext execution_context(context, thread_context, nullptr);
-
-	auto copy_local_state = copy_fun.function.copy_to_initialize_local(execution_context, *function_data);
-
-	DataChunk write_chunk;
-	write_chunk.Initialize(input.context, types_to_write);
-	// the first vector is constant (the file name)
-	Value filename_val(input.data_file_path);
-	write_chunk.data[0].Reference(filename_val);
-
-	// derive begin_snapshot from the minimum snapshot_id in positions
 	optional_idx begin_snapshot;
 	idx_t row_count = 0;
 	auto pos_data = FlatVector::GetData<int64_t>(write_chunk.data[1]);
-	auto snapshot_data = FlatVector::GetData<int64_t>(write_chunk.data[2]);
+	int64_t *snapshot_data = nullptr;
+	if (with_snapshots) {
+		snapshot_data = FlatVector::GetData<int64_t>(write_chunk.data[2]);
+	}
+
 	for (auto &entry : input.positions) {
-		if (!begin_snapshot.IsValid() || entry.snapshot_id < begin_snapshot.GetIndex()) {
-			begin_snapshot = entry.snapshot_id;
+		if (with_snapshots) {
+			// entry is PositionWithSnapshot
+			auto &pos_with_snap = reinterpret_cast<const PositionWithSnapshot &>(entry);
+			if (!begin_snapshot.IsValid() || pos_with_snap.snapshot_id < begin_snapshot.GetIndex()) {
+				begin_snapshot = pos_with_snap.snapshot_id;
+			}
+			pos_data[row_count] = NumericCast<int64_t>(pos_with_snap.position);
+			snapshot_data[row_count] = NumericCast<int64_t>(pos_with_snap.snapshot_id);
+		} else {
+			// entry is idx_t
+			pos_data[row_count] = NumericCast<int64_t>(reinterpret_cast<const idx_t &>(entry));
 		}
-		pos_data[row_count] = NumericCast<int64_t>(entry.position);
-		snapshot_data[row_count] = NumericCast<int64_t>(entry.snapshot_id);
 		row_count++;
 		if (row_count >= STANDARD_VECTOR_SIZE) {
 			write_chunk.SetCardinality(row_count);
@@ -206,10 +135,20 @@ DuckLakeDeleteFile DuckLakeDeleteFileWriter::WriteDeleteFileWithSnapshots(Client
 	delete_file.file_size_bytes = stats.file_size_bytes;
 	delete_file.footer_size = stats.footer_size_bytes.GetValue<idx_t>();
 	delete_file.encryption_key = input.encryption_key;
-	delete_file.begin_snapshot = begin_snapshot;
-	// end_snapshot is always NULL - this delete file is valid for all future snapshots
 	delete_file.source = input.source;
+	if (with_snapshots) {
+		delete_file.begin_snapshot = begin_snapshot;
+	}
 	return delete_file;
+}
+
+DuckLakeDeleteFile DuckLakeDeleteFileWriter::WriteDeleteFile(ClientContext &context, WriteDeleteFileInput &input) {
+	return WriteDeleteFileInternal(context, input);
+}
+
+DuckLakeDeleteFile DuckLakeDeleteFileWriter::WriteDeleteFileWithSnapshots(ClientContext &context,
+                                                                          WriteDeleteFileWithSnapshotsInput &input) {
+	return WriteDeleteFileInternal(context, input);
 }
 
 //===--------------------------------------------------------------------===//

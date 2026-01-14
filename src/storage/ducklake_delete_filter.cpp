@@ -9,8 +9,8 @@ namespace duckdb {
 DuckLakeDeleteFilter::DuckLakeDeleteFilter() : delete_data(make_shared_ptr<DuckLakeDeleteData>()) {
 }
 
-// FIXME: These two can be merged
-idx_t DuckLakeDeleteData::Filter(row_t start_row_index, idx_t count, SelectionVector &result_sel) const {
+idx_t DuckLakeDeleteData::Filter(row_t start_row_index, idx_t count, SelectionVector &result_sel,
+                                 optional_idx snapshot_filter) const {
 	auto entry = std::lower_bound(deleted_rows.begin(), deleted_rows.end(), start_row_index);
 	if (entry == deleted_rows.end()) {
 		// no filter found for this entry
@@ -25,45 +25,17 @@ idx_t DuckLakeDeleteData::Filter(row_t start_row_index, idx_t count, SelectionVe
 	// we have deletes in this range
 	result_sel.Initialize(STANDARD_VECTOR_SIZE);
 	idx_t result_count = 0;
+	bool check_snapshots = snapshot_filter.IsValid() && !snapshot_ids.empty();
 	for (idx_t i = 0; i < count; i++) {
 		if (delete_idx < deleted_rows.size() && start_row_index + i == deleted_rows[delete_idx]) {
-			// this row is deleted - skip
-			delete_idx++;
-			continue;
-		}
-		result_sel.set_index(result_count++, i);
-	}
-	return result_count;
-}
-
-idx_t DuckLakeDeleteData::Filter(row_t start_row_index, idx_t count, SelectionVector &result_sel,
-                                 idx_t snapshot_filter) const {
-	auto entry = std::lower_bound(deleted_rows.begin(), deleted_rows.end(), start_row_index);
-	if (entry == deleted_rows.end()) {
-		// no filter found for this entry
-		return count;
-	}
-	idx_t end_pos = start_row_index + count;
-	auto delete_idx = NumericCast<idx_t>(entry - deleted_rows.begin());
-	if (deleted_rows[delete_idx] > end_pos) {
-		// nothing in this range is deleted - skip
-		return count;
-	}
-	// we have deletes in this range - need to check snapshot IDs
-	result_sel.Initialize(STANDARD_VECTOR_SIZE);
-	idx_t result_count = 0;
-	bool has_snapshot_ids = !snapshot_ids.empty();
-	for (idx_t i = 0; i < count; i++) {
-		if (delete_idx < deleted_rows.size() && start_row_index + i == deleted_rows[delete_idx]) {
-			// check if this deletion is visible at the query snapshot
 			bool is_deleted = true;
-			if (has_snapshot_ids) {
+			if (check_snapshots) {
 				// only consider deletions where snapshot_id <= snapshot_filter
-				is_deleted = snapshot_ids[delete_idx] <= snapshot_filter;
+				is_deleted = snapshot_ids[delete_idx] <= snapshot_filter.GetIndex();
 			}
 			delete_idx++;
 			if (is_deleted) {
-				// this row is deleted at this snapshot - skip
+				// this row is deleted - skip
 				continue;
 			}
 		}
@@ -82,10 +54,7 @@ idx_t DuckLakeDeleteFilter::Filter(row_t start_row_index, idx_t count, Selection
 		}
 		count = MinValue<idx_t>(max_count - start_row_index, count);
 	}
-	if (snapshot_filter.IsValid()) {
-		return delete_data->Filter(start_row_index, count, result_sel, snapshot_filter.GetIndex());
-	}
-	return delete_data->Filter(start_row_index, count, result_sel);
+	return delete_data->Filter(start_row_index, count, result_sel, snapshot_filter);
 }
 
 DeleteFileScanResult DuckLakeDeleteFilter::ScanDeleteFile(ClientContext &context, const DuckLakeFileData &delete_file) {
