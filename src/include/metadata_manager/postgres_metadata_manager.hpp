@@ -16,19 +16,24 @@ class PostgresMetadataManager : public DuckLakeMetadataManager {
 public:
 	explicit PostgresMetadataManager(DuckLakeTransaction &transaction);
 
+	static unique_ptr<DuckLakeMetadataManager> Create(DuckLakeTransaction &transaction) {
+		return make_uniq<PostgresMetadataManager>(transaction);
+	}
+
 	bool TypeIsNativelySupported(const LogicalType &type) override;
 
 	string GetColumnTypeInternal(const LogicalType &type) override;
 
 	unique_ptr<QueryResult> Execute(DuckLakeSnapshot snapshot, string &query) override;
 
-	unique_ptr<QueryResult> Query(DuckLakeSnapshot snapshot, string &query) override;
+	unique_ptr<QueryResult> Query(string query) override;
+	unique_ptr<QueryResult> Query(DuckLakeSnapshot snapshot, string query) override;
 
 protected:
 	string GetLatestSnapshotQuery() const override;
 
 private:
-	unique_ptr<QueryResult> ExecuteQuery(DuckLakeSnapshot snapshot, string &query, string command);
+	unique_ptr<QueryResult> ExecuteQuery(string &query, string command);
 };
 
 } // namespace duckdb

@@ -15,6 +15,7 @@
 #include "duckdb/common/reference_map.hpp"
 #include "duckdb/common/types/value.hpp"
 #include "common/ducklake_snapshot.hpp"
+#include "storage/ducklake_catalog.hpp"
 #include "storage/ducklake_partition_data.hpp"
 #include "storage/ducklake_stats.hpp"
 #include "duckdb/common/types/timestamp.hpp"
@@ -97,6 +98,9 @@ public:
 	explicit DuckLakeMetadataManager(DuckLakeTransaction &transaction);
 	virtual ~DuckLakeMetadataManager();
 
+	typedef unique_ptr<DuckLakeMetadataManager> (*create_t)(DuckLakeTransaction &transaction);
+	static void Register(const string &name, create_t);
+
 	static unique_ptr<DuckLakeMetadataManager> Create(DuckLakeTransaction &transaction);
 
 	virtual bool TypeIsNativelySupported(const LogicalType &type);
@@ -105,13 +109,22 @@ public:
 
 	DuckLakeMetadataManager &Get(DuckLakeTransaction &transaction);
 
+	virtual bool IsInitialized(DuckLakeOptions &options);
 	//! Initialize a new DuckLake
 	virtual void InitializeDuckLake(bool has_explicit_schema, DuckLakeEncryption encryption);
 	virtual DuckLakeMetadata LoadDuckLake();
 
+	static void FillSnapshotArgs(string &query, const DuckLakeSnapshot &snapshot);
+	static void FillSnapshotCommitArgs(string &query, const DuckLakeSnapshotCommit &commit_info);
+	static void FillCatalogArgs(string &query, const DuckLakeCatalog &ducklake_catalog);
+
+	//! Directly execute on metadata
 	virtual unique_ptr<QueryResult> Execute(DuckLakeSnapshot snapshot, string &query);
 
-	virtual unique_ptr<QueryResult> Query(DuckLakeSnapshot snapshot, string &query);
+	//! Directly query on metadata
+	virtual unique_ptr<QueryResult> Query(string query);
+	//! Directly query on metadata
+	virtual unique_ptr<QueryResult> Query(DuckLakeSnapshot snapshot, string query);
 	//! Get the catalog information for a specific snapshot
 	virtual DuckLakeCatalogInfo GetCatalogForSnapshot(DuckLakeSnapshot snapshot);
 	virtual vector<DuckLakeGlobalStatsInfo> GetGlobalTableStats(DuckLakeSnapshot snapshot);
@@ -175,7 +188,7 @@ public:
 	virtual string UpdateGlobalTableStats(const DuckLakeGlobalStatsInfo &stats);
 	virtual SnapshotChangeInfo GetSnapshotAndStatsAndChanges(DuckLakeSnapshot start_snapshot,
 	                                                         SnapshotAndStats &current_snapshot);
-	SnapshotDeletedFromFiles GetFilesDeletedOrDroppedAfterSnapshot(const DuckLakeSnapshot &start_snapshot) const;
+	SnapshotDeletedFromFiles GetFilesDeletedOrDroppedAfterSnapshot(const DuckLakeSnapshot &start_snapshot);
 	virtual unique_ptr<DuckLakeSnapshot> GetSnapshot();
 	virtual unique_ptr<DuckLakeSnapshot> GetSnapshot(BoundAtClause &at_clause, SnapshotBound bound);
 	virtual idx_t GetNextColumnId(TableIndex table_id);
@@ -257,6 +270,8 @@ private:
 
 private:
 	unordered_map<idx_t, string> inlined_table_name_cache;
+	static unordered_map<string /* name */, create_t> metadata_managers;
+	static mutex metadata_managers_lock;
 
 protected:
 	DuckLakeTransaction &transaction;
