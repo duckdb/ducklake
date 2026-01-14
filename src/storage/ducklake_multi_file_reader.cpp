@@ -224,9 +224,8 @@ shared_ptr<BaseFileReader> DuckLakeMultiFileReader::TryCreateInlinedDataReader(c
 		// read the table at the specified version
 		auto transaction = read_info.GetTransaction();
 		auto &catalog = transaction->GetCatalog();
-		DuckLakeSnapshot snapshot(
-		    catalog.GetSnapshotForSchema(schema_version.GetIndex(), read_info.table.GetTableId(), *transaction),
-		    schema_version.GetIndex(), 0, 0);
+		DuckLakeSnapshot snapshot(catalog.GetBeginSnapshotForTable(read_info.table.GetTableId(), *transaction),
+		                          schema_version.GetIndex(), 0, 0);
 		auto entry = catalog.GetEntryById(*transaction, snapshot, read_info.table.GetTableId());
 		if (!entry) {
 			return nullptr;

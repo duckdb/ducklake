@@ -3,12 +3,12 @@
 # group: [data_inlining]
 
 #
-# This test reproduces a bug where GetCatalogIdForSchema doesn't
-# filter by table_id. When multiple tables have inlined data at the same
-# schema_version, reading from a fresh connection can fail.
+# This test reproduces a bug where multiple tables have inlined data at the
+# same schema_version. Reading from a fresh connection can fail because the
+# wrong begin_snapshot is used.
 #
-# The fix adds table_id filtering to GetCatalogIdForSchema so each table
-# gets its correct begin_snapshot.
+# The fix uses GetBeginSnapshotForTable which directly queries ducklake_table
+# by table_id to get the correct begin_snapshot.
 
 require ducklake
 
@@ -74,7 +74,7 @@ ATTACH 'ducklake:__TEST_DIR__/multi_table_fresh.db' AS ducklake (DATA_PATH '__TE
 
 # This query should work after the fix.
 # Before the fix, it would fail with "Cannot open file 'ducklake_inlined_data_2_X'"
-# because GetCatalogIdForSchema returned the wrong begin_snapshot.
+# because the wrong begin_snapshot was used.
 query I
 SELECT SUM(i) FROM ducklake.table_a
 ----
