@@ -22,12 +22,12 @@ SELECT
   CASE WHEN i % 7 = 0 THEN NULL ELSE i::INTEGER END AS maybe_null,
   DATE '2020-01-01' + i::INTEGER AS d,
   printf('%06d', i) AS s
-FROM range(110000) t(i);
+FROM range(110000) t(i); -- 54 groups of 2048 rows each
 
 # copy the reference table to a lot of small parquet files
 statement ok
 COPY events_ref TO '${DATA_PATH}/filter_stress_parquet'
-  (FORMAT PARQUET, ROW_GROUP_SIZE 1, ROW_GROUPS_PER_FILE 1);
+  (FORMAT PARQUET, ROW_GROUP_SIZE 2048, ROW_GROUPS_PER_FILE 1);
 
 # create a DuckLake table
 statement ok
