@@ -55,7 +55,7 @@ SELECT delete_file_id, table_id, begin_snapshot, end_snapshot, data_file_id, del
 2	1	3	NULL	1	1
 
 # Let's verify the parquet file info
-query I
-SELECT pos FROM '${DATA_PATH}/**/*-delete.parquet'
+query II
+SELECT pos, _ducklake_internal_snapshot_id FROM '${DATA_PATH}/test_deletion_from_inlined_insertion/**/*-delete.parquet'
 ----
-1
+1	3

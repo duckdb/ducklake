@@ -151,6 +151,8 @@ ReaderInitializeType DuckLakeMultiFileReader::InitializeReader(MultiFileReaderDa
 			if (file_entry.max_row_count.IsValid()) {
 				delete_filter->SetMaxRowCount(file_entry.max_row_count.GetIndex());
 			}
+			// set the snapshot id so we know what to skip from deletion files
+			delete_filter->SetSnapshotFilter(read_info.snapshot.snapshot_id);
 			if (delete_map) {
 				delete_map->AddDeleteData(reader.GetFileName(), delete_filter->delete_data);
 			}

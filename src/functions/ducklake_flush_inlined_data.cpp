@@ -68,9 +68,7 @@ SinkResultType DuckLakeFlushData::Sink(ExecutionContext &context, DataChunk &chu
 //===--------------------------------------------------------------------===//
 // Finalize
 //===--------------------------------------------------------------------===//
-
-// deletes_per_file[file_name][snapshot] = positions deleted up to that snapshot
-using DeletesPerFile = unordered_map<string, map<idx_t, set<idx_t>>>;
+using DeletesPerFile = unordered_map<string, set<PositionWithSnapshot>>;
 
 static DeletesPerFile GroupDeletesByFile(QueryResult &deleted_rows_result, vector<DuckLakeDataFile> &written_files,
                                          vector<idx_t> &file_start_row_ids) {
@@ -81,7 +79,8 @@ static DeletesPerFile GroupDeletesByFile(QueryResult &deleted_rows_result, vecto
 
 		if (written_files.size() == 1) {
 			// this is easy, we just handover the deleted row ids since they must be from this file
-			deletes_per_file[written_files[0].file_name][end_snap].insert(row_id);
+			PositionWithSnapshot pos_with_snap {row_id, end_snap};
+			deletes_per_file[written_files[0].file_name].insert(pos_with_snap);
 		} else {
 			// lets write the deletes to the right files, in case we have multiple files
 			for (idx_t file_idx = 0; file_idx < written_files.size(); file_idx++) {
@@ -89,60 +88,14 @@ static DeletesPerFile GroupDeletesByFile(QueryResult &deleted_rows_result, vecto
 				idx_t file_end = file_start + written_files[file_idx].row_count;
 				if (row_id >= file_start && row_id < file_end) {
 					idx_t pos_in_file = row_id - file_start;
-					deletes_per_file[written_files[file_idx].file_name][end_snap].insert(pos_in_file);
+					PositionWithSnapshot pos_with_snap {pos_in_file, end_snap};
+					deletes_per_file[written_files[file_idx].file_name].insert(pos_with_snap);
 					break;
 				}
 			}
 		}
 	}
 	return deletes_per_file;
-}
-
-struct WriteDeleteFilesForFileInput {
-	ClientContext &context;
-	DuckLakeTransaction &transaction;
-	FileSystem &fs;
-	const string &data_path;
-	const string &encryption_key;
-	const string &file_name;
-	map<idx_t, set<idx_t>> &snapshots_map;
-};
-
-static void WriteDeleteFilesForFile(ClientContext &context, WriteDeleteFilesForFileInput &input,
-                                    vector<DuckLakeDeleteFile> &delete_files) {
-	idx_t prev_count = 0;
-	idx_t current_delete_file_idx = 0;
-
-	vector<pair<idx_t, reference<set<idx_t>>>> snapshots;
-	for (auto &snap_entry : input.snapshots_map) {
-		snapshots.emplace_back(snap_entry.first, snap_entry.second);
-	}
-
-	for (idx_t i = 0; i < snapshots.size(); i++) {
-		auto current_snapshot = snapshots[i].first;
-		auto &current_positions = snapshots[i].second.get();
-		// end_snapshot is the next snapshot in the list, or empty for the last one
-		optional_idx next_snapshot;
-		if (i + 1 < snapshots.size()) {
-			next_snapshot = snapshots[i + 1].first;
-		}
-
-		if (current_positions.size() == prev_count) {
-			// this means there were no deletions in between the snapshots for this file, so we just
-			// extend the end snapshot
-			delete_files[current_delete_file_idx].end_snapshot = next_snapshot;
-			continue;
-		}
-
-		// write delete file
-		WriteDeleteFileInput file_input {
-		    input.context,   input.transaction, input.fs,         input.data_path, input.encryption_key,
-		    input.file_name, current_positions, current_snapshot, next_snapshot,   DeleteFileSource::FLUSH};
-		auto delete_file = DuckLakeDeleteFileWriter::WriteDeleteFile(context, file_input);
-		current_delete_file_idx = delete_files.size();
-		delete_files.push_back(std::move(delete_file));
-		prev_count = current_positions.size();
-	}
 }
 
 SinkFinalizeType DuckLakeFlushData::Finalize(Pipeline &pipeline, Event &event, ClientContext &context,
@@ -152,20 +105,13 @@ SinkFinalizeType DuckLakeFlushData::Finalize(Pipeline &pipeline, Event &event, C
 	auto snapshot = transaction.GetSnapshot();
 
 	if (!global_state.written_files.empty()) {
-		// query cumulative deleted rows at each snapshot boundary
-		auto deleted_rows_result =
-		    transaction.Query(snapshot, StringUtil::Format(R"(
-			WITH snapshots AS (
-				SELECT DISTINCT end_snapshot
-				FROM {METADATA_CATALOG}.%s
-				WHERE end_snapshot IS NOT NULL
-			)
-			SELECT s.end_snapshot, t.row_id
-			FROM snapshots s
-			JOIN {METADATA_CATALOG}.%s t ON t.end_snapshot <= s.end_snapshot
-			WHERE t.end_snapshot IS NOT NULL
-			ORDER BY s.end_snapshot, t.row_id;)",
-		                                                   inlined_table.table_name, inlined_table.table_name));
+		// query all deleted rows with their snapshot IDs
+		auto deleted_rows_result = transaction.Query(snapshot, StringUtil::Format(R"(
+			SELECT end_snapshot, row_id
+			FROM {METADATA_CATALOG}.%s
+			WHERE end_snapshot IS NOT NULL
+			ORDER BY row_id;)",
+		                                                                          inlined_table.table_name));
 
 		// lets figure out where each file ends, so we know where to place ze deletes
 		vector<idx_t> file_start_row_ids;
@@ -183,9 +129,16 @@ SinkFinalizeType DuckLakeFlushData::Finalize(Pipeline &pipeline, Event &event, C
 			vector<DuckLakeDeleteFile> delete_files;
 
 			for (auto &file_entry : deletes_per_file) {
-				WriteDeleteFilesForFileInput file_input {
-				    context, transaction, fs, table.DataPath(), encryption_key, file_entry.first, file_entry.second};
-				WriteDeleteFilesForFile(context, file_input, delete_files);
+				// write single file, begin_snapshot is the minimum snapshot
+				WriteDeleteFileWithSnapshotsInput file_input {context,
+				                                              transaction,
+				                                              fs,
+				                                              table.DataPath(),
+				                                              encryption_key,
+				                                              file_entry.first,
+				                                              file_entry.second,
+				                                              DeleteFileSource::FLUSH};
+				delete_files.push_back(DuckLakeDeleteFileWriter::WriteDeleteFileWithSnapshots(context, file_input));
 			}
 			AttachDeleteFilesToWrittenFiles(delete_files, global_state.written_files);
 		}

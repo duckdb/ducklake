@@ -9,6 +9,7 @@ namespace duckdb {
 DuckLakeDeleteFilter::DuckLakeDeleteFilter() : delete_data(make_shared_ptr<DuckLakeDeleteData>()) {
 }
 
+// FIXME: These two can be merged
 idx_t DuckLakeDeleteData::Filter(row_t start_row_index, idx_t count, SelectionVector &result_sel) const {
 	auto entry = std::lower_bound(deleted_rows.begin(), deleted_rows.end(), start_row_index);
 	if (entry == deleted_rows.end()) {
@@ -35,6 +36,42 @@ idx_t DuckLakeDeleteData::Filter(row_t start_row_index, idx_t count, SelectionVe
 	return result_count;
 }
 
+idx_t DuckLakeDeleteData::Filter(row_t start_row_index, idx_t count, SelectionVector &result_sel,
+                                 idx_t snapshot_filter) const {
+	auto entry = std::lower_bound(deleted_rows.begin(), deleted_rows.end(), start_row_index);
+	if (entry == deleted_rows.end()) {
+		// no filter found for this entry
+		return count;
+	}
+	idx_t end_pos = start_row_index + count;
+	auto delete_idx = NumericCast<idx_t>(entry - deleted_rows.begin());
+	if (deleted_rows[delete_idx] > end_pos) {
+		// nothing in this range is deleted - skip
+		return count;
+	}
+	// we have deletes in this range - need to check snapshot IDs
+	result_sel.Initialize(STANDARD_VECTOR_SIZE);
+	idx_t result_count = 0;
+	bool has_snapshot_ids = !snapshot_ids.empty();
+	for (idx_t i = 0; i < count; i++) {
+		if (delete_idx < deleted_rows.size() && start_row_index + i == deleted_rows[delete_idx]) {
+			// check if this deletion is visible at the query snapshot
+			bool is_deleted = true;
+			if (has_snapshot_ids) {
+				// only consider deletions where snapshot_id <= snapshot_filter
+				is_deleted = snapshot_ids[delete_idx] <= snapshot_filter;
+			}
+			delete_idx++;
+			if (is_deleted) {
+				// this row is deleted at this snapshot - skip
+				continue;
+			}
+		}
+		result_sel.set_index(result_count++, i);
+	}
+	return result_count;
+}
+
 idx_t DuckLakeDeleteFilter::Filter(row_t start_row_index, idx_t count, SelectionVector &result_sel) {
 	// apply max row count (if it is set)
 	if (max_row_count.IsValid()) {
@@ -45,10 +82,13 @@ idx_t DuckLakeDeleteFilter::Filter(row_t start_row_index, idx_t count, Selection
 		}
 		count = MinValue<idx_t>(max_count - start_row_index, count);
 	}
+	if (snapshot_filter.IsValid()) {
+		return delete_data->Filter(start_row_index, count, result_sel, snapshot_filter.GetIndex());
+	}
 	return delete_data->Filter(start_row_index, count, result_sel);
 }
 
-vector<idx_t> DuckLakeDeleteFilter::ScanDeleteFile(ClientContext &context, const DuckLakeFileData &delete_file) {
+DeleteFileScanResult DuckLakeDeleteFilter::ScanDeleteFile(ClientContext &context, const DuckLakeFileData &delete_file) {
 	auto &instance = DatabaseInstance::GetDatabase(context);
 	ExtensionLoader loader(instance, "ducklake");
 	auto &parquet_scan_entry = loader.GetTableFunction("parquet_scan");
@@ -77,15 +117,29 @@ vector<idx_t> DuckLakeDeleteFilter::ScanDeleteFile(ClientContext &context, const
 
 	auto bind_data = parquet_scan.bind(context, bind_input, return_types, return_names);
 
-	bool not_duckdb = return_types.size() != 2 || return_types[0].id() != LogicalTypeId::VARCHAR ||
-	                  return_types[1].id() != LogicalTypeId::BIGINT;
-	bool not_iceberg = return_types.size() != 3 || return_types[0].id() != LogicalTypeId::VARCHAR ||
-	                   return_types[1].id() != LogicalTypeId::BIGINT;
+	// Check for valid schema, there are three possibilities:
+	// 1. 2 columns: file_path (VARCHAR), pos (BIGINT) -> standard delete file
+	// 2. 3 columns: file_path (VARCHAR), pos (BIGINT), _ducklake_internal_snapshot_id (BIGINT) -> delete file with
+	// snapshots
+	// 3. 3 columns: file_path (VARCHAR), pos (BIGINT), row (?) -> iceberg format (third column ignored)
+	bool valid_two_col = return_types.size() == 2 && return_types[0].id() == LogicalTypeId::VARCHAR &&
+	                     return_types[1].id() == LogicalTypeId::BIGINT;
+	bool valid_three_col = return_types.size() == 3 && return_types[0].id() == LogicalTypeId::VARCHAR &&
+	                       return_types[1].id() == LogicalTypeId::BIGINT;
 
-	if (not_duckdb && not_iceberg) {
+	if (!valid_two_col && !valid_three_col) {
 		throw InvalidInputException(
-		    "Invalid schema contained in the delete file %s - expected file_name/position/row[optional]",
+		    "Invalid schema contained in the delete file %s - expected file_name/position/[snapshot_id or row]",
 		    delete_file.path);
+	}
+
+	// is this from ducklake?
+	bool has_snapshot_id = false;
+	if (return_types.size() == 3 && return_types[2].id() == LogicalTypeId::BIGINT) {
+		// check if the name matches _ducklake_internal_snapshot_id
+		if (return_names.size() > 2 && return_names[2] == "_ducklake_internal_snapshot_id") {
+			has_snapshot_id = true;
+		}
 	}
 
 	DataChunk scan_chunk;
@@ -102,7 +156,7 @@ vector<idx_t> DuckLakeDeleteFilter::ScanDeleteFile(ClientContext &context, const
 	auto global_state = parquet_scan.init_global(context, input);
 	auto local_state = parquet_scan.init_local(execution_context, input, global_state.get());
 
-	vector<idx_t> deleted_rows;
+	DeleteFileScanResult result;
 	int64_t last_delete = -1;
 	while (true) {
 		TableFunctionInput function_input(bind_data.get(), local_state.get(), global_state.get());
@@ -113,31 +167,44 @@ vector<idx_t> DuckLakeDeleteFilter::ScanDeleteFile(ClientContext &context, const
 		if (count == 0) {
 			break;
 		}
-		UnifiedVectorFormat delete_data;
-		scan_chunk.data[1].ToUnifiedFormat(count, delete_data);
+		UnifiedVectorFormat pos_data;
+		scan_chunk.data[1].ToUnifiedFormat(count, pos_data);
+		auto row_ids = UnifiedVectorFormat::GetData<int64_t>(pos_data);
 
-		auto row_ids = UnifiedVectorFormat::GetData<int64_t>(delete_data);
+		UnifiedVectorFormat snapshot_data;
 		for (idx_t i = 0; i < count; i++) {
-			auto idx = delete_data.sel->get_index(i);
-			if (!delete_data.validity.RowIsValid(idx)) {
+			auto pos_idx = pos_data.sel->get_index(i);
+			if (!pos_data.validity.RowIsValid(pos_idx)) {
 				throw InvalidInputException("Invalid delete data - delete data cannot have NULL values");
 			}
-			auto &row_id = row_ids[idx];
+			auto &row_id = row_ids[pos_idx];
 			if (row_id <= last_delete) {
 				throw InvalidInputException(
 				    "Invalid delete data - row ids must be sorted and strictly increasing - but found %d after %d",
 				    row_id, last_delete);
 			}
 
-			deleted_rows.push_back(row_id);
+			result.deleted_rows.push_back(row_id);
 			last_delete = row_id;
+
+			if (has_snapshot_id) {
+				scan_chunk.data[2].ToUnifiedFormat(count, snapshot_data);
+				auto snapshot_ids = UnifiedVectorFormat::GetData<int64_t>(snapshot_data);
+				auto snap_idx = snapshot_data.sel->get_index(i);
+				if (!snapshot_data.validity.RowIsValid(snap_idx)) {
+					throw InvalidInputException("Invalid delete data - snapshot_id cannot be NULL");
+				}
+				result.snapshot_ids.push_back(NumericCast<idx_t>(snapshot_ids[snap_idx]));
+			}
 		}
 	}
-	return deleted_rows;
+	return result;
 }
 
 void DuckLakeDeleteFilter::Initialize(ClientContext &context, const DuckLakeFileData &delete_file) {
-	delete_data->deleted_rows = ScanDeleteFile(context, delete_file);
+	auto scan_result = ScanDeleteFile(context, delete_file);
+	delete_data->deleted_rows = std::move(scan_result.deleted_rows);
+	delete_data->snapshot_ids = std::move(scan_result.snapshot_ids);
 }
 
 void DuckLakeDeleteFilter::Initialize(const DuckLakeInlinedDataDeletes &inlined_deletes) {
@@ -156,7 +223,7 @@ void DuckLakeDeleteFilter::Initialize(ClientContext &context, const DuckLakeDele
 		auto current_deletes = ScanDeleteFile(context, delete_scan.delete_file);
 		// iterate over the current delets - these are the rows we need to scan
 		memset(rows_to_scan.get(), 0, sizeof(bool) * delete_scan.row_count);
-		for (auto delete_idx : current_deletes) {
+		for (auto delete_idx : current_deletes.deleted_rows) {
 			if (delete_idx >= delete_scan.row_count) {
 				throw InvalidInputException(
 				    "Invalid delete data - delete index read from file %s is out of range for data file %s",
@@ -174,7 +241,7 @@ void DuckLakeDeleteFilter::Initialize(ClientContext &context, const DuckLakeDele
 		// if we have a previous delete file - scan that set of deletes
 		auto previous_deletes = ScanDeleteFile(context, delete_scan.previous_delete_file);
 		// these deletes are not new - we should not scan them
-		for (auto delete_idx : previous_deletes) {
+		for (auto delete_idx : previous_deletes.deleted_rows) {
 			if (delete_idx >= delete_scan.row_count) {
 				throw InvalidInputException(
 				    "Invalid delete data - delete index read from file %s is out of range for data file %s",
@@ -195,6 +262,10 @@ void DuckLakeDeleteFilter::Initialize(ClientContext &context, const DuckLakeDele
 
 void DuckLakeDeleteFilter::SetMaxRowCount(idx_t max_row_count_p) {
 	max_row_count = max_row_count_p;
+}
+
+void DuckLakeDeleteFilter::SetSnapshotFilter(idx_t snapshot_filter_p) {
+	snapshot_filter = snapshot_filter_p;
 }
 
 } // namespace duckdb

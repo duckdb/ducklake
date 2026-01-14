@@ -18,24 +18,40 @@ class DuckLakeTableEntry;
 class DuckLakeDeleteGlobalState;
 class DuckLakeTransaction;
 
+//! A deletion position with the snapshot ID from which it became valid
+struct PositionWithSnapshot {
+	idx_t position;
+	idx_t snapshot_id;
+
+	bool operator<(const PositionWithSnapshot &other) const {
+		return position < other.position;
+	}
+};
+
 //! Input parameters for writing a delete file
-struct WriteDeleteFileInput {
+template <typename PositionType>
+struct WriteDeleteFileInputBase {
 	ClientContext &context;
 	DuckLakeTransaction &transaction;
 	FileSystem &fs;
 	string data_path;
 	string encryption_key;
 	string data_file_path;
-	set<idx_t> positions;
-	optional_idx begin_snapshot;
-	optional_idx end_snapshot;
+	set<PositionType> positions;
 	DeleteFileSource source;
 };
 
-//! Utility class for writing delete files
+//! Input for writing a delete file without per-position snapshot IDs, used for deletion
+using WriteDeleteFileInput = WriteDeleteFileInputBase<idx_t>;
+
+//! Input for writing a delete file with per-position snapshot IDs, used for flushing
+using WriteDeleteFileWithSnapshotsInput = WriteDeleteFileInputBase<PositionWithSnapshot>;
+
+//! Util class for writing delete files
 struct DuckLakeDeleteFileWriter {
-	//! Write a delete file and return the resulting DuckLakeDeleteFile
 	static DuckLakeDeleteFile WriteDeleteFile(ClientContext &context, WriteDeleteFileInput &input);
+	static DuckLakeDeleteFile WriteDeleteFileWithSnapshots(ClientContext &context,
+	                                                       WriteDeleteFileWithSnapshotsInput &input);
 };
 
 struct DuckLakeDeleteMap {

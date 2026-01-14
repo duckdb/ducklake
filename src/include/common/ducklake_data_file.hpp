@@ -34,7 +34,6 @@ struct DuckLakeDeleteFile {
 	string encryption_key;
 	bool overwrites_existing_delete = false;
 	optional_idx begin_snapshot;
-	optional_idx end_snapshot;
 	DeleteFileSource source = DeleteFileSource::REGULAR;
 };
 
