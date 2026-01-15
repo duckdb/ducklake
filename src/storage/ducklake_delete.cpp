@@ -377,8 +377,6 @@ void DuckLakeDelete::FlushDelete(DuckLakeTransaction &transaction, ClientContext
 		return;
 	}
 
-	// Convert sorted_deletes to vector for the shared function
-
 	auto &fs = FileSystem::GetFileSystem(context);
 	WriteDeleteFileInput input {context,
 	                            transaction,
@@ -390,7 +388,6 @@ void DuckLakeDelete::FlushDelete(DuckLakeTransaction &transaction, ClientContext
 	                            DeleteFileSource::REGULAR};
 	auto written_file = DuckLakeDeleteFileWriter::WriteDeleteFile(context, input);
 
-	// Copy over the additional fields
 	written_file.data_file_id = delete_file.data_file_id;
 	written_file.overwrites_existing_delete = delete_file.overwrites_existing_delete;
 

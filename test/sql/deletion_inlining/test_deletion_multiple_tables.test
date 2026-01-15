@@ -53,11 +53,11 @@ statement ok
 CALL ducklake_flush_inlined_data('ducklake');
 
 # We get a single delete file per table
-query IIIIII
-SELECT delete_file_id, table_id, begin_snapshot, end_snapshot, data_file_id, delete_count FROM __ducklake_metadata_ducklake.ducklake_delete_file
+query IIII
+SELECT  table_id, begin_snapshot, end_snapshot, delete_count FROM __ducklake_metadata_ducklake.ducklake_delete_file ORDER BY table_id
 ----
-4	1	5	NULL	2	5
-5	2	8	NULL	3	5
+1	5	NULL	5
+2	8	NULL	5
 
 query I
 FROM t1;

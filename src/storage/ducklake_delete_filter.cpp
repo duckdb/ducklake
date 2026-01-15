@@ -35,7 +35,6 @@ idx_t DuckLakeDeleteData::Filter(row_t start_row_index, idx_t count, SelectionVe
 			}
 			delete_idx++;
 			if (is_deleted) {
-				// this row is deleted - skip
 				continue;
 			}
 		}

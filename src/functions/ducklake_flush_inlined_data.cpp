@@ -74,8 +74,8 @@ static DeletesPerFile GroupDeletesByFile(QueryResult &deleted_rows_result, vecto
                                          vector<idx_t> &file_start_row_ids) {
 	DeletesPerFile deletes_per_file;
 	for (auto &row : deleted_rows_result) {
-		idx_t end_snap = NumericCast<idx_t>(row.GetValue<int64_t>(0));
-		idx_t row_id = NumericCast<idx_t>(row.GetValue<int64_t>(1));
+		auto end_snap = row.GetValue<int64_t>(0);
+		auto row_id = row.GetValue<int64_t>(1);
 
 		if (written_files.size() == 1) {
 			// this is easy, we just handover the deleted row ids since they must be from this file
@@ -84,10 +84,10 @@ static DeletesPerFile GroupDeletesByFile(QueryResult &deleted_rows_result, vecto
 		} else {
 			// lets write the deletes to the right files, in case we have multiple files
 			for (idx_t file_idx = 0; file_idx < written_files.size(); file_idx++) {
-				idx_t file_start = file_start_row_ids[file_idx];
-				idx_t file_end = file_start + written_files[file_idx].row_count;
+				const int64_t file_start = static_cast<int64_t>(file_start_row_ids[file_idx]);
+				const int64_t file_end = static_cast<int64_t>(file_start + written_files[file_idx].row_count);
 				if (row_id >= file_start && row_id < file_end) {
-					idx_t pos_in_file = row_id - file_start;
+					int64_t pos_in_file = row_id - file_start;
 					PositionWithSnapshot pos_with_snap {pos_in_file, end_snap};
 					deletes_per_file[written_files[file_idx].file_name].insert(pos_with_snap);
 					break;

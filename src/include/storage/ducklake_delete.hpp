@@ -20,8 +20,8 @@ class DuckLakeTransaction;
 
 //! A deletion position with the snapshot ID from which it became valid
 struct PositionWithSnapshot {
-	idx_t position;
-	idx_t snapshot_id;
+	int64_t position;
+	int64_t snapshot_id;
 
 	bool operator<(const PositionWithSnapshot &other) const {
 		return position < other.position;

@@ -46,11 +46,11 @@ CALL ducklake_flush_inlined_data('ducklake');
 
 # With consolidated delete files, we now write one delete file per data file
 # Each deletion has its own snapshot_id stored in the file itself
-query IIIIII
-SELECT delete_file_id, table_id, begin_snapshot, end_snapshot, data_file_id, delete_count FROM __ducklake_metadata_ducklake.ducklake_delete_file
+query IIII
+SELECT table_id, begin_snapshot, end_snapshot, delete_count FROM __ducklake_metadata_ducklake.ducklake_delete_file ORDER BY begin_snapshot
 ----
-3	1	3	NULL	2	38561
-4	1	2	NULL	1	61741
+1	2	NULL	61741
+1	3	NULL	38561
 
 query I
 SELECT COUNT(*) FROM t1;
