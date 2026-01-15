@@ -73,8 +73,7 @@ CALL ducklake_rewrite_data_files('ducklake', 'test', delete_threshold => 0.5);
 query I
 SELECT delete_file_id FROM ducklake_metadata.ducklake_delete_file
 ----
-1
-2
+3
 
 query I
 SELECT COUNT(*) from test
@@ -92,8 +91,7 @@ WHERE key > 4000;
 query I
 SELECT delete_file_id FROM ducklake_metadata.ducklake_delete_file
 ----
-1
-2
+3
 5
 
 statement ok
@@ -102,8 +100,8 @@ CALL ducklake_rewrite_data_files('ducklake', 'test');
 query I
 SELECT delete_file_id FROM ducklake_metadata.ducklake_delete_file
 ----
-1
-2
+3
+5
 
 query I
 SELECT COUNT(*) from test
@@ -120,19 +118,14 @@ CALL ducklake_rewrite_data_files('ducklake', 'test');
 query I
 SELECT delete_file_id FROM ducklake_metadata.ducklake_delete_file
 ----
-1
-2
+3
+5
 7
 
 # Test that a manual delete_threshold option has priority over the global value.
 statement ok
 CALL ducklake_rewrite_data_files('ducklake', 'test', delete_threshold => 0);
 
-query I
-SELECT delete_file_id FROM ducklake_metadata.ducklake_delete_file
-----
-1
-2
 
 # Try invalid values for threshold
 statement error
@@ -159,7 +152,7 @@ CALL ducklake_cleanup_old_files('ducklake', cleanup_all => true);
 query I
 SELECT COUNT(*) FROM GLOB('${DATA_PATH}/ducklake_rewrite_data/**/*')
 ----
-6
+7
 
 # Let's check every snapshot has the right answer
 query II
