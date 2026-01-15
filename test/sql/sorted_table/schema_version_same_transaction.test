@@ -1,0 +1,73 @@
+# name: test/sql/sorted_table/schema_version_same_transaction.test
+# description: Verify schema_version with multiple operations in same transaction
+# group: [sorted_table]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+
+statement ok
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '__TEST_DIR__/same_txn_test/')
+
+statement ok
+CREATE TABLE ducklake.test(a INTEGER, b VARCHAR);
+
+query I
+SELECT max(schema_version) FROM ducklake.snapshots()
+----
+1
+
+# Multiple SET SORTED BY in same transaction - should NOT increment
+statement ok
+BEGIN
+
+statement ok
+ALTER TABLE ducklake.test SET SORTED BY (a ASC);
+
+statement ok
+ALTER TABLE ducklake.test SET SORTED BY (b DESC);
+
+statement ok
+ALTER TABLE ducklake.test SET SORTED BY (a DESC, b ASC);
+
+statement ok
+COMMIT
+
+query I
+SELECT max(schema_version) FROM ducklake.snapshots()
+----
+1
+
+# SET SORTED BY + ADD COLUMN in same transaction - SHOULD increment (once)
+statement ok
+BEGIN
+
+statement ok
+ALTER TABLE ducklake.test SET SORTED BY (a ASC);
+
+statement ok
+ALTER TABLE ducklake.test ADD COLUMN c BIGINT;
+
+statement ok
+ALTER TABLE ducklake.test SET SORTED BY (a ASC, c DESC);
+
+statement ok
+COMMIT
+
+query I
+SELECT max(schema_version) FROM ducklake.snapshots()
+----
+2
+
+# Verify sort data was committed correctly
+query III
+SELECT expression, sort_direction, null_order
+FROM __ducklake_metadata_ducklake.ducklake_sort_expression se
+JOIN __ducklake_metadata_ducklake.ducklake_sort_info si USING (sort_id)
+WHERE si.table_id = 1 AND si.end_snapshot IS NULL
+ORDER BY se.sort_key_index
+----
+a	ASC	NULLS_LAST
+c	DESC	NULLS_LAST

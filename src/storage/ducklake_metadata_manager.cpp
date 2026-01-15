@@ -2834,8 +2834,8 @@ string DuckLakeMetadataManager::WriteNewSortKeys(DuckLakeSnapshot commit_snapsho
 		old_sort_table_ids += to_string(new_sort.second.table_id.index);
 
 		if (!new_sort.second.id.IsValid()) {
-			// dropping sort data - we don't need to do anything
-			return {};
+			// dropping sort data - skip adding new values but continue to set end_snapshot on old sort
+			continue;
 		}
 		auto sort_id = new_sort.second.id.GetIndex();
 

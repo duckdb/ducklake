@@ -1099,6 +1099,12 @@ unique_ptr<CatalogEntry> DuckLakeTableEntry::AlterTable(DuckLakeTransaction &tra
 	auto create_info = GetInfo();
 	auto &table_info = create_info->Cast<CreateTableInfo>();
 
+	if (info.orders.empty()) {
+		// RESET SORTED BY - clear sort data
+		auto new_entry = make_uniq<DuckLakeTableEntry>(*this, table_info, unique_ptr<DuckLakeSort>());
+		return std::move(new_entry);
+	}
+
 	auto sort_data = make_uniq<DuckLakeSort>();
 	sort_data->sort_id = transaction.GetLocalCatalogId();
 	for (idx_t order_node_idx = 0; order_node_idx < info.orders.size(); order_node_idx++) {

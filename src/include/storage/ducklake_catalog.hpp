@@ -24,6 +24,7 @@ struct DuckLakeFileListEntry;
 struct DuckLakeConfigOption;
 struct DeleteFileMap;
 class LogicalGet;
+struct DuckLakeSort;
 
 class DuckLakeCatalog : public Catalog {
 public:
@@ -165,6 +166,9 @@ public:
 	                                                   DuckLakeCatalogSet &schema);
 	//! Return the schema for the given snapshot - loading it if it is not yet loaded
 	DuckLakeCatalogSet &GetSchemaForSnapshot(DuckLakeTransaction &transaction, DuckLakeSnapshot snapshot);
+	//! Update the sort data for a table in the cached schema (used when SET_SORT_KEY commits without schema change)
+	//! TODO: FIXME add methods or extend UpdateSortDataInCache to handle SET_COMMENT and SET_COLUMN_COMMENT flows
+	void UpdateSortDataInCache(idx_t schema_version, TableIndex table_id, unique_ptr<DuckLakeSort> sort_data);
 
 private:
 	void DropSchema(ClientContext &context, DropInfo &info) override;

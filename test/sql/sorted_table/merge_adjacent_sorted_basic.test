@@ -68,6 +68,27 @@ t.table_name = 'sort_on_compaction'
 statement ok
 ALTER TABLE ducklake.sort_on_compaction SET SORTED BY (sort_key_1 ASC NULLS LAST, sort_key_2 ASC NULLS LAST);
 
+# Validate snapshot changes - SET SORTED BY should NOT increment schema_version
+query I
+SELECT max(schema_version)
+FROM ducklake.snapshots()
+----
+1
+
+# Even multiple changes back to back should not change the schema_version
+statement ok
+ALTER TABLE ducklake.sort_on_compaction SET SORTED BY (sort_key_1 DESC, sort_key_2 DESC);
+
+statement ok
+ALTER TABLE ducklake.sort_on_compaction SET SORTED BY (sort_key_1 ASC NULLS LAST, sort_key_2 ASC NULLS LAST);
+
+# Validate snapshot changes - SET SORTED BY should NOT increment schema_version
+query I
+SELECT max(schema_version)
+FROM ducklake.snapshots()
+----
+1
+
 # Do some other kind of alter table on that table to make sure that it does not interfere
 statement ok
 ALTER TABLE sort_on_compaction ADD COLUMN new_column INTEGER;
@@ -98,6 +119,7 @@ t.table_name = 'sort_on_compaction'
 ----
 2	1
 
+
 # Column does not exist in the table
 statement error
 ALTER TABLE sort_on_compaction SET SORTED BY (WOOOOT ASC ,   BLAH ASC);
@@ -113,9 +135,9 @@ SET SORTED BY only supports column references, not expressions
 # Drop the table, then expire the snapshots, then validate that the catalog data has been removed
 
 # Pre-expiration catalog status:
-query IIIII
+query IIIIIII
 SELECT
-si.table_id, si.begin_snapshot, si.end_snapshot, se.sort_key_index, se.expression
+si.table_id, si.begin_snapshot, si.end_snapshot, se.sort_key_index, se.expression, se.sort_direction, se.null_order
 FROM __ducklake_metadata_ducklake.ducklake_sort_info si
 JOIN __ducklake_metadata_ducklake.ducklake_sort_expression se USING (sort_id)
 JOIN __ducklake_metadata_ducklake.ducklake_table t 
@@ -123,17 +145,21 @@ ON si.table_id = t.table_id
 WHERE 
 t.table_name = 'sort_on_compaction'
 ----
-1	4	NULL	0	sort_key_1
-1	4	NULL	1	sort_key_2
+1	4	5	0	sort_key_1	ASC	NULLS_LAST
+1	4	5	1	sort_key_2	ASC	NULLS_LAST
+1	5	6	0	sort_key_1	DESC	NULLS_LAST
+1	5	6	1	sort_key_2	DESC	NULLS_LAST
+1	6	NULL	0	sort_key_1	ASC	NULLS_LAST
+1	6	NULL	1	sort_key_2	ASC	NULLS_LAST
 
 
 statement ok
 drop table sort_on_compaction;
 
 # History should be present as long as the snapshots are not yet expired
-query IIIII
+query IIIIIII
 SELECT
-si.table_id, si.begin_snapshot, si.end_snapshot, se.sort_key_index, se.expression
+si.table_id, si.begin_snapshot, si.end_snapshot, se.sort_key_index, se.expression, se.sort_direction, se.null_order
 FROM __ducklake_metadata_ducklake.ducklake_sort_info si
 JOIN __ducklake_metadata_ducklake.ducklake_sort_expression se USING (sort_id)
 JOIN __ducklake_metadata_ducklake.ducklake_table t 
@@ -141,8 +167,12 @@ ON si.table_id = t.table_id
 WHERE 
 t.table_name = 'sort_on_compaction'
 ----
-1	4	7	0	sort_key_1
-1	4	7	1	sort_key_2
+1	4	5	0	sort_key_1	ASC	NULLS_LAST
+1	4	5	1	sort_key_2	ASC	NULLS_LAST
+1	5	6	0	sort_key_1	DESC	NULLS_LAST
+1	5	6	1	sort_key_2	DESC	NULLS_LAST
+1	6	9	0	sort_key_1	ASC	NULLS_LAST
+1	6	9	1	sort_key_2	ASC	NULLS_LAST
 
 statement ok
 CALL ducklake_expire_snapshots('ducklake', older_than => now());

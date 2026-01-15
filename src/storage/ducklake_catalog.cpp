@@ -1,6 +1,7 @@
 #include "storage/ducklake_catalog.hpp"
 
 #include "common/ducklake_types.hpp"
+#include "storage/ducklake_sort_data.hpp"
 #include "duckdb/catalog/catalog_entry/macro_catalog_entry.hpp"
 #include "duckdb/catalog/catalog_entry/schema_catalog_entry.hpp"
 #include "duckdb/catalog/catalog_entry/table_catalog_entry.hpp"
@@ -188,6 +189,22 @@ DuckLakeCatalogSet &DuckLakeCatalog::GetSchemaForSnapshot(DuckLakeTransaction &t
 	auto &result = *schema;
 	schemas.insert(make_pair(snapshot.schema_version, std::move(schema)));
 	return result;
+}
+
+void DuckLakeCatalog::UpdateSortDataInCache(idx_t schema_version, TableIndex table_id,
+                                            unique_ptr<DuckLakeSort> sort_data) {
+	lock_guard<mutex> guard(schemas_lock);
+	auto entry = schemas.find(schema_version);
+	if (entry == schemas.end()) {
+		// Schema not cached yet, nothing to update
+		return;
+	}
+	auto table_entry = entry->second->GetEntryById(table_id);
+	if (!table_entry || table_entry->type != CatalogType::TABLE_ENTRY) {
+		return;
+	}
+	auto &table = table_entry->Cast<DuckLakeTableEntry>();
+	table.SetSortData(std::move(sort_data));
 }
 
 static unique_ptr<DuckLakeFieldId> TransformColumnType(DuckLakeColumnInfo &col) {

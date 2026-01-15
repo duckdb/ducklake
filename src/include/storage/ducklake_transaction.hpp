@@ -10,6 +10,7 @@
 
 #include "ducklake_macro_entry.hpp"
 #include "common/ducklake_data_file.hpp"
+#include "common/local_change.hpp"
 #include "common/ducklake_snapshot.hpp"
 #include "duckdb/common/case_insensitive_map.hpp"
 #include "duckdb/common/types/value_map.hpp"
@@ -91,6 +92,7 @@ public:
 	void AlterEntry(CatalogEntry &old_entry, unique_ptr<CatalogEntry> new_entry);
 
 	DuckLakeCatalogSet &GetOrCreateTransactionLocalEntries(CatalogEntry &entry);
+	DuckLakeCatalogSet &GetOrCreateTransactionLocalEntriesAlterTable(CatalogEntry &entry, LocalChangeType change_type);
 	optional_ptr<DuckLakeCatalogSet> GetTransactionLocalSchemas();
 	optional_ptr<DuckLakeCatalogSet> GetTransactionLocalEntries(CatalogType type, const string &schema_name);
 	optional_ptr<CatalogEntry> GetTransactionLocalEntry(CatalogType catalog_type, const string &schema_name,
@@ -229,6 +231,8 @@ private:
 	idx_t local_catalog_id;
 	//! New tables added by this transaction
 	case_insensitive_map_t<unique_ptr<DuckLakeCatalogSet>> new_tables;
+	//! Tables altered with non-schema-changing operations
+	case_insensitive_map_t<unique_ptr<DuckLakeCatalogSet>> altered_tables_same_schema;
 	set<TableIndex> dropped_tables;
 
 	//! New macros added by this transaction
