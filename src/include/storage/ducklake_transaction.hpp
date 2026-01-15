@@ -92,7 +92,7 @@ public:
 	void AlterEntry(CatalogEntry &old_entry, unique_ptr<CatalogEntry> new_entry);
 
 	DuckLakeCatalogSet &GetOrCreateTransactionLocalEntries(CatalogEntry &entry);
-	DuckLakeCatalogSet &GetOrCreateTransactionLocalEntriesAlterTable(CatalogEntry &entry, LocalChangeType change_type);
+	DuckLakeCatalogSet &GetOrCreateTransactionLocalEntriesAlter(CatalogEntry &entry, LocalChangeType change_type);
 	optional_ptr<DuckLakeCatalogSet> GetTransactionLocalSchemas();
 	optional_ptr<DuckLakeCatalogSet> GetTransactionLocalEntries(CatalogType type, const string &schema_name);
 	optional_ptr<CatalogEntry> GetTransactionLocalEntry(CatalogType catalog_type, const string &schema_name,

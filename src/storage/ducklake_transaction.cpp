@@ -24,8 +24,8 @@ namespace duckdb {
 static bool IsSchemaAlteringChange(LocalChangeType type) {
 	switch (type) {
 	case LocalChangeType::SET_SORT_KEY:
-	// case LocalChangeType::SET_COMMENT:
-	// case LocalChangeType::SET_COLUMN_COMMENT:
+	case LocalChangeType::SET_COMMENT:
+	case LocalChangeType::SET_COLUMN_COMMENT:
 		return false;
 	default:
 		return true;
@@ -1798,23 +1798,53 @@ void DuckLakeTransaction::FlushChanges() {
 			catalog_version = commit_snapshot.schema_version;
 
 			// If there were non-schema-altering changes but schema_version didn't change,
-			// update the cached schema with the new data (e.g., sort info)
+			// update the cached schema with the new data (e.g., sort info, comments)
 			if (!altered_tables_same_schema.empty() && !SchemaChangesMade()) {
 				for (auto &schema_entry : altered_tables_same_schema) {
 					for (auto &entry : schema_entry.second->GetEntries()) {
 						if (entry.second->type == CatalogType::TABLE_ENTRY) {
 							auto &table = entry.second->Cast<DuckLakeTableEntry>();
 							auto table_id = table.GetTableId();
-							auto sort_data = table.GetSortData();
-							if (sort_data) {
-								// Copy the sort data to update the cache
-								auto sort_copy = make_uniq<DuckLakeSort>(*sort_data);
-								ducklake_catalog.UpdateSortDataInCache(commit_snapshot.schema_version, table_id,
-								                                       std::move(sort_copy));
-							} else {
-								// Sort data was cleared
-								ducklake_catalog.UpdateSortDataInCache(commit_snapshot.schema_version, table_id,
-								                                       nullptr);
+							auto local_change = table.GetLocalChange();
+
+							switch (local_change.type) {
+							case LocalChangeType::SET_SORT_KEY: {
+								auto sort_data = table.GetSortData();
+								if (sort_data) {
+									// Copy the sort data to update the cache
+									auto sort_copy = make_uniq<DuckLakeSort>(*sort_data);
+									ducklake_catalog.UpdateSortDataInCache(commit_snapshot.schema_version, table_id,
+									                                       std::move(sort_copy));
+								} else {
+									// Sort data was cleared
+									ducklake_catalog.UpdateSortDataInCache(commit_snapshot.schema_version, table_id,
+									                                       nullptr);
+								}
+								break;
+							}
+							case LocalChangeType::SET_COMMENT: {
+								ducklake_catalog.UpdateTableCommentInCache(commit_snapshot.schema_version, table_id,
+								                                           table.comment);
+								break;
+							}
+							case LocalChangeType::SET_COLUMN_COMMENT: {
+								auto field_index = local_change.field_index;
+								auto &col = table.GetColumnByFieldId(field_index);
+								ducklake_catalog.UpdateColumnCommentInCache(commit_snapshot.schema_version, table_id,
+								                                            field_index, col.Comment());
+								break;
+							}
+							default:
+								break;
+							}
+						} else if (entry.second->type == CatalogType::VIEW_ENTRY) {
+							auto &view = entry.second->Cast<DuckLakeViewEntry>();
+							auto view_id = view.GetViewId();
+							auto local_change = view.GetLocalChange();
+
+							if (local_change.type == LocalChangeType::SET_COMMENT) {
+								ducklake_catalog.UpdateViewCommentInCache(commit_snapshot.schema_version, view_id,
+								                                          view.comment);
 							}
 						}
 					}
@@ -2405,7 +2435,7 @@ void DuckLakeTransaction::AlterEntry(CatalogEntry &entry, unique_ptr<CatalogEntr
 void DuckLakeTransaction::AlterEntryInternal(DuckLakeTableEntry &table, unique_ptr<CatalogEntry> new_entry) {
 	auto &new_table = new_entry->Cast<DuckLakeTableEntry>();
 	auto change_type = new_table.GetLocalChange().type;
-	auto &entries = GetOrCreateTransactionLocalEntriesAlterTable(table, change_type);
+	auto &entries = GetOrCreateTransactionLocalEntriesAlter(table, change_type);
 	entries.CreateEntry(std::move(new_entry));
 	switch (change_type) {
 	case LocalChangeType::RENAMED: {
@@ -2439,9 +2469,10 @@ void DuckLakeTransaction::AlterEntryInternal(DuckLakeTableEntry &table, unique_p
 
 void DuckLakeTransaction::AlterEntryInternal(DuckLakeViewEntry &view, unique_ptr<CatalogEntry> new_entry) {
 	auto &new_view = new_entry->Cast<DuckLakeViewEntry>();
-	auto &entries = GetOrCreateTransactionLocalEntries(view);
+	auto change_type = new_view.GetLocalChange().type;
+	auto &entries = GetOrCreateTransactionLocalEntriesAlter(view, change_type);
 	entries.CreateEntry(std::move(new_entry));
-	switch (new_view.GetLocalChange().type) {
+	switch (change_type) {
 	case LocalChangeType::RENAMED: {
 		// rename - take care of the old table
 		if (view.IsTransactionLocal()) {
@@ -2494,7 +2525,7 @@ DuckLakeCatalogSet &DuckLakeTransaction::GetOrCreateTransactionLocalEntries(Cata
 	}
 }
 
-DuckLakeCatalogSet &DuckLakeTransaction::GetOrCreateTransactionLocalEntriesAlterTable(CatalogEntry &entry,
+DuckLakeCatalogSet &DuckLakeTransaction::GetOrCreateTransactionLocalEntriesAlter(CatalogEntry &entry,
                                                                                       LocalChangeType change_type) {
 	auto catalog_type = entry.type;
 	if (catalog_type == CatalogType::SCHEMA_ENTRY) {

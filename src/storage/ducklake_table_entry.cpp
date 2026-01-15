@@ -320,6 +320,15 @@ void DuckLakeTableEntry::SetSortData(unique_ptr<DuckLakeSort> sort_data_p) {
 	sort_data = std::move(sort_data_p);
 }
 
+void DuckLakeTableEntry::SetColumnComment(FieldIndex field_index, const Value &new_comment) {
+	auto field_id = GetFieldId(field_index);
+	if (!field_id) {
+		return;
+	}
+	auto &col = columns.GetColumnMutable(field_id->Name());
+	col.SetComment(new_comment);
+}
+
 const string &DuckLakeTableEntry::DataPath() const {
 	return data_path;
 }
