@@ -19,6 +19,11 @@ struct DuckLakeFilePartition {
 	string partition_value;
 };
 
+enum class DeleteFileSource : uint8_t {
+	REGULAR, //! Regular delete file created during a DELETE operation
+	FLUSH    //! Delete file created during a flush operation (flushing inlined data)
+};
+
 struct DuckLakeDeleteFile {
 	DataFileIndex data_file_id;
 	string data_file_path;
@@ -28,6 +33,8 @@ struct DuckLakeDeleteFile {
 	idx_t footer_size;
 	string encryption_key;
 	bool overwrites_existing_delete = false;
+	optional_idx begin_snapshot;
+	DeleteFileSource source = DeleteFileSource::REGULAR;
 };
 
 struct DuckLakeDataFile {
@@ -40,7 +47,7 @@ struct DuckLakeDataFile {
 	idx_t file_size_bytes;
 	optional_idx footer_size;
 	optional_idx partition_id;
-	unique_ptr<DuckLakeDeleteFile> delete_file;
+	vector<DuckLakeDeleteFile> delete_files;
 	map<FieldIndex, DuckLakeColumnStats> column_stats;
 	vector<DuckLakeFilePartition> partition_values;
 	string encryption_key;

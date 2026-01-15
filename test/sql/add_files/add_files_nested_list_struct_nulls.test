@@ -1,6 +1,7 @@
 # name: test/sql/add_files/add_files_nested_list_struct_nulls.test
 # description: Test that ducklake_add_data_files correctly computes value_count for nested columns
 # group: [add_files]
+
 #
 # This test validates the fix for integer underflow in value_count computation.
 # The fix ensures: value_count = num_values - null_count (not just num_values)

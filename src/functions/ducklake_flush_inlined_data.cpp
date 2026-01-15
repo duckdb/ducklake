@@ -16,8 +16,21 @@
 #include "duckdb/planner/operator/logical_empty_result.hpp"
 #include "storage/ducklake_flush_data.hpp"
 #include "duckdb/planner/operator/logical_projection.hpp"
+#include "storage/ducklake_delete.hpp"
 
 namespace duckdb {
+
+static void AttachDeleteFilesToWrittenFiles(vector<DuckLakeDeleteFile> &delete_files,
+                                            vector<DuckLakeDataFile> &written_files) {
+	for (auto &delete_file : delete_files) {
+		for (auto &written_file : written_files) {
+			if (written_file.file_name == delete_file.data_file_path) {
+				written_file.delete_files.push_back(std::move(delete_file));
+				break;
+			}
+		}
+	}
+}
 
 //===--------------------------------------------------------------------===//
 // Flush Data Operator
@@ -55,15 +68,83 @@ SinkResultType DuckLakeFlushData::Sink(ExecutionContext &context, DataChunk &chu
 //===--------------------------------------------------------------------===//
 // Finalize
 //===--------------------------------------------------------------------===//
+using DeletesPerFile = unordered_map<string, set<PositionWithSnapshot>>;
+
+static DeletesPerFile GroupDeletesByFile(QueryResult &deleted_rows_result, vector<DuckLakeDataFile> &written_files,
+                                         vector<idx_t> &file_start_row_ids) {
+	DeletesPerFile deletes_per_file;
+	for (auto &row : deleted_rows_result) {
+		auto end_snap = row.GetValue<int64_t>(0);
+		auto row_id = row.GetValue<int64_t>(1);
+
+		if (written_files.size() == 1) {
+			// this is easy, we just handover the deleted row ids since they must be from this file
+			PositionWithSnapshot pos_with_snap {row_id, end_snap};
+			deletes_per_file[written_files[0].file_name].insert(pos_with_snap);
+		} else {
+			// lets write the deletes to the right files, in case we have multiple files
+			for (idx_t file_idx = 0; file_idx < written_files.size(); file_idx++) {
+				const int64_t file_start = static_cast<int64_t>(file_start_row_ids[file_idx]);
+				const int64_t file_end = static_cast<int64_t>(file_start + written_files[file_idx].row_count);
+				if (row_id >= file_start && row_id < file_end) {
+					int64_t pos_in_file = row_id - file_start;
+					PositionWithSnapshot pos_with_snap {pos_in_file, end_snap};
+					deletes_per_file[written_files[file_idx].file_name].insert(pos_with_snap);
+					break;
+				}
+			}
+		}
+	}
+	return deletes_per_file;
+}
+
 SinkFinalizeType DuckLakeFlushData::Finalize(Pipeline &pipeline, Event &event, ClientContext &context,
                                              OperatorSinkFinalizeInput &input) const {
 	auto &global_state = input.global_state.Cast<DuckLakeInsertGlobalState>();
-
-	// add the files to the transaction
 	auto &transaction = DuckLakeTransaction::Get(context, global_state.table.catalog);
-	transaction.AppendFiles(global_state.table.GetTableId(), std::move(global_state.written_files));
+	auto snapshot = transaction.GetSnapshot();
 
-	// delete the inlined data
+	if (!global_state.written_files.empty()) {
+		// query all deleted rows with their snapshot IDs
+		auto deleted_rows_result = transaction.Query(snapshot, StringUtil::Format(R"(
+			SELECT end_snapshot, row_id
+			FROM {METADATA_CATALOG}.%s
+			WHERE end_snapshot IS NOT NULL
+			ORDER BY row_id;)",
+		                                                                          inlined_table.table_name));
+
+		// lets figure out where each file ends, so we know where to place ze deletes
+		vector<idx_t> file_start_row_ids;
+		idx_t current_pos = 0;
+		for (auto &written_file : global_state.written_files) {
+			file_start_row_ids.push_back(current_pos);
+			current_pos += written_file.row_count;
+		}
+
+		auto deletes_per_file =
+		    GroupDeletesByFile(*deleted_rows_result, global_state.written_files, file_start_row_ids);
+
+		if (!deletes_per_file.empty()) {
+			auto &fs = FileSystem::GetFileSystem(context);
+			vector<DuckLakeDeleteFile> delete_files;
+
+			for (auto &file_entry : deletes_per_file) {
+				// write single file, begin_snapshot is the minimum snapshot
+				WriteDeleteFileWithSnapshotsInput file_input {context,
+				                                              transaction,
+				                                              fs,
+				                                              table.DataPath(),
+				                                              encryption_key,
+				                                              file_entry.first,
+				                                              file_entry.second,
+				                                              DeleteFileSource::FLUSH};
+				delete_files.push_back(DuckLakeDeleteFileWriter::WriteDeleteFileWithSnapshots(context, file_input));
+			}
+			AttachDeleteFilesToWrittenFiles(delete_files, global_state.written_files);
+		}
+	}
+
+	transaction.AppendFiles(global_state.table.GetTableId(), std::move(global_state.written_files));
 	transaction.DeleteInlinedData(inlined_table);
 	return SinkFinalizeType::READY;
 }
@@ -157,6 +238,7 @@ unique_ptr<LogicalOperator> DuckLakeDataFlusher::GenerateFlushCommand() {
 
 	auto &multi_file_bind_data = bind_data->Cast<MultiFileBindData>();
 	auto &read_info = scan_function.function_info->Cast<DuckLakeFunctionInfo>();
+	read_info.scan_type = DuckLakeScanType::SCAN_FOR_FLUSH;
 	multi_file_bind_data.file_list = make_uniq<DuckLakeMultiFileList>(read_info, inlined_table);
 
 	optional_idx partition_id;
