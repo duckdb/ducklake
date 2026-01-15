@@ -3124,19 +3124,11 @@ string DuckLakeMetadataManager::WriteDeleteRewrites(const vector<DuckLakeCompact
 	if (compactions.empty()) {
 		return {};
 	}
-	// Delete Rewrites only deletes the deletion files.
-	string deleted_file_ids;
-	string scheduled_deletions;
-	set<idx_t> files_to_remove;
 	unordered_map<idx_t, idx_t> table_idx_last_snapshot;
-	// We can start by figuring out the files we can actually remove
 	for (idx_t i = compactions.size(); i > 0; i--) {
 		auto &compaction = compactions[i - 1];
 		if (table_idx_last_snapshot.find(compaction.table_index.index) == table_idx_last_snapshot.end()) {
-			// This is the last delete file of a table
 			table_idx_last_snapshot[compaction.table_index.index] = compaction.delete_file_start_snapshot.GetIndex();
-			files_to_remove.insert(i - 1);
-			D_ASSERT(!compaction.delete_file_end_snapshot.IsValid());
 		}
 	}
 
@@ -3144,21 +3136,7 @@ string DuckLakeMetadataManager::WriteDeleteRewrites(const vector<DuckLakeCompact
 	for (idx_t i = 0; i < compactions.size(); ++i) {
 		auto &compaction = compactions[i];
 		D_ASSERT(!compaction.path.empty());
-		auto path = GetRelativePath(compaction.delete_file_path);
-		if (files_to_remove.find(i) != files_to_remove.end()) {
-			// We only delete deletion files if they are part of the last snapshot, as they won't be required for
-			// time travel
-			if (!scheduled_deletions.empty()) {
-				scheduled_deletions += ", ";
-			}
-			scheduled_deletions += StringUtil::Format("(%d, %s, %s, NOW())", compaction.delete_file_id.index,
-			                                          SQLString(path.path), path.path_is_relative ? "true" : "false");
-			if (!deleted_file_ids.empty()) {
-				deleted_file_ids += ", ";
-			}
-			deleted_file_ids += to_string(compaction.delete_file_id.index);
-		} else if (!compaction.delete_file_end_snapshot.IsValid()) {
-			// if the deletion file was not removed, we still update its end_snapshot if null
+		if (!compaction.delete_file_end_snapshot.IsValid()) {
 			batch_query += StringUtil::Format(R"(
 			UPDATE {METADATA_CATALOG}.ducklake_delete_file SET end_snapshot = %llu
 			WHERE delete_file_id = %llu;
@@ -3180,17 +3158,6 @@ string DuckLakeMetadataManager::WriteDeleteRewrites(const vector<DuckLakeCompact
 			WHERE data_file_id = %llu;
 			)",
 		                       table_idx_last_snapshot[compaction.table_index.index], compaction.new_id.index);
-	}
-	if (!deleted_file_ids.empty()) {
-		// for each file that has been rewritten - we also delete it from the ducklake_delete_file table
-		batch_query += StringUtil::Format(R"(
-	DELETE FROM {METADATA_CATALOG}.ducklake_delete_file
-	WHERE delete_file_id IN (%s);
-	)",
-		                                  deleted_file_ids);
-		// add the files we cleared to the deletion schedule
-		batch_query +=
-		    "INSERT INTO {METADATA_CATALOG}.ducklake_files_scheduled_for_deletion VALUES " + scheduled_deletions + ";";
 	}
 	return batch_query;
 }

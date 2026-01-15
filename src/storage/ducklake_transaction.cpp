@@ -1600,7 +1600,7 @@ CompactionInformation DuckLakeTransaction::GetCompactionChanges(DuckLakeSnapshot
 			auto new_file = GetNewDataFile(compaction.written_file, commit_snapshot, table_id, compaction.row_id_start);
 			switch (type) {
 			case CompactionType::REWRITE_DELETES:
-				new_file.begin_snapshot = compaction.source_files[0].delete_files.back().begin_snapshot;
+				new_file.begin_snapshot = commit_snapshot.snapshot_id;
 				break;
 			case CompactionType::MERGE_ADJACENT_TABLES:
 				new_file.begin_snapshot = compaction.source_files[0].file.begin_snapshot;
@@ -1645,7 +1645,7 @@ CompactionInformation DuckLakeTransaction::GetCompactionChanges(DuckLakeSnapshot
 					file_info.delete_file_id = compacted_file.delete_files.back().delete_file_id;
 					file_info.start_snapshot = compacted_file.file.begin_snapshot;
 					file_info.table_index = entry.first;
-					file_info.delete_file_start_snapshot = compacted_file.delete_files.back().begin_snapshot;
+					file_info.delete_file_start_snapshot = commit_snapshot.snapshot_id;
 					file_info.delete_file_end_snapshot = compacted_file.delete_files.back().end_snapshot;
 				}
 				if (row_id_limit > new_file.row_count) {

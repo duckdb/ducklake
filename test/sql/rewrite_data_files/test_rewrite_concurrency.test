@@ -64,5 +64,43 @@ FROM test
 query III
 SELECT data_file_id, begin_snapshot, end_snapshot FROM ducklake_metadata.ducklake_data_file
 ----
-0	2	5
-4	5	NULL
+0	2	6
+4	6	NULL
+
+# Lets time travel
+query I
+SELECT count(*) FROM test AT (VERSION => 2)
+----
+100
+
+query I
+SELECT count(*) FROM test AT (VERSION => 3)
+----
+61
+
+query I
+SELECT count(*) FROM test AT (VERSION => 4)
+----
+52
+
+query I
+SELECT count(*) FROM test AT (VERSION => 5)
+----
+3
+
+query I
+SELECT count(*) FROM test AT (VERSION => 6)
+----
+3
+
+# We have 2 deletion files to delete due to the merging of deletion files
+query I
+SELECT COUNT(*) FROM ducklake_metadata.ducklake_files_scheduled_for_deletion
+----
+2
+
+# We have one file from snapshots 3 - 6, as we written a new data file in 6
+query II
+SELECT begin_snapshot, end_snapshot FROM ducklake_metadata.ducklake_delete_file ORDER BY ALL
+----
+3	6
