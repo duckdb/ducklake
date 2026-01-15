@@ -2526,7 +2526,7 @@ DuckLakeCatalogSet &DuckLakeTransaction::GetOrCreateTransactionLocalEntries(Cata
 }
 
 DuckLakeCatalogSet &DuckLakeTransaction::GetOrCreateTransactionLocalEntriesAlter(CatalogEntry &entry,
-                                                                                      LocalChangeType change_type) {
+                                                                                 LocalChangeType change_type) {
 	auto catalog_type = entry.type;
 	if (catalog_type == CatalogType::SCHEMA_ENTRY) {
 		// Schema entries always use new_schemas
