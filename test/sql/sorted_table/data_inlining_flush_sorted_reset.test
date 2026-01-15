@@ -1,6 +1,6 @@
-# name: test/sql/data_inlining/data_inlining_flush_sorted.test
+# name: test/sql/sorted_table/data_inlining_flush_sorted_reset.test
 # description: RESET SORTED BY should flush data in the original order
-# group: [data_inlining]
+# group: [sorted_table]
 
 require ducklake
 

@@ -1,6 +1,6 @@
 # name: test/sql/sorted_table/merge_adjacent_sorted_reset.test
 # description: test ducklake merge adjacent files in original order with RESET SORTED BY
-# group: [compaction]
+# group: [sorted_table]
 
 require ducklake
 

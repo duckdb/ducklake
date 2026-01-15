@@ -595,11 +595,12 @@ ORDER BY sort.table_id, sort.sort_id, sort_expr.sort_key_index
 		sort_field.dialect = row.GetValue<string>(4);
 
 		auto sort_direction_str = row.GetValue<string>(5);
-		sort_field.sort_direction = (StringUtil::CIEquals(sort_direction_str, "DESC") ? OrderType::DESCENDING : OrderType::ASCENDING);
+		sort_field.sort_direction =
+		    (StringUtil::CIEquals(sort_direction_str, "DESC") ? OrderType::DESCENDING : OrderType::ASCENDING);
 
 		auto null_order_str = row.GetValue<string>(6);
-		sort_field.null_order =
-		    (StringUtil::CIEquals(null_order_str, "NULLS_FIRST") ? OrderByNullType::NULLS_FIRST : OrderByNullType::NULLS_LAST);
+		sort_field.null_order = (StringUtil::CIEquals(null_order_str, "NULLS_FIRST") ? OrderByNullType::NULLS_FIRST
+		                                                                             : OrderByNullType::NULLS_LAST);
 		sort_entry.fields.push_back(std::move(sort_field));
 	}
 
@@ -2768,8 +2769,8 @@ WHERE table_id IN (%s) AND end_snapshot IS NULL
 	return batch_query;
 }
 
-void CheckTableSortEqual(const vector<DuckLakeSortInfo> &old_sorts, 
-						 unordered_map<idx_t, DuckLakeSortInfo> &new_sort_map) {
+void CheckTableSortEqual(const vector<DuckLakeSortInfo> &old_sorts,
+                         unordered_map<idx_t, DuckLakeSortInfo> &new_sort_map) {
 	for (auto &sort : old_sorts) {
 		if (new_sort_map.find(sort.table_id.index) != new_sort_map.end()) {
 			if (new_sort_map[sort.table_id.index] == sort) {
@@ -2780,7 +2781,8 @@ void CheckTableSortEqual(const vector<DuckLakeSortInfo> &old_sorts,
 	}
 }
 
-void CheckTableSortReset(const unordered_set<idx_t> &old_sort_set, const vector<DuckLakeSortInfo> &new_sorts, unordered_map<idx_t, DuckLakeSortInfo> &new_sort_map) {
+void CheckTableSortReset(const unordered_set<idx_t> &old_sort_set, const vector<DuckLakeSortInfo> &new_sorts,
+                         unordered_map<idx_t, DuckLakeSortInfo> &new_sort_map) {
 	vector<idx_t> sort_ids_to_erase;
 	for (auto &sort : new_sorts) {
 		if (old_sort_set.find(sort.table_id.index) == old_sort_set.end() && sort.fields.empty()) {

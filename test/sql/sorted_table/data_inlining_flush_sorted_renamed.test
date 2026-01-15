@@ -1,6 +1,6 @@
-# name: test/sql/data_inlining/data_inlining_flush_sorted.test
+# name: test/sql/sorted_table/data_inlining_flush_sorted_renamed.test
 # description: if column names have changed, inlining flush should fail until sorted by valid column names
-# group: [data_inlining]
+# group: [sorted_table]
 
 require ducklake
 

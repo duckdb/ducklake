@@ -1,6 +1,6 @@
-# name: test/sql/data_inlining/data_inlining_flush_sorted.test
+# name: test/sql/sorted_table/data_inlining_flush_sorted_alter_table.test
 # description: alter table commands should not interfere with sorted inline flush
-# group: [data_inlining]
+# group: [sorted_table]
 
 require ducklake
 

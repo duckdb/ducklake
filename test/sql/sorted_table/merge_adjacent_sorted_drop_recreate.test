@@ -1,6 +1,6 @@
-# name: test/sql/sorted_table/merge_adjacent_sorted_basic.test
+# name: test/sql/sorted_table/merge_adjacent_sorted_drop_recreate.test
 # description: test ducklake merge adjacent files dropping and recreating a table
-# group: [compaction]
+# group: [sorted_table]
 
 require ducklake
 

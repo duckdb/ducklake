@@ -1,6 +1,6 @@
 # name: test/sql/sorted_table/merge_adjacent_sorted_basic.test
 # description: test ducklake merge adjacent files with SET SORTED BY metadata
-# group: [compaction]
+# group: [sorted_table]
 
 require ducklake
 

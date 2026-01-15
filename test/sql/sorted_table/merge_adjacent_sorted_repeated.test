@@ -1,6 +1,6 @@
-# name: test/sql/compaction/merge_adjacent_options_sorted.test
+# name: test/sql/sorted_table/merge_adjacent_sorted_repeated.test
 # description: ensure that setting identical sort orders does not create extra catalog entries
-# group: [compaction]
+# group: [sorted_table]
 
 require ducklake
 

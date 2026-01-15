@@ -24,7 +24,6 @@ namespace duckdb {
 static bool IsSchemaAlteringChange(LocalChangeType type) {
 	switch (type) {
 	case LocalChangeType::SET_SORT_KEY:
-	// TODO: FIXME - Add support for comments to also not update the schema_version when they are changed
 	// case LocalChangeType::SET_COMMENT:
 	// case LocalChangeType::SET_COLUMN_COMMENT:
 		return false;
@@ -111,9 +110,8 @@ bool DuckLakeTransaction::SchemaChangesMade() {
 }
 
 bool DuckLakeTransaction::ChangesMade() {
-	return SchemaChangesMade() || !altered_tables_same_schema.empty() ||
-	       !table_data_changes.empty() || !dropped_files.empty() ||
-	       !new_name_maps.name_maps.empty();
+	return SchemaChangesMade() || !altered_tables_same_schema.empty() || !table_data_changes.empty() ||
+	       !dropped_files.empty() || !new_name_maps.name_maps.empty();
 }
 
 struct TransactionChangeInformation {
@@ -2497,7 +2495,7 @@ DuckLakeCatalogSet &DuckLakeTransaction::GetOrCreateTransactionLocalEntries(Cata
 }
 
 DuckLakeCatalogSet &DuckLakeTransaction::GetOrCreateTransactionLocalEntriesAlterTable(CatalogEntry &entry,
-                                                                             LocalChangeType change_type) {
+                                                                                      LocalChangeType change_type) {
 	auto catalog_type = entry.type;
 	if (catalog_type == CatalogType::SCHEMA_ENTRY) {
 		// Schema entries always use new_schemas

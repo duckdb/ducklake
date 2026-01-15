@@ -1,6 +1,6 @@
-# name: test/sql/data_inlining/data_inlining_flush_sorted.test
+# name: test/sql/sorted_table/data_inlining_flush_sorted_basic.test
 # description: test flushing inlined data to disk in order when SET SORTED BY is in use
-# group: [data_inlining]
+# group: [sorted_table]
 
 require ducklake
 
