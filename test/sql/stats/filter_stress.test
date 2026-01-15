@@ -1,0 +1,417 @@
+# name: test/sql/stats/filter_stress.test
+# description: Stress-test DuckLake file pruning correctness (comparing it with a reference DuckDB table)
+# group: [stats]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+
+test-env DATA_PATH __TEST_DIR__
+
+statement ok
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/ducklake_filter_stress_files')
+
+# create a reference DuckDB table - this is the table we will compare the DuckLake table to
+statement ok
+CREATE TABLE events_ref AS
+SELECT
+  i::INTEGER AS i,
+  (i % 10)::INTEGER AS g,
+  CASE WHEN i % 7 = 0 THEN NULL ELSE i::INTEGER END AS maybe_null,
+  DATE '2020-01-01' + i::INTEGER AS d,
+  printf('%06d', i) AS s
+FROM range(110000) t(i); -- 54 groups of 2048 rows each
+
+# copy the reference table to a lot of small parquet files
+statement ok
+COPY events_ref TO '${DATA_PATH}/filter_stress_parquet'
+  (FORMAT PARQUET, ROW_GROUP_SIZE 2048, ROW_GROUPS_PER_FILE 1);
+
+# create a DuckLake table
+statement ok
+CREATE TABLE ducklake.events(i INTEGER, g INTEGER, maybe_null INTEGER, d DATE, s VARCHAR);
+
+# add those small parquet files to the DuckLake table so we can test pruning correctness
+statement ok
+CALL ducklake_add_data_files('ducklake', 'events', '${DATA_PATH}/filter_stress_parquet/*.parquet');
+
+# Verify we produced lots of files
+query I
+SELECT COUNT(*) FROM ducklake_list_files('ducklake', 'events')
+----
+54
+
+# Basic pruning sanity: constant filter should read all files
+query II
+EXPLAIN ANALYZE SELECT * FROM ducklake.events WHERE 1 = 1
+----
+analyzed_plan	<REGEX>:.*Total Files Read: 54 .*
+
+# Basic pruning sanity: equality should not read all files
+query II
+EXPLAIN ANALYZE SELECT * FROM ducklake.events WHERE i=42
+----
+analyzed_plan	<REGEX>:.*Total Files Read: 1 .*
+
+# Simple filter sanity: single WHERE clause conditions on different types
+#
+# Integer equality
+query I
+SELECT COUNT(*) FROM events_ref WHERE i = 42
+----
+1
+
+query I
+SELECT COUNT(*) FROM (
+  (SELECT i, g, maybe_null, d, s FROM ducklake.events WHERE i = 42)
+  EXCEPT ALL
+  (SELECT i, g, maybe_null, d, s FROM events_ref WHERE i = 42)
+)
+----
+0
+
+query I
+SELECT COUNT(*) FROM (
+  (SELECT i, g, maybe_null, d, s FROM events_ref WHERE i = 42)
+  EXCEPT ALL
+  (SELECT i, g, maybe_null, d, s FROM ducklake.events WHERE i = 42)
+)
+----
+0
+
+# Date comparison
+query I
+SELECT COUNT(*) FROM events_ref WHERE d < DATE '2020-01-10'
+----
+9
+
+query I
+SELECT COUNT(*) FROM (
+  (SELECT i, g, maybe_null, d, s FROM ducklake.events WHERE d < DATE '2020-01-10')
+  EXCEPT ALL
+  (SELECT i, g, maybe_null, d, s FROM events_ref WHERE d < DATE '2020-01-10')
+)
+----
+0
+
+query I
+SELECT COUNT(*) FROM (
+  (SELECT i, g, maybe_null, d, s FROM events_ref WHERE d < DATE '2020-01-10')
+  EXCEPT ALL
+  (SELECT i, g, maybe_null, d, s FROM ducklake.events WHERE d < DATE '2020-01-10')
+)
+----
+0
+
+# String equality
+query I
+SELECT COUNT(*) FROM events_ref WHERE s = '000042'
+----
+1
+
+query I
+SELECT COUNT(*) FROM (
+  (SELECT i, g, maybe_null, d, s FROM ducklake.events WHERE s = '000042')
+  EXCEPT ALL
+  (SELECT i, g, maybe_null, d, s FROM events_ref WHERE s = '000042')
+)
+----
+0
+
+query I
+SELECT COUNT(*) FROM (
+  (SELECT i, g, maybe_null, d, s FROM events_ref WHERE s = '000042')
+  EXCEPT ALL
+  (SELECT i, g, maybe_null, d, s FROM ducklake.events WHERE s = '000042')
+)
+----
+0
+
+# NULL predicate
+query I
+SELECT COUNT(*) FROM events_ref WHERE maybe_null IS NULL
+----
+15715
+
+query I
+SELECT COUNT(*) FROM (
+  (SELECT i, g, maybe_null, d, s FROM ducklake.events WHERE maybe_null IS NULL)
+  EXCEPT ALL
+  (SELECT i, g, maybe_null, d, s FROM events_ref WHERE maybe_null IS NULL)
+)
+----
+0
+
+query I
+SELECT COUNT(*) FROM (
+  (SELECT i, g, maybe_null, d, s FROM events_ref WHERE maybe_null IS NULL)
+  EXCEPT ALL
+  (SELECT i, g, maybe_null, d, s FROM ducklake.events WHERE maybe_null IS NULL)
+)
+----
+0
+
+# Inspired by OR pushdown tests: OR + IN + AND combinations
+query I
+SELECT COUNT(*) FROM events_ref
+WHERE (i IN (5, 7, 9, 42) OR (g=3 AND i>100) OR (i BETWEEN 10 AND 20))
+  AND d < DATE '2020-06-01'
+----
+20
+
+query I
+SELECT COUNT(*) FROM (
+  (SELECT i, g, maybe_null, d, s FROM ducklake.events
+   WHERE (i IN (5, 7, 9, 42) OR (g=3 AND i>100) OR (i BETWEEN 10 AND 20))
+     AND d < DATE '2020-06-01')
+  EXCEPT ALL
+  (SELECT i, g, maybe_null, d, s FROM events_ref
+   WHERE (i IN (5, 7, 9, 42) OR (g=3 AND i>100) OR (i BETWEEN 10 AND 20))
+     AND d < DATE '2020-06-01')
+)
+----
+0
+
+query I
+SELECT COUNT(*) FROM (
+  (SELECT i, g, maybe_null, d, s FROM events_ref
+   WHERE (i IN (5, 7, 9, 42) OR (g=3 AND i>100) OR (i BETWEEN 10 AND 20))
+     AND d < DATE '2020-06-01')
+  EXCEPT ALL
+  (SELECT i, g, maybe_null, d, s FROM ducklake.events
+   WHERE (i IN (5, 7, 9, 42) OR (g=3 AND i>100) OR (i BETWEEN 10 AND 20))
+     AND d < DATE '2020-06-01')
+)
+----
+0
+
+# Inspired by transitive filters: redundant/constraining predicates should stay correct
+query I
+SELECT COUNT(*) FROM events_ref
+WHERE i >= 50 AND i <= 60 AND i > 55 AND i < 60
+----
+4
+
+query I
+SELECT COUNT(*) FROM (
+  (SELECT i, g, maybe_null, d, s FROM ducklake.events
+   WHERE i >= 50 AND i <= 60 AND i > 55 AND i < 60)
+  EXCEPT ALL
+  (SELECT i, g, maybe_null, d, s FROM events_ref
+   WHERE i >= 50 AND i <= 60 AND i > 55 AND i < 60)
+)
+----
+0
+
+query I
+SELECT COUNT(*) FROM (
+  (SELECT i, g, maybe_null, d, s FROM events_ref
+   WHERE i >= 50 AND i <= 60 AND i > 55 AND i < 60)
+  EXCEPT ALL
+  (SELECT i, g, maybe_null, d, s FROM ducklake.events
+   WHERE i >= 50 AND i <= 60 AND i > 55 AND i < 60)
+)
+----
+0
+
+# NULL-heavy filter correctness (should never incorrectly prune away NULL-containing files)
+query I
+SELECT COUNT(*) FROM events_ref
+WHERE maybe_null IS NULL OR maybe_null >= 109900
+----
+15800
+
+query I
+SELECT COUNT(*) FROM (
+  (SELECT i, g, maybe_null, d, s FROM ducklake.events
+   WHERE maybe_null IS NULL OR maybe_null >= 109900)
+  EXCEPT ALL
+  (SELECT i, g, maybe_null, d, s FROM events_ref
+   WHERE maybe_null IS NULL OR maybe_null >= 109900)
+)
+----
+0
+
+query I
+SELECT COUNT(*) FROM (
+  (SELECT i, g, maybe_null, d, s FROM events_ref
+   WHERE maybe_null IS NULL OR maybe_null >= 109900)
+  EXCEPT ALL
+  (SELECT i, g, maybe_null, d, s FROM ducklake.events
+   WHERE maybe_null IS NULL OR maybe_null >= 109900)
+)
+----
+0
+
+# Inspired by "filter clause" style complexity: boolean logic + string comparisons + NOT
+query I
+SELECT COUNT(*) FROM events_ref
+WHERE NOT (s < '000050') AND (s LIKE '0001%' OR s LIKE '0000%') AND (i % 2 = 0)
+----
+75
+
+query I
+SELECT COUNT(*) FROM (
+  (SELECT i, g, maybe_null, d, s FROM ducklake.events
+   WHERE NOT (s < '000050') AND (s LIKE '0001%' OR s LIKE '0000%') AND (i % 2 = 0))
+  EXCEPT ALL
+  (SELECT i, g, maybe_null, d, s FROM events_ref
+   WHERE NOT (s < '000050') AND (s LIKE '0001%' OR s LIKE '0000%') AND (i % 2 = 0))
+)
+----
+0
+
+query I
+SELECT COUNT(*) FROM (
+  (SELECT i, g, maybe_null, d, s FROM events_ref
+   WHERE NOT (s < '000050') AND (s LIKE '0001%' OR s LIKE '0000%') AND (i % 2 = 0))
+  EXCEPT ALL
+  (SELECT i, g, maybe_null, d, s FROM ducklake.events
+   WHERE NOT (s < '000050') AND (s LIKE '0001%' OR s LIKE '0000%') AND (i % 2 = 0))
+)
+----
+0
+
+# ORDER BY + LIMIT (Top-N) correctness: ensure pruning/topn never changes results
+#
+# Basic: ascending order on unique column
+query I
+SELECT COUNT(*) FROM (
+  SELECT i FROM events_ref ORDER BY i LIMIT 1000
+)
+----
+1000
+
+query I
+SELECT COUNT(*) FROM (
+  (SELECT i FROM ducklake.events ORDER BY i LIMIT 1000)
+  EXCEPT ALL
+  (SELECT i FROM events_ref ORDER BY i LIMIT 1000)
+)
+----
+0
+
+query I
+SELECT COUNT(*) FROM (
+  (SELECT i FROM events_ref ORDER BY i LIMIT 1000)
+  EXCEPT ALL
+  (SELECT i FROM ducklake.events ORDER BY i LIMIT 1000)
+)
+----
+0
+
+# Descending order on unique column
+query I
+SELECT COUNT(*) FROM (
+  SELECT i FROM events_ref ORDER BY i DESC LIMIT 1000
+)
+----
+1000
+
+query I
+SELECT COUNT(*) FROM (
+  (SELECT i FROM ducklake.events ORDER BY i DESC LIMIT 1000)
+  EXCEPT ALL
+  (SELECT i FROM events_ref ORDER BY i DESC LIMIT 1000)
+)
+----
+0
+
+query I
+SELECT COUNT(*) FROM (
+  (SELECT i FROM events_ref ORDER BY i DESC LIMIT 1000)
+  EXCEPT ALL
+  (SELECT i FROM ducklake.events ORDER BY i DESC LIMIT 1000)
+)
+----
+0
+
+# Top-N with filter + ORDER BY on DATE
+query I
+SELECT COUNT(*) FROM (
+  SELECT i, d
+  FROM events_ref
+  WHERE d < DATE '2020-03-01'
+  ORDER BY d DESC, i DESC
+  LIMIT 500
+)
+----
+60
+
+query I
+SELECT COUNT(*) FROM (
+  (SELECT i, d FROM ducklake.events WHERE d < DATE '2020-03-01' ORDER BY d DESC, i DESC LIMIT 500)
+  EXCEPT ALL
+  (SELECT i, d FROM events_ref     WHERE d < DATE '2020-03-01' ORDER BY d DESC, i DESC LIMIT 500)
+)
+----
+0
+
+query I
+SELECT COUNT(*) FROM (
+  (SELECT i, d FROM events_ref     WHERE d < DATE '2020-03-01' ORDER BY d DESC, i DESC LIMIT 500)
+  EXCEPT ALL
+  (SELECT i, d FROM ducklake.events WHERE d < DATE '2020-03-01' ORDER BY d DESC, i DESC LIMIT 500)
+)
+----
+0
+
+# NULL handling in ORDER BY should be consistent (NULLS LAST avoids engine-default differences)
+query I
+SELECT COUNT(*) FROM (
+  SELECT i, maybe_null
+  FROM events_ref
+  ORDER BY maybe_null NULLS LAST, i
+  LIMIT 1000
+)
+----
+1000
+
+query I
+SELECT COUNT(*) FROM (
+  (SELECT i, maybe_null FROM ducklake.events ORDER BY maybe_null NULLS LAST, i LIMIT 1000)
+  EXCEPT ALL
+  (SELECT i, maybe_null FROM events_ref     ORDER BY maybe_null NULLS LAST, i LIMIT 1000)
+)
+----
+0
+
+query I
+SELECT COUNT(*) FROM (
+  (SELECT i, maybe_null FROM events_ref     ORDER BY maybe_null NULLS LAST, i LIMIT 1000)
+  EXCEPT ALL
+  (SELECT i, maybe_null FROM ducklake.events ORDER BY maybe_null NULLS LAST, i LIMIT 1000)
+)
+----
+0
+
+# Composite ORDER BY (non-unique primary key avoided by adding i)
+query I
+SELECT COUNT(*) FROM (
+  SELECT g, i
+  FROM events_ref
+  ORDER BY g, i
+  LIMIT 2000
+)
+----
+2000
+
+query I
+SELECT COUNT(*) FROM (
+  (SELECT g, i FROM ducklake.events ORDER BY g, i LIMIT 2000)
+  EXCEPT ALL
+  (SELECT g, i FROM events_ref     ORDER BY g, i LIMIT 2000)
+)
+----
+0
+
+query I
+SELECT COUNT(*) FROM (
+  (SELECT g, i FROM events_ref     ORDER BY g, i LIMIT 2000)
+  EXCEPT ALL
+  (SELECT g, i FROM ducklake.events ORDER BY g, i LIMIT 2000)
+)
+----
+0
