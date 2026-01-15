@@ -164,9 +164,9 @@ optional_ptr<CatalogEntry> DuckLakeCatalog::GetEntryById(DuckLakeTransaction &tr
 	return schema.GetEntryById(table_id);
 }
 
-idx_t DuckLakeCatalog::GetSnapshotForSchema(idx_t schema_id, DuckLakeTransaction &transaction) {
+idx_t DuckLakeCatalog::GetBeginSnapshotForTable(TableIndex table_id, DuckLakeTransaction &transaction) {
 	auto &metadata_manager = transaction.GetMetadataManager();
-	return metadata_manager.GetCatalogIdForSchema(schema_id);
+	return metadata_manager.GetBeginSnapshotForTable(table_id);
 }
 
 DuckLakeCatalogSet &DuckLakeCatalog::GetSchemaForSnapshot(DuckLakeTransaction &transaction, DuckLakeSnapshot snapshot) {
