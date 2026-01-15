@@ -142,12 +142,12 @@ void DuckLakeInitializer::LoadExistingDuckLake(DuckLakeTransaction &transaction)
 	for (auto &tag : metadata.tags) {
 		if (tag.key == "version") {
 			string version = tag.value;
-			if (version != "0.4-dev1" && !options.migrate_if_required) {
-				// Throw when Loading the Ducklake if a Migration is required and migrate_if_required option is false
-				throw InvalidInputException("DuckLake Extension requires a DuckLake Catalog version of 0.4-dev1 or "
-				                            "higher, current version is %s "
-				                            "and migrate_if_required is set to false",
-				                            version);
+			if (version != "0.4-dev1" && !options.automatic_migration) {
+				// Throw when Loading the DuckLake if a Migration is required and automatic_migration option is false
+				throw InvalidInputException(
+				    "DuckLake catalog version mismatch: catalog version is %s, but the extension requires version "
+				    "0.4-dev1. To automatically migrate, set AUTOMATIC_MIGRATION to TRUE when attaching.",
+				    version);
 			}
 			if (version == "0.1") {
 				metadata_manager.MigrateV01();
