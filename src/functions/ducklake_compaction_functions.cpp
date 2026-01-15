@@ -299,7 +299,7 @@ unique_ptr<LogicalOperator> DuckLakeCompactor::InsertSort(Binder &binder, unique
 
 	if (!unmatching_names.empty()) {
 		std::string error_string =
-		    "Columns in the approx_sort parameter were not found in the DuckLake table. Unmatched columns were: ";
+		    "Columns in the SET SORTED BY statement were not found in the DuckLake table. Unmatched columns were: ";
 		for (auto &unmatching_name : unmatching_names) {
 			error_string += unmatching_name + ", ";
 		}
