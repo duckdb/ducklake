@@ -354,8 +354,85 @@ void DuckLakeDelete::FlushDelete(DuckLakeTransaction &transaction, ClientContext
 	// check if the file already has deletes
 	auto existing_delete_data = delete_map->GetDeleteData(filename);
 	if (existing_delete_data) {
-		// deletes already exist for this file - add to set of deletes to write
+		// deletes already exist for this file
 		auto &existing_deletes = existing_delete_data->deleted_rows;
+
+		// check if our file already has existing snapshot ids in them
+		auto &existing_snapshot_ids = existing_delete_data->snapshot_ids;
+		bool has_embedded_snapshots = !existing_snapshot_ids.empty();
+
+		// get the snapshot when existing deletes were created (from metadata)
+		auto existing_snapshot = data_file_info.delete_file_begin_snapshot;
+
+		// only write with snapshot IDs if we have committed deletes (has metadata or embedded snapshots)
+		bool write_with_snapshots = has_embedded_snapshots || existing_snapshot.IsValid();
+
+		if (write_with_snapshots) {
+			// the commit snapshot for new deletes is current_snapshot + 1
+			auto current_snapshot = transaction.GetSnapshot();
+			idx_t new_delete_snapshot = current_snapshot.snapshot_id + 1;
+
+			// build the set of positions with snapshots
+			set<PositionWithSnapshot> sorted_deletes_with_snapshots;
+
+			// add existing deletes with their snapshot IDs
+			for (idx_t i = 0; i < existing_deletes.size(); i++) {
+				PositionWithSnapshot pos_with_snap;
+				pos_with_snap.position = NumericCast<int64_t>(existing_deletes[i]);
+				if (has_embedded_snapshots) {
+					pos_with_snap.snapshot_id = NumericCast<int64_t>(existing_snapshot_ids[i]);
+				} else {
+					pos_with_snap.snapshot_id = NumericCast<int64_t>(existing_snapshot.GetIndex());
+				}
+				sorted_deletes_with_snapshots.insert(pos_with_snap);
+			}
+
+			// add new deletes with the commit snapshot
+			for (auto &pos : sorted_deletes) {
+				PositionWithSnapshot pos_with_snap;
+				pos_with_snap.position = NumericCast<int64_t>(pos);
+				pos_with_snap.snapshot_id = NumericCast<int64_t>(new_delete_snapshot);
+				sorted_deletes_with_snapshots.insert(pos_with_snap);
+			}
+
+			// clear the deletes from the map
+			delete_map->ClearDeletes(filename);
+
+			// set the delete file as overwriting existing deletes
+			delete_file.overwrites_existing_delete = true;
+
+			if (sorted_deletes_with_snapshots.size() == data_file_info.row_count) {
+				// ALL rows in this file are deleted - drop the file
+				if (delete_file.data_file_id.IsValid()) {
+					transaction.DropFile(table.GetTableId(), delete_file.data_file_id, data_file_info.file.path);
+				} else {
+					transaction.DropTransactionLocalFile(table.GetTableId(), data_file_info.file.path);
+				}
+				return;
+			}
+
+			auto &fs = FileSystem::GetFileSystem(context);
+			WriteDeleteFileWithSnapshotsInput input {context,
+			                                         transaction,
+			                                         fs,
+			                                         table.DataPath(),
+			                                         encryption_key,
+			                                         filename,
+			                                         sorted_deletes_with_snapshots,
+			                                         DeleteFileSource::REGULAR};
+			auto written_file = DuckLakeDeleteFileWriter::WriteDeleteFileWithSnapshots(context, input);
+
+			written_file.data_file_id = delete_file.data_file_id;
+			written_file.overwrites_existing_delete = delete_file.overwrites_existing_delete;
+			// track the old delete file for deletion from metadata and disk
+			written_file.overwritten_delete_file_id = data_file_info.delete_file_id;
+			written_file.overwritten_delete_file_path = data_file_info.delete_file.path;
+
+			global_state.written_files.emplace(filename, std::move(written_file));
+			return;
+		}
+
+		// transaction-local deletes without metadata
 		sorted_deletes.insert(existing_deletes.begin(), existing_deletes.end());
 
 		// clear the deletes

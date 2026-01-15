@@ -65,3 +65,19 @@ query II
 SELECT COUNT(*), SUM(id) FROM ducklake.test
 ----
 5000	25000000
+
+# Let's check the new file is properly consolidated
+query II
+SELECT begin_snapshot, end_snapshot FROM __ducklake_metadata_ducklake.ducklake_delete_file
+----
+2	NULL
+
+query I
+SELECT COUNT(*) FROM __ducklake_metadata_ducklake.ducklake_files_scheduled_for_deletion
+----
+1
+
+query II
+SELECT COUNT(*), SUM(id) FROM ducklake.test AT (VERSION => 2)
+----
+7500	37500000

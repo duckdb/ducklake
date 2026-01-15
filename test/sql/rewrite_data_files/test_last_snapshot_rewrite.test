@@ -55,8 +55,6 @@ True
 query I
 SELECT delete_file_id FROM ducklake_metadata.ducklake_delete_file
 ----
-1
-2
 3
 
 # This won't do much, since our default threshold is too high
@@ -66,8 +64,6 @@ CALL ducklake_rewrite_data_files('ducklake', 'test');
 query I
 SELECT delete_file_id FROM ducklake_metadata.ducklake_delete_file
 ----
-1
-2
 3
 
 statement ok

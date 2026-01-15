@@ -68,6 +68,14 @@ struct DuckLakeDeleteMap {
 		return delete_entry->second;
 	}
 
+	optional_ptr<DuckLakeFileListExtendedEntry> TryGetExtendedFileInfo(const string &filename) {
+		auto delete_entry = file_map.find(filename);
+		if (delete_entry == file_map.end()) {
+			return nullptr;
+		}
+		return &delete_entry->second;
+	}
+
 	optional_ptr<DuckLakeDeleteData> GetDeleteData(const string &filename) {
 		lock_guard<mutex> guard(lock);
 		auto entry = delete_data_map.find(filename);

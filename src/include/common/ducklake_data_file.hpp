@@ -33,6 +33,10 @@ struct DuckLakeDeleteFile {
 	idx_t footer_size;
 	string encryption_key;
 	bool overwrites_existing_delete = false;
+	//! The ID of the old delete file being overwritten (for deletion from metadata)
+	DataFileIndex overwritten_delete_file_id;
+	//! The path of the old delete file being overwritten (for scheduling disk deletion)
+	string overwritten_delete_file_path;
 	optional_idx begin_snapshot;
 	DeleteFileSource source = DeleteFileSource::REGULAR;
 };
