@@ -148,7 +148,7 @@ COMMENT ON VIEW ducklake.comment_view IS 'con1'
 query III
 SELECT snapshot_id, schema_version, changes FROM ducklake.snapshots() WHERE snapshot_id=12
 ----
-12	11	{views_altered=[9]}
+12	10	{views_altered=[9]}
 
 # deletes
 statement ok
@@ -157,4 +157,4 @@ DELETE FROM ducklake.s1.tbl
 query III
 SELECT snapshot_id, schema_version, changes FROM ducklake_snapshots('ducklake') WHERE snapshot_id=13
 ----
-13	11	{tables_deleted_from=[4]}
+13	10	{tables_deleted_from=[4]}

@@ -1,0 +1,119 @@
+# name: test/sql/comments/comment_schema_version.test
+# description: Verify COMMENT ON does not increment schema_version
+# group: [comments]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+
+statement ok
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '__TEST_DIR__/comment_schema_test/')
+
+statement ok
+CREATE TABLE ducklake.test(a INTEGER, b VARCHAR);
+
+query I
+SELECT max(schema_version) FROM ducklake.snapshots()
+----
+1
+
+# COMMENT ON TABLE should NOT increment schema_version
+statement ok
+COMMENT ON TABLE ducklake.test IS 'table comment'
+
+query I
+SELECT max(schema_version) FROM ducklake.snapshots()
+----
+1
+
+# COMMENT ON COLUMN should NOT increment schema_version
+statement ok
+COMMENT ON COLUMN ducklake.test.a IS 'column a comment'
+
+query I
+SELECT max(schema_version) FROM ducklake.snapshots()
+----
+1
+
+# Verify comments were written
+query I
+SELECT comment FROM duckdb_tables() WHERE table_name = 'test'
+----
+table comment
+
+query I
+SELECT comment FROM duckdb_columns() WHERE table_name = 'test' AND column_name = 'a'
+----
+column a comment
+
+# Setting comment to NULL should also NOT increment schema_version
+statement ok
+COMMENT ON TABLE ducklake.test IS NULL
+
+query I
+SELECT max(schema_version) FROM ducklake.snapshots()
+----
+1
+
+statement ok
+COMMENT ON COLUMN ducklake.test.a IS NULL
+
+query I
+SELECT max(schema_version) FROM ducklake.snapshots()
+----
+1
+
+# Verify comments were cleared
+query I
+SELECT comment FROM duckdb_tables() WHERE table_name = 'test'
+----
+NULL
+
+query I
+SELECT comment FROM duckdb_columns() WHERE table_name = 'test' AND column_name = 'a'
+----
+NULL
+
+# ============================================
+# VIEW COMMENT TESTS
+# ============================================
+
+statement ok
+CREATE VIEW ducklake.test_view AS SELECT * FROM ducklake.test
+
+query I
+SELECT max(schema_version) FROM ducklake.snapshots()
+----
+2
+
+# COMMENT ON VIEW should NOT increment schema_version
+statement ok
+COMMENT ON VIEW ducklake.test_view IS 'view comment'
+
+query I
+SELECT max(schema_version) FROM ducklake.snapshots()
+----
+2
+
+# Verify view comment was written
+query I
+SELECT comment FROM duckdb_views() WHERE view_name = 'test_view'
+----
+view comment
+
+# Setting view comment to NULL should also NOT increment schema_version
+statement ok
+COMMENT ON VIEW ducklake.test_view IS NULL
+
+query I
+SELECT max(schema_version) FROM ducklake.snapshots()
+----
+2
+
+# Verify view comment was cleared
+query I
+SELECT comment FROM duckdb_views() WHERE view_name = 'test_view'
+----
+NULL

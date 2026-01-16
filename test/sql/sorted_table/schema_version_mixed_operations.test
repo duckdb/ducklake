@@ -1,0 +1,74 @@
+# name: test/sql/sorted_table/schema_version_mixed_operations.test
+# description: Verify schema_version increments correctly with mixed operations
+# group: [sorted_table]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+
+statement ok
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '__TEST_DIR__/mixed_ops_test/')
+
+statement ok
+CREATE TABLE ducklake.test(a INTEGER, b VARCHAR);
+
+query I
+SELECT max(schema_version) FROM ducklake.snapshots()
+----
+1
+
+# SET SORTED BY should NOT increment
+statement ok
+ALTER TABLE ducklake.test SET SORTED BY (a ASC);
+
+query I
+SELECT max(schema_version) FROM ducklake.snapshots()
+----
+1
+
+# ADD COLUMN SHOULD increment schema_version
+statement ok
+ALTER TABLE ducklake.test ADD COLUMN c BIGINT;
+
+query I
+SELECT max(schema_version) FROM ducklake.snapshots()
+----
+2
+
+# SET SORTED BY after ADD COLUMN should NOT increment
+statement ok
+ALTER TABLE ducklake.test SET SORTED BY (a DESC, c ASC);
+
+query I
+SELECT max(schema_version) FROM ducklake.snapshots()
+----
+2
+
+# RENAME COLUMN SHOULD increment schema_version
+statement ok
+ALTER TABLE ducklake.test RENAME COLUMN b TO b_renamed;
+
+query I
+SELECT max(schema_version) FROM ducklake.snapshots()
+----
+3
+
+# SET SORTED BY with new column name should NOT increment
+statement ok
+ALTER TABLE ducklake.test SET SORTED BY (b_renamed ASC);
+
+query I
+SELECT max(schema_version) FROM ducklake.snapshots()
+----
+3
+
+# DROP COLUMN SHOULD increment schema_version
+statement ok
+ALTER TABLE ducklake.test DROP COLUMN c;
+
+query I
+SELECT max(schema_version) FROM ducklake.snapshots()
+----
+4

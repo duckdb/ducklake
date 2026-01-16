@@ -1,0 +1,44 @@
+# name: test/sql/sorted_table/reset_sorted_by_schema_version.test
+# description: Verify RESET SORTED BY does not increment schema_version
+# group: [sorted_table]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+
+statement ok
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '__TEST_DIR__/reset_schema_test/')
+
+statement ok
+CREATE TABLE ducklake.test(a INTEGER, b VARCHAR);
+
+query I
+SELECT max(schema_version) FROM ducklake.snapshots()
+----
+1
+
+statement ok
+ALTER TABLE ducklake.test SET SORTED BY (a ASC);
+
+query I
+SELECT max(schema_version) FROM ducklake.snapshots()
+----
+1
+
+statement ok
+ALTER TABLE ducklake.test RESET SORTED BY;
+
+# RESET SORTED BY should also NOT increment schema_version
+query I
+SELECT max(schema_version) FROM ducklake.snapshots()
+----
+1
+
+# Verify sort data was cleared (end_snapshot set)
+query I
+SELECT COUNT(*) FROM __ducklake_metadata_ducklake.ducklake_sort_info
+WHERE table_id = 1 AND end_snapshot IS NULL
+----
+0
