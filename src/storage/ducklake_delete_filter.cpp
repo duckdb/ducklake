@@ -190,12 +190,13 @@ void DuckLakeDeleteFilter::Initialize(ClientContext &context, const DuckLakeDele
 	auto rows_to_scan = make_unsafe_uniq_array<bool>(delete_scan.row_count);
 
 	// scan the current set of deletes
+	bool filter_by_snapshot = false;
 	if (!delete_scan.delete_file.path.empty()) {
 		// we have a delete file - read the delete file from disk
 		auto current_deletes = ScanDeleteFile(context, delete_scan.delete_file);
 
 		// Check embedded snapshots, if they exist we must use them for filtering
-		bool filter_by_snapshot = !current_deletes.snapshot_ids.empty();
+		filter_by_snapshot = !current_deletes.snapshot_ids.empty();
 
 		// iterate over the current deletes - these are the rows we need to scan
 		memset(rows_to_scan.get(), 0, sizeof(bool) * delete_scan.row_count);
@@ -213,7 +214,6 @@ void DuckLakeDeleteFilter::Initialize(ClientContext &context, const DuckLakeDele
 				if (snap_id < delete_scan.start_snapshot.GetIndex() || snap_id > delete_scan.end_snapshot.GetIndex()) {
 					continue;
 				}
-				delete_data->snapshot_ids.push_back(snap_id);
 			}
 
 			rows_to_scan[delete_idx] = true;
@@ -224,7 +224,7 @@ void DuckLakeDeleteFilter::Initialize(ClientContext &context, const DuckLakeDele
 		memset(rows_to_scan.get(), 1, sizeof(bool) * delete_scan.row_count);
 	}
 
-	if (!delete_scan.previous_delete_file.path.empty()) {
+	if (!delete_scan.previous_delete_file.path.empty() && !filter_by_snapshot) {
 		// if we have a previous delete file - scan that set of deletes
 		auto previous_deletes = ScanDeleteFile(context, delete_scan.previous_delete_file);
 		// these deletes are not new - we should not scan them
