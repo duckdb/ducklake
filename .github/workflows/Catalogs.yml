@@ -81,4 +81,4 @@ jobs:
         PGSERVICE: postgres
       run: |
         createdb ducklakedb
-        build/release/test/unittest --test-config test/configs/postgres.json
+        build/release/test/unittest --test-config test/configs/postgres.json "test/sql/*"
