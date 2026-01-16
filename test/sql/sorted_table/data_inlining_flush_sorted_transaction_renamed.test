@@ -1,0 +1,154 @@
+# name: test/sql/sorted_table/data_inlining_flush_sorted_renamed.test
+# description: if column names have changed, inlining flush should fail until sorted by valid column names
+# group: [sorted_table]
+
+# Irrelevant alter table
+# Alter table rename that causes inline flush to fail
+# Then handle rollback somehow?
+# Alter table rename then alter table set sorted by the new name, then flush
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+
+test-env DATA_PATH __TEST_DIR__
+
+
+statement ok
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/ducklake_inlining_flush_data', DATA_INLINING_ROW_LIMIT 10)
+
+# SET SORTED BY then rename columns - flush should error on missing columns
+statement ok
+CREATE TABLE ducklake.renamed_columns_test (unique_id INTEGER, sort_key_1 INTEGER, sort_key_2 VARCHAR);
+
+# Insert data (will be inlined initially)
+statement ok
+INSERT INTO ducklake.renamed_columns_test (unique_id, sort_key_1, sort_key_2)
+FROM range(5) t(i)
+SELECT
+	 i AS unique_id,
+	 i % 2 AS sort_key_1_changed,
+	 'woot' || i AS sort_key_2_changed
+;
+
+statement ok
+BEGIN
+
+statement ok
+ALTER TABLE ducklake.renamed_columns_test SET SORTED BY (sort_key_1 ASC NULLS LAST, sort_key_2 ASC NULLS LAST);
+
+# Do an irrelevant ALTER TABLE
+statement ok
+ALTER TABLE ducklake.renamed_columns_test ADD COLUMN bonus_column VARCHAR;
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake', table_name => 'renamed_columns_test');
+
+statement ok
+COMMIT
+
+query IIII
+FROM ducklake.renamed_columns_test
+----
+0	0	woot0	NULL
+2	0	woot2	NULL
+4	0	woot4	NULL
+1	1	woot1	NULL
+3	1	woot3	NULL
+
+statement ok
+INSERT INTO ducklake.renamed_columns_test (unique_id, sort_key_1, sort_key_2)
+FROM range(5) t(i)
+SELECT 
+	 i + 5 AS unique_id,
+	 (i + 5) % 2 AS sort_key_1,
+	 'woot' || (i + 5) AS sort_key_2
+ORDER BY 
+	 i DESC
+;
+
+# First 5 rows should reflect the sort order, second 5 rows should reflect insertion order
+query IIII
+FROM ducklake.renamed_columns_test
+----
+0	0	woot0	NULL
+2	0	woot2	NULL
+4	0	woot4	NULL
+1	1	woot1	NULL
+3	1	woot3	NULL
+9	1	woot9	NULL
+8	0	woot8	NULL
+7	1	woot7	NULL
+6	0	woot6	NULL
+5	1	woot5	NULL
+
+
+statement ok
+ALTER TABLE ducklake.renamed_columns_test RESET SORTED BY;
+
+statement ok
+BEGIN
+
+statement ok
+ALTER TABLE ducklake.renamed_columns_test SET SORTED BY (sort_key_1 ASC NULLS LAST, sort_key_2 ASC NULLS LAST);
+
+# Alter a column in the table to reflect 
+statement ok
+ALTER TABLE ducklake.renamed_columns_test RENAME COLUMN sort_key_1 TO sort_key_1_renamed;
+
+statement error
+CALL ducklake_flush_inlined_data('ducklake', table_name => 'renamed_columns_test');
+----
+Binder Error: Columns in the SET SORTED BY statement were not found in the DuckLake table. Unmatched columns were: sort_key_1
+
+statement ok
+ROLLBACK 
+
+# Now it should all succeed!
+statement ok
+BEGIN
+
+# Alter a column in the table to reflect 
+statement ok
+ALTER TABLE ducklake.renamed_columns_test RENAME COLUMN sort_key_1 TO sort_key_1_renamed;
+
+statement ok
+ALTER TABLE ducklake.renamed_columns_test SET SORTED BY (sort_key_1_renamed ASC NULLS LAST, sort_key_2 ASC NULLS LAST);
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake', table_name => 'renamed_columns_test');
+
+# The order is already reflected within the commit
+query IIII
+FROM ducklake.renamed_columns_test
+----
+0	0	woot0	NULL
+2	0	woot2	NULL
+4	0	woot4	NULL
+1	1	woot1	NULL
+3	1	woot3	NULL
+6	0	woot6	NULL
+8	0	woot8	NULL
+5	1	woot5	NULL
+7	1	woot7	NULL
+9	1	woot9	NULL
+
+
+statement ok
+COMMIT 
+
+query IIII
+FROM ducklake.renamed_columns_test
+----
+0	0	woot0	NULL
+2	0	woot2	NULL
+4	0	woot4	NULL
+1	1	woot1	NULL
+3	1	woot3	NULL
+6	0	woot6	NULL
+8	0	woot8	NULL
+5	1	woot5	NULL
+7	1	woot7	NULL
+9	1	woot9	NULL
