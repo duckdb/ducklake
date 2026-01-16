@@ -13,7 +13,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        duckdb_version: [ '<submodule_version>' ]
+        duckdb_version: [ 'v1.4-andium' ]
         arch: ['linux_amd64']
         vcpkg_version: [ '2023.04.15' ]
         include:
