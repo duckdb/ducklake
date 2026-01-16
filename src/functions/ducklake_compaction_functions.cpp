@@ -281,7 +281,7 @@ unique_ptr<LogicalOperator> DuckLakeCompactor::InsertSort(Binder &binder, unique
 	root_get->ResolveOperatorTypes();
 	auto &root_types = root_get->types;
 
-	vector<std::string> unmatching_names;
+	vector<string> unmatching_names;
 	for (auto &pre_bound_order : pre_bound_orders) {
 		auto name = pre_bound_order.expression->GetName();
 		auto order_idx_check = alias_map.find(name);
@@ -298,7 +298,7 @@ unique_ptr<LogicalOperator> DuckLakeCompactor::InsertSort(Binder &binder, unique
 	}
 
 	if (!unmatching_names.empty()) {
-		std::string error_string =
+		string error_string =
 		    "Columns in the SET SORTED BY statement were not found in the DuckLake table. Unmatched columns were: ";
 		for (auto &unmatching_name : unmatching_names) {
 			error_string += unmatching_name + ", ";

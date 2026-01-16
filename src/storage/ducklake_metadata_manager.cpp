@@ -2851,8 +2851,8 @@ string DuckLakeMetadataManager::WriteNewSortKeys(DuckLakeSnapshot commit_snapsho
 			if (!new_sort_expressions.empty()) {
 				new_sort_expressions += ", ";
 			}
-			std::string sort_direction = (field.sort_direction == OrderType::DESCENDING ? "DESC" : "ASC");
-			std::string null_order = (field.null_order == OrderByNullType::NULLS_FIRST ? "NULLS_FIRST" : "NULLS_LAST");
+			string sort_direction = (field.sort_direction == OrderType::DESCENDING ? "DESC" : "ASC");
+			string null_order = (field.null_order == OrderByNullType::NULLS_FIRST ? "NULLS_FIRST" : "NULLS_LAST");
 			new_sort_expressions +=
 			    StringUtil::Format("(%d, %d, %d, %s, %s, %s, %s)", sort_id, new_sort.second.table_id.index,
 			                       field.sort_key_index, SQLString(field.expression), SQLString(field.dialect),
