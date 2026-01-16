@@ -1,8 +1,6 @@
-# name: test/sql/sorted_table/merge_adjacent_sorted_transactions.test
+# name: test/sql/sorted_table/merge_adjacent_sorted_transaction_alter_table_unrelated.test
 # description: test ducklake merge adjacent files with SET SORTED BY metadata within transactions
 # group: [sorted_table]
-
-
 
 require ducklake
 
