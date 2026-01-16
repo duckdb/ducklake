@@ -43,6 +43,10 @@ idx_t DuckLakeDeleteData::Filter(row_t start_row_index, idx_t count, SelectionVe
 	return result_count;
 }
 
+bool DuckLakeDeleteData::HasEmbeddedSnapshots() const {
+	return !snapshot_ids.empty();
+}
+
 idx_t DuckLakeDeleteFilter::Filter(row_t start_row_index, idx_t count, SelectionVector &result_sel) {
 	// apply max row count (if it is set)
 	if (max_row_count.IsValid()) {
@@ -191,9 +195,7 @@ void DuckLakeDeleteFilter::Initialize(ClientContext &context, const DuckLakeDele
 		auto current_deletes = ScanDeleteFile(context, delete_scan.delete_file);
 
 		// Check embedded snapshots, if they exist we must use them for filtering
-		bool has_embedded_snapshots = !current_deletes.snapshot_ids.empty();
-		bool filter_by_snapshot =
-		    has_embedded_snapshots && delete_scan.start_snapshot.IsValid() && delete_scan.end_snapshot.IsValid();
+		bool filter_by_snapshot = !current_deletes.snapshot_ids.empty();
 
 		// iterate over the current deletes - these are the rows we need to scan
 		memset(rows_to_scan.get(), 0, sizeof(bool) * delete_scan.row_count);

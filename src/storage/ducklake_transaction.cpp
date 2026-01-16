@@ -1341,13 +1341,9 @@ DuckLakeTransaction::GetNewDeleteFiles(const DuckLakeCommitState &commit_state,
 		auto &table_changes = entry.second;
 		for (auto &file_entry : table_changes.new_delete_files) {
 			for (auto &file : file_entry.second) {
-				if (file.overwritten_delete_file_id.IsValid()) {
+				if (file.overwritten_delete_file.delete_file_id.IsValid()) {
 					// track the old delete file for deletion from metadata and disk
-					DuckLakeOverwrittenDeleteFile overwritten;
-					overwritten.delete_file_id = file.overwritten_delete_file_id;
-					overwritten.table_id = table_id;
-					overwritten.path = file.overwritten_delete_file_path;
-					overwritten_delete_files.push_back(std::move(overwritten));
+					overwritten_delete_files.push_back(file.overwritten_delete_file);
 				}
 				DuckLakeDeleteFileInfo delete_file;
 				delete_file.id = DataFileIndex(commit_state.commit_snapshot.next_file_id++);

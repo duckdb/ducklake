@@ -180,12 +180,6 @@ struct DuckLakeDeleteFileInfo {
 	optional_idx begin_snapshot;
 };
 
-struct DuckLakeOverwrittenDeleteFile {
-	DataFileIndex delete_file_id;
-	TableIndex table_id;
-	string path;
-};
-
 struct DuckLakePartitionFieldInfo {
 	idx_t partition_key_index = 0;
 	FieldIndex field_id;
@@ -349,7 +343,6 @@ struct DuckLakeFileListExtendedEntry {
 	DuckLakeFileData delete_file;
 	optional_idx row_id_start;
 	optional_idx snapshot_id;
-	//! The begin_snapshot of the existing delete file
 	optional_idx delete_file_begin_snapshot;
 	idx_t row_count;
 	idx_t delete_count = 0;

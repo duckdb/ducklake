@@ -19,6 +19,8 @@ struct DuckLakeDeleteData {
 
 	idx_t Filter(row_t start_row_index, idx_t count, SelectionVector &result_sel,
 	             optional_idx snapshot_filter = optional_idx()) const;
+
+	bool HasEmbeddedSnapshots() const;
 };
 
 struct DeleteFileScanResult {

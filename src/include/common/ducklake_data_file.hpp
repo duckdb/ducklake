@@ -24,6 +24,11 @@ enum class DeleteFileSource : uint8_t {
 	FLUSH    //! Delete file created during a flush operation (flushing inlined data)
 };
 
+struct DuckLakeOverwrittenDeleteFile {
+	DataFileIndex delete_file_id;
+	string path;
+};
+
 struct DuckLakeDeleteFile {
 	DataFileIndex data_file_id;
 	string data_file_path;
@@ -33,10 +38,8 @@ struct DuckLakeDeleteFile {
 	idx_t footer_size;
 	string encryption_key;
 	bool overwrites_existing_delete = false;
-	//! The ID of the old delete file being overwritten (for deletion from metadata)
-	DataFileIndex overwritten_delete_file_id;
-	//! The path of the old delete file being overwritten (for scheduling disk deletion)
-	string overwritten_delete_file_path;
+	//! The old delete file being overwritten (for deletion from metadata and disk)
+	DuckLakeOverwrittenDeleteFile overwritten_delete_file;
 	optional_idx begin_snapshot;
 	DeleteFileSource source = DeleteFileSource::REGULAR;
 };
