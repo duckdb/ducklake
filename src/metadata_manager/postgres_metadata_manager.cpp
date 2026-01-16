@@ -47,40 +47,13 @@ string PostgresMetadataManager::GetColumnTypeInternal(const LogicalType &column_
 	}
 }
 
-unique_ptr<QueryResult> PostgresMetadataManager::ExecuteQuery(string &query, string command) {
-	auto &commit_info = transaction.GetCommitInfo();
-
-	DuckLakeMetadataManager::FillSnapshotCommitArgs(query, commit_info);
-
-	auto &connection = transaction.GetConnection();
-	auto &ducklake_catalog = transaction.GetCatalog();
-	auto catalog_literal = DuckLakeUtil::SQLLiteralToString(ducklake_catalog.MetadataDatabaseName());
-
-	DuckLakeMetadataManager::FillCatalogArgs(query, ducklake_catalog);
-
-	return connection.Query(
-	    StringUtil::Format("CALL %s(%s, %s)", std::move(command), catalog_literal, SQLString(query)));
-}
-unique_ptr<QueryResult> PostgresMetadataManager::Execute(DuckLakeSnapshot snapshot, string &query) {
-	DuckLakeMetadataManager::FillSnapshotArgs(query, snapshot);
-	return ExecuteQuery(query, "postgres_execute");
-}
-
-unique_ptr<QueryResult> PostgresMetadataManager::Query(string query) {
-	return ExecuteQuery(query, "postgres_query");
-}
-
-unique_ptr<QueryResult> PostgresMetadataManager::Query(DuckLakeSnapshot snapshot, string query) {
-	DuckLakeMetadataManager::FillSnapshotArgs(query, snapshot);
-	return Query(query);
-}
-
 string PostgresMetadataManager::GetLatestSnapshotQuery() const {
 	return R"(
-		SELECT snapshot_id, schema_version, next_catalog_id, next_file_id
-		FROM {METADATA_SCHEMA_ESCAPED}.ducklake_snapshot WHERE snapshot_id = (
-			SELECT MAX(snapshot_id) FROM {METADATA_SCHEMA_ESCAPED}.ducklake_snapshot
-		)
+	SELECT * FROM postgres_query({METADATA_CATALOG_NAME_LITERAL},
+		'SELECT snapshot_id, schema_version, next_catalog_id, next_file_id
+		 FROM {METADATA_SCHEMA_ESCAPED}.ducklake_snapshot WHERE snapshot_id = (
+		     SELECT MAX(snapshot_id) FROM {METADATA_SCHEMA_ESCAPED}.ducklake_snapshot
+		 );')
 	)";
 }
 
