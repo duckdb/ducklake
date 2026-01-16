@@ -2158,9 +2158,7 @@ WHERE table_id=tid AND column_id=cid
 	}
 }
 
-template <class T>
-static timestamp_tz_t GetTimestampTZFromRow(ClientContext &context, const T &row, idx_t col_idx) {
-	auto val = row.iterator.chunk->GetValue(col_idx, row.row);
+static timestamp_tz_t GetTimestampTZFromRow(ClientContext &context, const Value &val) {
 	return val.CastAs(context, LogicalType::TIMESTAMP_TZ).template GetValue<timestamp_tz_t>();
 }
 
@@ -2183,12 +2181,12 @@ ORDER BY snapshot_id
 	for (auto &row : *res) {
 		DuckLakeSnapshotInfo snapshot_info;
 		snapshot_info.id = row.GetValue<idx_t>(0);
-		snapshot_info.time = GetTimestampTZFromRow(*context, row, 1);
+		snapshot_info.time = GetTimestampTZFromRow(*context, row.GetBaseValue(1));
 		snapshot_info.schema_version = row.GetValue<idx_t>(2);
 		snapshot_info.change_info.changes_made = row.IsNull(3) ? string() : row.GetValue<string>(3);
-		snapshot_info.author = row.iterator.chunk->GetValue(4, row.row);
-		snapshot_info.commit_message = row.iterator.chunk->GetValue(5, row.row);
-		snapshot_info.commit_extra_info = row.iterator.chunk->GetValue(6, row.row);
+		snapshot_info.author = row.GetBaseValue(4);
+		snapshot_info.commit_message = row.GetBaseValue(5);
+		snapshot_info.commit_extra_info = row.GetBaseValue(6);
 		snapshots.push_back(std::move(snapshot_info));
 	}
 	return snapshots;
@@ -2212,7 +2210,7 @@ FROM {METADATA_CATALOG}.ducklake_files_scheduled_for_deletion
 		path.path = row.GetValue<string>(1);
 		path.path_is_relative = row.GetValue<bool>(2);
 		info.path = FromRelativePath(path);
-		info.time = GetTimestampTZFromRow(*context, row, 3);
+		info.time = GetTimestampTZFromRow(*context, row.GetBaseValue(3));
 		result.push_back(std::move(info));
 	}
 	return result;

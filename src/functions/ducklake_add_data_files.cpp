@@ -184,8 +184,8 @@ FROM parquet_full_metadata(%s)
 	}
 
 	for (auto &row : *result) {
-		auto &chunk = *row.iterator.chunk;
-		idx_t row_idx = row.row;
+		auto &chunk = row.GetChunk();
+		idx_t row_idx = row.GetRowInChunk();
 
 		auto &file_metadata_vec = chunk.data[0];
 		auto &parquet_metadata_vec = chunk.data[1];
