@@ -170,7 +170,8 @@ INSERT INTO {METADATA_CATALOG}.ducklake_schema VALUES (0, '%s'::UUID, 0, NULL, '
 	//	ducklake_sorting_info
 	//	ducklake_sorting_column_info
 	//	ducklake_macro
-	auto result = Query(initialize_query);
+	DuckLakeSnapshot invalid_snapshot;
+	auto result = Execute(invalid_snapshot, initialize_query);
 	if (result->HasError()) {
 		result->GetErrorObject().Throw("Failed to initialize DuckLake:");
 	}
