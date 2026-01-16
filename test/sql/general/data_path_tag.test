@@ -6,12 +6,8 @@ require ducklake
 
 require parquet
 
-test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
-
-test-env DATA_PATH __TEST_DIR__
-
 statement ok
-ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/ducklake_duckdb_tables_files', METADATA_CATALOG 'ducklake_meta')
+ATTACH 'ducklake:__TEST_DIR__/ducklake_duckdb_tag_data_path.db' AS ducklake (DATA_PATH '__TEST_DIR__/ducklake_duckdb_tables_files', METADATA_CATALOG 'ducklake_meta')
 
 statement ok
 CREATE TABLE ducklake.test(i INTEGER);
@@ -35,7 +31,7 @@ statement ok
 DETACH ducklake;
 
 statement ok
-ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake;
+ATTACH 'ducklake:__TEST_DIR__/ducklake_duckdb_tag_data_path.db' AS ducklake;
 
 ### Existing DuckLake with no DATA_PATH, returns the one from the metadata catalog
 
@@ -48,7 +44,7 @@ statement ok
 DETACH ducklake;
 
 statement ok
-ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH something_else, OVERRIDE_DATA_PATH TRUE);
+ATTACH 'ducklake:__TEST_DIR__/ducklake_duckdb_tag_data_path.db' AS ducklake (DATA_PATH something_else, OVERRIDE_DATA_PATH TRUE);
 
 ### Existing DuckLake with different DATA_PATH, returns the currently provided one
 
@@ -66,7 +62,7 @@ statement ok
 DETACH ducklake;
 
 statement ok
-ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake;
+ATTACH 'ducklake:__TEST_DIR__/ducklake_duckdb_tag_data_path.db' AS ducklake;
 
 ### Existing DuckLake with no DATA_PATH, returns the one from the metadata catalog (the original one, not the overridden one)
 

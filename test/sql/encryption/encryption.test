@@ -8,12 +8,8 @@ require parquet
 
 require httpfs
 
-test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
-
-test-env DATA_PATH __TEST_DIR__
-
 statement ok
-ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/ducklake_encryption_files', ENCRYPTED)
+ATTACH 'ducklake:__TEST_DIR__/ducklake_encryption.db' AS ducklake (DATA_PATH '__TEST_DIR__/ducklake_encryption_files', ENCRYPTED)
 
 statement ok
 BEGIN
@@ -73,7 +69,7 @@ statement ok
 DETACH ducklake
 
 statement ok
-ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake
+ATTACH 'ducklake:__TEST_DIR__/ducklake_encryption.db' AS ducklake
 
 query II
 SELECT COUNT(*), SUM(id) FROM ducklake.test
