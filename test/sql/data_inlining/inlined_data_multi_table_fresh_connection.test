@@ -14,8 +14,12 @@ require ducklake
 
 require parquet
 
+test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+
+test-env DATA_PATH __TEST_DIR__
+
 statement ok
-ATTACH 'ducklake:__TEST_DIR__/multi_table_fresh.db' AS ducklake (DATA_PATH '__TEST_DIR__/multi_table_fresh_data')
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/multi_table_fresh_data')
 
 statement ok
 CALL ducklake.set_option('data_inlining_row_limit', 1000)
@@ -70,7 +74,7 @@ statement ok
 DETACH ducklake
 
 statement ok
-ATTACH 'ducklake:__TEST_DIR__/multi_table_fresh.db' AS ducklake (DATA_PATH '__TEST_DIR__/multi_table_fresh_data')
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/multi_table_fresh_data')
 
 # This query should work after the fix.
 # Before the fix, it would fail with "Cannot open file 'ducklake_inlined_data_2_X'"

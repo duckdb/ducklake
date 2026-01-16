@@ -6,8 +6,12 @@ require ducklake
 
 require parquet
 
+test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+
+test-env DATA_PATH __TEST_DIR__
+
 statement ok
-ATTACH 'ducklake:__TEST_DIR__/ducklake_inlining_setting.db' AS ducklake (DATA_PATH '__TEST_DIR__/ducklake_inlining_setting_files', METADATA_CATALOG 'ducklake_metadata')
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/ducklake_inlining_setting_files', METADATA_CATALOG 'ducklake_metadata')
 
 statement ok
 CREATE TABLE ducklake.test(i INTEGER, j INTEGER);
@@ -26,7 +30,7 @@ NULL	3
 
 # all data is inlined - so we have no files
 query I
-SELECT COUNT(*) FROM GLOB('__TEST_DIR__/ducklake_inlining_setting_files/**')
+SELECT COUNT(*) FROM GLOB('${DATA_PATH}/ducklake_inlining_setting_files/**')
 ----
 0
 
@@ -35,7 +39,7 @@ DETACH ducklake;
 
 # the option is persisted across restarts
 statement ok
-ATTACH 'ducklake:__TEST_DIR__/ducklake_inlining_setting.db' AS ducklake
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake
 
 statement ok
 INSERT INTO ducklake.test VALUES (5, 5);
@@ -48,7 +52,7 @@ NULL	3
 5	5
 
 query I
-SELECT COUNT(*) FROM GLOB('__TEST_DIR__/ducklake_inlining_setting_files/**')
+SELECT COUNT(*) FROM GLOB('${DATA_PATH}/ducklake_inlining_setting_files/**')
 ----
 0
 
