@@ -32,6 +32,7 @@
         "test/sql/compaction/compaction_delete_conflict.test",
         "test/sql/concurrent/concurrent_insert_conflict.test",
         "test/sql/concurrent/concurrent_insert_data_inlining.test",
+        "test/sql/checkpoint/checkpoint_updates_interleaved.test",
         "test/sql/rewrite_data_files/test_rewrite_concurrency.test",
         "test/sql/rewrite_data_files/test_rewrite_transaction_conflict.test",
         "test/sql/settings/max_retry_count.test",
