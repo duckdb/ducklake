@@ -61,8 +61,8 @@ unique_ptr<QueryResult> PostgresMetadataManager::ExecuteQuery(string &query, str
 	return connection.Query(
 	    StringUtil::Format("CALL %s(%s, %s)", std::move(command), catalog_literal, SQLString(query)));
 }
-unique_ptr<QueryResult> PostgresMetadataManager::Execute(DuckLakeSnapshot snapshot, string &query) {
-	DuckLakeMetadataManager::FillSnapshotArgs(query, snapshot);
+
+unique_ptr<QueryResult> PostgresMetadataManager::Execute(string query) {
 	return ExecuteQuery(query, "postgres_execute");
 }
 
@@ -70,18 +70,12 @@ unique_ptr<QueryResult> PostgresMetadataManager::Query(string query) {
 	return ExecuteQuery(query, "postgres_query");
 }
 
-unique_ptr<QueryResult> PostgresMetadataManager::Query(DuckLakeSnapshot snapshot, string query) {
-	DuckLakeMetadataManager::FillSnapshotArgs(query, snapshot);
-	return Query(query);
-}
-
 string PostgresMetadataManager::GetLatestSnapshotQuery() const {
 	return R"(
-	SELECT * FROM postgres_query({METADATA_CATALOG_NAME_LITERAL},
-		'SELECT snapshot_id, schema_version, next_catalog_id, next_file_id
-		 FROM {METADATA_SCHEMA_ESCAPED}.ducklake_snapshot WHERE snapshot_id = (
-		     SELECT MAX(snapshot_id) FROM {METADATA_SCHEMA_ESCAPED}.ducklake_snapshot
-		 );')
+		SELECT snapshot_id, schema_version, next_catalog_id, next_file_id
+		FROM {METADATA_SCHEMA_ESCAPED}.ducklake_snapshot WHERE snapshot_id = (
+			SELECT MAX(snapshot_id) FROM {METADATA_SCHEMA_ESCAPED}.ducklake_snapshot
+		)
 	)";
 }
 
