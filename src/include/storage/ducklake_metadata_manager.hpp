@@ -119,7 +119,9 @@ public:
 	static void FillCatalogArgs(string &query, const DuckLakeCatalog &ducklake_catalog);
 
 	//! Directly execute on metadata
-	virtual unique_ptr<QueryResult> Execute(DuckLakeSnapshot snapshot, string &query);
+	virtual unique_ptr<QueryResult> Execute(string query);
+	//! Directly execute on metadata
+	virtual unique_ptr<QueryResult> Execute(DuckLakeSnapshot snapshot, string query);
 
 	//! Directly query on metadata
 	virtual unique_ptr<QueryResult> Query(string query);

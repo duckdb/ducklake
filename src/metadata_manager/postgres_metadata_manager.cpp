@@ -61,18 +61,13 @@ unique_ptr<QueryResult> PostgresMetadataManager::ExecuteQuery(string &query, str
 	return connection.Query(
 	    StringUtil::Format("CALL %s(%s, %s)", std::move(command), catalog_literal, SQLString(query)));
 }
-unique_ptr<QueryResult> PostgresMetadataManager::Execute(DuckLakeSnapshot snapshot, string &query) {
-	DuckLakeMetadataManager::FillSnapshotArgs(query, snapshot);
+
+unique_ptr<QueryResult> PostgresMetadataManager::Execute(string query) {
 	return ExecuteQuery(query, "postgres_execute");
 }
 
 unique_ptr<QueryResult> PostgresMetadataManager::Query(string query) {
 	return ExecuteQuery(query, "postgres_query");
-}
-
-unique_ptr<QueryResult> PostgresMetadataManager::Query(DuckLakeSnapshot snapshot, string query) {
-	DuckLakeMetadataManager::FillSnapshotArgs(query, snapshot);
-	return Query(query);
 }
 
 string PostgresMetadataManager::GetLatestSnapshotQuery() const {
