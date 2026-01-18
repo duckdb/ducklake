@@ -18,16 +18,67 @@ DuckLakeInitializer::DuckLakeInitializer(ClientContext &context, DuckLakeCatalog
 	InitializeDataPath();
 }
 
+string DuckLakeInitializer::GetAttachOptions() {
+	vector<string> attach_options;
+	if (options.access_mode != AccessMode::AUTOMATIC) {
+		switch (options.access_mode) {
+		case AccessMode::READ_ONLY:
+			attach_options.push_back("READ_ONLY");
+			break;
+		case AccessMode::READ_WRITE:
+			attach_options.push_back("READ_WRITE");
+			break;
+		default:
+			throw InternalException("Unsupported access mode in DuckLake attach");
+		}
+	}
+	for (auto &option : options.metadata_parameters) {
+		attach_options.push_back(option.first + " " + option.second.ToSQLString());
+	}
+
+	if (attach_options.empty()) {
+		return string();
+	}
+	string result;
+	for (auto &option : attach_options) {
+		if (!result.empty()) {
+			result += ", ";
+		}
+		result += option;
+	}
+	return " (" + result + ")";
+}
+
 void DuckLakeInitializer::Initialize() {
 	auto &transaction = DuckLakeTransaction::Get(context, catalog);
-	auto &metadata_manager = transaction.GetMetadataManager();
+	// attach the metadata database
+	auto result =
+	    transaction.Query("ATTACH {METADATA_PATH} AS {METADATA_CATALOG_NAME_IDENTIFIER}" + GetAttachOptions());
+	if (result->HasError()) {
+		auto &error_obj = result->GetErrorObject();
+		error_obj.Throw("Failed to attach DuckLake MetaData \"" + catalog.MetadataDatabaseName() + "\" at path + \"" +
+		                catalog.MetadataPath() + "\"");
+	}
+	// explicitly load all secrets - work-around to secret initialization bug
+	transaction.Query("FROM duckdb_secrets()");
+
 	bool has_explicit_schema = !options.metadata_schema.empty();
+	if (options.metadata_schema.empty()) {
+		// if the schema is not explicitly set by the user - set it to the default schema in the catalog
+		options.metadata_schema = transaction.GetDefaultSchemaName();
+	}
 	// after the metadata database is attached initialize the ducklake
 	// check if we are loading an existing DuckLake or creating a new one
 	// FIXME: verify that all tables are in the correct format instead
-
-	bool is_initialized = metadata_manager.IsInitialized(options);
-	if (!is_initialized) {
+	result = transaction.Query(
+	    "SELECT COUNT(*) FROM duckdb_tables() WHERE database_name={METADATA_CATALOG_NAME_LITERAL} AND "
+	    "schema_name={METADATA_SCHEMA_NAME_LITERAL} AND table_name LIKE 'ducklake_%'");
+	if (result->HasError()) {
+		auto &error_obj = result->GetErrorObject();
+		error_obj.Throw("Failed to load DuckLake table data");
+	}
+	auto count = result->Fetch()->GetValue(0, 0).GetValue<idx_t>();
+	if (count == 0) {
 		if (!options.create_if_not_exists) {
 			throw InvalidInputException("Existing DuckLake at metadata catalog \"%s\" does not exist - and creating a "
 			                            "new DuckLake is explicitly disabled",
