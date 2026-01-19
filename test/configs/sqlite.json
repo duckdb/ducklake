@@ -44,7 +44,8 @@
         "test/sql/transaction/transaction_conflicts_delete.test",
         "test/sql/transaction/transaction_conflicts_view.test",
         "test/sql/concurrent/file_level_conflict.test",
-        "test/sql/transaction/transaction_conflict_inlining.test"
+        "test/sql/transaction/transaction_conflict_inlining.test",
+        "test/sql/checkpoint/checkpoint_updates_interleaved.test"
       ]
     },
     {
