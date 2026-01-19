@@ -13,9 +13,12 @@
 #include "duckdb/common/common.hpp"
 #include "duckdb/common/optional_idx.hpp"
 #include "common/index.hpp"
+#include "duckdb/storage/statistics/variant_stats.hpp"
 
 namespace duckdb {
 class BaseStatistics;
+
+struct DuckLakeColumnStats;
 
 struct DuckLakeColumnExtraStats {
 	virtual ~DuckLakeColumnExtraStats() = default;
@@ -53,12 +56,21 @@ public:
 	set<string> geo_types;
 };
 
+struct DuckLakeColumnVariantStats final : public DuckLakeColumnExtraStats {
+	DuckLakeColumnVariantStats();
+	void Merge(const DuckLakeColumnExtraStats &new_stats) override;
+	unique_ptr<DuckLakeColumnExtraStats> Copy() const override;
+
+	string Serialize() const override;
+	void Deserialize(const string &stats) override;
+
+public:
+	VariantStatsShreddingState shredding_state = VariantStatsShreddingState::UNINITIALIZED;
+	//unique_ptr<DuckLakeColumnStats> shredded_stats;
+};
+
 struct DuckLakeColumnStats {
-	explicit DuckLakeColumnStats(LogicalType type_p) : type(std::move(type_p)) {
-		if (DuckLakeTypes::IsGeoType(type)) {
-			extra_stats = make_uniq<DuckLakeColumnGeoStats>();
-		}
-	}
+	explicit DuckLakeColumnStats(LogicalType type_p);
 
 	// Copy constructor
 	DuckLakeColumnStats(const DuckLakeColumnStats &other);
@@ -85,7 +97,7 @@ struct DuckLakeColumnStats {
 public:
 	unique_ptr<BaseStatistics> ToStats() const;
 	void MergeStats(const DuckLakeColumnStats &new_stats);
-	DuckLakeColumnStats Copy() const;
+	unique_ptr<DuckLakeColumnStats> Copy() const;
 
 private:
 	unique_ptr<BaseStatistics> CreateNumericStats() const;

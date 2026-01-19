@@ -3,6 +3,7 @@
 #include "duckdb/parser/keyword_helper.hpp"
 #include "duckdb/common/file_system.hpp"
 #include "storage/ducklake_metadata_manager.hpp"
+#include "duckdb/function/scalar/variant_utils.hpp"
 
 namespace duckdb {
 
@@ -122,7 +123,19 @@ string ToSQLString(DuckLakeMetadataManager &metadata_manager, const Value &value
 		}
 		return "'" + StringUtil::Replace(value.ToString(), "'", "''") + "'";
 	}
-	case LogicalTypeId::VARIANT:
+	case LogicalTypeId::VARIANT: {
+		Vector tmp(value);
+		RecursiveUnifiedVectorFormat format;
+		Vector::RecursiveToUnifiedFormat(tmp, 1, format);
+		UnifiedVariantVectorData vector_data(format);
+		auto val = VariantUtils::ConvertVariantToValue(vector_data, 0, 0);
+
+		child_list_t<Value> children;
+		children.emplace_back("type", Value(val.type().ToString()));
+		children.emplace_back("value", val);
+		auto packed = Value::STRUCT(std::move(children));
+		return ToSQLString(metadata_manager, packed);
+	}
 	case LogicalTypeId::STRUCT: {
 		bool is_unnamed = StructType::IsUnnamed(value.type());
 		string ret = is_unnamed ? "(" : "{";

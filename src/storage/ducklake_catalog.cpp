@@ -224,6 +224,10 @@ static unique_ptr<DuckLakeFieldId> TransformColumnType(DuckLakeColumnInfo &col) 
 		return make_uniq<DuckLakeFieldId>(std::move(col_data), col.name, LogicalType::STRUCT(std::move(child_types)),
 		                                  std::move(child_fields));
 	}
+	if (StringUtil::CIEquals(col.type, "variant")) {
+		throw NotImplementedException("Variant??");
+		return make_uniq<DuckLakeFieldId>(std::move(col_data), col.name, LogicalType::VARIANT());
+	}
 	if (StringUtil::CIEquals(col.type, "list")) {
 		if (col.children.size() != 1) {
 			throw InvalidInputException("Lists must have a single child entry");
