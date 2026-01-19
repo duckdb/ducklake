@@ -66,10 +66,6 @@ DuckLakeColumnStats &DuckLakeColumnStats::operator=(const DuckLakeColumnStats &o
 	return *this;
 }
 
-unique_ptr<DuckLakeColumnStats> DuckLakeColumnStats::Copy() const {
-
-}
-
 void DuckLakeColumnStats::MergeStats(const DuckLakeColumnStats &new_stats) {
 	if (type != new_stats.type) {
 		// handle type promotion - adopt the new type

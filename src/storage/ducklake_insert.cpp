@@ -127,40 +127,49 @@ class DuckLakeInsertStatsTree;
 
 struct DuckLakeInsertStatsNode {
 public:
-	explicit DuckLakeInsertStatsNode(DuckLakeInsertStatsTree &tree, const string &name) : tree(tree), name(name) {}
+	explicit DuckLakeInsertStatsNode(DuckLakeInsertStatsTree &tree, idx_t index, const string &name) : tree(tree), index(index), name(name) {}
 public:
-	void ParseColumnStats(DuckLakeTableEntry &table, const vector<string> &path, map<FieldIndex, DuckLakeColumnStats> &out_stats) {
+	map<FieldIndex, DuckLakeColumnStats>::iterator ParseColumnStats(DuckLakeTableEntry &table, const vector<string> &path, map<FieldIndex, DuckLakeColumnStats> &out_stats) {
 		auto &field_id = table.GetFieldId(path);
 		auto &type = field_id.Type();
 		if (type.id() == LogicalTypeId::VARIANT) {
 			//! Collect the child stats
 			D_ASSERT(!children.empty());
-			auto variant_stats = DuckLakeColumnStats(type);
+			auto column_stats = DuckLakeColumnStats(type);
+			auto &variant_stats = column_stats.extra_stats->Cast<DuckLakeColumnVariantStats>();
+			D_ASSERT(this->type.id() == LogicalTypeId::STRUCT);
+			variant_stats.Build(this->type);
+
 			//! TODO: populate the variant stats
-			out_stats.emplace(field_id.GetFieldIndex(), variant_stats);
-			return;
+			auto it = out_stats.emplace(field_id.GetFieldIndex(), column_stats).first;
+			return it;
 		}
 		if (value) {
-			out_stats.emplace(field_id.GetFieldIndex(), DuckLakeInsert::ParseColumnStats(type, *value));
+			auto it = out_stats.emplace(field_id.GetFieldIndex(), DuckLakeInsert::ParseColumnStats(type, *value)).first;
+			return it;
 		}
 		for (auto &child : children) {
 			auto child_path = path;
 			child_path.push_back(child.first);
 			ParseColumnStats(table, child_path, out_stats);
 		}
+		return out_stats.end();
 	}
 public:
 	DuckLakeInsertStatsTree &tree;
+	//! Index in the tree where this node is located
+	idx_t index;
 	string name;
 	//! Index into the tree where the child node is located
 	case_insensitive_map_t<idx_t> children;
 	optional_ptr<const vector<Value>> value;
+	LogicalType type = LogicalType::INVALID;
 };
 
 class DuckLakeInsertStatsTree {
 public:
 	DuckLakeInsertStatsTree() {
-		storage.emplace_back(*this, "");
+		storage.emplace_back(*this, 0, "");
 	}
 
 	// Add or return an existing child under parent
@@ -173,17 +182,19 @@ public:
 		}
 
 		idx_t child = NewNode(name);
-		p.children[name] = child;
+		storage[parent].children[name] = child;
 		return child;
 	}
 
 	DuckLakeInsertStatsNode& Get(idx_t i) { return storage[i]; }
 	const DuckLakeInsertStatsNode& Get(idx_t i) const { return storage[i]; }
 
+	DuckLakeInsertStatsNode& Root() { return storage[0]; }
+
 private:
 	idx_t NewNode(const string &name) {
 		auto id = storage.size();
-		storage.emplace_back(*this, name);
+		storage.emplace_back(*this, id, name);
 		return id;
 	}
 
@@ -232,16 +243,52 @@ void DuckLakeInsert::AddWrittenFiles(DuckLakeInsertGlobalState &global_state, Da
 				continue;
 			}
 
-			auto &field_id = table.GetFieldId(column_names);
-			auto column_stats = ParseColumnStats(field_id.Type(), col_stats);
-			if (column_stats.null_count > 0 && column_names.size() == 1) {
+			idx_t node_index = 0;
+			for (auto &path : column_names) {
+				auto child_index = stats_tree.GetOrCreateChild(stats_tree.Get(node_index).index, path);
+				stats_tree.Get(node_index).children.emplace(path, child_index);
+				node_index = child_index;
+			}
+			auto &stats_node = stats_tree.Get(node_index);
+			stats_node.value = &col_stats;
+		}
+		auto &root_columns = stats_tree.Root().children;
+		auto column_types = chunk.GetValue(6, r);
+		auto &column_types_children = MapValue::GetChildren(column_types);
+		for (idx_t col_idx = 0; col_idx < column_types_children.size(); col_idx++) {
+			auto &struct_children = StructValue::GetChildren(column_types_children[col_idx]);
+			auto &col_name = StringValue::Get(struct_children[0]);
+
+			auto it = root_columns.find(col_name);
+			if (it == root_columns.end()) {
+				//! No stats for this column, skip
+				continue;
+			}
+			auto &col_type_str = StringValue::Get(struct_children[1]);
+			auto col_type = TransformStringToLogicalType(col_type_str);
+			auto child_index = it->second;
+			auto &child_node = stats_tree.Get(child_index);
+			child_node.type = col_type;
+		}
+
+		//! Actually parse the stats we've gathered and populate the 'column_stats' of the data file
+		for (auto &child : stats_tree.Root().children) {
+			auto &name = child.first;
+			auto &index = child.second;
+
+			auto &node = stats_tree.Get(index);
+			auto it = node.ParseColumnStats(table, {name}, data_file.column_stats);
+			if (it == data_file.column_stats.end()) {
+				//! This is a nested column, it doesn't have direct stats, only the leafs do
+				continue;
+			}
+			auto &column_stats = it->second;
+			if (column_stats.null_count > 0) {
 				// we wrote NULL values to a base column - verify NOT NULL constraint
-				if (global_state.not_null_fields.count(column_names[0])) {
-					throw ConstraintException("NOT NULL constraint failed: %s.%s", table.name, column_names[0]);
+				if (global_state.not_null_fields.count(name)) {
+					throw ConstraintException("NOT NULL constraint failed: %s.%s", table.name, name);
 				}
 			}
-
-			data_file.column_stats.insert(make_pair(field_id.GetFieldIndex(), std::move(column_stats)));
 		}
 
 		// extract the partition info
