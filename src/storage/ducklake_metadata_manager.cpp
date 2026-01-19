@@ -168,7 +168,7 @@ UPDATE {METADATA_CATALOG}.ducklake_data_file
 SET partial_max =
     CAST(regexp_extract(partial_file_info, 'partial_max:(\\d+)', 1) AS BIGINT)
 WHERE partial_max IS NULL;
-ALTER TABLE {METADATA_CATALOG}.ducklake_data_file DROP COLUMN {IF_EXISTS} partial_file_info BIGINT;
+ALTER TABLE {METADATA_CATALOG}.ducklake_data_file DROP COLUMN {IF_EXISTS} partial_file_info;
 UPDATE {METADATA_CATALOG}.ducklake_metadata SET value = '0.4-dev1' WHERE key = 'version';
 	)";
 	ExecuteMigration(migrate_query, allow_failures);
@@ -2231,7 +2231,7 @@ string DuckLakeMetadataManager::WriteNewDataFiles(const vector<DuckLakeFileInfo>
 		data_file_insert_query += StringUtil::Format(
 		    "(%d, %d, %s, NULL, NULL, %s, %s, 'parquet', %d, %d, %s, %s, %s, %s, %s, %s)", data_file_index, table_id,
 		    begin_snapshot, SQLString(path.path), path.path_is_relative ? "true" : "false", file.row_count,
-		    file.file_size_bytes, footer_size, row_id, partition_id, encryption_key, partial_max, mapping);
+		    file.file_size_bytes, footer_size, row_id, partition_id, encryption_key, mapping, partial_max);
 		for (auto &column_stats : file.column_stats) {
 			if (!column_stats_insert_query.empty()) {
 				column_stats_insert_query += ",";

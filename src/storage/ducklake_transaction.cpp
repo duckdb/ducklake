@@ -1597,18 +1597,10 @@ CompactionInformation DuckLakeTransaction::GetCompactionChanges(DuckLakeSnapshot
 			case CompactionType::REWRITE_DELETES:
 				new_file.begin_snapshot = compaction.source_files[0].delete_files.back().begin_snapshot;
 				break;
-			case CompactionType::MERGE_ADJACENT_TABLES:
-				new_file.begin_snapshot = compaction.source_files[0].file.begin_snapshot;
-				break;
-			default:
-				throw InternalException("DuckLakeTransaction::GetCompactionChanges Compaction type is invalid");
-			}
-
-			idx_t row_id_limit = 0;
-			// For MERGE_ADJACENT_TABLES, track the max partial snapshot across all source files
-			if (type == CompactionType::MERGE_ADJACENT_TABLES && compaction.source_files.size() > 1) {
+			case CompactionType::MERGE_ADJACENT_TABLES: {
+				// For MERGE_ADJACENT_TABLES, track the max partial snapshot across all source files
 				optional_idx merged_max_partial_snapshot;
-				// When merging multiple files, we need to track the max snapshot to enable proper time travel
+				idx_t first_begin_snapshot = compaction.source_files[0].file.begin_snapshot;
 				for (auto &compacted_file : compaction.source_files) {
 					idx_t file_max_snapshot = compacted_file.max_partial_file_snapshot.IsValid()
 					                              ? compacted_file.max_partial_file_snapshot.GetIndex()
@@ -1618,8 +1610,18 @@ CompactionInformation DuckLakeTransaction::GetCompactionChanges(DuckLakeSnapshot
 						merged_max_partial_snapshot = file_max_snapshot;
 					}
 				}
-				new_file.max_partial_file_snapshot = merged_max_partial_snapshot;
+				// Use the first source file's begin_snapshot for proper time travel support
+				new_file.begin_snapshot = first_begin_snapshot;
+				if (compaction.source_files.size() > 1) {
+					new_file.max_partial_file_snapshot = merged_max_partial_snapshot;
+				}
+				break;
 			}
+			default:
+				throw InternalException("DuckLakeTransaction::GetCompactionChanges Compaction type is invalid");
+			}
+
+			idx_t row_id_limit = 0;
 			for (auto &compacted_file : compaction.source_files) {
 				row_id_limit += compacted_file.file.row_count;
 				if (!compacted_file.delete_files.empty()) {
