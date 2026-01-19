@@ -69,7 +69,7 @@ public:
 	DuckLakeSnapshotCommit &GetCommitInfo() {
 		return commit_info;
 	}
-	//! Run query on duckdb
+	unique_ptr<QueryResult> Query(DuckLakeSnapshot snapshot, string query);
 	unique_ptr<QueryResult> Query(string query);
 	Connection &GetConnection();
 
