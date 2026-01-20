@@ -116,6 +116,7 @@ public:
 private:
 	unique_ptr<BaseStatistics> CreateNumericStats() const;
 	unique_ptr<BaseStatistics> CreateStringStats() const;
+	unique_ptr<BaseStatistics> CreateVariantStats() const;
 };
 
 struct DuckLakeColumnStats;
@@ -144,13 +145,13 @@ public:
 public:
 	void Merge(const DuckLakeColumnExtraStats &new_stats) override;
 	unique_ptr<DuckLakeColumnExtraStats> Copy() const override;
-
+	unique_ptr<BaseStatistics> ToStats() const;
 	string Serialize() const override;
 	void Deserialize(const string &stats) override;
 
 private:
 	void BuildInternal(idx_t parent, const LogicalType &shredded_internal_type);
-
+	bool ConvertStats(idx_t field_index, BaseStatistics &result) const;
 public:
 	VariantStatsShreddingState shredding_state = VariantStatsShreddingState::UNINITIALIZED;
 	LogicalType shredded_type = LogicalType::INVALID;

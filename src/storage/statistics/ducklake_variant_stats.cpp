@@ -1,6 +1,11 @@
 #include "storage/ducklake_stats.hpp"
 #include "duckdb/common/enum_util.hpp"
 #include "duckdb/common/printer.hpp"
+#include "duckdb/storage/statistics/base_statistics.hpp"
+#include "duckdb/storage/statistics/struct_stats.hpp"
+#include "duckdb/storage/statistics/variant_stats.hpp"
+#include "duckdb/storage/statistics/list_stats.hpp"
+#include "duckdb/common/type_visitor.hpp"
 
 #include "yyjson.hpp"
 
@@ -50,6 +55,193 @@ unique_ptr<DuckLakeColumnExtraStats> DuckLakeColumnVariantStats::Copy() const {
 	res->stats_arena = this->stats_arena;
 	res->shredded_type = this->shredded_type;
 	return res;
+}
+
+//! Copied from VariantColumnReader::TypedValueLayoutToType
+static bool TypedValueLayoutToType(const LogicalType &typed_value, LogicalType &output) {
+	if (!typed_value.IsNested()) {
+		output = typed_value;
+		return true;
+	}
+	auto type_id = typed_value.id();
+	if (type_id == LogicalTypeId::STRUCT) {
+		//! OBJECT (...)
+		auto &object_fields = StructType::GetChildTypes(typed_value);
+		child_list_t<LogicalType> children;
+		for (auto &object_field : object_fields) {
+			auto &name = object_field.first;
+			auto &field = object_field.second;
+			//! <name>: {
+			//! 	value: BLOB,
+			//! 	typed_value: <type>
+			//! }
+			auto &field_children = StructType::GetChildTypes(field);
+			idx_t index = DConstants::INVALID_INDEX;
+			for (idx_t i = 0; i < field_children.size(); i++) {
+				if (field_children[i].first == "typed_value") {
+					index = i;
+					break;
+				}
+			}
+			if (index == DConstants::INVALID_INDEX) {
+				//! FIXME: we might be able to just omit this field from the OBJECT, instead of flat-out failing the
+				//! conversion No 'typed_value' field, so we can't assign a structured type to this field at all
+				return false;
+			}
+			LogicalType child_type;
+			if (!TypedValueLayoutToType(field_children[index].second, child_type)) {
+				return false;
+			}
+			children.emplace_back(name, child_type);
+		}
+		output = LogicalType::STRUCT(std::move(children));
+		return true;
+	}
+	if (type_id == LogicalTypeId::LIST) {
+		//! ARRAY
+		auto &element = ListType::GetChildType(typed_value);
+		//! element: {
+		//! 	value: BLOB,
+		//! 	typed_value: <type>
+		//! }
+		auto &element_children = StructType::GetChildTypes(element);
+		idx_t index = DConstants::INVALID_INDEX;
+		for (idx_t i = 0; i < element_children.size(); i++) {
+			if (element_children[i].first == "typed_value") {
+				index = i;
+				break;
+			}
+		}
+		if (index == DConstants::INVALID_INDEX) {
+			//! This *might* be allowed by the spec, it's hard to reason about..
+			return false;
+		}
+		LogicalType child_type;
+		if (!TypedValueLayoutToType(element_children[index].second, child_type)) {
+			return false;
+		}
+		output = LogicalType::LIST(child_type);
+		return true;
+	}
+	throw InvalidInputException("VARIANT typed value has to be a primitive/struct/list, not %s",
+	                            typed_value.ToString());
+}
+
+static bool ConvertUnshreddedStats(BaseStatistics &result, BaseStatistics &input) {
+	D_ASSERT(result.GetType().id() == LogicalTypeId::UINTEGER);
+
+	D_ASSERT(input.GetType().id() == LogicalTypeId::BLOB);
+	result.CopyValidity(input);
+
+	auto min = StringStats::Min(input);
+	auto max = StringStats::Max(input);
+
+	if (!result.CanHaveNoNull()) {
+		return true;
+	}
+
+	if (min.empty() && max.empty()) {
+		//! All non-shredded values are NULL or VARIANT_NULL, set the stats to indicate this
+		NumericStats::SetMin<uint32_t>(result, 0);
+		NumericStats::SetMax<uint32_t>(result, 0);
+		result.SetHasNoNull();
+	}
+	return true;
+}
+
+bool DuckLakeColumnVariantStats::ConvertStats(idx_t field_index, BaseStatistics &result) const {
+	auto &untyped_value_index_stats = StructStats::GetChildStats(result, 0);
+	auto &typed_value_stats = StructStats::GetChildStats(result, 1);
+
+	auto &field = field_arena[field_index];
+	D_ASSERT(!field.children.empty());
+
+	auto value_it = field.children.find("value");
+	auto typed_value_it = field.children.find("typed_value");
+
+	if (value_it == field.children.end() || typed_value_it == field.children.end()) {
+		return false;
+	}
+	auto &value = field_arena[value_it->second];
+	auto &typed_value = field_arena[typed_value_it->second];
+
+	auto &type = typed_value_stats.GetType();
+	auto type_id = type.id();
+	if (type_id == LogicalTypeId::STRUCT) {
+		auto &child_types = StructType::GetChildTypes(type);
+		for (idx_t i = 0; i < child_types.size(); i++) {
+			auto &child_stats = StructStats::GetChildStats(typed_value_stats, i);
+			auto child_it = typed_value.children.find(child_types[i].first);
+			if (child_it == typed_value.children.end()) {
+				throw InternalException("STRUCT is missing its child?");
+			}
+			if (!ConvertStats(child_it->second, child_stats)) {
+				return false;
+			}
+		}
+		return true;
+	} else if (type_id == LogicalTypeId::LIST) {
+		auto &element = ListStats::GetChildStats(typed_value_stats);
+		auto element_it = typed_value.children.find("element");
+		if (element_it == typed_value.children.end()) {
+			throw InternalException("LIST without an 'element' field?");
+		}
+		return ConvertStats(element_it->second, element);
+	} else {
+		if (!value.stats_index.IsValid()) {
+			//! No stats for the leaf 'value', can't convert
+			return false;
+		}
+		if (!typed_value.stats_index.IsValid()) {
+			//! No stats for the leaf 'value', can't convert
+			return false;
+		}
+		auto &untyped = stats_arena[value.stats_index.GetIndex()];
+		auto value_stats = untyped.ToStats();
+		if (value_stats) {
+			ConvertUnshreddedStats(untyped_value_index_stats, *value_stats);
+		}
+
+		auto &typed = stats_arena[typed_value.stats_index.GetIndex()];
+		StructStats::SetChildStats(result, 1, typed.ToStats());
+	}
+	return true;
+}
+
+unique_ptr<BaseStatistics> DuckLakeColumnVariantStats::ToStats() const {
+	if (shredding_state != VariantStatsShreddingState::SHREDDED) {
+		return nullptr;
+	}
+	auto &child_types = StructType::GetChildTypes(shredded_type);
+	idx_t index = DConstants::INVALID_INDEX;
+	for (idx_t i = 0; i < child_types.size(); i++) {
+		if (child_types[i].first == "typed_value") {
+			index = i;
+			break;
+		}
+	}
+	if (index == DConstants::INVALID_INDEX) {
+		throw InternalException("State says SHREDDED but there is no 'typed_value' ???");
+	}
+
+	//! STRUCT(metadata, value, typed_value) -> STRUCT(untyped_value_index, typed_value)
+	LogicalType logical_type;
+	if (!TypedValueLayoutToType(child_types[index].second, logical_type)) {
+		return nullptr;
+	}
+	auto shredding_type = TypeVisitor::VisitReplace(logical_type, [](const LogicalType &type) {
+		return LogicalType::STRUCT({{"untyped_value_index", LogicalType::UINTEGER}, {"typed_value", type}});
+	});
+
+	auto variant_stats = VariantStats::CreateShredded(shredding_type);
+
+	//! Take the root stats
+	auto &shredded_stats = VariantStats::GetShreddedStats(variant_stats);
+	if (!ConvertStats(0, shredded_stats)) {
+		return nullptr;
+	}
+
+	return variant_stats.ToUnique();
 }
 
 void DuckLakeColumnVariantStats::Merge(const DuckLakeColumnExtraStats &new_stats) {
@@ -301,6 +493,7 @@ void DuckLakeColumnVariantStats::Deserialize(const string &stats) {
 	auto state = EnumUtil::FromString<VariantStatsShreddingState>(yyjson_get_str(state_val));
 	if (state == VariantStatsShreddingState::SHREDDED) {
 		shredded_type = DeserializeShredded(*this, root);
+		shredding_state = state;
 	}
 	yyjson_doc_free(doc);
 }

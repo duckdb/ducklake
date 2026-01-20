@@ -179,6 +179,14 @@ unique_ptr<BaseStatistics> DuckLakeColumnStats::CreateNumericStats() const {
 	return stats.ToUnique();
 }
 
+unique_ptr<BaseStatistics> DuckLakeColumnStats::CreateVariantStats() const {
+	if (!extra_stats) {
+		throw InternalException("Variant DuckLakeColumnStats without extra_stats?");
+	}
+	auto &variant_stats = extra_stats->Cast<DuckLakeColumnVariantStats>();
+	return variant_stats.ToStats();
+}
+
 unique_ptr<BaseStatistics> DuckLakeColumnStats::CreateStringStats() const {
 	if (!has_min || !has_max) {
 		return nullptr;
@@ -223,7 +231,10 @@ unique_ptr<BaseStatistics> DuckLakeColumnStats::ToStats() const {
 		}
 		return nullptr;
 	case LogicalTypeId::VARCHAR:
+	case LogicalTypeId::BLOB:
 		return CreateStringStats();
+	case LogicalTypeId::VARIANT:
+		return CreateVariantStats();
 	default:
 		return nullptr;
 	}
