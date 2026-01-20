@@ -10,9 +10,9 @@ DEFAULT_TEST_EXTENSION_DEPS=
 FULL_TEST_EXTENSION_DEPS=httpfs
 
 # Aws and Azure have vcpkg dependencies and therefore need vcpkg merging
-ifeq (${BUILD_EXTENSION_TEST_DEPS}, full)
-	USE_MERGED_VCPKG_MANIFEST:=1
-endif
+#ifeq (${BUILD_EXTENSION_TEST_DEPS}, full)
+USE_MERGED_VCPKG_MANIFEST:=1
+#endif
 
 # Include the Makefile from extension-ci-tools
 include extension-ci-tools/makefiles/duckdb_extension.Makefile
