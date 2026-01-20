@@ -49,7 +49,8 @@ jobs:
     - name: Setup vcpkg
       uses: lukka/run-vcpkg@v11.1
       with:
-        vcpkgGitCommitId: a42af01b72c28a8e1d7b48107b33e4f286a55ef6
+        vcpkgGitCommitId: ce613c41372b23b1f51333815feb3edd87ef8a8b
+        vcpkgJsonGlob: './vcpkg.json'
 
     - name: Build extension
       env:
