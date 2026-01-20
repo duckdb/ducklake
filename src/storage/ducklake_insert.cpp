@@ -185,55 +185,27 @@ private:
 };
 
 static void ParseVariantColumnStats(DuckLakeInsertStatsTree &tree, idx_t node_index,
-                                    DuckLakeColumnVariantStats &variant, idx_t field_index, const LogicalType &type) {
+                                    DuckLakeColumnVariantStats &variant, idx_t field_index) {
 	auto &stats_node = tree.Get(node_index);
 
 	D_ASSERT(variant.field_arena.size() != 0);
 	auto &variant_field = variant.field_arena[field_index];
 	if (stats_node.value) {
+		D_ASSERT(stats_node.type.id() != LogicalTypeId::INVALID);
 		variant_field.stats_index =
-		    variant.stats_arena.emplace(DuckLakeInsert::ParseColumnStats(type, *stats_node.value));
+		    variant.stats_arena.emplace(DuckLakeInsert::ParseColumnStats(stats_node.type, *stats_node.value));
 	}
 
-	auto type_id = type.id();
-	if (type_id == LogicalTypeId::STRUCT) {
-		auto &child_types = StructType::GetChildTypes(type);
-		for (idx_t i = 0; i < child_types.size(); i++) {
-			auto &child_entry = child_types[i];
-			auto &child_type = child_entry.second;
-			auto &name = child_entry.first;
+	for (auto &entry : stats_node.children) {
+		auto &name = entry.first;
+		auto child_index = entry.second;
 
-			auto stat_it = stats_node.children.find(name);
-			if (stat_it == stats_node.children.end()) {
-				//! No stats for this child
-				continue;
-			}
-			auto child_index = stat_it->second;
-
-			auto field_it = variant_field.children.find(name);
-			if (field_it == variant_field.children.end()) {
-				throw InvalidInputException("Stats don't match the Parquet file's schema!");
-			}
-			auto field_child_index = field_it->second;
-			ParseVariantColumnStats(tree, child_index, variant, field_child_index, child_type);
-		}
-	}
-	if (type_id == LogicalTypeId::LIST) {
-		auto &child_type = ListType::GetChildType(type);
-
-		auto stat_it = stats_node.children.find("element");
-		if (stat_it == stats_node.children.end()) {
-			//! No stats for the list element
-			return;
-		}
-		auto child_index = stat_it->second;
-
-		auto field_it = variant_field.children.find("element");
+		auto field_it = variant_field.children.find(name);
 		if (field_it == variant_field.children.end()) {
 			throw InvalidInputException("Stats don't match the Parquet file's schema!");
 		}
 		auto field_child_index = field_it->second;
-		ParseVariantColumnStats(tree, child_index, variant, field_child_index, child_type);
+		ParseVariantColumnStats(tree, child_index, variant, field_child_index);
 	}
 }
 
@@ -251,14 +223,13 @@ static map<FieldIndex, DuckLakeColumnStats>::iterator ParseStatNodes(DuckLakeIns
 		auto &variant_stats = column_stats.extra_stats->Cast<DuckLakeColumnVariantStats>();
 		D_ASSERT(stats_node.type.id() == LogicalTypeId::STRUCT);
 		variant_stats.Build(stats_node.type);
-		ParseVariantColumnStats(tree, node_index, variant_stats, 0, stats_node.type);
+		ParseVariantColumnStats(tree, node_index, variant_stats, 0);
 		auto it = out_stats.emplace(field_id.GetFieldIndex(), column_stats).first;
 		return it;
 	}
 	if (stats_node.value) {
-		auto it = out_stats.emplace(field_id.GetFieldIndex(), DuckLakeInsert::ParseColumnStats(type, *stats_node.value))
-		              .first;
-		return it;
+		auto res = out_stats.emplace(field_id.GetFieldIndex(), DuckLakeInsert::ParseColumnStats(type, *stats_node.value));
+		return res.first;
 	}
 	for (auto &child : stats_node.children) {
 		auto child_path = path;
@@ -280,6 +251,18 @@ void DuckLakeInsert::AddWrittenFiles(DuckLakeInsertGlobalState &global_state, Da
 		data_file.encryption_key = encryption_key;
 		if (partition_id.IsValid()) {
 			data_file.partition_id = partition_id.GetIndex();
+		}
+
+		//! Parse the mapping of column name -> column type
+		case_insensitive_map_t<LogicalType> column_type_map;
+		auto column_types = chunk.GetValue(6, r);
+		auto &column_types_children = MapValue::GetChildren(column_types);
+		for (idx_t col_idx = 0; col_idx < column_types_children.size(); col_idx++) {
+			auto &struct_children = StructValue::GetChildren(column_types_children[col_idx]);
+			auto &col_name = StringValue::Get(struct_children[0]);
+
+			auto &col_type_str = StringValue::Get(struct_children[1]);
+			column_type_map.emplace(col_name, TransformStringToLogicalType(col_type_str));
 		}
 
 		// extract the column stats
@@ -309,33 +292,46 @@ void DuckLakeInsert::AddWrittenFiles(DuckLakeInsertGlobalState &global_state, Da
 			if (column_names[0] == "_ducklake_internal_row_id") {
 				continue;
 			}
+			auto column_type_it = column_type_map.find(column_names[0]);
+			if (column_type_it == column_type_map.end()) {
+				throw InvalidInputException("Missing type for column %s", column_names[0]);
+			}
+			const_reference<LogicalType> current_type(column_type_it->second);
 
 			idx_t node_index = 0;
-			for (auto &path : column_names) {
-				auto child_index = stats_tree.GetOrCreateChild(stats_tree.Get(node_index).index, path);
-				stats_tree.Get(node_index).children.emplace(path, child_index);
+			for (idx_t i = 0; i < column_names.size(); i++) {
+				auto &field = column_names[i];
+				if (i) {
+					auto &column_type = current_type.get();
+					auto type_id = column_type.id();
+					if (type_id == LogicalTypeId::STRUCT) {
+						auto &child_types = StructType::GetChildTypes(column_type);
+						optional_idx child_index;
+						for (idx_t index = 0; index < child_types.size(); index++) {
+							if (StringUtil::CIEquals(child_types[index].first, field)) {
+								child_index = index;
+								break;
+							}
+						}
+						if (!child_index.IsValid()) {
+							auto current_column_names = vector<string>(column_names.begin(), column_names.begin() + i);
+							throw InvalidInputException("No type found for column at path: '%s'", StringUtil::Join(current_column_names, "."));
+						}
+						current_type = child_types[child_index.GetIndex()].second;
+					} else if (type_id == LogicalTypeId::LIST) {
+						current_type = ListType::GetChildType(column_type);
+					}
+				}
+				auto child_index = stats_tree.GetOrCreateChild(stats_tree.Get(node_index).index, field);
+				auto &stats_node = stats_tree.Get(node_index);
+				stats_node.children.emplace(field, child_index);
+
+				auto &child_node = stats_tree.Get(child_index);
+				child_node.type = current_type.get();
 				node_index = child_index;
 			}
 			auto &stats_node = stats_tree.Get(node_index);
 			stats_node.value = &col_stats;
-		}
-		auto &root_columns = stats_tree.Root().children;
-		auto column_types = chunk.GetValue(6, r);
-		auto &column_types_children = MapValue::GetChildren(column_types);
-		for (idx_t col_idx = 0; col_idx < column_types_children.size(); col_idx++) {
-			auto &struct_children = StructValue::GetChildren(column_types_children[col_idx]);
-			auto &col_name = StringValue::Get(struct_children[0]);
-
-			auto it = root_columns.find(col_name);
-			if (it == root_columns.end()) {
-				//! No stats for this column, skip
-				continue;
-			}
-			auto &col_type_str = StringValue::Get(struct_children[1]);
-			auto col_type = TransformStringToLogicalType(col_type_str);
-			auto child_index = it->second;
-			auto &child_node = stats_tree.Get(child_index);
-			child_node.type = col_type;
 		}
 
 		//! Actually parse the stats we've gathered and populate the 'column_stats' of the data file
