@@ -8,8 +8,8 @@ using namespace duckdb_yyjson; // NOLINT
 
 DuckLakeColumnVariantFieldStats::DuckLakeColumnVariantFieldStats(
     DuckLakeVariantStatsArena<DuckLakeColumnVariantFieldStats> &field_arena,
-    DuckLakeVariantStatsArena<DuckLakeColumnStats> &stats_arena, idx_t index, const LogicalType &type)
-    : field_arena(field_arena), stats_arena(stats_arena), index(index), stats(type) {
+    DuckLakeVariantStatsArena<DuckLakeColumnStats> &stats_arena, idx_t index)
+    : field_arena(field_arena), stats_arena(stats_arena), index(index) {
 }
 
 DuckLakeColumnVariantStats::DuckLakeColumnVariantStats() : DuckLakeColumnExtraStats() {
@@ -26,14 +26,14 @@ void DuckLakeColumnVariantStats::BuildInternal(idx_t parent_index, const Logical
 
 			auto new_index = field_arena.size();
 			field_arena[parent_index].children.emplace(child_name, new_index);
-			field_arena.emplace(field_arena, stats_arena, new_index, child_type);
+			field_arena.emplace(field_arena, stats_arena, new_index);
 			BuildInternal(new_index, child_type);
 		}
 	} else if (id == LogicalTypeId::LIST) {
 		auto new_index = field_arena.size();
 		auto &child_type = ListType::GetChildType(parent_type);
 		field_arena[parent_index].children.emplace("element", new_index);
-		field_arena.emplace(field_arena, stats_arena, new_index, child_type);
+		field_arena.emplace(field_arena, stats_arena, new_index);
 		BuildInternal(new_index, child_type);
 	}
 	//! Primitives (leafs) are already handled by the parent
@@ -41,7 +41,8 @@ void DuckLakeColumnVariantStats::BuildInternal(idx_t parent_index, const Logical
 
 void DuckLakeColumnVariantStats::Build(const LogicalType &shredded_internal_type) {
 	//! Create the root stats
-	field_arena.emplace(field_arena, stats_arena, 0, shredded_internal_type);
+	shredding_state = VariantStatsShreddingState::SHREDDED;
+	field_arena.emplace(field_arena, stats_arena, 0);
 	BuildInternal(0, shredded_internal_type);
 }
 

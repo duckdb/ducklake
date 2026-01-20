@@ -123,8 +123,7 @@ struct DuckLakeColumnStats;
 struct DuckLakeColumnVariantFieldStats {
 public:
 	DuckLakeColumnVariantFieldStats(DuckLakeVariantStatsArena<DuckLakeColumnVariantFieldStats> &field_arena,
-	                                DuckLakeVariantStatsArena<DuckLakeColumnStats> &stats_arena, idx_t index,
-	                                const LogicalType &type);
+	                                DuckLakeVariantStatsArena<DuckLakeColumnStats> &stats_arena, idx_t index);
 
 public:
 	DuckLakeVariantStatsArena<DuckLakeColumnVariantFieldStats> &field_arena;
@@ -132,7 +131,7 @@ public:
 	//! Index in the tree of the current node
 	idx_t index;
 
-	DuckLakeColumnStats stats;
+	optional_idx stats_index;
 
 	//! Children of this column (their index to find them in the tree)
 	case_insensitive_map_t<idx_t> children;

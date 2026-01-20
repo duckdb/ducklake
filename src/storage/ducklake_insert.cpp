@@ -132,36 +132,6 @@ public:
 	}
 
 public:
-	map<FieldIndex, DuckLakeColumnStats>::iterator ParseColumnStats(DuckLakeTableEntry &table,
-	                                                                const vector<string> &path,
-	                                                                map<FieldIndex, DuckLakeColumnStats> &out_stats) {
-		auto &field_id = table.GetFieldId(path);
-		auto &type = field_id.Type();
-		if (type.id() == LogicalTypeId::VARIANT) {
-			//! Collect the child stats
-			D_ASSERT(!children.empty());
-			auto column_stats = DuckLakeColumnStats(type);
-			auto &variant_stats = column_stats.extra_stats->Cast<DuckLakeColumnVariantStats>();
-			D_ASSERT(this->type.id() == LogicalTypeId::STRUCT);
-			variant_stats.Build(this->type);
-
-			//! TODO: populate the variant stats
-			auto it = out_stats.emplace(field_id.GetFieldIndex(), column_stats).first;
-			return it;
-		}
-		if (value) {
-			auto it = out_stats.emplace(field_id.GetFieldIndex(), DuckLakeInsert::ParseColumnStats(type, *value)).first;
-			return it;
-		}
-		for (auto &child : children) {
-			auto child_path = path;
-			child_path.push_back(child.first);
-			ParseColumnStats(table, child_path, out_stats);
-		}
-		return out_stats.end();
-	}
-
-public:
 	DuckLakeInsertStatsTree &tree;
 	//! Index in the tree where this node is located
 	idx_t index;
@@ -213,6 +183,91 @@ private:
 private:
 	vector<DuckLakeInsertStatsNode> storage;
 };
+
+static void ParseVariantColumnStats(DuckLakeInsertStatsTree &tree, idx_t node_index,
+                                    DuckLakeColumnVariantStats &variant, idx_t field_index, const LogicalType &type) {
+	auto &stats_node = tree.Get(node_index);
+
+	D_ASSERT(variant.field_arena.size() != 0);
+	auto &variant_field = variant.field_arena[field_index];
+	if (stats_node.value) {
+		variant_field.stats_index =
+		    variant.stats_arena.emplace(DuckLakeInsert::ParseColumnStats(type, *stats_node.value));
+	}
+
+	auto type_id = type.id();
+	if (type_id == LogicalTypeId::STRUCT) {
+		auto &child_types = StructType::GetChildTypes(type);
+		for (idx_t i = 0; i < child_types.size(); i++) {
+			auto &child_entry = child_types[i];
+			auto &child_type = child_entry.second;
+			auto &name = child_entry.first;
+
+			auto stat_it = stats_node.children.find(name);
+			if (stat_it == stats_node.children.end()) {
+				//! No stats for this child
+				continue;
+			}
+			auto child_index = stat_it->second;
+
+			auto field_it = variant_field.children.find(name);
+			if (field_it == variant_field.children.end()) {
+				throw InvalidInputException("Stats don't match the Parquet file's schema!");
+			}
+			auto field_child_index = field_it->second;
+			ParseVariantColumnStats(tree, child_index, variant, field_child_index, child_type);
+		}
+	}
+	if (type_id == LogicalTypeId::LIST) {
+		auto &child_type = ListType::GetChildType(type);
+
+		auto stat_it = stats_node.children.find("element");
+		if (stat_it == stats_node.children.end()) {
+			//! No stats for the list element
+			return;
+		}
+		auto child_index = stat_it->second;
+
+		auto field_it = variant_field.children.find("element");
+		if (field_it == variant_field.children.end()) {
+			throw InvalidInputException("Stats don't match the Parquet file's schema!");
+		}
+		auto field_child_index = field_it->second;
+		ParseVariantColumnStats(tree, child_index, variant, field_child_index, child_type);
+	}
+}
+
+static map<FieldIndex, DuckLakeColumnStats>::iterator ParseStatNodes(DuckLakeInsertStatsTree &tree, idx_t node_index,
+                                                                     DuckLakeTableEntry &table,
+                                                                     const vector<string> &path,
+                                                                     map<FieldIndex, DuckLakeColumnStats> &out_stats) {
+	auto &field_id = table.GetFieldId(path);
+	auto &type = field_id.Type();
+
+	auto &stats_node = tree.Get(node_index);
+	if (type.id() == LogicalTypeId::VARIANT) {
+		//! Collect the child stats
+		auto column_stats = DuckLakeColumnStats(type);
+		auto &variant_stats = column_stats.extra_stats->Cast<DuckLakeColumnVariantStats>();
+		D_ASSERT(stats_node.type.id() == LogicalTypeId::STRUCT);
+		variant_stats.Build(stats_node.type);
+		ParseVariantColumnStats(tree, node_index, variant_stats, 0, stats_node.type);
+		auto it = out_stats.emplace(field_id.GetFieldIndex(), column_stats).first;
+		return it;
+	}
+	if (stats_node.value) {
+		auto it = out_stats.emplace(field_id.GetFieldIndex(), DuckLakeInsert::ParseColumnStats(type, *stats_node.value))
+		              .first;
+		return it;
+	}
+	for (auto &child : stats_node.children) {
+		auto child_path = path;
+		child_path.push_back(child.first);
+		auto child_index = child.second;
+		ParseStatNodes(tree, child_index, table, child_path, out_stats);
+	}
+	return out_stats.end();
+}
 
 void DuckLakeInsert::AddWrittenFiles(DuckLakeInsertGlobalState &global_state, DataChunk &chunk,
                                      const string &encryption_key, optional_idx partition_id, bool set_snapshot_id) {
@@ -288,8 +343,7 @@ void DuckLakeInsert::AddWrittenFiles(DuckLakeInsertGlobalState &global_state, Da
 			auto &name = child.first;
 			auto &index = child.second;
 
-			auto &node = stats_tree.Get(index);
-			auto it = node.ParseColumnStats(table, {name}, data_file.column_stats);
+			auto it = ParseStatNodes(stats_tree, index, table, {name}, data_file.column_stats);
 			if (it == data_file.column_stats.end()) {
 				//! This is a nested column, it doesn't have direct stats, only the leafs do
 				continue;
