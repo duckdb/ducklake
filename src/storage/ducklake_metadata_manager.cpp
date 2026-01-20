@@ -167,7 +167,7 @@ ALTER TABLE {METADATA_CATALOG}.ducklake_data_file ADD COLUMN {IF_NOT_EXISTS} par
 UPDATE {METADATA_CATALOG}.ducklake_data_file
 SET partial_max =
     CAST(regexp_extract(partial_file_info, 'partial_max:(\\d+)', 1) AS BIGINT)
-WHERE partial_max IS NULL;
+WHERE partial_max IS NULL AND partial_file_info IS NOT NULL AND partial_file_info LIKE 'partial_max:%';
 ALTER TABLE {METADATA_CATALOG}.ducklake_data_file DROP COLUMN {IF_EXISTS} partial_file_info;
 UPDATE {METADATA_CATALOG}.ducklake_metadata SET value = '0.4-dev1' WHERE key = 'version';
 	)";
