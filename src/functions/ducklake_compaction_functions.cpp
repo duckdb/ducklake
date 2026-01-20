@@ -278,6 +278,11 @@ void DuckLakeCompactor::GenerateCompactions(DuckLakeTableEntry &table,
 					// don't consider merging if the file is larger than the target size
 					break;
 				}
+				// Files with created_by_rewrite = true can only be merged if they have the lowest snapshot
+				// (i.e., they are the first file in the merge). If encountered later, we can't merge them in.
+				if (candidate.created_by_rewrite && compaction_idx > start_idx) {
+					break;
+				}
 				// this file can be compacted along with the neighbors
 				current_file_size += file_size;
 			}

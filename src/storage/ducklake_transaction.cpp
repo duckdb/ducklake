@@ -1596,6 +1596,7 @@ CompactionInformation DuckLakeTransaction::GetCompactionChanges(DuckLakeSnapshot
 			switch (type) {
 			case CompactionType::REWRITE_DELETES:
 				new_file.begin_snapshot = compaction.source_files[0].delete_files.back().begin_snapshot;
+				new_file.created_by_rewrite = true;
 				break;
 			case CompactionType::MERGE_ADJACENT_TABLES: {
 				// For MERGE_ADJACENT_TABLES, track the max partial snapshot across all source files

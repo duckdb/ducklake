@@ -106,15 +106,16 @@ CALL ducklake_set_option('ducklake', 'target_file_size', '1MB');
 statement ok
 CALL ducklake_rewrite_data_files('ducklake', 't', delete_threshold => 0);
 
-# Merge all of them into a single file
 statement ok
 CALL ducklake_merge_adjacent_files('ducklake', 't');
 
-# Verify that we ended up with a single file
+# Verify that we have 2 files (merged DE + rewritten file)
+# The rewritten file cannot be merged because it has created_by_rewrite=true
+# and doesn't have the lowest snapshot
 query I
 SELECT COUNT(*) FROM ducklake_list_files('ducklake', 't');
 ----
-1
+2
 
 # Ensure the time-travel works
 query II

@@ -148,6 +148,8 @@ struct DuckLakeFileInfo {
 	MappingIndex mapping_id;
 	vector<DuckLakeColumnStatsInfo> column_stats;
 	vector<DuckLakeFilePartitionInfo> partition_values;
+	//! Whether the file was created by the ducklake_rewrite_data_files function
+	bool created_by_rewrite = false;
 };
 
 struct DuckLakeInlinedDataInfo {
@@ -370,6 +372,8 @@ struct DuckLakeCompactionFileEntry {
 	vector<DuckLakeCompactionDeleteFileData> delete_files;
 	optional_idx max_partial_file_snapshot;
 	idx_t schema_version;
+	//! Whether the file was created by the ducklake_rewrite_data_files function
+	bool created_by_rewrite = false;
 };
 
 struct DuckLakeRewriteFileEntry {

@@ -39,11 +39,13 @@ DELETE FROM t WHERE b > 100;
 statement ok
 CALL ducklake_rewrite_data_files('ducklake', 't');
 
-# Should merge everyone
 statement ok
 CALL ducklake_merge_adjacent_files('ducklake');
 
+# We expect 2 files: merged(file1+file2) + rewritten file3
+# The rewritten file cannot be merged because it has created_by_rewrite=true
+# and doesn't have the lowest snapshot
 query I
 SELECT COUNT(*) FROM ducklake_list_files('ducklake', 't');
 ----
-1
+2

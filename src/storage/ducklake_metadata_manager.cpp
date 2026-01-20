@@ -71,7 +71,7 @@ CREATE TABLE {METADATA_CATALOG}.ducklake_table(table_id BIGINT, table_uuid UUID,
 CREATE TABLE {METADATA_CATALOG}.ducklake_view(view_id BIGINT, view_uuid UUID, begin_snapshot BIGINT, end_snapshot BIGINT, schema_id BIGINT, view_name VARCHAR, dialect VARCHAR, sql VARCHAR, column_aliases VARCHAR);
 CREATE TABLE {METADATA_CATALOG}.ducklake_tag(object_id BIGINT, begin_snapshot BIGINT, end_snapshot BIGINT, key VARCHAR, value VARCHAR);
 CREATE TABLE {METADATA_CATALOG}.ducklake_column_tag(table_id BIGINT, column_id BIGINT, begin_snapshot BIGINT, end_snapshot BIGINT, key VARCHAR, value VARCHAR);
-CREATE TABLE {METADATA_CATALOG}.ducklake_data_file(data_file_id BIGINT PRIMARY KEY, table_id BIGINT, begin_snapshot BIGINT, end_snapshot BIGINT, file_order BIGINT, path VARCHAR, path_is_relative BOOLEAN, file_format VARCHAR, record_count BIGINT, file_size_bytes BIGINT, footer_size BIGINT, row_id_start BIGINT, partition_id BIGINT, encryption_key VARCHAR,  mapping_id BIGINT, partial_max BIGINT);
+CREATE TABLE {METADATA_CATALOG}.ducklake_data_file(data_file_id BIGINT PRIMARY KEY, table_id BIGINT, begin_snapshot BIGINT, end_snapshot BIGINT, file_order BIGINT, path VARCHAR, path_is_relative BOOLEAN, file_format VARCHAR, record_count BIGINT, file_size_bytes BIGINT, footer_size BIGINT, row_id_start BIGINT, partition_id BIGINT, encryption_key VARCHAR,  mapping_id BIGINT, partial_max BIGINT, created_by_rewrite BOOLEAN);
 CREATE TABLE {METADATA_CATALOG}.ducklake_file_column_stats(data_file_id BIGINT, table_id BIGINT, column_id BIGINT, column_size_bytes BIGINT, value_count BIGINT, null_count BIGINT, min_value VARCHAR, max_value VARCHAR, contains_nan BOOLEAN, extra_stats VARCHAR);
 CREATE TABLE {METADATA_CATALOG}.ducklake_delete_file(delete_file_id BIGINT PRIMARY KEY, table_id BIGINT, begin_snapshot BIGINT, end_snapshot BIGINT, data_file_id BIGINT, path VARCHAR, path_is_relative BOOLEAN, format VARCHAR, delete_count BIGINT, file_size_bytes BIGINT, footer_size BIGINT, encryption_key VARCHAR);
 CREATE TABLE {METADATA_CATALOG}.ducklake_column(column_id BIGINT, begin_snapshot BIGINT, end_snapshot BIGINT, table_id BIGINT, column_order BIGINT, column_name VARCHAR, column_type VARCHAR, initial_default VARCHAR, default_value VARCHAR, nulls_allowed BOOLEAN, parent_column BIGINT, default_value_type VARCHAR, default_value_dialect VARCHAR);
@@ -169,6 +169,7 @@ SET partial_max =
     CAST(regexp_extract(partial_file_info, 'partial_max:(\\d+)', 1) AS BIGINT)
 WHERE partial_max IS NULL;
 ALTER TABLE {METADATA_CATALOG}.ducklake_data_file DROP COLUMN {IF_EXISTS} partial_file_info;
+ALTER TABLE {METADATA_CATALOG}.ducklake_data_file ADD COLUMN {IF_NOT_EXISTS} created_by_rewrite BOOLEAN DEFAULT FALSE;
 UPDATE {METADATA_CATALOG}.ducklake_metadata SET value = '0.4-dev1' WHERE key = 'version';
 	)";
 	ExecuteMigration(migrate_query, allow_failures);
@@ -1315,7 +1316,7 @@ vector<DuckLakeCompactionFileEntry> DuckLakeMetadataManager::GetFilesForCompacti
 	    options.max_file_size.IsValid() ? options.max_file_size.GetIndex() : options.target_file_size;
 	string data_select_list = "data.data_file_id, data.record_count, data.row_id_start, data.begin_snapshot, "
 	                          "data.end_snapshot, data.mapping_id, sr.schema_version , data.partial_max, "
-	                          "data.partition_id, partition_info.keys, " +
+	                          "data.partition_id, partition_info.keys, data.created_by_rewrite, " +
 	                          GetFileSelectList("data");
 	string delete_select_list =
 	    "del.data_file_id,del.delete_file_id, del.delete_count, del.begin_snapshot, del.end_snapshot, " +
@@ -1402,6 +1403,9 @@ ORDER BY data.begin_snapshot, data.row_id_start, data.data_file_id, del.begin_sn
 				new_entry.file.partition_values.push_back(StringValue::Get(entry));
 			}
 		}
+		col_idx++;
+		// Parse created_by_rewrite flag
+		new_entry.created_by_rewrite = !row.IsNull(col_idx) && row.GetValue<bool>(col_idx);
 		col_idx++;
 		new_entry.file.data = ReadDataFile(table, row, col_idx, IsEncrypted());
 		if (files.empty() || files.back().file.id != new_entry.file.id) {
@@ -2228,10 +2232,12 @@ string DuckLakeMetadataManager::WriteNewDataFiles(const vector<DuckLakeFileInfo>
 		string footer_size = file.footer_size.IsValid() ? to_string(file.footer_size.GetIndex()) : "NULL";
 		string mapping = file.mapping_id.IsValid() ? to_string(file.mapping_id.index) : "NULL";
 		auto path = GetRelativePath(file.table_id, file.file_name, new_tables, new_schemas_result);
+		string created_by_rewrite = file.created_by_rewrite ? "true" : "false";
 		data_file_insert_query += StringUtil::Format(
-		    "(%d, %d, %s, NULL, NULL, %s, %s, 'parquet', %d, %d, %s, %s, %s, %s, %s, %s)", data_file_index, table_id,
+		    "(%d, %d, %s, NULL, NULL, %s, %s, 'parquet', %d, %d, %s, %s, %s, %s, %s, %s, %s)", data_file_index, table_id,
 		    begin_snapshot, SQLString(path.path), path.path_is_relative ? "true" : "false", file.row_count,
-		    file.file_size_bytes, footer_size, row_id, partition_id, encryption_key, mapping, partial_max);
+		    file.file_size_bytes, footer_size, row_id, partition_id, encryption_key, mapping, partial_max,
+		    created_by_rewrite);
 		for (auto &column_stats : file.column_stats) {
 			if (!column_stats_insert_query.empty()) {
 				column_stats_insert_query += ",";
