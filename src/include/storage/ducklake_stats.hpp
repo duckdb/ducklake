@@ -63,16 +63,22 @@ public:
 
 	// create a new T with arbitrary constructor args
 	template <class... Args>
-	idx_t emplace(Args&&... args) {
+	idx_t emplace(Args &&...args) {
 		idx_t id = static_cast<idx_t>(storage.size());
 		storage.emplace_back(std::forward<Args>(args)...);
 		return id;
 	}
 
-	T& operator[](idx_t i) { return storage[i]; }
-	const T& operator[](idx_t i) const { return storage[i]; }
+	T &operator[](idx_t i) {
+		return storage[i];
+	}
+	const T &operator[](idx_t i) const {
+		return storage[i];
+	}
 
-	size_t size() const { return storage.size(); }
+	size_t size() const {
+		return storage.size();
+	}
 
 private:
 	vector<T> storage;
@@ -116,7 +122,10 @@ struct DuckLakeColumnStats;
 
 struct DuckLakeColumnVariantFieldStats {
 public:
-	DuckLakeColumnVariantFieldStats(DuckLakeVariantStatsArena<DuckLakeColumnVariantFieldStats> &field_arena, DuckLakeVariantStatsArena<DuckLakeColumnStats> &stats_arena, idx_t index, const LogicalType &type);
+	DuckLakeColumnVariantFieldStats(DuckLakeVariantStatsArena<DuckLakeColumnVariantFieldStats> &field_arena,
+	                                DuckLakeVariantStatsArena<DuckLakeColumnStats> &stats_arena, idx_t index,
+	                                const LogicalType &type);
+
 public:
 	DuckLakeVariantStatsArena<DuckLakeColumnVariantFieldStats> &field_arena;
 	DuckLakeVariantStatsArena<DuckLakeColumnStats> &stats_arena;
@@ -132,16 +141,20 @@ public:
 struct DuckLakeColumnVariantStats final : public DuckLakeColumnExtraStats {
 public:
 	DuckLakeColumnVariantStats();
+
 public:
 	void Build(const LogicalType &shredded_internal_type);
+
 public:
 	void Merge(const DuckLakeColumnExtraStats &new_stats) override;
 	unique_ptr<DuckLakeColumnExtraStats> Copy() const override;
 
 	string Serialize() const override;
 	void Deserialize(const string &stats) override;
+
 private:
 	void BuildInternal(idx_t parent, const LogicalType &shredded_internal_type);
+
 public:
 	VariantStatsShreddingState shredding_state = VariantStatsShreddingState::UNINITIALIZED;
 	DuckLakeVariantStatsArena<DuckLakeColumnVariantFieldStats> field_arena;
