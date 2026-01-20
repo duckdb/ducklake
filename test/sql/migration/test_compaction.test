@@ -14,4 +14,5 @@ ATTACH 'ducklake:__TEST_DIR__/compacted_files.db' AS ducklake (DATA_PATH '__TEST
 query II
 select data_file_id, partial_max from __ducklake_metadata_ducklake.ducklake_data_file;
 ----
-4	NULL
+6	NULL
+8	9

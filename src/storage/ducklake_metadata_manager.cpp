@@ -164,11 +164,16 @@ ALTER TABLE {METADATA_CATALOG}.ducklake_column ADD COLUMN {IF_NOT_EXISTS} defaul
 ALTER TABLE {METADATA_CATALOG}.ducklake_column ADD COLUMN {IF_NOT_EXISTS} default_value_dialect VARCHAR DEFAULT NULL;
 ALTER TABLE {METADATA_CATALOG}.ducklake_schema_versions ADD COLUMN {IF_NOT_EXISTS} table_id BIGINT;
 ALTER TABLE {METADATA_CATALOG}.ducklake_data_file ADD COLUMN {IF_NOT_EXISTS} partial_max BIGINT;
-UPDATE {METADATA_CATALOG}.ducklake_data_file
-SET partial_max =
-    CAST(regexp_extract(partial_file_info, 'partial_max:(\\d+)', 1) AS BIGINT)
-WHERE partial_max IS NULL AND partial_file_info IS NOT NULL AND partial_file_info LIKE 'partial_max:%';
+CREATE TEMP TABLE {IF_NOT_EXISTS} __ducklake_partial_max_migration AS
+SELECT data_file_id, TRY_CAST(regexp_extract(partial_file_info, 'partial_max:(\d+)', 1) AS BIGINT) AS partial_max
+FROM {METADATA_CATALOG}.ducklake_data_file
+WHERE partial_file_info IS NOT NULL AND partial_file_info LIKE '%partial_max:%';
 ALTER TABLE {METADATA_CATALOG}.ducklake_data_file DROP COLUMN {IF_EXISTS} partial_file_info;
+UPDATE {METADATA_CATALOG}.ducklake_data_file AS df
+SET partial_max = m.partial_max
+FROM __ducklake_partial_max_migration m
+WHERE df.data_file_id = m.data_file_id;
+DROP TABLE IF EXISTS __ducklake_partial_max_migration;
 UPDATE {METADATA_CATALOG}.ducklake_metadata SET value = '0.4-dev1' WHERE key = 'version';
 	)";
 	ExecuteMigration(migrate_query, allow_failures);
