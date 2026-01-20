@@ -122,7 +122,7 @@ struct DuckLakeColumnStats;
 
 struct DuckLakeColumnVariantFieldStats {
 public:
-	explicit DuckLakeColumnVariantFieldStats(idx_t index);
+	explicit DuckLakeColumnVariantFieldStats(idx_t index) : index(index) {}
 
 public:
 	//! Index in the tree of the current node

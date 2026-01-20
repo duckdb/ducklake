@@ -8,12 +8,8 @@ namespace duckdb {
 
 using namespace duckdb_yyjson; // NOLINT
 
-DuckLakeColumnVariantFieldStats::DuckLakeColumnVariantFieldStats(idx_t index) : index(index) {
-}
-
 DuckLakeColumnVariantStats::DuckLakeColumnVariantStats()
-    : DuckLakeColumnExtraStats(), shredding_state(VariantStatsShreddingState::UNINITIALIZED) {
-	//! TODO: initialize the variant stats with a default
+	: DuckLakeColumnExtraStats(), shredding_state(VariantStatsShreddingState::UNINITIALIZED) {
 }
 
 void DuckLakeColumnVariantStats::BuildInternal(idx_t parent_index, const LogicalType &parent_type) {
@@ -62,10 +58,7 @@ void DuckLakeColumnVariantStats::Merge(const DuckLakeColumnExtraStats &new_stats
 	throw NotImplementedException("DuckLakeColumnVariantStats::Merge");
 }
 
-static void SerializeShreddedStats(yyjson_mut_doc *doc, yyjson_mut_val *parent, const string &name,
-                                   const duckdb::DuckLakeColumnStats &stats) {
-	auto name_str = unsafe_yyjson_mut_strncpy(doc, name.c_str(), name.size());
-	auto obj = yyjson_mut_obj_add_obj(doc, parent, name_str);
+static void SerializeShreddedStats(yyjson_mut_doc *doc, yyjson_mut_val *obj, const duckdb::DuckLakeColumnStats &stats) {
 	yyjson_mut_obj_add_strcpy(doc, obj, "type", stats.type.ToString().c_str());
 
 	if (stats.has_null_count) {
@@ -96,23 +89,21 @@ static void SerializeShreddedStats(yyjson_mut_doc *doc, yyjson_mut_val *parent, 
 	}
 }
 
-static void SerializeShreddedField(const DuckLakeColumnVariantStats &variant, yyjson_mut_doc *doc, yyjson_mut_val *obj,
-                                   idx_t parent_field, const LogicalType &type) {
+static void SerializeShreddedChildren(const DuckLakeColumnVariantStats &variant, yyjson_mut_doc *doc, yyjson_mut_val *obj,
+								   idx_t parent_field, const LogicalType &type) {
 	auto &stats_arena = variant.stats_arena;
 	auto &field_arena = variant.field_arena;
 	auto &parent = field_arena[parent_field];
 
-	auto serialize_child = [&](idx_t field_index, const string &name, const LogicalType &child_type) {
+	auto serialize_child = [&](idx_t field_index, yyjson_mut_val *container, const string &name, const LogicalType &child_type) {
 		if (field_index >= field_arena.size()) {
 			throw InternalException("VariantStats::Serialize: field_index out of range for field_arena");
 		}
 		auto &field = field_arena[field_index];
+		auto name_str = unsafe_yyjson_mut_strncpy(doc, name.c_str(), name.size());
+		auto child_obj = yyjson_mut_obj_add_obj(doc, container, name_str);
 		if (!field.children.empty()) {
-			auto name_str = unsafe_yyjson_mut_strncpy(doc, name.c_str(), name.size());
-			auto container = yyjson_mut_obj_add_obj(doc, obj, name_str);
-			yyjson_mut_obj_add_strcpy(doc, container, "type", EnumUtil::ToString(child_type.id()).c_str());
-			auto children = yyjson_mut_obj_add_obj(doc, container, "children");
-			SerializeShreddedField(variant, doc, children, field_index, child_type);
+			SerializeShreddedChildren(variant, doc, child_obj, field_index, child_type);
 			return;
 		}
 
@@ -121,11 +112,17 @@ static void SerializeShreddedField(const DuckLakeColumnVariantStats &variant, yy
 			if (stats_index >= stats_arena.size()) {
 				throw InternalException("VariantStats::Serialize: stats_index out of range for stats_arena");
 			}
-			SerializeShreddedStats(doc, obj, name, stats_arena[stats_index]);
+			SerializeShreddedStats(doc, child_obj, stats_arena[stats_index]);
 		}
 	};
 
+	if (parent.children.empty()) {
+		return;
+	}
 	auto type_id = type.id();
+	yyjson_mut_obj_add_strcpy(doc, obj, "type", EnumUtil::ToString(type_id).c_str());
+	auto children = yyjson_mut_obj_add_obj(doc, obj, "children");
+
 	if (type_id == LogicalTypeId::STRUCT) {
 		auto &child_types = StructType::GetChildTypes(type);
 		for (idx_t i = 0; i < child_types.size(); i++) {
@@ -138,7 +135,7 @@ static void SerializeShreddedField(const DuckLakeColumnVariantStats &variant, yy
 				throw InternalException("VariantStats::Serialize: Can't find child '%s' in parent", name);
 			}
 			auto field_index = child_it->second;
-			serialize_child(field_index, name, child_type);
+			serialize_child(field_index, children, name, child_type);
 		}
 	} else if (type_id == LogicalTypeId::LIST) {
 		auto &child_type = ListType::GetChildType(type);
@@ -147,12 +144,12 @@ static void SerializeShreddedField(const DuckLakeColumnVariantStats &variant, yy
 			throw InternalException("VariantStats::Serialize: Can't find child 'element' in parent");
 		}
 		auto field_index = child_it->second;
-		serialize_child(field_index, "element", child_type);
+		serialize_child(field_index, children, "element", child_type);
 	}
 }
 
 static void SerializeShredded(const DuckLakeColumnVariantStats &variant, yyjson_mut_doc *doc, yyjson_mut_val *root) {
-	SerializeShreddedField(variant, doc, root, 0, variant.shredded_type);
+	SerializeShreddedChildren(variant, doc, root, 0, variant.shredded_type);
 }
 
 string DuckLakeColumnVariantStats::Serialize() const {
@@ -182,7 +179,112 @@ string DuckLakeColumnVariantStats::Serialize() const {
 	Printer::Print(out);
 	free(json);
 	yyjson_mut_doc_free(doc);
-	return out;
+	return "'" + out + "'";
+}
+
+static idx_t BuildField(
+	DuckLakeColumnVariantStats &variant,
+	yyjson_val *node,
+	LogicalType &out_type
+) {
+	auto type_val = yyjson_obj_get(node, "type");
+	string type_str = yyjson_get_str(type_val);
+
+	idx_t index = variant.field_arena.size();
+	variant.field_arena.emplace(index);
+
+	LogicalType result_type;
+
+	if (type_str == "STRUCT") {
+		// build object members
+		auto children = yyjson_obj_get(node, "children");
+		child_list_t<LogicalType> struct_children;
+
+		yyjson_obj_iter iter;
+		yyjson_obj_iter_init(children, &iter);
+		yyjson_val *key, *val;
+		while ((key = yyjson_obj_iter_next(&iter))) {
+			val = yyjson_obj_iter_get_val(key);
+
+			string child_name = yyjson_get_str(key);
+			LogicalType child_type;
+			auto field_index = BuildField(variant, val, child_type);
+			variant.field_arena[index].children.emplace(child_name, field_index);
+			struct_children.emplace_back(child_name, child_type);
+		}
+		result_type = LogicalType::STRUCT(std::move(struct_children));
+	}
+	else if (type_str == "LIST") {
+		// list -> children.element
+		auto children = yyjson_obj_get(node, "children");
+		auto elem = yyjson_obj_get(children, "element");
+		LogicalType child_type;
+		auto field_index = BuildField(variant, elem, child_type);
+		variant.field_arena[index].children.emplace("element", field_index);
+		result_type = LogicalType::LIST(std::move(child_type));
+	}
+	else {
+		// leaf scalar => allocate stats and bind
+		result_type = TransformStringToLogicalType(type_str);
+
+		idx_t stats_idx = variant.stats_arena.emplace(result_type);
+		variant.field_arena[index].stats_index = stats_idx;
+
+		auto &stats = variant.stats_arena[stats_idx];
+
+		// fill stats if present
+		auto null_count = yyjson_obj_get(node, "null_count");
+		stats.null_count = yyjson_get_uint(null_count);
+		stats.has_null_count = true;
+
+		auto min_val = yyjson_obj_get(node, "min");
+		if (min_val) {
+			stats.min = yyjson_get_str(min_val);
+			stats.has_min = true;
+		}
+		auto max_val = yyjson_obj_get(node, "max");
+		if (max_val) {
+			stats.max = yyjson_get_str(max_val);
+			stats.has_max = true;
+		}
+
+		auto num_values = yyjson_obj_get(node, "num_values");
+		if (num_values) {
+			stats.has_num_values = true;
+			stats.num_values = yyjson_get_uint(num_values);
+		}
+
+		auto contains_nan = yyjson_obj_get(node, "contains_nan");
+		if (contains_nan) {
+			stats.has_contains_nan = true;
+			stats.contains_nan = yyjson_get_bool(contains_nan);
+		}
+
+		auto extra_stats = yyjson_obj_get(node, "extra_stats");
+		if (extra_stats) {
+			auto extra_stats_str = yyjson_get_str(extra_stats);
+			stats.extra_stats->Deserialize(extra_stats_str);
+		}
+
+		auto column_size_bytes = yyjson_obj_get(node, "column_size_bytes");
+		if (column_size_bytes) {
+			stats.column_size_bytes = yyjson_get_uint(column_size_bytes);
+		}
+
+		auto any_valid = yyjson_obj_get(node, "any_valid");
+		if (any_valid) {
+			stats.any_valid = yyjson_get_bool(any_valid);
+		}
+	}
+
+	out_type = result_type;
+	return index;
+}
+
+static LogicalType DeserializeShredded(DuckLakeColumnVariantStats &variant, yyjson_val *val) {
+	LogicalType shredded_type;
+	BuildField(variant, val, shredded_type);
+	return shredded_type;
 }
 
 void DuckLakeColumnVariantStats::Deserialize(const string &stats) {
@@ -195,9 +297,11 @@ void DuckLakeColumnVariantStats::Deserialize(const string &stats) {
 		yyjson_doc_free(doc);
 		throw InvalidInputException("Invalid variant stats JSON");
 	}
-
-	//! TODO: implement deserialize
-	throw NotImplementedException("DuckLakeColumnVariantStats::Deserialize");
+	auto state_val = yyjson_obj_get(root, "state");
+	auto state = EnumUtil::FromString<VariantStatsShreddingState>(yyjson_get_str(state_val));
+	if (state == VariantStatsShreddingState::SHREDDED) {
+		shredded_type = DeserializeShredded(*this, root);
+	}
 	yyjson_doc_free(doc);
 }
 
