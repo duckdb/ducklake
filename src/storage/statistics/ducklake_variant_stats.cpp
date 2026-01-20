@@ -14,7 +14,7 @@ namespace duckdb {
 using namespace duckdb_yyjson; // NOLINT
 
 DuckLakeColumnVariantStats::DuckLakeColumnVariantStats()
-	: DuckLakeColumnExtraStats(), shredding_state(VariantStatsShreddingState::UNINITIALIZED) {
+    : DuckLakeColumnExtraStats(), shredding_state(VariantStatsShreddingState::UNINITIALIZED) {
 }
 
 void DuckLakeColumnVariantStats::BuildInternal(idx_t parent_index, const LogicalType &parent_type) {
@@ -244,10 +244,154 @@ unique_ptr<BaseStatistics> DuckLakeColumnVariantStats::ToStats() const {
 	return variant_stats.ToUnique();
 }
 
+//! Logic copied from VariantStats::MergeShredding
+static bool MergeShredding(DuckLakeColumnVariantStats &a_stats, const LogicalType &a_type, idx_t a_field_index,
+                           const DuckLakeColumnVariantStats &b_stats, const LogicalType &b_type, idx_t b_field_index,
+                           LogicalType &out_type) {
+	auto a_type_id = a_type.id();
+	auto b_type_id = b_type.id();
+
+	if (a_type_id != b_type_id) {
+		return false;
+	}
+
+	auto &a_field = a_stats.field_arena[a_field_index];
+	auto &b_field = b_stats.field_arena[b_field_index];
+	if (a_type_id == LogicalTypeId::LIST) {
+		auto &a_child_type = ListType::GetChildType(a_type);
+		auto &b_child_type = ListType::GetChildType(b_type);
+
+		D_ASSERT(a_field.children.size() == 1 && b_field.children.size() == 1);
+		auto a_element = a_field.children.begin();
+		auto b_element = b_field.children.begin();
+		D_ASSERT(a_element->first == "element");
+		D_ASSERT(b_element->first == "element");
+
+		LogicalType child_type;
+		if (!MergeShredding(a_stats, a_child_type, a_element->second, b_stats, b_child_type, b_element->second,
+		                    child_type)) {
+			return false;
+		}
+		out_type = LogicalType::LIST(child_type);
+		return true;
+	} else if (a_type_id == LogicalTypeId::STRUCT) {
+		auto &a_child_types = StructType::GetChildTypes(a_type);
+		auto &b_child_types = StructType::GetChildTypes(b_type);
+
+		//! Map field name to index, for 'b'
+		case_insensitive_map_t<idx_t> key_to_index;
+		for (idx_t i = 0; i < b_child_types.size(); i++) {
+			auto &b_child_type = b_child_types[i];
+			key_to_index.emplace(b_child_type.first, i);
+		}
+
+		//! Attempt to merge all overlapping fields, only keep the fields that were able to be merged
+		child_list_t<LogicalType> new_children;
+		for (idx_t i = 0; i < a_child_types.size(); i++) {
+			auto &a_child_type = a_child_types[i];
+			auto other_it = key_to_index.find(a_child_type.first);
+			if (other_it == key_to_index.end()) {
+				//! Delete the child from the result
+				a_field.children.erase(a_child_type.first);
+				continue;
+			}
+			auto &b_child_type = b_child_types[other_it->second];
+			if (b_child_type.second.id() != a_child_type.second.id()) {
+				//! Delete the child from the result
+				a_field.children.erase(a_child_type.first);
+				continue;
+			}
+
+			auto a_child = a_field.children.find(a_child_type.first);
+			auto b_child = b_field.children.find(a_child_type.first);
+
+			LogicalType child_type;
+			if (!MergeShredding(a_stats, a_child_type.second, a_child->second, b_stats, b_child_type.second,
+			                    b_child->second, child_type)) {
+				//! Delete the child from the result
+				a_field.children.erase(a_child_type.first);
+				continue;
+			}
+			new_children.emplace_back(a_child_type.first, child_type);
+		}
+		if (new_children.empty()) {
+			//! No fields remaining, demote to unshredded
+			return false;
+		}
+
+		//! Create new stats out of the remaining fields
+		out_type = LogicalType::STRUCT(std::move(new_children));
+		return true;
+	} else {
+		if (!a_field.stats_index.IsValid()) {
+			return false;
+		}
+		if (!b_field.stats_index.IsValid()) {
+			return false;
+		}
+		auto &a_stats_item = a_stats.stats_arena[a_field.stats_index.GetIndex()];
+		auto &b_stats_item = b_stats.stats_arena[b_field.stats_index.GetIndex()];
+		a_stats_item.MergeStats(b_stats_item);
+		out_type = a_type;
+		return true;
+	}
+}
+
 void DuckLakeColumnVariantStats::Merge(const DuckLakeColumnExtraStats &new_stats) {
-	auto &variant_stats = new_stats.Cast<DuckLakeColumnVariantStats>();
-	//! TODO: copy the MergeShredding method implementation
-	throw NotImplementedException("DuckLakeColumnVariantStats::Merge");
+	auto &new_variant_stats = new_stats.Cast<DuckLakeColumnVariantStats>();
+
+	auto other_shredding_state = new_variant_stats.shredding_state;
+	switch (shredding_state) {
+	case VariantStatsShreddingState::INCONSISTENT: {
+		//! INCONSISTENT + ANY -> INCONSISTENT
+		return;
+	}
+	case VariantStatsShreddingState::UNINITIALIZED: {
+		switch (other_shredding_state) {
+		case VariantStatsShreddingState::SHREDDED:
+			shredded_type = new_variant_stats.shredded_type;
+			field_arena = new_variant_stats.field_arena;
+			stats_arena = new_variant_stats.stats_arena;
+			break;
+		default:
+			break;
+		}
+		//! UNINITIALIZED + ANY -> ANY
+		shredding_state = other_shredding_state;
+		break;
+	}
+	case VariantStatsShreddingState::NOT_SHREDDED: {
+		if (other_shredding_state == VariantStatsShreddingState::NOT_SHREDDED) {
+			return;
+		}
+		//! NOT_SHREDDED + !NOT_SHREDDED -> INCONSISTENT
+		shredding_state = VariantStatsShreddingState::INCONSISTENT;
+		shredded_type = LogicalType::INVALID;
+		break;
+	}
+	case VariantStatsShreddingState::SHREDDED: {
+		switch (other_shredding_state) {
+		case VariantStatsShreddingState::SHREDDED: {
+			LogicalType merged_shredded_type;
+			if (!MergeShredding(*this, shredded_type, 0, new_variant_stats, new_variant_stats.shredded_type, 0,
+			                    merged_shredded_type)) {
+				//! SHREDDED(T1) + SHREDDED(T2) -> INCONSISTENT
+				shredding_state = VariantStatsShreddingState::INCONSISTENT;
+				shredded_type = LogicalType::INVALID;
+				break;
+			}
+			shredded_type = merged_shredded_type;
+			break;
+		}
+		default:
+			//! SHREDDED + !SHREDDED -> INCONSISTENT
+			shredding_state = VariantStatsShreddingState::INCONSISTENT;
+			shredded_type = LogicalType::INVALID;
+			break;
+		}
+		break;
+	}
+	}
 }
 
 static void SerializeShreddedStats(yyjson_mut_doc *doc, yyjson_mut_val *obj, const duckdb::DuckLakeColumnStats &stats) {
@@ -281,13 +425,14 @@ static void SerializeShreddedStats(yyjson_mut_doc *doc, yyjson_mut_val *obj, con
 	}
 }
 
-static void SerializeShreddedChildren(const DuckLakeColumnVariantStats &variant, yyjson_mut_doc *doc, yyjson_mut_val *obj,
-								   idx_t parent_field, const LogicalType &type) {
+static void SerializeShreddedChildren(const DuckLakeColumnVariantStats &variant, yyjson_mut_doc *doc,
+                                      yyjson_mut_val *obj, idx_t parent_field, const LogicalType &type) {
 	auto &stats_arena = variant.stats_arena;
 	auto &field_arena = variant.field_arena;
 	auto &parent = field_arena[parent_field];
 
-	auto serialize_child = [&](idx_t field_index, yyjson_mut_val *container, const string &name, const LogicalType &child_type) {
+	auto serialize_child = [&](idx_t field_index, yyjson_mut_val *container, const string &name,
+	                           const LogicalType &child_type) {
 		if (field_index >= field_arena.size()) {
 			throw InternalException("VariantStats::Serialize: field_index out of range for field_arena");
 		}
@@ -374,11 +519,7 @@ string DuckLakeColumnVariantStats::Serialize() const {
 	return "'" + out + "'";
 }
 
-static idx_t BuildField(
-	DuckLakeColumnVariantStats &variant,
-	yyjson_val *node,
-	LogicalType &out_type
-) {
+static idx_t BuildField(DuckLakeColumnVariantStats &variant, yyjson_val *node, LogicalType &out_type) {
 	auto type_val = yyjson_obj_get(node, "type");
 	string type_str = yyjson_get_str(type_val);
 
@@ -405,8 +546,7 @@ static idx_t BuildField(
 			struct_children.emplace_back(child_name, child_type);
 		}
 		result_type = LogicalType::STRUCT(std::move(struct_children));
-	}
-	else if (type_str == "LIST") {
+	} else if (type_str == "LIST") {
 		// list -> children.element
 		auto children = yyjson_obj_get(node, "children");
 		auto elem = yyjson_obj_get(children, "element");
@@ -414,8 +554,7 @@ static idx_t BuildField(
 		auto field_index = BuildField(variant, elem, child_type);
 		variant.field_arena[index].children.emplace("element", field_index);
 		result_type = LogicalType::LIST(std::move(child_type));
-	}
-	else {
+	} else {
 		// leaf scalar => allocate stats and bind
 		result_type = TransformStringToLogicalType(type_str);
 

@@ -123,7 +123,8 @@ struct DuckLakeColumnStats;
 
 struct DuckLakeColumnVariantFieldStats {
 public:
-	explicit DuckLakeColumnVariantFieldStats(idx_t index) : index(index) {}
+	explicit DuckLakeColumnVariantFieldStats(idx_t index) : index(index) {
+	}
 
 public:
 	//! Index in the tree of the current node
@@ -152,6 +153,7 @@ public:
 private:
 	void BuildInternal(idx_t parent, const LogicalType &shredded_internal_type);
 	bool ConvertStats(idx_t field_index, BaseStatistics &result) const;
+
 public:
 	VariantStatsShreddingState shredding_state = VariantStatsShreddingState::UNINITIALIZED;
 	LogicalType shredded_type = LogicalType::INVALID;
