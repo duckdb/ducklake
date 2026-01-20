@@ -228,7 +228,8 @@ static map<FieldIndex, DuckLakeColumnStats>::iterator ParseStatNodes(DuckLakeIns
 		return it;
 	}
 	if (stats_node.value) {
-		auto res = out_stats.emplace(field_id.GetFieldIndex(), DuckLakeInsert::ParseColumnStats(type, *stats_node.value));
+		auto res =
+		    out_stats.emplace(field_id.GetFieldIndex(), DuckLakeInsert::ParseColumnStats(type, *stats_node.value));
 		return res.first;
 	}
 	for (auto &child : stats_node.children) {
@@ -315,7 +316,8 @@ void DuckLakeInsert::AddWrittenFiles(DuckLakeInsertGlobalState &global_state, Da
 						}
 						if (!child_index.IsValid()) {
 							auto current_column_names = vector<string>(column_names.begin(), column_names.begin() + i);
-							throw InvalidInputException("No type found for column at path: '%s'", StringUtil::Join(current_column_names, "."));
+							throw InvalidInputException("No type found for column at path: '%s'",
+							                            StringUtil::Join(current_column_names, "."));
 						}
 						current_type = child_types[child_index.GetIndex()].second;
 					} else if (type_id == LogicalTypeId::LIST) {

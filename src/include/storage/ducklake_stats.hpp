@@ -122,12 +122,9 @@ struct DuckLakeColumnStats;
 
 struct DuckLakeColumnVariantFieldStats {
 public:
-	DuckLakeColumnVariantFieldStats(DuckLakeVariantStatsArena<DuckLakeColumnVariantFieldStats> &field_arena,
-	                                DuckLakeVariantStatsArena<DuckLakeColumnStats> &stats_arena, idx_t index);
+	explicit DuckLakeColumnVariantFieldStats(idx_t index);
 
 public:
-	DuckLakeVariantStatsArena<DuckLakeColumnVariantFieldStats> &field_arena;
-	DuckLakeVariantStatsArena<DuckLakeColumnStats> &stats_arena;
 	//! Index in the tree of the current node
 	idx_t index;
 
@@ -156,6 +153,7 @@ private:
 
 public:
 	VariantStatsShreddingState shredding_state = VariantStatsShreddingState::UNINITIALIZED;
+	LogicalType shredded_type = LogicalType::INVALID;
 	DuckLakeVariantStatsArena<DuckLakeColumnVariantFieldStats> field_arena;
 	DuckLakeVariantStatsArena<DuckLakeColumnStats> stats_arena;
 };
