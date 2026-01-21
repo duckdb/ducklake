@@ -13,6 +13,7 @@
 #include "duckdb/parser/expression/cast_expression.hpp"
 #include "duckdb/parser/expression/columnref_expression.hpp"
 #include "duckdb/parser/expression/function_expression.hpp"
+#include "duckdb/parser/parsed_expression_iterator.hpp"
 #include "duckdb/storage/statistics/struct_stats.hpp"
 #include "duckdb/storage/statistics/list_stats.hpp"
 #include "duckdb/parser/parsed_data/comment_on_column_info.hpp"
@@ -366,24 +367,25 @@ string GetPartitionColumnName(ColumnRefExpression &colref) {
 	return colref.GetColumnName();
 }
 
-string GetSortColumnName(DuckLakeTableEntry &table, ParsedExpression &expr) {
-	// Only allow column references, reject expressions
-	if (expr.type != ExpressionType::COLUMN_REF) {
-		throw NotImplementedException("SET SORTED BY only supports column references, not expressions: %s",
-		                              expr.ToString());
-	}
-	auto &colref = expr.Cast<ColumnRefExpression>();
-	if (colref.IsQualified()) {
-		throw InvalidInputException("Unexpected qualified column reference - only unqualified columns are supported");
-	}
-	string column_name = colref.GetColumnName();
+void ValidateSortExpressionColumnRefs(DuckLakeTableEntry &table, ParsedExpression &expr) {
+	// Use VisitExpression to recursively validate all column references exist in the table
+	ParsedExpressionIterator::VisitExpression<ColumnRefExpression>(expr, [&](const ColumnRefExpression &colref) {
+		if (colref.IsQualified()) {
+			throw InvalidInputException(
+			    "Unexpected qualified column reference - only unqualified columns are supported");
+		}
+		string column_name = colref.GetColumnName();
+		if (!table.ColumnExists(column_name)) {
+			throw BinderException("Column \"%s\" does not exist in table \"%s\"", column_name, table.name);
+		}
+	});
+}
 
-	// Validate column exists
-	if (!table.ColumnExists(column_name)) {
-		throw BinderException("Column \"%s\" does not exist in table \"%s\"", column_name, table.name);
-	}
-
-	return column_name;
+string GetSortExpression(DuckLakeTableEntry &table, ParsedExpression &expr) {
+	// Validate all column references in the expression
+	ValidateSortExpressionColumnRefs(table, expr);
+	// Return the string representation of the expression
+	return expr.ToString();
 }
 
 DuckLakePartitionField GetPartitionField(DuckLakeTableEntry &table, ParsedExpression &expr) {
@@ -1120,13 +1122,12 @@ unique_ptr<CatalogEntry> DuckLakeTableEntry::AlterTable(DuckLakeTransaction &tra
 	for (idx_t order_node_idx = 0; order_node_idx < info.orders.size(); order_node_idx++) {
 		auto &order_node = info.orders[order_node_idx];
 
-		// FIXME: Currently must be column reference and column must exist. Want it to be an expression.
-		string column_name = GetSortColumnName(*this, *order_node.expression);
+		// Validate the expression and get its string representation
+		string sort_expression = GetSortExpression(*this, *order_node.expression);
 
 		DuckLakeSortField sort_field;
 		sort_field.sort_key_index = order_node_idx;
-		// FIXME: convert to order_node.expression->ToString(); once expressions are supported
-		sort_field.expression = column_name;
+		sort_field.expression = sort_expression;
 		sort_field.dialect = "duckdb";
 		sort_field.sort_direction = order_node.type;
 		sort_field.null_order = order_node.null_order;

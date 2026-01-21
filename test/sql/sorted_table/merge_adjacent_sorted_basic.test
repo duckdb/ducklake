@@ -148,11 +148,13 @@ ALTER TABLE sort_on_compaction SET SORTED BY (WOOOOT ASC ,   BLAH ASC);
 ----
 Column "WOOOOT" does not exist in table "sort_on_compaction"
 
-# Expressions are not supported, only column refs
-statement error
+# Expressions are now supported in SET SORTED BY
+statement ok
 ALTER TABLE sort_on_compaction SET SORTED BY (concat(sort_key_1, '_', sort_key_2) ASC);
-----
-SET SORTED BY only supports column references, not expressions
+
+# Reset back to simple column sort for the rest of the test
+statement ok
+ALTER TABLE sort_on_compaction SET SORTED BY (sort_key_1 ASC NULLS LAST, sort_key_2 ASC NULLS LAST);
 
 # Drop the table, then expire the snapshots, then validate that the catalog data has been removed
 
@@ -162,17 +164,20 @@ SELECT
 si.table_id, si.begin_snapshot, si.end_snapshot, se.sort_key_index, se.expression, se.sort_direction, se.null_order
 FROM __ducklake_metadata_ducklake.ducklake_sort_info si
 JOIN __ducklake_metadata_ducklake.ducklake_sort_expression se USING (sort_id)
-JOIN __ducklake_metadata_ducklake.ducklake_table t 
-ON si.table_id = t.table_id 
-WHERE 
+JOIN __ducklake_metadata_ducklake.ducklake_table t
+ON si.table_id = t.table_id
+WHERE
 t.table_name = 'sort_on_compaction'
 ----
 1	4	5	0	sort_key_1	ASC	NULLS_LAST
 1	4	5	1	sort_key_2	ASC	NULLS_LAST
 1	5	6	0	sort_key_1	DESC	NULLS_LAST
 1	5	6	1	sort_key_2	DESC	NULLS_LAST
-1	6	NULL	0	sort_key_1	ASC	NULLS_LAST
-1	6	NULL	1	sort_key_2	ASC	NULLS_LAST
+1	6	9	0	sort_key_1	ASC	NULLS_LAST
+1	6	9	1	sort_key_2	ASC	NULLS_LAST
+1	9	10	0	concat(sort_key_1, '_', sort_key_2)	ASC	NULLS_LAST
+1	10	NULL	0	sort_key_1	ASC	NULLS_LAST
+1	10	NULL	1	sort_key_2	ASC	NULLS_LAST
 
 
 statement ok
@@ -184,9 +189,9 @@ SELECT
 si.table_id, si.begin_snapshot, si.end_snapshot, se.sort_key_index, se.expression, se.sort_direction, se.null_order
 FROM __ducklake_metadata_ducklake.ducklake_sort_info si
 JOIN __ducklake_metadata_ducklake.ducklake_sort_expression se USING (sort_id)
-JOIN __ducklake_metadata_ducklake.ducklake_table t 
-ON si.table_id = t.table_id 
-WHERE 
+JOIN __ducklake_metadata_ducklake.ducklake_table t
+ON si.table_id = t.table_id
+WHERE
 t.table_name = 'sort_on_compaction'
 ----
 1	4	5	0	sort_key_1	ASC	NULLS_LAST
@@ -195,6 +200,9 @@ t.table_name = 'sort_on_compaction'
 1	5	6	1	sort_key_2	DESC	NULLS_LAST
 1	6	9	0	sort_key_1	ASC	NULLS_LAST
 1	6	9	1	sort_key_2	ASC	NULLS_LAST
+1	9	10	0	concat(sort_key_1, '_', sort_key_2)	ASC	NULLS_LAST
+1	10	11	0	sort_key_1	ASC	NULLS_LAST
+1	10	11	1	sort_key_2	ASC	NULLS_LAST
 
 statement ok
 CALL ducklake_expire_snapshots('ducklake', older_than => now());

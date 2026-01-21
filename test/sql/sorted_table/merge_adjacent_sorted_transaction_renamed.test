@@ -82,7 +82,7 @@ COMMIT
 statement error
 CALL ducklake_merge_adjacent_files('ducklake', 'sort_on_compaction');
 ----
-Binder Error: Columns in the SET SORTED BY statement were not found in the DuckLake table. Unmatched columns were: sort_key_1
+Columns in the SET SORTED BY statement were not found in the DuckLake table. Unmatched columns were: sort_key_1
 
 statement ok
 BEGIN

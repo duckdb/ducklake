@@ -101,7 +101,7 @@ ALTER TABLE ducklake.renamed_columns_test RENAME COLUMN sort_key_1 TO sort_key_1
 statement error
 CALL ducklake_flush_inlined_data('ducklake', table_name => 'renamed_columns_test');
 ----
-Binder Error: Columns in the SET SORTED BY statement were not found in the DuckLake table. Unmatched columns were: sort_key_1
+Columns in the SET SORTED BY statement were not found in the DuckLake table. Unmatched columns were: sort_key_1
 
 statement ok
 ROLLBACK 
