@@ -133,11 +133,6 @@ struct DuckLakeFilePartitionInfo {
 	string partition_value;
 };
 
-struct DuckLakePartialFileInfo {
-	idx_t snapshot_id;
-	idx_t max_row_count;
-};
-
 struct DuckLakeFileInfo {
 	DataFileIndex id;
 	TableIndex table_id;
@@ -153,7 +148,6 @@ struct DuckLakeFileInfo {
 	MappingIndex mapping_id;
 	vector<DuckLakeColumnStatsInfo> column_stats;
 	vector<DuckLakeFilePartitionInfo> partition_values;
-	vector<DuckLakePartialFileInfo> partial_file_info;
 };
 
 struct DuckLakeInlinedDataInfo {
@@ -379,14 +373,14 @@ struct DuckLakeCompactionFileEntry {
 	DuckLakeCompactionFileData file;
 	// optional_idx
 	vector<DuckLakeCompactionDeleteFileData> delete_files;
-	vector<DuckLakePartialFileInfo> partial_files;
+	optional_idx max_partial_file_snapshot;
 	idx_t schema_version;
 };
 
 struct DuckLakeRewriteFileEntry {
 	DuckLakeCompactionFileData file;
 	vector<DuckLakeCompactionDeleteFileData> delete_files;
-	vector<DuckLakePartialFileInfo> partial_files;
+	optional_idx max_partial_file_snapshot;
 	idx_t schema_version;
 };
 

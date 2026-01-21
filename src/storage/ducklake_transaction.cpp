@@ -1598,38 +1598,35 @@ CompactionInformation DuckLakeTransaction::GetCompactionChanges(DuckLakeSnapshot
 			case CompactionType::REWRITE_DELETES:
 				new_file.begin_snapshot = commit_snapshot.snapshot_id;
 				break;
-			case CompactionType::MERGE_ADJACENT_TABLES:
-				new_file.begin_snapshot = compaction.source_files[0].file.begin_snapshot;
+			case CompactionType::MERGE_ADJACENT_TABLES: {
+				// For MERGE_ADJACENT_TABLES, track the max partial snapshot across all source files
+				optional_idx merged_max_partial_snapshot;
+				idx_t first_begin_snapshot = compaction.source_files[0].file.begin_snapshot;
+				for (auto &compacted_file : compaction.source_files) {
+					idx_t file_max_snapshot = compacted_file.max_partial_file_snapshot.IsValid()
+					                              ? compacted_file.max_partial_file_snapshot.GetIndex()
+					                              : compacted_file.file.begin_snapshot;
+					if (!merged_max_partial_snapshot.IsValid() ||
+					    file_max_snapshot > merged_max_partial_snapshot.GetIndex()) {
+						merged_max_partial_snapshot = file_max_snapshot;
+					}
+				}
+				// Use the first source file's begin_snapshot for proper time travel support
+				new_file.begin_snapshot = first_begin_snapshot;
+				if (compaction.source_files.size() > 1) {
+					new_file.max_partial_file_snapshot = merged_max_partial_snapshot;
+				}
 				break;
+			}
 			default:
 				throw InternalException("DuckLakeTransaction::GetCompactionChanges Compaction type is invalid");
 			}
 
 			idx_t row_id_limit = 0;
 			for (auto &compacted_file : compaction.source_files) {
-				idx_t previous_row_limit = row_id_limit;
 				row_id_limit += compacted_file.file.row_count;
 				if (!compacted_file.delete_files.empty()) {
 					row_id_limit -= compacted_file.delete_files.back().row_count;
-				}
-				// For REWRITE_DELETES, do NOT carry forward partial_file_info from source files.
-				// The rewritten file's begin_snapshot is set to the delete snapshot, so time travel
-				// to earlier snapshots will read from the original file (which retains its partial_file_info).
-				if (type == CompactionType::MERGE_ADJACENT_TABLES) {
-					if (!compacted_file.partial_files.empty()) {
-						// we have existing partial file info
-						// we need to shift the row counts by the rows we have already written
-						for (auto &partial_info : compacted_file.partial_files) {
-							auto new_info = partial_info;
-							new_info.max_row_count += previous_row_limit;
-							new_file.partial_file_info.push_back(new_info);
-						}
-					} else if (compaction.source_files.size() > 1) {
-						DuckLakePartialFileInfo partial_info;
-						partial_info.snapshot_id = compacted_file.file.begin_snapshot;
-						partial_info.max_row_count = row_id_limit;
-						new_file.partial_file_info.push_back(partial_info);
-					}
 				}
 				DuckLakeCompactedFileInfo file_info;
 				file_info.path = compacted_file.file.data.path;
@@ -1934,12 +1931,12 @@ void DuckLakeTransaction::DropTransactionLocalFile(TableIndex table_id, const st
 		auto &file = table_files[i];
 		if (file.file_name == path) {
 			for (auto &del_file : file.delete_files) {
-				fs.RemoveFile(del_file.file_name);
+				fs.TryRemoveFile(del_file.file_name);
 			}
 			file.delete_files.clear();
 			// found the file - delete it from the table list and from disk
 			table_files.erase_at(i);
-			fs.RemoveFile(path);
+			fs.TryRemoveFile(path);
 			if (table_changes.IsEmpty()) {
 				// no more files remaining
 				table_data_changes.erase(entry);
@@ -2082,7 +2079,7 @@ void DuckLakeTransaction::AddDeletes(TableIndex table_id, vector<DuckLakeDeleteF
 				auto context_ref = context.lock();
 				auto &fs = FileSystem::GetFileSystem(*context_ref);
 				for (auto &old_file : existing_entry->second) {
-					fs.RemoveFile(old_file.file_name);
+					fs.TryRemoveFile(old_file.file_name);
 				}
 				existing_entry->second.clear();
 			}
@@ -2184,7 +2181,7 @@ void DuckLakeTransaction::DropTable(DuckLakeTableEntry &table) {
 			auto context_ref = context.lock();
 			auto &fs = FileSystem::GetFileSystem(*context_ref);
 			for (auto &file : table_changes.new_data_files) {
-				fs.RemoveFile(file.file_name);
+				fs.TryRemoveFile(file.file_name);
 			}
 			table_data_changes.erase(table_entry);
 		}
