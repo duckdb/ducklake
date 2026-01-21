@@ -172,6 +172,8 @@ struct DuckLakeDeleteFileInfo {
 	idx_t footer_size;
 	string encryption_key;
 	optional_idx begin_snapshot;
+	//! Optional max_snapshot information for partial deletion files.
+	optional_idx max_snapshot;
 };
 
 struct DuckLakePartitionFieldInfo {
@@ -370,6 +372,7 @@ struct DuckLakeCompactionFileData : public DuckLakeCompactionBaseFileData {
 
 struct DuckLakeCompactionDeleteFileData : public DuckLakeCompactionBaseFileData {
 	DataFileIndex delete_file_id;
+	optional_idx max_snapshot;
 };
 
 struct DuckLakeCompactionFileEntry {

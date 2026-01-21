@@ -41,6 +41,8 @@ struct DuckLakeDeleteFile {
 	//! The old delete file being overwritten (for deletion from metadata and disk)
 	DuckLakeOverwrittenDeleteFile overwritten_delete_file;
 	optional_idx begin_snapshot;
+	//! Optional max_snapshot information for partial deletion files.
+	optional_idx max_snapshot;
 	DeleteFileSource source = DeleteFileSource::REGULAR;
 };
 
