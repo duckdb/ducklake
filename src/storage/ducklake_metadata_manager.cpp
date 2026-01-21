@@ -1,6 +1,4 @@
 #include "storage/ducklake_metadata_manager.hpp"
-
-#include <utility>
 #include "storage/ducklake_transaction.hpp"
 #include "common/ducklake_util.hpp"
 #include "duckdb/planner/tableref/bound_at_clause.hpp"
@@ -71,7 +69,7 @@ CREATE TABLE {METADATA_CATALOG}.ducklake_table(table_id BIGINT, table_uuid UUID,
 CREATE TABLE {METADATA_CATALOG}.ducklake_view(view_id BIGINT, view_uuid UUID, begin_snapshot BIGINT, end_snapshot BIGINT, schema_id BIGINT, view_name VARCHAR, dialect VARCHAR, sql VARCHAR, column_aliases VARCHAR);
 CREATE TABLE {METADATA_CATALOG}.ducklake_tag(object_id BIGINT, begin_snapshot BIGINT, end_snapshot BIGINT, key VARCHAR, value VARCHAR);
 CREATE TABLE {METADATA_CATALOG}.ducklake_column_tag(table_id BIGINT, column_id BIGINT, begin_snapshot BIGINT, end_snapshot BIGINT, key VARCHAR, value VARCHAR);
-CREATE TABLE {METADATA_CATALOG}.ducklake_data_file(data_file_id BIGINT PRIMARY KEY, table_id BIGINT, begin_snapshot BIGINT, end_snapshot BIGINT, file_order BIGINT, path VARCHAR, path_is_relative BOOLEAN, file_format VARCHAR, record_count BIGINT, file_size_bytes BIGINT, footer_size BIGINT, row_id_start BIGINT, partition_id BIGINT, encryption_key VARCHAR, partial_file_info VARCHAR, mapping_id BIGINT);
+CREATE TABLE {METADATA_CATALOG}.ducklake_data_file(data_file_id BIGINT PRIMARY KEY, table_id BIGINT, begin_snapshot BIGINT, end_snapshot BIGINT, file_order BIGINT, path VARCHAR, path_is_relative BOOLEAN, file_format VARCHAR, record_count BIGINT, file_size_bytes BIGINT, footer_size BIGINT, row_id_start BIGINT, partition_id BIGINT, encryption_key VARCHAR,  mapping_id BIGINT, partial_max BIGINT);
 CREATE TABLE {METADATA_CATALOG}.ducklake_file_column_stats(data_file_id BIGINT, table_id BIGINT, column_id BIGINT, column_size_bytes BIGINT, value_count BIGINT, null_count BIGINT, min_value VARCHAR, max_value VARCHAR, contains_nan BOOLEAN, extra_stats VARCHAR);
 CREATE TABLE {METADATA_CATALOG}.ducklake_delete_file(delete_file_id BIGINT PRIMARY KEY, table_id BIGINT, begin_snapshot BIGINT, end_snapshot BIGINT, data_file_id BIGINT, path VARCHAR, path_is_relative BOOLEAN, format VARCHAR, delete_count BIGINT, file_size_bytes BIGINT, footer_size BIGINT, encryption_key VARCHAR);
 CREATE TABLE {METADATA_CATALOG}.ducklake_column(column_id BIGINT, begin_snapshot BIGINT, end_snapshot BIGINT, table_id BIGINT, column_order BIGINT, column_name VARCHAR, column_type VARCHAR, initial_default VARCHAR, default_value VARCHAR, nulls_allowed BOOLEAN, parent_column BIGINT, default_value_type VARCHAR, default_value_dialect VARCHAR);
@@ -94,10 +92,6 @@ INSERT INTO {METADATA_CATALOG}.ducklake_metadata (key, value) VALUES ('version',
 INSERT INTO {METADATA_CATALOG}.ducklake_schema VALUES (0, UUID(), 0, NULL, 'main', 'main/', true);
 	)",
 	                                       DuckDB::SourceID(), SQLString(data_path), encryption_str);
-	// TODO: add
-	//	ducklake_sorting_info
-	//	ducklake_sorting_column_info
-	//	ducklake_macro
 	auto result = transaction.Query(initialize_query);
 	if (result->HasError()) {
 		result->GetErrorObject().Throw("Failed to initialize DuckLake:");
@@ -167,6 +161,17 @@ CREATE TABLE {IF_NOT_EXISTS} {METADATA_CATALOG}.ducklake_macro_parameters(macro_
 ALTER TABLE {METADATA_CATALOG}.ducklake_column ADD COLUMN {IF_NOT_EXISTS} default_value_type VARCHAR DEFAULT 'literal';
 ALTER TABLE {METADATA_CATALOG}.ducklake_column ADD COLUMN {IF_NOT_EXISTS} default_value_dialect VARCHAR DEFAULT NULL;
 ALTER TABLE {METADATA_CATALOG}.ducklake_schema_versions ADD COLUMN {IF_NOT_EXISTS} table_id BIGINT;
+ALTER TABLE {METADATA_CATALOG}.ducklake_data_file ADD COLUMN {IF_NOT_EXISTS} partial_max BIGINT;
+CREATE TEMP TABLE {IF_NOT_EXISTS} __ducklake_partial_max_migration AS
+SELECT data_file_id, TRY_CAST(regexp_extract(partial_file_info, 'partial_max:(\d+)', 1) AS BIGINT) AS partial_max
+FROM {METADATA_CATALOG}.ducklake_data_file
+WHERE partial_file_info IS NOT NULL AND partial_file_info LIKE '%partial_max:%';
+ALTER TABLE {METADATA_CATALOG}.ducklake_data_file DROP COLUMN {IF_EXISTS} partial_file_info;
+UPDATE {METADATA_CATALOG}.ducklake_data_file AS df
+SET partial_max = m.partial_max
+FROM __ducklake_partial_max_migration m
+WHERE df.data_file_id = m.data_file_id;
+DROP TABLE IF EXISTS __ducklake_partial_max_migration;
 UPDATE {METADATA_CATALOG}.ducklake_metadata SET value = '0.4-dev1' WHERE key = 'version';
 	)";
 	ExecuteMigration(migrate_query, allow_failures);
@@ -308,18 +313,17 @@ static vector<DuckLakeMacroImplementation> LoadMacroImplementations(const Value 
 	return result;
 }
 
-idx_t DuckLakeMetadataManager::GetCatalogIdForSchema(idx_t schema_id) {
+idx_t DuckLakeMetadataManager::GetBeginSnapshotForTable(TableIndex table_id) {
 	string query = R"(
 SELECT begin_snapshot
-FROM {METADATA_CATALOG}.ducklake_inlined_data_tables
-INNER JOIN {METADATA_CATALOG}.ducklake_table ON (ducklake_table.table_id = ducklake_inlined_data_tables.table_id)
-WHERE schema_version = {SCHEMA_ID})";
-	query = StringUtil::Replace(query, "{SCHEMA_ID}", to_string(schema_id)).c_str();
+FROM {METADATA_CATALOG}.ducklake_table
+WHERE table_id = {TABLE_ID})";
+	query = StringUtil::Replace(query, "{TABLE_ID}", to_string(table_id.index)).c_str();
 	auto result = transaction.Query(query);
 	for (auto &row : *result) {
 		return row.GetValue<idx_t>(0);
 	}
-	throw InternalException("Schema Version %llu does not exist", schema_id);
+	throw InternalException("Table %llu does not exist", table_id.index);
 }
 
 DuckLakeCatalogInfo DuckLakeMetadataManager::GetCatalogForSnapshot(DuckLakeSnapshot snapshot) {
@@ -689,76 +693,13 @@ DuckLakeFileData DuckLakeMetadataManager::ReadDataFile(DuckLakeTableEntry &table
 	return data;
 }
 
-static string PartialFileInfoToString(const vector<DuckLakePartialFileInfo> &partial_file_info) {
-	string result;
-	for (auto &info : partial_file_info) {
-		if (!result.empty()) {
-			result += "|";
-		}
-		result += to_string(info.snapshot_id);
-		result += ":";
-		result += to_string(info.max_row_count);
+static void SetSnapshotFilter(const DuckLakeSnapshot &snapshot, idx_t max_partial_file_snapshot,
+                              DuckLakeFileListEntry &file_entry) {
+	if (max_partial_file_snapshot <= snapshot.snapshot_id) {
+		// all snapshot ids are included for this snapshot - skip filtering
+		return;
 	}
-	return result;
-}
-
-enum class PartialFileInfoType { PARTIAL_MAX, SPLITS };
-
-vector<DuckLakePartialFileInfo> ParsePartialFileInfo(const string &str, PartialFileInfoType type,
-                                                     DuckLakeSnapshot snapshot) {
-	vector<DuckLakePartialFileInfo> result;
-	switch (type) {
-	case PartialFileInfoType::PARTIAL_MAX: {
-		auto max_partial_file_snapshot = StringUtil::ToUnsigned(str.substr(12));
-		DuckLakePartialFileInfo file_info;
-		if (max_partial_file_snapshot <= snapshot.snapshot_id) {
-			// all snapshot ids are included for this snapshot - skip reading partial file info
-			return result;
-		}
-		file_info.snapshot_id = snapshot.snapshot_id;
-		result.push_back(file_info);
-		return result;
-	}
-	case PartialFileInfoType::SPLITS: {
-		auto splits = StringUtil::Split(str, "|");
-
-		for (auto &split : splits) {
-			auto partial_split = StringUtil::Split(split, ":");
-			DuckLakePartialFileInfo file_info;
-			file_info.snapshot_id = StringUtil::ToUnsigned(partial_split[0]);
-			file_info.max_row_count = StringUtil::ToUnsigned(partial_split[1]);
-			result.push_back(file_info);
-		}
-		return result;
-	}
-	default:
-		throw InternalException("Invalid PartialFileInfoType for ParsePartialFileInfo(...)");
-	}
-}
-
-static idx_t GetMaxRowCount(DuckLakeSnapshot snapshot, const string &partial_file_info_str) {
-	auto partial_file_info = ParsePartialFileInfo(partial_file_info_str, PartialFileInfoType::SPLITS, snapshot);
-	idx_t max_row_count = 0;
-	for (auto &info : partial_file_info) {
-		if (info.snapshot_id <= snapshot.snapshot_id) {
-			max_row_count = MaxValue<idx_t>(max_row_count, info.max_row_count);
-		}
-	}
-	return max_row_count;
-}
-
-static void ParsePartialFileInfo(const DuckLakeSnapshot &snapshot, const string &partial_file_info_str,
-                                 DuckLakeFileListEntry &file_entry) {
-	if (StringUtil::StartsWith(partial_file_info_str, "partial_max:")) {
-		auto max_partial_file_snapshot = StringUtil::ToUnsigned(partial_file_info_str.substr(12));
-		if (max_partial_file_snapshot <= snapshot.snapshot_id) {
-			// all snapshot ids are included for this snapshot - skip reading partial file info
-			return;
-		}
-		file_entry.snapshot_filter = snapshot.snapshot_id;
-	} else {
-		file_entry.max_row_count = GetMaxRowCount(snapshot, partial_file_info_str);
-	}
+	file_entry.snapshot_filter = snapshot.snapshot_id;
 }
 
 string DuckLakeMetadataManager::GenerateFilterFromTableFilter(const TableFilter &filter, const LogicalType &type,
@@ -1124,7 +1065,7 @@ vector<DuckLakeFileListEntry> DuckLakeMetadataManager::GetFilesForTable(DuckLake
                                                                         const FilterPushdownInfo *filter_info) {
 	auto table_id = table.GetTableId();
 	string select_list = GetFileSelectList("data") +
-	                     ", data.row_id_start, data.begin_snapshot, data.partial_file_info, data.mapping_id, " +
+	                     ", data.row_id_start, data.begin_snapshot, data.partial_max, data.mapping_id, " +
 	                     GetFileSelectList("del");
 
 	string query;
@@ -1170,8 +1111,8 @@ WHERE data.table_id=%d AND {SNAPSHOT_ID} >= data.begin_snapshot AND ({SNAPSHOT_I
 		col_idx++;
 		file_entry.snapshot_id = row.GetValue<idx_t>(col_idx++);
 		if (!row.IsNull(col_idx)) {
-			auto partial_file_info = row.GetValue<string>(col_idx);
-			ParsePartialFileInfo(snapshot, partial_file_info, file_entry);
+			auto partial_max = row.GetValue<idx_t>(col_idx);
+			SetSnapshotFilter(snapshot, partial_max, file_entry);
 		}
 		col_idx++;
 		if (!row.IsNull(col_idx)) {
@@ -1189,7 +1130,7 @@ vector<DuckLakeFileListEntry> DuckLakeMetadataManager::GetTableInsertions(DuckLa
                                                                           DuckLakeSnapshot end_snapshot) {
 	auto table_id = table.GetTableId();
 	string select_list = GetFileSelectList("data") +
-	                     ", data.row_id_start, data.begin_snapshot, data.partial_file_info, data.mapping_id, " +
+	                     ", data.row_id_start, data.begin_snapshot, data.partial_max, data.mapping_id, " +
 	                     GetFileSelectList("del");
 	auto query = StringUtil::Format(R"(
 SELECT %s
@@ -1215,8 +1156,8 @@ WHERE data.table_id=%d AND data.begin_snapshot >= %d AND data.begin_snapshot <= 
 		col_idx++;
 		file_entry.snapshot_id = row.GetValue<idx_t>(col_idx++);
 		if (!row.IsNull(col_idx)) {
-			auto partial_file_info = row.GetValue<string>(col_idx);
-			ParsePartialFileInfo(end_snapshot, partial_file_info, file_entry);
+			auto partial_max = row.GetValue<idx_t>(col_idx);
+			SetSnapshotFilter(end_snapshot, partial_max, file_entry);
 		}
 		col_idx++;
 		if (!row.IsNull(col_idx)) {
@@ -1375,7 +1316,7 @@ vector<DuckLakeCompactionFileEntry> DuckLakeMetadataManager::GetFilesForCompacti
 	idx_t effective_max_file_size =
 	    options.max_file_size.IsValid() ? options.max_file_size.GetIndex() : options.target_file_size;
 	string data_select_list = "data.data_file_id, data.record_count, data.row_id_start, data.begin_snapshot, "
-	                          "data.end_snapshot, data.mapping_id, sr.schema_version , data.partial_file_info, "
+	                          "data.end_snapshot, data.mapping_id, sr.schema_version , data.partial_max, "
 	                          "data.partition_id, partition_info.keys, " +
 	                          GetFileSelectList("data");
 	string delete_select_list =
@@ -1452,15 +1393,7 @@ ORDER BY data.begin_snapshot, data.row_id_start, data.data_file_id, del.begin_sn
 		col_idx++;
 		new_entry.schema_version = row.GetValue<idx_t>(col_idx++);
 		if (!row.IsNull(col_idx)) {
-			// parse the partial file info
-			auto partial_file_info = row.GetValue<string>(col_idx);
-			if (StringUtil::Contains(partial_file_info, "partial_max")) {
-				new_entry.partial_files =
-				    ParsePartialFileInfo(partial_file_info, PartialFileInfoType::PARTIAL_MAX, snapshot);
-			} else {
-				new_entry.partial_files =
-				    ParsePartialFileInfo(partial_file_info, PartialFileInfoType::SPLITS, snapshot);
-			}
+			new_entry.max_partial_file_snapshot = row.GetValue<idx_t>(col_idx);
 		}
 		col_idx++;
 		new_entry.file.partition_id = row.IsNull(col_idx) ? optional_idx() : row.GetValue<idx_t>(col_idx);
@@ -2292,22 +2225,15 @@ string DuckLakeMetadataManager::WriteNewDataFiles(const vector<DuckLakeFileInfo>
 		auto table_id = file.table_id.index;
 		auto encryption_key =
 		    file.encryption_key.empty() ? "NULL" : "'" + Blob::ToBase64(string_t(file.encryption_key)) + "'";
-		string partial_file_info = "NULL";
-		if (!file.partial_file_info.empty()) {
-			if (file.max_partial_file_snapshot.IsValid()) {
-				throw InternalException("Either partial_file_info or max_partial_file_snapshot can be set - not both");
-			}
-			partial_file_info = "'" + PartialFileInfoToString(file.partial_file_info) + "'";
-		} else if (file.max_partial_file_snapshot.IsValid()) {
-			partial_file_info = "'partial_max:" + to_string(file.max_partial_file_snapshot.GetIndex()) + "'";
-		}
+		string partial_max =
+		    file.max_partial_file_snapshot.IsValid() ? to_string(file.max_partial_file_snapshot.GetIndex()) : "NULL";
 		string footer_size = file.footer_size.IsValid() ? to_string(file.footer_size.GetIndex()) : "NULL";
 		string mapping = file.mapping_id.IsValid() ? to_string(file.mapping_id.index) : "NULL";
 		auto path = GetRelativePath(file.table_id, file.file_name, new_tables, new_schemas_result);
 		data_file_insert_query += StringUtil::Format(
 		    "(%d, %d, %s, NULL, NULL, %s, %s, 'parquet', %d, %d, %s, %s, %s, %s, %s, %s)", data_file_index, table_id,
 		    begin_snapshot, SQLString(path.path), path.path_is_relative ? "true" : "false", file.row_count,
-		    file.file_size_bytes, footer_size, row_id, partition_id, encryption_key, partial_file_info, mapping);
+		    file.file_size_bytes, footer_size, row_id, partition_id, encryption_key, mapping, partial_max);
 		for (auto &column_stats : file.column_stats) {
 			if (!column_stats_insert_query.empty()) {
 				column_stats_insert_query += ",";

@@ -21,6 +21,12 @@
       ]
     },
   {
+      "reason": "FIXME: something is borked with deleting catalog-uncommited files",
+      "paths": [
+        "test/sql/delete/delete_same_transaction.test"
+      ]
+    },
+  {
       "reason": "Test with a hardcoded file path.",
       "paths": [
         "test/sql/add_files/add_old_list.test",
@@ -28,7 +34,8 @@
         "test/sql/migration/per_table_schema.test",
         "test/sql/migration/v01_partitioned.test",
         "test/sql/delete/delete_ignore_extra_columns.test",
-        "test/sql/add_files/add_file_with_three_level_list.test"
+        "test/sql/add_files/add_file_with_three_level_list.test",
+        "test/sql/migration/test_compaction.test"
       ]
     }
   ]

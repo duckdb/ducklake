@@ -26,7 +26,7 @@ statement ok
 delete from t1 where a = 2;
 
 query I
-from t1 at (version => 2);
+from t1 at (version => 2) ORDER BY a;
 ----
 1
 2
@@ -36,14 +36,14 @@ statement ok
 CALL ducklake_flush_inlined_data('ducklake');
 
 query I
-from t1 at (version => 2);
+from t1 at (version => 2) ORDER BY a;
 ----
 1
 2
 3
 
 query I
-from t1
+from t1 ORDER BY a
 ----
 1
 3

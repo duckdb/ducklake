@@ -402,10 +402,12 @@ DuckLakeCompactor::GenerateCompactionCommand(vector<DuckLakeCompactionFileEntry>
 	}
 
 	bool write_row_id = false;
+	bool write_snapshot_id = false;
 	switch (type) {
 	case CompactionType::MERGE_ADJACENT_TABLES: {
 		// if files are adjacent, we don't need to write the row-id to the file
 		write_row_id = !files_are_adjacent;
+		write_snapshot_id = true;
 		break;
 	}
 	case CompactionType::REWRITE_DELETES: {
@@ -421,8 +423,12 @@ DuckLakeCompactor::GenerateCompactionCommand(vector<DuckLakeCompactionFileEntry>
 	// merge_adjacent_files does not use partitioning information - instead we always merge within partitions
 	copy_input.partition_data = nullptr;
 	if (write_row_id) {
-		copy_input.virtual_columns = InsertVirtualColumns::WRITE_ROW_ID_AND_SNAPSHOT_ID;
-	} else {
+		if (write_snapshot_id) {
+			copy_input.virtual_columns = InsertVirtualColumns::WRITE_ROW_ID_AND_SNAPSHOT_ID;
+		} else {
+			copy_input.virtual_columns = InsertVirtualColumns::WRITE_ROW_ID;
+		}
+	} else if (write_snapshot_id){
 		copy_input.virtual_columns = InsertVirtualColumns::WRITE_SNAPSHOT_ID;
 	}
 
@@ -440,7 +446,9 @@ DuckLakeCompactor::GenerateCompactionCommand(vector<DuckLakeCompactionFileEntry>
 	if (write_row_id) {
 		column_ids.emplace_back(COLUMN_IDENTIFIER_ROW_ID);
 	}
-	column_ids.emplace_back(DuckLakeMultiFileReader::COLUMN_IDENTIFIER_SNAPSHOT_ID);
+	if (write_snapshot_id) {
+		column_ids.emplace_back(DuckLakeMultiFileReader::COLUMN_IDENTIFIER_SNAPSHOT_ID);
+	}
 
 	// Resolve types so we can check if we need casts
 	ducklake_scan->ResolveOperatorTypes();
