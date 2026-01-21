@@ -311,7 +311,10 @@ struct DuckLakeFileListEntry {
 	optional_idx row_id_start;
 	optional_idx snapshot_id;
 	optional_idx max_row_count;
-	optional_idx snapshot_filter;
+	//! Upper bound filter, we only include rows where _ducklake_internal_snapshot_id <= snapshot_filter
+	optional_idx snapshot_filter_max;
+	//! Lower bound filter, we only include rows where _ducklake_internal_snapshot_id >= snapshot_filter_min
+	optional_idx snapshot_filter_min;
 	MappingIndex mapping_id;
 	DuckLakeDataType data_type = DuckLakeDataType::DATA_FILE;
 };
