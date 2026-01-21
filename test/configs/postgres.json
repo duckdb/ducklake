@@ -38,14 +38,6 @@
       "paths": [
         "test/sql/transaction/transaction_conflict_inlining.test"
       ]
-    },
-    {
-      "reason": "FIXME: Deletion inlining wrong results?",
-      "paths": [
-        "test/sql/deletion_inlining/test_deletion_multiple_tables.test",
-        "test/sql/deletion_inlining/test_deletion_from_inlined_multiple_snapshots.test",
-        "test/sql/deletion_inlining/test_deletion_from_inlined_insertion.test"
-      ]
     }
   ]
 }

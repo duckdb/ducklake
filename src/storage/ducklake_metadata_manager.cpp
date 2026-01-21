@@ -1990,7 +1990,8 @@ DuckLakeMetadataManager::ReadAllInlinedDataForFlush(DuckLakeSnapshot snapshot, c
 	auto result = transaction.Query(snapshot, StringUtil::Format(R"(
 SELECT %s
 FROM {METADATA_CATALOG}.%s inlined_data
-WHERE {SNAPSHOT_ID} >= begin_snapshot;)",
+WHERE {SNAPSHOT_ID} >= begin_snapshot
+ORDER BY row_id;)",
 	                                                             projection, inlined_table_name));
 	return TransformInlinedData(*result);
 }
