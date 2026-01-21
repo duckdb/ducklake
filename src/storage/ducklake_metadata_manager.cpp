@@ -1,6 +1,4 @@
 #include "storage/ducklake_metadata_manager.hpp"
-
-#include <utility>
 #include "storage/ducklake_transaction.hpp"
 #include "common/ducklake_util.hpp"
 #include "duckdb/planner/tableref/bound_at_clause.hpp"
@@ -315,18 +313,17 @@ static vector<DuckLakeMacroImplementation> LoadMacroImplementations(const Value 
 	return result;
 }
 
-idx_t DuckLakeMetadataManager::GetCatalogIdForSchema(idx_t schema_id) {
+idx_t DuckLakeMetadataManager::GetBeginSnapshotForTable(TableIndex table_id) {
 	string query = R"(
 SELECT begin_snapshot
-FROM {METADATA_CATALOG}.ducklake_inlined_data_tables
-INNER JOIN {METADATA_CATALOG}.ducklake_table ON (ducklake_table.table_id = ducklake_inlined_data_tables.table_id)
-WHERE schema_version = {SCHEMA_ID})";
-	query = StringUtil::Replace(query, "{SCHEMA_ID}", to_string(schema_id)).c_str();
+FROM {METADATA_CATALOG}.ducklake_table
+WHERE table_id = {TABLE_ID})";
+	query = StringUtil::Replace(query, "{TABLE_ID}", to_string(table_id.index)).c_str();
 	auto result = transaction.Query(query);
 	for (auto &row : *result) {
 		return row.GetValue<idx_t>(0);
 	}
-	throw InternalException("Schema Version %llu does not exist", schema_id);
+	throw InternalException("Table %llu does not exist", table_id.index);
 }
 
 DuckLakeCatalogInfo DuckLakeMetadataManager::GetCatalogForSnapshot(DuckLakeSnapshot snapshot) {
