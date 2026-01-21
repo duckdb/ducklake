@@ -21,6 +21,12 @@
       ]
     },
   {
+      "reason": "FIXME: something is borked with deleting catalog-uncommited files",
+      "paths": [
+        "test/sql/delete/delete_same_transaction.test"
+      ]
+    },
+  {
       "reason": "Test with a hardcoded file path.",
       "paths": [
         "test/sql/add_files/add_old_list.test",

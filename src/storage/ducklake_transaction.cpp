@@ -1930,12 +1930,12 @@ void DuckLakeTransaction::DropTransactionLocalFile(TableIndex table_id, const st
 		auto &file = table_files[i];
 		if (file.file_name == path) {
 			for (auto &del_file : file.delete_files) {
-				fs.TryRemoveFile(del_file.file_name);
+				fs.RemoveFile(del_file.file_name);
 			}
 			file.delete_files.clear();
 			// found the file - delete it from the table list and from disk
 			table_files.erase_at(i);
-			fs.TryRemoveFile(path);
+			fs.RemoveFile(path);
 			if (table_changes.IsEmpty()) {
 				// no more files remaining
 				table_data_changes.erase(entry);
@@ -2078,7 +2078,7 @@ void DuckLakeTransaction::AddDeletes(TableIndex table_id, vector<DuckLakeDeleteF
 				auto context_ref = context.lock();
 				auto &fs = FileSystem::GetFileSystem(*context_ref);
 				for (auto &old_file : existing_entry->second) {
-					fs.TryRemoveFile(old_file.file_name);
+					fs.RemoveFile(old_file.file_name);
 				}
 				existing_entry->second.clear();
 			}
@@ -2180,7 +2180,7 @@ void DuckLakeTransaction::DropTable(DuckLakeTableEntry &table) {
 			auto context_ref = context.lock();
 			auto &fs = FileSystem::GetFileSystem(*context_ref);
 			for (auto &file : table_changes.new_data_files) {
-				fs.TryRemoveFile(file.file_name);
+				fs.RemoveFile(file.file_name);
 			}
 			table_data_changes.erase(table_entry);
 		}
