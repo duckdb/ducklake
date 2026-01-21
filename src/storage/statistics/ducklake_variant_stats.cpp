@@ -140,7 +140,11 @@ static bool ConvertUnshreddedStats(BaseStatistics &result, BaseStatistics &input
 		return true;
 	}
 
-	if (min.empty() && max.empty()) {
+	bool is_null = min.empty() && max.empty();
+	if (!is_null) {
+		is_null = min == "00" && max == "00";
+	}
+	if (is_null) {
 		//! All non-shredded values are NULL or VARIANT_NULL, set the stats to indicate this
 		NumericStats::SetMin<uint32_t>(result, 0);
 		NumericStats::SetMax<uint32_t>(result, 0);
@@ -200,6 +204,9 @@ bool DuckLakeColumnVariantStats::ConvertStats(idx_t field_index, BaseStatistics 
 		auto value_stats = untyped.ToStats();
 		if (value_stats) {
 			ConvertUnshreddedStats(untyped_value_index_stats, *value_stats);
+		} else {
+			//! Stats couldn't be converted, just make them as wide as possible
+			untyped_value_index_stats = BaseStatistics::CreateUnknown(untyped_value_index_stats.GetType());
 		}
 
 		auto &typed = stats_arena[typed_value.stats_index.GetIndex()];
@@ -241,6 +248,8 @@ unique_ptr<BaseStatistics> DuckLakeColumnVariantStats::ToStats() const {
 		return nullptr;
 	}
 
+	variant_stats.SetHasNull();
+	variant_stats.SetHasNoNull();
 	return variant_stats.ToUnique();
 }
 
@@ -513,7 +522,6 @@ string DuckLakeColumnVariantStats::Serialize() const {
 		throw InternalException("Failed to serialize the VARIANT stats to JSON");
 	}
 	string out(json, len);
-	Printer::Print(out);
 	free(json);
 	yyjson_mut_doc_free(doc);
 	return "'" + out + "'";
