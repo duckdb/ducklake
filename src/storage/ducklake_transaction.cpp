@@ -2129,6 +2129,14 @@ void DuckLakeTransaction::TransactionLocalDelete(TableIndex table_id, const stri
 	auto &table_changes = entry->second;
 	for (auto &file : table_changes.new_data_files) {
 		if (file.file_name == data_file_path) {
+			if (!file.delete_files.empty()) {
+				auto context_ref = context.lock();
+				auto &fs = FileSystem::GetFileSystem(*context_ref);
+				for (auto &old_file : file.delete_files) {
+					fs.RemoveFile(old_file.file_name);
+				}
+				file.delete_files.clear();
+			}
 			file.delete_files.push_back(std::move(delete_file));
 			return;
 		}
