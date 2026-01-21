@@ -397,6 +397,12 @@ void DuckLakeDelete::FlushDeleteWithSnapshots(DuckLakeTransaction &transaction, 
 	written_file.overwritten_delete_file.delete_file_id = data_file_info.delete_file_id;
 	written_file.overwritten_delete_file.path = data_file_info.delete_file.path;
 
+	idx_t max_snapshot = 0;
+	for (auto &entry : sorted_deletes_with_snapshots) {
+		max_snapshot = MaxValue(max_snapshot, static_cast<idx_t>(entry.snapshot_id));
+	}
+	written_file.max_snapshot = max_snapshot;
+
 	global_state.written_files.emplace(filename, std::move(written_file));
 }
 
