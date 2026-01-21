@@ -699,7 +699,7 @@ static void SetSnapshotFilter(const DuckLakeSnapshot &snapshot, idx_t max_partia
 		// all snapshot ids are included for this snapshot - skip filtering
 		return;
 	}
-	file_entry.snapshot_filter = snapshot.snapshot_id;
+	file_entry.snapshot_filter_max = snapshot.snapshot_id;
 }
 
 string DuckLakeMetadataManager::GenerateFilterFromTableFilter(const TableFilter &filter, const LogicalType &type,
@@ -1132,14 +1132,21 @@ vector<DuckLakeFileListEntry> DuckLakeMetadataManager::GetTableInsertions(DuckLa
 	string select_list = GetFileSelectList("data") +
 	                     ", data.row_id_start, data.begin_snapshot, data.partial_max, data.mapping_id, " +
 	                     GetFileSelectList("del");
+	// Files either match the exact snapshot range
+	// Or they have partial_max set, which means they are a file with many snapshot ids, and might contain
+	// the snapshot we need
 	auto query = StringUtil::Format(R"(
 SELECT %s
 FROM {METADATA_CATALOG}.ducklake_data_file data, (
 	SELECT NULL path, NULL path_is_relative, NULL file_size_bytes, NULL footer_size, NULL encryption_key
 ) del
-WHERE data.table_id=%d AND data.begin_snapshot >= %d AND data.begin_snapshot <= {SNAPSHOT_ID};
+WHERE data.table_id=%d AND data.begin_snapshot <= {SNAPSHOT_ID} AND (
+	(data.begin_snapshot >= %d) OR
+	(data.partial_max IS NOT NULL AND data.partial_max >= %d)
+);
 		)",
-	                                select_list, table_id.index, start_snapshot.snapshot_id);
+	                                select_list, table_id.index, start_snapshot.snapshot_id,
+	                                start_snapshot.snapshot_id);
 
 	auto result = transaction.Query(end_snapshot, query);
 	if (result->HasError()) {
@@ -1154,10 +1161,17 @@ WHERE data.table_id=%d AND data.begin_snapshot >= %d AND data.begin_snapshot <= 
 			file_entry.row_id_start = row.GetValue<idx_t>(col_idx);
 		}
 		col_idx++;
-		file_entry.snapshot_id = row.GetValue<idx_t>(col_idx++);
+		auto begin_snapshot = row.GetValue<idx_t>(col_idx++);
+		file_entry.snapshot_id = begin_snapshot;
 		if (!row.IsNull(col_idx)) {
 			auto partial_max = row.GetValue<idx_t>(col_idx);
+			// Set upper bound filter if partial_max > end_snapshot
 			SetSnapshotFilter(end_snapshot, partial_max, file_entry);
+			// Set lower bound filter if begin_snapshot < start_snapshot
+			// This means the file contains rows from before start_snapshot that we need to filter out
+			if (begin_snapshot < start_snapshot.snapshot_id) {
+				file_entry.snapshot_filter_min = start_snapshot.snapshot_id;
+			}
 		}
 		col_idx++;
 		if (!row.IsNull(col_idx)) {

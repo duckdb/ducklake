@@ -38,6 +38,9 @@ INSERT INTO ducklake.test VALUES (NULL);
 statement ok
 INSERT INTO ducklake.test FROM range(10, 12);
 
+statement ok
+CALL ducklake_merge_adjacent_files('ducklake');
+
 query II
 SELECT rowid, * FROM ducklake_table_insertions('ducklake', 'main', 'test', 0, 2);
 ----
@@ -67,12 +70,13 @@ SELECT rowid, * FROM ducklake_table_insertions('ducklake', 'main', 'test', 5, 5)
 ----
 3	NULL
 
-# snapshot 7: update a subset of the rows
+# snapshot 7: merge (no data changes, just reorganization)
+# snapshot 8: update a subset of the rows
 statement ok
 UPDATE ducklake.test SET i=i+100 WHERE i < 11;
 
 query II
-SELECT rowid, * FROM ducklake_table_insertions('ducklake', 'main', 'test', 7, 7) ORDER BY rowid
+SELECT rowid, * FROM ducklake_table_insertions('ducklake', 'main', 'test', 8, 8) ORDER BY rowid
 ----
 0	101
 1	102
@@ -81,7 +85,7 @@ SELECT rowid, * FROM ducklake_table_insertions('ducklake', 'main', 'test', 7, 7)
 
 # the change feed has both the original rows and the updated rows
 query II
-SELECT rowid, * FROM ducklake_table_insertions('ducklake', 'main', 'test', 0, 7) ORDER BY ALL
+SELECT rowid, * FROM ducklake_table_insertions('ducklake', 'main', 'test', 0, 8) ORDER BY ALL
 ----
 0	1
 0	101
