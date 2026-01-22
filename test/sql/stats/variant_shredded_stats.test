@@ -1,0 +1,234 @@
+# name: test/sql/ducklake/shredded_variant_stats.test
+# group: [ducklake]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+
+test-env DATA_PATH __TEST_DIR__
+
+statement ok
+attach ':memory:' as db2(type 'ducklake')
+
+statement ok
+use db2;
+
+# ----------------------------------------
+# PRIMITIVE
+# ----------------------------------------
+
+statement ok
+CREATE TABLE fully_shredded_primitive AS
+SELECT COLUMNS(*)::VARIANT FROM (VALUES
+    (21::VARIANT),
+    (42::VARIANT)
+) t(col);
+
+query I
+SELECT stats(col) FROM fully_shredded_primitive LIMIT 1;
+----
+shredding_state: SHREDDED, shredding: {typed_value_type: INTEGER, stats: {fully_shredded: true}}[Has Null: true, Has No Null: true]
+
+statement ok
+CREATE TABLE fully_shredded_primitive_with_nulls AS
+SELECT COLUMNS(*)::VARIANT FROM (VALUES
+    (NULL::VARIANT),
+    (21::VARIANT),
+    (NULL::VARIANT),
+    (42::VARIANT)
+) t(col);
+
+query I
+SELECT stats(col) FROM fully_shredded_primitive_with_nulls LIMIT 1;
+----
+shredding_state: SHREDDED, shredding: {typed_value_type: INTEGER, stats: {fully_shredded: true}}[Has Null: true, Has No Null: true]
+
+
+statement ok
+CREATE TABLE not_fully_shredded_primitive AS
+SELECT COLUMNS(*)::VARIANT FROM (VALUES
+    (['test']::VARIANT),
+    (21::VARIANT),
+    (42::VARIANT)
+) t(col);
+
+query I
+SELECT stats(col) FROM not_fully_shredded_primitive LIMIT 1;
+----
+shredding_state: SHREDDED, shredding: {typed_value_type: INTEGER, stats: {fully_shredded: false}}[Has Null: true, Has No Null: true]
+
+
+# ----------------------------------------
+# ARRAY
+# ----------------------------------------
+
+statement ok
+CREATE TABLE fully_shredded_list AS
+SELECT COLUMNS(*)::VARIANT FROM (VALUES
+    (['test']::VARIANT),
+    ([21]::VARIANT)
+) t(col);
+
+query I
+SELECT stats(col) FROM fully_shredded_list LIMIT 1;
+----
+shredding_state: SHREDDED, shredding: {typed_value_type: INTEGER[], stats: {fully_shredded: true, child: fully_shredded: false}}[Has Null: true, Has No Null: true]
+
+
+statement ok
+CREATE TABLE fully_shredded_list_with_nulls AS
+SELECT COLUMNS(*)::VARIANT FROM (VALUES
+    (NULL::VARIANT),
+    (NULL::VARIANT),
+    (['test']::VARIANT),
+    ([21]::VARIANT),
+    (NULL::VARIANT)
+) t(col);
+
+query I
+SELECT stats(col) FROM fully_shredded_list_with_nulls LIMIT 1;
+----
+shredding_state: SHREDDED, shredding: {typed_value_type: INTEGER[], stats: {fully_shredded: true, child: fully_shredded: false}}[Has Null: true, Has No Null: true]
+
+statement ok
+CREATE TABLE not_fully_shredded_list AS
+SELECT COLUMNS(*)::VARIANT FROM (VALUES
+    (NULL::VARIANT),
+    (NULL::VARIANT),
+    (['test']::VARIANT),
+    (['hello', 'world']::VARIANT),
+    (21::VARIANT),
+    (NULL::VARIANT)
+) t(col);
+
+query I
+SELECT stats(col) FROM not_fully_shredded_list LIMIT 1;
+----
+shredding_state: SHREDDED, shredding: {typed_value_type: VARCHAR[], stats: {fully_shredded: false, child: fully_shredded: true}}[Has Null: true, Has No Null: true]
+
+
+# ----------------------------------------
+# ARRAY - ELEMENT
+# ----------------------------------------
+
+statement ok
+CREATE TABLE fully_shredded_list_element AS
+SELECT COLUMNS(*)::VARIANT FROM (VALUES
+    (['test']::VARIANT),
+    (['hello']::VARIANT)
+) t(col);
+
+query I
+SELECT stats(col) FROM fully_shredded_list_element LIMIT 1;
+----
+shredding_state: SHREDDED, shredding: {typed_value_type: VARCHAR[], stats: {fully_shredded: true, child: fully_shredded: true}}[Has Null: true, Has No Null: true]
+
+
+statement ok
+CREATE TABLE fully_shredded_list_element_with_nulls AS
+SELECT COLUMNS(*)::VARIANT FROM (VALUES
+    (['test']::VARIANT),
+    (['hello', NULL, 'world']::VARIANT)
+) t(col);
+
+query I
+SELECT stats(col) FROM fully_shredded_list_element_with_nulls LIMIT 1;
+----
+shredding_state: SHREDDED, shredding: {typed_value_type: VARCHAR[], stats: {fully_shredded: true, child: fully_shredded: true}}[Has Null: true, Has No Null: true]
+
+
+statement ok
+CREATE TABLE not_fully_shredded_list_element AS
+SELECT COLUMNS(*)::VARIANT FROM (VALUES
+    (['test']::VARIANT),
+    (['hello'::VARIANT, NULL, 21]::VARIANT)
+) t(col);
+
+query I
+SELECT stats(col) FROM not_fully_shredded_list_element LIMIT 1;
+----
+shredding_state: SHREDDED, shredding: {typed_value_type: VARCHAR[], stats: {fully_shredded: true, child: fully_shredded: false}}[Has Null: true, Has No Null: true]
+
+
+# ----------------------------------------
+# OBJECT
+# ----------------------------------------
+
+statement ok
+CREATE TABLE fully_shredded_object AS
+SELECT COLUMNS(*)::VARIANT FROM (VALUES
+    ({'a': 42, 'b': true}::VARIANT),
+    ({'a': 21, 'c': 'test'}::VARIANT)
+) t(col);
+
+query I
+SELECT stats(col) FROM fully_shredded_object LIMIT 1;
+----
+shredding_state: SHREDDED, shredding: {typed_value_type: STRUCT(a INTEGER, b BOOLEAN, c VARCHAR), stats: {fully_shredded: true, children: {a: fully_shredded: true, b: fully_shredded: true, c: fully_shredded: true}}}[Has Null: true, Has No Null: true]
+
+
+statement ok
+CREATE TABLE fully_shredded_object_with_nulls AS
+SELECT COLUMNS(*)::VARIANT FROM (VALUES
+    (NULL::VARIANT),
+    ({'a': 42, 'b': true}::VARIANT),
+    (NULL::VARIANT),
+    ({'a': 21, 'c': 'test'}::VARIANT)
+) t(col);
+
+query I
+SELECT stats(col) FROM fully_shredded_object_with_nulls LIMIT 1;
+----
+shredding_state: SHREDDED, shredding: {typed_value_type: STRUCT(a INTEGER, b BOOLEAN, c VARCHAR), stats: {fully_shredded: true, children: {a: fully_shredded: true, b: fully_shredded: true, c: fully_shredded: true}}}[Has Null: true, Has No Null: true]
+
+
+statement ok
+CREATE TABLE not_fully_shredded_object AS
+SELECT COLUMNS(*)::VARIANT FROM (VALUES
+    (NULL::VARIANT),
+    ({'a': 42, 'b': true}::VARIANT),
+    (NULL::VARIANT),
+    ({'a': 21, 'c': 'test'}::VARIANT),
+    (42::VARIANT)
+) t(col);
+
+query I
+SELECT stats(col) FROM not_fully_shredded_object LIMIT 1;
+----
+shredding_state: SHREDDED, shredding: {typed_value_type: STRUCT(a INTEGER, b BOOLEAN, c VARCHAR), stats: {fully_shredded: false, children: {a: fully_shredded: true, b: fully_shredded: true, c: fully_shredded: true}}}[Has Null: true, Has No Null: true]
+
+
+# ----------------------------------------
+# OBJECT - FIELD
+# ----------------------------------------
+
+statement ok
+CREATE TABLE not_fully_shredded_object_field AS
+SELECT COLUMNS(*)::VARIANT FROM (VALUES
+    (NULL::VARIANT),
+    ({'a': 42, 'b': true}::VARIANT),
+    (NULL::VARIANT),
+    ({'a': 'test', 'c': 'test'}::VARIANT)
+) t(col);
+
+query I
+SELECT stats(col) FROM not_fully_shredded_object_field LIMIT 1;
+----
+shredding_state: SHREDDED, shredding: {typed_value_type: STRUCT(a INTEGER, b BOOLEAN, c VARCHAR), stats: {fully_shredded: true, children: {a: fully_shredded: false, b: fully_shredded: true, c: fully_shredded: true}}}[Has Null: true, Has No Null: true]
+
+
+statement ok
+CREATE TABLE fully_shredded_object_field_with_nulls AS
+SELECT COLUMNS(*)::VARIANT FROM (VALUES
+    (NULL::VARIANT),
+    ({'a': 42, 'b': true}::VARIANT),
+    (NULL::VARIANT),
+    ({'a': NULL, 'c': 'test'}::VARIANT)
+) t(col);
+
+query I
+SELECT stats(col) FROM fully_shredded_object_field_with_nulls LIMIT 1;
+----
+shredding_state: SHREDDED, shredding: {typed_value_type: STRUCT(a INTEGER, b BOOLEAN, c VARCHAR), stats: {fully_shredded: true, children: {a: fully_shredded: true, b: fully_shredded: true, c: fully_shredded: true}}}[Has Null: true, Has No Null: true]

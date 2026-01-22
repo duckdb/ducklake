@@ -172,6 +172,9 @@ bool DuckLakeColumnVariantStats::ConvertStats(idx_t field_index, BaseStatistics 
 	auto &type = typed_value_stats.GetType();
 	auto type_id = type.id();
 	if (type_id == LogicalTypeId::STRUCT) {
+		typed_value_stats.SetHasNoNullFast();
+		typed_value_stats.SetHasNullFast();
+
 		auto &child_types = StructType::GetChildTypes(type);
 		for (idx_t i = 0; i < child_types.size(); i++) {
 			auto &child_stats = StructStats::GetChildStats(typed_value_stats, i);
@@ -183,34 +186,45 @@ bool DuckLakeColumnVariantStats::ConvertStats(idx_t field_index, BaseStatistics 
 				return false;
 			}
 		}
-		return true;
 	} else if (type_id == LogicalTypeId::LIST) {
+		typed_value_stats.SetHasNoNullFast();
+		typed_value_stats.SetHasNullFast();
+
 		auto &element = ListStats::GetChildStats(typed_value_stats);
 		auto element_it = typed_value.children.find("element");
 		if (element_it == typed_value.children.end()) {
 			throw InternalException("LIST without an 'element' field?");
 		}
-		return ConvertStats(element_it->second, element);
+		if (!ConvertStats(element_it->second, element)) {
+			return false;
+		}
 	} else {
+		if (!typed_value.stats_index.IsValid()) {
+			//! No stats for the leaf
+			return false;
+		}
+		auto &typed = stats_arena[typed_value.stats_index.GetIndex()];
+		auto typed_stats = typed.ToStats();
+		StructStats::SetChildStats(result, 1, std::move(typed_stats));
+	}
+
+	//! Initialize stats as UNKNOWN, in case we can't convert them
+	untyped_value_index_stats = BaseStatistics::CreateEmpty(untyped_value_index_stats.GetType());
+	unique_ptr<BaseStatistics> value_stats;
+	do {
 		if (!value.stats_index.IsValid()) {
 			//! No stats for the leaf 'value', can't convert
-			return false;
-		}
-		if (!typed_value.stats_index.IsValid()) {
-			//! No stats for the leaf 'value', can't convert
-			return false;
+			break;
 		}
 		auto &untyped = stats_arena[value.stats_index.GetIndex()];
-		auto value_stats = untyped.ToStats();
-		if (value_stats) {
-			ConvertUnshreddedStats(untyped_value_index_stats, *value_stats);
-		} else {
-			//! Stats couldn't be converted, just make them as wide as possible
-			untyped_value_index_stats = BaseStatistics::CreateUnknown(untyped_value_index_stats.GetType());
-		}
+		value_stats = untyped.ToStats();
+	} while(false);
 
-		auto &typed = stats_arena[typed_value.stats_index.GetIndex()];
-		StructStats::SetChildStats(result, 1, typed.ToStats());
+	if (value_stats) {
+		ConvertUnshreddedStats(untyped_value_index_stats, *value_stats);
+	} else {
+		untyped_value_index_stats.SetHasNoNullFast();
+		untyped_value_index_stats.SetHasNullFast();
 	}
 	return true;
 }
