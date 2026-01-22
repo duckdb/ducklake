@@ -30,12 +30,16 @@ string DuckLakeUtil::ParseQuotedValue(const string &input, idx_t &pos) {
 }
 
 string DuckLakeUtil::ToQuotedList(const vector<string> &input, char list_separator) {
+	return ToQuotedList(input.begin(), input.end(), list_separator);
+}
+
+string DuckLakeUtil::ToQuotedList(vector<string>::const_iterator begin, vector<string>::const_iterator end, char list_separator) {
 	string result;
-	for (auto &str : input) {
+	for (; begin != end; begin++) {
 		if (!result.empty()) {
 			result += list_separator;
 		}
-		result += KeywordHelper::WriteQuoted(str, '"');
+		result += KeywordHelper::WriteQuoted(*begin, '"');
 	}
 	return result;
 }

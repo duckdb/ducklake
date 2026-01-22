@@ -191,28 +191,61 @@ private:
 	vector<DuckLakeInsertStatsNode> storage;
 };
 
-static void ParseVariantColumnStats(DuckLakeInsertStatsTree &tree, idx_t node_index,
-                                    DuckLakeColumnVariantStats &variant, idx_t field_index) {
+static void ParseVariantColumnStats(DuckLakeInsertStatsTree &tree, idx_t node_index, DuckLakeColumnVariantStats &variant, idx_t field_index, const LogicalType &type) {
 	auto &stats_node = tree.Get(node_index);
 
 	D_ASSERT(variant.field_arena.size() != 0);
 	auto &variant_field = variant.field_arena[field_index];
 	if (stats_node.value) {
-		D_ASSERT(stats_node.type.id() != LogicalTypeId::INVALID);
+		D_ASSERT(type.id() != LogicalTypeId::INVALID);
 		variant_field.stats_index =
-		    variant.stats_arena.emplace(DuckLakeInsert::ParseColumnStats(stats_node.type, *stats_node.value));
+		    variant.stats_arena.emplace(DuckLakeInsert::ParseColumnStats(type, *stats_node.value));
 	}
 
-	for (auto &entry : stats_node.children) {
-		auto &name = entry.first;
-		auto child_index = entry.second;
+	if (stats_node.children.empty()) {
+		return;
+	}
+
+	auto type_id = type.id();
+	D_ASSERT(type_id == LogicalTypeId::LIST || type_id == LogicalTypeId::STRUCT);
+	if (type_id == LogicalTypeId::LIST) {
+		auto name = "element";
+
+		auto stats_it = stats_node.children.find(name);
+		if (stats_it == stats_node.children.end()) {
+			throw InvalidInputException("Stats don't match the Parquet file's schema! (LIST)");
+		}
+		D_ASSERT(variant_field.children.size() == 1);
+
+		auto &child_type = ListType::GetChildType(type);
+		auto child_index = stats_it->second;
 
 		auto field_it = variant_field.children.find(name);
 		if (field_it == variant_field.children.end()) {
-			throw InvalidInputException("Stats don't match the Parquet file's schema!");
+			throw InvalidInputException("Stats don't match the Parquet file's schema! (LIST)");
 		}
 		auto field_child_index = field_it->second;
-		ParseVariantColumnStats(tree, child_index, variant, field_child_index);
+		ParseVariantColumnStats(tree, child_index, variant, field_child_index, child_type);
+	} else {
+		auto &struct_children = StructType::GetChildTypes(type);
+		D_ASSERT(struct_children.size() == variant_field.children.size());
+		for (auto &entry : struct_children) {
+			auto &name = entry.first;
+			auto &child_type = entry.second;
+
+			auto stats_it = stats_node.children.find(name);
+			if (stats_it == stats_node.children.end()) {
+				throw InvalidInputException("Stats don't match the Parquet file's schema! (STRUCT)");
+			}
+
+			auto field_it = variant_field.children.find(name);
+			if (field_it == variant_field.children.end()) {
+				throw InvalidInputException("Stats don't match the Parquet file's schema! (STRUCT)");
+			}
+			auto child_index = stats_it->second;
+			auto field_child_index = field_it->second;
+			ParseVariantColumnStats(tree, child_index, variant, field_child_index, child_type);
+		}
 	}
 }
 
@@ -230,7 +263,7 @@ static map<FieldIndex, DuckLakeColumnStats>::iterator ParseStatNodes(DuckLakeIns
 		auto &variant_stats = column_stats.extra_stats->Cast<DuckLakeColumnVariantStats>();
 		D_ASSERT(stats_node.type.id() == LogicalTypeId::STRUCT);
 		variant_stats.Build(stats_node.type);
-		ParseVariantColumnStats(tree, node_index, variant_stats, 0);
+		ParseVariantColumnStats(tree, node_index, variant_stats, 0, stats_node.type);
 		auto it = out_stats.emplace(field_id.GetFieldIndex(), column_stats).first;
 		return it;
 	}
@@ -262,15 +295,18 @@ void DuckLakeInsert::AddWrittenFiles(DuckLakeInsertGlobalState &global_state, Da
 		}
 
 		//! Parse the mapping of column name -> column type
-		case_insensitive_map_t<LogicalType> column_type_map;
-		auto column_types = chunk.GetValue(6, r);
-		auto &column_types_children = MapValue::GetChildren(column_types);
-		for (idx_t col_idx = 0; col_idx < column_types_children.size(); col_idx++) {
-			auto &struct_children = StructValue::GetChildren(column_types_children[col_idx]);
-			auto &col_name = StringValue::Get(struct_children[0]);
+		case_insensitive_map_t<LogicalType> variant_layout_map;
+		auto layouts = chunk.GetValue(6, r);
+		if (!layouts.IsNull()) {
+			//! There is at least one variant column/field
+			auto &layouts_children = MapValue::GetChildren(layouts);
+			for (idx_t col_idx = 0; col_idx < layouts_children.size(); col_idx++) {
+				auto &struct_children = StructValue::GetChildren(layouts_children[col_idx]);
+				auto &path = StringValue::Get(struct_children[0]);
 
-			auto &col_type_str = StringValue::Get(struct_children[1]);
-			column_type_map.emplace(col_name, TransformStringToLogicalType(col_type_str));
+				auto &col_type_str = StringValue::Get(struct_children[1]);
+				variant_layout_map.emplace(path, TransformStringToLogicalType(col_type_str));
+			}
 		}
 
 		// extract the column stats
@@ -300,43 +336,22 @@ void DuckLakeInsert::AddWrittenFiles(DuckLakeInsertGlobalState &global_state, Da
 			if (column_names[0] == "_ducklake_internal_row_id") {
 				continue;
 			}
-			auto column_type_it = column_type_map.find(column_names[0]);
-			if (column_type_it == column_type_map.end()) {
-				throw InvalidInputException("Missing type for column %s", column_names[0]);
-			}
-			const_reference<LogicalType> current_type(column_type_it->second);
 
 			idx_t node_index = 0;
 			for (idx_t i = 0; i < column_names.size(); i++) {
 				auto &field = column_names[i];
-				if (i) {
-					auto &column_type = current_type.get();
-					auto type_id = column_type.id();
-					if (type_id == LogicalTypeId::STRUCT) {
-						auto &child_types = StructType::GetChildTypes(column_type);
-						optional_idx child_index;
-						for (idx_t index = 0; index < child_types.size(); index++) {
-							if (StringUtil::CIEquals(child_types[index].first, field)) {
-								child_index = index;
-								break;
-							}
-						}
-						if (!child_index.IsValid()) {
-							auto current_column_names = vector<string>(column_names.begin(), column_names.begin() + i);
-							throw InvalidInputException("No type found for column at path: '%s'",
-							                            StringUtil::Join(current_column_names, "."));
-						}
-						current_type = child_types[child_index.GetIndex()].second;
-					} else if (type_id == LogicalTypeId::LIST) {
-						current_type = ListType::GetChildType(column_type);
-					}
-				}
 				auto child_index = stats_tree.GetOrCreateChild(stats_tree.Get(node_index).index, field);
 				auto &stats_node = stats_tree.Get(node_index);
 				stats_node.children.emplace(field, child_index);
 
 				auto &child_node = stats_tree.Get(child_index);
-				child_node.type = current_type.get();
+				if (!variant_layout_map.empty()) {
+					auto current_path = DuckLakeUtil::ToQuotedList(column_names.begin(), column_names.begin() + i + 1, '.');
+					auto layout_it = variant_layout_map.find(current_path);
+					if (layout_it != variant_layout_map.end()) {
+						child_node.type = layout_it->second;
+					}
+				}
 				node_index = child_index;
 			}
 			auto &stats_node = stats_tree.Get(node_index);
