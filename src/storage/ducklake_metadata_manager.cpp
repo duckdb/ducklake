@@ -2048,10 +2048,8 @@ INNER JOIN {METADATA_CATALOG}.ducklake_column c
 	if (result->HasError()) {
 		result->GetErrorObject().Throw("Failed to get schema information from DuckLake: ");
 	}
-	for (auto &row : *result) {
-		return true;
-	}
-	return false;
+	// We are only interested if this returns any rows or not
+	return result->Fetch() != nullptr;
 }
 
 string DuckLakeMetadataManager::GetPathForTable(TableIndex table_id, const vector<DuckLakeTableInfo> &new_tables,
