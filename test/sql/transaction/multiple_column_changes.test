@@ -41,7 +41,7 @@ statement ok
 detach ducklake
 
 statement ok
-ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '__TEST_DIR__/multiple_column_changes', METADATA_CATALOG 'ducklake_meta')
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/multiple_column_changes', METADATA_CATALOG 'ducklake_meta')
 
 statement ok
 use ducklake
@@ -49,7 +49,7 @@ use ducklake
 statement ok
 INSERT INTO message(id) values (1);
 
-query I
+query II
 FROM message;
 ----
 1	123
