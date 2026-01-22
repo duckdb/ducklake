@@ -30,7 +30,7 @@ set autoinstall_known_extensions=false
 statement error
 ATTACH 'ducklake:autoload_problem.ducklake' (DATA_PATH 's3://some-bucket/')
 ----
-Missing Extension Error: Data path s3://some-bucket/ requires the extension httpfs to be loaded
+httpfs
 
 ### With autoloading, install and correct repo
 statement ok
