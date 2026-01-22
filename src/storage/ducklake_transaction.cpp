@@ -815,8 +815,13 @@ struct NewMacroInfo {
 	vector<DuckLakeMacroInfo> new_macros;
 };
 
-void HandleChangedFields(TableIndex table_id, const ColumnChangeInfo &change_info, NewTableInfo &result) {
+void HandleChangedFields(TableIndex table_id, const ColumnChangeInfo &change_info, NewTableInfo &result,
+                         const set<FieldIndex> &columns_handled_by_later_ops) {
 	for (auto &new_col_info : change_info.new_fields) {
+		// Skip adding columns that will be handled by a later operation (e.g., SET_DEFAULT after CHANGE_COLUMN_TYPE)
+		if (columns_handled_by_later_ops.find(new_col_info.column_info.id) != columns_handled_by_later_ops.end()) {
+			continue;
+		}
 		DuckLakeNewColumn new_column;
 		new_column.table_id = table_id;
 		new_column.column_info = new_col_info.column_info;
@@ -845,6 +850,23 @@ void DuckLakeTransaction::GetNewTableInfo(DuckLakeCommitState &commit_state, Duc
 		}
 		table_entry = table_entry.get().Child();
 	}
+
+	set<FieldIndex> columns_handled_by_later_ops;
+	for (idx_t table_idx = 0; table_idx < tables.size(); table_idx++) {
+		auto &table = tables[table_idx].get();
+		auto local_change = table.GetLocalChange();
+		switch (local_change.type) {
+		case LocalChangeType::SET_NULL:
+		case LocalChangeType::DROP_NULL:
+		case LocalChangeType::RENAME_COLUMN:
+		case LocalChangeType::SET_DEFAULT:
+			columns_handled_by_later_ops.insert(local_change.field_index);
+			break;
+		default:
+			break;
+		}
+	}
+
 	// traverse in reverse order
 	bool column_schema_change = false;
 	for (idx_t table_idx = tables.size(); table_idx > 0; table_idx--) {
@@ -907,7 +929,8 @@ void DuckLakeTransaction::GetNewTableInfo(DuckLakeCommitState &commit_state, Duc
 		case LocalChangeType::CHANGE_COLUMN_TYPE: {
 			// drop the indicated column
 			// note that in case of nested types we might be dropping multiple columns here
-			HandleChangedFields(commit_state.GetTableId(table), table.GetChangedFields(), result);
+			HandleChangedFields(commit_state.GetTableId(table), table.GetChangedFields(), result,
+			                    columns_handled_by_later_ops);
 			column_schema_change = true;
 			break;
 		}
