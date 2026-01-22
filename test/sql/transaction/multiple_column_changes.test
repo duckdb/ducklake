@@ -41,7 +41,7 @@ statement ok
 detach ducklake
 
 statement ok
-ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '__TEST_DIR__/ducklake_files', METADATA_CATALOG 'ducklake_meta')
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '__TEST_DIR__/multiple_column_changes', METADATA_CATALOG 'ducklake_meta')
 
 statement ok
 use ducklake
