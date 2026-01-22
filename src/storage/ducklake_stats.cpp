@@ -162,23 +162,25 @@ void DuckLakeTableStats::MergeStats(FieldIndex col_id, const DuckLakeColumnStats
 
 unique_ptr<BaseStatistics> DuckLakeColumnStats::CreateNumericStats() const {
 	auto stats = NumericStats::CreateEmpty(type);
-	if (has_min && has_max) {
+	if (has_min) {
 		// set min
 		Value min_val(min);
 		NumericStats::SetMin(stats, min_val.DefaultCastAs(type));
+	}
+	if (has_max) {
 		// set max
 		Value max_val(max);
 		NumericStats::SetMax(stats, max_val.DefaultCastAs(type));
 	}
+	if (!has_min && !has_max) {
+		stats = NumericStats::CreateUnknown(type);
+	}
+
 	// set null count
 	if (!has_null_count || null_count > 0) {
 		stats.SetHasNullFast();
 	}
-	if (!has_null_count || !has_num_values) {
-		//! We don't know the exact null / value count, we assume there are non-null values
-		stats.SetHasNoNullFast();
-	}
-	if (has_null_count && has_num_values && null_count != num_values) {
+	if (!has_null_count || !has_num_values || null_count != num_values) {
 		//! Not *all* values are NULL, set HasNoNull
 		stats.SetHasNoNullFast();
 	}
@@ -196,21 +198,23 @@ unique_ptr<BaseStatistics> DuckLakeColumnStats::CreateVariantStats() const {
 unique_ptr<BaseStatistics> DuckLakeColumnStats::CreateStringStats() const {
 	auto stats = StringStats::CreateEmpty(type);
 	if (has_min && has_max) {
-		StringStats::Update(stats, string_t(min));
 		StringStats::Update(stats, string_t(max));
+		StringStats::Update(stats, string_t(min));
 		StringStats::ResetMaxStringLength(stats);
 		StringStats::SetContainsUnicode(stats);
+	} else if (has_min) {
+		stats = StringStats::CreateUnknown(type);
+		StringStats::SetMin(stats, string_t(min));
+	} else if (has_max) {
+		stats = StringStats::CreateUnknown(type);
+		StringStats::SetMax(stats, string_t(max));
 	}
 
 	// set null count
 	if (!has_null_count || null_count > 0) {
 		stats.SetHasNullFast();
 	}
-	if (!has_null_count || !has_num_values) {
-		//! We don't know the exact null / value count, we assume there are non-null values
-		stats.SetHasNoNullFast();
-	}
-	if (has_null_count && has_num_values && null_count != num_values) {
+	if (!has_null_count || !has_num_values || null_count != num_values) {
 		//! Not *all* values are NULL, set HasNoNull
 		stats.SetHasNoNullFast();
 	}

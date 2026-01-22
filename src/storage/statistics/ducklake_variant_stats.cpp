@@ -218,7 +218,7 @@ bool DuckLakeColumnVariantStats::ConvertStats(idx_t field_index, BaseStatistics 
 		}
 		auto &untyped = stats_arena[value.stats_index.GetIndex()];
 		value_stats = untyped.ToStats();
-	} while(false);
+	} while (false);
 
 	if (value_stats) {
 		ConvertUnshreddedStats(untyped_value_index_stats, *value_stats);

@@ -1,5 +1,5 @@
-# name: test/sql/ducklake/shredded_variant_stats.test
-# group: [ducklake]
+# name: test/sql/stats/variant_shredded_stats.test
+# group: [stats]
 
 require ducklake
 

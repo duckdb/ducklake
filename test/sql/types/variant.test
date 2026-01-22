@@ -1,3 +1,6 @@
+# name: test/sql/types/variant.test
+# group: [types]
+
 require ducklake
 
 require parquet
