@@ -211,20 +211,16 @@ void DuckLakeDeleteFilter::Initialize(const DuckLakeInlinedDataDeletes &inlined_
 }
 
 void DuckLakeDeleteFilter::Initialize(ClientContext &context, const DuckLakeDeleteScanEntry &delete_scan) {
-	//FIXME: I can get rid of this scanning deletes - we need to scan the opposite (i.e. only the rows that were deleted)
+	// scanning deletes - we need to scan the opposite (i.e. only the rows that were deleted)
 	auto rows_to_scan = make_unsafe_uniq_array<bool>(delete_scan.row_count);
 
 	// scan the current set of deletes
 	if (!delete_scan.delete_file.path.empty()) {
 		// we have a delete file - read the delete file from disk
-		// Pass snapshot range for filter pushdown when the file has embedded snapshots
-		auto current_deletes = ScanDeleteFile(context, delete_scan.delete_file,
-		                                      delete_scan.start_snapshot, delete_scan.end_snapshot);
-
+		auto current_deletes = ScanDeleteFile(context, delete_scan.delete_file);
 		// iterate over the current deletes - these are the rows we need to scan
 		memset(rows_to_scan.get(), 0, sizeof(bool) * delete_scan.row_count);
-		for (idx_t i = 0; i < current_deletes.deleted_rows.size(); i++) {
-			auto delete_idx = current_deletes.deleted_rows[i];
+		for (auto delete_idx : current_deletes.deleted_rows) {
 			if (delete_idx >= delete_scan.row_count) {
 				throw InvalidInputException(
 				    "Invalid delete data - delete index read from file %s is out of range for data file %s",
@@ -238,19 +234,19 @@ void DuckLakeDeleteFilter::Initialize(ClientContext &context, const DuckLakeDele
 		memset(rows_to_scan.get(), 1, sizeof(bool) * delete_scan.row_count);
 	}
 
-	if (!delete_scan.previous_delete_file.path.empty()) {
-		// if we have a previous delete file - scan that set of deletes
-		auto previous_deletes = ScanDeleteFile(context, delete_scan.previous_delete_file);
-		// these deletes are not new - we should not scan them
-		for (auto delete_idx : previous_deletes.deleted_rows) {
-			if (delete_idx >= delete_scan.row_count) {
-				throw InvalidInputException(
-				    "Invalid delete data - delete index read from file %s is out of range for data file %s",
-				    delete_scan.delete_file.path, delete_scan.file.path);
-			}
-			rows_to_scan[delete_idx] = false;
-		}
-	}
+	// if (!delete_scan.previous_delete_file.path.empty()) {
+	// 	// if we have a previous delete file - scan that set of deletes
+	// 	auto previous_deletes = ScanDeleteFile(context, delete_scan.previous_delete_file);
+	// 	// these deletes are not new - we should not scan them
+	// 	for (auto delete_idx : previous_deletes.deleted_rows) {
+	// 		if (delete_idx >= delete_scan.row_count) {
+	// 			throw InvalidInputException(
+	// 			    "Invalid delete data - delete index read from file %s is out of range for data file %s",
+	// 			    delete_scan.delete_file.path, delete_scan.file.path);
+	// 		}
+	// 		rows_to_scan[delete_idx] = false;
+	// 	}
+	// }
 
 	// now construct the delete filter based on the rows we want to scan
 	auto &deleted = delete_data->deleted_rows;
