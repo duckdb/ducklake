@@ -31,54 +31,50 @@ public:
 	DuckLakeMultiFileList(DuckLakeFunctionInfo &read_info, vector<DuckLakeFileListEntry> files_to_scan);
 	DuckLakeMultiFileList(DuckLakeFunctionInfo &read_info, const DuckLakeInlinedTableInfo &inlined_table);
 
-	unique_ptr<MultiFileList> ComplexFilterPushdown(ClientContext &context, const MultiFileOptions &options,
-	                                                MultiFilePushdownInfo &info,
-	                                                vector<unique_ptr<Expression>> &filters) override;
-
 	unique_ptr<MultiFileList> DynamicFilterPushdown(ClientContext &context, const MultiFileOptions &options,
 	                                                const vector<string> &names, const vector<LogicalType> &types,
 	                                                const vector<column_t> &column_ids,
 	                                                TableFilterSet &filters) const override;
 
-	vector<OpenFileInfo> GetAllFiles() override;
-	FileExpandResult GetExpandResult() override;
-	idx_t GetTotalFileCount() override;
-	unique_ptr<NodeStatistics> GetCardinality(ClientContext &context) override;
+	vector<OpenFileInfo> GetAllFiles() const override;
+	FileExpandResult GetExpandResult() const override;
+	idx_t GetTotalFileCount() const override;
+	unique_ptr<NodeStatistics> GetCardinality(ClientContext &context) const override;
 	DuckLakeTableEntry &GetTable();
-	unique_ptr<MultiFileList> Copy() override;
+	unique_ptr<MultiFileList> Copy() const override;
 	bool HasTransactionLocalData() const {
 		return !transaction_local_files.empty() || transaction_local_data;
 	}
-	vector<DuckLakeFileListExtendedEntry> GetFilesExtended();
-	const vector<DuckLakeFileListEntry> &GetFiles();
-	const DuckLakeFileListEntry &GetFileEntry(idx_t file_idx);
+	vector<DuckLakeFileListExtendedEntry> GetFilesExtended() const;
+	const vector<DuckLakeFileListEntry> &GetFiles() const;
+	const DuckLakeFileListEntry &GetFileEntry(idx_t file_idx) const;
 
 	bool IsDeleteScan() const;
 	const DuckLakeDeleteScanEntry &GetDeleteScanEntry(idx_t file_idx);
 
 protected:
 	//! Get the i-th expanded file
-	OpenFileInfo GetFile(idx_t i) override;
+	OpenFileInfo GetFile(idx_t i) const override;
 
 private:
-	void GetFilesForTable();
-	void GetTableInsertions();
-	void GetTableDeletions();
+	void GetFilesForTable() const;
+	void GetTableInsertions() const;
+	void GetTableDeletions() const;
 
 private:
-	mutex file_lock;
+	mutable mutex file_lock;
 	DuckLakeFunctionInfo &read_info;
 	//! The set of files to read
-	vector<DuckLakeFileListEntry> files;
-	bool read_file_list;
+	mutable vector<DuckLakeFileListEntry> files;
+	mutable bool read_file_list;
 	//! The set of transaction-local files
 	vector<DuckLakeDataFile> transaction_local_files;
 	//! Inlined transaction-local data
 	shared_ptr<DuckLakeInlinedData> transaction_local_data;
 	//! Inlined data tables
-	vector<DuckLakeInlinedTableInfo> inlined_data_tables;
+	mutable vector<DuckLakeInlinedTableInfo> inlined_data_tables;
 	//! The set of delete scans, only used when scanning deleted tuples using ducklake_table_deletions
-	vector<DuckLakeDeleteScanEntry> delete_scans;
+	mutable vector<DuckLakeDeleteScanEntry> delete_scans;
 	//! Filter pushdown information
 	unique_ptr<FilterPushdownInfo> filter_info;
 };

@@ -245,8 +245,17 @@ void DuckLakeCompactor::GenerateCompactions(DuckLakeTableEntry &table,
 		candidates[group].candidate_files.push_back(file_idx);
 	}
 	if (type == CompactionType::REWRITE_DELETES) {
-		if (!files.empty()) {
-			auto compaction_command = GenerateCompactionCommand(std::move(files));
+		// For REWRITE_DELETES, generate one compaction command per partition group
+		for (auto &entry : candidates) {
+			auto &candidate_list = entry.second.candidate_files;
+			if (candidate_list.empty()) {
+				continue;
+			}
+			vector<DuckLakeCompactionFileEntry> partition_files;
+			for (auto &candidate_idx : candidate_list) {
+				partition_files.push_back(std::move(files[candidate_idx]));
+			}
+			auto compaction_command = GenerateCompactionCommand(std::move(partition_files));
 			if (compaction_command) {
 				compactions.push_back(std::move(compaction_command));
 			}

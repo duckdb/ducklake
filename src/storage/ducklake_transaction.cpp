@@ -815,8 +815,13 @@ struct NewMacroInfo {
 	vector<DuckLakeMacroInfo> new_macros;
 };
 
-void HandleChangedFields(TableIndex table_id, const ColumnChangeInfo &change_info, NewTableInfo &result) {
+void HandleChangedFields(TableIndex table_id, const ColumnChangeInfo &change_info, NewTableInfo &result,
+                         const set<FieldIndex> &columns_handled_by_later_ops) {
 	for (auto &new_col_info : change_info.new_fields) {
+		// Skip adding columns that will be handled by a later operation (e.g., SET_DEFAULT after CHANGE_COLUMN_TYPE)
+		if (columns_handled_by_later_ops.find(new_col_info.column_info.id) != columns_handled_by_later_ops.end()) {
+			continue;
+		}
 		DuckLakeNewColumn new_column;
 		new_column.table_id = table_id;
 		new_column.column_info = new_col_info.column_info;
@@ -845,6 +850,23 @@ void DuckLakeTransaction::GetNewTableInfo(DuckLakeCommitState &commit_state, Duc
 		}
 		table_entry = table_entry.get().Child();
 	}
+
+	set<FieldIndex> columns_handled_by_later_ops;
+	for (idx_t table_idx = 0; table_idx < tables.size(); table_idx++) {
+		auto &table = tables[table_idx].get();
+		auto local_change = table.GetLocalChange();
+		switch (local_change.type) {
+		case LocalChangeType::SET_NULL:
+		case LocalChangeType::DROP_NULL:
+		case LocalChangeType::RENAME_COLUMN:
+		case LocalChangeType::SET_DEFAULT:
+			columns_handled_by_later_ops.insert(local_change.field_index);
+			break;
+		default:
+			break;
+		}
+	}
+
 	// traverse in reverse order
 	bool column_schema_change = false;
 	for (idx_t table_idx = tables.size(); table_idx > 0; table_idx--) {
@@ -907,7 +929,8 @@ void DuckLakeTransaction::GetNewTableInfo(DuckLakeCommitState &commit_state, Duc
 		case LocalChangeType::CHANGE_COLUMN_TYPE: {
 			// drop the indicated column
 			// note that in case of nested types we might be dropping multiple columns here
-			HandleChangedFields(commit_state.GetTableId(table), table.GetChangedFields(), result);
+			HandleChangedFields(commit_state.GetTableId(table), table.GetChangedFields(), result,
+			                    columns_handled_by_later_ops);
 			column_schema_change = true;
 			break;
 		}
@@ -1288,9 +1311,12 @@ NewDataInfo DuckLakeTransaction::GetNewDataFiles(string &batch_query, DuckLakeCo
 			}
 
 			// merge the stats into the new global states
-			new_stats.record_count += file.row_count;
+			// files with max_partial_file_snapshot set are flushed from inlined data - don't count them again
+			if (!file.max_partial_file_snapshot.IsValid()) {
+				new_stats.record_count += file.row_count;
+				new_stats.next_row_id += file.row_count;
+			}
 			new_stats.table_size_bytes += file.file_size_bytes;
-			new_stats.next_row_id += file.row_count;
 			for (auto &entry : file.column_stats) {
 				new_stats.MergeStats(entry.first, entry.second);
 			}
@@ -1932,12 +1958,12 @@ void DuckLakeTransaction::DropTransactionLocalFile(TableIndex table_id, const st
 		auto &file = table_files[i];
 		if (file.file_name == path) {
 			for (auto &del_file : file.delete_files) {
-				fs.TryRemoveFile(del_file.file_name);
+				fs.RemoveFile(del_file.file_name);
 			}
 			file.delete_files.clear();
 			// found the file - delete it from the table list and from disk
 			table_files.erase_at(i);
-			fs.TryRemoveFile(path);
+			fs.RemoveFile(path);
 			if (table_changes.IsEmpty()) {
 				// no more files remaining
 				table_data_changes.erase(entry);
@@ -2080,7 +2106,7 @@ void DuckLakeTransaction::AddDeletes(TableIndex table_id, vector<DuckLakeDeleteF
 				auto context_ref = context.lock();
 				auto &fs = FileSystem::GetFileSystem(*context_ref);
 				for (auto &old_file : existing_entry->second) {
-					fs.TryRemoveFile(old_file.file_name);
+					fs.RemoveFile(old_file.file_name);
 				}
 				existing_entry->second.clear();
 			}
@@ -2131,6 +2157,17 @@ void DuckLakeTransaction::TransactionLocalDelete(TableIndex table_id, const stri
 	auto &table_changes = entry->second;
 	for (auto &file : table_changes.new_data_files) {
 		if (file.file_name == data_file_path) {
+			if (!file.delete_files.empty()) {
+				auto context_ref = context.lock();
+				auto &fs = FileSystem::GetFileSystem(*context_ref);
+				vector<string> files_to_delete;
+				files_to_delete.reserve(file.delete_files.size());
+				for (auto &old_file : file.delete_files) {
+					files_to_delete.push_back(old_file.file_name);
+				}
+				fs.RemoveFiles(files_to_delete);
+				file.delete_files.clear();
+			}
 			file.delete_files.push_back(std::move(delete_file));
 			return;
 		}
@@ -2182,7 +2219,7 @@ void DuckLakeTransaction::DropTable(DuckLakeTableEntry &table) {
 			auto context_ref = context.lock();
 			auto &fs = FileSystem::GetFileSystem(*context_ref);
 			for (auto &file : table_changes.new_data_files) {
-				fs.TryRemoveFile(file.file_name);
+				fs.RemoveFile(file.file_name);
 			}
 			table_data_changes.erase(table_entry);
 		}
