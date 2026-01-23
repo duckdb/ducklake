@@ -15,6 +15,8 @@
 namespace duckdb {
 class DuckLakeMetadataManager;
 class FileSystem;
+class TableFilter;
+class DynamicFilter;
 
 struct ParsedCatalogEntry {
 	string schema;
@@ -33,6 +35,8 @@ public:
 
 	static ParsedCatalogEntry ParseCatalogEntry(const string &input);
 	static string JoinPath(FileSystem &fs, const string &a, const string &b);
+
+	static DynamicFilter *GetOptionalDynamicFilter(const TableFilter &filter);
 };
 
 } // namespace duckdb
