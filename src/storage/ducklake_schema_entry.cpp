@@ -264,8 +264,7 @@ void DuckLakeSchemaEntry::Scan(ClientContext &context, CatalogType type,
 				try {
 					view_entry.Bind(context);
 				} catch (...) {
-					// if the view binding fails we continue so we can error when the view is actually queried
-					continue;
+					// don't skip it so consumers see all views in catalog scans
 				}
 			}
 		}

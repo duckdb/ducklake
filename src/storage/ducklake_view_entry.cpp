@@ -97,13 +97,14 @@ bool DuckLakeViewEntry::IsBound() const {
 
 void DuckLakeViewEntry::Bind(ClientContext &context) {
 	D_ASSERT(!is_bound);
-	is_bound = true;
 	std::string create_view_sql = "CREATE VIEW mock_view_name_lake";
 	if (!aliases.empty()) {
 		create_view_sql += "(";
-		for (const auto &alias : aliases) {
-			create_view_sql += KeywordHelper::WriteOptionallyQuoted(alias);
-			create_view_sql += ", ";
+		for (idx_t i = 0; i < aliases.size(); i++) {
+			if (i > 0) {
+				create_view_sql += ", ";
+			}
+			create_view_sql += KeywordHelper::WriteOptionallyQuoted(aliases[i]);
 		}
 		create_view_sql += ")";
 	}
@@ -114,6 +115,8 @@ void DuckLakeViewEntry::Bind(ClientContext &context) {
 	aliases = view_info->aliases;
 	types = view_info->types;
 	names = view_info->names;
+	// Only mark as bound after successful binding
+	is_bound = true;
 }
 
 } // namespace duckdb
