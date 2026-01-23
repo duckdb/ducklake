@@ -2,6 +2,7 @@
 #include "storage/ducklake_multi_file_reader.hpp"
 #include "storage/ducklake_table_entry.hpp"
 #include "storage/ducklake_catalog.hpp"
+#include "storage/ducklake_delete_filter.hpp"
 
 #include "duckdb/common/local_file_system.hpp"
 #include "duckdb/common/types/data_chunk.hpp"

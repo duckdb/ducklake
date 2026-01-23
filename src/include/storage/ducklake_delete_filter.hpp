@@ -45,7 +45,9 @@ public:
 	void SetSnapshotFilter(idx_t snapshot_filter);
 
 private:
-	static DeleteFileScanResult ScanDeleteFile(ClientContext &context, const DuckLakeFileData &delete_file);
+	static DeleteFileScanResult ScanDeleteFile(ClientContext &context, const DuckLakeFileData &delete_file,
+	                                           optional_idx snapshot_filter_min = optional_idx(),
+	                                           optional_idx snapshot_filter_max = optional_idx());
 };
 
 } // namespace duckdb
