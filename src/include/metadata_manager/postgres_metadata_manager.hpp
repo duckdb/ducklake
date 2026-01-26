@@ -30,6 +30,18 @@ public:
 protected:
 	string GetLatestSnapshotQuery() const override;
 
+	//! Wrap field selections with list aggregation using Postgres jsonb syntax
+	string WrapWithListAggregation(const unordered_map<string, string> &fields) const override;
+
+	//! Parse tag list from JSON query result (override for Postgres JSONB handling)
+	vector<DuckLakeTag> LoadTags(const Value &tag_map) const override;
+
+	//! Parse inlined data tables list from JSON query result (override for Postgres JSONB handling)
+	vector<DuckLakeInlinedTableInfo> LoadInlinedDataTables(const Value &list) const override;
+
+	//! Parse macro implementations list from JSON query result (override for Postgres JSONB handling)
+	vector<DuckLakeMacroImplementation> LoadMacroImplementations(const Value &list) const override;
+
 private:
 	unique_ptr<QueryResult> ExecuteQuery(string &query, string command);
 };
