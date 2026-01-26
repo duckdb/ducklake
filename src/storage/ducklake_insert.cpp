@@ -120,6 +120,9 @@ DuckLakeColumnStats DuckLakeInsert::ParseColumnStats(const LogicalType &type, co
 			for (const auto &child : ListValue::GetChildren(list_value)) {
 				geo_stats.geo_types.insert(StringValue::Get(child));
 			}
+		} else if (stats_name == "variant_type") {
+			//! Already handled
+			continue;
 		} else {
 			throw NotImplementedException("Unsupported stats type \"%s\" in DuckLakeInsert::Sink()", stats_name);
 		}
@@ -260,15 +263,14 @@ static LogicalType GetVariantLayout(DuckLakeInsertStatsTree &tree, idx_t variant
 		throw InvalidInputException("VARIANT 'metadata' needs to have stats!");
 	}
 
-	auto &value = *metadata_field.value;
-
+	auto &col_stats = *metadata_field.value;
 	LogicalType variant_type = LogicalType::INVALID;
 	for (idx_t stats_idx = 0; stats_idx < col_stats.size(); stats_idx++) {
 		auto &stats_children = StructValue::GetChildren(col_stats[stats_idx]);
 		auto &stats_name = StringValue::Get(stats_children[0]);
 		if (stats_name == "variant_type") {
 			auto type_str = StringValue::Get(stats_children[1]);
-			return TransformStringToLogicalType(type_str);
+			return UnboundType::TryParseAndDefaultBind(type_str);
 		}
 	}
 	throw InvalidInputException("VARIANT 'metadata' field needs to have a 'variant_stats' stats entry!");

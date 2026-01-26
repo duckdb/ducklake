@@ -578,7 +578,7 @@ static idx_t BuildField(DuckLakeColumnVariantStats &variant, yyjson_val *node, L
 		result_type = LogicalType::LIST(std::move(child_type));
 	} else {
 		// leaf scalar => allocate stats and bind
-		result_type = TransformStringToLogicalType(type_str);
+		result_type = UnboundType::TryParseAndDefaultBind(type_str);
 
 		idx_t stats_idx = variant.stats_arena.emplace(result_type);
 		variant.field_arena[index].stats_index = stats_idx;
