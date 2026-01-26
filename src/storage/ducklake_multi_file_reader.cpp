@@ -169,18 +169,19 @@ ReaderInitializeType DuckLakeMultiFileReader::InitializeReader(MultiFileReaderDa
 	}
 	auto result = MultiFileReader::InitializeReader(reader_data, bind_data, global_columns, global_column_ids,
 	                                                table_filters, context, gstate);
-	if (file_entry.snapshot_filter.IsValid()) {
+	// Handle snapshot filters for files with multiple snapshots (partial_max set)
+	if (file_entry.snapshot_filter_max.IsValid() || file_entry.snapshot_filter_min.IsValid()) {
 		// we have a snapshot filter - add it to the filter list
 		// find the column we need to filter on
 		auto &reader = *reader_data.reader;
 		optional_idx snapshot_col;
-		auto snapshot_filter_constant = Value::UBIGINT(file_entry.snapshot_filter.GetIndex());
+		LogicalType snapshot_col_type;
 		for (idx_t col_idx = 0; col_idx < reader.columns.size(); col_idx++) {
 			auto &col = reader.columns[col_idx];
 			if (col.identifier.type() == LogicalTypeId::INTEGER &&
 			    IntegerValue::Get(col.identifier) == LAST_UPDATED_SEQUENCE_NUMBER_ID) {
 				snapshot_col = col_idx;
-				snapshot_filter_constant = snapshot_filter_constant.DefaultCastAs(col.type);
+				snapshot_col_type = col.type;
 				break;
 			}
 		}
@@ -205,9 +206,24 @@ ReaderInitializeType DuckLakeMultiFileReader::InitializeReader(MultiFileReaderDa
 			reader.filters = make_uniq<TableFilterSet>();
 		}
 		ColumnIndex snapshot_col_idx(snapshot_local_id.GetIndex());
-		auto snapshot_filter =
-		    make_uniq<ConstantFilter>(ExpressionType::COMPARE_LESSTHANOREQUALTO, std::move(snapshot_filter_constant));
-		reader.filters->PushFilter(snapshot_col_idx, std::move(snapshot_filter));
+
+		// Add _ducklake_internal_snapshot_id <= snapshot_filter
+		if (file_entry.snapshot_filter_max.IsValid()) {
+			auto snapshot_filter_constant =
+			    Value::UBIGINT(file_entry.snapshot_filter_max.GetIndex()).DefaultCastAs(snapshot_col_type);
+			auto snapshot_filter = make_uniq<ConstantFilter>(ExpressionType::COMPARE_LESSTHANOREQUALTO,
+			                                                 std::move(snapshot_filter_constant));
+			reader.filters->PushFilter(snapshot_col_idx, std::move(snapshot_filter));
+		}
+
+		// Add _ducklake_internal_snapshot_id >= snapshot_filter_min
+		if (file_entry.snapshot_filter_min.IsValid()) {
+			auto snapshot_filter_min_constant =
+			    Value::UBIGINT(file_entry.snapshot_filter_min.GetIndex()).DefaultCastAs(snapshot_col_type);
+			auto snapshot_filter_min = make_uniq<ConstantFilter>(ExpressionType::COMPARE_GREATERTHANOREQUALTO,
+			                                                     std::move(snapshot_filter_min_constant));
+			reader.filters->PushFilter(snapshot_col_idx, std::move(snapshot_filter_min));
+		}
 	}
 	return result;
 }
@@ -240,7 +256,7 @@ shared_ptr<BaseFileReader> DuckLakeMultiFileReader::TryCreateInlinedDataReader(c
 		// read the table at the specified version
 		auto transaction = read_info.GetTransaction();
 		auto &catalog = transaction->GetCatalog();
-		DuckLakeSnapshot snapshot(catalog.GetSnapshotForSchema(schema_version.GetIndex(), *transaction),
+		DuckLakeSnapshot snapshot(catalog.GetBeginSnapshotForTable(read_info.table.GetTableId(), *transaction),
 		                          schema_version.GetIndex(), 0, 0);
 		auto entry = catalog.GetEntryById(*transaction, snapshot, read_info.table.GetTableId());
 		if (!entry) {

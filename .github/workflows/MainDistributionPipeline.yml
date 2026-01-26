@@ -12,22 +12,35 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  get-duckdb-version:
+    name: Get DuckDB version
+    runs-on: ubuntu-latest
+    outputs:
+      duckdb_version: ${{ steps.version.outputs.duckdb_version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: .github
+      - id: version
+        run: echo "duckdb_version=$(cat .github/duckdb-version)" >> $GITHUB_OUTPUT
+
   duckdb-next-build:
     name: Build extension binaries
+    needs: get-duckdb-version
     uses: duckdb/extension-ci-tools/.github/workflows/_extension_distribution.yml@main
     with:
-      duckdb_version: main
+      duckdb_version: ${{ needs.get-duckdb-version.outputs.duckdb_version }}
       ci_tools_version: main
       extension_name: ducklake
 
   duckdb-next-deploy:
     name: Deploy extension binaries
-    needs: duckdb-next-build
+    needs: [get-duckdb-version, duckdb-next-build]
     uses: duckdb/extension-ci-tools/.github/workflows/_extension_deploy.yml@main
     secrets: inherit
     with:
       extension_name: ducklake
-      duckdb_version: main
+      duckdb_version: ${{ needs.get-duckdb-version.outputs.duckdb_version }}
       ci_tools_version: main
       deploy_latest: ${{ startsWith(github.ref, 'refs/heads/v') || github.ref == 'refs/heads/main' }}
       deploy_versioned: ${{ startsWith(github.ref, 'refs/heads/v') || github.ref == 'refs/heads/main' }}

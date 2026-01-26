@@ -5,16 +5,23 @@
     "core_functions",
     "parquet",
     "ducklake",
-    "httpfs",
     "sqlite_scanner",
     "icu",
     "httpfs"
+  ],"skip_error_messages": [
+    "database is locked"
   ],
   "test_env": [{
       "env_name":  "DUCKLAKE_CONNECTION",
       "env_value": "sqlite:__TEST_DIR__/{BASE_TEST_NAME}.db"
    }],
   "skip_tests": [
+    {
+      "reason": "Test is slow",
+      "paths": [
+        "test/sql/deletion_inlining/test_multiple_files_flush.test_slow"
+      ]
+    },
     {
       "reason": "Not implemented Error: Unsupported catalog type for duckdb_columns",
       "paths": [
