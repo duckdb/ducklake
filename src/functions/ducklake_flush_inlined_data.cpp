@@ -105,10 +105,11 @@ SinkFinalizeType DuckLakeFlushData::Finalize(Pipeline &pipeline, Event &event, C
 	auto &global_state = input.global_state.Cast<DuckLakeInsertGlobalState>();
 	auto &transaction = DuckLakeTransaction::Get(context, global_state.table.catalog);
 	auto snapshot = transaction.GetSnapshot();
+	auto &metadata_manager = transaction.GetMetadataManager();
 
 	if (!global_state.written_files.empty()) {
 		// query all deleted rows with their snapshot IDs
-		auto deleted_rows_result = transaction.Query(snapshot, StringUtil::Format(R"(
+		auto deleted_rows_result = metadata_manager.Query(snapshot, StringUtil::Format(R"(
 			SELECT end_snapshot, row_id
 			FROM {METADATA_CATALOG}.%s
 			WHERE end_snapshot IS NOT NULL
