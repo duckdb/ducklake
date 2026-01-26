@@ -34,7 +34,7 @@ public:
 	//! Set which columns to read (by index). If not called, reads all columns.
 	void SetColumnIds(vector<column_t> column_ids);
 
-	//! Initialize the scan - must be called before Scan()
+	//! Initialize the scan
 	void InitializeScan();
 
 	//! Scan the next chunk. Returns false when done.
