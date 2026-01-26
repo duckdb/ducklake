@@ -482,33 +482,35 @@ void DuckLakeMultiFileReader::GatherDeletionScanSnapshots(BaseFileReader &reader
 	snapshot_vector.Flatten(count);
 	auto snapshot_data = FlatVector::GetData<int64_t>(snapshot_vector);
 
-	// Get the row_id_start for this file
-	optional_idx row_id_start;
-	if (reader_data.file_to_be_opened.extended_info) {
-		auto entry = reader_data.file_to_be_opened.extended_info->options.find("row_id_start");
-		if (entry != reader_data.file_to_be_opened.extended_info->options.end()) {
-			row_id_start = entry->second.GetValue<idx_t>();
-		}
-	}
-
-
 	UnifiedVectorFormat row_id_data;
 	rowid_vector.ToUnifiedFormat(count, row_id_data);
 	auto row_id_ptr = UnifiedVectorFormat::GetData<int64_t>(row_id_data);
 
-	// We need to check the snapshot_id for each row
+	// Look up the snapshot_id for each row
 	for (idx_t i = 0; i < count; i++) {
 		auto row_id_idx = row_id_data.sel->get_index(i);
 		auto row_id = row_id_ptr[row_id_idx];
-		// Convert to file-local row number
-		idx_t file_row_number;
-		if (row_id_start.IsValid()) {
-			file_row_number = NumericCast<idx_t>(row_id) - row_id_start.GetIndex();
+
+		idx_t lookup_key;
+		if (delete_filter.delete_data->uses_row_id) {
+			// File has embedded row_ids - use global row_id directly
+			lookup_key = static_cast<idx_t>(row_id);
 		} else {
-			file_row_number = NumericCast<idx_t>(row_id);
+			optional_idx row_id_start;
+			if (reader_data.file_to_be_opened.extended_info) {
+				auto entry = reader_data.file_to_be_opened.extended_info->options.find("row_id_start");
+				if (entry != reader_data.file_to_be_opened.extended_info->options.end()) {
+					row_id_start = entry->second.GetValue<idx_t>();
+				}
+			}
+			if (row_id_start.IsValid()) {
+				lookup_key = NumericCast<idx_t>(row_id) - row_id_start.GetIndex();
+			} else {
+				lookup_key = NumericCast<idx_t>(row_id);
+			}
 		}
-		// Look up the snapshot_id
-		auto snapshot = delete_filter.delete_data->GetSnapshotForRow(file_row_number);
+
+		auto snapshot = delete_filter.delete_data->GetSnapshotForRow(lookup_key);
 		if (snapshot.IsValid()) {
 			snapshot_data[i] = NumericCast<int64_t>(snapshot.GetIndex());
 		}
