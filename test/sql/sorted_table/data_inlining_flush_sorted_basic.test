@@ -12,7 +12,7 @@ test-env DATA_PATH __TEST_DIR__
 
 
 statement ok
-ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/ducklake_inlining_flush_data', DATA_INLINING_ROW_LIMIT 10)
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/ducklake_inlining_flush_data_basic', DATA_INLINING_ROW_LIMIT 10)
 
 statement ok
 CREATE TABLE ducklake.test(i INTEGER);
@@ -31,7 +31,7 @@ endloop
 
 # all data is inlined
 query I
-SELECT COUNT(*) FROM GLOB('${DATA_PATH}/ducklake_inlining_files/**')
+SELECT COUNT(*) FROM GLOB('${DATA_PATH}/ducklake_inlining_flush_data_basic/**')
 ----
 0
 
@@ -109,7 +109,7 @@ SELECT snapshot_id, changes FROM ducklake.snapshots() WHERE snapshot_id IN (2, 1
 
 # we now have one file
 query I
-SELECT COUNT(*) FROM GLOB('${DATA_PATH}/ducklake_inlining_flush_data/**')
+SELECT COUNT(*) FROM GLOB('${DATA_PATH}/ducklake_inlining_flush_data_basic/**')
 ----
 1
 
