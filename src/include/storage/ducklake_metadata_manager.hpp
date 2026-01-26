@@ -128,7 +128,7 @@ public:
 	                                                                  double deletion_threshold,
 	                                                                  DuckLakeSnapshot snapshot,
 	                                                                  DuckLakeFileSizeOptions options);
-	virtual idx_t GetCatalogIdForSchema(idx_t schema_id);
+	virtual idx_t GetBeginSnapshotForTable(TableIndex table_id);
 	virtual vector<DuckLakeFileForCleanup> GetOldFilesForCleanup(const string &filter);
 	virtual vector<DuckLakeFileForCleanup> GetOrphanFilesForCleanup(const string &filter, const string &separator);
 	virtual vector<DuckLakeFileForCleanup> GetFilesForCleanup(const string &filter, CleanupType type,
@@ -194,6 +194,10 @@ public:
 	                                                                 DuckLakeSnapshot end_snapshot,
 	                                                                 const string &inlined_table_name,
 	                                                                 const vector<string> &columns_to_read);
+
+	virtual shared_ptr<DuckLakeInlinedData> ReadAllInlinedDataForFlush(DuckLakeSnapshot snapshot,
+	                                                                   const string &inlined_table_name,
+	                                                                   const vector<string> &columns_to_read);
 	virtual void DeleteInlinedData(const DuckLakeInlinedTableInfo &inlined_table);
 	virtual string InsertNewSchema(const DuckLakeSnapshot &snapshot, const set<TableIndex> &table_ids);
 

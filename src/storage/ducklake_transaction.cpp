@@ -21,17 +21,6 @@
 
 namespace duckdb {
 
-static bool IsSchemaAlteringChange(LocalChangeType type) {
-	switch (type) {
-	case LocalChangeType::SET_SORT_KEY:
-	case LocalChangeType::SET_COMMENT:
-	case LocalChangeType::SET_COLUMN_COMMENT:
-		return false;
-	default:
-		return true;
-	}
-}
-
 bool LocalTableDataChanges::IsEmpty() const {
 	if (!new_data_files.empty()) {
 		return false;
@@ -110,8 +99,8 @@ bool DuckLakeTransaction::SchemaChangesMade() {
 }
 
 bool DuckLakeTransaction::ChangesMade() {
-	return SchemaChangesMade() || !altered_tables_same_schema.empty() || !table_data_changes.empty() ||
-	       !dropped_files.empty() || !new_name_maps.name_maps.empty();
+	return SchemaChangesMade() || !table_data_changes.empty() || !dropped_files.empty() ||
+	       !new_name_maps.name_maps.empty();
 }
 
 struct TransactionChangeInformation {
@@ -122,6 +111,7 @@ struct TransactionChangeInformation {
 	case_insensitive_map_t<reference_set_t<CatalogEntry>> created_table_macros;
 
 	set<TableIndex> altered_tables;
+	set<TableIndex> altered_tables_with_schema_version_changes;
 	set<TableIndex> altered_views;
 	set<TableIndex> dropped_tables;
 	set<TableIndex> dropped_views;
@@ -140,17 +130,27 @@ void GetTransactionTableChanges(reference<CatalogEntry> table_entry, Transaction
 		auto &table = table_entry.get().Cast<DuckLakeTableEntry>();
 		switch (table.GetLocalChange().type) {
 		case LocalChangeType::SET_PARTITION_KEY:
-		case LocalChangeType::SET_COMMENT:
-		case LocalChangeType::SET_COLUMN_COMMENT:
 		case LocalChangeType::SET_NULL:
 		case LocalChangeType::DROP_NULL:
 		case LocalChangeType::RENAME_COLUMN:
 		case LocalChangeType::ADD_COLUMN:
 		case LocalChangeType::REMOVE_COLUMN:
 		case LocalChangeType::CHANGE_COLUMN_TYPE:
-		case LocalChangeType::SET_DEFAULT:
+		case LocalChangeType::SET_DEFAULT: {
+			// this table was altered in a way that modifies the ducklake_schema_versions
+			auto table_id = table.GetTableId();
+			// don't report transaction-local tables yet - these will get added later on
+			if (!table_id.IsTransactionLocal()) {
+				changes.altered_tables.insert(table_id);
+				changes.altered_tables_with_schema_version_changes.insert(table_id);
+			}
+			break;
+		}
+		case LocalChangeType::SET_COMMENT:
+		case LocalChangeType::SET_COLUMN_COMMENT:
 		case LocalChangeType::SET_SORT_KEY: {
-			// this table was altered
+			// this table was altered, but not in a way that would break the ability to compact across files (same
+			// ducklake_schema_versions)
 			auto table_id = table.GetTableId();
 			// don't report transaction-local tables yet - these will get added later on
 			if (!table_id.IsTransactionLocal()) {
@@ -262,21 +262,6 @@ TransactionChangeInformation DuckLakeTransaction::GetTransactionChanges() {
 				break;
 			default:
 				throw InternalException("Unsupported type found in new_tables");
-			}
-		}
-	}
-	// Also process altered_tables_same_schema
-	for (auto &schema_entry : altered_tables_same_schema) {
-		for (auto &entry : schema_entry.second->GetEntries()) {
-			switch (entry.second->type) {
-			case CatalogType::TABLE_ENTRY:
-				GetTransactionTableChanges(*entry.second, changes);
-				break;
-			case CatalogType::VIEW_ENTRY:
-				GetTransactionViewChanges(*entry.second, changes);
-				break;
-			default:
-				throw InternalException("Unsupported type found in altered_tables_same_schema");
 			}
 		}
 	}
@@ -492,12 +477,14 @@ void DuckLakeTransaction::CleanupFiles() {
 			if (file.created_by_ducklake) {
 				fs.TryRemoveFile(file.file_name);
 			}
-			if (file.delete_file) {
-				fs.TryRemoveFile(file.delete_file->file_name);
+			for (auto &del_file : file.delete_files) {
+				fs.TryRemoveFile(del_file.file_name);
 			}
 		}
 		for (auto &file : table_changes.new_delete_files) {
-			fs.TryRemoveFile(file.second.file_name);
+			for (auto &delete_files : file.second) {
+				fs.TryRemoveFile(delete_files.file_name);
+			}
 		}
 		table_changes.new_data_files.clear();
 		table_changes.new_delete_files.clear();
@@ -654,9 +641,10 @@ void DuckLakeTransaction::CheckForConflicts(const TransactionChangeInformation &
 			for (auto &entry : table_data_changes) {
 				auto &table_changes = entry.second;
 				for (auto &file_entry : table_changes.new_delete_files) {
-					auto &file = file_entry.second;
-					ConflictCheck(file.data_file_id, deleted_files.deleted_from_files, "delete from file",
-					              "deleted from it");
+					for (auto &file : file_entry.second) {
+						ConflictCheck(file.data_file_id, deleted_files.deleted_from_files, "delete from file",
+						              "deleted from it");
+					}
 				}
 			}
 			for (auto &file : dropped_files) {
@@ -871,8 +859,13 @@ struct NewMacroInfo {
 	vector<DuckLakeMacroInfo> new_macros;
 };
 
-void HandleChangedFields(TableIndex table_id, const ColumnChangeInfo &change_info, NewTableInfo &result) {
+void HandleChangedFields(TableIndex table_id, const ColumnChangeInfo &change_info, NewTableInfo &result,
+                         const set<FieldIndex> &columns_handled_by_later_ops) {
 	for (auto &new_col_info : change_info.new_fields) {
+		// Skip adding columns that will be handled by a later operation (e.g., SET_DEFAULT after CHANGE_COLUMN_TYPE)
+		if (columns_handled_by_later_ops.find(new_col_info.column_info.id) != columns_handled_by_later_ops.end()) {
+			continue;
+		}
 		DuckLakeNewColumn new_column;
 		new_column.table_id = table_id;
 		new_column.column_info = new_col_info.column_info;
@@ -901,6 +894,23 @@ void DuckLakeTransaction::GetNewTableInfo(DuckLakeCommitState &commit_state, Duc
 		}
 		table_entry = table_entry.get().Child();
 	}
+
+	set<FieldIndex> columns_handled_by_later_ops;
+	for (idx_t table_idx = 0; table_idx < tables.size(); table_idx++) {
+		auto &table = tables[table_idx].get();
+		auto local_change = table.GetLocalChange();
+		switch (local_change.type) {
+		case LocalChangeType::SET_NULL:
+		case LocalChangeType::DROP_NULL:
+		case LocalChangeType::RENAME_COLUMN:
+		case LocalChangeType::SET_DEFAULT:
+			columns_handled_by_later_ops.insert(local_change.field_index);
+			break;
+		default:
+			break;
+		}
+	}
+
 	// traverse in reverse order
 	bool column_schema_change = false;
 	for (idx_t table_idx = tables.size(); table_idx > 0; table_idx--) {
@@ -913,6 +923,7 @@ void DuckLakeTransaction::GetNewTableInfo(DuckLakeCommitState &commit_state, Duc
 			result.new_partition_keys.push_back(std::move(partition_key));
 
 			transaction_changes.altered_tables.insert(table_id);
+			transaction_changes.altered_tables_with_schema_version_changes.insert(table_id);
 			column_schema_change = true;
 			break;
 		}
@@ -960,6 +971,7 @@ void DuckLakeTransaction::GetNewTableInfo(DuckLakeCommitState &commit_state, Duc
 			result.new_columns.push_back(std::move(new_col));
 
 			transaction_changes.altered_tables.insert(table_id);
+			transaction_changes.altered_tables_with_schema_version_changes.insert(table_id);
 			if (local_change.type == LocalChangeType::RENAME_COLUMN) {
 				column_schema_change = true;
 			}
@@ -969,7 +981,9 @@ void DuckLakeTransaction::GetNewTableInfo(DuckLakeCommitState &commit_state, Duc
 		case LocalChangeType::CHANGE_COLUMN_TYPE: {
 			// drop the indicated column
 			// note that in case of nested types we might be dropping multiple columns here
-			HandleChangedFields(commit_state.GetTableId(table), table.GetChangedFields(), result);
+			HandleChangedFields(commit_state.GetTableId(table), table.GetChangedFields(), result,
+			                    columns_handled_by_later_ops);
+      transaction_changes.altered_tables_with_schema_version_changes.insert(table_id);
 			column_schema_change = true;
 			break;
 		}
@@ -981,6 +995,7 @@ void DuckLakeTransaction::GetNewTableInfo(DuckLakeCommitState &commit_state, Duc
 			result.new_columns.push_back(std::move(new_col));
 
 			transaction_changes.altered_tables.insert(table.GetTableId());
+			transaction_changes.altered_tables_with_schema_version_changes.insert(table_id);
 			column_schema_change = true;
 			break;
 		}
@@ -1139,7 +1154,6 @@ void DuckLakeTransaction::GetNewViewInfo(DuckLakeCommitState &commit_state, Duck
 NewTableInfo DuckLakeTransaction::GetNewTables(DuckLakeCommitState &commit_state,
                                                TransactionChangeInformation &transaction_changes) {
 	NewTableInfo result;
-	// Process new_tables
 	for (auto &schema_entry : new_tables) {
 		for (auto &entry : schema_entry.second->GetEntries()) {
 			switch (entry.second->type) {
@@ -1151,21 +1165,6 @@ NewTableInfo DuckLakeTransaction::GetNewTables(DuckLakeCommitState &commit_state
 				break;
 			default:
 				throw InternalException("Unknown type in new_tables");
-			}
-		}
-	}
-	// Also process altered_tables_same_schema
-	for (auto &schema_entry : altered_tables_same_schema) {
-		for (auto &entry : schema_entry.second->GetEntries()) {
-			switch (entry.second->type) {
-			case CatalogType::TABLE_ENTRY:
-				GetNewTableInfo(commit_state, *schema_entry.second, *entry.second, result, transaction_changes);
-				break;
-			case CatalogType::VIEW_ENTRY:
-				GetNewViewInfo(commit_state, *schema_entry.second, *entry.second, result, transaction_changes);
-				break;
-			default:
-				throw InternalException("Unknown type in altered_tables_same_schema");
 			}
 		}
 	}
@@ -1262,8 +1261,17 @@ DuckLakeFileInfo DuckLakeTransaction::GetNewDataFile(DuckLakeDataFile &file, Duc
 		column_stats.column_size_bytes = to_string(stats.column_size_bytes);
 		if (stats.has_null_count) {
 			if (stats.has_num_values) {
-				column_stats.value_count = to_string(stats.num_values);
-				column_stats.null_count = to_string(stats.null_count);
+				// value_count should be the count of non-null values: num_values - null_count
+				// Validate that null_count doesn't exceed num_values to prevent underflow
+				if (stats.null_count > stats.num_values) {
+					// Invalid stats - null_count can't exceed total values
+					// This can happen with nested columns in some parquet files
+					column_stats.value_count = "NULL";
+					column_stats.null_count = "NULL";
+				} else {
+					column_stats.value_count = to_string(stats.num_values - stats.null_count);
+					column_stats.null_count = to_string(stats.null_count);
+				}
 			} else {
 				if (stats.null_count > file.row_count) {
 					// Something went wrong with the stats, make them NULL
@@ -1349,17 +1357,20 @@ NewDataInfo DuckLakeTransaction::GetNewDataFiles(string &batch_query, DuckLakeCo
 		vector<DuckLakeDeleteFile> delete_files;
 		for (auto &file : table_changes.new_data_files) {
 			auto data_file = GetNewDataFile(file, commit_state.commit_snapshot, table_id, new_stats.next_row_id);
-			if (file.delete_file) {
+			for (auto &del_file : file.delete_files) {
 				// this transaction-local file already has deletes - write them out
-				DuckLakeDeleteFile delete_file = *file.delete_file;
+				DuckLakeDeleteFile delete_file = del_file;
 				delete_file.data_file_id = data_file.id;
 				delete_files.push_back(std::move(delete_file));
 			}
 
 			// merge the stats into the new global states
-			new_stats.record_count += file.row_count;
+			// files with max_partial_file_snapshot set are flushed from inlined data - don't count them again
+			if (!file.max_partial_file_snapshot.IsValid()) {
+				new_stats.record_count += file.row_count;
+				new_stats.next_row_id += file.row_count;
+			}
 			new_stats.table_size_bytes += file.file_size_bytes;
-			new_stats.next_row_id += file.row_count;
 			for (auto &entry : file.column_stats) {
 				new_stats.MergeStats(entry.first, entry.second);
 			}
@@ -1409,20 +1420,22 @@ DuckLakeTransaction::GetNewDeleteFiles(const DuckLakeCommitState &commit_state,
 		auto table_id = commit_state.GetTableId(entry.first);
 		auto &table_changes = entry.second;
 		for (auto &file_entry : table_changes.new_delete_files) {
-			auto &file = file_entry.second;
-			if (file.overwrites_existing_delete) {
-				overwritten_delete_files.insert(file.data_file_id);
+			for (auto &file : file_entry.second) {
+				if (file.overwrites_existing_delete) {
+					overwritten_delete_files.insert(file.data_file_id);
+				}
+				DuckLakeDeleteFileInfo delete_file;
+				delete_file.id = DataFileIndex(commit_state.commit_snapshot.next_file_id++);
+				delete_file.table_id = table_id;
+				delete_file.data_file_id = file.data_file_id;
+				delete_file.path = file.file_name;
+				delete_file.delete_count = file.delete_count;
+				delete_file.file_size_bytes = file.file_size_bytes;
+				delete_file.footer_size = file.footer_size;
+				delete_file.encryption_key = file.encryption_key;
+				delete_file.begin_snapshot = file.begin_snapshot;
+				result.push_back(std::move(delete_file));
 			}
-			DuckLakeDeleteFileInfo delete_file;
-			delete_file.id = DataFileIndex(commit_state.commit_snapshot.next_file_id++);
-			delete_file.table_id = table_id;
-			delete_file.data_file_id = file.data_file_id;
-			delete_file.path = file.file_name;
-			delete_file.delete_count = file.delete_count;
-			delete_file.file_size_bytes = file.file_size_bytes;
-			delete_file.footer_size = file.footer_size;
-			delete_file.encryption_key = file.encryption_key;
-			result.push_back(std::move(delete_file));
 		}
 	}
 	return result;
@@ -1564,7 +1577,7 @@ string DuckLakeTransaction::CommitChanges(DuckLakeCommitState &commit_state,
 	// write new tables
 	vector<DuckLakeTableInfo> new_tables_result;
 	vector<DuckLakeTableInfo> new_inlined_data_tables_result;
-	if (!new_tables.empty() || !altered_tables_same_schema.empty()) {
+	if (!new_tables.empty()) {
 		auto result = GetNewTables(commit_state, transaction_changes);
 		batch_queries += metadata_manager->WriteNewTables(commit_snapshot, result.new_tables, new_schemas_result);
 		batch_queries += metadata_manager->WriteNewPartitionKeys(commit_snapshot, result.new_partition_keys);
@@ -1636,7 +1649,9 @@ string DuckLakeTransaction::CommitChanges(DuckLakeCommitState &commit_state,
 	// Tracking for tables that had schema changes
 	set<TableIndex> tables_with_schema_changes;
 	for (auto &table_id : transaction_changes.altered_tables) {
-		if (!table_id.IsTransactionLocal()) {
+		if (!table_id.IsTransactionLocal() &&
+		    transaction_changes.altered_tables_with_schema_version_changes.find(table_id) !=
+		        transaction_changes.altered_tables_with_schema_version_changes.end()) {
 			tables_with_schema_changes.insert(table_id);
 		}
 	}
@@ -1665,38 +1680,35 @@ CompactionInformation DuckLakeTransaction::GetCompactionChanges(DuckLakeSnapshot
 			case CompactionType::REWRITE_DELETES:
 				new_file.begin_snapshot = compaction.source_files[0].delete_files.back().begin_snapshot;
 				break;
-			case CompactionType::MERGE_ADJACENT_TABLES:
-				new_file.begin_snapshot = compaction.source_files[0].file.begin_snapshot;
+			case CompactionType::MERGE_ADJACENT_TABLES: {
+				// For MERGE_ADJACENT_TABLES, track the max partial snapshot across all source files
+				optional_idx merged_max_partial_snapshot;
+				idx_t first_begin_snapshot = compaction.source_files[0].file.begin_snapshot;
+				for (auto &compacted_file : compaction.source_files) {
+					idx_t file_max_snapshot = compacted_file.max_partial_file_snapshot.IsValid()
+					                              ? compacted_file.max_partial_file_snapshot.GetIndex()
+					                              : compacted_file.file.begin_snapshot;
+					if (!merged_max_partial_snapshot.IsValid() ||
+					    file_max_snapshot > merged_max_partial_snapshot.GetIndex()) {
+						merged_max_partial_snapshot = file_max_snapshot;
+					}
+				}
+				// Use the first source file's begin_snapshot for proper time travel support
+				new_file.begin_snapshot = first_begin_snapshot;
+				if (compaction.source_files.size() > 1) {
+					new_file.max_partial_file_snapshot = merged_max_partial_snapshot;
+				}
 				break;
+			}
 			default:
 				throw InternalException("DuckLakeTransaction::GetCompactionChanges Compaction type is invalid");
 			}
 
 			idx_t row_id_limit = 0;
 			for (auto &compacted_file : compaction.source_files) {
-				idx_t previous_row_limit = row_id_limit;
 				row_id_limit += compacted_file.file.row_count;
 				if (!compacted_file.delete_files.empty()) {
 					row_id_limit -= compacted_file.delete_files.back().row_count;
-				}
-				// For REWRITE_DELETES, do NOT carry forward partial_file_info from source files.
-				// The rewritten file's begin_snapshot is set to the delete snapshot, so time travel
-				// to earlier snapshots will read from the original file (which retains its partial_file_info).
-				if (type == CompactionType::MERGE_ADJACENT_TABLES) {
-					if (!compacted_file.partial_files.empty()) {
-						// we have existing partial file info
-						// we need to shift the row counts by the rows we have already written
-						for (auto &partial_info : compacted_file.partial_files) {
-							auto new_info = partial_info;
-							new_info.max_row_count += previous_row_limit;
-							new_file.partial_file_info.push_back(new_info);
-						}
-					} else if (compaction.source_files.size() > 1) {
-						DuckLakePartialFileInfo partial_info;
-						partial_info.snapshot_id = compacted_file.file.begin_snapshot;
-						partial_info.max_row_count = row_id_limit;
-						new_file.partial_file_info.push_back(partial_info);
-					}
 				}
 				DuckLakeCompactedFileInfo file_info;
 				file_info.path = compacted_file.file.data.path;
@@ -1796,60 +1808,6 @@ void DuckLakeTransaction::FlushChanges() {
 			}
 			connection->Commit();
 			catalog_version = commit_snapshot.schema_version;
-
-			// If there were non-schema-altering changes but schema_version didn't change,
-			// update the cached schema with the new data (e.g., sort info, comments)
-			if (!altered_tables_same_schema.empty() && !SchemaChangesMade()) {
-				for (auto &schema_entry : altered_tables_same_schema) {
-					for (auto &entry : schema_entry.second->GetEntries()) {
-						if (entry.second->type == CatalogType::TABLE_ENTRY) {
-							auto &table = entry.second->Cast<DuckLakeTableEntry>();
-							auto table_id = table.GetTableId();
-							auto local_change = table.GetLocalChange();
-
-							switch (local_change.type) {
-							case LocalChangeType::SET_SORT_KEY: {
-								auto sort_data = table.GetSortData();
-								if (sort_data) {
-									// Copy the sort data to update the cache
-									auto sort_copy = make_uniq<DuckLakeSort>(*sort_data);
-									ducklake_catalog.UpdateSortDataInCache(commit_snapshot.schema_version, table_id,
-									                                       std::move(sort_copy));
-								} else {
-									// Sort data was cleared
-									ducklake_catalog.UpdateSortDataInCache(commit_snapshot.schema_version, table_id,
-									                                       nullptr);
-								}
-								break;
-							}
-							case LocalChangeType::SET_COMMENT: {
-								ducklake_catalog.UpdateTableCommentInCache(commit_snapshot.schema_version, table_id,
-								                                           table.comment);
-								break;
-							}
-							case LocalChangeType::SET_COLUMN_COMMENT: {
-								auto field_index = local_change.field_index;
-								auto &col = table.GetColumnByFieldId(field_index);
-								ducklake_catalog.UpdateColumnCommentInCache(commit_snapshot.schema_version, table_id,
-								                                            field_index, col.Comment());
-								break;
-							}
-							default:
-								break;
-							}
-						} else if (entry.second->type == CatalogType::VIEW_ENTRY) {
-							auto &view = entry.second->Cast<DuckLakeViewEntry>();
-							auto view_id = view.GetViewId();
-							auto local_change = view.GetLocalChange();
-
-							if (local_change.type == LocalChangeType::SET_COMMENT) {
-								ducklake_catalog.UpdateViewCommentInCache(commit_snapshot.schema_version, view_id,
-								                                          view.comment);
-							}
-						}
-					}
-				}
-			}
 
 			// finished writing
 			break;
@@ -2054,10 +2012,10 @@ void DuckLakeTransaction::DropTransactionLocalFile(TableIndex table_id, const st
 	for (idx_t i = 0; i < table_files.size(); i++) {
 		auto &file = table_files[i];
 		if (file.file_name == path) {
-			if (file.delete_file) {
-				fs.RemoveFile(file.delete_file->file_name);
-				file.delete_file.reset();
+			for (auto &del_file : file.delete_files) {
+				fs.RemoveFile(del_file.file_name);
 			}
+			file.delete_files.clear();
 			// found the file - delete it from the table list and from disk
 			table_files.erase_at(i);
 			fs.RemoveFile(path);
@@ -2075,6 +2033,7 @@ void DuckLakeTransaction::AppendFiles(TableIndex table_id, vector<DuckLakeDataFi
 	if (files.empty()) {
 		return;
 	}
+	lock_guard<mutex> guard(table_data_changes_lock);
 	auto &table_changes = table_data_changes[table_id];
 	for (auto &file : files) {
 		table_changes.new_data_files.push_back(std::move(file));
@@ -2109,6 +2068,7 @@ void DuckLakeTransaction::AddNewInlinedDeletes(TableIndex table_id, const string
 	if (new_deletes.empty()) {
 		return;
 	}
+	lock_guard<mutex> guard(table_data_changes_lock);
 	auto &table_changes = table_data_changes[table_id];
 	auto &table_deletes = table_changes.new_inlined_data_deletes;
 	auto entry = table_deletes.find(table_name);
@@ -2182,6 +2142,7 @@ void DuckLakeTransaction::AddDeletes(TableIndex table_id, vector<DuckLakeDeleteF
 	if (files.empty()) {
 		return;
 	}
+	lock_guard<mutex> guard(table_data_changes_lock);
 	auto &table_changes = table_data_changes[table_id];
 	auto &table_delete_map = table_changes.new_delete_files;
 	for (auto &file : files) {
@@ -2189,16 +2150,23 @@ void DuckLakeTransaction::AddDeletes(TableIndex table_id, vector<DuckLakeDeleteF
 		if (data_file_path.empty()) {
 			throw InternalException("Data file path needs to be set in delete");
 		}
-		auto existing_entry = table_delete_map.find(data_file_path);
-		if (existing_entry != table_delete_map.end()) {
-			auto context_ref = context.lock();
-			auto &fs = FileSystem::GetFileSystem(*context_ref);
-			// we have a transaction-local delete for this file already - delete it
-			fs.RemoveFile(existing_entry->second.file_name);
-			// write the new file
-			existing_entry->second = std::move(file);
+		if (file.source == DeleteFileSource::FLUSH) {
+			// If we have a snapshot, this is a flushed delete file, we add it to the rooster
+			table_delete_map[data_file_path].push_back(std::move(file));
 		} else {
-			table_delete_map.insert(make_pair(data_file_path, std::move(file)));
+			// If not is a regular deletion
+			auto existing_entry = table_delete_map.find(data_file_path);
+			if (existing_entry != table_delete_map.end() && !existing_entry->second.empty()) {
+				// If a file already exists we remove it
+				auto context_ref = context.lock();
+				auto &fs = FileSystem::GetFileSystem(*context_ref);
+				for (auto &old_file : existing_entry->second) {
+					fs.RemoveFile(old_file.file_name);
+				}
+				existing_entry->second.clear();
+			}
+			// We add the new file in
+			table_delete_map[data_file_path].push_back(std::move(file));
 		}
 	}
 }
@@ -2224,10 +2192,10 @@ void DuckLakeTransaction::GetLocalDeleteForFile(TableIndex table_id, const strin
 	}
 	auto &table_changes = entry->second;
 	auto file_entry = table_changes.new_delete_files.find(path);
-	if (file_entry == table_changes.new_delete_files.end()) {
+	if (file_entry == table_changes.new_delete_files.end() || file_entry->second.empty()) {
 		return;
 	}
-	auto &delete_file = file_entry->second;
+	auto &delete_file = file_entry->second.back();
 	result.path = delete_file.file_name;
 	result.file_size_bytes = delete_file.file_size_bytes;
 	result.footer_size = delete_file.footer_size;
@@ -2244,13 +2212,18 @@ void DuckLakeTransaction::TransactionLocalDelete(TableIndex table_id, const stri
 	auto &table_changes = entry->second;
 	for (auto &file : table_changes.new_data_files) {
 		if (file.file_name == data_file_path) {
-			if (file.delete_file) {
-				// this file already has a transaction-local delete file - delete it
+			if (!file.delete_files.empty()) {
 				auto context_ref = context.lock();
 				auto &fs = FileSystem::GetFileSystem(*context_ref);
-				fs.RemoveFile(file.delete_file->file_name);
+				vector<string> files_to_delete;
+				files_to_delete.reserve(file.delete_files.size());
+				for (auto &old_file : file.delete_files) {
+					files_to_delete.push_back(old_file.file_name);
+				}
+				fs.RemoveFiles(files_to_delete);
+				file.delete_files.clear();
 			}
-			file.delete_file = make_uniq<DuckLakeDeleteFile>(std::move(delete_file));
+			file.delete_files.push_back(std::move(delete_file));
 			return;
 		}
 	}
@@ -2434,10 +2407,9 @@ void DuckLakeTransaction::AlterEntry(CatalogEntry &entry, unique_ptr<CatalogEntr
 
 void DuckLakeTransaction::AlterEntryInternal(DuckLakeTableEntry &table, unique_ptr<CatalogEntry> new_entry) {
 	auto &new_table = new_entry->Cast<DuckLakeTableEntry>();
-	auto change_type = new_table.GetLocalChange().type;
-	auto &entries = GetOrCreateTransactionLocalEntriesAlter(table, change_type);
+	auto &entries = GetOrCreateTransactionLocalEntries(table);
 	entries.CreateEntry(std::move(new_entry));
-	switch (change_type) {
+	switch (new_table.GetLocalChange().type) {
 	case LocalChangeType::RENAMED: {
 		// rename - take care of the old table
 		if (table.IsTransactionLocal()) {
@@ -2469,10 +2441,9 @@ void DuckLakeTransaction::AlterEntryInternal(DuckLakeTableEntry &table, unique_p
 
 void DuckLakeTransaction::AlterEntryInternal(DuckLakeViewEntry &view, unique_ptr<CatalogEntry> new_entry) {
 	auto &new_view = new_entry->Cast<DuckLakeViewEntry>();
-	auto change_type = new_view.GetLocalChange().type;
-	auto &entries = GetOrCreateTransactionLocalEntriesAlter(view, change_type);
+	auto &entries = GetOrCreateTransactionLocalEntries(view);
 	entries.CreateEntry(std::move(new_entry));
-	switch (change_type) {
+	switch (new_view.GetLocalChange().type) {
 	case LocalChangeType::RENAMED: {
 		// rename - take care of the old table
 		if (view.IsTransactionLocal()) {
@@ -2525,67 +2496,6 @@ DuckLakeCatalogSet &DuckLakeTransaction::GetOrCreateTransactionLocalEntries(Cata
 	}
 }
 
-DuckLakeCatalogSet &DuckLakeTransaction::GetOrCreateTransactionLocalEntriesAlter(CatalogEntry &entry,
-                                                                                 LocalChangeType change_type) {
-	auto catalog_type = entry.type;
-	if (catalog_type == CatalogType::SCHEMA_ENTRY) {
-		// Schema entries always use new_schemas
-		if (!new_schemas) {
-			new_schemas = make_uniq<DuckLakeCatalogSet>();
-		}
-		return *new_schemas;
-	}
-
-	auto &schema_name = entry.ParentSchema().name;
-
-	// For schema-altering changes, always use new_tables
-	if (IsSchemaAlteringChange(change_type)) {
-		// If there's an existing entry in altered_tables_same_schema for this table,
-		// move it to new_tables first so the chain is maintained
-		auto altered_entry = altered_tables_same_schema.find(schema_name);
-		if (altered_entry != altered_tables_same_schema.end()) {
-			auto existing = altered_entry->second->DropEntry(entry.name);
-			if (existing) {
-				// Move to new_tables
-				auto entry_it = new_tables.find(schema_name);
-				if (entry_it == new_tables.end()) {
-					auto new_set = make_uniq<DuckLakeCatalogSet>();
-					entry_it = new_tables.insert(make_pair(schema_name, std::move(new_set))).first;
-				}
-				entry_it->second->CreateEntry(std::move(existing));
-			}
-			// Clean up empty schema entry
-			if (altered_entry->second->GetEntries().empty()) {
-				altered_tables_same_schema.erase(altered_entry);
-			}
-		}
-
-		auto entry_it = new_tables.find(schema_name);
-		if (entry_it == new_tables.end()) {
-			auto new_set = make_uniq<DuckLakeCatalogSet>();
-			entry_it = new_tables.insert(make_pair(schema_name, std::move(new_set))).first;
-		}
-		return *entry_it->second;
-	}
-
-	// For non-schema-altering changes:
-	// 1. Check if entry already exists in new_tables (schema-altering change was already made)
-	auto new_tables_entry = new_tables.find(schema_name);
-	if (new_tables_entry != new_tables.end()) {
-		if (new_tables_entry->second->GetEntry(entry.name)) {
-			return *new_tables_entry->second;
-		}
-	}
-
-	// 2. Use altered_tables_same_schema
-	auto altered_entry = altered_tables_same_schema.find(schema_name);
-	if (altered_entry == altered_tables_same_schema.end()) {
-		auto new_set = make_uniq<DuckLakeCatalogSet>();
-		altered_entry = altered_tables_same_schema.insert(make_pair(schema_name, std::move(new_set))).first;
-	}
-	return *altered_entry->second;
-}
-
 optional_ptr<DuckLakeCatalogSet> DuckLakeTransaction::GetTransactionLocalSchemas() {
 	return new_schemas;
 }
@@ -2605,17 +2515,11 @@ optional_ptr<DuckLakeCatalogSet> DuckLakeTransaction::GetTransactionLocalEntries
 	switch (catalog_type) {
 	case CatalogType::TABLE_ENTRY:
 	case CatalogType::VIEW_ENTRY: {
-		// Check new_tables first
 		auto entry = new_tables.find(schema_name);
-		if (entry != new_tables.end()) {
-			return entry->second;
+		if (entry == new_tables.end()) {
+			return nullptr;
 		}
-		// Then check altered_tables_same_schema
-		auto altered_entry = altered_tables_same_schema.find(schema_name);
-		if (altered_entry != altered_tables_same_schema.end()) {
-			return altered_entry->second;
-		}
-		return nullptr;
+		return entry->second;
 	}
 	case CatalogType::MACRO_ENTRY:
 	case CatalogType::TABLE_MACRO_ENTRY:
@@ -2641,13 +2545,6 @@ optional_ptr<CatalogEntry> DuckLakeTransaction::GetLocalEntryById(SchemaIndex sc
 
 optional_ptr<CatalogEntry> DuckLakeTransaction::GetLocalEntryById(TableIndex table_id) {
 	for (auto &schema_entry : new_tables) {
-		auto entry = schema_entry.second->GetEntryById(table_id);
-		if (entry) {
-			return entry;
-		}
-	}
-	// Also check altered_tables_same_schema
-	for (auto &schema_entry : altered_tables_same_schema) {
 		auto entry = schema_entry.second->GetEntryById(table_id);
 		if (entry) {
 			return entry;

@@ -37,7 +37,8 @@
     "Adding indexes or constraints is not supported in DuckLake",
     "Only rename on top-level struct fields is supported currently",
     "Changing Secret Manager settings after the secret manager is used is not allowed!",
-    "Unsupported type \"TIME_NS\" in Parquet writer"
+    "Unsupported type \"TIME_NS\" in Parquet writer",
+    "DuckLakeScan not implemented"
   ],
   "skip_tests": [
     {
@@ -565,6 +566,18 @@
       "reason": "Assumes ordering of rowids that is not guaranteed in DuckLake",
       "paths": [
           "test/sql/projection/test_row_id_expression.test"
+      ]
+    },
+    {
+      "reason": "PARTITIONED BY is not supported for tables in a ducklake catalog",
+      "paths": [
+          "test/sql/create/create_table_extra_options.test"
+      ]
+    },
+    {
+      "reason": "Different results",
+      "paths": [
+          "test/sql/attach/show_schemas.test"
       ]
     }
   ]

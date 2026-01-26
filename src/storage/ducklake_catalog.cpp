@@ -1,7 +1,6 @@
 #include "storage/ducklake_catalog.hpp"
 
 #include "common/ducklake_types.hpp"
-#include "storage/ducklake_sort_data.hpp"
 #include "duckdb/catalog/catalog_entry/macro_catalog_entry.hpp"
 #include "duckdb/catalog/catalog_entry/schema_catalog_entry.hpp"
 #include "duckdb/catalog/catalog_entry/table_catalog_entry.hpp"
@@ -172,9 +171,9 @@ optional_ptr<CatalogEntry> DuckLakeCatalog::GetEntryById(DuckLakeTransaction &tr
 	return schema.GetEntryById(table_id);
 }
 
-idx_t DuckLakeCatalog::GetSnapshotForSchema(idx_t schema_id, DuckLakeTransaction &transaction) {
+idx_t DuckLakeCatalog::GetBeginSnapshotForTable(TableIndex table_id, DuckLakeTransaction &transaction) {
 	auto &metadata_manager = transaction.GetMetadataManager();
-	return metadata_manager.GetCatalogIdForSchema(schema_id);
+	return metadata_manager.GetBeginSnapshotForTable(table_id);
 }
 
 DuckLakeCatalogSet &DuckLakeCatalog::GetSchemaForSnapshot(DuckLakeTransaction &transaction, DuckLakeSnapshot snapshot) {
@@ -189,66 +188,6 @@ DuckLakeCatalogSet &DuckLakeCatalog::GetSchemaForSnapshot(DuckLakeTransaction &t
 	auto &result = *schema;
 	schemas.insert(make_pair(snapshot.schema_version, std::move(schema)));
 	return result;
-}
-
-void DuckLakeCatalog::UpdateSortDataInCache(idx_t schema_version, TableIndex table_id,
-                                            unique_ptr<DuckLakeSort> sort_data) {
-	lock_guard<mutex> guard(schemas_lock);
-	auto entry = schemas.find(schema_version);
-	if (entry == schemas.end()) {
-		// Schema not cached yet, nothing to update
-		return;
-	}
-	auto table_entry = entry->second->GetEntryById(table_id);
-	if (!table_entry || table_entry->type != CatalogType::TABLE_ENTRY) {
-		return;
-	}
-	auto &table = table_entry->Cast<DuckLakeTableEntry>();
-	table.SetSortData(std::move(sort_data));
-}
-
-void DuckLakeCatalog::UpdateTableCommentInCache(idx_t schema_version, TableIndex table_id, const Value &new_comment) {
-	lock_guard<mutex> guard(schemas_lock);
-	auto entry = schemas.find(schema_version);
-	if (entry == schemas.end()) {
-		// Schema not cached yet, nothing to update
-		return;
-	}
-	auto table_entry = entry->second->GetEntryById(table_id);
-	if (!table_entry || table_entry->type != CatalogType::TABLE_ENTRY) {
-		return;
-	}
-	table_entry->comment = new_comment;
-}
-
-void DuckLakeCatalog::UpdateColumnCommentInCache(idx_t schema_version, TableIndex table_id, FieldIndex field_index,
-                                                 const Value &new_comment) {
-	lock_guard<mutex> guard(schemas_lock);
-	auto entry = schemas.find(schema_version);
-	if (entry == schemas.end()) {
-		// Schema not cached yet, nothing to update
-		return;
-	}
-	auto table_entry = entry->second->GetEntryById(table_id);
-	if (!table_entry || table_entry->type != CatalogType::TABLE_ENTRY) {
-		return;
-	}
-	auto &table = table_entry->Cast<DuckLakeTableEntry>();
-	table.SetColumnComment(field_index, new_comment);
-}
-
-void DuckLakeCatalog::UpdateViewCommentInCache(idx_t schema_version, TableIndex view_id, const Value &new_comment) {
-	lock_guard<mutex> guard(schemas_lock);
-	auto entry = schemas.find(schema_version);
-	if (entry == schemas.end()) {
-		// Schema not cached yet, nothing to update
-		return;
-	}
-	auto view_entry = entry->second->GetEntryById(view_id);
-	if (!view_entry || view_entry->type != CatalogType::VIEW_ENTRY) {
-		return;
-	}
-	view_entry->comment = new_comment;
 }
 
 static unique_ptr<DuckLakeFieldId> TransformColumnType(DuckLakeColumnInfo &col) {

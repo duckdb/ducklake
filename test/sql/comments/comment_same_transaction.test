@@ -15,7 +15,7 @@ statement ok
 CREATE TABLE ducklake.test(a INTEGER, b VARCHAR);
 
 query I
-SELECT max(schema_version) FROM ducklake.snapshots()
+SELECT max(schema_version) FROM __ducklake_metadata_ducklake.ducklake_schema_versions where table_id = 1
 ----
 1
 
@@ -37,7 +37,7 @@ COMMIT
 
 # Should increment schema_version once (for ADD COLUMN)
 query I
-SELECT max(schema_version) FROM ducklake.snapshots()
+SELECT max(schema_version) FROM __ducklake_metadata_ducklake.ducklake_schema_versions where table_id = 1
 ----
 2
 
@@ -70,14 +70,22 @@ COMMENT ON VIEW ducklake.test_view IS 'new view comment'
 statement ok
 COMMIT
 
-# Should increment schema_version once (for CREATE VIEW)
 query I
-SELECT max(schema_version) FROM ducklake.snapshots()
+SELECT max(schema_version) FROM __ducklake_metadata_ducklake.ducklake_schema_versions where table_id = 1
 ----
-3
+2
 
 # Verify view comment was committed
 query I
 SELECT comment FROM duckdb_views() WHERE view_name = 'test_view'
 ----
 new view comment
+
+
+statement ok
+ALTER TABLE ducklake.test ADD COLUMN d BIGINT
+
+query I
+SELECT max(schema_version) FROM __ducklake_metadata_ducklake.ducklake_schema_versions where table_id = 1
+----
+4

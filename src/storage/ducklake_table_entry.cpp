@@ -321,15 +321,6 @@ void DuckLakeTableEntry::SetSortData(unique_ptr<DuckLakeSort> sort_data_p) {
 	sort_data = std::move(sort_data_p);
 }
 
-void DuckLakeTableEntry::SetColumnComment(FieldIndex field_index, const Value &new_comment) {
-	auto field_id = GetFieldId(field_index);
-	if (!field_id) {
-		return;
-	}
-	auto &col = columns.GetColumnMutable(field_id->Name());
-	col.SetComment(new_comment);
-}
-
 const string &DuckLakeTableEntry::DataPath() const {
 	return data_path;
 }
@@ -426,6 +417,9 @@ DuckLakePartitionField GetPartitionField(DuckLakeTableEntry &table, ParsedExpres
 		    expr.ToString());
 	}
 	DuckLakePartitionField field;
+	if (!table.ColumnExists(column_name)) {
+		throw CatalogException("Unexpected partition key - column \"%s\" does not exist", column_name);
+	}
 	auto &col = table.GetColumn(column_name);
 	PhysicalIndex column_index(col.StorageOid());
 	auto &field_id = table.GetFieldData().GetByRootIndex(column_index);

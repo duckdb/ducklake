@@ -21,7 +21,7 @@ SELECT max(snapshot_id) FROM ducklake.snapshots()
 1
 
 query I
-SELECT max(schema_version) FROM ducklake.snapshots()
+SELECT max(schema_version) FROM __ducklake_metadata_ducklake.ducklake_schema_versions where table_id = 1
 ----
 1
 
@@ -79,7 +79,7 @@ SELECT max(snapshot_id) FROM ducklake.snapshots()
 
 # Verify schema_version unchanged
 query I
-SELECT max(schema_version) FROM ducklake.snapshots()
+SELECT max(schema_version) FROM __ducklake_metadata_ducklake.ducklake_schema_versions where table_id = 1
 ----
 1
 
@@ -204,6 +204,6 @@ c	DESC	NULLS_LAST
 
 # schema_version should have incremented once for ADD COLUMN
 query I
-SELECT max(schema_version) FROM ducklake.snapshots()
+SELECT max(schema_version) FROM __ducklake_metadata_ducklake.ducklake_schema_versions where table_id = 1
 ----
 2

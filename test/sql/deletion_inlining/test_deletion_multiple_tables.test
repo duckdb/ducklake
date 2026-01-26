@@ -1,0 +1,74 @@
+# name: test/sql/deletion_inlining/test_deletion_multiple_tables.test
+# description: test ducklake flushing deletion on inserted inline, but we have multiple deletions over many snapshots in multiple tables
+# group: [deletion_inlining]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+
+test-env DATA_PATH __TEST_DIR__
+
+statement ok
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/test_deletion_multiple_tables',DATA_INLINING_ROW_LIMIT 10)
+
+statement ok
+use ducklake
+
+statement ok
+create table t1 (a integer)
+
+statement ok
+create table t2 (a integer)
+
+
+statement ok
+insert into t1 values (1), (2), (3), (1), (2), (3), (5), (6);
+
+statement ok
+insert into t2 values (1), (2), (3), (1), (2), (3), (5), (6);
+
+# Let's generate deletes over multiple snapshots
+
+statement ok
+delete from t1 where a = 2;
+
+statement ok
+delete from t1 where a = 1;
+
+statement ok
+delete from t1 where a = 5;
+
+statement ok
+delete from t2 where a = 2;
+
+statement ok
+delete from t2 where a = 1;
+
+statement ok
+delete from t2 where a = 5;
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake');
+
+# We get a single delete file per table
+query IIII
+SELECT  table_id, begin_snapshot, end_snapshot, delete_count FROM __ducklake_metadata_ducklake.ducklake_delete_file ORDER BY table_id
+----
+1	5	NULL	5
+2	8	NULL	5
+
+query I
+FROM t1;
+----
+3
+3
+6
+
+query I
+FROM t2;
+----
+3
+3
+6

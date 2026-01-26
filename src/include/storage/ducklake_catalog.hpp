@@ -24,7 +24,6 @@ struct DuckLakeFileListEntry;
 struct DuckLakeConfigOption;
 struct DeleteFileMap;
 class LogicalGet;
-struct DuckLakeSort;
 
 class DuckLakeCatalog : public Catalog {
 public:
@@ -160,21 +159,12 @@ public:
 
 	optional_ptr<const DuckLakeNameMap> TryGetMappingById(DuckLakeTransaction &transaction, MappingIndex mapping_id);
 	MappingIndex TryGetCompatibleNameMap(DuckLakeTransaction &transaction, const DuckLakeNameMap &name_map);
-	idx_t GetSnapshotForSchema(idx_t schema_id, DuckLakeTransaction &transaction);
+	idx_t GetBeginSnapshotForTable(TableIndex table_id, DuckLakeTransaction &transaction);
 
 	static unique_ptr<DuckLakeStats> ConstructStatsMap(vector<DuckLakeGlobalStatsInfo> &global_stats,
 	                                                   DuckLakeCatalogSet &schema);
 	//! Return the schema for the given snapshot - loading it if it is not yet loaded
 	DuckLakeCatalogSet &GetSchemaForSnapshot(DuckLakeTransaction &transaction, DuckLakeSnapshot snapshot);
-	//! Update the sort data for a table in the cached schema (used when SET_SORT_KEY commits without schema change)
-	void UpdateSortDataInCache(idx_t schema_version, TableIndex table_id, unique_ptr<DuckLakeSort> sort_data);
-	//! Update the table comment in the cached schema (used when SET_COMMENT commits without schema change)
-	void UpdateTableCommentInCache(idx_t schema_version, TableIndex table_id, const Value &new_comment);
-	//! Update a column comment in the cached schema (used when SET_COLUMN_COMMENT commits without schema change)
-	void UpdateColumnCommentInCache(idx_t schema_version, TableIndex table_id, FieldIndex field_index,
-	                                const Value &new_comment);
-	//! Update a view comment in the cached schema (used when SET_COMMENT on view commits without schema change)
-	void UpdateViewCommentInCache(idx_t schema_version, TableIndex view_id, const Value &new_comment);
 
 private:
 	void DropSchema(ClientContext &context, DropInfo &info) override;

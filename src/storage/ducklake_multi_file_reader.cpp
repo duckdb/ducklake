@@ -27,6 +27,20 @@
 
 namespace duckdb {
 
+// recursively normalize LIST child names from legacy formats blame legacy Avro/Parquet formats
+static void NormalizeListChildNames(vector<MultiFileColumnDefinition> &columns, bool parent_is_list = false) {
+	for (auto &col : columns) {
+		// basically array, element becomes list
+		if (parent_is_list && (col.name == "array" || col.name == "element")) {
+			col.name = "list";
+		}
+		if (!col.children.empty()) {
+			bool is_list = col.type.id() == LogicalTypeId::LIST;
+			NormalizeListChildNames(col.children, is_list);
+		}
+	}
+}
+
 DuckLakeMultiFileReader::DuckLakeMultiFileReader(DuckLakeFunctionInfo &read_info) : read_info(read_info) {
 	row_id_column = make_uniq<MultiFileColumnDefinition>("_ducklake_internal_row_id", LogicalType::BIGINT);
 	row_id_column->identifier = Value::INTEGER(MultiFileReader::ROW_ID_FIELD_ID);
@@ -137,6 +151,8 @@ ReaderInitializeType DuckLakeMultiFileReader::InitializeReader(MultiFileReaderDa
 			if (file_entry.max_row_count.IsValid()) {
 				delete_filter->SetMaxRowCount(file_entry.max_row_count.GetIndex());
 			}
+			// set the snapshot id so we know what to skip from deletion files
+			delete_filter->SetSnapshotFilter(read_info.snapshot.snapshot_id);
 			if (delete_map) {
 				delete_map->AddDeleteData(reader.GetFileName(), delete_filter->delete_data);
 			}
@@ -153,18 +169,19 @@ ReaderInitializeType DuckLakeMultiFileReader::InitializeReader(MultiFileReaderDa
 	}
 	auto result = MultiFileReader::InitializeReader(reader_data, bind_data, global_columns, global_column_ids,
 	                                                table_filters, context, gstate);
-	if (file_entry.snapshot_filter.IsValid()) {
+	// Handle snapshot filters for files with multiple snapshots (partial_max set)
+	if (file_entry.snapshot_filter_max.IsValid() || file_entry.snapshot_filter_min.IsValid()) {
 		// we have a snapshot filter - add it to the filter list
 		// find the column we need to filter on
 		auto &reader = *reader_data.reader;
 		optional_idx snapshot_col;
-		auto snapshot_filter_constant = Value::UBIGINT(file_entry.snapshot_filter.GetIndex());
+		LogicalType snapshot_col_type;
 		for (idx_t col_idx = 0; col_idx < reader.columns.size(); col_idx++) {
 			auto &col = reader.columns[col_idx];
 			if (col.identifier.type() == LogicalTypeId::INTEGER &&
 			    IntegerValue::Get(col.identifier) == LAST_UPDATED_SEQUENCE_NUMBER_ID) {
 				snapshot_col = col_idx;
-				snapshot_filter_constant = snapshot_filter_constant.DefaultCastAs(col.type);
+				snapshot_col_type = col.type;
 				break;
 			}
 		}
@@ -189,9 +206,24 @@ ReaderInitializeType DuckLakeMultiFileReader::InitializeReader(MultiFileReaderDa
 			reader.filters = make_uniq<TableFilterSet>();
 		}
 		ColumnIndex snapshot_col_idx(snapshot_local_id.GetIndex());
-		auto snapshot_filter =
-		    make_uniq<ConstantFilter>(ExpressionType::COMPARE_LESSTHANOREQUALTO, std::move(snapshot_filter_constant));
-		reader.filters->PushFilter(snapshot_col_idx, std::move(snapshot_filter));
+
+		// Add _ducklake_internal_snapshot_id <= snapshot_filter
+		if (file_entry.snapshot_filter_max.IsValid()) {
+			auto snapshot_filter_constant =
+			    Value::UBIGINT(file_entry.snapshot_filter_max.GetIndex()).DefaultCastAs(snapshot_col_type);
+			auto snapshot_filter = make_uniq<ConstantFilter>(ExpressionType::COMPARE_LESSTHANOREQUALTO,
+			                                                 std::move(snapshot_filter_constant));
+			reader.filters->PushFilter(snapshot_col_idx, std::move(snapshot_filter));
+		}
+
+		// Add _ducklake_internal_snapshot_id >= snapshot_filter_min
+		if (file_entry.snapshot_filter_min.IsValid()) {
+			auto snapshot_filter_min_constant =
+			    Value::UBIGINT(file_entry.snapshot_filter_min.GetIndex()).DefaultCastAs(snapshot_col_type);
+			auto snapshot_filter_min = make_uniq<ConstantFilter>(ExpressionType::COMPARE_GREATERTHANOREQUALTO,
+			                                                     std::move(snapshot_filter_min_constant));
+			reader.filters->PushFilter(snapshot_col_idx, std::move(snapshot_filter_min));
+		}
 	}
 	return result;
 }
@@ -224,7 +256,7 @@ shared_ptr<BaseFileReader> DuckLakeMultiFileReader::TryCreateInlinedDataReader(c
 		// read the table at the specified version
 		auto transaction = read_info.GetTransaction();
 		auto &catalog = transaction->GetCatalog();
-		DuckLakeSnapshot snapshot(catalog.GetSnapshotForSchema(schema_version.GetIndex(), *transaction),
+		DuckLakeSnapshot snapshot(catalog.GetBeginSnapshotForTable(read_info.table.GetTableId(), *transaction),
 		                          schema_version.GetIndex(), 0, 0);
 		auto entry = catalog.GetEntryById(*transaction, snapshot, read_info.table.GetTableId());
 		if (!entry) {
@@ -266,7 +298,8 @@ shared_ptr<BaseFileReader> DuckLakeMultiFileReader::CreateReader(ClientContext &
 
 vector<MultiFileColumnDefinition> MapColumns(MultiFileReaderData &reader_data,
                                              const vector<MultiFileColumnDefinition> &global_map,
-                                             const vector<unique_ptr<DuckLakeNameMapEntry>> &column_maps) {
+                                             const vector<unique_ptr<DuckLakeNameMapEntry>> &column_maps,
+                                             bool parent_is_list = false) {
 	// create a map of field id -> column map index for the mapping at this level
 	unordered_map<idx_t, idx_t> field_id_map;
 	for (idx_t column_map_idx = 0; column_map_idx < column_maps.size(); column_map_idx++) {
@@ -308,13 +341,16 @@ vector<MultiFileColumnDefinition> MapColumns(MultiFileReaderData &reader_data,
 			continue;
 		}
 
-		result_col.identifier = Value(column_map->source_name);
-		if (column_map->source_name == "array") {
-			result_col.name = "list";
+		auto source_name = column_map->source_name;
+		// normalize array element to list, due to old parquet formats
+		if (parent_is_list && (source_name == "array" || source_name == "element")) {
+			source_name = "list";
 		}
+		result_col.identifier = Value(source_name);
 		// recursively process any child nodes
 		if (!column_map->child_entries.empty()) {
-			result_col.children = MapColumns(reader_data, result_col.children, column_map->child_entries);
+			bool is_list = result_col.type.id() == LogicalTypeId::LIST;
+			result_col.children = MapColumns(reader_data, result_col.children, column_map->child_entries, is_list);
 		}
 	}
 	return result;
@@ -330,6 +366,8 @@ ReaderInitializeType DuckLakeMultiFileReader::CreateMapping(
     ClientContext &context, MultiFileReaderData &reader_data, const vector<MultiFileColumnDefinition> &global_columns,
     const vector<ColumnIndex> &global_column_ids, optional_ptr<TableFilterSet> filters, MultiFileList &multi_file_list,
     const MultiFileReaderBindData &bind_data, const virtual_column_map_t &virtual_columns) {
+	NormalizeListChildNames(reader_data.reader->columns);
+
 	if (reader_data.reader->file.extended_info) {
 		auto &file_options = reader_data.reader->file.extended_info->options;
 		auto entry = file_options.find("mapping_id");

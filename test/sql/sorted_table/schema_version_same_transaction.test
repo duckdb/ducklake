@@ -15,7 +15,7 @@ statement ok
 CREATE TABLE ducklake.test(a INTEGER, b VARCHAR);
 
 query I
-SELECT max(schema_version) FROM ducklake.snapshots()
+SELECT max(schema_version) FROM __ducklake_metadata_ducklake.ducklake_schema_versions where table_id = 1
 ----
 1
 
@@ -36,7 +36,7 @@ statement ok
 COMMIT
 
 query I
-SELECT max(schema_version) FROM ducklake.snapshots()
+SELECT max(schema_version) FROM __ducklake_metadata_ducklake.ducklake_schema_versions where table_id = 1
 ----
 1
 
@@ -57,9 +57,9 @@ statement ok
 COMMIT
 
 query I
-SELECT max(schema_version) FROM ducklake.snapshots()
+SELECT max(schema_version) FROM __ducklake_metadata_ducklake.ducklake_schema_versions where table_id = 1
 ----
-2
+3
 
 # Verify sort data was committed correctly
 query III

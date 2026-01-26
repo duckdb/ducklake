@@ -61,6 +61,7 @@ JOIN __ducklake_metadata_ducklake.ducklake_table t
 ON df.table_id = t.table_id
 WHERE
 t.table_name = 'reset_sorted_test'
+ORDER BY ALL
 ----
 0	1
 1	1

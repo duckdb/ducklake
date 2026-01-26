@@ -1,0 +1,55 @@
+# name: test/sql/transaction/multiple_column_changes.test
+# description: test type + extra chnage on column
+# group: [sql]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION __TEST_DIR__/multiple_column_changes.db
+
+test-env DATA_PATH __TEST_DIR__
+
+statement ok
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/multiple_column_changes', METADATA_CATALOG 'ducklake_meta')
+
+statement ok
+use ducklake
+
+statement ok
+CREATE TABLE message (
+  id INT NOT NULL,
+  user_id INT NOT NULL
+);
+
+statement ok
+BEGIN;
+
+statement ok
+ALTER TABLE message ALTER COLUMN user_id TYPE BIGINT;
+
+statement ok
+ALTER TABLE message ALTER COLUMN user_id SET DEFAULT 123;
+
+statement ok
+END;
+
+statement ok
+use memory
+
+statement ok
+detach ducklake
+
+statement ok
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/multiple_column_changes', METADATA_CATALOG 'ducklake_meta')
+
+statement ok
+use ducklake
+
+statement ok
+INSERT INTO message(id) values (1);
+
+query II
+FROM message;
+----
+1	123

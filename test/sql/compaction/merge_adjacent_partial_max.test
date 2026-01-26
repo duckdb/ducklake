@@ -1,0 +1,47 @@
+# name: test/sql/compaction/merge_adjacent_partial_max.test
+# description: Merge adjacent of  files generate partial_max
+# group: [compaction]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+
+test-env DATA_PATH __TEST_DIR__
+
+
+statement ok
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/merge_adjacent_partial_max/')
+
+statement ok
+USE ducklake;
+
+statement ok
+create table t (a integer);
+
+statement ok
+insert into t values (0);
+
+statement ok
+insert into t values (0);
+
+statement ok
+insert into t values (0);
+
+statement ok
+insert into t values (0);
+
+statement ok
+insert into t values (0);
+
+statement ok
+insert into t values (0);
+
+statement ok
+CALL ducklake_merge_adjacent_files('ducklake', 't');
+
+query I
+SELECT partial_max FROM __ducklake_metadata_ducklake.ducklake_data_file
+----
+7

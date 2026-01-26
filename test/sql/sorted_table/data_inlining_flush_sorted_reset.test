@@ -12,7 +12,7 @@ test-env DATA_PATH __TEST_DIR__
 
 
 statement ok
-ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/ducklake_inlining_flush_data', DATA_INLINING_ROW_LIMIT 10)
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/ducklake_inlining_flush_data_reset', DATA_INLINING_ROW_LIMIT 10)
 
 # SET SORTED BY then RESET SORTED BY within same transaction
 statement ok
