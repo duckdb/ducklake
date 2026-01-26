@@ -249,6 +249,31 @@ static void ParseVariantColumnStats(DuckLakeInsertStatsTree &tree, idx_t node_in
 	}
 }
 
+static LogicalType GetVariantLayout(DuckLakeInsertStatsTree &tree, idx_t variant_index) {
+	auto &variant = tree.Get(variant_index);
+	auto metadata_it = variant.children.find("metadata");
+	if (metadata_it == variant.children.end()) {
+		throw InvalidInputException("VARIANT without a 'metadata' field, this shouldn't happen");
+	}
+	auto &metadata_field = tree.Get(metadata_it->second);
+	if (!metadata_field.value) {
+		throw InvalidInputException("VARIANT 'metadata' needs to have stats!");
+	}
+
+	auto &value = *metadata_field.value;
+
+	LogicalType variant_type = LogicalType::INVALID;
+	for (idx_t stats_idx = 0; stats_idx < col_stats.size(); stats_idx++) {
+		auto &stats_children = StructValue::GetChildren(col_stats[stats_idx]);
+		auto &stats_name = StringValue::Get(stats_children[0]);
+		if (stats_name == "variant_type") {
+			auto type_str = StringValue::Get(stats_children[1]);
+			return TransformStringToLogicalType(type_str);
+		}
+	}
+	throw InvalidInputException("VARIANT 'metadata' field needs to have a 'variant_stats' stats entry!");
+}
+
 static map<FieldIndex, DuckLakeColumnStats>::iterator ParseStatNodes(DuckLakeInsertStatsTree &tree, idx_t node_index,
                                                                      DuckLakeTableEntry &table,
                                                                      const vector<string> &path,
@@ -261,9 +286,11 @@ static map<FieldIndex, DuckLakeColumnStats>::iterator ParseStatNodes(DuckLakeIns
 		//! Collect the child stats
 		auto column_stats = DuckLakeColumnStats(type);
 		auto &variant_stats = column_stats.extra_stats->Cast<DuckLakeColumnVariantStats>();
-		D_ASSERT(stats_node.type.id() == LogicalTypeId::STRUCT);
-		variant_stats.Build(stats_node.type);
-		ParseVariantColumnStats(tree, node_index, variant_stats, 0, stats_node.type);
+		auto variant_layout = GetVariantLayout(tree, node_index);
+		D_ASSERT(variant_layout.id() == LogicalTypeId::STRUCT);
+		variant_stats.Build(variant_layout);
+
+		ParseVariantColumnStats(tree, node_index, variant_stats, 0, variant_layout);
 		auto it = out_stats.emplace(field_id.GetFieldIndex(), column_stats).first;
 		return it;
 	}
@@ -294,26 +321,12 @@ void DuckLakeInsert::AddWrittenFiles(DuckLakeInsertGlobalState &global_state, Da
 			data_file.partition_id = partition_id.GetIndex();
 		}
 
-		//! Parse the mapping of column name -> column type
-		case_insensitive_map_t<LogicalType> variant_layout_map;
-		auto layouts = chunk.GetValue(6, r);
-		if (!layouts.IsNull()) {
-			//! There is at least one variant column/field
-			auto &layouts_children = MapValue::GetChildren(layouts);
-			for (idx_t col_idx = 0; col_idx < layouts_children.size(); col_idx++) {
-				auto &struct_children = StructValue::GetChildren(layouts_children[col_idx]);
-				auto &path = StringValue::Get(struct_children[0]);
-
-				auto &col_type_str = StringValue::Get(struct_children[1]);
-				variant_layout_map.emplace(path, TransformStringToLogicalType(col_type_str));
-			}
-		}
-
 		// extract the column stats
 		auto column_stats = chunk.GetValue(4, r);
 		auto &map_children = MapValue::GetChildren(column_stats);
 		auto &table = global_state.table;
 		DuckLakeInsertStatsTree stats_tree;
+		case_insensitive_map_t<LogicalType> variant_layout_map;
 		for (idx_t col_idx = 0; col_idx < map_children.size(); col_idx++) {
 			auto &struct_children = StructValue::GetChildren(map_children[col_idx]);
 			auto &col_name = StringValue::Get(struct_children[0]);
