@@ -16,16 +16,23 @@ namespace duckdb {
 struct DuckLakeDeleteData {
 	vector<idx_t> deleted_rows;
 	vector<idx_t> snapshot_ids;
+	//! For deletion scans: mapping from row_id to snapshot_id for rows that were deleted
+	unordered_map<idx_t, idx_t> scan_snapshot_map;
 
 	idx_t Filter(row_t start_row_index, idx_t count, SelectionVector &result_sel,
 	             optional_idx snapshot_filter = optional_idx()) const;
 
 	bool HasEmbeddedSnapshots() const;
+
+	//! Look up the snapshot_id for a deleted row (used in deletion scans)
+	optional_idx GetSnapshotForRow(idx_t row_id) const;
 };
 
 struct DeleteFileScanResult {
 	vector<idx_t> deleted_rows;
 	vector<idx_t> snapshot_ids;
+	//! Whether the delete file has embedded snapshot_id column
+	bool has_embedded_snapshots = false;
 };
 
 class DuckLakeDeleteFilter : public DeleteFilter {
