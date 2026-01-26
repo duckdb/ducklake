@@ -61,6 +61,7 @@ JOIN __ducklake_metadata_ducklake.ducklake_table t
 ON df.table_id = t.table_id 
 WHERE 
 t.table_name = 'sort_on_compaction'
+ORDER BY ALL
 ----
 0	1
 1	1
@@ -164,6 +165,7 @@ JOIN __ducklake_metadata_ducklake.ducklake_table t
 ON si.table_id = t.table_id 
 WHERE 
 t.table_name = 'sort_on_compaction'
+ORDER BY ALL
 ----
 1	4	5	0	sort_key_1	ASC	NULLS_LAST
 1	4	5	1	sort_key_2	ASC	NULLS_LAST
@@ -186,6 +188,7 @@ JOIN __ducklake_metadata_ducklake.ducklake_table t
 ON si.table_id = t.table_id 
 WHERE 
 t.table_name = 'sort_on_compaction'
+ORDER BY ALL
 ----
 1	4	5	0	sort_key_1	ASC	NULLS_LAST
 1	4	5	1	sort_key_2	ASC	NULLS_LAST

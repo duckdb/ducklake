@@ -71,6 +71,7 @@ JOIN __ducklake_metadata_ducklake.ducklake_table t
 ON df.table_id = t.table_id 
 WHERE 
 t.table_name = 'table_to_recreate'
+ORDER BY ALL
 ----
 0	3
 1	3

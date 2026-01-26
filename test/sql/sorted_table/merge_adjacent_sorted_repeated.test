@@ -61,6 +61,7 @@ JOIN __ducklake_metadata_ducklake.ducklake_table t
 ON df.table_id = t.table_id
 WHERE
 t.table_name = 'prevent_duplicates'
+ORDER BY ALL
 ----
 0	1
 1	1
@@ -105,6 +106,7 @@ FROM __ducklake_metadata_ducklake.ducklake_sort_info si
 JOIN __ducklake_metadata_ducklake.ducklake_sort_expression se USING (sort_id)
 WHERE
 si.table_id = 1
+ORDER BY ALL
 ----
 1	4	NULL	0
 1	4	NULL	1
@@ -155,6 +157,7 @@ JOIN __ducklake_metadata_ducklake.ducklake_table t
 ON df.table_id = t.table_id
 WHERE
 t.table_name = 'multiple_set_sorted'
+ORDER BY ALL
 ----
 3	4
 4	4
