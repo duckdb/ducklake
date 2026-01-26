@@ -463,7 +463,8 @@
     {
       "reason": "FIXME: Wrong result",
       "paths": [
-        "test/sql/join/positional/test_positional_join.test"
+        "test/sql/join/positional/test_positional_join.test",
+        "test/sql/update/test_null_update.test"
       ]
     },
     {

@@ -172,6 +172,8 @@ struct DuckLakeDeleteFileInfo {
 	idx_t footer_size;
 	string encryption_key;
 	optional_idx begin_snapshot;
+	//! Optional max_snapshot information for partial deletion files.
+	optional_idx max_snapshot;
 };
 
 struct DuckLakePartitionFieldInfo {
@@ -327,6 +329,10 @@ struct DuckLakeDeleteScanEntry {
 	optional_idx row_id_start;
 	MappingIndex mapping_id;
 	optional_idx snapshot_id;
+	//! The start of the snapshot range for filtering
+	optional_idx start_snapshot;
+	//! The end of the snapshot range for filtering
+	optional_idx end_snapshot;
 };
 
 struct DuckLakeFileListExtendedEntry {
@@ -336,6 +342,7 @@ struct DuckLakeFileListExtendedEntry {
 	DuckLakeFileData delete_file;
 	optional_idx row_id_start;
 	optional_idx snapshot_id;
+	optional_idx delete_file_begin_snapshot;
 	idx_t row_count;
 	idx_t delete_count = 0;
 	DuckLakeDataType data_type = DuckLakeDataType::DATA_FILE;
@@ -365,6 +372,7 @@ struct DuckLakeCompactionFileData : public DuckLakeCompactionBaseFileData {
 
 struct DuckLakeCompactionDeleteFileData : public DuckLakeCompactionBaseFileData {
 	DataFileIndex delete_file_id;
+	optional_idx max_snapshot;
 };
 
 struct DuckLakeCompactionFileEntry {

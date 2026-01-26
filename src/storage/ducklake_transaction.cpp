@@ -1360,15 +1360,16 @@ NewDataInfo DuckLakeTransaction::GetNewDataFiles(string &batch_query, DuckLakeCo
 
 vector<DuckLakeDeleteFileInfo>
 DuckLakeTransaction::GetNewDeleteFiles(const DuckLakeCommitState &commit_state,
-                                       set<DataFileIndex> &overwritten_delete_files) const {
+                                       vector<DuckLakeOverwrittenDeleteFile> &overwritten_delete_files) const {
 	vector<DuckLakeDeleteFileInfo> result;
 	for (auto &entry : table_data_changes) {
 		auto table_id = commit_state.GetTableId(entry.first);
 		auto &table_changes = entry.second;
 		for (auto &file_entry : table_changes.new_delete_files) {
 			for (auto &file : file_entry.second) {
-				if (file.overwrites_existing_delete) {
-					overwritten_delete_files.insert(file.data_file_id);
+				if (file.overwritten_delete_file.delete_file_id.IsValid()) {
+					// track the old delete file for deletion from metadata and disk
+					overwritten_delete_files.push_back(file.overwritten_delete_file);
 				}
 				DuckLakeDeleteFileInfo delete_file;
 				delete_file.id = DataFileIndex(commit_state.commit_snapshot.next_file_id++);
@@ -1380,6 +1381,7 @@ DuckLakeTransaction::GetNewDeleteFiles(const DuckLakeCommitState &commit_state,
 				delete_file.footer_size = file.footer_size;
 				delete_file.encryption_key = file.encryption_key;
 				delete_file.begin_snapshot = file.begin_snapshot;
+				delete_file.max_snapshot = file.max_snapshot;
 				result.push_back(std::move(delete_file));
 			}
 		}
@@ -1567,9 +1569,9 @@ string DuckLakeTransaction::CommitChanges(DuckLakeCommitState &commit_state,
 
 	if (!table_data_changes.empty()) {
 		// write new delete files
-		set<DataFileIndex> overwritten_delete_files;
+		vector<DuckLakeOverwrittenDeleteFile> overwritten_delete_files;
 		auto file_list = GetNewDeleteFiles(commit_state, overwritten_delete_files);
-		batch_queries += metadata_manager->DropDeleteFiles(overwritten_delete_files);
+		batch_queries += metadata_manager->DeleteOverwrittenDeleteFiles(overwritten_delete_files);
 		batch_queries += metadata_manager->WriteNewDeleteFiles(file_list, new_tables_result, new_schemas_result);
 
 		// write new inlined deletes
@@ -1621,7 +1623,7 @@ CompactionInformation DuckLakeTransaction::GetCompactionChanges(DuckLakeSnapshot
 			auto new_file = GetNewDataFile(compaction.written_file, commit_snapshot, table_id, compaction.row_id_start);
 			switch (type) {
 			case CompactionType::REWRITE_DELETES:
-				new_file.begin_snapshot = compaction.source_files[0].delete_files.back().begin_snapshot;
+				new_file.begin_snapshot = commit_snapshot.snapshot_id;
 				break;
 			case CompactionType::MERGE_ADJACENT_TABLES: {
 				// For MERGE_ADJACENT_TABLES, track the max partial snapshot across all source files
@@ -1663,7 +1665,7 @@ CompactionInformation DuckLakeTransaction::GetCompactionChanges(DuckLakeSnapshot
 					file_info.delete_file_id = compacted_file.delete_files.back().delete_file_id;
 					file_info.start_snapshot = compacted_file.file.begin_snapshot;
 					file_info.table_index = entry.first;
-					file_info.delete_file_start_snapshot = compacted_file.delete_files.back().begin_snapshot;
+					file_info.delete_file_start_snapshot = commit_snapshot.snapshot_id;
 					file_info.delete_file_end_snapshot = compacted_file.delete_files.back().end_snapshot;
 				}
 				if (row_id_limit > new_file.row_count) {
