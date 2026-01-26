@@ -8,9 +8,7 @@ DuckLakeDataFile::DuckLakeDataFile(const DuckLakeDataFile &other) {
 	file_size_bytes = other.file_size_bytes;
 	footer_size = other.footer_size;
 	partition_id = other.partition_id;
-	if (other.delete_file) {
-		delete_file = make_uniq<DuckLakeDeleteFile>(*other.delete_file);
-	}
+	delete_files = other.delete_files;
 	column_stats = other.column_stats;
 	partition_values = other.partition_values;
 	encryption_key = other.encryption_key;
@@ -26,9 +24,7 @@ DuckLakeDataFile &DuckLakeDataFile::operator=(const DuckLakeDataFile &other) {
 	file_size_bytes = other.file_size_bytes;
 	footer_size = other.footer_size;
 	partition_id = other.partition_id;
-	if (other.delete_file) {
-		delete_file = make_uniq<DuckLakeDeleteFile>(*other.delete_file);
-	}
+	delete_files = other.delete_files;
 	column_stats = other.column_stats;
 	partition_values = other.partition_values;
 	encryption_key = other.encryption_key;

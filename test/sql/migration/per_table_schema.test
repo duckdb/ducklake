@@ -9,7 +9,7 @@ require parquet
 unzip data/old_ducklake/per_table_schema.db.gz __TEST_DIR__/per_table_schema.db
 
 statement ok
-ATTACH 'ducklake:__TEST_DIR__/per_table_schema.db' AS ducklake (DATA_PATH '__TEST_DIR__/ducklake_migrate_per_table_schema', OVERRIDE_DATA_PATH TRUE)
+ATTACH 'ducklake:__TEST_DIR__/per_table_schema.db' AS ducklake (DATA_PATH '__TEST_DIR__/ducklake_migrate_per_table_schema', OVERRIDE_DATA_PATH TRUE, AUTOMATIC_MIGRATION TRUE)
 
 # Turning the global to local is basically an explosion within the table snapshot range.
 query III

@@ -9,7 +9,7 @@ require parquet
 unzip data/iceberg_deletes/delete_ignore_extra_columns.db.gz __TEST_DIR__/delete_ignore_extra_columns.db
 
 statement ok
-ATTACH 'ducklake:__TEST_DIR__/delete_ignore_extra_columns.db' AS ducklake (DATA_PATH 'data/iceberg_deletes/delete_ignore_extra_columns', OVERRIDE_DATA_PATH TRUE)
+ATTACH 'ducklake:__TEST_DIR__/delete_ignore_extra_columns.db' AS ducklake (DATA_PATH 'data/iceberg_deletes/delete_ignore_extra_columns', OVERRIDE_DATA_PATH TRUE, AUTOMATIC_MIGRATION TRUE)
 
 statement ok
 use ducklake

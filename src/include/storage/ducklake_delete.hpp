@@ -11,11 +11,48 @@
 #include "storage/ducklake_insert.hpp"
 #include "storage/ducklake_delete_filter.hpp"
 #include "storage/ducklake_metadata_info.hpp"
+#include "common/ducklake_data_file.hpp"
 
 namespace duckdb {
 class DuckLakeTableEntry;
 class DuckLakeDeleteGlobalState;
 class DuckLakeTransaction;
+
+//! A deletion position with the snapshot ID from which it became valid
+struct PositionWithSnapshot {
+	int64_t position;
+	int64_t snapshot_id;
+
+	bool operator<(const PositionWithSnapshot &other) const {
+		return position < other.position;
+	}
+};
+
+//! Input parameters for writing a delete file
+template <typename PositionType>
+struct WriteDeleteFileInputBase {
+	ClientContext &context;
+	DuckLakeTransaction &transaction;
+	FileSystem &fs;
+	string data_path;
+	string encryption_key;
+	string data_file_path;
+	set<PositionType> positions;
+	DeleteFileSource source;
+};
+
+//! Input for writing a delete file without per-position snapshot IDs, used for deletion
+using WriteDeleteFileInput = WriteDeleteFileInputBase<idx_t>;
+
+//! Input for writing a delete file with per-position snapshot IDs, used for flushing
+using WriteDeleteFileWithSnapshotsInput = WriteDeleteFileInputBase<PositionWithSnapshot>;
+
+//! Util class for writing delete files
+struct DuckLakeDeleteFileWriter {
+	static DuckLakeDeleteFile WriteDeleteFile(ClientContext &context, WriteDeleteFileInput &input);
+	static DuckLakeDeleteFile WriteDeleteFileWithSnapshots(ClientContext &context,
+	                                                       WriteDeleteFileWithSnapshotsInput &input);
+};
 
 struct DuckLakeDeleteMap {
 	void AddExtendedFileInfo(DuckLakeFileListExtendedEntry file_entry) {

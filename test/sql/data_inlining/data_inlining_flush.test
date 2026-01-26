@@ -111,7 +111,7 @@ SELECT COUNT(*) FROM GLOB('${DATA_PATH}/ducklake_inlining_flush_data/**')
 
 # flushing inlined data has no changes
 query IIII
-FROM ducklake.table_changes('test', 11, 12) ORDER BY ALL
+FROM ducklake.table_changes('test', 12, 12) ORDER BY ALL
 ----
 
 query III
