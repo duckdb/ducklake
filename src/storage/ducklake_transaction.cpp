@@ -21,17 +21,6 @@
 
 namespace duckdb {
 
-static bool IsSchemaAlteringChange(LocalChangeType type) {
-	switch (type) {
-	case LocalChangeType::SET_SORT_KEY:
-	case LocalChangeType::SET_COMMENT:
-	case LocalChangeType::SET_COLUMN_COMMENT:
-		return false;
-	default:
-		return true;
-	}
-}
-
 bool LocalTableDataChanges::IsEmpty() const {
 	if (!new_data_files.empty()) {
 		return false;
@@ -110,8 +99,8 @@ bool DuckLakeTransaction::SchemaChangesMade() {
 }
 
 bool DuckLakeTransaction::ChangesMade() {
-	return SchemaChangesMade() || !altered_tables_same_schema.empty() || !table_data_changes.empty() ||
-	       !dropped_files.empty() || !new_name_maps.name_maps.empty();
+	return SchemaChangesMade() || !table_data_changes.empty() || !dropped_files.empty() ||
+	       !new_name_maps.name_maps.empty();
 }
 
 struct TransactionChangeInformation {
@@ -122,6 +111,7 @@ struct TransactionChangeInformation {
 	case_insensitive_map_t<reference_set_t<CatalogEntry>> created_table_macros;
 
 	set<TableIndex> altered_tables;
+	set<TableIndex> altered_tables_with_schema_version_changes;
 	set<TableIndex> altered_views;
 	set<TableIndex> dropped_tables;
 	set<TableIndex> dropped_views;
@@ -140,17 +130,27 @@ void GetTransactionTableChanges(reference<CatalogEntry> table_entry, Transaction
 		auto &table = table_entry.get().Cast<DuckLakeTableEntry>();
 		switch (table.GetLocalChange().type) {
 		case LocalChangeType::SET_PARTITION_KEY:
-		case LocalChangeType::SET_COMMENT:
-		case LocalChangeType::SET_COLUMN_COMMENT:
 		case LocalChangeType::SET_NULL:
 		case LocalChangeType::DROP_NULL:
 		case LocalChangeType::RENAME_COLUMN:
 		case LocalChangeType::ADD_COLUMN:
 		case LocalChangeType::REMOVE_COLUMN:
 		case LocalChangeType::CHANGE_COLUMN_TYPE:
-		case LocalChangeType::SET_DEFAULT:
+		case LocalChangeType::SET_DEFAULT: {
+			// this table was altered in a way that modifies the ducklake_schema_versions
+			auto table_id = table.GetTableId();
+			// don't report transaction-local tables yet - these will get added later on
+			if (!table_id.IsTransactionLocal()) {
+				changes.altered_tables.insert(table_id);
+				changes.altered_tables_with_schema_version_changes.insert(table_id);
+			}
+			break;
+		}
+		case LocalChangeType::SET_COMMENT:
+		case LocalChangeType::SET_COLUMN_COMMENT:
 		case LocalChangeType::SET_SORT_KEY: {
-			// this table was altered
+			// this table was altered, but not in a way that would break the ability to compact across files (same
+			// ducklake_schema_versions)
 			auto table_id = table.GetTableId();
 			// don't report transaction-local tables yet - these will get added later on
 			if (!table_id.IsTransactionLocal()) {
@@ -262,21 +262,6 @@ TransactionChangeInformation DuckLakeTransaction::GetTransactionChanges() {
 				break;
 			default:
 				throw InternalException("Unsupported type found in new_tables");
-			}
-		}
-	}
-	// Also process altered_tables_same_schema
-	for (auto &schema_entry : altered_tables_same_schema) {
-		for (auto &entry : schema_entry.second->GetEntries()) {
-			switch (entry.second->type) {
-			case CatalogType::TABLE_ENTRY:
-				GetTransactionTableChanges(*entry.second, changes);
-				break;
-			case CatalogType::VIEW_ENTRY:
-				GetTransactionViewChanges(*entry.second, changes);
-				break;
-			default:
-				throw InternalException("Unsupported type found in altered_tables_same_schema");
 			}
 		}
 	}
@@ -913,6 +898,7 @@ void DuckLakeTransaction::GetNewTableInfo(DuckLakeCommitState &commit_state, Duc
 			result.new_partition_keys.push_back(std::move(partition_key));
 
 			transaction_changes.altered_tables.insert(table_id);
+			transaction_changes.altered_tables_with_schema_version_changes.insert(table_id);
 			column_schema_change = true;
 			break;
 		}
@@ -960,6 +946,7 @@ void DuckLakeTransaction::GetNewTableInfo(DuckLakeCommitState &commit_state, Duc
 			result.new_columns.push_back(std::move(new_col));
 
 			transaction_changes.altered_tables.insert(table_id);
+			transaction_changes.altered_tables_with_schema_version_changes.insert(table_id);
 			if (local_change.type == LocalChangeType::RENAME_COLUMN) {
 				column_schema_change = true;
 			}
@@ -970,6 +957,7 @@ void DuckLakeTransaction::GetNewTableInfo(DuckLakeCommitState &commit_state, Duc
 			// drop the indicated column
 			// note that in case of nested types we might be dropping multiple columns here
 			HandleChangedFields(commit_state.GetTableId(table), table.GetChangedFields(), result);
+			transaction_changes.altered_tables_with_schema_version_changes.insert(table_id);
 			column_schema_change = true;
 			break;
 		}
@@ -981,6 +969,7 @@ void DuckLakeTransaction::GetNewTableInfo(DuckLakeCommitState &commit_state, Duc
 			result.new_columns.push_back(std::move(new_col));
 
 			transaction_changes.altered_tables.insert(table.GetTableId());
+			transaction_changes.altered_tables_with_schema_version_changes.insert(table_id);
 			column_schema_change = true;
 			break;
 		}
@@ -1139,7 +1128,6 @@ void DuckLakeTransaction::GetNewViewInfo(DuckLakeCommitState &commit_state, Duck
 NewTableInfo DuckLakeTransaction::GetNewTables(DuckLakeCommitState &commit_state,
                                                TransactionChangeInformation &transaction_changes) {
 	NewTableInfo result;
-	// Process new_tables
 	for (auto &schema_entry : new_tables) {
 		for (auto &entry : schema_entry.second->GetEntries()) {
 			switch (entry.second->type) {
@@ -1151,21 +1139,6 @@ NewTableInfo DuckLakeTransaction::GetNewTables(DuckLakeCommitState &commit_state
 				break;
 			default:
 				throw InternalException("Unknown type in new_tables");
-			}
-		}
-	}
-	// Also process altered_tables_same_schema
-	for (auto &schema_entry : altered_tables_same_schema) {
-		for (auto &entry : schema_entry.second->GetEntries()) {
-			switch (entry.second->type) {
-			case CatalogType::TABLE_ENTRY:
-				GetNewTableInfo(commit_state, *schema_entry.second, *entry.second, result, transaction_changes);
-				break;
-			case CatalogType::VIEW_ENTRY:
-				GetNewViewInfo(commit_state, *schema_entry.second, *entry.second, result, transaction_changes);
-				break;
-			default:
-				throw InternalException("Unknown type in altered_tables_same_schema");
 			}
 		}
 	}
@@ -1564,7 +1537,7 @@ string DuckLakeTransaction::CommitChanges(DuckLakeCommitState &commit_state,
 	// write new tables
 	vector<DuckLakeTableInfo> new_tables_result;
 	vector<DuckLakeTableInfo> new_inlined_data_tables_result;
-	if (!new_tables.empty() || !altered_tables_same_schema.empty()) {
+	if (!new_tables.empty()) {
 		auto result = GetNewTables(commit_state, transaction_changes);
 		batch_queries += metadata_manager->WriteNewTables(commit_snapshot, result.new_tables, new_schemas_result);
 		batch_queries += metadata_manager->WriteNewPartitionKeys(commit_snapshot, result.new_partition_keys);
@@ -1636,7 +1609,9 @@ string DuckLakeTransaction::CommitChanges(DuckLakeCommitState &commit_state,
 	// Tracking for tables that had schema changes
 	set<TableIndex> tables_with_schema_changes;
 	for (auto &table_id : transaction_changes.altered_tables) {
-		if (!table_id.IsTransactionLocal()) {
+		if (!table_id.IsTransactionLocal() &&
+		    transaction_changes.altered_tables_with_schema_version_changes.find(table_id) !=
+		        transaction_changes.altered_tables_with_schema_version_changes.end()) {
 			tables_with_schema_changes.insert(table_id);
 		}
 	}
@@ -1796,60 +1771,6 @@ void DuckLakeTransaction::FlushChanges() {
 			}
 			connection->Commit();
 			catalog_version = commit_snapshot.schema_version;
-
-			// If there were non-schema-altering changes but schema_version didn't change,
-			// update the cached schema with the new data (e.g., sort info, comments)
-			if (!altered_tables_same_schema.empty() && !SchemaChangesMade()) {
-				for (auto &schema_entry : altered_tables_same_schema) {
-					for (auto &entry : schema_entry.second->GetEntries()) {
-						if (entry.second->type == CatalogType::TABLE_ENTRY) {
-							auto &table = entry.second->Cast<DuckLakeTableEntry>();
-							auto table_id = table.GetTableId();
-							auto local_change = table.GetLocalChange();
-
-							switch (local_change.type) {
-							case LocalChangeType::SET_SORT_KEY: {
-								auto sort_data = table.GetSortData();
-								if (sort_data) {
-									// Copy the sort data to update the cache
-									auto sort_copy = make_uniq<DuckLakeSort>(*sort_data);
-									ducklake_catalog.UpdateSortDataInCache(commit_snapshot.schema_version, table_id,
-									                                       std::move(sort_copy));
-								} else {
-									// Sort data was cleared
-									ducklake_catalog.UpdateSortDataInCache(commit_snapshot.schema_version, table_id,
-									                                       nullptr);
-								}
-								break;
-							}
-							case LocalChangeType::SET_COMMENT: {
-								ducklake_catalog.UpdateTableCommentInCache(commit_snapshot.schema_version, table_id,
-								                                           table.comment);
-								break;
-							}
-							case LocalChangeType::SET_COLUMN_COMMENT: {
-								auto field_index = local_change.field_index;
-								auto &col = table.GetColumnByFieldId(field_index);
-								ducklake_catalog.UpdateColumnCommentInCache(commit_snapshot.schema_version, table_id,
-								                                            field_index, col.Comment());
-								break;
-							}
-							default:
-								break;
-							}
-						} else if (entry.second->type == CatalogType::VIEW_ENTRY) {
-							auto &view = entry.second->Cast<DuckLakeViewEntry>();
-							auto view_id = view.GetViewId();
-							auto local_change = view.GetLocalChange();
-
-							if (local_change.type == LocalChangeType::SET_COMMENT) {
-								ducklake_catalog.UpdateViewCommentInCache(commit_snapshot.schema_version, view_id,
-								                                          view.comment);
-							}
-						}
-					}
-				}
-			}
 
 			// finished writing
 			break;
@@ -2434,10 +2355,9 @@ void DuckLakeTransaction::AlterEntry(CatalogEntry &entry, unique_ptr<CatalogEntr
 
 void DuckLakeTransaction::AlterEntryInternal(DuckLakeTableEntry &table, unique_ptr<CatalogEntry> new_entry) {
 	auto &new_table = new_entry->Cast<DuckLakeTableEntry>();
-	auto change_type = new_table.GetLocalChange().type;
-	auto &entries = GetOrCreateTransactionLocalEntriesAlter(table, change_type);
+	auto &entries = GetOrCreateTransactionLocalEntries(table);
 	entries.CreateEntry(std::move(new_entry));
-	switch (change_type) {
+	switch (new_table.GetLocalChange().type) {
 	case LocalChangeType::RENAMED: {
 		// rename - take care of the old table
 		if (table.IsTransactionLocal()) {
@@ -2469,10 +2389,9 @@ void DuckLakeTransaction::AlterEntryInternal(DuckLakeTableEntry &table, unique_p
 
 void DuckLakeTransaction::AlterEntryInternal(DuckLakeViewEntry &view, unique_ptr<CatalogEntry> new_entry) {
 	auto &new_view = new_entry->Cast<DuckLakeViewEntry>();
-	auto change_type = new_view.GetLocalChange().type;
-	auto &entries = GetOrCreateTransactionLocalEntriesAlter(view, change_type);
+	auto &entries = GetOrCreateTransactionLocalEntries(view);
 	entries.CreateEntry(std::move(new_entry));
-	switch (change_type) {
+	switch (new_view.GetLocalChange().type) {
 	case LocalChangeType::RENAMED: {
 		// rename - take care of the old table
 		if (view.IsTransactionLocal()) {
@@ -2525,67 +2444,6 @@ DuckLakeCatalogSet &DuckLakeTransaction::GetOrCreateTransactionLocalEntries(Cata
 	}
 }
 
-DuckLakeCatalogSet &DuckLakeTransaction::GetOrCreateTransactionLocalEntriesAlter(CatalogEntry &entry,
-                                                                                 LocalChangeType change_type) {
-	auto catalog_type = entry.type;
-	if (catalog_type == CatalogType::SCHEMA_ENTRY) {
-		// Schema entries always use new_schemas
-		if (!new_schemas) {
-			new_schemas = make_uniq<DuckLakeCatalogSet>();
-		}
-		return *new_schemas;
-	}
-
-	auto &schema_name = entry.ParentSchema().name;
-
-	// For schema-altering changes, always use new_tables
-	if (IsSchemaAlteringChange(change_type)) {
-		// If there's an existing entry in altered_tables_same_schema for this table,
-		// move it to new_tables first so the chain is maintained
-		auto altered_entry = altered_tables_same_schema.find(schema_name);
-		if (altered_entry != altered_tables_same_schema.end()) {
-			auto existing = altered_entry->second->DropEntry(entry.name);
-			if (existing) {
-				// Move to new_tables
-				auto entry_it = new_tables.find(schema_name);
-				if (entry_it == new_tables.end()) {
-					auto new_set = make_uniq<DuckLakeCatalogSet>();
-					entry_it = new_tables.insert(make_pair(schema_name, std::move(new_set))).first;
-				}
-				entry_it->second->CreateEntry(std::move(existing));
-			}
-			// Clean up empty schema entry
-			if (altered_entry->second->GetEntries().empty()) {
-				altered_tables_same_schema.erase(altered_entry);
-			}
-		}
-
-		auto entry_it = new_tables.find(schema_name);
-		if (entry_it == new_tables.end()) {
-			auto new_set = make_uniq<DuckLakeCatalogSet>();
-			entry_it = new_tables.insert(make_pair(schema_name, std::move(new_set))).first;
-		}
-		return *entry_it->second;
-	}
-
-	// For non-schema-altering changes:
-	// 1. Check if entry already exists in new_tables (schema-altering change was already made)
-	auto new_tables_entry = new_tables.find(schema_name);
-	if (new_tables_entry != new_tables.end()) {
-		if (new_tables_entry->second->GetEntry(entry.name)) {
-			return *new_tables_entry->second;
-		}
-	}
-
-	// 2. Use altered_tables_same_schema
-	auto altered_entry = altered_tables_same_schema.find(schema_name);
-	if (altered_entry == altered_tables_same_schema.end()) {
-		auto new_set = make_uniq<DuckLakeCatalogSet>();
-		altered_entry = altered_tables_same_schema.insert(make_pair(schema_name, std::move(new_set))).first;
-	}
-	return *altered_entry->second;
-}
-
 optional_ptr<DuckLakeCatalogSet> DuckLakeTransaction::GetTransactionLocalSchemas() {
 	return new_schemas;
 }
@@ -2605,17 +2463,11 @@ optional_ptr<DuckLakeCatalogSet> DuckLakeTransaction::GetTransactionLocalEntries
 	switch (catalog_type) {
 	case CatalogType::TABLE_ENTRY:
 	case CatalogType::VIEW_ENTRY: {
-		// Check new_tables first
 		auto entry = new_tables.find(schema_name);
-		if (entry != new_tables.end()) {
-			return entry->second;
+		if (entry == new_tables.end()) {
+			return nullptr;
 		}
-		// Then check altered_tables_same_schema
-		auto altered_entry = altered_tables_same_schema.find(schema_name);
-		if (altered_entry != altered_tables_same_schema.end()) {
-			return altered_entry->second;
-		}
-		return nullptr;
+		return entry->second;
 	}
 	case CatalogType::MACRO_ENTRY:
 	case CatalogType::TABLE_MACRO_ENTRY:
@@ -2641,13 +2493,6 @@ optional_ptr<CatalogEntry> DuckLakeTransaction::GetLocalEntryById(SchemaIndex sc
 
 optional_ptr<CatalogEntry> DuckLakeTransaction::GetLocalEntryById(TableIndex table_id) {
 	for (auto &schema_entry : new_tables) {
-		auto entry = schema_entry.second->GetEntryById(table_id);
-		if (entry) {
-			return entry;
-		}
-	}
-	// Also check altered_tables_same_schema
-	for (auto &schema_entry : altered_tables_same_schema) {
 		auto entry = schema_entry.second->GetEntryById(table_id);
 		if (entry) {
 			return entry;

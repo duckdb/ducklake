@@ -15,7 +15,7 @@ statement ok
 CREATE TABLE ducklake.test(a INTEGER, b VARCHAR);
 
 query I
-SELECT max(schema_version) FROM ducklake.snapshots()
+SELECT max(schema_version) FROM __ducklake_metadata_ducklake.ducklake_schema_versions where table_id = 1
 ----
 1
 
@@ -23,7 +23,7 @@ statement ok
 ALTER TABLE ducklake.test SET SORTED BY (a ASC);
 
 query I
-SELECT max(schema_version) FROM ducklake.snapshots()
+SELECT max(schema_version) FROM __ducklake_metadata_ducklake.ducklake_schema_versions where table_id = 1
 ----
 1
 
@@ -32,7 +32,7 @@ ALTER TABLE ducklake.test RESET SORTED BY;
 
 # RESET SORTED BY should also NOT increment schema_version
 query I
-SELECT max(schema_version) FROM ducklake.snapshots()
+SELECT max(schema_version) FROM __ducklake_metadata_ducklake.ducklake_schema_versions where table_id = 1
 ----
 1
 

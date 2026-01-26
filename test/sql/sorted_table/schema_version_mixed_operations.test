@@ -15,7 +15,7 @@ statement ok
 CREATE TABLE ducklake.test(a INTEGER, b VARCHAR);
 
 query I
-SELECT max(schema_version) FROM ducklake.snapshots()
+SELECT max(schema_version) FROM __ducklake_metadata_ducklake.ducklake_schema_versions where table_id = 1
 ----
 1
 
@@ -24,7 +24,7 @@ statement ok
 ALTER TABLE ducklake.test SET SORTED BY (a ASC);
 
 query I
-SELECT max(schema_version) FROM ducklake.snapshots()
+SELECT max(schema_version) FROM __ducklake_metadata_ducklake.ducklake_schema_versions where table_id = 1
 ----
 1
 
@@ -32,43 +32,45 @@ SELECT max(schema_version) FROM ducklake.snapshots()
 statement ok
 ALTER TABLE ducklake.test ADD COLUMN c BIGINT;
 
+# max(schema_version) is 3 because schema_version was incremented globally, but not in the ducklake_schema_version
+# when the SET SORTED BY statement executed
 query I
-SELECT max(schema_version) FROM ducklake.snapshots()
+SELECT max(schema_version) FROM __ducklake_metadata_ducklake.ducklake_schema_versions where table_id = 1
 ----
-2
+3
 
 # SET SORTED BY after ADD COLUMN should NOT increment
 statement ok
 ALTER TABLE ducklake.test SET SORTED BY (a DESC, c ASC);
 
 query I
-SELECT max(schema_version) FROM ducklake.snapshots()
+SELECT max(schema_version) FROM __ducklake_metadata_ducklake.ducklake_schema_versions where table_id = 1
 ----
-2
+3
 
 # RENAME COLUMN SHOULD increment schema_version
 statement ok
 ALTER TABLE ducklake.test RENAME COLUMN b TO b_renamed;
 
 query I
-SELECT max(schema_version) FROM ducklake.snapshots()
+SELECT max(schema_version) FROM __ducklake_metadata_ducklake.ducklake_schema_versions where table_id = 1
 ----
-3
+5
 
 # SET SORTED BY with new column name should NOT increment
 statement ok
 ALTER TABLE ducklake.test SET SORTED BY (b_renamed ASC);
 
 query I
-SELECT max(schema_version) FROM ducklake.snapshots()
+SELECT max(schema_version) FROM __ducklake_metadata_ducklake.ducklake_schema_versions where table_id = 1
 ----
-3
+5
 
 # DROP COLUMN SHOULD increment schema_version
 statement ok
 ALTER TABLE ducklake.test DROP COLUMN c;
 
 query I
-SELECT max(schema_version) FROM ducklake.snapshots()
+SELECT max(schema_version) FROM __ducklake_metadata_ducklake.ducklake_schema_versions where table_id = 1
 ----
-4
+7

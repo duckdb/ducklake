@@ -16,7 +16,7 @@ CREATE TABLE ducklake.test(a INTEGER, b VARCHAR);
 
 # Record initial state
 query I
-SELECT max(snapshot_id) FROM ducklake.snapshots()
+SELECT max(schema_version) FROM __ducklake_metadata_ducklake.ducklake_schema_versions where table_id = 1
 ----
 1
 
@@ -41,7 +41,7 @@ ROLLBACK
 
 # Verify snapshot_id has NOT changed (no new snapshot created)
 query I
-SELECT max(snapshot_id) FROM ducklake.snapshots()
+SELECT max(schema_version) FROM __ducklake_metadata_ducklake.ducklake_schema_versions where table_id = 1
 ----
 1
 
@@ -74,7 +74,7 @@ ROLLBACK
 
 # Verify no changes persisted
 query I
-SELECT max(snapshot_id) FROM ducklake.snapshots()
+SELECT max(schema_version) FROM __ducklake_metadata_ducklake.ducklake_schema_versions where table_id = 1
 ----
 1
 

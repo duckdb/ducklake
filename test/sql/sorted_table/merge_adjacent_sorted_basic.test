@@ -70,8 +70,7 @@ ALTER TABLE ducklake.sort_on_compaction SET SORTED BY (sort_key_1 ASC NULLS LAST
 
 # Validate snapshot changes - SET SORTED BY should NOT increment schema_version
 query I
-SELECT max(schema_version)
-FROM ducklake.snapshots()
+SELECT max(schema_version) FROM __ducklake_metadata_ducklake.ducklake_schema_versions where table_id = 1
 ----
 1
 
@@ -83,7 +82,7 @@ SELECT snapshot_id, schema_version, changes FROM ducklake_snapshots('ducklake')
 1	1	{tables_created=[main.sort_on_compaction]}
 2	1	{tables_inserted_into=[1]}
 3	1	{tables_inserted_into=[1]}
-4	1	{tables_altered=[1]}
+4	2	{tables_altered=[1]}
 
 # Even multiple changes back to back should not change the schema_version
 statement ok
@@ -94,8 +93,7 @@ ALTER TABLE ducklake.sort_on_compaction SET SORTED BY (sort_key_1 ASC NULLS LAST
 
 # Validate snapshot changes - SET SORTED BY should NOT increment schema_version
 query I
-SELECT max(schema_version)
-FROM ducklake.snapshots()
+SELECT max(schema_version) FROM __ducklake_metadata_ducklake.ducklake_schema_versions where table_id = 1
 ----
 1
 
@@ -107,9 +105,9 @@ SELECT snapshot_id, schema_version, changes FROM ducklake_snapshots('ducklake')
 1	1	{tables_created=[main.sort_on_compaction]}
 2	1	{tables_inserted_into=[1]}
 3	1	{tables_inserted_into=[1]}
-4	1	{tables_altered=[1]}
-5	1	{tables_altered=[1]}
-6	1	{tables_altered=[1]}
+4	2	{tables_altered=[1]}
+5	3	{tables_altered=[1]}
+6	4	{tables_altered=[1]}
 
 # Do some other kind of alter table on that table to make sure that it does not interfere
 statement ok
