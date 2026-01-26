@@ -253,9 +253,19 @@ static unique_ptr<MergeIntoOperator> DuckLakePlanMergeIntoAction(DuckLakeCatalog
 			action.expressions = std::move(new_expressions);
 		}
 		result->expressions = std::move(action.expressions);
-		auto &insert = catalog.PlanInsert(context, planner, insert_op, child_plan);
-		auto &copy = insert.children[0].get();
-		result->op = planner.Make<DuckLakeMergeInsert>(insert.types, insert, copy);
+
+		auto &ducklake_table = op.table.Cast<DuckLakeTableEntry>();
+		DuckLakeCopyInput copy_input(context, ducklake_table);
+		auto copy_options = DuckLakeInsert::GetCopyOptions(context, copy_input);
+
+		auto &physical_copy = DuckLakeInsert::PlanCopyForInsert(context, planner, copy_input, nullptr);
+		auto &insert = DuckLakeInsert::PlanInsert(context, planner, ducklake_table, std::move(copy_input.encryption_key));
+		insert.children.push_back(physical_copy);
+
+		auto &merge_insert =
+		    planner.Make<DuckLakeMergeInsert>(insert.types, insert, physical_copy).Cast<DuckLakeMergeInsert>();
+		merge_insert.extra_projections = std::move(copy_options.projection_list);
+		result->op = merge_insert;
 		break;
 	}
 	case MergeActionType::MERGE_ERROR:
