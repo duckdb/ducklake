@@ -4,6 +4,7 @@
 #include "storage/ducklake_update.hpp"
 #include "storage/ducklake_delete.hpp"
 #include "storage/ducklake_insert.hpp"
+#include "storage/ducklake_table_entry.hpp"
 #include "duckdb/planner/operator/logical_update.hpp"
 #include "duckdb/planner/operator/logical_dummy_scan.hpp"
 #include "duckdb/planner/operator/logical_delete.hpp"
