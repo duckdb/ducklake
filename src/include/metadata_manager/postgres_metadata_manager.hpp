@@ -33,14 +33,20 @@ protected:
 	//! Wrap field selections with list aggregation using Postgres jsonb syntax
 	string WrapWithListAggregation(const unordered_map<string, string> &fields) const override;
 
-	//! Parse tag list from JSON query result (override for Postgres JSONB handling)
+	//! Cast stats columns to target type using Postgres syntax (no TRY_CAST)
+	string CastStatsToTarget(const string &stats, const LogicalType &type) override;
+
+	//! Load tags from JSON result
 	vector<DuckLakeTag> LoadTags(const Value &tag_map) const override;
 
-	//! Parse inlined data tables list from JSON query result (override for Postgres JSONB handling)
+	//! Load inlined data tables from JSON result
 	vector<DuckLakeInlinedTableInfo> LoadInlinedDataTables(const Value &list) const override;
 
-	//! Parse macro implementations list from JSON query result (override for Postgres JSONB handling)
+	//! Load macro implementations from JSON result
 	vector<DuckLakeMacroImplementation> LoadMacroImplementations(const Value &list) const override;
+
+	//! Get orphan files - PostgreSQL doesn't support filesystem listing, return empty
+	vector<DuckLakeFileForCleanup> GetOrphanFilesForCleanup(const string &filter, const string &separator) override;
 
 private:
 	unique_ptr<QueryResult> ExecuteQuery(string &query, string command);

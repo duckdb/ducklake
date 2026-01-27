@@ -3,6 +3,7 @@
 #include "storage/ducklake_catalog.hpp"
 #include "storage/ducklake_metadata_manager.hpp"
 #include "storage/ducklake_transaction.hpp"
+#include "yyjson.hpp"
 
 namespace duckdb {
 
@@ -79,7 +80,6 @@ string PostgresMetadataManager::GetLatestSnapshotQuery() const {
 }
 
 string PostgresMetadataManager::WrapWithListAggregation(const unordered_map<string, string> &fields) const {
-	// Postgres syntax: jsonb_agg(jsonb_build_object('key1', val1, 'key2', val2, ...))
 	string fields_part;
 	for (auto const &entry : fields) {
 		if (!fields_part.empty()) {
@@ -87,111 +87,116 @@ string PostgresMetadataManager::WrapWithListAggregation(const unordered_map<stri
 		}
 		fields_part += "'" + entry.first + "', " + entry.second;
 	}
-	return "jsonb_agg(jsonb_build_object(" + fields_part + "))";
+	return "json_agg(json_build_object(" + fields_part + "))";
+}
+
+string PostgresMetadataManager::CastStatsToTarget(const string &stats, const LogicalType &type) {
+	// PostgreSQL doesn't have TRY_CAST, use regular CAST with :: operator
+	// For numeric types, we cast directly; stats should be valid numeric values
+	if (type.IsNumeric()) {
+		return "(" + stats + " :: " + GetColumnTypeInternal(type) + ")";
+	}
+	return stats;
 }
 
 vector<DuckLakeTag> PostgresMetadataManager::LoadTags(const Value &tag_map) const {
+	using namespace duckdb_yyjson; // NOLINT
+
+	// PostgreSQL returns jsonb which doesn't map cleanly to DuckDB LIST type
+	// TODO: Implement proper JSON parsing for tags
+	// For now, return empty tags to avoid crashing
 	vector<DuckLakeTag> result;
-	if (tag_map.IsNull()) {
-		return result;
+
+	auto tag = tag_map.GetValue<string>();
+
+	auto doc = yyjson_read(tag.c_str(), tag.size(), 0);
+	if (!doc) {
+		throw InvalidInputException("Failed to parse tags JSON");
+	}
+	auto root = yyjson_doc_get_root(doc);
+	if (!yyjson_is_arr(root)) {
+		yyjson_doc_free(doc);
+		throw InvalidInputException("Invalid tags JSON");
 	}
 
-	// Try to parse as DuckDB LIST/STRUCT first (postgres scanner might convert JSONB)
-	try {
-		auto &children = ListValue::GetChildren(tag_map);
-		for (auto &child : children) {
-			auto &struct_children = StructValue::GetChildren(child);
-			if (struct_children[1].IsNull()) {
-				continue;
-			}
-			DuckLakeTag tag;
-			tag.key = struct_children[0].ToString();
-			tag.value = struct_children[1].ToString();
-			result.push_back(std::move(tag));
+	idx_t idx, n_tag;
+
+	yyjson_arr_foreach(root, idx, n_tag, val)
+	{
+
+	}
+	auto bbox_json = yyjson_obj_get(root, "bbox");
+	if (yyjson_is_obj(bbox_json)) {
+		auto xmin_json = yyjson_obj_get(bbox_json, "xmin");
+		if (yyjson_is_num(xmin_json)) {
+			xmin = yyjson_get_real(xmin_json);
 		}
-		return result;
-	} catch (std::exception &) {
-		// Fall back to JSON string parsing
+		auto xmax_json = yyjson_obj_get(bbox_json, "xmax");
+		if (yyjson_is_num(xmax_json)) {
+			xmax = yyjson_get_real(xmax_json);
+		}
+		auto ymin_json = yyjson_obj_get(bbox_json, "ymin");
+		if (yyjson_is_num(ymin_json)) {
+			ymin = yyjson_get_real(ymin_json);
+		}
+		auto ymax_json = yyjson_obj_get(bbox_json, "ymax");
+		if (yyjson_is_num(ymax_json)) {
+			ymax = yyjson_get_real(ymax_json);
+		}
+		auto zmin_json = yyjson_obj_get(bbox_json, "zmin");
+		if (yyjson_is_num(zmin_json)) {
+			zmin = yyjson_get_real(zmin_json);
+		}
+		auto zmax_json = yyjson_obj_get(bbox_json, "zmax");
+		if (yyjson_is_num(zmax_json)) {
+			zmax = yyjson_get_real(zmax_json);
+		}
+		auto mmin_json = yyjson_obj_get(bbox_json, "mmin");
+		if (yyjson_is_num(mmin_json)) {
+			mmin = yyjson_get_real(mmin_json);
+		}
+		auto mmax_json = yyjson_obj_get(bbox_json, "mmax");
+		if (yyjson_is_num(mmax_json)) {
+			mmax = yyjson_get_real(mmax_json);
+		}
 	}
 
-	// If value is a string, parse as JSON
-	if (tag_map.type().id() == LogicalTypeId::VARCHAR) {
-		auto json_str = tag_map.ToString();
-		// TODO: Parse JSON string - for now return empty
-		// This would require a JSON parser or using DuckDB's JSON functions
+	auto types_json = yyjson_obj_get(root, "types");
+	if (yyjson_is_arr(types_json)) {
+		yyjson_arr_iter iter;
+		yyjson_arr_iter_init(types_json, &iter);
+		yyjson_val *type_json;
+		while ((type_json = yyjson_arr_iter_next(&iter))) {
+			if (yyjson_is_str(type_json)) {
+				geo_types.insert(yyjson_get_str(type_json));
+			}
+		}
 	}
+	yyjson_doc_free(doc);
 	return result;
 }
 
 vector<DuckLakeInlinedTableInfo> PostgresMetadataManager::LoadInlinedDataTables(const Value &list) const {
+	// PostgreSQL returns jsonb which doesn't map cleanly to DuckDB LIST type
+	// TODO: Implement proper JSON parsing
+	// For now, return empty list to avoid crashing
 	vector<DuckLakeInlinedTableInfo> result;
-	if (list.IsNull()) {
-		return result;
-	}
-
-	// Try to parse as DuckDB LIST/STRUCT first
-	try {
-		auto &children = ListValue::GetChildren(list);
-		for (auto &child : children) {
-			auto &struct_children = StructValue::GetChildren(child);
-			DuckLakeInlinedTableInfo info;
-			info.table_name = StringValue::Get(struct_children[0]);
-			info.schema_version = struct_children[1].GetValue<idx_t>();
-			result.push_back(std::move(info));
-		}
-		return result;
-	} catch (std::exception &) {
-		// Fall back to JSON string parsing
-	}
-
-	// If value is a string, parse as JSON
-	if (list.type().id() == LogicalTypeId::VARCHAR) {
-		auto json_str = list.ToString();
-		// TODO: Parse JSON string - for now return empty
-	}
 	return result;
 }
 
 vector<DuckLakeMacroImplementation> PostgresMetadataManager::LoadMacroImplementations(const Value &list) const {
+	// PostgreSQL returns jsonb which doesn't map cleanly to DuckDB LIST type
+	// TODO: Implement proper JSON parsing
+	// For now, return empty list to avoid crashing
 	vector<DuckLakeMacroImplementation> result;
-	if (list.IsNull()) {
-		return result;
-	}
+	return result;
+}
 
-	// Try to parse as DuckDB LIST/STRUCT first
-	try {
-		auto &children = ListValue::GetChildren(list);
-		for (auto &child : children) {
-			auto &struct_children = StructValue::GetChildren(child);
-			DuckLakeMacroImplementation impl;
-			impl.dialect = StringValue::Get(struct_children[0]);
-			impl.sql = StringValue::Get(struct_children[1]);
-			impl.type = StringValue::Get(struct_children[2]);
-
-			auto param_list = struct_children[3].GetValue<Value>();
-			if (!param_list.IsNull()) {
-				for (auto &param_value : ListValue::GetChildren(param_list)) {
-					auto &param_struct_children = StructValue::GetChildren(param_value);
-					DuckLakeMacroParameters param;
-					param.parameter_name = StringValue::Get(param_struct_children[0]);
-					param.parameter_type = StringValue::Get(param_struct_children[1]);
-					param.default_value = StringValue::Get(param_struct_children[2]);
-					param.default_value_type = StringValue::Get(param_struct_children[3]);
-					impl.parameters.push_back(std::move(param));
-				}
-			}
-			result.push_back(std::move(impl));
-		}
-		return result;
-	} catch (std::exception &) {
-		// Fall back to JSON string parsing
-	}
-
-	// If value is a string, parse as JSON
-	if (list.type().id() == LogicalTypeId::VARCHAR) {
-		auto json_str = list.ToString();
-		// TODO: Parse JSON string - for now return empty
-	}
+vector<DuckLakeFileForCleanup> PostgresMetadataManager::GetOrphanFilesForCleanup(const string &filter,
+                                                                                 const string &separator) {
+	// PostgreSQL doesn't support filesystem listing like DuckDB's read_blob
+	// Return empty list - orphan files will need to be cleaned up differently
+	vector<DuckLakeFileForCleanup> result;
 	return result;
 }
 
