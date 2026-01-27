@@ -1,6 +1,7 @@
 #include "metadata_manager/postgres_metadata_manager.hpp"
 #include "common/ducklake_util.hpp"
 #include "storage/ducklake_catalog.hpp"
+#include "storage/ducklake_metadata_info.hpp"
 #include "storage/ducklake_metadata_manager.hpp"
 #include "storage/ducklake_transaction.hpp"
 #include "yyjson.hpp"
@@ -79,7 +80,7 @@ string PostgresMetadataManager::GetLatestSnapshotQuery() const {
 	)";
 }
 
-string PostgresMetadataManager::WrapWithListAggregation(const unordered_map<string, string> &fields) const {
+string PostgresMetadataManager::WrapWithListAggregation(const vector<pair<string, string>> &fields) const {
 	string fields_part;
 	for (auto const &entry : fields) {
 		if (!fields_part.empty()) {
@@ -99,96 +100,191 @@ string PostgresMetadataManager::CastStatsToTarget(const string &stats, const Log
 	return stats;
 }
 
+string PostgresMetadataManager::CastColumnToTarget(const string &stats, const LogicalType &type) {
+	// Should not happen, but to pass unittest
+	if (!TypeIsNativelySupported(type)) {
+		return stats;
+	}
+	// Also for nested types
+	if (type.id() == LogicalTypeId ::ARRAY) {
+		LogicalType child_type = ArrayType::GetChildType(type);
+
+		while (child_type.id() == LogicalTypeId::ARRAY) {
+			child_type = ArrayType::GetChildType(child_type);
+		}
+		if (!TypeIsNativelySupported(child_type)) {
+			return stats;
+		}
+	}
+	return stats + "::" + GetColumnTypeInternal(type);
+}
+
 vector<DuckLakeTag> PostgresMetadataManager::LoadTags(const Value &tag_map) const {
 	using namespace duckdb_yyjson; // NOLINT
 
-	// PostgreSQL returns jsonb which doesn't map cleanly to DuckDB LIST type
-	// TODO: Implement proper JSON parsing for tags
-	// For now, return empty tags to avoid crashing
 	vector<DuckLakeTag> result;
 
-	auto tag = tag_map.GetValue<string>();
-
-	auto doc = yyjson_read(tag.c_str(), tag.size(), 0);
+	auto tags_json = tag_map.GetValue<string>();
+	auto doc = yyjson_read(tags_json.c_str(), tags_json.size(), 0);
 	if (!doc) {
 		throw InvalidInputException("Failed to parse tags JSON");
 	}
 	auto root = yyjson_doc_get_root(doc);
 	if (!yyjson_is_arr(root)) {
 		yyjson_doc_free(doc);
-		throw InvalidInputException("Invalid tags JSON");
+		throw InvalidInputException("Invalid tags JSON: expected array");
 	}
 
 	idx_t idx, n_tag;
+	yyjson_val *tag_json;
+	yyjson_arr_foreach(root, idx, n_tag, tag_json) {
+		if (!yyjson_is_obj(tag_json)) {
+			yyjson_doc_free(doc);
+			throw InvalidInputException("Invalid tags JSON: expected object");
+		}
 
-	yyjson_arr_foreach(root, idx, n_tag, val)
-	{
+		DuckLakeTag tag;
 
-	}
-	auto bbox_json = yyjson_obj_get(root, "bbox");
-	if (yyjson_is_obj(bbox_json)) {
-		auto xmin_json = yyjson_obj_get(bbox_json, "xmin");
-		if (yyjson_is_num(xmin_json)) {
-			xmin = yyjson_get_real(xmin_json);
+		auto key = yyjson_obj_get(tag_json, "key");
+		auto value = yyjson_obj_get(tag_json, "value");
+		if (!yyjson_is_str(key)) {
+			yyjson_doc_free(doc);
+			throw InvalidInputException("Invalid tags JSON: missing required fields");
 		}
-		auto xmax_json = yyjson_obj_get(bbox_json, "xmax");
-		if (yyjson_is_num(xmax_json)) {
-			xmax = yyjson_get_real(xmax_json);
-		}
-		auto ymin_json = yyjson_obj_get(bbox_json, "ymin");
-		if (yyjson_is_num(ymin_json)) {
-			ymin = yyjson_get_real(ymin_json);
-		}
-		auto ymax_json = yyjson_obj_get(bbox_json, "ymax");
-		if (yyjson_is_num(ymax_json)) {
-			ymax = yyjson_get_real(ymax_json);
-		}
-		auto zmin_json = yyjson_obj_get(bbox_json, "zmin");
-		if (yyjson_is_num(zmin_json)) {
-			zmin = yyjson_get_real(zmin_json);
-		}
-		auto zmax_json = yyjson_obj_get(bbox_json, "zmax");
-		if (yyjson_is_num(zmax_json)) {
-			zmax = yyjson_get_real(zmax_json);
-		}
-		auto mmin_json = yyjson_obj_get(bbox_json, "mmin");
-		if (yyjson_is_num(mmin_json)) {
-			mmin = yyjson_get_real(mmin_json);
-		}
-		auto mmax_json = yyjson_obj_get(bbox_json, "mmax");
-		if (yyjson_is_num(mmax_json)) {
-			mmax = yyjson_get_real(mmax_json);
-		}
-	}
 
-	auto types_json = yyjson_obj_get(root, "types");
-	if (yyjson_is_arr(types_json)) {
-		yyjson_arr_iter iter;
-		yyjson_arr_iter_init(types_json, &iter);
-		yyjson_val *type_json;
-		while ((type_json = yyjson_arr_iter_next(&iter))) {
-			if (yyjson_is_str(type_json)) {
-				geo_types.insert(yyjson_get_str(type_json));
-			}
+		tag.key = yyjson_get_str(key);
+
+		// Value can be null or string
+		if (yyjson_is_str(value)) {
+			tag.value = yyjson_get_str(value);
 		}
+
+		result.push_back(std::move(tag));
 	}
 	yyjson_doc_free(doc);
 	return result;
 }
 
 vector<DuckLakeInlinedTableInfo> PostgresMetadataManager::LoadInlinedDataTables(const Value &list) const {
-	// PostgreSQL returns jsonb which doesn't map cleanly to DuckDB LIST type
-	// TODO: Implement proper JSON parsing
-	// For now, return empty list to avoid crashing
+	using namespace duckdb_yyjson; // NOLINT
+
 	vector<DuckLakeInlinedTableInfo> result;
+
+	auto json_str = list.GetValue<string>();
+	auto doc = yyjson_read(json_str.c_str(), json_str.size(), 0);
+	if (!doc) {
+		throw InvalidInputException("Failed to parse inlined data tables JSON");
+	}
+	auto root = yyjson_doc_get_root(doc);
+	if (!yyjson_is_arr(root)) {
+		yyjson_doc_free(doc);
+		throw InvalidInputException("Invalid inlined data tables JSON: expected array");
+	}
+
+	idx_t idx, n_tables;
+	yyjson_val *table_json;
+	yyjson_arr_foreach(root, idx, n_tables, table_json) {
+		if (!yyjson_is_obj(table_json)) {
+			yyjson_doc_free(doc);
+			throw InvalidInputException("Invalid inlined data tables JSON: expected object");
+		}
+
+		auto table_name = yyjson_obj_get(table_json, "name");
+		auto schema_version = yyjson_obj_get(table_json, "schema_version");
+		if (!yyjson_is_str(table_name) || !yyjson_is_num(schema_version)) {
+			yyjson_doc_free(doc);
+			throw InvalidInputException("Invalid inlined data tables JSON: missing required fields");
+		}
+
+		DuckLakeInlinedTableInfo info;
+		info.table_name = yyjson_get_str(table_name);
+		info.schema_version = yyjson_get_uint(schema_version);
+		result.push_back(std::move(info));
+	}
+	yyjson_doc_free(doc);
 	return result;
 }
 
 vector<DuckLakeMacroImplementation> PostgresMetadataManager::LoadMacroImplementations(const Value &list) const {
-	// PostgreSQL returns jsonb which doesn't map cleanly to DuckDB LIST type
-	// TODO: Implement proper JSON parsing
-	// For now, return empty list to avoid crashing
+	using namespace duckdb_yyjson; // NOLINT
+
 	vector<DuckLakeMacroImplementation> result;
+
+	auto json_str = list.GetValue<string>();
+	auto doc = yyjson_read(json_str.c_str(), json_str.size(), 0);
+	if (!doc) {
+		throw InvalidInputException("Failed to parse macro implementations JSON");
+	}
+	auto root = yyjson_doc_get_root(doc);
+	if (!yyjson_is_arr(root)) {
+		yyjson_doc_free(doc);
+		throw InvalidInputException("Invalid macro implementations JSON: expected array");
+	}
+
+	idx_t idx, n_impls;
+	yyjson_val *impl_json;
+	yyjson_arr_foreach(root, idx, n_impls, impl_json) {
+		if (!yyjson_is_obj(impl_json)) {
+			yyjson_doc_free(doc);
+			throw InvalidInputException("Invalid macro implementations JSON: expected object");
+		}
+
+		auto dialect = yyjson_obj_get(impl_json, "dialect");
+		auto sql = yyjson_obj_get(impl_json, "sql");
+		auto type = yyjson_obj_get(impl_json, "type");
+		auto params = yyjson_obj_get(impl_json, "params");
+
+		if (!yyjson_is_str(dialect) || !yyjson_is_str(sql) || !yyjson_is_str(type)) {
+			yyjson_doc_free(doc);
+			throw InvalidInputException("Invalid macro implementations JSON: missing required fields");
+		}
+
+		DuckLakeMacroImplementation impl_info;
+		impl_info.dialect = yyjson_get_str(dialect);
+		impl_info.sql = yyjson_get_str(sql);
+		impl_info.type = yyjson_get_str(type);
+
+		// Parse parameters if present
+		if (yyjson_is_arr(params)) {
+			idx_t p_idx, n_params;
+			yyjson_val *param_json;
+			yyjson_arr_foreach(params, p_idx, n_params, param_json) {
+				if (!yyjson_is_obj(param_json)) {
+					yyjson_doc_free(doc);
+					throw InvalidInputException("Invalid macro parameter JSON: expected object");
+				}
+
+				auto param_name = yyjson_obj_get(param_json, "parameter_name");
+				auto param_type = yyjson_obj_get(param_json, "parameter_type");
+				auto default_value = yyjson_obj_get(param_json, "default_value");
+				auto default_value_type = yyjson_obj_get(param_json, "default_value_type");
+
+				if (!yyjson_is_str(param_name) || !yyjson_is_str(param_type)) {
+					yyjson_doc_free(doc);
+					throw InvalidInputException("Invalid macro parameter JSON: missing required fields");
+				}
+
+				DuckLakeMacroParameters param;
+				param.parameter_name = yyjson_get_str(param_name);
+				param.parameter_type = yyjson_get_str(param_type);
+
+				// default_value and default_value_type may be null
+				if (yyjson_is_str(default_value)) {
+					param.default_value = Value(yyjson_get_str(default_value));
+				} else {
+					param.default_value = Value();
+				}
+				if (yyjson_is_str(default_value_type)) {
+					param.default_value_type = yyjson_get_str(default_value_type);
+				}
+
+				impl_info.parameters.push_back(std::move(param));
+			}
+		}
+
+		result.push_back(std::move(impl_info));
+	}
+	yyjson_doc_free(doc);
 	return result;
 }
 

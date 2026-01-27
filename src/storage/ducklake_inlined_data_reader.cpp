@@ -72,7 +72,7 @@ bool DuckLakeInlinedDataReader::TryInitializeScan(ClientContext &context, Global
 			string projected_column = KeywordHelper::WriteOptionallyQuoted(columns[index].name);
 			if (!ducklake_catalog.IsDuckCatalog()) {
 				// If it's not a duckdb catalog, we add a cast.
-				projected_column += "::" + columns[index].type.ToString();
+				projected_column = metadata_manager.CastColumnToTarget(projected_column, columns[index].type);
 			}
 			columns_to_read.push_back(projected_column);
 		}

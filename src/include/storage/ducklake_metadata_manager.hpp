@@ -106,6 +106,7 @@ public:
 	virtual bool TypeIsNativelySupported(const LogicalType &type);
 
 	virtual string GetColumnTypeInternal(const LogicalType &column_type);
+	virtual string CastColumnToTarget(const string &stats, const LogicalType &type);
 
 	DuckLakeMetadataManager &Get(DuckLakeTransaction &transaction);
 
@@ -239,7 +240,7 @@ protected:
 	//! Wrap field selections with list aggregation of struct objects (DBMS-specific)
 	//! For DuckDB: LIST({'key1': val1, 'key2': val2, ...})
 	//! For Postgres: jsonb_agg(jsonb_build_object('key1', val1, 'key2', val2, ...))
-	virtual string WrapWithListAggregation(const unordered_map<string, string> &fields) const;
+	virtual string WrapWithListAggregation(const vector<pair<string, string>> &fields) const;
 
 	//! Parse tag list from query result (can be overridden for DBMS-specific handling)
 	virtual vector<DuckLakeTag> LoadTags(const Value &tag_map) const;

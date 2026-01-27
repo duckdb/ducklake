@@ -21,6 +21,7 @@ public:
 	}
 
 	bool TypeIsNativelySupported(const LogicalType &type) override;
+	string CastColumnToTarget(const string &stats, const LogicalType &type) override;
 
 	string GetColumnTypeInternal(const LogicalType &type) override;
 
@@ -31,7 +32,7 @@ protected:
 	string GetLatestSnapshotQuery() const override;
 
 	//! Wrap field selections with list aggregation using Postgres jsonb syntax
-	string WrapWithListAggregation(const unordered_map<string, string> &fields) const override;
+	string WrapWithListAggregation(const vector<pair<string, string>> &fields) const override;
 
 	//! Cast stats columns to target type using Postgres syntax (no TRY_CAST)
 	string CastStatsToTarget(const string &stats, const LogicalType &type) override;
