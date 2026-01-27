@@ -3273,11 +3273,9 @@ FROM {METADATA_CATALOG}.ducklake_files_scheduled_for_deletion
 	}
 	return result;
 }
-vector<DuckLakeFileForCleanup> DuckLakeMetadataManager::GetOrphanFilesForCleanup(const string &filter,
-                                                                                 const string &separator) {
-	auto query = R"(SELECT filename
-FROM read_blob({DATA_PATH} || '**')
-WHERE filename NOT IN (
+
+unordered_set<string> DuckLakeMetadataManager::GetActiveFiles(const string &separator) {
+	string query = R"(
 SELECT REPLACE(
            CASE
                WHEN NOT file_relative THEN file_path
@@ -3312,19 +3310,41 @@ SELECT REPLACE(
            '{SEPARATOR}'
 ) AS full_path
 FROM {METADATA_CATALOG}.ducklake_files_scheduled_for_deletion f
-)
-)" + filter;
+)";
 	query = StringUtil::Replace(query, "{SEPARATOR}", separator);
 	auto res = Query(query);
 	if (res->HasError()) {
-		res->GetErrorObject().Throw("Failed to get files scheduled for deletion from DuckLake: ");
+		res->GetErrorObject().Throw("Failed to get active files from DuckLake: ");
 	}
+	unordered_set<string> result;
+	for (auto &row : *res) {
+		result.insert(row.GetValue<string>(0));
+	}
+	return result;
+}
+
+vector<DuckLakeFileForCleanup> DuckLakeMetadataManager::GetOrphanFilesForCleanup(const string &filter,
+                                                                                 const string &separator) {
+	// Get active files from metadata
+	auto active_files = GetActiveFiles(separator);
+
+	// Get all files from filesystem using DuckDB's read_blob
+	auto query = "SELECT filename FROM read_blob({DATA_PATH} || '**')" + filter;
+	auto res = transaction.Query(query);
+	if (res->HasError()) {
+		res->GetErrorObject().Throw("Failed to get files from filesystem: ");
+	}
+
+	// Compute set difference: files on filesystem but not in metadata
 	auto context = transaction.context.lock();
 	vector<DuckLakeFileForCleanup> result;
 	for (auto &row : *res) {
-		DuckLakeFileForCleanup info;
-		info.path = row.GetValue<string>(0);
-		result.push_back(std::move(info));
+		auto filename = row.GetValue<string>(0);
+		if (active_files.find(filename) == active_files.end()) {
+			DuckLakeFileForCleanup info;
+			info.path = filename;
+			result.push_back(std::move(info));
+		}
 	}
 	return result;
 }
