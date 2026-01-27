@@ -98,7 +98,7 @@ bool DuckLakeViewEntry::IsBound() const {
 void DuckLakeViewEntry::Bind(ClientContext &context) {
 	D_ASSERT(!is_bound);
 	is_bound = true;
-	std::string create_view_sql = "CREATE VIEW mock_view_name_lake";
+	string create_view_sql = "CREATE VIEW mock_view_name_lake";
 	if (!aliases.empty()) {
 		create_view_sql += "(";
 		for (const auto &alias : aliases) {

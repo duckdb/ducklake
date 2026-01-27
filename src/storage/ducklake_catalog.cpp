@@ -452,6 +452,29 @@ unique_ptr<DuckLakeCatalogSet> DuckLakeCatalog::LoadSchemaForSnapshot(DuckLakeTr
 		auto &ducklake_table = table->Cast<DuckLakeTableEntry>();
 		ducklake_table.SetPartitionData(std::move(partition));
 	}
+
+	// load the sort entries
+	for (auto &entry : catalog.sorts) {
+		auto table = schema_set->GetEntryById(entry.table_id);
+		if (!table || table->type != CatalogType::TABLE_ENTRY) {
+			throw InvalidInputException("Could not find matching table for sort entry");
+		}
+		auto sort = make_uniq<DuckLakeSort>();
+		sort->sort_id = entry.id.GetIndex();
+		for (auto &field : entry.fields) {
+			DuckLakeSortField sort_field;
+			sort_field.sort_key_index = field.sort_key_index;
+			sort_field.expression = field.expression;
+			sort_field.dialect = field.dialect;
+			sort_field.sort_direction = field.sort_direction;
+			sort_field.null_order = field.null_order;
+
+			sort->fields.push_back(sort_field);
+		}
+		auto &ducklake_table = table->Cast<DuckLakeTableEntry>();
+		ducklake_table.SetSortData(std::move(sort));
+	}
+
 	return schema_set;
 }
 

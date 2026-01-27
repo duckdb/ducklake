@@ -1,0 +1,104 @@
+# name: test/sql/sorted_table/set_sorted_by_rollback_basic.test
+# description: Verify SET SORTED BY is rolled back correctly when transaction is rolled back
+# group: [sorted_table]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+
+statement ok
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '__TEST_DIR__/rollback_basic/')
+
+statement ok
+CREATE TABLE ducklake.test(a INTEGER, b VARCHAR);
+
+# Record initial state
+query I
+SELECT max(schema_version) FROM __ducklake_metadata_ducklake.ducklake_schema_versions where table_id = 1
+----
+1
+
+# Verify no sort info exists initially
+query I
+SELECT COUNT(*)
+FROM __ducklake_metadata_ducklake.ducklake_sort_info
+WHERE table_id = 1 AND end_snapshot IS NULL
+----
+0
+
+# BEGIN transaction and SET SORTED BY
+statement ok
+BEGIN
+
+statement ok
+ALTER TABLE ducklake.test SET SORTED BY (a ASC NULLS LAST);
+
+# ROLLBACK the transaction
+statement ok
+ROLLBACK
+
+# Verify snapshot_id has NOT changed (no new snapshot created)
+query I
+SELECT max(schema_version) FROM __ducklake_metadata_ducklake.ducklake_schema_versions where table_id = 1
+----
+1
+
+# Verify sort info does NOT exist after rollback
+query I
+SELECT COUNT(*)
+FROM __ducklake_metadata_ducklake.ducklake_sort_info
+WHERE table_id = 1 AND end_snapshot IS NULL
+----
+0
+
+# ============================================
+# Test multiple SET SORTED BY then rollback
+# ============================================
+
+statement ok
+BEGIN
+
+statement ok
+ALTER TABLE ducklake.test SET SORTED BY (a ASC);
+
+statement ok
+ALTER TABLE ducklake.test SET SORTED BY (b DESC);
+
+statement ok
+ALTER TABLE ducklake.test SET SORTED BY (a DESC, b ASC);
+
+statement ok
+ROLLBACK
+
+# Verify no changes persisted
+query I
+SELECT max(schema_version) FROM __ducklake_metadata_ducklake.ducklake_schema_versions where table_id = 1
+----
+1
+
+query I
+SELECT COUNT(*)
+FROM __ducklake_metadata_ducklake.ducklake_sort_info
+WHERE table_id = 1 AND end_snapshot IS NULL
+----
+0
+
+# ============================================
+# Verify SET SORTED BY still works after rollback
+# ============================================
+
+statement ok
+ALTER TABLE ducklake.test SET SORTED BY (a ASC NULLS LAST, b DESC NULLS LAST);
+
+# This should now have sort info committed
+query III
+SELECT expression, sort_direction, null_order
+FROM __ducklake_metadata_ducklake.ducklake_sort_expression se
+JOIN __ducklake_metadata_ducklake.ducklake_sort_info si USING (sort_id)
+WHERE si.table_id = 1 AND si.end_snapshot IS NULL
+ORDER BY se.sort_key_index
+----
+a	ASC	NULLS_LAST
+b	DESC	NULLS_LAST

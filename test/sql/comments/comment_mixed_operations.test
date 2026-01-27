@@ -1,0 +1,130 @@
+# name: test/sql/comments/comment_mixed_operations.test
+# description: Verify COMMENT ON mixed with schema-altering operations
+# group: [comments]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+
+statement ok
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '__TEST_DIR__/comment_mixed/')
+
+statement ok
+CREATE TABLE ducklake.test(a INTEGER, b VARCHAR);
+
+query I
+SELECT max(schema_version) FROM __ducklake_metadata_ducklake.ducklake_schema_versions where table_id = 1
+----
+1
+
+# COMMENT ON should NOT increment
+statement ok
+COMMENT ON TABLE ducklake.test IS 'first comment'
+
+query I
+SELECT max(schema_version) FROM __ducklake_metadata_ducklake.ducklake_schema_versions where table_id = 1
+----
+1
+
+# ADD COLUMN SHOULD increment
+statement ok
+ALTER TABLE ducklake.test ADD COLUMN c BIGINT
+
+query I
+SELECT max(schema_version) FROM __ducklake_metadata_ducklake.ducklake_schema_versions where table_id = 1
+----
+3
+
+# COMMENT ON after ADD COLUMN should NOT increment
+statement ok
+COMMENT ON COLUMN ducklake.test.c IS 'c column comment'
+
+query I
+SELECT max(schema_version) FROM __ducklake_metadata_ducklake.ducklake_schema_versions where table_id = 1
+----
+3
+
+# Update table comment should NOT increment
+statement ok
+COMMENT ON TABLE ducklake.test IS 'updated comment'
+
+query I
+SELECT max(schema_version) FROM __ducklake_metadata_ducklake.ducklake_schema_versions where table_id = 1
+----
+3
+
+# RENAME COLUMN SHOULD increment
+statement ok
+ALTER TABLE ducklake.test RENAME COLUMN b TO b_renamed
+
+query I
+SELECT max(schema_version) FROM __ducklake_metadata_ducklake.ducklake_schema_versions where table_id = 1
+----
+6
+
+# Verify final state
+query I
+SELECT comment FROM duckdb_tables() WHERE table_name = 'test'
+----
+updated comment
+
+# Clear the table comment (set to NULL) should NOT increment
+statement ok
+COMMENT ON TABLE ducklake.test IS NULL
+
+query I
+SELECT max(schema_version) FROM __ducklake_metadata_ducklake.ducklake_schema_versions where table_id = 1
+----
+6
+
+# Verify comment was cleared
+query I
+SELECT comment FROM duckdb_tables() WHERE table_name = 'test'
+----
+NULL
+
+# ============================================
+# VIEW COMMENTS SHOULD INCREMENT GLOBALLY
+# ============================================
+
+statement ok
+CREATE VIEW ducklake.test_view AS SELECT * FROM ducklake.test
+
+statement ok
+COMMENT ON VIEW ducklake.test_view IS 'view comment'
+
+# Verify view comment was written
+query I
+SELECT comment FROM duckdb_views() WHERE view_name = 'test_view'
+----
+view comment
+
+statement ok
+COMMENT ON VIEW ducklake.test_view IS 'updated view comment'
+
+# Verify view comment was updated
+query I
+SELECT comment FROM duckdb_views() WHERE view_name = 'test_view'
+----
+updated view comment
+
+# Clear view comment should NOT increment
+statement ok
+COMMENT ON VIEW ducklake.test_view IS NULL
+
+# Verify view comment was cleared
+query I
+SELECT comment FROM duckdb_views() WHERE view_name = 'test_view'
+----
+NULL
+
+# RENAME COLUMN SHOULD increment, and should use a higher schema_version
+statement ok
+ALTER TABLE ducklake.test RENAME COLUMN b_renamed TO b_renamed_again
+
+query I
+SELECT max(schema_version) FROM __ducklake_metadata_ducklake.ducklake_schema_versions where table_id = 1
+----
+12

@@ -19,6 +19,7 @@
 #include "common/ducklake_name_map.hpp"
 #include "storage/ducklake_inlined_data.hpp"
 #include "duckdb/parser/parsed_expression.hpp"
+#include "duckdb/common/enums/order_type.hpp"
 
 namespace duckdb {
 
@@ -205,6 +206,38 @@ struct DuckLakePartitionInfo {
 	}
 };
 
+struct DuckLakeSortFieldInfo {
+	idx_t sort_key_index = 0;
+	string expression;
+	string dialect;
+	OrderType sort_direction;
+	OrderByNullType null_order;
+	bool operator!=(const DuckLakeSortFieldInfo &new_field) const {
+		return expression != new_field.expression || dialect != new_field.dialect ||
+		       sort_direction != new_field.sort_direction || null_order != new_field.null_order;
+	}
+};
+
+struct DuckLakeSortInfo {
+	optional_idx id;
+	TableIndex table_id;
+	vector<DuckLakeSortFieldInfo> fields;
+	bool operator==(const DuckLakeSortInfo &new_sort) const {
+		if (table_id != new_sort.table_id || fields.size() != new_sort.fields.size()) {
+			return false;
+		}
+		for (idx_t i = 0; i < fields.size(); i++) {
+			if (fields[i] != new_sort.fields[i]) {
+				return false;
+			}
+		}
+		return true;
+	}
+	bool operator!=(vector<DuckLakeSortInfo>::const_reference value) const {
+		return !(*this == value);
+	}
+};
+
 struct DuckLakeGlobalColumnStatsInfo {
 	FieldIndex column_id;
 
@@ -292,6 +325,7 @@ struct DuckLakeCatalogInfo {
 	vector<DuckLakeViewInfo> views;
 	vector<DuckLakeMacroInfo> macros;
 	vector<DuckLakePartitionInfo> partitions;
+	vector<DuckLakeSortInfo> sorts;
 };
 
 struct DuckLakeFileData {
