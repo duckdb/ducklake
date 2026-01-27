@@ -811,11 +811,19 @@ ORDER BY table_id;
 }
 
 string DuckLakeMetadataManager::GetFileSelectList(const string &prefix) {
-	auto result = StringUtil::Replace(
-	    "{PREFIX}.path, {PREFIX}.path_is_relative, {PREFIX}.file_size_bytes, {PREFIX}.footer_size", "{PREFIX}", prefix);
-	if (IsEncrypted()) {
-		result += ", " + prefix + ".encryption_key";
+	static const vector<string> column_list {
+	    "path", "path_is_relative", "file_size_bytes", "footer_size", "encryption_key",
+	};
+
+	auto count = column_list.size();
+	if (!IsEncrypted()) {
+		count -= 1;
 	}
+
+	auto result = StringUtil::Join(column_list, count, ", ", [&prefix](const string &column) {
+		return prefix + "." + column + " AS " + prefix + "_" + column;
+	});
+
 	return result;
 }
 
