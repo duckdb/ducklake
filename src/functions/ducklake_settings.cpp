@@ -25,6 +25,10 @@ static unique_ptr<FunctionData> DuckLakeSettingsBind(ClientContext &context, Tab
 	auto catalog_type = ducklake_catalog.MetadataType();
 	if (catalog_type.empty()) {
 		catalog_type = "duckdb";
+	} else if (catalog_type == "postgres_scanner") {
+		catalog_type = "postgres";
+	} else if (catalog_type == "sqlite_scanner") {
+		catalog_type = "sqlite";
 	}
 	row_values.push_back(Value(catalog_type));
 
