@@ -1,0 +1,132 @@
+# name: test/sql/sorted_table/merge_adjacent_sorted_case_insensitivity.test
+# description: test ducklake merge adjacent files with SET SORTED BY when column case does not match the table
+# group: [sorted_table]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+
+
+statement ok
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '__TEST_DIR__/merge_adjacent_options_sorted_case_insensitivity/')
+
+statement ok
+USE ducklake;
+
+# Create one Table with columns that have upper and lower case
+statement ok
+CREATE TABLE sort_on_compaction (unique_id BIGINT, Sort_Key_1 BIGINT, Sort_Key_2 VARCHAR);
+
+statement ok
+INSERT INTO sort_on_compaction (unique_id, sort_key_1, sort_key_2)
+FROM range(4) t(i)
+SELECT 
+    i AS unique_id,
+    i % 2 AS sort_key_1,
+    'woot' || i AS sort_key_2
+ORDER BY 
+    i DESC
+;
+
+statement ok
+INSERT INTO sort_on_compaction (unique_id, sort_key_1, sort_key_2)
+FROM range(4) t(i)
+SELECT 
+    i + 4 AS unique_id,
+    (i + 4) % 2 AS sort_key_1,
+    'woot' || (i + 4) AS sort_key_2
+ORDER BY 
+    i DESC
+;
+
+query III
+FROM sort_on_compaction
+----
+3	1	woot3
+2	0	woot2
+1	1	woot1
+0	0	woot0
+7	1	woot7
+6	0	woot6
+5	1	woot5
+4	0	woot4
+
+# SET SORTED BY should be a case insensitive operation (when original columns are case sensitive)
+statement ok
+ALTER TABLE ducklake.sort_on_compaction SET SORTED BY (SORT_KEY_1 ASC NULLS LAST, SoRt_KeY_2 ASC NULLS LAST);
+
+statement ok
+CALL ducklake_merge_adjacent_files('ducklake', 'sort_on_compaction');
+
+query III
+FROM sort_on_compaction
+----
+0	0	woot0
+2	0	woot2
+4	0	woot4
+6	0	woot6
+1	1	woot1
+3	1	woot3
+5	1	woot5
+7	1	woot7
+
+
+# Create one Table with columns that are all lower case
+statement ok
+CREATE TABLE sort_on_compaction_2 (unique_id BIGINT, sort_key_1 BIGINT, sort_key_2 VARCHAR);
+
+statement ok
+INSERT INTO sort_on_compaction_2 (unique_id, sort_key_1, sort_key_2)
+FROM range(4) t(i)
+SELECT 
+    i AS unique_id,
+    i % 2 AS sort_key_1,
+    'woot' || i AS sort_key_2
+ORDER BY 
+    i DESC
+;
+
+statement ok
+INSERT INTO sort_on_compaction_2 (unique_id, sort_key_1, sort_key_2)
+FROM range(4) t(i)
+SELECT 
+    i + 4 AS unique_id,
+    (i + 4) % 2 AS sort_key_1,
+    'woot' || (i + 4) AS sort_key_2
+ORDER BY 
+    i DESC
+;
+
+query III
+FROM sort_on_compaction_2
+----
+3	1	woot3
+2	0	woot2
+1	1	woot1
+0	0	woot0
+7	1	woot7
+6	0	woot6
+5	1	woot5
+4	0	woot4
+
+# SET SORTED BY should be a case insensitive operation (when original columns are lower case)
+statement ok
+ALTER TABLE ducklake.sort_on_compaction_2 SET SORTED BY (SORT_KEY_1 ASC NULLS LAST, SoRt_KeY_2 ASC NULLS LAST);
+
+statement ok
+CALL ducklake_merge_adjacent_files('ducklake', 'sort_on_compaction_2');
+
+query III
+FROM sort_on_compaction_2
+----
+0	0	woot0
+2	0	woot2
+4	0	woot4
+6	0	woot6
+1	1	woot1
+3	1	woot3
+5	1	woot5
+7	1	woot7
+

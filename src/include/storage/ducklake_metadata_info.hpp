@@ -206,7 +206,6 @@ struct DuckLakePartitionInfo {
 
 struct DuckLakeSortFieldInfo {
 	idx_t sort_key_index = 0;
-	// TODO: Validate that expression is case insensitive when stored
 	string expression;
 	string dialect;
 	OrderType sort_direction;

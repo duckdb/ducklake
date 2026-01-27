@@ -983,7 +983,7 @@ void DuckLakeTransaction::GetNewTableInfo(DuckLakeCommitState &commit_state, Duc
 			// note that in case of nested types we might be dropping multiple columns here
 			HandleChangedFields(commit_state.GetTableId(table), table.GetChangedFields(), result,
 			                    columns_handled_by_later_ops);
-      transaction_changes.altered_tables_with_schema_version_changes.insert(table_id);
+			transaction_changes.altered_tables_with_schema_version_changes.insert(table_id);
 			column_schema_change = true;
 			break;
 		}

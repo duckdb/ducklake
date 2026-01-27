@@ -13,7 +13,6 @@
 #include "duckdb/common/enums/order_type.hpp"
 
 namespace duckdb {
-class BaseStatistics;
 
 struct DuckLakeSortField {
 	idx_t sort_key_index = 0;
