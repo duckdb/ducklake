@@ -159,6 +159,8 @@ public:
 	                                   const vector<DuckLakeTableInfo> &new_tables,
 	                                   const vector<DuckLakeTableInfo> &new_inlined_data_tables_result);
 	virtual string WriteNewInlinedDeletes(const vector<DuckLakeDeletedInlinedDataInfo> &new_deletes);
+	virtual string WriteNewInlinedFileDeletes(DuckLakeSnapshot &commit_snapshot,
+	                                          const vector<DuckLakeInlinedFileDeletionInfo> &new_deletes);
 	virtual string WriteNewInlinedTables(DuckLakeSnapshot commit_snapshot, const vector<DuckLakeTableInfo> &tables);
 	virtual string GetInlinedTableQueries(DuckLakeSnapshot commit_snapshot, const DuckLakeTableInfo &table,
 	                                      string &inlined_tables, string &inlined_table_queries);
@@ -268,7 +270,9 @@ private:
 	virtual string GenerateFilterPushdown(const TableFilter &filter, unordered_set<string> &referenced_stats);
 
 private:
-	unordered_map<idx_t, string> inlined_table_name_cache;
+	unordered_map<idx_t, string> insert_inlined_table_name_cache;
+	unordered_map<idx_t, string> delete_inlined_table_name_cache;
+
 
 protected:
 	DuckLakeTransaction &transaction;

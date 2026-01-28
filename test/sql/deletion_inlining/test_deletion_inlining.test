@@ -1,0 +1,53 @@
+# name: test/sql/deletion_inlining/test_deletion_inlining.test
+# description: test ducklake deletion inlining, simple case
+# group: [deletion_inlining]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+
+test-env DATA_PATH __TEST_DIR__
+
+statement ok
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/test_deletion_inlining',DATA_INLINING_ROW_LIMIT 10,  METADATA_CATALOG 'ducklake_meta')
+
+statement ok
+use ducklake
+
+statement ok
+CREATE TABLE t AS SELECT range a FROM range(50);
+
+# This creates a deletion file (19 rows deleted, which exceeds the inlining threshold)
+statement ok
+DELETE FROM T where a < 5
+
+query IIII
+SELECT table_id, begin_snapshot, end_snapshot, delete_count FROM ducklake_meta.ducklake_delete_file
+----
+
+# Verify the first inlined deletion (5 rows: 0-4)
+query III
+SELECT file_id, row_id, begin_snapshot FROM ducklake_meta.ducklake_inlined_delete_1 ORDER BY row_id
+----
+0	0	2
+0	1	2
+0	2	2
+0	3	2
+0	4	2
+
+# statement ok
+# DELETE FROM T where a < 8
+#
+# query III
+# SELECT file_id, row_id, begin_snapshot FROM ducklake_meta.ducklake_inlined_delete_1 ORDER BY row_id
+# ----
+# 0	0	2
+# 0	1	2
+# 0	2	2
+# 0	3	2
+# 0	4	2
+# 0	5	3
+# 0	6	3
+# 0	7	3

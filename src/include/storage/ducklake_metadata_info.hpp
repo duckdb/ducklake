@@ -163,6 +163,18 @@ struct DuckLakeDeletedInlinedDataInfo {
 	vector<idx_t> deleted_row_ids;
 };
 
+//! Info for a single file deletion entry to be written to inlined deletion table
+struct DuckLakeInlinedFileDeletionEntry {
+	idx_t file_id;
+	idx_t row_id;
+};
+
+//! Info for all inlined file deletions for a single table
+struct DuckLakeInlinedFileDeletionInfo {
+	TableIndex table_id;
+	vector<DuckLakeInlinedFileDeletionEntry> deletions;
+};
+
 struct DuckLakeDeleteFileInfo {
 	DataFileIndex id;
 	TableIndex table_id;

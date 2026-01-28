@@ -16,6 +16,7 @@
 #include "duckdb/common/types/uuid.hpp"
 #include "storage/ducklake_delete.hpp"
 #include "storage/ducklake_table_entry.hpp"
+#include "storage/ducklake_schema_entry.hpp"
 #include "common/ducklake_data_file.hpp"
 #include "storage/ducklake_multi_file_list.hpp"
 #include "duckdb/parallel/thread_context.hpp"
@@ -440,6 +441,20 @@ void DuckLakeDelete::FlushDelete(DuckLakeTransaction &transaction, ClientContext
 	delete_file.data_file_id = data_file_info.file_id;
 	// check if the file already has deletes
 	auto existing_delete_data = delete_map->GetDeleteData(filename);
+
+	// check if we should use inlined file deletions instead of creating a delete file
+	if (data_file_info.file_id.IsValid() && !existing_delete_data && !data_file_info.delete_file_id.IsValid()) {
+		auto &catalog = table.catalog.Cast<DuckLakeCatalog>();
+		auto &schema = table.ParentSchema().Cast<DuckLakeSchemaEntry>();
+		auto threshold = catalog.DataInliningRowLimit(schema.GetSchemaId(), table.GetTableId());
+		if (threshold > 0 && sorted_deletes.size() <= threshold) {
+			// use inlined file deletions
+			transaction.AddNewInlinedFileDeletes(table.GetTableId(), data_file_info.file_id.index,
+			                                     std::move(sorted_deletes));
+			return;
+		}
+	}
+
 	if (existing_delete_data) {
 		// deletes already exist for this file
 		auto &existing_deletes = existing_delete_data->deleted_rows;
