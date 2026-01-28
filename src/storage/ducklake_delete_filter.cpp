@@ -176,6 +176,9 @@ void DuckLakeDeleteFilter::Initialize(const DuckLakeInlinedDataDeletes &inlined_
 	for (auto &idx : inlined_deletes.rows) {
 		delete_data->deleted_rows.push_back(idx);
 	}
+	delete_data->snapshot_ids.clear();
+	// The deleted_rows vector must be sorted for binary search in Filter()
+	std::sort(delete_data->deleted_rows.begin(), delete_data->deleted_rows.end());
 }
 
 unordered_map<idx_t, idx_t> DuckLakeDeleteFilter::ScanDataFileRowIds(ClientContext &context,
@@ -269,34 +272,60 @@ void DuckLakeDeleteFilter::Initialize(ClientContext &context, const DuckLakeDele
 				delete_data->scan_snapshot_map = std::move(file_pos_to_snapshot);
 			}
 		}
-	} else {
-		// we have no delete file - this means the entire file was deleted
+	} else if (!delete_scan.inlined_file_deletions.empty()) {
+		memset(rows_to_scan.get(), 0, sizeof(bool) * delete_scan.row_count);
+	} else if (delete_scan.snapshot_id.IsValid()) {
 		// set all rows as being scanned
 		memset(rows_to_scan.get(), 1, sizeof(bool) * delete_scan.row_count);
-		if (delete_scan.snapshot_id.IsValid()) {
+		for (idx_t i = 0; i < delete_scan.row_count; i++) {
+			delete_data->scan_snapshot_map[i] = delete_scan.snapshot_id.GetIndex();
+		}
+		// For full file deletes, we need to scan the data file to get all row_ids
+		unordered_set<idx_t> all_positions;
+		for (idx_t i = 0; i < delete_scan.row_count; i++) {
+			all_positions.insert(i);
+		}
+		auto file_pos_to_row_id = ScanDataFileRowIds(context, delete_scan.file, all_positions);
+		if (!file_pos_to_row_id.empty()) {
+			// File has embedded row_ids
+			delete_data->uses_row_id = true;
+			for (auto &entry : file_pos_to_row_id) {
+				delete_data->scan_snapshot_map[entry.second] = delete_scan.snapshot_id.GetIndex();
+			}
+		} else {
+			// No embedded row_ids
+			delete_data->uses_row_id = false;
 			for (idx_t i = 0; i < delete_scan.row_count; i++) {
 				delete_data->scan_snapshot_map[i] = delete_scan.snapshot_id.GetIndex();
 			}
 		}
-		// For full file deletes, we need to scan the data file to get all row_ids
-		if (delete_scan.snapshot_id.IsValid()) {
-			unordered_set<idx_t> all_positions;
-			for (idx_t i = 0; i < delete_scan.row_count; i++) {
-				all_positions.insert(i);
+	} else {
+		// No deletions at all - initialize to no rows scanned
+		memset(rows_to_scan.get(), 0, sizeof(bool) * delete_scan.row_count);
+	}
+
+	// Process inlined file deletions
+	if (!delete_scan.inlined_file_deletions.empty()) {
+		// Collect positions for row_id lookup
+		unordered_set<idx_t> inlined_positions;
+		for (auto &inlined_delete : delete_scan.inlined_file_deletions) {
+				rows_to_scan[inlined_delete.first] = true;
+				inlined_positions.insert(inlined_delete.first);
+		}
+		// Check if file has embedded row_ids and populate scan_snapshot_map accordingly
+		auto file_pos_to_row_id = ScanDataFileRowIds(context, delete_scan.file, inlined_positions);
+		if (!file_pos_to_row_id.empty()) {
+			delete_data->uses_row_id = true;
+			for (auto &inlined_delete : delete_scan.inlined_file_deletions) {
+				auto it = file_pos_to_row_id.find(inlined_delete.first);
+				if (it != file_pos_to_row_id.end()) {
+					delete_data->scan_snapshot_map[it->second] = inlined_delete.second;
+				}
 			}
-			auto file_pos_to_row_id = ScanDataFileRowIds(context, delete_scan.file, all_positions);
-			if (!file_pos_to_row_id.empty()) {
-				// File has embedded row_ids
-				delete_data->uses_row_id = true;
-				for (auto &entry : file_pos_to_row_id) {
-					delete_data->scan_snapshot_map[entry.second] = delete_scan.snapshot_id.GetIndex();
-				}
-			} else {
-				// No embedded row_ids
-				delete_data->uses_row_id = false;
-				for (idx_t i = 0; i < delete_scan.row_count; i++) {
-					delete_data->scan_snapshot_map[i] = delete_scan.snapshot_id.GetIndex();
-				}
+		} else {
+			delete_data->uses_row_id = false;
+			for (auto &inlined_delete : delete_scan.inlined_file_deletions) {
+				delete_data->scan_snapshot_map[inlined_delete.first] = inlined_delete.second;
 			}
 		}
 	}

@@ -383,6 +383,10 @@ struct DuckLakeDeleteScanEntry {
 	optional_idx start_snapshot;
 	//! The end of the snapshot range for filtering
 	optional_idx end_snapshot;
+	//! Data file ID for matching inlined deletions
+	DataFileIndex file_id;
+	//! Inlined file deletions: maps row_id -> snapshot_id when deleted
+	unordered_map<idx_t, idx_t> inlined_file_deletions;
 };
 
 struct DuckLakeFileListExtendedEntry {
