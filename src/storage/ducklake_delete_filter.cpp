@@ -173,12 +173,13 @@ void DuckLakeDeleteFilter::Initialize(ClientContext &context, const DuckLakeFile
 }
 
 void DuckLakeDeleteFilter::Initialize(const DuckLakeInlinedDataDeletes &inlined_deletes) {
+	auto mid_idx = delete_data->deleted_rows.size();
 	for (auto &idx : inlined_deletes.rows) {
 		delete_data->deleted_rows.push_back(idx);
 	}
 	delete_data->snapshot_ids.clear();
-	// The deleted_rows vector must be sorted for binary search in Filter()
-	std::sort(delete_data->deleted_rows.begin(), delete_data->deleted_rows.end());
+	std::inplace_merge(delete_data->deleted_rows.begin(), delete_data->deleted_rows.begin() + mid_idx,
+	                   delete_data->deleted_rows.end());
 }
 
 unordered_map<idx_t, idx_t> DuckLakeDeleteFilter::ScanDataFileRowIds(ClientContext &context,

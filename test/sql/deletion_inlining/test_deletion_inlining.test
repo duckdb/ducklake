@@ -120,11 +120,6 @@ DELETE FROM T where a < 15
 statement ok
 DELETE FROM T where a > 45
 
-query I
-SELECT COUNT(*) FROM t
-----
-30
-
 # New deletions should be inlined (6 from a<15 + 4 from a>45 = 10 rows)
 query III
 SELECT file_id, row_id, begin_snapshot FROM ducklake_meta.ducklake_inlined_delete_1 ORDER BY row_id
@@ -140,20 +135,13 @@ SELECT file_id, row_id, begin_snapshot FROM ducklake_meta.ducklake_inlined_delet
 0	48	7
 0	49	7
 
+query I
+SELECT COUNT(*) FROM t
+----
+30
+
 # Delete file should still have 10 deletions from the first flush
 query IIIII
 SELECT table_id, begin_snapshot, end_snapshot, delete_count, partial_max FROM ducklake_meta.ducklake_delete_file ORDER BY begin_snapshot
 ----
 1	2	NULL	10	4
-
-# # query III
-# # SELECT file_id, row_id, begin_snapshot FROM ducklake_meta.ducklake_inlined_delete_1 ORDER BY row_id
-# # ----
-# # 0	0	2
-# # 0	1	2
-# # 0	2	2
-# # 0	3	2
-# # 0	4	2
-# # 0	5	3
-# # 0	6	3
-# # 0	7	3
