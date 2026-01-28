@@ -365,6 +365,10 @@ struct DuckLakeFileListEntry {
 	optional_idx snapshot_filter_min;
 	MappingIndex mapping_id;
 	DuckLakeDataType data_type = DuckLakeDataType::DATA_FILE;
+	//! The data file id
+	DataFileIndex file_id;
+	//! Inlined file deletions (row positions that have been deleted and stored in the metadata database)
+	set<idx_t> inlined_file_deletions;
 };
 
 struct DuckLakeDeleteScanEntry {

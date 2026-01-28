@@ -144,10 +144,17 @@ ReaderInitializeType DuckLakeMultiFileReader::InitializeReader(MultiFileReaderDa
 				delete_filter->Initialize(*inlined_deletes);
 				reader.deletion_filter = std::move(delete_filter);
 			}
-		} else if (!file_entry.delete_file.path.empty() || file_entry.max_row_count.IsValid()) {
+		} else if (!file_entry.delete_file.path.empty() || file_entry.max_row_count.IsValid() ||
+		           !file_entry.inlined_file_deletions.empty()) {
 			auto delete_filter = make_uniq<DuckLakeDeleteFilter>();
 			if (!file_entry.delete_file.path.empty()) {
 				delete_filter->Initialize(context, file_entry.delete_file);
+			}
+			// Apply inlined file deletions (stored in metadata database instead of delete file)
+			if (!file_entry.inlined_file_deletions.empty()) {
+				DuckLakeInlinedDataDeletes inlined_deletes;
+				inlined_deletes.rows = file_entry.inlined_file_deletions;
+				delete_filter->Initialize(inlined_deletes);
 			}
 			if (file_entry.max_row_count.IsValid()) {
 				delete_filter->SetMaxRowCount(file_entry.max_row_count.GetIndex());

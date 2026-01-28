@@ -1111,7 +1111,7 @@ vector<DuckLakeFileListEntry> DuckLakeMetadataManager::GetFilesForTable(DuckLake
                                                                         DuckLakeSnapshot snapshot,
                                                                         const FilterPushdownInfo *filter_info) {
 	auto table_id = table.GetTableId();
-	string select_list = GetFileSelectList("data") +
+	string select_list = "data.data_file_id, " + GetFileSelectList("data") +
 	                     ", data.row_id_start, data.begin_snapshot, data.partial_max, data.mapping_id, " +
 	                     GetFileSelectList("del");
 
@@ -1147,10 +1147,48 @@ WHERE data.table_id=%d AND {SNAPSHOT_ID} >= data.begin_snapshot AND ({SNAPSHOT_I
 	if (result->HasError()) {
 		result->GetErrorObject().Throw("Failed to get data file list from DuckLake: ");
 	}
+
+	// Query inlined file deletions for this table (if the table exists)
+	map<idx_t, set<idx_t>> inlined_deletions;
+	auto cache_entry = delete_inlined_table_name_cache.find(table_id.index);
+	string inlined_table_name;
+	if (cache_entry != delete_inlined_table_name_cache.end()) {
+		inlined_table_name = cache_entry->second;
+	} else {
+		// Check if the inlined deletion table exists
+		auto check_query = StringUtil::Format(
+		    "SELECT table_name FROM {METADATA_CATALOG}.ducklake_inlined_deletion_tables WHERE table_id = %d",
+		    table_id.index);
+		auto check_result = transaction.Query(snapshot, check_query);
+		if (!check_result->HasError()) {
+			auto chunk = check_result->Fetch();
+			if (chunk && chunk->size() > 0) {
+				inlined_table_name = chunk->GetValue(0, 0).ToString();
+				delete_inlined_table_name_cache[table_id.index] = inlined_table_name;
+			}
+		}
+	}
+
+	if (!inlined_table_name.empty()) {
+		// Query the inlined deletions
+		auto inlined_query = StringUtil::Format(
+		    "SELECT file_id, row_id FROM {METADATA_CATALOG}.%s WHERE begin_snapshot <= {SNAPSHOT_ID}",
+		    inlined_table_name);
+		auto inlined_result = transaction.Query(snapshot, inlined_query);
+		if (!inlined_result->HasError()) {
+			for (auto &row : *inlined_result) {
+				auto file_id = row.GetValue<idx_t>(0);
+				auto row_id = row.GetValue<idx_t>(1);
+				inlined_deletions[file_id].insert(row_id);
+			}
+		}
+	}
+
 	vector<DuckLakeFileListEntry> files;
 	for (auto &row : *result) {
 		DuckLakeFileListEntry file_entry;
 		idx_t col_idx = 0;
+		file_entry.file_id = DataFileIndex(row.GetValue<idx_t>(col_idx++));
 		file_entry.file = ReadDataFile(table, row, col_idx, IsEncrypted());
 		if (!row.IsNull(col_idx)) {
 			file_entry.row_id_start = row.GetValue<idx_t>(col_idx);
@@ -1167,6 +1205,13 @@ WHERE data.table_id=%d AND {SNAPSHOT_ID} >= data.begin_snapshot AND ({SNAPSHOT_I
 		}
 		col_idx++;
 		file_entry.delete_file = ReadDataFile(table, row, col_idx, IsEncrypted());
+
+		// Populate inlined file deletions for this file
+		auto del_entry = inlined_deletions.find(file_entry.file_id.index);
+		if (del_entry != inlined_deletions.end()) {
+			file_entry.inlined_file_deletions = std::move(del_entry->second);
+		}
+
 		files.push_back(std::move(file_entry));
 	}
 	return files;
