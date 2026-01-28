@@ -280,7 +280,7 @@ void DuckLakeDeleteFilter::Initialize(ClientContext &context, const DuckLakeDele
 			}
 		}
 
-		// Populate scan_snapshot_map, converting to row_ids if available
+		// Populate scan_snapshot_map, convert to row_ids
 		PopulateSnapshotMapFromPositions(context, delete_scan.file, file_pos_to_snapshot);
 	} else if (!delete_scan.inlined_file_deletions.empty()) {
 		memset(rows_to_scan.get(), 0, sizeof(bool) * delete_scan.row_count);

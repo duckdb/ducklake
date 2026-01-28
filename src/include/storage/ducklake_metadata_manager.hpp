@@ -274,6 +274,13 @@ private:
 	virtual string GenerateFilterPushdown(const TableFilter &filter, unordered_set<string> &referenced_stats);
 
 private:
+	//! Read inlined file deletions for regular table scans (no snapshot info per row)
+	map<idx_t, set<idx_t>> ReadInlinedFileDeletions(TableIndex table_id, DuckLakeSnapshot snapshot);
+	//! Read inlined file deletions for deletion scans (includes snapshot info per row)
+	map<idx_t, unordered_map<idx_t, idx_t>> ReadInlinedFileDeletionsForRange(TableIndex table_id,
+	                                                                          DuckLakeSnapshot start_snapshot,
+	                                                                          DuckLakeSnapshot end_snapshot);
+
 	unordered_map<idx_t, string> insert_inlined_table_name_cache;
 	unordered_map<idx_t, string> delete_inlined_table_name_cache;
 
