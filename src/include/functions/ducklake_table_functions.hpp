@@ -130,4 +130,9 @@ public:
 	static TableFunctionSet GetFunctions();
 };
 
+class DuckLakeSettingsFunction : public BaseMetadataFunction {
+public:
+	DuckLakeSettingsFunction();
+};
+
 } // namespace duckdb
