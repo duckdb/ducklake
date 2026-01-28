@@ -1150,25 +1150,7 @@ WHERE data.table_id=%d AND {SNAPSHOT_ID} >= data.begin_snapshot AND ({SNAPSHOT_I
 
 	// Query inlined file deletions for this table (if the table exists)
 	map<idx_t, set<idx_t>> inlined_deletions;
-	auto cache_entry = delete_inlined_table_name_cache.find(table_id.index);
-	string inlined_table_name;
-	if (cache_entry != delete_inlined_table_name_cache.end()) {
-		inlined_table_name = cache_entry->second;
-	} else {
-		// Check if the inlined deletion table exists
-		auto check_query = StringUtil::Format(
-		    "SELECT table_name FROM {METADATA_CATALOG}.ducklake_inlined_deletion_tables WHERE table_id = %d",
-		    table_id.index);
-		auto check_result = transaction.Query(snapshot, check_query);
-		if (!check_result->HasError()) {
-			auto chunk = check_result->Fetch();
-			if (chunk && chunk->size() > 0) {
-				inlined_table_name = chunk->GetValue(0, 0).ToString();
-				delete_inlined_table_name_cache[table_id.index] = inlined_table_name;
-			}
-		}
-	}
-
+	auto inlined_table_name = GetInlinedDeletionTableName(table_id, snapshot);
 	if (!inlined_table_name.empty()) {
 		// Query the inlined deletions
 		auto inlined_query = StringUtil::Format(
@@ -2039,34 +2021,20 @@ string DuckLakeMetadataManager::WriteNewInlinedFileDeletes(DuckLakeSnapshot &com
 		return batch_queries;
 	}
 	for (auto &entry : new_deletes) {
-		// table name format: ducklake_inlined_delete_{table_id}
-		string table_name = StringUtil::Format("ducklake_inlined_delete_%d", entry.table_id.index);
-
-		// check if this table already exists in our cache
-		// use a separate cache key space to avoid collision with inlined data tables
-		auto cache_entry = delete_inlined_table_name_cache.find(entry.table_id.index);
-		if (cache_entry == delete_inlined_table_name_cache.end()) {
-			// check if the table exists in the metadata catalog
-			auto query = StringUtil::Format(
-			    "SELECT table_name FROM {METADATA_CATALOG}.ducklake_inlined_deletion_tables WHERE table_id = %d",
-			    entry.table_id.index);
-			auto result = transaction.Query(commit_snapshot, query);
-			bool table_exists = false;
-			if (!result->HasError()) {
-				auto chunk = result->Fetch();
-				if (chunk && chunk->size() > 0) {
-					table_exists = true;
-				}
-			}
-			if (!table_exists) {
-				// create the table and register it
-				batch_queries += StringUtil::Format(R"(
+		// Check if the table already exists (uses cache)
+		auto existing_table_name = GetInlinedDeletionTableName(entry.table_id, commit_snapshot);
+		string table_name;
+		if (existing_table_name.empty()) {
+			// Table doesn't exist - generate CREATE TABLE query
+			table_name = StringUtil::Format("ducklake_inlined_delete_%d", entry.table_id.index);
+			batch_queries += StringUtil::Format(R"(
 CREATE TABLE {METADATA_CATALOG}.%s(file_id BIGINT, row_id BIGINT, begin_snapshot BIGINT);
 INSERT INTO {METADATA_CATALOG}.ducklake_inlined_deletion_tables VALUES (%d, '%s');
 )",
-				                                    table_name, entry.table_id.index, table_name);
-			}
+			                                    table_name, entry.table_id.index, table_name);
 			delete_inlined_table_name_cache[entry.table_id.index] = table_name;
+		} else {
+			table_name = existing_table_name;
 		}
 
 		// build the values for the deletions
@@ -2081,6 +2049,48 @@ INSERT INTO {METADATA_CATALOG}.ducklake_inlined_deletion_tables VALUES (%d, '%s'
 		    StringUtil::Format("INSERT INTO {METADATA_CATALOG}.%s VALUES %s;\n", table_name, values);
 	}
 	return batch_queries;
+}
+
+string DuckLakeMetadataManager::GetInlinedDeletionTableName(TableIndex table_id, DuckLakeSnapshot snapshot,
+                                                            bool create_if_not_exists) {
+	// Check the cache first
+	auto cache_entry = delete_inlined_table_name_cache.find(table_id.index);
+	if (cache_entry != delete_inlined_table_name_cache.end()) {
+		return cache_entry->second;
+	}
+
+	// Query the database
+	auto query = StringUtil::Format(
+	    "SELECT table_name FROM {METADATA_CATALOG}.ducklake_inlined_deletion_tables WHERE table_id = %d",
+	    table_id.index);
+	auto result = transaction.Query(snapshot, query);
+	if (!result->HasError()) {
+		auto chunk = result->Fetch();
+		if (chunk && chunk->size() > 0) {
+			auto table_name = chunk->GetValue(0, 0).ToString();
+			delete_inlined_table_name_cache[table_id.index] = table_name;
+			return table_name;
+		}
+	}
+
+	// Table doesn't exist
+	if (!create_if_not_exists) {
+		return string();
+	}
+
+	// Create the table
+	string table_name = StringUtil::Format("ducklake_inlined_delete_%d", table_id.index);
+	auto create_query = StringUtil::Format(R"(
+CREATE TABLE {METADATA_CATALOG}.%s(file_id BIGINT, row_id BIGINT, begin_snapshot BIGINT);
+INSERT INTO {METADATA_CATALOG}.ducklake_inlined_deletion_tables VALUES (%d, '%s');
+)",
+	                                       table_name, table_id.index, table_name);
+	auto create_result = transaction.Query(snapshot, create_query);
+	if (create_result->HasError()) {
+		create_result->GetErrorObject().Throw("Failed to create inlined deletion table: ");
+	}
+	delete_inlined_table_name_cache[table_id.index] = table_name;
+	return table_name;
 }
 
 shared_ptr<DuckLakeInlinedData> DuckLakeMetadataManager::TransformInlinedData(QueryResult &result) {

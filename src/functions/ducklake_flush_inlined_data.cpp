@@ -335,6 +335,105 @@ unique_ptr<LogicalOperator> DuckLakeDataFlusher::GenerateFlushCommand() {
 }
 
 //===--------------------------------------------------------------------===//
+// Flush Inlined File Deletions
+//===--------------------------------------------------------------------===//
+static void FlushInlinedFileDeletions(ClientContext &context, DuckLakeCatalog &catalog,
+                                      DuckLakeTransaction &transaction, DuckLakeTableEntry &table) {
+	auto &metadata_manager = transaction.GetMetadataManager();
+	auto table_id = table.GetTableId();
+	auto snapshot = transaction.GetSnapshot();
+
+	// Check if this table has an inlined deletion table
+	auto inlined_table_name = metadata_manager.GetInlinedDeletionTableName(table_id, snapshot);
+	if (inlined_table_name.empty()) {
+		return; // No inlined deletions for this table
+	}
+
+	// Query the inlined deletions with file paths
+	auto deletions_result = transaction.Query(snapshot, StringUtil::Format(R"(
+SELECT del.file_id, data.path, data.path_is_relative, del.row_id, del.begin_snapshot
+FROM {METADATA_CATALOG}.%s del
+JOIN {METADATA_CATALOG}.ducklake_data_file data ON del.file_id = data.data_file_id
+ORDER BY del.file_id, del.row_id
+	)",
+	                                                                       inlined_table_name));
+	if (deletions_result->HasError()) {
+		return;
+	}
+
+	// Group deletions by file
+	unordered_map<idx_t, string> file_paths;                          // file_id -> path
+	unordered_map<idx_t, set<PositionWithSnapshot>> deletes_per_file; // file_id -> deletions
+
+	while (true) {
+		auto chunk = deletions_result->Fetch();
+		if (!chunk || chunk->size() == 0) {
+			break;
+		}
+		for (idx_t row_idx = 0; row_idx < chunk->size(); row_idx++) {
+			auto file_id = chunk->GetValue(0, row_idx).GetValue<idx_t>();
+			auto path = chunk->GetValue(1, row_idx).GetValue<string>();
+			auto path_is_relative = chunk->GetValue(2, row_idx).GetValue<bool>();
+			auto row_id = chunk->GetValue(3, row_idx).GetValue<int64_t>();
+			auto begin_snapshot = chunk->GetValue(4, row_idx).GetValue<int64_t>();
+
+			if (file_paths.find(file_id) == file_paths.end()) {
+				if (path_is_relative) {
+					file_paths[file_id] = table.DataPath() + path;
+				} else {
+					file_paths[file_id] = path;
+				}
+			}
+
+			PositionWithSnapshot pos_with_snap;
+			pos_with_snap.position = row_id;
+			pos_with_snap.snapshot_id = begin_snapshot;
+			deletes_per_file[file_id].insert(pos_with_snap);
+		}
+	}
+
+	if (deletes_per_file.empty()) {
+		return;
+	}
+
+	// Write delete files
+	auto &fs = FileSystem::GetFileSystem(context);
+	vector<DuckLakeDeleteFile> delete_files;
+
+	// Get encryption key if the catalog is encrypted
+	string encryption_key;
+	if (catalog.IsEncrypted()) {
+		encryption_key = catalog.GenerateEncryptionKey(context);
+	}
+
+	for (auto &entry : deletes_per_file) {
+		auto file_id = entry.first;
+		auto &file_path = file_paths[file_id];
+
+		WriteDeleteFileWithSnapshotsInput file_input {context,
+		                                              transaction,
+		                                              fs,
+		                                              table.DataPath(),
+		                                              encryption_key,
+		                                              file_path,
+		                                              entry.second,
+		                                              DeleteFileSource::FLUSH};
+		auto delete_file = DuckLakeDeleteFileWriter::WriteDeleteFileWithSnapshots(context, file_input);
+		delete_file.data_file_id = DataFileIndex(file_id);
+		delete_files.push_back(std::move(delete_file));
+	}
+
+	// Register the delete files
+	transaction.AddDeletes(table_id, std::move(delete_files));
+
+	// Clear the inlined deletion table
+	auto delete_result = transaction.Query(StringUtil::Format("DELETE FROM {METADATA_CATALOG}.%s", inlined_table_name));
+	if (delete_result->HasError()) {
+		delete_result->GetErrorObject().Throw("Failed to clear inlined file deletions: ");
+	}
+}
+
+//===--------------------------------------------------------------------===//
 // Function
 //===--------------------------------------------------------------------===//
 static unique_ptr<LogicalOperator> FlushInlinedDataBind(ClientContext &context, TableFunctionBindInput &input,
@@ -406,6 +505,8 @@ static unique_ptr<LogicalOperator> FlushInlinedDataBind(ClientContext &context, 
 				                              inlined_table);
 				flushes.push_back(compactor.GenerateFlushCommand());
 			}
+			// Also flush inlined file deletions for this table
+			FlushInlinedFileDeletions(context, ducklake_catalog, transaction, table);
 		}
 	}
 	return_names.push_back("Success");
