@@ -86,28 +86,33 @@ SELECT file_id, row_id, begin_snapshot FROM ducklake_meta.ducklake_inlined_delet
 0	15	4
 
 # # Let's flush
+statement ok
+CALL ducklake_flush_inlined_data('ducklake')
+
+query III
+SELECT file_id, row_id, begin_snapshot FROM ducklake_meta.ducklake_inlined_delete_1 ORDER BY row_id
+----
+
+query I
+SELECT count(*) FROM GLOB('${DATA_PATH}/test_deletion_inlining/**/*-delete.parquet')
+----
+1
+
+# Verify new deletion file schema - should have _ducklake_internal_snapshot_id column
+# since it was created from flushing inlined deletions
+query II
+SELECT column_name, column_type FROM (DESCRIBE SELECT * FROM '${DATA_PATH}/test_deletion_inlining/**/*-delete.parquet') ORDER BY column_name
+----
+_ducklake_internal_snapshot_id	BIGINT
+file_path	VARCHAR
+pos	BIGINT
+
+query IIIII
+SELECT table_id, begin_snapshot, end_snapshot, delete_count, partial_max FROM ducklake_meta.ducklake_delete_file ORDER BY begin_snapshot
+----
+1	2	NULL	10	4
+
 # statement ok
-# CALL ducklake_flush_inlined_data('ducklake')
-#
-# query III
-# SELECT file_id, row_id, begin_snapshot FROM ducklake_meta.ducklake_inlined_delete_1 ORDER BY row_id
-# ----
-#
-# query I
-# SELECT count(*) FROM GLOB('${DATA_PATH}/test_deletion_inlining/**/*-delete.parquet')
-# ----
-# 1
-#
-# # Verify new deletion file schema - should have _ducklake_internal_snapshot_id column
-# # since it was created from flushing inlined deletions
-# query II
-# SELECT column_name, column_type FROM (DESCRIBE SELECT * FROM '${DATA_PATH}/test_deletion_inlining/**/*-delete.parquet') ORDER BY column_name
-# ----
-# _ducklake_internal_snapshot_id	BIGINT
-# file_path	VARCHAR
-# pos	BIGINT
-#
-# # statement ok
 # # DELETE FROM T where a < 8
 # #
 # # query III

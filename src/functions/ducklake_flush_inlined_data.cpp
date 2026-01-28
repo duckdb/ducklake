@@ -364,6 +364,7 @@ ORDER BY del.file_id, del.row_id
 	// Group deletions by file
 	unordered_map<idx_t, string> file_paths;                          // file_id -> path
 	unordered_map<idx_t, set<PositionWithSnapshot>> deletes_per_file; // file_id -> deletions
+	unordered_map<idx_t, idx_t> max_snapshots;                        // file_id -> max_snapshot
 
 	while (true) {
 		auto chunk = deletions_result->Fetch();
@@ -375,7 +376,7 @@ ORDER BY del.file_id, del.row_id
 			auto path = chunk->GetValue(1, row_idx).GetValue<string>();
 			auto path_is_relative = chunk->GetValue(2, row_idx).GetValue<bool>();
 			auto row_id = chunk->GetValue(3, row_idx).GetValue<int64_t>();
-			auto begin_snapshot = chunk->GetValue(4, row_idx).GetValue<int64_t>();
+			auto begin_snapshot = chunk->GetValue(4, row_idx).GetValue<idx_t>();
 
 			if (file_paths.find(file_id) == file_paths.end()) {
 				if (path_is_relative) {
@@ -383,11 +384,14 @@ ORDER BY del.file_id, del.row_id
 				} else {
 					file_paths[file_id] = path;
 				}
+				max_snapshots[file_id] = begin_snapshot;
+			} else {
+				max_snapshots[file_id] = MaxValue(max_snapshots[file_id], begin_snapshot);
 			}
 
 			PositionWithSnapshot pos_with_snap;
 			pos_with_snap.position = row_id;
-			pos_with_snap.snapshot_id = begin_snapshot;
+			pos_with_snap.snapshot_id = static_cast<int64_t>(begin_snapshot);
 			deletes_per_file[file_id].insert(pos_with_snap);
 		}
 	}
@@ -420,6 +424,7 @@ ORDER BY del.file_id, del.row_id
 		                                              DeleteFileSource::FLUSH};
 		auto delete_file = DuckLakeDeleteFileWriter::WriteDeleteFileWithSnapshots(context, file_input);
 		delete_file.data_file_id = DataFileIndex(file_id);
+		delete_file.max_snapshot = max_snapshots[file_id];
 		delete_files.push_back(std::move(delete_file));
 	}
 
