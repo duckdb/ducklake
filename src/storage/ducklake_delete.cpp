@@ -443,7 +443,7 @@ void DuckLakeDelete::FlushDelete(DuckLakeTransaction &transaction, ClientContext
 	auto existing_delete_data = delete_map->GetDeleteData(filename);
 
 	// check if we should use inlined file deletions instead of creating a delete file
-	if (data_file_info.file_id.IsValid() && !existing_delete_data && !data_file_info.delete_file_id.IsValid()) {
+	if (data_file_info.file_id.IsValid()) {
 		auto &catalog = table.catalog.Cast<DuckLakeCatalog>();
 		auto &schema = table.ParentSchema().Cast<DuckLakeSchemaEntry>();
 		auto threshold = catalog.DataInliningRowLimit(schema.GetSchemaId(), table.GetTableId());
