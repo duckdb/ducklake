@@ -49,65 +49,21 @@ static void ValidateSortExpressionColumns(DuckLakeTableEntry &table, ParsedExpre
 // Sort Binding Helpers
 //===--------------------------------------------------------------------===//
 
-//! Creates an OrderBinder for binding sort expressions.
-//! The out parameters (child_binder, bind_state, select_node) must outlive the returned OrderBinder.
-static OrderBinder CreateSortOrderBinder(Binder &binder, const string &table_name, idx_t table_index,
-                                         const vector<string> &column_names, const vector<LogicalType> &column_types,
-                                         shared_ptr<Binder> &out_child_binder, SelectBindState &out_bind_state,
-                                         SelectNode &out_select_node) {
-	// Create a child binder and add a generic binding for the table columns
-	out_child_binder = Binder::CreateBinder(binder.context, &binder);
-	out_child_binder->bind_context.AddGenericBinding(table_index, table_name, column_names, column_types);
+//! Binds ORDER BY expressions directly using ExpressionBinder.
+static vector<BoundOrderByNode> BindSortOrders(Binder &binder, const string &table_name, idx_t table_index,
+                                               const vector<string> &column_names,
+                                               const vector<LogicalType> &column_types,
+                                               vector<OrderByNode> &pre_bound_orders) {
+	// Create a child binder with the table columns in scope
+	auto child_binder = Binder::CreateBinder(binder.context, &binder);
+	child_binder->bind_context.AddGenericBinding(table_index, table_name, column_names, column_types);
 
-	// Set up SelectBindState with alias_map for column names
-	for (idx_t col_idx = 0; col_idx < column_names.size(); col_idx++) {
-		out_bind_state.alias_map[column_names[col_idx]] = col_idx;
-	}
-
-	// Create a SelectNode with column references for each table column
-	// This provides the extra_list for OrderBinder to add expressions that aren't simple column refs
-	for (auto &col_name : column_names) {
-		out_select_node.select_list.push_back(make_uniq<ColumnRefExpression>(col_name));
-	}
-
-	return OrderBinder({*out_child_binder}, out_select_node, out_bind_state);
-}
-
-//! Binds ORDER BY expressions using the provided OrderBinder and returns bound order nodes.
-static vector<BoundOrderByNode> BindSortOrders(Binder &binder, OrderBinder &order_binder,
-                                               vector<OrderByNode> &pre_bound_orders, SelectNode &select_node,
-                                               Binder &child_binder) {
+	// Bind each ORDER BY expression directly
 	vector<BoundOrderByNode> orders;
-
-	// Bind each ORDER BY expression
 	for (auto &pre_bound_order : pre_bound_orders) {
-		auto bound_expr = order_binder.Bind(std::move(pre_bound_order.expression));
-		if (!bound_expr) {
-			continue;
-		}
+		ExpressionBinder expr_binder(*child_binder, binder.context);
+		auto bound_expr = expr_binder.Bind(pre_bound_order.expression);
 		orders.emplace_back(pre_bound_order.type, pre_bound_order.null_order, std::move(bound_expr));
-	}
-
-	// Bind ALL expressions in the select_list (column refs + any extras added by OrderBinder)
-	vector<unique_ptr<Expression>> bound_expressions;
-	for (auto &parsed_expr : select_node.select_list) {
-		ExpressionBinder expr_binder(child_binder, binder.context);
-		bound_expressions.push_back(expr_binder.Bind(parsed_expr));
-	}
-
-	// Finalize ORDER BY expressions by converting indices to actual bound expressions
-	for (auto &order_node : orders) {
-		auto &expr = order_node.expression;
-		if (expr->GetExpressionType() != ExpressionType::VALUE_CONSTANT) {
-			continue;
-		}
-		auto &constant = expr->Cast<BoundConstantExpression>();
-		if (constant.value.type().id() != LogicalTypeId::UBIGINT) {
-			continue;
-		}
-		auto index = UBigIntValue::Get(constant.value);
-		D_ASSERT(index < bound_expressions.size());
-		expr = std::move(bound_expressions[index]);
 	}
 
 	return orders;
@@ -395,17 +351,9 @@ unique_ptr<LogicalOperator> DuckLakeCompactor::InsertSort(Binder &binder, unique
 		column_types.push_back(root_types[i]);
 	}
 
-	// State for binding - must outlive the OrderBinder
-	shared_ptr<Binder> child_binder;
-	SelectBindState bind_state;
-	SelectNode select_node;
-
-	// Create the OrderBinder
-	auto order_binder = CreateSortOrderBinder(binder, table.name, table_index, current_columns, column_types,
-	                                          child_binder, bind_state, select_node);
-
 	// Bind the ORDER BY expressions
-	auto orders = BindSortOrders(binder, order_binder, pre_bound_orders, select_node, *child_binder);
+	auto orders =
+	    BindSortOrders(binder, table.name, table_index, current_columns, column_types, pre_bound_orders);
 
 	// Create the LogicalOrder operator
 	auto order = make_uniq<LogicalOrder>(std::move(orders));
