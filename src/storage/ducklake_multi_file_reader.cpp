@@ -161,7 +161,8 @@ ReaderInitializeType DuckLakeMultiFileReader::InitializeReader(MultiFileReaderDa
 			}
 			// set the snapshot id so we know what to skip from deletion files
 			delete_filter->SetSnapshotFilter(read_info.snapshot.snapshot_id);
-			if (delete_map) {
+			// Only add to delete_map if there's an actual delete file and not just inlined deletions
+			if (delete_map && !file_entry.delete_file.path.empty()) {
 				delete_map->AddDeleteData(reader.GetFileName(), delete_filter->delete_data);
 			}
 			reader.deletion_filter = std::move(delete_filter);

@@ -42,17 +42,82 @@ SELECT COUNT(*) FROM t
 ----
 45
 
+statement ok
+DELETE FROM T where a < 9
+
+query I
+SELECT COUNT(*) FROM t
+----
+41
+
+query III
+SELECT file_id, row_id, begin_snapshot FROM ducklake_meta.ducklake_inlined_delete_1 ORDER BY row_id
+----
+0	0	2
+0	1	2
+0	2	2
+0	3	2
+0	4	2
+0	5	3
+0	6	3
+0	7	3
+0	8	3
+
+statement ok
+DELETE FROM T where a = 15
+
+query I
+SELECT COUNT(*) FROM t
+----
+40
+
+query III
+SELECT file_id, row_id, begin_snapshot FROM ducklake_meta.ducklake_inlined_delete_1 ORDER BY row_id
+----
+0	0	2
+0	1	2
+0	2	2
+0	3	2
+0	4	2
+0	5	3
+0	6	3
+0	7	3
+0	8	3
+0	15	4
+
+# # Let's flush
 # statement ok
-# DELETE FROM T where a < 8
+# CALL ducklake_flush_inlined_data('ducklake')
 #
 # query III
 # SELECT file_id, row_id, begin_snapshot FROM ducklake_meta.ducklake_inlined_delete_1 ORDER BY row_id
 # ----
-# 0	0	2
-# 0	1	2
-# 0	2	2
-# 0	3	2
-# 0	4	2
-# 0	5	3
-# 0	6	3
-# 0	7	3
+#
+# query I
+# SELECT count(*) FROM GLOB('${DATA_PATH}/test_deletion_inlining/**/*-delete.parquet')
+# ----
+# 1
+#
+# # Verify new deletion file schema - should have _ducklake_internal_snapshot_id column
+# # since it was created from flushing inlined deletions
+# query II
+# SELECT column_name, column_type FROM (DESCRIBE SELECT * FROM '${DATA_PATH}/test_deletion_inlining/**/*-delete.parquet') ORDER BY column_name
+# ----
+# _ducklake_internal_snapshot_id	BIGINT
+# file_path	VARCHAR
+# pos	BIGINT
+#
+# # statement ok
+# # DELETE FROM T where a < 8
+# #
+# # query III
+# # SELECT file_id, row_id, begin_snapshot FROM ducklake_meta.ducklake_inlined_delete_1 ORDER BY row_id
+# # ----
+# # 0	0	2
+# # 0	1	2
+# # 0	2	2
+# # 0	3	2
+# # 0	4	2
+# # 0	5	3
+# # 0	6	3
+# # 0	7	3
