@@ -64,6 +64,10 @@ private:
 	//! Returns a map from file_position to global_row_id
 	static unordered_map<idx_t, idx_t> ScanDataFileRowIds(ClientContext &context, const DuckLakeFileData &data_file,
 	                                                       const unordered_set<idx_t> &file_positions);
+	//! Populate scan_snapshot_map from a position-to-snapshot mapping
+	//! Handles conversion from file positions to row_ids if the data file has embedded row_ids
+	void PopulateSnapshotMapFromPositions(ClientContext &context, const DuckLakeFileData &data_file,
+	                                      const unordered_map<idx_t, idx_t> &position_to_snapshot) const;
 };
 
 } // namespace duckdb
