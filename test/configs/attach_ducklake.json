@@ -189,7 +189,8 @@
         "test/sql/transactions/conflict_drop_then_delete.test",
         "test/sql/transactions/test_create_drop_conflict.test",
         "test/sql/transactions/test_create_drop_conflict_variation1.test",
-        "test/sql/copy/parquet/parquet_glob.test"
+        "test/sql/copy/parquet/parquet_glob.test",
+        "test/sql/alter/alter_table_set_table_options.test"
       ]
     },
     {
