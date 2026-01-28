@@ -2022,23 +2022,10 @@ string DuckLakeMetadataManager::WriteNewInlinedFileDeletes(DuckLakeSnapshot &com
 		return batch_queries;
 	}
 	for (auto &entry : new_deletes) {
-		// Check if the table already exists (uses cache)
-		auto existing_table_name = GetInlinedDeletionTableName(entry.table_id, commit_snapshot);
-		string table_name;
-		if (existing_table_name.empty()) {
-			// Table doesn't exist - generate CREATE TABLE query
-			table_name = StringUtil::Format("ducklake_inlined_delete_%d", entry.table_id.index);
-			batch_queries += StringUtil::Format(R"(
-CREATE TABLE {METADATA_CATALOG}.%s(file_id BIGINT, row_id BIGINT, begin_snapshot BIGINT);
-INSERT INTO {METADATA_CATALOG}.ducklake_inlined_deletion_tables VALUES (%d, '%s');
-)",
-			                                    table_name, entry.table_id.index, table_name);
-			delete_inlined_table_name_cache[entry.table_id.index] = table_name;
-		} else {
-			table_name = existing_table_name;
-		}
+		// Get or create the inlined deletion table (handles caching internally)
+		auto table_name = GetInlinedDeletionTableName(entry.table_id, commit_snapshot, true);
 
-		// build the values for the deletions
+		// Build the values for the deletions
 		string values;
 		for (auto &deletion : entry.deletions) {
 			if (!values.empty()) {
