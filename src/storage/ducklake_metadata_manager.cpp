@@ -2027,11 +2027,14 @@ string DuckLakeMetadataManager::WriteNewInlinedFileDeletes(DuckLakeSnapshot &com
 
 		// Build the values for the deletions
 		string values;
-		for (auto &deletion : entry.deletions) {
-			if (!values.empty()) {
-				values += ", ";
+		for (auto &file_entry : entry.file_deletions) {
+			auto file_id = file_entry.first;
+			for (auto &row_id : file_entry.second) {
+				if (!values.empty()) {
+					values += ", ";
+				}
+				values += StringUtil::Format("(%d, %d, {SNAPSHOT_ID})", file_id, row_id);
 			}
-			values += StringUtil::Format("(%d, %d, {SNAPSHOT_ID})", deletion.file_id, deletion.row_id);
 		}
 		batch_queries +=
 		    StringUtil::Format("INSERT INTO {METADATA_CATALOG}.%s VALUES %s;\n", table_name, values);

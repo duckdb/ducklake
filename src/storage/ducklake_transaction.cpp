@@ -2167,19 +2167,13 @@ vector<DuckLakeInlinedFileDeletionInfo> DuckLakeTransaction::GetNewInlinedFileDe
 		if (!table_changes.new_inlined_file_deletes) {
 			continue;
 		}
+		if (table_changes.new_inlined_file_deletes->file_deletes.empty()) {
+			continue;
+		}
 		DuckLakeInlinedFileDeletionInfo info;
 		info.table_id = table_id;
-		for (auto &file_entry : table_changes.new_inlined_file_deletes->file_deletes) {
-			for (auto &row_id : file_entry.second) {
-				DuckLakeInlinedFileDeletionEntry deletion;
-				deletion.file_id = file_entry.first;
-				deletion.row_id = row_id;
-				info.deletions.push_back(deletion);
-			}
-		}
-		if (!info.deletions.empty()) {
-			result.push_back(std::move(info));
-		}
+		info.file_deletions = std::move(table_changes.new_inlined_file_deletes->file_deletes);
+		result.push_back(std::move(info));
 	}
 	return result;
 }

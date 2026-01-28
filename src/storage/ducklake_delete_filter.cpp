@@ -254,18 +254,19 @@ void DuckLakeDeleteFilter::PopulateSnapshotMapFromPositions(ClientContext &conte
 }
 
 void DuckLakeDeleteFilter::Initialize(ClientContext &context, const DuckLakeDeleteScanEntry &delete_scan) {
-	// scanning deletes - we need to scan the opposite (i.e. only the rows that were deleted)
+	// Scanning deletes - we need to scan the opposite (i.e. only the rows that were deleted)
+	// rows_to_scan[i] = true means row i was deleted and should be returned
 	auto rows_to_scan = make_unsafe_uniq_array<bool>(delete_scan.row_count);
 	bool has_embedded_snapshots = false;
 
-	// scan the current set of deletes
+	// Step 1: Handle the primary deletion source (delete file OR full file delete)
 	if (!delete_scan.delete_file.path.empty()) {
+		// Partial delete: read deletions from the delete file
 		unordered_map<idx_t, idx_t> file_pos_to_snapshot;
-		// we have a delete file - read the delete file from disk
 		auto current_deletes =
 		    ScanDeleteFile(context, delete_scan.delete_file, delete_scan.start_snapshot, delete_scan.end_snapshot);
 		has_embedded_snapshots = current_deletes.has_embedded_snapshots;
-		// iterate over the current deletes - these are the rows we need to scan
+
 		memset(rows_to_scan.get(), 0, sizeof(bool) * delete_scan.row_count);
 		for (idx_t i = 0; i < current_deletes.deleted_rows.size(); i++) {
 			auto delete_idx = current_deletes.deleted_rows[i];
@@ -279,15 +280,10 @@ void DuckLakeDeleteFilter::Initialize(ClientContext &context, const DuckLakeDele
 				file_pos_to_snapshot[delete_idx] = current_deletes.snapshot_ids[i];
 			}
 		}
-
-		// Populate scan_snapshot_map, convert to row_ids
 		PopulateSnapshotMapFromPositions(context, delete_scan.file, file_pos_to_snapshot);
-	} else if (!delete_scan.inlined_file_deletions.empty()) {
-		memset(rows_to_scan.get(), 0, sizeof(bool) * delete_scan.row_count);
 	} else if (delete_scan.snapshot_id.IsValid()) {
 		// Full file delete - all rows are being scanned
 		memset(rows_to_scan.get(), 1, sizeof(bool) * delete_scan.row_count);
-		// Build position_to_snapshot map with all positions using the same snapshot_id
 		unordered_map<idx_t, idx_t> position_to_snapshot;
 		auto snapshot_id = delete_scan.snapshot_id.GetIndex();
 		for (idx_t i = 0; i < delete_scan.row_count; i++) {
@@ -295,17 +291,15 @@ void DuckLakeDeleteFilter::Initialize(ClientContext &context, const DuckLakeDele
 		}
 		PopulateSnapshotMapFromPositions(context, delete_scan.file, position_to_snapshot);
 	} else {
-		// No deletions at all - initialize to no rows scanned
+		// No delete file and no full file delete - start with no rows marked
 		memset(rows_to_scan.get(), 0, sizeof(bool) * delete_scan.row_count);
 	}
 
 	// Process inlined file deletions
 	if (!delete_scan.inlined_file_deletions.empty()) {
-		// Mark rows to scan
 		for (auto &inlined_delete : delete_scan.inlined_file_deletions) {
 			rows_to_scan[inlined_delete.first] = true;
 		}
-		// Populate scan_snapshot_map, converting to row_ids if available
 		PopulateSnapshotMapFromPositions(context, delete_scan.file, delete_scan.inlined_file_deletions);
 	}
 
