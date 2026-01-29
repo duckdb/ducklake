@@ -101,7 +101,7 @@ string PostgresMetadataManager::CastStatsToTarget(const string &stats, const Log
 }
 
 string PostgresMetadataManager::CastColumnToTarget(const string &stats, const LogicalType &type) {
-	// Should not happen, but to pass unittest
+	// If not a pg native type, defer type cast to TransformInlinedData.
 	if (!TypeIsNativelySupported(type)) {
 		return stats;
 	}
