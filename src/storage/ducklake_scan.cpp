@@ -115,9 +115,7 @@ vector<PartitionStatistics> DuckLakeGetPartitionStats(ClientContext &context, Ge
 	}
 
 	// If there are any transaction-local changes (inserts, deletes, or dropped files), fall back to scanning
-	// This is simpler and safer than trying to account for uncommitted changes
-	if (transaction->HasTransactionLocalChanges(table_id) || transaction->HasLocalDeletes(table_id) ||
-	    transaction->HasLocalInlinedDeletes(table_id) || transaction->HasDroppedFiles()) {
+	if (transaction->HasAnyLocalChanges(table_id)) {
 		return result;
 	}
 

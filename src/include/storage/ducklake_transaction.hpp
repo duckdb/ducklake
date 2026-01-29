@@ -143,6 +143,8 @@ public:
 
 	bool HasDroppedFiles() const;
 	bool FileIsDropped(const string &path) const;
+	//! Check if there are any uncommitted changes for this table (inserts, deletes, or dropped files)
+	bool HasAnyLocalChanges(TableIndex table_id);
 
 	string GenerateUUID() const;
 	static string GenerateUUIDv7();
