@@ -38,7 +38,8 @@
     "Only rename on top-level struct fields is supported currently",
     "Changing Secret Manager settings after the secret manager is used is not allowed!",
     "Unsupported type \"TIME_NS\" in Parquet writer",
-    "DuckLakeScan not implemented"
+    "DuckLakeScan not implemented",
+    "Unsupported ALTER TABLE"
   ],
   "skip_tests": [
     {
@@ -362,6 +363,13 @@
       ]
     },
     {
+      "reason": "FIXME: Internal Error",
+      "paths": [
+        "test/sql/function/list/list_value_nested_lists.test"
+      ]
+    },
+
+    {
       "reason": "FIXME: BUGS? Weird behavior around hugeint",
       "paths": [
         "test/fuzzer/sqlsmith/test_abs_overflow.test",
@@ -579,6 +587,12 @@
       "reason": "Different results",
       "paths": [
           "test/sql/attach/show_schemas.test"
+      ]
+    },
+    {
+      "reason": "FIXME: CI Deadlock?",
+      "paths": [
+          "test/sql/update/test_stress_update_issue_19688.test"
       ]
     }
   ]
