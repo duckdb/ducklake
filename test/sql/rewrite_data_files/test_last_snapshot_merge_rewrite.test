@@ -83,7 +83,7 @@ skipif i=0
 query I
 SELECT COUNT(*) FROM GLOB('${DATA_PATH}/ducklake_last_merge_rewrite/**/*')
 ----
-14
+13
 
 skipif i=1
 query I
@@ -103,7 +103,7 @@ skipif i=0
 query I
 SELECT COUNT(*) FROM GLOB('${DATA_PATH}/ducklake_last_merge_rewrite/**/*')
 ----
-15
+14
 
 skipif i=1
 query I
