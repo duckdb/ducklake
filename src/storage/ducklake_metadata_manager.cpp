@@ -684,7 +684,7 @@ ORDER BY part.table_id, partition_id, partition_key_index
 	}
 
 	// load sort information
-	result = transaction.Query(snapshot, R"(
+	result = Query(snapshot, R"(
 SELECT sort.sort_id, sort.table_id, sort_expr.sort_key_index, sort_expr.expression, sort_expr.dialect, sort_expr.sort_direction, sort_expr.null_order
 FROM {METADATA_CATALOG}.ducklake_sort_info sort
 JOIN {METADATA_CATALOG}.ducklake_sort_expression sort_expr USING (sort_id)
@@ -1253,7 +1253,7 @@ vector<DuckLakeFileListEntry> DuckLakeMetadataManager::GetFilesForTable(DuckLake
 SELECT %s
 FROM {METADATA_CATALOG}.ducklake_data_file data
 LEFT JOIN (
-    SELECT data_file_id, delete_file_id, begin_snapshot, end_snapshot, delete_count, path, path_is_relative, file_size_bytes, footer_size, encryption_key
+    SELECT *
     FROM {METADATA_CATALOG}.ducklake_delete_file
     WHERE table_id=%d  AND {SNAPSHOT_ID} >= begin_snapshot
           AND ({SNAPSHOT_ID} < end_snapshot OR end_snapshot IS NULL)
@@ -1388,7 +1388,7 @@ LEFT JOIN LATERAL (
 ) AS previous_delete
 USING (data_file_id)
 JOIN (
-	SELECT data_file_id, row_id_start, record_count, mapping_id, path, path_is_relative, file_size_bytes, footer_size, encryption_key
+	SELECT *
 	FROM {METADATA_CATALOG}.ducklake_data_file data
 	WHERE table_id = %d
 ) AS data
@@ -1397,7 +1397,7 @@ USING (data_file_id)
 UNION ALL
 
 SELECT %s, data.end_snapshot FROM (
-	SELECT data_file_id, end_snapshot, row_id_start, record_count, mapping_id, path, path_is_relative, file_size_bytes, footer_size, encryption_key
+	SELECT *
 	FROM {METADATA_CATALOG}.ducklake_data_file
 	WHERE table_id = %d AND end_snapshot >= %d AND end_snapshot <= {SNAPSHOT_ID}
 ) AS data
@@ -1470,7 +1470,7 @@ DuckLakeMetadataManager::GetExtendedFilesForTable(DuckLakeTableEntry &table, Duc
 SELECT data.data_file_id, del.delete_file_id, data.record_count, %s
 FROM {METADATA_CATALOG}.ducklake_data_file data
 LEFT JOIN (
-	SELECT data_file_id, delete_file_id, begin_snapshot, end_snapshot, delete_count, path, path_is_relative, file_size_bytes, footer_size, encryption_key
+	SELECT *
     FROM {METADATA_CATALOG}.ducklake_delete_file
     WHERE table_id=%d  AND {SNAPSHOT_ID} >= begin_snapshot
           AND ({SNAPSHOT_ID} < end_snapshot OR end_snapshot IS NULL)
@@ -1563,7 +1563,7 @@ FROM {METADATA_CATALOG}.ducklake_data_file data
 LEFT JOIN snapshot_ranges sr
   ON data.begin_snapshot >= sr.begin_snapshot AND data.begin_snapshot < sr.end_snapshot
 LEFT JOIN (
-	SELECT data_file_id, delete_file_id, begin_snapshot, end_snapshot, delete_count, path, path_is_relative, file_size_bytes, footer_size, encryption_key
+	SELECT *
     FROM {METADATA_CATALOG}.ducklake_delete_file
     WHERE table_id=%d
 ) del USING (data_file_id)
