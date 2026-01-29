@@ -285,17 +285,6 @@ void DuckLakeSchemaEntry::Scan(ClientContext &context, CatalogType type,
 			// this entry exists in both the local and global set - emit only the transaction-local entry
 			continue;
 		}
-		if (entry.second->type == CatalogType::VIEW_ENTRY) {
-			auto &view_entry = entry.second->Cast<DuckLakeViewEntry>();
-			if (!view_entry.IsBound()) {
-				try {
-					view_entry.Bind(context);
-				} catch (...) {
-					// if the view binding fails we continue so we can error when the view is actually queried
-					continue;
-				}
-			}
-		}
 		callback(*entry.second);
 	}
 }

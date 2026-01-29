@@ -36,18 +36,12 @@ public:
 	LocalChange GetLocalChange() const {
 		return local_change;
 	}
-	bool IsBound() const;
-
-	void Bind(ClientContext &context);
 
 public:
 	unique_ptr<CatalogEntry> AlterEntry(ClientContext &context, AlterInfo &info) override;
 	unique_ptr<CatalogEntry> Copy(ClientContext &context) const override;
 
 	const SelectStatement &GetQuery() override;
-	bool HasTypes() const override {
-		return false;
-	}
 	unique_ptr<CreateInfo> GetInfo() const override;
 	string ToSQL() const override;
 
@@ -66,7 +60,6 @@ private:
 	string view_uuid;
 	string query_sql;
 	LocalChange local_change;
-	bool is_bound = false;
 };
 
 } // namespace duckdb
