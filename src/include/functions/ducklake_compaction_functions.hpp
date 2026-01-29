@@ -66,7 +66,7 @@ public:
 	}
 
 	void ResolveTypes() override {
-		types = {LogicalType::BOOLEAN};
+		types = {LogicalType::BIGINT};
 	}
 };
 
