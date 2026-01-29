@@ -2187,17 +2187,12 @@ bool DuckLakeTransaction::HasLocalDeletes(TableIndex table_id) {
 	return !entry->second.new_delete_files.empty();
 }
 
-bool DuckLakeTransaction::HasLocalInlinedDeletes(TableIndex table_id) {
-	auto entry = table_data_changes.find(table_id);
-	if (entry == table_data_changes.end()) {
-		return false;
-	}
-	return !entry->second.new_inlined_data_deletes.empty();
-}
-
 bool DuckLakeTransaction::HasAnyLocalChanges(TableIndex table_id) {
-	return HasTransactionLocalChanges(table_id) || HasLocalDeletes(table_id) || HasLocalInlinedDeletes(table_id) ||
-	       HasDroppedFiles();
+	auto entry = table_data_changes.find(table_id);
+	if (entry != table_data_changes.end() && !entry->second.IsEmpty()) {
+		return true;
+	}
+	return HasDroppedFiles();
 }
 
 void DuckLakeTransaction::GetLocalDeleteForFile(TableIndex table_id, const string &path, DuckLakeFileData &result) {
