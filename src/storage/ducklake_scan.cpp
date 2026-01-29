@@ -93,8 +93,10 @@ vector<PartitionStatistics> DuckLakeGetPartitionStats(ClientContext &context, Ge
 	auto table_id = table.GetTableId();
 
 	// Check if this is a time travel query - if so, fall back to scanning
-	// Time travel queries need to see historical data, and our metadata queries
-	// would return counts for the current snapshot instead of the historical one
+	// After merge_adjacent_files, multiple files are merged into one with a combined record_count.
+	// The merged file contains an embedded snapshot_id column for time travel filtering,
+	// but the metadata record_count represents ALL rows, not per-snapshot counts.
+	// Only a full scan can filter by snapshot_id to get the correct historical count.
 	auto current_snapshot = transaction->GetSnapshot();
 	if (func_info.snapshot.snapshot_id != current_snapshot.snapshot_id) {
 		return result;
