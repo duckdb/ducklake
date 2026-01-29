@@ -16,6 +16,14 @@
 #include "duckdb/planner/operator/logical_empty_result.hpp"
 #include "fmt/format.h"
 
+#include "functions/ducklake_compaction_functions.hpp"
+#include "duckdb/planner/operator/logical_order.hpp"
+#include "duckdb/planner/operator/logical_projection.hpp"
+#include "duckdb/parser/parser.hpp"
+#include "duckdb/parser/query_node/select_node.hpp"
+#include "duckdb/planner/expression_binder/order_binder.hpp"
+#include "duckdb/planner/expression_binder/select_bind_state.hpp"
+
 namespace duckdb {
 
 //===--------------------------------------------------------------------===//
@@ -91,74 +99,6 @@ string DuckLakeCompaction::GetName() const {
 	return "DUCKLAKE_COMPACTION";
 }
 
-//===--------------------------------------------------------------------===//
-// Logical Operator
-//===--------------------------------------------------------------------===//
-class DuckLakeLogicalCompaction : public LogicalExtensionOperator {
-public:
-	DuckLakeLogicalCompaction(idx_t table_index, DuckLakeTableEntry &table,
-	                          vector<DuckLakeCompactionFileEntry> source_files_p, string encryption_key_p,
-	                          optional_idx partition_id, vector<string> partition_values_p, optional_idx row_id_start,
-	                          CompactionType type)
-	    : table_index(table_index), table(table), source_files(std::move(source_files_p)),
-	      encryption_key(std::move(encryption_key_p)), partition_id(partition_id),
-	      partition_values(std::move(partition_values_p)), row_id_start(row_id_start), type(type) {
-	}
-
-	idx_t table_index;
-	DuckLakeTableEntry &table;
-	vector<DuckLakeCompactionFileEntry> source_files;
-	string encryption_key;
-	optional_idx partition_id;
-	vector<string> partition_values;
-	optional_idx row_id_start;
-	CompactionType type;
-
-public:
-	PhysicalOperator &CreatePlan(ClientContext &context, PhysicalPlanGenerator &planner) override {
-		auto &child = planner.CreatePlan(*children[0]);
-		return planner.Make<DuckLakeCompaction>(types, table, std::move(source_files), std::move(encryption_key),
-		                                        partition_id, std::move(partition_values), row_id_start, child, type);
-	}
-
-	string GetExtensionName() const override {
-		return "ducklake";
-	}
-	vector<ColumnBinding> GetColumnBindings() override {
-		vector<ColumnBinding> result;
-		result.emplace_back(table_index, 0);
-		return result;
-	}
-
-	void ResolveTypes() override {
-		types = {LogicalType::BOOLEAN};
-	}
-};
-
-//===--------------------------------------------------------------------===//
-// Compaction Command Generator
-//===--------------------------------------------------------------------===//
-class DuckLakeCompactor {
-public:
-	DuckLakeCompactor(ClientContext &context, DuckLakeCatalog &catalog, DuckLakeTransaction &transaction,
-	                  Binder &binder, TableIndex table_id, DuckLakeMergeAdjacentOptions options);
-	DuckLakeCompactor(ClientContext &context, DuckLakeCatalog &catalog, DuckLakeTransaction &transaction,
-	                  Binder &binder, TableIndex table_id, double delete_threshold);
-	void GenerateCompactions(DuckLakeTableEntry &table, vector<unique_ptr<LogicalOperator>> &compactions);
-	unique_ptr<LogicalOperator> GenerateCompactionCommand(vector<DuckLakeCompactionFileEntry> source_files);
-
-private:
-	ClientContext &context;
-	DuckLakeCatalog &catalog;
-	DuckLakeTransaction &transaction;
-	Binder &binder;
-	TableIndex table_id;
-	double delete_threshold = 0.95;
-	DuckLakeMergeAdjacentOptions options;
-
-	CompactionType type;
-};
-
 DuckLakeCompactor::DuckLakeCompactor(ClientContext &context, DuckLakeCatalog &catalog, DuckLakeTransaction &transaction,
                                      Binder &binder, TableIndex table_id, DuckLakeMergeAdjacentOptions options)
     : context(context), catalog(catalog), transaction(transaction), binder(binder), table_id(table_id),
@@ -221,6 +161,8 @@ void DuckLakeCompactor::GenerateCompactions(DuckLakeTableEntry &table,
 	filter_options.min_file_size = options.min_file_size;
 	filter_options.max_file_size = options.max_file_size;
 	filter_options.target_file_size = target_file_size;
+	// FIXME: pass in the sort_data so that list of files is approximately sorted in the same way
+	// (sorted by the min/max metadata)
 	auto files = metadata_manager.GetFilesForCompaction(table, type, delete_threshold, snapshot, filter_options);
 
 	// iterate over the files and split into separate compaction groups
@@ -310,6 +252,91 @@ void DuckLakeCompactor::GenerateCompactions(DuckLakeTableEntry &table,
 			}
 		}
 	}
+}
+
+unique_ptr<LogicalOperator> DuckLakeCompactor::InsertSort(Binder &binder, unique_ptr<LogicalOperator> &plan,
+                                                          DuckLakeTableEntry &table,
+                                                          optional_ptr<DuckLakeSort> sort_data) {
+	auto bindings = plan->GetColumnBindings();
+
+	vector<BoundOrderByNode> orders;
+
+	vector<OrderByNode> pre_bound_orders;
+
+	for (auto &pre_bound_order : sort_data->fields) {
+		if (pre_bound_order.dialect != "duckdb") {
+			continue;
+		}
+		auto parsed_expression = Parser::ParseExpressionList(pre_bound_order.expression);
+		OrderByNode order_node(pre_bound_order.sort_direction, pre_bound_order.null_order,
+		                       std::move(parsed_expression[0]));
+		pre_bound_orders.emplace_back(std::move(order_node));
+	}
+
+	if (pre_bound_orders.empty()) {
+		// Then the sorts were not in the DuckDB dialect and we return the original plan
+		return std::move(plan);
+	}
+	auto root_get = unique_ptr_cast<LogicalOperator, LogicalGet>(std::move(plan));
+
+	// FIXME: Allow arbitrary expressions instead of just column references. (Need a dynamic bind)
+	// Build a map of the names of columns in the query plan so we can bind to them
+	case_insensitive_map_t<idx_t> alias_map;
+	auto current_columns = table.GetColumns().GetColumnNames();
+	for (idx_t col_idx = 0; col_idx < current_columns.size(); col_idx++) {
+		alias_map[current_columns[col_idx]] = col_idx;
+	}
+
+	root_get->ResolveOperatorTypes();
+	auto &root_types = root_get->types;
+
+	vector<string> unmatching_names;
+	for (auto &pre_bound_order : pre_bound_orders) {
+		auto name = pre_bound_order.expression->GetName();
+		auto order_idx_check = alias_map.find(name);
+		if (order_idx_check != alias_map.end()) {
+			auto order_idx = order_idx_check->second;
+			auto expr = make_uniq<BoundColumnRefExpression>(root_types[order_idx], bindings[order_idx], 0);
+			orders.emplace_back(pre_bound_order.type, pre_bound_order.null_order, std::move(expr));
+		} else {
+			// Then we did not find the column in the table
+			// We want to record all of the ones that we do not find and then throw a more informative error that
+			// includes all incorrect columns.
+			unmatching_names.push_back(name);
+		}
+	}
+
+	if (!unmatching_names.empty()) {
+		string error_string =
+		    "Columns in the SET SORTED BY statement were not found in the DuckLake table. Unmatched columns were: ";
+		for (auto &unmatching_name : unmatching_names) {
+			error_string += unmatching_name + ", ";
+		}
+		error_string.resize(error_string.length() - 2); // Remove trailing ", "
+		throw BinderException(error_string);
+	}
+
+	auto order = make_uniq<LogicalOrder>(std::move(orders));
+
+	order->children.push_back(std::move(root_get));
+
+	vector<unique_ptr<Expression>> cast_expressions;
+	order->ResolveOperatorTypes();
+
+	auto &types = order->types;
+	auto order_bindings = order->GetColumnBindings();
+
+	for (idx_t col_idx = 0; col_idx < types.size(); col_idx++) {
+		auto &type = types[col_idx];
+		auto &binding = order_bindings[col_idx];
+		auto ref_expr = make_uniq<BoundColumnRefExpression>(type, binding);
+		cast_expressions.push_back(std::move(ref_expr));
+	}
+
+	auto projected = make_uniq<LogicalProjection>(binder.GenerateTableIndex(), std::move(cast_expressions));
+	projected->children.push_back(std::move(order));
+
+	return std::move(projected);
 }
 
 unique_ptr<LogicalOperator>
@@ -467,6 +494,26 @@ DuckLakeCompactor::GenerateCompactionCommand(vector<DuckLakeCompactionFileEntry>
 
 	if (DuckLakeTypes::RequiresCast(root->types)) {
 		root = DuckLakeInsert::InsertCasts(binder, root);
+	}
+
+	// If compaction should be ordered, add Order By (and projection) to logical plan
+	// Do not pull the sort setting at the time of the creation of the files being compacted,
+	// and instead pull the latest sort setting
+	// First, see if there are transaction local changes to the table
+	// Then fall back to latest snapshot if no local changes
+	auto latest_entry = transaction.GetTransactionLocalEntry(CatalogType::TABLE_ENTRY, table.schema.name, table.name);
+	if (!latest_entry) {
+		auto latest_snapshot = transaction.GetSnapshot();
+		latest_entry = catalog.GetEntryById(transaction, latest_snapshot, table_id);
+		if (!latest_entry) {
+			throw InternalException("DuckLakeCompactor: failed to find local table entry");
+		}
+	}
+	auto &latest_table = latest_entry->Cast<DuckLakeTableEntry>();
+
+	auto sort_data = latest_table.GetSortData();
+	if (sort_data) {
+		root = DuckLakeCompactor::InsertSort(binder, root, latest_table, sort_data);
 	}
 
 	// generate the LogicalCopyToFile

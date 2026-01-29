@@ -71,17 +71,28 @@ public:
 
 	unique_ptr<MultiFileReader> Copy() const override;
 
+	void FinalizeChunk(ClientContext &context, const MultiFileBindData &bind_data, BaseFileReader &reader,
+	                   const MultiFileReaderData &reader_data, DataChunk &input_chunk, DataChunk &output_chunk,
+	                   ExpressionExecutor &executor, optional_ptr<MultiFileReaderGlobalState> global_state) override;
+
 	static vector<MultiFileColumnDefinition> ColumnsFromFieldData(const DuckLakeFieldData &field_data,
 	                                                              bool emit_key_value = false);
 
 private:
 	shared_ptr<BaseFileReader> TryCreateInlinedDataReader(const OpenFileInfo &file);
+	//! For deletion scans we need to get the snapshot_id values using per-row snapshot information
+	void GatherDeletionScanSnapshots(BaseFileReader &reader, const MultiFileReaderData &reader_data,
+	                                DataChunk &output_chunk) const;
 
 private:
 	unique_ptr<MultiFileColumnDefinition> row_id_column;
 	unique_ptr<MultiFileColumnDefinition> snapshot_id_column;
 	//! Inlined transaction-local data
 	shared_ptr<DuckLakeInlinedData> transaction_local_data;
+	//! For deletion scans: track which output column is snapshot_id (if any)
+	optional_idx deletion_scan_snapshot_col;
+	//! For deletion scans: track which output column is rowid (if any)
+	optional_idx deletion_scan_rowid_col;
 };
 
 } // namespace duckdb

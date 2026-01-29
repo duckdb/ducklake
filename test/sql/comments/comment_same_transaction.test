@@ -1,0 +1,91 @@
+# name: test/sql/comments/comment_same_transaction.test
+# description: Verify COMMENT ON with other ALTER operations in same transaction
+# group: [comments]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+
+statement ok
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '__TEST_DIR__/comment_same_txn/')
+
+statement ok
+CREATE TABLE ducklake.test(a INTEGER, b VARCHAR);
+
+query I
+SELECT max(schema_version) FROM __ducklake_metadata_ducklake.ducklake_schema_versions where table_id = 1
+----
+1
+
+# COMMENT + ADD COLUMN in same transaction
+statement ok
+BEGIN
+
+statement ok
+COMMENT ON TABLE ducklake.test IS 'my table comment'
+
+statement ok
+ALTER TABLE ducklake.test ADD COLUMN c BIGINT
+
+statement ok
+COMMENT ON COLUMN ducklake.test.c IS 'new column comment'
+
+statement ok
+COMMIT
+
+# Should increment schema_version once (for ADD COLUMN)
+query I
+SELECT max(schema_version) FROM __ducklake_metadata_ducklake.ducklake_schema_versions where table_id = 1
+----
+2
+
+# Verify all changes were committed
+query I
+SELECT comment FROM duckdb_tables() WHERE table_name = 'test'
+----
+my table comment
+
+query II
+SELECT column_name, comment FROM duckdb_columns() WHERE table_name = 'test' ORDER BY column_index
+----
+a	NULL
+b	NULL
+c	new column comment
+
+# ============================================
+# VIEW COMMENT + CREATE VIEW IN SAME TRANSACTION
+# ============================================
+
+statement ok
+BEGIN
+
+statement ok
+CREATE VIEW ducklake.test_view AS SELECT * FROM ducklake.test
+
+statement ok
+COMMENT ON VIEW ducklake.test_view IS 'new view comment'
+
+statement ok
+COMMIT
+
+query I
+SELECT max(schema_version) FROM __ducklake_metadata_ducklake.ducklake_schema_versions where table_id = 1
+----
+2
+
+# Verify view comment was committed
+query I
+SELECT comment FROM duckdb_views() WHERE view_name = 'test_view'
+----
+new view comment
+
+
+statement ok
+ALTER TABLE ducklake.test ADD COLUMN d BIGINT
+
+query I
+SELECT max(schema_version) FROM __ducklake_metadata_ducklake.ducklake_schema_versions where table_id = 1
+----
+4
