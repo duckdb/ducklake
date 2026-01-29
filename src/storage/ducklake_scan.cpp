@@ -1,4 +1,5 @@
 #include "storage/ducklake_scan.hpp"
+#include "storage/ducklake_catalog.hpp"
 #include "storage/ducklake_multi_file_reader.hpp"
 #include "storage/ducklake_multi_file_list.hpp"
 #include "storage/ducklake_table_entry.hpp"
@@ -97,8 +98,9 @@ vector<PartitionStatistics> DuckLakeGetPartitionStats(ClientContext &context, Ge
 	// The merged file contains an embedded snapshot_id column for time travel filtering,
 	// but the metadata record_count represents ALL rows, not per-snapshot counts.
 	// Only a full scan can filter by snapshot_id to get the correct historical count.
+	// Time travel can occur via: (1) per-query AT clause, or (2) catalog attached at historical snapshot
 	auto current_snapshot = transaction->GetSnapshot();
-	if (func_info.snapshot.snapshot_id != current_snapshot.snapshot_id) {
+	if (func_info.snapshot.snapshot_id != current_snapshot.snapshot_id || transaction->GetCatalog().CatalogSnapshot()) {
 		return result;
 	}
 
