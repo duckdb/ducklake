@@ -746,7 +746,7 @@ unique_ptr<LogicalOperator> BindCompaction(ClientContext &context, TableFunction
 
 static unique_ptr<LogicalOperator> MergeAdjacentFilesBind(ClientContext &context, TableFunctionBindInput &input,
                                                           idx_t bind_index, vector<string> &return_names) {
-	return_names.push_back("files_merged");
+	return_names.push_back("files_processed");
 	return BindCompaction(context, input, bind_index, CompactionType::MERGE_ADJACENT_TABLES);
 }
 
@@ -769,7 +769,7 @@ TableFunctionSet DuckLakeMergeAdjacentFilesFunction::GetFunctions() {
 
 static unique_ptr<LogicalOperator> RewriteFilesBind(ClientContext &context, TableFunctionBindInput &input,
                                                     idx_t bind_index, vector<string> &return_names) {
-	return_names.push_back("files_merged");
+	return_names.push_back("files_processed");
 	return BindCompaction(context, input, bind_index, CompactionType::REWRITE_DELETES);
 }
 
