@@ -71,7 +71,7 @@ CREATE TABLE {METADATA_CATALOG}.ducklake_tag(object_id BIGINT, begin_snapshot BI
 CREATE TABLE {METADATA_CATALOG}.ducklake_column_tag(table_id BIGINT, column_id BIGINT, begin_snapshot BIGINT, end_snapshot BIGINT, key VARCHAR, value VARCHAR);
 CREATE TABLE {METADATA_CATALOG}.ducklake_data_file(data_file_id BIGINT PRIMARY KEY, table_id BIGINT, begin_snapshot BIGINT, end_snapshot BIGINT, file_order BIGINT, path VARCHAR, path_is_relative BOOLEAN, file_format VARCHAR, record_count BIGINT, file_size_bytes BIGINT, footer_size BIGINT, row_id_start BIGINT, partition_id BIGINT, encryption_key VARCHAR,  mapping_id BIGINT, partial_max BIGINT);
 CREATE TABLE {METADATA_CATALOG}.ducklake_file_column_stats(data_file_id BIGINT, table_id BIGINT, column_id BIGINT, column_size_bytes BIGINT, value_count BIGINT, null_count BIGINT, min_value VARCHAR, max_value VARCHAR, contains_nan BOOLEAN, extra_stats VARCHAR);
-CREATE TABLE {METADATA_CATALOG}.ducklake_delete_file(delete_file_id BIGINT PRIMARY KEY, table_id BIGINT, begin_snapshot BIGINT, end_snapshot BIGINT, data_file_id BIGINT, path VARCHAR, path_is_relative BOOLEAN, format VARCHAR, delete_count BIGINT, file_size_bytes BIGINT, footer_size BIGINT, encryption_key VARCHAR);
+CREATE TABLE {METADATA_CATALOG}.ducklake_delete_file(delete_file_id BIGINT PRIMARY KEY, table_id BIGINT, begin_snapshot BIGINT, end_snapshot BIGINT, data_file_id BIGINT, path VARCHAR, path_is_relative BOOLEAN, format VARCHAR, delete_count BIGINT, file_size_bytes BIGINT, footer_size BIGINT, encryption_key VARCHAR, partial_max BIGINT);
 CREATE TABLE {METADATA_CATALOG}.ducklake_column(column_id BIGINT, begin_snapshot BIGINT, end_snapshot BIGINT, table_id BIGINT, column_order BIGINT, column_name VARCHAR, column_type VARCHAR, initial_default VARCHAR, default_value VARCHAR, nulls_allowed BOOLEAN, parent_column BIGINT, default_value_type VARCHAR, default_value_dialect VARCHAR);
 CREATE TABLE {METADATA_CATALOG}.ducklake_table_stats(table_id BIGINT, record_count BIGINT, next_row_id BIGINT, file_size_bytes BIGINT);
 CREATE TABLE {METADATA_CATALOG}.ducklake_table_column_stats(table_id BIGINT, column_id BIGINT, contains_null BOOLEAN, contains_nan BOOLEAN, min_value VARCHAR, max_value VARCHAR, extra_stats VARCHAR);
@@ -86,6 +86,8 @@ CREATE TABLE {METADATA_CATALOG}.ducklake_schema_versions(begin_snapshot BIGINT, 
 CREATE TABLE {METADATA_CATALOG}.ducklake_macro(schema_id BIGINT, macro_id BIGINT, macro_name VARCHAR, begin_snapshot BIGINT, end_snapshot BIGINT);
 CREATE TABLE {METADATA_CATALOG}.ducklake_macro_impl(macro_id BIGINT, impl_id BIGINT, dialect VARCHAR, sql VARCHAR, type VARCHAR);
 CREATE TABLE {METADATA_CATALOG}.ducklake_macro_parameters(macro_id BIGINT, impl_id BIGINT,column_id BIGINT, parameter_name VARCHAR, parameter_type VARCHAR, default_value VARCHAR, default_value_type VARCHAR);
+CREATE TABLE {METADATA_CATALOG}.ducklake_sort_info(sort_id BIGINT, table_id BIGINT, begin_snapshot BIGINT, end_snapshot BIGINT);
+CREATE TABLE {METADATA_CATALOG}.ducklake_sort_expression(sort_id BIGINT, table_id BIGINT, sort_key_index BIGINT, expression VARCHAR, dialect VARCHAR, sort_direction VARCHAR, null_order VARCHAR);
 INSERT INTO {METADATA_CATALOG}.ducklake_snapshot VALUES (0, NOW(), 0, 1, 0);
 INSERT INTO {METADATA_CATALOG}.ducklake_snapshot_changes VALUES (0, 'created_schema:"main"',  NULL, NULL, NULL);
 INSERT INTO {METADATA_CATALOG}.ducklake_metadata (key, value) VALUES ('version', '0.4-dev1'), ('created_by', 'DuckDB %s'), ('data_path', %s), ('encrypted', '%s');
@@ -160,8 +162,11 @@ CREATE TABLE {IF_NOT_EXISTS} {METADATA_CATALOG}.ducklake_macro_impl(macro_id BIG
 CREATE TABLE {IF_NOT_EXISTS} {METADATA_CATALOG}.ducklake_macro_parameters(macro_id BIGINT, impl_id BIGINT,column_id BIGINT, parameter_name VARCHAR, parameter_type VARCHAR, default_value VARCHAR, default_value_type VARCHAR);
 ALTER TABLE {METADATA_CATALOG}.ducklake_column ADD COLUMN {IF_NOT_EXISTS} default_value_type VARCHAR DEFAULT 'literal';
 ALTER TABLE {METADATA_CATALOG}.ducklake_column ADD COLUMN {IF_NOT_EXISTS} default_value_dialect VARCHAR DEFAULT NULL;
+CREATE TABLE {IF_NOT_EXISTS} {METADATA_CATALOG}.ducklake_sort_info(sort_id BIGINT, table_id BIGINT, begin_snapshot BIGINT, end_snapshot BIGINT);
+CREATE TABLE {IF_NOT_EXISTS} {METADATA_CATALOG}.ducklake_sort_expression(sort_id BIGINT, table_id BIGINT, sort_key_index BIGINT, expression VARCHAR, dialect VARCHAR, sort_direction VARCHAR, null_order VARCHAR);
 ALTER TABLE {METADATA_CATALOG}.ducklake_schema_versions ADD COLUMN {IF_NOT_EXISTS} table_id BIGINT;
 ALTER TABLE {METADATA_CATALOG}.ducklake_data_file ADD COLUMN {IF_NOT_EXISTS} partial_max BIGINT;
+ALTER TABLE {METADATA_CATALOG}.ducklake_delete_file ADD COLUMN {IF_NOT_EXISTS} partial_max BIGINT;
 CREATE TEMP TABLE {IF_NOT_EXISTS} __ducklake_partial_max_migration AS
 SELECT data_file_id, TRY_CAST(regexp_extract(partial_file_info, 'partial_max:(\d+)', 1) AS BIGINT) AS partial_max
 FROM {METADATA_CATALOG}.ducklake_data_file
@@ -564,6 +569,46 @@ ORDER BY part.table_id, partition_id, partition_key_index
 		partition_field.transform = row.GetValue<string>(4);
 		partition_entry.fields.push_back(std::move(partition_field));
 	}
+
+	// load sort information
+	result = transaction.Query(snapshot, R"(
+SELECT sort.sort_id, sort.table_id, sort_expr.sort_key_index, sort_expr.expression, sort_expr.dialect, sort_expr.sort_direction, sort_expr.null_order
+FROM {METADATA_CATALOG}.ducklake_sort_info sort
+JOIN {METADATA_CATALOG}.ducklake_sort_expression sort_expr USING (sort_id)
+WHERE {SNAPSHOT_ID} >= sort.begin_snapshot AND ({SNAPSHOT_ID} < sort.end_snapshot OR sort.end_snapshot IS NULL)
+ORDER BY sort.table_id, sort.sort_id, sort_expr.sort_key_index
+)");
+	if (result->HasError()) {
+		result->GetErrorObject().Throw("Failed to get sort information from DuckLake: ");
+	}
+	auto &sorts = catalog.sorts;
+	for (auto &row : *result) {
+		auto sort_id = row.GetValue<uint64_t>(0);
+		auto table_id = TableIndex(row.GetValue<uint64_t>(1));
+
+		if (sorts.empty() || sorts.back().table_id != table_id) {
+			DuckLakeSortInfo sort_info;
+			sort_info.id = sort_id;
+			sort_info.table_id = table_id;
+			sorts.push_back(std::move(sort_info));
+		}
+		auto &sort_entry = sorts.back();
+
+		DuckLakeSortFieldInfo sort_field;
+		sort_field.sort_key_index = row.GetValue<uint64_t>(2);
+		sort_field.expression = row.GetValue<string>(3);
+		sort_field.dialect = row.GetValue<string>(4);
+
+		auto sort_direction_str = row.GetValue<string>(5);
+		sort_field.sort_direction =
+		    (StringUtil::CIEquals(sort_direction_str, "DESC") ? OrderType::DESCENDING : OrderType::ASCENDING);
+
+		auto null_order_str = row.GetValue<string>(6);
+		sort_field.null_order = (StringUtil::CIEquals(null_order_str, "NULLS_FIRST") ? OrderByNullType::NULLS_FIRST
+		                                                                             : OrderByNullType::NULLS_LAST);
+		sort_entry.fields.push_back(std::move(sort_field));
+	}
+
 	return catalog;
 }
 
@@ -1202,12 +1247,12 @@ vector<DuckLakeDeleteScanEntry> DuckLakeMetadataManager::GetTableDeletions(DuckL
 SELECT %s, current_delete.begin_snapshot FROM (
 	SELECT data_file_id, begin_snapshot, path, path_is_relative, file_size_bytes, footer_size, encryption_key
 	FROM {METADATA_CATALOG}.ducklake_delete_file
-	WHERE table_id = %d AND begin_snapshot >= %d AND begin_snapshot <= {SNAPSHOT_ID}
+	WHERE table_id = %d AND begin_snapshot <= {SNAPSHOT_ID}
 ) AS current_delete
 LEFT JOIN (
 	SELECT data_file_id, MAX_BY(COLUMNS(['path', 'path_is_relative', 'file_size_bytes', 'footer_size', 'encryption_key']), begin_snapshot) AS '\0'
 	FROM {METADATA_CATALOG}.ducklake_delete_file
-	WHERE table_id = %d AND begin_snapshot < current_delete.begin_snapshot
+	WHERE table_id = %d AND begin_snapshot < %d
 	GROUP BY data_file_id
 ) AS previous_delete
 USING (data_file_id)
@@ -1233,7 +1278,7 @@ USING (data_file_id), (
 	SELECT NULL path, NULL path_is_relative, NULL file_size_bytes, NULL footer_size, NULL encryption_key
 ) current_delete;
 		)",
-	                       select_list, table_id.index, start_snapshot.snapshot_id, table_id.index, table_id.index,
+	                       select_list, table_id.index, table_id.index, start_snapshot.snapshot_id, table_id.index,
 	                       select_list, table_id.index, start_snapshot.snapshot_id, table_id.index);
 	auto result = transaction.Query(end_snapshot, query);
 	if (result->HasError()) {
@@ -1256,6 +1301,9 @@ USING (data_file_id), (
 		entry.delete_file = ReadDataFile(table, row, col_idx, IsEncrypted());
 		entry.previous_delete_file = ReadDataFile(table, row, col_idx, IsEncrypted());
 		entry.snapshot_id = row.GetValue<idx_t>(col_idx++);
+		// store the snapshot range for filtering embedded snapshot IDs
+		entry.start_snapshot = start_snapshot.snapshot_id;
+		entry.end_snapshot = end_snapshot.snapshot_id;
 		files.push_back(std::move(entry));
 	}
 	return files;
@@ -1265,7 +1313,8 @@ vector<DuckLakeFileListExtendedEntry>
 DuckLakeMetadataManager::GetExtendedFilesForTable(DuckLakeTableEntry &table, DuckLakeSnapshot snapshot,
                                                   const FilterPushdownInfo *filter_info) {
 	auto table_id = table.GetTableId();
-	string select_list = GetFileSelectList("data") + ", data.row_id_start, " + GetFileSelectList("del");
+	string select_list =
+	    GetFileSelectList("data") + ", data.row_id_start, " + GetFileSelectList("del") + ", del.begin_snapshot";
 
 	string query;
 	string where_clause;
@@ -1315,6 +1364,10 @@ WHERE data.table_id=%d AND {SNAPSHOT_ID} >= data.begin_snapshot AND ({SNAPSHOT_I
 		}
 		col_idx++;
 		file_entry.delete_file = ReadDataFile(table, row, col_idx, IsEncrypted());
+		if (!row.IsNull(col_idx)) {
+			file_entry.delete_file_begin_snapshot = row.GetValue<idx_t>(col_idx);
+		}
+		col_idx++;
 		files.push_back(std::move(file_entry));
 	}
 	return files;
@@ -1334,7 +1387,7 @@ vector<DuckLakeCompactionFileEntry> DuckLakeMetadataManager::GetFilesForCompacti
 	                          "data.partition_id, partition_info.keys, " +
 	                          GetFileSelectList("data");
 	string delete_select_list =
-	    "del.data_file_id,del.delete_file_id, del.delete_count, del.begin_snapshot, del.end_snapshot, " +
+	    "del.data_file_id,del.delete_file_id, del.delete_count, del.begin_snapshot, del.end_snapshot, del.partial_max, " +
 	    GetFileSelectList("del");
 	string select_list = data_select_list + ", " + delete_select_list;
 	string deletion_threshold_clause;
@@ -1437,6 +1490,10 @@ ORDER BY data.begin_snapshot, data.row_id_start, data.data_file_id, del.begin_sn
 		delete_file.begin_snapshot = row.GetValue<idx_t>(col_idx++);
 		delete_file.end_snapshot = row.IsNull(col_idx) ? optional_idx() : row.GetValue<idx_t>(col_idx);
 		col_idx++;
+		if (!row.IsNull(col_idx)) {
+			delete_file.max_snapshot = row.GetValue<idx_t>(col_idx);
+		}
+		col_idx++;
 		delete_file.data = ReadDataFile(table, row, col_idx, IsEncrypted());
 		file_entry.delete_files.push_back(std::move(delete_file));
 	}
@@ -1481,6 +1538,7 @@ string DuckLakeMetadataManager::DropTables(const set<TableIndex> &ids, bool rena
 		batch_query += FlushDrop("ducklake_data_file", "table_id", ids);
 		batch_query += FlushDrop("ducklake_delete_file", "table_id", ids);
 		batch_query += FlushDrop("ducklake_tag", "object_id", ids);
+		batch_query += FlushDrop("ducklake_sort_info", "table_id", ids);
 	}
 	return batch_query;
 }
@@ -2297,6 +2355,40 @@ string DuckLakeMetadataManager::DropDeleteFiles(const set<DataFileIndex> &droppe
 	return FlushDrop("ducklake_delete_file", "data_file_id", dropped_files);
 }
 
+string
+DuckLakeMetadataManager::DeleteOverwrittenDeleteFiles(const vector<DuckLakeOverwrittenDeleteFile> &overwritten_files) {
+	if (overwritten_files.empty()) {
+		return {};
+	}
+	string deleted_file_ids;
+	string scheduled_deletions;
+	for (auto &file : overwritten_files) {
+		if (!deleted_file_ids.empty()) {
+			deleted_file_ids += ", ";
+		}
+		deleted_file_ids += to_string(file.delete_file_id.index);
+
+		if (!scheduled_deletions.empty()) {
+			scheduled_deletions += ", ";
+		}
+		auto path = GetRelativePath(file.path);
+		scheduled_deletions += StringUtil::Format("(%d, %s, %s, NOW())", file.delete_file_id.index,
+		                                          SQLString(path.path), path.path_is_relative ? "true" : "false");
+	}
+
+	string batch_query;
+	// delete the old delete file metadata records
+	batch_query += StringUtil::Format(R"(
+DELETE FROM {METADATA_CATALOG}.ducklake_delete_file
+WHERE delete_file_id IN (%s);
+)",
+	                                  deleted_file_ids);
+	// schedule the old files for disk deletion
+	batch_query +=
+	    "INSERT INTO {METADATA_CATALOG}.ducklake_files_scheduled_for_deletion VALUES " + scheduled_deletions + ";";
+	return batch_query;
+}
+
 string DuckLakeMetadataManager::WriteNewDeleteFiles(const vector<DuckLakeDeleteFileInfo> &new_files,
                                                     const vector<DuckLakeTableInfo> &new_tables,
                                                     vector<DuckLakeSchemaInfo> &new_schemas_result) {
@@ -2317,10 +2409,12 @@ string DuckLakeMetadataManager::WriteNewDeleteFiles(const vector<DuckLakeDeleteF
 		// Use explicit begin_snapshot if set (for flush operations), otherwise use commit snapshot
 		string begin_snapshot_str =
 		    file.begin_snapshot.IsValid() ? std::to_string(file.begin_snapshot.GetIndex()) : "{SNAPSHOT_ID}";
+		string partial_max =
+		    file.max_snapshot.IsValid() ? to_string(file.max_snapshot.GetIndex()) : "NULL";
 		delete_file_insert_query += StringUtil::Format(
-		    "(%d, %d, %s, NULL,  %d, %s, %s, 'parquet', %d, %d, %d, %s)", delete_file_index, table_id,
+		    "(%d, %d, %s, NULL,  %d, %s, %s, 'parquet', %d, %d, %d, %s, %s)", delete_file_index, table_id,
 		    begin_snapshot_str, data_file_index, SQLString(path.path), path.path_is_relative ? "true" : "false",
-		    file.delete_count, file.file_size_bytes, file.footer_size, encryption_key);
+		    file.delete_count, file.file_size_bytes, file.footer_size, encryption_key, partial_max);
 	}
 
 	// insert the data files
@@ -2678,6 +2772,117 @@ WHERE table_id IN (%s) AND end_snapshot IS NULL
 	return batch_query;
 }
 
+void CheckTableSortEqual(const vector<DuckLakeSortInfo> &old_sorts,
+                         unordered_map<idx_t, DuckLakeSortInfo> &new_sort_map) {
+	for (auto &sort : old_sorts) {
+		if (new_sort_map.find(sort.table_id.index) != new_sort_map.end()) {
+			if (new_sort_map[sort.table_id.index] == sort) {
+				// If a new sort already exists in an old sort, it's a nop, we can remove it
+				new_sort_map.erase(sort.table_id.index);
+			}
+		}
+	}
+}
+
+void CheckTableSortReset(const unordered_set<idx_t> &old_sort_set, const vector<DuckLakeSortInfo> &new_sorts,
+                         unordered_map<idx_t, DuckLakeSortInfo> &new_sort_map) {
+	vector<idx_t> sort_ids_to_erase;
+	for (auto &sort : new_sorts) {
+		if (old_sort_set.find(sort.table_id.index) == old_sort_set.end() && sort.fields.empty()) {
+			// If a map does not exist on the old sort and the sort has no fields, this is an reset over
+			// an empty sort definition, hence also a nop
+			sort_ids_to_erase.push_back(sort.table_id.index);
+		}
+	}
+	for (auto &id : sort_ids_to_erase) {
+		new_sort_map.erase(id);
+	}
+}
+
+static unordered_map<idx_t, DuckLakeSortInfo> GetNewSorts(const vector<DuckLakeSortInfo> &old_sorts,
+                                                          const vector<DuckLakeSortInfo> &new_sorts) {
+	unordered_map<idx_t, DuckLakeSortInfo> new_sort_map;
+	for (auto &sort : new_sorts) {
+		new_sort_map[sort.table_id.index] = sort;
+	}
+	unordered_set<idx_t> old_sort_set;
+	for (auto &sort : old_sorts) {
+		old_sort_set.insert(sort.table_id.index);
+	}
+	CheckTableSortEqual(old_sorts, new_sort_map);
+	CheckTableSortReset(old_sort_set, new_sorts, new_sort_map);
+
+	return new_sort_map;
+}
+
+string DuckLakeMetadataManager::WriteNewSortKeys(DuckLakeSnapshot commit_snapshot,
+                                                 const vector<DuckLakeSortInfo> &new_sorts) {
+	if (new_sorts.empty()) {
+		return {};
+	}
+	auto catalog = GetCatalogForSnapshot(commit_snapshot);
+
+	string old_sort_table_ids;
+	string new_sort_values;
+	string new_sort_expressions;
+
+	// Do not update if they are the same
+	auto new_sort_map = GetNewSorts(catalog.sorts, new_sorts);
+	if (new_sort_map.empty()) {
+		return {};
+	}
+	for (auto &new_sort : new_sort_map) {
+		// set old partition data as no longer valid
+		if (!old_sort_table_ids.empty()) {
+			old_sort_table_ids += ", ";
+		}
+		old_sort_table_ids += to_string(new_sort.second.table_id.index);
+
+		if (!new_sort.second.id.IsValid()) {
+			// dropping sort data - skip adding new values but continue to set end_snapshot on old sort
+			continue;
+		}
+		auto sort_id = new_sort.second.id.GetIndex();
+
+		if (!new_sort_values.empty()) {
+			new_sort_values += ", ";
+		}
+		new_sort_values +=
+		    StringUtil::Format(R"((%d, %d, {SNAPSHOT_ID}, NULL))", sort_id, new_sort.second.table_id.index);
+
+		for (auto &field : new_sort.second.fields) {
+			if (!new_sort_expressions.empty()) {
+				new_sort_expressions += ", ";
+			}
+			string sort_direction = (field.sort_direction == OrderType::DESCENDING ? "DESC" : "ASC");
+			string null_order = (field.null_order == OrderByNullType::NULLS_FIRST ? "NULLS_FIRST" : "NULLS_LAST");
+			new_sort_expressions +=
+			    StringUtil::Format("(%d, %d, %d, %s, %s, %s, %s)", sort_id, new_sort.second.table_id.index,
+			                       field.sort_key_index, SQLString(field.expression), SQLString(field.dialect),
+			                       SQLString(sort_direction), SQLString(null_order));
+		}
+	}
+	// update old sort information for any tables that have been altered
+	auto update_sort_query = StringUtil::Format(R"(
+UPDATE {METADATA_CATALOG}.ducklake_sort_info
+SET end_snapshot = {SNAPSHOT_ID}
+WHERE table_id IN (%s) AND end_snapshot IS NULL 
+;)",
+	                                            old_sort_table_ids);
+	string batch_query = update_sort_query;
+	if (!new_sort_values.empty()) {
+		new_sort_values = "INSERT INTO {METADATA_CATALOG}.ducklake_sort_info VALUES " + new_sort_values + ";";
+		batch_query += new_sort_values;
+	}
+	if (!new_sort_expressions.empty()) {
+		new_sort_expressions =
+		    "INSERT INTO {METADATA_CATALOG}.ducklake_sort_expression VALUES " + new_sort_expressions + ";";
+		batch_query += new_sort_expressions;
+	}
+
+	return batch_query;
+}
+
 string DuckLakeMetadataManager::WriteNewTags(const vector<DuckLakeTagInfo> &new_tags) {
 	if (new_tags.empty()) {
 		return {};
@@ -3021,19 +3226,11 @@ string DuckLakeMetadataManager::WriteDeleteRewrites(const vector<DuckLakeCompact
 	if (compactions.empty()) {
 		return {};
 	}
-	// Delete Rewrites only deletes the deletion files.
-	string deleted_file_ids;
-	string scheduled_deletions;
-	set<idx_t> files_to_remove;
 	unordered_map<idx_t, idx_t> table_idx_last_snapshot;
-	// We can start by figuring out the files we can actually remove
 	for (idx_t i = compactions.size(); i > 0; i--) {
 		auto &compaction = compactions[i - 1];
 		if (table_idx_last_snapshot.find(compaction.table_index.index) == table_idx_last_snapshot.end()) {
-			// This is the last delete file of a table
 			table_idx_last_snapshot[compaction.table_index.index] = compaction.delete_file_start_snapshot.GetIndex();
-			files_to_remove.insert(i - 1);
-			D_ASSERT(!compaction.delete_file_end_snapshot.IsValid());
 		}
 	}
 
@@ -3041,21 +3238,7 @@ string DuckLakeMetadataManager::WriteDeleteRewrites(const vector<DuckLakeCompact
 	for (idx_t i = 0; i < compactions.size(); ++i) {
 		auto &compaction = compactions[i];
 		D_ASSERT(!compaction.path.empty());
-		auto path = GetRelativePath(compaction.delete_file_path);
-		if (files_to_remove.find(i) != files_to_remove.end()) {
-			// We only delete deletion files if they are part of the last snapshot, as they won't be required for
-			// time travel
-			if (!scheduled_deletions.empty()) {
-				scheduled_deletions += ", ";
-			}
-			scheduled_deletions += StringUtil::Format("(%d, %s, %s, NOW())", compaction.delete_file_id.index,
-			                                          SQLString(path.path), path.path_is_relative ? "true" : "false");
-			if (!deleted_file_ids.empty()) {
-				deleted_file_ids += ", ";
-			}
-			deleted_file_ids += to_string(compaction.delete_file_id.index);
-		} else if (!compaction.delete_file_end_snapshot.IsValid()) {
-			// if the deletion file was not removed, we still update its end_snapshot if null
+		if (!compaction.delete_file_end_snapshot.IsValid()) {
 			batch_query += StringUtil::Format(R"(
 			UPDATE {METADATA_CATALOG}.ducklake_delete_file SET end_snapshot = %llu
 			WHERE delete_file_id = %llu;
@@ -3077,17 +3260,6 @@ string DuckLakeMetadataManager::WriteDeleteRewrites(const vector<DuckLakeCompact
 			WHERE data_file_id = %llu;
 			)",
 		                       table_idx_last_snapshot[compaction.table_index.index], compaction.new_id.index);
-	}
-	if (!deleted_file_ids.empty()) {
-		// for each file that has been rewritten - we also delete it from the ducklake_delete_file table
-		batch_query += StringUtil::Format(R"(
-	DELETE FROM {METADATA_CATALOG}.ducklake_delete_file
-	WHERE delete_file_id IN (%s);
-	)",
-		                                  deleted_file_ids);
-		// add the files we cleared to the deletion schedule
-		batch_query +=
-		    "INSERT INTO {METADATA_CATALOG}.ducklake_files_scheduled_for_deletion VALUES " + scheduled_deletions + ";";
 	}
 	return batch_query;
 }
@@ -3290,7 +3462,7 @@ VALUES %s;
 	if (!deleted_table_ids.empty()) {
 		tables_to_delete_from = {"ducklake_table",          "ducklake_table_stats",      "ducklake_table_column_stats",
 		                         "ducklake_partition_info", "ducklake_partition_column", "ducklake_column",
-		                         "ducklake_column_tag"};
+		                         "ducklake_column_tag",     "ducklake_sort_info",        "ducklake_sort_expression"};
 		for (auto &delete_tbl : tables_to_delete_from) {
 			auto result = transaction.Query(StringUtil::Format(R"(
 DELETE FROM {METADATA_CATALOG}.%s

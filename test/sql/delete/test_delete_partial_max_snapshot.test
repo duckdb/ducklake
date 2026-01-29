@@ -1,0 +1,39 @@
+# name: test/sql/delete/test_delete_partial_max_snapshot.test
+# description: Test ducklake deleting creates partial max snapshot for consolidated delete files
+# group: [delete]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+
+test-env DATA_PATH __TEST_DIR__
+
+
+statement ok
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/test_delete_partial_max_snapshot')
+
+statement ok
+use ducklake
+
+statement ok
+CREATE TABLE test AS SELECT i id FROM range(10) t(i);
+
+statement ok
+insert into test values (11),(12),(13);
+
+statement ok
+delete from test where id = 1
+
+statement ok
+delete from test where id = 5
+
+statement ok
+delete from test where id = 12
+
+query I
+SELECT partial_max FROM __ducklake_metadata_ducklake.ducklake_delete_file
+----
+4
+NULL

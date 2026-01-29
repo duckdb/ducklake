@@ -6,8 +6,6 @@ require-env LOCAL_EXTENSION_REPO
 
 require ducklake
 
-mode skip
-
 statement ok
 set allow_persistent_secrets=false;
 

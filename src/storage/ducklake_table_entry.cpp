@@ -69,6 +69,9 @@ DuckLakeTableEntry::DuckLakeTableEntry(DuckLakeTableEntry &parent, CreateTableIn
 	if (parent.partition_data) {
 		partition_data = make_uniq<DuckLakePartition>(*parent.partition_data);
 	}
+	if (parent.sort_data) {
+		sort_data = make_uniq<DuckLakeSort>(*parent.sort_data);
+	}
 	CheckSupportedTypes();
 	if (local_change.type == LocalChangeType::ADD_COLUMN) {
 		LogicalIndex new_col_idx(columns.LogicalColumnCount() - 1);
@@ -129,6 +132,13 @@ DuckLakeTableEntry::DuckLakeTableEntry(DuckLakeTableEntry &parent, CreateTableIn
                                        unique_ptr<DuckLakePartition> partition_data_p)
     : DuckLakeTableEntry(parent, info, LocalChangeType::SET_PARTITION_KEY) {
 	partition_data = std::move(partition_data_p);
+}
+
+// ALTER TABLE SET SORT KEY
+DuckLakeTableEntry::DuckLakeTableEntry(DuckLakeTableEntry &parent, CreateTableInfo &info,
+                                       unique_ptr<DuckLakeSort> sort_data_p)
+    : DuckLakeTableEntry(parent, info, LocalChangeType::SET_SORT_KEY) {
+	sort_data = std::move(sort_data_p);
 }
 
 const DuckLakeFieldId &DuckLakeTableEntry::GetFieldId(PhysicalIndex column_index) const {
@@ -306,6 +316,10 @@ void DuckLakeTableEntry::SetPartitionData(unique_ptr<DuckLakePartition> partitio
 	partition_data = std::move(partition_data_p);
 }
 
+void DuckLakeTableEntry::SetSortData(unique_ptr<DuckLakeSort> sort_data_p) {
+	sort_data = std::move(sort_data_p);
+}
+
 const string &DuckLakeTableEntry::DataPath() const {
 	return data_path;
 }
@@ -341,6 +355,26 @@ string GetPartitionColumnName(ColumnRefExpression &colref) {
 		throw InvalidInputException("Unexpected qualified column reference - only unqualified columns are supported");
 	}
 	return colref.GetColumnName();
+}
+
+string GetSortColumnName(DuckLakeTableEntry &table, ParsedExpression &expr) {
+	// Only allow column references, reject expressions
+	if (expr.type != ExpressionType::COLUMN_REF) {
+		throw NotImplementedException("SET SORTED BY only supports column references, not expressions: %s",
+		                              expr.ToString());
+	}
+	auto &colref = expr.Cast<ColumnRefExpression>();
+	if (colref.IsQualified()) {
+		throw InvalidInputException("Unexpected qualified column reference - only unqualified columns are supported");
+	}
+	string column_name = colref.GetColumnName();
+
+	// Validate column exists
+	if (!table.ColumnExists(column_name)) {
+		throw BinderException("Column \"%s\" does not exist in table \"%s\"", column_name, table.name);
+	}
+
+	return column_name;
 }
 
 DuckLakePartitionField GetPartitionField(DuckLakeTableEntry &table, ParsedExpression &expr) {
@@ -1065,6 +1099,38 @@ unique_ptr<CatalogEntry> DuckLakeTableEntry::AlterTable(DuckLakeTransaction &tra
 	return std::move(new_entry);
 }
 
+unique_ptr<CatalogEntry> DuckLakeTableEntry::AlterTable(DuckLakeTransaction &transaction, SetSortedByInfo &info) {
+	auto create_info = GetInfo();
+	auto &table_info = create_info->Cast<CreateTableInfo>();
+
+	if (info.orders.empty()) {
+		// RESET SORTED BY - clear sort data
+		auto new_entry = make_uniq<DuckLakeTableEntry>(*this, table_info, unique_ptr<DuckLakeSort>());
+		return std::move(new_entry);
+	}
+
+	auto sort_data = make_uniq<DuckLakeSort>();
+	sort_data->sort_id = transaction.GetLocalCatalogId();
+	for (idx_t order_node_idx = 0; order_node_idx < info.orders.size(); order_node_idx++) {
+		auto &order_node = info.orders[order_node_idx];
+
+		// FIXME: Currently must be column reference and column must exist. Want it to be an expression.
+		string column_name = GetSortColumnName(*this, *order_node.expression);
+
+		DuckLakeSortField sort_field;
+		sort_field.sort_key_index = order_node_idx;
+		// FIXME: convert to order_node.expression->ToString(); once expressions are supported
+		sort_field.expression = column_name;
+		sort_field.dialect = "duckdb";
+		sort_field.sort_direction = order_node.type;
+		sort_field.null_order = order_node.null_order;
+		sort_data->fields.push_back(sort_field);
+	}
+
+	auto new_entry = make_uniq<DuckLakeTableEntry>(*this, table_info, std::move(sort_data));
+	return std::move(new_entry);
+}
+
 unique_ptr<CatalogEntry> DuckLakeTableEntry::Alter(DuckLakeTransaction &transaction, AlterTableInfo &info) {
 	if (transaction.HasTransactionInlinedData(GetTableId())) {
 		throw NotImplementedException("ALTER on a table with transaction-local inlined data is not supported");
@@ -1094,6 +1160,8 @@ unique_ptr<CatalogEntry> DuckLakeTableEntry::Alter(DuckLakeTransaction &transact
 		return AlterTable(transaction, info.Cast<RenameFieldInfo>());
 	case AlterTableType::SET_DEFAULT:
 		return AlterTable(transaction, info.Cast<SetDefaultInfo>());
+	case AlterTableType::SET_SORTED_BY:
+		return AlterTable(transaction, info.Cast<SetSortedByInfo>());
 	default:
 		throw BinderException("Unsupported ALTER TABLE type in DuckLake");
 	}

@@ -184,6 +184,7 @@ private:
 	NewTableInfo GetNewTables(DuckLakeCommitState &commit_state, TransactionChangeInformation &transaction_changes);
 	NewMacroInfo GetNewMacros(DuckLakeCommitState &commit_state, TransactionChangeInformation &transaction_changes);
 	DuckLakePartitionInfo GetNewPartitionKey(DuckLakeCommitState &commit_state, DuckLakeTableEntry &tabletable_id);
+	DuckLakeSortInfo GetNewSortKey(DuckLakeCommitState &commit_state, DuckLakeTableEntry &tabletable_id);
 	DuckLakeTableInfo GetNewTable(DuckLakeCommitState &commit_state, DuckLakeTableEntry &table);
 	DuckLakeViewInfo GetNewView(DuckLakeCommitState &commit_state, DuckLakeViewEntry &view);
 	void FlushNewPartitionKey(DuckLakeSnapshot &commit_snapshot, DuckLakeTableEntry &table);
@@ -191,8 +192,9 @@ private:
 	                                optional_idx row_id_start);
 	NewDataInfo GetNewDataFiles(string &batch_query, DuckLakeCommitState &commit_state,
 	                            optional_ptr<vector<DuckLakeGlobalStatsInfo>> stats);
-	vector<DuckLakeDeleteFileInfo> GetNewDeleteFiles(const DuckLakeCommitState &commit_state,
-	                                                 set<DataFileIndex> &overwritten_delete_files) const;
+	vector<DuckLakeDeleteFileInfo>
+	GetNewDeleteFiles(const DuckLakeCommitState &commit_state,
+	                  vector<DuckLakeOverwrittenDeleteFile> &overwritten_delete_files) const;
 	string UpdateGlobalTableStats(TableIndex table_id, const DuckLakeNewGlobalStats &new_stats);
 	SnapshotAndStats CheckForConflicts(DuckLakeSnapshot transaction_snapshot,
 	                                   const TransactionChangeInformation &changes);

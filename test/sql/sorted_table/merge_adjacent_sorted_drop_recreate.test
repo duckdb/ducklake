@@ -1,0 +1,106 @@
+# name: test/sql/sorted_table/merge_adjacent_sorted_drop_recreate.test
+# description: test ducklake merge adjacent files dropping and recreating a table
+# group: [sorted_table]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+
+
+
+statement ok
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '__TEST_DIR__/merge_adjacent_options_sorted/')
+
+statement ok
+USE ducklake;
+
+statement ok
+CREATE TABLE table_to_recreate (unique_id_original BIGINT, sort_key_1_original BIGINT, sort_key_2_original VARCHAR);
+
+# SET SORTED BY on the original table copy
+statement ok
+ALTER TABLE ducklake.table_to_recreate SET SORTED BY (sort_key_1_original ASC NULLS LAST, sort_key_2_original ASC NULLS LAST);
+
+# DROP and re CREATE the table, then ensure the SET SORTED BY does not apply
+statement ok
+DROP TABLE ducklake.table_to_recreate;
+
+statement ok
+CREATE TABLE table_to_recreate (unique_id BIGINT, sort_key_1 BIGINT, sort_key_2 VARCHAR);
+
+statement ok
+INSERT INTO table_to_recreate (unique_id, sort_key_1, sort_key_2)
+FROM range(4) t(i)
+SELECT 
+    i AS unique_id,
+    i % 2 AS sort_key_1,
+    'woot' || i AS sort_key_2
+ORDER BY 
+    i DESC
+;
+
+statement ok
+INSERT INTO table_to_recreate (unique_id, sort_key_1, sort_key_2)
+FROM range(4) t(i)
+SELECT 
+    i + 4 AS unique_id,
+    (i + 4) % 2 AS sort_key_1,
+    'woot' || (i + 4) AS sort_key_2
+ORDER BY 
+    i DESC
+;
+
+query III
+FROM table_to_recreate
+----
+3	1	woot3
+2	0	woot2
+1	1	woot1
+0	0	woot0
+7	1	woot7
+6	0	woot6
+5	1	woot5
+4	0	woot4
+
+query II
+SELECT df.data_file_id, df.table_id 
+FROM __ducklake_metadata_ducklake.ducklake_data_file df 
+JOIN __ducklake_metadata_ducklake.ducklake_table t 
+ON df.table_id = t.table_id 
+WHERE 
+t.table_name = 'table_to_recreate'
+ORDER BY ALL
+----
+0	3
+1	3
+
+statement ok
+CALL ducklake_merge_adjacent_files('ducklake', 'table_to_recreate');
+
+
+# The sort order should match the original insert order, not the SET SORTED BY from the old table version
+query III
+FROM table_to_recreate
+----
+3	1	woot3
+2	0	woot2
+1	1	woot1
+0	0	woot0
+7	1	woot7
+6	0	woot6
+5	1	woot5
+4	0	woot4
+
+# We write a new file for the table
+query II
+SELECT df.data_file_id, df.table_id 
+FROM __ducklake_metadata_ducklake.ducklake_data_file df 
+JOIN __ducklake_metadata_ducklake.ducklake_table t 
+ON df.table_id = t.table_id 
+WHERE 
+t.table_name = 'table_to_recreate'
+----
+2	3
+

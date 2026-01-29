@@ -68,6 +68,14 @@ struct DuckLakeDeleteMap {
 		return delete_entry->second;
 	}
 
+	optional_ptr<DuckLakeFileListExtendedEntry> TryGetExtendedFileInfo(const string &filename) {
+		auto delete_entry = file_map.find(filename);
+		if (delete_entry == file_map.end()) {
+			return nullptr;
+		}
+		return &delete_entry->second;
+	}
+
 	optional_ptr<DuckLakeDeleteData> GetDeleteData(const string &filename) {
 		lock_guard<mutex> guard(lock);
 		auto entry = delete_data_map.find(filename);
@@ -147,6 +155,14 @@ public:
 private:
 	void FlushDelete(DuckLakeTransaction &transaction, ClientContext &context, DuckLakeDeleteGlobalState &global_state,
 	                 const string &filename, ColumnDataCollection &deleted_rows) const;
+	void FlushDeleteWithSnapshots(DuckLakeTransaction &transaction, ClientContext &context,
+	                              DuckLakeDeleteGlobalState &global_state, const string &filename,
+	                              const DuckLakeFileListExtendedEntry &data_file_info,
+	                              DuckLakeDeleteData &existing_delete_data, const set<idx_t> &sorted_deletes,
+	                              DuckLakeDeleteFile &delete_file) const;
+	//! Try to drop a file if all rows are deleted. Returns true if the file was dropped.
+	bool TryDropFullyDeletedFile(DuckLakeTransaction &transaction, const DuckLakeDeleteFile &delete_file,
+	                             const DuckLakeFileListExtendedEntry &data_file_info, idx_t delete_count) const;
 };
 
 } // namespace duckdb
