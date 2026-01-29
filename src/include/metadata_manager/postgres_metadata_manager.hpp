@@ -46,9 +46,6 @@ protected:
 	//! Load macro implementations from JSON result
 	vector<DuckLakeMacroImplementation> LoadMacroImplementations(const Value &list) const override;
 
-	//! Get orphan files - PostgreSQL doesn't support filesystem listing, return empty
-	vector<DuckLakeFileForCleanup> GetOrphanFilesForCleanup(const string &filter, const string &separator) override;
-
 private:
 	unique_ptr<QueryResult> ExecuteQuery(string &query, string command);
 };

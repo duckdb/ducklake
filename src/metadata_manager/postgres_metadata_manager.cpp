@@ -288,12 +288,4 @@ vector<DuckLakeMacroImplementation> PostgresMetadataManager::LoadMacroImplementa
 	return result;
 }
 
-vector<DuckLakeFileForCleanup> PostgresMetadataManager::GetOrphanFilesForCleanup(const string &filter,
-                                                                                 const string &separator) {
-	// PostgreSQL doesn't support filesystem listing like DuckDB's read_blob
-	// Return empty list - orphan files will need to be cleaned up differently
-	vector<DuckLakeFileForCleanup> result;
-	return result;
-}
-
 } // namespace duckdb

@@ -1533,7 +1533,7 @@ vector<DuckLakeCompactionFileEntry> DuckLakeMetadataManager::GetFilesForCompacti
 	string deletion_threshold_clause;
 	if (type == CompactionType::REWRITE_DELETES) {
 		deletion_threshold_clause = StringUtil::Format(
-		    " AND del.delete_count/data.record_count >= %f and data.end_snapshot is null", deletion_threshold);
+		    " AND CAST(del.delete_count AS FLOAT)/CAST(data.record_count AS FLOAT) >= %f and data.end_snapshot is null", deletion_threshold);
 	}
 	// Add file size filtering for MERGE_ADJACENT_TABLES compaction
 	string file_size_filter_clause;
@@ -3329,7 +3329,7 @@ vector<DuckLakeFileForCleanup> DuckLakeMetadataManager::GetOrphanFilesForCleanup
 	auto active_files = GetActiveFiles(separator);
 
 	// Get all files from filesystem using DuckDB's read_blob
-	auto query = "SELECT filename FROM read_blob({DATA_PATH} || '**')" + filter;
+	auto query = "SELECT filename FROM read_blob({DATA_PATH} || '**') WHERE true " + filter;
 	auto res = transaction.Query(query);
 	if (res->HasError()) {
 		res->GetErrorObject().Throw("Failed to get files from filesystem: ");
