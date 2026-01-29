@@ -137,6 +137,7 @@ public:
 	string GetDefaultSchemaName();
 
 	bool HasLocalDeletes(TableIndex table_id);
+	bool HasLocalInlinedDeletes(TableIndex table_id);
 	void GetLocalDeleteForFile(TableIndex table_id, const string &path, DuckLakeFileData &delete_file);
 	void TransactionLocalDelete(TableIndex table_id, const string &data_path, DuckLakeDeleteFile delete_file);
 

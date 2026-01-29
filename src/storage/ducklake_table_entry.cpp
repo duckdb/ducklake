@@ -342,6 +342,16 @@ optional_ptr<DuckLakeTableStats> DuckLakeTableEntry::GetTableStats(DuckLakeTrans
 	return dl_catalog.GetTableStats(transaction, GetTableId());
 }
 
+idx_t DuckLakeTableEntry::GetTotalDeleteCount(DuckLakeTransaction &transaction) {
+	auto &metadata_manager = transaction.GetMetadataManager();
+	return metadata_manager.GetTotalDeleteCount(GetTableId(), transaction.GetSnapshot());
+}
+
+idx_t DuckLakeTableEntry::GetActiveRecordCount(DuckLakeTransaction &transaction) {
+	auto &metadata_manager = transaction.GetMetadataManager();
+	return metadata_manager.GetActiveRecordCount(GetTableId(), transaction.GetSnapshot());
+}
+
 unique_ptr<CatalogEntry> DuckLakeTableEntry::AlterTable(DuckLakeTransaction &transaction, RenameTableInfo &info) {
 	auto create_info = GetInfo();
 	auto &table_info = create_info->Cast<CreateTableInfo>();

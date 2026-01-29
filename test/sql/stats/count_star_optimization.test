@@ -1,0 +1,108 @@
+# name: test/sql/stats/count_star_optimization.test
+# description: Test metadata-only COUNT(*) optimization
+# group: [stats]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+
+test-env DATA_PATH __TEST_DIR__
+
+statement ok
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/count_star_optimization')
+
+# create table and insert data
+statement ok
+CREATE TABLE ducklake.test(i INTEGER);
+
+statement ok
+INSERT INTO ducklake.test FROM range(1000);
+
+# basic COUNT(*) should return correct count
+query I
+SELECT COUNT(*) FROM ducklake.test;
+----
+1000
+
+# insert more data (non-overlapping range)
+statement ok
+INSERT INTO ducklake.test FROM range(1000, 1500);
+
+query I
+SELECT COUNT(*) FROM ducklake.test;
+----
+1500
+
+# test COUNT(*) with uncommitted inserts
+statement ok
+BEGIN;
+
+statement ok
+INSERT INTO ducklake.test FROM range(2000, 2200);
+
+query I
+SELECT COUNT(*) FROM ducklake.test;
+----
+1700
+
+statement ok
+ROLLBACK;
+
+query I
+SELECT COUNT(*) FROM ducklake.test;
+----
+1500
+
+# test COUNT(*) with uncommitted deletes (no prior committed deletes on this data)
+statement ok
+BEGIN;
+
+statement ok
+DELETE FROM ducklake.test WHERE i >= 400 AND i < 500;
+
+query I
+SELECT COUNT(*) FROM ducklake.test;
+----
+1400
+
+statement ok
+ROLLBACK;
+
+query I
+SELECT COUNT(*) FROM ducklake.test;
+----
+1500
+
+# test with committed deletes
+statement ok
+DELETE FROM ducklake.test WHERE i < 100;
+
+query I
+SELECT COUNT(*) FROM ducklake.test;
+----
+1400
+
+# test transaction-local table (newly created table)
+statement ok
+BEGIN;
+
+statement ok
+CREATE TABLE ducklake.new_table(x INTEGER);
+
+statement ok
+INSERT INTO ducklake.new_table FROM range(50);
+
+query I
+SELECT COUNT(*) FROM ducklake.new_table;
+----
+50
+
+statement ok
+COMMIT;
+
+query I
+SELECT COUNT(*) FROM ducklake.new_table;
+----
+50

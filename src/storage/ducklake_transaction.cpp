@@ -2187,6 +2187,14 @@ bool DuckLakeTransaction::HasLocalDeletes(TableIndex table_id) {
 	return !entry->second.new_delete_files.empty();
 }
 
+bool DuckLakeTransaction::HasLocalInlinedDeletes(TableIndex table_id) {
+	auto entry = table_data_changes.find(table_id);
+	if (entry == table_data_changes.end()) {
+		return false;
+	}
+	return !entry->second.new_inlined_data_deletes.empty();
+}
+
 void DuckLakeTransaction::GetLocalDeleteForFile(TableIndex table_id, const string &path, DuckLakeFileData &result) {
 	auto entry = table_data_changes.find(table_id);
 	if (entry == table_data_changes.end()) {

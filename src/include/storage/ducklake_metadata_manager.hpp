@@ -129,6 +129,8 @@ public:
 	                                                                  DuckLakeSnapshot snapshot,
 	                                                                  DuckLakeFileSizeOptions options);
 	virtual idx_t GetBeginSnapshotForTable(TableIndex table_id);
+	virtual idx_t GetTotalDeleteCount(TableIndex table_id, DuckLakeSnapshot snapshot);
+	virtual idx_t GetActiveRecordCount(TableIndex table_id, DuckLakeSnapshot snapshot);
 	virtual vector<DuckLakeFileForCleanup> GetOldFilesForCleanup(const string &filter);
 	virtual vector<DuckLakeFileForCleanup> GetOrphanFilesForCleanup(const string &filter, const string &separator);
 	virtual vector<DuckLakeFileForCleanup> GetFilesForCleanup(const string &filter, CleanupType type,
