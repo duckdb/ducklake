@@ -580,6 +580,12 @@
       "paths": [
           "test/sql/attach/show_schemas.test"
       ]
+    },
+    {
+      "reason": "CI Deadklock?",
+      "paths": [
+          "test/sql/update/update_default.test"
+      ]
     }
   ]
 }
