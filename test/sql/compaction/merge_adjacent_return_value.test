@@ -43,10 +43,10 @@ statement ok
 CALL ducklake.set_option('target_file_size', '10MB');
 
 # Run merge and check return value - should return 4 (all files merged into one)
-query I
-SELECT files_processed FROM ducklake_merge_adjacent_files('ducklake', 'test_table');
+query III
+SELECT * FROM ducklake_merge_adjacent_files('ducklake', 'test_table');
 ----
-4
+test_table	4	1
 
 # Verify we now have 1 file
 query I
@@ -98,11 +98,11 @@ statement ok
 CALL ducklake.set_option('target_file_size', '3KB');
 
 # Run merge - should return 2 rows (one per output file), each showing 3 files merged
-# Use SUM to verify total files merged = 6
-query I
-SELECT SUM(files_processed) FROM ducklake_merge_adjacent_files('ducklake', 'multi_merge');
+# Verify we get 2 rows with the same table name
+query III
+SELECT table_name, SUM(files_processed), SUM(files_created) FROM ducklake_merge_adjacent_files('ducklake', 'multi_merge') GROUP BY table_name;
 ----
-6
+multi_merge	6	2
 
 # Verify we now have 2 files
 query I
@@ -150,10 +150,10 @@ CALL ducklake.set_option('target_file_size', '10MB');
 
 # Run rewrite with delete_threshold => 0 (rewrite any file with deletes)
 # Default threshold is 0.95 which requires 95% of rows to be deleted
-query I
-SELECT files_processed FROM ducklake_rewrite_data_files('ducklake', 'rewrite_test', delete_threshold => 0);
+query III
+SELECT * FROM ducklake_rewrite_data_files('ducklake', 'rewrite_test', delete_threshold => 0);
 ----
-3
+rewrite_test	3	1
 
 # Verify we now have 1 file (all rewritten into one)
 query I

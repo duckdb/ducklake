@@ -1,0 +1,96 @@
+# name: test/sql/data_inlining/flush_inlined_data_return_value.test
+# description: test that flush_inlined_data returns the number of rows flushed
+# group: [data_inlining]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+
+test-env DATA_PATH __TEST_DIR__
+
+statement ok
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/flush_return_value/', DATA_INLINING_ROW_LIMIT 1000)
+
+statement ok
+USE ducklake;
+
+statement ok
+CREATE TABLE test_table (id INTEGER, data VARCHAR);
+
+# Insert some rows (they go to inlined data)
+statement ok
+INSERT INTO test_table SELECT i, 'data' || i FROM range(100) t(i);
+
+# Verify the rows are in inlined data
+query I
+SELECT count(*) FROM test_table;
+----
+100
+
+# Flush and check return value - should return 100 rows flushed
+query II
+SELECT * FROM ducklake_flush_inlined_data('ducklake', table_name => 'test_table');
+----
+test_table	100
+
+# Verify data is still correct after flush
+query I
+SELECT count(*) FROM test_table;
+----
+100
+
+# Insert more rows
+statement ok
+INSERT INTO test_table SELECT i, 'more_data' || i FROM range(100, 250) t(i);
+
+# Flush again - should return 150 rows flushed
+query II
+SELECT * FROM ducklake_flush_inlined_data('ducklake', table_name => 'test_table');
+----
+test_table	150
+
+# Verify total data
+query I
+SELECT count(*) FROM test_table;
+----
+250
+
+# Test with no data to flush - should return 0 rows
+query II
+SELECT * FROM ducklake_flush_inlined_data('ducklake', table_name => 'test_table');
+----
+test_table	0
+
+# Test flushing multiple tables
+statement ok
+CREATE TABLE table_a (id INTEGER);
+
+statement ok
+CREATE TABLE table_b (id INTEGER);
+
+statement ok
+INSERT INTO table_a SELECT i FROM range(50) t(i);
+
+statement ok
+INSERT INTO table_b SELECT i FROM range(75) t(i);
+
+# Flush all tables - should return rows for table_a and table_b
+# Order may vary so we use aggregation
+query I
+SELECT SUM(rows_flushed) FROM ducklake_flush_inlined_data('ducklake');
+----
+125
+
+# Verify both tables have correct data
+query I
+SELECT count(*) FROM table_a;
+----
+50
+
+query I
+SELECT count(*) FROM table_b;
+----
+75
+
