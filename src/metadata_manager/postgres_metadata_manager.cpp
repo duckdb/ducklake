@@ -154,10 +154,15 @@ vector<DuckLakeTag> PostgresMetadataManager::LoadTags(const Value &tag_map) cons
 
 		tag.key = yyjson_get_str(key);
 
-		// Value can be null or string
-		if (yyjson_is_str(value)) {
-			tag.value = yyjson_get_str(value);
+		// Value can be null or string - skip null values
+		if (yyjson_is_null(value)) {
+			continue;
 		}
+		if (!yyjson_is_str(value)) {
+			yyjson_doc_free(doc);
+			throw InvalidInputException("Invalid tags JSON: value must be string or null");
+		}
+		tag.value = yyjson_get_str(value);
 
 		result.push_back(std::move(tag));
 	}
