@@ -261,4 +261,29 @@ FROM T order by a
 64
 65
 
+query I
+SELECT count(*) FROM GLOB('${DATA_PATH}/test_deletion_inlining/**/*-delete.parquet')
+----
+5
 
+query I
+select count(*) FROM ducklake_meta.ducklake_files_scheduled_for_deletion
+----
+2
+
+
+statement ok
+CALL ducklake_cleanup_old_files(
+    'ducklake',
+    cleanup_all => true
+);
+
+query I
+SELECT count(*) FROM GLOB('${DATA_PATH}/test_deletion_inlining/**/*-delete.parquet')
+----
+3
+
+query I
+select count(*) FROM ducklake_meta.ducklake_files_scheduled_for_deletion
+----
+0
