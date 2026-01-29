@@ -47,10 +47,33 @@ DuckLakeFlushData::DuckLakeFlushData(PhysicalPlan &physical_plan, const vector<L
 }
 
 //===--------------------------------------------------------------------===//
+// Source State
+//===--------------------------------------------------------------------===//
+class DuckLakeFlushDataSourceState : public GlobalSourceState {
+public:
+	DuckLakeFlushDataSourceState() : returned_result(false) {
+	}
+	bool returned_result;
+};
+
+unique_ptr<GlobalSourceState> DuckLakeFlushData::GetGlobalSourceState(ClientContext &context) const {
+	return make_uniq<DuckLakeFlushDataSourceState>();
+}
+
+//===--------------------------------------------------------------------===//
 // GetData
 //===--------------------------------------------------------------------===//
 SourceResultType DuckLakeFlushData::GetDataInternal(ExecutionContext &context, DataChunk &chunk,
                                                     OperatorSourceInput &input) const {
+	auto &source_state = input.global_state.Cast<DuckLakeFlushDataSourceState>();
+	if (source_state.returned_result) {
+		return SourceResultType::FINISHED;
+	}
+	source_state.returned_result = true;
+
+	auto &gstate = this->sink_state->Cast<DuckLakeInsertGlobalState>();
+	chunk.SetCardinality(1);
+	chunk.SetValue(0, 0, Value::BIGINT(static_cast<int64_t>(gstate.rows_flushed)));
 	return SourceResultType::FINISHED;
 }
 
@@ -146,6 +169,11 @@ SinkFinalizeType DuckLakeFlushData::Finalize(Pipeline &pipeline, Event &event, C
 		}
 	}
 
+	// Compute total rows flushed before moving files
+	for (auto &file : global_state.written_files) {
+		global_state.rows_flushed += file.row_count;
+	}
+
 	transaction.AppendFiles(global_state.table.GetTableId(), std::move(global_state.written_files));
 	transaction.DeleteInlinedData(inlined_table);
 	return SinkFinalizeType::READY;
@@ -192,7 +220,7 @@ public:
 	}
 
 	void ResolveTypes() override {
-		types = {LogicalType::BOOLEAN};
+		types = {LogicalType::BIGINT};
 	}
 };
 
@@ -408,13 +436,13 @@ static unique_ptr<LogicalOperator> FlushInlinedDataBind(ClientContext &context, 
 			}
 		}
 	}
-	return_names.push_back("Success");
+	return_names.push_back("rows_flushed");
 	if (flushes.empty()) {
 		// nothing to write - generate empty result
 		vector<ColumnBinding> bindings;
 		vector<LogicalType> return_types;
 		bindings.emplace_back(bind_index, 0);
-		return_types.emplace_back(LogicalType::BOOLEAN);
+		return_types.emplace_back(LogicalType::BIGINT);
 		return make_uniq<LogicalEmptyResult>(std::move(return_types), std::move(bindings));
 	}
 	if (flushes.size() == 1) {
