@@ -6,7 +6,13 @@
 namespace duckdb {
 
 ParquetFileScanner::ParquetFileScanner(ClientContext &context, const DuckLakeFileData &file)
-    : context(context), multi_file_reader_creator(nullptr) {
+    : ParquetFileScanner(context, file, nullptr, nullptr) {
+}
+
+ParquetFileScanner::ParquetFileScanner(ClientContext &context, const DuckLakeFileData &file,
+                                       table_function_get_multi_file_reader_t multi_file_reader_creator_p,
+                                       shared_ptr<TableFunctionInfo> function_info_p)
+    : context(context) {
 	auto &instance = DatabaseInstance::GetDatabase(context);
 	ExtensionLoader loader(instance, "ducklake");
 	auto &parquet_scan_entry = loader.GetTableFunction("parquet_scan");
@@ -28,6 +34,14 @@ ParquetFileScanner::ParquetFileScanner(ClientContext &context, const DuckLakeFil
 	TableFunctionRef empty;
 	TableFunction dummy_table_function;
 	dummy_table_function.name = "ParquetFileScanner";
+
+	if (multi_file_reader_creator_p) {
+		dummy_table_function.get_multi_file_reader = multi_file_reader_creator_p;
+		if (function_info_p) {
+			dummy_table_function.function_info = std::move(function_info_p);
+		}
+	}
+
 	TableFunctionBindInput bind_input(children, named_params, input_types, input_names, nullptr, nullptr,
 	                                  dummy_table_function, empty);
 
@@ -59,12 +73,6 @@ void ParquetFileScanner::SetColumnIds(vector<column_t> column_ids_p) {
 	column_ids = std::move(column_ids_p);
 }
 
-void ParquetFileScanner::SetMultiFileReaderCreator(table_function_get_multi_file_reader_t creator,
-                                                   shared_ptr<TableFunctionInfo> function_info_p) {
-	multi_file_reader_creator = creator;
-	function_info = std::move(function_info_p);
-}
-
 void ParquetFileScanner::InitializeScan() {
 	if (initialized) {
 		return;
@@ -74,14 +82,6 @@ void ParquetFileScanner::InitializeScan() {
 	if (column_ids.empty()) {
 		for (idx_t i = 0; i < return_types.size(); i++) {
 			column_ids.push_back(i);
-		}
-	}
-
-	// Set custom multi-file reader creator if provided
-	if (multi_file_reader_creator) {
-		parquet_scan.get_multi_file_reader = multi_file_reader_creator;
-		if (function_info) {
-			parquet_scan.function_info = function_info;
 		}
 	}
 

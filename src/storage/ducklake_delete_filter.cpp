@@ -110,12 +110,11 @@ idx_t DuckLakeDeleteFilter::Filter(row_t start_row_index, idx_t count, Selection
 DeleteFileScanResult DuckLakeDeleteFilter::ScanDeleteFile(ClientContext &context, const DuckLakeFileData &delete_file,
                                                           optional_idx snapshot_filter_min,
                                                           optional_idx snapshot_filter_max) {
-	ParquetFileScanner scanner(context, delete_file);
-
 	// Set up custom MultiFileReader to avoid HEAD requests
 	auto function_info = make_shared_ptr<DeleteFileFunctionInfo>();
 	function_info->file_data = delete_file;
-	scanner.SetMultiFileReaderCreator(DeleteFileMultiFileReader::CreateInstance, std::move(function_info));
+	ParquetFileScanner scanner(context, delete_file, DeleteFileMultiFileReader::CreateInstance,
+	                           std::move(function_info));
 
 	auto &return_types = scanner.GetTypes();
 	auto &return_names = scanner.GetNames();
