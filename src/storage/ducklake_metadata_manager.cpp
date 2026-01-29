@@ -1533,7 +1533,8 @@ vector<DuckLakeCompactionFileEntry> DuckLakeMetadataManager::GetFilesForCompacti
 	string deletion_threshold_clause;
 	if (type == CompactionType::REWRITE_DELETES) {
 		deletion_threshold_clause = StringUtil::Format(
-		    " AND CAST(del.delete_count AS FLOAT)/CAST(data.record_count AS FLOAT) >= %f and data.end_snapshot is null", deletion_threshold);
+		    " AND CAST(del.delete_count AS FLOAT)/CAST(data.record_count AS FLOAT) >= %f and data.end_snapshot is null",
+		    deletion_threshold);
 	}
 	// Add file size filtering for MERGE_ADJACENT_TABLES compaction
 	string file_size_filter_clause;
@@ -2178,7 +2179,8 @@ WHERE row_id=deleted_row_id;
 	return batch_queries;
 }
 
-shared_ptr<DuckLakeInlinedData> DuckLakeMetadataManager::TransformInlinedData(QueryResult &result) {
+shared_ptr<DuckLakeInlinedData>
+DuckLakeMetadataManager::TransformInlinedData(QueryResult &result, const vector<LogicalType> &expected_types) {
 	if (result.HasError()) {
 		result.GetErrorObject().Throw("Failed to read inlined data from DuckLake: ");
 	}
@@ -2211,47 +2213,47 @@ static string GetProjection(const vector<string> &columns_to_read) {
 	return result;
 }
 
-shared_ptr<DuckLakeInlinedData> DuckLakeMetadataManager::ReadInlinedData(DuckLakeSnapshot snapshot,
-                                                                         const string &inlined_table_name,
-                                                                         const vector<string> &columns_to_read) {
+unique_ptr<QueryResult> DuckLakeMetadataManager::ReadInlinedData(DuckLakeSnapshot snapshot,
+                                                                 const string &inlined_table_name,
+                                                                 const vector<string> &columns_to_read) {
 	auto projection = GetProjection(columns_to_read);
 	auto result = Query(snapshot, StringUtil::Format(R"(
 SELECT %s
 FROM {METADATA_CATALOG}.%s inlined_data
 WHERE {SNAPSHOT_ID} >= begin_snapshot AND ({SNAPSHOT_ID} < end_snapshot OR end_snapshot IS NULL);)",
 	                                                 projection, inlined_table_name));
-	return TransformInlinedData(*result);
+	return result;
 }
 
-shared_ptr<DuckLakeInlinedData>
-DuckLakeMetadataManager::ReadInlinedDataInsertions(DuckLakeSnapshot start_snapshot, DuckLakeSnapshot end_snapshot,
-                                                   const string &inlined_table_name,
-                                                   const vector<string> &columns_to_read) {
+unique_ptr<QueryResult> DuckLakeMetadataManager::ReadInlinedDataInsertions(DuckLakeSnapshot start_snapshot,
+                                                                           DuckLakeSnapshot end_snapshot,
+                                                                           const string &inlined_table_name,
+                                                                           const vector<string> &columns_to_read) {
 	auto projection = GetProjection(columns_to_read);
 	auto result = Query(end_snapshot, StringUtil::Format(R"(
 SELECT %s
 FROM {METADATA_CATALOG}.%s inlined_data
 WHERE inlined_data.begin_snapshot >= %d AND inlined_data.begin_snapshot <= {SNAPSHOT_ID};)",
 	                                                     projection, inlined_table_name, start_snapshot.snapshot_id));
-	return TransformInlinedData(*result);
+	return result;
 }
 
-shared_ptr<DuckLakeInlinedData>
-DuckLakeMetadataManager::ReadInlinedDataDeletions(DuckLakeSnapshot start_snapshot, DuckLakeSnapshot end_snapshot,
-                                                  const string &inlined_table_name,
-                                                  const vector<string> &columns_to_read) {
+unique_ptr<QueryResult> DuckLakeMetadataManager::ReadInlinedDataDeletions(DuckLakeSnapshot start_snapshot,
+                                                                          DuckLakeSnapshot end_snapshot,
+                                                                          const string &inlined_table_name,
+                                                                          const vector<string> &columns_to_read) {
 	auto projection = GetProjection(columns_to_read);
 	auto result = Query(end_snapshot, StringUtil::Format(R"(
 SELECT %s
 FROM {METADATA_CATALOG}.%s inlined_data
 WHERE inlined_data.end_snapshot >= %d AND inlined_data.end_snapshot <= {SNAPSHOT_ID};)",
 	                                                     projection, inlined_table_name, start_snapshot.snapshot_id));
-	return TransformInlinedData(*result);
+	return result;
 }
 
-shared_ptr<DuckLakeInlinedData>
-DuckLakeMetadataManager::ReadAllInlinedDataForFlush(DuckLakeSnapshot snapshot, const string &inlined_table_name,
-                                                    const vector<string> &columns_to_read) {
+unique_ptr<QueryResult> DuckLakeMetadataManager::ReadAllInlinedDataForFlush(DuckLakeSnapshot snapshot,
+                                                                            const string &inlined_table_name,
+                                                                            const vector<string> &columns_to_read) {
 	auto projection = GetProjection(columns_to_read);
 	auto result = Query(snapshot, StringUtil::Format(R"(
 SELECT %s
@@ -2259,7 +2261,7 @@ FROM {METADATA_CATALOG}.%s inlined_data
 WHERE {SNAPSHOT_ID} >= begin_snapshot
 ORDER BY row_id;)",
 	                                                 projection, inlined_table_name));
-	return TransformInlinedData(*result);
+	return result;
 }
 
 string DuckLakeMetadataManager::GetPathForSchema(SchemaIndex schema_id,

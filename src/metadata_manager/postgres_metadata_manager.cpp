@@ -293,4 +293,47 @@ vector<DuckLakeMacroImplementation> PostgresMetadataManager::LoadMacroImplementa
 	return result;
 }
 
+shared_ptr<DuckLakeInlinedData>
+PostgresMetadataManager::TransformInlinedData(QueryResult &result, const vector<LogicalType> &expected_types) {
+	if (result.HasError()) {
+		result.GetErrorObject().Throw("Failed to read inlined data from DuckLake: ");
+	}
+
+	// Transform the result by casting VARCHAR vectors to their expected types
+	auto context = transaction.context.lock();
+	auto data = make_uniq<ColumnDataCollection>(*context, expected_types);
+
+	while (true) {
+		auto chunk = result.Fetch();
+		if (!chunk) {
+			break;
+		}
+
+		// Create a new chunk with the expected types
+		DataChunk casted_chunk;
+		casted_chunk.Initialize(*context, expected_types, chunk->size());
+		casted_chunk.SetCardinality(chunk->size());
+
+		// Cast each column from VARCHAR to its expected type
+		for (idx_t col_idx = 0; col_idx < chunk->ColumnCount(); col_idx++) {
+			auto &source_vector = chunk->data[col_idx];
+			auto &target_vector = casted_chunk.data[col_idx];
+
+			if (source_vector.GetType() == target_vector.GetType()) {
+				// No casting needed, just copy
+				target_vector.Reference(source_vector);
+			} else {
+				// Cast from VARCHAR to the expected type
+				VectorOperations::Cast(*context, source_vector, target_vector, chunk->size());
+			}
+		}
+
+		data->Append(casted_chunk);
+	}
+
+	auto inlined_data = make_shared_ptr<DuckLakeInlinedData>();
+	inlined_data->data = std::move(data);
+	return inlined_data;
+}
+
 } // namespace duckdb
