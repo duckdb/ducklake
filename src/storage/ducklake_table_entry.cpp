@@ -352,6 +352,16 @@ idx_t DuckLakeTableEntry::GetActiveRecordCount(DuckLakeTransaction &transaction)
 	return metadata_manager.GetActiveRecordCount(GetTableId(), transaction.GetSnapshot());
 }
 
+idx_t DuckLakeTableEntry::GetInlinedDataRowCount(DuckLakeTransaction &transaction) {
+	auto &metadata_manager = transaction.GetMetadataManager();
+	auto snapshot = transaction.GetSnapshot();
+	idx_t total = 0;
+	for (auto &inlined_table : inlined_data_tables) {
+		total += metadata_manager.GetInlinedDataRowCount(inlined_table.table_name, snapshot);
+	}
+	return total;
+}
+
 unique_ptr<CatalogEntry> DuckLakeTableEntry::AlterTable(DuckLakeTransaction &transaction, RenameTableInfo &info) {
 	auto create_info = GetInfo();
 	auto &table_info = create_info->Cast<CreateTableInfo>();

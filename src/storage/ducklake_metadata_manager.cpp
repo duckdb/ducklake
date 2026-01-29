@@ -361,6 +361,20 @@ WHERE table_id = {TABLE_ID}
 	return 0;
 }
 
+idx_t DuckLakeMetadataManager::GetInlinedDataRowCount(const string &inlined_table_name, DuckLakeSnapshot snapshot) {
+	string query = StringUtil::Format(R"(
+SELECT COUNT(*)
+FROM {METADATA_CATALOG}.%s
+WHERE {SNAPSHOT_ID} >= begin_snapshot
+  AND ({SNAPSHOT_ID} < end_snapshot OR end_snapshot IS NULL))",
+	                                  inlined_table_name);
+	auto result = transaction.Query(snapshot, query);
+	for (auto &row : *result) {
+		return row.GetValue<idx_t>(0);
+	}
+	return 0;
+}
+
 DuckLakeCatalogInfo DuckLakeMetadataManager::GetCatalogForSnapshot(DuckLakeSnapshot snapshot) {
 	auto &ducklake_catalog = transaction.GetCatalog();
 	auto &base_data_path = ducklake_catalog.DataPath();

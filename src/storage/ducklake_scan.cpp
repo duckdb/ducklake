@@ -105,21 +105,17 @@ vector<PartitionStatistics> DuckLakeGetPartitionStats(ClientContext &context, Ge
 		return result;
 	}
 
-	// If the table has inlined data, fall back to scanning
-	// Inlined deletes are tracked differently and not included in GetTotalDeleteCount
-	if (!table.GetInlinedDataTables().empty()) {
-		return result;
-	}
-
 	// If there are any transaction-local changes (inserts, deletes, or dropped files), fall back to scanning
 	if (transaction->HasAnyLocalChanges(table_id)) {
 		return result;
 	}
 
-	// Get count from active data files minus delete count
+	// Get count from active data files minus delete count, plus inlined data
+	// (inlined deletes are handled by end_snapshot visibility in GetInlinedDataRowCount)
 	idx_t record_count = table.GetActiveRecordCount(*transaction);
 	idx_t delete_count = table.GetTotalDeleteCount(*transaction);
-	idx_t count = record_count - delete_count;
+	idx_t inlined_count = table.GetInlinedDataRowCount(*transaction);
+	idx_t count = record_count - delete_count + inlined_count;
 
 	// Return single partition with total count
 	PartitionStatistics stats;

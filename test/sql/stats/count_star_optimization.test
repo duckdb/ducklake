@@ -106,3 +106,80 @@ query I
 SELECT COUNT(*) FROM ducklake.new_table;
 ----
 50
+
+# ============================================
+# Test with inlined data
+# ============================================
+
+statement ok
+DETACH ducklake;
+
+statement ok
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}_inlined' AS ducklake (DATA_PATH '${DATA_PATH}/count_star_inlined', DATA_INLINING_ROW_LIMIT 100)
+
+# create table with inlined data (small enough to be inlined)
+statement ok
+CREATE TABLE ducklake.inlined_test AS SELECT * FROM range(50) t(i);
+
+query I
+SELECT COUNT(*) FROM ducklake.inlined_test;
+----
+50
+
+# insert more inlined data
+statement ok
+INSERT INTO ducklake.inlined_test FROM range(50, 80);
+
+query I
+SELECT COUNT(*) FROM ducklake.inlined_test;
+----
+80
+
+# delete from inlined data
+statement ok
+DELETE FROM ducklake.inlined_test WHERE i < 10;
+
+query I
+SELECT COUNT(*) FROM ducklake.inlined_test;
+----
+70
+
+# test with uncommitted inlined inserts
+statement ok
+BEGIN;
+
+statement ok
+INSERT INTO ducklake.inlined_test FROM range(100, 120);
+
+query I
+SELECT COUNT(*) FROM ducklake.inlined_test;
+----
+90
+
+statement ok
+ROLLBACK;
+
+query I
+SELECT COUNT(*) FROM ducklake.inlined_test;
+----
+70
+
+# test with uncommitted inlined deletes
+statement ok
+BEGIN;
+
+statement ok
+DELETE FROM ducklake.inlined_test WHERE i >= 70;
+
+query I
+SELECT COUNT(*) FROM ducklake.inlined_test;
+----
+60
+
+statement ok
+ROLLBACK;
+
+query I
+SELECT COUNT(*) FROM ducklake.inlined_test;
+----
+70
