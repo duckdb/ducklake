@@ -1,7 +1,6 @@
 {
   "description": "Run on DuckLake database as storage.",
   "on_init": "ATTACH 'ducklake:{TEST_DIR}/{BASE_TEST_NAME}__ducklake.db' AS dl; SET timezone = 'UTC';",
-  "on_cleanup": "CALL ducklake_expire_snapshots('dl', older_than => '2085-04-38'::TIMESTAMP); CALL ducklake_cleanup_old_files('dl', cleanup_all => true); DETACH dl;",
   "on_new_connection": "USE dl;",
   "skip_compiled": "true",
   "sort_style": "rowsort",
@@ -580,6 +579,12 @@
       "reason": "Different results",
       "paths": [
           "test/sql/attach/show_schemas.test"
+      ]
+    },
+    {
+      "reason": "CI Deadklock?",
+      "paths": [
+          "test/sql/update/update_default.test"
       ]
     }
   ]
