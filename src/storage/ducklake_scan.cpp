@@ -75,22 +75,19 @@ vector<column_t> DuckLakeGetRowIdColumn(ClientContext &context, optional_ptr<Fun
 vector<PartitionStatistics> DuckLakeGetPartitionStats(ClientContext &context, GetPartitionStatsInput &input) {
 	vector<PartitionStatistics> result;
 
-	// Get bind data and file list
-	auto &bind_data = input.bind_data->Cast<MultiFileBindData>();
-	auto &file_list = bind_data.file_list->Cast<DuckLakeMultiFileList>();
-
-	// Don't use partition stats for delete scans
-	if (file_list.IsDeleteScan()) {
-		return result;
-	}
-
-	auto &table = file_list.GetTable();
-
-	// Get the function info to access the transaction
 	if (!input.table_function.function_info) {
 		return result;
 	}
 	auto &func_info = input.table_function.function_info->Cast<DuckLakeFunctionInfo>();
+
+	// Only use partition stats for regular table scans
+	if (func_info.scan_type != DuckLakeScanType::SCAN_TABLE) {
+		return result;
+	}
+
+	auto &bind_data = input.bind_data->Cast<MultiFileBindData>();
+	auto &file_list = bind_data.file_list->Cast<DuckLakeMultiFileList>();
+	auto &table = file_list.GetTable();
 	auto transaction = func_info.GetTransaction();
 
 	auto table_id = table.GetTableId();
