@@ -116,15 +116,10 @@ vector<PartitionStatistics> DuckLakeGetPartitionStats(ClientContext &context, Ge
 		return result;
 	}
 
-	// Only use metadata stats if there are no deletes at all
-	// Handling delete counts correctly with rewrites/compaction is complex
+	// Get count from active data files minus delete count
+	idx_t record_count = table.GetActiveRecordCount(*transaction);
 	idx_t delete_count = table.GetTotalDeleteCount(*transaction);
-	if (delete_count > 0) {
-		return result;
-	}
-
-	// Get count from active data files (not table_stats, which doesn't account for dropped files)
-	idx_t count = table.GetActiveRecordCount(*transaction);
+	idx_t count = record_count - delete_count;
 
 	// Return single partition with total count
 	PartitionStatistics stats;
