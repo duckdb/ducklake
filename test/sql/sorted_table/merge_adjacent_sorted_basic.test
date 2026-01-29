@@ -145,7 +145,7 @@ t.table_name = 'sort_on_compaction'
 statement error
 ALTER TABLE sort_on_compaction SET SORTED BY (WOOOOT ASC ,   BLAH ASC);
 ----
-Column "WOOOOT" does not exist in table "sort_on_compaction"
+Columns in the SET SORTED BY statement were not found in the DuckLake table. Unmatched columns were: WOOOOT, BLAH
 
 # Expressions are now supported in SET SORTED BY
 statement ok

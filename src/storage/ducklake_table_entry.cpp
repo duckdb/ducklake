@@ -358,25 +358,36 @@ string GetPartitionColumnName(ColumnRefExpression &colref) {
 	return colref.GetColumnName();
 }
 
-void ValidateSortExpressionColumnRefs(DuckLakeTableEntry &table, ParsedExpression &expr) {
-	// Use VisitExpression to recursively validate all column references exist in the table
-	ParsedExpressionIterator::VisitExpression<ColumnRefExpression>(expr, [&](const ColumnRefExpression &colref) {
-		if (colref.IsQualified()) {
-			throw InvalidInputException(
-			    "Unexpected qualified column reference - only unqualified columns are supported");
+void DuckLakeTableEntry::ValidateSortExpressionColumns(DuckLakeTableEntry &table,
+                                                        const vector<reference<ParsedExpression>> &expressions) {
+	vector<string> missing_columns;
+	for (auto &expr : expressions) {
+		ParsedExpressionIterator::VisitExpression<ColumnRefExpression>(
+		    expr.get(), [&](const ColumnRefExpression &colref) {
+			    if (colref.IsQualified()) {
+				    throw InvalidInputException(
+				        "Unexpected qualified column reference - only unqualified columns are supported");
+			    }
+			    string column_name = colref.GetColumnName();
+			    if (!table.ColumnExists(column_name)) {
+				    if (std::find(missing_columns.begin(), missing_columns.end(), column_name) ==
+				        missing_columns.end()) {
+					    missing_columns.push_back(column_name);
+				    }
+			    }
+		    });
+	}
+	if (!missing_columns.empty()) {
+		string error_string =
+		    "Columns in the SET SORTED BY statement were not found in the DuckLake table. Unmatched columns were: ";
+		for (idx_t i = 0; i < missing_columns.size(); i++) {
+			if (i > 0) {
+				error_string += ", ";
+			}
+			error_string += missing_columns[i];
 		}
-		string column_name = colref.GetColumnName();
-		if (!table.ColumnExists(column_name)) {
-			throw BinderException("Column \"%s\" does not exist in table \"%s\"", column_name, table.name);
-		}
-	});
-}
-
-string GetSortExpression(DuckLakeTableEntry &table, ParsedExpression &expr) {
-	// Validate all column references in the expression
-	ValidateSortExpressionColumnRefs(table, expr);
-	// Return the string representation of the expression
-	return expr.ToString();
+		throw BinderException(error_string);
+	}
 }
 
 DuckLakePartitionField GetPartitionField(DuckLakeTableEntry &table, ParsedExpression &expr) {
@@ -1111,17 +1122,21 @@ unique_ptr<CatalogEntry> DuckLakeTableEntry::AlterTable(DuckLakeTransaction &tra
 		return std::move(new_entry);
 	}
 
+	// Validate all column references in all sort expressions
+	vector<reference<ParsedExpression>> sort_expressions;
+	for (auto &order_node : info.orders) {
+		sort_expressions.push_back(*order_node.expression);
+	}
+	ValidateSortExpressionColumns(*this, sort_expressions);
+
 	auto sort_data = make_uniq<DuckLakeSort>();
 	sort_data->sort_id = transaction.GetLocalCatalogId();
 	for (idx_t order_node_idx = 0; order_node_idx < info.orders.size(); order_node_idx++) {
 		auto &order_node = info.orders[order_node_idx];
 
-		// Validate the expression and get its string representation
-		string sort_expression = GetSortExpression(*this, *order_node.expression);
-
 		DuckLakeSortField sort_field;
 		sort_field.sort_key_index = order_node_idx;
-		sort_field.expression = sort_expression;
+		sort_field.expression = order_node.expression->ToString();
 		sort_field.dialect = "duckdb";
 		sort_field.sort_direction = order_node.type;
 		sort_field.null_order = order_node.null_order;

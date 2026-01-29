@@ -100,18 +100,18 @@ FROM sort_expression_test
 statement error
 ALTER TABLE sort_expression_test SET SORTED BY (nonexistent_column || sort_key_1 ASC);
 ----
-Column "nonexistent_column" does not exist in table "sort_expression_test"
+Columns in the SET SORTED BY statement were not found in the DuckLake table. Unmatched columns were: nonexistent_column
 
 statement error
 ALTER TABLE sort_expression_test SET SORTED BY (sort_key_1 || another_missing_col ASC);
 ----
-Column "another_missing_col" does not exist in table "sort_expression_test"
+Columns in the SET SORTED BY statement were not found in the DuckLake table. Unmatched columns were: another_missing_col
 
 # Multiple non-existent columns in expression
 statement error
 ALTER TABLE sort_expression_test SET SORTED BY (foo || bar || baz ASC);
 ----
-Column "foo" does not exist in table "sort_expression_test"
+Columns in the SET SORTED BY statement were not found in the DuckLake table. Unmatched columns were: foo, bar, baz
 
 # ===========================================================================
 # Test: Valid expression initially, then column rename, then compaction fails

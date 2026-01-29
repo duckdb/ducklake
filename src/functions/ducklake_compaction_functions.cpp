@@ -30,22 +30,6 @@
 namespace duckdb {
 
 //===--------------------------------------------------------------------===//
-// Sort Expression Validation Helper
-//===--------------------------------------------------------------------===//
-static void ValidateSortExpressionColumns(DuckLakeTableEntry &table, ParsedExpression &expr,
-                                          vector<string> &missing_columns) {
-	ParsedExpressionIterator::VisitExpression<ColumnRefExpression>(expr, [&](const ColumnRefExpression &colref) {
-		string column_name = colref.GetColumnName();
-		if (!table.ColumnExists(column_name)) {
-			// Avoid duplicates
-			if (std::find(missing_columns.begin(), missing_columns.end(), column_name) == missing_columns.end()) {
-				missing_columns.push_back(column_name);
-			}
-		}
-	});
-}
-
-//===--------------------------------------------------------------------===//
 // Sort Binding Helpers
 //===--------------------------------------------------------------------===//
 
@@ -320,21 +304,11 @@ unique_ptr<LogicalOperator> DuckLakeCompactor::InsertSort(Binder &binder, unique
 	}
 
 	// Validate all column references in sort expressions exist in the table
-	vector<string> missing_columns;
+	vector<reference<ParsedExpression>> sort_expressions;
 	for (auto &pre_bound_order : pre_bound_orders) {
-		ValidateSortExpressionColumns(table, *pre_bound_order.expression, missing_columns);
+		sort_expressions.push_back(*pre_bound_order.expression);
 	}
-	if (!missing_columns.empty()) {
-		string error_string =
-		    "Columns in the SET SORTED BY statement were not found in the DuckLake table. Unmatched columns were: ";
-		for (idx_t i = 0; i < missing_columns.size(); i++) {
-			if (i > 0) {
-				error_string += ", ";
-			}
-			error_string += missing_columns[i];
-		}
-		throw BinderException(error_string);
-	}
+	DuckLakeTableEntry::ValidateSortExpressionColumns(table, sort_expressions);
 
 	// Resolve types for the input plan (could be LogicalGet or LogicalProjection)
 	plan->ResolveOperatorTypes();
@@ -352,8 +326,7 @@ unique_ptr<LogicalOperator> DuckLakeCompactor::InsertSort(Binder &binder, unique
 	}
 
 	// Bind the ORDER BY expressions
-	auto orders =
-	    BindSortOrders(binder, table.name, table_index, current_columns, column_types, pre_bound_orders);
+	auto orders = BindSortOrders(binder, table.name, table_index, current_columns, column_types, pre_bound_orders);
 
 	// Create the LogicalOrder operator
 	auto order = make_uniq<LogicalOrder>(std::move(orders));
@@ -503,7 +476,7 @@ DuckLakeCompactor::GenerateCompactionCommand(vector<DuckLakeCompactionFileEntry>
 		} else {
 			copy_input.virtual_columns = InsertVirtualColumns::WRITE_ROW_ID;
 		}
-	} else if (write_snapshot_id){
+	} else if (write_snapshot_id) {
 		copy_input.virtual_columns = InsertVirtualColumns::WRITE_SNAPSHOT_ID;
 	}
 
