@@ -2192,7 +2192,7 @@ bool DuckLakeTransaction::HasAnyLocalChanges(TableIndex table_id) {
 	if (entry != table_data_changes.end() && !entry->second.IsEmpty()) {
 		return true;
 	}
-	return HasDroppedFiles();
+	return tables_deleted_from.find(table_id) != tables_deleted_from.end();
 }
 
 void DuckLakeTransaction::GetLocalDeleteForFile(TableIndex table_id, const string &path, DuckLakeFileData &result) {
