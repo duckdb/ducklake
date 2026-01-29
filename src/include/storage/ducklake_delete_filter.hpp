@@ -56,10 +56,11 @@ public:
 	void SetMaxRowCount(idx_t max_row_count);
 	void SetSnapshotFilter(idx_t snapshot_filter);
 
-private:
 	static DeleteFileScanResult ScanDeleteFile(ClientContext &context, const DuckLakeFileData &delete_file,
 	                                           optional_idx snapshot_filter_min = optional_idx(),
 	                                           optional_idx snapshot_filter_max = optional_idx());
+
+private:
 	//! Scan the data file to get the global row_ids at specific file positions
 	//! Returns a map from file_position to global_row_id
 	static unordered_map<idx_t, idx_t> ScanDataFileRowIds(ClientContext &context, const DuckLakeFileData &data_file,

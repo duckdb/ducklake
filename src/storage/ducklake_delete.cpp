@@ -341,29 +341,17 @@ void DuckLakeDelete::FlushDeleteWithSnapshots(DuckLakeTransaction &transaction, 
                                               DuckLakeDeleteData &existing_delete_data, const set<idx_t> &sorted_deletes,
                                               DuckLakeDeleteFile &delete_file) const {
 
-	auto &existing_deletes = existing_delete_data.deleted_rows;
-	auto file_has_embedded_snapshots = existing_delete_data.HasEmbeddedSnapshots();
 	auto existing_snapshot = data_file_info.delete_file_begin_snapshot;
 
 	// the commit snapshot for new deletes is current_snapshot + 1
 	const auto current_snapshot = transaction.GetSnapshot();
-
+	const idx_t new_delete_snapshot = current_snapshot.snapshot_id + 1;
 
 	set<PositionWithSnapshot> sorted_deletes_with_snapshots;
 	// add existing deletes with their snapshot IDs
-	for (idx_t i = 0; i < existing_deletes.size(); i++) {
-		PositionWithSnapshot pos_with_snap;
-		pos_with_snap.position = static_cast<int64_t>(existing_deletes[i]);
-		if (file_has_embedded_snapshots) {
-			pos_with_snap.snapshot_id = static_cast<int64_t>(existing_delete_data.snapshot_ids[i]);
-		} else {
-			pos_with_snap.snapshot_id = static_cast<int64_t>(existing_snapshot.GetIndex());
-		}
-		sorted_deletes_with_snapshots.insert(pos_with_snap);
-	}
+	MergeDeletesWithSnapshots(existing_delete_data, existing_snapshot.GetIndex(), sorted_deletes_with_snapshots);
 
 	// add new deletes with the commit snapshot
-	const idx_t new_delete_snapshot = current_snapshot.snapshot_id + 1;
 	for (auto &pos : sorted_deletes) {
 		PositionWithSnapshot pos_with_snap;
 		pos_with_snap.position = static_cast<int64_t>(pos);

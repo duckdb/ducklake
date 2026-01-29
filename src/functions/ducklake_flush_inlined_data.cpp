@@ -17,6 +17,7 @@
 #include "storage/ducklake_flush_data.hpp"
 #include "duckdb/planner/operator/logical_projection.hpp"
 #include "storage/ducklake_delete.hpp"
+#include "storage/ducklake_delete_filter.hpp"
 
 #include "functions/ducklake_compaction_functions.hpp"
 
@@ -337,6 +338,15 @@ unique_ptr<LogicalOperator> DuckLakeDataFlusher::GenerateFlushCommand() {
 //===--------------------------------------------------------------------===//
 // Flush Inlined File Deletions
 //===--------------------------------------------------------------------===//
+struct ExistingDeleteFileInfo {
+	DataFileIndex delete_file_id;
+	string path;
+	bool path_is_relative;
+	idx_t begin_snapshot;
+	string encryption_key;
+	bool has_info = false;
+};
+
 static void FlushInlinedFileDeletions(ClientContext &context, DuckLakeCatalog &catalog,
                                       DuckLakeTransaction &transaction, DuckLakeTableEntry &table) {
 	auto &metadata_manager = transaction.GetMetadataManager();
@@ -349,22 +359,30 @@ static void FlushInlinedFileDeletions(ClientContext &context, DuckLakeCatalog &c
 		return; // No inlined deletions for this table
 	}
 
-	// Query the inlined deletions with file paths
+	// Query the inlined deletions with file paths and existing delete file info
 	auto deletions_result = transaction.Query(snapshot, StringUtil::Format(R"(
-SELECT del.file_id, data.path, data.path_is_relative, del.row_id, del.begin_snapshot
+SELECT del.file_id, data.path, data.path_is_relative, del.row_id, del.begin_snapshot,
+       existing_del.delete_file_id, existing_del.path as del_path, existing_del.path_is_relative as del_path_is_relative,
+       existing_del.begin_snapshot as del_begin_snapshot, existing_del.encryption_key as del_encryption_key
 FROM {METADATA_CATALOG}.%s del
 JOIN {METADATA_CATALOG}.ducklake_data_file data ON del.file_id = data.data_file_id
+LEFT JOIN (
+    SELECT * FROM {METADATA_CATALOG}.ducklake_delete_file
+    WHERE table_id = %d AND {SNAPSHOT_ID} >= begin_snapshot
+          AND ({SNAPSHOT_ID} < end_snapshot OR end_snapshot IS NULL)
+) existing_del ON del.file_id = existing_del.data_file_id
 ORDER BY del.file_id, del.row_id
 	)",
-	                                                                       inlined_table_name));
+	                                                                       inlined_table_name, table_id.index));
 	if (deletions_result->HasError()) {
 		return;
 	}
 
-	// Group deletions by file
-	unordered_map<idx_t, string> file_paths;                          // file_id -> path
-	unordered_map<idx_t, set<PositionWithSnapshot>> deletes_per_file; // file_id -> deletions
-	unordered_map<idx_t, idx_t> max_snapshots;                        // file_id -> max_snapshot
+	// Group deletions by file and track existing delete file info
+	unordered_map<idx_t, string> file_paths;                              // file_id -> data file path
+	unordered_map<idx_t, set<PositionWithSnapshot>> deletes_per_file;     // file_id -> inlined deletions
+	unordered_map<idx_t, idx_t> max_snapshots;                            // file_id -> max_snapshot
+	unordered_map<idx_t, ExistingDeleteFileInfo> existing_delete_files;   // file_id -> existing delete file info
 
 	while (true) {
 		auto chunk = deletions_result->Fetch();
@@ -385,6 +403,20 @@ ORDER BY del.file_id, del.row_id
 					file_paths[file_id] = path;
 				}
 				max_snapshots[file_id] = begin_snapshot;
+
+				// Check for existing delete file
+				if (!chunk->GetValue(5, row_idx).IsNull()) {
+					ExistingDeleteFileInfo del_info;
+					del_info.delete_file_id = DataFileIndex(chunk->GetValue(5, row_idx).GetValue<idx_t>());
+					del_info.path = chunk->GetValue(6, row_idx).GetValue<string>();
+					del_info.path_is_relative = chunk->GetValue(7, row_idx).GetValue<bool>();
+					del_info.begin_snapshot = chunk->GetValue(8, row_idx).GetValue<idx_t>();
+					if (!chunk->GetValue(9, row_idx).IsNull()) {
+						del_info.encryption_key = chunk->GetValue(9, row_idx).GetValue<string>();
+					}
+					del_info.has_info = true;
+					existing_delete_files[file_id] = std::move(del_info);
+				}
 			} else {
 				max_snapshots[file_id] = MaxValue(max_snapshots[file_id], begin_snapshot);
 			}
@@ -413,6 +445,37 @@ ORDER BY del.file_id, del.row_id
 	for (auto &entry : deletes_per_file) {
 		auto file_id = entry.first;
 		auto &file_path = file_paths[file_id];
+		auto &inlined_deletions = entry.second;
+
+		// Check if there's an existing delete file that we need to merge with
+		auto existing_entry = existing_delete_files.find(file_id);
+		set<PositionWithSnapshot> merged_deletions = inlined_deletions;
+		bool overwrites_existing = false;
+		ExistingDeleteFileInfo existing_info;
+
+		if (existing_entry != existing_delete_files.end() && existing_entry->second.has_info) {
+			existing_info = existing_entry->second;
+			overwrites_existing = true;
+
+			// Read existing deletions from the delete file
+			DuckLakeFileData existing_delete_file_data;
+			if (existing_info.path_is_relative) {
+				existing_delete_file_data.path = table.DataPath() + existing_info.path;
+			} else {
+				existing_delete_file_data.path = existing_info.path;
+			}
+			existing_delete_file_data.encryption_key = existing_info.encryption_key;
+
+			auto existing_deletions = DuckLakeDeleteFilter::ScanDeleteFile(context, existing_delete_file_data);
+
+			// Merge existing deletions with new inlined deletions
+			MergeDeletesWithSnapshots(existing_deletions, existing_info.begin_snapshot, merged_deletions);
+
+			// Update max_snapshot to include existing deletions
+			for (auto &pos : merged_deletions) {
+				max_snapshots[file_id] = MaxValue(max_snapshots[file_id], static_cast<idx_t>(pos.snapshot_id));
+			}
+		}
 
 		WriteDeleteFileWithSnapshotsInput file_input {context,
 		                                              transaction,
@@ -420,11 +483,20 @@ ORDER BY del.file_id, del.row_id
 		                                              table.DataPath(),
 		                                              encryption_key,
 		                                              file_path,
-		                                              entry.second,
+		                                              merged_deletions,
 		                                              DeleteFileSource::FLUSH};
 		auto delete_file = DuckLakeDeleteFileWriter::WriteDeleteFileWithSnapshots(context, file_input);
 		delete_file.data_file_id = DataFileIndex(file_id);
 		delete_file.max_snapshot = max_snapshots[file_id];
+
+		if (overwrites_existing) {
+			delete_file.overwrites_existing_delete = true;
+			delete_file.overwritten_delete_file.delete_file_id = existing_info.delete_file_id;
+			delete_file.overwritten_delete_file.path = existing_info.path_is_relative
+			                                               ? table.DataPath() + existing_info.path
+			                                               : existing_info.path;
+		}
+
 		delete_files.push_back(std::move(delete_file));
 	}
 

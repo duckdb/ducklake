@@ -145,3 +145,20 @@ query IIIII
 SELECT table_id, begin_snapshot, end_snapshot, delete_count, partial_max FROM ducklake_meta.ducklake_delete_file ORDER BY begin_snapshot
 ----
 1	2	NULL	10	4
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake')
+
+query IIIII
+SELECT table_id, begin_snapshot, end_snapshot, delete_count, partial_max FROM ducklake_meta.ducklake_delete_file ORDER BY begin_snapshot
+----
+1	2	NULL	20	7
+
+query I
+SELECT COUNT(*) FROM t
+----
+30
+
+query III
+SELECT file_id, row_id, begin_snapshot FROM ducklake_meta.ducklake_inlined_delete_1 ORDER BY row_id
+----
