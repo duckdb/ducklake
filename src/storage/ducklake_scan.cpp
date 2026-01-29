@@ -109,7 +109,9 @@ vector<PartitionStatistics> DuckLakeGetPartitionStats(ClientContext &context, Ge
 		return result;
 	}
 
-	// If there are any transaction-local changes (inserts, deletes, or dropped files), fall back to scanning
+	// If there are any transaction-local changes fall back to scanning
+	// Accounting for transaction local changes gets difficult, especially when entire
+	// files are dropped.
 	if (transaction->HasAnyLocalChanges(table_id)) {
 		return result;
 	}
