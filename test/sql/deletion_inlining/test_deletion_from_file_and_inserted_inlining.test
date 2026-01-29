@@ -1,0 +1,62 @@
+# name: test/sql/deletion_inlining/test_deletion_from_file_and_inserted_inlining.test
+# description: test ducklake deletion inlining from file and inserted inline
+# group: [deletion_inlining]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+
+test-env DATA_PATH __TEST_DIR__
+
+statement ok
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/test_deletion_from_file_and_inserted_inlining',DATA_INLINING_ROW_LIMIT 5,  METADATA_CATALOG 'ducklake_meta')
+
+statement ok
+use ducklake
+
+statement ok
+CREATE TABLE t AS SELECT range a FROM range(10);
+
+statement ok
+insert into t values (11),(12),(13);
+
+statement ok
+delete from t where a = 5 or a = 12;
+
+query I
+select count(*) from t
+----
+11
+
+query IIIII
+SELECT table_id, begin_snapshot, end_snapshot, delete_count, partial_max FROM ducklake_meta.ducklake_delete_file ORDER BY begin_snapshot
+----
+
+query IIII
+FROM ducklake_meta.ducklake_inlined_data_1_1
+----
+10	2	NULL	11
+11	2	3	12
+12	2	NULL	13
+
+query III
+SELECT file_id, row_id, begin_snapshot FROM ducklake_meta.ducklake_inlined_delete_1 ORDER BY row_id
+----
+0	5	3
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake')
+
+query IIIII
+SELECT table_id, begin_snapshot, end_snapshot, delete_count, partial_max FROM ducklake_meta.ducklake_delete_file ORDER BY begin_snapshot
+----
+1	3	NULL	1	NULL
+1	3	NULL	1	3
+
+query I
+select count(*) from t
+----
+11
+

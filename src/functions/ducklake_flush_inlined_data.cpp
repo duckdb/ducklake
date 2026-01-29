@@ -78,19 +78,19 @@ static DeletesPerFile GroupDeletesByFile(QueryResult &deleted_rows_result, vecto
 	DeletesPerFile deletes_per_file;
 	for (auto &row : deleted_rows_result) {
 		auto end_snap = row.GetValue<int64_t>(0);
-		auto row_id = row.GetValue<int64_t>(1);
+		auto output_position = row.GetValue<int64_t>(1);
 
 		if (written_files.size() == 1) {
-			// this is easy, we just handover the deleted row ids since they must be from this file
-			PositionWithSnapshot pos_with_snap {row_id, end_snap};
+			// Single file - use position directly
+			PositionWithSnapshot pos_with_snap {output_position, end_snap};
 			deletes_per_file[written_files[0].file_name].insert(pos_with_snap);
 		} else {
-			// lets write the deletes to the right files, in case we have multiple files
+			// Multiple files - find which file contains this position
 			for (idx_t file_idx = 0; file_idx < written_files.size(); file_idx++) {
 				const int64_t file_start = static_cast<int64_t>(file_start_row_ids[file_idx]);
 				const int64_t file_end = static_cast<int64_t>(file_start + written_files[file_idx].row_count);
-				if (row_id >= file_start && row_id < file_end) {
-					int64_t pos_in_file = row_id - file_start;
+				if (output_position >= file_start && output_position < file_end) {
+					int64_t pos_in_file = output_position - file_start;
 					PositionWithSnapshot pos_with_snap {pos_in_file, end_snap};
 					deletes_per_file[written_files[file_idx].file_name].insert(pos_with_snap);
 					break;
@@ -108,12 +108,18 @@ SinkFinalizeType DuckLakeFlushData::Finalize(Pipeline &pipeline, Event &event, C
 	auto snapshot = transaction.GetSnapshot();
 
 	if (!global_state.written_files.empty()) {
-		// query all deleted rows with their snapshot IDs
+		// Query deleted rows with their output file position
+		// We use ROW_NUMBER to get the  position of each row in flush order,
 		auto deleted_rows_result = transaction.Query(snapshot, StringUtil::Format(R"(
-			SELECT end_snapshot, row_id
-			FROM {METADATA_CATALOG}.%s
+			WITH all_rows AS (
+				SELECT row_id, end_snapshot, ROW_NUMBER() OVER (ORDER BY row_id) - 1 AS output_position
+				FROM {METADATA_CATALOG}.%s
+				WHERE {SNAPSHOT_ID} >= begin_snapshot
+			)
+			SELECT end_snapshot, output_position
+			FROM all_rows
 			WHERE end_snapshot IS NOT NULL
-			ORDER BY row_id;)",
+			ORDER BY output_position;)",
 		                                                                          inlined_table.table_name));
 
 		// lets figure out where each file ends, so we know where to place ze deletes
