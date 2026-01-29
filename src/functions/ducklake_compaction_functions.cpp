@@ -67,7 +67,9 @@ SourceResultType DuckLakeCompaction::GetDataInternal(ExecutionContext &context, 
 	source_state.returned_result = true;
 
 	chunk.SetCardinality(1);
-	chunk.SetValue(0, 0, Value::BIGINT(static_cast<int64_t>(source_files.size())));
+	chunk.SetValue(0, 0, Value(table.name));
+	chunk.SetValue(1, 0, Value::BIGINT(static_cast<int64_t>(source_files.size())));
+	chunk.SetValue(2, 0, Value::BIGINT(1)); // Each compaction creates 1 output file
 	return SourceResultType::FINISHED;
 }
 
@@ -588,6 +590,10 @@ static unique_ptr<LogicalOperator> GenerateCompactionOperator(TableFunctionBindI
 		vector<ColumnBinding> bindings;
 		vector<LogicalType> return_types;
 		bindings.emplace_back(bind_index, 0);
+		bindings.emplace_back(bind_index, 1);
+		bindings.emplace_back(bind_index, 2);
+		return_types.emplace_back(LogicalType::VARCHAR);
+		return_types.emplace_back(LogicalType::BIGINT);
 		return_types.emplace_back(LogicalType::BIGINT);
 		return make_uniq<LogicalEmptyResult>(std::move(return_types), std::move(bindings));
 	}
@@ -596,7 +602,11 @@ static unique_ptr<LogicalOperator> GenerateCompactionOperator(TableFunctionBindI
 		return std::move(compactions[0]);
 	}
 	auto union_op = input.binder->UnionOperators(std::move(compactions));
-	union_op->Cast<LogicalSetOperation>().table_index = bind_index;
+	auto &set_op = union_op->Cast<LogicalSetOperation>();
+	set_op.table_index = bind_index;
+	// Manually set column_count - this is normally derived during optimization
+	// but we need it at bind time for column binding resolution
+	set_op.column_count = 3;
 	return union_op;
 }
 
@@ -746,7 +756,9 @@ unique_ptr<LogicalOperator> BindCompaction(ClientContext &context, TableFunction
 
 static unique_ptr<LogicalOperator> MergeAdjacentFilesBind(ClientContext &context, TableFunctionBindInput &input,
                                                           idx_t bind_index, vector<string> &return_names) {
+	return_names.push_back("table_name");
 	return_names.push_back("files_processed");
+	return_names.push_back("files_created");
 	return BindCompaction(context, input, bind_index, CompactionType::MERGE_ADJACENT_TABLES);
 }
 
@@ -769,7 +781,9 @@ TableFunctionSet DuckLakeMergeAdjacentFilesFunction::GetFunctions() {
 
 static unique_ptr<LogicalOperator> RewriteFilesBind(ClientContext &context, TableFunctionBindInput &input,
                                                     idx_t bind_index, vector<string> &return_names) {
+	return_names.push_back("table_name");
 	return_names.push_back("files_processed");
+	return_names.push_back("files_created");
 	return BindCompaction(context, input, bind_index, CompactionType::REWRITE_DELETES);
 }
 
