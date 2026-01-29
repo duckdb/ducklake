@@ -582,9 +582,9 @@
       ]
     },
     {
-      "reason": "CI Deadklock?",
+      "reason": "FIXME: CI Deadlock?",
       "paths": [
-          "test/sql/update/update_default.test"
+          "test/sql/update/test_stress_update_issue_19688.test"
       ]
     }
   ]
