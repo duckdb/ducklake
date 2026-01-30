@@ -1,0 +1,97 @@
+# name: test/sql/deletion_inlining/test_deletion_inlining_partitions.test
+# description: Test ducklake deletion inlining with partitions
+# group: [deletion_inlining]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+
+test-env DATA_PATH __TEST_DIR__
+
+statement ok
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/ducklake_deletion_inlining_partitions', METADATA_CATALOG 'ducklake_meta', DATA_INLINING_ROW_LIMIT 10)
+
+statement ok
+USE ducklake
+
+# Create a partitioned table
+statement ok
+CREATE TABLE partitioned_tbl(id INTEGER, ts TIMESTAMP, val VARCHAR);
+
+statement ok
+ALTER TABLE partitioned_tbl SET PARTITIONED BY (year(ts), month(ts));
+
+statement ok
+INSERT INTO partitioned_tbl SELECT i, TIMESTAMP '2020-01-15' + interval (i) minutes, concat('val_', i) FROM range(50) t(i)
+
+statement ok
+INSERT INTO partitioned_tbl SELECT i + 100, TIMESTAMP '2020-02-15' + interval (i) minutes, concat('val_', i + 100) FROM range(50) t(i)
+
+statement ok
+INSERT INTO partitioned_tbl SELECT i + 200, TIMESTAMP '2021-01-15' + interval (i) minutes, concat('val_', i + 200) FROM range(50) t(i)
+
+query I
+SELECT COUNT(*) FROM partitioned_tbl
+----
+150
+
+statement ok
+DELETE FROM partitioned_tbl WHERE id < 3
+
+statement ok
+DELETE FROM partitioned_tbl WHERE id >= 100 AND id < 103
+
+statement ok
+DELETE FROM partitioned_tbl WHERE id >= 200 AND id < 203
+
+query I
+SELECT COUNT(*) FROM partitioned_tbl
+----
+141
+
+query II
+SELECT year(ts), COUNT(*) FROM partitioned_tbl GROUP BY year(ts) ORDER BY year(ts)
+----
+2020	94
+2021	47
+
+query I
+SELECT COUNT(*) FROM GLOB('${DATA_PATH}/ducklake_deletion_inlining_partitions/**/*-delete.parquet')
+----
+0
+
+query I
+SELECT COUNT(*) FROM ducklake_meta.ducklake_inlined_delete_1 WHERE end_snapshot IS NULL
+----
+9
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake')
+
+query I
+SELECT COUNT(*) FROM GLOB('${DATA_PATH}/ducklake_deletion_inlining_partitions/**/*-delete.parquet')
+----
+3
+
+query I
+SELECT COUNT(*) FROM partitioned_tbl
+----
+141
+
+query II
+SELECT year(ts), COUNT(*) FROM partitioned_tbl GROUP BY year(ts) ORDER BY year(ts)
+----
+2020	94
+2021	47
+
+query I
+SELECT COUNT(*) FROM partitioned_tbl AT (VERSION => 5)
+----
+150
+
+query I
+SELECT COUNT(*) FROM ducklake_meta.ducklake_inlined_delete_1 WHERE end_snapshot IS NULL
+----
+0
