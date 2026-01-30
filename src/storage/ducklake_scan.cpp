@@ -116,12 +116,7 @@ vector<PartitionStatistics> DuckLakeGetPartitionStats(ClientContext &context, Ge
 		return result;
 	}
 
-	// Get count from active data files minus delete count, plus inlined data
-	// (inlined deletes are handled by end_snapshot visibility in GetInlinedDataRowCount)
-	idx_t record_count = table.GetActiveRecordCount(*transaction);
-	idx_t delete_count = table.GetTotalDeleteCount(*transaction);
-	idx_t inlined_count = table.GetInlinedDataRowCount(*transaction);
-	idx_t count = record_count - delete_count + inlined_count;
+	idx_t count = table.GetNetDataFileRowCount(*transaction) + table.GetNetInlinedRowCount(*transaction);
 
 	// Return single partition with total count
 	PartitionStatistics stats;

@@ -342,22 +342,17 @@ optional_ptr<DuckLakeTableStats> DuckLakeTableEntry::GetTableStats(DuckLakeTrans
 	return dl_catalog.GetTableStats(transaction, GetTableId());
 }
 
-idx_t DuckLakeTableEntry::GetTotalDeleteCount(DuckLakeTransaction &transaction) {
+idx_t DuckLakeTableEntry::GetNetDataFileRowCount(DuckLakeTransaction &transaction) {
 	auto &metadata_manager = transaction.GetMetadataManager();
-	return metadata_manager.GetTotalDeleteCount(GetTableId(), transaction.GetSnapshot());
+	return metadata_manager.GetNetDataFileRowCount(GetTableId(), transaction.GetSnapshot());
 }
 
-idx_t DuckLakeTableEntry::GetActiveRecordCount(DuckLakeTransaction &transaction) {
-	auto &metadata_manager = transaction.GetMetadataManager();
-	return metadata_manager.GetActiveRecordCount(GetTableId(), transaction.GetSnapshot());
-}
-
-idx_t DuckLakeTableEntry::GetInlinedDataRowCount(DuckLakeTransaction &transaction) {
+idx_t DuckLakeTableEntry::GetNetInlinedRowCount(DuckLakeTransaction &transaction) {
 	auto &metadata_manager = transaction.GetMetadataManager();
 	auto snapshot = transaction.GetSnapshot();
 	idx_t total = 0;
 	for (auto &inlined_table : inlined_data_tables) {
-		total += metadata_manager.GetInlinedDataRowCount(inlined_table.table_name, snapshot);
+		total += metadata_manager.GetNetInlinedRowCount(inlined_table.table_name, snapshot);
 	}
 	return total;
 }
