@@ -2077,6 +2077,7 @@ map<idx_t, set<idx_t>> DuckLakeMetadataManager::ReadInlinedFileDeletions(TableIn
 	return result;
 }
 
+// FIXME: We should probably cache this..
 unordered_set<idx_t> DuckLakeMetadataManager::GetFileIdsWithInlinedDeletions(TableIndex table_id,
                                                                              DuckLakeSnapshot snapshot,
                                                                              const vector<idx_t> &file_ids) {
