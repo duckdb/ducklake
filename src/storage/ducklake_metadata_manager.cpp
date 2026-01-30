@@ -2048,7 +2048,7 @@ string DuckLakeMetadataManager::WriteNewInlinedFileDeletes(DuckLakeSnapshot &com
 				if (!values.empty()) {
 					values += ", ";
 				}
-				values += StringUtil::Format("(%d, %d, {SNAPSHOT_ID}, NULL)", file_id, row_id);
+				values += StringUtil::Format("(%d, %d, {SNAPSHOT_ID})", file_id, row_id);
 			}
 		}
 		batch_queries += StringUtil::Format("INSERT INTO {METADATA_CATALOG}.%s VALUES %s;\n", table_name, values);
@@ -2064,7 +2064,7 @@ map<idx_t, set<idx_t>> DuckLakeMetadataManager::ReadInlinedFileDeletions(TableIn
 		return result;
 	}
 	auto query = StringUtil::Format("SELECT file_id, row_id FROM {METADATA_CATALOG}.%s WHERE begin_snapshot <= "
-	                                "{SNAPSHOT_ID} AND (end_snapshot IS NULL OR end_snapshot > {SNAPSHOT_ID})",
+	                                "{SNAPSHOT_ID}",
 	                                inlined_table_name);
 	auto query_result = transaction.Query(snapshot, query);
 	if (!query_result->HasError()) {
@@ -2099,7 +2099,7 @@ unordered_set<idx_t> DuckLakeMetadataManager::GetFileIdsWithInlinedDeletions(Tab
 	}
 	auto query =
 	    StringUtil::Format("SELECT DISTINCT file_id FROM {METADATA_CATALOG}.%s WHERE file_id IN (%s) AND "
-	                       "begin_snapshot <= {SNAPSHOT_ID} AND (end_snapshot IS NULL OR end_snapshot > {SNAPSHOT_ID})",
+	                       "begin_snapshot <= {SNAPSHOT_ID}",
 	                       inlined_table_name, file_id_list);
 	auto query_result = transaction.Query(snapshot, query);
 	if (!query_result->HasError()) {
@@ -2119,8 +2119,7 @@ DuckLakeMetadataManager::ReadInlinedFileDeletionsForRange(TableIndex table_id, D
 		return result;
 	}
 	auto query = StringUtil::Format("SELECT file_id, row_id, begin_snapshot FROM {METADATA_CATALOG}.%s "
-	                                "WHERE begin_snapshot >= %d AND begin_snapshot <= {SNAPSHOT_ID} AND (end_snapshot "
-	                                "IS NULL OR end_snapshot > {SNAPSHOT_ID})",
+	                                "WHERE begin_snapshot >= %d AND begin_snapshot <= {SNAPSHOT_ID}",
 	                                inlined_table_name, start_snapshot.snapshot_id);
 	auto query_result = transaction.Query(end_snapshot, query);
 	if (!query_result->HasError()) {
@@ -2164,7 +2163,7 @@ string DuckLakeMetadataManager::GetInlinedDeletionTableName(TableIndex table_id,
 	// Create the table
 	string table_name = StringUtil::Format("ducklake_inlined_delete_%d", table_id.index);
 	auto create_query = StringUtil::Format(R"(
-CREATE TABLE {METADATA_CATALOG}.%s(file_id BIGINT, row_id BIGINT, begin_snapshot BIGINT, end_snapshot BIGINT);
+CREATE TABLE {METADATA_CATALOG}.%s(file_id BIGINT, row_id BIGINT, begin_snapshot BIGINT);
 INSERT INTO {METADATA_CATALOG}.ducklake_inlined_deletion_tables VALUES (%d, '%s');
 )",
 	                                       table_name, table_id.index, table_name);

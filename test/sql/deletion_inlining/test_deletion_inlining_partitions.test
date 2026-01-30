@@ -63,7 +63,7 @@ SELECT COUNT(*) FROM GLOB('${DATA_PATH}/ducklake_deletion_inlining_partitions/**
 0
 
 query I
-SELECT COUNT(*) FROM ducklake_meta.ducklake_inlined_delete_1 WHERE end_snapshot IS NULL
+SELECT COUNT(*) FROM ducklake_meta.ducklake_inlined_delete_1
 ----
 9
 
@@ -92,6 +92,6 @@ SELECT COUNT(*) FROM partitioned_tbl AT (VERSION => 5)
 150
 
 query I
-SELECT COUNT(*) FROM ducklake_meta.ducklake_inlined_delete_1 WHERE end_snapshot IS NULL
+SELECT COUNT(*) FROM ducklake_meta.ducklake_inlined_delete_1
 ----
 0

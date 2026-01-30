@@ -188,9 +188,9 @@ CALL ducklake_flush_inlined_data('ducklake')
 statement ok
 COMMIT
 
-# After flush + commit, the inlined deletions should be marked as flushed (end_snapshot set)
+# After flush + commit, the inlined deletions should be removed
 query III
-SELECT file_id, row_id, begin_snapshot FROM ducklake_meta.ducklake_inlined_delete_1 WHERE end_snapshot IS NULL ORDER BY row_id
+SELECT file_id, row_id, begin_snapshot FROM ducklake_meta.ducklake_inlined_delete_1 ORDER BY row_id
 ----
 
 # Data should still be correct after flush
