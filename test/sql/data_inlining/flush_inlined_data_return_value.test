@@ -30,10 +30,10 @@ SELECT count(*) FROM test_table;
 100
 
 # Flush and check return value - should return 100 rows flushed
-query II
-SELECT table_name, rows_flushed FROM ducklake_flush_inlined_data('ducklake', table_name => 'test_table');
+query III
+SELECT schema_name, table_name, rows_flushed FROM ducklake_flush_inlined_data('ducklake', table_name => 'test_table');
 ----
-test_table	100
+main	test_table	100
 
 # Verify data is still correct after flush
 query I
@@ -46,10 +46,10 @@ statement ok
 INSERT INTO test_table SELECT i, 'more_data' || i FROM range(100, 250) t(i);
 
 # Flush again - should return 150 rows flushed
-query II
-SELECT table_name, rows_flushed FROM ducklake_flush_inlined_data('ducklake', table_name => 'test_table');
+query III
+SELECT schema_name, table_name, rows_flushed FROM ducklake_flush_inlined_data('ducklake', table_name => 'test_table');
 ----
-test_table	150
+main	test_table	150
 
 # Verify total data
 query I
@@ -57,11 +57,11 @@ SELECT count(*) FROM test_table;
 ----
 250
 
-# Test with no data to flush - should return 0 rows
-query II
-SELECT table_name, rows_flushed FROM ducklake_flush_inlined_data('ducklake', table_name => 'test_table');
+# Test with no data to flush - returns 0 rows flushed for specific table
+query III
+SELECT schema_name, table_name, rows_flushed FROM ducklake_flush_inlined_data('ducklake', table_name => 'test_table');
 ----
-test_table	0
+main	test_table	0
 
 # Test flushing multiple tables
 statement ok
@@ -93,4 +93,48 @@ query I
 SELECT count(*) FROM table_b;
 ----
 75
+
+# Test that schema changes create multiple inlined table entries
+# Each schema version has its own inlined data, so flush returns multiple rows per table
+statement ok
+CREATE TABLE schema_change_table (id INTEGER, name VARCHAR);
+
+# Insert data before schema change (schema version 1)
+statement ok
+INSERT INTO schema_change_table SELECT i, 'before_' || i FROM range(50) t(i);
+
+# Alter table to add a column - this creates a new schema version
+statement ok
+ALTER TABLE schema_change_table ADD COLUMN extra_col INTEGER;
+
+# Insert data after schema change (schema version 2)
+statement ok
+INSERT INTO schema_change_table SELECT i, 'after_' || i, i * 10 FROM range(50, 80) t(i);
+
+# Verify all data is accessible
+query I
+SELECT count(*) FROM schema_change_table;
+----
+80
+
+# Flush should return TWO rows for the same table - one per schema version
+# The rows are ordered by schema version (earlier version first)
+query III
+SELECT schema_name, table_name, rows_flushed FROM ducklake_flush_inlined_data('ducklake', table_name => 'schema_change_table') ORDER BY rows_flushed;
+----
+main	schema_change_table	30
+main	schema_change_table	50
+
+# Verify data is still correct after flush
+query I
+SELECT count(*) FROM schema_change_table;
+----
+80
+
+# Subsequent flush returns 0 for both schema versions
+query III
+SELECT schema_name, table_name, rows_flushed FROM ducklake_flush_inlined_data('ducklake', table_name => 'schema_change_table') ORDER BY rows_flushed;
+----
+main	schema_change_table	0
+main	schema_change_table	0
 

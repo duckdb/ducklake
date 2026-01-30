@@ -73,8 +73,9 @@ SourceResultType DuckLakeFlushData::GetDataInternal(ExecutionContext &context, D
 
 	auto &gstate = this->sink_state->Cast<DuckLakeInsertGlobalState>();
 	chunk.SetCardinality(1);
-	chunk.SetValue(0, 0, Value(table.name));
-	chunk.SetValue(1, 0, Value::BIGINT(static_cast<int64_t>(gstate.rows_flushed)));
+	chunk.SetValue(0, 0, Value(table.schema.name));
+	chunk.SetValue(1, 0, Value(table.name));
+	chunk.SetValue(2, 0, Value::BIGINT(static_cast<int64_t>(gstate.rows_flushed)));
 	return SourceResultType::FINISHED;
 }
 
@@ -218,11 +219,12 @@ public:
 		vector<ColumnBinding> result;
 		result.emplace_back(table_index, 0);
 		result.emplace_back(table_index, 1);
+		result.emplace_back(table_index, 2);
 		return result;
 	}
 
 	void ResolveTypes() override {
-		types = {LogicalType::VARCHAR, LogicalType::BIGINT};
+		types = {LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::BIGINT};
 	}
 };
 
@@ -438,6 +440,7 @@ static unique_ptr<LogicalOperator> FlushInlinedDataBind(ClientContext &context, 
 			}
 		}
 	}
+	return_names.push_back("schema_name");
 	return_names.push_back("table_name");
 	return_names.push_back("rows_flushed");
 	if (flushes.empty()) {
@@ -446,6 +449,8 @@ static unique_ptr<LogicalOperator> FlushInlinedDataBind(ClientContext &context, 
 		vector<LogicalType> return_types;
 		bindings.emplace_back(bind_index, 0);
 		bindings.emplace_back(bind_index, 1);
+		bindings.emplace_back(bind_index, 2);
+		return_types.emplace_back(LogicalType::VARCHAR);
 		return_types.emplace_back(LogicalType::VARCHAR);
 		return_types.emplace_back(LogicalType::BIGINT);
 		return make_uniq<LogicalEmptyResult>(std::move(return_types), std::move(bindings));
@@ -459,7 +464,7 @@ static unique_ptr<LogicalOperator> FlushInlinedDataBind(ClientContext &context, 
 	set_op.table_index = bind_index;
 	// Manually set column_count - this is normally derived during optimization
 	// but we need it at bind time for column binding resolution
-	set_op.column_count = 2;
+	set_op.column_count = 3;
 	return union_op;
 }
 
