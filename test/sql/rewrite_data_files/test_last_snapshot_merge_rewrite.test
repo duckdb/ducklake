@@ -69,12 +69,15 @@ SELECT COUNT(*) FROM GLOB('${DATA_PATH}/ducklake_last_merge_rewrite/**/*')
 
 
 skipif i=0
-statement ok
-CALL ducklake_merge_adjacent_files('ducklake');
+query III
+SELECT table_name, files_processed, files_created FROM ducklake_merge_adjacent_files('ducklake')
+----
 
 skipif i=1
-statement ok
-CALL ducklake_rewrite_data_files('ducklake', 'test', delete_threshold => 0);
+query III
+SELECT table_name, files_processed, files_created FROM ducklake_rewrite_data_files('ducklake', 'test', delete_threshold => 0) ORDER BY ALL
+----
+test	3	1
 
 statement ok
 CALL ducklake_cleanup_old_files('ducklake', cleanup_all => true);
@@ -92,12 +95,15 @@ SELECT COUNT(*) FROM GLOB('${DATA_PATH}/ducklake_last_merge_rewrite/**/*')
 7
 
 skipif i=0
-statement ok
-CALL ducklake_rewrite_data_files('ducklake', 'test', delete_threshold => 0);
+query III
+SELECT table_name, files_processed, files_created FROM ducklake_rewrite_data_files('ducklake', 'test', delete_threshold => 0) ORDER BY ALL
+----
+test	3	1
 
 skipif i=1
-statement ok
-CALL ducklake_merge_adjacent_files('ducklake');
+query III
+SELECT table_name, files_processed, files_created FROM ducklake_merge_adjacent_files('ducklake')
+----
 
 skipif i=0
 query I

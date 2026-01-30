@@ -19,7 +19,7 @@ USE ducklake;
 statement ok
 CREATE TABLE example (key integer);
 
-# Generate 100 files
+# Generate 20 files
 loop i 0 20
 
 statement ok
@@ -27,8 +27,10 @@ INSERT INTO example VALUES (${i});
 
 endloop
 
-statement ok
-CALL ducklake_merge_adjacent_files('ducklake', 'example', max_compacted_files=>1);
+query III
+SELECT table_name, files_processed, files_created FROM ducklake_merge_adjacent_files('ducklake', 'example', max_compacted_files=>1)
+----
+example	20	1
 
 # We create max one file, since we use the default size limits, one file should fit all
 query II
@@ -86,8 +88,11 @@ SELECT max(data_file_id), min (data_file_id) FROM __ducklake_metadata_ducklake.d
 ----
 40	21
 
-statement ok
-CALL ducklake_merge_adjacent_files('ducklake', 'example', max_compacted_files=>2);
+query III
+SELECT table_name, files_processed, files_created FROM ducklake_merge_adjacent_files('ducklake', 'example', max_compacted_files=>2) ORDER BY ALL
+----
+example	5	1
+example	5	1
 
 # We create two new files, and remove as many as necessary to create them
 query II
@@ -95,8 +100,10 @@ SELECT max(data_file_id), min (data_file_id) > 30 FROM __ducklake_metadata_duckl
 ----
 42	True
 
-statement ok
-CALL ducklake_merge_adjacent_files('ducklake', 'example', max_compacted_files=>1);
+query III
+SELECT table_name, files_processed, files_created FROM ducklake_merge_adjacent_files('ducklake', 'example', max_compacted_files=>1)
+----
+example	3	1
 
 # We create max one file
 query II
@@ -104,8 +111,11 @@ SELECT max(data_file_id), min (data_file_id) > 31 FROM __ducklake_metadata_duckl
 ----
 43	True
 
-statement ok
-CALL ducklake_merge_adjacent_files('ducklake', 'example', max_compacted_files=>1000);
+query III
+SELECT table_name, files_processed, files_created FROM ducklake_merge_adjacent_files('ducklake', 'example', max_compacted_files=>1000) ORDER BY ALL
+----
+example	4	1
+example	5	1
 
 # We basically do max compaction, limiting the size set
 query II
@@ -113,8 +123,10 @@ SELECT max(data_file_id) > 43, min (data_file_id) > 32 FROM __ducklake_metadata_
 ----
 True	True
 
-statement ok
-CALL ducklake_merge_adjacent_files('ducklake', 'example', max_compacted_files=>1000);
+query III
+SELECT table_name, files_processed, files_created FROM ducklake_merge_adjacent_files('ducklake', 'example', max_compacted_files=>1000)
+----
+example	3	1
 
 # Calling it again, merges one more time both snapshots as they are under the size limit
 query I
@@ -122,8 +134,9 @@ SELECT max(data_file_id) FROM __ducklake_metadata_ducklake.ducklake_data_file
 ----
 46
 
-statement ok
-CALL ducklake_merge_adjacent_files('ducklake', 'example', max_compacted_files=>1000);
+query III
+SELECT table_name, files_processed, files_created FROM ducklake_merge_adjacent_files('ducklake', 'example', max_compacted_files=>1000)
+----
 
 # Calling it again, produces no changes
 query I
