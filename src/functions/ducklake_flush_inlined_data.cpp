@@ -377,6 +377,7 @@ LEFT JOIN (
     WHERE table_id = %d AND {SNAPSHOT_ID} >= begin_snapshot
           AND ({SNAPSHOT_ID} < end_snapshot OR end_snapshot IS NULL)
 ) existing_del ON del.file_id = existing_del.data_file_id
+WHERE del.end_snapshot IS NULL
 ORDER BY del.file_id, del.row_id
 	)",
 	                                                                       inlined_table_name, table_id.index));
@@ -509,10 +510,18 @@ ORDER BY del.file_id, del.row_id
 	// Register the delete files
 	transaction.AddDeletes(table_id, std::move(delete_files));
 
-	// Clear the inlined deletion table
-	auto delete_result = transaction.Query(StringUtil::Format("DELETE FROM {METADATA_CATALOG}.%s", inlined_table_name));
+	// Mark the inlined deletions as flushed by setting end_snapshot
+	// Using UPDATE first so the change is visible within the same transaction
+	auto update_result = transaction.Query(snapshot, StringUtil::Format(
+		"UPDATE {METADATA_CATALOG}.%s SET end_snapshot = {SNAPSHOT_ID} WHERE end_snapshot IS NULL", inlined_table_name));
+	if (update_result->HasError()) {
+		update_result->GetErrorObject().Throw("Failed to mark inlined file deletions as flushed: ");
+	}
+	// Also delete the flushed rows so they don't appear in direct metadata table queries
+	auto delete_result = transaction.Query(snapshot, StringUtil::Format(
+		"DELETE FROM {METADATA_CATALOG}.%s WHERE end_snapshot IS NOT NULL", inlined_table_name));
 	if (delete_result->HasError()) {
-		delete_result->GetErrorObject().Throw("Failed to clear inlined file deletions: ");
+		delete_result->GetErrorObject().Throw("Failed to delete flushed inlined file deletions: ");
 	}
 }
 

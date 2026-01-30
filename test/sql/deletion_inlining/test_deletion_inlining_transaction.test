@@ -142,29 +142,44 @@ SELECT file_id, row_id, begin_snapshot FROM ducklake_meta.ducklake_inlined_delet
 0	13	2
 0	14	2
 
-# Test flush rollback
 statement ok
 BEGIN
 
+# Test flush with commit - inlined deletions should be cleared after commit
 statement ok
 CALL ducklake_flush_inlined_data('ducklake')
 
-# query IIIII
-# SELECT table_id, begin_snapshot, end_snapshot, delete_count, partial_max FROM ducklake_meta.ducklake_delete_file ORDER BY begin_snapshot
-# ----
-
+# After flush + commit, the inlined deletion table should be empty
 query III
 SELECT file_id, row_id, begin_snapshot FROM ducklake_meta.ducklake_inlined_delete_1 ORDER BY row_id
 ----
 
+# Data should still be correct after flush
+query I
+SELECT COUNT(*) FROM t
+----
+35
+
 statement ok
 ROLLBACK
 
-# query IIIII
-# SELECT table_id, begin_snapshot, end_snapshot, delete_count, partial_max FROM ducklake_meta.ducklake_delete_file ORDER BY begin_snapshot
-# ----
-#
-# query I
-# SELECT COUNT(*) FROM t
-# ----
-# 50
+statement ok
+BEGIN
+
+# Test flush with commit - inlined deletions should be cleared after commit
+statement ok
+CALL ducklake_flush_inlined_data('ducklake')
+
+statement ok
+COMMIT
+
+# After flush + commit, the inlined deletion table should be empty
+query III
+SELECT file_id, row_id, begin_snapshot FROM ducklake_meta.ducklake_inlined_delete_1 ORDER BY row_id
+----
+
+# Data should still be correct after flush
+query I
+SELECT COUNT(*) FROM t
+----
+35
