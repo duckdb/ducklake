@@ -72,8 +72,10 @@ ALTER TABLE ducklake.prevent_duplicates SET SORTED BY (sort_key_1 ASC NULLS LAST
 statement ok
 ALTER TABLE ducklake.prevent_duplicates SET SORTED BY (sort_key_1 ASC NULLS LAST, sort_key_2 ASC NULLS LAST);
 
-statement ok
-CALL ducklake_merge_adjacent_files('ducklake', 'prevent_duplicates');
+query III
+SELECT table_name, files_processed, files_created FROM ducklake_merge_adjacent_files('ducklake', 'prevent_duplicates')
+----
+prevent_duplicates	2	1
 
 query III
 FROM prevent_duplicates
@@ -168,8 +170,10 @@ ALTER TABLE ducklake.multiple_set_sorted SET SORTED BY (sort_key_1 DESC NULLS FI
 statement ok
 ALTER TABLE ducklake.multiple_set_sorted SET SORTED BY (sort_key_1 ASC NULLS LAST, sort_key_2 ASC NULLS LAST);
 
-statement ok
-CALL ducklake_merge_adjacent_files('ducklake', 'multiple_set_sorted');
+query III
+SELECT table_name, files_processed, files_created FROM ducklake_merge_adjacent_files('ducklake', 'multiple_set_sorted')
+----
+multiple_set_sorted	2	1
 
 query III
 FROM multiple_set_sorted

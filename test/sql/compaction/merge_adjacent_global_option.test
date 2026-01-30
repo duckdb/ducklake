@@ -94,8 +94,12 @@ CALL ducklake.set_option('auto_compact', true , schema => 's1', table_name => 'e
 statement ok
 CALL ducklake.set_option('auto_compact', true , schema => 'main', table_name => 'example_2')
 
-statement ok
-CALL ducklake_merge_adjacent_files('ducklake');
+# Both example_2 tables (main and s1) should be merged
+query IIII
+SELECT schema_name, table_name, files_processed, files_created FROM ducklake_merge_adjacent_files('ducklake') ORDER BY ALL
+----
+main	example_2	2	1
+s1	example_2	2	1
 
 # We can set specific tables to be merged
 query II
@@ -114,8 +118,13 @@ SELECT data_file_id, table_id FROM __ducklake_metadata_ducklake.ducklake_data_fi
 statement ok
 CALL ducklake.set_option('auto_compact', true , schema => 's1')
 
-statement ok
-CALL ducklake_merge_adjacent_files('ducklake');
+# All s1 tables with auto_compact=true should be merged (example and example_3)
+# Tables already merged (example_2) don't appear in results
+query IIII
+SELECT schema_name, table_name, files_processed, files_created FROM ducklake_merge_adjacent_files('ducklake') ORDER BY ALL
+----
+s1	example	2	1
+s1	example_3	2	1
 
 query II
 SELECT data_file_id, table_id FROM __ducklake_metadata_ducklake.ducklake_data_file

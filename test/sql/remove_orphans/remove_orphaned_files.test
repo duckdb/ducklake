@@ -28,8 +28,10 @@ insert into test values (1);
 statement ok
 insert into test values (2);
 
-statement ok
-CALL ducklake_merge_adjacent_files('ducklake');
+query III
+SELECT table_name, files_processed, files_created FROM ducklake_merge_adjacent_files('ducklake')
+----
+test	2	1
 
 # Add orphaned file
 statement ok

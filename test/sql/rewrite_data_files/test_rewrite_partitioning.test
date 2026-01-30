@@ -69,8 +69,11 @@ SELECT * FROM partitioned ORDER BY part_key, id
 
 # This should rewrite files with deletes, grouping by partition
 # Currently this fails with: "DuckLakeCompactor: Files have different hive partition path"
-statement ok
-CALL ducklake_rewrite_data_files('ducklake', 'partitioned', delete_threshold => 0);
+query III
+SELECT table_name, files_processed, files_created FROM ducklake_rewrite_data_files('ducklake', 'partitioned', delete_threshold => 0) ORDER BY ALL
+----
+partitioned	1	1
+partitioned	1	1
 
 # After rewrite, delete files should be gone (applied to new data files)
 query I
@@ -90,8 +93,11 @@ SELECT * FROM partitioned ORDER BY part_key, id
 2	3	300
 
 # Merge adjacent files to consolidate (rewrite doesn't merge, just applies deletes)
-statement ok
-CALL ducklake_merge_adjacent_files('ducklake', 'partitioned');
+query III
+SELECT table_name, files_processed, files_created FROM ducklake_merge_adjacent_files('ducklake', 'partitioned') ORDER BY ALL
+----
+partitioned	3	1
+partitioned	3	1
 
 # Cleanup old files
 statement ok

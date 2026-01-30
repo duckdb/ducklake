@@ -33,8 +33,10 @@ statement ok
 INSERT INTO t SELECT i + 100, 'small2' FROM range(100) t(i);
 
 # Merge A+B into a single file (VERSION 4)
-statement ok
-CALL ducklake_merge_adjacent_files('ducklake', 't');
+query III
+SELECT table_name, files_processed, files_created FROM ducklake_merge_adjacent_files('ducklake', 't')
+----
+t	2	1
 
 # Create small files C (VERSION 5)
 statement ok
@@ -45,8 +47,10 @@ statement ok
 INSERT INTO t SELECT i + 300, 'small4' FROM range(100) t(i);
 
 # Merge C+D into a single file (VERSION 7)
-statement ok
-CALL ducklake_merge_adjacent_files('ducklake', 't');
+query III
+SELECT table_name, files_processed, files_created FROM ducklake_merge_adjacent_files('ducklake', 't')
+----
+t	2	1
 
 # State now:
 # - Merged AB (ids 0-199) with partial_max = 3 (max snapshot in merged file)
@@ -62,8 +66,10 @@ statement ok
 CALL ducklake_set_option('ducklake', 'target_file_size', '1MB');
 
 # Merge all files into a single file (VERSION 8)
-statement ok
-CALL ducklake_merge_adjacent_files('ducklake', 't');
+query III
+SELECT table_name, files_processed, files_created FROM ducklake_merge_adjacent_files('ducklake', 't')
+----
+t	2	1
 
 # State now:
 # - Merged ABCD (ids 0-399) with partial_max = 6 (max of all source files)

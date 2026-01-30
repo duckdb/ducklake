@@ -38,8 +38,10 @@ insert into t values (0);
 statement ok
 insert into t values (0);
 
-statement ok
-CALL ducklake_merge_adjacent_files('ducklake', 't');
+query III
+SELECT table_name, files_processed, files_created FROM ducklake_merge_adjacent_files('ducklake', 't')
+----
+t	6	1
 
 query I
 SELECT partial_max FROM __ducklake_metadata_ducklake.ducklake_data_file

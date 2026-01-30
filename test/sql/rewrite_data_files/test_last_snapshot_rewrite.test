@@ -58,16 +58,19 @@ SELECT delete_file_id FROM ducklake_metadata.ducklake_delete_file
 3
 
 # This won't do much, since our default threshold is too high
-statement ok
-CALL ducklake_rewrite_data_files('ducklake', 'test');
+query III
+SELECT table_name, files_processed, files_created FROM ducklake_rewrite_data_files('ducklake', 'test')
+----
 
 query I
 SELECT delete_file_id FROM ducklake_metadata.ducklake_delete_file
 ----
 3
 
-statement ok
-CALL ducklake_rewrite_data_files('ducklake', 'test', delete_threshold => 0.5);
+query III
+SELECT table_name, files_processed, files_created FROM ducklake_rewrite_data_files('ducklake', 'test', delete_threshold => 0.5)
+----
+test	1	1
 
 # We are deleting more than one file, so we can get it out
 query I
@@ -94,8 +97,10 @@ SELECT delete_file_id FROM ducklake_metadata.ducklake_delete_file
 3
 5
 
-statement ok
-CALL ducklake_rewrite_data_files('ducklake', 'test');
+query III
+SELECT table_name, files_processed, files_created FROM ducklake_rewrite_data_files('ducklake', 'test')
+----
+test	1	1
 
 query I
 SELECT delete_file_id FROM ducklake_metadata.ducklake_delete_file
@@ -112,8 +117,9 @@ statement ok
 DELETE FROM test
 WHERE key = 3000;
 
-statement ok
-CALL ducklake_rewrite_data_files('ducklake', 'test');
+query III
+SELECT table_name, files_processed, files_created FROM ducklake_rewrite_data_files('ducklake', 'test')
+----
 
 query I
 SELECT delete_file_id FROM ducklake_metadata.ducklake_delete_file
@@ -123,8 +129,10 @@ SELECT delete_file_id FROM ducklake_metadata.ducklake_delete_file
 7
 
 # Test that a manual delete_threshold option has priority over the global value.
-statement ok
-CALL ducklake_rewrite_data_files('ducklake', 'test', delete_threshold => 0);
+query III
+SELECT table_name, files_processed, files_created FROM ducklake_rewrite_data_files('ducklake', 'test', delete_threshold => 0)
+----
+test	1	1
 
 
 # Try invalid values for threshold

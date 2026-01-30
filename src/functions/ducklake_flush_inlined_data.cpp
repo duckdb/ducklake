@@ -47,10 +47,35 @@ DuckLakeFlushData::DuckLakeFlushData(PhysicalPlan &physical_plan, const vector<L
 }
 
 //===--------------------------------------------------------------------===//
+// Source State
+//===--------------------------------------------------------------------===//
+class DuckLakeFlushDataSourceState : public GlobalSourceState {
+public:
+	DuckLakeFlushDataSourceState() : returned_result(false) {
+	}
+	bool returned_result;
+};
+
+unique_ptr<GlobalSourceState> DuckLakeFlushData::GetGlobalSourceState(ClientContext &context) const {
+	return make_uniq<DuckLakeFlushDataSourceState>();
+}
+
+//===--------------------------------------------------------------------===//
 // GetData
 //===--------------------------------------------------------------------===//
 SourceResultType DuckLakeFlushData::GetDataInternal(ExecutionContext &context, DataChunk &chunk,
                                                     OperatorSourceInput &input) const {
+	auto &source_state = input.global_state.Cast<DuckLakeFlushDataSourceState>();
+	if (source_state.returned_result) {
+		return SourceResultType::FINISHED;
+	}
+	source_state.returned_result = true;
+
+	auto &gstate = this->sink_state->Cast<DuckLakeInsertGlobalState>();
+	chunk.SetCardinality(1);
+	chunk.SetValue(0, 0, Value(table.schema.name));
+	chunk.SetValue(1, 0, Value(table.name));
+	chunk.SetValue(2, 0, Value::BIGINT(static_cast<int64_t>(gstate.rows_flushed)));
 	return SourceResultType::FINISHED;
 }
 
@@ -146,6 +171,11 @@ SinkFinalizeType DuckLakeFlushData::Finalize(Pipeline &pipeline, Event &event, C
 		}
 	}
 
+	// Compute total rows flushed before moving files
+	for (auto &file : global_state.written_files) {
+		global_state.rows_flushed += file.row_count;
+	}
+
 	transaction.AppendFiles(global_state.table.GetTableId(), std::move(global_state.written_files));
 	transaction.DeleteInlinedData(inlined_table);
 	return SinkFinalizeType::READY;
@@ -188,11 +218,13 @@ public:
 	vector<ColumnBinding> GetColumnBindings() override {
 		vector<ColumnBinding> result;
 		result.emplace_back(table_index, 0);
+		result.emplace_back(table_index, 1);
+		result.emplace_back(table_index, 2);
 		return result;
 	}
 
 	void ResolveTypes() override {
-		types = {LogicalType::BOOLEAN};
+		types = {LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::BIGINT};
 	}
 };
 
@@ -408,13 +440,19 @@ static unique_ptr<LogicalOperator> FlushInlinedDataBind(ClientContext &context, 
 			}
 		}
 	}
-	return_names.push_back("Success");
+	return_names.push_back("schema_name");
+	return_names.push_back("table_name");
+	return_names.push_back("rows_flushed");
 	if (flushes.empty()) {
 		// nothing to write - generate empty result
 		vector<ColumnBinding> bindings;
 		vector<LogicalType> return_types;
 		bindings.emplace_back(bind_index, 0);
-		return_types.emplace_back(LogicalType::BOOLEAN);
+		bindings.emplace_back(bind_index, 1);
+		bindings.emplace_back(bind_index, 2);
+		return_types.emplace_back(LogicalType::VARCHAR);
+		return_types.emplace_back(LogicalType::VARCHAR);
+		return_types.emplace_back(LogicalType::BIGINT);
 		return make_uniq<LogicalEmptyResult>(std::move(return_types), std::move(bindings));
 	}
 	if (flushes.size() == 1) {
@@ -422,7 +460,11 @@ static unique_ptr<LogicalOperator> FlushInlinedDataBind(ClientContext &context, 
 		return std::move(flushes[0]);
 	}
 	auto union_op = input.binder->UnionOperators(std::move(flushes));
-	union_op->Cast<LogicalSetOperation>().table_index = bind_index;
+	auto &set_op = union_op->Cast<LogicalSetOperation>();
+	set_op.table_index = bind_index;
+	// Manually set column_count - this is normally derived during optimization
+	// but we need it at bind time for column binding resolution
+	set_op.column_count = 3;
 	return union_op;
 }
 

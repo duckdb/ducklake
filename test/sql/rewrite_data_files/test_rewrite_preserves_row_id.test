@@ -53,8 +53,10 @@ SELECT rowid, a, b FROM test ORDER BY a
 8	9	90
 
 # Now call rewrite_data_files to compact
-statement ok
-CALL ducklake_rewrite_data_files('ducklake', 'test', delete_threshold => 0);
+query III
+SELECT table_name, files_processed, files_created FROM ducklake_rewrite_data_files('ducklake', 'test', delete_threshold => 0)
+----
+test	1	1
 
 # Verify row IDs are preserved after rewrite - should still be (0, 2, 4, 6, 8)
 query III
@@ -122,8 +124,10 @@ SELECT rowid, a, b FROM test_large WHERE a >= 195 ORDER BY a
 198	199	1990
 
 # Rewrite the data files
-statement ok
-CALL ducklake_rewrite_data_files('ducklake', 'test_large', delete_threshold => 0);
+query III
+SELECT table_name, files_processed, files_created FROM ducklake_rewrite_data_files('ducklake', 'test_large', delete_threshold => 0)
+----
+test_large	1	1
 
 # Verify row IDs are still preserved after rewrite
 query I
@@ -176,8 +180,10 @@ SELECT rowid, a, b FROM test_large WHERE a <= 15 ORDER BY a
 10	11	110
 14	15	150
 
-statement ok
-CALL ducklake_rewrite_data_files('ducklake', 'test_large', delete_threshold => 0);
+query III
+SELECT table_name, files_processed, files_created FROM ducklake_rewrite_data_files('ducklake', 'test_large', delete_threshold => 0)
+----
+test_large	1	1
 
 # Row IDs should still be preserved
 query III
@@ -218,8 +224,10 @@ SELECT rowid, a, b FROM test ORDER BY a
 10	11	110
 11	12	120
 
-statement ok
-CALL ducklake_rewrite_data_files('ducklake', 'test', delete_threshold => 0);
+query III
+SELECT table_name, files_processed, files_created FROM ducklake_rewrite_data_files('ducklake', 'test', delete_threshold => 0)
+----
+test	1	1
 
 # Row IDs should still be preserved after second rewrite
 query III

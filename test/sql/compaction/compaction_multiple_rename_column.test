@@ -62,8 +62,10 @@ ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/co
 # Compact the files created at schema version 3
 # This loads the corrupted schema where both 'user_id' entries are visible
 # Without the fix, this fails with "Column with name user_id already exists!"
-statement ok
-CALL ducklake_merge_adjacent_files('ducklake', 'test');
+query III
+SELECT table_name, files_processed, files_created FROM ducklake_merge_adjacent_files('ducklake', 'test')
+----
+test	2	1
 
 # Verify current data is correct
 query II

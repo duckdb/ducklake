@@ -79,8 +79,13 @@ SELECT COUNT(*) FROM GLOB('${DATA_PATH}/ducklake_compaction_alter_files/**/*')
 ----
 8
 
-statement ok
-CALL ducklake_merge_adjacent_files('ducklake');
+query III
+SELECT table_name, files_processed, files_created FROM ducklake_merge_adjacent_files('ducklake') ORDER BY ALL
+----
+test	2	1
+test	2	1
+test	2	1
+test	2	1
 
 # we cannot merge across alter statements - so this results in 4 separate merges
 query I
