@@ -21,6 +21,9 @@ namespace duckdb {
 class ParquetFileScanner {
 public:
 	ParquetFileScanner(ClientContext &context, const DuckLakeFileData &file);
+	ParquetFileScanner(ClientContext &context, const DuckLakeFileData &file,
+	                   table_function_get_multi_file_reader_t multi_file_reader_creator,
+	                   shared_ptr<TableFunctionInfo> function_info = nullptr);
 
 	const vector<LogicalType> &GetTypes() const;
 	const vector<string> &GetNames() const;
