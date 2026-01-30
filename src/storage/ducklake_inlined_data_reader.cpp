@@ -42,6 +42,7 @@ bool DuckLakeInlinedDataReader::TryInitializeScan(ClientContext &context, Global
 		auto &ducklake_catalog = transaction->GetCatalog();
 		// push the projections directly into the read
 		vector<string> columns_to_read;
+		vector<LogicalType> expected_types;
 		for (auto &column_id : column_indexes) {
 			auto index = column_id.GetPrimaryIndex();
 			auto &col = columns[index];
@@ -66,15 +67,17 @@ bool DuckLakeInlinedDataReader::TryInitializeScan(ClientContext &context, Global
 				}
 				if (!virtual_column.empty()) {
 					columns_to_read.push_back(KeywordHelper::WriteOptionallyQuoted(virtual_column));
+					expected_types.push_back(LogicalType::BIGINT);
 					continue;
 				}
 			}
 			string projected_column = KeywordHelper::WriteOptionallyQuoted(columns[index].name);
 			if (!ducklake_catalog.IsDuckCatalog()) {
 				// If it's not a duckdb catalog, we add a cast.
-				projected_column += "::" + columns[index].type.ToString();
+				projected_column = metadata_manager.CastColumnToTarget(projected_column, columns[index].type);
 			}
 			columns_to_read.push_back(projected_column);
+			expected_types.push_back(col.type);
 		}
 		if (deletion_filter) {
 			// we have a deletion filter - the deletions are on row-ids, not on ordinals
@@ -85,31 +88,35 @@ bool DuckLakeInlinedDataReader::TryInitializeScan(ClientContext &context, Global
 				virtual_columns.push_back(InlinedVirtualColumn::NONE);
 			}
 			columns_to_read.push_back(KeywordHelper::WriteOptionallyQuoted("row_id"));
+			expected_types.push_back(LogicalType::BIGINT);
 			virtual_columns.emplace_back(InlinedVirtualColumn::COLUMN_EMPTY);
 		}
 		if (columns_to_read.empty()) {
 			// COUNT(*) - read row_id but don't emit
 			columns_to_read.push_back(KeywordHelper::WriteOptionallyQuoted("row_id"));
+			expected_types.push_back(LogicalType::BIGINT);
 			virtual_columns.emplace_back(InlinedVirtualColumn::COLUMN_EMPTY);
 		}
+		unique_ptr<QueryResult> query_result;
 		switch (read_info.scan_type) {
 		case DuckLakeScanType::SCAN_TABLE:
-			data = metadata_manager.ReadInlinedData(read_info.snapshot, table_name, columns_to_read);
+			query_result = metadata_manager.ReadInlinedData(read_info.snapshot, table_name, columns_to_read);
 			break;
 		case DuckLakeScanType::SCAN_INSERTIONS:
-			data = metadata_manager.ReadInlinedDataInsertions(*read_info.start_snapshot, read_info.snapshot, table_name,
-			                                                  columns_to_read);
+			query_result = metadata_manager.ReadInlinedDataInsertions(*read_info.start_snapshot, read_info.snapshot,
+			                                                          table_name, columns_to_read);
 			break;
 		case DuckLakeScanType::SCAN_DELETIONS:
-			data = metadata_manager.ReadInlinedDataDeletions(*read_info.start_snapshot, read_info.snapshot, table_name,
-			                                                 columns_to_read);
+			query_result = metadata_manager.ReadInlinedDataDeletions(*read_info.start_snapshot, read_info.snapshot,
+			                                                         table_name, columns_to_read);
 			break;
 		case DuckLakeScanType::SCAN_FOR_FLUSH:
-			data = metadata_manager.ReadAllInlinedDataForFlush(read_info.snapshot, table_name, columns_to_read);
+			query_result = metadata_manager.ReadAllInlinedDataForFlush(read_info.snapshot, table_name, columns_to_read);
 			break;
 		default:
 			throw InternalException("Unknown DuckLake scan type");
 		}
+		data = metadata_manager.TransformInlinedData(*query_result, expected_types);
 		if (!virtual_columns.empty()) {
 			auto scan_types = data->data->Types();
 			scan_chunk.Initialize(context, scan_types);
