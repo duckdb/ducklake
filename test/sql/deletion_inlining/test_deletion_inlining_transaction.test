@@ -1,0 +1,170 @@
+# name: test/sql/deletion_inlining/test_deletion_inlining_transaction.test
+# description: test ducklake deletion inlining with transactions
+# group: [deletion_inlining]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+
+test-env DATA_PATH __TEST_DIR__
+
+statement ok
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/test_deletion_inlining_transaction',DATA_INLINING_ROW_LIMIT 10,  METADATA_CATALOG 'ducklake_meta')
+
+statement ok
+use ducklake
+
+statement ok
+CREATE TABLE t AS SELECT range a FROM range(50);
+
+statement ok
+BEGIN
+
+# This creates an inlined file deletion (5 rows deleted, which is within the inlining threshold of 10)
+statement ok
+DELETE FROM T where a < 5
+
+# Verify the count reflects the delete within the transaction
+query I
+SELECT COUNT(*) FROM t;
+----
+45
+
+statement ok
+ROLLBACK
+
+query I
+SELECT COUNT(*) FROM t;
+----
+50
+
+# Verify inserting a new file and deleting from it in a transaction
+
+statement ok
+BEGIN
+
+statement ok
+insert into t values (56),(57),(58),(59),(60),(61),(62),(63),(64),(65),(66),(67),(68),(69),(70);
+
+query I
+SELECT COUNT(*) FROM t;
+----
+65
+
+# This creates inlined file deletions from multiple files (6 rows deleted, which is within the inlining threshold of 10)
+statement ok
+DELETE FROM T where a < 5 OR a = 65
+
+# Verify the count reflects the delete within the transaction
+query I
+SELECT COUNT(*) FROM t;
+----
+59
+
+statement ok
+ROLLBACK
+
+
+query I
+SELECT COUNT(*) FROM t;
+----
+50
+
+# Multiple deletions on the same file
+statement ok
+BEGIN
+
+statement ok
+DELETE FROM T where a < 5
+
+statement ok
+DELETE FROM T where a < 10
+
+statement ok
+DELETE FROM T where a < 15
+
+query I
+SELECT COUNT(*) FROM t;
+----
+35
+
+statement ok
+ROLLBACK
+
+query I
+SELECT COUNT(*) FROM t;
+----
+50
+
+statement ok
+BEGIN
+
+statement ok
+DELETE FROM T where a < 5
+
+statement ok
+DELETE FROM T where a < 10
+
+statement ok
+DELETE FROM T where a < 15
+
+query I
+SELECT COUNT(*) FROM t;
+----
+35
+
+statement ok
+COMMIT
+
+query I
+SELECT COUNT(*) FROM t;
+----
+35
+
+query III
+SELECT file_id, row_id, begin_snapshot FROM ducklake_meta.ducklake_inlined_delete_1 ORDER BY row_id
+----
+0	0	2
+0	1	2
+0	2	2
+0	3	2
+0	4	2
+0	5	2
+0	6	2
+0	7	2
+0	8	2
+0	9	2
+0	10	2
+0	11	2
+0	12	2
+0	13	2
+0	14	2
+
+# Test flush rollback
+statement ok
+BEGIN
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake')
+
+# query IIIII
+# SELECT table_id, begin_snapshot, end_snapshot, delete_count, partial_max FROM ducklake_meta.ducklake_delete_file ORDER BY begin_snapshot
+# ----
+
+query III
+SELECT file_id, row_id, begin_snapshot FROM ducklake_meta.ducklake_inlined_delete_1 ORDER BY row_id
+----
+
+statement ok
+ROLLBACK
+
+# query IIIII
+# SELECT table_id, begin_snapshot, end_snapshot, delete_count, partial_max FROM ducklake_meta.ducklake_delete_file ORDER BY begin_snapshot
+# ----
+#
+# query I
+# SELECT COUNT(*) FROM t
+# ----
+# 50

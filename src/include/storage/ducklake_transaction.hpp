@@ -146,6 +146,9 @@ public:
 	void GetLocalDeleteForFile(TableIndex table_id, const string &path, DuckLakeFileData &delete_file);
 	void TransactionLocalDelete(TableIndex table_id, const string &data_path, DuckLakeDeleteFile delete_file);
 
+	bool HasLocalInlinedFileDeletes(TableIndex table_id);
+	void GetLocalInlinedFileDeletesForFile(TableIndex table_id, idx_t file_id, set<idx_t> &result);
+
 	bool HasDroppedFiles() const;
 	bool FileIsDropped(const string &path) const;
 

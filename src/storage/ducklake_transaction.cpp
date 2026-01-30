@@ -2256,6 +2256,37 @@ void DuckLakeTransaction::GetLocalDeleteForFile(TableIndex table_id, const strin
 	result.encryption_key = delete_file.encryption_key;
 }
 
+bool DuckLakeTransaction::HasLocalInlinedFileDeletes(TableIndex table_id) {
+	auto entry = table_data_changes.find(table_id);
+	if (entry == table_data_changes.end()) {
+		return false;
+	}
+	auto &table_changes = entry->second;
+	if (!table_changes.new_inlined_file_deletes) {
+		return false;
+	}
+	return !table_changes.new_inlined_file_deletes->file_deletes.empty();
+}
+
+void DuckLakeTransaction::GetLocalInlinedFileDeletesForFile(TableIndex table_id, idx_t file_id, set<idx_t> &result) {
+	auto entry = table_data_changes.find(table_id);
+	if (entry == table_data_changes.end()) {
+		return;
+	}
+	auto &table_changes = entry->second;
+	if (!table_changes.new_inlined_file_deletes) {
+		return;
+	}
+	auto file_entry = table_changes.new_inlined_file_deletes->file_deletes.find(file_id);
+	if (file_entry == table_changes.new_inlined_file_deletes->file_deletes.end()) {
+		return;
+	}
+	// Merge the inlined deletes into the result set
+	for (auto &row_id : file_entry->second) {
+		result.insert(row_id);
+	}
+}
+
 void DuckLakeTransaction::TransactionLocalDelete(TableIndex table_id, const string &data_file_path,
                                                  DuckLakeDeleteFile delete_file) {
 	auto entry = table_data_changes.find(table_id);
