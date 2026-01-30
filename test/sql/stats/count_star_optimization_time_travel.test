@@ -1,0 +1,62 @@
+# name: test/sql/stats/count_star_optimization_time_travel.test
+# description: Test metadata-only COUNT(*) optimization with time travel
+# group: [stats]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+
+test-env DATA_PATH __TEST_DIR__
+
+statement ok
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/count_star_time_travel')
+
+# create table and insert data in multiple batches to create multiple files
+statement ok
+CREATE TABLE ducklake.merge_test(i INTEGER);
+
+statement ok
+INSERT INTO ducklake.merge_test FROM range(100);
+
+# record snapshot after first insert (should have 100 rows)
+query I
+SELECT MAX(snapshot_id) FROM ducklake.snapshots();
+----
+2
+
+statement ok
+INSERT INTO ducklake.merge_test FROM range(100, 200);
+
+statement ok
+INSERT INTO ducklake.merge_test FROM range(200, 300);
+
+# current count should be 300
+query I
+SELECT COUNT(*) FROM ducklake.merge_test;
+----
+300
+
+# run merge to create a file with partial_max
+statement ok
+CALL ducklake_merge_adjacent_files('ducklake', 'merge_test');
+
+# current count should still be 300
+query I
+SELECT COUNT(*) FROM ducklake.merge_test;
+----
+300
+
+# time travel to snapshot 2 should return 100, not 300
+# this verifies we fall back to scanning for time travel queries
+query I
+SELECT COUNT(*) FROM ducklake.merge_test AT (VERSION => 2);
+----
+100
+
+# time travel to snapshot 3 should return 200
+query I
+SELECT COUNT(*) FROM ducklake.merge_test AT (VERSION => 3);
+----
+200

@@ -1,0 +1,200 @@
+# name: test/sql/stats/count_star_optimization_basic.test
+# description: Test metadata-only COUNT(*) optimization
+# group: [stats]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+
+test-env DATA_PATH __TEST_DIR__
+
+statement ok
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/count_star_optimization')
+
+# ============================================
+# 1. Test COUNT(*) after inserts
+# ============================================
+
+statement ok
+CREATE TABLE ducklake.test(i INTEGER);
+
+statement ok
+INSERT INTO ducklake.test FROM range(1000);
+
+query I
+SELECT COUNT(*) FROM ducklake.test;
+----
+1000
+
+# insert more data
+statement ok
+INSERT INTO ducklake.test FROM range(1000, 1500);
+
+query I
+SELECT COUNT(*) FROM ducklake.test;
+----
+1500
+
+# ============================================
+# 2. Test COUNT(*) after deletes
+# ============================================
+
+statement ok
+DELETE FROM ducklake.test WHERE i < 100;
+
+query I
+SELECT COUNT(*) FROM ducklake.test;
+----
+1400
+
+statement ok
+DELETE FROM ducklake.test WHERE i >= 1400;
+
+query I
+SELECT COUNT(*) FROM ducklake.test;
+----
+1300
+
+# ============================================
+# 3. Test transaction-local changes
+# ============================================
+
+# create a fresh table to test transaction-local changes
+statement ok
+CREATE TABLE ducklake.txn_test(i INTEGER);
+
+statement ok
+INSERT INTO ducklake.txn_test FROM range(500);
+
+query I
+SELECT COUNT(*) FROM ducklake.txn_test;
+----
+500
+
+# test with uncommitted insert
+statement ok
+BEGIN;
+
+statement ok
+INSERT INTO ducklake.txn_test FROM range(500, 700);
+
+query I
+SELECT COUNT(*) FROM ducklake.txn_test;
+----
+700
+
+statement ok
+ROLLBACK;
+
+query I
+SELECT COUNT(*) FROM ducklake.txn_test;
+----
+500
+
+# test with uncommitted delete
+statement ok
+BEGIN;
+
+statement ok
+DELETE FROM ducklake.txn_test WHERE i >= 400;
+
+query I
+SELECT COUNT(*) FROM ducklake.txn_test;
+----
+400
+
+statement ok
+ROLLBACK;
+
+query I
+SELECT COUNT(*) FROM ducklake.txn_test;
+----
+500
+
+# test with uncommitted truncate
+statement ok
+BEGIN;
+
+statement ok
+TRUNCATE ducklake.txn_test;
+
+query I
+SELECT COUNT(*) FROM ducklake.txn_test;
+----
+0
+
+statement ok
+ROLLBACK;
+
+query I
+SELECT COUNT(*) FROM ducklake.txn_test;
+----
+500
+
+# ============================================
+# 4. Test transaction-local table
+# ============================================
+
+statement ok
+BEGIN;
+
+statement ok
+CREATE TABLE ducklake.new_table(x INTEGER);
+
+statement ok
+INSERT INTO ducklake.new_table FROM range(50);
+
+query I
+SELECT COUNT(*) FROM ducklake.new_table;
+----
+50
+
+statement ok
+COMMIT;
+
+query I
+SELECT COUNT(*) FROM ducklake.new_table;
+----
+50
+
+# ============================================
+# 5. Test truncate
+# ============================================
+
+statement ok
+TRUNCATE ducklake.test;
+
+query I
+SELECT COUNT(*) FROM ducklake.test;
+----
+0
+
+# insert after truncate to verify table still works
+statement ok
+INSERT INTO ducklake.test FROM range(500);
+
+query I
+SELECT COUNT(*) FROM ducklake.test;
+----
+500
+
+# ============================================
+# 6. Test COUNT(*) with WHERE clause (falls back to scanning)
+# ============================================
+
+query I
+SELECT COUNT(*) FROM ducklake.test WHERE i < 250;
+----
+250
+
+query I
+SELECT COUNT(*) FROM ducklake.test WHERE i >= 100 AND i < 300;
+----
+200
+
+query I
+SELECT COUNT(*) FROM ducklake.test WHERE i % 2 = 0;
+----
+250

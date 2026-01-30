@@ -331,6 +331,47 @@ WHERE table_id = {TABLE_ID})";
 	throw InternalException("Table %llu does not exist", table_id.index);
 }
 
+idx_t DuckLakeMetadataManager::GetNetDataFileRowCount(TableIndex table_id, DuckLakeSnapshot snapshot) {
+	// Compute sum(record_count) - sum(delete_count) in a single query
+	// Delete files are only counted if their corresponding data file is still visible
+	// This handles TRUNCATE correctly: when a data file's end_snapshot is set,
+	// its associated delete files are no longer counted
+	string query = R"(
+SELECT
+  COALESCE((SELECT SUM(record_count) FROM {METADATA_CATALOG}.ducklake_data_file
+            WHERE table_id = {TABLE_ID}
+              AND {SNAPSHOT_ID} >= begin_snapshot
+              AND ({SNAPSHOT_ID} < end_snapshot OR end_snapshot IS NULL)), 0)
+  -
+  COALESCE((SELECT SUM(del.delete_count) FROM {METADATA_CATALOG}.ducklake_delete_file del
+            JOIN {METADATA_CATALOG}.ducklake_data_file data ON del.data_file_id = data.data_file_id
+            WHERE del.table_id = {TABLE_ID}
+              AND {SNAPSHOT_ID} >= del.begin_snapshot
+              AND ({SNAPSHOT_ID} < del.end_snapshot OR del.end_snapshot IS NULL)
+              AND {SNAPSHOT_ID} >= data.begin_snapshot
+              AND ({SNAPSHOT_ID} < data.end_snapshot OR data.end_snapshot IS NULL)), 0))";
+	query = StringUtil::Replace(query, "{TABLE_ID}", to_string(table_id.index));
+	auto result = transaction.Query(snapshot, query);
+	for (auto &row : *result) {
+		return row.GetValue<idx_t>(0);
+	}
+	return 0;
+}
+
+idx_t DuckLakeMetadataManager::GetNetInlinedRowCount(const string &inlined_table_name, DuckLakeSnapshot snapshot) {
+	string query = StringUtil::Format(R"(
+SELECT COUNT(*)
+FROM {METADATA_CATALOG}.%s
+WHERE {SNAPSHOT_ID} >= begin_snapshot
+  AND ({SNAPSHOT_ID} < end_snapshot OR end_snapshot IS NULL))",
+	                                  inlined_table_name);
+	auto result = transaction.Query(snapshot, query);
+	for (auto &row : *result) {
+		return row.GetValue<idx_t>(0);
+	}
+	return 0;
+}
+
 DuckLakeCatalogInfo DuckLakeMetadataManager::GetCatalogForSnapshot(DuckLakeSnapshot snapshot) {
 	auto &ducklake_catalog = transaction.GetCatalog();
 	auto &base_data_path = ducklake_catalog.DataPath();
