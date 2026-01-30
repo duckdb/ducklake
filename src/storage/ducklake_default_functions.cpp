@@ -11,6 +11,7 @@ static const DefaultTableMacro ducklake_table_macros[] = {
 	{DEFAULT_SCHEMA, "set_option", {"option", "value", nullptr}, {{"table_name", "NULL"}, {"schema", "NULL"}, {nullptr, nullptr}},  "FROM ducklake_set_option({CATALOG}, option, value, table_name => table_name, schema => schema)"},
 	{DEFAULT_SCHEMA, "set_commit_message", {"author", "commit_message", nullptr}, {{"extra_info", "NULL"},{nullptr, nullptr}},  "FROM ducklake_set_commit_message({CATALOG}, author, commit_message, extra_info => extra_info)"},
 	{DEFAULT_SCHEMA, "options", {nullptr}, {{nullptr, nullptr}}, "FROM ducklake_options({CATALOG})"},
+	{DEFAULT_SCHEMA, "settings", {nullptr}, {{nullptr, nullptr}}, "FROM ducklake_settings({CATALOG})"},
 	{DEFAULT_SCHEMA, "current_snapshot", {nullptr}, {{nullptr, nullptr}},  "FROM ducklake_current_snapshot({CATALOG})"},
 {DEFAULT_SCHEMA, "last_committed_snapshot", {nullptr}, {{nullptr, nullptr}}, "FROM ducklake_last_committed_snapshot({CATALOG})"},
 	{DEFAULT_SCHEMA, "snapshots", {nullptr}, {{nullptr, nullptr}},  "FROM ducklake_snapshots({CATALOG})"},

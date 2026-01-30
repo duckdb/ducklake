@@ -89,12 +89,18 @@
       "paths": [
         "test/sql/transaction/transaction_schema.test"
       ]
+    },{
+      "reason": "Test only for Postgres as catalog",
+      "paths": [
+        "test/sql/metadata/ducklake_settings_postgres.test"
+      ]
     },
     {
       "reason": "DuckDB as a catalog specific",
       "paths": [
         "test/sql/autoloading/autoload_data_path.test",
-        "test/sql/general/metadata_parameters.test"
+        "test/sql/general/metadata_parameters.test",
+        "test/sql/metadata/ducklake_settings.test"
       ]
     }
   ]
