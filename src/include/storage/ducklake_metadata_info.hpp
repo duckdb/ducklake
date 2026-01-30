@@ -430,6 +430,8 @@ struct DuckLakeCompactionFileEntry {
 	vector<DuckLakeCompactionDeleteFileData> delete_files;
 	optional_idx max_partial_file_snapshot;
 	idx_t schema_version;
+	//! Whether this file has inlined deletions (stored in metadata database rather than delete files)
+	bool has_inlined_deletions = false;
 };
 
 struct DuckLakeRewriteFileEntry {

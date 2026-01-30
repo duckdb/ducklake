@@ -173,9 +173,9 @@ void DuckLakeCompactor::GenerateCompactions(DuckLakeTableEntry &table,
 			// this file by itself exceeds the threshold - skip merging
 			continue;
 		}
-		if ((!candidate.delete_files.empty() && type == CompactionType::MERGE_ADJACENT_TABLES) ||
-		    candidate.file.end_snapshot.IsValid()) {
-			// Merge Adjacent Tables doesn't perform the merge if delete files are present
+
+		if (!candidate.delete_files.empty() || candidate.has_inlined_deletions) {
+			// Merge Adjacent Tables doesn't perform the merge if delete files or inlined deletions are present
 			continue;
 		}
 		// construct the compaction group for this file - i.e. the set of candidate files we can compact it with

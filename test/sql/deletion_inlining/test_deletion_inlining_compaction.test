@@ -1,0 +1,40 @@
+# name: test/sql/deletion_inlining/test_deletion_inlining_compaction.test
+# description: test ducklake deletion inlining with compaction methods
+# group: [deletion_inlining]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+
+test-env DATA_PATH __TEST_DIR__
+
+statement ok
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/test_deletion_inlining_txn', DATA_INLINING_ROW_LIMIT 2, METADATA_CATALOG 'ducklake_meta')
+
+statement ok
+use ducklake
+
+statement ok
+CREATE TABLE t AS SELECT range a FROM range(50);
+
+statement ok
+delete from t where a = 25;
+
+statement ok
+insert into t values (51),(52),(53);
+
+statement ok
+CALL ducklake_merge_adjacent_files('ducklake');
+
+# This should not merge
+query I
+select count(*) FROM ducklake_meta.ducklake_data_file
+----
+2
+
+query I
+select count(*) from t
+----
+52

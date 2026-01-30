@@ -276,6 +276,9 @@ private:
 private:
 	//! Read inlined file deletions for regular table scans (no snapshot info per row)
 	map<idx_t, set<idx_t>> ReadInlinedFileDeletions(TableIndex table_id, DuckLakeSnapshot snapshot);
+	//! Check which file IDs have inlined deletions (returns set of file IDs that have deletions)
+	unordered_set<idx_t> GetFileIdsWithInlinedDeletions(TableIndex table_id, DuckLakeSnapshot snapshot,
+	                                                    const vector<idx_t> &file_ids);
 	//! Read inlined file deletions for deletion scans (includes snapshot info per row)
 	map<idx_t, unordered_map<idx_t, idx_t>> ReadInlinedFileDeletionsForRange(TableIndex table_id,
 	                                                                          DuckLakeSnapshot start_snapshot,

@@ -1527,6 +1527,21 @@ ORDER BY data.begin_snapshot, data.row_id_start, data.data_file_id, del.begin_sn
 		delete_file.data = ReadDataFile(table, row, col_idx, IsEncrypted());
 		file_entry.delete_files.push_back(std::move(delete_file));
 	}
+
+	// Check for inlined deletions and mark affected files
+	// Gather file IDs first, then query only for existence
+	vector<idx_t> file_ids;
+	file_ids.reserve(files.size());
+	for (auto &file : files) {
+		file_ids.push_back(file.file.id.index);
+	}
+	auto files_with_deletions = GetFileIdsWithInlinedDeletions(table_id, snapshot, file_ids);
+	for (auto &file : files) {
+		if (files_with_deletions.count(file.file.id.index)) {
+			file.has_inlined_deletions = true;
+		}
+	}
+
 	return files;
 }
 
@@ -2057,6 +2072,37 @@ map<idx_t, set<idx_t>> DuckLakeMetadataManager::ReadInlinedFileDeletions(TableIn
 			auto file_id = row.GetValue<idx_t>(0);
 			auto row_id = row.GetValue<idx_t>(1);
 			result[file_id].insert(row_id);
+		}
+	}
+	return result;
+}
+
+unordered_set<idx_t> DuckLakeMetadataManager::GetFileIdsWithInlinedDeletions(TableIndex table_id,
+                                                                             DuckLakeSnapshot snapshot,
+                                                                             const vector<idx_t> &file_ids) {
+	unordered_set<idx_t> result;
+	if (file_ids.empty()) {
+		return result;
+	}
+	auto inlined_table_name = GetInlinedDeletionTableName(table_id, snapshot);
+	if (inlined_table_name.empty()) {
+		return result;
+	}
+	// Build the IN clause with file IDs
+	string file_id_list;
+	for (auto &file_id : file_ids) {
+		if (!file_id_list.empty()) {
+			file_id_list += ", ";
+		}
+		file_id_list += to_string(file_id);
+	}
+	auto query = StringUtil::Format(
+	    "SELECT DISTINCT file_id FROM {METADATA_CATALOG}.%s WHERE file_id IN (%s) AND begin_snapshot <= {SNAPSHOT_ID}",
+	    inlined_table_name, file_id_list);
+	auto query_result = transaction.Query(snapshot, query);
+	if (!query_result->HasError()) {
+		for (auto &row : *query_result) {
+			result.insert(row.GetValue<idx_t>(0));
 		}
 	}
 	return result;
