@@ -6,11 +6,10 @@ require ducklake
 
 require parquet
 
-
 test-env DATA_PATH __TEST_DIR__
 
 statement ok
-ATTACH 'ducklake:ducklake_settings.db' AS ducklake (DATA_PATH '${DATA_PATH}/files')
+ATTACH 'ducklake:__TEST_DIR__/ducklake_settings.db' AS ducklake (DATA_PATH '${DATA_PATH}/files')
 
 statement ok
 use ducklake

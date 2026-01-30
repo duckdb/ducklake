@@ -23,7 +23,8 @@
         "test/sql/general/paths.test",
         "test/sql/general/default_path.test",
         "test/sql/autoloading/autoload_data_path.test",
-        "test/sql/general/metadata_parameters.test"
+        "test/sql/general/metadata_parameters.test",
+        "test/sql/metadata/ducklake_settings.test"
       ]
     },
     {

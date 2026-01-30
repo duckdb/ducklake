@@ -99,7 +99,8 @@
       "reason": "DuckDB as a catalog specific",
       "paths": [
         "test/sql/autoloading/autoload_data_path.test",
-        "test/sql/general/metadata_parameters.test"
+        "test/sql/general/metadata_parameters.test",
+        "test/sql/metadata/ducklake_settings.test"
       ]
     }
   ]
