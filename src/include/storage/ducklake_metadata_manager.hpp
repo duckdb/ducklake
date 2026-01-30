@@ -281,12 +281,11 @@ private:
 	                                                    const vector<idx_t> &file_ids);
 	//! Read inlined file deletions for deletion scans (includes snapshot info per row)
 	map<idx_t, unordered_map<idx_t, idx_t>> ReadInlinedFileDeletionsForRange(TableIndex table_id,
-	                                                                          DuckLakeSnapshot start_snapshot,
-	                                                                          DuckLakeSnapshot end_snapshot);
+	                                                                         DuckLakeSnapshot start_snapshot,
+	                                                                         DuckLakeSnapshot end_snapshot);
 
 	unordered_map<idx_t, string> insert_inlined_table_name_cache;
 	unordered_map<idx_t, string> delete_inlined_table_name_cache;
-
 
 protected:
 	DuckLakeTransaction &transaction;

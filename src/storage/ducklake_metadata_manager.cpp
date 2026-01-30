@@ -1194,7 +1194,8 @@ vector<DuckLakeFileListEntry> DuckLakeMetadataManager::GetTableInsertions(DuckLa
 	// Files either match the exact snapshot range
 	// Or they have partial_max set, which means they are a file with many snapshot ids, and might contain
 	// the snapshot we need
-	auto query = StringUtil::Format(R"(
+	auto query =
+	    StringUtil::Format(R"(
 SELECT %s
 FROM {METADATA_CATALOG}.ducklake_data_file data, (
 	SELECT NULL path, NULL path_is_relative, NULL file_size_bytes, NULL footer_size, NULL encryption_key
@@ -1204,8 +1205,7 @@ WHERE data.table_id=%d AND data.begin_snapshot <= {SNAPSHOT_ID} AND (
 	(data.partial_max IS NOT NULL AND data.partial_max >= %d)
 );
 		)",
-	                                select_list, table_id.index, start_snapshot.snapshot_id,
-	                                start_snapshot.snapshot_id);
+	                       select_list, table_id.index, start_snapshot.snapshot_id, start_snapshot.snapshot_id);
 
 	auto result = transaction.Query(end_snapshot, query);
 	if (result->HasError()) {
@@ -1248,8 +1248,8 @@ vector<DuckLakeDeleteScanEntry> DuckLakeMetadataManager::GetTableDeletions(DuckL
                                                                            DuckLakeSnapshot end_snapshot) {
 	auto table_id = table.GetTableId();
 	string select_list = "data.data_file_id, " + GetFileSelectList("data") +
-	                     ", data.row_id_start, data.record_count, data.mapping_id, " + GetFileSelectList("current_delete") +
-	                     ", " + GetFileSelectList("previous_delete");
+	                     ", data.row_id_start, data.record_count, data.mapping_id, " +
+	                     GetFileSelectList("current_delete") + ", " + GetFileSelectList("previous_delete");
 	// deletes come in two flavors:
 	// * deletes stored in the ducklake_delete_file table (partial deletes)
 	// * data files being deleted entirely through setting end_snapshot (full file deletes)
@@ -1416,9 +1416,9 @@ vector<DuckLakeCompactionFileEntry> DuckLakeMetadataManager::GetFilesForCompacti
 	                          "data.end_snapshot, data.mapping_id, sr.schema_version , data.partial_max, "
 	                          "data.partition_id, partition_info.keys, " +
 	                          GetFileSelectList("data");
-	string delete_select_list =
-	    "del.data_file_id,del.delete_file_id, del.delete_count, del.begin_snapshot, del.end_snapshot, del.partial_max, " +
-	    GetFileSelectList("del");
+	string delete_select_list = "del.data_file_id,del.delete_file_id, del.delete_count, del.begin_snapshot, "
+	                            "del.end_snapshot, del.partial_max, " +
+	                            GetFileSelectList("del");
 	string select_list = data_select_list + ", " + delete_select_list;
 	string deletion_threshold_clause;
 	if (type == CompactionType::REWRITE_DELETES) {
@@ -2051,21 +2051,21 @@ string DuckLakeMetadataManager::WriteNewInlinedFileDeletes(DuckLakeSnapshot &com
 				values += StringUtil::Format("(%d, %d, {SNAPSHOT_ID}, NULL)", file_id, row_id);
 			}
 		}
-		batch_queries +=
-		    StringUtil::Format("INSERT INTO {METADATA_CATALOG}.%s VALUES %s;\n", table_name, values);
+		batch_queries += StringUtil::Format("INSERT INTO {METADATA_CATALOG}.%s VALUES %s;\n", table_name, values);
 	}
 	return batch_queries;
 }
 
-map<idx_t, set<idx_t>> DuckLakeMetadataManager::ReadInlinedFileDeletions(TableIndex table_id, DuckLakeSnapshot snapshot) {
+map<idx_t, set<idx_t>> DuckLakeMetadataManager::ReadInlinedFileDeletions(TableIndex table_id,
+                                                                         DuckLakeSnapshot snapshot) {
 	map<idx_t, set<idx_t>> result;
 	auto inlined_table_name = GetInlinedDeletionTableName(table_id, snapshot);
 	if (inlined_table_name.empty()) {
 		return result;
 	}
-	auto query = StringUtil::Format(
-	    "SELECT file_id, row_id FROM {METADATA_CATALOG}.%s WHERE begin_snapshot <= {SNAPSHOT_ID} AND (end_snapshot IS NULL OR end_snapshot > {SNAPSHOT_ID})",
-	    inlined_table_name);
+	auto query = StringUtil::Format("SELECT file_id, row_id FROM {METADATA_CATALOG}.%s WHERE begin_snapshot <= "
+	                                "{SNAPSHOT_ID} AND (end_snapshot IS NULL OR end_snapshot > {SNAPSHOT_ID})",
+	                                inlined_table_name);
 	auto query_result = transaction.Query(snapshot, query);
 	if (!query_result->HasError()) {
 		for (auto &row : *query_result) {
@@ -2097,9 +2097,10 @@ unordered_set<idx_t> DuckLakeMetadataManager::GetFileIdsWithInlinedDeletions(Tab
 		}
 		file_id_list += to_string(file_id);
 	}
-	auto query = StringUtil::Format(
-	    "SELECT DISTINCT file_id FROM {METADATA_CATALOG}.%s WHERE file_id IN (%s) AND begin_snapshot <= {SNAPSHOT_ID} AND (end_snapshot IS NULL OR end_snapshot > {SNAPSHOT_ID})",
-	    inlined_table_name, file_id_list);
+	auto query =
+	    StringUtil::Format("SELECT DISTINCT file_id FROM {METADATA_CATALOG}.%s WHERE file_id IN (%s) AND "
+	                       "begin_snapshot <= {SNAPSHOT_ID} AND (end_snapshot IS NULL OR end_snapshot > {SNAPSHOT_ID})",
+	                       inlined_table_name, file_id_list);
 	auto query_result = transaction.Query(snapshot, query);
 	if (!query_result->HasError()) {
 		for (auto &row : *query_result) {
@@ -2117,10 +2118,10 @@ DuckLakeMetadataManager::ReadInlinedFileDeletionsForRange(TableIndex table_id, D
 	if (inlined_table_name.empty()) {
 		return result;
 	}
-	auto query = StringUtil::Format(
-	    "SELECT file_id, row_id, begin_snapshot FROM {METADATA_CATALOG}.%s "
-	    "WHERE begin_snapshot >= %d AND begin_snapshot <= {SNAPSHOT_ID} AND (end_snapshot IS NULL OR end_snapshot > {SNAPSHOT_ID})",
-	    inlined_table_name, start_snapshot.snapshot_id);
+	auto query = StringUtil::Format("SELECT file_id, row_id, begin_snapshot FROM {METADATA_CATALOG}.%s "
+	                                "WHERE begin_snapshot >= %d AND begin_snapshot <= {SNAPSHOT_ID} AND (end_snapshot "
+	                                "IS NULL OR end_snapshot > {SNAPSHOT_ID})",
+	                                inlined_table_name, start_snapshot.snapshot_id);
 	auto query_result = transaction.Query(end_snapshot, query);
 	if (!query_result->HasError()) {
 		for (auto &row : *query_result) {
@@ -2599,8 +2600,7 @@ string DuckLakeMetadataManager::WriteNewDeleteFiles(const vector<DuckLakeDeleteF
 		// Use explicit begin_snapshot if set (for flush operations), otherwise use commit snapshot
 		string begin_snapshot_str =
 		    file.begin_snapshot.IsValid() ? std::to_string(file.begin_snapshot.GetIndex()) : "{SNAPSHOT_ID}";
-		string partial_max =
-		    file.max_snapshot.IsValid() ? to_string(file.max_snapshot.GetIndex()) : "NULL";
+		string partial_max = file.max_snapshot.IsValid() ? to_string(file.max_snapshot.GetIndex()) : "NULL";
 		delete_file_insert_query += StringUtil::Format(
 		    "(%d, %d, %s, NULL,  %d, %s, %s, 'parquet', %d, %d, %d, %s, %s)", delete_file_index, table_id,
 		    begin_snapshot_str, data_file_index, SQLString(path.path), path.path_is_relative ? "true" : "false",

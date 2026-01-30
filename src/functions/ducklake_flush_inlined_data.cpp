@@ -386,10 +386,10 @@ ORDER BY del.file_id, del.row_id
 	}
 
 	// Group deletions by file and track existing delete file info
-	unordered_map<idx_t, string> file_paths;                              // file_id -> data file path
-	unordered_map<idx_t, set<PositionWithSnapshot>> deletes_per_file;     // file_id -> inlined deletions
-	unordered_map<idx_t, idx_t> max_snapshots;                            // file_id -> max_snapshot
-	unordered_map<idx_t, ExistingDeleteFileInfo> existing_delete_files;   // file_id -> existing delete file info
+	unordered_map<idx_t, string> file_paths;                            // file_id -> data file path
+	unordered_map<idx_t, set<PositionWithSnapshot>> deletes_per_file;   // file_id -> inlined deletions
+	unordered_map<idx_t, idx_t> max_snapshots;                          // file_id -> max_snapshot
+	unordered_map<idx_t, ExistingDeleteFileInfo> existing_delete_files; // file_id -> existing delete file info
 
 	while (true) {
 		auto chunk = deletions_result->Fetch();
@@ -499,9 +499,8 @@ ORDER BY del.file_id, del.row_id
 		if (overwrites_existing) {
 			delete_file.overwrites_existing_delete = true;
 			delete_file.overwritten_delete_file.delete_file_id = existing_info.delete_file_id;
-			delete_file.overwritten_delete_file.path = existing_info.path_is_relative
-			                                               ? table.DataPath() + existing_info.path
-			                                               : existing_info.path;
+			delete_file.overwritten_delete_file.path =
+			    existing_info.path_is_relative ? table.DataPath() + existing_info.path : existing_info.path;
 		}
 
 		delete_files.push_back(std::move(delete_file));
@@ -511,17 +510,12 @@ ORDER BY del.file_id, del.row_id
 	transaction.AddDeletes(table_id, std::move(delete_files));
 
 	// Mark the inlined deletions as flushed by setting end_snapshot
-	// Using UPDATE first so the change is visible within the same transaction
-	auto update_result = transaction.Query(snapshot, StringUtil::Format(
-		"UPDATE {METADATA_CATALOG}.%s SET end_snapshot = {SNAPSHOT_ID} WHERE end_snapshot IS NULL", inlined_table_name));
+	auto update_result = transaction.Query(
+	    snapshot,
+	    StringUtil::Format("UPDATE {METADATA_CATALOG}.%s SET end_snapshot = {SNAPSHOT_ID} WHERE end_snapshot IS NULL",
+	                       inlined_table_name));
 	if (update_result->HasError()) {
 		update_result->GetErrorObject().Throw("Failed to mark inlined file deletions as flushed: ");
-	}
-	// Also delete the flushed rows so they don't appear in direct metadata table queries
-	auto delete_result = transaction.Query(snapshot, StringUtil::Format(
-		"DELETE FROM {METADATA_CATALOG}.%s WHERE end_snapshot IS NOT NULL", inlined_table_name));
-	if (delete_result->HasError()) {
-		delete_result->GetErrorObject().Throw("Failed to delete flushed inlined file deletions: ");
 	}
 }
 

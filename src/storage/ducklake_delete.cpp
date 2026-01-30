@@ -338,9 +338,8 @@ bool DuckLakeDelete::TryDropFullyDeletedFile(DuckLakeTransaction &transaction, c
 void DuckLakeDelete::FlushDeleteWithSnapshots(DuckLakeTransaction &transaction, ClientContext &context,
                                               DuckLakeDeleteGlobalState &global_state, const string &filename,
                                               const DuckLakeFileListExtendedEntry &data_file_info,
-                                              DuckLakeDeleteData &existing_delete_data, const set<idx_t> &sorted_deletes,
-                                              DuckLakeDeleteFile &delete_file) const {
-
+                                              DuckLakeDeleteData &existing_delete_data,
+                                              const set<idx_t> &sorted_deletes, DuckLakeDeleteFile &delete_file) const {
 	auto existing_snapshot = data_file_info.delete_file_begin_snapshot;
 
 	// the commit snapshot for new deletes is current_snapshot + 1

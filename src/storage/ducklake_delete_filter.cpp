@@ -183,8 +183,8 @@ void DuckLakeDeleteFilter::Initialize(const DuckLakeInlinedDataDeletes &inlined_
 }
 
 unordered_map<idx_t, idx_t> DuckLakeDeleteFilter::ScanDataFileRowIds(ClientContext &context,
-                                                                      const DuckLakeFileData &data_file,
-                                                                      const unordered_set<idx_t> &file_positions) {
+                                                                     const DuckLakeFileData &data_file,
+                                                                     const unordered_set<idx_t> &file_positions) {
 	unordered_map<idx_t, idx_t> result;
 	if (file_positions.empty()) {
 		return result;
@@ -224,8 +224,9 @@ unordered_map<idx_t, idx_t> DuckLakeDeleteFilter::ScanDataFileRowIds(ClientConte
 	return result;
 }
 
-void DuckLakeDeleteFilter::PopulateSnapshotMapFromPositions(ClientContext &context, const DuckLakeFileData &data_file,
-                                                            const unordered_map<idx_t, idx_t> &position_to_snapshot) const {
+void DuckLakeDeleteFilter::PopulateSnapshotMapFromPositions(
+    ClientContext &context, const DuckLakeFileData &data_file,
+    const unordered_map<idx_t, idx_t> &position_to_snapshot) const {
 	if (position_to_snapshot.empty()) {
 		return;
 	}

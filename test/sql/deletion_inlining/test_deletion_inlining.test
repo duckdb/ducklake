@@ -89,8 +89,9 @@ SELECT file_id, row_id, begin_snapshot FROM ducklake_meta.ducklake_inlined_delet
 statement ok
 CALL ducklake_flush_inlined_data('ducklake')
 
+# After flush, active inlined deletions (end_snapshot IS NULL) should be empty
 query III
-SELECT file_id, row_id, begin_snapshot FROM ducklake_meta.ducklake_inlined_delete_1 ORDER BY row_id
+SELECT file_id, row_id, begin_snapshot FROM ducklake_meta.ducklake_inlined_delete_1 WHERE end_snapshot IS NULL ORDER BY row_id
 ----
 
 query I
@@ -121,8 +122,9 @@ statement ok
 DELETE FROM T where a > 45
 
 # New deletions should be inlined (6 from a<15 + 4 from a>45 = 10 rows)
+# Filter by end_snapshot IS NULL to only see active (non-flushed) deletions
 query III
-SELECT file_id, row_id, begin_snapshot FROM ducklake_meta.ducklake_inlined_delete_1 ORDER BY row_id
+SELECT file_id, row_id, begin_snapshot FROM ducklake_meta.ducklake_inlined_delete_1 WHERE end_snapshot IS NULL ORDER BY row_id
 ----
 0	9	6
 0	10	6
@@ -159,8 +161,9 @@ SELECT COUNT(*) FROM t
 ----
 30
 
+# After flush, active inlined deletions should be empty
 query III
-SELECT file_id, row_id, begin_snapshot FROM ducklake_meta.ducklake_inlined_delete_1 ORDER BY row_id
+SELECT file_id, row_id, begin_snapshot FROM ducklake_meta.ducklake_inlined_delete_1 WHERE end_snapshot IS NULL ORDER BY row_id
 ----
 
 # Now let's do an insert that is fully inlined
@@ -185,8 +188,9 @@ SELECT COUNT(*) FROM T
 ----
 43
 
+# Only check active (non-flushed) deletions
 query III
-SELECT file_id, row_id, begin_snapshot FROM ducklake_meta.ducklake_inlined_delete_1 ORDER BY row_id
+SELECT file_id, row_id, begin_snapshot FROM ducklake_meta.ducklake_inlined_delete_1 WHERE end_snapshot IS NULL ORDER BY row_id
 ----
 4	10	11
 4	11	11

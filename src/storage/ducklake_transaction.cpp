@@ -2173,7 +2173,8 @@ void DuckLakeTransaction::AddNewInlinedFileDeletes(TableIndex table_id, idx_t fi
 	}
 }
 
-vector<DuckLakeInlinedFileDeletionInfo> DuckLakeTransaction::GetNewInlinedFileDeletes(DuckLakeCommitState &commit_state) {
+vector<DuckLakeInlinedFileDeletionInfo>
+DuckLakeTransaction::GetNewInlinedFileDeletes(DuckLakeCommitState &commit_state) {
 	vector<DuckLakeInlinedFileDeletionInfo> result;
 	for (auto &entry : table_data_changes) {
 		auto table_id = commit_state.GetTableId(entry.first);

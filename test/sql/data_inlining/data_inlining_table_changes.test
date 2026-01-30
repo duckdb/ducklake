@@ -1,3 +1,6 @@
+# name: test/sql/data_inlining/data_inlining_table_changes.test
+# group: [data_inlining]
+
 # # name: test/sql/data_inlining/data_inlining_table_changes.test
 # # description: test ducklake_table_changes function with inlined data
 # # group: [data_inlining]
