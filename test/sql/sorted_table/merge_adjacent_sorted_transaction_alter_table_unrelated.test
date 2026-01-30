@@ -106,7 +106,7 @@ SELECT snapshot_id, schema_version, changes FROM ducklake_snapshots('ducklake')
 2	1	{tables_inserted_into=[1]}
 3	1	{tables_inserted_into=[1]}
 4	2	{tables_altered=[1]}
-5	2	{}
+5	2	{merge_adjacent=[1]}
 
 
 # We wrote a new file for the table

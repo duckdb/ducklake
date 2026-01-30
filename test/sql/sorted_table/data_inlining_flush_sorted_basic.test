@@ -105,7 +105,7 @@ query II
 SELECT snapshot_id, changes FROM ducklake.snapshots() WHERE snapshot_id IN (2, 13) ORDER BY snapshot_id
 ----
 2	{inlined_insert=[1]}
-13	{flushed_inlined=[1]}
+13	{inline_flush=[1]}
 
 # we now have one file
 query I

@@ -88,7 +88,7 @@ SELECT snapshot_id, changes FROM snapshots();
 6	{tables_deleted_from=[1]}
 7	{tables_inserted_into=[1]}
 8	{tables_deleted_from=[1]}
-9	{}
+9	{rewrite_delete=[1]}
 
 loop i 0 2
 
