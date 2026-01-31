@@ -37,6 +37,9 @@ bool LocalTableDataChanges::IsEmpty() const {
 	if (!compactions.empty()) {
 		return false;
 	}
+	if (new_inlined_file_deletes) {
+		return false;
+	}
 	return true;
 }
 
@@ -2146,6 +2149,7 @@ void DuckLakeTransaction::DeleteFromLocalInlinedData(TableIndex table_id, set<id
 
 optional_ptr<DuckLakeInlinedDataDeletes> DuckLakeTransaction::GetInlinedDeletes(TableIndex table_id,
                                                                                 const string &table_name) {
+	lock_guard<mutex> guard(table_data_changes_lock);
 	auto entry = table_data_changes.find(table_id);
 	if (entry == table_data_changes.end()) {
 		return nullptr;
@@ -2258,6 +2262,7 @@ void DuckLakeTransaction::GetLocalDeleteForFile(TableIndex table_id, const strin
 }
 
 bool DuckLakeTransaction::HasLocalInlinedFileDeletes(TableIndex table_id) {
+	lock_guard<mutex> guard(table_data_changes_lock);
 	auto entry = table_data_changes.find(table_id);
 	if (entry == table_data_changes.end()) {
 		return false;
@@ -2270,6 +2275,7 @@ bool DuckLakeTransaction::HasLocalInlinedFileDeletes(TableIndex table_id) {
 }
 
 void DuckLakeTransaction::GetLocalInlinedFileDeletesForFile(TableIndex table_id, idx_t file_id, set<idx_t> &result) {
+	lock_guard<mutex> guard(table_data_changes_lock);
 	auto entry = table_data_changes.find(table_id);
 	if (entry == table_data_changes.end()) {
 		return;

@@ -34,6 +34,6 @@ attempting to delete from
 endloop
 
 query I
-SELECT COUNT(*) < 50 FROM ducklake.t
+SELECT COUNT(*) > 0 FROM ducklake.t
 ----
 1

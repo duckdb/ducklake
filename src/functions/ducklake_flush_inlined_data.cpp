@@ -381,7 +381,7 @@ ORDER BY del.file_id, del.row_id
 	)",
 	                                                                       inlined_table_name, table_id.index));
 	if (deletions_result->HasError()) {
-		return;
+		deletions_result->GetErrorObject().Throw("Failed to query inlined file deletions for flush: ");
 	}
 
 	// Group deletions by file and track existing delete file info
