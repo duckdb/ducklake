@@ -29,11 +29,11 @@ concurrentloop i 0 5
 statement maybe
 DELETE FROM ducklake.t WHERE a < ${i}*5
 ----
-attempting to delete from file with index
+attempting to delete from
 
 endloop
 
 query I
 SELECT COUNT(*) < 50 FROM ducklake.t
 ----
-true
+1
