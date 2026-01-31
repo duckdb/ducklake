@@ -23,7 +23,8 @@
         "test/sql/general/paths.test",
         "test/sql/general/default_path.test",
         "test/sql/autoloading/autoload_data_path.test",
-        "test/sql/general/metadata_parameters.test"
+        "test/sql/general/metadata_parameters.test",
+        "test/sql/metadata/ducklake_settings.test"
       ]
     },
     {
@@ -31,6 +32,12 @@
       "paths": [
         "test/sql/migration/v01_partitioned.test",
         "test/sql/migration/v01.test"
+      ]
+    },
+    {
+      "reason": "Test only for SQLite as catalog",
+      "paths": [
+        "test/sql/metadata/ducklake_settings_sqlite.test"
       ]
     },
     {

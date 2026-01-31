@@ -1,0 +1,27 @@
+# name: test/sql/metadata/ducklake_settings_minio.test
+# description: Test ducklake_settings function with minio data path
+# group: [metadata]
+
+require ducklake
+
+require parquet
+
+require httpfs
+
+test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+
+test-env DATA_PATH __TEST_DIR__
+
+require-env S3_TEST_SERVER_AVAILABLE 1
+
+statement ok
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/files')
+
+statement ok
+use ducklake
+
+# Verify the data path is S3
+query I
+SELECT data_path LIKE 's3://%' FROM settings();
+----
+1
