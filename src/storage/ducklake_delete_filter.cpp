@@ -282,7 +282,7 @@ void DuckLakeDeleteFilter::Initialize(ClientContext &context, const DuckLakeDele
 			}
 		}
 		PopulateSnapshotMapFromPositions(context, delete_scan.file, file_pos_to_snapshot);
-	} else if (delete_scan.snapshot_id.IsValid()) {
+	} else if (delete_scan.snapshot_id.IsValid() && delete_scan.inlined_file_deletions.empty()) {
 		// Full file delete - all rows are being scanned
 		memset(rows_to_scan.get(), 1, sizeof(bool) * delete_scan.row_count);
 		unordered_map<idx_t, idx_t> position_to_snapshot;

@@ -1336,6 +1336,57 @@ USING (data_file_id), (
 		files.push_back(std::move(entry));
 	}
 
+	// Collect file IDs that ONLY have inlined file deletions (not seen in main query)
+	string unseen_file_ids;
+	for (auto &inlined_entry : inlined_deletions) {
+		if (seen_file_ids.find(inlined_entry.first) != seen_file_ids.end()) {
+			continue;
+		}
+		if (!unseen_file_ids.empty()) {
+			unseen_file_ids += ", ";
+		}
+		unseen_file_ids += to_string(inlined_entry.first);
+	}
+
+	if (!unseen_file_ids.empty()) {
+		auto file_query = StringUtil::Format(R"(
+SELECT data.data_file_id, %s, data.row_id_start, data.record_count, data.mapping_id
+FROM {METADATA_CATALOG}.ducklake_data_file data
+WHERE data.data_file_id IN (%s)
+		)",
+		                                     GetFileSelectList("data"), unseen_file_ids);
+		auto file_result = transaction.Query(end_snapshot, file_query);
+		if (!file_result->HasError()) {
+			for (auto &row : *file_result) {
+				DuckLakeDeleteScanEntry entry;
+				idx_t col_idx = 0;
+				auto file_id = row.GetValue<idx_t>(col_idx++);
+				entry.file_id = DataFileIndex(file_id);
+				entry.file = ReadDataFile(table, row, col_idx, IsEncrypted());
+				if (!row.IsNull(col_idx)) {
+					entry.row_id_start = row.GetValue<idx_t>(col_idx);
+				}
+				col_idx++;
+				entry.row_count = row.GetValue<idx_t>(col_idx++);
+				if (!row.IsNull(col_idx)) {
+					entry.mapping_id = MappingIndex(row.GetValue<idx_t>(col_idx));
+				}
+				col_idx++;
+				// No delete file for this entry (deletions are inlined)
+				entry.start_snapshot = start_snapshot.snapshot_id;
+				entry.end_snapshot = end_snapshot.snapshot_id;
+				auto it = inlined_deletions.find(file_id);
+				if (it != inlined_deletions.end()) {
+					entry.inlined_file_deletions = std::move(it->second);
+				}
+				if (!entry.inlined_file_deletions.empty()) {
+					entry.snapshot_id = entry.inlined_file_deletions.begin()->second;
+				}
+				files.push_back(std::move(entry));
+			}
+		}
+	}
+
 	return files;
 }
 
