@@ -81,8 +81,8 @@ public:
 private:
 	shared_ptr<BaseFileReader> TryCreateInlinedDataReader(const OpenFileInfo &file);
 	//! For deletion scans we need to get the snapshot_id values using per-row snapshot information
-	void GatherDeletionScanSnapshots(BaseFileReader &reader, const MultiFileReaderData &reader_data,
-	                                 DataChunk &output_chunk) const;
+	void GatherDeletionScanSnapshots(BaseFileReader &reader, const MultiFileReaderData &reader_data, DataChunk &chunk,
+	                                 optional_idx rowid_col_override = optional_idx()) const;
 
 private:
 	unique_ptr<MultiFileColumnDefinition> row_id_column;
@@ -93,6 +93,8 @@ private:
 	optional_idx deletion_scan_snapshot_col;
 	//! For deletion scans: track which output column is rowid (if any)
 	optional_idx deletion_scan_rowid_col;
+	//! Whether row_id was internally projected (not in user's query)
+	bool internally_projected_rowid = false;
 };
 
 } // namespace duckdb
