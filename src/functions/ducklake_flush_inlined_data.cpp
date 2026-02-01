@@ -25,12 +25,15 @@ namespace duckdb {
 
 static void AttachDeleteFilesToWrittenFiles(vector<DuckLakeDeleteFile> &delete_files,
                                             vector<DuckLakeDataFile> &written_files) {
+	unordered_map<string, reference<DuckLakeDataFile>> file_map;
+	file_map.reserve(written_files.size());
+	for (auto &written_file : written_files) {
+		file_map.emplace(written_file.file_name, written_file);
+	}
 	for (auto &delete_file : delete_files) {
-		for (auto &written_file : written_files) {
-			if (written_file.file_name == delete_file.data_file_path) {
-				written_file.delete_files.push_back(std::move(delete_file));
-				break;
-			}
+		auto it = file_map.find(delete_file.data_file_path);
+		if (it != file_map.end()) {
+			it->second.get().delete_files.push_back(std::move(delete_file));
 		}
 	}
 }
@@ -79,22 +82,22 @@ static DeletesPerFile GroupDeletesByFile(QueryResult &deleted_rows_result, vecto
 	for (auto &row : deleted_rows_result) {
 		auto end_snap = row.GetValue<int64_t>(0);
 		auto output_position = row.GetValue<int64_t>(1);
-
 		if (written_files.size() == 1) {
 			// Single file - use position directly
 			PositionWithSnapshot pos_with_snap {output_position, end_snap};
 			deletes_per_file[written_files[0].file_name].insert(pos_with_snap);
 		} else {
-			// Multiple files - find which file contains this position
-			for (idx_t file_idx = 0; file_idx < written_files.size(); file_idx++) {
-				const int64_t file_start = static_cast<int64_t>(file_start_row_ids[file_idx]);
-				const int64_t file_end = static_cast<int64_t>(file_start + written_files[file_idx].row_count);
-				if (output_position >= file_start && output_position < file_end) {
-					int64_t pos_in_file = output_position - file_start;
-					PositionWithSnapshot pos_with_snap {pos_in_file, end_snap};
-					deletes_per_file[written_files[file_idx].file_name].insert(pos_with_snap);
-					break;
-				}
+			// Multiple files, binary search them to see which has the position, since the position
+			// should be sorted
+			auto pos_as_idx = static_cast<idx_t>(output_position);
+			auto it = std::upper_bound(file_start_row_ids.begin(), file_start_row_ids.end(), pos_as_idx);
+			if (it != file_start_row_ids.begin()) {
+				--it;
+				const auto file_idx = static_cast<idx_t>(it - file_start_row_ids.begin());
+				const auto file_start = static_cast<int64_t>(file_start_row_ids[file_idx]);
+				int64_t pos_in_file = output_position - file_start;
+				PositionWithSnapshot pos_with_snap {pos_in_file, end_snap};
+				deletes_per_file[written_files[file_idx].file_name].insert(pos_with_snap);
 			}
 		}
 	}
@@ -124,6 +127,7 @@ SinkFinalizeType DuckLakeFlushData::Finalize(Pipeline &pipeline, Event &event, C
 
 		// lets figure out where each file ends, so we know where to place ze deletes
 		vector<idx_t> file_start_row_ids;
+		file_start_row_ids.reserve(global_state.written_files.size());
 		idx_t current_pos = 0;
 		for (auto &written_file : global_state.written_files) {
 			file_start_row_ids.push_back(current_pos);
@@ -455,13 +459,18 @@ ORDER BY del.file_id, del.row_id
 
 		// Check if there's an existing delete file that we need to merge with
 		auto existing_entry = existing_delete_files.find(file_id);
-		set<PositionWithSnapshot> merged_deletions = inlined_deletions;
+		bool needs_merge = existing_entry != existing_delete_files.end() && existing_entry->second.has_info;
 		bool overwrites_existing = false;
 		ExistingDeleteFileInfo existing_info;
+		set<PositionWithSnapshot> merged_deletions;
 
-		if (existing_entry != existing_delete_files.end() && existing_entry->second.has_info) {
-			existing_info = existing_entry->second;
+		if (needs_merge) {
+			const auto &existing_info_ref = existing_entry->second;
+			existing_info = existing_info_ref;
 			overwrites_existing = true;
+
+			// Only copy when we need to merge
+			merged_deletions = inlined_deletions;
 
 			// Read existing deletions from the delete file
 			DuckLakeFileData existing_delete_file_data;
@@ -483,13 +492,16 @@ ORDER BY del.file_id, del.row_id
 			}
 		}
 
+		// Use reference to either merged or original deletions
+		const auto &deletions_to_write = merged_deletions.empty() ? inlined_deletions : merged_deletions;
+
 		WriteDeleteFileWithSnapshotsInput file_input {context,
 		                                              transaction,
 		                                              fs,
 		                                              table.DataPath(),
 		                                              encryption_key,
 		                                              file_path,
-		                                              merged_deletions,
+		                                              deletions_to_write,
 		                                              DeleteFileSource::FLUSH};
 		auto delete_file = DuckLakeDeleteFileWriter::WriteDeleteFileWithSnapshots(context, file_input);
 		delete_file.data_file_id = DataFileIndex(file_id);
@@ -509,8 +521,8 @@ ORDER BY del.file_id, del.row_id
 	transaction.AddDeletes(table_id, std::move(delete_files));
 
 	// Delete the flushed inlined deletions
-	auto delete_result = transaction.Query(
-	    snapshot, StringUtil::Format("DELETE FROM {METADATA_CATALOG}.%s", inlined_table_name));
+	auto delete_result =
+	    transaction.Query(snapshot, StringUtil::Format("DELETE FROM {METADATA_CATALOG}.%s", inlined_table_name));
 	if (delete_result->HasError()) {
 		delete_result->GetErrorObject().Throw("Failed to delete inlined file deletions after flush: ");
 	}

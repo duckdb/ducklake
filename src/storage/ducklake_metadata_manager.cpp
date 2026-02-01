@@ -2097,10 +2097,9 @@ unordered_set<idx_t> DuckLakeMetadataManager::GetFileIdsWithInlinedDeletions(Tab
 		}
 		file_id_list += to_string(file_id);
 	}
-	auto query =
-	    StringUtil::Format("SELECT DISTINCT file_id FROM {METADATA_CATALOG}.%s WHERE file_id IN (%s) AND "
-	                       "begin_snapshot <= {SNAPSHOT_ID}",
-	                       inlined_table_name, file_id_list);
+	auto query = StringUtil::Format("SELECT DISTINCT file_id FROM {METADATA_CATALOG}.%s WHERE file_id IN (%s) AND "
+	                                "begin_snapshot <= {SNAPSHOT_ID}",
+	                                inlined_table_name, file_id_list);
 	auto query_result = transaction.Query(snapshot, query);
 	if (!query_result->HasError()) {
 		for (auto &row : *query_result) {
