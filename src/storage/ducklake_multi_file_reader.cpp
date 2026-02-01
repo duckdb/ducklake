@@ -28,6 +28,31 @@
 
 namespace duckdb {
 
+
+//! Try to find a column in local_columns that matches the given field_id
+static bool TryFindColumnByFieldId(const vector<MultiFileColumnDefinition> &local_columns, int32_t field_id,
+                                   MultiFileColumnDefinition *fallback_column,
+                                   optional_ptr<MultiFileColumnDefinition> &global_column_reference) {
+	for (auto &col : local_columns) {
+		if (col.identifier.IsNull()) {
+			continue;
+		}
+		if (col.identifier.GetValue<int32_t>() == field_id) {
+			global_column_reference = fallback_column;
+			return true;
+		}
+	}
+	return false;
+}
+
+//! Add a snapshot filter to the reader's filter set
+static void AddSnapshotFilter(BaseFileReader &reader, const ColumnIndex &col_idx, const LogicalType &col_type,
+                              idx_t snapshot_value, ExpressionType comparison_type) {
+	auto constant = Value::UBIGINT(snapshot_value).DefaultCastAs(col_type);
+	auto filter = make_uniq<ConstantFilter>(comparison_type, std::move(constant));
+	reader.filters->PushFilter(col_idx, std::move(filter));
+}
+
 // recursively normalize LIST child names from legacy formats blame legacy Avro/Parquet formats
 static void NormalizeListChildNames(vector<MultiFileColumnDefinition> &columns, bool parent_is_list = false) {
 	for (auto &col : columns) {
@@ -216,22 +241,16 @@ ReaderInitializeType DuckLakeMultiFileReader::InitializeReader(MultiFileReaderDa
 		}
 		ColumnIndex snapshot_col_idx(snapshot_local_id.GetIndex());
 
-		// Add _ducklake_internal_snapshot_id <= snapshot_filter
+		// Add _ducklake_internal_snapshot_id <= snapshot_filter_max
 		if (file_entry.snapshot_filter_max.IsValid()) {
-			auto snapshot_filter_constant =
-			    Value::UBIGINT(file_entry.snapshot_filter_max.GetIndex()).DefaultCastAs(snapshot_col_type);
-			auto snapshot_filter = make_uniq<ConstantFilter>(ExpressionType::COMPARE_LESSTHANOREQUALTO,
-			                                                 std::move(snapshot_filter_constant));
-			reader.filters->PushFilter(snapshot_col_idx, std::move(snapshot_filter));
+			AddSnapshotFilter(reader, snapshot_col_idx, snapshot_col_type, file_entry.snapshot_filter_max.GetIndex(),
+			                  ExpressionType::COMPARE_LESSTHANOREQUALTO);
 		}
 
 		// Add _ducklake_internal_snapshot_id >= snapshot_filter_min
 		if (file_entry.snapshot_filter_min.IsValid()) {
-			auto snapshot_filter_min_constant =
-			    Value::UBIGINT(file_entry.snapshot_filter_min.GetIndex()).DefaultCastAs(snapshot_col_type);
-			auto snapshot_filter_min = make_uniq<ConstantFilter>(ExpressionType::COMPARE_GREATERTHANOREQUALTO,
-			                                                     std::move(snapshot_filter_min_constant));
-			reader.filters->PushFilter(snapshot_col_idx, std::move(snapshot_filter_min));
+			AddSnapshotFilter(reader, snapshot_col_idx, snapshot_col_type, file_entry.snapshot_filter_min.GetIndex(),
+			                  ExpressionType::COMPARE_GREATERTHANOREQUALTO);
 		}
 	}
 	return result;
@@ -431,15 +450,9 @@ unique_ptr<Expression> DuckLakeMultiFileReader::GetVirtualColumnExpression(
 		// row id column
 		// this is computed as row_id_start + file_row_number OR read from the file
 		// first check if the row id is explicitly defined in this file
-		for (auto &col : local_columns) {
-			if (col.identifier.IsNull()) {
-				continue;
-			}
-			if (col.identifier.GetValue<int32_t>() == MultiFileReader::ROW_ID_FIELD_ID) {
-				// it is! return a reference to the global row id column so we can read it from the file directly
-				global_column_reference = row_id_column.get();
-				return nullptr;
-			}
+		if (TryFindColumnByFieldId(local_columns, MultiFileReader::ROW_ID_FIELD_ID, row_id_column.get(),
+		                           global_column_reference)) {
+			return nullptr;
 		}
 		// get the row id start for this file
 		if (!reader_data.file_to_be_opened.extended_info) {
@@ -474,15 +487,9 @@ unique_ptr<Expression> DuckLakeMultiFileReader::GetVirtualColumnExpression(
 	}
 	if (column_id == COLUMN_IDENTIFIER_SNAPSHOT_ID) {
 		deletion_scan_snapshot_col = local_idx.GetIndex();
-		for (auto &col : local_columns) {
-			if (col.identifier.IsNull()) {
-				continue;
-			}
-			if (col.identifier.GetValue<int32_t>() == MultiFileReader::LAST_UPDATED_SEQUENCE_NUMBER_ID) {
-				// it is! return a reference to the global snapshot id column so we can read it from the file directly
-				global_column_reference = snapshot_id_column.get();
-				return nullptr;
-			}
+		if (TryFindColumnByFieldId(local_columns, MultiFileReader::LAST_UPDATED_SEQUENCE_NUMBER_ID,
+		                           snapshot_id_column.get(), global_column_reference)) {
+			return nullptr;
 		}
 		// get the row id start for this file
 		if (!reader_data.file_to_be_opened.extended_info) {
