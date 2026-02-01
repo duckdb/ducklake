@@ -1,95 +1,92 @@
 # name: test/sql/data_inlining/data_inlining_table_changes.test
+# description: test ducklake_table_changes function with inlined data
 # group: [data_inlining]
 
-# # name: test/sql/data_inlining/data_inlining_table_changes.test
-# # description: test ducklake_table_changes function with inlined data
-# # group: [data_inlining]
-#
-# require ducklake
-#
-# require parquet
-#
-# test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
-#
-# test-env DATA_PATH __TEST_DIR__
-#
-#
-# statement ok
-# ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/ducklake_inlining_table_changes_files', DATA_INLINING_ROW_LIMIT 10)
-#
-# # snapshot 1
-# statement ok
-# CREATE TABLE ducklake.test(i INTEGER);
-#
-# # snapshot 2
-# statement ok
-# INSERT INTO ducklake.test FROM range(3);
-#
-# # snapshot 3
-# statement ok
-# UPDATE ducklake.test SET i=i+100
-#
-# # snapshot 4
-# statement ok
-# UPDATE ducklake.test SET i=i+100
-#
-# # snapshot 5
-# statement ok
-# DELETE FROM ducklake.test
-#
-# query IIII
-# FROM ducklake.table_changes('test', 0, 2) ORDER BY ALL
-# ----
-# 2	0	insert	0
-# 2	1	insert	1
-# 2	2	insert	2
-#
-# query IIII
-# FROM ducklake.table_changes('test', 3, 3) ORDER BY ALL
-# ----
-# 3	0	update_postimage	100
-# 3	0	update_preimage	0
-# 3	1	update_postimage	101
-# 3	1	update_preimage	1
-# 3	2	update_postimage	102
-# 3	2	update_preimage	2
-#
-# query IIII
-# FROM ducklake.table_changes('test', 4, 4) ORDER BY ALL
-# ----
-# 4	0	update_postimage	200
-# 4	0	update_preimage	100
-# 4	1	update_postimage	201
-# 4	1	update_preimage	101
-# 4	2	update_postimage	202
-# 4	2	update_preimage	102
-#
-# query IIII
-# FROM ducklake.table_changes('test', 5, 5) ORDER BY ALL
-# ----
-# 5	0	delete	200
-# 5	1	delete	201
-# 5	2	delete	202
-#
-# # all changes
-# query IIII
-# FROM ducklake.table_changes('test', 0, 5) ORDER BY ALL
-# ----
-# 2	0	insert	0
-# 2	1	insert	1
-# 2	2	insert	2
-# 3	0	update_postimage	100
-# 3	0	update_preimage	0
-# 3	1	update_postimage	101
-# 3	1	update_preimage	1
-# 3	2	update_postimage	102
-# 3	2	update_preimage	2
-# 4	0	update_postimage	200
-# 4	0	update_preimage	100
-# 4	1	update_postimage	201
-# 4	1	update_preimage	101
-# 4	2	update_postimage	202
-# 4	2	update_preimage	102
-# 5	0	delete	200
-# 5	1	delete	201
-# 5	2	delete	202
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+
+test-env DATA_PATH __TEST_DIR__
+
+
+statement ok
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/ducklake_inlining_table_changes_files', DATA_INLINING_ROW_LIMIT 10)
+
+# snapshot 1
+statement ok
+CREATE TABLE ducklake.test(i INTEGER);
+
+# snapshot 2
+statement ok
+INSERT INTO ducklake.test FROM range(3);
+
+# snapshot 3
+statement ok
+UPDATE ducklake.test SET i=i+100
+
+# snapshot 4
+statement ok
+UPDATE ducklake.test SET i=i+100
+
+# snapshot 5
+statement ok
+DELETE FROM ducklake.test
+
+query IIII
+FROM ducklake.table_changes('test', 0, 2) ORDER BY ALL
+----
+2	0	insert	0
+2	1	insert	1
+2	2	insert	2
+
+query IIII
+FROM ducklake.table_changes('test', 3, 3) ORDER BY ALL
+----
+3	0	update_postimage	100
+3	0	update_preimage	0
+3	1	update_postimage	101
+3	1	update_preimage	1
+3	2	update_postimage	102
+3	2	update_preimage	2
+
+query IIII
+FROM ducklake.table_changes('test', 4, 4) ORDER BY ALL
+----
+4	0	update_postimage	200
+4	0	update_preimage	100
+4	1	update_postimage	201
+4	1	update_preimage	101
+4	2	update_postimage	202
+4	2	update_preimage	102
+
+query IIII
+FROM ducklake.table_changes('test', 5, 5) ORDER BY ALL
+----
+5	0	delete	200
+5	1	delete	201
+5	2	delete	202
+
+# all changes
+query IIII
+FROM ducklake.table_changes('test', 0, 5) ORDER BY ALL
+----
+2	0	insert	0
+2	1	insert	1
+2	2	insert	2
+3	0	update_postimage	100
+3	0	update_preimage	0
+3	1	update_postimage	101
+3	1	update_preimage	1
+3	2	update_postimage	102
+3	2	update_preimage	2
+4	0	update_postimage	200
+4	0	update_preimage	100
+4	1	update_postimage	201
+4	1	update_preimage	101
+4	2	update_postimage	202
+4	2	update_preimage	102
+5	0	delete	200
+5	1	delete	201
+5	2	delete	202
