@@ -140,7 +140,7 @@ vector<Value> DuckLakeSnapshotsFunction::GetSnapshotValues(const DuckLakeSnapsho
 	PushIDChangeList(change_keys, change_values, other_changes.altered_views, "views_altered");
 	PushIDChangeList(change_keys, change_values, other_changes.tables_inserted_inlined, "inlined_insert");
 	PushIDChangeList(change_keys, change_values, other_changes.tables_deleted_inlined, "inlined_delete");
-	PushIDChangeList(change_keys, change_values, other_changes.tables_flushed_inlined, "inline_flush");
+	PushIDChangeList(change_keys, change_values, other_changes.tables_flushed_inlined, "flushed_inlined");
 	PushIDChangeList(change_keys, change_values, other_changes.tables_merge_adjacent, "merge_adjacent");
 	PushIDChangeList(change_keys, change_values, other_changes.tables_rewrite_delete, "rewrite_delete");
 
