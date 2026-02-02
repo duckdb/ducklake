@@ -69,7 +69,7 @@ select count(*) FROM ducklake_meta.ducklake_delete_file
 1
 
 query II
-SELECT begin_snapshot, end_snapshot FROM ducklake_meta.ducklake_data_file
+SELECT begin_snapshot, end_snapshot FROM ducklake_meta.ducklake_data_file order by all
 ----
 1	7
 3	NULL

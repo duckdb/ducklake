@@ -210,7 +210,7 @@ statement ok
 CALL ducklake_flush_inlined_data('ducklake')
 
 query IIIII
-SELECT table_id, begin_snapshot, end_snapshot, delete_count, partial_max FROM ducklake_meta.ducklake_delete_file ORDER BY begin_snapshot
+SELECT table_id, begin_snapshot, end_snapshot, delete_count, partial_max FROM ducklake_meta.ducklake_delete_file ORDER BY ALL
 ----
 1	2	NULL	21	11
 1	11	NULL	1	NULL
