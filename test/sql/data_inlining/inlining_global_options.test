@@ -97,7 +97,6 @@ CALL ducklake.set_option('auto_compact', true, schema=> 's1', table_name =>'exam
 query III
 SELECT schema_name, table_name, rows_flushed FROM ducklake_flush_inlined_data('ducklake') ORDER BY ALL
 ----
-main	example_2	0
 s1	example_2	2
 
 query II
@@ -112,9 +111,7 @@ CALL ducklake.set_option('auto_compact', true, schema=> 's1')
 query III
 SELECT schema_name, table_name, rows_flushed FROM ducklake_flush_inlined_data('ducklake') ORDER BY ALL
 ----
-main	example_2	0
 s1	example	2
-s1	example_2	0
 s1	example_3	2
 
 query II
@@ -132,10 +129,6 @@ query III
 SELECT schema_name, table_name, rows_flushed FROM ducklake_flush_inlined_data('ducklake') ORDER BY ALL
 ----
 main	example	2
-main	example_2	0
-s1	example	0
-s1	example_2	0
-s1	example_3	0
 
 query II
 SELECT data_file_id, table_id FROM __ducklake_metadata_ducklake.ducklake_data_file

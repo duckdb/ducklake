@@ -44,9 +44,7 @@ ATTACH 'ducklake:__TEST_DIR__/inlining_issue_on_empty_inline.db' AS inlining (DA
 statement ok
 use inlining;
 
+# All tables have 0 rows to flush, so no rows are returned
 query III
 SELECT schema_name, table_name, rows_flushed FROM ducklake_flush_inlined_data('inlining') ORDER BY ALL
 ----
-main	tbl	0
-main	test	0
-main	test	0

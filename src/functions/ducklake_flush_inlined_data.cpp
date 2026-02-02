@@ -17,6 +17,13 @@
 #include "storage/ducklake_flush_data.hpp"
 #include "duckdb/planner/operator/logical_projection.hpp"
 #include "storage/ducklake_delete.hpp"
+#include "duckdb/planner/operator/logical_aggregate.hpp"
+#include "duckdb/planner/operator/logical_filter.hpp"
+#include "duckdb/planner/expression/bound_aggregate_expression.hpp"
+#include "duckdb/planner/expression/bound_comparison_expression.hpp"
+#include "duckdb/planner/expression/bound_constant_expression.hpp"
+#include "duckdb/function/function_binder.hpp"
+#include "duckdb/catalog/catalog_entry/aggregate_function_catalog_entry.hpp"
 
 #include "functions/ducklake_compaction_functions.hpp"
 
@@ -455,17 +462,91 @@ static unique_ptr<LogicalOperator> FlushInlinedDataBind(ClientContext &context, 
 		return_types.emplace_back(LogicalType::BIGINT);
 		return make_uniq<LogicalEmptyResult>(std::move(return_types), std::move(bindings));
 	}
+
+	// Get the child operator (either single flush or union of flushes)
+	unique_ptr<LogicalOperator> child;
 	if (flushes.size() == 1) {
-		flushes[0]->Cast<DuckLakeLogicalFlush>().table_index = bind_index;
-		return std::move(flushes[0]);
+		child = std::move(flushes[0]);
+	} else {
+		child = input.binder->UnionOperators(std::move(flushes));
+		// Manually set column_count - this is normally derived during optimization
+		// but we need it at bind time for column binding resolution
+		auto &set_op = child->Cast<LogicalSetOperation>();
+		set_op.column_count = 3;
 	}
-	auto union_op = input.binder->UnionOperators(std::move(flushes));
-	auto &set_op = union_op->Cast<LogicalSetOperation>();
-	set_op.table_index = bind_index;
-	// Manually set column_count - this is normally derived during optimization
-	// but we need it at bind time for column binding resolution
-	set_op.column_count = 3;
-	return union_op;
+	// We want to construct the query tree equivalent to the SQL query below.
+	// That way we can return the number of rows that were flushed for each table
+	//
+	//   SELECT                                                                                            
+	//     schema_name,                          
+	//     table_name,
+	//     SUM(rows_flushed) AS rows_flushed
+	//   FROM (flush_1 UNION ALL flush_2 UNION ALL flush_3 UNION ALL ...) t
+	//   GROUP BY schema_name, table_name
+	//   HAVING rows_flushed > 0;
+
+	// Resolve columns are: [0] schema_name (VARCHAR), [1] table_name (VARCHAR), [2] rows_flushed (BIGINT)
+	child->ResolveOperatorTypes();
+	auto child_bindings = child->GetColumnBindings();
+
+	// Create GROUP BY expressions (schema_name, table_name)
+	vector<unique_ptr<Expression>> groups;
+	groups.push_back(make_uniq<BoundColumnRefExpression>(child->types[0], child_bindings[0]));
+	groups.push_back(make_uniq<BoundColumnRefExpression>(child->types[1], child_bindings[1]));
+
+	// Create SUM(rows_flushed) aggregate
+	auto &system_catalog = Catalog::GetSystemCatalog(context);
+	auto &sum_entry = system_catalog.GetEntry<AggregateFunctionCatalogEntry>(context, DEFAULT_SCHEMA, "sum");
+
+	vector<unique_ptr<Expression>> sum_args;
+	sum_args.push_back(make_uniq<BoundColumnRefExpression>(child->types[2], child_bindings[2]));
+
+	// Pick the right sum overload
+	auto sum_func = sum_entry.functions.GetFunctionByArguments(context, {sum_args[0]->return_type});
+	FunctionBinder function_binder(context);
+	auto sum_aggregate = function_binder.BindAggregateFunction(
+	    sum_func,                    // The SUM(BIGINT) -> HUGEINT function
+	    std::move(sum_args),         // Arguments: [rows_flushed column ref]
+	    nullptr,                     // No FILTER clause (e.g., SUM(x) FILTER (WHERE ...))
+	    AggregateType::NON_DISTINCT  // Not SUM(DISTINCT ...)
+	);
+
+	// Create LogicalAggregate with GROUP BY schema_name, table_name and SUM(rows_flushed)
+	idx_t group_index = input.binder->GenerateTableIndex();
+	idx_t aggregate_index = input.binder->GenerateTableIndex();
+
+	vector<unique_ptr<Expression>> aggregates;
+	aggregates.push_back(std::move(sum_aggregate));
+
+	auto aggregate = make_uniq<LogicalAggregate>(group_index, aggregate_index, std::move(aggregates));
+	aggregate->groups = std::move(groups);
+	aggregate->children.push_back(std::move(child));
+	// Resolved columns are: [0] schema_name (VARCHAR), [1] table_name (VARCHAR), [2] SUM(rows_flushed) (HUGEINT)
+	aggregate->ResolveOperatorTypes();
+
+	// Create HAVING filter (SUM(rows_flushed) > 0)
+	auto agg_bindings = aggregate->GetColumnBindings();
+	auto sum_col_ref = make_uniq<BoundColumnRefExpression>(aggregate->types[2], agg_bindings[2]);
+	// Note: SUM(BIGINT) returns HUGEINT. We must use the its output type for the 0 constant
+	auto zero_const = make_uniq<BoundConstantExpression>(Value::Numeric(aggregate->types[2], 0));
+	auto filter_expr = make_uniq<BoundComparisonExpression>(ExpressionType::COMPARE_GREATERTHAN,
+	                                                        std::move(sum_col_ref), std::move(zero_const));
+
+	auto filter = make_uniq<LogicalFilter>(std::move(filter_expr));
+	filter->children.push_back(std::move(aggregate));
+	// Resolved columns are passed through from child: [0] schema_name, [1] table_name, [2] SUM(rows_flushed)
+	filter->ResolveOperatorTypes();
+
+	// Need a projection to set the correct table index for column binding resolution
+	vector<unique_ptr<Expression>> proj_exprs;
+	auto filter_bindings = filter->GetColumnBindings();
+	for (idx_t i = 0; i < filter->types.size(); i++) {
+		proj_exprs.push_back(make_uniq<BoundColumnRefExpression>(filter->types[i], filter_bindings[i]));
+	}
+	auto projection = make_uniq<LogicalProjection>(bind_index, std::move(proj_exprs));
+	projection->children.push_back(std::move(filter));
+
+	return projection;
 }
 
 DuckLakeFlushInlinedDataFunction::DuckLakeFlushInlinedDataFunction()
