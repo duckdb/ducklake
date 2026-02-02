@@ -774,9 +774,9 @@ TableFunctionSet DuckLakeMergeAdjacentFilesFunction::GetFunctions() {
 		function.bind_operator = MergeAdjacentFilesBind;
 		function.named_parameters["min_file_size"] = LogicalType::UBIGINT;
 		function.named_parameters["max_file_size"] = LogicalType::UBIGINT;
+		function.named_parameters["max_compacted_files"] = LogicalType::UBIGINT;
 		if (type.size() == 2) {
 			function.named_parameters["schema"] = LogicalType::VARCHAR;
-			function.named_parameters["max_compacted_files"] = LogicalType::UBIGINT;
 		}
 		set.AddFunction(function);
 	}

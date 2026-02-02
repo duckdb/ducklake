@@ -149,3 +149,55 @@ query I
 select count(*) FROM example;
 ----
 20
+
+# Test max_compacted_files with database-wide compaction (no table specified)
+statement ok
+DROP TABLE example;
+
+statement ok
+CALL ducklake_expire_snapshots('ducklake', older_than => now());
+
+statement ok
+CALL ducklake.set_option('target_file_size', '1KB');
+
+statement ok
+CREATE TABLE table1 (key integer);
+
+statement ok
+CREATE TABLE table2 (key integer);
+
+# Generate 10 files per table
+loop i 0 10
+
+statement ok
+INSERT INTO table1 VALUES (${i});
+
+statement ok
+INSERT INTO table2 VALUES (${i});
+
+endloop
+
+query I
+SELECT count(*) FROM __ducklake_metadata_ducklake.ducklake_data_file
+----
+20
+
+# Compact entire database with max_compacted_files=1 per table
+# Each table should get at most 1 compaction operation
+query III
+SELECT table_name, files_processed, files_created FROM ducklake_merge_adjacent_files('ducklake', max_compacted_files=>1) ORDER BY table_name
+----
+table1	5	1
+table2	5	1
+
+# Both tables got compacted (1 operation each)
+query I
+SELECT count(*) FROM __ducklake_metadata_ducklake.ducklake_data_file
+----
+12
+
+# Check data is still correct
+query I
+SELECT (SELECT count(*) FROM table1) + (SELECT count(*) FROM table2);
+----
+20
