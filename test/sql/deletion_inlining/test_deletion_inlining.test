@@ -198,7 +198,7 @@ SELECT file_id, row_id, begin_snapshot FROM ducklake_meta.ducklake_inlined_delet
 0	40	11
 
 query IIII
-FROM ducklake_meta.ducklake_inlined_data_1_1
+FROM ducklake_meta.ducklake_inlined_data_1_1 order by ALL
 ----
 50	9	NULL	51
 51	9	NULL	52

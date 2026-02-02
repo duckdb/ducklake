@@ -35,7 +35,7 @@ SELECT table_id, begin_snapshot, end_snapshot, delete_count, partial_max FROM du
 ----
 
 query IIII
-FROM ducklake_meta.ducklake_inlined_data_1_1
+FROM ducklake_meta.ducklake_inlined_data_1_1 ORDER BY ALL
 ----
 10	2	NULL	11
 11	2	3	12
