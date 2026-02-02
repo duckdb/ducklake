@@ -121,8 +121,7 @@ SinkFinalizeType DuckLakeFlushData::Finalize(Pipeline &pipeline, Event &event, C
 			)
 			SELECT end_snapshot, output_position
 			FROM all_rows
-			WHERE end_snapshot IS NOT NULL
-			ORDER BY output_position;)",
+			WHERE end_snapshot IS NOT NULL;)",
 		                                                                          inlined_table.table_name));
 
 		// lets figure out where each file ends, so we know where to place ze deletes
@@ -387,7 +386,6 @@ LEFT JOIN (
     WHERE table_id = %d AND {SNAPSHOT_ID} >= begin_snapshot
           AND ({SNAPSHOT_ID} < end_snapshot OR end_snapshot IS NULL)
 ) existing_del ON del.file_id = existing_del.data_file_id
-ORDER BY del.file_id, del.row_id
 	)",
 	                                                                       inlined_table_name, table_id.index));
 	if (deletions_result->HasError()) {
