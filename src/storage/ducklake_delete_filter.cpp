@@ -260,10 +260,11 @@ void DuckLakeDeleteFilter::Initialize(ClientContext &context, const DuckLakeDele
 	auto rows_to_scan = make_unsafe_uniq_array<bool>(delete_scan.row_count);
 	bool has_embedded_snapshots = false;
 
-	// Step 1: Handle the primary deletion source (delete file OR full file delete)
+	unordered_map<idx_t, idx_t> all_position_to_snapshot;
+
+	// Handle the primary deletion source (delete file OR full file delete)
 	if (!delete_scan.delete_file.path.empty()) {
-		// Partial delete: read deletions from the delete file
-		unordered_map<idx_t, idx_t> file_pos_to_snapshot;
+		// Partial delete, read deletions from the delete file
 		auto current_deletes =
 		    ScanDeleteFile(context, delete_scan.delete_file, delete_scan.start_snapshot, delete_scan.end_snapshot);
 		has_embedded_snapshots = current_deletes.has_embedded_snapshots;
@@ -278,34 +279,37 @@ void DuckLakeDeleteFilter::Initialize(ClientContext &context, const DuckLakeDele
 			}
 			rows_to_scan[delete_idx] = true;
 			if (i < current_deletes.snapshot_ids.size()) {
-				file_pos_to_snapshot[delete_idx] = current_deletes.snapshot_ids[i];
+				all_position_to_snapshot[delete_idx] = current_deletes.snapshot_ids[i];
 			}
 		}
-		PopulateSnapshotMapFromPositions(context, delete_scan.file, file_pos_to_snapshot);
 	} else if (delete_scan.snapshot_id.IsValid() && delete_scan.inlined_file_deletions.empty()) {
-		// Full file delete - all rows are being scanned
+		// Full file delete, all rows are being scanned
 		memset(rows_to_scan.get(), 1, sizeof(bool) * delete_scan.row_count);
-		unordered_map<idx_t, idx_t> position_to_snapshot;
 		auto snapshot_id = delete_scan.snapshot_id.GetIndex();
 		for (idx_t i = 0; i < delete_scan.row_count; i++) {
-			position_to_snapshot[i] = snapshot_id;
+			all_position_to_snapshot[i] = snapshot_id;
 		}
-		PopulateSnapshotMapFromPositions(context, delete_scan.file, position_to_snapshot);
 	} else {
-		// No delete file and no full file delete - start with no rows marked
+		// No delete file and no full file delete
 		memset(rows_to_scan.get(), 0, sizeof(bool) * delete_scan.row_count);
 	}
 
-	// Process inlined file deletions
+	// Add inlined file deletions to the combined map
 	if (!delete_scan.inlined_file_deletions.empty()) {
 		for (auto &inlined_delete : delete_scan.inlined_file_deletions) {
 			rows_to_scan[inlined_delete.first] = true;
+			// Add to combined map (inlined deletions may override or add to existing)
+			all_position_to_snapshot[inlined_delete.first] = inlined_delete.second;
 		}
-		PopulateSnapshotMapFromPositions(context, delete_scan.file, delete_scan.inlined_file_deletions);
+	}
+
+	// Scan data file to get row_id mappings for ALL positions
+	if (!all_position_to_snapshot.empty()) {
+		PopulateSnapshotMapFromPositions(context, delete_scan.file, all_position_to_snapshot);
 	}
 
 	if (!delete_scan.previous_delete_file.path.empty() && !has_embedded_snapshots) {
-		// if we have a previous delete file - scan that set of deletes
+		// if we have a previous delete file, scan that set of deletes
 		// This only matters if we do not have a partial deletion file, since thes have all deletes
 		auto previous_deletes = ScanDeleteFile(context, delete_scan.previous_delete_file);
 		// these deletes are not new - we should not scan them
