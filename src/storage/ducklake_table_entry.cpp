@@ -335,8 +335,8 @@ optional_ptr<DuckLakeTableStats> DuckLakeTableEntry::GetTableStats(DuckLakeTrans
 		return nullptr;
 	}
 	auto &dl_catalog = catalog.Cast<DuckLakeCatalog>();
-	if (transaction.HasTransactionLocalChanges(GetTableId())) {
-		// no stats if there are transaction-local changes
+	if (transaction.HasTransactionLocalInserts(GetTableId())) {
+		// no stats if there are transaction-local inserts
 		return nullptr;
 	}
 	return dl_catalog.GetTableStats(transaction, GetTableId());

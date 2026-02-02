@@ -98,7 +98,7 @@ public:
 	vector<DuckLakeDataFile> GetTransactionLocalFiles(TableIndex table_id);
 	shared_ptr<DuckLakeInlinedData> GetTransactionLocalInlinedData(TableIndex table_id);
 	void DropTransactionLocalFile(TableIndex table_id, const string &path);
-	bool HasTransactionLocalChanges(TableIndex table_id) const;
+	bool HasTransactionLocalInserts(TableIndex table_id) const;
 	bool HasTransactionInlinedData(TableIndex table_id) const;
 	void AppendFiles(TableIndex table_id, vector<DuckLakeDataFile> files);
 	void AddDeletes(TableIndex table_id, vector<DuckLakeDeleteFile> files);

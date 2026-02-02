@@ -1956,7 +1956,7 @@ idx_t DuckLakeTransaction::GetLocalCatalogId() {
 	return local_catalog_id++;
 }
 
-bool DuckLakeTransaction::HasTransactionLocalChanges(TableIndex table_id) const {
+bool DuckLakeTransaction::HasTransactionLocalInserts(TableIndex table_id) const {
 	auto entry = table_data_changes.find(table_id);
 	if (entry == table_data_changes.end()) {
 		return false;
