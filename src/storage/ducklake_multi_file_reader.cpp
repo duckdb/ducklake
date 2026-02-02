@@ -28,7 +28,6 @@
 
 namespace duckdb {
 
-
 //! Try to find a column in local_columns that matches the given field_id
 static bool TryFindColumnByFieldId(const vector<MultiFileColumnDefinition> &local_columns, int32_t field_id,
                                    MultiFileColumnDefinition *fallback_column,

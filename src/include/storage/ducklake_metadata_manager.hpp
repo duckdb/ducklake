@@ -286,7 +286,7 @@ private:
 	                                                                         DuckLakeSnapshot end_snapshot);
 
 	unordered_map<idx_t, string> insert_inlined_table_name_cache;
-	unordered_map<idx_t, string> delete_inlined_table_name_cache;
+	unordered_set<idx_t> delete_inlined_table_cache;
 
 protected:
 	DuckLakeTransaction &transaction;
