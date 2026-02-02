@@ -179,8 +179,8 @@ void DuckLakeDeleteFilter::Initialize(const DuckLakeInlinedDataDeletes &inlined_
 }
 
 unordered_map<idx_t, idx_t> DuckLakeDeleteFilter::ScanDataFileRowIds(ClientContext &context,
-                                                                      const DuckLakeFileData &data_file,
-                                                                      const unordered_set<idx_t> &file_positions) {
+                                                                     const DuckLakeFileData &data_file,
+                                                                     const unordered_set<idx_t> &file_positions) {
 	unordered_map<idx_t, idx_t> result;
 	if (file_positions.empty()) {
 		return result;

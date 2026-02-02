@@ -1180,7 +1180,8 @@ vector<DuckLakeFileListEntry> DuckLakeMetadataManager::GetTableInsertions(DuckLa
 	// Files either match the exact snapshot range
 	// Or they have partial_max set, which means they are a file with many snapshot ids, and might contain
 	// the snapshot we need
-	auto query = StringUtil::Format(R"(
+	auto query =
+	    StringUtil::Format(R"(
 SELECT %s
 FROM {METADATA_CATALOG}.ducklake_data_file data, (
 	SELECT NULL path, NULL path_is_relative, NULL file_size_bytes, NULL footer_size, NULL encryption_key
@@ -1190,8 +1191,7 @@ WHERE data.table_id=%d AND data.begin_snapshot <= {SNAPSHOT_ID} AND (
 	(data.partial_max IS NOT NULL AND data.partial_max >= %d)
 );
 		)",
-	                                select_list, table_id.index, start_snapshot.snapshot_id,
-	                                start_snapshot.snapshot_id);
+	                       select_list, table_id.index, start_snapshot.snapshot_id, start_snapshot.snapshot_id);
 
 	auto result = transaction.Query(end_snapshot, query);
 	if (result->HasError()) {
@@ -1386,9 +1386,9 @@ vector<DuckLakeCompactionFileEntry> DuckLakeMetadataManager::GetFilesForCompacti
 	                          "data.end_snapshot, data.mapping_id, sr.schema_version , data.partial_max, "
 	                          "data.partition_id, partition_info.keys, " +
 	                          GetFileSelectList("data");
-	string delete_select_list =
-	    "del.data_file_id,del.delete_file_id, del.delete_count, del.begin_snapshot, del.end_snapshot, del.partial_max, " +
-	    GetFileSelectList("del");
+	string delete_select_list = "del.data_file_id,del.delete_file_id, del.delete_count, del.begin_snapshot, "
+	                            "del.end_snapshot, del.partial_max, " +
+	                            GetFileSelectList("del");
 	string select_list = data_select_list + ", " + delete_select_list;
 	string deletion_threshold_clause;
 	if (type == CompactionType::REWRITE_DELETES) {
@@ -2409,8 +2409,7 @@ string DuckLakeMetadataManager::WriteNewDeleteFiles(const vector<DuckLakeDeleteF
 		// Use explicit begin_snapshot if set (for flush operations), otherwise use commit snapshot
 		string begin_snapshot_str =
 		    file.begin_snapshot.IsValid() ? std::to_string(file.begin_snapshot.GetIndex()) : "{SNAPSHOT_ID}";
-		string partial_max =
-		    file.max_snapshot.IsValid() ? to_string(file.max_snapshot.GetIndex()) : "NULL";
+		string partial_max = file.max_snapshot.IsValid() ? to_string(file.max_snapshot.GetIndex()) : "NULL";
 		delete_file_insert_query += StringUtil::Format(
 		    "(%d, %d, %s, NULL,  %d, %s, %s, 'parquet', %d, %d, %d, %s, %s)", delete_file_index, table_id,
 		    begin_snapshot_str, data_file_index, SQLString(path.path), path.path_is_relative ? "true" : "false",

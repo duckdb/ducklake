@@ -82,7 +82,7 @@ private:
 	shared_ptr<BaseFileReader> TryCreateInlinedDataReader(const OpenFileInfo &file);
 	//! For deletion scans we need to get the snapshot_id values using per-row snapshot information
 	void GatherDeletionScanSnapshots(BaseFileReader &reader, const MultiFileReaderData &reader_data,
-	                                DataChunk &output_chunk) const;
+	                                 DataChunk &output_chunk) const;
 
 private:
 	unique_ptr<MultiFileColumnDefinition> row_id_column;
