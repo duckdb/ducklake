@@ -1320,9 +1320,7 @@ USING (data_file_id), (
 	                            select_list, table_id.index, table_id.index, start_snapshot.snapshot_id, table_id.index,
 	                            select_list, table_id.index, start_snapshot.snapshot_id, table_id.index);
 
-	// Third UNION: files with ONLY inlined deletions (no delete_file entry, no end_snapshot)
 	if (has_inlined_table) {
-		// Generate NULL columns to match GetFileSelectList format (4 cols without encryption, 5 with)
 		string null_file_cols = "NULL path, NULL path_is_relative, NULL file_size_bytes, NULL footer_size";
 		if (IsEncrypted()) {
 			null_file_cols += ", NULL encryption_key";
@@ -1388,7 +1386,7 @@ FROM main_results
 		entry.delete_file = ReadDataFile(table, row, col_idx, IsEncrypted());
 		entry.previous_delete_file = ReadDataFile(table, row, col_idx, IsEncrypted());
 		entry.snapshot_id = row.GetValue<idx_t>(col_idx++);
-		// Store the snapshot range for filtering embedded snapshot IDs
+		// store the snapshot range for filtering embedded snapshot IDs
 		entry.start_snapshot = start_snapshot.snapshot_id;
 		entry.end_snapshot = end_snapshot.snapshot_id;
 
@@ -2113,7 +2111,7 @@ string DuckLakeMetadataManager::WriteNewInlinedFileDeletes(DuckLakeSnapshot &com
 
 		// Build the values for the deletions
 		string values;
-		for (auto &file_entry : entry.file_deletions) {
+		for (auto &file_entry : entry.file_deletions.file_deletes) {
 			auto file_id = file_entry.first;
 			for (auto &row_id : file_entry.second) {
 				if (!values.empty()) {

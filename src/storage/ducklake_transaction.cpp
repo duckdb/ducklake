@@ -2191,7 +2191,7 @@ DuckLakeTransaction::GetNewInlinedFileDeletes(DuckLakeCommitState &commit_state)
 		}
 		DuckLakeInlinedFileDeletionInfo info;
 		info.table_id = table_id;
-		info.file_deletions = std::move(table_changes.new_inlined_file_deletes->file_deletes);
+		info.file_deletions.file_deletes = std::move(table_changes.new_inlined_file_deletes->file_deletes);
 		result.push_back(std::move(info));
 	}
 	return result;

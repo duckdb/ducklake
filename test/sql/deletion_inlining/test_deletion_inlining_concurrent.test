@@ -26,10 +26,10 @@ CREATE TABLE ducklake.t AS SELECT range a FROM range(50)
 
 concurrentloop i 0 5
 
+# We cant check the error message since that's catalog specific
 statement maybe
 DELETE FROM ducklake.t WHERE a < ${i}*5
 ----
-attempting to delete from
 
 endloop
 

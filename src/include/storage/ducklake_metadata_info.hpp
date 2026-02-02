@@ -167,7 +167,7 @@ struct DuckLakeDeletedInlinedDataInfo {
 struct DuckLakeInlinedFileDeletionInfo {
 	TableIndex table_id;
 	//! Maps file_id -> set of deleted row_ids
-	map<idx_t, set<idx_t>> file_deletions;
+	DuckLakeInlinedFileDeletes file_deletions;
 };
 
 struct DuckLakeDeleteFileInfo {
@@ -380,7 +380,7 @@ struct DuckLakeDeleteScanEntry {
 	optional_idx end_snapshot;
 	//! Data file ID for matching inlined deletions
 	DataFileIndex file_id;
-	//! Inlined file deletions: maps row_id -> snapshot_id when deleted
+	//! Inlined file deletions {row_id -> snapshot_id}
 	unordered_map<idx_t, idx_t> inlined_file_deletions;
 };
 

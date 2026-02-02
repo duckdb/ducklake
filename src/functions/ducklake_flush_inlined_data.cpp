@@ -78,12 +78,13 @@ using DeletesPerFile = unordered_map<string, set<PositionWithSnapshot>>;
 
 static DeletesPerFile GroupDeletesByFile(QueryResult &deleted_rows_result, vector<DuckLakeDataFile> &written_files,
                                          vector<idx_t> &file_start_row_ids) {
+	D_ASSERT(std::is_sorted(file_start_row_ids.begin(), file_start_row_ids.end()));
 	DeletesPerFile deletes_per_file;
 	for (auto &row : deleted_rows_result) {
 		auto end_snap = row.GetValue<int64_t>(0);
 		auto output_position = row.GetValue<int64_t>(1);
 		if (written_files.size() == 1) {
-			// Single file - use position directly
+			// Single file, we just handover the deleted row ids since they must be from this file
 			PositionWithSnapshot pos_with_snap {output_position, end_snap};
 			deletes_per_file[written_files[0].file_name].insert(pos_with_snap);
 		} else {
@@ -112,7 +113,6 @@ SinkFinalizeType DuckLakeFlushData::Finalize(Pipeline &pipeline, Event &event, C
 
 	if (!global_state.written_files.empty()) {
 		// Query deleted rows with their output file position
-		// We use ROW_NUMBER to get the  position of each row in flush order,
 		auto deleted_rows_result = transaction.Query(snapshot, StringUtil::Format(R"(
 			WITH all_rows AS (
 				SELECT row_id, end_snapshot, ROW_NUMBER() OVER (ORDER BY row_id) - 1 AS output_position
@@ -124,7 +124,7 @@ SinkFinalizeType DuckLakeFlushData::Finalize(Pipeline &pipeline, Event &event, C
 			WHERE end_snapshot IS NOT NULL;)",
 		                                                                          inlined_table.table_name));
 
-		// lets figure out where each file ends, so we know where to place ze deletes
+		// Let's figure out where each file ends, so we know where to place ze deletes
 		vector<idx_t> file_start_row_ids;
 		file_start_row_ids.reserve(global_state.written_files.size());
 		idx_t current_pos = 0;
@@ -371,7 +371,8 @@ static void FlushInlinedFileDeletions(ClientContext &context, DuckLakeCatalog &c
 	// Check if this table has an inlined deletion table
 	auto inlined_table_name = metadata_manager.GetInlinedDeletionTableName(table_id, snapshot);
 	if (inlined_table_name.empty()) {
-		return; // No inlined deletions for this table
+		// No inlined deletions for this table, skiddadle
+		return;
 	}
 
 	// Query the inlined deletions with file paths and existing delete file info
@@ -452,7 +453,9 @@ LEFT JOIN (
 		encryption_key = catalog.GenerateEncryptionKey(context);
 	}
 
-	for (auto &[file_id, file_info] : files_to_flush) {
+	for (auto &entry : files_to_flush) {
+		auto file_id = entry.first;
+		auto &file_info = entry.second;
 		set<PositionWithSnapshot> merged_deletions;
 		bool overwrites_existing = false;
 

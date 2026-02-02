@@ -173,6 +173,7 @@ void DuckLakeDeleteFilter::Initialize(ClientContext &context, const DuckLakeFile
 }
 
 void DuckLakeDeleteFilter::Initialize(const DuckLakeInlinedDataDeletes &inlined_deletes) {
+	D_ASSERT(std::is_sorted(delete_data->deleted_rows.begin(), delete_data->deleted_rows.end()));
 	auto mid_idx = delete_data->deleted_rows.size();
 	for (auto &idx : inlined_deletes.rows) {
 		delete_data->deleted_rows.push_back(idx);
@@ -303,13 +304,13 @@ void DuckLakeDeleteFilter::Initialize(ClientContext &context, const DuckLakeDele
 		}
 	}
 
-	// Scan data file to get row_id mappings for ALL positions
+	// Scan data file to get row_id mappings for all positions
 	if (!all_position_to_snapshot.empty()) {
 		PopulateSnapshotMapFromPositions(context, delete_scan.file, all_position_to_snapshot);
 	}
 
 	if (!delete_scan.previous_delete_file.path.empty() && !has_embedded_snapshots) {
-		// if we have a previous delete file, scan that set of deletes
+		// if we have a previous delete file - scan that set of deletes
 		// This only matters if we do not have a partial deletion file, since thes have all deletes
 		auto previous_deletes = ScanDeleteFile(context, delete_scan.previous_delete_file);
 		// these deletes are not new - we should not scan them

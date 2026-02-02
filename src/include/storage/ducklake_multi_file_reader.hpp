@@ -94,6 +94,7 @@ private:
 	//! For deletion scans: track which output column is rowid (if any)
 	optional_idx deletion_scan_rowid_col;
 	//! Whether row_id was internally projected (not in user's query)
+	//! This is necessary for DCF queries over inlined deletions
 	bool internally_projected_rowid = false;
 };
 
