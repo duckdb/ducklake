@@ -47,7 +47,7 @@ t.table_name = 'spatial_sort_test'
 0	1
 1	1
 
-# Set sorted by a nested expression: concat(substr(power(unique_id, unique_id)::varchar, 1, 1), name)
+# Set sorted by a space filling curve expression (using spatial's ST_HILBERT function)
 statement ok
 ALTER TABLE ducklake.spatial_sort_test SET SORTED BY (st_hilbert(st_point(i, j)) ASC NULLS LAST);
 
