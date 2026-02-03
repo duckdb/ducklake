@@ -1956,7 +1956,7 @@ idx_t DuckLakeTransaction::GetLocalCatalogId() {
 	return local_catalog_id++;
 }
 
-bool DuckLakeTransaction::HasTransactionLocalChanges(TableIndex table_id) const {
+bool DuckLakeTransaction::HasTransactionLocalInserts(TableIndex table_id) const {
 	auto entry = table_data_changes.find(table_id);
 	if (entry == table_data_changes.end()) {
 		return false;
@@ -2185,6 +2185,14 @@ bool DuckLakeTransaction::HasLocalDeletes(TableIndex table_id) {
 		return false;
 	}
 	return !entry->second.new_delete_files.empty();
+}
+
+bool DuckLakeTransaction::HasAnyLocalChanges(TableIndex table_id) {
+	auto entry = table_data_changes.find(table_id);
+	if (entry != table_data_changes.end() && !entry->second.IsEmpty()) {
+		return true;
+	}
+	return tables_deleted_from.find(table_id) != tables_deleted_from.end();
 }
 
 void DuckLakeTransaction::GetLocalDeleteForFile(TableIndex table_id, const string &path, DuckLakeFileData &result) {
