@@ -85,12 +85,9 @@ FROM macro_sort_test
 ABC	XYZ	AXBYCZ
 ZYX	CBA	ZCYBXA
 
-# We can even clear the sorting and macro before committing (nice and clean!)
+# We can even clear the sorting before committing
 statement ok 
 ALTER TABLE ducklake.macro_sort_test RESET SORTED BY
-
-statement ok
-DROP MACRO zip_varchar
 
 statement ok
 COMMIT
@@ -104,3 +101,7 @@ FROM macro_sort_test
 321	000	302010
 ABC	XYZ	AXBYCZ
 ZYX	CBA	ZCYBXA
+
+statement ok
+DROP MACRO zip_varchar
+
