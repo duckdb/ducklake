@@ -16,6 +16,13 @@
 #include "duckdb/planner/operator/logical_empty_result.hpp"
 #include "storage/ducklake_flush_data.hpp"
 #include "duckdb/planner/operator/logical_projection.hpp"
+#include "duckdb/planner/operator/logical_aggregate.hpp"
+#include "duckdb/planner/operator/logical_filter.hpp"
+#include "duckdb/planner/expression/bound_comparison_expression.hpp"
+#include "duckdb/planner/expression/bound_constant_expression.hpp"
+#include "duckdb/catalog/catalog_entry/aggregate_function_catalog_entry.hpp"
+#include "duckdb/function/function_binder.hpp"
+#include "duckdb/planner/expression/bound_aggregate_expression.hpp"
 #include "storage/ducklake_delete.hpp"
 #include "storage/ducklake_delete_filter.hpp"
 
@@ -707,10 +714,10 @@ static unique_ptr<LogicalOperator> FlushInlinedDataBind(ClientContext &context, 
 
 	// Create HAVING filter (SUM(rows_flushed) > 0)
 	auto agg_bindings = aggregate->GetColumnBindings();
-	auto sum_col_ref = make_uniq<BoundColumnRefExpression>(aggregate->types[2], agg_bindings[2]);
+	unique_ptr<Expression> sum_col_ref = make_uniq<BoundColumnRefExpression>(aggregate->types[2], agg_bindings[2]);
 	// Note: SUM(BIGINT) returns HUGEINT. We must use the its output type for the 0 constant
-	auto zero_const = make_uniq<BoundConstantExpression>(Value::Numeric(aggregate->types[2], 0));
-	auto filter_expr = make_uniq<BoundComparisonExpression>(ExpressionType::COMPARE_GREATERTHAN,
+	unique_ptr<Expression> zero_const = make_uniq<BoundConstantExpression>(Value::Numeric(aggregate->types[2], 0));
+	unique_ptr<Expression> filter_expr = make_uniq<BoundComparisonExpression>(ExpressionType::COMPARE_GREATERTHAN,
 	                                                        std::move(sum_col_ref), std::move(zero_const));
 
 	auto filter = make_uniq<LogicalFilter>(std::move(filter_expr));
