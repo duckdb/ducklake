@@ -71,7 +71,13 @@ static bool CanSkipFileByTopNDynamicFilter(const DuckLakeFileListEntry &file_ent
 		if (mm_it == file_entry.column_min_max.end()) {
 			continue;
 		}
-		constant = constant.DefaultCastAs(col_filter.column_type);
+
+		// from here we'll try to cast and compare with the dynamic filter values
+		// if casts fail, just skip pruning
+		Value casted_constant;
+		if (!constant.DefaultTryCastAs(col_filter.column_type, casted_constant, nullptr)) {
+			continue;
+		}
 
 		switch (comparison_type) {
 		case ExpressionType::COMPARE_GREATERTHAN:
@@ -80,11 +86,14 @@ static bool CanSkipFileByTopNDynamicFilter(const DuckLakeFileListEntry &file_ent
 			if (max_str.empty()) {
 				continue;
 			}
-			auto file_max = Value(max_str).DefaultCastAs(col_filter.column_type);
-			if (comparison_type == ExpressionType::COMPARE_GREATERTHAN) {
-				return !(file_max > constant);
+			Value file_max;
+			if (!Value(max_str).DefaultTryCastAs(col_filter.column_type, file_max, nullptr)) {
+				continue;
 			}
-			return !(file_max >= constant);
+			if (comparison_type == ExpressionType::COMPARE_GREATERTHAN) {
+				return !(file_max > casted_constant);
+			}
+			return !(file_max >= casted_constant);
 		}
 		case ExpressionType::COMPARE_LESSTHAN:
 		case ExpressionType::COMPARE_LESSTHANOREQUALTO: {
@@ -92,11 +101,14 @@ static bool CanSkipFileByTopNDynamicFilter(const DuckLakeFileListEntry &file_ent
 			if (min_str.empty()) {
 				continue;
 			}
-			auto file_min = Value(min_str).DefaultCastAs(col_filter.column_type);
-			if (comparison_type == ExpressionType::COMPARE_LESSTHAN) {
-				return !(file_min < constant);
+			Value file_min;
+			if (!Value(min_str).DefaultTryCastAs(col_filter.column_type, file_min, nullptr)) {
+				continue;
 			}
-			return !(file_min <= constant);
+			if (comparison_type == ExpressionType::COMPARE_LESSTHAN) {
+				return !(file_min < casted_constant);
+			}
+			return !(file_min <= casted_constant);
 		}
 		default:
 			// nothing to prune
@@ -511,8 +523,7 @@ unique_ptr<Expression> DuckLakeMultiFileReader::GetVirtualColumnExpression(
 				continue;
 			}
 			if (col.identifier.GetValue<int32_t>() == MultiFileReader::LAST_UPDATED_SEQUENCE_NUMBER_ID) {
-				// it is! return a reference to the global snapshot id column so we can read it from the file
-				// directly
+				// it is! return a reference to the global snapshot id column so we can read it from the file directly
 				global_column_reference = snapshot_id_column.get();
 				return nullptr;
 			}

@@ -89,6 +89,7 @@ struct FilterPushdownInfo {
 struct FilterPushdownQueryComponents {
 	string cte_section;
 	string where_clause;
+	string order_by_clause;
 };
 
 //! The DuckLake metadata manger is the communication layer between the system and the metadata catalog
