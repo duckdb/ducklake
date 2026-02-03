@@ -28,11 +28,26 @@ DuckLakeMetadataManager::~DuckLakeMetadataManager() {
 }
 optional_ptr<AttachedDatabase> GetDatabase(ClientContext &context, const string &name);
 
+unordered_map<string /* name */, DuckLakeMetadataManager::create_t> DuckLakeMetadataManager::metadata_managers = {
+    {"postgres", PostgresMetadataManager::Create}, {"postgres_scanner", PostgresMetadataManager::Create}};
+
+mutex DuckLakeMetadataManager::metadata_managers_lock;
+
+void DuckLakeMetadataManager::Register(const string &name, DuckLakeMetadataManager::create_t create) {
+	lock_guard<mutex> lock(metadata_managers_lock);
+	if (metadata_managers.find(name) != metadata_managers.end()) {
+		throw InternalException("Metadata manager with name \"%s\" already exists!", name);
+	}
+	metadata_managers[name] = create;
+}
+
 unique_ptr<DuckLakeMetadataManager> DuckLakeMetadataManager::Create(DuckLakeTransaction &transaction) {
+	lock_guard<mutex> lock(metadata_managers_lock);
 	auto &catalog = transaction.GetCatalog();
 	auto catalog_type = catalog.MetadataType();
-	if (catalog_type == "postgres" || catalog_type == "postgres_scanner") {
-		return make_uniq<PostgresMetadataManager>(transaction);
+	auto create = metadata_managers[catalog_type];
+	if (create) {
+		return create(transaction);
 	}
 	return make_uniq<DuckLakeMetadataManager>(transaction);
 }

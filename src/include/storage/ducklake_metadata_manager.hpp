@@ -97,6 +97,9 @@ public:
 	explicit DuckLakeMetadataManager(DuckLakeTransaction &transaction);
 	virtual ~DuckLakeMetadataManager();
 
+	typedef unique_ptr<DuckLakeMetadataManager> (*create_t)(DuckLakeTransaction &transaction);
+	static void Register(const string &name, create_t);
+
 	static unique_ptr<DuckLakeMetadataManager> Create(DuckLakeTransaction &transaction);
 
 	virtual bool TypeIsNativelySupported(const LogicalType &type);
@@ -271,6 +274,8 @@ private:
 
 private:
 	unordered_map<idx_t, string> inlined_table_name_cache;
+	static unordered_map<string /* name */, create_t> metadata_managers;
+	static mutex metadata_managers_lock;
 
 protected:
 	DuckLakeTransaction &transaction;

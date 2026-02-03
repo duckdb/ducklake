@@ -16,6 +16,10 @@ class PostgresMetadataManager : public DuckLakeMetadataManager {
 public:
 	explicit PostgresMetadataManager(DuckLakeTransaction &transaction);
 
+	static unique_ptr<DuckLakeMetadataManager> Create(DuckLakeTransaction &transaction) {
+		return make_uniq<PostgresMetadataManager>(transaction);
+	}
+
 	bool TypeIsNativelySupported(const LogicalType &type) override;
 
 	string GetColumnTypeInternal(const LogicalType &type) override;
