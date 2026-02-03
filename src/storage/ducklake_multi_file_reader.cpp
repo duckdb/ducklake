@@ -464,13 +464,15 @@ unique_ptr<Expression> DuckLakeMultiFileReader::GetVirtualColumnExpression(
 	                                                   global_column_reference);
 }
 
-void DuckLakeMultiFileReader::GatherDeletionScanSnapshots(BaseFileReader &reader, const MultiFileReaderData &reader_data,
-                                                         DataChunk &output_chunk) const {
+void DuckLakeMultiFileReader::GatherDeletionScanSnapshots(BaseFileReader &reader,
+                                                          const MultiFileReaderData &reader_data,
+                                                          DataChunk &output_chunk) const {
 	auto &delete_filter = static_cast<DuckLakeDeleteFilter &>(*reader.deletion_filter);
 	optional_idx snapshot_col_idx = deletion_scan_snapshot_col;
 	optional_idx rowid_col_idx = deletion_scan_rowid_col;
 
-	if (delete_filter.delete_data->scan_snapshot_map.empty() || !snapshot_col_idx.IsValid() || !rowid_col_idx.IsValid()) {
+	if (delete_filter.delete_data->scan_snapshot_map.empty() || !snapshot_col_idx.IsValid() ||
+	    !rowid_col_idx.IsValid()) {
 		// We don't have anything to gather
 		return;
 	}
@@ -525,7 +527,8 @@ void DuckLakeMultiFileReader::FinalizeChunk(ClientContext &context, const MultiF
 	MultiFileReader::FinalizeChunk(context, bind_data, reader, reader_data, input_chunk, output_chunk, executor,
 	                               global_state);
 
-	// We need to gather the snapshot_id information correctly for scan deletions if the files are partial deletion files.
+	// We need to gather the snapshot_id information correctly for scan deletions if the files are partial deletion
+	// files.
 	if (read_info.scan_type == DuckLakeScanType::SCAN_DELETIONS && reader.deletion_filter) {
 		GatherDeletionScanSnapshots(reader, reader_data, output_chunk);
 	}
