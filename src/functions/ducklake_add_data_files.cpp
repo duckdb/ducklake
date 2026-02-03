@@ -1172,9 +1172,9 @@ DuckLakeDataFile DuckLakeFileProcessor::AddFileToTable(ParquetFileMetadata &file
 		if (file.hive_partition_values.size() != partition_data->fields.size()) {
 			invalid_partition = true;
 		} else {
-			for (auto hive_partition_value : file.hive_partition_values) {
+			for (const auto& hive_partition_value : file.hive_partition_values) {
 				bool found_field = false;
-				for (auto field : partition_data->fields) {
+				for (const auto& field : partition_data->fields) {
 					if (field.field_id.index == hive_partition_value.field_index.index) {
 						found_field = true;
 						break;
