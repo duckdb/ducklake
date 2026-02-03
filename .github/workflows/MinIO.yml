@@ -48,6 +48,7 @@ jobs:
         run: |
           cd duckdb
           git checkout $(cat ../.github/duckdb-version)
+          git log -1 --format='%H'
 
       - name: Check installed versions
         run: |

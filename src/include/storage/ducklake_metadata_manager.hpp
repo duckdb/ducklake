@@ -15,6 +15,7 @@
 #include "duckdb/common/reference_map.hpp"
 #include "duckdb/common/types/value.hpp"
 #include "common/ducklake_snapshot.hpp"
+#include "storage/ducklake_catalog.hpp"
 #include "storage/ducklake_partition_data.hpp"
 #include "storage/ducklake_stats.hpp"
 #include "duckdb/common/types/timestamp.hpp"
@@ -97,21 +98,36 @@ public:
 	explicit DuckLakeMetadataManager(DuckLakeTransaction &transaction);
 	virtual ~DuckLakeMetadataManager();
 
+	typedef unique_ptr<DuckLakeMetadataManager> (*create_t)(DuckLakeTransaction &transaction);
+	static void Register(const string &name, create_t);
+
 	static unique_ptr<DuckLakeMetadataManager> Create(DuckLakeTransaction &transaction);
 
 	virtual bool TypeIsNativelySupported(const LogicalType &type);
 
 	virtual string GetColumnTypeInternal(const LogicalType &column_type);
+	virtual string CastColumnToTarget(const string &stats, const LogicalType &type);
 
 	DuckLakeMetadataManager &Get(DuckLakeTransaction &transaction);
 
+	virtual bool IsInitialized(DuckLakeOptions &options);
 	//! Initialize a new DuckLake
 	virtual void InitializeDuckLake(bool has_explicit_schema, DuckLakeEncryption encryption);
 	virtual DuckLakeMetadata LoadDuckLake();
 
-	virtual unique_ptr<QueryResult> Execute(DuckLakeSnapshot snapshot, string &query);
+	static void FillSnapshotArgs(string &query, const DuckLakeSnapshot &snapshot);
+	static void FillSnapshotCommitArgs(string &query, const DuckLakeSnapshotCommit &commit_info);
+	static void FillCatalogArgs(string &query, const DuckLakeCatalog &ducklake_catalog);
 
-	virtual unique_ptr<QueryResult> Query(DuckLakeSnapshot snapshot, string &query);
+	//! Directly execute on metadata
+	virtual unique_ptr<QueryResult> Execute(string query);
+	//! Directly execute on metadata
+	virtual unique_ptr<QueryResult> Execute(DuckLakeSnapshot snapshot, string query);
+
+	//! Directly query on metadata
+	virtual unique_ptr<QueryResult> Query(string query);
+	//! Directly query on metadata
+	virtual unique_ptr<QueryResult> Query(DuckLakeSnapshot snapshot, string query);
 	//! Get the catalog information for a specific snapshot
 	virtual DuckLakeCatalogInfo GetCatalogForSnapshot(DuckLakeSnapshot snapshot);
 	virtual vector<DuckLakeGlobalStatsInfo> GetGlobalTableStats(DuckLakeSnapshot snapshot);
@@ -132,6 +148,7 @@ public:
 	virtual idx_t GetNetDataFileRowCount(TableIndex table_id, DuckLakeSnapshot snapshot);
 	virtual idx_t GetNetInlinedRowCount(const string &inlined_table_name, DuckLakeSnapshot snapshot);
 	virtual vector<DuckLakeFileForCleanup> GetOldFilesForCleanup(const string &filter);
+	virtual unordered_set<string> GetActiveFiles(const string &separator);
 	virtual vector<DuckLakeFileForCleanup> GetOrphanFilesForCleanup(const string &filter, const string &separator);
 	virtual vector<DuckLakeFileForCleanup> GetFilesForCleanup(const string &filter, CleanupType type,
 	                                                          const string &separator);
@@ -183,24 +200,26 @@ public:
 	virtual string UpdateGlobalTableStats(const DuckLakeGlobalStatsInfo &stats);
 	virtual SnapshotChangeInfo GetSnapshotAndStatsAndChanges(DuckLakeSnapshot start_snapshot,
 	                                                         SnapshotAndStats &current_snapshot);
-	SnapshotDeletedFromFiles GetFilesDeletedOrDroppedAfterSnapshot(const DuckLakeSnapshot &start_snapshot) const;
+	SnapshotDeletedFromFiles GetFilesDeletedOrDroppedAfterSnapshot(const DuckLakeSnapshot &start_snapshot);
 	virtual unique_ptr<DuckLakeSnapshot> GetSnapshot();
 	virtual unique_ptr<DuckLakeSnapshot> GetSnapshot(BoundAtClause &at_clause, SnapshotBound bound);
 	virtual idx_t GetNextColumnId(TableIndex table_id);
-	virtual shared_ptr<DuckLakeInlinedData> ReadInlinedData(DuckLakeSnapshot snapshot, const string &inlined_table_name,
-	                                                        const vector<string> &columns_to_read);
-	virtual shared_ptr<DuckLakeInlinedData> ReadInlinedDataInsertions(DuckLakeSnapshot start_snapshot,
-	                                                                  DuckLakeSnapshot end_snapshot,
-	                                                                  const string &inlined_table_name,
-	                                                                  const vector<string> &columns_to_read);
-	virtual shared_ptr<DuckLakeInlinedData> ReadInlinedDataDeletions(DuckLakeSnapshot start_snapshot,
-	                                                                 DuckLakeSnapshot end_snapshot,
-	                                                                 const string &inlined_table_name,
-	                                                                 const vector<string> &columns_to_read);
+	virtual unique_ptr<QueryResult> ReadInlinedData(DuckLakeSnapshot snapshot, const string &inlined_table_name,
+	                                                const vector<string> &columns_to_read);
+	virtual unique_ptr<QueryResult> ReadInlinedDataInsertions(DuckLakeSnapshot start_snapshot,
+	                                                          DuckLakeSnapshot end_snapshot,
+	                                                          const string &inlined_table_name,
+	                                                          const vector<string> &columns_to_read);
+	virtual unique_ptr<QueryResult> ReadInlinedDataDeletions(DuckLakeSnapshot start_snapshot,
+	                                                         DuckLakeSnapshot end_snapshot,
+	                                                         const string &inlined_table_name,
+	                                                         const vector<string> &columns_to_read);
+	virtual unique_ptr<QueryResult> ReadAllInlinedDataForFlush(DuckLakeSnapshot snapshot,
+	                                                           const string &inlined_table_name,
+	                                                           const vector<string> &columns_to_read);
+	virtual shared_ptr<DuckLakeInlinedData> TransformInlinedData(QueryResult &result,
+	                                                             const vector<LogicalType> &expected_types);
 
-	virtual shared_ptr<DuckLakeInlinedData> ReadAllInlinedDataForFlush(DuckLakeSnapshot snapshot,
-	                                                                   const string &inlined_table_name,
-	                                                                   const vector<string> &columns_to_read);
 	virtual void DeleteInlinedData(const DuckLakeInlinedTableInfo &inlined_table);
 	virtual string InsertNewSchema(const DuckLakeSnapshot &snapshot, const set<TableIndex> &table_ids);
 
@@ -223,10 +242,21 @@ public:
 protected:
 	virtual string GetLatestSnapshotQuery() const;
 
+	//! Wrap field selections with list aggregation of struct objects (DBMS-specific)
+	//! For DuckDB: LIST({'key1': val1, 'key2': val2, ...})
+	//! For Postgres: jsonb_agg(jsonb_build_object('key1', val1, 'key2', val2, ...))
+	virtual string WrapWithListAggregation(const vector<pair<string, string>> &fields) const;
+
+	//! Parse tag list from query result (can be overridden for DBMS-specific handling)
+	virtual vector<DuckLakeTag> LoadTags(const Value &tag_map) const;
+	//! Parse inlined data tables list from query result (can be overridden for DBMS-specific handling)
+	virtual vector<DuckLakeInlinedTableInfo> LoadInlinedDataTables(const Value &list) const;
+	//! Parse macro implementations list from query result (can be overridden for DBMS-specific handling)
+	virtual vector<DuckLakeMacroImplementation> LoadMacroImplementations(const Value &list) const;
+
 protected:
 	string GetInlinedTableQuery(const DuckLakeTableInfo &table, const string &table_name);
 	string GetColumnType(const DuckLakeColumnInfo &col);
-	shared_ptr<DuckLakeInlinedData> TransformInlinedData(QueryResult &result);
 
 	//! Get path relative to catalog path
 	DuckLakePath GetRelativePath(const string &path);
@@ -271,6 +301,8 @@ private:
 
 private:
 	unordered_map<idx_t, string> inlined_table_name_cache;
+	static unordered_map<string /* name */, create_t> metadata_managers;
+	static mutex metadata_managers_lock;
 
 protected:
 	DuckLakeTransaction &transaction;
