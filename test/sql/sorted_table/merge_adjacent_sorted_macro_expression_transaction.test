@@ -104,7 +104,7 @@ t.table_name = 'macro_sort_test'
 ----
 2	1
 
-# Verify data is now sorted by the nested expression
+# Verify data is now sorted by the macro
 query III
 SELECT i, j, zip_varchar(i, j, num_chars := 3)
 FROM macro_sort_test

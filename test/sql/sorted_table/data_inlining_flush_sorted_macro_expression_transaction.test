@@ -1,5 +1,5 @@
-# name: test/sql/sorted_table/merge_adjacent_sorted_macro_expression.test
-# description: Sort by a DuckLake macro to approximate space filling curve sorting
+# name: test/sql/sorted_table/merge_adjacent_sorted_macro_expression_transaction.test
+# description: Sort by a DuckLake macro to approximate space filling curve sorting within a transaction
 # group: [sorted_table]
 
 require ducklake
@@ -11,7 +11,7 @@ test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
 
 
 statement ok
-ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '__TEST_DIR__/merge_adjacent_sorted_nested_expression/')
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '__TEST_DIR__/merge_adjacent_sorted_nested_expression/', DATA_INLINING_ROW_LIMIT 10)
 
 statement ok
 USE ducklake;
@@ -25,25 +25,14 @@ INSERT INTO macro_sort_test
 SELECT 'ZYX' AS i, 'CBA' AS j 
 UNION ALL 
 SELECT 'ABC' AS i, 'XYZ' AS j 
-
-
-statement ok
-INSERT INTO macro_sort_test 
+UNION ALL
 SELECT '321' AS i, '000' AS j 
 UNION ALL 
 SELECT '123' AS i, '000' AS j 
 
-# Verify we have 2 data files before compaction
-query II
-SELECT df.data_file_id, df.table_id
-FROM __ducklake_metadata_ducklake.ducklake_data_file df
-JOIN __ducklake_metadata_ducklake.ducklake_table t
-ON df.table_id = t.table_id
-WHERE
-t.table_name = 'macro_sort_test'
-----
-0	1
-1	1
+
+statement ok
+BEGIN
 
 statement ok
 CREATE MACRO zip_varchar(i, j, num_chars := 6) AS (
@@ -60,12 +49,6 @@ CREATE MACRO zip_varchar(i, j, num_chars := 6) AS (
     ].flatten().array_to_string('')
 );
 
-# Check Macro Tables
-query IIIII
-FROM __ducklake_metadata_ducklake.ducklake_macro;
-----
-0	2	zip_varchar	4	NULL
-
 # Test that the macro is working as intended independently of sorting
 query III
 SELECT
@@ -79,7 +62,7 @@ ABC	XYZ	AXBYCZ
 statement ok
 ALTER TABLE ducklake.macro_sort_test SET SORTED BY (zip_varchar(i, j, num_chars := 3) ASC NULLS LAST);
 
-# Verify data before compaction (should be in insertion order)
+# Verify data before inline flush (should be in insertion order)
 query III
 SELECT i, j, zip_varchar(i, j, num_chars := 3)
 FROM macro_sort_test
@@ -89,22 +72,30 @@ ABC	XYZ	AXBYCZ
 321	000	302010
 123	000	102030
 
-# Compact the files
 statement ok
-CALL ducklake_merge_adjacent_files('ducklake', 'macro_sort_test');
-
-# Verify we have 1 data file after compaction
-query II
-SELECT df.data_file_id, df.table_id
-FROM __ducklake_metadata_ducklake.ducklake_data_file df
-JOIN __ducklake_metadata_ducklake.ducklake_table t
-ON df.table_id = t.table_id
-WHERE
-t.table_name = 'macro_sort_test'
-----
-2	1
+CALL ducklake_flush_inlined_data('ducklake', table_name => 'macro_sort_test');
 
 # Verify data is now sorted by the macro
+query III
+SELECT i, j, zip_varchar(i, j, num_chars := 3)
+FROM macro_sort_test
+----
+123	000	102030
+321	000	302010
+ABC	XYZ	AXBYCZ
+ZYX	CBA	ZCYBXA
+
+# We can even clear the sorting and macro before committing (nice and clean!)
+statement ok 
+ALTER TABLE ducklake.macro_sort_test RESET SORTED BY
+
+statement ok
+DROP MACRO zip_varchar
+
+statement ok
+COMMIT
+
+# Verify data is still sorted by the macro
 query III
 SELECT i, j, zip_varchar(i, j, num_chars := 3)
 FROM macro_sort_test
