@@ -1,0 +1,24 @@
+# name: test/sql/metadata/ducklake_settings_sqlite.test
+# description: Test ducklake_settings function with sqlite catalog
+# group: [metadata]
+
+require ducklake
+
+require parquet
+
+require sqlite_scanner
+
+test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+
+test-env DATA_PATH __TEST_DIR__
+
+statement ok
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/files')
+
+statement ok
+use ducklake
+
+query III
+SELECT catalog_type, extension_version IS NOT NULL AS has_version, data_path IS NOT NULL AS has_path FROM settings();
+----
+sqlite	true	true

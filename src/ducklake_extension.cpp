@@ -77,6 +77,9 @@ static void LoadInternal(ExtensionLoader &loader) {
 	DuckLakeLastCommittedSnapshotFunction last_committed;
 	loader.RegisterFunction(last_committed);
 
+	DuckLakeSettingsFunction settings;
+	loader.RegisterFunction(settings);
+
 	// secrets
 	auto secret_type = DuckLakeSecret::GetSecretType();
 	loader.RegisterSecretType(secret_type);
