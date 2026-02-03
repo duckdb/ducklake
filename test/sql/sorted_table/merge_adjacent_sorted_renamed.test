@@ -62,5 +62,7 @@ Columns in the SET SORTED BY statement were not found in the DuckLake table. Unm
 statement ok
 ALTER TABLE ducklake.renamed_columns_test SET SORTED BY (sort_key_1_changed ASC NULLS LAST, sort_key_2_changed ASC NULLS LAST);
 
-statement ok
-CALL ducklake_merge_adjacent_files('ducklake', 'renamed_columns_test');
+query III
+SELECT table_name, files_processed, files_created FROM ducklake_merge_adjacent_files('ducklake', 'renamed_columns_test')
+----
+renamed_columns_test	2	1

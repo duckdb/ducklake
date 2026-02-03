@@ -62,11 +62,14 @@ public:
 	vector<ColumnBinding> GetColumnBindings() override {
 		vector<ColumnBinding> result;
 		result.emplace_back(table_index, 0);
+		result.emplace_back(table_index, 1);
+		result.emplace_back(table_index, 2);
+		result.emplace_back(table_index, 3);
 		return result;
 	}
 
 	void ResolveTypes() override {
-		types = {LogicalType::BOOLEAN};
+		types = {LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::BIGINT, LogicalType::BIGINT};
 	}
 };
 

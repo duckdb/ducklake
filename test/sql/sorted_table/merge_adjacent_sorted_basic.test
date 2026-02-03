@@ -114,8 +114,10 @@ SELECT snapshot_id, schema_version, changes FROM ducklake_snapshots('ducklake')
 statement ok
 ALTER TABLE sort_on_compaction ADD COLUMN new_column INTEGER;
 
-statement ok
-CALL ducklake_merge_adjacent_files('ducklake', 'sort_on_compaction');
+query III
+SELECT table_name, files_processed, files_created FROM ducklake_merge_adjacent_files('ducklake', 'sort_on_compaction')
+----
+sort_on_compaction	2	1
 
 query IIII
 FROM sort_on_compaction

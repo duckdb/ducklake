@@ -1,0 +1,51 @@
+# name: test/sql/merge/merge_multi_partition_timestamp.test
+# description: MERGE with multiple timestamp partition transforms produces incorrect partition values
+# group: [merge]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+
+test-env DATA_PATH __TEST_DIR__
+
+statement ok
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/merge_partition_bug', METADATA_CATALOG 'meta')
+
+statement ok
+USE ducklake
+
+statement ok
+CREATE TABLE t (id INTEGER, ts TIMESTAMP);
+
+statement ok
+ALTER TABLE t SET PARTITIONED BY (year(ts), month(ts));
+
+statement ok
+INSERT INTO t VALUES (1, '2025-01-15');
+
+# MERGE a new row with ts='2025-03-20' (year=2025, month=3)
+statement ok
+MERGE INTO t USING (SELECT 2 as id, '2025-03-20'::TIMESTAMP as ts) AS src ON t.id = src.id
+WHEN NOT MATCHED THEN INSERT *;
+
+# Verify data is correct
+query II
+SELECT * FROM t ORDER BY id
+----
+1	2025-01-15 00:00:00
+2	2025-03-20 00:00:00
+
+# Year should only be 2025, not 0
+query I
+SELECT DISTINCT partition_value FROM meta.ducklake_file_partition_value WHERE partition_key_index = 0 ORDER BY 1
+----
+2025
+
+# Month should be 1 and 3, not 0
+query I
+SELECT DISTINCT partition_value FROM meta.ducklake_file_partition_value WHERE partition_key_index = 1 ORDER BY 1
+----
+1
+3

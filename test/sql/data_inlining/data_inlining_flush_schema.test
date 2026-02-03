@@ -51,8 +51,10 @@ SELECT COUNT(*) FROM GLOB('${DATA_PATH}/ducklake_inlining_flush_schema_data/**')
 0
 
 # flush the "test" table in the main schema
-statement ok
-CALL ducklake_flush_inlined_data('ducklake', table_name => 'test')
+query II
+SELECT table_name, rows_flushed FROM ducklake_flush_inlined_data('ducklake', table_name => 'test')
+----
+test	1
 
 query I
 SELECT COUNT(*) FROM GLOB('${DATA_PATH}/ducklake_inlining_flush_schema_data/**')
@@ -60,8 +62,11 @@ SELECT COUNT(*) FROM GLOB('${DATA_PATH}/ducklake_inlining_flush_schema_data/**')
 1
 
 # flush the full "s1" schema
-statement ok
-CALL ducklake_flush_inlined_data('ducklake', schema_name => 's1')
+query II
+SELECT table_name, rows_flushed FROM ducklake_flush_inlined_data('ducklake', schema_name => 's1') ORDER BY table_name
+----
+test	1
+test2	1
 
 query I
 SELECT COUNT(*) FROM GLOB('${DATA_PATH}/ducklake_inlining_flush_schema_data/**')
@@ -69,8 +74,10 @@ SELECT COUNT(*) FROM GLOB('${DATA_PATH}/ducklake_inlining_flush_schema_data/**')
 3
 
 # flush a single table in a specific schema
-statement ok
-CALL ducklake_flush_inlined_data('ducklake', schema_name => 's2', table_name => 'test')
+query II
+SELECT table_name, rows_flushed FROM ducklake_flush_inlined_data('ducklake', schema_name => 's2', table_name => 'test')
+----
+test	1
 
 query I
 SELECT COUNT(*) FROM GLOB('${DATA_PATH}/ducklake_inlining_flush_schema_data/**')

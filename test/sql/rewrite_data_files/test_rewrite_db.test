@@ -67,8 +67,11 @@ SELECT data_file_id, begin_snapshot, end_snapshot FROM ducklake_metadata.ducklak
 7	10	NULL
 
 # Now lets call the rewrite function in the whole DB
-statement ok
-CALL ducklake_rewrite_data_files('ducklake', delete_threshold => 0);
+query III
+SELECT table_name, files_processed, files_created FROM ducklake_rewrite_data_files('ducklake', delete_threshold => 0) ORDER BY ALL
+----
+test_0	2	1
+test_1	2	1
 
 # Check ze files after rewrite, we should have removed the last file of each table (i.e., id 4 and 9)
 query IIII
