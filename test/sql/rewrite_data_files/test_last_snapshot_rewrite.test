@@ -172,11 +172,11 @@ SELECT snapshot_id, changes FROM snapshots();
 3	{tables_deleted_from=[1]}
 4	{tables_deleted_from=[1]}
 5	{tables_deleted_from=[1]}
-6	{}
+6	{rewrite_delete=[1]}
 7	{tables_deleted_from=[1]}
-8	{}
+8	{rewrite_delete=[1]}
 9	{tables_deleted_from=[1]}
-10	{}
+10	{rewrite_delete=[1]}
 
 query I
 select count(*) from test AT (VERSION => 3);

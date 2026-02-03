@@ -163,6 +163,13 @@ struct DuckLakeDeletedInlinedDataInfo {
 	vector<idx_t> deleted_row_ids;
 };
 
+//! Info for all inlined file deletions for a single table
+struct DuckLakeInlinedFileDeletionInfo {
+	TableIndex table_id;
+	//! Maps file_id -> set of deleted row_ids
+	DuckLakeInlinedFileDeletes file_deletions;
+};
+
 struct DuckLakeDeleteFileInfo {
 	DataFileIndex id;
 	TableIndex table_id;
@@ -353,6 +360,10 @@ struct DuckLakeFileListEntry {
 	optional_idx snapshot_filter_min;
 	MappingIndex mapping_id;
 	DuckLakeDataType data_type = DuckLakeDataType::DATA_FILE;
+	//! The data file id
+	DataFileIndex file_id;
+	//! Inlined file deletions (row positions that have been deleted and stored in the metadata database)
+	set<idx_t> inlined_file_deletions;
 };
 
 struct DuckLakeDeleteScanEntry {
@@ -367,6 +378,10 @@ struct DuckLakeDeleteScanEntry {
 	optional_idx start_snapshot;
 	//! The end of the snapshot range for filtering
 	optional_idx end_snapshot;
+	//! Data file ID for matching inlined deletions
+	DataFileIndex file_id;
+	//! Inlined file deletions {row_id -> snapshot_id}
+	unordered_map<idx_t, idx_t> inlined_file_deletions;
 };
 
 struct DuckLakeFileListExtendedEntry {
@@ -415,6 +430,8 @@ struct DuckLakeCompactionFileEntry {
 	vector<DuckLakeCompactionDeleteFileData> delete_files;
 	optional_idx max_partial_file_snapshot;
 	idx_t schema_version;
+	//! Whether this file has inlined deletions (stored in metadata database rather than delete files)
+	bool has_inlined_deletions = false;
 };
 
 struct DuckLakeRewriteFileEntry {

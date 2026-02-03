@@ -200,7 +200,7 @@ void DuckLakeCompactor::GenerateCompactions(DuckLakeTableEntry &table,
 			continue;
 		}
 		if ((!candidate.delete_files.empty() && type == CompactionType::MERGE_ADJACENT_TABLES) ||
-		    candidate.file.end_snapshot.IsValid()) {
+		    candidate.file.end_snapshot.IsValid() || candidate.has_inlined_deletions) {
 			// Merge Adjacent Tables doesn't perform the merge if delete files are present
 			continue;
 		}
