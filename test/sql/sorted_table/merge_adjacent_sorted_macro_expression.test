@@ -11,7 +11,7 @@ test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
 
 
 statement ok
-ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '__TEST_DIR__/merge_adjacent_sorted_nested_expression/')
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '__TEST_DIR__/merge_adjacent_sorted_macro_expression/')
 
 statement ok
 USE ducklake;
