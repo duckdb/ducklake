@@ -312,18 +312,13 @@ unique_ptr<LogicalOperator> DuckLakeCompactor::InsertSort(Binder &binder, unique
 
 	// Resolve types for the input plan (could be LogicalGet or LogicalProjection)
 	plan->ResolveOperatorTypes();
-	auto &root_types = plan->types;
 
-	// Get the column names and table index
-	auto current_columns = table.GetColumns().GetColumnNames();
+	auto &columns = table.GetColumns();
+	auto current_columns = columns.GetColumnNames();
+	auto column_types = columns.GetColumnTypes();
+
 	D_ASSERT(!bindings.empty());
 	auto table_index = bindings[0].table_index;
-
-	// Get the types for just the table columns (root_types may include virtual columns)
-	vector<LogicalType> column_types;
-	for (idx_t i = 0; i < current_columns.size(); i++) {
-		column_types.push_back(root_types[i]);
-	}
 
 	// Bind the ORDER BY expressions
 	auto orders = BindSortOrders(binder, table.name, table_index, current_columns, column_types, pre_bound_orders);
