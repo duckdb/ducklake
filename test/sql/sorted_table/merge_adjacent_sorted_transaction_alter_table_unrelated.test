@@ -79,8 +79,10 @@ ALTER TABLE sort_on_compaction ADD COLUMN new_column INTEGER;
 statement ok
 COMMIT
 
-statement ok
-CALL ducklake_merge_adjacent_files('ducklake', 'sort_on_compaction');
+query III
+SELECT table_name, files_processed, files_created FROM ducklake_merge_adjacent_files('ducklake', 'sort_on_compaction')
+----
+sort_on_compaction	2	1
 
 
 # Now we have the new sort order and the new column

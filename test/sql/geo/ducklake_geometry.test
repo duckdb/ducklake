@@ -62,8 +62,10 @@ select extra_stats from ducklake_meta.ducklake_table_column_stats order by all;
 {"bbox": {"xmin": 1.000000, "xmax": 10.000000, "ymin": 2.000000, "ymax": 10.000000, "zmin": 5.000000, "zmax": 10.000000, "mmin": null, "mmax": null}, "types": ["linestring_z", "point"]}
 
 # Merge files into a single file and check stats remain the same
-statement ok
-CALL ducklake_merge_adjacent_files('ducklake')
+query III
+SELECT table_name, files_processed, files_created FROM ducklake_merge_adjacent_files('ducklake')
+----
+t1	2	1
 
 query I
 select extra_stats from ducklake_meta.ducklake_file_column_stats order by all;
@@ -95,8 +97,10 @@ select extra_stats from ducklake_meta.ducklake_file_column_stats order by all;
 {"bbox": {"xmin": 20.000000, "xmax": 20.000000, "ymin": 20.000000, "ymax": 20.000000, "zmin": null, "zmax": null, "mmin": 5.000000, "mmax": 5.000000}, "types": ["point_m"]}
 
 # Now merge all again
-statement ok
-CALL ducklake_merge_adjacent_files('ducklake')
+query III
+SELECT table_name, files_processed, files_created FROM ducklake_merge_adjacent_files('ducklake')
+----
+t1	3	1
 
 # Check merged stats
 query I

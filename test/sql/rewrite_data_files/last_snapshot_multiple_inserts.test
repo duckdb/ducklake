@@ -58,8 +58,10 @@ SELECT COUNT(*) FROM GLOB('${DATA_PATH}/ducklake_multiple_inserts/**/*')
 ----
 7
 
-statement ok
-CALL ducklake_rewrite_data_files('ducklake', 'test', delete_threshold => 0);
+query III
+SELECT table_name, files_processed, files_created FROM ducklake_rewrite_data_files('ducklake', 'test', delete_threshold => 0) ORDER BY ALL
+----
+test	3	1
 
 statement ok
 CALL ducklake_cleanup_old_files('ducklake', cleanup_all => true);

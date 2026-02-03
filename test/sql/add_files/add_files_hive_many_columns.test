@@ -1,0 +1,57 @@
+# name: test/sql/add_files/add_files_hive_many_columns.test
+# description: test ducklake adding files with many Hive-partitioned columns
+# group: [add_files]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+
+test-env DATA_PATH __TEST_DIR__
+
+
+statement ok
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/ducklake_add_files_hive_many_columns');
+
+statement ok
+COPY (SELECT 2026 AS year, 1 AS month, 30 AS day, 'abcde' AS collection, 'eng' AS language, 1 AS value)
+TO '${DATA_PATH}/hive_many_columns' (FORMAT PARQUET, PARTITION_BY (year, month, day, collection, language));
+
+statement ok
+CREATE TABLE ducklake.test AS FROM '${DATA_PATH}/hive_many_columns/**/*.parquet' WITH NO DATA;
+
+statement ok
+ALTER TABLE ducklake.test SET PARTITIONED BY (year, month, day, collection, language);
+
+statement ok
+CALL ducklake_add_data_files('ducklake', 'test', '${DATA_PATH}/hive_many_columns/**/*.parquet');
+
+query IIIIII
+SELECT year, month, day, collection, language, value FROM ducklake.test
+----
+2026	1	30	abcde	eng	1
+
+query II
+SELECT column_name, partition_value
+FROM __ducklake_metadata_ducklake.ducklake_column
+NATURAL INNER JOIN __ducklake_metadata_ducklake.ducklake_partition_column
+NATURAL INNER JOIN __ducklake_metadata_ducklake.ducklake_file_partition_value
+ORDER BY column_name;
+----
+collection	abcde
+day	30
+language	eng
+month	1
+year	2026
+
+statement ok
+CREATE TABLE ducklake.test2 AS FROM '${DATA_PATH}/hive_many_columns/**/*.parquet' WITH NO DATA;
+
+statement ok
+ALTER TABLE ducklake.test2 SET PARTITIONED BY (year, month, day, collection, value);
+
+statement error
+CALL ducklake_add_data_files('ducklake', 'test2', '${DATA_PATH}/hive_many_columns/**/*.parquet');
+----
+contains an invalid partition value for the table configuration

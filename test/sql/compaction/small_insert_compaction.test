@@ -63,11 +63,14 @@ SELECT snapshot_id, rowid, * FROM ducklake.test ORDER BY ALL
 7	3	4
 8	4	5
 
-statement ok
-CALL ducklake.merge_adjacent_files();
+query III
+SELECT table_name, files_processed, files_created FROM ducklake.merge_adjacent_files() ORDER BY ALL
+----
+test	5	1
 
-statement ok
-CALL ducklake_merge_adjacent_files('ducklake');
+query III
+SELECT table_name, files_processed, files_created FROM ducklake_merge_adjacent_files('ducklake') ORDER BY ALL
+----
 
 # files are not immediately deleted - but are added to the deletion queue
 # we actually gain a file here
