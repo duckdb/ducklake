@@ -42,8 +42,10 @@ SELECT COUNT(*) FROM ducklake_list_files('ducklake', 't');
 3
 
 # Merge B+C into a single file (A is too big to merge)
-statement ok
-CALL ducklake_merge_adjacent_files('ducklake', 't');
+query III
+SELECT table_name, files_processed, files_created FROM ducklake_merge_adjacent_files('ducklake', 't')
+----
+t	2	1
 
 # State now:
 # - File A (ids 0-4999): NO partial_max, begin_snapshot=2
@@ -71,8 +73,10 @@ statement ok
 CALL ducklake_set_option('ducklake', 'target_file_size', '1KB');
 
 # Merge D+E into a single file (A is too big to merge)
-statement ok
-CALL ducklake_merge_adjacent_files('ducklake', 't');
+query III
+SELECT table_name, files_processed, files_created FROM ducklake_merge_adjacent_files('ducklake', 't')
+----
+t	2	1
 
 # State now:
 # - File A (ids 0-4999): NO partial_max, begin_snapshot=2
@@ -103,12 +107,16 @@ statement ok
 CALL ducklake_set_option('ducklake', 'target_file_size', '1MB');
 
 # Rewrite all data files, including ones with partial_max
-statement ok
-CALL ducklake_rewrite_data_files('ducklake', 't', delete_threshold => 0);
+query III
+SELECT table_name, files_processed, files_created FROM ducklake_rewrite_data_files('ducklake', 't', delete_threshold => 0)
+----
+t	2	1
 
 # Merge all of them into a single file
-statement ok
-CALL ducklake_merge_adjacent_files('ducklake', 't');
+query III
+SELECT table_name, files_processed, files_created FROM ducklake_merge_adjacent_files('ducklake', 't')
+----
+t	2	1
 
 # Verify that we ended up with a single file
 query I

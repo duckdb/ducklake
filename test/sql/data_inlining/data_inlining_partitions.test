@@ -54,8 +54,11 @@ SELECT COUNT(*) FROM partitioned_tbl WHERE year(ts) = 2021
 1216
 
 # flush the inlined data
-statement ok
-CALL ducklake_flush_inlined_data('ducklake')
+query III
+SELECT schema_name, table_name, rows_flushed FROM ducklake_flush_inlined_data('ducklake') ORDER BY ALL
+----
+main	partitioned_tbl	10000
+
 
 # we now have 14 files
 query I

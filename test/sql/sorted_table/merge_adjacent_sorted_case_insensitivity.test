@@ -57,8 +57,10 @@ FROM sort_on_compaction
 statement ok
 ALTER TABLE ducklake.sort_on_compaction SET SORTED BY (SORT_KEY_1 ASC NULLS LAST, SoRt_KeY_2 ASC NULLS LAST);
 
-statement ok
-CALL ducklake_merge_adjacent_files('ducklake', 'sort_on_compaction');
+query III
+SELECT table_name, files_processed, files_created FROM ducklake_merge_adjacent_files('ducklake', 'sort_on_compaction')
+----
+sort_on_compaction	2	1
 
 query III
 FROM sort_on_compaction
@@ -115,8 +117,10 @@ FROM sort_on_compaction_2
 statement ok
 ALTER TABLE ducklake.sort_on_compaction_2 SET SORTED BY (SORT_KEY_1 ASC NULLS LAST, SoRt_KeY_2 ASC NULLS LAST);
 
-statement ok
-CALL ducklake_merge_adjacent_files('ducklake', 'sort_on_compaction_2');
+query III
+SELECT table_name, files_processed, files_created FROM ducklake_merge_adjacent_files('ducklake', 'sort_on_compaction_2')
+----
+sort_on_compaction_2	2	1
 
 query III
 FROM sort_on_compaction_2

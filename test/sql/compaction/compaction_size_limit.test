@@ -44,8 +44,11 @@ SELECT COUNT(*) FROM GLOB('${DATA_PATH}/compaction_size_limit/main/test/*')
 5
 
 
-statement ok
-CALL ducklake_merge_adjacent_files('ducklake')
+query III
+SELECT table_name, files_processed, files_created FROM ducklake_merge_adjacent_files('ducklake') ORDER BY ALL
+----
+test	2	1
+test	3	1
 
 statement ok
 CALL ducklake_cleanup_old_files('ducklake', cleanup_all => true);

@@ -72,8 +72,10 @@ ALTER TABLE ducklake.reset_sorted_test SET SORTED BY (sort_key_1 ASC NULLS LAST,
 statement ok
 ALTER TABLE ducklake.reset_sorted_test RESET SORTED BY;
 
-statement ok
-CALL ducklake_merge_adjacent_files('ducklake', 'reset_sorted_test');
+query III
+SELECT table_name, files_processed, files_created FROM ducklake_merge_adjacent_files('ducklake', 'reset_sorted_test')
+----
+reset_sorted_test	2	1
 
 # We should receive the insertion order post compaction due to the RESET SORTED BY
 query III
