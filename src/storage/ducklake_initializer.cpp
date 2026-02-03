@@ -171,12 +171,8 @@ void DuckLakeInitializer::LoadExistingDuckLake(DuckLakeTransaction &transaction)
 		}
 		if (tag.key == "data_path") {
 			if (options.data_path.empty()) {
-				// set the data path to the value in the tag
-				options.data_path = tag.value;
+				options.data_path = metadata_manager.LoadPath(tag.value);
 				InitializeDataPath();
-				// load the correct path from the metadata manager
-				// we need to do this after InitializeDataPath() because that sets up the correct separator
-				options.data_path = metadata_manager.LoadPath(options.data_path);
 			} else {
 				// verify that they match if override_data_path is not set to true
 				if (metadata_manager.StorePath(options.data_path) != tag.value && !options.override_data_path) {

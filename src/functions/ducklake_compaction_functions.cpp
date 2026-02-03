@@ -490,7 +490,7 @@ DuckLakeCompactor::GenerateCompactionCommand(vector<DuckLakeCompactionFileEntry>
 		} else {
 			copy_input.virtual_columns = InsertVirtualColumns::WRITE_ROW_ID;
 		}
-	} else if (write_snapshot_id){
+	} else if (write_snapshot_id) {
 		copy_input.virtual_columns = InsertVirtualColumns::WRITE_SNAPSHOT_ID;
 	}
 
