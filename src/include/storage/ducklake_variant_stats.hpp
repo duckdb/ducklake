@@ -12,10 +12,10 @@
 
 namespace duckdb {
 
-
 struct DuckLakeVariantStats {
-	string field_path;
-	string shredded_type;
+	DuckLakeVariantStats(LogicalType shredded_type, DuckLakeColumnStats field_stats);
+
+	LogicalType shredded_type;
 	DuckLakeColumnStats field_stats;
 };
 
@@ -23,12 +23,16 @@ struct DuckLakeColumnVariantStats final : public DuckLakeColumnExtraStats {
 	DuckLakeColumnVariantStats();
 	void Merge(const DuckLakeColumnExtraStats &new_stats) override;
 	unique_ptr<DuckLakeColumnExtraStats> Copy() const override;
+
 	bool ParseStats(const string &stats_name, const vector<Value> &stats_children) override;
+
 	string Serialize() const override;
 	void Deserialize(const string &stats) override;
 
 public:
-	vector<DuckLakeVariantStats> variant_stats;
+	// map of field name -> field stats
+	unordered_map<string, DuckLakeVariantStats> shredded_field_stats;
+	LogicalType variant_type;
 };
 
 } // namespace duckdb

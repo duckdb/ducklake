@@ -194,11 +194,11 @@ unique_ptr<BaseStatistics> DuckLakeColumnStats::CreateNumericStats() const {
 
 unique_ptr<BaseStatistics> DuckLakeColumnStats::CreateVariantStats() const {
 	throw InternalException("Create Variant Stats");
-//	if (!extra_stats) {
-//		throw InternalException("Variant DuckLakeColumnStats without extra_stats?");
-//	}
-//	auto &variant_stats = extra_stats->Cast<DuckLakeColumnVariantStats>();
-//	return variant_stats.ToStats();
+	//	if (!extra_stats) {
+	//		throw InternalException("Variant DuckLakeColumnStats without extra_stats?");
+	//	}
+	//	auto &variant_stats = extra_stats->Cast<DuckLakeColumnVariantStats>();
+	//	return variant_stats.ToStats();
 }
 
 unique_ptr<BaseStatistics> DuckLakeColumnStats::CreateStringStats() const {

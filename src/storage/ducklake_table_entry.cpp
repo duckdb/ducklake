@@ -149,20 +149,22 @@ optional_ptr<const DuckLakeFieldId> DuckLakeTableEntry::GetFieldId(FieldIndex fi
 	return field_data->GetByFieldIndex(field_index);
 }
 
-const DuckLakeFieldId &DuckLakeTableEntry::GetFieldId(const vector<string> &column_names) const {
-	auto result = TryGetFieldId(column_names);
+const DuckLakeFieldId &DuckLakeTableEntry::GetFieldId(const vector<string> &column_names,
+                                                      optional_ptr<optional_idx> name_offset) const {
+	auto result = TryGetFieldId(column_names, name_offset);
 	if (!result) {
 		throw BinderException("Column \"%s\" does not exist", StringUtil::Join(column_names, "."));
 	}
 	return *result;
 }
 
-optional_ptr<const DuckLakeFieldId> DuckLakeTableEntry::TryGetFieldId(const vector<string> &column_names) const {
+optional_ptr<const DuckLakeFieldId> DuckLakeTableEntry::TryGetFieldId(const vector<string> &column_names,
+                                                                      optional_ptr<optional_idx> name_offset) const {
 	if (!columns.ColumnExists(column_names[0])) {
 		return nullptr;
 	}
 	auto &root_col = columns.GetColumn(column_names[0]);
-	return field_data->GetByNames(root_col.Physical(), column_names);
+	return field_data->GetByNames(root_col.Physical(), column_names, name_offset);
 }
 
 const ColumnDefinition &DuckLakeTableEntry::GetColumnByFieldId(FieldIndex field_index) const {

@@ -21,10 +21,7 @@ class BaseStatistics;
 struct DuckLakeColumnStats;
 struct DuckLakeVariantStats;
 
-enum class DuckLakeExtraStatsType {
-	GEOMETRY,
-	VARIANT
-};
+enum class DuckLakeExtraStatsType { GEOMETRY, VARIANT };
 
 struct DuckLakeColumnExtraStats {
 	explicit DuckLakeColumnExtraStats(DuckLakeExtraStatsType stats_type);
