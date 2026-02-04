@@ -23,7 +23,7 @@ struct DuckLakeColumnVariantStats final : public DuckLakeColumnExtraStats {
 	DuckLakeColumnVariantStats();
 	void Merge(const DuckLakeColumnExtraStats &new_stats) override;
 	unique_ptr<DuckLakeColumnExtraStats> Copy() const override;
-
+	bool ParseStats(const string &stats_name, const vector<Value> &stats_children) override;
 	string Serialize() const override;
 	void Deserialize(const string &stats) override;
 

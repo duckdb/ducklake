@@ -37,6 +37,8 @@ struct DuckLakeColumnExtraStats {
 		return stats_type;
 	}
 
+	virtual bool ParseStats(const string &stats_name, const vector<Value> &children) = 0;
+
 	// Convert the stats into a string representation for storage (e.g. JSON)
 	virtual string Serialize() const = 0;
 	// Parse the stats from a string

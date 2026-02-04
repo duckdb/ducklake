@@ -30,4 +30,8 @@ void DuckLakeColumnVariantStats::Deserialize(const string &stats) {
     throw InternalException("eek");
 }
 
+bool DuckLakeColumnVariantStats::ParseStats(const string &stats_name, const vector<Value> &stats_children) {
+    return false;
+}
+
 } // namespace duckdb

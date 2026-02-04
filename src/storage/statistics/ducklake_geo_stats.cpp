@@ -1,6 +1,6 @@
 #include "storage/ducklake_stats.hpp"
 #include "storage/ducklake_geo_stats.hpp"
-
+#include "duckdb/common/types/value.hpp"
 #include "yyjson.hpp"
 
 namespace duckdb {
@@ -123,6 +123,34 @@ void DuckLakeColumnGeoStats::Deserialize(const string &stats) {
 		}
 	}
 	yyjson_doc_free(doc);
+}
+
+bool DuckLakeColumnGeoStats::ParseStats(const string &stats_name, const vector<Value> &stats_children) {
+	if (stats_name == "bbox_xmax") {
+		xmax = stats_children[1].DefaultCastAs(LogicalType::DOUBLE).GetValue<double>();
+	} else if (stats_name == "bbox_xmin") {
+		xmin = stats_children[1].DefaultCastAs(LogicalType::DOUBLE).GetValue<double>();
+	} else if (stats_name == "bbox_ymax") {
+		ymax = stats_children[1].DefaultCastAs(LogicalType::DOUBLE).GetValue<double>();
+	} else if (stats_name == "bbox_ymin") {
+		ymin = stats_children[1].DefaultCastAs(LogicalType::DOUBLE).GetValue<double>();
+	} else if (stats_name == "bbox_zmax") {
+		zmax = stats_children[1].DefaultCastAs(LogicalType::DOUBLE).GetValue<double>();
+	} else if (stats_name == "bbox_zmin") {
+		zmin = stats_children[1].DefaultCastAs(LogicalType::DOUBLE).GetValue<double>();
+	} else if (stats_name == "bbox_mmax") {
+		mmax = stats_children[1].DefaultCastAs(LogicalType::DOUBLE).GetValue<double>();
+	} else if (stats_name == "bbox_mmin") {
+		mmin = stats_children[1].DefaultCastAs(LogicalType::DOUBLE).GetValue<double>();
+	} else if (stats_name == "geo_types") {
+		auto list_value = stats_children[1].DefaultCastAs(LogicalType::LIST(LogicalType::VARCHAR));
+		for (const auto &child : ListValue::GetChildren(list_value)) {
+			geo_types.insert(StringValue::Get(child));
+		}
+	} else {
+		return false;
+	}
+	return true;
 }
 
 } // namespace duckdb
