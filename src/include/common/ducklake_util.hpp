@@ -27,6 +27,7 @@ class DuckLakeUtil {
 public:
 	static string ParseQuotedValue(const string &input, idx_t &pos);
 	static string ToQuotedList(const vector<string> &input, char list_separator = ',');
+	static string ToQuotedList(vector<string>::const_iterator begin, vector<string>::const_iterator end, char list_separator = ',');
 	static vector<string> ParseQuotedList(const string &input, char list_separator = ',');
 	static string SQLIdentifierToString(const string &text);
 	static string SQLLiteralToString(const string &text);

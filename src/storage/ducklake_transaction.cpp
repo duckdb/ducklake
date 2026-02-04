@@ -18,6 +18,7 @@
 #include "storage/ducklake_transaction_changes.hpp"
 #include "storage/ducklake_transaction_manager.hpp"
 #include "storage/ducklake_view_entry.hpp"
+#include "duckdb/common/printer.hpp"
 
 namespace duckdb {
 
@@ -1824,7 +1825,6 @@ void DuckLakeTransaction::FlushChanges() {
 			batch_queries += metadata_manager->InsertSnapshot();
 
 			batch_queries += WriteSnapshotChanges(commit_state, transaction_changes);
-
 			auto res = metadata_manager->Execute(commit_snapshot, batch_queries);
 			if (res->HasError()) {
 				res->GetErrorObject().Throw("Failed to flush changes into DuckLake: ");

@@ -13,9 +13,12 @@
 #include "duckdb/common/common.hpp"
 #include "duckdb/common/optional_idx.hpp"
 #include "common/index.hpp"
+#include "duckdb/storage/statistics/variant_stats.hpp"
 
 namespace duckdb {
 class BaseStatistics;
+
+struct DuckLakeColumnStats;
 
 struct DuckLakeColumnExtraStats {
 	virtual ~DuckLakeColumnExtraStats() = default;
@@ -53,12 +56,36 @@ public:
 	set<string> geo_types;
 };
 
-struct DuckLakeColumnStats {
-	explicit DuckLakeColumnStats(LogicalType type_p) : type(std::move(type_p)) {
-		if (DuckLakeTypes::IsGeoType(type)) {
-			extra_stats = make_uniq<DuckLakeColumnGeoStats>();
-		}
+template <class T>
+class DuckLakeVariantStatsArena {
+public:
+	DuckLakeVariantStatsArena() = default;
+
+	// create a new T with arbitrary constructor args
+	template <class... Args>
+	idx_t emplace(Args &&...args) {
+		idx_t id = static_cast<idx_t>(storage.size());
+		storage.emplace_back(std::forward<Args>(args)...);
+		return id;
 	}
+
+	T &operator[](idx_t i) {
+		return storage[i];
+	}
+	const T &operator[](idx_t i) const {
+		return storage[i];
+	}
+
+	size_t size() const {
+		return storage.size();
+	}
+
+private:
+	vector<T> storage;
+};
+
+struct DuckLakeColumnStats {
+	explicit DuckLakeColumnStats(LogicalType type_p);
 
 	// Copy constructor
 	DuckLakeColumnStats(const DuckLakeColumnStats &other);
@@ -85,11 +112,53 @@ struct DuckLakeColumnStats {
 public:
 	unique_ptr<BaseStatistics> ToStats() const;
 	void MergeStats(const DuckLakeColumnStats &new_stats);
-	DuckLakeColumnStats Copy() const;
 
 private:
 	unique_ptr<BaseStatistics> CreateNumericStats() const;
 	unique_ptr<BaseStatistics> CreateStringStats() const;
+	unique_ptr<BaseStatistics> CreateVariantStats() const;
+};
+
+struct DuckLakeColumnStats;
+
+struct DuckLakeColumnVariantFieldStats {
+public:
+	explicit DuckLakeColumnVariantFieldStats(idx_t index) : index(index) {
+	}
+
+public:
+	//! Index in the tree of the current node
+	idx_t index;
+
+	optional_idx stats_index;
+
+	//! Children of this column (their index to find them in the tree)
+	case_insensitive_map_t<idx_t> children;
+};
+
+struct DuckLakeColumnVariantStats final : public DuckLakeColumnExtraStats {
+public:
+	DuckLakeColumnVariantStats();
+
+public:
+	void Build(const LogicalType &shredded_internal_type);
+
+public:
+	void Merge(const DuckLakeColumnExtraStats &new_stats) override;
+	unique_ptr<DuckLakeColumnExtraStats> Copy() const override;
+	unique_ptr<BaseStatistics> ToStats() const;
+	string Serialize() const override;
+	void Deserialize(const string &stats) override;
+
+private:
+	void BuildInternal(idx_t parent, const LogicalType &shredded_internal_type);
+	bool ConvertStats(idx_t field_index, BaseStatistics &result) const;
+
+public:
+	VariantStatsShreddingState shredding_state = VariantStatsShreddingState::UNINITIALIZED;
+	LogicalType shredded_type = LogicalType::INVALID;
+	DuckLakeVariantStatsArena<DuckLakeColumnVariantFieldStats> field_arena;
+	DuckLakeVariantStatsArena<DuckLakeColumnStats> stats_arena;
 };
 
 //! These are the global, table-wide stats

@@ -373,6 +373,9 @@ const DuckLakeFieldId &DuckLakeFieldId::GetChildByIndex(idx_t index) const {
 optional_ptr<const DuckLakeFieldId> DuckLakeFieldData::GetByNames(PhysicalIndex id,
                                                                   const vector<string> &column_names) const {
 	const_reference<DuckLakeFieldId> result = GetByRootIndex(id);
+	if (result.get().Type().id() == LogicalTypeId::VARIANT) {
+		return result.get();
+	}
 	for (idx_t i = 1; i < column_names.size(); ++i) {
 		auto &current = result.get();
 		auto next_child = current.GetChildByName(column_names[i]);

@@ -1,0 +1,48 @@
+# name: test/sql/types/variant.test
+# group: [types]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+
+test-env DATA_PATH __TEST_DIR__
+
+statement ok
+attach ':memory:' as db2(type 'ducklake')
+
+statement ok
+use db2;
+
+# Test CREATE + INSERT
+statement ok
+CREATE TABLE tbl as select COLUMNS(*)::VARIANT from (values(
+	{
+		'a': ['a', 'b', 'this is a long string'],
+		'b': {
+			'nested': [{'nested_in_list': 42}]
+		}
+	}
+)) t(a);
+
+# Test 'Merge'
+statement ok
+insert into tbl values(
+	{
+		'c': NULL,
+		'b': {'nested': [{'nested_in_list': 42}]}
+	}
+);
+
+query I
+select a from tbl;
+----
+{'a': [a, b, this is a long string], 'b': {'nested': [{'nested_in_list': 42}]}}
+{'b': {'nested': [{'nested_in_list': 42}]}, 'c': NULL}
+
+# Merge got rid of the 'a' column, because the second insert wasn't shredded on OBJECT(a, b)
+query I
+select stats(a) from tbl limit 1;
+----
+shredding_state: SHREDDED, shredding: {typed_value_type: STRUCT(b STRUCT(nested STRUCT(nested_in_list INTEGER)[])), stats: {fully_shredded: true, children: {b: fully_shredded: true, children: {nested: fully_shredded: true, child: fully_shredded: true, children: {nested_in_list: fully_shredded: true}}}}}[Has Null: true, Has No Null: true]
