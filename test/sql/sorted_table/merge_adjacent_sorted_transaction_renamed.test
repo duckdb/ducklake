@@ -98,8 +98,10 @@ ALTER TABLE ducklake.sort_on_compaction SET SORTED BY (sort_key_1_renamed_again 
 statement ok
 COMMIT
 
-statement ok
-CALL ducklake_merge_adjacent_files('ducklake', 'sort_on_compaction');
+query III
+SELECT table_name, files_processed, files_created FROM ducklake_merge_adjacent_files('ducklake', 'sort_on_compaction')
+----
+sort_on_compaction	2	1
 
 # Now we have the new sort order and the new column
 query III
@@ -125,7 +127,7 @@ SELECT snapshot_id, schema_version, changes FROM ducklake_snapshots('ducklake')
 3	1	{tables_inserted_into=[1]}
 4	2	{tables_altered=[1]}
 5	3	{tables_altered=[1]}
-6	3	{}
+6	3	{merge_adjacent=[1]}
 
 
 # We wrote a new file for the table

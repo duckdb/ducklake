@@ -28,6 +28,34 @@ struct PositionWithSnapshot {
 	}
 };
 
+inline void MergeDeletesWithSnapshots(const DeleteFileScanResult &scan_result, idx_t fallback_snapshot,
+                                      set<PositionWithSnapshot> &result) {
+	for (idx_t i = 0; i < scan_result.deleted_rows.size(); i++) {
+		PositionWithSnapshot pos_with_snap;
+		pos_with_snap.position = static_cast<int64_t>(scan_result.deleted_rows[i]);
+		if (scan_result.has_embedded_snapshots) {
+			pos_with_snap.snapshot_id = static_cast<int64_t>(scan_result.snapshot_ids[i]);
+		} else {
+			pos_with_snap.snapshot_id = static_cast<int64_t>(fallback_snapshot);
+		}
+		result.insert(pos_with_snap);
+	}
+}
+
+inline void MergeDeletesWithSnapshots(const DuckLakeDeleteData &delete_data, idx_t fallback_snapshot,
+                                      set<PositionWithSnapshot> &result) {
+	for (idx_t i = 0; i < delete_data.deleted_rows.size(); i++) {
+		PositionWithSnapshot pos_with_snap;
+		pos_with_snap.position = static_cast<int64_t>(delete_data.deleted_rows[i]);
+		if (delete_data.HasEmbeddedSnapshots()) {
+			pos_with_snap.snapshot_id = static_cast<int64_t>(delete_data.snapshot_ids[i]);
+		} else {
+			pos_with_snap.snapshot_id = static_cast<int64_t>(fallback_snapshot);
+		}
+		result.insert(pos_with_snap);
+	}
+}
+
 //! Input parameters for writing a delete file
 template <typename PositionType>
 struct WriteDeleteFileInputBase {

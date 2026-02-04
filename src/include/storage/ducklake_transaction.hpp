@@ -43,6 +43,7 @@ struct LocalTableDataChanges {
 	unique_ptr<DuckLakeInlinedData> new_inlined_data;
 	unordered_map<string, vector<DuckLakeDeleteFile>> new_delete_files;
 	unordered_map<string, unique_ptr<DuckLakeInlinedDataDeletes>> new_inlined_data_deletes;
+	unique_ptr<DuckLakeInlinedFileDeletes> new_inlined_file_deletes;
 	vector<DuckLakeCompactionEntry> compactions;
 	bool IsEmpty() const;
 };
@@ -98,7 +99,7 @@ public:
 	vector<DuckLakeDataFile> GetTransactionLocalFiles(TableIndex table_id);
 	shared_ptr<DuckLakeInlinedData> GetTransactionLocalInlinedData(TableIndex table_id);
 	void DropTransactionLocalFile(TableIndex table_id, const string &path);
-	bool HasTransactionLocalChanges(TableIndex table_id) const;
+	bool HasTransactionLocalInserts(TableIndex table_id) const;
 	bool HasTransactionInlinedData(TableIndex table_id) const;
 	void AppendFiles(TableIndex table_id, vector<DuckLakeDataFile> files);
 	void AddDeletes(TableIndex table_id, vector<DuckLakeDeleteFile> files);
@@ -113,6 +114,11 @@ public:
 	void DeleteFromLocalInlinedData(TableIndex table_id, set<idx_t> new_deletes);
 	optional_ptr<DuckLakeInlinedDataDeletes> GetInlinedDeletes(TableIndex table_id, const string &table_name);
 	vector<DuckLakeDeletedInlinedDataInfo> GetNewInlinedDeletes(DuckLakeCommitState &commit_state);
+
+	//! Add inlined file deletions (deletions from parquet files stored in metadata)
+	void AddNewInlinedFileDeletes(TableIndex table_id, idx_t file_id, set<idx_t> new_deletes);
+	//! Get all inlined file deletions for commit
+	vector<DuckLakeInlinedFileDeletionInfo> GetNewInlinedFileDeletes(DuckLakeCommitState &commit_state);
 
 	void DropSchema(DuckLakeSchemaEntry &schema);
 	void DropTable(DuckLakeTableEntry &table);
@@ -140,8 +146,13 @@ public:
 	void GetLocalDeleteForFile(TableIndex table_id, const string &path, DuckLakeFileData &delete_file);
 	void TransactionLocalDelete(TableIndex table_id, const string &data_path, DuckLakeDeleteFile delete_file);
 
+	bool HasLocalInlinedFileDeletes(TableIndex table_id);
+	void GetLocalInlinedFileDeletesForFile(TableIndex table_id, idx_t file_id, set<idx_t> &result);
+
 	bool HasDroppedFiles() const;
 	bool FileIsDropped(const string &path) const;
+	//! Check if there are any uncommitted changes for this table (inserts, deletes, or dropped files)
+	bool HasAnyLocalChanges(TableIndex table_id);
 
 	string GenerateUUID() const;
 	static string GenerateUUIDv7();

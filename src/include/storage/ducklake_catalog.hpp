@@ -121,6 +121,10 @@ public:
 		return options.encryption;
 	}
 
+	bool IsEncrypted() const override {
+		return Encryption() == DuckLakeEncryption::ENCRYPTED;
+	}
+
 	bool IsCommitInfoRequired() const {
 		auto require = GetConfigOption<string>("require_commit_message", {}, {}, "false");
 		return require == "true";

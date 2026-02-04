@@ -55,8 +55,10 @@ SELECT count(*) FROM __ducklake_metadata_ducklake.ducklake_data_file WHERE end_s
 2
 
 # Test min_file_size: only merge files >= 1000 bytes (should only merge the medium files)
-statement ok
-CALL ducklake_merge_adjacent_files('ducklake', 'example', min_file_size=>1000);
+query IIII
+SELECT schema_name, table_name, files_processed, files_created FROM ducklake_merge_adjacent_files('ducklake', 'example', min_file_size=>1000)
+----
+main	example	2	1
 
 # The two medium files should be merged, small files remain
 query I
@@ -100,8 +102,10 @@ statement ok
 INSERT INTO example SELECT i + 200, repeat('medium', 100) FROM range(100) t(i);
 
 # Test max_file_size: only merge files < 1000 bytes (should only merge the small files)
-statement ok
-CALL ducklake_merge_adjacent_files('ducklake', 'example', max_file_size=>1000);
+query IIII
+SELECT schema_name, table_name, files_processed, files_created FROM ducklake_merge_adjacent_files('ducklake', 'example', max_file_size=>1000)
+----
+main	example	2	1
 
 # The two small files should be merged, medium files remain
 query I
@@ -147,8 +151,9 @@ INSERT INTO example SELECT i + 200, repeat('medium', 100) FROM range(100) t(i);
 # Test combined min_file_size and max_file_size: range that excludes all files
 # Small files are ~400-500 bytes, medium files are ~1800 bytes
 # 600-1500 range should match nothing
-statement ok
-CALL ducklake_merge_adjacent_files('ducklake', 'example', min_file_size=>600, max_file_size=>1500);
+query IIII
+SELECT schema_name, table_name, files_processed, files_created FROM ducklake_merge_adjacent_files('ducklake', 'example', min_file_size=>600, max_file_size=>1500)
+----
 
 # No files should be merged
 query I

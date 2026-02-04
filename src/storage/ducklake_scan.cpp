@@ -1,10 +1,13 @@
 #include "storage/ducklake_scan.hpp"
+#include "storage/ducklake_catalog.hpp"
 #include "storage/ducklake_multi_file_reader.hpp"
 #include "storage/ducklake_multi_file_list.hpp"
 #include "storage/ducklake_table_entry.hpp"
 #include "storage/ducklake_stats.hpp"
+#include "storage/ducklake_transaction.hpp"
 
 #include "duckdb/catalog/catalog_entry/table_function_catalog_entry.hpp"
+#include "duckdb/function/partition_stats.hpp"
 #include "duckdb/function/table_function.hpp"
 #include "duckdb/main/extension_helper.hpp"
 #include "duckdb/main/query_profiler.hpp"
@@ -70,6 +73,59 @@ vector<column_t> DuckLakeGetRowIdColumn(ClientContext &context, optional_ptr<Fun
 	return result;
 }
 
+vector<PartitionStatistics> DuckLakeGetPartitionStats(ClientContext &context, GetPartitionStatsInput &input) {
+	vector<PartitionStatistics> result;
+
+	if (!input.table_function.function_info) {
+		return result;
+	}
+	auto &func_info = input.table_function.function_info->Cast<DuckLakeFunctionInfo>();
+
+	// Only use partition stats for regular table scans
+	if (func_info.scan_type != DuckLakeScanType::SCAN_TABLE) {
+		return result;
+	}
+
+	auto &bind_data = input.bind_data->Cast<MultiFileBindData>();
+	auto &file_list = bind_data.file_list->Cast<DuckLakeMultiFileList>();
+	auto &table = file_list.GetTable();
+	auto transaction = func_info.GetTransaction();
+
+	auto table_id = table.GetTableId();
+
+	// Check if this is a time travel query - if so, fall back to scanning
+	// After merge_adjacent_files, multiple files are merged into one with a combined record_count.
+	// The merged file contains an embedded snapshot_id column for time travel filtering,
+	// but the metadata record_count represents ALL rows, not per-snapshot counts.
+	// Only a full scan can filter by snapshot_id to get the correct historical count.
+	// Time travel can occur via: (1) per-query AT clause, or (2) catalog attached at historical snapshot
+	auto current_snapshot = transaction->GetSnapshot();
+	if (func_info.snapshot.snapshot_id != current_snapshot.snapshot_id || transaction->GetCatalog().CatalogSnapshot()) {
+		return result;
+	}
+
+	// Check if this is a transaction-local table (no committed stats)
+	if (table.IsTransactionLocal()) {
+		return result;
+	}
+
+	// If there are any transaction-local changes fall back to scanning
+	// Accounting for transaction local changes gets difficult, especially when entire
+	// files are dropped.
+	if (transaction->HasAnyLocalChanges(table_id)) {
+		return result;
+	}
+
+	idx_t count = table.GetNetDataFileRowCount(*transaction) + table.GetNetInlinedRowCount(*transaction);
+
+	// Return single partition with total count
+	PartitionStatistics stats;
+	stats.count = count;
+	stats.count_type = CountType::COUNT_EXACT;
+	result.push_back(std::move(stats));
+	return result;
+}
+
 TableFunction DuckLakeFunctions::GetDuckLakeScanFunction(DatabaseInstance &instance) {
 	// Parquet extension needs to be loaded for this to make sense
 	ExtensionHelper::AutoLoadExtension(instance, "parquet");
@@ -87,6 +143,7 @@ TableFunction DuckLakeFunctions::GetDuckLakeScanFunction(DatabaseInstance &insta
 	function.get_bind_info = DuckLakeBindInfo;
 	function.get_virtual_columns = DuckLakeVirtualColumns;
 	function.get_row_id_columns = DuckLakeGetRowIdColumn;
+	function.get_partition_stats = DuckLakeGetPartitionStats;
 
 	// Unset all of these: they are either broken, very inefficient.
 	// TODO: implement/fix these

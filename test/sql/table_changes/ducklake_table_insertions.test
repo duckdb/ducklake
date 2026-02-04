@@ -38,8 +38,10 @@ INSERT INTO ducklake.test VALUES (NULL);
 statement ok
 INSERT INTO ducklake.test FROM range(10, 12);
 
-statement ok
-CALL ducklake_merge_adjacent_files('ducklake');
+query III
+SELECT table_name, files_processed, files_created FROM ducklake_merge_adjacent_files('ducklake')
+----
+test	5	1
 
 query II
 SELECT rowid, * FROM ducklake_table_insertions('ducklake', 'main', 'test', 0, 2);

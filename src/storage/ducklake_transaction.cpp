@@ -37,6 +37,9 @@ bool LocalTableDataChanges::IsEmpty() const {
 	if (!compactions.empty()) {
 		return false;
 	}
+	if (new_inlined_file_deletes) {
+		return false;
+	}
 	return true;
 }
 
@@ -123,6 +126,8 @@ struct TransactionChangeInformation {
 	set<TableIndex> tables_deleted_inlined;
 	set<TableIndex> tables_flushed_inlined;
 	set<TableIndex> tables_compacted;
+	set<TableIndex> tables_merge_adjacent;
+	set<TableIndex> tables_rewrite_delete;
 };
 
 void GetTransactionTableChanges(reference<CatalogEntry> table_entry, TransactionChangeInformation &changes) {
@@ -344,11 +349,20 @@ void DuckLakeTransaction::AddTableChanges(TableIndex table_id, const LocalTableD
 	if (!table_changes.new_delete_files.empty()) {
 		changes.tables_deleted_from.insert(table_id);
 	}
-	if (!table_changes.new_inlined_data_deletes.empty()) {
+	if (!table_changes.new_inlined_data_deletes.empty() || table_changes.new_inlined_file_deletes) {
 		changes.tables_deleted_inlined.insert(table_id);
 	}
-	if (!table_changes.compactions.empty()) {
-		changes.tables_compacted.insert(table_id);
+	for (auto &compaction : table_changes.compactions) {
+		switch (compaction.type) {
+		case CompactionType::MERGE_ADJACENT_TABLES:
+			changes.tables_merge_adjacent.insert(table_id);
+			break;
+		case CompactionType::REWRITE_DELETES:
+			changes.tables_rewrite_delete.insert(table_id);
+			break;
+		default:
+			throw InternalException("Unknown compaction type");
+		}
 	}
 }
 
@@ -452,18 +466,13 @@ string DuckLakeTransaction::WriteSnapshotChanges(DuckLakeCommitState &commit_sta
 	AddChangeInfo(commit_state, change_info, changes.altered_views, "altered_view");
 	AddChangeInfo(commit_state, change_info, changes.tables_inserted_inlined, "inlined_insert");
 	AddChangeInfo(commit_state, change_info, changes.tables_deleted_inlined, "inlined_delete");
-	AddChangeInfo(commit_state, change_info, changes.tables_flushed_inlined, "flushed_inlined");
-	if (!changes.tables_compacted.empty() && !change_info.changes_made.empty()) {
+	AddChangeInfo(commit_state, change_info, changes.tables_flushed_inlined, "inline_flush");
+	bool has_compaction = !changes.tables_merge_adjacent.empty() || !changes.tables_rewrite_delete.empty();
+	if (has_compaction && !change_info.changes_made.empty()) {
 		throw InvalidInputException("Transactions can either make changes OR perform compaction - not both");
 	}
-	for (auto &entry : changes.tables_compacted) {
-		auto table_id = entry;
-		if (!change_info.changes_made.empty()) {
-			change_info.changes_made += ",";
-		}
-		change_info.changes_made += "compacted_table:";
-		change_info.changes_made += to_string(table_id.index);
-	}
+	AddChangeInfo(commit_state, change_info, changes.tables_merge_adjacent, "merge_adjacent");
+	AddChangeInfo(commit_state, change_info, changes.tables_rewrite_delete, "rewrite_delete");
 	return metadata_manager->WriteSnapshotChanges(change_info, commit_info);
 }
 
@@ -625,7 +634,8 @@ void DuckLakeTransaction::CheckForConflicts(const TransactionChangeInformation &
 	for (auto &table_id : changes.tables_deleted_from) {
 		ConflictCheck(table_id, other_changes.dropped_tables, "delete from table", "dropped it");
 		ConflictCheck(table_id, other_changes.altered_tables, "delete from table", "altered it");
-		ConflictCheck(table_id, other_changes.tables_compacted, "delete from table", "compacted it");
+		ConflictCheck(table_id, other_changes.tables_merge_adjacent, "delete from table", "compacted it");
+		ConflictCheck(table_id, other_changes.tables_rewrite_delete, "delete from table", "compacted it");
 	}
 	if (!changes.tables_deleted_from.empty()) {
 		bool check_for_matches = false;
@@ -663,10 +673,17 @@ void DuckLakeTransaction::CheckForConflicts(const TransactionChangeInformation &
 		ConflictCheck(table_id, other_changes.tables_deleted_inlined, "flush inline data", "deleted from it");
 		ConflictCheck(table_id, other_changes.tables_flushed_inlined, "flush inline data", "flushed it");
 	}
-	for (auto &table_id : changes.tables_compacted) {
+	for (auto &table_id : changes.tables_merge_adjacent) {
 		ConflictCheck(table_id, other_changes.dropped_tables, "compact table", "dropped it");
 		ConflictCheck(table_id, other_changes.tables_deleted_from, "compact table", "deleted from it");
-		ConflictCheck(table_id, other_changes.tables_compacted, "compact table", "compacted it");
+		ConflictCheck(table_id, other_changes.tables_merge_adjacent, "compact table", "compacted it");
+		ConflictCheck(table_id, other_changes.tables_rewrite_delete, "compact table", "compacted it");
+	}
+	for (auto &table_id : changes.tables_rewrite_delete) {
+		ConflictCheck(table_id, other_changes.dropped_tables, "compact table", "dropped it");
+		ConflictCheck(table_id, other_changes.tables_deleted_from, "compact table", "deleted from it");
+		ConflictCheck(table_id, other_changes.tables_merge_adjacent, "compact table", "compacted it");
+		ConflictCheck(table_id, other_changes.tables_rewrite_delete, "compact table", "compacted it");
 	}
 	for (auto &table_id : changes.altered_tables) {
 		ConflictCheck(table_id, other_changes.dropped_tables, "alter table", "dropped it");
@@ -1629,9 +1646,13 @@ string DuckLakeTransaction::CommitChanges(DuckLakeCommitState &commit_state,
 		batch_queries += metadata_manager->DeleteOverwrittenDeleteFiles(overwritten_delete_files);
 		batch_queries += metadata_manager->WriteNewDeleteFiles(file_list, new_tables_result, new_schemas_result);
 
-		// write new inlined deletes
+		// write new inlined deletes (for inlined data tables)
 		auto inlined_deletes = GetNewInlinedDeletes(commit_state);
 		batch_queries += metadata_manager->WriteNewInlinedDeletes(inlined_deletes);
+
+		// write new inlined file deletes (for parquet files)
+		auto inlined_file_deletes = GetNewInlinedFileDeletes(commit_state);
+		batch_queries += metadata_manager->WriteNewInlinedFileDeletes(commit_snapshot, inlined_file_deletes);
 
 		// write compactions
 		auto compaction_merge_adjacent_changes =
@@ -1956,7 +1977,7 @@ idx_t DuckLakeTransaction::GetLocalCatalogId() {
 	return local_catalog_id++;
 }
 
-bool DuckLakeTransaction::HasTransactionLocalChanges(TableIndex table_id) const {
+bool DuckLakeTransaction::HasTransactionLocalInserts(TableIndex table_id) const {
 	auto entry = table_data_changes.find(table_id);
 	if (entry == table_data_changes.end()) {
 		return false;
@@ -2128,6 +2149,7 @@ void DuckLakeTransaction::DeleteFromLocalInlinedData(TableIndex table_id, set<id
 
 optional_ptr<DuckLakeInlinedDataDeletes> DuckLakeTransaction::GetInlinedDeletes(TableIndex table_id,
                                                                                 const string &table_name) {
+	lock_guard<mutex> guard(table_data_changes_lock);
 	auto entry = table_data_changes.find(table_id);
 	if (entry == table_data_changes.end()) {
 		return nullptr;
@@ -2138,6 +2160,41 @@ optional_ptr<DuckLakeInlinedDataDeletes> DuckLakeTransaction::GetInlinedDeletes(
 		return nullptr;
 	}
 	return delete_entry->second.get();
+}
+
+void DuckLakeTransaction::AddNewInlinedFileDeletes(TableIndex table_id, idx_t file_id, set<idx_t> new_deletes) {
+	if (new_deletes.empty()) {
+		return;
+	}
+	lock_guard<mutex> guard(table_data_changes_lock);
+	auto &table_changes = table_data_changes[table_id];
+	if (!table_changes.new_inlined_file_deletes) {
+		table_changes.new_inlined_file_deletes = make_uniq<DuckLakeInlinedFileDeletes>();
+	}
+	auto &file_deletes = table_changes.new_inlined_file_deletes->file_deletes[file_id];
+	for (auto &row_id : new_deletes) {
+		file_deletes.insert(row_id);
+	}
+}
+
+vector<DuckLakeInlinedFileDeletionInfo>
+DuckLakeTransaction::GetNewInlinedFileDeletes(DuckLakeCommitState &commit_state) {
+	vector<DuckLakeInlinedFileDeletionInfo> result;
+	for (auto &entry : table_data_changes) {
+		auto table_id = commit_state.GetTableId(entry.first);
+		auto &table_changes = entry.second;
+		if (!table_changes.new_inlined_file_deletes) {
+			continue;
+		}
+		if (table_changes.new_inlined_file_deletes->file_deletes.empty()) {
+			continue;
+		}
+		DuckLakeInlinedFileDeletionInfo info;
+		info.table_id = table_id;
+		info.file_deletions.file_deletes = std::move(table_changes.new_inlined_file_deletes->file_deletes);
+		result.push_back(std::move(info));
+	}
+	return result;
 }
 
 void DuckLakeTransaction::AddDeletes(TableIndex table_id, vector<DuckLakeDeleteFile> files) {
@@ -2187,6 +2244,14 @@ bool DuckLakeTransaction::HasLocalDeletes(TableIndex table_id) {
 	return !entry->second.new_delete_files.empty();
 }
 
+bool DuckLakeTransaction::HasAnyLocalChanges(TableIndex table_id) {
+	auto entry = table_data_changes.find(table_id);
+	if (entry != table_data_changes.end() && !entry->second.IsEmpty()) {
+		return true;
+	}
+	return tables_deleted_from.find(table_id) != tables_deleted_from.end();
+}
+
 void DuckLakeTransaction::GetLocalDeleteForFile(TableIndex table_id, const string &path, DuckLakeFileData &result) {
 	auto entry = table_data_changes.find(table_id);
 	if (entry == table_data_changes.end()) {
@@ -2202,6 +2267,39 @@ void DuckLakeTransaction::GetLocalDeleteForFile(TableIndex table_id, const strin
 	result.file_size_bytes = delete_file.file_size_bytes;
 	result.footer_size = delete_file.footer_size;
 	result.encryption_key = delete_file.encryption_key;
+}
+
+bool DuckLakeTransaction::HasLocalInlinedFileDeletes(TableIndex table_id) {
+	lock_guard<mutex> guard(table_data_changes_lock);
+	auto entry = table_data_changes.find(table_id);
+	if (entry == table_data_changes.end()) {
+		return false;
+	}
+	auto &table_changes = entry->second;
+	if (!table_changes.new_inlined_file_deletes) {
+		return false;
+	}
+	return !table_changes.new_inlined_file_deletes->file_deletes.empty();
+}
+
+void DuckLakeTransaction::GetLocalInlinedFileDeletesForFile(TableIndex table_id, idx_t file_id, set<idx_t> &result) {
+	lock_guard<mutex> guard(table_data_changes_lock);
+	auto entry = table_data_changes.find(table_id);
+	if (entry == table_data_changes.end()) {
+		return;
+	}
+	auto &table_changes = entry->second;
+	if (!table_changes.new_inlined_file_deletes) {
+		return;
+	}
+	auto file_entry = table_changes.new_inlined_file_deletes->file_deletes.find(file_id);
+	if (file_entry == table_changes.new_inlined_file_deletes->file_deletes.end()) {
+		return;
+	}
+	// Merge the inlined deletes into the result set
+	for (auto &row_id : file_entry->second) {
+		result.insert(row_id);
+	}
 }
 
 void DuckLakeTransaction::TransactionLocalDelete(TableIndex table_id, const string &data_file_path,

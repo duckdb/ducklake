@@ -28,8 +28,10 @@ insert into t values (1);
 statement ok
 insert into t values (2);
 
-statement ok
-CALL ducklake_flush_inlined_data('ducklake')
+query II
+SELECT table_name, rows_flushed FROM ducklake_flush_inlined_data('ducklake')
+----
+t	3
 
 query II
 SELECT record_count, next_row_id FROM __ducklake_metadata_ducklake.ducklake_table_stats;

@@ -1,0 +1,43 @@
+# name: test/sql/delete/delete_metadata.test
+# description: Test ducklake deletes
+# group: [delete]
+
+require httpfs
+
+require-env S3_TEST_SERVER_AVAILABLE 1
+
+test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+
+require ducklake
+
+require parquet
+
+statement ok
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH 's3://mybucket')
+
+# Clean up any existing table from previous runs
+statement ok
+DROP TABLE IF EXISTS ducklake.test;
+
+statement ok
+CREATE TABLE ducklake.test AS SELECT i id FROM range(1000) t(i);
+
+statement ok
+DELETE FROM ducklake.test WHERE id IN (100, 200, 300);
+
+# Verify there is 1 delete file
+query I
+SELECT sum(delete_file_count) FROM ducklake_table_info('ducklake') WHERE table_name = 'test';
+----
+1
+
+query II
+EXPLAIN ANALYZE SELECT * FROM ducklake.test
+----
+analyzed_plan	<REGEX>:.*#HEAD: 0.*
+
+# we can time travel to see the state of the table before deletes
+query II
+EXPLAIN ANALYZE SELECT * FROM ducklake.test AT (VERSION => 1)
+----
+analyzed_plan	<REGEX>:.*#HEAD: 0.*
