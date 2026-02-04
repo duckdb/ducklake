@@ -91,6 +91,12 @@ LogicalType ExtractVariantType(const LogicalType &variant_type, const vector<str
 				// reached the final type - this is the type
 				return entry.second;
 			}
+			// FIXME: handle list
+			if (entry.second.id() != LogicalTypeId::STRUCT) {
+				throw InvalidInputException(
+				    "Expected variant type to be struct at this layer while looking for nested field %s - but found %s",
+				    StringUtil::Join(field_names, "."), variant_type);
+			}
 			// not the final field - recurse to find the field
 			auto &field_name = field_names[field_idx];
 			for (auto &typed_child : StructType::GetChildTypes(entry.second)) {

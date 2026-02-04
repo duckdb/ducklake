@@ -13,6 +13,8 @@
 namespace duckdb {
 
 struct DuckLakeColumnGeoStats final : public DuckLakeColumnExtraStats {
+	static constexpr const DuckLakeExtraStatsType TYPE = DuckLakeExtraStatsType::GEOMETRY;
+
 	DuckLakeColumnGeoStats();
 	void Merge(const DuckLakeColumnExtraStats &new_stats) override;
 	unique_ptr<DuckLakeColumnExtraStats> Copy() const override;

@@ -20,6 +20,8 @@ struct DuckLakeVariantStats {
 };
 
 struct DuckLakeColumnVariantStats final : public DuckLakeColumnExtraStats {
+	static constexpr const DuckLakeExtraStatsType TYPE = DuckLakeExtraStatsType::VARIANT;
+
 	DuckLakeColumnVariantStats();
 	void Merge(const DuckLakeColumnExtraStats &new_stats) override;
 	unique_ptr<DuckLakeColumnExtraStats> Copy() const override;
