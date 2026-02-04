@@ -97,6 +97,9 @@ public:
 	explicit DuckLakeMetadataManager(DuckLakeTransaction &transaction);
 	virtual ~DuckLakeMetadataManager();
 
+	typedef unique_ptr<DuckLakeMetadataManager> (*create_t)(DuckLakeTransaction &transaction);
+	static void Register(const string &name, create_t);
+
 	static unique_ptr<DuckLakeMetadataManager> Create(DuckLakeTransaction &transaction);
 
 	virtual bool TypeIsNativelySupported(const LogicalType &type);
@@ -279,6 +282,10 @@ public:
 	map<idx_t, set<idx_t>> ReadInlinedFileDeletions(TableIndex table_id, DuckLakeSnapshot snapshot);
 
 private:
+	unordered_map<idx_t, string> inlined_table_name_cache;
+	static unordered_map<string /* name */, create_t> metadata_managers;
+	static mutex metadata_managers_lock;
+
 	//! Check which file IDs have inlined deletions (returns set of file IDs that have deletions)
 	unordered_set<idx_t> GetFileIdsWithInlinedDeletions(TableIndex table_id, DuckLakeSnapshot snapshot,
 	                                                    const vector<idx_t> &file_ids);
