@@ -16,6 +16,8 @@
 
 namespace duckdb {
 class BaseStatistics;
+struct DuckLakeColumnStatsInfo;
+struct DuckLakeFileInfo;
 
 struct DuckLakeColumnStats;
 
@@ -34,8 +36,13 @@ struct DuckLakeColumnExtraStats {
 
 	virtual bool ParseStats(const string &stats_name, const vector<Value> &children) = 0;
 
-	// Convert the stats into a string representation for storage (e.g. JSON)
-	virtual string Serialize() const = 0;
+	// Convert the stats into a string representation for global stats storage (e.g. JSON)
+	virtual bool TrySerialize(string &result) const {
+		// by default: cannot convert to stats
+		return false;
+	}
+	//! Convert the stats into file-specific stats
+	virtual void Serialize(DuckLakeColumnStatsInfo &column_stats) const = 0;
 	// Parse the stats from a string
 	virtual void Deserialize(const string &stats) = 0;
 

@@ -8,6 +8,7 @@
 #include "duckdb/common/type_visitor.hpp"
 #include "storage/ducklake_insert.hpp"
 #include "duckdb/parser/keyword_helper.hpp"
+#include "storage/ducklake_metadata_info.hpp"
 
 namespace duckdb {
 
@@ -28,8 +29,14 @@ unique_ptr<DuckLakeColumnExtraStats> DuckLakeColumnVariantStats::Copy() const {
 	return std::move(result);
 }
 
-string DuckLakeColumnVariantStats::Serialize() const {
-	throw InternalException("eek");
+void DuckLakeColumnVariantStats::Serialize(DuckLakeColumnStatsInfo &column_stats) const {
+	for(auto &entry : shredded_field_stats) {
+		DuckLakeVariantStatsInfo shredded_stats;
+		shredded_stats.field_name = entry.first;
+		shredded_stats.shredded_type = DuckLakeTypes::ToString(entry.second.shredded_type);
+		shredded_stats.field_stats = DuckLakeColumnStatsInfo::FromColumnStats(column_stats.column_id, entry.second.field_stats);
+		column_stats.variant_stats.push_back(std::move(shredded_stats));
+	}
 }
 
 void DuckLakeColumnVariantStats::Deserialize(const string &stats) {

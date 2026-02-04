@@ -28,7 +28,7 @@ struct DuckLakeColumnVariantStats final : public DuckLakeColumnExtraStats {
 
 	bool ParseStats(const string &stats_name, const vector<Value> &stats_children) override;
 
-	string Serialize() const override;
+	void Serialize(DuckLakeColumnStatsInfo &column_stats) const override;
 	void Deserialize(const string &stats) override;
 
 public:

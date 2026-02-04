@@ -1,6 +1,7 @@
 #include "storage/ducklake_stats.hpp"
 #include "storage/ducklake_geo_stats.hpp"
 #include "duckdb/common/types/value.hpp"
+#include "storage/ducklake_metadata_info.hpp"
 #include "yyjson.hpp"
 
 namespace duckdb {
@@ -37,7 +38,7 @@ void DuckLakeColumnGeoStats::Merge(const DuckLakeColumnExtraStats &new_stats) {
 	geo_types.insert(geo_stats.geo_types.begin(), geo_stats.geo_types.end());
 }
 
-string DuckLakeColumnGeoStats::Serialize() const {
+bool DuckLakeColumnGeoStats::TrySerialize(string &result) const {
 	// Format as JSON
 	auto xmin_val = xmin == NumericLimits<double>::Maximum() ? "null" : std::to_string(xmin);
 	auto xmax_val = xmax == NumericLimits<double>::Minimum() ? "null" : std::to_string(xmax);
@@ -61,7 +62,12 @@ string DuckLakeColumnGeoStats::Serialize() const {
 	}
 	types += "]";
 
-	return StringUtil::Format(R"('{"bbox": %s, "types": %s}')", bbox, types);
+	result = StringUtil::Format(R"('{"bbox": %s, "types": %s}')", bbox, types);
+	return true;
+}
+
+void DuckLakeColumnGeoStats::Serialize(DuckLakeColumnStatsInfo &column_stats) const {
+	TrySerialize(column_stats.extra_stats);
 }
 
 void DuckLakeColumnGeoStats::Deserialize(const string &stats) {
