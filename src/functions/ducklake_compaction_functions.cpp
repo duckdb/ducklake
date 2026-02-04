@@ -200,7 +200,7 @@ void DuckLakeCompactor::GenerateCompactions(DuckLakeTableEntry &table,
 			continue;
 		}
 		if ((!candidate.delete_files.empty() && type == CompactionType::MERGE_ADJACENT_TABLES) ||
-		    candidate.file.end_snapshot.IsValid()) {
+		    candidate.file.end_snapshot.IsValid() || candidate.has_inlined_deletions) {
 			// Merge Adjacent Tables doesn't perform the merge if delete files are present
 			continue;
 		}
@@ -490,7 +490,7 @@ DuckLakeCompactor::GenerateCompactionCommand(vector<DuckLakeCompactionFileEntry>
 		} else {
 			copy_input.virtual_columns = InsertVirtualColumns::WRITE_ROW_ID;
 		}
-	} else if (write_snapshot_id){
+	} else if (write_snapshot_id) {
 		copy_input.virtual_columns = InsertVirtualColumns::WRITE_SNAPSHOT_ID;
 	}
 

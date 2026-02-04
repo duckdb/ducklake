@@ -1,0 +1,151 @@
+# name: test/sql/deletion_inlining/test_deletion_inlining_large.test
+# description: test ducklake deletion inlining with larger dataset and various delete sizes
+# group: [deletion_inlining]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+
+test-env DATA_PATH __TEST_DIR__
+
+statement ok
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/deletion_inlining_large', METADATA_CATALOG 'ducklake_meta', DATA_INLINING_ROW_LIMIT 3000)
+
+statement ok
+USE ducklake
+
+statement ok
+CREATE TABLE t AS SELECT range a, range * 2 b FROM range(10000)
+
+query II
+SELECT COUNT(*), SUM(a) FROM t
+----
+10000	49995000
+
+# Small delete
+statement ok
+DELETE FROM t WHERE a IN (100, 500, 999)
+
+query II
+SELECT COUNT(*), SUM(a) FROM t
+----
+9997	49993401
+
+# Small delete
+statement ok
+DELETE FROM t WHERE a IN (50, 2500, 5000, 7500)
+
+query II
+SELECT COUNT(*), SUM(a) FROM t
+----
+9993	49978351
+
+# Medium delete
+statement ok
+DELETE FROM t WHERE a >= 1000 AND a < 1020
+
+query II
+SELECT COUNT(*), SUM(a) FROM t
+----
+9973	49958161
+
+# Medium delete
+statement ok
+DELETE FROM t WHERE a % 100 = 77 AND a < 2400
+
+query II
+SELECT COUNT(*), SUM(a) FROM t
+----
+9949	49928713
+
+# Large delete
+statement ok
+DELETE FROM t WHERE a >= 3000 AND a < 5900
+
+query II
+SELECT COUNT(*), SUM(a) FROM t
+----
+7050	37030163
+
+# No delete files yet, whole shebang is inlined
+query I
+SELECT COUNT(*) FROM GLOB('${DATA_PATH}/deletion_inlining_large/**/*-delete.parquet')
+----
+0
+
+query I
+SELECT COUNT(*) FROM ducklake_meta.ducklake_inlined_delete_1
+----
+2950
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake')
+
+query I
+SELECT COUNT(*) >= 1 FROM GLOB('${DATA_PATH}/deletion_inlining_large/**/*-delete.parquet')
+----
+true
+
+query I
+SELECT COUNT(*) FROM ducklake_meta.ducklake_inlined_delete_1
+----
+0
+
+query II
+SELECT COUNT(*), SUM(a) FROM t
+----
+7050	37030163
+
+# Time travel
+query II
+SELECT COUNT(*), SUM(a) FROM t AT (VERSION => 1)
+----
+10000	49995000
+
+query II
+SELECT COUNT(*), SUM(a) FROM t AT (VERSION => 2)
+----
+9997	49993401
+
+query II
+SELECT COUNT(*), SUM(a) FROM t AT (VERSION => 3)
+----
+9993	49978351
+
+query II
+SELECT COUNT(*), SUM(a) FROM t AT (VERSION => 4)
+----
+9973	49958161
+
+query II
+SELECT COUNT(*), SUM(a) FROM t AT (VERSION => 5)
+----
+9949	49928713
+
+query II
+SELECT COUNT(*), SUM(a) FROM t AT (VERSION => 6)
+----
+7050	37030163
+
+statement ok
+DELETE FROM t WHERE a >= 9000
+
+query II
+SELECT COUNT(*), SUM(a) FROM t
+----
+6050	27530663
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake')
+
+query II
+SELECT COUNT(*), SUM(a) FROM t
+----
+6050	27530663
+
+query II
+SELECT COUNT(*), SUM(a) FROM t AT (VERSION => 7)
+----
+7050	37030163

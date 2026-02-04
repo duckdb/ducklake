@@ -18,6 +18,8 @@ enum class ChangeType {
 	ALTERED_TABLE,
 	ALTERED_VIEW,
 	COMPACTED_TABLE,
+	MERGE_ADJACENT,
+	REWRITE_DELETE,
 	CREATED_SCALAR_MACRO,
 	CREATED_TABLE_MACRO,
 	DROPPED_SCALAR_MACRO,
@@ -67,11 +69,16 @@ ChangeType ParseChangeType(const string &changes_made, idx_t &pos) {
 		return ChangeType::DELETED_FROM_TABLE;
 	} else if (StringUtil::CIEquals(change_type_str, "compacted_table")) {
 		return ChangeType::COMPACTED_TABLE;
+	} else if (StringUtil::CIEquals(change_type_str, "merge_adjacent")) {
+		return ChangeType::MERGE_ADJACENT;
+	} else if (StringUtil::CIEquals(change_type_str, "rewrite_delete")) {
+		return ChangeType::REWRITE_DELETE;
 	} else if (StringUtil::CIEquals(change_type_str, "inlined_insert")) {
 		return ChangeType::INSERTED_INTO_TABLE_INLINED;
 	} else if (StringUtil::CIEquals(change_type_str, "inlined_delete")) {
 		return ChangeType::DELETED_FROM_TABLE_INLINED;
-	} else if (StringUtil::CIEquals(change_type_str, "flushed_inlined")) {
+	} else if (StringUtil::CIEquals(change_type_str, "flushed_inlined") ||
+	           StringUtil::CIEquals(change_type_str, "inline_flush")) {
 		return ChangeType::FLUSHED_INLINE_DATA_FOR_TABLE;
 	} else {
 		throw InvalidInputException("Unsupported change type %s", change_type_str);
@@ -184,6 +191,12 @@ SnapshotChangeInformation SnapshotChangeInformation::ParseChangesMade(const stri
 			break;
 		case ChangeType::COMPACTED_TABLE:
 			result.tables_compacted.insert(TableIndex(StringUtil::ToUnsigned(entry.change_value)));
+			break;
+		case ChangeType::MERGE_ADJACENT:
+			result.tables_merge_adjacent.insert(TableIndex(StringUtil::ToUnsigned(entry.change_value)));
+			break;
+		case ChangeType::REWRITE_DELETE:
+			result.tables_rewrite_delete.insert(TableIndex(StringUtil::ToUnsigned(entry.change_value)));
 			break;
 		case ChangeType::INSERTED_INTO_TABLE_INLINED:
 			result.tables_inserted_inlined.insert(TableIndex(StringUtil::ToUnsigned(entry.change_value)));

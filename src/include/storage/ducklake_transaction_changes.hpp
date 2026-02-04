@@ -31,6 +31,8 @@ struct SnapshotChangeInformation {
 	set<TableIndex> inserted_tables;
 	set<TableIndex> tables_deleted_from;
 	set<TableIndex> tables_compacted;
+	set<TableIndex> tables_merge_adjacent;
+	set<TableIndex> tables_rewrite_delete;
 	set<TableIndex> tables_inserted_inlined;
 	set<TableIndex> tables_deleted_inlined;
 	set<TableIndex> tables_flushed_inlined;

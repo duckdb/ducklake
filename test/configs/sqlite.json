@@ -102,6 +102,12 @@
         "test/sql/general/metadata_parameters.test",
         "test/sql/metadata/ducklake_settings.test"
       ]
+    },
+    {
+      "reason": "Current transaction is aborted (please ROLLBACK)",
+      "paths": [
+        "test/sql/deletion_inlining/test_deletion_inlining_concurrent.test"
+      ]
     }
   ]
 }

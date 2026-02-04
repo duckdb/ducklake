@@ -1,6 +1,6 @@
 # name: test/sql/transaction/multiple_column_changes.test
 # description: test type + extra chnage on column
-# group: [sql]
+# group: [transaction]
 
 require ducklake
 
