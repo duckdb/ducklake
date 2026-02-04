@@ -35,4 +35,19 @@ public:
 	LogicalType variant_type;
 };
 
+//! Helper class for constructing variant stats from the stats returned by the Parquet writer
+struct PartialVariantStats {
+public:
+	PartialVariantStats();
+
+	void ParseVariantStats(const vector<string> &path, idx_t variant_field_start, const vector<Value> &col_stats);
+	DuckLakeColumnStats Finalize();
+
+private:
+	DuckLakeColumnStats result;
+	LogicalType variant_type;
+	unordered_map<string, DuckLakeVariantStats> shredded_field_stats;
+	set<string> fully_shredded_fields;
+};
+
 } // namespace duckdb
