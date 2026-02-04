@@ -31,6 +31,8 @@ struct DuckLakeColumnVariantStats final : public DuckLakeColumnExtraStats {
 	void Serialize(DuckLakeColumnStatsInfo &column_stats) const override;
 	void Deserialize(const string &stats) override;
 
+	unique_ptr<BaseStatistics> ToStats() const;
+
 public:
 	// map of field name -> field stats
 	unordered_map<string, DuckLakeVariantStats> shredded_field_stats;
@@ -48,8 +50,9 @@ public:
 private:
 	DuckLakeColumnStats result;
 	LogicalType variant_type;
-	unordered_map<string, DuckLakeVariantStats> shredded_field_stats;
-	set<string> fully_shredded_fields;
+	map<vector<string>, DuckLakeVariantStats> shredded_field_stats;
+	map<vector<string>, string> field_names;
+	set<vector<string>> fully_shredded_fields;
 };
 
 } // namespace duckdb

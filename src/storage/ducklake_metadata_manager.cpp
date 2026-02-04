@@ -2723,15 +2723,16 @@ string DuckLakeMetadataManager::WriteNewDataFiles(const vector<DuckLakeFileInfo>
 			    "(%d, %d, %d, %s, %s, %s, %s, %s, %s, %s)", data_file_index, table_id, column_id,
 			    column_stats.column_size_bytes, column_stats.value_count, column_stats.null_count, column_stats.min_val,
 			    column_stats.max_val, column_stats.contains_nan, column_stats.extra_stats);
-			for(auto &variant_stats : column_stats.variant_stats) {
+			for (auto &variant_stats : column_stats.variant_stats) {
 				if (!variant_stats_insert_query.empty()) {
 					variant_stats_insert_query += ",";
 				}
 				auto &field_stats = variant_stats.field_stats;
-			variant_stats_insert_query += StringUtil::Format(
-			    "(%d, %d, %d, %s, %s, %s, %s, %s, %s, %s, %s, %s)", data_file_index, table_id, column_id, SQLString(variant_stats.field_name), SQLString(variant_stats.shredded_type),
-			    field_stats.column_size_bytes, field_stats.value_count, field_stats.null_count, field_stats.min_val,
-			    field_stats.max_val, field_stats.contains_nan, field_stats.extra_stats);
+				variant_stats_insert_query += StringUtil::Format(
+				    "(%d, %d, %d, %s, %s, %s, %s, %s, %s, %s, %s, %s)", data_file_index, table_id, column_id,
+				    SQLString(variant_stats.field_name), SQLString(variant_stats.shredded_type),
+				    field_stats.column_size_bytes, field_stats.value_count, field_stats.null_count, field_stats.min_val,
+				    field_stats.max_val, field_stats.contains_nan, field_stats.extra_stats);
 			}
 		}
 		if (file.partition_id.IsValid() == file.partition_values.empty()) {
@@ -2764,7 +2765,8 @@ string DuckLakeMetadataManager::WriteNewDataFiles(const vector<DuckLakeFileInfo>
 		                                  partition_insert_query);
 	}
 	if (!variant_stats_insert_query.empty()) {
-		batch_query += StringUtil::Format("INSERT INTO {METADATA_CATALOG}.ducklake_file_variant_stats VALUES %s;", variant_stats_insert_query);
+		batch_query += StringUtil::Format("INSERT INTO {METADATA_CATALOG}.ducklake_file_variant_stats VALUES %s;",
+		                                  variant_stats_insert_query);
 	}
 	return batch_query;
 }

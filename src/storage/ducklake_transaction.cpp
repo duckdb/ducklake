@@ -1253,7 +1253,8 @@ string DuckLakeTransaction::UpdateGlobalTableStats(TableIndex table_id,
 	return metadata_manager->UpdateGlobalTableStats(stats);
 }
 
-DuckLakeColumnStatsInfo DuckLakeColumnStatsInfo::FromColumnStats(FieldIndex field_id, const DuckLakeColumnStats &stats) {
+DuckLakeColumnStatsInfo DuckLakeColumnStatsInfo::FromColumnStats(FieldIndex field_id,
+                                                                 const DuckLakeColumnStats &stats) {
 	DuckLakeColumnStatsInfo column_stats;
 	column_stats.column_id = field_id;
 	column_stats.min_val = stats.has_min ? DuckLakeUtil::StatsToString(stats.min) : "NULL";
@@ -1303,7 +1304,8 @@ DuckLakeFileInfo DuckLakeTransaction::GetNewDataFile(DuckLakeDataFile &file, Duc
 	data_file.max_partial_file_snapshot = file.max_partial_file_snapshot;
 	// gather the column statistics for this file
 	for (auto &column_stats_entry : file.column_stats) {
-		auto column_stats = DuckLakeColumnStatsInfo::FromColumnStats(column_stats_entry.first, column_stats_entry.second);
+		auto column_stats =
+		    DuckLakeColumnStatsInfo::FromColumnStats(column_stats_entry.first, column_stats_entry.second);
 		data_file.column_stats.push_back(std::move(column_stats));
 	}
 	for (auto &partition_entry : file.partition_values) {

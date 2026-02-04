@@ -20,7 +20,8 @@ DuckLakeVariantStats::DuckLakeVariantStats(LogicalType shredded_type_p, DuckLake
 }
 
 void DuckLakeColumnVariantStats::Merge(const DuckLakeColumnExtraStats &new_stats) {
-	throw InternalException("eek");
+	// FIXME: we can merge overlapping shredded stats
+	shredded_field_stats.clear();
 }
 
 unique_ptr<DuckLakeColumnExtraStats> DuckLakeColumnVariantStats::Copy() const {
@@ -30,11 +31,12 @@ unique_ptr<DuckLakeColumnExtraStats> DuckLakeColumnVariantStats::Copy() const {
 }
 
 void DuckLakeColumnVariantStats::Serialize(DuckLakeColumnStatsInfo &column_stats) const {
-	for(auto &entry : shredded_field_stats) {
+	for (auto &entry : shredded_field_stats) {
 		DuckLakeVariantStatsInfo shredded_stats;
 		shredded_stats.field_name = entry.first;
 		shredded_stats.shredded_type = DuckLakeTypes::ToString(entry.second.shredded_type);
-		shredded_stats.field_stats = DuckLakeColumnStatsInfo::FromColumnStats(column_stats.column_id, entry.second.field_stats);
+		shredded_stats.field_stats =
+		    DuckLakeColumnStatsInfo::FromColumnStats(column_stats.column_id, entry.second.field_stats);
 		column_stats.variant_stats.push_back(std::move(shredded_stats));
 	}
 }
@@ -56,21 +58,6 @@ string QuoteVariantFieldName(const string &field_name) {
 	return KeywordHelper::WriteQuoted(field_name, '"');
 }
 
-string VariantFieldNamesToField(const vector<string> &field_names) {
-	if (field_names.empty()) {
-		// root element - just "root"
-		return "root";
-	}
-	string result;
-	for (auto &field_name : field_names) {
-		if (!result.empty()) {
-			result += ".";
-		}
-		result += QuoteVariantFieldName(field_name);
-	}
-	return result;
-}
-
 vector<string> ExtractVariantFieldNames(const vector<string> &path, idx_t variant_field_start) {
 	vector<string> field_names;
 	for (idx_t i = variant_field_start; i + 1 < path.size(); i += 2) {
@@ -84,7 +71,10 @@ vector<string> ExtractVariantFieldNames(const vector<string> &path, idx_t varian
 }
 
 LogicalType ExtractVariantType(const LogicalType &variant_type, const vector<string> &field_names,
-                               idx_t field_idx = 0) {
+                               string &variant_field_name, idx_t field_idx = 0) {
+	if (field_idx == 0 && field_names.empty()) {
+		variant_field_name = "root";
+	}
 	if (variant_type.id() != LogicalTypeId::STRUCT) {
 		throw InvalidInputException(
 		    "Expected variant type to be struct at this layer while looking for field %s - but found %s",
@@ -98,18 +88,34 @@ LogicalType ExtractVariantType(const LogicalType &variant_type, const vector<str
 				// reached the final type - this is the type
 				return entry.second;
 			}
-			// FIXME: handle list
+			auto &field_name = field_names[field_idx];
+			if (entry.second.id() == LogicalTypeId::LIST) {
+				if (field_name != "element") {
+					throw InvalidInputException(
+					    "Found a list at this layer - expected a field named \"element\" but got a field named \"%s\"",
+					    field_name);
+				}
+				if (!variant_field_name.empty()) {
+					variant_field_name += ".";
+				}
+				variant_field_name += "element";
+				return ExtractVariantType(ListType::GetChildType(entry.second), field_names, variant_field_name,
+				                          field_idx + 1);
+			}
 			if (entry.second.id() != LogicalTypeId::STRUCT) {
 				throw InvalidInputException(
 				    "Expected variant type to be struct at this layer while looking for nested field %s - but found %s",
 				    StringUtil::Join(field_names, "."), variant_type);
 			}
 			// not the final field - recurse to find the field
-			auto &field_name = field_names[field_idx];
 			for (auto &typed_child : StructType::GetChildTypes(entry.second)) {
 				if (typed_child.first == field_name) {
 					// found the field to recurse on
-					return ExtractVariantType(typed_child.second, field_names, field_idx + 1);
+					if (!variant_field_name.empty()) {
+						variant_field_name += ".";
+					}
+					variant_field_name += QuoteVariantFieldName(field_name);
+					return ExtractVariantType(typed_child.second, field_names, variant_field_name, field_idx + 1);
 				}
 			}
 			throw InvalidInputException("Could not find field %s in type %s", field_name, variant_type);
@@ -143,15 +149,15 @@ void PartialVariantStats::ParseVariantStats(const vector<string> &path, idx_t va
 	// this is information about a field within the variant
 	// this must be either a "value" (untyped info) or "typed_value" (shredded info)
 	auto variant_field_names = ExtractVariantFieldNames(path, variant_field_start);
-	auto variant_field_name = VariantFieldNamesToField(variant_field_names);
 	if (path.back() == "typed_value") {
 		// typed info - extract the shredded type from the variant type
-		auto shredded_type = ExtractVariantType(variant_type, variant_field_names);
+		string variant_field_name;
+		auto shredded_type = ExtractVariantType(variant_type, variant_field_names, variant_field_name);
 		auto shredded_stats = DuckLakeInsert::ParseColumnStats(shredded_type, col_stats);
 		result.column_size_bytes += shredded_stats.column_size_bytes;
 		DuckLakeVariantStats variant_field_stats(std::move(shredded_type), std::move(shredded_stats));
-
-		shredded_field_stats.insert(make_pair(std::move(variant_field_name), std::move(variant_field_stats)));
+		field_names[variant_field_names] = std::move(variant_field_name);
+		shredded_field_stats.insert(make_pair(variant_field_names, std::move(variant_field_stats)));
 		return;
 	}
 	if (path.back() == "value") {
@@ -162,7 +168,7 @@ void PartialVariantStats::ParseVariantStats(const vector<string> &path, idx_t va
 		// for partially shredded data we don't write any stats to ducklake
 		if (untyped_stats.has_null_count && untyped_stats.has_num_values &&
 		    untyped_stats.null_count == untyped_stats.num_values) {
-			fully_shredded_fields.insert(variant_field_name);
+			fully_shredded_fields.insert(variant_field_names);
 		}
 		return;
 	}
@@ -176,11 +182,21 @@ DuckLakeColumnStats PartialVariantStats::Finalize() {
 	for (auto &entry : fully_shredded_fields) {
 		auto shredded_entry = shredded_field_stats.find(entry);
 		if (shredded_entry != shredded_field_stats.end()) {
-			variant_stats.shredded_field_stats.emplace(std::move(shredded_entry->first),
+			auto field_name_entry = field_names.find(shredded_entry->first);
+			if (field_name_entry == field_names.end()) {
+				throw InternalException("Found shredded stats but not shredded field name");
+			}
+			variant_stats.shredded_field_stats.emplace(std::move(field_name_entry->second),
 			                                           std::move(shredded_entry->second));
+			field_names.erase(field_name_entry);
+			shredded_field_stats.erase(entry);
 		}
 	}
 	return std::move(result);
+}
+
+unique_ptr<BaseStatistics> DuckLakeColumnVariantStats::ToStats() const {
+	return nullptr;
 }
 
 } // namespace duckdb
