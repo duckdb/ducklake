@@ -45,8 +45,9 @@ unique_ptr<DuckLakeMetadataManager> DuckLakeMetadataManager::Create(DuckLakeTran
 	lock_guard<mutex> lock(metadata_managers_lock);
 	auto &catalog = transaction.GetCatalog();
 	auto catalog_type = catalog.MetadataType();
-	auto create = metadata_managers[catalog_type];
-	if (create) {
+	auto metadata_manager_iter = metadata_managers.find(catalog_type);
+	if (metadata_manager_iter != metadata_managers.end()) {
+		auto create = metadata_manager_iter->second;
 		return create(transaction);
 	}
 	return make_uniq<DuckLakeMetadataManager>(transaction);
