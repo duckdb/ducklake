@@ -215,9 +215,14 @@ void DuckLakeDeleteFilter::Initialize(ClientContext &context, const DuckLakeFile
 }
 
 void DuckLakeDeleteFilter::Initialize(const DuckLakeInlinedDataDeletes &inlined_deletes) {
+	D_ASSERT(std::is_sorted(delete_data->deleted_rows.begin(), delete_data->deleted_rows.end()));
+	auto mid_idx = delete_data->deleted_rows.size();
 	for (auto &idx : inlined_deletes.rows) {
 		delete_data->deleted_rows.push_back(idx);
 	}
+	delete_data->snapshot_ids.clear();
+	std::inplace_merge(delete_data->deleted_rows.begin(), delete_data->deleted_rows.begin() + mid_idx,
+	                   delete_data->deleted_rows.end());
 }
 
 unordered_map<idx_t, idx_t> DuckLakeDeleteFilter::ScanDataFileRowIds(ClientContext &context,
@@ -262,19 +267,51 @@ unordered_map<idx_t, idx_t> DuckLakeDeleteFilter::ScanDataFileRowIds(ClientConte
 	return result;
 }
 
+void DuckLakeDeleteFilter::PopulateSnapshotMapFromPositions(
+    ClientContext &context, const DuckLakeFileData &data_file,
+    const unordered_map<idx_t, idx_t> &position_to_snapshot) const {
+	if (position_to_snapshot.empty()) {
+		return;
+	}
+	unordered_set<idx_t> positions;
+	for (auto &entry : position_to_snapshot) {
+		positions.insert(entry.first);
+	}
+	// Try to get row_ids from the data file
+	auto file_pos_to_row_id = ScanDataFileRowIds(context, data_file, positions);
+	if (!file_pos_to_row_id.empty()) {
+		// File has embedded row_ids, use row_id as key
+		delete_data->uses_row_id = true;
+		for (auto &entry : position_to_snapshot) {
+			auto it = file_pos_to_row_id.find(entry.first);
+			if (it != file_pos_to_row_id.end()) {
+				delete_data->scan_snapshot_map[it->second] = entry.second;
+			}
+		}
+	} else {
+		// No embedded row_ids, use file position as key
+		delete_data->uses_row_id = false;
+		for (auto &entry : position_to_snapshot) {
+			delete_data->scan_snapshot_map[entry.first] = entry.second;
+		}
+	}
+}
+
 void DuckLakeDeleteFilter::Initialize(ClientContext &context, const DuckLakeDeleteScanEntry &delete_scan) {
-	// scanning deletes - we need to scan the opposite (i.e. only the rows that were deleted)
+	// Scanning deletes - we need to scan the opposite (i.e. only the rows that were deleted)
+	// rows_to_scan[i] = true means row i was deleted and should be returned
 	auto rows_to_scan = make_unsafe_uniq_array<bool>(delete_scan.row_count);
 	bool has_embedded_snapshots = false;
 
-	// scan the current set of deletes
+	unordered_map<idx_t, idx_t> all_position_to_snapshot;
+
+	// Handle the primary deletion source (delete file OR full file delete)
 	if (!delete_scan.delete_file.path.empty()) {
-		unordered_map<idx_t, idx_t> file_pos_to_snapshot;
-		// we have a delete file - read the delete file from disk
+		// Partial delete, read deletions from the delete file
 		auto current_deletes =
 		    ScanDeleteFile(context, delete_scan.delete_file, delete_scan.start_snapshot, delete_scan.end_snapshot);
 		has_embedded_snapshots = current_deletes.has_embedded_snapshots;
-		// iterate over the current deletes - these are the rows we need to scan
+
 		memset(rows_to_scan.get(), 0, sizeof(bool) * delete_scan.row_count);
 		for (idx_t i = 0; i < current_deletes.deleted_rows.size(); i++) {
 			auto delete_idx = current_deletes.deleted_rows[i];
@@ -285,62 +322,33 @@ void DuckLakeDeleteFilter::Initialize(ClientContext &context, const DuckLakeDele
 			}
 			rows_to_scan[delete_idx] = true;
 			if (i < current_deletes.snapshot_ids.size()) {
-				file_pos_to_snapshot[delete_idx] = current_deletes.snapshot_ids[i];
+				all_position_to_snapshot[delete_idx] = current_deletes.snapshot_ids[i];
 			}
 		}
-
-		// For files with embedded row_ids, convert file_pos_to_snapshot to row_id-indexed map
-		if (!file_pos_to_snapshot.empty()) {
-			unordered_set<idx_t> positions_to_scan;
-			for (auto &entry : file_pos_to_snapshot) {
-				positions_to_scan.insert(entry.first);
-			}
-			auto file_pos_to_row_id = ScanDataFileRowIds(context, delete_scan.file, positions_to_scan);
-			if (!file_pos_to_row_id.empty()) {
-				// File has embedded row_ids
-				delete_data->uses_row_id = true;
-				for (auto &entry : file_pos_to_snapshot) {
-					auto it = file_pos_to_row_id.find(entry.first);
-					if (it != file_pos_to_row_id.end()) {
-						delete_data->scan_snapshot_map[it->second] = entry.second;
-					}
-				}
-			} else {
-				// If we have no embedded row_ids, we can use file position as key
-				delete_data->uses_row_id = false;
-				delete_data->scan_snapshot_map = std::move(file_pos_to_snapshot);
-			}
+	} else if (delete_scan.snapshot_id.IsValid() && delete_scan.inlined_file_deletions.empty()) {
+		// Full file delete, all rows are being scanned
+		memset(rows_to_scan.get(), 1, sizeof(bool) * delete_scan.row_count);
+		auto snapshot_id = delete_scan.snapshot_id.GetIndex();
+		for (idx_t i = 0; i < delete_scan.row_count; i++) {
+			all_position_to_snapshot[i] = snapshot_id;
 		}
 	} else {
-		// we have no delete file - this means the entire file was deleted
-		// set all rows as being scanned
-		memset(rows_to_scan.get(), 1, sizeof(bool) * delete_scan.row_count);
-		if (delete_scan.snapshot_id.IsValid()) {
-			for (idx_t i = 0; i < delete_scan.row_count; i++) {
-				delete_data->scan_snapshot_map[i] = delete_scan.snapshot_id.GetIndex();
-			}
+		// No delete file and no full file delete
+		memset(rows_to_scan.get(), 0, sizeof(bool) * delete_scan.row_count);
+	}
+
+	// Add inlined file deletions to the combined map
+	if (!delete_scan.inlined_file_deletions.empty()) {
+		for (auto &inlined_delete : delete_scan.inlined_file_deletions) {
+			rows_to_scan[inlined_delete.first] = true;
+			// Add to combined map (inlined deletions may override or add to existing)
+			all_position_to_snapshot[inlined_delete.first] = inlined_delete.second;
 		}
-		// For full file deletes, we need to scan the data file to get all row_ids
-		if (delete_scan.snapshot_id.IsValid()) {
-			unordered_set<idx_t> all_positions;
-			for (idx_t i = 0; i < delete_scan.row_count; i++) {
-				all_positions.insert(i);
-			}
-			auto file_pos_to_row_id = ScanDataFileRowIds(context, delete_scan.file, all_positions);
-			if (!file_pos_to_row_id.empty()) {
-				// File has embedded row_ids
-				delete_data->uses_row_id = true;
-				for (auto &entry : file_pos_to_row_id) {
-					delete_data->scan_snapshot_map[entry.second] = delete_scan.snapshot_id.GetIndex();
-				}
-			} else {
-				// No embedded row_ids
-				delete_data->uses_row_id = false;
-				for (idx_t i = 0; i < delete_scan.row_count; i++) {
-					delete_data->scan_snapshot_map[i] = delete_scan.snapshot_id.GetIndex();
-				}
-			}
-		}
+	}
+
+	// Scan data file to get row_id mappings for all positions
+	if (!all_position_to_snapshot.empty()) {
+		PopulateSnapshotMapFromPositions(context, delete_scan.file, all_position_to_snapshot);
 	}
 
 	if (!delete_scan.previous_delete_file.path.empty() && !has_embedded_snapshots) {

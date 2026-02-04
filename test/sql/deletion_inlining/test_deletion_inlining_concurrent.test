@@ -1,0 +1,39 @@
+# name: test/sql/deletion_inlining/test_deletion_inlining_concurrent.test
+# description: test concurrent operations with deletion inlining enabled
+# group: [deletion_inlining]
+
+require notwindows
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+
+test-env DATA_PATH __TEST_DIR__
+
+statement ok
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/deletion_inlining_concurrent', DATA_INLINING_ROW_LIMIT 10, METADATA_CATALOG 'ducklake_meta')
+
+statement ok
+SET ducklake_retry_wait_ms=100
+
+statement ok
+SET ducklake_retry_backoff=2.0
+
+statement ok
+CREATE TABLE ducklake.t AS SELECT range a FROM range(50)
+
+concurrentloop i 0 5
+
+# We cant check the error message since that's catalog specific
+statement maybe
+DELETE FROM ducklake.t WHERE a < ${i}*5
+----
+
+endloop
+
+query I
+SELECT COUNT(*) > 0 FROM ducklake.t
+----
+1

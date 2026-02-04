@@ -10,6 +10,7 @@
 
 #include "duckdb/common/common.hpp"
 #include "duckdb/common/unordered_set.hpp"
+#include "duckdb/common/unordered_map.hpp"
 #include "duckdb/common/case_insensitive_map.hpp"
 #include "duckdb/common/optional_idx.hpp"
 #include "duckdb/common/reference_map.hpp"
@@ -161,6 +162,13 @@ struct DuckLakeDeletedInlinedDataInfo {
 	TableIndex table_id;
 	string table_name;
 	vector<idx_t> deleted_row_ids;
+};
+
+//! Info for all inlined file deletions for a single table
+struct DuckLakeInlinedFileDeletionInfo {
+	TableIndex table_id;
+	//! Maps file_id -> set of deleted row_ids
+	DuckLakeInlinedFileDeletes file_deletions;
 };
 
 struct DuckLakeDeleteFileInfo {
@@ -342,6 +350,7 @@ enum class DuckLakeDataType {
 };
 
 struct DuckLakeFileListEntry {
+	optional_idx data_file_id;
 	DuckLakeFileData file;
 	DuckLakeFileData delete_file;
 	optional_idx row_id_start;
@@ -353,6 +362,12 @@ struct DuckLakeFileListEntry {
 	optional_idx snapshot_filter_min;
 	MappingIndex mapping_id;
 	DuckLakeDataType data_type = DuckLakeDataType::DATA_FILE;
+	//! The data file id
+	DataFileIndex file_id;
+	//! Inlined file deletions (row positions that have been deleted and stored in the metadata database)
+	set<idx_t> inlined_file_deletions;
+	//! Column min/max values for dynamic filter pushdown
+	unordered_map<idx_t, pair<string, string>> column_min_max;
 };
 
 struct DuckLakeDeleteScanEntry {
@@ -367,6 +382,10 @@ struct DuckLakeDeleteScanEntry {
 	optional_idx start_snapshot;
 	//! The end of the snapshot range for filtering
 	optional_idx end_snapshot;
+	//! Data file ID for matching inlined deletions
+	DataFileIndex file_id;
+	//! Inlined file deletions {row_id -> snapshot_id}
+	unordered_map<idx_t, idx_t> inlined_file_deletions;
 };
 
 struct DuckLakeFileListExtendedEntry {
@@ -415,6 +434,8 @@ struct DuckLakeCompactionFileEntry {
 	vector<DuckLakeCompactionDeleteFileData> delete_files;
 	optional_idx max_partial_file_snapshot;
 	idx_t schema_version;
+	//! Whether this file has inlined deletions (stored in metadata database rather than delete files)
+	bool has_inlined_deletions = false;
 };
 
 struct DuckLakeRewriteFileEntry {
