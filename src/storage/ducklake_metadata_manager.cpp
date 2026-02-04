@@ -10,10 +10,12 @@
 #include "duckdb.hpp"
 #include "metadata_manager/postgres_metadata_manager.hpp"
 #include "duckdb/main/attached_database.hpp"
+#include "duckdb/main/database.hpp"
 #include "duckdb/planner/filter/constant_filter.hpp"
 #include "duckdb/planner/filter/conjunction_filter.hpp"
 #include "duckdb/planner/filter/null_filter.hpp"
 #include "duckdb/planner/filter/optional_filter.hpp"
+#include "duckdb/planner/filter/dynamic_filter.hpp"
 #include "duckdb/planner/filter/in_filter.hpp"
 #include "duckdb/planner/expression.hpp"
 #include "duckdb/parser/parser.hpp"
@@ -1119,7 +1121,7 @@ FilterSQLResult DuckLakeMetadataManager::ConvertFilterPushdownToSQL(const Filter
 		if (!conditions.empty()) {
 			conditions += " AND ";
 		}
-		conditions += StringUtil::Format("data_file_id IN (SELECT data_file_id FROM %s WHERE %s(%s))", cte_name,
+		conditions += StringUtil::Format("data.data_file_id IN (SELECT data_file_id FROM %s WHERE %s(%s))", cte_name,
 		                                 null_checks.c_str(), filter_condition.c_str());
 
 		CTERequirement req(column_filter.column_field_index, referenced_stats);
@@ -1181,13 +1183,71 @@ DuckLakeMetadataManager::GenerateFilterPushdownComponents(const FilterPushdownIn
 	return result;
 }
 
+struct DynamicFilterColumn {
+	idx_t column_field_index;
+	ExpressionType comparison_type;
+	LogicalType column_type;
+};
+
 vector<DuckLakeFileListEntry> DuckLakeMetadataManager::GetFilesForTable(DuckLakeTableEntry &table,
                                                                         DuckLakeSnapshot snapshot,
                                                                         const FilterPushdownInfo *filter_info) {
 	auto table_id = table.GetTableId();
+
+	// If we have Top-N dynamic filter pushdown, include file-level min/max stats for pruning and ordering
+	vector<DynamicFilterColumn> dynamic_filter_columns;
+	if (filter_info) {
+		for (auto &entry : filter_info->column_filters) {
+			auto &col_filter = entry.second;
+			auto *dynamic = DuckLakeUtil::GetOptionalDynamicFilter(*col_filter.table_filter);
+			if (dynamic) {
+				ExpressionType comparison_type;
+				{
+					lock_guard<mutex> l(dynamic->filter_data->lock);
+					comparison_type = dynamic->filter_data->filter->comparison_type;
+				}
+				dynamic_filter_columns.push_back(
+				    {col_filter.column_field_index, comparison_type, col_filter.column_type});
+			}
+		}
+	}
+
+	string stats_select_list;
+	string stats_join_list;
+	string order_by_clause;
+	for (idx_t i = 0; i < dynamic_filter_columns.size(); i++) {
+		auto &dfc = dynamic_filter_columns[i];
+		auto alias = StringUtil::Format("stats_%d", NumericCast<int64_t>(i));
+		stats_select_list += StringUtil::Format(", %s.min_value, %s.max_value", alias.c_str(), alias.c_str());
+		stats_join_list += StringUtil::Format(
+		    "\nLEFT JOIN {METADATA_CATALOG}.ducklake_file_column_stats %s ON %s.data_file_id = data.data_file_id AND "
+		    "%s.table_id = data.table_id AND %s.column_id = %d",
+		    alias.c_str(), alias.c_str(), alias.c_str(), alias.c_str(), NumericCast<int64_t>(dfc.column_field_index));
+
+		// Generate ORDER BY clause to optimize Top-N queries - order files by their min/max stats
+		// so we find satisfying rows early and can skip remaining files via dynamic filter pruning.
+		// We only order by the first dynamic filter column: Top-N typically has a single ordering column,
+		// and multiple columns would have conflicting requirements (e.g., ORDER BY a DESC, b ASC).
+		if (order_by_clause.empty()) {
+			const bool seeking_high_values = dfc.comparison_type == ExpressionType::COMPARE_GREATERTHAN ||
+			                                 dfc.comparison_type == ExpressionType::COMPARE_GREATERTHANOREQUALTO;
+			const bool seeking_low_values = dfc.comparison_type == ExpressionType::COMPARE_LESSTHAN ||
+			                                dfc.comparison_type == ExpressionType::COMPARE_LESSTHANOREQUALTO;
+			if (seeking_high_values) {
+				// For DESC Top-N (seeking high values), order by max_value DESC so files with highest values come first
+				auto cast_expr = CastStatsToTarget(alias + ".max_value", dfc.column_type);
+				order_by_clause = StringUtil::Format("\nORDER BY %s DESC NULLS LAST", cast_expr);
+			} else if (seeking_low_values) {
+				// For ASC Top-N (seeking low values), order by min_value ASC so files with lowest values come first
+				auto cast_expr = CastStatsToTarget(alias + ".min_value", dfc.column_type);
+				order_by_clause = StringUtil::Format("\nORDER BY %s ASC NULLS LAST", cast_expr);
+			}
+		}
+	}
+
 	string select_list = "data.data_file_id, " + GetFileSelectList("data") +
 	                     ", data.row_id_start, data.begin_snapshot, data.partial_max, data.mapping_id, " +
-	                     GetFileSelectList("del");
+	                     GetFileSelectList("del") + stats_select_list;
 
 	string query;
 	string where_clause;
@@ -1203,20 +1263,23 @@ vector<DuckLakeFileListEntry> DuckLakeMetadataManager::GetFilesForTable(DuckLake
 	query += StringUtil::Format(R"(
 SELECT %s
 FROM {METADATA_CATALOG}.ducklake_data_file data
+%s
 LEFT JOIN (
     SELECT *
     FROM {METADATA_CATALOG}.ducklake_delete_file
     WHERE table_id=%d  AND {SNAPSHOT_ID} >= begin_snapshot
           AND ({SNAPSHOT_ID} < end_snapshot OR end_snapshot IS NULL)
-    ) del USING (data_file_id)
+    ) del ON del.data_file_id = data.data_file_id
 WHERE data.table_id=%d AND {SNAPSHOT_ID} >= data.begin_snapshot AND ({SNAPSHOT_ID} < data.end_snapshot OR data.end_snapshot IS NULL)
 		)",
-	                            select_list, table_id.index, table_id.index);
+	                            select_list, stats_join_list, table_id.index, table_id.index);
 
 	// Add WHERE clause from filters if it was generated
 	if (!where_clause.empty()) {
 		query += "\nAND " + where_clause;
 	}
+	// Add ORDER BY clause for Top-N optimization if generated
+	query += order_by_clause;
 	auto result = transaction.Query(snapshot, query);
 	if (result->HasError()) {
 		result->GetErrorObject().Throw("Failed to get data file list from DuckLake: ");
@@ -1246,6 +1309,20 @@ WHERE data.table_id=%d AND {SNAPSHOT_ID} >= data.begin_snapshot AND ({SNAPSHOT_I
 		}
 		col_idx++;
 		file_entry.delete_file = ReadDataFile(table, row, col_idx, IsEncrypted());
+		for (auto &dfc : dynamic_filter_columns) {
+			string min_val;
+			string max_val;
+			if (!row.IsNull(col_idx)) {
+				min_val = row.GetValue<string>(col_idx);
+			}
+			col_idx++;
+			if (!row.IsNull(col_idx)) {
+				max_val = row.GetValue<string>(col_idx);
+			}
+			col_idx++;
+			file_entry.column_min_max.emplace(dfc.column_field_index,
+			                                  make_pair(std::move(min_val), std::move(max_val)));
+		}
 
 		// Populate inlined file deletions for this file
 		auto del_entry = inlined_deletions.find(file_entry.file_id.index);

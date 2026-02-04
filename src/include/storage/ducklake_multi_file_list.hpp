@@ -48,6 +48,9 @@ public:
 	vector<DuckLakeFileListExtendedEntry> GetFilesExtended() const;
 	const vector<DuckLakeFileListEntry> &GetFiles() const;
 	const DuckLakeFileListEntry &GetFileEntry(idx_t file_idx) const;
+	optional_ptr<const FilterPushdownInfo> GetFilterInfo() const {
+		return filter_info.get();
+	}
 
 	bool IsDeleteScan() const;
 	const DuckLakeDeleteScanEntry &GetDeleteScanEntry(idx_t file_idx);
