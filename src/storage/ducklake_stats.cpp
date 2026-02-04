@@ -1,4 +1,6 @@
 #include "storage/ducklake_stats.hpp"
+#include "storage/ducklake_geo_stats.hpp"
+#include "storage/ducklake_variant_stats.hpp"
 #include "duckdb/common/types/string.hpp"
 #include "duckdb/common/types/value.hpp"
 #include "duckdb/storage/statistics/base_statistics.hpp"
@@ -10,6 +12,9 @@
 namespace duckdb {
 
 using namespace duckdb_yyjson; // NOLINT
+
+DuckLakeColumnExtraStats::DuckLakeColumnExtraStats(DuckLakeExtraStatsType stats_type) : stats_type(stats_type) {
+}
 
 DuckLakeColumnStats::DuckLakeColumnStats(LogicalType type_p) : type(std::move(type_p)) {
 	if (DuckLakeTypes::IsGeoType(type)) {
@@ -188,11 +193,12 @@ unique_ptr<BaseStatistics> DuckLakeColumnStats::CreateNumericStats() const {
 }
 
 unique_ptr<BaseStatistics> DuckLakeColumnStats::CreateVariantStats() const {
-	if (!extra_stats) {
-		throw InternalException("Variant DuckLakeColumnStats without extra_stats?");
-	}
-	auto &variant_stats = extra_stats->Cast<DuckLakeColumnVariantStats>();
-	return variant_stats.ToStats();
+	throw InternalException("Create Variant Stats");
+//	if (!extra_stats) {
+//		throw InternalException("Variant DuckLakeColumnStats without extra_stats?");
+//	}
+//	auto &variant_stats = extra_stats->Cast<DuckLakeColumnVariantStats>();
+//	return variant_stats.ToStats();
 }
 
 unique_ptr<BaseStatistics> DuckLakeColumnStats::CreateStringStats() const {

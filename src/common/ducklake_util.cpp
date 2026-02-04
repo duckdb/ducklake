@@ -5,7 +5,6 @@
 #include "storage/ducklake_metadata_manager.hpp"
 #include "duckdb/planner/filter/optional_filter.hpp"
 #include "duckdb/planner/filter/dynamic_filter.hpp"
-#include "duckdb/function/scalar/variant_utils.hpp"
 
 namespace duckdb {
 
@@ -32,16 +31,12 @@ string DuckLakeUtil::ParseQuotedValue(const string &input, idx_t &pos) {
 }
 
 string DuckLakeUtil::ToQuotedList(const vector<string> &input, char list_separator) {
-	return ToQuotedList(input.begin(), input.end(), list_separator);
-}
-
-string DuckLakeUtil::ToQuotedList(vector<string>::const_iterator begin, vector<string>::const_iterator end, char list_separator) {
 	string result;
-	for (; begin != end; begin++) {
+	for (auto &str : input) {
 		if (!result.empty()) {
 			result += list_separator;
 		}
-		result += KeywordHelper::WriteQuoted(*begin, '"');
+		result += KeywordHelper::WriteQuoted(str, '"');
 	}
 	return result;
 }
@@ -130,17 +125,7 @@ string ToSQLString(DuckLakeMetadataManager &metadata_manager, const Value &value
 		return "'" + StringUtil::Replace(value.ToString(), "'", "''") + "'";
 	}
 	case LogicalTypeId::VARIANT: {
-		Vector tmp(value);
-		RecursiveUnifiedVectorFormat format;
-		Vector::RecursiveToUnifiedFormat(tmp, 1, format);
-		UnifiedVariantVectorData vector_data(format);
-		auto val = VariantUtils::ConvertVariantToValue(vector_data, 0, 0);
-
-		child_list_t<Value> children;
-		children.emplace_back("type", Value(val.type().ToString()));
-		children.emplace_back("value", val);
-		auto packed = Value::STRUCT(std::move(children));
-		return ToSQLString(metadata_manager, packed);
+		throw InternalException("Variant to string");
 	}
 	case LogicalTypeId::STRUCT: {
 		bool is_unnamed = StructType::IsUnnamed(value.type());

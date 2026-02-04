@@ -10,7 +10,7 @@ test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
 test-env DATA_PATH __TEST_DIR__
 
 statement ok
-attach ':memory:' as db2(type 'ducklake')
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS db2 (DATA_PATH '${DATA_PATH}/ducklake_topn_pruning', METADATA_CATALOG 'dl')
 
 statement ok
 use db2;
@@ -25,6 +25,13 @@ SELECT COLUMNS(*)::VARIANT FROM (VALUES
     (21::VARIANT),
     (42::VARIANT)
 ) t(col);
+
+query I
+FROM dl.ducklake_file_column_stats
+----
+
+mode skip
+
 
 query I
 SELECT stats(col) FROM fully_shredded_primitive LIMIT 1;

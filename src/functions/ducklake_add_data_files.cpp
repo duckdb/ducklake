@@ -8,6 +8,7 @@
 #include "duckdb/common/types/value.hpp"
 #include "duckdb/common/vector_operations/vector_operations.hpp"
 #include "duckdb/common/types/vector.hpp"
+#include "storage/ducklake_geo_stats.hpp"
 
 namespace duckdb {
 

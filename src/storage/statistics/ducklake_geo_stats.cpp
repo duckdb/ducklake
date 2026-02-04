@@ -1,4 +1,5 @@
 #include "storage/ducklake_stats.hpp"
+#include "storage/ducklake_geo_stats.hpp"
 
 #include "yyjson.hpp"
 
@@ -6,7 +7,7 @@ namespace duckdb {
 
 using namespace duckdb_yyjson; // NOLINT
 
-DuckLakeColumnGeoStats::DuckLakeColumnGeoStats() : DuckLakeColumnExtraStats() {
+DuckLakeColumnGeoStats::DuckLakeColumnGeoStats() : DuckLakeColumnExtraStats(DuckLakeExtraStatsType::GEOMETRY) {
 	xmin = NumericLimits<double>::Maximum();
 	xmax = NumericLimits<double>::Minimum();
 	ymin = NumericLimits<double>::Maximum();
