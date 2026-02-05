@@ -605,12 +605,6 @@
       ]
     },
     {
-      "reason": "FIXME: Broken blob filter pushdown?",
-      "paths": [
-          "test/issues/general/test_4612.test"
-      ]
-    },
-    {
       "reason": "Unsupported variant type in Parquet",
       "paths": [
           "test/sql/function/variant/variant_typeof.test",

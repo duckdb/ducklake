@@ -252,7 +252,6 @@ unique_ptr<BaseStatistics> DuckLakeColumnStats::ToStats() const {
 		}
 		return nullptr;
 	case LogicalTypeId::VARCHAR:
-	case LogicalTypeId::BLOB:
 		return CreateStringStats();
 	case LogicalTypeId::VARIANT:
 		return CreateVariantStats();
