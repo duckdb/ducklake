@@ -38,6 +38,13 @@ struct DuckLakeColumnStats {
 	bool any_valid = true;
 	bool has_contains_nan = false;
 
+	bool AnyValid() const {
+		if (has_num_values && has_null_count) {
+			return num_values > null_count;
+		}
+		return any_valid;
+	}
+
 	unique_ptr<DuckLakeColumnExtraStats> extra_stats;
 
 public:

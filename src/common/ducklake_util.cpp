@@ -5,6 +5,7 @@
 #include "storage/ducklake_metadata_manager.hpp"
 #include "duckdb/planner/filter/optional_filter.hpp"
 #include "duckdb/planner/filter/dynamic_filter.hpp"
+#include "duckdb/function/scalar/variant_utils.hpp"
 
 namespace duckdb {
 
@@ -125,7 +126,12 @@ string ToSQLString(DuckLakeMetadataManager &metadata_manager, const Value &value
 		return "'" + StringUtil::Replace(value.ToString(), "'", "''") + "'";
 	}
 	case LogicalTypeId::VARIANT: {
-		throw InternalException("Variant to string");
+		Vector tmp(value);
+		RecursiveUnifiedVectorFormat format;
+		Vector::RecursiveToUnifiedFormat(tmp, 1, format);
+		UnifiedVariantVectorData vector_data(format);
+		auto val = VariantUtils::ConvertVariantToValue(vector_data, 0, 0);
+		return ToSQLString(metadata_manager, val);
 	}
 	case LogicalTypeId::STRUCT: {
 		bool is_unnamed = StructType::IsUnnamed(value.type());
@@ -136,9 +142,9 @@ string ToSQLString(DuckLakeMetadataManager &metadata_manager, const Value &value
 			auto &name = child_types[i].first;
 			auto &child = struct_values[i];
 			if (is_unnamed) {
-				ret += child.ToSQLString();
+				ret += ToSQLString(metadata_manager, child);
 			} else {
-				ret += "'" + name + "': " + child.ToSQLString();
+				ret += "'" + name + "': " + ToSQLString(metadata_manager, child);
 			}
 			if (i < struct_values.size() - 1) {
 				ret += ", ";
@@ -168,7 +174,7 @@ string ToSQLString(DuckLakeMetadataManager &metadata_manager, const Value &value
 		auto &list_values = ListValue::GetChildren(value);
 		for (idx_t i = 0; i < list_values.size(); i++) {
 			auto &child = list_values[i];
-			ret += child.ToSQLString();
+			ret += ToSQLString(metadata_manager, child);
 			if (i < list_values.size() - 1) {
 				ret += ", ";
 			}
@@ -181,7 +187,7 @@ string ToSQLString(DuckLakeMetadataManager &metadata_manager, const Value &value
 		auto &array_values = ArrayValue::GetChildren(value);
 		for (idx_t i = 0; i < array_values.size(); i++) {
 			auto &child = array_values[i];
-			ret += child.ToSQLString();
+			ret += ToSQLString(metadata_manager, child);
 			if (i < array_values.size() - 1) {
 				ret += ", ";
 			}

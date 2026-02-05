@@ -98,11 +98,11 @@ void DuckLakeColumnStats::MergeStats(const DuckLakeColumnStats &new_stats) {
 		}
 	}
 
-	if (!new_stats.any_valid) {
+	if (!new_stats.AnyValid()) {
 		// all values in the source are NULL - don't update min/max
 		return;
 	}
-	if (!any_valid) {
+	if (!AnyValid()) {
 		// all values in the current stats are null - copy the min/max
 		min = new_stats.min;
 		has_min = new_stats.has_min;
