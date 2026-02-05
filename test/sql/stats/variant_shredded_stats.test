@@ -18,7 +18,6 @@ use db2;
 # ----------------------------------------
 # PRIMITIVE
 # ----------------------------------------
-
 statement ok
 CREATE TABLE fully_shredded_primitive AS
 SELECT COLUMNS(*)::VARIANT FROM (VALUES
