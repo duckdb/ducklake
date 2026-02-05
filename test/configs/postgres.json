@@ -31,6 +31,13 @@
       ]
     },
     {
+      "reason": "Modifies connection string",
+      "paths": [
+        "test/sql/catalog/quoted_identifiers.test",
+        "test/sql/stats/count_star_optimization_file_operations.test"
+      ]
+    },
+    {
       "reason": "Migration",
       "paths": [
         "test/sql/migration/v01_partitioned.test",
