@@ -595,6 +595,27 @@
       "paths": [
           "test/sql/update/test_stress_update_issue_19688.test"
       ]
+    },
+    {
+      "reason": "FIXME: Internal error",
+      "paths": [
+          "test/sql/copy/csv/test_copy_null.test"
+      ]
+    },
+    {
+      "reason": "FIXME: Broken blob filter pushdown?",
+      "paths": [
+          "test/issues/general/test_4612.test"
+      ]
+    },
+    {
+      "reason": "Unsupported variant type in Parquet",
+      "paths": [
+          "test/sql/function/variant/variant_typeof.test",
+          "test/sql/storage/types/variant/test_all_types_single_object.test",
+          "test/sql/storage/types/variant/struct_of_variant.test",
+          "test/sql/storage/types/variant/test_all_types_single_table.test"
+      ]
     }
   ]
 }

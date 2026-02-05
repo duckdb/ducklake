@@ -98,7 +98,8 @@ string ToSQLString(DuckLakeMetadataManager &metadata_manager, const Value &value
 		return value.ToString();
 	}
 	string value_type = value.type().ToString();
-	if (!metadata_manager.TypeIsNativelySupported(value.type())) {
+	bool use_native_type = metadata_manager.TypeIsNativelySupported(value.type());
+	if (!use_native_type) {
 		value_type = "VARCHAR";
 	} else {
 		value_type = metadata_manager.GetColumnTypeInternal(value.type());
@@ -131,6 +132,10 @@ string ToSQLString(DuckLakeMetadataManager &metadata_manager, const Value &value
 		Vector::RecursiveToUnifiedFormat(tmp, 1, format);
 		UnifiedVariantVectorData vector_data(format);
 		auto val = VariantUtils::ConvertVariantToValue(vector_data, 0, 0);
+		if (!use_native_type) {
+			throw NotImplementedException("Variant types cannot be inlined in this catalog type yet");
+		}
+		// variant can just be stored as a variant
 		return ToSQLString(metadata_manager, val);
 	}
 	case LogicalTypeId::STRUCT: {

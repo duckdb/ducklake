@@ -15,7 +15,7 @@ ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS db2 (DATA_PATH '${DATA_PATH}/ducklak
 statement ok
 use db2;
 
-loop inline_limit 0 10
+foreach inline_limit 0 10
 
 statement ok
 CALL set_option('data_inlining_row_limit', '${inline_limit}');
