@@ -9,6 +9,7 @@
 #include "storage/ducklake_insert.hpp"
 #include "duckdb/parser/keyword_helper.hpp"
 #include "storage/ducklake_metadata_info.hpp"
+#include "yyjson.hpp"
 
 namespace duckdb {
 
@@ -41,8 +42,199 @@ void DuckLakeColumnVariantStats::Serialize(DuckLakeColumnStatsInfo &column_stats
 	}
 }
 
+static DuckLakeVariantStats DeserializeShreddedStats(const LogicalType &shredded_type, duckdb_yyjson::yyjson_val *obj) {
+	DuckLakeColumnStats column_stats(shredded_type);
+	DuckLakeVariantStats variant_stats(shredded_type, std::move(column_stats));
+
+	auto &stats = variant_stats.field_stats;
+
+	auto *null_count_val = yyjson_obj_get(obj, "null_count");
+	if (null_count_val) {
+	        stats.has_null_count = true;
+	        stats.null_count = (idx_t)yyjson_get_int(null_count_val);
+	}
+
+	auto *min_val = yyjson_obj_get(obj, "min");
+	if (min_val) {
+	        stats.has_min = true;
+	        stats.min = string(yyjson_get_str(min_val), yyjson_get_len(min_val));
+	}
+
+	auto *max_val = yyjson_obj_get(obj, "max");
+	if (max_val) {
+	        stats.has_max = true;
+	        stats.max = string(yyjson_get_str(max_val), yyjson_get_len(max_val));
+	}
+
+	auto *num_values_val = yyjson_obj_get(obj, "num_values");
+	if (num_values_val) {
+	        stats.has_num_values = true;
+	        stats.num_values = (idx_t)yyjson_get_int(num_values_val);
+	}
+
+	auto *contains_nan_val = yyjson_obj_get(obj, "contains_nan");
+	if (contains_nan_val) {
+	        stats.has_contains_nan = true;
+	        stats.contains_nan = yyjson_get_bool(contains_nan_val);
+	}
+
+	auto *column_size_val = yyjson_obj_get(obj, "column_size_bytes");
+	if (column_size_val) {
+	        stats.column_size_bytes = (idx_t)yyjson_get_int(column_size_val);
+	}
+
+	auto *any_valid_val = yyjson_obj_get(obj, "any_valid");
+	if (any_valid_val) {
+	        stats.any_valid = yyjson_get_bool(any_valid_val);
+	}
+
+	if (stats.extra_stats) {
+		auto *extra_stats_val = yyjson_obj_get(obj, "extra_stats");
+		if (extra_stats_val) {
+		        string extra_stats_str = yyjson_get_str(extra_stats_val);
+			stats.extra_stats->Deserialize(extra_stats_str);
+		}
+	}
+
+	return variant_stats;
+	}
+
 void DuckLakeColumnVariantStats::Deserialize(const string &stats) {
-	throw InternalException("eek");
+	duckdb_yyjson::yyjson_doc *doc = duckdb_yyjson::yyjson_read(stats.c_str(), stats.size(), 0);
+	if (!doc) {
+		throw InvalidInputException("Failed to parse VARIANT stats JSON \"%s\"", stats);
+	}
+	duckdb_yyjson::yyjson_val *root = yyjson_doc_get_root(doc);
+	size_t idx, max;
+	duckdb_yyjson::yyjson_val *obj;
+	yyjson_arr_foreach(root, idx, max, obj) {
+		auto *field_name_val = yyjson_obj_get(obj, "field_name");
+		if (!field_name_val) {
+			throw InvalidInputException("Missing field_name in VARIANT stats JSON \"%s\"", stats);
+		}
+		string field_name = yyjson_get_str(field_name_val);
+
+		auto *shredded_type_val = yyjson_obj_get(obj, "shredded_type");
+		if (!shredded_type_val) {
+			throw InvalidInputException("Missing shredded_type in VARIANT stats JSON \"%s\"", stats);
+		}
+		auto shredded_type = DuckLakeTypes::FromString(yyjson_get_str(shredded_type_val));
+		auto variant_stats = DeserializeShreddedStats(shredded_type, obj);
+
+		shredded_field_stats.insert(make_pair(std::move(field_name), std::move(variant_stats)));
+	}
+
+	yyjson_doc_free(doc);
+}
+
+static void SerializeShreddedStats(duckdb_yyjson::yyjson_mut_doc *doc, duckdb_yyjson::yyjson_mut_val *obj, const string &field_name, const DuckLakeVariantStats &variant_stats) {
+	yyjson_mut_obj_add_strcpy(doc, obj, "field_name", field_name.c_str());
+
+	yyjson_mut_obj_add_strcpy(doc, obj, "shredded_type", DuckLakeTypes::ToString(variant_stats.shredded_type).c_str());
+
+	auto &stats = variant_stats.field_stats;
+	if (stats.has_null_count) {
+		yyjson_mut_obj_add_int(doc, obj, "null_count", (int64_t)stats.null_count);
+	}
+
+	if (stats.has_min) {
+		yyjson_mut_obj_add_strncpy(doc, obj, "min", stats.min.c_str(), stats.min.size());
+	}
+
+	if (stats.has_max) {
+		yyjson_mut_obj_add_strncpy(doc, obj, "max", stats.max.c_str(), stats.max.size());
+	}
+
+	if (stats.has_num_values) {
+		yyjson_mut_obj_add_int(doc, obj, "num_values", (int64_t)stats.num_values);
+	}
+
+	if (stats.has_contains_nan) {
+		yyjson_mut_obj_add_bool(doc, obj, "contains_nan", stats.contains_nan);
+	}
+
+	yyjson_mut_obj_add_int(doc, obj, "column_size_bytes", (int64_t)stats.column_size_bytes);
+	yyjson_mut_obj_add_bool(doc, obj, "any_valid", stats.any_valid);
+
+	if (stats.extra_stats) {
+		string extra_stats_str;
+		if (stats.extra_stats->TrySerialize(extra_stats_str)) {
+			yyjson_mut_obj_add_strcpy(doc, obj, "extra_stats", extra_stats_str.c_str());
+		}
+	}
+}
+
+bool DuckLakeColumnVariantStats::TrySerialize(string &result) const {
+	if (shredded_field_stats.empty()) {
+		// no shredded stats
+		return false;
+	}
+
+	duckdb_yyjson::yyjson_mut_doc *doc = duckdb_yyjson::yyjson_mut_doc_new(nullptr);
+	duckdb_yyjson::yyjson_mut_val *root = yyjson_mut_arr(doc);
+	yyjson_mut_doc_set_root(doc, root);
+
+	for(auto &entry : shredded_field_stats) {
+		auto child_obj = yyjson_mut_obj(doc);
+		SerializeShreddedStats(doc, child_obj, entry.first, entry.second);
+		yyjson_mut_arr_append(root, child_obj);
+	}
+
+	// serialize to string
+	size_t len = 0;
+	char *json = yyjson_mut_write(doc, 0, &len);
+	if (!json) {
+		throw InternalException("Failed to serialize the VARIANT stats to JSON");
+	}
+	string out(json, len);
+	free(json);
+	yyjson_mut_doc_free(doc);
+	result = "'" + out + "'";
+	return true;
+}
+
+unique_ptr<BaseStatistics> DuckLakeColumnVariantStats::ToStats() const {
+	if (shredded_field_stats.empty()) {
+		return nullptr;
+	}
+	throw InternalException("To Stats");
+//	// create the "shredded" type
+//	if (shredding_state != VariantStatsShreddingState::SHREDDED) {
+//		return nullptr;
+//	}
+//	auto &child_types = StructType::GetChildTypes(shredded_type);
+//	idx_t index = DConstants::INVALID_INDEX;
+//	for (idx_t i = 0; i < child_types.size(); i++) {
+//		if (child_types[i].first == "typed_value") {
+//			index = i;
+//			break;
+//		}
+//	}
+//	if (index == DConstants::INVALID_INDEX) {
+//		throw InternalException("State says SHREDDED but there is no 'typed_value' ???");
+//	}
+//
+//	//! STRUCT(metadata, value, typed_value) -> STRUCT(untyped_value_index, typed_value)
+//	LogicalType logical_type;
+//	if (!TypedValueLayoutToType(child_types[index].second, logical_type)) {
+//		return nullptr;
+//	}
+//	auto shredding_type = TypeVisitor::VisitReplace(logical_type, [](const LogicalType &type) {
+//		return LogicalType::STRUCT({{"untyped_value_index", LogicalType::UINTEGER}, {"typed_value", type}});
+//	});
+//
+//	auto variant_stats = VariantStats::CreateShredded(shredding_type);
+//
+//	//! Take the root stats
+//	auto &shredded_stats = VariantStats::GetShreddedStats(variant_stats);
+//	if (!ConvertStats(0, shredded_stats)) {
+//		return nullptr;
+//	}
+//
+//	variant_stats.SetHasNull();
+//	variant_stats.SetHasNoNull();
+//	return variant_stats.ToUnique();
+//	return nullptr;
 }
 
 bool DuckLakeColumnVariantStats::ParseStats(const string &stats_name, const vector<Value> &stats_children) {
@@ -202,10 +394,6 @@ DuckLakeColumnStats PartialVariantStats::Finalize() {
 		}
 	}
 	return std::move(result);
-}
-
-unique_ptr<BaseStatistics> DuckLakeColumnVariantStats::ToStats() const {
-	return nullptr;
 }
 
 } // namespace duckdb

@@ -26,6 +26,11 @@ SELECT COLUMNS(*)::VARIANT FROM (VALUES
     (42::VARIANT)
 ) t(col);
 
+query I
+SELECT stats(col) FROM fully_shredded_primitive LIMIT 1;
+----
+shredding_state: SHREDDED, shredding: {typed_value_type: INTEGER, stats: {fully_shredded: true}}[Has Null: true, Has No Null: true]
+
 # # check the stats
 # two non-null values
 query II
