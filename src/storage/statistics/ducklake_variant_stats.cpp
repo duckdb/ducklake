@@ -166,8 +166,17 @@ void PartialVariantStats::ParseVariantStats(const vector<string> &path, idx_t va
 		result.column_size_bytes += untyped_stats.column_size_bytes;
 		// check if there are any untyped values - if they are ALL null this is fully shredded
 		// for partially shredded data we don't write any stats to ducklake
+		bool is_fully_shredded = false;
 		if (untyped_stats.has_null_count && untyped_stats.has_num_values &&
 		    untyped_stats.null_count == untyped_stats.num_values) {
+			// all untyped values are NULL - fully shredded
+			is_fully_shredded = true;
+		}
+		if (untyped_stats.has_min && untyped_stats.has_max && untyped_stats.min == "00" && untyped_stats.max == "00") {
+			// we have untyped values - but they are all NULL
+			is_fully_shredded = true;
+		}
+		if (is_fully_shredded) {
 			fully_shredded_fields.insert(variant_field_names);
 		}
 		return;
