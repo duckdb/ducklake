@@ -71,6 +71,18 @@ FileSystem &DuckLakeMetadataManager::GetFileSystem() {
 	return FileSystem::GetFileSystem(transaction.GetCatalog().GetDatabase());
 }
 
+string DuckLakeMetadataManager::ListAggregation(const vector<pair<string, string>> &fields) const {
+	// DuckDB syntax: LIST({'key1': val1, 'key2': val2, ...})
+	string fields_part;
+	for (auto const &entry : fields) {
+		if (!fields_part.empty()) {
+			fields_part += ", ";
+		}
+		fields_part += "'" + entry.first + "': " + entry.second;
+	}
+	return "LIST({" + fields_part + "})";
+}
+
 void DuckLakeMetadataManager::InitializeDuckLake(bool has_explicit_schema, DuckLakeEncryption encryption) {
 	string initialize_query;
 	if (has_explicit_schema) {
@@ -289,7 +301,7 @@ static bool AddChildColumn(vector<DuckLakeColumnInfo> &columns, FieldIndex paren
 	return false;
 }
 
-static vector<DuckLakeTag> LoadTags(const Value &tag_map) {
+vector<DuckLakeTag> DuckLakeMetadataManager::LoadTags(const Value &tag_map) const {
 	vector<DuckLakeTag> result;
 	for (auto &tag : ListValue::GetChildren(tag_map)) {
 		auto &struct_children = StructValue::GetChildren(tag);
@@ -304,7 +316,7 @@ static vector<DuckLakeTag> LoadTags(const Value &tag_map) {
 	return result;
 }
 
-static vector<DuckLakeInlinedTableInfo> LoadInlinedDataTables(const Value &list) {
+vector<DuckLakeInlinedTableInfo> DuckLakeMetadataManager::LoadInlinedDataTables(const Value &list) const {
 	vector<DuckLakeInlinedTableInfo> result;
 	for (auto &val : ListValue::GetChildren(list)) {
 		auto &struct_children = StructValue::GetChildren(val);
@@ -316,7 +328,7 @@ static vector<DuckLakeInlinedTableInfo> LoadInlinedDataTables(const Value &list)
 	return result;
 }
 
-static vector<DuckLakeMacroImplementation> LoadMacroImplementations(const Value &list) {
+vector<DuckLakeMacroImplementation> DuckLakeMetadataManager::LoadMacroImplementations(const Value &list) const {
 	vector<DuckLakeMacroImplementation> result;
 	for (auto &val : ListValue::GetChildren(list)) {
 		auto &struct_children = StructValue::GetChildren(val);
@@ -449,24 +461,33 @@ WHERE {SNAPSHOT_ID} >= begin_snapshot AND ({SNAPSHOT_ID} < end_snapshot OR end_s
 		catalog.schemas.push_back(std::move(schema));
 	}
 
+	static const vector<pair<string, string>> TAG_FIELDS = {
+	    {"key", "key"},
+	    {"value", "value"},
+	};
+	static const vector<pair<string, string>> INLINED_DATA_TABLES_FIELDS = {
+	    {"name", "table_name"},
+	    {"schema_version", "schema_version"},
+	};
+
 	// load the table information
-	result = transaction.Query(snapshot, R"(
+	result = transaction.Query(snapshot, StringUtil::Format(R"(
 SELECT schema_id, tbl.table_id, table_uuid::VARCHAR, table_name,
 	(
-		SELECT LIST({'key': key, 'value': value})
+		SELECT %s
 		FROM {METADATA_CATALOG}.ducklake_tag tag
 		WHERE object_id=table_id AND
 		      {SNAPSHOT_ID} >= tag.begin_snapshot AND ({SNAPSHOT_ID} < tag.end_snapshot OR tag.end_snapshot IS NULL)
 	) AS tag,
 	(
-		SELECT LIST({'name': table_name, 'schema_version': schema_version})
+		SELECT %s
 		FROM {METADATA_CATALOG}.ducklake_inlined_data_tables inlined_data_tables
 		WHERE inlined_data_tables.table_id = tbl.table_id
 	) AS inlined_data_tables,
 	path, path_is_relative,
 	col.column_id, column_name, column_type, initial_default, default_value, nulls_allowed, parent_column,
 	(
-		SELECT LIST({'key': key, 'value': value})
+		SELECT %s
 		FROM {METADATA_CATALOG}.ducklake_column_tag col_tag
 		WHERE col_tag.table_id=tbl.table_id AND col_tag.column_id=col.column_id AND
 		      {SNAPSHOT_ID} >= col_tag.begin_snapshot AND ({SNAPSHOT_ID} < col_tag.end_snapshot OR col_tag.end_snapshot IS NULL)
@@ -476,7 +497,10 @@ LEFT JOIN {METADATA_CATALOG}.ducklake_column col USING (table_id)
 WHERE {SNAPSHOT_ID} >= tbl.begin_snapshot AND ({SNAPSHOT_ID} < tbl.end_snapshot OR tbl.end_snapshot IS NULL)
   AND (({SNAPSHOT_ID} >= col.begin_snapshot AND ({SNAPSHOT_ID} < col.end_snapshot OR col.end_snapshot IS NULL)) OR column_id IS NULL)
 ORDER BY table_id, parent_column NULLS FIRST, column_order
-)");
+)",
+	                                                        ListAggregation(TAG_FIELDS),
+	                                                        ListAggregation(INLINED_DATA_TABLES_FIELDS),
+	                                                        ListAggregation(TAG_FIELDS)));
 	if (result->HasError()) {
 		result->GetErrorObject().Throw("Failed to get table information from DuckLake: ");
 	}
@@ -563,17 +587,18 @@ ORDER BY table_id, parent_column NULLS FIRST, column_order
 		}
 	}
 	// load view information
-	result = transaction.Query(snapshot, R"(
+	result = transaction.Query(snapshot, StringUtil::Format(R"(
 SELECT view_id, view_uuid, schema_id, view_name, dialect, sql, column_aliases,
 	(
-		SELECT LIST({'key': key, 'value': value})
+		SELECT %s
 		FROM {METADATA_CATALOG}.ducklake_tag tag
 		WHERE object_id=view_id AND
 		      {SNAPSHOT_ID} >= tag.begin_snapshot AND ({SNAPSHOT_ID} < tag.end_snapshot OR tag.end_snapshot IS NULL)
 	) AS tag
 FROM {METADATA_CATALOG}.ducklake_view view
 WHERE {SNAPSHOT_ID} >= begin_snapshot AND ({SNAPSHOT_ID} < view.end_snapshot OR view.end_snapshot IS NULL)
-)");
+)",
+	                                                        ListAggregation(TAG_FIELDS)));
 	if (result->HasError()) {
 		result->GetErrorObject().Throw("Failed to get partition information from DuckLake: ");
 	}
@@ -594,21 +619,33 @@ WHERE {SNAPSHOT_ID} >= begin_snapshot AND ({SNAPSHOT_ID} < view.end_snapshot OR 
 		views.push_back(std::move(view_info));
 	}
 
+	static const vector<pair<string, string>> MACRO_PARAM_FIELDS = {{"parameter_name", "parameter_name"},
+	                                                                {"parameter_type", "parameter_type"},
+	                                                                {"default_value", "default_value"},
+	                                                                {"default_value_type", "default_value_type"}};
+	auto macro_param_query = StringUtil::Format(R"(
+		(
+		SELECT %s
+		FROM {METADATA_CATALOG}.ducklake_macro_parameters
+		WHERE ducklake_macro_impl.macro_id = ducklake_macro_parameters.macro_id
+		AND ducklake_macro_impl.impl_id = ducklake_macro_parameters.impl_id
+		)
+	)",
+	                                            ListAggregation(MACRO_PARAM_FIELDS));
+	const vector<pair<string, string>> MACRO_IMPL_FIELDS = {
+	    {"dialect", "dialect"}, {"sql", "sql"}, {"type", "type"}, {"params", macro_param_query}};
+
 	// load macro information
-	result = transaction.Query(snapshot, R"(
+	result = transaction.Query(snapshot, StringUtil::Format(R"(
 SELECT schema_id, ducklake_macro.macro_id, macro_name, (
-		SELECT LIST({'dialect': dialect, 'sql':sql, 'type':type, 'params': (
-		    SELECT LIST({'parameter_name': parameter_name, 'parameter_type': parameter_type, 'default_value': default_value, 'default_value_type': default_value_type})
-				FROM {METADATA_CATALOG}.ducklake_macro_parameters
-		        WHERE ducklake_macro_impl.macro_id = ducklake_macro_parameters.macro_id
-		        AND ducklake_macro_impl.impl_id = ducklake_macro_parameters.impl_id
-		)})
+		SELECT %s
 		FROM {METADATA_CATALOG}.ducklake_macro_impl
 		WHERE ducklake_macro.macro_id = ducklake_macro_impl.macro_id
 	) AS impl
 FROM {METADATA_CATALOG}.ducklake_macro
 WHERE  {SNAPSHOT_ID} >= ducklake_macro.begin_snapshot AND ({SNAPSHOT_ID} < ducklake_macro.end_snapshot OR ducklake_macro.end_snapshot IS NULL)
-)");
+)",
+	                                                        ListAggregation(MACRO_IMPL_FIELDS)));
 	if (result->HasError()) {
 		result->GetErrorObject().Throw("Failed to get macro information from DuckLake: ");
 	}
@@ -1673,7 +1710,7 @@ WITH snapshot_ranges AS (
 	WHERE table_id=%d
 	ORDER BY begin_snapshot
 )
-SELECT %s,
+SELECT %s
 FROM {METADATA_CATALOG}.ducklake_data_file data
 LEFT JOIN snapshot_ranges sr
   ON data.begin_snapshot >= sr.begin_snapshot AND data.begin_snapshot < sr.end_snapshot
@@ -1683,7 +1720,7 @@ LEFT JOIN (
     WHERE table_id=%d
 ) del USING (data_file_id)
 LEFT JOIN (
-   SELECT data_file_id, LIST(partition_value ORDER BY partition_key_index) keys
+   SELECT data_file_id, ARRAY_AGG(partition_value ORDER BY partition_key_index) keys
    FROM {METADATA_CATALOG}.ducklake_file_partition_value
    GROUP BY data_file_id
 ) partition_info USING (data_file_id)
@@ -3293,7 +3330,7 @@ string DuckLakeMetadataManager::WriteNewSortKeys(DuckLakeSnapshot commit_snapsho
 	auto update_sort_query = StringUtil::Format(R"(
 UPDATE {METADATA_CATALOG}.ducklake_sort_info
 SET end_snapshot = {SNAPSHOT_ID}
-WHERE table_id IN (%s) AND end_snapshot IS NULL 
+WHERE table_id IN (%s) AND end_snapshot IS NULL
 ;)",
 	                                            old_sort_table_ids);
 	string batch_query = update_sort_query;
