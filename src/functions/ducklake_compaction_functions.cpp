@@ -23,8 +23,35 @@
 #include "duckdb/parser/query_node/select_node.hpp"
 #include "duckdb/planner/expression_binder/order_binder.hpp"
 #include "duckdb/planner/expression_binder/select_bind_state.hpp"
+#include "duckdb/parser/expression/columnref_expression.hpp"
+#include "duckdb/planner/expression/bound_constant_expression.hpp"
+#include "duckdb/parser/parsed_expression_iterator.hpp"
 
 namespace duckdb {
+
+//===--------------------------------------------------------------------===//
+// Sort Binding Helpers
+//===--------------------------------------------------------------------===//
+
+//! Binds ORDER BY expressions directly using ExpressionBinder.
+static vector<BoundOrderByNode> BindSortOrders(Binder &binder, const string &table_name, idx_t table_index,
+                                               const vector<string> &column_names,
+                                               const vector<LogicalType> &column_types,
+                                               vector<OrderByNode> &pre_bound_orders) {
+	// Create a child binder with the table columns in scope
+	auto child_binder = Binder::CreateBinder(binder.context, &binder);
+	child_binder->bind_context.AddGenericBinding(table_index, table_name, column_names, column_types);
+
+	// Bind each ORDER BY expression directly
+	vector<BoundOrderByNode> orders;
+	for (auto &pre_bound_order : pre_bound_orders) {
+		ExpressionBinder expr_binder(*child_binder, binder.context);
+		auto bound_expr = expr_binder.Bind(pre_bound_order.expression);
+		orders.emplace_back(pre_bound_order.type, pre_bound_order.null_order, std::move(bound_expr));
+	}
+
+	return orders;
+}
 
 //===--------------------------------------------------------------------===//
 // Compaction Operator
@@ -285,10 +312,8 @@ unique_ptr<LogicalOperator> DuckLakeCompactor::InsertSort(Binder &binder, unique
                                                           optional_ptr<DuckLakeSort> sort_data) {
 	auto bindings = plan->GetColumnBindings();
 
-	vector<BoundOrderByNode> orders;
-
+	// Parse the sort expressions from the sort_data
 	vector<OrderByNode> pre_bound_orders;
-
 	for (auto &pre_bound_order : sort_data->fields) {
 		if (pre_bound_order.dialect != "duckdb") {
 			continue;
@@ -303,52 +328,34 @@ unique_ptr<LogicalOperator> DuckLakeCompactor::InsertSort(Binder &binder, unique
 		// Then the sorts were not in the DuckDB dialect and we return the original plan
 		return std::move(plan);
 	}
-	auto root_get = unique_ptr_cast<LogicalOperator, LogicalGet>(std::move(plan));
 
-	// FIXME: Allow arbitrary expressions instead of just column references. (Need a dynamic bind)
-	// Build a map of the names of columns in the query plan so we can bind to them
-	case_insensitive_map_t<idx_t> alias_map;
-	auto current_columns = table.GetColumns().GetColumnNames();
-	for (idx_t col_idx = 0; col_idx < current_columns.size(); col_idx++) {
-		alias_map[current_columns[col_idx]] = col_idx;
-	}
-
-	root_get->ResolveOperatorTypes();
-	auto &root_types = root_get->types;
-
-	vector<string> unmatching_names;
+	// Validate all column references in sort expressions exist in the table
+	vector<reference<ParsedExpression>> sort_expressions;
 	for (auto &pre_bound_order : pre_bound_orders) {
-		auto name = pre_bound_order.expression->GetName();
-		auto order_idx_check = alias_map.find(name);
-		if (order_idx_check != alias_map.end()) {
-			auto order_idx = order_idx_check->second;
-			auto expr = make_uniq<BoundColumnRefExpression>(root_types[order_idx], bindings[order_idx], 0);
-			orders.emplace_back(pre_bound_order.type, pre_bound_order.null_order, std::move(expr));
-		} else {
-			// Then we did not find the column in the table
-			// We want to record all of the ones that we do not find and then throw a more informative error that
-			// includes all incorrect columns.
-			unmatching_names.push_back(name);
-		}
+		sort_expressions.push_back(*pre_bound_order.expression);
 	}
+	DuckLakeTableEntry::ValidateSortExpressionColumns(table, sort_expressions);
 
-	if (!unmatching_names.empty()) {
-		string error_string =
-		    "Columns in the SET SORTED BY statement were not found in the DuckLake table. Unmatched columns were: ";
-		for (auto &unmatching_name : unmatching_names) {
-			error_string += unmatching_name + ", ";
-		}
-		error_string.resize(error_string.length() - 2); // Remove trailing ", "
-		throw BinderException(error_string);
-	}
+	// Resolve types for the input plan (could be LogicalGet or LogicalProjection)
+	plan->ResolveOperatorTypes();
 
+	auto &columns = table.GetColumns();
+	auto current_columns = columns.GetColumnNames();
+	auto column_types = columns.GetColumnTypes();
+
+	D_ASSERT(!bindings.empty());
+	auto table_index = bindings[0].table_index;
+
+	// Bind the ORDER BY expressions
+	auto orders = BindSortOrders(binder, table.name, table_index, current_columns, column_types, pre_bound_orders);
+
+	// Create the LogicalOrder operator
 	auto order = make_uniq<LogicalOrder>(std::move(orders));
-
-	order->children.push_back(std::move(root_get));
-
-	vector<unique_ptr<Expression>> cast_expressions;
+	order->children.push_back(std::move(plan));
 	order->ResolveOperatorTypes();
 
+	// Create a projection to pass through all columns
+	vector<unique_ptr<Expression>> cast_expressions;
 	auto &types = order->types;
 	auto order_bindings = order->GetColumnBindings();
 

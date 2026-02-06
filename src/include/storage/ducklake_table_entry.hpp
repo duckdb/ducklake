@@ -120,6 +120,10 @@ public:
 	virtual_column_map_t GetVirtualColumns() const override;
 	vector<column_t> GetRowIdColumns() const override;
 
+	//! Validates that all column references in sort expressions exist in the table
+	static void ValidateSortExpressionColumns(DuckLakeTableEntry &table,
+	                                          const vector<reference<ParsedExpression>> &expressions);
+
 private:
 	unique_ptr<CatalogEntry> AlterTable(DuckLakeTransaction &transaction, RenameTableInfo &info);
 	unique_ptr<CatalogEntry> AlterTable(DuckLakeTransaction &transaction, SetPartitionedByInfo &info);

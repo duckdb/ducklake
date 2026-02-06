@@ -57,7 +57,7 @@ ORDER BY
 statement error
 CALL ducklake_merge_adjacent_files('ducklake', 'renamed_columns_test');
 ----
-Binder Error: Columns in the SET SORTED BY statement were not found in the DuckLake table. Unmatched columns were: sort_key_1, sort_key_2
+Columns in the SET SORTED BY statement were not found in the DuckLake table. Unmatched columns were: sort_key_1, sort_key_2
 
 statement ok
 ALTER TABLE ducklake.renamed_columns_test SET SORTED BY (sort_key_1_changed ASC NULLS LAST, sort_key_2_changed ASC NULLS LAST);

@@ -1,0 +1,95 @@
+# name: test/sql/sorted_table/merge_adjacent_sorted_spatial_hilbert.test
+# description: Sort by hilbert encoding from the spatial extension for space filling curve sorting
+# group: [sorted_table]
+
+require ducklake
+
+require parquet
+
+require spatial
+
+test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+
+
+statement ok
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '__TEST_DIR__/merge_adjacent_sorted_nested_expression/')
+
+statement ok
+USE ducklake;
+
+# Create a table with a unique_id column for nested expression sorting
+statement ok
+CREATE TABLE spatial_sort_test (i BIGINT, j BIGINT);
+
+statement ok
+INSERT INTO spatial_sort_test 
+FROM range(2) t1(i) 
+CROSS JOIN range(2) t2(j) 
+SELECT i+10 AS i, j+100 AS j
+ORDER BY i, j;
+
+statement ok
+INSERT INTO spatial_sort_test 
+FROM range(2) t1(i) 
+CROSS JOIN range(2) t2(j) 
+SELECT (i+2)+10 AS i, (j+2)+100 AS j 
+ORDER BY i, j;
+
+# Verify we have 2 data files before compaction
+query II
+SELECT df.data_file_id, df.table_id
+FROM __ducklake_metadata_ducklake.ducklake_data_file df
+JOIN __ducklake_metadata_ducklake.ducklake_table t
+ON df.table_id = t.table_id
+WHERE
+t.table_name = 'spatial_sort_test'
+----
+0	1
+1	1
+
+# Set sorted by a space filling curve expression (using spatial's ST_HILBERT function)
+statement ok
+ALTER TABLE ducklake.spatial_sort_test SET SORTED BY (st_hilbert(st_point(i, j)) ASC NULLS LAST);
+
+# Verify data before compaction (should be in insertion order)
+query II
+SELECT i, j
+FROM spatial_sort_test
+----
+10	100
+10	101
+11	100
+11	101
+12	102
+12	103
+13	102
+13	103
+
+# Compact the files
+statement ok
+CALL ducklake_merge_adjacent_files('ducklake', 'spatial_sort_test');
+
+# Verify we have 1 data file after compaction
+query II
+SELECT df.data_file_id, df.table_id
+FROM __ducklake_metadata_ducklake.ducklake_data_file df
+JOIN __ducklake_metadata_ducklake.ducklake_table t
+ON df.table_id = t.table_id
+WHERE
+t.table_name = 'spatial_sort_test'
+----
+2	1
+
+# Verify data is now sorted by the nested expression
+query III
+SELECT i, j, st_hilbert(st_point(i, j)) AS sort_key
+FROM spatial_sort_test
+----
+12	102	3271163904
+12	103	3271426088
+13	102	3287941120
+13	103	3959302184
+10	100	4240965632
+10	101	4241392296
+11	100	4292870144
+11	101	4293831336

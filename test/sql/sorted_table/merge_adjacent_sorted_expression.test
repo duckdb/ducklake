@@ -1,0 +1,188 @@
+# name: test/sql/sorted_table/merge_adjacent_sorted_expression.test
+# description: test ducklake merge adjacent files with SET SORTED BY using expressions (not just column refs)
+# group: [sorted_table]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+
+statement ok
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '__TEST_DIR__/merge_adjacent_sorted_expression/')
+
+statement ok
+USE ducklake;
+
+# Create a table with columns that will be concatenated for sorting
+statement ok
+CREATE TABLE sort_expression_test (unique_id BIGINT, sort_key_1 VARCHAR, sort_key_2 VARCHAR);
+
+statement ok
+INSERT INTO sort_expression_test (unique_id, sort_key_1, sort_key_2)
+VALUES
+    (1, 'b', 'z'),
+    (2, 'a', 'y'),
+    (3, 'c', 'x'),
+    (4, 'a', 'z');
+
+statement ok
+INSERT INTO sort_expression_test (unique_id, sort_key_1, sort_key_2)
+VALUES
+    (5, 'b', 'x'),
+    (6, 'c', 'z'),
+    (7, 'a', 'x'),
+    (8, 'b', 'y');
+
+# Verify we have 2 data files before compaction
+query II
+SELECT df.data_file_id, df.table_id
+FROM __ducklake_metadata_ducklake.ducklake_data_file df
+JOIN __ducklake_metadata_ducklake.ducklake_table t
+ON df.table_id = t.table_id
+WHERE
+t.table_name = 'sort_expression_test'
+----
+0	1
+1	1
+
+# Set sorted by an expression (concatenation of two columns)
+statement ok
+ALTER TABLE ducklake.sort_expression_test SET SORTED BY (sort_key_1 || sort_key_2 ASC NULLS LAST);
+
+# Verify data before compaction (should be in insertion order)
+query III
+FROM sort_expression_test
+----
+1	b	z
+2	a	y
+3	c	x
+4	a	z
+5	b	x
+6	c	z
+7	a	x
+8	b	y
+
+# Compact the files
+statement ok
+CALL ducklake_merge_adjacent_files('ducklake', 'sort_expression_test');
+
+# Verify we have 1 data file after compaction
+query II
+SELECT df.data_file_id, df.table_id
+FROM __ducklake_metadata_ducklake.ducklake_data_file df
+JOIN __ducklake_metadata_ducklake.ducklake_table t
+ON df.table_id = t.table_id
+WHERE
+t.table_name = 'sort_expression_test'
+----
+2	1
+
+# Verify data is now sorted by the concatenation of sort_key_1 and sort_key_2
+# Expected order by sort_key_1 || sort_key_2:
+# ax (id=7), ay (id=2), az (id=4), bx (id=5), by (id=8), bz (id=1), cx (id=3), cz (id=6)
+query III
+FROM sort_expression_test
+----
+7	a	x
+2	a	y
+4	a	z
+5	b	x
+8	b	y
+1	b	z
+3	c	x
+6	c	z
+
+# ===========================================================================
+# Test: Invalid expression with non-existent columns should fail at SET SORTED BY time
+# ===========================================================================
+
+statement error
+ALTER TABLE sort_expression_test SET SORTED BY (nonexistent_column || sort_key_1 ASC);
+----
+Columns in the SET SORTED BY statement were not found in the DuckLake table. Unmatched columns were: nonexistent_column
+
+statement error
+ALTER TABLE sort_expression_test SET SORTED BY (sort_key_1 || another_missing_col ASC);
+----
+Columns in the SET SORTED BY statement were not found in the DuckLake table. Unmatched columns were: another_missing_col
+
+# Multiple non-existent columns in expression
+statement error
+ALTER TABLE sort_expression_test SET SORTED BY (foo || bar || baz ASC);
+----
+Columns in the SET SORTED BY statement were not found in the DuckLake table. Unmatched columns were: foo, bar, baz
+
+# ===========================================================================
+# Test: Valid expression initially, then column rename, then compaction fails
+# ===========================================================================
+
+statement ok
+CREATE TABLE rename_expr_test (id BIGINT, col_a VARCHAR, col_b VARCHAR);
+
+statement ok
+INSERT INTO rename_expr_test VALUES (1, 'x', 'y'), (2, 'a', 'b');
+
+statement ok
+INSERT INTO rename_expr_test VALUES (3, 'p', 'q'), (4, 'm', 'n');
+
+# Set sorted by an expression using both columns
+statement ok
+ALTER TABLE rename_expr_test SET SORTED BY (col_a || col_b ASC);
+
+# Rename one of the columns used in the sort expression
+statement ok
+ALTER TABLE rename_expr_test RENAME COLUMN col_a TO col_a_renamed;
+
+# Compaction should fail with a descriptive error about the missing column
+statement error
+CALL ducklake_merge_adjacent_files('ducklake', 'rename_expr_test');
+----
+Columns in the SET SORTED BY statement were not found in the DuckLake table. Unmatched columns were: col_a
+
+# Fix the sort expression to use the new column name
+statement ok
+ALTER TABLE rename_expr_test SET SORTED BY (col_a_renamed || col_b ASC);
+
+# Now compaction should succeed
+statement ok
+CALL ducklake_merge_adjacent_files('ducklake', 'rename_expr_test');
+
+# Verify the data is sorted correctly
+query III
+FROM rename_expr_test
+----
+2	a	b
+4	m	n
+3	p	q
+1	x	y
+
+# ===========================================================================
+# Test: Rename multiple columns used in sort expression
+# ===========================================================================
+
+statement ok
+CREATE TABLE multi_rename_test (id BIGINT, first_name VARCHAR, last_name VARCHAR);
+
+statement ok
+INSERT INTO multi_rename_test VALUES (1, 'John', 'Doe'), (2, 'Alice', 'Smith');
+
+statement ok
+INSERT INTO multi_rename_test VALUES (3, 'Bob', 'Jones'), (4, 'Carol', 'Brown');
+
+# Set sorted by concatenation of both name columns
+statement ok
+ALTER TABLE multi_rename_test SET SORTED BY (first_name || last_name ASC);
+
+# Rename both columns
+statement ok
+ALTER TABLE multi_rename_test RENAME COLUMN first_name TO given_name;
+
+statement ok
+ALTER TABLE multi_rename_test RENAME COLUMN last_name TO family_name;
+
+# Compaction should fail listing both missing columns
+statement error
+CALL ducklake_merge_adjacent_files('ducklake', 'multi_rename_test');
+----
+Columns in the SET SORTED BY statement were not found in the DuckLake table. Unmatched columns were: first_name, last_name

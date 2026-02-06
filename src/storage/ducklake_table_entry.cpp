@@ -13,6 +13,7 @@
 #include "duckdb/parser/expression/cast_expression.hpp"
 #include "duckdb/parser/expression/columnref_expression.hpp"
 #include "duckdb/parser/expression/function_expression.hpp"
+#include "duckdb/parser/parsed_expression_iterator.hpp"
 #include "duckdb/storage/statistics/struct_stats.hpp"
 #include "duckdb/storage/statistics/list_stats.hpp"
 #include "duckdb/parser/parsed_data/comment_on_column_info.hpp"
@@ -374,24 +375,36 @@ string GetPartitionColumnName(ColumnRefExpression &colref) {
 	return colref.GetColumnName();
 }
 
-string GetSortColumnName(DuckLakeTableEntry &table, ParsedExpression &expr) {
-	// Only allow column references, reject expressions
-	if (expr.type != ExpressionType::COLUMN_REF) {
-		throw NotImplementedException("SET SORTED BY only supports column references, not expressions: %s",
-		                              expr.ToString());
+void DuckLakeTableEntry::ValidateSortExpressionColumns(DuckLakeTableEntry &table,
+                                                        const vector<reference<ParsedExpression>> &expressions) {
+	vector<string> missing_columns;
+	for (auto &expr : expressions) {
+		ParsedExpressionIterator::VisitExpression<ColumnRefExpression>(
+		    expr.get(), [&](const ColumnRefExpression &colref) {
+			    if (colref.IsQualified()) {
+				    throw InvalidInputException(
+				        "Unexpected qualified column reference - only unqualified columns are supported");
+			    }
+			    string column_name = colref.GetColumnName();
+			    if (!table.ColumnExists(column_name)) {
+				    if (std::find(missing_columns.begin(), missing_columns.end(), column_name) ==
+				        missing_columns.end()) {
+					    missing_columns.push_back(column_name);
+				    }
+			    }
+		    });
 	}
-	auto &colref = expr.Cast<ColumnRefExpression>();
-	if (colref.IsQualified()) {
-		throw InvalidInputException("Unexpected qualified column reference - only unqualified columns are supported");
+	if (!missing_columns.empty()) {
+		string error_string =
+		    "Columns in the SET SORTED BY statement were not found in the DuckLake table. Unmatched columns were: ";
+		for (idx_t i = 0; i < missing_columns.size(); i++) {
+			if (i > 0) {
+				error_string += ", ";
+			}
+			error_string += missing_columns[i];
+		}
+		throw BinderException(error_string);
 	}
-	string column_name = colref.GetColumnName();
-
-	// Validate column exists
-	if (!table.ColumnExists(column_name)) {
-		throw BinderException("Column \"%s\" does not exist in table \"%s\"", column_name, table.name);
-	}
-
-	return column_name;
 }
 
 DuckLakePartitionField GetPartitionField(DuckLakeTableEntry &table, ParsedExpression &expr) {
@@ -1126,18 +1139,21 @@ unique_ptr<CatalogEntry> DuckLakeTableEntry::AlterTable(DuckLakeTransaction &tra
 		return std::move(new_entry);
 	}
 
+	// Validate all column references in all sort expressions
+	vector<reference<ParsedExpression>> sort_expressions;
+	for (auto &order_node : info.orders) {
+		sort_expressions.push_back(*order_node.expression);
+	}
+	ValidateSortExpressionColumns(*this, sort_expressions);
+
 	auto sort_data = make_uniq<DuckLakeSort>();
 	sort_data->sort_id = transaction.GetLocalCatalogId();
 	for (idx_t order_node_idx = 0; order_node_idx < info.orders.size(); order_node_idx++) {
 		auto &order_node = info.orders[order_node_idx];
 
-		// FIXME: Currently must be column reference and column must exist. Want it to be an expression.
-		string column_name = GetSortColumnName(*this, *order_node.expression);
-
 		DuckLakeSortField sort_field;
 		sort_field.sort_key_index = order_node_idx;
-		// FIXME: convert to order_node.expression->ToString(); once expressions are supported
-		sort_field.expression = column_name;
+		sort_field.expression = order_node.expression->ToString();
 		sort_field.dialect = "duckdb";
 		sort_field.sort_direction = order_node.type;
 		sort_field.null_order = order_node.null_order;
