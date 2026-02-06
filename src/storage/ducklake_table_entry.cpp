@@ -462,7 +462,6 @@ DuckLakePartitionField GetPartitionField(DuckLakeTableEntry &table, ParsedExpres
 		    "Unsupported partition key %s - only identity columns and year/month/day/hour/bucket are supported",
 		    expr.ToString());
 	}
-	DuckLakePartitionField field;
 	if (!table.ColumnExists(column_name)) {
 		throw CatalogException("Unexpected partition key - column \"%s\" does not exist", column_name);
 	}
