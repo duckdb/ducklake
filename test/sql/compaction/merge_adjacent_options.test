@@ -71,8 +71,10 @@ SELECT data_file_id, table_id FROM __ducklake_metadata_ducklake.ducklake_data_fi
 7	5
 
 # We define a table_name but not a schema name so we should be able to merge from example_2
-statement ok
-CALL ducklake_merge_adjacent_files('ducklake', 'example_2');
+query III
+SELECT table_name, files_processed, files_created FROM ducklake_merge_adjacent_files('ducklake', 'example_2')
+----
+example_2	2	1
 
 # We write a new file for table id 2
 query II
@@ -88,8 +90,10 @@ SELECT data_file_id, table_id FROM __ducklake_metadata_ducklake.ducklake_data_fi
 
 
 # If we define the schema we do table id 5
-statement ok
-CALL ducklake_merge_adjacent_files('ducklake', 'example_2', schema=>'s1');
+query IIII
+SELECT schema_name, table_name, files_processed, files_created FROM ducklake_merge_adjacent_files('ducklake', 'example_2', schema=>'s1')
+----
+s1	example_2	2	1
 
 query II
 SELECT data_file_id, table_id FROM __ducklake_metadata_ducklake.ducklake_data_file
@@ -102,8 +106,11 @@ SELECT data_file_id, table_id FROM __ducklake_metadata_ducklake.ducklake_data_fi
 9	5
 
 # If we call with nothing, all tables, schemas go in, so we compress both remaining tables
-statement ok
-CALL ducklake_merge_adjacent_files('ducklake');
+query IIII
+SELECT schema_name, table_name, files_processed, files_created FROM ducklake_merge_adjacent_files('ducklake') ORDER BY ALL
+----
+main	example	2	1
+s1	example	2	1
 
 query II
 SELECT data_file_id, table_id FROM __ducklake_metadata_ducklake.ducklake_data_file

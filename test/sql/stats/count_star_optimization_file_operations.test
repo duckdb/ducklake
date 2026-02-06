@@ -1,0 +1,285 @@
+# name: test/sql/stats/count_star_optimization_file_operations.test
+# description: Test metadata-only COUNT(*) optimization with file operations
+# group: [stats]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+
+test-env DATA_PATH __TEST_DIR__
+
+statement ok
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/count_star_file_ops')
+
+# ============================================
+# 1. Test COUNT(*) with ducklake_merge_adjacent_files
+# ============================================
+
+statement ok
+CREATE TABLE ducklake.merge_test(i INTEGER);
+
+# insert data in multiple batches to create multiple files
+statement ok
+INSERT INTO ducklake.merge_test FROM range(100);
+
+statement ok
+INSERT INTO ducklake.merge_test FROM range(100, 200);
+
+statement ok
+INSERT INTO ducklake.merge_test FROM range(200, 300);
+
+query I
+SELECT COUNT(*) FROM ducklake.merge_test;
+----
+300
+
+# merge files
+statement ok
+CALL ducklake_merge_adjacent_files('ducklake', 'merge_test');
+
+query I
+SELECT COUNT(*) FROM ducklake.merge_test;
+----
+300
+
+# insert more data after merge
+statement ok
+INSERT INTO ducklake.merge_test FROM range(300, 400);
+
+query I
+SELECT COUNT(*) FROM ducklake.merge_test;
+----
+400
+
+# test uncommitted merge with rollback
+statement ok
+INSERT INTO ducklake.merge_test FROM range(400, 500);
+
+statement ok
+INSERT INTO ducklake.merge_test FROM range(500, 600);
+
+query I
+SELECT COUNT(*) FROM ducklake.merge_test;
+----
+600
+
+statement ok
+BEGIN;
+
+statement ok
+CALL ducklake_merge_adjacent_files('ducklake', 'merge_test');
+
+query I
+SELECT COUNT(*) FROM ducklake.merge_test;
+----
+600
+
+statement ok
+ROLLBACK;
+
+query I
+SELECT COUNT(*) FROM ducklake.merge_test;
+----
+600
+
+# ============================================
+# 2. Test COUNT(*) with ducklake_rewrite_data_files
+# ============================================
+
+statement ok
+CREATE TABLE ducklake.rewrite_test(i INTEGER);
+
+statement ok
+INSERT INTO ducklake.rewrite_test FROM range(500);
+
+# delete some rows to create delete files
+statement ok
+DELETE FROM ducklake.rewrite_test WHERE i % 10 = 0;
+
+query I
+SELECT COUNT(*) FROM ducklake.rewrite_test;
+----
+450
+
+# rewrite to apply deletes
+statement ok
+CALL ducklake_rewrite_data_files('ducklake', 'rewrite_test');
+
+query I
+SELECT COUNT(*) FROM ducklake.rewrite_test;
+----
+450
+
+# insert more data after rewrite
+statement ok
+INSERT INTO ducklake.rewrite_test FROM range(500, 600);
+
+query I
+SELECT COUNT(*) FROM ducklake.rewrite_test;
+----
+550
+
+# test uncommitted rewrite with rollback
+statement ok
+DELETE FROM ducklake.rewrite_test WHERE i % 10 = 1;
+
+query I
+SELECT COUNT(*) FROM ducklake.rewrite_test;
+----
+490
+
+statement ok
+BEGIN;
+
+statement ok
+CALL ducklake_rewrite_data_files('ducklake', 'rewrite_test');
+
+query I
+SELECT COUNT(*) FROM ducklake.rewrite_test;
+----
+490
+
+statement ok
+ROLLBACK;
+
+query I
+SELECT COUNT(*) FROM ducklake.rewrite_test;
+----
+490
+
+# ============================================
+# 3. Test COUNT(*) with ducklake_add_data_files
+# ============================================
+
+# create external parquet file with matching type
+statement ok
+COPY (SELECT i::INTEGER AS i FROM range(200) t(i)) TO '${DATA_PATH}/external_data.parquet';
+
+statement ok
+CREATE TABLE ducklake.add_files_test(i INTEGER);
+
+statement ok
+INSERT INTO ducklake.add_files_test FROM range(100);
+
+query I
+SELECT COUNT(*) FROM ducklake.add_files_test;
+----
+100
+
+# add external file
+statement ok
+CALL ducklake_add_data_files('ducklake', 'add_files_test', ['${DATA_PATH}/external_data.parquet']);
+
+query I
+SELECT COUNT(*) FROM ducklake.add_files_test;
+----
+300
+
+# insert more data after adding files
+statement ok
+INSERT INTO ducklake.add_files_test FROM range(300, 400);
+
+query I
+SELECT COUNT(*) FROM ducklake.add_files_test;
+----
+400
+
+# ============================================
+# 4. Test COUNT(*) with ducklake_flush_inlined_data
+# ============================================
+
+statement ok
+DETACH ducklake;
+
+statement ok
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}_flush' AS ducklake (DATA_PATH '${DATA_PATH}/count_star_flush', DATA_INLINING_ROW_LIMIT 100)
+
+statement ok
+CREATE TABLE ducklake.flush_test(i INTEGER);
+
+# insert inlined data
+statement ok
+INSERT INTO ducklake.flush_test FROM range(50);
+
+query I
+SELECT COUNT(*) FROM ducklake.flush_test;
+----
+50
+
+# insert more inlined data
+statement ok
+INSERT INTO ducklake.flush_test FROM range(50, 80);
+
+query I
+SELECT COUNT(*) FROM ducklake.flush_test;
+----
+80
+
+# flush inlined data to parquet files
+statement ok
+CALL ducklake_flush_inlined_data('ducklake', table_name => 'flush_test');
+
+query I
+SELECT COUNT(*) FROM ducklake.flush_test;
+----
+80
+
+# insert more data after flush (will be inlined again)
+statement ok
+INSERT INTO ducklake.flush_test FROM range(80, 100);
+
+query I
+SELECT COUNT(*) FROM ducklake.flush_test;
+----
+100
+
+# delete some rows and flush again
+statement ok
+DELETE FROM ducklake.flush_test WHERE i % 10 = 0;
+
+query I
+SELECT COUNT(*) FROM ducklake.flush_test;
+----
+90
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake', table_name => 'flush_test');
+
+query I
+SELECT COUNT(*) FROM ducklake.flush_test;
+----
+90
+
+# test uncommitted flush with rollback on a fresh table
+statement ok
+CREATE TABLE ducklake.flush_txn_test(i INTEGER);
+
+statement ok
+INSERT INTO ducklake.flush_txn_test FROM range(50);
+
+query I
+SELECT COUNT(*) FROM ducklake.flush_txn_test;
+----
+50
+
+statement ok
+BEGIN;
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake', table_name => 'flush_txn_test');
+
+query I
+SELECT COUNT(*) FROM ducklake.flush_txn_test;
+----
+50
+
+statement ok
+ROLLBACK;
+
+query I
+SELECT COUNT(*) FROM ducklake.flush_txn_test;
+----
+50
+

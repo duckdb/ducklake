@@ -30,7 +30,7 @@ date_array,
 timestamp_array,
 timestamptz_array,
 timestamp,
-list_of_fixed_int_array, hugeint, uhugeint, interval, time_tz, date, blob, varchar, timestamp_s, timestamp_ms, timestamp_ns,timestamp_tz) FROM test_all_types();
+list_of_fixed_int_array, hugeint, uhugeint, interval, time_tz, date, blob, varchar, timestamp_s, timestamp_ms, timestamp_ns,timestamp_tz, time_ns) FROM test_all_types();
 
 query I nosort alltypes
 FROM all_types
@@ -64,7 +64,7 @@ CREATE TABLE extra_types (
     ts_tz TIMESTAMPTZ,
     dou_ar DOUBLE[],
     date_ar DATE[],
-    ts TIMESTAMP,
+    ts TIMESTAMP
 );
 
 statement ok

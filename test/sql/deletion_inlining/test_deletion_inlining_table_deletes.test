@@ -1,0 +1,82 @@
+# name: test/sql/deletion_inlining/test_deletion_inlining_table_deletes.test
+# description: test table_deletions with inlined file deletions
+# group: [deletion_inlining]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+
+test-env DATA_PATH __TEST_DIR__
+
+statement ok
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/deletion_inlining_changes', DATA_INLINING_ROW_LIMIT 5, METADATA_CATALOG 'ducklake_meta')
+
+statement ok
+use ducklake
+
+statement ok
+CREATE TABLE t AS SELECT range i FROM range(20);
+
+statement ok
+INSERT INTO t SELECT range + 100 FROM range(15);
+
+query I
+SELECT COUNT(*) FROM ducklake_meta.ducklake_data_file WHERE table_id = 1
+----
+2
+
+statement ok
+DELETE FROM t WHERE i < 3
+
+statement ok
+DELETE FROM t WHERE i >= 100 AND i < 102
+
+statement ok
+DELETE FROM t WHERE i = 5 OR i = 10 OR i = 105
+
+# ============================================
+# Test ducklake_table_deletions
+# ============================================
+
+# Deletions for snapshots 1-2 (no deletions)
+query II
+SELECT snapshot_id, i FROM ducklake_table_deletions('ducklake', 'main', 't', 1, 2) ORDER BY i
+----
+
+# Deletions for snapshot 3
+query II
+SELECT snapshot_id, i FROM ducklake_table_deletions('ducklake', 'main', 't', 3, 3) ORDER BY i
+----
+3	0
+3	1
+3	2
+
+# Deletions for snapshot 4
+query II
+SELECT snapshot_id, i FROM ducklake_table_deletions('ducklake', 'main', 't', 4, 4) ORDER BY i
+----
+4	100
+4	101
+
+# Deletions for snapshot 5
+query II
+SELECT snapshot_id, i FROM ducklake_table_deletions('ducklake', 'main', 't', 5, 5) ORDER BY i
+----
+5	5
+5	10
+5	105
+
+# All deletions (snapshots 3-5)
+query II
+SELECT snapshot_id, i FROM ducklake_table_deletions('ducklake', 'main', 't', 3, 5) ORDER BY snapshot_id, i
+----
+3	0
+3	1
+3	2
+4	100
+4	101
+5	5
+5	10
+5	105

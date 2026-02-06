@@ -21,6 +21,7 @@ jobs:
       VCPKG_TOOLCHAIN_PATH: ${{ github.workspace }}/vcpkg/scripts/buildsystems/vcpkg.cmake
       PIP_BREAK_SYSTEM_PACKAGES: 1
       BUILD_EXTENSION_TEST_DEPS: full
+      S3_TEST_SERVER_AVAILABLE: 1
 
     steps:
       - name: Install required ubuntu packages
@@ -43,6 +44,11 @@ jobs:
           fetch-depth: 0
           submodules: 'true'
 
+      - name: Checkout DuckDB to version
+        run: |
+          cd duckdb
+          git checkout $(cat ../.github/duckdb-version)
+
       - name: Check installed versions
         run: |
           ninja --version
@@ -51,7 +57,7 @@ jobs:
       - name: Setup vcpkg
         uses: lukka/run-vcpkg@v11.1
         with:
-          vcpkgGitCommitId: ce613c41372b23b1f51333815feb3edd87ef8a8b
+          vcpkgGitCommitId: 84bab45d415d22042bd0b9081aea57f362da3f35
 
       - name: Setup Ccache
         uses: hendrikmuhs/ccache-action@main

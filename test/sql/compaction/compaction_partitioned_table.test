@@ -45,8 +45,11 @@ SELECT snapshot_id, rowid, * FROM ducklake.partitioned ORDER BY ALL
 5	2	2	100
 6	3	2	200
 
-statement ok
-CALL ducklake_merge_adjacent_files('ducklake');
+query III
+SELECT table_name, files_processed, files_created FROM ducklake_merge_adjacent_files('ducklake') ORDER BY ALL
+----
+partitioned	2	1
+partitioned	2	1
 
 # we gain two files here
 query I

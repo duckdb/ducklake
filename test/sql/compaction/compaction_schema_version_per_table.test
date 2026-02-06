@@ -26,8 +26,10 @@ statement ok
 INSERT INTO table_to_compact VALUES (5), (6);
 
 # compaction should work because the table's schema didn't change (only a view was created)
-statement ok
-CALL ducklake_merge_adjacent_files('ducklake', 'table_to_compact');
+query III
+SELECT table_name, files_processed, files_created FROM ducklake_merge_adjacent_files('ducklake', 'table_to_compact')
+----
+table_to_compact	2	1
 
 # cleanup old files
 statement ok
@@ -87,8 +89,10 @@ SELECT COUNT(*) FROM ducklake_list_files('ducklake', 'table_to_compact')
 3
 
 # compaction should work because table_to_compact's schema didn't change
-statement ok
-CALL ducklake_merge_adjacent_files('ducklake', 'table_to_compact');
+query III
+SELECT table_name, files_processed, files_created FROM ducklake_merge_adjacent_files('ducklake', 'table_to_compact')
+----
+table_to_compact	3	1
 
 # after cleanup we should have 1 file for table_to_compact
 query I
@@ -102,8 +106,11 @@ SELECT COUNT(*) FROM ducklake_list_files('ducklake', 'another_table')
 ----
 4
 
-statement ok
-CALL ducklake_merge_adjacent_files('ducklake', 'another_table');
+query III
+SELECT table_name, files_processed, files_created FROM ducklake_merge_adjacent_files('ducklake', 'another_table') ORDER BY ALL
+----
+another_table	2	1
+another_table	2	1
 
 # after cleanup we should have 2 file for another_table
 query I

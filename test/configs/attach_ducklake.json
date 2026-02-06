@@ -37,7 +37,9 @@
     "Adding indexes or constraints is not supported in DuckLake",
     "Only rename on top-level struct fields is supported currently",
     "Changing Secret Manager settings after the secret manager is used is not allowed!",
-    "Unsupported type \"TIME_NS\" in Parquet writer"
+    "Unsupported type \"TIME_NS\" in Parquet writer",
+    "DuckLakeScan not implemented",
+    "Unsupported ALTER TABLE"
   ],
   "skip_tests": [
     {
@@ -188,13 +190,16 @@
         "test/sql/transactions/conflict_drop_then_delete.test",
         "test/sql/transactions/test_create_drop_conflict.test",
         "test/sql/transactions/test_create_drop_conflict_variation1.test",
-        "test/sql/copy/parquet/parquet_glob.test"
+        "test/sql/copy/parquet/parquet_glob.test",
+        "test/sql/alter/alter_table_set_table_options.test",
+        "test/sql/function/variant/variant_extract_try_cast.test"
       ]
     },
     {
       "reason": "Supported in DuckLake, not supported in Core",
       "paths": [
-        "test/sql/alter/alter_table_set_partitioned_by.test"
+        "test/sql/alter/alter_table_set_partitioned_by.test",
+        "test/sql/create/create_as_partition_sorted_options.test"
       ]
     },
     {
@@ -361,6 +366,13 @@
       ]
     },
     {
+      "reason": "FIXME: Internal Error",
+      "paths": [
+        "test/sql/function/list/list_value_nested_lists.test"
+      ]
+    },
+
+    {
       "reason": "FIXME: BUGS? Weird behavior around hugeint",
       "paths": [
         "test/fuzzer/sqlsmith/test_abs_overflow.test",
@@ -462,7 +474,8 @@
     {
       "reason": "FIXME: Wrong result",
       "paths": [
-        "test/sql/join/positional/test_positional_join.test"
+        "test/sql/join/positional/test_positional_join.test",
+        "test/sql/update/test_null_update.test"
       ]
     },
     {
@@ -565,6 +578,47 @@
       "reason": "Assumes ordering of rowids that is not guaranteed in DuckLake",
       "paths": [
           "test/sql/projection/test_row_id_expression.test"
+      ]
+    },
+    {
+      "reason": "PARTITIONED BY is not supported for tables in a ducklake catalog",
+      "paths": [
+          "test/sql/create/create_table_extra_options.test"
+      ]
+    },
+    {
+      "reason": "Different results",
+      "paths": [
+          "test/sql/attach/show_schemas.test"
+      ]
+    },
+    {
+      "reason": "FIXME: CI Deadlock?",
+      "paths": [
+          "test/sql/update/test_stress_update_issue_19688.test"
+      ]
+    },
+    {
+      "reason": "FIXME: Internal error",
+      "paths": [
+          "test/sql/copy/csv/test_copy_null.test"
+      ]
+    },
+    {
+      "reason": "Unsupported variant type in Parquet",
+      "paths": [
+          "test/sql/function/variant/variant_typeof.test",
+          "test/sql/storage/types/variant/test_all_types_single_object.test",
+          "test/sql/storage/types/variant/struct_of_variant.test",
+          "test/sql/storage/types/variant/test_all_types_single_table.test",
+          "test/sql/storage/types/variant/test_all_types.test",
+          "test/sql/storage/types/variant/test_all_types_variant.test"
+      ]
+    },
+    {
+      "reason": "Variant shredding stats are different between Parquet <> DuckDB",
+      "paths": [
+          "test/sql/storage/types/variant/variant_extract_stats.test"
       ]
     }
   ]

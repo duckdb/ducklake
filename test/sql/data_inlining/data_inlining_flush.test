@@ -72,8 +72,10 @@ statement ok
 BEGIN
 
 # flush inlined data
-statement ok
-CALL ducklake_flush_inlined_data('ducklake')
+query II
+SELECT table_name, rows_flushed from ducklake_flush_inlined_data('ducklake')
+----
+test	10
 
 query I
 SELECT COUNT(*) FROM ducklake.test
@@ -111,7 +113,7 @@ SELECT COUNT(*) FROM GLOB('${DATA_PATH}/ducklake_inlining_flush_data/**')
 
 # flushing inlined data has no changes
 query IIII
-FROM ducklake.table_changes('test', 11, 12) ORDER BY ALL
+FROM ducklake.table_changes('test', 12, 12) ORDER BY ALL
 ----
 
 query III

@@ -1,0 +1,18 @@
+# name: test/sql/migration/test_compaction.test
+# description: test migration code that transforms partial_file_info into partial_max
+# group: [migration]
+
+require ducklake
+
+require parquet
+
+unzip data/old_ducklake/compacted_files.db.gz __TEST_DIR__/compacted_files.db
+
+statement ok
+ATTACH 'ducklake:__TEST_DIR__/compacted_files.db' AS ducklake (DATA_PATH '__TEST_DIR__/ducklake_migrate_per_table_schema', OVERRIDE_DATA_PATH TRUE, AUTOMATIC_MIGRATION TRUE)
+
+query II
+select data_file_id, partial_max from __ducklake_metadata_ducklake.ducklake_data_file;
+----
+6	NULL
+8	9

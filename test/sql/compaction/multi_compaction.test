@@ -28,8 +28,10 @@ INSERT INTO ducklake.test VALUES (${BASE} + 2);
 statement ok
 INSERT INTO ducklake.test VALUES (${BASE} + 3);
 
-statement ok
-CALL ducklake_merge_adjacent_files('ducklake');
+query III
+SELECT table_name, files_processed, files_created FROM ducklake_merge_adjacent_files('ducklake')
+----
+test	<REGEX>:\d+	1
 
 endloop
 

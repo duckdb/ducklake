@@ -1,0 +1,274 @@
+# name: test/sql/stats/variant_shredded_stats.test
+# group: [stats]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+
+test-env DATA_PATH __TEST_DIR__
+
+statement ok
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS db2 (DATA_PATH '${DATA_PATH}/ducklake_variant_stats', METADATA_CATALOG 'dl')
+
+statement ok
+use db2;
+
+# ----------------------------------------
+# PRIMITIVE
+# ----------------------------------------
+statement ok
+CREATE TABLE fully_shredded_primitive AS
+SELECT COLUMNS(*)::VARIANT FROM (VALUES
+    (21::VARIANT),
+    (42::VARIANT)
+) t(col);
+
+query I
+SELECT stats(col) FROM fully_shredded_primitive LIMIT 1;
+----
+shredding_state: SHREDDED, shredding: {typed_value_type: INTEGER, stats: {fully_shredded: true}}[Has Null: true, Has No Null: true]
+
+# # check the stats
+# two non-null values
+query II
+SELECT value_count, null_count FROM dl.ducklake_file_column_stats
+----
+2	0
+
+query IIIII
+SELECT variant_path, shredded_type, min_value, max_value, null_count FROM dl.ducklake_file_variant_stats WHERE data_file_id=0
+----
+root	int32	21	42	0
+
+query I
+FROM fully_shredded_primitive
+----
+21
+42
+
+statement ok
+CREATE TABLE fully_shredded_primitive_with_nulls AS
+SELECT COLUMNS(*)::VARIANT FROM (VALUES
+    (NULL::VARIANT),
+    (30::VARIANT),
+    (NULL::VARIANT),
+    (60::VARIANT)
+) t(col);
+
+query IIIIII
+SELECT variant_path, shredded_type, min_value, max_value, null_count, value_count FROM dl.ducklake_file_variant_stats WHERE data_file_id=1
+----
+root	int32	30	60	2	2
+
+query I
+FROM fully_shredded_primitive_with_nulls
+----
+NULL
+30
+NULL
+60
+
+statement ok
+CREATE TABLE not_fully_shredded_primitive AS
+SELECT COLUMNS(*)::VARIANT FROM (VALUES
+    (['test']::VARIANT),
+    (21::VARIANT),
+    (42::VARIANT)
+) t(col);
+
+# completely inconsistent - so no shredded stats
+query IIIIII
+SELECT variant_path, shredded_type, min_value, max_value, null_count, value_count FROM dl.ducklake_file_variant_stats WHERE data_file_id=2
+----
+
+# ----------------------------------------
+# ARRAY
+# ----------------------------------------
+statement ok
+CREATE TABLE fully_shredded_list AS
+SELECT COLUMNS(*)::VARIANT FROM (VALUES
+    (['test', 'a', 'b', 'c']::VARIANT),
+    (['world']::VARIANT)
+) t(col);
+
+query IIIIII
+SELECT variant_path, shredded_type, min_value, max_value, null_count, value_count FROM dl.ducklake_file_variant_stats WHERE data_file_id=3
+----
+element	varchar	a	world	0	5
+
+query I
+FROM fully_shredded_list
+----
+[test, a, b, c]
+[world]
+
+statement ok
+CREATE TABLE fully_shredded_list_with_nulls AS
+SELECT COLUMNS(*)::VARIANT FROM (VALUES
+    (NULL::VARIANT),
+    (NULL::VARIANT),
+    (['test', 'xxd', 'bzbzbz', 'zzzz']::VARIANT),
+    (['world']::VARIANT),
+    (NULL::VARIANT)
+) t(col);
+
+query IIIIII
+SELECT variant_path, shredded_type, min_value, max_value, null_count, value_count FROM dl.ducklake_file_variant_stats WHERE data_file_id=4
+----
+element	varchar	bzbzbz	zzzz	3	5
+
+query I
+FROM fully_shredded_list_with_nulls
+----
+NULL
+NULL
+[test, xxd, bzbzbz, zzzz]
+[world]
+NULL
+
+statement ok
+CREATE TABLE not_fully_shredded_list AS
+SELECT COLUMNS(*)::VARIANT FROM (VALUES
+    (NULL::VARIANT),
+    (NULL::VARIANT),
+    (['test']::VARIANT),
+    (['hello', 'world']::VARIANT),
+    ([21]::VARIANT),
+    (NULL::VARIANT)
+) t(col);
+
+# completely inconsistent - so no shredded stats
+query IIIIII
+SELECT variant_path, shredded_type, min_value, max_value, null_count, value_count FROM dl.ducklake_file_variant_stats WHERE data_file_id=5
+----
+
+query I
+FROM not_fully_shredded_list
+----
+NULL
+NULL
+[test]
+[hello, world]
+[21]
+NULL
+
+# ----------------------------------------
+# OBJECT
+# ----------------------------------------
+statement ok
+CREATE TABLE fully_shredded_object AS
+SELECT COLUMNS(*)::VARIANT FROM (VALUES
+    ({'a': 42, 'b': true}::VARIANT),
+    ({'a': 21, 'c': 'test'}::VARIANT)
+) t(col);
+
+# this is fully shredded, in spite of missing entries. These are just labeled as NULL
+query IIIIII
+SELECT variant_path, shredded_type, min_value, max_value, null_count, value_count FROM dl.ducklake_file_variant_stats WHERE data_file_id=6 ORDER BY variant_path
+----
+"a"	int32	21	42	0	2
+"b"	boolean	1	1	1	1
+"c"	varchar	test	test	1	1
+
+query I
+FROM fully_shredded_object
+----
+{'a': 42, 'b': true}
+{'a': 21, 'c': test}
+
+query I
+SELECT col.b FROM fully_shredded_object
+----
+true
+NULL
+
+statement ok
+CREATE TABLE fully_shredded_object_with_nulls AS
+SELECT COLUMNS(*)::VARIANT FROM (VALUES
+    (NULL::VARIANT),
+    ({'a': 42, 'b': true}::VARIANT),
+    (NULL::VARIANT),
+    ({'a': 21, 'c': 'test'}::VARIANT)
+) t(col);
+
+query IIIIII
+SELECT variant_path, shredded_type, min_value, max_value, null_count, value_count FROM dl.ducklake_file_variant_stats WHERE data_file_id=7 ORDER BY variant_path
+----
+"a"	int32	21	42	2	2
+"b"	boolean	1	1	3	1
+"c"	varchar	test	test	3	1
+
+query III
+SELECT col.a, col.b, col.c FROM fully_shredded_object_with_nulls
+----
+NULL	NULL	NULL
+42	true	NULL
+NULL	NULL	NULL
+21	NULL	test
+
+statement ok
+CREATE TABLE not_fully_shredded_object AS
+SELECT COLUMNS(*)::VARIANT FROM (VALUES
+    (NULL::VARIANT),
+    ({'a': 42, 'b': true}::VARIANT),
+    (NULL::VARIANT),
+    ({'a': 21, 'c': 'test'}::VARIANT),
+    (42::VARIANT)
+) t(col);
+
+# in spite of the top-level non-struct, the sub-fields are still fully shredded, they are just NULL also for the integer field
+query IIIIII
+SELECT variant_path, shredded_type, min_value, max_value, null_count, value_count FROM dl.ducklake_file_variant_stats WHERE data_file_id=8 ORDER BY variant_path
+----
+"a"	int32	21	42	3	2
+"b"	boolean	1	1	4	1
+"c"	varchar	test	test	4	1
+
+query III
+SELECT col.a, col.b, col.c FROM not_fully_shredded_object
+----
+NULL	NULL	NULL
+42	true	NULL
+NULL	NULL	NULL
+21	NULL	test
+NULL	NULL	NULL
+
+
+# ----------------------------------------
+# OBJECT - FIELD
+# ----------------------------------------
+
+statement ok
+CREATE TABLE not_fully_shredded_object_field AS
+SELECT COLUMNS(*)::VARIANT FROM (VALUES
+    (NULL::VARIANT),
+    ({'a': 42, 'b': true}::VARIANT),
+    (NULL::VARIANT),
+    ({'a': 'test', 'c': 'test'}::VARIANT)
+) t(col);
+
+#only "a" is not fully shredded, "b" and "c" are
+query IIIIII
+SELECT variant_path, shredded_type, min_value, max_value, null_count, value_count FROM dl.ducklake_file_variant_stats WHERE data_file_id=9 ORDER BY variant_path
+----
+"b"	boolean	1	1	3	1
+"c"	varchar	test	test	3	1
+
+statement ok
+CREATE TABLE fully_shredded_object_field_with_nulls AS
+SELECT COLUMNS(*)::VARIANT FROM (VALUES
+    (NULL::VARIANT),
+    ({'a': 42, 'b': true}::VARIANT),
+    (NULL::VARIANT),
+    ({'a': NULL, 'c': 'test'}::VARIANT)
+) t(col);
+
+# all sub-fields are fully shredded
+query IIIIII
+SELECT variant_path, shredded_type, min_value, max_value, null_count, value_count FROM dl.ducklake_file_variant_stats WHERE data_file_id=10 ORDER BY variant_path
+----
+"a"	int32	42	42	3	1
+"b"	boolean	1	1	3	1
+"c"	varchar	test	test	3	1

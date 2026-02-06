@@ -3,6 +3,9 @@
 #include "duckdb/parser/keyword_helper.hpp"
 #include "duckdb/common/file_system.hpp"
 #include "storage/ducklake_metadata_manager.hpp"
+#include "duckdb/planner/filter/optional_filter.hpp"
+#include "duckdb/planner/filter/dynamic_filter.hpp"
+#include "duckdb/function/scalar/variant_utils.hpp"
 
 namespace duckdb {
 
@@ -95,7 +98,8 @@ string ToSQLString(DuckLakeMetadataManager &metadata_manager, const Value &value
 		return value.ToString();
 	}
 	string value_type = value.type().ToString();
-	if (!metadata_manager.TypeIsNativelySupported(value.type())) {
+	bool use_native_type = metadata_manager.TypeIsNativelySupported(value.type());
+	if (!use_native_type) {
 		value_type = "VARCHAR";
 	} else {
 		value_type = metadata_manager.GetColumnTypeInternal(value.type());
@@ -122,7 +126,18 @@ string ToSQLString(DuckLakeMetadataManager &metadata_manager, const Value &value
 		}
 		return "'" + StringUtil::Replace(value.ToString(), "'", "''") + "'";
 	}
-	case LogicalTypeId::VARIANT:
+	case LogicalTypeId::VARIANT: {
+		Vector tmp(value);
+		RecursiveUnifiedVectorFormat format;
+		Vector::RecursiveToUnifiedFormat(tmp, 1, format);
+		UnifiedVariantVectorData vector_data(format);
+		auto val = VariantUtils::ConvertVariantToValue(vector_data, 0, 0);
+		if (!use_native_type) {
+			throw NotImplementedException("Variant types cannot be inlined in this catalog type yet");
+		}
+		// variant can just be stored as a variant
+		return ToSQLString(metadata_manager, val);
+	}
 	case LogicalTypeId::STRUCT: {
 		bool is_unnamed = StructType::IsUnnamed(value.type());
 		string ret = is_unnamed ? "(" : "{";
@@ -132,9 +147,9 @@ string ToSQLString(DuckLakeMetadataManager &metadata_manager, const Value &value
 			auto &name = child_types[i].first;
 			auto &child = struct_values[i];
 			if (is_unnamed) {
-				ret += child.ToSQLString();
+				ret += ToSQLString(metadata_manager, child);
 			} else {
-				ret += "'" + name + "': " + child.ToSQLString();
+				ret += "'" + name + "': " + ToSQLString(metadata_manager, child);
 			}
 			if (i < struct_values.size() - 1) {
 				ret += ", ";
@@ -164,7 +179,7 @@ string ToSQLString(DuckLakeMetadataManager &metadata_manager, const Value &value
 		auto &list_values = ListValue::GetChildren(value);
 		for (idx_t i = 0; i < list_values.size(); i++) {
 			auto &child = list_values[i];
-			ret += child.ToSQLString();
+			ret += ToSQLString(metadata_manager, child);
 			if (i < list_values.size() - 1) {
 				ret += ", ";
 			}
@@ -177,7 +192,7 @@ string ToSQLString(DuckLakeMetadataManager &metadata_manager, const Value &value
 		auto &array_values = ArrayValue::GetChildren(value);
 		for (idx_t i = 0; i < array_values.size(); i++) {
 			auto &child = array_values[i];
-			ret += child.ToSQLString();
+			ret += ToSQLString(metadata_manager, child);
 			if (i < array_values.size() - 1) {
 				ret += ", ";
 			}
@@ -281,6 +296,21 @@ string DuckLakeUtil::JoinPath(FileSystem &fs, const string &a, const string &b) 
 	} else {
 		return a + sep + b;
 	}
+}
+
+DynamicFilter *DuckLakeUtil::GetOptionalDynamicFilter(const TableFilter &filter) {
+	if (filter.filter_type != TableFilterType::OPTIONAL_FILTER) {
+		return nullptr;
+	}
+	auto &optional = filter.Cast<OptionalFilter>();
+	if (!optional.child_filter || optional.child_filter->filter_type != TableFilterType::DYNAMIC_FILTER) {
+		return nullptr;
+	}
+	auto &dynamic = optional.child_filter->Cast<DynamicFilter>();
+	if (!dynamic.filter_data || !dynamic.filter_data->filter) {
+		return nullptr;
+	}
+	return &dynamic;
 }
 
 } // namespace duckdb

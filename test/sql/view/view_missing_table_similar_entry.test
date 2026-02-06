@@ -1,0 +1,45 @@
+# name: test/sql/view/view_missing_table_similar_entry.test
+# description: Test that querying views with missing table references does not stack overflow
+# group: [view]
+
+require ducklake
+
+require parquet
+
+statement ok
+ATTACH 'ducklake:__TEST_DIR__/view_missing_table.db' AS ducklake (DATA_PATH '__TEST_DIR__/view_missing_table')
+
+statement ok
+use ducklake
+
+# lets make a table
+statement ok
+CREATE TABLE my_table (a INTEGER, b VARCHAR)
+
+# bunch of views can select from it
+loop i 0 10
+
+statement ok
+CREATE VIEW view_${i} AS FROM ducklake.main.my_table
+
+endloop
+
+# unbound views by deatch attach
+statement ok
+USE memory
+
+statement ok
+DETACH ducklake
+
+statement ok
+ATTACH 'ducklake:__TEST_DIR__/view_missing_table.db' AS ducklake (DATA_PATH '__TEST_DIR__/view_missing_table')
+
+# drop the table before binding
+statement ok
+DROP TABLE ducklake.main.my_table
+
+# this would stack overflow since we cant bind ze table
+query I
+SELECT count(*) FROM information_schema.tables WHERE table_catalog = 'ducklake'
+----
+10

@@ -1,5 +1,5 @@
 # name: test/sql/compaction/merge_adjacent_partial_file_info.test
-# description: Merge adjacent of two files with partial info
+# description: Merge adjacent of two files with partial_max
 # group: [compaction]
 
 require ducklake
@@ -28,13 +28,15 @@ CALL ducklake_set_option('ducklake', 'target_file_size', '1KB');
 statement ok
 INSERT INTO t SELECT i, 'small1' FROM range(100) t(i);
 
-# Create small files B (VERSION 3)	
+# Create small files B (VERSION 3)
 statement ok
 INSERT INTO t SELECT i + 100, 'small2' FROM range(100) t(i);
 
 # Merge A+B into a single file (VERSION 4)
-statement ok
-CALL ducklake_merge_adjacent_files('ducklake', 't');
+query III
+SELECT table_name, files_processed, files_created FROM ducklake_merge_adjacent_files('ducklake', 't')
+----
+t	2	1
 
 # Create small files C (VERSION 5)
 statement ok
@@ -45,32 +47,36 @@ statement ok
 INSERT INTO t SELECT i + 300, 'small4' FROM range(100) t(i);
 
 # Merge C+D into a single file (VERSION 7)
-statement ok
-CALL ducklake_merge_adjacent_files('ducklake', 't');
+query III
+SELECT table_name, files_processed, files_created FROM ducklake_merge_adjacent_files('ducklake', 't')
+----
+t	2	1
 
 # State now:
-# - Merged AB (ids 0-199) with partial_file_info
-# - Merged CD (ids 200-399) with partial_file_info
+# - Merged AB (ids 0-199) with partial_max = 3 (max snapshot in merged file)
+# - Merged CD (ids 200-399) with partial_max = 6 (max snapshot in merged file)
 query III
-SELECT begin_snapshot, end_snapshot, partial_file_info FROM __ducklake_metadata_ducklake.ducklake_data_file;
+SELECT begin_snapshot, end_snapshot, partial_max FROM __ducklake_metadata_ducklake.ducklake_data_file;
 ----
-2	NULL	2:100|3:200
-5	NULL	5:100|6:200
+2	NULL	3
+5	NULL	6
 
 # Set large target file size to merge all files
 statement ok
 CALL ducklake_set_option('ducklake', 'target_file_size', '1MB');
 
 # Merge all files into a single file (VERSION 8)
-statement ok
-CALL ducklake_merge_adjacent_files('ducklake', 't');
+query III
+SELECT table_name, files_processed, files_created FROM ducklake_merge_adjacent_files('ducklake', 't')
+----
+t	2	1
 
 # State now:
-# - Merged ABCD (ids 0-399) with merged partial_file_info
+# - Merged ABCD (ids 0-399) with partial_max = 6 (max of all source files)
 query III
-SELECT begin_snapshot, end_snapshot, partial_file_info FROM __ducklake_metadata_ducklake.ducklake_data_file;
+SELECT begin_snapshot, end_snapshot, partial_max FROM __ducklake_metadata_ducklake.ducklake_data_file;
 ----
-2	NULL	2:100|3:200|5:300|6:400
+2	NULL	6
 
 # Ensure the time-travel works
 query II

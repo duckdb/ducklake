@@ -28,8 +28,10 @@ INSERT INTO ducklake.test VALUES (2);
 statement ok
 INSERT INTO ducklake.test VALUES (3);
 
-statement ok
-CALL ducklake_merge_adjacent_files('ducklake');
+query III
+SELECT table_name, files_processed, files_created FROM ducklake_merge_adjacent_files('ducklake')
+----
+test	3	1
 
 # delete the old files
 statement ok

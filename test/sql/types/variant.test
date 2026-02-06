@@ -1,0 +1,88 @@
+# name: test/sql/types/variant.test
+# group: [types]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+
+test-env DATA_PATH __TEST_DIR__
+
+statement ok
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS db2 (DATA_PATH '${DATA_PATH}/ducklake_variant')
+
+statement ok
+use db2;
+
+foreach inline_limit 0 10
+
+statement ok
+CALL set_option('data_inlining_row_limit', '${inline_limit}');
+
+statement ok
+CREATE OR REPLACE TABLE variant_tbl(v VARIANT);
+
+# variant can hold so much crap
+statement ok
+INSERT INTO variant_tbl VALUES (42), ('hello world'), (DATE '2000-01-01'), ({'a': 42, 'b': NULL, 'c': 84}), (NULL), ([1, 2, 3, NULL, 5]);
+
+query II
+SELECT v, variant_typeof(v) FROM variant_tbl
+----
+42	INT32
+hello world	VARCHAR
+2000-01-01	DATE
+{'a': 42, 'b': NULL, 'c': 84}	OBJECT(a, b, c)
+NULL	VARIANT_NULL
+[1, 2, 3, NULL, 5]	ARRAY(5)
+
+# we can extract subfields
+query II
+SELECT v.c, variant_typeof(v.c) FROM variant_tbl
+----
+NULL	VARIANT_NULL
+NULL	VARIANT_NULL
+NULL	VARIANT_NULL
+84	INT32
+NULL	VARIANT_NULL
+NULL	VARIANT_NULL
+
+# and filter on subfields
+query I
+SELECT COUNT(*) FROM variant_tbl WHERE v.c=84
+----
+1
+
+# delete from the table
+query I
+DELETE FROM variant_tbl WHERE v::VARCHAR='hello world'
+----
+1
+
+query I
+FROM variant_tbl
+----
+42
+2000-01-01
+{'a': 42, 'b': NULL, 'c': 84}
+NULL
+[1, 2, 3, NULL, 5]
+
+# or run updates
+statement ok
+UPDATE variant_tbl SET v=v+100 WHERE variant_typeof(v) = 'INT32'
+
+query I
+SELECT v FROM variant_tbl WHERE variant_typeof(v) = 'INT32'
+----
+142
+
+# FIXME: this is wrong for inline limit = 0
+# query IIII
+# FROM table_changes('variant_tbl', 4, 4) ORDER BY ALL
+# ----
+# 4	0	update_postimage	142
+# 4	0	update_preimage	42
+
+endloop

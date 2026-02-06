@@ -370,10 +370,22 @@ const DuckLakeFieldId &DuckLakeFieldId::GetChildByIndex(idx_t index) const {
 	return *children[index];
 }
 
-optional_ptr<const DuckLakeFieldId> DuckLakeFieldData::GetByNames(PhysicalIndex id,
-                                                                  const vector<string> &column_names) const {
+optional_ptr<const DuckLakeFieldId> DuckLakeFieldData::GetByNames(PhysicalIndex id, const vector<string> &column_names,
+                                                                  optional_ptr<optional_idx> name_offset) const {
 	const_reference<DuckLakeFieldId> result = GetByRootIndex(id);
-	for (idx_t i = 1; i < column_names.size(); ++i) {
+	for (idx_t i = 1; i <= column_names.size(); ++i) {
+		if (result.get().Type().id() == LogicalTypeId::VARIANT) {
+			if (name_offset) {
+				*name_offset = i;
+				return result.get();
+			}
+			throw InvalidInputException(
+			    "Column path %s points to child of variant column %s - but no name_offset is provided",
+			    StringUtil::Join(column_names, "."), result.get().Name());
+		}
+		if (i >= column_names.size()) {
+			break;
+		}
 		auto &current = result.get();
 		auto next_child = current.GetChildByName(column_names[i]);
 		if (!next_child) {

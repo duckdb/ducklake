@@ -30,8 +30,10 @@ SELECT COUNT(*) FROM GLOB('${DATA_PATH}/ducklake_inlining_encryption_files/main/
 0
 
 # we can flush the data
-statement ok
-CALL ducklake_flush_inlined_data('ducklake')
+query III
+SELECT schema_name, table_name, rows_flushed FROM ducklake_flush_inlined_data('ducklake') ORDER BY ALL
+----
+main	test	1000
 
 # now we have a file
 query I

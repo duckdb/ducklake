@@ -28,7 +28,7 @@ public:
 	static CopyFunctionCatalogEntry &GetCopyFunction(ClientContext &context, const string &name);
 };
 
-enum class DuckLakeScanType { SCAN_TABLE, SCAN_INSERTIONS, SCAN_DELETIONS };
+enum class DuckLakeScanType { SCAN_TABLE, SCAN_INSERTIONS, SCAN_DELETIONS, SCAN_FOR_FLUSH };
 
 struct DuckLakeFunctionInfo : public TableFunctionInfo {
 	DuckLakeFunctionInfo(DuckLakeTableEntry &table, DuckLakeTransaction &transaction, DuckLakeSnapshot snapshot);

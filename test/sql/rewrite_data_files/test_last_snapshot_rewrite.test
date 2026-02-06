@@ -55,30 +55,28 @@ True
 query I
 SELECT delete_file_id FROM ducklake_metadata.ducklake_delete_file
 ----
-1
-2
 3
 
 # This won't do much, since our default threshold is too high
-statement ok
-CALL ducklake_rewrite_data_files('ducklake', 'test');
+query III
+SELECT table_name, files_processed, files_created FROM ducklake_rewrite_data_files('ducklake', 'test')
+----
 
 query I
 SELECT delete_file_id FROM ducklake_metadata.ducklake_delete_file
 ----
-1
-2
 3
 
-statement ok
-CALL ducklake_rewrite_data_files('ducklake', 'test', delete_threshold => 0.5);
+query III
+SELECT table_name, files_processed, files_created FROM ducklake_rewrite_data_files('ducklake', 'test', delete_threshold => 0.5)
+----
+test	1	1
 
 # We are deleting more than one file, so we can get it out
 query I
 SELECT delete_file_id FROM ducklake_metadata.ducklake_delete_file
 ----
-1
-2
+3
 
 query I
 SELECT COUNT(*) from test
@@ -96,18 +94,19 @@ WHERE key > 4000;
 query I
 SELECT delete_file_id FROM ducklake_metadata.ducklake_delete_file
 ----
-1
-2
+3
 5
 
-statement ok
-CALL ducklake_rewrite_data_files('ducklake', 'test');
+query III
+SELECT table_name, files_processed, files_created FROM ducklake_rewrite_data_files('ducklake', 'test')
+----
+test	1	1
 
 query I
 SELECT delete_file_id FROM ducklake_metadata.ducklake_delete_file
 ----
-1
-2
+3
+5
 
 query I
 SELECT COUNT(*) from test
@@ -118,25 +117,23 @@ statement ok
 DELETE FROM test
 WHERE key = 3000;
 
-statement ok
-CALL ducklake_rewrite_data_files('ducklake', 'test');
+query III
+SELECT table_name, files_processed, files_created FROM ducklake_rewrite_data_files('ducklake', 'test')
+----
 
 query I
 SELECT delete_file_id FROM ducklake_metadata.ducklake_delete_file
 ----
-1
-2
+3
+5
 7
 
 # Test that a manual delete_threshold option has priority over the global value.
-statement ok
-CALL ducklake_rewrite_data_files('ducklake', 'test', delete_threshold => 0);
-
-query I
-SELECT delete_file_id FROM ducklake_metadata.ducklake_delete_file
+query III
+SELECT table_name, files_processed, files_created FROM ducklake_rewrite_data_files('ducklake', 'test', delete_threshold => 0)
 ----
-1
-2
+test	1	1
+
 
 # Try invalid values for threshold
 statement error
@@ -163,7 +160,7 @@ CALL ducklake_cleanup_old_files('ducklake', cleanup_all => true);
 query I
 SELECT COUNT(*) FROM GLOB('${DATA_PATH}/ducklake_rewrite_data/**/*')
 ----
-6
+7
 
 # Let's check every snapshot has the right answer
 query II
@@ -175,11 +172,11 @@ SELECT snapshot_id, changes FROM snapshots();
 3	{tables_deleted_from=[1]}
 4	{tables_deleted_from=[1]}
 5	{tables_deleted_from=[1]}
-6	{}
+6	{rewrite_delete=[1]}
 7	{tables_deleted_from=[1]}
-8	{}
+8	{rewrite_delete=[1]}
 9	{tables_deleted_from=[1]}
-10	{}
+10	{rewrite_delete=[1]}
 
 query I
 select count(*) from test AT (VERSION => 3);

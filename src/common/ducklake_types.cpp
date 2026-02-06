@@ -57,6 +57,9 @@ static LogicalType ParseBaseType(const string &str) {
 	if (StringUtil::CIEquals(str, "json")) {
 		return LogicalType::JSON();
 	}
+	if (StringUtil::CIEquals(str, "variant")) {
+		return LogicalType::VARIANT();
+	}
 
 	if (StringUtil::CIEquals(str, "geometry")) {
 		LogicalType geo_type(LogicalTypeId::BLOB);
@@ -78,8 +81,7 @@ static string ToStringBaseType(const LogicalType &type) {
 
 // Only GEOMETRY type needs special handling, to cast to WKB_BLOB
 bool DuckLakeTypes::IsGeoType(const LogicalType &type) {
-	return type.HasAlias() && StringUtil::CIEquals(type.GetAlias(), "GEOMETRY") &&
-	       (type.id() == LogicalTypeId::BLOB || type.id() == LogicalTypeId::USER);
+	return type.HasAlias() && StringUtil::CIEquals(type.GetAlias(), "GEOMETRY") && (type.id() == LogicalTypeId::BLOB);
 }
 
 bool DuckLakeTypes::RequiresCast(const LogicalType &type) {
@@ -129,8 +131,8 @@ string DuckLakeTypes::ToString(const LogicalType &type) {
 		if (IsGeoType(type)) {
 			return "geometry";
 		}
-		if (type.id() == LogicalTypeId::USER) {
-			const auto type_name = UserType::GetTypeName(type);
+		if (type.id() == LogicalTypeId::UNBOUND) {
+			const auto type_name = type.GetAlias();
 			if (StringUtil::Lower(type_name) == "json") {
 				return "json";
 			}
@@ -140,6 +142,8 @@ string DuckLakeTypes::ToString(const LogicalType &type) {
 	switch (type.id()) {
 	case LogicalTypeId::STRUCT:
 		return "struct";
+	case LogicalTypeId::VARIANT:
+		return "variant";
 	case LogicalTypeId::LIST:
 		return "list";
 	case LogicalTypeId::MAP:

@@ -1,5 +1,5 @@
 # name: test/sql/compaction/merge_rewrite_partial_file_info.test
-# description: Reproduce issue ##551 with REWRITE_DELETES and partial file info
+# description: Reproduce issue ##551 with REWRITE_DELETES and partial_max
 # group: [compaction]
 
 require ducklake
@@ -42,23 +42,25 @@ SELECT COUNT(*) FROM ducklake_list_files('ducklake', 't');
 3
 
 # Merge B+C into a single file (A is too big to merge)
-statement ok
-CALL ducklake_merge_adjacent_files('ducklake', 't');
+query III
+SELECT table_name, files_processed, files_created FROM ducklake_merge_adjacent_files('ducklake', 't')
+----
+t	2	1
 
 # State now:
-# - File A (ids 0-4999): NO partial_file_info, begin_snapshot=2
-# - Merged BC (ids 5000-5199): HAS partial_file_info, begin_snapshot=3
+# - File A (ids 0-4999): NO partial_max, begin_snapshot=2
+# - Merged BC (ids 5000-5199): HAS partial_max=4, begin_snapshot=3
 query I
 SELECT COUNT(*) FROM ducklake_list_files('ducklake', 't') WHERE delete_file IS NULL;
 ----
 2
 
-# Only merged BC has partial_file_info
+# Only merged BC has partial_max
 query I
-SELECT partial_file_info FROM __ducklake_metadata_ducklake.ducklake_data_file WHERE end_snapshot IS NULL;
+SELECT partial_max FROM __ducklake_metadata_ducklake.ducklake_data_file WHERE end_snapshot IS NULL;
 ----
 NULL
-3:100|4:200
+4
 
 statement ok
 INSERT INTO t SELECT i + 5200, 'small3' FROM range(10) t(i);
@@ -71,30 +73,32 @@ statement ok
 CALL ducklake_set_option('ducklake', 'target_file_size', '1KB');
 
 # Merge D+E into a single file (A is too big to merge)
-statement ok
-CALL ducklake_merge_adjacent_files('ducklake', 't');
+query III
+SELECT table_name, files_processed, files_created FROM ducklake_merge_adjacent_files('ducklake', 't')
+----
+t	2	1
 
 # State now:
-# - File A (ids 0-4999): NO partial_file_info, begin_snapshot=2
-# - Merged BC (ids 5000-5199): HAS partial_file_info, begin_snapshot=3
-# - Merged DE (ids 5200-5219): HAS partial_file_info, begin_snapshot=4
+# - File A (ids 0-4999): NO partial_max, begin_snapshot=2
+# - Merged BC (ids 5000-5199): HAS partial_max=4, begin_snapshot=3
+# - Merged DE (ids 5200-5219): HAS partial_max=7, begin_snapshot=6
 query I
 SELECT COUNT(*) FROM ducklake_list_files('ducklake', 't') WHERE delete_file IS NULL;
 ----
 3
 
 query I
-SELECT partial_file_info FROM __ducklake_metadata_ducklake.ducklake_data_file WHERE end_snapshot IS NULL;
+SELECT partial_max FROM __ducklake_metadata_ducklake.ducklake_data_file WHERE end_snapshot IS NULL;
 ----
 NULL
-3:100|4:200
-6:10|7:20
+4
+7
 
-# Delete from file A (no partial_file_info)
+# Delete from file A (no partial_max)
 statement ok
 DELETE FROM t WHERE id < 4900;
 
-# Delete from merged file BC (has partial_file_info)
+# Delete from merged file BC (has partial_max)
 statement ok
 DELETE FROM t WHERE id >= 5000 AND id < 5150;
 
@@ -102,13 +106,17 @@ DELETE FROM t WHERE id >= 5000 AND id < 5150;
 statement ok
 CALL ducklake_set_option('ducklake', 'target_file_size', '1MB');
 
-# Rewrite all data files, including ones with partial_file_info
-statement ok
-CALL ducklake_rewrite_data_files('ducklake', 't', delete_threshold => 0);
+# Rewrite all data files, including ones with partial_max
+query III
+SELECT table_name, files_processed, files_created FROM ducklake_rewrite_data_files('ducklake', 't', delete_threshold => 0)
+----
+t	2	1
 
 # Merge all of them into a single file
-statement ok
-CALL ducklake_merge_adjacent_files('ducklake', 't');
+query III
+SELECT table_name, files_processed, files_created FROM ducklake_merge_adjacent_files('ducklake', 't')
+----
+t	2	1
 
 # Verify that we ended up with a single file
 query I

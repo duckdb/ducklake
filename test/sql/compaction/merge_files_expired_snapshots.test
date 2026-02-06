@@ -93,7 +93,7 @@ SELECT snapshot_id, changes FROM snapshots();
 ----
 0	{schemas_created=[main]}
 3	{tables_inserted_into=[1]}
-4	{}
+4	{merge_adjacent=[1]}
 5	{tables_inserted_into=[1]}
 6	{tables_altered=[1]}
 7	{tables_inserted_into=[1]}

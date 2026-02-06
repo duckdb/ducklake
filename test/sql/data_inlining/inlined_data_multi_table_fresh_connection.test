@@ -1,0 +1,86 @@
+# name: test/sql/data_inlining/inlined_data_multi_table_fresh_connection.test
+# description: Test inling data works when making schema changes to multiple tables in the same transaction.
+# group: [data_inlining]
+
+#
+# This test reproduces a bug where multiple tables have inlined data at the
+# same schema_version. Reading from a fresh connection can fail because the
+# wrong begin_snapshot is used.
+#
+# The fix uses GetBeginSnapshotForTable which directly queries ducklake_table
+# by table_id to get the correct begin_snapshot.
+
+require ducklake
+
+require parquet
+
+statement ok
+ATTACH 'ducklake:__TEST_DIR__/multi_table_fresh.db' AS ducklake (DATA_PATH '__TEST_DIR__/multi_table_fresh_data')
+
+statement ok
+CALL ducklake.set_option('data_inlining_row_limit', 1000)
+
+# Create table_b FIRST (table_id=1, begin_snapshot=1)
+statement ok
+CREATE TABLE ducklake.table_b(j INTEGER)
+
+statement ok
+INSERT INTO ducklake.table_b VALUES (10), (20), (30)
+
+# Create table_a SECOND (table_id=2, begin_snapshot=3)
+statement ok
+CREATE TABLE ducklake.table_a(i INTEGER)
+
+statement ok
+INSERT INTO ducklake.table_a VALUES (1), (2), (3)
+
+# ALTER both tables in ONE transaction to create inlined data entries at same schema_version
+statement ok
+BEGIN TRANSACTION
+
+statement ok
+ALTER TABLE ducklake.table_b ADD COLUMN y INTEGER
+
+statement ok
+ALTER TABLE ducklake.table_a ADD COLUMN x INTEGER
+
+statement ok
+COMMIT
+
+# Advance schema_version further so inlined data schema_version != current
+statement ok
+ALTER TABLE ducklake.table_a ADD COLUMN z1 INTEGER
+
+statement ok
+ALTER TABLE ducklake.table_a ADD COLUMN z2 INTEGER
+
+# Verify queries work with current connection (catalog cached)
+query I
+SELECT SUM(i) FROM ducklake.table_a
+----
+6
+
+query I
+SELECT SUM(j) FROM ducklake.table_b
+----
+60
+
+# Detach and re-attach to get fresh connection with empty catalog cache
+statement ok
+DETACH ducklake
+
+statement ok
+ATTACH 'ducklake:__TEST_DIR__/multi_table_fresh.db' AS ducklake (DATA_PATH '__TEST_DIR__/multi_table_fresh_data')
+
+# This query should work after the fix.
+# Before the fix, it would fail with "Cannot open file 'ducklake_inlined_data_2_X'"
+# because the wrong begin_snapshot was used.
+query I
+SELECT SUM(i) FROM ducklake.table_a
+----
+6
+
+query I
+SELECT SUM(j) FROM ducklake.table_b
+----
+60

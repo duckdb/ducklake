@@ -1,0 +1,154 @@
+# name: test/sql/table_changes/ducklake_table_deletions_compacted.test
+# description: test ducklake_table_deletions with multiple deletions after compacting multiple files into one
+# group: [table_changes]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+
+test-env DATA_PATH __TEST_DIR__
+
+statement ok
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/ducklake_table_deletions_compacted_files')
+
+statement ok
+use ducklake
+
+statement ok
+CREATE TABLE test(i INTEGER);
+
+# insert data across 10 files (1000 rows each)
+statement ok
+INSERT INTO test FROM range(1000)
+
+statement ok
+INSERT INTO test SELECT i + 1000 FROM range(1000) t(i)
+
+statement ok
+INSERT INTO test SELECT i + 2000 FROM range(1000) t(i)
+
+statement ok
+INSERT INTO test SELECT i + 3000 FROM range(1000) t(i)
+
+statement ok
+INSERT INTO test SELECT i + 4000 FROM range(1000) t(i)
+
+statement ok
+INSERT INTO test SELECT i + 5000 FROM range(1000) t(i)
+
+statement ok
+INSERT INTO test SELECT i + 6000 FROM range(1000) t(i)
+
+statement ok
+INSERT INTO test SELECT i + 7000 FROM range(1000) t(i)
+
+statement ok
+INSERT INTO test SELECT i + 8000 FROM range(1000) t(i)
+
+statement ok
+INSERT INTO test SELECT i + 9000 FROM range(1000) t(i)
+
+# compact all files into one
+statement ok
+CALL merge_adjacent_files()
+
+# verify we now have 1 data file
+query I
+SELECT COUNT(*) FROM ducklake_list_files('ducklake', 'test')
+----
+1
+
+query I
+SELECT COUNT(*) FROM test
+----
+10000
+
+# now do multiple deletions on the compacted file
+
+# delete 1200 rows (0-1199)
+statement ok
+DELETE FROM test WHERE i < 1200
+
+query I
+SELECT COUNT(*) FROM test
+----
+8800
+
+# delete 1200 rows (1200-2399)
+statement ok
+DELETE FROM test WHERE i >= 1200 AND i < 2400
+
+query I
+SELECT COUNT(*) FROM test
+----
+7600
+
+# delete 1200 rows (2400-3599)
+statement ok
+DELETE FROM test WHERE i >= 2400 AND i < 3600
+
+query I
+SELECT COUNT(*) FROM test
+----
+6400
+
+# delete 1200 rows (3600-4799)
+statement ok
+DELETE FROM test WHERE i >= 3600 AND i < 4800
+
+query I
+SELECT COUNT(*) FROM test
+----
+5200
+
+# delete 1200 rows (4800-5999)
+statement ok
+DELETE FROM test WHERE i >= 4800 AND i < 6000
+
+query I
+SELECT COUNT(*) FROM test
+----
+4000
+
+query I
+SELECT MIN(i) FROM test
+----
+6000
+
+query I
+SELECT MAX(i) FROM test
+----
+9999
+
+query I
+SELECT COUNT(*) FROM table_deletions('test', 13, 13)
+----
+1200
+
+query I
+SELECT COUNT(*) FROM table_deletions('test', 14, 14)
+----
+1200
+
+query I
+SELECT COUNT(*) FROM table_deletions('test', 15, 15)
+----
+1200
+
+query I
+SELECT COUNT(*) FROM table_deletions('test', 16, 16)
+----
+1200
+
+query I
+SELECT COUNT(*) FROM table_deletions('test', 17, 17)
+----
+1200
+
+# get all deletions
+query I
+SELECT COUNT(*) FROM table_deletions('test', 13, 17)
+----
+6000

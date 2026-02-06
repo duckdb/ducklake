@@ -1,0 +1,151 @@
+# name: test/sql/stats/count_star_optimization_inlined.test
+# description: Test metadata-only COUNT(*) optimization with inlined data
+# group: [stats]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+
+test-env DATA_PATH __TEST_DIR__
+
+statement ok
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/count_star_inlined', DATA_INLINING_ROW_LIMIT 100)
+
+# ============================================
+# 1. Test COUNT(*) after inserts (with schema evolution)
+# ============================================
+
+# create table with inlined data (small enough to be inlined)
+statement ok
+CREATE TABLE ducklake.inlined_test AS SELECT * FROM range(50) t(i);
+
+query I
+SELECT COUNT(*) FROM ducklake.inlined_test;
+----
+50
+
+# insert more inlined data
+statement ok
+INSERT INTO ducklake.inlined_test FROM range(50, 80);
+
+query I
+SELECT COUNT(*) FROM ducklake.inlined_test;
+----
+80
+
+# add a column (creates a new inlined table)
+statement ok
+ALTER TABLE ducklake.inlined_test ADD COLUMN j INTEGER DEFAULT 0;
+
+query I
+SELECT COUNT(*) FROM ducklake.inlined_test;
+----
+80
+
+# insert 10 rows with new schema (goes to new inlined table)
+statement ok
+INSERT INTO ducklake.inlined_test(i, j) SELECT i, i * 10 FROM range(80, 90) t(i);
+
+query I
+SELECT COUNT(*) FROM ducklake.inlined_test;
+----
+90
+
+# add another column (creates yet another inlined table)
+statement ok
+ALTER TABLE ducklake.inlined_test ADD COLUMN k VARCHAR DEFAULT 'x';
+
+query I
+SELECT COUNT(*) FROM ducklake.inlined_test;
+----
+90
+
+# insert 10 rows with newest schema (goes to third inlined table)
+statement ok
+INSERT INTO ducklake.inlined_test(i, j, k) SELECT i, i * 10, 'val' || i::VARCHAR FROM range(90, 100) t(i);
+
+query I
+SELECT COUNT(*) FROM ducklake.inlined_test;
+----
+100
+
+# ============================================
+# 2. Test COUNT(*) after deletes across all inlined tables
+# ============================================
+
+# delete across all three inlined tables using modulo
+# this deletes i=0,10,20,30,40,50,60,70 from table 1, i=80 from table 2, i=90 from table 3
+statement ok
+DELETE FROM ducklake.inlined_test WHERE i % 10 = 0;
+
+query I
+SELECT COUNT(*) FROM ducklake.inlined_test;
+----
+90
+
+# ============================================
+# 3. Test transaction-local changes
+# ============================================
+
+# test with uncommitted insert
+statement ok
+BEGIN;
+
+statement ok
+INSERT INTO ducklake.inlined_test(i) FROM range(100, 120);
+
+query I
+SELECT COUNT(*) FROM ducklake.inlined_test;
+----
+110
+
+statement ok
+ROLLBACK;
+
+query I
+SELECT COUNT(*) FROM ducklake.inlined_test;
+----
+90
+
+# test with uncommitted delete across all three tables
+statement ok
+BEGIN;
+
+statement ok
+DELETE FROM ducklake.inlined_test WHERE i % 10 = 1;
+
+query I
+SELECT COUNT(*) FROM ducklake.inlined_test;
+----
+80
+
+statement ok
+ROLLBACK;
+
+query I
+SELECT COUNT(*) FROM ducklake.inlined_test;
+----
+90
+
+# ============================================
+# 4. Test truncate
+# ============================================
+
+statement ok
+TRUNCATE ducklake.inlined_test;
+
+query I
+SELECT COUNT(*) FROM ducklake.inlined_test;
+----
+0
+
+# insert after truncate to verify table still works
+statement ok
+INSERT INTO ducklake.inlined_test(i) FROM range(50);
+
+query I
+SELECT COUNT(*) FROM ducklake.inlined_test;
+----
+50

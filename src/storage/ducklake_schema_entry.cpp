@@ -1,4 +1,5 @@
 #include "storage/ducklake_schema_entry.hpp"
+#include "duckdb/catalog/similar_catalog_entry.hpp"
 #include "duckdb/common/types/uuid.hpp"
 #include "duckdb/parser/parsed_data/comment_on_column_info.hpp"
 #include "duckdb/parser/parsed_data/create_view_info.hpp"
@@ -284,16 +285,6 @@ void DuckLakeSchemaEntry::Scan(ClientContext &context, CatalogType type,
 			// this entry exists in both the local and global set - emit only the transaction-local entry
 			continue;
 		}
-		if (entry.second->type == CatalogType::VIEW_ENTRY) {
-			auto &view_entry = entry.second->Cast<DuckLakeViewEntry>();
-			if (!view_entry.IsBound()) {
-				try {
-					view_entry.Bind(context);
-				} catch (...) {
-					//
-				}
-			}
-		}
 		callback(*entry.second);
 	}
 }
@@ -352,6 +343,44 @@ optional_ptr<CatalogEntry> DuckLakeSchemaEntry::LookupEntry(CatalogTransaction t
 		return nullptr;
 	}
 	return *entry;
+}
+
+SimilarCatalogEntry DuckLakeSchemaEntry::GetSimilarEntry(CatalogTransaction transaction,
+                                                         const EntryLookupInfo &lookup_info) {
+	SimilarCatalogEntry result;
+	auto catalog_type = lookup_info.GetCatalogType();
+	auto &entry_name = lookup_info.GetEntryName();
+	if (!CatalogTypeIsSupported(catalog_type)) {
+		return result;
+	}
+	auto &duck_transaction = transaction.transaction->Cast<DuckLakeTransaction>();
+	// check transaction local first
+	auto local_set = duck_transaction.GetTransactionLocalEntries(catalog_type, name);
+	if (local_set) {
+		for (auto &entry : local_set->GetEntries()) {
+			auto entry_score = StringUtil::SimilarityRating(entry.second->name, entry_name);
+			if (entry_score > result.score) {
+				result.score = entry_score;
+				result.name = entry.second->name;
+				result.schema = this;
+			}
+		}
+	}
+	// check commited entries, without binding views
+	auto &catalog_set = GetCatalogSet(catalog_type);
+	for (auto &entry : catalog_set.GetEntries()) {
+		if (duck_transaction.IsDeleted(*entry.second) || duck_transaction.IsRenamed(*entry.second)) {
+			// this changed
+			continue;
+		}
+		auto entry_score = StringUtil::SimilarityRating(entry.second->name, entry_name);
+		if (entry_score > result.score) {
+			result.score = entry_score;
+			result.name = entry.second->name;
+			result.schema = this;
+		}
+	}
+	return result;
 }
 
 void DuckLakeSchemaEntry::AddEntry(CatalogType type, unique_ptr<CatalogEntry> entry) {

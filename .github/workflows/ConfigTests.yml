@@ -13,8 +13,6 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        # Add commits/tags to build against other DuckDB versions
-        duckdb_version: [ '<submodule_version>' ]
         arch: ['linux_amd64']
         vcpkg_version: [ '2023.04.15' ]
         include:
@@ -38,10 +36,9 @@ jobs:
         submodules: 'true'
 
     - name: Checkout DuckDB to version
-      if: ${{ matrix.duckdb_version != '<submodule_version>'}}
       run: |
         cd duckdb
-        git checkout ${{ matrix.duckdb_version }}
+        git checkout $(cat ../.github/duckdb-version)
 
     - name: Setup Ccache
       uses: hendrikmuhs/ccache-action@main
