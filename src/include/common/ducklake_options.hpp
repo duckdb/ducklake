@@ -25,6 +25,7 @@ struct DuckLakeOptions {
 	string metadata_path;
 	string metadata_schema;
 	string data_path;
+	string static_backup;
 	bool override_data_path = false;
 	AccessMode access_mode = AccessMode::AUTOMATIC;
 	DuckLakeEncryption encryption = DuckLakeEncryption::AUTOMATIC;
