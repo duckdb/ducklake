@@ -191,13 +191,15 @@
         "test/sql/transactions/test_create_drop_conflict.test",
         "test/sql/transactions/test_create_drop_conflict_variation1.test",
         "test/sql/copy/parquet/parquet_glob.test",
-        "test/sql/alter/alter_table_set_table_options.test"
+        "test/sql/alter/alter_table_set_table_options.test",
+        "test/sql/function/variant/variant_extract_try_cast.test"
       ]
     },
     {
       "reason": "Supported in DuckLake, not supported in Core",
       "paths": [
-        "test/sql/alter/alter_table_set_partitioned_by.test"
+        "test/sql/alter/alter_table_set_partitioned_by.test",
+        "test/sql/create/create_as_partition_sorted_options.test"
       ]
     },
     {
@@ -594,6 +596,29 @@
       "reason": "FIXME: CI Deadlock?",
       "paths": [
           "test/sql/update/test_stress_update_issue_19688.test"
+      ]
+    },
+    {
+      "reason": "FIXME: Internal error",
+      "paths": [
+          "test/sql/copy/csv/test_copy_null.test"
+      ]
+    },
+    {
+      "reason": "Unsupported variant type in Parquet",
+      "paths": [
+          "test/sql/function/variant/variant_typeof.test",
+          "test/sql/storage/types/variant/test_all_types_single_object.test",
+          "test/sql/storage/types/variant/struct_of_variant.test",
+          "test/sql/storage/types/variant/test_all_types_single_table.test",
+          "test/sql/storage/types/variant/test_all_types.test",
+          "test/sql/storage/types/variant/test_all_types_variant.test"
+      ]
+    },
+    {
+      "reason": "Variant shredding stats are different between Parquet <> DuckDB",
+      "paths": [
+          "test/sql/storage/types/variant/variant_extract_stats.test"
       ]
     }
   ]

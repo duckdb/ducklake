@@ -9,7 +9,8 @@
     "icu",
     "httpfs"
   ],"skip_error_messages": [
-    "database is locked"
+    "database is locked",
+    "Variant types cannot be inlined in this catalog type yet"
   ],
   "test_env": [{
       "env_name":  "DUCKLAKE_CONNECTION",

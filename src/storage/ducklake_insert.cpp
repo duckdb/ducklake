@@ -7,6 +7,7 @@
 #include "common/ducklake_util.hpp"
 #include "storage/ducklake_scan.hpp"
 #include "storage/ducklake_inline_data.hpp"
+#include "storage/ducklake_geo_stats.hpp"
 #include "common/ducklake_types.hpp"
 
 #include "duckdb/catalog/catalog_entry/copy_function_catalog_entry.hpp"
@@ -21,6 +22,7 @@
 #include "duckdb/main/extension_helper.hpp"
 #include "duckdb/function/function_binder.hpp"
 #include "duckdb/planner/operator/logical_projection.hpp"
+#include "storage/ducklake_variant_stats.hpp"
 
 namespace duckdb {
 
@@ -90,37 +92,8 @@ DuckLakeColumnStats DuckLakeInsert::ParseColumnStats(const LogicalType &type, co
 		} else if (stats_name == "has_nan") {
 			column_stats.has_contains_nan = true;
 			column_stats.contains_nan = StringValue::Get(stats_children[1]) == "true";
-		} else if (stats_name == "bbox_xmax") {
-			auto &geo_stats = column_stats.extra_stats->Cast<DuckLakeColumnGeoStats>();
-			geo_stats.xmax = stats_children[1].DefaultCastAs(LogicalType::DOUBLE).GetValue<double>();
-		} else if (stats_name == "bbox_xmin") {
-			auto &geo_stats = column_stats.extra_stats->Cast<DuckLakeColumnGeoStats>();
-			geo_stats.xmin = stats_children[1].DefaultCastAs(LogicalType::DOUBLE).GetValue<double>();
-		} else if (stats_name == "bbox_ymax") {
-			auto &geo_stats = column_stats.extra_stats->Cast<DuckLakeColumnGeoStats>();
-			geo_stats.ymax = stats_children[1].DefaultCastAs(LogicalType::DOUBLE).GetValue<double>();
-		} else if (stats_name == "bbox_ymin") {
-			auto &geo_stats = column_stats.extra_stats->Cast<DuckLakeColumnGeoStats>();
-			geo_stats.ymin = stats_children[1].DefaultCastAs(LogicalType::DOUBLE).GetValue<double>();
-		} else if (stats_name == "bbox_zmax") {
-			auto &geo_stats = column_stats.extra_stats->Cast<DuckLakeColumnGeoStats>();
-			geo_stats.zmax = stats_children[1].DefaultCastAs(LogicalType::DOUBLE).GetValue<double>();
-		} else if (stats_name == "bbox_zmin") {
-			auto &geo_stats = column_stats.extra_stats->Cast<DuckLakeColumnGeoStats>();
-			geo_stats.zmin = stats_children[1].DefaultCastAs(LogicalType::DOUBLE).GetValue<double>();
-		} else if (stats_name == "bbox_mmax") {
-			auto &geo_stats = column_stats.extra_stats->Cast<DuckLakeColumnGeoStats>();
-			geo_stats.mmax = stats_children[1].DefaultCastAs(LogicalType::DOUBLE).GetValue<double>();
-		} else if (stats_name == "bbox_mmin") {
-			auto &geo_stats = column_stats.extra_stats->Cast<DuckLakeColumnGeoStats>();
-			geo_stats.mmin = stats_children[1].DefaultCastAs(LogicalType::DOUBLE).GetValue<double>();
-		} else if (stats_name == "geo_types") {
-			auto &geo_stats = column_stats.extra_stats->Cast<DuckLakeColumnGeoStats>();
-			auto list_value = stats_children[1].DefaultCastAs(LogicalType::LIST(LogicalType::VARCHAR));
-			for (const auto &child : ListValue::GetChildren(list_value)) {
-				geo_stats.geo_types.insert(StringValue::Get(child));
-			}
-		} else if (stats_name == "variant_type") {
+		} else if (column_stats.extra_stats && column_stats.extra_stats->ParseStats(stats_name, stats_children)) {
+			// handled by extra stats
 			continue;
 		} else {
 			throw NotImplementedException("Unsupported stats type \"%s\" in DuckLakeInsert::Sink()", stats_name);
@@ -146,6 +119,7 @@ void DuckLakeInsert::AddWrittenFiles(DuckLakeInsertGlobalState &global_state, Da
 		auto column_stats = chunk.GetValue(4, r);
 		auto &map_children = MapValue::GetChildren(column_stats);
 		auto &table = global_state.table;
+		map<FieldIndex, PartialVariantStats> variant_stats;
 		for (idx_t col_idx = 0; col_idx < map_children.size(); col_idx++) {
 			auto &struct_children = StructValue::GetChildren(map_children[col_idx]);
 			auto &col_name = StringValue::Get(struct_children[0]);
@@ -169,7 +143,26 @@ void DuckLakeInsert::AddWrittenFiles(DuckLakeInsertGlobalState &global_state, Da
 				continue;
 			}
 
-			auto &field_id = table.GetFieldId(column_names);
+			optional_idx name_offset;
+			auto &field_id = table.GetFieldId(column_names, &name_offset);
+			if (name_offset.IsValid()) {
+				if (field_id.Type().id() != LogicalTypeId::VARIANT) {
+					throw InternalException("name_offset can only be set for variant columns");
+				}
+				// variant stats are constructed iteratively as they are provided per-field
+				auto entry = variant_stats.find(field_id.GetFieldIndex());
+				if (entry == variant_stats.end()) {
+					// insert empty stats for variants if this is the first stats we encounter for variants
+					auto insert_entry =
+					    variant_stats.insert(make_pair(field_id.GetFieldIndex(), PartialVariantStats()));
+					entry = insert_entry.first;
+				}
+				entry->second.ParseVariantStats(column_names, name_offset.GetIndex(), col_stats);
+				continue;
+			}
+			if (field_id.Type().id() == LogicalTypeId::VARIANT) {
+				throw InvalidInputException("Top-level variant cannot have stats");
+			}
 			auto column_stats = ParseColumnStats(field_id.Type(), col_stats);
 			if (column_stats.null_count > 0 && column_names.size() == 1) {
 				// we wrote NULL values to a base column - verify NOT NULL constraint
@@ -179,6 +172,11 @@ void DuckLakeInsert::AddWrittenFiles(DuckLakeInsertGlobalState &global_state, Da
 			}
 
 			data_file.column_stats.insert(make_pair(field_id.GetFieldIndex(), std::move(column_stats)));
+		}
+		// finalize variant stats
+		for (auto &entry : variant_stats) {
+			// FIXME: verify NOT NULL constraints for variants
+			data_file.column_stats.insert(make_pair(entry.first, entry.second.Finalize()));
 		}
 		// extract the partition info
 		auto partition_info = chunk.GetValue(5, r);

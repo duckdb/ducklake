@@ -57,6 +57,9 @@ static LogicalType ParseBaseType(const string &str) {
 	if (StringUtil::CIEquals(str, "json")) {
 		return LogicalType::JSON();
 	}
+	if (StringUtil::CIEquals(str, "variant")) {
+		return LogicalType::VARIANT();
+	}
 
 	if (StringUtil::CIEquals(str, "geometry")) {
 		LogicalType geo_type(LogicalTypeId::BLOB);
@@ -139,6 +142,8 @@ string DuckLakeTypes::ToString(const LogicalType &type) {
 	switch (type.id()) {
 	case LogicalTypeId::STRUCT:
 		return "struct";
+	case LogicalTypeId::VARIANT:
+		return "variant";
 	case LogicalTypeId::LIST:
 		return "list";
 	case LogicalTypeId::MAP:

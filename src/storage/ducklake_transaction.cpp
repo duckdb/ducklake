@@ -18,6 +18,7 @@
 #include "storage/ducklake_transaction_changes.hpp"
 #include "storage/ducklake_transaction_manager.hpp"
 #include "storage/ducklake_view_entry.hpp"
+#include "duckdb/common/printer.hpp"
 
 namespace duckdb {
 
@@ -1239,8 +1240,7 @@ string DuckLakeTransaction::UpdateGlobalTableStats(TableIndex table_id,
 			col_stats.max_val = column_stats.max;
 		}
 		if (column_stats.extra_stats) {
-			col_stats.has_extra_stats = true;
-			col_stats.extra_stats = column_stats.extra_stats->Serialize();
+			col_stats.has_extra_stats = column_stats.extra_stats->TrySerialize(col_stats.extra_stats);
 		} else {
 			col_stats.has_extra_stats = false;
 		}
@@ -1251,6 +1251,40 @@ string DuckLakeTransaction::UpdateGlobalTableStats(TableIndex table_id,
 	stats.table_size_bytes = new_stats.table_size_bytes;
 	// finally update the stats in the tables
 	return metadata_manager->UpdateGlobalTableStats(stats);
+}
+
+DuckLakeColumnStatsInfo DuckLakeColumnStatsInfo::FromColumnStats(FieldIndex field_id,
+                                                                 const DuckLakeColumnStats &stats) {
+	DuckLakeColumnStatsInfo column_stats;
+	column_stats.column_id = field_id;
+	column_stats.min_val = stats.has_min ? DuckLakeUtil::StatsToString(stats.min) : "NULL";
+	column_stats.max_val = stats.has_max ? DuckLakeUtil::StatsToString(stats.max) : "NULL";
+	column_stats.column_size_bytes = to_string(stats.column_size_bytes);
+	if (stats.has_null_count && stats.has_num_values) {
+		// value_count should be the count of non-null values: num_values - null_count
+		// Validate that null_count doesn't exceed num_values to prevent underflow
+		if (stats.null_count > stats.num_values) {
+			// Invalid stats - null_count can't exceed total values
+			column_stats.value_count = "NULL";
+			column_stats.null_count = "NULL";
+		} else {
+			column_stats.value_count = to_string(stats.num_values - stats.null_count);
+			column_stats.null_count = to_string(stats.null_count);
+		}
+	} else {
+		column_stats.value_count = "NULL";
+		column_stats.null_count = "NULL";
+	}
+	if (stats.has_contains_nan) {
+		column_stats.contains_nan = stats.contains_nan ? "true" : "false";
+	} else {
+		column_stats.contains_nan = "NULL";
+	}
+	column_stats.extra_stats = "NULL";
+	if (stats.extra_stats) {
+		stats.extra_stats->Serialize(column_stats);
+	}
+	return column_stats;
 }
 
 DuckLakeFileInfo DuckLakeTransaction::GetNewDataFile(DuckLakeDataFile &file, DuckLakeSnapshot &commit_snapshot,
@@ -1270,54 +1304,8 @@ DuckLakeFileInfo DuckLakeTransaction::GetNewDataFile(DuckLakeDataFile &file, Duc
 	data_file.max_partial_file_snapshot = file.max_partial_file_snapshot;
 	// gather the column statistics for this file
 	for (auto &column_stats_entry : file.column_stats) {
-		DuckLakeColumnStatsInfo column_stats;
-		column_stats.column_id = column_stats_entry.first;
-		auto &stats = column_stats_entry.second;
-		column_stats.min_val = stats.has_min ? DuckLakeUtil::StatsToString(stats.min) : "NULL";
-		column_stats.max_val = stats.has_max ? DuckLakeUtil::StatsToString(stats.max) : "NULL";
-		column_stats.column_size_bytes = to_string(stats.column_size_bytes);
-		if (stats.has_null_count) {
-			if (stats.has_num_values) {
-				// value_count should be the count of non-null values: num_values - null_count
-				// Validate that null_count doesn't exceed num_values to prevent underflow
-				if (stats.null_count > stats.num_values) {
-					// Invalid stats - null_count can't exceed total values
-					// This can happen with nested columns in some parquet files
-					column_stats.value_count = "NULL";
-					column_stats.null_count = "NULL";
-				} else {
-					column_stats.value_count = to_string(stats.num_values - stats.null_count);
-					column_stats.null_count = to_string(stats.null_count);
-				}
-			} else {
-				if (stats.null_count > file.row_count) {
-					// Something went wrong with the stats, make them NULL
-					column_stats.value_count = "NULL";
-					column_stats.null_count = "NULL";
-				} else {
-					column_stats.value_count = to_string(file.row_count - stats.null_count);
-					column_stats.null_count = to_string(stats.null_count);
-				}
-			}
-			if (stats.null_count == file.row_count) {
-				// all values are NULL for this file
-				stats.any_valid = false;
-			}
-		} else {
-			column_stats.value_count = "NULL";
-			column_stats.null_count = "NULL";
-		}
-		if (stats.has_contains_nan) {
-			column_stats.contains_nan = stats.contains_nan ? "true" : "false";
-		} else {
-			column_stats.contains_nan = "NULL";
-		}
-		if (stats.extra_stats) {
-			column_stats.extra_stats = stats.extra_stats->Serialize();
-		} else {
-			column_stats.extra_stats = "NULL";
-		}
-
+		auto column_stats =
+		    DuckLakeColumnStatsInfo::FromColumnStats(column_stats_entry.first, column_stats_entry.second);
 		data_file.column_stats.push_back(std::move(column_stats));
 	}
 	for (auto &partition_entry : file.partition_values) {
@@ -1824,7 +1812,6 @@ void DuckLakeTransaction::FlushChanges() {
 			batch_queries += metadata_manager->InsertSnapshot();
 
 			batch_queries += WriteSnapshotChanges(commit_state, transaction_changes);
-
 			auto res = metadata_manager->Execute(commit_snapshot, batch_queries);
 			if (res->HasError()) {
 				res->GetErrorObject().Throw("Failed to flush changes into DuckLake: ");

@@ -15,6 +15,9 @@
       "env_name":  "DUCKLAKE_CONNECTION",
       "env_value": "postgres:dbname=ducklakedb"
    }],
+   "skip_error_messages": [
+    "Variant types cannot be inlined in this catalog type yet"
+  ],
   "skip_tests": [
     {
       "reason": "Tests only for DuckDB as a catalog",
@@ -25,6 +28,13 @@
         "test/sql/autoloading/autoload_data_path.test",
         "test/sql/general/metadata_parameters.test",
         "test/sql/metadata/ducklake_settings.test"
+      ]
+    },
+    {
+      "reason": "Modifies connection string",
+      "paths": [
+        "test/sql/catalog/quoted_identifiers.test",
+        "test/sql/stats/count_star_optimization_file_operations.test"
       ]
     },
     {

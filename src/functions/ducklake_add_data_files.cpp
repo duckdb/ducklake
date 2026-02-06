@@ -8,6 +8,7 @@
 #include "duckdb/common/types/value.hpp"
 #include "duckdb/common/vector_operations/vector_operations.hpp"
 #include "duckdb/common/types/vector.hpp"
+#include "storage/ducklake_geo_stats.hpp"
 
 namespace duckdb {
 
@@ -1172,9 +1173,9 @@ DuckLakeDataFile DuckLakeFileProcessor::AddFileToTable(ParquetFileMetadata &file
 		if (file.hive_partition_values.size() != partition_data->fields.size()) {
 			invalid_partition = true;
 		} else {
-			for (const auto& hive_partition_value : file.hive_partition_values) {
+			for (const auto &hive_partition_value : file.hive_partition_values) {
 				bool found_field = false;
-				for (const auto& field : partition_data->fields) {
+				for (const auto &field : partition_data->fields) {
 					if (field.field_id.index == hive_partition_value.field_index.index) {
 						found_field = true;
 						break;

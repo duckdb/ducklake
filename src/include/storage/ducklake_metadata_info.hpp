@@ -23,6 +23,7 @@
 #include "duckdb/common/enums/order_type.hpp"
 
 namespace duckdb {
+struct DuckLakeVariantStatsInfo;
 
 //===--------------------------------------------------------------------===//
 // Compaction Type
@@ -128,6 +129,15 @@ struct DuckLakeColumnStatsInfo {
 	string max_val;
 	string contains_nan;
 	string extra_stats;
+	vector<DuckLakeVariantStatsInfo> variant_stats;
+
+	static DuckLakeColumnStatsInfo FromColumnStats(FieldIndex field_id, const DuckLakeColumnStats &stats);
+};
+
+struct DuckLakeVariantStatsInfo {
+	string field_name;
+	string shredded_type;
+	DuckLakeColumnStatsInfo field_stats;
 };
 
 struct DuckLakeFilePartitionInfo {
