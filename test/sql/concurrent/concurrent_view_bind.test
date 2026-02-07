@@ -1,0 +1,61 @@
+# name: test/sql/concurrent/concurrent_view_bind.test
+# description: Test that concurrent view binding is thread-safe
+# group: [concurrent]
+
+require ducklake
+
+require parquet
+
+require notwindows
+
+statement ok
+ATTACH 'ducklake:__TEST_DIR__/concurrent_view_bind.db' AS ducklake (DATA_PATH '__TEST_DIR__/concurrent_view_bind')
+
+statement ok
+USE ducklake
+
+# Create multiple views to increase chance of concurrent binding
+statement ok
+CREATE VIEW v1 AS SELECT 1 AS a, 2 AS b
+
+statement ok
+CREATE VIEW v2 AS SELECT 'hello' AS x, 'world' AS y
+
+statement ok
+CREATE VIEW v3(col1, col2, col3) AS SELECT 1, 2, 3
+
+statement ok
+USE memory
+
+statement ok
+DETACH ducklake
+
+# Reattach - views are now unbound
+statement ok
+ATTACH 'ducklake:__TEST_DIR__/concurrent_view_bind.db' AS ducklake (DATA_PATH '__TEST_DIR__/concurrent_view_bind')
+
+# Concurrent catalog scans trigger concurrent Bind() calls
+concurrentloop i 0 100
+
+query I
+SELECT count(*) FROM information_schema.tables WHERE table_catalog = 'ducklake' AND table_type = 'VIEW'
+----
+3
+
+endloop
+
+# Verify views are still usable after concurrent binding
+query II
+SELECT a, b FROM ducklake.v1
+----
+1	2
+
+query II
+SELECT x, y FROM ducklake.v2
+----
+hello	world
+
+query III
+SELECT col1, col2, col3 FROM ducklake.v3
+----
+1	2	3

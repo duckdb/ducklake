@@ -79,7 +79,7 @@ unique_ptr<SelectStatement> DuckLakeViewEntry::ParseSelectStatement() const {
 }
 
 const SelectStatement &DuckLakeViewEntry::GetQuery() {
-	lock_guard<mutex> l(parse_lock);
+	lock_guard<std::recursive_mutex> l(lock);
 	if (!query) {
 		// parse the query
 		query = ParseSelectStatement();
@@ -92,11 +92,15 @@ string DuckLakeViewEntry::GetQuerySQL() {
 }
 
 bool DuckLakeViewEntry::IsBound() const {
+	lock_guard<std::recursive_mutex> guard(lock);
 	return is_bound;
 }
 
 void DuckLakeViewEntry::Bind(ClientContext &context) {
-	D_ASSERT(!is_bound);
+	lock_guard<std::recursive_mutex> guard(lock);
+	if (is_bound) {
+		return;
+	}
 	std::string create_view_sql = "CREATE VIEW mock_view_name_lake";
 	if (!aliases.empty()) {
 		create_view_sql += "(";
