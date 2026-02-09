@@ -3581,7 +3581,7 @@ SELECT REPLACE(
 FROM {METADATA_CATALOG}.ducklake_files_scheduled_for_deletion f
 )";
 	query = StringUtil::Replace(query, "{SEPARATOR}", separator);
-	auto res = Query(query);
+	auto res = transaction.Query(query);
 	if (res->HasError()) {
 		res->GetErrorObject().Throw("Failed to get active files from DuckLake: ");
 	}
