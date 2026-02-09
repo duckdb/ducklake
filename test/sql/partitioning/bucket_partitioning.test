@@ -48,3 +48,337 @@ query I
 SELECT transform FROM ducklake_metadata.ducklake_partition_column WHERE table_id = 1
 ----
 bucket(4)
+
+# ----------------------------------------------------------------------------------------------------------------------
+# Error condition tests
+# ----------------------------------------------------------------------------------------------------------------------
+
+# Wrong argument count: too few arguments (1 arg)
+statement error
+ALTER TABLE bucketed_tbl SET PARTITIONED BY (bucket(user_id));
+----
+Expected bucket(bucket_count, column)
+
+# Wrong argument count: too many arguments (3 args)
+statement error
+ALTER TABLE bucketed_tbl SET PARTITIONED BY (bucket(4, user_id, value));
+----
+Expected bucket(bucket_count, column)
+
+# Non-constant bucket count (column reference instead of constant)
+statement error
+ALTER TABLE bucketed_tbl SET PARTITIONED BY (bucket(value, user_id));
+----
+Bucket count must be a constant integer
+
+# Non-column-ref as second argument (string literal)
+statement error
+ALTER TABLE bucketed_tbl SET PARTITIONED BY (bucket(4, 'literal'));
+----
+Expected bucket(column, bucket_count)
+
+# Non-integer bucket count (string constant)
+statement error
+ALTER TABLE bucketed_tbl SET PARTITIONED BY (bucket('abc', user_id));
+----
+Bucket count must be an integer
+
+# Zero bucket count
+statement error
+ALTER TABLE bucketed_tbl SET PARTITIONED BY (bucket(0, user_id));
+----
+Bucket count must be positive
+
+# Negative bucket count
+statement error
+ALTER TABLE bucketed_tbl SET PARTITIONED BY (bucket(-1, user_id));
+----
+Bucket count must be positive
+
+# Non-existent column
+statement error
+ALTER TABLE bucketed_tbl SET PARTITIONED BY (bucket(4, nonexistent_col));
+----
+does not exist
+
+# ----------------------------------------------------------------------------------------------------------------------
+# Case insensitivity tests
+# ----------------------------------------------------------------------------------------------------------------------
+
+# All uppercase
+statement ok
+CREATE TABLE case_upper_tbl(id INTEGER, val VARCHAR);
+
+statement ok
+ALTER TABLE case_upper_tbl SET PARTITIONED BY (BUCKET(4, id));
+
+statement ok
+INSERT INTO case_upper_tbl VALUES (1, 'a'), (2, 'b'), (3, 'c');
+
+query II
+SELECT id, val FROM case_upper_tbl ORDER BY id
+----
+1	a
+2	b
+3	c
+
+# Mixed case
+statement ok
+CREATE TABLE case_mixed_tbl(id INTEGER, val VARCHAR);
+
+statement ok
+ALTER TABLE case_mixed_tbl SET PARTITIONED BY (Bucket(4, id));
+
+statement ok
+INSERT INTO case_mixed_tbl VALUES (10, 'x'), (20, 'y'), (30, 'z');
+
+query II
+SELECT id, val FROM case_mixed_tbl ORDER BY id
+----
+10	x
+20	y
+30	z
+
+# ----------------------------------------------------------------------------------------------------------------------
+# Different column type tests
+# ----------------------------------------------------------------------------------------------------------------------
+
+# INTEGER column --------------------------------------------------------------
+statement ok
+CREATE TABLE bucket_int_tbl(id INTEGER, data VARCHAR);
+
+statement ok
+ALTER TABLE bucket_int_tbl SET PARTITIONED BY (bucket(3, id));
+
+statement ok
+INSERT INTO bucket_int_tbl VALUES (1, 'one'), (2, 'two'), (3, 'three'), (100, 'hundred'), (200, 'two hundred');
+
+query II
+SELECT id, data FROM bucket_int_tbl ORDER BY id
+----
+1	one
+2	two
+3	three
+100	hundred
+200	two hundred
+
+query I
+SELECT COUNT(DISTINCT regexp_extract(path, '.*bucket=([0-9]+)[/\\].*', 1)) BETWEEN 1 AND 3
+FROM glob('${DATA_PATH}/ducklake_bucket_partition/**/*.parquet') t(path)
+WHERE path LIKE '%bucket_int_tbl%' AND path LIKE '%bucket=%'
+----
+true
+
+# BIGINT column ---------------------------------------------------------------
+statement ok
+CREATE TABLE bucket_bigint_tbl(id BIGINT, data VARCHAR);
+
+statement ok
+ALTER TABLE bucket_bigint_tbl SET PARTITIONED BY (bucket(4, id));
+
+statement ok
+INSERT INTO bucket_bigint_tbl VALUES (1000000000000, 'big1'), (2000000000000, 'big2'), (3000000000000, 'big3');
+
+query II
+SELECT id, data FROM bucket_bigint_tbl ORDER BY id
+----
+1000000000000	big1
+2000000000000	big2
+3000000000000	big3
+
+# DATE column
+statement ok
+CREATE TABLE bucket_date_tbl(dt DATE, data VARCHAR);
+
+statement ok
+ALTER TABLE bucket_date_tbl SET PARTITIONED BY (bucket(4, dt));
+
+statement ok
+INSERT INTO bucket_date_tbl VALUES ('2024-01-15', 'jan'), ('2024-06-20', 'jun'), ('2024-12-25', 'dec');
+
+query II
+SELECT dt, data FROM bucket_date_tbl ORDER BY dt
+----
+2024-01-15	jan
+2024-06-20	jun
+2024-12-25	dec
+
+# TIMESTAMP column ------------------------------------------------------------
+statement ok
+CREATE TABLE bucket_ts_tbl(ts TIMESTAMP, data VARCHAR);
+
+statement ok
+ALTER TABLE bucket_ts_tbl SET PARTITIONED BY (bucket(4, ts));
+
+statement ok
+INSERT INTO bucket_ts_tbl VALUES ('2024-01-15 10:30:00', 'morning'), ('2024-06-20 14:00:00', 'afternoon'), ('2024-12-25 23:59:59', 'night');
+
+query II
+SELECT ts, data FROM bucket_ts_tbl ORDER BY ts
+----
+2024-01-15 10:30:00	morning
+2024-06-20 14:00:00	afternoon
+2024-12-25 23:59:59	night
+
+# DOUBLE column ---------------------------------------------------------------
+statement ok
+CREATE TABLE bucket_double_tbl(val DOUBLE, data VARCHAR);
+
+statement ok
+ALTER TABLE bucket_double_tbl SET PARTITIONED BY (bucket(4, val));
+
+statement ok
+INSERT INTO bucket_double_tbl VALUES (1.5, 'a'), (2.7, 'b'), (3.14159, 'c');
+
+query II
+SELECT val, data FROM bucket_double_tbl ORDER BY val
+----
+1.5	a
+2.7	b
+3.14159	c
+
+# BOOLEAN column --------------------------------------------------------------
+statement ok
+CREATE TABLE bucket_bool_tbl(flag BOOLEAN, data VARCHAR);
+
+statement ok
+ALTER TABLE bucket_bool_tbl SET PARTITIONED BY (bucket(2, flag));
+
+statement ok
+INSERT INTO bucket_bool_tbl VALUES (true, 'yes'), (false, 'no'), (true, 'also yes');
+
+query II
+SELECT flag, data FROM bucket_bool_tbl ORDER BY data
+----
+true	also yes
+false	no
+true	yes
+
+# Nested type: STRUCT column --------------------------------------------------
+statement ok
+CREATE TABLE bucket_struct_tbl(s STRUCT(x INTEGER, y INTEGER), data VARCHAR);
+
+statement ok
+ALTER TABLE bucket_struct_tbl SET PARTITIONED BY (bucket(3, s));
+
+statement ok
+INSERT INTO bucket_struct_tbl VALUES ({'x': 1, 'y': 2}, 'point1'), ({'x': 3, 'y': 4}, 'point2'), ({'x': 5, 'y': 6}, 'point3');
+
+query II
+SELECT s, data FROM bucket_struct_tbl ORDER BY data
+----
+{'x': 1, 'y': 2}	point1
+{'x': 3, 'y': 4}	point2
+{'x': 5, 'y': 6}	point3
+
+# Nested type: LIST column ----------------------------------------------------
+statement ok
+CREATE TABLE bucket_list_tbl(items INTEGER[], data VARCHAR);
+
+statement ok
+ALTER TABLE bucket_list_tbl SET PARTITIONED BY (bucket(3, items));
+
+statement ok
+INSERT INTO bucket_list_tbl VALUES ([1, 2, 3], 'first'), ([4, 5], 'second'), ([6], 'third');
+
+query II
+SELECT items, data FROM bucket_list_tbl ORDER BY data
+----
+[1, 2, 3]	first
+[4, 5]	second
+[6]	third
+
+# ---------------------------------------------------------------------------
+# Combined partition tests: bucket with other transforms
+# ---------------------------------------------------------------------------
+
+# Bucket + identity
+statement ok
+CREATE TABLE bucket_identity_tbl(user_id VARCHAR, status VARCHAR, value INTEGER);
+
+statement ok
+ALTER TABLE bucket_identity_tbl SET PARTITIONED BY (bucket(4, user_id), status);
+
+statement ok
+INSERT INTO bucket_identity_tbl VALUES ('alice', 'active', 1), ('bob', 'inactive', 2), ('charlie', 'active', 3), ('alice', 'inactive', 4), ('bob', 'active', 5);
+
+query III
+SELECT user_id, status, value FROM bucket_identity_tbl ORDER BY user_id, status
+----
+alice	active	1
+alice	inactive	4
+bob	active	5
+bob	inactive	2
+charlie	active	3
+
+# Verify both partition dimensions appear in file paths
+query I
+SELECT COUNT(*) > 0
+FROM glob('${DATA_PATH}/ducklake_bucket_partition/**/*.parquet') t(path)
+WHERE path LIKE '%bucket_identity_tbl%' AND path LIKE '%bucket=%' AND path LIKE '%status=%'
+----
+true
+
+# Bucket + year
+statement ok
+CREATE TABLE bucket_year_tbl(user_id VARCHAR, created_at TIMESTAMP, value INTEGER);
+
+statement ok
+ALTER TABLE bucket_year_tbl SET PARTITIONED BY (bucket(4, user_id), year(created_at));
+
+statement ok
+INSERT INTO bucket_year_tbl VALUES
+  ('alice', '2023-03-15 10:00:00', 1),
+  ('bob', '2023-07-20 14:00:00', 2),
+  ('charlie', '2024-01-10 08:00:00', 3),
+  ('alice', '2024-06-25 16:00:00', 4),
+  ('bob', '2024-11-30 20:00:00', 5);
+
+query III
+SELECT user_id, year(created_at), SUM(value) FROM bucket_year_tbl GROUP BY user_id, year(created_at) ORDER BY user_id, year(created_at)
+----
+alice	2023	1
+alice	2024	4
+bob	2023	2
+bob	2024	5
+charlie	2024	3
+
+# Verify both partition dimensions appear in file paths
+query I
+SELECT COUNT(*) > 0
+FROM glob('${DATA_PATH}/ducklake_bucket_partition/**/*.parquet') t(path)
+WHERE path LIKE '%bucket_year_tbl%' AND path LIKE '%bucket=%' AND path LIKE '%year=%'
+----
+true
+
+# Bucket + month + day
+statement ok
+CREATE TABLE bucket_month_day_tbl(id INTEGER, ts TIMESTAMP, value VARCHAR);
+
+statement ok
+ALTER TABLE bucket_month_day_tbl SET PARTITIONED BY (bucket(8, id), month(ts), day(ts));
+
+statement ok
+INSERT INTO bucket_month_day_tbl VALUES
+  (1, '2024-01-15 10:00:00', 'a'),
+  (2, '2024-01-15 14:00:00', 'b'),
+  (3, '2024-02-20 08:00:00', 'c'),
+  (4, '2024-02-20 16:00:00', 'd'),
+  (5, '2024-03-25 20:00:00', 'e');
+
+query III
+SELECT id, ts, value FROM bucket_month_day_tbl ORDER BY id
+----
+1	2024-01-15 10:00:00	a
+2	2024-01-15 14:00:00	b
+3	2024-02-20 08:00:00	c
+4	2024-02-20 16:00:00	d
+5	2024-03-25 20:00:00	e
+
+# Verify all three partition dimensions appear in file paths
+query I
+SELECT COUNT(*) > 0
+FROM glob('${DATA_PATH}/ducklake_bucket_partition/**/*.parquet') t(path)
+WHERE path LIKE '%bucket_month_day_tbl%' AND path LIKE '%bucket=%' AND path LIKE '%month=%' AND path LIKE '%day=%'
+----
+true
