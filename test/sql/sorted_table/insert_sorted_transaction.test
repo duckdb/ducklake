@@ -1,0 +1,134 @@
+# name: test/sql/sorted_table/insert_sorted_transaction.test
+# description: test INSERT sorting behavior with transactions (ALTER TABLE, SET SORTED BY)
+# group: [sorted_table]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+
+test-env DATA_PATH __TEST_DIR__
+
+statement ok
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/insert_sorted_txn')
+
+# test: BEGIN -> SET SORTED BY -> INSERT -> verify sorted -> COMMIT -> re-verify
+statement ok
+CREATE TABLE ducklake.test_txn_sort(i INTEGER)
+
+statement ok
+BEGIN
+
+statement ok
+ALTER TABLE ducklake.test_txn_sort SET SORTED BY (i DESC)
+
+statement ok
+INSERT INTO ducklake.test_txn_sort VALUES (3), (1), (5), (2), (4)
+
+# within transaction, data should be sorted
+query I
+SELECT * FROM ducklake.test_txn_sort
+----
+5
+4
+3
+2
+1
+
+statement ok
+COMMIT
+
+# after commit, sort order should persist
+query I
+SELECT * FROM ducklake.test_txn_sort
+----
+5
+4
+3
+2
+1
+
+# test: BEGIN -> SET SORTED BY -> INSERT -> ROLLBACK -> INSERT -> verify NOT sorted
+statement ok
+CREATE TABLE ducklake.test_txn_rollback(i INTEGER)
+
+statement ok
+BEGIN
+
+statement ok
+ALTER TABLE ducklake.test_txn_rollback SET SORTED BY (i ASC)
+
+statement ok
+INSERT INTO ducklake.test_txn_rollback VALUES (3), (1), (5), (2), (4)
+
+# within transaction, data should be sorted
+query I
+SELECT * FROM ducklake.test_txn_rollback
+----
+1
+2
+3
+4
+5
+
+statement ok
+ROLLBACK
+
+# after rollback the sort and data are gone
+query I
+SELECT COUNT(*) FROM ducklake.test_txn_rollback
+----
+0
+
+# insert without sort (sort was rolled back)
+statement ok
+INSERT INTO ducklake.test_txn_rollback VALUES (3), (1), (5), (2), (4)
+
+query I
+SELECT * FROM ducklake.test_txn_rollback
+----
+3
+1
+5
+2
+4
+
+# test: BEGIN -> ALTER TABLE ADD COLUMN -> INSERT with sort -> COMMIT -> re-verify
+statement ok
+CREATE TABLE ducklake.test_txn_alter(a INTEGER)
+
+statement ok
+ALTER TABLE ducklake.test_txn_alter SET SORTED BY (a DESC)
+
+statement ok
+BEGIN
+
+statement ok
+ALTER TABLE ducklake.test_txn_alter ADD COLUMN b VARCHAR
+
+statement ok
+INSERT INTO ducklake.test_txn_alter VALUES (3, 'c'), (1, 'a'), (5, 'e'), (2, 'b'), (4, 'd')
+
+# within transaction, data should be sorted by a DESC
+query II
+SELECT * FROM ducklake.test_txn_alter
+----
+5	e
+4	d
+3	c
+2	b
+1	a
+
+statement ok
+COMMIT
+
+# after commit, sort order should persist with the new column
+query II
+SELECT * FROM ducklake.test_txn_alter
+----
+5	e
+4	d
+3	c
+2	b
+1	a

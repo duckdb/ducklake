@@ -1,0 +1,68 @@
+# name: test/sql/sorted_table/insert_sorted_expression.test
+# description: test that INSERT operations sort data using expression-based sort keys
+# group: [sorted_table]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+
+test-env DATA_PATH __TEST_DIR__
+
+statement ok
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/insert_sorted_expr')
+
+# sort by expression: concat
+statement ok
+CREATE TABLE ducklake.test_concat(first_name VARCHAR, last_name VARCHAR)
+
+statement ok
+ALTER TABLE ducklake.test_concat SET SORTED BY (concat(last_name, ', ', first_name) ASC)
+
+statement ok
+INSERT INTO ducklake.test_concat VALUES ('John', 'Smith'), ('Alice', 'Brown'), ('Bob', 'Johnson')
+
+query II
+SELECT * FROM ducklake.test_concat
+----
+Alice	Brown
+Bob	Johnson
+John	Smith
+
+# sort by expression: arithmetic
+statement ok
+CREATE TABLE ducklake.test_arith(a INTEGER, b INTEGER)
+
+statement ok
+ALTER TABLE ducklake.test_arith SET SORTED BY ((a + b) DESC)
+
+statement ok
+INSERT INTO ducklake.test_arith VALUES (1, 2), (5, 1), (2, 2), (3, 5)
+
+query II
+SELECT * FROM ducklake.test_arith
+----
+3	5
+5	1
+2	2
+1	2
+
+# sort by expression: negative / unary
+statement ok
+CREATE TABLE ducklake.test_neg(i INTEGER)
+
+statement ok
+ALTER TABLE ducklake.test_neg SET SORTED BY ((-i) ASC)
+
+statement ok
+INSERT INTO ducklake.test_neg VALUES (3), (1), (5), (2), (4)
+
+query I
+SELECT * FROM ducklake.test_neg
+----
+5
+4
+3
+2
+1

@@ -34,10 +34,10 @@ namespace duckdb {
 //===--------------------------------------------------------------------===//
 
 //! Binds ORDER BY expressions directly using ExpressionBinder.
-static vector<BoundOrderByNode> BindSortOrders(Binder &binder, const string &table_name, idx_t table_index,
-                                               const vector<string> &column_names,
-                                               const vector<LogicalType> &column_types,
-                                               vector<OrderByNode> &pre_bound_orders) {
+vector<BoundOrderByNode> DuckLakeCompactor::BindSortOrders(Binder &binder, const string &table_name, idx_t table_index,
+                                                           const vector<string> &column_names,
+                                                           const vector<LogicalType> &column_types,
+                                                           vector<OrderByNode> &pre_bound_orders) {
 	// Create a child binder with the table columns in scope
 	auto child_binder = Binder::CreateBinder(binder.context, &binder);
 	child_binder->bind_context.AddGenericBinding(table_index, table_name, column_names, column_types);
@@ -362,7 +362,8 @@ unique_ptr<LogicalOperator> DuckLakeCompactor::InsertSort(Binder &binder, unique
 	auto table_index = bindings[0].table_index;
 
 	// Bind the ORDER BY expressions
-	auto orders = BindSortOrders(binder, table.name, table_index, current_columns, column_types, pre_bound_orders);
+	auto orders = DuckLakeCompactor::BindSortOrders(binder, table.name, table_index, current_columns, column_types,
+	                                                pre_bound_orders);
 
 	// Create the LogicalOrder operator
 	auto order = make_uniq<LogicalOrder>(std::move(orders));

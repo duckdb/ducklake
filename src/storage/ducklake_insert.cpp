@@ -9,14 +9,21 @@
 #include "storage/ducklake_inline_data.hpp"
 #include "storage/ducklake_geo_stats.hpp"
 #include "common/ducklake_types.hpp"
+#include "functions/ducklake_compaction_functions.hpp"
 
 #include "duckdb/catalog/catalog_entry/copy_function_catalog_entry.hpp"
+#include "duckdb/execution/operator/order/physical_order.hpp"
 #include "duckdb/execution/operator/projection/physical_projection.hpp"
 #include "duckdb/execution/operator/scan/physical_table_scan.hpp"
+#include "duckdb/parser/parser.hpp"
+#include "duckdb/planner/binder.hpp"
+#include "duckdb/planner/expression_binder.hpp"
+#include "duckdb/planner/expression_iterator.hpp"
 #include "duckdb/planner/operator/logical_insert.hpp"
 #include "duckdb/planner/operator/logical_create_table.hpp"
 #include "duckdb/planner/parsed_data/bound_create_table_info.hpp"
 #include "duckdb/planner/expression/bound_cast_expression.hpp"
+#include "duckdb/planner/expression/bound_columnref_expression.hpp"
 #include "duckdb/planner/expression/bound_reference_expression.hpp"
 #include "duckdb/common/multi_file/multi_file_reader.hpp"
 #include "duckdb/main/extension_helper.hpp"
@@ -749,6 +756,68 @@ string DuckLakeCatalog::GenerateEncryptionKey(ClientContext &context) const {
 	return string(char_ptr_cast(bytes), ENCRYPTION_KEY_SIZE);
 }
 
+static void ResolveColumnRefs(unique_ptr<Expression> &expr) {
+	if (expr->GetExpressionClass() == ExpressionClass::BOUND_COLUMN_REF) {
+		auto &col_ref = expr->Cast<BoundColumnRefExpression>();
+		expr = make_uniq<BoundReferenceExpression>(col_ref.return_type,
+		                                           NumericCast<storage_t>(col_ref.binding.column_index));
+		return;
+	}
+	ExpressionIterator::EnumerateChildren(*expr, [](unique_ptr<Expression> &child) { ResolveColumnRefs(child); });
+}
+
+static optional_ptr<PhysicalOperator> PlanInsertSort(ClientContext &context, PhysicalPlanGenerator &planner,
+                                                     PhysicalOperator &plan, DuckLakeTableEntry &table,
+                                                     optional_ptr<DuckLakeSort> sort_data) {
+	// Parse the sort expressions from the sort_data
+	vector<OrderByNode> pre_bound_orders;
+	for (auto &field : sort_data->fields) {
+		if (field.dialect != "duckdb") {
+			continue;
+		}
+		auto parsed_expression = Parser::ParseExpressionList(field.expression);
+		pre_bound_orders.emplace_back(field.sort_direction, field.null_order, std::move(parsed_expression[0]));
+	}
+	if (pre_bound_orders.empty()) {
+		return nullptr;
+	}
+
+	// Validate all column references in sort expressions exist in the table
+	// If columns have been renamed and the sort expressions are stale, gracefully skip sorting
+	vector<reference<ParsedExpression>> sort_expressions;
+	for (auto &order : pre_bound_orders) {
+		sort_expressions.push_back(*order.expression);
+	}
+	DuckLakeTableEntry::ValidateSortExpressionColumns(table, sort_expressions);
+
+
+	// Bind the ORDER BY expressions
+	auto &columns = table.GetColumns();
+	auto column_names = columns.GetColumnNames();
+	auto column_types = columns.GetColumnTypes();
+
+	auto binder = Binder::CreateBinder(context);
+	idx_t table_index = 0;
+	auto orders = DuckLakeCompactor::BindSortOrders(*binder, table.name, table_index, column_names, column_types,
+	                                                pre_bound_orders);
+
+	// Convert BoundColumnRefExpression to BoundReferenceExpression for physical plan
+	for (auto &order : orders) {
+		ResolveColumnRefs(order.expression);
+	}
+
+	// Create identity projection map
+	vector<idx_t> projection_map;
+	for (idx_t i = 0; i < plan.types.size(); i++) {
+		projection_map.push_back(i);
+	}
+
+	auto &order_op = planner.Make<PhysicalOrder>(plan.types, std::move(orders), std::move(projection_map),
+	                                             plan.estimated_cardinality);
+	order_op.children.push_back(plan);
+	return &order_op;
+}
+
 PhysicalOperator &DuckLakeCatalog::PlanInsert(ClientContext &context, PhysicalPlanGenerator &planner, LogicalInsert &op,
                                               optional_ptr<PhysicalOperator> plan) {
 	if (op.return_chunk) {
@@ -761,6 +830,16 @@ PhysicalOperator &DuckLakeCatalog::PlanInsert(ClientContext &context, PhysicalPl
 		plan = planner.ResolveDefaultsProjection(op, *plan);
 	}
 	auto &ducklake_table = op.table.Cast<DuckLakeTableEntry>();
+
+	// Sort data according to the table's SET SORTED BY configuration
+	auto sort_data = ducklake_table.GetSortData();
+	if (sort_data) {
+		auto sorted_plan = PlanInsertSort(context, planner, *plan, ducklake_table, sort_data);
+		if (sorted_plan) {
+			plan = sorted_plan;
+		}
+	}
+
 	optional_ptr<DuckLakeInlineData> inline_data;
 
 	idx_t data_inlining_row_limit = GetInliningLimit(context, ducklake_table, plan->types);

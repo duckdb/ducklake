@@ -1,0 +1,201 @@
+# name: test/sql/sorted_table/insert_sorted_basic.test
+# description: test that INSERT operations automatically sort data according to SET SORTED BY
+# group: [sorted_table]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+
+test-env DATA_PATH __TEST_DIR__
+
+statement ok
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/insert_sorted_basic')
+
+# basic integer sort DESC
+statement ok
+CREATE TABLE ducklake.test_int(i INTEGER)
+
+statement ok
+ALTER TABLE ducklake.test_int SET SORTED BY (i DESC)
+
+statement ok
+INSERT INTO ducklake.test_int VALUES (3), (1), (5), (2), (4)
+
+query I
+SELECT * FROM ducklake.test_int
+----
+5
+4
+3
+2
+1
+
+# basic integer sort ASC
+statement ok
+CREATE TABLE ducklake.test_asc(i INTEGER)
+
+statement ok
+ALTER TABLE ducklake.test_asc SET SORTED BY (i ASC)
+
+statement ok
+INSERT INTO ducklake.test_asc VALUES (3), (1), (5), (2), (4)
+
+query I
+SELECT * FROM ducklake.test_asc
+----
+1
+2
+3
+4
+5
+
+# multiple sort columns
+statement ok
+CREATE TABLE ducklake.test_multi(a INTEGER, b VARCHAR)
+
+statement ok
+ALTER TABLE ducklake.test_multi SET SORTED BY (a ASC, b DESC)
+
+statement ok
+INSERT INTO ducklake.test_multi VALUES (2, 'x'), (1, 'b'), (1, 'a'), (2, 'z'), (1, 'c')
+
+query II
+SELECT * FROM ducklake.test_multi
+----
+1	c
+1	b
+1	a
+2	z
+2	x
+
+# string sort
+statement ok
+CREATE TABLE ducklake.test_str(s VARCHAR)
+
+statement ok
+ALTER TABLE ducklake.test_str SET SORTED BY (s ASC)
+
+statement ok
+INSERT INTO ducklake.test_str VALUES ('banana'), ('apple'), ('cherry'), ('date')
+
+query I
+SELECT * FROM ducklake.test_str
+----
+apple
+banana
+cherry
+date
+
+# INSERT ... SELECT
+statement ok
+CREATE TABLE ducklake.test_insert_select(i INTEGER)
+
+statement ok
+ALTER TABLE ducklake.test_insert_select SET SORTED BY (i ASC)
+
+statement ok
+INSERT INTO ducklake.test_insert_select SELECT * FROM (VALUES (5), (3), (1), (4), (2)) t(i)
+
+query I
+SELECT * FROM ducklake.test_insert_select
+----
+1
+2
+3
+4
+5
+
+# NULL values with NULLS LAST (default for ASC)
+statement ok
+CREATE TABLE ducklake.test_nulls(i INTEGER)
+
+statement ok
+ALTER TABLE ducklake.test_nulls SET SORTED BY (i ASC NULLS LAST)
+
+statement ok
+INSERT INTO ducklake.test_nulls VALUES (3), (NULL), (1), (NULL), (2)
+
+query I
+SELECT * FROM ducklake.test_nulls
+----
+1
+2
+3
+NULL
+NULL
+
+# NULL values with NULLS FIRST
+statement ok
+CREATE TABLE ducklake.test_nulls_first(i INTEGER)
+
+statement ok
+ALTER TABLE ducklake.test_nulls_first SET SORTED BY (i ASC NULLS FIRST)
+
+statement ok
+INSERT INTO ducklake.test_nulls_first VALUES (3), (NULL), (1), (NULL), (2)
+
+query I
+SELECT * FROM ducklake.test_nulls_first
+----
+NULL
+NULL
+1
+2
+3
+
+# no sort data - insertion order preserved
+statement ok
+CREATE TABLE ducklake.test_nosort(i INTEGER)
+
+statement ok
+INSERT INTO ducklake.test_nosort VALUES (3), (1), (5), (2), (4)
+
+query I
+SELECT * FROM ducklake.test_nosort
+----
+3
+1
+5
+2
+4
+
+# RESET SORTED BY then INSERT - should not sort
+statement ok
+CREATE TABLE ducklake.test_reset(i INTEGER)
+
+statement ok
+ALTER TABLE ducklake.test_reset SET SORTED BY (i ASC)
+
+statement ok
+ALTER TABLE ducklake.test_reset RESET SORTED BY
+
+statement ok
+INSERT INTO ducklake.test_reset VALUES (3), (1), (5), (2), (4)
+
+query I
+SELECT * FROM ducklake.test_reset
+----
+3
+1
+5
+2
+4
+
+# list type column with sort on a different column
+statement ok
+CREATE TABLE ducklake.test_complex(i INTEGER, l INTEGER[])
+
+statement ok
+ALTER TABLE ducklake.test_complex SET SORTED BY (i DESC)
+
+statement ok
+INSERT INTO ducklake.test_complex VALUES (1, [10, 20]), (3, [30]), (2, [40, 50, 60])
+
+query II
+SELECT * FROM ducklake.test_complex
+----
+3	[30]
+2	[40, 50, 60]
+1	[10, 20]

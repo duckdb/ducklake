@@ -90,6 +90,10 @@ public:
 	unique_ptr<LogicalOperator> GenerateCompactionCommand(vector<DuckLakeCompactionFileEntry> source_files);
 	static unique_ptr<LogicalOperator> InsertSort(Binder &binder, unique_ptr<LogicalOperator> &plan,
 	                                              DuckLakeTableEntry &table, optional_ptr<DuckLakeSort> sort_data);
+	static vector<BoundOrderByNode> BindSortOrders(Binder &binder, const string &table_name, idx_t table_index,
+	                                               const vector<string> &column_names,
+	                                               const vector<LogicalType> &column_types,
+	                                               vector<OrderByNode> &pre_bound_orders);
 
 private:
 	ClientContext &context;
