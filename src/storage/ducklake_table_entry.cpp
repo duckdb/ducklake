@@ -419,7 +419,7 @@ DuckLakePartitionField GetPartitionField(DuckLakeTableEntry &table, ParsedExpres
 				throw NotImplementedException("Bucket count must be a constant integer, got %s", expr.ToString());
 			}
 			if (function.children[1]->type != ExpressionType::COLUMN_REF) {
-				throw NotImplementedException("Expected hash(column, bucket_count), but got %s", expr.ToString());
+				throw NotImplementedException("Expected bucket(column, bucket_count), but got %s", expr.ToString());
 			}
 
 			auto &bucket_expr = function.children[0]->Cast<ConstantExpression>();
