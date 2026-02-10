@@ -232,6 +232,17 @@ public:
 protected:
 	virtual string GetLatestSnapshotQuery() const;
 
+	//! Wrap field selections with list aggregation of struct objects (DBMS-specific)
+	//! For DuckDB: LIST({'key1': val1, 'key2': val2, ...})
+	//! For Postgres: jsonb_agg(jsonb_build_object('key1', val1, 'key2', val2, ...))
+	virtual string ListAggregation(const vector<pair<string, string>> &fields) const;
+	//! Parse tag list from ListAggregation value
+	virtual vector<DuckLakeTag> LoadTags(const Value &tag_map) const;
+	//! Parse inlined data tables list from ListAggregation value
+	virtual vector<DuckLakeInlinedTableInfo> LoadInlinedDataTables(const Value &list) const;
+	//! Parse macro implementations list from ListAggregation value
+	virtual vector<DuckLakeMacroImplementation> LoadMacroImplementations(const Value &list) const;
+
 protected:
 	string GetInlinedTableQuery(const DuckLakeTableInfo &table, const string &table_name);
 	string GetColumnType(const DuckLakeColumnInfo &col);

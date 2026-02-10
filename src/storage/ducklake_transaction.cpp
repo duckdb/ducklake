@@ -19,6 +19,8 @@
 #include "storage/ducklake_transaction_manager.hpp"
 #include "storage/ducklake_view_entry.hpp"
 #include "duckdb/common/printer.hpp"
+#include "duckdb/main/settings.hpp"
+#include "duckdb/main/client_config.hpp"
 
 namespace duckdb {
 
@@ -85,12 +87,17 @@ Connection &DuckLakeTransaction::GetConnection() {
 		connection = make_uniq<Connection>(db);
 		// set the search path to the metadata catalog
 		auto &client_data = ClientData::Get(*connection->context);
+		// ensure we are only looking in the ducklake catalog schema during querying
 		CatalogSearchEntry metadata_entry(ducklake_catalog.MetadataDatabaseName(),
 		                                  ducklake_catalog.MetadataSchemaName());
 		if (metadata_entry.schema.empty()) {
 			metadata_entry.schema = "main";
 		}
 		client_data.catalog_search_path->Set(metadata_entry, CatalogSetPathType::SET_DIRECTLY);
+
+		// set max error reporting to 0 so that during error reporting we don't traverse other schemas / catalogs
+		auto &client_config = ClientConfig::GetConfig(*connection->context);
+		client_config.user_settings.SetUserSetting(CatalogErrorMaxSchemasSetting::SettingIndex, Value::UBIGINT(0));
 		connection->BeginTransaction();
 	}
 	return *connection;
