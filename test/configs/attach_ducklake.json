@@ -628,7 +628,7 @@
       ]
     },
     {
-        "reason": "FIXME: GEOMETRY limitations (should be fixed at some point)",
+        "reason": "FIXME: GEOMETRY limitations (stats are different in DuckLake, shredding is not supported)",
         "paths": [
             "test/sql/types/geo/geometry_stats.test",
             "test/sql/types/geo/geometry_shred_list.test",
