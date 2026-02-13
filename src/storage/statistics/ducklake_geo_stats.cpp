@@ -174,10 +174,9 @@ unique_ptr<BaseStatistics> DuckLakeColumnGeoStats::ToStats() const {
 	extent.m_min = mmin;
 	extent.m_max = mmax;
 
-
 	static const unordered_map<string, pair<GeometryType, VertexType>> type_mapping = {
-		// XY TYPES
-		{"unknown", {GeometryType::INVALID, VertexType::XY}},
+	    // XY TYPES
+	    {"unknown", {GeometryType::INVALID, VertexType::XY}},
 	    {"point", {GeometryType::POINT, VertexType::XY}},
 	    {"linestring", {GeometryType::LINESTRING, VertexType::XY}},
 	    {"polygon", {GeometryType::POLYGON, VertexType::XY}},
@@ -185,8 +184,8 @@ unique_ptr<BaseStatistics> DuckLakeColumnGeoStats::ToStats() const {
 	    {"multilinestring", {GeometryType::MULTILINESTRING, VertexType::XY}},
 	    {"multipolygon", {GeometryType::MULTIPOLYGON, VertexType::XY}},
 	    {"geometrycollection", {GeometryType::GEOMETRYCOLLECTION, VertexType::XY}},
-		// Z TYPES
-		{"unknown_z", {GeometryType::INVALID, VertexType::XYZ}},
+	    // Z TYPES
+	    {"unknown_z", {GeometryType::INVALID, VertexType::XYZ}},
 	    {"point_z", {GeometryType::POINT, VertexType::XYZ}},
 	    {"linestring_z", {GeometryType::LINESTRING, VertexType::XYZ}},
 	    {"polygon_z", {GeometryType::POLYGON, VertexType::XYZ}},
@@ -194,8 +193,8 @@ unique_ptr<BaseStatistics> DuckLakeColumnGeoStats::ToStats() const {
 	    {"multilinestring_z", {GeometryType::MULTILINESTRING, VertexType::XYZ}},
 	    {"multipolygon_z", {GeometryType::MULTIPOLYGON, VertexType::XYZ}},
 	    {"geometrycollection_z", {GeometryType::GEOMETRYCOLLECTION, VertexType::XYZ}},
-		// M TYPES
-		{"unknown_m", {GeometryType::INVALID, VertexType::XYM}},
+	    // M TYPES
+	    {"unknown_m", {GeometryType::INVALID, VertexType::XYM}},
 	    {"point_m", {GeometryType::POINT, VertexType::XYM}},
 	    {"linestring_m", {GeometryType::LINESTRING, VertexType::XYM}},
 	    {"polygon_m", {GeometryType::POLYGON, VertexType::XYM}},
@@ -203,8 +202,8 @@ unique_ptr<BaseStatistics> DuckLakeColumnGeoStats::ToStats() const {
 	    {"multilinestring_m", {GeometryType::MULTILINESTRING, VertexType::XYM}},
 	    {"multipolygon_m", {GeometryType::MULTIPOLYGON, VertexType::XYM}},
 	    {"geometrycollection_m", {GeometryType::GEOMETRYCOLLECTION, VertexType::XYM}},
-		// ZM TYPES
-		{"unknown_zm", {GeometryType::INVALID, VertexType::XYZM}},
+	    // ZM TYPES
+	    {"unknown_zm", {GeometryType::INVALID, VertexType::XYZM}},
 	    {"point_zm", {GeometryType::POINT, VertexType::XYZM}},
 	    {"linestring_zm", {GeometryType::LINESTRING, VertexType::XYZM}},
 	    {"polygon_zm", {GeometryType::POLYGON, VertexType::XYZM}},
@@ -212,7 +211,6 @@ unique_ptr<BaseStatistics> DuckLakeColumnGeoStats::ToStats() const {
 	    {"multilinestring_zm", {GeometryType::MULTILINESTRING, VertexType::XYZM}},
 	    {"multipolygon_zm", {GeometryType::MULTIPOLYGON, VertexType::XYZM}},
 	    {"geometrycollection_zm", {GeometryType::GEOMETRYCOLLECTION, VertexType::XYZM}}};
-
 
 	auto &types = GeometryStats::GetTypes(stats);
 	for (auto &type : geo_types) {

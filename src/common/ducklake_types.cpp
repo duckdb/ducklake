@@ -42,7 +42,7 @@ static constexpr const ducklake_type_array DUCKLAKE_TYPES {{{"boolean", LogicalT
                                                             {"varchar", LogicalTypeId::VARCHAR},
                                                             {"blob", LogicalTypeId::BLOB},
                                                             {"uuid", LogicalTypeId::UUID},
-																{"geometry", LogicalTypeId::GEOMETRY},
+                                                            {"geometry", LogicalTypeId::GEOMETRY},
                                                             {"struct", LogicalTypeId::STRUCT},
                                                             {"map", LogicalTypeId::MAP},
                                                             {"list", LogicalTypeId::LIST},
@@ -160,7 +160,8 @@ void DuckLakeTypes::CheckSupportedType(const LogicalType &type) {
 	});
 
 	// Special case for now, only allow GEOMETRY as top-level type
-	if ((!IsGeoType(type) && TypeVisitor::Contains(type, IsGeoType)) || (type.id() != LogicalTypeId::GEOMETRY && TypeVisitor::Contains(type, LogicalTypeId::GEOMETRY))) {
+	if ((!IsGeoType(type) && TypeVisitor::Contains(type, IsGeoType)) ||
+	    (type.id() != LogicalTypeId::GEOMETRY && TypeVisitor::Contains(type, LogicalTypeId::GEOMETRY))) {
 		throw InvalidInputException("GEOMETRY type is only supported as a top-level type");
 	}
 }

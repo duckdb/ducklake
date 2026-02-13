@@ -200,7 +200,6 @@ unique_ptr<BaseStatistics> DuckLakeColumnStats::CreateVariantStats() const {
 	return variant_stats.ToStats();
 }
 
-
 unique_ptr<BaseStatistics> DuckLakeColumnStats::CreateGeometryStats() const {
 	if (!extra_stats) {
 		throw InternalException("Geometry DuckLakeColumnStats without extra_stats?");
@@ -218,7 +217,6 @@ unique_ptr<BaseStatistics> DuckLakeColumnStats::CreateGeometryStats() const {
 	}
 	return stats;
 }
-
 
 unique_ptr<BaseStatistics> DuckLakeColumnStats::CreateStringStats() const {
 	auto stats = StringStats::CreateEmpty(type);

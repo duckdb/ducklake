@@ -25,6 +25,7 @@ struct DuckLakeColumnGeoStats final : public DuckLakeColumnExtraStats {
 	void Deserialize(const string &stats) override;
 
 	unique_ptr<BaseStatistics> ToStats() const;
+
 public:
 	double xmin, xmax, ymin, ymax, zmin, zmax, mmin, mmax;
 	set<string> geo_types;
