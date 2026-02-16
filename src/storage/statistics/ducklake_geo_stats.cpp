@@ -1,10 +1,13 @@
 #include "storage/ducklake_stats.hpp"
 #include "storage/ducklake_geo_stats.hpp"
+
 #include "duckdb/common/types/value.hpp"
+#include "duckdb/common/case_insensitive_map.hpp"
 #include "storage/ducklake_metadata_info.hpp"
-#include "yyjson.hpp"
 #include "duckdb/storage/statistics/geometry_stats.hpp"
 #include "duckdb/storage/statistics/base_statistics.hpp"
+
+#include "yyjson.hpp"
 
 namespace duckdb {
 
@@ -174,7 +177,7 @@ unique_ptr<BaseStatistics> DuckLakeColumnGeoStats::ToStats() const {
 	extent.m_min = mmin;
 	extent.m_max = mmax;
 
-	static const unordered_map<string, pair<GeometryType, VertexType>> type_mapping = {
+	static const case_insensitive_map_t<pair<GeometryType, VertexType>> type_mapping = {
 	    // XY TYPES
 	    {"unknown", {GeometryType::INVALID, VertexType::XY}},
 	    {"point", {GeometryType::POINT, VertexType::XY}},
