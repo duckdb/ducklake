@@ -345,11 +345,7 @@ unique_ptr<LogicalOperator> DuckLakeCompactor::InsertSort(Binder &binder, unique
 	}
 
 	// Validate all column references in sort expressions exist in the table
-	vector<reference<ParsedExpression>> sort_expressions;
-	for (auto &pre_bound_order : pre_bound_orders) {
-		sort_expressions.push_back(*pre_bound_order.expression);
-	}
-	DuckLakeTableEntry::ValidateSortExpressionColumns(table, sort_expressions);
+	DuckLakeTableEntry::ValidateSortExpressionColumns(table, pre_bound_orders);
 
 	// Resolve types for the input plan (could be LogicalGet or LogicalProjection)
 	plan->ResolveOperatorTypes();

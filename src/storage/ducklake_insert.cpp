@@ -783,11 +783,7 @@ static optional_ptr<PhysicalOperator> PlanInsertSort(ClientContext &context, Phy
 	}
 
 	// Validate all column references in sort expressions exist in the table
-	vector<reference<ParsedExpression>> sort_expressions;
-	for (auto &order : pre_bound_orders) {
-		sort_expressions.push_back(*order.expression);
-	}
-	DuckLakeTableEntry::ValidateSortExpressionColumns(table, sort_expressions);
+	DuckLakeTableEntry::ValidateSortExpressionColumns(table, pre_bound_orders);
 
 	// Bind the ORDER BY expressions
 	auto &columns = table.GetColumns();
