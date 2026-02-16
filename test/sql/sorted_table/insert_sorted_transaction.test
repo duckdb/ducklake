@@ -132,3 +132,97 @@ SELECT * FROM ducklake.test_txn_alter
 3	c
 2	b
 1	a
+
+# test: BEGIN -> ADD COLUMN -> SET SORTED BY new column -> INSERT -> COMMIT
+statement ok
+BEGIN
+
+statement ok
+CREATE TABLE ducklake.test_add_sort_insert(a INTEGER)
+
+statement ok
+ALTER TABLE ducklake.test_add_sort_insert ADD COLUMN b INTEGER
+
+statement ok
+ALTER TABLE ducklake.test_add_sort_insert SET SORTED BY (b ASC)
+
+statement ok
+INSERT INTO ducklake.test_add_sort_insert VALUES (10, 3), (20, 1), (30, 2)
+
+# within transaction, data should be sorted by the newly added column b
+query II
+SELECT * FROM ducklake.test_add_sort_insert
+----
+20	1
+30	2
+10	3
+
+statement ok
+COMMIT
+
+# after commit, sort order persists
+query II
+SELECT * FROM ducklake.test_add_sort_insert
+----
+20	1
+30	2
+10	3
+
+# test: BEGIN -> SET SORTED BY -> DROP that column -> INSERT should error -> ROLLBACK
+statement ok
+CREATE TABLE ducklake.test_sort_drop_insert(a INTEGER, b INTEGER)
+
+statement ok
+BEGIN
+
+statement ok
+ALTER TABLE ducklake.test_sort_drop_insert SET SORTED BY (b ASC)
+
+statement ok
+ALTER TABLE ducklake.test_sort_drop_insert DROP COLUMN b
+
+statement error
+INSERT INTO ducklake.test_sort_drop_insert VALUES (1)
+----
+Columns in the SET SORTED BY statement were not found
+
+statement ok
+ROLLBACK
+
+# test: BEGIN -> SET SORTED BY -> DROP column -> ADD column back -> INSERT -> COMMIT
+statement ok
+CREATE TABLE ducklake.test_sort_drop_readd(a INTEGER, b INTEGER)
+
+statement ok
+BEGIN
+
+statement ok
+ALTER TABLE ducklake.test_sort_drop_readd SET SORTED BY (b DESC)
+
+statement ok
+ALTER TABLE ducklake.test_sort_drop_readd DROP COLUMN b
+
+statement ok
+ALTER TABLE ducklake.test_sort_drop_readd ADD COLUMN b INTEGER
+
+statement ok
+INSERT INTO ducklake.test_sort_drop_readd VALUES (10, 3), (20, 1), (30, 2)
+
+# data should be sorted by the re-added column b DESC
+query II
+SELECT * FROM ducklake.test_sort_drop_readd
+----
+10	3
+30	2
+20	1
+
+statement ok
+COMMIT
+
+# after commit, sort order persists
+query II
+SELECT * FROM ducklake.test_sort_drop_readd
+----
+10	3
+30	2
+20	1

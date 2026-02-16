@@ -1,0 +1,244 @@
+# name: test/sql/sorted_table/insert_sorted_sort_on_insert_option.test
+# description: test the sort_on_insert option to control whether INSERT sorts data
+# group: [sorted_table]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+
+test-env DATA_PATH __TEST_DIR__
+
+statement ok
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/sort_on_insert_option')
+
+# -----------------------------------------------
+# Test 1: Default behavior - INSERT sorts (sort_on_insert not set, defaults to true)
+# -----------------------------------------------
+statement ok
+CREATE TABLE ducklake.test_default(i INTEGER)
+
+statement ok
+ALTER TABLE ducklake.test_default SET SORTED BY (i ASC)
+
+statement ok
+INSERT INTO ducklake.test_default VALUES (3), (1), (5), (2), (4)
+
+query I
+SELECT * FROM ducklake.test_default
+----
+1
+2
+3
+4
+5
+
+# -----------------------------------------------
+# Test 2: sort_on_insert=false globally - INSERT does NOT sort
+# -----------------------------------------------
+statement ok
+CALL ducklake_set_option('ducklake', 'sort_on_insert', 'false')
+
+statement ok
+CREATE TABLE ducklake.test_global_false(i INTEGER)
+
+statement ok
+ALTER TABLE ducklake.test_global_false SET SORTED BY (i ASC)
+
+statement ok
+INSERT INTO ducklake.test_global_false VALUES (3), (1), (5), (2), (4)
+
+# data should NOT be sorted - insertion order preserved
+query I
+SELECT * FROM ducklake.test_global_false
+----
+3
+1
+5
+2
+4
+
+# -----------------------------------------------
+# Test 3: sort_on_insert=true explicitly - INSERT sorts
+# -----------------------------------------------
+statement ok
+CALL ducklake_set_option('ducklake', 'sort_on_insert', 'true')
+
+statement ok
+CREATE TABLE ducklake.test_explicit_true(i INTEGER)
+
+statement ok
+ALTER TABLE ducklake.test_explicit_true SET SORTED BY (i ASC)
+
+statement ok
+INSERT INTO ducklake.test_explicit_true VALUES (3), (1), (5), (2), (4)
+
+query I
+SELECT * FROM ducklake.test_explicit_true
+----
+1
+2
+3
+4
+5
+
+# -----------------------------------------------
+# Test 4: Table-scoped sort_on_insert=false - only that table skips sorting
+# -----------------------------------------------
+
+# reset global to default (true)
+statement ok
+CALL ducklake_set_option('ducklake', 'sort_on_insert', 'true')
+
+statement ok
+CREATE TABLE ducklake.test_table_scoped(i INTEGER)
+
+statement ok
+ALTER TABLE ducklake.test_table_scoped SET SORTED BY (i ASC)
+
+statement ok
+CALL ducklake.set_option('sort_on_insert', 'false', table_name => 'test_table_scoped')
+
+statement ok
+INSERT INTO ducklake.test_table_scoped VALUES (3), (1), (5), (2), (4)
+
+# this table should NOT be sorted
+query I
+SELECT * FROM ducklake.test_table_scoped
+----
+3
+1
+5
+2
+4
+
+# another table should still sort
+statement ok
+CREATE TABLE ducklake.test_other_table(i INTEGER)
+
+statement ok
+ALTER TABLE ducklake.test_other_table SET SORTED BY (i ASC)
+
+statement ok
+INSERT INTO ducklake.test_other_table VALUES (3), (1), (5), (2), (4)
+
+query I
+SELECT * FROM ducklake.test_other_table
+----
+1
+2
+3
+4
+5
+
+# -----------------------------------------------
+# Test 5: Compaction still sorts when sort_on_insert=false
+# -----------------------------------------------
+statement ok
+CALL ducklake_set_option('ducklake', 'sort_on_insert', 'false')
+
+statement ok
+CREATE TABLE ducklake.test_compaction(i INTEGER)
+
+statement ok
+ALTER TABLE ducklake.test_compaction SET SORTED BY (i ASC)
+
+statement ok
+INSERT INTO ducklake.test_compaction VALUES (5), (3), (1)
+
+statement ok
+INSERT INTO ducklake.test_compaction VALUES (4), (2), (6)
+
+# data is NOT sorted on insert
+query I
+SELECT * FROM ducklake.test_compaction
+----
+5
+3
+1
+4
+2
+6
+
+# compaction should still sort
+query III
+SELECT table_name, files_processed, files_created FROM ducklake_merge_adjacent_files('ducklake', 'test_compaction')
+----
+test_compaction	2	1
+
+# after compaction, data should be sorted
+query I
+SELECT * FROM ducklake.test_compaction
+----
+1
+2
+3
+4
+5
+6
+
+# -----------------------------------------------
+# Test 6: Flush still sorts when sort_on_insert=false
+# -----------------------------------------------
+statement ok
+DETACH ducklake
+
+statement ok
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake2 (DATA_PATH '${DATA_PATH}/sort_on_insert_flush', DATA_INLINING_ROW_LIMIT 10)
+
+statement ok
+CALL ducklake_set_option('ducklake2', 'sort_on_insert', 'false')
+
+statement ok
+CREATE TABLE ducklake2.test_flush(i INTEGER)
+
+statement ok
+ALTER TABLE ducklake2.test_flush SET SORTED BY (i DESC)
+
+loop i 0 5
+
+statement ok
+INSERT INTO ducklake2.test_flush VALUES (${i})
+
+endloop
+
+# data is inlined, not sorted on insert
+query I
+SELECT * FROM ducklake2.test_flush
+----
+0
+1
+2
+3
+4
+
+# now insert some more unsorted values
+statement ok
+INSERT INTO ducklake2.test_flush VALUES (9), (7), (6), (8), (5)
+
+# flush should sort the data
+statement ok
+CALL ducklake_flush_inlined_data('ducklake2', table_name => 'test_flush')
+
+query I
+SELECT * FROM ducklake2.test_flush
+----
+9
+8
+7
+6
+5
+4
+3
+2
+1
+0
+
+# -----------------------------------------------
+# Test 7: Invalid input - non-boolean value throws error
+# -----------------------------------------------
+statement error
+CALL ducklake_set_option('ducklake2', 'sort_on_insert', 'not_a_bool')
+----
+Could not convert string

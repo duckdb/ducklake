@@ -48,21 +48,48 @@ SELECT * FROM ducklake.test_arith
 2	2
 1	2
 
-# sort by expression: negative / unary
+# sort by multiple expressions: primary sort on length(name), secondary on (a * b) DESC
 statement ok
-CREATE TABLE ducklake.test_neg(i INTEGER)
+CREATE TABLE ducklake.test_multi_expr(a INTEGER, b INTEGER, name VARCHAR)
 
 statement ok
-ALTER TABLE ducklake.test_neg SET SORTED BY ((-i) ASC)
+ALTER TABLE ducklake.test_multi_expr SET SORTED BY (length(name) ASC, (a * b) DESC)
 
 statement ok
-INSERT INTO ducklake.test_neg VALUES (3), (1), (5), (2), (4)
+INSERT INTO ducklake.test_multi_expr VALUES (3, 4, 'ab'), (2, 5, 'abc'), (1, 1, 'ab'), (5, 2, 'abc'), (7, 1, 'a')
 
-query I
-SELECT * FROM ducklake.test_neg
+# length('a')=1, length('ab')=2, length('abc')=3
+# within length=2: (3*4)=12 > (1*1)=1
+# within length=3: (2*5)=10 = (5*2)=10 (stable order)
+query III
+SELECT * FROM ducklake.test_multi_expr
 ----
-5
-4
-3
-2
-1
+7	1	a
+3	4	ab
+1	1	ab
+2	5	abc
+5	2	abc
+
+# sort by complex nested expression: concat(substr(power(unique_id, unique_id)::varchar, 1, 1), name)
+statement ok
+CREATE TABLE ducklake.test_nested_expr(unique_id BIGINT, name VARCHAR)
+
+statement ok
+ALTER TABLE ducklake.test_nested_expr SET SORTED BY (concat(substr(power(unique_id, unique_id)::varchar, 1, 1), name) ASC NULLS LAST)
+
+statement ok
+INSERT INTO ducklake.test_nested_expr VALUES (1, 'one'), (2, 'two'), (3, 'three'), (4, 'four'), (5, 'five'), (6, 'six'), (7, 'seven'), (8, 'eight')
+
+query III
+SELECT *, concat(substr(power(unique_id, unique_id)::varchar, 1, 1), name) as sort_col 
+FROM ducklake.test_nested_expr
+----
+8	eight	1eight
+1	one	1one
+4	four	2four
+3	three	2three
+5	five	3five
+6	six	4six
+2	two	4two
+7	seven	8seven
+

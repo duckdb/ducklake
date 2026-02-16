@@ -783,13 +783,11 @@ static optional_ptr<PhysicalOperator> PlanInsertSort(ClientContext &context, Phy
 	}
 
 	// Validate all column references in sort expressions exist in the table
-	// If columns have been renamed and the sort expressions are stale, gracefully skip sorting
 	vector<reference<ParsedExpression>> sort_expressions;
 	for (auto &order : pre_bound_orders) {
 		sort_expressions.push_back(*order.expression);
 	}
 	DuckLakeTableEntry::ValidateSortExpressionColumns(table, sort_expressions);
-
 
 	// Bind the ORDER BY expressions
 	auto &columns = table.GetColumns();
@@ -834,9 +832,14 @@ PhysicalOperator &DuckLakeCatalog::PlanInsert(ClientContext &context, PhysicalPl
 	// Sort data according to the table's SET SORTED BY configuration
 	auto sort_data = ducklake_table.GetSortData();
 	if (sort_data) {
-		auto sorted_plan = PlanInsertSort(context, planner, *plan, ducklake_table, sort_data);
-		if (sorted_plan) {
-			plan = sorted_plan;
+		auto &ducklake_schema_for_sort = ducklake_table.ParentSchema().Cast<DuckLakeSchemaEntry>();
+		bool sort_on_insert = GetConfigOption<string>("sort_on_insert", ducklake_schema_for_sort.GetSchemaId(),
+		                                              ducklake_table.GetTableId(), "true") == "true";
+		if (sort_on_insert) {
+			auto sorted_plan = PlanInsertSort(context, planner, *plan, ducklake_table, sort_data);
+			if (sorted_plan) {
+				plan = sorted_plan;
+			}
 		}
 	}
 
