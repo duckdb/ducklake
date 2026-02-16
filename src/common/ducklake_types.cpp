@@ -12,7 +12,7 @@ struct DefaultType {
 	LogicalTypeId id;
 };
 
-using ducklake_type_array = std::array<DefaultType, 33>;
+using ducklake_type_array = std::array<DefaultType, 32>;
 
 static constexpr const ducklake_type_array DUCKLAKE_TYPES {{{"boolean", LogicalTypeId::BOOLEAN},
                                                             {"int8", LogicalTypeId::TINYINT},
@@ -42,7 +42,6 @@ static constexpr const ducklake_type_array DUCKLAKE_TYPES {{{"boolean", LogicalT
                                                             {"varchar", LogicalTypeId::VARCHAR},
                                                             {"blob", LogicalTypeId::BLOB},
                                                             {"uuid", LogicalTypeId::UUID},
-                                                            {"geometry", LogicalTypeId::GEOMETRY},
                                                             {"struct", LogicalTypeId::STRUCT},
                                                             {"map", LogicalTypeId::MAP},
                                                             {"list", LogicalTypeId::LIST},
@@ -61,6 +60,9 @@ static LogicalType ParseBaseType(const string &str) {
 	if (StringUtil::CIEquals(str, "variant")) {
 		return LogicalType::VARIANT();
 	}
+	if (StringUtil::CIEquals(str, "geometry")) {
+		return LogicalType::GEOMETRY();
+	}
 
 	throw InvalidInputException("Failed to parse DuckLake type - unsupported type '%s'", str);
 }
@@ -74,13 +76,16 @@ static string ToStringBaseType(const LogicalType &type) {
 	throw InvalidInputException("Failed to convert DuckDB type to DuckLake - unsupported type %s", type);
 }
 
-// Only GEOMETRY type needs special handling, to cast to WKB_BLOB
-bool DuckLakeTypes::IsGeoType(const LogicalType &type) {
-	return type.id() == LogicalTypeId::GEOMETRY;
+// GEOMETRY used to be defined as an alias over BLOB in the spatial extension, but is now part of core.
+// If we try to export from an older version of DuckDB that still has GEOMETRY as an alias,
+// we need to detect that and convert it to the new GEOMETRY type. The cast is defined in spatial, so it's enough
+// to just insert a cast to the new GEOMETRY type here - the spatial extension will take care of the rest.
+static bool IsLegacyGeometryType(const LogicalType &type) {
+	return (type.id() == LogicalTypeId::BLOB) && type.HasAlias() && StringUtil::CIEquals(type.GetAlias(), "GEOMETRY");
 }
 
 bool DuckLakeTypes::RequiresCast(const LogicalType &type) {
-	return TypeVisitor::Contains(type, IsGeoType);
+	return TypeVisitor::Contains(type, IsLegacyGeometryType);
 }
 
 bool DuckLakeTypes::RequiresCast(const vector<LogicalType> &types) {
@@ -94,7 +99,7 @@ bool DuckLakeTypes::RequiresCast(const vector<LogicalType> &types) {
 
 LogicalType DuckLakeTypes::GetCastedType(const LogicalType &type) {
 	return TypeVisitor::VisitReplace(type, [](const LogicalType &type) {
-		if (IsGeoType(type)) {
+		if (IsLegacyGeometryType(type)) {
 			return LogicalType::GEOMETRY();
 		}
 		return type;
@@ -121,7 +126,7 @@ string DuckLakeTypes::ToString(const LogicalType &type) {
 		if (type.IsJSONType()) {
 			return "json";
 		}
-		if (IsGeoType(type)) {
+		if (IsLegacyGeometryType(type)) {
 			return "geometry";
 		}
 		if (type.id() == LogicalTypeId::UNBOUND) {
@@ -137,6 +142,8 @@ string DuckLakeTypes::ToString(const LogicalType &type) {
 		return "struct";
 	case LogicalTypeId::VARIANT:
 		return "variant";
+	case LogicalTypeId::GEOMETRY:
+		return "geometry";
 	case LogicalTypeId::LIST:
 		return "list";
 	case LogicalTypeId::MAP:
@@ -160,8 +167,11 @@ void DuckLakeTypes::CheckSupportedType(const LogicalType &type) {
 	});
 
 	// Special case for now, only allow GEOMETRY as top-level type
-	if ((!IsGeoType(type) && TypeVisitor::Contains(type, IsGeoType)) ||
-	    (type.id() != LogicalTypeId::GEOMETRY && TypeVisitor::Contains(type, LogicalTypeId::GEOMETRY))) {
+	const auto has_legacy_geometry = !IsLegacyGeometryType(type) && TypeVisitor::Contains(type, IsLegacyGeometryType);
+	const auto has_duckdb_geometry =
+	    type.id() != LogicalTypeId::GEOMETRY && TypeVisitor::Contains(type, LogicalTypeId::GEOMETRY);
+
+	if (has_duckdb_geometry || has_legacy_geometry) {
 		throw InvalidInputException("GEOMETRY type is only supported as a top-level type");
 	}
 }

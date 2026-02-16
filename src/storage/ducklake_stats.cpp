@@ -17,7 +17,7 @@ DuckLakeColumnExtraStats::DuckLakeColumnExtraStats(DuckLakeExtraStatsType stats_
 }
 
 DuckLakeColumnStats::DuckLakeColumnStats(LogicalType type_p) : type(std::move(type_p)) {
-	if (DuckLakeTypes::IsGeoType(type)) {
+	if (type.id() == LogicalTypeId::GEOMETRY) {
 		extra_stats = make_uniq<DuckLakeColumnGeoStats>();
 	}
 	if (type.id() == LogicalTypeId::VARIANT) {
