@@ -202,6 +202,15 @@ unique_ptr<BaseStatistics> GetColumnStats(const DuckLakeFieldId &field_id, const
 		ListStats::SetChildStats(list_stats, std::move(child_stats));
 		return list_stats.ToUnique();
 	}
+	case LogicalTypeId::MAP: {
+		auto key_stats = GetColumnStats(*field_children[0], table_stats);
+		auto value_stats = GetColumnStats(*field_children[1], table_stats);
+		auto map_stats = ListStats::CreateUnknown(field_id.Type());
+		auto &entry_stats = ListStats::GetChildStats(map_stats);
+		StructStats::SetChildStats(entry_stats, 0, std::move(key_stats));
+		StructStats::SetChildStats(entry_stats, 1, std::move(value_stats));
+		return map_stats.ToUnique();
+	}
 	default:
 		// unsupported nested type
 		return nullptr;
