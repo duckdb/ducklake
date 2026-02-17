@@ -47,13 +47,16 @@ vector<OrderByNode> DuckLakeCompactor::ParseSortOrders(const DuckLakeSort &sort_
 }
 
 //! Binds ORDER BY expressions directly using ExpressionBinder.
-vector<BoundOrderByNode> DuckLakeCompactor::BindSortOrders(Binder &binder, const string &table_name, idx_t table_index,
-                                                           const vector<string> &column_names,
-                                                           const vector<LogicalType> &column_types,
+vector<BoundOrderByNode> DuckLakeCompactor::BindSortOrders(Binder &binder, DuckLakeTableEntry &table,
+                                                           idx_t table_index,
                                                            vector<OrderByNode> &pre_bound_orders) {
+	auto &columns = table.GetColumns();
+	auto column_names = columns.GetColumnNames();
+	auto column_types = columns.GetColumnTypes();
+
 	// Create a child binder with the table columns in scope
 	auto child_binder = Binder::CreateBinder(binder.context, &binder);
-	child_binder->bind_context.AddGenericBinding(table_index, table_name, column_names, column_types);
+	child_binder->bind_context.AddGenericBinding(table_index, table.name, column_names, column_types);
 
 	// Bind each ORDER BY expression directly
 	vector<BoundOrderByNode> orders;
@@ -353,16 +356,11 @@ unique_ptr<LogicalOperator> DuckLakeCompactor::InsertSort(Binder &binder, unique
 	// Resolve types for the input plan (could be LogicalGet or LogicalProjection)
 	plan->ResolveOperatorTypes();
 
-	auto &columns = table.GetColumns();
-	auto current_columns = columns.GetColumnNames();
-	auto column_types = columns.GetColumnTypes();
-
 	D_ASSERT(!bindings.empty());
 	auto table_index = bindings[0].table_index;
 
 	// Bind the ORDER BY expressions
-	auto orders = DuckLakeCompactor::BindSortOrders(binder, table.name, table_index, current_columns, column_types,
-	                                                pre_bound_orders);
+	auto orders = DuckLakeCompactor::BindSortOrders(binder, table, table_index, pre_bound_orders);
 
 	// Create the LogicalOrder operator
 	auto order = make_uniq<LogicalOrder>(std::move(orders));

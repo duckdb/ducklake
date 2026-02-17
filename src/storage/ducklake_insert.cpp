@@ -779,14 +779,9 @@ static optional_ptr<PhysicalOperator> PlanInsertSort(ClientContext &context, Phy
 	DuckLakeTableEntry::ValidateSortExpressionColumns(table, pre_bound_orders);
 
 	// Bind the ORDER BY expressions
-	auto &columns = table.GetColumns();
-	auto column_names = columns.GetColumnNames();
-	auto column_types = columns.GetColumnTypes();
-
 	auto binder = Binder::CreateBinder(context);
 	idx_t table_index = 0;
-	auto orders = DuckLakeCompactor::BindSortOrders(*binder, table.name, table_index, column_names, column_types,
-	                                                pre_bound_orders);
+	auto orders = DuckLakeCompactor::BindSortOrders(*binder, table, table_index, pre_bound_orders);
 
 	// Convert BoundColumnRefExpression to BoundReferenceExpression for physical plan
 	for (auto &order : orders) {
