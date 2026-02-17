@@ -770,14 +770,7 @@ static optional_ptr<PhysicalOperator> PlanInsertSort(ClientContext &context, Phy
                                                      PhysicalOperator &plan, DuckLakeTableEntry &table,
                                                      optional_ptr<DuckLakeSort> sort_data) {
 	// Parse the sort expressions from the sort_data
-	vector<OrderByNode> pre_bound_orders;
-	for (auto &field : sort_data->fields) {
-		if (field.dialect != "duckdb") {
-			continue;
-		}
-		auto parsed_expression = Parser::ParseExpressionList(field.expression);
-		pre_bound_orders.emplace_back(field.sort_direction, field.null_order, std::move(parsed_expression[0]));
-	}
+	auto pre_bound_orders = DuckLakeCompactor::ParseSortOrders(*sort_data);
 	if (pre_bound_orders.empty()) {
 		return nullptr;
 	}

@@ -33,6 +33,19 @@ namespace duckdb {
 // Sort Binding Helpers
 //===--------------------------------------------------------------------===//
 
+//! Parses sort expressions from DuckLakeSort into OrderByNode vectors (DuckDB dialect only).
+vector<OrderByNode> DuckLakeCompactor::ParseSortOrders(const DuckLakeSort &sort_data) {
+	vector<OrderByNode> pre_bound_orders;
+	for (auto &field : sort_data.fields) {
+		if (field.dialect != "duckdb") {
+			continue;
+		}
+		auto parsed_expression = Parser::ParseExpressionList(field.expression);
+		pre_bound_orders.emplace_back(field.sort_direction, field.null_order, std::move(parsed_expression[0]));
+	}
+	return pre_bound_orders;
+}
+
 //! Binds ORDER BY expressions directly using ExpressionBinder.
 vector<BoundOrderByNode> DuckLakeCompactor::BindSortOrders(Binder &binder, const string &table_name, idx_t table_index,
                                                            const vector<string> &column_names,
@@ -328,17 +341,7 @@ unique_ptr<LogicalOperator> DuckLakeCompactor::InsertSort(Binder &binder, unique
 	auto bindings = plan->GetColumnBindings();
 
 	// Parse the sort expressions from the sort_data
-	vector<OrderByNode> pre_bound_orders;
-	for (auto &pre_bound_order : sort_data->fields) {
-		if (pre_bound_order.dialect != "duckdb") {
-			continue;
-		}
-		auto parsed_expression = Parser::ParseExpressionList(pre_bound_order.expression);
-		OrderByNode order_node(pre_bound_order.sort_direction, pre_bound_order.null_order,
-		                       std::move(parsed_expression[0]));
-		pre_bound_orders.emplace_back(std::move(order_node));
-	}
-
+	auto pre_bound_orders = DuckLakeCompactor::ParseSortOrders(*sort_data);
 	if (pre_bound_orders.empty()) {
 		// Then the sorts were not in the DuckDB dialect and we return the original plan
 		return std::move(plan);
