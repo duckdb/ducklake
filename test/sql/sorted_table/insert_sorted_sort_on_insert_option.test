@@ -144,6 +144,10 @@ CREATE TABLE ducklake.test_compaction(i INTEGER)
 statement ok
 ALTER TABLE ducklake.test_compaction SET SORTED BY (i ASC)
 
+# Disable inlining to test compaction behavior
+statement ok 
+CALL ducklake.set_option('data_inlining_row_limit', 0, table_name => 'test_compaction')
+
 statement ok
 INSERT INTO ducklake.test_compaction VALUES (5), (3), (1)
 
