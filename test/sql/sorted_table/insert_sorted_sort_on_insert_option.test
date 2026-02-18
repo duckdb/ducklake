@@ -199,7 +199,7 @@ ALTER TABLE ducklake2.test_flush SET SORTED BY (i DESC)
 statement ok
 INSERT INTO ducklake2.test_flush  VALUES (1), (0), (3), (2), (4)
 
-# data is inlined, not sorted on insert
+# sort_on_insert is disabled
 query I
 SELECT * FROM ducklake2.test_flush
 ----
@@ -230,6 +230,88 @@ SELECT * FROM ducklake2.test_flush
 2
 1
 0
+
+query I
+SELECT COUNT(*) FROM GLOB('${DATA_PATH}/sort_on_insert_flush/**')
+----
+1
+
+statement ok
+CALL ducklake_set_option('ducklake2', 'sort_on_insert', 'true')
+
+# Insert more than the inlining limit. This should be sorted on insert (now that sort_on_insert is re-enabled).
+statement ok
+INSERT INTO ducklake2.test_flush 
+VALUES (15), (16), (17), (18), (19), (14), (13), (12), (11), (10), (20)
+
+query I
+SELECT * FROM ducklake2.test_flush
+----
+9
+8
+7
+6
+5
+4
+3
+2
+1
+0
+20
+19
+18
+17
+16
+15
+14
+13
+12
+11
+10
+
+query I
+SELECT COUNT(*) FROM GLOB('${DATA_PATH}/sort_on_insert_flush/**')
+----
+2
+
+# Insert less than the inlining limit. This will be sorted on insert also
+statement ok
+INSERT INTO ducklake2.test_flush 
+VALUES (22), (21), (23)
+
+query I
+SELECT * FROM ducklake2.test_flush
+----
+9
+8
+7
+6
+5
+4
+3
+2
+1
+0
+20
+19
+18
+17
+16
+15
+14
+13
+12
+11
+10
+23
+22
+21
+
+query I
+SELECT COUNT(*) FROM GLOB('${DATA_PATH}/sort_on_insert_flush/**')
+----
+2
+
 
 # -----------------------------------------------
 # Test 7: Invalid input - non-boolean value throws error
