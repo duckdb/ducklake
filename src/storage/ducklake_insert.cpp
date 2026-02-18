@@ -424,8 +424,8 @@ static unique_ptr<Expression> GetPartitionExpression(ClientContext &context, Duc
 		return GetFunction(context, copy_input, "day", field.field_id);
 	case DuckLakeTransformType::HOUR:
 		return GetFunction(context, copy_input, "hour", field.field_id);
-	case DuckLakeTransformType::BUCKET: {
-		return GetBucketExpression(context, copy_input, field);}
+	case DuckLakeTransformType::BUCKET: 
+		return GetBucketExpression(context, copy_input, field);
 	default:
 		throw NotImplementedException("Unsupported partition transform type in GetPartitionExpression");
 	}
