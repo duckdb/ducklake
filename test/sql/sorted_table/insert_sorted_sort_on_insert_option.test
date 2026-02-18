@@ -196,21 +196,17 @@ CREATE TABLE ducklake2.test_flush(i INTEGER)
 statement ok
 ALTER TABLE ducklake2.test_flush SET SORTED BY (i DESC)
 
-loop i 0 5
-
 statement ok
-INSERT INTO ducklake2.test_flush VALUES (${i})
-
-endloop
+INSERT INTO ducklake2.test_flush  VALUES (1), (0), (3), (2), (4)
 
 # data is inlined, not sorted on insert
 query I
 SELECT * FROM ducklake2.test_flush
 ----
-0
 1
-2
+0
 3
+2
 4
 
 # now insert some more unsorted values
