@@ -312,6 +312,59 @@ SELECT COUNT(*) FROM GLOB('${DATA_PATH}/sort_on_insert_flush/**')
 ----
 2
 
+statement ok
+CALL ducklake_set_option('ducklake2', 'sort_on_insert', 'false')
+
+# Insert more than the inlining limit. This should be sorted on insert (since it should flush to parquet).
+statement ok
+INSERT INTO ducklake2.test_flush 
+VALUES (24), (25), (26), (27), (28), (29), (30), (31), (32), (33), (34)
+
+query I
+SELECT * FROM ducklake2.test_flush
+----
+9
+8
+7
+6
+5
+4
+3
+2
+1
+0
+20
+19
+18
+17
+16
+15
+14
+13
+12
+11
+10
+34
+33
+32
+31
+30
+29
+28
+27
+26
+25
+24
+23
+22
+21
+
+
+query I
+SELECT COUNT(*) FROM GLOB('${DATA_PATH}/sort_on_insert_flush/**')
+----
+3
+
 
 # -----------------------------------------------
 # Test 7: Invalid input - non-boolean value throws error

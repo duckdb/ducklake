@@ -815,15 +815,13 @@ PhysicalOperator &DuckLakeCatalog::PlanInsert(ClientContext &context, PhysicalPl
 
 	// Sort data according to the table's SET SORTED BY configuration
 	auto sort_data = ducklake_table.GetSortData();
-	if (sort_data) {
-		auto &ducklake_schema_for_sort = ducklake_table.ParentSchema().Cast<DuckLakeSchemaEntry>();
-		bool sort_on_insert = GetConfigOption<string>("sort_on_insert", ducklake_schema_for_sort.GetSchemaId(),
-		                                              ducklake_table.GetTableId(), "true") == "true";
-		if (sort_on_insert) {
-			auto sorted_plan = PlanInsertSort(context, planner, *plan, ducklake_table, sort_data);
-			if (sorted_plan) {
-				plan = sorted_plan;
-			}
+	auto &ducklake_schema_for_sort = ducklake_table.ParentSchema().Cast<DuckLakeSchemaEntry>();
+	bool sort_on_insert = GetConfigOption<string>("sort_on_insert", ducklake_schema_for_sort.GetSchemaId(),
+		                                         ducklake_table.GetTableId(), "true") == "true";
+	if (sort_data && sort_on_insert) {
+		auto sorted_plan = PlanInsertSort(context, planner, *plan, ducklake_table, sort_data);
+		if (sorted_plan) {
+			plan = sorted_plan;
 		}
 	}
 
@@ -833,6 +831,17 @@ PhysicalOperator &DuckLakeCatalog::PlanInsert(ClientContext &context, PhysicalPl
 	if (data_inlining_row_limit > 0) {
 		plan = planner.Make<DuckLakeInlineData>(*plan, data_inlining_row_limit);
 		inline_data = plan->Cast<DuckLakeInlineData>();
+
+		// When sort_on_insert=false but inlining is enabled, add sorting AFTER
+		// the inline data operator. Data that exceeds the inlining limit passes
+		// through to parquet files and must be sorted. Data that is inlined
+		// (absorbed by DuckLakeInlineData) never reaches this sort operator.
+		if (sort_data && !sort_on_insert) {
+			auto sorted_plan = PlanInsertSort(context, planner, *plan, ducklake_table, sort_data);
+			if (sorted_plan) {
+				plan = sorted_plan;
+			}
+		}
 	}
 	DuckLakeCopyInput copy_input(context, ducklake_table);
 	auto &physical_copy = DuckLakeInsert::PlanCopyForInsert(context, planner, copy_input, plan);
