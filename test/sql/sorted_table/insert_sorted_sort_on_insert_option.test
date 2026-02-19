@@ -8,6 +8,8 @@ require parquet
 
 test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
 
+test-env DUCKLAKE_CONNECTION_2 __TEST_DIR__/{UUID}_2.db
+
 test-env DATA_PATH __TEST_DIR__
 
 statement ok
@@ -189,7 +191,7 @@ statement ok
 DETACH ducklake
 
 statement ok
-ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake2 (DATA_PATH '${DATA_PATH}/sort_on_insert_flush', DATA_INLINING_ROW_LIMIT 10)
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION_2}' AS ducklake2 (DATA_PATH '${DATA_PATH}/sort_on_insert_flush', DATA_INLINING_ROW_LIMIT 10)
 
 statement ok
 CALL ducklake_set_option('ducklake2', 'sort_on_insert', 'false')
