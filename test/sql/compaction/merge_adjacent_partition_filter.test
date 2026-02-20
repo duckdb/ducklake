@@ -122,6 +122,8 @@ statement ok
 INSERT INTO ducklake.multi_partition VALUES ('2025-01-02'::DATE, 100, 'e');
 
 # Merge files with date_col = '2025-01-01' AND amount > 100
+# Note: This merges 2 files (one with value 'c', one with 'd') in partition (2025-01-01, 200)
+# into 1 file, so 2 rows are returned
 query III
 SELECT table_name, files_processed, files_created FROM ducklake_merge_adjacent_files('ducklake', 'multi_partition', partition_filter=>"date_col = '2025-01-01' AND amount > 100")
 ----
