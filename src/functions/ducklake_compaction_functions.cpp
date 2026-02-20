@@ -60,10 +60,11 @@ DuckLakeCompaction::DuckLakeCompaction(PhysicalPlan &physical_plan, const vector
                                        DuckLakeTableEntry &table, vector<DuckLakeCompactionFileEntry> source_files_p,
                                        string encryption_key_p, optional_idx partition_id,
                                        vector<string> partition_values_p, optional_idx row_id_start,
-                                       PhysicalOperator &child, CompactionType type)
+                                       PhysicalOperator &child, CompactionType type, bool is_repartitioning)
     : PhysicalOperator(physical_plan, PhysicalOperatorType::EXTENSION, types, 0), table(table),
       source_files(std::move(source_files_p)), encryption_key(std::move(encryption_key_p)), partition_id(partition_id),
-      partition_values(std::move(partition_values_p)), row_id_start(row_id_start), type(type) {
+      partition_values(std::move(partition_values_p)), row_id_start(row_id_start), type(type),
+      is_repartitioning(is_repartitioning) {
 	children.push_back(child);
 }
 
@@ -97,7 +98,13 @@ SourceResultType DuckLakeCompaction::GetDataInternal(ExecutionContext &context, 
 	chunk.SetValue(0, 0, Value(table.schema.name));
 	chunk.SetValue(1, 0, Value(table.name));
 	chunk.SetValue(2, 0, Value::BIGINT(static_cast<int64_t>(source_files.size())));
-	chunk.SetValue(3, 0, Value::BIGINT(1)); // Each compaction creates 1 output file
+
+	idx_t files_created = 1;
+	if (is_repartitioning) {
+		auto &sink_global_state = sink_state->Cast<DuckLakeInsertGlobalState>();
+		files_created = sink_global_state.written_files.size();
+	}
+	chunk.SetValue(3, 0, Value::BIGINT(static_cast<int64_t>(files_created)));
 	return SourceResultType::FINISHED;
 }
 
@@ -121,27 +128,43 @@ SinkFinalizeType DuckLakeCompaction::Finalize(Pipeline &pipeline, Event &event, 
                                               OperatorSinkFinalizeInput &input) const {
 	auto &global_state = input.global_state.Cast<DuckLakeInsertGlobalState>();
 
-	if (global_state.written_files.size() != 1) {
+	if (!is_repartitioning && global_state.written_files.size() != 1) {
 		throw InternalException("DuckLakeCompaction - expected a single output file");
 	}
-	// set the partition values correctly
+
+	// Handle partition values
 	for (auto &file : global_state.written_files) {
-		for (idx_t col_idx = 0; col_idx < partition_values.size(); col_idx++) {
-			DuckLakeFilePartition file_partition_info;
-			file_partition_info.partition_column_idx = col_idx;
-			file_partition_info.partition_value = partition_values[col_idx];
-			file.partition_values.push_back(std::move(file_partition_info));
+		if (!is_repartitioning) {
+			// Non-repartitioning: set partition values from source
+			for (idx_t col_idx = 0; col_idx < partition_values.size(); col_idx++) {
+				DuckLakeFilePartition file_partition_info;
+				file_partition_info.partition_column_idx = col_idx;
+				file_partition_info.partition_value = partition_values[col_idx];
+				file.partition_values.push_back(std::move(file_partition_info));
+			}
 		}
+		// For repartitioning, partition values are already set by the parquet writer
 	}
 
-	DuckLakeCompactionEntry compaction_entry;
-	compaction_entry.row_id_start = row_id_start;
-	compaction_entry.source_files = source_files;
-	compaction_entry.written_file = global_state.written_files[0];
-	compaction_entry.type = type;
+	// Create compaction entries for each written file
+	// When repartitioning, each file gets its own row_id_start based on the accumulated row count
+	// When not repartitioning, all files share the same row_id_start
+	idx_t current_row_id_start = row_id_start.IsValid() ? row_id_start.GetIndex() : 0;
+	for (auto &written_file : global_state.written_files) {
+		DuckLakeCompactionEntry compaction_entry;
+		compaction_entry.row_id_start = current_row_id_start;
+		compaction_entry.source_files = source_files;
+		compaction_entry.written_file = written_file;
+		compaction_entry.type = type;
+		compaction_entry.is_repartitioning = is_repartitioning;
 
-	auto &transaction = DuckLakeTransaction::Get(context, global_state.table.catalog);
-	transaction.AddCompaction(global_state.table.GetTableId(), std::move(compaction_entry));
+		auto &transaction = DuckLakeTransaction::Get(context, global_state.table.catalog);
+		transaction.AddCompaction(global_state.table.GetTableId(), std::move(compaction_entry));
+
+		// Increment row_id_start for the next file
+		current_row_id_start += written_file.row_count;
+	}
+
 	return SinkFinalizeType::READY;
 }
 
@@ -447,25 +470,23 @@ DuckLakeCompactor::GenerateCompactionCommand(vector<DuckLakeCompactionFileEntry>
 	// generate the LogicalGet
 	auto &columns = table.GetColumns();
 	auto table_path = table.DataPath();
-	string data_path;
-	if (partition_id.IsValid()) {
-		data_path = actionable_source_files[0].file.data.path;
-		data_path = StringUtil::Replace(data_path, table_path, "");
-		auto path_result = StringUtil::Split(data_path, catalog.Separator());
-		data_path = "";
-		if (path_result.size() > 1) {
-			// This means we have a hive partition.
-			for (idx_t i = 0; i < path_result.size() - 1; i++) {
-				data_path += path_result[i];
-				if (i != path_result.size() - 2) {
-					data_path += catalog.Separator();
-				}
-			}
-			// If we do have a hive partition, let's verify all files have the same one.
-			for (idx_t i = 1; i < actionable_source_files.size(); i++) {
-				if (!StringUtil::Contains(actionable_source_files[i].file.data.path, data_path)) {
-					throw InternalException("DuckLakeCompactor: Files have different hive partition path");
-				}
+
+	// Check if we should repartition based on match_current_partitioning flag
+	bool should_repartition = false;
+	optional_ptr<DuckLakeTableEntry> latest_table;
+	if (type == CompactionType::MERGE_ADJACENT_TABLES && options.match_current_partitioning) {
+		// Get the latest table entry to check if it has partitioning
+		auto latest_entry = transaction.GetTransactionLocalEntry(CatalogType::TABLE_ENTRY, table.schema.name, table.name);
+		if (!latest_entry) {
+			auto latest_snapshot = transaction.GetSnapshot();
+			latest_entry = catalog.GetEntryById(transaction, latest_snapshot, table_id);
+		}
+		if (latest_entry) {
+			latest_table = &latest_entry->Cast<DuckLakeTableEntry>();
+			auto latest_partition_data = latest_table->GetPartitionData();
+			// Repartition if latest table has partitioning
+			if (latest_partition_data) {
+				should_repartition = true;
 			}
 		}
 	}
@@ -488,9 +509,45 @@ DuckLakeCompactor::GenerateCompactionCommand(vector<DuckLakeCompactionFileEntry>
 		throw InternalException("Invalid Compaction Type");
 	}
 
-	DuckLakeCopyInput copy_input(context, table, data_path);
-	// merge_adjacent_files does not use partitioning information - instead we always merge within partitions
-	copy_input.partition_data = nullptr;
+	// For repartitioning, pass empty hive partition so constructor uses table.DataPath()
+	// For non-repartitioning, pass the hive partition path
+	string hive_partition_path = "";
+	if (should_repartition) {
+		// Empty path - constructor will use table.DataPath()
+	} else if (partition_id.IsValid()) {
+		// Extract hive partition path from source files
+		hive_partition_path = actionable_source_files[0].file.data.path;
+		hive_partition_path = StringUtil::Replace(hive_partition_path, table_path, "");
+		auto path_result = StringUtil::Split(hive_partition_path, catalog.Separator());
+		hive_partition_path = "";
+		if (path_result.size() > 1) {
+			// This means we have a hive partition.
+			for (idx_t i = 0; i < path_result.size() - 1; i++) {
+				hive_partition_path += path_result[i];
+				if (i != path_result.size() - 2) {
+					hive_partition_path += catalog.Separator();
+				}
+			}
+			// If we do have a hive partition, let's verify all files have the same one.
+			for (idx_t i = 1; i < actionable_source_files.size(); i++) {
+				if (!StringUtil::Contains(actionable_source_files[i].file.data.path, hive_partition_path)) {
+					throw InternalException("DuckLakeCompactor: Files have different hive partition path");
+				}
+			}
+		}
+	}
+
+	// When repartitioning, use the latest table entry (with current partitioning)
+	// Otherwise, use the table entry at the source files' snapshot
+	if (should_repartition && !latest_table) {
+		throw InternalException("DuckLakeCompactor: repartitioning requested but latest table entry not found");
+	}
+	DuckLakeCopyInput copy_input(context, should_repartition ? *latest_table : table, hive_partition_path);
+	// merge_adjacent_files does not use partitioning information by default - instead we always merge within partitions
+	// However, if match_current_partitioning is true and the table has partitioning, we enable repartitioning
+	if (!should_repartition) {
+		copy_input.partition_data = nullptr;
+	}
 	if (write_row_id) {
 		if (write_snapshot_id) {
 			copy_input.virtual_columns = InsertVirtualColumns::WRITE_ROW_ID_AND_SNAPSHOT_ID;
@@ -534,19 +591,22 @@ DuckLakeCompactor::GenerateCompactionCommand(vector<DuckLakeCompactionFileEntry>
 	// and instead pull the latest sort setting
 	// First, see if there are transaction local changes to the table
 	// Then fall back to latest snapshot if no local changes
-	auto latest_entry = transaction.GetTransactionLocalEntry(CatalogType::TABLE_ENTRY, table.schema.name, table.name);
-	if (!latest_entry) {
-		auto latest_snapshot = transaction.GetSnapshot();
-		latest_entry = catalog.GetEntryById(transaction, latest_snapshot, table_id);
+	// If we already have latest_table from repartitioning check, reuse it
+	if (!latest_table) {
+		auto latest_entry = transaction.GetTransactionLocalEntry(CatalogType::TABLE_ENTRY, table.schema.name, table.name);
 		if (!latest_entry) {
-			throw InternalException("DuckLakeCompactor: failed to find local table entry");
+			auto latest_snapshot = transaction.GetSnapshot();
+			latest_entry = catalog.GetEntryById(transaction, latest_snapshot, table_id);
+			if (!latest_entry) {
+				throw InternalException("DuckLakeCompactor: failed to find local table entry");
+			}
 		}
+		latest_table = &latest_entry->Cast<DuckLakeTableEntry>();
 	}
-	auto &latest_table = latest_entry->Cast<DuckLakeTableEntry>();
 
-	auto sort_data = latest_table.GetSortData();
+	auto sort_data = latest_table->GetSortData();
 	if (sort_data) {
-		root = DuckLakeCompactor::InsertSort(binder, root, latest_table, sort_data);
+		root = DuckLakeCompactor::InsertSort(binder, root, *latest_table, sort_data);
 	}
 
 	// generate the LogicalCopyToFile
@@ -554,7 +614,13 @@ DuckLakeCompactor::GenerateCompactionCommand(vector<DuckLakeCompactionFileEntry>
 	                                         std::move(copy_options.info));
 
 	auto &fs = FileSystem::GetFileSystem(context);
-	copy->file_path = copy_options.filename_pattern.CreateFilename(fs, copy_options.file_path, "parquet", 0);
+	// For partitioned output, file_path should be the base directory, not a full file path
+	// The partitioned parquet writer will create subdirectories and files under it
+	if (copy_options.partition_output) {
+		copy->file_path = copy_options.file_path;
+	} else {
+		copy->file_path = copy_options.filename_pattern.CreateFilename(fs, copy_options.file_path, "parquet", 0);
+	}
 	copy->use_tmp_file = copy_options.use_tmp_file;
 	copy->filename_pattern = std::move(copy_options.filename_pattern);
 	copy->file_extension = std::move(copy_options.file_extension);
@@ -566,11 +632,17 @@ DuckLakeCompactor::GenerateCompactionCommand(vector<DuckLakeCompactionFileEntry>
 
 	copy->partition_output = copy_options.partition_output;
 	copy->write_partition_columns = copy_options.write_partition_columns;
-	copy->write_empty_file = false;
+	// Use write_empty_file from options for partitioned output, otherwise false
+	copy->write_empty_file = copy_options.write_empty_file;
 	copy->partition_columns = std::move(copy_options.partition_columns);
 	copy->names = std::move(copy_options.names);
 	copy->expected_types = std::move(copy_options.expected_types);
-	copy->preserve_order = PreserveOrderType::PRESERVE_ORDER;
+	// Preserve order is not supported with partition output
+	if (copy->partition_output) {
+		copy->preserve_order = PreserveOrderType::DONT_PRESERVE_ORDER;
+	} else {
+		copy->preserve_order = PreserveOrderType::PRESERVE_ORDER;
+	}
 	copy->file_size_bytes = optional_idx();
 	copy->rotate = false;
 	copy->children.push_back(std::move(root));
@@ -580,10 +652,27 @@ DuckLakeCompactor::GenerateCompactionCommand(vector<DuckLakeCompactionFileEntry>
 		target_row_id_start = source_files[0].file.row_id_start;
 	}
 
+	// If repartitioning, use the partition_id from the latest table's partition scheme
+	// but leave partition_values empty so output files are partitioned by the parquet writer.
+	// If not repartitioning, use the source file's partition_id and partition_values.
+	optional_idx effective_partition_id;
+	vector<string> effective_partition_values;
+	if (should_repartition) {
+		if (latest_table) {
+			auto latest_partition_data = latest_table->GetPartitionData();
+			if (latest_partition_data) {
+				effective_partition_id = latest_partition_data->partition_id;
+			}
+		}
+	} else {
+		effective_partition_id = partition_id;
+		effective_partition_values = std::move(partition_values);
+	}
+
 	// followed by the compaction operator (that writes the results back to the
 	auto compaction = make_uniq<DuckLakeLogicalCompaction>(
 	    binder.GenerateTableIndex(), table, std::move(actionable_source_files), std::move(copy_input.encryption_key),
-	    partition_id, std::move(partition_values), target_row_id_start, type);
+	    effective_partition_id, std::move(effective_partition_values), target_row_id_start, type, should_repartition);
 	compaction->children.push_back(std::move(copy));
 	return std::move(compaction);
 }
@@ -624,6 +713,7 @@ static void GenerateCompaction(ClientContext &context, DuckLakeTransaction &tran
                                DuckLakeCatalog &ducklake_catalog, TableFunctionBindInput &input,
                                DuckLakeTableEntry &cur_table, CompactionType type, double delete_threshold,
                                uint64_t max_files, optional_idx min_file_size, optional_idx max_file_size,
+                               bool match_current_partitioning,
                                vector<unique_ptr<LogicalOperator>> &compactions) {
 	switch (type) {
 	case CompactionType::MERGE_ADJACENT_TABLES: {
@@ -631,6 +721,7 @@ static void GenerateCompaction(ClientContext &context, DuckLakeTransaction &tran
 		options.max_files = max_files;
 		options.min_file_size = min_file_size;
 		options.max_file_size = max_file_size;
+		options.match_current_partitioning = match_current_partitioning;
 		DuckLakeCompactor compactor(context, ducklake_catalog, transaction, *input.binder, cur_table.GetTableId(),
 		                            options);
 		compactor.GenerateCompactions(cur_table, compactions);
@@ -712,6 +803,12 @@ unique_ptr<LogicalOperator> BindCompaction(ClientContext &context, TableFunction
 		throw BinderException("The min_file_size must be less than max_file_size.");
 	}
 
+	bool match_current_partitioning = false;
+	auto match_current_partitioning_entry = input.named_parameters.find("match_current_partitioning");
+	if (match_current_partitioning_entry != input.named_parameters.end()) {
+		match_current_partitioning = BooleanValue::Get(match_current_partitioning_entry->second);
+	}
+
 	if (input.inputs.size() == 1) {
 		// No default schema/table, we will perform rewrites on deletes in the whole database
 		auto schemas = ducklake_catalog.GetSchemas(context);
@@ -724,7 +821,8 @@ unique_ptr<LogicalOperator> BindCompaction(ClientContext &context, TableFunction
 					                                             cur_table.GetTableId(), "true") == "true") {
 						auto delete_threshold = GetDeleteThreshold(&dl_cur_schema, cur_table, ducklake_catalog, input);
 						GenerateCompaction(context, transaction, ducklake_catalog, input, cur_table, type,
-						                   delete_threshold, max_files, min_file_size, max_file_size, compactions);
+						                   delete_threshold, max_files, min_file_size, max_file_size,
+						                   match_current_partitioning, compactions);
 					}
 				}
 			});
@@ -758,7 +856,7 @@ unique_ptr<LogicalOperator> BindCompaction(ClientContext &context, TableFunction
 	if (auto_compact) {
 		auto delete_threshold = GetDeleteThreshold(dl_schema, ducklake_table, ducklake_catalog, input);
 		GenerateCompaction(context, transaction, ducklake_catalog, input, ducklake_table, type, delete_threshold,
-		                   max_files, min_file_size, max_file_size, compactions);
+		                   max_files, min_file_size, max_file_size, match_current_partitioning, compactions);
 	}
 
 	return GenerateCompactionOperator(input, bind_index, compactions);
@@ -782,6 +880,7 @@ TableFunctionSet DuckLakeMergeAdjacentFilesFunction::GetFunctions() {
 		function.named_parameters["min_file_size"] = LogicalType::UBIGINT;
 		function.named_parameters["max_file_size"] = LogicalType::UBIGINT;
 		function.named_parameters["max_compacted_files"] = LogicalType::UBIGINT;
+		function.named_parameters["match_current_partitioning"] = LogicalType::BOOLEAN;
 		if (type.size() == 2) {
 			function.named_parameters["schema"] = LogicalType::VARCHAR;
 		}

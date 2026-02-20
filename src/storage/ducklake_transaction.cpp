@@ -1767,7 +1767,7 @@ CompactionInformation DuckLakeTransaction::GetCompactionChanges(DuckLakeSnapshot
 					file_info.delete_file_start_snapshot = commit_snapshot.snapshot_id;
 					file_info.delete_file_end_snapshot = compacted_file.delete_files.back().end_snapshot;
 				}
-				if (row_id_limit > new_file.row_count) {
+				if (!compaction.is_repartitioning && row_id_limit > new_file.row_count) {
 					throw InternalException("Compaction error - row id limit is larger than the row count of the file");
 				}
 				result.compacted_files.push_back(std::move(file_info));

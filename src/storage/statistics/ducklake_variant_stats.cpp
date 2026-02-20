@@ -248,9 +248,9 @@ struct NestedVariantStats {
 	}
 
 	void ConvertStats(const unordered_map<string, DuckLakeVariantStats> &field_stats, BaseStatistics &main_stats) {
-		auto &stats = StructStats::GetChildStats(main_stats, VariantStats::TYPED_VALUE_INDEX);
+		auto &stats = VariantStats::GetShreddedStats(main_stats);
 
-		auto &untyped_value_index_stats = StructStats::GetChildStats(main_stats, VariantStats::UNTYPED_VALUE_INDEX);
+		auto &untyped_value_index_stats = VariantStats::GetUnshreddedStats(main_stats);
 		untyped_value_index_stats.SetHasNull();
 		if (!full_field_name.empty()) {
 			// field, find it in the stats

@@ -460,6 +460,7 @@ struct DuckLakeCompactionEntry {
 	DuckLakeDataFile written_file;
 	optional_idx row_id_start;
 	CompactionType type;
+	bool is_repartitioning = false;
 };
 
 struct DuckLakeCompactedFileInfo {
@@ -479,6 +480,7 @@ struct DuckLakeMergeAdjacentOptions {
 	uint64_t max_files;
 	optional_idx min_file_size;
 	optional_idx max_file_size;
+	bool match_current_partitioning = false;
 };
 
 struct DuckLakeFileSizeOptions {

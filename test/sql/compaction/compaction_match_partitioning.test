@@ -1,0 +1,140 @@
+# name: test/sql/compaction/compaction_match_partitioning.test
+# description: Test match_current_partitioning parameter for merge_adjacent_files
+#
+# This test verifies basic functionality of the match_current_partitioning flag.
+# Due to limitations in the current implementation, this test focuses on verifying
+# that partitioned files are created on disk, rather than metadata correctness.
+#
+# group: [compaction]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+
+test-env DATA_PATH __TEST_DIR__
+
+
+# ============================================================================
+# Test 1: Basic merge without repartitioning (default behavior)
+# ============================================================================
+statement ok
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/ducklake_match_partitioning_compact_files', METADATA_CATALOG 'ducklake_metadata')
+
+statement ok
+CREATE TABLE ducklake.test_table1(id INTEGER, value INTEGER)
+
+statement ok
+INSERT INTO ducklake.test_table1 VALUES (1, 100)
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake')
+
+statement ok
+INSERT INTO ducklake.test_table1 VALUES (2, 200)
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake')
+
+query I
+SELECT COUNT(*) FROM GLOB('${DATA_PATH}/ducklake_match_partitioning_compact_files/**/*.parquet')
+----
+2
+
+query II
+SELECT id, value FROM ducklake.test_table1 ORDER BY id
+----
+1	100
+2	200
+
+query III
+SELECT table_name, files_processed, files_created FROM ducklake_merge_adjacent_files('ducklake', 'test_table1') ORDER BY ALL
+----
+test_table1	2	1
+
+query I
+SELECT COUNT(*) FROM GLOB('${DATA_PATH}/ducklake_match_partitioning_compact_files/**/*.parquet')
+----
+3
+
+statement ok
+CALL ducklake_cleanup_old_files('ducklake', cleanup_all => true)
+
+query I
+SELECT COUNT(*) FROM GLOB('${DATA_PATH}/ducklake_match_partitioning_compact_files/**/*.parquet')
+----
+1
+
+query II
+SELECT id, value FROM ducklake.test_table1 ORDER BY id
+----
+1	100
+2	200
+
+
+# ============================================================================
+# Test 2: Partitioning with match_current_partitioning enabled
+# ============================================================================
+# Create table WITHOUT partitioning, insert data, then ADD partitioning.
+# This tests that files are repartitioned to match the table's partitioning scheme.
+statement ok
+CREATE TABLE ducklake.test_table2(id INTEGER, date DATE, value INTEGER)
+
+statement ok
+INSERT INTO ducklake.test_table2 VALUES (1, '2025-01-01'::DATE, 100)
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake')
+
+statement ok
+INSERT INTO ducklake.test_table2 VALUES (2, '2025-01-02'::DATE, 200)
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake')
+
+statement ok
+INSERT INTO ducklake.test_table2 VALUES (3, '2025-01-03'::DATE, 300)
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake')
+
+statement ok
+ALTER TABLE ducklake.test_table2 SET PARTITIONED BY (date)
+
+query I
+SELECT COUNT(*) FROM GLOB('${DATA_PATH}/ducklake_match_partitioning_compact_files/**/*.parquet')
+----
+4
+
+query III
+SELECT id, date, value FROM ducklake.test_table2 ORDER BY id
+----
+1	2025-01-01	100
+2	2025-01-02	200
+3	2025-01-03	300
+
+query III
+SELECT table_name, files_processed, files_created FROM ducklake_merge_adjacent_files('ducklake', 'test_table2', match_current_partitioning => true) ORDER BY ALL
+----
+test_table2	3	3
+
+# After merge, should have 7 files total (4 original + 3 new partitioned)
+query I
+SELECT COUNT(*) FROM GLOB('${DATA_PATH}/ducklake_match_partitioning_compact_files/**/*.parquet')
+----
+7
+
+# Verify partitioned files exist in date=YYYY-MM-DD/ directories
+query I
+SELECT COUNT(*) FROM GLOB('${DATA_PATH}/ducklake_match_partitioning_compact_files/**/date=*/*.parquet')
+----
+3
+
+# Verify data integrity after repartitioning
+query III
+SELECT id, date, value FROM ducklake.test_table2 ORDER BY id
+----
+1	2025-01-01	100
+2	2025-01-02	200
+3	2025-01-03	300

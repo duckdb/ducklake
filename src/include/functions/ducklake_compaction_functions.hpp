@@ -34,10 +34,11 @@ public:
 	DuckLakeLogicalCompaction(idx_t table_index, DuckLakeTableEntry &table,
 	                          vector<DuckLakeCompactionFileEntry> source_files_p, string encryption_key_p,
 	                          optional_idx partition_id, vector<string> partition_values_p, optional_idx row_id_start,
-	                          CompactionType type)
+	                          CompactionType type, bool is_repartitioning = false)
 	    : table_index(table_index), table(table), source_files(std::move(source_files_p)),
 	      encryption_key(std::move(encryption_key_p)), partition_id(partition_id),
-	      partition_values(std::move(partition_values_p)), row_id_start(row_id_start), type(type) {
+	      partition_values(std::move(partition_values_p)), row_id_start(row_id_start), type(type),
+	      is_repartitioning(is_repartitioning) {
 	}
 
 	idx_t table_index;
@@ -48,12 +49,14 @@ public:
 	vector<string> partition_values;
 	optional_idx row_id_start;
 	CompactionType type;
+	bool is_repartitioning;
 
 public:
 	PhysicalOperator &CreatePlan(ClientContext &context, PhysicalPlanGenerator &planner) override {
 		auto &child = planner.CreatePlan(*children[0]);
 		return planner.Make<DuckLakeCompaction>(types, table, std::move(source_files), std::move(encryption_key),
-		                                        partition_id, std::move(partition_values), row_id_start, child, type);
+		                                        partition_id, std::move(partition_values), row_id_start, child, type,
+		                                        is_repartitioning);
 	}
 
 	string GetName() const override {
