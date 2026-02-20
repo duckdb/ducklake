@@ -13,7 +13,7 @@ ATTACH 'ducklake:__TEST_DIR__/per_table_schema.db' AS ducklake (DATA_PATH '__TES
 
 # Turning the global to local is basically an explosion within the table snapshot range.
 query III
-FROM __ducklake_metadata_ducklake.ducklake_schema_versions;
+FROM __ducklake_metadata_ducklake.ducklake_schema_versions ORDER BY ALL;
 ----
 1	1	1
 1	2	1

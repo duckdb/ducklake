@@ -13,13 +13,6 @@ DuckLakeInlineData::DuckLakeInlineData(PhysicalPlan &physical_plan, PhysicalOper
     : PhysicalOperator(physical_plan, PhysicalOperatorType::EXTENSION, child.types, child.estimated_cardinality),
       inline_row_limit(inline_row_limit) {
 	children.push_back(child);
-
-	for (const auto &type : types) {
-		if (DuckLakeTypes::RequiresCast(type)) {
-			throw NotImplementedException("DuckLake does not yet support data-inlining of '%s' columns",
-			                              type.ToString());
-		}
-	}
 }
 
 enum class InlinePhase { INLINING_ROWS, EMITTING_PREVIOUSLY_INLINED_ROWS, PASS_THROUGH_ROWS };

@@ -142,11 +142,11 @@ void DuckLakeInitializer::LoadExistingDuckLake(DuckLakeTransaction &transaction)
 	for (auto &tag : metadata.tags) {
 		if (tag.key == "version") {
 			string version = tag.value;
-			if (version != "0.4-dev1" && !options.automatic_migration) {
+			if (version != "0.4" && !options.automatic_migration) {
 				// Throw when Loading the DuckLake if a Migration is required and automatic_migration option is false
 				throw InvalidInputException(
 				    "DuckLake catalog version mismatch: catalog version is %s, but the extension requires version "
-				    "0.4-dev1. To automatically migrate, set AUTOMATIC_MIGRATION to TRUE when attaching.",
+				    "0.4. To automatically migrate, set AUTOMATIC_MIGRATION to TRUE when attaching.",
 				    version);
 			}
 			if (version == "0.1") {
@@ -163,10 +163,15 @@ void DuckLakeInitializer::LoadExistingDuckLake(DuckLakeTransaction &transaction)
 			}
 			if (version == "0.3") {
 				metadata_manager.MigrateV03();
-				version = "0.4-dev1";
+				version = "0.4";
 			}
-			if (version != "0.4-dev1") {
-				throw NotImplementedException("Only DuckLake versions 0.1, 0.2, 0.3-dev1, 0.3, 0.4-dev1 are supported");
+			if (version == "0.4-dev1") {
+				metadata_manager.MigrateV03(true);
+				version = "0.4";
+			}
+			if (version != "0.4") {
+				throw NotImplementedException(
+				    "Only DuckLake versions 0.1, 0.2, 0.3-dev1, 0.3, 0.4-dev1, 0.4 are supported");
 			}
 		}
 		if (tag.key == "data_path") {

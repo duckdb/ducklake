@@ -9,14 +9,13 @@
     "icu",
     "httpfs"
   ],"skip_error_messages": [
-    "database is locked",
-    "Variant types cannot be inlined in this catalog type yet"
+    "database is locked"
   ],
   "test_env": [{
       "env_name":  "DUCKLAKE_CONNECTION",
       "env_value": "sqlite:__TEST_DIR__/{BASE_TEST_NAME}.db"
    }],
-  "skip_error_messages": ["database is locked", "Variant types cannot be inlined in this catalog type yet"],
+  "skip_error_messages": ["database is locked"],
   "skip_tests": [
     {
       "reason": "Test is slow",

@@ -1,0 +1,123 @@
+# name: test/sql/data_inlining/data_inlining_alter_geometry.test
+# description: test data inlining behavior when adding/removing geometry columns via ALTER TABLE
+# group: [data_inlining]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+
+test-env DATA_PATH __TEST_DIR__
+
+statement ok
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/ducklake_inlining_alter_geo_files', METADATA_CATALOG 'ducklake_meta', DATA_INLINING_ROW_LIMIT 10)
+
+statement ok
+USE ducklake;
+
+statement ok
+CREATE TABLE t1(i INTEGER, v VARCHAR);
+
+statement ok
+INSERT INTO t1 VALUES (1, 'hello'), (2, 'world');
+
+query II
+SELECT * FROM t1
+----
+1	hello
+2	world
+
+query I
+SELECT COUNT(*) FROM ducklake_meta.ducklake_inlined_data_1_1
+----
+2
+
+statement ok
+ALTER TABLE t1 ADD COLUMN g GEOMETRY;
+
+statement ok
+INSERT INTO t1 VALUES (3, 'geo', NULL);
+
+query III
+SELECT i, v, g FROM t1 ORDER BY i
+----
+1	hello	NULL
+2	world	NULL
+3	geo	NULL
+
+query I
+SELECT COUNT(*) FROM ducklake_meta.ducklake_inlined_data_1_1
+----
+2
+
+statement ok
+INSERT INTO t1 VALUES (4, 'more_geo', NULL);
+
+query III
+SELECT i, v, g FROM t1 ORDER BY i
+----
+1	hello	NULL
+2	world	NULL
+3	geo	NULL
+4	more_geo	NULL
+
+query I
+SELECT COUNT(*) FROM ducklake_meta.ducklake_inlined_data_1_1
+----
+2
+
+statement ok
+ALTER TABLE t1 DROP COLUMN g;
+
+statement ok
+INSERT INTO t1 VALUES (5, 'after_drop');
+
+query II
+SELECT * FROM t1 ORDER BY i
+----
+1	hello
+2	world
+3	geo
+4	more_geo
+5	after_drop
+
+query I
+SELECT COUNT(*) FROM ducklake_meta.ducklake_inlined_data_1_3
+----
+1
+
+statement ok
+ALTER TABLE t1 ADD COLUMN g GEOMETRY;
+
+statement ok
+INSERT INTO t1 VALUES (6, 'geo_again', NULL);
+
+query III
+SELECT i, v, g FROM t1 ORDER BY i
+----
+1	hello	NULL
+2	world	NULL
+3	geo	NULL
+4	more_geo	NULL
+5	after_drop	NULL
+6	geo_again	NULL
+
+query I
+SELECT COUNT(*) FROM ducklake_meta.ducklake_inlined_data_1_3
+----
+1
+
+statement ok
+CREATE TABLE t2 AS SELECT * FROM t1 WHERE i > 4;
+
+query III
+SELECT * FROM t2 ORDER BY i
+----
+5	after_drop	NULL
+6	geo_again	NULL
+
+query I
+SELECT COUNT(*) FROM ducklake_meta.ducklake_inlined_data_1_3
+----
+1

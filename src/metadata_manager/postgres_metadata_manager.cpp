@@ -37,6 +37,13 @@ bool PostgresMetadataManager::TypeIsNativelySupported(const LogicalType &type) {
 	}
 }
 
+bool PostgresMetadataManager::SupportsInlining(const LogicalType &type) {
+	if (type.id() == LogicalTypeId::VARIANT) {
+		return false;
+	}
+	return DuckLakeMetadataManager::SupportsInlining(type);
+}
+
 string PostgresMetadataManager::GetColumnTypeInternal(const LogicalType &column_type) {
 	switch (column_type.id()) {
 	case LogicalTypeId::DOUBLE:

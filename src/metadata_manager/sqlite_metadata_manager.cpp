@@ -28,6 +28,13 @@ bool SQLiteMetadataManager::TypeIsNativelySupported(const LogicalType &type) {
 	}
 }
 
+bool SQLiteMetadataManager::SupportsInlining(const LogicalType &type) {
+	if (type.id() == LogicalTypeId::VARIANT) {
+		return false;
+	}
+	return DuckLakeMetadataManager::SupportsInlining(type);
+}
+
 string SQLiteMetadataManager::GetColumnTypeInternal(const LogicalType &column_type) {
 	switch (column_type.id()) {
 	case LogicalTypeId::FLOAT:

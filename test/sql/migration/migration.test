@@ -12,8 +12,12 @@ unzip data/old_ducklake/v02.db.gz __TEST_DIR__/v02.db
 
 unzip data/old_ducklake/v03-dev1.db.gz __TEST_DIR__/v03-dev1.db
 
+unzip data/old_ducklake/v03.db.gz __TEST_DIR__/v03.db
+
+unzip data/old_ducklake/v04-dev1.db.gz __TEST_DIR__/v04-dev1.db
+
 # test that automatic_migration defaults to false and throws an error
-foreach version v01 v02 v03-dev1
+foreach version v01 v02 v03-dev1 v03 v04-dev1
 
 statement error
 ATTACH 'ducklake:__TEST_DIR__/${version}.db' AS ducklake (DATA_PATH '__TEST_DIR__/ducklake_migrate_${version}_err', OVERRIDE_DATA_PATH TRUE)
@@ -22,7 +26,7 @@ DuckLake catalog version mismatch
 
 endloop
 
-foreach version v01 v02 v03-dev1
+foreach version v01 v02 v03-dev1 v03 v04-dev1
 
 statement ok
 ATTACH 'ducklake:__TEST_DIR__/${version}.db' AS ducklake (DATA_PATH '__TEST_DIR__/ducklake_migrate_${version}', OVERRIDE_DATA_PATH TRUE, AUTOMATIC_MIGRATION TRUE)

@@ -644,17 +644,6 @@
           "test/parquet/variant/variant_comparison.test",
         "test/sql/storage/types/variant/variant_shredding_omit_untyped.test"
       ]
-    },
-    {
-      "reason": "FIXME: inline of GEOMETRY not yet supported",
-      "paths": [
-        "test/geoparquet/no_spatial.test",
-        "test/geoparquet/mixed.test",
-        "test/sql/types/geo/geometry_shred_empty.test",
-        "test/sql/types/geo/geometry.test",
-        "test/sql/types/geo/geometry_wkb.test",
-        "test/sql/types/geo/geometry_shred_fetch.test"
-      ]
     }
   ]
 }

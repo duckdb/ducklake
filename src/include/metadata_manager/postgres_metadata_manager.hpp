@@ -21,6 +21,7 @@ public:
 	}
 
 	bool TypeIsNativelySupported(const LogicalType &type) override;
+	bool SupportsInlining(const LogicalType &type) override;
 
 	string GetColumnTypeInternal(const LogicalType &type) override;
 
