@@ -482,3 +482,99 @@ SELECT table_name, files_processed, files_created FROM ducklake_merge_adjacent_f
 # Test 15b: Attempt to use multiple statements with OR (should still fail because of semicolon)
 statement error Binder Error: Invalid partition filter: only one statement is allowed
 SELECT table_name, files_processed, files_created FROM ducklake_merge_adjacent_files('ducklake', 'valid_table', partition_filter=>"part_col = 1; SELECT * FROM")
+
+# ============================================================================
+# Test 16: Partition transformations (DAY, MONTH, YEAR)
+# ============================================================================
+
+statement ok
+CREATE TABLE date_transform_table (date_col DATE, value VARCHAR);
+
+statement ok
+ALTER TABLE ducklake.date_transform_table SET PARTITIONED BY (DAY(date_col));
+
+statement ok
+INSERT INTO ducklake.date_transform_table VALUES ('2025-01-01'::DATE, 'a');
+
+statement ok
+INSERT INTO ducklake.date_transform_table VALUES ('2025-01-01'::DATE, 'b');
+
+statement ok
+INSERT INTO ducklake.date_transform_table VALUES ('2025-01-02'::DATE, 'c');
+
+# Count files before merge
+query I
+SELECT COUNT(*) FROM ducklake_list_files('ducklake', 'date_transform_table')
+----
+3
+
+# Merge files with DAY(date_col) = 1 (should merge the two files with 2025-01-01)
+query III
+SELECT table_name, files_processed, files_created FROM ducklake_merge_adjacent_files('ducklake', 'date_transform_table', partition_filter=>"DAY(date_col) = 1")
+----
+date_transform_table	2	1
+
+# Count files after merge (should be 2 files: 1 merged + 1 unchanged)
+query I
+SELECT COUNT(*) FROM ducklake_list_files('ducklake', 'date_transform_table')
+----
+2
+
+# ============================================================================
+# Test 17: Multiple partition columns with transformations
+# ============================================================================
+
+statement ok
+CREATE TABLE year_month_table (date_col DATE, value VARCHAR);
+
+statement ok
+ALTER TABLE ducklake.year_month_table SET PARTITIONED BY (YEAR(date_col), MONTH(date_col));
+
+statement ok
+INSERT INTO ducklake.year_month_table VALUES ('2025-01-01'::DATE, 'a');
+
+statement ok
+INSERT INTO ducklake.year_month_table VALUES ('2025-01-01'::DATE, 'b');
+
+statement ok
+INSERT INTO ducklake.year_month_table VALUES ('2025-02-01'::DATE, 'c');
+
+statement ok
+INSERT INTO ducklake.year_month_table VALUES ('2025-03-01'::DATE, 'd');
+
+# Count files before merge
+query I
+SELECT COUNT(*) FROM ducklake_list_files('ducklake', 'year_month_table')
+----
+4
+
+# Merge files with YEAR(date_col) = 2025 AND MONTH(date_col) = 1 (should merge two files)
+query III
+SELECT table_name, files_processed, files_created FROM ducklake_merge_adjacent_files('ducklake', 'year_month_table', partition_filter=>"YEAR(date_col) = 2025 AND MONTH(date_col) = 1")
+----
+year_month_table	2	1
+
+# Count files after merge (should be 3 files: 1 merged + 2 unchanged)
+query I
+SELECT COUNT(*) FROM ducklake_list_files('ducklake', 'year_month_table')
+----
+3
+
+# ============================================================================
+# Test 18: Data integrity after transformations
+# ============================================================================
+
+query II
+SELECT * FROM date_transform_table ORDER BY date_col, value
+----
+2025-01-01	a
+2025-01-01	b
+2025-01-02	c
+
+query III
+SELECT * FROM year_month_table ORDER BY date_col, value
+----
+2025-01-01	a
+2025-01-01	b
+2025-02-01	c
+2025-03-01	d
