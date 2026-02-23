@@ -446,7 +446,7 @@ unique_ptr<DuckLakeCatalogSet> DuckLakeCatalog::LoadSchemaForSnapshot(DuckLakeTr
 				partition_field.transform.type = DuckLakeTransformType::IDENTITY;
 			} else if (StringUtil::StartsWith(field.transform, "bucket(")) {
 				partition_field.transform.type = DuckLakeTransformType::BUCKET;
-				// "bucket(X)" → remove prefix and suffix
+				// "bucket(X)" -> remove prefix and suffix
 				auto inner = field.transform.substr(7);
 				inner = inner.substr(0, inner.size() - 1);
 				partition_field.transform.bucket_count = std::stoull(inner);
