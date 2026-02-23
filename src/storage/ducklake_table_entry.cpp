@@ -413,18 +413,18 @@ DuckLakePartitionField GetPartitionField(DuckLakeTableEntry &table, ParsedExpres
 		if (name == "bucket") {
 			field.transform.type = DuckLakeTransformType::BUCKET;
 			if (function.children.size() != 2) {
-				throw NotImplementedException("Expected bucket(bucket_count, column), but got %s", expr.ToString());
+				throw InvalidInputException("Expected bucket(bucket_count, column), but got %s", expr.ToString());
 			}
 			if (function.children[0]->type != ExpressionType::VALUE_CONSTANT) {
-				throw NotImplementedException("Bucket count must be a constant integer, got %s", expr.ToString());
+				throw InvalidInputException("Bucket count must be a constant integer, got %s", expr.ToString());
 			}
 			if (function.children[1]->type != ExpressionType::COLUMN_REF) {
-				throw NotImplementedException("Expected bucket(bucket_count, column), but got %s", expr.ToString());
+				throw InvalidInputException("Expected bucket(bucket_count, column), but got %s", expr.ToString());
 			}
 
 			auto &bucket_expr = function.children[0]->Cast<ConstantExpression>();
 			if (!bucket_expr.value.DefaultTryCastAs(LogicalType::BIGINT)) {
-				throw NotImplementedException("Bucket count must be an integer");
+				throw InvalidInputException("Bucket count must be an integer");
 			}
 			auto bucket_count = bucket_expr.value.GetValue<int64_t>();
 			if (bucket_count <= 0) {
@@ -434,7 +434,7 @@ DuckLakePartitionField GetPartitionField(DuckLakeTableEntry &table, ParsedExpres
 			field.transform.bucket_count = bucket_count;
 			column_name = GetPartitionColumnName(function.children[1]->Cast<ColumnRefExpression>());
 			break;
-		} 
+		}
 
 		// Other transforms have one argument.
 		if (name == "year") {
@@ -447,7 +447,7 @@ DuckLakePartitionField GetPartitionField(DuckLakeTableEntry &table, ParsedExpres
 			field.transform.type = DuckLakeTransformType::HOUR;
 		} else {
 			throw NotImplementedException(
-				"Unsupported partition function %s - only year, month, day, hour, and bucket are supported", name);
+			    "Unsupported partition function %s - only year, month, day, hour, and bucket are supported", name);
 		}
 
 		if (function.children.size() != 1 || function.children[0]->type != ExpressionType::COLUMN_REF) {
