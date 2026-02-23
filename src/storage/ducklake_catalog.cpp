@@ -447,6 +447,12 @@ unique_ptr<DuckLakeCatalogSet> DuckLakeCatalog::LoadSchemaForSnapshot(DuckLakeTr
 				partition_field.transform.type = DuckLakeTransformType::IDENTITY;
 			} else if (StringUtil::StartsWith(field.transform, "bucket(")) {
 				partition_field.transform.type = DuckLakeTransformType::BUCKET;
+
+				StringUtil::Trim(field.transform);
+				if (!StringUtil::EndsWith(field.transform, ")")) {
+					throw InvalidInputException("Invalid bucket partition transform: %s", field.transform);
+				}
+
 				// "bucket(X)" -> remove prefix and suffix
 				auto inner = field.transform.substr(7, field.transform.size() - 8); // All but ')' (last character)
 				idx_t bucket_count;
