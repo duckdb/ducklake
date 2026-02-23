@@ -464,3 +464,219 @@ alice	5
 bob	7
 charlie	3
 dave	6
+
+# ----------------------------------------------------------------------------------------------------------------------
+# NULL handling test
+# ----------------------------------------------------------------------------------------------------------------------
+
+statement ok
+CREATE TABLE bucket_null_tbl(user_id VARCHAR, value INTEGER);
+
+statement ok
+ALTER TABLE bucket_null_tbl SET PARTITIONED BY (bucket(4, user_id));
+
+statement ok
+INSERT INTO bucket_null_tbl VALUES ('alice', 1), (NULL, 2), ('bob', 3), (NULL, 4);
+
+query II
+SELECT user_id, value FROM bucket_null_tbl ORDER BY value
+----
+alice	1
+NULL	2
+bob	3
+NULL	4
+
+query I
+SELECT COUNT(*) FROM bucket_null_tbl WHERE user_id IS NULL
+----
+2
+
+query I
+SELECT SUM(value) FROM bucket_null_tbl
+----
+10
+
+# ----------------------------------------------------------------------------------------------------------------------
+# DELETE test
+# ----------------------------------------------------------------------------------------------------------------------
+
+statement ok
+CREATE TABLE bucket_delete_tbl(user_id VARCHAR, value INTEGER);
+
+statement ok
+ALTER TABLE bucket_delete_tbl SET PARTITIONED BY (bucket(4, user_id));
+
+statement ok
+INSERT INTO bucket_delete_tbl VALUES ('alice', 1), ('bob', 2), ('charlie', 3), ('dave', 4);
+
+statement ok
+DELETE FROM bucket_delete_tbl WHERE user_id = 'bob'
+
+query I
+SELECT COUNT(*) FROM bucket_delete_tbl
+----
+3
+
+query II
+SELECT user_id, value FROM bucket_delete_tbl ORDER BY user_id
+----
+alice	1
+charlie	3
+dave	4
+
+# Delete all remaining rows
+statement ok
+DELETE FROM bucket_delete_tbl
+
+query I
+SELECT COUNT(*) FROM bucket_delete_tbl
+----
+0
+
+# Re-insert after full delete
+statement ok
+INSERT INTO bucket_delete_tbl VALUES ('eve', 5);
+
+query II
+SELECT user_id, value FROM bucket_delete_tbl
+----
+eve	5
+
+# ----------------------------------------------------------------------------------------------------------------------
+# RESET PARTITIONED BY test
+# ----------------------------------------------------------------------------------------------------------------------
+
+statement ok
+CREATE TABLE bucket_reset_tbl(user_id VARCHAR, value INTEGER);
+
+statement ok
+ALTER TABLE bucket_reset_tbl SET PARTITIONED BY (bucket(4, user_id));
+
+statement ok
+INSERT INTO bucket_reset_tbl VALUES ('alice', 1), ('bob', 2), ('charlie', 3);
+
+# Remove bucket partitioning
+statement ok
+ALTER TABLE bucket_reset_tbl RESET PARTITIONED BY
+
+# Verify data is still accessible
+query II
+SELECT user_id, value FROM bucket_reset_tbl ORDER BY user_id
+----
+alice	1
+bob	2
+charlie	3
+
+# Insert after reset should work (no longer partitioned)
+statement ok
+INSERT INTO bucket_reset_tbl VALUES ('dave', 4);
+
+query I
+SELECT COUNT(*) FROM bucket_reset_tbl
+----
+4
+
+# ----------------------------------------------------------------------------------------------------------------------
+# Change number of bucket partitions on live table
+# ----------------------------------------------------------------------------------------------------------------------
+
+statement ok
+CREATE TABLE bucket_repart_tbl(user_id VARCHAR, value INTEGER);
+
+statement ok
+ALTER TABLE bucket_repart_tbl SET PARTITIONED BY (bucket(4, user_id));
+
+statement ok
+INSERT INTO bucket_repart_tbl VALUES ('alice', 1), ('bob', 2), ('charlie', 3);
+
+# Verify data readable with 4-bucket partitioning
+query II
+SELECT user_id, value FROM bucket_repart_tbl ORDER BY user_id
+----
+alice	1
+bob	2
+charlie	3
+
+# Old data bucket values are in [0, 4)
+query I
+SELECT MAX(CAST(regexp_extract(path, '.*bucket=([0-9]+)[/\\].*', 1) AS INTEGER)) < 4
+FROM glob('${DATA_PATH}/ducklake_bucket_partition/**/*.parquet') t(path)
+WHERE path LIKE '%bucket_repart_tbl%' AND path LIKE '%bucket=%'
+----
+true
+
+# Change to 8 buckets
+statement ok
+ALTER TABLE bucket_repart_tbl SET PARTITIONED BY (bucket(8, user_id));
+
+# Old data should still be readable
+query II
+SELECT user_id, value FROM bucket_repart_tbl ORDER BY user_id
+----
+alice	1
+bob	2
+charlie	3
+
+# Insert new data under the 8-bucket scheme
+statement ok
+INSERT INTO bucket_repart_tbl VALUES ('dave', 4), ('eve', 5), ('frank', 6);
+
+# All data (old + new) must be readable
+query II
+SELECT user_id, value FROM bucket_repart_tbl ORDER BY user_id
+----
+alice	1
+bob	2
+charlie	3
+dave	4
+eve	5
+frank	6
+
+# Verify partition metadata now says bucket(8)
+query I
+SELECT transform FROM ducklake_metadata2.ducklake_partition_column
+WHERE table_id = (SELECT table_id FROM ducklake_metadata2.ducklake_table WHERE table_name = 'bucket_repart_tbl')
+----
+bucket(8)
+
+# ----------------------------------------------------------------------------------------------------------------------
+# ducklake_add_data_files
+# ----------------------------------------------------------------------------------------------------------------------
+statement ok
+CREATE TABLE bucket_add_source(user_id VARCHAR, value INTEGER);
+
+statement ok
+ALTER TABLE bucket_add_source SET PARTITIONED BY (bucket(4, user_id));
+
+statement ok
+INSERT INTO bucket_add_source VALUES ('alice', 1), ('bob', 2), ('charlie', 3);
+
+# Capture the glob pattern for the files that were written
+query I
+SELECT COUNT(*) > 0
+FROM glob('${DATA_PATH}/ducklake_bucket_partition/**/*.parquet') t(path)
+WHERE path LIKE '%bucket_add_source%' AND path LIKE '%bucket=%'
+----
+true
+
+# Create a second bucket-partitioned table with the same schema and partitioning
+statement ok
+CREATE TABLE bucket_add_target(user_id VARCHAR, value INTEGER);
+
+statement ok
+ALTER TABLE bucket_add_target SET PARTITIONED BY (bucket(4, user_id));
+
+# Add the files from the source table into the target table
+statement ok
+SELECT * FROM ducklake_add_data_files('ducklake', 'bucket_add_target',
+  (SELECT LIST(path) FROM glob('${DATA_PATH}/ducklake_bucket_partition/**/*.parquet') t(path) 
+  WHERE path LIKE '%bucket_add_source%'),
+  hive_partitioning => true);
+
+# Verify all data is accessible in the target table
+query II
+SELECT user_id, value FROM bucket_add_target ORDER BY user_id
+----
+alice	1
+bob	2
+charlie	3
