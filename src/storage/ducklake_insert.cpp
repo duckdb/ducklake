@@ -378,57 +378,10 @@ static unique_ptr<Expression> GetColumnReference(DuckLakeCopyInput &copy_input, 
 	return CreateColumnReference(copy_input, column_field_id.Type(), index.GetIndex());
 }
 
-static unique_ptr<Expression> GetFunction(ClientContext &context, DuckLakeCopyInput &copy_input,
-                                          const string &function_name, FieldIndex field_id) {
-	vector<unique_ptr<Expression>> children;
-	children.push_back(GetColumnReference(copy_input, field_id));
-
-	ErrorData error;
-	FunctionBinder binder(context);
-	auto function = binder.BindScalarFunction(DEFAULT_SCHEMA, function_name, std::move(children), error, false);
-	if (!function) {
-		error.Throw();
-	}
-	return function;
-}
-
-static unique_ptr<Expression> GetBucketExpression(ClientContext &context, DuckLakeCopyInput &copy_input,
-                                                  const DuckLakePartitionField &field) {
-	// hash(col) -> UBIGINT dtype
-	auto hash_expr = GetFunction(context, copy_input, "hash", field.field_id);
-
-	// hash_value % bucket_count
-	vector<unique_ptr<Expression>> children;
-	children.push_back(std::move(hash_expr));
-	children.push_back(make_uniq<BoundConstantExpression>(Value::UBIGINT(field.transform.bucket_count)));
-
-	ErrorData error;
-	FunctionBinder binder(context);
-	auto mod_expr = binder.BindScalarFunction(DEFAULT_SCHEMA, "%", std::move(children), error, false);
-	if (!mod_expr) {
-		error.Throw();
-	}
-	return mod_expr;
-}
-
 static unique_ptr<Expression> GetPartitionExpression(ClientContext &context, DuckLakeCopyInput &copy_input,
                                                      const DuckLakePartitionField &field) {
-	switch (field.transform.type) {
-	case DuckLakeTransformType::IDENTITY:
-		return GetColumnReference(copy_input, field.field_id);
-	case DuckLakeTransformType::YEAR:
-		return GetFunction(context, copy_input, "year", field.field_id);
-	case DuckLakeTransformType::MONTH:
-		return GetFunction(context, copy_input, "month", field.field_id);
-	case DuckLakeTransformType::DAY:
-		return GetFunction(context, copy_input, "day", field.field_id);
-	case DuckLakeTransformType::HOUR:
-		return GetFunction(context, copy_input, "hour", field.field_id);
-	case DuckLakeTransformType::BUCKET:
-		return GetBucketExpression(context, copy_input, field);
-	default:
-		throw NotImplementedException("Unsupported partition transform type in GetPartitionExpression");
-	}
+	auto column_expr = GetColumnReference(copy_input, field.field_id);
+	return DuckLakePartitionUtils::ApplyPartitionTransform(context, std::move(column_expr), field);
 }
 
 static string GetPartitionExpressionName(DuckLakeCopyInput &copy_input, const DuckLakePartitionField &field,
