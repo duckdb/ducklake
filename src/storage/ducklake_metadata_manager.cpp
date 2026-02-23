@@ -164,7 +164,7 @@ INSERT INTO {METADATA_CATALOG}.ducklake_schema VALUES (0, UUID(), 0, NULL, 'main
 	                                       DuckDB::SourceID(), SQLString(data_path), encryption_str);
 	auto result = transaction.Query(initialize_query);
 	if (result->HasError()) {
-		result->GetErrorObject().Throw("Failed to initialize DuckLake:");
+		result->GetErrorObject().Throw("Failed to initialize DuckLake: ");
 	}
 }
 
@@ -184,7 +184,7 @@ UPDATE {METADATA_CATALOG}.ducklake_metadata SET value = '0.2' WHERE key = 'versi
 	)";
 	auto result = transaction.Query(migrate_query);
 	if (result->HasError()) {
-		result->GetErrorObject().Throw("Failed to migrate DuckLake from v0.1 to v0.2:");
+		result->GetErrorObject().Throw("Failed to migrate DuckLake from v0.1 to v0.2: ");
 	}
 }
 
@@ -203,7 +203,7 @@ void DuckLakeMetadataManager::ExecuteMigration(string migrate_query, bool allow_
 	}
 	auto result = transaction.Query(migrate_query);
 	if (result->HasError()) {
-		result->GetErrorObject().Throw("Failed to migrate DuckLake from v0.2 to v0.3:");
+		result->GetErrorObject().Throw("Failed to migrate DuckLake from v0.2 to v0.3: ");
 	}
 }
 
