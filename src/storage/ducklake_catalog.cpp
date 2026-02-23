@@ -26,6 +26,7 @@
 #include "duckdb/function/scalar_macro_function.hpp"
 #include "duckdb/function/table_macro_function.hpp"
 #include "storage/ducklake_macro_entry.hpp"
+#include "duckdb/common/operator/cast_operators.hpp"
 
 namespace duckdb {
 
@@ -447,9 +448,12 @@ unique_ptr<DuckLakeCatalogSet> DuckLakeCatalog::LoadSchemaForSnapshot(DuckLakeTr
 			} else if (StringUtil::StartsWith(field.transform, "bucket(")) {
 				partition_field.transform.type = DuckLakeTransformType::BUCKET;
 				// "bucket(X)" -> remove prefix and suffix
-				auto inner = field.transform.substr(7);
-				inner = inner.substr(0, inner.size() - 1);
-				partition_field.transform.bucket_count = std::stoull(inner);
+				auto inner = field.transform.substr(7, field.transform.size() - 8); // All but ')' (last character)
+				idx_t bucket_count;
+				if (!TryCast::Operation<string_t, idx_t>(string_t(inner), bucket_count) || bucket_count == 0) {
+					throw InvalidInputException("Invalid bucket partition transform: %s", field.transform);
+				}
+				partition_field.transform.bucket_count = bucket_count;
 			} else {
 				throw InvalidInputException("Unsupported partition transform %s", field.transform);
 			}
