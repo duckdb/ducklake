@@ -322,13 +322,13 @@ static unique_ptr<Expression> GetFunction(ClientContext &context, unique_ptr<Bou
 static unique_ptr<Expression> GetBucketExpression(ClientContext &context,
                                                   unique_ptr<BoundReferenceExpression> column_reference,
                                                   const DuckLakePartitionField &field) {
-	// hash(col)
+	// hash(col) -> UBIGINT dtype
 	auto hash_expr = GetFunction(context, std::move(column_reference), "hash");
 
 	// hash_value % bucket_count
 	vector<unique_ptr<Expression>> children;
 	children.emplace_back(std::move(hash_expr));
-	children.emplace_back(make_uniq<BoundConstantExpression>(Value::BIGINT(field.transform.bucket_count)));
+	children.emplace_back(make_uniq<BoundConstantExpression>(Value::UBIGINT(field.transform.bucket_count)));
 
 	ErrorData error;
 	FunctionBinder binder(context);

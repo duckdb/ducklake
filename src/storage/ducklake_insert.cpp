@@ -394,13 +394,13 @@ static unique_ptr<Expression> GetFunction(ClientContext &context, DuckLakeCopyIn
 
 static unique_ptr<Expression> GetBucketExpression(ClientContext &context, DuckLakeCopyInput &copy_input,
                                                   const DuckLakePartitionField &field) {
-	// hash(col)
+	// hash(col) -> UBIGINT dtype
 	auto hash_expr = GetFunction(context, copy_input, "hash", field.field_id);
 
 	// hash_value % bucket_count
 	vector<unique_ptr<Expression>> children;
 	children.push_back(std::move(hash_expr));
-	children.push_back(make_uniq<BoundConstantExpression>(Value::BIGINT(field.transform.bucket_count)));
+	children.push_back(make_uniq<BoundConstantExpression>(Value::UBIGINT(field.transform.bucket_count)));
 
 	ErrorData error;
 	FunctionBinder binder(context);
