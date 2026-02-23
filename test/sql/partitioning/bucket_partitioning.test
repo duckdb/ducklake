@@ -382,3 +382,85 @@ FROM glob('${DATA_PATH}/ducklake_bucket_partition/**/*.parquet') t(path)
 WHERE path LIKE '%bucket_month_day_tbl%' AND path LIKE '%bucket=%' AND path LIKE '%month=%' AND path LIKE '%day=%'
 ----
 true
+
+# ----------------------------------------------------------------------------------------------------------------------
+# UPDATE test
+# ----------------------------------------------------------------------------------------------------------------------
+
+statement ok
+CREATE TABLE bucket_update_tbl(user_id VARCHAR, value INTEGER);
+
+statement ok
+ALTER TABLE bucket_update_tbl SET PARTITIONED BY (bucket(4, user_id));
+
+statement ok
+INSERT INTO bucket_update_tbl VALUES ('alice', 1), ('bob', 2), ('charlie', 3);
+
+# Update a non-partition column
+statement ok
+UPDATE bucket_update_tbl SET value = 10 WHERE user_id = 'alice'
+
+query II
+SELECT user_id, value FROM bucket_update_tbl WHERE user_id = 'alice'
+----
+alice	10
+
+# Update the partition column itself (causes delete + re-insert into potentially different bucket)
+statement ok
+UPDATE bucket_update_tbl SET user_id = 'dave' WHERE user_id = 'bob'
+
+query II
+SELECT user_id, value FROM bucket_update_tbl ORDER BY user_id
+----
+alice	10
+charlie	3
+dave	2
+
+# Verify total row count is preserved
+query I
+SELECT COUNT(*) FROM bucket_update_tbl
+----
+3
+
+# ----------------------------------------------------------------------------------------------------------------------
+# DETACH/ATTACH round-trip test
+# ----------------------------------------------------------------------------------------------------------------------
+
+# Verify partition metadata survives a detach + re-attach cycle
+statement ok
+USE memory
+
+statement ok
+DETACH ducklake
+
+statement ok
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/ducklake_bucket_partition', METADATA_CATALOG 'ducklake_metadata2')
+
+statement ok
+USE ducklake
+
+# Query the original bucketed_tbl created at the top of the file
+query II
+SELECT user_id, SUM(value) FROM bucketed_tbl GROUP BY user_id ORDER BY user_id
+----
+alice	5
+bob	7
+charlie	3
+
+# Verify partition metadata is still correct after re-attach
+query I
+SELECT transform FROM ducklake_metadata2.ducklake_partition_column WHERE table_id = 1
+----
+bucket(4)
+
+# Insert new data into the re-attached table to verify writes still work
+statement ok
+INSERT INTO bucketed_tbl VALUES ('dave', 6)
+
+query II
+SELECT user_id, SUM(value) FROM bucketed_tbl GROUP BY user_id ORDER BY user_id
+----
+alice	5
+bob	7
+charlie	3
+dave	6
