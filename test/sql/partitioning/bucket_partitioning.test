@@ -75,7 +75,7 @@ Bucket count must be a constant integer
 statement error
 ALTER TABLE bucketed_tbl SET PARTITIONED BY (bucket(4, 'literal'));
 ----
-Expected bucket(column, bucket_count)
+Expected bucket(bucket_count, column)
 
 # Non-integer bucket count (string constant)
 statement error

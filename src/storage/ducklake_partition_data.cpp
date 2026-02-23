@@ -22,11 +22,14 @@ unique_ptr<Expression> DuckLakePartitionUtils::ApplyScalarFunction(ClientContext
 unique_ptr<Expression> DuckLakePartitionUtils::ApplyBucketTransform(ClientContext &context,
                                                                     unique_ptr<Expression> column_expr,
                                                                     idx_t bucket_count) {
+	D_ASSERT(bucket_count > 0);
+
+	// Not compatible with Iceberg since we're not using murmur3 hash, but instead DuckDB's own hash.
 	auto hash_expr = ApplyScalarFunction(context, "hash", std::move(column_expr));
 
 	vector<unique_ptr<Expression>> children;
 	children.push_back(std::move(hash_expr));
-	// UBIGINT to match hash() return type — ensures modulo result is always in [0, N)
+	// UBIGINT to match hash() return type - ensures modulo result is always in [0, N)
 	children.push_back(make_uniq<BoundConstantExpression>(Value::UBIGINT(bucket_count)));
 
 	ErrorData error;
