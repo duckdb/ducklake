@@ -14,7 +14,7 @@ test-env DATA_PATH __TEST_DIR__
 statement ok
 ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/ducklake_view_tosql');
 
-# Simple view - verify sql column in duckdb_views()
+# simple view
 statement ok
 CREATE VIEW ducklake.simple_view AS SELECT 42 AS answer
 
@@ -23,13 +23,12 @@ SELECT sql FROM duckdb_views() WHERE view_name='simple_view' AND database_name='
 ----
 CREATE VIEW simple_view AS SELECT 42 AS answer;
 
-# Ensure the view is still queryable
 query I
 SELECT answer FROM ducklake.simple_view
 ----
 42
 
-# View with explicit column aliases
+# view with explicit column aliases
 statement ok
 CREATE VIEW ducklake.aliased_view(x, y) AS SELECT 1, 2
 
@@ -43,7 +42,7 @@ SELECT x, y FROM ducklake.aliased_view
 ----
 1	2
 
-# View with a more complex query (join + filter)
+# view with a filter
 statement ok
 CREATE TABLE ducklake.t1 (id INTEGER, val VARCHAR)
 
@@ -64,7 +63,7 @@ SELECT * FROM ducklake.complex_view
 2	world
 3	foo
 
-# View with a name that is a keyword - must be quoted
+# view with a keyword name must be quoted
 statement ok
 CREATE VIEW ducklake."select" AS SELECT 99 AS n
 
@@ -78,7 +77,6 @@ SELECT n FROM ducklake."select"
 ----
 99
 
-# Verify all views appear correctly in duckdb_views()
 query I
 SELECT view_name FROM duckdb_views() WHERE database_name='ducklake' ORDER BY view_name
 ----
@@ -87,7 +85,7 @@ complex_view
 select
 simple_view
 
-# After renaming a view, ToSQL() must reflect the new name
+# after rename, sql reflects the new name
 statement ok
 ALTER VIEW ducklake.simple_view RENAME TO renamed_view
 
@@ -101,13 +99,12 @@ SELECT answer FROM ducklake.renamed_view
 ----
 42
 
-# The old name should no longer appear
 query I
 SELECT count(*) FROM duckdb_views() WHERE view_name='simple_view' AND database_name='ducklake'
 ----
 0
 
-# View with a subquery
+# view with a subquery
 statement ok
 CREATE VIEW ducklake.subquery_view AS SELECT * FROM (SELECT id * 2 AS doubled FROM t1) sq WHERE doubled < 6
 

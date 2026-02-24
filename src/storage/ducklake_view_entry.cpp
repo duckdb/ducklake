@@ -59,9 +59,6 @@ unique_ptr<CreateInfo> DuckLakeViewEntry::GetInfo() const {
 }
 
 string DuckLakeViewEntry::ToSQL() const {
-	// Directly construct the CREATE VIEW statement from the stored query_sql,
-	// avoiding the expensive parse->AST->serialize roundtrip that GetInfo()->ToString() performs.
-	// query_sql is guaranteed to be pre-serialized from SelectStatement::ToString().
 	string result = "CREATE VIEW ";
 	result += KeywordHelper::WriteOptionallyQuoted(name);
 	if (!aliases.empty()) {
