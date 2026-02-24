@@ -11,7 +11,7 @@ test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
 test-env DATA_PATH __TEST_DIR__
 
 statement ok
-ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/ducklake_bucket_partition', METADATA_CATALOG 'ducklake_metadata')
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/ducklake_bucket_partition', METADATA_CATALOG 'ducklake_metadata', DATA_INLINING_ROW_LIMIT 0)
 
 statement ok
 USE ducklake
@@ -423,49 +423,6 @@ SELECT COUNT(*) FROM bucket_update_tbl
 3
 
 # ----------------------------------------------------------------------------------------------------------------------
-# DETACH/ATTACH round-trip test
-# ----------------------------------------------------------------------------------------------------------------------
-
-# Verify partition metadata survives a detach + re-attach cycle
-statement ok
-USE memory
-
-statement ok
-DETACH ducklake
-
-statement ok
-ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/ducklake_bucket_partition', METADATA_CATALOG 'ducklake_metadata2')
-
-statement ok
-USE ducklake
-
-# Query the original bucketed_tbl created at the top of the file
-query II
-SELECT user_id, SUM(value) FROM bucketed_tbl GROUP BY user_id ORDER BY user_id
-----
-alice	5
-bob	7
-charlie	3
-
-# Verify partition metadata is still correct after re-attach
-query I
-SELECT transform FROM ducklake_metadata2.ducklake_partition_column WHERE table_id = 1
-----
-bucket(4)
-
-# Insert new data into the re-attached table to verify writes still work
-statement ok
-INSERT INTO bucketed_tbl VALUES ('dave', 6)
-
-query II
-SELECT user_id, SUM(value) FROM bucketed_tbl GROUP BY user_id ORDER BY user_id
-----
-alice	5
-bob	7
-charlie	3
-dave	6
-
-# ----------------------------------------------------------------------------------------------------------------------
 # NULL handling test
 # ----------------------------------------------------------------------------------------------------------------------
 
@@ -634,8 +591,10 @@ frank	6
 
 # Verify partition metadata now says bucket(8)
 query I
-SELECT transform FROM ducklake_metadata2.ducklake_partition_column
-WHERE table_id = (SELECT table_id FROM ducklake_metadata2.ducklake_table WHERE table_name = 'bucket_repart_tbl')
+SELECT transform FROM ducklake_metadata.ducklake_partition_info part
+JOIN ducklake_metadata.ducklake_partition_column part_col USING (partition_id, table_id)
+WHERE part.end_snapshot IS NULL
+AND part.table_id = (SELECT table_id FROM ducklake_metadata.ducklake_table WHERE table_name = 'bucket_repart_tbl')
 ----
 bucket(8)
 
@@ -666,12 +625,13 @@ CREATE TABLE bucket_add_target(user_id VARCHAR, value INTEGER);
 statement ok
 ALTER TABLE bucket_add_target SET PARTITIONED BY (bucket(4, user_id));
 
-# Add the files from the source table into the target table
+# Store file paths in a variable, then add them to the target table
 statement ok
-SELECT * FROM ducklake_add_data_files('ducklake', 'bucket_add_target',
-  (SELECT LIST(path) FROM glob('${DATA_PATH}/ducklake_bucket_partition/**/*.parquet') t(path) 
-  WHERE path LIKE '%bucket_add_source%'),
-  hive_partitioning => true);
+SET VARIABLE add_files_list = (SELECT LIST(path) FROM glob('${DATA_PATH}/ducklake_bucket_partition/**/*.parquet') t(path)
+  WHERE path LIKE '%bucket_add_source%');
+
+statement ok
+CALL ducklake_add_data_files('ducklake', 'bucket_add_target', getvariable('add_files_list'), hive_partitioning => true);
 
 # Verify all data is accessible in the target table
 query II
@@ -680,3 +640,75 @@ SELECT user_id, value FROM bucket_add_target ORDER BY user_id
 alice	1
 bob	2
 charlie	3
+
+# ----------------------------------------------------------------------------------------------------------------------
+# DETACH/ATTACH round-trip test
+# ----------------------------------------------------------------------------------------------------------------------
+
+# Use a separate database (without DATA_INLINING_ROW_LIMIT 0) to test DETACH/ATTACH
+statement ok
+USE memory
+
+statement ok
+DETACH ducklake
+
+statement ok
+ATTACH 'ducklake:__TEST_DIR__/ducklake_reattach.db' AS ducklake (DATA_PATH '${DATA_PATH}/ducklake_bucket_reattach', METADATA_CATALOG 'ducklake_reattach_meta')
+
+statement ok
+USE ducklake
+
+statement ok
+CREATE TABLE reattach_tbl(user_id VARCHAR, value INTEGER);
+
+statement ok
+ALTER TABLE reattach_tbl SET PARTITIONED BY (bucket(4, user_id));
+
+statement ok
+INSERT INTO reattach_tbl VALUES ('alice', 1), ('bob', 2), ('charlie', 3);
+
+query II
+SELECT user_id, SUM(value) FROM reattach_tbl GROUP BY user_id ORDER BY user_id
+----
+alice	1
+bob	2
+charlie	3
+
+# Detach and re-attach
+statement ok
+USE memory
+
+statement ok
+DETACH ducklake
+
+statement ok
+ATTACH 'ducklake:__TEST_DIR__/ducklake_reattach.db' AS ducklake (DATA_PATH '${DATA_PATH}/ducklake_bucket_reattach', METADATA_CATALOG 'ducklake_reattach_meta2')
+
+statement ok
+USE ducklake
+
+# Verify data survives re-attach
+query II
+SELECT user_id, SUM(value) FROM reattach_tbl GROUP BY user_id ORDER BY user_id
+----
+alice	1
+bob	2
+charlie	3
+
+# Verify partition metadata is still correct after re-attach
+query I
+SELECT transform FROM ducklake_reattach_meta2.ducklake_partition_column WHERE table_id = 1
+----
+bucket(4)
+
+# Insert new data into the re-attached table to verify writes still work
+statement ok
+INSERT INTO reattach_tbl VALUES ('dave', 6)
+
+query II
+SELECT user_id, SUM(value) FROM reattach_tbl GROUP BY user_id ORDER BY user_id
+----
+alice	1
+bob	2
+charlie	3
+dave	6
