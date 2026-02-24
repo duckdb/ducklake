@@ -283,7 +283,7 @@ unique_ptr<DuckLakeFieldId> DuckLakeFieldId::RenameField(const vector<string> &c
 	if (!found) {
 		throw InternalException("DuckLakeFieldId::AddField - child not found in struct path");
 	}
-	auto new_type = GetStructType(new_children);
+	auto new_type = GetNewNestedType(type, new_children);
 	return make_uniq<DuckLakeFieldId>(column_data.Copy(), Name(), std::move(new_type), std::move(new_children));
 }
 

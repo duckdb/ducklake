@@ -24,6 +24,9 @@ statement ok
 insert into test values (11),(12),(13);
 
 statement ok
+CALL ducklake_flush_inlined_data('ducklake')
+
+statement ok
 delete from test where id = 1
 
 statement ok
@@ -32,8 +35,17 @@ delete from test where id = 5
 statement ok
 delete from test where id = 12
 
+statement ok
+CALL ducklake_flush_inlined_data('ducklake')
+
+# partial_max of the consolidated delete file should equal the Nth delete snapshot (N = delete_count)
+statement ok
+SET VARIABLE n = (SELECT delete_count FROM __ducklake_metadata_ducklake.ducklake_delete_file WHERE delete_count > 1);
+
+statement ok
+SET VARIABLE expected_pm = (SELECT snapshot_id FROM (SELECT snapshot_id, row_number() OVER (ORDER BY snapshot_id) AS rn FROM ducklake_snapshots('ducklake') WHERE changes::VARCHAR LIKE '%delete%=[1]%' AND changes::VARCHAR NOT LIKE '%rewrite%') WHERE rn = getvariable('n'));
+
 query I
-SELECT partial_max FROM __ducklake_metadata_ducklake.ducklake_delete_file
+SELECT partial_max = getvariable('expected_pm') FROM __ducklake_metadata_ducklake.ducklake_delete_file WHERE delete_count > 1
 ----
-4
-NULL
+true

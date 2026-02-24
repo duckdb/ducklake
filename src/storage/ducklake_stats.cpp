@@ -115,8 +115,8 @@ void DuckLakeColumnStats::MergeStats(const DuckLakeColumnStats &new_stats) {
 		has_min = false;
 	} else if (has_min) {
 		// both stats have a min - select the smallest
-		if (type.IsNumeric()) {
-			// for numerics we need to parse the stats
+		if (RequiresValueComparison(type)) {
+			// for numerics/temporals we need to parse the stats
 			auto current_min = Value(min).DefaultCastAs(type);
 			auto new_min = Value(new_stats.min).DefaultCastAs(type);
 			if (new_min < current_min) {
@@ -131,9 +131,9 @@ void DuckLakeColumnStats::MergeStats(const DuckLakeColumnStats &new_stats) {
 	if (!new_stats.has_max) {
 		has_max = false;
 	} else if (has_max) {
-		// both stats have a min - select the smallest
-		if (type.IsNumeric()) {
-			// for numerics we need to parse the stats
+		// both stats have a max - select the largest
+		if (RequiresValueComparison(type)) {
+			// for numerics/temporals we need to parse the stats
 			auto current_max = Value(max).DefaultCastAs(type);
 			auto new_max = Value(new_stats.max).DefaultCastAs(type);
 			if (new_max > current_max) {

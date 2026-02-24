@@ -6,7 +6,7 @@ namespace duckdb {
 
 static unique_ptr<FunctionData> DuckLakeSettingsBind(ClientContext &context, TableFunctionBindInput &input,
                                                      vector<LogicalType> &return_types, vector<string> &names) {
-	auto &catalog = BaseMetadataFunction::GetCatalog(context, input.inputs[0]);
+	auto &catalog = DuckLakeBaseMetadataFunction::GetCatalog(context, input.inputs[0]);
 	auto &ducklake_catalog = catalog.Cast<DuckLakeCatalog>();
 
 	names.emplace_back("catalog_type");
@@ -21,14 +21,15 @@ static unique_ptr<FunctionData> DuckLakeSettingsBind(ClientContext &context, Tab
 	auto result = make_uniq<MetadataBindData>();
 	vector<Value> row_values;
 
-	// catalog_type: default to "duckdb" if not explicitly set (DuckDB is the default metadata storage)
+	// catalog_type: normalize the metadata type to a user-friendly name
 	auto catalog_type = ducklake_catalog.MetadataType();
-	if (catalog_type.empty()) {
-		catalog_type = "duckdb";
-	} else if (catalog_type == "postgres_scanner") {
+	if (catalog_type == "postgres_scanner") {
 		catalog_type = "postgres";
 	} else if (catalog_type == "sqlite_scanner") {
 		catalog_type = "sqlite";
+	} else if (catalog_type.empty() || catalog_type == "motherduck" || catalog_type == "md_server") {
+		// default to "duckdb" since DuckDB is the default metadata storage
+		catalog_type = "duckdb";
 	}
 	row_values.push_back(Value(catalog_type));
 
@@ -44,7 +45,8 @@ static unique_ptr<FunctionData> DuckLakeSettingsBind(ClientContext &context, Tab
 	return std::move(result);
 }
 
-DuckLakeSettingsFunction::DuckLakeSettingsFunction() : BaseMetadataFunction("ducklake_settings", DuckLakeSettingsBind) {
+DuckLakeSettingsFunction::DuckLakeSettingsFunction()
+    : DuckLakeBaseMetadataFunction("ducklake_settings", DuckLakeSettingsBind) {
 }
 
 } // namespace duckdb

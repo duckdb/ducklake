@@ -3,6 +3,7 @@
 #include "common/ducklake_util.hpp"
 #include "duckdb/planner/tableref/bound_at_clause.hpp"
 #include "duckdb/common/types/blob.hpp"
+#include "duckdb/common/type_visitor.hpp"
 #include "storage/ducklake_catalog.hpp"
 #include "common/ducklake_types.hpp"
 #include "storage/ducklake_schema_entry.hpp"
@@ -56,6 +57,9 @@ unique_ptr<DuckLakeMetadataManager> DuckLakeMetadataManager::Create(DuckLakeTran
 		auto create = metadata_manager_iter->second;
 		return create(transaction);
 	}
+	if (catalog_type == "sqlite_scanner") {
+		return make_uniq<SQLiteMetadataManager>(transaction);
+	}
 	return make_uniq<DuckLakeMetadataManager>(transaction);
 }
 
@@ -64,6 +68,35 @@ DuckLakeMetadataManager &DuckLakeMetadataManager::Get(DuckLakeTransaction &trans
 }
 
 bool DuckLakeMetadataManager::TypeIsNativelySupported(const LogicalType &type) {
+	return true;
+}
+
+bool DuckLakeMetadataManager::SupportsInlining(const LogicalType &type) {
+	if (type.id() == LogicalTypeId::GEOMETRY) {
+		return false;
+	}
+	return true;
+}
+
+bool DuckLakeMetadataManager::SupportsInliningTypes(const vector<LogicalType> &types) {
+	for (auto &type : types) {
+		if (TypeVisitor::Contains(type, [&](const LogicalType &t) { return !SupportsInlining(t); })) {
+			return false;
+		}
+	}
+	return true;
+}
+
+bool DuckLakeMetadataManager::SupportsInliningColumns(const vector<DuckLakeColumnInfo> &columns) {
+	for (auto &col : columns) {
+		auto col_type = DuckLakeTypes::FromString(col.type);
+		if (!SupportsInlining(col_type)) {
+			return false;
+		}
+		if (!col.children.empty() && !SupportsInliningColumns(col.children)) {
+			return false;
+		}
+	}
 	return true;
 }
 
@@ -125,13 +158,13 @@ CREATE TABLE {METADATA_CATALOG}.ducklake_sort_info(sort_id BIGINT, table_id BIGI
 CREATE TABLE {METADATA_CATALOG}.ducklake_sort_expression(sort_id BIGINT, table_id BIGINT, sort_key_index BIGINT, expression VARCHAR, dialect VARCHAR, sort_direction VARCHAR, null_order VARCHAR);
 INSERT INTO {METADATA_CATALOG}.ducklake_snapshot VALUES (0, NOW(), 0, 1, 0);
 INSERT INTO {METADATA_CATALOG}.ducklake_snapshot_changes VALUES (0, 'created_schema:"main"',  NULL, NULL, NULL);
-INSERT INTO {METADATA_CATALOG}.ducklake_metadata (key, value) VALUES ('version', '0.4-dev1'), ('created_by', 'DuckDB %s'), ('data_path', %s), ('encrypted', '%s');
+INSERT INTO {METADATA_CATALOG}.ducklake_metadata (key, value) VALUES ('version', '0.4'), ('created_by', 'DuckDB %s'), ('data_path', %s), ('encrypted', '%s');
 INSERT INTO {METADATA_CATALOG}.ducklake_schema VALUES (0, UUID(), 0, NULL, 'main', 'main/', true);
 	)",
 	                                       DuckDB::SourceID(), SQLString(data_path), encryption_str);
 	auto result = transaction.Query(initialize_query);
 	if (result->HasError()) {
-		result->GetErrorObject().Throw("Failed to initialize DuckLake:");
+		result->GetErrorObject().Throw("Failed to initialize DuckLake: ");
 	}
 }
 
@@ -151,7 +184,7 @@ UPDATE {METADATA_CATALOG}.ducklake_metadata SET value = '0.2' WHERE key = 'versi
 	)";
 	auto result = transaction.Query(migrate_query);
 	if (result->HasError()) {
-		result->GetErrorObject().Throw("Failed to migrate DuckLake from v0.1 to v0.2:");
+		result->GetErrorObject().Throw("Failed to migrate DuckLake from v0.1 to v0.2: ");
 	}
 }
 
@@ -170,7 +203,7 @@ void DuckLakeMetadataManager::ExecuteMigration(string migrate_query, bool allow_
 	}
 	auto result = transaction.Query(migrate_query);
 	if (result->HasError()) {
-		result->GetErrorObject().Throw("Failed to migrate DuckLake from v0.2 to v0.3:");
+		result->GetErrorObject().Throw("Failed to migrate DuckLake from v0.2 to v0.3: ");
 	}
 }
 
@@ -213,7 +246,7 @@ SET partial_max = m.partial_max
 FROM __ducklake_partial_max_migration m
 WHERE df.data_file_id = m.data_file_id;
 DROP TABLE IF EXISTS __ducklake_partial_max_migration;
-UPDATE {METADATA_CATALOG}.ducklake_metadata SET value = '0.4-dev1' WHERE key = 'version';
+UPDATE {METADATA_CATALOG}.ducklake_metadata SET value = '0.4' WHERE key = 'version';
 	)";
 	ExecuteMigration(migrate_query, allow_failures);
 
@@ -223,7 +256,8 @@ SELECT t.table_id, t.begin_snapshot, sv.schema_version
 FROM {METADATA_CATALOG}.ducklake_schema_versions sv
 JOIN {METADATA_CATALOG}.ducklake_table t
   ON sv.begin_snapshot BETWEEN t.begin_snapshot
-                           AND COALESCE(t.end_snapshot, sv.begin_snapshot);
+                           AND COALESCE(t.end_snapshot, sv.begin_snapshot)
+WHERE sv.table_id IS NULL;
 )");
 	if (migrate_schema_versions->HasError()) {
 		if (!allow_failures) {
@@ -970,8 +1004,8 @@ string DuckLakeMetadataManager::CastValueToTarget(const Value &val, const Logica
 }
 
 string DuckLakeMetadataManager::CastStatsToTarget(const string &stats, const LogicalType &type) {
-	// we only need to cast numerics
-	if (type.IsNumeric()) {
+	// we need to cast numerics and temporals for correct comparison
+	if (RequiresValueComparison(type)) {
 		return "TRY_CAST(" + stats + " AS " + type.ToString() + ")";
 	}
 	return stats;
@@ -1989,6 +2023,9 @@ string DuckLakeMetadataManager::GetColumnTypeInternal(const LogicalType &column_
 string DuckLakeMetadataManager::GetColumnType(const DuckLakeColumnInfo &col) {
 	auto column_type = DuckLakeTypes::FromString(col.type);
 	if (!TypeIsNativelySupported(column_type)) {
+		if (!column_type.IsNested()) {
+			return GetColumnTypeInternal(column_type);
+		}
 		return "VARCHAR";
 	}
 	switch (column_type.id()) {
@@ -2064,9 +2101,6 @@ string DuckLakeMetadataManager::WriteNewTables(DuckLakeSnapshot commit_snapshot,
 		batch_query += "INSERT INTO {METADATA_CATALOG}.ducklake_column VALUES " + column_insert_sql + ";";
 	}
 
-	// write new data-inlining tables (if data-inlining is enabled)
-	batch_query += WriteNewInlinedTables(commit_snapshot, new_tables);
-
 	return batch_query;
 }
 
@@ -2099,7 +2133,27 @@ string DuckLakeMetadataManager::WriteNewInlinedTables(DuckLakeSnapshot commit_sn
 			// not inlining for this table or inlining is for a table on this transaction, hence handled there - skip it
 			continue;
 		}
-		GetInlinedTableQueries(commit_snapshot, table, inlined_tables, inlined_table_queries);
+		// If columns are empty (e.g., for renamed tables), fetch them from the catalog
+		const DuckLakeTableInfo *table_ptr = &table;
+		DuckLakeTableInfo table_with_columns;
+		if (table.columns.empty()) {
+			auto current_snapshot = transaction.GetSnapshot();
+			auto table_entry = catalog.GetEntryById(transaction, current_snapshot, table.id);
+			if (table_entry) {
+				auto &tbl = table_entry->Cast<DuckLakeTableEntry>();
+				table_with_columns = table;
+				table_with_columns.columns = tbl.GetTableColumns();
+				table_ptr = &table_with_columns;
+			}
+		}
+		// FIXME: we are skipping columns that have conflicting names, we should resolve this
+		if (DuckLakeUtil::HasInlinedSystemColumnConflict(table_ptr->columns)) {
+			continue;
+		}
+		if (!SupportsInliningColumns(table_ptr->columns)) {
+			continue;
+		}
+		GetInlinedTableQueries(commit_snapshot, *table_ptr, inlined_tables, inlined_table_queries);
 	}
 	if (inlined_tables.empty()) {
 		return {};
@@ -2293,9 +2347,11 @@ WHERE table_id = %d AND schema_version=(
 				row_id++;
 			}
 		}
-		string append_query = StringUtil::Format("INSERT INTO {METADATA_CATALOG}.%s VALUES %s;",
-		                                         SQLIdentifier(inlined_table_name), values);
-		batch_query += append_query;
+		if (!values.empty()) {
+			string append_query = StringUtil::Format("INSERT INTO {METADATA_CATALOG}.%s VALUES %s;",
+			                                         SQLIdentifier(inlined_table_name), values);
+			batch_query += append_query;
+		}
 	}
 	return batch_query;
 }

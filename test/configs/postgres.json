@@ -15,9 +15,6 @@
       "env_name":  "DUCKLAKE_CONNECTION",
       "env_value": "postgres:dbname=ducklakedb"
    }],
-   "skip_error_messages": [
-    "Variant types cannot be inlined in this catalog type yet"
-  ],
   "skip_tests": [
     {
       "reason": "Tests only for DuckDB as a catalog",

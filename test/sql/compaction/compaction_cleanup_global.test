@@ -22,13 +22,16 @@ statement ok
 INSERT INTO ducklake.test FROM range(10)
 
 statement ok
+CALL ducklake_flush_inlined_data('ducklake')
+
+statement ok
 DELETE FROM ducklake.test
 
 statement ok
 DROP TABLE ducklake.test
 
 statement ok
-CALL ducklake_expire_snapshots('ducklake', dry_run => false, versions => [2])
+CALL ducklake_expire_snapshots('ducklake', dry_run => false, versions => [2,3,4])
 
 statement ok
 CALL ducklake.set_option('delete_older_than', '1 week')

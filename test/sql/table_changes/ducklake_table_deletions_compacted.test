@@ -50,6 +50,10 @@ INSERT INTO test SELECT i + 8000 FROM range(1000) t(i)
 statement ok
 INSERT INTO test SELECT i + 9000 FROM range(1000) t(i)
 
+# flush inlined data to create files for compaction
+statement ok
+CALL ducklake_flush_inlined_data('ducklake')
+
 # compact all files into one
 statement ok
 CALL merge_adjacent_files()

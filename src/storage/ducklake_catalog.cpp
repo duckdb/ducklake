@@ -61,6 +61,15 @@ void DuckLakeCatalog::FinalizeLoad(optional_ptr<ClientContext> context) {
 		con->BeginTransaction();
 		context = con->context.get();
 	}
+	// If data_inlining_row_limit wasn't explicitly set via ATTACH options,
+	// use the global DuckDB setting as the default
+	if (options.config_options.find("data_inlining_row_limit") == options.config_options.end()) {
+		Value setting_val;
+		if (context->TryGetCurrentSetting("ducklake_default_data_inlining_row_limit", setting_val)) {
+			auto limit = setting_val.GetValue<idx_t>();
+			options.config_options["data_inlining_row_limit"] = to_string(limit);
+		}
+	}
 	DuckLakeInitializer initializer(*context, *this, options);
 	initializer.Initialize();
 	db.tags["data_path"] = DataPath();
@@ -807,7 +816,7 @@ bool DuckLakeCatalog::TryGetConfigOption(const string &option, string &result, D
 }
 
 idx_t DuckLakeCatalog::DataInliningRowLimit(SchemaIndex schema_index, TableIndex table_index) const {
-	return GetConfigOption<idx_t>("data_inlining_row_limit", schema_index, table_index, 0);
+	return GetConfigOption<idx_t>("data_inlining_row_limit", schema_index, table_index, 10);
 }
 
 unique_ptr<LogicalOperator> DuckLakeCatalog::BindAlterAddIndex(Binder &binder, TableCatalogEntry &table_entry,

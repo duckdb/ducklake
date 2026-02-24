@@ -1,0 +1,73 @@
+# name: test/sql/data_inlining/data_inlining_interleaved_update.test
+# description: test interleaved INSERT/UPDATE/INSERT on inlined data within a single transaction
+# group: [data_inlining]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+
+test-env DATA_PATH __TEST_DIR__
+
+statement ok
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/ducklake_inlining_interleaved_update_files', METADATA_CATALOG 'ducklake_meta', DATA_INLINING_ROW_LIMIT 10)
+
+# snapshot 1: create table with initial committed data
+statement ok
+CREATE TABLE ducklake.test(id INTEGER, val VARCHAR)
+
+# snapshot 2: commit initial inlined data
+statement ok
+INSERT INTO ducklake.test VALUES (1, 'a'), (2, 'b')
+
+query III
+SELECT rowid, * FROM ducklake.test ORDER BY id
+----
+0	1	a
+1	2	b
+
+# snapshot 3: interleaved INSERT -> UPDATE -> INSERT in one transaction on committed data
+statement ok
+BEGIN
+
+statement ok
+INSERT INTO ducklake.test VALUES (3, 'c')
+
+query I
+UPDATE ducklake.test SET val='aa' WHERE id=1
+----
+1
+
+statement ok
+INSERT INTO ducklake.test VALUES (4, 'd')
+
+statement ok
+COMMIT
+
+# verify data is correct
+query II
+SELECT * FROM ducklake.test ORDER BY id
+----
+1	aa
+2	b
+3	c
+4	d
+
+# verify rowids - the updated row (id=1) should preserve its original rowid (0)
+query III
+SELECT rowid, * FROM ducklake.test ORDER BY id
+----
+0	1	aa
+1	2	b
+3	3	c
+4	4	d
+
+# verify table_changes shows the update correctly (not as separate delete+insert)
+query IIIII
+FROM ducklake.table_changes('test', 3, 3) ORDER BY ALL
+----
+3	0	update_postimage	1	aa
+3	0	update_preimage	1	a
+3	3	insert	3	c
+3	4	insert	4	d

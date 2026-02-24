@@ -24,26 +24,38 @@ statement ok
 INSERT INTO ducklake.partitioned VALUES (1, 10);
 
 statement ok
+CALL ducklake_flush_inlined_data('ducklake')
+
+statement ok
 INSERT INTO ducklake.partitioned VALUES (2, 100);
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake')
 
 statement ok
 INSERT INTO ducklake.partitioned VALUES (1, 20);
 
 statement ok
+CALL ducklake_flush_inlined_data('ducklake')
+
+statement ok
 INSERT INTO ducklake.partitioned VALUES (2, 200);
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake')
 
 query I
 SELECT COUNT(*) FROM GLOB('${DATA_PATH}/ducklake_partitioned_compact_non_adjacent_files/**/*.parquet')
 ----
 4
 
-query IIII
-SELECT snapshot_id, rowid, * FROM ducklake.partitioned ORDER BY ALL
+query III
+SELECT rowid, * FROM ducklake.partitioned ORDER BY ALL
 ----
-3	0	1	10
-4	1	2	100
-5	2	1	20
-6	3	2	200
+0	1	10
+1	2	100
+2	1	20
+3	2	200
 
 query III
 SELECT table_name, files_processed, files_created FROM ducklake_merge_adjacent_files('ducklake') ORDER BY ALL
@@ -77,49 +89,67 @@ ORDER BY ALL
 2	1
 2	2
 
+statement ok
+SET VARIABLE s1 = (SELECT snapshot_id FROM (SELECT snapshot_id, row_number() OVER (ORDER BY snapshot_id) as rn FROM ducklake_snapshots('ducklake') WHERE changes::VARCHAR LIKE '%insert%=[1]%') WHERE rn = 1);
+
+statement ok
+SET VARIABLE s2 = (SELECT snapshot_id FROM (SELECT snapshot_id, row_number() OVER (ORDER BY snapshot_id) as rn FROM ducklake_snapshots('ducklake') WHERE changes::VARCHAR LIKE '%insert%=[1]%') WHERE rn = 2);
+
 query II
-SELECT * FROM ducklake.partitioned AT (VERSION => 3)
+SELECT * FROM ducklake.partitioned AT (VERSION => getvariable('s1'))
 ----
 1	10
 
 query II rowsort
-SELECT * FROM ducklake.partitioned AT (VERSION => 4)
+SELECT * FROM ducklake.partitioned AT (VERSION => getvariable('s2'))
 ----
 1	10
 2	100
 
-query IIII
-SELECT snapshot_id, rowid, * FROM ducklake.partitioned ORDER BY ALL
+query III
+SELECT rowid, * FROM ducklake.partitioned ORDER BY ALL
 ----
-3	0	1	10
-4	1	2	100
-5	2	1	20
-6	3	2	200
+0	1	10
+1	2	100
+2	1	20
+3	2	200
 
 # insert and compact again
 statement ok
 INSERT INTO ducklake.partitioned VALUES (1, 30);
 
 statement ok
+CALL ducklake_flush_inlined_data('ducklake')
+
+statement ok
 INSERT INTO ducklake.partitioned VALUES (2, 300);
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake')
 
 statement ok
 INSERT INTO ducklake.partitioned VALUES (1, 40);
 
 statement ok
+CALL ducklake_flush_inlined_data('ducklake')
+
+statement ok
 INSERT INTO ducklake.partitioned VALUES (2, 400);
 
-query IIII
-SELECT snapshot_id, rowid, * FROM ducklake.partitioned ORDER BY ALL
+statement ok
+CALL ducklake_flush_inlined_data('ducklake')
+
+query III
+SELECT rowid, * FROM ducklake.partitioned ORDER BY ALL
 ----
-3	0	1	10
-4	1	2	100
-5	2	1	20
-6	3	2	200
-8	4	1	30
-9	5	2	300
-10	6	1	40
-11	7	2	400
+0	1	10
+1	2	100
+2	1	20
+3	2	200
+4	1	30
+5	2	300
+6	1	40
+7	2	400
 
 # we're back up to 6 files
 query I
@@ -144,14 +174,14 @@ SELECT COUNT(*) FROM GLOB('${DATA_PATH}/ducklake_partitioned_compact_non_adjacen
 ----
 2
 
-query IIII
-SELECT snapshot_id, rowid, * FROM ducklake.partitioned ORDER BY ALL
+query III
+SELECT rowid, * FROM ducklake.partitioned ORDER BY ALL
 ----
-3	0	1	10
-4	1	2	100
-5	2	1	20
-6	3	2	200
-8	4	1	30
-9	5	2	300
-10	6	1	40
-11	7	2	400
+0	1	10
+1	2	100
+2	1	20
+3	2	200
+4	1	30
+5	2	300
+6	1	40
+7	2	400

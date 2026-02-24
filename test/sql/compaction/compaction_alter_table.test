@@ -14,70 +14,115 @@ test-env DATA_PATH __TEST_DIR__
 statement ok
 ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/ducklake_compaction_alter_files')
 
-# snapshot 1
+# snapshot 1 (create)
 statement ok
 CREATE TABLE ducklake.test(id INTEGER, i INTEGER);
 
-# snapshot 2
+# snapshot 2 (inlined_insert)
 statement ok
 INSERT INTO ducklake.test VALUES (1, 10);
 
-# snapshot 3
+# snapshot 3 (flushed_inlined)
+statement ok
+CALL ducklake_flush_inlined_data('ducklake')
+
+# snapshot 4 (inlined_insert)
 statement ok
 INSERT INTO ducklake.test VALUES (2, 20);
 
-# snapshot 4
+# snapshot 5 (flushed_inlined)
+statement ok
+CALL ducklake_flush_inlined_data('ducklake')
+
+# snapshot 6 (alter)
 statement ok
 ALTER TABLE ducklake.test ADD COLUMN j INTEGER
 
-# snapshot 5
+# snapshot 7 (inlined_insert)
 statement ok
 INSERT INTO ducklake.test VALUES (3, 30, 300);
 
-# snapshot 6
+# snapshot 8 (flushed_inlined)
+statement ok
+CALL ducklake_flush_inlined_data('ducklake')
+
+# snapshot 9 (inlined_insert)
 statement ok
 INSERT INTO ducklake.test VALUES (4, 40, 400);
 
-# snapshot 7
+# snapshot 10 (flushed_inlined)
+statement ok
+CALL ducklake_flush_inlined_data('ducklake')
+
+# snapshot 11 (alter)
 statement ok
 ALTER TABLE ducklake.test DROP COLUMN i
 
-# snapshot 8
+# snapshot 12 (inlined_insert)
 statement ok
 INSERT INTO ducklake.test VALUES (5, 500);
 
-# snapshot 9
+# snapshot 13 (flushed_inlined)
+statement ok
+CALL ducklake_flush_inlined_data('ducklake')
+
+# snapshot 14 (inlined_insert)
 statement ok
 INSERT INTO ducklake.test VALUES (6, 600);
 
-# snapshot 10
+# snapshot 15 (flushed_inlined)
+statement ok
+CALL ducklake_flush_inlined_data('ducklake')
+
+# snapshot 16 (alter)
 statement ok
 ALTER TABLE ducklake.test ADD COLUMN i VARCHAR
 
-# snapshot 11
+# snapshot 17 (inlined_insert)
 statement ok
 INSERT INTO ducklake.test VALUES (7, 700, 'hello');
 
-# snapshot 12
+# snapshot 18 (flushed_inlined)
+statement ok
+CALL ducklake_flush_inlined_data('ducklake')
+
+# snapshot 19 (inlined_insert)
 statement ok
 INSERT INTO ducklake.test VALUES (8, 800, 'world');
 
-query IIIII
-SELECT snapshot_id, rowid, * FROM ducklake.test ORDER BY ALL
+# snapshot 20 (flushed_inlined)
+statement ok
+CALL ducklake_flush_inlined_data('ducklake')
+
+query IIII
+SELECT rowid, * FROM ducklake.test ORDER BY ALL
 ----
-2	0	1	NULL	NULL
-3	1	2	NULL	NULL
-5	2	3	300	NULL
-6	3	4	400	NULL
-8	4	5	500	NULL
-9	5	6	600	NULL
-11	6	7	700	hello
-12	7	8	800	world
+0	1	NULL	NULL
+1	2	NULL	NULL
+2	3	300	NULL
+3	4	400	NULL
+4	5	500	NULL
+5	6	600	NULL
+6	7	700	hello
+7	8	800	world
 
 query I
 SELECT COUNT(*) FROM GLOB('${DATA_PATH}/ducklake_compaction_alter_files/**/*')
 ----
 8
+
+# compute dynamic snapshot IDs for time travel queries
+# the 2nd insert snapshot (after 2nd insert, before any alter) - schema is (id, i)
+statement ok
+SET VARIABLE s2 = (SELECT snapshot_id FROM (SELECT snapshot_id, row_number() OVER (ORDER BY snapshot_id) AS rn FROM ducklake_snapshots('ducklake') WHERE changes::VARCHAR LIKE '%insert%=[1]%') WHERE rn = 2);
+
+# the 4th insert snapshot (after 4th insert, after ALTER ADD j) - schema is (id, i, j)
+statement ok
+SET VARIABLE s4 = (SELECT snapshot_id FROM (SELECT snapshot_id, row_number() OVER (ORDER BY snapshot_id) AS rn FROM ducklake_snapshots('ducklake') WHERE changes::VARCHAR LIKE '%insert%=[1]%') WHERE rn = 4);
+
+# the 6th insert snapshot (after 6th insert, after ALTER DROP i) - schema is (id, j)
+statement ok
+SET VARIABLE s6 = (SELECT snapshot_id FROM (SELECT snapshot_id, row_number() OVER (ORDER BY snapshot_id) AS rn FROM ducklake_snapshots('ducklake') WHERE changes::VARCHAR LIKE '%insert%=[1]%') WHERE rn = 6);
 
 query III
 SELECT table_name, files_processed, files_created FROM ducklake_merge_adjacent_files('ducklake') ORDER BY ALL
@@ -104,38 +149,42 @@ SELECT COUNT(*) FROM GLOB('${DATA_PATH}/ducklake_compaction_alter_files/**/*')
 
 # verify correct behavior when operating on the compacted file
 # time travel
+# s2 = 2nd insert snapshot: schema is (id, i) - no j column yet
+query III
+SELECT rowid, * FROM ducklake.test AT (VERSION => getvariable('s2')) ORDER BY ALL
+----
+0	1	10
+1	2	20
+
+# s4 = 4th insert snapshot: schema after ALTER ADD j is (id, i, j)
 query IIII
-SELECT snapshot_id, rowid, * FROM ducklake.test AT (VERSION => 3) ORDER BY ALL
+SELECT rowid, * FROM ducklake.test AT (VERSION => getvariable('s4')) ORDER BY ALL
 ----
-2	0	1	10
-3	1	2	20
+0	1	10	NULL
+1	2	20	NULL
+2	3	30	300
+3	4	40	400
 
-query IIIII
-SELECT snapshot_id, rowid, * FROM ducklake.test AT (VERSION => 6) ORDER BY ALL
+# s6 = 6th insert snapshot: schema after ALTER DROP i is (id, j)
+query III
+SELECT rowid, * FROM ducklake.test AT (VERSION => getvariable('s6')) ORDER BY ALL
 ----
-2	0	1	10	NULL
-3	1	2	20	NULL
-5	2	3	30	300
-6	3	4	40	400
+0	1	NULL
+1	2	NULL
+2	3	300
+3	4	400
+4	5	500
+5	6	600
 
+# Current state (rowids are now 0-based after compaction)
 query IIII
-SELECT snapshot_id, rowid, * FROM ducklake.test AT (VERSION => 9) ORDER BY ALL
+SELECT rowid, * FROM ducklake.test ORDER BY ALL
 ----
-2	0	1	NULL
-3	1	2	NULL
-5	2	3	300
-6	3	4	400
-8	4	5	500
-9	5	6	600
-
-query IIIII
-SELECT snapshot_id, rowid, * FROM ducklake.test ORDER BY ALL
-----
-2	0	1	NULL	NULL
-3	1	2	NULL	NULL
-5	2	3	300	NULL
-6	3	4	400	NULL
-8	4	5	500	NULL
-9	5	6	600	NULL
-11	6	7	700	hello
-12	7	8	800	world
+0	1	NULL	NULL
+1	2	NULL	NULL
+2	3	300	NULL
+3	4	400	NULL
+4	5	500	NULL
+5	6	600	NULL
+6	7	700	hello
+7	8	800	world

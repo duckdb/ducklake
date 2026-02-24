@@ -8,8 +8,6 @@ require parquet
 
 test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
 
-
-
 statement ok
 ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '__TEST_DIR__/merge_adjacent_options_sorted/')
 
@@ -23,24 +21,30 @@ CREATE TABLE reset_sorted_test (unique_id BIGINT, sort_key_1 BIGINT, sort_key_2 
 statement ok
 INSERT INTO reset_sorted_test (unique_id, sort_key_1, sort_key_2)
 FROM range(4) t(i)
-SELECT 
+SELECT
     i AS unique_id,
     i % 2 AS sort_key_1,
     'woot' || i AS sort_key_2
-ORDER BY 
+ORDER BY
     i DESC
 ;
 
 statement ok
+CALL ducklake_flush_inlined_data('ducklake')
+
+statement ok
 INSERT INTO reset_sorted_test (unique_id, sort_key_1, sort_key_2)
 FROM range(4) t(i)
-SELECT 
+SELECT
     i + 4 AS unique_id,
     (i + 4) % 2 AS sort_key_1,
     'woot' || (i + 4) AS sort_key_2
-ORDER BY 
+ORDER BY
     i DESC
 ;
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake')
 
 query III
 FROM reset_sorted_test
@@ -54,8 +58,8 @@ FROM reset_sorted_test
 5	1	woot5
 4	0	woot4
 
-query II
-SELECT df.data_file_id, df.table_id
+query I
+SELECT COUNT(*)
 FROM __ducklake_metadata_ducklake.ducklake_data_file df
 JOIN __ducklake_metadata_ducklake.ducklake_table t
 ON df.table_id = t.table_id
@@ -63,8 +67,7 @@ WHERE
 t.table_name = 'reset_sorted_test'
 ORDER BY ALL
 ----
-0	1
-1	1
+2
 
 statement ok
 ALTER TABLE ducklake.reset_sorted_test SET SORTED BY (sort_key_1 ASC NULLS LAST, sort_key_2 ASC NULLS LAST);
@@ -91,12 +94,12 @@ FROM reset_sorted_test
 4	0	woot4
 
 # We write a new file for the table
-query II
-SELECT df.data_file_id, df.table_id
+query I
+SELECT COUNT(*)
 FROM __ducklake_metadata_ducklake.ducklake_data_file df
 JOIN __ducklake_metadata_ducklake.ducklake_table t
 ON df.table_id = t.table_id
 WHERE
 t.table_name = 'reset_sorted_test'
 ----
-2	1
+1

@@ -23,48 +23,57 @@ loop i 0 2
 statement ok
 CREATE TABLE test_${i} (key INTEGER, values VARCHAR);
 
-# 2	{tables_inserted_into=[1]}
 statement ok
 INSERT INTO test_${i}  SELECT i, concat('thisisastring_', i) FROM range(100) t(i)
 
+statement ok
+CALL ducklake_flush_inlined_data('ducklake')
+
 # Let's do a few insertions interleaved with deletions
-# 3	{tables_deleted_from=[1]}
 statement ok
 DELETE FROM test_${i}
 WHERE key < 50;
 
-# 4	{tables_inserted_into=[1]}
+statement ok
+CALL ducklake_flush_inlined_data('ducklake')
+
 statement ok
 INSERT INTO test_${i}  SELECT i, concat('thisisastring_', i) FROM range(100,200) t(i)
 
-# 5	{tables_deleted_from=[1]}
+statement ok
+CALL ducklake_flush_inlined_data('ducklake')
+
 statement ok
 DELETE FROM test_${i}
 WHERE key < 80;
 
-# 6	{tables_deleted_from=[1]}
+statement ok
+CALL ducklake_flush_inlined_data('ducklake')
+
 statement ok
 DELETE FROM test_${i}
 WHERE key  = 120;
 
+statement ok
+CALL ducklake_flush_inlined_data('ducklake')
+
 endloop
 
-# Check ze files before rewrite
-query IIII
-SELECT data_file_id, delete_file_id, begin_snapshot, end_snapshot FROM ducklake_metadata.ducklake_delete_file
-----
-0	3	3	NULL
-2	4	6	NULL
-5	8	9	NULL
-7	9	12	NULL
+# Capture the snapshot before rewrite (last snapshot_id)
+statement ok
+SET VARIABLE pre_rewrite_snap = (SELECT max(snapshot_id) FROM ducklake_snapshots('ducklake'))
 
-query III
-SELECT data_file_id, begin_snapshot, end_snapshot FROM ducklake_metadata.ducklake_data_file
+# Check ze files before rewrite - verify counts and structural properties
+# The exact begin_snapshot values differ between inline and no-inline modes
+query I
+SELECT count(*) FROM ducklake_metadata.ducklake_delete_file WHERE end_snapshot IS NULL
 ----
-0	2	NULL
-2	4	NULL
-5	8	NULL
-7	10	NULL
+4
+
+query I
+SELECT count(*) FROM ducklake_metadata.ducklake_data_file WHERE end_snapshot IS NULL
+----
+4
 
 # Now lets call the rewrite function in the whole DB
 query III
@@ -73,72 +82,144 @@ SELECT table_name, files_processed, files_created FROM ducklake_rewrite_data_fil
 test_0	2	1
 test_1	2	1
 
-# Check ze files after rewrite, we should have removed the last file of each table (i.e., id 4 and 9)
-query IIII
-SELECT data_file_id, delete_file_id, begin_snapshot, end_snapshot FROM ducklake_metadata.ducklake_delete_file ORDER BY ALL
-----
-0	3	3	13
-2	4	6	13
-5	8	9	13
-7	9	12	13
+# Capture the rewrite snapshot id
+statement ok
+SET VARIABLE rewrite_snap = (SELECT max(snapshot_id) FROM ducklake_snapshots('ducklake'))
 
-query III
-SELECT data_file_id, begin_snapshot, end_snapshot FROM ducklake_metadata.ducklake_data_file  ORDER BY ALL
-----
-0	2	13
-2	4	13
-5	8	13
-7	10	13
-10	13	NULL
-11	13	NULL
-
-# Validate some results
+# Check ze files after rewrite, we should have removed the last file of each table
+# All old delete files should now have end_snapshot = rewrite_snap
 query I
-select count(*) from test_0 AT (VERSION => 3);
+SELECT count(*) FROM ducklake_metadata.ducklake_delete_file WHERE end_snapshot = getvariable('rewrite_snap')
 ----
-50
+4
 
 query I
-select count(*) from test_0 AT (VERSION => 4);
+SELECT count(*) FROM ducklake_metadata.ducklake_delete_file WHERE end_snapshot IS NULL
 ----
-150
+0
+
+# All old data files should have end_snapshot = rewrite_snap, plus 2 new ones with end_snapshot IS NULL
+query I
+SELECT count(*) FROM ducklake_metadata.ducklake_data_file WHERE end_snapshot = getvariable('rewrite_snap')
+----
+4
 
 query I
-select count(*) from test_0 AT (VERSION => 5);
+SELECT count(*) FROM ducklake_metadata.ducklake_data_file WHERE end_snapshot IS NULL
 ----
-120
+2
 
 query I
-select count(*) from test_0 AT (VERSION => 6);
+SELECT count(*) FROM ducklake_metadata.ducklake_data_file WHERE begin_snapshot = getvariable('rewrite_snap') AND end_snapshot IS NULL
 ----
-119
+2
 
-# Check other table
+# Validate time travel results for test_0
+# Capture snapshot IDs for test_0 operations (table_id=1)
+# test_0 insert 1
+statement ok
+SET VARIABLE t0_insert1 = (SELECT min(snapshot_id) FROM ducklake_snapshots('ducklake') WHERE changes::VARCHAR LIKE '%insert%=[1]%')
+
+# test_0 delete 1 (first delete snapshot for table 1)
+statement ok
+SET VARIABLE t0_del1 = (SELECT min(snapshot_id) FROM ducklake_snapshots('ducklake') WHERE changes::VARCHAR LIKE '%delete%=[1]%')
+
+# test_0 insert 2 (second insert for table 1)
+statement ok
+SET VARIABLE t0_insert2 = (SELECT min(snapshot_id) FROM ducklake_snapshots('ducklake') WHERE changes::VARCHAR LIKE '%insert%=[1]%' AND snapshot_id > getvariable('t0_del1'))
+
+# test_0 delete 2 (second delete for table 1, after second insert)
+statement ok
+SET VARIABLE t0_del2 = (SELECT min(snapshot_id) FROM ducklake_snapshots('ducklake') WHERE changes::VARCHAR LIKE '%delete%=[1]%' AND snapshot_id > getvariable('t0_insert2'))
+
+# test_0 last delete snapshot (last delete-related snapshot for table 1)
+statement ok
+SET VARIABLE t0_del3 = (SELECT max(snapshot_id) FROM ducklake_snapshots('ducklake') WHERE changes::VARCHAR LIKE '%delete%=[1]%' OR changes::VARCHAR LIKE '%inlined_delete=[1]%')
+
+# After first insert: 100 rows
 query I
-select count(*) from test_1 AT (VERSION => 8);
+select count(*) from test_0 AT (VERSION => getvariable('t0_insert1'));
 ----
 100
 
+# After first delete (key < 50): 50 rows
 query I
-select count(*) from test_1 AT (VERSION => 9);
+select count(*) from test_0 AT (VERSION => getvariable('t0_del1'));
 ----
 50
 
+# After second insert: 150 rows
 query I
-select count(*) from test_1 AT (VERSION => 10);
+select count(*) from test_0 AT (VERSION => getvariable('t0_insert2'));
 ----
 150
 
+# After second delete (key < 80): 120 rows
 query I
-select count(*) from test_1 AT (VERSION => 11);
+select count(*) from test_0 AT (VERSION => getvariable('t0_del2'));
 ----
 120
 
+# After last delete (key = 120): 119 rows
+# In inline mode this is a flushed_inlined snapshot; in no-inline it's a tables_deleted_from
 query I
-select count(*) from test_1 AT (VERSION => 12);
+select count(*) from test_0 AT (VERSION => getvariable('t0_del3'));
 ----
 119
 
+# Validate time travel results for test_1
+# Capture snapshot IDs for test_1 operations (table_id=2)
+# test_1 insert 1
+statement ok
+SET VARIABLE t1_insert1 = (SELECT min(snapshot_id) FROM ducklake_snapshots('ducklake') WHERE changes::VARCHAR LIKE '%insert%=[2]%')
+
+# test_1 delete 1
+statement ok
+SET VARIABLE t1_del1 = (SELECT min(snapshot_id) FROM ducklake_snapshots('ducklake') WHERE changes::VARCHAR LIKE '%delete%=[2]%')
+
+# test_1 insert 2
+statement ok
+SET VARIABLE t1_insert2 = (SELECT min(snapshot_id) FROM ducklake_snapshots('ducklake') WHERE changes::VARCHAR LIKE '%insert%=[2]%' AND snapshot_id > getvariable('t1_del1'))
+
+# test_1 delete 2
+statement ok
+SET VARIABLE t1_del2 = (SELECT min(snapshot_id) FROM ducklake_snapshots('ducklake') WHERE changes::VARCHAR LIKE '%delete%=[2]%' AND snapshot_id > getvariable('t1_insert2'))
+
+# test_1 last delete snapshot
+statement ok
+SET VARIABLE t1_del3 = (SELECT max(snapshot_id) FROM ducklake_snapshots('ducklake') WHERE changes::VARCHAR LIKE '%delete%=[2]%' OR changes::VARCHAR LIKE '%inlined_delete=[2]%')
+
+# After first insert: 100 rows
+query I
+select count(*) from test_1 AT (VERSION => getvariable('t1_insert1'));
+----
+100
+
+# After first delete (key < 50): 50 rows
+query I
+select count(*) from test_1 AT (VERSION => getvariable('t1_del1'));
+----
+50
+
+# After second insert: 150 rows
+query I
+select count(*) from test_1 AT (VERSION => getvariable('t1_insert2'));
+----
+150
+
+# After second delete (key < 80): 120 rows
+query I
+select count(*) from test_1 AT (VERSION => getvariable('t1_del2'));
+----
+120
+
+# After last delete (key = 120): 119 rows
+query I
+select count(*) from test_1 AT (VERSION => getvariable('t1_del3'));
+----
+119
+
+# Check current state
 query I
 select count(*) from test_0;
 ----

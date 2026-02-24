@@ -17,9 +17,12 @@ ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/du
 statement ok
 CREATE TABLE ducklake.test_table as SELECT 1 as test_table_column
 
+statement ok
+CALL ducklake_flush_inlined_data('ducklake')
+
 ### Comment on column from table
 query I
-select comment from duckdb_columns() where column_name='test_table_column';
+select comment from duckdb_columns() where column_name='test_table_column' and database_name='ducklake';
 ----
 NULL
 
@@ -27,7 +30,7 @@ statement ok
 COMMENT ON COLUMN ducklake.test_table.test_table_column IS 'very gezellige column'
 
 query I
-select comment from duckdb_columns() where column_name='test_table_column';
+select comment from duckdb_columns() where column_name='test_table_column' and database_name='ducklake';
 ----
 very gezellige column
 
@@ -38,7 +41,7 @@ statement ok
 COMMENT ON COLUMN ducklake.test_table.test_table_column IS 'toch niet zo gezellig'
 
 query I
-select comment from duckdb_columns() where column_name='test_table_column';
+select comment from duckdb_columns() where column_name='test_table_column' and database_name='ducklake';
 ----
 toch niet zo gezellig
 
@@ -47,6 +50,6 @@ statement ok
 ROLLBACK
 
 query I
-select comment from duckdb_columns() where column_name='test_table_column';
+select comment from duckdb_columns() where column_name='test_table_column' and database_name='ducklake';
 ----
 very gezellige column

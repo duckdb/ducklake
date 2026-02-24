@@ -19,14 +19,29 @@ bool PostgresMetadataManager::TypeIsNativelySupported(const LogicalType &type) {
 	case LogicalTypeId::UBIGINT:
 	case LogicalTypeId::HUGEINT:
 	case LogicalTypeId::UHUGEINT:
+	// Postgres timestamp/date ranges are narrower than DuckDB's
+	case LogicalTypeId::DATE:
+	case LogicalTypeId::TIMESTAMP:
+	case LogicalTypeId::TIMESTAMP_TZ:
 	case LogicalTypeId::TIMESTAMP_SEC:
 	case LogicalTypeId::TIMESTAMP_MS:
 	case LogicalTypeId::TIMESTAMP_NS:
+	// Postgres bytea input format differs from DuckDB's blob text format
+	case LogicalTypeId::BLOB:
+	// Postgres cannot store null bytes in VARCHAR/TEXT columns
+	case LogicalTypeId::VARCHAR:
 	case LogicalTypeId::VARIANT:
 		return false;
 	default:
 		return true;
 	}
+}
+
+bool PostgresMetadataManager::SupportsInlining(const LogicalType &type) {
+	if (type.id() == LogicalTypeId::VARIANT) {
+		return false;
+	}
+	return DuckLakeMetadataManager::SupportsInlining(type);
 }
 
 string PostgresMetadataManager::GetColumnTypeInternal(const LogicalType &column_type) {
@@ -40,8 +55,21 @@ string PostgresMetadataManager::GetColumnTypeInternal(const LogicalType &column_
 		return "INTEGER";
 	case LogicalTypeId::UINTEGER:
 		return "BIGINT";
+	case LogicalTypeId::FLOAT:
+		return "REAL";
 	case LogicalTypeId::BLOB:
+	case LogicalTypeId::VARCHAR:
 		return "BYTEA";
+	case LogicalTypeId::UBIGINT:
+	case LogicalTypeId::HUGEINT:
+	case LogicalTypeId::UHUGEINT:
+	case LogicalTypeId::DATE:
+	case LogicalTypeId::TIMESTAMP:
+	case LogicalTypeId::TIMESTAMP_TZ:
+	case LogicalTypeId::TIMESTAMP_SEC:
+	case LogicalTypeId::TIMESTAMP_MS:
+	case LogicalTypeId::TIMESTAMP_NS:
+		return "VARCHAR";
 	default:
 		return column_type.ToString();
 	}

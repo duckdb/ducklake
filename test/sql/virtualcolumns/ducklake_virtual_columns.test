@@ -20,6 +20,9 @@ CREATE TABLE ducklake.test(i INTEGER);
 statement ok
 INSERT INTO ducklake.test VALUES (1), (2), (3);
 
+statement ok
+CALL ducklake_flush_inlined_data('ducklake')
+
 query I
 SELECT file_row_number FROM ducklake.test
 ----

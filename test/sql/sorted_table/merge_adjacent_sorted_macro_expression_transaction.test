@@ -21,29 +21,34 @@ statement ok
 CREATE TABLE macro_sort_test (i VARCHAR, j VARCHAR);
 
 statement ok
-INSERT INTO macro_sort_test 
-SELECT 'ZYX' AS i, 'CBA' AS j 
-UNION ALL 
-SELECT 'ABC' AS i, 'XYZ' AS j 
-
+INSERT INTO macro_sort_test
+SELECT 'ZYX' AS i, 'CBA' AS j
+UNION ALL
+SELECT 'ABC' AS i, 'XYZ' AS j
 
 statement ok
-INSERT INTO macro_sort_test 
-SELECT '321' AS i, '000' AS j 
-UNION ALL 
-SELECT '123' AS i, '000' AS j 
+CALL ducklake_flush_inlined_data('ducklake')
+
+statement ok
+INSERT INTO macro_sort_test
+SELECT '321' AS i, '000' AS j
+UNION ALL
+SELECT '123' AS i, '000' AS j
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake')
 
 # Verify we have 2 data files before compaction
-query II
-SELECT df.data_file_id, df.table_id
+query I
+SELECT df.table_id
 FROM __ducklake_metadata_ducklake.ducklake_data_file df
 JOIN __ducklake_metadata_ducklake.ducklake_table t
 ON df.table_id = t.table_id
 WHERE
 t.table_name = 'macro_sort_test'
 ----
-0	1
-1	1
+1
+1
 
 statement ok
 BEGIN
@@ -94,15 +99,15 @@ statement ok
 CALL ducklake_merge_adjacent_files('ducklake', 'macro_sort_test');
 
 # Verify we have 1 data file after compaction
-query II
-SELECT df.data_file_id, df.table_id
+query I
+SELECT df.table_id
 FROM __ducklake_metadata_ducklake.ducklake_data_file df
 JOIN __ducklake_metadata_ducklake.ducklake_table t
 ON df.table_id = t.table_id
 WHERE
 t.table_name = 'macro_sort_test'
 ----
-2	1
+1
 
 # Verify data is now sorted by the macro
 query III

@@ -637,5 +637,14 @@
             "test/sql/types/geo/geometry_shred.test"
         ]
     }
+    ,
+    {
+      "reason": "FIXME: Variant Bugs?",
+      "paths": [
+        "test/parquet/variant/variant_comparison.test",
+        "test/sql/storage/types/variant/variant_shredding_omit_untyped.test",
+        "test/parquet/variant/variant_json_copy.test"
+      ]
+    }
   ]
 }

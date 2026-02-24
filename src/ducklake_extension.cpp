@@ -22,6 +22,9 @@ static void LoadInternal(ExtensionLoader &loader) {
 	                          Value::UBIGINT(100), nullptr, SetScope::GLOBAL);
 	config.AddExtensionOption("ducklake_retry_backoff", "Backoff factor for exponentially increasing retry wait time",
 	                          LogicalType::DOUBLE, Value::DOUBLE(1.5), nullptr, SetScope::GLOBAL);
+	config.AddExtensionOption("ducklake_default_data_inlining_row_limit",
+	                          "Default row limit for data inlining (0 disables inlining)", LogicalType::UBIGINT,
+	                          Value::UBIGINT(10), nullptr, SetScope::GLOBAL);
 
 	DuckLakeSnapshotsFunction snapshots;
 	loader.RegisterFunction(snapshots);

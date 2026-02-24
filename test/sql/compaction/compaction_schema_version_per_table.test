@@ -20,10 +20,16 @@ statement ok
 CREATE TABLE table_to_compact AS SELECT range a FROM range(5);
 
 statement ok
+CALL ducklake_flush_inlined_data('ducklake')
+
+statement ok
 CREATE VIEW view_bumps_schema_version AS SELECT 42;
 
 statement ok
 INSERT INTO table_to_compact VALUES (5), (6);
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake')
 
 # compaction should work because the table's schema didn't change (only a view was created)
 query III
@@ -55,11 +61,19 @@ statement ok
 INSERT INTO ducklake.another_table VALUES (100), (200);
 
 statement ok
+CALL ducklake_flush_inlined_data('ducklake')
+
+statement ok
 INSERT INTO ducklake.another_table VALUES (300), (400);
 
+statement ok
+CALL ducklake_flush_inlined_data('ducklake')
 
 statement ok
 INSERT INTO ducklake.table_to_compact VALUES (7), (8);
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake')
 
 statement ok
 ALTER TABLE ducklake.another_table ADD COLUMN y VARCHAR;
@@ -68,19 +82,28 @@ statement ok
 INSERT INTO ducklake.another_table VALUES (300, 1), (400,2);
 
 statement ok
+CALL ducklake_flush_inlined_data('ducklake')
+
+statement ok
 INSERT INTO ducklake.another_table VALUES (500, 1), (600,2);
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake')
 
 # table_to_compact (id 1)  only has one schema still
 # another_table (id 3)  has two schemas
-query III
-FROM __ducklake_metadata_ducklake.ducklake_schema_versions
+query II
+SELECT schema_version, table_id FROM __ducklake_metadata_ducklake.ducklake_schema_versions
 ----
-1	1	1
-5	3	3
-9	4	3
+1	1
+3	3
+4	3
 
 statement ok
 INSERT INTO ducklake.table_to_compact VALUES (9), (10);
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake')
 
 # we should have 3 data files for table_to_compact (1 merged + 2 new inserts)
 query I

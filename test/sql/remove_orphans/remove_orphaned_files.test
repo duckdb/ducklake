@@ -26,7 +26,13 @@ statement ok
 insert into test values (1);
 
 statement ok
+CALL ducklake_flush_inlined_data('ducklake')
+
+statement ok
 insert into test values (2);
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake')
 
 query III
 SELECT table_name, files_processed, files_created FROM ducklake_merge_adjacent_files('ducklake')

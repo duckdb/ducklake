@@ -25,6 +25,9 @@ ALTER TABLE my_timeseries SET PARTITIONED BY (year(ts));
 statement ok
 INSERT INTO my_timeseries VALUES ('2025-09-17'::TIMESTAMP, 42::DOUBLE PRECISION);
 
+# flush inlined data to create files
+statement ok
+CALL ducklake_flush_inlined_data('ducklake')
 
 statement ok
 MERGE INTO my_timeseries

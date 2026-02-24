@@ -17,51 +17,67 @@ test-env DATA_PATH __TEST_DIR__
 statement ok
 ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/ducklake_compaction_files', METADATA_CATALOG 'xx')
 
-# snapshot 1
 statement ok
 CREATE TABLE ducklake.test(i INTEGER);
 
-# snapshot 2
 statement ok
 CREATE TABLE ducklake.test2(i INTEGER);
 
-# snapshot 3
+# insert 1 into test
 statement ok
 INSERT INTO ducklake.test VALUES (1);
 
-# snapshot 4: random change that does not modify the "test" table
+statement ok
+CALL ducklake_flush_inlined_data('ducklake')
+
+# insert into test2: random change that does not modify the "test" table
 statement ok
 INSERT INTO ducklake.test2 VALUES (42);
 
-# snapshot 5
+statement ok
+CALL ducklake_flush_inlined_data('ducklake')
+
+# insert 2 into test
 statement ok
 INSERT INTO ducklake.test VALUES (2);
 
-# snapshot 6
+statement ok
+CALL ducklake_flush_inlined_data('ducklake')
+
+# insert 3 into test
 statement ok
 INSERT INTO ducklake.test VALUES (3);
 
-# snapshot 7
+statement ok
+CALL ducklake_flush_inlined_data('ducklake')
+
+# insert 4 into test
 statement ok
 INSERT INTO ducklake.test VALUES (4);
 
-# snapshot 8
+statement ok
+CALL ducklake_flush_inlined_data('ducklake')
+
+# insert 5 into test
 statement ok
 INSERT INTO ducklake.test VALUES (5);
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake')
 
 query I
 SELECT COUNT(*) FROM GLOB('${DATA_PATH}/ducklake_compaction_files/**/*')
 ----
 6
 
-query III
-SELECT snapshot_id, rowid, * FROM ducklake.test ORDER BY ALL
+query II
+SELECT rowid, * FROM ducklake.test ORDER BY ALL
 ----
-3	0	1
-5	1	2
-6	2	3
-7	3	4
-8	4	5
+0	1
+1	2
+2	3
+3	4
+4	5
 
 query III
 SELECT table_name, files_processed, files_created FROM ducklake.merge_adjacent_files() ORDER BY ALL
@@ -101,55 +117,77 @@ SELECT COUNT(*) FROM GLOB('${DATA_PATH}/ducklake_compaction_files/**/*')
 ----
 2
 
+# compute snapshot IDs dynamically so the test works in both inline and no-inline modes
+# s1 = 1st insert into test (table_id=1)
+statement ok
+SET VARIABLE s1 = (SELECT snapshot_id FROM (SELECT snapshot_id, row_number() OVER (ORDER BY snapshot_id) as rn FROM ducklake_snapshots('ducklake') WHERE changes::VARCHAR LIKE '%insert%=[1]%') WHERE rn = 1);
+
+# s_test2 = insert into test2 (table_id=2) - used to verify unrelated inserts don't affect test
+statement ok
+SET VARIABLE s_test2 = (SELECT snapshot_id FROM (SELECT snapshot_id, row_number() OVER (ORDER BY snapshot_id) as rn FROM ducklake_snapshots('ducklake') WHERE changes::VARCHAR LIKE '%insert%=[2]%') WHERE rn = 1);
+
+# s2 = 2nd insert into test (table_id=1)
+statement ok
+SET VARIABLE s2 = (SELECT snapshot_id FROM (SELECT snapshot_id, row_number() OVER (ORDER BY snapshot_id) as rn FROM ducklake_snapshots('ducklake') WHERE changes::VARCHAR LIKE '%insert%=[1]%') WHERE rn = 2);
+
+# s3 = 3rd insert into test (table_id=1)
+statement ok
+SET VARIABLE s3 = (SELECT snapshot_id FROM (SELECT snapshot_id, row_number() OVER (ORDER BY snapshot_id) as rn FROM ducklake_snapshots('ducklake') WHERE changes::VARCHAR LIKE '%insert%=[1]%') WHERE rn = 3);
+
+# s_last = last snapshot (after compaction)
+statement ok
+SET VARIABLE s_last = (SELECT max(snapshot_id) FROM ducklake_snapshots('ducklake'));
+
 # verify correct behavior when operating on the compacted file
 # time travel
 query I
-SELECT * FROM ducklake.test AT (VERSION => 3)
+SELECT * FROM ducklake.test AT (VERSION => getvariable('s1'))
 ----
 1
 
 query I
-SELECT * FROM ducklake.test AT (VERSION => 4)
+SELECT * FROM ducklake.test AT (VERSION => getvariable('s_test2'))
 ----
 1
 
 
 query I
-SELECT * FROM ducklake.test AT (VERSION => 5) ORDER BY ALL
+SELECT * FROM ducklake.test AT (VERSION => getvariable('s2')) ORDER BY ALL
 ----
 1
 2
 
-# reading snapshot id and row id
-query III
-SELECT snapshot_id, rowid, * FROM ducklake.test ORDER BY ALL
+# reading row id
+# After compaction, rowids start at 0 (they get compacted)
+query II
+SELECT rowid, * FROM ducklake.test ORDER BY ALL
 ----
-3	0	1
-5	1	2
-6	2	3
-7	3	4
-8	4	5
+0	1
+1	2
+2	3
+3	4
+4	5
 
 # table insertions function
 query II
-SELECT rowid, * FROM ducklake_table_insertions('ducklake', 'main', 'test', 0, 3) ORDER BY ALL
+SELECT rowid, * FROM ducklake_table_insertions('ducklake', 'main', 'test', 0, getvariable('s1')) ORDER BY ALL
 ----
 0	1
 
 query II
-SELECT rowid, * FROM ducklake_table_insertions('ducklake', 'main', 'test', 0, 4) ORDER BY ALL
+SELECT rowid, * FROM ducklake_table_insertions('ducklake', 'main', 'test', 0, getvariable('s_test2')) ORDER BY ALL
 ----
 0	1
 
 query II
-SELECT rowid, * FROM ducklake_table_insertions('ducklake', 'main', 'test', 0, 6) ORDER BY ALL
+SELECT rowid, * FROM ducklake_table_insertions('ducklake', 'main', 'test', 0, getvariable('s3')) ORDER BY ALL
 ----
 0	1
 1	2
 2	3
 
 query II
-SELECT rowid, * FROM ducklake_table_insertions('ducklake', 'main', 'test', 0, 9) ORDER BY ALL
+SELECT rowid, * FROM ducklake_table_insertions('ducklake', 'main', 'test', 0, getvariable('s_last')) ORDER BY ALL
 ----
 0	1
 1	2

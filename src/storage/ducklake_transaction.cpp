@@ -3,6 +3,7 @@
 #include "common/ducklake_types.hpp"
 #include "common/ducklake_util.hpp"
 #include "duckdb/common/thread.hpp"
+#include "duckdb/common/vector_operations/vector_operations.hpp"
 #include "duckdb/catalog/catalog_entry/scalar_macro_catalog_entry.hpp"
 #include "duckdb/common/types/uuid.hpp"
 #include "duckdb/function/scalar_macro_function.hpp"
@@ -1034,6 +1035,16 @@ void DuckLakeTransaction::GetNewTableInfo(DuckLakeCommitState &commit_state, Duc
 
 			// remap the table in the commit state
 			commit_state.committed_tables.emplace(old_table_id, new_table_id);
+
+			// create an inlined data table entry with the latest columns
+			// (uses tables.front() to get the most up-to-date schema including any ALTER TABLE changes)
+			auto &latest_table = tables.front().get();
+			DuckLakeTableInfo inlined_entry;
+			inlined_entry.id = new_table_id;
+			inlined_entry.schema_id = latest_table.ParentSchema().Cast<DuckLakeSchemaEntry>().GetSchemaId();
+			inlined_entry.uuid = latest_table.GetTableUUID();
+			inlined_entry.columns = latest_table.GetTableColumns();
+			result.new_inlined_data_tables.push_back(std::move(inlined_entry));
 			break;
 		}
 		default:
@@ -1041,15 +1052,26 @@ void DuckLakeTransaction::GetNewTableInfo(DuckLakeCommitState &commit_state, Duc
 		}
 	}
 	if (column_schema_change) {
-		// we changed the column definitions of a table - we need to create a new inlined data table (if data inlining
-		// is enabled)
+		// we changed the column definitions of an existing table - we need to create a new inlined data table
+		// (if data inlining is enabled)
+		// for newly created tables this is already handled in the CREATED case above
 		auto &table = tables.front().get();
-
-		DuckLakeTableInfo table_entry;
-		table_entry.id = table.GetTableId();
-		table_entry.uuid = table.GetTableUUID();
-		table_entry.columns = table.GetTableColumns();
-		result.new_inlined_data_tables.push_back(std::move(table_entry));
+		auto committed_id = commit_state.GetTableId(table);
+		bool already_added = false;
+		for (auto &entry : result.new_inlined_data_tables) {
+			if (entry.id == committed_id) {
+				already_added = true;
+				break;
+			}
+		}
+		if (!already_added) {
+			DuckLakeTableInfo table_entry;
+			table_entry.id = committed_id;
+			table_entry.schema_id = table.ParentSchema().Cast<DuckLakeSchemaEntry>().GetSchemaId();
+			table_entry.uuid = table.GetTableUUID();
+			table_entry.columns = table.GetTableColumns();
+			result.new_inlined_data_tables.push_back(std::move(table_entry));
+		}
 	}
 }
 
@@ -1368,7 +1390,11 @@ NewDataInfo DuckLakeTransaction::GetNewDataFiles(string &batch_query, DuckLakeCo
 		auto &new_stats = new_globals.stats;
 		vector<DuckLakeDeleteFile> delete_files;
 		for (auto &file : table_changes.new_data_files) {
-			auto data_file = GetNewDataFile(file, commit_state.commit_snapshot, table_id, new_stats.next_row_id);
+			// flushed files (with max_partial_file_snapshot) have embedded row_ids, we gotta use the original
+			// row_id_start
+			auto row_id_start =
+			    file.flush_row_id_start.IsValid() ? file.flush_row_id_start.GetIndex() : new_stats.next_row_id;
+			auto data_file = GetNewDataFile(file, commit_state.commit_snapshot, table_id, row_id_start);
 			for (auto &del_file : file.delete_files) {
 				// this transaction-local file already has deletes - write them out
 				DuckLakeDeleteFile delete_file = del_file;
@@ -1813,10 +1839,9 @@ void DuckLakeTransaction::FlushChanges() {
 			}
 			can_retry = true;
 			DuckLakeCommitState commit_state(commit_snapshot);
-			string batch_queries = CommitChanges(commit_state, transaction_changes, stats);
-
 			// write the new snapshot
-			batch_queries += metadata_manager->InsertSnapshot();
+			string batch_queries = metadata_manager->InsertSnapshot();
+			batch_queries += CommitChanges(commit_state, transaction_changes, stats);
 
 			batch_queries += WriteSnapshotChanges(commit_state, transaction_changes);
 			auto res = metadata_manager->Execute(commit_snapshot, batch_queries);
@@ -2063,6 +2088,31 @@ void DuckLakeTransaction::AppendInlinedData(TableIndex table_id, unique_ptr<Duck
 	if (table_changes.new_inlined_data) {
 		// already exists - append
 		auto &existing_data = *table_changes.new_inlined_data;
+		auto &existing_types = existing_data.data->Types();
+		auto &new_types = new_data->data->Types();
+		// check if types changed (e.g. due to ALTER COLUMN TYPE)
+		if (existing_types != new_types) {
+			// if types differ we gotta add a cast.
+			auto context_ref = context.lock();
+			auto casted_data = make_uniq<ColumnDataCollection>(*context_ref, new_types);
+			ColumnDataAppendState append_state;
+			casted_data->InitializeAppend(append_state);
+			for (auto &chunk : existing_data.data->Chunks()) {
+				DataChunk casted_chunk;
+				casted_chunk.Initialize(*context_ref, new_types);
+				for (idx_t col_idx = 0; col_idx < chunk.ColumnCount(); col_idx++) {
+					if (existing_types[col_idx] != new_types[col_idx]) {
+						VectorOperations::Cast(*context_ref, chunk.data[col_idx], casted_chunk.data[col_idx],
+						                       chunk.size());
+					} else {
+						casted_chunk.data[col_idx].Reference(chunk.data[col_idx]);
+					}
+				}
+				casted_chunk.SetCardinality(chunk.size());
+				casted_data->Append(append_state, casted_chunk);
+			}
+			existing_data.data = std::move(casted_data);
+		}
 		ColumnDataAppendState append_state;
 		existing_data.data->InitializeAppend(append_state);
 		for (auto &chunk : new_data->data->Chunks()) {
@@ -2103,6 +2153,7 @@ void DuckLakeTransaction::AddNewInlinedDeletes(TableIndex table_id, const string
 }
 
 void DuckLakeTransaction::DeleteFromLocalInlinedData(TableIndex table_id, set<idx_t> new_deletes) {
+	lock_guard<mutex> guard(table_data_changes_lock);
 	auto entry = table_data_changes.find(table_id);
 	if (entry == table_data_changes.end()) {
 		throw InternalException("DeleteFromLocalInlinedData called but no transaction-local data exists for table");
@@ -2138,6 +2189,132 @@ void DuckLakeTransaction::DeleteFromLocalInlinedData(TableIndex table_id, set<id
 	}
 
 	// override the existing collection
+	table_changes.new_inlined_data->data = std::move(new_data);
+}
+
+void DuckLakeTransaction::AddColumnToLocalInlinedData(TableIndex table_id, const LogicalType &new_column_type,
+                                                      FieldIndex new_field_index, const Value &default_value) {
+	lock_guard<mutex> guard(table_data_changes_lock);
+	auto entry = table_data_changes.find(table_id);
+	if (entry == table_data_changes.end()) {
+		throw InternalException("AddColumnToLocalInlinedData called but no transaction-local data exists");
+	}
+	auto &table_changes = entry->second;
+	if (!table_changes.new_inlined_data) {
+		throw InternalException("AddColumnToLocalInlinedData called but no inlined data exists");
+	}
+
+	auto &existing = *table_changes.new_inlined_data->data;
+
+	// New types: existing + new column
+	auto new_types = existing.Types();
+	new_types.push_back(new_column_type);
+
+	auto context_ref = context.lock();
+	auto new_data = make_uniq<ColumnDataCollection>(*context_ref, new_types);
+
+	ColumnDataAppendState append_state;
+	new_data->InitializeAppend(append_state);
+
+	bool has_default = !default_value.IsNull();
+
+	for (auto &chunk : existing.Chunks()) {
+		DataChunk new_chunk;
+		new_chunk.Initialize(*context_ref, new_types);
+
+		// Copy existing columns
+		for (idx_t col_idx = 0; col_idx < chunk.ColumnCount(); col_idx++) {
+			new_chunk.data[col_idx].Reference(chunk.data[col_idx]);
+		}
+
+		// New column: use default value or NULL
+		auto &new_col_vector = new_chunk.data[chunk.ColumnCount()];
+		if (has_default) {
+			new_col_vector.Reference(default_value);
+		} else {
+			new_col_vector.SetVectorType(VectorType::CONSTANT_VECTOR);
+			ConstantVector::SetNull(new_col_vector, true);
+		}
+
+		new_chunk.SetCardinality(chunk.size());
+		new_data->Append(append_state, new_chunk);
+	}
+
+	// Add stats for new column
+	idx_t total_rows = existing.Count();
+	DuckLakeColumnStats new_col_stats(new_column_type);
+	new_col_stats.num_values = total_rows;
+	new_col_stats.has_num_values = true;
+	if (has_default) {
+		new_col_stats.null_count = 0;
+		new_col_stats.has_null_count = true;
+		new_col_stats.any_valid = true;
+	} else {
+		new_col_stats.null_count = total_rows;
+		new_col_stats.has_null_count = true;
+		new_col_stats.any_valid = false;
+	}
+
+	table_changes.new_inlined_data->column_stats.emplace(new_field_index, std::move(new_col_stats));
+	table_changes.new_inlined_data->data = std::move(new_data);
+}
+
+static void RemoveFieldStats(map<FieldIndex, DuckLakeColumnStats> &column_stats, const DuckLakeFieldId &field_id) {
+	column_stats.erase(field_id.GetFieldIndex());
+	for (auto &child_id : field_id.Children()) {
+		RemoveFieldStats(column_stats, *child_id);
+	}
+}
+
+void DuckLakeTransaction::RemoveColumnFromLocalInlinedData(TableIndex table_id, LogicalIndex removed_column_index,
+                                                           const DuckLakeFieldId &field_id) {
+	lock_guard<mutex> guard(table_data_changes_lock);
+	auto entry = table_data_changes.find(table_id);
+	if (entry == table_data_changes.end()) {
+		throw InternalException("RemoveColumnFromLocalInlinedData called but no transaction-local data exists");
+	}
+	auto &table_changes = entry->second;
+	if (!table_changes.new_inlined_data) {
+		throw InternalException("RemoveColumnFromLocalInlinedData called but no inlined data exists");
+	}
+
+	auto &existing = *table_changes.new_inlined_data->data;
+
+	// New types: existing minus the removed column
+	vector<LogicalType> new_types;
+	for (idx_t col_idx = 0; col_idx < existing.Types().size(); col_idx++) {
+		if (col_idx == removed_column_index.index) {
+			continue;
+		}
+		new_types.push_back(existing.Types()[col_idx]);
+	}
+
+	auto context_ref = context.lock();
+	auto new_data = make_uniq<ColumnDataCollection>(*context_ref, new_types);
+
+	ColumnDataAppendState append_state;
+	new_data->InitializeAppend(append_state);
+
+	for (auto &chunk : existing.Chunks()) {
+		DataChunk new_chunk;
+		new_chunk.Initialize(*context_ref, new_types);
+
+		idx_t new_col_idx = 0;
+		for (idx_t col_idx = 0; col_idx < chunk.ColumnCount(); col_idx++) {
+			if (col_idx == removed_column_index.index) {
+				continue;
+			}
+			new_chunk.data[new_col_idx].Reference(chunk.data[col_idx]);
+			new_col_idx++;
+		}
+
+		new_chunk.SetCardinality(chunk.size());
+		new_data->Append(append_state, new_chunk);
+	}
+
+	// Remove stats for the dropped field and all its children
+	RemoveFieldStats(table_changes.new_inlined_data->column_stats, field_id);
+
 	table_changes.new_inlined_data->data = std::move(new_data);
 }
 

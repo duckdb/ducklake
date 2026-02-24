@@ -27,6 +27,9 @@ VALUES
     (4, 'a', 'z');
 
 statement ok
+CALL ducklake_flush_inlined_data('ducklake')
+
+statement ok
 INSERT INTO sort_expression_test (unique_id, sort_key_1, sort_key_2)
 VALUES
     (5, 'b', 'x'),
@@ -34,17 +37,20 @@ VALUES
     (7, 'a', 'x'),
     (8, 'b', 'y');
 
+statement ok
+CALL ducklake_flush_inlined_data('ducklake')
+
 # Verify we have 2 data files before compaction
-query II
-SELECT df.data_file_id, df.table_id
+query I
+SELECT  df.table_id
 FROM __ducklake_metadata_ducklake.ducklake_data_file df
 JOIN __ducklake_metadata_ducklake.ducklake_table t
 ON df.table_id = t.table_id
 WHERE
 t.table_name = 'sort_expression_test'
 ----
-0	1
-1	1
+1
+1
 
 # Set sorted by an expression (concatenation of two columns)
 statement ok
@@ -68,15 +74,15 @@ statement ok
 CALL ducklake_merge_adjacent_files('ducklake', 'sort_expression_test');
 
 # Verify we have 1 data file after compaction
-query II
-SELECT df.data_file_id, df.table_id
+query I
+SELECT  df.table_id
 FROM __ducklake_metadata_ducklake.ducklake_data_file df
 JOIN __ducklake_metadata_ducklake.ducklake_table t
 ON df.table_id = t.table_id
 WHERE
 t.table_name = 'sort_expression_test'
 ----
-2	1
+1
 
 # Verify data is now sorted by the concatenation of sort_key_1 and sort_key_2
 # Expected order by sort_key_1 || sort_key_2:
@@ -124,7 +130,13 @@ statement ok
 INSERT INTO rename_expr_test VALUES (1, 'x', 'y'), (2, 'a', 'b');
 
 statement ok
+CALL ducklake_flush_inlined_data('ducklake')
+
+statement ok
 INSERT INTO rename_expr_test VALUES (3, 'p', 'q'), (4, 'm', 'n');
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake')
 
 # Set sorted by an expression using both columns
 statement ok
@@ -168,7 +180,13 @@ statement ok
 INSERT INTO multi_rename_test VALUES (1, 'John', 'Doe'), (2, 'Alice', 'Smith');
 
 statement ok
+CALL ducklake_flush_inlined_data('ducklake')
+
+statement ok
 INSERT INTO multi_rename_test VALUES (3, 'Bob', 'Jones'), (4, 'Carol', 'Brown');
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake')
 
 # Set sorted by concatenation of both name columns
 statement ok

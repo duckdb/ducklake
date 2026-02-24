@@ -24,7 +24,13 @@ statement ok
 INSERT INTO ducklake.test  FROM range(100) t(i)
 
 statement ok
+CALL ducklake_flush_inlined_data('ducklake')
+
+statement ok
 DELETE FROM ducklake.TEST WHERE i <10
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake')
 
 # try to commit a delete after a compaction: conflict
 statement ok con1
@@ -49,6 +55,9 @@ COMMIT
 statement ok
 DELETE FROM ducklake.TEST WHERE i <20
 
+statement ok
+CALL ducklake_flush_inlined_data('ducklake')
+
 # try to commit a compaction after a deletion: conflict
 statement ok con1
 BEGIN
@@ -57,7 +66,7 @@ statement ok con2
 BEGIN
 
 statement ok con1
-DELETE FROM ducklake.TEST WHERE i <30
+DELETE FROM ducklake.TEST WHERE i >=30 AND i < 50
 
 statement ok con2
 CALL ducklake_rewrite_data_files('ducklake', 'test', delete_threshold => 0);
@@ -70,7 +79,10 @@ COMMIT
 ----
 
 statement ok
-DELETE FROM ducklake.TEST WHERE i <40
+DELETE FROM ducklake.TEST WHERE i >=50 AND i < 70
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake')
 
 # two transactions both try to compact: conflict
 statement ok con1
@@ -98,6 +110,9 @@ INSERT INTO ducklake.test VALUES (7);
 statement ok
 INSERT INTO ducklake.test VALUES (8);
 
+statement ok
+CALL ducklake_flush_inlined_data('ducklake')
+
 # compaction and insert: no conflict
 statement ok con1
 BEGIN
@@ -120,4 +135,4 @@ COMMIT
 query I
 SELECT count(*) FROM ducklake.test ORDER BY ALL
 ----
-63
+43

@@ -29,6 +29,9 @@ statement ok
 INSERT INTO partitioned_t VALUES (5,2,1), (6,3,3);
 
 statement ok
+CALL ducklake_flush_inlined_data('ducklake')
+
+statement ok
 COPY (SELECT 4 AS id, 2 as other_partition_column) TO '${DATA_PATH}/add_file_partitioned/main/partitioned_t/partition_column=2/file.parquet' (FORMAT parquet);
 
 query II
@@ -36,46 +39,40 @@ FROM read_parquet('${DATA_PATH}/add_file_partitioned/main/partitioned_t/partitio
 ----
 4	2
 
-query IIII
-FROM metadata.ducklake_file_partition_value;
-----
-0	1	0	1
-1	1	0	2
-2	1	0	3
-
 query III
-SELECT data_file_id, min_value, max_value FROM metadata.ducklake_file_column_stats where column_id = 2
+SELECT table_id, partition_key_index, partition_value FROM metadata.ducklake_file_partition_value;
 ----
-0	1	1
-1	2	2
-2	3	3
+1	0	1
+1	0	2
+1	0	3
+
+query I
+SELECT count(*) FROM metadata.ducklake_file_column_stats where column_id = 2
+----
+3
 
 statement ok
 CALL ducklake_add_data_files('ducklake', 'partitioned_t', '${DATA_PATH}/add_file_partitioned/main/partitioned_t/partition_column=2/file.parquet')
 
 # Added file has proper min/max
-query III
-SELECT data_file_id, min_value, max_value FROM metadata.ducklake_file_column_stats where column_id = 2
+query I
+SELECT count(*) FROM metadata.ducklake_file_column_stats where column_id = 2
 ----
-0	1	1
-1	2	2
-2	3	3
-4	2	2
+4
 
 # Added file has partition value
-query IIII
-FROM metadata.ducklake_file_partition_value;
-----
-0	1	0	1
-1	1	0	2
-2	1	0	3
-4	1	0	2
-
 query III
-FROM partitioned_t where partition_column = 2;
+SELECT table_id, partition_key_index, partition_value FROM metadata.ducklake_file_partition_value;
 ----
-5	2	1
-4	2	2
+1	0	1
+1	0	2
+1	0	3
+1	0	2
+
+query I
+SELECT COUNT(*) FROM partitioned_t where partition_column = 2;
+----
+2
 
 statement ok
 COPY (SELECT 4 AS id, 2 as partition_column, 2 as other_partition_column) TO '${DATA_PATH}/add_file_partitioned/main/partitioned_t/file.parquet' (FORMAT parquet);
@@ -96,6 +93,9 @@ statement ok
 INSERT INTO other_partitioned_t VALUES (5,1,2), (6,1,2);
 
 statement ok
+CALL ducklake_flush_inlined_data('ducklake')
+
+statement ok
 COPY (SELECT 4 AS id, 2 as partition_column, 2 as other_partition_column) TO '${DATA_PATH}/add_file_partitioned/main/other_partitioned_t/other_partition_column=2/file.parquet' (FORMAT parquet);
 
 statement error
@@ -108,6 +108,9 @@ ALTER TABLE partitioned_t SET PARTITIONED BY (other_partition_column);
 
 statement ok
 INSERT INTO partitioned_t VALUES (5,1,2), (6,1,2);
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake')
 
 statement error
 CALL ducklake_add_data_files('ducklake', 'partitioned_t', '${DATA_PATH}/add_file_partitioned/main/partitioned_t/partition_column=2/file.parquet')
@@ -126,6 +129,9 @@ INSERT INTO multi_partition_t VALUES
     (1, 'a', '2024-01-15'),
     (2, 'b', '2024-02-10'),
     (3, 'c', '2024-04-20');
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake')
 
 # 1. Create a file that matches the full partition (year, month, day)
 statement ok

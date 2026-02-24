@@ -28,8 +28,16 @@ ALTER TABLE partitioned SET PARTITIONED BY (part_key);
 statement ok
 INSERT INTO partitioned VALUES (1, 1, 10), (1, 2, 20);
 
+# flush to create file
+statement ok
+CALL ducklake_flush_inlined_data('ducklake')
+
 statement ok
 INSERT INTO partitioned VALUES (2, 1, 100), (2, 2, 200);
+
+# flush to create file
+statement ok
+CALL ducklake_flush_inlined_data('ducklake')
 
 # We should have 2 data files (one per insert, but inserts had multiple rows)
 query I
@@ -49,6 +57,10 @@ USING _merge_source AS source
 ON (target.part_key = source.part_key AND target.id = source.id)
 WHEN MATCHED THEN UPDATE SET value = source.value
 WHEN NOT MATCHED THEN INSERT *;
+
+# flush to create delete files from inlined deletions
+statement ok
+CALL ducklake_flush_inlined_data('ducklake')
 
 # Verify delete files were created by MERGE
 query I

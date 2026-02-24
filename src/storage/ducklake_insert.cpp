@@ -140,6 +140,13 @@ void DuckLakeInsert::AddWrittenFiles(DuckLakeInsertGlobalState &global_state, Da
 				continue;
 			}
 			if (column_names[0] == "_ducklake_internal_row_id") {
+				if (set_snapshot_id) {
+					// extract the min row_id so flushed files preserve the original row_id_start
+					auto row_id_stats = ParseColumnStats(LogicalType::BIGINT, col_stats);
+					if (row_id_stats.has_min) {
+						data_file.flush_row_id_start = StringUtil::ToUnsigned(row_id_stats.min);
+					}
+				}
 				continue;
 			}
 
@@ -756,7 +763,11 @@ PhysicalOperator &DuckLakeCatalog::PlanInsert(ClientContext &context, PhysicalPl
 	optional_ptr<DuckLakeInlineData> inline_data;
 
 	idx_t data_inlining_row_limit = DataInliningRowLimit(ducklake_schema.GetSchemaId(), ducklake_table.GetTableId());
-	if (data_inlining_row_limit > 0) {
+	// FIXME: we are skipping columns that have conflicting names, we should resolve this
+	auto &duck_transaction = DuckLakeTransaction::Get(context, *this);
+	auto &metadata_manager = duck_transaction.GetMetadataManager();
+	if (data_inlining_row_limit > 0 && !DuckLakeUtil::HasInlinedSystemColumnConflict(ducklake_table.GetColumns()) &&
+	    metadata_manager.SupportsInliningTypes(plan->types)) {
 		plan = planner.Make<DuckLakeInlineData>(*plan, data_inlining_row_limit);
 		inline_data = plan->Cast<DuckLakeInlineData>();
 	}
@@ -780,7 +791,9 @@ PhysicalOperator &DuckLakeCatalog::PlanCreateTableAs(ClientContext &context, Phy
 	reference<PhysicalOperator> root = plan;
 	optional_ptr<DuckLakeInlineData> inline_data;
 	idx_t data_inlining_row_limit = DataInliningRowLimit(duck_schema.GetSchemaId(), TableIndex());
-	if (data_inlining_row_limit > 0) {
+	auto &metadata_manager = duck_transaction.GetMetadataManager();
+	if (data_inlining_row_limit > 0 && !DuckLakeUtil::HasInlinedSystemColumnConflict(columns) &&
+	    metadata_manager.SupportsInliningTypes(plan.types)) {
 		root = planner.Make<DuckLakeInlineData>(root.get(), data_inlining_row_limit);
 		inline_data = root.get().Cast<DuckLakeInlineData>();
 	}

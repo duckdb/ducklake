@@ -63,6 +63,8 @@ struct DuckLakeDataFile {
 	MappingIndex mapping_id;
 	optional_idx begin_snapshot;
 	optional_idx max_partial_file_snapshot;
+	//! The row_id_start extracted from the file (for flushed files that have embedded row_ids)
+	optional_idx flush_row_id_start;
 	//! If the file was created by ducklake
 	bool created_by_ducklake = true;
 };

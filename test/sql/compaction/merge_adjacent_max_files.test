@@ -11,7 +11,7 @@ test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
 test-env DATA_PATH __TEST_DIR__
 
 statement ok
-ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/merge_adjacent_max_files/')
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/merge_adjacent_max_files/', DATA_INLINING_ROW_LIMIT 0)
 
 statement ok
 USE ducklake;
@@ -50,7 +50,7 @@ CALL ducklake.set_option('target_file_size', '1KB');
 statement ok
 CREATE TABLE example (key integer);
 
-# Generate 100 files
+# Generate 20 files
 loop i 0 20
 
 statement ok

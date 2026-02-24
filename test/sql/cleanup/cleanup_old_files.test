@@ -23,18 +23,31 @@ statement ok
 INSERT INTO t VALUES (1), (2), (3);
 
 statement ok
+CALL ducklake_flush_inlined_data('ducklake')
+
+statement ok
 INSERT INTO t VALUES (4), (5);
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake')
 
 statement ok
 DELETE FROM t WHERE x <= 2;
 
 statement ok
+CALL ducklake_flush_inlined_data('ducklake')
+
+statement ok
 INSERT INTO t VALUES (6), (7);
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake')
 
 query III
 SELECT table_name, files_processed, files_created FROM ducklake_rewrite_data_files('ducklake', 't', delete_threshold => 0)
 ----
 t	1	1
+
 
 query III
 SELECT table_name, files_processed, files_created FROM ducklake_merge_adjacent_files('ducklake')

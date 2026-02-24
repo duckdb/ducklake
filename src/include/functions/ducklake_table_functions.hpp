@@ -34,14 +34,14 @@ struct MetadataBindData : public TableFunctionData {
 	vector<vector<Value>> rows;
 };
 
-class BaseMetadataFunction : public TableFunction {
+class DuckLakeBaseMetadataFunction : public TableFunction {
 public:
-	BaseMetadataFunction(string name, table_function_bind_t bind);
+	DuckLakeBaseMetadataFunction(string name, table_function_bind_t bind);
 
 	static Catalog &GetCatalog(ClientContext &context, const Value &input);
 };
 
-class DuckLakeSnapshotsFunction : public BaseMetadataFunction {
+class DuckLakeSnapshotsFunction : public DuckLakeBaseMetadataFunction {
 public:
 	DuckLakeSnapshotsFunction();
 
@@ -49,7 +49,7 @@ public:
 	static vector<Value> GetSnapshotValues(const DuckLakeSnapshotInfo &snapshot);
 };
 
-class DuckLakeTableInfoFunction : public BaseMetadataFunction {
+class DuckLakeTableInfoFunction : public DuckLakeBaseMetadataFunction {
 public:
 	DuckLakeTableInfoFunction();
 };
@@ -105,22 +105,22 @@ public:
 	DuckLakeSetCommitMessage();
 };
 
-class DuckLakeOptionsFunction : public BaseMetadataFunction {
+class DuckLakeOptionsFunction : public DuckLakeBaseMetadataFunction {
 public:
 	DuckLakeOptionsFunction();
 };
 
-class DuckLakeLastCommittedSnapshotFunction : public BaseMetadataFunction {
+class DuckLakeLastCommittedSnapshotFunction : public DuckLakeBaseMetadataFunction {
 public:
 	DuckLakeLastCommittedSnapshotFunction();
 };
 
-class DuckLakeListFilesFunction : public BaseMetadataFunction {
+class DuckLakeListFilesFunction : public DuckLakeBaseMetadataFunction {
 public:
 	DuckLakeListFilesFunction();
 };
 
-class DuckLakeCurrentSnapshotFunction : public BaseMetadataFunction {
+class DuckLakeCurrentSnapshotFunction : public DuckLakeBaseMetadataFunction {
 public:
 	DuckLakeCurrentSnapshotFunction();
 };
@@ -130,7 +130,7 @@ public:
 	static TableFunctionSet GetFunctions();
 };
 
-class DuckLakeSettingsFunction : public BaseMetadataFunction {
+class DuckLakeSettingsFunction : public DuckLakeBaseMetadataFunction {
 public:
 	DuckLakeSettingsFunction();
 };

@@ -76,16 +76,11 @@ static string ToStringBaseType(const LogicalType &type) {
 	throw InvalidInputException("Failed to convert DuckDB type to DuckLake - unsupported type %s", type);
 }
 
-// GEOMETRY used to be defined as an alias over BLOB in the spatial extension, but is now part of core.
-// If we try to export from an older version of DuckDB that still has GEOMETRY as an alias,
-// we need to detect that and convert it to the new GEOMETRY type. The cast is defined in spatial, so it's enough
-// to just insert a cast to the new GEOMETRY type here - the spatial extension will take care of the rest.
-static bool IsLegacyGeometryType(const LogicalType &type) {
-	return (type.id() == LogicalTypeId::BLOB) && type.HasAlias() && StringUtil::CIEquals(type.GetAlias(), "GEOMETRY");
-}
+
 
 bool DuckLakeTypes::RequiresCast(const LogicalType &type) {
-	return TypeVisitor::Contains(type, IsLegacyGeometryType);
+	// There are no types that requires casts as of DuckDB v1.5
+	return false;
 }
 
 bool DuckLakeTypes::RequiresCast(const vector<LogicalType> &types) {
@@ -98,12 +93,8 @@ bool DuckLakeTypes::RequiresCast(const vector<LogicalType> &types) {
 }
 
 LogicalType DuckLakeTypes::GetCastedType(const LogicalType &type) {
-	return TypeVisitor::VisitReplace(type, [](const LogicalType &type) {
-		if (IsLegacyGeometryType(type)) {
-			return LogicalType::GEOMETRY();
-		}
-		return type;
-	});
+	// There are no types that requires casts as of DuckDB v1.5
+	return type;
 }
 
 LogicalType DuckLakeTypes::FromString(const string &type) {
@@ -125,9 +116,6 @@ string DuckLakeTypes::ToString(const LogicalType &type) {
 	if (type.HasAlias()) {
 		if (type.IsJSONType()) {
 			return "json";
-		}
-		if (IsLegacyGeometryType(type)) {
-			return "geometry";
 		}
 		if (type.id() == LogicalTypeId::UNBOUND) {
 			const auto type_name = type.GetAlias();

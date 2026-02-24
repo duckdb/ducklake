@@ -23,10 +23,19 @@ statement ok
 INSERT INTO ducklake.test VALUES (1);
 
 statement ok
+CALL ducklake_flush_inlined_data('ducklake');
+
+statement ok
 INSERT INTO ducklake.test VALUES (2);
 
 statement ok
+CALL ducklake_flush_inlined_data('ducklake');
+
+statement ok
 INSERT INTO ducklake.test VALUES (3);
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake');
 
 query III
 SELECT table_name, files_processed, files_created FROM ducklake_merge_adjacent_files('ducklake')
@@ -55,9 +64,9 @@ SELECT * FROM ducklake.test AT (VERSION => 2)
 ----
 1
 
-query III
-SELECT snapshot_id, rowid, * FROM ducklake.test ORDER BY ALL
+query II
+SELECT rowid, * FROM ducklake.test ORDER BY ALL
 ----
-2	0	1
-3	1	2
-4	2	3
+0	1
+1	2
+2	3

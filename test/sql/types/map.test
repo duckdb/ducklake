@@ -24,6 +24,9 @@ SELECT * FROM ducklake.test
 statement ok
 INSERT INTO ducklake.test VALUES (MAP {'i': 1, 'j': 2}), (MAP {'j': 3}), (NULL);
 
+statement ok
+CALL ducklake_flush_inlined_data('ducklake')
+
 query I
 SELECT * FROM ducklake.test
 ----
@@ -42,6 +45,9 @@ SELECT * FROM ducklake.test WHERE s.i=100
 
 statement ok
 INSERT INTO ducklake.test VALUES (MAP {'i': 4, 'j': 5}), (MAP {'i': 6});
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake')
 
 query I
 SELECT * FROM ducklake.test

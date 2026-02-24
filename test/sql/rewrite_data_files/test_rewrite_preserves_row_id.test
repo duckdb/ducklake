@@ -23,6 +23,9 @@ CREATE TABLE test(a INTEGER, b INTEGER);
 statement ok
 INSERT INTO test SELECT i, i * 10 FROM range(1, 11) t(i);
 
+statement ok
+CALL ducklake_flush_inlined_data('ducklake')
+
 # Verify initial row IDs (0-9)
 query III
 SELECT rowid, a, b FROM test ORDER BY a
@@ -41,6 +44,9 @@ SELECT rowid, a, b FROM test ORDER BY a
 # Delete even rows (a = 2, 4, 6, 8, 10)
 statement ok
 DELETE FROM test WHERE a % 2 = 0;
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake')
 
 # Verify row IDs after delete - should have gaps (0, 2, 4, 6, 8)
 query III
@@ -203,6 +209,9 @@ SELECT COUNT(*) FROM test_large
 statement ok
 INSERT INTO test VALUES (11, 110), (12, 120);
 
+statement ok
+CALL ducklake_flush_inlined_data('ducklake')
+
 # New rows should get row IDs starting after the max existing row ID (which was 9)
 query III
 SELECT rowid, a, b FROM test WHERE a > 10 ORDER BY a
@@ -213,6 +222,9 @@ SELECT rowid, a, b FROM test WHERE a > 10 ORDER BY a
 # Test deleting and rewriting again preserves row IDs
 statement ok
 DELETE FROM test WHERE a = 3;
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake')
 
 query III
 SELECT rowid, a, b FROM test ORDER BY a

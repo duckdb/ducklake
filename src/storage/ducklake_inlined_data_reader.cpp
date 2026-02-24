@@ -6,6 +6,7 @@
 #include "duckdb/planner/table_filter_state.hpp"
 #include "storage/ducklake_catalog.hpp"
 #include "storage/ducklake_delete_filter.hpp"
+#include "duckdb/common/vector_operations/vector_operations.hpp"
 
 namespace duckdb {
 
@@ -31,10 +32,6 @@ bool DuckLakeInlinedDataReader::TryInitializeScan(ClientContext &context, Global
 		}
 		initialized_scan = true;
 	}
-	if (!expression_map.empty()) {
-		throw InternalException("FIXME: support expression_map");
-	}
-
 	if (!data) {
 		// scanning data from a table - read it from the metadata catalog
 		auto transaction = read_info.GetTransaction();
@@ -72,9 +69,13 @@ bool DuckLakeInlinedDataReader::TryInitializeScan(ClientContext &context, Global
 				}
 			}
 			string projected_column = KeywordHelper::WriteOptionallyQuoted(columns[index].name);
-			if (!ducklake_catalog.IsDuckCatalog()) {
+			auto &metadata_type = ducklake_catalog.MetadataType();
+			bool needs_cast = !metadata_type.empty() && metadata_type != "duckdb";
+			if (needs_cast) {
 				// If it's not a duckdb catalog, we add a cast.
-				projected_column = metadata_manager.CastColumnToTarget(projected_column, columns[index].type);
+				if (columns[index].type.id() != LogicalTypeId::VARCHAR) {
+					projected_column = metadata_manager.CastColumnToTarget(projected_column, columns[index].type);
+				}
 			}
 			columns_to_read.push_back(projected_column);
 			expected_types.push_back(col.type);
@@ -96,6 +97,12 @@ bool DuckLakeInlinedDataReader::TryInitializeScan(ClientContext &context, Global
 			columns_to_read.push_back(KeywordHelper::WriteOptionallyQuoted("row_id"));
 			expected_types.push_back(LogicalType::BIGINT);
 			virtual_columns.emplace_back(InlinedVirtualColumn::COLUMN_EMPTY);
+		}
+		if (!expression_map.empty() && virtual_columns.empty()) {
+			for (idx_t i = 0; i < columns_to_read.size(); i++) {
+				scan_column_ids.push_back(i);
+				virtual_columns.push_back(InlinedVirtualColumn::NONE);
+			}
 		}
 		unique_ptr<QueryResult> query_result;
 		switch (read_info.scan_type) {
@@ -159,14 +166,38 @@ bool DuckLakeInlinedDataReader::TryInitializeScan(ClientContext &context, Global
 			scan_column_ids.push_back(col_id);
 			virtual_columns.emplace_back(InlinedVirtualColumn::NONE);
 		}
-		if (!scan_types.empty()) {
+		if (!scan_types.empty() || !virtual_columns.empty()) {
+			// add an extra column to scan to determine the cardinality
+			// this is needed even when all columns are virtual (e.g., only rowid)
 			scan_types.push_back(types[0]);
 			scan_column_ids.push_back(0);
 		}
 		scan_chunk.Initialize(context, scan_types);
-
 		data->data->InitializeScan(state, scan_column_ids);
 	}
+	for (auto &entry : expression_map) {
+		expression_executors[entry.first] = make_uniq<ExpressionExecutor>(context, *entry.second);
+	}
+	return true;
+}
+
+bool DuckLakeInlinedDataReader::TryEvaluateExpression(ClientContext &context, idx_t virtual_col_idx,
+                                                      Vector &input_vector, const LogicalType &input_type,
+                                                      Vector &output_vector) {
+	if (expression_map.empty() || virtual_col_idx >= column_ids.size()) {
+		return false;
+	}
+	auto local_id = column_ids[MultiFileLocalIndex(virtual_col_idx)];
+	auto expr_it = expression_executors.find(local_id);
+	if (expr_it == expression_executors.end()) {
+		return false;
+	}
+	DataChunk expr_input;
+	expr_input.Initialize(Allocator::Get(context), {input_type});
+	expr_input.Reset();
+	expr_input.data[0].Reference(input_vector);
+	expr_input.SetCardinality(scan_chunk.size());
+	expr_it->second->ExecuteExpression(expr_input, output_vector);
 	return true;
 }
 
@@ -180,10 +211,28 @@ AsyncResult DuckLakeInlinedDataReader::Scan(ClientContext &context, GlobalTableF
 			switch (virtual_columns[c]) {
 			case InlinedVirtualColumn::NONE: {
 				auto column_id = source_idx++;
-				chunk.data[c].Reference(scan_chunk.data[column_id]);
+				if (TryEvaluateExpression(context, c, scan_chunk.data[column_id], scan_chunk.data[column_id].GetType(),
+				                          chunk.data[c])) {
+					break;
+				}
+				if (chunk.data[c].GetType() != scan_chunk.data[column_id].GetType()) {
+					// type was changed, we gotta cast the data
+					VectorOperations::Cast(context, scan_chunk.data[column_id], chunk.data[c], scan_chunk.size());
+				} else {
+					chunk.data[c].Reference(scan_chunk.data[column_id]);
+				}
 				break;
 			}
 			case InlinedVirtualColumn::COLUMN_ROW_ID: {
+				// Generate ordinal data for row IDs
+				Vector ordinal_vector(LogicalType::BIGINT);
+				auto ordinal_data = FlatVector::GetData<int64_t>(ordinal_vector);
+				for (idx_t r = 0; r < scan_chunk.size(); r++) {
+					ordinal_data[r] = NumericCast<int64_t>(file_row_number + r);
+				}
+				if (TryEvaluateExpression(context, c, ordinal_vector, LogicalType::BIGINT, chunk.data[c])) {
+					continue;
+				}
 				auto row_id_data = FlatVector::GetData<int64_t>(chunk.data[c]);
 				for (idx_t r = 0; r < scan_chunk.size(); r++) {
 					row_id_data[r] = NumericCast<int64_t>(file_row_number + r);

@@ -4,7 +4,7 @@
 
 namespace duckdb {
 
-Catalog &BaseMetadataFunction::GetCatalog(ClientContext &context, const Value &input) {
+Catalog &DuckLakeBaseMetadataFunction::GetCatalog(ClientContext &context, const Value &input) {
 	if (input.IsNull()) {
 		throw BinderException("Catalog cannot be NULL");
 	}
@@ -29,12 +29,13 @@ struct MetadataFunctionData : public GlobalTableFunctionState {
 	idx_t offset;
 };
 
-unique_ptr<GlobalTableFunctionState> MetadataFunctionInit(ClientContext &context, TableFunctionInitInput &input) {
+static unique_ptr<GlobalTableFunctionState> MetadataFunctionInit(ClientContext &context,
+                                                                 TableFunctionInitInput &input) {
 	auto result = make_uniq<MetadataFunctionData>();
 	return std::move(result);
 }
 
-void MetadataFunctionExecute(ClientContext &context, TableFunctionInput &data_p, DataChunk &output) {
+static void MetadataFunctionExecute(ClientContext &context, TableFunctionInput &data_p, DataChunk &output) {
 	auto &data = data_p.bind_data->Cast<MetadataBindData>();
 	auto &state = data_p.global_state->Cast<MetadataFunctionData>();
 	if (state.offset >= data.rows.size()) {
@@ -58,7 +59,7 @@ void MetadataFunctionExecute(ClientContext &context, TableFunctionInput &data_p,
 	output.SetCardinality(count);
 }
 
-BaseMetadataFunction::BaseMetadataFunction(string name_p, table_function_bind_t bind)
+DuckLakeBaseMetadataFunction::DuckLakeBaseMetadataFunction(string name_p, table_function_bind_t bind)
     : TableFunction(std::move(name_p), {LogicalType::VARCHAR}, MetadataFunctionExecute, bind, MetadataFunctionInit) {
 }
 

@@ -15,6 +15,7 @@ DuckLakeDataFile::DuckLakeDataFile(const DuckLakeDataFile &other) {
 	mapping_id = other.mapping_id;
 	begin_snapshot = other.begin_snapshot;
 	max_partial_file_snapshot = other.max_partial_file_snapshot;
+	flush_row_id_start = other.flush_row_id_start;
 	created_by_ducklake = other.created_by_ducklake;
 }
 
@@ -31,6 +32,7 @@ DuckLakeDataFile &DuckLakeDataFile::operator=(const DuckLakeDataFile &other) {
 	mapping_id = other.mapping_id;
 	begin_snapshot = other.begin_snapshot;
 	max_partial_file_snapshot = other.max_partial_file_snapshot;
+	flush_row_id_start = other.flush_row_id_start;
 	created_by_ducklake = other.created_by_ducklake;
 	return *this;
 }
