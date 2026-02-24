@@ -114,7 +114,7 @@ CREATE VIEW ducklake.subquery_view AS SELECT * FROM (SELECT id * 2 AS doubled FR
 query I
 SELECT sql FROM duckdb_views() WHERE view_name='subquery_view' AND database_name='ducklake'
 ----
-CREATE VIEW subquery_view AS SELECT * FROM (SELECT (id * 2) AS doubled FROM t1) sq WHERE (doubled < 6);
+CREATE VIEW subquery_view AS SELECT * FROM (SELECT (id * 2) AS doubled FROM t1) AS sq WHERE (doubled < 6);
 
 query I
 SELECT doubled FROM ducklake.subquery_view ORDER BY doubled
