@@ -17,7 +17,7 @@ DuckLakeColumnExtraStats::DuckLakeColumnExtraStats(DuckLakeExtraStatsType stats_
 }
 
 DuckLakeColumnStats::DuckLakeColumnStats(LogicalType type_p) : type(std::move(type_p)) {
-	if (DuckLakeTypes::IsGeoType(type)) {
+	if (type.id() == LogicalTypeId::GEOMETRY) {
 		extra_stats = make_uniq<DuckLakeColumnGeoStats>();
 	}
 	if (type.id() == LogicalTypeId::VARIANT) {
@@ -200,6 +200,24 @@ unique_ptr<BaseStatistics> DuckLakeColumnStats::CreateVariantStats() const {
 	return variant_stats.ToStats();
 }
 
+unique_ptr<BaseStatistics> DuckLakeColumnStats::CreateGeometryStats() const {
+	if (!extra_stats) {
+		throw InternalException("Geometry DuckLakeColumnStats without extra_stats?");
+	}
+	auto &geometry_stats = extra_stats->Cast<DuckLakeColumnGeoStats>();
+	auto stats = geometry_stats.ToStats();
+
+	// set null count
+	if (!has_null_count || null_count > 0) {
+		stats->SetHasNullFast();
+	}
+	if (!has_null_count || !has_num_values || null_count != num_values) {
+		//! Not *all* values are NULL, set HasNoNull
+		stats->SetHasNoNullFast();
+	}
+	return stats;
+}
+
 unique_ptr<BaseStatistics> DuckLakeColumnStats::CreateStringStats() const {
 	auto stats = StringStats::CreateEmpty(type);
 	if (has_min && has_max) {
@@ -253,6 +271,8 @@ unique_ptr<BaseStatistics> DuckLakeColumnStats::ToStats() const {
 		return nullptr;
 	case LogicalTypeId::VARCHAR:
 		return CreateStringStats();
+	case LogicalTypeId::GEOMETRY:
+		return CreateGeometryStats();
 	case LogicalTypeId::VARIANT:
 		return CreateVariantStats();
 	default:

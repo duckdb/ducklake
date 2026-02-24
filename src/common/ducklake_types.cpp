@@ -12,7 +12,7 @@ struct DefaultType {
 	LogicalTypeId id;
 };
 
-using ducklake_type_array = std::array<DefaultType, 33>;
+using ducklake_type_array = std::array<DefaultType, 32>;
 
 static constexpr const ducklake_type_array DUCKLAKE_TYPES {{{"boolean", LogicalTypeId::BOOLEAN},
                                                             {"int8", LogicalTypeId::TINYINT},
@@ -42,7 +42,6 @@ static constexpr const ducklake_type_array DUCKLAKE_TYPES {{{"boolean", LogicalT
                                                             {"varchar", LogicalTypeId::VARCHAR},
                                                             {"blob", LogicalTypeId::BLOB},
                                                             {"uuid", LogicalTypeId::UUID},
-                                                            {"geometry", LogicalTypeId::GEOMETRY},
                                                             {"struct", LogicalTypeId::STRUCT},
                                                             {"map", LogicalTypeId::MAP},
                                                             {"list", LogicalTypeId::LIST},
@@ -61,6 +60,9 @@ static LogicalType ParseBaseType(const string &str) {
 	if (StringUtil::CIEquals(str, "variant")) {
 		return LogicalType::VARIANT();
 	}
+	if (StringUtil::CIEquals(str, "geometry")) {
+		return LogicalType::GEOMETRY();
+	}
 
 	throw InvalidInputException("Failed to parse DuckLake type - unsupported type '%s'", str);
 }
@@ -74,13 +76,9 @@ static string ToStringBaseType(const LogicalType &type) {
 	throw InvalidInputException("Failed to convert DuckDB type to DuckLake - unsupported type %s", type);
 }
 
-// Only GEOMETRY type needs special handling, to cast to WKB_BLOB
-bool DuckLakeTypes::IsGeoType(const LogicalType &type) {
-	return type.id() == LogicalTypeId::GEOMETRY;
-}
-
 bool DuckLakeTypes::RequiresCast(const LogicalType &type) {
-	return TypeVisitor::Contains(type, IsGeoType);
+	// There are no types that requires casts as of DuckDB v1.5
+	return false;
 }
 
 bool DuckLakeTypes::RequiresCast(const vector<LogicalType> &types) {
@@ -93,12 +91,8 @@ bool DuckLakeTypes::RequiresCast(const vector<LogicalType> &types) {
 }
 
 LogicalType DuckLakeTypes::GetCastedType(const LogicalType &type) {
-	return TypeVisitor::VisitReplace(type, [](const LogicalType &type) {
-		if (IsGeoType(type)) {
-			return LogicalType::GEOMETRY();
-		}
-		return type;
-	});
+	// There are no types that requires casts as of DuckDB v1.5
+	return type;
 }
 
 LogicalType DuckLakeTypes::FromString(const string &type) {
@@ -121,9 +115,6 @@ string DuckLakeTypes::ToString(const LogicalType &type) {
 		if (type.IsJSONType()) {
 			return "json";
 		}
-		if (IsGeoType(type)) {
-			return "geometry";
-		}
 		if (type.id() == LogicalTypeId::UNBOUND) {
 			const auto type_name = type.GetAlias();
 			if (StringUtil::Lower(type_name) == "json") {
@@ -137,6 +128,8 @@ string DuckLakeTypes::ToString(const LogicalType &type) {
 		return "struct";
 	case LogicalTypeId::VARIANT:
 		return "variant";
+	case LogicalTypeId::GEOMETRY:
+		return "geometry";
 	case LogicalTypeId::LIST:
 		return "list";
 	case LogicalTypeId::MAP:
@@ -158,12 +151,6 @@ void DuckLakeTypes::CheckSupportedType(const LogicalType &type) {
 		DuckLakeTypes::ToString(type);
 		return type;
 	});
-
-	// Special case for now, only allow GEOMETRY as top-level type
-	if ((!IsGeoType(type) && TypeVisitor::Contains(type, IsGeoType)) ||
-	    (type.id() != LogicalTypeId::GEOMETRY && TypeVisitor::Contains(type, LogicalTypeId::GEOMETRY))) {
-		throw InvalidInputException("GEOMETRY type is only supported as a top-level type");
-	}
 }
 
 } // namespace duckdb

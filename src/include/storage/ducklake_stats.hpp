@@ -60,6 +60,7 @@ private:
 	unique_ptr<BaseStatistics> CreateNumericStats() const;
 	unique_ptr<BaseStatistics> CreateStringStats() const;
 	unique_ptr<BaseStatistics> CreateVariantStats() const;
+	unique_ptr<BaseStatistics> CreateGeometryStats() const;
 };
 
 //! These are the global, table-wide stats
