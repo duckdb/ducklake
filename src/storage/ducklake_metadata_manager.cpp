@@ -190,7 +190,8 @@ UPDATE {METADATA_CATALOG}.ducklake_metadata SET value = '0.2' WHERE key = 'versi
 	}
 }
 
-void DuckLakeMetadataManager::ExecuteMigration(string migrate_query, bool allow_failures) {
+void DuckLakeMetadataManager::ExecuteMigration(string migrate_query, bool allow_failures, const string &from_version,
+                                               const string &to_version) {
 	if (allow_failures) {
 		migrate_query = StringUtil::Replace(migrate_query, "{IF_NOT_EXISTS}", "IF NOT EXISTS");
 		migrate_query = StringUtil::Replace(migrate_query, "{IF_EXISTS}", "IF EXISTS");
@@ -205,7 +206,7 @@ void DuckLakeMetadataManager::ExecuteMigration(string migrate_query, bool allow_
 	}
 	auto result = transaction.Query(migrate_query);
 	if (result->HasError()) {
-		result->GetErrorObject().Throw("Failed to migrate DuckLake from v0.2 to v0.3: ");
+		result->GetErrorObject().Throw("Failed to migrate DuckLake from v" + from_version + " to v" + to_version + ":");
 	}
 }
 
@@ -222,7 +223,7 @@ ALTER TABLE {IF_EXISTS} {METADATA_CATALOG}.ducklake_file_column_statistics RENAM
 ALTER TABLE {METADATA_CATALOG}.ducklake_file_column_stats ADD COLUMN {IF_NOT_EXISTS} extra_stats VARCHAR DEFAULT NULL;
 ALTER TABLE {METADATA_CATALOG}.ducklake_table_column_stats ADD COLUMN {IF_NOT_EXISTS} extra_stats VARCHAR DEFAULT NULL;
 	)";
-	ExecuteMigration(migrate_query, allow_failures);
+	ExecuteMigration(migrate_query, allow_failures, "0.2", "0.3");
 }
 
 void DuckLakeMetadataManager::MigrateV03(bool allow_failures) {
@@ -251,7 +252,7 @@ WHERE df.data_file_id = m.data_file_id;
 DROP TABLE IF EXISTS __ducklake_partial_max_migration;
 UPDATE {METADATA_CATALOG}.ducklake_metadata SET value = '0.4' WHERE key = 'version';
 	)";
-	ExecuteMigration(migrate_query, allow_failures);
+	ExecuteMigration(migrate_query, allow_failures, "0.3", "0.4");
 
 	auto migrate_schema_versions = transaction.Query(R"(
 INSERT INTO {METADATA_CATALOG}.ducklake_schema_versions (table_id, begin_snapshot, schema_version)
