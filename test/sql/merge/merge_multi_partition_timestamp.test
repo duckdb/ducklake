@@ -25,6 +25,9 @@ ALTER TABLE t SET PARTITIONED BY (year(ts), month(ts));
 statement ok
 INSERT INTO t VALUES (1, '2025-01-15');
 
+statement ok
+CALL ducklake_flush_inlined_data('ducklake')
+
 # MERGE a new row with ts='2025-03-20' (year=2025, month=3)
 statement ok
 MERGE INTO t USING (SELECT 2 as id, '2025-03-20'::TIMESTAMP as ts) AS src ON t.id = src.id

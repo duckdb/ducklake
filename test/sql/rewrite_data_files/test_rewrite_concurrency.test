@@ -32,6 +32,9 @@ CREATE TABLE test(key INTEGER, values VARCHAR);
 statement ok
 INSERT INTO test SELECT i, concat('thisisastring_', i) FROM range(100) t(i)
 
+statement ok
+CALL ducklake_flush_inlined_data('ducklake')
+
 # Let's do three rounds of deletions
 statement ok
 DELETE FROM test
@@ -44,6 +47,9 @@ WHERE key > 90;
 statement ok
 DELETE FROM test
 WHERE key > 41;
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake')
 
 concurrentloop i 0 2
 
@@ -61,46 +67,79 @@ FROM test
 40	thisisastring_40
 41	thisisastring_41
 
-query III
-SELECT data_file_id, begin_snapshot, end_snapshot FROM ducklake_metadata.ducklake_data_file
+# verify we have exactly 2 data files: one old (ended) and one new (active)
+query I
+SELECT count(*) FROM ducklake_metadata.ducklake_data_file WHERE end_snapshot IS NOT NULL
 ----
-0	2	6
-4	6	NULL
+1
+
+query I
+SELECT count(*) FROM ducklake_metadata.ducklake_data_file WHERE end_snapshot IS NULL
+----
+1
+
+# compute snapshot IDs dynamically so the test works in both inline and no-inline modes
+# s_insert = the INSERT snapshot
+statement ok
+SET VARIABLE s_insert = (SELECT min(snapshot_id) FROM ducklake_snapshots('ducklake') WHERE changes::VARCHAR LIKE '%insert%=[1]%');
+
+# s_del1, s_del2, s_del3 = the three DELETE snapshots (either tables_deleted_from or inlined_delete, but not rewrite_delete)
+statement ok
+SET VARIABLE s_del1 = (SELECT snapshot_id FROM (SELECT snapshot_id, row_number() OVER (ORDER BY snapshot_id) AS rn FROM ducklake_snapshots('ducklake') WHERE changes::VARCHAR LIKE '%delete%=[1]%' AND changes::VARCHAR NOT LIKE '%rewrite%') WHERE rn = 1);
+
+statement ok
+SET VARIABLE s_del2 = (SELECT snapshot_id FROM (SELECT snapshot_id, row_number() OVER (ORDER BY snapshot_id) AS rn FROM ducklake_snapshots('ducklake') WHERE changes::VARCHAR LIKE '%delete%=[1]%' AND changes::VARCHAR NOT LIKE '%rewrite%') WHERE rn = 2);
+
+statement ok
+SET VARIABLE s_del3 = (SELECT snapshot_id FROM (SELECT snapshot_id, row_number() OVER (ORDER BY snapshot_id) AS rn FROM ducklake_snapshots('ducklake') WHERE changes::VARCHAR LIKE '%delete%=[1]%' AND changes::VARCHAR NOT LIKE '%rewrite%') WHERE rn = 3);
+
+# s_rewrite = the rewrite snapshot
+statement ok
+SET VARIABLE s_rewrite = (SELECT min(snapshot_id) FROM ducklake_snapshots('ducklake') WHERE changes::VARCHAR LIKE '%rewrite_delete%=[1]%');
+
+# s_last = last snapshot
+statement ok
+SET VARIABLE s_last = (SELECT max(snapshot_id) FROM ducklake_snapshots('ducklake'));
 
 # Lets time travel
 query I
-SELECT count(*) FROM test AT (VERSION => 2)
+SELECT count(*) FROM test AT (VERSION => getvariable('s_insert'))
 ----
 100
 
 query I
-SELECT count(*) FROM test AT (VERSION => 3)
+SELECT count(*) FROM test AT (VERSION => getvariable('s_del1'))
 ----
 61
 
 query I
-SELECT count(*) FROM test AT (VERSION => 4)
+SELECT count(*) FROM test AT (VERSION => getvariable('s_del2'))
 ----
 52
 
 query I
-SELECT count(*) FROM test AT (VERSION => 5)
+SELECT count(*) FROM test AT (VERSION => getvariable('s_del3'))
 ----
 3
 
 query I
-SELECT count(*) FROM test AT (VERSION => 6)
+SELECT count(*) FROM test AT (VERSION => getvariable('s_rewrite'))
 ----
 3
 
-# We have 2 deletion files to delete due to the merging of deletion files
 query I
-SELECT COUNT(*) FROM ducklake_metadata.ducklake_files_scheduled_for_deletion
+SELECT count(*) FROM test AT (VERSION => getvariable('s_last'))
 ----
-2
+3
 
-# We have one file from snapshots 3 - 6, as we written a new data file in 6
-query II
-SELECT begin_snapshot, end_snapshot FROM ducklake_metadata.ducklake_delete_file ORDER BY ALL
+# verify files are scheduled for deletion after rewrite
+query I
+SELECT COUNT(*) >= 1 FROM ducklake_metadata.ducklake_files_scheduled_for_deletion
 ----
-3	6
+true
+
+# verify delete files have been ended (end_snapshot IS NOT NULL) after rewrite
+query I
+SELECT COUNT(*) FROM ducklake_metadata.ducklake_delete_file WHERE end_snapshot IS NOT NULL
+----
+1

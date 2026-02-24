@@ -154,7 +154,7 @@ vector<Value> DuckLakeSnapshotsFunction::GetSnapshotValues(const DuckLakeSnapsho
 
 static unique_ptr<FunctionData> DuckLakeSnapshotsBind(ClientContext &context, TableFunctionBindInput &input,
                                                       vector<LogicalType> &return_types, vector<string> &names) {
-	auto &catalog = BaseMetadataFunction::GetCatalog(context, input.inputs[0]);
+	auto &catalog = DuckLakeBaseMetadataFunction::GetCatalog(context, input.inputs[0]);
 	auto &transaction = DuckLakeTransaction::Get(context, catalog);
 
 	auto &metadata_manager = transaction.GetMetadataManager();
@@ -169,7 +169,7 @@ static unique_ptr<FunctionData> DuckLakeSnapshotsBind(ClientContext &context, Ta
 }
 
 DuckLakeSnapshotsFunction::DuckLakeSnapshotsFunction()
-    : BaseMetadataFunction("ducklake_snapshots", DuckLakeSnapshotsBind) {
+    : DuckLakeBaseMetadataFunction("ducklake_snapshots", DuckLakeSnapshotsBind) {
 }
 
 } // namespace duckdb

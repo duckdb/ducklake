@@ -17,40 +17,80 @@ ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/du
 statement ok
 CREATE TABLE ducklake.test(i INTEGER, j INTEGER)
 
-# insert -> alter is not supported
+# insert -> alter IS now supported for ADD COLUMN
 statement ok
 BEGIN
 
 statement ok
 INSERT INTO ducklake.test VALUES (42, 84);
 
-statement error
-ALTER TABLE ducklake.test ADD COLUMN k INTEGER
-----
-ALTER on a table with transaction-local inlined data is not supported
-
-statement ok
-ROLLBACK
-
-# alter -> insert works
-statement ok
-BEGIN
-
 statement ok
 ALTER TABLE ducklake.test ADD COLUMN k INTEGER
-
-statement ok
-INSERT INTO ducklake.test VALUES (42, 84, 100);
 
 query III
 FROM ducklake.test
 ----
-42	84	100
+42	84	NULL
 
 statement ok
 COMMIT
 
+# verify data persists after commit
 query III
 FROM ducklake.test
 ----
-42	84	100
+42	84	NULL
+
+# test ADD COLUMN with DEFAULT value
+statement ok
+BEGIN
+
+statement ok
+INSERT INTO ducklake.test VALUES (100, 200, 300);
+
+statement ok
+ALTER TABLE ducklake.test ADD COLUMN l INTEGER DEFAULT 42
+
+# existing rows should have the default value 42
+query IIII
+FROM ducklake.test
+----
+42	84	NULL	42
+100	200	300	42
+
+statement ok
+COMMIT
+
+# verify data persists after commit
+query IIII
+FROM ducklake.test
+----
+42	84	NULL	42
+100	200	300	42
+
+# alter -> insert works (add another column without default)
+statement ok
+BEGIN
+
+statement ok
+ALTER TABLE ducklake.test ADD COLUMN m VARCHAR
+
+statement ok
+INSERT INTO ducklake.test VALUES (500, 600, 700, 800, 'hello');
+
+query IIIII
+FROM ducklake.test
+----
+42	84	NULL	42	NULL
+100	200	300	42	NULL
+500	600	700	800	hello
+
+statement ok
+COMMIT
+
+query IIIII
+FROM ducklake.test
+----
+42	84	NULL	42	NULL
+100	200	300	42	NULL
+500	600	700	800	hello

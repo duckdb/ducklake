@@ -28,7 +28,7 @@ struct DuckLakeAddDataFilesData : public TableFunctionData {
 
 static unique_ptr<FunctionData> DuckLakeAddDataFilesBind(ClientContext &context, TableFunctionBindInput &input,
                                                          vector<LogicalType> &return_types, vector<string> &names) {
-	auto &catalog = BaseMetadataFunction::GetCatalog(context, input.inputs[0]);
+	auto &catalog = DuckLakeBaseMetadataFunction::GetCatalog(context, input.inputs[0]);
 	string schema_name;
 	if (input.inputs[1].IsNull()) {
 		throw InvalidInputException("Table name cannot be NULL");
@@ -556,9 +556,7 @@ LogicalType DuckLakeParquetTypeChecker::DeriveLogicalType(const ParquetColumn &s
 		} else if (StringUtil::StartsWith(s_ele.logical_type, "UUIDType()")) {
 			return LogicalType::UUID;
 		} else if (StringUtil::StartsWith(s_ele.logical_type, "Geometry")) {
-			LogicalType geo_type(LogicalTypeId::BLOB);
-			geo_type.SetAlias("GEOMETRY");
-			return geo_type;
+			return LogicalType::GEOMETRY();
 		}
 	}
 	if (!s_ele.converted_type.empty()) {
@@ -773,8 +771,8 @@ void DuckLakeParquetTypeChecker::CheckMatchingType() {
 		return;
 	}
 
-	if (DuckLakeTypes::IsGeoType(type)) {
-		if (!DuckLakeTypes::IsGeoType(source_type)) {
+	if (type.id() == LogicalTypeId::GEOMETRY) {
+		if (source_type.id() != LogicalTypeId::GEOMETRY) {
 			failures.push_back(StringUtil::Format(
 			    "Expected type \"GEOMETRY\" but found type \"%s\". Is this a GeoParquet v1.*.* file? DuckLake only "
 			    "supports GEOMETRY types stored in native Parquet(V3) format, not GeoParquet(v1.*.*)",

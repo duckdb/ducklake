@@ -22,38 +22,52 @@ loop i 0 2
 statement ok
 CREATE TABLE test(key INTEGER, values VARCHAR);
 
-# 2	{tables_inserted_into=[1]}
 statement ok
 INSERT INTO test SELECT i, concat('thisisastring_', i) FROM range(100) t(i)
 
+statement ok
+CALL ducklake_flush_inlined_data('ducklake')
+
 # Let's do a few insertions interleaved with deletions
-# 3	{tables_deleted_from=[1]}
 statement ok
 DELETE FROM test
 WHERE key < 50;
 
-# 4	{tables_inserted_into=[1]}
+statement ok
+CALL ducklake_flush_inlined_data('ducklake')
+
 statement ok
 INSERT INTO test SELECT i, concat('thisisastring_', i) FROM range(100,200) t(i)
 
-# 5	{tables_deleted_from=[1]}
+statement ok
+CALL ducklake_flush_inlined_data('ducklake')
+
 statement ok
 DELETE FROM test
 WHERE key < 80;
 
-# 6	{tables_deleted_from=[1]}
+statement ok
+CALL ducklake_flush_inlined_data('ducklake')
+
 statement ok
 DELETE FROM test
 WHERE key  = 120;
 
-# 7	{tables_inserted_into=[1]}
+statement ok
+CALL ducklake_flush_inlined_data('ducklake')
+
 statement ok
 INSERT INTO test SELECT i, concat('thisisastring_', i) FROM range(200,300) t(i)
 
-# 8	{tables_deleted_from=[1]}
+statement ok
+CALL ducklake_flush_inlined_data('ducklake')
+
 statement ok
 DELETE FROM test
 WHERE key  > 200 and key < 250;
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake')
 
 skipif i=1
 query I
@@ -138,6 +152,11 @@ select count(*) from test;
 170
 
 query I
+select count(*) from test AT (VERSION => 2);
+----
+100
+
+query I
 select count(*) from test AT (VERSION => 3);
 ----
 50
@@ -157,13 +176,22 @@ select count(*) from test AT (VERSION => 6);
 ----
 119
 
+# compute snapshot IDs dynamically so the test works in both inline and no-inline modes
+# s_ins3 = the 3rd INSERT snapshot (INSERT 200-299, count=219)
+statement ok
+SET VARIABLE s_ins3 = (SELECT snapshot_id FROM (SELECT snapshot_id, row_number() OVER (ORDER BY snapshot_id) AS rn FROM ducklake_snapshots('ducklake') WHERE changes::VARCHAR LIKE '%insert%=[1]%') WHERE rn = 3);
+
+# s_del_last = the first DELETE snapshot after s_ins3 that is not a rewrite (DELETE >200 AND <250, count=170)
+statement ok
+SET VARIABLE s_del_last = (SELECT min(snapshot_id) FROM ducklake_snapshots('ducklake') WHERE changes::VARCHAR LIKE '%delete%=[1]%' AND changes::VARCHAR NOT LIKE '%rewrite%' AND snapshot_id > getvariable('s_ins3'));
+
 query I
-select count(*) from test AT (VERSION => 7);
+select count(*) from test AT (VERSION => getvariable('s_ins3'));
 ----
 219
 
 query I
-select count(*) from test AT (VERSION => 8);
+select count(*) from test AT (VERSION => getvariable('s_del_last'));
 ----
 170
 

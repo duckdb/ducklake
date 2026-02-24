@@ -14,71 +14,107 @@ test-env DATA_PATH __TEST_DIR__
 statement ok
 ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/ducklake_table_insertions_files');
 
-# snapshot 1
 statement ok
 CREATE TABLE ducklake.test(i INTEGER);
 
-# snapshot 2
+# 5 inserts, each followed by flush
 statement ok
 INSERT INTO ducklake.test VALUES (1);
 
-# snapshot 3
+statement ok
+CALL ducklake_flush_inlined_data('ducklake')
+
 statement ok
 INSERT INTO ducklake.test VALUES (2);
 
-# snapshot 4
+statement ok
+CALL ducklake_flush_inlined_data('ducklake')
+
 statement ok
 INSERT INTO ducklake.test VALUES (3);
 
-# snapshot 5
+statement ok
+CALL ducklake_flush_inlined_data('ducklake')
+
 statement ok
 INSERT INTO ducklake.test VALUES (NULL);
 
-# snapshot 6
+statement ok
+CALL ducklake_flush_inlined_data('ducklake')
+
 statement ok
 INSERT INTO ducklake.test FROM range(10, 12);
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake')
 
 query III
 SELECT table_name, files_processed, files_created FROM ducklake_merge_adjacent_files('ducklake')
 ----
 test	5	1
 
+# Compute insert snapshot IDs dynamically (differs between inline and non-inline modes)
+statement ok
+PREPARE ti AS SELECT rowid, * FROM ducklake_table_insertions('ducklake', 'main', 'test', $1, $2) ORDER BY ALL;
+
+# s1..s5 = snapshot IDs for the 1st through 5th inserts into table 1
+statement ok
+SET VARIABLE s1 = (SELECT snapshot_id FROM (SELECT snapshot_id, row_number() OVER (ORDER BY snapshot_id) as rn FROM ducklake_snapshots('ducklake') WHERE changes::VARCHAR LIKE '%insert%=[1]%') WHERE rn = 1);
+
+statement ok
+SET VARIABLE s2 = (SELECT snapshot_id FROM (SELECT snapshot_id, row_number() OVER (ORDER BY snapshot_id) as rn FROM ducklake_snapshots('ducklake') WHERE changes::VARCHAR LIKE '%insert%=[1]%') WHERE rn = 2);
+
+statement ok
+SET VARIABLE s3 = (SELECT snapshot_id FROM (SELECT snapshot_id, row_number() OVER (ORDER BY snapshot_id) as rn FROM ducklake_snapshots('ducklake') WHERE changes::VARCHAR LIKE '%insert%=[1]%') WHERE rn = 3);
+
+statement ok
+SET VARIABLE s4 = (SELECT snapshot_id FROM (SELECT snapshot_id, row_number() OVER (ORDER BY snapshot_id) as rn FROM ducklake_snapshots('ducklake') WHERE changes::VARCHAR LIKE '%insert%=[1]%') WHERE rn = 4);
+
+# Insertions from start through 1st insert
 query II
-SELECT rowid, * FROM ducklake_table_insertions('ducklake', 'main', 'test', 0, 2);
+EXECUTE ti(0, getvariable('s1'));
 ----
 0	1
 
+# Insertions from start through 2nd insert
 query II
-SELECT rowid, * FROM ducklake_table_insertions('ducklake', 'main', 'test', 0, 3);
+EXECUTE ti(0, getvariable('s2'));
 ----
 0	1
 1	2
 
+# Insertions from start through 3rd insert
 query II
-SELECT rowid, * FROM ducklake_table_insertions('ducklake', 'main', 'test', 0, 4);
+EXECUTE ti(0, getvariable('s3'));
 ----
 0	1
 1	2
 2	3
 
+# Insertions from 3rd through 4th insert
 query II
-SELECT rowid, * FROM ducklake_table_insertions('ducklake', 'main', 'test', 4, 5);
+EXECUTE ti(getvariable('s3'), getvariable('s4'));
 ----
 2	3
 3	NULL
 
+# Insertions at 4th insert only
 query II
-SELECT rowid, * FROM ducklake_table_insertions('ducklake', 'main', 'test', 5, 5);
+EXECUTE ti(getvariable('s4'), getvariable('s4'));
 ----
 3	NULL
 
-# snapshot 7: merge (no data changes, just reorganization)
-# snapshot 8: update a subset of the rows
+# merge (no data changes, just reorganization)
+# then update a subset of the rows
 statement ok
 UPDATE ducklake.test SET i=i+100 WHERE i < 11;
 
+# s_update = snapshot ID of the UPDATE (the next insert-related snapshot after the 5th)
+statement ok
+SET VARIABLE s_update = (SELECT snapshot_id FROM (SELECT snapshot_id, row_number() OVER (ORDER BY snapshot_id) as rn FROM ducklake_snapshots('ducklake') WHERE changes::VARCHAR LIKE '%insert%=[1]%') WHERE rn = 6);
+
 query II
-SELECT rowid, * FROM ducklake_table_insertions('ducklake', 'main', 'test', 8, 8) ORDER BY rowid
+EXECUTE ti(getvariable('s_update'), getvariable('s_update'));
 ----
 0	101
 1	102
@@ -87,7 +123,7 @@ SELECT rowid, * FROM ducklake_table_insertions('ducklake', 'main', 'test', 8, 8)
 
 # the change feed has both the original rows and the updated rows
 query II
-SELECT rowid, * FROM ducklake_table_insertions('ducklake', 'main', 'test', 0, 8) ORDER BY ALL
+EXECUTE ti(0, getvariable('s_update'));
 ----
 0	1
 0	101

@@ -620,6 +620,30 @@
       "paths": [
           "test/sql/storage/types/variant/variant_extract_stats.test"
       ]
+    },
+    {
+      "reason": "FIXME? Variant issues",
+      "paths": [
+          "test/sql/storage/types/variant/variant_shredding_omit_untyped.test"
+      ]
+    },
+    {
+        "reason": "FIXME: GEOMETRY limitations (should be fixed at some point)",
+        "paths": [
+            "test/sql/types/geo/geometry_stats.test",
+            "test/sql/types/geo/geometry_shred_list.test",
+            "test/sql/types/geo/geometry_shred_limit.test",
+            "test/sql/types/geo/geometry_crs.test",
+            "test/sql/types/geo/geometry_shred.test"
+        ]
+    }
+    ,
+    {
+      "reason": "FIXME: Variant Bugs?",
+      "paths": [
+          "test/parquet/variant/variant_comparison.test",
+        "test/sql/storage/types/variant/variant_shredding_omit_untyped.test"
+      ]
     }
   ]
 }

@@ -1,4 +1,5 @@
 #include "storage/ducklake_inline_data.hpp"
+#include "storage/ducklake_stats.hpp"
 
 #include "duckdb/common/type_visitor.hpp"
 #include "storage/ducklake_insert.hpp"
@@ -12,13 +13,6 @@ DuckLakeInlineData::DuckLakeInlineData(PhysicalPlan &physical_plan, PhysicalOper
     : PhysicalOperator(physical_plan, PhysicalOperatorType::EXTENSION, child.types, child.estimated_cardinality),
       inline_row_limit(inline_row_limit) {
 	children.push_back(child);
-
-	for (const auto &type : types) {
-		if (DuckLakeTypes::RequiresCast(type)) {
-			throw NotImplementedException("DuckLake does not yet support data-inlining of '%s' columns",
-			                              type.ToString());
-		}
-	}
 }
 
 enum class InlinePhase { INLINING_ROWS, EMITTING_PREVIOUSLY_INLINED_ROWS, PASS_THROUGH_ROWS };
@@ -234,7 +228,7 @@ DuckLakeColumnStats GetVectorStats(Vector &input_vec, idx_t row_count) {
 	VectorOperations::DefaultCast(input_vec, str_vector, row_count);
 	// FIXME: we can be more efficient here by templating on other types (numerics...)
 	// FIXME: we can gather nan statistics for FLOAT/DOUBLE
-	if (type.IsNumeric()) {
+	if (RequiresValueComparison(type)) {
 		return TemplatedUpdateStats<string_t, StatsNumericFallbackOperator>(str_vector, type, row_count);
 	}
 	return TemplatedUpdateStats<string_t, StatsFallbackOperator>(str_vector, type, row_count);

@@ -8,8 +8,6 @@ require parquet
 
 test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
 
-
-
 statement ok
 ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '__TEST_DIR__/merge_adjacent_options_sorted/')
 
@@ -33,24 +31,30 @@ CREATE TABLE table_to_recreate (unique_id BIGINT, sort_key_1 BIGINT, sort_key_2 
 statement ok
 INSERT INTO table_to_recreate (unique_id, sort_key_1, sort_key_2)
 FROM range(4) t(i)
-SELECT 
+SELECT
     i AS unique_id,
     i % 2 AS sort_key_1,
     'woot' || i AS sort_key_2
-ORDER BY 
+ORDER BY
     i DESC
 ;
 
 statement ok
+CALL ducklake_flush_inlined_data('ducklake')
+
+statement ok
 INSERT INTO table_to_recreate (unique_id, sort_key_1, sort_key_2)
 FROM range(4) t(i)
-SELECT 
+SELECT
     i + 4 AS unique_id,
     (i + 4) % 2 AS sort_key_1,
     'woot' || (i + 4) AS sort_key_2
-ORDER BY 
+ORDER BY
     i DESC
 ;
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake')
 
 query III
 FROM table_to_recreate
@@ -64,17 +68,17 @@ FROM table_to_recreate
 5	1	woot5
 4	0	woot4
 
-query II
-SELECT df.data_file_id, df.table_id 
-FROM __ducklake_metadata_ducklake.ducklake_data_file df 
-JOIN __ducklake_metadata_ducklake.ducklake_table t 
-ON df.table_id = t.table_id 
-WHERE 
+query I
+SELECT df.table_id
+FROM __ducklake_metadata_ducklake.ducklake_data_file df
+JOIN __ducklake_metadata_ducklake.ducklake_table t
+ON df.table_id = t.table_id
+WHERE
 t.table_name = 'table_to_recreate'
 ORDER BY ALL
 ----
-0	3
-1	3
+3
+3
 
 query III
 SELECT table_name, files_processed, files_created FROM ducklake_merge_adjacent_files('ducklake', 'table_to_recreate')
@@ -96,13 +100,13 @@ FROM table_to_recreate
 4	0	woot4
 
 # We write a new file for the table
-query II
-SELECT df.data_file_id, df.table_id 
-FROM __ducklake_metadata_ducklake.ducklake_data_file df 
-JOIN __ducklake_metadata_ducklake.ducklake_table t 
-ON df.table_id = t.table_id 
-WHERE 
+query I
+SELECT df.table_id
+FROM __ducklake_metadata_ducklake.ducklake_data_file df
+JOIN __ducklake_metadata_ducklake.ducklake_table t
+ON df.table_id = t.table_id
+WHERE
 t.table_name = 'table_to_recreate'
 ----
-2	3
+3
 

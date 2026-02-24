@@ -57,7 +57,7 @@ jobs:
       uses: hendrikmuhs/ccache-action@main
       with:
         key: ${{ github.job }}
-        save: ${{ github.ref == 'refs/heads/main' || github.repository != 'duckdb/duckdb-postgres' }}
+        save: ${{ github.ref == 'refs/heads/main' || github.repository != 'duckdb/ducklake' }}
 
     - name: Setup vcpkg
       uses: lukka/run-vcpkg@v11.1

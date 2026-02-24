@@ -84,8 +84,8 @@ query I
 select * from t1 ORDER BY ALL;
 ----
 POINT (1 2)
-POINT M (20 20 5)
 POINT ZM (-30 -30 -30 -30)
+POINT M (20 20 5)
 LINESTRING Z (5 5 5, 10 10 10)
 
 # Check stats

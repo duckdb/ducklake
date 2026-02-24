@@ -20,38 +20,52 @@ USE ducklake
 statement ok
 CREATE TABLE test(key INTEGER, values VARCHAR);
 
-# 2	{tables_inserted_into=[1]}
 statement ok
 INSERT INTO test SELECT i, concat('thisisastring_', i) FROM range(100) t(i)
 
+statement ok
+CALL ducklake_flush_inlined_data('ducklake')
+
 # Let's do a few insertions interleaved with deletions
-# 3	{tables_deleted_from=[1]}
 statement ok
 DELETE FROM test
 WHERE key < 50;
 
-# 4	{tables_inserted_into=[1]}
+statement ok
+CALL ducklake_flush_inlined_data('ducklake')
+
 statement ok
 INSERT INTO test SELECT i, concat('thisisastring_', i) FROM range(100,200) t(i)
 
-# 5	{tables_deleted_from=[1]}
+statement ok
+CALL ducklake_flush_inlined_data('ducklake')
+
 statement ok
 DELETE FROM test
 WHERE key < 80;
 
-# 6	{tables_deleted_from=[1]}
+statement ok
+CALL ducklake_flush_inlined_data('ducklake')
+
 statement ok
 DELETE FROM test
 WHERE key  = 120;
 
-# 7	{tables_inserted_into=[1]}
+statement ok
+CALL ducklake_flush_inlined_data('ducklake')
+
 statement ok
 INSERT INTO test SELECT i, concat('thisisastring_', i) FROM range(200,300) t(i)
 
-# 8	{tables_deleted_from=[1]}
+statement ok
+CALL ducklake_flush_inlined_data('ducklake')
+
 statement ok
 DELETE FROM test
 WHERE key  > 200 and key < 250;
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake')
 
 query I
 SELECT COUNT(*) FROM GLOB('${DATA_PATH}/ducklake_multiple_inserts/**/*')
@@ -78,49 +92,80 @@ select count(*) from test;
 170
 
 # Test previous snapshots are all-right
-query II
-SELECT snapshot_id, changes FROM snapshots();
+# In inline mode, DELETE of 1 row creates an inlined_delete + flushed tables_deleted_from (11 snapshots)
+# In no-inline mode, it goes directly to tables_deleted_from (10 snapshots)
+
+# Verify key snapshot type counts (same in both inline and no-inline mode)
+query I
+SELECT count(*) FROM snapshots() WHERE changes::VARCHAR LIKE '%tables_inserted_into%=[1]%'
 ----
-0	{schemas_created=[main]}
-1	{tables_created=[main.test]}
-2	{tables_inserted_into=[1]}
-3	{tables_deleted_from=[1]}
-4	{tables_inserted_into=[1]}
-5	{tables_deleted_from=[1]}
-6	{tables_deleted_from=[1]}
-7	{tables_inserted_into=[1]}
-8	{tables_deleted_from=[1]}
-9	{rewrite_delete=[1]}
+3
+
+query I
+SELECT count(*) FROM snapshots() WHERE changes::VARCHAR LIKE '%rewrite_delete%=[1]%'
+----
+1
+
+# Compute dynamic snapshot IDs for versions that differ between inline/no-inline mode
+# In inline mode: DELETE of 1 row creates inlined_delete + flushed tables_deleted_from (extra snapshot)
+# In no-inline mode: DELETE of 1 row goes directly to tables_deleted_from (no extra snapshot)
+
+# s_del3 = 3rd non-rewrite delete (DELETE WHERE key = 120)
+# inline: snapshot 6 (inlined_delete), no-inline: snapshot 6 (tables_deleted_from)
+statement ok
+SET VARIABLE s_del3 = (SELECT snapshot_id FROM (SELECT snapshot_id, row_number() OVER (ORDER BY snapshot_id) AS rn FROM ducklake_snapshots('ducklake') WHERE changes::VARCHAR LIKE '%delete%=[1]%' AND changes::VARCHAR NOT LIKE '%rewrite%') WHERE rn = 3);
+
+# s_ins3 = 3rd insert (INSERT range(200,300))
+# inline: snapshot 8, no-inline: snapshot 7
+statement ok
+SET VARIABLE s_ins3 = (SELECT snapshot_id FROM (SELECT snapshot_id, row_number() OVER (ORDER BY snapshot_id) AS rn FROM ducklake_snapshots('ducklake') WHERE changes::VARCHAR LIKE '%insert%=[1]%') WHERE rn = 3);
+
+# s_del_last = last non-rewrite delete (DELETE WHERE key > 200 AND key < 250)
+# inline: snapshot 9, no-inline: snapshot 8
+statement ok
+SET VARIABLE s_del_last = (SELECT max(snapshot_id) FROM ducklake_snapshots('ducklake') WHERE changes::VARCHAR LIKE '%delete%=[1]%' AND changes::VARCHAR NOT LIKE '%rewrite%');
 
 loop i 0 2
 
+# VERSION 2: after first INSERT (100 rows)
+query I
+select count(*) from test AT (VERSION => 2);
+----
+100
+
+# VERSION 3: after DELETE key < 50 (50 rows remain)
 query I
 select count(*) from test AT (VERSION => 3);
 ----
 50
 
+# VERSION 4: after second INSERT (150 rows)
 query I
 select count(*) from test AT (VERSION => 4);
 ----
 150
 
+# VERSION 5: after DELETE key < 80 (120 rows remain)
 query I
 select count(*) from test AT (VERSION => 5);
 ----
 120
 
+# After DELETE key = 120 (119 rows remain) - snapshot ID varies by mode
 query I
-select count(*) from test AT (VERSION => 6);
+select count(*) from test AT (VERSION => getvariable('s_del3'));
 ----
 119
 
+# After third INSERT range(200,300) (219 rows) - snapshot ID varies by mode
 query I
-select count(*) from test AT (VERSION => 7);
+select count(*) from test AT (VERSION => getvariable('s_ins3'));
 ----
 219
 
+# After DELETE key > 200 AND key < 250 (170 rows remain) - snapshot ID varies by mode
 query I
-select count(*) from test AT (VERSION => 8);
+select count(*) from test AT (VERSION => getvariable('s_del_last'));
 ----
 170
 

@@ -248,10 +248,10 @@ struct NestedVariantStats {
 	}
 
 	void ConvertStats(const unordered_map<string, DuckLakeVariantStats> &field_stats, BaseStatistics &main_stats) {
-		auto &untyped_value_index_stats = StructStats::GetChildStats(main_stats, 0);
-		untyped_value_index_stats.SetHasNull();
+		auto &stats = StructStats::GetChildStats(main_stats, VariantStats::TYPED_VALUE_INDEX);
 
-		auto &stats = StructStats::GetChildStats(main_stats, 1);
+		auto &untyped_value_index_stats = StructStats::GetChildStats(main_stats, VariantStats::UNTYPED_VALUE_INDEX);
+		untyped_value_index_stats.SetHasNull();
 		if (!full_field_name.empty()) {
 			// field, find it in the stats
 			auto entry = field_stats.find(full_field_name);
@@ -377,7 +377,7 @@ unique_ptr<BaseStatistics> DuckLakeColumnVariantStats::ToStats() const {
 	// get the type
 	auto shredded_type = nested_stats.ToType(shredded_field_stats);
 	auto full_shredding_type = TypeVisitor::VisitReplace(shredded_type, [](const LogicalType &type) {
-		return LogicalType::STRUCT({{"untyped_value_index", LogicalType::UINTEGER}, {"typed_value", type}});
+		return LogicalType::STRUCT({{"typed_value", type}, {"untyped_value_index", LogicalType::UINTEGER}});
 	});
 	auto variant_stats = VariantStats::CreateShredded(full_shredding_type);
 

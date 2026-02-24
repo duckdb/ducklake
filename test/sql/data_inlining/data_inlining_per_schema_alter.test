@@ -1,0 +1,48 @@
+# name: test/sql/data_inlining/data_inlining_per_schema_alter.test
+# description: test that per-schema inlining settings are respected after ALTER TABLE
+# group: [data_inlining]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+
+test-env DATA_PATH __TEST_DIR__
+
+statement ok
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/ducklake_per_schema_alter', METADATA_CATALOG 'ducklake_meta', DATA_INLINING_ROW_LIMIT 10)
+
+# create a schema and disable inlining for it
+statement ok
+CREATE SCHEMA ducklake.s1
+
+statement ok
+CALL ducklake.set_option('data_inlining_row_limit', 0, schema=> 's1')
+
+# create a table in the schema with inlining disabled
+statement ok
+CREATE TABLE ducklake.s1.t1(i INTEGER, j VARCHAR)
+
+statement ok
+INSERT INTO ducklake.s1.t1 VALUES (1, 'hello'), (2, 'world')
+
+query I
+SELECT COUNT(*) FROM ducklake_meta.ducklake_inlined_data_tables
+----
+0
+
+# ALTER TABLE ADD COLUMN triggers the column_schema_change path
+statement ok
+ALTER TABLE ducklake.s1.t1 ADD COLUMN k INTEGER DEFAULT 42
+
+query III
+SELECT * FROM ducklake.s1.t1 ORDER BY i
+----
+1	hello	42
+2	world	42
+
+query I
+SELECT COUNT(*) FROM ducklake_meta.ducklake_inlined_data_tables
+----
+0

@@ -24,19 +24,41 @@ statement ok
 insert into t values (0);
 
 statement ok
-insert into t values (0);
+CALL ducklake_flush_inlined_data('ducklake')
 
 statement ok
 insert into t values (0);
 
 statement ok
-insert into t values (0);
+CALL ducklake_flush_inlined_data('ducklake')
 
 statement ok
 insert into t values (0);
 
 statement ok
+CALL ducklake_flush_inlined_data('ducklake')
+
+statement ok
 insert into t values (0);
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake')
+
+statement ok
+insert into t values (0);
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake')
+
+statement ok
+insert into t values (0);
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake')
+
+# Capture expected partial_max before merge: max begin_snapshot of active files
+statement ok
+SET VARIABLE expected_pm = (SELECT max(begin_snapshot) FROM __ducklake_metadata_ducklake.ducklake_data_file WHERE end_snapshot IS NULL);
 
 query III
 SELECT table_name, files_processed, files_created FROM ducklake_merge_adjacent_files('ducklake', 't')
@@ -44,6 +66,6 @@ SELECT table_name, files_processed, files_created FROM ducklake_merge_adjacent_f
 t	6	1
 
 query I
-SELECT partial_max FROM __ducklake_metadata_ducklake.ducklake_data_file
+SELECT partial_max = getvariable('expected_pm') FROM __ducklake_metadata_ducklake.ducklake_data_file WHERE end_snapshot IS NULL
 ----
-7
+true

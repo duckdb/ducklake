@@ -343,20 +343,24 @@ PhysicalOperator &DuckLakeCatalog::PlanUpdate(ClientContext &context, PhysicalPl
 		expressions.push_back(op.expressions[expression_map[i]]->Copy());
 	}
 	if (copy_input.partition_data) {
-		// If we have partitions, we must include them in our expressions.
+		bool all_identity = true;
 		for (auto &field : copy_input.partition_data->fields) {
-			if (field.transform.type == DuckLakeTransformType::IDENTITY) {
-				// Identity Partitions are already there
-				continue;
+			if (field.transform.type != DuckLakeTransformType::IDENTITY) {
+				all_identity = false;
+				break;
 			}
-			optional_idx col_idx;
-			DuckLakeInsert::GetTopLevelColumn(copy_input, field.field_id, col_idx);
-			D_ASSERT(col_idx.IsValid());
-			auto &child_expression = expressions[col_idx.GetIndex()]->Cast<BoundReferenceExpression>();
-			auto column_reference =
-			    make_uniq<BoundReferenceExpression>(child_expression.return_type, child_expression.index);
-			expressions.push_back(
-			    DuckLakePartitionUtils::ApplyPartitionTransform(context, std::move(column_reference), field));
+		}
+		if (!all_identity) {
+			for (auto &field : copy_input.partition_data->fields) {
+				optional_idx col_idx;
+				DuckLakeInsert::GetTopLevelColumn(copy_input, field.field_id, col_idx);
+				D_ASSERT(col_idx.IsValid());
+				auto &child_expression = expressions[col_idx.GetIndex()]->Cast<BoundReferenceExpression>();
+				auto column_reference =
+				    make_uniq<BoundReferenceExpression>(child_expression.return_type, child_expression.index);
+				expressions.push_back(
+				    DuckLakePartitionUtils::ApplyPartitionTransform(context, std::move(column_reference), field));
+			}
 		}
 	}
 

@@ -3,6 +3,7 @@
 #include "common/ducklake_util.hpp"
 #include "duckdb/planner/tableref/bound_at_clause.hpp"
 #include "duckdb/common/types/blob.hpp"
+#include "duckdb/common/type_visitor.hpp"
 #include "storage/ducklake_catalog.hpp"
 #include "common/ducklake_types.hpp"
 #include "storage/ducklake_schema_entry.hpp"
@@ -56,6 +57,9 @@ unique_ptr<DuckLakeMetadataManager> DuckLakeMetadataManager::Create(DuckLakeTran
 		auto create = metadata_manager_iter->second;
 		return create(transaction);
 	}
+	if (catalog_type == "sqlite_scanner") {
+		return make_uniq<SQLiteMetadataManager>(transaction);
+	}
 	return make_uniq<DuckLakeMetadataManager>(transaction);
 }
 
@@ -64,6 +68,35 @@ DuckLakeMetadataManager &DuckLakeMetadataManager::Get(DuckLakeTransaction &trans
 }
 
 bool DuckLakeMetadataManager::TypeIsNativelySupported(const LogicalType &type) {
+	return true;
+}
+
+bool DuckLakeMetadataManager::SupportsInlining(const LogicalType &type) {
+	if (type.id() == LogicalTypeId::GEOMETRY) {
+		return false;
+	}
+	return true;
+}
+
+bool DuckLakeMetadataManager::SupportsInliningTypes(const vector<LogicalType> &types) {
+	for (auto &type : types) {
+		if (TypeVisitor::Contains(type, [&](const LogicalType &t) { return !SupportsInlining(t); })) {
+			return false;
+		}
+	}
+	return true;
+}
+
+bool DuckLakeMetadataManager::SupportsInliningColumns(const vector<DuckLakeColumnInfo> &columns) {
+	for (auto &col : columns) {
+		auto col_type = DuckLakeTypes::FromString(col.type);
+		if (!SupportsInlining(col_type)) {
+			return false;
+		}
+		if (!col.children.empty() && !SupportsInliningColumns(col.children)) {
+			return false;
+		}
+	}
 	return true;
 }
 
@@ -125,7 +158,7 @@ CREATE TABLE {METADATA_CATALOG}.ducklake_sort_info(sort_id BIGINT, table_id BIGI
 CREATE TABLE {METADATA_CATALOG}.ducklake_sort_expression(sort_id BIGINT, table_id BIGINT, sort_key_index BIGINT, expression VARCHAR, dialect VARCHAR, sort_direction VARCHAR, null_order VARCHAR);
 INSERT INTO {METADATA_CATALOG}.ducklake_snapshot VALUES (0, NOW(), 0, 1, 0);
 INSERT INTO {METADATA_CATALOG}.ducklake_snapshot_changes VALUES (0, 'created_schema:"main"',  NULL, NULL, NULL);
-INSERT INTO {METADATA_CATALOG}.ducklake_metadata (key, value) VALUES ('version', '0.4-dev1'), ('created_by', 'DuckDB %s'), ('data_path', %s), ('encrypted', '%s');
+INSERT INTO {METADATA_CATALOG}.ducklake_metadata (key, value) VALUES ('version', '0.4'), ('created_by', 'DuckDB %s'), ('data_path', %s), ('encrypted', '%s');
 INSERT INTO {METADATA_CATALOG}.ducklake_schema VALUES (0, UUID(), 0, NULL, 'main', 'main/', true);
 	)",
 	                                       DuckDB::SourceID(), SQLString(data_path), encryption_str);
@@ -213,7 +246,7 @@ SET partial_max = m.partial_max
 FROM __ducklake_partial_max_migration m
 WHERE df.data_file_id = m.data_file_id;
 DROP TABLE IF EXISTS __ducklake_partial_max_migration;
-UPDATE {METADATA_CATALOG}.ducklake_metadata SET value = '0.4-dev1' WHERE key = 'version';
+UPDATE {METADATA_CATALOG}.ducklake_metadata SET value = '0.4' WHERE key = 'version';
 	)";
 	ExecuteMigration(migrate_query, allow_failures);
 
@@ -223,7 +256,8 @@ SELECT t.table_id, t.begin_snapshot, sv.schema_version
 FROM {METADATA_CATALOG}.ducklake_schema_versions sv
 JOIN {METADATA_CATALOG}.ducklake_table t
   ON sv.begin_snapshot BETWEEN t.begin_snapshot
-                           AND COALESCE(t.end_snapshot, sv.begin_snapshot);
+                           AND COALESCE(t.end_snapshot, sv.begin_snapshot)
+WHERE sv.table_id IS NULL;
 )");
 	if (migrate_schema_versions->HasError()) {
 		if (!allow_failures) {
@@ -819,11 +853,19 @@ ORDER BY table_id;
 }
 
 string DuckLakeMetadataManager::GetFileSelectList(const string &prefix) {
-	auto result = StringUtil::Replace(
-	    "{PREFIX}.path, {PREFIX}.path_is_relative, {PREFIX}.file_size_bytes, {PREFIX}.footer_size", "{PREFIX}", prefix);
-	if (IsEncrypted()) {
-		result += ", " + prefix + ".encryption_key";
+	static const vector<string> column_list {
+	    "path", "path_is_relative", "file_size_bytes", "footer_size", "encryption_key",
+	};
+
+	auto count = column_list.size();
+	if (!IsEncrypted()) {
+		count -= 1;
 	}
+
+	auto result = StringUtil::Join(column_list, count, ", ", [&prefix](const string &column) {
+		return prefix + "." + column + " AS " + prefix + "_" + column;
+	});
+
 	return result;
 }
 
@@ -962,11 +1004,15 @@ string DuckLakeMetadataManager::CastValueToTarget(const Value &val, const Logica
 }
 
 string DuckLakeMetadataManager::CastStatsToTarget(const string &stats, const LogicalType &type) {
-	// we only need to cast numerics
-	if (type.IsNumeric()) {
+	// we need to cast numerics and temporals for correct comparison
+	if (RequiresValueComparison(type)) {
 		return "TRY_CAST(" + stats + " AS " + type.ToString() + ")";
 	}
 	return stats;
+}
+
+string DuckLakeMetadataManager::CastColumnToTarget(const string &column, const LogicalType &type) {
+	return column + "::" + type.ToString();
 }
 
 string DuckLakeMetadataManager::GenerateConstantFilter(const ConstantFilter &constant_filter, const LogicalType &type,
@@ -1392,7 +1438,12 @@ vector<DuckLakeFileListEntry> DuckLakeMetadataManager::GetTableInsertions(DuckLa
 	    StringUtil::Format(R"(
 SELECT %s
 FROM {METADATA_CATALOG}.ducklake_data_file data, (
-	SELECT NULL path, NULL path_is_relative, NULL file_size_bytes, NULL footer_size, NULL encryption_key
+	SELECT
+		CAST(NULL AS VARCHAR) path,
+		CAST(NULL AS BOOLEAN) path_is_relative,
+		CAST(NULL AS BIGINT) file_size_bytes,
+		CAST(NULL AS BIGINT) footer_size,
+		CAST(NULL AS VARCHAR) encryption_key
 ) del
 WHERE data.table_id=%d AND data.begin_snapshot <= {SNAPSHOT_ID} AND (
 	(data.begin_snapshot >= %d) OR
@@ -1482,14 +1533,21 @@ SELECT %s, current_delete.begin_snapshot FROM (
 	FROM {METADATA_CATALOG}.ducklake_delete_file
 	WHERE table_id = %d AND begin_snapshot <= {SNAPSHOT_ID}
 ) AS current_delete
-LEFT JOIN (
-	SELECT data_file_id, MAX_BY(COLUMNS(['path', 'path_is_relative', 'file_size_bytes', 'footer_size', 'encryption_key']), begin_snapshot) AS '\0'
+LEFT JOIN LATERAL (
+	SELECT DISTINCT ON (data_file_id)
+		data_file_id,
+		path,
+		path_is_relative,
+		file_size_bytes,
+		footer_size,
+		encryption_key
 	FROM {METADATA_CATALOG}.ducklake_delete_file
 	WHERE table_id = %d AND begin_snapshot < %d
-	GROUP BY data_file_id
+	ORDER BY data_file_id, begin_snapshot DESC
 ) AS previous_delete
 USING (data_file_id)
 JOIN (
+	SELECT *
 	FROM {METADATA_CATALOG}.ducklake_data_file data
 	WHERE table_id = %d
 ) AS data
@@ -1498,14 +1556,21 @@ USING (data_file_id)
 UNION ALL
 
 SELECT %s, data.end_snapshot FROM (
+	SELECT *
 	FROM {METADATA_CATALOG}.ducklake_data_file
 	WHERE table_id = %d AND end_snapshot >= %d AND end_snapshot <= {SNAPSHOT_ID}
 ) AS data
-LEFT JOIN (
-	SELECT data_file_id, MAX_BY(COLUMNS(['path', 'path_is_relative', 'file_size_bytes', 'footer_size', 'encryption_key']), begin_snapshot) AS '\0'
+LEFT JOIN LATERAL (
+	SELECT DISTINCT ON (data_file_id)
+		data_file_id,
+		path,
+		path_is_relative,
+		file_size_bytes,
+		footer_size,
+		encryption_key
 	FROM {METADATA_CATALOG}.ducklake_delete_file
 	WHERE table_id = %d AND begin_snapshot < data.end_snapshot
-	GROUP BY data_file_id
+	ORDER BY data_file_id, begin_snapshot DESC
 ) AS previous_delete
 USING (data_file_id), (
 	SELECT NULL path, NULL path_is_relative, NULL file_size_bytes, NULL footer_size, NULL encryption_key
@@ -1679,14 +1744,19 @@ vector<DuckLakeCompactionFileEntry> DuckLakeMetadataManager::GetFilesForCompacti
 	                          "data.end_snapshot, data.mapping_id, sr.schema_version , data.partial_max, "
 	                          "data.partition_id, partition_info.keys, " +
 	                          GetFileSelectList("data");
-	string delete_select_list = "del.data_file_id,del.delete_file_id, del.delete_count, del.begin_snapshot, "
-	                            "del.end_snapshot, del.partial_max, " +
+	string delete_select_list = "del.data_file_id AS del_data_file_id,"
+	                            "del.delete_file_id AS del_delete_file_id, "
+	                            "del.delete_count, "
+	                            "del.begin_snapshot AS del_begin_snapshot, "
+	                            "del.end_snapshot AS del_end_snapshot, "
+	                            "del.partial_max AS del_partial_max, " +
 	                            GetFileSelectList("del");
 	string select_list = data_select_list + ", " + delete_select_list;
 	string deletion_threshold_clause;
 	if (type == CompactionType::REWRITE_DELETES) {
 		deletion_threshold_clause = StringUtil::Format(
-		    " AND del.delete_count/data.record_count >= %f and data.end_snapshot is null", deletion_threshold);
+		    " AND CAST(del.delete_count AS FLOAT)/CAST(data.record_count AS FLOAT) >= %f and data.end_snapshot is null",
+		    deletion_threshold);
 	}
 	// Add file size filtering for MERGE_ADJACENT_TABLES compaction
 	string file_size_filter_clause;
@@ -1953,6 +2023,9 @@ string DuckLakeMetadataManager::GetColumnTypeInternal(const LogicalType &column_
 string DuckLakeMetadataManager::GetColumnType(const DuckLakeColumnInfo &col) {
 	auto column_type = DuckLakeTypes::FromString(col.type);
 	if (!TypeIsNativelySupported(column_type)) {
+		if (!column_type.IsNested()) {
+			return GetColumnTypeInternal(column_type);
+		}
 		return "VARCHAR";
 	}
 	switch (column_type.id()) {
@@ -2028,9 +2101,6 @@ string DuckLakeMetadataManager::WriteNewTables(DuckLakeSnapshot commit_snapshot,
 		batch_query += "INSERT INTO {METADATA_CATALOG}.ducklake_column VALUES " + column_insert_sql + ";";
 	}
 
-	// write new data-inlining tables (if data-inlining is enabled)
-	batch_query += WriteNewInlinedTables(commit_snapshot, new_tables);
-
 	return batch_query;
 }
 
@@ -2063,7 +2133,27 @@ string DuckLakeMetadataManager::WriteNewInlinedTables(DuckLakeSnapshot commit_sn
 			// not inlining for this table or inlining is for a table on this transaction, hence handled there - skip it
 			continue;
 		}
-		GetInlinedTableQueries(commit_snapshot, table, inlined_tables, inlined_table_queries);
+		// If columns are empty (e.g., for renamed tables), fetch them from the catalog
+		const DuckLakeTableInfo *table_ptr = &table;
+		DuckLakeTableInfo table_with_columns;
+		if (table.columns.empty()) {
+			auto current_snapshot = transaction.GetSnapshot();
+			auto table_entry = catalog.GetEntryById(transaction, current_snapshot, table.id);
+			if (table_entry) {
+				auto &tbl = table_entry->Cast<DuckLakeTableEntry>();
+				table_with_columns = table;
+				table_with_columns.columns = tbl.GetTableColumns();
+				table_ptr = &table_with_columns;
+			}
+		}
+		// FIXME: we are skipping columns that have conflicting names, we should resolve this
+		if (DuckLakeUtil::HasInlinedSystemColumnConflict(table_ptr->columns)) {
+			continue;
+		}
+		if (!SupportsInliningColumns(table_ptr->columns)) {
+			continue;
+		}
+		GetInlinedTableQueries(commit_snapshot, *table_ptr, inlined_tables, inlined_table_queries);
 	}
 	if (inlined_tables.empty()) {
 		return {};
@@ -2257,9 +2347,11 @@ WHERE table_id = %d AND schema_version=(
 				row_id++;
 			}
 		}
-		string append_query = StringUtil::Format("INSERT INTO {METADATA_CATALOG}.%s VALUES %s;",
-		                                         SQLIdentifier(inlined_table_name), values);
-		batch_query += append_query;
+		if (!values.empty()) {
+			string append_query = StringUtil::Format("INSERT INTO {METADATA_CATALOG}.%s VALUES %s;",
+			                                         SQLIdentifier(inlined_table_name), values);
+			batch_query += append_query;
+		}
 	}
 	return batch_query;
 }
@@ -2428,7 +2520,8 @@ string DuckLakeMetadataManager::GetInlinedDeletionTableName(TableIndex table_id,
 	return string();
 }
 
-shared_ptr<DuckLakeInlinedData> DuckLakeMetadataManager::TransformInlinedData(QueryResult &result) {
+shared_ptr<DuckLakeInlinedData> DuckLakeMetadataManager::TransformInlinedData(QueryResult &result,
+                                                                              const vector<LogicalType> &) {
 	if (result.HasError()) {
 		result.GetErrorObject().Throw("Failed to read inlined data from DuckLake: ");
 	}
@@ -2449,31 +2542,34 @@ shared_ptr<DuckLakeInlinedData> DuckLakeMetadataManager::TransformInlinedData(Qu
 
 static string GetProjection(const vector<string> &columns_to_read) {
 	string result;
+	idx_t i = 1;
 	for (auto &entry : columns_to_read) {
 		if (!result.empty()) {
 			result += ", ";
 		}
-		result += entry;
+		// alias to avoid duplicate name in PG
+		result += entry + StringUtil::Format(" AS col%d", i);
+		i++;
 	}
 	return result;
 }
 
-shared_ptr<DuckLakeInlinedData> DuckLakeMetadataManager::ReadInlinedData(DuckLakeSnapshot snapshot,
-                                                                         const string &inlined_table_name,
-                                                                         const vector<string> &columns_to_read) {
+unique_ptr<QueryResult> DuckLakeMetadataManager::ReadInlinedData(DuckLakeSnapshot snapshot,
+                                                                 const string &inlined_table_name,
+                                                                 const vector<string> &columns_to_read) {
 	auto projection = GetProjection(columns_to_read);
 	auto result = transaction.Query(snapshot, StringUtil::Format(R"(
 SELECT %s
 FROM {METADATA_CATALOG}.%s inlined_data
 WHERE {SNAPSHOT_ID} >= begin_snapshot AND ({SNAPSHOT_ID} < end_snapshot OR end_snapshot IS NULL);)",
 	                                                             projection, inlined_table_name));
-	return TransformInlinedData(*result);
+	return result;
 }
 
-shared_ptr<DuckLakeInlinedData>
-DuckLakeMetadataManager::ReadInlinedDataInsertions(DuckLakeSnapshot start_snapshot, DuckLakeSnapshot end_snapshot,
-                                                   const string &inlined_table_name,
-                                                   const vector<string> &columns_to_read) {
+unique_ptr<QueryResult> DuckLakeMetadataManager::ReadInlinedDataInsertions(DuckLakeSnapshot start_snapshot,
+                                                                           DuckLakeSnapshot end_snapshot,
+                                                                           const string &inlined_table_name,
+                                                                           const vector<string> &columns_to_read) {
 	auto projection = GetProjection(columns_to_read);
 	auto result =
 	    transaction.Query(end_snapshot, StringUtil::Format(R"(
@@ -2481,13 +2577,13 @@ SELECT %s
 FROM {METADATA_CATALOG}.%s inlined_data
 WHERE inlined_data.begin_snapshot >= %d AND inlined_data.begin_snapshot <= {SNAPSHOT_ID};)",
 	                                                       projection, inlined_table_name, start_snapshot.snapshot_id));
-	return TransformInlinedData(*result);
+	return result;
 }
 
-shared_ptr<DuckLakeInlinedData>
-DuckLakeMetadataManager::ReadInlinedDataDeletions(DuckLakeSnapshot start_snapshot, DuckLakeSnapshot end_snapshot,
-                                                  const string &inlined_table_name,
-                                                  const vector<string> &columns_to_read) {
+unique_ptr<QueryResult> DuckLakeMetadataManager::ReadInlinedDataDeletions(DuckLakeSnapshot start_snapshot,
+                                                                          DuckLakeSnapshot end_snapshot,
+                                                                          const string &inlined_table_name,
+                                                                          const vector<string> &columns_to_read) {
 	auto projection = GetProjection(columns_to_read);
 	auto result =
 	    transaction.Query(end_snapshot, StringUtil::Format(R"(
@@ -2495,12 +2591,12 @@ SELECT %s
 FROM {METADATA_CATALOG}.%s inlined_data
 WHERE inlined_data.end_snapshot >= %d AND inlined_data.end_snapshot <= {SNAPSHOT_ID};)",
 	                                                       projection, inlined_table_name, start_snapshot.snapshot_id));
-	return TransformInlinedData(*result);
+	return result;
 }
 
-shared_ptr<DuckLakeInlinedData>
-DuckLakeMetadataManager::ReadAllInlinedDataForFlush(DuckLakeSnapshot snapshot, const string &inlined_table_name,
-                                                    const vector<string> &columns_to_read) {
+unique_ptr<QueryResult> DuckLakeMetadataManager::ReadAllInlinedDataForFlush(DuckLakeSnapshot snapshot,
+                                                                            const string &inlined_table_name,
+                                                                            const vector<string> &columns_to_read) {
 	auto projection = GetProjection(columns_to_read);
 	auto result = transaction.Query(snapshot, StringUtil::Format(R"(
 SELECT %s
@@ -2508,7 +2604,7 @@ FROM {METADATA_CATALOG}.%s inlined_data
 WHERE {SNAPSHOT_ID} >= begin_snapshot
 ORDER BY row_id;)",
 	                                                             projection, inlined_table_name));
-	return TransformInlinedData(*result);
+	return result;
 }
 
 string DuckLakeMetadataManager::GetPathForSchema(SchemaIndex schema_id,
@@ -2590,7 +2686,11 @@ WHERE schema_id = %d;)",
 		}
 	}
 	auto result = transaction.Query(StringUtil::Format(R"(
-SELECT s.path, s.path_is_relative, t.path, t.path_is_relative
+SELECT
+	s.path AS s_path,
+	s.path_is_relative AS s_path_is_relative,
+	t.path AS t_path,
+	t.path_is_relative AS t_path_is_relative
 FROM {METADATA_CATALOG}.ducklake_schema s
 JOIN {METADATA_CATALOG}.ducklake_table t
 USING (schema_id)
@@ -2976,7 +3076,7 @@ SELECT
     next_catalog_id,
     next_file_id,
     COALESCE((
-            SELECT STRING_AGG(changes_made, '')
+            SELECT STRING_AGG(changes_made, ',')
             FROM {METADATA_CATALOG}.ducklake_snapshot_changes c
             WHERE c.snapshot_id > {SNAPSHOT_ID}
             ),'') AS changes,
@@ -3101,7 +3201,7 @@ unique_ptr<DuckLakeSnapshot> DuckLakeMetadataManager::GetSnapshot(BoundAtClause 
 	auto &unit = at_clause.Unit();
 	auto &val = at_clause.GetValue();
 	unique_ptr<QueryResult> result;
-	const string timestamp_aggregate = bound == SnapshotBound::LOWER_BOUND ? "MIN" : "MAX";
+	const string timestamp_order = bound == SnapshotBound::LOWER_BOUND ? "ASC" : "DESC";
 	const string timestamp_condition = bound == SnapshotBound::LOWER_BOUND ? ">" : "<";
 	if (StringUtil::CIEquals(unit, "version")) {
 		result = transaction.Query(StringUtil::Format(R"(
@@ -3110,15 +3210,17 @@ FROM {METADATA_CATALOG}.ducklake_snapshot
 WHERE snapshot_id = %llu;)",
 		                                              val.DefaultCastAs(LogicalType::UBIGINT).GetValue<idx_t>()));
 	} else if (StringUtil::CIEquals(unit, "timestamp")) {
-		result = transaction.Query(StringUtil::Format(R"(
+		result = transaction.Query(StringUtil::Format(
+		    R"(
 SELECT snapshot_id, schema_version, next_catalog_id, next_file_id
 FROM {METADATA_CATALOG}.ducklake_snapshot
 WHERE snapshot_id = (
-	SELECT %s_BY(snapshot_id, snapshot_time)
+	SELECT snapshot_id
 	FROM {METADATA_CATALOG}.ducklake_snapshot
-	WHERE snapshot_time %s= %s);)",
-		                                              timestamp_aggregate, timestamp_condition,
-		                                              val.DefaultCastAs(LogicalType::VARCHAR).ToSQLString()));
+	WHERE snapshot_time %s= %s
+	ORDER BY snapshot_time %s
+	LIMIT 1);)",
+		    timestamp_condition, val.DefaultCastAs(LogicalType::VARCHAR).ToSQLString(), timestamp_order));
 	} else {
 		throw InvalidInputException("Unsupported AT clause unit - %s", unit);
 	}
@@ -3975,7 +4077,12 @@ string DuckLakeMetadataManager::InsertNewSchema(const DuckLakeSnapshot &snapshot
 vector<DuckLakeTableSizeInfo> DuckLakeMetadataManager::GetTableSizes(DuckLakeSnapshot snapshot) {
 	vector<DuckLakeTableSizeInfo> table_sizes;
 	auto result = transaction.Query(snapshot, R"(
-SELECT schema_id, table_id, table_name, table_uuid, data_file_info.file_count, data_file_info.total_file_size, delete_file_info.file_count, delete_file_info.total_file_size
+SELECT
+	schema_id, table_id, table_name, table_uuid,
+	data_file_info.file_count AS data_file_count,
+	data_file_info.total_file_size AS data_total_size,
+	delete_file_info.file_count AS delete_file_count,
+	delete_file_info.total_file_size AS delete_total_size
 FROM {METADATA_CATALOG}.ducklake_table tbl, LATERAL (
 	SELECT COUNT(*) file_count, SUM(file_size_bytes) total_file_size
 	FROM {METADATA_CATALOG}.ducklake_data_file df

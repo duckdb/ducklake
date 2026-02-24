@@ -29,7 +29,13 @@ statement ok
 INSERT INTO partitioned_tbl SELECT i%2, concat('thisisastring_', i) FROM range(10000) t(i)
 
 statement ok
+CALL ducklake_flush_inlined_data('ducklake')
+
+statement ok
 ALTER TABLE partitioned_tbl RENAME TO partitioned_tbl_renamed
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake')
 
 # check if rename causes partition info to get dropped
 query I
@@ -39,6 +45,9 @@ SELECT COUNT(*) FROM ducklake_metadata.ducklake_partition_info WHERE end_snapsho
 
 statement ok
 ALTER TABLE partitioned_tbl_renamed RENAME TO partitioned_tbl
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake')
 
 query I
 SELECT COUNT(*) FROM partitioned_tbl WHERE part_key=0
@@ -69,6 +78,9 @@ SELECT * FROM ducklake_metadata.ducklake_file_partition_value
 # append to partition
 statement ok
 INSERT INTO partitioned_tbl SELECT (i%2) + 1, concat('thisisanotherstring_', i) FROM range(10000) t(i)
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake')
 
 query I
 SELECT COUNT(*) FROM partitioned_tbl WHERE part_key=2
@@ -105,6 +117,9 @@ SELECT COUNT(*) FROM partition_tbl2 WHERE part_key=0
 statement ok
 COMMIT
 
+statement ok
+CALL ducklake_flush_inlined_data('ducklake')
+
 query III
 SELECT data_file_id, partition_id, regexp_extract(path, '.*(part_key=[0-9])[/\\].*', 1)
 FROM ducklake_metadata.ducklake_data_file
@@ -139,6 +154,9 @@ SELECT COUNT(*) FROM partition_tbl3 WHERE part_key=0
 
 statement ok
 COMMIT
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake')
 
 query I
 SELECT COUNT(*) FROM partition_tbl3 WHERE part_key=0

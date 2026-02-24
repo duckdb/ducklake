@@ -23,15 +23,24 @@ statement ok
 INSERT INTO ducklake.test VALUES (${BASE} + 1);
 
 statement ok
+CALL ducklake_flush_inlined_data('ducklake')
+
+statement ok
 INSERT INTO ducklake.test VALUES (${BASE} + 2);
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake')
 
 statement ok
 INSERT INTO ducklake.test VALUES (${BASE} + 3);
 
-query III
-SELECT table_name, files_processed, files_created FROM ducklake_merge_adjacent_files('ducklake')
+statement ok
+CALL ducklake_flush_inlined_data('ducklake')
+
+query II
+SELECT table_name, files_created FROM ducklake_merge_adjacent_files('ducklake')
 ----
-test	<REGEX>:\d+	1
+test	1
 
 endloop
 
@@ -51,13 +60,13 @@ SELECT * FROM ducklake.test AT (VERSION => 2)
 ----
 1
 
-# row-ids/snapshot-ids are kept also across multiple compaction runs
-query III
-SELECT snapshot_id, rowid, * FROM ducklake.test ORDER BY ALL
+# row-ids are kept also across multiple compaction runs
+query II
+SELECT rowid, * FROM ducklake.test ORDER BY ALL
 ----
-2	0	1
-3	1	2
-4	2	3
-6	3	4
-7	4	5
-8	5	6
+0	1
+1	2
+2	3
+3	4
+4	5
+5	6

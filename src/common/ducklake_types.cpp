@@ -12,7 +12,7 @@ struct DefaultType {
 	LogicalTypeId id;
 };
 
-using ducklake_type_array = std::array<DefaultType, 32>;
+using ducklake_type_array = std::array<DefaultType, 33>;
 
 static constexpr const ducklake_type_array DUCKLAKE_TYPES {{{"boolean", LogicalTypeId::BOOLEAN},
                                                             {"int8", LogicalTypeId::TINYINT},
@@ -42,6 +42,7 @@ static constexpr const ducklake_type_array DUCKLAKE_TYPES {{{"boolean", LogicalT
                                                             {"varchar", LogicalTypeId::VARCHAR},
                                                             {"blob", LogicalTypeId::BLOB},
                                                             {"uuid", LogicalTypeId::UUID},
+                                                            {"geometry", LogicalTypeId::GEOMETRY},
                                                             {"struct", LogicalTypeId::STRUCT},
                                                             {"map", LogicalTypeId::MAP},
                                                             {"list", LogicalTypeId::LIST},
@@ -61,12 +62,6 @@ static LogicalType ParseBaseType(const string &str) {
 		return LogicalType::VARIANT();
 	}
 
-	if (StringUtil::CIEquals(str, "geometry")) {
-		LogicalType geo_type(LogicalTypeId::BLOB);
-		geo_type.SetAlias("GEOMETRY");
-		return geo_type;
-	}
-
 	throw InvalidInputException("Failed to parse DuckLake type - unsupported type '%s'", str);
 }
 
@@ -81,7 +76,7 @@ static string ToStringBaseType(const LogicalType &type) {
 
 // Only GEOMETRY type needs special handling, to cast to WKB_BLOB
 bool DuckLakeTypes::IsGeoType(const LogicalType &type) {
-	return type.HasAlias() && StringUtil::CIEquals(type.GetAlias(), "GEOMETRY") && (type.id() == LogicalTypeId::BLOB);
+	return type.id() == LogicalTypeId::GEOMETRY;
 }
 
 bool DuckLakeTypes::RequiresCast(const LogicalType &type) {
@@ -100,9 +95,7 @@ bool DuckLakeTypes::RequiresCast(const vector<LogicalType> &types) {
 LogicalType DuckLakeTypes::GetCastedType(const LogicalType &type) {
 	return TypeVisitor::VisitReplace(type, [](const LogicalType &type) {
 		if (IsGeoType(type)) {
-			LogicalType wkb_type(LogicalTypeId::BLOB);
-			wkb_type.SetAlias("WKB_BLOB");
-			return wkb_type;
+			return LogicalType::GEOMETRY();
 		}
 		return type;
 	});
@@ -167,7 +160,8 @@ void DuckLakeTypes::CheckSupportedType(const LogicalType &type) {
 	});
 
 	// Special case for now, only allow GEOMETRY as top-level type
-	if (!IsGeoType(type) && TypeVisitor::Contains(type, IsGeoType)) {
+	if ((!IsGeoType(type) && TypeVisitor::Contains(type, IsGeoType)) ||
+	    (type.id() != LogicalTypeId::GEOMETRY && TypeVisitor::Contains(type, LogicalTypeId::GEOMETRY))) {
 		throw InvalidInputException("GEOMETRY type is only supported as a top-level type");
 	}
 }

@@ -55,7 +55,7 @@ private:
 	unique_ptr<SelectStatement> ParseSelectStatement() const;
 
 private:
-	mutex parse_lock;
+	mutable mutex lock;
 	TableIndex view_id;
 	string view_uuid;
 	string query_sql;

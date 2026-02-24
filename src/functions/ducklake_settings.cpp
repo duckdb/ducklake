@@ -6,7 +6,7 @@ namespace duckdb {
 
 static unique_ptr<FunctionData> DuckLakeSettingsBind(ClientContext &context, TableFunctionBindInput &input,
                                                      vector<LogicalType> &return_types, vector<string> &names) {
-	auto &catalog = BaseMetadataFunction::GetCatalog(context, input.inputs[0]);
+	auto &catalog = DuckLakeBaseMetadataFunction::GetCatalog(context, input.inputs[0]);
 	auto &ducklake_catalog = catalog.Cast<DuckLakeCatalog>();
 
 	names.emplace_back("catalog_type");
@@ -44,7 +44,8 @@ static unique_ptr<FunctionData> DuckLakeSettingsBind(ClientContext &context, Tab
 	return std::move(result);
 }
 
-DuckLakeSettingsFunction::DuckLakeSettingsFunction() : BaseMetadataFunction("ducklake_settings", DuckLakeSettingsBind) {
+DuckLakeSettingsFunction::DuckLakeSettingsFunction()
+    : DuckLakeBaseMetadataFunction("ducklake_settings", DuckLakeSettingsBind) {
 }
 
 } // namespace duckdb

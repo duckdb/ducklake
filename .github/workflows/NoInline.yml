@@ -1,0 +1,62 @@
+name: No Inline Tests
+on: [push, pull_request,repository_dispatch]
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ github.head_ref || '' }}-${{ github.base_ref || '' }}-${{ github.ref != 'refs/heads/main' || github.sha }}
+  cancel-in-progress: true
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  ducklake-no-inline-tests:
+    name: DuckLake Tests (No Inlining)
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        arch: ['linux_amd64']
+        vcpkg_version: [ '2023.04.15' ]
+        include:
+          - arch: 'linux_amd64'
+            vcpkg_triplet: 'x64-linux'
+
+    env:
+      VCPKG_TARGET_TRIPLET: ${{ matrix.vcpkg_triplet }}
+      GEN: Ninja
+      VCPKG_TOOLCHAIN_PATH: ${{ github.workspace }}/vcpkg/scripts/buildsystems/vcpkg.cmake
+
+    steps:
+    - name: Install required ubuntu packages
+      run: |
+        sudo apt-get update -y -qq
+        sudo apt-get install -y -qq build-essential cmake ninja-build ccache python3
+
+    - uses: actions/checkout@v3
+      with:
+        fetch-depth: 0
+        submodules: 'true'
+
+    - name: Checkout DuckDB to version
+      run: |
+        cd duckdb
+        git checkout $(cat ../.github/duckdb-version)
+
+    - name: Setup Ccache
+      uses: hendrikmuhs/ccache-action@main
+      with:
+        key: ${{ github.job }}
+        save: ${{ github.ref == 'refs/heads/main' || github.repository != 'duckdb/ducklake' }}
+
+    - name: Setup vcpkg
+      uses: lukka/run-vcpkg@v11.1
+      with:
+        vcpkgGitCommitId: a42af01b72c28a8e1d7b48107b33e4f286a55ef6
+
+    - name: Build extension
+      env:
+        GEN: ninja
+      run: |
+        make release
+
+    - name: Test extension (no inlining)
+      run: |
+        build/release/test/unittest --test-config test/configs/no_inline.json

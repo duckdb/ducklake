@@ -52,7 +52,7 @@ struct CleanupBindData : public TableFunctionData {
 static unique_ptr<FunctionData> CleanupBind(ClientContext &context, TableFunctionBindInput &input,
                                             vector<LogicalType> &return_types, vector<string> &names,
                                             CleanupType type) {
-	auto &catalog = BaseMetadataFunction::GetCatalog(context, input.inputs[0]);
+	auto &catalog = DuckLakeBaseMetadataFunction::GetCatalog(context, input.inputs[0]);
 	auto result = make_uniq<CleanupBindData>(catalog, type);
 
 	auto &ducklake_catalog = reinterpret_cast<DuckLakeCatalog &>(catalog);

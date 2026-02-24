@@ -1,0 +1,54 @@
+# name: test/sql/view/view_alias_binding.test
+# description: Test that views with column aliases bind correctly after detach/reattach
+# group: [view]
+
+require ducklake
+
+require parquet
+
+statement ok
+ATTACH 'ducklake:__TEST_DIR__/view_alias_binding.db' AS ducklake (DATA_PATH '__TEST_DIR__/view_alias_binding')
+
+statement ok
+USE ducklake
+
+statement ok
+CREATE VIEW single_alias(a) AS SELECT 42 AS x
+
+statement ok
+CREATE VIEW multi_alias(col1, col2) AS SELECT 1, 2
+
+query I
+SELECT count(*) FROM information_schema.tables WHERE table_catalog = 'ducklake' AND table_type = 'VIEW'
+----
+2
+
+statement ok
+USE memory
+
+statement ok
+DETACH ducklake
+
+statement ok
+ATTACH 'ducklake:__TEST_DIR__/view_alias_binding.db' AS ducklake (DATA_PATH '__TEST_DIR__/view_alias_binding')
+
+query I
+SELECT count(*) FROM information_schema.tables WHERE table_catalog = 'ducklake' AND table_type = 'VIEW'
+----
+2
+
+query I
+SELECT table_name FROM information_schema.tables WHERE table_catalog = 'ducklake' AND table_type = 'VIEW' ORDER BY table_name
+----
+multi_alias
+single_alias
+
+query I
+SELECT a FROM ducklake.single_alias
+----
+42
+
+query II
+SELECT col1, col2 FROM ducklake.multi_alias
+----
+1	2

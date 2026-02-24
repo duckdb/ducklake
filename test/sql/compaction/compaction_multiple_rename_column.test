@@ -20,7 +20,7 @@ test-env DUCKLAKE_CONNECTION __TEST_DIR__/compaction_multiple_rename_column.db
 test-env DATA_PATH __TEST_DIR__
 
 statement ok
-ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/compaction_multiple_rename_column')
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/compaction_multiple_rename_column', DATA_INLINING_ROW_LIMIT 0)
 
 # Create table with user_id column (schema version 1)
 statement ok
@@ -57,7 +57,7 @@ statement ok
 DETACH ducklake;
 
 statement ok
-ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/compaction_multiple_rename_column')
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/compaction_multiple_rename_column', DATA_INLINING_ROW_LIMIT 0)
 
 # Compact the files created at schema version 3
 # This loads the corrupted schema where both 'user_id' entries are visible

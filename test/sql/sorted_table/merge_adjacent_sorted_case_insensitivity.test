@@ -22,24 +22,30 @@ CREATE TABLE sort_on_compaction (unique_id BIGINT, Sort_Key_1 BIGINT, Sort_Key_2
 statement ok
 INSERT INTO sort_on_compaction (unique_id, sort_key_1, sort_key_2)
 FROM range(4) t(i)
-SELECT 
+SELECT
     i AS unique_id,
     i % 2 AS sort_key_1,
     'woot' || i AS sort_key_2
-ORDER BY 
+ORDER BY
     i DESC
 ;
 
 statement ok
+CALL ducklake_flush_inlined_data('ducklake')
+
+statement ok
 INSERT INTO sort_on_compaction (unique_id, sort_key_1, sort_key_2)
 FROM range(4) t(i)
-SELECT 
+SELECT
     i + 4 AS unique_id,
     (i + 4) % 2 AS sort_key_1,
     'woot' || (i + 4) AS sort_key_2
-ORDER BY 
+ORDER BY
     i DESC
 ;
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake')
 
 query III
 FROM sort_on_compaction
@@ -82,24 +88,30 @@ CREATE TABLE sort_on_compaction_2 (unique_id BIGINT, sort_key_1 BIGINT, sort_key
 statement ok
 INSERT INTO sort_on_compaction_2 (unique_id, sort_key_1, sort_key_2)
 FROM range(4) t(i)
-SELECT 
+SELECT
     i AS unique_id,
     i % 2 AS sort_key_1,
     'woot' || i AS sort_key_2
-ORDER BY 
+ORDER BY
     i DESC
 ;
 
 statement ok
+CALL ducklake_flush_inlined_data('ducklake')
+
+statement ok
 INSERT INTO sort_on_compaction_2 (unique_id, sort_key_1, sort_key_2)
 FROM range(4) t(i)
-SELECT 
+SELECT
     i + 4 AS unique_id,
     (i + 4) % 2 AS sort_key_1,
     'woot' || (i + 4) AS sort_key_2
-ORDER BY 
+ORDER BY
     i DESC
 ;
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake')
 
 query III
 FROM sort_on_compaction_2

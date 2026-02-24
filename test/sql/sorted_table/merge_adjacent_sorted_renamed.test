@@ -11,7 +11,7 @@ test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
 
 
 statement ok
-ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '__TEST_DIR__/merge_adjacent_options_sorted/')
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '__TEST_DIR__/merge_adjacent_options_sorted/', DATA_INLINING_ROW_LIMIT 0)
 
 statement ok
 USE ducklake;
@@ -57,7 +57,7 @@ ORDER BY
 statement error
 CALL ducklake_merge_adjacent_files('ducklake', 'renamed_columns_test');
 ----
-Binder Error: Columns in the SET SORTED BY statement were not found in the DuckLake table. Unmatched columns were: sort_key_1, sort_key_2
+Columns in the SET SORTED BY statement were not found in the DuckLake table. Unmatched columns were: sort_key_1, sort_key_2
 
 statement ok
 ALTER TABLE ducklake.renamed_columns_test SET SORTED BY (sort_key_1_changed ASC NULLS LAST, sort_key_2_changed ASC NULLS LAST);

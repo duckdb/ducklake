@@ -56,6 +56,10 @@ public:
 		                                        partition_id, std::move(partition_values), row_id_start, child, type);
 	}
 
+	string GetName() const override {
+		return "DUCKLAKE_COMPACTION";
+	}
+
 	string GetExtensionName() const override {
 		return "ducklake";
 	}

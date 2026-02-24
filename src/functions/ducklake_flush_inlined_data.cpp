@@ -229,6 +229,10 @@ public:
 		                                       partition_id, child);
 	}
 
+	string GetName() const override {
+		return "DUCKLAKE_FLUSH_DATA";
+	}
+
 	string GetExtensionName() const override {
 		return "ducklake";
 	}
@@ -566,7 +570,7 @@ static unique_ptr<LogicalOperator> FlushInlinedDataBind(ClientContext &context, 
                                                         idx_t bind_index, vector<string> &return_names) {
 	input.binder->SetAlwaysRequireRebind();
 	// gather a list of files to compact
-	auto &catalog = BaseMetadataFunction::GetCatalog(context, input.inputs[0]);
+	auto &catalog = DuckLakeBaseMetadataFunction::GetCatalog(context, input.inputs[0]);
 	auto &ducklake_catalog = catalog.Cast<DuckLakeCatalog>();
 	auto &transaction = DuckLakeTransaction::Get(context, ducklake_catalog);
 
@@ -692,12 +696,12 @@ static unique_ptr<LogicalOperator> FlushInlinedDataBind(ClientContext &context, 
 	// Pick the right sum overload
 	auto sum_func = sum_entry.functions.GetFunctionByArguments(context, {sum_args[0]->return_type});
 	FunctionBinder function_binder(context);
-	auto sum_aggregate = function_binder.BindAggregateFunction(
-	    sum_func,                    // The SUM(BIGINT) -> HUGEINT function
-	    std::move(sum_args),         // Arguments: [rows_flushed column ref]
-	    nullptr,                     // No FILTER clause (e.g., SUM(x) FILTER (WHERE ...))
-	    AggregateType::NON_DISTINCT  // Not SUM(DISTINCT ...)
-	);
+	auto sum_aggregate =
+	    function_binder.BindAggregateFunction(sum_func,            // The SUM(BIGINT) -> HUGEINT function
+	                                          std::move(sum_args), // Arguments: [rows_flushed column ref]
+	                                          nullptr,             // No FILTER clause (e.g., SUM(x) FILTER (WHERE ...))
+	                                          AggregateType::NON_DISTINCT // Not SUM(DISTINCT ...)
+	    );
 
 	// Create LogicalAggregate with GROUP BY schema_name, table_name and SUM(rows_flushed)
 	idx_t group_index = input.binder->GenerateTableIndex();
@@ -717,8 +721,8 @@ static unique_ptr<LogicalOperator> FlushInlinedDataBind(ClientContext &context, 
 	unique_ptr<Expression> sum_col_ref = make_uniq<BoundColumnRefExpression>(aggregate->types[2], agg_bindings[2]);
 	// Note: SUM(BIGINT) returns HUGEINT. We must use the its output type for the 0 constant
 	unique_ptr<Expression> zero_const = make_uniq<BoundConstantExpression>(Value::Numeric(aggregate->types[2], 0));
-	unique_ptr<Expression> filter_expr = make_uniq<BoundComparisonExpression>(ExpressionType::COMPARE_GREATERTHAN,
-	                                                        std::move(sum_col_ref), std::move(zero_const));
+	unique_ptr<Expression> filter_expr = make_uniq<BoundComparisonExpression>(
+	    ExpressionType::COMPARE_GREATERTHAN, std::move(sum_col_ref), std::move(zero_const));
 
 	auto filter = make_uniq<LogicalFilter>(std::move(filter_expr));
 	filter->children.push_back(std::move(aggregate));

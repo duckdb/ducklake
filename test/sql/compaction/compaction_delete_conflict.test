@@ -13,7 +13,7 @@ test-env DATA_PATH __TEST_DIR__
 
 
 statement ok
-ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/ducklake_conflicts_compaction_files')
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/ducklake_conflicts_compaction_files', DATA_INLINING_ROW_LIMIT 0)
 
 statement ok
 SET immediate_transaction_mode=true

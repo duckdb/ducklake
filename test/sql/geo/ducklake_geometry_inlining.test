@@ -24,13 +24,33 @@ USE ducklake;
 statement ok
 create table t1 (g GEOMETRY);
 
-statement error
+statement ok
 insert into t1 VALUES (ST_POINT(1,2));
+
+query I
+SELECT * FROM t1;
 ----
-Not implemented Error: DuckLake does not yet support data-inlining of 'GEOMETRY' columns
+POINT (1 2)
 
-
-statement error
+statement ok
 create table t2 as select ST_POINT(1,2) as g;
+
+statement ok
+insert into t1 VALUES (ST_POINT(1,2));
+
+statement ok
+insert into t1 VALUES (ST_POINT(1,2));
+
+statement ok
+insert into t1 VALUES (ST_POINT(1,2));
+
+statement ok
+insert into t1 VALUES (ST_POINT(1,2));
+
+statement ok
+insert into t1 VALUES (ST_POINT(1,2));
+
+query I
+SELECT COUNT(*) FROM t1;
 ----
-Not implemented Error: DuckLake does not yet support data-inlining of 'GEOMETRY' columns
+6

@@ -25,6 +25,9 @@ CREATE TABLE ducklake.test AS SELECT i id FROM range(1000) t(i);
 statement ok
 DELETE FROM ducklake.test WHERE id IN (100, 200, 300);
 
+statement ok
+CALL ducklake_flush_inlined_data('ducklake')
+
 # Verify there is 1 delete file
 query I
 SELECT sum(delete_file_count) FROM ducklake_table_info('ducklake') WHERE table_name = 'test';

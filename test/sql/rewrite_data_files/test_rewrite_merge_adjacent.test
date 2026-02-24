@@ -23,9 +23,15 @@ CREATE TABLE t (a VARCHAR, b INT);
 statement ok
 INSERT INTO t VALUES ('text', 1);
 
+statement ok
+CALL ducklake_flush_inlined_data('ducklake')
+
 # Generates the 2nd file
 statement ok
 INSERT INTO t VALUES ('text2', 2);
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake')
 
 # Generates the 3rd file
 statement ok

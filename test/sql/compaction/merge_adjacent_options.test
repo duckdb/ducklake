@@ -24,7 +24,13 @@ statement ok
 INSERT INTO example (key, value) VALUES ('foo', 'bar');
 
 statement ok
+CALL ducklake_flush_inlined_data('ducklake')
+
+statement ok
 INSERT INTO example (key, value) VALUES ('baz', 'qux');
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake')
 
 # Create another Table with two files
 statement ok
@@ -34,7 +40,13 @@ statement ok
 INSERT INTO example_2 (key, value) VALUES ('foo', 'bar');
 
 statement ok
+CALL ducklake_flush_inlined_data('ducklake')
+
+statement ok
 INSERT INTO example_2 (key, value) VALUES ('baz', 'qux');
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake')
 
 # Different schema with another table with two files
 statement ok
@@ -47,7 +59,13 @@ statement ok
 INSERT INTO s1.example (key, value) VALUES ('foo', 'bar');
 
 statement ok
+CALL ducklake_flush_inlined_data('ducklake')
+
+statement ok
 INSERT INTO s1.example (key, value) VALUES ('baz', 'qux');
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake')
 
 statement ok
 CREATE TABLE s1.example_2 (key VARCHAR, value VARCHAR);
@@ -56,19 +74,21 @@ statement ok
 INSERT INTO s1.example_2 (key, value) VALUES ('foo', 'bar');
 
 statement ok
+CALL ducklake_flush_inlined_data('ducklake')
+
+statement ok
 INSERT INTO s1.example_2 (key, value) VALUES ('baz', 'qux');
 
+statement ok
+CALL ducklake_flush_inlined_data('ducklake')
+
 query II
-SELECT data_file_id, table_id FROM __ducklake_metadata_ducklake.ducklake_data_file
+SELECT table_id, count(*) FROM __ducklake_metadata_ducklake.ducklake_data_file GROUP BY table_id ORDER BY ALL
 ----
-0	1
-1	1
+1	2
 2	2
-3	2
-4	4
-5	4
-6	5
-7	5
+4	2
+5	2
 
 # We define a table_name but not a schema name so we should be able to merge from example_2
 query III
@@ -78,15 +98,12 @@ example_2	2	1
 
 # We write a new file for table id 2
 query II
-SELECT data_file_id, table_id FROM __ducklake_metadata_ducklake.ducklake_data_file
+SELECT table_id, count(*) FROM __ducklake_metadata_ducklake.ducklake_data_file GROUP BY table_id ORDER BY ALL
 ----
-0	1
-1	1
-4	4
-5	4
-6	5
-7	5
-8	2
+1	2
+2	1
+4	2
+5	2
 
 
 # If we define the schema we do table id 5
@@ -96,14 +113,12 @@ SELECT schema_name, table_name, files_processed, files_created FROM ducklake_mer
 s1	example_2	2	1
 
 query II
-SELECT data_file_id, table_id FROM __ducklake_metadata_ducklake.ducklake_data_file
+SELECT table_id, count(*) FROM __ducklake_metadata_ducklake.ducklake_data_file GROUP BY table_id ORDER BY ALL
 ----
-0	1
-1	1
-4	4
-5	4
-8	2
-9	5
+1	2
+2	1
+4	2
+5	1
 
 # If we call with nothing, all tables, schemas go in, so we compress both remaining tables
 query IIII
@@ -113,12 +128,12 @@ main	example	2	1
 s1	example	2	1
 
 query II
-SELECT data_file_id, table_id FROM __ducklake_metadata_ducklake.ducklake_data_file
+SELECT table_id, count(*) FROM __ducklake_metadata_ducklake.ducklake_data_file GROUP BY table_id ORDER BY ALL
 ----
-8	2
-9	5
-10	1
-11	4
+1	1
+2	1
+4	1
+5	1
 
 statement error
 CALL ducklake_merge_adjacent_files('ducklake', 'example_2', schema=>'bogus');

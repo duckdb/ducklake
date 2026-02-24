@@ -104,8 +104,15 @@ public:
 	static unique_ptr<DuckLakeMetadataManager> Create(DuckLakeTransaction &transaction);
 
 	virtual bool TypeIsNativelySupported(const LogicalType &type);
+	//! Check if a type supports data inlining on this metadata backend
+	virtual bool SupportsInlining(const LogicalType &type);
+	//! Check if a set of LogicalTypes supports data inlining, recursing into nested types
+	bool SupportsInliningTypes(const vector<LogicalType> &types);
+	//! Check if columns (stored as DuckLakeColumnInfo) support inlining, recursing into children
+	bool SupportsInliningColumns(const vector<DuckLakeColumnInfo> &columns);
 
 	virtual string GetColumnTypeInternal(const LogicalType &column_type);
+	virtual string CastColumnToTarget(const string &column, const LogicalType &type);
 
 	DuckLakeMetadataManager &Get(DuckLakeTransaction &transaction);
 
@@ -196,20 +203,22 @@ public:
 	virtual unique_ptr<DuckLakeSnapshot> GetSnapshot();
 	virtual unique_ptr<DuckLakeSnapshot> GetSnapshot(BoundAtClause &at_clause, SnapshotBound bound);
 	virtual idx_t GetNextColumnId(TableIndex table_id);
-	virtual shared_ptr<DuckLakeInlinedData> ReadInlinedData(DuckLakeSnapshot snapshot, const string &inlined_table_name,
-	                                                        const vector<string> &columns_to_read);
-	virtual shared_ptr<DuckLakeInlinedData> ReadInlinedDataInsertions(DuckLakeSnapshot start_snapshot,
-	                                                                  DuckLakeSnapshot end_snapshot,
-	                                                                  const string &inlined_table_name,
-	                                                                  const vector<string> &columns_to_read);
-	virtual shared_ptr<DuckLakeInlinedData> ReadInlinedDataDeletions(DuckLakeSnapshot start_snapshot,
-	                                                                 DuckLakeSnapshot end_snapshot,
-	                                                                 const string &inlined_table_name,
-	                                                                 const vector<string> &columns_to_read);
+	virtual unique_ptr<QueryResult> ReadInlinedData(DuckLakeSnapshot snapshot, const string &inlined_table_name,
+	                                                const vector<string> &columns_to_read);
+	virtual unique_ptr<QueryResult> ReadInlinedDataInsertions(DuckLakeSnapshot start_snapshot,
+	                                                          DuckLakeSnapshot end_snapshot,
+	                                                          const string &inlined_table_name,
+	                                                          const vector<string> &columns_to_read);
+	virtual unique_ptr<QueryResult> ReadInlinedDataDeletions(DuckLakeSnapshot start_snapshot,
+	                                                         DuckLakeSnapshot end_snapshot,
+	                                                         const string &inlined_table_name,
+	                                                         const vector<string> &columns_to_read);
+	virtual unique_ptr<QueryResult> ReadAllInlinedDataForFlush(DuckLakeSnapshot snapshot,
+	                                                           const string &inlined_table_name,
+	                                                           const vector<string> &columns_to_read);
+	virtual shared_ptr<DuckLakeInlinedData> TransformInlinedData(QueryResult &result,
+	                                                             const vector<LogicalType> &expected_types);
 
-	virtual shared_ptr<DuckLakeInlinedData> ReadAllInlinedDataForFlush(DuckLakeSnapshot snapshot,
-	                                                                   const string &inlined_table_name,
-	                                                                   const vector<string> &columns_to_read);
 	virtual void DeleteInlinedData(const DuckLakeInlinedTableInfo &inlined_table);
 	virtual string InsertNewSchema(const DuckLakeSnapshot &snapshot, const set<TableIndex> &table_ids);
 
@@ -246,7 +255,6 @@ protected:
 protected:
 	string GetInlinedTableQuery(const DuckLakeTableInfo &table, const string &table_name);
 	string GetColumnType(const DuckLakeColumnInfo &col);
-	shared_ptr<DuckLakeInlinedData> TransformInlinedData(QueryResult &result);
 
 	//! Get path relative to catalog path
 	DuckLakePath GetRelativePath(const string &path);

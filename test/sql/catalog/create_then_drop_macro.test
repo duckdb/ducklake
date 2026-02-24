@@ -1,0 +1,53 @@
+# name: test/sql/catalog/create_then_drop_macro.test
+# group: [catalog]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+
+statement ok
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '__TEST_DIR__/create_then_drop_macro/')
+
+statement ok
+USE ducklake;
+
+statement ok
+BEGIN
+
+statement ok
+CREATE MACRO zip_varchar(i, j, num_chars := 6) AS (
+    -- By default using 6 characters from each string so that
+    -- if data is ASCII, we can fit it all in 12 bytes so that it is stored inline
+    -- rather than requiring a pointer
+    [
+       list_value(z[1], z[2])
+       FOR z
+       IN list_zip(
+          substr(i, 1, num_chars).rpad(num_chars, ' ').string_split(''),
+          substr(j, 1, num_chars).rpad(num_chars, ' ').string_split('')
+       )
+    ].flatten().array_to_string('')
+);
+
+# Test that the macro is working as intended independently of sorting
+query III
+SELECT
+    'ABC' AS i,
+    'XYZ' AS j,
+    zip_varchar(i, j, num_chars := 3) AS zipped_varchar;
+----
+ABC	XYZ	AXBYCZ
+
+statement ok
+DROP MACRO zip_varchar
+
+# Error happens here
+statement ok
+COMMIT
+
+statement error
+SELECT zip_varchar('ABC', 'XYZ');
+----
+does not exist
