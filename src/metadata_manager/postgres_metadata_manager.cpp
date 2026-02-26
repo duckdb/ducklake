@@ -31,6 +31,8 @@ bool PostgresMetadataManager::TypeIsNativelySupported(const LogicalType &type) {
 	// Postgres cannot store null bytes in VARCHAR/TEXT columns
 	case LogicalTypeId::VARCHAR:
 	case LogicalTypeId::VARIANT:
+	// If we knew that the Postgres installation has PostGIS installed, we could support GEOMETRY in the future.
+	case LogicalTypeId::GEOMETRY:
 		return false;
 	default:
 		return true;

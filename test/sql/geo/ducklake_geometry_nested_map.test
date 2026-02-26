@@ -1,0 +1,49 @@
+# name: test/sql/geo/ducklake_geometry_nested_map.test
+# group: [geo]
+
+# Stats are not preserved when serialized in the stats() function, so this doesnt work
+require no_alternative_verify
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+
+test-env DATA_PATH __TEST_DIR__
+
+statement ok
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '__TEST_DIR__/ducklake_files', METADATA_CATALOG 'ducklake_meta')
+
+statement ok
+USE ducklake;
+
+############################
+### MAP of geometry types
+############################
+
+statement ok
+CHECKPOINT;
+
+statement ok
+create table t3 (g map(INT, GEOMETRY));
+
+statement ok
+insert into t3 VALUES (MAP(ARRAY[1], ARRAY['POINT(1 2)'::GEOMETRY]));
+
+query I
+select * from t3;
+----
+{1='POINT (1 2)'}
+
+query I
+SELECT stats(g) FROM t3;
+----
+[ {key: [Min: 1, Max: 1][Has Null: false, Has No Null: true], value: [Extent: [X: [1.000000, 1.000000], Y: [2.000000, 2.000000], Z: [inf, -inf], M: [inf, -inf]], Types: [point], Flags: [Has Empty Geom: true, Has No Empty Geom: true, Has Empty Part: true, Has No Empty Part: true]][Has Null: false, Has No Null: true]}[Has Null: true, Has No Null: true]][Has Null: true, Has No Null: true]
+
+query I
+select extra_stats from ducklake_meta.ducklake_file_column_stats ORDER BY ALL;
+----
+{"bbox": {"xmin": 1.000000, "xmax": 1.000000, "ymin": 2.000000, "ymax": 2.000000, "zmin": null, "zmax": null, "mmin": null, "mmax": null}, "types": ["point"]}
+NULL
+

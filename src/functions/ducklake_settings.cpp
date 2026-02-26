@@ -21,14 +21,15 @@ static unique_ptr<FunctionData> DuckLakeSettingsBind(ClientContext &context, Tab
 	auto result = make_uniq<MetadataBindData>();
 	vector<Value> row_values;
 
-	// catalog_type: default to "duckdb" if not explicitly set (DuckDB is the default metadata storage)
+	// catalog_type: normalize the metadata type to a user-friendly name
 	auto catalog_type = ducklake_catalog.MetadataType();
-	if (catalog_type.empty()) {
-		catalog_type = "duckdb";
-	} else if (catalog_type == "postgres_scanner") {
+	if (catalog_type == "postgres_scanner") {
 		catalog_type = "postgres";
 	} else if (catalog_type == "sqlite_scanner") {
 		catalog_type = "sqlite";
+	} else if (catalog_type.empty() || catalog_type == "motherduck" || catalog_type == "md_server") {
+		// default to "duckdb" since DuckDB is the default metadata storage
+		catalog_type = "duckdb";
 	}
 	row_values.push_back(Value(catalog_type));
 

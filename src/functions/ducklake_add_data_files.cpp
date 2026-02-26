@@ -1088,6 +1088,12 @@ DuckLakeFileProcessor::MapColumns(ParquetFileMetadata &file_metadata,
 			                            prefix.empty() ? prefix : prefix + ".", col->name, file_metadata.filename,
 			                            table.name);
 		}
+		auto hive_entry = hive_partitions.find(col->name);
+		if (hive_entry != hive_partitions.end()) {
+			column_maps.push_back(MapHiveColumn(file_metadata, entry->second.get(), Value(hive_entry->second)));
+			field_id_map.erase(entry);
+			continue;
+		}
 		column_maps.push_back(MapColumn(file_metadata, *col, entry->second.get(), prefix));
 		field_id_map.erase(entry);
 	}
