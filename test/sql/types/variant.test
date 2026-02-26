@@ -10,7 +10,7 @@ test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
 test-env DATA_PATH __TEST_DIR__
 
 statement ok
-ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS db2 (DATA_PATH '${DATA_PATH}/ducklake_variant', STORAGE_VERSION 'v1.5.0')
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS db2 (DATA_PATH '${DATA_PATH}/ducklake_variant')
 
 statement ok
 use db2;
