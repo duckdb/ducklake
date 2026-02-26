@@ -53,6 +53,8 @@ static void HandleDuckLakeOption(DuckLakeOptions &options, const string &option,
 		options.automatic_migration = BooleanValue::Get(value.DefaultCastAs(LogicalType::BOOLEAN));
 	} else if (lcase == "busy_timeout") {
 		options.busy_timeout = UBigIntValue::Get(value.DefaultCastAs(LogicalType::UBIGINT));
+	} else if (lcase == "storage_version") {
+		options.storage_version = value.ToString();
 	} else {
 		throw NotImplementedException("Unsupported option %s for DuckLake", option);
 	}

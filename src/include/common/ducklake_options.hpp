@@ -36,6 +36,7 @@ struct DuckLakeOptions {
 	map<SchemaIndex, option_map_t> schema_options;
 	map<TableIndex, option_map_t> table_options;
 	idx_t busy_timeout = 5000;
+	string storage_version;
 };
 
 } // namespace duckdb

@@ -35,6 +35,9 @@ string DuckLakeInitializer::GetAttachOptions() {
 	for (auto &option : options.metadata_parameters) {
 		attach_options.push_back(option.first + " " + option.second.ToSQLString());
 	}
+	if (!options.storage_version.empty()) {
+		attach_options.push_back(StringUtil::Format("STORAGE_VERSION '%s'", options.storage_version));
+	}
 
 	if (attach_options.empty()) {
 		return string();
