@@ -2077,8 +2077,17 @@ void DuckLakeTransaction::AppendFiles(TableIndex table_id, vector<DuckLakeDataFi
 	}
 	lock_guard<mutex> guard(table_data_changes_lock);
 	auto &table_changes = table_data_changes[table_id];
-	for (auto &file : files) {
-		table_changes.new_data_files.push_back(std::move(file));
+	if (table_changes.new_data_files.empty()) {
+		// If empty, just move the entire vector
+		table_changes.new_data_files = std::move(files);
+	} else {
+		// Reserve to avoid reallocations during insertion
+		table_changes.new_data_files.reserve(table_changes.new_data_files.size() + files.size());
+		// Use move_iterator for efficient batch move
+		table_changes.new_data_files.insert(
+		    table_changes.new_data_files.end(),
+		    std::make_move_iterator(files.begin()),
+		    std::make_move_iterator(files.end()));
 	}
 }
 
