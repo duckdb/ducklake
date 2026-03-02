@@ -9,6 +9,7 @@
 #include "duckdb/common/vector_operations/vector_operations.hpp"
 #include "duckdb/common/types/vector.hpp"
 #include "storage/ducklake_geo_stats.hpp"
+#include <unordered_set>
 
 namespace duckdb {
 
@@ -134,7 +135,7 @@ public:
 	vector<DuckLakeDataFile> AddFiles(const vector<string> &globs);
 
 private:
-	void ReadParquetFullMetadata(const string &glob);
+	void ReadParquetFullMetadata(const string &glob, vector<DuckLakeDataFile> &result);
 	DuckLakeDataFile AddFileToTable(ParquetFileMetadata &file);
 	unique_ptr<DuckLakeNameMapEntry> MapColumn(ParquetFileMetadata &file_metadata, ParquetColumn &column,
 	                                           const DuckLakeFieldId &field_id, string prefix);
@@ -157,10 +158,10 @@ private:
 	bool ignore_extra_columns;
 	map<string, string> hive_partitions;
 	HivePartitioningType hive_partitioning;
-	unordered_map<string, unique_ptr<ParquetFileMetadata>> parquet_files;
+	unordered_set<string> processed_files;
 };
 
-void DuckLakeFileProcessor::ReadParquetFullMetadata(const string &glob) {
+void DuckLakeFileProcessor::ReadParquetFullMetadata(const string &glob, vector<DuckLakeDataFile> &written_files) {
 	auto result = transaction.Query(StringUtil::Format(R"(
 SELECT 
     list_transform(parquet_file_metadata, x -> struct_pack(
@@ -231,16 +232,14 @@ FROM parquet_full_metadata(%s)
 		    FlatVector::GetData<string_t>(*struct_children[0])[struct_idx].GetString(); // struct field: file_name
 
 		// Check if we've already processed this file (can happen with overlapping globs)
-		auto &file_metadata_ptr = parquet_files[filename];
-		if (file_metadata_ptr) {
+		if (processed_files.count(filename)) {
 			// File already processed in a previous glob, skip
 			continue;
 		}
+		processed_files.insert(filename);
 
-		// Initialize new file metadata entry
-		file_metadata_ptr = make_uniq<ParquetFileMetadata>();
-		auto &file = *file_metadata_ptr;
-		file.filename = filename;
+		ParquetFileMetadata file;
+		file.filename = std::move(filename);
 
 		file.row_count = FlatVector::GetData<int64_t>(*struct_children[1])[struct_idx]; // struct field: num_rows
 		file.file_size_bytes =
@@ -482,6 +481,11 @@ FROM parquet_full_metadata(%s)
 			}
 
 			column.column_stats.push_back(std::move(stats));
+		}
+		auto data_file = AddFileToTable(file);
+		data_file.created_by_ducklake = false;
+		if (data_file.row_count > 0) {
+			written_files.push_back(std::move(data_file));
 		}
 	}
 }
@@ -1209,23 +1213,11 @@ DuckLakeDataFile DuckLakeFileProcessor::AddFileToTable(ParquetFileMetadata &file
 }
 
 vector<DuckLakeDataFile> DuckLakeFileProcessor::AddFiles(const vector<string> &globs) {
-	// fetch the metadata, stats and columns from the various files
-	for (auto &glob : globs) {
-		ReadParquetFullMetadata(glob);
-	}
-
-	// now we have obtained a list of files to add together with the relevant information (statistics, file size, ...)
-	// we need to create a mapping from the columns in the file to the columns in the table
+	// Process files directly to DuckLakeDataFile format to minimize peak memory usage
+	// Each file's intermediate metadata is discarded immediately after processing
 	vector<DuckLakeDataFile> written_files;
-	for (auto &entry : parquet_files) {
-		auto file = AddFileToTable(*entry.second);
-		// File being called by 'add files' is not created by ducklake
-		file.created_by_ducklake = false;
-		if (file.row_count == 0) {
-			// skip adding empty files
-			continue;
-		}
-		written_files.push_back(std::move(file));
+	for (auto &glob : globs) {
+		ReadParquetFullMetadata(glob, written_files);
 	}
 	return written_files;
 }
