@@ -1331,12 +1331,7 @@ DuckLakeFileInfo DuckLakeTransaction::GetNewDataFile(DuckLakeDataFile &file, Duc
 	data_file.mapping_id = file.mapping_id;
 	data_file.begin_snapshot = file.begin_snapshot;
 	data_file.max_partial_file_snapshot = file.max_partial_file_snapshot;
-	// gather the column statistics for this file
-	for (auto &column_stats_entry : file.column_stats) {
-		auto column_stats =
-		    DuckLakeColumnStatsInfo::FromColumnStats(column_stats_entry.first, column_stats_entry.second);
-		data_file.column_stats.push_back(std::move(column_stats));
-	}
+	data_file.column_stats = file.column_stats;
 	for (auto &partition_entry : file.partition_values) {
 		DuckLakeFilePartitionInfo partition_info;
 		partition_info.partition_column_idx = partition_entry.partition_column_idx;
@@ -1646,7 +1641,7 @@ string DuckLakeTransaction::CommitChanges(DuckLakeCommitState &commit_state,
 	// write new data / data files
 	if (!table_data_changes.empty()) {
 		auto result = GetNewDataFiles(batch_queries, commit_state, stats);
-		batch_queries += metadata_manager->WriteNewDataFiles(result.new_files, new_tables_result, new_schemas_result);
+		batch_queries += metadata_manager->WriteNewDataFiles(commit_snapshot, result.new_files, new_tables_result, new_schemas_result);
 		batch_queries += metadata_manager->WriteNewInlinedData(commit_snapshot, result.new_inlined_data,
 		                                                       new_tables_result, new_inlined_data_tables_result);
 	}
@@ -1680,11 +1675,11 @@ string DuckLakeTransaction::CommitChanges(DuckLakeCommitState &commit_state,
 		    GetCompactionChanges(commit_snapshot, CompactionType::MERGE_ADJACENT_TABLES);
 		batch_queries += metadata_manager->WriteCompactions(compaction_merge_adjacent_changes.compacted_files,
 		                                                    CompactionType::MERGE_ADJACENT_TABLES);
-		batch_queries += metadata_manager->WriteNewDataFiles(compaction_merge_adjacent_changes.new_files,
+		batch_queries += metadata_manager->WriteNewDataFiles(commit_snapshot, compaction_merge_adjacent_changes.new_files,
 		                                                     new_tables_result, new_schemas_result);
 
 		auto compaction_rewrite_delete_changes = GetCompactionChanges(commit_snapshot, CompactionType::REWRITE_DELETES);
-		batch_queries += metadata_manager->WriteNewDataFiles(compaction_rewrite_delete_changes.new_files,
+		batch_queries += metadata_manager->WriteNewDataFiles(commit_snapshot, compaction_rewrite_delete_changes.new_files,
 		                                                     new_tables_result, new_schemas_result);
 		batch_queries += metadata_manager->WriteCompactions(compaction_rewrite_delete_changes.compacted_files,
 		                                                    CompactionType::REWRITE_DELETES);

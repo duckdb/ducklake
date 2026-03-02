@@ -1,5 +1,6 @@
 #include "storage/ducklake_metadata_manager.hpp"
 #include "storage/ducklake_transaction.hpp"
+#include "storage/ducklake_variant_stats.hpp"
 #include "common/ducklake_util.hpp"
 #include "duckdb/planner/tableref/bound_at_clause.hpp"
 #include "duckdb/common/types/blob.hpp"
@@ -9,6 +10,7 @@
 #include "storage/ducklake_schema_entry.hpp"
 #include "storage/ducklake_table_entry.hpp"
 #include "duckdb.hpp"
+#include "duckdb/main/appender.hpp"
 #include "metadata_manager/postgres_metadata_manager.hpp"
 #include "metadata_manager/sqlite_metadata_manager.hpp"
 #include "duckdb/main/attached_database.hpp"
@@ -2816,12 +2818,216 @@ string DuckLakeMetadataManager::FromRelativePath(TableIndex table_id, const Duck
 	return FromRelativePath(path, GetPath(table_id, {}, {}));
 }
 
-string DuckLakeMetadataManager::WriteNewDataFiles(const vector<DuckLakeFileInfo> &new_files,
+
+// Optimized version using DuckDB Appender API for much faster inserts
+string DuckLakeMetadataManager::WriteNewDataFilesWithAppender(DuckLakeSnapshot &commit_snapshot,
+                                                              const vector<DuckLakeFileInfo> &new_files,
+                                                              const vector<DuckLakeTableInfo> &new_tables,
+                                                              vector<DuckLakeSchemaInfo> &new_schemas_result) {
+	auto &catalog = transaction.GetCatalog();
+	auto &connection = transaction.GetConnection();
+	const auto &db_name = catalog.MetadataDatabaseName();
+	auto schema_name = catalog.MetadataSchemaName();
+	if (schema_name.empty()) {
+		schema_name = "main";
+	}
+
+	// Create appenders for each table
+	Appender data_file_appender(connection, db_name, schema_name, "ducklake_data_file");
+	Appender column_stats_appender(connection, db_name, schema_name, "ducklake_file_column_stats");
+	Appender partition_value_appender(connection, db_name, schema_name, "ducklake_file_partition_value");
+	Appender variant_stats_appender(connection, db_name, schema_name, "ducklake_file_variant_stats");
+
+	for (auto &file : new_files) {
+		auto data_file_index = static_cast<int64_t>(file.id.index);
+		auto table_id = static_cast<int64_t>(file.table_id.index);
+		int64_t begin_snapshot_val = file.begin_snapshot.IsValid()
+			? static_cast<int64_t>(file.begin_snapshot.GetIndex())
+			: static_cast<int64_t>(commit_snapshot.snapshot_id);
+		auto path = GetRelativePath(file.table_id, file.file_name, new_tables, new_schemas_result);
+
+		// ducklake_data_file columns:
+		// data_file_id, table_id, begin_snapshot, end_snapshot, file_order, path, path_is_relative,
+		// file_format, record_count, file_size_bytes, footer_size, row_id_start, partition_id,
+		// encryption_key, mapping_id, partial_max
+		data_file_appender.BeginRow();
+		data_file_appender.Append<int64_t>(data_file_index);                    // data_file_id
+		data_file_appender.Append<int64_t>(table_id);                           // table_id
+		data_file_appender.Append<int64_t>(begin_snapshot_val);                 // begin_snapshot
+		data_file_appender.Append(Value());                                     // end_snapshot (NULL)
+		data_file_appender.Append(Value());                                     // file_order (NULL)
+		data_file_appender.Append<string_t>(string_t(path.path));               // path
+		data_file_appender.Append<bool>(path.path_is_relative);                 // path_is_relative
+		data_file_appender.Append<string_t>(string_t("parquet"));               // file_format
+		data_file_appender.Append<int64_t>(static_cast<int64_t>(file.row_count));  // record_count
+		data_file_appender.Append<int64_t>(static_cast<int64_t>(file.file_size_bytes)); // file_size_bytes
+		if (file.footer_size.IsValid()) {
+			data_file_appender.Append<int64_t>(static_cast<int64_t>(file.footer_size.GetIndex())); // footer_size
+		} else {
+			data_file_appender.Append(Value());
+		}
+		if (file.row_id_start.IsValid()) {
+			data_file_appender.Append<int64_t>(static_cast<int64_t>(file.row_id_start.GetIndex())); // row_id_start
+		} else {
+			data_file_appender.Append(Value());
+		}
+		if (file.partition_id.IsValid()) {
+			data_file_appender.Append<int64_t>(static_cast<int64_t>(file.partition_id.GetIndex())); // partition_id
+		} else {
+			data_file_appender.Append(Value());
+		}
+		if (!file.encryption_key.empty()) {
+			data_file_appender.Append<string_t>(string_t(Blob::ToBase64(string_t(file.encryption_key)))); // encryption_key
+		} else {
+			data_file_appender.Append(Value());
+		}
+		if (file.mapping_id.IsValid()) {
+			data_file_appender.Append<int64_t>(static_cast<int64_t>(file.mapping_id.index)); // mapping_id
+		} else {
+			data_file_appender.Append(Value());
+		}
+		if (file.max_partial_file_snapshot.IsValid()) {
+			data_file_appender.Append<int64_t>(static_cast<int64_t>(file.max_partial_file_snapshot.GetIndex())); // partial_max
+		} else {
+			data_file_appender.Append(Value());
+		}
+		data_file_appender.EndRow();
+
+		// Column stats - using typed values directly
+		for (auto &column_stats_entry : file.column_stats) {
+			auto column_id = static_cast<int64_t>(column_stats_entry.first.index);
+			auto &stats = column_stats_entry.second;
+
+			// ducklake_file_column_stats columns:
+			// data_file_id, table_id, column_id, column_size_bytes, value_count, null_count,
+			// min_value, max_value, contains_nan, extra_stats
+			column_stats_appender.BeginRow();
+			column_stats_appender.Append<int64_t>(data_file_index);
+			column_stats_appender.Append<int64_t>(table_id);
+			column_stats_appender.Append<int64_t>(column_id);
+			column_stats_appender.Append<int64_t>(static_cast<int64_t>(stats.column_size_bytes));
+
+			// value_count and null_count
+			if (stats.has_null_count && stats.has_num_values && stats.null_count <= stats.num_values) {
+				column_stats_appender.Append<int64_t>(static_cast<int64_t>(stats.num_values - stats.null_count));
+				column_stats_appender.Append<int64_t>(static_cast<int64_t>(stats.null_count));
+			} else {
+				column_stats_appender.Append(Value());
+				column_stats_appender.Append(Value());
+			}
+
+			// min_value and max_value
+			if (stats.has_min) {
+				column_stats_appender.Append<string_t>(string_t(stats.min));
+			} else {
+				column_stats_appender.Append(Value());
+			}
+			if (stats.has_max) {
+				column_stats_appender.Append<string_t>(string_t(stats.max));
+			} else {
+				column_stats_appender.Append(Value());
+			}
+
+			// contains_nan
+			if (stats.has_contains_nan) {
+				column_stats_appender.Append<bool>(stats.contains_nan);
+			} else {
+				column_stats_appender.Append(Value());
+			}
+
+			// extra_stats
+			string extra_stats_str;
+			if (stats.extra_stats && stats.extra_stats->TrySerialize(extra_stats_str)) {
+				column_stats_appender.Append<string_t>(string_t(extra_stats_str));
+			} else {
+				column_stats_appender.Append(Value());
+			}
+			column_stats_appender.EndRow();
+
+			// Variant stats from extra_stats
+			if (stats.extra_stats && stats.extra_stats->GetStatsType() == DuckLakeExtraStatsType::VARIANT) {
+				auto &variant_extra = static_cast<DuckLakeColumnVariantStats &>(*stats.extra_stats);
+				for (auto &variant_entry : variant_extra.shredded_field_stats) {
+					auto &field_stats = variant_entry.second.field_stats;
+
+					// ducklake_file_variant_stats columns:
+					// data_file_id, table_id, column_id, variant_path, shredded_type, column_size_bytes,
+					// value_count, null_count, min_value, max_value, contains_nan, extra_stats
+					variant_stats_appender.BeginRow();
+					variant_stats_appender.Append<int64_t>(data_file_index);
+					variant_stats_appender.Append<int64_t>(table_id);
+					variant_stats_appender.Append<int64_t>(column_id);
+					variant_stats_appender.Append<string_t>(string_t(variant_entry.first));
+					variant_stats_appender.Append<string_t>(string_t(DuckLakeTypes::ToString(variant_entry.second.shredded_type)));
+					variant_stats_appender.Append<int64_t>(static_cast<int64_t>(field_stats.column_size_bytes));
+
+					if (field_stats.has_null_count && field_stats.has_num_values && field_stats.null_count <= field_stats.num_values) {
+						variant_stats_appender.Append<int64_t>(static_cast<int64_t>(field_stats.num_values - field_stats.null_count));
+						variant_stats_appender.Append<int64_t>(static_cast<int64_t>(field_stats.null_count));
+					} else {
+						variant_stats_appender.Append(Value());
+						variant_stats_appender.Append(Value());
+					}
+
+					if (field_stats.has_min) {
+						variant_stats_appender.Append<string_t>(string_t(field_stats.min));
+					} else {
+						variant_stats_appender.Append(Value());
+					}
+					if (field_stats.has_max) {
+						variant_stats_appender.Append<string_t>(string_t(field_stats.max));
+					} else {
+						variant_stats_appender.Append(Value());
+					}
+
+					if (field_stats.has_contains_nan) {
+						variant_stats_appender.Append<bool>(field_stats.contains_nan);
+					} else {
+						variant_stats_appender.Append(Value());
+					}
+
+					string field_extra_stats_str;
+					if (field_stats.extra_stats && field_stats.extra_stats->TrySerialize(field_extra_stats_str)) {
+						variant_stats_appender.Append<string_t>(string_t(field_extra_stats_str));
+					} else {
+						variant_stats_appender.Append(Value());
+					}
+					variant_stats_appender.EndRow();
+				}
+			}
+		}
+
+		// Partition values
+		if (file.partition_id.IsValid() == file.partition_values.empty()) {
+			throw InternalException("File should either not be partitioned, or have partition values");
+		}
+		for (auto &part_val : file.partition_values) {
+			// ducklake_file_partition_value columns:
+			// data_file_id, table_id, partition_key_index, partition_value
+			partition_value_appender.BeginRow();
+			partition_value_appender.Append<int64_t>(data_file_index);
+			partition_value_appender.Append<int64_t>(table_id);
+			partition_value_appender.Append<int64_t>(static_cast<int64_t>(part_val.partition_column_idx));
+			partition_value_appender.Append<string_t>(string_t(part_val.partition_value));
+			partition_value_appender.EndRow();
+		}
+	}
+
+	// Appenders will flush on destruction
+	return "";
+}
+
+string DuckLakeMetadataManager::WriteNewDataFiles(DuckLakeSnapshot &commit_snapshot,
+                                                  const vector<DuckLakeFileInfo> &new_files,
                                                   const vector<DuckLakeTableInfo> &new_tables,
                                                   vector<DuckLakeSchemaInfo> &new_schemas_result) {
 	string batch_query;
 	if (new_files.empty()) {
 		return batch_query;
+	}
+	// Use optimized appender path for DuckDB metadata (much faster for large inserts)
+	if (SupportsAppender()) {
+		return WriteNewDataFilesWithAppender(commit_snapshot, new_files, new_tables, new_schemas_result);
 	}
 	string data_file_insert_query;
 	string column_stats_insert_query;
@@ -2849,7 +3055,9 @@ string DuckLakeMetadataManager::WriteNewDataFiles(const vector<DuckLakeFileInfo>
 		    "(%d, %d, %s, NULL, NULL, %s, %s, 'parquet', %d, %d, %s, %s, %s, %s, %s, %s)", data_file_index, table_id,
 		    begin_snapshot, SQLString(path.path), path.path_is_relative ? "true" : "false", file.row_count,
 		    file.file_size_bytes, footer_size, row_id, partition_id, encryption_key, mapping, partial_max);
-		for (auto &column_stats : file.column_stats) {
+		for (auto &raw_stats : file.column_stats) {
+			// Stringify stats to construct insert queries
+			auto column_stats = DuckLakeColumnStatsInfo::FromColumnStats(raw_stats.first, raw_stats.second);
 			if (!column_stats_insert_query.empty()) {
 				column_stats_insert_query += ",";
 			}
