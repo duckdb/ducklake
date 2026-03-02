@@ -720,9 +720,22 @@ void DuckLakeParquetTypeChecker::CheckFloatingPoints() {
 		DUCKDB_EXPLICIT_FALLTHROUGH;
 	case LogicalTypeId::FLOAT:
 		accepted_types.push_back(LogicalType::FLOAT);
+		// Integer types can be implicitly cast to float/double
+		accepted_types.push_back(LogicalType::TINYINT);
+		accepted_types.push_back(LogicalType::SMALLINT);
+		accepted_types.push_back(LogicalType::INTEGER);
+		accepted_types.push_back(LogicalType::BIGINT);
+		accepted_types.push_back(LogicalType::UTINYINT);
+		accepted_types.push_back(LogicalType::USMALLINT);
+		accepted_types.push_back(LogicalType::UINTEGER);
+		accepted_types.push_back(LogicalType::UBIGINT);
 		break;
 	default:
 		throw InternalException("Unknown float type");
+	}
+	// DECIMAL can be implicitly cast to float/double
+	if (source_type.id() == LogicalTypeId::DECIMAL) {
+		return;
 	}
 	if (!CheckTypes(accepted_types)) {
 		Fail();
@@ -744,10 +757,24 @@ void DuckLakeParquetTypeChecker::CheckTimestamp() {
 }
 
 void DuckLakeParquetTypeChecker::CheckDecimal() {
-	if (source_type.id() != LogicalTypeId::DECIMAL) {
-		failures.push_back(StringUtil::Format("Expected type \"DECIMAL\" but found type \"%s\"", source_type));
+	// Integer types can be implicitly cast to DECIMAL
+	switch (source_type.id()) {
+	case LogicalTypeId::TINYINT:
+	case LogicalTypeId::SMALLINT:
+	case LogicalTypeId::INTEGER:
+	case LogicalTypeId::BIGINT:
+	case LogicalTypeId::UTINYINT:
+	case LogicalTypeId::USMALLINT:
+	case LogicalTypeId::UINTEGER:
+	case LogicalTypeId::UBIGINT:
+		return;
+	case LogicalTypeId::DECIMAL:
+		break;
+	default:
+		failures.push_back(StringUtil::Format("Expected type \"DECIMAL\" or integer type but found type \"%s\"", source_type));
 		Fail();
 	}
+
 	auto source_scale = DecimalType::GetScale(source_type);
 	auto source_precision = DecimalType::GetWidth(source_type);
 	auto target_scale = DecimalType::GetScale(type);

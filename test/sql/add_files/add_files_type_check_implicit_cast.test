@@ -1,0 +1,248 @@
+# name: test/sql/add_files/add_files_type_check_implicit_cast.test
+# description: test ducklake adding files with implicit type casts (integers to float/double/decimal)
+# group: [add_files]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+
+test-env DATA_PATH __TEST_DIR__
+
+
+statement ok
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/ducklake_add_files_implicit_cast')
+
+statement ok
+COPY (SELECT -1::TINYINT col1) TO '${DATA_PATH}/tinyint.parquet'
+
+statement ok
+COPY (SELECT -100::SMALLINT col1) TO '${DATA_PATH}/smallint.parquet'
+
+statement ok
+COPY (SELECT -10000::INTEGER col1) TO '${DATA_PATH}/int.parquet'
+
+statement ok
+COPY (SELECT -1000000::BIGINT col1) TO '${DATA_PATH}/bigint.parquet'
+
+statement ok
+COPY (SELECT 1::UTINYINT col1) TO '${DATA_PATH}/utinyint.parquet'
+
+statement ok
+COPY (SELECT 100::USMALLINT col1) TO '${DATA_PATH}/usmallint.parquet'
+
+statement ok
+COPY (SELECT 10000::UINTEGER col1) TO '${DATA_PATH}/uinteger.parquet'
+
+statement ok
+COPY (SELECT 1000000::UBIGINT col1) TO '${DATA_PATH}/ubigint.parquet'
+
+statement ok
+COPY (SELECT 123.45::DECIMAL(10,2) col1) TO '${DATA_PATH}/decimal.parquet'
+
+statement ok
+COPY (SELECT true col1) TO '${DATA_PATH}/bool.parquet'
+
+statement ok
+COPY (SELECT 42.5::FLOAT col1) TO '${DATA_PATH}/float.parquet'
+
+statement ok
+COPY (SELECT 42.5::DOUBLE col1) TO '${DATA_PATH}/double.parquet'
+
+####################################
+# FLOAT accepts integer types      #
+####################################
+statement ok
+CREATE OR REPLACE TABLE ducklake.test(col1 FLOAT);
+
+# should still reject booleans
+statement error
+CALL ducklake_add_data_files('ducklake', 'test', '${DATA_PATH}/bool.parquet')
+----
+Expected one of FLOAT
+
+# all signed integer types should be implicitly cast to float
+foreach ACCEPTED_TYPE tinyint smallint int bigint
+
+statement ok
+CALL ducklake_add_data_files('ducklake', 'test', '${DATA_PATH}/${ACCEPTED_TYPE}.parquet')
+
+endloop
+
+query I
+FROM ducklake.test ORDER BY col1
+----
+-1000000.0
+-10000.0
+-100.0
+-1.0
+
+####################################
+# FLOAT accepts unsigned integers  #
+####################################
+statement ok
+CREATE OR REPLACE TABLE ducklake.test(col1 FLOAT);
+
+foreach ACCEPTED_TYPE utinyint usmallint uinteger ubigint
+
+statement ok
+CALL ducklake_add_data_files('ducklake', 'test', '${DATA_PATH}/${ACCEPTED_TYPE}.parquet')
+
+endloop
+
+query I
+FROM ducklake.test ORDER BY col1
+----
+1.0
+100.0
+10000.0
+1000000.0
+
+####################################
+# FLOAT accepts DECIMAL            #
+####################################
+statement ok
+CREATE OR REPLACE TABLE ducklake.test(col1 FLOAT);
+
+statement ok
+CALL ducklake_add_data_files('ducklake', 'test', '${DATA_PATH}/decimal.parquet')
+
+query I
+FROM ducklake.test
+----
+123.45
+
+####################################
+# DOUBLE accepts integer types     #
+####################################
+statement ok
+CREATE OR REPLACE TABLE ducklake.test(col1 DOUBLE);
+
+# should still reject booleans
+statement error
+CALL ducklake_add_data_files('ducklake', 'test', '${DATA_PATH}/bool.parquet')
+----
+Expected one of DOUBLE, FLOAT
+
+# all signed integer types should be implicitly cast to double
+foreach ACCEPTED_TYPE tinyint smallint int bigint
+
+statement ok
+CALL ducklake_add_data_files('ducklake', 'test', '${DATA_PATH}/${ACCEPTED_TYPE}.parquet')
+
+endloop
+
+query I
+FROM ducklake.test ORDER BY col1
+----
+-1000000.0
+-10000.0
+-100.0
+-1.0
+
+####################################
+# DOUBLE accepts unsigned integers #
+####################################
+statement ok
+CREATE OR REPLACE TABLE ducklake.test(col1 DOUBLE);
+
+foreach ACCEPTED_TYPE utinyint usmallint uinteger ubigint
+
+statement ok
+CALL ducklake_add_data_files('ducklake', 'test', '${DATA_PATH}/${ACCEPTED_TYPE}.parquet')
+
+endloop
+
+query I
+FROM ducklake.test ORDER BY col1
+----
+1.0
+100.0
+10000.0
+1000000.0
+
+####################################
+# DOUBLE accepts DECIMAL           #
+####################################
+statement ok
+CREATE OR REPLACE TABLE ducklake.test(col1 DOUBLE);
+
+statement ok
+CALL ducklake_add_data_files('ducklake', 'test', '${DATA_PATH}/decimal.parquet')
+
+query I
+FROM ducklake.test
+----
+123.45
+
+####################################
+# DECIMAL accepts integer types    #
+####################################
+statement ok
+CREATE OR REPLACE TABLE ducklake.test(col1 DECIMAL(18,2));
+
+# should still reject booleans and floats for decimal
+statement error
+CALL ducklake_add_data_files('ducklake', 'test', '${DATA_PATH}/bool.parquet')
+----
+Expected type "DECIMAL"
+
+statement error
+CALL ducklake_add_data_files('ducklake', 'test', '${DATA_PATH}/float.parquet')
+----
+Expected type "DECIMAL"
+
+statement error
+CALL ducklake_add_data_files('ducklake', 'test', '${DATA_PATH}/double.parquet')
+----
+Expected type "DECIMAL"
+
+# all signed integer types should be implicitly cast to decimal
+foreach ACCEPTED_TYPE tinyint smallint int bigint
+
+statement ok
+CALL ducklake_add_data_files('ducklake', 'test', '${DATA_PATH}/${ACCEPTED_TYPE}.parquet')
+
+endloop
+
+query I
+FROM ducklake.test ORDER BY col1
+----
+-1000000.00
+-10000.00
+-100.00
+-1.00
+
+####################################
+# DECIMAL accepts unsigned integers #
+####################################
+statement ok
+CREATE OR REPLACE TABLE ducklake.test(col1 DECIMAL(18,2));
+
+foreach ACCEPTED_TYPE utinyint usmallint uinteger ubigint
+
+statement ok
+CALL ducklake_add_data_files('ducklake', 'test', '${DATA_PATH}/${ACCEPTED_TYPE}.parquet')
+
+endloop
+
+query I
+FROM ducklake.test ORDER BY col1
+----
+1.00
+100.00
+10000.00
+1000000.00
+
+####################################
+# DECIMAL rejects integers that don't fit #
+####################################
+# integers are only
+statement ok
+CREATE OR REPLACE TABLE ducklake.test(col1 DECIMAL(4,2));
+
+statement error
+CALL ducklake_add_data_files('ducklake', 'test', '${DATA_PATH}/bigint.parquet')
+----
+Could not convert string "-1000000" to DECIMAL(4,2)
