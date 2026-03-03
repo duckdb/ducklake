@@ -1,0 +1,150 @@
+# name: test/sql/add_files/add_files_hive_partition_cast.test
+# description: test ducklake hive partition implicit casting
+# group: [add_files]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+
+test-env DATA_PATH __TEST_DIR__
+
+
+statement ok
+PRAGMA enable_verification
+
+statement ok
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/ducklake_add_files_hive')
+
+statement ok
+CREATE TABLE ducklake.test(id INTEGER, year INTEGER, month INTEGER, day DATE);
+
+statement ok
+COPY (SELECT 1 AS id, 2024 AS year, 1 AS month, DATE '2024-01-02' AS day
+    UNION ALL
+    SELECT 2 AS id, 2024 AS year, 2 AS month, NULL AS day)
+TO '${DATA_PATH}/ducklake_add_files_hive' (FORMAT parquet, PARTITION_BY (year, month, day));
+
+statement ok
+CALL ducklake_add_data_files('ducklake', 'test',
+    '${DATA_PATH}/ducklake_add_files_hive/*/*/*/*.parquet',
+    hive_partitioning => true)
+
+query IIII
+SELECT id, year, month, day FROM ducklake.test ORDER BY id;
+----
+1	2024	1	2024-01-02
+2	2024	2	NULL
+
+# Test null partitions
+statement ok
+CREATE TABLE ducklake.test_null(id INTEGER, category VARCHAR, amount DECIMAL(10,2));
+
+statement ok
+COPY (SELECT 1 AS id, 'electronics' AS category, 99.99::DECIMAL(10,2) AS amount
+    UNION ALL
+    SELECT 2 AS id, NULL AS category, 50.00::DECIMAL(10,2) AS amount
+    UNION ALL
+    SELECT 3 AS id, 'home appliances' AS category, NULL AS amount)
+TO '${DATA_PATH}/hive_null' (FORMAT parquet, PARTITION_BY (category, amount));
+
+statement ok
+CALL ducklake_add_data_files('ducklake', 'test_null',
+    '${DATA_PATH}/hive_null/*/*/*.parquet',
+    hive_partitioning => true)
+
+query III
+SELECT id, category, amount FROM ducklake.test_null ORDER BY id;
+----
+1	electronics	99.99
+2	NULL	50.00
+3	home appliances	NULL
+
+# Test boolean casting
+statement ok
+CREATE TABLE ducklake.test_bool(id INTEGER, active BOOLEAN, verified BOOLEAN);
+
+statement ok
+COPY (SELECT 1 AS id, true AS active, false AS verified
+    UNION ALL
+    SELECT 2 AS id, false AS active, true AS verified)
+TO '${DATA_PATH}/bool_test' (FORMAT parquet, PARTITION_BY (active, verified));
+
+statement ok
+CALL ducklake_add_data_files('ducklake', 'test_bool',
+    '${DATA_PATH}/bool_test/*/*/*.parquet',
+    hive_partitioning => true)
+
+query III
+SELECT id, active, verified FROM ducklake.test_bool ORDER BY id;
+----
+1	true	false
+2	false	true
+
+# Test floating point values
+statement ok
+CREATE TABLE ducklake.test_float(id INTEGER, ratio DOUBLE, percentage FLOAT);
+
+statement ok
+COPY (SELECT 1 AS id, 3.14159 AS ratio, 99.5::FLOAT AS percentage
+    UNION ALL
+    SELECT 2 AS id, -0.001 AS ratio, 0.0::FLOAT AS percentage)
+TO '${DATA_PATH}/float_test' (FORMAT parquet, PARTITION_BY (ratio, percentage));
+
+statement ok
+CALL ducklake_add_data_files('ducklake', 'test_float',
+    '${DATA_PATH}/float_test/*/*/*.parquet',
+    hive_partitioning => true)
+
+query III
+SELECT id, ratio, percentage FROM ducklake.test_float ORDER BY id;
+----
+1	3.14159	99.5
+2	-0.001	0.0
+
+# Test timestamp values with NULL
+statement ok
+CREATE TABLE ducklake.test_ts(id INTEGER, created_at TIMESTAMP);
+
+statement ok
+COPY (SELECT 1 AS id, TIMESTAMP '2024-01-15 10:30:00' AS created_at
+    UNION ALL
+    SELECT 2 AS id, NULL AS created_at)
+TO '${DATA_PATH}/ts_test' (FORMAT parquet, PARTITION_BY (created_at));
+
+statement ok
+CALL ducklake_add_data_files('ducklake', 'test_ts',
+    '${DATA_PATH}/ts_test/*/*.parquet',
+    hive_partitioning => true)
+
+query II
+SELECT id, created_at FROM ducklake.test_ts ORDER BY id;
+----
+1	2024-01-15 10:30:00
+2	NULL
+
+# Test URL-encoded special characters in VARCHAR (spaces via partition)
+statement ok
+CREATE TABLE ducklake.test_special(id INTEGER, name VARCHAR);
+
+statement ok
+COPY (SELECT 1 AS id, 'hello world' AS name
+    UNION ALL
+    SELECT 2 AS id, 'test&value' AS name
+    UNION ALL
+    SELECT 3 AS id, 'with=equals' AS name)
+TO '${DATA_PATH}/special_test' (FORMAT parquet, PARTITION_BY (name));
+
+statement ok
+CALL ducklake_add_data_files('ducklake', 'test_special',
+    '${DATA_PATH}/special_test/*/*.parquet',
+    hive_partitioning => true)
+
+query II
+SELECT id, name FROM ducklake.test_special ORDER BY id;
+----
+1	hello world
+2	test&value
+3	with=equals
+
