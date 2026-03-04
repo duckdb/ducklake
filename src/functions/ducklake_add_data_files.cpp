@@ -1055,12 +1055,15 @@ void DuckLakeFileProcessor::MapColumnStats(ParquetFileMetadata &file_metadata, D
 		auto &hive_value = entry.hive_value;
 
 		DuckLakeColumnStats column_stats(field_type);
-		column_stats.has_null_count = false;
+		column_stats.has_null_count = true;
 		if (!hive_value.IsNull()) {
-			column_stats.has_null_count = true;
 			column_stats.min = column_stats.max = hive_value.ToString();
 			column_stats.has_min = column_stats.has_max = true;
-		}
+		} else {
+			// All rows in this file have NULL for this partition column
+			column_stats.null_count = file_metadata.row_count.GetIndex();
+			column_stats.any_valid = false;
+		};
 
 		result.column_stats.emplace(field_index, std::move(column_stats));
 	}
