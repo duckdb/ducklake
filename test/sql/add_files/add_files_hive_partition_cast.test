@@ -259,6 +259,10 @@ SELECT id, value, partition_col FROM ducklake.test_null_stats WHERE partition_co
 # Verify internal metadata stats are correctly written for NULL partition columns
 # Query the file stats for the partition column (column_id=3)
 # Join with data_file to match by record_count to identify which file is which
+# Note: disable verification for this query to work around sqlite_scanner serialization issue
+statement ok
+PRAGMA disable_verification
+
 query IIII
 SELECT df.record_count, cs.null_count, cs.min_value, cs.max_value
 FROM "__ducklake_metadata_ducklake".ducklake_file_column_stats cs
@@ -270,6 +274,9 @@ ORDER BY df.record_count DESC, cs.min_value NULLS LAST;
 3	0	a	a
 2	2	NULL	NULL
 1	0	b	b
+
+statement ok
+PRAGMA enable_verification
 
 # Test that when a column exists both in parquet data AND as hive partition,
 # the hive partition value takes precedence and is properly handled
