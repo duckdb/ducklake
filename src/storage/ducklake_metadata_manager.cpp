@@ -2938,6 +2938,10 @@ string DuckLakeMetadataManager::WriteNewDataFilesWithAppender(DuckLakeSnapshot &
 			// extra_stats
 			string extra_stats_str;
 			if (stats.extra_stats && stats.extra_stats->TrySerialize(extra_stats_str)) {
+				// TrySerialize wraps the JSON in single quotes for SQL - strip them for Appender
+				if (extra_stats_str.size() >= 2 && extra_stats_str.front() == '\'' && extra_stats_str.back() == '\'') {
+					extra_stats_str = extra_stats_str.substr(1, extra_stats_str.size() - 2);
+				}
 				column_stats_appender.Append<string_t>(string_t(extra_stats_str));
 			} else {
 				column_stats_appender.Append(Value());
@@ -2988,6 +2992,10 @@ string DuckLakeMetadataManager::WriteNewDataFilesWithAppender(DuckLakeSnapshot &
 
 					string field_extra_stats_str;
 					if (field_stats.extra_stats && field_stats.extra_stats->TrySerialize(field_extra_stats_str)) {
+						// TrySerialize wraps the JSON in single quotes for SQL - strip them for Appender
+						if (field_extra_stats_str.size() >= 2 && field_extra_stats_str.front() == '\'' && field_extra_stats_str.back() == '\'') {
+							field_extra_stats_str = field_extra_stats_str.substr(1, field_extra_stats_str.size() - 2);
+						}
 						variant_stats_appender.Append<string_t>(string_t(field_extra_stats_str));
 					} else {
 						variant_stats_appender.Append(Value());
