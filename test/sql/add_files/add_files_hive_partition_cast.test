@@ -148,3 +148,67 @@ SELECT id, name FROM ducklake.test_special ORDER BY id;
 2	test&value
 3	with=equals
 
+# Test that NULL partition column statistics are correctly tracked
+statement ok
+CREATE TABLE ducklake.test_null_stats(id INTEGER, value INTEGER, partition_col VARCHAR);
+
+statement ok
+COPY (SELECT 1 AS id, 100 AS value, 'a' AS partition_col
+    UNION ALL
+    SELECT 2 AS id, 200 AS value, 'a' AS partition_col
+    UNION ALL
+    SELECT 3 AS id, 300 AS value, 'a' AS partition_col
+    UNION ALL
+    SELECT 4 AS id, 400 AS value, NULL AS partition_col
+    UNION ALL
+    SELECT 5 AS id, 500 AS value, NULL AS partition_col
+    UNION ALL
+    SELECT 6 AS id, 600 AS value, 'b' AS partition_col)
+TO '${DATA_PATH}/null_stats' (FORMAT parquet, PARTITION_BY (partition_col));
+
+statement ok
+CALL ducklake_add_data_files('ducklake', 'test_null_stats',
+    '${DATA_PATH}/null_stats/*/*.parquet',
+    hive_partitioning => true)
+
+# Verify all data is returned correctly
+query III
+SELECT id, value, partition_col FROM ducklake.test_null_stats ORDER BY id;
+----
+1	100	a
+2	200	a
+3	300	a
+4	400	NULL
+5	500	NULL
+6	600	b
+
+# Verify filtering on NULL partition values works correctly
+query III
+SELECT id, value, partition_col FROM ducklake.test_null_stats WHERE partition_col IS NULL ORDER BY id;
+----
+4	400	NULL
+5	500	NULL
+
+# Verify filtering on non-NULL partition values works correctly
+query III
+SELECT id, value, partition_col FROM ducklake.test_null_stats WHERE partition_col IS NOT NULL ORDER BY id;
+----
+1	100	a
+2	200	a
+3	300	a
+6	600	b
+
+# Verify internal metadata stats are correctly written for NULL partition columns
+# Query the file stats for the partition column (column_id=3)
+# Join with data_file to match by record_count to identify which file is which
+query IIII
+SELECT df.record_count, cs.null_count, cs.min_value, cs.max_value
+FROM "__ducklake_metadata_ducklake".ducklake_file_column_stats cs
+JOIN "__ducklake_metadata_ducklake".ducklake_data_file df ON cs.data_file_id = df.data_file_id
+JOIN "__ducklake_metadata_ducklake".ducklake_table t ON cs.table_id = t.table_id
+WHERE t.table_name = 'test_null_stats' AND cs.column_id = 3
+ORDER BY df.record_count DESC, cs.min_value NULLS LAST;
+----
+3	0	a	a
+2	2	NULL	NULL
+1	0	b	b
