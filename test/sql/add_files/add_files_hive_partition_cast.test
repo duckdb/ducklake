@@ -270,3 +270,40 @@ ORDER BY df.record_count DESC, cs.min_value NULLS LAST;
 3	0	a	a
 2	2	NULL	NULL
 1	0	b	b
+
+# Test that when a column exists both in parquet data AND as hive partition,
+# the hive partition value takes precedence and is properly handled
+statement ok
+CREATE TABLE ducklake.test_hive_precedence(id INTEGER, category DOUBLE);
+
+# First create the directory structure using a dummy partition write
+statement ok
+COPY (SELECT 1 AS id, 3.14 AS category UNION ALL SELECT 2 AS id, NULL AS category)
+TO '${DATA_PATH}/ducklake_hive_precedence' (FORMAT parquet, PARTITION_BY (category));
+
+# Now overwrite those files with parquet files that contain 'from_parquet' as category value
+# but keep the same hive directory structure
+statement ok
+COPY (SELECT 1 AS id, '3.14' AS category) TO '${DATA_PATH}/ducklake_hive_precedence/category=3.14/data.parquet' (FORMAT parquet, OVERWRITE true);
+
+statement ok
+COPY (SELECT 2 AS id, NULL AS category) TO '${DATA_PATH}/ducklake_hive_precedence/category=__HIVE_DEFAULT_PARTITION__/data.parquet' (FORMAT parquet, OVERWRITE true);
+
+statement ok
+CALL ducklake_add_data_files('ducklake', 'test_hive_precedence',
+    '${DATA_PATH}/ducklake_hive_precedence/*/data.parquet',
+    hive_partitioning => true)
+
+# The category values should come from the hive partition path (alpha, beta),
+# NOT from the parquet file data (from_parquet)
+query II
+SELECT id, category FROM ducklake.test_hive_precedence ORDER BY id;
+----
+1	3.14
+2	NULL
+
+# Verify typeof() for timestamp columns
+query I
+SELECT typeof(category) FROM ducklake.test_hive_precedence LIMIT 1;
+----
+DOUBLE
