@@ -1055,6 +1055,10 @@ void DuckLakeFileProcessor::MapColumnStats(ParquetFileMetadata &file_metadata, D
 		auto &hive_value = entry.hive_value;
 
 		DuckLakeColumnStats column_stats(field_type);
+		// num_values and null_count both needed to write count
+		// metadata in DuckLakeColumnStatsInfo::FromColumnStats
+		column_stats.has_num_values = true;
+		column_stats.num_values = file_metadata.row_count.GetIndex();
 		column_stats.has_null_count = true;
 		if (!hive_value.IsNull()) {
 			column_stats.min = column_stats.max = hive_value.ToString();
