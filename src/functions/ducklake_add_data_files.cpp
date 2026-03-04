@@ -231,12 +231,15 @@ FROM parquet_full_metadata(%s)
 		auto filename =
 		    FlatVector::GetData<string_t>(*struct_children[0])[struct_idx].GetString(); // struct field: file_name
 
+		// Normalize path separators for consistent deduplication across platforms (Windows uses backslashes)
+		auto normalized_filename = StringUtil::Replace(filename, "\\", "/");
+
 		// Check if we've already processed this file (can happen with overlapping globs)
-		if (processed_files.count(filename)) {
+		if (processed_files.count(normalized_filename)) {
 			// File already processed in a previous glob, skip
 			continue;
 		}
-		processed_files.insert(filename);
+		processed_files.insert(normalized_filename);
 
 		ParquetFileMetadata file;
 		file.filename = std::move(filename);
