@@ -3021,7 +3021,12 @@ string DuckLakeMetadataManager::WriteNewDataFilesWithAppender(DuckLakeSnapshot &
 		}
 	}
 
-	// Appenders will flush on destruction
+	// Explicitly close appenders
+	data_file_appender.Close();
+	column_stats_appender.Close();
+	partition_value_appender.Close();
+	variant_stats_appender.Close();
+
 	return "";
 }
 
