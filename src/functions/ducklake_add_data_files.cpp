@@ -1097,7 +1097,9 @@ DuckLakeFileProcessor::MapColumns(ParquetFileMetadata &file_metadata,
 		}
 		auto hive_entry = hive_partitions.find(col->name);
 		if (hive_entry != hive_partitions.end()) {
-			column_maps.push_back(MapHiveColumn(file_metadata, entry->second.get(), Value(hive_entry->second)));
+			auto hive_value =
+			    HivePartitioning::GetValue(context, col->name, hive_entry->second, entry->second.get().Type());
+			column_maps.push_back(MapHiveColumn(file_metadata, entry->second.get(), hive_value));
 			field_id_map.erase(entry);
 			continue;
 		}
