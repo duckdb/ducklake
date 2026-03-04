@@ -126,6 +126,10 @@ void DuckLakeColumnStats::MergeStats(const DuckLakeColumnStats &new_stats) {
 			// for other types we can compare the strings directly
 			min = new_stats.min;
 		}
+	} else {
+		// current stats don't have min but new_stats does
+		has_min = true;
+		min = new_stats.min;
 	}
 
 	if (!new_stats.has_max) {
@@ -143,6 +147,10 @@ void DuckLakeColumnStats::MergeStats(const DuckLakeColumnStats &new_stats) {
 			// for other types we can compare the strings directly
 			max = new_stats.max;
 		}
+	} else {
+		// current stats don't have max but new_stats does
+		has_max = true;
+		max = new_stats.max;
 	}
 
 	if (new_stats.extra_stats) {
