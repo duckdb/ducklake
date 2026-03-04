@@ -1147,9 +1147,13 @@ void DuckLakeFileProcessor::MapPartitionColumns(ParquetFileMetadata &file) {
 			// key not found in the file path
 			continue;
 		}
-		auto hive_value = HivePartitioning::GetValue(context, partition_key_name, hive_entry->second, field_id->Type());
+		// Get the correct type for the partition key based on the transform
+		// For YEAR/MONTH/DAY/HOUR transforms, the type is BIGINT, not the source column type
+		auto partition_key_type =
+		    DuckLakePartitionUtils::GetPartitionKeyType(partition_field.transform.type, field_id->Type());
+		auto hive_value = HivePartitioning::GetValue(context, partition_key_name, hive_entry->second, partition_key_type);
 		file.hive_partition_values.emplace_back(
-		    HivePartition {partition_field.field_id, field_id->Type(), hive_value});
+		    HivePartition {partition_field.field_id, partition_key_type, hive_value});
 	}
 }
 
