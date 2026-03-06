@@ -1,0 +1,90 @@
+# name: test/sql/sorted_table/insert_sorted_macro_expression.test
+# description: test that INSERT operations sort data using a DuckLake macro in SET SORTED BY
+# group: [sorted_table]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+
+test-env DATA_PATH __TEST_DIR__
+
+statement ok
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/insert_sorted_macro_expr')
+
+statement ok
+USE ducklake;
+
+# create the zip_varchar macro
+statement ok
+CREATE MACRO zip_varchar(i, j, num_chars := 6) AS (
+    [
+       list_value(z[1], z[2])
+       FOR z
+       IN list_zip(
+          substr(i, 1, num_chars).rpad(num_chars, ' ').string_split(''),
+          substr(j, 1, num_chars).rpad(num_chars, ' ').string_split('')
+       )
+    ].flatten().array_to_string('')
+);
+
+# verify the macro works independently
+query I
+SELECT zip_varchar('ABC', 'XYZ', num_chars := 3)
+----
+AXBYCZ
+
+# create table and set sorted by the macro expression
+statement ok
+CREATE TABLE macro_sort_insert(i VARCHAR, j VARCHAR)
+
+statement ok
+ALTER TABLE macro_sort_insert SET SORTED BY (zip_varchar(i, j, num_chars := 3) ASC NULLS LAST)
+
+statement ok
+INSERT INTO macro_sort_insert VALUES ('ZYX', 'CBA'), ('ABC', 'XYZ'), ('321', '000'), ('123', '000')
+
+query III
+SELECT i, j, zip_varchar(i, j, num_chars := 3) FROM macro_sort_insert
+----
+123	000	102030
+321	000	302010
+ABC	XYZ	AXBYCZ
+ZYX	CBA	ZCYBXA
+
+# second insert also gets sorted
+statement ok
+INSERT INTO macro_sort_insert VALUES ('MMM', 'NNN'), ('AAA', 'AAA'), ('ZZZ', 'ZZZ')
+
+query III
+SELECT i, j, zip_varchar(i, j, num_chars := 3) FROM macro_sort_insert
+----
+123	000	102030
+321	000	302010
+ABC	XYZ	AXBYCZ
+ZYX	CBA	ZCYBXA
+AAA	AAA	AAAAAA
+MMM	NNN	MNMNMN
+ZZZ	ZZZ	ZZZZZZ
+
+# RESET SORTED BY - subsequent insert should not sort
+statement ok
+ALTER TABLE macro_sort_insert RESET SORTED BY
+
+statement ok
+INSERT INTO macro_sort_insert VALUES ('PPP', 'QQQ'), ('BBB', 'CCC')
+
+# new rows should be in insertion order
+query III
+SELECT i, j, zip_varchar(i, j, num_chars := 3) FROM macro_sort_insert
+----
+123	000	102030
+321	000	302010
+ABC	XYZ	AXBYCZ
+ZYX	CBA	ZCYBXA
+AAA	AAA	AAAAAA
+MMM	NNN	MNMNMN
+ZZZ	ZZZ	ZZZZZZ
+PPP	QQQ	PQPQPQ
+BBB	CCC	BCBCBC

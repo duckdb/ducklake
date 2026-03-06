@@ -69,7 +69,7 @@ ORDER BY
 	 i DESC
 ;
 
-# First 5 rows should reflect the sort order, second 5 rows should reflect insertion order
+# Both batches should reflect the sort order (sort_key_1 ASC, sort_key_2 ASC)
 query IIII
 FROM ducklake.renamed_columns_test
 ----
@@ -78,11 +78,11 @@ FROM ducklake.renamed_columns_test
 4	0	woot4	NULL
 1	1	woot1	NULL
 3	1	woot3	NULL
-9	1	woot9	NULL
-8	0	woot8	NULL
-7	1	woot7	NULL
 6	0	woot6	NULL
+8	0	woot8	NULL
 5	1	woot5	NULL
+7	1	woot7	NULL
+9	1	woot9	NULL
 
 
 statement ok

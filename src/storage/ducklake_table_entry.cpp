@@ -376,11 +376,11 @@ string GetPartitionColumnName(ColumnRefExpression &colref) {
 }
 
 void DuckLakeTableEntry::ValidateSortExpressionColumns(DuckLakeTableEntry &table,
-                                                       const vector<reference<ParsedExpression>> &expressions) {
+                                                       const vector<OrderByNode> &orders) {
 	vector<string> missing_columns;
-	for (auto &expr : expressions) {
+	for (auto &order : orders) {
 		ParsedExpressionIterator::VisitExpression<ColumnRefExpression>(
-		    expr.get(), [&](const ColumnRefExpression &colref) {
+		    *order.expression, [&](const ColumnRefExpression &colref) {
 			    if (colref.IsQualified()) {
 				    throw InvalidInputException(
 				        "Unexpected qualified column reference - only unqualified columns are supported");
@@ -1167,11 +1167,7 @@ unique_ptr<CatalogEntry> DuckLakeTableEntry::AlterTable(DuckLakeTransaction &tra
 	}
 
 	// Validate all column references in all sort expressions
-	vector<reference<ParsedExpression>> sort_expressions;
-	for (auto &order_node : info.orders) {
-		sort_expressions.push_back(*order_node.expression);
-	}
-	ValidateSortExpressionColumns(*this, sort_expressions);
+	ValidateSortExpressionColumns(*this, info.orders);
 
 	auto sort_data = make_uniq<DuckLakeSort>();
 	sort_data->sort_id = transaction.GetLocalCatalogId();

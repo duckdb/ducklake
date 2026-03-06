@@ -1,5 +1,5 @@
 # name: test/sql/sorted_table/data_inlining_flush_sorted_renamed.test
-# description: if column names have changed, inlining flush should fail until sorted by valid column names
+# description: if column names have changed, insert and flush should fail until sorted by valid column names
 # group: [sorted_table]
 
 require ducklake
@@ -14,7 +14,7 @@ test-env DATA_PATH __TEST_DIR__
 statement ok
 ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/ducklake_inlining_flush_data_renamed', DATA_INLINING_ROW_LIMIT 10)
 
-# SET SORTED BY then rename columns - flush should error on missing columns
+# SET SORTED BY then rename columns - insert should error on missing columns
 statement ok
 CREATE TABLE ducklake.renamed_columns_test (unique_id INTEGER, sort_key_1 INTEGER, sort_key_2 VARCHAR);
 
@@ -28,7 +28,23 @@ ALTER TABLE ducklake.renamed_columns_test RENAME COLUMN sort_key_1 TO sort_key_1
 statement ok
 ALTER TABLE ducklake.renamed_columns_test RENAME COLUMN sort_key_2 TO sort_key_2_changed;
 
-# Insert data (will be inlined initially)
+# Insert should fail because the sort expressions reference old column names
+statement error
+INSERT INTO ducklake.renamed_columns_test (unique_id, sort_key_1_changed, sort_key_2_changed)
+FROM range(5) t(i)
+SELECT
+    i AS unique_id,
+    i % 2 AS sort_key_1_changed,
+    'woot' || i AS sort_key_2_changed
+;
+----
+Columns in the SET SORTED BY statement were not found in the DuckLake table. Unmatched columns were: sort_key_1, sort_key_2
+
+# Fix the sort expression to use the new column names
+statement ok
+ALTER TABLE ducklake.renamed_columns_test SET SORTED BY (sort_key_1_changed ASC NULLS LAST, sort_key_2_changed ASC NULLS LAST);
+
+# Now insert succeeds and data is sorted
 statement ok
 INSERT INTO ducklake.renamed_columns_test (unique_id, sort_key_1_changed, sort_key_2_changed)
 FROM range(5) t(i)
@@ -38,15 +54,6 @@ SELECT
     'woot' || i AS sort_key_2_changed
 ;
 
-# Flush should fail because the sort columns no longer exist
-statement error
-CALL ducklake_flush_inlined_data('ducklake', table_name => 'renamed_columns_test');
-----
-Columns in the SET SORTED BY statement were not found in the DuckLake table. Unmatched columns were: sort_key_1, sort_key_2
-
-statement ok
-ALTER TABLE ducklake.renamed_columns_test SET SORTED BY (sort_key_1_changed ASC NULLS LAST, sort_key_2_changed ASC NULLS LAST);
-
-# Once sorting the new column names, we succeed
+# Flush also succeeds
 statement ok
 CALL ducklake_flush_inlined_data('ducklake', table_name => 'renamed_columns_test');

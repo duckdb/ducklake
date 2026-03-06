@@ -121,8 +121,7 @@ public:
 	vector<column_t> GetRowIdColumns() const override;
 
 	//! Validates that all column references in sort expressions exist in the table
-	static void ValidateSortExpressionColumns(DuckLakeTableEntry &table,
-	                                          const vector<reference<ParsedExpression>> &expressions);
+	static void ValidateSortExpressionColumns(DuckLakeTableEntry &table, const vector<OrderByNode> &orders);
 
 private:
 	unique_ptr<CatalogEntry> AlterTable(DuckLakeTransaction &transaction, RenameTableInfo &info);

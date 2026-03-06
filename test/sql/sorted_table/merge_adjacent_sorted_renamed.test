@@ -16,7 +16,7 @@ ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '__TEST_DIR__/me
 statement ok
 USE ducklake;
 
-# SET SORTED BY then rename columns - compaction should error on missing columns
+# SET SORTED BY then rename columns - insert should error on missing columns
 statement ok
 CREATE TABLE renamed_columns_test (unique_id BIGINT, sort_key_1 BIGINT, sort_key_2 VARCHAR);
 
@@ -30,7 +30,25 @@ ALTER TABLE renamed_columns_test RENAME COLUMN sort_key_1 TO sort_key_1_changed;
 statement ok
 ALTER TABLE renamed_columns_test RENAME COLUMN sort_key_2 TO sort_key_2_changed;
 
-# Insert data twice to create two files
+# Insert should fail because the sort expressions reference old column names
+statement error
+INSERT INTO renamed_columns_test (unique_id, sort_key_1_changed, sort_key_2_changed)
+FROM range(4) t(i)
+SELECT
+    i AS unique_id,
+    i % 2 AS sort_key_1_changed,
+    'woot' || i AS sort_key_2_changed
+ORDER BY
+    i DESC
+;
+----
+Columns in the SET SORTED BY statement were not found in the DuckLake table. Unmatched columns were: sort_key_1, sort_key_2
+
+# Fix the sort expression to use the new column names
+statement ok
+ALTER TABLE ducklake.renamed_columns_test SET SORTED BY (sort_key_1_changed ASC NULLS LAST, sort_key_2_changed ASC NULLS LAST);
+
+# Now inserts succeed and data is sorted
 statement ok
 INSERT INTO renamed_columns_test (unique_id, sort_key_1_changed, sort_key_2_changed)
 FROM range(4) t(i)
@@ -53,15 +71,7 @@ ORDER BY
     i DESC
 ;
 
-# Compaction should fail because the sort columns no longer exist
-statement error
-CALL ducklake_merge_adjacent_files('ducklake', 'renamed_columns_test');
-----
-Columns in the SET SORTED BY statement were not found in the DuckLake table. Unmatched columns were: sort_key_1, sort_key_2
-
-statement ok
-ALTER TABLE ducklake.renamed_columns_test SET SORTED BY (sort_key_1_changed ASC NULLS LAST, sort_key_2_changed ASC NULLS LAST);
-
+# Compaction should succeed now
 query III
 SELECT table_name, files_processed, files_created FROM ducklake_merge_adjacent_files('ducklake', 'renamed_columns_test')
 ----
