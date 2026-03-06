@@ -1,0 +1,59 @@
+# name: ${FILE_PATH}
+# description: Benchmark adding many small parquet files using ducklake_add_data_files
+# group: [add_files_small]
+
+argument file_count 10000
+
+name DuckLake Add Small Files
+group ducklake_add_files
+subgroup small_files
+
+require ducklake
+require parquet
+
+cache_file ducklake_add_files_small_files_ready_${file_count}_${column_count}.marker
+
+load
+CREATE TABLE src AS
+SELECT
+  i::INTEGER AS col_long_name_001,
+  (i + 1)::INTEGER AS col_long_name_002,
+  (i + 2)::INTEGER AS col_long_name_003,
+  (i + 3)::INTEGER AS col_long_name_004,
+  (i + 4)::INTEGER AS col_long_name_005,
+  (i + 5)::INTEGER AS col_long_name_006,
+  (i + 6)::INTEGER AS col_long_name_007,
+  (i + 7)::INTEGER AS col_long_name_008,
+  (i + 8)::INTEGER AS col_long_name_009,
+  (i + 9)::INTEGER AS col_long_name_010,
+  (i + 10)::INTEGER AS col_long_name_011,
+  (i + 11)::INTEGER AS col_long_name_012,
+  (i + 12)::INTEGER AS col_long_name_013,
+  (i + 13)::INTEGER AS col_long_name_014,
+  (i + 14)::INTEGER AS col_long_name_015,
+  (i + 15)::INTEGER AS col_long_name_016,
+  (i + 16)::INTEGER AS col_long_name_017,
+  (i + 17)::INTEGER AS col_long_name_018,
+  (i + 18)::INTEGER AS col_long_name_019,
+  (i + 19)::INTEGER AS col_long_name_020,
+FROM range(${file_count}) t(i);
+COPY src TO '${BENCHMARK_DIR}/ducklake_add_files_small_files_source_parquet'
+  (FORMAT PARQUET, PARTITION_BY (col_long_name_001), WRITE_PARTITION_COLUMNS true, OVERWRITE);
+COPY (SELECT 1) TO '${BENCHMARK_DIR}/ducklake_add_files_small_files_ready_${file_count}.marker' (FORMAT CSV, HEADER);
+ATTACH 'ducklake:${BENCHMARK_DIR}/ducklake_add_files_small_files.db' AS ducklake
+  (DATA_PATH '${BENCHMARK_DIR}/ducklake_add_files_small_files_data_files', METADATA_CATALOG 'metadata');
+USE ducklake;
+
+reload
+ATTACH 'ducklake:${BENCHMARK_DIR}/ducklake_add_files_small_files.db' AS ducklake
+  (METADATA_CATALOG 'metadata');
+USE ducklake;
+
+run
+CREATE TABLE ducklake.big_files AS
+SELECT * FROM read_parquet('${BENCHMARK_DIR}/ducklake_add_files_small_files_source_parquet/**/*.parquet')
+LIMIT 0;
+CALL ducklake_add_data_files('ducklake', 'big_files', '${BENCHMARK_DIR}/ducklake_add_files_small_files_source_parquet/**/*.parquet');
+
+cleanup
+DROP TABLE IF EXISTS ducklake.big_files;
