@@ -3098,9 +3098,14 @@ string DuckLakeMetadataManager::WriteNewDataFiles(DuckLakeSnapshot &commit_snaps
 			if (!partition_insert_query.empty()) {
 				partition_insert_query += ",";
 			}
-			partition_insert_query +=
-			    StringUtil::Format("(%d, %d, %d, %s)", data_file_index, table_id, part_val.partition_column_idx,
-			                       SQLString(part_val.partition_value));
+			string partition_val;
+			if (part_val.partition_value.IsNull()) {
+				partition_val = "NULL";
+			} else {
+				partition_val = StringUtil::Format("%s", SQLString(part_val.partition_value.ToString()));
+			}
+			partition_insert_query += StringUtil::Format("(%d, %d, %d, %s)", data_file_index, table_id,
+			                                             part_val.partition_column_idx, partition_val);
 		}
 	}
 	if (data_file_insert_query.empty()) {

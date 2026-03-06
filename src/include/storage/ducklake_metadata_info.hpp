@@ -142,7 +142,7 @@ struct DuckLakeVariantStatsInfo {
 
 struct DuckLakeFilePartitionInfo {
 	idx_t partition_column_idx;
-	string partition_value;
+	Value partition_value;
 };
 
 struct DuckLakeFileInfo {
