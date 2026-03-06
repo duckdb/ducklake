@@ -3016,7 +3016,11 @@ string DuckLakeMetadataManager::WriteNewDataFilesWithAppender(DuckLakeSnapshot &
 			partition_value_appender.Append<int64_t>(data_file_index);
 			partition_value_appender.Append<int64_t>(table_id);
 			partition_value_appender.Append<int64_t>(static_cast<int64_t>(part_val.partition_column_idx));
-			partition_value_appender.Append<string_t>(string_t(part_val.partition_value));
+			if (part_val.partition_value.IsNull()) {
+				partition_value_appender.Append(Value());
+			} else {
+				partition_value_appender.Append(part_val.partition_value);
+			}
 			partition_value_appender.EndRow();
 		}
 	}
