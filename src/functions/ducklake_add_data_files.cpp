@@ -106,6 +106,7 @@ struct HivePartition {
 	FieldIndex field_index;
 	LogicalType field_type;
 	Value hive_value;
+	DuckLakeTransformType transform_type;
 };
 
 struct ParquetFileMetadata {
@@ -913,7 +914,8 @@ unique_ptr<DuckLakeNameMapEntry> DuckLakeFileProcessor::MapHiveColumn(ParquetFil
 	}
 
 	// Store the hive partition information for later statistics processing
-	file_metadata.hive_partition_values.emplace_back(HivePartition {target_field_id, field_id.Type(), hive_value});
+	file_metadata.hive_partition_values.emplace_back(
+	    HivePartition {target_field_id, field_id.Type(), hive_value, DuckLakeTransformType::IDENTITY});
 
 	// return the map - the name is empty on purpose to signal this comes from a partition
 	auto result = make_uniq<DuckLakeNameMapEntry>();
@@ -1046,6 +1048,11 @@ void DuckLakeFileProcessor::MapColumnStats(ParquetFileMetadata &file_metadata, D
 
 	// Process statistics for hive partition columns
 	for (auto &entry : file_metadata.hive_partition_values) {
+		if (entry.transform_type == DuckLakeTransformType::BUCKET) {
+			// Bucket partitioning uses the result of the hash for the folder names, so we can't get statistics from it
+			continue;
+		}
+
 		auto field_index = entry.field_index;
 		auto &field_type = entry.field_type;
 		auto &hive_value = entry.hive_value;
@@ -1140,8 +1147,8 @@ void DuckLakeFileProcessor::MapPartitionColumns(ParquetFileMetadata &file) {
 			continue;
 		}
 
-		file.hive_partition_values.emplace_back(
-		    HivePartition {partition_field.field_id, field_id->Type(), Value(hive_entry->second)});
+		file.hive_partition_values.emplace_back(HivePartition {
+		    partition_field.field_id, field_id->Type(), Value(hive_entry->second), partition_field.transform.type});
 	}
 }
 
@@ -1214,8 +1221,8 @@ vector<DuckLakeDataFile> DuckLakeFileProcessor::AddFiles(const vector<string> &g
 		ReadParquetFullMetadata(glob);
 	}
 
-	// now we have obtained a list of files to add together with the relevant information (statistics, file size, ...)
-	// we need to create a mapping from the columns in the file to the columns in the table
+	// now we have obtained a list of files to add together with the relevant information (statistics, file size,
+	// ...) we need to create a mapping from the columns in the file to the columns in the table
 	vector<DuckLakeDataFile> written_files;
 	for (auto &entry : parquet_files) {
 		auto file = AddFileToTable(*entry.second);

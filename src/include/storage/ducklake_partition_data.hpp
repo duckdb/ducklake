@@ -15,10 +15,11 @@
 namespace duckdb {
 class BaseStatistics;
 
-enum class DuckLakeTransformType { IDENTITY, YEAR, MONTH, DAY, HOUR };
+enum class DuckLakeTransformType { IDENTITY, BUCKET, YEAR, MONTH, DAY, HOUR };
 
 struct DuckLakeTransform {
 	DuckLakeTransformType type;
+	idx_t bucket_count = 0; // only for BUCKET
 };
 
 struct DuckLakePartitionField {
@@ -53,6 +54,9 @@ struct DuckLakePartitionUtils {
 		case DuckLakeTransformType::HOUR:
 			prefix = "hour";
 			break;
+		case DuckLakeTransformType::BUCKET:
+			prefix = "bucket";
+			break;
 		default:
 			throw NotImplementedException("Unsupported partition transform type");
 		}
@@ -61,6 +65,18 @@ struct DuckLakePartitionUtils {
 		}
 		return prefix + "_" + field_name;
 	}
+
+	//! Wrap a column expression in a named scalar function (e.g. "year", "hash")
+	static unique_ptr<Expression> ApplyScalarFunction(ClientContext &context, const string &function_name,
+	                                                  unique_ptr<Expression> column_expr);
+
+	//! Compute hash(column_expr) % bucket_count (UBIGINT to guarantee non-negative results)
+	static unique_ptr<Expression> ApplyBucketTransform(ClientContext &context, unique_ptr<Expression> column_expr,
+	                                                   idx_t bucket_count);
+
+	//! Apply the appropriate partition transform to a column expression based on the field's transform type
+	static unique_ptr<Expression> ApplyPartitionTransform(ClientContext &context, unique_ptr<Expression> column_expr,
+	                                                      const DuckLakePartitionField &field);
 };
 
 } // namespace duckdb

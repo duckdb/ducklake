@@ -17,6 +17,7 @@
 #include "duckdb/planner/expression/bound_function_expression.hpp"
 #include "duckdb/planner/operator/logical_get.hpp"
 #include "duckdb/planner/operator/logical_projection.hpp"
+#include "duckdb/planner/expression/bound_constant_expression.hpp"
 #include "duckdb/planner/expression/bound_columnref_expression.hpp"
 
 namespace duckdb {
@@ -305,38 +306,6 @@ InsertionOrderPreservingMap<string> DuckLakeUpdate::ParamsToString() const {
 	return result;
 }
 
-static unique_ptr<Expression> GetFunction(ClientContext &context, unique_ptr<BoundReferenceExpression> column_reference,
-                                          const string &function_name) {
-	vector<unique_ptr<Expression>> children;
-	children.emplace_back(std::move(column_reference));
-	ErrorData error;
-	FunctionBinder binder(context);
-	auto function = binder.BindScalarFunction(DEFAULT_SCHEMA, function_name, std::move(children), error, false);
-	if (!function) {
-		error.Throw();
-	}
-	return function;
-}
-
-static unique_ptr<Expression> GetPartitionExpressionForUpdate(ClientContext &context,
-                                                              unique_ptr<BoundReferenceExpression> column_reference,
-                                                              const DuckLakePartitionField &field) {
-	switch (field.transform.type) {
-	case DuckLakeTransformType::IDENTITY:
-		return std::move(column_reference);
-	case DuckLakeTransformType::YEAR:
-		return GetFunction(context, std::move(column_reference), "year");
-	case DuckLakeTransformType::MONTH:
-		return GetFunction(context, std::move(column_reference), "month");
-	case DuckLakeTransformType::DAY:
-		return GetFunction(context, std::move(column_reference), "day");
-	case DuckLakeTransformType::HOUR:
-		return GetFunction(context, std::move(column_reference), "hour");
-	default:
-		throw NotImplementedException("Unsupported partition transform type in GetPartitionExpressionForUpdate");
-	}
-}
-
 PhysicalOperator &DuckLakeCatalog::PlanUpdate(ClientContext &context, PhysicalPlanGenerator &planner, LogicalUpdate &op,
                                               PhysicalOperator &child_plan) {
 	if (op.return_chunk) {
@@ -389,7 +358,8 @@ PhysicalOperator &DuckLakeCatalog::PlanUpdate(ClientContext &context, PhysicalPl
 				auto &child_expression = expressions[col_idx.GetIndex()]->Cast<BoundReferenceExpression>();
 				auto column_reference =
 				    make_uniq<BoundReferenceExpression>(child_expression.return_type, child_expression.index);
-				expressions.push_back(GetPartitionExpressionForUpdate(context, std::move(column_reference), field));
+				expressions.push_back(
+				    DuckLakePartitionUtils::ApplyPartitionTransform(context, std::move(column_reference), field));
 			}
 		}
 	}
