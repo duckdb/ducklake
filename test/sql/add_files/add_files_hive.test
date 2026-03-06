@@ -48,6 +48,12 @@ EXPLAIN ANALYZE SELECT COUNT(*) FROM ducklake.test WHERE part_key=1
 ----
 analyzed_plan	<REGEX>:.*Total Files Read: 1.*
 
+# Offset/Limit generate more complex query plans, ensure they don't trigger unnecessary file reads.
+query II
+EXPLAIN ANALYZE SELECT * FROM ducklake.test WHERE part_key = 1 OFFSET 0 LIMIT 1;
+----
+analyzed_plan	<REGEX>:.*Total Files Read: 1.*
+
 # rename the hive partition
 statement ok
 ALTER TABLE ducklake.test RENAME part_key TO new_part_key
