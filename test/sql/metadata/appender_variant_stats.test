@@ -1,0 +1,132 @@
+# name: test/sql/metadata/appender_variant_stats.test
+# description: Test variant stats are correctly written via the DuckDB Appender API
+# group: [metadata]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+
+test-env DATA_PATH __TEST_DIR__
+
+statement ok
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/ducklake_appender_variant_test', METADATA_CATALOG 'dl', DATA_INLINING_ROW_LIMIT 0)
+
+# ------------------------------------------
+# Variant column with primitive values
+# ------------------------------------------
+statement ok
+CREATE TABLE ducklake.variant_primitive AS
+SELECT COLUMNS(*)::VARIANT FROM (VALUES
+    (10::VARIANT),
+    (20::VARIANT),
+    (30::VARIANT)
+) t(col);
+
+# Verify variant stats are recorded
+query IIII
+SELECT variant_path, shredded_type, min_value, max_value FROM dl.ducklake_file_variant_stats
+WHERE table_id = (SELECT table_id FROM dl.ducklake_table WHERE table_name = 'variant_primitive')
+----
+root	int32	10	30
+
+# Verify data can be read back
+query I
+FROM ducklake.variant_primitive
+----
+10
+20
+30
+
+# ------------------------------------------
+# Variant column with mixed values including nulls
+# ------------------------------------------
+statement ok
+CREATE TABLE ducklake.variant_with_nulls AS
+SELECT COLUMNS(*)::VARIANT FROM (VALUES
+    (100::VARIANT),
+    (NULL::VARIANT),
+    (200::VARIANT),
+    (NULL::VARIANT)
+) t(col);
+
+# Variant stats should include null count
+query IIIII
+SELECT variant_path, shredded_type, min_value, max_value, null_count FROM dl.ducklake_file_variant_stats
+WHERE table_id = (SELECT table_id FROM dl.ducklake_table WHERE table_name = 'variant_with_nulls')
+----
+root	int32	100	200	2
+
+query I
+FROM ducklake.variant_with_nulls
+----
+100
+NULL
+200
+NULL
+
+# ------------------------------------------
+# Variant column with string values
+# ------------------------------------------
+statement ok
+CREATE TABLE ducklake.variant_strings AS
+SELECT COLUMNS(*)::VARIANT FROM (VALUES
+    ('apple'::VARIANT),
+    ('banana'::VARIANT),
+    ('cherry'::VARIANT)
+) t(col);
+
+query IIII
+SELECT variant_path, shredded_type, min_value, max_value FROM dl.ducklake_file_variant_stats
+WHERE table_id = (SELECT table_id FROM dl.ducklake_table WHERE table_name = 'variant_strings')
+----
+root	varchar	apple	cherry
+
+query I
+FROM ducklake.variant_strings
+----
+apple
+banana
+cherry
+
+# ------------------------------------------
+# Variant column with nested array values
+# ------------------------------------------
+statement ok
+CREATE TABLE ducklake.variant_arrays AS
+SELECT COLUMNS(*)::VARIANT FROM (VALUES
+    (['a', 'b', 'c']::VARIANT),
+    (['x', 'y', 'z']::VARIANT)
+) t(col);
+
+# Array element stats
+query IIII
+SELECT variant_path, shredded_type, min_value, max_value FROM dl.ducklake_file_variant_stats
+WHERE table_id = (SELECT table_id FROM dl.ducklake_table WHERE table_name = 'variant_arrays')
+----
+element	varchar	a	z
+
+query I
+FROM ducklake.variant_arrays
+----
+[a, b, c]
+[x, y, z]
+
+# ------------------------------------------
+# Multiple inserts with variant data
+# ------------------------------------------
+statement ok
+INSERT INTO ducklake.variant_primitive SELECT (i * 10)::VARIANT FROM range(4, 11) t(i);
+
+query I
+SELECT COUNT(*) FROM ducklake.variant_primitive
+----
+10
+
+# Verify stats are recorded for multiple data files
+query I
+SELECT COUNT(*) FROM dl.ducklake_file_variant_stats
+WHERE table_id = (SELECT table_id FROM dl.ducklake_table WHERE table_name = 'variant_primitive')
+----
+2
