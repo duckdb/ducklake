@@ -61,6 +61,23 @@ struct DuckLakePartitionUtils {
 		}
 		return prefix + "_" + field_name;
 	}
+
+	//! Get the partition key type for a partition field based on its transform
+	//! For IDENTITY transforms, returns the source column type
+	//! For YEAR, MONTH, DAY, HOUR transforms, returns BIGINT (the result type of those functions)
+	static LogicalType GetPartitionKeyType(DuckLakeTransformType transform_type, const LogicalType &source_type) {
+		switch (transform_type) {
+		case DuckLakeTransformType::IDENTITY:
+			return source_type;
+		case DuckLakeTransformType::YEAR:
+		case DuckLakeTransformType::MONTH:
+		case DuckLakeTransformType::DAY:
+		case DuckLakeTransformType::HOUR:
+			return LogicalType::BIGINT;
+		default:
+			throw NotImplementedException("Unsupported partition transform type");
+		}
+	}
 };
 
 } // namespace duckdb
