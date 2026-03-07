@@ -138,7 +138,8 @@ public:
 	virtual vector<DuckLakeCompactionFileEntry> GetFilesForCompaction(DuckLakeTableEntry &table, CompactionType type,
 	                                                                  double deletion_threshold,
 	                                                                  DuckLakeSnapshot snapshot,
-	                                                                  DuckLakeFileSizeOptions options);
+	                                                                  DuckLakeFileSizeOptions options,
+	                                                                  const string &partition_filter = "");  // NEW parameter
 	virtual idx_t GetBeginSnapshotForTable(TableIndex table_id);
 	virtual idx_t GetNetDataFileRowCount(TableIndex table_id, DuckLakeSnapshot snapshot);
 	virtual idx_t GetNetInlinedRowCount(const string &inlined_table_name, DuckLakeSnapshot snapshot);
@@ -235,6 +236,16 @@ public:
 	virtual void MigrateV03(bool allow_failures = false);
 	virtual void ExecuteMigration(string migrate_query, bool allow_failures, const string &from_version,
 	                              const string &to_version);
+
+	// Partition filter helper functions
+	struct ParsedPartitionFilter {
+		string where_clause;
+		vector<string> referenced_columns;
+	};
+	static ParsedPartitionFilter ParseAndValidatePartitionFilter(DuckLakeTableEntry &table, const string &partition_filter);
+	static string BuildPartitionFilterCTE(DuckLakeTableEntry &table, idx_t table_id, const string &where_clause = "");
+	static string BuildCastExpression(const LogicalType &column_type, const DuckLakeTransform &transform, const string &value_expr);
+	static string GetPartitionFilterWhereClause(const string &partition_filter, const string &where_clause = "");
 
 	string LoadPath(string path);
 	string StorePath(string path);

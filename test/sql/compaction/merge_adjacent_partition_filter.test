@@ -1,0 +1,582 @@
+# name: test/sql/compaction/merge_adjacent_partition_filter.test
+# description: test ducklake merge adjacent files with partition_filter parameter
+# group: [compaction]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+
+test-env DATA_PATH __TEST_DIR__
+
+statement ok
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/merge_adjacent_partition_filter/')
+
+statement ok
+USE ducklake;
+
+# ============================================================================
+# Test 1: NOT_PARTITIONED keyword
+# ============================================================================
+
+# Test NOT_PARTITIONED keyword
+statement ok
+CREATE TABLE unpartitioned_table (key VARCHAR, value VARCHAR);
+
+statement ok
+INSERT INTO unpartitioned_table (key, value) VALUES ('foo', 'bar');
+
+statement ok
+INSERT INTO unpartitioned_table (key, value) VALUES ('baz', 'qux');
+
+# Count files before merge
+query I
+SELECT COUNT(*) FROM ducklake_list_files('ducklake', 'unpartitioned_table')
+----
+2
+
+# Merge only unpartitioned files
+query III
+SELECT table_name, files_processed, files_created FROM ducklake_merge_adjacent_files('ducklake', 'unpartitioned_table', partition_filter=>'NOT_PARTITIONED')
+----
+unpartitioned_table	2	1
+
+# Count files after merge (should be 1 file)
+query I
+SELECT COUNT(*) FROM ducklake_list_files('ducklake', 'unpartitioned_table')
+----
+1
+
+# ============================================================================
+# Test 2: SQL WHERE clause with DATE type
+# ============================================================================
+
+statement ok
+CREATE TABLE date_partitioned (date_col DATE, value VARCHAR);
+
+statement ok
+ALTER TABLE ducklake.date_partitioned SET PARTITIONED BY (date_col);
+
+statement ok
+INSERT INTO ducklake.date_partitioned VALUES ('2025-01-01'::DATE, 'a');
+
+statement ok
+INSERT INTO ducklake.date_partitioned VALUES ('2025-01-01'::DATE, 'b');
+
+statement ok
+INSERT INTO ducklake.date_partitioned VALUES ('2025-01-02'::DATE, 'c');
+
+# Count files before merge
+query I
+SELECT COUNT(*) FROM ducklake_list_files('ducklake', 'date_partitioned')
+----
+3
+
+# Merge only files with date_col = '2025-01-01'
+query III
+SELECT table_name, files_processed, files_created FROM ducklake_merge_adjacent_files('ducklake', 'date_partitioned', partition_filter=>"date_col = '2025-01-01'")
+----
+date_partitioned	2	1
+
+# Count files after merge (should be 2 files: 1 merged + 1 unchanged)
+query I
+SELECT COUNT(*) FROM ducklake_list_files('ducklake', 'date_partitioned')
+----
+2
+
+# Verify data integrity
+query II
+SELECT * FROM date_partitioned ORDER BY date_col, value
+----
+2025-01-01	a
+2025-01-01	b
+2025-01-02	c
+
+# ============================================================================
+# Test 3: SQL WHERE clause with INTEGER type and AND/OR
+# ============================================================================
+
+statement ok
+CREATE TABLE multi_partition (date_col DATE, amount INTEGER, value VARCHAR);
+
+statement ok
+ALTER TABLE ducklake.multi_partition SET PARTITIONED BY (date_col, amount);
+
+statement ok
+INSERT INTO ducklake.multi_partition VALUES ('2025-01-01'::DATE, 100, 'a');
+
+statement ok
+INSERT INTO ducklake.multi_partition VALUES ('2025-01-01'::DATE, 100, 'b');
+
+statement ok
+INSERT INTO ducklake.multi_partition VALUES ('2025-01-01'::DATE, 100, 'b');
+
+statement ok
+INSERT INTO ducklake.multi_partition VALUES ('2025-01-01'::DATE, 200, 'c');
+
+statement ok
+INSERT INTO ducklake.multi_partition VALUES ('2025-01-01'::DATE, 200, 'd');
+
+statement ok
+INSERT INTO ducklake.multi_partition VALUES ('2025-01-02'::DATE, 100, 'e');
+
+# Merge files with date_col = '2025-01-01' AND amount > 100
+# Note: This merges 2 files (one with value 'c', one with 'd') in partition (2025-01-01, 200)
+# into 1 file, so 2 rows are returned
+query III
+SELECT table_name, files_processed, files_created FROM ducklake_merge_adjacent_files('ducklake', 'multi_partition', partition_filter=>"date_col = '2025-01-01' AND amount > 100")
+----
+multi_partition	2	1
+
+# Count files after merge (should be 5 files: 4 unchanged + 1 merged)
+query I
+SELECT COUNT(*) FROM ducklake_list_files('ducklake', 'multi_partition')
+----
+5
+
+# ============================================================================
+# Test 4: SQL WHERE clause with BIGINT type
+# ============================================================================
+
+statement ok
+CREATE TABLE bigint_partition (id BIGINT, name VARCHAR);
+
+statement ok
+ALTER TABLE ducklake.bigint_partition SET PARTITIONED BY (id);
+
+statement ok
+INSERT INTO ducklake.bigint_partition VALUES (1000000000000::BIGINT, 'a');
+
+statement ok
+INSERT INTO ducklake.bigint_partition VALUES (1000000000000::BIGINT, 'b');
+
+statement ok
+INSERT INTO ducklake.bigint_partition VALUES (2000000000000::BIGINT, 'c');
+
+# Merge files with id = 1000000000000
+query III
+SELECT table_name, files_processed, files_created FROM ducklake_merge_adjacent_files('ducklake', 'bigint_partition', partition_filter=>"id = 1000000000000")
+----
+bigint_partition	2	1
+
+# Count files after merge (should be 2 files: 1 merged + 1 unchanged)
+query I
+SELECT COUNT(*) FROM ducklake_list_files('ducklake', 'bigint_partition')
+----
+2
+
+# ============================================================================
+# Test 5: SQL WHERE clause with BOOLEAN type
+# ============================================================================
+
+statement ok
+CREATE TABLE bool_partition (is_active BOOLEAN, value VARCHAR);
+
+statement ok
+ALTER TABLE ducklake.bool_partition SET PARTITIONED BY (is_active);
+
+statement ok
+INSERT INTO ducklake.bool_partition VALUES (true, 'a');
+
+statement ok
+INSERT INTO ducklake.bool_partition VALUES (true, 'b');
+
+statement ok
+INSERT INTO ducklake.bool_partition VALUES (false, 'c');
+
+# Merge files with is_active = true
+query III
+SELECT table_name, files_processed, files_created FROM ducklake_merge_adjacent_files('ducklake', 'bool_partition', partition_filter=>"is_active = true")
+----
+bool_partition	2	1
+
+# Count files after merge (should be 2 files: 1 merged + 1 unchanged)
+query I
+SELECT COUNT(*) FROM ducklake_list_files('ducklake', 'bool_partition')
+----
+2
+
+# ============================================================================
+# Test 6: SQL WHERE clause with VARCHAR type
+# ============================================================================
+
+statement ok
+CREATE TABLE varchar_partition (status VARCHAR, value VARCHAR);
+
+statement ok
+ALTER TABLE ducklake.varchar_partition SET PARTITIONED BY (status);
+
+statement ok
+INSERT INTO ducklake.varchar_partition VALUES ('active', 'a');
+
+statement ok
+INSERT INTO ducklake.varchar_partition VALUES ('active', 'b');
+
+statement ok
+INSERT INTO ducklake.varchar_partition VALUES ('inactive', 'c');
+
+# Merge files with status = 'active'
+query III
+SELECT table_name, files_processed, files_created FROM ducklake_merge_adjacent_files('ducklake', 'varchar_partition', partition_filter=>"status = 'active'")
+----
+varchar_partition	2	1
+
+# ============================================================================
+# Test 7: SQL WHERE clause with IN operator
+# ============================================================================
+
+statement ok
+CREATE TABLE in_test (date_col DATE, value VARCHAR);
+
+statement ok
+ALTER TABLE ducklake.in_test SET PARTITIONED BY (date_col);
+
+statement ok
+INSERT INTO ducklake.in_test VALUES ('2025-01-01'::DATE, 'a');
+
+statement ok
+INSERT INTO ducklake.in_test VALUES ('2025-01-01'::DATE, 'b');
+
+statement ok
+INSERT INTO ducklake.in_test VALUES ('2025-01-02'::DATE, 'c');
+
+statement ok
+INSERT INTO ducklake.in_test VALUES ('2025-01-03'::DATE, 'd');
+
+# Merge files with date_col IN ('2025-01-01', '2025-01-02')
+query III
+SELECT table_name, files_processed, files_created FROM ducklake_merge_adjacent_files('ducklake', 'in_test', partition_filter=>"date_col IN ('2025-01-01', '2025-01-02')")
+----
+in_test	3	1
+
+# Count files after merge (should be 3 files: 1 merged + 2 unchanged)
+query I
+SELECT COUNT(*) FROM ducklake_list_files('ducklake', 'in_test')
+----
+3
+
+# ============================================================================
+# Test 8: SQL WHERE clause with BETWEEN operator
+# ============================================================================
+
+statement ok
+CREATE TABLE between_test (amount INTEGER, value VARCHAR);
+
+statement ok
+ALTER TABLE ducklake.between_test SET PARTITIONED BY (amount);
+
+statement ok
+INSERT INTO ducklake.between_test VALUES (100, 'a');
+
+statement ok
+INSERT INTO ducklake.between_test VALUES (150, 'b');
+
+statement ok
+INSERT INTO ducklake.between_test VALUES (200, 'c');
+
+statement ok
+INSERT INTO ducklake.between_test VALUES (300, 'd');
+
+# Merge files with amount BETWEEN 100 AND 200
+query III
+SELECT table_name, files_processed, files_created FROM ducklake_merge_adjacent_files('ducklake', 'between_test', partition_filter=>"amount BETWEEN 100 AND 200")
+----
+between_test	2	1
+
+# Count files after merge (should be 3 files: 1 merged + 2 unchanged)
+query I
+SELECT COUNT(*) FROM ducklake_list_files('ducklake', 'between_test')
+----
+3
+
+# ============================================================================
+# Test 10: Default behavior (no partition_filter parameter)
+# ============================================================================
+
+statement ok
+CREATE TABLE default_test (key VARCHAR, value VARCHAR);
+
+statement ok
+INSERT INTO default_test (key, value) VALUES ('foo', 'bar');
+
+statement ok
+INSERT INTO default_test (key, value) VALUES ('baz', 'qux');
+
+# Merge without partition_filter (should merge all files)
+query III
+SELECT table_name, files_processed, files_created FROM ducklake_merge_adjacent_files('ducklake', 'default_test')
+----
+default_test	2	1
+
+# Count files after merge (should be 1 file)
+query I
+SELECT COUNT(*) FROM ducklake_list_files('ducklake', 'default_test')
+----
+1
+
+# ============================================================================
+# Test 11: Integration with existing parameters (min_file_size, max_file_size)
+# ============================================================================
+
+statement ok
+CREATE TABLE integration_table (key VARCHAR, value VARCHAR);
+
+# Insert multiple small files
+statement ok
+INSERT INTO integration_table (key, value) VALUES ('foo', 'bar');
+
+statement ok
+INSERT INTO integration_table (key, value) VALUES ('baz', 'qux');
+
+statement ok
+INSERT INTO integration_table (key, value) VALUES ('quux', 'corge');
+
+statement ok
+INSERT INTO integration_table (key, value) VALUES ('grault', 'garply');
+
+# Count files before merge
+query I
+SELECT COUNT(*) FROM ducklake_list_files('ducklake', 'integration_table')
+----
+4
+
+# Merge with partition_filter and max_compacted_files limit
+query III
+SELECT table_name, files_processed, files_created FROM ducklake_merge_adjacent_files('ducklake', 'integration_table', partition_filter=>'none', max_compacted_files=>2)
+----
+integration_table	4	1
+
+# Count files after merge (should be 1 file)
+query I
+SELECT COUNT(*) FROM ducklake_list_files('ducklake', 'integration_table')
+----
+1
+
+# ============================================================================
+# Test 12: Verify data integrity after compaction
+# ============================================================================
+
+query II
+SELECT * FROM unpartitioned_table ORDER BY key
+----
+baz	qux
+foo	bar
+
+query III
+SELECT * FROM date_partitioned ORDER BY date_col, value
+----
+2025-01-01	a
+2025-01-01	b
+2025-01-02	c
+
+query III
+SELECT * FROM multi_partition ORDER BY date_col, amount, value
+----
+2025-01-01	100	a
+2025-01-01	100	b
+2025-01-01	200	c
+
+query III
+SELECT * FROM bigint_partition ORDER BY id, name
+----
+1000000000000	a
+1000000000000	b
+2000000000000	c
+
+query III
+SELECT * FROM bool_partition ORDER BY is_active, value
+----
+false	c
+true	a
+true	b
+
+query III
+SELECT * FROM varchar_partition ORDER BY status, value
+----
+active	a
+active	b
+inactive	c
+
+query III
+SELECT * FROM in_test ORDER BY date_col, value
+----
+2025-01-01	a
+2025-01-01	b
+2025-01-02	c
+2025-01-03	d
+
+query II
+SELECT * FROM integration_table ORDER BY key
+----
+baz	qux
+foo	bar
+grault	garply
+quux	corge
+
+query III
+SELECT * FROM default_test ORDER BY key
+----
+baz	qux
+foo	bar
+
+# ============================================================================
+# Test 13: Validation - reject non-partition columns
+# ============================================================================
+
+# Test 13a: Attempt to filter by non-partition column (should fail)
+statement ok
+CREATE TABLE valid_table (part_col INTEGER, other_col VARCHAR, value VARCHAR);
+
+statement ok
+ALTER TABLE ducklake.valid_table SET PARTITIONED BY (part_col);
+
+statement ok
+INSERT INTO ducklake.valid_table VALUES (1, 'a', 'x');
+
+statement ok
+INSERT INTO ducklake.valid_table VALUES (1, 'b', 'y');
+
+statement error Binder Error: Invalid partition filter: column 'other_col' is not a partition column. Partition columns are: part_col
+SELECT table_name, files_processed, files_created FROM ducklake_merge_adjacent_files('ducklake', 'valid_table', partition_filter=>"other_col = 'a'")
+
+# Test 13b: Valid filter using partition column (should succeed)
+query III
+SELECT table_name, files_processed, files_created FROM ducklake_merge_adjacent_files('ducklake', 'valid_table', partition_filter=>"part_col = 1")
+----
+valid_table	2	1
+
+# ============================================================================
+# Test 14: Validation - proper column reference detection
+# ============================================================================
+
+# Test 14a: Filter with multiple partition columns - all must be partition columns
+statement ok
+CREATE TABLE multi_col_table (col1 INTEGER, col2 VARCHAR, col3 DATE, value VARCHAR);
+
+statement ok
+ALTER TABLE ducklake.multi_col_table SET PARTITIONED BY (col1, col2);
+
+statement ok
+INSERT INTO ducklake.multi_col_table VALUES (1, 'a', '2025-01-01'::DATE, 'x');
+
+statement ok
+INSERT INTO ducklake.multi_col_table VALUES (1, 'a', '2025-01-02'::DATE, 'y');
+
+statement error Binder Error: Invalid partition filter: column 'col3' is not a partition column. Partition columns are: col1, col2
+SELECT table_name, files_processed, files_created FROM ducklake_merge_adjacent_files('ducklake', 'multi_col_table', partition_filter=>"col1 = 1 AND col2 = 'a' AND col3 = '2025-01-01'::DATE")
+
+# Test 14b: Valid filter with multiple partition columns
+query III
+SELECT table_name, files_processed, files_created FROM ducklake_merge_adjacent_files('ducklake', 'multi_col_table', partition_filter=>"col1 = 1 AND col2 = 'a'")
+----
+multi_col_table	2	1
+
+# ============================================================================
+# Test 15: Validation - reject multiple statements
+# ============================================================================
+
+# Test 15a: Attempt to use multiple statements (should fail)
+# This tests that we properly detect and reject multi-statement injection attempts
+statement error Binder Error: Invalid partition filter: only one statement is allowed
+SELECT table_name, files_processed, files_created FROM ducklake_merge_adjacent_files('ducklake', 'valid_table', partition_filter=>"part_col = 1; DROP TABLE")
+
+# Test 15b: Attempt to use multiple statements with OR (should still fail because of semicolon)
+statement error Binder Error: Invalid partition filter: only one statement is allowed
+SELECT table_name, files_processed, files_created FROM ducklake_merge_adjacent_files('ducklake', 'valid_table', partition_filter=>"part_col = 1; SELECT * FROM")
+
+# ============================================================================
+# Test 16: Partition transformations (DAY, MONTH, YEAR)
+# ============================================================================
+
+statement ok
+CREATE TABLE date_transform_table (date_col DATE, value VARCHAR);
+
+statement ok
+ALTER TABLE ducklake.date_transform_table SET PARTITIONED BY (DAY(date_col));
+
+statement ok
+INSERT INTO ducklake.date_transform_table VALUES ('2025-01-01'::DATE, 'a');
+
+statement ok
+INSERT INTO ducklake.date_transform_table VALUES ('2025-01-01'::DATE, 'b');
+
+statement ok
+INSERT INTO ducklake.date_transform_table VALUES ('2025-01-02'::DATE, 'c');
+
+# Count files before merge
+query I
+SELECT COUNT(*) FROM ducklake_list_files('ducklake', 'date_transform_table')
+----
+3
+
+# Merge files with DAY(date_col) = 1 (should merge the two files with 2025-01-01)
+query III
+SELECT table_name, files_processed, files_created FROM ducklake_merge_adjacent_files('ducklake', 'date_transform_table', partition_filter=>"DAY(date_col) = 1")
+----
+date_transform_table	2	1
+
+# Count files after merge (should be 2 files: 1 merged + 1 unchanged)
+query I
+SELECT COUNT(*) FROM ducklake_list_files('ducklake', 'date_transform_table')
+----
+2
+
+# ============================================================================
+# Test 17: Multiple partition columns with transformations
+# ============================================================================
+
+statement ok
+CREATE TABLE year_month_table (date_col DATE, value VARCHAR);
+
+statement ok
+ALTER TABLE ducklake.year_month_table SET PARTITIONED BY (YEAR(date_col), MONTH(date_col));
+
+statement ok
+INSERT INTO ducklake.year_month_table VALUES ('2025-01-01'::DATE, 'a');
+
+statement ok
+INSERT INTO ducklake.year_month_table VALUES ('2025-01-01'::DATE, 'b');
+
+statement ok
+INSERT INTO ducklake.year_month_table VALUES ('2025-02-01'::DATE, 'c');
+
+statement ok
+INSERT INTO ducklake.year_month_table VALUES ('2025-03-01'::DATE, 'd');
+
+# Count files before merge
+query I
+SELECT COUNT(*) FROM ducklake_list_files('ducklake', 'year_month_table')
+----
+4
+
+# Merge files with YEAR(date_col) = 2025 AND MONTH(date_col) = 1 (should merge two files)
+query III
+SELECT table_name, files_processed, files_created FROM ducklake_merge_adjacent_files('ducklake', 'year_month_table', partition_filter=>"YEAR(date_col) = 2025 AND MONTH(date_col) = 1")
+----
+year_month_table	2	1
+
+# Count files after merge (should be 3 files: 1 merged + 2 unchanged)
+query I
+SELECT COUNT(*) FROM ducklake_list_files('ducklake', 'year_month_table')
+----
+3
+
+# ============================================================================
+# Test 18: Data integrity after transformations
+# ============================================================================
+
+query II
+SELECT * FROM date_transform_table ORDER BY date_col, value
+----
+2025-01-01	a
+2025-01-01	b
+2025-01-02	c
+
+query III
+SELECT * FROM year_month_table ORDER BY date_col, value
+----
+2025-01-01	a
+2025-01-01	b
+2025-02-01	c
+2025-03-01	d

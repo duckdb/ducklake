@@ -22,6 +22,10 @@
 #include "duckdb/planner/expression.hpp"
 #include "duckdb/parser/parser.hpp"
 #include "duckdb/parser/expression/cast_expression.hpp"
+#include "duckdb/parser/expression/columnref_expression.hpp"
+#include "duckdb/parser/parsed_expression_iterator.hpp"
+#include "duckdb/parser/statement/select_statement.hpp"
+#include "duckdb/parser/query_node.hpp"
 
 namespace duckdb {
 
@@ -1736,7 +1740,8 @@ vector<DuckLakeCompactionFileEntry> DuckLakeMetadataManager::GetFilesForCompacti
                                                                                    CompactionType type,
                                                                                    double deletion_threshold,
                                                                                    DuckLakeSnapshot snapshot,
-                                                                                   DuckLakeFileSizeOptions options) {
+                                                                                   DuckLakeFileSizeOptions options,
+                                                                                   const string &partition_filter) {
 	auto table_id = table.GetTableId();
 	// Determine the effective max file size threshold for filtering
 	idx_t effective_max_file_size =
@@ -1768,8 +1773,52 @@ vector<DuckLakeCompactionFileEntry> DuckLakeMetadataManager::GetFilesForCompacti
 		}
 		file_size_filter_clause += StringUtil::Format(" AND data.file_size_bytes < %llu", effective_max_file_size);
 	}
+
+	// Build partition filter components
+	string partition_cte_content;
+	string partition_filter_clause;
+	string where_clause_to_use;
+
+	if (type == CompactionType::MERGE_ADJACENT_TABLES && !partition_filter.empty()) {
+		// Parse and validate the partition filter to prevent SQL injection
+		auto parsed_filter = ParseAndValidatePartitionFilter(table, partition_filter);
+		where_clause_to_use = parsed_filter.where_clause;
+
+		// Determine if we need a CTE (for SQL WHERE clause)
+		bool needs_cte = !StringUtil::CIEquals(where_clause_to_use, "NOT_PARTITIONED");
+
+		if (needs_cte) {
+			// Build CTE with type-casted partition values and filter applied directly in CTE
+			partition_cte_content = BuildPartitionFilterCTE(table, table_id.index, where_clause_to_use);
+			// No need for additional WHERE clause in main query since filter is in CTE
+			partition_filter_clause = "";
+		} else {
+			// NOT_PARTITIONED keyword - simple WHERE clause
+			partition_filter_clause = GetPartitionFilterWhereClause(where_clause_to_use, "");
+		}
+	}
+
+	// Build the WITH clause - combine partition CTE with snapshot_ranges CTE
+	string with_clause;
+	if (!partition_cte_content.empty()) {
+		// Remove the "WITH" and trailing newline from partition_cte_content
+		string partition_cte_body = partition_cte_content;
+		// Remove "WITH " prefix
+		if (partition_cte_body.find("WITH ") == 0) {
+			partition_cte_body = partition_cte_body.substr(4);
+		}
+		// Remove trailing whitespace/newline
+		while (!partition_cte_body.empty() && (partition_cte_body.back() == '\n' || partition_cte_body.back() == '\r' || partition_cte_body.back() == ' ')) {
+			partition_cte_body.pop_back();
+		}
+		// Combine with snapshot_ranges
+		with_clause = StringUtil::Format("WITH\n%s,\n  snapshot_ranges AS (", partition_cte_body);
+	} else {
+		with_clause = "WITH\n  snapshot_ranges AS (";
+	}
+
 	auto query = StringUtil::Format(R"(
-WITH snapshot_ranges AS (
+%s
   SELECT
     begin_snapshot,
     COALESCE(
@@ -1795,11 +1844,11 @@ LEFT JOIN (
    FROM {METADATA_CATALOG}.ducklake_file_partition_value
    GROUP BY data_file_id
 ) partition_info USING (data_file_id)
-WHERE data.table_id=%d %s%s
+WHERE data.table_id=%d %s%s%s
 ORDER BY data.begin_snapshot, data.row_id_start, data.data_file_id, del.begin_snapshot
 		)",
-	                                table_id.index, select_list, table_id.index, table_id.index,
-	                                deletion_threshold_clause, file_size_filter_clause);
+	                                with_clause, table_id.index, select_list, table_id.index, table_id.index,
+	                                deletion_threshold_clause, file_size_filter_clause, partition_filter_clause);
 	auto result = transaction.Query(query);
 	if (result->HasError()) {
 		result->GetErrorObject().Throw("Failed to get compaction file list from DuckLake: ");
@@ -4161,6 +4210,202 @@ UPDATE {METADATA_CATALOG}.ducklake_metadata SET value=%s WHERE key=%s AND %s
 	}
 	if (result->HasError()) {
 		result->GetErrorObject().Throw("Failed to insert config option in DuckLake: ");
+	}
+}
+
+string DuckLakeMetadataManager::BuildCastExpression(const LogicalType &column_type, const DuckLakeTransform &transform,
+                                                       const string &value_expr) {
+	// Handle transforms (e.g., YEAR, MONTH, DAY) - for now, just cast to base type
+	// Transform logic can be added later if needed
+
+	switch (column_type.id()) {
+	case LogicalTypeId::VARCHAR:
+		return value_expr;
+	case LogicalTypeId::INTEGER:
+		return StringUtil::Format("(%s)::INTEGER", value_expr);
+	case LogicalTypeId::BIGINT:
+		return StringUtil::Format("(%s)::BIGINT", value_expr);
+	case LogicalTypeId::DATE:
+		return StringUtil::Format("(%s)::DATE", value_expr);
+	case LogicalTypeId::TIMESTAMP:
+	case LogicalTypeId::TIMESTAMP_NS:
+	case LogicalTypeId::TIMESTAMP_MS:
+	case LogicalTypeId::TIMESTAMP_SEC:
+		return StringUtil::Format("(%s)::TIMESTAMP", value_expr);
+	case LogicalTypeId::BOOLEAN:
+		return StringUtil::Format("(%s)::BOOLEAN", value_expr);
+	case LogicalTypeId::FLOAT:
+	case LogicalTypeId::DOUBLE:
+		return StringUtil::Format("(%s)::DOUBLE", value_expr);
+	case LogicalTypeId::DECIMAL:
+		return StringUtil::Format("(%s)::DECIMAL", value_expr);
+	case LogicalTypeId::TINYINT:
+		return StringUtil::Format("(%s)::TINYINT", value_expr);
+	case LogicalTypeId::SMALLINT:
+		return StringUtil::Format("(%s)::SMALLINT", value_expr);
+	case LogicalTypeId::UTINYINT:
+		return StringUtil::Format("(%s)::UTINYINT", value_expr);
+	case LogicalTypeId::USMALLINT:
+		return StringUtil::Format("(%s)::USMALLINT", value_expr);
+	case LogicalTypeId::UINTEGER:
+		return StringUtil::Format("(%s)::UINTEGER", value_expr);
+	case LogicalTypeId::UBIGINT:
+		return StringUtil::Format("(%s)::UBIGINT", value_expr);
+	default:
+		throw BinderException("Unsupported partition column type: %s", column_type.ToString());
+	}
+}
+
+string DuckLakeMetadataManager::BuildPartitionFilterCTE(DuckLakeTableEntry &table, idx_t table_id, const string &where_clause) {
+	// Get partition column information
+	auto partition_data = table.GetPartitionData();
+	if (!partition_data || partition_data->fields.empty()) {
+		return ""; // No partition columns
+	}
+
+	// Build column selects with type casting
+	string column_selects;
+	for (const auto &field : partition_data->fields) {
+		// Get column name from field_id
+		const auto &column_entry = table.GetColumn(LogicalIndex(field.field_id.index));
+		string column_name = column_entry.Name();
+		string column_type = column_entry.Type().ToString();
+
+		// Build CASE expression with type casting
+		string cast_expr = BuildCastExpression(column_entry.Type(), field.transform, "pv.partition_value");
+
+		if (!column_selects.empty()) {
+			column_selects += ", ";
+		}
+
+		// Use MAX with CASE to pivot partition values
+		column_selects += StringUtil::Format(
+		    "MAX(CASE WHEN pv.partition_key_index = %d THEN %s END) AS %s", field.partition_key_index, cast_expr,
+		    DuckLakeUtil::SQLIdentifierToString(column_name));
+	}
+
+	// Build WHERE clause for filtering if provided
+	string filter_clause;
+	if (!where_clause.empty()) {
+		filter_clause = " AND (" + where_clause + ")";
+	}
+
+	return StringUtil::Format(R"(
+partition_values AS (
+    SELECT pv.data_file_id, %s
+    FROM {METADATA_CATALOG}.ducklake_file_partition_value pv
+    WHERE pv.table_id = %d%s
+    GROUP BY pv.data_file_id
+)
+)",
+	                            column_selects, table_id, filter_clause);
+}
+
+string DuckLakeMetadataManager::GetPartitionFilterWhereClause(const string &partition_filter,
+                                                                const string &where_clause) {
+	// Handle NOT_PARTITIONED keyword - filters for files without partitions
+	if (StringUtil::CIEquals(partition_filter, "NOT_PARTITIONED")) {
+		return " AND data.partition_id IS NULL";
+	}
+
+	// Handle SQL WHERE clause - filters by specific partition values
+	if (!where_clause.empty()) {
+		return StringUtil::Format(
+		    " AND EXISTS (SELECT 1 FROM partition_values pv WHERE pv.data_file_id = data.data_file_id AND (%s))",
+		    where_clause);
+	}
+
+	return "";
+}
+
+DuckLakeMetadataManager::ParsedPartitionFilter
+DuckLakeMetadataManager::ParseAndValidatePartitionFilter(DuckLakeTableEntry &table, const string &partition_filter) {
+	ParsedPartitionFilter result;
+
+	// Handle empty filter
+	if (partition_filter.empty()) {
+		result.where_clause = "";
+		return result;
+	}
+
+	// Handle special keywords - no parsing needed
+	if (StringUtil::CIEquals(partition_filter, "NOT_PARTITIONED")) {
+		result.where_clause = partition_filter;
+		return result;
+	}
+
+	// For SQL WHERE clauses, we need to parse and validate
+	// We'll use DuckDB's parser to validate the syntax
+	try {
+		Parser parser;
+		// Create a SELECT statement with the WHERE clause to validate
+		string validation_query = StringUtil::Format("SELECT 1 WHERE %s", partition_filter);
+		parser.ParseQuery(validation_query);
+
+		if (parser.statements.empty()) {
+			throw BinderException("Invalid partition filter: could not parse filter");
+		}
+
+		// Validate that only one statement was parsed (prevent multiple statement injection)
+		if (parser.statements.size() > 1) {
+			throw BinderException("Invalid partition filter: only one statement is allowed");
+		}
+
+		// Extract referenced columns from the parsed expression by walking the expression tree
+		// Get the first statement and cast it to SelectStatement
+		auto &stmt = parser.statements[0];
+		if (stmt->type != StatementType::SELECT_STATEMENT) {
+			throw BinderException("Invalid partition filter: expected SELECT statement");
+		}
+		auto &select_stmt = stmt->Cast<SelectStatement>();
+
+		// Get the WHERE clause from the select statement
+		if (!select_stmt.node || select_stmt.node->type != QueryNodeType::SELECT_NODE) {
+			throw BinderException("Invalid partition filter: could not find WHERE clause");
+		}
+		auto &select_node = select_stmt.node->Cast<SelectNode>();
+		if (!select_node.where_clause) {
+			throw BinderException("Invalid partition filter: WHERE clause is empty");
+		}
+
+		// Walk the expression tree to find all column references
+		unordered_set<string> referenced_cols;
+		ParsedExpressionIterator::EnumerateChildren(
+		    *select_node.where_clause, [&](const ParsedExpression &child) {
+			    if (child.GetExpressionClass() == ExpressionClass::COLUMN_REF) {
+				    auto &col_ref = child.Cast<ColumnRefExpression>();
+				    string column_name = col_ref.GetColumnName();
+				    referenced_cols.insert(column_name);
+			    }
+		    });
+
+		// Build partition column name set for validation
+		unordered_set<string> valid_partition_columns;
+		auto partition_data = table.GetPartitionData();
+		if (partition_data) {
+			for (const auto &field : partition_data->fields) {
+				const auto &column_entry = table.GetColumn(LogicalIndex(field.field_id.index));
+				string column_name = column_entry.Name();
+				valid_partition_columns.insert(column_name);
+			}
+		}
+
+		// Validate that all referenced columns are partition columns
+		for (const auto &col : referenced_cols) {
+			if (valid_partition_columns.find(col) == valid_partition_columns.end()) {
+				throw BinderException(
+				    "Invalid partition filter: column '%s' is not a partition column. "
+				    "Partition columns are: %s",
+				    col, StringUtil::Join(valid_partition_columns, ", "));
+			}
+			result.referenced_columns.push_back(col);
+		}
+
+		result.where_clause = partition_filter;
+		return result;
+
+	} catch (const Exception &e) {
+		throw BinderException("Invalid partition filter: %s", e.what());
 	}
 }
 

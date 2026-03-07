@@ -216,7 +216,7 @@ void DuckLakeCompactor::GenerateCompactions(DuckLakeTableEntry &table,
 	filter_options.target_file_size = target_file_size;
 	// FIXME: pass in the sort_data so that list of files is approximately sorted in the same way
 	// (sorted by the min/max metadata)
-	auto files = metadata_manager.GetFilesForCompaction(table, type, delete_threshold, snapshot, filter_options);
+	auto files = metadata_manager.GetFilesForCompaction(table, type, delete_threshold, snapshot, filter_options, options.partition_filter);
 
 	// iterate over the files and split into separate compaction groups
 	compaction_map_t<DuckLakeCompactionCandidates> candidates;
@@ -624,6 +624,7 @@ static void GenerateCompaction(ClientContext &context, DuckLakeTransaction &tran
                                DuckLakeCatalog &ducklake_catalog, TableFunctionBindInput &input,
                                DuckLakeTableEntry &cur_table, CompactionType type, double delete_threshold,
                                uint64_t max_files, optional_idx min_file_size, optional_idx max_file_size,
+                               const string &partition_filter,  // NEW
                                vector<unique_ptr<LogicalOperator>> &compactions) {
 	switch (type) {
 	case CompactionType::MERGE_ADJACENT_TABLES: {
@@ -631,6 +632,7 @@ static void GenerateCompaction(ClientContext &context, DuckLakeTransaction &tran
 		options.max_files = max_files;
 		options.min_file_size = min_file_size;
 		options.max_file_size = max_file_size;
+		options.partition_filter = partition_filter;  // NEW
 		DuckLakeCompactor compactor(context, ducklake_catalog, transaction, *input.binder, cur_table.GetTableId(),
 		                            options);
 		compactor.GenerateCompactions(cur_table, compactions);
@@ -712,6 +714,19 @@ unique_ptr<LogicalOperator> BindCompaction(ClientContext &context, TableFunction
 		throw BinderException("The min_file_size must be less than max_file_size.");
 	}
 
+	// Parse partition_filter parameter (no parsing needed - validation happens in GetFilesForCompaction)
+	string partition_filter;
+	auto partition_filter_entry = input.named_parameters.find("partition_filter");
+	if (partition_filter_entry != input.named_parameters.end()) {
+		if (partition_filter_entry->second.IsNull()) {
+			throw BinderException("The partition_filter option must be a non-null string.");
+		}
+		partition_filter = StringValue::Get(partition_filter_entry->second);
+		if (partition_filter.empty()) {
+			throw BinderException("The partition_filter option must not be empty. To merge all files, omit the partition_filter parameter.");
+		}
+	}
+
 	if (input.inputs.size() == 1) {
 		// No default schema/table, we will perform rewrites on deletes in the whole database
 		auto schemas = ducklake_catalog.GetSchemas(context);
@@ -724,7 +739,7 @@ unique_ptr<LogicalOperator> BindCompaction(ClientContext &context, TableFunction
 					                                             cur_table.GetTableId(), "true") == "true") {
 						auto delete_threshold = GetDeleteThreshold(&dl_cur_schema, cur_table, ducklake_catalog, input);
 						GenerateCompaction(context, transaction, ducklake_catalog, input, cur_table, type,
-						                   delete_threshold, max_files, min_file_size, max_file_size, compactions);
+						                   delete_threshold, max_files, min_file_size, max_file_size, partition_filter, compactions);
 					}
 				}
 			});
@@ -758,7 +773,7 @@ unique_ptr<LogicalOperator> BindCompaction(ClientContext &context, TableFunction
 	if (auto_compact) {
 		auto delete_threshold = GetDeleteThreshold(dl_schema, ducklake_table, ducklake_catalog, input);
 		GenerateCompaction(context, transaction, ducklake_catalog, input, ducklake_table, type, delete_threshold,
-		                   max_files, min_file_size, max_file_size, compactions);
+		                   max_files, min_file_size, max_file_size, partition_filter, compactions);
 	}
 
 	return GenerateCompactionOperator(input, bind_index, compactions);
@@ -782,6 +797,7 @@ TableFunctionSet DuckLakeMergeAdjacentFilesFunction::GetFunctions() {
 		function.named_parameters["min_file_size"] = LogicalType::UBIGINT;
 		function.named_parameters["max_file_size"] = LogicalType::UBIGINT;
 		function.named_parameters["max_compacted_files"] = LogicalType::UBIGINT;
+		function.named_parameters["partition_filter"] = LogicalType::VARCHAR;  // NEW
 		if (type.size() == 2) {
 			function.named_parameters["schema"] = LogicalType::VARCHAR;
 		}
