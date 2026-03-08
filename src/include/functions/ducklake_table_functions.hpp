@@ -135,4 +135,9 @@ public:
 	DuckLakeSettingsFunction();
 };
 
+class DuckLakeStaticBackupFunction : public TableFunction {
+public:
+	DuckLakeStaticBackupFunction();
+};
+
 } // namespace duckdb

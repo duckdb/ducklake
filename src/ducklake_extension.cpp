@@ -50,6 +50,9 @@ static void LoadInternal(ExtensionLoader &loader) {
 	DuckLakeCleanupOrphanedFilesFunction cleanup_orphaned_files;
 	loader.RegisterFunction(cleanup_orphaned_files);
 
+	DuckLakeStaticBackupFunction backup;
+	loader.RegisterFunction(backup);
+
 	DuckLakeExpireSnapshotsFunction expire_snapshots;
 	loader.RegisterFunction(expire_snapshots);
 
