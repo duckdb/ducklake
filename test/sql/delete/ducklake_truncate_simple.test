@@ -1,0 +1,32 @@
+# name: test/sql/delete/ducklake_truncate_simple.test
+# description: simple TRUNCATE on ducklake table
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+
+test-env DATA_PATH __TEST_DIR__
+
+statement ok
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/ducklake_truncate_simple')
+
+statement ok
+CREATE TABLE ducklake.truncate_test(i INTEGER);
+
+statement ok
+INSERT INTO ducklake.truncate_test FROM range(10);
+
+query I
+SELECT COUNT(*) FROM ducklake.truncate_test;
+----
+10
+
+statement ok
+TRUNCATE ducklake.truncate_test;
+
+query I
+SELECT COUNT(*) FROM ducklake.truncate_test;
+----
+0
