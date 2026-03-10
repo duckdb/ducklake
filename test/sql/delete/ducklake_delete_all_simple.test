@@ -18,6 +18,11 @@ CREATE TABLE ducklake.delete_all_test(i INTEGER);
 statement ok
 INSERT INTO ducklake.delete_all_test FROM range(10);
 
+query II
+EXPLAIN DELETE FROM ducklake.delete_all_test;
+----
+physical_plan	<REGEX>:.*DUCKLAKE_TRUNCATE.*
+
 query I
 SELECT COUNT(*) FROM ducklake.delete_all_test;
 ----
