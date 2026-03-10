@@ -56,10 +56,8 @@ SourceResultType DuckLakeTruncate::GetDataInternal(ExecutionContext &context, Da
 			// handled via metadata manager
 			continue;
 		}
-		idx_t visible_rows = file_info.row_count;
-		if (file_info.delete_count <= visible_rows) {
-			visible_rows -= file_info.delete_count;
-		}
+		D_ASSERT(file_info.delete_count <= file_info.row_count);
+		idx_t visible_rows = file_info.row_count - file_info.delete_count;
 		total_deleted_count += visible_rows;
 
 		if (file_info.data_type == DuckLakeDataType::DATA_FILE) {
