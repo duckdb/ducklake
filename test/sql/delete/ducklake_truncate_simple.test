@@ -18,6 +18,11 @@ CREATE TABLE ducklake.truncate_test(i INTEGER);
 statement ok
 INSERT INTO ducklake.truncate_test FROM range(10);
 
+query II
+EXPLAIN TRUNCATE ducklake.truncate_test;
+----
+physical_plan	<REGEX>:.*DUCKLAKE_TRUNCATE.*
+
 query I
 SELECT COUNT(*) FROM ducklake.truncate_test;
 ----
