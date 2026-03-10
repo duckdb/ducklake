@@ -1,0 +1,32 @@
+# name: test/sql/delete/ducklake_delete_all_simple.test
+# description: simple delete-all on ducklake table
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+
+test-env DATA_PATH __TEST_DIR__
+
+statement ok
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/ducklake_delete_all_simple')
+
+statement ok
+CREATE TABLE ducklake.delete_all_test(i INTEGER);
+
+statement ok
+INSERT INTO ducklake.delete_all_test FROM range(10);
+
+query I
+SELECT COUNT(*) FROM ducklake.delete_all_test;
+----
+10
+
+statement ok
+DELETE FROM ducklake.delete_all_test;
+
+query I
+SELECT COUNT(*) FROM ducklake.delete_all_test;
+----
+0

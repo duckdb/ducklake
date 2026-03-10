@@ -125,6 +125,15 @@ struct DuckLakeDeleteMap {
 		delete_data_map.emplace(filename, std::move(delete_data));
 	}
 
+	vector<DuckLakeFileListExtendedEntry> GetAllFileInfos() const {
+		vector<DuckLakeFileListExtendedEntry> result;
+		result.reserve(file_map.size());
+		for (auto &entry : file_map) {
+			result.push_back(entry.second);
+		}
+		return result;
+	}
+
 private:
 	mutex lock;
 	unordered_map<string, DuckLakeFileListExtendedEntry> file_map;
