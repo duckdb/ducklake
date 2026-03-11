@@ -402,7 +402,7 @@ shared_ptr<BaseFileReader> DuckLakeMultiFileReader::CreateReader(ClientContext &
 	return MultiFileReader::CreateReader(context, file, options, file_options, interface);
 }
 
-vector<MultiFileColumnDefinition> MapColumns(MultiFileReaderData &reader_data,
+vector<MultiFileColumnDefinition> MapColumns(ClientContext &context, MultiFileReaderData &reader_data,
                                              const vector<MultiFileColumnDefinition> &global_map,
                                              const vector<unique_ptr<DuckLakeNameMapEntry>> &column_maps,
                                              bool parent_is_list = false) {
@@ -442,8 +442,9 @@ vector<MultiFileColumnDefinition> MapColumns(MultiFileReaderData &reader_data,
 				                            "found in filename \"%s\"",
 				                            column_map->source_name, reader_data.reader->file.path);
 			}
-			Value partition_val(entry->second);
-			result_col.default_expression = make_uniq<ConstantExpression>(partition_val.DefaultCastAs(result_col.type));
+			// Use GetValue to handle NULL values (__HIVE_DEFAULT_PARTITION__) and type casting
+			Value partition_val = HivePartitioning::GetValue(context, column_map->source_name, entry->second, result_col.type);
+			result_col.default_expression = make_uniq<ConstantExpression>(std::move(partition_val));
 			continue;
 		}
 
@@ -456,16 +457,16 @@ vector<MultiFileColumnDefinition> MapColumns(MultiFileReaderData &reader_data,
 		// recursively process any child nodes
 		if (!column_map->child_entries.empty()) {
 			bool is_list = result_col.type.id() == LogicalTypeId::LIST;
-			result_col.children = MapColumns(reader_data, result_col.children, column_map->child_entries, is_list);
+			result_col.children = MapColumns(context, reader_data, result_col.children, column_map->child_entries, is_list);
 		}
 	}
 	return result;
 }
 
-vector<MultiFileColumnDefinition> CreateNewMapping(MultiFileReaderData &reader_data,
+vector<MultiFileColumnDefinition> CreateNewMapping(ClientContext &context, MultiFileReaderData &reader_data,
                                                    const vector<MultiFileColumnDefinition> &global_map,
                                                    const DuckLakeNameMap &name_map) {
-	return MapColumns(reader_data, global_map, name_map.column_maps);
+	return MapColumns(context, reader_data, global_map, name_map.column_maps);
 }
 
 ReaderInitializeType DuckLakeMultiFileReader::CreateMapping(
@@ -509,7 +510,7 @@ ReaderInitializeType DuckLakeMultiFileReader::CreateMapping(
 			auto transaction = read_info.transaction.lock();
 			auto &mapping = transaction->GetMappingById(mapping_id);
 			// use the mapping to generate a new set of global columns for this file
-			auto mapped_columns = CreateNewMapping(reader_data, global_columns, mapping);
+			auto mapped_columns = CreateNewMapping(context, reader_data, global_columns, mapping);
 			return MultiFileReader::CreateMapping(context, reader_data, mapped_columns, column_ids_to_use, filters,
 			                                      multi_file_list, bind_data, virtual_columns,
 			                                      MultiFileColumnMappingMode::BY_NAME);

@@ -5,6 +5,7 @@
 #include "storage/ducklake_table_entry.hpp"
 #include "storage/ducklake_insert.hpp"
 #include "duckdb/common/constants.hpp"
+#include "duckdb/common/hive_partitioning.hpp"
 #include "duckdb/common/types/value.hpp"
 #include "duckdb/common/vector_operations/vector_operations.hpp"
 #include "duckdb/common/types/vector.hpp"
@@ -126,9 +127,11 @@ struct ParquetFileMetadata {
 
 struct DuckLakeFileProcessor {
 public:
-	DuckLakeFileProcessor(DuckLakeTransaction &transaction, const DuckLakeAddDataFilesData &bind_data)
-	    : transaction(transaction), table(bind_data.table), allow_missing(bind_data.allow_missing),
-	      ignore_extra_columns(bind_data.ignore_extra_columns), hive_partitioning(bind_data.hive_partitioning) {
+	DuckLakeFileProcessor(DuckLakeTransaction &transaction, ClientContext &context,
+	                      const DuckLakeAddDataFilesData &bind_data)
+	    : transaction(transaction), context(context), table(bind_data.table),
+	      allow_missing(bind_data.allow_missing), ignore_extra_columns(bind_data.ignore_extra_columns),
+	      hive_partitioning(bind_data.hive_partitioning) {
 	}
 
 	vector<DuckLakeDataFile> AddFiles(const vector<string> &globs);
@@ -152,6 +155,7 @@ private:
 
 private:
 	DuckLakeTransaction &transaction;
+	ClientContext &context;
 	DuckLakeTableEntry &table;
 	bool allow_missing;
 	bool ignore_extra_columns;
@@ -1051,9 +1055,19 @@ void DuckLakeFileProcessor::MapColumnStats(ParquetFileMetadata &file_metadata, D
 		auto &hive_value = entry.hive_value;
 
 		DuckLakeColumnStats column_stats(field_type);
-		column_stats.min = column_stats.max = hive_value.ToString();
-		column_stats.has_min = column_stats.has_max = true;
+		// num_values and null_count both needed to write count
+		// metadata in DuckLakeColumnStatsInfo::FromColumnStats
+		column_stats.has_num_values = true;
+		column_stats.num_values = file_metadata.row_count.GetIndex();
 		column_stats.has_null_count = true;
+		if (!hive_value.IsNull()) {
+			column_stats.min = column_stats.max = hive_value.ToString();
+			column_stats.has_min = column_stats.has_max = true;
+		} else {
+			// All rows in this file have NULL for this partition column
+			column_stats.null_count = file_metadata.row_count.GetIndex();
+			column_stats.any_valid = false;
+		};
 
 		result.column_stats.emplace(field_index, std::move(column_stats));
 	}
@@ -1083,7 +1097,9 @@ DuckLakeFileProcessor::MapColumns(ParquetFileMetadata &file_metadata,
 		}
 		auto hive_entry = hive_partitions.find(col->name);
 		if (hive_entry != hive_partitions.end()) {
-			column_maps.push_back(MapHiveColumn(file_metadata, entry->second.get(), Value(hive_entry->second)));
+			auto hive_value =
+			    HivePartitioning::GetValue(context, col->name, hive_entry->second, entry->second.get().Type());
+			column_maps.push_back(MapHiveColumn(file_metadata, entry->second.get(), hive_value));
 			field_id_map.erase(entry);
 			continue;
 		}
@@ -1096,7 +1112,8 @@ DuckLakeFileProcessor::MapColumns(ParquetFileMetadata &file_metadata,
 		auto hive_entry = hive_partitions.find(field_id.Name());
 		if (hive_entry != hive_partitions.end()) {
 			// the column exists in the hive partitions - check if the type matches
-			column_maps.push_back(MapHiveColumn(file_metadata, field_id, Value(hive_entry->second)));
+			auto hive_value = HivePartitioning::GetValue(context, field_id.Name(), hive_entry->second, field_id.Type());
+			column_maps.push_back(MapHiveColumn(file_metadata, field_id, hive_value));
 			continue;
 		}
 		// column does not exist - check if we are ignoring missing columns
@@ -1139,9 +1156,13 @@ void DuckLakeFileProcessor::MapPartitionColumns(ParquetFileMetadata &file) {
 			// key not found in the file path
 			continue;
 		}
-
+		// Get the correct type for the partition key based on the transform
+		// For YEAR/MONTH/DAY/HOUR transforms, the type is BIGINT, not the source column type
+		auto partition_key_type =
+		    DuckLakePartitionUtils::GetPartitionKeyType(partition_field.transform.type, field_id->Type());
+		auto hive_value = HivePartitioning::GetValue(context, partition_key_name, hive_entry->second, partition_key_type);
 		file.hive_partition_values.emplace_back(
-		    HivePartition {partition_field.field_id, field_id->Type(), Value(hive_entry->second)});
+		    HivePartition {partition_field.field_id, partition_key_type, hive_value});
 	}
 }
 
@@ -1238,7 +1259,7 @@ static void DuckLakeAddDataFilesExecute(ClientContext &context, TableFunctionInp
 	if (state.finished) {
 		return;
 	}
-	DuckLakeFileProcessor processor(transaction, bind_data);
+	DuckLakeFileProcessor processor(transaction, context, bind_data);
 	auto files_to_add = processor.AddFiles(bind_data.globs);
 	// add the files
 	transaction.AppendFiles(bind_data.table.GetTableId(), std::move(files_to_add));
