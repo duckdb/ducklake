@@ -1,0 +1,202 @@
+# name: test/sql/metadata/appender_partition_values.test
+# description: Test partition values are correctly written via the DuckDB Appender API
+# group: [metadata]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+
+test-env DATA_PATH __TEST_DIR__
+
+statement ok
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/ducklake_appender_partition_test', METADATA_CATALOG 'dl', DATA_INLINING_ROW_LIMIT 0)
+
+# ------------------------------------------
+# Single partition column with multiple files
+# ------------------------------------------
+statement ok
+CREATE TABLE ducklake.single_partition(id INTEGER, category VARCHAR, value INTEGER);
+ALTER TABLE ducklake.single_partition SET PARTITIONED BY (category);
+
+# Create multiple files for partition 'A' (two separate inserts)
+statement ok
+INSERT INTO ducklake.single_partition VALUES (1, 'A', 100), (2, 'A', 200);
+
+statement ok
+INSERT INTO ducklake.single_partition VALUES (3, 'A', 300);
+
+# Create files for other partitions
+statement ok
+INSERT INTO ducklake.single_partition VALUES (4, 'B', 400), (5, 'B', 500);
+
+statement ok
+INSERT INTO ducklake.single_partition VALUES (6, 'C', 600);
+
+# Verify we have 4 data files total
+query I
+SELECT COUNT(*) FROM dl.ducklake_data_file WHERE table_id = (SELECT table_id FROM dl.ducklake_table WHERE table_name = 'single_partition')
+----
+4
+
+# Verify partition values were recorded (should have entries for each file)
+query I
+SELECT COUNT(*) FROM dl.ducklake_file_partition_value
+WHERE table_id = (SELECT table_id FROM dl.ducklake_table WHERE table_name = 'single_partition')
+----
+4
+
+# Verify 3 distinct partition values
+query I
+SELECT COUNT(DISTINCT partition_value) FROM dl.ducklake_file_partition_value
+WHERE table_id = (SELECT table_id FROM dl.ducklake_table WHERE table_name = 'single_partition')
+----
+3
+
+# Verify data can be read back
+query III
+SELECT * FROM ducklake.single_partition ORDER BY id
+----
+1	A	100
+2	A	200
+3	A	300
+4	B	400
+5	B	500
+6	C	600
+
+# Verify partition pruning works - should read only 2 files for partition 'A'
+query II
+EXPLAIN ANALYZE SELECT * FROM ducklake.single_partition WHERE category = 'A'
+----
+analyzed_plan	<REGEX>:.*Total Files Read: 2.*
+
+query III
+SELECT * FROM ducklake.single_partition WHERE category = 'A' ORDER BY id
+----
+1	A	100
+2	A	200
+3	A	300
+
+# Pruning for partition 'B' should read 1 file
+query II
+EXPLAIN ANALYZE SELECT * FROM ducklake.single_partition WHERE category = 'B'
+----
+analyzed_plan	<REGEX>:.*Total Files Read: 1.*
+
+query III
+SELECT * FROM ducklake.single_partition WHERE category = 'B' ORDER BY id
+----
+4	B	400
+5	B	500
+
+# ------------------------------------------
+# Multiple partition columns with multiple files
+# ------------------------------------------
+statement ok
+CREATE TABLE ducklake.multi_partition(id INTEGER, year INTEGER, month INTEGER, value VARCHAR);
+ALTER TABLE ducklake.multi_partition SET PARTITIONED BY (year, month);
+
+# Create separate files with different partition combinations
+statement ok
+INSERT INTO ducklake.multi_partition VALUES (1, 2023, 1, 'jan2023_a');
+
+statement ok
+INSERT INTO ducklake.multi_partition VALUES (2, 2023, 1, 'jan2023_b');
+
+statement ok
+INSERT INTO ducklake.multi_partition VALUES (3, 2023, 2, 'feb2023');
+
+statement ok
+INSERT INTO ducklake.multi_partition VALUES (4, 2024, 1, 'jan2024');
+
+# Verify we have 4 data files
+query I
+SELECT COUNT(*) FROM dl.ducklake_data_file WHERE table_id = (SELECT table_id FROM dl.ducklake_table WHERE table_name = 'multi_partition')
+----
+4
+
+# Each file has 2 partition columns, so 8 partition values total
+query I
+SELECT COUNT(*) FROM dl.ducklake_file_partition_value
+WHERE table_id = (SELECT table_id FROM dl.ducklake_table WHERE table_name = 'multi_partition')
+----
+8
+
+# Data can be read back correctly
+query IIII
+SELECT * FROM ducklake.multi_partition ORDER BY id
+----
+1	2023	1	jan2023_a
+2	2023	1	jan2023_b
+3	2023	2	feb2023
+4	2024	1	jan2024
+
+# Partition pruning with multiple columns - year=2023 AND month=1 should read 2 files
+query II
+EXPLAIN ANALYZE SELECT * FROM ducklake.multi_partition WHERE year = 2023 AND month = 1
+----
+analyzed_plan	<REGEX>:.*Total Files Read: 2.*
+
+query IIII
+SELECT * FROM ducklake.multi_partition WHERE year = 2023 AND month = 1 ORDER BY id
+----
+1	2023	1	jan2023_a
+2	2023	1	jan2023_b
+
+# Pruning for year=2024 should read 1 file
+query II
+EXPLAIN ANALYZE SELECT * FROM ducklake.multi_partition WHERE year = 2024
+----
+analyzed_plan	<REGEX>:.*Total Files Read: 1.*
+
+query IIII
+SELECT * FROM ducklake.multi_partition WHERE year = 2024 ORDER BY id
+----
+4	2024	1	jan2024
+
+# ------------------------------------------
+# Adding more data to existing partitions
+# ------------------------------------------
+statement ok
+INSERT INTO ducklake.single_partition VALUES (7, 'A', 700);
+
+statement ok
+INSERT INTO ducklake.single_partition VALUES (8, 'D', 800);
+
+# Should now have 6 data files (4 original + 2 new)
+query I
+SELECT COUNT(*) FROM dl.ducklake_data_file WHERE table_id = (SELECT table_id FROM dl.ducklake_table WHERE table_name = 'single_partition')
+----
+6
+
+# Data integrity check
+query I
+SELECT COUNT(*) FROM ducklake.single_partition
+----
+8
+
+# Partition 'A' should now have 3 files and all data
+query II
+EXPLAIN ANALYZE SELECT * FROM ducklake.single_partition WHERE category = 'A'
+----
+analyzed_plan	<REGEX>:.*Total Files Read: 3.*
+
+query III
+SELECT * FROM ducklake.single_partition WHERE category = 'A' ORDER BY id
+----
+1	A	100
+2	A	200
+3	A	300
+7	A	700
+
+# New partition 'D' should have 1 file
+query II
+EXPLAIN ANALYZE SELECT * FROM ducklake.single_partition WHERE category = 'D'
+----
+analyzed_plan	<REGEX>:.*Total Files Read: 1.*
+
+query III
+SELECT * FROM ducklake.single_partition WHERE category = 'D' ORDER BY id
+----
+8	D	800

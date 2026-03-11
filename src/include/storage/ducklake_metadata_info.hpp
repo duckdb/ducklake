@@ -158,7 +158,7 @@ struct DuckLakeFileInfo {
 	optional_idx max_partial_file_snapshot;
 	string encryption_key;
 	MappingIndex mapping_id;
-	vector<DuckLakeColumnStatsInfo> column_stats;
+	map<FieldIndex, DuckLakeColumnStats> column_stats;
 	vector<DuckLakeFilePartitionInfo> partition_values;
 };
 
