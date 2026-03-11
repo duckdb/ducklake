@@ -261,7 +261,7 @@ private:
 	unique_ptr<DuckLakeCatalogSet> new_schemas;
 	map<SchemaIndex, reference<DuckLakeSchemaEntry>> dropped_schemas;
 	//! Local changes made to tables
-	mutex table_data_changes_lock;
+	mutable mutex table_data_changes_lock;
 	map<TableIndex, LocalTableDataChanges> table_data_changes;
 	//! Snapshot cache for the AT (...) conditions that are referenced in the transaction
 	value_map_t<DuckLakeSnapshot> snapshot_cache;
