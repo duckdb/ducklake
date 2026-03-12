@@ -1690,7 +1690,7 @@ DuckLakeMetadataManager::GetExtendedFilesForTable(DuckLakeTableEntry &table, Duc
 SELECT data.data_file_id, del.delete_file_id, data.record_count, COALESCE(del.delete_count, 0), %s
 FROM {METADATA_CATALOG}.ducklake_data_file data
 LEFT JOIN (
-		SELECT *
+	SELECT *
     FROM {METADATA_CATALOG}.ducklake_delete_file
     WHERE table_id=%d  AND {SNAPSHOT_ID} >= begin_snapshot
           AND ({SNAPSHOT_ID} < end_snapshot OR end_snapshot IS NULL)
