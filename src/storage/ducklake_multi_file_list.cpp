@@ -280,6 +280,7 @@ vector<DuckLakeFileListExtendedEntry> DuckLakeMultiFileList::GetFilesExtended() 
 		file_entry.delete_file_id = DataFileIndex();
 		file_entry.row_count = file.row_count;
 		if (!file.delete_files.empty()) {
+			D_ASSERT(file.delete_files.size() == 1);
 			file_entry.delete_count = file.delete_files.back().delete_count;
 		}
 		file_entry.file = GetFileData(file);
