@@ -68,6 +68,7 @@ void DuckLakeTransaction::Commit() {
 	}
 	connection.reset();
 
+	lock_guard<mutex> guard(table_data_changes_lock);
 	table_data_changes.clear();
 }
 
@@ -79,6 +80,7 @@ void DuckLakeTransaction::Rollback() {
 	}
 	CleanupFiles();
 
+	lock_guard<mutex> guard(table_data_changes_lock);
 	table_data_changes.clear();
 }
 
@@ -104,13 +106,13 @@ Connection &DuckLakeTransaction::GetConnection() {
 	return *connection;
 }
 
-bool DuckLakeTransaction::SchemaChangesMade() {
+bool DuckLakeTransaction::SchemaChangesMade() const {
 	return !new_tables.empty() || !dropped_tables.empty() || new_schemas || !dropped_schemas.empty() ||
 	       !dropped_views.empty() || !new_macros.empty() || !dropped_scalar_macros.empty() ||
 	       !dropped_table_macros.empty();
 }
 
-bool DuckLakeTransaction::ChangesMade() {
+bool DuckLakeTransaction::ChangesMade() const {
 	return SchemaChangesMade() || !table_data_changes.empty() || !dropped_files.empty() ||
 	       !new_name_maps.name_maps.empty();
 }
@@ -222,7 +224,7 @@ void GetTransactionViewChanges(reference<CatalogEntry> view_entry, TransactionCh
 	}
 }
 
-TransactionChangeInformation DuckLakeTransaction::GetTransactionChanges() {
+TransactionChangeInformation DuckLakeTransaction::GetTransactionChanges() const {
 	TransactionChangeInformation changes;
 	for (auto &dropped_table_idx : dropped_tables) {
 		changes.dropped_tables.insert(dropped_table_idx);
@@ -335,7 +337,7 @@ struct DuckLakeCommitState {
 };
 
 void DuckLakeTransaction::AddTableChanges(TableIndex table_id, const LocalTableDataChanges &table_changes,
-                                          TransactionChangeInformation &changes) {
+                                          TransactionChangeInformation &changes) const {
 	bool inserted_data = false;
 	bool flushed_inline_data = false;
 	for (auto &file : table_changes.new_data_files) {
@@ -390,7 +392,7 @@ void AddChangeInfo(DuckLakeCommitState &commit_state, SnapshotChangeInfo &change
 }
 
 string DuckLakeTransaction::WriteSnapshotChanges(DuckLakeCommitState &commit_state,
-                                                 TransactionChangeInformation &changes) {
+                                                 TransactionChangeInformation &changes) const {
 	SnapshotChangeInfo change_info;
 
 	// re-add all inserted tables - transaction-local table identifiers should have been converted at this stage
@@ -489,6 +491,7 @@ void DuckLakeTransaction::CleanupFiles() {
 	// remove any files that were written
 	auto context_ref = context.lock();
 	auto &fs = FileSystem::GetFileSystem(db);
+	lock_guard<mutex> guard(table_data_changes_lock);
 	for (auto &entry : table_data_changes) {
 		auto &table_changes = entry.second;
 		for (auto &file : table_changes.new_data_files) {
@@ -573,7 +576,7 @@ void ConflictCheck(const case_insensitive_map_t<reference_set_t<CatalogEntry>> &
 
 void DuckLakeTransaction::CheckForConflicts(const TransactionChangeInformation &changes,
                                             const SnapshotChangeInformation &other_changes,
-                                            DuckLakeSnapshot transaction_snapshot) {
+                                            DuckLakeSnapshot transaction_snapshot) const {
 	// check if we are dropping the same table as another transaction
 	for (auto &dropped_idx : changes.dropped_tables) {
 		ConflictCheck(dropped_idx, other_changes.dropped_tables, "drop table", "dropped it already");
@@ -781,6 +784,7 @@ DuckLakePartitionInfo DuckLakeTransaction::GetNewPartitionKey(DuckLakeCommitStat
 	}
 
 	// if we wrote any data with this partition id - rewrite it to the latest partition id
+	lock_guard<mutex> guard(table_data_changes_lock);
 	for (auto &entry : table_data_changes) {
 		auto &table_changes = entry.second;
 		for (auto &file : table_changes.new_data_files) {
@@ -1356,6 +1360,7 @@ NewDataInfo DuckLakeTransaction::GetNewDataFiles(string &batch_query, DuckLakeCo
 		auto &schema = ducklake_catalog.GetSchemaForSnapshot(*this, GetSnapshot());
 		dl_stats = ducklake_catalog.ConstructStatsMap(*stats, schema);
 	}
+	lock_guard<mutex> guard(table_data_changes_lock);
 	for (auto &entry : table_data_changes) {
 		auto table_id = commit_state.GetTableId(entry.first);
 		if (table_id.IsTransactionLocal()) {
@@ -1410,7 +1415,7 @@ NewDataInfo DuckLakeTransaction::GetNewDataFiles(string &batch_query, DuckLakeCo
 			result.new_files.push_back(std::move(data_file));
 		}
 		// write any deletes that were made on top of these transaction-local files
-		AddDeletes(table_id, std::move(delete_files));
+		AddDeletesLocked(table_id, std::move(delete_files));
 
 		if (table_changes.new_inlined_data) {
 			auto &inlined_data = *table_changes.new_inlined_data;
@@ -1525,6 +1530,7 @@ NewNameMapInfo DuckLakeTransaction::GetNewNameMaps(DuckLakeCommitState &commit_s
 		remap_mapping_index[local_map_id] = new_map_id;
 	}
 	// iterate over the data files to point them towards any new mapping ids
+	lock_guard<mutex> guard(table_data_changes_lock);
 	for (auto &entry : table_data_changes) {
 		auto &table_changes = entry.second;
 		for (auto &data_file : table_changes.new_data_files) {
@@ -1540,7 +1546,7 @@ NewNameMapInfo DuckLakeTransaction::GetNewNameMaps(DuckLakeCommitState &commit_s
 	return result;
 }
 
-vector<DuckLakeDeletedInlinedDataInfo> DuckLakeTransaction::GetNewInlinedDeletes(DuckLakeCommitState &commit_state) {
+vector<DuckLakeDeletedInlinedDataInfo> DuckLakeTransaction::GetNewInlinedDeletes(DuckLakeCommitState &commit_state) const {
 	vector<DuckLakeDeletedInlinedDataInfo> result;
 	for (auto &entry : table_data_changes) {
 		auto table_id = commit_state.GetTableId(entry.first);
@@ -1639,7 +1645,12 @@ string DuckLakeTransaction::CommitChanges(DuckLakeCommitState &commit_state,
 	}
 
 	// write new data / data files
-	if (!table_data_changes.empty()) {
+	bool has_table_data_changes = false;
+	{
+		lock_guard<mutex> guard(table_data_changes_lock);
+		has_table_data_changes = !table_data_changes.empty();
+	}
+	if (has_table_data_changes) {
 		auto result = GetNewDataFiles(batch_queries, commit_state, stats);
 		batch_queries += metadata_manager->WriteNewDataFiles(commit_snapshot, result.new_files, new_tables_result, new_schemas_result);
 		batch_queries += metadata_manager->WriteNewInlinedData(commit_snapshot, result.new_inlined_data,
@@ -1655,7 +1666,7 @@ string DuckLakeTransaction::CommitChanges(DuckLakeCommitState &commit_state,
 		batch_queries += metadata_manager->DropDataFiles(dropped_indexes);
 	}
 
-	if (!table_data_changes.empty()) {
+	if (has_table_data_changes) {
 		// write new delete files
 		vector<DuckLakeOverwrittenDeleteFile> overwritten_delete_files;
 		auto file_list = GetNewDeleteFiles(commit_state, overwritten_delete_files);
@@ -1707,6 +1718,7 @@ string DuckLakeTransaction::CommitChanges(DuckLakeCommitState &commit_state,
 CompactionInformation DuckLakeTransaction::GetCompactionChanges(DuckLakeSnapshot &commit_snapshot,
                                                                 CompactionType type) {
 	CompactionInformation result;
+	lock_guard<mutex> guard(table_data_changes_lock);
 	for (auto &entry : table_data_changes) {
 		auto table_id = entry.first;
 		auto &table_changes = entry.second;
@@ -2009,7 +2021,7 @@ bool DuckLakeTransaction::HasTransactionInlinedData(TableIndex table_id) const {
 	return table_changes.new_inlined_data != nullptr;
 }
 
-vector<DuckLakeDataFile> DuckLakeTransaction::GetTransactionLocalFiles(TableIndex table_id) {
+vector<DuckLakeDataFile> DuckLakeTransaction::GetTransactionLocalFiles(TableIndex table_id) const {
 	auto entry = table_data_changes.find(table_id);
 	if (entry == table_data_changes.end()) {
 		return vector<DuckLakeDataFile>();
@@ -2017,7 +2029,7 @@ vector<DuckLakeDataFile> DuckLakeTransaction::GetTransactionLocalFiles(TableInde
 	return entry->second.new_data_files;
 }
 
-shared_ptr<DuckLakeInlinedData> DuckLakeTransaction::GetTransactionLocalInlinedData(TableIndex table_id) {
+shared_ptr<DuckLakeInlinedData> DuckLakeTransaction::GetTransactionLocalInlinedData(TableIndex table_id) const {
 	auto entry = table_data_changes.find(table_id);
 	if (entry == table_data_changes.end()) {
 		return nullptr;
@@ -2037,6 +2049,7 @@ shared_ptr<DuckLakeInlinedData> DuckLakeTransaction::GetTransactionLocalInlinedD
 }
 
 void DuckLakeTransaction::DropTransactionLocalFile(TableIndex table_id, const string &path) {
+	lock_guard<mutex> guard(table_data_changes_lock);
 	auto entry = table_data_changes.find(table_id);
 	if (entry == table_data_changes.end()) {
 		throw InternalException(
@@ -2323,8 +2336,7 @@ void DuckLakeTransaction::RemoveColumnFromLocalInlinedData(TableIndex table_id, 
 }
 
 optional_ptr<DuckLakeInlinedDataDeletes> DuckLakeTransaction::GetInlinedDeletes(TableIndex table_id,
-                                                                                const string &table_name) {
-	lock_guard<mutex> guard(table_data_changes_lock);
+                                                                                const string &table_name) const {
 	auto entry = table_data_changes.find(table_id);
 	if (entry == table_data_changes.end()) {
 		return nullptr;
@@ -2355,6 +2367,7 @@ void DuckLakeTransaction::AddNewInlinedFileDeletes(TableIndex table_id, idx_t fi
 vector<DuckLakeInlinedFileDeletionInfo>
 DuckLakeTransaction::GetNewInlinedFileDeletes(DuckLakeCommitState &commit_state) {
 	vector<DuckLakeInlinedFileDeletionInfo> result;
+	lock_guard<mutex> guard(table_data_changes_lock);
 	for (auto &entry : table_data_changes) {
 		auto table_id = commit_state.GetTableId(entry.first);
 		auto &table_changes = entry.second;
@@ -2377,6 +2390,10 @@ void DuckLakeTransaction::AddDeletes(TableIndex table_id, vector<DuckLakeDeleteF
 		return;
 	}
 	lock_guard<mutex> guard(table_data_changes_lock);
+	AddDeletesLocked(table_id, std::move(files));
+}
+
+void DuckLakeTransaction::AddDeletesLocked(TableIndex table_id, vector<DuckLakeDeleteFile> files) {
 	auto &table_changes = table_data_changes[table_id];
 	auto &table_delete_map = table_changes.new_delete_files;
 	for (auto &file : files) {
@@ -2411,7 +2428,7 @@ void DuckLakeTransaction::AddCompaction(TableIndex table_id, DuckLakeCompactionE
 	table_changes.compactions.push_back(std::move(entry));
 }
 
-bool DuckLakeTransaction::HasLocalDeletes(TableIndex table_id) {
+bool DuckLakeTransaction::HasLocalDeletes(TableIndex table_id) const {
 	auto entry = table_data_changes.find(table_id);
 	if (entry == table_data_changes.end()) {
 		return false;
@@ -2419,7 +2436,7 @@ bool DuckLakeTransaction::HasLocalDeletes(TableIndex table_id) {
 	return !entry->second.new_delete_files.empty();
 }
 
-bool DuckLakeTransaction::HasAnyLocalChanges(TableIndex table_id) {
+bool DuckLakeTransaction::HasAnyLocalChanges(TableIndex table_id) const {
 	auto entry = table_data_changes.find(table_id);
 	if (entry != table_data_changes.end() && !entry->second.IsEmpty()) {
 		return true;
@@ -2427,7 +2444,8 @@ bool DuckLakeTransaction::HasAnyLocalChanges(TableIndex table_id) {
 	return tables_deleted_from.find(table_id) != tables_deleted_from.end();
 }
 
-void DuckLakeTransaction::GetLocalDeleteForFile(TableIndex table_id, const string &path, DuckLakeFileData &result) {
+void DuckLakeTransaction::GetLocalDeleteForFile(TableIndex table_id, const string &path,
+                                                DuckLakeFileData &result) const {
 	auto entry = table_data_changes.find(table_id);
 	if (entry == table_data_changes.end()) {
 		return;
@@ -2444,8 +2462,7 @@ void DuckLakeTransaction::GetLocalDeleteForFile(TableIndex table_id, const strin
 	result.encryption_key = delete_file.encryption_key;
 }
 
-bool DuckLakeTransaction::HasLocalInlinedFileDeletes(TableIndex table_id) {
-	lock_guard<mutex> guard(table_data_changes_lock);
+bool DuckLakeTransaction::HasLocalInlinedFileDeletes(TableIndex table_id) const {
 	auto entry = table_data_changes.find(table_id);
 	if (entry == table_data_changes.end()) {
 		return false;
@@ -2457,8 +2474,8 @@ bool DuckLakeTransaction::HasLocalInlinedFileDeletes(TableIndex table_id) {
 	return !table_changes.new_inlined_file_deletes->file_deletes.empty();
 }
 
-void DuckLakeTransaction::GetLocalInlinedFileDeletesForFile(TableIndex table_id, idx_t file_id, set<idx_t> &result) {
-	lock_guard<mutex> guard(table_data_changes_lock);
+void DuckLakeTransaction::GetLocalInlinedFileDeletesForFile(TableIndex table_id, idx_t file_id,
+                                                            set<idx_t> &result) const {
 	auto entry = table_data_changes.find(table_id);
 	if (entry == table_data_changes.end()) {
 		return;
@@ -2479,6 +2496,7 @@ void DuckLakeTransaction::GetLocalInlinedFileDeletesForFile(TableIndex table_id,
 
 void DuckLakeTransaction::TransactionLocalDelete(TableIndex table_id, const string &data_file_path,
                                                  DuckLakeDeleteFile delete_file) {
+	lock_guard<mutex> guard(table_data_changes_lock);
 	auto entry = table_data_changes.find(table_id);
 	if (entry == table_data_changes.end()) {
 		throw InternalException(
@@ -2540,10 +2558,11 @@ void DuckLakeTransaction::DropTable(DuckLakeTableEntry &table) {
 		if (schema_entry == new_tables.end()) {
 			throw InternalException("Dropping a transaction local table that does not exist?");
 		}
-		auto table_id = table.GetTableId();
-		schema_entry->second->DropEntry(table.name);
-		// if we have written any files for this table - clean them up
-		auto table_entry = table_data_changes.find(table_id);
+			auto table_id = table.GetTableId();
+			schema_entry->second->DropEntry(table.name);
+			// if we have written any files for this table - clean them up
+			lock_guard<mutex> guard(table_data_changes_lock);
+			auto table_entry = table_data_changes.find(table_id);
 		if (table_entry != table_data_changes.end()) {
 			auto &table_changes = table_entry->second;
 			auto context_ref = context.lock();
