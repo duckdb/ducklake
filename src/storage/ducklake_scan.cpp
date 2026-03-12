@@ -213,7 +213,8 @@ TableFunction DuckLakeFunctions::GetDuckLakeScanFunction(DatabaseInstance &insta
 
 DuckLakeFunctionInfo::DuckLakeFunctionInfo(DuckLakeTableEntry &table, DuckLakeTransaction &transaction_p,
                                            DuckLakeSnapshot snapshot)
-    : table(table), transaction(transaction_p.shared_from_this()), snapshot(snapshot) {
+    : table(table), transaction(transaction_p.shared_from_this()), table_name(table.name), snapshot(snapshot),
+      table_id(table.GetTableId()) {
 }
 
 shared_ptr<DuckLakeFunctionInfo>

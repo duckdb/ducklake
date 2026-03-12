@@ -11,6 +11,7 @@
 #include "storage/ducklake_scan.hpp"
 #include "storage/ducklake_transaction.hpp"
 #include "duckdb/planner/operator/logical_delete.hpp"
+#include "duckdb/planner/operator/logical_get.hpp"
 
 namespace duckdb {
 
@@ -20,7 +21,7 @@ public:
 };
 
 DuckLakeTruncate::DuckLakeTruncate(PhysicalPlan &physical_plan, DuckLakeTableEntry &table)
-    : PhysicalOperator(physical_plan, PhysicalOperatorType::EXTENSION, {LogicalType::BIGINT}, 0), table(table) {
+    : PhysicalOperator(physical_plan, PhysicalOperatorType::EXTENSION, {LogicalType::UBIGINT}, 0), table(table) {
 }
 
 unique_ptr<GlobalSourceState> DuckLakeTruncate::GetGlobalSourceState(ClientContext &context) const {
@@ -41,47 +42,40 @@ SourceResultType DuckLakeTruncate::GetDataInternal(ExecutionContext &context, Da
 	auto transaction_local_data = transaction.GetTransactionLocalInlinedData(table.GetTableId());
 	DuckLakeMultiFileList file_list(read_info, std::move(transaction_local_files), transaction_local_data);
 
-	idx_t total_deleted_count = 0;
 	auto &metadata_manager = transaction.GetMetadataManager();
 	auto snapshot = transaction.GetSnapshot();
-	for (auto &inlined_table : table.GetInlinedDataTables()) {
-		auto inlined_count = metadata_manager.GetNetInlinedRowCount(inlined_table.table_name, snapshot);
-		total_deleted_count += inlined_count;
-		metadata_manager.DeleteInlinedData(inlined_table);
-	}
-
+	uint64_t total_deleted_count = 0;
 	auto files = file_list.GetFilesExtended();
 	for (auto &file_info : files) {
-		if (file_info.data_type == DuckLakeDataType::INLINED_DATA) {
-			// handled via metadata manager
-			continue;
-		}
-		D_ASSERT(file_info.delete_count <= file_info.row_count);
-		idx_t visible_rows = file_info.row_count - file_info.delete_count;
-		total_deleted_count += visible_rows;
-
-		if (file_info.data_type == DuckLakeDataType::DATA_FILE) {
+		switch (file_info.data_type) {
+		case DuckLakeDataType::DATA_FILE: {
+			D_ASSERT(file_info.delete_count <= file_info.row_count);
+			total_deleted_count += file_info.row_count - file_info.delete_count;
 			if (file_info.file_id.IsValid()) {
 				transaction.DropFile(table.GetTableId(), file_info.file_id, file_info.file.path);
 			} else {
 				transaction.DropTransactionLocalFile(table.GetTableId(), file_info.file.path);
 			}
-			continue;
+			break;
 		}
-
-		set<idx_t> deletes;
-		for (idx_t i = 0; i < file_info.row_count; i++) {
-			deletes.insert(i);
+		case DuckLakeDataType::INLINED_DATA: {
+			auto inlined_count = metadata_manager.GetNetInlinedRowCount(file_info.file.path, snapshot);
+			total_deleted_count += inlined_count;
+			transaction.MarkInlinedDataDeleted(file_info.file.path);
+			break;
 		}
-		if (file_info.data_type == DuckLakeDataType::TRANSACTION_LOCAL_INLINED_DATA) {
-			transaction.DeleteFromLocalInlinedData(table.GetTableId(), std::move(deletes));
-		} else {
-			transaction.AddNewInlinedDeletes(table.GetTableId(), file_info.file.path, std::move(deletes));
+		case DuckLakeDataType::TRANSACTION_LOCAL_INLINED_DATA: {
+			total_deleted_count += file_info.row_count;
+			transaction.TruncateLocalInlinedData(table.GetTableId());
+			break;
+		}
+		default:
+			throw InternalException("Unsupported DuckLakeDataType in truncate");
 		}
 	}
 
 	chunk.SetCardinality(1);
-	chunk.SetValue(0, 0, Value::BIGINT(NumericCast<int64_t>(total_deleted_count)));
+	chunk.SetValue(0, 0, Value::UBIGINT(total_deleted_count));
 	return SourceResultType::FINISHED;
 }
 
@@ -96,7 +90,11 @@ InsertionOrderPreservingMap<string> DuckLakeTruncate::ParamsToString() const {
 }
 
 PhysicalOperator &DuckLakeCatalog::PlanDelete(ClientContext &context, PhysicalPlanGenerator &planner, LogicalDelete &op) {
-	bool delete_all = !op.children.empty() && op.children[0]->type == LogicalOperatorType::LOGICAL_GET;
+	bool delete_all = false;
+	if (op.children.size() == 1 && op.children[0]->type == LogicalOperatorType::LOGICAL_GET) {
+		auto &get = op.children[0]->Cast<LogicalGet>();
+		delete_all = get.table_filters.filters.empty();
+	}
 	if (!delete_all) {
 		return Catalog::PlanDelete(context, planner, op);
 	}

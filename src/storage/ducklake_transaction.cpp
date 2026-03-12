@@ -2558,6 +2558,11 @@ void DuckLakeTransaction::DeleteSnapshots(const vector<DuckLakeSnapshotInfo> &sn
 	metadata_manager.DeleteSnapshots(snapshots);
 }
 
+void DuckLakeTransaction::MarkInlinedDataDeleted(const string &inlined_table_name) {
+	auto &metadata_manager = GetMetadataManager();
+	metadata_manager.MarkInlinedDataDeleted(GetSnapshot(), inlined_table_name);
+}
+
 void DuckLakeTransaction::DeleteInlinedData(const DuckLakeInlinedTableInfo &inlined_table) {
 	auto &metadata_manager = GetMetadataManager();
 	metadata_manager.DeleteInlinedData(inlined_table);
@@ -2708,6 +2713,22 @@ void DuckLakeTransaction::AddNewInlinedDeletes(TableIndex table_id, const string
 void DuckLakeTransaction::DeleteFromLocalInlinedData(TableIndex table_id, set<idx_t> new_deletes) {
 	auto context_ref = context.lock();
 	local_changes.DeleteFromLocalInlinedData(*context_ref, table_id, std::move(new_deletes));
+}
+
+void DuckLakeTransaction::TruncateLocalInlinedData(TableIndex table_id) {
+	lock_guard<mutex> guard(table_data_changes_lock);
+	auto entry = table_data_changes.find(table_id);
+	if (entry == table_data_changes.end()) {
+		throw InternalException("TruncateLocalInlinedData called but no transaction-local data exists for table");
+	}
+	auto &table_changes = entry->second;
+	if (!table_changes.new_inlined_data) {
+		throw InternalException("TruncateLocalInlinedData called but no inlined data exists");
+	}
+	table_changes.new_inlined_data.reset();
+	if (table_changes.IsEmpty()) {
+		table_data_changes.erase(entry);
+	}
 }
 
 void DuckLakeTransaction::AddColumnToLocalInlinedData(TableIndex table_id, const LogicalType &new_column_type,

@@ -1,0 +1,41 @@
+# name: test/sql/delete/truncate_table_time_travel.test
+# description: Verify time travel works correctly across TRUNCATE
+# group: [delete]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+
+test-env DATA_PATH __TEST_DIR__
+
+
+statement ok
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/ducklake_truncate_time_travel_files', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE ducklake.time_travel_test(id INTEGER);
+
+statement ok
+INSERT INTO ducklake.time_travel_test VALUES (1), (2), (3);
+
+statement ok
+SET VARIABLE pre_truncate_snapshot = (SELECT max(snapshot_id) FROM ducklake.snapshots());
+
+query I
+TRUNCATE ducklake.time_travel_test
+----
+3
+
+query I
+SELECT COUNT(*) FROM ducklake.time_travel_test
+----
+0
+
+query I
+SELECT id FROM ducklake.time_travel_test AT (VERSION => getvariable('pre_truncate_snapshot')) ORDER BY ALL
+----
+1
+2
+3
