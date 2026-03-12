@@ -26,8 +26,18 @@
 #include "duckdb/function/scalar_macro_function.hpp"
 #include "duckdb/function/table_macro_function.hpp"
 #include "storage/ducklake_macro_entry.hpp"
+#include "storage/ducklake_metadata_info.hpp"
 
 namespace duckdb {
+
+struct DuckLakeCatalog::LoadedSchemaState {
+	DuckLakeCatalogInfo loaded_catalog;
+	unique_ptr<DuckLakeCatalogSet> schema_set;
+	vector<unique_ptr<CreateSchemaInfo>> schema_infos;
+	vector<unique_ptr<CreateTableInfo>> table_infos;
+	vector<unique_ptr<CreateViewInfo>> view_infos;
+	vector<unique_ptr<CreateMacroInfo>> macro_infos;
+};
 
 DuckLakeCatalog::DuckLakeCatalog(AttachedDatabase &db_p, DuckLakeOptions options_p)
     : Catalog(db_p), options(std::move(options_p)), last_uncommitted_catalog_version(TRANSACTION_ID_START) {
@@ -190,12 +200,12 @@ DuckLakeCatalogSet &DuckLakeCatalog::GetSchemaForSnapshot(DuckLakeTransaction &t
 	auto entry = schemas.find(snapshot.schema_version);
 	if (entry != schemas.end()) {
 		// this schema version is already cached
-		return *entry->second;
+		return *entry->second->schema_set;
 	}
 	// load the schema version from the metadata manager
-	auto schema = LoadSchemaForSnapshot(transaction, snapshot);
-	auto &result = *schema;
-	schemas.insert(make_pair(snapshot.schema_version, std::move(schema)));
+	auto schema_state = LoadSchemaForSnapshot(transaction, snapshot);
+	auto &result = *schema_state->schema_set;
+	schemas.insert(make_pair(snapshot.schema_version, std::move(schema_state)));
 	return result;
 }
 
@@ -316,21 +326,25 @@ unique_ptr<CreateMacroInfo> CreateMacroInfoFromDucklake(ClientContext &context, 
 	return macro_info;
 }
 
-unique_ptr<DuckLakeCatalogSet> DuckLakeCatalog::LoadSchemaForSnapshot(DuckLakeTransaction &transaction,
-                                                                      DuckLakeSnapshot snapshot) {
+unique_ptr<DuckLakeCatalog::LoadedSchemaState> DuckLakeCatalog::LoadSchemaForSnapshot(DuckLakeTransaction &transaction,
+                                                                                       DuckLakeSnapshot snapshot) {
 	auto &metadata_manager = transaction.GetMetadataManager();
-	auto catalog = metadata_manager.GetCatalogForSnapshot(snapshot);
+	auto result = make_uniq<LoadedSchemaState>();
+	result->loaded_catalog = metadata_manager.GetCatalogForSnapshot(snapshot);
+	auto &catalog = result->loaded_catalog;
 	ducklake_entries_map_t schema_map;
 	for (auto &schema : catalog.schemas) {
-		CreateSchemaInfo schema_info;
+		result->schema_infos.push_back(make_uniq<CreateSchemaInfo>());
+		auto &schema_info = *result->schema_infos.back();
 		schema_info.schema = schema.name;
 		auto schema_entry = make_uniq<DuckLakeSchemaEntry>(*this, schema_info, schema.id, std::move(schema.uuid),
 		                                                   std::move(schema.path));
 		schema_map.insert(make_pair(std::move(schema.name), std::move(schema_entry)));
 	}
 
-	auto schema_set = make_uniq<DuckLakeCatalogSet>(std::move(schema_map));
-	auto &schema_id_map = schema_set->GetSchemaIdMap();
+	result->schema_set = make_uniq<DuckLakeCatalogSet>(std::move(schema_map));
+	auto &schema_set = *result->schema_set;
+	auto &schema_id_map = schema_set.GetSchemaIdMap();
 	// load the table entries
 	for (auto &table : catalog.tables) {
 		// find the schema for the table
@@ -341,12 +355,13 @@ unique_ptr<DuckLakeCatalogSet> DuckLakeCatalog::LoadSchemaForSnapshot(DuckLakeTr
 			    table.name);
 		}
 		auto &schema_entry = entry->second.get();
-		auto create_table_info = make_uniq<CreateTableInfo>(schema_entry, table.name);
+		result->table_infos.push_back(make_uniq<CreateTableInfo>(schema_entry, table.name));
+		auto &create_table_info = *result->table_infos.back();
 		for (auto &tag : table.tags) {
 			if (tag.key == "comment") {
-				create_table_info->comment = tag.value;
+				create_table_info.comment = tag.value;
 			} else {
-				create_table_info->tags[tag.key] = tag.value;
+				create_table_info.tags[tag.key] = tag.value;
 			}
 		}
 		// parse the columns
@@ -369,19 +384,20 @@ unique_ptr<DuckLakeCatalogSet> DuckLakeCatalog::LoadSchemaForSnapshot(DuckLakeTr
 			if (default_val) {
 				column.SetDefaultValue(std::move(default_val));
 			}
-			create_table_info->columns.AddColumn(std::move(column));
+			create_table_info.columns.AddColumn(std::move(column));
 			field_data->Add(std::move(field_id));
 		}
 		// create the NOT NULL constraints
 		for (auto &not_null_col : not_null_columns) {
-			auto &col = create_table_info->columns.GetColumn(not_null_col);
-			create_table_info->constraints.push_back(make_uniq<NotNullConstraint>(col.Logical()));
+			auto &col = create_table_info.columns.GetColumn(not_null_col);
+			create_table_info.constraints.push_back(make_uniq<NotNullConstraint>(col.Logical()));
 		}
 		// create the table and add it to the schema set
-		auto table_entry = make_uniq<DuckLakeTableEntry>(
-		    *this, schema_entry, *create_table_info, table.id, std::move(table.uuid), std::move(table.path),
-		    std::move(field_data), optional_idx(), std::move(table.inlined_data_tables), LocalChangeType::NONE);
-		schema_set->AddEntry(schema_entry, table.id, std::move(table_entry));
+		auto table_entry =
+		    make_uniq<DuckLakeTableEntry>(*this, schema_entry, create_table_info, table.id, std::move(table.uuid),
+		                                  std::move(table.path), std::move(field_data), optional_idx(),
+		                                  std::move(table.inlined_data_tables), LocalChangeType::NONE);
+		schema_set.AddEntry(schema_entry, table.id, std::move(table_entry));
 	}
 
 	// load the view entries
@@ -393,19 +409,20 @@ unique_ptr<DuckLakeCatalogSet> DuckLakeCatalog::LoadSchemaForSnapshot(DuckLakeTr
 			    "Failed to load DuckLake - could not find schema that corresponds to the view entry \"%s\"", view.name);
 		}
 		auto &schema_entry = entry->second.get();
-		auto create_view_info = make_uniq<CreateViewInfo>(schema_entry, view.name);
-		create_view_info->aliases = view.column_aliases;
+		result->view_infos.push_back(make_uniq<CreateViewInfo>(schema_entry, view.name));
+		auto &create_view_info = *result->view_infos.back();
+		create_view_info.aliases = view.column_aliases;
 		for (auto &tag : view.tags) {
 			if (tag.key == "comment") {
-				create_view_info->comment = tag.value;
+				create_view_info.comment = tag.value;
 			} else {
-				create_view_info->tags[tag.key] = tag.value;
+				create_view_info.tags[tag.key] = tag.value;
 			}
 		}
 		auto view_entry =
-		    make_uniq<DuckLakeViewEntry>(*this, schema_entry, *create_view_info, view.id, std::move(view.uuid),
+		    make_uniq<DuckLakeViewEntry>(*this, schema_entry, create_view_info, view.id, std::move(view.uuid),
 		                                 std::move(view.sql), LocalChangeType::NONE);
-		schema_set->AddEntry(schema_entry, view.id, std::move(view_entry));
+		schema_set.AddEntry(schema_entry, view.id, std::move(view_entry));
 	}
 
 	// load the macros
@@ -417,15 +434,16 @@ unique_ptr<DuckLakeCatalogSet> DuckLakeCatalog::LoadSchemaForSnapshot(DuckLakeTr
 			    macro.macro_name);
 		}
 		auto &schema_entry = entry->second.get();
-		auto create_macro = CreateMacroInfoFromDucklake(*transaction.context.lock(), macro, schema_entry.name);
+		result->macro_infos.push_back(CreateMacroInfoFromDucklake(*transaction.context.lock(), macro, schema_entry.name));
+		auto &create_macro = *result->macro_infos.back();
 		if (macro.implementations.front().type == "scalar") {
 			auto macro_catalog_entry =
-			    make_uniq<DuckLakeScalarMacroEntry>(*this, schema_entry, *create_macro, macro.macro_id);
-			schema_set->AddEntry(schema_entry, macro.macro_id, std::move(macro_catalog_entry));
+			    make_uniq<DuckLakeScalarMacroEntry>(*this, schema_entry, create_macro, macro.macro_id);
+			schema_set.AddEntry(schema_entry, macro.macro_id, std::move(macro_catalog_entry));
 		} else if (macro.implementations.front().type == "table") {
 			auto macro_catalog_entry =
-			    make_uniq<DuckLakeTableMacroEntry>(*this, schema_entry, *create_macro, macro.macro_id);
-			schema_set->AddEntry(schema_entry, macro.macro_id, std::move(macro_catalog_entry));
+			    make_uniq<DuckLakeTableMacroEntry>(*this, schema_entry, create_macro, macro.macro_id);
+			schema_set.AddEntry(schema_entry, macro.macro_id, std::move(macro_catalog_entry));
 		} else {
 			throw InvalidInputException("Macro type %s is not accepted", macro.implementations.front().type);
 		}
@@ -433,7 +451,7 @@ unique_ptr<DuckLakeCatalogSet> DuckLakeCatalog::LoadSchemaForSnapshot(DuckLakeTr
 
 	// load the partition entries
 	for (auto &entry : catalog.partitions) {
-		auto table = schema_set->GetEntryById(entry.table_id);
+		auto table = schema_set.GetEntryById(entry.table_id);
 		if (!table || table->type != CatalogType::TABLE_ENTRY) {
 			throw InvalidInputException("Could not find matching table for partition entry");
 		}
@@ -464,7 +482,7 @@ unique_ptr<DuckLakeCatalogSet> DuckLakeCatalog::LoadSchemaForSnapshot(DuckLakeTr
 
 	// load the sort entries
 	for (auto &entry : catalog.sorts) {
-		auto table = schema_set->GetEntryById(entry.table_id);
+		auto table = schema_set.GetEntryById(entry.table_id);
 		if (!table || table->type != CatalogType::TABLE_ENTRY) {
 			throw InvalidInputException("Could not find matching table for sort entry");
 		}
@@ -484,7 +502,7 @@ unique_ptr<DuckLakeCatalogSet> DuckLakeCatalog::LoadSchemaForSnapshot(DuckLakeTr
 		ducklake_table.SetSortData(std::move(sort));
 	}
 
-	return schema_set;
+	return result;
 }
 
 DuckLakeStats &DuckLakeCatalog::GetStatsForSnapshot(DuckLakeTransaction &transaction, DuckLakeSnapshot snapshot) {
