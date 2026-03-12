@@ -219,6 +219,7 @@ public:
 	virtual shared_ptr<DuckLakeInlinedData> TransformInlinedData(QueryResult &result,
 	                                                             const vector<LogicalType> &expected_types);
 
+	virtual void MarkInlinedDataDeleted(DuckLakeSnapshot snapshot, const string &inlined_table_name);
 	virtual void DeleteInlinedData(const DuckLakeInlinedTableInfo &inlined_table);
 	virtual string InsertNewSchema(const DuckLakeSnapshot &snapshot, const set<TableIndex> &table_ids);
 

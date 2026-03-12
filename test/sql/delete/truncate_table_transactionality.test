@@ -1,0 +1,44 @@
+# name: test/sql/delete/truncate_table_transactionality.test
+# description: Verify uncommitted TRUNCATE is not visible to other connections
+# group: [delete]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+
+test-env DATA_PATH __TEST_DIR__
+
+
+statement ok
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/ducklake_truncate_transactionality_files')
+
+statement ok
+CREATE TABLE ducklake.txn_test AS SELECT i id FROM range(25) t(i);
+
+statement ok con1
+BEGIN
+
+query I con1
+TRUNCATE ducklake.txn_test
+----
+25
+
+query II con1
+SELECT COUNT(*), SUM(id) FROM ducklake.txn_test
+----
+0	NULL
+
+query II con2
+SELECT COUNT(*), SUM(id) FROM ducklake.txn_test
+----
+25	300
+
+statement ok con1
+COMMIT
+
+query II con2
+SELECT COUNT(*), SUM(id) FROM ducklake.txn_test
+----
+0	NULL

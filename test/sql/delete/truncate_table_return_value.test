@@ -1,0 +1,36 @@
+# name: test/sql/delete/truncate_table_return_value.test
+# description: Verify TRUNCATE return value including tables with existing deletes
+# group: [delete]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+
+test-env DATA_PATH __TEST_DIR__
+
+
+statement ok
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/ducklake_truncate_return_value_files')
+
+statement ok
+CREATE TABLE ducklake.return_value_test AS SELECT i id FROM range(10000) t(i);
+
+statement ok
+DELETE FROM ducklake.return_value_test WHERE id%8=0
+
+query II
+SELECT COUNT(*), SUM(id) FROM ducklake.return_value_test
+----
+8750	43750000
+
+query I
+TRUNCATE ducklake.return_value_test
+----
+8750
+
+query II
+SELECT COUNT(*), SUM(id) FROM ducklake.return_value_test
+----
+0	NULL

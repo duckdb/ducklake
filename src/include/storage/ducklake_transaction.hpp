@@ -113,6 +113,7 @@ public:
 	void AppendInlinedData(TableIndex table_id, unique_ptr<DuckLakeInlinedData> collection);
 	void AddNewInlinedDeletes(TableIndex table_id, const string &table_name, set<idx_t> new_deletes);
 	void DeleteFromLocalInlinedData(TableIndex table_id, set<idx_t> new_deletes);
+	void TruncateLocalInlinedData(TableIndex table_id);
 	void AddColumnToLocalInlinedData(TableIndex table_id, const LogicalType &new_column_type,
 	                                 FieldIndex new_field_index, const Value &default_value = Value());
 	void RemoveColumnFromLocalInlinedData(TableIndex table_id, LogicalIndex removed_column_index,
@@ -133,6 +134,7 @@ public:
 	void DropFile(TableIndex table_id, DataFileIndex data_file_id, string path);
 
 	void DeleteSnapshots(const vector<DuckLakeSnapshotInfo> &snapshots);
+	void MarkInlinedDataDeleted(const string &inlined_table_name);
 	void DeleteInlinedData(const DuckLakeInlinedTableInfo &inlined_table);
 
 	bool SchemaChangesMade();
