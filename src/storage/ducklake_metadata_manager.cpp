@@ -1687,7 +1687,7 @@ DuckLakeMetadataManager::GetExtendedFilesForTable(DuckLakeTableEntry &table, Duc
 
 	// Add base query
 	query += StringUtil::Format(R"(
-SELECT data.data_file_id, del.delete_file_id, data.record_count, %s
+SELECT data.data_file_id, del.delete_file_id, data.record_count, COALESCE(del.delete_count, 0), %s
 FROM {METADATA_CATALOG}.ducklake_data_file data
 LEFT JOIN (
 	SELECT *
@@ -1716,7 +1716,8 @@ WHERE data.table_id=%d AND {SNAPSHOT_ID} >= data.begin_snapshot AND ({SNAPSHOT_I
 			file_entry.delete_file_id = DataFileIndex(row.GetValue<idx_t>(1));
 		}
 		file_entry.row_count = row.GetValue<idx_t>(2);
-		idx_t col_idx = 3;
+		file_entry.delete_count = row.GetValue<idx_t>(3);
+		idx_t col_idx = 4;
 		file_entry.file = ReadDataFile(table, row, col_idx, IsEncrypted());
 		if (!row.IsNull(col_idx)) {
 			file_entry.row_id_start = row.GetValue<idx_t>(col_idx);
@@ -4054,12 +4055,25 @@ WHERE end_snapshot IS NOT NULL AND NOT EXISTS(
 
 void DuckLakeMetadataManager::DeleteInlinedData(const DuckLakeInlinedTableInfo &inlined_table) {
 	auto result = transaction.Query(StringUtil::Format(R"(
-		DELETE FROM {METADATA_CATALOG}.%s
-)",
+			DELETE FROM {METADATA_CATALOG}.%s
+	)",
 	                                                   SQLIdentifier(inlined_table.table_name)));
 	if (result->HasError()) {
 		result->GetErrorObject().Throw("Failed to delete inlined data in DuckLake from table " +
 		                               inlined_table.table_name + ": ");
+	}
+}
+
+void DuckLakeMetadataManager::MarkInlinedDataDeleted(DuckLakeSnapshot snapshot, const string &inlined_table_name) {
+	auto result = transaction.Query(snapshot, StringUtil::Format(R"(
+		UPDATE {METADATA_CATALOG}.%s
+		SET end_snapshot = {SNAPSHOT_ID}
+		WHERE end_snapshot IS NULL AND begin_snapshot <= {SNAPSHOT_ID}
+	)",
+	                                                     SQLIdentifier(inlined_table_name)));
+	if (result->HasError()) {
+		result->GetErrorObject().Throw("Failed to mark inlined data as deleted in DuckLake from table " +
+		                               inlined_table_name + ": ");
 	}
 }
 
