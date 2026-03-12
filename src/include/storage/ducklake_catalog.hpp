@@ -171,8 +171,11 @@ public:
 	DuckLakeCatalogSet &GetSchemaForSnapshot(DuckLakeTransaction &transaction, DuckLakeSnapshot snapshot);
 
 private:
+	struct LoadedSchemaState;
+
+private:
 	void DropSchema(ClientContext &context, DropInfo &info) override;
-	unique_ptr<DuckLakeCatalogSet> LoadSchemaForSnapshot(DuckLakeTransaction &transaction, DuckLakeSnapshot snapshot);
+	unique_ptr<LoadedSchemaState> LoadSchemaForSnapshot(DuckLakeTransaction &transaction, DuckLakeSnapshot snapshot);
 	DuckLakeStats &GetStatsForSnapshot(DuckLakeTransaction &transaction, DuckLakeSnapshot snapshot);
 	unique_ptr<DuckLakeStats> LoadStatsForSnapshot(DuckLakeTransaction &transaction, DuckLakeSnapshot snapshot,
 	                                               DuckLakeCatalogSet &schema);
@@ -181,7 +184,7 @@ private:
 private:
 	mutex schemas_lock;
 	//! Map of schema index -> schema
-	unordered_map<idx_t, unique_ptr<DuckLakeCatalogSet>> schemas;
+	unordered_map<idx_t, unique_ptr<LoadedSchemaState>> schemas;
 	//! Map of data file index -> table stats
 	unordered_map<idx_t, unique_ptr<DuckLakeStats>> stats;
 	//! Map of mapping index -> name map
