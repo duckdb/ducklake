@@ -1458,7 +1458,6 @@ vector<DuckLakeDeleteFileInfo>
 DuckLakeTransaction::GetNewDeleteFiles(const DuckLakeCommitState &commit_state,
                                        vector<DuckLakeOverwrittenDeleteFile> &overwritten_delete_files) const {
 	vector<DuckLakeDeleteFileInfo> result;
-	lock_guard<mutex> guard(table_data_changes_lock);
 	for (auto &entry : table_data_changes) {
 		auto table_id = commit_state.GetTableId(entry.first);
 		auto &table_changes = entry.second;
@@ -2010,7 +2009,6 @@ idx_t DuckLakeTransaction::GetLocalCatalogId() {
 }
 
 bool DuckLakeTransaction::HasTransactionLocalInserts(TableIndex table_id) const {
-	lock_guard<mutex> guard(table_data_changes_lock);
 	auto entry = table_data_changes.find(table_id);
 	if (entry == table_data_changes.end()) {
 		return false;
@@ -2020,7 +2018,6 @@ bool DuckLakeTransaction::HasTransactionLocalInserts(TableIndex table_id) const 
 }
 
 bool DuckLakeTransaction::HasTransactionInlinedData(TableIndex table_id) const {
-	lock_guard<mutex> guard(table_data_changes_lock);
 	auto entry = table_data_changes.find(table_id);
 	if (entry == table_data_changes.end()) {
 		return false;
