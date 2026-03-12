@@ -1,0 +1,89 @@
+# name: test/sql/rewrite_data_files/test_rewrite_large_file_with_deletes.test
+# description: Test that rewrite_data_files does not skip large files with delete files
+# group: [rewrite_data_files]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+
+test-env DATA_PATH __TEST_DIR__
+
+
+statement ok
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/rewrite_large_deletes', METADATA_CATALOG 'ducklake_metadata')
+
+statement ok
+USE ducklake
+
+# Set a very small target_file_size so that the data file exceeds it
+statement ok
+CALL ducklake.set_option('target_file_size', '1KB');
+
+statement ok
+CREATE TABLE test (key INTEGER, value VARCHAR);
+
+statement ok
+INSERT INTO test SELECT i, concat('thisisastring_', i) FROM range(1000) t(i)
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake')
+
+# Verify we have 1 data file, no delete files
+query I
+SELECT count(*) FROM ducklake_metadata.ducklake_data_file WHERE end_snapshot IS NULL
+----
+1
+
+query I
+SELECT count(*) FROM ducklake_metadata.ducklake_delete_file WHERE end_snapshot IS NULL
+----
+0
+
+# Delete some rows to create a delete file
+statement ok
+DELETE FROM test WHERE key < 500
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake')
+
+# Verify we now have a delete file
+query I
+SELECT count(*) FROM ducklake_metadata.ducklake_delete_file WHERE end_snapshot IS NULL
+----
+1
+
+# The data file should be larger than target_file_size (1KB)
+# Without the fix, rewrite_data_files would skip this file
+query III
+SELECT table_name, files_processed, files_created FROM ducklake_rewrite_data_files('ducklake', delete_threshold => 0) ORDER BY ALL
+----
+test	1	1
+
+# After rewrite: delete files should be gone, data file should be rewritten
+query I
+SELECT count(*) FROM ducklake_metadata.ducklake_delete_file WHERE end_snapshot IS NULL
+----
+0
+
+query I
+SELECT count(*) FROM ducklake_metadata.ducklake_data_file WHERE end_snapshot IS NULL
+----
+1
+
+# Verify data correctness
+query I
+SELECT count(*) FROM test
+----
+500
+
+query I
+SELECT min(key) FROM test
+----
+500
+
+query I
+SELECT max(key) FROM test
+----
+999
