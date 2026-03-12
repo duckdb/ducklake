@@ -97,8 +97,8 @@ public:
 	optional_ptr<DuckLakeCatalogSet> GetTransactionLocalEntries(CatalogType type, const string &schema_name);
 	optional_ptr<CatalogEntry> GetTransactionLocalEntry(CatalogType catalog_type, const string &schema_name,
 	                                                    const string &entry_name);
-	vector<DuckLakeDataFile> GetTransactionLocalFiles(TableIndex table_id);
-	shared_ptr<DuckLakeInlinedData> GetTransactionLocalInlinedData(TableIndex table_id);
+	vector<DuckLakeDataFile> GetTransactionLocalFiles(TableIndex table_id) const;
+	shared_ptr<DuckLakeInlinedData> GetTransactionLocalInlinedData(TableIndex table_id) const;
 	void DropTransactionLocalFile(TableIndex table_id, const string &path);
 	bool HasTransactionLocalInserts(TableIndex table_id) const;
 	bool HasTransactionInlinedData(TableIndex table_id) const;
@@ -117,8 +117,8 @@ public:
 	                                 FieldIndex new_field_index, const Value &default_value = Value());
 	void RemoveColumnFromLocalInlinedData(TableIndex table_id, LogicalIndex removed_column_index,
 	                                      const DuckLakeFieldId &field_id);
-	optional_ptr<DuckLakeInlinedDataDeletes> GetInlinedDeletes(TableIndex table_id, const string &table_name);
-	vector<DuckLakeDeletedInlinedDataInfo> GetNewInlinedDeletes(DuckLakeCommitState &commit_state);
+	optional_ptr<DuckLakeInlinedDataDeletes> GetInlinedDeletes(TableIndex table_id, const string &table_name) const;
+	vector<DuckLakeDeletedInlinedDataInfo> GetNewInlinedDeletes(DuckLakeCommitState &commit_state) const;
 
 	//! Add inlined file deletions (deletions from parquet files stored in metadata)
 	void AddNewInlinedFileDeletes(TableIndex table_id, idx_t file_id, set<idx_t> new_deletes);
@@ -135,8 +135,8 @@ public:
 	void DeleteSnapshots(const vector<DuckLakeSnapshotInfo> &snapshots);
 	void DeleteInlinedData(const DuckLakeInlinedTableInfo &inlined_table);
 
-	bool SchemaChangesMade();
-	bool ChangesMade();
+	bool SchemaChangesMade() const;
+	bool ChangesMade() const;
 	idx_t GetLocalCatalogId();
 	static bool IsTransactionLocal(idx_t id) {
 		return id >= DuckLakeConstants::TRANSACTION_LOCAL_ID_START;
@@ -147,17 +147,17 @@ public:
 
 	string GetDefaultSchemaName();
 
-	bool HasLocalDeletes(TableIndex table_id);
-	void GetLocalDeleteForFile(TableIndex table_id, const string &path, DuckLakeFileData &delete_file);
+	bool HasLocalDeletes(TableIndex table_id) const;
+	void GetLocalDeleteForFile(TableIndex table_id, const string &path, DuckLakeFileData &delete_file) const;
 	void TransactionLocalDelete(TableIndex table_id, const string &data_path, DuckLakeDeleteFile delete_file);
 
-	bool HasLocalInlinedFileDeletes(TableIndex table_id);
-	void GetLocalInlinedFileDeletesForFile(TableIndex table_id, idx_t file_id, set<idx_t> &result);
+	bool HasLocalInlinedFileDeletes(TableIndex table_id) const;
+	void GetLocalInlinedFileDeletesForFile(TableIndex table_id, idx_t file_id, set<idx_t> &result) const;
 
 	bool HasDroppedFiles() const;
 	bool FileIsDropped(const string &path) const;
 	//! Check if there are any uncommitted changes for this table (inserts, deletes, or dropped files)
-	bool HasAnyLocalChanges(TableIndex table_id);
+	bool HasAnyLocalChanges(TableIndex table_id) const;
 
 	string GenerateUUID() const;
 	static string GenerateUUIDv7();
@@ -215,10 +215,10 @@ private:
 	SnapshotAndStats CheckForConflicts(DuckLakeSnapshot transaction_snapshot,
 	                                   const TransactionChangeInformation &changes);
 	void CheckForConflicts(const TransactionChangeInformation &changes, const SnapshotChangeInformation &other_changes,
-	                       DuckLakeSnapshot transaction_snapshot);
-	string WriteSnapshotChanges(DuckLakeCommitState &commit_state, TransactionChangeInformation &changes);
+	                       DuckLakeSnapshot transaction_snapshot) const;
+	string WriteSnapshotChanges(DuckLakeCommitState &commit_state, TransactionChangeInformation &changes) const;
 	//! Return the set of changes made by this transaction
-	TransactionChangeInformation GetTransactionChanges();
+	TransactionChangeInformation GetTransactionChanges() const;
 	void GetNewTableInfo(DuckLakeCommitState &commit_state, DuckLakeCatalogSet &catalog_set,
 	                     reference<CatalogEntry> table_entry, NewTableInfo &result,
 	                     TransactionChangeInformation &transaction_changes);
@@ -231,7 +231,7 @@ private:
 	void AlterEntryInternal(DuckLakeTableEntry &old_entry, unique_ptr<CatalogEntry> new_entry);
 	void AlterEntryInternal(DuckLakeViewEntry &old_entry, unique_ptr<CatalogEntry> new_entry);
 	void AddTableChanges(TableIndex table_id, const LocalTableDataChanges &table_changes,
-	                     TransactionChangeInformation &changes);
+	                     TransactionChangeInformation &changes) const;
 
 private:
 	DuckLakeCatalog &ducklake_catalog;
