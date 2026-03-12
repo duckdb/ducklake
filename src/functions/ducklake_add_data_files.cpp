@@ -168,13 +168,13 @@ private:
 void DuckLakeFileProcessor::ReadParquetFullMetadata(const string &glob, vector<DuckLakeDataFile> &written_files) {
 	auto result = transaction.Query(StringUtil::Format(R"(
 SELECT 
-    list_transform(parquet_file_metadata, x -> struct_pack(
+    list_transform(parquet_file_metadata, lambda x: struct_pack(
         file_name := x.file_name,
         num_rows := x.num_rows,
         file_size_bytes := x.file_size_bytes,
         footer_size := x.footer_size
     )) AS parquet_file_metadata,
-    list_transform(parquet_metadata, x -> struct_pack(
+    list_transform(parquet_metadata, lambda x: struct_pack(
         column_id := x.column_id,
         stats_min := COALESCE(x.stats_min, x.stats_min_value),
         stats_max := COALESCE(x.stats_max, x.stats_max_value),
@@ -184,7 +184,7 @@ SELECT
         geo_bbox := x.geo_bbox,
         geo_types := x.geo_types
     )) AS parquet_metadata,
-    list_transform(parquet_schema, x -> struct_pack(
+    list_transform(parquet_schema, lambda x: struct_pack(
         "name" := x."name",
         "type" := x."type",
         num_children := x.num_children,
