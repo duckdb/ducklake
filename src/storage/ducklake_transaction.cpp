@@ -1415,7 +1415,7 @@ NewDataInfo DuckLakeTransaction::GetNewDataFiles(string &batch_query, DuckLakeCo
 			result.new_files.push_back(std::move(data_file));
 		}
 		// write any deletes that were made on top of these transaction-local files
-		AddDeletes(table_id, std::move(delete_files));
+		AddDeletesLocked(table_id, std::move(delete_files));
 
 		if (table_changes.new_inlined_data) {
 			auto &inlined_data = *table_changes.new_inlined_data;
@@ -2390,6 +2390,10 @@ void DuckLakeTransaction::AddDeletes(TableIndex table_id, vector<DuckLakeDeleteF
 		return;
 	}
 	lock_guard<mutex> guard(table_data_changes_lock);
+	AddDeletesLocked(table_id, std::move(files));
+}
+
+void DuckLakeTransaction::AddDeletesLocked(TableIndex table_id, vector<DuckLakeDeleteFile> files) {
 	auto &table_changes = table_data_changes[table_id];
 	auto &table_delete_map = table_changes.new_delete_files;
 	for (auto &file : files) {

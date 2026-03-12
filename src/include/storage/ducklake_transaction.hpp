@@ -230,6 +230,8 @@ private:
 
 	void AlterEntryInternal(DuckLakeTableEntry &old_entry, unique_ptr<CatalogEntry> new_entry);
 	void AlterEntryInternal(DuckLakeViewEntry &old_entry, unique_ptr<CatalogEntry> new_entry);
+	//! Mutates table_data_changes; caller must hold table_data_changes_lock.
+	void AddDeletesLocked(TableIndex table_id, vector<DuckLakeDeleteFile> files);
 	void AddTableChanges(TableIndex table_id, const LocalTableDataChanges &table_changes,
 	                     TransactionChangeInformation &changes) const;
 
