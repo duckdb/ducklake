@@ -108,6 +108,23 @@ SinkResultType DuckLakeFlushData::Sink(ExecutionContext &context, DataChunk &chu
 //===--------------------------------------------------------------------===//
 using DeletesPerFile = unordered_map<string, set<PositionWithSnapshot>>;
 
+static void RemoveFullyDeletedWrittenFiles(ClientContext &context, vector<DuckLakeDataFile> &written_files,
+                                           DeletesPerFile &deletes_per_file) {
+	auto &fs = FileSystem::GetFileSystem(context);
+	vector<DuckLakeDataFile> remaining_files;
+	remaining_files.reserve(written_files.size());
+	for (auto &written_file : written_files) {
+		auto delete_entry = deletes_per_file.find(written_file.file_name);
+		if (delete_entry != deletes_per_file.end() && delete_entry->second.size() >= written_file.row_count) {
+			fs.RemoveFile(written_file.file_name);
+			deletes_per_file.erase(delete_entry);
+			continue;
+		}
+		remaining_files.push_back(std::move(written_file));
+	}
+	written_files = std::move(remaining_files);
+}
+
 static DeletesPerFile GroupDeletesByFile(QueryResult &deleted_rows_result, vector<DuckLakeDataFile> &written_files,
                                          vector<idx_t> &file_start_row_ids) {
 	D_ASSERT(std::is_sorted(file_start_row_ids.begin(), file_start_row_ids.end()));
@@ -167,6 +184,7 @@ SinkFinalizeType DuckLakeFlushData::Finalize(Pipeline &pipeline, Event &event, C
 
 		auto deletes_per_file =
 		    GroupDeletesByFile(*deleted_rows_result, global_state.written_files, file_start_row_ids);
+		RemoveFullyDeletedWrittenFiles(context, global_state.written_files, deletes_per_file);
 
 		if (!deletes_per_file.empty()) {
 			auto &fs = FileSystem::GetFileSystem(context);
