@@ -2818,7 +2818,6 @@ string DuckLakeMetadataManager::FromRelativePath(TableIndex table_id, const Duck
 	return FromRelativePath(path, GetPath(table_id, {}, {}));
 }
 
-
 // Optimized version using DuckDB Appender API for much faster inserts
 string DuckLakeMetadataManager::WriteNewDataFilesWithAppender(DuckLakeSnapshot &commit_snapshot,
                                                               const vector<DuckLakeFileInfo> &new_files,
@@ -2842,8 +2841,8 @@ string DuckLakeMetadataManager::WriteNewDataFilesWithAppender(DuckLakeSnapshot &
 		auto data_file_index = static_cast<int64_t>(file.id.index);
 		auto table_id = static_cast<int64_t>(file.table_id.index);
 		int64_t begin_snapshot_val = file.begin_snapshot.IsValid()
-			? static_cast<int64_t>(file.begin_snapshot.GetIndex())
-			: static_cast<int64_t>(commit_snapshot.snapshot_id);
+		                                 ? static_cast<int64_t>(file.begin_snapshot.GetIndex())
+		                                 : static_cast<int64_t>(commit_snapshot.snapshot_id);
 		auto path = GetRelativePath(file.table_id, file.file_name, new_tables, new_schemas_result);
 
 		// ducklake_data_file columns:
@@ -2851,15 +2850,15 @@ string DuckLakeMetadataManager::WriteNewDataFilesWithAppender(DuckLakeSnapshot &
 		// file_format, record_count, file_size_bytes, footer_size, row_id_start, partition_id,
 		// encryption_key, mapping_id, partial_max
 		data_file_appender.BeginRow();
-		data_file_appender.Append<int64_t>(data_file_index);                    // data_file_id
-		data_file_appender.Append<int64_t>(table_id);                           // table_id
-		data_file_appender.Append<int64_t>(begin_snapshot_val);                 // begin_snapshot
-		data_file_appender.Append(Value());                                     // end_snapshot (NULL)
-		data_file_appender.Append(Value());                                     // file_order (NULL)
-		data_file_appender.Append<string_t>(string_t(path.path));               // path
-		data_file_appender.Append<bool>(path.path_is_relative);                 // path_is_relative
-		data_file_appender.Append<string_t>(string_t("parquet"));               // file_format
-		data_file_appender.Append<int64_t>(static_cast<int64_t>(file.row_count));  // record_count
+		data_file_appender.Append<int64_t>(data_file_index);                            // data_file_id
+		data_file_appender.Append<int64_t>(table_id);                                   // table_id
+		data_file_appender.Append<int64_t>(begin_snapshot_val);                         // begin_snapshot
+		data_file_appender.Append(Value());                                             // end_snapshot (NULL)
+		data_file_appender.Append(Value());                                             // file_order (NULL)
+		data_file_appender.Append<string_t>(string_t(path.path));                       // path
+		data_file_appender.Append<bool>(path.path_is_relative);                         // path_is_relative
+		data_file_appender.Append<string_t>(string_t("parquet"));                       // file_format
+		data_file_appender.Append<int64_t>(static_cast<int64_t>(file.row_count));       // record_count
 		data_file_appender.Append<int64_t>(static_cast<int64_t>(file.file_size_bytes)); // file_size_bytes
 		if (file.footer_size.IsValid()) {
 			data_file_appender.Append<int64_t>(static_cast<int64_t>(file.footer_size.GetIndex())); // footer_size
@@ -2877,7 +2876,8 @@ string DuckLakeMetadataManager::WriteNewDataFilesWithAppender(DuckLakeSnapshot &
 			data_file_appender.Append(Value());
 		}
 		if (!file.encryption_key.empty()) {
-			data_file_appender.Append<string_t>(string_t(Blob::ToBase64(string_t(file.encryption_key)))); // encryption_key
+			data_file_appender.Append<string_t>(
+			    string_t(Blob::ToBase64(string_t(file.encryption_key)))); // encryption_key
 		} else {
 			data_file_appender.Append(Value());
 		}
@@ -2887,7 +2887,8 @@ string DuckLakeMetadataManager::WriteNewDataFilesWithAppender(DuckLakeSnapshot &
 			data_file_appender.Append(Value());
 		}
 		if (file.max_partial_file_snapshot.IsValid()) {
-			data_file_appender.Append<int64_t>(static_cast<int64_t>(file.max_partial_file_snapshot.GetIndex())); // partial_max
+			data_file_appender.Append<int64_t>(
+			    static_cast<int64_t>(file.max_partial_file_snapshot.GetIndex())); // partial_max
 		} else {
 			data_file_appender.Append(Value());
 		}
@@ -2962,11 +2963,14 @@ string DuckLakeMetadataManager::WriteNewDataFilesWithAppender(DuckLakeSnapshot &
 					variant_stats_appender.Append<int64_t>(table_id);
 					variant_stats_appender.Append<int64_t>(column_id);
 					variant_stats_appender.Append<string_t>(string_t(variant_entry.first));
-					variant_stats_appender.Append<string_t>(string_t(DuckLakeTypes::ToString(variant_entry.second.shredded_type)));
+					variant_stats_appender.Append<string_t>(
+					    string_t(DuckLakeTypes::ToString(variant_entry.second.shredded_type)));
 					variant_stats_appender.Append<int64_t>(static_cast<int64_t>(field_stats.column_size_bytes));
 
-					if (field_stats.has_null_count && field_stats.has_num_values && field_stats.null_count <= field_stats.num_values) {
-						variant_stats_appender.Append<int64_t>(static_cast<int64_t>(field_stats.num_values - field_stats.null_count));
+					if (field_stats.has_null_count && field_stats.has_num_values &&
+					    field_stats.null_count <= field_stats.num_values) {
+						variant_stats_appender.Append<int64_t>(
+						    static_cast<int64_t>(field_stats.num_values - field_stats.null_count));
 						variant_stats_appender.Append<int64_t>(static_cast<int64_t>(field_stats.null_count));
 					} else {
 						variant_stats_appender.Append(Value());
@@ -2993,7 +2997,8 @@ string DuckLakeMetadataManager::WriteNewDataFilesWithAppender(DuckLakeSnapshot &
 					string field_extra_stats_str;
 					if (field_stats.extra_stats && field_stats.extra_stats->TrySerialize(field_extra_stats_str)) {
 						// TrySerialize wraps the JSON in single quotes for SQL - strip them for Appender
-						if (field_extra_stats_str.size() >= 2 && field_extra_stats_str.front() == '\'' && field_extra_stats_str.back() == '\'') {
+						if (field_extra_stats_str.size() >= 2 && field_extra_stats_str.front() == '\'' &&
+						    field_extra_stats_str.back() == '\'') {
 							field_extra_stats_str = field_extra_stats_str.substr(1, field_extra_stats_str.size() - 2);
 						}
 						variant_stats_appender.Append<string_t>(string_t(field_extra_stats_str));

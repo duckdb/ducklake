@@ -443,7 +443,8 @@ vector<MultiFileColumnDefinition> MapColumns(ClientContext &context, MultiFileRe
 				                            column_map->source_name, reader_data.reader->file.path);
 			}
 			// Use GetValue to handle NULL values (__HIVE_DEFAULT_PARTITION__) and type casting
-			Value partition_val = HivePartitioning::GetValue(context, column_map->source_name, entry->second, result_col.type);
+			Value partition_val =
+			    HivePartitioning::GetValue(context, column_map->source_name, entry->second, result_col.type);
 			result_col.default_expression = make_uniq<ConstantExpression>(std::move(partition_val));
 			continue;
 		}
@@ -457,7 +458,8 @@ vector<MultiFileColumnDefinition> MapColumns(ClientContext &context, MultiFileRe
 		// recursively process any child nodes
 		if (!column_map->child_entries.empty()) {
 			bool is_list = result_col.type.id() == LogicalTypeId::LIST;
-			result_col.children = MapColumns(context, reader_data, result_col.children, column_map->child_entries, is_list);
+			result_col.children =
+			    MapColumns(context, reader_data, result_col.children, column_map->child_entries, is_list);
 		}
 	}
 	return result;
