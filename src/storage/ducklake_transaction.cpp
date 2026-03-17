@@ -57,6 +57,47 @@ bool LocalTableChanges::HasChanges() const{
 	return !changes.empty();
 }
 
+LocalTableChangeIterationHelper::LocalTableChangeIterationHelper(mutex &local_changes_lock, const map<TableIndex, LocalTableDataChanges> &changes_p) : lock(local_changes_lock), changes(changes_p) {}
+
+
+LocalTableChangeIterationHelper::LocalTableChangeIteratorEntry::LocalTableChangeIteratorEntry() {}
+
+TableIndex LocalTableChangeIterationHelper::LocalTableChangeIteratorEntry::GetTableIndex() const {
+	return table_id;
+}
+
+const LocalTableDataChanges &LocalTableChangeIterationHelper::LocalTableChangeIteratorEntry::GetTableChanges() const {
+	return *changes;
+}
+
+LocalTableChangeIterationHelper::LocalTableChangeIterator::LocalTableChangeIterator(map<TableIndex, LocalTableDataChanges>::const_iterator it_p, map<TableIndex, LocalTableDataChanges>::const_iterator end_it_p) : it(std::move(it_p)), end_it(std::move(end_it_p)) {
+	if (it != end_it) {
+		entry.table_id = it->first;
+		entry.changes = it->second;
+	}
+}
+
+LocalTableChangeIterationHelper::LocalTableChangeIterator &LocalTableChangeIterationHelper::LocalTableChangeIterator::operator++() {
+	it++;
+	if (it != end_it) {
+		entry.table_id = it->first;
+		entry.changes = it->second;
+	}
+	return *this;
+}
+
+bool LocalTableChangeIterationHelper::LocalTableChangeIterator::operator!=(const LocalTableChangeIterator &other) const {
+	return it != other.it;
+}
+
+const LocalTableChangeIterationHelper::LocalTableChangeIteratorEntry &LocalTableChangeIterationHelper::LocalTableChangeIterator::operator*() const {
+	return entry;
+}
+
+LocalTableChangeIterationHelper LocalTableChanges::Changes() const {
+	return LocalTableChangeIterationHelper(lock, changes);
+}
+
 DuckLakeTransaction::DuckLakeTransaction(DuckLakeCatalog &ducklake_catalog, TransactionManager &manager,
                                          ClientContext &context)
     : Transaction(manager, context), ducklake_catalog(ducklake_catalog), db(*context.db),
@@ -288,13 +329,13 @@ TransactionChangeInformation DuckLakeTransaction::GetTransactionChanges() const 
 		}
 	}
 	changes.tables_deleted_from = tables_deleted_from;
-	for (auto &entry : local_changes.changes) {
-		auto table_id = entry.first;
+	for (auto &entry : local_changes.Changes()) {
+		auto table_id = entry.GetTableIndex();
 		if (table_id.IsTransactionLocal()) {
 			// don't report transaction-local tables yet - these will get added later on
 			continue;
 		}
-		auto &table_changes = entry.second;
+		auto &table_changes = entry.GetTableChanges();
 		AddTableChanges(table_id, table_changes, changes);
 	}
 	return changes;
@@ -403,9 +444,9 @@ string DuckLakeTransaction::WriteSnapshotChanges(DuckLakeCommitState &commit_sta
 
 	// re-add all inserted tables - transaction-local table identifiers should have been converted at this stage
 	changes.tables_deleted_from = tables_deleted_from;
-	for (auto &entry : local_changes.changes) {
-		auto table_id = commit_state.GetTableId(entry.first);
-		auto &table_changes = entry.second;
+	for (auto &entry : local_changes.Changes()) {
+		auto table_id = commit_state.GetTableId(entry.GetTableIndex());
+		auto &table_changes = entry.GetTableChanges();
 		AddTableChanges(table_id, table_changes, changes);
 	}
 	for (auto &entry : changes.dropped_schemas) {
@@ -666,8 +707,8 @@ void DuckLakeTransaction::CheckForConflicts(const TransactionChangeInformation &
 		if (check_for_matches) {
 			// If we have deletes on the tables, check for files being deleted
 			const auto deleted_files = metadata_manager->GetFilesDeletedOrDroppedAfterSnapshot(transaction_snapshot);
-			for (auto &entry : local_changes.changes) {
-				auto &table_changes = entry.second;
+			for (auto &entry : local_changes.Changes()) {
+				auto &table_changes = entry.GetTableChanges();
 				for (auto &file_entry : table_changes.new_delete_files) {
 					for (auto &file : file_entry.second) {
 						ConflictCheck(file.data_file_id, deleted_files.deleted_from_files, "delete from file",
@@ -1460,9 +1501,9 @@ vector<DuckLakeDeleteFileInfo>
 DuckLakeTransaction::GetNewDeleteFiles(const DuckLakeCommitState &commit_state,
                                        vector<DuckLakeOverwrittenDeleteFile> &overwritten_delete_files) const {
 	vector<DuckLakeDeleteFileInfo> result;
-	for (auto &entry : local_changes.changes) {
-		auto table_id = commit_state.GetTableId(entry.first);
-		auto &table_changes = entry.second;
+	for (auto &entry : local_changes.Changes()) {
+		auto table_id = commit_state.GetTableId(entry.GetTableIndex());
+		auto &table_changes = entry.GetTableChanges();
 		for (auto &file_entry : table_changes.new_delete_files) {
 			for (auto &file : file_entry.second) {
 				if (file.overwritten_delete_file.delete_file_id.IsValid()) {
@@ -2373,10 +2414,9 @@ void DuckLakeTransaction::AddNewInlinedFileDeletes(TableIndex table_id, idx_t fi
 vector<DuckLakeInlinedFileDeletionInfo>
 DuckLakeTransaction::GetNewInlinedFileDeletes(DuckLakeCommitState &commit_state) {
 	vector<DuckLakeInlinedFileDeletionInfo> result;
-	lock_guard<mutex> guard(local_changes.lock);
-	for (auto &entry : local_changes.changes) {
-		auto table_id = commit_state.GetTableId(entry.first);
-		auto &table_changes = entry.second;
+	for (auto &entry : local_changes.Changes()) {
+		auto table_id = commit_state.GetTableId(entry.GetTableIndex());
+		auto &table_changes = entry.GetTableChanges();
 		if (!table_changes.new_inlined_file_deletes) {
 			continue;
 		}

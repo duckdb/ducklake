@@ -38,6 +38,7 @@ struct CompactionInformation;
 struct DuckLakePath;
 struct DuckLakeCommitState;
 class DuckLakeFieldId;
+class LocalTableChangeIterationHelper;
 
 struct LocalTableDataChanges {
 	vector<DuckLakeDataFile> new_data_files;
@@ -53,10 +54,51 @@ struct LocalTableChanges {
 public:
 	void Clear();
 	bool HasChanges() const;
+	LocalTableChangeIterationHelper Changes() const;
 
 // private:
 	mutable mutex lock;
 	map<TableIndex, LocalTableDataChanges> changes;
+};
+
+class LocalTableChangeIterationHelper {
+public:
+	LocalTableChangeIterationHelper(mutex &local_changes_lock, const map<TableIndex, LocalTableDataChanges> &changes);
+private:
+	unique_lock<mutex> lock;
+	const map<TableIndex, LocalTableDataChanges> &changes;
+
+private:
+	struct LocalTableChangeIteratorEntry {
+		friend class LocalTableChangeIterationHelper;
+	public:
+		LocalTableChangeIteratorEntry();
+		TableIndex GetTableIndex() const;
+		const LocalTableDataChanges &GetTableChanges() const;
+
+	private:
+		TableIndex table_id;
+		optional_ptr<const LocalTableDataChanges> changes;
+	};
+	class LocalTableChangeIterator {
+	public:
+		explicit LocalTableChangeIterator(map<TableIndex, LocalTableDataChanges>::const_iterator it, map<TableIndex, LocalTableDataChanges>::const_iterator end_it);
+		map<TableIndex, LocalTableDataChanges>::const_iterator it;
+		map<TableIndex, LocalTableDataChanges>::const_iterator end_it;
+		LocalTableChangeIteratorEntry entry;
+
+	public:
+		LocalTableChangeIterator &operator++();
+		bool operator!=(const LocalTableChangeIterator &other) const;
+		const LocalTableChangeIteratorEntry &operator*() const;
+	};
+public:
+	LocalTableChangeIterator begin() { // NOLINT: match stl API
+		return LocalTableChangeIterator(changes.begin(), changes.end());
+	}
+	LocalTableChangeIterator end() { // NOLINT: match stl API
+		return LocalTableChangeIterator(changes.end(), changes.end());
+	}
 };
 
 struct SnapshotAndStats {
