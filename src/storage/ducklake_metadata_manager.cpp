@@ -2522,6 +2522,11 @@ string DuckLakeMetadataManager::GetInlinedDeletionTableName(TableIndex table_id,
 	return string();
 }
 
+void DuckLakeMetadataManager::InvalidateInlinedDeletionTableCache(TableIndex table_id) {
+	D_ASSERT(delete_inlined_table_cache.find(table_id.index) != delete_inlined_table_cache.end());
+	delete_inlined_table_cache.erase(table_id.index);
+}
+
 shared_ptr<DuckLakeInlinedData> DuckLakeMetadataManager::TransformInlinedData(QueryResult &result,
                                                                               const vector<LogicalType> &) {
 	if (result.HasError()) {

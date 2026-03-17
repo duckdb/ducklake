@@ -89,9 +89,11 @@ SELECT file_id, row_id, begin_snapshot FROM ducklake_meta.ducklake_inlined_delet
 statement ok
 CALL ducklake_flush_inlined_data('ducklake')
 
-query III
+# After flush, the inlined deletion table should be dropped
+statement error
 SELECT file_id, row_id, begin_snapshot FROM ducklake_meta.ducklake_inlined_delete_1 ORDER BY row_id
 ----
+ducklake_inlined_delete_1
 
 query I
 SELECT count(*) FROM GLOB('${DATA_PATH}/test_deletion_inlining/**/*-delete.parquet')
@@ -159,10 +161,10 @@ SELECT COUNT(*) FROM t
 ----
 30
 
-# After flush, active inlined deletions should be empty
-query III
+statement error
 SELECT file_id, row_id, begin_snapshot FROM ducklake_meta.ducklake_inlined_delete_1 ORDER BY row_id
 ----
+ducklake_inlined_delete_1
 
 # Now let's do an insert that is fully inlined
 statement ok

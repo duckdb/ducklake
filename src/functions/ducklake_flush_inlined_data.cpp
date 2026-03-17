@@ -555,12 +555,13 @@ LEFT JOIN (
 	// Register the delete files
 	transaction.AddDeletes(table_id, std::move(delete_files));
 
-	// Delete the flushed inlined deletions
+	// Drop the inlined deletion table and clear deletion cache after flushing
 	auto delete_result =
-	    transaction.Query(snapshot, StringUtil::Format("DELETE FROM {METADATA_CATALOG}.%s", inlined_table_name));
+	    transaction.Query(snapshot, StringUtil::Format("DROP TABLE {METADATA_CATALOG}.%s", inlined_table_name));
 	if (delete_result->HasError()) {
-		delete_result->GetErrorObject().Throw("Failed to delete inlined file deletions after flush: ");
+		delete_result->GetErrorObject().Throw("Failed to drop inlined file deletions table after flush: ");
 	}
+	metadata_manager.InvalidateInlinedDeletionTableCache(table_id);
 }
 
 //===--------------------------------------------------------------------===//

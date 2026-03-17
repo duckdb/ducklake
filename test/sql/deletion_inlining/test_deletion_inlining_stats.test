@@ -30,10 +30,10 @@ SELECT delete_count, begin_snapshot FROM ducklake_meta.ducklake_delete_file
 ----
 5	2
 
-query I
+statement error
 SELECT COUNT(*) FROM ducklake_meta.ducklake_inlined_delete_1
 ----
-0
+ducklake_inlined_delete_1
 
 query II
 SELECT record_count, next_row_id FROM ducklake_meta.ducklake_table_stats

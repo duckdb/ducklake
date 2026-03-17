@@ -88,10 +88,10 @@ SELECT COUNT(*) >= 1 FROM GLOB('${DATA_PATH}/deletion_inlining_large/**/*-delete
 ----
 true
 
-query I
+statement error
 SELECT COUNT(*) FROM ducklake_meta.ducklake_inlined_delete_1
 ----
-0
+ducklake_inlined_delete_1
 
 query II
 SELECT COUNT(*), SUM(a) FROM t
