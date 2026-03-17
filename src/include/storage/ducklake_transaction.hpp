@@ -56,6 +56,17 @@ public:
 	bool HasChanges() const;
 	LocalTableChangeIterationHelper Changes() const;
 	void CleanupFiles(DatabaseInstance &db);
+	bool HasTransactionLocalInserts(TableIndex table_id) const;
+	bool HasTransactionInlinedData(TableIndex table_id) const;
+	vector<DuckLakeDataFile> GetTransactionLocalFiles(TableIndex table_id) const;
+	shared_ptr<DuckLakeInlinedData> GetTransactionLocalInlinedData(ClientContext &context, TableIndex table_id) const;
+	void DropTransactionLocalFile(ClientContext &context, TableIndex table_id, const string &path);
+	void AppendFiles(TableIndex table_id, vector<DuckLakeDataFile> files);
+	void AppendInlinedData(ClientContext &context, TableIndex table_id, unique_ptr<DuckLakeInlinedData> new_data);
+	void AddNewInlinedDeletes(TableIndex table_id, const string &table_name, set<idx_t> new_deletes);
+	void DeleteFromLocalInlinedData(ClientContext &context, TableIndex table_id, set<idx_t> new_deletes);
+	void AddColumnToLocalInlinedData(ClientContext &context, TableIndex table_id, const LogicalType &new_column_type,
+									 FieldIndex new_field_index, const Value &default_value);
 
 // private:
 	mutable mutex lock;
