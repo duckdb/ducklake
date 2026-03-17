@@ -49,6 +49,16 @@ struct LocalTableDataChanges {
 	bool IsEmpty() const;
 };
 
+struct LocalTableChanges {
+public:
+	void Clear();
+	bool HasChanges() const;
+
+// private:
+	mutable mutex lock;
+	map<TableIndex, LocalTableDataChanges> changes;
+};
+
 struct SnapshotAndStats {
 	vector<DuckLakeGlobalStatsInfo> stats;
 	DuckLakeSnapshot snapshot;
@@ -263,8 +273,7 @@ private:
 	unique_ptr<DuckLakeCatalogSet> new_schemas;
 	map<SchemaIndex, reference<DuckLakeSchemaEntry>> dropped_schemas;
 	//! Local changes made to tables
-	mutex table_data_changes_lock;
-	map<TableIndex, LocalTableDataChanges> table_data_changes;
+	LocalTableChanges local_changes;
 	//! Snapshot cache for the AT (...) conditions that are referenced in the transaction
 	value_map_t<DuckLakeSnapshot> snapshot_cache;
 	//! New set of transaction-local name maps
