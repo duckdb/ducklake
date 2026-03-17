@@ -553,6 +553,43 @@ void LocalTableChanges::CleanupFiles(ClientContext &context, TableIndex table_id
 	}
 }
 
+void LocalTableChanges::AddDeletesToMap(ClientContext &context, vector<DuckLakeDeleteFile> new_deletes,
+                                        unordered_map<string, vector<DuckLakeDeleteFile>> &table_delete_map) {
+	for (auto &file : new_deletes) {
+		auto &data_file_path = file.data_file_path;
+		if (data_file_path.empty()) {
+			throw InternalException("Data file path needs to be set in delete");
+		}
+		if (file.source == DeleteFileSource::FLUSH) {
+			// If we have a snapshot, this is a flushed delete file, we add it to the rooster
+			table_delete_map[data_file_path].push_back(std::move(file));
+		} else {
+			// If not is a regular deletion
+			auto existing_entry = table_delete_map.find(data_file_path);
+			if (existing_entry != table_delete_map.end() && !existing_entry->second.empty()) {
+				// If a file already exists we remove it
+				auto &fs = FileSystem::GetFileSystem(context);
+				for (auto &old_file : existing_entry->second) {
+					fs.RemoveFile(old_file.file_name);
+				}
+				existing_entry->second.clear();
+			}
+			// We add the new file in
+			table_delete_map[data_file_path].push_back(std::move(file));
+		}
+	}
+}
+
+void LocalTableChanges::AddDeletes(ClientContext &context, TableIndex table_id, vector<DuckLakeDeleteFile> files) {
+	if (files.empty()) {
+		return;
+	}
+	lock_guard<mutex> guard(lock);
+	auto &table_changes = changes[table_id];
+	auto &table_delete_map = table_changes.new_delete_files;
+	LocalTableChanges::AddDeletesToMap(context, std::move(files), table_delete_map);
+}
+
 LocalTableChangeIterationHelper::LocalTableChangeIterationHelper(
     mutex &local_changes_lock, const map<TableIndex, LocalTableDataChanges> &changes_p)
     : lock(local_changes_lock), changes(changes_p) {
@@ -855,6 +892,7 @@ struct DuckLakeCommitState {
 	map<TableIndex, TableIndex> committed_tables;
 	map<idx_t, idx_t> committed_partition_ids;
 	map<MappingIndex, MappingIndex> committed_mapping_indexes;
+	map<TableIndex, vector<DuckLakeDeleteFile>> local_delete_files;
 
 	void RemapIdentifier(SchemaIndex &schema_id) const {
 		auto entry = committed_schemas.find(schema_id);
@@ -1902,13 +1940,12 @@ NewDataInfo DuckLakeTransaction::GetNewDataFiles(string &batch_query, DuckLakeCo
 		auto &schema = ducklake_catalog.GetSchemaForSnapshot(*this, GetSnapshot());
 		dl_stats = ducklake_catalog.ConstructStatsMap(*stats, schema);
 	}
-	lock_guard<mutex> guard(local_changes.lock);
-	for (auto &entry : local_changes.changes) {
-		auto table_id = commit_state.GetTableId(entry.first);
+	for (auto &entry : local_changes.Changes()) {
+		auto table_id = commit_state.GetTableId(entry.GetTableIndex());
 		if (table_id.IsTransactionLocal()) {
 			throw InternalException("Cannot commit transaction local files - these should have been cleaned up before");
 		}
-		auto &table_changes = entry.second;
+		auto &table_changes = entry.GetTableChanges();
 		if (table_changes.new_data_files.empty() && !table_changes.new_inlined_data) {
 			// no new data - skip this entry
 			continue;
@@ -1956,8 +1993,8 @@ NewDataInfo DuckLakeTransaction::GetNewDataFiles(string &batch_query, DuckLakeCo
 			}
 			result.new_files.push_back(std::move(data_file));
 		}
-		// write any deletes that were made on top of these transaction-local files
-		AddDeletesLocked(table_id, std::move(delete_files));
+		// add any delete files that were made on top of these transaction-local files
+		commit_state.local_delete_files[table_id] = std::move(delete_files);
 
 		if (table_changes.new_inlined_data) {
 			auto &inlined_data = *table_changes.new_inlined_data;
@@ -1992,10 +2029,28 @@ NewDataInfo DuckLakeTransaction::GetNewDataFiles(string &batch_query, DuckLakeCo
 	return result;
 }
 
+DuckLakeDeleteFileInfo DuckLakeTransaction::GetNewDeleteFile(TableIndex table_id,
+                                                             const DuckLakeCommitState &commit_state,
+                                                             const DuckLakeDeleteFile &file) const {
+	DuckLakeDeleteFileInfo delete_file;
+	delete_file.id = DataFileIndex(commit_state.commit_snapshot.next_file_id++);
+	delete_file.table_id = table_id;
+	delete_file.data_file_id = file.data_file_id;
+	delete_file.path = file.file_name;
+	delete_file.delete_count = file.delete_count;
+	delete_file.file_size_bytes = file.file_size_bytes;
+	delete_file.footer_size = file.footer_size;
+	delete_file.encryption_key = file.encryption_key;
+	delete_file.begin_snapshot = file.begin_snapshot;
+	delete_file.max_snapshot = file.max_snapshot;
+	return delete_file;
+}
+
 vector<DuckLakeDeleteFileInfo>
 DuckLakeTransaction::GetNewDeleteFiles(const DuckLakeCommitState &commit_state,
                                        vector<DuckLakeOverwrittenDeleteFile> &overwritten_delete_files) const {
 	vector<DuckLakeDeleteFileInfo> result;
+	// handle delete files made to existing files
 	for (auto &entry : local_changes.Changes()) {
 		auto table_id = commit_state.GetTableId(entry.GetTableIndex());
 		auto &table_changes = entry.GetTableChanges();
@@ -2005,19 +2060,22 @@ DuckLakeTransaction::GetNewDeleteFiles(const DuckLakeCommitState &commit_state,
 					// track the old delete file for deletion from metadata and disk
 					overwritten_delete_files.push_back(file.overwritten_delete_file);
 				}
-				DuckLakeDeleteFileInfo delete_file;
-				delete_file.id = DataFileIndex(commit_state.commit_snapshot.next_file_id++);
-				delete_file.table_id = table_id;
-				delete_file.data_file_id = file.data_file_id;
-				delete_file.path = file.file_name;
-				delete_file.delete_count = file.delete_count;
-				delete_file.file_size_bytes = file.file_size_bytes;
-				delete_file.footer_size = file.footer_size;
-				delete_file.encryption_key = file.encryption_key;
-				delete_file.begin_snapshot = file.begin_snapshot;
-				delete_file.max_snapshot = file.max_snapshot;
+				auto delete_file = GetNewDeleteFile(table_id, commit_state, file);
 				result.push_back(std::move(delete_file));
 			}
+		}
+	}
+	// handle any delete files that were added to data files that are ALSO added in this transaction
+	for (auto &entry : commit_state.local_delete_files) {
+		auto table_id = commit_state.GetTableId(entry.first);
+		for (auto &file : entry.second) {
+			if (file.overwritten_delete_file.delete_file_id.IsValid()) {
+				throw InternalException("Local delete files should not overwrite files");
+				// track the old delete file for deletion from metadata and disk
+				overwritten_delete_files.push_back(file.overwritten_delete_file);
+			}
+			auto delete_file = GetNewDeleteFile(table_id, commit_state, file);
+			result.push_back(std::move(delete_file));
 		}
 	}
 	return result;
@@ -2617,40 +2675,8 @@ DuckLakeTransaction::GetNewInlinedFileDeletes(DuckLakeCommitState &commit_state)
 }
 
 void DuckLakeTransaction::AddDeletes(TableIndex table_id, vector<DuckLakeDeleteFile> files) {
-	if (files.empty()) {
-		return;
-	}
-	lock_guard<mutex> guard(local_changes.lock);
-	AddDeletesLocked(table_id, std::move(files));
-}
-
-void DuckLakeTransaction::AddDeletesLocked(TableIndex table_id, vector<DuckLakeDeleteFile> files) {
-	auto &table_changes = local_changes.changes[table_id];
-	auto &table_delete_map = table_changes.new_delete_files;
-	for (auto &file : files) {
-		auto &data_file_path = file.data_file_path;
-		if (data_file_path.empty()) {
-			throw InternalException("Data file path needs to be set in delete");
-		}
-		if (file.source == DeleteFileSource::FLUSH) {
-			// If we have a snapshot, this is a flushed delete file, we add it to the rooster
-			table_delete_map[data_file_path].push_back(std::move(file));
-		} else {
-			// If not is a regular deletion
-			auto existing_entry = table_delete_map.find(data_file_path);
-			if (existing_entry != table_delete_map.end() && !existing_entry->second.empty()) {
-				// If a file already exists we remove it
-				auto context_ref = context.lock();
-				auto &fs = FileSystem::GetFileSystem(*context_ref);
-				for (auto &old_file : existing_entry->second) {
-					fs.RemoveFile(old_file.file_name);
-				}
-				existing_entry->second.clear();
-			}
-			// We add the new file in
-			table_delete_map[data_file_path].push_back(std::move(file));
-		}
-	}
+	auto context_ref = context.lock();
+	local_changes.AddDeletes(*context_ref, table_id, std::move(files));
 }
 
 void DuckLakeTransaction::AddCompaction(TableIndex table_id, DuckLakeCompactionEntry entry) {

@@ -83,8 +83,11 @@ public:
 
 	void TransactionLocalDelete(ClientContext &context, TableIndex table_id, const string &data_file_path,
 	                            DuckLakeDeleteFile delete_file);
+	void AddDeletes(ClientContext &context, TableIndex table_id, vector<DuckLakeDeleteFile> files);
+	static void AddDeletesToMap(ClientContext &context, vector<DuckLakeDeleteFile> new_deletes,
+	                            unordered_map<string, vector<DuckLakeDeleteFile>> &delete_file_map);
 
-	// private:
+private:
 	mutable mutex lock;
 	map<TableIndex, LocalTableDataChanges> changes;
 };
@@ -295,6 +298,8 @@ private:
 	vector<DuckLakeDeleteFileInfo>
 	GetNewDeleteFiles(const DuckLakeCommitState &commit_state,
 	                  vector<DuckLakeOverwrittenDeleteFile> &overwritten_delete_files) const;
+	DuckLakeDeleteFileInfo GetNewDeleteFile(TableIndex table_id, const DuckLakeCommitState &commit_state,
+	                                        const DuckLakeDeleteFile &file) const;
 	string UpdateGlobalTableStats(TableIndex table_id, const DuckLakeNewGlobalStats &new_stats);
 	SnapshotAndStats CheckForConflicts(DuckLakeSnapshot transaction_snapshot,
 	                                   const TransactionChangeInformation &changes);
@@ -314,8 +319,6 @@ private:
 
 	void AlterEntryInternal(DuckLakeTableEntry &old_entry, unique_ptr<CatalogEntry> new_entry);
 	void AlterEntryInternal(DuckLakeViewEntry &old_entry, unique_ptr<CatalogEntry> new_entry);
-	//! Mutates table_data_changes; caller must hold table_data_changes_lock.
-	void AddDeletesLocked(TableIndex table_id, vector<DuckLakeDeleteFile> files);
 	void AddTableChanges(TableIndex table_id, const LocalTableDataChanges &table_changes,
 	                     TransactionChangeInformation &changes) const;
 
