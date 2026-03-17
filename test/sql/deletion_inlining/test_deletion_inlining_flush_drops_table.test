@@ -50,7 +50,7 @@ SELECT COUNT(*) FROM t
 45
 
 query I
-SELECT count(*) FROM GLOB('${DATA_PATH}/test_flush_drops_table/**/*-delete.parquet')
+SELECT count(*) FROM GLOB('${DATA_PATH}/test_deletion_inlining_flush_drops_table/**/*-delete.parquet')
 ----
 1
 
