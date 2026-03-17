@@ -24,7 +24,8 @@
         "test/sql/general/default_path.test",
         "test/sql/autoloading/autoload_data_path.test",
         "test/sql/general/metadata_parameters.test",
-        "test/sql/metadata/ducklake_settings.test"
+        "test/sql/metadata/ducklake_settings.test",
+        "test/sql/remove_orphans/metadata_in_data_path.test"
       ]
     },
     {
