@@ -56,6 +56,7 @@ public:
 	bool HasChanges() const;
 	LocalTableChangeIterationHelper Changes() const;
 	void CleanupFiles(DatabaseInstance &db);
+	void CleanupFiles(ClientContext &context, TableIndex table_id);
 	bool HasTransactionLocalInserts(TableIndex table_id) const;
 	bool HasTransactionInlinedData(TableIndex table_id) const;
 	vector<DuckLakeDataFile> GetTransactionLocalFiles(TableIndex table_id) const;
@@ -66,9 +67,24 @@ public:
 	void AddNewInlinedDeletes(TableIndex table_id, const string &table_name, set<idx_t> new_deletes);
 	void DeleteFromLocalInlinedData(ClientContext &context, TableIndex table_id, set<idx_t> new_deletes);
 	void AddColumnToLocalInlinedData(ClientContext &context, TableIndex table_id, const LogicalType &new_column_type,
-									 FieldIndex new_field_index, const Value &default_value);
+	                                 FieldIndex new_field_index, const Value &default_value);
+	void RemoveColumnFromLocalInlinedData(ClientContext &context, TableIndex table_id,
+	                                      LogicalIndex removed_column_index, const DuckLakeFieldId &field_id);
+	optional_ptr<DuckLakeInlinedDataDeletes> GetInlinedDeletes(TableIndex table_id, const string &table_name) const;
+	void AddNewInlinedFileDeletes(TableIndex table_id, idx_t file_id, set<idx_t> new_deletes);
+	void AddCompaction(TableIndex table_id, DuckLakeCompactionEntry entry);
+	bool HasLocalDeletes(TableIndex table_id) const;
+	bool HasAnyLocalChanges(TableIndex table_id) const;
 
-// private:
+	void GetLocalDeleteForFile(TableIndex table_id, const string &path, DuckLakeFileData &result) const;
+	bool HasLocalInlinedFileDeletes(TableIndex table_id) const;
+
+	void GetLocalInlinedFileDeletesForFile(TableIndex table_id, idx_t file_id, set<idx_t> &result) const;
+
+	void TransactionLocalDelete(ClientContext &context, TableIndex table_id, const string &data_file_path,
+	                            DuckLakeDeleteFile delete_file);
+
+	// private:
 	mutable mutex lock;
 	map<TableIndex, LocalTableDataChanges> changes;
 };
@@ -76,6 +92,7 @@ public:
 class LocalTableChangeIterationHelper {
 public:
 	LocalTableChangeIterationHelper(mutex &local_changes_lock, const map<TableIndex, LocalTableDataChanges> &changes);
+
 private:
 	unique_lock<mutex> lock;
 	const map<TableIndex, LocalTableDataChanges> &changes;
@@ -83,6 +100,7 @@ private:
 private:
 	struct LocalTableChangeIteratorEntry {
 		friend class LocalTableChangeIterationHelper;
+
 	public:
 		LocalTableChangeIteratorEntry();
 		TableIndex GetTableIndex() const;
@@ -94,7 +112,8 @@ private:
 	};
 	class LocalTableChangeIterator {
 	public:
-		explicit LocalTableChangeIterator(map<TableIndex, LocalTableDataChanges>::const_iterator it, map<TableIndex, LocalTableDataChanges>::const_iterator end_it);
+		explicit LocalTableChangeIterator(map<TableIndex, LocalTableDataChanges>::const_iterator it,
+		                                  map<TableIndex, LocalTableDataChanges>::const_iterator end_it);
 		map<TableIndex, LocalTableDataChanges>::const_iterator it;
 		map<TableIndex, LocalTableDataChanges>::const_iterator end_it;
 		LocalTableChangeIteratorEntry entry;
@@ -104,6 +123,7 @@ private:
 		bool operator!=(const LocalTableChangeIterator &other) const;
 		const LocalTableChangeIteratorEntry &operator*() const;
 	};
+
 public:
 	LocalTableChangeIterator begin() { // NOLINT: match stl API
 		return LocalTableChangeIterator(changes.begin(), changes.end());
@@ -268,8 +288,8 @@ private:
 	DuckLakeTableInfo GetNewTable(DuckLakeCommitState &commit_state, DuckLakeTableEntry &table);
 	DuckLakeViewInfo GetNewView(DuckLakeCommitState &commit_state, DuckLakeViewEntry &view);
 	void FlushNewPartitionKey(DuckLakeSnapshot &commit_snapshot, DuckLakeTableEntry &table);
-	DuckLakeFileInfo GetNewDataFile(DuckLakeDataFile &file, DuckLakeSnapshot &commit_snapshot, TableIndex table_id,
-	                                optional_idx row_id_start);
+	DuckLakeFileInfo GetNewDataFile(const DuckLakeDataFile &file, DuckLakeSnapshot &commit_snapshot,
+	                                TableIndex table_id, optional_idx row_id_start);
 	NewDataInfo GetNewDataFiles(string &batch_query, DuckLakeCommitState &commit_state,
 	                            optional_ptr<vector<DuckLakeGlobalStatsInfo>> stats);
 	vector<DuckLakeDeleteFileInfo>

@@ -130,9 +130,8 @@ struct DuckLakeFileProcessor {
 public:
 	DuckLakeFileProcessor(DuckLakeTransaction &transaction, ClientContext &context,
 	                      const DuckLakeAddDataFilesData &bind_data)
-	    : transaction(transaction), context(context), table(bind_data.table),
-	      allow_missing(bind_data.allow_missing), ignore_extra_columns(bind_data.ignore_extra_columns),
-	      hive_partitioning(bind_data.hive_partitioning) {
+	    : transaction(transaction), context(context), table(bind_data.table), allow_missing(bind_data.allow_missing),
+	      ignore_extra_columns(bind_data.ignore_extra_columns), hive_partitioning(bind_data.hive_partitioning) {
 	}
 
 	vector<DuckLakeDataFile> AddFiles(const vector<string> &globs);
@@ -1167,7 +1166,8 @@ void DuckLakeFileProcessor::MapPartitionColumns(ParquetFileMetadata &file) {
 		// For YEAR/MONTH/DAY/HOUR transforms, the type is BIGINT, not the source column type
 		auto partition_key_type =
 		    DuckLakePartitionUtils::GetPartitionKeyType(partition_field.transform.type, field_id->Type());
-		auto hive_value = HivePartitioning::GetValue(context, partition_key_name, hive_entry->second, partition_key_type);
+		auto hive_value =
+		    HivePartitioning::GetValue(context, partition_key_name, hive_entry->second, partition_key_type);
 		file.hive_partition_values.emplace_back(
 		    HivePartition {partition_field.field_id, partition_key_type, hive_value});
 	}
