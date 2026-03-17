@@ -57,6 +57,29 @@ bool LocalTableChanges::HasChanges() const{
 	return !changes.empty();
 }
 
+void LocalTableChanges::CleanupFiles(DatabaseInstance &db) {
+	auto &fs = FileSystem::GetFileSystem(db);
+	lock_guard<mutex> guard(lock);
+	for (auto &entry : changes) {
+		auto &table_changes = entry.second;
+		for (auto &file : table_changes.new_data_files) {
+			if (file.created_by_ducklake) {
+				fs.TryRemoveFile(file.file_name);
+			}
+			for (auto &del_file : file.delete_files) {
+				fs.TryRemoveFile(del_file.file_name);
+			}
+		}
+		for (auto &file : table_changes.new_delete_files) {
+			for (auto &delete_files : file.second) {
+				fs.TryRemoveFile(delete_files.file_name);
+			}
+		}
+		table_changes.new_data_files.clear();
+		table_changes.new_delete_files.clear();
+	}
+}
+
 LocalTableChangeIterationHelper::LocalTableChangeIterationHelper(mutex &local_changes_lock, const map<TableIndex, LocalTableDataChanges> &changes_p) : lock(local_changes_lock), changes(changes_p) {}
 
 
@@ -536,27 +559,7 @@ string DuckLakeTransaction::WriteSnapshotChanges(DuckLakeCommitState &commit_sta
 
 void DuckLakeTransaction::CleanupFiles() {
 	// remove any files that were written
-	auto context_ref = context.lock();
-	auto &fs = FileSystem::GetFileSystem(db);
-	lock_guard<mutex> guard(local_changes.lock);
-	for (auto &entry : local_changes.changes) {
-		auto &table_changes = entry.second;
-		for (auto &file : table_changes.new_data_files) {
-			if (file.created_by_ducklake) {
-				fs.TryRemoveFile(file.file_name);
-			}
-			for (auto &del_file : file.delete_files) {
-				fs.TryRemoveFile(del_file.file_name);
-			}
-		}
-		for (auto &file : table_changes.new_delete_files) {
-			for (auto &delete_files : file.second) {
-				fs.TryRemoveFile(delete_files.file_name);
-			}
-		}
-		table_changes.new_data_files.clear();
-		table_changes.new_delete_files.clear();
-	}
+	local_changes.CleanupFiles(db);
 }
 
 template <class T, class MAP>

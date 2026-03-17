@@ -55,6 +55,7 @@ public:
 	void Clear();
 	bool HasChanges() const;
 	LocalTableChangeIterationHelper Changes() const;
+	void CleanupFiles(DatabaseInstance &db);
 
 // private:
 	mutable mutex lock;
