@@ -288,7 +288,7 @@ private:
 	DuckLakeTableInfo GetNewTable(DuckLakeCommitState &commit_state, DuckLakeTableEntry &table);
 	DuckLakeViewInfo GetNewView(DuckLakeCommitState &commit_state, DuckLakeViewEntry &view);
 	void FlushNewPartitionKey(DuckLakeSnapshot &commit_snapshot, DuckLakeTableEntry &table);
-	DuckLakeFileInfo GetNewDataFile(const DuckLakeDataFile &file, DuckLakeSnapshot &commit_snapshot,
+	DuckLakeFileInfo GetNewDataFile(const DuckLakeDataFile &file, DuckLakeCommitState &commit_state,
 	                                TableIndex table_id, optional_idx row_id_start);
 	NewDataInfo GetNewDataFiles(string &batch_query, DuckLakeCommitState &commit_state,
 	                            optional_ptr<vector<DuckLakeGlobalStatsInfo>> stats);
@@ -310,7 +310,7 @@ private:
 	void GetNewViewInfo(DuckLakeCommitState &commit_state, DuckLakeCatalogSet &catalog_set,
 	                    reference<CatalogEntry> table_entry, NewTableInfo &result,
 	                    TransactionChangeInformation &transaction_changes);
-	CompactionInformation GetCompactionChanges(DuckLakeSnapshot &commit_snapshot, CompactionType type);
+	CompactionInformation GetCompactionChanges(DuckLakeCommitState &commit_state, CompactionType type);
 
 	void AlterEntryInternal(DuckLakeTableEntry &old_entry, unique_ptr<CatalogEntry> new_entry);
 	void AlterEntryInternal(DuckLakeViewEntry &old_entry, unique_ptr<CatalogEntry> new_entry);

@@ -853,6 +853,7 @@ struct DuckLakeCommitState {
 	DuckLakeSnapshot &commit_snapshot;
 	map<SchemaIndex, SchemaIndex> committed_schemas;
 	map<TableIndex, TableIndex> committed_tables;
+	map<idx_t, idx_t> committed_partition_ids;
 
 	void RemapIdentifier(SchemaIndex &schema_id) const {
 		auto entry = committed_schemas.find(schema_id);
@@ -864,6 +865,15 @@ struct DuckLakeCommitState {
 		auto entry = committed_tables.find(table_id);
 		if (entry != committed_tables.end()) {
 			table_id = entry->second;
+		}
+	}
+	void RemapPartitionId(optional_idx &partition_id) const {
+		if (!partition_id.IsValid()) {
+			return;
+		}
+		auto entry = committed_partition_ids.find(partition_id.GetIndex());
+		if (entry != committed_partition_ids.end()) {
+			partition_id = entry->second;
 		}
 	}
 
@@ -1314,17 +1324,7 @@ DuckLakePartitionInfo DuckLakeTransaction::GetNewPartitionKey(DuckLakeCommitStat
 		}
 		partition_key.fields.push_back(std::move(partition_field));
 	}
-
-	// if we wrote any data with this partition id - rewrite it to the latest partition id
-	lock_guard<mutex> guard(local_changes.lock);
-	for (auto &entry : local_changes.changes) {
-		auto &table_changes = entry.second;
-		for (auto &file : table_changes.new_data_files) {
-			if (file.partition_id.IsValid() && file.partition_id.GetIndex() == local_partition_id) {
-				file.partition_id = partition_id;
-			}
-		}
-	}
+	commit_state.committed_partition_ids[local_partition_id] = partition_id;
 	return partition_key;
 }
 
@@ -1852,8 +1852,9 @@ DuckLakeColumnStatsInfo DuckLakeColumnStatsInfo::FromColumnStats(FieldIndex fiel
 	return column_stats;
 }
 
-DuckLakeFileInfo DuckLakeTransaction::GetNewDataFile(const DuckLakeDataFile &file, DuckLakeSnapshot &commit_snapshot,
+DuckLakeFileInfo DuckLakeTransaction::GetNewDataFile(const DuckLakeDataFile &file, DuckLakeCommitState &commit_state,
                                                      TableIndex table_id, optional_idx row_id_start) {
+	auto &commit_snapshot = commit_state.commit_snapshot;
 	DuckLakeFileInfo data_file;
 	data_file.id = DataFileIndex(commit_snapshot.next_file_id++);
 	data_file.table_id = table_id;
@@ -1862,6 +1863,7 @@ DuckLakeFileInfo DuckLakeTransaction::GetNewDataFile(const DuckLakeDataFile &fil
 	data_file.file_size_bytes = file.file_size_bytes;
 	data_file.footer_size = file.footer_size;
 	data_file.partition_id = file.partition_id;
+	commit_state.RemapPartitionId(data_file.partition_id);
 	data_file.encryption_key = file.encryption_key;
 	data_file.row_id_start = row_id_start;
 	data_file.mapping_id = file.mapping_id;
@@ -1926,7 +1928,7 @@ NewDataInfo DuckLakeTransaction::GetNewDataFiles(string &batch_query, DuckLakeCo
 			// row_id_start
 			auto row_id_start =
 			    file.flush_row_id_start.IsValid() ? file.flush_row_id_start.GetIndex() : new_stats.next_row_id;
-			auto data_file = GetNewDataFile(file, commit_state.commit_snapshot, table_id, row_id_start);
+			auto data_file = GetNewDataFile(file, commit_state, table_id, row_id_start);
 			for (auto &del_file : file.delete_files) {
 				// this transaction-local file already has deletes - write them out
 				DuckLakeDeleteFile delete_file = del_file;
@@ -2213,13 +2215,13 @@ string DuckLakeTransaction::CommitChanges(DuckLakeCommitState &commit_state,
 
 		// write compactions
 		auto compaction_merge_adjacent_changes =
-		    GetCompactionChanges(commit_snapshot, CompactionType::MERGE_ADJACENT_TABLES);
+		    GetCompactionChanges(commit_state, CompactionType::MERGE_ADJACENT_TABLES);
 		batch_queries += metadata_manager->WriteCompactions(compaction_merge_adjacent_changes.compacted_files,
 		                                                    CompactionType::MERGE_ADJACENT_TABLES);
 		batch_queries += metadata_manager->WriteNewDataFiles(
 		    commit_snapshot, compaction_merge_adjacent_changes.new_files, new_tables_result, new_schemas_result);
 
-		auto compaction_rewrite_delete_changes = GetCompactionChanges(commit_snapshot, CompactionType::REWRITE_DELETES);
+		auto compaction_rewrite_delete_changes = GetCompactionChanges(commit_state, CompactionType::REWRITE_DELETES);
 		batch_queries += metadata_manager->WriteNewDataFiles(
 		    commit_snapshot, compaction_rewrite_delete_changes.new_files, new_tables_result, new_schemas_result);
 		batch_queries += metadata_manager->WriteCompactions(compaction_rewrite_delete_changes.compacted_files,
@@ -2245,8 +2247,9 @@ string DuckLakeTransaction::CommitChanges(DuckLakeCommitState &commit_state,
 	return batch_queries;
 }
 
-CompactionInformation DuckLakeTransaction::GetCompactionChanges(DuckLakeSnapshot &commit_snapshot,
+CompactionInformation DuckLakeTransaction::GetCompactionChanges(DuckLakeCommitState &commit_state,
                                                                 CompactionType type) {
+    auto &commit_snapshot = commit_state.commit_snapshot;
 	CompactionInformation result;
 	for (auto &entry : local_changes.Changes()) {
 		auto table_id = entry.GetTableIndex();
@@ -2255,7 +2258,7 @@ CompactionInformation DuckLakeTransaction::GetCompactionChanges(DuckLakeSnapshot
 			if (type != compaction.type) {
 				continue;
 			}
-			auto new_file = GetNewDataFile(compaction.written_file, commit_snapshot, table_id, compaction.row_id_start);
+			auto new_file = GetNewDataFile(compaction.written_file, commit_state, table_id, compaction.row_id_start);
 			switch (type) {
 			case CompactionType::REWRITE_DELETES:
 				new_file.begin_snapshot = commit_snapshot.snapshot_id;
