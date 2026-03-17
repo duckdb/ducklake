@@ -854,6 +854,7 @@ struct DuckLakeCommitState {
 	map<SchemaIndex, SchemaIndex> committed_schemas;
 	map<TableIndex, TableIndex> committed_tables;
 	map<idx_t, idx_t> committed_partition_ids;
+	map<MappingIndex, MappingIndex> committed_mapping_indexes;
 
 	void RemapIdentifier(SchemaIndex &schema_id) const {
 		auto entry = committed_schemas.find(schema_id);
@@ -874,6 +875,12 @@ struct DuckLakeCommitState {
 		auto entry = committed_partition_ids.find(partition_id.GetIndex());
 		if (entry != committed_partition_ids.end()) {
 			partition_id = entry->second;
+		}
+	}
+	void RemapMappingIndex(MappingIndex &table_id) const {
+		auto entry = committed_mapping_indexes.find(table_id);
+		if (entry != committed_mapping_indexes.end()) {
+			table_id = entry->second;
 		}
 	}
 
@@ -1863,13 +1870,14 @@ DuckLakeFileInfo DuckLakeTransaction::GetNewDataFile(const DuckLakeDataFile &fil
 	data_file.file_size_bytes = file.file_size_bytes;
 	data_file.footer_size = file.footer_size;
 	data_file.partition_id = file.partition_id;
-	commit_state.RemapPartitionId(data_file.partition_id);
 	data_file.encryption_key = file.encryption_key;
 	data_file.row_id_start = row_id_start;
 	data_file.mapping_id = file.mapping_id;
 	data_file.begin_snapshot = file.begin_snapshot;
 	data_file.max_partial_file_snapshot = file.max_partial_file_snapshot;
 	data_file.column_stats = file.column_stats;
+	commit_state.RemapPartitionId(data_file.partition_id);
+	commit_state.RemapMappingIndex(data_file.mapping_id);
 	for (auto &partition_entry : file.partition_values) {
 		DuckLakeFilePartitionInfo partition_info;
 		partition_info.partition_column_idx = partition_entry.partition_column_idx;
@@ -2039,7 +2047,7 @@ void ConvertNameMapColumn(const DuckLakeNameMapEntry &name_map_entry, MappingInd
 
 NewNameMapInfo DuckLakeTransaction::GetNewNameMaps(DuckLakeCommitState &commit_state) {
 	NewNameMapInfo result;
-	map<MappingIndex, MappingIndex> remap_mapping_index;
+	auto &committed_mapping_indexes = commit_state.committed_mapping_indexes;
 	for (auto &entry : new_name_maps.name_maps) {
 		// generate a new mapping id
 		auto local_map_id = entry.first;
@@ -2061,21 +2069,7 @@ NewNameMapInfo DuckLakeTransaction::GetNewNameMaps(DuckLakeCommitState &commit_s
 		}
 		result.new_column_mappings.push_back(std::move(map_info));
 
-		remap_mapping_index[local_map_id] = new_map_id;
-	}
-	// iterate over the data files to point them towards any new mapping ids
-	lock_guard<mutex> guard(local_changes.lock);
-	for (auto &entry : local_changes.changes) {
-		auto &table_changes = entry.second;
-		for (auto &data_file : table_changes.new_data_files) {
-			if (!data_file.mapping_id.IsValid()) {
-				continue;
-			}
-			auto entry = remap_mapping_index.find(data_file.mapping_id);
-			if (entry != remap_mapping_index.end()) {
-				data_file.mapping_id = entry->second;
-			}
-		}
+		committed_mapping_indexes[local_map_id] = new_map_id;
 	}
 	return result;
 }
@@ -2249,7 +2243,7 @@ string DuckLakeTransaction::CommitChanges(DuckLakeCommitState &commit_state,
 
 CompactionInformation DuckLakeTransaction::GetCompactionChanges(DuckLakeCommitState &commit_state,
                                                                 CompactionType type) {
-    auto &commit_snapshot = commit_state.commit_snapshot;
+	auto &commit_snapshot = commit_state.commit_snapshot;
 	CompactionInformation result;
 	for (auto &entry : local_changes.Changes()) {
 		auto table_id = entry.GetTableIndex();
