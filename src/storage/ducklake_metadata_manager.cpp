@@ -403,6 +403,21 @@ WHERE table_id = {TABLE_ID})";
 	throw InternalException("Table %llu does not exist", table_id.index);
 }
 
+idx_t DuckLakeMetadataManager::GetBeginSnapshotForSchemaVersion(TableIndex table_id, idx_t schema_version) {
+	string query = R"(
+SELECT begin_snapshot
+FROM {METADATA_CATALOG}.ducklake_schema_versions
+WHERE table_id = {TABLE_ID} AND schema_version = {SCHEMA_VERSION})";
+	query = StringUtil::Replace(query, "{TABLE_ID}", to_string(table_id.index));
+	query = StringUtil::Replace(query, "{SCHEMA_VERSION}", to_string(schema_version));
+	auto result = transaction.Query(query);
+	for (auto &row : *result) {
+		return row.GetValue<idx_t>(0);
+	}
+	// We need to fallback to GetBeginSnapshotForTable if this table doesnt have an alter yet
+	return GetBeginSnapshotForTable(table_id);
+}
+
 idx_t DuckLakeMetadataManager::GetNetDataFileRowCount(TableIndex table_id, DuckLakeSnapshot snapshot) {
 	// Compute sum(record_count) - sum(delete_count) - inlined_deletions in a single query
 	// Delete files are only counted if their corresponding data file is still visible
