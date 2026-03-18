@@ -60,7 +60,7 @@ SELECT COUNT(*) FROM t AT (VERSION => getvariable('v_after_delete'))
 query I
 SELECT COUNT(*) FROM ducklake_flush_inlined_data('ducklake');
 ----
-0
+1
 
 query I
 SELECT COUNT(*) FROM t AT (VERSION => getvariable('v_after_insert'))
@@ -75,17 +75,17 @@ SELECT COUNT(*) FROM t AT (VERSION => getvariable('v_after_delete'))
 query II
 SELECT COUNT(*), COALESCE(SUM(record_count), 0) FROM ducklake_meta.ducklake_data_file WHERE end_snapshot IS NULL;
 ----
-0	0
+1	20
 
 query II
 SELECT COUNT(*), COALESCE(SUM(delete_count), 0) FROM ducklake_meta.ducklake_delete_file WHERE end_snapshot IS NULL;
 ----
-0	0
+1	20
 
-query I
-SELECT COUNT(*) FROM ducklake_rewrite_data_files('ducklake', 't', delete_threshold => 0);
+query II
+SELECT COUNT(*), SUM(files_created) FROM ducklake_rewrite_data_files('ducklake', 't', delete_threshold => 0);
 ----
-0
+1	0
 
 query I
 SELECT COUNT(*) FROM t AT (VERSION => getvariable('v_after_insert'))

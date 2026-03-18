@@ -2310,33 +2310,42 @@ CompactionInformation DuckLakeTransaction::GetCompactionChanges(DuckLakeCommitSt
 			if (type != compaction.type) {
 				continue;
 			}
-			auto new_file = GetNewDataFile(compaction.written_file, commit_state, table_id, compaction.row_id_start);
-			switch (type) {
-			case CompactionType::REWRITE_DELETES:
-				new_file.begin_snapshot = commit_snapshot.snapshot_id;
-				break;
-			case CompactionType::MERGE_ADJACENT_TABLES: {
-				// For MERGE_ADJACENT_TABLES, track the max partial snapshot across all source files
-				optional_idx merged_max_partial_snapshot;
-				idx_t first_begin_snapshot = compaction.source_files[0].file.begin_snapshot;
-				for (auto &compacted_file : compaction.source_files) {
-					idx_t file_max_snapshot = compacted_file.max_partial_file_snapshot.IsValid()
-					                              ? compacted_file.max_partial_file_snapshot.GetIndex()
-					                              : compacted_file.file.begin_snapshot;
-					if (!merged_max_partial_snapshot.IsValid() ||
-					    file_max_snapshot > merged_max_partial_snapshot.GetIndex()) {
-						merged_max_partial_snapshot = file_max_snapshot;
+				bool has_new_file = !compaction.written_file.file_name.empty();
+				DuckLakeFileInfo new_file;
+
+				if (!has_new_file) {
+					if (type != CompactionType::REWRITE_DELETES) {
+						throw InternalException("Compaction error - expected output file for non-rewrite compaction");
 					}
+				} else {
+					new_file = GetNewDataFile(compaction.written_file, commit_state, table_id, compaction.row_id_start);
+					switch (type) {
+					case CompactionType::REWRITE_DELETES:
+						new_file.begin_snapshot = commit_snapshot.snapshot_id;
+						break;
+					case CompactionType::MERGE_ADJACENT_TABLES: {
+						// For MERGE_ADJACENT_TABLES, track the max partial snapshot across all source files
+						optional_idx merged_max_partial_snapshot;
+						idx_t first_begin_snapshot = compaction.source_files[0].file.begin_snapshot;
+						for (auto &compacted_file : compaction.source_files) {
+							idx_t file_max_snapshot = compacted_file.max_partial_file_snapshot.IsValid()
+							                              ? compacted_file.max_partial_file_snapshot.GetIndex()
+							                              : compacted_file.file.begin_snapshot;
+							if (!merged_max_partial_snapshot.IsValid() ||
+							    file_max_snapshot > merged_max_partial_snapshot.GetIndex()) {
+								merged_max_partial_snapshot = file_max_snapshot;
+							}
+					}
+					// Use the first source file's begin_snapshot for proper time travel support
+					new_file.begin_snapshot = first_begin_snapshot;
+					if (compaction.source_files.size() > 1) {
+						new_file.max_partial_file_snapshot = merged_max_partial_snapshot;
+					}
+					break;
 				}
-				// Use the first source file's begin_snapshot for proper time travel support
-				new_file.begin_snapshot = first_begin_snapshot;
-				if (compaction.source_files.size() > 1) {
-					new_file.max_partial_file_snapshot = merged_max_partial_snapshot;
+				default:
+					throw InternalException("DuckLakeTransaction::GetCompactionChanges Compaction type is invalid");
 				}
-				break;
-			}
-			default:
-				throw InternalException("DuckLakeTransaction::GetCompactionChanges Compaction type is invalid");
 			}
 
 			idx_t row_id_limit = 0;
@@ -2348,7 +2357,9 @@ CompactionInformation DuckLakeTransaction::GetCompactionChanges(DuckLakeCommitSt
 				DuckLakeCompactedFileInfo file_info;
 				file_info.path = compacted_file.file.data.path;
 				file_info.source_id = compacted_file.file.id;
-				file_info.new_id = new_file.id;
+				if (has_new_file) {
+					file_info.new_id = new_file.id;
+				}
 
 				if (!compacted_file.delete_files.empty()) {
 					file_info.delete_file_path = compacted_file.delete_files.back().data.path;
@@ -2358,12 +2369,18 @@ CompactionInformation DuckLakeTransaction::GetCompactionChanges(DuckLakeCommitSt
 					file_info.delete_file_start_snapshot = commit_snapshot.snapshot_id;
 					file_info.delete_file_end_snapshot = compacted_file.delete_files.back().end_snapshot;
 				}
-				if (row_id_limit > new_file.row_count) {
+				if (has_new_file && row_id_limit > new_file.row_count) {
 					throw InternalException("Compaction error - row id limit is larger than the row count of the file");
 				}
 				result.compacted_files.push_back(std::move(file_info));
 			}
-			result.new_files.push_back(std::move(new_file));
+			if (!has_new_file && row_id_limit != 0) {
+				throw InternalException(
+				    "Compaction error - rewrite compaction without output file must fully delete source files");
+			}
+			if (has_new_file) {
+				result.new_files.push_back(std::move(new_file));
+			}
 		}
 	}
 	return result;
