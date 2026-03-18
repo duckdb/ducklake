@@ -191,11 +191,10 @@ void DuckLakeInsert::AddWrittenFiles(DuckLakeInsertGlobalState &global_state, Da
 			auto &partition_children = MapValue::GetChildren(partition_info);
 			for (idx_t col_idx = 0; col_idx < partition_children.size(); col_idx++) {
 				auto &struct_children = StructValue::GetChildren(partition_children[col_idx]);
-				auto &part_value = StringValue::Get(struct_children[1]);
 
 				DuckLakeFilePartition file_partition_info;
 				file_partition_info.partition_column_idx = col_idx;
-				file_partition_info.partition_value = part_value;
+				file_partition_info.partition_value = struct_children[1];
 				data_file.partition_values.push_back(std::move(file_partition_info));
 			}
 		}

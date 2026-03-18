@@ -30,7 +30,7 @@ CREATE TABLE ducklake.test(part_key INT, part_key2 INT, val VARCHAR);
 statement error
 CALL ducklake_add_data_files('ducklake', 'test', '${DATA_PATH}/ducklake_add_files_hive_mismatch/**/*.parquet', hive_partitioning => true)
 ----
-cannot be cast to the column type
+Unable to cast 'p1' (from hive partition column 'PART_KEY') to: 'INTEGER'
 
 statement ok
 CREATE OR REPLACE TABLE ducklake.test(part_key VARCHAR, part_key2 INT, val VARCHAR);

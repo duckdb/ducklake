@@ -19,7 +19,6 @@ public:
 	static string ToString(const LogicalType &str);
 	static void CheckSupportedType(const LogicalType &type);
 
-	static bool IsGeoType(const LogicalType &type);
 	static bool RequiresCast(const LogicalType &type);
 	static bool RequiresCast(const vector<LogicalType> &types);
 	//! If this type requires a cast, return the type to cast to

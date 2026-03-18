@@ -35,6 +35,11 @@ string DuckLakeInitializer::GetAttachOptions() {
 	for (auto &option : options.metadata_parameters) {
 		attach_options.push_back(option.first + " " + option.second.ToSQLString());
 	}
+	const string metadata_type = catalog.MetadataType();
+	if (metadata_type.empty() || metadata_type == "duckdb") {
+		// this is duckdb, we always do latest storage
+		attach_options.push_back(StringUtil::Format("STORAGE_VERSION '%s'", "latest"));
+	}
 
 	if (attach_options.empty()) {
 		return string();

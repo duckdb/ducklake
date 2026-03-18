@@ -11,12 +11,13 @@
 #include "storage/ducklake_stats.hpp"
 #include "duckdb/common/optional_idx.hpp"
 #include "common/index.hpp"
+#include "duckdb/common/types/value.hpp"
 
 namespace duckdb {
 
 struct DuckLakeFilePartition {
 	idx_t partition_column_idx;
-	string partition_value;
+	Value partition_value;
 };
 
 enum class DeleteFileSource : uint8_t {
