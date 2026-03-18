@@ -1,0 +1,180 @@
+# name: test/sql/metadata/appender_data_files.test
+# description: Test that the DuckDB Appender API for metadata inserts works correctly
+# group: [metadata]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+
+test-env DATA_PATH __TEST_DIR__
+
+statement ok
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/ducklake_appender_test', METADATA_CATALOG 'dl', DATA_INLINING_ROW_LIMIT 0)
+
+# ------------------------------------------
+# Basic insert - verify data file is recorded correctly
+# ------------------------------------------
+statement ok
+CREATE TABLE ducklake.basic_test(id INTEGER, value VARCHAR);
+
+statement ok
+INSERT INTO ducklake.basic_test VALUES (1, 'hello'), (2, 'world'), (3, 'test');
+
+# Verify the data file was created
+query I
+SELECT COUNT(*) FROM dl.ducklake_data_file WHERE table_id = (SELECT table_id FROM dl.ducklake_table WHERE table_name = 'basic_test')
+----
+1
+
+# Verify the data can be read back correctly
+query II
+SELECT * FROM ducklake.basic_test ORDER BY id
+----
+1	hello
+2	world
+3	test
+
+# Verify column stats were recorded
+query I
+SELECT COUNT(*) FROM dl.ducklake_file_column_stats 
+WHERE table_id = (SELECT table_id FROM dl.ducklake_table WHERE table_name = 'basic_test')
+----
+2
+
+# ------------------------------------------
+# Multiple inserts - verify multiple data files
+# ------------------------------------------
+statement ok
+INSERT INTO ducklake.basic_test VALUES (4, 'foo'), (5, 'bar');
+
+query I
+SELECT COUNT(*) FROM dl.ducklake_data_file WHERE table_id = (SELECT table_id FROM dl.ducklake_table WHERE table_name = 'basic_test')
+----
+2
+
+query II
+SELECT * FROM ducklake.basic_test ORDER BY id
+----
+1	hello
+2	world
+3	test
+4	foo
+5	bar
+
+# ------------------------------------------
+# Column stats min/max values
+# ------------------------------------------
+statement ok
+CREATE TABLE ducklake.stats_test(i INTEGER, s VARCHAR);
+
+statement ok
+INSERT INTO ducklake.stats_test SELECT i, printf('%06d', i) FROM range(1000) t(i);
+
+# Check column stats contain min/max
+query IIII
+SELECT column_id, min_value, max_value, value_count FROM dl.ducklake_file_column_stats
+WHERE table_id = (SELECT table_id FROM dl.ducklake_table WHERE table_name = 'stats_test')
+ORDER BY column_id
+----
+1	0	999	1000
+2	000000	000999	1000
+
+# Verify filter pushdown still works with appender-written stats
+query II
+EXPLAIN ANALYZE SELECT COUNT(*) FROM ducklake.stats_test WHERE i > 900
+----
+analyzed_plan	<REGEX>:.*Total Files Read: 1.*
+
+query I
+SELECT COUNT(*) FROM ducklake.stats_test WHERE i > 900
+----
+99
+
+# ------------------------------------------
+# NULL values in data
+# ------------------------------------------
+statement ok
+CREATE TABLE ducklake.null_test(id INTEGER, value VARCHAR);
+
+statement ok
+INSERT INTO ducklake.null_test VALUES (1, 'a'), (2, NULL), (3, 'c'), (4, NULL);
+
+query II
+SELECT * FROM ducklake.null_test ORDER BY id
+----
+1	a
+2	NULL
+3	c
+4	NULL
+
+# Check null counts are recorded
+query II
+SELECT column_id, null_count FROM dl.ducklake_file_column_stats 
+WHERE table_id = (SELECT table_id FROM dl.ducklake_table WHERE table_name = 'null_test')
+ORDER BY column_id
+----
+1	0
+2	2
+
+# ------------------------------------------
+# Filter pushdown with explicit multi-file setup
+# ------------------------------------------
+statement ok
+CREATE TABLE ducklake.pruning_test(id INTEGER, value VARCHAR);
+
+# Create 3 separate files with known ranges
+statement ok
+INSERT INTO ducklake.pruning_test SELECT i, printf('%06d', i) FROM range(0, 1000) t(i);
+
+statement ok
+INSERT INTO ducklake.pruning_test SELECT i, printf('%06d', i) FROM range(1000, 2000) t(i);
+
+statement ok
+INSERT INTO ducklake.pruning_test SELECT i, printf('%06d', i) FROM range(2000, 3000) t(i);
+
+# Verify we have 3 data files
+query I
+SELECT COUNT(*) FROM dl.ducklake_data_file WHERE table_id = (SELECT table_id FROM dl.ducklake_table WHERE table_name = 'pruning_test')
+----
+3
+
+# Verify each file has column stats
+query I
+SELECT COUNT(*) FROM dl.ducklake_file_column_stats WHERE table_id = (SELECT table_id FROM dl.ducklake_table WHERE table_name = 'pruning_test')
+----
+6
+
+# Query that should only hit the first file (id: 0-999)
+query I
+SELECT COUNT(*) FROM ducklake.pruning_test WHERE id < 500
+----
+500
+
+query II
+EXPLAIN ANALYZE SELECT COUNT(*) FROM ducklake.pruning_test WHERE id < 500
+----
+analyzed_plan	<REGEX>:.*Total Files Read: 1.*
+
+# Query that should hit first two files (id: 0-1999)
+query I
+SELECT COUNT(*) FROM ducklake.pruning_test WHERE id < 1500
+----
+1500
+
+query II
+EXPLAIN ANALYZE SELECT COUNT(*) FROM ducklake.pruning_test WHERE id < 1500
+----
+analyzed_plan	<REGEX>:.*Total Files Read: 2.*
+
+# Query that should hit all three files
+query I
+SELECT COUNT(*) FROM ducklake.pruning_test WHERE id < 2500
+----
+2500
+
+query II
+EXPLAIN ANALYZE SELECT COUNT(*) FROM ducklake.pruning_test WHERE id < 2500
+----
+analyzed_plan	<REGEX>:.*Total Files Read: 3.*

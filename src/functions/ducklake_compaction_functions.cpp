@@ -222,8 +222,9 @@ void DuckLakeCompactor::GenerateCompactions(DuckLakeTableEntry &table,
 	compaction_map_t<DuckLakeCompactionCandidates> candidates;
 	for (idx_t file_idx = 0; file_idx < files.size(); file_idx++) {
 		auto &candidate = files[file_idx];
-		if (candidate.file.data.file_size_bytes >= target_file_size) {
+		if (candidate.file.data.file_size_bytes >= target_file_size && type != CompactionType::REWRITE_DELETES) {
 			// this file by itself exceeds the threshold - skip merging
+			// (does not apply to REWRITE_DELETES - delete files must be rewritten regardless of data file size)
 			continue;
 		}
 		if ((!candidate.delete_files.empty() && type == CompactionType::MERGE_ADJACENT_TABLES) ||

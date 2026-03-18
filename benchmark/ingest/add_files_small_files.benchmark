@@ -1,0 +1,5 @@
+# name: benchmark/ingest/add_files_small_files.benchmark
+# description: Benchmark adding many small parquet files using ducklake_add_data_files
+# group: [add_files_small]
+
+template benchmark/ingest/add_files_small_files.benchmark.in

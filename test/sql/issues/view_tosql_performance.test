@@ -1,0 +1,120 @@
+# name: test/sql/issues/view_tosql_performance.test
+# description: Test that duckdb_views() returns correct SQL for DuckLake views (issue #788)
+# group: [issues]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+
+test-env DATA_PATH __TEST_DIR__
+
+
+statement ok
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/ducklake_view_tosql');
+
+# simple view
+statement ok
+CREATE VIEW ducklake.simple_view AS SELECT 42 AS answer
+
+query I
+SELECT sql FROM duckdb_views() WHERE view_name='simple_view' AND database_name='ducklake'
+----
+CREATE VIEW simple_view AS SELECT 42 AS answer;
+
+query I
+SELECT answer FROM ducklake.simple_view
+----
+42
+
+# view with explicit column aliases
+statement ok
+CREATE VIEW ducklake.aliased_view(x, y) AS SELECT 1, 2
+
+query I
+SELECT sql FROM duckdb_views() WHERE view_name='aliased_view' AND database_name='ducklake'
+----
+CREATE VIEW aliased_view (x, y) AS SELECT 1, 2;
+
+query II
+SELECT x, y FROM ducklake.aliased_view
+----
+1	2
+
+# view with a filter
+statement ok
+CREATE TABLE ducklake.t1 (id INTEGER, val VARCHAR)
+
+statement ok
+INSERT INTO ducklake.t1 VALUES (1, 'hello'), (2, 'world'), (3, 'foo')
+
+statement ok
+CREATE VIEW ducklake.complex_view AS SELECT id, val FROM t1 WHERE id > 1 ORDER BY id
+
+query I
+SELECT sql FROM duckdb_views() WHERE view_name='complex_view' AND database_name='ducklake'
+----
+CREATE VIEW complex_view AS SELECT id, val FROM t1 WHERE (id > 1) ORDER BY id;
+
+query II
+SELECT * FROM ducklake.complex_view
+----
+2	world
+3	foo
+
+# view with a keyword name must be quoted
+statement ok
+CREATE VIEW ducklake."select" AS SELECT 99 AS n
+
+query I
+SELECT sql FROM duckdb_views() WHERE view_name='select' AND database_name='ducklake'
+----
+CREATE VIEW "select" AS SELECT 99 AS n;
+
+query I
+SELECT n FROM ducklake."select"
+----
+99
+
+query I
+SELECT view_name FROM duckdb_views() WHERE database_name='ducklake' ORDER BY view_name
+----
+aliased_view
+complex_view
+select
+simple_view
+
+# after rename, sql reflects the new name
+statement ok
+ALTER VIEW ducklake.simple_view RENAME TO renamed_view
+
+query I
+SELECT sql FROM duckdb_views() WHERE view_name='renamed_view' AND database_name='ducklake'
+----
+CREATE VIEW renamed_view AS SELECT 42 AS answer;
+
+query I
+SELECT answer FROM ducklake.renamed_view
+----
+42
+
+query I
+SELECT count(*) FROM duckdb_views() WHERE view_name='simple_view' AND database_name='ducklake'
+----
+0
+
+# view with a subquery
+statement ok
+CREATE VIEW ducklake.subquery_view AS SELECT * FROM (SELECT id * 2 AS doubled FROM t1) sq WHERE doubled < 6
+
+query I
+SELECT sql FROM duckdb_views() WHERE view_name='subquery_view' AND database_name='ducklake'
+----
+CREATE VIEW subquery_view AS SELECT * FROM (SELECT (id * 2) AS doubled FROM t1) AS sq WHERE (doubled < 6);
+
+query I
+SELECT doubled FROM ducklake.subquery_view ORDER BY doubled
+----
+2
+4

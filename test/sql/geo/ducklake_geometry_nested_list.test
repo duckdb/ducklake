@@ -1,0 +1,46 @@
+# name: test/sql/geo/ducklake_geometry_nested_list.test
+# group: [geo]
+
+# Stats are not preserved when serialized in the stats() function, so this doesnt work
+require no_alternative_verify
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+
+test-env DATA_PATH __TEST_DIR__
+
+statement ok
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '__TEST_DIR__/ducklake_files', METADATA_CATALOG 'ducklake_meta')
+
+statement ok
+USE ducklake;
+
+############################
+### LIST of geometry types
+############################
+statement ok
+create table t1 (g GEOMETRY[]);
+
+statement ok
+insert into t1 VALUES (ARRAY['POINT(1 2)'::GEOMETRY, 'LINESTRING(0 0, 1 1)'::GEOMETRY]);
+
+statement ok
+CHECKPOINT;
+
+query I
+select * from t1;
+----
+['POINT (1 2)', 'LINESTRING (0 0, 1 1)']
+
+query I
+SELECT stats(g) FROM t1;
+----
+[[Extent: [X: [0.000000, 1.000000], Y: [0.000000, 2.000000], Z: [inf, -inf], M: [inf, -inf]], Types: [point, linestring], Flags: [Has Empty Geom: true, Has No Empty Geom: true, Has Empty Part: true, Has No Empty Part: true]][Has Null: false, Has No Null: true]][Has Null: true, Has No Null: true]
+
+query I
+select extra_stats from ducklake_meta.ducklake_file_column_stats;
+----
+{"bbox": {"xmin": 0.000000, "xmax": 1.000000, "ymin": 0.000000, "ymax": 2.000000, "zmin": null, "zmax": null, "mmin": null, "mmax": null}, "types": ["linestring", "point"]}
