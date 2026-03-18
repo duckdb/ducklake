@@ -62,6 +62,16 @@ SELECT COUNT(*) FROM ducklake_flush_inlined_data('ducklake');
 ----
 0
 
+query I
+SELECT COUNT(*) FROM t AT (VERSION => getvariable('v_after_insert'))
+----
+20
+
+query I
+SELECT COUNT(*) FROM t AT (VERSION => getvariable('v_after_delete'))
+----
+0
+
 query II
 SELECT COUNT(*), COALESCE(SUM(record_count), 0) FROM ducklake_meta.ducklake_data_file WHERE end_snapshot IS NULL;
 ----
