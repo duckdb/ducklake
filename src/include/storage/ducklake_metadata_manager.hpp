@@ -311,9 +311,10 @@ private:
 public:
 	//! Read inlined file deletions for regular table scans (no snapshot info per row)
 	map<idx_t, set<idx_t>> ReadInlinedFileDeletions(TableIndex table_id, DuckLakeSnapshot snapshot);
+	//! Clear inlined table caches (needed after rollback so retry re-creates the tables)
+	void ClearInlinedTableCaches();
 
 private:
-	unordered_map<idx_t, string> inlined_table_name_cache;
 	static unordered_map<string /* name */, create_t> metadata_managers;
 	static mutex metadata_managers_lock;
 
