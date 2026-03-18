@@ -277,8 +277,9 @@ DuckLakeDataFlusher::DuckLakeDataFlusher(ClientContext &context, DuckLakeCatalog
 
 unique_ptr<LogicalOperator> DuckLakeDataFlusher::GenerateFlushCommand() {
 	// get the table entry at the specified snapshot
-	DuckLakeSnapshot snapshot(catalog.GetBeginSnapshotForTable(table_id, transaction), inlined_table.schema_version, 0,
-	                          0);
+	DuckLakeSnapshot snapshot(
+	    catalog.GetBeginSnapshotForSchemaVersion(table_id, inlined_table.schema_version, transaction),
+	    inlined_table.schema_version, 0, 0);
 
 	auto entry = catalog.GetEntryById(transaction, snapshot, table_id);
 	if (!entry) {

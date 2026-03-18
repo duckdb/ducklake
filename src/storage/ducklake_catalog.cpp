@@ -185,6 +185,12 @@ idx_t DuckLakeCatalog::GetBeginSnapshotForTable(TableIndex table_id, DuckLakeTra
 	return metadata_manager.GetBeginSnapshotForTable(table_id);
 }
 
+idx_t DuckLakeCatalog::GetBeginSnapshotForSchemaVersion(TableIndex table_id, idx_t schema_version,
+                                                        DuckLakeTransaction &transaction) {
+	auto &metadata_manager = transaction.GetMetadataManager();
+	return metadata_manager.GetBeginSnapshotForSchemaVersion(table_id, schema_version);
+}
+
 DuckLakeCatalogSet &DuckLakeCatalog::GetSchemaForSnapshot(DuckLakeTransaction &transaction, DuckLakeSnapshot snapshot) {
 	lock_guard<mutex> guard(schemas_lock);
 	auto entry = schemas.find(snapshot.schema_version);
