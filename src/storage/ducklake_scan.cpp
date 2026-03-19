@@ -9,6 +9,8 @@
 #include "duckdb/catalog/catalog_entry/table_function_catalog_entry.hpp"
 #include "duckdb/common/multi_file/multi_file_data.hpp"
 #include "duckdb/common/string_util.hpp"
+#include "duckdb/common/serializer/serializer.hpp"
+#include "duckdb/common/serializer/deserializer.hpp"
 #include "duckdb/function/partition_stats.hpp"
 #include "duckdb/function/table_function.hpp"
 #include "duckdb/main/extension_helper.hpp"
@@ -111,15 +113,6 @@ BindInfo DuckLakeBindInfo(const optional_ptr<FunctionData> bind_data) {
 	return BindInfo(file_list.GetTable());
 }
 
-void DuckLakeScanSerialize(Serializer &serializer, const optional_ptr<FunctionData> bind_data,
-                           const TableFunction &function) {
-	throw NotImplementedException("DuckLakeScan not implemented");
-}
-
-unique_ptr<FunctionData> DuckLakeScanDeserialize(Deserializer &deserializer, TableFunction &function) {
-	throw NotImplementedException("DuckLakeScan not implemented");
-}
-
 virtual_column_map_t DuckLakeVirtualColumns(ClientContext &context, optional_ptr<FunctionData> bind_data_p) {
 	auto &bind_data = bind_data_p->Cast<MultiFileBindData>();
 	auto &file_list = bind_data.file_list->Cast<DuckLakeMultiFileList>();
@@ -190,7 +183,7 @@ vector<PartitionStatistics> DuckLakeGetPartitionStats(ClientContext &context, Ge
 
 TableFunction DuckLakeFunctions::GetDuckLakeScanFunction(DatabaseInstance &instance) {
 	// Parquet extension needs to be loaded for this to make sense
-	ExtensionHelper::AutoLoadExtension(instance, "parquet");
+	ExtensionHelper::TryAutoLoadExtension(instance, "parquet");
 
 	// The ducklake_scan function is constructed by grabbing the parquet scan from the Catalog, then injecting the
 	// DuckLakeMultiFileReader into it to create a DuckLake-based multi file read
@@ -207,8 +200,6 @@ TableFunction DuckLakeFunctions::GetDuckLakeScanFunction(DatabaseInstance &insta
 	function.get_row_id_columns = DuckLakeGetRowIdColumn;
 	function.get_partition_stats = DuckLakeGetPartitionStats;
 
-	// Unset all of these: they are either broken, very inefficient.
-	// TODO: implement/fix these
 	function.serialize = DuckLakeScanSerialize;
 	function.deserialize = DuckLakeScanDeserialize;
 
@@ -233,4 +224,56 @@ shared_ptr<DuckLakeTransaction> DuckLakeFunctionInfo::GetTransaction() {
 	return result;
 }
 
+void DuckLakeScanSerialize(Serializer &serializer, const optional_ptr<FunctionData> bind_data,
+                           const TableFunction &function) {
+	auto &func_info = function.function_info->Cast<DuckLakeFunctionInfo>();
+	auto &catalog = func_info.table.ParentCatalog();
+	serializer.WriteProperty(100, "catalog_name", catalog.GetName());
+	serializer.WriteProperty(101, "schema_name", func_info.table.ParentSchema().name);
+	serializer.WriteProperty(102, "table_name", func_info.table_name);
+	serializer.WriteProperty(103, "snapshot_id", func_info.snapshot.snapshot_id);
+	serializer.WriteProperty(104, "schema_version", func_info.snapshot.schema_version);
+	serializer.WriteProperty(105, "next_catalog_id", func_info.snapshot.next_catalog_id);
+	serializer.WriteProperty(106, "next_file_id", func_info.snapshot.next_file_id);
+}
+
+unique_ptr<FunctionData> DuckLakeScanDeserialize(Deserializer &deserializer, TableFunction &function) {
+	auto &context = deserializer.Get<ClientContext &>();
+	auto catalog_name = deserializer.ReadProperty<string>(100, "catalog_name");
+	auto schema_name = deserializer.ReadProperty<string>(101, "schema_name");
+	auto table_name = deserializer.ReadProperty<string>(102, "table_name");
+	auto snapshot_id = deserializer.ReadProperty<idx_t>(103, "snapshot_id");
+	auto schema_version = deserializer.ReadProperty<idx_t>(104, "schema_version");
+	auto next_catalog_id = deserializer.ReadProperty<idx_t>(105, "next_catalog_id");
+	auto next_file_id = deserializer.ReadProperty<idx_t>(106, "next_file_id");
+
+	// Look up the DuckLake catalog and table
+	auto &catalog = Catalog::GetCatalog(context, catalog_name);
+	auto &transaction = DuckLakeTransaction::Get(context, catalog);
+	DuckLakeSnapshot snapshot(snapshot_id, schema_version, next_catalog_id, next_file_id);
+
+	auto &table_entry =
+	    Catalog::GetEntry<TableCatalogEntry>(context, catalog_name, schema_name, table_name).Cast<DuckLakeTableEntry>();
+
+	// Reconstruct the full ducklake_scan function (the deserialized stub lacks parquet callbacks)
+	auto full_function = DuckLakeFunctions::GetDuckLakeScanFunction(*context.db);
+
+	// Set up function info
+	auto function_info = make_shared_ptr<DuckLakeFunctionInfo>(table_entry, transaction, snapshot);
+	function_info->table_name = table_name;
+	for (auto &col : table_entry.GetColumns().Logical()) {
+		function_info->column_names.push_back(col.Name());
+		function_info->column_types.push_back(col.Type());
+	}
+	function_info->table_id = table_entry.GetTableId();
+	full_function.function_info = std::move(function_info);
+
+	// Bind the scan using the full function
+	auto bind_data = DuckLakeFunctions::BindDuckLakeScan(context, full_function);
+
+	// Copy the reconstructed function back so the LogicalGet uses it
+	function = std::move(full_function);
+
+	return bind_data;
+}
 } // namespace duckdb

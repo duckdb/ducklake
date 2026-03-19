@@ -17,6 +17,8 @@ namespace duckdb {
 class DuckLakeMultiFileList;
 class DuckLakeTableEntry;
 class DuckLakeTransaction;
+class Serializer;
+class Deserializer;
 
 class DuckLakeFunctions {
 public:
@@ -27,6 +29,11 @@ public:
 
 	static CopyFunctionCatalogEntry &GetCopyFunction(ClientContext &context, const string &name);
 };
+
+//! Serialize/Deserialize callbacks for DuckLakeScan (used by table macro Copy)
+void DuckLakeScanSerialize(Serializer &serializer, const optional_ptr<FunctionData> bind_data,
+                           const TableFunction &function);
+unique_ptr<FunctionData> DuckLakeScanDeserialize(Deserializer &deserializer, TableFunction &function);
 
 enum class DuckLakeScanType { SCAN_TABLE, SCAN_INSERTIONS, SCAN_DELETIONS, SCAN_FOR_FLUSH };
 

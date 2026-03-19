@@ -3,6 +3,7 @@
 #include "duckdb/common/exception.hpp"
 #include "duckdb/common/string_util.hpp"
 #include "storage/ducklake_storage.hpp"
+#include "storage/ducklake_scan.hpp"
 #include "functions/ducklake_table_functions.hpp"
 #include "storage/ducklake_secret.hpp"
 #include "duckdb/storage/storage_extension.hpp"
@@ -82,6 +83,14 @@ static void LoadInternal(ExtensionLoader &loader) {
 
 	DuckLakeSettingsFunction settings;
 	loader.RegisterFunction(settings);
+
+	// Register ducklake_scan so it can be found during deserialization (e.g. for table macro Copy)
+	// We register a stub here because parquet may not be loaded yet at extension init time.
+	// The actual function is fully reconstructed in DuckLakeScanDeserialize.
+	TableFunction ducklake_scan_stub("ducklake_scan", {LogicalType::VARCHAR}, nullptr, nullptr);
+	ducklake_scan_stub.serialize = DuckLakeScanSerialize;
+	ducklake_scan_stub.deserialize = DuckLakeScanDeserialize;
+	loader.RegisterFunction(ducklake_scan_stub);
 
 	// secrets
 	auto secret_type = DuckLakeSecret::GetSecretType();
