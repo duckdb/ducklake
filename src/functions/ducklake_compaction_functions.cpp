@@ -93,11 +93,17 @@ SourceResultType DuckLakeCompaction::GetDataInternal(ExecutionContext &context, 
 	}
 	source_state.returned_result = true;
 
+	if (!this->sink_state) {
+		throw InternalException("DuckLakeCompaction - missing sink state while producing result");
+	}
+	auto &gstate = this->sink_state->Cast<DuckLakeInsertGlobalState>();
+	auto files_created = gstate.written_files.size();
+
 	chunk.SetCardinality(1);
 	chunk.SetValue(0, 0, Value(table.schema.name));
 	chunk.SetValue(1, 0, Value(table.name));
 	chunk.SetValue(2, 0, Value::BIGINT(static_cast<int64_t>(source_files.size())));
-	chunk.SetValue(3, 0, Value::BIGINT(1)); // Each compaction creates 1 output file
+	chunk.SetValue(3, 0, Value::BIGINT(static_cast<int64_t>(files_created)));
 	return SourceResultType::FINISHED;
 }
 
@@ -121,7 +127,10 @@ SinkFinalizeType DuckLakeCompaction::Finalize(Pipeline &pipeline, Event &event, 
                                               OperatorSinkFinalizeInput &input) const {
 	auto &global_state = input.global_state.Cast<DuckLakeInsertGlobalState>();
 
-	if (global_state.written_files.size() != 1) {
+	if (global_state.written_files.size() > 1) {
+		throw InternalException("DuckLakeCompaction - expected at most a single output file");
+	}
+	if (global_state.written_files.empty() && type != CompactionType::REWRITE_DELETES) {
 		throw InternalException("DuckLakeCompaction - expected a single output file");
 	}
 	// set the partition values correctly
@@ -137,7 +146,9 @@ SinkFinalizeType DuckLakeCompaction::Finalize(Pipeline &pipeline, Event &event, 
 	DuckLakeCompactionEntry compaction_entry;
 	compaction_entry.row_id_start = row_id_start;
 	compaction_entry.source_files = source_files;
-	compaction_entry.written_file = global_state.written_files[0];
+	if (!global_state.written_files.empty()) {
+		compaction_entry.written_file = global_state.written_files[0];
+	}
 	compaction_entry.type = type;
 
 	auto &transaction = DuckLakeTransaction::Get(context, global_state.table.catalog);

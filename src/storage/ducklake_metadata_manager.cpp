@@ -4064,13 +4064,15 @@ string DuckLakeMetadataManager::WriteDeleteRewrites(const vector<DuckLakeCompact
 		WHERE data_file_id = %llu;
 		)",
 		                       table_idx_last_snapshot[compaction.table_index.index], compaction.source_id.index);
-		// update the snapshot of our newly added file
-		batch_query +=
-		    StringUtil::Format(R"(
-			UPDATE {METADATA_CATALOG}.ducklake_data_file SET begin_snapshot = %llu
-			WHERE data_file_id = %llu;
-			)",
-		                       table_idx_last_snapshot[compaction.table_index.index], compaction.new_id.index);
+		// update the snapshot of our newly added file (if it was created)
+		if (compaction.new_id.IsValid()) {
+			batch_query +=
+			    StringUtil::Format(R"(
+				UPDATE {METADATA_CATALOG}.ducklake_data_file SET begin_snapshot = %llu
+				WHERE data_file_id = %llu;
+				)",
+			                       table_idx_last_snapshot[compaction.table_index.index], compaction.new_id.index);
+		}
 	}
 	return batch_query;
 }
