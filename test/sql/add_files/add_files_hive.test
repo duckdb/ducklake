@@ -12,7 +12,7 @@ test-env DATA_PATH __TEST_DIR__
 
 
 statement ok
-ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/ducklake_add_files_hive/', METADATA_CATALOG 'metadata');
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/ducklake_add_files_hive/', METADATA_CATALOG 'metadata', DATA_INLINING_ROW_LIMIT 0);
 
 statement ok
 CREATE TABLE partitioned_tbl(part_key INT, part_key2 INT, val VARCHAR);
@@ -45,6 +45,12 @@ SELECT part_key, part_key2, val FROM ducklake.test ORDER BY ALL
 # test pushdown into stats
 query II
 EXPLAIN ANALYZE SELECT COUNT(*) FROM ducklake.test WHERE part_key=1
+----
+analyzed_plan	<REGEX>:.*Total Files Read: 1.*
+
+# Offset/Limit generate more complex query plans, ensure they don't trigger unnecessary file reads.
+query II
+EXPLAIN ANALYZE SELECT * FROM ducklake.test WHERE part_key = 1 OFFSET 0 LIMIT 1;
 ----
 analyzed_plan	<REGEX>:.*Total Files Read: 1.*
 

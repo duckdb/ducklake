@@ -1,0 +1,259 @@
+# name: test/sql/compaction/merge_rewrite_partial_file_info.test
+# description: Reproduce issue ##551 with REWRITE_DELETES and partial_max
+# group: [compaction]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+
+test-env DATA_PATH __TEST_DIR__
+
+
+statement ok
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/reproduce_issue/')
+
+statement ok
+USE ducklake;
+
+# Set small target file size to control merging behavior
+statement ok
+CALL ducklake_set_option('ducklake', 'target_file_size', '10KB');
+
+statement ok
+CREATE TABLE t (id INTEGER, data VARCHAR);
+
+statement ok
+SET VARIABLE snap_create = (SELECT MAX(snapshot_id) FROM ducklake_snapshots('ducklake'));
+
+# Create a LARGE file A that won't be merged (exceeds target_file_size)
+statement ok
+INSERT INTO t SELECT i, repeat('x', 100) FROM range(5000) t(i);
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake')
+
+statement ok
+SET VARIABLE snap_A = (SELECT MAX(snapshot_id) FROM ducklake_snapshots('ducklake'));
+
+# Create small files B and C that WILL be merged
+statement ok
+INSERT INTO t SELECT i + 5000, 'small1' FROM range(100) t(i);
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake')
+
+statement ok
+SET VARIABLE snap_B = (SELECT MAX(snapshot_id) FROM ducklake_snapshots('ducklake'));
+
+statement ok
+INSERT INTO t SELECT i + 5100, 'small2' FROM range(100) t(i);
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake')
+
+statement ok
+SET VARIABLE snap_C = (SELECT MAX(snapshot_id) FROM ducklake_snapshots('ducklake'));
+
+# At this point we have 3 files
+query I
+SELECT COUNT(*) FROM ducklake_list_files('ducklake', 't');
+----
+3
+
+# Capture expected partial_max before merge: max begin_snapshot of the small files (B and C)
+# (exclude file A which has the smallest begin_snapshot and won't be merged)
+statement ok
+SET VARIABLE expected_pm_1 = (SELECT max(begin_snapshot) FROM __ducklake_metadata_ducklake.ducklake_data_file WHERE end_snapshot IS NULL AND begin_snapshot != (SELECT min(begin_snapshot) FROM __ducklake_metadata_ducklake.ducklake_data_file WHERE end_snapshot IS NULL));
+
+# Merge B+C into a single file (A is too big to merge)
+query III
+SELECT table_name, files_processed, files_created FROM ducklake_merge_adjacent_files('ducklake', 't')
+----
+t	2	1
+
+statement ok
+SET VARIABLE snap_merge_BC = (SELECT MAX(snapshot_id) FROM ducklake_snapshots('ducklake'));
+
+# State now:
+# - File A (ids 0-4999): NO partial_max
+# - Merged BC (ids 5000-5199): HAS partial_max
+query I
+SELECT COUNT(*) FROM ducklake_list_files('ducklake', 't') WHERE delete_file IS NULL;
+----
+2
+
+# Only merged BC has partial_max - verify it equals expected value
+query I
+SELECT CASE WHEN partial_max IS NULL THEN NULL ELSE partial_max = getvariable('expected_pm_1') END
+FROM __ducklake_metadata_ducklake.ducklake_data_file WHERE end_snapshot IS NULL ORDER BY data_file_id;
+----
+NULL
+true
+
+statement ok
+INSERT INTO t SELECT i + 5200, 'small3' FROM range(10) t(i);
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake')
+
+statement ok
+SET VARIABLE snap_D = (SELECT MAX(snapshot_id) FROM ducklake_snapshots('ducklake'));
+
+statement ok
+INSERT INTO t SELECT i + 5210, 'small4' FROM range(10) t(i);
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake')
+
+statement ok
+SET VARIABLE snap_E = (SELECT MAX(snapshot_id) FROM ducklake_snapshots('ducklake'));
+
+# Set small target file size so only D & E get merged
+statement ok
+CALL ducklake_set_option('ducklake', 'target_file_size', '1KB');
+
+# Capture expected partial_max for D+E merge: max begin_snapshot of files created after the first merge
+statement ok
+SET VARIABLE merge1_snap = (SELECT max(snapshot_id) FROM ducklake_snapshots('ducklake') WHERE changes::VARCHAR LIKE '%merge%');
+
+statement ok
+SET VARIABLE expected_pm_2 = (SELECT max(begin_snapshot) FROM __ducklake_metadata_ducklake.ducklake_data_file WHERE end_snapshot IS NULL AND begin_snapshot > getvariable('merge1_snap'));
+
+# Merge D+E into a single file (A is too big to merge)
+query III
+SELECT table_name, files_processed, files_created FROM ducklake_merge_adjacent_files('ducklake', 't')
+----
+t	2	1
+
+statement ok
+SET VARIABLE snap_merge_DE = (SELECT MAX(snapshot_id) FROM ducklake_snapshots('ducklake'));
+
+# State now:
+# - File A: NO partial_max
+# - Merged BC: HAS partial_max = expected_pm_1
+# - Merged DE: HAS partial_max = expected_pm_2
+query I
+SELECT COUNT(*) FROM ducklake_list_files('ducklake', 't') WHERE delete_file IS NULL;
+----
+3
+
+query I
+SELECT CASE WHEN partial_max IS NULL THEN NULL
+  WHEN partial_max = getvariable('expected_pm_1') THEN true
+  WHEN partial_max = getvariable('expected_pm_2') THEN true
+  ELSE false
+END
+FROM __ducklake_metadata_ducklake.ducklake_data_file WHERE end_snapshot IS NULL ORDER BY data_file_id;
+----
+NULL
+true
+true
+
+# Delete from file A (no partial_max)
+statement ok
+DELETE FROM t WHERE id < 4900;
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake')
+
+statement ok
+SET VARIABLE snap_del_A = (SELECT MAX(snapshot_id) FROM ducklake_snapshots('ducklake'));
+
+# Delete from merged file BC (has partial_max)
+statement ok
+DELETE FROM t WHERE id >= 5000 AND id < 5150;
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake')
+
+statement ok
+SET VARIABLE snap_del_BC = (SELECT MAX(snapshot_id) FROM ducklake_snapshots('ducklake'));
+
+# Set large target to merge all files
+statement ok
+CALL ducklake_set_option('ducklake', 'target_file_size', '1MB');
+
+# Rewrite all data files, including ones with partial_max
+query III
+SELECT table_name, files_processed, files_created FROM ducklake_rewrite_data_files('ducklake', 't', delete_threshold => 0)
+----
+t	2	1
+
+statement ok
+SET VARIABLE snap_rewrite = (SELECT MAX(snapshot_id) FROM ducklake_snapshots('ducklake'));
+
+# Merge all of them into a single file
+query III
+SELECT table_name, files_processed, files_created FROM ducklake_merge_adjacent_files('ducklake', 't')
+----
+t	2	1
+
+# Verify that we ended up with a single file
+query I
+SELECT COUNT(*) FROM ducklake_list_files('ducklake', 't');
+----
+1
+
+# Ensure the final count is correct after all operations
+query I
+SELECT COUNT(*) FROM t;
+----
+170
+
+# Ensure time-travel works across all snapshots
+query I
+SELECT COUNT(*) FROM t AT (VERSION => getvariable('snap_create'))
+----
+0
+
+query I
+SELECT COUNT(*) FROM t AT (VERSION => getvariable('snap_A'))
+----
+5000
+
+query I
+SELECT COUNT(*) FROM t AT (VERSION => getvariable('snap_B'))
+----
+5100
+
+query I
+SELECT COUNT(*) FROM t AT (VERSION => getvariable('snap_C'))
+----
+5200
+
+query I
+SELECT COUNT(*) FROM t AT (VERSION => getvariable('snap_merge_BC'))
+----
+5200
+
+query I
+SELECT COUNT(*) FROM t AT (VERSION => getvariable('snap_D'))
+----
+5210
+
+query I
+SELECT COUNT(*) FROM t AT (VERSION => getvariable('snap_E'))
+----
+5220
+
+query I
+SELECT COUNT(*) FROM t AT (VERSION => getvariable('snap_merge_DE'))
+----
+5220
+
+query I
+SELECT COUNT(*) FROM t AT (VERSION => getvariable('snap_del_A'))
+----
+320
+
+query I
+SELECT COUNT(*) FROM t AT (VERSION => getvariable('snap_del_BC'))
+----
+170
+
+query I
+SELECT COUNT(*) FROM t AT (VERSION => getvariable('snap_rewrite'))
+----
+170

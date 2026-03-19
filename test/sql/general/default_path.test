@@ -18,6 +18,10 @@ CREATE TABLE ducklake.test(i INTEGER, j INTEGER);
 statement ok
 INSERT INTO ducklake.test VALUES (1, 2), (NULL, 3);
 
+# flush inlined data to create files
+statement ok
+CALL ducklake_flush_inlined_data('ducklake')
+
 query I
 SELECT COUNT(*) FROM glob('__TEST_DIR__/ducklake_default_paths.db.files/**') WHERE 'main/test/' IN file.replace('\', '/')
 ----
@@ -32,6 +36,10 @@ CREATE TABLE ducklake.s1.test(i INTEGER);
 
 statement ok
 INSERT INTO ducklake.s1.test VALUES (42);
+
+# flush inlined data to create files
+statement ok
+CALL ducklake_flush_inlined_data('ducklake')
 
 query I
 SELECT COUNT(*) FROM glob('__TEST_DIR__/ducklake_default_paths.db.files/**') WHERE 's1/test/' IN file.replace('\', '/')

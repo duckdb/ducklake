@@ -24,6 +24,9 @@ SELECT * FROM ducklake.test
 statement ok
 INSERT INTO ducklake.test VALUES (MAP {'i': 1, 'j': 2}), (MAP {'j': 3}), (NULL);
 
+statement ok
+CALL ducklake_flush_inlined_data('ducklake')
+
 query I
 SELECT * FROM ducklake.test
 ----
@@ -43,6 +46,9 @@ SELECT * FROM ducklake.test WHERE s.i=100
 statement ok
 INSERT INTO ducklake.test VALUES (MAP {'i': 4, 'j': 5}), (MAP {'i': 6});
 
+statement ok
+CALL ducklake_flush_inlined_data('ducklake')
+
 query I
 SELECT * FROM ducklake.test
 ----
@@ -59,3 +65,8 @@ query I
 SELECT stats(s.i) FROM ducklake.test LIMIT 1
 ----
 <REGEX>:.*Min.*1.*Max.*6.*Has Null.*true.*
+
+query I
+SELECT stats(s) FROM ducklake.test ORDER BY all LIMIT 1
+----
+<REGEX>:.*Min.*{i=1, j=2}.*Max.*{i=6}.*Has Null.*true.*

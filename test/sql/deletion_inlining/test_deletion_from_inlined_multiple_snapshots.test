@@ -1,0 +1,108 @@
+# name: test/sql/deletion_inlining/test_deletion_from_inlined_multiple_snapshots.test
+# description: test ducklake flushing deletion on inserted inline, but we have multiple deletions over many snapshots
+# group: [deletion_inlining]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+
+test-env DATA_PATH __TEST_DIR__
+
+statement ok
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/test_deletion_from_inlined_multiple_snapshots',DATA_INLINING_ROW_LIMIT 10)
+
+statement ok
+use ducklake
+
+statement ok
+create table t1 (a integer)
+
+statement ok
+insert into t1 values (1), (2), (3), (1), (2), (3), (5), (6);
+
+# Let's generate deletes over multiple snapshots
+
+statement ok
+delete from t1 where a = 2;
+
+statement ok
+delete from t1 where a = 1;
+
+statement ok
+delete from t1 where a = 5;
+
+statement ok
+delete from t1 where a = 6;
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake');
+
+# This generates one deletion file, the file has all the correct snapshot information in it
+query IIIIII
+SELECT delete_file_id, table_id, begin_snapshot, end_snapshot, data_file_id, delete_count FROM __ducklake_metadata_ducklake.ducklake_delete_file
+----
+2	1	3	NULL	1	6
+
+# Let's verify the parquet file info
+query II
+SELECT pos, _ducklake_internal_snapshot_id FROM '${DATA_PATH}/test_deletion_from_inlined_multiple_snapshots/**/*-delete.parquet'
+----
+0	4
+1	3
+3	4
+4	3
+6	5
+7	6
+
+query I
+FROM t1
+----
+3
+3
+
+# Test timetraveling
+query I
+FROM t1  at (version => 6);
+----
+3
+3
+
+query I
+FROM t1  at (version => 5);
+----
+3
+3
+6
+
+query I
+FROM t1  at (version => 4);
+----
+3
+3
+5
+6
+
+query I
+FROM t1  at (version => 3);
+----
+1
+3
+1
+3
+5
+6
+
+query I
+FROM t1  at (version => 2);
+----
+1
+2
+3
+1
+2
+3
+5
+6
+

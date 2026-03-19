@@ -20,8 +20,10 @@ CREATE TABLE tbl(col INTEGER);
 statement ok
 INSERT INTO tbl VALUES (1), (2), (3);
 
-statement ok
-CALL ducklake_flush_inlined_data('inlining');
+query III
+SELECT schema_name, table_name, rows_flushed FROM ducklake_flush_inlined_data('inlining')
+----
+main	tbl	3
 
 statement ok
 create table test (id integer);
@@ -42,5 +44,7 @@ ATTACH 'ducklake:__TEST_DIR__/inlining_issue_on_empty_inline.db' AS inlining (DA
 statement ok
 use inlining;
 
-statement ok
-CALL ducklake_flush_inlined_data('inlining');
+# All tables have 0 rows to flush, so no rows are returned
+query III
+SELECT schema_name, table_name, rows_flushed FROM ducklake_flush_inlined_data('inlining') ORDER BY ALL
+----

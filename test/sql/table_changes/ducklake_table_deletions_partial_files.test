@@ -1,0 +1,146 @@
+# name: test/sql/table_changes/ducklake_table_deletions_partial_files.test
+# description: test ducklake_table_deletions function with partial deletion files over multiple data files
+# group: [table_changes]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+
+test-env DATA_PATH __TEST_DIR__
+
+statement ok
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/ducklake_partial_deletions_files')
+
+# snapshot 1 - Create table and insert data into multiple files
+statement ok
+CREATE TABLE ducklake.test(i INTEGER, j VARCHAR);
+
+# snapshot 2 - insert first file
+statement ok
+INSERT INTO ducklake.test SELECT i, 'file1_row' || i::VARCHAR FROM range(5) t(i);
+
+# snapshot 3 - insert second file
+statement ok
+INSERT INTO ducklake.test SELECT i + 10, 'file2_row' || i::VARCHAR FROM range(5) t(i);
+
+# snapshot 4 - insert third file
+statement ok
+INSERT INTO ducklake.test SELECT i + 20, 'file3_row' || i::VARCHAR FROM range(5) t(i);
+
+# snapshot 5 - delete from first file
+statement ok
+DELETE FROM ducklake.test WHERE i = 1
+
+# snapshot 6 - delete from second file
+statement ok
+DELETE FROM ducklake.test WHERE i = 11
+
+# snapshot 7 - delete from third file
+statement ok
+DELETE FROM ducklake.test WHERE i = 21
+
+# snapshot 8 - delete another row from first file (same partial delete file)
+statement ok
+DELETE FROM ducklake.test WHERE i = 3
+
+# snapshot 9 - delete another row from second file (same partial delete file)
+statement ok
+DELETE FROM ducklake.test WHERE i = 13
+
+# snapshot 10 - delete another row from third file (same partial delete file)
+statement ok
+DELETE FROM ducklake.test WHERE i = 23
+
+query II
+FROM ducklake.test ORDER BY i
+----
+0	file1_row0
+2	file1_row2
+4	file1_row4
+10	file2_row0
+12	file2_row2
+14	file2_row4
+20	file3_row0
+22	file3_row2
+24	file3_row4
+
+query III
+SELECT rowid, snapshot_id, i FROM ducklake_table_deletions('ducklake', 'main', 'test', 5, 5) ORDER BY rowid
+----
+1	5	1
+
+query III
+SELECT rowid, snapshot_id, i FROM ducklake_table_deletions('ducklake', 'main', 'test', 6, 6) ORDER BY rowid
+----
+6	6	11
+
+query III
+SELECT rowid, snapshot_id, i FROM ducklake_table_deletions('ducklake', 'main', 'test', 7, 7) ORDER BY rowid
+----
+11	7	21
+
+query III
+SELECT rowid, snapshot_id, i FROM ducklake_table_deletions('ducklake', 'main', 'test', 8, 8) ORDER BY rowid
+----
+3	8	3
+
+query III
+SELECT rowid, snapshot_id, i FROM ducklake_table_deletions('ducklake', 'main', 'test', 9, 9) ORDER BY rowid
+----
+8	9	13
+
+query III
+SELECT rowid, snapshot_id, i FROM ducklake_table_deletions('ducklake', 'main', 'test', 10, 10) ORDER BY rowid
+----
+13	10	23
+
+query III
+SELECT rowid, snapshot_id, i FROM ducklake_table_deletions('ducklake', 'main', 'test', 5, 8) WHERE i < 10 ORDER BY rowid
+----
+1	5	1
+3	8	3
+
+query III
+SELECT rowid, snapshot_id, i FROM ducklake_table_deletions('ducklake', 'main', 'test', 5, 10) ORDER BY rowid
+----
+1	5	1
+3	8	3
+6	6	11
+8	9	13
+11	7	21
+13	10	23
+
+query II
+SELECT rowid, i FROM ducklake_table_deletions('ducklake', 'main', 'test', 0, 10) ORDER BY rowid
+----
+1	1
+3	3
+6	11
+8	13
+11	21
+13	23
+
+statement ok
+DELETE FROM ducklake.test WHERE i < 10
+
+query III
+SELECT rowid, snapshot_id, i FROM ducklake_table_deletions('ducklake', 'main', 'test', 11, 11) ORDER BY rowid
+----
+0	11	0
+2	11	2
+4	11	4
+
+query II
+SELECT rowid, i FROM ducklake_table_deletions('ducklake', 'main', 'test', 0, 11) ORDER BY rowid
+----
+0	0
+1	1
+2	2
+3	3
+4	4
+6	11
+8	13
+11	21
+13	23

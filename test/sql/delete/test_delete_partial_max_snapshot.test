@@ -1,0 +1,51 @@
+# name: test/sql/delete/test_delete_partial_max_snapshot.test
+# description: Test ducklake deleting creates partial max snapshot for consolidated delete files
+# group: [delete]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+
+test-env DATA_PATH __TEST_DIR__
+
+
+statement ok
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/test_delete_partial_max_snapshot')
+
+statement ok
+use ducklake
+
+statement ok
+CREATE TABLE test AS SELECT i id FROM range(10) t(i);
+
+statement ok
+insert into test values (11),(12),(13);
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake')
+
+statement ok
+delete from test where id = 1
+
+statement ok
+delete from test where id = 5
+
+statement ok
+delete from test where id = 12
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake')
+
+# partial_max of the consolidated delete file should equal the Nth delete snapshot (N = delete_count)
+statement ok
+SET VARIABLE n = (SELECT delete_count FROM __ducklake_metadata_ducklake.ducklake_delete_file WHERE delete_count > 1);
+
+statement ok
+SET VARIABLE expected_pm = (SELECT snapshot_id FROM (SELECT snapshot_id, row_number() OVER (ORDER BY snapshot_id) AS rn FROM ducklake_snapshots('ducklake') WHERE changes::VARCHAR LIKE '%delete%=[1]%' AND changes::VARCHAR NOT LIKE '%rewrite%') WHERE rn = getvariable('n'));
+
+query I
+SELECT partial_max = getvariable('expected_pm') FROM __ducklake_metadata_ducklake.ducklake_delete_file WHERE delete_count > 1
+----
+true

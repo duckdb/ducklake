@@ -12,13 +12,31 @@ unzip data/old_ducklake/v02.db.gz __TEST_DIR__/v02.db
 
 unzip data/old_ducklake/v03-dev1.db.gz __TEST_DIR__/v03-dev1.db
 
-foreach version v01 v02 v03-dev1
+unzip data/old_ducklake/v03.db.gz __TEST_DIR__/v03.db
+
+unzip data/old_ducklake/v04-dev1.db.gz __TEST_DIR__/v04-dev1.db
+
+# test that automatic_migration defaults to false and throws an error
+foreach version v01 v02 v03-dev1 v03 v04-dev1
+
+statement error
+ATTACH 'ducklake:__TEST_DIR__/${version}.db' AS ducklake (DATA_PATH '__TEST_DIR__/ducklake_migrate_${version}_err', OVERRIDE_DATA_PATH TRUE)
+----
+DuckLake catalog version mismatch
+
+endloop
+
+foreach version v01 v02 v03-dev1 v03 v04-dev1
 
 statement ok
-ATTACH 'ducklake:__TEST_DIR__/${version}.db' AS ducklake (DATA_PATH '__TEST_DIR__/ducklake_migrate_${version}', OVERRIDE_DATA_PATH TRUE)
+ATTACH 'ducklake:__TEST_DIR__/${version}.db' AS ducklake (DATA_PATH '__TEST_DIR__/ducklake_migrate_${version}', OVERRIDE_DATA_PATH TRUE, AUTOMATIC_MIGRATION TRUE)
 
 statement ok
 INSERT INTO ducklake.test VALUES (42);
+
+# flush inlined data to create files
+statement ok
+CALL ducklake_flush_inlined_data('ducklake')
 
 query I
 FROM ducklake.test
@@ -48,7 +66,7 @@ statement ok
 DETACH ducklake
 
 statement ok
-ATTACH 'ducklake:__TEST_DIR__/${version}.db' AS ducklake (DATA_PATH '__TEST_DIR__/ducklake_migrate_${version}', OVERRIDE_DATA_PATH TRUE)
+ATTACH 'ducklake:__TEST_DIR__/${version}.db' AS ducklake (DATA_PATH '__TEST_DIR__/ducklake_migrate_${version}', OVERRIDE_DATA_PATH TRUE, AUTOMATIC_MIGRATION TRUE)
 
 query I
 FROM ducklake.test
@@ -56,11 +74,10 @@ FROM ducklake.test
 42
 84
 
-query II
+query III
 FROM __ducklake_metadata_ducklake.ducklake_schema_versions;
 ----
-0	0
-1	1
+1	1	1
 
 statement ok
 DETACH ducklake;

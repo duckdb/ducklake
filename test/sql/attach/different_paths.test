@@ -16,6 +16,9 @@ statement ok
 CREATE TABLE t AS SELECT range a FROM range(10);
 
 statement ok
+CALL ducklake_flush_inlined_data('a_ducklake')
+
+statement ok
 USE memory;
 
 statement ok

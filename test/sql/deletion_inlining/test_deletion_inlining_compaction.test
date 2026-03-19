@@ -1,0 +1,165 @@
+# name: test/sql/deletion_inlining/test_deletion_inlining_compaction.test
+# description: test ducklake deletion inlining with compaction methods
+# group: [deletion_inlining]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+
+test-env DATA_PATH __TEST_DIR__
+
+statement ok
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/test_deletion_inlining_txn', DATA_INLINING_ROW_LIMIT 2, METADATA_CATALOG 'ducklake_meta')
+
+statement ok
+use ducklake
+
+statement ok
+CREATE TABLE t AS SELECT range a FROM range(50);
+
+statement ok
+delete from t where a = 25;
+
+statement ok
+insert into t values (51),(52),(53);
+
+statement ok
+CALL ducklake_merge_adjacent_files('ducklake');
+
+# This should not merge
+query I
+select count(*) FROM ducklake_meta.ducklake_data_file
+----
+2
+
+query I
+select count(*) from t
+----
+52
+
+# If we add another file, we should be able to merge them
+statement ok
+insert into t values (54),(55),(56);
+
+statement ok
+CALL ducklake_merge_adjacent_files('ducklake');
+
+# This should not merge
+query I
+select count(*) FROM ducklake_meta.ducklake_data_file
+----
+2
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake')
+
+query I
+select count(*) FROM ducklake_meta.ducklake_delete_file
+----
+1
+
+statement ok
+CALL ducklake_rewrite_data_files('ducklake', delete_threshold => 0);
+
+query I
+select count(*) FROM ducklake_meta.ducklake_delete_file
+----
+1
+
+query II
+SELECT begin_snapshot, end_snapshot FROM ducklake_meta.ducklake_data_file order by all
+----
+1	7
+3	NULL
+7	NULL
+
+# Time travel tests to verify snapshots are correct
+
+query II
+SELECT snapshot_id, changes FROM snapshots()
+----
+0	{schemas_created=[main]}
+1	{tables_created=[main.t], tables_inserted_into=[1]}
+2	{inlined_delete=[1]}
+3	{tables_inserted_into=[1]}
+4	{tables_inserted_into=[1]}
+5	{merge_adjacent=[1]}
+6	{tables_deleted_from=[1]}
+7	{rewrite_delete=[1]}
+
+# Snapshot 1: Original 50 rows (0-49)
+query I
+SELECT count(*) FROM t AT (VERSION => 1)
+----
+50
+
+# Snapshot 2: After delete of row 25 (49 rows)
+query I
+SELECT count(*) FROM t AT (VERSION => 2)
+----
+49
+
+query I
+SELECT count(*) FROM t AT (VERSION => 2) WHERE a = 25
+----
+0
+
+# Snapshot 3: After insert of 51,52,53 (52 rows)
+query I
+SELECT count(*) FROM t AT (VERSION => 3)
+----
+52
+
+
+# Snapshot 4: After insert of 54,55,56 (55 rows)
+query I
+SELECT count(*) FROM t AT (VERSION => 4)
+----
+55
+
+# Snapshot 5: After second merge_adjacent_files
+query I
+SELECT count(*) FROM t AT (VERSION => 5)
+----
+55
+
+# Snapshot 6: After flush and rewrite operations
+query I
+SELECT count(*) FROM t AT (VERSION => 6)
+----
+55
+
+# Verify current snapshot matches latest
+query I
+SELECT count(*) FROM t
+----
+55
+
+# Verify data integrity across time travel
+query I
+SELECT sum(a) FROM t AT (VERSION => 1)
+----
+1225
+
+query I
+SELECT sum(a) FROM t AT (VERSION => 2)
+----
+1200
+
+# Verify specific values exist at correct snapshots
+query I
+SELECT a FROM t AT (VERSION => 1) WHERE a = 25
+----
+25
+
+query I
+SELECT count(*) FROM t AT (VERSION => 3) WHERE a IN (51, 52, 53)
+----
+3
+
+query I
+SELECT count(*) FROM t AT (VERSION => 4) WHERE a IN (54, 55, 56)
+----
+3

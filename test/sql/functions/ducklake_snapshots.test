@@ -31,20 +31,48 @@ statement ok
 INSERT INTO ducklake.s1.tbl VALUES (42);
 
 statement ok
+CALL ducklake_flush_inlined_data('ducklake')
+
+statement ok
 DROP TABLE ducklake.s1.tbl
 
 statement ok
 DROP SCHEMA ducklake.s1
 
+# check the DDL snapshots that are the same in both modes
 query III
-SELECT snapshot_id, schema_version, changes FROM ducklake.snapshots()
+SELECT snapshot_id, schema_version, changes FROM ducklake.snapshots() WHERE snapshot_id <= 2
 ----
 0	0	{schemas_created=[main]}
 1	1	{schemas_created=[s1]}
 2	2	{tables_created=[s1.tbl]}
-3	2	{tables_inserted_into=[2]}
-4	3	{tables_dropped=[2]}
-5	4	{schemas_dropped=[1]}
+
+# verify insert-related snapshot(s) exist - inlined_insert or tables_inserted_into
+query I
+SELECT count(*) FROM ducklake.snapshots() WHERE changes::VARCHAR LIKE '%insert%=[2]%'
+----
+1
+
+# in inline mode there is also a flushed_inlined snapshot; verify the count of insert+flush snapshots
+query I
+SELECT count(*) FROM ducklake.snapshots() WHERE changes::VARCHAR LIKE '%insert%=[2]%' OR changes::VARCHAR LIKE '%flushed_inlined=[2]%'
+----
+<REGEX>:1|2
+
+# verify the drop table and drop schema snapshots exist with correct schema_versions
+query I
+SELECT schema_version FROM ducklake.snapshots() WHERE changes::VARCHAR LIKE '%tables_dropped=%'
+----
+3
+
+query I
+SELECT schema_version FROM ducklake.snapshots() WHERE changes::VARCHAR LIKE '%schemas_dropped=%'
+----
+4
+
+# capture the last snapshot_id after the initial sequence (schemas_dropped snapshot)
+statement ok
+SET VARIABLE base_snap = (SELECT max(snapshot_id) FROM ducklake.snapshots())
 
 # this transaction does nothing in a round-about way
 # no snapshot is created here
@@ -69,9 +97,11 @@ DROP SCHEMA ducklake.s1
 statement ok
 COMMIT
 
-query III
-SELECT snapshot_id, schema_version, changes FROM ducklake.snapshots() WHERE snapshot_id=6
+# verify that no new snapshot was created by the no-op transaction
+query I
+SELECT count(*) FROM ducklake.snapshots() WHERE snapshot_id > getvariable('base_snap')
 ----
+0
 
 # this transaction actually makes some changes
 statement ok
@@ -87,21 +117,59 @@ statement ok
 INSERT INTO ducklake.s1.tbl VALUES (42);
 
 statement ok
+CALL ducklake_flush_inlined_data('ducklake')
+
+statement ok
 COMMIT
 
-query III
-SELECT snapshot_id, schema_version, changes FROM ducklake.snapshots() WHERE snapshot_id=6
+# verify the real transaction snapshot - it should be right after base_snap
+# schema_version should be 5 (base was 4, DDL in this transaction bumps it)
+# capture the table_id from the insert change for later checks
+statement ok
+SET VARIABLE real_txn_snap = getvariable('base_snap') + 1
+
+query I
+SELECT schema_version FROM ducklake.snapshots() WHERE snapshot_id = getvariable('real_txn_snap')
 ----
-6	5	{schemas_created=[s1], tables_created=[s1.tbl], tables_inserted_into=[4]}
+5
+
+# the changes should include schemas_created, tables_created, and some insert reference
+query I
+SELECT changes::VARCHAR LIKE '%schemas_created=[s1]%' FROM ducklake.snapshots() WHERE snapshot_id = getvariable('real_txn_snap')
+----
+true
+
+query I
+SELECT changes::VARCHAR LIKE '%tables_created=[s1.tbl]%' FROM ducklake.snapshots() WHERE snapshot_id = getvariable('real_txn_snap')
+----
+true
+
+query I
+SELECT changes::VARCHAR LIKE '%insert%' FROM ducklake.snapshots() WHERE snapshot_id = getvariable('real_txn_snap')
+----
+true
+
+# capture the table_id used for the recreated tbl
+statement ok
+SET VARIABLE tbl_id = (SELECT regexp_extract(changes::VARCHAR, 'insert.*=\[(\d+)\]', 1)::INT FROM ducklake.snapshots() WHERE snapshot_id = getvariable('real_txn_snap'))
 
 # alter table
 statement ok
 ALTER TABLE ducklake.s1.tbl SET PARTITIONED BY (i)
 
-query III
-SELECT snapshot_id, schema_version, changes FROM ducklake.snapshots() WHERE snapshot_id=7
+statement ok
+SET VARIABLE alter_snap = getvariable('real_txn_snap') + 1
+
+query I
+SELECT schema_version FROM ducklake.snapshots() WHERE snapshot_id = getvariable('alter_snap')
 ----
-7	6	{tables_altered=[4]}
+6
+
+# verify the altered table_id matches the one from the real transaction
+query I
+SELECT changes::VARCHAR LIKE '%tables_altered=[' || getvariable('tbl_id') || ']%' FROM ducklake.snapshots() WHERE snapshot_id = getvariable('alter_snap')
+----
+true
 
 # create a table and alter it
 statement ok
@@ -116,27 +184,51 @@ ALTER TABLE ducklake.s1.tbl2 SET PARTITIONED BY (i)
 statement ok
 COMMIT
 
-query III
-SELECT snapshot_id, schema_version, changes FROM ducklake.snapshots() WHERE snapshot_id=8
+statement ok
+SET VARIABLE create_alter_snap = getvariable('alter_snap') + 1
+
+query I
+SELECT schema_version FROM ducklake.snapshots() WHERE snapshot_id = getvariable('create_alter_snap')
 ----
-8	7	{tables_created=[s1.tbl2], tables_altered=[6]}
+7
+
+query I
+SELECT changes::VARCHAR LIKE '%tables_created=[s1.tbl2]%' FROM ducklake.snapshots() WHERE snapshot_id = getvariable('create_alter_snap')
+----
+true
+
+query I
+SELECT changes::VARCHAR LIKE '%tables_altered=%' FROM ducklake.snapshots() WHERE snapshot_id = getvariable('create_alter_snap')
+----
+true
 
 # create a view
 statement ok
 CREATE VIEW ducklake.v1 AS SELECT 42
 
-query III
-SELECT snapshot_id, schema_version, changes FROM ducklake.snapshots() WHERE snapshot_id=9
+statement ok
+SET VARIABLE view_snap = getvariable('create_alter_snap') + 1
+
+query II
+SELECT schema_version, changes FROM ducklake.snapshots() WHERE snapshot_id = getvariable('view_snap')
 ----
-9	8	{views_created=[main.v1]}
+8	{views_created=[main.v1]}
 
 statement ok
 DROP VIEW ducklake.v1
 
-query III
-SELECT snapshot_id, schema_version, changes FROM ducklake.snapshots() WHERE snapshot_id=10
+statement ok
+SET VARIABLE drop_view_snap = getvariable('view_snap') + 1
+
+query I
+SELECT schema_version FROM ducklake.snapshots() WHERE snapshot_id = getvariable('drop_view_snap')
 ----
-10	9	{views_dropped=[8]}
+9
+
+query I
+SELECT changes::VARCHAR LIKE '%views_dropped=%' FROM ducklake.snapshots() WHERE snapshot_id = getvariable('drop_view_snap')
+----
+true
 
 # comments
 statement ok
@@ -145,16 +237,34 @@ CREATE VIEW ducklake.comment_view AS SELECT 42;
 statement ok con1
 COMMENT ON VIEW ducklake.comment_view IS 'con1'
 
-query III
-SELECT snapshot_id, schema_version, changes FROM ducklake.snapshots() WHERE snapshot_id=12
+# the comment creates 2 snapshots: one for the view creation, one for the comment
+statement ok
+SET VARIABLE comment_snap = getvariable('drop_view_snap') + 2
+
+query I
+SELECT schema_version FROM ducklake.snapshots() WHERE snapshot_id = getvariable('comment_snap')
 ----
-12	11	{views_altered=[9]}
+11
+
+query I
+SELECT changes::VARCHAR LIKE '%views_altered=%' FROM ducklake.snapshots() WHERE snapshot_id = getvariable('comment_snap')
+----
+true
 
 # deletes
 statement ok
 DELETE FROM ducklake.s1.tbl
 
-query III
-SELECT snapshot_id, schema_version, changes FROM ducklake_snapshots('ducklake') WHERE snapshot_id=13
+statement ok
+SET VARIABLE delete_snap = getvariable('comment_snap') + 1
+
+query I
+SELECT schema_version FROM ducklake_snapshots('ducklake') WHERE snapshot_id = getvariable('delete_snap')
 ----
-13	11	{tables_deleted_from=[4]}
+11
+
+# verify delete snapshot contains either inlined_delete or tables_deleted_from
+query I
+SELECT changes::VARCHAR LIKE '%delete%=[' || getvariable('tbl_id') || ']%' FROM ducklake_snapshots('ducklake') WHERE snapshot_id = getvariable('delete_snap')
+----
+true

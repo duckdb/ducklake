@@ -3,6 +3,8 @@
 #include "duckdb/parser/parser.hpp"
 #include "duckdb/parser/parsed_data/alter_info.hpp"
 #include "duckdb/parser/parsed_data/alter_table_info.hpp"
+#include "duckdb/parser/keyword_helper.hpp"
+#include "duckdb/common/string_util.hpp"
 
 namespace duckdb {
 
@@ -57,7 +59,18 @@ unique_ptr<CreateInfo> DuckLakeViewEntry::GetInfo() const {
 }
 
 string DuckLakeViewEntry::ToSQL() const {
-	return GetInfo()->ToString();
+	string result = "CREATE VIEW ";
+	result += KeywordHelper::WriteOptionallyQuoted(name);
+	if (!aliases.empty()) {
+		result += " (";
+		result += StringUtil::Join(aliases, aliases.size(), ", ",
+		                           [](const string &alias) { return KeywordHelper::WriteOptionallyQuoted(alias); });
+		result += ")";
+	}
+	result += " AS ";
+	result += query_sql;
+	result += ";";
+	return result;
 }
 
 unique_ptr<CatalogEntry> DuckLakeViewEntry::Copy(ClientContext &context) const {
@@ -79,7 +92,7 @@ unique_ptr<SelectStatement> DuckLakeViewEntry::ParseSelectStatement() const {
 }
 
 const SelectStatement &DuckLakeViewEntry::GetQuery() {
-	lock_guard<mutex> l(parse_lock);
+	lock_guard<mutex> l(lock);
 	if (!query) {
 		// parse the query
 		query = ParseSelectStatement();
@@ -89,31 +102,6 @@ const SelectStatement &DuckLakeViewEntry::GetQuery() {
 
 string DuckLakeViewEntry::GetQuerySQL() {
 	return query_sql;
-}
-
-bool DuckLakeViewEntry::IsBound() const {
-	return is_bound;
-}
-
-void DuckLakeViewEntry::Bind(ClientContext &context) {
-	D_ASSERT(!is_bound);
-	is_bound = true;
-	std::string create_view_sql = "CREATE VIEW mock_view_name_lake";
-	if (!aliases.empty()) {
-		create_view_sql += "(";
-		for (const auto &alias : aliases) {
-			create_view_sql += KeywordHelper::WriteOptionallyQuoted(alias);
-			create_view_sql += ", ";
-		}
-		create_view_sql += ")";
-	}
-
-	create_view_sql += " as " + query_sql;
-	const auto view_info = CreateViewInfo::FromCreateView(context, schema, create_view_sql);
-	// Fill aliases, types and names
-	aliases = view_info->aliases;
-	types = view_info->types;
-	names = view_info->names;
 }
 
 } // namespace duckdb

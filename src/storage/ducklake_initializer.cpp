@@ -35,6 +35,11 @@ string DuckLakeInitializer::GetAttachOptions() {
 	for (auto &option : options.metadata_parameters) {
 		attach_options.push_back(option.first + " " + option.second.ToSQLString());
 	}
+	const string metadata_type = catalog.MetadataType();
+	if (metadata_type.empty() || metadata_type == "duckdb") {
+		// this is duckdb, we always do latest storage
+		attach_options.push_back(StringUtil::Format("STORAGE_VERSION '%s'", "latest"));
+	}
 
 	if (attach_options.empty()) {
 		return string();
@@ -142,12 +147,12 @@ void DuckLakeInitializer::LoadExistingDuckLake(DuckLakeTransaction &transaction)
 	for (auto &tag : metadata.tags) {
 		if (tag.key == "version") {
 			string version = tag.value;
-			if (version != "0.4-dev1" && !options.migrate_if_required) {
-				// Throw when Loading the Ducklake if a Migration is required and migrate_if_required option is false
-				throw InvalidInputException("DuckLake Extension requires a DuckLake Catalog version of 0.4-dev1 or "
-				                            "higher, current version is %s "
-				                            "and migrate_if_required is set to false",
-				                            version);
+			if (version != "0.4" && !options.automatic_migration) {
+				// Throw when Loading the DuckLake if a Migration is required and automatic_migration option is false
+				throw InvalidInputException(
+				    "DuckLake catalog version mismatch: catalog version is %s, but the extension requires version "
+				    "0.4. To automatically migrate, set AUTOMATIC_MIGRATION to TRUE when attaching.",
+				    version);
 			}
 			if (version == "0.1") {
 				metadata_manager.MigrateV01();
@@ -163,20 +168,21 @@ void DuckLakeInitializer::LoadExistingDuckLake(DuckLakeTransaction &transaction)
 			}
 			if (version == "0.3") {
 				metadata_manager.MigrateV03();
-				version = "0.4-dev1";
+				version = "0.4";
 			}
-			if (version != "0.4-dev1") {
-				throw NotImplementedException("Only DuckLake versions 0.1, 0.2, 0.3-dev1, 0.3, 0.4-dev1 are supported");
+			if (version == "0.4-dev1") {
+				metadata_manager.MigrateV03(true);
+				version = "0.4";
+			}
+			if (version != "0.4") {
+				throw NotImplementedException(
+				    "Only DuckLake versions 0.1, 0.2, 0.3-dev1, 0.3, 0.4-dev1, 0.4 are supported");
 			}
 		}
 		if (tag.key == "data_path") {
 			if (options.data_path.empty()) {
-				// set the data path to the value in the tag
-				options.data_path = tag.value;
+				options.data_path = metadata_manager.LoadPath(tag.value);
 				InitializeDataPath();
-				// load the correct path from the metadata manager
-				// we need to do this after InitializeDataPath() because that sets up the correct separator
-				options.data_path = metadata_manager.LoadPath(options.data_path);
 			} else {
 				// verify that they match if override_data_path is not set to true
 				if (metadata_manager.StorePath(options.data_path) != tag.value && !options.override_data_path) {

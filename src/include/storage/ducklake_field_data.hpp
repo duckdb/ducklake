@@ -106,7 +106,8 @@ public:
 	void Add(unique_ptr<DuckLakeFieldId> field_info);
 	const DuckLakeFieldId &GetByRootIndex(PhysicalIndex id) const;
 	optional_ptr<const DuckLakeFieldId> GetByFieldIndex(FieldIndex id) const;
-	optional_ptr<const DuckLakeFieldId> GetByNames(PhysicalIndex id, const vector<string> &column_names) const;
+	optional_ptr<const DuckLakeFieldId> GetByNames(PhysicalIndex id, const vector<string> &column_names,
+	                                               optional_ptr<optional_idx> name_offset = nullptr) const;
 	idx_t GetColumnCount() {
 		return field_ids.size();
 	}
@@ -122,7 +123,7 @@ public:
 	static shared_ptr<DuckLakeFieldData> AddColumn(const DuckLakeFieldData &field_data, const ColumnDefinition &new_col,
 	                                               idx_t &next_column_id);
 	static shared_ptr<DuckLakeFieldData> SetDefault(const DuckLakeFieldData &field_data, FieldIndex field_index,
-	                                                const ColumnDefinition &new_col);
+	                                                const ColumnDefinition &new_col, bool add_column);
 
 private:
 	vector<unique_ptr<DuckLakeFieldId>> field_ids;

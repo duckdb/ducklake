@@ -1,0 +1,34 @@
+# name: test/sql/add_files/add_file_with_three_level_list.test
+# description: test ducklake adding files directly
+# group: [add_files]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+
+test-env DATA_PATH __TEST_DIR__
+
+
+statement ok
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/add_file_with_three_level_list/');
+
+statement ok
+use ducklake
+
+statement ok
+create or replace table location as (select * from read_parquet('data/parquet/three_level_list.parquet') limit 0);
+
+statement ok
+call ducklake_add_data_files('ducklake', 'location', 'data/parquet/three_level_list.parquet');
+
+query IIIIIIIIIIIIIIIII
+FROM location order by all limit 1
+----
+{'namespace': tripsimulator, 'id': 2025-10-10ConsignmentFilterExceptionTest07_10}	simulator	popcorn_food	NULL	LOCATION_UPDATE	NULL	NULL	NULL	1760086881761	NULL	{'position': {'latitude': 53.13562965856774, 'longitude': 6.433596850057938}, 'position_accuracy': NULL, 'speed': 0, 'speed_reliability': 1.0, 'course': NULL, 'course_reliability': 1.0, 'timestamp': 1760086881761, 'functional_road_class': NULL, 'form_of_way': NULL, 'gps_status': FIX, 'invalid_reason': NULL, 'params': {}}	NULL	NULL	NULL	tripsimulator	32902.9	NULL
+
+query I
+SELECT COUNT(*) FROM location order by all limit 1
+----
+3638

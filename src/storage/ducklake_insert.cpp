@@ -7,6 +7,7 @@
 #include "common/ducklake_util.hpp"
 #include "storage/ducklake_scan.hpp"
 #include "storage/ducklake_inline_data.hpp"
+#include "storage/ducklake_geo_stats.hpp"
 #include "common/ducklake_types.hpp"
 
 #include "duckdb/catalog/catalog_entry/copy_function_catalog_entry.hpp"
@@ -21,6 +22,7 @@
 #include "duckdb/main/extension_helper.hpp"
 #include "duckdb/function/function_binder.hpp"
 #include "duckdb/planner/operator/logical_projection.hpp"
+#include "storage/ducklake_variant_stats.hpp"
 
 namespace duckdb {
 
@@ -81,41 +83,18 @@ DuckLakeColumnStats DuckLakeInsert::ParseColumnStats(const LogicalType &type, co
 			D_ASSERT(!column_stats.has_null_count);
 			column_stats.has_null_count = true;
 			column_stats.null_count = StringUtil::ToUnsigned(StringValue::Get(stats_children[1]));
+		} else if (stats_name == "num_values") {
+			D_ASSERT(!column_stats.has_num_values);
+			column_stats.has_num_values = true;
+			column_stats.num_values = StringUtil::ToUnsigned(StringValue::Get(stats_children[1]));
 		} else if (stats_name == "column_size_bytes") {
 			column_stats.column_size_bytes = StringUtil::ToUnsigned(StringValue::Get(stats_children[1]));
 		} else if (stats_name == "has_nan") {
 			column_stats.has_contains_nan = true;
 			column_stats.contains_nan = StringValue::Get(stats_children[1]) == "true";
-		} else if (stats_name == "bbox_xmax") {
-			auto &geo_stats = column_stats.extra_stats->Cast<DuckLakeColumnGeoStats>();
-			geo_stats.xmax = stats_children[1].DefaultCastAs(LogicalType::DOUBLE).GetValue<double>();
-		} else if (stats_name == "bbox_xmin") {
-			auto &geo_stats = column_stats.extra_stats->Cast<DuckLakeColumnGeoStats>();
-			geo_stats.xmin = stats_children[1].DefaultCastAs(LogicalType::DOUBLE).GetValue<double>();
-		} else if (stats_name == "bbox_ymax") {
-			auto &geo_stats = column_stats.extra_stats->Cast<DuckLakeColumnGeoStats>();
-			geo_stats.ymax = stats_children[1].DefaultCastAs(LogicalType::DOUBLE).GetValue<double>();
-		} else if (stats_name == "bbox_ymin") {
-			auto &geo_stats = column_stats.extra_stats->Cast<DuckLakeColumnGeoStats>();
-			geo_stats.ymin = stats_children[1].DefaultCastAs(LogicalType::DOUBLE).GetValue<double>();
-		} else if (stats_name == "bbox_zmax") {
-			auto &geo_stats = column_stats.extra_stats->Cast<DuckLakeColumnGeoStats>();
-			geo_stats.zmax = stats_children[1].DefaultCastAs(LogicalType::DOUBLE).GetValue<double>();
-		} else if (stats_name == "bbox_zmin") {
-			auto &geo_stats = column_stats.extra_stats->Cast<DuckLakeColumnGeoStats>();
-			geo_stats.zmin = stats_children[1].DefaultCastAs(LogicalType::DOUBLE).GetValue<double>();
-		} else if (stats_name == "bbox_mmax") {
-			auto &geo_stats = column_stats.extra_stats->Cast<DuckLakeColumnGeoStats>();
-			geo_stats.mmax = stats_children[1].DefaultCastAs(LogicalType::DOUBLE).GetValue<double>();
-		} else if (stats_name == "bbox_mmin") {
-			auto &geo_stats = column_stats.extra_stats->Cast<DuckLakeColumnGeoStats>();
-			geo_stats.mmin = stats_children[1].DefaultCastAs(LogicalType::DOUBLE).GetValue<double>();
-		} else if (stats_name == "geo_types") {
-			auto &geo_stats = column_stats.extra_stats->Cast<DuckLakeColumnGeoStats>();
-			auto list_value = stats_children[1].DefaultCastAs(LogicalType::LIST(LogicalType::VARCHAR));
-			for (const auto &child : ListValue::GetChildren(list_value)) {
-				geo_stats.geo_types.insert(StringValue::Get(child));
-			}
+		} else if (column_stats.extra_stats && column_stats.extra_stats->ParseStats(stats_name, stats_children)) {
+			// handled by extra stats
+			continue;
 		} else {
 			throw NotImplementedException("Unsupported stats type \"%s\" in DuckLakeInsert::Sink()", stats_name);
 		}
@@ -140,6 +119,7 @@ void DuckLakeInsert::AddWrittenFiles(DuckLakeInsertGlobalState &global_state, Da
 		auto column_stats = chunk.GetValue(4, r);
 		auto &map_children = MapValue::GetChildren(column_stats);
 		auto &table = global_state.table;
+		map<FieldIndex, PartialVariantStats> variant_stats;
 		for (idx_t col_idx = 0; col_idx < map_children.size(); col_idx++) {
 			auto &struct_children = StructValue::GetChildren(map_children[col_idx]);
 			auto &col_name = StringValue::Get(struct_children[0]);
@@ -160,10 +140,36 @@ void DuckLakeInsert::AddWrittenFiles(DuckLakeInsertGlobalState &global_state, Da
 				continue;
 			}
 			if (column_names[0] == "_ducklake_internal_row_id") {
+				if (set_snapshot_id) {
+					// extract the min row_id so flushed files preserve the original row_id_start
+					auto row_id_stats = ParseColumnStats(LogicalType::BIGINT, col_stats);
+					if (row_id_stats.has_min) {
+						data_file.flush_row_id_start = StringUtil::ToUnsigned(row_id_stats.min);
+					}
+				}
 				continue;
 			}
 
-			auto &field_id = table.GetFieldId(column_names);
+			optional_idx name_offset;
+			auto &field_id = table.GetFieldId(column_names, &name_offset);
+			if (name_offset.IsValid()) {
+				if (field_id.Type().id() != LogicalTypeId::VARIANT) {
+					throw InternalException("name_offset can only be set for variant columns");
+				}
+				// variant stats are constructed iteratively as they are provided per-field
+				auto entry = variant_stats.find(field_id.GetFieldIndex());
+				if (entry == variant_stats.end()) {
+					// insert empty stats for variants if this is the first stats we encounter for variants
+					auto insert_entry =
+					    variant_stats.insert(make_pair(field_id.GetFieldIndex(), PartialVariantStats()));
+					entry = insert_entry.first;
+				}
+				entry->second.ParseVariantStats(column_names, name_offset.GetIndex(), col_stats);
+				continue;
+			}
+			if (field_id.Type().id() == LogicalTypeId::VARIANT) {
+				throw InvalidInputException("Top-level variant cannot have stats");
+			}
 			auto column_stats = ParseColumnStats(field_id.Type(), col_stats);
 			if (column_stats.null_count > 0 && column_names.size() == 1) {
 				// we wrote NULL values to a base column - verify NOT NULL constraint
@@ -174,17 +180,21 @@ void DuckLakeInsert::AddWrittenFiles(DuckLakeInsertGlobalState &global_state, Da
 
 			data_file.column_stats.insert(make_pair(field_id.GetFieldIndex(), std::move(column_stats)));
 		}
+		// finalize variant stats
+		for (auto &entry : variant_stats) {
+			// FIXME: verify NOT NULL constraints for variants
+			data_file.column_stats.insert(make_pair(entry.first, entry.second.Finalize()));
+		}
 		// extract the partition info
 		auto partition_info = chunk.GetValue(5, r);
 		if (!partition_info.IsNull()) {
 			auto &partition_children = MapValue::GetChildren(partition_info);
 			for (idx_t col_idx = 0; col_idx < partition_children.size(); col_idx++) {
 				auto &struct_children = StructValue::GetChildren(partition_children[col_idx]);
-				auto &part_value = StringValue::Get(struct_children[1]);
 
 				DuckLakeFilePartition file_partition_info;
 				file_partition_info.partition_column_idx = col_idx;
-				file_partition_info.partition_value = part_value;
+				file_partition_info.partition_value = struct_children[1];
 				data_file.partition_values.push_back(std::move(file_partition_info));
 			}
 		}
@@ -250,7 +260,7 @@ CopyFunctionCatalogEntry &DuckLakeFunctions::GetCopyFunction(ClientContext &cont
 	// name), but that do not offer enough control
 	auto &db = *context.db;
 	string extension_name = ExtensionHelper::FindExtensionInEntries(name, EXTENSION_COPY_FUNCTIONS);
-	if (!extension_name.empty() && db.config.options.autoload_known_extensions &&
+	if (!extension_name.empty() && Settings::Get<AutoloadKnownExtensionsSetting>(context) &&
 	    ExtensionHelper::CanAutoloadExtension(extension_name)) {
 		// This will either succeed or throw
 		ExtensionHelper::AutoLoadExtension(db, extension_name);
@@ -408,30 +418,7 @@ static unique_ptr<Expression> GetPartitionExpression(ClientContext &context, Duc
 static string GetPartitionExpressionName(DuckLakeCopyInput &copy_input, const DuckLakePartitionField &field,
                                          case_insensitive_set_t &names) {
 	auto field_id = copy_input.field_data->GetByFieldIndex(field.field_id);
-	string prefix;
-	switch (field.transform.type) {
-	case DuckLakeTransformType::IDENTITY:
-		return field_id->Name();
-	case DuckLakeTransformType::YEAR:
-		prefix = "year";
-		break;
-	case DuckLakeTransformType::MONTH:
-		prefix = "month";
-		break;
-	case DuckLakeTransformType::DAY:
-		prefix = "day";
-		break;
-	case DuckLakeTransformType::HOUR:
-		prefix = "hour";
-		break;
-	default:
-		throw NotImplementedException("Unsupported partition transform type in GetPartitionExpressionName");
-	}
-	if (names.find(prefix) == names.end()) {
-		// prefer only the transform (e.g. year)
-		return prefix;
-	}
-	return prefix + "_" + field_id->Name();
+	return DuckLakePartitionUtils::GetPartitionKeyName(field.transform.type, field_id->Name(), names);
 }
 
 static void GeneratePartitionExpressions(ClientContext &context, DuckLakeCopyInput &copy_input,
@@ -670,7 +657,7 @@ unique_ptr<LogicalOperator> DuckLakeInsert::InsertCasts(Binder &binder, unique_p
 	auto result = make_uniq<LogicalProjection>(binder.GenerateTableIndex(), std::move(cast_expressions));
 	result->children.push_back(std::move(plan));
 
-	return result;
+	return std::move(result);
 }
 
 PhysicalOperator &DuckLakeInsert::PlanCopyForInsert(ClientContext &context, PhysicalPlanGenerator &planner,
@@ -775,7 +762,11 @@ PhysicalOperator &DuckLakeCatalog::PlanInsert(ClientContext &context, PhysicalPl
 	optional_ptr<DuckLakeInlineData> inline_data;
 
 	idx_t data_inlining_row_limit = DataInliningRowLimit(ducklake_schema.GetSchemaId(), ducklake_table.GetTableId());
-	if (data_inlining_row_limit > 0) {
+	// FIXME: we are skipping columns that have conflicting names, we should resolve this
+	auto &duck_transaction = DuckLakeTransaction::Get(context, *this);
+	auto &metadata_manager = duck_transaction.GetMetadataManager();
+	if (data_inlining_row_limit > 0 && !DuckLakeUtil::HasInlinedSystemColumnConflict(ducklake_table.GetColumns()) &&
+	    metadata_manager.SupportsInliningTypes(plan->types)) {
 		plan = planner.Make<DuckLakeInlineData>(*plan, data_inlining_row_limit);
 		inline_data = plan->Cast<DuckLakeInlineData>();
 	}
@@ -799,7 +790,9 @@ PhysicalOperator &DuckLakeCatalog::PlanCreateTableAs(ClientContext &context, Phy
 	reference<PhysicalOperator> root = plan;
 	optional_ptr<DuckLakeInlineData> inline_data;
 	idx_t data_inlining_row_limit = DataInliningRowLimit(duck_schema.GetSchemaId(), TableIndex());
-	if (data_inlining_row_limit > 0) {
+	auto &metadata_manager = duck_transaction.GetMetadataManager();
+	if (data_inlining_row_limit > 0 && !DuckLakeUtil::HasInlinedSystemColumnConflict(columns) &&
+	    metadata_manager.SupportsInliningTypes(plan.types)) {
 		root = planner.Make<DuckLakeInlineData>(root.get(), data_inlining_row_limit);
 		inline_data = root.get().Cast<DuckLakeInlineData>();
 	}

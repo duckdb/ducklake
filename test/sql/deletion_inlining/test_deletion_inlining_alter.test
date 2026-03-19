@@ -1,0 +1,93 @@
+# name: test/sql/deletion_inlining/test_deletion_inlining_alter.test
+# description: test ducklake deletion inlining with ALTER TABLE statements
+# group: [deletion_inlining]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+
+test-env DATA_PATH __TEST_DIR__
+
+statement ok
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/deletion_inlining_alter', METADATA_CATALOG 'ducklake_meta', DATA_INLINING_ROW_LIMIT 10)
+
+statement ok
+USE ducklake
+
+statement ok
+CREATE TABLE t AS SELECT range i, range * 2 j FROM range(50)
+
+statement ok
+DELETE FROM t WHERE i < 5
+
+query II
+SELECT COUNT(*), SUM(j) FROM t
+----
+45	2430
+
+statement ok
+ALTER TABLE t ADD COLUMN k INTEGER
+
+statement ok
+INSERT INTO t VALUES (100, 200, 300)
+
+query II
+SELECT COUNT(*), SUM(k) FROM t
+----
+46	300
+
+statement ok
+DELETE FROM t WHERE i = 100
+
+query II
+SELECT COUNT(*), SUM(k) FROM t
+----
+45	NULL
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake')
+
+query II
+SELECT COUNT(*), SUM(j) FROM t
+----
+45	2430
+
+statement ok
+ALTER TABLE t DROP COLUMN k
+
+statement ok
+DELETE FROM t WHERE i >= 45
+
+query I
+SELECT COUNT(*) FROM t
+----
+40
+
+statement ok
+ALTER TABLE t ALTER j SET TYPE BIGINT
+
+statement ok
+INSERT INTO t VALUES (1000, 2000000000000)
+
+query I
+SELECT COUNT(*) FROM t
+----
+41
+
+statement ok
+DELETE FROM t WHERE i = 1000
+
+query I
+SELECT COUNT(*) FROM t
+----
+40
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake')
+
+query I
+SELECT COUNT(*) FROM t
+----
+40

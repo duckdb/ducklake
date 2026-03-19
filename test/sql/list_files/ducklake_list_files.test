@@ -14,34 +14,40 @@ test-env DATA_PATH __TEST_DIR__
 statement ok
 ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/ducklake_list_files');
 
-# snapshot 1
 statement ok
 CREATE TABLE ducklake.test(i INTEGER);
 
-# snapshot 2
 statement ok
 INSERT INTO ducklake.test FROM range(100);
 
-# snapshot 3
+statement ok
+CALL ducklake_flush_inlined_data('ducklake')
+
 statement ok
 INSERT INTO ducklake.test FROM range(100, 200);
 
-# snapshot 4
+statement ok
+CALL ducklake_flush_inlined_data('ducklake')
+
 statement ok
 INSERT INTO ducklake.test FROM range(200, 300);
 
+statement ok
+CALL ducklake_flush_inlined_data('ducklake')
+
 # partitions
-# snapshot 5
 statement ok
 CREATE TABLE ducklake.partitioned_tbl(part_key INT, value INT);
 
-# snapshot 6
 statement ok
 ALTER TABLE ducklake.partitioned_tbl SET PARTITIONED BY (part_key);
 
-# snapshot 7
 statement ok
 INSERT INTO ducklake.partitioned_tbl VALUES (1, 50), (2, 100);
+
+# flush to create partitioned files
+statement ok
+CALL ducklake_flush_inlined_data('ducklake')
 
 query I
 SELECT COUNT(*) FROM ducklake_list_files('ducklake', 'test')
@@ -94,6 +100,10 @@ SELECT COUNT(*) FROM ducklake_list_files('ducklake', 'test') WHERE delete_file I
 # now delete
 statement ok
 DELETE FROM ducklake.test WHERE i%2=0 AND i < 150
+
+# flush to create delete files
+statement ok
+CALL ducklake_flush_inlined_data('ducklake')
 
 # we have two delete files now (we did not delete from the last file)
 query I

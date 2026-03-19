@@ -26,7 +26,8 @@ enum class LocalChangeType {
 	ADD_COLUMN,
 	REMOVE_COLUMN,
 	CHANGE_COLUMN_TYPE,
-	SET_DEFAULT
+	SET_DEFAULT,
+	SET_SORT_KEY
 };
 
 struct LocalChange {
@@ -53,11 +54,6 @@ struct LocalChange {
 		result.field_index = field_idx;
 		return result;
 	}
-	static LocalChange SetDefault(FieldIndex field_idx) {
-		LocalChange result(LocalChangeType::SET_DEFAULT);
-		result.field_index = field_idx;
-		return result;
-	}
 	static LocalChange RenameColumn(FieldIndex field_idx) {
 		LocalChange result(LocalChangeType::RENAME_COLUMN);
 		result.field_index = field_idx;
@@ -70,4 +66,16 @@ struct LocalChange {
 	}
 };
 
+struct SetDefaultLocalChange : LocalChange {
+	explicit SetDefaultLocalChange(bool is_column_new)
+	    : LocalChange(LocalChangeType::SET_DEFAULT), is_column_new(is_column_new) {};
+
+	static SetDefaultLocalChange SetDefault(FieldIndex field_idx, bool is_column_new) {
+		SetDefaultLocalChange result(is_column_new);
+		result.field_index = field_idx;
+		return result;
+	}
+
+	bool is_column_new;
+};
 } // namespace duckdb

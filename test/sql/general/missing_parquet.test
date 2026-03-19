@@ -9,7 +9,7 @@ require no_extension_autoloading "EXPECTED This is meant to test missing parquet
 test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
 
 statement ok
-ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '__TEST_DIR__/ducklake_missing_parquet')
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '__TEST_DIR__/ducklake_missing_parquet', DATA_INLINING_ROW_LIMIT 0)
 
 statement ok
 SELECT snapshot_id, schema_version, changes FROM ducklake_snapshots('ducklake')

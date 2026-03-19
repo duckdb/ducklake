@@ -23,4 +23,9 @@ struct DuckLakeInlinedDataDeletes {
 	set<idx_t> rows;
 };
 
+//! Stores inlined file deletions for a table
+struct DuckLakeInlinedFileDeletes {
+	map<idx_t, set<idx_t>> file_deletes;
+};
+
 } // namespace duckdb

@@ -31,7 +31,7 @@ unique_ptr<GlobalTableFunctionState> DuckLakeSetCommitMessageInit(ClientContext 
 
 static unique_ptr<FunctionData> DuckLakeSetCommitMessageBind(ClientContext &context, TableFunctionBindInput &input,
                                                              vector<LogicalType> &return_types, vector<string> &names) {
-	auto &catalog = BaseMetadataFunction::GetCatalog(context, input.inputs[0]);
+	auto &catalog = DuckLakeBaseMetadataFunction::GetCatalog(context, input.inputs[0]);
 	return_types.push_back(LogicalType::BOOLEAN);
 	names.push_back("Success");
 	auto extra_info_entry = input.named_parameters.find("extra_info");

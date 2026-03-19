@@ -21,13 +21,19 @@ CREATE TABLE ducklake.t1(t1_c1 INT, t1_c2 VARCHAR, t1_c3 TIMESTAMP);
 statement ok
 INSERT INTO ducklake.t1 VALUES (42, 'hello', TIMESTAMP '1992-01-01');
 
+statement ok
+CALL ducklake_flush_inlined_data('ducklake')
+
 # CTAS
 statement ok
 CREATE TABLE ducklake.t2 AS SELECT 84 t2_c1, 'world' t2_c2
 
+statement ok
+CALL ducklake_flush_inlined_data('ducklake')
+
 query III
 SELECT name, type, field_id FROM parquet_schema('${DATA_PATH}/ducklake_field_ids_files/main/t1/*.parquet')
-WHERE name <> 'duckdb_schema'
+WHERE name NOT IN ('duckdb_schema', '_ducklake_internal_row_id', '_ducklake_internal_snapshot_id')
 ORDER BY name
 ----
 t1_c1	INT32	1
@@ -37,7 +43,7 @@ t1_c3	INT64	3
 
 query III
 SELECT name, type, field_id FROM parquet_schema('${DATA_PATH}/ducklake_field_ids_files/main/t2/*.parquet')
-WHERE name <> 'duckdb_schema'
+WHERE name NOT IN ('duckdb_schema', '_ducklake_internal_row_id', '_ducklake_internal_snapshot_id')
 ORDER BY name
 ----
 t2_c1	INT32	1
@@ -51,9 +57,12 @@ SELECT {'c1': 42, 'c2': {'n1': 84, 'n2': 32}} struct_col,
        [{'x': 42, 'y': 84}] as list_of_structs,
        {'l': [1,2,3], 'l2': 42, 'l3': {'x': 42, 'y': 84}} as struct_of_lists
 
+statement ok
+CALL ducklake_flush_inlined_data('ducklake')
+
 query II
 SELECT name, field_id FROM parquet_schema('${DATA_PATH}/ducklake_field_ids_files/main/t3/*.parquet')
-WHERE name <> 'duckdb_schema'
+WHERE name NOT IN ('duckdb_schema', '_ducklake_internal_row_id', '_ducklake_internal_snapshot_id')
 ORDER BY name
 ----
 c1	2

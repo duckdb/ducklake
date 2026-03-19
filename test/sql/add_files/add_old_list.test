@@ -1,0 +1,29 @@
+# name: test/sql/add_files/add_old_list.test
+# description: test ducklake adding a parquet file with legacy avro list layout
+# group: [add_files]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+
+test-env DATA_PATH __TEST_DIR__
+
+statement ok
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/add_old_list');
+
+statement ok
+USE ducklake
+
+statement ok
+CREATE TABLE test AS SELECT * FROM read_parquet('data/parquet/old_list_structure.parquet')
+WITH NO DATA;
+
+statement ok
+CALL ducklake_add_data_files('ducklake', 'test', 'data/parquet/old_list_structure.parquet')
+
+query I
+FROM test;
+----
+[[1, 2], [3, 4]]

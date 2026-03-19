@@ -24,6 +24,9 @@ statement ok
 insert into my_timeseries VALUES ('2025-09-15',42)
 
 statement ok
+CALL ducklake_flush_inlined_data('ducklake')
+
+statement ok
 MERGE INTO my_timeseries
     USING (
         SELECT
@@ -65,10 +68,16 @@ statement ok
 insert into my_timeseries VALUES ('2025-09-15', 43, 39)
 
 statement ok
+CALL ducklake_flush_inlined_data('ducklake')
+
+statement ok
 CREATE TABLE my_timeseries_new (ts TIMESTAMP, x DOUBLE PRECISION, y DOUBLE PRECISION);
 
 statement ok
 insert into my_timeseries_new VALUES ('2025-09-15', 43, 33)
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake')
 
 statement ok
 MERGE INTO my_timeseries old

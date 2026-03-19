@@ -21,6 +21,9 @@ statement ok
 INSERT INTO ducklake.test VALUES (100, 'hello');
 
 statement ok
+CALL ducklake_flush_inlined_data('ducklake')
+
+statement ok
 SET VARIABLE parquet_files = (SELECT LIST(data_file) FROM ducklake_list_files('ducklake', 'test'))
 
 statement ok
@@ -30,8 +33,9 @@ DROP TABLE ducklake.test
 statement ok
 CREATE TABLE ducklake.test(col1 INTEGER, col2 VARCHAR);
 
+# The flushed file contains _ducklake_internal_row_id column, so we need to ignore extra columns
 statement ok
-CALL ducklake_add_data_files('ducklake', 'test', getvariable('parquet_files')[1])
+CALL ducklake_add_data_files('ducklake', 'test', getvariable('parquet_files')[1], ignore_extra_columns => true)
 
 query II
 FROM ducklake.test

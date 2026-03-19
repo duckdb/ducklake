@@ -24,6 +24,9 @@ statement ok
 INSERT INTO ducklake.test VALUES (2);
 
 statement ok
+CALL ducklake_flush_inlined_data('ducklake')
+
+statement ok
 BEGIN
 
 statement ok
@@ -50,13 +53,17 @@ FROM ducklake.test ORDER BY ALL
 100	100
 
 # alter the default
+# First insert with old defaults (outside transaction to avoid inlining conflict with ALTER)
+statement ok
+INSERT INTO ducklake.test DEFAULT VALUES
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake')
+
 foreach finaltransaction ROLLBACK COMMIT
 
 statement ok
 BEGIN
-
-statement ok
-INSERT INTO ducklake.test DEFAULT VALUES
 
 statement ok
 ALTER TABLE ducklake.test ALTER i SET DEFAULT 1000
@@ -91,6 +98,9 @@ SELECT table_id, column_id, initial_default, default_value, default_value_type, 
 
 statement ok
 INSERT INTO ducklake.test DEFAULT VALUES
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake')
 
 query II
 FROM ducklake.test ORDER BY ALL

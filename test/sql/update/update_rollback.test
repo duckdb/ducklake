@@ -17,6 +17,10 @@ ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/du
 statement ok
 CREATE TABLE ducklake.test AS SELECT 1000 + i id, i % 10 as val FROM range(1000) t(i);
 
+# flush inlined data to create files
+statement ok
+CALL ducklake_flush_inlined_data('ducklake')
+
 statement ok
 BEGIN
 

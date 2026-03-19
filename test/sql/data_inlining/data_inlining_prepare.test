@@ -1,0 +1,26 @@
+# name: test/sql/data_inlining/data_inlining_prepare.test
+# description: Test data inlining with prepare statements
+# group: [data_inlining]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+
+test-env DATA_PATH __TEST_DIR__
+
+statement ok
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/data_inlining_prepare', METADATA_CATALOG 'ducklake_metadata', DATA_INLINING_ROW_LIMIT 1000)
+
+statement ok
+USE ducklake
+
+statement ok
+CREATE TABLE IF NOT EXISTS test_tbl (id INTEGER);
+
+statement ok
+PREPARE q AS FROM ducklake_flush_inlined_data('ducklake', table_name => 'test_tbl');
+
+statement ok
+EXECUTE q;

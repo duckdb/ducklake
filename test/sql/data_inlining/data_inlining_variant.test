@@ -1,0 +1,33 @@
+# name: test/sql/data_inlining/data_inlining_variant.test
+# description: test data inlining with variant type
+# group: [data_inlining]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+
+test-env DATA_PATH __TEST_DIR__
+
+statement ok
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/ducklake_inlining_variant_geo_files', METADATA_CATALOG 'ducklake_meta', DATA_INLINING_ROW_LIMIT 10)
+
+statement ok
+USE ducklake;
+
+statement ok
+CREATE TABLE variant_tbl(v VARIANT);
+
+statement ok
+INSERT INTO variant_tbl VALUES (42), ('hello world'), (DATE '2000-01-01'), ({'a': 42, 'b': NULL, 'c': 84}), (NULL), ([1, 2, 3, NULL, 5]);
+
+query II
+SELECT v, variant_typeof(v) FROM variant_tbl
+----
+42	INT32
+hello world	VARCHAR
+2000-01-01	DATE
+{'a': 42, 'b': NULL, 'c': 84}	OBJECT(a, b, c)
+NULL	VARIANT_NULL
+[1, 2, 3, NULL, 5]	ARRAY(5)

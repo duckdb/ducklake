@@ -23,7 +23,16 @@
         "test/sql/general/paths.test",
         "test/sql/general/default_path.test",
         "test/sql/autoloading/autoload_data_path.test",
-        "test/sql/general/metadata_parameters.test"
+        "test/sql/general/metadata_parameters.test",
+        "test/sql/metadata/ducklake_settings.test",
+        "test/sql/remove_orphans/metadata_in_data_path.test"
+      ]
+    },
+    {
+      "reason": "Modifies connection string",
+      "paths": [
+        "test/sql/catalog/quoted_identifiers.test",
+        "test/sql/stats/count_star_optimization_file_operations.test"
       ]
     },
     {
@@ -34,9 +43,21 @@
       ]
     },
     {
+      "reason": "Test only for SQLite as catalog",
+      "paths": [
+        "test/sql/metadata/ducklake_settings_sqlite.test"
+      ]
+    },
+    {
       "reason": "Postgres Locking (Not a bug, rather PG behavior)",
       "paths": [
         "test/sql/transaction/transaction_conflict_inlining.test"
+      ]
+    },
+    {
+      "reason": "Current transaction is aborted",
+      "paths": [
+        "test/sql/deletion_inlining/test_deletion_inlining_concurrent.test"
       ]
     }
   ]

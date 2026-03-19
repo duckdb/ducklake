@@ -49,8 +49,8 @@ static void HandleDuckLakeOption(DuckLakeOptions &options, const string &option,
 		options.metadata_parameters[parameter_name] = value;
 	} else if (lcase == "create_if_not_exists") {
 		options.create_if_not_exists = BooleanValue::Get(value.DefaultCastAs(LogicalType::BOOLEAN));
-	} else if (lcase == "migrate_if_required") {
-		options.migrate_if_required = BooleanValue::Get(value.DefaultCastAs(LogicalType::BOOLEAN));
+	} else if (lcase == "automatic_migration") {
+		options.automatic_migration = BooleanValue::Get(value.DefaultCastAs(LogicalType::BOOLEAN));
 	} else if (lcase == "busy_timeout") {
 		options.busy_timeout = UBigIntValue::Get(value.DefaultCastAs(LogicalType::UBIGINT));
 	} else {

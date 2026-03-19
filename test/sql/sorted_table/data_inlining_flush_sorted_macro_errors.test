@@ -1,0 +1,136 @@
+# name: test/sql/sorted_table/data_inlining_flush_sorted_macro_errors.test
+# description: Test unhappy paths in sorting by macros
+# group: [sorted_table]
+
+require ducklake
+
+require parquet
+
+
+test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+
+
+statement ok
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '__TEST_DIR__/merge_adjacent_sorted_macro_errors/', DATA_INLINING_ROW_LIMIT 10)
+
+statement ok
+USE ducklake;
+
+# Drop a macro before flushing and throw an error
+statement ok
+CREATE TABLE macro_sort_test (i VARCHAR, j VARCHAR);
+
+statement ok
+INSERT INTO macro_sort_test 
+SELECT 'ZYX' AS i, 'CBA' AS j 
+UNION ALL 
+SELECT 'ABC' AS i, 'XYZ' AS j 
+UNION ALL
+SELECT '321' AS i, '000' AS j 
+UNION ALL 
+SELECT '123' AS i, '000' AS j 
+
+
+statement ok
+CREATE MACRO zip_varchar(i, j, num_chars := 6) AS (
+    -- By default using 6 characters from each string so that
+    -- if data is ASCII, we can fit it all in 12 bytes so that it is stored inline
+    -- rather than requiring a pointer
+    [
+	   list_value(z[1], z[2])
+	   FOR z
+	   IN list_zip(
+		  substr(i, 1, num_chars).rpad(num_chars, ' ').string_split(''),
+		  substr(j, 1, num_chars).rpad(num_chars, ' ').string_split('')
+	   )
+    ].flatten().array_to_string('')
+);
+
+# Test that the macro is working as intended independently of sorting
+query III
+SELECT
+    'ABC' AS i,
+    'XYZ' AS j,
+    zip_varchar(i, j, num_chars := 3) AS zipped_varchar;
+----
+ABC	XYZ	AXBYCZ
+
+# Set sorted 
+statement ok
+ALTER TABLE ducklake.macro_sort_test SET SORTED BY (zip_varchar(i, j, num_chars := 3) ASC NULLS LAST);
+
+# Verify data before inline flush (should be in insertion order)
+query III
+SELECT i, j, zip_varchar(i, j, num_chars := 3)
+FROM macro_sort_test
+----
+ZYX	CBA	ZCYBXA
+ABC	XYZ	AXBYCZ
+321	000	302010
+123	000	102030
+
+# Dropping the macro should cause the flush_inlined_data to error
+statement ok
+DROP MACRO zip_varchar
+
+# The macro no longer exists, so we should error out with a helpful message
+statement error
+CALL ducklake_flush_inlined_data('ducklake', table_name => 'macro_sort_test');
+----
+Catalog Error: Scalar Function with name zip_varchar does not exist!
+
+statement ok
+ALTER TABLE macro_sort_test RESET SORTED BY
+
+# We create a macro, set sort, drop macro, 
+# create macro again (but now invalid for our sorting),
+# then try to flush and error appropriately
+statement ok
+CREATE MACRO zip_varchar(i, j, num_chars := 6) AS (
+    -- By default using 6 characters from each string so that
+    -- if data is ASCII, we can fit it all in 12 bytes so that it is stored inline
+    -- rather than requiring a pointer
+    [
+	   list_value(z[1], z[2])
+	   FOR z
+	   IN list_zip(
+		  substr(i, 1, num_chars).rpad(num_chars, ' ').string_split(''),
+		  substr(j, 1, num_chars).rpad(num_chars, ' ').string_split('')
+	   )
+    ].flatten().array_to_string('')
+);
+
+# Test that the macro is working as intended independently of sorting
+query III
+SELECT
+    'ABC' AS i,
+    'XYZ' AS j,
+    zip_varchar(i, j, num_chars := 3) AS zipped_varchar;
+----
+ABC	XYZ	AXBYCZ
+
+# Set sorted 
+statement ok
+ALTER TABLE ducklake.macro_sort_test SET SORTED BY (zip_varchar(i, j, num_chars := 3) ASC NULLS LAST);
+
+statement ok
+DROP MACRO zip_varchar
+
+# Create a macro with a different set of parameters (invalid for our sort)
+statement ok
+CREATE MACRO zip_varchar(i) AS (
+    i || '_nope'
+);
+
+query II
+select 
+    'woot' as i,
+    zip_varchar(i)
+----
+woot	woot_nope
+
+# The macro no longer exists, so we should error out with a helpful message
+statement error
+CALL ducklake_flush_inlined_data('ducklake', table_name => 'macro_sort_test');
+----
+Binder Error: Macro zip_varchar() does not support the supplied arguments

@@ -26,10 +26,18 @@ statement ok
 insert into test values (1);
 
 statement ok
+CALL ducklake_flush_inlined_data('ducklake')
+
+statement ok
 insert into test values (2);
 
 statement ok
-CALL ducklake_merge_adjacent_files('ducklake');
+CALL ducklake_flush_inlined_data('ducklake')
+
+query III
+SELECT table_name, files_processed, files_created FROM ducklake_merge_adjacent_files('ducklake')
+----
+test	2	1
 
 # Add orphaned file
 statement ok
@@ -72,6 +80,9 @@ query I
 SELECT ends_with(path,'bla.parquet') FROM ducklake_delete_orphaned_files('ducklake', cleanup_all => true, dry_run => true);
 ----
 True
+
+statement ok
+LOAD icu
 
 # Check older_than filter
 query I

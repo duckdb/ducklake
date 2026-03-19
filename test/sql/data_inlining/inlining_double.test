@@ -1,0 +1,28 @@
+# name: test/sql/data_inlining/inlining_double.test
+# description: test ducklake inlining with double values
+# group: [data_inlining]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+
+test-env DATA_PATH __TEST_DIR__
+
+statement ok
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}'  AS ducklake (DATA_PATH '${DATA_PATH}/inlining_double', METADATA_CATALOG 'ducklake_meta', DATA_INLINING_ROW_LIMIT 10)
+
+statement ok
+USE ducklake;
+
+statement ok
+CREATE TABLE events (id INTEGER, latitude DOUBLE, longitude DOUBLE)
+
+statement ok
+INSERT INTO events VALUES (1, 37.7749, -122.4194)
+
+query III
+FROM events;
+----
+1	37.7749	-122.4194

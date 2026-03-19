@@ -1,0 +1,58 @@
+# name: test/sql/partitioning/update_partition_function.test
+# description: Test UPDATE on table partitioned by a mix of identity and non-identity transforms
+# group: [partitioning]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+
+test-env DATA_PATH __TEST_DIR__
+
+statement ok
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/ducklake_update_partition_function', METADATA_CATALOG 'ducklake_metadata')
+
+statement ok
+USE ducklake
+
+statement ok
+CREATE TABLE t (p VARCHAR, ts TIMESTAMP, v VARCHAR);
+
+statement ok
+ALTER TABLE t SET PARTITIONED BY (p, day(ts));
+
+statement ok
+INSERT INTO t VALUES ('p1', TIMESTAMP '2026-02-05', 'va');
+
+statement ok
+INSERT INTO t VALUES ('p2', TIMESTAMP '2026-03-10', 'vb');
+
+statement ok
+UPDATE t SET p = 'p3' WHERE v = 'va';
+
+query III rowsort
+SELECT p, ts, v FROM t;
+----
+p2	2026-03-10 00:00:00	vb
+p3	2026-02-05 00:00:00	va
+
+# update a non-partition column
+statement ok
+UPDATE t SET v = 'vc' WHERE p = 'p2';
+
+query III rowsort
+SELECT p, ts, v FROM t;
+----
+p2	2026-03-10 00:00:00	vc
+p3	2026-02-05 00:00:00	va
+
+# update the timestamp (used in non-identity partition transform)
+statement ok
+UPDATE t SET ts = TIMESTAMP '2026-06-15' WHERE p = 'p3';
+
+query III rowsort
+SELECT p, ts, v FROM t;
+----
+p2	2026-03-10 00:00:00	vc
+p3	2026-06-15 00:00:00	va

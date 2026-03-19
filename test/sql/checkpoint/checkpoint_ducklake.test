@@ -84,7 +84,6 @@ CALL ducklake.set_option('delete_older_than', '1 millisecond');
 statement ok
 CHECKPOINT;
 
-
 query II
 SELECT data_file_id, table_id FROM __ducklake_metadata_ducklake.ducklake_data_file ORDER BY ALL
 ----
@@ -92,9 +91,11 @@ SELECT data_file_id, table_id FROM __ducklake_metadata_ducklake.ducklake_data_fi
 6	2
 7	3
 
-query II
-SELECT delete_file_id, table_id FROM __ducklake_metadata_ducklake.ducklake_delete_file
+# We do not delete the deletion file after the checkpointing anymore
+query IIII
+SELECT delete_file_id, table_id, begin_snapshot, end_snapshot FROM __ducklake_metadata_ducklake.ducklake_delete_file
 ----
+5	3	11	13
 
 query I
 SELECT COUNT(*)

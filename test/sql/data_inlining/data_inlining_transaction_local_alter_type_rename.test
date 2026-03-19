@@ -1,0 +1,108 @@
+# name: test/sql/data_inlining/data_inlining_transaction_local_alter_type_rename.test
+# description: test ALTER COLUMN TYPE and RENAME COLUMN on transaction-local inlined data
+# group: [data_inlining]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+
+test-env DATA_PATH __TEST_DIR__
+
+statement ok
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/ducklake_inlining_alter_type_rename', METADATA_CATALOG 'ducklake_meta', DATA_INLINING_ROW_LIMIT 10)
+
+statement ok
+CREATE TABLE ducklake.rename_test(i INTEGER, j VARCHAR)
+
+statement ok
+BEGIN
+
+statement ok
+INSERT INTO ducklake.rename_test VALUES (1, 'hello'), (2, 'world')
+
+statement ok
+ALTER TABLE ducklake.rename_test RENAME COLUMN j TO name
+
+query IT
+SELECT i, name FROM ducklake.rename_test ORDER BY i
+----
+1	hello
+2	world
+
+statement ok
+COMMIT
+
+query IT
+SELECT i, name FROM ducklake.rename_test ORDER BY i
+----
+1	hello
+2	world
+
+statement ok
+CREATE TABLE ducklake.type_test(i INTEGER, v INTEGER)
+
+statement ok
+BEGIN
+
+statement ok
+INSERT INTO ducklake.type_test VALUES (1, 100), (2, 200)
+
+statement ok
+ALTER TABLE ducklake.type_test ALTER v TYPE BIGINT
+
+query II
+SELECT i, v FROM ducklake.type_test ORDER BY i
+----
+1	100
+2	200
+
+statement ok
+COMMIT
+
+query II
+SELECT i, v FROM ducklake.type_test ORDER BY i
+----
+1	100
+2	200
+
+query I
+SELECT typeof(v) FROM ducklake.type_test LIMIT 1
+----
+BIGINT
+
+statement ok
+CREATE TABLE ducklake.type_test2(i INTEGER, v FLOAT)
+
+statement ok
+BEGIN
+
+statement ok
+INSERT INTO ducklake.type_test2 VALUES (1, 1.5)
+
+statement ok
+ALTER TABLE ducklake.type_test2 ALTER v TYPE DOUBLE
+
+query IR
+SELECT i, v FROM ducklake.type_test2 ORDER BY i
+----
+1	1.5
+
+statement ok
+INSERT INTO ducklake.type_test2 VALUES (2, 2.5)
+
+query IR
+SELECT i, v FROM ducklake.type_test2 ORDER BY i
+----
+1	1.5
+2	2.5
+
+statement ok
+COMMIT
+
+query IR
+SELECT i, v FROM ducklake.type_test2 ORDER BY i
+----
+1	1.5
+2	2.5

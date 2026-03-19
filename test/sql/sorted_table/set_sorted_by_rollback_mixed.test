@@ -1,0 +1,209 @@
+# name: test/sql/sorted_table/set_sorted_by_rollback_mixed.test
+# description: Verify SET SORTED BY with other ALTER TABLE operations is rolled back correctly
+# group: [sorted_table]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+
+statement ok
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '__TEST_DIR__/rollback_mixed/')
+
+statement ok
+CREATE TABLE ducklake.test(a INTEGER, b VARCHAR);
+
+# Record initial state
+query I
+SELECT max(snapshot_id) FROM ducklake.snapshots()
+----
+1
+
+query I
+SELECT max(schema_version) FROM __ducklake_metadata_ducklake.ducklake_schema_versions where table_id = 1
+----
+1
+
+# Verify initial column structure
+query I
+SELECT column_name FROM duckdb_columns() WHERE table_name = 'test' ORDER BY column_index
+----
+a
+b
+
+# ============================================
+# SET SORTED BY + ADD COLUMN then ROLLBACK
+# ============================================
+
+statement ok
+BEGIN
+
+statement ok
+ALTER TABLE ducklake.test SET SORTED BY (a ASC NULLS LAST);
+
+statement ok
+ALTER TABLE ducklake.test ADD COLUMN c BIGINT;
+
+# Verify changes visible within transaction
+query I
+SELECT column_name FROM duckdb_columns() WHERE table_name = 'test' ORDER BY column_index
+----
+a
+b
+c
+
+statement ok
+ROLLBACK
+
+# Verify column was rolled back
+query I
+SELECT column_name FROM duckdb_columns() WHERE table_name = 'test' ORDER BY column_index
+----
+a
+b
+
+# Verify sort info was rolled back
+query I
+SELECT COUNT(*)
+FROM __ducklake_metadata_ducklake.ducklake_sort_info
+WHERE table_id = 1 AND end_snapshot IS NULL
+----
+0
+
+# Verify snapshot_id unchanged
+query I
+SELECT max(snapshot_id) FROM ducklake.snapshots()
+----
+1
+
+# Verify schema_version unchanged
+query I
+SELECT max(schema_version) FROM __ducklake_metadata_ducklake.ducklake_schema_versions where table_id = 1
+----
+1
+
+# ============================================
+# ADD COLUMN + SET SORTED BY (reverse order) then ROLLBACK
+# ============================================
+
+statement ok
+BEGIN
+
+statement ok
+ALTER TABLE ducklake.test ADD COLUMN c BIGINT;
+
+statement ok
+ALTER TABLE ducklake.test SET SORTED BY (a ASC, c DESC);
+
+# Verify changes visible within transaction
+query I
+SELECT column_name FROM duckdb_columns() WHERE table_name = 'test' ORDER BY column_index
+----
+a
+b
+c
+
+statement ok
+ROLLBACK
+
+# Verify both changes were rolled back
+query I
+SELECT column_name FROM duckdb_columns() WHERE table_name = 'test' ORDER BY column_index
+----
+a
+b
+
+query I
+SELECT COUNT(*)
+FROM __ducklake_metadata_ducklake.ducklake_sort_info
+WHERE table_id = 1 AND end_snapshot IS NULL
+----
+0
+
+# ============================================
+# Multiple ALTER TABLE operations then ROLLBACK
+# ============================================
+
+statement ok
+BEGIN
+
+statement ok
+ALTER TABLE ducklake.test SET SORTED BY (a ASC);
+
+statement ok
+ALTER TABLE ducklake.test ADD COLUMN c BIGINT;
+
+statement ok
+ALTER TABLE ducklake.test SET SORTED BY (a ASC, c DESC);
+
+statement ok
+ALTER TABLE ducklake.test ADD COLUMN d VARCHAR;
+
+statement ok
+ALTER TABLE ducklake.test SET SORTED BY (a ASC, c DESC, d ASC);
+
+# Verify all changes visible within transaction
+query I
+SELECT column_name FROM duckdb_columns() WHERE table_name = 'test' ORDER BY column_index
+----
+a
+b
+c
+d
+
+statement ok
+ROLLBACK
+
+# Verify all changes were rolled back
+query I
+SELECT column_name FROM duckdb_columns() WHERE table_name = 'test' ORDER BY column_index
+----
+a
+b
+
+query I
+SELECT COUNT(*)
+FROM __ducklake_metadata_ducklake.ducklake_sort_info
+WHERE table_id = 1 AND end_snapshot IS NULL
+----
+0
+
+query I
+SELECT max(snapshot_id) FROM ducklake.snapshots()
+----
+1
+
+# ============================================
+# Verify operations still work after rollback
+# ============================================
+
+statement ok
+ALTER TABLE ducklake.test ADD COLUMN c BIGINT;
+
+statement ok
+ALTER TABLE ducklake.test SET SORTED BY (a ASC NULLS LAST, c DESC NULLS LAST);
+
+# Verify changes were committed
+query I
+SELECT column_name FROM duckdb_columns() WHERE table_name = 'test' ORDER BY column_index
+----
+a
+b
+c
+
+query III
+SELECT expression, sort_direction, null_order
+FROM __ducklake_metadata_ducklake.ducklake_sort_expression se
+JOIN __ducklake_metadata_ducklake.ducklake_sort_info si USING (sort_id)
+WHERE si.table_id = 1 AND si.end_snapshot IS NULL
+ORDER BY se.sort_key_index
+----
+a	ASC	NULLS_LAST
+c	DESC	NULLS_LAST
+
+# schema_version should have incremented once for ADD COLUMN
+query I
+SELECT max(schema_version) FROM __ducklake_metadata_ducklake.ducklake_schema_versions where table_id = 1
+----
+2

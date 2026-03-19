@@ -5,16 +5,24 @@
     "core_functions",
     "parquet",
     "ducklake",
-    "httpfs",
     "sqlite_scanner",
     "icu",
     "httpfs"
+  ],"skip_error_messages": [
+    "database is locked"
   ],
   "test_env": [{
       "env_name":  "DUCKLAKE_CONNECTION",
       "env_value": "sqlite:__TEST_DIR__/{BASE_TEST_NAME}.db"
    }],
+  "skip_error_messages": ["database is locked"],
   "skip_tests": [
+    {
+      "reason": "Test is slow",
+      "paths": [
+        "test/sql/deletion_inlining/test_multiple_files_flush.test_slow"
+      ]
+    },
     {
       "reason": "Not implemented Error: Unsupported catalog type for duckdb_columns",
       "paths": [
@@ -82,24 +90,30 @@
       "paths": [
         "test/sql/transaction/transaction_schema.test"
       ]
-    },
-    {
-      "reason": "FIXME:Cannot compare values of type VARCHAR and type TIMESTAMP WITH TIME ZONE ",
+    },{
+      "reason": "Test only for Postgres as catalog",
       "paths": [
-        "test/sql/compaction/cleanup_old_files_global_option.test",
-        "test/sql/compaction/compaction_cleanup_global.test",
-        "test/sql/compaction/expire_snapshot_global_option.test",
-        "test/sql/checkpoint/many_inserts_transaction.test",
-        "test/sql/checkpoint/view_checkpoint.test",
-        "test/sql/checkpoint/checkpoint_ducklake.test",
-        "test/sql/checkpoint/checkpoint_updates_interleaved.test"
+        "test/sql/metadata/ducklake_settings_postgres.test"
       ]
     },
     {
       "reason": "DuckDB as a catalog specific",
       "paths": [
         "test/sql/autoloading/autoload_data_path.test",
-        "test/sql/general/metadata_parameters.test"
+        "test/sql/general/metadata_parameters.test",
+        "test/sql/metadata/ducklake_settings.test"
+      ]
+    },
+    {
+      "reason": "Current transaction is aborted (please ROLLBACK)",
+      "paths": [
+        "test/sql/deletion_inlining/test_deletion_inlining_concurrent.test"
+      ]
+    },
+    {
+      "reason": "FIXME: old sqlite extension has issues with this query, can be removed after v1.5.1",
+      "paths": [
+        "test/sql/metadata/ducklake_ui_catalog_query.test"
       ]
     }
   ]

@@ -1,0 +1,38 @@
+# name: test/sql/concurrent/concurrent_table_creation.test_slow
+# description: test concurrent creation of catalog entries
+# group: [concurrent]
+
+require notwindows
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+
+test-env DATA_PATH __TEST_DIR__
+
+statement ok
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/ducklake_concurrent_insert_table_creation')
+
+concurrentloop threadid 0 3
+
+loop i 0 10
+
+statement ok
+CREATE TABLE ducklake.tbl_${threadid}_${i}(i INTEGER);
+
+statement ok
+CREATE VIEW ducklake.view_${threadid}_${i} AS FROM ducklake.tbl_${threadid}_${i}
+
+statement ok
+INSERT INTO ducklake.tbl_${threadid}_${i} VALUES (${threadid} * 1000 + ${i})
+
+query I
+SELECT i=${threadid} * 1000 + ${i} FROM ducklake.view_${threadid}_${i}
+----
+true
+
+endloop
+
+endloop

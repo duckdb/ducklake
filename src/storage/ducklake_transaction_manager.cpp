@@ -11,7 +11,7 @@ DuckLakeTransactionManager::DuckLakeTransactionManager(AttachedDatabase &db_p, D
 Transaction &DuckLakeTransactionManager::StartTransaction(ClientContext &context) {
 	auto transaction = make_shared_ptr<DuckLakeTransaction>(ducklake_catalog, *this, context);
 	transaction->Start();
-	if (DBConfig::GetSetting<ImmediateTransactionModeSetting>(context) && get_snapshot) {
+	if (Settings::Get<ImmediateTransactionModeSetting>(context) && get_snapshot) {
 		get_snapshot = false;
 		// no snapshot loaded yet for this transaction - load it
 		transaction->GetSnapshot();

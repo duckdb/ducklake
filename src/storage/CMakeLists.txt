@@ -1,3 +1,4 @@
+add_subdirectory(statistics)
 add_library(
   ducklake_storage OBJECT
   ducklake_catalog.cpp

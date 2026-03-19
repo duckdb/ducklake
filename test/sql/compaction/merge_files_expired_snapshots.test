@@ -12,7 +12,7 @@ test-env DATA_PATH __TEST_DIR__
 
 
 statement ok
-ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/ducklake_merge_expire_snapshots_schema')
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/ducklake_merge_expire_snapshots_schema', DATA_INLINING_ROW_LIMIT 0)
 
 statement ok
 USE ducklake;
@@ -93,7 +93,7 @@ SELECT snapshot_id, changes FROM snapshots();
 ----
 0	{schemas_created=[main]}
 3	{tables_inserted_into=[1]}
-4	{}
+4	{merge_adjacent=[1]}
 5	{tables_inserted_into=[1]}
 6	{tables_altered=[1]}
 7	{tables_inserted_into=[1]}

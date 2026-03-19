@@ -17,6 +17,7 @@
 #include "storage/ducklake_stats.hpp"
 
 namespace duckdb {
+struct DuckLakeGlobalStatsInfo;
 class ColumnList;
 class DuckLakeFieldData;
 struct DuckLakeFileListEntry;
@@ -120,6 +121,10 @@ public:
 		return options.encryption;
 	}
 
+	bool IsEncrypted() const override {
+		return Encryption() == DuckLakeEncryption::ENCRYPTED;
+	}
+
 	bool IsCommitInfoRequired() const {
 		auto require = GetConfigOption<string>("require_commit_message", {}, {}, "false");
 		return require == "true";
@@ -158,13 +163,15 @@ public:
 
 	optional_ptr<const DuckLakeNameMap> TryGetMappingById(DuckLakeTransaction &transaction, MappingIndex mapping_id);
 	MappingIndex TryGetCompatibleNameMap(DuckLakeTransaction &transaction, const DuckLakeNameMap &name_map);
-	idx_t GetSnapshotForSchema(idx_t schema_id, DuckLakeTransaction &transaction);
+	idx_t GetBeginSnapshotForTable(TableIndex table_id, DuckLakeTransaction &transaction);
+
+	static unique_ptr<DuckLakeStats> ConstructStatsMap(vector<DuckLakeGlobalStatsInfo> &global_stats,
+	                                                   DuckLakeCatalogSet &schema);
+	//! Return the schema for the given snapshot - loading it if it is not yet loaded
+	DuckLakeCatalogSet &GetSchemaForSnapshot(DuckLakeTransaction &transaction, DuckLakeSnapshot snapshot);
 
 private:
 	void DropSchema(ClientContext &context, DropInfo &info) override;
-
-	//! Return the schema for the given snapshot - loading it if it is not yet loaded
-	DuckLakeCatalogSet &GetSchemaForSnapshot(DuckLakeTransaction &transaction, DuckLakeSnapshot snapshot);
 	unique_ptr<DuckLakeCatalogSet> LoadSchemaForSnapshot(DuckLakeTransaction &transaction, DuckLakeSnapshot snapshot);
 	DuckLakeStats &GetStatsForSnapshot(DuckLakeTransaction &transaction, DuckLakeSnapshot snapshot);
 	unique_ptr<DuckLakeStats> LoadStatsForSnapshot(DuckLakeTransaction &transaction, DuckLakeSnapshot snapshot,

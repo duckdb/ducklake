@@ -20,6 +20,9 @@ CREATE TABLE ducklake.test(col1 INTEGER, col2 VARCHAR);
 statement ok
 INSERT INTO ducklake.test VALUES (100, 'hello');
 
+statement ok
+CALL ducklake_flush_inlined_data('ducklake')
+
 # write a parquet file outside of DuckLake
 statement ok
 COPY (SELECT 200 col1, 'world' col2) TO '${DATA_PATH}/ducklake_add_files/main/test/my_file.parquet';
@@ -124,9 +127,14 @@ FROM ducklake.test
 300	NULL
 400	50
 
+# compute the version for the state after add_data_files my_file3
+# in inline mode there is an extra flush snapshot, so the version differs
+statement ok
+SET VARIABLE v_file3 = (SELECT snapshot_id FROM (SELECT snapshot_id, row_number() OVER (ORDER BY snapshot_id) as rn FROM ducklake_snapshots('ducklake') WHERE changes::VARCHAR LIKE '%insert%') WHERE rn = 4);
+
 # schema-level time travel works, also on files we added here
 query III
-FROM ducklake.test AT (VERSION => 6)
+FROM ducklake.test AT (VERSION => getvariable('v_file3'))
 ----
 100	hello	NULL
 200	world	NULL
@@ -170,7 +178,7 @@ SELECT col1, col2, col3 FROM ducklake.test
 
 # time travel still works
 query III
-FROM ducklake.test AT (VERSION => 6)
+FROM ducklake.test AT (VERSION => getvariable('v_file3'))
 ----
 100	hello	NULL
 200	world	NULL

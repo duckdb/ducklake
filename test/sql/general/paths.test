@@ -21,6 +21,10 @@ CREATE TABLE ducklake.test(i INTEGER, j INTEGER);
 statement ok
 INSERT INTO ducklake.test VALUES (1, 2), (NULL, 3);
 
+# flush inlined data to create files
+statement ok
+CALL ducklake_flush_inlined_data('ducklake')
+
 query I
 SELECT COUNT(*) FROM glob('${DATA_PATH}/ducklake_paths_files/**') WHERE 'test' IN file
 ----
@@ -56,6 +60,10 @@ CREATE TABLE ducklake.s1.test(i INTEGER);
 
 statement ok
 INSERT INTO ducklake.s1.test VALUES (42);
+
+# flush inlined data to create files
+statement ok
+CALL ducklake_flush_inlined_data('ducklake')
 
 query I
 SELECT COUNT(*) FROM glob('${DATA_PATH}/ducklake_paths_files/**') WHERE 's1' IN file

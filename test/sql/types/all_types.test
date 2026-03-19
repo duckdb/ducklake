@@ -26,7 +26,7 @@ fixed_nested_varchar_array,
 fixed_struct_array,
 struct_of_fixed_array,
 fixed_array_of_int_list,
-list_of_fixed_int_array, hugeint, uhugeint, interval, time_tz) FROM test_all_types();
+list_of_fixed_int_array, hugeint, uhugeint, interval, time_tz, time_ns) FROM test_all_types();
 
 query I nosort alltypes
 FROM all_types

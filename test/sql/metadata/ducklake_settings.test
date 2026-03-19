@@ -1,0 +1,30 @@
+# name: test/sql/metadata/ducklake_settings.test
+# description: Test ducklake_settings function
+# group: [metadata]
+
+require ducklake
+
+require parquet
+
+test-env DATA_PATH __TEST_DIR__
+
+statement ok
+ATTACH 'ducklake:__TEST_DIR__/ducklake_settings.db' AS ducklake (DATA_PATH '${DATA_PATH}/files')
+
+statement ok
+use ducklake
+
+query III
+SELECT catalog_type, extension_version IS NOT NULL AS has_version, data_path IS NOT NULL AS has_path FROM ducklake_settings('ducklake');
+----
+duckdb	true	true
+
+query III
+SELECT catalog_type, extension_version IS NOT NULL AS has_version, data_path IS NOT NULL AS has_path FROM settings();
+----
+duckdb	true	true
+
+query I
+SELECT length(data_path) > 0 FROM settings();
+----
+1

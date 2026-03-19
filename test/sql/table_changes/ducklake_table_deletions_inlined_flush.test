@@ -1,0 +1,103 @@
+# name: test/sql/table_changes/ducklake_table_deletions_inlined_flush.test
+# description: test ducklake_table_deletions function with inlined data, flush, and subsequent deletions
+# group: [table_changes]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+
+test-env DATA_PATH __TEST_DIR__
+
+
+statement ok
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/ducklake_inlined_flush_deletions_files', DATA_INLINING_ROW_LIMIT 100)
+
+# snapshot 1
+statement ok
+CREATE TABLE ducklake.test(i INTEGER, j VARCHAR);
+
+# snapshot 2 - insert inlined data (small enough to be inlined)
+statement ok
+INSERT INTO ducklake.test SELECT i, 'row' || i::VARCHAR FROM range(10) t(i);
+
+# snapshot 3 - delete
+statement ok
+DELETE FROM ducklake.test WHERE i = 2
+
+# snapshot 4 - delete
+statement ok
+DELETE FROM ducklake.test WHERE i = 5
+
+# snapshot 5 - delete
+statement ok
+DELETE FROM ducklake.test WHERE i = 8
+
+# snapshot 6 - flush
+statement ok
+CALL ducklake_flush_inlined_data('ducklake')
+
+# snapshot 7 - delete (creates partial delete file)
+statement ok
+DELETE FROM ducklake.test WHERE i = 1
+
+# snapshot 8 - delete (creates partial delete file)
+statement ok
+DELETE FROM ducklake.test WHERE i = 4
+
+# snapshot 9 - delete (creates partial delete file)
+statement ok
+DELETE FROM ducklake.test WHERE i = 7
+
+# Verify remaining data
+query II
+SELECT * FROM ducklake.test ORDER BY i
+----
+0	row0
+3	row3
+6	row6
+9	row9
+
+# Test: deletions after flush (from parquet file with partial delete files)
+query III
+SELECT rowid, snapshot_id, i FROM ducklake_table_deletions('ducklake', 'main', 'test', 7, 7) ORDER BY rowid
+----
+1	7	1
+
+query III
+SELECT rowid, snapshot_id, i FROM ducklake_table_deletions('ducklake', 'main', 'test', 8, 8) ORDER BY rowid
+----
+4	8	4
+
+query III
+SELECT rowid, snapshot_id, i FROM ducklake_table_deletions('ducklake', 'main', 'test', 9, 9) ORDER BY rowid
+----
+7	9	7
+
+query III
+SELECT rowid, snapshot_id, i FROM ducklake_table_deletions('ducklake', 'main', 'test', 7, 9) ORDER BY rowid
+----
+1	7	1
+4	8	4
+7	9	7
+
+query III
+SELECT rowid, snapshot_id, i FROM ducklake_table_deletions('ducklake', 'main', 'test', 3, 9) ORDER BY rowid
+----
+1	7	1
+2	3	2
+4	8	4
+5	4	5
+7	9	7
+8	5	8
+
+query II
+SELECT rowid, i FROM ducklake_table_deletions('ducklake', 'main', 'test', 0, 9) ORDER BY rowid
+----
+1	1
+2	2
+4	4
+5	5
+7	7
+8	8

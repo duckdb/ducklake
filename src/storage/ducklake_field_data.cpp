@@ -283,7 +283,7 @@ unique_ptr<DuckLakeFieldId> DuckLakeFieldId::RenameField(const vector<string> &c
 	if (!found) {
 		throw InternalException("DuckLakeFieldId::AddField - child not found in struct path");
 	}
-	auto new_type = GetStructType(new_children);
+	auto new_type = GetNewNestedType(type, new_children);
 	return make_uniq<DuckLakeFieldId>(column_data.Copy(), Name(), std::move(new_type), std::move(new_children));
 }
 
@@ -326,10 +326,14 @@ shared_ptr<DuckLakeFieldData> DuckLakeFieldData::DropColumn(const DuckLakeFieldD
 }
 
 shared_ptr<DuckLakeFieldData> DuckLakeFieldData::SetDefault(const DuckLakeFieldData &field_data, FieldIndex field_index,
-                                                            const ColumnDefinition &new_col) {
+                                                            const ColumnDefinition &new_col, bool add_column) {
 	auto result = make_shared_ptr<DuckLakeFieldData>();
 	auto new_default =
 	    new_col.HasDefaultValue() ? optional_ptr<const ParsedExpression>(new_col.DefaultValue()) : nullptr;
+	if (new_default && new_default->type != ExpressionType::VALUE_CONSTANT && add_column) {
+		throw NotImplementedException("We cannot add a column with a non-literal default value. Add the column and "
+		                              "then explicitly set the default for new values using \"ALTER ... SET DEFAULT\"");
+	}
 	for (auto &existing_id : field_data.field_ids) {
 		unique_ptr<DuckLakeFieldId> field_id;
 		if (existing_id->GetFieldIndex() == field_index) {
@@ -366,10 +370,22 @@ const DuckLakeFieldId &DuckLakeFieldId::GetChildByIndex(idx_t index) const {
 	return *children[index];
 }
 
-optional_ptr<const DuckLakeFieldId> DuckLakeFieldData::GetByNames(PhysicalIndex id,
-                                                                  const vector<string> &column_names) const {
+optional_ptr<const DuckLakeFieldId> DuckLakeFieldData::GetByNames(PhysicalIndex id, const vector<string> &column_names,
+                                                                  optional_ptr<optional_idx> name_offset) const {
 	const_reference<DuckLakeFieldId> result = GetByRootIndex(id);
-	for (idx_t i = 1; i < column_names.size(); ++i) {
+	for (idx_t i = 1; i <= column_names.size(); ++i) {
+		if (result.get().Type().id() == LogicalTypeId::VARIANT) {
+			if (name_offset) {
+				*name_offset = i;
+				return result.get();
+			}
+			throw InvalidInputException(
+			    "Column path %s points to child of variant column %s - but no name_offset is provided",
+			    StringUtil::Join(column_names, "."), result.get().Name());
+		}
+		if (i >= column_names.size()) {
+			break;
+		}
 		auto &current = result.get();
 		auto next_child = current.GetChildByName(column_names[i]);
 		if (!next_child) {

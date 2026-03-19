@@ -8,6 +8,8 @@ require parquet
 
 require tpch
 
+require notwindows
+
 statement ok
 CALL dbgen(sf=1);
 
