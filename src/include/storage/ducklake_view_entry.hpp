@@ -45,6 +45,8 @@ public:
 	unique_ptr<CreateInfo> GetInfo() const override;
 	string ToSQL() const override;
 
+	void BindView(ClientContext &context, BindViewAction action = BindViewAction::BIND_IF_UNBOUND) override;
+
 	string GetQuerySQL();
 
 public:

@@ -1,0 +1,102 @@
+# name: test/sql/view/dangling_view_columns.test
+# description: Test that dangling views don't error on inspection
+# group: [view]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+
+test-env DATA_PATH __TEST_DIR__
+
+statement ok
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/dangling_view_files');
+
+statement ok
+USE ducklake
+
+statement ok
+CREATE SCHEMA IF NOT EXISTS main
+
+statement ok
+CREATE TABLE main.t1 (id INTEGER, label VARCHAR)
+
+statement ok
+CREATE VIEW main.v1 AS SELECT 1 AS id, 'x' AS label
+
+statement ok
+CREATE VIEW main.v2 AS SELECT id, label FROM main.v1
+
+statement ok
+CREATE VIEW main.v3 AS SELECT 100 AS score, 'hello' AS greeting
+
+statement ok
+DROP VIEW main.v1
+
+query I
+SELECT view_name FROM duckdb_views() WHERE database_name = 'ducklake' AND schema_name = 'main' ORDER BY view_name
+----
+v2
+v3
+
+query III
+SELECT table_name, column_name, data_type FROM information_schema.columns WHERE table_schema = 'main' AND table_name IN ('t1', 'v2', 'v3') ORDER BY table_name, ordinal_position
+----
+t1	id	INTEGER
+t1	label	VARCHAR
+v3	score	INTEGER
+v3	greeting	VARCHAR
+
+query III
+SELECT table_name, column_name, data_type FROM duckdb_columns() WHERE database_name = 'ducklake' AND schema_name = 'main' AND table_name IN ('t1', 'v2', 'v3') ORDER BY table_name, column_index
+----
+t1	id	INTEGER
+t1	label	VARCHAR
+v3	score	INTEGER
+v3	greeting	VARCHAR
+
+statement error
+SELECT * FROM main.v2
+----
+Table with name v1 does not exist
+
+statement error
+SELECT * FROM main.v2
+----
+Table with name v1 does not exist
+
+statement ok
+CREATE VIEW main.v1 AS SELECT 42 AS id, 'y' AS label
+
+query II
+SELECT * FROM main.v2
+----
+42	y
+
+statement ok
+DROP VIEW main.v1
+
+query III
+SELECT table_name, column_name, data_type FROM information_schema.columns WHERE table_schema = 'main' AND table_name IN ('t1', 'v2', 'v3') ORDER BY table_name, ordinal_position
+----
+t1	id	INTEGER
+t1	label	VARCHAR
+v3	score	INTEGER
+v3	greeting	VARCHAR
+
+query III
+SELECT table_name, column_name, data_type FROM duckdb_columns() WHERE database_name = 'ducklake' AND schema_name = 'main' AND table_name IN ('t1', 'v2', 'v3') ORDER BY table_name, column_index
+----
+t1	id	INTEGER
+t1	label	VARCHAR
+v3	score	INTEGER
+v3	greeting	VARCHAR
+
+statement ok
+CREATE VIEW main.v1 AS SELECT 1 AS a, 'x' AS b
+
+statement error
+SELECT * FROM main.v2
+----
+Referenced column "id" not found in FROM clause
