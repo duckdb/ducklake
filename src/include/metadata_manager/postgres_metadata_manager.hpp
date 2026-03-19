@@ -20,6 +20,10 @@ public:
 
 protected:
 	string GetLatestSnapshotQuery() const override;
+
+private:
+	string GenerateCTESectionFromRequirements(const unordered_map<idx_t, CTERequirement> &requirements,
+	                                          TableIndex table_id) override;
 };
 
 } // namespace duckdb
