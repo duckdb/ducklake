@@ -137,6 +137,9 @@ string PostgresMetadataManager::GenerateCTESectionFromRequirements(
 	// directly on the PostgreSQL server. This allows PostgreSQL to use its indexes on
 	// (table_id, column_id) instead of DuckDB's postgres scanner bulk-copying the
 	// entire ducklake_file_column_stats table via COPY with ctid range batches.
+	// Note: MATERIALIZED/NOT MATERIALIZED hints are DuckDB-specific SQL but are valid
+	// here because the CTEs are processed by DuckDB's query engine — only the inner
+	// postgres_query() call executes on PostgreSQL.
 	string cte_section = "WITH ";
 	bool first_cte = true;
 
