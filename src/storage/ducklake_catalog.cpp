@@ -832,4 +832,26 @@ unique_ptr<LogicalOperator> DuckLakeCatalog::BindAlterAddIndex(Binder &binder, T
 	throw NotImplementedException("Adding indexes or constraints is not supported in DuckLake");
 }
 
+int DuckLakeCatalog::CheckInlinedDeletionTableCache(TableIndex table_id, DuckLakeSnapshot snapshot) {
+	lock_guard<mutex> guard(inlined_deletion_cache_lock);
+	if (inlined_deletion_exists.find(table_id.index) != inlined_deletion_exists.end()) {
+		return 1; // known to exist
+	}
+	auto it = inlined_deletion_not_exists.find(table_id.index);
+	if (it != inlined_deletion_not_exists.end() && snapshot.snapshot_id <= it->second) {
+		return -1; // known to not exist at this or earlier snapshot
+	}
+	return 0; // unknown
+}
+
+void DuckLakeCatalog::CacheInlinedDeletionTableResult(TableIndex table_id, DuckLakeSnapshot snapshot, bool exists) {
+	lock_guard<mutex> guard(inlined_deletion_cache_lock);
+	if (exists) {
+		inlined_deletion_exists.insert(table_id.index);
+		inlined_deletion_not_exists.erase(table_id.index);
+	} else {
+		inlined_deletion_not_exists[table_id.index] = snapshot.snapshot_id;
+	}
+}
+
 } // namespace duckdb

@@ -2445,12 +2445,13 @@ map<idx_t, set<idx_t>> DuckLakeMetadataManager::ReadInlinedFileDeletions(TableIn
 	                                "{SNAPSHOT_ID}",
 	                                inlined_table_name);
 	auto query_result = transaction.Query(snapshot, query);
-	if (!query_result->HasError()) {
-		for (auto &row : *query_result) {
-			auto file_id = row.GetValue<idx_t>(0);
-			auto row_id = row.GetValue<idx_t>(1);
-			result[file_id].insert(row_id);
-		}
+	if (query_result->HasError()) {
+		query_result->GetErrorObject().Throw("Failed to read inlined file deletions from DuckLake: ");
+	}
+	for (auto &row : *query_result) {
+		auto file_id = row.GetValue<idx_t>(0);
+		auto row_id = row.GetValue<idx_t>(1);
+		result[file_id].insert(row_id);
 	}
 	return result;
 }
@@ -2479,10 +2480,11 @@ unordered_set<idx_t> DuckLakeMetadataManager::GetFileIdsWithInlinedDeletions(Tab
 	                                "begin_snapshot <= {SNAPSHOT_ID}",
 	                                inlined_table_name, file_id_list);
 	auto query_result = transaction.Query(snapshot, query);
-	if (!query_result->HasError()) {
-		for (auto &row : *query_result) {
-			result.insert(row.GetValue<idx_t>(0));
-		}
+	if (query_result->HasError()) {
+		query_result->GetErrorObject().Throw("Failed to read inlined file deletion IDs from DuckLake: ");
+	}
+	for (auto &row : *query_result) {
+		result.insert(row.GetValue<idx_t>(0));
 	}
 	return result;
 }
@@ -2499,13 +2501,14 @@ DuckLakeMetadataManager::ReadInlinedFileDeletionsForRange(TableIndex table_id, D
 	                                "WHERE begin_snapshot >= %d AND begin_snapshot <= {SNAPSHOT_ID}",
 	                                inlined_table_name, start_snapshot.snapshot_id);
 	auto query_result = transaction.Query(end_snapshot, query);
-	if (!query_result->HasError()) {
-		for (auto &row : *query_result) {
-			auto file_id = row.GetValue<idx_t>(0);
-			auto row_id = row.GetValue<idx_t>(1);
-			auto snapshot_id = row.GetValue<idx_t>(2);
-			result[file_id][row_id] = snapshot_id;
-		}
+	if (query_result->HasError()) {
+		query_result->GetErrorObject().Throw("Failed to read inlined file deletions for range from DuckLake: ");
+	}
+	for (auto &row : *query_result) {
+		auto file_id = row.GetValue<idx_t>(0);
+		auto row_id = row.GetValue<idx_t>(1);
+		auto snapshot_id = row.GetValue<idx_t>(2);
+		result[file_id][row_id] = snapshot_id;
 	}
 	return result;
 }
@@ -2515,13 +2518,22 @@ string DuckLakeMetadataManager::GetInlinedDeletionTableName(TableIndex table_id,
 	// The table name is always deterministic
 	string table_name = StringUtil::Format("ducklake_inlined_delete_%d", table_id.index);
 
-	// Check the cache first (tracks whether table exists)
+	// Check per-transaction cache first (covers tables created in this transaction)
 	if (delete_inlined_table_cache.find(table_id.index) != delete_inlined_table_cache.end()) {
 		return table_name;
 	}
 
+	// Check catalog-level cache (persists across transactions)
+	auto &catalog = transaction.GetCatalog();
+	auto cache_result = catalog.CheckInlinedDeletionTableCache(table_id, snapshot);
+	if (cache_result == 1) {
+		return table_name; // known to exist (committed)
+	}
+	if (cache_result == -1 && !create_if_not_exists) {
+		return string(); // known to not exist
+	}
+
 	if (create_if_not_exists) {
-		// Create the table if it doesn't exist
 		auto create_query = StringUtil::Format(
 		    "CREATE TABLE IF NOT EXISTS {METADATA_CATALOG}.%s(file_id BIGINT, row_id BIGINT, begin_snapshot BIGINT);",
 		    table_name);
@@ -2529,17 +2541,23 @@ string DuckLakeMetadataManager::GetInlinedDeletionTableName(TableIndex table_id,
 		if (create_result->HasError()) {
 			create_result->GetErrorObject().Throw("Failed to create inlined deletion table: ");
 		}
+		// Only cache per-transaction — the CREATE is transactional and may be rolled back
 		delete_inlined_table_cache.insert(table_id.index);
 		return table_name;
 	}
 
-	// Check if the table exists by querying duckdb_tables()
+	// Read path: table visibility implies it was committed, safe to cache at catalog level
 	auto query = StringUtil::Format("SELECT NULL FROM {METADATA_CATALOG}.%s LIMIT 1", table_name);
 	auto result = transaction.Query(snapshot, query);
+	// TODO: Using the error state to check for existence here is fragile.
+	// Even if the table exists, a transient error in the catalog query would lead us to assume it does not exist.
+	// Maybe persist the existence of the deletion inlining table on the table metadata instead?
 	if (!result->HasError()) {
 		delete_inlined_table_cache.insert(table_id.index);
+		catalog.CacheInlinedDeletionTableResult(table_id, snapshot, true);
 		return table_name;
 	}
+	catalog.CacheInlinedDeletionTableResult(table_id, snapshot, false);
 	return string();
 }
 

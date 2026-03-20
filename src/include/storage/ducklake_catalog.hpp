@@ -171,6 +171,12 @@ public:
 	//! Return the schema for the given snapshot - loading it if it is not yet loaded
 	DuckLakeCatalogSet &GetSchemaForSnapshot(DuckLakeTransaction &transaction, DuckLakeSnapshot snapshot);
 
+	//! Check if an inlined deletion table is known to exist or not exist for the given table and snapshot
+	//! Returns: 1 = known to exist, -1 = known to not exist, 0 = unknown (need to query)
+	int CheckInlinedDeletionTableCache(TableIndex table_id, DuckLakeSnapshot snapshot);
+	//! Cache the result of an inlined deletion table existence check
+	void CacheInlinedDeletionTableResult(TableIndex table_id, DuckLakeSnapshot snapshot, bool exists);
+
 private:
 	void DropSchema(ClientContext &context, DropInfo &info) override;
 	unique_ptr<DuckLakeCatalogSet> LoadSchemaForSnapshot(DuckLakeTransaction &transaction, DuckLakeSnapshot snapshot);
@@ -201,6 +207,13 @@ private:
 	string metadata_type;
 	//! Whether or not the catalog is initialized
 	bool initialized = false;
+	//! Cache for inlined deletion table existence checks
+	mutex inlined_deletion_cache_lock;
+	//! Table IDs where the inlined deletion table is known to exist (permanent - never invalidated)
+	unordered_set<idx_t> inlined_deletion_exists;
+	//! Table IDs where the inlined deletion table is known to NOT exist, with the snapshot_id at which we checked
+	//! Valid as long as current snapshot.snapshot_id <= cached snapshot_id
+	unordered_map<idx_t, idx_t> inlined_deletion_not_exists;
 	//! The id of the last committed snapshot, set at FlushChanges on a successful commit
 	mutable mutex commit_lock;
 	optional_idx last_committed_snapshot;
