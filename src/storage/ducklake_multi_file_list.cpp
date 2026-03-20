@@ -278,7 +278,12 @@ vector<DuckLakeFileListExtendedEntry> DuckLakeMultiFileList::GetFilesExtended() 
 		file_entry.file_id = DataFileIndex();
 		file_entry.delete_file_id = DataFileIndex();
 		file_entry.row_count = transaction_local_data->data->Count();
-		file_entry.row_id_start = transaction_row_start;
+		if (!transaction_local_data->row_ids.empty()) {
+			// preserved row_ids are absolute, so row_id_start must be 0
+			file_entry.row_id_start = 0;
+		} else {
+			file_entry.row_id_start = transaction_row_start;
+		}
 		file_entry.data_type = DuckLakeDataType::TRANSACTION_LOCAL_INLINED_DATA;
 		result.push_back(std::move(file_entry));
 	}
@@ -370,7 +375,12 @@ void DuckLakeMultiFileList::GetFilesForTable() const {
 		// we have transaction local inlined data - create the dummy file entry
 		DuckLakeFileListEntry file_entry;
 		file_entry.file.path = DUCKLAKE_TRANSACTION_LOCAL_INLINED_FILENAME;
-		file_entry.row_id_start = transaction_row_start;
+		if (!transaction_local_data->row_ids.empty()) {
+			// preserved row_ids are absolute, so row_id_start must be 0
+			file_entry.row_id_start = 0;
+		} else {
+			file_entry.row_id_start = transaction_row_start;
+		}
 		file_entry.data_type = DuckLakeDataType::TRANSACTION_LOCAL_INLINED_DATA;
 		files.push_back(std::move(file_entry));
 	}

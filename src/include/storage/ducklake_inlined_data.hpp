@@ -17,6 +17,8 @@ namespace duckdb {
 struct DuckLakeInlinedData {
 	unique_ptr<ColumnDataCollection> data;
 	map<FieldIndex, DuckLakeColumnStats> column_stats;
+	//! Row Ids for update inlining
+	vector<int64_t> row_ids;
 };
 
 struct DuckLakeInlinedDataDeletes {

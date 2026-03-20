@@ -89,7 +89,7 @@ unique_ptr<GlobalSinkState> DuckLakeUpdate::GetGlobalSinkState(ClientContext &co
 	copy_op.sink_state = copy_op.GetGlobalSinkState(context);
 	delete_op.sink_state = delete_op.GetGlobalSinkState(context);
 	if (inline_data_op) {
-	    // We need tto initialize data global state
+		// We need tto initialize data global state
 		result->inline_data_gstate = inline_data_op->GetGlobalOperatorState(context);
 	}
 	return std::move(result);
@@ -205,11 +205,12 @@ SinkResultType DuckLakeUpdate::Sink(ExecutionContext &context, DataChunk &chunk,
 	}
 
 	if (inline_data_op) {
-		// if we have an inline data operator, we need to execute through it, it will either inline it or pass it throuhg
+		// if we have an inline data operator, we need to execute through it, it will either inline it or pass it
+		// throuhg
 		auto &inline_output = lstate.inline_output_chunk;
 		inline_output.Reset();
-		auto inline_result = inline_data_op->Execute(context, insert_chunk, inline_output,
-		                                             *gstate.inline_data_gstate, *lstate.inline_data_lstate);
+		auto inline_result = inline_data_op->Execute(context, insert_chunk, inline_output, *gstate.inline_data_gstate,
+		                                             *lstate.inline_data_lstate);
 		if (inline_output.size() > 0) {
 			OperatorSinkInput copy_input {*copy_op.sink_state, *lstate.copy_local_state, input.interrupt_state};
 			copy_op.Sink(context, inline_output, copy_input);
@@ -217,8 +218,8 @@ SinkResultType DuckLakeUpdate::Sink(ExecutionContext &context, DataChunk &chunk,
 		// handle HAVE_MORE_OUTPUT
 		while (inline_result == OperatorResultType::HAVE_MORE_OUTPUT) {
 			inline_output.Reset();
-			inline_result = inline_data_op->Execute(context, insert_chunk, inline_output,
-			                                        *gstate.inline_data_gstate, *lstate.inline_data_lstate);
+			inline_result = inline_data_op->Execute(context, insert_chunk, inline_output, *gstate.inline_data_gstate,
+			                                        *lstate.inline_data_lstate);
 			if (inline_output.size() > 0) {
 				OperatorSinkInput copy_input {*copy_op.sink_state, *lstate.copy_local_state, input.interrupt_state};
 				copy_op.Sink(context, inline_output, copy_input);
@@ -289,7 +290,6 @@ SinkFinalizeType DuckLakeUpdate::Finalize(Pipeline &pipeline, Event &event, Clie
                                           OperatorSinkFinalizeInput &input) const {
 	auto &gstate = input.global_state.Cast<DuckLakeUpdateGlobalState>();
 
-
 	if (inline_data_op) {
 		// call OperatorFinalize on inline data
 		OperatorFinalizeInput inline_finalize_input {*gstate.inline_data_gstate, input.interrupt_state};
@@ -315,7 +315,6 @@ SinkFinalizeType DuckLakeUpdate::Finalize(Pipeline &pipeline, Event &event, Clie
 
 	DataChunk copy_source_chunk;
 	copy_source_chunk.Initialize(context, copy_op.types);
-
 
 	if (!insert_op.sink_state) {
 		// use existing sink_state if OperatorFinalize already created it

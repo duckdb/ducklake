@@ -126,6 +126,7 @@ shared_ptr<DuckLakeInlinedData> LocalTableChanges::GetTransactionLocalInlinedDat
 	for (auto &chunk : local_changes.data->Chunks()) {
 		result->data->Append(chunk);
 	}
+	result->row_ids = local_changes.row_ids;
 	return result;
 }
 
@@ -208,6 +209,11 @@ void LocalTableChanges::AppendInlinedData(ClientContext &context, TableIndex tab
 		existing_data.data->InitializeAppend(append_state);
 		for (auto &chunk : new_data->data->Chunks()) {
 			existing_data.data->Append(chunk);
+		}
+		// merge preserved row_ids from update inlining
+		if (!new_data->row_ids.empty()) {
+			existing_data.row_ids.insert(existing_data.row_ids.end(), new_data->row_ids.begin(),
+			                             new_data->row_ids.end());
 		}
 		for (auto &entry : new_data->column_stats) {
 			auto stats_entry = existing_data.column_stats.find(entry.first);
@@ -2012,8 +2018,10 @@ NewDataInfo DuckLakeTransaction::GetNewDataFiles(string &batch_query, DuckLakeCo
 
 			// update global stats
 			new_stats.record_count += record_count;
-			new_stats.next_row_id += record_count;
-
+			if (inlined_data.row_ids.empty()) {
+				// regular insert, we advance next_row_id
+				new_stats.next_row_id += record_count;
+			}
 			// add the file to the to-be-written inlined data list
 			new_inlined_data.data = table_changes.new_inlined_data.get();
 			result.new_inlined_data.push_back(new_inlined_data);

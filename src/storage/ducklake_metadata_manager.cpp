@@ -2347,21 +2347,28 @@ WHERE table_id = %d AND schema_version=(
 		// append the data
 		// FIXME: we can do a much faster append than this
 		string values;
+		bool has_preserved_row_ids = !entry.data->row_ids.empty();
 		idx_t row_id = entry.row_id_start;
+		idx_t global_row_idx = 0;
 		for (auto &chunk : entry.data->data->Chunks()) {
 			for (idx_t r = 0; r < chunk.size(); r++) {
 				if (!values.empty()) {
 					values += ", ";
 				}
 				values += "(";
-				values += to_string(row_id);
+				if (has_preserved_row_ids) {
+					values += to_string(entry.data->row_ids[global_row_idx]);
+				} else {
+					values += to_string(row_id);
+					row_id++;
+				}
 				values += ", {SNAPSHOT_ID}, NULL";
 				for (idx_t c = 0; c < chunk.ColumnCount(); c++) {
 					values += ", ";
 					values += DuckLakeUtil::ValueToSQL(*this, context, chunk.GetValue(c, r));
 				}
 				values += ")";
-				row_id++;
+				global_row_idx++;
 			}
 		}
 		if (!values.empty()) {
@@ -2395,7 +2402,7 @@ VALUES %s
 UPDATE {METADATA_CATALOG}.%s
 SET end_snapshot = {SNAPSHOT_ID}
 FROM deleted_row_list
-WHERE row_id=deleted_row_id;
+WHERE row_id=deleted_row_id AND end_snapshot IS NULL AND begin_snapshot != {SNAPSHOT_ID};
 )",
 		                                    row_id_list, entry.table_name);
 	}
