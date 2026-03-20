@@ -63,6 +63,9 @@ public:
 	//! Duplicate row detection (first-write-wins)
 	mutex seen_rows_lock;
 	unordered_set<FileRowId, FileRowIdHash> seen_rows;
+
+	//! Inline data global state
+	unique_ptr<GlobalOperatorState> inline_data_gstate;
 };
 
 class DuckLakeUpdateLocalState : public LocalSinkState {
@@ -75,12 +78,20 @@ public:
 	DataChunk insert_chunk;
 	DataChunk delete_chunk;
 	idx_t updated_count = 0;
+
+	//! Inline data local state and output buffer
+	unique_ptr<OperatorState> inline_data_lstate;
+	DataChunk inline_output_chunk;
 };
 
 unique_ptr<GlobalSinkState> DuckLakeUpdate::GetGlobalSinkState(ClientContext &context) const {
 	auto result = make_uniq<DuckLakeUpdateGlobalState>();
 	copy_op.sink_state = copy_op.GetGlobalSinkState(context);
 	delete_op.sink_state = delete_op.GetGlobalSinkState(context);
+	if (inline_data_op) {
+	    // We need tto initialize data global state
+		result->inline_data_gstate = inline_data_op->GetGlobalOperatorState(context);
+	}
 	return std::move(result);
 }
 
@@ -115,6 +126,10 @@ unique_ptr<LocalSinkState> DuckLakeUpdate::GetLocalSinkState(ExecutionContext &c
 	result->insert_chunk.Initialize(context.client, insert_types);
 
 	result->delete_chunk.Initialize(context.client, delete_types);
+	if (inline_data_op) {
+		result->inline_data_lstate = inline_data_op->GetOperatorState(context);
+		result->inline_output_chunk.Initialize(context.client, inline_data_op->types);
+	}
 	return std::move(result);
 }
 
@@ -189,8 +204,30 @@ SinkResultType DuckLakeUpdate::Sink(ExecutionContext &context, DataChunk &chunk,
 		    update_expression_chunk.data[physical_column_count + part_idx]);
 	}
 
-	OperatorSinkInput copy_input {*copy_op.sink_state, *lstate.copy_local_state, input.interrupt_state};
-	copy_op.Sink(context, insert_chunk, copy_input);
+	if (inline_data_op) {
+		// if we have an inline data operator, we need to execute through it, it will either inline it or pass it throuhg
+		auto &inline_output = lstate.inline_output_chunk;
+		inline_output.Reset();
+		auto inline_result = inline_data_op->Execute(context, insert_chunk, inline_output,
+		                                             *gstate.inline_data_gstate, *lstate.inline_data_lstate);
+		if (inline_output.size() > 0) {
+			OperatorSinkInput copy_input {*copy_op.sink_state, *lstate.copy_local_state, input.interrupt_state};
+			copy_op.Sink(context, inline_output, copy_input);
+		}
+		// handle HAVE_MORE_OUTPUT
+		while (inline_result == OperatorResultType::HAVE_MORE_OUTPUT) {
+			inline_output.Reset();
+			inline_result = inline_data_op->Execute(context, insert_chunk, inline_output,
+			                                        *gstate.inline_data_gstate, *lstate.inline_data_lstate);
+			if (inline_output.size() > 0) {
+				OperatorSinkInput copy_input {*copy_op.sink_state, *lstate.copy_local_state, input.interrupt_state};
+				copy_op.Sink(context, inline_output, copy_input);
+			}
+		}
+	} else {
+		OperatorSinkInput copy_input {*copy_op.sink_state, *lstate.copy_local_state, input.interrupt_state};
+		copy_op.Sink(context, insert_chunk, copy_input);
+	}
 
 	// push the rowids into the delete
 	auto &delete_chunk = lstate.delete_chunk;
@@ -212,6 +249,23 @@ SinkResultType DuckLakeUpdate::Sink(ExecutionContext &context, DataChunk &chunk,
 SinkCombineResultType DuckLakeUpdate::Combine(ExecutionContext &context, OperatorSinkCombineInput &input) const {
 	auto &global_state = input.global_state.Cast<DuckLakeUpdateGlobalState>();
 	auto &local_state = input.local_state.Cast<DuckLakeUpdateLocalState>();
+	// drain inline data FinalExecute — flushes local→global or emits on overflow
+	if (inline_data_op) {
+		auto &inline_output = local_state.inline_output_chunk;
+		while (true) {
+			inline_output.Reset();
+			auto fresult = inline_data_op->FinalExecute(context, inline_output, *global_state.inline_data_gstate,
+			                                            *local_state.inline_data_lstate);
+			if (inline_output.size() > 0) {
+				OperatorSinkInput copy_input {*copy_op.sink_state, *local_state.copy_local_state,
+				                              input.interrupt_state};
+				copy_op.Sink(context, inline_output, copy_input);
+			}
+			if (fresult == OperatorFinalizeResultType::FINISHED) {
+				break;
+			}
+		}
+	}
 	OperatorSinkCombineInput copy_combine_input {*copy_op.sink_state, *local_state.copy_local_state,
 	                                             input.interrupt_state};
 	auto result = copy_op.Combine(context, copy_combine_input);
@@ -233,6 +287,15 @@ SinkCombineResultType DuckLakeUpdate::Combine(ExecutionContext &context, Operato
 //===--------------------------------------------------------------------===//
 SinkFinalizeType DuckLakeUpdate::Finalize(Pipeline &pipeline, Event &event, ClientContext &context,
                                           OperatorSinkFinalizeInput &input) const {
+	auto &gstate = input.global_state.Cast<DuckLakeUpdateGlobalState>();
+
+
+	if (inline_data_op) {
+		// call OperatorFinalize on inline data
+		OperatorFinalizeInput inline_finalize_input {*gstate.inline_data_gstate, input.interrupt_state};
+		inline_data_op->OperatorFinalize(pipeline, event, context, inline_finalize_input);
+	}
+
 	OperatorSinkFinalizeInput copy_finalize_input {*copy_op.sink_state, input.interrupt_state};
 	auto result = copy_op.Finalize(pipeline, event, context, copy_finalize_input);
 	if (result != SinkFinalizeType::READY) {
@@ -253,11 +316,15 @@ SinkFinalizeType DuckLakeUpdate::Finalize(Pipeline &pipeline, Event &event, Clie
 	DataChunk copy_source_chunk;
 	copy_source_chunk.Initialize(context, copy_op.types);
 
-	auto global_sink = insert_op.GetGlobalSinkState(context);
+
+	if (!insert_op.sink_state) {
+		// use existing sink_state if OperatorFinalize already created it
+		insert_op.sink_state = insert_op.GetGlobalSinkState(context);
+	}
 	auto local_sink = insert_op.GetLocalSinkState(execution_context);
 
 	OperatorSourceInput source_input {*global_source, *local_source, input.interrupt_state};
-	OperatorSinkInput sink_input {*global_sink, *local_sink, input.interrupt_state};
+	OperatorSinkInput sink_input {*insert_op.sink_state, *local_sink, input.interrupt_state};
 	while (true) {
 		auto source_result = copy_op.GetData(execution_context, copy_source_chunk, source_input);
 		if (copy_source_chunk.size() == 0) {
@@ -276,7 +343,7 @@ SinkFinalizeType DuckLakeUpdate::Finalize(Pipeline &pipeline, Event &event, Clie
 		}
 	}
 
-	OperatorSinkFinalizeInput insert_finalize_input {*global_sink, input.interrupt_state};
+	OperatorSinkFinalizeInput insert_finalize_input {*insert_op.sink_state, input.interrupt_state};
 	result = insert_op.Finalize(pipeline, event, context, insert_finalize_input);
 	if (result != SinkFinalizeType::READY) {
 		throw InternalException("DuckLakeUpdate::Finalize does not support async child operators");
