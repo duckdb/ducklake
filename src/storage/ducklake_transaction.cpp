@@ -283,6 +283,8 @@ void LocalTableChanges::DeleteFromLocalInlinedData(ClientContext &context, Table
 			sel.set_index(selected_rows++, r);
 			if (has_preserved_row_ids) {
 				new_row_ids.push_back(preserved_row_ids[base_row_id + r]);
+			} else {
+				new_row_ids.push_back(NumericCast<int64_t>(row_id));
 			}
 		}
 		base_row_id += chunk.size();
@@ -295,9 +297,7 @@ void LocalTableChanges::DeleteFromLocalInlinedData(ClientContext &context, Table
 
 	// override the existing collection and row_ids
 	table_changes.new_inlined_data->data = std::move(new_data);
-	if (has_preserved_row_ids) {
-		table_changes.new_inlined_data->row_ids = std::move(new_row_ids);
-	}
+	table_changes.new_inlined_data->row_ids = std::move(new_row_ids);
 }
 
 static void RemoveFieldStats(map<FieldIndex, DuckLakeColumnStats> &column_stats, const DuckLakeFieldId &field_id) {
