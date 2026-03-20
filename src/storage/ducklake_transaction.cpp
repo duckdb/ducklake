@@ -2495,6 +2495,8 @@ void DuckLakeTransaction::FlushChanges() {
 #endif
 
 			// retry the transaction (with a new snapshot id)
+			// clear the inlined table caches - the rollback undid any table creation from the previous attempt
+			metadata_manager->ClearInlinedTableCaches();
 			connection->BeginTransaction();
 			snapshot.reset();
 		}
@@ -2685,7 +2687,8 @@ DuckLakeTransaction::GetNewInlinedFileDeletes(DuckLakeCommitState &commit_state)
 		}
 		DuckLakeInlinedFileDeletionInfo info;
 		info.table_id = table_id;
-		info.file_deletions.file_deletes = std::move(table_changes.new_inlined_file_deletes->file_deletes);
+		// copy, not move - data must survive commit retries in FlushChanges
+		info.file_deletions.file_deletes = table_changes.new_inlined_file_deletes->file_deletes;
 		result.push_back(std::move(info));
 	}
 	return result;

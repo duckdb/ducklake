@@ -1,0 +1,59 @@
+# name: test/sql/deletion_inlining/test_deletion_inlining_concurrent_retry.test
+# description: test that inlined file deletes survive commit retries
+# group: [deletion_inlining]
+
+require notwindows
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+
+test-env DATA_PATH __TEST_DIR__
+
+statement ok
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/deletion_inlining_concurrent_retry', DATA_INLINING_ROW_LIMIT 10, METADATA_CATALOG 'ducklake_meta')
+
+statement ok
+SET ducklake_retry_wait_ms=100
+
+statement ok
+SET ducklake_retry_backoff=2.0
+
+# Create separate tables with data in parquet files (50 rows > inlining limit of 10).
+# Using separate tables avoids table-level conflicts in CheckForConflicts — the only
+# collision is on the snapshot primary key, which triggers the retry path.
+loop i 0 3
+
+statement ok
+CREATE TABLE ducklake.t${i} AS SELECT range a FROM range(50)
+
+endloop
+
+# Each thread owns one table and deletes rows one at a time in a loop.
+# Each single-row delete is its own transaction, causing many snapshot PK collisions
+# across threads and forcing retries. With the original bugs (std::move emptying
+# delete data, stale inlined table cache after rollback), retried deletes silently
+# lose their inlined file deletion metadata.
+concurrentloop tableid 0 3
+
+loop rowid 0 5
+
+statement maybe
+DELETE FROM ducklake.t${tableid} WHERE a = ${rowid}
+----
+
+endloop
+
+endloop
+
+# Every table should have rows 0-4 deleted.
+loop i 0 3
+
+query I
+SELECT COUNT(*) FROM ducklake.t${i} WHERE a < 5
+----
+0
+
+endloop

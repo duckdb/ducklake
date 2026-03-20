@@ -2428,6 +2428,11 @@ string DuckLakeMetadataManager::WriteNewInlinedFileDeletes(DuckLakeSnapshot &com
 	return batch_queries;
 }
 
+void DuckLakeMetadataManager::ClearInlinedTableCaches() {
+	insert_inlined_table_name_cache.clear();
+	delete_inlined_table_cache.clear();
+}
+
 map<idx_t, set<idx_t>> DuckLakeMetadataManager::ReadInlinedFileDeletions(TableIndex table_id,
                                                                          DuckLakeSnapshot snapshot) {
 	map<idx_t, set<idx_t>> result;
