@@ -290,6 +290,12 @@ SinkFinalizeType DuckLakeUpdate::Finalize(Pipeline &pipeline, Event &event, Clie
                                           OperatorSinkFinalizeInput &input) const {
 	auto &gstate = input.global_state.Cast<DuckLakeUpdateGlobalState>();
 
+	OperatorSinkFinalizeInput del_finalize_input {*delete_op.sink_state, input.interrupt_state};
+	auto result = delete_op.Finalize(pipeline, event, context, del_finalize_input);
+	if (result != SinkFinalizeType::READY) {
+		throw InternalException("DuckLakeUpdate::Finalize does not support async child operators");
+	}
+
 	if (inline_data_op) {
 		// call OperatorFinalize on inline data
 		OperatorFinalizeInput inline_finalize_input {*gstate.inline_data_gstate, input.interrupt_state};
@@ -297,12 +303,7 @@ SinkFinalizeType DuckLakeUpdate::Finalize(Pipeline &pipeline, Event &event, Clie
 	}
 
 	OperatorSinkFinalizeInput copy_finalize_input {*copy_op.sink_state, input.interrupt_state};
-	auto result = copy_op.Finalize(pipeline, event, context, copy_finalize_input);
-	if (result != SinkFinalizeType::READY) {
-		throw InternalException("DuckLakeUpdate::Finalize does not support async child operators");
-	}
-	OperatorSinkFinalizeInput del_finalize_input {*delete_op.sink_state, input.interrupt_state};
-	result = delete_op.Finalize(pipeline, event, context, del_finalize_input);
+	result = copy_op.Finalize(pipeline, event, context, copy_finalize_input);
 	if (result != SinkFinalizeType::READY) {
 		throw InternalException("DuckLakeUpdate::Finalize does not support async child operators");
 	}

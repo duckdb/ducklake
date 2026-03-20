@@ -255,10 +255,13 @@ void LocalTableChanges::DeleteFromLocalInlinedData(ClientContext &context, Table
 	}
 	auto &table_changes = entry->second;
 	auto &existing = *table_changes.new_inlined_data->data;
+	auto &preserved_row_ids = table_changes.new_inlined_data->row_ids;
+	bool has_preserved_row_ids = !preserved_row_ids.empty();
 	// construct a new collection from the existing data minus the deletes
 	auto new_data = make_uniq<ColumnDataCollection>(context, existing.Types());
 
 	idx_t base_row_id = 0;
+	vector<int64_t> new_row_ids;
 	ColumnDataAppendState append_state;
 	new_data->InitializeAppend(append_state);
 	for (auto &chunk : existing.Chunks()) {
@@ -267,12 +270,20 @@ void LocalTableChanges::DeleteFromLocalInlinedData(ClientContext &context, Table
 		idx_t selected_rows = 0;
 
 		for (idx_t r = 0; r < chunk.size(); r++) {
-			auto row_id = base_row_id + r;
+			idx_t row_id;
+			if (has_preserved_row_ids) {
+				row_id = NumericCast<idx_t>(preserved_row_ids[base_row_id + r]);
+			} else {
+				row_id = base_row_id + r;
+			}
 			if (new_deletes.find(row_id) != new_deletes.end()) {
 				// deleted - skip
 				continue;
 			}
 			sel.set_index(selected_rows++, r);
+			if (has_preserved_row_ids) {
+				new_row_ids.push_back(preserved_row_ids[base_row_id + r]);
+			}
 		}
 		base_row_id += chunk.size();
 		if (selected_rows == 0) {
@@ -282,8 +293,11 @@ void LocalTableChanges::DeleteFromLocalInlinedData(ClientContext &context, Table
 		new_data->Append(append_state, chunk);
 	}
 
-	// override the existing collection
+	// override the existing collection and row_ids
 	table_changes.new_inlined_data->data = std::move(new_data);
+	if (has_preserved_row_ids) {
+		table_changes.new_inlined_data->row_ids = std::move(new_row_ids);
+	}
 }
 
 static void RemoveFieldStats(map<FieldIndex, DuckLakeColumnStats> &column_stats, const DuckLakeFieldId &field_id) {
