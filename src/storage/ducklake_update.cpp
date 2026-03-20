@@ -8,8 +8,12 @@
 #include "duckdb/planner/expression.hpp"
 #include "duckdb/planner/expression/bound_reference_expression.hpp"
 #include "storage/ducklake_delete.hpp"
+#include "storage/ducklake_inline_data.hpp"
 #include "storage/ducklake_table_entry.hpp"
 #include "storage/ducklake_catalog.hpp"
+#include "storage/ducklake_schema_entry.hpp"
+#include "storage/ducklake_transaction.hpp"
+#include "common/ducklake_util.hpp"
 #include "duckdb/planner/operator/logical_update.hpp"
 #include "duckdb/parallel/thread_context.hpp"
 #include "duckdb/parser/expression/cast_expression.hpp"
@@ -337,6 +341,31 @@ static unique_ptr<Expression> GetPartitionExpressionForUpdate(ClientContext &con
 	}
 }
 
+static optional_ptr<DuckLakeInlineData>
+PlanInlineDataForUpdate(ClientContext &context, DuckLakeCatalog &catalog, PhysicalPlanGenerator &planner,
+                        DuckLakeTableEntry &table, const vector<unique_ptr<Expression>> &expressions,
+                        idx_t physical_count, PhysicalOperator &child_plan, PhysicalOperator &insert_op) {
+	vector<LogicalType> physical_types;
+	for (idx_t i = 0; i < physical_count; i++) {
+		physical_types.push_back(expressions[i]->return_type);
+	}
+	idx_t limit = catalog.GetInliningLimit(context, table, physical_types);
+	if (limit == 0) {
+		return nullptr;
+	}
+	// compute insert_chunk types: [physical (casted)] [BIGINT row_id] [partition (casted)]
+	vector<LogicalType> insert_types;
+	for (auto &expr : expressions) {
+		insert_types.push_back(expr->return_type);
+	}
+	insert_types.insert(insert_types.begin() + physical_count, LogicalType::BIGINT);
+
+	auto &inline_op = planner.Make<DuckLakeInlineData>(child_plan, limit).Cast<DuckLakeInlineData>();
+	inline_op.types = insert_types;
+	inline_op.insert = insert_op.Cast<DuckLakeInsert>();
+	return &inline_op;
+}
+
 PhysicalOperator &DuckLakeCatalog::PlanUpdate(ClientContext &context, PhysicalPlanGenerator &planner, LogicalUpdate &op,
                                               PhysicalOperator &child_plan) {
 	if (op.return_chunk) {
@@ -348,8 +377,7 @@ PhysicalOperator &DuckLakeCatalog::PlanUpdate(ClientContext &context, PhysicalPl
 		}
 	}
 	auto &table = op.table.Cast<DuckLakeTableEntry>();
-	// FIXME: we should take the inlining limit into account here and write new updates to the inline data tables if
-	// possible updates are executed as a delete + insert - generate the two nodes (delete and insert) plan the copy for
+	// updates are executed as a delete + insert - generate the two nodes (delete and insert) plan the copy for
 	// the insert
 	DuckLakeCopyInput copy_input(context, table);
 	copy_input.virtual_columns = InsertVirtualColumns::WRITE_ROW_ID;
@@ -401,7 +429,15 @@ PhysicalOperator &DuckLakeCatalog::PlanUpdate(ClientContext &context, PhysicalPl
 		}
 	}
 
-	return planner.Make<DuckLakeUpdate>(table, op.columns, child_plan, copy_op, delete_op, insert_op, expressions);
+	// plan inline data before creating update (update constructor moves expressions)
+	auto inline_data =
+	    PlanInlineDataForUpdate(context, *this, planner, table, expressions, op.columns.size(), child_plan, insert_op);
+
+	auto &update_op =
+	    planner.Make<DuckLakeUpdate>(table, op.columns, child_plan, copy_op, delete_op, insert_op, expressions)
+	        .Cast<DuckLakeUpdate>();
+	update_op.inline_data_op = inline_data;
+	return update_op;
 }
 
 void DuckLakeTableEntry::BindUpdateConstraints(Binder &binder, LogicalGet &get, LogicalProjection &proj,

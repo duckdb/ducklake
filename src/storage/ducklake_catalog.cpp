@@ -26,6 +26,7 @@
 #include "duckdb/function/scalar_macro_function.hpp"
 #include "duckdb/function/table_macro_function.hpp"
 #include "storage/ducklake_macro_entry.hpp"
+#include "common/ducklake_util.hpp"
 
 namespace duckdb {
 
@@ -823,6 +824,26 @@ bool DuckLakeCatalog::TryGetConfigOption(const string &option, string &result, D
 
 idx_t DuckLakeCatalog::DataInliningRowLimit(SchemaIndex schema_index, TableIndex table_index) const {
 	return GetConfigOption<idx_t>("data_inlining_row_limit", schema_index, table_index, 10);
+}
+
+idx_t DuckLakeCatalog::GetInliningLimit(ClientContext &context, DuckLakeTableEntry &table,
+                                        const vector<LogicalType> &types) {
+	auto &schema = table.ParentSchema().Cast<DuckLakeSchemaEntry>();
+	idx_t limit = DataInliningRowLimit(schema.GetSchemaId(), table.GetTableId());
+	if (limit == 0) {
+		return 0;
+	}
+	if (DuckLakeUtil::HasInlinedSystemColumnConflict(table.GetColumns())) {
+		// We also return 0 if we have inline column conflicts
+		return 0;
+	}
+	auto &transaction = DuckLakeTransaction::Get(context, *this);
+	auto &metadata_manager = transaction.GetMetadataManager();
+	if (!metadata_manager.SupportsInliningTypes(types)) {
+		// Or of inline is not supported
+		return 0;
+	}
+	return limit;
 }
 
 unique_ptr<LogicalOperator> DuckLakeCatalog::BindAlterAddIndex(Binder &binder, TableCatalogEntry &table_entry,

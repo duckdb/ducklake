@@ -57,6 +57,8 @@ public:
 		return metadata_type;
 	}
 	idx_t DataInliningRowLimit(SchemaIndex schema_index, TableIndex table_index) const;
+	//! Returns the inlining limit (0 if the table is not eligible)
+	idx_t GetInliningLimit(ClientContext &context, DuckLakeTableEntry &table, const vector<LogicalType> &types);
 	string &Separator() {
 		return separator;
 	}

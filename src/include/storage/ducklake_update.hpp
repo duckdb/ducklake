@@ -11,6 +11,7 @@
 #include "storage/ducklake_insert.hpp"
 
 namespace duckdb {
+class DuckLakeInlineData;
 
 class DuckLakeUpdate : public PhysicalOperator {
 public:
@@ -31,6 +32,8 @@ public:
 	//! The row-id-index
 	idx_t row_id_index;
 	vector<unique_ptr<Expression>> expressions;
+	//! The (optional) inline data operator
+	optional_ptr<DuckLakeInlineData> inline_data_op;
 
 public:
 	// // Source interface
