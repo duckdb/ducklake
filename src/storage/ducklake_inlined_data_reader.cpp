@@ -226,13 +226,13 @@ AsyncResult DuckLakeInlinedDataReader::Scan(ClientContext &context, GlobalTableF
 			case InlinedVirtualColumn::COLUMN_ROW_ID: {
 				Vector ordinal_vector(LogicalType::BIGINT);
 				auto ordinal_data = FlatVector::GetData<int64_t>(ordinal_vector);
-				if (!data->row_ids.empty()) {
+				if (data->HasPreservedRowIds()) {
 					// use preserved row_ids from update inlining
 					for (idx_t r = 0; r < scan_chunk.size(); r++) {
 						ordinal_data[r] = data->row_ids[file_row_number + r];
 					}
 				} else {
-					// use general orginal row id
+					// use general ordinal row id
 					for (idx_t r = 0; r < scan_chunk.size(); r++) {
 						ordinal_data[r] = NumericCast<int64_t>(file_row_number + r);
 					}

@@ -19,6 +19,10 @@ struct DuckLakeInlinedData {
 	map<FieldIndex, DuckLakeColumnStats> column_stats;
 	//! Row Ids for update inlining
 	vector<int64_t> row_ids;
+
+	bool HasPreservedRowIds() const {
+		return !row_ids.empty();
+	}
 };
 
 struct DuckLakeInlinedDataDeletes {

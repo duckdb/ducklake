@@ -840,7 +840,7 @@ idx_t DuckLakeCatalog::GetInliningLimit(ClientContext &context, DuckLakeTableEnt
 	auto &transaction = DuckLakeTransaction::Get(context, *this);
 	auto &metadata_manager = transaction.GetMetadataManager();
 	if (!metadata_manager.SupportsInliningTypes(types)) {
-		// Or of inline is not supported
+		// Or if inlining is not supported
 		return 0;
 	}
 	return limit;

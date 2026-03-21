@@ -24,7 +24,6 @@ class DuckLakeMultiFileList : public MultiFileList {
 	    "__ducklake_inlined_transaction_local_data";
 
 public:
-	static constexpr const idx_t TRANSACTION_LOCAL_ID_START = 1000000000000000000ULL;
 	DuckLakeMultiFileList(DuckLakeFunctionInfo &read_info, vector<DuckLakeDataFile> transaction_local_files,
 	                      shared_ptr<DuckLakeInlinedData> transaction_local_data,
 	                      unique_ptr<FilterPushdownInfo> filter_info = nullptr);
@@ -63,6 +62,8 @@ private:
 	void GetFilesForTable() const;
 	void GetTableInsertions() const;
 	void GetTableDeletions() const;
+	//! Get the row_id_start for transaction-local inlined data.
+	idx_t GetTransactionLocalRowIdStart(idx_t transaction_row_start) const;
 
 private:
 	mutable mutex file_lock;

@@ -300,10 +300,10 @@ OperatorFinalResultType DuckLakeInlineData::OperatorFinalize(Pipeline &pipeline,
 		return OperatorFinalResultType::FINISHED;
 	}
 	{
-		auto cinsert = const_cast<DuckLakeInsert *>(insert.get());
-		lock_guard<mutex> lock(cinsert->lock);
-		if (!cinsert->sink_state) {
-			cinsert->sink_state = insert->GetGlobalSinkState(context);
+		auto mutable_insert = insert.get_mutable();
+		lock_guard<mutex> lock(mutable_insert->lock);
+		if (!mutable_insert->sink_state) {
+			mutable_insert->sink_state = insert->GetGlobalSinkState(context);
 		}
 	}
 	auto &insert_gstate = insert->sink_state->Cast<DuckLakeInsertGlobalState>();
@@ -317,7 +317,7 @@ OperatorFinalResultType DuckLakeInlineData::OperatorFinalize(Pipeline &pipeline,
 	insert_gstate.total_insert_count = inlined_data.Count();
 
 	// use physical column count for stats
-	// If we are inlining from updates, we might have extra columms (e.g., row_id, partitions)
+	// If we are inlining from updates, we might have extra columns (e.g., row_id, partitions)
 	auto physical_col_count = table.GetColumns().PhysicalColumnCount();
 
 	// compute the column stats for the data
@@ -343,7 +343,7 @@ OperatorFinalResultType DuckLakeInlineData::OperatorFinalize(Pipeline &pipeline,
 	}
 
 	if (inlined_data.Types().size() > physical_col_count) {
-		// If we have extra columns, we need to extract the pysical columns
+		// If we have extra columns, we need to extract the physical columns
 		vector<LogicalType> phys_types(inlined_data.Types().begin(), inlined_data.Types().begin() + physical_col_count);
 		auto phys_data = make_uniq<ColumnDataCollection>(context, phys_types);
 		ColumnDataAppendState append_state;

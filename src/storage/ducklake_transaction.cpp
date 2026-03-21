@@ -16,7 +16,6 @@
 #include "storage/ducklake_macro_entry.hpp"
 #include "storage/ducklake_schema_entry.hpp"
 #include "storage/ducklake_table_entry.hpp"
-#include "storage/ducklake_multi_file_list.hpp"
 #include "storage/ducklake_transaction_changes.hpp"
 #include "storage/ducklake_transaction_manager.hpp"
 #include "storage/ducklake_view_entry.hpp"
@@ -127,7 +126,7 @@ shared_ptr<DuckLakeInlinedData> LocalTableChanges::GetTransactionLocalInlinedDat
 	for (auto &chunk : local_changes.data->Chunks()) {
 		result->data->Append(chunk);
 	}
-	result->row_ids = local_changes.row_ids;
+	result->row_ids = local_changes.row_ids; // propagate preserved row_ids if any
 	return result;
 }
 
@@ -212,20 +211,21 @@ void LocalTableChanges::AppendInlinedData(ClientContext &context, TableIndex tab
 			existing_data.data->Append(chunk);
 		}
 		// merge preserved row_ids from update inlining
-		if (!new_data->row_ids.empty() || !existing_data.row_ids.empty()) {
-			if (existing_data.row_ids.empty()) {
+		if (new_data->HasPreservedRowIds() || existing_data.HasPreservedRowIds()) {
+			if (!existing_data.HasPreservedRowIds()) {
 				idx_t existing_count = existing_data.data->Count() - new_data->data->Count();
 				existing_data.row_ids.reserve(existing_count + new_data->row_ids.size());
-				auto next_id = NumericCast<int64_t>(DuckLakeMultiFileList::TRANSACTION_LOCAL_ID_START);
+				auto next_id = NumericCast<int64_t>(DuckLakeConstants::TRANSACTION_LOCAL_ROW_ID_START);
 				for (idx_t i = 0; i < existing_count; i++) {
 					existing_data.row_ids.push_back(next_id + NumericCast<int64_t>(i));
 				}
 			}
-			if (!new_data->row_ids.empty()) {
+			if (new_data->HasPreservedRowIds()) {
 				existing_data.row_ids.insert(existing_data.row_ids.end(), new_data->row_ids.begin(),
 				                             new_data->row_ids.end());
 			} else {
-				int64_t next_id = NumericCast<int64_t>(DuckLakeMultiFileList::TRANSACTION_LOCAL_ID_START);
+				// new data is insert-only — assign sequential placeholder ids after the max existing id
+				int64_t next_id = NumericCast<int64_t>(DuckLakeConstants::TRANSACTION_LOCAL_ROW_ID_START);
 				for (auto &rid : existing_data.row_ids) {
 					if (rid >= next_id) {
 						next_id = rid + 1;
@@ -277,7 +277,7 @@ void LocalTableChanges::DeleteFromLocalInlinedData(ClientContext &context, Table
 	auto &table_changes = entry->second;
 	auto &existing = *table_changes.new_inlined_data->data;
 	auto &preserved_row_ids = table_changes.new_inlined_data->row_ids;
-	bool has_preserved_row_ids = !preserved_row_ids.empty();
+	bool has_preserved_row_ids = table_changes.new_inlined_data->HasPreservedRowIds();
 	// construct a new collection from the existing data minus the deletes
 	auto new_data = make_uniq<ColumnDataCollection>(context, existing.Types());
 
@@ -305,9 +305,8 @@ void LocalTableChanges::DeleteFromLocalInlinedData(ClientContext &context, Table
 			if (has_preserved_row_ids) {
 				new_row_ids.push_back(preserved_row_ids[base_row_id + r]);
 			} else {
-				// generate transaction local row ids w a placeholder
-				new_row_ids.push_back(
-				    NumericCast<int64_t>(DuckLakeMultiFileList::TRANSACTION_LOCAL_ID_START + row_id));
+				// generate transaction-local placeholder row_ids
+				new_row_ids.push_back(NumericCast<int64_t>(DuckLakeConstants::TRANSACTION_LOCAL_ROW_ID_START + row_id));
 			}
 		}
 		base_row_id += chunk.size();
@@ -2055,13 +2054,13 @@ NewDataInfo DuckLakeTransaction::GetNewDataFiles(string &batch_query, DuckLakeCo
 
 			// update global stats
 			new_stats.record_count += record_count;
-			if (inlined_data.row_ids.empty()) {
+			if (!inlined_data.HasPreservedRowIds()) {
 				// regular insert, we advance next_row_id
 				new_stats.next_row_id += record_count;
 			} else {
 				// mixed insert and updates, we only advance inserted row_ids
 				for (auto &rid : inlined_data.row_ids) {
-					if (NumericCast<idx_t>(rid) >= DuckLakeMultiFileList::TRANSACTION_LOCAL_ID_START) {
+					if (DuckLakeConstants::IsTransactionLocalRowId(rid)) {
 						new_stats.next_row_id++;
 					}
 				}
@@ -2362,31 +2361,31 @@ CompactionInformation DuckLakeTransaction::GetCompactionChanges(DuckLakeCommitSt
 			if (type != compaction.type) {
 				continue;
 			}
-				bool has_new_file = !compaction.written_file.file_name.empty();
-				DuckLakeFileInfo new_file;
+			bool has_new_file = !compaction.written_file.file_name.empty();
+			DuckLakeFileInfo new_file;
 
-				if (!has_new_file) {
-					if (type != CompactionType::REWRITE_DELETES) {
-						throw InternalException("Compaction error - expected output file for non-rewrite compaction");
-					}
-				} else {
-					new_file = GetNewDataFile(compaction.written_file, commit_state, table_id, compaction.row_id_start);
-					switch (type) {
-					case CompactionType::REWRITE_DELETES:
-						new_file.begin_snapshot = commit_snapshot.snapshot_id;
-						break;
-					case CompactionType::MERGE_ADJACENT_TABLES: {
-						// For MERGE_ADJACENT_TABLES, track the max partial snapshot across all source files
-						optional_idx merged_max_partial_snapshot;
-						idx_t first_begin_snapshot = compaction.source_files[0].file.begin_snapshot;
-						for (auto &compacted_file : compaction.source_files) {
-							idx_t file_max_snapshot = compacted_file.max_partial_file_snapshot.IsValid()
-							                              ? compacted_file.max_partial_file_snapshot.GetIndex()
-							                              : compacted_file.file.begin_snapshot;
-							if (!merged_max_partial_snapshot.IsValid() ||
-							    file_max_snapshot > merged_max_partial_snapshot.GetIndex()) {
-								merged_max_partial_snapshot = file_max_snapshot;
-							}
+			if (!has_new_file) {
+				if (type != CompactionType::REWRITE_DELETES) {
+					throw InternalException("Compaction error - expected output file for non-rewrite compaction");
+				}
+			} else {
+				new_file = GetNewDataFile(compaction.written_file, commit_state, table_id, compaction.row_id_start);
+				switch (type) {
+				case CompactionType::REWRITE_DELETES:
+					new_file.begin_snapshot = commit_snapshot.snapshot_id;
+					break;
+				case CompactionType::MERGE_ADJACENT_TABLES: {
+					// For MERGE_ADJACENT_TABLES, track the max partial snapshot across all source files
+					optional_idx merged_max_partial_snapshot;
+					idx_t first_begin_snapshot = compaction.source_files[0].file.begin_snapshot;
+					for (auto &compacted_file : compaction.source_files) {
+						idx_t file_max_snapshot = compacted_file.max_partial_file_snapshot.IsValid()
+						                              ? compacted_file.max_partial_file_snapshot.GetIndex()
+						                              : compacted_file.file.begin_snapshot;
+						if (!merged_max_partial_snapshot.IsValid() ||
+						    file_max_snapshot > merged_max_partial_snapshot.GetIndex()) {
+							merged_max_partial_snapshot = file_max_snapshot;
+						}
 					}
 					// Use the first source file's begin_snapshot for proper time travel support
 					new_file.begin_snapshot = first_begin_snapshot;

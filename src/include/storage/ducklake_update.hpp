@@ -65,6 +65,12 @@ public:
 
 	string GetName() const override;
 	InsertionOrderPreservingMap<string> ParamsToString() const override;
+
+private:
+	//! Forward output from the inline data operator to the copy sink, draining HAVE_MORE_OUTPUT as needed.
+	void ForwardInlineOutputToCopy(ExecutionContext &context, DataChunk &inline_output,
+	                               GlobalOperatorState &inline_gstate, OperatorState &inline_lstate, DataChunk &input,
+	                               LocalSinkState &copy_lstate, InterruptState &interrupt_state) const;
 };
 
 } // namespace duckdb

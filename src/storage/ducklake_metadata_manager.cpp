@@ -6,7 +6,6 @@
 #include "duckdb/common/types/blob.hpp"
 #include "duckdb/common/type_visitor.hpp"
 #include "storage/ducklake_catalog.hpp"
-#include "storage/ducklake_multi_file_list.hpp"
 #include "common/ducklake_types.hpp"
 #include "storage/ducklake_schema_entry.hpp"
 #include "storage/ducklake_table_entry.hpp"
@@ -2349,7 +2348,7 @@ WHERE table_id = %d AND schema_version=(
 		// append the data
 		// FIXME: we can do a much faster append than this
 		string values;
-		bool has_preserved_row_ids = !entry.data->row_ids.empty();
+		bool has_preserved_row_ids = entry.data->HasPreservedRowIds();
 		idx_t row_id = entry.row_id_start;
 		idx_t global_row_idx = 0;
 		for (auto &chunk : entry.data->data->Chunks()) {
@@ -2360,7 +2359,7 @@ WHERE table_id = %d AND schema_version=(
 				values += "(";
 				if (has_preserved_row_ids) {
 					auto rid = entry.data->row_ids[global_row_idx];
-					if (NumericCast<idx_t>(rid) >= DuckLakeMultiFileList::TRANSACTION_LOCAL_ID_START) {
+					if (DuckLakeConstants::IsTransactionLocalRowId(rid)) {
 						// This is a INSERT row w a placeholder id, we assign sequential row_id
 						values += to_string(row_id);
 						row_id++;
