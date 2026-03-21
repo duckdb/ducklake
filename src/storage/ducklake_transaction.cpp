@@ -1684,7 +1684,7 @@ void DuckLakeTransaction::GetNewMacroInfo(DuckLakeCommitState &commit_state, ref
 
 	new_macro_info.macro_id = MacroIndex(commit_state.commit_snapshot.next_catalog_id++);
 	new_macro_info.macro_name = macro_entry.name;
-	new_macro_info.schema_id = ducklake_schema.GetSchemaId();
+	new_macro_info.schema_id = commit_state.GetSchemaId(ducklake_schema);
 	// Let's do the implementations
 	for (const auto &impl : macro_entry.macros) {
 		DuckLakeMacroImplementation macro_impl;
@@ -2310,31 +2310,31 @@ CompactionInformation DuckLakeTransaction::GetCompactionChanges(DuckLakeCommitSt
 			if (type != compaction.type) {
 				continue;
 			}
-				bool has_new_file = !compaction.written_file.file_name.empty();
-				DuckLakeFileInfo new_file;
+			bool has_new_file = !compaction.written_file.file_name.empty();
+			DuckLakeFileInfo new_file;
 
-				if (!has_new_file) {
-					if (type != CompactionType::REWRITE_DELETES) {
-						throw InternalException("Compaction error - expected output file for non-rewrite compaction");
-					}
-				} else {
-					new_file = GetNewDataFile(compaction.written_file, commit_state, table_id, compaction.row_id_start);
-					switch (type) {
-					case CompactionType::REWRITE_DELETES:
-						new_file.begin_snapshot = commit_snapshot.snapshot_id;
-						break;
-					case CompactionType::MERGE_ADJACENT_TABLES: {
-						// For MERGE_ADJACENT_TABLES, track the max partial snapshot across all source files
-						optional_idx merged_max_partial_snapshot;
-						idx_t first_begin_snapshot = compaction.source_files[0].file.begin_snapshot;
-						for (auto &compacted_file : compaction.source_files) {
-							idx_t file_max_snapshot = compacted_file.max_partial_file_snapshot.IsValid()
-							                              ? compacted_file.max_partial_file_snapshot.GetIndex()
-							                              : compacted_file.file.begin_snapshot;
-							if (!merged_max_partial_snapshot.IsValid() ||
-							    file_max_snapshot > merged_max_partial_snapshot.GetIndex()) {
-								merged_max_partial_snapshot = file_max_snapshot;
-							}
+			if (!has_new_file) {
+				if (type != CompactionType::REWRITE_DELETES) {
+					throw InternalException("Compaction error - expected output file for non-rewrite compaction");
+				}
+			} else {
+				new_file = GetNewDataFile(compaction.written_file, commit_state, table_id, compaction.row_id_start);
+				switch (type) {
+				case CompactionType::REWRITE_DELETES:
+					new_file.begin_snapshot = commit_snapshot.snapshot_id;
+					break;
+				case CompactionType::MERGE_ADJACENT_TABLES: {
+					// For MERGE_ADJACENT_TABLES, track the max partial snapshot across all source files
+					optional_idx merged_max_partial_snapshot;
+					idx_t first_begin_snapshot = compaction.source_files[0].file.begin_snapshot;
+					for (auto &compacted_file : compaction.source_files) {
+						idx_t file_max_snapshot = compacted_file.max_partial_file_snapshot.IsValid()
+						                              ? compacted_file.max_partial_file_snapshot.GetIndex()
+						                              : compacted_file.file.begin_snapshot;
+						if (!merged_max_partial_snapshot.IsValid() ||
+						    file_max_snapshot > merged_max_partial_snapshot.GetIndex()) {
+							merged_max_partial_snapshot = file_max_snapshot;
+						}
 					}
 					// Use the first source file's begin_snapshot for proper time travel support
 					new_file.begin_snapshot = first_begin_snapshot;
