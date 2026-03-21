@@ -6,6 +6,7 @@
 #include "duckdb/common/types/blob.hpp"
 #include "duckdb/common/type_visitor.hpp"
 #include "storage/ducklake_catalog.hpp"
+#include "storage/ducklake_multi_file_list.hpp"
 #include "common/ducklake_types.hpp"
 #include "storage/ducklake_schema_entry.hpp"
 #include "storage/ducklake_table_entry.hpp"
@@ -2357,7 +2358,15 @@ WHERE table_id = %d AND schema_version=(
 				}
 				values += "(";
 				if (has_preserved_row_ids) {
-					values += to_string(entry.data->row_ids[global_row_idx]);
+					auto rid = entry.data->row_ids[global_row_idx];
+					if (NumericCast<idx_t>(rid) >= DuckLakeMultiFileList::TRANSACTION_LOCAL_ID_START) {
+						// This is a INSERT row w a placeholder id, we assign sequential row_id
+						values += to_string(row_id);
+						row_id++;
+					} else {
+						// This is a UPDATE row, we use preserved row_id
+						values += to_string(rid);
+					}
 				} else {
 					values += to_string(row_id);
 					row_id++;

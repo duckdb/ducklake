@@ -16,6 +16,7 @@
 #include "storage/ducklake_macro_entry.hpp"
 #include "storage/ducklake_schema_entry.hpp"
 #include "storage/ducklake_table_entry.hpp"
+#include "storage/ducklake_multi_file_list.hpp"
 #include "storage/ducklake_transaction_changes.hpp"
 #include "storage/ducklake_transaction_manager.hpp"
 #include "storage/ducklake_view_entry.hpp"
@@ -211,9 +212,29 @@ void LocalTableChanges::AppendInlinedData(ClientContext &context, TableIndex tab
 			existing_data.data->Append(chunk);
 		}
 		// merge preserved row_ids from update inlining
-		if (!new_data->row_ids.empty()) {
-			existing_data.row_ids.insert(existing_data.row_ids.end(), new_data->row_ids.begin(),
-			                             new_data->row_ids.end());
+		if (!new_data->row_ids.empty() || !existing_data.row_ids.empty()) {
+			if (existing_data.row_ids.empty()) {
+				idx_t existing_count = existing_data.data->Count() - new_data->data->Count();
+				existing_data.row_ids.reserve(existing_count + new_data->row_ids.size());
+				auto next_id = NumericCast<int64_t>(DuckLakeMultiFileList::TRANSACTION_LOCAL_ID_START);
+				for (idx_t i = 0; i < existing_count; i++) {
+					existing_data.row_ids.push_back(next_id + NumericCast<int64_t>(i));
+				}
+			}
+			if (!new_data->row_ids.empty()) {
+				existing_data.row_ids.insert(existing_data.row_ids.end(), new_data->row_ids.begin(),
+				                             new_data->row_ids.end());
+			} else {
+				int64_t next_id = NumericCast<int64_t>(DuckLakeMultiFileList::TRANSACTION_LOCAL_ID_START);
+				for (auto &rid : existing_data.row_ids) {
+					if (rid >= next_id) {
+						next_id = rid + 1;
+					}
+				}
+				for (idx_t i = 0; i < new_data->data->Count(); i++) {
+					existing_data.row_ids.push_back(next_id + NumericCast<int64_t>(i));
+				}
+			}
 		}
 		for (auto &entry : new_data->column_stats) {
 			auto stats_entry = existing_data.column_stats.find(entry.first);
@@ -284,7 +305,9 @@ void LocalTableChanges::DeleteFromLocalInlinedData(ClientContext &context, Table
 			if (has_preserved_row_ids) {
 				new_row_ids.push_back(preserved_row_ids[base_row_id + r]);
 			} else {
-				new_row_ids.push_back(NumericCast<int64_t>(row_id));
+				// generate transaction local row ids w a placeholder
+				new_row_ids.push_back(
+				    NumericCast<int64_t>(DuckLakeMultiFileList::TRANSACTION_LOCAL_ID_START + row_id));
 			}
 		}
 		base_row_id += chunk.size();
@@ -2035,6 +2058,13 @@ NewDataInfo DuckLakeTransaction::GetNewDataFiles(string &batch_query, DuckLakeCo
 			if (inlined_data.row_ids.empty()) {
 				// regular insert, we advance next_row_id
 				new_stats.next_row_id += record_count;
+			} else {
+				// mixed insert and updates, we only advance inserted row_ids
+				for (auto &rid : inlined_data.row_ids) {
+					if (NumericCast<idx_t>(rid) >= DuckLakeMultiFileList::TRANSACTION_LOCAL_ID_START) {
+						new_stats.next_row_id++;
+					}
+				}
 			}
 			// add the file to the to-be-written inlined data list
 			new_inlined_data.data = table_changes.new_inlined_data.get();

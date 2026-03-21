@@ -20,11 +20,11 @@ namespace duckdb {
 //! The DuckLakeMultiFileList implements the MultiFileList API to allow injecting it into the regular DuckDB parquet
 //! scan
 class DuckLakeMultiFileList : public MultiFileList {
-	static constexpr const idx_t TRANSACTION_LOCAL_ID_START = 1000000000000000000ULL;
 	static constexpr const char *DUCKLAKE_TRANSACTION_LOCAL_INLINED_FILENAME =
 	    "__ducklake_inlined_transaction_local_data";
 
 public:
+	static constexpr const idx_t TRANSACTION_LOCAL_ID_START = 1000000000000000000ULL;
 	DuckLakeMultiFileList(DuckLakeFunctionInfo &read_info, vector<DuckLakeDataFile> transaction_local_files,
 	                      shared_ptr<DuckLakeInlinedData> transaction_local_data,
 	                      unique_ptr<FilterPushdownInfo> filter_info = nullptr);
