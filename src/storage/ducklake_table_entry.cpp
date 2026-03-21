@@ -1208,7 +1208,8 @@ unique_ptr<CatalogEntry> DuckLakeTableEntry::Alter(DuckLakeTransaction &transact
 		    info.alter_table_type != AlterTableType::RENAME_COLUMN &&
 		    info.alter_table_type != AlterTableType::ALTER_COLUMN_TYPE &&
 		    info.alter_table_type != AlterTableType::SET_NOT_NULL &&
-		    info.alter_table_type != AlterTableType::DROP_NOT_NULL) {
+		    info.alter_table_type != AlterTableType::DROP_NOT_NULL &&
+		    info.alter_table_type != AlterTableType::SET_DEFAULT) {
 			throw NotImplementedException("ALTER on a table with transaction-local inlined data is not supported %s",
 			                              EnumUtil::ToString(info.alter_table_type));
 		}
