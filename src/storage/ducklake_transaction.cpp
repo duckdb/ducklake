@@ -1622,7 +1622,7 @@ void DuckLakeTransaction::GetNewTableInfo(DuckLakeCommitState &commit_state, Duc
 			auto &latest_table = tables.front().get();
 			DuckLakeTableInfo inlined_entry;
 			inlined_entry.id = new_table_id;
-			inlined_entry.schema_id = latest_table.ParentSchema().Cast<DuckLakeSchemaEntry>().GetSchemaId();
+			inlined_entry.schema_id = commit_state.GetSchemaId(latest_table.ParentSchema().Cast<DuckLakeSchemaEntry>());
 			inlined_entry.uuid = latest_table.GetTableUUID();
 			inlined_entry.columns = latest_table.GetTableColumns();
 			result.new_inlined_data_tables.push_back(std::move(inlined_entry));
@@ -1648,7 +1648,7 @@ void DuckLakeTransaction::GetNewTableInfo(DuckLakeCommitState &commit_state, Duc
 		if (!already_added) {
 			DuckLakeTableInfo table_entry;
 			table_entry.id = committed_id;
-			table_entry.schema_id = table.ParentSchema().Cast<DuckLakeSchemaEntry>().GetSchemaId();
+			table_entry.schema_id = commit_state.GetSchemaId(table.ParentSchema().Cast<DuckLakeSchemaEntry>());
 			table_entry.uuid = table.GetTableUUID();
 			table_entry.columns = table.GetTableColumns();
 			result.new_inlined_data_tables.push_back(std::move(table_entry));
@@ -1684,7 +1684,7 @@ void DuckLakeTransaction::GetNewMacroInfo(DuckLakeCommitState &commit_state, ref
 
 	new_macro_info.macro_id = MacroIndex(commit_state.commit_snapshot.next_catalog_id++);
 	new_macro_info.macro_name = macro_entry.name;
-	new_macro_info.schema_id = ducklake_schema.GetSchemaId();
+	new_macro_info.schema_id = commit_state.GetSchemaId(ducklake_schema);
 	// Let's do the implementations
 	for (const auto &impl : macro_entry.macros) {
 		DuckLakeMacroImplementation macro_impl;
