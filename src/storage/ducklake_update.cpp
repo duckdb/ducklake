@@ -216,20 +216,11 @@ InsertionOrderPreservingMap<string> DuckLakeUpdate::ParamsToString() const {
 	return result;
 }
 
-PhysicalOperator &DuckLakeCatalog::PlanUpdate(ClientContext &context, PhysicalPlanGenerator &planner, LogicalUpdate &op,
-                                              PhysicalOperator &child_plan) {
-	if (op.return_chunk) {
-		throw BinderException("RETURNING clause not yet supported for updates of a DuckLake table");
-	}
-	for (auto &expr : op.expressions) {
-		if (expr->type == ExpressionType::VALUE_DEFAULT) {
-			throw BinderException("SET DEFAULT is not yet supported for updates of a DuckLake table");
-		}
-	}
+DuckLakeUpdate &DuckLakeUpdate::PlanUpdateOperator(ClientContext &context, PhysicalPlanGenerator &planner,
+                                                   LogicalUpdate &op, PhysicalOperator &child_plan,
+                                                   DuckLakeCopyInput &copy_input) {
 	auto &table = op.table.Cast<DuckLakeTableEntry>();
 
-	DuckLakeCopyInput copy_input(context, table);
-	copy_input.virtual_columns = InsertVirtualColumns::WRITE_ROW_ID;
 	vector<idx_t> row_id_indexes;
 	for (idx_t i = 0; i < DuckLakeUpdate::DELETION_INFO_SIZE; i++) {
 		row_id_indexes.push_back(i);
@@ -257,8 +248,26 @@ PhysicalOperator &DuckLakeCatalog::PlanUpdate(ClientContext &context, PhysicalPl
 	}
 	update_output_types.push_back(LogicalType::BIGINT);
 	update_op.types = std::move(update_output_types);
+	return update_op;
+}
 
-	// follow the insert path for inlining:
+PhysicalOperator &DuckLakeCatalog::PlanUpdate(ClientContext &context, PhysicalPlanGenerator &planner, LogicalUpdate &op,
+                                              PhysicalOperator &child_plan) {
+	if (op.return_chunk) {
+		throw BinderException("RETURNING clause not yet supported for updates of a DuckLake table");
+	}
+	for (auto &expr : op.expressions) {
+		if (expr->type == ExpressionType::VALUE_DEFAULT) {
+			throw BinderException("SET DEFAULT is not yet supported for updates of a DuckLake table");
+		}
+	}
+	auto &table = op.table.Cast<DuckLakeTableEntry>();
+
+	DuckLakeCopyInput copy_input(context, table);
+	copy_input.virtual_columns = InsertVirtualColumns::WRITE_ROW_ID;
+	auto &update_op = DuckLakeUpdate::PlanUpdateOperator(context, planner, op, child_plan, copy_input);
+
+	// follow the insert path for inlining
 	optional_ptr<PhysicalOperator> plan = &update_op;
 	optional_ptr<DuckLakeInlineData> inline_data;
 

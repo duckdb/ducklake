@@ -15,8 +15,7 @@ namespace duckdb {
 class DuckLakeUpdate : public PhysicalOperator {
 public:
 	DuckLakeUpdate(PhysicalPlan &physical_plan, DuckLakeTableEntry &table, vector<PhysicalIndex> columns,
-	               PhysicalOperator &child, PhysicalOperator &delete_op,
-	               vector<unique_ptr<Expression>> &expressions);
+	               PhysicalOperator &child, PhysicalOperator &delete_op, vector<unique_ptr<Expression>> &expressions);
 
 	//! The table to update
 	DuckLakeTableEntry &table;
@@ -36,8 +35,8 @@ public:
 	unique_ptr<OperatorState> GetOperatorState(ExecutionContext &context) const override;
 	OperatorResultType Execute(ExecutionContext &context, DataChunk &input, DataChunk &chunk,
 	                           GlobalOperatorState &gstate, OperatorState &state) const override;
-	OperatorFinalizeResultType FinalExecute(ExecutionContext &context, DataChunk &chunk,
-	                                        GlobalOperatorState &gstate, OperatorState &state) const override;
+	OperatorFinalizeResultType FinalExecute(ExecutionContext &context, DataChunk &chunk, GlobalOperatorState &gstate,
+	                                        OperatorState &state) const override;
 	OperatorFinalResultType OperatorFinalize(Pipeline &pipeline, Event &event, ClientContext &context,
 	                                         OperatorFinalizeInput &input) const override;
 
@@ -55,6 +54,9 @@ public:
 
 	string GetName() const override;
 	InsertionOrderPreservingMap<string> ParamsToString() const override;
+
+	static DuckLakeUpdate &PlanUpdateOperator(ClientContext &context, PhysicalPlanGenerator &planner, LogicalUpdate &op,
+	                                          PhysicalOperator &child_plan, DuckLakeCopyInput &copy_input);
 };
 
 } // namespace duckdb
