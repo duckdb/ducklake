@@ -1,0 +1,65 @@
+# name: test/sql/compaction/compaction_per_thread_output.test
+# description: test compaction with per_thread_output enabled
+# group: [compaction]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+
+test-env DATA_PATH __TEST_DIR__
+
+statement ok
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/ducklake_compaction_per_thread_output')
+
+statement ok
+CALL ducklake.set_option('per_thread_output', 'true');
+
+statement ok
+CREATE TABLE ducklake.test(i INTEGER);
+
+statement ok
+INSERT INTO ducklake.test VALUES (1);
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake')
+
+statement ok
+INSERT INTO ducklake.test VALUES (2);
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake')
+
+statement ok
+INSERT INTO ducklake.test VALUES (3);
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake')
+
+# merge_adjacent_files should work with per_thread_output enabled
+statement ok
+CALL ducklake_merge_adjacent_files('ducklake');
+
+# verify data integrity after merge
+query I
+SELECT * FROM ducklake.test ORDER BY ALL
+----
+1
+2
+3
+
+# delete from the merged file to create a delete file
+statement ok
+DELETE FROM ducklake.test WHERE i = 3;
+
+# rewrite_data_files should work with per_thread_output enabled
+statement ok
+CALL ducklake_rewrite_data_files('ducklake', delete_threshold => 0);
+
+# verify data integrity after rewrite
+query I
+SELECT * FROM ducklake.test ORDER BY ALL
+----
+1
+2
