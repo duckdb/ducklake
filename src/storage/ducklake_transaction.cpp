@@ -213,6 +213,8 @@ void LocalTableChanges::AppendInlinedData(ClientContext &context, TableIndex tab
 		// merge preserved row_ids from update inlining
 		if (new_data->HasPreservedRowIds() || existing_data.HasPreservedRowIds()) {
 			if (!existing_data.HasPreservedRowIds()) {
+				// if the existing data doesnt have preserved row ids, we sign them off sequentially from
+				// transaction local id
 				idx_t existing_count = existing_data.data->Count() - new_data->data->Count();
 				existing_data.row_ids.reserve(existing_count + new_data->row_ids.size());
 				auto next_id = NumericCast<int64_t>(DuckLakeConstants::TRANSACTION_LOCAL_ROW_ID_START);
@@ -221,14 +223,17 @@ void LocalTableChanges::AppendInlinedData(ClientContext &context, TableIndex tab
 				}
 			}
 			if (new_data->HasPreservedRowIds()) {
+				// if this is already preserved we can just insert it
 				existing_data.row_ids.insert(existing_data.row_ids.end(), new_data->row_ids.begin(),
 				                             new_data->row_ids.end());
 			} else {
-				// new data is insert-only — assign sequential placeholder ids after the max existing id
+				// new data doesnt preserve row_ids, we need to use the TRANSACTION_LOCAL_ROW_ID_START
 				int64_t next_id = NumericCast<int64_t>(DuckLakeConstants::TRANSACTION_LOCAL_ROW_ID_START);
-				for (auto &rid : existing_data.row_ids) {
-					if (rid >= next_id) {
-						next_id = rid + 1;
+				if (!existing_data.row_ids.empty()) {
+					auto max_id = *std::max_element(existing_data.row_ids.begin(), existing_data.row_ids.end());
+					if (max_id >= next_id) {
+						// we only use max_id if it's guaranteed to be transactional (over next_id)
+						next_id = max_id + 1;
 					}
 				}
 				for (idx_t i = 0; i < new_data->data->Count(); i++) {
