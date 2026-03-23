@@ -20,9 +20,13 @@ struct DuckLakeInlinedData {
 	//! Row Ids for update inlining
 	vector<int64_t> row_ids;
 
-	bool HasPreservedRowIds() const {
-		return !row_ids.empty();
-	}
+	bool HasPreservedRowIds() const;
+	//! Get the row_id for a given position in the data collection
+	idx_t GetRowId(idx_t position) const;
+	//! Get the output row_id for a surviving (non-deleted) row
+	int64_t GetOutputRowId(idx_t position) const;
+	//! Merge preserved row_ids from update inlining
+	void MergeRowIds(const DuckLakeInlinedData &new_data, idx_t new_data_count);
 };
 
 struct DuckLakeInlinedDataDeletes {

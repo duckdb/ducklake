@@ -211,36 +211,7 @@ void LocalTableChanges::AppendInlinedData(ClientContext &context, TableIndex tab
 			existing_data.data->Append(chunk);
 		}
 		// merge preserved row_ids from update inlining
-		if (new_data->HasPreservedRowIds() || existing_data.HasPreservedRowIds()) {
-			if (!existing_data.HasPreservedRowIds()) {
-				// if the existing data doesnt have preserved row ids, we sign them off sequentially from
-				// transaction local id
-				idx_t existing_count = existing_data.data->Count() - new_data->data->Count();
-				existing_data.row_ids.reserve(existing_count + new_data->row_ids.size());
-				auto next_id = NumericCast<int64_t>(DuckLakeConstants::TRANSACTION_LOCAL_ROW_ID_START);
-				for (idx_t i = 0; i < existing_count; i++) {
-					existing_data.row_ids.push_back(next_id + NumericCast<int64_t>(i));
-				}
-			}
-			if (new_data->HasPreservedRowIds()) {
-				// if this is already preserved we can just insert it
-				existing_data.row_ids.insert(existing_data.row_ids.end(), new_data->row_ids.begin(),
-				                             new_data->row_ids.end());
-			} else {
-				// new data doesnt preserve row_ids, we need to use the TRANSACTION_LOCAL_ROW_ID_START
-				int64_t next_id = NumericCast<int64_t>(DuckLakeConstants::TRANSACTION_LOCAL_ROW_ID_START);
-				if (!existing_data.row_ids.empty()) {
-					auto max_id = *std::max_element(existing_data.row_ids.begin(), existing_data.row_ids.end());
-					if (max_id >= next_id) {
-						// we only use max_id if it's guaranteed to be transactional (over next_id)
-						next_id = max_id + 1;
-					}
-				}
-				for (idx_t i = 0; i < new_data->data->Count(); i++) {
-					existing_data.row_ids.push_back(next_id + NumericCast<int64_t>(i));
-				}
-			}
-		}
+		existing_data.MergeRowIds(*new_data, new_data->data->Count());
 		for (auto &entry : new_data->column_stats) {
 			auto stats_entry = existing_data.column_stats.find(entry.first);
 			if (stats_entry == existing_data.column_stats.end()) {
@@ -280,9 +251,8 @@ void LocalTableChanges::DeleteFromLocalInlinedData(ClientContext &context, Table
 		throw InternalException("DeleteFromLocalInlinedData called but no transaction-local data exists for table");
 	}
 	auto &table_changes = entry->second;
-	auto &existing = *table_changes.new_inlined_data->data;
-	auto &preserved_row_ids = table_changes.new_inlined_data->row_ids;
-	bool has_preserved_row_ids = table_changes.new_inlined_data->HasPreservedRowIds();
+	auto &inlined_data = *table_changes.new_inlined_data;
+	auto &existing = *inlined_data.data;
 	// construct a new collection from the existing data minus the deletes
 	auto new_data = make_uniq<ColumnDataCollection>(context, existing.Types());
 
@@ -296,23 +266,14 @@ void LocalTableChanges::DeleteFromLocalInlinedData(ClientContext &context, Table
 		idx_t selected_rows = 0;
 
 		for (idx_t r = 0; r < chunk.size(); r++) {
-			idx_t row_id;
-			if (has_preserved_row_ids) {
-				row_id = NumericCast<idx_t>(preserved_row_ids[base_row_id + r]);
-			} else {
-				row_id = base_row_id + r;
-			}
+			idx_t position = base_row_id + r;
+			auto row_id = inlined_data.GetRowId(position);
 			if (new_deletes.find(row_id) != new_deletes.end()) {
 				// deleted - skip
 				continue;
 			}
 			sel.set_index(selected_rows++, r);
-			if (has_preserved_row_ids) {
-				new_row_ids.push_back(preserved_row_ids[base_row_id + r]);
-			} else {
-				// generate transaction-local placeholder row_ids
-				new_row_ids.push_back(NumericCast<int64_t>(DuckLakeConstants::TRANSACTION_LOCAL_ROW_ID_START + row_id));
-			}
+			new_row_ids.push_back(inlined_data.GetOutputRowId(position));
 		}
 		base_row_id += chunk.size();
 		if (selected_rows == 0) {
@@ -323,8 +284,8 @@ void LocalTableChanges::DeleteFromLocalInlinedData(ClientContext &context, Table
 	}
 
 	// override the existing collection and row_ids
-	table_changes.new_inlined_data->data = std::move(new_data);
-	table_changes.new_inlined_data->row_ids = std::move(new_row_ids);
+	inlined_data.data = std::move(new_data);
+	inlined_data.row_ids = std::move(new_row_ids);
 }
 
 static void RemoveFieldStats(map<FieldIndex, DuckLakeColumnStats> &column_stats, const DuckLakeFieldId &field_id) {
