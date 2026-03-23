@@ -574,7 +574,7 @@ DuckLakeCompactor::GenerateCompactionCommand(vector<DuckLakeCompactionFileEntry>
 	copy->filename_pattern = std::move(copy_options.filename_pattern);
 	copy->file_extension = std::move(copy_options.file_extension);
 	copy->overwrite_mode = copy_options.overwrite_mode;
-	copy->per_thread_output = copy_options.per_thread_output;
+	copy->per_thread_output = false;
 	copy->file_size_bytes = copy_options.file_size_bytes;
 	copy->rotate = copy_options.rotate;
 	copy->return_type = copy_options.return_type;
