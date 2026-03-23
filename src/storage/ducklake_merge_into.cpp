@@ -113,6 +113,51 @@ SinkCombineResultType DuckLakeMergeInsert::Combine(ExecutionContext &context, Op
 	return copy.Combine(context, combine_input);
 }
 
+// Scan copy operator source and sink into insert operator — shared by MergeInsert and MergeUpdate
+static void FinalizeCopyToInsert(Pipeline &pipeline, Event &event, ClientContext &context,
+                                 PhysicalOperator &copy_op, PhysicalOperator &insert_op,
+                                 InterruptState &interrupt_state) {
+	DataChunk chunk;
+	chunk.Initialize(context, copy_op.types);
+
+	ThreadContext thread(context);
+	ExecutionContext exec_context(context, thread, nullptr);
+
+	auto copy_global = copy_op.GetGlobalSourceState(context);
+	auto copy_local = copy_op.GetLocalSourceState(exec_context, *copy_global);
+	OperatorSourceInput source_input {*copy_global, *copy_local, interrupt_state};
+
+	auto insert_global = insert_op.GetGlobalSinkState(context);
+	auto insert_local = insert_op.GetLocalSinkState(exec_context);
+	OperatorSinkInput sink_input {*insert_global, *insert_local, interrupt_state};
+	SourceResultType source_res = SourceResultType::HAVE_MORE_OUTPUT;
+	while (source_res == SourceResultType::HAVE_MORE_OUTPUT) {
+		chunk.Reset();
+		source_res = copy_op.GetData(exec_context, chunk, source_input);
+		if (chunk.size() == 0) {
+			continue;
+		}
+		if (source_res == SourceResultType::BLOCKED) {
+			throw InternalException("BLOCKED not supported in DuckLakeMerge");
+		}
+
+		auto sink_result = insert_op.Sink(exec_context, chunk, sink_input);
+		if (sink_result != SinkResultType::NEED_MORE_INPUT) {
+			throw InternalException("BLOCKED not supported in DuckLakeMerge");
+		}
+	}
+	OperatorSinkCombineInput combine_input {*insert_global, *insert_local, interrupt_state};
+	auto combine_res = insert_op.Combine(exec_context, combine_input);
+	if (combine_res == SinkCombineResultType::BLOCKED) {
+		throw InternalException("BLOCKED not supported in DuckLakeMerge");
+	}
+	OperatorSinkFinalizeInput finalize_input {*insert_global, interrupt_state};
+	auto finalize_res = insert_op.Finalize(pipeline, event, context, finalize_input);
+	if (finalize_res == SinkFinalizeType::BLOCKED) {
+		throw InternalException("BLOCKED not supported in DuckLakeMerge");
+	}
+}
+
 SinkFinalizeType DuckLakeMergeInsert::Finalize(Pipeline &pipeline, Event &event, ClientContext &context,
                                                OperatorSinkFinalizeInput &input) const {
 	OperatorSinkFinalizeInput copy_finalize {*copy.sink_state, input.interrupt_state};
@@ -121,46 +166,7 @@ SinkFinalizeType DuckLakeMergeInsert::Finalize(Pipeline &pipeline, Event &event,
 		return SinkFinalizeType::BLOCKED;
 	}
 
-	// now scan the copy
-	DataChunk chunk;
-	chunk.Initialize(context, copy.types);
-
-	ThreadContext thread(context);
-	ExecutionContext exec_context(context, thread, nullptr);
-
-	auto copy_global = copy.GetGlobalSourceState(context);
-	auto copy_local = copy.GetLocalSourceState(exec_context, *copy_global);
-	OperatorSourceInput source_input {*copy_global, *copy_local, input.interrupt_state};
-
-	auto insert_global = insert.GetGlobalSinkState(context);
-	auto insert_local = insert.GetLocalSinkState(exec_context);
-	OperatorSinkInput sink_input {*insert_global, *insert_local, input.interrupt_state};
-	SourceResultType source_res = SourceResultType::HAVE_MORE_OUTPUT;
-	while (source_res == SourceResultType::HAVE_MORE_OUTPUT) {
-		chunk.Reset();
-		source_res = copy.GetData(exec_context, chunk, source_input);
-		if (chunk.size() == 0) {
-			continue;
-		}
-		if (source_res == SourceResultType::BLOCKED) {
-			throw InternalException("BLOCKED not supported in DuckLakeMergeInsert");
-		}
-
-		auto sink_result = insert.Sink(exec_context, chunk, sink_input);
-		if (sink_result != SinkResultType::NEED_MORE_INPUT) {
-			throw InternalException("BLOCKED not supported in DuckLakeMergeInsert");
-		}
-	}
-	OperatorSinkCombineInput combine_input {*insert_global, *insert_local, input.interrupt_state};
-	auto combine_res = insert.Combine(exec_context, combine_input);
-	if (combine_res == SinkCombineResultType::BLOCKED) {
-		throw InternalException("BLOCKED not supported in DuckLakeMergeInsert");
-	}
-	OperatorSinkFinalizeInput finalize_input {*insert_global, input.interrupt_state};
-	auto finalize_res = insert.Finalize(pipeline, event, context, finalize_input);
-	if (finalize_res == SinkFinalizeType::BLOCKED) {
-		throw InternalException("BLOCKED not supported in DuckLakeMergeInsert");
-	}
+	FinalizeCopyToInsert(pipeline, event, context, copy, insert, input.interrupt_state);
 	return SinkFinalizeType::READY;
 }
 
@@ -354,35 +360,7 @@ SinkFinalizeType DuckLakeMergeUpdate::Finalize(Pipeline &pipeline, Event &event,
 	OperatorSinkFinalizeInput copy_finalize {*copy_op.sink_state, input.interrupt_state};
 	copy_op.Finalize(pipeline, event, context, copy_finalize);
 
-	DataChunk chunk;
-	chunk.Initialize(context, copy_op.types);
-	ThreadContext thread(context);
-	ExecutionContext exec_context(context, thread, nullptr);
-
-	auto copy_global = copy_op.GetGlobalSourceState(context);
-	auto copy_local = copy_op.GetLocalSourceState(exec_context, *copy_global);
-	OperatorSourceInput source_input {*copy_global, *copy_local, input.interrupt_state};
-
-	auto insert_global = insert_op.GetGlobalSinkState(context);
-	auto insert_local = insert_op.GetLocalSinkState(exec_context);
-	OperatorSinkInput sink_input {*insert_global, *insert_local, input.interrupt_state};
-
-	while (true) {
-		chunk.Reset();
-		auto source_res = copy_op.GetData(exec_context, chunk, source_input);
-		if (chunk.size() > 0) {
-			insert_op.Sink(exec_context, chunk, sink_input);
-		}
-		if (source_res == SourceResultType::FINISHED || chunk.size() == 0) {
-			break;
-		}
-	}
-
-	OperatorSinkCombineInput insert_combine {*insert_global, *insert_local, input.interrupt_state};
-	insert_op.Combine(exec_context, insert_combine);
-	OperatorSinkFinalizeInput insert_finalize {*insert_global, input.interrupt_state};
-	insert_op.Finalize(pipeline, event, context, insert_finalize);
-
+	FinalizeCopyToInsert(pipeline, event, context, copy_op, insert_op, input.interrupt_state);
 	return SinkFinalizeType::READY;
 }
 
