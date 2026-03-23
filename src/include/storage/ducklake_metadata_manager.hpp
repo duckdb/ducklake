@@ -243,6 +243,7 @@ public:
 
 	string LoadPath(string path);
 	string StorePath(string path);
+	string GetPathSeparator(const string &path);
 
 protected:
 	virtual string GetLatestSnapshotQuery() const;

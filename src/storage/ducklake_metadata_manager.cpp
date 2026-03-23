@@ -2806,9 +2806,18 @@ DuckLakePath DuckLakeMetadataManager::GetRelativePath(const string &path, const 
 	return result;
 }
 
+string DuckLakeMetadataManager::GetPathSeparator(const string &path) {
+	auto &catalog = transaction.GetCatalog();
+	if (!catalog.DataPath().empty()) {
+		// use the cached separator from the catalog
+		return catalog.Separator();
+	}
+	// if catalog is not loaded, use the file system
+	return GetFileSystem().PathSeparator(path);
+}
+
 string DuckLakeMetadataManager::StorePath(string path) {
-	auto &fs = GetFileSystem();
-	auto separator = fs.PathSeparator(path);
+	auto separator = GetPathSeparator(path);
 	if (separator == "/") {
 		return path;
 	}
@@ -2816,8 +2825,7 @@ string DuckLakeMetadataManager::StorePath(string path) {
 }
 
 string DuckLakeMetadataManager::LoadPath(string path) {
-	auto &fs = GetFileSystem();
-	auto separator = fs.PathSeparator(path);
+	auto separator = GetPathSeparator(path);
 	if (separator == "/") {
 		return path;
 	}
