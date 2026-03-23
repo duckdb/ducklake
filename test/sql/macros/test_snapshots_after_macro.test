@@ -1,6 +1,6 @@
 # name: test/sql/macros/test_snapshots_after_macro.test
 # description: test that snapshots() works after creating a macro
-# group: [macro]
+# group: [macros]
 
 require ducklake
 

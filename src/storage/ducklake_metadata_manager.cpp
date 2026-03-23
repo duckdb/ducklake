@@ -231,6 +231,7 @@ CREATE TABLE {IF_NOT_EXISTS} {METADATA_CATALOG}.ducklake_macro(schema_id BIGINT,
 CREATE TABLE {IF_NOT_EXISTS} {METADATA_CATALOG}.ducklake_macro_impl(macro_id BIGINT, impl_id BIGINT, dialect VARCHAR, sql VARCHAR, type VARCHAR);
 CREATE TABLE {IF_NOT_EXISTS} {METADATA_CATALOG}.ducklake_macro_parameters(macro_id BIGINT, impl_id BIGINT,column_id BIGINT, parameter_name VARCHAR, parameter_type VARCHAR, default_value VARCHAR, default_value_type VARCHAR);
 ALTER TABLE {METADATA_CATALOG}.ducklake_column ADD COLUMN {IF_NOT_EXISTS} default_value_type VARCHAR DEFAULT 'literal';
+UPDATE {METADATA_CATALOG}.ducklake_column SET default_value_type = 'literal' WHERE default_value_type IS NULL;
 ALTER TABLE {METADATA_CATALOG}.ducklake_column ADD COLUMN {IF_NOT_EXISTS} default_value_dialect VARCHAR DEFAULT NULL;
 CREATE TABLE {IF_NOT_EXISTS} {METADATA_CATALOG}.ducklake_sort_info(sort_id BIGINT, table_id BIGINT, begin_snapshot BIGINT, end_snapshot BIGINT);
 CREATE TABLE {IF_NOT_EXISTS} {METADATA_CATALOG}.ducklake_sort_expression(sort_id BIGINT, table_id BIGINT, sort_key_index BIGINT, expression VARCHAR, dialect VARCHAR, sort_direction VARCHAR, null_order VARCHAR);
@@ -2186,10 +2187,10 @@ string DuckLakeMetadataManager::WriteNewMacros(const vector<DuckLakeMacroInfo> &
 	string batch_query;
 	for (auto &macro : new_macros) {
 		// Insert in the macro table
-		batch_query = StringUtil::Format(R"(
+		batch_query += StringUtil::Format(R"(
 INSERT INTO {METADATA_CATALOG}.ducklake_macro values(%llu,%llu,'%s',{SNAPSHOT_ID}, NULL);
 )",
-		                                 macro.schema_id.index, macro.macro_id.index, macro.macro_name);
+		                                  macro.schema_id.index, macro.macro_id.index, macro.macro_name);
 		// Insert in the implementation table
 		for (idx_t impl_id = 0; impl_id < macro.implementations.size(); ++impl_id) {
 			auto &impl = macro.implementations[impl_id];
@@ -2426,6 +2427,11 @@ string DuckLakeMetadataManager::WriteNewInlinedFileDeletes(DuckLakeSnapshot &com
 		batch_queries += StringUtil::Format("INSERT INTO {METADATA_CATALOG}.%s VALUES %s;\n", table_name, values);
 	}
 	return batch_queries;
+}
+
+void DuckLakeMetadataManager::ClearInlinedTableCaches() {
+	insert_inlined_table_name_cache.clear();
+	delete_inlined_table_cache.clear();
 }
 
 map<idx_t, set<idx_t>> DuckLakeMetadataManager::ReadInlinedFileDeletions(TableIndex table_id,
@@ -4064,13 +4070,15 @@ string DuckLakeMetadataManager::WriteDeleteRewrites(const vector<DuckLakeCompact
 		WHERE data_file_id = %llu;
 		)",
 		                       table_idx_last_snapshot[compaction.table_index.index], compaction.source_id.index);
-		// update the snapshot of our newly added file
-		batch_query +=
-		    StringUtil::Format(R"(
-			UPDATE {METADATA_CATALOG}.ducklake_data_file SET begin_snapshot = %llu
-			WHERE data_file_id = %llu;
-			)",
-		                       table_idx_last_snapshot[compaction.table_index.index], compaction.new_id.index);
+		// update the snapshot of our newly added file (if it was created)
+		if (compaction.new_id.IsValid()) {
+			batch_query +=
+			    StringUtil::Format(R"(
+				UPDATE {METADATA_CATALOG}.ducklake_data_file SET begin_snapshot = %llu
+				WHERE data_file_id = %llu;
+				)",
+			                       table_idx_last_snapshot[compaction.table_index.index], compaction.new_id.index);
+		}
 	}
 	return batch_query;
 }

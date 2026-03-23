@@ -112,10 +112,12 @@ void DuckLakeInitializer::InitializeDataPath() {
 
 	auto &fs = FileSystem::GetFileSystem(context);
 	auto separator = fs.PathSeparator(data_path);
-	// ensure the paths we store always end in a path separator
-	if (!StringUtil::EndsWith(data_path, separator)) {
-		data_path += separator;
+	// pop trailing path separators
+	while (!data_path.empty() && (data_path.back() == '/' || data_path.back() == '\\')) {
+		data_path.pop_back();
 	}
+	// ensure the paths we store always end in a path separator
+	data_path += separator;
 	catalog.Separator() = separator;
 }
 
