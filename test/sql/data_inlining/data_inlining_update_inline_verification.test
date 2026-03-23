@@ -16,9 +16,6 @@ ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/du
 statement ok
 CREATE TABLE ducklake.test AS SELECT i, 'val_' || i::VARCHAR AS j FROM range(20) t(i)
 
-statement ok
-SELECT COUNT(*) cnt FROM GLOB('${DATA_PATH}/ducklake_update_inline_verify_files/**')
-
 query I
 SELECT COUNT(*) = 1 cnt FROM GLOB('${DATA_PATH}/ducklake_update_inline_verify_files/**')
 ----
