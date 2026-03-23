@@ -219,6 +219,11 @@ InsertionOrderPreservingMap<string> DuckLakeUpdate::ParamsToString() const {
 DuckLakeUpdate &DuckLakeUpdate::PlanUpdateOperator(ClientContext &context, PhysicalPlanGenerator &planner,
                                                    LogicalUpdate &op, PhysicalOperator &child_plan,
                                                    DuckLakeCopyInput &copy_input) {
+	for (auto &expr : op.expressions) {
+		if (expr->type == ExpressionType::VALUE_DEFAULT) {
+			throw BinderException("SET DEFAULT is not yet supported for updates of a DuckLake table");
+		}
+	}
 	auto &table = op.table.Cast<DuckLakeTableEntry>();
 
 	vector<idx_t> row_id_indexes;
@@ -255,11 +260,6 @@ PhysicalOperator &DuckLakeCatalog::PlanUpdate(ClientContext &context, PhysicalPl
                                               PhysicalOperator &child_plan) {
 	if (op.return_chunk) {
 		throw BinderException("RETURNING clause not yet supported for updates of a DuckLake table");
-	}
-	for (auto &expr : op.expressions) {
-		if (expr->type == ExpressionType::VALUE_DEFAULT) {
-			throw BinderException("SET DEFAULT is not yet supported for updates of a DuckLake table");
-		}
 	}
 	auto &table = op.table.Cast<DuckLakeTableEntry>();
 
