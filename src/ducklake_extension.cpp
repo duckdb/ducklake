@@ -5,14 +5,19 @@
 #include "storage/ducklake_storage.hpp"
 #include "functions/ducklake_table_functions.hpp"
 #include "storage/ducklake_secret.hpp"
+#include "duckdb/logging/log_manager.hpp"
 #include "duckdb/storage/storage_extension.hpp"
+#include "storage/ducklake_log_type.hpp"
 
 namespace duckdb {
 
 static void LoadInternal(ExtensionLoader &loader) {
 	loader.SetDescription("Adds support for DuckLake, SQL as a Lakehouse Format");
 
-	auto &config = DBConfig::GetConfig(loader.GetDatabaseInstance());
+	auto &instance = loader.GetDatabaseInstance();
+	instance.GetLogManager().RegisterLogType(make_uniq<DuckLakeMetadataLogType>());
+
+	auto &config = DBConfig::GetConfig(instance);
 	StorageExtension::Register(config, "ducklake", make_shared_ptr<DuckLakeStorageExtension>());
 
 	config.AddExtensionOption("ducklake_max_retry_count",

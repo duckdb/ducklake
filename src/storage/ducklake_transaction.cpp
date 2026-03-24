@@ -20,6 +20,8 @@
 #include "storage/ducklake_transaction_manager.hpp"
 #include "storage/ducklake_view_entry.hpp"
 #include "duckdb/common/printer.hpp"
+#include "duckdb/logging/logger.hpp"
+#include "storage/ducklake_log_type.hpp"
 #include "duckdb/main/settings.hpp"
 #include "duckdb/main/client_config.hpp"
 
@@ -2543,7 +2545,18 @@ unique_ptr<QueryResult> DuckLakeTransaction::Query(string query) {
 	query = StringUtil::Replace(query, "{METADATA_SCHEMA_ESCAPED}", schema_identifier_escaped);
 	query = StringUtil::Replace(query, "{METADATA_PATH}", metadata_path);
 	query = StringUtil::Replace(query, "{DATA_PATH}", data_path);
-	return connection.Query(query);
+	auto start = std::chrono::steady_clock::now();
+	auto result = connection.Query(query);
+	auto end = std::chrono::steady_clock::now();
+	auto elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count();
+
+	DUCKDB_LOG(db, DuckLakeMetadataLogType, ducklake_catalog.GetName(), query, elapsed_ms);
+
+	auto &cb = ducklake_catalog.GetQueryCallback();
+	if (cb) {
+		cb(query, end - start);
+	}
+	return result;
 }
 
 unique_ptr<QueryResult> DuckLakeTransaction::Query(DuckLakeSnapshot snapshot, string query) {

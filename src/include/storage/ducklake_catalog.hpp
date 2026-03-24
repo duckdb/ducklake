@@ -16,6 +16,9 @@
 #include "storage/ducklake_partition_data.hpp"
 #include "storage/ducklake_stats.hpp"
 
+#include <chrono>
+#include <functional>
+
 namespace duckdb {
 struct DuckLakeGlobalStatsInfo;
 class ColumnList;
@@ -171,6 +174,16 @@ public:
 	//! Return the schema for the given snapshot - loading it if it is not yet loaded
 	DuckLakeCatalogSet &GetSchemaForSnapshot(DuckLakeTransaction &transaction, DuckLakeSnapshot snapshot);
 
+	//! Callback type for instrumenting metadata queries
+	using QueryCallback = std::function<void(const string &query, std::chrono::steady_clock::duration elapsed)>;
+
+	void SetQueryCallback(QueryCallback callback) {
+		query_callback = std::move(callback);
+	}
+	const QueryCallback &GetQueryCallback() const {
+		return query_callback;
+	}
+
 private:
 	void DropSchema(ClientContext &context, DropInfo &info) override;
 	unique_ptr<DuckLakeCatalogSet> LoadSchemaForSnapshot(DuckLakeTransaction &transaction, DuckLakeSnapshot snapshot);
@@ -204,6 +217,8 @@ private:
 	//! The id of the last committed snapshot, set at FlushChanges on a successful commit
 	mutable mutex commit_lock;
 	optional_idx last_committed_snapshot;
+	//! Optional callback for instrumenting metadata queries
+	QueryCallback query_callback;
 };
 
 } // namespace duckdb
