@@ -78,5 +78,8 @@ jobs:
       env:
         PGSERVICE: postgres
       run: |
+        # Remove ducklake from the local extension repo to prevent autoloading
+        # a loadable copy over the statically linked one
+        rm -f build/release/repository/*/linux_amd64/ducklake.duckdb_extension
         createdb ducklakedb
         build/release/test/unittest --test-config test/configs/postgres.json --test-dir ./ "test/sql/*"
