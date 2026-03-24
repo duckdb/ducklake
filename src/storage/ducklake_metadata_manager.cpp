@@ -2348,21 +2348,36 @@ WHERE table_id = %d AND schema_version=(
 		// append the data
 		// FIXME: we can do a much faster append than this
 		string values;
+		bool has_preserved_row_ids = entry.data->HasPreservedRowIds();
 		idx_t row_id = entry.row_id_start;
+		idx_t global_row_idx = 0;
 		for (auto &chunk : entry.data->data->Chunks()) {
 			for (idx_t r = 0; r < chunk.size(); r++) {
 				if (!values.empty()) {
 					values += ", ";
 				}
 				values += "(";
-				values += to_string(row_id);
+				if (has_preserved_row_ids) {
+					auto rid = entry.data->row_ids[global_row_idx];
+					if (DuckLakeConstants::IsTransactionLocalRowId(rid)) {
+						// This is a INSERT row w a placeholder id, we assign sequential row_id
+						values += to_string(row_id);
+						row_id++;
+					} else {
+						// This is a UPDATE row, we use preserved row_id
+						values += to_string(rid);
+					}
+				} else {
+					values += to_string(row_id);
+					row_id++;
+				}
 				values += ", {SNAPSHOT_ID}, NULL";
 				for (idx_t c = 0; c < chunk.ColumnCount(); c++) {
 					values += ", ";
 					values += DuckLakeUtil::ValueToSQL(*this, context, chunk.GetValue(c, r));
 				}
 				values += ")";
-				row_id++;
+				global_row_idx++;
 			}
 		}
 		if (!values.empty()) {
@@ -2396,7 +2411,7 @@ VALUES %s
 UPDATE {METADATA_CATALOG}.%s
 SET end_snapshot = {SNAPSHOT_ID}
 FROM deleted_row_list
-WHERE row_id=deleted_row_id;
+WHERE row_id=deleted_row_id AND end_snapshot IS NULL AND begin_snapshot != {SNAPSHOT_ID};
 )",
 		                                    row_id_list, entry.table_name);
 	}
@@ -2602,7 +2617,8 @@ unique_ptr<QueryResult> DuckLakeMetadataManager::ReadInlinedData(DuckLakeSnapsho
 	auto result = transaction.Query(snapshot, StringUtil::Format(R"(
 SELECT %s
 FROM {METADATA_CATALOG}.%s inlined_data
-WHERE {SNAPSHOT_ID} >= begin_snapshot AND ({SNAPSHOT_ID} < end_snapshot OR end_snapshot IS NULL);)",
+WHERE {SNAPSHOT_ID} >= begin_snapshot AND ({SNAPSHOT_ID} < end_snapshot OR end_snapshot IS NULL)
+ORDER BY row_id;)",
 	                                                             projection, inlined_table_name));
 	return result;
 }
