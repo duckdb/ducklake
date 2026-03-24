@@ -15,7 +15,7 @@ class BaseStatistics;
 
 //! Returns true for types that require value-based (not lexicographic string) comparison for min/max stats
 inline bool RequiresValueComparison(const LogicalType &type) {
-	return type.IsNumeric() || type.IsTemporal();
+	return type.IsNumeric() || type.IsTemporal() || type.id() == LogicalTypeId::BOOLEAN;
 }
 
 struct DuckLakeColumnStats;
@@ -60,6 +60,7 @@ private:
 	unique_ptr<BaseStatistics> CreateNumericStats() const;
 	unique_ptr<BaseStatistics> CreateStringStats() const;
 	unique_ptr<BaseStatistics> CreateVariantStats() const;
+	unique_ptr<BaseStatistics> CreateGeometryStats() const;
 };
 
 //! These are the global, table-wide stats

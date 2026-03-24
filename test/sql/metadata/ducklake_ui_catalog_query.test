@@ -1,0 +1,52 @@
+# name: test/sql/metadata/ducklake_ui_catalog_query.test
+# description: Reproducer for UI metadata query against ducklake catalog
+# group: [metadata]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+
+test-env DATA_PATH __TEST_DIR__
+
+statement ok
+SET threads=8
+
+statement ok
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS lake (DATA_PATH '${DATA_PATH}/ducklake_ui_catalog_query_files')
+
+statement ok
+CREATE TABLE lake.sample(i INTEGER, note VARCHAR);
+
+query I
+SELECT COUNT(*)::INTEGER
+FROM (
+    SELECT
+        schemata.schema_name AS schema_name,
+        tables.table_name AS table_name,
+        tables.table_type AS table_type,
+        tables.table_comment AS table_comment,
+        table_metadata.estimated_size AS table_estimated_size,
+        columns.ordinal_position AS column_position,
+        columns.column_name AS column_name,
+        columns.data_type AS column_data_type,
+        columns.column_comment AS column_comment
+    FROM system.information_schema.schemata AS schemata
+    LEFT JOIN system.information_schema.tables AS tables
+      ON tables.table_catalog = schemata.catalog_name
+     AND tables.table_schema = schemata.schema_name
+    LEFT JOIN duckdb_tables() AS table_metadata
+      ON table_metadata.table_name = tables.table_name
+     AND table_metadata.schema_name = tables.table_schema
+     AND table_metadata.database_name = tables.table_catalog
+    LEFT JOIN system.information_schema.columns AS columns
+      ON columns.table_catalog = tables.table_catalog
+     AND columns.table_schema = tables.table_schema
+     AND columns.table_name = tables.table_name
+    WHERE schemata.catalog_name = 'lake'
+      AND schemata.schema_name NOT IN ('information_schema', 'pg_catalog')
+    ORDER BY schemata.schema_name, tables.table_name, columns.ordinal_position
+) q;
+----
+2

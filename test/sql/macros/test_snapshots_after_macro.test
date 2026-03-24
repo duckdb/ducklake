@@ -1,0 +1,36 @@
+# name: test/sql/macros/test_snapshots_after_macro.test
+# description: test that snapshots() works after creating a macro
+# group: [macros]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+
+test-env DATA_PATH __TEST_DIR__
+
+statement ok
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS mylake (DATA_PATH '${DATA_PATH}/test_snapshots_after_macro')
+
+statement ok
+use mylake
+
+statement ok
+CREATE TABLE tbl (id INT, val VARCHAR)
+
+statement ok
+INSERT INTO tbl VALUES (1, 'a'), (2, 'b')
+
+query I
+SELECT count(*) FROM mylake.snapshots()
+----
+3
+
+statement ok
+CREATE MACRO testmacro() AS TABLE (SELECT * FROM tbl)
+
+query I
+SELECT count(*) FROM mylake.snapshots()
+----
+4

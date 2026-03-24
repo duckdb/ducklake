@@ -1,0 +1,73 @@
+# name: test/sql/remove_orphans/orphan_after_expire.test
+# description: Test that active data files are NOT reported as orphaned after snapshot expiration
+# group: [remove_orphans]
+
+require ducklake
+
+require parquet
+
+require icu
+
+test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+
+test-env DATA_PATH __TEST_DIR__
+
+statement ok
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS lake (DATA_PATH '${DATA_PATH}/orphan_after_expire//', METADATA_CATALOG 'ducklake_meta')
+
+statement ok
+USE lake
+
+statement ok
+CREATE TABLE lake.t1 (id INTEGER, val VARCHAR)
+
+statement ok
+INSERT INTO lake.t1 VALUES (1, 'Hello'), (2, 'World')
+
+statement ok
+CALL ducklake_flush_inlined_data('lake')
+
+statement ok
+CREATE TABLE lake.t2 (id INTEGER, val VARCHAR)
+
+statement ok
+INSERT INTO lake.t2 VALUES (1, 'Foo'), (2, 'Bar')
+
+statement ok
+CALL ducklake_flush_inlined_data('lake')
+
+statement ok
+UPDATE lake.t1 SET val = 'DuckLake' WHERE id = 2
+
+statement ok
+ALTER TABLE lake.t1 ADD name VARCHAR
+
+statement ok
+INSERT INTO lake.t1 VALUES (3, 'Test', 'Test')
+
+statement ok
+CALL ducklake_flush_inlined_data('lake')
+
+statement ok
+CALL ducklake_merge_adjacent_files('lake')
+
+statement ok
+CALL ducklake_rewrite_data_files('lake')
+
+statement ok
+CALL ducklake_expire_snapshots('lake', older_than => now() - INTERVAL '1 second')
+
+query I
+SELECT COUNT(*) > 0 FROM lake.t1
+----
+true
+
+query I
+SELECT COUNT(*) > 0 FROM lake.t2
+----
+true
+
+query I
+SELECT count(*) FROM ducklake_delete_orphaned_files('lake', dry_run => true, cleanup_all => true)
+----
+0

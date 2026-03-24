@@ -1,0 +1,56 @@
+# name: test/sql/alter/test_insert_select_alter_column_persistence.test
+# description: test that INSERT ... SELECT on ALTER-added column is persisted across DETACH/ATTACH
+# group: [alter]
+
+require ducklake
+
+require parquet
+
+statement ok
+ATTACH 'ducklake:__TEST_DIR__/alter_insert_select.db' AS dl (DATA_PATH '__TEST_DIR__/alter_insert_select')
+
+statement ok
+USE dl
+
+statement ok
+CREATE TABLE t (id INT, name VARCHAR)
+
+statement ok
+INSERT INTO t VALUES (1, 'a')
+
+statement ok
+ALTER TABLE t ADD COLUMN ts TIMESTAMPTZ
+
+statement ok
+CREATE TABLE src (id INT, name VARCHAR)
+
+statement ok
+INSERT INTO src VALUES (2, 'b')
+
+statement ok
+INSERT INTO t (id, name, ts) SELECT id, name, '2026-01-01'::TIMESTAMPTZ AS ts FROM src
+
+query IIT
+SELECT * FROM t ORDER BY id
+----
+1	a	NULL
+2	b	2026-01-01 00:00:00+00
+
+# Detach and reattach
+statement ok
+USE memory
+
+statement ok
+DETACH dl
+
+statement ok
+ATTACH 'ducklake:__TEST_DIR__/alter_insert_select.db' AS dl (DATA_PATH '__TEST_DIR__/alter_insert_select')
+
+statement ok
+USE dl
+
+query IIT
+SELECT * FROM t ORDER BY id
+----
+1	a	NULL
+2	b	2026-01-01 00:00:00+00

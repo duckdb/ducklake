@@ -93,11 +93,17 @@ SourceResultType DuckLakeCompaction::GetDataInternal(ExecutionContext &context, 
 	}
 	source_state.returned_result = true;
 
+	if (!this->sink_state) {
+		throw InternalException("DuckLakeCompaction - missing sink state while producing result");
+	}
+	auto &gstate = this->sink_state->Cast<DuckLakeInsertGlobalState>();
+	auto files_created = gstate.written_files.size();
+
 	chunk.SetCardinality(1);
 	chunk.SetValue(0, 0, Value(table.schema.name));
 	chunk.SetValue(1, 0, Value(table.name));
 	chunk.SetValue(2, 0, Value::BIGINT(static_cast<int64_t>(source_files.size())));
-	chunk.SetValue(3, 0, Value::BIGINT(1)); // Each compaction creates 1 output file
+	chunk.SetValue(3, 0, Value::BIGINT(static_cast<int64_t>(files_created)));
 	return SourceResultType::FINISHED;
 }
 
@@ -121,7 +127,10 @@ SinkFinalizeType DuckLakeCompaction::Finalize(Pipeline &pipeline, Event &event, 
                                               OperatorSinkFinalizeInput &input) const {
 	auto &global_state = input.global_state.Cast<DuckLakeInsertGlobalState>();
 
-	if (global_state.written_files.size() != 1) {
+	if (global_state.written_files.size() > 1) {
+		throw InternalException("DuckLakeCompaction - expected at most a single output file");
+	}
+	if (global_state.written_files.empty() && type != CompactionType::REWRITE_DELETES) {
 		throw InternalException("DuckLakeCompaction - expected a single output file");
 	}
 	// set the partition values correctly
@@ -137,7 +146,9 @@ SinkFinalizeType DuckLakeCompaction::Finalize(Pipeline &pipeline, Event &event, 
 	DuckLakeCompactionEntry compaction_entry;
 	compaction_entry.row_id_start = row_id_start;
 	compaction_entry.source_files = source_files;
-	compaction_entry.written_file = global_state.written_files[0];
+	if (!global_state.written_files.empty()) {
+		compaction_entry.written_file = global_state.written_files[0];
+	}
 	compaction_entry.type = type;
 
 	auto &transaction = DuckLakeTransaction::Get(context, global_state.table.catalog);
@@ -222,8 +233,9 @@ void DuckLakeCompactor::GenerateCompactions(DuckLakeTableEntry &table,
 	compaction_map_t<DuckLakeCompactionCandidates> candidates;
 	for (idx_t file_idx = 0; file_idx < files.size(); file_idx++) {
 		auto &candidate = files[file_idx];
-		if (candidate.file.data.file_size_bytes >= target_file_size) {
+		if (candidate.file.data.file_size_bytes >= target_file_size && type != CompactionType::REWRITE_DELETES) {
 			// this file by itself exceeds the threshold - skip merging
+			// (does not apply to REWRITE_DELETES - delete files must be rewritten regardless of data file size)
 			continue;
 		}
 		if ((!candidate.delete_files.empty() && type == CompactionType::MERGE_ADJACENT_TABLES) ||
@@ -303,6 +315,9 @@ void DuckLakeCompactor::GenerateCompactions(DuckLakeTableEntry &table,
 			if (compacted_files >= options.max_files) {
 				break;
 			}
+		}
+		if (compacted_files >= options.max_files) {
+			break;
 		}
 	}
 }
@@ -559,7 +574,7 @@ DuckLakeCompactor::GenerateCompactionCommand(vector<DuckLakeCompactionFileEntry>
 	copy->filename_pattern = std::move(copy_options.filename_pattern);
 	copy->file_extension = std::move(copy_options.file_extension);
 	copy->overwrite_mode = copy_options.overwrite_mode;
-	copy->per_thread_output = copy_options.per_thread_output;
+	copy->per_thread_output = false;
 	copy->file_size_bytes = copy_options.file_size_bytes;
 	copy->rotate = copy_options.rotate;
 	copy->return_type = copy_options.return_type;

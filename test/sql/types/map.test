@@ -65,3 +65,8 @@ query I
 SELECT stats(s.i) FROM ducklake.test LIMIT 1
 ----
 <REGEX>:.*Min.*1.*Max.*6.*Has Null.*true.*
+
+query I
+SELECT stats(s) FROM ducklake.test ORDER BY all LIMIT 1
+----
+<REGEX>:.*Min.*{i=1, j=2}.*Max.*{i=6}.*Has Null.*true.*

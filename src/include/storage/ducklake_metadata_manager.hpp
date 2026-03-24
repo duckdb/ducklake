@@ -106,6 +106,11 @@ public:
 	virtual bool TypeIsNativelySupported(const LogicalType &type);
 	//! Check if a type supports data inlining on this metadata backend
 	virtual bool SupportsInlining(const LogicalType &type);
+	//! Check if this metadata manager supports the DuckDB Appender API for fast inserts
+	//! Returns true for DuckDB metadata, false for external databases (Postgres, SQLite)
+	virtual bool SupportsAppender() const {
+		return true;
+	}
 	//! Check if a set of LogicalTypes supports data inlining, recursing into nested types
 	bool SupportsInliningTypes(const vector<LogicalType> &types);
 	//! Check if columns (stored as DuckLakeColumnInfo) support inlining, recursing into children
@@ -140,6 +145,7 @@ public:
 	                                                                  DuckLakeSnapshot snapshot,
 	                                                                  DuckLakeFileSizeOptions options);
 	virtual idx_t GetBeginSnapshotForTable(TableIndex table_id);
+	virtual idx_t GetBeginSnapshotForSchemaVersion(TableIndex table_id, idx_t schema_version);
 	virtual idx_t GetNetDataFileRowCount(TableIndex table_id, DuckLakeSnapshot snapshot);
 	virtual idx_t GetNetInlinedRowCount(const string &inlined_table_name, DuckLakeSnapshot snapshot);
 	virtual vector<DuckLakeFileForCleanup> GetOldFilesForCleanup(const string &filter);
@@ -164,7 +170,7 @@ public:
 	virtual string WriteNewColumns(const vector<DuckLakeNewColumn> &new_columns);
 	virtual string WriteNewTags(const vector<DuckLakeTagInfo> &new_tags);
 	virtual string WriteNewColumnTags(const vector<DuckLakeColumnTagInfo> &new_tags);
-	virtual string WriteNewDataFiles(const vector<DuckLakeFileInfo> &new_files,
+	virtual string WriteNewDataFiles(DuckLakeSnapshot &commit_snapshot, const vector<DuckLakeFileInfo> &new_files,
 	                                 const vector<DuckLakeTableInfo> &new_tables,
 	                                 vector<DuckLakeSchemaInfo> &new_schemas_result);
 	virtual string WriteNewInlinedData(DuckLakeSnapshot &commit_snapshot,
@@ -238,6 +244,7 @@ public:
 
 	string LoadPath(string path);
 	string StorePath(string path);
+	string GetPathSeparator(const string &path);
 
 protected:
 	virtual string GetLatestSnapshotQuery() const;
@@ -256,6 +263,11 @@ protected:
 protected:
 	string GetInlinedTableQuery(const DuckLakeTableInfo &table, const string &table_name);
 	string GetColumnType(const DuckLakeColumnInfo &col);
+
+	//! Optimized data file writing using DuckDB Appender API (only for DuckDB metadata manager)
+	string WriteNewDataFilesWithAppender(DuckLakeSnapshot &commit_snapshot, const vector<DuckLakeFileInfo> &new_files,
+	                                     const vector<DuckLakeTableInfo> &new_tables,
+	                                     vector<DuckLakeSchemaInfo> &new_schemas_result);
 
 	//! Get path relative to catalog path
 	DuckLakePath GetRelativePath(const string &path);
@@ -301,9 +313,10 @@ private:
 public:
 	//! Read inlined file deletions for regular table scans (no snapshot info per row)
 	map<idx_t, set<idx_t>> ReadInlinedFileDeletions(TableIndex table_id, DuckLakeSnapshot snapshot);
+	//! Clear inlined table caches (needed after rollback so retry re-creates the tables)
+	void ClearInlinedTableCaches();
 
 private:
-	unordered_map<idx_t, string> inlined_table_name_cache;
 	static unordered_map<string /* name */, create_t> metadata_managers;
 	static mutex metadata_managers_lock;
 
