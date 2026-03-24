@@ -25,6 +25,8 @@ struct DuckLakeConfigOption;
 struct DeleteFileMap;
 class LogicalGet;
 
+enum class InlinedDeletionCacheResult { EXISTS, DOES_NOT_EXIST, UNKNOWN };
+
 class DuckLakeCatalog : public Catalog {
 public:
 	// default target file size: 512MB
@@ -172,8 +174,7 @@ public:
 	DuckLakeCatalogSet &GetSchemaForSnapshot(DuckLakeTransaction &transaction, DuckLakeSnapshot snapshot);
 
 	//! Check if an inlined deletion table is known to exist or not exist for the given table and snapshot
-	//! Returns: 1 = known to exist, -1 = known to not exist, 0 = unknown (need to query)
-	int CheckInlinedDeletionTableCache(TableIndex table_id, DuckLakeSnapshot snapshot);
+	InlinedDeletionCacheResult CheckInlinedDeletionTableCache(TableIndex table_id, DuckLakeSnapshot snapshot);
 	//! Cache the result of an inlined deletion table existence check
 	void CacheInlinedDeletionTableResult(TableIndex table_id, DuckLakeSnapshot snapshot, bool exists);
 

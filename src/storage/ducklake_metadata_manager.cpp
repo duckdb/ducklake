@@ -2526,10 +2526,10 @@ string DuckLakeMetadataManager::GetInlinedDeletionTableName(TableIndex table_id,
 	// Check catalog-level cache (persists across transactions)
 	auto &catalog = transaction.GetCatalog();
 	auto cache_result = catalog.CheckInlinedDeletionTableCache(table_id, snapshot);
-	if (cache_result == 1) {
+	if (cache_result == InlinedDeletionCacheResult::EXISTS) {
 		return table_name; // known to exist (committed)
 	}
-	if (cache_result == -1 && !create_if_not_exists) {
+	if (cache_result == InlinedDeletionCacheResult::DOES_NOT_EXIST && !create_if_not_exists) {
 		return string(); // known to not exist
 	}
 
