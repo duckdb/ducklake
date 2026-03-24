@@ -84,13 +84,9 @@ static void LoadInternal(ExtensionLoader &loader) {
 	DuckLakeSettingsFunction settings;
 	loader.RegisterFunction(settings);
 
-	// Register ducklake_scan so it can be found during deserialization (e.g. for table macro Copy)
-	// We register a stub here because parquet may not be loaded yet at extension init time.
-	// The actual function is fully reconstructed in DuckLakeScanDeserialize.
-	TableFunction ducklake_scan_stub("ducklake_scan", {LogicalType::VARCHAR}, nullptr, nullptr);
-	ducklake_scan_stub.serialize = DuckLakeScanSerialize;
-	ducklake_scan_stub.deserialize = DuckLakeScanDeserialize;
-	loader.RegisterFunction(ducklake_scan_stub);
+	// Register ducklake_scan so it can be found during deserialization
+	auto ducklake_scan = DuckLakeFunctions::GetDuckLakeScanFunction(loader.GetDatabaseInstance());
+	loader.RegisterFunction(ducklake_scan);
 
 	// secrets
 	auto secret_type = DuckLakeSecret::GetSecretType();

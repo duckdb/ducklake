@@ -40,6 +40,9 @@ enum class DuckLakeScanType { SCAN_TABLE, SCAN_INSERTIONS, SCAN_DELETIONS, SCAN_
 struct DuckLakeFunctionInfo : public TableFunctionInfo {
 	DuckLakeFunctionInfo(DuckLakeTableEntry &table, DuckLakeTransaction &transaction, DuckLakeSnapshot snapshot);
 
+	static shared_ptr<DuckLakeFunctionInfo> Create(DuckLakeTableEntry &table, DuckLakeTransaction &transaction,
+	                                               DuckLakeSnapshot snapshot);
+
 	DuckLakeTableEntry &table;
 	weak_ptr<DuckLakeTransaction> transaction;
 	string table_name;
