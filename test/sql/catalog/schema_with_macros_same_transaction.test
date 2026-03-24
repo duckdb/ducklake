@@ -1,0 +1,74 @@
+# name: test/sql/catalog/schema_with_macros_same_transaction.test
+# description: Test creating a schema and macros in the same transaction (verifies schema ID remapping)
+# group: [catalog]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+
+statement ok
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '__TEST_DIR__/schema_macros_txn/')
+
+statement ok
+USE ducklake;
+
+# Create schema + scalar macro in the same transaction
+statement ok
+BEGIN
+
+statement ok
+CREATE SCHEMA test_schema
+
+statement ok
+CREATE MACRO test_schema.my_add(a, b) AS a + b
+
+statement ok
+COMMIT
+
+query I
+SELECT test_schema.my_add(1, 2)
+----
+3
+
+# Create schema + table macro in the same transaction
+statement ok
+BEGIN
+
+statement ok
+CREATE SCHEMA test_schema2
+
+statement ok
+CREATE MACRO test_schema2.my_range(n) AS TABLE SELECT * FROM range(n)
+
+statement ok
+COMMIT
+
+query I
+SELECT count(*) FROM test_schema2.my_range(5)
+----
+5
+
+# Create schema + scalar macro with default parameter in the same transaction
+statement ok
+BEGIN
+
+statement ok
+CREATE SCHEMA test_schema3
+
+statement ok
+CREATE MACRO test_schema3.greet(name, greeting := 'hello') AS greeting || ' ' || name
+
+statement ok
+COMMIT
+
+query I
+SELECT test_schema3.greet('world')
+----
+hello world
+
+query I
+SELECT test_schema3.greet('world', greeting := 'hi')
+----
+hi world
