@@ -70,9 +70,9 @@ jobs:
       run: |
         make release
 
-    #- name: Test SQLite
-    #  run: |
-    #    build/release/test/unittest --test-config test/configs/sqlite.json --test-dir ./ "test/sql/*"
+    - name: Test SQLite
+      run: |
+        build/release/test/unittest --test-config test/configs/sqlite.json --test-dir ./ "test/sql/*"
 
     - name: Test Postgres
       env:
