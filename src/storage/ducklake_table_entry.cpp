@@ -260,14 +260,8 @@ TableFunction DuckLakeTableEntry::GetScanFunction(ClientContext &context, unique
 	auto function = DuckLakeFunctions::GetDuckLakeScanFunction(*context.db);
 	auto &transaction = DuckLakeTransaction::Get(context, ParentCatalog());
 	auto function_info =
-	    make_shared_ptr<DuckLakeFunctionInfo>(*this, transaction, transaction.GetSnapshot(lookup_info.GetAtClause()));
-	function_info->table_name = name;
-	for (auto &col : columns.Logical()) {
-		function_info->column_names.push_back(col.Name());
-		function_info->column_types.push_back(col.Type());
-	}
-	auto table_id = GetTableId();
-	function_info->table_id = table_id;
+	    DuckLakeFunctionInfo::Create(*this, transaction, transaction.GetSnapshot(lookup_info.GetAtClause()));
+	auto table_id = function_info->table_id;
 	function.function_info = std::move(function_info);
 	auto &dropped_tables = transaction.GetDroppedTables();
 	auto &renamed_tables = transaction.GetRenamedTables();
