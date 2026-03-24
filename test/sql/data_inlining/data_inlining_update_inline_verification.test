@@ -1,0 +1,106 @@
+# name: test/sql/data_inlining/data_inlining_update_inline_verification.test
+# description: verify that a small update on file-backed data gets inlined (insert + delete tables, no new file)
+# group: [data_inlining]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+
+test-env DATA_PATH __TEST_DIR__
+
+statement ok
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/ducklake_update_inline_verify_files', METADATA_CATALOG 'ducklake_meta', DATA_INLINING_ROW_LIMIT 10)
+
+statement ok
+CREATE TABLE ducklake.test AS SELECT i, 'val_' || i::VARCHAR AS j FROM range(20) t(i)
+
+query I
+SELECT COUNT(*) = 1 cnt FROM GLOB('${DATA_PATH}/ducklake_update_inline_verify_files/**')
+----
+true
+
+query I
+UPDATE ducklake.test SET j='updated' WHERE i=5
+----
+1
+
+query I
+SELECT COUNT(*) = 1 FROM GLOB('${DATA_PATH}/ducklake_update_inline_verify_files/**')
+----
+true
+
+# verify the data is correct
+query II
+SELECT * FROM ducklake.test WHERE i=5
+----
+5	updated
+
+# the inlined insert table should have the new row from the update
+query II
+SELECT i, j FROM ducklake_meta.ducklake_inlined_data_1_1
+----
+5	updated
+
+# the inlined delete table should track the old row that was removed from the file
+query I
+SELECT COUNT(*) FROM ducklake_meta.ducklake_inlined_delete_1
+----
+1
+
+# verify rowids are preserved
+query III
+SELECT rowid, * FROM ducklake.test WHERE i=5
+----
+5	5	updated
+
+# do another update
+query I
+UPDATE ducklake.test SET j='changed' WHERE i=10
+----
+1
+
+# still no new files
+query I
+SELECT COUNT(*) = 1FROM GLOB('${DATA_PATH}/ducklake_update_inline_verify_files/**')
+----
+true
+
+# inlined insert table now has 2 rows
+query II
+SELECT i, j FROM ducklake_meta.ducklake_inlined_data_1_1 ORDER BY i
+----
+5	updated
+10	changed
+
+# inlined delete table now has 2 entries
+query I
+SELECT COUNT(*) FROM ducklake_meta.ducklake_inlined_delete_1
+----
+2
+
+# verify all data is correct
+query II
+SELECT * FROM ducklake.test ORDER BY i
+----
+0	val_0
+1	val_1
+2	val_2
+3	val_3
+4	val_4
+5	updated
+6	val_6
+7	val_7
+8	val_8
+9	val_9
+10	changed
+11	val_11
+12	val_12
+13	val_13
+14	val_14
+15	val_15
+16	val_16
+17	val_17
+18	val_18
+19	val_19

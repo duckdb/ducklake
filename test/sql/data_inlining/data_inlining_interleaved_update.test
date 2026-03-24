@@ -55,13 +55,14 @@ SELECT * FROM ducklake.test ORDER BY id
 4	d
 
 # verify rowids - the updated row (id=1) should preserve its original rowid (0)
+# INSERT rows get sequential row_ids from next_row_id (2), UPDATE rows keep preserved row_ids
 query III
 SELECT rowid, * FROM ducklake.test ORDER BY id
 ----
 0	1	aa
 1	2	b
-3	3	c
-4	4	d
+2	3	c
+3	4	d
 
 # verify table_changes shows the update correctly (not as separate delete+insert)
 query IIIII
@@ -69,5 +70,31 @@ FROM ducklake.table_changes('test', 3, 3) ORDER BY ALL
 ----
 3	0	update_postimage	1	aa
 3	0	update_preimage	1	a
-3	3	insert	3	c
-3	4	insert	4	d
+3	2	insert	3	c
+3	3	insert	4	d
+
+# UPDATE -> INSERT in one transaction (update-only existing data, then insert)
+# this tests the case where existing_data has only preserved row_ids (from the update)
+# and the new insert data needs TRANSACTION_LOCAL_ROW_ID_START-based ids
+statement ok
+BEGIN
+
+query I
+UPDATE ducklake.test SET val='bb' WHERE id=2
+----
+1
+
+statement ok
+INSERT INTO ducklake.test VALUES (5, 'e')
+
+statement ok
+COMMIT
+
+query III
+SELECT rowid, * FROM ducklake.test ORDER BY id
+----
+0	1	aa
+1	2	bb
+2	3	c
+3	4	d
+4	5	e

@@ -248,7 +248,7 @@ vector<DuckLakeFileListExtendedEntry> DuckLakeMultiFileList::GetFilesExtended() 
 			transaction.GetLocalDeleteForFile(read_info.table_id, file_entry.file.path, file_entry.delete_file);
 		}
 	}
-	idx_t transaction_row_start = TRANSACTION_LOCAL_ID_START;
+	idx_t transaction_row_start = DuckLakeConstants::TRANSACTION_LOCAL_ROW_ID_START;
 	for (auto &file : transaction_local_files) {
 		DuckLakeFileListExtendedEntry file_entry;
 		file_entry.file_id = DataFileIndex();
@@ -278,7 +278,7 @@ vector<DuckLakeFileListExtendedEntry> DuckLakeMultiFileList::GetFilesExtended() 
 		file_entry.file_id = DataFileIndex();
 		file_entry.delete_file_id = DataFileIndex();
 		file_entry.row_count = transaction_local_data->data->Count();
-		file_entry.row_id_start = transaction_row_start;
+		file_entry.row_id_start = GetTransactionLocalRowIdStart(transaction_row_start);
 		file_entry.data_type = DuckLakeDataType::TRANSACTION_LOCAL_INLINED_DATA;
 		result.push_back(std::move(file_entry));
 	}
@@ -348,7 +348,7 @@ void DuckLakeMultiFileList::GetFilesForTable() const {
 			}
 		}
 	}
-	idx_t transaction_row_start = TRANSACTION_LOCAL_ID_START;
+	idx_t transaction_row_start = DuckLakeConstants::TRANSACTION_LOCAL_ROW_ID_START;
 	for (auto &file : transaction_local_files) {
 		DuckLakeFileListEntry file_entry;
 		file_entry.file = GetFileData(file);
@@ -370,7 +370,7 @@ void DuckLakeMultiFileList::GetFilesForTable() const {
 		// we have transaction local inlined data - create the dummy file entry
 		DuckLakeFileListEntry file_entry;
 		file_entry.file.path = DUCKLAKE_TRANSACTION_LOCAL_INLINED_FILENAME;
-		file_entry.row_id_start = transaction_row_start;
+		file_entry.row_id_start = GetTransactionLocalRowIdStart(transaction_row_start);
 		file_entry.data_type = DuckLakeDataType::TRANSACTION_LOCAL_INLINED_DATA;
 		files.push_back(std::move(file_entry));
 	}
@@ -450,6 +450,14 @@ const vector<DuckLakeFileListEntry> &DuckLakeMultiFileList::GetFiles() const {
 		read_file_list = true;
 	}
 	return files;
+}
+
+idx_t DuckLakeMultiFileList::GetTransactionLocalRowIdStart(idx_t transaction_row_start) const {
+	if (transaction_local_data && transaction_local_data->HasPreservedRowIds()) {
+		// preserved row_ids are absolute, so row_id_start must be 0
+		return 0;
+	}
+	return transaction_row_start;
 }
 
 } // namespace duckdb

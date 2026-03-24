@@ -300,10 +300,10 @@ OperatorFinalResultType DuckLakeInlineData::OperatorFinalize(Pipeline &pipeline,
 		return OperatorFinalResultType::FINISHED;
 	}
 	{
-		auto cinsert = const_cast<DuckLakeInsert *>(insert.get());
-		lock_guard<mutex> lock(cinsert->lock);
-		if (!cinsert->sink_state) {
-			cinsert->sink_state = insert->GetGlobalSinkState(context);
+		auto mutable_insert = insert.get_mutable();
+		lock_guard<mutex> lock(mutable_insert->lock);
+		if (!mutable_insert->sink_state) {
+			mutable_insert->sink_state = insert->GetGlobalSinkState(context);
 		}
 	}
 	auto &insert_gstate = insert->sink_state->Cast<DuckLakeInsertGlobalState>();
@@ -313,15 +313,18 @@ OperatorFinalResultType DuckLakeInlineData::OperatorFinalize(Pipeline &pipeline,
 	auto &table = insert_gstate.table;
 	auto result = make_uniq<DuckLakeInlinedData>();
 	auto &inlined_data = *gstate.global_inlined_data;
-	result->data = std::move(gstate.global_inlined_data);
 	// set the insert count to the total number of inlined rows
 	insert_gstate.total_insert_count = inlined_data.Count();
+
+	// use physical column count for stats
+	// If we are inlining from updates, we might have extra columns (e.g., row_id, partitions)
+	auto physical_col_count = table.GetColumns().PhysicalColumnCount();
 
 	// compute the column stats for the data
 	vector<DuckLakeBaseColumnStats> new_stats;
 	auto &field_data = table.GetFieldData();
 	for (auto &chunk : inlined_data.Chunks()) {
-		for (idx_t c = 0; c < chunk.ColumnCount(); c++) {
+		for (idx_t c = 0; c < physical_col_count; c++) {
 			UpdateStats(new_stats, c, chunk.data[c], chunk.size(), field_data.GetByRootIndex(PhysicalIndex(c)));
 		}
 	}
@@ -337,6 +340,36 @@ OperatorFinalResultType DuckLakeInlineData::OperatorFinalize(Pipeline &pipeline,
 				throw ConstraintException("NOT NULL constraint failed: %s.%s", table.name, column_name);
 			}
 		}
+	}
+
+	if (inlined_data.Types().size() > physical_col_count) {
+		// If we have extra columns, we need to extract the physical columns
+		vector<LogicalType> phys_types(inlined_data.Types().begin(), inlined_data.Types().begin() + physical_col_count);
+		auto phys_data = make_uniq<ColumnDataCollection>(context, phys_types);
+		ColumnDataAppendState append_state;
+		phys_data->InitializeAppend(append_state);
+		for (auto &chunk : inlined_data.Chunks()) {
+			// extract row_ids from the row_id column
+			auto &row_id_vec = chunk.data[physical_col_count];
+			UnifiedVectorFormat row_id_format;
+			row_id_vec.ToUnifiedFormat(chunk.size(), row_id_format);
+			auto row_id_data = UnifiedVectorFormat::GetData<int64_t>(row_id_format);
+			for (idx_t r = 0; r < chunk.size(); r++) {
+				auto idx = row_id_format.sel->get_index(r);
+				result->row_ids.push_back(row_id_data[idx]);
+			}
+			DataChunk phys_chunk;
+			phys_chunk.InitializeEmpty(phys_types);
+			for (idx_t i = 0; i < physical_col_count; i++) {
+				phys_chunk.data[i].Reference(chunk.data[i]);
+			}
+			phys_chunk.SetCardinality(chunk.size());
+			phys_data->Append(append_state, phys_chunk);
+		}
+		result->data = std::move(phys_data);
+	} else {
+		// Otherwise we just copy them
+		result->data = std::move(gstate.global_inlined_data);
 	}
 
 	// push the inlined data into the transaction

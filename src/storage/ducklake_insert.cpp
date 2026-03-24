@@ -758,15 +758,10 @@ PhysicalOperator &DuckLakeCatalog::PlanInsert(ClientContext &context, PhysicalPl
 		plan = planner.ResolveDefaultsProjection(op, *plan);
 	}
 	auto &ducklake_table = op.table.Cast<DuckLakeTableEntry>();
-	auto &ducklake_schema = ducklake_table.ParentSchema().Cast<DuckLakeSchemaEntry>();
 	optional_ptr<DuckLakeInlineData> inline_data;
 
-	idx_t data_inlining_row_limit = DataInliningRowLimit(ducklake_schema.GetSchemaId(), ducklake_table.GetTableId());
-	// FIXME: we are skipping columns that have conflicting names, we should resolve this
-	auto &duck_transaction = DuckLakeTransaction::Get(context, *this);
-	auto &metadata_manager = duck_transaction.GetMetadataManager();
-	if (data_inlining_row_limit > 0 && !DuckLakeUtil::HasInlinedSystemColumnConflict(ducklake_table.GetColumns()) &&
-	    metadata_manager.SupportsInliningTypes(plan->types)) {
+	idx_t data_inlining_row_limit = GetInliningLimit(context, ducklake_table, plan->types);
+	if (data_inlining_row_limit > 0) {
 		plan = planner.Make<DuckLakeInlineData>(*plan, data_inlining_row_limit);
 		inline_data = plan->Cast<DuckLakeInlineData>();
 	}
