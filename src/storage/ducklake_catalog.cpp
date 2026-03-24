@@ -26,6 +26,7 @@
 #include "duckdb/function/scalar_macro_function.hpp"
 #include "duckdb/function/table_macro_function.hpp"
 #include "storage/ducklake_macro_entry.hpp"
+#include "common/ducklake_util.hpp"
 
 namespace duckdb {
 
@@ -183,6 +184,12 @@ optional_ptr<CatalogEntry> DuckLakeCatalog::GetEntryById(DuckLakeTransaction &tr
 idx_t DuckLakeCatalog::GetBeginSnapshotForTable(TableIndex table_id, DuckLakeTransaction &transaction) {
 	auto &metadata_manager = transaction.GetMetadataManager();
 	return metadata_manager.GetBeginSnapshotForTable(table_id);
+}
+
+idx_t DuckLakeCatalog::GetBeginSnapshotForSchemaVersion(TableIndex table_id, idx_t schema_version,
+                                                        DuckLakeTransaction &transaction) {
+	auto &metadata_manager = transaction.GetMetadataManager();
+	return metadata_manager.GetBeginSnapshotForSchemaVersion(table_id, schema_version);
 }
 
 DuckLakeCatalogSet &DuckLakeCatalog::GetSchemaForSnapshot(DuckLakeTransaction &transaction, DuckLakeSnapshot snapshot) {
@@ -819,11 +826,54 @@ idx_t DuckLakeCatalog::DataInliningRowLimit(SchemaIndex schema_index, TableIndex
 	return GetConfigOption<idx_t>("data_inlining_row_limit", schema_index, table_index, 10);
 }
 
+idx_t DuckLakeCatalog::GetInliningLimit(ClientContext &context, DuckLakeTableEntry &table,
+                                        const vector<LogicalType> &types) {
+	auto &schema = table.ParentSchema().Cast<DuckLakeSchemaEntry>();
+	idx_t limit = DataInliningRowLimit(schema.GetSchemaId(), table.GetTableId());
+	if (limit == 0) {
+		return 0;
+	}
+	if (DuckLakeUtil::HasInlinedSystemColumnConflict(table.GetColumns())) {
+		// We also return 0 if we have inline column conflicts
+		return 0;
+	}
+	auto &transaction = DuckLakeTransaction::Get(context, *this);
+	auto &metadata_manager = transaction.GetMetadataManager();
+	if (!metadata_manager.SupportsInliningTypes(types)) {
+		// Or if inlining is not supported
+		return 0;
+	}
+	return limit;
+}
+
 unique_ptr<LogicalOperator> DuckLakeCatalog::BindAlterAddIndex(Binder &binder, TableCatalogEntry &table_entry,
                                                                unique_ptr<LogicalOperator> plan,
                                                                unique_ptr<CreateIndexInfo> create_info,
                                                                unique_ptr<AlterTableInfo> alter_info) {
 	throw NotImplementedException("Adding indexes or constraints is not supported in DuckLake");
+}
+
+InlinedDeletionCacheResult DuckLakeCatalog::CheckInlinedDeletionTableCache(TableIndex table_id,
+                                                                           DuckLakeSnapshot snapshot) {
+	lock_guard<mutex> guard(inlined_deletion_cache_lock);
+	if (inlined_deletion_exists.find(table_id.index) != inlined_deletion_exists.end()) {
+		return InlinedDeletionCacheResult::EXISTS;
+	}
+	auto it = inlined_deletion_not_exists.find(table_id.index);
+	if (it != inlined_deletion_not_exists.end() && snapshot.snapshot_id <= it->second) {
+		return InlinedDeletionCacheResult::DOES_NOT_EXIST;
+	}
+	return InlinedDeletionCacheResult::UNKNOWN;
+}
+
+void DuckLakeCatalog::CacheInlinedDeletionTableResult(TableIndex table_id, DuckLakeSnapshot snapshot, bool exists) {
+	lock_guard<mutex> guard(inlined_deletion_cache_lock);
+	if (exists) {
+		inlined_deletion_exists.insert(table_id.index);
+		inlined_deletion_not_exists.erase(table_id.index);
+	} else {
+		inlined_deletion_not_exists[table_id.index] = snapshot.snapshot_id;
+	}
 }
 
 } // namespace duckdb

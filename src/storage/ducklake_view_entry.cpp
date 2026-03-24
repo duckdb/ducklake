@@ -104,4 +104,13 @@ string DuckLakeViewEntry::GetQuerySQL() {
 	return query_sql;
 }
 
+void DuckLakeViewEntry::BindView(ClientContext &context, BindViewAction action) {
+	try {
+		ViewCatalogEntry::BindView(context, action);
+	} catch (...) {
+		// If binding fails, we reset the view
+		UpdateBinding({}, {});
+	}
+}
+
 } // namespace duckdb

@@ -232,6 +232,7 @@ CREATE TABLE {IF_NOT_EXISTS} {METADATA_CATALOG}.ducklake_macro(schema_id BIGINT,
 CREATE TABLE {IF_NOT_EXISTS} {METADATA_CATALOG}.ducklake_macro_impl(macro_id BIGINT, impl_id BIGINT, dialect VARCHAR, sql VARCHAR, type VARCHAR);
 CREATE TABLE {IF_NOT_EXISTS} {METADATA_CATALOG}.ducklake_macro_parameters(macro_id BIGINT, impl_id BIGINT,column_id BIGINT, parameter_name VARCHAR, parameter_type VARCHAR, default_value VARCHAR, default_value_type VARCHAR);
 ALTER TABLE {METADATA_CATALOG}.ducklake_column ADD COLUMN {IF_NOT_EXISTS} default_value_type VARCHAR DEFAULT 'literal';
+UPDATE {METADATA_CATALOG}.ducklake_column SET default_value_type = 'literal' WHERE default_value_type IS NULL;
 ALTER TABLE {METADATA_CATALOG}.ducklake_column ADD COLUMN {IF_NOT_EXISTS} default_value_dialect VARCHAR DEFAULT NULL;
 CREATE TABLE {IF_NOT_EXISTS} {METADATA_CATALOG}.ducklake_sort_info(sort_id BIGINT, table_id BIGINT, begin_snapshot BIGINT, end_snapshot BIGINT);
 CREATE TABLE {IF_NOT_EXISTS} {METADATA_CATALOG}.ducklake_sort_expression(sort_id BIGINT, table_id BIGINT, sort_key_index BIGINT, expression VARCHAR, dialect VARCHAR, sort_direction VARCHAR, null_order VARCHAR);
@@ -402,6 +403,21 @@ WHERE table_id = {TABLE_ID})";
 		return row.GetValue<idx_t>(0);
 	}
 	throw InternalException("Table %llu does not exist", table_id.index);
+}
+
+idx_t DuckLakeMetadataManager::GetBeginSnapshotForSchemaVersion(TableIndex table_id, idx_t schema_version) {
+	string query = R"(
+SELECT begin_snapshot
+FROM {METADATA_CATALOG}.ducklake_schema_versions
+WHERE table_id = {TABLE_ID} AND schema_version = {SCHEMA_VERSION})";
+	query = StringUtil::Replace(query, "{TABLE_ID}", to_string(table_id.index));
+	query = StringUtil::Replace(query, "{SCHEMA_VERSION}", to_string(schema_version));
+	auto result = transaction.Query(query);
+	for (auto &row : *result) {
+		return row.GetValue<idx_t>(0);
+	}
+	// We need to fallback to GetBeginSnapshotForTable if this table doesnt have an alter yet
+	return GetBeginSnapshotForTable(table_id);
 }
 
 idx_t DuckLakeMetadataManager::GetNetDataFileRowCount(TableIndex table_id, DuckLakeSnapshot snapshot) {
@@ -2172,10 +2188,10 @@ string DuckLakeMetadataManager::WriteNewMacros(const vector<DuckLakeMacroInfo> &
 	string batch_query;
 	for (auto &macro : new_macros) {
 		// Insert in the macro table
-		batch_query = StringUtil::Format(R"(
+		batch_query += StringUtil::Format(R"(
 INSERT INTO {METADATA_CATALOG}.ducklake_macro values(%llu,%llu,'%s',{SNAPSHOT_ID}, NULL);
 )",
-		                                 macro.schema_id.index, macro.macro_id.index, macro.macro_name);
+		                                  macro.schema_id.index, macro.macro_id.index, macro.macro_name);
 		// Insert in the implementation table
 		for (idx_t impl_id = 0; impl_id < macro.implementations.size(); ++impl_id) {
 			auto &impl = macro.implementations[impl_id];
@@ -2333,21 +2349,36 @@ WHERE table_id = %d AND schema_version=(
 		// append the data
 		// FIXME: we can do a much faster append than this
 		string values;
+		bool has_preserved_row_ids = entry.data->HasPreservedRowIds();
 		idx_t row_id = entry.row_id_start;
+		idx_t global_row_idx = 0;
 		for (auto &chunk : entry.data->data->Chunks()) {
 			for (idx_t r = 0; r < chunk.size(); r++) {
 				if (!values.empty()) {
 					values += ", ";
 				}
 				values += "(";
-				values += to_string(row_id);
+				if (has_preserved_row_ids) {
+					auto rid = entry.data->row_ids[global_row_idx];
+					if (DuckLakeConstants::IsTransactionLocalRowId(rid)) {
+						// This is a INSERT row w a placeholder id, we assign sequential row_id
+						values += to_string(row_id);
+						row_id++;
+					} else {
+						// This is a UPDATE row, we use preserved row_id
+						values += to_string(rid);
+					}
+				} else {
+					values += to_string(row_id);
+					row_id++;
+				}
 				values += ", {SNAPSHOT_ID}, NULL";
 				for (idx_t c = 0; c < chunk.ColumnCount(); c++) {
 					values += ", ";
 					values += DuckLakeUtil::ValueToSQL(*this, context, chunk.GetValue(c, r));
 				}
 				values += ")";
-				row_id++;
+				global_row_idx++;
 			}
 		}
 		if (!values.empty()) {
@@ -2381,7 +2412,7 @@ VALUES %s
 UPDATE {METADATA_CATALOG}.%s
 SET end_snapshot = {SNAPSHOT_ID}
 FROM deleted_row_list
-WHERE row_id=deleted_row_id;
+WHERE row_id=deleted_row_id AND end_snapshot IS NULL AND begin_snapshot != {SNAPSHOT_ID};
 )",
 		                                    row_id_list, entry.table_name);
 	}
@@ -2414,6 +2445,11 @@ string DuckLakeMetadataManager::WriteNewInlinedFileDeletes(DuckLakeSnapshot &com
 	return batch_queries;
 }
 
+void DuckLakeMetadataManager::ClearInlinedTableCaches() {
+	insert_inlined_table_name_cache.clear();
+	delete_inlined_table_cache.clear();
+}
+
 map<idx_t, set<idx_t>> DuckLakeMetadataManager::ReadInlinedFileDeletions(TableIndex table_id,
                                                                          DuckLakeSnapshot snapshot) {
 	map<idx_t, set<idx_t>> result;
@@ -2425,12 +2461,13 @@ map<idx_t, set<idx_t>> DuckLakeMetadataManager::ReadInlinedFileDeletions(TableIn
 	                                "{SNAPSHOT_ID}",
 	                                inlined_table_name);
 	auto query_result = transaction.Query(snapshot, query);
-	if (!query_result->HasError()) {
-		for (auto &row : *query_result) {
-			auto file_id = row.GetValue<idx_t>(0);
-			auto row_id = row.GetValue<idx_t>(1);
-			result[file_id].insert(row_id);
-		}
+	if (query_result->HasError()) {
+		query_result->GetErrorObject().Throw("Failed to read inlined file deletions from DuckLake: ");
+	}
+	for (auto &row : *query_result) {
+		auto file_id = row.GetValue<idx_t>(0);
+		auto row_id = row.GetValue<idx_t>(1);
+		result[file_id].insert(row_id);
 	}
 	return result;
 }
@@ -2459,10 +2496,11 @@ unordered_set<idx_t> DuckLakeMetadataManager::GetFileIdsWithInlinedDeletions(Tab
 	                                "begin_snapshot <= {SNAPSHOT_ID}",
 	                                inlined_table_name, file_id_list);
 	auto query_result = transaction.Query(snapshot, query);
-	if (!query_result->HasError()) {
-		for (auto &row : *query_result) {
-			result.insert(row.GetValue<idx_t>(0));
-		}
+	if (query_result->HasError()) {
+		query_result->GetErrorObject().Throw("Failed to read inlined file deletion IDs from DuckLake: ");
+	}
+	for (auto &row : *query_result) {
+		result.insert(row.GetValue<idx_t>(0));
 	}
 	return result;
 }
@@ -2479,13 +2517,14 @@ DuckLakeMetadataManager::ReadInlinedFileDeletionsForRange(TableIndex table_id, D
 	                                "WHERE begin_snapshot >= %d AND begin_snapshot <= {SNAPSHOT_ID}",
 	                                inlined_table_name, start_snapshot.snapshot_id);
 	auto query_result = transaction.Query(end_snapshot, query);
-	if (!query_result->HasError()) {
-		for (auto &row : *query_result) {
-			auto file_id = row.GetValue<idx_t>(0);
-			auto row_id = row.GetValue<idx_t>(1);
-			auto snapshot_id = row.GetValue<idx_t>(2);
-			result[file_id][row_id] = snapshot_id;
-		}
+	if (query_result->HasError()) {
+		query_result->GetErrorObject().Throw("Failed to read inlined file deletions for range from DuckLake: ");
+	}
+	for (auto &row : *query_result) {
+		auto file_id = row.GetValue<idx_t>(0);
+		auto row_id = row.GetValue<idx_t>(1);
+		auto snapshot_id = row.GetValue<idx_t>(2);
+		result[file_id][row_id] = snapshot_id;
 	}
 	return result;
 }
@@ -2495,13 +2534,22 @@ string DuckLakeMetadataManager::GetInlinedDeletionTableName(TableIndex table_id,
 	// The table name is always deterministic
 	string table_name = StringUtil::Format("ducklake_inlined_delete_%d", table_id.index);
 
-	// Check the cache first (tracks whether table exists)
+	// Check per-transaction cache first (covers tables created in this transaction)
 	if (delete_inlined_table_cache.find(table_id.index) != delete_inlined_table_cache.end()) {
 		return table_name;
 	}
 
+	// Check catalog-level cache (persists across transactions)
+	auto &catalog = transaction.GetCatalog();
+	auto cache_result = catalog.CheckInlinedDeletionTableCache(table_id, snapshot);
+	if (cache_result == InlinedDeletionCacheResult::EXISTS) {
+		return table_name; // known to exist (committed)
+	}
+	if (cache_result == InlinedDeletionCacheResult::DOES_NOT_EXIST && !create_if_not_exists) {
+		return string(); // known to not exist
+	}
+
 	if (create_if_not_exists) {
-		// Create the table if it doesn't exist
 		auto create_query = StringUtil::Format(
 		    "CREATE TABLE IF NOT EXISTS {METADATA_CATALOG}.%s(file_id BIGINT, row_id BIGINT, begin_snapshot BIGINT);",
 		    table_name);
@@ -2509,17 +2557,23 @@ string DuckLakeMetadataManager::GetInlinedDeletionTableName(TableIndex table_id,
 		if (create_result->HasError()) {
 			create_result->GetErrorObject().Throw("Failed to create inlined deletion table: ");
 		}
+		// Only cache per-transaction — the CREATE is transactional and may be rolled back
 		delete_inlined_table_cache.insert(table_id.index);
 		return table_name;
 	}
 
-	// Check if the table exists by querying duckdb_tables()
+	// Read path: table visibility implies it was committed, safe to cache at catalog level
 	auto query = StringUtil::Format("SELECT NULL FROM {METADATA_CATALOG}.%s LIMIT 1", table_name);
 	auto result = transaction.Query(snapshot, query);
+	// TODO: Using the error state to check for existence here is fragile.
+	// Even if the table exists, a transient error in the catalog query would lead us to assume it does not exist.
+	// Maybe persist the existence of the deletion inlining table on the table metadata instead?
 	if (!result->HasError()) {
 		delete_inlined_table_cache.insert(table_id.index);
+		catalog.CacheInlinedDeletionTableResult(table_id, snapshot, true);
 		return table_name;
 	}
+	catalog.CacheInlinedDeletionTableResult(table_id, snapshot, false);
 	return string();
 }
 
@@ -2564,7 +2618,8 @@ unique_ptr<QueryResult> DuckLakeMetadataManager::ReadInlinedData(DuckLakeSnapsho
 	auto result = transaction.Query(snapshot, StringUtil::Format(R"(
 SELECT %s
 FROM {METADATA_CATALOG}.%s inlined_data
-WHERE {SNAPSHOT_ID} >= begin_snapshot AND ({SNAPSHOT_ID} < end_snapshot OR end_snapshot IS NULL);)",
+WHERE {SNAPSHOT_ID} >= begin_snapshot AND ({SNAPSHOT_ID} < end_snapshot OR end_snapshot IS NULL)
+ORDER BY row_id;)",
 	                                                             projection, inlined_table_name));
 	return result;
 }
@@ -2786,9 +2841,18 @@ DuckLakePath DuckLakeMetadataManager::GetRelativePath(const string &path, const 
 	return result;
 }
 
+string DuckLakeMetadataManager::GetPathSeparator(const string &path) {
+	auto &catalog = transaction.GetCatalog();
+	if (!catalog.DataPath().empty()) {
+		// use the cached separator from the catalog
+		return catalog.Separator();
+	}
+	// if catalog is not loaded, use the file system
+	return GetFileSystem().PathSeparator(path);
+}
+
 string DuckLakeMetadataManager::StorePath(string path) {
-	auto &fs = GetFileSystem();
-	auto separator = fs.PathSeparator(path);
+	auto separator = GetPathSeparator(path);
 	if (separator == "/") {
 		return path;
 	}
@@ -2796,8 +2860,7 @@ string DuckLakeMetadataManager::StorePath(string path) {
 }
 
 string DuckLakeMetadataManager::LoadPath(string path) {
-	auto &fs = GetFileSystem();
-	auto separator = fs.PathSeparator(path);
+	auto separator = GetPathSeparator(path);
 	if (separator == "/") {
 		return path;
 	}
@@ -4050,13 +4113,15 @@ string DuckLakeMetadataManager::WriteDeleteRewrites(const vector<DuckLakeCompact
 		WHERE data_file_id = %llu;
 		)",
 		                       table_idx_last_snapshot[compaction.table_index.index], compaction.source_id.index);
-		// update the snapshot of our newly added file
-		batch_query +=
-		    StringUtil::Format(R"(
-			UPDATE {METADATA_CATALOG}.ducklake_data_file SET begin_snapshot = %llu
-			WHERE data_file_id = %llu;
-			)",
-		                       table_idx_last_snapshot[compaction.table_index.index], compaction.new_id.index);
+		// update the snapshot of our newly added file (if it was created)
+		if (compaction.new_id.IsValid()) {
+			batch_query +=
+			    StringUtil::Format(R"(
+				UPDATE {METADATA_CATALOG}.ducklake_data_file SET begin_snapshot = %llu
+				WHERE data_file_id = %llu;
+				)",
+			                       table_idx_last_snapshot[compaction.table_index.index], compaction.new_id.index);
+		}
 	}
 	return batch_query;
 }

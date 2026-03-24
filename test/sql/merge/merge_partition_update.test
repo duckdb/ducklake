@@ -39,6 +39,10 @@ MERGE INTO my_timeseries
     ON my_timeseries.ts = timeseries_updates.ts
     WHEN MATCHED THEN UPDATE;
 
+# flush inlined data from the MERGE update
+statement ok
+CALL ducklake_flush_inlined_data('ducklake')
+
 query I
 SELECT COUNT(*) FROM GLOB('${DATA_PATH}/merge_partition_update/**/year=2025/*')
 ----
@@ -50,6 +54,10 @@ statement ok
 UPDATE my_timeseries
 SET x = 43::DOUBLE PRECISION
 WHERE ts = '2025-09-17'::TIMESTAMP;
+
+# flush inlined data from the UPDATE
+statement ok
+CALL ducklake_flush_inlined_data('ducklake')
 
 query I
 SELECT COUNT(*) FROM GLOB('${DATA_PATH}/merge_partition_update/**/year=2025/*')

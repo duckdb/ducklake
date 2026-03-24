@@ -7,6 +7,7 @@ add_library(
   ducklake_delete_filter.cpp
   ducklake_field_data.cpp
   ducklake_inline_data.cpp
+  ducklake_inlined_data.cpp
   ducklake_inlined_data_reader.cpp
   ducklake_insert.cpp
   ducklake_merge_into.cpp
