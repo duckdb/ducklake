@@ -1,7 +1,7 @@
 {
   "description": "Run DuckLake tests using Postgres as a catalog DBMS.",
   "on_init": "ATTACH 'dbname=ducklakedb' AS pg (TYPE postgres); USE pg; DROP SCHEMA public CASCADE; DROP SCHEMA IF EXISTS metadata_s1 CASCADE; DROP SCHEMA IF EXISTS metadata_s2 CASCADE; CREATE SCHEMA public;USE memory; DETACH pg;",
-  "autoloading": "false",
+  "autoloading": "none",
   "statically_loaded_extensions": [
     "core_functions",
     "parquet",
