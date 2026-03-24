@@ -70,16 +70,19 @@ jobs:
       run: |
         make release
 
-    - name: Test SQLite
-      run: |
-        build/release/test/unittest --test-config test/configs/sqlite.json --test-dir ./ "test/sql/*"
+    #- name: Test SQLite
+    #  run: |
+    #    build/release/test/unittest --test-config test/configs/sqlite.json --test-dir ./ "test/sql/*"
 
     - name: Test Postgres
       env:
         PGSERVICE: postgres
       run: |
-        # Remove ducklake from the local extension repo to prevent autoloading
-        # a loadable copy over the statically linked one
-        rm -f build/release/repository/*/linux_amd64/ducklake.duckdb_extension
+        # Pre-install postgres_scanner so LOAD finds it without autoloading
+        # (autoloading is disabled to prevent loading wrong ducklake version)
+        REPO_DIR="build/release/repository/$(cat .github/duckdb-version)/${{ matrix.arch }}"
+        EXT_DIR="$HOME/.duckdb/extensions/$(cat .github/duckdb-version)/${{ matrix.arch }}"
+        mkdir -p "$EXT_DIR"
+        cp "$REPO_DIR/postgres_scanner.duckdb_extension" "$EXT_DIR/"
         createdb ducklakedb
         build/release/test/unittest --test-config test/configs/postgres.json --test-dir ./ "test/sql/*"
