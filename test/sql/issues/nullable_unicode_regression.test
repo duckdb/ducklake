@@ -1,0 +1,76 @@
+# name: test/sql/issues/nullable_unicode_regression.test
+# description: minimal repro for nullable UTF-8 VARCHAR stats regression in DuckLake
+# group: [issues]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+
+test-env DATA_PATH __TEST_DIR__
+
+statement ok
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/nullable_unicode_regression', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+USE ducklake
+
+# Test 1: CTAS with leading NULLs + multi-byte UTF-8 in single file
+statement ok
+CREATE TABLE t AS
+SELECT * FROM (
+    SELECT  i::VARCHAR        AS id,
+            NULL::VARCHAR     AS name
+    FROM generate_series(1, 80000) t(i)
+    UNION ALL
+    SELECT  '80001',
+            '£1.99'
+);
+
+query II
+SELECT * FROM t ORDER BY name LIMIT 1
+----
+80001	£1.99
+
+# Test 2: separate INSERTs (NULL file then UTF-8 file)
+statement ok
+CREATE TABLE t2(id INTEGER, subtitle VARCHAR)
+
+statement ok
+INSERT INTO t2 VALUES (1, NULL)
+
+statement ok
+INSERT INTO t2 VALUES (2, chr(8220))
+
+query II
+SELECT length(subtitle), length(subtitle || '')
+FROM t2
+WHERE id = 2
+----
+1	1
+
+# Test 3: various multi-byte characters after NULL-heavy rows
+statement ok
+CREATE TABLE t3 AS
+SELECT * FROM (
+    SELECT  i::VARCHAR        AS id,
+            NULL::VARCHAR     AS val
+    FROM generate_series(1, 80000) t(i)
+    UNION ALL
+    SELECT '80001', 'é'
+    UNION ALL
+    SELECT '80002', '€100'
+    UNION ALL
+    SELECT '80003', '日本語'
+);
+
+query II
+SELECT id, val FROM t3 WHERE val IS NOT NULL ORDER BY id
+----
+80001	é
+80002	€100
+80003	日本語
+
+statement ok
+SELECT * FROM t3 ORDER BY val
