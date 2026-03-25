@@ -35,6 +35,7 @@ class FileSystem;
 class ConstantFilter;
 
 struct SnapshotAndStats;
+struct FlushedInlinedTableInfo;
 
 enum class SnapshotBound { LOWER_BOUND, UPPER_BOUND };
 
@@ -226,6 +227,10 @@ public:
 	                                                             const vector<LogicalType> &expected_types);
 
 	virtual void DeleteInlinedData(const DuckLakeInlinedTableInfo &inlined_table);
+	//! We delete at the flush
+	virtual void DeleteFlushedInlinedData(const DuckLakeInlinedTableInfo &inlined_table, idx_t flush_snapshot_id);
+	//! If it conflicts we batch everything at the retry
+	virtual string GenerateDeleteFlushedInlinedData(const vector<FlushedInlinedTableInfo> &flushed_tables);
 	virtual string InsertNewSchema(const DuckLakeSnapshot &snapshot, const set<TableIndex> &table_ids);
 
 	virtual vector<DuckLakeSnapshotInfo> GetAllSnapshots(const string &filter = string());
