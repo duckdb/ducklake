@@ -2260,6 +2260,11 @@ string DuckLakeTransaction::CommitChanges(DuckLakeCommitState &commit_state,
 		                                                       new_tables_result, new_inlined_data_tables_result);
 	}
 
+	// in case of a retry, we generate the deletion of inlined data from the tables
+	if (!flushed_inlined_tables.empty()) {
+		batch_queries += metadata_manager->GenerateDeleteFlushedInlinedData(flushed_inlined_tables);
+	}
+
 	// drop data files
 	if (!dropped_files.empty()) {
 		set<DataFileIndex> dropped_indexes;
@@ -2543,6 +2548,16 @@ void DuckLakeTransaction::DeleteSnapshots(const vector<DuckLakeSnapshotInfo> &sn
 void DuckLakeTransaction::DeleteInlinedData(const DuckLakeInlinedTableInfo &inlined_table) {
 	auto &metadata_manager = GetMetadataManager();
 	metadata_manager.DeleteInlinedData(inlined_table);
+}
+
+void DuckLakeTransaction::DeleteFlushedInlinedData(const DuckLakeInlinedTableInfo &inlined_table,
+                                                   idx_t flush_snapshot_id) {
+	auto &metadata_manager = GetMetadataManager();
+	metadata_manager.DeleteFlushedInlinedData(inlined_table, flush_snapshot_id);
+}
+
+void DuckLakeTransaction::MarkInlinedDataForDeletion(DuckLakeInlinedTableInfo inlined_table, idx_t flush_snapshot_id) {
+	flushed_inlined_tables.push_back({std::move(inlined_table), flush_snapshot_id});
 }
 
 unique_ptr<QueryResult> DuckLakeTransaction::Query(string query) {

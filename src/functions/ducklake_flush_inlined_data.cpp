@@ -194,7 +194,8 @@ SinkFinalizeType DuckLakeFlushData::Finalize(Pipeline &pipeline, Event &event, C
 	}
 
 	transaction.AppendFiles(global_state.table.GetTableId(), std::move(global_state.written_files));
-	transaction.DeleteInlinedData(inlined_table);
+	transaction.DeleteFlushedInlinedData(inlined_table, snapshot.snapshot_id);
+	transaction.MarkInlinedDataForDeletion(inlined_table, snapshot.snapshot_id);
 	return SinkFinalizeType::READY;
 }
 
