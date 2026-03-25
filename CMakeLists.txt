@@ -15,6 +15,15 @@ set(EXTENSION_SOURCES ${ALL_OBJECT_FILES})
 build_static_extension(${TARGET_NAME} ${EXTENSION_SOURCES})
 build_loadable_extension(${TARGET_NAME} " " ${EXTENSION_SOURCES})
 
+# Roaring is installed via vcpkg and used for deletion vectors
+find_package(roaring CONFIG)
+if(roaring_FOUND)
+    target_link_libraries(${EXTENSION_NAME} roaring::roaring roaring::roaring-headers roaring::roaring-headers-cpp)
+    target_link_libraries(${TARGET_NAME}_loadable_extension roaring::roaring roaring::roaring-headers roaring::roaring-headers-cpp)
+    target_compile_definitions(${EXTENSION_NAME} PRIVATE DUCKLAKE_HAVE_ROARING)
+    target_compile_definitions(${TARGET_NAME}_loadable_extension PRIVATE DUCKLAKE_HAVE_ROARING)
+endif()
+
 install(
   TARGETS ${EXTENSION_NAME}
   EXPORT "${DUCKDB_EXPORT_SET}"
