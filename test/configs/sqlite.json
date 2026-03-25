@@ -1,6 +1,6 @@
 {
   "description": "Run DuckLake tests using SQLite as a catalog DBMS.",
-  "autoloading": "all",
+  "autoloading": "none",
   "statically_loaded_extensions": [
     "core_functions",
     "parquet",
