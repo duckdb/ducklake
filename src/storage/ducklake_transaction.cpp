@@ -1232,11 +1232,13 @@ void DuckLakeTransaction::CheckForConflicts(const TransactionChangeInformation &
 	}
 	for (auto &table_id : changes.tables_inserted_into) {
 		ConflictCheck(table_id, other_changes.dropped_tables, "insert into table", "dropped it");
-		ConflictCheck(table_id, other_changes.altered_tables, "insert into table", "altered it");
+		// NOTE: insert-vs-alter is safe because each data file carries its own mapping_id
+		// that describes the column layout at write time. The multi-file reader uses
+		// this mapping to correctly read files written under older schemas, even after
+		// ALTER TABLE ADD/DROP/RENAME COLUMN operations.
 	}
 	for (auto &table_id : changes.tables_inserted_inlined) {
 		ConflictCheck(table_id, other_changes.dropped_tables, "insert into table", "dropped it");
-		ConflictCheck(table_id, other_changes.altered_tables, "insert into table", "altered it");
 	}
 	for (auto &table_id : changes.tables_deleted_from) {
 		ConflictCheck(table_id, other_changes.dropped_tables, "delete from table", "dropped it");

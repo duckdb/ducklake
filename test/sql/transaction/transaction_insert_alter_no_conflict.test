@@ -1,0 +1,103 @@
+# name: test/sql/transaction/transaction_insert_alter_no_conflict.test
+# description: Test that concurrent INSERT and ALTER TABLE do not conflict
+# group: [transaction]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+
+test-env DATA_PATH __TEST_DIR__
+
+statement ok
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/ducklake_insert_alter_no_conflict_files')
+
+statement ok
+SET immediate_transaction_mode=true
+
+statement ok
+CREATE TABLE ducklake.test(i INTEGER, j INTEGER);
+
+statement ok
+INSERT INTO ducklake.test VALUES (1, 10);
+
+# one transaction inserts while another alters: should NOT conflict
+statement ok con1
+BEGIN
+
+statement ok con2
+BEGIN
+
+statement ok con1
+INSERT INTO ducklake.test VALUES (2, 20);
+
+statement ok con2
+ALTER TABLE ducklake.test ADD COLUMN k INTEGER
+
+statement ok con1
+COMMIT
+
+statement ok con2
+COMMIT
+
+# verify both changes applied: 2 rows, 3 columns, new column is NULL for existing rows
+query III
+SELECT i, j, k FROM ducklake.test ORDER BY i
+----
+1	10	NULL
+2	20	NULL
+
+# one transaction alters while another inserts (reversed order): should NOT conflict
+statement ok con1
+BEGIN
+
+statement ok con2
+BEGIN
+
+statement ok con1
+ALTER TABLE ducklake.test ADD COLUMN m INTEGER
+
+statement ok con2
+INSERT INTO ducklake.test VALUES (3, 30, 300);
+
+statement ok con1
+COMMIT
+
+statement ok con2
+COMMIT
+
+# verify: 3 rows, 4 columns
+query IIII
+SELECT i, j, k, m FROM ducklake.test ORDER BY i
+----
+1	10	NULL	NULL
+2	20	NULL	NULL
+3	30	300	NULL
+
+# concurrent insert and rename column: should NOT conflict
+statement ok con1
+BEGIN
+
+statement ok con2
+BEGIN
+
+statement ok con1
+INSERT INTO ducklake.test VALUES (4, 40, 400, 4000);
+
+statement ok con2
+ALTER TABLE ducklake.test RENAME COLUMN m TO n
+
+statement ok con1
+COMMIT
+
+statement ok con2
+COMMIT
+
+query IIII
+SELECT i, j, k, n FROM ducklake.test ORDER BY i
+----
+1	10	NULL	NULL
+2	20	NULL	NULL
+3	30	300	NULL
+4	40	400	4000
