@@ -1,9 +1,11 @@
 #include "storage/ducklake_delete_filter.hpp"
+#include "storage/ducklake_deletion_vector.hpp"
 #include "common/parquet_file_scanner.hpp"
 #include "duckdb/planner/filter/constant_filter.hpp"
 #include "duckdb/planner/table_filter.hpp"
 #include "duckdb/common/multi_file/multi_file_list.hpp"
 #include "duckdb/common/multi_file/multi_file_reader.hpp"
+#include "duckdb/common/string_util.hpp"
 
 namespace duckdb {
 
@@ -107,9 +109,36 @@ idx_t DuckLakeDeleteFilter::Filter(row_t start_row_index, idx_t count, Selection
 	return delete_data->Filter(start_row_index, count, result_sel, snapshot_filter);
 }
 
+DeleteFileScanResult DuckLakeDeleteFilter::ScanDeletionVectorFile(ClientContext &context,
+                                                                  const DuckLakeFileData &delete_file) {
+	auto &fs = FileSystem::GetFileSystem(context);
+	auto file_handle = fs.OpenFile(delete_file.path, FileOpenFlags::FILE_FLAGS_READ);
+	auto file_size = file_handle->GetFileSize();
+
+	auto buffer = make_unsafe_uniq_array<data_t>(file_size);
+	file_handle->Read(buffer.get(), file_size);
+
+	auto dv_data = DuckLakeDeletionVectorData::FromBlob(buffer.get(), file_size);
+
+	DeleteFileScanResult result;
+	result.has_embedded_snapshots = false;
+
+	set<idx_t> deleted_set;
+	dv_data->ToSet(deleted_set);
+	for (auto &pos : deleted_set) {
+		result.deleted_rows.push_back(pos);
+	}
+	return result;
+}
+
 DeleteFileScanResult DuckLakeDeleteFilter::ScanDeleteFile(ClientContext &context, const DuckLakeFileData &delete_file,
                                                           optional_idx snapshot_filter_min,
                                                           optional_idx snapshot_filter_max) {
+	// Check if this is a puffin deletion vector file
+	if (StringUtil::EndsWith(delete_file.path, ".puffin")) {
+		return ScanDeletionVectorFile(context, delete_file);
+	}
+
 	// Set up custom MultiFileReader to avoid HEAD requests
 	auto function_info = make_shared_ptr<DeleteFileFunctionInfo>();
 	function_info->file_data = delete_file;
