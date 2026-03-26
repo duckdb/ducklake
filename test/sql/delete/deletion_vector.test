@@ -30,9 +30,9 @@ DELETE FROM ducklake.test WHERE id%2=0
 ----
 1000
 
-# verify the delete file is in puffin format
+# verify the delete files are in puffin format
 query I
-SELECT format FROM __ducklake_metadata_ducklake.ducklake_delete_file
+SELECT format FROM __ducklake_metadata_ducklake.ducklake_delete_file WHERE end_snapshot IS NULL
 ----
 puffin
 puffin
@@ -49,7 +49,7 @@ SELECT COUNT(*), COUNT(*) FILTER(WHERE id%2=0) FROM ducklake.test AT (VERSION =>
 ----
 2000	1000
 
-# delete some more rows (this will go through the snapshot merge path and fall back to parquet)
+# delete some more rows - this goes through FlushDeleteWithSnapshots but should still write puffin
 query I
 DELETE FROM ducklake.test WHERE id < 100
 ----
@@ -59,3 +59,26 @@ query I
 SELECT COUNT(*) FROM ducklake.test
 ----
 950
+
+# all active delete files should still be puffin (old ones get overwritten)
+query I
+SELECT DISTINCT format FROM __ducklake_metadata_ducklake.ducklake_delete_file WHERE end_snapshot IS NULL
+----
+puffin
+
+# verify the actual data is correct
+query I
+SELECT COUNT(*) FILTER(WHERE id < 100) FROM ducklake.test
+----
+0
+
+# delete all remaining rows from one file to test full file drop
+query I
+DELETE FROM ducklake.test WHERE id >= 0 AND id < 1000
+----
+450
+
+query I
+SELECT COUNT(*) FROM ducklake.test
+----
+500

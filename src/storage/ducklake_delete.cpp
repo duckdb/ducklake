@@ -383,6 +383,42 @@ void DuckLakeDelete::FlushDeleteWithSnapshots(DuckLakeTransaction &transaction, 
 	const auto current_snapshot = transaction.GetSnapshot();
 	const idx_t new_delete_snapshot = current_snapshot.snapshot_id + 1;
 
+	auto &catalog = table.catalog.Cast<DuckLakeCatalog>();
+	auto &schema = table.ParentSchema().Cast<DuckLakeSchemaEntry>();
+	bool use_deletion_vectors = catalog.WriteDeletionVectors(schema.GetSchemaId(), table.GetTableId());
+
+	if (use_deletion_vectors) {
+		// Deletion vectors don't support per-position snapshot tracking.
+		// Merge all positions (existing + new) into a flat set, like the old pre-snapshot code.
+		set<idx_t> all_deletes = sorted_deletes;
+		auto &existing_deletes = existing_delete_data.deleted_rows;
+		all_deletes.insert(existing_deletes.begin(), existing_deletes.end());
+
+		// clear the deletes from the map
+		delete_map->ClearDeletes(filename);
+
+		// set the delete file as overwriting existing deletes
+		delete_file.overwrites_existing_delete = true;
+
+		if (TryDropFullyDeletedFile(transaction, delete_file, data_file_info, all_deletes.size())) {
+			return;
+		}
+
+		auto &fs = FileSystem::GetFileSystem(context);
+		WriteDeleteFileInput input {context,   transaction,           fs,       table.DataPath(),
+		                            encryption_key, filename, all_deletes, DeleteFileSource::REGULAR};
+		auto written_file = DuckLakeDeleteFileWriter::WriteDeletionVectorFile(context, input);
+
+		written_file.data_file_id = delete_file.data_file_id;
+		written_file.overwrites_existing_delete = delete_file.overwrites_existing_delete;
+		// track the old delete file for deletion from metadata
+		written_file.overwritten_delete_file.delete_file_id = data_file_info.delete_file_id;
+		written_file.overwritten_delete_file.path = data_file_info.delete_file.path;
+
+		global_state.written_files.emplace(filename, std::move(written_file));
+		return;
+	}
+
 	set<PositionWithSnapshot> sorted_deletes_with_snapshots;
 	// add existing deletes with their snapshot IDs
 	MergeDeletesWithSnapshots(existing_delete_data, existing_snapshot.GetIndex(), sorted_deletes_with_snapshots);

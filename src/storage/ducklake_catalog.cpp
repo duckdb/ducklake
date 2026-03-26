@@ -71,6 +71,12 @@ void DuckLakeCatalog::FinalizeLoad(optional_ptr<ClientContext> context) {
 			options.config_options["data_inlining_row_limit"] = to_string(limit);
 		}
 	}
+	if (options.config_options.find("write_deletion_vectors") == options.config_options.end()) {
+		Value setting_val;
+		if (context->TryGetCurrentSetting("ducklake_default_write_deletion_vectors", setting_val)) {
+			options.config_options["write_deletion_vectors"] = setting_val.GetValue<bool>() ? "true" : "false";
+		}
+	}
 	DuckLakeInitializer initializer(*context, *this, options);
 	initializer.Initialize();
 	db.tags["data_path"] = DataPath();
