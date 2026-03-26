@@ -119,6 +119,59 @@ unique_ptr<DuckLakeDeletionVectorData> DuckLakeDeletionVectorData::FromBlob(data
 	return result;
 }
 
+vector<data_t> DuckLakeDeletionVectorData::ToBlob(const unordered_map<int32_t, roaring::Roaring> &bitmaps) {
+	//! https://iceberg.apache.org/puffin-spec/#deletion-vector-v1-blob-type
+
+	// Calculate total size needed
+	idx_t total_size = 0;
+	total_size += sizeof(uint32_t); // vector_size field
+	total_size += sizeof(uint32_t); // magic bytes
+	total_size += sizeof(uint64_t); // amount of bitmaps
+	for (const auto &entry : bitmaps) {
+		total_size += sizeof(int32_t);                   // key
+		total_size += entry.second.getSizeInBytes(true); // portable serialized bitmap
+	}
+	total_size += sizeof(uint32_t); // CRC checksum
+
+	vector<data_t> blob_output;
+	blob_output.resize(total_size);
+	data_ptr_t blob_ptr = blob_output.data();
+
+	// Write vector_size (total_size - (CRC checksum + vector_size field))
+	uint32_t vector_size = BSwap(static_cast<uint32_t>(total_size - sizeof(uint32_t) - sizeof(uint32_t)));
+	Store<uint32_t>(vector_size, blob_ptr);
+	blob_ptr += sizeof(uint32_t);
+
+	auto checksummed_data_start = blob_ptr;
+	constexpr uint8_t DELETION_VECTOR_MAGIC[4] = {0xD1, 0xD3, 0x39, 0x64};
+	memcpy(blob_ptr, DELETION_VECTOR_MAGIC, 4);
+	blob_ptr += sizeof(uint32_t);
+
+	// Write bitmap count
+	Store<uint64_t>(bitmaps.size(), blob_ptr);
+	blob_ptr += sizeof(uint64_t);
+
+	// Write each bitmap
+	for (const auto &entry : bitmaps) {
+		// Write key (high 32 bits)
+		Store<int32_t>(entry.first, blob_ptr);
+		blob_ptr += sizeof(int32_t);
+
+		// Write bitmap (portable format)
+		size_t bitmap_size = entry.second.write((char *)blob_ptr, true);
+		blob_ptr += bitmap_size;
+	}
+
+	// Compute and write CRC checksum
+	auto checksummed_data_length = blob_ptr - checksummed_data_start;
+	CRC32 crc;
+	crc.Update(checksummed_data_start, checksummed_data_length);
+	uint32_t checksum = crc.GetValue();
+
+	Store<uint32_t>(BSwap(checksum), blob_ptr);
+	return blob_output;
+}
+
 namespace {
 
 struct RoaringIterateContext {

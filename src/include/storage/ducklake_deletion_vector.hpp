@@ -21,6 +21,8 @@ struct DuckLakeDeletionVectorData {
 public:
 	//! Deserialize a deletion vector from a puffin blob
 	static unique_ptr<DuckLakeDeletionVectorData> FromBlob(data_ptr_t blob_start, idx_t blob_length);
+	//! Serialize bitmaps into a deletion-vector-v1 puffin blob
+	static vector<data_t> ToBlob(const unordered_map<int32_t, roaring::Roaring> &bitmaps);
 
 	//! Convert the bitmaps to a sorted set of deleted row positions
 	void ToSet(set<idx_t> &out) const;
