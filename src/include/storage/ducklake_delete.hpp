@@ -80,6 +80,8 @@ struct DuckLakeDeleteFileWriter {
 	static DuckLakeDeleteFile WriteDeleteFile(ClientContext &context, WriteDeleteFileInput &input);
 	static DuckLakeDeleteFile WriteDeleteFileWithSnapshots(ClientContext &context,
 	                                                       WriteDeleteFileWithSnapshotsInput &input);
+	//! Write a deletion vector file (puffin format) instead of a parquet delete file
+	static DuckLakeDeleteFile WriteDeletionVectorFile(ClientContext &context, WriteDeleteFileInput &input);
 };
 
 struct DuckLakeDeleteMap {

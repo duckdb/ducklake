@@ -186,6 +186,7 @@ struct DuckLakeDeleteFileInfo {
 	TableIndex table_id;
 	DataFileIndex data_file_id;
 	string path;
+	DeleteFileFormat format = DeleteFileFormat::PARQUET;
 	idx_t delete_count;
 	idx_t file_size_bytes;
 	idx_t footer_size;

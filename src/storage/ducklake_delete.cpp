@@ -1,4 +1,5 @@
 #include "storage/ducklake_catalog.hpp"
+#include "storage/ducklake_deletion_vector.hpp"
 #include "duckdb/planner/operator/logical_delete.hpp"
 #include "duckdb/planner/operator/logical_get.hpp"
 #include "duckdb/common/multi_file/multi_file_function.hpp"
@@ -150,6 +151,42 @@ DuckLakeDeleteFile DuckLakeDeleteFileWriter::WriteDeleteFile(ClientContext &cont
 DuckLakeDeleteFile DuckLakeDeleteFileWriter::WriteDeleteFileWithSnapshots(ClientContext &context,
                                                                           WriteDeleteFileWithSnapshotsInput &input) {
 	return WriteDeleteFileInternal(context, input);
+}
+
+DuckLakeDeleteFile DuckLakeDeleteFileWriter::WriteDeletionVectorFile(ClientContext &context,
+                                                                      WriteDeleteFileInput &input) {
+	auto delete_file_uuid = "ducklake-" + input.transaction.GenerateUUID() + "-delete.puffin";
+	string delete_file_path = DuckLakeUtil::JoinPath(input.fs, input.data_path, delete_file_uuid);
+
+	// Build roaring bitmaps grouped by high 32 bits
+	unordered_map<int32_t, roaring::Roaring> bitmaps;
+	for (auto row_idx : input.positions) {
+		int64_t row_id = static_cast<int64_t>(row_idx);
+		int32_t high_bits = static_cast<int32_t>(row_id >> 32);
+		uint32_t low_bits = static_cast<uint32_t>(row_id & 0xFFFFFFFF);
+		bitmaps[high_bits].add(low_bits);
+	}
+
+	// Serialize to blob
+	auto blob_data = DuckLakeDeletionVectorData::ToBlob(bitmaps);
+
+	// Write blob to file
+	auto &fs = FileSystem::GetFileSystem(context);
+	auto file_handle =
+	    fs.OpenFile(delete_file_path, FileOpenFlags::FILE_FLAGS_WRITE | FileOpenFlags::FILE_FLAGS_FILE_CREATE);
+	file_handle->Write(blob_data.data(), blob_data.size());
+	file_handle->Close();
+
+	DuckLakeDeleteFile delete_file;
+	delete_file.data_file_path = input.data_file_path;
+	delete_file.file_name = delete_file_path;
+	delete_file.format = DeleteFileFormat::PUFFIN;
+	delete_file.delete_count = input.positions.size();
+	delete_file.file_size_bytes = blob_data.size();
+	delete_file.footer_size = 0;
+	delete_file.encryption_key = input.encryption_key;
+	delete_file.source = input.source;
+	return delete_file;
 }
 
 //===--------------------------------------------------------------------===//
@@ -472,6 +509,10 @@ void DuckLakeDelete::FlushDelete(DuckLakeTransaction &transaction, ClientContext
 	}
 
 	auto &fs = FileSystem::GetFileSystem(context);
+	auto &catalog = table.catalog.Cast<DuckLakeCatalog>();
+	auto &schema = table.ParentSchema().Cast<DuckLakeSchemaEntry>();
+	bool use_deletion_vectors = catalog.WriteDeletionVectors(schema.GetSchemaId(), table.GetTableId());
+
 	WriteDeleteFileInput input {context,
 	                            transaction,
 	                            fs,
@@ -480,7 +521,8 @@ void DuckLakeDelete::FlushDelete(DuckLakeTransaction &transaction, ClientContext
 	                            filename,
 	                            sorted_deletes,
 	                            DeleteFileSource::REGULAR};
-	auto written_file = DuckLakeDeleteFileWriter::WriteDeleteFile(context, input);
+	auto written_file = use_deletion_vectors ? DuckLakeDeleteFileWriter::WriteDeletionVectorFile(context, input)
+	                                         : DuckLakeDeleteFileWriter::WriteDeleteFile(context, input);
 
 	written_file.data_file_id = delete_file.data_file_id;
 	written_file.overwrites_existing_delete = delete_file.overwrites_existing_delete;
