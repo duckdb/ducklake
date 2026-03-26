@@ -119,8 +119,16 @@ unique_ptr<DuckLakeDeletionVectorData> DuckLakeDeletionVectorData::FromBlob(data
 	return result;
 }
 
-vector<data_t> DuckLakeDeletionVectorData::ToBlob(const unordered_map<int32_t, roaring::Roaring> &bitmaps) {
+vector<data_t> DuckLakeDeletionVectorData::ToBlob(const set<idx_t> &positions) {
 	//! https://iceberg.apache.org/puffin-spec/#deletion-vector-v1-blob-type
+
+	// Group row positions by high 32 bits into roaring bitmaps
+	unordered_map<int32_t, roaring::Roaring> bitmaps;
+	for (auto row_idx : positions) {
+		int32_t high_bits = static_cast<int32_t>(static_cast<int64_t>(row_idx) >> 32);
+		uint32_t low_bits = static_cast<uint32_t>(row_idx & 0xFFFFFFFF);
+		bitmaps[high_bits].add(low_bits);
+	}
 
 	// Calculate total size needed
 	idx_t total_size = 0;
