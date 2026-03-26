@@ -1,0 +1,34 @@
+# name: test/sql/issues/corrupted_catalog_fault_isolation.test
+# description: A corrupted ducklake catalog should not prevent attaching other ducklake catalogs
+# group: [issues]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+
+test-env DATA_PATH __TEST_DIR__
+
+# Create a ducklake catalog with a table
+statement ok
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS corrupt_dl (DATA_PATH '${DATA_PATH}/corrupt_dl/')
+
+statement ok
+CREATE TABLE corrupt_dl.t1 AS SELECT 1 AS id, 'hello' AS name
+
+# Corrupt the metadata: set an invalid column type
+statement ok
+UPDATE __ducklake_metadata_corrupt_dl.ducklake_column SET column_type = 'int32varcharvarchar' WHERE column_name = 'id'
+
+# Attach a second ducklake catalog - this should succeed despite the corrupted sibling
+statement ok
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS good_dl (DATA_PATH '${DATA_PATH}/good_dl/')
+
+statement ok
+CREATE TABLE good_dl.t2 AS SELECT 42 AS val
+
+query I
+SELECT val FROM good_dl.t2
+----
+42
