@@ -32,7 +32,7 @@ static void LoadInternal(ExtensionLoader &loader) {
 	                          "Default row limit for data inlining (0 disables inlining)", LogicalType::UBIGINT,
 	                          Value::UBIGINT(10), nullptr, SetScope::GLOBAL);
 	config.AddExtensionOption(
-	    "ducklake_default_write_deletion_vectors",
+	    "ducklake_write_deletion_vectors",
 	    "[EXPERIMENTAL] Write Iceberg V3 deletion vectors (puffin) instead of positional delete files (parquet)",
 	    LogicalType::BOOLEAN, Value::BOOLEAN(false), nullptr, SetScope::GLOBAL);
 

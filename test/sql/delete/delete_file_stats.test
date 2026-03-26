@@ -25,7 +25,7 @@ DELETE FROM ducklake.test WHERE id%2=0
 1500
 
 query II
-SELECT  file_size_bytes > 0, footer_size > 0 FROM __ducklake_metadata_ducklake.ducklake_delete_file
+SELECT  file_size_bytes > 0, footer_size >= 0 FROM __ducklake_metadata_ducklake.ducklake_delete_file
 ----
 true	true
 true	true

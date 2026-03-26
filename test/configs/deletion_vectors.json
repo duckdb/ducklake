@@ -1,6 +1,6 @@
 {
   "description": "Run DuckLake tests with deletion vectors enabled (puffin format instead of parquet delete files).",
-  "on_init": "SET ducklake_default_write_deletion_vectors = true;",
+  "on_init": "SET ducklake_write_deletion_vectors = true;",
   "statically_loaded_extensions": [
     "core_functions",
     "parquet",
@@ -15,10 +15,8 @@
       ]
     },
     {
-      "reason": "Deletion vectors do not support per-position snapshot tracking, breaking tests that rely on precise time travel across multiple deletes or parquet-specific delete file metadata",
+      "reason": "Deletion vectors do not support per-position snapshot tracking, breaking tests that rely on precise time travel across multiple deletes",
       "paths": [
-        "test/sql/delete/delete_file_stats.test",
-        "test/sql/delete/delete_same_transaction.test",
         "test/sql/delete/multi_deletes.test",
         "test/sql/table_changes/ducklake_table_deletions_compacted.test",
         "test/sql/table_changes/ducklake_table_deletions_large.test",
@@ -26,9 +24,7 @@
         "test/sql/rewrite_data_files/test_last_snapshot_merge_rewrite.test",
         "test/sql/rewrite_data_files/test_last_snapshot_rewrite.test",
         "test/sql/rewrite_data_files/test_rewrite_concurrency.test",
-        "test/sql/rewrite_data_files/test_rewrite_db.test",
-        "test/sql/alter/alter_timestamptz_promotion.test",
-        "test/sql/alter/test_insert_select_alter_column_persistence.test"
+        "test/sql/rewrite_data_files/test_rewrite_db.test"
       ]
     }
   ]
