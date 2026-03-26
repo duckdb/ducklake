@@ -38,7 +38,7 @@ static constexpr const ducklake_option_array DUCKLAKE_OPTIONS = {
                       "'ducklake_rewrite_data_files', 'ducklake_delete_orphaned_files'"},
      {"encrypted", "Whether or not to encrypt Parquet files written to the data path"},
      {"per_thread_output", "Whether to create separate output files per thread during parallel insertion"},
-     {"write_deletion_vectors", "Whether to write Iceberg V3 deletion vectors (puffin) instead of positional delete files (parquet)"}}};
+     {"write_deletion_vectors", "[EXPERIMENTAL - do not use outside testing] Whether to write Iceberg V3 deletion vectors (puffin) instead of positional delete files (parquet)"}}};
 
 struct DuckLakeOptionsData : public TableFunctionData {
 	explicit DuckLakeOptionsData(Catalog &catalog) : catalog(catalog) {
