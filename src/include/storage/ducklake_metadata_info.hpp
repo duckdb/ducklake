@@ -352,6 +352,7 @@ struct DuckLakeFileData {
 	string encryption_key;
 	idx_t file_size_bytes = 0;
 	optional_idx footer_size;
+	DeleteFileFormat format = DeleteFileFormat::PARQUET;
 };
 
 enum class DuckLakeDataType {

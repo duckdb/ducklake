@@ -887,6 +887,10 @@ string DuckLakeMetadataManager::GetFileSelectList(const string &prefix) {
 	return result;
 }
 
+string DuckLakeMetadataManager::GetDeleteFileSelectList(const string &prefix) {
+	return GetFileSelectList(prefix) + ", " + prefix + ".format AS " + prefix + "_format";
+}
+
 template <class T>
 DuckLakeFileData DuckLakeMetadataManager::ReadDataFile(DuckLakeTableEntry &table, T &row, idx_t &col_idx,
                                                        bool is_encrypted) {
@@ -916,6 +920,17 @@ DuckLakeFileData DuckLakeMetadataManager::ReadDataFile(DuckLakeTableEntry &table
 		}
 		data.encryption_key = Blob::FromBase64(row.template GetValue<string>(col_idx++));
 	}
+	return data;
+}
+
+template <class T>
+DuckLakeFileData DuckLakeMetadataManager::ReadDeleteFile(DuckLakeTableEntry &table, T &row, idx_t &col_idx,
+                                                         bool is_encrypted) {
+	auto data = ReadDataFile(table, row, col_idx, is_encrypted);
+	if (!row.IsNull(col_idx)) {
+		data.format = DeleteFileFormatFromString(row.template GetValue<string>(col_idx));
+	}
+	col_idx++;
 	return data;
 }
 
@@ -1354,7 +1369,7 @@ vector<DuckLakeFileListEntry> DuckLakeMetadataManager::GetFilesForTable(DuckLake
 
 	string select_list = "data.data_file_id, " + GetFileSelectList("data") +
 	                     ", data.row_id_start, data.begin_snapshot, data.partial_max, data.mapping_id, " +
-	                     GetFileSelectList("del") + stats_select_list;
+	                     GetDeleteFileSelectList("del") + stats_select_list;
 
 	string query;
 	string where_clause;
@@ -1415,7 +1430,7 @@ WHERE data.table_id=%d AND {SNAPSHOT_ID} >= data.begin_snapshot AND ({SNAPSHOT_I
 			file_entry.mapping_id = MappingIndex(row.GetValue<idx_t>(col_idx));
 		}
 		col_idx++;
-		file_entry.delete_file = ReadDataFile(table, row, col_idx, IsEncrypted());
+		file_entry.delete_file = ReadDeleteFile(table, row, col_idx, IsEncrypted());
 		for (auto &dfc : dynamic_filter_columns) {
 			string min_val;
 			string max_val;
@@ -1448,7 +1463,7 @@ vector<DuckLakeFileListEntry> DuckLakeMetadataManager::GetTableInsertions(DuckLa
 	auto table_id = table.GetTableId();
 	string select_list = GetFileSelectList("data") +
 	                     ", data.row_id_start, data.begin_snapshot, data.partial_max, data.mapping_id, " +
-	                     GetFileSelectList("del");
+	                     GetDeleteFileSelectList("del");
 	// Files either match the exact snapshot range
 	// Or they have partial_max set, which means they are a file with many snapshot ids, and might contain
 	// the snapshot we need
@@ -1461,7 +1476,8 @@ FROM {METADATA_CATALOG}.ducklake_data_file data, (
 		CAST(NULL AS BOOLEAN) path_is_relative,
 		CAST(NULL AS BIGINT) file_size_bytes,
 		CAST(NULL AS BIGINT) footer_size,
-		CAST(NULL AS VARCHAR) encryption_key
+		CAST(NULL AS VARCHAR) encryption_key,
+		CAST(NULL AS VARCHAR) format
 ) del
 WHERE data.table_id=%d AND data.begin_snapshot <= {SNAPSHOT_ID} AND (
 	(data.begin_snapshot >= %d) OR
@@ -1500,7 +1516,7 @@ WHERE data.table_id=%d AND data.begin_snapshot <= {SNAPSHOT_ID} AND (
 			file_entry.mapping_id = MappingIndex(row.GetValue<idx_t>(col_idx));
 		}
 		col_idx++;
-		file_entry.delete_file = ReadDataFile(table, row, col_idx, IsEncrypted());
+		file_entry.delete_file = ReadDeleteFile(table, row, col_idx, IsEncrypted());
 		files.push_back(std::move(file_entry));
 	}
 	return files;
@@ -1512,7 +1528,7 @@ vector<DuckLakeDeleteScanEntry> DuckLakeMetadataManager::GetTableDeletions(DuckL
 	auto table_id = table.GetTableId();
 	string select_list = "data.data_file_id, " + GetFileSelectList("data") +
 	                     ", data.row_id_start, data.record_count, data.mapping_id, " +
-	                     GetFileSelectList("current_delete") + ", " + GetFileSelectList("previous_delete");
+	                     GetDeleteFileSelectList("current_delete") + ", " + GetDeleteFileSelectList("previous_delete");
 
 	// Check if we have an inlined deletion table for this table (usually cached, no DB hit)
 	auto inlined_table_name = GetInlinedDeletionTableName(table_id, end_snapshot);
@@ -1547,7 +1563,7 @@ main_results AS (
 	// Main query: partial deletes from delete_file table and full file deletes
 	query += StringUtil::Format(R"(
 SELECT %s, current_delete.begin_snapshot FROM (
-	SELECT data_file_id, begin_snapshot, path, path_is_relative, file_size_bytes, footer_size, encryption_key
+	SELECT data_file_id, begin_snapshot, path, path_is_relative, file_size_bytes, footer_size, encryption_key, format
 	FROM {METADATA_CATALOG}.ducklake_delete_file
 	WHERE table_id = %d AND begin_snapshot <= {SNAPSHOT_ID}
 ) AS current_delete
@@ -1558,7 +1574,8 @@ LEFT JOIN LATERAL (
 		path_is_relative,
 		file_size_bytes,
 		footer_size,
-		encryption_key
+		encryption_key,
+		format
 	FROM {METADATA_CATALOG}.ducklake_delete_file
 	WHERE table_id = %d AND begin_snapshot < %d
 	ORDER BY data_file_id, begin_snapshot DESC
@@ -1585,13 +1602,14 @@ LEFT JOIN LATERAL (
 		path_is_relative,
 		file_size_bytes,
 		footer_size,
-		encryption_key
+		encryption_key,
+		format
 	FROM {METADATA_CATALOG}.ducklake_delete_file
 	WHERE table_id = %d AND begin_snapshot < data.end_snapshot
 	ORDER BY data_file_id, begin_snapshot DESC
 ) AS previous_delete
 USING (data_file_id), (
-	SELECT NULL path, NULL path_is_relative, NULL file_size_bytes, NULL footer_size, NULL encryption_key
+	SELECT NULL path, NULL path_is_relative, NULL file_size_bytes, NULL footer_size, NULL encryption_key, NULL format
 ) current_delete
 )",
 	                            select_list, table_id.index, table_id.index, start_snapshot.snapshot_id, table_id.index,
@@ -1602,6 +1620,7 @@ USING (data_file_id), (
 		if (IsEncrypted()) {
 			null_file_cols += ", NULL encryption_key";
 		}
+		null_file_cols += ", NULL format";
 		query += StringUtil::Format(R"(
 UNION ALL
 
@@ -1660,8 +1679,8 @@ FROM main_results
 			entry.mapping_id = MappingIndex(row.GetValue<idx_t>(col_idx));
 		}
 		col_idx++;
-		entry.delete_file = ReadDataFile(table, row, col_idx, IsEncrypted());
-		entry.previous_delete_file = ReadDataFile(table, row, col_idx, IsEncrypted());
+		entry.delete_file = ReadDeleteFile(table, row, col_idx, IsEncrypted());
+		entry.previous_delete_file = ReadDeleteFile(table, row, col_idx, IsEncrypted());
 		entry.snapshot_id = row.GetValue<idx_t>(col_idx++);
 		// store the snapshot range for filtering embedded snapshot IDs
 		entry.start_snapshot = start_snapshot.snapshot_id;
@@ -1690,7 +1709,7 @@ DuckLakeMetadataManager::GetExtendedFilesForTable(DuckLakeTableEntry &table, Duc
                                                   const FilterPushdownInfo *filter_info) {
 	auto table_id = table.GetTableId();
 	string select_list =
-	    GetFileSelectList("data") + ", data.row_id_start, " + GetFileSelectList("del") + ", del.begin_snapshot";
+	    GetFileSelectList("data") + ", data.row_id_start, " + GetDeleteFileSelectList("del") + ", del.begin_snapshot";
 
 	string query;
 	string where_clause;
@@ -1739,7 +1758,7 @@ WHERE data.table_id=%d AND {SNAPSHOT_ID} >= data.begin_snapshot AND ({SNAPSHOT_I
 			file_entry.row_id_start = row.GetValue<idx_t>(col_idx);
 		}
 		col_idx++;
-		file_entry.delete_file = ReadDataFile(table, row, col_idx, IsEncrypted());
+		file_entry.delete_file = ReadDeleteFile(table, row, col_idx, IsEncrypted());
 		if (!row.IsNull(col_idx)) {
 			file_entry.delete_file_begin_snapshot = row.GetValue<idx_t>(col_idx);
 		}
@@ -1768,7 +1787,7 @@ vector<DuckLakeCompactionFileEntry> DuckLakeMetadataManager::GetFilesForCompacti
 	                            "del.begin_snapshot AS del_begin_snapshot, "
 	                            "del.end_snapshot AS del_end_snapshot, "
 	                            "del.partial_max AS del_partial_max, " +
-	                            GetFileSelectList("del");
+	                            GetDeleteFileSelectList("del");
 	string select_list = data_select_list + ", " + delete_select_list;
 	string deletion_threshold_clause;
 	if (type == CompactionType::REWRITE_DELETES) {
@@ -1875,7 +1894,7 @@ ORDER BY data.begin_snapshot, data.row_id_start, data.data_file_id, del.begin_sn
 			delete_file.max_snapshot = row.GetValue<idx_t>(col_idx);
 		}
 		col_idx++;
-		delete_file.data = ReadDataFile(table, row, col_idx, IsEncrypted());
+		delete_file.data = ReadDeleteFile(table, row, col_idx, IsEncrypted());
 		file_entry.delete_files.push_back(std::move(delete_file));
 	}
 

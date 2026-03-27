@@ -135,7 +135,7 @@ DeleteFileScanResult DuckLakeDeleteFilter::ScanDeleteFile(ClientContext &context
                                                           optional_idx snapshot_filter_min,
                                                           optional_idx snapshot_filter_max) {
 	// Check if this is a puffin deletion vector file
-	if (StringUtil::EndsWith(delete_file.path, ".puffin")) {
+	if (delete_file.format == DeleteFileFormat::PUFFIN) {
 		return ScanDeletionVectorFile(context, delete_file);
 	}
 
