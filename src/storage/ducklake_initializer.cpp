@@ -76,6 +76,7 @@ void DuckLakeInitializer::Initialize() {
 	// check if we are loading an existing DuckLake or creating a new one
 	// directly query a known ducklake metadata table to avoid scanning all attached catalogs via duckdb_tables()
 	// this prevents a corrupted ducklake catalog from blocking initialization of unrelated ducklake databases
+	// FIXME: verify that all ducklake tables are in the correct format
 	result = transaction.Query("SELECT NULL FROM {METADATA_CATALOG}.ducklake_metadata LIMIT 1");
 	if (result->HasError()) {
 		auto &error_obj = result->GetErrorObject();
