@@ -1,6 +1,7 @@
 # name: test/sql/issues/corrupted_catalog_fault_isolation.test
 # description: A corrupted ducklake catalog should not prevent attaching other ducklake catalogs
 # group: [issues]
+# note: skipped in SQLite/Postgres CI configs - this test requires multiple independent metadata databases
 
 require ducklake
 
