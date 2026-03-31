@@ -21,6 +21,7 @@ add_library(
   ducklake_delete.cpp
   ducklake_deletion_vector.cpp
   ducklake_multi_file_reader.cpp
+  ducklake_partition_data.cpp
   ducklake_secret.cpp
   ducklake_stats.cpp
   ducklake_table_entry.cpp
