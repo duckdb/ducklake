@@ -140,7 +140,7 @@ SinkFinalizeType DuckLakeFlushData::Finalize(Pipeline &pipeline, Event &event, C
 			auto deleted_rows_result =
 			    transaction.Query(snapshot, StringUtil::Format(R"(
 				WITH all_rows AS (
-					SELECT end_snapshot, ROW_NUMBER() OVER (ORDER BY row_id) - 1 AS output_position
+					SELECT end_snapshot, ROW_NUMBER() OVER (ORDER BY row_id, begin_snapshot) - 1 AS output_position
 					FROM {METADATA_CATALOG}.%s
 					WHERE {SNAPSHOT_ID} >= begin_snapshot%s
 				)
