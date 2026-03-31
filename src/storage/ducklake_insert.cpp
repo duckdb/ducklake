@@ -199,6 +199,9 @@ void DuckLakeInsert::AddWrittenFiles(DuckLakeInsertGlobalState &global_state, Da
 			}
 		}
 		if (set_snapshot_id && !data_file.begin_snapshot.IsValid()) {
+			if (data_file.row_count == 0) {
+				continue;
+			}
 			throw InvalidInputException("Did not find written snapshot id - but operation requires it to be set");
 		}
 
