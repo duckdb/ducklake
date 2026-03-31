@@ -143,6 +143,11 @@ public:
 		return hive_file_pattern == "true";
 	}
 
+	bool WriteDeletionVectors(SchemaIndex schema_id, TableIndex table_id) const {
+		auto write_dv = GetConfigOption<string>("write_deletion_vectors", schema_id, table_id, "false");
+		return write_dv == "true";
+	}
+
 	void SetEncryption(DuckLakeEncryption encryption);
 	// Generate an encryption key for writing (or empty if encryption is disabled)
 	string GenerateEncryptionKey(ClientContext &context) const;
