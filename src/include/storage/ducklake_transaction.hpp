@@ -74,6 +74,7 @@ public:
 	void AddNewInlinedFileDeletes(TableIndex table_id, idx_t file_id, set<idx_t> new_deletes);
 	void AddCompaction(TableIndex table_id, DuckLakeCompactionEntry entry);
 	bool HasLocalDeletes(TableIndex table_id) const;
+	bool HasLocalDeleteForFile(TableIndex table_id, const string &path) const;
 	bool HasAnyLocalChanges(TableIndex table_id) const;
 
 	void GetLocalDeleteForFile(TableIndex table_id, const string &path, DuckLakeFileData &result) const;
@@ -235,6 +236,7 @@ public:
 	string GetDefaultSchemaName();
 
 	bool HasLocalDeletes(TableIndex table_id) const;
+	bool HasLocalDeleteForFile(TableIndex table_id, const string &path) const;
 	void GetLocalDeleteForFile(TableIndex table_id, const string &path, DuckLakeFileData &delete_file) const;
 	void TransactionLocalDelete(TableIndex table_id, const string &data_path, DuckLakeDeleteFile delete_file);
 

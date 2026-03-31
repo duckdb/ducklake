@@ -470,6 +470,17 @@ bool LocalTableChanges::HasAnyLocalChanges(TableIndex table_id) const {
 	return false;
 }
 
+bool LocalTableChanges::HasLocalDeleteForFile(TableIndex table_id, const string &path) const {
+	lock_guard<mutex> guard(lock);
+	auto entry = changes.find(table_id);
+	if (entry == changes.end()) {
+		return false;
+	}
+	auto &table_changes = entry->second;
+	auto file_entry = table_changes.new_delete_files.find(path);
+	return file_entry != table_changes.new_delete_files.end() && !file_entry->second.empty();
+}
+
 void LocalTableChanges::GetLocalDeleteForFile(TableIndex table_id, const string &path, DuckLakeFileData &result) const {
 	lock_guard<mutex> guard(lock);
 	auto entry = changes.find(table_id);
@@ -2735,6 +2746,10 @@ void DuckLakeTransaction::AddCompaction(TableIndex table_id, DuckLakeCompactionE
 
 bool DuckLakeTransaction::HasLocalDeletes(TableIndex table_id) const {
 	return local_changes.HasLocalDeletes(table_id);
+}
+
+bool DuckLakeTransaction::HasLocalDeleteForFile(TableIndex table_id, const string &path) const {
+	return local_changes.HasLocalDeleteForFile(table_id, path);
 }
 
 bool DuckLakeTransaction::HasAnyLocalChanges(TableIndex table_id) const {
