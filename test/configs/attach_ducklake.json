@@ -172,8 +172,9 @@
         "test/sql/update/test_update_same_value.test",
         "test/sql/delete/cleanup_delete_on_conflict.test",
         "test/sql/alter/add_col/test_add_col_transactions.test",
-        "test/sql/alter/drop_col/test_drop_col_transactions.test"
-
+        "test/sql/alter/drop_col/test_drop_col_transactions.test",
+        "test/sql/transactions/transaction_insert_mixed_deletes.test",
+        "test/sql/transactions/transaction_insert_delete_chunks.test"
       ]
     },
     {
