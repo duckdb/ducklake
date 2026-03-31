@@ -2659,7 +2659,7 @@ unique_ptr<QueryResult> DuckLakeMetadataManager::ReadAllInlinedDataForFlush(Duck
 SELECT %s
 FROM {METADATA_CATALOG}.%s inlined_data
 WHERE {SNAPSHOT_ID} >= begin_snapshot
-ORDER BY row_id;)",
+ORDER BY row_id, begin_snapshot;)",
 	                                                             projection, inlined_table_name));
 	return result;
 }
