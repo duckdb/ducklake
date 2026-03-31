@@ -784,7 +784,7 @@ PhysicalOperator &DuckLakeCatalog::PlanCreateTableAs(ClientContext &context, Phy
 	// FIXME: if table already exists and we are doing CREATE IF NOT EXISTS - skip
 	reference<PhysicalOperator> root = plan;
 	optional_ptr<DuckLakeInlineData> inline_data;
-	idx_t data_inlining_row_limit = DataInliningRowLimit(duck_schema.GetSchemaId(), TableIndex());
+	idx_t data_inlining_row_limit = DataInliningRowLimit(context, duck_schema.GetSchemaId(), TableIndex());
 	auto &metadata_manager = duck_transaction.GetMetadataManager();
 	if (data_inlining_row_limit > 0 && !DuckLakeUtil::HasInlinedSystemColumnConflict(columns) &&
 	    metadata_manager.SupportsInliningTypes(plan.types)) {

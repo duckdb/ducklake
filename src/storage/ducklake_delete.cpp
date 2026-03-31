@@ -433,7 +433,7 @@ void DuckLakeDelete::FlushDelete(DuckLakeTransaction &transaction, ClientContext
 	if (data_file_info.file_id.IsValid()) {
 		auto &catalog = table.catalog.Cast<DuckLakeCatalog>();
 		auto &schema = table.ParentSchema().Cast<DuckLakeSchemaEntry>();
-		auto threshold = catalog.DataInliningRowLimit(schema.GetSchemaId(), table.GetTableId());
+		auto threshold = catalog.DataInliningRowLimit(context, schema.GetSchemaId(), table.GetTableId());
 		if (threshold > 0 && sorted_deletes.size() <= threshold) {
 			// use inlined file deletions
 			transaction.AddNewInlinedFileDeletes(table.GetTableId(), data_file_info.file_id.index,
