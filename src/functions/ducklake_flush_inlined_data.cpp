@@ -194,7 +194,8 @@ SinkFinalizeType DuckLakeFlushData::Finalize(Pipeline &pipeline, Event &event, C
 	}
 
 	transaction.AppendFiles(global_state.table.GetTableId(), std::move(global_state.written_files));
-	transaction.DeleteInlinedData(inlined_table);
+	transaction.DeleteFlushedInlinedData(inlined_table, snapshot.snapshot_id);
+	transaction.MarkInlinedDataForDeletion(inlined_table, snapshot.snapshot_id);
 	return SinkFinalizeType::READY;
 }
 
@@ -404,6 +405,7 @@ struct FileDeleteInfo {
 	bool existing_delete_path_is_relative = false;
 	idx_t existing_delete_begin_snapshot = 0;
 	string existing_delete_encryption_key;
+	DeleteFileFormat existing_delete_format = DeleteFileFormat::PARQUET;
 };
 
 static void FlushInlinedFileDeletions(ClientContext &context, DuckLakeCatalog &catalog,
@@ -423,7 +425,8 @@ static void FlushInlinedFileDeletions(ClientContext &context, DuckLakeCatalog &c
 	auto deletions_result = transaction.Query(snapshot, StringUtil::Format(R"(
 SELECT del.file_id, data.path, data.path_is_relative, del.row_id, del.begin_snapshot,
        existing_del.delete_file_id, existing_del.path as del_path, existing_del.path_is_relative as del_path_is_relative,
-       existing_del.begin_snapshot as del_begin_snapshot, existing_del.encryption_key as del_encryption_key
+       existing_del.begin_snapshot as del_begin_snapshot, existing_del.encryption_key as del_encryption_key,
+       existing_del.format as del_format
 FROM {METADATA_CATALOG}.%s del
 JOIN {METADATA_CATALOG}.ducklake_data_file data ON del.file_id = data.data_file_id
 LEFT JOIN (
@@ -468,6 +471,10 @@ LEFT JOIN (
 					file_info.existing_delete_begin_snapshot = chunk->GetValue(8, row_idx).GetValue<idx_t>();
 					if (!chunk->GetValue(9, row_idx).IsNull()) {
 						file_info.existing_delete_encryption_key = chunk->GetValue(9, row_idx).GetValue<string>();
+					}
+					if (!chunk->GetValue(10, row_idx).IsNull()) {
+						file_info.existing_delete_format =
+						    DeleteFileFormatFromString(chunk->GetValue(10, row_idx).GetValue<string>());
 					}
 				}
 			} else {
@@ -515,6 +522,7 @@ LEFT JOIN (
 			                                     ? table.DataPath() + file_info.existing_delete_path
 			                                     : file_info.existing_delete_path;
 			existing_delete_file_data.encryption_key = file_info.existing_delete_encryption_key;
+			existing_delete_file_data.format = file_info.existing_delete_format;
 
 			auto existing_deletions = DuckLakeDeleteFilter::ScanDeleteFile(context, existing_delete_file_data);
 

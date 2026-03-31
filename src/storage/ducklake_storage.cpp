@@ -47,6 +47,9 @@ static void HandleDuckLakeOption(DuckLakeOptions &options, const string &option,
 	} else if (StringUtil::StartsWith(lcase, "meta_")) {
 		auto parameter_name = lcase.substr(5);
 		options.metadata_parameters[parameter_name] = value;
+	} else if (lcase == "write_deletion_vectors") {
+		options.config_options["write_deletion_vectors"] =
+		    BooleanValue::Get(value.DefaultCastAs(LogicalType::BOOLEAN)) ? "true" : "false";
 	} else if (lcase == "create_if_not_exists") {
 		options.create_if_not_exists = BooleanValue::Get(value.DefaultCastAs(LogicalType::BOOLEAN));
 	} else if (lcase == "automatic_migration") {

@@ -13,6 +13,7 @@
 #include "duckdb/catalog/catalog_entry/scalar_macro_catalog_entry.hpp"
 #include "duckdb/catalog/catalog_entry/table_macro_catalog_entry.hpp"
 #include "storage/ducklake_macro_entry.hpp"
+#include "common/ducklake_util.hpp"
 
 namespace duckdb {
 
@@ -62,6 +63,12 @@ optional_ptr<CatalogEntry> DuckLakeSchemaEntry::CreateTableExtended(CatalogTrans
 	// check if we have an existing entry with this name
 	if (!HandleCreateConflict(transaction, CatalogType::TABLE_ENTRY, base_info.table, base_info.on_conflict)) {
 		return nullptr;
+	}
+	// reject columns with reserved DuckLake internal names
+	for (auto &col : base_info.columns.Logical()) {
+		if (DuckLakeUtil::IsInlinedSystemColumn(col.Name())) {
+			throw BinderException("Column name \"%s\" is reserved by DuckLake for internal use", col.Name());
+		}
 	}
 	//! get a local table-id
 	auto table_id = TableIndex(duck_transaction.GetLocalCatalogId());
@@ -136,12 +143,17 @@ optional_ptr<CatalogEntry> DuckLakeSchemaEntry::CreateView(CatalogTransaction tr
 		return nullptr;
 	}
 	auto &duck_transaction = transaction.transaction->Cast<DuckLakeTransaction>();
-	//! get a local view-id
+	// get a local view-id
 	auto view_id = TableIndex(duck_transaction.GetLocalCatalogId());
 	auto view_uuid = UUID::ToString(UUID::GenerateRandomUUID());
 
+	// replace our catalog name with a generic {DUCKLAKE_CATALOG}.
+	auto query_sql = info.query->ToString();
+	auto &catalog_name = ParentCatalog().GetName();
+	query_sql = StringUtil::Replace(query_sql, catalog_name + ".", "{DUCKLAKE_CATALOG}.");
+
 	auto view_entry = make_uniq<DuckLakeViewEntry>(ParentCatalog(), *this, info, view_id, std::move(view_uuid),
-	                                               info.query->ToString(), LocalChangeType::CREATED);
+	                                               query_sql, LocalChangeType::CREATED);
 	auto result = view_entry.get();
 	duck_transaction.CreateEntry(std::move(view_entry));
 	return result;
