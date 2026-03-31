@@ -326,6 +326,19 @@ void DuckLakeTableEntry::SetSortData(unique_ptr<DuckLakeSort> sort_data_p) {
 	sort_data = std::move(sort_data_p);
 }
 
+vector<string> DuckLakeTableEntry::GetPartitionSQLExpressions() const {
+	vector<string> result;
+	if (!partition_data) {
+		return result;
+	}
+	for (auto &field : partition_data->fields) {
+		auto &col = GetColumnByFieldId(field.field_id);
+		auto col_name = KeywordHelper::WriteOptionallyQuoted(col.GetName());
+		result.push_back(DuckLakePartitionUtils::GetPartitionSQLExpression(field.transform.type, col_name));
+	}
+	return result;
+}
+
 const string &DuckLakeTableEntry::DataPath() const {
 	return data_path;
 }
