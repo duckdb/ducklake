@@ -283,13 +283,15 @@ DuckLakeMetadata DuckLakeMetadataManager::LoadDuckLake() {
 SELECT key, value, scope, scope_id FROM {METADATA_CATALOG}.ducklake_metadata
 )");
 	if (result->HasError()) {
+		// preserve the original error in case the fallback also fails
+		auto original_error = result->GetErrorObject().RawMessage();
 		// we might be loading from a v0.1 database - if so we don't have scope yet
 		result = transaction.Query(R"(
 SELECT key, value FROM {METADATA_CATALOG}.ducklake_metadata
 )");
 		if (result->HasError()) {
-			auto &error_obj = result->GetErrorObject();
-			error_obj.Throw("Failed to load existing DuckLake: ");
+			auto fallback_error = result->GetErrorObject().RawMessage();
+			throw IOException("Failed to load existing DuckLake: %s\nFollowed by: %s", original_error, fallback_error);
 		}
 	}
 	DuckLakeMetadata metadata;
