@@ -40,6 +40,11 @@ struct DuckLakeCommitState;
 class DuckLakeFieldId;
 class LocalTableChangeIterationHelper;
 
+struct FlushedInlinedTableInfo {
+	DuckLakeInlinedTableInfo inlined_table;
+	idx_t flush_snapshot_id;
+};
+
 struct LocalTableDataChanges {
 	vector<DuckLakeDataFile> new_data_files;
 	unique_ptr<DuckLakeInlinedData> new_inlined_data;
@@ -74,6 +79,7 @@ public:
 	void AddNewInlinedFileDeletes(TableIndex table_id, idx_t file_id, set<idx_t> new_deletes);
 	void AddCompaction(TableIndex table_id, DuckLakeCompactionEntry entry);
 	bool HasLocalDeletes(TableIndex table_id) const;
+	bool HasLocalDeleteForFile(TableIndex table_id, const string &path) const;
 	bool HasAnyLocalChanges(TableIndex table_id) const;
 
 	void GetLocalDeleteForFile(TableIndex table_id, const string &path, DuckLakeFileData &result) const;
@@ -221,6 +227,10 @@ public:
 
 	void DeleteSnapshots(const vector<DuckLakeSnapshotInfo> &snapshots);
 	void DeleteInlinedData(const DuckLakeInlinedTableInfo &inlined_table);
+	//! Delete inlined data rows with begin_snapshot <= flush_snapshot_id
+	void DeleteFlushedInlinedData(const DuckLakeInlinedTableInfo &inlined_table, idx_t flush_snapshot_id);
+	//! Marks that inlined data have been deleted in a flush if retries are necessary
+	void MarkInlinedDataForDeletion(DuckLakeInlinedTableInfo inlined_table, idx_t flush_snapshot_id);
 
 	bool SchemaChangesMade() const;
 	bool ChangesMade() const;
@@ -235,6 +245,7 @@ public:
 	string GetDefaultSchemaName();
 
 	bool HasLocalDeletes(TableIndex table_id) const;
+	bool HasLocalDeleteForFile(TableIndex table_id, const string &path) const;
 	void GetLocalDeleteForFile(TableIndex table_id, const string &path, DuckLakeFileData &delete_file) const;
 	void TransactionLocalDelete(TableIndex table_id, const string &data_path, DuckLakeDeleteFile delete_file);
 
@@ -351,6 +362,8 @@ private:
 	map<SchemaIndex, reference<DuckLakeSchemaEntry>> dropped_schemas;
 	//! Local changes made to tables
 	LocalTableChanges local_changes;
+	//! Inlined data tables that were flushed and should be cleaned up during commit (snapshot-bounded)
+	vector<FlushedInlinedTableInfo> flushed_inlined_tables;
 	//! Snapshot cache for the AT (...) conditions that are referenced in the transaction
 	value_map_t<DuckLakeSnapshot> snapshot_cache;
 	//! New set of transaction-local name maps

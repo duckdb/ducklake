@@ -1,7 +1,7 @@
 {
   "description": "Run DuckLake tests using Postgres as a catalog DBMS.",
   "on_init": "ATTACH 'dbname=ducklakedb' AS pg (TYPE postgres); USE pg; DROP SCHEMA public CASCADE; DROP SCHEMA IF EXISTS metadata_s1 CASCADE; DROP SCHEMA IF EXISTS metadata_s2 CASCADE; CREATE SCHEMA public;USE memory; DETACH pg;",
-  "autoloading": "all",
+  "autoloading": "none",
   "statically_loaded_extensions": [
     "core_functions",
     "parquet",
@@ -24,6 +24,7 @@
         "test/sql/general/default_path.test",
         "test/sql/autoloading/autoload_data_path.test",
         "test/sql/general/metadata_parameters.test",
+        "test/sql/issues/corrupted_catalog_fault_isolation.test",
         "test/sql/metadata/ducklake_settings.test",
         "test/sql/remove_orphans/metadata_in_data_path.test"
       ]

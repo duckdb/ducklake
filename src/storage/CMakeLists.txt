@@ -10,6 +10,7 @@ add_library(
   ducklake_inlined_data.cpp
   ducklake_inlined_data_reader.cpp
   ducklake_insert.cpp
+  ducklake_log_type.cpp
   ducklake_merge_into.cpp
   ducklake_schema_entry.cpp
   ducklake_transaction_manager.cpp
@@ -18,7 +19,9 @@ add_library(
   ducklake_multi_file_list.cpp
   ducklake_storage.cpp
   ducklake_delete.cpp
+  ducklake_deletion_vector.cpp
   ducklake_multi_file_reader.cpp
+  ducklake_partition_data.cpp
   ducklake_secret.cpp
   ducklake_stats.cpp
   ducklake_table_entry.cpp

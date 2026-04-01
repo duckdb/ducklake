@@ -186,6 +186,7 @@ struct DuckLakeDeleteFileInfo {
 	TableIndex table_id;
 	DataFileIndex data_file_id;
 	string path;
+	DeleteFileFormat format = DeleteFileFormat::PARQUET;
 	idx_t delete_count;
 	idx_t file_size_bytes;
 	idx_t footer_size;
@@ -351,6 +352,7 @@ struct DuckLakeFileData {
 	string encryption_key;
 	idx_t file_size_bytes = 0;
 	optional_idx footer_size;
+	DeleteFileFormat format = DeleteFileFormat::PARQUET;
 };
 
 enum class DuckLakeDataType {

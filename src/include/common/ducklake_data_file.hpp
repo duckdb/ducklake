@@ -20,6 +20,14 @@ struct DuckLakeFilePartition {
 	Value partition_value;
 };
 
+enum class DeleteFileFormat : uint8_t {
+	PARQUET, //! Positional delete file in Parquet format
+	PUFFIN   //! Deletion vector in Puffin format (Iceberg V3)
+};
+
+string DeleteFileFormatToString(DeleteFileFormat format);
+DeleteFileFormat DeleteFileFormatFromString(const string &str);
+
 enum class DeleteFileSource : uint8_t {
 	REGULAR, //! Regular delete file created during a DELETE operation
 	FLUSH    //! Delete file created during a flush operation (flushing inlined data)
@@ -34,6 +42,7 @@ struct DuckLakeDeleteFile {
 	DataFileIndex data_file_id;
 	string data_file_path;
 	string file_name;
+	DeleteFileFormat format = DeleteFileFormat::PARQUET;
 	idx_t delete_count;
 	idx_t file_size_bytes;
 	idx_t footer_size;
