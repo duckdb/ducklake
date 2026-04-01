@@ -266,8 +266,13 @@ ReaderInitializeType DuckLakeMultiFileReader::InitializeReader(MultiFileReaderDa
 			if (file_entry.max_row_count.IsValid()) {
 				delete_filter->SetMaxRowCount(file_entry.max_row_count.GetIndex());
 			}
-			// set the snapshot id so we know what to skip from deletion files
-			delete_filter->SetSnapshotFilter(read_info.snapshot.snapshot_id);
+			auto txn = read_info.GetTransaction();
+			bool has_local_delete = txn && txn->HasLocalDeleteForFile(read_info.table_id, reader.GetFileName());
+			if (!has_local_delete) {
+				// We only set snapshot filter if this file is not a current running transaction
+				// OW, we are guaranteed to be on the latest valid snapshot
+				delete_filter->SetSnapshotFilter(read_info.snapshot.snapshot_id);
+			}
 			reader.deletion_filter = std::move(delete_filter);
 		}
 	} else {

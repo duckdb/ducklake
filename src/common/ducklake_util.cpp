@@ -328,7 +328,8 @@ DynamicFilter *DuckLakeUtil::GetOptionalDynamicFilter(const TableFilter &filter)
 
 bool DuckLakeUtil::IsInlinedSystemColumn(const string &name) {
 	return StringUtil::CIEquals(name, "row_id") || StringUtil::CIEquals(name, "begin_snapshot") ||
-	       StringUtil::CIEquals(name, "end_snapshot");
+	       StringUtil::CIEquals(name, "end_snapshot") || StringUtil::CIEquals(name, "_ducklake_internal_snapshot_id") ||
+	       StringUtil::CIEquals(name, "_ducklake_internal_row_id");
 }
 
 bool DuckLakeUtil::HasInlinedSystemColumnConflict(const ColumnList &columns) {

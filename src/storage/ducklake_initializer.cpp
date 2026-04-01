@@ -74,22 +74,24 @@ void DuckLakeInitializer::Initialize() {
 	}
 	// after the metadata database is attached initialize the ducklake
 	// check if we are loading an existing DuckLake or creating a new one
-	// FIXME: verify that all tables are in the correct format instead
-	result = transaction.Query(
-	    "SELECT COUNT(*) FROM duckdb_tables() WHERE database_name={METADATA_CATALOG_NAME_LITERAL} AND "
-	    "schema_name={METADATA_SCHEMA_NAME_LITERAL} AND table_name LIKE 'ducklake_%'");
+	// directly query a known ducklake metadata table to avoid scanning all attached catalogs via duckdb_tables()
+	// this prevents a corrupted ducklake catalog from blocking initialization of unrelated ducklake databases
+	// FIXME: verify that all ducklake tables are in the correct format
+	result = transaction.Query("SELECT NULL FROM {METADATA_CATALOG}.ducklake_metadata LIMIT 1");
 	if (result->HasError()) {
 		auto &error_obj = result->GetErrorObject();
-		error_obj.Throw("Failed to load DuckLake table data");
-	}
-	auto count = result->Fetch()->GetValue(0, 0).GetValue<idx_t>();
-	if (count == 0) {
-		if (!options.create_if_not_exists) {
-			throw InvalidInputException("Existing DuckLake at metadata catalog \"%s\" does not exist - and creating a "
-			                            "new DuckLake is explicitly disabled",
-			                            options.metadata_path);
+		if (error_obj.Type() == ExceptionType::CATALOG) {
+			// table does not exist - this is a new ducklake
+			if (!options.create_if_not_exists) {
+				throw InvalidInputException(
+				    "Existing DuckLake at metadata catalog \"%s\" does not exist - and creating a "
+				    "new DuckLake is explicitly disabled",
+				    options.metadata_path);
+			}
+			InitializeNewDuckLake(transaction, has_explicit_schema);
+		} else {
+			error_obj.Throw("Failed to load DuckLake table data");
 		}
-		InitializeNewDuckLake(transaction, has_explicit_schema);
 	} else {
 		LoadExistingDuckLake(transaction);
 	}

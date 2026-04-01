@@ -221,6 +221,7 @@ DuckLakeFileData GetDeleteData(const DuckLakeDataFile &file) {
 	result.encryption_key = delete_file.encryption_key;
 	result.file_size_bytes = delete_file.file_size_bytes;
 	result.footer_size = delete_file.footer_size;
+	result.format = delete_file.format;
 	return result;
 }
 
