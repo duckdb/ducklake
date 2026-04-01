@@ -260,14 +260,8 @@ TableFunction DuckLakeTableEntry::GetScanFunction(ClientContext &context, unique
 	auto function = DuckLakeFunctions::GetDuckLakeScanFunction(*context.db);
 	auto &transaction = DuckLakeTransaction::Get(context, ParentCatalog());
 	auto function_info =
-	    make_shared_ptr<DuckLakeFunctionInfo>(*this, transaction, transaction.GetSnapshot(lookup_info.GetAtClause()));
-	function_info->table_name = name;
-	for (auto &col : columns.Logical()) {
-		function_info->column_names.push_back(col.Name());
-		function_info->column_types.push_back(col.Type());
-	}
-	auto table_id = GetTableId();
-	function_info->table_id = table_id;
+	    DuckLakeFunctionInfo::Create(*this, transaction, transaction.GetSnapshot(lookup_info.GetAtClause()));
+	auto table_id = function_info->table_id;
 	function.function_info = std::move(function_info);
 	auto &dropped_tables = transaction.GetDroppedTables();
 	auto &renamed_tables = transaction.GetRenamedTables();
@@ -330,6 +324,20 @@ void DuckLakeTableEntry::SetPartitionData(unique_ptr<DuckLakePartition> partitio
 
 void DuckLakeTableEntry::SetSortData(unique_ptr<DuckLakeSort> sort_data_p) {
 	sort_data = std::move(sort_data_p);
+}
+
+vector<string> DuckLakeTableEntry::GetPartitionSQLExpressions() const {
+	vector<string> result;
+	if (!partition_data) {
+		return result;
+	}
+	for (auto &field : partition_data->fields) {
+		auto &col = GetColumnByFieldId(field.field_id);
+		auto col_name = KeywordHelper::WriteOptionallyQuoted(col.GetName());
+		col_name = "CAST(" + col_name + " AS " + col.GetType().ToString() + ")";
+		result.push_back(DuckLakePartitionUtils::GetPartitionSQLExpression(field.transform.type, col_name));
+	}
+	return result;
 }
 
 const string &DuckLakeTableEntry::DataPath() const {

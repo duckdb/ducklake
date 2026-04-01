@@ -16,6 +16,9 @@
 #include "storage/ducklake_partition_data.hpp"
 #include "storage/ducklake_stats.hpp"
 
+#include <chrono>
+#include <functional>
+
 namespace duckdb {
 struct DuckLakeGlobalStatsInfo;
 class ColumnList;
@@ -59,6 +62,7 @@ public:
 		return metadata_type;
 	}
 	idx_t DataInliningRowLimit(SchemaIndex schema_index, TableIndex table_index) const;
+	idx_t DataInliningRowLimit(ClientContext &context, SchemaIndex schema_index, TableIndex table_index) const;
 	//! Returns the inlining limit (0 if the table is not eligible)
 	idx_t GetInliningLimit(ClientContext &context, DuckLakeTableEntry &table, const vector<LogicalType> &types);
 	string &Separator() {
@@ -140,6 +144,11 @@ public:
 		return hive_file_pattern == "true";
 	}
 
+	bool WriteDeletionVectors(SchemaIndex schema_id, TableIndex table_id) const {
+		auto write_dv = GetConfigOption<string>("write_deletion_vectors", schema_id, table_id, "false");
+		return write_dv == "true";
+	}
+
 	void SetEncryption(DuckLakeEncryption encryption);
 	// Generate an encryption key for writing (or empty if encryption is disabled)
 	string GenerateEncryptionKey(ClientContext &context) const;
@@ -174,6 +183,16 @@ public:
 	                                                   DuckLakeCatalogSet &schema);
 	//! Return the schema for the given snapshot - loading it if it is not yet loaded
 	DuckLakeCatalogSet &GetSchemaForSnapshot(DuckLakeTransaction &transaction, DuckLakeSnapshot snapshot);
+
+	//! Callback type for instrumenting metadata queries
+	using QueryCallback = std::function<void(const string &query, std::chrono::steady_clock::duration elapsed)>;
+
+	void SetQueryCallback(QueryCallback callback) {
+		query_callback = std::move(callback);
+	}
+	const QueryCallback &GetQueryCallback() const {
+		return query_callback;
+	}
 
 	//! Check if an inlined deletion table is known to exist or not exist for the given table and snapshot
 	InlinedDeletionCacheResult CheckInlinedDeletionTableCache(TableIndex table_id, DuckLakeSnapshot snapshot);
@@ -220,6 +239,8 @@ private:
 	//! The id of the last committed snapshot, set at FlushChanges on a successful commit
 	mutable mutex commit_lock;
 	optional_idx last_committed_snapshot;
+	//! Optional callback for instrumenting metadata queries
+	QueryCallback query_callback;
 };
 
 } // namespace duckdb

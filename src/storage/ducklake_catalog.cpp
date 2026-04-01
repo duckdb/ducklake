@@ -62,13 +62,10 @@ void DuckLakeCatalog::FinalizeLoad(optional_ptr<ClientContext> context) {
 		con->BeginTransaction();
 		context = con->context.get();
 	}
-	// If data_inlining_row_limit wasn't explicitly set via ATTACH options,
-	// use the global DuckDB setting as the default
-	if (options.config_options.find("data_inlining_row_limit") == options.config_options.end()) {
+	if (options.config_options.find("write_deletion_vectors") == options.config_options.end()) {
 		Value setting_val;
-		if (context->TryGetCurrentSetting("ducklake_default_data_inlining_row_limit", setting_val)) {
-			auto limit = setting_val.GetValue<idx_t>();
-			options.config_options["data_inlining_row_limit"] = to_string(limit);
+		if (context->TryGetCurrentSetting("ducklake_write_deletion_vectors", setting_val)) {
+			options.config_options["write_deletion_vectors"] = setting_val.GetValue<bool>() ? "true" : "false";
 		}
 	}
 	DuckLakeInitializer initializer(*context, *this, options);
@@ -826,10 +823,24 @@ idx_t DuckLakeCatalog::DataInliningRowLimit(SchemaIndex schema_index, TableIndex
 	return GetConfigOption<idx_t>("data_inlining_row_limit", schema_index, table_index, 10);
 }
 
+idx_t DuckLakeCatalog::DataInliningRowLimit(ClientContext &context, SchemaIndex schema_index,
+                                            TableIndex table_index) const {
+	string value_str;
+	if (TryGetConfigOption("data_inlining_row_limit", value_str, schema_index, table_index)) {
+		return Value(value_str).GetValue<idx_t>();
+	}
+	// No explicit catalog/schema/table option set, we read the global DuckDB setting
+	Value setting_val;
+	if (context.TryGetCurrentSetting("ducklake_default_data_inlining_row_limit", setting_val)) {
+		return setting_val.GetValue<idx_t>();
+	}
+	return 10;
+}
+
 idx_t DuckLakeCatalog::GetInliningLimit(ClientContext &context, DuckLakeTableEntry &table,
                                         const vector<LogicalType> &types) {
 	auto &schema = table.ParentSchema().Cast<DuckLakeSchemaEntry>();
-	idx_t limit = DataInliningRowLimit(schema.GetSchemaId(), table.GetTableId());
+	idx_t limit = DataInliningRowLimit(context, schema.GetSchemaId(), table.GetTableId());
 	if (limit == 0) {
 		return 0;
 	}
