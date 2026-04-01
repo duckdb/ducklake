@@ -1708,8 +1708,8 @@ vector<DuckLakeFileListExtendedEntry>
 DuckLakeMetadataManager::GetExtendedFilesForTable(DuckLakeTableEntry &table, DuckLakeSnapshot snapshot,
                                                   const FilterPushdownInfo *filter_info) {
 	auto table_id = table.GetTableId();
-	string select_list =
-	    GetFileSelectList("data") + ", data.row_id_start, data.mapping_id, " + GetDeleteFileSelectList("del") + ", del.begin_snapshot";
+	string select_list = GetFileSelectList("data") + ", data.row_id_start, data.mapping_id, " +
+	                     GetDeleteFileSelectList("del") + ", del.begin_snapshot";
 
 	string query;
 	string where_clause;
