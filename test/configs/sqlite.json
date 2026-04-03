@@ -1,6 +1,6 @@
 {
   "description": "Run DuckLake tests using SQLite as a catalog DBMS.",
-  "autoloading": "all",
+  "autoloading": "none",
   "statically_loaded_extensions": [
     "core_functions",
     "parquet",
@@ -68,6 +68,7 @@
       "paths": [
         "test/sql/general/missing_parquet.test",
         "test/sql/general/paths.test",
+        "test/sql/issues/corrupted_catalog_fault_isolation.test",
         "test/sql/secrets/ducklake_secrets.test"
       ]
     },

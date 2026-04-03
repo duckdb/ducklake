@@ -199,6 +199,9 @@ void DuckLakeInsert::AddWrittenFiles(DuckLakeInsertGlobalState &global_state, Da
 			}
 		}
 		if (set_snapshot_id && !data_file.begin_snapshot.IsValid()) {
+			if (data_file.row_count == 0) {
+				continue;
+			}
 			throw InvalidInputException("Did not find written snapshot id - but operation requires it to be set");
 		}
 
@@ -758,15 +761,10 @@ PhysicalOperator &DuckLakeCatalog::PlanInsert(ClientContext &context, PhysicalPl
 		plan = planner.ResolveDefaultsProjection(op, *plan);
 	}
 	auto &ducklake_table = op.table.Cast<DuckLakeTableEntry>();
-	auto &ducklake_schema = ducklake_table.ParentSchema().Cast<DuckLakeSchemaEntry>();
 	optional_ptr<DuckLakeInlineData> inline_data;
 
-	idx_t data_inlining_row_limit = DataInliningRowLimit(ducklake_schema.GetSchemaId(), ducklake_table.GetTableId());
-	// FIXME: we are skipping columns that have conflicting names, we should resolve this
-	auto &duck_transaction = DuckLakeTransaction::Get(context, *this);
-	auto &metadata_manager = duck_transaction.GetMetadataManager();
-	if (data_inlining_row_limit > 0 && !DuckLakeUtil::HasInlinedSystemColumnConflict(ducklake_table.GetColumns()) &&
-	    metadata_manager.SupportsInliningTypes(plan->types)) {
+	idx_t data_inlining_row_limit = GetInliningLimit(context, ducklake_table, plan->types);
+	if (data_inlining_row_limit > 0) {
 		plan = planner.Make<DuckLakeInlineData>(*plan, data_inlining_row_limit);
 		inline_data = plan->Cast<DuckLakeInlineData>();
 	}
@@ -789,7 +787,7 @@ PhysicalOperator &DuckLakeCatalog::PlanCreateTableAs(ClientContext &context, Phy
 	// FIXME: if table already exists and we are doing CREATE IF NOT EXISTS - skip
 	reference<PhysicalOperator> root = plan;
 	optional_ptr<DuckLakeInlineData> inline_data;
-	idx_t data_inlining_row_limit = DataInliningRowLimit(duck_schema.GetSchemaId(), TableIndex());
+	idx_t data_inlining_row_limit = DataInliningRowLimit(context, duck_schema.GetSchemaId(), TableIndex());
 	auto &metadata_manager = duck_transaction.GetMetadataManager();
 	if (data_inlining_row_limit > 0 && !DuckLakeUtil::HasInlinedSystemColumnConflict(columns) &&
 	    metadata_manager.SupportsInliningTypes(plan.types)) {

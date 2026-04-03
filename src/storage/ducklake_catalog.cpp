@@ -26,6 +26,7 @@
 #include "duckdb/function/scalar_macro_function.hpp"
 #include "duckdb/function/table_macro_function.hpp"
 #include "storage/ducklake_macro_entry.hpp"
+#include "common/ducklake_util.hpp"
 
 namespace duckdb {
 
@@ -61,13 +62,10 @@ void DuckLakeCatalog::FinalizeLoad(optional_ptr<ClientContext> context) {
 		con->BeginTransaction();
 		context = con->context.get();
 	}
-	// If data_inlining_row_limit wasn't explicitly set via ATTACH options,
-	// use the global DuckDB setting as the default
-	if (options.config_options.find("data_inlining_row_limit") == options.config_options.end()) {
+	if (options.config_options.find("write_deletion_vectors") == options.config_options.end()) {
 		Value setting_val;
-		if (context->TryGetCurrentSetting("ducklake_default_data_inlining_row_limit", setting_val)) {
-			auto limit = setting_val.GetValue<idx_t>();
-			options.config_options["data_inlining_row_limit"] = to_string(limit);
+		if (context->TryGetCurrentSetting("ducklake_write_deletion_vectors", setting_val)) {
+			options.config_options["write_deletion_vectors"] = setting_val.GetValue<bool>() ? "true" : "false";
 		}
 	}
 	DuckLakeInitializer initializer(*context, *this, options);
@@ -825,11 +823,68 @@ idx_t DuckLakeCatalog::DataInliningRowLimit(SchemaIndex schema_index, TableIndex
 	return GetConfigOption<idx_t>("data_inlining_row_limit", schema_index, table_index, 10);
 }
 
+idx_t DuckLakeCatalog::DataInliningRowLimit(ClientContext &context, SchemaIndex schema_index,
+                                            TableIndex table_index) const {
+	string value_str;
+	if (TryGetConfigOption("data_inlining_row_limit", value_str, schema_index, table_index)) {
+		return Value(value_str).GetValue<idx_t>();
+	}
+	// No explicit catalog/schema/table option set, we read the global DuckDB setting
+	Value setting_val;
+	if (context.TryGetCurrentSetting("ducklake_default_data_inlining_row_limit", setting_val)) {
+		return setting_val.GetValue<idx_t>();
+	}
+	return 10;
+}
+
+idx_t DuckLakeCatalog::GetInliningLimit(ClientContext &context, DuckLakeTableEntry &table,
+                                        const vector<LogicalType> &types) {
+	auto &schema = table.ParentSchema().Cast<DuckLakeSchemaEntry>();
+	idx_t limit = DataInliningRowLimit(context, schema.GetSchemaId(), table.GetTableId());
+	if (limit == 0) {
+		return 0;
+	}
+	if (DuckLakeUtil::HasInlinedSystemColumnConflict(table.GetColumns())) {
+		// We also return 0 if we have inline column conflicts
+		return 0;
+	}
+	auto &transaction = DuckLakeTransaction::Get(context, *this);
+	auto &metadata_manager = transaction.GetMetadataManager();
+	if (!metadata_manager.SupportsInliningTypes(types)) {
+		// Or if inlining is not supported
+		return 0;
+	}
+	return limit;
+}
+
 unique_ptr<LogicalOperator> DuckLakeCatalog::BindAlterAddIndex(Binder &binder, TableCatalogEntry &table_entry,
                                                                unique_ptr<LogicalOperator> plan,
                                                                unique_ptr<CreateIndexInfo> create_info,
                                                                unique_ptr<AlterTableInfo> alter_info) {
 	throw NotImplementedException("Adding indexes or constraints is not supported in DuckLake");
+}
+
+InlinedDeletionCacheResult DuckLakeCatalog::CheckInlinedDeletionTableCache(TableIndex table_id,
+                                                                           DuckLakeSnapshot snapshot) {
+	lock_guard<mutex> guard(inlined_deletion_cache_lock);
+	if (inlined_deletion_exists.find(table_id.index) != inlined_deletion_exists.end()) {
+		return InlinedDeletionCacheResult::EXISTS;
+	}
+	auto it = inlined_deletion_not_exists.find(table_id.index);
+	if (it != inlined_deletion_not_exists.end() && snapshot.snapshot_id <= it->second) {
+		return InlinedDeletionCacheResult::DOES_NOT_EXIST;
+	}
+	return InlinedDeletionCacheResult::UNKNOWN;
+}
+
+void DuckLakeCatalog::CacheInlinedDeletionTableResult(TableIndex table_id, DuckLakeSnapshot snapshot, bool exists) {
+	lock_guard<mutex> guard(inlined_deletion_cache_lock);
+	if (exists) {
+		inlined_deletion_exists.insert(table_id.index);
+		inlined_deletion_not_exists.erase(table_id.index);
+	} else {
+		inlined_deletion_not_exists[table_id.index] = snapshot.snapshot_id;
+	}
 }
 
 } // namespace duckdb
