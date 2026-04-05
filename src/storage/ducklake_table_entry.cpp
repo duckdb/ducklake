@@ -517,22 +517,24 @@ unique_ptr<CatalogEntry> DuckLakeTableEntry::AlterTable(DuckLakeTransaction &tra
 	auto stats = GetTableStats(transaction);
 	if (!stats) {
 		throw CatalogException(
-		    "Cannot SET NULL on table %s - the table has transaction-local changes or no stats are available", name);
+		    "Cannot SET NOT NULL on table %s - the table has transaction-local changes or no stats are available",
+		    name);
 	}
 
 	auto column_stats = stats->column_stats.find(field_id.GetFieldIndex());
 	if (column_stats == stats->column_stats.end()) {
-		throw CatalogException("Cannot SET NULL on table %s - no column stats are available", name);
+		throw CatalogException("Cannot SET NOT NULL on table %s - no column stats are available", name);
 	}
 	auto &col_stats = column_stats->second;
 	if (col_stats.has_null_count && col_stats.null_count > 0) {
-		throw CatalogException("Cannot SET NULL on column %s - the column has NULL values", col.GetName());
+		throw CatalogException("Cannot SET NOT NULL on column %s - the column has NULL values", col.GetName());
 	}
 
 	// check if there is an existing constraint
 	auto existing_idx = FindNotNullConstraint(table_info, col.Logical());
 	if (existing_idx.IsValid()) {
-		throw CatalogException("Cannot SET NULL on column %s - it already has a NOT NULL constraint", col.GetName());
+		throw CatalogException("Cannot SET NOT NULL on column %s - it already has a NOT NULL constraint",
+		                       col.GetName());
 	}
 	table_info.constraints.push_back(make_uniq<NotNullConstraint>(col.Logical()));
 
