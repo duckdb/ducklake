@@ -174,3 +174,13 @@ CREATE SCHEMA ducklake.schema_two
 
 statement ok
 COMMIT
+
+# creating a schema that already exists should error
+statement error
+CREATE SCHEMA ducklake.s1;
+----
+already exists
+
+# CREATE SCHEMA IF NOT EXISTS should succeed silently
+statement ok
+CREATE SCHEMA IF NOT EXISTS ducklake.s1;
