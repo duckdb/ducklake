@@ -1,4 +1,5 @@
 #include "common/ducklake_types.hpp"
+#include "common/ducklake_util.hpp"
 #include "storage/ducklake_table_entry.hpp"
 #include "storage/ducklake_catalog.hpp"
 #include "storage/ducklake_scan.hpp"
@@ -561,6 +562,9 @@ unique_ptr<CatalogEntry> DuckLakeTableEntry::AlterTable(DuckLakeTransaction &tra
 }
 
 unique_ptr<CatalogEntry> DuckLakeTableEntry::AlterTable(DuckLakeTransaction &transaction, RenameColumnInfo &info) {
+	if (DuckLakeUtil::IsInlinedSystemColumn(info.new_name)) {
+		throw CatalogException("Column name \"%s\" is reserved by DuckLake for internal use", info.new_name);
+	}
 	auto create_info = GetInfo();
 	auto &table_info = create_info->Cast<CreateTableInfo>();
 	if (!table_info.columns.ColumnExists(info.old_name)) {
@@ -597,6 +601,9 @@ void DuckLakeTableEntry::RequireNextColumnId(DuckLakeTransaction &transaction) {
 }
 
 unique_ptr<CatalogEntry> DuckLakeTableEntry::AlterTable(DuckLakeTransaction &transaction, AddColumnInfo &info) {
+	if (DuckLakeUtil::IsInlinedSystemColumn(info.new_column.Name())) {
+		throw CatalogException("Column name \"%s\" is reserved by DuckLake for internal use", info.new_column.Name());
+	}
 	auto create_info = GetInfo();
 	auto &table_info = create_info->Cast<CreateTableInfo>();
 	if (info.if_column_not_exists && ColumnExists(info.new_column.Name())) {
