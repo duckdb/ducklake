@@ -205,7 +205,7 @@ void DuckLakeSchemaEntry::Alter(CatalogTransaction catalog_transaction, AlterInf
 			auto existing_table = GetEntry(catalog_transaction, CatalogType::TABLE_ENTRY, new_table->name);
 			if (StringUtil::Lower(alter.name) != StringUtil::Lower(new_table->name) && existing_table) {
 				throw BinderException("Cannot rename table %s to %s, since %s already exists.", alter.name,
-				                      new_table->name, alter.name);
+				                      new_table->name, new_table->name);
 			}
 		}
 		transaction.AlterEntry(table, std::move(new_table));
