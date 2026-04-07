@@ -78,5 +78,11 @@ jobs:
       env:
         PGSERVICE: postgres
       run: |
+        # Pre-install postgres_scanner so LOAD finds it without autoloading
+        # (autoloading is disabled to prevent loading wrong ducklake version)
+        REPO_DIR="build/release/repository/$(cat .github/duckdb-version)/${{ matrix.arch }}"
+        EXT_DIR="$HOME/.duckdb/extensions/$(cat .github/duckdb-version)/${{ matrix.arch }}"
+        mkdir -p "$EXT_DIR"
+        cp "$REPO_DIR/postgres_scanner.duckdb_extension" "$EXT_DIR/"
         createdb ducklakedb
         build/release/test/unittest --test-config test/configs/postgres.json --test-dir ./ "test/sql/*"

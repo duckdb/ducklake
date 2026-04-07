@@ -35,6 +35,7 @@ class FileSystem;
 class ConstantFilter;
 
 struct SnapshotAndStats;
+struct FlushedInlinedTableInfo;
 
 enum class SnapshotBound { LOWER_BOUND, UPPER_BOUND };
 
@@ -145,6 +146,7 @@ public:
 	                                                                  DuckLakeSnapshot snapshot,
 	                                                                  DuckLakeFileSizeOptions options);
 	virtual idx_t GetBeginSnapshotForTable(TableIndex table_id);
+	virtual idx_t GetBeginSnapshotForSchemaVersion(TableIndex table_id, idx_t schema_version);
 	virtual idx_t GetNetDataFileRowCount(TableIndex table_id, DuckLakeSnapshot snapshot);
 	virtual idx_t GetNetInlinedRowCount(const string &inlined_table_name, DuckLakeSnapshot snapshot);
 	virtual vector<DuckLakeFileForCleanup> GetOldFilesForCleanup(const string &filter);
@@ -225,6 +227,10 @@ public:
 	                                                             const vector<LogicalType> &expected_types);
 
 	virtual void DeleteInlinedData(const DuckLakeInlinedTableInfo &inlined_table);
+	//! We delete at the flush
+	virtual void DeleteFlushedInlinedData(const DuckLakeInlinedTableInfo &inlined_table, idx_t flush_snapshot_id);
+	//! If it conflicts we batch everything at the retry
+	virtual string GenerateDeleteFlushedInlinedData(const vector<FlushedInlinedTableInfo> &flushed_tables);
 	virtual string InsertNewSchema(const DuckLakeSnapshot &snapshot, const set<TableIndex> &table_ids);
 
 	virtual vector<DuckLakeSnapshotInfo> GetAllSnapshots(const string &filter = string());
@@ -244,6 +250,7 @@ public:
 
 	string LoadPath(string path);
 	string StorePath(string path);
+	string GetPathSeparator(const string &path);
 
 protected:
 	virtual string GetLatestSnapshotQuery() const;
@@ -290,9 +297,12 @@ private:
 	string FlushDrop(const string &metadata_table_name, const string &id_name, const set<T> &dropped_entries);
 	template <class T>
 	DuckLakeFileData ReadDataFile(DuckLakeTableEntry &table, T &row, idx_t &col_idx, bool is_encrypted);
+	template <class T>
+	DuckLakeFileData ReadDeleteFile(DuckLakeTableEntry &table, T &row, idx_t &col_idx, bool is_encrypted);
 
 	bool IsEncrypted() const;
 	string GetFileSelectList(const string &prefix);
+	string GetDeleteFileSelectList(const string &prefix);
 	FilterPushdownQueryComponents GenerateFilterPushdownComponents(const FilterPushdownInfo &filter_info,
 	                                                               TableIndex table_id);
 	virtual FilterSQLResult ConvertFilterPushdownToSQL(const FilterPushdownInfo &filter_info);
@@ -312,9 +322,10 @@ private:
 public:
 	//! Read inlined file deletions for regular table scans (no snapshot info per row)
 	map<idx_t, set<idx_t>> ReadInlinedFileDeletions(TableIndex table_id, DuckLakeSnapshot snapshot);
+	//! Clear inlined table caches (needed after rollback so retry re-creates the tables)
+	void ClearInlinedTableCaches();
 
 private:
-	unordered_map<idx_t, string> inlined_table_name_cache;
 	static unordered_map<string /* name */, create_t> metadata_managers;
 	static mutex metadata_managers_lock;
 

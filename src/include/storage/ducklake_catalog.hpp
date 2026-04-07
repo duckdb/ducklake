@@ -16,6 +16,9 @@
 #include "storage/ducklake_partition_data.hpp"
 #include "storage/ducklake_stats.hpp"
 
+#include <chrono>
+#include <functional>
+
 namespace duckdb {
 struct DuckLakeGlobalStatsInfo;
 class ColumnList;
@@ -24,6 +27,8 @@ struct DuckLakeFileListEntry;
 struct DuckLakeConfigOption;
 struct DeleteFileMap;
 class LogicalGet;
+
+enum class InlinedDeletionCacheResult { EXISTS, DOES_NOT_EXIST, UNKNOWN };
 
 class DuckLakeCatalog : public Catalog {
 public:
@@ -57,6 +62,9 @@ public:
 		return metadata_type;
 	}
 	idx_t DataInliningRowLimit(SchemaIndex schema_index, TableIndex table_index) const;
+	idx_t DataInliningRowLimit(ClientContext &context, SchemaIndex schema_index, TableIndex table_index) const;
+	//! Returns the inlining limit (0 if the table is not eligible)
+	idx_t GetInliningLimit(ClientContext &context, DuckLakeTableEntry &table, const vector<LogicalType> &types);
 	string &Separator() {
 		return separator;
 	}
@@ -136,6 +144,11 @@ public:
 		return hive_file_pattern == "true";
 	}
 
+	bool WriteDeletionVectors(SchemaIndex schema_id, TableIndex table_id) const {
+		auto write_dv = GetConfigOption<string>("write_deletion_vectors", schema_id, table_id, "false");
+		return write_dv == "true";
+	}
+
 	void SetEncryption(DuckLakeEncryption encryption);
 	// Generate an encryption key for writing (or empty if encryption is disabled)
 	string GenerateEncryptionKey(ClientContext &context) const;
@@ -164,11 +177,27 @@ public:
 	optional_ptr<const DuckLakeNameMap> TryGetMappingById(DuckLakeTransaction &transaction, MappingIndex mapping_id);
 	MappingIndex TryGetCompatibleNameMap(DuckLakeTransaction &transaction, const DuckLakeNameMap &name_map);
 	idx_t GetBeginSnapshotForTable(TableIndex table_id, DuckLakeTransaction &transaction);
+	idx_t GetBeginSnapshotForSchemaVersion(TableIndex table_id, idx_t schema_version, DuckLakeTransaction &transaction);
 
 	static unique_ptr<DuckLakeStats> ConstructStatsMap(vector<DuckLakeGlobalStatsInfo> &global_stats,
 	                                                   DuckLakeCatalogSet &schema);
 	//! Return the schema for the given snapshot - loading it if it is not yet loaded
 	DuckLakeCatalogSet &GetSchemaForSnapshot(DuckLakeTransaction &transaction, DuckLakeSnapshot snapshot);
+
+	//! Callback type for instrumenting metadata queries
+	using QueryCallback = std::function<void(const string &query, std::chrono::steady_clock::duration elapsed)>;
+
+	void SetQueryCallback(QueryCallback callback) {
+		query_callback = std::move(callback);
+	}
+	const QueryCallback &GetQueryCallback() const {
+		return query_callback;
+	}
+
+	//! Check if an inlined deletion table is known to exist or not exist for the given table and snapshot
+	InlinedDeletionCacheResult CheckInlinedDeletionTableCache(TableIndex table_id, DuckLakeSnapshot snapshot);
+	//! Cache the result of an inlined deletion table existence check
+	void CacheInlinedDeletionTableResult(TableIndex table_id, DuckLakeSnapshot snapshot, bool exists);
 
 private:
 	void DropSchema(ClientContext &context, DropInfo &info) override;
@@ -200,9 +229,18 @@ private:
 	string metadata_type;
 	//! Whether or not the catalog is initialized
 	bool initialized = false;
+	//! Cache for inlined deletion table existence checks
+	mutex inlined_deletion_cache_lock;
+	//! Table IDs where the inlined deletion table is known to exist (permanent - never invalidated)
+	unordered_set<idx_t> inlined_deletion_exists;
+	//! Table IDs where the inlined deletion table is known to NOT exist, with the snapshot_id at which we checked
+	//! Valid as long as current snapshot.snapshot_id <= cached snapshot_id
+	unordered_map<idx_t, idx_t> inlined_deletion_not_exists;
 	//! The id of the last committed snapshot, set at FlushChanges on a successful commit
 	mutable mutex commit_lock;
 	optional_idx last_committed_snapshot;
+	//! Optional callback for instrumenting metadata queries
+	QueryCallback query_callback;
 };
 
 } // namespace duckdb

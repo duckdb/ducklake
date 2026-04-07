@@ -1,0 +1,47 @@
+# name: test/sql/transaction/update_null_column.test
+# description: test that boolean stats pruning works correctly after update/insert
+# group: [transaction]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+
+test-env DATA_PATH __TEST_DIR__
+
+statement ok
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/update_null_column/', DATA_INLINING_ROW_LIMIT 0);
+
+statement ok
+USE ducklake;
+
+statement ok
+CREATE TABLE test (active BOOLEAN);
+
+statement ok
+INSERT INTO test (active) VALUES (false);
+
+query I
+SELECT COUNT(*) FROM test WHERE active = false;
+----
+1
+
+statement ok
+CREATE TABLE t (id BIGINT, tag VARCHAR);
+
+statement ok
+INSERT INTO t (id) VALUES (1);
+
+statement ok
+UPDATE t SET tag = 'new';
+
+query IT
+SELECT * FROM t;
+----
+1	new
+
+query IT
+SELECT * FROM t WHERE tag = 'new';
+----
+1	new

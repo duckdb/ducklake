@@ -34,50 +34,18 @@ struct DuckLakePartition {
 
 struct DuckLakePartitionUtils {
 	//! Get the hive partition key name for a partition field, while also resolving name collisions e.g., year_dt
-
 	static string GetPartitionKeyName(DuckLakeTransformType transform_type, const string &field_name,
-	                                  case_insensitive_set_t &used_names) {
-		string prefix;
-		switch (transform_type) {
-		case DuckLakeTransformType::IDENTITY:
-			return field_name;
-		case DuckLakeTransformType::YEAR:
-			prefix = "year";
-			break;
-		case DuckLakeTransformType::MONTH:
-			prefix = "month";
-			break;
-		case DuckLakeTransformType::DAY:
-			prefix = "day";
-			break;
-		case DuckLakeTransformType::HOUR:
-			prefix = "hour";
-			break;
-		default:
-			throw NotImplementedException("Unsupported partition transform type");
-		}
-		if (used_names.find(prefix) == used_names.end()) {
-			return prefix;
-		}
-		return prefix + "_" + field_name;
-	}
+	                                  case_insensitive_set_t &used_names);
 
-	//! Get the partition key type for a partition field based on its transform
-	//! For IDENTITY transforms, returns the source column type
-	//! For YEAR, MONTH, DAY, HOUR transforms, returns BIGINT (the result type of those functions)
-	static LogicalType GetPartitionKeyType(DuckLakeTransformType transform_type, const LogicalType &source_type) {
-		switch (transform_type) {
-		case DuckLakeTransformType::IDENTITY:
-			return source_type;
-		case DuckLakeTransformType::YEAR:
-		case DuckLakeTransformType::MONTH:
-		case DuckLakeTransformType::DAY:
-		case DuckLakeTransformType::HOUR:
-			return LogicalType::BIGINT;
-		default:
-			throw NotImplementedException("Unsupported partition transform type");
-		}
-	}
+	//! Get a SQL expression string for a partition field (e.g., "col" for identity, "year(col)" for year transform)
+	static string GetPartitionSQLExpression(DuckLakeTransformType transform_type, const string &col_name);
+
+	//! Returns Logical Type for a given partition key
+	static LogicalType GetPartitionKeyType(DuckLakeTransformType transform_type, const LogicalType &source_type);
+
+	//! Build a SQL WHERE filter matching the given partition values (e.g., "region = 'east' AND year(ts) = 2020")
+	static string BuildPartitionFilter(const vector<string> &partition_sql_exprs,
+	                                   const vector<Value> &partition_values);
 };
 
 } // namespace duckdb
