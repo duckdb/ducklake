@@ -23,6 +23,12 @@ DuckLakeSchemaEntry::DuckLakeSchemaEntry(Catalog &catalog, CreateSchemaInfo &inf
       data_path(std::move(data_path_p)) {
 }
 
+unique_ptr<CreateInfo> DuckLakeSchemaEntry::GetInfo() const {
+	auto result = SchemaCatalogEntry::GetInfo();
+	result->on_conflict = OnCreateConflict::IGNORE_ON_CONFLICT;
+	return result;
+}
+
 bool DuckLakeSchemaEntry::HandleCreateConflict(CatalogTransaction transaction, CatalogType catalog_type,
                                                const string &entry_name, OnCreateConflict on_conflict) {
 	auto existing_entry = GetEntry(transaction, catalog_type, entry_name);
