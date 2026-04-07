@@ -108,35 +108,6 @@ SinkResultType DuckLakeFlushData::Sink(ExecutionContext &context, DataChunk &chu
 //===--------------------------------------------------------------------===//
 using DeletesPerFile = unordered_map<string, set<PositionWithSnapshot>>;
 
-static DeletesPerFile GroupDeletesByFile(QueryResult &deleted_rows_result, vector<DuckLakeDataFile> &written_files,
-                                         vector<idx_t> &file_start_row_ids) {
-	D_ASSERT(std::is_sorted(file_start_row_ids.begin(), file_start_row_ids.end()));
-	DeletesPerFile deletes_per_file;
-	for (auto &row : deleted_rows_result) {
-		auto end_snap = row.GetValue<int64_t>(0);
-		auto output_position = row.GetValue<int64_t>(1);
-		if (written_files.size() == 1) {
-			// Single file, we just handover the deleted row ids since they must be from this file
-			PositionWithSnapshot pos_with_snap {output_position, end_snap};
-			deletes_per_file[written_files[0].file_name].insert(pos_with_snap);
-		} else {
-			// Multiple files, binary search them to see which has the position, since the position
-			// should be sorted
-			auto pos_as_idx = static_cast<idx_t>(output_position);
-			auto it = std::upper_bound(file_start_row_ids.begin(), file_start_row_ids.end(), pos_as_idx);
-			if (it != file_start_row_ids.begin()) {
-				--it;
-				const auto file_idx = static_cast<idx_t>(it - file_start_row_ids.begin());
-				const auto file_start = static_cast<int64_t>(file_start_row_ids[file_idx]);
-				int64_t pos_in_file = output_position - file_start;
-				PositionWithSnapshot pos_with_snap {pos_in_file, end_snap};
-				deletes_per_file[written_files[file_idx].file_name].insert(pos_with_snap);
-			}
-		}
-	}
-	return deletes_per_file;
-}
-
 SinkFinalizeType DuckLakeFlushData::Finalize(Pipeline &pipeline, Event &event, ClientContext &context,
                                              OperatorSinkFinalizeInput &input) const {
 	auto &global_state = input.global_state.Cast<DuckLakeInsertGlobalState>();
@@ -144,29 +115,50 @@ SinkFinalizeType DuckLakeFlushData::Finalize(Pipeline &pipeline, Event &event, C
 	auto snapshot = transaction.GetSnapshot();
 
 	if (!global_state.written_files.empty()) {
-		// Query deleted rows with their output file position
-		auto deleted_rows_result = transaction.Query(snapshot, StringUtil::Format(R"(
-			WITH all_rows AS (
-				SELECT row_id, end_snapshot, ROW_NUMBER() OVER (ORDER BY row_id) - 1 AS output_position
-				FROM {METADATA_CATALOG}.%s
-				WHERE {SNAPSHOT_ID} >= begin_snapshot
-			)
-			SELECT end_snapshot, output_position
-			FROM all_rows
-			WHERE end_snapshot IS NOT NULL;)",
-		                                                                          inlined_table.table_name));
+		DeletesPerFile deletes_per_file;
+		auto partition_sql_exprs = table.GetPartitionSQLExpressions();
 
-		// Let's figure out where each file ends, so we know where to place ze deletes
-		vector<idx_t> file_start_row_ids;
-		file_start_row_ids.reserve(global_state.written_files.size());
-		idx_t current_pos = 0;
-		for (auto &written_file : global_state.written_files) {
-			file_start_row_ids.push_back(current_pos);
-			current_pos += written_file.row_count;
+		// Track cumulative row offset per partition so each file knows its range
+		unordered_map<string, idx_t> partition_row_offsets;
+
+		for (auto &file : global_state.written_files) {
+			// Build partition filter (empty string for non-partitioned tables)
+			string partition_filter;
+			if (!partition_sql_exprs.empty()) {
+				vector<Value> values;
+				for (auto &pv : file.partition_values) {
+					values.push_back(pv.partition_value);
+				}
+				partition_filter = DuckLakePartitionUtils::BuildPartitionFilter(partition_sql_exprs, values);
+			}
+
+			idx_t file_offset = partition_row_offsets[partition_filter];
+			partition_row_offsets[partition_filter] += file.row_count;
+
+			// Query deleted rows within this file's row range, filtered to its partition
+			string extra_filter = partition_filter.empty() ? "" : " AND " + partition_filter;
+			auto deleted_rows_result =
+			    transaction.Query(snapshot, StringUtil::Format(R"(
+				WITH all_rows AS (
+					SELECT end_snapshot, ROW_NUMBER() OVER (ORDER BY row_id, begin_snapshot) - 1 AS output_position
+					FROM {METADATA_CATALOG}.%s
+					WHERE {SNAPSHOT_ID} >= begin_snapshot%s
+				)
+				SELECT end_snapshot, output_position
+				FROM all_rows
+				WHERE end_snapshot IS NOT NULL
+				AND output_position >= %d AND output_position < %d;)",
+			                                                   inlined_table.table_name, extra_filter, file_offset,
+			                                                   file_offset + file.row_count));
+
+			for (auto &row : *deleted_rows_result) {
+				auto end_snap = row.GetValue<int64_t>(0);
+				auto output_position = row.GetValue<int64_t>(1);
+				int64_t pos_in_file = output_position - static_cast<int64_t>(file_offset);
+				PositionWithSnapshot pos_with_snap {pos_in_file, end_snap};
+				deletes_per_file[file.file_name].insert(pos_with_snap);
+			}
 		}
-
-		auto deletes_per_file =
-		    GroupDeletesByFile(*deleted_rows_result, global_state.written_files, file_start_row_ids);
 
 		if (!deletes_per_file.empty()) {
 			auto &fs = FileSystem::GetFileSystem(context);
@@ -194,7 +186,8 @@ SinkFinalizeType DuckLakeFlushData::Finalize(Pipeline &pipeline, Event &event, C
 	}
 
 	transaction.AppendFiles(global_state.table.GetTableId(), std::move(global_state.written_files));
-	transaction.DeleteInlinedData(inlined_table);
+	transaction.DeleteFlushedInlinedData(inlined_table, snapshot.snapshot_id);
+	transaction.MarkInlinedDataForDeletion(inlined_table, snapshot.snapshot_id);
 	return SinkFinalizeType::READY;
 }
 
@@ -277,8 +270,9 @@ DuckLakeDataFlusher::DuckLakeDataFlusher(ClientContext &context, DuckLakeCatalog
 
 unique_ptr<LogicalOperator> DuckLakeDataFlusher::GenerateFlushCommand() {
 	// get the table entry at the specified snapshot
-	DuckLakeSnapshot snapshot(catalog.GetBeginSnapshotForTable(table_id, transaction), inlined_table.schema_version, 0,
-	                          0);
+	DuckLakeSnapshot snapshot(
+	    catalog.GetBeginSnapshotForSchemaVersion(table_id, inlined_table.schema_version, transaction),
+	    inlined_table.schema_version, 0, 0);
 
 	auto entry = catalog.GetEntryById(transaction, snapshot, table_id);
 	if (!entry) {
@@ -403,6 +397,7 @@ struct FileDeleteInfo {
 	bool existing_delete_path_is_relative = false;
 	idx_t existing_delete_begin_snapshot = 0;
 	string existing_delete_encryption_key;
+	DeleteFileFormat existing_delete_format = DeleteFileFormat::PARQUET;
 };
 
 static void FlushInlinedFileDeletions(ClientContext &context, DuckLakeCatalog &catalog,
@@ -422,7 +417,8 @@ static void FlushInlinedFileDeletions(ClientContext &context, DuckLakeCatalog &c
 	auto deletions_result = transaction.Query(snapshot, StringUtil::Format(R"(
 SELECT del.file_id, data.path, data.path_is_relative, del.row_id, del.begin_snapshot,
        existing_del.delete_file_id, existing_del.path as del_path, existing_del.path_is_relative as del_path_is_relative,
-       existing_del.begin_snapshot as del_begin_snapshot, existing_del.encryption_key as del_encryption_key
+       existing_del.begin_snapshot as del_begin_snapshot, existing_del.encryption_key as del_encryption_key,
+       existing_del.format as del_format
 FROM {METADATA_CATALOG}.%s del
 JOIN {METADATA_CATALOG}.ducklake_data_file data ON del.file_id = data.data_file_id
 LEFT JOIN (
@@ -467,6 +463,10 @@ LEFT JOIN (
 					file_info.existing_delete_begin_snapshot = chunk->GetValue(8, row_idx).GetValue<idx_t>();
 					if (!chunk->GetValue(9, row_idx).IsNull()) {
 						file_info.existing_delete_encryption_key = chunk->GetValue(9, row_idx).GetValue<string>();
+					}
+					if (!chunk->GetValue(10, row_idx).IsNull()) {
+						file_info.existing_delete_format =
+						    DeleteFileFormatFromString(chunk->GetValue(10, row_idx).GetValue<string>());
 					}
 				}
 			} else {
@@ -514,6 +514,7 @@ LEFT JOIN (
 			                                     ? table.DataPath() + file_info.existing_delete_path
 			                                     : file_info.existing_delete_path;
 			existing_delete_file_data.encryption_key = file_info.existing_delete_encryption_key;
+			existing_delete_file_data.format = file_info.existing_delete_format;
 
 			auto existing_deletions = DuckLakeDeleteFilter::ScanDeleteFile(context, existing_delete_file_data);
 

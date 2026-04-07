@@ -231,6 +231,10 @@ unique_ptr<BaseStatistics> DuckLakeColumnStats::CreateStringStats() const {
 	} else if (has_max) {
 		stats = StringStats::CreateUnknown(type);
 		StringStats::SetMax(stats, string_t(max));
+	} else {
+		// No min/max stats available - use unknown stats to avoid
+		// false claims about max_string_length (CreateEmpty sets it to 0)
+		stats = StringStats::CreateUnknown(type);
 	}
 
 	// set null count

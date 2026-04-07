@@ -3,16 +3,22 @@
 #include "duckdb/common/exception.hpp"
 #include "duckdb/common/string_util.hpp"
 #include "storage/ducklake_storage.hpp"
+#include "storage/ducklake_scan.hpp"
 #include "functions/ducklake_table_functions.hpp"
 #include "storage/ducklake_secret.hpp"
+#include "duckdb/logging/log_manager.hpp"
 #include "duckdb/storage/storage_extension.hpp"
+#include "storage/ducklake_log_type.hpp"
 
 namespace duckdb {
 
 static void LoadInternal(ExtensionLoader &loader) {
 	loader.SetDescription("Adds support for DuckLake, SQL as a Lakehouse Format");
 
-	auto &config = DBConfig::GetConfig(loader.GetDatabaseInstance());
+	auto &instance = loader.GetDatabaseInstance();
+	instance.GetLogManager().RegisterLogType(make_uniq<DuckLakeMetadataLogType>());
+
+	auto &config = DBConfig::GetConfig(instance);
 	StorageExtension::Register(config, "ducklake", make_shared_ptr<DuckLakeStorageExtension>());
 
 	config.AddExtensionOption("ducklake_max_retry_count",
@@ -25,6 +31,10 @@ static void LoadInternal(ExtensionLoader &loader) {
 	config.AddExtensionOption("ducklake_default_data_inlining_row_limit",
 	                          "Default row limit for data inlining (0 disables inlining)", LogicalType::UBIGINT,
 	                          Value::UBIGINT(10), nullptr, SetScope::GLOBAL);
+	config.AddExtensionOption(
+	    "ducklake_write_deletion_vectors",
+	    "[EXPERIMENTAL] Write Iceberg V3 deletion vectors (puffin) instead of positional delete files (parquet)",
+	    LogicalType::BOOLEAN, Value::BOOLEAN(false), nullptr, SetScope::GLOBAL);
 
 	DuckLakeSnapshotsFunction snapshots;
 	loader.RegisterFunction(snapshots);
@@ -82,6 +92,10 @@ static void LoadInternal(ExtensionLoader &loader) {
 
 	DuckLakeSettingsFunction settings;
 	loader.RegisterFunction(settings);
+
+	// Register ducklake_scan so it can be found during deserialization
+	auto ducklake_scan = DuckLakeFunctions::GetDuckLakeScanFunction(loader.GetDatabaseInstance());
+	loader.RegisterFunction(ducklake_scan);
 
 	// secrets
 	auto secret_type = DuckLakeSecret::GetSecretType();

@@ -20,7 +20,6 @@ namespace duckdb {
 //! The DuckLakeMultiFileList implements the MultiFileList API to allow injecting it into the regular DuckDB parquet
 //! scan
 class DuckLakeMultiFileList : public MultiFileList {
-	static constexpr const idx_t TRANSACTION_LOCAL_ID_START = 1000000000000000000ULL;
 	static constexpr const char *DUCKLAKE_TRANSACTION_LOCAL_INLINED_FILENAME =
 	    "__ducklake_inlined_transaction_local_data";
 
@@ -35,6 +34,10 @@ public:
 	                                                const vector<string> &names, const vector<LogicalType> &types,
 	                                                const vector<column_t> &column_ids,
 	                                                TableFilterSet &filters) const override;
+
+	unique_ptr<MultiFileList> ComplexFilterPushdown(ClientContext &context, const MultiFileOptions &options,
+	                                                MultiFilePushdownInfo &info,
+	                                                vector<unique_ptr<Expression>> &filters) const override;
 
 	vector<OpenFileInfo> GetAllFiles() const override;
 	FileExpandResult GetExpandResult() const override;
@@ -63,6 +66,9 @@ private:
 	void GetFilesForTable() const;
 	void GetTableInsertions() const;
 	void GetTableDeletions() const;
+	void AddFilterToPushdownInfo(FilterPushdownInfo &pushdown_info, column_t column_id, unique_ptr<TableFilter> filter) const;
+	//! Get the row_id_start for transaction-local inlined data.
+	idx_t GetTransactionLocalRowIdStart(idx_t transaction_row_start) const;
 
 private:
 	mutable mutex file_lock;

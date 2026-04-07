@@ -253,6 +253,10 @@ ReaderInitializeType DuckLakeMultiFileReader::InitializeReader(MultiFileReaderDa
 			if (!file_entry.delete_file.path.empty()) {
 				delete_filter->Initialize(context, file_entry.delete_file);
 			}
+			if (delete_map && !file_entry.delete_file.path.empty()) {
+				auto delete_data_copy = make_shared_ptr<DuckLakeDeleteData>(*delete_filter->delete_data);
+				delete_map->AddDeleteData(reader.GetFileName(), std::move(delete_data_copy));
+			}
 			// Apply inlined file deletions (stored in metadata database instead of delete file)
 			if (!file_entry.inlined_file_deletions.empty()) {
 				DuckLakeInlinedDataDeletes inlined_deletes;
@@ -262,11 +266,12 @@ ReaderInitializeType DuckLakeMultiFileReader::InitializeReader(MultiFileReaderDa
 			if (file_entry.max_row_count.IsValid()) {
 				delete_filter->SetMaxRowCount(file_entry.max_row_count.GetIndex());
 			}
-			// set the snapshot id so we know what to skip from deletion files
-			delete_filter->SetSnapshotFilter(read_info.snapshot.snapshot_id);
-			// Only add to delete_map if there's an actual delete file and not just inlined deletions
-			if (delete_map && !file_entry.delete_file.path.empty()) {
-				delete_map->AddDeleteData(reader.GetFileName(), delete_filter->delete_data);
+			auto txn = read_info.GetTransaction();
+			bool has_local_delete = txn && txn->HasLocalDeleteForFile(read_info.table_id, reader.GetFileName());
+			if (!has_local_delete) {
+				// We only set snapshot filter if this file is not a current running transaction
+				// OW, we are guaranteed to be on the latest valid snapshot
+				delete_filter->SetSnapshotFilter(read_info.snapshot.snapshot_id);
 			}
 			reader.deletion_filter = std::move(delete_filter);
 		}
@@ -362,7 +367,8 @@ shared_ptr<BaseFileReader> DuckLakeMultiFileReader::TryCreateInlinedDataReader(c
 		// read the table at the specified version
 		auto transaction = read_info.GetTransaction();
 		auto &catalog = transaction->GetCatalog();
-		DuckLakeSnapshot snapshot(catalog.GetBeginSnapshotForTable(read_info.table.GetTableId(), *transaction),
+		DuckLakeSnapshot snapshot(catalog.GetBeginSnapshotForSchemaVersion(read_info.table.GetTableId(),
+		                                                                   schema_version.GetIndex(), *transaction),
 		                          schema_version.GetIndex(), 0, 0);
 		auto entry = catalog.GetEntryById(*transaction, snapshot, read_info.table.GetTableId());
 		if (!entry) {
@@ -402,7 +408,7 @@ shared_ptr<BaseFileReader> DuckLakeMultiFileReader::CreateReader(ClientContext &
 	return MultiFileReader::CreateReader(context, file, options, file_options, interface);
 }
 
-vector<MultiFileColumnDefinition> MapColumns(MultiFileReaderData &reader_data,
+vector<MultiFileColumnDefinition> MapColumns(ClientContext &context, MultiFileReaderData &reader_data,
                                              const vector<MultiFileColumnDefinition> &global_map,
                                              const vector<unique_ptr<DuckLakeNameMapEntry>> &column_maps,
                                              bool parent_is_list = false) {
@@ -442,8 +448,10 @@ vector<MultiFileColumnDefinition> MapColumns(MultiFileReaderData &reader_data,
 				                            "found in filename \"%s\"",
 				                            column_map->source_name, reader_data.reader->file.path);
 			}
-			Value partition_val(entry->second);
-			result_col.default_expression = make_uniq<ConstantExpression>(partition_val.DefaultCastAs(result_col.type));
+			// Use GetValue to handle NULL values (__HIVE_DEFAULT_PARTITION__) and type casting
+			Value partition_val =
+			    HivePartitioning::GetValue(context, column_map->source_name, entry->second, result_col.type);
+			result_col.default_expression = make_uniq<ConstantExpression>(std::move(partition_val));
 			continue;
 		}
 
@@ -456,16 +464,17 @@ vector<MultiFileColumnDefinition> MapColumns(MultiFileReaderData &reader_data,
 		// recursively process any child nodes
 		if (!column_map->child_entries.empty()) {
 			bool is_list = result_col.type.id() == LogicalTypeId::LIST;
-			result_col.children = MapColumns(reader_data, result_col.children, column_map->child_entries, is_list);
+			result_col.children =
+			    MapColumns(context, reader_data, result_col.children, column_map->child_entries, is_list);
 		}
 	}
 	return result;
 }
 
-vector<MultiFileColumnDefinition> CreateNewMapping(MultiFileReaderData &reader_data,
+vector<MultiFileColumnDefinition> CreateNewMapping(ClientContext &context, MultiFileReaderData &reader_data,
                                                    const vector<MultiFileColumnDefinition> &global_map,
                                                    const DuckLakeNameMap &name_map) {
-	return MapColumns(reader_data, global_map, name_map.column_maps);
+	return MapColumns(context, reader_data, global_map, name_map.column_maps);
 }
 
 ReaderInitializeType DuckLakeMultiFileReader::CreateMapping(
@@ -509,7 +518,7 @@ ReaderInitializeType DuckLakeMultiFileReader::CreateMapping(
 			auto transaction = read_info.transaction.lock();
 			auto &mapping = transaction->GetMappingById(mapping_id);
 			// use the mapping to generate a new set of global columns for this file
-			auto mapped_columns = CreateNewMapping(reader_data, global_columns, mapping);
+			auto mapped_columns = CreateNewMapping(context, reader_data, global_columns, mapping);
 			return MultiFileReader::CreateMapping(context, reader_data, mapped_columns, column_ids_to_use, filters,
 			                                      multi_file_list, bind_data, virtual_columns,
 			                                      MultiFileColumnMappingMode::BY_NAME);

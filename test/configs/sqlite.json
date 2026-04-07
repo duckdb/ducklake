@@ -1,6 +1,6 @@
 {
   "description": "Run DuckLake tests using SQLite as a catalog DBMS.",
-  "autoloading": "all",
+  "autoloading": "none",
   "statically_loaded_extensions": [
     "core_functions",
     "parquet",
@@ -68,6 +68,7 @@
       "paths": [
         "test/sql/general/missing_parquet.test",
         "test/sql/general/paths.test",
+        "test/sql/issues/corrupted_catalog_fault_isolation.test",
         "test/sql/secrets/ducklake_secrets.test"
       ]
     },
@@ -108,6 +109,12 @@
       "reason": "Current transaction is aborted (please ROLLBACK)",
       "paths": [
         "test/sql/deletion_inlining/test_deletion_inlining_concurrent.test"
+      ]
+    },
+    {
+      "reason": "FIXME: old sqlite extension has issues with this query, can be removed after v1.5.1",
+      "paths": [
+        "test/sql/metadata/ducklake_ui_catalog_query.test"
       ]
     }
   ]

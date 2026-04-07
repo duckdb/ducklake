@@ -11,14 +11,7 @@
 #include "duckdb/main/query_profiler.hpp"
 #include "duckdb/main/secret/secret_manager.hpp"
 #include "duckdb/optimizer/filter_combiner.hpp"
-#include "duckdb/parser/expression/function_expression.hpp"
 #include "duckdb/planner/table_filter.hpp"
-#include "duckdb/planner/operator/logical_get.hpp"
-#include "duckdb/planner/filter/constant_filter.hpp"
-#include "duckdb/planner/filter/conjunction_filter.hpp"
-#include "duckdb/planner/filter/null_filter.hpp"
-#include "duckdb/planner/filter/optional_filter.hpp"
-#include "duckdb/planner/filter/in_filter.hpp"
 #include "storage/ducklake_table_entry.hpp"
 
 namespace duckdb {
@@ -47,6 +40,20 @@ DuckLakeMultiFileList::DuckLakeMultiFileList(DuckLakeFunctionInfo &read_info,
 	inlined_data_tables.push_back(inlined_table);
 }
 
+void DuckLakeMultiFileList::AddFilterToPushdownInfo(FilterPushdownInfo &pushdown_info, column_t column_id,
+                                                    unique_ptr<TableFilter> filter) const {
+	if (IsVirtualColumn(column_id)) {
+		return;
+	}
+	auto column_index = PhysicalIndex(column_id);
+	auto &root_id = read_info.table.GetFieldId(column_index);
+	auto field_index = root_id.GetFieldIndex().index;
+	// Get the column type from the table schema, not from the scan types array
+	const auto &column_type = read_info.column_types[column_index.index];
+	ColumnFilterInfo filter_info_entry(field_index, column_type, std::move(filter));
+	pushdown_info.column_filters.emplace(field_index, std::move(filter_info_entry));
+}
+
 unique_ptr<MultiFileList>
 DuckLakeMultiFileList::DynamicFilterPushdown(ClientContext &context, const MultiFileOptions &options,
                                              const vector<string> &names, const vector<LogicalType> &types,
@@ -59,28 +66,45 @@ DuckLakeMultiFileList::DynamicFilterPushdown(ClientContext &context, const Multi
 	auto pushdown_info = make_uniq<FilterPushdownInfo>();
 
 	for (auto &entry : filters.filters) {
-		auto column_index_val = entry.first;
-		idx_t column_idx = column_index_val;
-		auto column_id = column_ids[column_idx];
-
-		if (IsVirtualColumn(column_id)) {
-			continue;
-		}
-
-		auto column_index = PhysicalIndex(column_id);
-		auto &root_id = read_info.table.GetFieldId(column_index);
-		auto field_index = root_id.GetFieldIndex().index;
-
-		auto filter_copy = entry.second->Copy();
-		// Get the column type from the table schema, not from the scan types array
-		const auto &column_type = read_info.column_types[column_index.index];
-
-		ColumnFilterInfo filter_info(field_index, column_type, std::move(filter_copy));
-		pushdown_info->column_filters.emplace(field_index, std::move(filter_info));
+		auto column_id = column_ids[entry.first];
+		AddFilterToPushdownInfo(*pushdown_info, column_id, entry.second->Copy());
 	}
 
 	if (pushdown_info->column_filters.empty()) {
 		// no pushdown possible
+		return nullptr;
+	}
+
+	return make_uniq<DuckLakeMultiFileList>(read_info, transaction_local_files, transaction_local_data,
+	                                        std::move(pushdown_info));
+}
+
+unique_ptr<MultiFileList> DuckLakeMultiFileList::ComplexFilterPushdown(ClientContext &context,
+                                                                       const MultiFileOptions &options,
+                                                                       MultiFilePushdownInfo &info,
+                                                                       vector<unique_ptr<Expression>> &filters) const {
+	if (read_info.scan_type != DuckLakeScanType::SCAN_TABLE || filters.empty()) {
+		return nullptr;
+	}
+
+	FilterCombiner combiner(context);
+	for (auto &filter : filters) {
+		combiner.AddFilter(filter->Copy());
+	}
+	vector<FilterPushdownResult> pushdown_results;
+	auto table_filter_set = combiner.GenerateTableScanFilters(info.column_indexes, pushdown_results);
+
+	if (table_filter_set.filters.empty()) {
+		return nullptr;
+	}
+
+	auto pushdown_info = filter_info ? filter_info->Copy() : make_uniq<FilterPushdownInfo>();
+
+	for (auto &entry : table_filter_set.filters) {
+		AddFilterToPushdownInfo(*pushdown_info, entry.first, std::move(entry.second));
+	}
+
+	if (pushdown_info->column_filters.empty()) {
 		return nullptr;
 	}
 
@@ -221,6 +245,7 @@ DuckLakeFileData GetDeleteData(const DuckLakeDataFile &file) {
 	result.encryption_key = delete_file.encryption_key;
 	result.file_size_bytes = delete_file.file_size_bytes;
 	result.footer_size = delete_file.footer_size;
+	result.format = delete_file.format;
 	return result;
 }
 
@@ -248,7 +273,7 @@ vector<DuckLakeFileListExtendedEntry> DuckLakeMultiFileList::GetFilesExtended() 
 			transaction.GetLocalDeleteForFile(read_info.table_id, file_entry.file.path, file_entry.delete_file);
 		}
 	}
-	idx_t transaction_row_start = TRANSACTION_LOCAL_ID_START;
+	idx_t transaction_row_start = DuckLakeConstants::TRANSACTION_LOCAL_ROW_ID_START;
 	for (auto &file : transaction_local_files) {
 		DuckLakeFileListExtendedEntry file_entry;
 		file_entry.file_id = DataFileIndex();
@@ -278,7 +303,7 @@ vector<DuckLakeFileListExtendedEntry> DuckLakeMultiFileList::GetFilesExtended() 
 		file_entry.file_id = DataFileIndex();
 		file_entry.delete_file_id = DataFileIndex();
 		file_entry.row_count = transaction_local_data->data->Count();
-		file_entry.row_id_start = transaction_row_start;
+		file_entry.row_id_start = GetTransactionLocalRowIdStart(transaction_row_start);
 		file_entry.data_type = DuckLakeDataType::TRANSACTION_LOCAL_INLINED_DATA;
 		result.push_back(std::move(file_entry));
 	}
@@ -297,6 +322,7 @@ vector<DuckLakeFileListExtendedEntry> DuckLakeMultiFileList::GetFilesExtended() 
 			file_entry.row_id_start = file.row_id_start;
 			file_entry.delete_file = file.delete_file;
 			file_entry.file_id = file.file_id;
+			file_entry.mapping_id = file.mapping_id;
 			file_entry.data_type = file.data_type;
 			// Apply committed inlined file deletions from metadata
 			if (file.file_id.IsValid()) {
@@ -348,7 +374,7 @@ void DuckLakeMultiFileList::GetFilesForTable() const {
 			}
 		}
 	}
-	idx_t transaction_row_start = TRANSACTION_LOCAL_ID_START;
+	idx_t transaction_row_start = DuckLakeConstants::TRANSACTION_LOCAL_ROW_ID_START;
 	for (auto &file : transaction_local_files) {
 		DuckLakeFileListEntry file_entry;
 		file_entry.file = GetFileData(file);
@@ -370,7 +396,7 @@ void DuckLakeMultiFileList::GetFilesForTable() const {
 		// we have transaction local inlined data - create the dummy file entry
 		DuckLakeFileListEntry file_entry;
 		file_entry.file.path = DUCKLAKE_TRANSACTION_LOCAL_INLINED_FILENAME;
-		file_entry.row_id_start = transaction_row_start;
+		file_entry.row_id_start = GetTransactionLocalRowIdStart(transaction_row_start);
 		file_entry.data_type = DuckLakeDataType::TRANSACTION_LOCAL_INLINED_DATA;
 		files.push_back(std::move(file_entry));
 	}
@@ -450,6 +476,14 @@ const vector<DuckLakeFileListEntry> &DuckLakeMultiFileList::GetFiles() const {
 		read_file_list = true;
 	}
 	return files;
+}
+
+idx_t DuckLakeMultiFileList::GetTransactionLocalRowIdStart(idx_t transaction_row_start) const {
+	if (transaction_local_data && transaction_local_data->HasPreservedRowIds()) {
+		// preserved row_ids are absolute, so row_id_start must be 0
+		return 0;
+	}
+	return transaction_row_start;
 }
 
 } // namespace duckdb

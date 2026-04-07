@@ -12,6 +12,9 @@
 
 namespace duckdb {
 
+class Serializer;
+class Deserializer;
+
 struct DuckLakeSnapshot {
 	DuckLakeSnapshot(idx_t snapshot_id, idx_t schema_version, idx_t next_catalog_id, idx_t next_file_id)
 	    : snapshot_id(snapshot_id), schema_version(schema_version), next_catalog_id(next_catalog_id),
@@ -27,6 +30,9 @@ struct DuckLakeSnapshot {
 	idx_t schema_version;
 	idx_t next_catalog_id;
 	idx_t next_file_id;
+
+	void Serialize(Serializer &serializer) const;
+	static DuckLakeSnapshot Deserialize(Deserializer &deserializer);
 };
 
 } // namespace duckdb

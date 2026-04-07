@@ -147,7 +147,7 @@ SnapshotChangeInformation SnapshotChangeInformation::ParseChangesMade(const stri
 		}
 		case ChangeType::CREATED_TABLE_MACRO: {
 			auto catalog_value = DuckLakeUtil::ParseCatalogEntry(entry.change_value);
-			result.created_scalar_macros[catalog_value.schema].insert(
+			result.created_table_macros[catalog_value.schema].insert(
 			    make_pair(std::move(catalog_value.name), "table_macro"));
 			break;
 		}

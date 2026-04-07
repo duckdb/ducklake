@@ -22,8 +22,13 @@ public:
 
 	bool TypeIsNativelySupported(const LogicalType &type) override;
 	bool SupportsInlining(const LogicalType &type) override;
+	bool SupportsAppender() const override {
+		return false;
+	}
 
 	string GetColumnTypeInternal(const LogicalType &type) override;
+	shared_ptr<DuckLakeInlinedData> TransformInlinedData(QueryResult &result,
+	                                                     const vector<LogicalType> &expected_types) override;
 
 	unique_ptr<QueryResult> Execute(DuckLakeSnapshot snapshot, string &query) override;
 
