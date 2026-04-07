@@ -26,6 +26,7 @@
 #include "storage/ducklake_delete.hpp"
 #include "storage/ducklake_delete_filter.hpp"
 #include "duckdb/common/types/blob.hpp"
+#include "common/ducklake_util.hpp"
 #include "functions/ducklake_compaction_functions.hpp"
 #include "storage/ducklake_sort_data.hpp"
 
@@ -420,6 +421,7 @@ static void FlushInlinedFileDeletions(ClientContext &context, DuckLakeCatalog &c
 	auto &metadata_manager = transaction.GetMetadataManager();
 	auto table_id = table.GetTableId();
 	auto snapshot = transaction.GetSnapshot();
+	auto &fs = FileSystem::GetFileSystem(context);
 
 	// Check if this table has an inlined deletion table
 	auto inlined_table_name = metadata_manager.GetInlinedDeletionTableName(table_id, snapshot);
@@ -466,7 +468,9 @@ LEFT JOIN (
 			if (file_info.file_path.empty()) {
 				auto path = chunk->GetValue(1, row_idx).GetValue<string>();
 				auto path_is_relative = chunk->GetValue(2, row_idx).GetValue<bool>();
-				file_info.file_path = path_is_relative ? table.DataPath() + path : path;
+				file_info.file_path = path_is_relative
+					? DuckLakeUtil::JoinPath(fs, table.DataPath(), path)
+					: path;
 				file_info.max_snapshot = begin_snapshot;
 
 				// Check for existing delete file
@@ -503,7 +507,6 @@ LEFT JOIN (
 	}
 
 	// Write delete files
-	auto &fs = FileSystem::GetFileSystem(context);
 	vector<DuckLakeDeleteFile> delete_files;
 
 	// Get encryption key if the catalog is encrypted
@@ -527,7 +530,10 @@ LEFT JOIN (
 			// Read existing deletions from the delete file
 			DuckLakeFileData existing_delete_file_data;
 			existing_delete_file_data.path = file_info.existing_delete_path_is_relative
-			                                     ? table.DataPath() + file_info.existing_delete_path
+			                                     ? DuckLakeUtil::JoinPath(
+			                                           fs,
+			                                           table.DataPath(),
+			                                           file_info.existing_delete_path)
 			                                     : file_info.existing_delete_path;
 			existing_delete_file_data.encryption_key = file_info.existing_delete_encryption_key;
 			existing_delete_file_data.format = file_info.existing_delete_format;
@@ -562,7 +568,10 @@ LEFT JOIN (
 			delete_file.overwrites_existing_delete = true;
 			delete_file.overwritten_delete_file.delete_file_id = file_info.existing_delete_file_id;
 			delete_file.overwritten_delete_file.path = file_info.existing_delete_path_is_relative
-			                                               ? table.DataPath() + file_info.existing_delete_path
+			                                               ? DuckLakeUtil::JoinPath(
+			                                                     fs,
+			                                                     table.DataPath(),
+			                                                     file_info.existing_delete_path)
 			                                               : file_info.existing_delete_path;
 		}
 

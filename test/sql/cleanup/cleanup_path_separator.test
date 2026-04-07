@@ -1,0 +1,87 @@
+# name: test/sql/cleanup/cleanup_path_separator.test
+# description: cleanup uses normalized paths when relative entries include leading separators
+# group: [cleanup]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+
+test-env DATA_PATH __TEST_DIR__
+
+
+statement ok
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/cleanup_path_separator', METADATA_CATALOG 'ducklake_meta')
+
+statement ok
+INSERT INTO ducklake_meta.ducklake_files_scheduled_for_deletion VALUES (999, '/main/t/lead.parquet', true, NOW());
+
+statement ok
+INSERT INTO ducklake_meta.ducklake_files_scheduled_for_deletion VALUES (1000, 'main/./t/dot.parquet', true, NOW());
+
+statement ok
+INSERT INTO ducklake_meta.ducklake_files_scheduled_for_deletion VALUES (1001, 'main/../t/parent.parquet', true, NOW());
+
+statement ok
+INSERT INTO ducklake_meta.ducklake_files_scheduled_for_deletion VALUES (1002, 's3://other-bucket/abs.parquet', true, NOW());
+
+statement ok
+CREATE TEMP TABLE cleanup_paths AS
+SELECT replace(path, chr(92), '/') AS path
+FROM ducklake_cleanup_old_files('ducklake', dry_run => true, cleanup_all => true);
+
+query I
+SELECT COUNT(*) FROM cleanup_paths;
+----
+4
+
+query I
+SELECT COUNT(*) FROM cleanup_paths
+WHERE path NOT LIKE '%://%'
+  AND ltrim(path, '/') LIKE '%//%';
+----
+0
+
+query I
+SELECT COUNT(*) FROM cleanup_paths
+WHERE replace(path, '://', ':/') LIKE '%/./%'
+   OR replace(path, '://', ':/') LIKE '%/../%';
+----
+0
+
+query I
+SELECT COUNT(*) FROM cleanup_paths
+WHERE path = 's3://other-bucket/abs.parquet';
+----
+1
+
+statement ok
+DROP TABLE cleanup_paths;
+
+test-env DUCKLAKE_CONNECTION_ROOT __TEST_DIR__/{UUID}_root.db
+
+statement ok
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION_ROOT}' AS ducklake_root (DATA_PATH '/', METADATA_CATALOG 'ducklake_root_meta')
+
+statement ok
+INSERT INTO ducklake_root_meta.ducklake_files_scheduled_for_deletion VALUES (2000, 'rooted.parquet', true, NOW());
+
+statement ok
+INSERT INTO ducklake_root_meta.ducklake_files_scheduled_for_deletion VALUES (2001, '/rooted2.parquet', true, NOW());
+
+statement ok
+CREATE TEMP TABLE cleanup_paths AS
+SELECT replace(path, chr(92), '/') AS path
+FROM ducklake_cleanup_old_files('ducklake_root', dry_run => true, cleanup_all => true);
+
+query I
+SELECT COUNT(*) FROM cleanup_paths;
+----
+2
+
+query I
+SELECT COUNT(*) FROM cleanup_paths
+WHERE NOT (path LIKE '/%' OR substr(path, 2, 2) = ':/');
+----
+0

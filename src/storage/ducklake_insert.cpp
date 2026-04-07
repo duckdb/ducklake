@@ -5,6 +5,7 @@
 #include "storage/ducklake_table_entry.hpp"
 #include "storage/ducklake_transaction.hpp"
 #include "common/ducklake_util.hpp"
+#include "duckdb/common/file_system.hpp"
 #include "storage/ducklake_scan.hpp"
 #include "storage/ducklake_inline_data.hpp"
 #include "storage/ducklake_geo_stats.hpp"
@@ -335,7 +336,7 @@ DuckLakeCopyOptions::DuckLakeCopyOptions(unique_ptr<CopyInfo> info_p, CopyFuncti
 
 DuckLakeCopyInput::DuckLakeCopyInput(ClientContext &context, DuckLakeTableEntry &table, const string &hive_partition)
     : catalog(table.ParentCatalog().Cast<DuckLakeCatalog>()), columns(table.GetColumns()),
-      data_path(table.DataPath() + hive_partition) {
+      data_path(DuckLakeUtil::JoinPath(FileSystem::GetFileSystem(context), table.DataPath(), hive_partition)) {
 	partition_data = table.GetPartitionData();
 	field_data = table.GetFieldData();
 	schema_id = table.ParentSchema().Cast<DuckLakeSchemaEntry>().GetSchemaId();
@@ -850,8 +851,11 @@ PhysicalOperator &DuckLakeCatalog::PlanCreateTableAs(ClientContext &context, Phy
 		DuckLakeTypes::CheckSupportedType(col.Type());
 	}
 	auto table_uuid = duck_transaction.GenerateUUID();
-	auto table_data_path =
-	    duck_schema.DataPath() + DuckLakeCatalog::GeneratePathFromName(table_uuid, create_info.table);
+	auto &fs = FileSystem::GetFileSystem(context);
+	auto table_data_path = DuckLakeUtil::JoinPath(
+	    fs,
+	    duck_schema.DataPath(),
+	    DuckLakeCatalog::GeneratePathFromName(table_uuid, create_info.table));
 
 	DuckLakeCopyInput copy_input(context, duck_schema, columns, table_data_path);
 	auto &physical_copy = DuckLakeInsert::PlanCopyForInsert(context, planner, copy_input, root.get());
