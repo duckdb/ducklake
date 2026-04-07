@@ -74,6 +74,13 @@ static DuckLakeDeleteFile WriteDeleteFileInternal(ClientContext &context, InputT
 		types_to_write.push_back(LogicalType::BIGINT);
 	}
 
+	if (!input.fs.IsRemoteFile(input.data_path)) {
+		try {
+			input.fs.CreateDirectoriesRecursive(input.data_path);
+		} catch (...) {
+		}
+	}
+
 	auto function_data = copy_fun.function.copy_to_bind(input.context, bind_input, names_to_write, types_to_write);
 	auto copy_global_state = copy_fun.function.copy_to_initialize_global(context, *function_data, delete_file_path);
 
@@ -164,6 +171,12 @@ DuckLakeDeleteFile DuckLakeDeleteFileWriter::WriteDeletionVectorFile(ClientConte
 
 	// Write blob to file
 	auto &fs = FileSystem::GetFileSystem(context);
+	if (!fs.IsRemoteFile(input.data_path)) {
+		try {
+			fs.CreateDirectoriesRecursive(input.data_path);
+		} catch (...) {
+		}
+	}
 	auto file_handle =
 	    fs.OpenFile(delete_file_path, FileOpenFlags::FILE_FLAGS_WRITE | FileOpenFlags::FILE_FLAGS_FILE_CREATE);
 	file_handle->Write(blob_data.data(), blob_data.size());

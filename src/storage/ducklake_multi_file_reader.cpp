@@ -3,6 +3,7 @@
 #include "storage/ducklake_table_entry.hpp"
 #include "storage/ducklake_catalog.hpp"
 #include "storage/ducklake_delete_filter.hpp"
+#include "common/ducklake_name_map.hpp"
 #include "common/ducklake_util.hpp"
 
 #include "duckdb/common/local_file_system.hpp"
@@ -67,6 +68,43 @@ static void NormalizeListChildNames(vector<MultiFileColumnDefinition> &columns, 
 			NormalizeListChildNames(col.children, is_list);
 		}
 	}
+}
+
+static unique_ptr<DuckLakeNameMapEntry> CreateLegacyNameMapEntry(const DuckLakeFieldId &field_id) {
+	auto result = make_uniq<DuckLakeNameMapEntry>();
+	result->source_name = field_id.Name();
+	result->target_field_id = field_id.GetFieldIndex();
+	for (auto &child : field_id.Children()) {
+		result->child_entries.push_back(CreateLegacyNameMapEntry(*child));
+	}
+	return result;
+}
+
+static unique_ptr<DuckLakeNameMap> TryCreateLegacyNameMap(DuckLakeFunctionInfo &read_info,
+                                                          const OpenFileInfo &opened_file) {
+	if (!opened_file.extended_info) {
+		return nullptr;
+	}
+	auto snapshot_entry = opened_file.extended_info->options.find("snapshot_id");
+	if (snapshot_entry == opened_file.extended_info->options.end() || snapshot_entry->second.IsNull()) {
+		return nullptr;
+	}
+
+	auto transaction = read_info.GetTransaction();
+	auto file_snapshot = transaction->GetMetadataManager().GetSnapshotById(snapshot_entry->second.GetValue<idx_t>());
+	auto &catalog = read_info.table.catalog.Cast<DuckLakeCatalog>();
+	auto historical_entry = catalog.GetEntryById(*transaction, *file_snapshot, read_info.table.GetTableId());
+	if (!historical_entry || historical_entry->type != CatalogType::TABLE_ENTRY) {
+		return nullptr;
+	}
+
+	auto result = make_uniq<DuckLakeNameMap>();
+	auto &historical_table = historical_entry->Cast<DuckLakeTableEntry>();
+	result->table_id = historical_table.GetTableId();
+	for (auto &field_id : historical_table.GetFieldData().GetFieldIds()) {
+		result->column_maps.push_back(CreateLegacyNameMapEntry(*field_id));
+	}
+	return result;
 }
 
 static bool CanSkipFileByTopNDynamicFilter(const DuckLakeFileListEntry &file_entry,
@@ -519,6 +557,13 @@ ReaderInitializeType DuckLakeMultiFileReader::CreateMapping(
 			auto &mapping = transaction->GetMappingById(mapping_id);
 			// use the mapping to generate a new set of global columns for this file
 			auto mapped_columns = CreateNewMapping(context, reader_data, global_columns, mapping);
+			return MultiFileReader::CreateMapping(context, reader_data, mapped_columns, column_ids_to_use, filters,
+			                                      multi_file_list, bind_data, virtual_columns,
+			                                      MultiFileColumnMappingMode::BY_NAME);
+		}
+		auto legacy_name_map = TryCreateLegacyNameMap(read_info, reader_data.reader->file);
+		if (legacy_name_map) {
+			auto mapped_columns = CreateNewMapping(context, reader_data, global_columns, *legacy_name_map);
 			return MultiFileReader::CreateMapping(context, reader_data, mapped_columns, column_ids_to_use, filters,
 			                                      multi_file_list, bind_data, virtual_columns,
 			                                      MultiFileColumnMappingMode::BY_NAME);

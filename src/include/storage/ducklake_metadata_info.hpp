@@ -446,8 +446,8 @@ struct DuckLakeCompactionFileEntry {
 	vector<DuckLakeCompactionDeleteFileData> delete_files;
 	optional_idx max_partial_file_snapshot;
 	idx_t schema_version;
-	//! Whether this file has inlined deletions (stored in metadata database rather than delete files)
-	bool has_inlined_deletions = false;
+	//! Inlined file deletions stored in the metadata database rather than delete files.
+	set<idx_t> inlined_file_deletions;
 };
 
 struct DuckLakeRewriteFileEntry {
@@ -468,6 +468,7 @@ struct DuckLakeCompactedFileInfo {
 	string path;
 	DataFileIndex source_id;
 	DataFileIndex new_id;
+	optional_idx rewrite_snapshot;
 	//! Info on delete files, in case the compaction is a delete-rewrite
 	string delete_file_path;
 	DataFileIndex delete_file_id;
