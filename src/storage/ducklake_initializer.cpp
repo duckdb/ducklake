@@ -11,6 +11,7 @@
 #include "storage/ducklake_transaction.hpp"
 #include "storage/ducklake_schema_entry.hpp"
 #include "common/ducklake_version.hpp"
+#include "common/ducklake_util.hpp"
 #include "metadata_manager/ducklake_metadata_manager_v1_1.hpp"
 #include "metadata_manager/sqlite_metadata_manager.hpp"
 #include "metadata_manager/postgres_metadata_manager.hpp"
@@ -130,7 +131,7 @@ void DuckLakeInitializer::InitializeDataPath() {
 	CheckAndAutoloadedRequiredExtension(data_path);
 
 	auto &fs = FileSystem::GetFileSystem(context);
-	auto separator = fs.PathSeparator(data_path);
+	auto separator = DuckLakeUtil::LocalOrRemoteSeparator(fs, data_path);
 	// pop trailing path separators
 	while (!data_path.empty() && (data_path.back() == '/' || data_path.back() == '\\')) {
 		data_path.pop_back();

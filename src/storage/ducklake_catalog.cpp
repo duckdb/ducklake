@@ -29,6 +29,7 @@
 #include "duckdb/common/operator/cast_operators.hpp"
 #include "duckdb/common/types/uuid.hpp"
 #include "common/ducklake_util.hpp"
+#include "duckdb/common/file_system.hpp"
 
 namespace duckdb {
 
@@ -147,7 +148,11 @@ optional_ptr<CatalogEntry> DuckLakeCatalog::CreateSchema(CatalogTransaction tran
 	//! get a local table-id
 	auto schema_id = SchemaIndex(duck_transaction.GetLocalCatalogId());
 	auto schema_uuid = duck_transaction.GenerateUUID();
-	auto schema_data_path = DataPath() + DuckLakeCatalog::GeneratePathFromName(schema_uuid, info.schema);
+	auto &fs = FileSystem::GetFileSystem(transaction.GetContext());
+	auto schema_data_path = DuckLakeUtil::JoinPath(
+	    fs,
+	    DataPath(),
+	    DuckLakeCatalog::GeneratePathFromName(schema_uuid, info.schema));
 	auto schema_entry =
 	    make_uniq<DuckLakeSchemaEntry>(*this, info, schema_id, std::move(schema_uuid), std::move(schema_data_path));
 	auto result = schema_entry.get();
