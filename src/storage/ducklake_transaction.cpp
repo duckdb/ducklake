@@ -1624,6 +1624,11 @@ void DuckLakeTransaction::GetNewTableInfo(DuckLakeCommitState &commit_state, Duc
 			transaction_changes.altered_tables_with_schema_version_changes.insert(table_id);
 			if (local_change.type == LocalChangeType::RENAME_COLUMN) {
 				column_schema_change = true;
+				// persist updated sort expressions (column name was updated in the table entry)
+				if (table.GetSortData()) {
+					auto sort_key = GetNewSortKey(commit_state, table);
+					result.new_sort_keys.push_back(std::move(sort_key));
+				}
 			}
 			break;
 		}

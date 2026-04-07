@@ -30,25 +30,7 @@ ALTER TABLE renamed_columns_test RENAME COLUMN sort_key_1 TO sort_key_1_changed;
 statement ok
 ALTER TABLE renamed_columns_test RENAME COLUMN sort_key_2 TO sort_key_2_changed;
 
-# Insert should fail because the sort expressions reference old column names
-statement error
-INSERT INTO renamed_columns_test (unique_id, sort_key_1_changed, sort_key_2_changed)
-FROM range(4) t(i)
-SELECT
-    i AS unique_id,
-    i % 2 AS sort_key_1_changed,
-    'woot' || i AS sort_key_2_changed
-ORDER BY
-    i DESC
-;
-----
-Columns in the SET SORTED BY statement were not found in the DuckLake table. Unmatched columns were: sort_key_1, sort_key_2
-
-# Fix the sort expression to use the new column names
-statement ok
-ALTER TABLE ducklake.renamed_columns_test SET SORTED BY (sort_key_1_changed ASC NULLS LAST, sort_key_2_changed ASC NULLS LAST);
-
-# Now inserts succeed and data is sorted
+# Insert succeeds because sort expressions are updated during rename
 statement ok
 INSERT INTO renamed_columns_test (unique_id, sort_key_1_changed, sort_key_2_changed)
 FROM range(4) t(i)
