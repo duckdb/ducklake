@@ -14,6 +14,7 @@
 #include "duckdb/catalog/catalog_entry/table_macro_catalog_entry.hpp"
 #include "storage/ducklake_macro_entry.hpp"
 #include "common/ducklake_util.hpp"
+#include "duckdb/common/file_system.hpp"
 
 namespace duckdb {
 
@@ -96,7 +97,11 @@ optional_ptr<CatalogEntry> DuckLakeSchemaEntry::CreateTable(CatalogTransaction t
 	auto &duck_catalog = catalog.Cast<DuckLakeCatalog>();
 	auto &base_info = info.Base();
 	auto table_uuid = duck_transaction.GenerateUUID();
-	auto table_data_path = DataPath() + duck_catalog.GeneratePathFromName(table_uuid, base_info.table);
+	auto &fs = FileSystem::GetFileSystem(transaction.GetContext());
+	auto table_data_path = DuckLakeUtil::JoinPath(
+	    fs,
+	    DataPath(),
+	    duck_catalog.GeneratePathFromName(table_uuid, base_info.table));
 	return CreateTableExtended(transaction, info, std::move(table_uuid), std::move(table_data_path));
 }
 

@@ -1,5 +1,6 @@
 #include "common/ducklake_util.hpp"
 #include "duckdb/common/string_util.hpp"
+#include "duckdb/common/path.hpp"
 #include "duckdb/parser/keyword_helper.hpp"
 #include "duckdb/parser/parser.hpp"
 #include "duckdb/common/file_system.hpp"
@@ -312,13 +313,39 @@ void DuckLakeUtil::EnsureDirectoryExists(FileSystem &fs, const string &data_path
 	}
 }
 
-string DuckLakeUtil::JoinPath(FileSystem &fs, const string &a, const string &b) {
-	auto sep = fs.PathSeparator(a);
-	if (StringUtil::EndsWith(a, sep)) {
-		return a + b;
-	} else {
-		return a + sep + b;
+string DuckLakeUtil::LocalOrRemoteSeparator(FileSystem &fs, const string &path) {
+	auto parsed = Path::FromString(path);
+	if (parsed.IsRemote()) {
+		return "/";
 	}
+	return fs.PathSeparator(path);
+}
+
+string DuckLakeUtil::JoinPath(FileSystem &fs, const string &a, const string &b) {
+	static_cast<void>(fs);
+	if (a.empty()) {
+		return Path::Normalize(b);
+	}
+	if (b.empty()) {
+		return Path::Normalize(a);
+	}
+	auto full_tail = Path::FromString(b);
+	if (full_tail.HasScheme() || full_tail.HasDrive()) {
+		return full_tail.ToString();
+	}
+	auto trimmed_tail = b;
+	auto trim_pos = trimmed_tail.find_first_not_of("/\\");
+	if (trim_pos == string::npos) {
+		trimmed_tail.clear();
+	} else if (trim_pos > 0) {
+		trimmed_tail.erase(0, trim_pos);
+	}
+	if (trimmed_tail.empty()) {
+		return Path::Normalize(a);
+	}
+	auto base = Path::FromString(a);
+	auto rel = Path::FromString(trimmed_tail);
+	return base.Join(rel).ToString();
 }
 
 DynamicFilter *DuckLakeUtil::GetOptionalDynamicFilter(const TableFilter &filter) {
