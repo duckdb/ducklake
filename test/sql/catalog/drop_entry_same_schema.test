@@ -1,5 +1,5 @@
 # name: test/sql/catalog/drop_entry_same_schema.test
-# description: Test that dropping a transaction-local table/view does not remove other entries in the same schema
+# description: Test that dropping a transaction-local table/view does not remove other entries in the same schema, see issue https://github.com/duckdb/ducklake/issues/957
 # group: [catalog]
 
 require ducklake
@@ -14,7 +14,6 @@ test-env DATA_PATH __TEST_DIR__
 statement ok
 ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/ducklake_drop_same_schema')
 
-# dropping one transaction-local table must not remove another table in the same schema
 statement ok
 BEGIN
 
@@ -93,7 +92,7 @@ FROM ducklake.vb
 statement ok
 DROP VIEW ducklake.vb
 
-# dropping a transaction-local table must not remove a transaction-local view (mixed types)
+# dropping a transaction-local table must not remove a transaction-local view
 statement ok
 BEGIN
 
