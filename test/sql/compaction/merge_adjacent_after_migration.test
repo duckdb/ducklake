@@ -1,0 +1,70 @@
+# name: test/sql/compaction/merge_adjacent_after_migration.test
+# description: Reproduce schema cache collision via actual v0.3 -> v0.4 migration with multiple tables and data files
+# group: [compaction]
+
+require ducklake
+
+require parquet
+
+# Unzip the v0.3 metadata database and data files
+unzip data/old_ducklake/v03_multi_table.db.gz __TEST_DIR__/v03_multi_table.db
+
+unzip data/old_ducklake/v03_mt_a1.parquet.gz __TEST_DIR__/a1.parquet
+
+unzip data/old_ducklake/v03_mt_a2.parquet.gz __TEST_DIR__/a2.parquet
+
+unzip data/old_ducklake/v03_mt_b1.parquet.gz __TEST_DIR__/b1.parquet
+
+unzip data/old_ducklake/v03_mt_b2.parquet.gz __TEST_DIR__/b2.parquet
+
+# Attach with migration (v0.3 -> v0.4)
+statement ok
+ATTACH 'ducklake:__TEST_DIR__/v03_multi_table.db' AS ducklake (DATA_PATH '__TEST_DIR__/', OVERRIDE_DATA_PATH TRUE, AUTOMATIC_MIGRATION TRUE)
+
+# After migration, schema_version=2 is the latest and cached during ATTACH.
+# To trigger the cache collision, we need a schema change so that the latest
+# schema_version advances, making the old schema_version=2 stale and uncached
+# at a specific snapshot_id.
+statement ok
+CREATE TABLE ducklake.c(k INTEGER);
+
+# Now the latest snapshot has schema_version=3 (cached during the CREATE above).
+# The old files for tables a and b still reference schema_version=2 via the CTE.
+# But schema_version=2 was cached at the latest snapshot during ATTACH — we need
+# to invalidate that. A new session would do it, so detach and re-attach.
+statement ok
+DETACH ducklake;
+
+statement ok
+ATTACH 'ducklake:__TEST_DIR__/v03_multi_table.db' AS ducklake (DATA_PATH '__TEST_DIR__/', OVERRIDE_DATA_PATH TRUE)
+
+# Now schema_version=3 is cached (latest snapshot), but schema_version=2 is NOT cached.
+# The compactor will load schema_version=2 at table a's file begin_snapshot (=2),
+# which is BEFORE table b existed (begin_snapshot=6).
+# Compacting table a caches schema_version=2 at snapshot_id=2.
+# Then compacting table b hits the cache for schema_version=2 → table b not found → crash.
+query III
+SELECT table_name, files_processed, files_created FROM ducklake_merge_adjacent_files('ducklake', 'a')
+----
+a	2	1
+
+query III
+SELECT table_name, files_processed, files_created FROM ducklake_merge_adjacent_files('ducklake', 'b')
+----
+b	2	1
+
+# Verify data is still correct
+query I
+SELECT * FROM ducklake.a ORDER BY i
+----
+1
+2
+
+query I
+SELECT * FROM ducklake.b ORDER BY j
+----
+10
+20
+
+statement ok
+DETACH ducklake;

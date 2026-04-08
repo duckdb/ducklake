@@ -542,13 +542,7 @@ DuckLakeCopyOptions DuckLakeInsert::GetCopyOptions(ClientContext &context, DuckL
 	auto &copy_fun = DuckLakeFunctions::GetCopyFunction(context, "parquet");
 
 	auto &fs = FileSystem::GetFileSystem(context);
-	if (!fs.IsRemoteFile(copy_input.data_path)) {
-		// create data path if it does not yet exist
-		try {
-			fs.CreateDirectoriesRecursive(copy_input.data_path);
-		} catch (...) {
-		}
-	}
+	DuckLakeUtil::EnsureDirectoryExists(fs, copy_input.data_path);
 
 	// Bind Copy Function
 	CopyFunctionBindInput bind_input(*info);
