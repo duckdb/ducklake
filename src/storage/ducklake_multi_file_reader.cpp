@@ -525,8 +525,7 @@ ReaderInitializeType DuckLakeMultiFileReader::CreateMapping(
 		}
 	}
 	// Check if file columns have field_id identifiers
-	bool has_field_ids =
-	    !reader_data.reader->columns.empty() && !reader_data.reader->columns[0].identifier.IsNull();
+	bool has_field_ids = !reader_data.reader->columns.empty() && !reader_data.reader->columns[0].identifier.IsNull();
 	if (!has_field_ids) {
 		// Legacy external file without field_ids and no mapping
 		auto &file_columns = reader_data.reader->columns;
