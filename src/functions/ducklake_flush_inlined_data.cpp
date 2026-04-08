@@ -27,6 +27,7 @@
 #include "storage/ducklake_delete_filter.hpp"
 
 #include "functions/ducklake_compaction_functions.hpp"
+#include "storage/ducklake_sort_data.hpp"
 
 namespace duckdb {
 
@@ -50,10 +51,11 @@ static void AttachDeleteFilesToWrittenFiles(vector<DuckLakeDeleteFile> &delete_f
 //===--------------------------------------------------------------------===//
 DuckLakeFlushData::DuckLakeFlushData(PhysicalPlan &physical_plan, const vector<LogicalType> &types,
                                      DuckLakeTableEntry &table, DuckLakeInlinedTableInfo inlined_table_p,
-                                     string encryption_key_p, optional_idx partition_id, PhysicalOperator &child)
+                                     string encryption_key_p, optional_idx partition_id, string sort_order_sql_p,
+                                     PhysicalOperator &child)
     : PhysicalOperator(physical_plan, PhysicalOperatorType::EXTENSION, types, 0), table(table),
       inlined_table(std::move(inlined_table_p)), encryption_key(std::move(encryption_key_p)),
-      partition_id(partition_id) {
+      partition_id(partition_id), sort_order_sql(std::move(sort_order_sql_p)) {
 	children.push_back(child);
 }
 
@@ -137,10 +139,16 @@ SinkFinalizeType DuckLakeFlushData::Finalize(Pipeline &pipeline, Event &event, C
 
 			// Query deleted rows within this file's row range, filtered to its partition
 			string extra_filter = partition_filter.empty() ? "" : " AND " + partition_filter;
+			// When the table has sort metadata, the file is written in sorted order.
+			// The ORDER BY must match the actual file order so delete positions are correct.
+			string order_by = "row_id, begin_snapshot";
+			if (!sort_order_sql.empty()) {
+				order_by = sort_order_sql + ", row_id, begin_snapshot";
+			}
 			auto deleted_rows_result =
 			    transaction.Query(snapshot, StringUtil::Format(R"(
 				WITH all_rows AS (
-					SELECT end_snapshot, ROW_NUMBER() OVER (ORDER BY row_id, begin_snapshot) - 1 AS output_position
+					SELECT end_snapshot, ROW_NUMBER() OVER (ORDER BY %s) - 1 AS output_position
 					FROM {METADATA_CATALOG}.%s
 					WHERE {SNAPSHOT_ID} >= begin_snapshot%s
 				)
@@ -148,8 +156,8 @@ SinkFinalizeType DuckLakeFlushData::Finalize(Pipeline &pipeline, Event &event, C
 				FROM all_rows
 				WHERE end_snapshot IS NOT NULL
 				AND output_position >= %d AND output_position < %d;)",
-			                                                   inlined_table.table_name, extra_filter, file_offset,
-			                                                   file_offset + file.row_count));
+			                                                   order_by, inlined_table.table_name, extra_filter,
+			                                                   file_offset, file_offset + file.row_count));
 
 			for (auto &row : *deleted_rows_result) {
 				auto end_snap = row.GetValue<int64_t>(0);
@@ -204,9 +212,10 @@ string DuckLakeFlushData::GetName() const {
 class DuckLakeLogicalFlush : public LogicalExtensionOperator {
 public:
 	DuckLakeLogicalFlush(idx_t table_index, DuckLakeTableEntry &table, DuckLakeInlinedTableInfo inlined_table_p,
-	                     string encryption_key_p, optional_idx partition_id_p)
+	                     string encryption_key_p, optional_idx partition_id_p, string sort_order_sql_p)
 	    : table_index(table_index), table(table), inlined_table(std::move(inlined_table_p)),
-	      encryption_key(std::move(encryption_key_p)), partition_id(partition_id_p) {
+	      encryption_key(std::move(encryption_key_p)), partition_id(partition_id_p),
+	      sort_order_sql(std::move(sort_order_sql_p)) {
 	}
 
 	idx_t table_index;
@@ -214,12 +223,13 @@ public:
 	DuckLakeInlinedTableInfo inlined_table;
 	string encryption_key;
 	optional_idx partition_id;
+	string sort_order_sql;
 
 public:
 	PhysicalOperator &CreatePlan(ClientContext &context, PhysicalPlanGenerator &planner) override {
 		auto &child = planner.CreatePlan(*children[0]);
 		return planner.Make<DuckLakeFlushData>(types, table, std::move(inlined_table), std::move(encryption_key),
-		                                       partition_id, child);
+		                                       partition_id, std::move(sort_order_sql), child);
 	}
 
 	string GetName() const override {
@@ -346,9 +356,11 @@ unique_ptr<LogicalOperator> DuckLakeDataFlusher::GenerateFlushCommand() {
 	}
 	auto &latest_table = latest_entry->Cast<DuckLakeTableEntry>();
 
+	string sort_order_sql;
 	auto sort_data = latest_table.GetSortData();
 	if (sort_data) {
 		root = DuckLakeCompactor::InsertSort(binder, root, latest_table, sort_data);
+		sort_order_sql = DuckLakeSort::BuildSortOrderSQL(*sort_data, latest_table.GetColumns(), table.GetColumns());
 	}
 
 	// generate the LogicalCopyToFile
@@ -375,8 +387,9 @@ unique_ptr<LogicalOperator> DuckLakeDataFlusher::GenerateFlushCommand() {
 	copy->children.push_back(std::move(root));
 
 	// followed by the compaction operator (that writes the results back to the
-	auto compaction = make_uniq<DuckLakeLogicalFlush>(binder.GenerateTableIndex(), table, inlined_table,
-	                                                  std::move(copy_input.encryption_key), partition_id);
+	auto compaction =
+	    make_uniq<DuckLakeLogicalFlush>(binder.GenerateTableIndex(), table, inlined_table,
+	                                    std::move(copy_input.encryption_key), partition_id, std::move(sort_order_sql));
 	compaction->children.push_back(std::move(copy));
 	return std::move(compaction);
 }
