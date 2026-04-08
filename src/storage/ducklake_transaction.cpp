@@ -2844,7 +2844,9 @@ void DuckLakeTransaction::DropTable(DuckLakeTableEntry &table) {
 		// if we have written any files for this table - clean them up
 		auto context_ref = context.lock();
 		local_changes.CleanupFiles(*context_ref, table_id);
-		new_tables.erase(schema_entry);
+		if (schema_entry->second->GetEntries().empty()) {
+			new_tables.erase(schema_entry);
+		}
 	} else {
 		auto table_id = table.GetTableId();
 		dropped_tables.insert(table_id);
@@ -2859,7 +2861,9 @@ void DuckLakeTransaction::DropView(DuckLakeViewEntry &view) {
 			throw InternalException("Dropping a transaction local view that does not exist?");
 		}
 		schema_entry->second->DropEntry(view.name);
-		new_tables.erase(schema_entry);
+		if (schema_entry->second->GetEntries().empty()) {
+			new_tables.erase(schema_entry);
+		}
 	} else {
 		auto view_id = view.GetViewId();
 		dropped_views.insert(view_id);
