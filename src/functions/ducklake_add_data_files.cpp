@@ -108,6 +108,7 @@ struct HivePartition {
 	FieldIndex field_index;
 	LogicalType field_type;
 	Value hive_value;
+	DuckLakeTransformType transform_type;
 };
 
 struct ParquetFileMetadata {
@@ -923,7 +924,8 @@ unique_ptr<DuckLakeNameMapEntry> DuckLakeFileProcessor::MapHiveColumn(ParquetFil
 	}
 
 	// Store the hive partition information for later statistics processing
-	file_metadata.hive_partition_values.emplace_back(HivePartition {target_field_id, field_id.Type(), hive_value});
+	file_metadata.hive_partition_values.emplace_back(
+	    HivePartition {target_field_id, field_id.Type(), hive_value, DuckLakeTransformType::IDENTITY});
 
 	// return the map - the name is empty on purpose to signal this comes from a partition
 	auto result = make_uniq<DuckLakeNameMapEntry>();
@@ -1056,6 +1058,11 @@ void DuckLakeFileProcessor::MapColumnStats(ParquetFileMetadata &file_metadata, D
 
 	// Process statistics for hive partition columns
 	for (auto &entry : file_metadata.hive_partition_values) {
+		if (entry.transform_type == DuckLakeTransformType::BUCKET) {
+			// Bucket partitioning uses the result of the hash for the folder names, so we can't get statistics from it
+			continue;
+		}
+
 		auto field_index = entry.field_index;
 		auto &field_type = entry.field_type;
 		auto &hive_value = entry.hive_value;
@@ -1169,7 +1176,7 @@ void DuckLakeFileProcessor::MapPartitionColumns(ParquetFileMetadata &file) {
 		auto hive_value =
 		    HivePartitioning::GetValue(context, partition_key_name, hive_entry->second, partition_key_type);
 		file.hive_partition_values.emplace_back(
-		    HivePartition {partition_field.field_id, partition_key_type, hive_value});
+		    HivePartition {partition_field.field_id, partition_key_type, hive_value, partition_field.transform.type});
 	}
 }
 

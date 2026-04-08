@@ -22,6 +22,7 @@
 #include "duckdb/main/extension_helper.hpp"
 #include "duckdb/function/function_binder.hpp"
 #include "duckdb/planner/operator/logical_projection.hpp"
+#include "duckdb/planner/expression/bound_constant_expression.hpp"
 #include "storage/ducklake_variant_stats.hpp"
 
 namespace duckdb {
@@ -386,36 +387,10 @@ static unique_ptr<Expression> GetColumnReference(DuckLakeCopyInput &copy_input, 
 	return CreateColumnReference(copy_input, column_field_id.Type(), index.GetIndex());
 }
 
-static unique_ptr<Expression> GetFunction(ClientContext &context, DuckLakeCopyInput &copy_input,
-                                          const string &function_name, FieldIndex field_id) {
-	vector<unique_ptr<Expression>> children;
-	children.push_back(GetColumnReference(copy_input, field_id));
-
-	ErrorData error;
-	FunctionBinder binder(context);
-	auto function = binder.BindScalarFunction(DEFAULT_SCHEMA, function_name, std::move(children), error, false);
-	if (!function) {
-		error.Throw();
-	}
-	return function;
-}
-
 static unique_ptr<Expression> GetPartitionExpression(ClientContext &context, DuckLakeCopyInput &copy_input,
                                                      const DuckLakePartitionField &field) {
-	switch (field.transform.type) {
-	case DuckLakeTransformType::IDENTITY:
-		return GetColumnReference(copy_input, field.field_id);
-	case DuckLakeTransformType::YEAR:
-		return GetFunction(context, copy_input, "year", field.field_id);
-	case DuckLakeTransformType::MONTH:
-		return GetFunction(context, copy_input, "month", field.field_id);
-	case DuckLakeTransformType::DAY:
-		return GetFunction(context, copy_input, "day", field.field_id);
-	case DuckLakeTransformType::HOUR:
-		return GetFunction(context, copy_input, "hour", field.field_id);
-	default:
-		throw NotImplementedException("Unsupported partition transform type in GetPartitionExpression");
-	}
+	auto column_expr = GetColumnReference(copy_input, field.field_id);
+	return DuckLakePartitionUtils::ApplyPartitionTransform(context, std::move(column_expr), field);
 }
 
 static string GetPartitionExpressionName(DuckLakeCopyInput &copy_input, const DuckLakePartitionField &field,
