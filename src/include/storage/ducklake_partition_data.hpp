@@ -52,7 +52,7 @@ struct DuckLakePartitionUtils {
 	static unique_ptr<Expression> ApplyScalarFunction(ClientContext &context, const string &function_name,
 	                                                  unique_ptr<Expression> column_expr);
 
-	//! Compute hash(column_expr) % bucket_count (UBIGINT to guarantee non-negative results)
+	//! Compute murmur3_32(column_expr) % bucket_count (Iceberg-compatible bucket transform)
 	static unique_ptr<Expression> ApplyBucketTransform(ClientContext &context, unique_ptr<Expression> column_expr,
 	                                                   idx_t bucket_count);
 

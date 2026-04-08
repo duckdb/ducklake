@@ -56,7 +56,7 @@ LogicalType DuckLakePartitionUtils::GetPartitionKeyType(DuckLakeTransformType tr
 	case DuckLakeTransformType::HOUR:
 		return LogicalType::BIGINT;
 	case DuckLakeTransformType::BUCKET:
-		return LogicalType::UBIGINT;
+		return LogicalType::INTEGER;
 	default:
 		throw NotImplementedException("Unsupported partition transform type");
 	}
@@ -97,17 +97,27 @@ unique_ptr<Expression> DuckLakePartitionUtils::ApplyBucketTransform(ClientContex
                                                                     idx_t bucket_count) {
 	D_ASSERT(bucket_count > 0);
 
-	// Not compatible with Iceberg since we're not using murmur3 hash, but instead DuckDB's own hash.
-	auto hash_expr = ApplyScalarFunction(context, "hash", std::move(column_expr));
+	// Iceberg-compatible: murmur3_x86_32 with seed 0
+	auto hash_expr = ApplyScalarFunction(context, "murmur3_32", std::move(column_expr));
 
-	vector<unique_ptr<Expression>> children;
-	children.push_back(std::move(hash_expr));
-	// UBIGINT to match hash() return type - ensures modulo result is always in [0, N)
-	children.push_back(make_uniq<BoundConstantExpression>(Value::UBIGINT(bucket_count)));
+	// Iceberg bucket: (hash & Integer.MAX_VALUE) % N
+	// Mask off sign bit to ensure non-negative result
+	vector<unique_ptr<Expression>> and_children;
+	and_children.push_back(std::move(hash_expr));
+	and_children.push_back(make_uniq<BoundConstantExpression>(Value::INTEGER(NumericLimits<int32_t>::Maximum())));
 
 	ErrorData error;
 	FunctionBinder binder(context);
-	auto mod_expr = binder.BindScalarFunction(DEFAULT_SCHEMA, "%", std::move(children), error, false);
+	auto and_expr = binder.BindScalarFunction(DEFAULT_SCHEMA, "&", std::move(and_children), error, false);
+	if (!and_expr) {
+		error.Throw();
+	}
+
+	vector<unique_ptr<Expression>> mod_children;
+	mod_children.push_back(std::move(and_expr));
+	mod_children.push_back(make_uniq<BoundConstantExpression>(Value::INTEGER(NumericCast<int32_t>(bucket_count))));
+
+	auto mod_expr = binder.BindScalarFunction(DEFAULT_SCHEMA, "%", std::move(mod_children), error, false);
 	if (!mod_expr) {
 		error.Throw();
 	}

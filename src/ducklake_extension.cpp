@@ -7,10 +7,13 @@
 #include "functions/ducklake_table_functions.hpp"
 #include "storage/ducklake_secret.hpp"
 #include "duckdb/logging/log_manager.hpp"
+#include "duckdb/function/scalar_function.hpp"
 #include "duckdb/storage/storage_extension.hpp"
 #include "storage/ducklake_log_type.hpp"
 
 namespace duckdb {
+
+ScalarFunction DuckLakeMurmur3Function();
 
 static void LoadInternal(ExtensionLoader &loader) {
 	loader.SetDescription("Adds support for DuckLake, SQL as a Lakehouse Format");
@@ -103,6 +106,10 @@ static void LoadInternal(ExtensionLoader &loader) {
 
 	auto ducklake_secret_function = DuckLakeSecret::GetFunction();
 	loader.RegisterFunction(ducklake_secret_function);
+
+	// Register murmur3_32 scalar function for Iceberg-compatible bucket partitioning
+	auto murmur3_func = DuckLakeMurmur3Function();
+	loader.RegisterFunction(murmur3_func);
 }
 
 void DucklakeExtension::Load(ExtensionLoader &loader) {
