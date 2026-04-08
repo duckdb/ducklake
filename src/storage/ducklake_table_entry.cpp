@@ -11,6 +11,7 @@
 #include "duckdb/main/client_context.hpp"
 #include "duckdb/parser/tableref/table_function_ref.hpp"
 #include "duckdb/parser/parsed_data/create_table_info.hpp"
+#include "duckdb/parser/parser.hpp"
 #include "duckdb/parser/expression/cast_expression.hpp"
 #include "duckdb/parser/expression/columnref_expression.hpp"
 #include "duckdb/parser/expression/function_expression.hpp"
@@ -102,12 +103,37 @@ DuckLakeTableEntry::DuckLakeTableEntry(DuckLakeTableEntry &parent, CreateTableIn
 	                                           local_change.is_column_new);
 }
 
+static void ReplaceColumnRefName(ParsedExpression &expr, const string &old_name, const string &new_name) {
+	if (expr.type == ExpressionType::COLUMN_REF) {
+		auto &colref = expr.Cast<ColumnRefExpression>();
+		if (!colref.IsQualified() && StringUtil::CIEquals(colref.GetColumnName(), old_name)) {
+			colref.column_names.back() = new_name;
+		}
+		return;
+	}
+	ParsedExpressionIterator::EnumerateChildren(
+	    expr, [&](ParsedExpression &child) { ReplaceColumnRefName(child, old_name, new_name); });
+}
+
 // ALTER TABLE RENAME COLUMN
 DuckLakeTableEntry::DuckLakeTableEntry(DuckLakeTableEntry &parent, CreateTableInfo &info, LocalChange local_change,
                                        const string &new_name)
     : DuckLakeTableEntry(parent, info, local_change) {
 	D_ASSERT(local_change.type == LocalChangeType::RENAME_COLUMN);
 	field_data = DuckLakeFieldData::RenameColumn(*field_data, local_change.field_index, new_name);
+	// Update sort expressions to reference the new column name
+	if (sort_data) {
+		auto old_field = parent.GetFieldData().GetByFieldIndex(local_change.field_index);
+		D_ASSERT(old_field);
+		auto &old_col_name = old_field->Name();
+		for (auto &sort_field : sort_data->fields) {
+			auto parsed = Parser::ParseExpressionList(sort_field.expression);
+			if (!parsed.empty()) {
+				ReplaceColumnRefName(*parsed[0], old_col_name, new_name);
+				sort_field.expression = parsed[0]->ToString();
+			}
+		}
+	}
 }
 
 // ALTER TABLE DROP COLUMN
@@ -394,11 +420,11 @@ string GetPartitionColumnName(ColumnRefExpression &colref) {
 }
 
 void DuckLakeTableEntry::ValidateSortExpressionColumns(DuckLakeTableEntry &table,
-                                                       const vector<reference<ParsedExpression>> &expressions) {
+                                                       const vector<OrderByNode> &orders) {
 	vector<string> missing_columns;
-	for (auto &expr : expressions) {
+	for (auto &order : orders) {
 		ParsedExpressionIterator::VisitExpression<ColumnRefExpression>(
-		    expr.get(), [&](const ColumnRefExpression &colref) {
+		    *order.expression, [&](const ColumnRefExpression &colref) {
 			    if (colref.IsQualified()) {
 				    throw InvalidInputException(
 				        "Unexpected qualified column reference - only unqualified columns are supported");
@@ -1222,11 +1248,7 @@ unique_ptr<CatalogEntry> DuckLakeTableEntry::AlterTable(DuckLakeTransaction &tra
 	}
 
 	// Validate all column references in all sort expressions
-	vector<reference<ParsedExpression>> sort_expressions;
-	for (auto &order_node : info.orders) {
-		sort_expressions.push_back(*order_node.expression);
-	}
-	ValidateSortExpressionColumns(*this, sort_expressions);
+	ValidateSortExpressionColumns(*this, info.orders);
 
 	auto sort_data = make_uniq<DuckLakeSort>();
 	sort_data->sort_id = transaction.GetLocalCatalogId();
