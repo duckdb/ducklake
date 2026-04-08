@@ -80,8 +80,25 @@ static unique_ptr<DuckLakeNameMapEntry> CreateLegacyNameMapEntry(const DuckLakeF
 	return result;
 }
 
+static bool FileHasFieldIdIdentifiers(const vector<MultiFileColumnDefinition> &columns) {
+	for (auto &column : columns) {
+		if (!column.identifier.IsNull() && column.identifier.type().id() == LogicalTypeId::INTEGER) {
+			return true;
+		}
+		if (FileHasFieldIdIdentifiers(column.children)) {
+			return true;
+		}
+	}
+	return false;
+}
+
 static unique_ptr<DuckLakeNameMap> TryCreateLegacyNameMap(DuckLakeFunctionInfo &read_info,
-                                                          const OpenFileInfo &opened_file) {
+                                                          const OpenFileInfo &opened_file,
+                                                          const vector<MultiFileColumnDefinition> &local_columns) {
+	if (FileHasFieldIdIdentifiers(local_columns)) {
+		// DuckLake-written files already carry field IDs and do not need a legacy name-map fallback.
+		return nullptr;
+	}
 	if (!opened_file.extended_info) {
 		return nullptr;
 	}
@@ -561,7 +578,7 @@ ReaderInitializeType DuckLakeMultiFileReader::CreateMapping(
 			                                      multi_file_list, bind_data, virtual_columns,
 			                                      MultiFileColumnMappingMode::BY_NAME);
 		}
-		auto legacy_name_map = TryCreateLegacyNameMap(read_info, reader_data.reader->file);
+		auto legacy_name_map = TryCreateLegacyNameMap(read_info, reader_data.reader->file, reader_data.reader->columns);
 		if (legacy_name_map) {
 			auto mapped_columns = CreateNewMapping(context, reader_data, global_columns, *legacy_name_map);
 			return MultiFileReader::CreateMapping(context, reader_data, mapped_columns, column_ids_to_use, filters,

@@ -1795,7 +1795,7 @@ vector<DuckLakeCompactionFileEntry> DuckLakeMetadataManager::GetFilesForCompacti
 	string deletion_threshold_clause;
 	if (type == CompactionType::REWRITE_DELETES) {
 		// Filter current data files in SQL, then apply the delete threshold in C++ so we can include
-		// metadata-only inlined file deletions as rewrite candidates.
+		// metadata-only inlined file deletions as rewrite candidates
 		deletion_threshold_clause = " AND data.end_snapshot is null";
 	}
 	// Add file size filtering for MERGE_ADJACENT_TABLES compaction
@@ -1901,7 +1901,7 @@ ORDER BY data.begin_snapshot, data.row_id_start, data.data_file_id, del.begin_sn
 		file_entry.delete_files.push_back(std::move(delete_file));
 	}
 
-	// Load inlined deletions for active files so rewrite compaction can treat them the same as delete files.
+	// Load inlined deletions for active files so rewrite compaction can treat them the same as delete files
 	auto inlined_deletions = ReadInlinedFileDeletions(table_id, snapshot);
 	for (auto &file : files) {
 		auto entry = inlined_deletions.find(file.file.id.index);

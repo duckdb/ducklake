@@ -446,7 +446,7 @@ struct DuckLakeCompactionFileEntry {
 	vector<DuckLakeCompactionDeleteFileData> delete_files;
 	optional_idx max_partial_file_snapshot;
 	idx_t schema_version;
-	//! Inlined file deletions stored in the metadata database rather than delete files.
+	//! Inlined file deletions stored in the metadata database rather than delete files
 	set<idx_t> inlined_file_deletions;
 };
 

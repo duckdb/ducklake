@@ -18,6 +18,7 @@
 #include "duckdb/planner/operator/logical_projection.hpp"
 #include "duckdb/planner/operator/logical_aggregate.hpp"
 #include "duckdb/planner/operator/logical_filter.hpp"
+#include "common/parquet_file_scanner.hpp"
 #include "duckdb/planner/expression/bound_comparison_expression.hpp"
 #include "duckdb/planner/expression/bound_constant_expression.hpp"
 #include "duckdb/catalog/catalog_entry/aggregate_function_catalog_entry.hpp"
@@ -43,6 +44,106 @@ static void AttachDeleteFilesToWrittenFiles(vector<DuckLakeDeleteFile> &delete_f
 			it->second.get().delete_files.push_back(std::move(delete_file));
 		}
 	}
+}
+
+struct FlushedRowVersion {
+	idx_t row_id;
+	idx_t begin_snapshot;
+
+	bool operator==(const FlushedRowVersion &other) const {
+		return row_id == other.row_id && begin_snapshot == other.begin_snapshot;
+	}
+};
+
+struct FlushedRowVersionHash {
+	hash_t operator()(const FlushedRowVersion &row_version) const {
+		return CombineHash(std::hash<idx_t> {}(row_version.row_id),
+		                   std::hash<idx_t> {}(row_version.begin_snapshot));
+	}
+};
+
+using DeletedRowsByVersion = unordered_map<FlushedRowVersion, idx_t, FlushedRowVersionHash>;
+using FilePositionsByVersion = unordered_map<FlushedRowVersion, idx_t, FlushedRowVersionHash>;
+
+static DuckLakeFileData CreateWrittenFileScanEntry(const DuckLakeDataFile &written_file) {
+	DuckLakeFileData result;
+	result.path = written_file.file_name;
+	result.encryption_key = written_file.encryption_key;
+	result.file_size_bytes = written_file.file_size_bytes;
+	result.footer_size = written_file.footer_size;
+	return result;
+}
+
+static FilePositionsByVersion ScanWrittenFilePositions(ClientContext &context, const DuckLakeDataFile &written_file) {
+	auto file_entry = CreateWrittenFileScanEntry(written_file);
+	ParquetFileScanner scanner(context, file_entry);
+
+	auto row_id_col_idx = scanner.FindColumn("_ducklake_internal_row_id");
+	auto snapshot_id_col_idx = scanner.FindColumn("_ducklake_internal_snapshot_id");
+	if (!row_id_col_idx.IsValid() || !snapshot_id_col_idx.IsValid()) {
+		throw InternalException("Flushed file \"%s\" is missing internal row/snapshot columns required for delete "
+		                        "position tracking",
+		                        written_file.file_name);
+	}
+
+	scanner.SetColumnIds(
+	    {NumericCast<column_t>(row_id_col_idx.GetIndex()), NumericCast<column_t>(snapshot_id_col_idx.GetIndex())});
+
+	DataChunk scan_chunk;
+	scan_chunk.Initialize(context, {LogicalType::BIGINT, LogicalType::BIGINT});
+
+	FilePositionsByVersion result;
+	idx_t current_file_position = 0;
+	while (scanner.Scan(scan_chunk)) {
+		auto count = scan_chunk.size();
+
+		UnifiedVectorFormat row_id_data;
+		scan_chunk.data[0].ToUnifiedFormat(count, row_id_data);
+		auto row_ids = UnifiedVectorFormat::GetData<int64_t>(row_id_data);
+
+		UnifiedVectorFormat snapshot_data;
+		scan_chunk.data[1].ToUnifiedFormat(count, snapshot_data);
+		auto snapshot_ids = UnifiedVectorFormat::GetData<int64_t>(snapshot_data);
+
+		for (idx_t i = 0; i < count; i++) {
+			auto row_id_idx = row_id_data.sel->get_index(i);
+			auto snapshot_idx = snapshot_data.sel->get_index(i);
+			if (!row_id_data.validity.RowIsValid(row_id_idx) || !snapshot_data.validity.RowIsValid(snapshot_idx)) {
+				throw InvalidInputException("Flushed file \"%s\" has NULL internal row/snapshot columns",
+				                            written_file.file_name);
+			}
+
+			FlushedRowVersion row_version {NumericCast<idx_t>(row_ids[row_id_idx]),
+			                               NumericCast<idx_t>(snapshot_ids[snapshot_idx])};
+			auto insert_result = result.emplace(row_version, current_file_position);
+			if (!insert_result.second) {
+				throw InternalException("Flushed file \"%s\" contains duplicate row version (%d, %d)",
+				                        written_file.file_name, row_version.row_id, row_version.begin_snapshot);
+			}
+			current_file_position++;
+		}
+	}
+	return result;
+}
+
+static DeletedRowsByVersion LoadDeletedRowsForPartition(DuckLakeTransaction &transaction, DuckLakeSnapshot snapshot,
+                                                        const string &inlined_table_name,
+                                                        const string &partition_filter) {
+	string extra_filter = partition_filter.empty() ? "" : " AND " + partition_filter;
+	auto deleted_rows_result = transaction.Query(snapshot, StringUtil::Format(R"(
+		SELECT row_id, begin_snapshot, end_snapshot
+		FROM {METADATA_CATALOG}.%s
+		WHERE {SNAPSHOT_ID} >= begin_snapshot%s
+		  AND end_snapshot IS NOT NULL;)",
+	                                                           inlined_table_name, extra_filter));
+
+	DeletedRowsByVersion result;
+	for (auto &row : *deleted_rows_result) {
+		FlushedRowVersion row_version {NumericCast<idx_t>(row.GetValue<int64_t>(0)),
+		                               NumericCast<idx_t>(row.GetValue<int64_t>(1))};
+		result[row_version] = NumericCast<idx_t>(row.GetValue<int64_t>(2));
+	}
+	return result;
 }
 
 //===--------------------------------------------------------------------===//
@@ -117,9 +218,7 @@ SinkFinalizeType DuckLakeFlushData::Finalize(Pipeline &pipeline, Event &event, C
 	if (!global_state.written_files.empty()) {
 		DeletesPerFile deletes_per_file;
 		auto partition_sql_exprs = table.GetPartitionSQLExpressions();
-
-		// Track cumulative row offset per partition so each file knows its range
-		unordered_map<string, idx_t> partition_row_offsets;
+		unordered_map<string, DeletedRowsByVersion> deleted_rows_by_partition;
 
 		for (auto &file : global_state.written_files) {
 			// Build partition filter (empty string for non-partitioned tables)
@@ -132,30 +231,25 @@ SinkFinalizeType DuckLakeFlushData::Finalize(Pipeline &pipeline, Event &event, C
 				partition_filter = DuckLakePartitionUtils::BuildPartitionFilter(partition_sql_exprs, values);
 			}
 
-			idx_t file_offset = partition_row_offsets[partition_filter];
-			partition_row_offsets[partition_filter] += file.row_count;
+			auto deleted_partition_entry = deleted_rows_by_partition.find(partition_filter);
+			if (deleted_partition_entry == deleted_rows_by_partition.end()) {
+				auto deleted_rows =
+				    LoadDeletedRowsForPartition(transaction, snapshot, inlined_table.table_name, partition_filter);
+				deleted_partition_entry =
+				    deleted_rows_by_partition.emplace(partition_filter, std::move(deleted_rows)).first;
+			}
+			if (deleted_partition_entry->second.empty()) {
+				continue;
+			}
 
-			// Query deleted rows within this file's row range, filtered to its partition
-			string extra_filter = partition_filter.empty() ? "" : " AND " + partition_filter;
-			auto deleted_rows_result =
-			    transaction.Query(snapshot, StringUtil::Format(R"(
-				WITH all_rows AS (
-					SELECT end_snapshot, ROW_NUMBER() OVER (ORDER BY row_id, begin_snapshot) - 1 AS output_position
-					FROM {METADATA_CATALOG}.%s
-					WHERE {SNAPSHOT_ID} >= begin_snapshot%s
-				)
-				SELECT end_snapshot, output_position
-				FROM all_rows
-				WHERE end_snapshot IS NOT NULL
-				AND output_position >= %d AND output_position < %d;)",
-			                                                   inlined_table.table_name, extra_filter, file_offset,
-			                                                   file_offset + file.row_count));
-
-			for (auto &row : *deleted_rows_result) {
-				auto end_snap = row.GetValue<int64_t>(0);
-				auto output_position = row.GetValue<int64_t>(1);
-				int64_t pos_in_file = output_position - static_cast<int64_t>(file_offset);
-				PositionWithSnapshot pos_with_snap {pos_in_file, end_snap};
+			auto file_positions = ScanWrittenFilePositions(context, file);
+			for (auto &entry : file_positions) {
+				auto delete_entry = deleted_partition_entry->second.find(entry.first);
+				if (delete_entry == deleted_partition_entry->second.end()) {
+					continue;
+				}
+				PositionWithSnapshot pos_with_snap {NumericCast<int64_t>(entry.second),
+				                                    NumericCast<int64_t>(delete_entry->second)};
 				deletes_per_file[file.file_name].insert(pos_with_snap);
 			}
 		}
