@@ -11,7 +11,7 @@ test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
 test-env DATA_PATH __TEST_DIR__
 
 statement ok
-ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/ducklake_bucket_partition', METADATA_CATALOG 'ducklake_metadata', DATA_INLINING_ROW_LIMIT 0)
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/ducklake_bucket_partition', METADATA_CATALOG 'ducklake_metadata')
 
 statement ok
 USE ducklake
@@ -23,9 +23,12 @@ CREATE TABLE bucketed_tbl(user_id VARCHAR, value INTEGER);
 statement ok
 ALTER TABLE bucketed_tbl SET PARTITIONED BY (bucket(4, user_id));
 
-# Insert some data
+# Insert data in small batches (< default inlining limit) so data gets inlined when inlining is on
 statement ok
-INSERT INTO bucketed_tbl VALUES ('alice', 1), ('bob', 2), ('charlie', 3), ('alice', 4), ('bob', 5);
+INSERT INTO bucketed_tbl VALUES ('alice', 1), ('bob', 2), ('charlie', 3);
+
+statement ok
+INSERT INTO bucketed_tbl VALUES ('alice', 4), ('bob', 5);
 
 # Verify data is correct
 query II
@@ -35,13 +38,51 @@ alice	5
 bob	7
 charlie	3
 
-# Verify we have bucket partitions (should have between 1 and 4 buckets)
+# Flush inlined data (no-op when inlining is disabled, succeeds either way)
+statement ok
+CALL ducklake_flush_inlined_data('ducklake');
+
+# Verify data is still correct after flush
+query II
+SELECT user_id, SUM(value) FROM bucketed_tbl GROUP BY user_id ORDER BY user_id
+----
+alice	5
+bob	7
+charlie	3
+
+# After flush, parquet files must exist in the correct bucket directories
+# murmur3_32 bucket(4): alice->1, bob->2, charlie->3
 query I
 SELECT COUNT(DISTINCT regexp_extract(path, '.*bucket=([0-9]+)[/\\].*', 1)) BETWEEN 1 AND 4
 FROM glob('${DATA_PATH}/ducklake_bucket_partition/**/*.parquet') t(path)
-WHERE path LIKE '%bucket=%'
+WHERE path LIKE '%bucketed_tbl%' AND path LIKE '%bucket=%'
 ----
 true
+
+# Verify each user's data is in the correct bucket by reading individual parquet files
+query I
+SELECT DISTINCT regexp_extract(path, '.*bucket=([0-9]+)[/\\].*', 1)::INT
+FROM glob('${DATA_PATH}/ducklake_bucket_partition/**/*.parquet') t(path)
+WHERE path LIKE '%bucketed_tbl%' AND path LIKE '%bucket=%'
+  AND path IN (SELECT filename FROM parquet_scan('${DATA_PATH}/ducklake_bucket_partition/main/bucketed_tbl/**/*.parquet', filename=true) WHERE user_id = 'alice')
+----
+1
+
+query I
+SELECT DISTINCT regexp_extract(path, '.*bucket=([0-9]+)[/\\].*', 1)::INT
+FROM glob('${DATA_PATH}/ducklake_bucket_partition/**/*.parquet') t(path)
+WHERE path LIKE '%bucketed_tbl%' AND path LIKE '%bucket=%'
+  AND path IN (SELECT filename FROM parquet_scan('${DATA_PATH}/ducklake_bucket_partition/main/bucketed_tbl/**/*.parquet', filename=true) WHERE user_id = 'bob')
+----
+2
+
+query I
+SELECT DISTINCT regexp_extract(path, '.*bucket=([0-9]+)[/\\].*', 1)::INT
+FROM glob('${DATA_PATH}/ducklake_bucket_partition/**/*.parquet') t(path)
+WHERE path LIKE '%bucketed_tbl%' AND path LIKE '%bucket=%'
+  AND path IN (SELECT filename FROM parquet_scan('${DATA_PATH}/ducklake_bucket_partition/main/bucketed_tbl/**/*.parquet', filename=true) WHERE user_id = 'charlie')
+----
+3
 
 # Verify partition metadata is stored correctly
 query I
@@ -161,6 +202,9 @@ SELECT id, data FROM bucket_int_tbl ORDER BY id
 3	three
 100	hundred
 200	two hundred
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake');
 
 query I
 SELECT COUNT(DISTINCT regexp_extract(path, '.*bucket=([0-9]+)[/\\].*', 1)) BETWEEN 1 AND 3
@@ -311,6 +355,9 @@ bob	active	5
 bob	inactive	2
 charlie	active	3
 
+statement ok
+CALL ducklake_flush_inlined_data('ducklake');
+
 # Verify both partition dimensions appear in file paths
 query I
 SELECT COUNT(*) > 0
@@ -343,6 +390,9 @@ bob	2023	2
 bob	2024	5
 charlie	2024	3
 
+statement ok
+CALL ducklake_flush_inlined_data('ducklake');
+
 # Verify both partition dimensions appear in file paths
 query I
 SELECT COUNT(*) > 0
@@ -374,6 +424,9 @@ SELECT id, ts, value FROM bucket_month_day_tbl ORDER BY id
 3	2024-02-20 08:00:00	c
 4	2024-02-20 16:00:00	d
 5	2024-03-25 20:00:00	e
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake');
 
 # Verify all three partition dimensions appear in file paths
 query I
@@ -554,6 +607,9 @@ alice	1
 bob	2
 charlie	3
 
+statement ok
+CALL ducklake_flush_inlined_data('ducklake');
+
 # Old data bucket values are in [0, 4)
 query I
 SELECT MAX(CAST(regexp_extract(path, '.*bucket=([0-9]+)[/\\].*', 1) AS INTEGER)) < 4
@@ -601,6 +657,11 @@ bucket(8)
 # ----------------------------------------------------------------------------------------------------------------------
 # ducklake_add_data_files
 # ----------------------------------------------------------------------------------------------------------------------
+
+# Disable inlining for this section — add_data_files needs raw parquet files without internal columns
+statement ok
+CALL set_option('data_inlining_row_limit', '0');
+
 statement ok
 CREATE TABLE bucket_add_source(user_id VARCHAR, value INTEGER);
 

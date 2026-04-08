@@ -36,12 +36,16 @@ string DuckLakePartitionUtils::GetPartitionKeyName(DuckLakeTransformType transfo
 	return prefix + "_" + field_name;
 }
 
-string DuckLakePartitionUtils::GetPartitionSQLExpression(DuckLakeTransformType transform_type, const string &col_name) {
-	if (transform_type == DuckLakeTransformType::IDENTITY) {
+string DuckLakePartitionUtils::GetPartitionSQLExpression(const DuckLakeTransform &transform, const string &col_name) {
+	if (transform.type == DuckLakeTransformType::IDENTITY) {
 		return col_name;
 	}
+	if (transform.type == DuckLakeTransformType::BUCKET) {
+		// Return the actual SQL expression that computes the bucket assignment
+		return "(murmur3_32(" + col_name + ") & 2147483647) % " + to_string(transform.bucket_count);
+	}
 	case_insensitive_set_t used_names;
-	string func_name = GetPartitionKeyName(transform_type, col_name, used_names);
+	string func_name = GetPartitionKeyName(transform.type, col_name, used_names);
 	return func_name + "(" + col_name + ")";
 }
 

@@ -39,7 +39,7 @@ struct DuckLakePartitionUtils {
 	                                  case_insensitive_set_t &used_names);
 
 	//! Get a SQL expression string for a partition field (e.g., "col" for identity, "year(col)" for year transform)
-	static string GetPartitionSQLExpression(DuckLakeTransformType transform_type, const string &col_name);
+	static string GetPartitionSQLExpression(const DuckLakeTransform &transform, const string &col_name);
 
 	//! Returns Logical Type for a given partition key
 	static LogicalType GetPartitionKeyType(DuckLakeTransformType transform_type, const LogicalType &source_type);
