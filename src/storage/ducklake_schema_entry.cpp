@@ -503,13 +503,14 @@ void DuckLakeSchemaEntry::TryDropSchema(DuckLakeTransaction &transaction, bool c
 	}
 	// drop all dependents
 	vector<reference<CatalogEntry>> local_entries_to_drop;
-	local_entries_to_drop.reserve(local_tables->GetEntries().size() + local_macros->GetEntries().size());
 	if (local_tables) {
+		local_entries_to_drop.reserve(local_entries_to_drop.size() + local_tables->GetEntries().size());
 		for (auto &entry : local_tables->GetEntries()) {
 			local_entries_to_drop.push_back(*entry.second);
 		}
 	}
 	if (local_macros) {
+		local_entries_to_drop.reserve(local_entries_to_drop.size() + local_macros->GetEntries().size());
 		for (auto &entry : local_macros->GetEntries()) {
 			local_entries_to_drop.push_back(*entry.second);
 		}
