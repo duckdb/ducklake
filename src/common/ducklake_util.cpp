@@ -350,4 +350,46 @@ bool DuckLakeUtil::HasInlinedSystemColumnConflict(const vector<DuckLakeColumnInf
 	return false;
 }
 
+string DuckLakeUtil::ReplaceSkippingQuotes(const string &sql, const string &from, const string &to) {
+	if (from.empty()) {
+		return sql;
+	}
+	string result;
+	result.reserve(sql.size());
+	idx_t i = 0;
+	while (i < sql.size()) {
+		char c = sql[i];
+		if (c == '\'' || c == '"') {
+			// Now we're inside a quoted region, so copy everything until the matching close quote.
+			char quote = c;
+			result += c;
+			i++;
+			while (i < sql.size()) {
+				result += sql[i];
+				if (sql[i] == quote) {
+					i++;
+					// doubled quote is an escape, still stay inside the quoted region
+					if (i < sql.size() && sql[i] == quote) {
+						result += sql[i];
+						i++;
+						continue;
+					}
+					break;
+				}
+				i++;
+			}
+			continue;
+		}
+		// We're outside quotes, can now check for a match of `from`.
+		if (sql.compare(i, from.size(), from) == 0) {
+			result += to;
+			i += from.size();
+		} else {
+			result += c;
+			i++;
+		}
+	}
+	return result;
+}
+
 } // namespace duckdb
