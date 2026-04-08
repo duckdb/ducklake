@@ -501,16 +501,15 @@ void DuckLakeSchemaEntry::TryDropSchema(DuckLakeTransaction &transaction, bool c
 		error_string += "Use DROP...CASCADE to drop all dependents.";
 		throw CatalogException(error_string);
 	}
-	// drop all dependents - collect transaction-local entries first since dropping modifies the sets
+	// drop all dependents
 	vector<reference<CatalogEntry>> local_entries_to_drop;
+	local_entries_to_drop.reserve(local_tables->GetEntries().size() + local_macros->GetEntries().size());
 	if (local_tables) {
-		local_entries_to_drop.reserve(local_tables->GetEntries().size() + local_entries_to_drop.size());
 		for (auto &entry : local_tables->GetEntries()) {
 			local_entries_to_drop.push_back(*entry.second);
 		}
 	}
 	if (local_macros) {
-		local_entries_to_drop.reserve(local_macros->GetEntries().size() + local_entries_to_drop.size());
 		for (auto &entry : local_macros->GetEntries()) {
 			local_entries_to_drop.push_back(*entry.second);
 		}
