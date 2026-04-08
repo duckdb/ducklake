@@ -31,6 +31,11 @@ there are entries that depend on it
 statement ok
 DROP SCHEMA ducklake.my_schema CASCADE
 
+statement error
+SELECT * FROM ducklake.my_schema.t1
+----
+schema "my_schema" does not exist
+
 statement ok
 COMMIT
 
@@ -52,6 +57,11 @@ there are entries that depend on it
 statement ok
 DROP SCHEMA ducklake.my_schema CASCADE
 
+statement error
+SELECT * FROM ducklake.my_schema.v1
+----
+schema "my_schema" does not exist
+
 statement ok
 COMMIT
 
@@ -64,6 +74,32 @@ CREATE SCHEMA ducklake.my_schema
 
 statement ok
 CREATE MACRO ducklake.my_schema.add_one(x) AS x + 1
+
+statement error
+DROP SCHEMA ducklake.my_schema
+----
+there are entries that depend on it
+
+statement ok
+DROP SCHEMA ducklake.my_schema CASCADE
+
+statement error
+SELECT ducklake.my_schema.add_one(1)
+----
+Scalar Function with name add_one does not exist!
+
+statement ok
+COMMIT
+
+# Test when there's a transaction-local table macro in the schema, it cannot be dropped.
+statement ok
+BEGIN
+
+statement ok
+CREATE SCHEMA ducklake.my_schema
+
+statement ok
+CREATE MACRO ducklake.my_schema.my_table_macro() AS TABLE SELECT 42 AS x
 
 statement error
 DROP SCHEMA ducklake.my_schema
