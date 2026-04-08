@@ -459,7 +459,7 @@ void DuckLakeSchemaEntry::TryDropSchema(DuckLakeTransaction &transaction, bool c
 			const auto &dropped_macros = transaction.GetDroppedTableMacros();
 			bool add_dependent = false;
 			switch (entry.second->type) {
-			case CatalogType::MACRO_ENTRY: {
+			case CatalogType::TABLE_MACRO_ENTRY: {
 				const auto &ducklake_macro = entry.second->Cast<DuckLakeTableMacroEntry>();
 				if (dropped_macros.find(ducklake_macro.GetIndex()) == dropped_macros.end()) {
 					add_dependent = true;
