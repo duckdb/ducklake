@@ -1533,6 +1533,8 @@ void DuckLakeTransaction::GetNewTableInfo(DuckLakeCommitState &commit_state, Duc
 	}
 
 	set<FieldIndex> columns_handled_by_later_ops;
+	// Maps from field index to the number of alter operations for that field.
+	map<FieldIndex, idx_t> field_alter_count;
 	for (idx_t table_idx = 0; table_idx < tables.size(); table_idx++) {
 		auto &table = tables[table_idx].get();
 		auto local_change = table.GetLocalChange();
@@ -1542,11 +1544,15 @@ void DuckLakeTransaction::GetNewTableInfo(DuckLakeCommitState &commit_state, Duc
 		case LocalChangeType::RENAME_COLUMN:
 		case LocalChangeType::SET_DEFAULT:
 			columns_handled_by_later_ops.insert(local_change.field_index);
+			field_alter_count[local_change.field_index]++;
 			break;
 		default:
 			break;
 		}
 	}
+
+	// Maps from field index to the number of alter operations remaining for that field.
+	map<FieldIndex, idx_t> field_alter_remaining(std::move(field_alter_count));
 
 	// traverse in reverse order
 	bool column_schema_change = false;
@@ -1595,6 +1601,13 @@ void DuckLakeTransaction::GetNewTableInfo(DuckLakeCommitState &commit_state, Duc
 		case LocalChangeType::DROP_NULL:
 		case LocalChangeType::RENAME_COLUMN:
 		case LocalChangeType::SET_DEFAULT: {
+			auto &remaining = field_alter_remaining[local_change.field_index];
+			remaining--;
+			// This is an older thus superseded entry for a field that is altered for multiple times in this
+			// transaction, so we skip it; the newest entry will emit the definitive value.
+			if (remaining > 0) {
+				break;
+			}
 			// drop the previous column
 			DuckLakeDroppedColumn dropped_col;
 			dropped_col.table_id = commit_state.GetTableId(table);
