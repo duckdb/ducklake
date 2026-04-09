@@ -42,15 +42,11 @@ SourceResultType DuckLakeTruncate::GetDataInternal(ExecutionContext &context, Da
 	auto transaction_local_data = transaction.GetTransactionLocalInlinedData(table.GetTableId());
 	DuckLakeMultiFileList file_list(read_info, std::move(transaction_local_files), transaction_local_data);
 
-	auto &metadata_manager = transaction.GetMetadataManager();
-	auto snapshot = transaction.GetSnapshot();
-	uint64_t total_deleted_count = 0;
+	uint64_t total_deleted_count = table.GetNetDataFileRowCount(transaction) + table.GetNetInlinedRowCount(transaction);
 	auto files = file_list.GetFilesExtended();
 	for (auto &file_info : files) {
 		switch (file_info.data_type) {
 		case DuckLakeDataType::DATA_FILE: {
-			D_ASSERT(file_info.delete_count <= file_info.row_count);
-			total_deleted_count += file_info.row_count - file_info.delete_count;
 			if (file_info.file_id.IsValid()) {
 				transaction.DropFile(table.GetTableId(), file_info.file_id, file_info.file.path);
 			} else {
@@ -59,13 +55,10 @@ SourceResultType DuckLakeTruncate::GetDataInternal(ExecutionContext &context, Da
 			break;
 		}
 		case DuckLakeDataType::INLINED_DATA: {
-			auto inlined_count = metadata_manager.GetNetInlinedRowCount(file_info.file.path, snapshot);
-			total_deleted_count += inlined_count;
 			transaction.MarkInlinedDataDeleted(file_info.file.path);
 			break;
 		}
 		case DuckLakeDataType::TRANSACTION_LOCAL_INLINED_DATA: {
-			total_deleted_count += file_info.row_count;
 			transaction.TruncateLocalInlinedData(table.GetTableId());
 			break;
 		}
@@ -98,10 +91,15 @@ PhysicalOperator &DuckLakeCatalog::PlanDelete(ClientContext &context, PhysicalPl
 	if (!delete_all) {
 		return Catalog::PlanDelete(context, planner, op);
 	}
+	auto &table = op.table.Cast<DuckLakeTableEntry>();
+	auto &transaction = DuckLakeTransaction::Get(context, *this);
+	if (transaction.HasAnyLocalChanges(table.GetTableId())) {
+		return Catalog::PlanDelete(context, planner, op);
+	}
 	if (op.return_chunk) {
 		throw BinderException("RETURNING clause not yet supported for deletion of a DuckLake table");
 	}
-	return planner.Make<DuckLakeTruncate>(op.table.Cast<DuckLakeTableEntry>());
+	return planner.Make<DuckLakeTruncate>(table);
 }
 
 } // namespace duckdb
