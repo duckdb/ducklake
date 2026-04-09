@@ -149,5 +149,4 @@ unique_ptr<Expression> DuckLakePartitionUtils::ApplyPartitionTransform(ClientCon
 	}
 }
 
-
 } // namespace duckdb

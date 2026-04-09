@@ -257,7 +257,6 @@ DuckLakeUpdate &DuckLakeUpdate::PlanUpdateOperator(ClientContext &context, Physi
 	return update_op;
 }
 
-
 PhysicalOperator &DuckLakeCatalog::PlanUpdate(ClientContext &context, PhysicalPlanGenerator &planner, LogicalUpdate &op,
                                               PhysicalOperator &child_plan) {
 	if (op.return_chunk) {
