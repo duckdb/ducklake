@@ -1538,6 +1538,9 @@ void DuckLakeTransaction::GetNewTableInfo(DuckLakeCommitState &commit_state, Duc
 	set<FieldIndex> columns_handled_by_later_ops;
 	// Maps from field index to the number of alter operations for that field.
 	map<FieldIndex, idx_t> field_alter_count;
+	idx_t comment_count = 0;
+	// Maps from field index to the number of column comment operations for that field.
+	map<FieldIndex, idx_t> column_comment_count;
 	for (idx_t table_idx = 0; table_idx < tables.size(); table_idx++) {
 		auto &table = tables[table_idx].get();
 		auto local_change = table.GetLocalChange();
@@ -1549,6 +1552,12 @@ void DuckLakeTransaction::GetNewTableInfo(DuckLakeCommitState &commit_state, Duc
 			columns_handled_by_later_ops.insert(local_change.field_index);
 			field_alter_count[local_change.field_index]++;
 			break;
+		case LocalChangeType::SET_COMMENT:
+			comment_count++;
+			break;
+		case LocalChangeType::SET_COLUMN_COMMENT:
+			column_comment_count[local_change.field_index]++;
+			break;
 		default:
 			break;
 		}
@@ -1556,6 +1565,9 @@ void DuckLakeTransaction::GetNewTableInfo(DuckLakeCommitState &commit_state, Duc
 
 	// Maps from field index to the number of alter operations remaining for that field.
 	map<FieldIndex, idx_t> field_alter_remaining(std::move(field_alter_count));
+	idx_t comment_remaining = comment_count;
+	// Maps from field index to the number of column comment operations remaining for that field.
+	map<FieldIndex, idx_t> column_comment_remaining(std::move(column_comment_count));
 
 	// traverse in reverse order
 	bool column_schema_change = false;
@@ -1580,6 +1592,10 @@ void DuckLakeTransaction::GetNewTableInfo(DuckLakeCommitState &commit_state, Duc
 			break;
 		}
 		case LocalChangeType::SET_COMMENT: {
+			comment_remaining--;
+			if (comment_remaining > 0) {
+				break;
+			}
 			DuckLakeTagInfo comment_info;
 			comment_info.id = commit_state.GetTableId(table).index;
 			comment_info.key = "comment";
@@ -1590,6 +1606,11 @@ void DuckLakeTransaction::GetNewTableInfo(DuckLakeCommitState &commit_state, Duc
 			break;
 		}
 		case LocalChangeType::SET_COLUMN_COMMENT: {
+			auto &col_comment_rem = column_comment_remaining[local_change.field_index];
+			col_comment_rem--;
+			if (col_comment_rem > 0) {
+				break;
+			}
 			DuckLakeColumnTagInfo comment_info;
 			comment_info.table_id = commit_state.GetTableId(table);
 			comment_info.field_index = local_change.field_index;
@@ -1798,11 +1819,23 @@ void DuckLakeTransaction::GetNewViewInfo(DuckLakeCommitState &commit_state, Duck
 		}
 		view_entry = view_entry.get().Child();
 	}
+	// count comment operations for deduplication
+	idx_t view_comment_count = 0;
+	for (idx_t view_idx = 0; view_idx < views.size(); view_idx++) {
+		if (views[view_idx].get().GetLocalChange().type == LocalChangeType::SET_COMMENT) {
+			view_comment_count++;
+		}
+	}
+	idx_t view_comment_remaining = view_comment_count;
 	// traverse in reverse order
 	for (idx_t view_idx = views.size(); view_idx > 0; view_idx--) {
 		auto &view = views[view_idx - 1].get();
 		switch (view.GetLocalChange().type) {
 		case LocalChangeType::SET_COMMENT: {
+			view_comment_remaining--;
+			if (view_comment_remaining > 0) {
+				break;
+			}
 			DuckLakeTagInfo comment_info;
 			comment_info.id = commit_state.GetViewId(view).index;
 			comment_info.key = "comment";
