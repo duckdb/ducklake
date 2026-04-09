@@ -30,7 +30,7 @@ DELETE FROM ducklake.tbl WHERE id % 2 = 0;
 
 # delete file exists
 query I
-SELECT COUNT(*) FROM glob('${DATA_PATH}/ducklake_drop_delete_cleanup/main/tbl/*-delete.parquet')
+SELECT COUNT(*) FROM glob('${DATA_PATH}/ducklake_drop_delete_cleanup/main/tbl/*-delete.*')
 ----
 1
 
@@ -44,7 +44,7 @@ SELECT COUNT(*) FROM glob('${DATA_PATH}/ducklake_drop_delete_cleanup/main/tbl/*.
 0
 
 query I
-SELECT COUNT(*) FROM glob('${DATA_PATH}/ducklake_drop_delete_cleanup/main/tbl/*-delete.parquet')
+SELECT COUNT(*) FROM glob('${DATA_PATH}/ducklake_drop_delete_cleanup/main/tbl/*-delete.*')
 ----
 0
 
