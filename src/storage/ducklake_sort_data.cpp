@@ -24,7 +24,7 @@ string DuckLakeSort::BuildSortOrderSQL(const DuckLakeSort &sort_data, const Colu
 			}
 		}
 		if (mapped_col.empty()) {
-			// Not a simple column reference or column not found — can't replicate in metadata SQL
+			// Not a simple column reference or column not found
 			return string();
 		}
 		if (!result.empty()) {

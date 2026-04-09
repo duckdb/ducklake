@@ -31,6 +31,15 @@
 
 namespace duckdb {
 
+static bool ColumnsHaveFieldIds(const vector<MultiFileColumnDefinition> &columns) {
+	for (auto &col : columns) {
+		if (col.identifier.IsNull()) {
+			return false;
+		}
+	}
+	return !columns.empty();
+}
+
 //! Try to find a column in local_columns that matches the given field_id
 static bool TryFindColumnByFieldId(const vector<MultiFileColumnDefinition> &local_columns, int32_t field_id,
                                    MultiFileColumnDefinition *fallback_column,
@@ -525,8 +534,7 @@ ReaderInitializeType DuckLakeMultiFileReader::CreateMapping(
 		}
 	}
 	// Check if file columns have field_id identifiers
-	bool has_field_ids = !reader_data.reader->columns.empty() && !reader_data.reader->columns[0].identifier.IsNull();
-	if (!has_field_ids) {
+	if (!ColumnsHaveFieldIds(reader_data.reader->columns)) {
 		// Legacy external file without field_ids and no mapping
 		auto &file_columns = reader_data.reader->columns;
 		vector<string> source_names;
