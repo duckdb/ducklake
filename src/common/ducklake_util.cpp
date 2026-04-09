@@ -303,6 +303,15 @@ string DuckLakeUtil::ValueToSQL(DuckLakeMetadataManager &metadata_manager, Clien
 	return StringUtil::Format("%s", SQLString(result));
 }
 
+void DuckLakeUtil::EnsureDirectoryExists(FileSystem &fs, const string &data_path) {
+	if (!fs.IsRemoteFile(data_path)) {
+		try {
+			fs.CreateDirectoriesRecursive(data_path);
+		} catch (...) {
+		}
+	}
+}
+
 string DuckLakeUtil::JoinPath(FileSystem &fs, const string &a, const string &b) {
 	auto sep = fs.PathSeparator(a);
 	if (StringUtil::EndsWith(a, sep)) {
