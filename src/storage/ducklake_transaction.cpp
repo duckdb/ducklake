@@ -290,6 +290,22 @@ void LocalTableChanges::DeleteFromLocalInlinedData(ClientContext &context, Table
 	inlined_data.row_ids = std::move(new_row_ids);
 }
 
+void LocalTableChanges::TruncateLocalInlinedData(TableIndex table_id) {
+	lock_guard<mutex> guard(lock);
+	auto entry = changes.find(table_id);
+	if (entry == changes.end()) {
+		throw InternalException("TruncateLocalInlinedData called but no transaction-local data exists for table");
+	}
+	auto &table_changes = entry->second;
+	if (!table_changes.new_inlined_data) {
+		throw InternalException("TruncateLocalInlinedData called but no inlined data exists");
+	}
+	table_changes.new_inlined_data.reset();
+	if (table_changes.IsEmpty()) {
+		changes.erase(entry);
+	}
+}
+
 static void RemoveFieldStats(map<FieldIndex, DuckLakeColumnStats> &column_stats, const DuckLakeFieldId &field_id) {
 	column_stats.erase(field_id.GetFieldIndex());
 	for (auto &child_id : field_id.Children()) {
@@ -2716,19 +2732,7 @@ void DuckLakeTransaction::DeleteFromLocalInlinedData(TableIndex table_id, set<id
 }
 
 void DuckLakeTransaction::TruncateLocalInlinedData(TableIndex table_id) {
-	lock_guard<mutex> guard(table_data_changes_lock);
-	auto entry = table_data_changes.find(table_id);
-	if (entry == table_data_changes.end()) {
-		throw InternalException("TruncateLocalInlinedData called but no transaction-local data exists for table");
-	}
-	auto &table_changes = entry->second;
-	if (!table_changes.new_inlined_data) {
-		throw InternalException("TruncateLocalInlinedData called but no inlined data exists");
-	}
-	table_changes.new_inlined_data.reset();
-	if (table_changes.IsEmpty()) {
-		table_data_changes.erase(entry);
-	}
+	local_changes.TruncateLocalInlinedData(table_id);
 }
 
 void DuckLakeTransaction::AddColumnToLocalInlinedData(TableIndex table_id, const LogicalType &new_column_type,
