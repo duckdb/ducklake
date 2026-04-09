@@ -570,6 +570,14 @@ void LocalTableChanges::CleanupFiles(ClientContext &context, TableIndex table_id
 		auto &fs = FileSystem::GetFileSystem(context);
 		for (auto &file : table_changes.new_data_files) {
 			fs.RemoveFile(file.file_name);
+			for (auto &del_file : file.delete_files) {
+				fs.TryRemoveFile(del_file.file_name);
+			}
+		}
+		for (auto &file : table_changes.new_delete_files) {
+			for (auto &delete_files : file.second) {
+				fs.TryRemoveFile(delete_files.file_name);
+			}
 		}
 		changes.erase(table_entry);
 	}
