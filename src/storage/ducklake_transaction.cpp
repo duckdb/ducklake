@@ -1396,6 +1396,9 @@ DuckLakePartitionInfo DuckLakeTransaction::GetNewPartitionKey(DuckLakeCommitStat
 		case DuckLakeTransformType::HOUR:
 			partition_field.transform = "hour";
 			break;
+		case DuckLakeTransformType::BUCKET:
+			partition_field.transform = StringUtil::Format("bucket(%d)", field.transform.bucket_count);
+			break;
 		default:
 			throw NotImplementedException("Unimplemented transform type for partition");
 		}
@@ -1535,6 +1538,8 @@ void DuckLakeTransaction::GetNewTableInfo(DuckLakeCommitState &commit_state, Duc
 	}
 
 	set<FieldIndex> columns_handled_by_later_ops;
+	// Maps from field index to the number of alter operations for that field.
+	map<FieldIndex, idx_t> field_alter_count;
 	for (idx_t table_idx = 0; table_idx < tables.size(); table_idx++) {
 		auto &table = tables[table_idx].get();
 		auto local_change = table.GetLocalChange();
@@ -1544,11 +1549,15 @@ void DuckLakeTransaction::GetNewTableInfo(DuckLakeCommitState &commit_state, Duc
 		case LocalChangeType::RENAME_COLUMN:
 		case LocalChangeType::SET_DEFAULT:
 			columns_handled_by_later_ops.insert(local_change.field_index);
+			field_alter_count[local_change.field_index]++;
 			break;
 		default:
 			break;
 		}
 	}
+
+	// Maps from field index to the number of alter operations remaining for that field.
+	map<FieldIndex, idx_t> field_alter_remaining(std::move(field_alter_count));
 
 	// traverse in reverse order
 	bool column_schema_change = false;
@@ -1597,6 +1606,13 @@ void DuckLakeTransaction::GetNewTableInfo(DuckLakeCommitState &commit_state, Duc
 		case LocalChangeType::DROP_NULL:
 		case LocalChangeType::RENAME_COLUMN:
 		case LocalChangeType::SET_DEFAULT: {
+			auto &remaining = field_alter_remaining[local_change.field_index];
+			remaining--;
+			// This is an older thus superseded entry for a field that is altered for multiple times in this
+			// transaction, so we skip it; the newest entry will emit the definitive value.
+			if (remaining > 0) {
+				break;
+			}
 			// drop the previous column
 			DuckLakeDroppedColumn dropped_col;
 			dropped_col.table_id = commit_state.GetTableId(table);
@@ -1613,6 +1629,11 @@ void DuckLakeTransaction::GetNewTableInfo(DuckLakeCommitState &commit_state, Duc
 			transaction_changes.altered_tables_with_schema_version_changes.insert(table_id);
 			if (local_change.type == LocalChangeType::RENAME_COLUMN) {
 				column_schema_change = true;
+				// persist updated sort expressions (column name was updated in the table entry)
+				if (table.GetSortData()) {
+					auto sort_key = GetNewSortKey(commit_state, table);
+					result.new_sort_keys.push_back(std::move(sort_key));
+				}
 			}
 			break;
 		}
@@ -2846,7 +2867,9 @@ void DuckLakeTransaction::DropTable(DuckLakeTableEntry &table) {
 		// if we have written any files for this table - clean them up
 		auto context_ref = context.lock();
 		local_changes.CleanupFiles(*context_ref, table_id);
-		new_tables.erase(schema_entry);
+		if (schema_entry->second->GetEntries().empty()) {
+			new_tables.erase(schema_entry);
+		}
 	} else {
 		auto table_id = table.GetTableId();
 		dropped_tables.insert(table_id);
@@ -2861,7 +2884,9 @@ void DuckLakeTransaction::DropView(DuckLakeViewEntry &view) {
 			throw InternalException("Dropping a transaction local view that does not exist?");
 		}
 		schema_entry->second->DropEntry(view.name);
-		new_tables.erase(schema_entry);
+		if (schema_entry->second->GetEntries().empty()) {
+			new_tables.erase(schema_entry);
+		}
 	} else {
 		auto view_id = view.GetViewId();
 		dropped_views.insert(view_id);
