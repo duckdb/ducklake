@@ -59,3 +59,24 @@ query II
 SELECT key, value FROM __ducklake_metadata_ducklake.ducklake_column_tag WHERE end_snapshot IS NULL AND table_id = 1
 ----
 comment	col second
+
+# Check view-wise comment.
+statement ok
+CREATE VIEW ducklake.test_view AS SELECT * FROM ducklake.test
+
+statement ok
+BEGIN
+
+statement ok
+COMMENT ON VIEW ducklake.test_view IS 'view first'
+
+statement ok
+COMMENT ON VIEW ducklake.test_view IS 'view second'
+
+statement ok
+COMMIT
+
+query I
+SELECT comment FROM duckdb_views() WHERE view_name = 'test_view'
+----
+view second
