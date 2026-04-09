@@ -160,7 +160,7 @@ CREATE TABLE {METADATA_CATALOG}.ducklake_sort_info(sort_id BIGINT, table_id BIGI
 CREATE TABLE {METADATA_CATALOG}.ducklake_sort_expression(sort_id BIGINT, table_id BIGINT, sort_key_index BIGINT, expression VARCHAR, dialect VARCHAR, sort_direction VARCHAR, null_order VARCHAR);
 INSERT INTO {METADATA_CATALOG}.ducklake_snapshot VALUES (0, NOW(), 0, 1, 0);
 INSERT INTO {METADATA_CATALOG}.ducklake_snapshot_changes VALUES (0, 'created_schema:"main"',  NULL, NULL, NULL);
-INSERT INTO {METADATA_CATALOG}.ducklake_metadata (key, value) VALUES ('version', '0.4'), ('created_by', 'DuckDB %s'), ('data_path', %s), ('encrypted', '%s');
+INSERT INTO {METADATA_CATALOG}.ducklake_metadata (key, value) VALUES ('version', '1.0'), ('created_by', 'DuckDB %s'), ('data_path', %s), ('encrypted', '%s');
 INSERT INTO {METADATA_CATALOG}.ducklake_schema VALUES (0, UUID(), 0, NULL, 'main', 'main/', true);
 	)",
 	                                       DuckDB::SourceID(), SQLString(data_path), encryption_str);
@@ -256,7 +256,7 @@ UPDATE {METADATA_CATALOG}.ducklake_metadata SET value = '0.4' WHERE key = 'versi
 
 	auto migrate_schema_versions = transaction.Query(R"(
 INSERT INTO {METADATA_CATALOG}.ducklake_schema_versions (table_id, begin_snapshot, schema_version)
-SELECT t.table_id, t.begin_snapshot, sv.schema_version
+SELECT t.table_id, sv.begin_snapshot, sv.schema_version
 FROM {METADATA_CATALOG}.ducklake_schema_versions sv
 JOIN {METADATA_CATALOG}.ducklake_table t
   ON sv.begin_snapshot BETWEEN t.begin_snapshot
@@ -276,6 +276,15 @@ DELETE FROM {METADATA_CATALOG}.ducklake_schema_versions WHERE table_id IS NULL;
 		if (!allow_failures) {
 			delete_global_entries->GetErrorObject().Throw("Failed to clean up global schema_versions entries: ");
 		}
+	}
+}
+
+void DuckLakeMetadataManager::MigrateV04() {
+	auto result = transaction.Query(R"(
+UPDATE {METADATA_CATALOG}.ducklake_metadata SET value = '1.0' WHERE key = 'version';
+	)");
+	if (result->HasError()) {
+		result->GetErrorObject().Throw("Failed to migrate DuckLake from v0.4 to v1.0: ");
 	}
 }
 
@@ -1711,8 +1720,8 @@ vector<DuckLakeFileListExtendedEntry>
 DuckLakeMetadataManager::GetExtendedFilesForTable(DuckLakeTableEntry &table, DuckLakeSnapshot snapshot,
                                                   const FilterPushdownInfo *filter_info) {
 	auto table_id = table.GetTableId();
-	string select_list =
-	    GetFileSelectList("data") + ", data.row_id_start, " + GetDeleteFileSelectList("del") + ", del.begin_snapshot";
+	string select_list = GetFileSelectList("data") + ", data.row_id_start, data.mapping_id, " +
+	                     GetDeleteFileSelectList("del") + ", del.begin_snapshot";
 
 	string query;
 	string where_clause;
@@ -1759,6 +1768,10 @@ WHERE data.table_id=%d AND {SNAPSHOT_ID} >= data.begin_snapshot AND ({SNAPSHOT_I
 		file_entry.file = ReadDataFile(table, row, col_idx, IsEncrypted());
 		if (!row.IsNull(col_idx)) {
 			file_entry.row_id_start = row.GetValue<idx_t>(col_idx);
+		}
+		col_idx++;
+		if (!row.IsNull(col_idx)) {
+			file_entry.mapping_id = MappingIndex(row.GetValue<idx_t>(col_idx));
 		}
 		col_idx++;
 		file_entry.delete_file = ReadDeleteFile(table, row, col_idx, IsEncrypted());

@@ -33,14 +33,30 @@ namespace duckdb {
 // Sort Binding Helpers
 //===--------------------------------------------------------------------===//
 
+//! Parses sort expressions from DuckLakeSort into OrderByNode vectors (DuckDB dialect only).
+vector<OrderByNode> DuckLakeCompactor::ParseSortOrders(const DuckLakeSort &sort_data) {
+	vector<OrderByNode> pre_bound_orders;
+	for (auto &field : sort_data.fields) {
+		if (field.dialect != "duckdb") {
+			continue;
+		}
+		auto parsed_expression = Parser::ParseExpressionList(field.expression);
+		pre_bound_orders.emplace_back(field.sort_direction, field.null_order, std::move(parsed_expression[0]));
+	}
+	return pre_bound_orders;
+}
+
 //! Binds ORDER BY expressions directly using ExpressionBinder.
-static vector<BoundOrderByNode> BindSortOrders(Binder &binder, const string &table_name, idx_t table_index,
-                                               const vector<string> &column_names,
-                                               const vector<LogicalType> &column_types,
-                                               vector<OrderByNode> &pre_bound_orders) {
+vector<BoundOrderByNode> DuckLakeCompactor::BindSortOrders(Binder &binder, DuckLakeTableEntry &table,
+                                                           idx_t table_index,
+                                                           vector<OrderByNode> &pre_bound_orders) {
+	auto &columns = table.GetColumns();
+	auto column_names = columns.GetColumnNames();
+	auto column_types = columns.GetColumnTypes();
+
 	// Create a child binder with the table columns in scope
 	auto child_binder = Binder::CreateBinder(binder.context, &binder);
-	child_binder->bind_context.AddGenericBinding(table_index, table_name, column_names, column_types);
+	child_binder->bind_context.AddGenericBinding(table_index, table.name, column_names, column_types);
 
 	// Bind each ORDER BY expression directly
 	vector<BoundOrderByNode> orders;
@@ -328,41 +344,23 @@ unique_ptr<LogicalOperator> DuckLakeCompactor::InsertSort(Binder &binder, unique
 	auto bindings = plan->GetColumnBindings();
 
 	// Parse the sort expressions from the sort_data
-	vector<OrderByNode> pre_bound_orders;
-	for (auto &pre_bound_order : sort_data->fields) {
-		if (pre_bound_order.dialect != "duckdb") {
-			continue;
-		}
-		auto parsed_expression = Parser::ParseExpressionList(pre_bound_order.expression);
-		OrderByNode order_node(pre_bound_order.sort_direction, pre_bound_order.null_order,
-		                       std::move(parsed_expression[0]));
-		pre_bound_orders.emplace_back(std::move(order_node));
-	}
-
+	auto pre_bound_orders = DuckLakeCompactor::ParseSortOrders(*sort_data);
 	if (pre_bound_orders.empty()) {
 		// Then the sorts were not in the DuckDB dialect and we return the original plan
 		return std::move(plan);
 	}
 
 	// Validate all column references in sort expressions exist in the table
-	vector<reference<ParsedExpression>> sort_expressions;
-	for (auto &pre_bound_order : pre_bound_orders) {
-		sort_expressions.push_back(*pre_bound_order.expression);
-	}
-	DuckLakeTableEntry::ValidateSortExpressionColumns(table, sort_expressions);
+	DuckLakeTableEntry::ValidateSortExpressionColumns(table, pre_bound_orders);
 
 	// Resolve types for the input plan (could be LogicalGet or LogicalProjection)
 	plan->ResolveOperatorTypes();
-
-	auto &columns = table.GetColumns();
-	auto current_columns = columns.GetColumnNames();
-	auto column_types = columns.GetColumnTypes();
 
 	D_ASSERT(!bindings.empty());
 	auto table_index = bindings[0].table_index;
 
 	// Bind the ORDER BY expressions
-	auto orders = BindSortOrders(binder, table.name, table_index, current_columns, column_types, pre_bound_orders);
+	auto orders = DuckLakeCompactor::BindSortOrders(binder, table, table_index, pre_bound_orders);
 
 	// Create the LogicalOrder operator
 	auto order = make_uniq<LogicalOrder>(std::move(orders));

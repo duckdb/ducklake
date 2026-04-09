@@ -39,6 +39,10 @@ struct DuckLakeNameMap {
 
 	hash_t GetHash() const;
 	bool IsCompatibleWith(const DuckLakeNameMap &other) const;
+
+	//! Create a positional name mapping from source column names to target field IDs.
+	static vector<unique_ptr<DuckLakeNameMapEntry>> CreatePositionalMapping(const vector<string> &source_names,
+	                                                                        const vector<FieldIndex> &target_field_ids);
 };
 
 struct NameMapHashFunction {

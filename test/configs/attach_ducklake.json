@@ -137,7 +137,8 @@
         "test/optimizer/pushdown/filter_cannot_pushdown.test",
         "test/optimizer/pushdown/filters_on_limit_optimizer.test",
         "test/sql/explain/test_explain_table_scan.test",
-        "test/sql/types/struct/struct_projection_pushdown_in_storage.test"
+        "test/sql/types/struct/struct_projection_pushdown_in_storage.test",
+        "test/optimizer/pushdown/join_filter_pushdown_cast.test"
       ]
     },
     {
@@ -172,8 +173,9 @@
         "test/sql/update/test_update_same_value.test",
         "test/sql/delete/cleanup_delete_on_conflict.test",
         "test/sql/alter/add_col/test_add_col_transactions.test",
-        "test/sql/alter/drop_col/test_drop_col_transactions.test"
-
+        "test/sql/alter/drop_col/test_drop_col_transactions.test",
+        "test/sql/transactions/transaction_insert_mixed_deletes.test",
+        "test/sql/transactions/transaction_insert_delete_chunks.test"
       ]
     },
     {
@@ -637,6 +639,13 @@
             "test/sql/types/geo/geometry_crs.test",
             "test/sql/types/geo/geometry_shred.test"
         ]
+    },
+    {
+      "reason": "Multiple require storage sections create same-named tables, causing conflicts in DuckLake",
+      "paths": [
+        "test/sql/pivot/pivot_star.test",
+        "test/sql/types/geo/geometry_update.test"
+      ]
     },
     {
       "reason": "FIXME: Variant Bugs?",

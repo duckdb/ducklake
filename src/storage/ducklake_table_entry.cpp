@@ -1,4 +1,5 @@
 #include "common/ducklake_types.hpp"
+#include "common/ducklake_util.hpp"
 #include "storage/ducklake_table_entry.hpp"
 #include "storage/ducklake_catalog.hpp"
 #include "storage/ducklake_scan.hpp"
@@ -10,6 +11,7 @@
 #include "duckdb/main/client_context.hpp"
 #include "duckdb/parser/tableref/table_function_ref.hpp"
 #include "duckdb/parser/parsed_data/create_table_info.hpp"
+#include "duckdb/parser/parser.hpp"
 #include "duckdb/parser/expression/cast_expression.hpp"
 #include "duckdb/parser/expression/columnref_expression.hpp"
 #include "duckdb/parser/expression/function_expression.hpp"
@@ -94,11 +96,26 @@ DuckLakeTableEntry::DuckLakeTableEntry(DuckLakeTableEntry &parent, CreateTableIn
 	if (parent.partition_data) {
 		partition_data = make_uniq<DuckLakePartition>(*parent.partition_data);
 	}
+	if (parent.sort_data) {
+		sort_data = make_uniq<DuckLakeSort>(*parent.sort_data);
+	}
 	CheckSupportedTypes();
 
 	auto changed_id = local_change.field_index;
 	field_data = DuckLakeFieldData::SetDefault(*field_data, changed_id, GetColumnByFieldId(changed_id),
 	                                           local_change.is_column_new);
+}
+
+static void ReplaceColumnRefName(ParsedExpression &expr, const string &old_name, const string &new_name) {
+	if (expr.type == ExpressionType::COLUMN_REF) {
+		auto &colref = expr.Cast<ColumnRefExpression>();
+		if (!colref.IsQualified() && StringUtil::CIEquals(colref.GetColumnName(), old_name)) {
+			colref.column_names.back() = new_name;
+		}
+		return;
+	}
+	ParsedExpressionIterator::EnumerateChildren(
+	    expr, [&](ParsedExpression &child) { ReplaceColumnRefName(child, old_name, new_name); });
 }
 
 // ALTER TABLE RENAME COLUMN
@@ -107,6 +124,19 @@ DuckLakeTableEntry::DuckLakeTableEntry(DuckLakeTableEntry &parent, CreateTableIn
     : DuckLakeTableEntry(parent, info, local_change) {
 	D_ASSERT(local_change.type == LocalChangeType::RENAME_COLUMN);
 	field_data = DuckLakeFieldData::RenameColumn(*field_data, local_change.field_index, new_name);
+	// Update sort expressions to reference the new column name
+	if (sort_data) {
+		auto old_field = parent.GetFieldData().GetByFieldIndex(local_change.field_index);
+		D_ASSERT(old_field);
+		auto &old_col_name = old_field->Name();
+		for (auto &sort_field : sort_data->fields) {
+			auto parsed = Parser::ParseExpressionList(sort_field.expression);
+			if (!parsed.empty()) {
+				ReplaceColumnRefName(*parsed[0], old_col_name, new_name);
+				sort_field.expression = parsed[0]->ToString();
+			}
+		}
+	}
 }
 
 // ALTER TABLE DROP COLUMN
@@ -335,7 +365,7 @@ vector<string> DuckLakeTableEntry::GetPartitionSQLExpressions() const {
 		auto &col = GetColumnByFieldId(field.field_id);
 		auto col_name = KeywordHelper::WriteOptionallyQuoted(col.GetName());
 		col_name = "CAST(" + col_name + " AS " + col.GetType().ToString() + ")";
-		result.push_back(DuckLakePartitionUtils::GetPartitionSQLExpression(field.transform.type, col_name));
+		result.push_back(DuckLakePartitionUtils::GetPartitionSQLExpression(field.transform, col_name));
 	}
 	return result;
 }
@@ -393,11 +423,11 @@ string GetPartitionColumnName(ColumnRefExpression &colref) {
 }
 
 void DuckLakeTableEntry::ValidateSortExpressionColumns(DuckLakeTableEntry &table,
-                                                       const vector<reference<ParsedExpression>> &expressions) {
+                                                       const vector<OrderByNode> &orders) {
 	vector<string> missing_columns;
-	for (auto &expr : expressions) {
+	for (auto &order : orders) {
 		ParsedExpressionIterator::VisitExpression<ColumnRefExpression>(
-		    expr.get(), [&](const ColumnRefExpression &colref) {
+		    *order.expression, [&](const ColumnRefExpression &colref) {
 			    if (colref.IsQualified()) {
 				    throw InvalidInputException(
 				        "Unexpected qualified column reference - only unqualified columns are supported");
@@ -426,42 +456,72 @@ void DuckLakeTableEntry::ValidateSortExpressionColumns(DuckLakeTableEntry &table
 
 DuckLakePartitionField GetPartitionField(DuckLakeTableEntry &table, ParsedExpression &expr) {
 	string column_name;
-	DuckLakeTransformType transform_type;
+	DuckLakePartitionField field;
+
 	switch (expr.type) {
 	case ExpressionType::COLUMN_REF: {
 		auto &colref = expr.Cast<ColumnRefExpression>();
 		column_name = GetPartitionColumnName(colref);
-		transform_type = DuckLakeTransformType::IDENTITY;
+		field.transform.type = DuckLakeTransformType::IDENTITY;
 		break;
 	}
 	case ExpressionType::FUNCTION: {
 		auto &function = expr.Cast<FunctionExpression>();
 		auto name = StringUtil::Lower(function.function_name);
+
+		// BUCKET logic is different from the other transforms because it has two arguments.
+		if (name == "bucket") {
+			field.transform.type = DuckLakeTransformType::BUCKET;
+			if (function.children.size() != 2) {
+				throw InvalidInputException("Expected bucket(bucket_count, column), but got %s", expr.ToString());
+			}
+			if (function.children[0]->type != ExpressionType::VALUE_CONSTANT) {
+				throw InvalidInputException("Bucket count must be a constant integer, got %s", expr.ToString());
+			}
+			if (function.children[1]->type != ExpressionType::COLUMN_REF) {
+				throw InvalidInputException("Expected bucket(bucket_count, column), but got %s", expr.ToString());
+			}
+
+			auto &bucket_expr = function.children[0]->Cast<ConstantExpression>();
+			if (!bucket_expr.value.DefaultTryCastAs(LogicalType::BIGINT)) {
+				throw InvalidInputException("Bucket count must be an integer");
+			}
+			auto bucket_count = bucket_expr.value.GetValue<int64_t>();
+			if (bucket_count <= 0) {
+				throw InvalidInputException("Bucket count must be positive");
+			}
+
+			field.transform.bucket_count = bucket_count;
+			column_name = GetPartitionColumnName(function.children[1]->Cast<ColumnRefExpression>());
+			break;
+		}
+
+		// Other transforms have one argument.
 		if (name == "year") {
-			transform_type = DuckLakeTransformType::YEAR;
+			field.transform.type = DuckLakeTransformType::YEAR;
 		} else if (name == "month") {
-			transform_type = DuckLakeTransformType::MONTH;
+			field.transform.type = DuckLakeTransformType::MONTH;
 		} else if (name == "day") {
-			transform_type = DuckLakeTransformType::DAY;
+			field.transform.type = DuckLakeTransformType::DAY;
 		} else if (name == "hour") {
-			transform_type = DuckLakeTransformType::HOUR;
+			field.transform.type = DuckLakeTransformType::HOUR;
 		} else {
 			throw NotImplementedException(
-			    "Unsupported partition function %s - only year, month, day, hour are supported", name);
+			    "Unsupported partition function %s - only year, month, day, hour, and bucket are supported", name);
 		}
+
 		if (function.children.size() != 1 || function.children[0]->type != ExpressionType::COLUMN_REF) {
 			throw NotImplementedException("Expected %s(column), but got %s", name, expr.ToString());
 		}
-		auto &colref = function.children[0]->Cast<ColumnRefExpression>();
-		column_name = GetPartitionColumnName(colref);
+
+		column_name = GetPartitionColumnName(function.children[0]->Cast<ColumnRefExpression>());
 		break;
 	}
 	default:
 		throw NotImplementedException(
-		    "Unsupported partition key %s - only identity columns and year/month/day/hour are supported",
+		    "Unsupported partition key %s - only identity columns and year/month/day/hour/bucket are supported",
 		    expr.ToString());
 	}
-	DuckLakePartitionField field;
 	if (!table.ColumnExists(column_name)) {
 		throw CatalogException("Unexpected partition key - column \"%s\" does not exist", column_name);
 	}
@@ -469,7 +529,6 @@ DuckLakePartitionField GetPartitionField(DuckLakeTableEntry &table, ParsedExpres
 	PhysicalIndex column_index(col.StorageOid());
 	auto &field_id = table.GetFieldData().GetByRootIndex(column_index);
 	field.field_id = field_id.GetFieldIndex();
-	field.transform.type = transform_type;
 	return field;
 }
 
@@ -517,22 +576,24 @@ unique_ptr<CatalogEntry> DuckLakeTableEntry::AlterTable(DuckLakeTransaction &tra
 	auto stats = GetTableStats(transaction);
 	if (!stats) {
 		throw CatalogException(
-		    "Cannot SET NULL on table %s - the table has transaction-local changes or no stats are available", name);
+		    "Cannot SET NOT NULL on table %s - the table has transaction-local changes or no stats are available",
+		    name);
 	}
 
 	auto column_stats = stats->column_stats.find(field_id.GetFieldIndex());
 	if (column_stats == stats->column_stats.end()) {
-		throw CatalogException("Cannot SET NULL on table %s - no column stats are available", name);
+		throw CatalogException("Cannot SET NOT NULL on table %s - no column stats are available", name);
 	}
 	auto &col_stats = column_stats->second;
 	if (col_stats.has_null_count && col_stats.null_count > 0) {
-		throw CatalogException("Cannot SET NULL on column %s - the column has NULL values", col.GetName());
+		throw CatalogException("Cannot SET NOT NULL on column %s - the column has NULL values", col.GetName());
 	}
 
 	// check if there is an existing constraint
 	auto existing_idx = FindNotNullConstraint(table_info, col.Logical());
 	if (existing_idx.IsValid()) {
-		throw CatalogException("Cannot SET NULL on column %s - it already has a NOT NULL constraint", col.GetName());
+		throw CatalogException("Cannot SET NOT NULL on column %s - it already has a NOT NULL constraint",
+		                       col.GetName());
 	}
 	table_info.constraints.push_back(make_uniq<NotNullConstraint>(col.Logical()));
 
@@ -561,6 +622,9 @@ unique_ptr<CatalogEntry> DuckLakeTableEntry::AlterTable(DuckLakeTransaction &tra
 }
 
 unique_ptr<CatalogEntry> DuckLakeTableEntry::AlterTable(DuckLakeTransaction &transaction, RenameColumnInfo &info) {
+	if (DuckLakeUtil::IsInlinedSystemColumn(info.new_name)) {
+		throw CatalogException("Column name \"%s\" is reserved by DuckLake for internal use", info.new_name);
+	}
 	auto create_info = GetInfo();
 	auto &table_info = create_info->Cast<CreateTableInfo>();
 	if (!table_info.columns.ColumnExists(info.old_name)) {
@@ -597,6 +661,9 @@ void DuckLakeTableEntry::RequireNextColumnId(DuckLakeTransaction &transaction) {
 }
 
 unique_ptr<CatalogEntry> DuckLakeTableEntry::AlterTable(DuckLakeTransaction &transaction, AddColumnInfo &info) {
+	if (DuckLakeUtil::IsInlinedSystemColumn(info.new_column.Name())) {
+		throw CatalogException("Column name \"%s\" is reserved by DuckLake for internal use", info.new_column.Name());
+	}
 	auto create_info = GetInfo();
 	auto &table_info = create_info->Cast<CreateTableInfo>();
 	if (info.if_column_not_exists && ColumnExists(info.new_column.Name())) {
@@ -1184,11 +1251,7 @@ unique_ptr<CatalogEntry> DuckLakeTableEntry::AlterTable(DuckLakeTransaction &tra
 	}
 
 	// Validate all column references in all sort expressions
-	vector<reference<ParsedExpression>> sort_expressions;
-	for (auto &order_node : info.orders) {
-		sort_expressions.push_back(*order_node.expression);
-	}
-	ValidateSortExpressionColumns(*this, sort_expressions);
+	ValidateSortExpressionColumns(*this, info.orders);
 
 	auto sort_data = make_uniq<DuckLakeSort>();
 	sort_data->sort_id = transaction.GetLocalCatalogId();
