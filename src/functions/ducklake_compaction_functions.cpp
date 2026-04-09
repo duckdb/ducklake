@@ -254,9 +254,10 @@ void DuckLakeCompactor::GenerateCompactions(DuckLakeTableEntry &table,
 			// (does not apply to REWRITE_DELETES - delete files must be rewritten regardless of data file size)
 			continue;
 		}
-		if ((!candidate.delete_files.empty() && type == CompactionType::MERGE_ADJACENT_TABLES) ||
-		    candidate.file.end_snapshot.IsValid() || candidate.has_inlined_deletions) {
-			// Merge Adjacent Tables doesn't perform the merge if delete files are present
+		if (((!candidate.delete_files.empty() || !candidate.inlined_file_deletions.empty()) &&
+		     type == CompactionType::MERGE_ADJACENT_TABLES) ||
+		    candidate.file.end_snapshot.IsValid()) {
+			// Merge Adjacent Tables doesn't perform the merge if any deletes are present
 			continue;
 		}
 		// construct the compaction group for this file - i.e. the set of candidate files we can compact it with
@@ -413,9 +414,11 @@ DuckLakeCompactor::GenerateCompactionCommand(vector<DuckLakeCompactionFileEntry>
 	for (auto &source : source_files) {
 		DuckLakeFileListEntry result;
 		result.file = source.file.data;
+		result.file_id = source.file.id;
 		result.row_id_start = source.file.row_id_start;
 		result.snapshot_id = source.file.begin_snapshot;
 		result.mapping_id = source.file.mapping_id;
+		result.inlined_file_deletions = source.inlined_file_deletions;
 		switch (type) {
 		case CompactionType::REWRITE_DELETES: {
 			if (!source.delete_files.empty()) {

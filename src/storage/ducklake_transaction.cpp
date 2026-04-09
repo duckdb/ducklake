@@ -2420,9 +2420,12 @@ CompactionInformation DuckLakeTransaction::GetCompactionChanges(DuckLakeCommitSt
 				if (!compacted_file.delete_files.empty()) {
 					row_id_limit -= compacted_file.delete_files.back().row_count;
 				}
+				row_id_limit -= compacted_file.inlined_file_deletions.size();
 				DuckLakeCompactedFileInfo file_info;
 				file_info.path = compacted_file.file.data.path;
 				file_info.source_id = compacted_file.file.id;
+				file_info.table_index = entry.GetTableIndex();
+				file_info.rewrite_snapshot = commit_snapshot.snapshot_id;
 				if (has_new_file) {
 					file_info.new_id = new_file.id;
 				}
@@ -2431,7 +2434,6 @@ CompactionInformation DuckLakeTransaction::GetCompactionChanges(DuckLakeCommitSt
 					file_info.delete_file_path = compacted_file.delete_files.back().data.path;
 					file_info.delete_file_id = compacted_file.delete_files.back().delete_file_id;
 					file_info.start_snapshot = compacted_file.file.begin_snapshot;
-					file_info.table_index = entry.GetTableIndex();
 					file_info.delete_file_start_snapshot = commit_snapshot.snapshot_id;
 					file_info.delete_file_end_snapshot = compacted_file.delete_files.back().end_snapshot;
 				}
