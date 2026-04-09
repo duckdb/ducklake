@@ -1,6 +1,7 @@
 #include "common/ducklake_util.hpp"
 #include "duckdb/common/string_util.hpp"
 #include "duckdb/parser/keyword_helper.hpp"
+#include "duckdb/parser/parser.hpp"
 #include "duckdb/common/file_system.hpp"
 #include "storage/ducklake_metadata_manager.hpp"
 #include "storage/ducklake_metadata_info.hpp"
@@ -348,6 +349,62 @@ bool DuckLakeUtil::HasInlinedSystemColumnConflict(const vector<DuckLakeColumnInf
 		}
 	}
 	return false;
+}
+
+string DuckLakeUtil::ReplaceSkippingQuotes(const string &sql, const string &from, const string &to) {
+	if (from.empty()) {
+		return sql;
+	}
+
+	auto tokens = Parser::Tokenize(sql);
+
+	// Collect quoted ranges (string constants and double-quoted identifiers) where replacement doesn't happen
+	vector<pair<idx_t, idx_t>> no_replace_ranges;
+	for (idx_t i = 0; i < tokens.size(); i++) {
+		bool is_quoted = tokens[i].type == SimplifiedTokenType::SIMPLIFIED_TOKEN_STRING_CONSTANT;
+		if (!is_quoted && tokens[i].type == SimplifiedTokenType::SIMPLIFIED_TOKEN_IDENTIFIER &&
+		    tokens[i].start < sql.size() && sql[tokens[i].start] == '"') {
+			is_quoted = true;
+		}
+		if (is_quoted) {
+			const idx_t start = tokens[i].start;
+			const idx_t end = (i + 1 < tokens.size()) ? tokens[i + 1].start : sql.size();
+			no_replace_ranges.push_back({start, end});
+		}
+	}
+
+	string result;
+	result.reserve(sql.size());
+	idx_t pos = 0;
+	idx_t range_idx = 0;
+
+	while (pos < sql.size()) {
+		while (range_idx < no_replace_ranges.size() && pos >= no_replace_ranges[range_idx].second) {
+			range_idx++;
+		}
+
+		// If inside a quoted range, copy verbatim to its end
+		if (range_idx < no_replace_ranges.size() && pos >= no_replace_ranges[range_idx].first) {
+			idx_t end = no_replace_ranges[range_idx].second;
+			result += sql.substr(pos, end - pos);
+			pos = end;
+			range_idx++;
+			continue;
+		}
+
+		// If not inside a quoted range, check for a match of `from`
+		if (sql.compare(pos, from.size(), from) == 0) {
+			result += to;
+			pos += from.size();
+			continue;
+		}
+
+		// Otherwise, just copy the character at the current position
+		result += sql[pos];
+		pos++;
+	}
+
+	return result;
 }
 
 } // namespace duckdb
