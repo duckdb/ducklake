@@ -577,6 +577,8 @@ DuckLakeCompactor::GenerateCompactionCommand(vector<DuckLakeCompactionFileEntry>
 	copy->rotate = copy_options.rotate;
 	copy->return_type = copy_options.return_type;
 
+	copy->batch_size = DEFAULT_ROW_GROUP_SIZE;
+
 	copy->partition_output = copy_options.partition_output;
 	copy->write_partition_columns = copy_options.write_partition_columns;
 	copy->write_empty_file = false;
