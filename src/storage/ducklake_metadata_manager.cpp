@@ -432,7 +432,8 @@ SELECT begin_snapshot
 FROM {METADATA_CATALOG}.ducklake_table
 WHERE table_id = {TABLE_ID})";
 	query = StringUtil::Replace(query, "{TABLE_ID}", to_string(table_id.index)).c_str();
-	auto result = transaction.Query(query);
+	auto result = result_or_throw(transaction.Query(query),
+	                             "Failed to query begin snapshot for DuckLake table: ");
 	for (auto &row : *result) {
 		return row.GetValue<idx_t>(0);
 	}
@@ -446,7 +447,8 @@ FROM {METADATA_CATALOG}.ducklake_schema_versions
 WHERE table_id = {TABLE_ID} AND schema_version = {SCHEMA_VERSION})";
 	query = StringUtil::Replace(query, "{TABLE_ID}", to_string(table_id.index));
 	query = StringUtil::Replace(query, "{SCHEMA_VERSION}", to_string(schema_version));
-	auto result = transaction.Query(query);
+	auto result = result_or_throw(transaction.Query(query),
+	                             "Failed to query begin snapshot for DuckLake schema version: ");
 	for (auto &row : *result) {
 		return row.GetValue<idx_t>(0);
 	}
@@ -493,11 +495,9 @@ SELECT
   %s)",
 	                                  inlined_deletion_subquery);
 	query = StringUtil::Replace(query, "{TABLE_ID}", to_string(table_id.index));
-	auto result = transaction.Query(snapshot, query);
-	for (auto &row : *result) {
-		return row.GetValue<idx_t>(0);
-	}
-	return 0;
+	return query_scalar_or_zero<idx_t>(
+	    transaction.Query(snapshot, query),
+	    "Failed to query net data file row count for DuckLake table: ");
 }
 
 idx_t DuckLakeMetadataManager::GetNetInlinedRowCount(const string &inlined_table_name, DuckLakeSnapshot snapshot) {
@@ -507,11 +507,9 @@ FROM {METADATA_CATALOG}.%s
 WHERE {SNAPSHOT_ID} >= begin_snapshot
   AND ({SNAPSHOT_ID} < end_snapshot OR end_snapshot IS NULL))",
 	                                  inlined_table_name);
-	auto result = transaction.Query(snapshot, query);
-	for (auto &row : *result) {
-		return row.GetValue<idx_t>(0);
-	}
-	return 0;
+	return query_scalar_or_zero<idx_t>(
+	    transaction.Query(snapshot, query),
+	    "Failed to query net inlined row count for DuckLake table: ");
 }
 
 DuckLakeCatalogInfo DuckLakeMetadataManager::GetCatalogForSnapshot(DuckLakeSnapshot snapshot) {
@@ -519,14 +517,13 @@ DuckLakeCatalogInfo DuckLakeMetadataManager::GetCatalogForSnapshot(DuckLakeSnaps
 	auto &base_data_path = ducklake_catalog.DataPath();
 	DuckLakeCatalogInfo catalog;
 	// load the schema information
-	auto result = transaction.Query(snapshot, R"(
+	auto result = result_or_throw(
+	    transaction.Query(snapshot, R"(
 SELECT schema_id, schema_uuid::VARCHAR, schema_name, path, path_is_relative
 FROM {METADATA_CATALOG}.ducklake_schema
 WHERE {SNAPSHOT_ID} >= begin_snapshot AND ({SNAPSHOT_ID} < end_snapshot OR end_snapshot IS NULL)
-)");
-	if (result->HasError()) {
-		result->GetErrorObject().Throw("Failed to get schema information from DuckLake: ");
-	}
+)"),
+	    "Failed to get schema information from DuckLake: ");
 	map<SchemaIndex, idx_t> schema_map;
 	for (auto &row : *result) {
 		DuckLakeSchemaInfo schema;
@@ -558,7 +555,8 @@ WHERE {SNAPSHOT_ID} >= begin_snapshot AND ({SNAPSHOT_ID} < end_snapshot OR end_s
 	};
 
 	// load the table information
-	result = transaction.Query(snapshot, StringUtil::Format(R"(
+	result = result_or_throw(
+	    transaction.Query(snapshot, StringUtil::Format(R"(
 SELECT schema_id, tbl.table_id, table_uuid::VARCHAR, table_name,
 	(
 		SELECT %s
@@ -587,10 +585,8 @@ ORDER BY table_id, parent_column NULLS FIRST, column_order
 )",
 	                                                        ListAggregation(TAG_FIELDS),
 	                                                        ListAggregation(INLINED_DATA_TABLES_FIELDS),
-	                                                        ListAggregation(TAG_FIELDS)));
-	if (result->HasError()) {
-		result->GetErrorObject().Throw("Failed to get table information from DuckLake: ");
-	}
+	                                                        ListAggregation(TAG_FIELDS))),
+	    "Failed to get table information from DuckLake: ");
 	const idx_t COLUMN_INDEX_START = 8;
 	auto &tables = catalog.tables;
 	for (auto &row : *result) {
@@ -674,7 +670,8 @@ ORDER BY table_id, parent_column NULLS FIRST, column_order
 		}
 	}
 	// load view information
-	result = transaction.Query(snapshot, StringUtil::Format(R"(
+	result = result_or_throw(
+	    transaction.Query(snapshot, StringUtil::Format(R"(
 SELECT view_id, view_uuid, schema_id, view_name, dialect, sql, column_aliases,
 	(
 		SELECT %s
@@ -685,10 +682,8 @@ SELECT view_id, view_uuid, schema_id, view_name, dialect, sql, column_aliases,
 FROM {METADATA_CATALOG}.ducklake_view view
 WHERE {SNAPSHOT_ID} >= begin_snapshot AND ({SNAPSHOT_ID} < view.end_snapshot OR view.end_snapshot IS NULL)
 )",
-	                                                        ListAggregation(TAG_FIELDS)));
-	if (result->HasError()) {
-		result->GetErrorObject().Throw("Failed to get partition information from DuckLake: ");
-	}
+	                                                        ListAggregation(TAG_FIELDS))),
+	    "Failed to get partition information from DuckLake: ");
 	auto &views = catalog.views;
 	for (auto &row : *result) {
 		DuckLakeViewInfo view_info;
@@ -723,7 +718,8 @@ WHERE {SNAPSHOT_ID} >= begin_snapshot AND ({SNAPSHOT_ID} < view.end_snapshot OR 
 	    {"dialect", "dialect"}, {"sql", "sql"}, {"type", "type"}, {"params", macro_param_query}};
 
 	// load macro information
-	result = transaction.Query(snapshot, StringUtil::Format(R"(
+	result = result_or_throw(
+	    transaction.Query(snapshot, StringUtil::Format(R"(
 SELECT schema_id, ducklake_macro.macro_id, macro_name, (
 		SELECT %s
 		FROM {METADATA_CATALOG}.ducklake_macro_impl
@@ -732,10 +728,8 @@ SELECT schema_id, ducklake_macro.macro_id, macro_name, (
 FROM {METADATA_CATALOG}.ducklake_macro
 WHERE  {SNAPSHOT_ID} >= ducklake_macro.begin_snapshot AND ({SNAPSHOT_ID} < ducklake_macro.end_snapshot OR ducklake_macro.end_snapshot IS NULL)
 )",
-	                                                        ListAggregation(MACRO_IMPL_FIELDS)));
-	if (result->HasError()) {
-		result->GetErrorObject().Throw("Failed to get macro information from DuckLake: ");
-	}
+	                                                        ListAggregation(MACRO_IMPL_FIELDS))),
+	    "Failed to get macro information from DuckLake: ");
 	auto &macros = catalog.macros;
 	for (auto &row : *result) {
 		DuckLakeMacroInfo macro_info;
@@ -748,16 +742,15 @@ WHERE  {SNAPSHOT_ID} >= ducklake_macro.begin_snapshot AND ({SNAPSHOT_ID} < duckl
 	}
 
 	// load partition information
-	result = transaction.Query(snapshot, R"(
+	result = result_or_throw(
+	    transaction.Query(snapshot, R"(
 SELECT partition_id, part.table_id, partition_key_index, column_id, transform
 FROM {METADATA_CATALOG}.ducklake_partition_info part
 JOIN {METADATA_CATALOG}.ducklake_partition_column part_col USING (partition_id)
 WHERE {SNAPSHOT_ID} >= part.begin_snapshot AND ({SNAPSHOT_ID} < part.end_snapshot OR part.end_snapshot IS NULL)
 ORDER BY part.table_id, partition_id, partition_key_index
-)");
-	if (result->HasError()) {
-		result->GetErrorObject().Throw("Failed to get partition information from DuckLake: ");
-	}
+)"),
+	    "Failed to get partition information from DuckLake: ");
 	auto &partitions = catalog.partitions;
 	for (auto &row : *result) {
 		auto partition_id = row.GetValue<uint64_t>(0);
@@ -779,16 +772,15 @@ ORDER BY part.table_id, partition_id, partition_key_index
 	}
 
 	// load sort information
-	result = transaction.Query(snapshot, R"(
+	result = result_or_throw(
+	    transaction.Query(snapshot, R"(
 SELECT sort.sort_id, sort.table_id, sort_expr.sort_key_index, sort_expr.expression, sort_expr.dialect, sort_expr.sort_direction, sort_expr.null_order
 FROM {METADATA_CATALOG}.ducklake_sort_info sort
 JOIN {METADATA_CATALOG}.ducklake_sort_expression sort_expr USING (sort_id)
 WHERE {SNAPSHOT_ID} >= sort.begin_snapshot AND ({SNAPSHOT_ID} < sort.end_snapshot OR sort.end_snapshot IS NULL)
 ORDER BY sort.table_id, sort.sort_id, sort_expr.sort_key_index
-)");
-	if (result->HasError()) {
-		result->GetErrorObject().Throw("Failed to get sort information from DuckLake: ");
-	}
+)"),
+	    "Failed to get sort information from DuckLake: ");
 	auto &sorts = catalog.sorts;
 	for (auto &row : *result) {
 		auto sort_id = row.GetValue<uint64_t>(0);
@@ -2369,7 +2361,8 @@ WHERE table_id = %d AND schema_version=(
     WHERE table_id=%d
 );)",
 			                                entry.table_id.index, entry.table_id.index);
-			auto result = transaction.Query(commit_snapshot, query);
+			auto result = result_or_throw(transaction.Query(commit_snapshot, query),
+			                             "Failed to query DuckLake inlined table name: ");
 			for (auto &row : *result) {
 				inlined_table_name = row.GetValue<string>(0);
 				insert_inlined_table_name_cache[entry.table_id.index] = inlined_table_name;
@@ -2738,11 +2731,13 @@ string DuckLakeMetadataManager::GetPathForSchema(SchemaIndex schema_id,
 			return FromRelativePath(path);
 		}
 	}
-	auto result = transaction.Query(StringUtil::Format(R"(
+	auto result = result_or_throw(
+	    transaction.Query(StringUtil::Format(R"(
 SELECT path, path_is_relative
 FROM {METADATA_CATALOG}.ducklake_schema
 WHERE schema_id = %d;)",
-	                                                   schema_id.index));
+	                                                   schema_id.index)),
+	    "Failed to query DuckLake schema path: ");
 	for (auto &row : *result) {
 		DuckLakePath path;
 		path.path = row.GetValue<string>(0);
@@ -2775,11 +2770,13 @@ string DuckLakeMetadataManager::GetPathForTable(TableIndex table_id, const vecto
 	for (const auto &new_table : new_tables) {
 		if (new_table.id == table_id) {
 			// This is a table not yet in the catalog
-			auto result = transaction.Query(StringUtil::Format(R"(
+			auto result = result_or_throw(
+			    transaction.Query(StringUtil::Format(R"(
 SELECT s.path, s.path_is_relative
 FROM {METADATA_CATALOG}.ducklake_schema s
 WHERE schema_id = %d;)",
-			                                                   new_table.schema_id.index));
+			                                                   new_table.schema_id.index)),
+			    "Failed to query DuckLake schema path for table: ");
 			for (auto &row : *result) {
 				DuckLakePath schema_path;
 				schema_path.path = row.GetValue<string>(0);
@@ -2806,7 +2803,8 @@ WHERE schema_id = %d;)",
 			}
 		}
 	}
-	auto result = transaction.Query(StringUtil::Format(R"(
+	auto result = result_or_throw(
+	    transaction.Query(StringUtil::Format(R"(
 SELECT
 	s.path AS s_path,
 	s.path_is_relative AS s_path_is_relative,
@@ -2816,7 +2814,8 @@ FROM {METADATA_CATALOG}.ducklake_schema s
 JOIN {METADATA_CATALOG}.ducklake_table t
 USING (schema_id)
 WHERE table_id = %d;)",
-	                                                   table_id.index));
+	                                                   table_id.index)),
+	    "Failed to query DuckLake table path: ");
 	for (auto &row : *result) {
 		DuckLakePath schema_path;
 		schema_path.path = row.GetValue<string>(0);
@@ -3348,14 +3347,16 @@ vector<DuckLakeColumnMappingInfo> DuckLakeMetadataManager::GetColumnMappings(opt
 	if (start_from.IsValid()) {
 		filter = "WHERE mapping_id >= " + to_string(start_from.GetIndex());
 	}
-	auto result = transaction.Query(StringUtil::Format(R"(
+	auto result = result_or_throw(
+	    transaction.Query(StringUtil::Format(R"(
 SELECT mapping_id, table_id, type, column_id, source_name, target_field_id, parent_column, is_partition
 FROM {METADATA_CATALOG}.ducklake_column_mapping
 JOIN {METADATA_CATALOG}.ducklake_name_mapping USING (mapping_id)
 %s
 ORDER BY mapping_id, parent_column NULLS FIRST
 )",
-	                                                   filter));
+	                                                   filter)),
+	    "Failed to query DuckLake column mappings: ");
 	vector<DuckLakeColumnMappingInfo> column_maps;
 	for (auto &row : *result) {
 		MappingIndex mapping_id(row.GetValue<idx_t>(0));
@@ -3549,10 +3550,8 @@ string DuckLakeMetadataManager::GetLatestSnapshotQuery() const {
 }
 
 unique_ptr<DuckLakeSnapshot> DuckLakeMetadataManager::GetSnapshot() {
-	auto result = transaction.Query(GetLatestSnapshotQuery());
-	if (result->HasError()) {
-		result->GetErrorObject().Throw("Failed to query most recent snapshot for DuckLake: ");
-	}
+	auto result = result_or_throw(transaction.Query(GetLatestSnapshotQuery()),
+	                             "Failed to query most recent snapshot for DuckLake: ");
 	auto snapshot = TryGetSnapshotInternal(*result);
 	if (!snapshot) {
 		throw InvalidInputException("No snapshot found in DuckLake");
@@ -3563,17 +3562,19 @@ unique_ptr<DuckLakeSnapshot> DuckLakeMetadataManager::GetSnapshot() {
 unique_ptr<DuckLakeSnapshot> DuckLakeMetadataManager::GetSnapshot(BoundAtClause &at_clause, SnapshotBound bound) {
 	auto &unit = at_clause.Unit();
 	auto &val = at_clause.GetValue();
-	unique_ptr<QueryResult> result;
 	const string timestamp_order = bound == SnapshotBound::LOWER_BOUND ? "ASC" : "DESC";
 	const string timestamp_condition = bound == SnapshotBound::LOWER_BOUND ? ">" : "<";
+	auto err_text = StringUtil::Format(
+	    "Failed to query snapshot at %s %s for DuckLake: ", StringUtil::Lower(unit), val.ToString());
+	unique_ptr<QueryResult> snapshot_result;
 	if (StringUtil::CIEquals(unit, "version")) {
-		result = transaction.Query(StringUtil::Format(R"(
+		snapshot_result = transaction.Query(StringUtil::Format(R"(
 SELECT snapshot_id, schema_version, next_catalog_id, next_file_id
 FROM {METADATA_CATALOG}.ducklake_snapshot
 WHERE snapshot_id = %llu;)",
-		                                              val.DefaultCastAs(LogicalType::UBIGINT).GetValue<idx_t>()));
+		                                                  val.DefaultCastAs(LogicalType::UBIGINT).GetValue<idx_t>()));
 	} else if (StringUtil::CIEquals(unit, "timestamp")) {
-		result = transaction.Query(StringUtil::Format(
+		snapshot_result = transaction.Query(StringUtil::Format(
 		    R"(
 SELECT snapshot_id, schema_version, next_catalog_id, next_file_id
 FROM {METADATA_CATALOG}.ducklake_snapshot
@@ -3587,10 +3588,7 @@ WHERE snapshot_id = (
 	} else {
 		throw InvalidInputException("Unsupported AT clause unit - %s", unit);
 	}
-	if (result->HasError()) {
-		result->GetErrorObject().Throw(StringUtil::Format(
-		    "Failed to query snapshot at %s %s for DuckLake: ", StringUtil::Lower(unit), val.ToString()));
-	}
+	auto result = result_or_throw(std::move(snapshot_result), err_text);
 	auto snapshot = TryGetSnapshotInternal(*result);
 	if (!snapshot) {
 		throw InvalidInputException("No snapshot found at %s %s", StringUtil::Lower(unit), val.ToString());
@@ -4089,15 +4087,14 @@ WHERE data_file_id IN (%s);
 }
 
 idx_t DuckLakeMetadataManager::GetNextColumnId(TableIndex table_id) {
-	auto result = transaction.Query(StringUtil::Format(R"(
+	auto result = result_or_throw(
+	    transaction.Query(StringUtil::Format(R"(
 	SELECT MAX(column_id)
 	FROM {METADATA_CATALOG}.ducklake_column
 	WHERE table_id=%d
 )",
-	                                                   table_id.index));
-	if (result->HasError()) {
-		result->GetErrorObject().Throw("Failed to get next column id in DuckLake: ");
-	}
+	                                                   table_id.index)),
+	    "Failed to get next column id in DuckLake: ");
 	for (auto &row : *result) {
 		if (row.IsNull(0)) {
 			break;
@@ -4224,7 +4221,8 @@ WHERE snapshot_id IN (%s);
 		}
 	}
 	// get a list of tables that are no longer required after these deletions
-	result = transaction.Query(R"(
+	result = result_or_throw(
+	    transaction.Query(R"(
 SELECT table_id
 FROM {METADATA_CATALOG}.ducklake_table t
 WHERE end_snapshot IS NOT NULL AND NOT EXISTS (
@@ -4239,7 +4237,8 @@ AND NOT EXISTS (
       AND (t2.end_snapshot IS NULL OR  EXISTS (SELECT snapshot_id
     FROM {METADATA_CATALOG}.ducklake_snapshot
     WHERE  snapshot_id >= begin_snapshot AND snapshot_id < t2.end_snapshot))
-  );)");
+  );)"),
+	    "Failed to query DuckLake tables for snapshot cleanup: ");
 
 	vector<TableIndex> cleanup_tables;
 	for (auto &row : *result) {
@@ -4259,7 +4258,8 @@ AND NOT EXISTS (
 		table_id_filter = StringUtil::Format("table_id IN (%s) OR", deleted_table_ids);
 	}
 
-	result = transaction.Query(StringUtil::Format(R"(
+	result = result_or_throw(
+	    transaction.Query(StringUtil::Format(R"(
 SELECT data_file_id, table_id, path, path_is_relative
 FROM {METADATA_CATALOG}.ducklake_data_file
 WHERE %s (end_snapshot IS NOT NULL AND NOT EXISTS(
@@ -4267,7 +4267,8 @@ WHERE %s (end_snapshot IS NOT NULL AND NOT EXISTS(
     FROM {METADATA_CATALOG}.ducklake_snapshot
     WHERE snapshot_id >= begin_snapshot AND snapshot_id < end_snapshot
 ));)",
-	                                              table_id_filter));
+	                                              table_id_filter)),
+	    "Failed to query DuckLake data files for snapshot cleanup: ");
 	vector<DuckLakeFileForCleanup> cleanup_files;
 	for (auto &row : *result) {
 		DuckLakeFileForCleanup info;
@@ -4327,7 +4328,8 @@ VALUES %s;
 		file_id_filter = StringUtil::Format("data_file_id IN (%s) OR", deleted_file_ids);
 	}
 
-	result = transaction.Query(StringUtil::Format(R"(
+	result = result_or_throw(
+	    transaction.Query(StringUtil::Format(R"(
 SELECT delete_file_id, table_id, path, path_is_relative
 FROM {METADATA_CATALOG}.ducklake_delete_file
 WHERE %s %s (end_snapshot IS NOT NULL AND NOT EXISTS(
@@ -4335,7 +4337,8 @@ WHERE %s %s (end_snapshot IS NOT NULL AND NOT EXISTS(
     FROM {METADATA_CATALOG}.ducklake_snapshot
     WHERE snapshot_id >= begin_snapshot AND snapshot_id < end_snapshot
 ));)",
-	                                              table_id_filter, file_id_filter));
+	                                              table_id_filter, file_id_filter)),
+	    "Failed to query DuckLake delete files for snapshot cleanup: ");
 	vector<DuckLakeFileForCleanup> cleanup_deletes;
 	for (auto &row : *result) {
 		DuckLakeFileForCleanup info;
@@ -4495,7 +4498,8 @@ string DuckLakeMetadataManager::InsertNewSchema(const DuckLakeSnapshot &snapshot
 
 vector<DuckLakeTableSizeInfo> DuckLakeMetadataManager::GetTableSizes(DuckLakeSnapshot snapshot) {
 	vector<DuckLakeTableSizeInfo> table_sizes;
-	auto result = transaction.Query(snapshot, R"(
+	auto result = result_or_throw(
+	    transaction.Query(snapshot, R"(
 SELECT
 	schema_id, table_id, table_name, table_uuid,
 	data_file_info.file_count AS data_file_count,
@@ -4512,7 +4516,8 @@ FROM {METADATA_CATALOG}.ducklake_table tbl, LATERAL (
 	WHERE df.table_id = tbl.table_id AND {SNAPSHOT_ID} >= begin_snapshot AND ({SNAPSHOT_ID} < end_snapshot OR end_snapshot IS NULL)
 ) delete_file_info
 WHERE {SNAPSHOT_ID} >= begin_snapshot AND ({SNAPSHOT_ID} < end_snapshot OR end_snapshot IS NULL)
-)");
+)"),
+	    "Failed to query DuckLake table sizes: ");
 	for (auto &row : *result) {
 		DuckLakeTableSizeInfo table_size;
 		table_size.schema_id = SchemaIndex(row.GetValue<idx_t>(0));
@@ -4556,29 +4561,31 @@ void DuckLakeMetadataManager::SetConfigOption(const DuckLakeConfigOption &option
 		scope_id = "NULL";
 		scope_filter = "scope IS NULL";
 	}
-	auto result = transaction.Query(StringUtil::Format(R"(
+	auto count = query_scalar_or_throw<idx_t>(
+	    transaction.Query(StringUtil::Format(R"(
 SELECT COUNT(*)
 FROM {METADATA_CATALOG}.ducklake_metadata
 WHERE key = %s AND %s
 )",
-	                                                   SQLString(option_key), scope_filter));
+	                                                   SQLString(option_key), scope_filter)),
+	    "Failed to query config option in DuckLake: ");
 
-	auto count = result->Fetch()->GetValue(0, 0).GetValue<idx_t>();
 	if (count == 0) {
 		// option does not yet exist - insert the value
-		result = transaction.Query(StringUtil::Format(R"(
+		execute_or_throw(
+		    transaction.Query(StringUtil::Format(R"(
 INSERT INTO {METADATA_CATALOG}.ducklake_metadata VALUES (%s, %s, %s, %s)
 )",
-		                                              SQLString(option_key), SQLString(option_value), scope, scope_id));
+		                                              SQLString(option_key), SQLString(option_value), scope, scope_id)),
+		    "Failed to insert config option in DuckLake: ");
 	} else {
 		// option already exists - update it
-		result = transaction.Query(StringUtil::Format(R"(
+		execute_or_throw(
+		    transaction.Query(StringUtil::Format(R"(
 UPDATE {METADATA_CATALOG}.ducklake_metadata SET value=%s WHERE key=%s AND %s
 )",
-		                                              SQLString(option_value), SQLString(option_key), scope_filter));
-	}
-	if (result->HasError()) {
-		result->GetErrorObject().Throw("Failed to insert config option in DuckLake: ");
+		                                              SQLString(option_value), SQLString(option_key), scope_filter)),
+		    "Failed to insert config option in DuckLake: ");
 	}
 }
 

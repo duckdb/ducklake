@@ -429,7 +429,8 @@ static void FlushInlinedFileDeletions(ClientContext &context, DuckLakeCatalog &c
 	}
 
 	// Query the inlined deletions with file paths and existing delete file info
-	auto deletions_result = transaction.Query(snapshot, StringUtil::Format(R"(
+	auto deletions_result = result_or_throw(
+	    transaction.Query(snapshot, StringUtil::Format(R"(
 SELECT del.file_id, data.path, data.path_is_relative, del.row_id, del.begin_snapshot,
        existing_del.delete_file_id, existing_del.path as del_path, existing_del.path_is_relative as del_path_is_relative,
        existing_del.begin_snapshot as del_begin_snapshot, existing_del.encryption_key as del_encryption_key,
@@ -442,10 +443,8 @@ LEFT JOIN (
           AND ({SNAPSHOT_ID} < end_snapshot OR end_snapshot IS NULL)
 ) existing_del ON del.file_id = existing_del.data_file_id
 	)",
-	                                                                       inlined_table_name, table_id.index));
-	if (deletions_result->HasError()) {
-		deletions_result->GetErrorObject().Throw("Failed to query inlined file deletions for flush: ");
-	}
+	                                                                       inlined_table_name, table_id.index)),
+	    "Failed to query inlined file deletions for flush: ");
 
 	unordered_map<idx_t, FileDeleteInfo> files_to_flush;
 

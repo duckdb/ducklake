@@ -104,25 +104,26 @@ bool DuckLakeInlinedDataReader::TryInitializeScan(ClientContext &context, Global
 				virtual_columns.push_back(InlinedVirtualColumn::NONE);
 			}
 		}
-		unique_ptr<QueryResult> query_result;
+		unique_ptr<QueryResult> scan_result;
 		switch (read_info.scan_type) {
 		case DuckLakeScanType::SCAN_TABLE:
-			query_result = metadata_manager.ReadInlinedData(read_info.snapshot, table_name, columns_to_read);
+			scan_result = metadata_manager.ReadInlinedData(read_info.snapshot, table_name, columns_to_read);
 			break;
 		case DuckLakeScanType::SCAN_INSERTIONS:
-			query_result = metadata_manager.ReadInlinedDataInsertions(*read_info.start_snapshot, read_info.snapshot,
-			                                                          table_name, columns_to_read);
+			scan_result = metadata_manager.ReadInlinedDataInsertions(*read_info.start_snapshot, read_info.snapshot,
+			                                                        table_name, columns_to_read);
 			break;
 		case DuckLakeScanType::SCAN_DELETIONS:
-			query_result = metadata_manager.ReadInlinedDataDeletions(*read_info.start_snapshot, read_info.snapshot,
-			                                                         table_name, columns_to_read);
+			scan_result = metadata_manager.ReadInlinedDataDeletions(*read_info.start_snapshot, read_info.snapshot,
+			                                                       table_name, columns_to_read);
 			break;
 		case DuckLakeScanType::SCAN_FOR_FLUSH:
-			query_result = metadata_manager.ReadAllInlinedDataForFlush(read_info.snapshot, table_name, columns_to_read);
+			scan_result = metadata_manager.ReadAllInlinedDataForFlush(read_info.snapshot, table_name, columns_to_read);
 			break;
 		default:
 			throw InternalException("Unknown DuckLake scan type");
 		}
+		auto query_result = result_or_throw(std::move(scan_result), "Failed to read inlined data from DuckLake: ");
 		data = metadata_manager.TransformInlinedData(*query_result, expected_types);
 		if (!virtual_columns.empty()) {
 			auto scan_types = data->data->Types();
