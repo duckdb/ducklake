@@ -679,7 +679,17 @@ PhysicalOperator &DuckLakeInsert::PlanCopyForInsert(ClientContext &context, Phys
 	physical_copy.overwrite_mode = copy_options.overwrite_mode;
 	physical_copy.per_thread_output = copy_options.per_thread_output;
 	physical_copy.file_size_bytes = copy_options.file_size_bytes;
-	physical_copy.batch_size = DEFAULT_ROW_GROUP_SIZE;
+	auto rgs_entry = copy_options.info->options.find("row_group_size");
+	if (rgs_entry != copy_options.info->options.end() && !rgs_entry->second.empty()) {
+		physical_copy.batch_size = std::stoull(rgs_entry->second[0].ToString());
+	} else {
+		physical_copy.batch_size = DEFAULT_ROW_GROUP_SIZE;
+	}
+	auto rgsb_entry = copy_options.info->options.find("row_group_size_bytes");
+	if (rgsb_entry != copy_options.info->options.end() && !rgsb_entry->second.empty()) {
+		auto bytes_str = rgsb_entry->second[0].ToString();
+		physical_copy.batch_size_bytes = DBConfig::ParseMemoryLimit(bytes_str);
+	}
 	physical_copy.return_type = copy_options.return_type;
 
 	physical_copy.partition_output = copy_options.partition_output;
