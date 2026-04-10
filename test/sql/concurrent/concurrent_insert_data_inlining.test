@@ -44,4 +44,4 @@ SELECT COUNT(*) FROM glob('{DATA_PATH}/ducklake_concurrent_insert_inline_files/*
 query I
 SELECT stats(key) FROM ducklake.tbl LIMIT 1
 ----
-<REGEX>:.*Min: 0, Max: 1.*
+<REGEX>:.*max.*1.*min.*0.*

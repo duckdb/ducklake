@@ -30,7 +30,7 @@ checkpoint;
 query I
 select stats(g) from t1 limit 1;
 ----
-[Extent: [X: [0.000000, 0.000000], Y: [0.000000, 0.000000], Z: [inf, -inf], M: [inf, -inf]], Types: [point], Flags: [Has Empty Geom: true, Has No Empty Geom: true, Has Empty Part: true, Has No Empty Part: true]][Has Null: false, Has No Null: true]
+{'extent': {'x_max': 0.0, 'x_min': 0.0, 'y_max': 0.0, 'y_min': 0.0}, 'has_empty_geom': true, 'has_empty_part': true, 'has_no_null': true, 'has_non_empty_geom': true, 'has_non_empty_part': true, 'has_null': false}
 
 statement ok
 insert into t1 values (1, 'POINT(-2 2)'::GEOMETRY);

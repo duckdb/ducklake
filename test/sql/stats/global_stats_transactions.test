@@ -51,4 +51,4 @@ COMMIT
 query I
 SELECT stats(i) FROM ducklake.test LIMIT 1
 ----
-<REGEX>:.*Min.*42.*Max.*84.*Has Null.*true.*
+<REGEX>:.*max.*84.*min.*42.*

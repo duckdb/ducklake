@@ -28,7 +28,7 @@ SELECT COLUMNS(*)::VARIANT FROM (VALUES
 query I
 SELECT stats(col) FROM fully_shredded_primitive LIMIT 1;
 ----
-shredding_state: SHREDDED, shredding: {typed_value_type: INTEGER, stats: {fully_shredded: true}}[Has Null: true, Has No Null: true]
+{'fully_shredded': {'stats': {'has_no_null': true, 'has_null': false, 'max': 42, 'min': 21}, 'type': INTEGER}, 'has_no_null': true, 'has_null': true, 'shredding_state': SHREDDED}
 
 # # check the stats
 # two non-null values

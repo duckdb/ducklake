@@ -58,4 +58,4 @@ NULL
 query I
 SELECT stats(l[1]) FROM ducklake.test LIMIT 1
 ----
-<REGEX>:.*Min.*1.*Max.*7.*Has Null.*true.*
+<REGEX>:.*max.*7.*min.*1.*

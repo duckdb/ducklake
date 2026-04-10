@@ -39,7 +39,7 @@ COMMIT
 query I
 SELECT stats(i) FROM ducklake.test LIMIT 1
 ----
-[Min: 1, Max: 101][Has Null: true, Has No Null: true]
+{'has_no_null': true, 'has_null': true, 'max': 101, 'min': 1}
 
 query IIII
 SELECT rowid, snapshot_id, * FROM ducklake.test ORDER BY rowid
