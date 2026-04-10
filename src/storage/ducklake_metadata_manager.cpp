@@ -3799,7 +3799,7 @@ VALUES %s
 UPDATE {METADATA_CATALOG}.ducklake_tag
 SET end_snapshot = {SNAPSHOT_ID}
 FROM overwritten_tags
-WHERE object_id=tid
+WHERE object_id=tid AND ducklake_tag.key=overwritten_tags.key AND end_snapshot IS NULL
 ;)",
 	                                        tags_list);
 
@@ -3840,7 +3840,7 @@ VALUES %s
 UPDATE {METADATA_CATALOG}.ducklake_column_tag
 SET end_snapshot = {SNAPSHOT_ID}
 FROM overwritten_tags
-WHERE table_id=tid AND column_id=cid
+WHERE table_id=tid AND column_id=cid AND ducklake_column_tag.key=overwritten_tags.key AND end_snapshot IS NULL
 ;)",
 	                                        tags_list);
 
