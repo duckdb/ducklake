@@ -4371,8 +4371,8 @@ WHERE table_id IN (%s);)",
 		}
 	}
 
-	// delete any views, schemas, etc that are no longer referenced
-	tables_to_delete_from = {"ducklake_schema", "ducklake_view", "ducklake_tag"};
+	// delete any views, schemas, macros, etc that are no longer referenced
+	tables_to_delete_from = {"ducklake_schema", "ducklake_view", "ducklake_tag", "ducklake_macro"};
 	for (auto &delete_tbl : tables_to_delete_from) {
 		auto result = transaction.Query(StringUtil::Format(R"(
 DELETE FROM {METADATA_CATALOG}.%s
@@ -4381,6 +4381,18 @@ WHERE end_snapshot IS NOT NULL AND NOT EXISTS(
     FROM {METADATA_CATALOG}.ducklake_snapshot
     WHERE snapshot_id >= begin_snapshot AND snapshot_id < end_snapshot
 );)",
+		                                                   delete_tbl));
+		if (result->HasError()) {
+			result->GetErrorObject().Throw("Failed to delete from " + delete_tbl + " in DuckLake: ");
+		}
+	}
+
+	// clean up macro implementation and parameters for deleted macros
+	tables_to_delete_from = {"ducklake_macro_impl", "ducklake_macro_parameters"};
+	for (auto &delete_tbl : tables_to_delete_from) {
+		auto result = transaction.Query(StringUtil::Format(R"(
+DELETE FROM {METADATA_CATALOG}.%s
+WHERE macro_id NOT IN (SELECT macro_id FROM {METADATA_CATALOG}.ducklake_macro);)",
 		                                                   delete_tbl));
 		if (result->HasError()) {
 			result->GetErrorObject().Throw("Failed to delete from " + delete_tbl + " in DuckLake: ");
