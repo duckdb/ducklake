@@ -1,0 +1,65 @@
+# name: test/sql/compaction/expire_snapshots_variant_stats.test
+# description: test that variant stats are cleaned up when expiring snapshots
+# group: [compaction]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+
+test-env DATA_PATH __TEST_DIR__
+
+statement ok
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/ducklake_expire_snapshots_variant_stats_files', METADATA_CATALOG 'metadata', DATA_INLINING_ROW_LIMIT 0)
+
+# snapshot 1
+statement ok
+CREATE TABLE ducklake.tbl (v VARIANT)
+
+# snapshot 2
+statement ok
+INSERT INTO ducklake.tbl SELECT 42::VARIANT
+
+# snapshot 3
+statement ok
+INSERT INTO ducklake.tbl SELECT 'hello'::VARIANT
+
+# verify variant stats were created
+query I
+SELECT COUNT(*) FROM metadata.ducklake_file_variant_stats
+----
+2
+
+# verify file column stats were created
+query I
+SELECT COUNT(*) FROM metadata.ducklake_file_column_stats
+----
+2
+
+# snapshot 4
+statement ok
+DROP TABLE ducklake.tbl
+
+# expire all old snapshots
+statement ok
+CALL ducklake_expire_snapshots('ducklake', older_than => NOW())
+
+statement ok
+CALL ducklake_cleanup_old_files('ducklake', cleanup_all => true)
+
+# all files should be gone
+query I
+SELECT COUNT(*) FROM GLOB('${DATA_PATH}/ducklake_expire_snapshots_variant_stats_files/main/tbl/*')
+----
+0
+
+# all file-level metadata should be cleaned up
+foreach tbl ducklake_table ducklake_column ducklake_table_stats ducklake_table_column_stats ducklake_data_file ducklake_delete_file ducklake_file_column_stats ducklake_file_variant_stats
+
+query I
+SELECT COUNT(*) FROM metadata.${tbl}
+----
+0
+
+endloop
