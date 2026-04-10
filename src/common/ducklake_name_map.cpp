@@ -78,4 +78,18 @@ void DuckLakeNameMapSet::Add(unique_ptr<DuckLakeNameMap> mapping) {
 	name_map_compatibility_set.insert(ref);
 }
 
+vector<unique_ptr<DuckLakeNameMapEntry>>
+DuckLakeNameMap::CreatePositionalMapping(const vector<string> &source_names,
+                                         const vector<FieldIndex> &target_field_ids) {
+	vector<unique_ptr<DuckLakeNameMapEntry>> result;
+	auto count = MinValue(source_names.size(), target_field_ids.size());
+	for (idx_t i = 0; i < count; i++) {
+		auto entry = make_uniq<DuckLakeNameMapEntry>();
+		entry->source_name = source_names[i];
+		entry->target_field_id = target_field_ids[i];
+		result.push_back(std::move(entry));
+	}
+	return result;
+}
+
 } // namespace duckdb
