@@ -6,13 +6,13 @@ require ducklake
 
 require parquet
 
-test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
 
-test-env DATA_PATH __TEST_DIR__
+test-env DATA_PATH {TEST_DIR}
 
 
 statement ok
-ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/ducklake_inlining_large_files', METADATA_CATALOG 'ducklake_meta', DATA_INLINING_ROW_LIMIT 999999)
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/ducklake_inlining_large_files', METADATA_CATALOG 'ducklake_meta', DATA_INLINING_ROW_LIMIT 999999)
 
 statement ok
 CREATE TABLE bigtbl AS FROM range(1000000) t(i);
@@ -32,6 +32,6 @@ SELECT COUNT(*), SUM(i), MIN(i), MAX(i) FROM bigtbl
 
 # this exceeds the inline limit so we have a file
 query I
-SELECT COUNT(*) FROM GLOB('${DATA_PATH}/ducklake_inlining_large_files/**')
+SELECT COUNT(*) FROM GLOB('{DATA_PATH}/ducklake_inlining_large_files/**')
 ----
 1

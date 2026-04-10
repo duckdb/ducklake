@@ -6,12 +6,12 @@ require ducklake
 
 require parquet
 
-test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
 
-test-env DATA_PATH __TEST_DIR__
+test-env DATA_PATH {TEST_DIR}
 
 statement ok
-ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/ducklake_drop_delete_cleanup', DATA_INLINING_ROW_LIMIT 0)
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/ducklake_drop_delete_cleanup', DATA_INLINING_ROW_LIMIT 0)
 
 statement ok
 BEGIN
@@ -21,7 +21,7 @@ CREATE TABLE ducklake.tbl AS SELECT i id FROM range(1000) t(i);
 
 # data file exists
 query I
-SELECT COUNT(*) FROM glob('${DATA_PATH}/ducklake_drop_delete_cleanup/main/tbl/*.parquet')
+SELECT COUNT(*) FROM glob('{DATA_PATH}/ducklake_drop_delete_cleanup/main/tbl/*.parquet')
 ----
 1
 
@@ -30,7 +30,7 @@ DELETE FROM ducklake.tbl WHERE id % 2 = 0;
 
 # delete file exists
 query I
-SELECT COUNT(*) FROM glob('${DATA_PATH}/ducklake_drop_delete_cleanup/main/tbl/*-delete.*')
+SELECT COUNT(*) FROM glob('{DATA_PATH}/ducklake_drop_delete_cleanup/main/tbl/*-delete.*')
 ----
 1
 
@@ -39,12 +39,12 @@ DROP TABLE ducklake.tbl
 
 # both data files and delete files should be cleaned up
 query I
-SELECT COUNT(*) FROM glob('${DATA_PATH}/ducklake_drop_delete_cleanup/main/tbl/*.parquet')
+SELECT COUNT(*) FROM glob('{DATA_PATH}/ducklake_drop_delete_cleanup/main/tbl/*.parquet')
 ----
 0
 
 query I
-SELECT COUNT(*) FROM glob('${DATA_PATH}/ducklake_drop_delete_cleanup/main/tbl/*-delete.*')
+SELECT COUNT(*) FROM glob('{DATA_PATH}/ducklake_drop_delete_cleanup/main/tbl/*-delete.*')
 ----
 0
 

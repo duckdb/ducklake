@@ -6,12 +6,12 @@ require ducklake
 
 require parquet
 
-test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
 
-test-env DATA_PATH __TEST_DIR__
+test-env DATA_PATH {TEST_DIR}
 
 statement ok
-ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/test_deletion_inlining',DATA_INLINING_ROW_LIMIT 10,  METADATA_CATALOG 'ducklake_meta')
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/test_deletion_inlining',DATA_INLINING_ROW_LIMIT 10,  METADATA_CATALOG 'ducklake_meta')
 
 statement ok
 use ducklake
@@ -94,14 +94,14 @@ SELECT file_id, row_id, begin_snapshot FROM ducklake_meta.ducklake_inlined_delet
 ----
 
 query I
-SELECT count(*) FROM GLOB('${DATA_PATH}/test_deletion_inlining/**/*-delete.parquet')
+SELECT count(*) FROM GLOB('{DATA_PATH}/test_deletion_inlining/**/*-delete.parquet')
 ----
 1
 
 # Verify new deletion file schema - should have _ducklake_internal_snapshot_id column
 # since it was created from flushing inlined deletions
 query II
-SELECT column_name, column_type FROM (DESCRIBE SELECT * FROM '${DATA_PATH}/test_deletion_inlining/**/*-delete.parquet') ORDER BY column_name
+SELECT column_name, column_type FROM (DESCRIBE SELECT * FROM '{DATA_PATH}/test_deletion_inlining/**/*-delete.parquet') ORDER BY column_name
 ----
 _ducklake_internal_snapshot_id	BIGINT
 file_path	VARCHAR
@@ -264,7 +264,7 @@ FROM T order by a
 65
 
 query I
-SELECT count(*) FROM GLOB('${DATA_PATH}/test_deletion_inlining/**/*-delete.parquet')
+SELECT count(*) FROM GLOB('{DATA_PATH}/test_deletion_inlining/**/*-delete.parquet')
 ----
 5
 
@@ -281,7 +281,7 @@ CALL ducklake_cleanup_old_files(
 );
 
 query I
-SELECT count(*) FROM GLOB('${DATA_PATH}/test_deletion_inlining/**/*-delete.parquet')
+SELECT count(*) FROM GLOB('{DATA_PATH}/test_deletion_inlining/**/*-delete.parquet')
 ----
 3
 

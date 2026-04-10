@@ -6,13 +6,13 @@ require ducklake
 
 require parquet
 
-test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
 
-test-env DATA_PATH __TEST_DIR__
+test-env DATA_PATH {TEST_DIR}
 
 
 statement ok
-ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/add_file_specific_schema/', METADATA_CATALOG 'metadata');
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/add_file_specific_schema/', METADATA_CATALOG 'metadata');
 
 statement ok
 USE ducklake;
@@ -24,15 +24,15 @@ statement ok
 CREATE TABLE schema_test.test(col1 INTEGER, col2 VARCHAR);
 
 statement ok
-COPY (SELECT 200 col1, 'world' col2) TO '${DATA_PATH}/file.parquet';
+COPY (SELECT 200 col1, 'world' col2) TO '{DATA_PATH}/file.parquet';
 
 statement error
-CALL ducklake_add_data_files('ducklake', 'test', '${DATA_PATH}/file.parquet');
+CALL ducklake_add_data_files('ducklake', 'test', '{DATA_PATH}/file.parquet');
 ----
 Did you mean "schema_test.test"?
 
 statement ok
-CALL ducklake_add_data_files('ducklake', 'test', '${DATA_PATH}/file.parquet', schema = 'schema_test');
+CALL ducklake_add_data_files('ducklake', 'test', '{DATA_PATH}/file.parquet', schema = 'schema_test');
 
 query II
 FROM schema_test.test;

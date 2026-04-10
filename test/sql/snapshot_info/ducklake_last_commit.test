@@ -7,7 +7,7 @@ require ducklake
 require parquet
 
 statement ok
-ATTACH 'ducklake:__TEST_DIR__/ducklake_last_snapshot_commit.db' AS ducklake;
+ATTACH 'ducklake:{TEST_DIR}/ducklake_last_snapshot_commit.db' AS ducklake;
 
 query I
 FROM ducklake_last_committed_snapshot('ducklake')
@@ -86,7 +86,7 @@ statement ok
 DETACH ducklake
 
 statement ok
-ATTACH 'ducklake:__TEST_DIR__/ducklake_last_snapshot_commit.db' AS ducklake;
+ATTACH 'ducklake:{TEST_DIR}/ducklake_last_snapshot_commit.db' AS ducklake;
 
 statement ok
 USE ducklake;
@@ -112,7 +112,7 @@ concurrentloop i 0 50
 
 skipif i>25
 statement ok
-insert into ducklake.integer values (${i});
+insert into ducklake.integer values ({i});
 
 skipif i<25
 statement ok

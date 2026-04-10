@@ -6,12 +6,12 @@ require ducklake
 
 require parquet
 
-test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
 
-test-env DATA_PATH __TEST_DIR__
+test-env DATA_PATH {TEST_DIR}
 
 statement ok
-ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/delete_legacy_missing_mapping_after_rename_add_files', METADATA_CATALOG 'ducklake_meta', DATA_INLINING_ROW_LIMIT 0)
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/delete_legacy_missing_mapping_after_rename_add_files', METADATA_CATALOG 'ducklake_meta', DATA_INLINING_ROW_LIMIT 0)
 
 statement ok
 CREATE TABLE ducklake.t(old_id INTEGER, payload VARCHAR)
@@ -21,10 +21,10 @@ COPY (
     SELECT 42 AS old_id, 'old' AS payload
     UNION ALL
     SELECT 43 AS old_id, 'old2' AS payload
-) TO '${DATA_PATH}/delete_legacy_missing_mapping_after_rename_add_files_source.parquet'
+) TO '{DATA_PATH}/delete_legacy_missing_mapping_after_rename_add_files_source.parquet'
 
 statement ok
-CALL ducklake_add_data_files('ducklake', 't', '${DATA_PATH}/delete_legacy_missing_mapping_after_rename_add_files_source.parquet')
+CALL ducklake_add_data_files('ducklake', 't', '{DATA_PATH}/delete_legacy_missing_mapping_after_rename_add_files_source.parquet')
 
 statement ok
 ALTER TABLE ducklake.t RENAME COLUMN old_id TO id

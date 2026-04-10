@@ -6,13 +6,13 @@ require ducklake
 
 require parquet
 
-test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
 
-test-env DATA_PATH __TEST_DIR__
+test-env DATA_PATH {TEST_DIR}
 
 
 statement ok
-ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/ducklake_compaction_alter_files')
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/ducklake_compaction_alter_files')
 
 # snapshot 1 (create)
 statement ok
@@ -107,7 +107,7 @@ SELECT rowid, * FROM ducklake.test ORDER BY ALL
 7	8	800	world
 
 query I
-SELECT COUNT(*) FROM GLOB('${DATA_PATH}/ducklake_compaction_alter_files/**/*')
+SELECT COUNT(*) FROM GLOB('{DATA_PATH}/ducklake_compaction_alter_files/**/*')
 ----
 8
 
@@ -134,7 +134,7 @@ test	2	1
 
 # we cannot merge across alter statements - so this results in 4 separate merges
 query I
-SELECT COUNT(*) FROM GLOB('${DATA_PATH}/ducklake_compaction_alter_files/**/*')
+SELECT COUNT(*) FROM GLOB('{DATA_PATH}/ducklake_compaction_alter_files/**/*')
 ----
 12
 
@@ -143,7 +143,7 @@ CALL ducklake_cleanup_old_files('ducklake', cleanup_all => true);
 
 # four files remain
 query I
-SELECT COUNT(*) FROM GLOB('${DATA_PATH}/ducklake_compaction_alter_files/**/*')
+SELECT COUNT(*) FROM GLOB('{DATA_PATH}/ducklake_compaction_alter_files/**/*')
 ----
 4
 

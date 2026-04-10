@@ -6,12 +6,12 @@ require ducklake
 
 require parquet
 
-test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
 
-test-env DATA_PATH __TEST_DIR__
+test-env DATA_PATH {TEST_DIR}
 
 statement ok
-ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/ducklake_bucket_partition', METADATA_CATALOG 'ducklake_metadata')
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/ducklake_bucket_partition', METADATA_CATALOG 'ducklake_metadata')
 
 statement ok
 USE ducklake
@@ -54,7 +54,7 @@ charlie	3
 # murmur3_32 bucket(4): alice->1, bob->2, charlie->3
 query I
 SELECT COUNT(DISTINCT regexp_extract(path, '.*bucket=([0-9]+)[/\\].*', 1)) BETWEEN 1 AND 4
-FROM glob('${DATA_PATH}/ducklake_bucket_partition/**/*.parquet') t(path)
+FROM glob('{DATA_PATH}/ducklake_bucket_partition/**/*.parquet') t(path)
 WHERE path LIKE '%bucketed_tbl%' AND path LIKE '%bucket=%'
 ----
 true
@@ -62,25 +62,25 @@ true
 # Verify each user's data is in the correct bucket by reading individual parquet files
 query I
 SELECT DISTINCT regexp_extract(path, '.*bucket=([0-9]+)[/\\].*', 1)::INT
-FROM glob('${DATA_PATH}/ducklake_bucket_partition/**/*.parquet') t(path)
+FROM glob('{DATA_PATH}/ducklake_bucket_partition/**/*.parquet') t(path)
 WHERE path LIKE '%bucketed_tbl%' AND path LIKE '%bucket=%'
-  AND path IN (SELECT filename FROM parquet_scan('${DATA_PATH}/ducklake_bucket_partition/main/bucketed_tbl/**/*.parquet', filename=true) WHERE user_id = 'alice')
+  AND path IN (SELECT filename FROM parquet_scan('{DATA_PATH}/ducklake_bucket_partition/main/bucketed_tbl/**/*.parquet', filename=true) WHERE user_id = 'alice')
 ----
 1
 
 query I
 SELECT DISTINCT regexp_extract(path, '.*bucket=([0-9]+)[/\\].*', 1)::INT
-FROM glob('${DATA_PATH}/ducklake_bucket_partition/**/*.parquet') t(path)
+FROM glob('{DATA_PATH}/ducklake_bucket_partition/**/*.parquet') t(path)
 WHERE path LIKE '%bucketed_tbl%' AND path LIKE '%bucket=%'
-  AND path IN (SELECT filename FROM parquet_scan('${DATA_PATH}/ducklake_bucket_partition/main/bucketed_tbl/**/*.parquet', filename=true) WHERE user_id = 'bob')
+  AND path IN (SELECT filename FROM parquet_scan('{DATA_PATH}/ducklake_bucket_partition/main/bucketed_tbl/**/*.parquet', filename=true) WHERE user_id = 'bob')
 ----
 2
 
 query I
 SELECT DISTINCT regexp_extract(path, '.*bucket=([0-9]+)[/\\].*', 1)::INT
-FROM glob('${DATA_PATH}/ducklake_bucket_partition/**/*.parquet') t(path)
+FROM glob('{DATA_PATH}/ducklake_bucket_partition/**/*.parquet') t(path)
 WHERE path LIKE '%bucketed_tbl%' AND path LIKE '%bucket=%'
-  AND path IN (SELECT filename FROM parquet_scan('${DATA_PATH}/ducklake_bucket_partition/main/bucketed_tbl/**/*.parquet', filename=true) WHERE user_id = 'charlie')
+  AND path IN (SELECT filename FROM parquet_scan('{DATA_PATH}/ducklake_bucket_partition/main/bucketed_tbl/**/*.parquet', filename=true) WHERE user_id = 'charlie')
 ----
 3
 
@@ -208,7 +208,7 @@ CALL ducklake_flush_inlined_data('ducklake');
 
 query I
 SELECT COUNT(DISTINCT regexp_extract(path, '.*bucket=([0-9]+)[/\\].*', 1)) BETWEEN 1 AND 3
-FROM glob('${DATA_PATH}/ducklake_bucket_partition/**/*.parquet') t(path)
+FROM glob('{DATA_PATH}/ducklake_bucket_partition/**/*.parquet') t(path)
 WHERE path LIKE '%bucket_int_tbl%' AND path LIKE '%bucket=%'
 ----
 true
@@ -361,7 +361,7 @@ CALL ducklake_flush_inlined_data('ducklake');
 # Verify both partition dimensions appear in file paths
 query I
 SELECT COUNT(*) > 0
-FROM glob('${DATA_PATH}/ducklake_bucket_partition/**/*.parquet') t(path)
+FROM glob('{DATA_PATH}/ducklake_bucket_partition/**/*.parquet') t(path)
 WHERE path LIKE '%bucket_identity_tbl%' AND path LIKE '%bucket=%' AND path LIKE '%status=%'
 ----
 true
@@ -396,7 +396,7 @@ CALL ducklake_flush_inlined_data('ducklake');
 # Verify both partition dimensions appear in file paths
 query I
 SELECT COUNT(*) > 0
-FROM glob('${DATA_PATH}/ducklake_bucket_partition/**/*.parquet') t(path)
+FROM glob('{DATA_PATH}/ducklake_bucket_partition/**/*.parquet') t(path)
 WHERE path LIKE '%bucket_year_tbl%' AND path LIKE '%bucket=%' AND path LIKE '%year=%'
 ----
 true
@@ -431,7 +431,7 @@ CALL ducklake_flush_inlined_data('ducklake');
 # Verify all three partition dimensions appear in file paths
 query I
 SELECT COUNT(*) > 0
-FROM glob('${DATA_PATH}/ducklake_bucket_partition/**/*.parquet') t(path)
+FROM glob('{DATA_PATH}/ducklake_bucket_partition/**/*.parquet') t(path)
 WHERE path LIKE '%bucket_month_day_tbl%' AND path LIKE '%bucket=%' AND path LIKE '%month=%' AND path LIKE '%day=%'
 ----
 true
@@ -613,7 +613,7 @@ CALL ducklake_flush_inlined_data('ducklake');
 # Old data bucket values are in [0, 4)
 query I
 SELECT MAX(CAST(regexp_extract(path, '.*bucket=([0-9]+)[/\\].*', 1) AS INTEGER)) < 4
-FROM glob('${DATA_PATH}/ducklake_bucket_partition/**/*.parquet') t(path)
+FROM glob('{DATA_PATH}/ducklake_bucket_partition/**/*.parquet') t(path)
 WHERE path LIKE '%bucket_repart_tbl%' AND path LIKE '%bucket=%'
 ----
 true
@@ -674,7 +674,7 @@ INSERT INTO bucket_add_source VALUES ('alice', 1), ('bob', 2), ('charlie', 3);
 # Capture the glob pattern for the files that were written
 query I
 SELECT COUNT(*) > 0
-FROM glob('${DATA_PATH}/ducklake_bucket_partition/**/*.parquet') t(path)
+FROM glob('{DATA_PATH}/ducklake_bucket_partition/**/*.parquet') t(path)
 WHERE path LIKE '%bucket_add_source%' AND path LIKE '%bucket=%'
 ----
 true
@@ -688,7 +688,7 @@ ALTER TABLE bucket_add_target SET PARTITIONED BY (bucket(4, user_id));
 
 # Store file paths in a variable, then add them to the target table
 statement ok
-SET VARIABLE add_files_list = (SELECT LIST(path) FROM glob('${DATA_PATH}/ducklake_bucket_partition/**/*.parquet') t(path)
+SET VARIABLE add_files_list = (SELECT LIST(path) FROM glob('{DATA_PATH}/ducklake_bucket_partition/**/*.parquet') t(path)
   WHERE path LIKE '%bucket_add_source%');
 
 statement ok
@@ -714,7 +714,7 @@ statement ok
 DETACH ducklake
 
 statement ok
-ATTACH 'ducklake:__TEST_DIR__/ducklake_reattach.db' AS ducklake (DATA_PATH '${DATA_PATH}/ducklake_bucket_reattach', METADATA_CATALOG 'ducklake_reattach_meta')
+ATTACH 'ducklake:{TEST_DIR}/ducklake_reattach.db' AS ducklake (DATA_PATH '{DATA_PATH}/ducklake_bucket_reattach', METADATA_CATALOG 'ducklake_reattach_meta')
 
 statement ok
 USE ducklake
@@ -743,7 +743,7 @@ statement ok
 DETACH ducklake
 
 statement ok
-ATTACH 'ducklake:__TEST_DIR__/ducklake_reattach.db' AS ducklake (DATA_PATH '${DATA_PATH}/ducklake_bucket_reattach', METADATA_CATALOG 'ducklake_reattach_meta2')
+ATTACH 'ducklake:{TEST_DIR}/ducklake_reattach.db' AS ducklake (DATA_PATH '{DATA_PATH}/ducklake_bucket_reattach', METADATA_CATALOG 'ducklake_reattach_meta2')
 
 statement ok
 USE ducklake
