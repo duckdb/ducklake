@@ -679,6 +679,7 @@ PhysicalOperator &DuckLakeInsert::PlanCopyForInsert(ClientContext &context, Phys
 	physical_copy.overwrite_mode = copy_options.overwrite_mode;
 	physical_copy.per_thread_output = copy_options.per_thread_output;
 	physical_copy.file_size_bytes = copy_options.file_size_bytes;
+	physical_copy.batch_size = DEFAULT_ROW_GROUP_SIZE;
 	physical_copy.return_type = copy_options.return_type;
 
 	physical_copy.partition_output = copy_options.partition_output;
