@@ -101,7 +101,8 @@ unique_ptr<MultiFileList> DuckLakeMultiFileList::ComplexFilterPushdown(ClientCon
 	auto pushdown_info = filter_info ? filter_info->Copy() : make_uniq<FilterPushdownInfo>();
 
 	for (auto &entry : table_filter_set) {
-		AddFilterToPushdownInfo(*pushdown_info, entry.GetIndex().GetIndex(), entry.TakeFilter());
+		auto column_id = info.column_ids[entry.GetIndex().GetIndex()];
+		AddFilterToPushdownInfo(*pushdown_info, column_id, entry.TakeFilter());
 	}
 
 	if (pushdown_info->column_filters.empty()) {

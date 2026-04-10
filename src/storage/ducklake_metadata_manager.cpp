@@ -1247,19 +1247,16 @@ FilterSQLResult DuckLakeMetadataManager::ConvertFilterPushdownToSQL(const Filter
 
 		string cte_name = StringUtil::Format("col_%d_stats", column_filter.column_field_index);
 
-		string not_null_checks;
+		string null_checks;
 		for (const auto &stat : referenced_stats) {
-			if (!not_null_checks.empty()) {
-				not_null_checks += " AND ";
-			}
-			not_null_checks += stat + " IS NOT NULL";
+			null_checks += stat + " IS NULL OR ";
 		}
 
 		if (!conditions.empty()) {
 			conditions += " AND ";
 		}
-		conditions += StringUtil::Format("data.data_file_id NOT IN (SELECT data_file_id FROM %s WHERE %s AND NOT (%s))",
-		                                 cte_name, not_null_checks.c_str(), filter_condition.c_str());
+		conditions += StringUtil::Format("data.data_file_id IN (SELECT data_file_id FROM %s WHERE %s(%s))", cte_name,
+		                                 null_checks.c_str(), filter_condition.c_str());
 
 		CTERequirement req(column_filter.column_field_index, referenced_stats);
 		result.required_ctes.emplace(column_filter.column_field_index, std::move(req));
