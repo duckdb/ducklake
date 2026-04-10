@@ -211,14 +211,14 @@ string DuckLakeFlushData::GetName() const {
 //===--------------------------------------------------------------------===//
 class DuckLakeLogicalFlush : public LogicalExtensionOperator {
 public:
-	DuckLakeLogicalFlush(idx_t table_index, DuckLakeTableEntry &table, DuckLakeInlinedTableInfo inlined_table_p,
+	DuckLakeLogicalFlush(TableIndex table_index, DuckLakeTableEntry &table, DuckLakeInlinedTableInfo inlined_table_p,
 	                     string encryption_key_p, optional_idx partition_id_p, string sort_order_sql_p)
 	    : table_index(table_index), table(table), inlined_table(std::move(inlined_table_p)),
 	      encryption_key(std::move(encryption_key_p)), partition_id(partition_id_p),
 	      sort_order_sql(std::move(sort_order_sql_p)) {
 	}
 
-	idx_t table_index;
+	TableIndex table_index;
 	DuckLakeTableEntry &table;
 	DuckLakeInlinedTableInfo inlined_table;
 	string encryption_key;
@@ -241,9 +241,9 @@ public:
 	}
 	vector<ColumnBinding> GetColumnBindings() override {
 		vector<ColumnBinding> result;
-		result.emplace_back(table_index, 0);
-		result.emplace_back(table_index, 1);
-		result.emplace_back(table_index, 2);
+		result.emplace_back(table_index, ProjectionIndex(0));
+		result.emplace_back(table_index, ProjectionIndex(1));
+		result.emplace_back(table_index, ProjectionIndex(2));
 		return result;
 	}
 
@@ -310,7 +310,7 @@ unique_ptr<LogicalOperator> DuckLakeDataFlusher::GenerateFlushCommand() {
 	auto &columns = table.GetColumns();
 
 	DuckLakeCopyInput copy_input(context, table);
-	copy_input.get_table_index = table_idx;
+	copy_input.get_table_index = table_idx.index;
 	copy_input.virtual_columns = InsertVirtualColumns::WRITE_ROW_ID_AND_SNAPSHOT_ID;
 
 	auto copy_options = DuckLakeInsert::GetCopyOptions(context, copy_input);
@@ -581,7 +581,7 @@ LEFT JOIN (
 // Function
 //===--------------------------------------------------------------------===//
 static unique_ptr<LogicalOperator> FlushInlinedDataBind(ClientContext &context, TableFunctionBindInput &input,
-                                                        idx_t bind_index, vector<string> &return_names) {
+                                                        TableIndex bind_index, vector<string> &return_names) {
 	input.binder->SetAlwaysRequireRebind();
 	// gather a list of files to compact
 	auto &catalog = DuckLakeBaseMetadataFunction::GetCatalog(context, input.inputs[0]);
@@ -660,9 +660,9 @@ static unique_ptr<LogicalOperator> FlushInlinedDataBind(ClientContext &context, 
 		// nothing to write - generate empty result
 		vector<ColumnBinding> bindings;
 		vector<LogicalType> return_types;
-		bindings.emplace_back(bind_index, 0);
-		bindings.emplace_back(bind_index, 1);
-		bindings.emplace_back(bind_index, 2);
+		bindings.emplace_back(bind_index, ProjectionIndex(0));
+		bindings.emplace_back(bind_index, ProjectionIndex(1));
+		bindings.emplace_back(bind_index, ProjectionIndex(2));
 		return_types.emplace_back(LogicalType::VARCHAR);
 		return_types.emplace_back(LogicalType::VARCHAR);
 		return_types.emplace_back(LogicalType::BIGINT);
@@ -718,8 +718,8 @@ static unique_ptr<LogicalOperator> FlushInlinedDataBind(ClientContext &context, 
 	    );
 
 	// Create LogicalAggregate with GROUP BY schema_name, table_name and SUM(rows_flushed)
-	idx_t group_index = input.binder->GenerateTableIndex();
-	idx_t aggregate_index = input.binder->GenerateTableIndex();
+	auto group_index = input.binder->GenerateTableIndex();
+	auto aggregate_index = input.binder->GenerateTableIndex();
 
 	vector<unique_ptr<Expression>> aggregates;
 	aggregates.push_back(std::move(sum_aggregate));

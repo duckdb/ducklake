@@ -225,7 +225,7 @@ AsyncResult DuckLakeInlinedDataReader::Scan(ClientContext &context, GlobalTableF
 			}
 			case InlinedVirtualColumn::COLUMN_ROW_ID: {
 				Vector ordinal_vector(LogicalType::BIGINT);
-				auto ordinal_data = FlatVector::GetData<int64_t>(ordinal_vector);
+				auto ordinal_data = FlatVector::GetDataMutable<int64_t>(ordinal_vector);
 				if (data->HasPreservedRowIds()) {
 					// use preserved row_ids from update inlining
 					for (idx_t r = 0; r < scan_chunk.size(); r++) {
@@ -240,7 +240,7 @@ AsyncResult DuckLakeInlinedDataReader::Scan(ClientContext &context, GlobalTableF
 				if (TryEvaluateExpression(context, c, ordinal_vector, LogicalType::BIGINT, chunk.data[c])) {
 					continue;
 				}
-				auto row_id_data = FlatVector::GetData<int64_t>(chunk.data[c]);
+				auto row_id_data = FlatVector::GetDataMutable<int64_t>(chunk.data[c]);
 				for (idx_t r = 0; r < scan_chunk.size(); r++) {
 					row_id_data[r] = ordinal_data[r];
 				}
@@ -265,17 +265,17 @@ AsyncResult DuckLakeInlinedDataReader::Scan(ClientContext &context, GlobalTableF
 			approved_tuple_count = deletion_filter->Filter(file_row_number, approved_tuple_count, sel);
 		}
 		if (filters) {
-			for (auto &entry : filters->filters) {
-				if (entry.second->filter_type == TableFilterType::OPTIONAL_FILTER) {
+			for (auto &entry : *filters) {
+				auto &filter = entry.Filter();
+				if (filter.filter_type == TableFilterType::OPTIONAL_FILTER) {
 					continue;
 				}
-				auto column_id = entry.first;
+				auto column_id = entry.GetIndex().GetIndex();
 				auto &vec = chunk.data[column_id];
 
 				UnifiedVectorFormat vdata;
 				vec.ToUnifiedFormat(chunk.size(), vdata);
 
-				auto &filter = *entry.second;
 				auto filter_state = TableFilterState::Initialize(context, filter);
 
 				approved_tuple_count = ColumnSegment::FilterSelection(sel, vec, vdata, filter, *filter_state,

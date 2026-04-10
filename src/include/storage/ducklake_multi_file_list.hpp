@@ -70,8 +70,6 @@ private:
 	                             unique_ptr<TableFilter> filter) const;
 	//! Get the row_id_start for transaction-local inlined data.
 	idx_t GetTransactionLocalRowIdStart(idx_t transaction_row_start) const;
-	void AddFilterToPushdownInfo(FilterPushdownInfo &pushdown_info, column_t column_id,
-	                             unique_ptr<TableFilter> filter) const;
 
 private:
 	mutable mutex file_lock;
