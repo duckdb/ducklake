@@ -681,7 +681,7 @@ PhysicalOperator &DuckLakeCatalog::PlanDelete(ClientContext &context, PhysicalPl
 		row_id_indexes.push_back(bound_ref.index);
 	}
 	return DuckLakeDelete::PlanDelete(context, planner, op.table.Cast<DuckLakeTableEntry>(), child_plan,
-	                                  std::move(row_id_indexes), std::move(encryption_key));
+	                                  std::move(row_id_indexes), std::move(encryption_key), true);
 }
 
 } // namespace duckdb

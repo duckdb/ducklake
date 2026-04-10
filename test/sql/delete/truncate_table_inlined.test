@@ -1,0 +1,50 @@
+# name: test/sql/delete/truncate_table_inlined.test
+# description: Verify TRUNCATE works with inlined data
+# group: [delete]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+
+test-env DATA_PATH __TEST_DIR__
+
+
+statement ok
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/ducklake_truncate_inlined_files')
+
+statement ok
+CALL ducklake.set_option('data_inlining_row_limit', 1000);
+
+statement ok
+CREATE TABLE ducklake.test_inline AS SELECT i id FROM range(8) t(i);
+
+query I
+TRUNCATE ducklake.test_inline
+----
+8
+
+query I
+SELECT COUNT(*) FROM ducklake.test_inline
+----
+0
+
+statement ok
+INSERT INTO ducklake.test_inline VALUES (1), (2), (3);
+
+statement ok
+BEGIN
+
+query I
+TRUNCATE ducklake.test_inline
+----
+3
+
+statement ok
+ROLLBACK
+
+query I
+SELECT COUNT(*) FROM ducklake.test_inline
+----
+3

@@ -290,6 +290,22 @@ void LocalTableChanges::DeleteFromLocalInlinedData(ClientContext &context, Table
 	inlined_data.row_ids = std::move(new_row_ids);
 }
 
+void LocalTableChanges::TruncateLocalInlinedData(TableIndex table_id) {
+	lock_guard<mutex> guard(lock);
+	auto entry = changes.find(table_id);
+	if (entry == changes.end()) {
+		throw InternalException("TruncateLocalInlinedData called but no transaction-local data exists for table");
+	}
+	auto &table_changes = entry->second;
+	if (!table_changes.new_inlined_data) {
+		throw InternalException("TruncateLocalInlinedData called but no inlined data exists");
+	}
+	table_changes.new_inlined_data.reset();
+	if (table_changes.IsEmpty()) {
+		changes.erase(entry);
+	}
+}
+
 static void RemoveFieldStats(map<FieldIndex, DuckLakeColumnStats> &column_stats, const DuckLakeFieldId &field_id) {
 	column_stats.erase(field_id.GetFieldIndex());
 	for (auto &child_id : field_id.Children()) {
@@ -2391,9 +2407,12 @@ CompactionInformation DuckLakeTransaction::GetCompactionChanges(DuckLakeCommitSt
 				if (!compacted_file.delete_files.empty()) {
 					row_id_limit -= compacted_file.delete_files.back().row_count;
 				}
+				row_id_limit -= compacted_file.inlined_file_deletions.size();
 				DuckLakeCompactedFileInfo file_info;
 				file_info.path = compacted_file.file.data.path;
 				file_info.source_id = compacted_file.file.id;
+				file_info.table_index = entry.GetTableIndex();
+				file_info.rewrite_snapshot = commit_snapshot.snapshot_id;
 				if (has_new_file) {
 					file_info.new_id = new_file.id;
 				}
@@ -2402,7 +2421,6 @@ CompactionInformation DuckLakeTransaction::GetCompactionChanges(DuckLakeCommitSt
 					file_info.delete_file_path = compacted_file.delete_files.back().data.path;
 					file_info.delete_file_id = compacted_file.delete_files.back().delete_file_id;
 					file_info.start_snapshot = compacted_file.file.begin_snapshot;
-					file_info.table_index = entry.GetTableIndex();
 					file_info.delete_file_start_snapshot = commit_snapshot.snapshot_id;
 					file_info.delete_file_end_snapshot = compacted_file.delete_files.back().end_snapshot;
 				}
@@ -2558,6 +2576,11 @@ void DuckLakeTransaction::DeleteSnapshots(const vector<DuckLakeSnapshotInfo> &sn
 	metadata_manager.DeleteSnapshots(snapshots);
 }
 
+void DuckLakeTransaction::MarkInlinedDataDeleted(const string &inlined_table_name) {
+	auto &metadata_manager = GetMetadataManager();
+	metadata_manager.MarkInlinedDataDeleted(GetSnapshot(), inlined_table_name);
+}
+
 void DuckLakeTransaction::DeleteInlinedData(const DuckLakeInlinedTableInfo &inlined_table) {
 	auto &metadata_manager = GetMetadataManager();
 	metadata_manager.DeleteInlinedData(inlined_table);
@@ -2708,6 +2731,10 @@ void DuckLakeTransaction::AddNewInlinedDeletes(TableIndex table_id, const string
 void DuckLakeTransaction::DeleteFromLocalInlinedData(TableIndex table_id, set<idx_t> new_deletes) {
 	auto context_ref = context.lock();
 	local_changes.DeleteFromLocalInlinedData(*context_ref, table_id, std::move(new_deletes));
+}
+
+void DuckLakeTransaction::TruncateLocalInlinedData(TableIndex table_id) {
+	local_changes.TruncateLocalInlinedData(table_id);
 }
 
 void DuckLakeTransaction::AddColumnToLocalInlinedData(TableIndex table_id, const LogicalType &new_column_type,
