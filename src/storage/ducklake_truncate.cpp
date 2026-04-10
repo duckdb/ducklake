@@ -20,6 +20,21 @@ public:
 	bool finished = false;
 };
 
+static set<idx_t> GetVisibleInlinedRowIds(DuckLakeTransaction &transaction, DuckLakeSnapshot snapshot,
+                                          const string &inlined_table_name) {
+	auto &metadata_manager = transaction.GetMetadataManager();
+	auto query_result = metadata_manager.ReadInlinedData(snapshot, inlined_table_name, {"row_id"});
+	if (query_result->HasError()) {
+		query_result->GetErrorObject().Throw("Failed to read inlined row ids during DuckLake truncate: ");
+	}
+
+	set<idx_t> row_ids;
+	for (auto &row : *query_result) {
+		row_ids.insert(row.GetValue<idx_t>(0));
+	}
+	return row_ids;
+}
+
 DuckLakeTruncate::DuckLakeTruncate(PhysicalPlan &physical_plan, DuckLakeTableEntry &table)
     : PhysicalOperator(physical_plan, PhysicalOperatorType::EXTENSION, {LogicalType::UBIGINT}, 0), table(table) {
 }
@@ -55,7 +70,8 @@ SourceResultType DuckLakeTruncate::GetDataInternal(ExecutionContext &context, Da
 			break;
 		}
 		case DuckLakeDataType::INLINED_DATA: {
-			transaction.MarkInlinedDataDeleted(file_info.file.path);
+			auto row_ids = GetVisibleInlinedRowIds(transaction, read_info.snapshot, file_info.file.path);
+			transaction.AddNewInlinedDeletes(table.GetTableId(), file_info.file.path, std::move(row_ids));
 			break;
 		}
 		case DuckLakeDataType::TRANSACTION_LOCAL_INLINED_DATA: {
