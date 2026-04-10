@@ -4391,8 +4391,11 @@ WHERE end_snapshot IS NOT NULL AND NOT EXISTS(
 	tables_to_delete_from = {"ducklake_macro_impl", "ducklake_macro_parameters"};
 	for (auto &delete_tbl : tables_to_delete_from) {
 		auto result = transaction.Query(StringUtil::Format(R"(
-DELETE FROM {METADATA_CATALOG}.%s
-WHERE macro_id NOT IN (SELECT macro_id FROM {METADATA_CATALOG}.ducklake_macro);)",
+DELETE FROM {METADATA_CATALOG}.%s tbl
+WHERE NOT EXISTS (
+    SELECT 1 FROM {METADATA_CATALOG}.ducklake_macro m
+    WHERE m.macro_id = tbl.macro_id
+);)",
 		                                                   delete_tbl));
 		if (result->HasError()) {
 			result->GetErrorObject().Throw("Failed to delete from " + delete_tbl + " in DuckLake: ");
