@@ -82,14 +82,14 @@ static void Murmur3ScalarFunction(DataChunk &args, ExpressionState &state, Vecto
 			// Iceberg: hash UTF-8 bytes directly
 			auto val = UnifiedVectorFormat::GetData<string_t>(input_data)[idx];
 			result_data[i] = DuckLakeMurmur3::Hash(reinterpret_cast<const uint8_t *>(val.GetData()),
-			                                       static_cast<idx_t>(val.GetSize()));
+			                                        static_cast<idx_t>(val.GetSize()));
 			break;
 		}
 		default: {
 			// For complex types (STRUCT, LIST, etc.) hash the string representation
 			auto str_val = input.GetValue(idx).ToString();
 			result_data[i] = DuckLakeMurmur3::Hash(reinterpret_cast<const uint8_t *>(str_val.data()),
-			                                       static_cast<idx_t>(str_val.size()));
+			                                        static_cast<idx_t>(str_val.size()));
 			break;
 		}
 		}

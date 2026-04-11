@@ -786,7 +786,7 @@ PhysicalOperator &DuckLakeCatalog::PlanInsert(ClientContext &context, PhysicalPl
 	auto sort_data = ducklake_table.GetSortData();
 	auto &ducklake_schema_for_sort = ducklake_table.ParentSchema().Cast<DuckLakeSchemaEntry>();
 	bool sort_on_insert = GetConfigOption<string>("sort_on_insert", ducklake_schema_for_sort.GetSchemaId(),
-	                                              ducklake_table.GetTableId(), "true") == "true";
+		                                         ducklake_table.GetTableId(), "true") == "true";
 	if (sort_data && sort_on_insert) {
 		auto sorted_plan = PlanInsertSort(context, planner, *plan, ducklake_table, sort_data);
 		if (sorted_plan) {

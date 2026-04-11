@@ -47,7 +47,8 @@ vector<OrderByNode> DuckLakeCompactor::ParseSortOrders(const DuckLakeSort &sort_
 }
 
 //! Binds ORDER BY expressions directly using ExpressionBinder.
-vector<BoundOrderByNode> DuckLakeCompactor::BindSortOrders(Binder &binder, DuckLakeTableEntry &table, idx_t table_index,
+vector<BoundOrderByNode> DuckLakeCompactor::BindSortOrders(Binder &binder, DuckLakeTableEntry &table,
+                                                           idx_t table_index,
                                                            vector<OrderByNode> &pre_bound_orders) {
 	auto &columns = table.GetColumns();
 	auto column_names = columns.GetColumnNames();
