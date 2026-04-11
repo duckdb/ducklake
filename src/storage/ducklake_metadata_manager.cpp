@@ -4358,11 +4358,11 @@ VALUES %s;
 
 	// delete based on table id -> ducklake_table_stats, ducklake_table_column_stats, ducklake_partition_info
 	if (!deleted_table_ids.empty()) {
-		tables_to_delete_from = {"ducklake_table",          "ducklake_table_stats",      "ducklake_table_column_stats",
-		                         "ducklake_partition_info", "ducklake_partition_column", "ducklake_column",
-		                         "ducklake_column_tag",     "ducklake_sort_info",        "ducklake_sort_expression",
-		                         "ducklake_schema_versions", "ducklake_inlined_data_tables",
-		                         "ducklake_column_mapping"};
+		tables_to_delete_from = {
+		    "ducklake_table",           "ducklake_table_stats",         "ducklake_table_column_stats",
+		    "ducklake_partition_info",  "ducklake_partition_column",    "ducklake_column",
+		    "ducklake_column_tag",      "ducklake_sort_info",           "ducklake_sort_expression",
+		    "ducklake_schema_versions", "ducklake_inlined_data_tables", "ducklake_column_mapping"};
 		for (auto &delete_tbl : tables_to_delete_from) {
 			auto result = transaction.Query(StringUtil::Format(R"(
 DELETE FROM {METADATA_CATALOG}.%s

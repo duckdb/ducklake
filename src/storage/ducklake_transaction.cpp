@@ -1548,6 +1548,7 @@ void DuckLakeTransaction::GetNewTableInfo(DuckLakeCommitState &commit_state, Duc
 	set<FieldIndex> columns_handled_by_later_ops;
 	// Maps from field index to the number of alter operations for that field.
 	map<FieldIndex, idx_t> field_alter_count;
+	// Number of table comment operations.
 	idx_t comment_count = 0;
 	// Maps from field index to the number of column comment operations for that field.
 	map<FieldIndex, idx_t> column_comment_count;
@@ -1575,9 +1576,14 @@ void DuckLakeTransaction::GetNewTableInfo(DuckLakeCommitState &commit_state, Duc
 
 	// Maps from field index to the number of alter operations remaining for that field.
 	map<FieldIndex, idx_t> field_alter_remaining(std::move(field_alter_count));
+	// Number of table comment operations remaining.
 	idx_t comment_remaining = comment_count;
 	// Maps from field index to the number of column comment operations remaining for that field.
 	map<FieldIndex, idx_t> column_comment_remaining(std::move(column_comment_count));
+
+	// Used to decide whether a column is a newly added column in this transaction.
+	// Maps from field_index.index to the index of the column in result.new_columns.
+	unordered_map<idx_t, idx_t> txn_added_fields;
 
 	// traverse in reverse order
 	bool column_schema_change = false;
@@ -1642,17 +1648,26 @@ void DuckLakeTransaction::GetNewTableInfo(DuckLakeCommitState &commit_state, Duc
 			if (remaining > 0) {
 				break;
 			}
-			// drop the previous column
-			DuckLakeDroppedColumn dropped_col;
-			dropped_col.table_id = commit_state.GetTableId(table);
-			dropped_col.field_id = local_change.field_index;
-			result.dropped_columns.push_back(dropped_col);
 
-			// insert the new column with the new info
-			DuckLakeNewColumn new_col;
-			new_col.table_id = commit_state.GetTableId(table);
-			new_col.column_info = table.GetColumnInfo(local_change.field_index);
-			result.new_columns.push_back(std::move(new_col));
+			// Check whether this field was added in the same transaction. If so, directly updating the
+			// existing new_columns entry in-place.
+			auto local_txn_column_iter = txn_added_fields.find(local_change.field_index.index);
+			if (local_txn_column_iter != txn_added_fields.end()) {
+				result.new_columns[local_txn_column_iter->second].column_info =
+				    table.GetColumnInfo(local_change.field_index);
+			} else {
+				// The field has been committed, drop the old committed entry.
+				DuckLakeDroppedColumn dropped_col;
+				dropped_col.table_id = commit_state.GetTableId(table);
+				dropped_col.field_id = local_change.field_index;
+				result.dropped_columns.push_back(dropped_col);
+
+				// Insert the new column with the updated info.
+				DuckLakeNewColumn new_col;
+				new_col.table_id = commit_state.GetTableId(table);
+				new_col.column_info = table.GetColumnInfo(local_change.field_index);
+				result.new_columns.push_back(std::move(new_col));
+			}
 
 			transaction_changes.altered_tables.insert(table_id);
 			transaction_changes.altered_tables_with_schema_version_changes.insert(table_id);
@@ -1681,6 +1696,7 @@ void DuckLakeTransaction::GetNewTableInfo(DuckLakeCommitState &commit_state, Duc
 			DuckLakeNewColumn new_col;
 			new_col.table_id = commit_state.GetTableId(table);
 			new_col.column_info = table.GetAddColumnInfo();
+			txn_added_fields[new_col.column_info.id.index] = result.new_columns.size();
 			result.new_columns.push_back(std::move(new_col));
 
 			transaction_changes.altered_tables.insert(table.GetTableId());

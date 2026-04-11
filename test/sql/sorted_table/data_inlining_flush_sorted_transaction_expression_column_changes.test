@@ -1,0 +1,54 @@
+# name: test/sql/sorted_table/data_inlining_flush_sorted_transaction_expression_column_changes.test
+# description: Test SET SORTED BY with expression when columns are dropped and re-added in same transaction
+# group: [sorted_table]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+
+test-env DATA_PATH __TEST_DIR__
+
+statement ok
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/ducklake_inlining_flush_expression_column_changes', DATA_INLINING_ROW_LIMIT 10)
+
+# Create table with VARCHAR columns suitable for concatenation expression
+statement ok
+CREATE TABLE ducklake.expression_column_test (unique_id INTEGER, sort_key_1 VARCHAR, sort_key_2 VARCHAR);
+
+# Insert data (will be inlined initially)
+statement ok
+INSERT INTO ducklake.expression_column_test (unique_id, sort_key_1, sort_key_2)
+VALUES
+    (0, 'a', 'val0'),
+    (1, 'c', 'val1'),
+    (2, 'b', 'val2'),
+    (3, 'a', 'val3'),
+    (4, 'c', 'val4');
+
+statement ok
+BEGIN
+
+statement ok
+ALTER TABLE ducklake.expression_column_test ADD COLUMN sort_key_2_new VARCHAR;
+
+statement ok
+ALTER TABLE ducklake.expression_column_test RENAME COLUMN sort_key_2_new TO sort_key_3;
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake', table_name => 'expression_column_test');
+
+statement ok
+COMMIT
+
+query IIII
+FROM ducklake.expression_column_test
+SELECT *
+ORDER BY sort_key_1, unique_id
+----
+0	a	val0	NULL
+3	a	val3	NULL
+2	b	val2	NULL
+1	c	val1	NULL
+4	c	val4	NULL

@@ -422,8 +422,7 @@ string GetPartitionColumnName(ColumnRefExpression &colref) {
 	return colref.GetColumnName();
 }
 
-void DuckLakeTableEntry::ValidateSortExpressionColumns(DuckLakeTableEntry &table,
-                                                       const vector<OrderByNode> &orders) {
+void DuckLakeTableEntry::ValidateSortExpressionColumns(DuckLakeTableEntry &table, const vector<OrderByNode> &orders) {
 	vector<string> missing_columns;
 	for (auto &order : orders) {
 		ParsedExpressionIterator::VisitExpression<ColumnRefExpression>(
