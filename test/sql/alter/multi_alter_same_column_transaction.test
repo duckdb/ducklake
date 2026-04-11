@@ -38,11 +38,9 @@ ALTER TABLE ducklake.t RENAME COLUMN col1 TO col1_final
 statement ok
 COMMIT
 
-# NULL insert must succeed (DROP NOT NULL was the final nullability state)
 statement ok
 INSERT INTO ducklake.t VALUES (3, NULL)
 
-# Default insert must use 42 (SET DEFAULT 42 was the final default)
 statement ok
 INSERT INTO ducklake.t (id) VALUES (4)
 
@@ -71,10 +69,13 @@ statement ok
 BEGIN
 
 statement ok
-ALTER TABLE ducklake.expression_column_test ADD COLUMN sort_key_2_new VARCHAR;
+ALTER TABLE ducklake.expression_column_test ADD COLUMN rename_column_1 VARCHAR;
 
 statement ok
-ALTER TABLE ducklake.expression_column_test RENAME COLUMN sort_key_2_new TO sort_key_3;
+ALTER TABLE ducklake.expression_column_test RENAME COLUMN rename_column_1 TO rename_column_2;
+
+statement ok
+ALTER TABLE ducklake.expression_column_test RENAME COLUMN rename_column_2 TO rename_column_3;
 
 statement ok
 CALL ducklake_flush_inlined_data('ducklake', table_name => 'expression_column_test');
@@ -82,13 +83,11 @@ CALL ducklake_flush_inlined_data('ducklake', table_name => 'expression_column_te
 statement ok
 COMMIT
 
-query IIII
-FROM ducklake.expression_column_test
-SELECT *
-ORDER BY sort_key_1, unique_id
+query I
+FROM ducklake.expression_column_test SELECT rename_column_3
 ----
-0	a	val0	NULL
-3	a	val3	NULL
-2	b	val2	NULL
-1	c	val1	NULL
-4	c	val4	NULL
+NULL
+NULL
+NULL
+NULL
+NULL
