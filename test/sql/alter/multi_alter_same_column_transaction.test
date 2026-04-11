@@ -11,8 +11,9 @@ test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
 test-env DATA_PATH __TEST_DIR__
 
 statement ok
-ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/ducklake_multi_alter_same_col')
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/ducklake_multi_alter_same_col', DATA_INLINING_ROW_LIMIT 10)
 
+# Part 1: SET NOT NULL -> DROP NOT NULL -> SET DEFAULT -> RENAME
 statement ok
 CREATE TABLE ducklake.t (id INTEGER, col1 INTEGER);
 
@@ -52,3 +53,42 @@ SELECT id, col1_final FROM ducklake.t ORDER BY id
 2	20
 3	NULL
 4	42
+
+# Part 2: ADD COLUMN + RENAME in the same transaction as flush
+statement ok
+CREATE TABLE ducklake.expression_column_test (unique_id INTEGER, sort_key_1 VARCHAR, sort_key_2 VARCHAR);
+
+statement ok
+INSERT INTO ducklake.expression_column_test (unique_id, sort_key_1, sort_key_2)
+VALUES
+    (0, 'a', 'val0'),
+    (1, 'c', 'val1'),
+    (2, 'b', 'val2'),
+    (3, 'a', 'val3'),
+    (4, 'c', 'val4');
+
+statement ok
+BEGIN
+
+statement ok
+ALTER TABLE ducklake.expression_column_test ADD COLUMN sort_key_2_new VARCHAR;
+
+statement ok
+ALTER TABLE ducklake.expression_column_test RENAME COLUMN sort_key_2_new TO sort_key_3;
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake', table_name => 'expression_column_test');
+
+statement ok
+COMMIT
+
+query IIII
+FROM ducklake.expression_column_test
+SELECT *
+ORDER BY sort_key_1, unique_id
+----
+0	a	val0	NULL
+3	a	val3	NULL
+2	b	val2	NULL
+1	c	val1	NULL
+4	c	val4	NULL
