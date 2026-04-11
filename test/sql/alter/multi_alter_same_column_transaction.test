@@ -1,0 +1,54 @@
+# name: test/sql/alter/multi_alter_same_column_transaction.test
+# description: Multiple ALTER operations on the same column within a single transaction
+# group: [alter]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+
+test-env DATA_PATH __TEST_DIR__
+
+statement ok
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/ducklake_multi_alter_same_col')
+
+statement ok
+CREATE TABLE ducklake.t (id INTEGER, col1 INTEGER);
+
+statement ok
+INSERT INTO ducklake.t VALUES (1, 10), (2, 20);
+
+statement ok
+BEGIN
+
+statement ok
+ALTER TABLE ducklake.t ALTER col1 SET NOT NULL
+
+statement ok
+ALTER TABLE ducklake.t ALTER col1 DROP NOT NULL
+
+statement ok
+ALTER TABLE ducklake.t ALTER col1 SET DEFAULT 42
+
+statement ok
+ALTER TABLE ducklake.t RENAME COLUMN col1 TO col1_final
+
+statement ok
+COMMIT
+
+# NULL insert must succeed (DROP NOT NULL was the final nullability state)
+statement ok
+INSERT INTO ducklake.t VALUES (3, NULL)
+
+# Default insert must use 42 (SET DEFAULT 42 was the final default)
+statement ok
+INSERT INTO ducklake.t (id) VALUES (4)
+
+query II
+SELECT id, col1_final FROM ducklake.t ORDER BY id
+----
+1	10
+2	20
+3	NULL
+4	42
