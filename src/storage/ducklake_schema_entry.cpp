@@ -412,13 +412,14 @@ void DuckLakeSchemaEntry::TryDropSchema(DuckLakeTransaction &transaction, bool c
 	if (!cascade) {
 		// get a list of all dependents
 		vector<reference<CatalogEntry>> dependents;
+		const auto &dropped_tables = transaction.GetDroppedTables();
+		const auto &dropped_views = transaction.GetDroppedViews();
 		for (auto &entry : tables.GetEntries()) {
-			const auto &dropped_tables = transaction.GetDroppedTables();
 			bool add_dependent = false;
 			switch (entry.second->type) {
 			case CatalogType::VIEW_ENTRY: {
 				const auto &ducklake_view = entry.second->Cast<DuckLakeViewEntry>();
-				if (dropped_tables.find(ducklake_view.GetViewId()) == dropped_tables.end()) {
+				if (dropped_views.find(ducklake_view.GetViewId()) == dropped_views.end()) {
 					add_dependent = true;
 				}
 			} break;
@@ -430,7 +431,7 @@ void DuckLakeSchemaEntry::TryDropSchema(DuckLakeTransaction &transaction, bool c
 			} break;
 			default:
 				throw InternalException(
-				    "Unexpected catalog type %s for GetDroppedTables() in DuckLakeSchemaEntry::TryDropSchema()",
+				    "Unexpected catalog type %s in DuckLakeSchemaEntry::TryDropSchema()",
 				    CatalogTypeToString(entry.second->type));
 			}
 			if (add_dependent) {
