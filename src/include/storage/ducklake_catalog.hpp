@@ -121,6 +121,10 @@ public:
 
 	string GetDataPath();
 
+	string GetStaticBackup() const {
+		return options.static_backup;
+	}
+
 	bool SupportsTimeTravel() const override {
 		return true;
 	}
