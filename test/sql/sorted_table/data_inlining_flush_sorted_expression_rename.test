@@ -1,0 +1,59 @@
+# name: test/sql/sorted_table/data_inlining_flush_sorted_expression_rename.test
+# description: flushing inlined data with an expression sort key after a column rename should produce correct results
+# group: [sorted_table]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+
+test-env DATA_PATH __TEST_DIR__
+
+statement ok
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/ducklake_inlining_flush_sorted_expr_rename', DATA_INLINING_ROW_LIMIT 100)
+
+statement ok
+CREATE TABLE ducklake.t(id INTEGER, val INTEGER);
+
+statement ok
+INSERT INTO ducklake.t VALUES (2, 0), (1, 0), (3, 0);
+
+statement ok
+UPDATE ducklake.t SET val = val + 1 WHERE id = 2;
+
+statement ok
+UPDATE ducklake.t SET val = val + 1 WHERE id = 2;
+
+statement ok
+UPDATE ducklake.t SET val = val + 1 WHERE id = 2;
+
+# Set an expression sort key
+statement ok
+ALTER TABLE ducklake.t SET SORTED BY ((id + 0) ASC NULLS LAST);
+
+statement ok
+ALTER TABLE ducklake.t RENAME COLUMN id TO new_id;
+
+statement ok
+INSERT INTO ducklake.t VALUES (4, 0);
+
+# Before flush: verify correct live state under the new column name
+query II
+SELECT new_id, val FROM ducklake.t ORDER BY new_id
+----
+1	0
+2	3
+3	0
+4	0
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake')
+
+query II
+SELECT new_id, val FROM ducklake.t ORDER BY new_id
+----
+1	0
+2	3
+3	0
+4	0
