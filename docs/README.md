@@ -118,3 +118,25 @@ We are happy to have outside contributions to our DuckLake extension. We current
 
 1. `main`. Our main branch is our DuckLake implementation that uses DuckDB `main` as a submodule. If your contribution is a new feature, or a bug fix that requires a DuckLake spec change, or if it strictly depends on a change in DuckDB `main`, you must target this branch.
 2. `1.5-variegata`. Here, we use DuckDB `1.5-variegata` as a submodule. Target this branch if you have a bug-fix that does not require a DuckLake spec change.
+
+## Testing
+
+```bash
+# run all DuckLake extension tests
+./build/release/test/unittest
+# run a single test file
+./build/release/test/unittest test/sql/transaction/create_conflict.test
+# run tests matching a pattern
+./build/release/test/unittest "test/sql/partitioning/*"
+
+# run DuckDB core tests using DuckLake as storage backend
+./build/release/test/unittest --test-config test/configs/attach_ducklake.json --test-dir duckdb
+
+# run DuckLake tests using PostgreSQL as catalog database (requires running PostgreSQL)
+./build/release/test/unittest --test-config test/configs/postgres.json
+# run DuckLake tests using SQLite as catalog database
+./build/release/test/unittest --test-config test/configs/sqlite.json
+
+# run tests with deletion vectors enabled
+./build/release/test/unittest --test-config test/configs/deletion_vectors.json
+```
