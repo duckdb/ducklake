@@ -31,6 +31,15 @@ query II
 FROM ducklake.test
 ----
 
+# CTAS with IF NOT EXISTS - table already exists, should be ignored
+statement ok
+CREATE TABLE IF NOT EXISTS ducklake.test AS SELECT 1 i, 2 j;
+
+# original table should be unchanged (empty, INTEGER columns)
+query II
+FROM ducklake.test
+----
+
 # replace table
 statement ok
 CREATE OR REPLACE TABLE ducklake.test(i VARCHAR);
