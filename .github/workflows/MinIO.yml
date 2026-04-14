@@ -30,7 +30,7 @@ jobs:
           sudo apt-get install -y -qq software-properties-common
           sudo add-apt-repository ppa:git-core/ppa
           sudo apt-get update -y -qq
-          sudo apt-get install -y -qq build-essential cmake ninja-build ccache python3
+          sudo apt-get install -y -qq build-essential cmake ninja-build ccache python3 mold
           sudo curl -L "https://github.com/docker/compose/releases/download/1.29.2/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose
           sudo chmod +x /usr/local/bin/docker-compose
 

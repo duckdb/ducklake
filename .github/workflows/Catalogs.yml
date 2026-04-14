@@ -31,7 +31,7 @@ jobs:
     - name: Install required ubuntu packages
       run: |
         sudo apt-get update -y -qq
-        sudo apt-get install -y -qq build-essential cmake ninja-build ccache python3
+        sudo apt-get install -y -qq build-essential cmake ninja-build ccache python3 mold
 
     - name: Setup PostgreSQL for Linux/macOS/Windows
       uses: ikalnytskyi/action-setup-postgres@v7
