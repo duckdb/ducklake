@@ -6,12 +6,12 @@ require ducklake
 
 require parquet
 
-test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
 
-test-env DATA_PATH __TEST_DIR__
+test-env DATA_PATH {TEST_DIR}
 
 statement ok
-ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/ducklake_expire_snapshots_metadata_cleanup_files', METADATA_CATALOG 'metadata', DATA_INLINING_ROW_LIMIT 0)
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/ducklake_expire_snapshots_metadata_cleanup_files', METADATA_CATALOG 'metadata', DATA_INLINING_ROW_LIMIT 0)
 
 # snapshot 1: create table with a VARIANT column
 statement ok
@@ -54,7 +54,7 @@ CALL ducklake_cleanup_old_files('ducklake', cleanup_all => true)
 
 # all files should be gone
 query I
-SELECT COUNT(*) FROM GLOB('${DATA_PATH}/ducklake_expire_snapshots_metadata_cleanup_files/main/tbl/*')
+SELECT COUNT(*) FROM GLOB('{DATA_PATH}/ducklake_expire_snapshots_metadata_cleanup_files/main/tbl/*')
 ----
 0
 
@@ -62,7 +62,7 @@ SELECT COUNT(*) FROM GLOB('${DATA_PATH}/ducklake_expire_snapshots_metadata_clean
 foreach tbl ducklake_table ducklake_column ducklake_table_stats ducklake_table_column_stats ducklake_data_file ducklake_delete_file ducklake_file_column_stats ducklake_file_variant_stats ducklake_schema_versions
 
 query I
-SELECT COUNT(*) FROM metadata.${tbl}
+SELECT COUNT(*) FROM metadata.{tbl}
 ----
 0
 
