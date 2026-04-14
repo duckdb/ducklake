@@ -91,3 +91,67 @@ NULL
 NULL
 NULL
 NULL
+
+# Part 3: ADD + RENAME + DROP in the same transaction
+statement ok
+CREATE TABLE ducklake.add_rename_drop_test (id INTEGER, val VARCHAR);
+
+statement ok
+INSERT INTO ducklake.add_rename_drop_test VALUES (1, 'a'), (2, 'b');
+
+statement ok
+BEGIN
+
+statement ok
+ALTER TABLE ducklake.add_rename_drop_test ADD COLUMN tmp_col INTEGER;
+
+statement ok
+ALTER TABLE ducklake.add_rename_drop_test RENAME COLUMN tmp_col TO renamed_col;
+
+statement ok
+ALTER TABLE ducklake.add_rename_drop_test DROP COLUMN renamed_col;
+
+statement ok
+COMMIT
+
+query II
+SELECT * FROM ducklake.add_rename_drop_test ORDER BY id
+----
+1	a
+2	b
+
+# Part 4: ADD two columns and RENAME both in the same transaction
+statement ok
+CREATE TABLE ducklake.add_rename_two_cols_test (id INTEGER);
+
+statement ok
+INSERT INTO ducklake.add_rename_two_cols_test VALUES (1), (2), (3);
+
+statement ok
+BEGIN
+
+statement ok
+ALTER TABLE ducklake.add_rename_two_cols_test ADD COLUMN col_a VARCHAR;
+
+statement ok
+ALTER TABLE ducklake.add_rename_two_cols_test ADD COLUMN col_b INTEGER;
+
+statement ok
+ALTER TABLE ducklake.add_rename_two_cols_test RENAME COLUMN col_a TO col_a_renamed;
+
+statement ok
+ALTER TABLE ducklake.add_rename_two_cols_test RENAME COLUMN col_b TO col_b_renamed;
+
+statement ok
+COMMIT
+
+statement ok
+INSERT INTO ducklake.add_rename_two_cols_test VALUES (4, 'hello', 42);
+
+query III
+SELECT * FROM ducklake.add_rename_two_cols_test ORDER BY id
+----
+1	NULL	NULL
+2	NULL	NULL
+3	NULL	NULL
+4	hello	42

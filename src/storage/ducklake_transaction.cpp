@@ -1510,7 +1510,8 @@ struct NewMacroInfo {
 };
 
 void HandleChangedFields(TableIndex table_id, const ColumnChangeInfo &change_info, NewTableInfo &result,
-                         const set<FieldIndex> &columns_handled_by_later_ops) {
+                         const set<FieldIndex> &columns_handled_by_later_ops,
+                         unordered_map<idx_t, idx_t> &txn_added_fields) {
 	for (auto &new_col_info : change_info.new_fields) {
 		// Skip adding columns that will be handled by a later operation (e.g., SET_DEFAULT after CHANGE_COLUMN_TYPE)
 		if (columns_handled_by_later_ops.find(new_col_info.column_info.id) != columns_handled_by_later_ops.end()) {
@@ -1523,6 +1524,22 @@ void HandleChangedFields(TableIndex table_id, const ColumnChangeInfo &change_inf
 		result.new_columns.push_back(std::move(new_column));
 	}
 	for (auto &dropped_field_id : change_info.dropped_fields) {
+		auto it = txn_added_fields.find(dropped_field_id.index);
+		if (it != txn_added_fields.end()) {
+			// Column was added in the same transaction, we cancel the add rather than emitting a drop.
+			auto erased_idx = it->second;
+			result.new_columns.erase(result.new_columns.begin() + erased_idx);
+			txn_added_fields.erase(it);
+			// Assume the number of columns to add and drop in the same transaction is not too large.
+			for (auto &entry : txn_added_fields) {
+				if (entry.second > erased_idx) {
+					entry.second--;
+				}
+			}
+			continue;
+		}
+
+		// Column was not added in the same transaction, we emit a drop.
 		DuckLakeDroppedColumn dropped_col;
 		dropped_col.table_id = table_id;
 		dropped_col.field_id = dropped_field_id;
@@ -1686,7 +1703,7 @@ void DuckLakeTransaction::GetNewTableInfo(DuckLakeCommitState &commit_state, Duc
 			// drop the indicated column
 			// note that in case of nested types we might be dropping multiple columns here
 			HandleChangedFields(commit_state.GetTableId(table), table.GetChangedFields(), result,
-			                    columns_handled_by_later_ops);
+			                    columns_handled_by_later_ops, txn_added_fields);
 			transaction_changes.altered_tables_with_schema_version_changes.insert(table_id);
 			column_schema_change = true;
 			break;
