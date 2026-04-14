@@ -6,13 +6,13 @@ require ducklake
 
 require parquet
 
-test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
 
-test-env DATA_PATH __TEST_DIR__
+test-env DATA_PATH {TEST_DIR}
 
 
 statement ok
-ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/ducklake_inlining_flush_data_reset', DATA_INLINING_ROW_LIMIT 10)
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/ducklake_inlining_flush_data_reset', DATA_INLINING_ROW_LIMIT 10)
 
 # SET SORTED BY then RESET SORTED BY within same transaction
 statement ok
@@ -26,7 +26,7 @@ SELECT COUNT(*) FROM ducklake.reset_test
 loop i 0 10
 
 statement ok
-INSERT INTO ducklake.reset_test VALUES (${i})
+INSERT INTO ducklake.reset_test VALUES ({i})
 
 endloop
 

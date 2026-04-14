@@ -1,0 +1,38 @@
+# name: test/sql/view/view_string_literal_catalog_replace.test
+# description: Test that naive catalog name replacement does not corrupt string literals in views
+# group: [view]
+
+require ducklake
+
+require parquet
+
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/view_literal.db' AS dl (DATA_PATH '{TEST_DIR}/view_literal_data')
+
+statement ok
+CREATE TABLE dl.main.t(i INTEGER)
+
+statement ok
+INSERT INTO dl.main.t VALUES (1)
+
+# Create a view whose SELECT list contains a string literal with the catalog name in it
+statement ok
+CREATE VIEW dl.main.v AS SELECT 'dl.hello' AS val FROM dl.main.t
+
+query I
+SELECT * FROM dl.main.v
+----
+dl.hello
+
+statement ok
+DETACH dl
+
+# Re-attach under a different catalog name
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/view_literal.db' AS other_name (DATA_PATH '{TEST_DIR}/view_literal_data')
+
+# The string literal must still be 'dl.hello', NOT 'other_name.hello'
+query I
+SELECT * FROM other_name.main.v
+----
+dl.hello

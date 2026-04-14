@@ -6,12 +6,12 @@ require ducklake
 
 require parquet
 
-test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
 
-test-env DATA_PATH __TEST_DIR__
+test-env DATA_PATH {TEST_DIR}
 
 statement ok
-ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/partkey_multi', DATA_INLINING_ROW_LIMIT 20)
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/partkey_multi', DATA_INLINING_ROW_LIMIT 20)
 
 statement ok
 CREATE TABLE ducklake.p(id INTEGER, region VARCHAR, amount DOUBLE);
@@ -61,7 +61,7 @@ DETACH ducklake
 # Test 2: DELETE (not UPDATE) before flush on partitioned table
 # ------------------------------------------------------------------
 statement ok
-ATTACH 'ducklake:${DUCKLAKE_CONNECTION}_del' AS ducklake (DATA_PATH '${DATA_PATH}/partkey_del', DATA_INLINING_ROW_LIMIT 20)
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}_del' AS ducklake (DATA_PATH '{DATA_PATH}/partkey_del', DATA_INLINING_ROW_LIMIT 20)
 
 statement ok
 CREATE TABLE ducklake.d(id INTEGER, region VARCHAR, amount DOUBLE);
@@ -97,7 +97,7 @@ DETACH ducklake
 # Test 3: Non-partitioned table with UPDATE before flush
 # ------------------------------------------------------------------
 statement ok
-ATTACH 'ducklake:${DUCKLAKE_CONNECTION}_nopart' AS ducklake (DATA_PATH '${DATA_PATH}/nopart_upd', DATA_INLINING_ROW_LIMIT 20)
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}_nopart' AS ducklake (DATA_PATH '{DATA_PATH}/nopart_upd', DATA_INLINING_ROW_LIMIT 20)
 
 statement ok
 CREATE TABLE ducklake.np(id INTEGER, val INTEGER);
@@ -132,7 +132,7 @@ DETACH ducklake
 # Test 4: Transform-based partition (year) with UPDATE before flush
 # ------------------------------------------------------------------
 statement ok
-ATTACH 'ducklake:${DUCKLAKE_CONNECTION}_transform' AS ducklake (DATA_PATH '${DATA_PATH}/partkey_transform', DATA_INLINING_ROW_LIMIT 20)
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}_transform' AS ducklake (DATA_PATH '{DATA_PATH}/partkey_transform', DATA_INLINING_ROW_LIMIT 20)
 
 statement ok
 CREATE TABLE ducklake.t(id INTEGER, ts TIMESTAMP, amount DOUBLE);

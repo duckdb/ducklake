@@ -1,0 +1,82 @@
+# name: test/sql/comments/comment_duplicate_same_transaction.test
+# description: Verify that setting COMMENT multiple times in the same transaction only keeps the latest value
+# group: [comments]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{TEST_DIR}/comment_dup_txn/')
+
+statement ok
+CREATE TABLE ducklake.test(a INTEGER);
+
+# Check table-wise comment.
+statement ok
+BEGIN
+
+statement ok
+COMMENT ON TABLE ducklake.test IS 'first'
+
+statement ok
+COMMENT ON TABLE ducklake.test IS 'second'
+
+statement ok
+COMMIT
+
+query I
+SELECT comment FROM duckdb_tables() WHERE table_name = 'test'
+----
+second
+
+query II
+SELECT key, value FROM __ducklake_metadata_ducklake.ducklake_tag WHERE end_snapshot IS NULL AND object_id = 1
+----
+comment	second
+
+# Check column-wise comment.
+statement ok
+BEGIN
+
+statement ok
+COMMENT ON COLUMN ducklake.test.a IS 'col first'
+
+statement ok
+COMMENT ON COLUMN ducklake.test.a IS 'col second'
+
+statement ok
+COMMIT
+
+query II
+SELECT column_name, comment FROM duckdb_columns() WHERE table_name = 'test' AND column_name = 'a'
+----
+a	col second
+
+query II
+SELECT key, value FROM __ducklake_metadata_ducklake.ducklake_column_tag WHERE end_snapshot IS NULL AND table_id = 1
+----
+comment	col second
+
+# Check view-wise comment.
+statement ok
+CREATE VIEW ducklake.test_view AS SELECT * FROM ducklake.test
+
+statement ok
+BEGIN
+
+statement ok
+COMMENT ON VIEW ducklake.test_view IS 'view first'
+
+statement ok
+COMMENT ON VIEW ducklake.test_view IS 'view second'
+
+statement ok
+COMMIT
+
+query I
+SELECT comment FROM duckdb_views() WHERE view_name = 'test_view'
+----
+view second

@@ -1,0 +1,33 @@
+# name: test/sql/alter/issue_944.test
+# description: test ducklake cannot create, rename or rename a column to system colume name
+# group: [alter]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/issue_944', METADATA_CATALOG 'xx')
+
+statement error
+CREATE TABLE ducklake.test(row_id INTEGER);
+----
+Column name "row_id" is reserved by DuckLake for internal use
+
+statement ok
+CREATE TABLE ducklake.test(a INTEGER);
+
+statement error
+ALTER TABLE ducklake.test ADD COLUMN row_id INTEGER;
+----
+Column name "row_id" is reserved by DuckLake for internal use
+
+statement error
+ALTER TABLE ducklake.test RENAME COLUMN a TO row_id;
+----
+Column name "row_id" is reserved by DuckLake for internal use

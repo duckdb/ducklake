@@ -1,0 +1,81 @@
+# name: test/sql/alter/set_default_duplicate_in_transaction.test
+# description: Regression test for duplicate SET DEFAULT on the same column within a single transaction
+# group: [alter]
+
+#
+# Bug: When SET DEFAULT is applied multiple times to the same column within a single
+# transaction, the commit generates a drop+add pair for EACH alteration. This inserts
+# duplicate rows in ducklake_column (both with end_snapshot IS NULL), causing a
+# "Column with name X already exists!" error on next table access.
+#
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/ducklake_set_default_dup')
+
+statement ok
+CREATE TABLE ducklake.tbl (a INTEGER);
+
+# Two SET DEFAULT on the same column in one transaction
+statement ok
+BEGIN
+
+statement ok
+ALTER TABLE ducklake.tbl ALTER a SET DEFAULT 99
+
+statement ok
+ALTER TABLE ducklake.tbl ALTER a SET DEFAULT 9
+
+statement ok
+COMMIT
+
+# This should succeed - but fails with "Column with name a already exists!"
+statement ok
+BEGIN
+
+statement ok
+ALTER TABLE ducklake.tbl ALTER a SET DEFAULT 8
+
+statement ok
+COMMIT
+
+# Verify the final default value is 8
+statement ok
+INSERT INTO ducklake.tbl DEFAULT VALUES
+
+query I
+SELECT a FROM ducklake.tbl
+----
+8
+
+# Also test three SET DEFAULTs in one transaction
+statement ok
+BEGIN
+
+statement ok
+ALTER TABLE ducklake.tbl ALTER a SET DEFAULT 100
+
+statement ok
+ALTER TABLE ducklake.tbl ALTER a SET DEFAULT 200
+
+statement ok
+ALTER TABLE ducklake.tbl ALTER a SET DEFAULT 300
+
+statement ok
+COMMIT
+
+statement ok
+INSERT INTO ducklake.tbl DEFAULT VALUES
+
+query I
+SELECT a FROM ducklake.tbl ORDER BY a
+----
+8
+300

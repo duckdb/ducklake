@@ -6,13 +6,13 @@ require ducklake
 
 require parquet
 
-test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
 
-test-env DATA_PATH __TEST_DIR__
+test-env DATA_PATH {TEST_DIR}
 
 
 statement ok
-ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/ducklake_files_conflict_cleanup', DATA_INLINING_ROW_LIMIT 0)
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/ducklake_files_conflict_cleanup', DATA_INLINING_ROW_LIMIT 0)
 
 statement ok
 SET immediate_transaction_mode=true
@@ -38,7 +38,7 @@ COMMIT
 
 # con2 has the transaction-local files written in the directory
 query I
-SELECT COUNT(*) FROM glob('${DATA_PATH}/ducklake_files_conflict_cleanup/**/*.parquet')
+SELECT COUNT(*) FROM glob('{DATA_PATH}/ducklake_files_conflict_cleanup/**/*.parquet')
 ----
 1
 
@@ -49,6 +49,6 @@ conflict
 
 # they are cleaned up after the conflict
 query I
-SELECT COUNT(*) FROM glob('${DATA_PATH}/ducklake_files_conflict_cleanup/**/*.parquet')
+SELECT COUNT(*) FROM glob('{DATA_PATH}/ducklake_files_conflict_cleanup/**/*.parquet')
 ----
 0

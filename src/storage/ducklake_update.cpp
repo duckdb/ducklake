@@ -21,6 +21,7 @@
 #include "duckdb/planner/expression/bound_function_expression.hpp"
 #include "duckdb/planner/operator/logical_get.hpp"
 #include "duckdb/planner/operator/logical_projection.hpp"
+#include "duckdb/planner/expression/bound_constant_expression.hpp"
 #include "duckdb/planner/expression/bound_columnref_expression.hpp"
 
 namespace duckdb {
@@ -323,9 +324,9 @@ void DuckLakeTableEntry::BindUpdateConstraints(Binder &binder, LogicalGet &get, 
 		}
 		// column is not projected yet: project it by adding the clause "i=i" to the set of updated columns
 		update.expressions.push_back(make_uniq<BoundColumnRefExpression>(
-		    column.Type(), ColumnBinding(proj.table_index, proj.expressions.size())));
+		    column.Type(), ColumnBinding(proj.table_index, ProjectionIndex(proj.expressions.size()))));
 		proj.expressions.push_back(make_uniq<BoundColumnRefExpression>(
-		    column.Type(), ColumnBinding(get.table_index, column_id_index.GetIndex())));
+		    column.Type(), ColumnBinding(get.table_index, ProjectionIndex(column_id_index.GetIndex()))));
 		get.AddColumnId(physical_index.index);
 		update.columns.push_back(physical_index);
 	}

@@ -176,7 +176,7 @@ DeleteFileScanResult DuckLakeDeleteFilter::ScanDeleteFile(ClientContext &context
 	// Create snapshot filters if we have a snapshot column and filter range is specified
 	if (has_snapshot_id && (snapshot_filter_min.IsValid() || snapshot_filter_max.IsValid())) {
 		auto filters = make_uniq<TableFilterSet>();
-		ColumnIndex snapshot_col_idx(2); // snapshot_id is column 2
+		ProjectionIndex snapshot_col_idx(2); // snapshot_id is column 2
 
 		if (snapshot_filter_min.IsValid()) {
 			auto min_constant = Value::BIGINT(NumericCast<int64_t>(snapshot_filter_min.GetIndex()));

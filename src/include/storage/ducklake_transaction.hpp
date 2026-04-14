@@ -263,6 +263,9 @@ public:
 	const set<TableIndex> &GetDroppedTables() {
 		return dropped_tables;
 	}
+	const set<TableIndex> &GetDroppedViews() {
+		return dropped_views;
+	}
 	const set<MacroIndex> &GetDroppedScalarMacros() {
 		return dropped_scalar_macros;
 	}

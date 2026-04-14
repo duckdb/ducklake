@@ -1,0 +1,40 @@
+# name: test/sql/partitioning/partition_key_name_conflict.test
+# description: Test that a column named "year" does not conflict with the year() partition transform
+# group: [partitioning]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/ducklake_partition_key_conflict', METADATA_CATALOG 'ducklake_metadata', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+USE ducklake
+
+statement ok
+CREATE TABLE t("year" INTEGER, ts TIMESTAMP, v VARCHAR);
+
+statement ok
+ALTER TABLE t SET PARTITIONED BY (year(ts), "year");
+
+statement ok
+INSERT INTO t VALUES (42, TIMESTAMP '2020-06-15', 'hello');
+
+query III
+SELECT "year", ts, v FROM t
+----
+42	2020-06-15 00:00:00	hello
+
+statement ok
+INSERT INTO t VALUES (99, TIMESTAMP '2021-12-25', 'world');
+
+query III rowsort
+SELECT "year", ts, v FROM t
+----
+42	2020-06-15 00:00:00	hello
+99	2021-12-25 00:00:00	world
