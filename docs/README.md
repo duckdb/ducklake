@@ -9,9 +9,6 @@
 
 # DuckDB DuckLake Extension
 
-> While we tested the DuckLake extension extensively, it is currently experimental as demonstrated by its version number 0.x.
-> If you encounter any problems, please file a [new issue](https://github.com/duckdb/ducklake/issues).
-
 DuckLake is an open Lakehouse format that is built on SQL and Parquet. DuckLake stores metadata in a [catalog database](https://ducklake.select/docs/stable/duckdb/usage/choosing_a_catalog_database), and stores data in Parquet files. The DuckLake extension allows DuckDB to directly read and write data from DuckLake.
 
 See the [DuckLake website](https://ducklake.select) for more information.

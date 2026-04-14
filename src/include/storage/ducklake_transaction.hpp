@@ -291,7 +291,6 @@ protected:
 private:
 	void CleanupFiles();
 	void FlushChanges();
-	void FlushSettingChanges();
 	string CommitChanges(DuckLakeCommitState &commit_state, TransactionChangeInformation &transaction_changes,
 	                     optional_ptr<vector<DuckLakeGlobalStatsInfo>> stats);
 	void CommitCompaction(DuckLakeSnapshot &commit_snapshot, TransactionChangeInformation &transaction_changes);
