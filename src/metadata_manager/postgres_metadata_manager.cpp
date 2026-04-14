@@ -127,6 +127,51 @@ string PostgresMetadataManager::GetLatestSnapshotQuery() const {
 	)";
 }
 
+string PostgresMetadataManager::GenerateCTESectionFromRequirements(
+    const unordered_map<idx_t, CTERequirement> &requirements, TableIndex table_id) {
+	if (requirements.empty()) {
+		return "";
+	}
+
+	// For PostgreSQL backends, use postgres_query() to execute the column stats lookup
+	// directly on the PostgreSQL server. This allows PostgreSQL to use its indexes on
+	// (table_id, column_id) instead of DuckDB's postgres scanner bulk-copying the
+	// entire ducklake_file_column_stats table via COPY with ctid range batches.
+	// Note: MATERIALIZED/NOT MATERIALIZED hints are DuckDB-specific SQL but are valid
+	// here because the CTEs are processed by DuckDB's query engine — only the inner
+	// postgres_query() call executes on PostgreSQL.
+	string cte_section = "WITH ";
+	bool first_cte = true;
+
+	for (const auto &entry : requirements) {
+		const auto &req = entry.second;
+
+		if (!first_cte) {
+			cte_section += ",\n";
+		}
+		first_cte = false;
+
+		string select_list = "data_file_id";
+		for (const auto &stat : req.referenced_stats) {
+			select_list += ", " + stat;
+		}
+
+		string materialized_hint = (req.reference_count > 1) ? " AS MATERIALIZED" : " AS NOT MATERIALIZED";
+
+		cte_section +=
+		    StringUtil::Format("col_%d_stats%s (\n", req.column_field_index, materialized_hint.c_str());
+		cte_section += StringUtil::Format(
+		    "  SELECT * FROM postgres_query({METADATA_CATALOG_NAME_LITERAL},\n"
+		    "    'SELECT %s\n"
+		    "     FROM {METADATA_SCHEMA_ESCAPED}.ducklake_file_column_stats\n"
+		    "     WHERE column_id = %d AND table_id = %d')\n",
+		    select_list.c_str(), req.column_field_index, table_id.index);
+		cte_section += ")";
+	}
+
+	return cte_section + "\n";
+}
+
 // We need a specialized function here to do a reinterpret for postgres from BLOB to VARCHAR
 shared_ptr<DuckLakeInlinedData>
 PostgresMetadataManager::TransformInlinedData(QueryResult &result, const vector<LogicalType> &expected_types) {

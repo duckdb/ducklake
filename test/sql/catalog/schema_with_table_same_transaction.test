@@ -1,0 +1,100 @@
+# name: test/sql/catalog/schema_with_table_same_transaction.test
+# description: Test creating a schema and table with inlined data in the same transaction (verifies schema ID remapping for inlined table entries)
+# group: [catalog]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+
+statement ok
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '__TEST_DIR__/schema_table_txn/')
+
+statement ok
+USE ducklake;
+
+# Create schema + table + insert in the same transaction
+statement ok
+BEGIN
+
+statement ok
+CREATE SCHEMA test_schema
+
+statement ok
+CREATE TABLE test_schema.t1 (i INTEGER, s VARCHAR)
+
+statement ok
+INSERT INTO test_schema.t1 VALUES (1, 'hello'), (2, 'world')
+
+statement ok
+COMMIT
+
+query IT
+SELECT * FROM test_schema.t1 ORDER BY i
+----
+1	hello
+2	world
+
+# Flush inlined data to exercise the inlined table entry path
+statement ok
+CALL ducklake_flush_inlined_data('ducklake')
+
+query IT
+SELECT * FROM test_schema.t1 ORDER BY i
+----
+1	hello
+2	world
+
+# Create schema + multiple tables in the same transaction
+statement ok
+BEGIN
+
+statement ok
+CREATE SCHEMA test_schema2
+
+statement ok
+CREATE TABLE test_schema2.t1 (x INTEGER)
+
+statement ok
+CREATE TABLE test_schema2.t2 (y VARCHAR)
+
+statement ok
+INSERT INTO test_schema2.t1 VALUES (42)
+
+statement ok
+INSERT INTO test_schema2.t2 VALUES ('duck')
+
+statement ok
+COMMIT
+
+query I
+SELECT x FROM test_schema2.t1
+----
+42
+
+query I
+SELECT y FROM test_schema2.t2
+----
+duck
+
+# Flush and verify data survives
+statement ok
+CALL ducklake_flush_inlined_data('ducklake')
+
+# Verify data survives flush
+query IT
+SELECT * FROM test_schema.t1 ORDER BY i
+----
+1	hello
+2	world
+
+query I
+SELECT x FROM test_schema2.t1
+----
+42
+
+query I
+SELECT y FROM test_schema2.t2
+----
+duck

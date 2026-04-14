@@ -39,6 +39,8 @@ protected:
 
 private:
 	unique_ptr<QueryResult> ExecuteQuery(DuckLakeSnapshot snapshot, string &query, string command);
+	string GenerateCTESectionFromRequirements(const unordered_map<idx_t, CTERequirement> &requirements,
+	                                          TableIndex table_id) override;
 };
 
 } // namespace duckdb
