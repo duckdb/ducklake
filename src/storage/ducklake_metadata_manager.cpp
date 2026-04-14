@@ -3978,7 +3978,7 @@ vector<DuckLakeFileForCleanup> DuckLakeMetadataManager::GetOrphanFilesForCleanup
 	auto query = R"(SELECT filename
 FROM read_blob({DATA_PATH} || '**')
 WHERE suffix(filename, '.parquet')
-AND filename NOT IN (
+AND REPLACE(filename, '\', '/') NOT IN (
 SELECT REPLACE(
            CASE
                WHEN NOT file_relative THEN file_path
@@ -3990,8 +3990,8 @@ SELECT REPLACE(
                              END
                    END
            END,
-           '/',
-           '{SEPARATOR}'
+           '\',
+           '/'
        ) AS full_path
 FROM
   (SELECT s.path AS schema_path, t.path AS table_path, file_path, s.path_is_relative AS schema_relative, t.path_is_relative AS table_relative, file_relative FROM (
@@ -4009,13 +4009,12 @@ SELECT REPLACE(
         WHEN NOT f.path_is_relative THEN f.path
         ELSE {DATA_PATH} || f.path
     END ,
-           '/',
-           '{SEPARATOR}'
+           '\',
+           '/'
 ) AS full_path
 FROM {METADATA_CATALOG}.ducklake_files_scheduled_for_deletion f
 )
 )" + filter;
-	query = StringUtil::Replace(query, "{SEPARATOR}", separator);
 	auto res = transaction.Query(query);
 	if (res->HasError()) {
 		res->GetErrorObject().Throw("Failed to get files scheduled for deletion from DuckLake: ");
@@ -4359,11 +4358,11 @@ VALUES %s;
 
 	// delete based on table id -> ducklake_table_stats, ducklake_table_column_stats, ducklake_partition_info
 	if (!deleted_table_ids.empty()) {
-		tables_to_delete_from = {"ducklake_table",          "ducklake_table_stats",      "ducklake_table_column_stats",
-		                         "ducklake_partition_info", "ducklake_partition_column", "ducklake_column",
-		                         "ducklake_column_tag",     "ducklake_sort_info",        "ducklake_sort_expression",
-		                         "ducklake_schema_versions", "ducklake_inlined_data_tables",
-		                         "ducklake_column_mapping"};
+		tables_to_delete_from = {
+		    "ducklake_table",           "ducklake_table_stats",         "ducklake_table_column_stats",
+		    "ducklake_partition_info",  "ducklake_partition_column",    "ducklake_column",
+		    "ducklake_column_tag",      "ducklake_sort_info",           "ducklake_sort_expression",
+		    "ducklake_schema_versions", "ducklake_inlined_data_tables", "ducklake_column_mapping"};
 		for (auto &delete_tbl : tables_to_delete_from) {
 			auto result = transaction.Query(StringUtil::Format(R"(
 DELETE FROM {METADATA_CATALOG}.%s
