@@ -15,7 +15,7 @@ include_directories(src/include)
 
 # Roaring is installed via vcpkg and used for deletion vectors
 find_package(roaring CONFIG REQUIRED)
-include_directories(${roaring_DIR}/../../../include)
+include_directories(${roaring_DIR}/../../include)
 
 add_subdirectory(src)
 set(EXTENSION_SOURCES ${ALL_OBJECT_FILES})
