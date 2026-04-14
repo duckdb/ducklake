@@ -111,3 +111,10 @@ To run, run the bundled `duckdb` shell:
 ```
  ./build/release/duckdb
 ```
+
+## Contributing
+
+We are happy to have outside contributions to our DuckLake extension. We currently have two active branches, and depending on your contribution, you must target the appropriate branch. Please note that bug fixes are always welcome. For new features, please coordinate with the team before starting any implementation.
+
+1. `main`. Our main branch is our DuckLake implementation that uses DuckDB `main` as a submodule. If your contribution is a new feature, or a bug fix that requires a DuckLake spec change, or if it strictly depends on a change in DuckDB `main`, you must target this branch.
+2. `1.5-variegata`. Here, we use DuckDB `1.5-variegata` as a submodule. Target this branch if you have a bug-fix that does not require a DuckLake spec change.
