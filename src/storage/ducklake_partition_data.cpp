@@ -11,7 +11,8 @@ string DuckLakePartitionUtils::GetPartitionKeyName(DuckLakeTransformType transfo
 	string prefix;
 	switch (transform_type) {
 	case DuckLakeTransformType::IDENTITY:
-		return field_name;
+		prefix = field_name;
+		break;
 	case DuckLakeTransformType::YEAR:
 		prefix = "year";
 		break;

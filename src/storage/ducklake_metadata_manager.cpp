@@ -3799,7 +3799,7 @@ VALUES %s
 UPDATE {METADATA_CATALOG}.ducklake_tag
 SET end_snapshot = {SNAPSHOT_ID}
 FROM overwritten_tags
-WHERE object_id=tid
+WHERE object_id=tid AND ducklake_tag.key=overwritten_tags.key AND end_snapshot IS NULL
 ;)",
 	                                        tags_list);
 
@@ -3840,7 +3840,7 @@ VALUES %s
 UPDATE {METADATA_CATALOG}.ducklake_column_tag
 SET end_snapshot = {SNAPSHOT_ID}
 FROM overwritten_tags
-WHERE table_id=tid AND column_id=cid
+WHERE table_id=tid AND column_id=cid AND ducklake_column_tag.key=overwritten_tags.key AND end_snapshot IS NULL
 ;)",
 	                                        tags_list);
 
@@ -4104,7 +4104,7 @@ string DuckLakeMetadataManager::WriteMergeAdjacent(const vector<DuckLakeCompacte
 	// for each file that has been compacted - delete it from the list of data files entirely
 	// including all other info (stats, delete files, partition values, etc)
 	vector<string> tables_to_delete_from {"ducklake_data_file", "ducklake_file_column_stats", "ducklake_delete_file",
-	                                      "ducklake_file_partition_value"};
+	                                      "ducklake_file_partition_value", "ducklake_file_variant_stats"};
 	string batch_query;
 	for (auto &delete_from_tbl : tables_to_delete_from) {
 		batch_query += StringUtil::Format(R"(
@@ -4270,7 +4270,8 @@ WHERE %s (end_snapshot IS NOT NULL AND NOT EXISTS(
 		}
 
 		// delete the data files
-		tables_to_delete_from = {"ducklake_data_file", "ducklake_file_column_stats"};
+		tables_to_delete_from = {"ducklake_data_file", "ducklake_file_column_stats", "ducklake_file_variant_stats",
+		                         "ducklake_file_partition_value"};
 		for (auto &delete_tbl : tables_to_delete_from) {
 			result = transaction.Query(StringUtil::Format(R"(
 DELETE FROM {METADATA_CATALOG}.%s
@@ -4360,7 +4361,9 @@ VALUES %s;
 	if (!deleted_table_ids.empty()) {
 		tables_to_delete_from = {"ducklake_table",          "ducklake_table_stats",      "ducklake_table_column_stats",
 		                         "ducklake_partition_info", "ducklake_partition_column", "ducklake_column",
-		                         "ducklake_column_tag",     "ducklake_sort_info",        "ducklake_sort_expression"};
+		                         "ducklake_column_tag",     "ducklake_sort_info",        "ducklake_sort_expression",
+		                         "ducklake_schema_versions", "ducklake_inlined_data_tables",
+		                         "ducklake_column_mapping"};
 		for (auto &delete_tbl : tables_to_delete_from) {
 			auto result = transaction.Query(StringUtil::Format(R"(
 DELETE FROM {METADATA_CATALOG}.%s
@@ -4372,8 +4375,8 @@ WHERE table_id IN (%s);)",
 		}
 	}
 
-	// delete any views, schemas, etc that are no longer referenced
-	tables_to_delete_from = {"ducklake_schema", "ducklake_view", "ducklake_tag"};
+	// delete any views, schemas, macros, etc that are no longer referenced
+	tables_to_delete_from = {"ducklake_schema", "ducklake_view", "ducklake_tag", "ducklake_macro"};
 	for (auto &delete_tbl : tables_to_delete_from) {
 		auto result = transaction.Query(StringUtil::Format(R"(
 DELETE FROM {METADATA_CATALOG}.%s
@@ -4385,6 +4388,34 @@ WHERE end_snapshot IS NOT NULL AND NOT EXISTS(
 		                                                   delete_tbl));
 		if (result->HasError()) {
 			result->GetErrorObject().Throw("Failed to delete from " + delete_tbl + " in DuckLake: ");
+		}
+	}
+
+	// clean up macro implementation and parameters for deleted macros
+	tables_to_delete_from = {"ducklake_macro_impl", "ducklake_macro_parameters"};
+	for (auto &delete_tbl : tables_to_delete_from) {
+		auto result = transaction.Query(StringUtil::Format(R"(
+DELETE FROM {METADATA_CATALOG}.%s tbl
+WHERE NOT EXISTS (
+    SELECT 1 FROM {METADATA_CATALOG}.ducklake_macro m
+    WHERE m.macro_id = tbl.macro_id
+);)",
+		                                                   delete_tbl));
+		if (result->HasError()) {
+			result->GetErrorObject().Throw("Failed to delete from " + delete_tbl + " in DuckLake: ");
+		}
+	}
+
+	// clean up name mappings for deleted column mappings
+	{
+		auto result = transaction.Query(R"(
+DELETE FROM {METADATA_CATALOG}.ducklake_name_mapping tbl
+WHERE NOT EXISTS (
+    SELECT 1 FROM {METADATA_CATALOG}.ducklake_column_mapping m
+    WHERE m.mapping_id = tbl.mapping_id
+);)");
+		if (result->HasError()) {
+			result->GetErrorObject().Throw("Failed to delete from ducklake_name_mapping in DuckLake: ");
 		}
 	}
 }
