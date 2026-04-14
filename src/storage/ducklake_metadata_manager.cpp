@@ -3859,39 +3859,41 @@ WHERE table_id=tid AND column_id=cid
 	return batch_query;
 }
 
-string DuckLakeMetadataManager::UpdateGlobalTableStats(const DuckLakeGlobalStatsInfo &stats) {
-	string column_stats_values;
-	for (auto &col_stats : stats.column_stats) {
-		if (!column_stats_values.empty()) {
-			column_stats_values += ",";
-		}
-		string contains_null;
-		if (col_stats.has_contains_null) {
-			contains_null = col_stats.contains_null ? "true" : "false";
-		} else {
-			contains_null = "NULL";
-		}
-		string contains_nan;
-		if (col_stats.has_contains_nan) {
-			contains_nan = col_stats.contains_nan ? "true" : "false";
-		} else {
-			contains_nan = "NULL";
-		}
-		string min_val = col_stats.has_min ? DuckLakeUtil::StatsToString(col_stats.min_val) : "NULL";
-		string max_val = col_stats.has_max ? DuckLakeUtil::StatsToString(col_stats.max_val) : "NULL";
-		string extra_stats_val = col_stats.has_extra_stats ? col_stats.extra_stats : "NULL";
+struct ColumnStatsSQL {
+	string contains_null;
+	string contains_nan;
+	string min_val;
+	string max_val;
+	string extra_stats;
 
-		column_stats_values +=
-		    StringUtil::Format("(%d, %d, %s, %s, %s, %s, %s)", stats.table_id.index, col_stats.column_id.index,
-		                       contains_null, contains_nan, min_val, max_val, extra_stats_val);
+	static ColumnStatsSQL FromColumnStats(const DuckLakeGlobalColumnStatsInfo &col_stats) {
+		ColumnStatsSQL result;
+		result.contains_null = col_stats.has_contains_null ? (col_stats.contains_null ? "true" : "false") : "NULL";
+		result.contains_nan = col_stats.has_contains_nan ? (col_stats.contains_nan ? "true" : "false") : "NULL";
+		result.min_val = col_stats.has_min ? DuckLakeUtil::StatsToString(col_stats.min_val) : "NULL";
+		result.max_val = col_stats.has_max ? DuckLakeUtil::StatsToString(col_stats.max_val) : "NULL";
+		result.extra_stats = col_stats.has_extra_stats ? col_stats.extra_stats : "NULL";
+		return result;
 	}
+};
+
+string DuckLakeMetadataManager::UpdateGlobalTableStats(const DuckLakeGlobalStatsInfo &stats) {
 	string batch_query;
 
 	if (!stats.initialized) {
-		// stats have not been initialized yet - insert them
 		batch_query +=
 		    StringUtil::Format("INSERT INTO {METADATA_CATALOG}.ducklake_table_stats VALUES (%d, %d, %d, %d);",
 		                       stats.table_id.index, stats.record_count, stats.next_row_id, stats.table_size_bytes);
+		string column_stats_values;
+		for (auto &col_stats : stats.column_stats) {
+			if (!column_stats_values.empty()) {
+				column_stats_values += ",";
+			}
+			auto sql = ColumnStatsSQL::FromColumnStats(col_stats);
+			column_stats_values +=
+			    StringUtil::Format("(%d, %d, %s, %s, %s, %s, %s)", stats.table_id.index, col_stats.column_id.index,
+			                       sql.contains_null, sql.contains_nan, sql.min_val, sql.max_val, sql.extra_stats);
+		}
 		batch_query += StringUtil::Format("INSERT INTO {METADATA_CATALOG}.ducklake_table_column_stats VALUES %s;",
 		                                  column_stats_values);
 	} else {
@@ -3900,16 +3902,15 @@ string DuckLakeMetadataManager::UpdateGlobalTableStats(const DuckLakeGlobalStats
 		    "UPDATE {METADATA_CATALOG}.ducklake_table_stats SET record_count=%d, file_size_bytes=%d, "
 		    "next_row_id=%d WHERE table_id=%d;",
 		    stats.record_count, stats.table_size_bytes, stats.next_row_id, stats.table_id.index);
-		batch_query += StringUtil::Format(R"(
-WITH new_values(tid, cid, new_contains_null, new_contains_nan, new_min, new_max, new_extra_stats) AS (
-VALUES %s
-)
-UPDATE {METADATA_CATALOG}.ducklake_table_column_stats
-SET contains_null=new_contains_null::boolean, contains_nan=new_contains_nan::boolean, min_value=new_min, max_value=new_max, extra_stats=new_extra_stats
-FROM new_values
-WHERE table_id=tid AND column_id=cid;
-)",
-		                                  column_stats_values);
+		for (auto &col_stats : stats.column_stats) {
+			auto sql = ColumnStatsSQL::FromColumnStats(col_stats);
+			batch_query +=
+			    StringUtil::Format("UPDATE {METADATA_CATALOG}.ducklake_table_column_stats "
+			                       "SET contains_null=%s, contains_nan=%s, min_value=%s, max_value=%s, extra_stats=%s "
+			                       "WHERE table_id=%d AND column_id=%d;",
+			                       sql.contains_null, sql.contains_nan, sql.min_val, sql.max_val, sql.extra_stats,
+			                       stats.table_id.index, col_stats.column_id.index);
+		}
 	}
 	return batch_query;
 }
