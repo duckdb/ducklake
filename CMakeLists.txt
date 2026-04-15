@@ -17,6 +17,12 @@ include_directories(src/include)
 find_package(roaring CONFIG REQUIRED)
 include_directories(${roaring_DIR}/../../include)
 
+# Warn when returning unique_ptr<Derived> as unique_ptr<Base> without std::move
+# (Clang-specific; GCC does not need an explicit flag for this pattern)
+if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+  add_compile_options(-Wreturn-std-move)
+endif()
+
 add_subdirectory(src)
 set(EXTENSION_SOURCES ${ALL_OBJECT_FILES})
 
