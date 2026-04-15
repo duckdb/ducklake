@@ -171,10 +171,15 @@ void DuckLakeInitializer::LoadExistingDuckLake(DuckLakeTransaction &transaction)
 	for (auto &tag : metadata.tags) {
 		if (tag.key == "version") {
 			auto catalog_version = DuckLakeVersionFromString(tag.value);
-			// determine the target version: pinned version or latest
-			auto target_version =
-			    options.ducklake_version != DuckLakeVersion::UNSET ? options.ducklake_version : DUCKLAKE_LATEST_VERSION;
-			if (catalog_version != target_version && !options.automatic_migration) {
+			auto target_version = ResolveTargetVersion(catalog_version, tag.value);
+			if (catalog_version > target_version) {
+				// catalog is newer than the requested version, no FWC
+				throw InvalidInputException(
+				    "DuckLake catalog version is '%s', which is newer than the requested version '%s'. "
+				    "Cannot downgrade a DuckLake catalog.",
+				    tag.value, DuckLakeVersionToString(target_version));
+			}
+			if (catalog_version < target_version && !options.automatic_migration) {
 				throw InvalidInputException(
 				    "DuckLake catalog version mismatch: catalog version is %s, but the extension requires version "
 				    "%s. To automatically migrate, set AUTOMATIC_MIGRATION to TRUE when attaching.",
@@ -253,6 +258,26 @@ void DuckLakeInitializer::LoadExistingDuckLake(DuckLakeTransaction &transaction)
 	if (resolved_version != DuckLakeVersion::UNSET) {
 		SetVersionedMetadataManager(transaction, resolved_version);
 	}
+}
+
+DuckLakeVersion DuckLakeInitializer::ResolveTargetVersion(DuckLakeVersion catalog_version,
+                                                          const string &catalog_version_str) {
+	if (options.ducklake_version != DuckLakeVersion::UNSET) {
+		// If the user pinned a version, we use that
+		return options.ducklake_version;
+	}
+	if (options.automatic_migration) {
+		// If automatic_migration is on, use to latest
+		return DUCKLAKE_LATEST_VERSION;
+	}
+	if (catalog_version >= DuckLakeVersion::V1_0) {
+		// otherwise, use the catalog's current version (must be >= V1_0)
+		return catalog_version;
+	}
+	// pre-1.0 catalogs always require migration
+	throw InvalidInputException("DuckLake catalog version mismatch: catalog version is %s, but the extension requires "
+	                            "version %s. To automatically migrate, set AUTOMATIC_MIGRATION to TRUE when attaching.",
+	                            catalog_version_str, DuckLakeVersionToString(DUCKLAKE_LATEST_VERSION));
 }
 
 void DuckLakeInitializer::SetVersionedMetadataManager(DuckLakeTransaction &transaction, DuckLakeVersion version) {

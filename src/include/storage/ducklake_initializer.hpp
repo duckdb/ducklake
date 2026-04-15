@@ -30,6 +30,7 @@ private:
 	string GetAttachOptions();
 	void CheckAndAutoloadedRequiredExtension(const string &pattern);
 	void SetVersionedMetadataManager(DuckLakeTransaction &transaction, DuckLakeVersion version);
+	DuckLakeVersion ResolveTargetVersion(DuckLakeVersion catalog_version, const string &catalog_version_str);
 
 private:
 	ClientContext &context;
