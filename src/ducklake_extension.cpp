@@ -3,6 +3,7 @@
 #include "duckdb/common/exception.hpp"
 #include "duckdb/common/string_util.hpp"
 #include "storage/ducklake_storage.hpp"
+#include "common/ducklake_version.hpp"
 #include "storage/ducklake_scan.hpp"
 #include "functions/ducklake_table_functions.hpp"
 #include "storage/ducklake_secret.hpp"
@@ -34,6 +35,8 @@ static void LoadInternal(ExtensionLoader &loader) {
 	config.AddExtensionOption("ducklake_default_data_inlining_row_limit",
 	                          "Default row limit for data inlining (0 disables inlining)", LogicalType::UBIGINT,
 	                          Value::UBIGINT(10), nullptr, SetScope::GLOBAL);
+	config.AddExtensionOption("ducklake_default_version", "Default DuckLake version for new catalogs",
+	                          LogicalType::VARCHAR, Value(), nullptr, SetScope::GLOBAL);
 	config.AddExtensionOption(
 	    "ducklake_write_deletion_vectors",
 	    "[EXPERIMENTAL] Write Iceberg V3 deletion vectors (puffin) instead of positional delete files (parquet)",

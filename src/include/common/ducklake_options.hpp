@@ -12,6 +12,7 @@
 #include "duckdb/common/types.hpp"
 #include "duckdb/common/enums/access_mode.hpp"
 #include "common/ducklake_encryption.hpp"
+#include "common/ducklake_version.hpp"
 #include "duckdb/planner/tableref/bound_at_clause.hpp"
 #include "duckdb/common/optional_idx.hpp"
 #include "common/index.hpp"
@@ -36,6 +37,7 @@ struct DuckLakeOptions {
 	map<SchemaIndex, option_map_t> schema_options;
 	map<TableIndex, option_map_t> table_options;
 	idx_t busy_timeout = 5000;
+	DuckLakeVersion ducklake_version = DuckLakeVersion::UNSET;
 };
 
 } // namespace duckdb
