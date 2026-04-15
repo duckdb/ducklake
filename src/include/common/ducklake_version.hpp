@@ -12,7 +12,7 @@
 
 namespace duckdb {
 
-enum class DuckLakeVersion : u_int8_t {
+enum class DuckLakeVersion : uint8_t {
 	UNSET = 0,
 	V0_1 = 1,
 	V0_2 = 2,
