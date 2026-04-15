@@ -11,6 +11,7 @@
 #include "storage/ducklake_transaction.hpp"
 #include "storage/ducklake_schema_entry.hpp"
 #include "common/ducklake_version.hpp"
+#include "metadata_manager/ducklake_metadata_manager_v1_1.hpp"
 
 namespace duckdb {
 
@@ -77,7 +78,12 @@ void DuckLakeInitializer::Initialize() {
 	if (options.ducklake_version == DuckLakeVersion::UNSET) {
 		Value setting_val;
 		if (context.TryGetCurrentSetting("ducklake_default_version", setting_val) && !setting_val.IsNull()) {
-			options.ducklake_version = DuckLakeVersionFromString(setting_val.ToString());
+			auto version = DuckLakeVersionFromString(setting_val.ToString());
+			if (version < DuckLakeVersion::V1_0) {
+				throw InvalidInputException("ducklake_default_version must be >= '1.0', got '%s'",
+				                            setting_val.ToString());
+			}
+			options.ducklake_version = version;
 		}
 	}
 
@@ -145,6 +151,10 @@ void DuckLakeInitializer::InitializeNewDuckLake(DuckLakeTransaction &transaction
 		options.data_path = path + ".files";
 		InitializeDataPath();
 	}
+	// default to the latest version when creating a new DuckLake
+	auto version =
+	    options.ducklake_version == DuckLakeVersion::UNSET ? DUCKLAKE_LATEST_VERSION : options.ducklake_version;
+	SetVersionedMetadataManager(transaction, version);
 	auto &metadata_manager = transaction.GetMetadataManager();
 	metadata_manager.InitializeDuckLake(has_explicit_schema, catalog.Encryption());
 	if (catalog.Encryption() == DuckLakeEncryption::AUTOMATIC) {
@@ -157,51 +167,56 @@ void DuckLakeInitializer::LoadExistingDuckLake(DuckLakeTransaction &transaction)
 	// load the data path from the existing duck lake
 	auto &metadata_manager = transaction.GetMetadataManager();
 	auto metadata = metadata_manager.LoadDuckLake();
+	DuckLakeVersion resolved_version = DuckLakeVersion::UNSET;
 	for (auto &tag : metadata.tags) {
 		if (tag.key == "version") {
-			string version = tag.value;
-			if (version != "1.0" && !options.automatic_migration) {
-				// Throw when Loading the DuckLake if a Migration is required and automatic_migration option is false
+			auto catalog_version = DuckLakeVersionFromString(tag.value);
+			// determine the target version: pinned version or latest
+			auto target_version =
+			    options.ducklake_version != DuckLakeVersion::UNSET ? options.ducklake_version : DUCKLAKE_LATEST_VERSION;
+			if (catalog_version != target_version && !options.automatic_migration) {
 				throw InvalidInputException(
 				    "DuckLake catalog version mismatch: catalog version is %s, but the extension requires version "
-				    "1.0. To automatically migrate, set AUTOMATIC_MIGRATION to TRUE when attaching.",
-				    version);
+				    "%s. To automatically migrate, set AUTOMATIC_MIGRATION to TRUE when attaching.",
+				    tag.value, DuckLakeVersionToString(target_version));
 			}
-			if (version == "0.1") {
+			if (catalog_version == DuckLakeVersion::V0_1) {
 				metadata_manager.MigrateV01();
-				version = "0.2";
+				catalog_version = DuckLakeVersion::V0_2;
 			}
-			if (version == "0.2") {
+			if (catalog_version == DuckLakeVersion::V0_2) {
 				metadata_manager.MigrateV02();
-				version = "0.3";
+				catalog_version = DuckLakeVersion::V0_3;
 			}
-			if (version == "0.3-dev1") {
+			if (catalog_version == DuckLakeVersion::V0_3_DEV1) {
 				metadata_manager.MigrateV02(true);
-				version = "0.3";
+				catalog_version = DuckLakeVersion::V0_3;
 			}
-			if (version == "0.3") {
+			if (catalog_version == DuckLakeVersion::V0_3) {
 				metadata_manager.MigrateV03();
-				version = "0.4";
+				catalog_version = DuckLakeVersion::V0_4;
 			}
-			if (version == "0.4-dev1") {
+			if (catalog_version == DuckLakeVersion::V0_4_DEV1) {
 				metadata_manager.MigrateV03(true);
-				version = "0.4";
+				catalog_version = DuckLakeVersion::V0_4;
 			}
-			if (version == "0.4") {
+			if (catalog_version == DuckLakeVersion::V0_4) {
 				metadata_manager.MigrateV04();
-				version = "1.0";
+				catalog_version = DuckLakeVersion::V1_0;
 			}
-			if (version != "1.0") {
-				throw NotImplementedException(
-				    "Only DuckLake versions 0.1, 0.2, 0.3-dev1, 0.3, 0.4-dev1, 0.4, 1.0 are supported");
+			if (catalog_version >= target_version) {
+				resolved_version = catalog_version;
+				continue;
 			}
-			if (options.ducklake_version != DuckLakeVersion::UNSET &&
-			    version != DuckLakeVersionToString(options.ducklake_version)) {
-				throw InvalidInputException(
-				    "DuckLake version mismatch: catalog version is '%s', but ducklake_version '%s' was requested. "
-				    "To automatically migrate, set AUTOMATIC_MIGRATION to TRUE when attaching.",
-				    version, DuckLakeVersionToString(options.ducklake_version));
+			if (catalog_version == DuckLakeVersion::V1_0) {
+				metadata_manager.MigrateV10();
+				catalog_version = DuckLakeVersion::V1_1_DEV_1;
 			}
+			if (catalog_version != DUCKLAKE_LATEST_VERSION) {
+				throw NotImplementedException("Unsupported DuckLake version '%s'",
+				                              DuckLakeVersionToString(catalog_version));
+			}
+			resolved_version = catalog_version;
 		}
 		if (tag.key == "data_path") {
 			if (options.data_path.empty()) {
@@ -233,6 +248,23 @@ void DuckLakeInitializer::LoadExistingDuckLake(DuckLakeTransaction &transaction)
 	}
 	for (auto &entry : metadata.table_settings) {
 		options.table_options[entry.table_id][entry.tag.key] = entry.tag.value;
+	}
+	// set correct version metadata manager
+	if (resolved_version != DuckLakeVersion::UNSET) {
+		SetVersionedMetadataManager(transaction, resolved_version);
+	}
+}
+
+void DuckLakeInitializer::SetVersionedMetadataManager(DuckLakeTransaction &transaction, DuckLakeVersion version) {
+	switch (version) {
+	case DuckLakeVersion::V1_0:
+		// base DuckLakeMetadataManager is V1.0, so this is a nop
+		break;
+	case DuckLakeVersion::V1_1_DEV_1:
+		transaction.SetMetadataManager(make_uniq<DuckLakeMetadataManagerV1_1>(transaction));
+		break;
+	default:
+		throw InternalException("SetVersionedMetadataManager: unsupported version");
 	}
 }
 
