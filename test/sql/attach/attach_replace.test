@@ -6,12 +6,75 @@ require ducklake
 
 require parquet
 
-test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
 
-test-env DATA_PATH __TEST_DIR__
-
-statement ok
-ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/attach_replace', METADATA_CATALOG 'x')
+test-env DATA_PATH {TEST_DIR}
 
 statement ok
-ATTACH OR REPLACE'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/attach_replace_2', METADATA_CATALOG 'xx')
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/attach_replace', METADATA_CATALOG 'x')
+
+statement ok
+CREATE TABLE ducklake.t1 (i INT);
+
+statement ok
+INSERT INTO ducklake.t1 VALUES (42);
+
+query I
+SELECT * FROM ducklake.t1
+----
+42
+
+# attaching with the same name without REPLACE should fail
+statement error
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/attach_replace', METADATA_CATALOG 'x')
+----
+already exists
+
+# replace with a fresh ducklake - old table should be gone
+test-env DUCKLAKE_CONNECTION_2 {TEST_DIR}/{UUID}_2.db
+
+statement ok
+ATTACH OR REPLACE 'ducklake:{DUCKLAKE_CONNECTION_2}' AS ducklake (DATA_PATH '{DATA_PATH}/attach_replace_2')
+
+statement error
+SELECT * FROM ducklake.t1
+----
+does not exist
+
+# verify the replaced catalog is functional
+statement ok
+CREATE TABLE ducklake.t2 (j INT);
+
+statement ok
+INSERT INTO ducklake.t2 VALUES (100);
+
+query I
+SELECT * FROM ducklake.t2
+----
+100
+
+test-env DUCKLAKE_CONNECTION_A {TEST_DIR}/{UUID}_a.db
+
+test-env DUCKLAKE_CONNECTION_B {TEST_DIR}/{UUID}_b.db
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION_A}' AS test_replace (DATA_PATH '{DATA_PATH}/replace_default_a')
+
+statement ok
+CREATE TABLE test_replace.t1 (i INT);
+
+statement ok
+INSERT INTO test_replace.t1 VALUES (1);
+
+query I
+SELECT * FROM test_replace.t1
+----
+1
+
+statement ok
+ATTACH OR REPLACE 'ducklake:{DUCKLAKE_CONNECTION_B}' AS test_replace (DATA_PATH '{DATA_PATH}/replace_default_b')
+
+statement error
+SELECT * FROM test_replace.t1
+----
+does not exist

@@ -6,12 +6,12 @@ require ducklake
 
 require parquet
 
-test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
 
-test-env DATA_PATH __TEST_DIR__
+test-env DATA_PATH {TEST_DIR}
 
 statement ok
-ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/expire_snapshot_bug', METADATA_CATALOG 'ducklake_meta')
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/expire_snapshot_bug', METADATA_CATALOG 'ducklake_meta')
 
 statement ok
 USE ducklake;
@@ -105,7 +105,7 @@ CALL ducklake_expire_snapshots('ducklake', versions => [getvariable('s_rename_c'
 foreach tbl ducklake_table ducklake_column ducklake_table_stats ducklake_table_column_stats ducklake_data_file ducklake_delete_file
 
 query I
-SELECT COUNT(*) FROM ducklake_meta.${tbl}
+SELECT COUNT(*) FROM ducklake_meta.{tbl}
 ----
 0
 

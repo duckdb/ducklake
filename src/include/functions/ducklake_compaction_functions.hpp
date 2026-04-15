@@ -31,7 +31,7 @@ namespace duckdb {
 //===--------------------------------------------------------------------===//
 class DuckLakeLogicalCompaction : public LogicalExtensionOperator {
 public:
-	DuckLakeLogicalCompaction(idx_t table_index, DuckLakeTableEntry &table,
+	DuckLakeLogicalCompaction(TableIndex table_index, DuckLakeTableEntry &table,
 	                          vector<DuckLakeCompactionFileEntry> source_files_p, string encryption_key_p,
 	                          optional_idx partition_id, vector<string> partition_values_p, optional_idx row_id_start,
 	                          CompactionType type)
@@ -40,7 +40,7 @@ public:
 	      partition_values(std::move(partition_values_p)), row_id_start(row_id_start), type(type) {
 	}
 
-	idx_t table_index;
+	TableIndex table_index;
 	DuckLakeTableEntry &table;
 	vector<DuckLakeCompactionFileEntry> source_files;
 	string encryption_key;
@@ -65,10 +65,10 @@ public:
 	}
 	vector<ColumnBinding> GetColumnBindings() override {
 		vector<ColumnBinding> result;
-		result.emplace_back(table_index, 0);
-		result.emplace_back(table_index, 1);
-		result.emplace_back(table_index, 2);
-		result.emplace_back(table_index, 3);
+		result.emplace_back(table_index, ProjectionIndex(0));
+		result.emplace_back(table_index, ProjectionIndex(1));
+		result.emplace_back(table_index, ProjectionIndex(2));
+		result.emplace_back(table_index, ProjectionIndex(3));
 		return result;
 	}
 
@@ -90,6 +90,9 @@ public:
 	unique_ptr<LogicalOperator> GenerateCompactionCommand(vector<DuckLakeCompactionFileEntry> source_files);
 	static unique_ptr<LogicalOperator> InsertSort(Binder &binder, unique_ptr<LogicalOperator> &plan,
 	                                              DuckLakeTableEntry &table, optional_ptr<DuckLakeSort> sort_data);
+	static vector<OrderByNode> ParseSortOrders(const DuckLakeSort &sort_data);
+	static vector<BoundOrderByNode> BindSortOrders(Binder &binder, DuckLakeTableEntry &table, TableIndex table_index,
+	                                               vector<OrderByNode> &pre_bound_orders);
 
 private:
 	ClientContext &context;

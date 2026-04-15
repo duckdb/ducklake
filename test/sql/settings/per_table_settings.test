@@ -7,7 +7,7 @@ require ducklake
 require parquet
 
 statement ok
-ATTACH 'ducklake:__TEST_DIR__/ducklake_per_table_settings.db' AS ducklake (DATA_PATH '__TEST_DIR__/ducklake_per_table_settings_files');
+ATTACH 'ducklake:{TEST_DIR}/ducklake_per_table_settings.db' AS ducklake (DATA_PATH '{TEST_DIR}/ducklake_per_table_settings_files');
 
 # test different settings per schema/table
 statement ok
@@ -61,7 +61,7 @@ INSERT INTO ducklake.t1 SELECT 'hello world' || i str FROM range(1000) t(i)
 1000
 
 query I
-SELECT DISTINCT compression FROM parquet_metadata('__TEST_DIR__/ducklake_per_table_settings_files/main/t1/**') ORDER BY ALL
+SELECT DISTINCT compression FROM parquet_metadata('{TEST_DIR}/ducklake_per_table_settings_files/main/t1/**') ORDER BY ALL
 ----
 ZSTD
 
@@ -72,7 +72,7 @@ INSERT INTO ducklake.t2 SELECT 'hello world' || i str FROM range(1000) t(i)
 1000
 
 query I
-SELECT DISTINCT compression FROM parquet_metadata('__TEST_DIR__/ducklake_per_table_settings_files/main/t2/**') ORDER BY ALL
+SELECT DISTINCT compression FROM parquet_metadata('{TEST_DIR}/ducklake_per_table_settings_files/main/t2/**') ORDER BY ALL
 ----
 UNCOMPRESSED
 
@@ -83,7 +83,7 @@ INSERT INTO ducklake.s1.t1 SELECT 'hello world' || i str FROM range(1000) t(i)
 1000
 
 query I
-SELECT DISTINCT compression FROM parquet_metadata('__TEST_DIR__/ducklake_per_table_settings_files/s1/t1/**') ORDER BY ALL
+SELECT DISTINCT compression FROM parquet_metadata('{TEST_DIR}/ducklake_per_table_settings_files/s1/t1/**') ORDER BY ALL
 ----
 GZIP
 
@@ -94,7 +94,7 @@ INSERT INTO ducklake.s1.t2 SELECT 'hello world' || i str FROM range(1000) t(i)
 1000
 
 query I
-SELECT DISTINCT compression FROM parquet_metadata('__TEST_DIR__/ducklake_per_table_settings_files/s1/t2/**') ORDER BY ALL
+SELECT DISTINCT compression FROM parquet_metadata('{TEST_DIR}/ducklake_per_table_settings_files/s1/t2/**') ORDER BY ALL
 ----
 LZ4_RAW
 
@@ -103,7 +103,7 @@ statement ok
 DETACH ducklake
 
 statement ok
-ATTACH 'ducklake:__TEST_DIR__/ducklake_per_table_settings.db' AS ducklake (DATA_PATH '__TEST_DIR__/ducklake_per_table_settings_files');
+ATTACH 'ducklake:{TEST_DIR}/ducklake_per_table_settings.db' AS ducklake (DATA_PATH '{TEST_DIR}/ducklake_per_table_settings_files');
 
 endloop
 

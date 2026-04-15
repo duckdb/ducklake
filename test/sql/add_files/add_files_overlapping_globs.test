@@ -6,12 +6,12 @@ require ducklake
 
 require parquet
 
-test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
 
-test-env DATA_PATH __TEST_DIR__
+test-env DATA_PATH {TEST_DIR}
 
 statement ok
-ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/ducklake_overlapping_globs/', METADATA_CATALOG 'metadata');
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/ducklake_overlapping_globs/', METADATA_CATALOG 'metadata');
 
 statement ok
 CREATE TABLE ducklake.test(col1 INTEGER, col2 VARCHAR);
@@ -25,20 +25,20 @@ CALL ducklake_flush_inlined_data('ducklake')
 
 # Create multiple parquet files in the table data directory (created by INSERT/flush)
 statement ok
-COPY (SELECT 1 col1, 'a' col2) TO '${DATA_PATH}/ducklake_overlapping_globs/main/test/file1.parquet';
+COPY (SELECT 1 col1, 'a' col2) TO '{DATA_PATH}/ducklake_overlapping_globs/main/test/file1.parquet';
 
 statement ok
-COPY (SELECT 2 col1, 'b' col2) TO '${DATA_PATH}/ducklake_overlapping_globs/main/test/file2.parquet';
+COPY (SELECT 2 col1, 'b' col2) TO '{DATA_PATH}/ducklake_overlapping_globs/main/test/file2.parquet';
 
 statement ok
-COPY (SELECT 3 col1, 'c' col2) TO '${DATA_PATH}/ducklake_overlapping_globs/main/test/file3.parquet';
+COPY (SELECT 3 col1, 'c' col2) TO '{DATA_PATH}/ducklake_overlapping_globs/main/test/file3.parquet';
 
 # Test 1: Add files using overlapping globs - the wildcard should match all 3 files,
 # and we also explicitly add file1.parquet - it should only be added once
 statement ok
 CALL ducklake_add_data_files('ducklake', 'test', [
-    '${DATA_PATH}/ducklake_overlapping_globs/main/test/file*.parquet',
-    '${DATA_PATH}/ducklake_overlapping_globs/main/test/file1.parquet'
+    '{DATA_PATH}/ducklake_overlapping_globs/main/test/file*.parquet',
+    '{DATA_PATH}/ducklake_overlapping_globs/main/test/file1.parquet'
 ])
 
 # Each file should appear exactly once (3 new + 1 initial = 4 total rows)
@@ -64,8 +64,8 @@ CREATE TABLE ducklake.test2(col1 INTEGER, col2 VARCHAR);
 # Same glob listed twice - each file should only be added once
 statement ok
 CALL ducklake_add_data_files('ducklake', 'test2', [
-    '${DATA_PATH}/ducklake_overlapping_globs/main/test/file*.parquet',
-    '${DATA_PATH}/ducklake_overlapping_globs/main/test/file*.parquet'
+    '{DATA_PATH}/ducklake_overlapping_globs/main/test/file*.parquet',
+    '{DATA_PATH}/ducklake_overlapping_globs/main/test/file*.parquet'
 ])
 
 query II rowsort
@@ -87,9 +87,9 @@ CREATE TABLE ducklake.test3(col1 INTEGER, col2 VARCHAR);
 
 statement ok
 CALL ducklake_add_data_files('ducklake', 'test3', [
-    '${DATA_PATH}/ducklake_overlapping_globs/main/test/file1.parquet',
-    '${DATA_PATH}/ducklake_overlapping_globs/main/test/file1.parquet',
-    '${DATA_PATH}/ducklake_overlapping_globs/main/test/file1.parquet'
+    '{DATA_PATH}/ducklake_overlapping_globs/main/test/file1.parquet',
+    '{DATA_PATH}/ducklake_overlapping_globs/main/test/file1.parquet',
+    '{DATA_PATH}/ducklake_overlapping_globs/main/test/file1.parquet'
 ])
 
 # file1 should only be added once, not three times
@@ -111,9 +111,9 @@ CREATE TABLE ducklake.test4(col1 INTEGER, col2 VARCHAR);
 # Add file2 and file3 explicitly, plus wildcard that matches all files including file2 and file3
 statement ok
 CALL ducklake_add_data_files('ducklake', 'test4', [
-    '${DATA_PATH}/ducklake_overlapping_globs/main/test/file2.parquet',
-    '${DATA_PATH}/ducklake_overlapping_globs/main/test/file3.parquet',
-    '${DATA_PATH}/ducklake_overlapping_globs/main/test/file*.parquet'
+    '{DATA_PATH}/ducklake_overlapping_globs/main/test/file2.parquet',
+    '{DATA_PATH}/ducklake_overlapping_globs/main/test/file3.parquet',
+    '{DATA_PATH}/ducklake_overlapping_globs/main/test/file*.parquet'
 ])
 
 query II rowsort

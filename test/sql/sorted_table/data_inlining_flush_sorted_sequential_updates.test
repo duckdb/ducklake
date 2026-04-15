@@ -1,0 +1,57 @@
+# name: test/sql/sorted_table/data_inlining_flush_sorted_sequential_updates.test
+# description: sorted flush should build delete positions from actual file order, not row_id order
+# group: [sorted_table]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/ducklake_inlining_flush_sorted_sequential_updates', DATA_INLINING_ROW_LIMIT 100)
+
+statement ok
+CREATE TABLE ducklake.t(id INTEGER, val INTEGER);
+
+statement ok
+INSERT INTO ducklake.t VALUES (2, 0), (1, 0), (3, 0);
+
+statement ok
+UPDATE ducklake.t SET val = val + 1 WHERE id = 2;
+
+statement ok
+UPDATE ducklake.t SET val = val + 1 WHERE id = 2;
+
+statement ok
+UPDATE ducklake.t SET val = val + 1 WHERE id = 2;
+
+statement ok
+ALTER TABLE ducklake.t SET SORTED BY (id ASC NULLS LAST);
+
+query II
+SELECT id, val FROM ducklake.t ORDER BY id
+----
+1	0
+2	3
+3	0
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake')
+
+query II
+SELECT id, COUNT(*) FROM ducklake.t GROUP BY id ORDER BY id
+----
+1	1
+2	1
+3	1
+
+query II
+SELECT id, val FROM ducklake.t ORDER BY id
+----
+1	0
+2	3
+3	0

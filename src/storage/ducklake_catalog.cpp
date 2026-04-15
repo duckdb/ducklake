@@ -26,6 +26,7 @@
 #include "duckdb/function/scalar_macro_function.hpp"
 #include "duckdb/function/table_macro_function.hpp"
 #include "storage/ducklake_macro_entry.hpp"
+#include "duckdb/common/operator/cast_operators.hpp"
 #include "common/ducklake_util.hpp"
 
 namespace duckdb {
@@ -105,7 +106,7 @@ optional_ptr<CatalogEntry> DuckLakeCatalog::CreateSchema(CatalogTransaction tran
 			return nullptr;
 		}
 		if (info.on_conflict == OnCreateConflict::ERROR_ON_CONFLICT) {
-			return nullptr;
+			throw CatalogException::EntryAlreadyExists(CatalogType::SCHEMA_ENTRY, info.schema);
 		}
 		// drop the existing entry
 		DropInfo drop_info;
@@ -457,6 +458,21 @@ unique_ptr<DuckLakeCatalogSet> DuckLakeCatalog::LoadSchemaForSnapshot(DuckLakeTr
 				partition_field.transform.type = DuckLakeTransformType::HOUR;
 			} else if (field.transform == "identity") {
 				partition_field.transform.type = DuckLakeTransformType::IDENTITY;
+			} else if (StringUtil::StartsWith(field.transform, "bucket(")) {
+				partition_field.transform.type = DuckLakeTransformType::BUCKET;
+
+				StringUtil::Trim(field.transform);
+				if (!StringUtil::EndsWith(field.transform, ")")) {
+					throw InvalidInputException("Invalid bucket partition transform: %s", field.transform);
+				}
+
+				// "bucket(X)" -> remove prefix and suffix
+				auto inner = field.transform.substr(7, field.transform.size() - 8); // All but ')' (last character)
+				idx_t bucket_count;
+				if (!TryCast::Operation<string_t, idx_t>(string_t(inner), bucket_count) || bucket_count == 0) {
+					throw InvalidInputException("Invalid bucket partition transform: %s", field.transform);
+				}
+				partition_field.transform.bucket_count = bucket_count;
 			} else {
 				throw InvalidInputException("Unsupported partition transform %s", field.transform);
 			}

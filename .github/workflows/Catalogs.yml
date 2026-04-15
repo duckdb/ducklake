@@ -31,7 +31,7 @@ jobs:
     - name: Install required ubuntu packages
       run: |
         sudo apt-get update -y -qq
-        sudo apt-get install -y -qq build-essential cmake ninja-build ccache python3
+        sudo apt-get install -y -qq build-essential cmake ninja-build ccache python3 mold
 
     - name: Setup PostgreSQL for Linux/macOS/Windows
       uses: ikalnytskyi/action-setup-postgres@v7
@@ -77,12 +77,7 @@ jobs:
     - name: Test Postgres
       env:
         PGSERVICE: postgres
+        LOCAL_EXTENSION_REPO: ${{ github.workspace }}/build/release/repository
       run: |
-        # Pre-install postgres_scanner so LOAD finds it without autoloading
-        # (autoloading is disabled to prevent loading wrong ducklake version)
-        REPO_DIR="build/release/repository/$(cat .github/duckdb-version)/${{ matrix.arch }}"
-        EXT_DIR="$HOME/.duckdb/extensions/$(cat .github/duckdb-version)/${{ matrix.arch }}"
-        mkdir -p "$EXT_DIR"
-        cp "$REPO_DIR/postgres_scanner.duckdb_extension" "$EXT_DIR/"
         createdb ducklakedb
         build/release/test/unittest --test-config test/configs/postgres.json --test-dir ./ "test/sql/*"

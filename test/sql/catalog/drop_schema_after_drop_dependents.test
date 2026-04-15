@@ -1,0 +1,56 @@
+# name: test/sql/catalog/drop_schema_after_drop_dependents.test
+# description: Regression: DROP SCHEMA (no CASCADE) after dropping the only committed dependent in the same transaction
+# group: [catalog]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/ducklake_drop_schema_after_drop_dependents')
+
+statement ok
+CREATE SCHEMA ducklake.s
+
+statement ok
+CREATE VIEW ducklake.s.v AS SELECT 1 AS x
+
+statement ok
+BEGIN
+
+statement ok
+DROP VIEW ducklake.s.v
+
+statement ok
+DROP SCHEMA ducklake.s
+
+statement ok
+COMMIT
+
+# same pattern for a committed base table (only dependent is dropped in-txn, then schema)
+statement ok
+CREATE SCHEMA ducklake.s_tbl
+
+statement ok
+CREATE TABLE ducklake.s_tbl.t(i INTEGER)
+
+statement ok
+BEGIN
+
+statement ok
+DROP TABLE ducklake.s_tbl.t
+
+statement ok
+DROP SCHEMA ducklake.s_tbl
+
+statement ok
+COMMIT
+
+query I
+SELECT schema_name FROM duckdb_schemas() WHERE database_name='ducklake' ORDER BY ALL
+----
+main

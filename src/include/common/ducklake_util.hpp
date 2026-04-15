@@ -40,6 +40,13 @@ public:
 
 	static DynamicFilter *GetOptionalDynamicFilter(const TableFilter &filter);
 
+	//! Create the data path directory if it does not yet exist
+	static void EnsureDirectoryExists(FileSystem &fs, const string &data_path);
+
+	//! Replace occurrences of `from` with `to`, skipping content inside
+	//! single-quoted string literals and double-quoted identifiers.
+	static string ReplaceSkippingQuotes(const string &sql, const string &from, const string &to);
+
 	//! Returns true if the given column name conflicts with inlined data system columns
 	static bool IsInlinedSystemColumn(const string &name);
 	//! Returns true if any column name conflicts with inlined data system columns

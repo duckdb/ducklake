@@ -6,10 +6,10 @@ require ducklake
 
 require parquet
 
-unzip data/old_ducklake/compacted_files.db.gz __TEST_DIR__/compacted_files.db
+unzip data/old_ducklake/compacted_files.db.gz {TEST_DIR}/compacted_files.db
 
 statement ok
-ATTACH 'ducklake:__TEST_DIR__/compacted_files.db' AS ducklake (DATA_PATH '__TEST_DIR__/ducklake_migrate_per_table_schema', OVERRIDE_DATA_PATH TRUE, AUTOMATIC_MIGRATION TRUE)
+ATTACH 'ducklake:{TEST_DIR}/compacted_files.db' AS ducklake (DATA_PATH '{TEST_DIR}/ducklake_migrate_per_table_schema', OVERRIDE_DATA_PATH TRUE, AUTOMATIC_MIGRATION TRUE)
 
 query II
 select data_file_id, partial_max from __ducklake_metadata_ducklake.ducklake_data_file;

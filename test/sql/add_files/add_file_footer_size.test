@@ -6,23 +6,23 @@ require ducklake
 
 require parquet
 
-test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
 
-test-env DATA_PATH __TEST_DIR__
+test-env DATA_PATH {TEST_DIR}
 
 
 statement ok
-ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/ducklake_empty_files/', METADATA_CATALOG 'metadata');
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/ducklake_empty_files/', METADATA_CATALOG 'metadata');
 
 statement ok
 CREATE TABLE ducklake.test(col1 INTEGER, col2 VARCHAR);
 
 # write a parquet file outside of DuckLake
 statement ok
-COPY (SELECT 200 col1, 'world' col2) TO '${DATA_PATH}/data.parquet';
+COPY (SELECT 200 col1, 'world' col2) TO '{DATA_PATH}/data.parquet';
 
 statement ok
-CALL ducklake_add_data_files('ducklake', 'test', '${DATA_PATH}/data.parquet')
+CALL ducklake_add_data_files('ducklake', 'test', '{DATA_PATH}/data.parquet')
 
 query I
 SELECT data_file_footer_size > 0 FROM ducklake_list_files('ducklake', 'test')

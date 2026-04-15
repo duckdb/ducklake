@@ -74,6 +74,8 @@ static DuckLakeDeleteFile WriteDeleteFileInternal(ClientContext &context, InputT
 		types_to_write.push_back(LogicalType::BIGINT);
 	}
 
+	DuckLakeUtil::EnsureDirectoryExists(input.fs, input.data_path);
+
 	auto function_data = copy_fun.function.copy_to_bind(input.context, bind_input, names_to_write, types_to_write);
 	auto copy_global_state = copy_fun.function.copy_to_initialize_global(context, *function_data, delete_file_path);
 
@@ -93,10 +95,10 @@ static DuckLakeDeleteFile WriteDeleteFileInternal(ClientContext &context, InputT
 
 	optional_idx begin_snapshot;
 	idx_t row_count = 0;
-	auto pos_data = FlatVector::GetData<int64_t>(write_chunk.data[1]);
+	auto pos_data = FlatVector::GetDataMutable<int64_t>(write_chunk.data[1]);
 	int64_t *snapshot_data = nullptr;
 	if (with_snapshots) {
-		snapshot_data = FlatVector::GetData<int64_t>(write_chunk.data[2]);
+		snapshot_data = FlatVector::GetDataMutable<int64_t>(write_chunk.data[2]);
 	}
 
 	for (auto &entry : input.positions) {
@@ -164,6 +166,7 @@ DuckLakeDeleteFile DuckLakeDeleteFileWriter::WriteDeletionVectorFile(ClientConte
 
 	// Write blob to file
 	auto &fs = FileSystem::GetFileSystem(context);
+	DuckLakeUtil::EnsureDirectoryExists(fs, input.data_path);
 	auto file_handle =
 	    fs.OpenFile(delete_file_path, FileOpenFlags::FILE_FLAGS_WRITE | FileOpenFlags::FILE_FLAGS_FILE_CREATE);
 	file_handle->Write(blob_data.data(), blob_data.size());
@@ -249,7 +252,7 @@ public:
 		}
 		ColumnDataAppendState append_state;
 		deleted_row_collection->InitializeAppend(append_state);
-		auto data = FlatVector::GetData<uint64_t>(file_row_id_chunk.data[0]);
+		auto data = FlatVector::GetDataMutable<uint64_t>(file_row_id_chunk.data[0]);
 		idx_t chunk_size = 0;
 		for (idx_t r = 0; r < local_entry.size(); ++r) {
 			data[chunk_size++] = local_entry[r];

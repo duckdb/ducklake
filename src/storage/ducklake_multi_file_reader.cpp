@@ -31,6 +31,15 @@
 
 namespace duckdb {
 
+static bool ColumnsHaveFieldIds(const vector<MultiFileColumnDefinition> &columns) {
+	for (auto &col : columns) {
+		if (col.identifier.IsNull()) {
+			return false;
+		}
+	}
+	return !columns.empty();
+}
+
 //! Try to find a column in local_columns that matches the given field_id
 static bool TryFindColumnByFieldId(const vector<MultiFileColumnDefinition> &local_columns, int32_t field_id,
                                    MultiFileColumnDefinition *fallback_column,
@@ -52,7 +61,7 @@ static void AddSnapshotFilter(BaseFileReader &reader, const ColumnIndex &col_idx
                               idx_t snapshot_value, ExpressionType comparison_type) {
 	auto constant = Value::UBIGINT(snapshot_value).DefaultCastAs(col_type);
 	auto filter = make_uniq<ConstantFilter>(comparison_type, std::move(constant));
-	reader.filters->PushFilter(col_idx, std::move(filter));
+	reader.filters->PushFilter(ProjectionIndex(col_idx.GetPrimaryIndex()), std::move(filter));
 }
 
 // recursively normalize LIST child names from legacy formats blame legacy Avro/Parquet formats
@@ -524,6 +533,22 @@ ReaderInitializeType DuckLakeMultiFileReader::CreateMapping(
 			                                      MultiFileColumnMappingMode::BY_NAME);
 		}
 	}
+	// Check if file columns have field_id identifiers
+	if (!ColumnsHaveFieldIds(reader_data.reader->columns)) {
+		// Legacy external file without field_ids and no mapping
+		auto &file_columns = reader_data.reader->columns;
+		vector<string> source_names;
+		vector<FieldIndex> target_field_ids;
+		for (idx_t i = 0; i < MinValue(file_columns.size(), global_columns.size()); i++) {
+			source_names.push_back(file_columns[i].name);
+			target_field_ids.emplace_back(global_columns[i].identifier.GetValue<idx_t>());
+		}
+		auto positional_map = DuckLakeNameMap::CreatePositionalMapping(source_names, target_field_ids);
+		auto mapped_columns = MapColumns(context, reader_data, global_columns, positional_map);
+		return MultiFileReader::CreateMapping(context, reader_data, mapped_columns, column_ids_to_use, filters,
+		                                      multi_file_list, bind_data, virtual_columns,
+		                                      MultiFileColumnMappingMode::BY_NAME);
+	}
 	return MultiFileReader::CreateMapping(context, reader_data, global_columns, column_ids_to_use, filters,
 	                                      multi_file_list, bind_data, virtual_columns);
 }
@@ -611,7 +636,7 @@ void DuckLakeMultiFileReader::GatherDeletionScanSnapshots(BaseFileReader &reader
 
 	idx_t count = chunk.size();
 	snapshot_vector.Flatten(count);
-	auto snapshot_data = FlatVector::GetData<int64_t>(snapshot_vector);
+	auto snapshot_data = FlatVector::GetDataMutable<int64_t>(snapshot_vector);
 
 	UnifiedVectorFormat row_id_data;
 	rowid_vector.ToUnifiedFormat(count, row_id_data);
@@ -643,7 +668,7 @@ void DuckLakeMultiFileReader::GatherDeletionScanSnapshots(BaseFileReader &reader
 
 		auto snapshot = delete_filter.delete_data->GetSnapshotForRow(lookup_key);
 		if (snapshot.IsValid()) {
-			snapshot_data[i] = NumericCast<int64_t>(snapshot.GetIndex());
+			snapshot_data[i] = snapshot.GetIndex();
 		}
 	}
 }

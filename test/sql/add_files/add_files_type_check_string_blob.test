@@ -8,22 +8,22 @@ require parquet
 
 require json
 
-test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
 
-test-env DATA_PATH __TEST_DIR__
+test-env DATA_PATH {TEST_DIR}
 
-
-statement ok
-ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/ducklake_add_files_string_blob')
 
 statement ok
-COPY (SELECT 'hello world' AS col1) TO '${DATA_PATH}/string.parquet';
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/ducklake_add_files_string_blob')
 
 statement ok
-COPY (SELECT '\x80'::BLOB AS col1) TO '${DATA_PATH}/blob.parquet';
+COPY (SELECT 'hello world' AS col1) TO '{DATA_PATH}/string.parquet';
 
 statement ok
-COPY (SELECT '{"hello": "world"}'::JSON AS col1) TO '${DATA_PATH}/json.parquet';
+COPY (SELECT '\x80'::BLOB AS col1) TO '{DATA_PATH}/blob.parquet';
+
+statement ok
+COPY (SELECT '{"hello": "world"}'::JSON AS col1) TO '{DATA_PATH}/json.parquet';
 
 ##########
 # string #
@@ -32,12 +32,12 @@ statement ok
 CREATE OR REPLACE TABLE ducklake.test(col1 VARCHAR);
 
 statement error
-CALL ducklake_add_data_files('ducklake', 'test', '${DATA_PATH}/blob.parquet')
+CALL ducklake_add_data_files('ducklake', 'test', '{DATA_PATH}/blob.parquet')
 ----
 BLOB
 
 statement ok
-CALL ducklake_add_data_files('ducklake', 'test', '${DATA_PATH}/string.parquet')
+CALL ducklake_add_data_files('ducklake', 'test', '{DATA_PATH}/string.parquet')
 
 query I
 FROM ducklake.test
@@ -51,12 +51,12 @@ statement ok
 CREATE OR REPLACE TABLE ducklake.test(col1 BLOB);
 
 statement error
-CALL ducklake_add_data_files('ducklake', 'test', '${DATA_PATH}/string.parquet')
+CALL ducklake_add_data_files('ducklake', 'test', '{DATA_PATH}/string.parquet')
 ----
 VARCHAR
 
 statement ok
-CALL ducklake_add_data_files('ducklake', 'test', '${DATA_PATH}/blob.parquet')
+CALL ducklake_add_data_files('ducklake', 'test', '{DATA_PATH}/blob.parquet')
 
 query I
 FROM ducklake.test
@@ -70,12 +70,12 @@ statement ok
 CREATE OR REPLACE TABLE ducklake.test(col1 JSON);
 
 statement error
-CALL ducklake_add_data_files('ducklake', 'test', '${DATA_PATH}/string.parquet')
+CALL ducklake_add_data_files('ducklake', 'test', '{DATA_PATH}/string.parquet')
 ----
 VARCHAR
 
 statement ok
-CALL ducklake_add_data_files('ducklake', 'test', '${DATA_PATH}/json.parquet')
+CALL ducklake_add_data_files('ducklake', 'test', '{DATA_PATH}/json.parquet')
 
 query I
 FROM ducklake.test

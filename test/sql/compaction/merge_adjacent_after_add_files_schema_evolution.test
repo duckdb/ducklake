@@ -1,0 +1,180 @@
+# name: test/sql/compaction/merge_adjacent_after_add_files_schema_evolution.test
+# description: test that merge_adjacent_files does not create duplicates after UPDATE + DELETE + INSERT + ALTER ADD COLUMN + flush on a table with external Parquet files
+# group: [compaction]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+# Create external Parquet files
+statement ok
+COPY (
+    SELECT i AS id,
+        'ext_' || i::VARCHAR AS name,
+        i * 1.5 AS score
+    FROM RANGE(50) t(i)
+) TO '{DATA_PATH}/external1.parquet';
+
+statement ok
+COPY (
+    SELECT i + 50 AS id,
+        'ext_' || (i + 50)::VARCHAR AS name,
+        (i + 50) * 1.5 AS score
+    FROM RANGE(50) t(i)
+) TO '{DATA_PATH}/external2.parquet';
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake(DATA_PATH '{DATA_PATH}/merge_adj_schema_evo/', DATA_INLINING_ROW_LIMIT 50)
+
+statement ok
+USE ducklake;
+
+statement ok
+CREATE TABLE t AS
+SELECT *
+FROM read_parquet('{DATA_PATH}/external1.parquet')
+WITH NO DATA;
+
+statement ok
+CALL ducklake_add_data_files('ducklake', 't', '{DATA_PATH}/external1.parquet');
+
+statement ok
+CALL ducklake_add_data_files('ducklake', 't', '{DATA_PATH}/external2.parquet');
+
+# Verify initial data
+query I
+SELECT COUNT(DISTINCT id)
+FROM t
+----
+100
+
+# Modify the table
+statement ok
+UPDATE t
+SET score = score + 1000
+WHERE id < 20;
+
+statement ok
+DELETE
+FROM t
+WHERE id >= 90;
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake');
+
+statement ok
+INSERT INTO t
+SELECT i + 200,
+    'new_' || i::VARCHAR,
+    i * 0.5
+FROM RANGE(30) t(i);
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake');
+
+# Verify data before schema evolution
+query I
+SELECT COUNT(DISTINCT id)
+FROM t
+----
+120
+
+# Schema evolution
+statement ok
+ALTER TABLE t ADD COLUMN category VARCHAR;
+
+statement ok
+UPDATE t
+SET category = CASE
+    WHEN score > 500 THEN 'high'
+    ELSE 'low'
+END;
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake');
+
+# Verify data after schema evolution
+query I
+SELECT COUNT(*)
+FROM t
+----
+120
+
+query I
+SELECT COUNT(DISTINCT id)
+FROM t
+----
+120
+
+# No duplicates before merge
+query I
+SELECT COUNT(*)
+FROM (
+    SELECT id,
+        COUNT(*) c
+    FROM t
+    GROUP BY id
+    HAVING c > 1
+)
+----
+0
+
+# Compact files
+statement ok
+CALL ducklake_merge_adjacent_files('ducklake', 't');
+
+# Verify no duplicates after merge
+query I
+SELECT COUNT(*)
+FROM t
+----
+120
+
+query I
+SELECT COUNT(DISTINCT id)
+FROM t
+----
+120
+
+query I
+SELECT COUNT(*)
+FROM (
+    SELECT id,
+        COUNT(*) c
+    FROM t
+    GROUP BY id
+    HAVING c > 1
+)
+----
+0
+
+# Also test the simpler case: add_data_files + UPDATE without schema evolution
+statement ok
+CREATE TABLE t2 AS
+SELECT *
+FROM read_parquet('{DATA_PATH}/external1.parquet')
+WITH NO DATA;
+
+statement ok
+CALL ducklake_add_data_files('ducklake', 't2', '{DATA_PATH}/external1.parquet');
+
+statement ok
+UPDATE t2
+SET name = 'updated_' || id::VARCHAR;
+
+query I
+SELECT COUNT(DISTINCT id)
+FROM t2
+----
+50
+
+query I
+SELECT COUNT(*)
+FROM t2
+WHERE id IS NULL
+----
+0

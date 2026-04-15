@@ -6,10 +6,10 @@ require ducklake
 
 require parquet
 
-test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
 
 statement ok
-ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '__TEST_DIR__/merge_adjacent_sorted_expression/')
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{TEST_DIR}/merge_adjacent_sorted_expression/')
 
 statement ok
 USE ducklake;
@@ -146,17 +146,7 @@ ALTER TABLE rename_expr_test SET SORTED BY (col_a || col_b ASC);
 statement ok
 ALTER TABLE rename_expr_test RENAME COLUMN col_a TO col_a_renamed;
 
-# Compaction should fail with a descriptive error about the missing column
-statement error
-CALL ducklake_merge_adjacent_files('ducklake', 'rename_expr_test');
-----
-Columns in the SET SORTED BY statement were not found in the DuckLake table. Unmatched columns were: col_a
-
-# Fix the sort expression to use the new column name
-statement ok
-ALTER TABLE rename_expr_test SET SORTED BY (col_a_renamed || col_b ASC);
-
-# Now compaction should succeed
+# Compaction succeeds because sort expressions are updated during rename
 statement ok
 CALL ducklake_merge_adjacent_files('ducklake', 'rename_expr_test');
 
@@ -199,8 +189,6 @@ ALTER TABLE multi_rename_test RENAME COLUMN first_name TO given_name;
 statement ok
 ALTER TABLE multi_rename_test RENAME COLUMN last_name TO family_name;
 
-# Compaction should fail listing both missing columns
-statement error
+# Compaction succeeds because sort expressions are updated during rename
+statement ok
 CALL ducklake_merge_adjacent_files('ducklake', 'multi_rename_test');
-----
-Columns in the SET SORTED BY statement were not found in the DuckLake table. Unmatched columns were: first_name, last_name

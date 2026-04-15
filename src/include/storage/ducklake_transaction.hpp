@@ -263,6 +263,9 @@ public:
 	const set<TableIndex> &GetDroppedTables() {
 		return dropped_tables;
 	}
+	const set<TableIndex> &GetDroppedViews() {
+		return dropped_views;
+	}
 	const set<MacroIndex> &GetDroppedScalarMacros() {
 		return dropped_scalar_macros;
 	}
@@ -288,7 +291,6 @@ protected:
 private:
 	void CleanupFiles();
 	void FlushChanges();
-	void FlushSettingChanges();
 	string CommitChanges(DuckLakeCommitState &commit_state, TransactionChangeInformation &transaction_changes,
 	                     optional_ptr<vector<DuckLakeGlobalStatsInfo>> stats);
 	void CommitCompaction(DuckLakeSnapshot &commit_snapshot, TransactionChangeInformation &transaction_changes);

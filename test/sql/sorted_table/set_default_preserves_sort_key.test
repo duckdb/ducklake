@@ -1,0 +1,46 @@
+# name: test/sql/sorted_table/set_default_preserves_sort_key.test
+# description: Regression: SET DEFAULT followed by RENAME on the sort column in the same transaction
+# group: [sorted_table]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{TEST_DIR}/set_default_preserves_sort_key/')
+
+statement ok
+USE ducklake;
+
+statement ok
+CREATE TABLE t (a INTEGER, b INTEGER);
+
+statement ok
+INSERT INTO t VALUES (3, 30), (1, 10);
+
+statement ok
+ALTER TABLE t SET SORTED BY (a);
+
+statement ok
+BEGIN;
+
+statement ok
+ALTER TABLE t ALTER COLUMN b SET DEFAULT 42;
+
+statement ok
+ALTER TABLE t RENAME COLUMN a TO a_renamed;
+
+statement ok
+COMMIT;
+
+statement ok
+INSERT INTO t VALUES (2, 20);
+
+query II
+SELECT * FROM t ORDER BY a_renamed
+----
+1	10
+2	20
+3	30

@@ -6,13 +6,13 @@ require ducklake
 
 require parquet
 
-test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
 
-test-env DATA_PATH __TEST_DIR__
+test-env DATA_PATH {TEST_DIR}
 
 
 statement ok
-ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/ducklake_global_stats', METADATA_CATALOG 'ducklake_meta')
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/ducklake_global_stats', METADATA_CATALOG 'ducklake_meta')
 
 # test tracking of stats
 statement ok
@@ -24,7 +24,7 @@ INSERT INTO ducklake.test VALUES (42);
 query I
 SELECT stats(i) FROM ducklake.test LIMIT 1
 ----
-<REGEX>:.*Min.*42.*Max.*42.*Has Null.*false.*
+<REGEX>:.*max.*42.*min.*42.*
 
 statement ok
 INSERT INTO ducklake.test VALUES (84)
@@ -32,7 +32,7 @@ INSERT INTO ducklake.test VALUES (84)
 query I
 SELECT stats(i) FROM ducklake.test LIMIT 1
 ----
-<REGEX>:.*Min.*42.*Max.*84.*Has Null.*false.*
+<REGEX>:.*has_null.*false.*max.*84.*min.*42.*
 
 statement ok
 INSERT INTO ducklake.test VALUES (NULL)
@@ -40,7 +40,7 @@ INSERT INTO ducklake.test VALUES (NULL)
 query I
 SELECT stats(i) FROM ducklake.test LIMIT 1
 ----
-<REGEX>:.*Min.*42.*Max.*84.*Has Null.*true.*
+<REGEX>:.*has_null.*true.*max.*84.*min.*42.*
 
 # dates/timestamps
 statement ok
@@ -52,7 +52,7 @@ INSERT INTO ducklake.dates VALUES (date '1992-01-01');
 query I
 SELECT stats(d) FROM ducklake.dates LIMIT 1
 ----
-<REGEX>:.*Min.*1992-01-01.*Max.*1992-01-01.*Has Null.*false.*
+<REGEX>:.*max.*1992-01-01.*min.*1992-01-01.*
 
 statement ok
 INSERT INTO ducklake.dates VALUES (date '2000-02-03');
@@ -60,7 +60,7 @@ INSERT INTO ducklake.dates VALUES (date '2000-02-03');
 query I
 SELECT stats(d) FROM ducklake.dates LIMIT 1
 ----
-<REGEX>:.*Min.*1992-01-01.*Max.*2000-02-03.*Has Null.*false.*
+<REGEX>:.*max.*2000-02-03.*min.*1992-01-01.*
 
 # strings
 statement ok
@@ -72,7 +72,7 @@ INSERT INTO ducklake.strings VALUES ('hello world');
 query I
 SELECT stats(s) FROM ducklake.strings LIMIT 1
 ----
-<REGEX>:.*Min.*hello wo.*Max.*hello wo.*Has Null.*false.*
+<REGEX>:.*max.*hello wo.*min.*hello wo.*
 
 statement ok
 INSERT INTO ducklake.strings VALUES ('bye bye world');
@@ -80,7 +80,7 @@ INSERT INTO ducklake.strings VALUES ('bye bye world');
 query I
 SELECT stats(s) FROM ducklake.strings LIMIT 1
 ----
-<REGEX>:.*Min.*bye bye.*Max.*hello wo.*Has Null.*false.*
+<REGEX>:.*max.*hello wo.*min.*bye bye.*
 
 # multiple inserts within the same transaction
 statement ok
@@ -101,7 +101,7 @@ COMMIT
 query I
 SELECT stats(i) FROM ducklake.test LIMIT 1
 ----
-<REGEX>:.*Min.*42.*Max.*87.*Has Null.*true.*
+<REGEX>:.*has_null.*true.*max.*87.*min.*42.*
 
 # test stats with transaction-local changes
 statement ok

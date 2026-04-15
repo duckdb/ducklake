@@ -1,17 +1,18 @@
 # name: test/sql/issues/corrupted_catalog_fault_isolation.test
 # description: A corrupted ducklake catalog should not prevent attaching other ducklake catalogs
 # group: [issues]
+
 # note: skipped in SQLite/Postgres CI configs - this test requires multiple independent metadata databases
 
 require ducklake
 
 require parquet
 
-test-env DATA_PATH __TEST_DIR__
+test-env DATA_PATH {TEST_DIR}
 
 # Create a ducklake catalog with a table
 statement ok
-ATTACH 'ducklake:__TEST_DIR__/corrupted.db' AS corrupt_dl (DATA_PATH '${DATA_PATH}/corrupted')
+ATTACH 'ducklake:{TEST_DIR}/corrupted.db' AS corrupt_dl (DATA_PATH '{DATA_PATH}/corrupted')
 
 statement ok
 CREATE TABLE corrupt_dl.t1 AS SELECT 1 AS id, 'hello' AS name
@@ -22,7 +23,7 @@ UPDATE __ducklake_metadata_corrupt_dl.main.ducklake_column SET column_type = 'in
 
 # Attach a second ducklake catalog - this should succeed despite the corrupted sibling
 statement ok
-ATTACH 'ducklake:__TEST_DIR__/good.db' AS good_dl (DATA_PATH '${DATA_PATH}/good')
+ATTACH 'ducklake:{TEST_DIR}/good.db' AS good_dl (DATA_PATH '{DATA_PATH}/good')
 
 statement ok
 CREATE TABLE good_dl.t2 AS SELECT 42 AS val
@@ -37,7 +38,7 @@ DETACH corrupt_dl
 
 # Reattach the corrupted catalog - attach itself should succeed (lazy loading)
 statement ok
-ATTACH 'ducklake:__TEST_DIR__/corrupted.db' AS corrupt_dl (DATA_PATH '${DATA_PATH}/corrupted')
+ATTACH 'ducklake:{TEST_DIR}/corrupted.db' AS corrupt_dl (DATA_PATH '{DATA_PATH}/corrupted')
 
 # Verify the corruption survives detach/reattach
 statement error
