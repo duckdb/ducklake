@@ -1612,7 +1612,12 @@ LEFT JOIN LATERAL (
 	ORDER BY data_file_id, begin_snapshot DESC
 ) AS previous_delete
 USING (data_file_id), (
-	SELECT CAST(NULL AS VARCHAR) AS path, CAST(NULL AS BOOLEAN) AS path_is_relative, CAST(NULL AS BIGINT) AS file_size_bytes, CAST(NULL AS BIGINT) AS footer_size, CAST(NULL AS VARCHAR) AS encryption_key, NULL format
+	SELECT CAST(NULL AS VARCHAR) AS path,
+		CAST(NULL AS BOOLEAN) AS path_is_relative,
+		CAST(NULL AS BIGINT) AS file_size_bytes,
+		CAST(NULL AS BIGINT) AS footer_size,
+		CAST(NULL AS VARCHAR) AS encryption_key,
+		CAST(NULL AS VARCHAR) format
 ) current_delete
 )",
 	                            select_list, table_id.index, table_id.index, start_snapshot.snapshot_id, table_id.index,
