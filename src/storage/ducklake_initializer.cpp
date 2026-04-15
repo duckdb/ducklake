@@ -10,6 +10,7 @@
 #include "storage/ducklake_catalog.hpp"
 #include "storage/ducklake_transaction.hpp"
 #include "storage/ducklake_schema_entry.hpp"
+#include "common/ducklake_version.hpp"
 
 namespace duckdb {
 
@@ -72,6 +73,14 @@ void DuckLakeInitializer::Initialize() {
 		// if the schema is not explicitly set by the user - set it to the default schema in the catalog
 		options.metadata_schema = transaction.GetDefaultSchemaName();
 	}
+	// if no explicit ducklake_version was set via ATTACH, check the global setting
+	if (options.ducklake_version == DuckLakeVersion::UNSET) {
+		Value setting_val;
+		if (context.TryGetCurrentSetting("ducklake_default_version", setting_val) && !setting_val.IsNull()) {
+			options.ducklake_version = DuckLakeVersionFromString(setting_val.ToString());
+		}
+	}
+
 	// after the metadata database is attached initialize the ducklake
 	// check if we are loading an existing DuckLake or creating a new one
 	// directly query a known ducklake metadata table to avoid scanning all attached catalogs via duckdb_tables()
@@ -185,6 +194,13 @@ void DuckLakeInitializer::LoadExistingDuckLake(DuckLakeTransaction &transaction)
 			if (version != "1.0") {
 				throw NotImplementedException(
 				    "Only DuckLake versions 0.1, 0.2, 0.3-dev1, 0.3, 0.4-dev1, 0.4, 1.0 are supported");
+			}
+			if (options.ducklake_version != DuckLakeVersion::UNSET &&
+			    version != DuckLakeVersionToString(options.ducklake_version)) {
+				throw InvalidInputException(
+				    "DuckLake version mismatch: catalog version is '%s', but ducklake_version '%s' was requested. "
+				    "To automatically migrate, set AUTOMATIC_MIGRATION to TRUE when attaching.",
+				    version, DuckLakeVersionToString(options.ducklake_version));
 			}
 		}
 		if (tag.key == "data_path") {

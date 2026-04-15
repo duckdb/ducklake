@@ -1,0 +1,94 @@
+# name: test/sql/attach/attach_ducklake_version.test
+# description: test ducklake_version option for attach
+# group: [attach]
+
+require ducklake
+
+require parquet
+
+# invalid version should fail
+statement error
+ATTACH 'ducklake:{TEST_DIR}/ducklake_version_err.db' AS ducklake_err(DATA_PATH '{TEST_DIR}/ducklake_version_err_files', DUCKLAKE_VERSION '2.0')
+----
+Unsupported ducklake_version
+
+# valid version '1.0' should succeed on new database
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/ducklake_version.db' AS ducklake(DATA_PATH '{TEST_DIR}/ducklake_version_files', DUCKLAKE_VERSION '1.0')
+
+statement ok
+CREATE TABLE ducklake.t1 (
+    i INT
+);
+
+statement ok
+INSERT INTO ducklake.t1 VALUES (42);
+
+statement ok
+DETACH ducklake
+
+# re-attach with matching version should succeed
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/ducklake_version.db' AS ducklake(DATA_PATH '{TEST_DIR}/ducklake_version_files', DUCKLAKE_VERSION '1.0')
+
+query I
+SELECT *
+FROM ducklake.t1
+----
+42
+
+statement ok
+DETACH ducklake
+
+# re-attach without version should also succeed (backward compat)
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/ducklake_version.db' AS ducklake(DATA_PATH '{TEST_DIR}/ducklake_version_files')
+
+query I
+SELECT *
+FROM ducklake.t1
+----
+42
+
+statement ok
+DETACH ducklake
+
+# global setting: invalid version should fail at attach time
+statement ok
+SET ducklake_default_version = '2.0'
+
+statement error
+ATTACH 'ducklake:{TEST_DIR}/ducklake_version.db' AS ducklake(DATA_PATH '{TEST_DIR}/ducklake_version_files')
+----
+Unsupported ducklake_version
+
+# global setting: set valid version
+statement ok
+SET ducklake_default_version = '1.0'
+
+# attach without explicit ducklake_version should pick up global setting
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/ducklake_version.db' AS ducklake(DATA_PATH '{TEST_DIR}/ducklake_version_files')
+
+query I
+SELECT *
+FROM ducklake.t1
+----
+42
+
+statement ok
+DETACH ducklake
+
+# reset global setting
+statement ok
+RESET ducklake_default_version
+
+# attach still works without any version constraint
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/ducklake_version.db' AS ducklake(DATA_PATH '{TEST_DIR}/ducklake_version_files')
+
+query I
+SELECT *
+FROM ducklake.t1
+----
+42

@@ -45,6 +45,7 @@ CreateSecretFunction DuckLakeSecret::GetFunction() {
 	function.named_parameters["metadata_path"] = LogicalType::VARCHAR;
 	function.named_parameters["metadata_parameters"] = LogicalType::MAP(LogicalType::VARCHAR, LogicalType::VARCHAR);
 	function.named_parameters["encrypted"] = LogicalType::BOOLEAN;
+	function.named_parameters["ducklake_version"] = LogicalType::VARCHAR;
 	return function;
 }
 
