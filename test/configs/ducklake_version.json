@@ -1,0 +1,18 @@
+{
+  "description": "Run on DuckLake database as storage with ducklake_default_version set to 1.0.",
+  "on_init": "SET ducklake_default_version = '1.0';",
+  "statically_loaded_extensions": [
+    "core_functions",
+    "parquet",
+    "ducklake",
+    "icu"
+  ],
+  "skip_tests": [
+    {
+      "reason": "Parquet is statically loaded in this config, test requires missing parquet",
+      "paths": [
+        "test/sql/general/missing_parquet.test"
+      ]
+    }
+  ]
+}
