@@ -1,0 +1,139 @@
+# name: test/sql/partitioning/merge_adjacent_null_partition.test
+# description: ducklake_merge_adjacent_files with NULL partition
+# group: [partitioning]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+#===----------------------------------------------------------------------===#
+# Part 1: minimal repro - crash from regular INSERT + flush alone
+#===----------------------------------------------------------------------===#
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (
+    DATA_PATH '{DATA_PATH}/null_partition_merge',
+    METADATA_CATALOG 'meta'
+)
+
+statement ok
+CREATE TABLE ducklake.t (id INTEGER, tag VARCHAR)
+
+statement ok
+ALTER TABLE ducklake.t SET PARTITIONED BY (tag)
+
+# First null-partition file: INSERT + flush writes partition_value = SQL NULL
+statement ok
+INSERT INTO ducklake.t VALUES (1, NULL)
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake')
+
+# Second null-partition file: same path, second SQL NULL stored
+statement ok
+INSERT INTO ducklake.t VALUES (2, NULL)
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake')
+
+# Confirm two live files exist, both with partition_value = SQL NULL
+query I
+SELECT COUNT(*) FROM meta.ducklake_data_file WHERE end_snapshot IS NULL
+----
+2
+
+query I
+SELECT COUNT(*) FROM meta.ducklake_file_partition_value WHERE partition_value IS NULL
+----
+2
+
+# Previously crashed:
+#   INTERNAL Error: Calling StringValue::Get on a NULL value
+# because GetFilesForCompaction called ARRAY_AGG(partition_value) which in DuckDB
+# includes NULLs, then passed the NULL list element to StringValue::Get.
+statement ok
+CALL ducklake_merge_adjacent_files('ducklake')
+
+# After successful compaction: one live file, correct metadata, correct data
+query I
+SELECT COUNT(*) FROM meta.ducklake_data_file WHERE end_snapshot IS NULL
+----
+1
+
+query I
+SELECT COUNT(*) FROM meta.ducklake_file_partition_value WHERE partition_value IS NULL
+----
+1
+
+query II
+SELECT id, tag FROM ducklake.t ORDER BY id
+----
+1	NULL
+2	NULL
+
+query I
+SELECT COUNT(*) FROM ducklake.t WHERE tag IS NULL
+----
+2
+
+query I
+SELECT COUNT(*) FROM ducklake.t WHERE tag IS NOT NULL
+----
+0
+
+#===----------------------------------------------------------------------===#
+# Part 2: secondary bug - add_data_files stores 'NULL' string, not SQL NULL
+#         This also interacts with compaction (different representation prevents
+#         files from the two paths being grouped together for merging).
+#===----------------------------------------------------------------------===#
+
+# Write a source parquet file with a NULL partition value via DuckDB hive partitioning
+statement ok
+COPY (SELECT 3 AS id, NULL::VARCHAR AS tag)
+TO '{DATA_PATH}/null_part_src'
+(FORMAT PARQUET, PARTITION_BY (tag))
+
+# Register it via add_data_files
+statement ok
+CALL ducklake_add_data_files('ducklake', 't',
+    '{DATA_PATH}/null_part_src/tag=__HIVE_DEFAULT_PARTITION__/*.parquet',
+    hive_partitioning => true)
+
+# Both files (one from flush, one from add_data_files) must use SQL NULL so
+# they are grouped together and compactable.
+query I
+SELECT COUNT(*) FROM meta.ducklake_file_partition_value WHERE partition_value IS NULL
+----
+2
+
+query I
+SELECT COUNT(*) FROM meta.ducklake_file_partition_value WHERE partition_value = 'NULL'
+----
+0
+
+# Compaction must merge the flush-registered file and the add_data_files-registered
+# file into a single output file (same null partition group).
+statement ok
+CALL ducklake_merge_adjacent_files('ducklake')
+
+query I
+SELECT COUNT(*) FROM meta.ducklake_data_file WHERE end_snapshot IS NULL
+----
+1
+
+query I
+SELECT COUNT(*) FROM meta.ducklake_file_partition_value WHERE partition_value IS NULL
+----
+1
+
+# All three rows visible after the second round of compaction
+query II
+SELECT id, tag FROM ducklake.t ORDER BY id
+----
+1	NULL
+2	NULL
+3	NULL
