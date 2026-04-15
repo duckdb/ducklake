@@ -209,8 +209,6 @@ struct DuckLakeCompactionGroupHash {
 			hash ^= std::hash<idx_t>()(group.partition_id.GetIndex());
 		}
 		for (auto &val : group.partition_values) {
-			// NULL partitions get a fixed constant so all null-partition files
-			// hash to the same bucket regardless of type.
 			if (val.IsNull()) {
 				hash ^= 0x9E3779B97F4A7C15ULL;
 			} else {
@@ -232,8 +230,6 @@ struct DuckLakeCompactionGroupEquality {
 		for (idx_t i = 0; i < a.partition_values.size(); i++) {
 			const auto &av = a.partition_values[i];
 			const auto &bv = b.partition_values[i];
-			// NULL == NULL means "same null partition"; one NULL and one non-NULL
-			// means different partitions.
 			if (av.IsNull() != bv.IsNull()) {
 				return false;
 			}
