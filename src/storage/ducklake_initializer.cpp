@@ -12,6 +12,8 @@
 #include "storage/ducklake_schema_entry.hpp"
 #include "common/ducklake_version.hpp"
 #include "metadata_manager/ducklake_metadata_manager_v1_1.hpp"
+#include "metadata_manager/sqlite_metadata_manager.hpp"
+#include "metadata_manager/postgres_metadata_manager.hpp"
 
 namespace duckdb {
 
@@ -281,16 +283,24 @@ DuckLakeVersion DuckLakeInitializer::ResolveTargetVersion(DuckLakeVersion catalo
 }
 
 void DuckLakeInitializer::SetVersionedMetadataManager(DuckLakeTransaction &transaction, DuckLakeVersion version) {
-	switch (version) {
-	case DuckLakeVersion::V1_0:
-		// base DuckLakeMetadataManager is V1.0, so this is a nop
-		break;
-	case DuckLakeVersion::V1_1_DEV_1:
-		transaction.SetMetadataManager(make_uniq<DuckLakeMetadataManagerV1_1>(transaction));
-		break;
-	default:
+	if (version == DuckLakeVersion::V1_0) {
+		// base metadata managers are already V1.0, nop
+		return;
+	}
+	auto &current = transaction.GetMetadataManager();
+	unique_ptr<DuckLakeMetadataManager> new_manager;
+	if (version == DuckLakeVersion::V1_1_DEV_1) {
+		if (dynamic_cast<PostgresMetadataManager *>(&current)) {
+			new_manager = make_uniq<DuckLakeMetadataManagerV1_1<PostgresMetadataManager>>(transaction);
+		} else if (dynamic_cast<SQLiteMetadataManager *>(&current)) {
+			new_manager = make_uniq<DuckLakeMetadataManagerV1_1<SQLiteMetadataManager>>(transaction);
+		} else {
+			new_manager = make_uniq<DuckLakeMetadataManagerV1_1<DuckLakeMetadataManager>>(transaction);
+		}
+	} else {
 		throw InternalException("SetVersionedMetadataManager: unsupported version");
 	}
+	transaction.SetMetadataManager(std::move(new_manager));
 }
 
 } // namespace duckdb

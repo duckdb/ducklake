@@ -12,9 +12,11 @@
 
 namespace duckdb {
 
-class DuckLakeMetadataManagerV1_1 : public DuckLakeMetadataManager {
+template <typename Base>
+class DuckLakeMetadataManagerV1_1 : public Base {
 public:
-	explicit DuckLakeMetadataManagerV1_1(DuckLakeTransaction &transaction);
+	explicit DuckLakeMetadataManagerV1_1(DuckLakeTransaction &transaction) : Base(transaction) {
+	}
 
 	string GetCreateTableStatements() override;
 	string GetVersionString() override;
