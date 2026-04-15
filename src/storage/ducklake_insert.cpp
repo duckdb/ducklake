@@ -838,7 +838,6 @@ PhysicalOperator &DuckLakeCatalog::PlanCreateTableAs(ClientContext &context, Phy
 	auto &columns = create_info.columns;
 	auto &duck_transaction = DuckLakeTransaction::Get(context, *this);
 	auto &duck_schema = op.schema.Cast<DuckLakeSchemaEntry>();
-	// FIXME: if table already exists and we are doing CREATE IF NOT EXISTS - skip
 	reference<PhysicalOperator> root = plan;
 	optional_ptr<DuckLakeInlineData> inline_data;
 	idx_t data_inlining_row_limit = DataInliningRowLimit(context, duck_schema.GetSchemaId(), TableIndex());
