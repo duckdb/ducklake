@@ -1,0 +1,47 @@
+# name: test/sql/issues/corrupted_catalog_fault_isolation.test
+# description: A corrupted ducklake catalog should not prevent attaching other ducklake catalogs
+# group: [issues]
+
+# note: skipped in SQLite/Postgres CI configs - this test requires multiple independent metadata databases
+
+require ducklake
+
+require parquet
+
+test-env DATA_PATH {TEST_DIR}
+
+# Create a ducklake catalog with a table
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/corrupted.db' AS corrupt_dl (DATA_PATH '{DATA_PATH}/corrupted')
+
+statement ok
+CREATE TABLE corrupt_dl.t1 AS SELECT 1 AS id, 'hello' AS name
+
+# Corrupt the metadata: set an invalid column type
+statement ok
+UPDATE __ducklake_metadata_corrupt_dl.main.ducklake_column SET column_type = 'int32varcharvarchar' WHERE column_name = 'id'
+
+# Attach a second ducklake catalog - this should succeed despite the corrupted sibling
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/good.db' AS good_dl (DATA_PATH '{DATA_PATH}/good')
+
+statement ok
+CREATE TABLE good_dl.t2 AS SELECT 42 AS val
+
+query I
+SELECT val FROM good_dl.t2
+----
+42
+
+statement ok
+DETACH corrupt_dl
+
+# Reattach the corrupted catalog - attach itself should succeed (lazy loading)
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/corrupted.db' AS corrupt_dl (DATA_PATH '{DATA_PATH}/corrupted')
+
+# Verify the corruption survives detach/reattach
+statement error
+SELECT * FROM corrupt_dl.t1
+----
+unsupported type 'int32varcharvarchar'

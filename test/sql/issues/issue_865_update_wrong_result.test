@@ -1,0 +1,60 @@
+# name: test/sql/issues/issue_865_update_wrong_result.test
+# description: UPDATE on ducklake table produces duplicate rows when a data file has both a committed delete file and committed inlined file deletions
+# group: [issues]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/issue_865', DATA_INLINING_ROW_LIMIT 10)
+
+# Create table with enough rows to NOT be inlined
+statement ok
+CREATE TABLE ducklake.test AS SELECT i AS id, 'original' AS val FROM range(100) t(i)
+
+# Create delete file
+statement ok
+DELETE FROM ducklake.test WHERE id >= 80
+
+query I
+SELECT count(*) FROM ducklake.test
+----
+80
+
+# Inline deletes
+statement ok
+DELETE FROM ducklake.test WHERE id >= 75
+
+query I
+SELECT count(*) FROM ducklake.test
+----
+75
+
+# If we update more than the inline value, inlined deletion merge will corrupt de delete data
+query I
+UPDATE ducklake.test SET val = 'updated' WHERE id < 20
+----
+20
+
+# After update: should still have 75 rows
+query I
+SELECT count(*) FROM ducklake.test
+----
+75
+
+# The 20 updated rows should exist exactly once with 'updated'
+query I
+SELECT count(*) FROM ducklake.test WHERE val = 'updated'
+----
+20
+
+# No duplicate ids
+query I
+SELECT count(*) FROM (SELECT id, count(*) cnt FROM ducklake.test GROUP BY id HAVING count(*) > 1)
+----
+0

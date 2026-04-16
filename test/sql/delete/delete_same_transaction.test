@@ -6,13 +6,13 @@ require ducklake
 
 require parquet
 
-test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
 
-test-env DATA_PATH __TEST_DIR__
+test-env DATA_PATH {TEST_DIR}
 
 
 statement ok
-ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/ducklake_delete_same_transaction_files')
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/ducklake_delete_same_transaction_files')
 
 statement ok
 BEGIN
@@ -50,7 +50,7 @@ COMMIT
 
 # verify that we only have one delete file written after the commit (i.e. we cleaned up the first file
 query I
-SELECT COUNT(*) FROM glob('${DATA_PATH}/ducklake_delete_same_transaction_files/main/test/*-delete.parquet')
+SELECT COUNT(*) FROM glob('{DATA_PATH}/ducklake_delete_same_transaction_files/main/test/*-delete.*')
 ----
 1
 

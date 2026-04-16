@@ -10,6 +10,7 @@
 #include "duckdb/parser/keyword_helper.hpp"
 #include "storage/ducklake_metadata_info.hpp"
 #include "yyjson.hpp"
+#include "common/ducklake_util.hpp"
 
 namespace duckdb {
 
@@ -208,7 +209,7 @@ bool DuckLakeColumnVariantStats::TrySerialize(string &result) const {
 	string out(json, len);
 	free(json);
 	yyjson_mut_doc_free(doc);
-	result = "'" + out + "'";
+	result = DuckLakeUtil::SQLLiteralToString(out);
 	return true;
 }
 

@@ -1,0 +1,165 @@
+# name: test/sql/data_inlining/partition_inlining.test
+# description: Multiple partition key updates + flush
+# group: [data_inlining]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/partkey_multi', DATA_INLINING_ROW_LIMIT 20)
+
+statement ok
+CREATE TABLE ducklake.p(id INTEGER, region VARCHAR, amount DOUBLE);
+
+statement ok
+ALTER TABLE ducklake.p SET PARTITIONED BY (region);
+
+statement ok
+INSERT INTO ducklake.p VALUES (1, 'east', 100.0), (2, 'east', 200.0);
+
+statement ok
+INSERT INTO ducklake.p VALUES (3, 'west', 300.0), (4, 'west', 400.0);
+
+# First update: move id=1 east->west
+statement ok
+UPDATE ducklake.p SET region = 'west' WHERE id = 1;
+
+# Second update: move id=2 east->central (new partition)
+statement ok
+UPDATE ducklake.p SET region = 'central' WHERE id = 2;
+
+# Before flush - CORRECT
+query III
+FROM ducklake.p ORDER BY id
+----
+1	west	100.0
+2	central	200.0
+3	west	300.0
+4	west	400.0
+
+# Flush
+statement ok
+CALL ducklake_flush_inlined_data('ducklake')
+
+query III
+FROM ducklake.p ORDER BY id
+----
+1	west	100.0
+2	central	200.0
+3	west	300.0
+4	west	400.0
+
+statement ok
+DETACH ducklake
+
+# ------------------------------------------------------------------
+# Test 2: DELETE (not UPDATE) before flush on partitioned table
+# ------------------------------------------------------------------
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}_del' AS ducklake (DATA_PATH '{DATA_PATH}/partkey_del', DATA_INLINING_ROW_LIMIT 20)
+
+statement ok
+CREATE TABLE ducklake.d(id INTEGER, region VARCHAR, amount DOUBLE);
+
+statement ok
+ALTER TABLE ducklake.d SET PARTITIONED BY (region);
+
+statement ok
+INSERT INTO ducklake.d VALUES (1, 'east', 10.0), (2, 'east', 20.0), (3, 'west', 30.0);
+
+statement ok
+DELETE FROM ducklake.d WHERE id = 1;
+
+query III
+FROM ducklake.d ORDER BY id
+----
+2	east	20.0
+3	west	30.0
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake')
+
+query III
+FROM ducklake.d ORDER BY id
+----
+2	east	20.0
+3	west	30.0
+
+statement ok
+DETACH ducklake
+
+# ------------------------------------------------------------------
+# Test 3: Non-partitioned table with UPDATE before flush
+# ------------------------------------------------------------------
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}_nopart' AS ducklake (DATA_PATH '{DATA_PATH}/nopart_upd', DATA_INLINING_ROW_LIMIT 20)
+
+statement ok
+CREATE TABLE ducklake.np(id INTEGER, val INTEGER);
+
+statement ok
+INSERT INTO ducklake.np VALUES (1, 100), (2, 200), (3, 300);
+
+statement ok
+UPDATE ducklake.np SET val = 999 WHERE id = 2;
+
+query II
+FROM ducklake.np ORDER BY id
+----
+1	100
+2	999
+3	300
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake')
+
+query II
+FROM ducklake.np ORDER BY id
+----
+1	100
+2	999
+3	300
+
+statement ok
+DETACH ducklake
+
+# ------------------------------------------------------------------
+# Test 4: Transform-based partition (year) with UPDATE before flush
+# ------------------------------------------------------------------
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}_transform' AS ducklake (DATA_PATH '{DATA_PATH}/partkey_transform', DATA_INLINING_ROW_LIMIT 20)
+
+statement ok
+CREATE TABLE ducklake.t(id INTEGER, ts TIMESTAMP, amount DOUBLE);
+
+statement ok
+ALTER TABLE ducklake.t SET PARTITIONED BY (year(ts));
+
+statement ok
+INSERT INTO ducklake.t VALUES (1, '2020-06-15', 10.0), (2, '2020-11-01', 20.0), (3, '2021-03-20', 30.0);
+
+# Move id=1 from year 2020 to 2021
+statement ok
+UPDATE ducklake.t SET ts = '2021-06-15' WHERE id = 1;
+
+query III
+FROM ducklake.t ORDER BY id
+----
+1	2021-06-15 00:00:00	10.0
+2	2020-11-01 00:00:00	20.0
+3	2021-03-20 00:00:00	30.0
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake')
+
+query III
+FROM ducklake.t ORDER BY id
+----
+1	2021-06-15 00:00:00	10.0
+2	2020-11-01 00:00:00	20.0
+3	2021-03-20 00:00:00	30.0

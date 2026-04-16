@@ -6,10 +6,10 @@ require ducklake
 
 require parquet
 
-test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
 
 statement ok
-ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '__TEST_DIR__/merge_adjacent_options_sorted/')
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{TEST_DIR}/merge_adjacent_options_sorted/')
 
 statement ok
 USE ducklake;
@@ -81,31 +81,13 @@ ALTER TABLE sort_on_compaction RENAME COLUMN sort_key_1 TO sort_key_1_renamed;
 statement ok
 COMMIT
 
-# The compaction should fail due to the stale sort order
-statement error
-CALL ducklake_merge_adjacent_files('ducklake', 'sort_on_compaction');
-----
-Columns in the SET SORTED BY statement were not found in the DuckLake table. Unmatched columns were: sort_key_1
-
-statement ok
-BEGIN
-
-# Do some other kind of alter table on that table to make sure that it does not interfere
-statement ok
-ALTER TABLE sort_on_compaction RENAME COLUMN sort_key_1_renamed TO sort_key_1_renamed_again;
-
-statement ok
-ALTER TABLE ducklake.sort_on_compaction SET SORTED BY (sort_key_1_renamed_again ASC NULLS LAST, sort_key_2 ASC NULLS LAST);
-
-statement ok
-COMMIT
-
+# Compaction succeeds because sort expressions are updated during rename
 query III
 SELECT table_name, files_processed, files_created FROM ducklake_merge_adjacent_files('ducklake', 'sort_on_compaction')
 ----
 sort_on_compaction	2	1
 
-# Now we have the new sort order and the new column
+# Now we have the new sort order and the renamed column
 query III
 FROM sort_on_compaction
 ----

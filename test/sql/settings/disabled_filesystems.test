@@ -1,0 +1,19 @@
+# name: test/sql/settings/disabled_filesystems.test
+# description: StorePath/LoadPath breaks when LocalFileSystem is disabled
+# group: [settings]
+
+require ducklake
+
+require httpfs
+
+statement ok
+ATTACH 'ducklake::memory:' AS ducklake (DATA_PATH 's3://any-bucket/data/')
+
+statement ok
+USE ducklake
+
+statement ok
+SET disabled_filesystems = 'LocalFileSystem'
+
+statement ok
+CREATE TABLE test (id INTEGER)

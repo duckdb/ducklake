@@ -39,7 +39,10 @@
     "Changing Secret Manager settings after the secret manager is used is not allowed!",
     "Unsupported type \"TIME_NS\" in Parquet writer",
     "DuckLakeScan not implemented",
-    "Unsupported ALTER TABLE"
+    "Unsupported ALTER TABLE",
+    "reserved by DuckLake",
+    "We cannot add a column with a non-literal default value",
+    "Can't convert TableFilterType"
   ],
   "skip_tests": [
     {
@@ -136,7 +139,13 @@
         "test/optimizer/pushdown/filter_cannot_pushdown.test",
         "test/optimizer/pushdown/filters_on_limit_optimizer.test",
         "test/sql/explain/test_explain_table_scan.test",
-        "test/sql/types/struct/struct_projection_pushdown_in_storage.test"
+        "test/sql/types/struct/struct_projection_pushdown_in_storage.test",
+        "test/optimizer/pushdown/join_filter_pushdown_cast.test",
+        "test/optimizer/projection_pullup.test",
+        "test/optimizer/test_aggregate_function_rewrite.test",
+        "test/optimizer/row_number_virtual_column.test",
+        "test/sql/window/test_streaming_window.test",
+        "test/sql/transactions/test_cardinality_estimation_uncommitted.test"
       ]
     },
     {
@@ -171,8 +180,9 @@
         "test/sql/update/test_update_same_value.test",
         "test/sql/delete/cleanup_delete_on_conflict.test",
         "test/sql/alter/add_col/test_add_col_transactions.test",
-        "test/sql/alter/drop_col/test_drop_col_transactions.test"
-
+        "test/sql/alter/drop_col/test_drop_col_transactions.test",
+        "test/sql/transactions/transaction_insert_mixed_deletes.test",
+        "test/sql/transactions/transaction_insert_delete_chunks.test"
       ]
     },
     {
@@ -192,7 +202,8 @@
         "test/sql/transactions/test_create_drop_conflict_variation1.test",
         "test/sql/copy/parquet/parquet_glob.test",
         "test/sql/alter/alter_table_set_table_options.test",
-        "test/sql/function/variant/variant_extract_try_cast.test"
+        "test/sql/function/variant/variant_extract_try_cast.test",
+        "test/sql/alter/rename_table/test_rename_table_view.test"
       ]
     },
     {
@@ -273,7 +284,8 @@
         "test/fuzzer/sqlsmith/nullif_map_with_config.test",
         "test/sql/storage/buffer_manager_temp_dir.test",
         "test/issues/internal/test_5457.test",
-        "test/sql/copy/csv/code_cov/csv_disk_reload.test"
+        "test/sql/copy/csv/code_cov/csv_disk_reload.test",
+        "test/sql/table_function/duckdb_eviction_queues.test"
       ]
     },
     {
@@ -487,7 +499,8 @@
     {
       "reason": "RowID order - SELECT (SELECT rowid FROM a LIMIT 1) - No guarantee from DuckLake to be ordered",
       "paths": [
-        "test/sql/projection/test_row_id_expression.test"
+        "test/sql/projection/test_row_id_expression.test",
+        "test/fuzzer/pedro/returning_clause_with_rowid.test"
       ]
     },
     {
@@ -575,12 +588,6 @@
       ]
     },
     {
-      "reason": "Assumes ordering of rowids that is not guaranteed in DuckLake",
-      "paths": [
-          "test/sql/projection/test_row_id_expression.test"
-      ]
-    },
-    {
       "reason": "PARTITIONED BY is not supported for tables in a ducklake catalog",
       "paths": [
           "test/sql/create/create_table_extra_options.test"
@@ -622,12 +629,6 @@
       ]
     },
     {
-      "reason": "FIXME? Variant issues",
-      "paths": [
-          "test/sql/storage/types/variant/variant_shredding_omit_untyped.test"
-      ]
-    },
-    {
         "reason": "FIXME: GEOMETRY limitations (stats are different in DuckLake, shredding is not supported)",
         "paths": [
             "test/sql/types/geo/geometry_stats.test",
@@ -636,6 +637,13 @@
             "test/sql/types/geo/geometry_crs.test",
             "test/sql/types/geo/geometry_shred.test"
         ]
+    },
+    {
+      "reason": "Multiple require storage sections create same-named tables, causing conflicts in DuckLake",
+      "paths": [
+        "test/sql/pivot/pivot_star.test",
+        "test/sql/types/geo/geometry_update.test"
+      ]
     },
     {
       "reason": "FIXME: Variant Bugs?",

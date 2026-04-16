@@ -337,44 +337,42 @@ vector<DuckLakeMacroImplementation> PostgresMetadataManager::LoadMacroImplementa
 	return result;
 }
 
+// We need a specialized function here to do a reinterpret for postgres from BLOB to VARCHAR
 shared_ptr<DuckLakeInlinedData>
 PostgresMetadataManager::TransformInlinedData(QueryResult &result, const vector<LogicalType> &expected_types) {
+	bool needs_reinterpret = false;
+	if (!expected_types.empty()) {
+		D_ASSERT(expected_types.size() == result.types.size());
+		for (idx_t i = 0; i < expected_types.size(); i++) {
+			if (result.types[i] != expected_types[i]) {
+				D_ASSERT(result.types[i].id() == LogicalTypeId::BLOB &&
+				         expected_types[i].id() == LogicalTypeId::VARCHAR);
+				needs_reinterpret = true;
+			}
+		}
+	}
+	if (!needs_reinterpret) {
+		return DuckLakeMetadataManager::TransformInlinedData(result, expected_types);
+	}
+
 	if (result.HasError()) {
 		result.GetErrorObject().Throw("Failed to read inlined data from DuckLake: ");
 	}
-
-	// Transform the result by casting VARCHAR vectors to their expected types
 	auto context = transaction.context.lock();
 	auto data = make_uniq<ColumnDataCollection>(*context, expected_types);
-
+	DataChunk reinterpret_chunk;
+	reinterpret_chunk.Initialize(*context, expected_types);
 	while (true) {
 		auto chunk = result.Fetch();
 		if (!chunk) {
 			break;
 		}
-
-		// Create a new chunk with the expected types
-		DataChunk casted_chunk;
-		casted_chunk.Initialize(*context, expected_types, chunk->size());
-		casted_chunk.SetCardinality(chunk->size());
-
-		// Cast each column from VARCHAR to its expected type
-		for (idx_t col_idx = 0; col_idx < chunk->ColumnCount(); col_idx++) {
-			auto &source_vector = chunk->data[col_idx];
-			auto &target_vector = casted_chunk.data[col_idx];
-
-			if (source_vector.GetType() == target_vector.GetType()) {
-				// No casting needed, just copy
-				target_vector.Reference(source_vector);
-			} else {
-				// Cast from VARCHAR to the expected type
-				VectorOperations::Cast(*context, source_vector, target_vector, chunk->size());
-			}
+		for (idx_t i = 0; i < expected_types.size(); i++) {
+			reinterpret_chunk.data[i].Reinterpret(chunk->data[i]);
 		}
-
-		data->Append(casted_chunk);
+		reinterpret_chunk.SetCardinality(chunk->size());
+		data->Append(reinterpret_chunk);
 	}
-
 	auto inlined_data = make_shared_ptr<DuckLakeInlinedData>();
 	inlined_data->data = std::move(data);
 	return inlined_data;

@@ -1,0 +1,113 @@
+# name: test/sql/catalog/drop_schema_transaction_local_entries.test
+# description: Test that DROP SCHEMA correctly checks transaction-local entries for dependents
+# group: [catalog]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/ducklake_drop_schema_txn_local')
+
+# Test when there's transaction-local table in the schema, it cannot be dropped.
+statement ok
+BEGIN
+
+statement ok
+CREATE SCHEMA ducklake.my_schema
+
+statement ok
+CREATE TABLE ducklake.my_schema.t1(i INTEGER)
+
+statement error
+DROP SCHEMA ducklake.my_schema
+----
+there are entries that depend on it
+
+statement ok
+DROP SCHEMA ducklake.my_schema CASCADE
+
+statement error
+SELECT * FROM ducklake.my_schema.t1
+----
+schema "my_schema" does not exist
+
+statement ok
+COMMIT
+
+# Test when there's a transaction-local view in the schema, it cannot be dropped.
+statement ok
+BEGIN
+
+statement ok
+CREATE SCHEMA ducklake.my_schema
+
+statement ok
+CREATE VIEW ducklake.my_schema.v1 AS SELECT 42 AS x
+
+statement error
+DROP SCHEMA ducklake.my_schema
+----
+there are entries that depend on it
+
+statement ok
+DROP SCHEMA ducklake.my_schema CASCADE
+
+statement error
+SELECT * FROM ducklake.my_schema.v1
+----
+schema "my_schema" does not exist
+
+statement ok
+COMMIT
+
+# Test when there's a transaction-local macro in the schema, it cannot be dropped.
+statement ok
+BEGIN
+
+statement ok
+CREATE SCHEMA ducklake.my_schema
+
+statement ok
+CREATE MACRO ducklake.my_schema.add_one(x) AS x + 1
+
+statement error
+DROP SCHEMA ducklake.my_schema
+----
+there are entries that depend on it
+
+statement ok
+DROP SCHEMA ducklake.my_schema CASCADE
+
+statement error
+SELECT ducklake.my_schema.add_one(1)
+----
+Scalar Function with name add_one does not exist!
+
+statement ok
+COMMIT
+
+# Test when there's a transaction-local table macro in the schema, it cannot be dropped.
+statement ok
+BEGIN
+
+statement ok
+CREATE SCHEMA ducklake.my_schema
+
+statement ok
+CREATE MACRO ducklake.my_schema.my_table_macro() AS TABLE SELECT 42 AS x
+
+statement error
+DROP SCHEMA ducklake.my_schema
+----
+there are entries that depend on it
+
+statement ok
+DROP SCHEMA ducklake.my_schema CASCADE
+
+statement ok
+COMMIT

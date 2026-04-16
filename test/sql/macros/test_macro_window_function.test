@@ -1,0 +1,45 @@
+# name: test/sql/macros/test_macro_window_function.test
+# description: test table macros with window functions
+# group: [macros]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/test_macro_window');
+
+statement ok
+USE ducklake;
+
+statement ok
+CREATE TABLE tbl (id INT, val REAL);
+
+statement ok
+INSERT INTO tbl VALUES (1, 1.0), (2, 2.0), (3, 3.0), (4, 10.0);
+
+statement ok
+CREATE MACRO macro_no_partition() AS TABLE (SELECT avg(val) OVER () AS avg_val FROM tbl);
+
+query I
+FROM macro_no_partition();
+----
+4.0
+4.0
+4.0
+4.0
+
+statement ok
+CREATE MACRO macro_partition() AS TABLE (SELECT avg(val) OVER (PARTITION BY id) AS avg_val FROM tbl);
+
+query I
+FROM macro_partition();
+----
+1.0
+2.0
+3.0
+10.0

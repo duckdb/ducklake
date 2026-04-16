@@ -13,6 +13,7 @@
 #include "duckdb/catalog/catalog_entry/scalar_macro_catalog_entry.hpp"
 #include "duckdb/catalog/catalog_entry/table_macro_catalog_entry.hpp"
 #include "storage/ducklake_macro_entry.hpp"
+#include "common/ducklake_util.hpp"
 
 namespace duckdb {
 
@@ -20,6 +21,12 @@ DuckLakeSchemaEntry::DuckLakeSchemaEntry(Catalog &catalog, CreateSchemaInfo &inf
                                          string schema_uuid, string data_path_p)
     : SchemaCatalogEntry(catalog, info), schema_id(schema_id), schema_uuid(std::move(schema_uuid)),
       data_path(std::move(data_path_p)) {
+}
+
+unique_ptr<CreateInfo> DuckLakeSchemaEntry::GetInfo() const {
+	auto result = SchemaCatalogEntry::GetInfo();
+	result->on_conflict = OnCreateConflict::IGNORE_ON_CONFLICT;
+	return result;
 }
 
 bool DuckLakeSchemaEntry::HandleCreateConflict(CatalogTransaction transaction, CatalogType catalog_type,
@@ -31,7 +38,7 @@ bool DuckLakeSchemaEntry::HandleCreateConflict(CatalogTransaction transaction, C
 	}
 	switch (on_conflict) {
 	case OnCreateConflict::ERROR_ON_CONFLICT:
-		throw CatalogException("%s with name \"%s\" already exists", CatalogTypeToString(existing_entry->type),
+		throw CatalogException("%s with name \"%s\" already exists!", CatalogTypeToString(existing_entry->type),
 		                       entry_name);
 	case OnCreateConflict::IGNORE_ON_CONFLICT:
 		// ignore - skip without throwing an error
@@ -62,6 +69,12 @@ optional_ptr<CatalogEntry> DuckLakeSchemaEntry::CreateTableExtended(CatalogTrans
 	// check if we have an existing entry with this name
 	if (!HandleCreateConflict(transaction, CatalogType::TABLE_ENTRY, base_info.table, base_info.on_conflict)) {
 		return nullptr;
+	}
+	// reject columns with reserved DuckLake internal names
+	for (auto &col : base_info.columns.Logical()) {
+		if (DuckLakeUtil::IsInlinedSystemColumn(col.Name())) {
+			throw BinderException("Column name \"%s\" is reserved by DuckLake for internal use", col.Name());
+		}
 	}
 	//! get a local table-id
 	auto table_id = TableIndex(duck_transaction.GetLocalCatalogId());
@@ -136,12 +149,17 @@ optional_ptr<CatalogEntry> DuckLakeSchemaEntry::CreateView(CatalogTransaction tr
 		return nullptr;
 	}
 	auto &duck_transaction = transaction.transaction->Cast<DuckLakeTransaction>();
-	//! get a local view-id
+	// get a local view-id
 	auto view_id = TableIndex(duck_transaction.GetLocalCatalogId());
 	auto view_uuid = UUID::ToString(UUID::GenerateRandomUUID());
 
+	// replace our catalog name with a generic {DUCKLAKE_CATALOG}.
+	auto query_sql = info.query->ToString();
+	auto &catalog_name = ParentCatalog().GetName();
+	query_sql = DuckLakeUtil::ReplaceSkippingQuotes(query_sql, catalog_name + ".", "{DUCKLAKE_CATALOG}.");
+
 	auto view_entry = make_uniq<DuckLakeViewEntry>(ParentCatalog(), *this, info, view_id, std::move(view_uuid),
-	                                               info.query->ToString(), LocalChangeType::CREATED);
+	                                               query_sql, LocalChangeType::CREATED);
 	auto result = view_entry.get();
 	duck_transaction.CreateEntry(std::move(view_entry));
 	return result;
@@ -193,7 +211,7 @@ void DuckLakeSchemaEntry::Alter(CatalogTransaction catalog_transaction, AlterInf
 			auto existing_table = GetEntry(catalog_transaction, CatalogType::TABLE_ENTRY, new_table->name);
 			if (StringUtil::Lower(alter.name) != StringUtil::Lower(new_table->name) && existing_table) {
 				throw BinderException("Cannot rename table %s to %s, since %s already exists.", alter.name,
-				                      new_table->name, alter.name);
+				                      new_table->name, new_table->name);
 			}
 		}
 		transaction.AlterEntry(table, std::move(new_table));
@@ -389,16 +407,19 @@ void DuckLakeSchemaEntry::AddEntry(CatalogType type, unique_ptr<CatalogEntry> en
 }
 
 void DuckLakeSchemaEntry::TryDropSchema(DuckLakeTransaction &transaction, bool cascade) {
+	auto local_tables = transaction.GetTransactionLocalEntries(CatalogType::TABLE_ENTRY, name);
+	auto local_macros = transaction.GetTransactionLocalEntries(CatalogType::MACRO_ENTRY, name);
 	if (!cascade) {
 		// get a list of all dependents
 		vector<reference<CatalogEntry>> dependents;
+		const auto &dropped_tables = transaction.GetDroppedTables();
+		const auto &dropped_views = transaction.GetDroppedViews();
 		for (auto &entry : tables.GetEntries()) {
-			const auto &dropped_tables = transaction.GetDroppedTables();
 			bool add_dependent = false;
 			switch (entry.second->type) {
 			case CatalogType::VIEW_ENTRY: {
 				const auto &ducklake_view = entry.second->Cast<DuckLakeViewEntry>();
-				if (dropped_tables.find(ducklake_view.GetViewId()) == dropped_tables.end()) {
+				if (dropped_views.find(ducklake_view.GetViewId()) == dropped_views.end()) {
 					add_dependent = true;
 				}
 			} break;
@@ -409,11 +430,16 @@ void DuckLakeSchemaEntry::TryDropSchema(DuckLakeTransaction &transaction, bool c
 				}
 			} break;
 			default:
-				throw InternalException(
-				    "Unexpected catalog type %s for GetDroppedTables() in DuckLakeSchemaEntry::TryDropSchema()",
-				    CatalogTypeToString(entry.second->type));
+				throw InternalException("Unexpected catalog type %s in DuckLakeSchemaEntry::TryDropSchema()",
+				                        CatalogTypeToString(entry.second->type));
 			}
 			if (add_dependent) {
+				dependents.push_back(*entry.second);
+			}
+		}
+		if (local_tables) {
+			dependents.reserve(dependents.size() + local_tables->GetEntries().size());
+			for (auto &entry : local_tables->GetEntries()) {
 				dependents.push_back(*entry.second);
 			}
 		}
@@ -441,7 +467,7 @@ void DuckLakeSchemaEntry::TryDropSchema(DuckLakeTransaction &transaction, bool c
 			const auto &dropped_macros = transaction.GetDroppedTableMacros();
 			bool add_dependent = false;
 			switch (entry.second->type) {
-			case CatalogType::MACRO_ENTRY: {
+			case CatalogType::TABLE_MACRO_ENTRY: {
 				const auto &ducklake_macro = entry.second->Cast<DuckLakeTableMacroEntry>();
 				if (dropped_macros.find(ducklake_macro.GetIndex()) == dropped_macros.end()) {
 					add_dependent = true;
@@ -453,6 +479,12 @@ void DuckLakeSchemaEntry::TryDropSchema(DuckLakeTransaction &transaction, bool c
 				    CatalogTypeToString(entry.second->type));
 			}
 			if (add_dependent) {
+				dependents.push_back(*entry.second);
+			}
+		}
+		if (local_macros) {
+			dependents.reserve(dependents.size() + local_macros->GetEntries().size());
+			for (auto &entry : local_macros->GetEntries()) {
 				dependents.push_back(*entry.second);
 			}
 		}
@@ -470,6 +502,22 @@ void DuckLakeSchemaEntry::TryDropSchema(DuckLakeTransaction &transaction, bool c
 		throw CatalogException(error_string);
 	}
 	// drop all dependents
+	vector<reference<CatalogEntry>> local_entries_to_drop;
+	if (local_tables) {
+		local_entries_to_drop.reserve(local_entries_to_drop.size() + local_tables->GetEntries().size());
+		for (auto &entry : local_tables->GetEntries()) {
+			local_entries_to_drop.push_back(*entry.second);
+		}
+	}
+	if (local_macros) {
+		local_entries_to_drop.reserve(local_entries_to_drop.size() + local_macros->GetEntries().size());
+		for (auto &entry : local_macros->GetEntries()) {
+			local_entries_to_drop.push_back(*entry.second);
+		}
+	}
+	for (auto &entry : local_entries_to_drop) {
+		transaction.DropEntry(entry.get());
+	}
 	for (auto &entry : tables.GetEntries()) {
 		transaction.DropEntry(*entry.second);
 	}

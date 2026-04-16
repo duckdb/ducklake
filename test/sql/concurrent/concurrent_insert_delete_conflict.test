@@ -1,0 +1,55 @@
+# name: test/sql/concurrent/concurrent_insert_delete_conflict.test
+# description: test that concurrent insert + delete on the same table triggers a conflict
+# group: [concurrent]
+
+require notwindows
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/ducklake_concurrent_insert_delete_files', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+SET ducklake_retry_wait_ms=100
+
+statement ok
+SET ducklake_retry_backoff=2.0
+
+statement ok
+SET ducklake_max_retry_count=100
+
+statement ok
+CREATE TABLE ducklake.tbl(key INTEGER);
+
+statement ok
+INSERT INTO ducklake.tbl SELECT i FROM range(10) t(i);
+
+query II
+SELECT COUNT(*), SUM(key) FROM ducklake.tbl
+----
+10	45
+
+# one thread inserts, the other deletes; cross-conflict should be detected
+concurrentloop i 0 2
+
+statement maybe
+DELETE FROM ducklake.tbl WHERE key = {i}
+----
+
+statement maybe
+INSERT INTO ducklake.tbl VALUES (100 + {i})
+----
+
+endloop
+
+# the table should not have duplicate keys regardless of which statements succeeded
+query I
+SELECT COUNT(*) FROM (SELECT key, COUNT(*) as cnt FROM ducklake.tbl GROUP BY key HAVING cnt > 1)
+----
+0

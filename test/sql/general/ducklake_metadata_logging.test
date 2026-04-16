@@ -1,0 +1,57 @@
+# name: test/sql/general/ducklake_metadata_logging.test
+# description: Test DuckLakeMetadata logging
+# group: [general]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+# enable logging for DuckLakeMetadata
+statement ok
+CALL enable_logging('DuckLakeMetadata')
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/ducklake_metadata_logging')
+
+# create a table - this should generate metadata queries
+statement ok
+CREATE TABLE ducklake.test_tbl(id INTEGER, value VARCHAR)
+
+# insert some data
+statement ok
+INSERT INTO ducklake.test_tbl VALUES (1, 'hello'), (2, 'world')
+
+# read the data to trigger more metadata queries
+query II
+SELECT * FROM ducklake.test_tbl ORDER BY id
+----
+1	hello
+2	world
+
+# verify that logs were generated
+query I
+SELECT COUNT(*) > 0 FROM duckdb_logs_parsed('DuckLakeMetadata')
+----
+true
+
+# verify the catalog column matches the attached catalog name
+query I
+SELECT COUNT(*) FROM duckdb_logs_parsed('DuckLakeMetadata') WHERE catalog != 'ducklake'
+----
+0
+
+# verify elapsed_ms is non-negative
+query I
+SELECT COUNT(*) FROM duckdb_logs_parsed('DuckLakeMetadata') WHERE elapsed_ms < 0
+----
+0
+
+# verify the query column is not empty
+query I
+SELECT COUNT(*) FROM duckdb_logs_parsed('DuckLakeMetadata') WHERE query IS NULL OR length(query) = 0
+----
+0

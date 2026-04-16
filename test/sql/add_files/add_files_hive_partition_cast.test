@@ -6,16 +6,16 @@ require ducklake
 
 require parquet
 
-test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
 
-test-env DATA_PATH __TEST_DIR__
+test-env DATA_PATH {TEST_DIR}
 
 
 statement ok
 PRAGMA enable_verification
 
 statement ok
-ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/ducklake_add_files_hive_cast')
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/ducklake_add_files_hive_cast')
 
 statement ok
 CREATE TABLE ducklake.test(id INTEGER, year INTEGER, month INTEGER, day DATE);
@@ -24,11 +24,11 @@ statement ok
 COPY (SELECT 1 AS id, 2024 AS year, 1 AS month, DATE '2024-01-02' AS day
     UNION ALL
     SELECT 2 AS id, 2024 AS year, 2 AS month, NULL AS day)
-TO '${DATA_PATH}/ducklake_add_files_hive_cast' (FORMAT parquet, PARTITION_BY (year, month, day));
+TO '{DATA_PATH}/ducklake_add_files_hive_cast' (FORMAT parquet, PARTITION_BY (year, month, day));
 
 statement ok
 CALL ducklake_add_data_files('ducklake', 'test',
-    '${DATA_PATH}/ducklake_add_files_hive_cast/*/*/*/*.parquet',
+    '{DATA_PATH}/ducklake_add_files_hive_cast/*/*/*/*.parquet',
     hive_partitioning => true)
 
 query IIII
@@ -67,11 +67,11 @@ COPY (SELECT 1 AS id, 'electronics' AS category, 99.99::DECIMAL(10,2) AS amount
     SELECT 2 AS id, NULL AS category, 50.00::DECIMAL(10,2) AS amount
     UNION ALL
     SELECT 3 AS id, 'home appliances' AS category, NULL AS amount)
-TO '${DATA_PATH}/ducklake_add_files_hive_null' (FORMAT parquet, PARTITION_BY (category, amount));
+TO '{DATA_PATH}/ducklake_add_files_hive_null' (FORMAT parquet, PARTITION_BY (category, amount));
 
 statement ok
 CALL ducklake_add_data_files('ducklake', 'test_null',
-    '${DATA_PATH}/ducklake_add_files_hive_null/*/*/*.parquet',
+    '{DATA_PATH}/ducklake_add_files_hive_null/*/*/*.parquet',
     hive_partitioning => true)
 
 query III
@@ -89,11 +89,11 @@ statement ok
 COPY (SELECT 1 AS id, true AS active, false AS verified
     UNION ALL
     SELECT 2 AS id, false AS active, true AS verified)
-TO '${DATA_PATH}/ducklake_add_files_hive_bool' (FORMAT parquet, PARTITION_BY (active, verified));
+TO '{DATA_PATH}/ducklake_add_files_hive_bool' (FORMAT parquet, PARTITION_BY (active, verified));
 
 statement ok
 CALL ducklake_add_data_files('ducklake', 'test_bool',
-    '${DATA_PATH}/ducklake_add_files_hive_bool/*/*/*.parquet',
+    '{DATA_PATH}/ducklake_add_files_hive_bool/*/*/*.parquet',
     hive_partitioning => true)
 
 query III
@@ -123,11 +123,11 @@ statement ok
 COPY (SELECT 1 AS id, 3.14159 AS ratio, 99.5::FLOAT AS percentage
     UNION ALL
     SELECT 2 AS id, -0.001 AS ratio, 0.0::FLOAT AS percentage)
-TO '${DATA_PATH}/ducklake_add_files_hive_float' (FORMAT parquet, PARTITION_BY (ratio, percentage));
+TO '{DATA_PATH}/ducklake_add_files_hive_float' (FORMAT parquet, PARTITION_BY (ratio, percentage));
 
 statement ok
 CALL ducklake_add_data_files('ducklake', 'test_float',
-    '${DATA_PATH}/ducklake_add_files_hive_float/*/*/*.parquet',
+    '{DATA_PATH}/ducklake_add_files_hive_float/*/*/*.parquet',
     hive_partitioning => true)
 
 query III
@@ -157,11 +157,11 @@ statement ok
 COPY (SELECT 1 AS id, TIMESTAMP '2024-01-15 10:30:00' AS created_at
     UNION ALL
     SELECT 2 AS id, NULL AS created_at)
-TO '${DATA_PATH}/ducklake_add_files_hive_ts' (FORMAT parquet, PARTITION_BY (created_at));
+TO '{DATA_PATH}/ducklake_add_files_hive_ts' (FORMAT parquet, PARTITION_BY (created_at));
 
 statement ok
 CALL ducklake_add_data_files('ducklake', 'test_ts',
-    '${DATA_PATH}/ducklake_add_files_hive_ts/*/*.parquet',
+    '{DATA_PATH}/ducklake_add_files_hive_ts/*/*.parquet',
     hive_partitioning => true)
 
 query II
@@ -192,11 +192,11 @@ COPY (SELECT 1 AS id, 'hello world' AS name
     SELECT 2 AS id, 'test&value' AS name
     UNION ALL
     SELECT 3 AS id, 'with=equals' AS name)
-TO '${DATA_PATH}/ducklake_add_files_hive_special' (FORMAT parquet, PARTITION_BY (name));
+TO '{DATA_PATH}/ducklake_add_files_hive_special' (FORMAT parquet, PARTITION_BY (name));
 
 statement ok
 CALL ducklake_add_data_files('ducklake', 'test_special',
-    '${DATA_PATH}/ducklake_add_files_hive_special/*/*.parquet',
+    '{DATA_PATH}/ducklake_add_files_hive_special/*/*.parquet',
     hive_partitioning => true)
 
 query II
@@ -222,11 +222,11 @@ COPY (SELECT 1 AS id, 100 AS value, 'a' AS partition_col
     SELECT 5 AS id, 500 AS value, NULL AS partition_col
     UNION ALL
     SELECT 6 AS id, 600 AS value, 'b' AS partition_col)
-TO '${DATA_PATH}/ducklake_add_files_hive_null_stats' (FORMAT parquet, PARTITION_BY (partition_col));
+TO '{DATA_PATH}/ducklake_add_files_hive_null_stats' (FORMAT parquet, PARTITION_BY (partition_col));
 
 statement ok
 CALL ducklake_add_data_files('ducklake', 'test_null_stats',
-    '${DATA_PATH}/ducklake_add_files_hive_null_stats/*/*.parquet',
+    '{DATA_PATH}/ducklake_add_files_hive_null_stats/*/*.parquet',
     hive_partitioning => true)
 
 # Verify all data is returned correctly
@@ -286,19 +286,19 @@ CREATE TABLE ducklake.test_hive_precedence(id INTEGER, category DOUBLE);
 # First create the directory structure using a dummy partition write
 statement ok
 COPY (SELECT 1 AS id, 3.14 AS category UNION ALL SELECT 2 AS id, NULL AS category)
-TO '${DATA_PATH}/ducklake_hive_precedence' (FORMAT parquet, PARTITION_BY (category));
+TO '{DATA_PATH}/ducklake_hive_precedence' (FORMAT parquet, PARTITION_BY (category));
 
 # Now overwrite those files with parquet files that contain 'from_parquet' as category value
 # but keep the same hive directory structure
 statement ok
-COPY (SELECT 1 AS id, '3.14' AS category) TO '${DATA_PATH}/ducklake_hive_precedence/category=3.14/data.parquet' (FORMAT parquet, OVERWRITE true);
+COPY (SELECT 1 AS id, '3.14' AS category) TO '{DATA_PATH}/ducklake_hive_precedence/category=3.14/data.parquet' (FORMAT parquet, OVERWRITE true);
 
 statement ok
-COPY (SELECT 2 AS id, NULL AS category) TO '${DATA_PATH}/ducklake_hive_precedence/category=__HIVE_DEFAULT_PARTITION__/data.parquet' (FORMAT parquet, OVERWRITE true);
+COPY (SELECT 2 AS id, NULL AS category) TO '{DATA_PATH}/ducklake_hive_precedence/category=__HIVE_DEFAULT_PARTITION__/data.parquet' (FORMAT parquet, OVERWRITE true);
 
 statement ok
 CALL ducklake_add_data_files('ducklake', 'test_hive_precedence',
-    '${DATA_PATH}/ducklake_hive_precedence/*/data.parquet',
+    '{DATA_PATH}/ducklake_hive_precedence/*/data.parquet',
     hive_partitioning => true)
 
 # The category values should come from the hive partition path (alpha, beta),

@@ -1,0 +1,39 @@
+# name: test/sql/data_inlining/set_inlining_limit_after_attach.test
+# description: Test that SET ducklake_default_data_inlining_row_limit after ATTACH is respected (issue #876)
+# group: [data_inlining]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/set_inlining_limit_after_attach', METADATA_CATALOG 'ducklake_meta')
+
+statement ok
+USE ducklake
+
+statement ok
+CREATE TABLE tbl (pk INTEGER, val VARCHAR);
+
+statement ok
+SET ducklake_default_data_inlining_row_limit = 0;
+
+statement ok
+INSERT INTO tbl VALUES (1, 'a'), (2, 'b'), (3, 'c');
+
+query I
+SELECT COUNT(*) FROM tbl WHERE filename LIKE 'ducklake_inlined%'
+----
+0
+
+statement ok
+UPDATE tbl SET val = 'x';
+
+query I
+SELECT COUNT(*) FROM tbl WHERE filename LIKE 'ducklake_inlined%'
+----
+0

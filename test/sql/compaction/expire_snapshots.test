@@ -6,13 +6,13 @@ require ducklake
 
 require parquet
 
-test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
 
-test-env DATA_PATH __TEST_DIR__
+test-env DATA_PATH {TEST_DIR}
 
 
 statement ok
-ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/ducklake_expire_snapshots_files', METADATA_CATALOG 'metadata')
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/ducklake_expire_snapshots_files', METADATA_CATALOG 'metadata')
 
 # delete all values in a table
 # snapshot 1
@@ -68,7 +68,7 @@ CALL ducklake_cleanup_old_files('ducklake', cleanup_all => true);
 
 # verify that it is actually gone
 query I
-SELECT COUNT(*) FROM GLOB('${DATA_PATH}/ducklake_expire_snapshots_files/*')
+SELECT COUNT(*) FROM GLOB('{DATA_PATH}/ducklake_expire_snapshots_files/*')
 ----
 0
 
@@ -84,7 +84,7 @@ SELECT snapshot_id FROM ducklake_expire_snapshots('ducklake', older_than => NOW(
 foreach tbl ducklake_table ducklake_column ducklake_table_stats ducklake_table_column_stats
 
 query I
-SELECT COUNT(*) FROM metadata.${tbl}
+SELECT COUNT(*) FROM metadata.{tbl}
 ----
 0
 

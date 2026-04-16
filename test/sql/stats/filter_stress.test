@@ -6,12 +6,12 @@ require ducklake
 
 require parquet
 
-test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
 
-test-env DATA_PATH __TEST_DIR__
+test-env DATA_PATH {TEST_DIR}
 
 statement ok
-ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/ducklake_filter_stress_files')
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/ducklake_filter_stress_files')
 
 # create a reference DuckDB table - this is the table we will compare the DuckLake table to
 statement ok
@@ -26,7 +26,7 @@ FROM range(110000) t(i); -- 54 groups of 2048 rows each
 
 # copy the reference table to a lot of small parquet files
 statement ok
-COPY events_ref TO '${DATA_PATH}/filter_stress_parquet'
+COPY events_ref TO '{DATA_PATH}/filter_stress_parquet'
   (FORMAT PARQUET, ROW_GROUP_SIZE 2048, ROW_GROUPS_PER_FILE 1);
 
 # create a DuckLake table
@@ -35,7 +35,7 @@ CREATE TABLE ducklake.events(i INTEGER, g INTEGER, maybe_null INTEGER, d DATE, s
 
 # add those small parquet files to the DuckLake table so we can test pruning correctness
 statement ok
-CALL ducklake_add_data_files('ducklake', 'events', '${DATA_PATH}/filter_stress_parquet/*.parquet');
+CALL ducklake_add_data_files('ducklake', 'events', '{DATA_PATH}/filter_stress_parquet/*.parquet');
 
 # Verify we produced multiple files (exact count depends on thread count during COPY)
 query I

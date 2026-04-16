@@ -47,12 +47,21 @@ static void HandleDuckLakeOption(DuckLakeOptions &options, const string &option,
 	} else if (StringUtil::StartsWith(lcase, "meta_")) {
 		auto parameter_name = lcase.substr(5);
 		options.metadata_parameters[parameter_name] = value;
+	} else if (lcase == "write_deletion_vectors") {
+		options.config_options["write_deletion_vectors"] =
+		    BooleanValue::Get(value.DefaultCastAs(LogicalType::BOOLEAN)) ? "true" : "false";
 	} else if (lcase == "create_if_not_exists") {
 		options.create_if_not_exists = BooleanValue::Get(value.DefaultCastAs(LogicalType::BOOLEAN));
 	} else if (lcase == "automatic_migration") {
 		options.automatic_migration = BooleanValue::Get(value.DefaultCastAs(LogicalType::BOOLEAN));
 	} else if (lcase == "busy_timeout") {
 		options.busy_timeout = UBigIntValue::Get(value.DefaultCastAs(LogicalType::UBIGINT));
+	} else if (lcase == "ducklake_version") {
+		auto version = DuckLakeVersionFromString(value.ToString());
+		if (version < DuckLakeVersion::V1_0) {
+			throw InvalidInputException("ducklake_version must be >= '1.0', got '%s'", value.ToString());
+		}
+		options.ducklake_version = version;
 	} else {
 		throw NotImplementedException("Unsupported option %s for DuckLake", option);
 	}

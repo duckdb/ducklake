@@ -8,12 +8,12 @@ require ducklake
 
 require parquet
 
-test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
 
-test-env DATA_PATH __TEST_DIR__
+test-env DATA_PATH {TEST_DIR}
 
 statement ok
-ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/ducklake_files', METADATA_CATALOG 'ducklake_meta')
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/ducklake_files', METADATA_CATALOG 'ducklake_meta')
 
 statement ok
 USE ducklake;
@@ -30,7 +30,7 @@ checkpoint;
 query I
 select stats(g) from t1 limit 1;
 ----
-[Extent: [X: [0.000000, 0.000000], Y: [0.000000, 0.000000], Z: [inf, -inf], M: [inf, -inf]], Types: [point], Flags: [Has Empty Geom: true, Has No Empty Geom: true, Has Empty Part: true, Has No Empty Part: true]][Has Null: false, Has No Null: true]
+{'extent': {'x_max': 0.0, 'x_min': 0.0, 'y_max': 0.0, 'y_min': 0.0}, 'has_empty_geom': true, 'has_empty_part': true, 'has_no_null': true, 'has_non_empty_geom': true, 'has_non_empty_part': true, 'has_null': false}
 
 statement ok
 insert into t1 values (1, 'POINT(-2 2)'::GEOMETRY);
@@ -38,7 +38,7 @@ insert into t1 values (1, 'POINT(-2 2)'::GEOMETRY);
 query I
 select stats(g) from t1 limit 1;
 ----
-[Extent: [X: [-2.000000, 0.000000], Y: [0.000000, 2.000000], Z: [inf, -inf], M: [inf, -inf]], Types: [point], Flags: [Has Empty Geom: true, Has No Empty Geom: true, Has Empty Part: true, Has No Empty Part: true]][Has Null: false, Has No Null: true]
+{'extent': {'x_max': 0.0, 'x_min': -2.0, 'y_max': 2.0, 'y_min': 0.0}, 'has_empty_geom': true, 'has_empty_part': true, 'has_no_null': true, 'has_non_empty_geom': true, 'has_non_empty_part': true, 'has_null': false}
 
 statement ok
 insert into t1 values (3, 'POINT(2 -2)'::GEOMETRY);
@@ -46,7 +46,7 @@ insert into t1 values (3, 'POINT(2 -2)'::GEOMETRY);
 query I
 select stats(g) from t1 limit 1;
 ----
-[Extent: [X: [-2.000000, 2.000000], Y: [-2.000000, 2.000000], Z: [inf, -inf], M: [inf, -inf]], Types: [point], Flags: [Has Empty Geom: true, Has No Empty Geom: true, Has Empty Part: true, Has No Empty Part: true]][Has Null: false, Has No Null: true]
+{'extent': {'x_max': 2.0, 'x_min': -2.0, 'y_max': 2.0, 'y_min': -2.0}, 'has_empty_geom': true, 'has_empty_part': true, 'has_no_null': true, 'has_non_empty_geom': true, 'has_non_empty_part': true, 'has_null': false}
 
 # Insert Z-Value Geometry
 statement ok
@@ -55,7 +55,7 @@ insert into t1 values (4, 'LINESTRING Z (0 0 0, 1 1 1, 2 2 2)'::GEOMETRY);
 query I
 select stats(g) from t1 limit 1;
 ----
-[Extent: [X: [-2.000000, 2.000000], Y: [-2.000000, 2.000000], Z: [0.000000, 2.000000], M: [inf, -inf]], Types: [point, linestring_z], Flags: [Has Empty Geom: true, Has No Empty Geom: true, Has Empty Part: true, Has No Empty Part: true]][Has Null: false, Has No Null: true]
+{'extent': {'x_max': 2.0, 'x_min': -2.0, 'y_max': 2.0, 'y_min': -2.0, 'z_max': 2.0, 'z_min': 0.0}, 'has_empty_geom': true, 'has_empty_part': true, 'has_no_null': true, 'has_non_empty_geom': true, 'has_non_empty_part': true, 'has_null': false}
 
 # Insert M-Value Geometry
 statement ok
@@ -64,7 +64,7 @@ insert into t1 values (5, 'POLYGON M ((0 0 2, 4 0 2, 4 4 2, 0 4 2, 0 0 2))'::GEO
 query I
 select stats(g) from t1 limit 1;
 ----
-[Extent: [X: [-2.000000, 4.000000], Y: [-2.000000, 4.000000], Z: [0.000000, 2.000000], M: [2.000000, 2.000000]], Types: [point, linestring_z, polygon_m], Flags: [Has Empty Geom: true, Has No Empty Geom: true, Has Empty Part: true, Has No Empty Part: true]][Has Null: false, Has No Null: true]
+{'extent': {'m_max': 2.0, 'm_min': 2.0, 'x_max': 4.0, 'x_min': -2.0, 'y_max': 4.0, 'y_min': -2.0, 'z_max': 2.0, 'z_min': 0.0}, 'has_empty_geom': true, 'has_empty_part': true, 'has_no_null': true, 'has_non_empty_geom': true, 'has_non_empty_part': true, 'has_null': false}
 
 # Insert ZM-Value Geometry
 statement ok
@@ -73,6 +73,6 @@ insert into t1 values (6, 'MULTILINESTRING ZM ((0 0 -10 10, 1 1 -10 10), (2 2 2 
 query I
 select stats(g) from t1 limit 1;
 ----
-[Extent: [X: [-2.000000, 4.000000], Y: [-2.000000, 4.000000], Z: [-10.000000, 3.000000], M: [1.000000, 10.000000]], Types: [point, linestring_z, polygon_m, multilinestring_zm], Flags: [Has Empty Geom: true, Has No Empty Geom: true, Has Empty Part: true, Has No Empty Part: true]][Has Null: false, Has No Null: true]
+{'extent': {'m_max': 10.0, 'm_min': 1.0, 'x_max': 4.0, 'x_min': -2.0, 'y_max': 4.0, 'y_min': -2.0, 'z_max': 3.0, 'z_min': -10.0}, 'has_empty_geom': true, 'has_empty_part': true, 'has_no_null': true, 'has_non_empty_geom': true, 'has_non_empty_part': true, 'has_null': false}
 
 

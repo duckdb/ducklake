@@ -8,12 +8,12 @@ require parquet
 
 require icu
 
-test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
 
-test-env DATA_PATH __TEST_DIR__
+test-env DATA_PATH {TEST_DIR}
 
 statement ok
-ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/checkpoint_ducklake', DATA_INLINING_ROW_LIMIT 5)
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/checkpoint_ducklake', DATA_INLINING_ROW_LIMIT 5)
 
 statement ok
 use ducklake
@@ -60,7 +60,7 @@ WHERE a < 98;
 
 # Create orphan file
 statement ok
-COPY t_2 to '${DATA_PATH}/checkpoint_ducklake/main/t/bla.parquet';
+COPY t_2 to '{DATA_PATH}/checkpoint_ducklake/main/t/bla.parquet';
 
 query II
 SELECT data_file_id, table_id FROM __ducklake_metadata_ducklake.ducklake_data_file
@@ -74,7 +74,7 @@ SELECT delete_file_id, table_id FROM __ducklake_metadata_ducklake.ducklake_delet
 
 # t has the orphan, all data is inlined, t_2 has the data, and deletion, test has the data, we have 4 files in total.
 query I
-SELECT COUNT(*) FROM GLOB('${DATA_PATH}/checkpoint_ducklake/main/**')
+SELECT COUNT(*) FROM GLOB('{DATA_PATH}/checkpoint_ducklake/main/**')
 ----
 4
 
@@ -99,7 +99,7 @@ SELECT delete_file_id, table_id, begin_snapshot, end_snapshot FROM __ducklake_me
 
 query I
 SELECT COUNT(*)
-FROM GLOB('${DATA_PATH}/checkpoint_ducklake/main/**')
+FROM GLOB('{DATA_PATH}/checkpoint_ducklake/main/**')
 WHERE file LIKE '%bla%';
 ----
 0

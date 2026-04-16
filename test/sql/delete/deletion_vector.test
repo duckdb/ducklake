@@ -1,0 +1,84 @@
+# name: test/sql/delete/deletion_vector.test
+# description: Test writing and reading deletion vectors (puffin format)
+# group: [delete]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/deletion_vector_files', WRITE_DELETION_VECTORS true)
+
+statement ok
+CREATE TABLE ducklake.test AS SELECT i id FROM range(1000) t(i);
+
+statement ok
+INSERT INTO ducklake.test SELECT i id FROM range(15000, 16000) t(i)
+
+query I
+SELECT COUNT(*) FROM ducklake.test
+----
+2000
+
+# delete even rows
+query I
+DELETE FROM ducklake.test WHERE id%2=0
+----
+1000
+
+# verify the delete files are in puffin format
+query I
+SELECT format FROM __ducklake_metadata_ducklake.ducklake_delete_file WHERE end_snapshot IS NULL
+----
+puffin
+puffin
+
+# verify data is correct after delete
+query II
+SELECT COUNT(*), COUNT(*) FILTER(WHERE id%2=0) FROM ducklake.test
+----
+1000	0
+
+# we can time travel to see the state of the table before deletes
+query II
+SELECT COUNT(*), COUNT(*) FILTER(WHERE id%2=0) FROM ducklake.test AT (VERSION => 2)
+----
+2000	1000
+
+# delete some more rows - this goes through FlushDeleteWithSnapshots but should still write puffin
+query I
+DELETE FROM ducklake.test WHERE id < 100
+----
+50
+
+query I
+SELECT COUNT(*) FROM ducklake.test
+----
+950
+
+# all active delete files should still be puffin (old ones get overwritten)
+query I
+SELECT DISTINCT format FROM __ducklake_metadata_ducklake.ducklake_delete_file WHERE end_snapshot IS NULL
+----
+puffin
+
+# verify the actual data is correct
+query I
+SELECT COUNT(*) FILTER(WHERE id < 100) FROM ducklake.test
+----
+0
+
+# delete all remaining rows from one file to test full file drop
+query I
+DELETE FROM ducklake.test WHERE id >= 0 AND id < 1000
+----
+450
+
+query I
+SELECT COUNT(*) FROM ducklake.test
+----
+500

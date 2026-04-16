@@ -1,0 +1,19 @@
+# name: test/sql/reserved_names/reserved_names.test
+# description: test using reserved names fails gracefully
+# group: [reserved_names]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/colname', DATA_INLINING_ROW_LIMIT 20)
+
+statement error
+CREATE TABLE ducklake.conflict(id INTEGER, _ducklake_internal_snapshot_id INTEGER);
+----
+Column name "_ducklake_internal_snapshot_id" is reserved by DuckLake for internal use

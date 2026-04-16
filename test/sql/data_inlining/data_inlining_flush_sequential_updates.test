@@ -1,0 +1,94 @@
+# name: test/sql/data_inlining/data_inlining_flush_sequential_updates.test
+# description: test that sequential updates are correctly preserved after flushing inlined data
+# group: [data_inlining]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/ducklake_flush_seq_updates_data', DATA_INLINING_ROW_LIMIT 50)
+
+statement ok
+USE ducklake
+
+statement ok
+CREATE TABLE t(id INTEGER, val INTEGER)
+
+statement ok
+INSERT INTO t SELECT i, 0 FROM range(20) t(i)
+
+# 10 sequential updates, each increments val by 1
+statement ok
+UPDATE t SET val = val + 1
+
+statement ok
+UPDATE t SET val = val + 1
+
+statement ok
+UPDATE t SET val = val + 1
+
+statement ok
+UPDATE t SET val = val + 1
+
+statement ok
+UPDATE t SET val = val + 1
+
+statement ok
+UPDATE t SET val = val + 1
+
+statement ok
+UPDATE t SET val = val + 1
+
+statement ok
+UPDATE t SET val = val + 1
+
+statement ok
+UPDATE t SET val = val + 1
+
+statement ok
+UPDATE t SET val = val + 1
+
+# before flush: all values should be 10
+query II
+SELECT MIN(val), MAX(val) FROM t
+----
+10	10
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake')
+
+# after flush: values must still be 10 (not regressed to intermediate update values)
+query II
+SELECT MIN(val), MAX(val) FROM t
+----
+10	10
+
+# verify full table contents
+query II
+SELECT id, val FROM t ORDER BY id
+----
+0	10
+1	10
+2	10
+3	10
+4	10
+5	10
+6	10
+7	10
+8	10
+9	10
+10	10
+11	10
+12	10
+13	10
+14	10
+15	10
+16	10
+17	10
+18	10
+19	10

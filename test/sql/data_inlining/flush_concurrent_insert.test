@@ -1,0 +1,62 @@
+# name: test/sql/data_inlining/flush_concurrent_insert.test
+# description: flush_inlined_data should not duplicate rows when INSERT runs concurrently
+# group: [data_inlining]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/concurrent_flush_dup', DATA_INLINING_ROW_LIMIT 100000)
+
+statement ok
+CREATE TABLE ducklake.events (id INTEGER, val VARCHAR)
+
+# Pre-insert some data so there's inlined data to flush
+loop i 0 20
+
+statement ok
+INSERT INTO ducklake.events VALUES ({i}, 'pre')
+
+endloop
+
+# Concurrent: each thread inserts then flushes
+# The race: flush reads inlined data, concurrent INSERT commits new rows,
+# flush deletes ALL inlined data (including newly inserted rows)
+concurrentloop threadid 0 10
+
+loop j 0 5
+
+statement maybe
+INSERT INTO ducklake.events VALUES (1000 + {threadid} * 100 + {j}, 'concurrent')
+----
+
+statement maybe
+CALL ducklake_flush_inlined_data('ducklake')
+----
+
+endloop
+
+endloop
+
+# Final flush
+statement ok
+CALL ducklake_flush_inlined_data('ducklake')
+
+# No duplicate IDs
+query I
+SELECT count(*) FROM (SELECT id, count(*) cnt FROM ducklake.events GROUP BY id HAVING count(*) > 1)
+----
+0
+
+
+# Count total rows - should be 20 (pre) + 50 (concurrent, 10 threads * 5 inserts)
+query I
+SELECT count(*) <=70 FROM ducklake.events
+----
+true
+

@@ -6,13 +6,13 @@ require ducklake
 
 require parquet
 
-test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
 
-test-env DATA_PATH __TEST_DIR__
+test-env DATA_PATH {TEST_DIR}
 
 
 statement ok
-ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/ducklake_multi_compaction_files')
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/ducklake_multi_compaction_files')
 
 statement ok
 CREATE TABLE ducklake.test(i INTEGER);
@@ -20,19 +20,19 @@ CREATE TABLE ducklake.test(i INTEGER);
 foreach BASE 0 3
 
 statement ok
-INSERT INTO ducklake.test VALUES (${BASE} + 1);
+INSERT INTO ducklake.test VALUES ({BASE} + 1);
 
 statement ok
 CALL ducklake_flush_inlined_data('ducklake')
 
 statement ok
-INSERT INTO ducklake.test VALUES (${BASE} + 2);
+INSERT INTO ducklake.test VALUES ({BASE} + 2);
 
 statement ok
 CALL ducklake_flush_inlined_data('ducklake')
 
 statement ok
-INSERT INTO ducklake.test VALUES (${BASE} + 3);
+INSERT INTO ducklake.test VALUES ({BASE} + 3);
 
 statement ok
 CALL ducklake_flush_inlined_data('ducklake')
@@ -50,7 +50,7 @@ CALL ducklake_cleanup_old_files('ducklake', cleanup_all => true);
 
 # all files have been compacted into one file
 query I
-SELECT COUNT(*) FROM GLOB('${DATA_PATH}/ducklake_multi_compaction_files/**/*')
+SELECT COUNT(*) FROM GLOB('{DATA_PATH}/ducklake_multi_compaction_files/**/*')
 ----
 1
 

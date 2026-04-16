@@ -1,0 +1,55 @@
+# name: test/sql/comments/comment_preserves_other_tags.test
+# description: Setting a table or column comment only expires the 'comment' tag, not other tags on the same object
+# group: [comments]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{TEST_DIR}/comment_unrelated_tags/')
+
+statement ok
+CREATE TABLE ducklake.tbl (i INT);
+
+# manually insert a tag with a different key ('owner') for the table
+statement ok
+INSERT INTO __ducklake_metadata_ducklake.ducklake_tag VALUES (1, 2, NULL, 'owner', 'alice');
+
+# now set a comment on the table
+statement ok
+COMMENT ON TABLE ducklake.tbl IS 'my comment';
+
+# the 'owner' tag should still be active
+query III
+SELECT key, value, end_snapshot FROM __ducklake_metadata_ducklake.ducklake_tag ORDER BY key;
+----
+comment	my comment	NULL
+owner	alice	NULL
+
+# update the comment
+statement ok
+COMMENT ON TABLE ducklake.tbl IS 'updated comment';
+
+query III
+SELECT key, value, end_snapshot IS NULL FROM __ducklake_metadata_ducklake.ducklake_tag ORDER BY key, end_snapshot IS NULL;
+----
+comment	my comment	false
+comment	updated comment	true
+owner	alice	true
+
+# verify the same for column-level tags
+statement ok
+INSERT INTO __ducklake_metadata_ducklake.ducklake_column_tag VALUES (1, 0, 4, NULL, 'pii', 'true');
+
+statement ok
+COMMENT ON COLUMN ducklake.tbl.i IS 'col comment';
+
+# the 'pii' column tag should still be active
+query III
+SELECT key, value, end_snapshot IS NULL FROM __ducklake_metadata_ducklake.ducklake_column_tag ORDER BY key;
+----
+comment	col comment	true
+pii	true	true

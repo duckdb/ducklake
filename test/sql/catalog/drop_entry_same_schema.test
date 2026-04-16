@@ -1,0 +1,154 @@
+# name: test/sql/catalog/drop_entry_same_schema.test
+# description: Test that dropping a transaction-local table/view does not remove other entries in the same schema, see issue https://github.com/duckdb/ducklake/issues/957
+# group: [catalog]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/ducklake_drop_same_schema')
+
+statement ok
+BEGIN
+
+statement ok
+CREATE TABLE ducklake.t1(x INTEGER);
+
+statement ok
+CREATE TABLE ducklake.t2(y INTEGER);
+
+statement ok
+INSERT INTO ducklake.t1 VALUES (1);
+
+statement ok
+INSERT INTO ducklake.t2 VALUES (2);
+
+statement ok
+DROP TABLE ducklake.t1
+
+statement error
+SELECT * FROM ducklake.t1
+----
+does not exist
+
+query I
+SELECT * FROM ducklake.t2
+----
+2
+
+query I
+SELECT table_name FROM duckdb_tables() WHERE database_name = 'ducklake' ORDER BY table_name
+----
+t2
+
+statement ok
+COMMIT
+
+query I
+SELECT * FROM ducklake.t2
+----
+2
+
+statement ok
+DROP TABLE ducklake.t2
+
+# dropping one transaction-local view must not remove another view in the same schema
+statement ok
+BEGIN
+
+statement ok
+CREATE VIEW ducklake.va AS SELECT 10 AS a
+
+statement ok
+CREATE VIEW ducklake.vb AS SELECT 20 AS b
+
+statement ok
+DROP VIEW ducklake.va
+
+statement error
+FROM ducklake.va
+----
+does not exist
+
+query I
+FROM ducklake.vb
+----
+20
+
+statement ok
+COMMIT
+
+query I
+FROM ducklake.vb
+----
+20
+
+statement ok
+DROP VIEW ducklake.vb
+
+# dropping a transaction-local table must not remove a transaction-local view
+statement ok
+BEGIN
+
+statement ok
+CREATE TABLE ducklake.mix_t(x INTEGER);
+
+statement ok
+CREATE VIEW ducklake.mix_v AS SELECT 99 AS v
+
+statement ok
+DROP TABLE ducklake.mix_t
+
+query I
+FROM ducklake.mix_v
+----
+99
+
+statement ok
+COMMIT
+
+query I
+FROM ducklake.mix_v
+----
+99
+
+statement ok
+DROP VIEW ducklake.mix_v
+
+# dropping a transaction-local view must not remove a transaction-local table (mixed types, reverse)
+statement ok
+BEGIN
+
+statement ok
+CREATE TABLE ducklake.mix_t2(x INTEGER);
+
+statement ok
+INSERT INTO ducklake.mix_t2 VALUES (42);
+
+statement ok
+CREATE VIEW ducklake.mix_v2 AS SELECT 77 AS v
+
+statement ok
+DROP VIEW ducklake.mix_v2
+
+query I
+SELECT * FROM ducklake.mix_t2
+----
+42
+
+statement ok
+COMMIT
+
+query I
+SELECT * FROM ducklake.mix_t2
+----
+42
+
+statement ok
+DROP TABLE ducklake.mix_t2

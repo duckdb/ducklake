@@ -1,0 +1,51 @@
+# name: test/sql/data_inlining/data_inlining_txn_delete_visibility.test
+# description: DELETE inside transaction not visible to subsequent reads when file has existing delete file
+# group: [data_inlining]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS lake (DATA_PATH '{DATA_PATH}/txn_delete_vis', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE lake.test (id INTEGER, val INTEGER)
+
+statement ok
+INSERT INTO lake.test VALUES (1, 10), (2, 20), (3, 30)
+
+# Create a committed delete file on the parquet file
+statement ok
+DELETE FROM lake.test WHERE id = 1
+
+# Verify id=1 is gone
+query II
+SELECT * FROM lake.test ORDER BY id
+----
+2	20
+3	30
+
+# DELETE inside a transaction  id=2 should not be visible after DELETE
+statement ok
+BEGIN
+
+statement ok
+DELETE FROM lake.test WHERE id = 2
+
+query II
+SELECT * FROM lake.test ORDER BY id
+----
+3	30
+
+statement ok
+COMMIT
+
+query II
+SELECT * FROM lake.test ORDER BY id
+----
+3	30

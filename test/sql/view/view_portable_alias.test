@@ -1,0 +1,55 @@
+# name: test/sql/view/view_portable_alias.test
+# description: Test that views store catalog-agnostic SQL for portability
+# group: [view]
+
+require ducklake
+
+require parquet
+
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/view_alias.db' AS dl (DATA_PATH '{TEST_DIR}/view_alias_data')
+
+statement ok
+CREATE TABLE dl.t (id INT, val VARCHAR)
+
+statement ok
+INSERT INTO dl.t VALUES (1, 'a'), (2, 'b'), (3, 'c')
+
+# Create view with explicit catalog reference
+statement ok
+CREATE VIEW dl.v AS SELECT * FROM dl.t
+
+query II
+SELECT * FROM dl.v ORDER BY id
+----
+1	a
+2	b
+3	c
+
+# Detach and reattach with the SAME alias — view should still work
+statement ok
+DETACH dl
+
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/view_alias.db' AS dl (DATA_PATH '{TEST_DIR}/view_alias_data')
+
+query II
+SELECT * FROM dl.v ORDER BY id
+----
+1	a
+2	b
+3	c
+
+# Detach and reattach with a DIFFERENT alias — view should still work
+statement ok
+DETACH dl
+
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/view_alias.db' AS dl2 (DATA_PATH '{TEST_DIR}/view_alias_data')
+
+query II
+SELECT * FROM dl2.v ORDER BY id
+----
+1	a
+2	b
+3	c

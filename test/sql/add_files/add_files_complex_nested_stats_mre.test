@@ -6,12 +6,12 @@ require ducklake
 
 require parquet
 
-test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
 
-test-env DATA_PATH __TEST_DIR__
+test-env DATA_PATH {TEST_DIR}
 
 statement ok
-ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/stats_data', METADATA_CATALOG 'metadata');
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/stats_data', METADATA_CATALOG 'metadata');
 
 # Schema that reproduces the original error: array + struct array + other types
 statement ok
@@ -26,17 +26,17 @@ COPY (SELECT
     [1.0::DOUBLE, 2.0] as data_array,
     [{'key': 'status', 'value': 'active'}] as diagnostics,
     100::UINTEGER as seq_num
-) TO '${DATA_PATH}/file1.parquet';
+) TO '{DATA_PATH}/file1.parquet';
 
 statement ok
 COPY (SELECT 
     [3.0::DOUBLE, 4.0, 5.0] as data_array,
     [{'key': 'type', 'value': 'test'}, {'key': 'state', 'value': 'running'}] as diagnostics,
     200::UINTEGER as seq_num
-) TO '${DATA_PATH}/file2.parquet';
+) TO '{DATA_PATH}/file2.parquet';
 
 statement ok
-CALL ducklake_add_data_files('ducklake', 'test_table', '${DATA_PATH}/file1.parquet')
+CALL ducklake_add_data_files('ducklake', 'test_table', '{DATA_PATH}/file1.parquet')
 
 query III
 SELECT column_id, min_value, max_value FROM metadata.ducklake_file_column_stats ORDER BY data_file_id, column_id
@@ -56,7 +56,7 @@ SELECT column_id, min_value, max_value FROM metadata.ducklake_table_column_stats
 7	100	100
 
 statement ok
-CALL ducklake_add_data_files('ducklake', 'test_table', '${DATA_PATH}/file2.parquet')
+CALL ducklake_add_data_files('ducklake', 'test_table', '{DATA_PATH}/file2.parquet')
 
 query IIII
 SELECT data_file_id, column_id, min_value, max_value FROM metadata.ducklake_file_column_stats ORDER BY data_file_id, column_id

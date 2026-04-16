@@ -28,6 +28,8 @@ public:
 
 	string GetColumnTypeInternal(const LogicalType &type) override;
 	string CastColumnToTarget(const string &stats, const LogicalType &type) override;
+	shared_ptr<DuckLakeInlinedData> TransformInlinedData(QueryResult &result,
+	                                                     const vector<LogicalType> &expected_types) override;
 
 	unique_ptr<QueryResult> Execute(string query) override;
 	unique_ptr<QueryResult> Query(string query) override;
@@ -49,10 +51,6 @@ protected:
 
 	//! Load macro implementations from JSON result
 	vector<DuckLakeMacroImplementation> LoadMacroImplementations(const Value &list) const override;
-
-	//! Override TransformInlinedData to cast VARCHAR values back to original DuckDB types
-	shared_ptr<DuckLakeInlinedData> TransformInlinedData(QueryResult &result,
-	                                                     const vector<LogicalType> &expected_types) override;
 
 private:
 	unique_ptr<QueryResult> ExecuteQuery(string &query, string command);

@@ -1,0 +1,50 @@
+# name: test/sql/stats/variant_stats_special_chars.test
+# description: test that single quotes in variant string stats don't break serialization
+# group: [stats]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS db2 (DATA_PATH '{DATA_PATH}/ducklake_variant_stats_special', METADATA_CATALOG 'dl', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+use db2;
+
+statement ok
+CREATE TABLE t (v VARIANT)
+
+statement ok
+INSERT INTO t VALUES ({'text': 'hello'}::VARIANT)
+
+# second insert: the apostrophe becomes the new max in the table-level extra_stats
+# TrySerialize wraps the JSON in single quotes for SQL - the apostrophe must be escaped
+statement ok
+INSERT INTO t VALUES ({'text': 'it''s fine'}::VARIANT)
+
+query I
+SELECT COUNT(*) FROM t
+----
+2
+
+# check per-file stats
+query IIII
+SELECT variant_path, shredded_type, min_value, max_value FROM dl.ducklake_file_variant_stats WHERE data_file_id=0
+----
+"text"	varchar	hello	hello
+
+query IIII
+SELECT variant_path, shredded_type, min_value, max_value FROM dl.ducklake_file_variant_stats WHERE data_file_id=1
+----
+"text"	varchar	it's fine	it's fine
+
+# table-level extra_stats should have survived serialization with the single quote
+query I
+SELECT extra_stats IS NOT NULL FROM dl.ducklake_table_column_stats
+----
+true

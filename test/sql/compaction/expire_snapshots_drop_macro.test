@@ -1,0 +1,71 @@
+# name: test/sql/compaction/expire_snapshots_drop_macro.test
+# description: test expire_snapshots cleans up dropped macro metadata (scalar and table macros)
+# group: [compaction]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/expire_snapshots_drop_macro_files', METADATA_CATALOG 'metadata')
+
+statement ok
+USE ducklake;
+
+statement ok
+CREATE TABLE tbl(i INTEGER);
+
+# snapshot: create scalar macro
+statement ok
+CREATE MACRO add_one(x) AS (x + 1);
+
+# snapshot: create table macro
+statement ok
+CREATE MACRO get_all() AS TABLE SELECT * FROM tbl;
+
+# snapshot: drop both macros
+statement ok
+DROP MACRO add_one;
+
+statement ok
+DROP MACRO TABLE get_all;
+
+# macro metadata should still exist (referenced by historical snapshots)
+query I
+SELECT COUNT(*) FROM metadata.ducklake_macro;
+----
+2
+
+query I
+SELECT COUNT(*) FROM metadata.ducklake_macro_impl;
+----
+2
+
+query I
+SELECT COUNT(*) FROM metadata.ducklake_macro_parameters;
+----
+1
+
+# expire all old snapshots
+statement ok
+CALL ducklake_expire_snapshots('ducklake', older_than => NOW());
+
+# after expiration, all macro metadata should be cleaned up
+query I
+SELECT COUNT(*) FROM metadata.ducklake_macro;
+----
+0
+
+query I
+SELECT COUNT(*) FROM metadata.ducklake_macro_impl;
+----
+0
+
+query I
+SELECT COUNT(*) FROM metadata.ducklake_macro_parameters;
+----
+0
