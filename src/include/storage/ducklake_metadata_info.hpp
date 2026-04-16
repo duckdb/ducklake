@@ -433,7 +433,7 @@ struct DuckLakeCompactionFileData : public DuckLakeCompactionBaseFileData {
 	optional_idx row_id_start;
 	MappingIndex mapping_id;
 	optional_idx partition_id;
-	vector<string> partition_values;
+	vector<Value> partition_values;
 };
 
 struct DuckLakeCompactionDeleteFileData : public DuckLakeCompactionBaseFileData {

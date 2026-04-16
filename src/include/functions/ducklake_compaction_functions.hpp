@@ -33,7 +33,7 @@ class DuckLakeLogicalCompaction : public LogicalExtensionOperator {
 public:
 	DuckLakeLogicalCompaction(idx_t table_index, DuckLakeTableEntry &table,
 	                          vector<DuckLakeCompactionFileEntry> source_files_p, string encryption_key_p,
-	                          optional_idx partition_id, vector<string> partition_values_p, optional_idx row_id_start,
+	                          optional_idx partition_id, vector<Value> partition_values_p, optional_idx row_id_start,
 	                          CompactionType type)
 	    : table_index(table_index), table(table), source_files(std::move(source_files_p)),
 	      encryption_key(std::move(encryption_key_p)), partition_id(partition_id),
@@ -45,7 +45,7 @@ public:
 	vector<DuckLakeCompactionFileEntry> source_files;
 	string encryption_key;
 	optional_idx partition_id;
-	vector<string> partition_values;
+	vector<Value> partition_values;
 	optional_idx row_id_start;
 	CompactionType type;
 

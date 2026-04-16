@@ -1236,7 +1236,7 @@ DuckLakeDataFile DuckLakeFileProcessor::AddFileToTable(ParquetFileMetadata &file
 		}
 		for (auto &hive_partition : file.hive_partition_values) {
 			result.partition_values.push_back({field_partition_key_map[hive_partition.field_index.index],
-			                                   hive_partition.hive_value.GetValue<string>()});
+			                                   hive_partition.hive_value});
 		}
 		result.partition_id = partition_data->partition_id;
 	}

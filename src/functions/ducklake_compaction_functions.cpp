@@ -75,7 +75,7 @@ vector<BoundOrderByNode> DuckLakeCompactor::BindSortOrders(Binder &binder, DuckL
 DuckLakeCompaction::DuckLakeCompaction(PhysicalPlan &physical_plan, const vector<LogicalType> &types,
                                        DuckLakeTableEntry &table, vector<DuckLakeCompactionFileEntry> source_files_p,
                                        string encryption_key_p, optional_idx partition_id,
-                                       vector<string> partition_values_p, optional_idx row_id_start,
+                                       vector<Value> partition_values_p, optional_idx row_id_start,
                                        PhysicalOperator &child, CompactionType type)
     : PhysicalOperator(physical_plan, PhysicalOperatorType::EXTENSION, types, 0), table(table),
       source_files(std::move(source_files_p)), encryption_key(std::move(encryption_key_p)), partition_id(partition_id),
@@ -198,7 +198,7 @@ struct DuckLakeCompactionCandidates {
 struct DuckLakeCompactionGroup {
 	idx_t schema_version;
 	optional_idx partition_id;
-	vector<string> partition_values;
+	vector<Value> partition_values;
 };
 
 struct DuckLakeCompactionGroupHash {
@@ -208,8 +208,12 @@ struct DuckLakeCompactionGroupHash {
 		if (group.partition_id.IsValid()) {
 			hash ^= std::hash<idx_t>()(group.partition_id.GetIndex());
 		}
-		for (auto &partition_val : group.partition_values) {
-			hash ^= std::hash<string>()(partition_val);
+		for (auto &val : group.partition_values) {
+			if (val.IsNull()) {
+				hash ^= 0x9E3779B97F4A7C15ULL;
+			} else {
+				hash ^= std::hash<string>()(val.ToString());
+			}
 		}
 		return hash;
 	}
@@ -217,8 +221,23 @@ struct DuckLakeCompactionGroupHash {
 
 struct DuckLakeCompactionGroupEquality {
 	bool operator()(const DuckLakeCompactionGroup &a, const DuckLakeCompactionGroup &b) const {
-		return a.schema_version == b.schema_version && a.partition_id == b.partition_id &&
-		       a.partition_values == b.partition_values;
+		if (a.schema_version != b.schema_version || a.partition_id != b.partition_id) {
+			return false;
+		}
+		if (a.partition_values.size() != b.partition_values.size()) {
+			return false;
+		}
+		for (idx_t i = 0; i < a.partition_values.size(); i++) {
+			const auto &av = a.partition_values[i];
+			const auto &bv = b.partition_values[i];
+			if (av.IsNull() != bv.IsNull()) {
+				return false;
+			}
+			if (!av.IsNull() && av.ToString() != bv.ToString()) {
+				return false;
+			}
+		}
+		return true;
 	}
 };
 
