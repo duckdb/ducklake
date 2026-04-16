@@ -132,14 +132,14 @@ void DuckLakeMetadataManager::InitializeDuckLake(bool has_explicit_schema, DuckL
 	string data_path = StorePath(base_data_path);
 	string encryption_str = encryption == DuckLakeEncryption::ENCRYPTED ? "true" : "false";
 	string initial_schema_uuid = transaction.GenerateUUID();
-	initialize_query +=
-	    StringUtil::Format(R"(
+	initialize_query += StringUtil::Format(R"(
 INSERT INTO {METADATA_CATALOG}.ducklake_snapshot VALUES (0, NOW(), 0, 1, 0);
 INSERT INTO {METADATA_CATALOG}.ducklake_snapshot_changes VALUES (0, 'created_schema:"main"',  NULL, NULL, NULL);
 INSERT INTO {METADATA_CATALOG}.ducklake_metadata (key, value) VALUES ('version', '%s'), ('created_by', 'DuckDB %s'), ('data_path', %s), ('encrypted', '%s');
 INSERT INTO {METADATA_CATALOG}.ducklake_schema VALUES (0, '%s'::UUID, 0, NULL, 'main', 'main/', true);
 	)",
-	                       GetVersionString(), DuckDB::SourceID(), SQLString(data_path), encryption_str, initial_schema_uuid);
+	                                       GetVersionString(), DuckDB::SourceID(), SQLString(data_path), encryption_str,
+	                                       initial_schema_uuid);
 	auto result = transaction.Query(initialize_query);
 	if (result->HasError()) {
 		result->GetErrorObject().Throw("Failed to initialize DuckLake: ");
@@ -1656,7 +1656,8 @@ USING (data_file_id), (
 	                            select_list, table_id.index, start_snapshot.snapshot_id, table_id.index);
 
 	if (has_inlined_table) {
-		string null_file_cols = "CAST(NULL AS VARCHAR) AS path, CAST(NULL AS BOOLEAN) AS path_is_relative, CAST(NULL AS BIGINT) AS file_size_bytes, CAST(NULL AS BIGINT) AS footer_size";
+		string null_file_cols = "CAST(NULL AS VARCHAR) AS path, CAST(NULL AS BOOLEAN) AS path_is_relative, CAST(NULL "
+		                        "AS BIGINT) AS file_size_bytes, CAST(NULL AS BIGINT) AS footer_size";
 		if (IsEncrypted()) {
 			null_file_cols += ", CAST(NULL AS VARCHAR) AS encryption_key";
 		}

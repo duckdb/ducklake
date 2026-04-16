@@ -20,12 +20,21 @@ enum class DuckLakeTransformType { IDENTITY, BUCKET, YEAR, MONTH, DAY, HOUR };
 struct DuckLakeTransform {
 	DuckLakeTransformType type;
 	idx_t bucket_count = 0; // only for BUCKET
+
+	bool operator==(const DuckLakeTransform &other) const {
+		return type == other.type && bucket_count == other.bucket_count;
+	}
 };
 
 struct DuckLakePartitionField {
 	idx_t partition_key_index = 0;
 	FieldIndex field_id;
 	DuckLakeTransform transform;
+
+	bool operator==(const DuckLakePartitionField &other) const {
+		return partition_key_index == other.partition_key_index && field_id == other.field_id &&
+		       transform == other.transform;
+	}
 };
 
 struct DuckLakePartition {
