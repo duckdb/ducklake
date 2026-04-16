@@ -1,0 +1,81 @@
+# name: test/sql/insert/insert_wide_table_low_memory.test
+# description: test that many small inserts into a wide table work under low memory limit
+# group: [insert]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+
+test-env DATA_PATH __TEST_DIR__
+
+statement ok
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/ducklake_wide_low_mem')
+
+# disable inlining so each insert creates a separate parquet file and stats entry
+statement ok
+SET ducklake_default_data_inlining_row_limit=0
+
+# create a wide table with 100 columns
+statement ok
+CREATE TABLE ducklake.wide_table (
+	col_0 INTEGER, col_1 INTEGER, col_2 INTEGER, col_3 INTEGER, col_4 INTEGER,
+	col_5 INTEGER, col_6 INTEGER, col_7 INTEGER, col_8 INTEGER, col_9 INTEGER,
+	col_10 INTEGER, col_11 INTEGER, col_12 INTEGER, col_13 INTEGER, col_14 INTEGER,
+	col_15 INTEGER, col_16 INTEGER, col_17 INTEGER, col_18 INTEGER, col_19 INTEGER,
+	col_20 INTEGER, col_21 INTEGER, col_22 INTEGER, col_23 INTEGER, col_24 INTEGER,
+	col_25 INTEGER, col_26 INTEGER, col_27 INTEGER, col_28 INTEGER, col_29 INTEGER,
+	col_30 INTEGER, col_31 INTEGER, col_32 INTEGER, col_33 INTEGER, col_34 INTEGER,
+	col_35 INTEGER, col_36 INTEGER, col_37 INTEGER, col_38 INTEGER, col_39 INTEGER,
+	col_40 INTEGER, col_41 INTEGER, col_42 INTEGER, col_43 INTEGER, col_44 INTEGER,
+	col_45 INTEGER, col_46 INTEGER, col_47 INTEGER, col_48 INTEGER, col_49 INTEGER,
+	col_50 INTEGER, col_51 INTEGER, col_52 INTEGER, col_53 INTEGER, col_54 INTEGER,
+	col_55 INTEGER, col_56 INTEGER, col_57 INTEGER, col_58 INTEGER, col_59 INTEGER,
+	col_60 INTEGER, col_61 INTEGER, col_62 INTEGER, col_63 INTEGER, col_64 INTEGER,
+	col_65 INTEGER, col_66 INTEGER, col_67 INTEGER, col_68 INTEGER, col_69 INTEGER,
+	col_70 INTEGER, col_71 INTEGER, col_72 INTEGER, col_73 INTEGER, col_74 INTEGER,
+	col_75 INTEGER, col_76 INTEGER, col_77 INTEGER, col_78 INTEGER, col_79 INTEGER,
+	col_80 INTEGER, col_81 INTEGER, col_82 INTEGER, col_83 INTEGER, col_84 INTEGER,
+	col_85 INTEGER, col_86 INTEGER, col_87 INTEGER, col_88 INTEGER, col_89 INTEGER,
+	col_90 INTEGER, col_91 INTEGER, col_92 INTEGER, col_93 INTEGER, col_94 INTEGER,
+	col_95 INTEGER, col_96 INTEGER, col_97 INTEGER, col_98 INTEGER, col_99 INTEGER
+)
+
+statement ok
+SET memory_limit='50MB'
+
+# Fill a temp table to consume most of the max memory (~40MB), leaving only a few MB for ObjectCache stats entries.
+statement ok
+CREATE TEMP TABLE mem_filler AS SELECT i, repeat('x', 1000) AS pad FROM range(40000) t(i)
+
+# Each stats entry = 100 columns × 256 bytes = 26KB.
+# After filling ~40MB of the 50MB buffer pool, only ~10MB remains.
+# 500 inserts × 26KB ≈ 13MB of stats entries will fill the remaining space and force eviction.
+
+loop i 0 500
+
+statement ok
+INSERT INTO ducklake.wide_table (col_0, col_1, col_2) VALUES (${i}, ${i} * 10, ${i} * 100)
+
+endloop
+
+query I
+SELECT COUNT(*) FROM ducklake.wide_table
+----
+500
+
+query I
+SELECT SUM(col_0) FROM ducklake.wide_table
+----
+124750
+
+query I
+SELECT SUM(col_1) FROM ducklake.wide_table
+----
+1247500
+
+query I
+SELECT COUNT(*) FROM ducklake.wide_table WHERE col_0 = 50
+----
+1
