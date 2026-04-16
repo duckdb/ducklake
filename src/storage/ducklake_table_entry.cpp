@@ -540,11 +540,7 @@ static bool PartitionFieldsMatch(optional_ptr<DuckLakePartition> current_partiti
 		return false;
 	}
 	for (idx_t i = 0; i < current_partition->fields.size(); i++) {
-		auto &current_field = current_partition->fields[i];
-		auto &requested_field = requested_partition.fields[i];
-		if (current_field.partition_key_index != requested_field.partition_key_index ||
-		    current_field.field_id != requested_field.field_id ||
-		    current_field.transform.type != requested_field.transform.type) {
+		if (!(current_partition->fields[i] == requested_partition.fields[i])) {
 			return false;
 		}
 	}
