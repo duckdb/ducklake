@@ -106,6 +106,7 @@ void DuckLakeExpireSnapshotsExecute(ClientContext &context, TableFunctionInput &
 	if (!state.executed && !data.dry_run) {
 		auto &transaction = DuckLakeTransaction::Get(context, data.catalog);
 		transaction.DeleteSnapshots(data.snapshots);
+		state.executed = true;
 	}
 
 	idx_t count = 0;
