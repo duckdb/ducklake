@@ -15,6 +15,7 @@
 #include "duckdb/common/reference_map.hpp"
 #include "duckdb/common/types/value.hpp"
 #include "common/ducklake_snapshot.hpp"
+#include "storage/ducklake_catalog.hpp"
 #include "storage/ducklake_partition_data.hpp"
 #include "storage/ducklake_stats.hpp"
 #include "duckdb/common/types/timestamp.hpp"
@@ -130,9 +131,19 @@ public:
 	virtual string GetVersionString();
 	virtual DuckLakeMetadata LoadDuckLake();
 
-	virtual unique_ptr<QueryResult> Execute(DuckLakeSnapshot snapshot, string &query);
+	static void FillSnapshotArgs(string &query, const DuckLakeSnapshot &snapshot);
+	static void FillSnapshotCommitArgs(string &query, const DuckLakeSnapshotCommit &commit_info);
+	static void FillCatalogArgs(string &query, const DuckLakeCatalog &ducklake_catalog);
 
-	virtual unique_ptr<QueryResult> Query(DuckLakeSnapshot snapshot, string &query);
+	//! Directly execute on metadata
+	virtual unique_ptr<QueryResult> Execute(string query);
+	//! Directly execute on metadata
+	virtual unique_ptr<QueryResult> Execute(DuckLakeSnapshot snapshot, string query);
+
+	//! Directly query on metadata
+	virtual unique_ptr<QueryResult> Query(string query);
+	//! Directly query on metadata
+	virtual unique_ptr<QueryResult> Query(DuckLakeSnapshot snapshot, string query);
 	//! Get the catalog information for a specific snapshot
 	virtual DuckLakeCatalogInfo GetCatalogForSnapshot(DuckLakeSnapshot snapshot);
 	virtual vector<DuckLakeGlobalStatsInfo> GetGlobalTableStats(DuckLakeSnapshot snapshot);
@@ -210,7 +221,7 @@ public:
 	virtual string UpdateGlobalTableStats(const DuckLakeGlobalStatsInfo &stats);
 	virtual SnapshotChangeInfo GetSnapshotAndStatsAndChanges(DuckLakeSnapshot start_snapshot,
 	                                                         SnapshotAndStats &current_snapshot);
-	SnapshotDeletedFromFiles GetFilesDeletedOrDroppedAfterSnapshot(const DuckLakeSnapshot &start_snapshot) const;
+	SnapshotDeletedFromFiles GetFilesDeletedOrDroppedAfterSnapshot(const DuckLakeSnapshot &start_snapshot);
 	virtual unique_ptr<DuckLakeSnapshot> GetSnapshot();
 	virtual unique_ptr<DuckLakeSnapshot> GetSnapshot(BoundAtClause &at_clause, SnapshotBound bound);
 	virtual idx_t GetNextColumnId(TableIndex table_id);
@@ -270,6 +281,16 @@ protected:
 	virtual vector<DuckLakeInlinedTableInfo> LoadInlinedDataTables(const Value &list) const;
 	//! Parse macro implementations list from ListAggregation value
 	virtual vector<DuckLakeMacroImplementation> LoadMacroImplementations(const Value &list) const;
+	//! Parse inlined file deletions from ListAggregation value
+	virtual unordered_map<idx_t, idx_t> LoadInlinedDeletions(const Value &deletions_value) const;
+	//! Check if a metadata table exists (without poisoning the transaction on error)
+	virtual bool CheckTableExists(const string &table_name);
+
+public:
+	//! Build a SQL partition filter for the given expressions and values.
+	//! Returns empty string if no filter can be applied (e.g. BUCKET partitions on non-DuckDB backends).
+	virtual string BuildPartitionFilter(const vector<string> &partition_sql_exprs,
+	                                    const vector<Value> &partition_values);
 
 protected:
 	string GetInlinedTableQuery(const DuckLakeTableInfo &table, const string &table_name);

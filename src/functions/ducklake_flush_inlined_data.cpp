@@ -115,6 +115,7 @@ SinkFinalizeType DuckLakeFlushData::Finalize(Pipeline &pipeline, Event &event, C
 	auto &global_state = input.global_state.Cast<DuckLakeInsertGlobalState>();
 	auto &transaction = DuckLakeTransaction::Get(context, global_state.table.catalog);
 	auto snapshot = transaction.GetSnapshot();
+	auto &metadata_manager = transaction.GetMetadataManager();
 
 	if (!global_state.written_files.empty()) {
 		DeletesPerFile deletes_per_file;
@@ -131,7 +132,7 @@ SinkFinalizeType DuckLakeFlushData::Finalize(Pipeline &pipeline, Event &event, C
 				for (auto &pv : file.partition_values) {
 					values.push_back(pv.partition_value);
 				}
-				partition_filter = DuckLakePartitionUtils::BuildPartitionFilter(partition_sql_exprs, values);
+				partition_filter = metadata_manager.BuildPartitionFilter(partition_sql_exprs, values);
 			}
 
 			idx_t file_offset = partition_row_offsets[partition_filter];
@@ -146,7 +147,7 @@ SinkFinalizeType DuckLakeFlushData::Finalize(Pipeline &pipeline, Event &event, C
 				order_by = sort_order_sql + ", row_id, begin_snapshot";
 			}
 			auto deleted_rows_result =
-			    transaction.Query(snapshot, StringUtil::Format(R"(
+			    metadata_manager.Query(snapshot, StringUtil::Format(R"(
 				WITH all_rows AS (
 					SELECT end_snapshot, ROW_NUMBER() OVER (ORDER BY %s) - 1 AS output_position
 					FROM {METADATA_CATALOG}.%s
@@ -429,7 +430,7 @@ static void FlushInlinedFileDeletions(ClientContext &context, DuckLakeCatalog &c
 	}
 
 	// Query the inlined deletions with file paths and existing delete file info
-	auto deletions_result = transaction.Query(snapshot, StringUtil::Format(R"(
+	auto deletions_result = metadata_manager.Query(snapshot, StringUtil::Format(R"(
 SELECT del.file_id, data.path, data.path_is_relative, del.row_id, del.begin_snapshot,
        existing_del.delete_file_id, existing_del.path as del_path, existing_del.path_is_relative as del_path_is_relative,
        existing_del.begin_snapshot as del_begin_snapshot, existing_del.encryption_key as del_encryption_key,
@@ -442,7 +443,7 @@ LEFT JOIN (
           AND ({SNAPSHOT_ID} < end_snapshot OR end_snapshot IS NULL)
 ) existing_del ON del.file_id = existing_del.data_file_id
 	)",
-	                                                                       inlined_table_name, table_id.index));
+	                                                                            inlined_table_name, table_id.index));
 	if (deletions_result->HasError()) {
 		deletions_result->GetErrorObject().Throw("Failed to query inlined file deletions for flush: ");
 	}
@@ -573,7 +574,7 @@ LEFT JOIN (
 
 	// Delete the flushed inlined deletions
 	auto delete_result =
-	    transaction.Query(snapshot, StringUtil::Format("DELETE FROM {METADATA_CATALOG}.%s", inlined_table_name));
+	    metadata_manager.Execute(snapshot, StringUtil::Format("DELETE FROM {METADATA_CATALOG}.%s", inlined_table_name));
 	if (delete_result->HasError()) {
 		delete_result->GetErrorObject().Throw("Failed to delete inlined file deletions after flush: ");
 	}

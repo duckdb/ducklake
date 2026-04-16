@@ -27,18 +27,40 @@ public:
 	}
 
 	string GetColumnTypeInternal(const LogicalType &type) override;
+	string CastColumnToTarget(const string &stats, const LogicalType &type) override;
 	shared_ptr<DuckLakeInlinedData> TransformInlinedData(QueryResult &result,
 	                                                     const vector<LogicalType> &expected_types) override;
 
-	unique_ptr<QueryResult> Execute(DuckLakeSnapshot snapshot, string &query) override;
-
-	unique_ptr<QueryResult> Query(DuckLakeSnapshot snapshot, string &query) override;
+	unique_ptr<QueryResult> Execute(string query) override;
+	unique_ptr<QueryResult> Query(string query) override;
 
 protected:
 	string GetLatestSnapshotQuery() const override;
 
+	//! Wrap field selections with list aggregation using Postgres json syntax
+	string ListAggregation(const vector<pair<string, string>> &fields) const override;
+
+	//! Cast stats columns to target type using Postgres syntax (no TRY_CAST)
+	string CastStatsToTarget(const string &stats, const LogicalType &type) override;
+
+	//! Load tags from JSON result
+	vector<DuckLakeTag> LoadTags(const Value &tag_map) const override;
+
+	//! Load inlined data tables from JSON result
+	vector<DuckLakeInlinedTableInfo> LoadInlinedDataTables(const Value &list) const override;
+
+	//! Load macro implementations from JSON result
+	vector<DuckLakeMacroImplementation> LoadMacroImplementations(const Value &list) const override;
+	//! Load inlined file deletions from JSON result
+	unordered_map<idx_t, idx_t> LoadInlinedDeletions(const Value &deletions_value) const override;
+	//! Check table existence without poisoning the PG transaction
+	bool CheckTableExists(const string &table_name) override;
+	//! Skip BUCKET partition filters (murmur3_32 is not available in postgres)
+	string BuildPartitionFilter(const vector<string> &partition_sql_exprs,
+	                            const vector<Value> &partition_values) override;
+
 private:
-	unique_ptr<QueryResult> ExecuteQuery(DuckLakeSnapshot snapshot, string &query, string command);
+	unique_ptr<QueryResult> ExecuteQuery(string &query, string command);
 };
 
 } // namespace duckdb
