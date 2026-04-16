@@ -283,6 +283,14 @@ protected:
 	virtual vector<DuckLakeMacroImplementation> LoadMacroImplementations(const Value &list) const;
 	//! Parse inlined file deletions from ListAggregation value
 	virtual unordered_map<idx_t, idx_t> LoadInlinedDeletions(const Value &deletions_value) const;
+	//! Check if a metadata table exists (without poisoning the transaction on error)
+	virtual bool CheckTableExists(const string &table_name);
+
+public:
+	//! Build a SQL partition filter for the given expressions and values.
+	//! Returns empty string if no filter can be applied (e.g. BUCKET partitions on non-DuckDB backends).
+	virtual string BuildPartitionFilter(const vector<string> &partition_sql_exprs,
+	                                    const vector<Value> &partition_values);
 
 protected:
 	string GetInlinedTableQuery(const DuckLakeTableInfo &table, const string &table_name);

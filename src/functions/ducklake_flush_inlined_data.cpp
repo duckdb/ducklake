@@ -132,7 +132,7 @@ SinkFinalizeType DuckLakeFlushData::Finalize(Pipeline &pipeline, Event &event, C
 				for (auto &pv : file.partition_values) {
 					values.push_back(pv.partition_value);
 				}
-				partition_filter = DuckLakePartitionUtils::BuildPartitionFilter(partition_sql_exprs, values);
+				partition_filter = metadata_manager.BuildPartitionFilter(partition_sql_exprs, values);
 			}
 
 			idx_t file_offset = partition_row_offsets[partition_filter];

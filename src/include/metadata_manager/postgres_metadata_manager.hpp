@@ -53,6 +53,11 @@ protected:
 	vector<DuckLakeMacroImplementation> LoadMacroImplementations(const Value &list) const override;
 	//! Load inlined file deletions from JSON result
 	unordered_map<idx_t, idx_t> LoadInlinedDeletions(const Value &deletions_value) const override;
+	//! Check table existence without poisoning the PG transaction
+	bool CheckTableExists(const string &table_name) override;
+	//! Skip BUCKET partition filters (murmur3_32 is not available in postgres)
+	string BuildPartitionFilter(const vector<string> &partition_sql_exprs,
+	                            const vector<Value> &partition_values) override;
 
 private:
 	unique_ptr<QueryResult> ExecuteQuery(string &query, string command);

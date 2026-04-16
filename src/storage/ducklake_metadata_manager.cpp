@@ -2681,18 +2681,24 @@ string DuckLakeMetadataManager::GetInlinedDeletionTableName(TableIndex table_id,
 	}
 
 	// Read path: table visibility implies it was committed, safe to cache at catalog level
-	auto query = StringUtil::Format("SELECT NULL FROM {METADATA_CATALOG}.%s LIMIT 1", table_name);
-	auto result = Query(snapshot, query);
-	// TODO: Using the error state to check for existence here is fragile.
-	// Even if the table exists, a transient error in the catalog query would lead us to assume it does not exist.
-	// Maybe persist the existence of the deletion inlining table on the table metadata instead?
-	if (!result->HasError()) {
+	if (CheckTableExists(table_name)) {
 		delete_inlined_table_cache.insert(table_id.index);
 		catalog.CacheInlinedDeletionTableResult(table_id, snapshot, true);
 		return table_name;
 	}
 	catalog.CacheInlinedDeletionTableResult(table_id, snapshot, false);
 	return string();
+}
+
+string DuckLakeMetadataManager::BuildPartitionFilter(const vector<string> &partition_sql_exprs,
+                                                     const vector<Value> &partition_values) {
+	return DuckLakePartitionUtils::BuildPartitionFilter(partition_sql_exprs, partition_values);
+}
+
+bool DuckLakeMetadataManager::CheckTableExists(const string &table_name) {
+	auto query = StringUtil::Format("SELECT NULL FROM {METADATA_CATALOG}.%s LIMIT 1", table_name);
+	auto result = Query(query);
+	return !result->HasError();
 }
 
 shared_ptr<DuckLakeInlinedData> DuckLakeMetadataManager::TransformInlinedData(QueryResult &result,
@@ -4057,10 +4063,8 @@ FROM {METADATA_CATALOG}.ducklake_files_scheduled_for_deletion
 }
 vector<DuckLakeFileForCleanup> DuckLakeMetadataManager::GetOrphanFilesForCleanup(const string &filter,
                                                                                  const string &separator) {
-	auto query = R"(SELECT filename
-FROM read_blob({DATA_PATH} || '**')
-WHERE suffix(filename, '.parquet')
-AND REPLACE(filename, '\', '/') NOT IN (
+	// Step 1: Get all known file paths from the metadata catalog
+	auto catalog_query = R"(
 SELECT REPLACE(
            CASE
                WHEN NOT file_relative THEN file_path
@@ -4095,19 +4099,34 @@ SELECT REPLACE(
            '/'
 ) AS full_path
 FROM {METADATA_CATALOG}.ducklake_files_scheduled_for_deletion f
-)
-)" + filter;
-	query = StringUtil::Replace(query, "{SEPARATOR}", separator);
-	auto res = Query(query);
-	if (res->HasError()) {
-		res->GetErrorObject().Throw("Failed to get files scheduled for deletion from DuckLake: ");
+)";
+	auto catalog_res = Query(catalog_query);
+	if (catalog_res->HasError()) {
+		catalog_res->GetErrorObject().Throw("Failed to get known file paths from DuckLake: ");
 	}
-	auto context = transaction.context.lock();
+	unordered_set<string> known_files;
+	for (auto &row : *catalog_res) {
+		known_files.insert(row.GetValue<string>(0));
+	}
+
+	// Step 2: Scan the filesystem using DuckDB's read_blob (must run on DuckDB, not on external catalog)
+	string fs_query = R"(SELECT REPLACE(filename, '\', '/') AS filename
+FROM read_blob({DATA_PATH} || '**')
+WHERE suffix(filename, '.parquet'))" + filter;
+	auto fs_res = transaction.Query(fs_query);
+	if (fs_res->HasError()) {
+		fs_res->GetErrorObject().Throw("Failed to scan filesystem for orphan file detection in DuckLake: ");
+	}
+
+	// Step 3: Compute the difference -- files on disk but not in catalog
 	vector<DuckLakeFileForCleanup> result;
-	for (auto &row : *res) {
-		DuckLakeFileForCleanup info;
-		info.path = row.GetValue<string>(0);
-		result.push_back(std::move(info));
+	for (auto &row : *fs_res) {
+		auto filename = row.GetValue<string>(0);
+		if (known_files.find(filename) == known_files.end()) {
+			DuckLakeFileForCleanup info;
+			info.path = filename;
+			result.push_back(std::move(info));
+		}
 	}
 	return result;
 }

@@ -103,8 +103,14 @@ unique_ptr<QueryResult> PostgresMetadataManager::ExecuteQuery(string &query, str
 	query = StringUtil::Replace(query, "{METADATA_PATH}", metadata_path);
 	query = StringUtil::Replace(query, "{DATA_PATH}", data_path);
 
-	return connection.Query(
+	auto result = connection.Query(
 	    StringUtil::Format("CALL %s(%s, %s)", std::move(command), catalog_literal, SQLString(query)));
+	if (result->HasError()) {
+		// Propagate errors immediately -- in Postgres, a failed query aborts the current
+		// transaction and all subsequent queries will fail with "current transaction is aborted".
+		result->GetErrorObject().Throw("Failed to execute metadata query on Postgres: ");
+	}
+	return result;
 }
 
 unique_ptr<QueryResult> PostgresMetadataManager::Execute(string query) {
@@ -337,6 +343,42 @@ vector<DuckLakeMacroImplementation> PostgresMetadataManager::LoadMacroImplementa
 	return result;
 }
 
+string PostgresMetadataManager::BuildPartitionFilter(const vector<string> &partition_sql_exprs,
+                                                     const vector<Value> &partition_values) {
+	// TODO: BUCKET partition filters use murmur3_32() which is not available in postgres.
+	// For now, skip BUCKET filters. The caller should handle post-fetch filtering.
+	string filter;
+	for (idx_t p = 0; p < partition_sql_exprs.size(); p++) {
+		if (StringUtil::Contains(partition_sql_exprs[p], "murmur3_32")) {
+			continue;
+		}
+		if (!filter.empty()) {
+			filter += " AND ";
+		}
+		auto &val = partition_values[p];
+		if (val.IsNull()) {
+			filter += partition_sql_exprs[p] + " IS NULL";
+		} else {
+			filter += partition_sql_exprs[p] + " = " + val.ToSQLString();
+		}
+	}
+	return filter;
+}
+
+bool PostgresMetadataManager::CheckTableExists(const string &table_name) {
+	auto result = Query(StringUtil::Format(
+	    "SELECT 1 FROM information_schema.tables WHERE table_schema = {METADATA_SCHEMA_NAME_LITERAL} AND table_name = %s",
+	    SQLString(table_name)));
+	if (result->HasError()) {
+		result->GetErrorObject().Throw("Failed to check table existence in DuckLake: ");
+	}
+	for (auto &row : *result) {
+		(void)row;
+		return true;
+	}
+	return false;
+}
+
 unordered_map<idx_t, idx_t> PostgresMetadataManager::LoadInlinedDeletions(const Value &deletions_value) const {
 	using namespace duckdb_yyjson; // NOLINT
 
@@ -374,21 +416,20 @@ unordered_map<idx_t, idx_t> PostgresMetadataManager::LoadInlinedDeletions(const 
 	return result;
 }
 
-// We need a specialized function here to do a reinterpret for postgres from BLOB to VARCHAR
+// Postgres returns non-native types as VARCHAR and BLOB columns as BYTEA.
+// We need to cast/reinterpret them back to the expected DuckDB types.
 shared_ptr<DuckLakeInlinedData>
 PostgresMetadataManager::TransformInlinedData(QueryResult &result, const vector<LogicalType> &expected_types) {
-	bool needs_reinterpret = false;
+	bool needs_transform = false;
 	if (!expected_types.empty()) {
 		D_ASSERT(expected_types.size() == result.types.size());
 		for (idx_t i = 0; i < expected_types.size(); i++) {
 			if (result.types[i] != expected_types[i]) {
-				D_ASSERT(result.types[i].id() == LogicalTypeId::BLOB &&
-				         expected_types[i].id() == LogicalTypeId::VARCHAR);
-				needs_reinterpret = true;
+				needs_transform = true;
 			}
 		}
 	}
-	if (!needs_reinterpret) {
+	if (!needs_transform) {
 		return DuckLakeMetadataManager::TransformInlinedData(result, expected_types);
 	}
 
@@ -397,18 +438,29 @@ PostgresMetadataManager::TransformInlinedData(QueryResult &result, const vector<
 	}
 	auto context = transaction.context.lock();
 	auto data = make_uniq<ColumnDataCollection>(*context, expected_types);
-	DataChunk reinterpret_chunk;
-	reinterpret_chunk.Initialize(*context, expected_types);
+	DataChunk transformed_chunk;
+	transformed_chunk.Initialize(*context, expected_types);
 	while (true) {
 		auto chunk = result.Fetch();
 		if (!chunk) {
 			break;
 		}
+		transformed_chunk.SetCardinality(chunk->size());
 		for (idx_t i = 0; i < expected_types.size(); i++) {
-			reinterpret_chunk.data[i].Reinterpret(chunk->data[i]);
+			auto &source = chunk->data[i];
+			auto &target = transformed_chunk.data[i];
+			if (source.GetType() == target.GetType()) {
+				target.Reference(source);
+			} else if (source.GetType().id() == LogicalTypeId::BLOB &&
+			           target.GetType().id() == LogicalTypeId::VARCHAR) {
+				// BYTEA -> VARCHAR: reinterpret
+				target.Reinterpret(source);
+			} else {
+				// VARCHAR -> complex types (MAP, STRUCT, etc.): cast
+				VectorOperations::Cast(*context, source, target, chunk->size());
+			}
 		}
-		reinterpret_chunk.SetCardinality(chunk->size());
-		data->Append(reinterpret_chunk);
+		data->Append(transformed_chunk);
 	}
 	auto inlined_data = make_shared_ptr<DuckLakeInlinedData>();
 	inlined_data->data = std::move(data);

@@ -45,9 +45,25 @@ string DuckLakePartitionUtils::GetPartitionSQLExpression(const DuckLakeTransform
 		// Return the actual SQL expression that computes the bucket assignment
 		return "(murmur3_32(" + col_name + ") & 2147483647) % " + to_string(transform.bucket_count);
 	}
-	case_insensitive_set_t used_names;
-	string func_name = GetPartitionKeyName(transform.type, col_name, used_names);
-	return func_name + "(" + col_name + ")";
+	// Use EXTRACT(... FROM col)::INTEGER syntax which works on both DuckDB and Postgres
+	string part;
+	switch (transform.type) {
+	case DuckLakeTransformType::YEAR:
+		part = "YEAR";
+		break;
+	case DuckLakeTransformType::MONTH:
+		part = "MONTH";
+		break;
+	case DuckLakeTransformType::DAY:
+		part = "DAY";
+		break;
+	case DuckLakeTransformType::HOUR:
+		part = "HOUR";
+		break;
+	default:
+		throw NotImplementedException("Unsupported partition transform type in GetPartitionSQLExpression");
+	}
+	return "EXTRACT(" + part + " FROM " + col_name + ")::INTEGER";
 }
 
 LogicalType DuckLakePartitionUtils::GetPartitionKeyType(DuckLakeTransformType transform_type,
