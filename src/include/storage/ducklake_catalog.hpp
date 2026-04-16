@@ -47,25 +47,6 @@ struct DuckLakeStatsCacheEntry : public ObjectCacheEntry {
 	optional_idx GetEstimatedCacheMemory() const override;
 };
 
-//! Cache entry for DuckLake catalog schemas
-struct DuckLakeSchemaCacheEntry : public ObjectCacheEntry {
-	static constexpr idx_t ESTIMATED_BYTES_PER_CATALOG_ENTRY = 1024;
-
-	explicit DuckLakeSchemaCacheEntry(unique_ptr<DuckLakeCatalogSet> catalog_set_p)
-	    : catalog_set(std::move(*catalog_set_p)) {
-	}
-
-	DuckLakeCatalogSet catalog_set;
-
-	static string ObjectType() {
-		return "ducklake_schema";
-	}
-	string GetObjectType() override {
-		return ObjectType();
-	}
-	optional_idx GetEstimatedCacheMemory() const override;
-};
-
 enum class InlinedDeletionCacheResult { EXISTS, DOES_NOT_EXIST, UNKNOWN };
 
 class DuckLakeCatalog : public Catalog {
@@ -220,8 +201,7 @@ public:
 	static unique_ptr<DuckLakeStats> ConstructStatsMap(vector<DuckLakeGlobalStatsInfo> &global_stats,
 	                                                   DuckLakeCatalogSet &schema);
 	//! Return the schema for the given snapshot - loading it if it is not yet loaded
-	shared_ptr<DuckLakeSchemaCacheEntry> GetSchemaForSnapshot(DuckLakeTransaction &transaction,
-	                                                          DuckLakeSnapshot snapshot);
+	DuckLakeCatalogSet &GetSchemaForSnapshot(DuckLakeTransaction &transaction, DuckLakeSnapshot snapshot);
 
 	//! Callback type for instrumenting metadata queries
 	using QueryCallback = std::function<void(const string &query, std::chrono::steady_clock::duration elapsed)>;
@@ -248,11 +228,12 @@ private:
 	void LoadNameMaps(DuckLakeTransaction &transaction);
 	//! Generate a cache key for the ObjectCache
 	string StatsCacheKey(idx_t next_file_id) const;
-	string SchemaCacheKey(idx_t schema_version) const;
 	ObjectCache &GetObjectCacheInstance();
 
 private:
-	mutex name_maps_lock;
+	mutex schemas_lock;
+	//! Map of schema index -> schema
+	unordered_map<idx_t, unique_ptr<DuckLakeCatalogSet>> schemas;
 	//! Map of mapping index -> name map
 	DuckLakeNameMapSet name_maps;
 	//! The maximum name map index we have loaded so far

@@ -381,10 +381,12 @@ shared_ptr<DuckLakeTableStats> DuckLakeTableEntry::GetTableStats(ClientContext &
 
 shared_ptr<DuckLakeTableStats> DuckLakeTableEntry::GetTableStats(DuckLakeTransaction &transaction) {
 	if (IsTransactionLocal()) {
+		// no stats for transaction local tables
 		return nullptr;
 	}
 	auto &dl_catalog = catalog.Cast<DuckLakeCatalog>();
 	if (transaction.HasTransactionLocalInserts(GetTableId())) {
+		// no stats if there are transaction-local inserts
 		return nullptr;
 	}
 	return dl_catalog.GetTableStats(transaction, GetTableId());
