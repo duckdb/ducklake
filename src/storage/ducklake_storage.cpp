@@ -56,6 +56,12 @@ static void HandleDuckLakeOption(DuckLakeOptions &options, const string &option,
 		options.automatic_migration = BooleanValue::Get(value.DefaultCastAs(LogicalType::BOOLEAN));
 	} else if (lcase == "busy_timeout") {
 		options.busy_timeout = UBigIntValue::Get(value.DefaultCastAs(LogicalType::UBIGINT));
+	} else if (lcase == "ducklake_version") {
+		auto version = DuckLakeVersionFromString(value.ToString());
+		if (version < DuckLakeVersion::V1_0) {
+			throw InvalidInputException("ducklake_version must be >= '1.0', got '%s'", value.ToString());
+		}
+		options.ducklake_version = version;
 	} else {
 		throw NotImplementedException("Unsupported option %s for DuckLake", option);
 	}
