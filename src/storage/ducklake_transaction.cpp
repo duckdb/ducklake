@@ -2064,8 +2064,8 @@ NewDataInfo DuckLakeTransaction::GetNewDataFiles(string &batch_query, DuckLakeCo
 	DuckLakeNewGlobalStats new_globals;
 	unique_ptr<DuckLakeStats> dl_stats;
 	if (stats) {
-		auto &schema = ducklake_catalog.GetSchemaForSnapshot(*this, GetSnapshot());
-		dl_stats = ducklake_catalog.ConstructStatsMap(*stats, schema);
+		auto schema_entry = ducklake_catalog.GetSchemaForSnapshot(*this, GetSnapshot());
+		dl_stats = ducklake_catalog.ConstructStatsMap(*stats, schema_entry->catalog_set);
 	}
 	for (auto &entry : local_changes.Changes()) {
 		auto table_id = commit_state.GetTableId(entry.GetTableIndex());
@@ -2080,13 +2080,15 @@ NewDataInfo DuckLakeTransaction::GetNewDataFiles(string &batch_query, DuckLakeCo
 		// get the global table stats
 		DuckLakeNewGlobalStats new_globals;
 		optional_ptr<DuckLakeTableStats> current_stats;
+		shared_ptr<DuckLakeTableStats> current_stats_pin;
 		if (dl_stats) {
 			auto dl_stats_entry = dl_stats->table_stats.find(table_id);
 			if (dl_stats_entry != dl_stats->table_stats.end()) {
 				current_stats = dl_stats_entry->second.get();
 			}
 		} else {
-			current_stats = ducklake_catalog.GetTableStats(*this, table_id);
+			current_stats_pin = ducklake_catalog.GetTableStats(*this, table_id);
+			current_stats = current_stats_pin.get();
 		}
 
 		if (current_stats) {

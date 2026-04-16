@@ -84,8 +84,8 @@ public:
 	optional_ptr<const DuckLakeFieldId> GetFieldId(FieldIndex field_index) const;
 	void SetPartitionData(unique_ptr<DuckLakePartition> partition_data);
 	void SetSortData(unique_ptr<DuckLakeSort> sort_data);
-	optional_ptr<DuckLakeTableStats> GetTableStats(ClientContext &context);
-	optional_ptr<DuckLakeTableStats> GetTableStats(DuckLakeTransaction &transaction);
+	shared_ptr<DuckLakeTableStats> GetTableStats(ClientContext &context);
+	shared_ptr<DuckLakeTableStats> GetTableStats(DuckLakeTransaction &transaction);
 	idx_t GetNetDataFileRowCount(DuckLakeTransaction &transaction);
 	idx_t GetNetInlinedRowCount(DuckLakeTransaction &transaction);
 

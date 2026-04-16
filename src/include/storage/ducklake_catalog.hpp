@@ -12,6 +12,7 @@
 #include "common/ducklake_options.hpp"
 #include "common/ducklake_name_map.hpp"
 #include "duckdb/catalog/catalog.hpp"
+#include "duckdb/storage/object_cache.hpp"
 #include "storage/ducklake_catalog_set.hpp"
 #include "storage/ducklake_partition_data.hpp"
 #include "storage/ducklake_stats.hpp"
@@ -27,6 +28,43 @@ struct DuckLakeFileListEntry;
 struct DuckLakeConfigOption;
 struct DeleteFileMap;
 class LogicalGet;
+
+//! Cache entry for DuckLake table statistics
+struct DuckLakeStatsCacheEntry : public ObjectCacheEntry {
+	static constexpr idx_t ESTIMATED_BYTES_PER_COLUMN_STATS = 256;
+
+	explicit DuckLakeStatsCacheEntry(unique_ptr<DuckLakeStats> stats_p) : stats(std::move(*stats_p)) {
+	}
+
+	DuckLakeStats stats;
+
+	static string ObjectType() {
+		return "ducklake_stats";
+	}
+	string GetObjectType() override {
+		return ObjectType();
+	}
+	optional_idx GetEstimatedCacheMemory() const override;
+};
+
+//! Cache entry for DuckLake catalog schemas
+struct DuckLakeSchemaCacheEntry : public ObjectCacheEntry {
+	static constexpr idx_t ESTIMATED_BYTES_PER_CATALOG_ENTRY = 1024;
+
+	explicit DuckLakeSchemaCacheEntry(unique_ptr<DuckLakeCatalogSet> catalog_set_p)
+	    : catalog_set(std::move(*catalog_set_p)) {
+	}
+
+	DuckLakeCatalogSet catalog_set;
+
+	static string ObjectType() {
+		return "ducklake_schema";
+	}
+	string GetObjectType() override {
+		return ObjectType();
+	}
+	optional_idx GetEstimatedCacheMemory() const override;
+};
 
 enum class InlinedDeletionCacheResult { EXISTS, DOES_NOT_EXIST, UNKNOWN };
 
@@ -106,9 +144,9 @@ public:
 	                                              unique_ptr<CreateIndexInfo> create_info,
 	                                              unique_ptr<AlterTableInfo> alter_info) override;
 	DatabaseSize GetDatabaseSize(ClientContext &context) override;
-	optional_ptr<DuckLakeTableStats> GetTableStats(DuckLakeTransaction &transaction, TableIndex table_id);
-	optional_ptr<DuckLakeTableStats> GetTableStats(DuckLakeTransaction &transaction, DuckLakeSnapshot snapshot,
-	                                               TableIndex table_id);
+	shared_ptr<DuckLakeTableStats> GetTableStats(DuckLakeTransaction &transaction, TableIndex table_id);
+	shared_ptr<DuckLakeTableStats> GetTableStats(DuckLakeTransaction &transaction, DuckLakeSnapshot snapshot,
+	                                             TableIndex table_id);
 
 	optional_ptr<CatalogEntry> GetEntryById(DuckLakeTransaction &transaction, DuckLakeSnapshot snapshot,
 	                                        SchemaIndex schema_id);
@@ -182,7 +220,8 @@ public:
 	static unique_ptr<DuckLakeStats> ConstructStatsMap(vector<DuckLakeGlobalStatsInfo> &global_stats,
 	                                                   DuckLakeCatalogSet &schema);
 	//! Return the schema for the given snapshot - loading it if it is not yet loaded
-	DuckLakeCatalogSet &GetSchemaForSnapshot(DuckLakeTransaction &transaction, DuckLakeSnapshot snapshot);
+	shared_ptr<DuckLakeSchemaCacheEntry> GetSchemaForSnapshot(DuckLakeTransaction &transaction,
+	                                                          DuckLakeSnapshot snapshot);
 
 	//! Callback type for instrumenting metadata queries
 	using QueryCallback = std::function<void(const string &query, std::chrono::steady_clock::duration elapsed)>;
@@ -202,17 +241,18 @@ public:
 private:
 	void DropSchema(ClientContext &context, DropInfo &info) override;
 	unique_ptr<DuckLakeCatalogSet> LoadSchemaForSnapshot(DuckLakeTransaction &transaction, DuckLakeSnapshot snapshot);
-	DuckLakeStats &GetStatsForSnapshot(DuckLakeTransaction &transaction, DuckLakeSnapshot snapshot);
+	shared_ptr<DuckLakeStatsCacheEntry> GetStatsForSnapshot(DuckLakeTransaction &transaction,
+	                                                        DuckLakeSnapshot snapshot);
 	unique_ptr<DuckLakeStats> LoadStatsForSnapshot(DuckLakeTransaction &transaction, DuckLakeSnapshot snapshot,
 	                                               DuckLakeCatalogSet &schema);
 	void LoadNameMaps(DuckLakeTransaction &transaction);
+	//! Generate a cache key for the ObjectCache
+	string StatsCacheKey(idx_t next_file_id) const;
+	string SchemaCacheKey(idx_t schema_version) const;
+	ObjectCache &GetObjectCacheInstance();
 
 private:
-	mutex schemas_lock;
-	//! Map of schema index -> schema
-	unordered_map<idx_t, unique_ptr<DuckLakeCatalogSet>> schemas;
-	//! Map of data file index -> table stats
-	unordered_map<idx_t, unique_ptr<DuckLakeStats>> stats;
+	mutex name_maps_lock;
 	//! Map of mapping index -> name map
 	DuckLakeNameMapSet name_maps;
 	//! The maximum name map index we have loaded so far
