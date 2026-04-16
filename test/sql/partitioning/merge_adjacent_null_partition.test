@@ -97,3 +97,144 @@ SELECT id, tag FROM ducklake.t ORDER BY id
 1	NULL
 2	NULL
 3	NULL
+
+#===----------------------------------------------------------------------===#
+# Part 3: Multiple partition columns, both NULL
+#===----------------------------------------------------------------------===#
+
+statement ok
+CREATE TABLE ducklake.multi_null (id INTEGER, a VARCHAR, b VARCHAR)
+
+statement ok
+ALTER TABLE ducklake.multi_null SET PARTITIONED BY (a, b)
+
+statement ok
+INSERT INTO ducklake.multi_null VALUES (1, NULL, NULL)
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake')
+
+statement ok
+INSERT INTO ducklake.multi_null VALUES (2, NULL, NULL)
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake')
+
+# Both files should be in the same partition group and mergeable
+statement ok
+CALL ducklake_merge_adjacent_files('ducklake')
+
+query I
+SELECT COUNT(*) FROM meta.ducklake_data_file
+    WHERE table_id = (SELECT table_id FROM meta.ducklake_table WHERE table_name = 'multi_null')
+----
+1
+
+# Both partition columns should have NULL partition values after merge
+query I
+SELECT COUNT(*) FROM meta.ducklake_file_partition_value fpv
+    JOIN meta.ducklake_data_file df ON fpv.data_file_id = df.data_file_id
+    WHERE df.table_id = (SELECT table_id FROM meta.ducklake_table WHERE table_name = 'multi_null')
+      AND fpv.partition_value IS NULL
+----
+2
+
+query III
+SELECT id, a, b FROM ducklake.multi_null ORDER BY id
+----
+1	NULL	NULL
+2	NULL	NULL
+
+#===----------------------------------------------------------------------===#
+# Part 4: Mixed NULL and non-NULL across partition columns
+#===----------------------------------------------------------------------===#
+
+statement ok
+CREATE TABLE ducklake.mixed_null (id INTEGER, a VARCHAR, b VARCHAR)
+
+statement ok
+ALTER TABLE ducklake.mixed_null SET PARTITIONED BY (a, b)
+
+# Two files with a=NULL, b='x'
+statement ok
+INSERT INTO ducklake.mixed_null VALUES (1, NULL, 'x')
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake')
+
+statement ok
+INSERT INTO ducklake.mixed_null VALUES (2, NULL, 'x')
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake')
+
+# Two files with a='y', b=NULL
+statement ok
+INSERT INTO ducklake.mixed_null VALUES (3, 'y', NULL)
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake')
+
+statement ok
+INSERT INTO ducklake.mixed_null VALUES (4, 'y', NULL)
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake')
+
+# One file with a=NULL, b=NULL
+statement ok
+INSERT INTO ducklake.mixed_null VALUES (5, NULL, NULL)
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake')
+
+# One file with a='y', b='x'
+statement ok
+INSERT INTO ducklake.mixed_null VALUES (6, 'y', 'x')
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake')
+
+query I
+SELECT COUNT(*) FROM meta.ducklake_data_file
+    WHERE table_id = (SELECT table_id FROM meta.ducklake_table WHERE table_name = 'mixed_null')
+----
+6
+
+statement ok
+CALL ducklake_merge_adjacent_files('ducklake')
+
+# After merge: 4 files — (NULL,'x') merged, ('y',NULL) merged, (NULL,NULL) alone, ('y','x') alone
+query I
+SELECT COUNT(*) FROM meta.ducklake_data_file
+    WHERE table_id = (SELECT table_id FROM meta.ducklake_table WHERE table_name = 'mixed_null')
+----
+4
+
+# 4 NULL partition values: (NULL,'x') has 1, ('y',NULL) has 1, (NULL,NULL) has 2
+query I
+SELECT COUNT(*) FROM meta.ducklake_file_partition_value fpv
+    JOIN meta.ducklake_data_file df ON fpv.data_file_id = df.data_file_id
+    WHERE df.table_id = (SELECT table_id FROM meta.ducklake_table WHERE table_name = 'mixed_null')
+      AND fpv.partition_value IS NULL
+----
+4
+
+# 4 non-NULL partition values: (NULL,'x') has 1, ('y',NULL) has 1, ('y','x') has 2
+query I
+SELECT COUNT(*) FROM meta.ducklake_file_partition_value fpv
+    JOIN meta.ducklake_data_file df ON fpv.data_file_id = df.data_file_id
+    WHERE df.table_id = (SELECT table_id FROM meta.ducklake_table WHERE table_name = 'mixed_null')
+      AND fpv.partition_value IS NOT NULL
+----
+4
+
+query III
+SELECT id, a, b FROM ducklake.mixed_null ORDER BY id
+----
+1	NULL	x
+2	NULL	x
+3	y	NULL
+4	y	NULL
+5	NULL	NULL
+6	y	x
