@@ -42,16 +42,16 @@ CREATE TABLE ducklake.wide_table (
 	col_95 INTEGER, col_96 INTEGER, col_97 INTEGER, col_98 INTEGER, col_99 INTEGER
 )
 
+# Disable temp_directory so DuckDB cannot spill blocks for temporary tables to disk.
+statement ok
+SET temp_directory=''
+
 statement ok
 SET memory_limit='50MB'
 
-# Fill a temp table to consume most of the max memory (~40MB), leaving only a few MB for ObjectCache stats entries.
-statement ok
-CREATE TEMP TABLE mem_filler AS SELECT i, repeat('x', 1000) AS pad FROM range(40000) t(i)
-
+# Phase 1: fill ObjectCache with stats entries.
 # Each stats entry = 100 columns × 256 bytes = 26KB.
-# After filling ~40MB of the 50MB buffer pool, only ~10MB remains.
-# 500 inserts × 26KB ≈ 13MB of stats entries will fill the remaining space and force eviction.
+# 500 inserts × 26KB = 13MB of object cache memory accounting.
 
 loop i 0 500
 
@@ -74,6 +74,43 @@ query I
 SELECT SUM(col_1) FROM ducklake.wide_table
 ----
 1247500
+
+# Phase 2: allocate unevictable blocks via a temp table.
+# Without temp_directory these blocks cannot be spilled, so the buffer pool
+# falls through to EvictObjectCacheEntries, evicting our stats cache entries.
+# ~15MB of temp data leaves enough headroom for DuckLake working memory.
+statement ok
+CREATE TEMP TABLE mem_filler(i INTEGER, pad VARCHAR)
+
+loop j 0 3
+
+statement ok
+INSERT INTO mem_filler SELECT i + ${j} * 5000, repeat('x', 1000) FROM range(5000) t(i)
+
+endloop
+
+# Phase 3: more DuckLake inserts after eviction, so stats are reloaded on demand.
+loop i 500 600
+
+statement ok
+INSERT INTO ducklake.wide_table (col_0, col_1, col_2) VALUES (${i}, ${i} * 10, ${i} * 100)
+
+endloop
+
+query I
+SELECT COUNT(*) FROM ducklake.wide_table
+----
+600
+
+query I
+SELECT SUM(col_0) FROM ducklake.wide_table
+----
+179700
+
+query I
+SELECT SUM(col_1) FROM ducklake.wide_table
+----
+1797000
 
 query I
 SELECT COUNT(*) FROM ducklake.wide_table WHERE col_0 = 50
