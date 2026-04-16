@@ -51,6 +51,8 @@ protected:
 
 	//! Load macro implementations from JSON result
 	vector<DuckLakeMacroImplementation> LoadMacroImplementations(const Value &list) const override;
+	//! Load inlined file deletions from JSON result
+	unordered_map<idx_t, idx_t> LoadInlinedDeletions(const Value &deletions_value) const override;
 
 private:
 	unique_ptr<QueryResult> ExecuteQuery(string &query, string command);

@@ -337,6 +337,43 @@ vector<DuckLakeMacroImplementation> PostgresMetadataManager::LoadMacroImplementa
 	return result;
 }
 
+unordered_map<idx_t, idx_t> PostgresMetadataManager::LoadInlinedDeletions(const Value &deletions_value) const {
+	using namespace duckdb_yyjson; // NOLINT
+
+	unordered_map<idx_t, idx_t> result;
+
+	auto json_str = deletions_value.GetValue<string>();
+	auto doc = yyjson_read(json_str.c_str(), json_str.size(), 0);
+	if (!doc) {
+		throw InvalidInputException("Failed to parse inlined deletions JSON");
+	}
+	auto root = yyjson_doc_get_root(doc);
+	if (!yyjson_is_arr(root)) {
+		yyjson_doc_free(doc);
+		throw InvalidInputException("Invalid inlined deletions JSON: expected array");
+	}
+
+	idx_t idx, n_dels;
+	yyjson_val *del_json;
+	yyjson_arr_foreach(root, idx, n_dels, del_json) {
+		if (!yyjson_is_obj(del_json)) {
+			yyjson_doc_free(doc);
+			throw InvalidInputException("Invalid inlined deletions JSON: expected object");
+		}
+
+		auto row_id = yyjson_obj_get(del_json, "row_id");
+		auto snapshot_id = yyjson_obj_get(del_json, "snapshot_id");
+		if (!yyjson_is_num(row_id) || !yyjson_is_num(snapshot_id)) {
+			yyjson_doc_free(doc);
+			throw InvalidInputException("Invalid inlined deletions JSON: missing required fields");
+		}
+
+		result[yyjson_get_uint(row_id)] = yyjson_get_uint(snapshot_id);
+	}
+	yyjson_doc_free(doc);
+	return result;
+}
+
 // We need a specialized function here to do a reinterpret for postgres from BLOB to VARCHAR
 shared_ptr<DuckLakeInlinedData>
 PostgresMetadataManager::TransformInlinedData(QueryResult &result, const vector<LogicalType> &expected_types) {

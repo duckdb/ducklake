@@ -281,6 +281,8 @@ protected:
 	virtual vector<DuckLakeInlinedTableInfo> LoadInlinedDataTables(const Value &list) const;
 	//! Parse macro implementations list from ListAggregation value
 	virtual vector<DuckLakeMacroImplementation> LoadMacroImplementations(const Value &list) const;
+	//! Parse inlined file deletions from ListAggregation value
+	virtual unordered_map<idx_t, idx_t> LoadInlinedDeletions(const Value &deletions_value) const;
 
 protected:
 	string GetInlinedTableQuery(const DuckLakeTableInfo &table, const string &table_name);

@@ -426,6 +426,18 @@ vector<DuckLakeMacroImplementation> DuckLakeMetadataManager::LoadMacroImplementa
 	return result;
 }
 
+unordered_map<idx_t, idx_t> DuckLakeMetadataManager::LoadInlinedDeletions(const Value &deletions_value) const {
+	unordered_map<idx_t, idx_t> result;
+	auto &list_children = ListValue::GetChildren(deletions_value);
+	for (auto &child : list_children) {
+		auto &struct_children = StructValue::GetChildren(child);
+		auto row_id = struct_children[0].GetValue<idx_t>();
+		auto snapshot_id = struct_children[1].GetValue<idx_t>();
+		result[row_id] = snapshot_id;
+	}
+	return result;
+}
+
 idx_t DuckLakeMetadataManager::GetBeginSnapshotForTable(TableIndex table_id) {
 	string query = R"(
 SELECT begin_snapshot
@@ -1579,10 +1591,11 @@ vector<DuckLakeDeleteScanEntry> DuckLakeMetadataManager::GetTableDeletions(DuckL
 
 	// Add CTE for aggregated inlined deletions if the table exists
 	if (has_inlined_table) {
+		vector<pair<string, string>> deletion_fields {{"row_id", "row_id"}, {"snapshot_id", "begin_snapshot"}};
 		query = StringUtil::Format(R"(
 WITH inlined_dels AS (
 	SELECT file_id,
-	       LIST(STRUCT_PACK(row_id := row_id, snapshot_id := begin_snapshot)) as deletions,
+	       %s as deletions,
 	       MIN(begin_snapshot) as min_snapshot
 	FROM {METADATA_CATALOG}.%s
 	WHERE begin_snapshot >= %d AND begin_snapshot <= {SNAPSHOT_ID}
@@ -1590,7 +1603,7 @@ WITH inlined_dels AS (
 ),
 main_results AS (
 )",
-		                           inlined_table_name, start_snapshot.snapshot_id);
+		                           ListAggregation(deletion_fields), inlined_table_name, start_snapshot.snapshot_id);
 	} else {
 		query = "WITH main_results AS (\n";
 	}
@@ -1726,16 +1739,10 @@ FROM main_results
 		entry.start_snapshot = start_snapshot.snapshot_id;
 		entry.end_snapshot = end_snapshot.snapshot_id;
 
-		// Parse inlined file deletions from the LIST column (last column)
+		// Parse inlined file deletions from the LIST/JSON column (last column)
 		if (!row.IsNull(col_idx)) {
-			auto deletions_list = row.GetValue<Value>(col_idx);
-			auto &list_children = ListValue::GetChildren(deletions_list);
-			for (auto &child : list_children) {
-				auto &struct_children = StructValue::GetChildren(child);
-				auto row_id = struct_children[0].GetValue<idx_t>();
-				auto snapshot_id = struct_children[1].GetValue<idx_t>();
-				entry.inlined_file_deletions[row_id] = snapshot_id;
-			}
+			auto deletions_value = row.GetValue<Value>(col_idx);
+			entry.inlined_file_deletions = LoadInlinedDeletions(deletions_value);
 		}
 
 		files.push_back(std::move(entry));
