@@ -4,11 +4,9 @@
 #include "duckdb/parser/parser.hpp"
 #include "duckdb/common/file_system.hpp"
 #include "storage/ducklake_metadata_manager.hpp"
-#include "storage/ducklake_metadata_info.hpp"
 #include "duckdb/planner/filter/optional_filter.hpp"
 #include "duckdb/planner/filter/dynamic_filter.hpp"
 #include "duckdb/function/scalar/variant_utils.hpp"
-#include "duckdb/catalog/catalog_entry/table_catalog_entry.hpp"
 
 #include <cmath>
 
@@ -340,24 +338,6 @@ bool DuckLakeUtil::IsInlinedSystemColumn(const string &name) {
 	return StringUtil::CIEquals(name, "row_id") || StringUtil::CIEquals(name, "begin_snapshot") ||
 	       StringUtil::CIEquals(name, "end_snapshot") || StringUtil::CIEquals(name, "_ducklake_internal_snapshot_id") ||
 	       StringUtil::CIEquals(name, "_ducklake_internal_row_id");
-}
-
-bool DuckLakeUtil::HasInlinedSystemColumnConflict(const ColumnList &columns) {
-	for (auto &col : columns.Logical()) {
-		if (IsInlinedSystemColumn(col.Name())) {
-			return true;
-		}
-	}
-	return false;
-}
-
-bool DuckLakeUtil::HasInlinedSystemColumnConflict(const vector<DuckLakeColumnInfo> &columns) {
-	for (auto &col : columns) {
-		if (IsInlinedSystemColumn(col.name)) {
-			return true;
-		}
-	}
-	return false;
 }
 
 string DuckLakeUtil::ReplaceSkippingQuotes(const string &sql, const string &from, const string &to) {

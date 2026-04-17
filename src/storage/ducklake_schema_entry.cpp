@@ -430,9 +430,8 @@ void DuckLakeSchemaEntry::TryDropSchema(DuckLakeTransaction &transaction, bool c
 				}
 			} break;
 			default:
-				throw InternalException(
-				    "Unexpected catalog type %s in DuckLakeSchemaEntry::TryDropSchema()",
-				    CatalogTypeToString(entry.second->type));
+				throw InternalException("Unexpected catalog type %s in DuckLakeSchemaEntry::TryDropSchema()",
+				                        CatalogTypeToString(entry.second->type));
 			}
 			if (add_dependent) {
 				dependents.push_back(*entry.second);

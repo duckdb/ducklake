@@ -13,12 +13,10 @@
 #include "duckdb/common/types/value.hpp"
 
 namespace duckdb {
-class ColumnList;
 class DuckLakeMetadataManager;
 class FileSystem;
 class TableFilter;
 class DynamicFilter;
-struct DuckLakeColumnInfo;
 
 struct ParsedCatalogEntry {
 	string schema;
@@ -49,9 +47,6 @@ public:
 
 	//! Returns true if the given column name conflicts with inlined data system columns
 	static bool IsInlinedSystemColumn(const string &name);
-	//! Returns true if any column name conflicts with inlined data system columns
-	static bool HasInlinedSystemColumnConflict(const ColumnList &columns);
-	static bool HasInlinedSystemColumnConflict(const vector<DuckLakeColumnInfo> &columns);
 };
 
 } // namespace duckdb

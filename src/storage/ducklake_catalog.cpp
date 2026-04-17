@@ -853,21 +853,15 @@ idx_t DuckLakeCatalog::DataInliningRowLimit(ClientContext &context, SchemaIndex 
 	return 10;
 }
 
-idx_t DuckLakeCatalog::GetInliningLimit(ClientContext &context, DuckLakeTableEntry &table,
-                                        const vector<LogicalType> &types) {
+idx_t DuckLakeCatalog::GetInliningLimit(ClientContext &context, DuckLakeTableEntry &table) {
 	auto &schema = table.ParentSchema().Cast<DuckLakeSchemaEntry>();
 	idx_t limit = DataInliningRowLimit(context, schema.GetSchemaId(), table.GetTableId());
 	if (limit == 0) {
 		return 0;
 	}
-	if (DuckLakeUtil::HasInlinedSystemColumnConflict(table.GetColumns())) {
-		// We also return 0 if we have inline column conflicts
-		return 0;
-	}
 	auto &transaction = DuckLakeTransaction::Get(context, *this);
 	auto &metadata_manager = transaction.GetMetadataManager();
-	if (!metadata_manager.SupportsInliningTypes(types)) {
-		// Or if inlining is not supported
+	if (!metadata_manager.CanInlineColumns(table.GetColumns())) {
 		return 0;
 	}
 	return limit;
