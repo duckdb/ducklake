@@ -2080,13 +2080,15 @@ NewDataInfo DuckLakeTransaction::GetNewDataFiles(string &batch_query, DuckLakeCo
 		// get the global table stats
 		DuckLakeNewGlobalStats new_globals;
 		optional_ptr<DuckLakeTableStats> current_stats;
+		shared_ptr<DuckLakeTableStats> current_stats_pin;
 		if (dl_stats) {
 			auto dl_stats_entry = dl_stats->table_stats.find(table_id);
 			if (dl_stats_entry != dl_stats->table_stats.end()) {
 				current_stats = dl_stats_entry->second.get();
 			}
 		} else {
-			current_stats = ducklake_catalog.GetTableStats(*this, table_id);
+			current_stats_pin = ducklake_catalog.GetTableStats(*this, table_id);
+			current_stats = current_stats_pin.get();
 		}
 
 		if (current_stats) {

@@ -31,6 +31,15 @@
 
 namespace duckdb {
 
+optional_idx DuckLakeStatsCacheEntry::GetEstimatedCacheMemory() const {
+	idx_t estimate = sizeof(DuckLakeStats);
+	for (auto &table_entry : stats.table_stats) {
+		estimate += sizeof(DuckLakeTableStats);
+		estimate += table_entry.second->column_stats.size() * ESTIMATED_BYTES_PER_COLUMN_STATS;
+	}
+	return estimate;
+}
+
 DuckLakeCatalog::DuckLakeCatalog(AttachedDatabase &db_p, DuckLakeOptions options_p)
     : Catalog(db_p), options(std::move(options_p)), last_uncommitted_catalog_version(TRANSACTION_ID_START) {
 	// figure out the metadata server type
@@ -507,19 +516,19 @@ unique_ptr<DuckLakeCatalogSet> DuckLakeCatalog::LoadSchemaForSnapshot(DuckLakeTr
 	return schema_set;
 }
 
-DuckLakeStats &DuckLakeCatalog::GetStatsForSnapshot(DuckLakeTransaction &transaction, DuckLakeSnapshot snapshot) {
-	auto &schema = GetSchemaForSnapshot(transaction, snapshot);
-	lock_guard<mutex> guard(schemas_lock);
-	auto entry = stats.find(snapshot.next_file_id);
-	if (entry != stats.end()) {
-		// this stat is already cached
-		return *entry->second;
+shared_ptr<DuckLakeStatsCacheEntry> DuckLakeCatalog::GetStatsForSnapshot(DuckLakeTransaction &transaction,
+                                                                        DuckLakeSnapshot snapshot) {
+	auto &cache = GetObjectCacheInstance();
+	auto key = StatsCacheKey(snapshot.next_file_id);
+	auto cached = cache.Get<DuckLakeStatsCacheEntry>(key);
+	if (cached) {
+		return cached;
 	}
-	// load the stats from the metadata manager
+	auto &schema = GetSchemaForSnapshot(transaction, snapshot);
 	auto table_stats = LoadStatsForSnapshot(transaction, snapshot, schema);
-	auto &result = *table_stats;
-	stats.insert(make_pair(snapshot.next_file_id, std::move(table_stats)));
-	return result;
+	auto entry = make_shared_ptr<DuckLakeStatsCacheEntry>(std::move(table_stats));
+	cache.Put(std::move(key), entry);
+	return entry;
 }
 
 static unique_ptr<DuckLakeNameMap> ConvertNameMap(DuckLakeColumnMappingInfo column_mapping) {
@@ -656,18 +665,18 @@ unique_ptr<DuckLakeStats> DuckLakeCatalog::LoadStatsForSnapshot(DuckLakeTransact
 	return ConstructStatsMap(global_stats, schema);
 }
 
-optional_ptr<DuckLakeTableStats> DuckLakeCatalog::GetTableStats(DuckLakeTransaction &transaction, TableIndex table_id) {
+shared_ptr<DuckLakeTableStats> DuckLakeCatalog::GetTableStats(DuckLakeTransaction &transaction, TableIndex table_id) {
 	return GetTableStats(transaction, transaction.GetSnapshot(), table_id);
 }
 
-optional_ptr<DuckLakeTableStats> DuckLakeCatalog::GetTableStats(DuckLakeTransaction &transaction,
-                                                                DuckLakeSnapshot snapshot, TableIndex table_id) {
-	auto &lake_stats = GetStatsForSnapshot(transaction, snapshot);
-	auto entry = lake_stats.table_stats.find(table_id);
-	if (entry == lake_stats.table_stats.end()) {
+shared_ptr<DuckLakeTableStats> DuckLakeCatalog::GetTableStats(DuckLakeTransaction &transaction,
+                                                              DuckLakeSnapshot snapshot, TableIndex table_id) {
+	auto stats_entry = GetStatsForSnapshot(transaction, snapshot);
+	auto it = stats_entry->stats.table_stats.find(table_id);
+	if (it == stats_entry->stats.table_stats.end()) {
 		return nullptr;
 	}
-	return entry->second.get();
+	return shared_ptr<DuckLakeTableStats>(std::move(stats_entry), it->second.get());
 }
 
 optional_ptr<SchemaCatalogEntry> DuckLakeCatalog::LookupSchema(CatalogTransaction transaction,
@@ -901,6 +910,14 @@ void DuckLakeCatalog::CacheInlinedDeletionTableResult(TableIndex table_id, DuckL
 	} else {
 		inlined_deletion_not_exists[table_id.index] = snapshot.snapshot_id;
 	}
+}
+
+string DuckLakeCatalog::StatsCacheKey(idx_t next_file_id) const {
+	return StringUtil::Format("ducklake:%s:%s:stats:%llu", GetName(), MetadataPath(), next_file_id);
+}
+
+ObjectCache &DuckLakeCatalog::GetObjectCacheInstance() {
+	return GetDatabase().GetObjectCache();
 }
 
 } // namespace duckdb
