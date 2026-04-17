@@ -335,6 +335,8 @@ virtual_column_map_t DuckLakeTableEntry::GetVirtualColumns() const {
 	result.insert(make_pair(COLUMN_IDENTIFIER_ROW_ID, TableColumn("rowid", LogicalType::BIGINT)));
 	result.insert(make_pair(DuckLakeMultiFileReader::COLUMN_IDENTIFIER_SNAPSHOT_ID,
 	                        TableColumn("snapshot_id", LogicalType::BIGINT)));
+	result.insert(make_pair(DuckLakeMultiFileReader::COLUMN_IDENTIFIER_END_SNAPSHOT_ID,
+	                        TableColumn("end_snapshot_id", LogicalType::BIGINT)));
 	result.insert(make_pair(COLUMN_IDENTIFIER_EMPTY, TableColumn("", LogicalType::BOOLEAN)));
 	return result;
 }
