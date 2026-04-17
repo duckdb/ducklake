@@ -113,17 +113,14 @@ public:
 	virtual bool SupportsAppender() const {
 		return true;
 	}
-	//! Maximum identifier (table/column) length in bytes supported by this backend
+	//! Maximum identifier length in bytes supported by this backend
 	virtual idx_t MaxIdentifierLength() const {
 		return NumericLimits<idx_t>::Maximum();
 	}
 	//! Check if columns (stored as DuckLakeColumnInfo) support inlining, recursing into children
 	bool SupportsInliningColumns(const vector<DuckLakeColumnInfo> &columns);
 
-	//! Check whether a table with the given columns can be inlined on this metadata backend:
-	//! - no column name conflicts with DuckLake reserved internal columns
-	//! - no column name exceeds the backend's identifier length limit (e.g. 63 bytes on Postgres)
-	//! - all column types are supported for inlining (recursing into nested children)
+	//! Check whether a table with the given columns can be inlined
 	bool CanInlineColumns(const ColumnList &columns);
 	bool CanInlineColumns(const vector<DuckLakeColumnInfo> &columns);
 
