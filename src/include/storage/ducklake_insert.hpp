@@ -25,7 +25,14 @@ struct DuckLakePartition;
 struct DuckLakeCopyOptions;
 struct DuckLakeCopyInput;
 
-enum class InsertVirtualColumns { NONE, WRITE_ROW_ID, WRITE_SNAPSHOT_ID, WRITE_ROW_ID_AND_SNAPSHOT_ID };
+enum class InsertVirtualColumns {
+	NONE,
+	WRITE_ROW_ID,
+	WRITE_SNAPSHOT_ID,
+	WRITE_ROW_ID_AND_SNAPSHOT_ID,
+	//! Write row_id, begin_snapshot, and end_snapshot (used for flushing inlined data with deletes)
+	WRITE_ALL_SNAPSHOT_COLUMNS
+};
 
 class DuckLakeInsertGlobalState : public GlobalSinkState {
 public:

@@ -31,21 +31,6 @@
 
 namespace duckdb {
 
-static void AttachDeleteFilesToWrittenFiles(vector<DuckLakeDeleteFile> &delete_files,
-                                            vector<DuckLakeDataFile> &written_files) {
-	unordered_map<string, reference<DuckLakeDataFile>> file_map;
-	file_map.reserve(written_files.size());
-	for (auto &written_file : written_files) {
-		file_map.emplace(written_file.file_name, written_file);
-	}
-	for (auto &delete_file : delete_files) {
-		auto it = file_map.find(delete_file.data_file_path);
-		if (it != file_map.end()) {
-			it->second.get().delete_files.push_back(std::move(delete_file));
-		}
-	}
-}
-
 //===--------------------------------------------------------------------===//
 // Flush Data Operator
 //===--------------------------------------------------------------------===//
@@ -108,85 +93,14 @@ SinkResultType DuckLakeFlushData::Sink(ExecutionContext &context, DataChunk &chu
 //===--------------------------------------------------------------------===//
 // Finalize
 //===--------------------------------------------------------------------===//
-using DeletesPerFile = unordered_map<string, set<PositionWithSnapshot>>;
-
 SinkFinalizeType DuckLakeFlushData::Finalize(Pipeline &pipeline, Event &event, ClientContext &context,
                                              OperatorSinkFinalizeInput &input) const {
 	auto &global_state = input.global_state.Cast<DuckLakeInsertGlobalState>();
 	auto &transaction = DuckLakeTransaction::Get(context, global_state.table.catalog);
 	auto snapshot = transaction.GetSnapshot();
 
-	if (!global_state.written_files.empty()) {
-		DeletesPerFile deletes_per_file;
-		auto partition_sql_exprs = table.GetPartitionSQLExpressions();
-
-		// Track cumulative row offset per partition so each file knows its range
-		unordered_map<string, idx_t> partition_row_offsets;
-
-		for (auto &file : global_state.written_files) {
-			// Build partition filter (empty string for non-partitioned tables)
-			string partition_filter;
-			if (!partition_sql_exprs.empty()) {
-				vector<Value> values;
-				for (auto &pv : file.partition_values) {
-					values.push_back(pv.partition_value);
-				}
-				partition_filter = DuckLakePartitionUtils::BuildPartitionFilter(partition_sql_exprs, values);
-			}
-
-			idx_t file_offset = partition_row_offsets[partition_filter];
-			partition_row_offsets[partition_filter] += file.row_count;
-
-			// Query deleted rows within this file's row range, filtered to its partition
-			string extra_filter = partition_filter.empty() ? "" : " AND " + partition_filter;
-			// When the table has sort metadata, the file is written in sorted order.
-			// The ORDER BY must match the actual file order so delete positions are correct.
-			string order_by = "row_id, begin_snapshot";
-			if (!sort_order_sql.empty()) {
-				order_by = sort_order_sql + ", row_id, begin_snapshot";
-			}
-			auto deleted_rows_result =
-			    transaction.Query(snapshot, StringUtil::Format(R"(
-				WITH all_rows AS (
-					SELECT end_snapshot, ROW_NUMBER() OVER (ORDER BY %s) - 1 AS output_position
-					FROM {METADATA_CATALOG}.%s
-					WHERE {SNAPSHOT_ID} >= begin_snapshot%s
-				)
-				SELECT end_snapshot, output_position
-				FROM all_rows
-				WHERE end_snapshot IS NOT NULL
-				AND output_position >= %d AND output_position < %d;)",
-			                                                   order_by, inlined_table.table_name, extra_filter,
-			                                                   file_offset, file_offset + file.row_count));
-
-			for (auto &row : *deleted_rows_result) {
-				auto end_snap = row.GetValue<int64_t>(0);
-				auto output_position = row.GetValue<int64_t>(1);
-				int64_t pos_in_file = output_position - static_cast<int64_t>(file_offset);
-				PositionWithSnapshot pos_with_snap {pos_in_file, end_snap};
-				deletes_per_file[file.file_name].insert(pos_with_snap);
-			}
-		}
-
-		if (!deletes_per_file.empty()) {
-			auto &fs = FileSystem::GetFileSystem(context);
-			vector<DuckLakeDeleteFile> delete_files;
-
-			for (auto &file_entry : deletes_per_file) {
-				// write single file, begin_snapshot is the minimum snapshot
-				WriteDeleteFileWithSnapshotsInput file_input {context,
-				                                              transaction,
-				                                              fs,
-				                                              table.DataPath(),
-				                                              encryption_key,
-				                                              file_entry.first,
-				                                              file_entry.second,
-				                                              DeleteFileSource::FLUSH};
-				delete_files.push_back(DuckLakeDeleteFileWriter::WriteDeleteFileWithSnapshots(context, file_input));
-			}
-			AttachDeleteFilesToWrittenFiles(delete_files, global_state.written_files);
-		}
-	}
+	// No delete files needed -- end_snapshot is embedded in the data file as a virtual column.
+	// The scan filters rows based on end_snapshot for visibility.
 
 	// Compute total rows flushed before moving files
 	for (auto &file : global_state.written_files) {
@@ -311,7 +225,7 @@ unique_ptr<LogicalOperator> DuckLakeDataFlusher::GenerateFlushCommand() {
 
 	DuckLakeCopyInput copy_input(context, table);
 	copy_input.get_table_index = table_idx.index;
-	copy_input.virtual_columns = InsertVirtualColumns::WRITE_ROW_ID_AND_SNAPSHOT_ID;
+	copy_input.virtual_columns = InsertVirtualColumns::WRITE_ALL_SNAPSHOT_COLUMNS;
 
 	auto copy_options = DuckLakeInsert::GetCopyOptions(context, copy_input);
 
@@ -325,6 +239,7 @@ unique_ptr<LogicalOperator> DuckLakeDataFlusher::GenerateFlushCommand() {
 	}
 	column_ids.emplace_back(COLUMN_IDENTIFIER_ROW_ID);
 	column_ids.emplace_back(DuckLakeMultiFileReader::COLUMN_IDENTIFIER_SNAPSHOT_ID);
+	column_ids.emplace_back(DuckLakeMultiFileReader::COLUMN_IDENTIFIER_END_SNAPSHOT_ID);
 
 	auto root = unique_ptr_cast<LogicalGet, LogicalOperator>(std::move(ducklake_scan));
 

@@ -26,6 +26,7 @@
 #include "duckdb/planner/expression/bound_columnref_expression.hpp"
 #include "duckdb/planner/expression/bound_reference_expression.hpp"
 #include "duckdb/common/multi_file/multi_file_reader.hpp"
+#include "storage/ducklake_multi_file_reader.hpp"
 #include "duckdb/main/extension_helper.hpp"
 #include "duckdb/function/function_binder.hpp"
 #include "duckdb/planner/operator/logical_projection.hpp"
@@ -145,6 +146,10 @@ void DuckLakeInsert::AddWrittenFiles(DuckLakeInsertGlobalState &global_state, Da
 						data_file.max_partial_file_snapshot = StringUtil::ToUnsigned(snapshot_stats.max);
 					}
 				}
+				continue;
+			}
+			if (column_names[0] == "_ducklake_internal_end_snapshot_id") {
+				// end_snapshot stats -- skip (no metadata extraction needed)
 				continue;
 			}
 			if (column_names[0] == "_ducklake_internal_row_id") {
@@ -305,12 +310,18 @@ static Value GetFieldIdValue(const DuckLakeFieldId &field_id) {
 
 static bool WriteRowId(InsertVirtualColumns virtual_columns) {
 	return virtual_columns == InsertVirtualColumns::WRITE_ROW_ID ||
-	       virtual_columns == InsertVirtualColumns::WRITE_ROW_ID_AND_SNAPSHOT_ID;
+	       virtual_columns == InsertVirtualColumns::WRITE_ROW_ID_AND_SNAPSHOT_ID ||
+	       virtual_columns == InsertVirtualColumns::WRITE_ALL_SNAPSHOT_COLUMNS;
 }
 
 static bool WriteSnapshotId(InsertVirtualColumns virtual_columns) {
 	return virtual_columns == InsertVirtualColumns::WRITE_SNAPSHOT_ID ||
-	       virtual_columns == InsertVirtualColumns::WRITE_ROW_ID_AND_SNAPSHOT_ID;
+	       virtual_columns == InsertVirtualColumns::WRITE_ROW_ID_AND_SNAPSHOT_ID ||
+	       virtual_columns == InsertVirtualColumns::WRITE_ALL_SNAPSHOT_COLUMNS;
+}
+
+static bool WriteEndSnapshotId(InsertVirtualColumns virtual_columns) {
+	return virtual_columns == InsertVirtualColumns::WRITE_ALL_SNAPSHOT_COLUMNS;
 }
 
 static Value WrittenFieldIds(DuckLakeFieldData &field_data, InsertVirtualColumns virtual_columns) {
@@ -325,6 +336,10 @@ static Value WrittenFieldIds(DuckLakeFieldData &field_data, InsertVirtualColumns
 	if (WriteSnapshotId(virtual_columns)) {
 		values.emplace_back("_ducklake_internal_snapshot_id",
 		                    Value::BIGINT(MultiFileReader::LAST_UPDATED_SEQUENCE_NUMBER_ID));
+	}
+	if (WriteEndSnapshotId(virtual_columns)) {
+		values.emplace_back("_ducklake_internal_end_snapshot_id",
+		                    Value::BIGINT(DuckLakeMultiFileReader::END_SNAPSHOT_FIELD_ID));
 	}
 	return Value::STRUCT(std::move(values));
 }
@@ -434,6 +449,9 @@ static void GeneratePartitionExpressions(ClientContext &context, DuckLakeCopyInp
 	case InsertVirtualColumns::WRITE_ROW_ID_AND_SNAPSHOT_ID:
 		virtual_column_count = 2;
 		break;
+	case InsertVirtualColumns::WRITE_ALL_SNAPSHOT_COLUMNS:
+		virtual_column_count = 3;
+		break;
 	default:
 		virtual_column_count = 0;
 		break;
@@ -537,6 +555,10 @@ DuckLakeCopyOptions DuckLakeInsert::GetCopyOptions(ClientContext &context, DuckL
 	}
 	if (WriteSnapshotId(copy_input.virtual_columns)) {
 		names_to_write.push_back("_ducklake_internal_snapshot_id");
+		types_to_write.push_back(LogicalType::BIGINT);
+	}
+	if (WriteEndSnapshotId(copy_input.virtual_columns)) {
+		names_to_write.push_back("_ducklake_internal_end_snapshot_id");
 		types_to_write.push_back(LogicalType::BIGINT);
 	}
 

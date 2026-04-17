@@ -59,6 +59,9 @@ bool DuckLakeInlinedDataReader::TryInitializeScan(ClientContext &context, Global
 						virtual_column = "begin_snapshot";
 					}
 					break;
+				case DuckLakeMultiFileReader::END_SNAPSHOT_FIELD_ID:
+					virtual_column = "end_snapshot";
+					break;
 				default:
 					break;
 				}

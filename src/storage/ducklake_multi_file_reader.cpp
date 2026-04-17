@@ -56,6 +56,23 @@ static bool TryFindColumnByFieldId(const vector<MultiFileColumnDefinition> &loca
 	return false;
 }
 
+//! Build a selection vector keeping rows visible at the given snapshot:
+//! end_snapshot IS NULL (live) OR end_snapshot > current_snapshot (not yet deleted at this snapshot).
+static idx_t ApplyEndSnapshotFilter(Vector &end_snap_vec, idx_t count, int64_t current_snapshot,
+                                    SelectionVector &sel) {
+	UnifiedVectorFormat vdata;
+	end_snap_vec.ToUnifiedFormat(count, vdata);
+	auto end_snap_data = UnifiedVectorFormat::GetData<int64_t>(vdata);
+	idx_t result_count = 0;
+	for (idx_t i = 0; i < count; i++) {
+		auto idx = vdata.sel->get_index(i);
+		if (!vdata.validity.RowIsValid(idx) || end_snap_data[idx] > current_snapshot) {
+			sel.set_index(result_count++, i);
+		}
+	}
+	return result_count;
+}
+
 //! Add a snapshot filter to the reader's filter set
 static void AddSnapshotFilter(BaseFileReader &reader, const ColumnIndex &col_idx, const LogicalType &col_type,
                               idx_t snapshot_value, ExpressionType comparison_type) {
@@ -156,6 +173,9 @@ DuckLakeMultiFileReader::DuckLakeMultiFileReader(DuckLakeFunctionInfo &read_info
 	row_id_column->identifier = Value::INTEGER(MultiFileReader::ROW_ID_FIELD_ID);
 	snapshot_id_column = make_uniq<MultiFileColumnDefinition>("_ducklake_internal_snapshot_id", LogicalType::BIGINT);
 	snapshot_id_column->identifier = Value::INTEGER(MultiFileReader::LAST_UPDATED_SEQUENCE_NUMBER_ID);
+	end_snapshot_id_column =
+	    make_uniq<MultiFileColumnDefinition>("_ducklake_internal_end_snapshot_id", LogicalType::BIGINT);
+	end_snapshot_id_column->identifier = Value::INTEGER(END_SNAPSHOT_FIELD_ID);
 }
 
 DuckLakeMultiFileReader::~DuckLakeMultiFileReader() {
@@ -293,6 +313,9 @@ ReaderInitializeType DuckLakeMultiFileReader::InitializeReader(MultiFileReaderDa
 			reader.deletion_filter = std::move(delete_filter);
 		}
 	}
+	end_snapshot_filter_col = optional_idx();
+	internally_projected_end_snapshot = false;
+
 	auto result = MultiFileReader::InitializeReader(reader_data, bind_data, global_columns, global_column_ids,
 	                                                table_filters, context, gstate);
 	// Handle snapshot filters for files with multiple snapshots (partial_max set)
@@ -345,6 +368,41 @@ ReaderInitializeType DuckLakeMultiFileReader::InitializeReader(MultiFileReaderDa
 			                  ExpressionType::COMPARE_GREATERTHANOREQUALTO);
 		}
 	}
+
+	// Handle end_snapshot filtering for files with embedded end_snapshot data
+	// (produced by flush of inlined data with deletes)
+	if (!file_list.IsDeleteScan() && file_entry.data_type == DuckLakeDataType::DATA_FILE) {
+		auto &reader = *reader_data.reader;
+		optional_idx end_snap_col;
+		for (idx_t col_idx = 0; col_idx < reader.columns.size(); col_idx++) {
+			auto &col = reader.columns[col_idx];
+			if (col.identifier.type() == LogicalTypeId::INTEGER &&
+			    IntegerValue::Get(col.identifier) == END_SNAPSHOT_FIELD_ID) {
+				end_snap_col = col_idx;
+				break;
+			}
+		}
+		if (end_snap_col.IsValid()) {
+			idx_t end_snap_col_id = end_snap_col.GetIndex();
+			// Check if the column is already projected
+			optional_idx end_snap_local_id;
+			for (idx_t i = 0; i < reader.column_ids.size(); i++) {
+				if (reader.column_indexes[i].GetPrimaryIndex() == end_snap_col_id) {
+					end_snap_local_id = i;
+					break;
+				}
+			}
+			if (!end_snap_local_id.IsValid()) {
+				// Internally project the end_snapshot column for filtering
+				end_snap_local_id = reader.column_indexes.size();
+				reader.column_indexes.emplace_back(end_snap_col_id);
+				reader.column_ids.emplace_back(end_snap_col_id);
+				internally_projected_end_snapshot = true;
+			}
+			end_snapshot_filter_col = end_snap_local_id.GetIndex();
+		}
+	}
+
 	return result;
 }
 
@@ -614,6 +672,14 @@ unique_ptr<Expression> DuckLakeMultiFileReader::GetVirtualColumnExpression(
 		}
 		return make_uniq<BoundConstantExpression>(entry->second);
 	}
+	if (column_id == COLUMN_IDENTIFIER_END_SNAPSHOT_ID) {
+		if (TryFindColumnByFieldId(local_columns, END_SNAPSHOT_FIELD_ID, end_snapshot_id_column.get(),
+		                           global_column_reference)) {
+			return nullptr;
+		}
+		// file does not have end_snapshot -- all rows are live
+		return make_uniq<BoundConstantExpression>(Value(LogicalType::BIGINT));
+	}
 	return MultiFileReader::GetVirtualColumnExpression(context, reader_data, local_columns, column_id, type, local_idx,
 	                                                   global_column_reference);
 }
@@ -707,6 +773,38 @@ void DuckLakeMultiFileReader::FinalizeChunk(ClientContext &context, const MultiF
 		for (idx_t i = 0; i < output_chunk.ColumnCount(); i++) {
 			output_chunk.data[i].Reference(temp_chunk.data[i]);
 		}
+	} else if (end_snapshot_filter_col.IsValid() && internally_projected_end_snapshot) {
+		// Internally projected end_snapshot: finalize into a temp chunk (user columns + end_snapshot),
+		// filter, then copy user columns back to output_chunk.
+		vector<LogicalType> temp_types;
+		for (idx_t i = 0; i < output_chunk.ColumnCount(); i++) {
+			temp_types.push_back(output_chunk.data[i].GetType());
+		}
+		temp_types.push_back(LogicalType::BIGINT);
+
+		DataChunk temp_chunk;
+		temp_chunk.Initialize(Allocator::DefaultAllocator(), temp_types);
+		MultiFileReader::FinalizeChunk(context, bind_data, reader, reader_data, input_chunk, temp_chunk, executor,
+		                               global_state);
+
+		auto end_snap_idx = output_chunk.ColumnCount();
+		SelectionVector sel(temp_chunk.size());
+		idx_t result_count = ApplyEndSnapshotFilter(temp_chunk.data[end_snap_idx], temp_chunk.size(),
+		                                            NumericCast<int64_t>(read_info.snapshot.snapshot_id), sel);
+
+		temp_chunk.Slice(sel, result_count);
+		output_chunk.SetCardinality(result_count);
+		for (idx_t i = 0; i < output_chunk.ColumnCount(); i++) {
+			output_chunk.data[i].Reference(temp_chunk.data[i]);
+		}
+	} else if (end_snapshot_filter_col.IsValid()) {
+		MultiFileReader::FinalizeChunk(context, bind_data, reader, reader_data, input_chunk, output_chunk, executor,
+		                               global_state);
+		SelectionVector sel(output_chunk.size());
+		idx_t result_count =
+		    ApplyEndSnapshotFilter(output_chunk.data[end_snapshot_filter_col.GetIndex()], output_chunk.size(),
+		                           NumericCast<int64_t>(read_info.snapshot.snapshot_id), sel);
+		output_chunk.Slice(sel, result_count);
 	} else {
 		MultiFileReader::FinalizeChunk(context, bind_data, reader, reader_data, input_chunk, output_chunk, executor,
 		                               global_state);

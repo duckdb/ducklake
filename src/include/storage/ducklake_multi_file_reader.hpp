@@ -20,6 +20,9 @@ class DuckLakeFieldData;
 struct DuckLakeMultiFileReader : public MultiFileReader {
 public:
 	static constexpr column_t COLUMN_IDENTIFIER_SNAPSHOT_ID = UINT64_C(10000000000000000000);
+	static constexpr column_t COLUMN_IDENTIFIER_END_SNAPSHOT_ID = UINT64_C(10000000000000000001);
+	//! Parquet field ID for the end_snapshot virtual column (one below LAST_UPDATED_SEQUENCE_NUMBER_ID)
+	static constexpr int32_t END_SNAPSHOT_FIELD_ID = 2147483538;
 
 public:
 	explicit DuckLakeMultiFileReader(DuckLakeFunctionInfo &read_info);
@@ -87,6 +90,7 @@ private:
 private:
 	unique_ptr<MultiFileColumnDefinition> row_id_column;
 	unique_ptr<MultiFileColumnDefinition> snapshot_id_column;
+	unique_ptr<MultiFileColumnDefinition> end_snapshot_id_column;
 	//! Inlined transaction-local data
 	shared_ptr<DuckLakeInlinedData> transaction_local_data;
 	//! For deletion scans: track which output column is snapshot_id (if any)
@@ -96,6 +100,10 @@ private:
 	//! Whether row_id was internally projected (not in user's query)
 	//! This is necessary for DCF queries over inlined deletions
 	bool internally_projected_rowid = false;
+	//! For end_snapshot filtering: which output column holds end_snapshot (if any)
+	optional_idx end_snapshot_filter_col;
+	//! Whether end_snapshot was internally projected (not in user's query)
+	bool internally_projected_end_snapshot = false;
 };
 
 } // namespace duckdb
