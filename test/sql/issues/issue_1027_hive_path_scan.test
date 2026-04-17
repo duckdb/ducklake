@@ -8,9 +8,7 @@ require parquet
 
 test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
 
-# DATA_PATH contains an incidental key=value segment: ParquetFileScanner
-# must not treat it as hive partitioning and append a synthetic column
-# to the delete-file schema.
+# DATA_PATH contains an incidental key=value segment
 test-env DATA_PATH __TEST_DIR__/issue_1027/site_id=42
 
 statement ok
@@ -22,9 +20,11 @@ CREATE TABLE ducklake.t AS SELECT i AS id FROM range(1000) t(i)
 statement ok
 DELETE FROM ducklake.t WHERE id % 7 = 0
 
-# FILTER forces a row-level scan that applies the delete filter.
-# Before the fix this threw "Invalid schema contained in the delete file".
+# Second DELETE adds _ducklake_internal_snapshot_id to the delete file
+statement ok
+DELETE FROM ducklake.t WHERE id % 5 = 0
+
 query II
-SELECT COUNT(*), COUNT(*) FILTER (WHERE id % 7 = 0) FROM ducklake.t
+SELECT COUNT(*), COUNT(*) FILTER (WHERE id % 7 = 0 OR id % 5 = 0) FROM ducklake.t
 ----
-857	0
+686	0
