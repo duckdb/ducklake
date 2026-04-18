@@ -449,6 +449,8 @@ struct DuckLakeCompactionFileEntry {
 	idx_t schema_version;
 	//! Inlined file deletions stored in the metadata database rather than delete files.
 	set<idx_t> inlined_file_deletions;
+	//! Whether this file has any inlined deletions (cheap flag; set for all compaction types).
+	bool has_inlined_deletions = false;
 };
 
 struct DuckLakeRewriteFileEntry {

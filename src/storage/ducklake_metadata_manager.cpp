@@ -1914,12 +1914,28 @@ ORDER BY data.begin_snapshot, data.row_id_start, data.data_file_id, del.begin_sn
 		file_entry.delete_files.push_back(std::move(delete_file));
 	}
 
-	// Load inlined deletions for active files so rewrite compaction can treat them the same as delete files.
-	auto inlined_deletions = ReadInlinedFileDeletions(table_id, snapshot);
-	for (auto &file : files) {
-		auto entry = inlined_deletions.find(file.file.id.index);
-		if (entry != inlined_deletions.end()) {
-			file.inlined_file_deletions = std::move(entry->second);
+	if (type == CompactionType::REWRITE_DELETES) {
+		// Full row-ID payload needed to compute delete ratio and perform the rewrite.
+		auto inlined_deletions = ReadInlinedFileDeletions(table_id, snapshot);
+		for (auto &file : files) {
+			auto entry = inlined_deletions.find(file.file.id.index);
+			if (entry != inlined_deletions.end()) {
+				file.inlined_file_deletions = std::move(entry->second);
+				file.has_inlined_deletions = true;
+			}
+		}
+	} else {
+		// Cheap existence-only check — avoids fetching every deleted row_id for non-rewrite paths.
+		vector<idx_t> file_ids;
+		file_ids.reserve(files.size());
+		for (auto &file : files) {
+			file_ids.push_back(file.file.id.index);
+		}
+		auto files_with_deletions = GetFileIdsWithInlinedDeletions(table_id, snapshot, file_ids);
+		for (auto &file : files) {
+			if (files_with_deletions.count(file.file.id.index)) {
+				file.has_inlined_deletions = true;
+			}
 		}
 	}
 

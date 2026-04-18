@@ -254,7 +254,7 @@ void DuckLakeCompactor::GenerateCompactions(DuckLakeTableEntry &table,
 			// (does not apply to REWRITE_DELETES - delete files must be rewritten regardless of data file size)
 			continue;
 		}
-		if (((!candidate.delete_files.empty() || !candidate.inlined_file_deletions.empty()) &&
+		if (((!candidate.delete_files.empty() || candidate.has_inlined_deletions) &&
 		     type == CompactionType::MERGE_ADJACENT_TABLES) ||
 		    candidate.file.end_snapshot.IsValid()) {
 			// Merge Adjacent Tables doesn't perform the merge if any deletes are present
