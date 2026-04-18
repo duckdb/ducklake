@@ -2064,8 +2064,8 @@ NewDataInfo DuckLakeTransaction::GetNewDataFiles(string &batch_query, DuckLakeCo
 	DuckLakeNewGlobalStats new_globals;
 	unique_ptr<DuckLakeStats> dl_stats;
 	if (stats) {
-		auto &schema = ducklake_catalog.GetSchemaForSnapshot(*this, GetSnapshot());
-		dl_stats = ducklake_catalog.ConstructStatsMap(*stats, schema);
+		auto schema_entry = ducklake_catalog.GetSchemaForSnapshot(*this, GetSnapshot());
+		dl_stats = ducklake_catalog.ConstructStatsMap(*stats, schema_entry->catalog_set);
 	}
 	for (auto &entry : local_changes.Changes()) {
 		auto table_id = commit_state.GetTableId(entry.GetTableIndex());

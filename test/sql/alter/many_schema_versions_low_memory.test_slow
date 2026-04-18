@@ -1,0 +1,123 @@
+# name: test/sql/alter/many_schema_versions_low_memory.test_slow
+# description: test that many DDL operations work under a low memory limit with schema cache eviction
+# group: [alter]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+
+test-env DATA_PATH __TEST_DIR__
+
+statement ok
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/ducklake_many_schema_versions')
+
+# Create many tables so each schema-version cache entry is sizeable.
+loop i 0 100
+
+statement ok
+CREATE TABLE ducklake.t${i} (id INTEGER, a INTEGER, b INTEGER, c INTEGER, d INTEGER, e INTEGER)
+
+endloop
+
+# A single table that we'll ALTER to churn schema_version.
+statement ok
+CREATE TABLE ducklake.target (id INTEGER)
+
+statement ok
+INSERT INTO ducklake.target VALUES (1), (2), (3)
+
+# Disable temp_directory so DuckDB cannot spill blocks for temporary tables to disk.
+# This forces the buffer pool into the EvictObjectCacheEntries path under pressure.
+statement ok
+SET temp_directory=''
+
+statement ok
+SET memory_limit='50MB'
+
+# Phase 1: churn schema_version via many ALTER operations.
+
+loop i 0 150
+
+statement ok
+ALTER TABLE ducklake.target ADD COLUMN col_${i} INTEGER DEFAULT ${i}
+
+endloop
+
+# Sanity-check after heavy DDL.
+query I
+SELECT COUNT(*) FROM ducklake.target
+----
+3
+
+query I
+SELECT SUM(col_0) FROM ducklake.target
+----
+0
+
+query I
+SELECT SUM(col_149) FROM ducklake.target
+----
+447
+
+# Phase 2: allocate unevictable blocks via a temp table.
+# Without temp_directory these blocks cannot be spilled, so the buffer pool falls through to evict schema cache entry.
+statement ok
+CREATE TEMP TABLE mem_filler(i INTEGER, pad VARCHAR)
+
+loop j 0 2
+
+statement ok
+INSERT INTO mem_filler SELECT i + ${j} * 5000, repeat('x', 1000) FROM range(5000) t(i)
+
+endloop
+
+# Phase 3: more DDL + reads after eviction pressure.
+
+loop i 150 200
+
+statement ok
+ALTER TABLE ducklake.target ADD COLUMN col_${i} INTEGER DEFAULT ${i}
+
+endloop
+
+# Verify correctness after both schema churn AND cache eviction.
+query I
+SELECT COUNT(*) FROM ducklake.target
+----
+3
+
+query I
+SELECT SUM(col_0) FROM ducklake.target
+----
+0
+
+query I
+SELECT SUM(col_199) FROM ducklake.target
+----
+597
+
+query I
+SELECT SUM(col_100) FROM ducklake.target
+----
+300
+
+query I
+SELECT COUNT(*) FROM ducklake.t0
+----
+0
+
+query I
+SELECT COUNT(*) FROM ducklake.t99
+----
+0
+
+# Another round of insertion and check.
+statement ok
+INSERT INTO ducklake.target (id, col_199) VALUES (4, 999)
+
+query I
+SELECT SUM(col_199) FROM ducklake.target
+----
+1596

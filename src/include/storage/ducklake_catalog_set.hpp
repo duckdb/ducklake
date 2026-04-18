@@ -44,7 +44,7 @@ public:
 		return entry->Cast<T>();
 	}
 
-	const ducklake_entries_map_t &GetEntries() {
+	const ducklake_entries_map_t &GetEntries() const {
 		return catalog_entries;
 	}
 	const map<SchemaIndex, reference<DuckLakeSchemaEntry>> &GetSchemaIdMap() {
