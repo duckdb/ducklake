@@ -45,7 +45,7 @@ ALTER TABLE ducklake.target ADD COLUMN col_${i} INTEGER DEFAULT ${i}
 
 endloop
 
-# Sanity-check after heavy DDL.
+# Validation after DDL.
 query I
 SELECT COUNT(*) FROM ducklake.target
 ----

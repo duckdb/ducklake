@@ -232,11 +232,8 @@ public:
 
 	static unique_ptr<DuckLakeStats> ConstructStatsMap(vector<DuckLakeGlobalStatsInfo> &global_stats,
 	                                                   DuckLakeCatalogSet &schema);
-	//! Return the schema cache entry for the requested snapshot.
-	shared_ptr<DuckLakeSchemaCacheEntry> GetSchemaForSnapshot(DuckLakeTransaction &transaction,
-	                                                          DuckLakeSnapshot snapshot);
-	//! Pin a schema cache entry for the duration of the current query to ensure safe memory access safety.
-	void PinSchemaForQuery(DuckLakeTransaction &transaction, shared_ptr<DuckLakeSchemaCacheEntry> entry);
+	//! Return the schema for the given snapshot - loading it if it is not yet loaded
+	DuckLakeCatalogSet &GetSchemaForSnapshot(DuckLakeTransaction &transaction, DuckLakeSnapshot snapshot);
 
 	//! Callback type for instrumenting metadata queries
 	using QueryCallback = std::function<void(const string &query, std::chrono::steady_clock::duration elapsed)>;
@@ -256,12 +253,17 @@ public:
 private:
 	void DropSchema(ClientContext &context, DropInfo &info) override;
 	unique_ptr<DuckLakeCatalogSet> LoadSchemaForSnapshot(DuckLakeTransaction &transaction, DuckLakeSnapshot snapshot);
+	//! Look up (or load) the ObjectCache entry for a given snapshot.
+	shared_ptr<DuckLakeSchemaCacheEntry> GetSchemaCacheEntry(DuckLakeTransaction &transaction,
+	                                                         DuckLakeSnapshot snapshot);
 	shared_ptr<DuckLakeStatsCacheEntry> GetStatsForSnapshot(DuckLakeTransaction &transaction,
 	                                                        DuckLakeSnapshot snapshot);
+	//! Pin a schema cache entry for the duration of the current query to ensure safe memory access.
+	void PinSchemaForQuery(DuckLakeTransaction &transaction, shared_ptr<DuckLakeSchemaCacheEntry> entry);
 	unique_ptr<DuckLakeStats> LoadStatsForSnapshot(DuckLakeTransaction &transaction, DuckLakeSnapshot snapshot,
 	                                               DuckLakeCatalogSet &schema);
 	void LoadNameMaps(DuckLakeTransaction &transaction);
-
+	//! Generate a cache key for the ObjectCache
 	string StatsCacheKey(idx_t next_file_id) const;
 	string SchemaCacheKey(idx_t schema_version) const;
 	string SchemaPinStateKey() const;
@@ -283,6 +285,8 @@ private:
 	atomic<idx_t> last_uncommitted_catalog_version;
 	//! The metadata server type
 	string metadata_type;
+	//! A per-instance identifier used to scope ObjectCache keys.
+	string instance_id;
 	//! Whether or not the catalog is initialized
 	bool initialized = false;
 	//! Cache for inlined deletion table existence checks

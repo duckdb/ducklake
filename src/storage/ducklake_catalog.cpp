@@ -27,6 +27,7 @@
 #include "duckdb/function/table_macro_function.hpp"
 #include "storage/ducklake_macro_entry.hpp"
 #include "duckdb/common/operator/cast_operators.hpp"
+#include "duckdb/common/types/uuid.hpp"
 #include "common/ducklake_util.hpp"
 
 namespace duckdb {
@@ -59,7 +60,8 @@ void DuckLakeSchemaPinState::Pin(shared_ptr<DuckLakeSchemaCacheEntry> entry) {
 }
 
 DuckLakeCatalog::DuckLakeCatalog(AttachedDatabase &db_p, DuckLakeOptions options_p)
-    : Catalog(db_p), options(std::move(options_p)), last_uncommitted_catalog_version(TRANSACTION_ID_START) {
+    : Catalog(db_p), options(std::move(options_p)), last_uncommitted_catalog_version(TRANSACTION_ID_START),
+      instance_id(UUID::ToString(UUID::GenerateRandomUUID())) {
 	// figure out the metadata server type
 	auto entry = options.metadata_parameters.find("type");
 	if (entry != options.metadata_parameters.end()) {
@@ -176,8 +178,8 @@ void DuckLakeCatalog::ScanSchemas(ClientContext &context, std::function<void(Sch
 		}
 	}
 	auto snapshot = duck_transaction.GetSnapshot();
-	auto schemas_entry = GetSchemaForSnapshot(duck_transaction, snapshot);
-	for (auto &schema : schemas_entry->catalog_set.GetEntries()) {
+	auto &schemas = GetSchemaForSnapshot(duck_transaction, snapshot);
+	for (auto &schema : schemas.GetEntries()) {
 		auto &schema_entry = schema.second->Cast<SchemaCatalogEntry>();
 		if (duck_transaction.IsDeleted(schema_entry)) {
 			continue;
@@ -192,9 +194,8 @@ optional_ptr<CatalogEntry> DuckLakeCatalog::GetEntryById(DuckLakeTransaction &tr
 	if (local_entry) {
 		return local_entry;
 	}
-	auto schema_entry = GetSchemaForSnapshot(transaction, snapshot);
-	PinSchemaForQuery(transaction, schema_entry);
-	return schema_entry->catalog_set.GetEntryById(schema_id);
+	auto &schema = GetSchemaForSnapshot(transaction, snapshot);
+	return schema.GetEntryById(schema_id);
 }
 
 optional_ptr<CatalogEntry> DuckLakeCatalog::GetEntryById(DuckLakeTransaction &transaction, DuckLakeSnapshot snapshot,
@@ -203,9 +204,8 @@ optional_ptr<CatalogEntry> DuckLakeCatalog::GetEntryById(DuckLakeTransaction &tr
 	if (local_entry) {
 		return local_entry;
 	}
-	auto schema_entry = GetSchemaForSnapshot(transaction, snapshot);
-	PinSchemaForQuery(transaction, schema_entry);
-	return schema_entry->catalog_set.GetEntryById(table_id);
+	auto &schema = GetSchemaForSnapshot(transaction, snapshot);
+	return schema.GetEntryById(table_id);
 }
 
 idx_t DuckLakeCatalog::GetBeginSnapshotForTable(TableIndex table_id, DuckLakeTransaction &transaction) {
@@ -219,8 +219,8 @@ idx_t DuckLakeCatalog::GetBeginSnapshotForSchemaVersion(TableIndex table_id, idx
 	return metadata_manager.GetBeginSnapshotForSchemaVersion(table_id, schema_version);
 }
 
-shared_ptr<DuckLakeSchemaCacheEntry> DuckLakeCatalog::GetSchemaForSnapshot(DuckLakeTransaction &transaction,
-                                                                          DuckLakeSnapshot snapshot) {
+shared_ptr<DuckLakeSchemaCacheEntry> DuckLakeCatalog::GetSchemaCacheEntry(DuckLakeTransaction &transaction,
+                                                                         DuckLakeSnapshot snapshot) {
 	auto &cache = GetObjectCacheInstance();
 	auto key = SchemaCacheKey(snapshot.schema_version);
 	auto cached = cache.Get<DuckLakeSchemaCacheEntry>(key);
@@ -231,6 +231,12 @@ shared_ptr<DuckLakeSchemaCacheEntry> DuckLakeCatalog::GetSchemaForSnapshot(DuckL
 	auto entry = make_shared_ptr<DuckLakeSchemaCacheEntry>(std::move(schema));
 	cache.Put(std::move(key), entry);
 	return entry;
+}
+
+DuckLakeCatalogSet &DuckLakeCatalog::GetSchemaForSnapshot(DuckLakeTransaction &transaction, DuckLakeSnapshot snapshot) {
+	auto entry = GetSchemaCacheEntry(transaction, snapshot);
+	PinSchemaForQuery(transaction, entry);
+	return entry->catalog_set;
 }
 
 void DuckLakeCatalog::PinSchemaForQuery(DuckLakeTransaction &transaction,
@@ -558,7 +564,7 @@ shared_ptr<DuckLakeStatsCacheEntry> DuckLakeCatalog::GetStatsForSnapshot(DuckLak
 	if (cached) {
 		return cached;
 	}
-	auto schema_entry = GetSchemaForSnapshot(transaction, snapshot);
+	auto schema_entry = GetSchemaCacheEntry(transaction, snapshot);
 	auto table_stats = LoadStatsForSnapshot(transaction, snapshot, schema_entry->catalog_set);
 	auto entry = make_shared_ptr<DuckLakeStatsCacheEntry>(std::move(table_stats));
 	cache.Put(std::move(key), entry);
@@ -738,9 +744,8 @@ optional_ptr<SchemaCatalogEntry> DuckLakeCatalog::LookupSchema(CatalogTransactio
 		}
 	}
 	auto snapshot = duck_transaction.GetSnapshot(at_clause);
-	auto schemas_entry = GetSchemaForSnapshot(duck_transaction, snapshot);
-	PinSchemaForQuery(duck_transaction, schemas_entry);
-	auto entry = schemas_entry->catalog_set.GetEntry<SchemaCatalogEntry>(schema_name);
+	auto &schemas = GetSchemaForSnapshot(duck_transaction, snapshot);
+	auto entry = schemas.GetEntry<SchemaCatalogEntry>(schema_name);
 	if (!entry) {
 		if (if_not_found == OnEntryNotFound::THROW_EXCEPTION) {
 			throw BinderException("Schema \"%s\" not found in DuckLakeCatalog \"%s\"", schema_name, GetName());
@@ -948,15 +953,15 @@ void DuckLakeCatalog::CacheInlinedDeletionTableResult(TableIndex table_id, DuckL
 }
 
 string DuckLakeCatalog::StatsCacheKey(idx_t next_file_id) const {
-	return StringUtil::Format("ducklake:%s:%s:stats:%llu", GetName(), MetadataPath(), next_file_id);
+	return StringUtil::Format("ducklake:%s:%s:%s:stats:%llu", GetName(), MetadataPath(), instance_id, next_file_id);
 }
 
 string DuckLakeCatalog::SchemaCacheKey(idx_t schema_version) const {
-	return StringUtil::Format("ducklake:%s:%s:schema:%llu", GetName(), MetadataPath(), schema_version);
+	return StringUtil::Format("ducklake:%s:%s:%s:schema:%llu", GetName(), MetadataPath(), instance_id, schema_version);
 }
 
 string DuckLakeCatalog::SchemaPinStateKey() const {
-	return StringUtil::Format("ducklake_schema_pin:%s:%s", GetName(), MetadataPath());
+	return StringUtil::Format("ducklake_schema_pin:%s:%s:%s", GetName(), MetadataPath(), instance_id);
 }
 
 ObjectCache &DuckLakeCatalog::GetObjectCacheInstance() {
