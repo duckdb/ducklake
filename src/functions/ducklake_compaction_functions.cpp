@@ -318,6 +318,10 @@ void DuckLakeCompactor::GenerateCompactions(DuckLakeTableEntry &table,
 				idx_t compaction_file_count = compaction_idx - start_idx;
 				if (compaction_file_count == 1) {
 					// If we only have one file to compact, we have nothing to compact
+					compacted_files++;
+					if (compacted_files >= options.max_files) {
+						break;
+					}
 					continue;
 				}
 				vector<DuckLakeCompactionFileEntry> compaction_files;
