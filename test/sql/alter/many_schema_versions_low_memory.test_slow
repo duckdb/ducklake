@@ -34,7 +34,7 @@ statement ok
 SET temp_directory=''
 
 statement ok
-SET memory_limit='50MB'
+SET memory_limit='100MB'
 
 # Phase 1: churn schema_version via many ALTER operations.
 

@@ -50,6 +50,9 @@ public:
 	const map<SchemaIndex, reference<DuckLakeSchemaEntry>> &GetSchemaIdMap() {
 		return schema_entry_map;
 	}
+	idx_t TotalEntryCount() const {
+		return catalog_entries.size() + table_entry_map.size() + macro_entry_map.size();
+	}
 
 private:
 	ducklake_entries_map_t catalog_entries;

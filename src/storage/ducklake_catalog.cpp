@@ -43,7 +43,7 @@ optional_idx DuckLakeStatsCacheEntry::GetEstimatedCacheMemory() const {
 
 optional_idx DuckLakeSchemaCacheEntry::GetEstimatedCacheMemory() const {
 	idx_t estimate = sizeof(DuckLakeCatalogSet);
-	estimate += catalog_set.GetEntries().size() * ESTIMATED_BYTES_PER_ENTRY;
+	estimate += catalog_set.TotalEntryCount() * ESTIMATED_BYTES_PER_ENTRY;
 	return estimate;
 }
 
