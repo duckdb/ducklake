@@ -27,6 +27,7 @@ public:
 	}
 
 	string GetColumnTypeInternal(const LogicalType &type) override;
+	string CastColumnToTarget(const string &column, const LogicalType &type) override;
 	shared_ptr<DuckLakeInlinedData> TransformInlinedData(QueryResult &result,
 	                                                     const vector<LogicalType> &expected_types) override;
 
