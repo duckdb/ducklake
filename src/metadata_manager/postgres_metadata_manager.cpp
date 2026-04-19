@@ -77,6 +77,13 @@ string PostgresMetadataManager::GetColumnTypeInternal(const LogicalType &column_
 	}
 }
 
+string PostgresMetadataManager::CastColumnToTarget(const string &column, const LogicalType &type) {
+	if (type.IsNested()) {
+		return StringUtil::Format("CAST(CAST(%s AS JSON) AS %s)", column, type.ToString());
+	}
+	return DuckLakeMetadataManager::CastColumnToTarget(column, type);
+}
+
 unique_ptr<QueryResult> PostgresMetadataManager::ExecuteQuery(DuckLakeSnapshot snapshot, string &query,
                                                               string command) {
 	auto &commit_info = transaction.GetCommitInfo();
