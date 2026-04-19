@@ -1,0 +1,66 @@
+# name: test/sql/data_inlining/postgres_inline_struct_timestamps.test
+# description: check inline struct timestamp variants with postgres metadata
+# group: [data_inlining]
+
+require ducklake
+
+require parquet
+
+require json
+
+require postgres_scanner
+
+test-env DATA_PATH {TEST_DIR}
+
+test-env DUCKLAKE_CONNECTION {DUCKLAKE_CONNECTION}
+
+statement ok
+SET TimeZone='UTC';
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/ducklake_postgres_inline_struct_timestamps', METADATA_SCHEMA 'inline_struct_timestamps_{UUID}', DATA_INLINING_ROW_LIMIT 10)
+
+statement ok
+CREATE TABLE ducklake.events (
+    id INTEGER,
+    event_struct STRUCT(
+        ts TIMESTAMP,
+        ts_ns TIMESTAMP_NS,
+        ts_tz TIMESTAMPTZ,
+        ts_tz_ns TIMESTAMPTZ_NS
+    )
+);
+
+statement ok
+INSERT INTO ducklake.events VALUES (
+    1,
+    struct_pack(
+        ts := TIMESTAMP '2024-01-01 02:03:04',
+        ts_ns := CAST('2024-01-01 02:03:04' AS TIMESTAMP_NS),
+        ts_tz := CAST('2024-01-01 02:03:04+00' AS TIMESTAMPTZ),
+        ts_tz_ns := CAST('2024-01-01 02:03:04+00' AS TIMESTAMPTZ_NS)
+    )
+);
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake');
+
+query T
+SELECT struct_extract(event_struct, 'ts')::VARCHAR FROM ducklake.events;
+----
+2024-01-01 02:03:04
+
+query T
+SELECT struct_extract(event_struct, 'ts_ns')::VARCHAR FROM ducklake.events;
+----
+2024-01-01 02:03:04
+
+query T
+SELECT struct_extract(event_struct, 'ts_tz')::VARCHAR FROM ducklake.events;
+----
+2024-01-01 02:03:04+00
+
+query T
+SELECT struct_extract(event_struct, 'ts_tz_ns')::VARCHAR FROM ducklake.events;
+----
+2024-01-01 02:03:04+00
