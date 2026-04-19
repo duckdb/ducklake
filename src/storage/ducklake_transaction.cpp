@@ -1224,6 +1224,7 @@ void DuckLakeTransaction::CheckForConflicts(const TransactionChangeInformation &
 		              "created a schema with this name already");
 	}
 	// check if we are creating the same macro as another transaction
+	ConflictCheck(changes.created_table_macros, other_changes.dropped_schemas, other_changes.created_table_macros);
 	ConflictCheck(changes.created_scalar_macros, other_changes.dropped_schemas, other_changes.created_scalar_macros);
 	ConflictCheck(changes.created_tables, other_changes.dropped_schemas, other_changes.created_tables);
 	// check if we are creating the same table as another transaction
