@@ -1,4 +1,4 @@
-# name: test/sql/insert/insert_wide_table_low_memory.test
+# name: test/sql/insert/insert_wide_table_low_memory.test_slow
 # description: test that many small inserts into a wide table work under low memory limit
 # group: [insert]
 

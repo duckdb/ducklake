@@ -12,6 +12,7 @@
 #include "common/ducklake_options.hpp"
 #include "common/ducklake_name_map.hpp"
 #include "duckdb/catalog/catalog.hpp"
+#include "duckdb/main/client_context_state.hpp"
 #include "duckdb/storage/object_cache.hpp"
 #include "storage/ducklake_catalog_set.hpp"
 #include "storage/ducklake_partition_data.hpp"
@@ -45,6 +46,37 @@ struct DuckLakeStatsCacheEntry : public ObjectCacheEntry {
 		return ObjectType();
 	}
 	optional_idx GetEstimatedCacheMemory() const override;
+};
+
+//! Cache entry for a DuckLake schema version
+struct DuckLakeSchemaCacheEntry : public ObjectCacheEntry {
+	static constexpr idx_t ESTIMATED_BYTES_PER_ENTRY = 4096;
+
+	explicit DuckLakeSchemaCacheEntry(unique_ptr<DuckLakeCatalogSet> catalog_set_p)
+	    : catalog_set(std::move(*catalog_set_p)) {
+	}
+
+	DuckLakeCatalogSet catalog_set;
+
+	static string ObjectType() {
+		return "ducklake_schema";
+	}
+	string GetObjectType() override {
+		return ObjectType();
+	}
+	optional_idx GetEstimatedCacheMemory() const override;
+};
+
+//! Query-scoped pin for DuckLake schema cache entries, which guarantee memory safety before transaction finishes.
+class DuckLakeSchemaPinState : public ClientContextState {
+public:
+	void QueryEnd(ClientContext &context) override;
+	void Pin(shared_ptr<DuckLakeSchemaCacheEntry> entry);
+
+private:
+	mutex lock;
+	// Maps from address of the schema cache entry to the schema cache entry.
+	unordered_map<DuckLakeSchemaCacheEntry *, shared_ptr<DuckLakeSchemaCacheEntry>> pins;
 };
 
 enum class InlinedDeletionCacheResult { EXISTS, DOES_NOT_EXIST, UNKNOWN };
@@ -221,19 +253,24 @@ public:
 private:
 	void DropSchema(ClientContext &context, DropInfo &info) override;
 	unique_ptr<DuckLakeCatalogSet> LoadSchemaForSnapshot(DuckLakeTransaction &transaction, DuckLakeSnapshot snapshot);
+	//! Look up (or load) the ObjectCache entry for a given snapshot.
+	shared_ptr<DuckLakeSchemaCacheEntry> GetSchemaCacheEntry(DuckLakeTransaction &transaction,
+	                                                         DuckLakeSnapshot snapshot);
 	shared_ptr<DuckLakeStatsCacheEntry> GetStatsForSnapshot(DuckLakeTransaction &transaction,
 	                                                        DuckLakeSnapshot snapshot);
+	//! Pin a schema cache entry for the duration of the current query to ensure safe memory access.
+	void PinSchemaForQuery(DuckLakeTransaction &transaction, shared_ptr<DuckLakeSchemaCacheEntry> entry);
 	unique_ptr<DuckLakeStats> LoadStatsForSnapshot(DuckLakeTransaction &transaction, DuckLakeSnapshot snapshot,
 	                                               DuckLakeCatalogSet &schema);
 	void LoadNameMaps(DuckLakeTransaction &transaction);
 	//! Generate a cache key for the ObjectCache
 	string StatsCacheKey(idx_t next_file_id) const;
+	string SchemaCacheKey(idx_t schema_version) const;
+	string SchemaPinStateKey() const;
 	ObjectCache &GetObjectCacheInstance();
 
 private:
-	mutex schemas_lock;
-	//! Map of schema index -> schema
-	unordered_map<idx_t, unique_ptr<DuckLakeCatalogSet>> schemas;
+	mutex name_maps_lock;
 	//! Map of mapping index -> name map
 	DuckLakeNameMapSet name_maps;
 	//! The maximum name map index we have loaded so far
@@ -248,6 +285,8 @@ private:
 	atomic<idx_t> last_uncommitted_catalog_version;
 	//! The metadata server type
 	string metadata_type;
+	//! A per-instance identifier used to scope ObjectCache keys.
+	string instance_id;
 	//! Whether or not the catalog is initialized
 	bool initialized = false;
 	//! Cache for inlined deletion table existence checks
