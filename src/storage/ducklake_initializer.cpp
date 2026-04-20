@@ -36,13 +36,22 @@ string DuckLakeInitializer::GetAttachOptions() {
 			throw InternalException("Unsupported access mode in DuckLake attach");
 		}
 	}
+	bool has_isolation_level_override = false;
 	for (auto &option : options.metadata_parameters) {
 		attach_options.push_back(option.first + " " + option.second.ToSQLString());
+		if (StringUtil::Lower(option.first) == "isolation_level") {
+			has_isolation_level_override = true;
+		}
 	}
 	const string metadata_type = catalog.MetadataType();
 	if (metadata_type.empty() || metadata_type == "duckdb") {
 		// this is duckdb, we always do latest storage
 		attach_options.push_back(StringUtil::Format("STORAGE_VERSION '%s'", "latest"));
+	} else if ((metadata_type == "postgres" || metadata_type == "postgres_scanner") &&
+	           !has_isolation_level_override) {
+		// REPEATABLE READ pins one pg snapshot per DuckLake tx, hiding concurrent
+		// committers from CheckForConflicts. Override via meta_isolation_level.
+		attach_options.push_back("isolation_level 'read committed'");
 	}
 
 	if (attach_options.empty()) {
@@ -159,6 +168,9 @@ void DuckLakeInitializer::InitializeNewDuckLake(DuckLakeTransaction &transaction
 	SetVersionedMetadataManager(transaction, version);
 	auto &metadata_manager = transaction.GetMetadataManager();
 	metadata_manager.InitializeDuckLake(has_explicit_schema, catalog.Encryption());
+	if (auto *pg_mgr = dynamic_cast<PostgresMetadataManager *>(&metadata_manager)) {
+		pg_mgr->EnsureIdSequences();
+	}
 	if (catalog.Encryption() == DuckLakeEncryption::AUTOMATIC) {
 		// default to unencrypted
 		catalog.SetEncryption(DuckLakeEncryption::UNENCRYPTED);
@@ -256,7 +268,11 @@ void DuckLakeInitializer::LoadExistingDuckLake(DuckLakeTransaction &transaction)
 	for (auto &entry : metadata.table_settings) {
 		options.table_options[entry.table_id][entry.tag.key] = entry.tag.value;
 	}
-	// set correct version metadata manager
+	if (options.access_mode != AccessMode::READ_ONLY) {
+		if (auto *pg_mgr = dynamic_cast<PostgresMetadataManager *>(&transaction.GetMetadataManager())) {
+			pg_mgr->EnsureIdSequences();
+		}
+	}
 	if (resolved_version != DuckLakeVersion::UNSET) {
 		SetVersionedMetadataManager(transaction, resolved_version);
 	}

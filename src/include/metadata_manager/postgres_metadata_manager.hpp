@@ -37,11 +37,26 @@ public:
 
 	unique_ptr<QueryResult> Query(DuckLakeSnapshot snapshot, string &query) override;
 
+	idx_t AllocateNextSnapshotId(idx_t current_snapshot_id) override;
+	idx_t AllocateNextCatalogId(idx_t current_next_catalog_id) override;
+	idx_t AllocateNextFileId(idx_t current_next_file_id) override;
+	idx_t AllocateNextSchemaVersion(idx_t current_schema_version) override;
+	void AcquireCommitLock() override;
+
+	void EnsureIdSequences();
+
 protected:
 	string GetLatestSnapshotQuery() const override;
 
 private:
 	unique_ptr<QueryResult> ExecuteQuery(DuckLakeSnapshot snapshot, string &query, string command);
+
+	idx_t FetchScalarSequenceValue(const string &seq_name);
+
+	// classid half is hashtext(schema) so multiple DuckLake catalogs on one
+	// pg instance do not share the key.
+	static constexpr int32_t DUCKLAKE_COMMIT_ADVISORY_SUBKEY = 0x44754C4B;
+	optional_idx commit_lock_classid;
 };
 
 } // namespace duckdb

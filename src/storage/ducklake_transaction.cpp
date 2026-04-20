@@ -923,15 +923,36 @@ TransactionChangeInformation DuckLakeTransaction::GetTransactionChanges() const 
 }
 
 struct DuckLakeCommitState {
-	explicit DuckLakeCommitState(DuckLakeSnapshot &snapshot) : commit_snapshot(snapshot) {
+	DuckLakeCommitState(DuckLakeSnapshot &snapshot, DuckLakeMetadataManager &metadata_manager)
+	    : commit_snapshot(snapshot), metadata_manager(metadata_manager) {
 	}
 
 	DuckLakeSnapshot &commit_snapshot;
+	DuckLakeMetadataManager &metadata_manager;
 	map<SchemaIndex, SchemaIndex> committed_schemas;
 	map<TableIndex, TableIndex> committed_tables;
 	map<idx_t, idx_t> committed_partition_ids;
 	map<MappingIndex, MappingIndex> committed_mapping_indexes;
 	map<TableIndex, vector<DuckLakeDeleteFile>> local_delete_files;
+
+	// (table_id, expected new stats_version). FlushChanges post-verifies via
+	// SELECT to catch CAS UPDATEs that silently matched zero rows.
+	vector<std::pair<TableIndex, idx_t>> stats_verification;
+
+	idx_t AllocateCatalogId() const {
+		idx_t id = metadata_manager.AllocateNextCatalogId(commit_snapshot.next_catalog_id);
+		if (id + 1 > commit_snapshot.next_catalog_id) {
+			commit_snapshot.next_catalog_id = id + 1;
+		}
+		return id;
+	}
+	idx_t AllocateFileId() const {
+		idx_t id = metadata_manager.AllocateNextFileId(commit_snapshot.next_file_id);
+		if (id + 1 > commit_snapshot.next_file_id) {
+			commit_snapshot.next_file_id = id + 1;
+		}
+		return id;
+	}
 
 	void RemapIdentifier(SchemaIndex &schema_id) const {
 		auto entry = committed_schemas.find(schema_id);
@@ -1210,6 +1231,7 @@ void DuckLakeTransaction::CheckForConflicts(const TransactionChangeInformation &
 	// check if we are dropping the same view as another transaction
 	for (auto &dropped_idx : changes.dropped_views) {
 		ConflictCheck(dropped_idx, other_changes.dropped_views, "drop view", "dropped it already");
+		ConflictCheck(dropped_idx, other_changes.altered_views, "drop view", "altered it");
 	}
 	// check if we are dropping the same macro as another transaction
 	for (auto &dropped_idx : changes.dropped_scalar_macros) {
@@ -1327,19 +1349,24 @@ void DuckLakeTransaction::CheckForConflicts(const TransactionChangeInformation &
 		ConflictCheck(table_id, other_changes.tables_deleted_from, "compact table", "deleted from it");
 		ConflictCheck(table_id, other_changes.tables_merge_adjacent, "compact table", "compacted it");
 		ConflictCheck(table_id, other_changes.tables_rewrite_delete, "compact table", "compacted it");
+		ConflictCheck(table_id, other_changes.altered_tables, "compact table", "altered it");
 	}
 	for (auto &table_id : changes.tables_rewrite_delete) {
 		ConflictCheck(table_id, other_changes.dropped_tables, "compact table", "dropped it");
 		ConflictCheck(table_id, other_changes.tables_deleted_from, "compact table", "deleted from it");
 		ConflictCheck(table_id, other_changes.tables_merge_adjacent, "compact table", "compacted it");
 		ConflictCheck(table_id, other_changes.tables_rewrite_delete, "compact table", "compacted it");
+		ConflictCheck(table_id, other_changes.altered_tables, "compact table", "altered it");
 	}
 	for (auto &table_id : changes.altered_tables) {
 		ConflictCheck(table_id, other_changes.dropped_tables, "alter table", "dropped it");
 		ConflictCheck(table_id, other_changes.altered_tables, "alter table", "altered it");
+		ConflictCheck(table_id, other_changes.tables_merge_adjacent, "alter table", "compacted it");
+		ConflictCheck(table_id, other_changes.tables_rewrite_delete, "alter table", "compacted it");
 	}
 	for (auto &view_id : changes.altered_views) {
 		ConflictCheck(view_id, other_changes.altered_views, "alter view", "altered it");
+		ConflictCheck(view_id, other_changes.dropped_views, "alter view", "dropped it");
 	}
 }
 
@@ -1363,7 +1390,7 @@ vector<DuckLakeSchemaInfo> DuckLakeTransaction::GetNewSchemas(DuckLakeCommitStat
 		auto &schema_entry = entry.second->Cast<DuckLakeSchemaEntry>();
 		auto old_id = schema_entry.GetSchemaId();
 		DuckLakeSchemaInfo schema_info;
-		schema_info.id = SchemaIndex(commit_state.commit_snapshot.next_catalog_id++);
+		schema_info.id = SchemaIndex(commit_state.AllocateCatalogId());
 		schema_info.uuid = schema_entry.GetSchemaUUID();
 		schema_info.name = schema_entry.name;
 		schema_info.path = schema_entry.DataPath();
@@ -1391,7 +1418,7 @@ DuckLakePartitionInfo DuckLakeTransaction::GetNewPartitionKey(DuckLakeCommitStat
 		return partition_key;
 	}
 	auto local_partition_id = partition_data->partition_id;
-	auto partition_id = commit_state.commit_snapshot.next_catalog_id++;
+	auto partition_id = commit_state.AllocateCatalogId();
 	partition_key.id = partition_id;
 	partition_data->partition_id = partition_id;
 	for (auto &field : partition_data->fields) {
@@ -1440,7 +1467,7 @@ DuckLakeSortInfo DuckLakeTransaction::GetNewSortKey(DuckLakeCommitState &commit_
 		return sort_key;
 	}
 
-	auto sort_id = commit_state.commit_snapshot.next_catalog_id++;
+	auto sort_id = commit_state.AllocateCatalogId();
 	sort_key.id = sort_id;
 	sort_data->sort_id = sort_id;
 	for (auto &field : sort_data->fields) {
@@ -1487,7 +1514,7 @@ DuckLakeTableInfo DuckLakeTransaction::GetNewTable(DuckLakeCommitState &commit_s
 	auto original_id = table_entry.id;
 	bool is_new_table;
 	if (IsTransactionLocal(original_id.index)) {
-		table_entry.id = TableIndex(commit_state.commit_snapshot.next_catalog_id++);
+		table_entry.id = TableIndex(commit_state.AllocateCatalogId());
 		is_new_table = true;
 	} else {
 		// this table already has an id - keep it
@@ -1786,7 +1813,7 @@ DuckLakeViewInfo DuckLakeTransaction::GetNewView(DuckLakeCommitState &commit_sta
 	DuckLakeViewInfo view_entry;
 	auto original_id = view.GetViewId();
 	if (IsTransactionLocal(original_id.index)) {
-		view_entry.id = TableIndex(commit_state.commit_snapshot.next_catalog_id++);
+		view_entry.id = TableIndex(commit_state.AllocateCatalogId());
 	} else {
 		// this view already has an id - keep it
 		// this happens if e.g. this view is renamed
@@ -1807,7 +1834,7 @@ void DuckLakeTransaction::GetNewMacroInfo(DuckLakeCommitState &commit_state, ref
 	auto &macro_entry = entry.get().Cast<MacroCatalogEntry>();
 	auto &ducklake_schema = macro_entry.schema.Cast<DuckLakeSchemaEntry>();
 
-	new_macro_info.macro_id = MacroIndex(commit_state.commit_snapshot.next_catalog_id++);
+	new_macro_info.macro_id = MacroIndex(commit_state.AllocateCatalogId());
 	new_macro_info.macro_name = macro_entry.name;
 	new_macro_info.schema_id = commit_state.GetSchemaId(ducklake_schema);
 	// Let's do the implementations
@@ -1960,9 +1987,13 @@ struct DuckLakeNewGlobalStats {
 };
 
 string DuckLakeTransaction::UpdateGlobalTableStats(TableIndex table_id,
-                                                   const DuckLakeNewGlobalStats &new_global_stats) {
+                                                   const DuckLakeNewGlobalStats &new_global_stats,
+                                                   idx_t expected_stats_version,
+                                                   idx_t new_stats_version) {
 	DuckLakeGlobalStatsInfo stats;
 	stats.table_id = table_id;
+	stats.stats_version = expected_stats_version;
+	stats.new_stats_version = new_stats_version;
 
 	stats.initialized = new_global_stats.initialized;
 	auto &new_stats = new_global_stats.stats;
@@ -2038,7 +2069,8 @@ DuckLakeFileInfo DuckLakeTransaction::GetNewDataFile(const DuckLakeDataFile &fil
                                                      TableIndex table_id, optional_idx row_id_start) {
 	auto &commit_snapshot = commit_state.commit_snapshot;
 	DuckLakeFileInfo data_file;
-	data_file.id = DataFileIndex(commit_snapshot.next_file_id++);
+	data_file.id = DataFileIndex(commit_state.AllocateFileId());
+	(void)commit_snapshot;
 	data_file.table_id = table_id;
 	data_file.file_name = file.file_name;
 	data_file.row_count = file.row_count;
@@ -2168,11 +2200,25 @@ NewDataInfo DuckLakeTransaction::GetNewDataFiles(string &batch_query, DuckLakeCo
 
 			if (table_changes.new_data_files.empty()) {
 				// force an increment of file_id to signal a data change if we have only inlined data changes
-				commit_state.commit_snapshot.next_file_id++;
+				(void)commit_state.AllocateFileId();
 			}
 		}
 		// update the global stats for this table based on the newly written data
-		batch_query += UpdateGlobalTableStats(table_id, new_globals);
+		// CAS: expected = observed pre-commit version (0 if row uninitialised).
+		idx_t expected_stats_version = 0;
+		if (stats) {
+			for (auto &s : *stats) {
+				if (s.table_id == table_id) {
+					expected_stats_version = s.stats_version;
+					break;
+				}
+			}
+		}
+		idx_t new_stats_version = commit_state.commit_snapshot.snapshot_id;
+		batch_query += UpdateGlobalTableStats(table_id, new_globals, expected_stats_version, new_stats_version);
+		if (new_globals.initialized) {
+			commit_state.stats_verification.emplace_back(table_id, new_stats_version);
+		}
 	}
 	return result;
 }
@@ -2181,7 +2227,7 @@ DuckLakeDeleteFileInfo DuckLakeTransaction::GetNewDeleteFile(TableIndex table_id
                                                              const DuckLakeCommitState &commit_state,
                                                              const DuckLakeDeleteFile &file) const {
 	DuckLakeDeleteFileInfo delete_file;
-	delete_file.id = DataFileIndex(commit_state.commit_snapshot.next_file_id++);
+	delete_file.id = DataFileIndex(commit_state.AllocateFileId());
 	delete_file.table_id = table_id;
 	delete_file.data_file_id = file.data_file_id;
 	delete_file.path = file.file_name;
@@ -2259,7 +2305,7 @@ NewNameMapInfo DuckLakeTransaction::GetNewNameMaps(DuckLakeCommitState &commit_s
 		// generate a new mapping id
 		auto local_map_id = entry.first;
 		auto &mapping = *entry.second;
-		MappingIndex new_map_id(commit_state.commit_snapshot.next_file_id++);
+		MappingIndex new_map_id(commit_state.AllocateFileId());
 
 		DuckLakeColumnMappingInfo map_info;
 		map_info.table_id = commit_state.GetTableId(mapping.table_id);
@@ -2556,6 +2602,14 @@ bool RetryOnError(const string &original_message) {
 	if (StringUtil::Contains(message, "concurrent")) {
 		return true;
 	}
+	if (StringUtil::Contains(message, "server closed the connection") ||
+	    StringUtil::Contains(message, "connection to server") ||
+	    StringUtil::Contains(message, "connection reset")) {
+		return true;
+	}
+	if (StringUtil::Contains(message, "deadlock")) {
+		return true;
+	}
 	return false;
 }
 
@@ -2580,7 +2634,6 @@ void DuckLakeTransaction::FlushChanges() {
 	}
 
 	auto transaction_snapshot = GetSnapshot();
-	auto transaction_changes = GetTransactionChanges();
 	SnapshotAndStats commit_stats_snapshot;
 	auto &commit_snapshot = commit_stats_snapshot.snapshot;
 	optional_ptr<vector<DuckLakeGlobalStatsInfo>> stats;
@@ -2588,21 +2641,28 @@ void DuckLakeTransaction::FlushChanges() {
 		bool can_retry;
 		try {
 			can_retry = false;
-			if (i > 0) {
-				// we failed our first commit due to another transaction committing
-				// retry - but first check for conflicts
-				commit_stats_snapshot = CheckForConflicts(transaction_snapshot, transaction_changes);
-				stats = &commit_stats_snapshot.stats;
-			} else {
-				commit_stats_snapshot.snapshot = GetSnapshot();
-			}
-			commit_snapshot.snapshot_id++;
-			if (SchemaChangesMade()) {
-				// we changed the schema - need to get a new schema version
-				commit_snapshot.schema_version++;
-			}
+			// Re-capture every attempt: tx-local state may have changed and
+			// stale tx_changes make CheckForConflicts miss real conflicts.
+			auto transaction_changes = GetTransactionChanges();
 			can_retry = true;
-			DuckLakeCommitState commit_state(commit_snapshot);
+			// Must share the pg tx with AllocateNextSnapshotId below; release
+			// tied to COMMIT/ROLLBACK. Split breaks MAX(snapshot_id)-as-horizon.
+			metadata_manager->AcquireCommitLock();
+			// Conflict check under the commit lock: any committer between
+			// transaction start and now has released the lock and is visible
+			// under read-committed, so the result is authoritative. Logical
+			// conflicts (Transaction conflict ...) are not retriable — same tx
+			// state will throw again — so gate retry off across the call.
+			can_retry = false;
+			commit_stats_snapshot = CheckForConflicts(transaction_snapshot, transaction_changes);
+			stats = &commit_stats_snapshot.stats;
+			can_retry = true;
+			commit_snapshot.snapshot_id = metadata_manager->AllocateNextSnapshotId(commit_snapshot.snapshot_id);
+			if (SchemaChangesMade()) {
+				commit_snapshot.schema_version =
+				    metadata_manager->AllocateNextSchemaVersion(commit_snapshot.schema_version);
+			}
+			DuckLakeCommitState commit_state(commit_snapshot, *metadata_manager);
 			// write the new snapshot
 			string batch_queries = metadata_manager->InsertSnapshot();
 			batch_queries += CommitChanges(commit_state, transaction_changes, stats);
@@ -2611,6 +2671,30 @@ void DuckLakeTransaction::FlushChanges() {
 			auto res = metadata_manager->Execute(commit_snapshot, batch_queries);
 			if (res->HasError()) {
 				res->GetErrorObject().Throw("Failed to flush changes into DuckLake: ");
+			}
+			// Own-writes visible pre-COMMIT. Row with a different stats_version
+			// means a concurrent committer's UPDATE won; our CAS matched zero.
+			for (auto &entry : commit_state.stats_verification) {
+				string check_sql = StringUtil::Format(
+				    "SELECT stats_version FROM {METADATA_CATALOG}.ducklake_table_stats WHERE table_id = %d",
+				    entry.first.index);
+				auto check_res = metadata_manager->Query(commit_snapshot, check_sql);
+				if (check_res->HasError()) {
+					check_res->GetErrorObject().Throw("Failed to verify stats_version post-commit: ");
+				}
+				auto chunk = check_res->Fetch();
+				if (!chunk || chunk->size() == 0) {
+					throw TransactionException(
+					    "concurrent update to ducklake_table_stats: row missing for table_id=%d, retrying",
+					    entry.first.index);
+				}
+				idx_t actual = chunk->data[0].GetValue(0).GetValue<uint64_t>();
+				if (actual != entry.second) {
+					throw TransactionException(
+					    "concurrent update to ducklake_table_stats detected (stats_version=%llu, "
+					    "expected=%llu for table_id=%d), retrying",
+					    (unsigned long long)actual, (unsigned long long)entry.second, entry.first.index);
+				}
 			}
 			connection->Commit();
 			catalog_version = commit_snapshot.schema_version;

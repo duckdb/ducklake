@@ -316,7 +316,8 @@ private:
 	                  vector<DuckLakeOverwrittenDeleteFile> &overwritten_delete_files) const;
 	DuckLakeDeleteFileInfo GetNewDeleteFile(TableIndex table_id, const DuckLakeCommitState &commit_state,
 	                                        const DuckLakeDeleteFile &file) const;
-	string UpdateGlobalTableStats(TableIndex table_id, const DuckLakeNewGlobalStats &new_stats);
+	string UpdateGlobalTableStats(TableIndex table_id, const DuckLakeNewGlobalStats &new_stats,
+	                              idx_t expected_stats_version, idx_t new_stats_version);
 	SnapshotAndStats CheckForConflicts(DuckLakeSnapshot transaction_snapshot,
 	                                   const TransactionChangeInformation &changes);
 	void CheckForConflicts(const TransactionChangeInformation &changes, const SnapshotChangeInformation &other_changes,

@@ -1,0 +1,67 @@
+# name: test/sql/concurrent/concurrent_insert_pg_sequences.test
+# description: verify Postgres sequence-backed ID allocators are adopted and advance
+#              under concurrent load (fixes ducklake_snapshot_pkey race).
+# group: [concurrent]
+
+require notwindows
+
+require ducklake
+
+require parquet
+
+require postgres_scanner
+
+test-env DUCKLAKE_CONNECTION postgres:dbname=ducklakedb
+
+test-env PG_METADATA_CONN dbname=ducklakedb
+
+test-env DATA_PATH __TEST_DIR__
+
+statement ok
+ATTACH '{PG_METADATA_CONN}' AS _clean_pg (TYPE postgres);
+
+statement ok
+CALL postgres_execute('_clean_pg',
+    'DROP SCHEMA IF EXISTS metadata_pg_seq_test CASCADE');
+
+query I
+SELECT COUNT(*)::BIGINT FROM postgres_query('_clean_pg',
+    'SELECT 1 FROM pg_namespace WHERE nspname = ''metadata_pg_seq_test''');
+----
+0
+
+statement ok
+DETACH _clean_pg;
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl_pg_seq (DATA_PATH '{DATA_PATH}/ducklake_pg_seq_files', METADATA_SCHEMA 'metadata_pg_seq_test');
+
+statement ok
+ATTACH '{PG_METADATA_CONN}' AS pg_meta (TYPE postgres);
+
+statement ok
+CREATE TABLE dl_pg_seq.tbl(key INTEGER);
+
+concurrentloop i 0 4
+
+query I
+INSERT INTO dl_pg_seq.tbl VALUES ({i})
+----
+1
+
+endloop
+
+# is_called=true proves nextval() fired during commits (vs setval-only bootstrap).
+query III
+SELECT is_called_snap, is_called_cat, is_called_fil
+FROM postgres_query('pg_meta',
+    'SELECT (SELECT is_called FROM metadata_pg_seq_test.ducklake_snapshot_id_seq) AS is_called_snap,
+            (SELECT is_called FROM metadata_pg_seq_test.ducklake_catalog_id_seq)  AS is_called_cat,
+            (SELECT is_called FROM metadata_pg_seq_test.ducklake_file_id_seq)     AS is_called_fil');
+----
+true	true	true
+
+query II
+SELECT COUNT(*), SUM(key) FROM dl_pg_seq.tbl;
+----
+4	6

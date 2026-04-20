@@ -1,0 +1,695 @@
+# name: test/sql/concurrent/concurrent_pg_conflict_detection.test
+# description: deterministic conflict-detection coverage for the postgres
+#              metadata backend. Each scenario forces a specific conflict
+#              path to fire and asserts on the resulting error message,
+#              so passing this test means the path actually executed.
+# group: [concurrent]
+
+require notwindows
+
+require ducklake
+
+require parquet
+
+require postgres_scanner
+
+test-env DUCKLAKE_CONNECTION postgres:dbname=ducklakedb
+
+test-env PG_METADATA_CONN dbname=ducklakedb
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH '{PG_METADATA_CONN}' AS _clean_pg (TYPE postgres);
+
+statement ok
+CALL postgres_execute('_clean_pg',
+    'DROP SCHEMA IF EXISTS metadata_pg_conflict_test CASCADE');
+
+statement ok
+DETACH _clean_pg;
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/ducklake_pg_conflict_files', METADATA_SCHEMA 'metadata_pg_conflict_test', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+ATTACH '{PG_METADATA_CONN}' AS pg_meta (TYPE postgres)
+
+statement ok con1
+SET ducklake_retry_wait_ms=20
+
+statement ok con1
+SET ducklake_max_retry_count=10
+
+statement ok con2
+SET ducklake_retry_wait_ms=20
+
+statement ok con2
+SET ducklake_max_retry_count=10
+
+
+# Regression guard: ducklake-internal metadata catalog must run at
+# `read committed`. `repeatable read` pins the PG snapshot per DuckLake tx
+# and silently disables CheckForConflicts cross-action detection.
+
+# touch metadata to ensure the internal connection has issued BEGIN
+statement ok
+CREATE TABLE dl.iso_probe(x INTEGER)
+
+query I
+SELECT * FROM postgres_query('__ducklake_metadata_dl',
+    'SELECT current_setting(''transaction_isolation'')')
+----
+read committed
+
+
+# Scenario A: CREATE TABLE same name from two transactions.
+# Exercises ConflictCheck on changes.created_tables.
+statement ok con1
+BEGIN
+
+statement ok con2
+BEGIN
+
+statement ok con1
+CREATE TABLE dl.create_dup(x INTEGER)
+
+statement ok con2
+CREATE TABLE dl.create_dup(y INTEGER)
+
+statement ok con1
+COMMIT
+
+statement error con2
+COMMIT
+----
+<REGEX>:.*Transaction conflict.*create.*create_dup.*
+
+# Catalog must reflect exactly the winner (con1's column 'x'), not con2.
+query I
+SELECT COUNT(*)::BIGINT FROM postgres_query('pg_meta',
+    'SELECT 1 FROM metadata_pg_conflict_test.ducklake_table
+     WHERE table_name = ''create_dup'' AND end_snapshot IS NULL')
+----
+1
+
+
+# Scenario B: INSERT vs ALTER on the same table.
+# Exercises tables_inserted_into ∩ altered_tables.
+statement ok
+CREATE TABLE dl.shape(a INTEGER)
+
+statement ok
+INSERT INTO dl.shape VALUES (1)
+
+statement ok con1
+BEGIN
+
+statement ok con2
+BEGIN
+
+statement ok con1
+ALTER TABLE dl.shape ADD COLUMN b INTEGER
+
+statement ok con2
+INSERT INTO dl.shape(a) VALUES (10)
+
+statement ok con1
+COMMIT
+
+statement error con2
+COMMIT
+----
+<REGEX>:.*Transaction conflict.*insert into table.*altered.*
+
+
+# Scenario C: INSERT vs DROP on the same table.
+# Exercises tables_inserted_into ∩ dropped_tables.
+statement ok
+CREATE TABLE dl.doomed(a INTEGER)
+
+statement ok
+INSERT INTO dl.doomed VALUES (1)
+
+statement ok con1
+BEGIN
+
+statement ok con2
+BEGIN
+
+statement ok con1
+DROP TABLE dl.doomed
+
+statement ok con2
+INSERT INTO dl.doomed VALUES (10)
+
+statement ok con1
+COMMIT
+
+statement error con2
+COMMIT
+----
+<REGEX>:.*Transaction conflict.*insert into table.*dropped.*
+
+
+# Scenario D: concurrent DELETE on the same data file.
+# Exercises file-level ConflictCheck OR ducklake_delete_file_active_uidx.
+statement ok
+CREATE TABLE dl.del_target(k INTEGER)
+
+statement ok
+INSERT INTO dl.del_target SELECT i FROM range(64) t(i)
+
+query I
+SELECT COUNT(*)::BIGINT FROM postgres_query('pg_meta',
+    'SELECT 1 FROM metadata_pg_conflict_test.ducklake_data_file df
+     JOIN metadata_pg_conflict_test.ducklake_table t USING (table_id)
+     WHERE t.table_name = ''del_target'' AND df.end_snapshot IS NULL')
+----
+1
+
+statement ok con1
+BEGIN
+
+statement ok con2
+BEGIN
+
+statement ok con1
+DELETE FROM dl.del_target WHERE k = 0
+
+statement ok con2
+DELETE FROM dl.del_target WHERE k = 1
+
+statement ok con1
+COMMIT
+
+statement error con2
+COMMIT
+----
+<REGEX>:.*(Transaction conflict.*delete|duplicate key|ducklake_delete_file_active_uidx).*
+
+# Active delete_file uniqueness invariant must hold post-conflict.
+# Without it, both delete masks apply as independent variants → double-count.
+query I
+SELECT COUNT(*)::BIGINT FROM postgres_query('pg_meta',
+    'SELECT data_file_id FROM metadata_pg_conflict_test.ducklake_delete_file
+     WHERE end_snapshot IS NULL
+     GROUP BY data_file_id
+     HAVING COUNT(*) > 1')
+----
+0
+
+
+# Scenario F: ALTER vs ALTER same table.
+# Exercises altered_tables ∩ altered_tables.
+statement ok
+CREATE TABLE dl.alter_dup(a INTEGER)
+
+statement ok con1
+BEGIN
+
+statement ok con2
+BEGIN
+
+statement ok con1
+ALTER TABLE dl.alter_dup ADD COLUMN x INTEGER
+
+statement ok con2
+ALTER TABLE dl.alter_dup ADD COLUMN y INTEGER
+
+statement ok con1
+COMMIT
+
+statement error con2
+COMMIT
+----
+<REGEX>:.*Transaction conflict.*alter table.*altered.*
+
+
+# Scenario G: DROP vs ALTER on same table (con1 DROPs first).
+# Exercises altered_tables ∩ dropped_tables.
+statement ok
+CREATE TABLE dl.drop_alter(a INTEGER)
+
+statement ok con1
+BEGIN
+
+statement ok con2
+BEGIN
+
+statement ok con1
+DROP TABLE dl.drop_alter
+
+statement ok con2
+ALTER TABLE dl.drop_alter ADD COLUMN x INTEGER
+
+statement ok con1
+COMMIT
+
+statement error con2
+COMMIT
+----
+<REGEX>:.*Transaction conflict.*alter table.*dropped.*
+
+
+# Scenario H: DROP vs DROP same table.
+# Exercises dropped_tables ∩ dropped_tables.
+statement ok
+CREATE TABLE dl.drop_dup(a INTEGER)
+
+statement ok con1
+BEGIN
+
+statement ok con2
+BEGIN
+
+statement ok con1
+DROP TABLE dl.drop_dup
+
+statement ok con2
+DROP TABLE dl.drop_dup
+
+statement ok con1
+COMMIT
+
+statement error con2
+COMMIT
+----
+<REGEX>:.*Transaction conflict.*drop table.*dropped.*
+
+
+# Scenario I: ALTER vs DELETE same table (con1 ALTERs first).
+# Exercises tables_deleted_from ∩ altered_tables.
+statement ok
+CREATE TABLE dl.alter_del(k INTEGER)
+
+statement ok
+INSERT INTO dl.alter_del SELECT i FROM range(8) t(i)
+
+statement ok con1
+BEGIN
+
+statement ok con2
+BEGIN
+
+statement ok con1
+ALTER TABLE dl.alter_del ADD COLUMN x INTEGER
+
+statement ok con2
+DELETE FROM dl.alter_del WHERE k = 0
+
+statement ok con1
+COMMIT
+
+statement error con2
+COMMIT
+----
+<REGEX>:.*Transaction conflict.*delete from table.*altered.*
+
+
+# Scenario J: DROP vs DELETE same table (con1 DROPs first).
+# Exercises tables_deleted_from ∩ dropped_tables.
+statement ok
+CREATE TABLE dl.drop_del(k INTEGER)
+
+statement ok
+INSERT INTO dl.drop_del SELECT i FROM range(8) t(i)
+
+statement ok con1
+BEGIN
+
+statement ok con2
+BEGIN
+
+statement ok con1
+DROP TABLE dl.drop_del
+
+statement ok con2
+DELETE FROM dl.drop_del WHERE k = 0
+
+statement ok con1
+COMMIT
+
+statement error con2
+COMMIT
+----
+<REGEX>:.*Transaction conflict.*delete from table.*dropped.*
+
+
+# Scenario K: concurrent INSERTs into same table — negative control.
+# insert/insert is commutative; both commits succeed.
+statement ok
+CREATE TABLE dl.ins_ins(k INTEGER)
+
+statement ok con1
+BEGIN
+
+statement ok con2
+BEGIN
+
+statement ok con1
+INSERT INTO dl.ins_ins VALUES (1)
+
+statement ok con2
+INSERT INTO dl.ins_ins VALUES (2)
+
+statement ok con1
+COMMIT
+
+statement ok con2
+COMMIT
+
+query I
+SELECT COUNT(*)::BIGINT FROM dl.ins_ins
+----
+2
+
+
+# Scenario E: stats_version CAS advances on each commit.
+# Sequence-allocated snapshot ids decouple from commit order, so
+# stats_version is what keeps ducklake_table_stats convergent.
+statement ok
+CREATE TABLE dl.stats_target(k INTEGER)
+
+statement ok
+INSERT INTO dl.stats_target VALUES (1)
+
+statement ok
+CREATE TEMP TABLE _v1 AS
+SELECT stats_version AS v FROM postgres_query('pg_meta',
+    'SELECT stats_version FROM metadata_pg_conflict_test.ducklake_table_stats
+     WHERE table_id = (SELECT table_id FROM metadata_pg_conflict_test.ducklake_table
+                       WHERE table_name = ''stats_target'' AND end_snapshot IS NULL)')
+
+statement ok
+INSERT INTO dl.stats_target VALUES (2)
+
+query I
+SELECT (SELECT stats_version FROM postgres_query('pg_meta',
+    'SELECT stats_version FROM metadata_pg_conflict_test.ducklake_table_stats
+     WHERE table_id = (SELECT table_id FROM metadata_pg_conflict_test.ducklake_table
+                       WHERE table_name = ''stats_target'' AND end_snapshot IS NULL)'))
+       > (SELECT v FROM _v1)
+----
+true
+
+
+# Scenario L: ALTER vs ALTER on same view.
+# Exercises altered_views ∩ altered_views.
+statement ok
+CREATE TABLE dl.view_base(a INTEGER)
+
+statement ok
+CREATE VIEW dl.dup_view AS SELECT a FROM dl.view_base
+
+statement ok con1
+BEGIN
+
+statement ok con2
+BEGIN
+
+statement ok con1
+COMMENT ON VIEW dl.dup_view IS 'comment-1'
+
+statement ok con2
+COMMENT ON VIEW dl.dup_view IS 'comment-2'
+
+statement ok con1
+COMMIT
+
+statement error con2
+COMMIT
+----
+<REGEX>:.*Transaction conflict.*alter view.*altered.*
+
+
+# Scenario M: DROP vs DROP same view.
+# Exercises dropped_views ∩ dropped_views.
+statement ok
+CREATE VIEW dl.drop_dup_view AS SELECT a FROM dl.view_base
+
+statement ok con1
+BEGIN
+
+statement ok con2
+BEGIN
+
+statement ok con1
+DROP VIEW dl.drop_dup_view
+
+statement ok con2
+DROP VIEW dl.drop_dup_view
+
+statement ok con1
+COMMIT
+
+statement error con2
+COMMIT
+----
+<REGEX>:.*Transaction conflict.*drop view.*dropped.*
+
+
+# Scenario N: COMPACT vs DELETE on same table (con1 compacts first).
+# Exercises tables_deleted_from ∩ tables_merge_adjacent.
+statement ok
+CREATE TABLE dl.compact_del(k INTEGER)
+
+statement ok
+INSERT INTO dl.compact_del SELECT i FROM range(8) t(i)
+
+statement ok
+INSERT INTO dl.compact_del SELECT i FROM range(8, 16) t(i)
+
+statement ok con1
+BEGIN
+
+statement ok con2
+BEGIN
+
+query III con1
+SELECT table_name, files_processed, files_created FROM ducklake_merge_adjacent_files('dl', 'compact_del')
+----
+compact_del	2	1
+
+statement ok con2
+DELETE FROM dl.compact_del WHERE k = 0
+
+statement ok con1
+COMMIT
+
+statement error con2
+COMMIT
+----
+<REGEX>:.*Transaction conflict.*delete from table.*compacted.*
+
+
+# Scenario O: DELETE vs COMPACT on same table (con1 deletes first).
+# Exercises tables_merge_adjacent ∩ tables_deleted_from.
+statement ok
+CREATE TABLE dl.del_compact(k INTEGER)
+
+statement ok
+INSERT INTO dl.del_compact SELECT i FROM range(8) t(i)
+
+statement ok
+INSERT INTO dl.del_compact SELECT i FROM range(8, 16) t(i)
+
+statement ok con1
+BEGIN
+
+statement ok con2
+BEGIN
+
+statement ok con1
+DELETE FROM dl.del_compact WHERE k = 0
+
+query III con2
+SELECT table_name, files_processed, files_created FROM ducklake_merge_adjacent_files('dl', 'del_compact')
+----
+del_compact	2	1
+
+statement ok con1
+COMMIT
+
+statement error con2
+COMMIT
+----
+<REGEX>:.*Transaction conflict.*compact table.*deleted.*
+
+
+# Scenario P: COMPACT vs COMPACT on same table.
+# Exercises tables_merge_adjacent ∩ tables_merge_adjacent.
+statement ok
+CREATE TABLE dl.compact_dup(k INTEGER)
+
+statement ok
+INSERT INTO dl.compact_dup SELECT i FROM range(8) t(i)
+
+statement ok
+INSERT INTO dl.compact_dup SELECT i FROM range(8, 16) t(i)
+
+statement ok con1
+BEGIN
+
+statement ok con2
+BEGIN
+
+query III con1
+SELECT table_name, files_processed, files_created FROM ducklake_merge_adjacent_files('dl', 'compact_dup')
+----
+compact_dup	2	1
+
+query III con2
+SELECT table_name, files_processed, files_created FROM ducklake_merge_adjacent_files('dl', 'compact_dup')
+----
+compact_dup	2	1
+
+statement ok con1
+COMMIT
+
+statement error con2
+COMMIT
+----
+<REGEX>:.*Transaction conflict.*compact table.*compacted.*
+
+
+# Scenario Q: COMPACT vs ALTER on same table (con1 compacts first).
+# Exercises altered_tables ∩ tables_merge_adjacent.
+statement ok
+CREATE TABLE dl.compact_alter(k INTEGER)
+
+statement ok
+INSERT INTO dl.compact_alter SELECT i FROM range(8) t(i)
+
+statement ok
+INSERT INTO dl.compact_alter SELECT i FROM range(8, 16) t(i)
+
+statement ok con1
+BEGIN
+
+statement ok con2
+BEGIN
+
+query III con1
+SELECT table_name, files_processed, files_created FROM ducklake_merge_adjacent_files('dl', 'compact_alter')
+----
+compact_alter	2	1
+
+statement ok con2
+ALTER TABLE dl.compact_alter ADD COLUMN x INTEGER
+
+statement ok con1
+COMMIT
+
+statement error con2
+COMMIT
+----
+<REGEX>:.*Transaction conflict.*alter table.*compacted.*
+
+
+# Scenario R: ALTER vs COMPACT on same table (con1 alters first).
+# Exercises tables_merge_adjacent ∩ altered_tables.
+statement ok
+CREATE TABLE dl.alter_compact(k INTEGER)
+
+statement ok
+INSERT INTO dl.alter_compact SELECT i FROM range(8) t(i)
+
+statement ok
+INSERT INTO dl.alter_compact SELECT i FROM range(8, 16) t(i)
+
+statement ok con1
+BEGIN
+
+statement ok con2
+BEGIN
+
+statement ok con1
+ALTER TABLE dl.alter_compact ADD COLUMN x INTEGER
+
+query III con2
+SELECT table_name, files_processed, files_created FROM ducklake_merge_adjacent_files('dl', 'alter_compact')
+----
+alter_compact	2	1
+
+statement ok con1
+COMMIT
+
+statement error con2
+COMMIT
+----
+<REGEX>:.*Transaction conflict.*compact table.*altered.*
+
+
+# Scenario S: ALTER view vs DROP view (con1 alters first).
+# Exercises dropped_views ∩ altered_views.
+statement ok
+CREATE TABLE dl.s_view_base(a INTEGER)
+
+statement ok
+CREATE VIEW dl.alter_drop_view AS SELECT a FROM dl.s_view_base
+
+statement ok con1
+BEGIN
+
+statement ok con2
+BEGIN
+
+statement ok con1
+COMMENT ON VIEW dl.alter_drop_view IS 'comment-1'
+
+statement ok con2
+DROP VIEW dl.alter_drop_view
+
+statement ok con1
+COMMIT
+
+statement error con2
+COMMIT
+----
+<REGEX>:.*Transaction conflict.*drop view.*altered.*
+
+
+# Scenario T: DROP view vs ALTER view (con1 drops first).
+# Exercises altered_views ∩ dropped_views.
+statement ok
+CREATE VIEW dl.drop_alter_view AS SELECT a FROM dl.s_view_base
+
+statement ok con1
+BEGIN
+
+statement ok con2
+BEGIN
+
+statement ok con1
+DROP VIEW dl.drop_alter_view
+
+statement ok con2
+COMMENT ON VIEW dl.drop_alter_view IS 'comment-2'
+
+statement ok con1
+COMMIT
+
+statement error con2
+COMMIT
+----
+<REGEX>:.*Transaction conflict.*alter view.*dropped.*
+
+
+# Smoke: concurrent CREATE TABLE collisions converge under load.
+# Tests outcome, not mechanism — catches contention regressions the
+# deterministic scenarios miss.
+concurrentloop i 0 8
+
+statement maybe
+CREATE TABLE dl.stress_dup(x INTEGER)
+----
+
+endloop
+
+query I
+SELECT COUNT(*)::BIGINT FROM postgres_query('pg_meta',
+    'SELECT 1 FROM metadata_pg_conflict_test.ducklake_table
+     WHERE table_name = ''stress_dup'' AND end_snapshot IS NULL')
+----
+1
