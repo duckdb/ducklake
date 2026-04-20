@@ -1839,6 +1839,7 @@ vector<DuckLakeCompactionFileEntry> DuckLakeMetadataManager::GetFilesForCompacti
 			    StringUtil::Format(" AND data.file_size_bytes >= %llu", options.min_file_size.GetIndex());
 		}
 		file_size_filter_clause += StringUtil::Format(" AND data.file_size_bytes < %llu", effective_max_file_size);
+		file_size_filter_clause += " AND data.end_snapshot IS NULL";
 	}
 	auto query = StringUtil::Format(R"(
 WITH snapshot_ranges AS (
