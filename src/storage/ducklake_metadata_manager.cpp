@@ -3599,8 +3599,8 @@ FROM {METADATA_CATALOG}.ducklake_snapshot
 WHERE snapshot_id = (
 	SELECT snapshot_id
 	FROM {METADATA_CATALOG}.ducklake_snapshot
-	WHERE snapshot_time %s= %s
-	ORDER BY snapshot_time %s
+	WHERE snapshot_time::TIMESTAMPTZ %s= %s
+	ORDER BY snapshot_time::TIMESTAMPTZ %s
 	LIMIT 1);)",
 		    timestamp_condition, val.DefaultCastAs(LogicalType::VARCHAR).ToSQLString(), timestamp_order));
 	} else {
@@ -3616,7 +3616,6 @@ WHERE snapshot_id = (
 	}
 	return snapshot;
 }
-
 
 static unordered_map<idx_t, DuckLakePartitionInfo>
 GetNewPartitions(const vector<DuckLakePartitionInfo> &old_partitions,
@@ -4187,7 +4186,7 @@ string DuckLakeMetadataManager::WriteDeleteRewrites(const vector<DuckLakeCompact
 				UPDATE {METADATA_CATALOG}.ducklake_delete_file SET end_snapshot = %llu
 				WHERE delete_file_id = %llu;
 				)",
-				                                  table_idx_last_snapshot[compaction.table_index.index],
+			                                  table_idx_last_snapshot[compaction.table_index.index],
 			                                  compaction.delete_file_id.index);
 		}
 		// We must update the data file table
