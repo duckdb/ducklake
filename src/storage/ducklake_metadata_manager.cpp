@@ -1272,11 +1272,25 @@ FilterSQLResult DuckLakeMetadataManager::ConvertFilterPushdownToSQL(const Filter
 			null_checks += stat + " IS NULL OR ";
 		}
 
+		const bool needs_value_count_guard =
+		    referenced_stats.count("min_value") > 0 || referenced_stats.count("max_value") > 0;
+		if (needs_value_count_guard) {
+			referenced_stats.insert("value_count");
+		}
+
 		if (!conditions.empty()) {
 			conditions += " AND ";
 		}
-		conditions += StringUtil::Format("data.data_file_id IN (SELECT data_file_id FROM %s WHERE %s(%s))", cte_name,
-		                                 null_checks.c_str(), filter_condition.c_str());
+		if (needs_value_count_guard) {
+			conditions += StringUtil::Format(
+			    "data.data_file_id IN (SELECT data_file_id FROM %s WHERE "
+			    "(value_count IS NULL OR value_count > 0) AND (%s(%s)))",
+			    cte_name, null_checks.c_str(), filter_condition.c_str());
+		} else {
+			conditions += StringUtil::Format(
+			    "data.data_file_id IN (SELECT data_file_id FROM %s WHERE %s(%s))", cte_name, null_checks.c_str(),
+			    filter_condition.c_str());
+		}
 
 		CTERequirement req(column_filter.column_field_index, referenced_stats);
 		result.required_ctes.emplace(column_filter.column_field_index, std::move(req));
