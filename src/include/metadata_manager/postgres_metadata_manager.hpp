@@ -34,11 +34,19 @@ public:
 
 	unique_ptr<QueryResult> Query(DuckLakeSnapshot snapshot, string &query) override;
 
+	idx_t AllocateNextSnapshotId(idx_t current_snapshot_id) override;
+	idx_t AllocateNextCatalogId(idx_t current_next_catalog_id) override;
+	idx_t AllocateNextFileId(idx_t current_next_file_id) override;
+
+	void EnsureIdSequences();
+
 protected:
 	string GetLatestSnapshotQuery() const override;
 
 private:
 	unique_ptr<QueryResult> ExecuteQuery(DuckLakeSnapshot snapshot, string &query, string command);
+
+	idx_t FetchScalarSequenceValue(const string &seq_name);
 };
 
 } // namespace duckdb

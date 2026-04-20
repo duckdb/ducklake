@@ -204,6 +204,10 @@ public:
 	virtual string WriteMergeAdjacent(const vector<DuckLakeCompactedFileInfo> &compactions);
 	virtual string WriteDeleteRewrites(const vector<DuckLakeCompactedFileInfo> &compactions);
 	virtual string WriteCompactions(const vector<DuckLakeCompactedFileInfo> &compactions, CompactionType type);
+	virtual idx_t AllocateNextSnapshotId(idx_t current_snapshot_id);
+	virtual idx_t AllocateNextCatalogId(idx_t current_next_catalog_id);
+	virtual idx_t AllocateNextFileId(idx_t current_next_file_id);
+
 	virtual string InsertSnapshot();
 	virtual string WriteSnapshotChanges(const SnapshotChangeInfo &change_info,
 	                                    const DuckLakeSnapshotCommit &commit_info);

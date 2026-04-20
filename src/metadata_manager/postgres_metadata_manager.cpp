@@ -127,6 +127,89 @@ string PostgresMetadataManager::GetLatestSnapshotQuery() const {
 	)";
 }
 
+idx_t PostgresMetadataManager::FetchScalarSequenceValue(const string &seq_name) {
+	DuckLakeSnapshot dummy {0, 0, 0, 0};
+	string query = "SELECT nextval('{METADATA_SCHEMA_ESCAPED}." + seq_name + "')";
+	auto result = Query(dummy, query);
+	if (result->HasError()) {
+		result->GetErrorObject().Throw("Failed to allocate next value from " + seq_name + ": ");
+	}
+	auto chunk = result->Fetch();
+	if (!chunk || chunk->size() == 0) {
+		throw InternalException("ducklake: %s returned no value from nextval()", seq_name);
+	}
+	auto v = chunk->data[0].GetValue(0).GetValue<int64_t>();
+	if (v < 0) {
+		throw InternalException("ducklake: %s returned negative value: %lld", seq_name, (long long)v);
+	}
+	return static_cast<idx_t>(v);
+}
+
+idx_t PostgresMetadataManager::AllocateNextSnapshotId(idx_t /*advisory*/) {
+	return FetchScalarSequenceValue("ducklake_snapshot_id_seq");
+}
+
+idx_t PostgresMetadataManager::AllocateNextCatalogId(idx_t /*advisory*/) {
+	return FetchScalarSequenceValue("ducklake_catalog_id_seq");
+}
+
+idx_t PostgresMetadataManager::AllocateNextFileId(idx_t /*advisory*/) {
+	return FetchScalarSequenceValue("ducklake_file_id_seq");
+}
+
+void PostgresMetadataManager::EnsureIdSequences() {
+	// One statement per call: postgres_execute drops all but the first of a batch.
+	DuckLakeSnapshot dummy {0, 0, 0, 0};
+
+	auto run = [&](string query) {
+		auto result = Execute(dummy, query);
+		if (result->HasError()) {
+			result->GetErrorObject().Throw("Failed to ensure DuckLake id sequences: ");
+		}
+	};
+
+	// file_id_seq needs MINVALUE 0: bootstrap next_file_id=0 and first allocation must return 0.
+	run("CREATE SEQUENCE IF NOT EXISTS {METADATA_SCHEMA_ESCAPED}.ducklake_snapshot_id_seq CACHE 1");
+	run("CREATE SEQUENCE IF NOT EXISTS {METADATA_SCHEMA_ESCAPED}.ducklake_catalog_id_seq CACHE 1");
+	run("CREATE SEQUENCE IF NOT EXISTS {METADATA_SCHEMA_ESCAPED}.ducklake_file_id_seq MINVALUE 0 START WITH 0 CACHE 1");
+	run(R"(SELECT setval(
+  '{METADATA_SCHEMA_ESCAPED}.ducklake_snapshot_id_seq',
+  GREATEST(
+    (SELECT last_value FROM {METADATA_SCHEMA_ESCAPED}.ducklake_snapshot_id_seq),
+    GREATEST(1, COALESCE((SELECT MAX(snapshot_id) FROM {METADATA_SCHEMA_ESCAPED}.ducklake_snapshot), 0))
+  ),
+  COALESCE((SELECT MAX(snapshot_id) FROM {METADATA_SCHEMA_ESCAPED}.ducklake_snapshot), 1) >= 1
+))");
+	run(R"(SELECT setval(
+  '{METADATA_SCHEMA_ESCAPED}.ducklake_catalog_id_seq',
+  GREATEST(
+    (SELECT last_value FROM {METADATA_SCHEMA_ESCAPED}.ducklake_catalog_id_seq),
+    GREATEST(1, COALESCE((SELECT MAX(next_catalog_id) - 1 FROM {METADATA_SCHEMA_ESCAPED}.ducklake_snapshot), 0))
+  ),
+  COALESCE((SELECT MAX(next_catalog_id) - 1 FROM {METADATA_SCHEMA_ESCAPED}.ducklake_snapshot), 0) >= 1
+))");
+	run(R"(SELECT setval(
+  '{METADATA_SCHEMA_ESCAPED}.ducklake_file_id_seq',
+  GREATEST(
+    (SELECT last_value FROM {METADATA_SCHEMA_ESCAPED}.ducklake_file_id_seq),
+    GREATEST(0, COALESCE((SELECT MAX(next_file_id) - 1 FROM {METADATA_SCHEMA_ESCAPED}.ducklake_snapshot), 0))
+  ),
+  COALESCE((SELECT MAX(next_file_id) - 1 FROM {METADATA_SCHEMA_ESCAPED}.ducklake_snapshot), 0) >= 1
+))");
+
+	// Name-uniqueness constraints replace the PK-violation signal the sequence
+	// allocator eliminates, so CheckForConflicts still fires on duplicate creates.
+	run("CREATE UNIQUE INDEX IF NOT EXISTS ducklake_schema_name_active_uidx "
+	    "ON {METADATA_SCHEMA_ESCAPED}.ducklake_schema (schema_name) "
+	    "WHERE end_snapshot IS NULL");
+	run("CREATE UNIQUE INDEX IF NOT EXISTS ducklake_table_name_active_uidx "
+	    "ON {METADATA_SCHEMA_ESCAPED}.ducklake_table (schema_id, table_name) "
+	    "WHERE end_snapshot IS NULL");
+	run("CREATE UNIQUE INDEX IF NOT EXISTS ducklake_view_name_active_uidx "
+	    "ON {METADATA_SCHEMA_ESCAPED}.ducklake_view (schema_id, view_name) "
+	    "WHERE end_snapshot IS NULL");
+}
+
 // We need a specialized function here to do a reinterpret for postgres from BLOB to VARCHAR
 shared_ptr<DuckLakeInlinedData>
 PostgresMetadataManager::TransformInlinedData(QueryResult &result, const vector<LogicalType> &expected_types) {

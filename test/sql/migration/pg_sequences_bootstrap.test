@@ -1,0 +1,97 @@
+# name: test/sql/migration/pg_sequences_bootstrap.test
+# description: verify EnsureIdSequences bootstraps from a pre-sequence catalog state
+# group: [migration]
+
+require notwindows
+
+require ducklake
+
+require parquet
+
+require postgres_scanner
+
+test-env DUCKLAKE_CONNECTION none
+
+test-env PG_METADATA_CONN none
+
+test-env DATA_PATH {TEST_DIR}
+
+# First attach creates the catalog with sequences.
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/ducklake_pg_seq_bootstrap', METADATA_SCHEMA 'metadata_s1')
+
+statement ok
+CREATE TABLE ducklake.tbl(key INTEGER);
+
+statement ok
+INSERT INTO ducklake.tbl VALUES (1), (2), (3);
+
+statement ok
+DETACH ducklake
+
+# Simulate a pre-sequence catalog by dropping the three sequences while
+# leaving the tables intact. EnsureIdSequences should re-create them on
+# the next attach and setval them to the current catalog state.
+statement ok
+ATTACH '{PG_METADATA_CONN}' AS pg_raw (TYPE postgres);
+
+statement ok
+CALL postgres_execute('pg_raw',
+    'DROP SEQUENCE IF EXISTS metadata_s1.ducklake_snapshot_id_seq;
+     DROP SEQUENCE IF EXISTS metadata_s1.ducklake_catalog_id_seq;
+     DROP SEQUENCE IF EXISTS metadata_s1.ducklake_file_id_seq;');
+
+# Verify sequences are gone
+query I
+SELECT COUNT(*)
+FROM pg_raw.pg_catalog.pg_class c
+JOIN pg_raw.pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+WHERE c.relkind = 'S'
+  AND n.nspname = 'metadata_s1'
+  AND c.relname IN ('ducklake_snapshot_id_seq', 'ducklake_catalog_id_seq', 'ducklake_file_id_seq');
+----
+0
+
+statement ok
+DETACH pg_raw
+
+# Re-attach — EnsureIdSequences hook must restore them
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/ducklake_pg_seq_bootstrap', METADATA_SCHEMA 'metadata_s1')
+
+statement ok
+ATTACH '{PG_METADATA_CONN}' AS pg_meta (TYPE postgres);
+
+# All three sequences exist again
+query I
+SELECT COUNT(*)
+FROM pg_meta.pg_catalog.pg_class c
+JOIN pg_meta.pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+WHERE c.relkind = 'S'
+  AND n.nspname = 'metadata_s1'
+  AND c.relname IN ('ducklake_snapshot_id_seq', 'ducklake_catalog_id_seq', 'ducklake_file_id_seq');
+----
+3
+
+# setval is correct: last_value >= MAX for all three counters (read via postgres_query
+# because postgres_scanner does not expose sequences as duckdb tables).
+query III
+SELECT snap_ok, cat_ok, fil_ok FROM postgres_query('pg_meta',
+    'SELECT
+       (SELECT last_value FROM metadata_s1.ducklake_snapshot_id_seq) >=
+         COALESCE((SELECT MAX(snapshot_id) FROM metadata_s1.ducklake_snapshot), 0) AS snap_ok,
+       (SELECT last_value FROM metadata_s1.ducklake_catalog_id_seq)  >=
+         COALESCE((SELECT MAX(next_catalog_id) - 1 FROM metadata_s1.ducklake_snapshot), 0) AS cat_ok,
+       (SELECT last_value FROM metadata_s1.ducklake_file_id_seq)     >=
+         COALESCE((SELECT MAX(next_file_id) - 1 FROM metadata_s1.ducklake_snapshot), 0) AS fil_ok');
+----
+true	true	true
+
+# Next commit must not PK-collide with existing rows
+statement ok
+INSERT INTO ducklake.tbl VALUES (4);
+
+query II
+SELECT COUNT(*), SUM(key) FROM ducklake.tbl;
+----
+4	10

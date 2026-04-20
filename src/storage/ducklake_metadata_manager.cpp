@@ -3413,6 +3413,18 @@ string DuckLakeMetadataManager::InsertSnapshot() {
 	return R"(INSERT INTO {METADATA_CATALOG}.ducklake_snapshot VALUES ({SNAPSHOT_ID}, NOW(), {SCHEMA_VERSION}, {NEXT_CATALOG_ID}, {NEXT_FILE_ID});)";
 }
 
+idx_t DuckLakeMetadataManager::AllocateNextSnapshotId(idx_t current_snapshot_id) {
+	return current_snapshot_id + 1;
+}
+
+idx_t DuckLakeMetadataManager::AllocateNextCatalogId(idx_t current_next_catalog_id) {
+	return current_next_catalog_id;
+}
+
+idx_t DuckLakeMetadataManager::AllocateNextFileId(idx_t current_next_file_id) {
+	return current_next_file_id;
+}
+
 static string SQLStringOrNull(const string &str) {
 	if (str.empty()) {
 		return "NULL";

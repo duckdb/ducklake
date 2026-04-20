@@ -159,6 +159,9 @@ void DuckLakeInitializer::InitializeNewDuckLake(DuckLakeTransaction &transaction
 	SetVersionedMetadataManager(transaction, version);
 	auto &metadata_manager = transaction.GetMetadataManager();
 	metadata_manager.InitializeDuckLake(has_explicit_schema, catalog.Encryption());
+	if (auto *pg_mgr = dynamic_cast<PostgresMetadataManager *>(&metadata_manager)) {
+		pg_mgr->EnsureIdSequences();
+	}
 	if (catalog.Encryption() == DuckLakeEncryption::AUTOMATIC) {
 		// default to unencrypted
 		catalog.SetEncryption(DuckLakeEncryption::UNENCRYPTED);
@@ -256,7 +259,11 @@ void DuckLakeInitializer::LoadExistingDuckLake(DuckLakeTransaction &transaction)
 	for (auto &entry : metadata.table_settings) {
 		options.table_options[entry.table_id][entry.tag.key] = entry.tag.value;
 	}
-	// set correct version metadata manager
+	if (options.access_mode != AccessMode::READ_ONLY) {
+		if (auto *pg_mgr = dynamic_cast<PostgresMetadataManager *>(&transaction.GetMetadataManager())) {
+			pg_mgr->EnsureIdSequences();
+		}
+	}
 	if (resolved_version != DuckLakeVersion::UNSET) {
 		SetVersionedMetadataManager(transaction, resolved_version);
 	}
