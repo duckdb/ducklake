@@ -425,7 +425,7 @@ static unique_ptr<MergeIntoOperator> DuckLakePlanMergeIntoAction(DuckLakeCatalog
 
 		// maybe wrap with InlineData if we hit the row limit
 		optional_ptr<DuckLakeInlineData> inline_data;
-		idx_t data_inlining_row_limit = catalog.GetInliningLimit(context, ducklake_table, update_op.types);
+		idx_t data_inlining_row_limit = catalog.GetInliningLimit(context, ducklake_table);
 		if (data_inlining_row_limit > 0) {
 			auto &inline_op =
 			    planner.Make<DuckLakeInlineData>(update_op, data_inlining_row_limit).Cast<DuckLakeInlineData>();

@@ -1,0 +1,140 @@
+# name: test/sql/data_inlining/postgres_identifier_limit.test
+# description: Tables with column names > 63 chars must not be inlined on postgres
+# group: [data_inlining]
+
+require ducklake
+
+require parquet
+
+require postgres_scanner
+
+test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+
+test-env DATA_PATH __TEST_DIR__
+
+statement ok
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/pg_id_limit_files', DATA_INLINING_ROW_LIMIT 10)
+
+# CREATE TABLE with a column name longer than 63 bytes must succeed and not create an inlined shell
+statement ok
+CREATE TABLE ducklake.long_create(a_very_long_column_name_that_exceeds_postgres_sixty_three_char_limitx INTEGER, b INTEGER);
+
+statement ok
+INSERT INTO ducklake.long_create VALUES (1, 2);
+
+query II
+SELECT * FROM ducklake.long_create;
+----
+1	2
+
+# Data in parquet
+query I
+SELECT COUNT(*) FROM GLOB('${DATA_PATH}/pg_id_limit_files/**/*.parquet')
+----
+1
+
+# CREATE TABLE AS with a long column name
+statement ok
+CREATE TABLE ducklake.long_ctas AS
+SELECT 1 AS another_really_long_column_name_that_also_exceeds_sixty_three_char_limitx;
+
+query I
+SELECT * FROM ducklake.long_ctas;
+----
+1
+
+# ALTER TABLE RENAME to a long name disables inlining for subsequent INSERTs
+statement ok
+CREATE TABLE ducklake.t_rename(x INTEGER);
+
+statement ok
+ALTER TABLE ducklake.t_rename RENAME x TO x_renamed_to_a_very_long_column_name_that_exceeds_pg_sixty_three_charx;
+
+statement ok
+INSERT INTO ducklake.t_rename VALUES (1);
+
+statement ok
+INSERT INTO ducklake.t_rename VALUES (2);
+
+query I
+SELECT COUNT(*) FROM ducklake.t_rename;
+----
+2
+
+# ALTER TABLE ADD COLUMN with long name disables inlining for subsequent INSERTs
+statement ok
+CREATE TABLE ducklake.t_add(x INTEGER);
+
+statement ok
+ALTER TABLE ducklake.t_add ADD COLUMN a_newly_added_column_with_a_name_that_exceeds_pg_sixty_three_chars_bytex INTEGER;
+
+statement ok
+INSERT INTO ducklake.t_add VALUES (1, 3);
+
+statement ok
+INSERT INTO ducklake.t_add VALUES (2, 4);
+
+query II
+SELECT * FROM ducklake.t_add ORDER BY x;
+----
+1	3
+2	4
+
+
+# this should inline
+statement ok
+CREATE TABLE ducklake.t_toggle(c INTEGER);
+
+statement ok
+INSERT INTO ducklake.t_toggle VALUES (1);
+
+query I
+SELECT COUNT(*) FROM GLOB('${DATA_PATH}/pg_id_limit_files/main/t_toggle/**/*.parquet')
+----
+0
+
+query I
+SELECT COUNT(*) FROM ducklake.t_toggle WHERE filename LIKE 'ducklake_inlined_data_%'
+----
+1
+
+# Rename to a long name -> inline bad
+statement ok
+ALTER TABLE ducklake.t_toggle RENAME c TO c_renamed_to_a_very_long_column_name_that_exceeds_pg_sixty_three_charx;
+
+statement ok
+INSERT INTO ducklake.t_toggle VALUES (2);
+
+query I
+SELECT COUNT(*) FROM GLOB('${DATA_PATH}/pg_id_limit_files/main/t_toggle/**/*.parquet')
+----
+1
+
+query I
+SELECT COUNT(*) FROM ducklake.t_toggle WHERE filename LIKE '%.parquet'
+----
+1
+
+# Rename back to a short name -> inline friend again
+statement ok
+ALTER TABLE ducklake.t_toggle RENAME c_renamed_to_a_very_long_column_name_that_exceeds_pg_sixty_three_charx TO c_short_again;
+
+statement ok
+INSERT INTO ducklake.t_toggle VALUES (3);
+
+query I
+SELECT COUNT(*) FROM GLOB('${DATA_PATH}/pg_id_limit_files/main/t_toggle/**/*.parquet')
+----
+1
+
+query I
+SELECT COUNT(*) FROM ducklake.t_toggle WHERE filename LIKE 'ducklake_inlined_data_%'
+----
+2
+
+query I
+SELECT c_short_again FROM ducklake.t_toggle ORDER BY c_short_again
+----
+1
+2
+3

@@ -80,15 +80,6 @@ bool DuckLakeMetadataManager::SupportsInlining(const LogicalType &type) {
 	return true;
 }
 
-bool DuckLakeMetadataManager::SupportsInliningTypes(const vector<LogicalType> &types) {
-	for (auto &type : types) {
-		if (TypeVisitor::Contains(type, [&](const LogicalType &t) { return !SupportsInlining(t); })) {
-			return false;
-		}
-	}
-	return true;
-}
-
 bool DuckLakeMetadataManager::SupportsInliningColumns(const vector<DuckLakeColumnInfo> &columns) {
 	for (auto &col : columns) {
 		auto col_type = DuckLakeTypes::FromString(col.type);
@@ -100,6 +91,35 @@ bool DuckLakeMetadataManager::SupportsInliningColumns(const vector<DuckLakeColum
 		}
 	}
 	return true;
+}
+
+bool DuckLakeMetadataManager::CanInlineColumns(const ColumnList &columns) {
+	auto max_identifier_length = MaxIdentifierLength();
+	for (auto &col : columns.Logical()) {
+		if (DuckLakeUtil::IsInlinedSystemColumn(col.Name())) {
+			return false;
+		}
+		if (col.Name().size() > max_identifier_length) {
+			return false;
+		}
+		if (TypeVisitor::Contains(col.Type(), [&](const LogicalType &t) { return !SupportsInlining(t); })) {
+			return false;
+		}
+	}
+	return true;
+}
+
+bool DuckLakeMetadataManager::CanInlineColumns(const vector<DuckLakeColumnInfo> &columns) {
+	auto max_identifier_length = MaxIdentifierLength();
+	for (auto &col : columns) {
+		if (DuckLakeUtil::IsInlinedSystemColumn(col.name)) {
+			return false;
+		}
+		if (col.name.size() > max_identifier_length) {
+			return false;
+		}
+	}
+	return SupportsInliningColumns(columns);
 }
 
 FileSystem &DuckLakeMetadataManager::GetFileSystem() {
@@ -2230,10 +2250,7 @@ string DuckLakeMetadataManager::WriteNewInlinedTables(DuckLakeSnapshot commit_sn
 			}
 		}
 		// FIXME: we are skipping columns that have conflicting names, we should resolve this
-		if (DuckLakeUtil::HasInlinedSystemColumnConflict(table_ptr->columns)) {
-			continue;
-		}
-		if (!SupportsInliningColumns(table_ptr->columns)) {
+		if (!CanInlineColumns(table_ptr->columns)) {
 			continue;
 		}
 		GetInlinedTableQueries(commit_snapshot, *table_ptr, inlined_tables, inlined_table_queries);
@@ -4389,11 +4406,11 @@ VALUES %s;
 
 	// delete based on table id -> ducklake_table_stats, ducklake_table_column_stats, ducklake_partition_info
 	if (!deleted_table_ids.empty()) {
-		tables_to_delete_from = {"ducklake_table",          "ducklake_table_stats",      "ducklake_table_column_stats",
-		                         "ducklake_partition_info", "ducklake_partition_column", "ducklake_column",
-		                         "ducklake_column_tag",     "ducklake_sort_info",        "ducklake_sort_expression",
-		                         "ducklake_schema_versions", "ducklake_inlined_data_tables",
-		                         "ducklake_column_mapping"};
+		tables_to_delete_from = {
+		    "ducklake_table",           "ducklake_table_stats",         "ducklake_table_column_stats",
+		    "ducklake_partition_info",  "ducklake_partition_column",    "ducklake_column",
+		    "ducklake_column_tag",      "ducklake_sort_info",           "ducklake_sort_expression",
+		    "ducklake_schema_versions", "ducklake_inlined_data_tables", "ducklake_column_mapping"};
 		for (auto &delete_tbl : tables_to_delete_from) {
 			auto result = transaction.Query(StringUtil::Format(R"(
 DELETE FROM {METADATA_CATALOG}.%s
