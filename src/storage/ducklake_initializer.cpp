@@ -36,13 +36,21 @@ string DuckLakeInitializer::GetAttachOptions() {
 			throw InternalException("Unsupported access mode in DuckLake attach");
 		}
 	}
+	bool has_isolation_level_override = false;
 	for (auto &option : options.metadata_parameters) {
 		attach_options.push_back(option.first + " " + option.second.ToSQLString());
+		if (StringUtil::Lower(option.first) == "isolation_level") {
+			has_isolation_level_override = true;
+		}
 	}
 	const string metadata_type = catalog.MetadataType();
 	if (metadata_type.empty() || metadata_type == "duckdb") {
 		// this is duckdb, we always do latest storage
 		attach_options.push_back(StringUtil::Format("STORAGE_VERSION '%s'", "latest"));
+	} else if (metadata_type == "postgres" && !has_isolation_level_override) {
+		// REPEATABLE READ pins one pg snapshot per DuckLake tx, hiding concurrent
+		// committers from CheckForConflicts. Override via meta_isolation_level.
+		attach_options.push_back("isolation_level 'read committed'");
 	}
 
 	if (attach_options.empty()) {

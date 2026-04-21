@@ -163,7 +163,7 @@ public:
 
 	void SetCommittedSnapshotId(idx_t value) {
 		lock_guard<mutex> guard(commit_lock);
-		// Max-update: sequence allocator lets concurrent commits arrive out of order.
+		// Max-update: sequence allocation decoupled from commit order.
 		if (!last_committed_snapshot.IsValid() || value > last_committed_snapshot.GetIndex()) {
 			last_committed_snapshot = value;
 		}

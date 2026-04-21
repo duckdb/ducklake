@@ -282,6 +282,9 @@ struct DuckLakeGlobalStatsInfo {
 	idx_t record_count;
 	idx_t next_row_id;
 	idx_t table_size_bytes;
+	// CAS predicate / target. Post-verified in FlushChanges.
+	idx_t stats_version = 0;
+	idx_t new_stats_version = 0;
 	vector<DuckLakeGlobalColumnStatsInfo> column_stats;
 };
 

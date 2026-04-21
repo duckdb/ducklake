@@ -161,8 +161,8 @@ CREATE TABLE {METADATA_CATALOG}.ducklake_file_column_stats(data_file_id BIGINT, 
 CREATE TABLE {METADATA_CATALOG}.ducklake_file_variant_stats(data_file_id BIGINT, table_id BIGINT, column_id BIGINT, variant_path VARCHAR, shredded_type VARCHAR, column_size_bytes BIGINT, value_count BIGINT, null_count BIGINT, min_value VARCHAR, max_value VARCHAR, contains_nan BOOLEAN, extra_stats VARCHAR);
 CREATE TABLE {METADATA_CATALOG}.ducklake_delete_file(delete_file_id BIGINT PRIMARY KEY, table_id BIGINT, begin_snapshot BIGINT, end_snapshot BIGINT, data_file_id BIGINT, path VARCHAR, path_is_relative BOOLEAN, format VARCHAR, delete_count BIGINT, file_size_bytes BIGINT, footer_size BIGINT, encryption_key VARCHAR, partial_max BIGINT);
 CREATE TABLE {METADATA_CATALOG}.ducklake_column(column_id BIGINT, begin_snapshot BIGINT, end_snapshot BIGINT, table_id BIGINT, column_order BIGINT, column_name VARCHAR, column_type VARCHAR, initial_default VARCHAR, default_value VARCHAR, nulls_allowed BOOLEAN, parent_column BIGINT, default_value_type VARCHAR, default_value_dialect VARCHAR);
-CREATE TABLE {METADATA_CATALOG}.ducklake_table_stats(table_id BIGINT, record_count BIGINT, next_row_id BIGINT, file_size_bytes BIGINT);
-CREATE TABLE {METADATA_CATALOG}.ducklake_table_column_stats(table_id BIGINT, column_id BIGINT, contains_null BOOLEAN, contains_nan BOOLEAN, min_value VARCHAR, max_value VARCHAR, extra_stats VARCHAR);
+CREATE TABLE {METADATA_CATALOG}.ducklake_table_stats(table_id BIGINT PRIMARY KEY, record_count BIGINT, next_row_id BIGINT, file_size_bytes BIGINT, stats_version BIGINT NOT NULL DEFAULT 0);
+CREATE TABLE {METADATA_CATALOG}.ducklake_table_column_stats(table_id BIGINT, column_id BIGINT, contains_null BOOLEAN, contains_nan BOOLEAN, min_value VARCHAR, max_value VARCHAR, extra_stats VARCHAR, PRIMARY KEY (table_id, column_id));
 CREATE TABLE {METADATA_CATALOG}.ducklake_partition_info(partition_id BIGINT, table_id BIGINT, begin_snapshot BIGINT, end_snapshot BIGINT);
 CREATE TABLE {METADATA_CATALOG}.ducklake_partition_column(partition_id BIGINT, table_id BIGINT, partition_key_index BIGINT, column_id BIGINT, transform VARCHAR);
 CREATE TABLE {METADATA_CATALOG}.ducklake_file_partition_value(data_file_id BIGINT, table_id BIGINT, partition_key_index BIGINT, partition_value VARCHAR);
@@ -303,7 +303,10 @@ UPDATE {METADATA_CATALOG}.ducklake_metadata SET value = '1.0' WHERE key = 'versi
 }
 
 void DuckLakeMetadataManager::MigrateV10() {
+	// Stats PKs deliberately NOT added: pg ADD PRIMARY KEY is not idempotent,
+	// concurrent init runs would race. Existing catalogs rely on CAS alone.
 	auto result = transaction.Query(R"(
+ALTER TABLE {METADATA_CATALOG}.ducklake_table_stats ADD COLUMN IF NOT EXISTS stats_version BIGINT NOT NULL DEFAULT 0;
 UPDATE {METADATA_CATALOG}.ducklake_metadata SET value = '1.1-dev1' WHERE key = 'version';
 	)");
 	if (result->HasError()) {
@@ -831,6 +834,10 @@ void TransformGlobalStatsRow(const ROW &row, vector<DuckLakeGlobalStatsInfo> &gl
 		new_entry.record_count = row.template GetValue<uint64_t>(2 + from_column);
 		new_entry.next_row_id = row.template GetValue<uint64_t>(3 + from_column);
 		new_entry.table_size_bytes = row.template GetValue<uint64_t>(4 + from_column);
+		const idx_t STATS_VERSION_COL = 10 + from_column;
+		if (!row.IsNull(STATS_VERSION_COL)) { // NULL on pre-migration rows
+			new_entry.stats_version = row.template GetValue<uint64_t>(STATS_VERSION_COL);
+		}
 		global_stats.push_back(std::move(new_entry));
 	}
 
@@ -896,7 +903,7 @@ vector<DuckLakeGlobalStatsInfo> TransformGlobalStats(QueryResult &result) {
 vector<DuckLakeGlobalStatsInfo> DuckLakeMetadataManager::GetGlobalTableStats(DuckLakeSnapshot snapshot) {
 	// query the most recent stats
 	auto result = transaction.Query(snapshot, R"(
-SELECT table_id, column_id, record_count, next_row_id, file_size_bytes, contains_null, contains_nan, min_value, max_value, extra_stats
+SELECT table_id, column_id, record_count, next_row_id, file_size_bytes, contains_null, contains_nan, min_value, max_value, extra_stats, stats_version
 FROM {METADATA_CATALOG}.ducklake_table_stats
 LEFT JOIN {METADATA_CATALOG}.ducklake_table_column_stats USING (table_id)
 WHERE record_count IS NOT NULL AND file_size_bytes IS NOT NULL
@@ -2402,7 +2409,9 @@ WHERE table_id = %d AND schema_version=(
 			// write the new inlined table
 			string inlined_tables;
 			string inlined_table_queries;
-			commit_snapshot.schema_version++;
+			// Race-free: physical name `ducklake_inlined_data_<tid>_<ver>` would
+			// collide under concurrent CREATE-inlined paths with a local ++.
+			commit_snapshot.schema_version = AllocateNextSchemaVersion(commit_snapshot.schema_version);
 			inlined_table_name =
 			    GetInlinedTableQueries(commit_snapshot, table_info, inlined_tables, inlined_table_queries);
 			batch_query += "INSERT INTO {METADATA_CATALOG}.ducklake_inlined_data_tables VALUES " + inlined_tables + ";";
@@ -3464,7 +3473,8 @@ SELECT
     NULL AS contains_nan,
     NULL AS min_value,
     NULL AS max_value,
-    NULL AS extra_stats
+    NULL AS extra_stats,
+    NULL AS stats_version
     FROM {METADATA_CATALOG}.ducklake_snapshot
     WHERE snapshot_id = (
         SELECT MAX(snapshot_id)
@@ -3485,7 +3495,8 @@ SELECT
     contains_nan,
     min_value,
     max_value,
-    extra_stats
+    extra_stats,
+    stats_version
 FROM {METADATA_CATALOG}.ducklake_table_stats
 LEFT JOIN {METADATA_CATALOG}.ducklake_table_column_stats
     USING (table_id)
@@ -3923,7 +3934,7 @@ string DuckLakeMetadataManager::UpdateGlobalTableStats(const DuckLakeGlobalStats
 
 	if (!stats.initialized) {
 		batch_query +=
-		    StringUtil::Format("INSERT INTO {METADATA_CATALOG}.ducklake_table_stats VALUES (%d, %d, %d, %d);",
+		    StringUtil::Format("INSERT INTO {METADATA_CATALOG}.ducklake_table_stats VALUES (%d, %d, %d, %d, 0);",
 		                       stats.table_id.index, stats.record_count, stats.next_row_id, stats.table_size_bytes);
 		string column_stats_values;
 		for (auto &col_stats : stats.column_stats) {
@@ -3938,11 +3949,13 @@ string DuckLakeMetadataManager::UpdateGlobalTableStats(const DuckLakeGlobalStats
 		batch_query += StringUtil::Format("INSERT INTO {METADATA_CATALOG}.ducklake_table_column_stats VALUES %s;",
 		                                  column_stats_values);
 	} else {
-		// stats have been initialized - update them
+		// CAS: stats_version=expected, set to unique new_stats_version.
+		// FlushChanges post-verifies via SELECT to detect silent rowcount=0.
 		batch_query += StringUtil::Format(
 		    "UPDATE {METADATA_CATALOG}.ducklake_table_stats SET record_count=%d, file_size_bytes=%d, "
-		    "next_row_id=%d WHERE table_id=%d;",
-		    stats.record_count, stats.table_size_bytes, stats.next_row_id, stats.table_id.index);
+		    "next_row_id=%d, stats_version=%d WHERE table_id=%d AND stats_version=%d;",
+		    stats.record_count, stats.table_size_bytes, stats.next_row_id, stats.new_stats_version,
+		    stats.table_id.index, stats.stats_version);
 		for (auto &col_stats : stats.column_stats) {
 			auto sql = ColumnStatsSQL::FromColumnStats(col_stats);
 			batch_query +=

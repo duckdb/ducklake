@@ -926,6 +926,10 @@ struct DuckLakeCommitState {
 	map<MappingIndex, MappingIndex> committed_mapping_indexes;
 	map<TableIndex, vector<DuckLakeDeleteFile>> local_delete_files;
 
+	// (table_id, expected new stats_version). FlushChanges post-verifies via
+	// SELECT to catch CAS UPDATEs that silently matched zero rows.
+	vector<std::pair<TableIndex, idx_t>> stats_verification;
+
 	idx_t AllocateCatalogId() const {
 		idx_t id = metadata_manager.AllocateNextCatalogId(commit_snapshot.next_catalog_id);
 		if (id + 1 > commit_snapshot.next_catalog_id) {
@@ -1934,9 +1938,13 @@ struct DuckLakeNewGlobalStats {
 };
 
 string DuckLakeTransaction::UpdateGlobalTableStats(TableIndex table_id,
-                                                   const DuckLakeNewGlobalStats &new_global_stats) {
+                                                   const DuckLakeNewGlobalStats &new_global_stats,
+                                                   idx_t expected_stats_version,
+                                                   idx_t new_stats_version) {
 	DuckLakeGlobalStatsInfo stats;
 	stats.table_id = table_id;
+	stats.stats_version = expected_stats_version;
+	stats.new_stats_version = new_stats_version;
 
 	stats.initialized = new_global_stats.initialized;
 	auto &new_stats = new_global_stats.stats;
@@ -2145,7 +2153,21 @@ NewDataInfo DuckLakeTransaction::GetNewDataFiles(string &batch_query, DuckLakeCo
 			}
 		}
 		// update the global stats for this table based on the newly written data
-		batch_query += UpdateGlobalTableStats(table_id, new_globals);
+		// CAS: expected = observed pre-commit version (0 if row uninitialised).
+		idx_t expected_stats_version = 0;
+		if (stats) {
+			for (auto &s : *stats) {
+				if (s.table_id == table_id) {
+					expected_stats_version = s.stats_version;
+					break;
+				}
+			}
+		}
+		idx_t new_stats_version = commit_state.commit_snapshot.snapshot_id;
+		batch_query += UpdateGlobalTableStats(table_id, new_globals, expected_stats_version, new_stats_version);
+		if (new_globals.initialized) {
+			commit_state.stats_verification.emplace_back(table_id, new_stats_version);
+		}
 	}
 	return result;
 }
@@ -2532,6 +2554,9 @@ bool RetryOnError(const string &original_message) {
 	    StringUtil::Contains(message, "connection reset")) {
 		return true;
 	}
+	if (StringUtil::Contains(message, "deadlock")) {
+		return true;
+	}
 	return false;
 }
 
@@ -2556,7 +2581,6 @@ void DuckLakeTransaction::FlushChanges() {
 	}
 
 	auto transaction_snapshot = GetSnapshot();
-	auto transaction_changes = GetTransactionChanges();
 	SnapshotAndStats commit_stats_snapshot;
 	auto &commit_snapshot = commit_stats_snapshot.snapshot;
 	optional_ptr<vector<DuckLakeGlobalStatsInfo>> stats;
@@ -2564,15 +2588,19 @@ void DuckLakeTransaction::FlushChanges() {
 		bool can_retry;
 		try {
 			can_retry = false;
-			// Must run every attempt: sequence allocator has no PK-violation
-			// retry, so logical conflicts only surface via this explicit check.
+			// Re-capture every attempt: tx-local state may have changed and
+			// stale tx_changes make CheckForConflicts miss real conflicts.
+			auto transaction_changes = GetTransactionChanges();
 			commit_stats_snapshot = CheckForConflicts(transaction_snapshot, transaction_changes);
 			stats = &commit_stats_snapshot.stats;
-			// Set before the allocator call so a pg connection fault retries.
 			can_retry = true;
+			// Must share the pg tx with AllocateNextSnapshotId below; release
+			// tied to COMMIT/ROLLBACK. Split breaks MAX(snapshot_id)-as-horizon.
+			metadata_manager->AcquireCommitLock();
 			commit_snapshot.snapshot_id = metadata_manager->AllocateNextSnapshotId(commit_snapshot.snapshot_id);
 			if (SchemaChangesMade()) {
-				commit_snapshot.schema_version++;
+				commit_snapshot.schema_version =
+				    metadata_manager->AllocateNextSchemaVersion(commit_snapshot.schema_version);
 			}
 			DuckLakeCommitState commit_state(commit_snapshot, *metadata_manager);
 			// write the new snapshot
@@ -2583,6 +2611,30 @@ void DuckLakeTransaction::FlushChanges() {
 			auto res = metadata_manager->Execute(commit_snapshot, batch_queries);
 			if (res->HasError()) {
 				res->GetErrorObject().Throw("Failed to flush changes into DuckLake: ");
+			}
+			// Own-writes visible pre-COMMIT. Row with a different stats_version
+			// means a concurrent committer's UPDATE won; our CAS matched zero.
+			for (auto &entry : commit_state.stats_verification) {
+				string check_sql = StringUtil::Format(
+				    "SELECT stats_version FROM {METADATA_CATALOG}.ducklake_table_stats WHERE table_id = %d",
+				    entry.first.index);
+				auto check_res = metadata_manager->Query(commit_snapshot, check_sql);
+				if (check_res->HasError()) {
+					check_res->GetErrorObject().Throw("Failed to verify stats_version post-commit: ");
+				}
+				auto chunk = check_res->Fetch();
+				if (!chunk || chunk->size() == 0) {
+					throw TransactionException(
+					    "concurrent update to ducklake_table_stats: row missing for table_id=%d, retrying",
+					    entry.first.index);
+				}
+				idx_t actual = chunk->data[0].GetValue(0).GetValue<uint64_t>();
+				if (actual != entry.second) {
+					throw TransactionException(
+					    "concurrent update to ducklake_table_stats detected (stats_version=%llu, "
+					    "expected=%llu for table_id=%d), retrying",
+					    (unsigned long long)actual, (unsigned long long)entry.second, entry.first.index);
+				}
 			}
 			connection->Commit();
 			catalog_version = commit_snapshot.schema_version;
