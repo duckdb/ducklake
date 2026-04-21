@@ -11,34 +11,34 @@ require icu
 statement ok
 SET TimeZone='UTC';
 
-test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
 
-test-env DATA_PATH __TEST_DIR__
+test-env DATA_PATH {TEST_DIR}
 
-
-statement ok
-ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake  (DATA_PATH '${DATA_PATH}/ducklake_add_files_type_timestamp')
 
 statement ok
-COPY (SELECT DATE '2000-01-01' AS col1) TO '${DATA_PATH}/date.parquet';
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake  (DATA_PATH '{DATA_PATH}/ducklake_add_files_type_timestamp')
 
 statement ok
-COPY (SELECT TIME '20:12:24'  AS col1) TO '${DATA_PATH}/time.parquet';
+COPY (SELECT DATE '2000-01-01' AS col1) TO '{DATA_PATH}/date.parquet';
 
 statement ok
-COPY (SELECT TIMESTAMP '2020-02-03 12:23:34.123456' AS col1) TO '${DATA_PATH}/timestamp.parquet';
+COPY (SELECT TIME '20:12:24'  AS col1) TO '{DATA_PATH}/time.parquet';
 
 statement ok
-COPY (SELECT TIMESTAMPTZ '2020-02-03 12:23:34.123456' AS col1) TO '${DATA_PATH}/timestamptz.parquet';
+COPY (SELECT TIMESTAMP '2020-02-03 12:23:34.123456' AS col1) TO '{DATA_PATH}/timestamp.parquet';
 
 statement ok
-COPY (SELECT TIMESTAMP_S '2020-02-03 12:23:34' AS col1) TO '${DATA_PATH}/timestamp_s.parquet';
+COPY (SELECT TIMESTAMPTZ '2020-02-03 12:23:34.123456' AS col1) TO '{DATA_PATH}/timestamptz.parquet';
 
 statement ok
-COPY (SELECT TIMESTAMP_MS '2020-02-03 12:23:34.123' AS col1) TO '${DATA_PATH}/timestamp_ms.parquet';
+COPY (SELECT TIMESTAMP_S '2020-02-03 12:23:34' AS col1) TO '{DATA_PATH}/timestamp_s.parquet';
 
 statement ok
-COPY (SELECT TIMESTAMP_NS '2020-02-03 12:23:34.123456789' AS col1) TO '${DATA_PATH}/timestamp_ns.parquet';
+COPY (SELECT TIMESTAMP_MS '2020-02-03 12:23:34.123' AS col1) TO '{DATA_PATH}/timestamp_ms.parquet';
+
+statement ok
+COPY (SELECT TIMESTAMP_NS '2020-02-03 12:23:34.123456789' AS col1) TO '{DATA_PATH}/timestamp_ns.parquet';
 
 ########
 # date #
@@ -47,17 +47,17 @@ statement ok
 CREATE OR REPLACE TABLE ducklake.test(col1 DATE);
 
 statement error
-CALL ducklake_add_data_files('ducklake', 'test', '${DATA_PATH}/timestamp.parquet')
+CALL ducklake_add_data_files('ducklake', 'test', '{DATA_PATH}/timestamp.parquet')
 ----
 TIMESTAMP
 
 statement error
-CALL ducklake_add_data_files('ducklake', 'test', '${DATA_PATH}/time.parquet')
+CALL ducklake_add_data_files('ducklake', 'test', '{DATA_PATH}/time.parquet')
 ----
 TIME
 
 statement ok
-CALL ducklake_add_data_files('ducklake', 'test', '${DATA_PATH}/date.parquet')
+CALL ducklake_add_data_files('ducklake', 'test', '{DATA_PATH}/date.parquet')
 
 query I
 FROM ducklake.test
@@ -71,17 +71,17 @@ statement ok
 CREATE OR REPLACE TABLE ducklake.test(col1 TIME);
 
 statement error
-CALL ducklake_add_data_files('ducklake', 'test', '${DATA_PATH}/timestamp.parquet')
+CALL ducklake_add_data_files('ducklake', 'test', '{DATA_PATH}/timestamp.parquet')
 ----
 TIMESTAMP
 
 statement error
-CALL ducklake_add_data_files('ducklake', 'test', '${DATA_PATH}/date.parquet')
+CALL ducklake_add_data_files('ducklake', 'test', '{DATA_PATH}/date.parquet')
 ----
 DATE
 
 statement ok
-CALL ducklake_add_data_files('ducklake', 'test', '${DATA_PATH}/time.parquet')
+CALL ducklake_add_data_files('ducklake', 'test', '{DATA_PATH}/time.parquet')
 
 query I
 FROM ducklake.test
@@ -97,7 +97,7 @@ CREATE OR REPLACE TABLE ducklake.test(col1 TIMESTAMP_S);
 foreach unaccepted_type date time timestamp_ns timestamptz
 
 statement error
-CALL ducklake_add_data_files('ducklake', 'test', '${DATA_PATH}/${unaccepted_type}.parquet')
+CALL ducklake_add_data_files('ducklake', 'test', '{DATA_PATH}/{unaccepted_type}.parquet')
 ----
 TIMESTAMP
 
@@ -106,7 +106,7 @@ endloop
 foreach accepted_type timestamp_s timestamp_ms timestamp
 
 statement ok
-CALL ducklake_add_data_files('ducklake', 'test', '${DATA_PATH}/${accepted_type}.parquet')
+CALL ducklake_add_data_files('ducklake', 'test', '{DATA_PATH}/{accepted_type}.parquet')
 
 endloop
 
@@ -126,7 +126,7 @@ CREATE OR REPLACE TABLE ducklake.test(col1 TIMESTAMP_MS);
 foreach unaccepted_type date time timestamp_ns timestamptz
 
 statement error
-CALL ducklake_add_data_files('ducklake', 'test', '${DATA_PATH}/${unaccepted_type}.parquet')
+CALL ducklake_add_data_files('ducklake', 'test', '{DATA_PATH}/{unaccepted_type}.parquet')
 ----
 TIMESTAMP
 
@@ -135,7 +135,7 @@ endloop
 foreach accepted_type timestamp_s timestamp_ms timestamp
 
 statement ok
-CALL ducklake_add_data_files('ducklake', 'test', '${DATA_PATH}/${accepted_type}.parquet')
+CALL ducklake_add_data_files('ducklake', 'test', '{DATA_PATH}/{accepted_type}.parquet')
 
 endloop
 
@@ -155,7 +155,7 @@ CREATE OR REPLACE TABLE ducklake.test(col1 TIMESTAMP);
 foreach unaccepted_type date time timestamptz
 
 statement error
-CALL ducklake_add_data_files('ducklake', 'test', '${DATA_PATH}/${unaccepted_type}.parquet')
+CALL ducklake_add_data_files('ducklake', 'test', '{DATA_PATH}/{unaccepted_type}.parquet')
 ----
 TIMESTAMP
 
@@ -164,7 +164,7 @@ endloop
 foreach accepted_type timestamp_s timestamp_ms timestamp timestamp_ns
 
 statement ok
-CALL ducklake_add_data_files('ducklake', 'test', '${DATA_PATH}/${accepted_type}.parquet')
+CALL ducklake_add_data_files('ducklake', 'test', '{DATA_PATH}/{accepted_type}.parquet')
 
 endloop
 
@@ -185,7 +185,7 @@ CREATE OR REPLACE TABLE ducklake.test(col1 TIMESTAMP_NS);
 foreach unaccepted_type date time timestamptz
 
 statement error
-CALL ducklake_add_data_files('ducklake', 'test', '${DATA_PATH}/${unaccepted_type}.parquet')
+CALL ducklake_add_data_files('ducklake', 'test', '{DATA_PATH}/{unaccepted_type}.parquet')
 ----
 TIMESTAMP
 
@@ -194,7 +194,7 @@ endloop
 foreach accepted_type timestamp_s timestamp_ms timestamp timestamp_ns
 
 statement ok
-CALL ducklake_add_data_files('ducklake', 'test', '${DATA_PATH}/${accepted_type}.parquet')
+CALL ducklake_add_data_files('ducklake', 'test', '{DATA_PATH}/{accepted_type}.parquet')
 
 endloop
 
@@ -215,14 +215,14 @@ CREATE OR REPLACE TABLE ducklake.test(col1 TIMESTAMPTZ);
 foreach unaccepted_type date time timestamp
 
 statement error
-CALL ducklake_add_data_files('ducklake', 'test', '${DATA_PATH}/${unaccepted_type}.parquet')
+CALL ducklake_add_data_files('ducklake', 'test', '{DATA_PATH}/{unaccepted_type}.parquet')
 ----
 TIMESTAMP
 
 endloop
 
 statement ok
-CALL ducklake_add_data_files('ducklake', 'test', '${DATA_PATH}/timestamptz.parquet')
+CALL ducklake_add_data_files('ducklake', 'test', '{DATA_PATH}/timestamptz.parquet')
 
 query I rowsort
 FROM ducklake.test

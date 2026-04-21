@@ -7,13 +7,13 @@ require ducklake
 require parquet
 
 # partitioning based on a column
-test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
 
-test-env DATA_PATH __TEST_DIR__
+test-env DATA_PATH {TEST_DIR}
 
 
 statement ok
-ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/ducklake_inlining_partitions', METADATA_CATALOG 'ducklake_metadata', DATA_INLINING_ROW_LIMIT 1000)
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/ducklake_inlining_partitions', METADATA_CATALOG 'ducklake_metadata', DATA_INLINING_ROW_LIMIT 1000)
 
 statement ok
 USE ducklake
@@ -27,13 +27,13 @@ ALTER TABLE partitioned_tbl SET PARTITIONED BY (year(ts), month(ts));
 loop i 0 10
 
 statement ok
-INSERT INTO partitioned_tbl SELECT i, TIMESTAMP '2020-01-01' + interval (i) hours, concat('thisisastring_', i) FROM range(1000 * ${i}, 1000 * (${i} + 1)) t(i)
+INSERT INTO partitioned_tbl SELECT i, TIMESTAMP '2020-01-01' + interval (i) hours, concat('thisisastring_', i) FROM range(1000 * {i}, 1000 * ({i} + 1)) t(i)
 
 endloop
 
 # all data is inlined
 query I
-SELECT COUNT(*) FROM GLOB('${DATA_PATH}/ducklake_inlining_partitions/main/partitioned_tbl/**')
+SELECT COUNT(*) FROM GLOB('{DATA_PATH}/ducklake_inlining_partitions/main/partitioned_tbl/**')
 ----
 0
 
@@ -62,7 +62,7 @@ main	partitioned_tbl	10000
 
 # we now have 14 files
 query I
-SELECT COUNT(*) FROM GLOB('${DATA_PATH}/ducklake_inlining_partitions/main/partitioned_tbl/**')
+SELECT COUNT(*) FROM GLOB('{DATA_PATH}/ducklake_inlining_partitions/main/partitioned_tbl/**')
 ----
 14
 
@@ -85,7 +85,7 @@ SELECT COUNT(*) FROM partitioned_tbl WHERE year(ts) = 2021
 # verify the result data is partitioned
 query II
 SELECT regexp_extract(path, '.*year=([0-9]+)[/\\].*', 1)::INT AS year_part, regexp_extract(path, '.*month=([0-9]+)[/\\].*', 1)::INT AS month_part
-FROM glob('${DATA_PATH}/ducklake_inlining_partitions/**') t(path) ORDER BY ALL
+FROM glob('{DATA_PATH}/ducklake_inlining_partitions/**') t(path) ORDER BY ALL
 ----
 2020	1
 2020	2

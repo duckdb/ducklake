@@ -6,13 +6,13 @@ require ducklake
 
 require parquet
 
-test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
 
-test-env DATA_PATH __TEST_DIR__
+test-env DATA_PATH {TEST_DIR}
 
 
 statement ok
-ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/ducklake_add_files_transaction_local');
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/ducklake_add_files_transaction_local');
 
 statement ok
 BEGIN
@@ -22,10 +22,10 @@ CREATE TABLE ducklake.test(col1 INTEGER, col2 VARCHAR);
 
 # write a parquet file outside of DuckLake
 statement ok
-COPY (SELECT 1 col1, 'hello world' col2) TO '${DATA_PATH}/my_file.parquet';
+COPY (SELECT 1 col1, 'hello world' col2) TO '{DATA_PATH}/my_file.parquet';
 
 statement ok
-CALL ducklake_add_data_files('ducklake', 'test', '${DATA_PATH}/my_file.parquet')
+CALL ducklake_add_data_files('ducklake', 'test', '{DATA_PATH}/my_file.parquet')
 
 query II
 FROM ducklake.test

@@ -450,7 +450,7 @@ static unique_ptr<MergeIntoOperator> DuckLakePlanMergeIntoAction(DuckLakeCatalog
 		break;
 	}
 	case MergeActionType::MERGE_DELETE: {
-		LogicalDelete delete_op(op.table, 0);
+		LogicalDelete delete_op(op.table, TableIndex(0));
 		delete_op.expressions.push_back(nullptr);
 
 		vector<LogicalType> row_id_types {LogicalType::VARCHAR, LogicalType::UBIGINT, LogicalType::BIGINT};
@@ -463,7 +463,7 @@ static unique_ptr<MergeIntoOperator> DuckLakePlanMergeIntoAction(DuckLakeCatalog
 		break;
 	}
 	case MergeActionType::MERGE_INSERT: {
-		LogicalInsert insert_op(op.table, 0);
+		LogicalInsert insert_op(op.table, TableIndex(0));
 		insert_op.bound_constraints = std::move(bound_constraints);
 		for (auto &def : op.bound_defaults) {
 			insert_op.bound_defaults.push_back(def->Copy());

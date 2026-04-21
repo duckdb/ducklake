@@ -7,7 +7,7 @@ require ducklake
 require parquet
 
 statement ok
-ATTACH 'ducklake:__TEST_DIR__/view_alias.db' AS dl (DATA_PATH '__TEST_DIR__/view_alias_data')
+ATTACH 'ducklake:{TEST_DIR}/view_alias.db' AS dl (DATA_PATH '{TEST_DIR}/view_alias_data')
 
 statement ok
 CREATE TABLE dl.t (id INT, val VARCHAR)
@@ -31,7 +31,7 @@ statement ok
 DETACH dl
 
 statement ok
-ATTACH 'ducklake:__TEST_DIR__/view_alias.db' AS dl (DATA_PATH '__TEST_DIR__/view_alias_data')
+ATTACH 'ducklake:{TEST_DIR}/view_alias.db' AS dl (DATA_PATH '{TEST_DIR}/view_alias_data')
 
 query II
 SELECT * FROM dl.v ORDER BY id
@@ -45,7 +45,7 @@ statement ok
 DETACH dl
 
 statement ok
-ATTACH 'ducklake:__TEST_DIR__/view_alias.db' AS dl2 (DATA_PATH '__TEST_DIR__/view_alias_data')
+ATTACH 'ducklake:{TEST_DIR}/view_alias.db' AS dl2 (DATA_PATH '{TEST_DIR}/view_alias_data')
 
 query II
 SELECT * FROM dl2.v ORDER BY id

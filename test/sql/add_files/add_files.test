@@ -6,13 +6,13 @@ require ducklake
 
 require parquet
 
-test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
 
-test-env DATA_PATH __TEST_DIR__
+test-env DATA_PATH {TEST_DIR}
 
 
 statement ok
-ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/ducklake_add_files/', METADATA_CATALOG 'metadata');
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/ducklake_add_files/', METADATA_CATALOG 'metadata');
 
 statement ok
 CREATE TABLE ducklake.test(col1 INTEGER, col2 VARCHAR);
@@ -25,14 +25,14 @@ CALL ducklake_flush_inlined_data('ducklake')
 
 # write a parquet file outside of DuckLake
 statement ok
-COPY (SELECT 200 col1, 'world' col2) TO '${DATA_PATH}/ducklake_add_files/main/test/my_file.parquet';
+COPY (SELECT 200 col1, 'world' col2) TO '{DATA_PATH}/ducklake_add_files/main/test/my_file.parquet';
 
 statement ok
 BEGIN
 
 # make its existence known to DuckLake
 statement ok
-CALL ducklake_add_data_files('ducklake', 'test', '${DATA_PATH}/ducklake_add_files/main/test/my_file.parquet')
+CALL ducklake_add_data_files('ducklake', 'test', '{DATA_PATH}/ducklake_add_files/main/test/my_file.parquet')
 
 query II
 FROM ducklake.test
@@ -51,13 +51,13 @@ FROM ducklake.test
 
 # reverse the order
 statement ok
-COPY (SELECT 'abcd' col2, 300 col1) TO '${DATA_PATH}/ducklake_add_files/main/test/my_file2.parquet';
+COPY (SELECT 'abcd' col2, 300 col1) TO '{DATA_PATH}/ducklake_add_files/main/test/my_file2.parquet';
 
 statement ok
 BEGIN
 
 statement ok
-CALL ducklake_add_data_files('ducklake', 'test', '${DATA_PATH}/ducklake_add_files/main/test/my_file2.parquet')
+CALL ducklake_add_data_files('ducklake', 'test', '{DATA_PATH}/ducklake_add_files/main/test/my_file2.parquet')
 
 query II
 FROM ducklake.test
@@ -96,10 +96,10 @@ FROM ducklake.test
 
 # we can add a new file
 statement ok
-COPY (SELECT 'efgh' col2, 400 col1, 50::TINYINT col3) TO '${DATA_PATH}/ducklake_add_files/main/test/my_file3.parquet';
+COPY (SELECT 'efgh' col2, 400 col1, 50::TINYINT col3) TO '{DATA_PATH}/ducklake_add_files/main/test/my_file3.parquet';
 
 statement ok
-CALL ducklake_add_data_files('ducklake', 'test', '${DATA_PATH}/ducklake_add_files/main/test/my_file3.parquet')
+CALL ducklake_add_data_files('ducklake', 'test', '{DATA_PATH}/ducklake_add_files/main/test/my_file3.parquet')
 
 query III
 FROM ducklake.test
@@ -149,10 +149,10 @@ statement ok
 ALTER TABLE ducklake.test ADD COLUMN col2 VARCHAR
 
 statement ok
-COPY (SELECT 'ijkl' col2, 500 col1, 100::TINYINT col3) TO '${DATA_PATH}/ducklake_add_files/main/test/my_file4.parquet';
+COPY (SELECT 'ijkl' col2, 500 col1, 100::TINYINT col3) TO '{DATA_PATH}/ducklake_add_files/main/test/my_file4.parquet';
 
 statement ok
-CALL ducklake_add_data_files('ducklake', 'test', '${DATA_PATH}/ducklake_add_files/main/test/my_file4.parquet')
+CALL ducklake_add_data_files('ducklake', 'test', '{DATA_PATH}/ducklake_add_files/main/test/my_file4.parquet')
 
 # col2 is NULL for the old columns, even though they have a column called col2
 query III
@@ -187,6 +187,6 @@ FROM ducklake.test AT (VERSION => getvariable('v_file3'))
 
 # file does not exist
 statement error
-CALL ducklake_add_data_files('ducklake', 'test', '${DATA_PATH}/abcd.parquet')
+CALL ducklake_add_data_files('ducklake', 'test', '{DATA_PATH}/abcd.parquet')
 ----
 Failed to add data files

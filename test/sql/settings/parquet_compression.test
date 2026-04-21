@@ -7,7 +7,7 @@ require ducklake
 require parquet
 
 statement ok
-ATTACH 'ducklake:__TEST_DIR__/ducklake_parquet_compression.db' AS ducklake (DATA_PATH '__TEST_DIR__/ducklake_parquet_compression')
+ATTACH 'ducklake:{TEST_DIR}/ducklake_parquet_compression.db' AS ducklake (DATA_PATH '{TEST_DIR}/ducklake_parquet_compression')
 
 statement ok
 CALL ducklake.set_option('parquet_compression', 'zstd')
@@ -26,14 +26,14 @@ CREATE TABLE ducklake.tbl AS SELECT i, 'hello world' || i str FROM range(100000)
 
 # zstd + v2 encodings are used
 query II
-SELECT DISTINCT compression, encodings FROM parquet_metadata('__TEST_DIR__/ducklake_parquet_compression/**') ORDER BY ALL
+SELECT DISTINCT compression, encodings FROM parquet_metadata('{TEST_DIR}/ducklake_parquet_compression/**') ORDER BY ALL
 ----
 ZSTD	DELTA_BINARY_PACKED
 ZSTD	DELTA_LENGTH_BYTE_ARRAY
 
 # we have two row groups (of up to 64K rows)
 query I
-SELECT COUNT(DISTINCT row_group_id) FROM parquet_metadata('__TEST_DIR__/ducklake_parquet_compression/**') ORDER BY ALL
+SELECT COUNT(DISTINCT row_group_id) FROM parquet_metadata('{TEST_DIR}/ducklake_parquet_compression/**') ORDER BY ALL
 ----
 2
 
@@ -42,13 +42,13 @@ statement ok
 DETACH ducklake
 
 statement ok
-ATTACH 'ducklake:__TEST_DIR__/ducklake_parquet_compression.db' AS ducklake (DATA_PATH '__TEST_DIR__/ducklake_parquet_compression')
+ATTACH 'ducklake:{TEST_DIR}/ducklake_parquet_compression.db' AS ducklake (DATA_PATH '{TEST_DIR}/ducklake_parquet_compression')
 
 statement ok
 INSERT INTO ducklake.tbl VALUES (42, 'hello world');
 
 query II
-SELECT DISTINCT compression, encodings FROM parquet_metadata('__TEST_DIR__/ducklake_parquet_compression/**') ORDER BY ALL
+SELECT DISTINCT compression, encodings FROM parquet_metadata('{TEST_DIR}/ducklake_parquet_compression/**') ORDER BY ALL
 ----
 ZSTD	DELTA_BINARY_PACKED
 ZSTD	DELTA_LENGTH_BYTE_ARRAY

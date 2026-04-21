@@ -8,13 +8,13 @@ require ducklake
 
 require parquet
 
-test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
 
-test-env DATA_PATH __TEST_DIR__
+test-env DATA_PATH {TEST_DIR}
 
 
 statement ok
-ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/ducklake_concurrent_insert_inline_files')
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/ducklake_concurrent_insert_inline_files')
 
 statement ok
 CREATE TABLE ducklake.tbl(key INTEGER);
@@ -25,7 +25,7 @@ CALL ducklake.set_option('data_inlining_row_limit', 10);
 concurrentloop i 0 2
 
 query I
-INSERT INTO ducklake.tbl VALUES (${i})
+INSERT INTO ducklake.tbl VALUES ({i})
 ----
 1
 
@@ -37,11 +37,11 @@ SELECT COUNT(*), SUM(key) FROM ducklake.tbl
 2	1
 
 query I
-SELECT COUNT(*) FROM glob('${DATA_PATH}/ducklake_concurrent_insert_inline_files/**')
+SELECT COUNT(*) FROM glob('{DATA_PATH}/ducklake_concurrent_insert_inline_files/**')
 ----
 0
 
 query I
 SELECT stats(key) FROM ducklake.tbl LIMIT 1
 ----
-<REGEX>:.*Min: 0, Max: 1.*
+<REGEX>:.*max.*1.*min.*0.*

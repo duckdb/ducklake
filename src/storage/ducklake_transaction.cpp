@@ -775,7 +775,7 @@ void GetTransactionTableChanges(reference<CatalogEntry> table_entry, Transaction
 			// this table was altered in a way that modifies the ducklake_schema_versions
 			auto table_id = table.GetTableId();
 			// don't report transaction-local tables yet - these will get added later on
-			if (!table_id.IsTransactionLocal()) {
+			if (!IsTransactionLocal(table_id)) {
 				changes.altered_tables.insert(table_id);
 				changes.altered_tables_with_schema_version_changes.insert(table_id);
 			}
@@ -788,7 +788,7 @@ void GetTransactionTableChanges(reference<CatalogEntry> table_entry, Transaction
 			// ducklake_schema_versions)
 			auto table_id = table.GetTableId();
 			// don't report transaction-local tables yet - these will get added later on
-			if (!table_id.IsTransactionLocal()) {
+			if (!IsTransactionLocal(table_id)) {
 				changes.altered_tables.insert(table_id);
 			}
 			break;
@@ -819,7 +819,7 @@ void GetTransactionViewChanges(reference<CatalogEntry> view_entry, TransactionCh
 			// this table was altered
 			auto view_id = view.GetViewId();
 			// don't report transaction-local views yet - these will get added later on
-			if (!view_id.IsTransactionLocal()) {
+			if (!IsTransactionLocal(view_id)) {
 				changes.altered_views.insert(view_id);
 			}
 			break;
@@ -903,7 +903,7 @@ TransactionChangeInformation DuckLakeTransaction::GetTransactionChanges() const 
 	changes.tables_deleted_from = tables_deleted_from;
 	for (auto &entry : local_changes.Changes()) {
 		auto table_id = entry.GetTableIndex();
-		if (table_id.IsTransactionLocal()) {
+		if (IsTransactionLocal(table_id.index)) {
 			// don't report transaction-local tables yet - these will get added later on
 			continue;
 		}
@@ -1372,7 +1372,7 @@ DuckLakePartitionInfo DuckLakeTransaction::GetNewPartitionKey(DuckLakeCommitStat
                                                               DuckLakeTableEntry &table) {
 	DuckLakePartitionInfo partition_key;
 	partition_key.table_id = commit_state.GetTableId(table);
-	if (partition_key.table_id.IsTransactionLocal()) {
+	if (IsTransactionLocal(partition_key.table_id.index)) {
 		throw InternalException("Trying to write partition with transaction local table-id");
 	}
 	// insert the new partition data
@@ -1420,7 +1420,7 @@ DuckLakePartitionInfo DuckLakeTransaction::GetNewPartitionKey(DuckLakeCommitStat
 DuckLakeSortInfo DuckLakeTransaction::GetNewSortKey(DuckLakeCommitState &commit_state, DuckLakeTableEntry &table) {
 	DuckLakeSortInfo sort_key;
 	sort_key.table_id = commit_state.GetTableId(table);
-	if (sort_key.table_id.IsTransactionLocal()) {
+	if (IsTransactionLocal(sort_key.table_id.index)) {
 		throw InternalException("Trying to write sort with transaction local table-id");
 	}
 
@@ -1477,7 +1477,7 @@ DuckLakeTableInfo DuckLakeTransaction::GetNewTable(DuckLakeCommitState &commit_s
 	auto table_entry = table.GetTableInfo();
 	auto original_id = table_entry.id;
 	bool is_new_table;
-	if (original_id.IsTransactionLocal()) {
+	if (IsTransactionLocal(original_id.index)) {
 		table_entry.id = TableIndex(commit_state.commit_snapshot.next_catalog_id++);
 		is_new_table = true;
 	} else {
@@ -1776,7 +1776,7 @@ DuckLakeViewInfo DuckLakeTransaction::GetNewView(DuckLakeCommitState &commit_sta
 	auto &schema = view.ParentSchema().Cast<DuckLakeSchemaEntry>();
 	DuckLakeViewInfo view_entry;
 	auto original_id = view.GetViewId();
-	if (original_id.IsTransactionLocal()) {
+	if (IsTransactionLocal(original_id.index)) {
 		view_entry.id = TableIndex(commit_state.commit_snapshot.next_catalog_id++);
 	} else {
 		// this view already has an id - keep it
@@ -2070,7 +2070,7 @@ NewDataInfo DuckLakeTransaction::GetNewDataFiles(string &batch_query, DuckLakeCo
 	}
 	for (auto &entry : local_changes.Changes()) {
 		auto table_id = commit_state.GetTableId(entry.GetTableIndex());
-		if (table_id.IsTransactionLocal()) {
+		if (IsTransactionLocal(table_id.index)) {
 			throw InternalException("Cannot commit transaction local files - these should have been cleaned up before");
 		}
 		auto &table_changes = entry.GetTableChanges();
@@ -2256,7 +2256,7 @@ NewNameMapInfo DuckLakeTransaction::GetNewNameMaps(DuckLakeCommitState &commit_s
 		map_info.table_id = commit_state.GetTableId(mapping.table_id);
 		map_info.mapping_id = new_map_id;
 		map_info.map_type = "map_by_name";
-		if (map_info.table_id.IsTransactionLocal()) {
+		if (IsTransactionLocal(map_info.table_id.index)) {
 			throw InternalException("table_id should be rewritten to non-transaction local before");
 		}
 
@@ -2428,14 +2428,14 @@ string DuckLakeTransaction::CommitChanges(DuckLakeCommitState &commit_state,
 	// Tracking for tables that had schema changes
 	set<TableIndex> tables_with_schema_changes;
 	for (auto &table_id : transaction_changes.altered_tables) {
-		if (!table_id.IsTransactionLocal() &&
+		if (!IsTransactionLocal(table_id.index) &&
 		    transaction_changes.altered_tables_with_schema_version_changes.find(table_id) !=
 		        transaction_changes.altered_tables_with_schema_version_changes.end()) {
 			tables_with_schema_changes.insert(table_id);
 		}
 	}
 	for (auto &new_table : new_tables_result) {
-		if (!new_table.id.IsTransactionLocal()) {
+		if (!IsTransactionLocal(new_table.id.index)) {
 			tables_with_schema_changes.insert(new_table.id);
 		}
 	}

@@ -61,7 +61,7 @@ static void AddSnapshotFilter(BaseFileReader &reader, const ColumnIndex &col_idx
                               idx_t snapshot_value, ExpressionType comparison_type) {
 	auto constant = Value::UBIGINT(snapshot_value).DefaultCastAs(col_type);
 	auto filter = make_uniq<ConstantFilter>(comparison_type, std::move(constant));
-	reader.filters->PushFilter(col_idx, std::move(filter));
+	reader.filters->PushFilter(ProjectionIndex(col_idx.GetPrimaryIndex()), std::move(filter));
 }
 
 // recursively normalize LIST child names from legacy formats blame legacy Avro/Parquet formats
@@ -636,7 +636,7 @@ void DuckLakeMultiFileReader::GatherDeletionScanSnapshots(BaseFileReader &reader
 
 	idx_t count = chunk.size();
 	snapshot_vector.Flatten(count);
-	auto snapshot_data = FlatVector::GetData<int64_t>(snapshot_vector);
+	auto snapshot_data = FlatVector::GetDataMutable<int64_t>(snapshot_vector);
 
 	UnifiedVectorFormat row_id_data;
 	rowid_vector.ToUnifiedFormat(count, row_id_data);
@@ -668,7 +668,7 @@ void DuckLakeMultiFileReader::GatherDeletionScanSnapshots(BaseFileReader &reader
 
 		auto snapshot = delete_filter.delete_data->GetSnapshotForRow(lookup_key);
 		if (snapshot.IsValid()) {
-			snapshot_data[i] = NumericCast<int64_t>(snapshot.GetIndex());
+			snapshot_data[i] = snapshot.GetIndex();
 		}
 	}
 }

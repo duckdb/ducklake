@@ -1,0 +1,106 @@
+# name: test/sql/partitioning/partition_nop_schema_version.test
+# description: Verify repeated SET PARTITIONED BY does not increment schema_version or block compaction
+# group: [partitioning]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/partition_nop_schema_version')
+
+statement ok
+CREATE TABLE ducklake.test(part_key INTEGER, value VARCHAR);
+
+query I
+SELECT max(schema_version) FROM __ducklake_metadata_ducklake.ducklake_schema_versions WHERE table_id = 1
+----
+1
+
+statement ok
+ALTER TABLE ducklake.test SET PARTITIONED BY (part_key);
+
+query I
+SELECT max(schema_version) FROM __ducklake_metadata_ducklake.ducklake_schema_versions WHERE table_id = 1
+----
+2
+
+statement ok
+CALL ducklake.set_option('data_inlining_row_limit', 0);
+
+statement ok
+INSERT INTO ducklake.test VALUES (1, 'before_1'), (1, 'before_2');
+
+query I
+SELECT COUNT(*) FROM ducklake_list_files('ducklake', 'test')
+----
+1
+
+query I
+SELECT COUNT(*) FROM GLOB('{DATA_PATH}/partition_nop_schema_version/**/*.parquet')
+----
+1
+
+# Setting the same partitioning again should be a no-op for schema versions too.
+statement ok
+ALTER TABLE ducklake.test SET PARTITIONED BY (part_key);
+
+query I
+SELECT max(schema_version) FROM __ducklake_metadata_ducklake.ducklake_schema_versions WHERE table_id = 1
+----
+2
+
+statement ok
+CALL ducklake.set_option('data_inlining_row_limit', 0);
+
+statement ok
+INSERT INTO ducklake.test VALUES (1, 'after_1'), (1, 'after_2');
+
+query I
+SELECT COUNT(*) FROM ducklake_list_files('ducklake', 'test')
+----
+2
+
+query I
+SELECT COUNT(*) FROM GLOB('{DATA_PATH}/partition_nop_schema_version/**/*.parquet')
+----
+2
+
+query III
+SELECT table_name, files_processed, files_created
+FROM ducklake_merge_adjacent_files('ducklake', 'test')
+----
+test	2	1
+
+statement ok
+CALL ducklake_cleanup_old_files('ducklake', cleanup_all => true);
+
+query I
+SELECT COUNT(*) FROM ducklake_list_files('ducklake', 'test')
+----
+1
+
+query I
+SELECT COUNT(*) FROM GLOB('{DATA_PATH}/partition_nop_schema_version/**/*.parquet')
+----
+1
+
+query II
+SELECT part_key, value FROM ducklake.test ORDER BY ALL
+----
+1	after_1
+1	after_2
+1	before_1
+1	before_2
+
+statement ok
+ALTER TABLE ducklake.test SET PARTITIONED BY (part_key, value);
+
+query I
+SELECT max(schema_version) FROM __ducklake_metadata_ducklake.ducklake_schema_versions WHERE table_id = 1
+----
+3

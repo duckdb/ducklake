@@ -6,12 +6,12 @@ require ducklake
 
 require parquet
 
-test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
 
-test-env DATA_PATH __TEST_DIR__
+test-env DATA_PATH {TEST_DIR}
 
 statement ok
-ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/count_star_file_ops')
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/count_star_file_ops')
 
 # ============================================
 # 1. Test COUNT(*) with ducklake_merge_adjacent_files
@@ -155,7 +155,7 @@ SELECT COUNT(*) FROM ducklake.rewrite_test;
 
 # create external parquet file with matching type
 statement ok
-COPY (SELECT i::INTEGER AS i FROM range(200) t(i)) TO '${DATA_PATH}/external_data.parquet';
+COPY (SELECT i::INTEGER AS i FROM range(200) t(i)) TO '{DATA_PATH}/external_data.parquet';
 
 statement ok
 CREATE TABLE ducklake.add_files_test(i INTEGER);
@@ -170,7 +170,7 @@ SELECT COUNT(*) FROM ducklake.add_files_test;
 
 # add external file
 statement ok
-CALL ducklake_add_data_files('ducklake', 'add_files_test', ['${DATA_PATH}/external_data.parquet']);
+CALL ducklake_add_data_files('ducklake', 'add_files_test', ['{DATA_PATH}/external_data.parquet']);
 
 query I
 SELECT COUNT(*) FROM ducklake.add_files_test;
@@ -194,7 +194,7 @@ statement ok
 DETACH ducklake;
 
 statement ok
-ATTACH 'ducklake:${DUCKLAKE_CONNECTION}_flush' AS ducklake (DATA_PATH '${DATA_PATH}/count_star_flush', DATA_INLINING_ROW_LIMIT 100)
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}_flush' AS ducklake (DATA_PATH '{DATA_PATH}/count_star_flush', DATA_INLINING_ROW_LIMIT 100)
 
 statement ok
 CREATE TABLE ducklake.flush_test(i INTEGER);

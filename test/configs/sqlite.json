@@ -13,7 +13,7 @@
   ],
   "test_env": [{
       "env_name":  "DUCKLAKE_CONNECTION",
-      "env_value": "sqlite:__TEST_DIR__/{BASE_TEST_NAME}.db"
+      "env_value": "sqlite:{TEST_DIR}/{BASE_TEST_NAME}.db"
    }],
   "skip_error_messages": ["database is locked"],
   "skip_tests": [

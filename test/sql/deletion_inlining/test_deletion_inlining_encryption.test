@@ -8,12 +8,12 @@ require parquet
 
 require httpfs
 
-test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
 
-test-env DATA_PATH __TEST_DIR__
+test-env DATA_PATH {TEST_DIR}
 
 statement ok
-ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/ducklake_deletion_inlining_encryption', ENCRYPTED, DATA_INLINING_ROW_LIMIT 10)
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/ducklake_deletion_inlining_encryption', ENCRYPTED, DATA_INLINING_ROW_LIMIT 10)
 
 statement ok
 use ducklake
@@ -36,7 +36,7 @@ SELECT COUNT(*), SUM(a) FROM t
 45	1215
 
 query I
-SELECT COUNT(*) FROM GLOB('${DATA_PATH}/ducklake_deletion_inlining_encryption/**/*-delete.parquet')
+SELECT COUNT(*) FROM GLOB('{DATA_PATH}/ducklake_deletion_inlining_encryption/**/*-delete.parquet')
 ----
 0
 
@@ -44,12 +44,12 @@ statement ok
 CALL ducklake_flush_inlined_data('ducklake')
 
 query I
-SELECT COUNT(*) FROM GLOB('${DATA_PATH}/ducklake_deletion_inlining_encryption/**/*-delete.parquet')
+SELECT COUNT(*) FROM GLOB('{DATA_PATH}/ducklake_deletion_inlining_encryption/**/*-delete.parquet')
 ----
 1
 
 statement error
-SELECT * FROM '${DATA_PATH}/ducklake_deletion_inlining_encryption/**/*-delete.parquet'
+SELECT * FROM '{DATA_PATH}/ducklake_deletion_inlining_encryption/**/*-delete.parquet'
 ----
 encrypted
 

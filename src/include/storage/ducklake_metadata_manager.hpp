@@ -131,6 +131,10 @@ public:
 
 	//! Initialize a new DuckLake
 	virtual void InitializeDuckLake(bool has_explicit_schema, DuckLakeEncryption encryption);
+	//! Get the CREATE TABLE statements for all metadata tables
+	virtual string GetCreateTableStatements();
+	//! Get the version string written to ducklake_metadata
+	virtual string GetVersionString();
 	virtual DuckLakeMetadata LoadDuckLake();
 
 	virtual unique_ptr<QueryResult> Execute(DuckLakeSnapshot snapshot, string &query);
@@ -253,6 +257,7 @@ public:
 	virtual void MigrateV02(bool allow_failures = false);
 	virtual void MigrateV03(bool allow_failures = false);
 	virtual void MigrateV04();
+	virtual void MigrateV10();
 	virtual void ExecuteMigration(string migrate_query, bool allow_failures, const string &from_version,
 	                              const string &to_version);
 
