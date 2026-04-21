@@ -25,7 +25,7 @@
 #include "duckdb/planner/expression/bound_aggregate_expression.hpp"
 #include "storage/ducklake_delete.hpp"
 #include "storage/ducklake_delete_filter.hpp"
-
+#include "duckdb/common/types/blob.hpp"
 #include "functions/ducklake_compaction_functions.hpp"
 #include "storage/ducklake_sort_data.hpp"
 
@@ -475,7 +475,8 @@ LEFT JOIN (
 					file_info.existing_delete_path_is_relative = chunk->GetValue(7, row_idx).GetValue<bool>();
 					file_info.existing_delete_begin_snapshot = chunk->GetValue(8, row_idx).GetValue<idx_t>();
 					if (!chunk->GetValue(9, row_idx).IsNull()) {
-						file_info.existing_delete_encryption_key = chunk->GetValue(9, row_idx).GetValue<string>();
+						file_info.existing_delete_encryption_key =
+						    Blob::FromBase64(chunk->GetValue(9, row_idx).GetValue<string>());
 					}
 					if (!chunk->GetValue(10, row_idx).IsNull()) {
 						file_info.existing_delete_format =
