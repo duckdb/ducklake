@@ -212,9 +212,9 @@ FROM parquet_full_metadata(%s)
 		auto &parquet_schema_vec = chunk.data[2];
 
 		// Access the underlying list data directly
-		auto &file_metadata_list_entries = ListVector::GetEntry(file_metadata_vec);
-		auto &parquet_metadata_list_entries = ListVector::GetEntry(parquet_metadata_vec);
-		auto &parquet_schema_list_entries = ListVector::GetEntry(parquet_schema_vec);
+		auto &file_metadata_list_entries = ListVector::GetChildMutable(file_metadata_vec);
+		auto &parquet_metadata_list_entries = ListVector::GetChildMutable(parquet_metadata_vec);
+		auto &parquet_schema_list_entries = ListVector::GetChildMutable(parquet_schema_vec);
 		auto file_metadata_list_data = FlatVector::GetData<list_entry_t>(file_metadata_vec);
 		auto parquet_metadata_list_data = FlatVector::GetData<list_entry_t>(parquet_metadata_vec);
 		auto parquet_schema_list_data = FlatVector::GetData<list_entry_t>(parquet_schema_vec);
@@ -1237,8 +1237,8 @@ DuckLakeDataFile DuckLakeFileProcessor::AddFileToTable(ParquetFileMetadata &file
 			field_partition_key_map[partition_fields.field_id.index] = partition_fields.partition_key_index;
 		}
 		for (auto &hive_partition : file.hive_partition_values) {
-			result.partition_values.push_back({field_partition_key_map[hive_partition.field_index.index],
-			                                   hive_partition.hive_value});
+			result.partition_values.push_back(
+			    {field_partition_key_map[hive_partition.field_index.index], hive_partition.hive_value});
 		}
 		result.partition_id = partition_data->partition_id;
 	}

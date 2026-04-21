@@ -220,7 +220,7 @@ idx_t DuckLakeCatalog::GetBeginSnapshotForSchemaVersion(TableIndex table_id, idx
 }
 
 shared_ptr<DuckLakeSchemaCacheEntry> DuckLakeCatalog::GetSchemaCacheEntry(DuckLakeTransaction &transaction,
-                                                                         DuckLakeSnapshot snapshot) {
+                                                                          DuckLakeSnapshot snapshot) {
 	auto &cache = GetObjectCacheInstance();
 	auto key = SchemaCacheKey(snapshot.schema_version);
 	auto cached = cache.Get<DuckLakeSchemaCacheEntry>(key);
@@ -239,8 +239,7 @@ DuckLakeCatalogSet &DuckLakeCatalog::GetSchemaForSnapshot(DuckLakeTransaction &t
 	return entry->catalog_set;
 }
 
-void DuckLakeCatalog::PinSchemaForQuery(DuckLakeTransaction &transaction,
-                                        shared_ptr<DuckLakeSchemaCacheEntry> entry) {
+void DuckLakeCatalog::PinSchemaForQuery(DuckLakeTransaction &transaction, shared_ptr<DuckLakeSchemaCacheEntry> entry) {
 	if (!entry) {
 		return;
 	}
@@ -557,7 +556,7 @@ unique_ptr<DuckLakeCatalogSet> DuckLakeCatalog::LoadSchemaForSnapshot(DuckLakeTr
 }
 
 shared_ptr<DuckLakeStatsCacheEntry> DuckLakeCatalog::GetStatsForSnapshot(DuckLakeTransaction &transaction,
-                                                                        DuckLakeSnapshot snapshot) {
+                                                                         DuckLakeSnapshot snapshot) {
 	auto &cache = GetObjectCacheInstance();
 	auto key = StatsCacheKey(snapshot.next_file_id);
 	auto cached = cache.Get<DuckLakeStatsCacheEntry>(key);

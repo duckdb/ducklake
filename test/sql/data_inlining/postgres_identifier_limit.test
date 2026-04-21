@@ -8,12 +8,12 @@ require parquet
 
 require postgres_scanner
 
-test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
 
-test-env DATA_PATH __TEST_DIR__
+test-env DATA_PATH {TEST_DIR}
 
 statement ok
-ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/pg_id_limit_files', DATA_INLINING_ROW_LIMIT 10)
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/pg_id_limit_files', DATA_INLINING_ROW_LIMIT 10)
 
 # CREATE TABLE with a column name longer than 63 bytes must succeed and not create an inlined shell
 statement ok
@@ -29,7 +29,7 @@ SELECT * FROM ducklake.long_create;
 
 # Data in parquet
 query I
-SELECT COUNT(*) FROM GLOB('${DATA_PATH}/pg_id_limit_files/**/*.parquet')
+SELECT COUNT(*) FROM GLOB('{DATA_PATH}/pg_id_limit_files/**/*.parquet')
 ----
 1
 
@@ -89,7 +89,7 @@ statement ok
 INSERT INTO ducklake.t_toggle VALUES (1);
 
 query I
-SELECT COUNT(*) FROM GLOB('${DATA_PATH}/pg_id_limit_files/main/t_toggle/**/*.parquet')
+SELECT COUNT(*) FROM GLOB('{DATA_PATH}/pg_id_limit_files/main/t_toggle/**/*.parquet')
 ----
 0
 
@@ -106,7 +106,7 @@ statement ok
 INSERT INTO ducklake.t_toggle VALUES (2);
 
 query I
-SELECT COUNT(*) FROM GLOB('${DATA_PATH}/pg_id_limit_files/main/t_toggle/**/*.parquet')
+SELECT COUNT(*) FROM GLOB('{DATA_PATH}/pg_id_limit_files/main/t_toggle/**/*.parquet')
 ----
 1
 
@@ -123,7 +123,7 @@ statement ok
 INSERT INTO ducklake.t_toggle VALUES (3);
 
 query I
-SELECT COUNT(*) FROM GLOB('${DATA_PATH}/pg_id_limit_files/main/t_toggle/**/*.parquet')
+SELECT COUNT(*) FROM GLOB('{DATA_PATH}/pg_id_limit_files/main/t_toggle/**/*.parquet')
 ----
 1
 

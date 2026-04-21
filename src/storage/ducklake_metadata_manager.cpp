@@ -20,8 +20,12 @@
 #include "duckdb/planner/filter/null_filter.hpp"
 #include "duckdb/planner/filter/optional_filter.hpp"
 #include "duckdb/planner/filter/dynamic_filter.hpp"
+#include "duckdb/planner/filter/expression_filter.hpp"
 #include "duckdb/planner/filter/in_filter.hpp"
 #include "duckdb/planner/expression.hpp"
+#include "duckdb/planner/expression/bound_comparison_expression.hpp"
+#include "duckdb/planner/expression/bound_constant_expression.hpp"
+#include "duckdb/planner/expression/bound_reference_expression.hpp"
 #include "duckdb/parser/parser.hpp"
 #include "duckdb/parser/expression/cast_expression.hpp"
 
@@ -998,6 +1002,28 @@ static void SetSnapshotFilter(const DuckLakeSnapshot &snapshot, idx_t max_partia
 	file_entry.snapshot_filter_max = snapshot.snapshot_id;
 }
 
+static bool TryExtractConstantComparison(const Expression &expr, ExpressionType &comparison_type, Value &constant) {
+	if (expr.GetExpressionClass() != ExpressionClass::BOUND_COMPARISON) {
+		return false;
+	}
+	auto &comp = expr.Cast<BoundComparisonExpression>();
+	auto &left = *comp.left;
+	auto &right = *comp.right;
+	if (left.GetExpressionClass() == ExpressionClass::BOUND_REF &&
+	    right.GetExpressionClass() == ExpressionClass::BOUND_CONSTANT) {
+		comparison_type = comp.GetExpressionType();
+		constant = right.Cast<BoundConstantExpression>().value;
+		return true;
+	}
+	if (right.GetExpressionClass() == ExpressionClass::BOUND_REF &&
+	    left.GetExpressionClass() == ExpressionClass::BOUND_CONSTANT) {
+		comparison_type = FlipComparisonExpression(comp.GetExpressionType());
+		constant = left.Cast<BoundConstantExpression>().value;
+		return true;
+	}
+	return false;
+}
+
 string DuckLakeMetadataManager::GenerateFilterFromTableFilter(const TableFilter &filter, const LogicalType &type,
                                                               unordered_set<string> &referenced_stats) {
 	switch (filter.filter_type) {
@@ -1068,6 +1094,16 @@ string DuckLakeMetadataManager::GenerateFilterFromTableFilter(const TableFilter 
 			result += "(" + next_filter + ")";
 		}
 		return result;
+	}
+	case TableFilterType::EXPRESSION_FILTER: {
+		auto &expr_filter = filter.Cast<ExpressionFilter>();
+		ExpressionType comparison_type;
+		Value constant;
+		if (!TryExtractConstantComparison(*expr_filter.expr, comparison_type, constant)) {
+			return string();
+		}
+		auto temporary_constant_filter = ConstantFilter(comparison_type, std::move(constant));
+		return GenerateFilterFromTableFilter(temporary_constant_filter, type, referenced_stats);
 	}
 	default:
 		return string();
@@ -1268,6 +1304,16 @@ string DuckLakeMetadataManager::GenerateFilterPushdown(const TableFilter &filter
 		}
 		return result;
 	}
+	case TableFilterType::EXPRESSION_FILTER: {
+		auto &expr_filter = filter.Cast<ExpressionFilter>();
+		ExpressionType comparison_type;
+		Value constant;
+		if (!TryExtractConstantComparison(*expr_filter.expr, comparison_type, constant)) {
+			return string();
+		}
+		auto temporary_constant_filter = ConstantFilter(comparison_type, std::move(constant));
+		return GenerateFilterPushdown(temporary_constant_filter, referenced_stats);
+	}
 	default:
 		// unsupported filter
 		return string();
@@ -1305,14 +1351,12 @@ FilterSQLResult DuckLakeMetadataManager::ConvertFilterPushdownToSQL(const Filter
 			conditions += " AND ";
 		}
 		if (needs_value_count_guard) {
-			conditions += StringUtil::Format(
-			    "data.data_file_id IN (SELECT data_file_id FROM %s WHERE "
-			    "(value_count IS NULL OR value_count > 0) AND (%s(%s)))",
-			    cte_name, null_checks.c_str(), filter_condition.c_str());
+			conditions += StringUtil::Format("data.data_file_id IN (SELECT data_file_id FROM %s WHERE "
+			                                 "(value_count IS NULL OR value_count > 0) AND (%s(%s)))",
+			                                 cte_name, null_checks.c_str(), filter_condition.c_str());
 		} else {
-			conditions += StringUtil::Format(
-			    "data.data_file_id IN (SELECT data_file_id FROM %s WHERE %s(%s))", cte_name, null_checks.c_str(),
-			    filter_condition.c_str());
+			conditions += StringUtil::Format("data.data_file_id IN (SELECT data_file_id FROM %s WHERE %s(%s))",
+			                                 cte_name, null_checks.c_str(), filter_condition.c_str());
 		}
 
 		CTERequirement req(column_filter.column_field_index, referenced_stats);
@@ -1395,7 +1439,7 @@ vector<DuckLakeFileListEntry> DuckLakeMetadataManager::GetFilesForTable(DuckLake
 				ExpressionType comparison_type;
 				{
 					lock_guard<mutex> l(dynamic->filter_data->lock);
-					comparison_type = dynamic->filter_data->filter->comparison_type;
+					comparison_type = dynamic->filter_data->comparison_type;
 				}
 				dynamic_filter_columns.push_back(
 				    {col_filter.column_field_index, comparison_type, col_filter.column_type});
@@ -3660,7 +3704,6 @@ WHERE snapshot_id = (
 	return snapshot;
 }
 
-
 static unordered_map<idx_t, DuckLakePartitionInfo>
 GetNewPartitions(const vector<DuckLakePartitionInfo> &old_partitions,
                  const vector<DuckLakePartitionInfo> &new_partitions) {
@@ -4230,7 +4273,7 @@ string DuckLakeMetadataManager::WriteDeleteRewrites(const vector<DuckLakeCompact
 				UPDATE {METADATA_CATALOG}.ducklake_delete_file SET end_snapshot = %llu
 				WHERE delete_file_id = %llu;
 				)",
-				                                  table_idx_last_snapshot[compaction.table_index.index],
+			                                  table_idx_last_snapshot[compaction.table_index.index],
 			                                  compaction.delete_file_id.index);
 		}
 		// We must update the data file table

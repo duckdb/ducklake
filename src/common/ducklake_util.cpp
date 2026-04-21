@@ -328,7 +328,7 @@ DynamicFilter *DuckLakeUtil::GetOptionalDynamicFilter(const TableFilter &filter)
 		return nullptr;
 	}
 	auto &dynamic = optional.child_filter->Cast<DynamicFilter>();
-	if (!dynamic.filter_data || !dynamic.filter_data->filter) {
+	if (!dynamic.filter_data) {
 		return nullptr;
 	}
 	return &dynamic;

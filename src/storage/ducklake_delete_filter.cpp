@@ -2,6 +2,10 @@
 #include "storage/ducklake_deletion_vector.hpp"
 #include "common/parquet_file_scanner.hpp"
 #include "duckdb/planner/filter/constant_filter.hpp"
+#include "duckdb/planner/filter/expression_filter.hpp"
+#include "duckdb/planner/expression/bound_comparison_expression.hpp"
+#include "duckdb/planner/expression/bound_constant_expression.hpp"
+#include "duckdb/planner/expression/bound_reference_expression.hpp"
 #include "duckdb/planner/table_filter.hpp"
 #include "duckdb/common/multi_file/multi_file_list.hpp"
 #include "duckdb/common/multi_file/multi_file_reader.hpp"
@@ -180,14 +184,19 @@ DeleteFileScanResult DuckLakeDeleteFilter::ScanDeleteFile(ClientContext &context
 
 		if (snapshot_filter_min.IsValid()) {
 			auto min_constant = Value::BIGINT(NumericCast<int64_t>(snapshot_filter_min.GetIndex()));
-			auto min_filter =
-			    make_uniq<ConstantFilter>(ExpressionType::COMPARE_GREATERTHANOREQUALTO, std::move(min_constant));
+			auto min_comparison =
+			    make_uniq<BoundComparisonExpression>(ExpressionType::COMPARE_GREATERTHANOREQUALTO,
+			                                         make_uniq<BoundReferenceExpression>(LogicalType::BIGINT, 0),
+			                                         make_uniq<BoundConstantExpression>(std::move(min_constant)));
+			auto min_filter = make_uniq<ExpressionFilter>(std::move(min_comparison));
 			filters->PushFilter(snapshot_col_idx, std::move(min_filter));
 		}
 		if (snapshot_filter_max.IsValid()) {
 			auto max_constant = Value::BIGINT(NumericCast<int64_t>(snapshot_filter_max.GetIndex()));
-			auto max_filter =
-			    make_uniq<ConstantFilter>(ExpressionType::COMPARE_LESSTHANOREQUALTO, std::move(max_constant));
+			auto max_comparison = make_uniq<BoundComparisonExpression>(
+			    ExpressionType::COMPARE_LESSTHANOREQUALTO, make_uniq<BoundReferenceExpression>(LogicalType::BIGINT, 0),
+			    make_uniq<BoundConstantExpression>(std::move(max_constant)));
+			auto max_filter = make_uniq<ExpressionFilter>(std::move(max_comparison));
 			filters->PushFilter(snapshot_col_idx, std::move(max_filter));
 		}
 		scanner.SetFilters(std::move(filters));
