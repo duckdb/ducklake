@@ -10,11 +10,11 @@ require parquet
 
 require postgres_scanner
 
-test-env DUCKLAKE_CONNECTION none
+test-env DUCKLAKE_CONNECTION postgres:dbname=ducklakedb
 
-test-env PG_METADATA_CONN none
+test-env PG_METADATA_CONN dbname=ducklakedb
 
-test-env DATA_PATH {TEST_DIR}
+test-env DATA_PATH __TEST_DIR__
 
 # First attach creates the catalog with sequences.
 statement ok
