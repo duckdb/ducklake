@@ -1466,9 +1466,6 @@ vector<DuckLakeFileListEntry> DuckLakeMetadataManager::GetFilesForTable(DuckLake
 				ExpressionType comparison_type;
 				{
 					lock_guard<mutex> l(dynamic->filter_data->lock);
-					if (!dynamic->filter_data->initialized) {
-						continue;
-					}
 					comparison_type = dynamic->filter_data->comparison_type;
 				}
 				dynamic_filter_columns.push_back(
