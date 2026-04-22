@@ -1,7 +1,11 @@
 #include "storage/ducklake_delete_filter.hpp"
 #include "storage/ducklake_deletion_vector.hpp"
 #include "common/parquet_file_scanner.hpp"
+#include "duckdb/planner/expression/bound_comparison_expression.hpp"
+#include "duckdb/planner/expression/bound_constant_expression.hpp"
+#include "duckdb/planner/expression/bound_reference_expression.hpp"
 #include "duckdb/planner/filter/constant_filter.hpp"
+#include "duckdb/planner/filter/expression_filter.hpp"
 #include "duckdb/planner/table_filter.hpp"
 #include "duckdb/common/multi_file/multi_file_list.hpp"
 #include "duckdb/common/multi_file/multi_file_reader.hpp"
@@ -178,16 +182,20 @@ DeleteFileScanResult DuckLakeDeleteFilter::ScanDeleteFile(ClientContext &context
 		auto filters = make_uniq<TableFilterSet>();
 		ProjectionIndex snapshot_col_idx(2); // snapshot_id is column 2
 
+		auto make_expr_filter = [](ExpressionType cmp_type, Value constant) {
+			auto lhs = make_uniq<BoundReferenceExpression>(LogicalType::BIGINT, 0ULL);
+			auto rhs = make_uniq<BoundConstantExpression>(std::move(constant));
+			auto cmp = make_uniq<BoundComparisonExpression>(cmp_type, std::move(lhs), std::move(rhs));
+			return make_uniq<ExpressionFilter>(std::move(cmp));
+		};
 		if (snapshot_filter_min.IsValid()) {
 			auto min_constant = Value::BIGINT(NumericCast<int64_t>(snapshot_filter_min.GetIndex()));
-			auto min_filter =
-			    make_uniq<ConstantFilter>(ExpressionType::COMPARE_GREATERTHANOREQUALTO, std::move(min_constant));
+			auto min_filter = make_expr_filter(ExpressionType::COMPARE_GREATERTHANOREQUALTO, std::move(min_constant));
 			filters->PushFilter(snapshot_col_idx, std::move(min_filter));
 		}
 		if (snapshot_filter_max.IsValid()) {
 			auto max_constant = Value::BIGINT(NumericCast<int64_t>(snapshot_filter_max.GetIndex()));
-			auto max_filter =
-			    make_uniq<ConstantFilter>(ExpressionType::COMPARE_LESSTHANOREQUALTO, std::move(max_constant));
+			auto max_filter = make_expr_filter(ExpressionType::COMPARE_LESSTHANOREQUALTO, std::move(max_constant));
 			filters->PushFilter(snapshot_col_idx, std::move(max_filter));
 		}
 		scanner.SetFilters(std::move(filters));

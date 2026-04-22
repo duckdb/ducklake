@@ -25,8 +25,10 @@
 #include "storage/ducklake_delete.hpp"
 #include "duckdb/function/function_binder.hpp"
 #include "storage/ducklake_inlined_data_reader.hpp"
+#include "duckdb/planner/expression/bound_comparison_expression.hpp"
 #include "duckdb/planner/filter/constant_filter.hpp"
 #include "duckdb/planner/filter/dynamic_filter.hpp"
+#include "duckdb/planner/filter/expression_filter.hpp"
 #include "duckdb/planner/filter/optional_filter.hpp"
 
 namespace duckdb {
@@ -60,7 +62,10 @@ static bool TryFindColumnByFieldId(const vector<MultiFileColumnDefinition> &loca
 static void AddSnapshotFilter(BaseFileReader &reader, const ColumnIndex &col_idx, const LogicalType &col_type,
                               idx_t snapshot_value, ExpressionType comparison_type) {
 	auto constant = Value::UBIGINT(snapshot_value).DefaultCastAs(col_type);
-	auto filter = make_uniq<ConstantFilter>(comparison_type, std::move(constant));
+	auto lhs = make_uniq<BoundReferenceExpression>(col_type, 0ULL);
+	auto rhs = make_uniq<BoundConstantExpression>(std::move(constant));
+	auto cmp = make_uniq<BoundComparisonExpression>(comparison_type, std::move(lhs), std::move(rhs));
+	auto filter = make_uniq<ExpressionFilter>(std::move(cmp));
 	reader.filters->PushFilter(ProjectionIndex(col_idx.GetPrimaryIndex()), std::move(filter));
 }
 

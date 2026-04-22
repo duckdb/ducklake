@@ -33,6 +33,7 @@ class BoundAtClause;
 class QueryResult;
 class FileSystem;
 class ConstantFilter;
+class Expression;
 
 struct SnapshotAndStats;
 struct FlushedInlinedTableInfo;
@@ -315,6 +316,7 @@ private:
 	                                                  TableIndex table_id);
 	virtual string GenerateFilterFromTableFilter(const TableFilter &filter, const LogicalType &type,
 	                                             unordered_set<string> &referenced_stats);
+	static unique_ptr<TableFilter> ExtractTableFilterFromExpression(const Expression &expr);
 	virtual bool ValueIsFinite(const Value &val);
 	virtual string CastValueToTarget(const Value &val, const LogicalType &type);
 	virtual string CastStatsToTarget(const string &stats, const LogicalType &type);
