@@ -1,0 +1,36 @@
+diff --git a/src/function/scalar/struct/remap_struct.cpp b/src/function/scalar/struct/remap_struct.cpp
+index b38c66c01d..eb70ea6a3c 100644
+--- a/src/function/scalar/struct/remap_struct.cpp
++++ b/src/function/scalar/struct/remap_struct.cpp
+@@ -95,7 +95,6 @@ void RemapMap(Vector &input, Vector &default_vector, Vector &result, idx_t resul
+ 	auto &result_value_vector = MapVector::GetValues(result);
+ 	auto list_size = ListVector::GetListSize(input);
+ 	ListVector::Reserve(result, list_size);
+-	ListVector::SetListSize(result, list_size);
+ 
+ 	bool has_top_level_null = false;
+ 	// copy over the NULL values from the input vector
+@@ -136,6 +135,7 @@ void RemapMap(Vector &input, Vector &default_vector, Vector &result, idx_t resul
+ 	result_vectors.emplace_back(result_value_vector);
+ 
+ 	RemapChildVectors(result, input_vectors, result_vectors, remap_info, default_vector, has_top_level_null, list_size);
++	ListVector::SetListSize(result, list_size);
+ }
+ 
+ void RemapList(Vector &input, Vector &default_vector, Vector &result, idx_t result_size,
+@@ -144,7 +144,6 @@ void RemapList(Vector &input, Vector &default_vector, Vector &result, idx_t resu
+ 	auto &result_vector = ListVector::GetChildMutable(result);
+ 	auto list_size = ListVector::GetListSize(input);
+ 	ListVector::Reserve(result, list_size);
+-	ListVector::SetListSize(result, list_size);
+ 
+ 	bool has_top_level_null = false;
+ 	// copy over the NULL values from the input vector
+@@ -181,6 +180,7 @@ void RemapList(Vector &input, Vector &default_vector, Vector &result, idx_t resu
+ 	result_vectors.emplace_back(result_vector);
+ 
+ 	RemapChildVectors(result, input_vectors, result_vectors, remap_info, default_vector, has_top_level_null, list_size);
++	ListVector::SetListSize(result, list_size);
+ }
+ 
+ void RemapStruct(Vector &input, Vector &default_vector, Vector &result, idx_t result_size,
