@@ -2553,6 +2553,11 @@ bool RetryOnError(const string &original_message) {
 	if (StringUtil::Contains(message, "concurrent")) {
 		return true;
 	}
+	// retry on sqlite lock errors
+	constexpr const char *sqlite_busy_message = "database is locked";
+	if (StringUtil::Contains(message, sqlite_busy_message)) {
+		return true;
+	}
 	return false;
 }
 
