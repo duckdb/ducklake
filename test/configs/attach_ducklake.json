@@ -145,7 +145,8 @@
         "test/optimizer/test_aggregate_function_rewrite.test",
         "test/optimizer/row_number_virtual_column.test",
         "test/sql/window/test_streaming_window.test",
-        "test/sql/transactions/test_cardinality_estimation_uncommitted.test"
+        "test/sql/transactions/test_cardinality_estimation_uncommitted.test",
+        "test/sql/filter/test_struct_pushdown.test"
       ]
     },
     {
@@ -584,6 +585,8 @@
         "test/sql/storage/compression/string/blob.test",
         "test/sql/storage/compression/string/empty.test",
         "test/sql/storage/compression/rle/rle_bool.test",
+        "test/sql/storage/compression/rle/rle_filter.test",
+        "test/sql/storage/compression/rle/rle_select_list.test",
         "test/sql/storage/optimistic_write/optimistic_write_not_trigger_checkpoint.test"
       ]
     },

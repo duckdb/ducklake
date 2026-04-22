@@ -1046,9 +1046,14 @@ static bool TryExtractInValues(const Expression &expr, vector<Value> &values) {
 	}
 	values.clear();
 	for (idx_t i = 1; i < op.children.size(); i++) {
-		values.push_back(op.children[i]->Cast<BoundConstantExpression>().value);
+		auto &val = op.children[i]->Cast<BoundConstantExpression>().value;
+		if (val.IsNull()) {
+			// InFilter cannot hold NULL values - disable pushdown for this expression
+			return false;
+		}
+		values.push_back(val);
 	}
-	return true;
+	return values.size() > 0;
 }
 
 string DuckLakeMetadataManager::GenerateFilterFromTableFilter(const TableFilter &filter, const LogicalType &type,
