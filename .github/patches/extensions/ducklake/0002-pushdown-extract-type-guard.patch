@@ -1,0 +1,17 @@
+diff --git a/src/common/column_index.cpp b/src/common/column_index.cpp
+index 976aeb3975..d186b44ebe 100644
+--- a/src/common/column_index.cpp
++++ b/src/common/column_index.cpp
+@@ -11,9 +11,11 @@ void ColumnIndex::SetPushdownExtractType(const LogicalType &type_information,
+ 
+ 	auto &child = child_indexes[0];
+ 	if (child.HasPrimaryIndex()) {
++		D_ASSERT(type_information.id() == LogicalTypeId::STRUCT);
+ 		auto &child_types = StructType::GetChildTypes(type);
+ 		auto &child_type = child_types[child.GetPrimaryIndex()].second;
+-		if (child.child_indexes.empty()) {
++		if (child.child_indexes.empty() ||
++		    (child_type.id() != LogicalTypeId::STRUCT && child_type.id() != LogicalTypeId::VARIANT)) {
+ 			if (cast_type) {
+ 				child.SetType(*cast_type);
+ 			} else {
