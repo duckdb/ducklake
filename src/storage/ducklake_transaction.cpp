@@ -354,6 +354,11 @@ void LocalTableChanges::AddColumnToLocalInlinedData(ClientContext &context, Tabl
 		new_col_stats.null_count = 0;
 		new_col_stats.has_null_count = true;
 		new_col_stats.any_valid = true;
+		auto default_str = default_value.ToString();
+		new_col_stats.has_min = true;
+		new_col_stats.min = default_str;
+		new_col_stats.has_max = true;
+		new_col_stats.max = std::move(default_str);
 	} else {
 		new_col_stats.null_count = total_rows;
 		new_col_stats.has_null_count = true;
