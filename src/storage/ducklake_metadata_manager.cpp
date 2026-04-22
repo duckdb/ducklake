@@ -86,6 +86,24 @@ bool DuckLakeMetadataManager::SupportsInlining(const LogicalType &type) {
 	return true;
 }
 
+bool DuckLakeMetadataManager::Retry(const ErrorData &error) const {
+	const string lower_message = StringUtil::Lower(error.Message());
+	return RetryOnMessage(lower_message);
+}
+
+bool DuckLakeMetadataManager::RetryOnMessage(const string &lower_message) const {
+	if (StringUtil::Contains(lower_message, "primary key") || StringUtil::Contains(lower_message, "unique")) {
+		return true;
+	}
+	if (StringUtil::Contains(lower_message, "conflict")) {
+		return true;
+	}
+	if (StringUtil::Contains(lower_message, "concurrent")) {
+		return true;
+	}
+	return false;
+}
+
 bool DuckLakeMetadataManager::SupportsInliningColumns(const vector<DuckLakeColumnInfo> &columns) {
 	for (auto &col : columns) {
 		auto col_type = DuckLakeTypes::FromString(col.type);

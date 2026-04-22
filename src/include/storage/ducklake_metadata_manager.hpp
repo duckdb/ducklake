@@ -9,6 +9,7 @@
 #pragma once
 
 #include "duckdb/common/common.hpp"
+#include "duckdb/common/error_data.hpp"
 #include "duckdb/common/unordered_set.hpp"
 #include "duckdb/common/case_insensitive_map.hpp"
 #include "duckdb/common/optional_idx.hpp"
@@ -117,6 +118,8 @@ public:
 	virtual idx_t MaxIdentifierLength() const {
 		return NumericLimits<idx_t>::Maximum();
 	}
+	//! Return true if a failed commit should be retried
+	virtual bool Retry(const ErrorData &error) const;
 	//! Check if columns (stored as DuckLakeColumnInfo) support inlining, recursing into children
 	bool SupportsInliningColumns(const vector<DuckLakeColumnInfo> &columns);
 
@@ -268,6 +271,8 @@ public:
 protected:
 	virtual string GetLatestSnapshotQuery() const;
 
+	//! Catalog-specific retry rules (message already lower-cased)
+	virtual bool RetryOnMessage(const string &lower_message) const;
 	//! Wrap field selections with list aggregation of struct objects (DBMS-specific)
 	//! For DuckDB: LIST({'key1': val1, 'key2': val2, ...})
 	//! For Postgres: jsonb_agg(jsonb_build_object('key1', val1, 'key2', val2, ...))
