@@ -96,8 +96,8 @@ static bool CanSkipFileByTopNDynamicFilter(const DuckLakeFileListEntry &file_ent
 			if (!filter->filter_data->initialized) {
 				return false;
 			}
-			comparison_type = filter->filter_data->filter->comparison_type;
-			constant = filter->filter_data->filter->constant;
+			comparison_type = filter->filter_data->comparison_type;
+			constant = filter->filter_data->constant;
 		}
 
 		auto mm_it = file_entry.column_min_max.find(col_filter.column_field_index);
