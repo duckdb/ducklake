@@ -25,6 +25,7 @@
 #include "duckdb/planner/expression.hpp"
 #include "duckdb/planner/expression/bound_comparison_expression.hpp"
 #include "duckdb/planner/expression/bound_constant_expression.hpp"
+#include "duckdb/planner/expression/bound_operator_expression.hpp"
 #include "duckdb/planner/expression/bound_reference_expression.hpp"
 #include "duckdb/parser/parser.hpp"
 #include "duckdb/parser/expression/cast_expression.hpp"
@@ -1024,6 +1025,32 @@ static bool TryExtractConstantComparison(const Expression &expr, ExpressionType 
 	return false;
 }
 
+static bool TryExtractInValues(const Expression &expr, vector<Value> &values) {
+	if (expr.GetExpressionClass() != ExpressionClass::BOUND_OPERATOR) {
+		return false;
+	}
+	if (expr.GetExpressionType() != ExpressionType::COMPARE_IN) {
+		return false;
+	}
+	auto &op = expr.Cast<BoundOperatorExpression>();
+	if (op.children.size() < 2) {
+		return false;
+	}
+	if (op.children[0]->GetExpressionClass() != ExpressionClass::BOUND_REF) {
+		return false;
+	}
+	for (idx_t i = 1; i < op.children.size(); i++) {
+		if (op.children[i]->GetExpressionClass() != ExpressionClass::BOUND_CONSTANT) {
+			return false;
+		}
+	}
+	values.clear();
+	for (idx_t i = 1; i < op.children.size(); i++) {
+		values.push_back(op.children[i]->Cast<BoundConstantExpression>().value);
+	}
+	return true;
+}
+
 string DuckLakeMetadataManager::GenerateFilterFromTableFilter(const TableFilter &filter, const LogicalType &type,
                                                               unordered_set<string> &referenced_stats) {
 	switch (filter.filter_type) {
@@ -1099,11 +1126,16 @@ string DuckLakeMetadataManager::GenerateFilterFromTableFilter(const TableFilter 
 		auto &expr_filter = filter.Cast<ExpressionFilter>();
 		ExpressionType comparison_type;
 		Value constant;
-		if (!TryExtractConstantComparison(*expr_filter.expr, comparison_type, constant)) {
-			return string();
+		if (TryExtractConstantComparison(*expr_filter.expr, comparison_type, constant)) {
+			auto temporary_constant_filter = ConstantFilter(comparison_type, std::move(constant));
+			return GenerateFilterFromTableFilter(temporary_constant_filter, type, referenced_stats);
 		}
-		auto temporary_constant_filter = ConstantFilter(comparison_type, std::move(constant));
-		return GenerateFilterFromTableFilter(temporary_constant_filter, type, referenced_stats);
+		vector<Value> in_values;
+		if (TryExtractInValues(*expr_filter.expr, in_values)) {
+			auto temporary_in_filter = InFilter(std::move(in_values));
+			return GenerateFilterFromTableFilter(temporary_in_filter, type, referenced_stats);
+		}
+		return string();
 	}
 	default:
 		return string();
@@ -1308,11 +1340,16 @@ string DuckLakeMetadataManager::GenerateFilterPushdown(const TableFilter &filter
 		auto &expr_filter = filter.Cast<ExpressionFilter>();
 		ExpressionType comparison_type;
 		Value constant;
-		if (!TryExtractConstantComparison(*expr_filter.expr, comparison_type, constant)) {
-			return string();
+		if (TryExtractConstantComparison(*expr_filter.expr, comparison_type, constant)) {
+			auto temporary_constant_filter = ConstantFilter(comparison_type, std::move(constant));
+			return GenerateFilterPushdown(temporary_constant_filter, referenced_stats);
 		}
-		auto temporary_constant_filter = ConstantFilter(comparison_type, std::move(constant));
-		return GenerateFilterPushdown(temporary_constant_filter, referenced_stats);
+		vector<Value> in_values;
+		if (TryExtractInValues(*expr_filter.expr, in_values)) {
+			auto temporary_in_filter = InFilter(std::move(in_values));
+			return GenerateFilterPushdown(temporary_in_filter, referenced_stats);
+		}
+		return string();
 	}
 	default:
 		// unsupported filter
