@@ -1,0 +1,57 @@
+diff --git a/src/optimizer/remove_unused_columns.cpp b/src/optimizer/remove_unused_columns.cpp
+index 92755adc59..6691b98c44 100644
+--- a/src/optimizer/remove_unused_columns.cpp
++++ b/src/optimizer/remove_unused_columns.cpp
+@@ -29,6 +29,7 @@
+ #include "duckdb/function/scalar/nested_functions.hpp"
+ #include "duckdb/optimizer/filter_pushdown.hpp"
+ #include "duckdb/optimizer/optimizer.hpp"
++#include <functional>
+ #include <utility>
+ 
+ namespace duckdb {
+@@ -47,6 +48,35 @@ static void GatherCTEScans(const TableIndex cte_index, const LogicalOperator &op
+ 	}
+ }
+ 
++static bool IsExtractFunctionName(const string &name) {
++	return name == "struct_extract" || name == "struct_extract_at" || name == "array_extract" ||
++	       name == "variant_extract";
++}
++
++static bool ContainsExtractFunction(const Expression &expr);
++
++static void CheckExtractChild(const Expression &child, bool *found) {
++	if (*found) {
++		return;
++	}
++	if (ContainsExtractFunction(child)) {
++		*found = true;
++	}
++}
++
++static bool ContainsExtractFunction(const Expression &expr) {
++	if (expr.GetExpressionClass() == ExpressionClass::BOUND_FUNCTION) {
++		auto &func = expr.Cast<BoundFunctionExpression>();
++		if (IsExtractFunctionName(func.function.name)) {
++			return true;
++		}
++	}
++	bool found = false;
++	auto callback = std::bind(&CheckExtractChild, std::placeholders::_1, &found);
++	ExpressionIterator::EnumerateChildren(expr, callback);
++	return found;
++}
++
+ RemoveUnusedColumns::RemoveUnusedColumns(Optimizer &optimizer)
+     : optimizer(optimizer), binder(optimizer.binder), context(optimizer.context), everything_referenced(true),
+       root(*this) {
+@@ -765,7 +795,7 @@ void RemoveUnusedColumns::RemoveColumnsFromLogicalGet(LogicalGet &get, unique_pt
+ 		auto column_ref = make_uniq<BoundColumnRefExpression>(std::move(column_type), filter_binding);
+ 		//! Convert the filter to an expression, so we can visit it
+ 		auto filter_expr = filter.ToExpression(*column_ref);
+-		if (filter_expr->IsScalar()) {
++		if (filter_expr->IsScalar() && !ContainsExtractFunction(*filter_expr)) {
+ 			filter_expr = std::move(column_ref);
+ 		}
+ 		filter_expressions.push_back(std::move(filter_expr));
