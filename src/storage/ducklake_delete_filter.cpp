@@ -2,6 +2,7 @@
 #include "storage/ducklake_deletion_vector.hpp"
 #include "common/parquet_file_scanner.hpp"
 #include "duckdb/planner/filter/constant_filter.hpp"
+#include "duckdb/planner/filter/expression_filter.hpp"
 #include "duckdb/planner/table_filter.hpp"
 #include "duckdb/common/multi_file/multi_file_list.hpp"
 #include "duckdb/common/multi_file/multi_file_reader.hpp"
@@ -180,15 +181,15 @@ DeleteFileScanResult DuckLakeDeleteFilter::ScanDeleteFile(ClientContext &context
 
 		if (snapshot_filter_min.IsValid()) {
 			auto min_constant = Value::BIGINT(NumericCast<int64_t>(snapshot_filter_min.GetIndex()));
-			auto min_filter =
-			    make_uniq<ConstantFilter>(ExpressionType::COMPARE_GREATERTHANOREQUALTO, std::move(min_constant));
-			filters->PushFilter(snapshot_col_idx, std::move(min_filter));
+			auto min_filter = ConstantFilter(ExpressionType::COMPARE_GREATERTHANOREQUALTO, std::move(min_constant));
+			auto min_expr_filter = ExpressionFilter::FromTableFilter(min_filter, LogicalType::BIGINT);
+			filters->PushFilter(snapshot_col_idx, std::move(min_expr_filter));
 		}
 		if (snapshot_filter_max.IsValid()) {
 			auto max_constant = Value::BIGINT(NumericCast<int64_t>(snapshot_filter_max.GetIndex()));
-			auto max_filter =
-			    make_uniq<ConstantFilter>(ExpressionType::COMPARE_LESSTHANOREQUALTO, std::move(max_constant));
-			filters->PushFilter(snapshot_col_idx, std::move(max_filter));
+			auto max_filter = ConstantFilter(ExpressionType::COMPARE_LESSTHANOREQUALTO, std::move(max_constant));
+			auto max_expr_filter = ExpressionFilter::FromTableFilter(max_filter, LogicalType::BIGINT);
+			filters->PushFilter(snapshot_col_idx, std::move(max_expr_filter));
 		}
 		scanner.SetFilters(std::move(filters));
 	}
