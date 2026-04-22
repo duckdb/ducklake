@@ -17,6 +17,11 @@
 #include "duckdb/main/query_profiler.hpp"
 #include "duckdb/main/secret/secret_manager.hpp"
 #include "duckdb/parser/expression/function_expression.hpp"
+#include "duckdb/planner/expression/bound_function_expression.hpp"
+#include "duckdb/planner/expression_iterator.hpp"
+#include "duckdb/storage/statistics/struct_stats.hpp"
+
+#include <functional>
 
 namespace duckdb {
 
@@ -107,6 +112,104 @@ unique_ptr<BaseStatistics> DuckLakeStatistics(ClientContext &context, const Func
 	return table.GetStatistics(context, column_index);
 }
 
+static bool DuckLakeSupportsPushdownExtract(const FunctionData &bind_data, const LogicalIndex &column_idx) {
+	if (IsVirtualColumn(column_idx.index)) {
+		return false;
+	}
+	auto &multi_file_data = bind_data.Cast<MultiFileBindData>();
+	if (!multi_file_data.file_list) {
+		return false;
+	}
+	auto &file_list = multi_file_data.file_list->Cast<DuckLakeMultiFileList>();
+	auto &columns = file_list.GetTable().GetColumns();
+	if (column_idx.index >= columns.LogicalColumnCount()) {
+		return false;
+	}
+	auto &column_type = columns.GetColumn(LogicalIndex(column_idx.index)).Type();
+	if (column_type.id() != LogicalTypeId::STRUCT) {
+		return false;
+	}
+	return true;
+}
+
+static unique_ptr<BaseStatistics> ExtractChildStats(const BaseStatistics &stats, const ColumnIndex &column_index) {
+	const BaseStatistics *current_stats = &stats;
+	const ColumnIndex *current_index = &column_index;
+	while (current_index->HasChildren()) {
+		if (current_index->ChildIndexCount() != 1) {
+			return nullptr;
+		}
+		auto &child_index = current_index->GetChildIndex(0);
+		if (current_stats->GetType().id() != LogicalTypeId::STRUCT) {
+			return nullptr;
+		}
+		idx_t child_idx;
+		if (child_index.HasPrimaryIndex()) {
+			child_idx = child_index.GetPrimaryIndex();
+		} else {
+			child_idx = StructType::GetChildIndexUnsafe(current_stats->GetType(), child_index.GetFieldName());
+		}
+		current_stats = &StructStats::GetChildStats(*current_stats, child_idx);
+		current_index = &child_index;
+	}
+	return current_stats->ToUnique();
+}
+
+static unique_ptr<BaseStatistics> DuckLakeStatisticsExtended(ClientContext &client,
+                                                             TableFunctionGetStatisticsInput &input) {
+	if (!input.bind_data) {
+		return nullptr;
+	}
+	if (input.column_index.IsVirtualColumn()) {
+		return nullptr;
+	}
+	auto root_stats = DuckLakeStatistics(client, input.bind_data.get(), input.column_index.GetPrimaryIndex());
+	if (!root_stats) {
+		return nullptr;
+	}
+	if (!input.column_index.IsPushdownExtract()) {
+		return root_stats;
+	}
+	if (!input.column_index.HasChildren()) {
+		return root_stats;
+	}
+	return ExtractChildStats(*root_stats, input.column_index);
+}
+
+static bool IsSubstringFunctionName(const string &name) {
+	return name == "substring" || name == "substr" || name == "substring_grapheme";
+}
+
+static bool ContainsSubstringFunction(const Expression &expr);
+
+static void CheckSubstringChild(const Expression &child, bool *found) {
+	if (*found) {
+		return;
+	}
+	if (ContainsSubstringFunction(child)) {
+		*found = true;
+	}
+}
+
+static bool ContainsSubstringFunction(const Expression &expr) {
+	if (expr.GetExpressionClass() == ExpressionClass::BOUND_FUNCTION) {
+		auto &func = expr.Cast<BoundFunctionExpression>();
+		if (IsSubstringFunctionName(func.function.name)) {
+			return true;
+		}
+	}
+	bool found = false;
+	auto callback = std::bind(&CheckSubstringChild, std::placeholders::_1, &found);
+	ExpressionIterator::EnumerateChildren(expr, callback);
+	return found;
+}
+
+static bool DuckLakePushdownExpression(ClientContext &client, const LogicalGet &get, Expression &expr) {
+	static_cast<void>(client);
+	static_cast<void>(get);
+	return !ContainsSubstringFunction(expr);
+}
+
 BindInfo DuckLakeBindInfo(const optional_ptr<FunctionData> bind_data) {
 	auto &multi_file_data = bind_data->Cast<MultiFileBindData>();
 	auto &file_list = multi_file_data.file_list->Cast<DuckLakeMultiFileList>();
@@ -195,7 +298,10 @@ TableFunction DuckLakeFunctions::GetDuckLakeScanFunction(DatabaseInstance &insta
 		function.get_multi_file_reader = DuckLakeMultiFileReader::CreateInstance;
 	}
 
-	function.statistics = DuckLakeStatistics;
+	function.statistics = nullptr;
+	function.statistics_extended = DuckLakeStatisticsExtended;
+	function.supports_pushdown_extract = DuckLakeSupportsPushdownExtract;
+	function.pushdown_expression = DuckLakePushdownExpression;
 	function.get_bind_info = DuckLakeBindInfo;
 	function.get_virtual_columns = DuckLakeVirtualColumns;
 	function.get_row_id_columns = DuckLakeGetRowIdColumn;
