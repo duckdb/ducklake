@@ -1011,9 +1011,15 @@ unique_ptr<TableFilter> DuckLakeMetadataManager::ExtractTableFilterFromExpressio
 		auto &op = expr.Cast<BoundOperatorExpression>();
 		auto op_type = op.GetExpressionType();
 		if (op_type == ExpressionType::OPERATOR_IS_NULL) {
+			if (op.children.empty() || op.children[0]->GetExpressionClass() != ExpressionClass::BOUND_REF) {
+				return nullptr;
+			}
 			return make_uniq<IsNullFilter>();
 		}
 		if (op_type == ExpressionType::OPERATOR_IS_NOT_NULL) {
+			if (op.children.empty() || op.children[0]->GetExpressionClass() != ExpressionClass::BOUND_REF) {
+				return nullptr;
+			}
 			return make_uniq<IsNotNullFilter>();
 		}
 		if (op_type == ExpressionType::COMPARE_IN && !op.children.empty() &&
