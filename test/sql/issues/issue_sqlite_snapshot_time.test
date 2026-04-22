@@ -1,0 +1,62 @@
+# name: test/sql/issues/issue_sqlite_snapshot_time.test
+# description: Attaching a SQLite-backed DuckLake at a past SNAPSHOT_TIME must not
+# group: [issues]
+
+#              be broken by string-vs-timestamp comparison on the sqlite backend.
+
+require ducklake
+
+require parquet
+
+require sqlite_scanner
+
+require icu
+
+statement ok
+ATTACH 'ducklake:sqlite:__TEST_DIR__/issue_sqlite_snapshot_time.db' AS mylake (DATA_PATH '__TEST_DIR__/issue_sqlite_snapshot_time_files')
+
+statement ok
+CREATE TABLE mylake.test_dataset (col1 BIGINT, col2 VARCHAR);
+
+statement ok
+INSERT INTO mylake.test_dataset VALUES (1, 'a'), (2, 'b');
+
+query I
+SELECT count(*) FROM mylake.test_dataset
+----
+2
+
+# capture the snapshot_time of the latest snapshot so far (the insert above)
+statement ok
+SET VARIABLE t1 = (SELECT max(snapshot_time) FROM mylake.snapshots());
+
+statement ok
+DETACH mylake
+
+statement ok
+ATTACH 'ducklake:sqlite:__TEST_DIR__/issue_sqlite_snapshot_time.db' AS mylake
+
+statement ok
+INSERT INTO mylake.test_dataset VALUES (3, 'c'), (4, 'd');
+
+statement ok
+DETACH mylake
+
+# re-attach at t1: must land on the snapshot containing exactly the first two rows
+statement ok
+ATTACH 'ducklake:sqlite:__TEST_DIR__/issue_sqlite_snapshot_time.db' AS mylake (SNAPSHOT_TIME getvariable('t1'))
+
+query II
+SELECT * FROM mylake.test_dataset ORDER BY col1
+----
+1	a
+2	b
+
+statement ok
+DETACH mylake
+
+# attaching at a timestamp earlier than the first snapshot must still fail cleanly
+statement error
+ATTACH 'ducklake:sqlite:__TEST_DIR__/issue_sqlite_snapshot_time.db' AS mylake (SNAPSHOT_TIME TIMESTAMPTZ '1970-01-01 00:00:00+00')
+----
+No snapshot found at timestamp
