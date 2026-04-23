@@ -12,8 +12,11 @@
 #include "duckdb/planner/operator/logical_insert.hpp"
 #include "duckdb/planner/expression/bound_reference_expression.hpp"
 #include "duckdb/parallel/thread_context.hpp"
+#include "duckdb/parallel/interrupt.hpp"
 #include "duckdb/catalog/catalog_entry/table_catalog_entry.hpp"
 #include "duckdb/execution/operator/projection/physical_projection.hpp"
+
+#include <functional>
 
 namespace duckdb {
 
@@ -164,15 +167,36 @@ static void FinalizeCopyToInsert(Pipeline &pipeline, Event &event, ClientContext
 	}
 }
 
+static void RunCopyToInsertAfterFlush(Pipeline &pipeline, Event &event, ClientContext &client,
+                                      PhysicalOperator &copy_op, PhysicalOperator &insert_op) {
+	auto signal_state = make_shared_ptr<InterruptDoneSignalState>();
+	InterruptState interrupt_state(signal_state);
+	FinalizeCopyToInsert(pipeline, event, client, copy_op, insert_op, interrupt_state);
+}
+
 SinkFinalizeType DuckLakeMergeInsert::Finalize(Pipeline &pipeline, Event &event, ClientContext &context,
                                                OperatorSinkFinalizeInput &input) const {
+	auto &copy_op = copy.Cast<PhysicalCopyToFile>();
+	if (copy_op.partition_output) {
+		auto callback = std::bind(RunCopyToInsertAfterFlush, std::placeholders::_1, std::placeholders::_2,
+		                          std::placeholders::_3, std::ref(copy), std::ref(insert));
+		copy_op.RegisterPartitionFlushCallback(std::move(callback));
+
+		OperatorSinkFinalizeInput copy_finalize {*copy.sink_state, input.interrupt_state};
+		auto finalize_result = copy.Finalize(pipeline, event, context, copy_finalize);
+		if (finalize_result == SinkFinalizeType::BLOCKED) {
+			return SinkFinalizeType::BLOCKED;
+		}
+		return SinkFinalizeType::READY;
+	}
+
 	OperatorSinkFinalizeInput copy_finalize {*copy.sink_state, input.interrupt_state};
 	auto finalize_result = copy.Finalize(pipeline, event, context, copy_finalize);
 	if (finalize_result == SinkFinalizeType::BLOCKED) {
 		return SinkFinalizeType::BLOCKED;
 	}
 
-	FinalizeCopyToInsert(pipeline, event, context, copy, insert, input.interrupt_state);
+	RunCopyToInsertAfterFlush(pipeline, event, context, copy, insert);
 	return SinkFinalizeType::READY;
 }
 
@@ -379,10 +403,27 @@ SinkFinalizeType DuckLakeMergeUpdate::Finalize(Pipeline &pipeline, Event &event,
 		inline_data_op->OperatorFinalize(pipeline, event, context, inline_finalize);
 	}
 
-	OperatorSinkFinalizeInput copy_finalize {*copy_op.sink_state, input.interrupt_state};
-	copy_op.Finalize(pipeline, event, context, copy_finalize);
+	auto &copy_to_file = copy_op.Cast<PhysicalCopyToFile>();
+	if (copy_to_file.partition_output) {
+		auto callback = std::bind(RunCopyToInsertAfterFlush, std::placeholders::_1, std::placeholders::_2,
+		                          std::placeholders::_3, std::ref(copy_op), std::ref(insert_op));
+		copy_to_file.RegisterPartitionFlushCallback(std::move(callback));
 
-	FinalizeCopyToInsert(pipeline, event, context, copy_op, insert_op, input.interrupt_state);
+		OperatorSinkFinalizeInput copy_finalize {*copy_op.sink_state, input.interrupt_state};
+		auto finalize_result = copy_op.Finalize(pipeline, event, context, copy_finalize);
+		if (finalize_result == SinkFinalizeType::BLOCKED) {
+			return SinkFinalizeType::BLOCKED;
+		}
+		return SinkFinalizeType::READY;
+	}
+
+	OperatorSinkFinalizeInput copy_finalize {*copy_op.sink_state, input.interrupt_state};
+	auto finalize_result = copy_op.Finalize(pipeline, event, context, copy_finalize);
+	if (finalize_result == SinkFinalizeType::BLOCKED) {
+		return SinkFinalizeType::BLOCKED;
+	}
+
+	RunCopyToInsertAfterFlush(pipeline, event, context, copy_op, insert_op);
 	return SinkFinalizeType::READY;
 }
 
