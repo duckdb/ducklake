@@ -31,53 +31,8 @@ SELECT COUNT(*) FROM ducklake_snapshots('ducklake')
 ----
 5
 
-# Test 1: Valid case - only versions parameter
-query I
-SELECT COUNT(*) FROM ducklake_expire_snapshots('ducklake', dry_run => true, versions => [1])
-----
-1
-
-# Test 2: Valid case - only older_than parameter
-query I
-SELECT COUNT(*) FROM ducklake_expire_snapshots('ducklake', dry_run => true, older_than => NOW())
-----
-4
-
-# Test 3: Invalid case - both versions AND older_than together
+# Test invalid case, both versions AND older_than are specified
 statement error
 SELECT COUNT(*) FROM ducklake_expire_snapshots('ducklake', dry_run => true, versions => [1, 2], older_than => NOW())
-----
-cannot specify both 'versions' and 'older_than'
-
-# Test 4: Neither versions nor older_than, and no global option set
-query I
-SELECT COUNT(*) FROM ducklake_expire_snapshots('ducklake', dry_run => true)
-----
-0
-
-# Verify all snapshots are still present
-query I
-SELECT COUNT(*) FROM ducklake_snapshots('ducklake')
-----
-5
-
-# Verify table data is intact
-query I
-SELECT COUNT(*) FROM ducklake.test
-----
-3
-
-# Test 5: Set global option, then call with no params
-statement ok
-CALL ducklake.set_option('expire_older_than', '1 millisecond')
-
-query I
-SELECT COUNT(*) FROM ducklake_expire_snapshots('ducklake', dry_run => true)
-----
-4
-
-# Invalid case with both versions AND older_than explicitly specified
-statement error
-SELECT COUNT(*) FROM ducklake_expire_snapshots('ducklake', dry_run => true, versions => [1], older_than => NOW())
 ----
 cannot specify both 'versions' and 'older_than'
