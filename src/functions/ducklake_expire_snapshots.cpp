@@ -48,8 +48,13 @@ static unique_ptr<FunctionData> DuckLakeExpireSnapshotsBind(ClientContext &conte
 			throw InternalException("Unsupported named parameter for ducklake_expire_snapshots");
 		}
 	}
-	if ((has_versions == has_timestamp && has_versions == true) ||
-	    (has_versions == has_timestamp && has_versions == false && older_than_default.empty())) {
+	if (has_versions && has_timestamp) {
+		throw InvalidInputException(
+		    "ducklake_expire_snapshots: cannot specify both 'versions' and 'older_than' parameters at the "
+		    "same time. Please use only one criterion.");
+	}
+	// No criteria given and no global default: silently no-op.
+	if (!has_versions && !has_timestamp && older_than_default.empty()) {
 		result->valid = false;
 		return std::move(result);
 	}
