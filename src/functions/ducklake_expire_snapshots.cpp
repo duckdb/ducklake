@@ -14,6 +14,7 @@ struct ExpireSnapshotsBindData : public TableFunctionData {
 	Catalog &catalog;
 	vector<DuckLakeSnapshotInfo> snapshots;
 	bool dry_run = false;
+	bool valid = true;
 };
 
 static unique_ptr<FunctionData> DuckLakeExpireSnapshotsBind(ClientContext &context, TableFunctionBindInput &input,
@@ -52,10 +53,10 @@ static unique_ptr<FunctionData> DuckLakeExpireSnapshotsBind(ClientContext &conte
 		    "ducklake_expire_snapshots: cannot specify both 'versions' and 'older_than' parameters at the "
 		    "same time. Please use only one criterion.");
 	}
+	// No criteria given and no global default: silently no-op.
 	if (!has_versions && !has_timestamp && older_than_default.empty()) {
-		throw InvalidInputException(
-		    "ducklake_expire_snapshots: must specify either 'versions' or 'older_than' parameter, or set "
-		    "the 'expire_older_than' global option via set_option.");
+		result->valid = false;
+		return std::move(result);
 	}
 
 	string filter;
@@ -100,6 +101,9 @@ unique_ptr<GlobalTableFunctionState> DuckLakeExpireSnapshotsInit(ClientContext &
 
 void DuckLakeExpireSnapshotsExecute(ClientContext &context, TableFunctionInput &data_p, DataChunk &output) {
 	auto &data = data_p.bind_data->Cast<ExpireSnapshotsBindData>();
+	if (!data.valid) {
+		return;
+	}
 	auto &state = data_p.global_state->Cast<DuckLakeExpireSnapshotsData>();
 	if (state.offset >= data.snapshots.size()) {
 		return;

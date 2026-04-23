@@ -49,11 +49,11 @@ SELECT COUNT(*) FROM ducklake_expire_snapshots('ducklake', dry_run => true, vers
 ----
 cannot specify both 'versions' and 'older_than'
 
-# Test 4: Invalid case - neither versions nor older_than, and no global option set
-statement error
+# Test 4: Neither versions nor older_than, and no global option set
+query I
 SELECT COUNT(*) FROM ducklake_expire_snapshots('ducklake', dry_run => true)
 ----
-must specify either 'versions' or 'older_than'
+0
 
 # Verify all snapshots are still present
 query I
