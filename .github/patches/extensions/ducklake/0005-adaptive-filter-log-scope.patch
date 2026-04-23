@@ -1,0 +1,12 @@
+diff --git a/test/sql/copy/parquet/multi_file/adaptive_filter_carryover.test b/test/sql/copy/parquet/multi_file/adaptive_filter_carryover.test
+index be1d43d0ab..699f94ba66 100644
+--- a/test/sql/copy/parquet/multi_file/adaptive_filter_carryover.test
++++ b/test/sql/copy/parquet/multi_file/adaptive_filter_carryover.test
+@@ -74,6 +74,7 @@ SELECT count(*) FROM read_parquet(['{TEST_DIR}/af_cross_1.parquet', '{TEST_DIR}/
+ 
+ query I
+ SELECT count(*) FROM duckdb_logs_parsed('AdaptiveFilter')
++WHERE event = 'INIT' AND file_path LIKE '%af_cross_%.parquet'
+ ----
+ 0
+ 
