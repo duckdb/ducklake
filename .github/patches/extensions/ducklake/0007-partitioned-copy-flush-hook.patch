@@ -1,0 +1,116 @@
+diff --git a/src/include/duckdb/execution/operator/persistent/physical_copy_to_file.hpp b/src/include/duckdb/execution/operator/persistent/physical_copy_to_file.hpp
+index 5e3a772f64..416a3f8873 100644
+--- a/src/include/duckdb/execution/operator/persistent/physical_copy_to_file.hpp
++++ b/src/include/duckdb/execution/operator/persistent/physical_copy_to_file.hpp
+@@ -16,6 +16,8 @@
+ #include "duckdb/parser/parsed_data/copy_info.hpp"
+ #include "duckdb/storage/storage_lock.hpp"
+ 
++#include <functional>
++
+ namespace duckdb {
+ 
+ struct GlobalFileState;
+@@ -48,6 +50,8 @@ public:
+ 	static string GetNonTmpFile(ClientContext &context, const string &tmp_file_path);
+ 	static void ReturnStatistics(DataChunk &chunk, CopyToFileInfo &written_file_info);
+ 
++	void RegisterPartitionFlushCallback(std::function<void(Pipeline &, Event &, ClientContext &)> callback);
++
+ 	bool Rotate() const;
+ 	bool RotateNow(GlobalFileState &global_state) const;
+ 	void FlushBatch(ClientContext &context, GlobalSinkState &gstate_p, unique_ptr<GlobalFileState> &file_state_ptr,
+
+diff --git a/src/execution/operator/persistent/physical_copy_to_file.cpp b/src/execution/operator/persistent/physical_copy_to_file.cpp
+index 1c12cbd5e4..de83b70e0d 100644
+--- a/src/execution/operator/persistent/physical_copy_to_file.cpp
++++ b/src/execution/operator/persistent/physical_copy_to_file.cpp
+@@ -379,6 +379,8 @@ public:
+ 	PartitionedCopy(const PhysicalCopyToFile &op, ClientContext &context, CopyToFileGlobalState &copy_gstate);
+ 
+ public:
++	using FlushCallback = std::function<void(Pipeline &, Event &, ClientContext &)>;
++
+ 	//! PhysicalOperator-like interface
+ 	void Sink(ExecutionContext &execution_context, DataChunk &chunk, PartitionedCopyLocalState &lstate,
+ 	          InterruptState &interrupt_state);
+@@ -387,6 +389,9 @@ public:
+ 	void Finalize(Pipeline &pipeline, Event &event, InterruptState &interrupt_state);
+ 	void Flush(ExecutionContext &execution_context, InterruptState &interrupt_state);
+ 
++	void RegisterFlushCallback(FlushCallback callback);
++	void RunFlushCallbacks(Pipeline &pipeline, Event &event, ClientContext &client);
++
+ 	void InitializeFlush() DUCKDB_REQUIRES(lock);
+ 	void FinalizeState(PartitionedCopyState &state, InterruptState &interrupt_state) DUCKDB_REQUIRES(state.lock);
+ 
+@@ -422,6 +427,8 @@ public:
+ 	shared_ptr<PartitionedCopyState> sinking_state DUCKDB_GUARDED_BY(lock);
+ 	shared_ptr<PartitionedCopyState> flushing_state DUCKDB_GUARDED_BY(lock);
+ 
++	vector<FlushCallback> flush_callbacks DUCKDB_GUARDED_BY(lock);
++
+ 	//! Fine-grained lock for partition write tracking (leaf lock — never held while acquiring lock)
+ 	mutable annotated_mutex active_writes_lock;
+ 	//! The active writes per partition (for partitioned write)
+@@ -945,7 +952,23 @@ unique_ptr<const SortStrategy> PartitionedCopy::ConstructSortStrategy() const {
+ 	return SortStrategy::Factory(context, partition_bys, order_bys, *source_types, partition_stats, source_cardinality);
+ }
+ 
++void PartitionedCopy::RegisterFlushCallback(FlushCallback callback) {
++	annotated_lock_guard<annotated_mutex> guard(lock);
++	flush_callbacks.push_back(std::move(callback));
++}
++
++void PartitionedCopy::RunFlushCallbacks(Pipeline &pipeline, Event &event, ClientContext &client) {
++	vector<FlushCallback> callbacks;
++	{
++		annotated_lock_guard<annotated_mutex> guard(lock);
++		callbacks = std::move(flush_callbacks);
++	}
++	for (auto &entry : callbacks) {
++		entry(pipeline, event, client);
++	}
++}
++
+ void PartitionedCopy::CreateNextState() {
+ 	auto global_sink_state = sort_strategy->GetGlobalSinkState(context);
+ 	annotated_lock_guard<annotated_mutex> guard(lock);
+ 	D_ASSERT(!sinking_state);
+@@ -1099,12 +1121,15 @@ public:
+ 	}
+ 
+ 	void FinishEvent() override {
+-		annotated_lock_guard<annotated_mutex> global_guard(partitioned_copy.lock);
+-		if (partitioned_copy.sinking_state) {
+-			auto partitioned_copy_finalize_event =
+-			    make_shared_ptr<PartitionedCopyFinalizeEvent>(*pipeline, partitioned_copy);
+-			InsertEvent(std::move(partitioned_copy_finalize_event));
++		{
++			annotated_lock_guard<annotated_mutex> global_guard(partitioned_copy.lock);
++			if (partitioned_copy.sinking_state) {
++				auto next_event = make_shared_ptr<PartitionedCopyFinalizeEvent>(*pipeline, partitioned_copy);
++				InsertEvent(std::move(next_event));
++				return;
++			}
+ 		}
++		partitioned_copy.RunFlushCallbacks(*pipeline, *this, GetClientContext());
+ 	}
+ 
+ private:
+@@ -1468,6 +1493,15 @@ void PhysicalCopyToFile::ReturnStatistics(DataChunk &chunk, CopyToFileInfo &info
+ 	chunk.data[5].Append(info.partition_keys);
+ }
+ 
++void PhysicalCopyToFile::RegisterPartitionFlushCallback(
++	    std::function<void(Pipeline &, Event &, ClientContext &)> callback) {
++	if (!partition_output) {
++		return;
++	}
++	auto &gstate = sink_state->Cast<CopyToFileGlobalState>();
++	gstate.partitioned_copy->RegisterFlushCallback(std::move(callback));
++}
++
+ bool PhysicalCopyToFile::Rotate() const {
+ 	return file_size_bytes.IsValid() || batches_per_file.IsValid();
+ }
