@@ -40,7 +40,8 @@ FROM read_parquet('{DATA_PATH}/add_file_partitioned/main/partitioned_t/partition
 4	2
 
 query III
-SELECT table_id, partition_key_index, partition_value FROM metadata.ducklake_file_partition_value;
+SELECT table_id, partition_key_index, partition_value FROM metadata.ducklake_file_partition_value
+ORDER BY 1, 2, 3
 ----
 1	0	1
 1	0	2
@@ -62,12 +63,13 @@ SELECT count(*) FROM metadata.ducklake_file_column_stats where column_id = 2
 
 # Added file has partition value
 query III
-SELECT table_id, partition_key_index, partition_value FROM metadata.ducklake_file_partition_value;
+SELECT table_id, partition_key_index, partition_value FROM metadata.ducklake_file_partition_value
+ORDER BY 1, 2, 3
 ----
 1	0	1
 1	0	2
-1	0	3
 1	0	2
+1	0	3
 
 query I
 SELECT COUNT(*) FROM partitioned_t where partition_column = 2;
