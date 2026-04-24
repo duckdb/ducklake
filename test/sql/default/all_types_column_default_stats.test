@@ -1,5 +1,5 @@
-# name: test/sql/default/add_column_default_stats.test
-# description: verify min/max/null stats are correct after ADD COLUMN with DEFAULT
+# name: test/sql/default/all_types_column_default_stats.test
+# description: verify min/max/null stats for all types are correct after ADD COLUMN with DEFAULT
 # group: [default]
 
 require ducklake
