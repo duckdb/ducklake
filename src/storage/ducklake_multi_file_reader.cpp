@@ -7,6 +7,10 @@
 
 #include "duckdb/common/local_file_system.hpp"
 #include "duckdb/common/types/data_chunk.hpp"
+#include "duckdb/common/vector/array_vector.hpp"
+#include "duckdb/common/vector/list_vector.hpp"
+#include "duckdb/common/vector/struct_vector.hpp"
+#include "duckdb/common/vector_operations/vector_operations.hpp"
 #include "duckdb/execution/expression_executor.hpp"
 #include "duckdb/function/table_function.hpp"
 #include "duckdb/main/client_data.hpp"
@@ -678,6 +682,23 @@ void DuckLakeMultiFileReader::GatherDeletionScanSnapshots(BaseFileReader &reader
 	}
 }
 
+// Materialize a vector into a fresh flat vector of the given count, preserving values. Used to
+// normalize nested outputs from remap_struct, where dropping every source child of a struct inside
+// a list/map produces a Reference'd constant default whose underlying size does not match the
+// logical list length — downstream consumers (e.g. create_sort_key) then index past the buffer.
+static void MaterializeNested(Vector &vec, idx_t count) {
+	if (count == 0) {
+		return;
+	}
+	if (!vec.GetType().IsNested()) {
+		return;
+	}
+	Vector copy(vec.GetType(), count);
+	VectorOperations::Copy(vec, copy, count, 0, 0);
+	vec.Reference(copy);
+	vec.Flatten(count);
+}
+
 void DuckLakeMultiFileReader::FinalizeChunk(ClientContext &context, const MultiFileBindData &bind_data,
                                             BaseFileReader &reader, const MultiFileReaderData &reader_data,
                                             DataChunk &input_chunk, DataChunk &output_chunk,
@@ -720,6 +741,16 @@ void DuckLakeMultiFileReader::FinalizeChunk(ClientContext &context, const MultiF
 		// files.
 		if (read_info.scan_type == DuckLakeScanType::SCAN_DELETIONS && reader.deletion_filter) {
 			GatherDeletionScanSnapshots(reader, reader_data, output_chunk);
+		}
+	}
+	// When struct evolution within a list/map drops every source child, remap_struct produces a
+	// list whose struct child is a Reference'd constant default vector. Downstream consumers
+	// (e.g. create_sort_key) index the child by absolute list offset and crash on that shape.
+	// Recursively flatten nested outputs so the physical layout matches the logical list size.
+	auto out_size = output_chunk.size();
+	if (out_size > 0) {
+		for (idx_t i = 0; i < output_chunk.ColumnCount(); i++) {
+			MaterializeNested(output_chunk.data[i], out_size);
 		}
 	}
 }

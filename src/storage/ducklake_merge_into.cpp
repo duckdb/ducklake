@@ -166,10 +166,20 @@ static void FinalizeCopyToInsert(Pipeline &pipeline, Event &event, ClientContext
 
 SinkFinalizeType DuckLakeMergeInsert::Finalize(Pipeline &pipeline, Event &event, ClientContext &context,
                                                OperatorSinkFinalizeInput &input) const {
-	OperatorSinkFinalizeInput copy_finalize {*copy.sink_state, input.interrupt_state};
-	auto finalize_result = copy.Finalize(pipeline, event, context, copy_finalize);
-	if (finalize_result == SinkFinalizeType::BLOCKED) {
-		return SinkFinalizeType::BLOCKED;
+	auto &copy_to_file = copy.Cast<PhysicalCopyToFile>();
+	if (copy_to_file.partition_output) {
+		// Partitioned writes are normally driven by pipeline events scheduled from Finalize;
+		// that pattern doesn't fit here because we need the written files before we can sink into
+		// the metadata insert. Drive the partitioned finalize synchronously instead.
+		ThreadContext thread(context);
+		ExecutionContext exec_context(context, thread, nullptr);
+		copy_to_file.FinalizePartitionedSync(exec_context, *copy.sink_state, input.interrupt_state);
+	} else {
+		OperatorSinkFinalizeInput copy_finalize {*copy.sink_state, input.interrupt_state};
+		auto finalize_result = copy.Finalize(pipeline, event, context, copy_finalize);
+		if (finalize_result == SinkFinalizeType::BLOCKED) {
+			return SinkFinalizeType::BLOCKED;
+		}
 	}
 
 	FinalizeCopyToInsert(pipeline, event, context, copy, insert, input.interrupt_state);
@@ -379,8 +389,16 @@ SinkFinalizeType DuckLakeMergeUpdate::Finalize(Pipeline &pipeline, Event &event,
 		inline_data_op->OperatorFinalize(pipeline, event, context, inline_finalize);
 	}
 
-	OperatorSinkFinalizeInput copy_finalize {*copy_op.sink_state, input.interrupt_state};
-	copy_op.Finalize(pipeline, event, context, copy_finalize);
+	auto &copy_to_file = copy_op.Cast<PhysicalCopyToFile>();
+	if (copy_to_file.partition_output) {
+		// See DuckLakeMergeInsert::Finalize for rationale.
+		ThreadContext thread(context);
+		ExecutionContext exec_context(context, thread, nullptr);
+		copy_to_file.FinalizePartitionedSync(exec_context, *copy_op.sink_state, input.interrupt_state);
+	} else {
+		OperatorSinkFinalizeInput copy_finalize {*copy_op.sink_state, input.interrupt_state};
+		copy_op.Finalize(pipeline, event, context, copy_finalize);
+	}
 
 	FinalizeCopyToInsert(pipeline, event, context, copy_op, insert_op, input.interrupt_state);
 	return SinkFinalizeType::READY;
