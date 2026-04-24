@@ -610,7 +610,7 @@ SourceResultType DuckLakeDelete::GetDataInternal(ExecutionContext &context, Data
 	auto &global_state = sink_state->Cast<DuckLakeDeleteGlobalState>();
 	auto value = Value::BIGINT(NumericCast<int64_t>(global_state.total_deleted_count));
 	chunk.SetCardinality(1);
-	chunk.SetValue(0, 0, value);
+	chunk.data[0].SetValue(0, value);
 	return SourceResultType::FINISHED;
 }
 

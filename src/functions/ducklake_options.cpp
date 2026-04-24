@@ -161,11 +161,11 @@ void DuckLakeOptionsExecute(ClientContext &context, TableFunctionInput &data_p, 
 	idx_t count = 0;
 	while (state.offset < state.options.size() && count < STANDARD_VECTOR_SIZE) {
 		auto &option = state.options[state.offset++];
-		output.SetValue(0, count, Value(option.option_name));
-		output.SetValue(1, count, option.description);
-		output.SetValue(2, count, Value(option.value));
-		output.SetValue(3, count, Value(option.scope));
-		output.SetValue(4, count, option.scope_entry.empty() ? Value() : Value(option.scope_entry));
+		output.data[0].SetValue(count, Value(option.option_name));
+		output.data[1].SetValue(count, option.description);
+		output.data[2].SetValue(count, Value(option.value));
+		output.data[3].SetValue(count, Value(option.scope));
+		output.data[4].SetValue(count, option.scope_entry.empty() ? Value() : Value(option.scope_entry));
 		count++;
 	}
 	output.SetCardinality(count);

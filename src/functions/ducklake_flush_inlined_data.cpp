@@ -86,9 +86,9 @@ SourceResultType DuckLakeFlushData::GetDataInternal(ExecutionContext &context, D
 
 	auto &gstate = this->sink_state->Cast<DuckLakeInsertGlobalState>();
 	chunk.SetCardinality(1);
-	chunk.SetValue(0, 0, Value(table.schema.name));
-	chunk.SetValue(1, 0, Value(table.name));
-	chunk.SetValue(2, 0, Value::BIGINT(static_cast<int64_t>(gstate.rows_flushed)));
+	chunk.data[0].SetValue(0, Value(table.schema.name));
+	chunk.data[1].SetValue(0, Value(table.name));
+	chunk.data[2].SetValue(0, Value::BIGINT(static_cast<int64_t>(gstate.rows_flushed)));
 	return SourceResultType::FINISHED;
 }
 
