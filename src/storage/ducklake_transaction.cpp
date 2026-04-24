@@ -335,7 +335,7 @@ void LocalTableChanges::AddColumnToLocalInlinedData(ClientContext &context, Tabl
 		// New column: use default value or NULL
 		auto &new_col_vector = new_chunk.data[chunk.ColumnCount()];
 		if (has_default) {
-			new_col_vector.Reference(default_value);
+			new_col_vector.Reference(default_value, count_t(chunk.size()));
 		} else {
 			new_col_vector.SetVectorType(VectorType::CONSTANT_VECTOR);
 			ConstantVector::SetNull(new_col_vector, true);

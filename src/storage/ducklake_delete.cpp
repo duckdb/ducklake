@@ -91,7 +91,7 @@ static DuckLakeDeleteFile WriteDeleteFileInternal(ClientContext &context, InputT
 	write_chunk.Initialize(input.context, types_to_write);
 	// the first vector is constant (the file name)
 	Value filename_val(input.data_file_path);
-	write_chunk.data[0].Reference(filename_val);
+	write_chunk.data[0].Reference(filename_val, count_t(STANDARD_VECTOR_SIZE));
 
 	optional_idx begin_snapshot;
 	idx_t row_count = 0;
