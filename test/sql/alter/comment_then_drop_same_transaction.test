@@ -1,5 +1,5 @@
 # name: test/sql/alter/comment_then_drop_same_transaction.test
-# description: COMMENT followed by DROP in the same transaction must commit the DROP
+# description: ALTER followed by DROP in the same transaction must commit the DROP
 # group: [alter]
 
 require ducklake
@@ -68,5 +68,39 @@ COMMIT;
 
 statement error
 SELECT count(*) FROM v;
+----
+does not exist
+
+# ============================================
+# TABLE: RENAME TABLE + DROP TABLE in same transaction
+# ============================================
+
+statement ok
+CREATE TABLE t_rename (i INT);
+
+statement ok
+INSERT INTO t_rename VALUES (1), (2);
+
+statement ok
+BEGIN;
+
+statement ok
+ALTER TABLE t_rename RENAME TO t_rename2;
+
+statement ok
+DROP TABLE t_rename2;
+
+statement ok
+COMMIT;
+
+# the renamed-away name must not exist
+statement error
+SELECT count(*) FROM t_rename2;
+----
+does not exist
+
+# the original name must not exist either, the DROP must take effect
+statement error
+SELECT count(*) FROM t_rename;
 ----
 does not exist
