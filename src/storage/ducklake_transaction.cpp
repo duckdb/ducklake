@@ -2935,13 +2935,12 @@ void DuckLakeTransaction::DropSchema(DuckLakeSchemaEntry &schema) {
 
 void DuckLakeTransaction::DropTable(DuckLakeTableEntry &table) {
 	catalog_version = ducklake_catalog.GetNewUncommittedCatalogVersion();
+	auto table_id = table.GetTableId();
 	if (table.IsTransactionLocal()) {
-		// table is transaction-local - drop it from the transaction local changes
 		auto schema_entry = new_tables.find(table.ParentSchema().name);
 		if (schema_entry == new_tables.end()) {
-			throw InternalException("Dropping a transaction local table that does not exist?");
+			throw InternalException("Dropping a transaction local table %s that does not exist", table.name);
 		}
-		auto table_id = table.GetTableId();
 		schema_entry->second->DropEntry(table.name);
 		// if we have written any files for this table - clean them up
 		auto context_ref = context.lock();
@@ -2949,15 +2948,18 @@ void DuckLakeTransaction::DropTable(DuckLakeTableEntry &table) {
 		if (schema_entry->second->GetEntries().empty()) {
 			new_tables.erase(schema_entry);
 		}
-	} else {
-		auto table_id = table.GetTableId();
+	}
+
+	// The table exists before the transaction, drop the table anyway.
+	if (!table_id.IsTransactionLocal()) {
+		renamed_tables.erase(table_id);
 		dropped_tables.insert(table_id);
 	}
 }
 
 void DuckLakeTransaction::DropView(DuckLakeViewEntry &view) {
+	auto view_id = view.GetViewId();
 	if (view.IsTransactionLocal()) {
-		// table is transaction-local - drop it from the transaction local changes
 		auto schema_entry = new_tables.find(view.ParentSchema().name);
 		if (schema_entry == new_tables.end()) {
 			throw InternalException("Dropping a transaction local view that does not exist?");
@@ -2966,8 +2968,11 @@ void DuckLakeTransaction::DropView(DuckLakeViewEntry &view) {
 		if (schema_entry->second->GetEntries().empty()) {
 			new_tables.erase(schema_entry);
 		}
-	} else {
-		auto view_id = view.GetViewId();
+	}
+
+	// The view exists before the transaction, drop the view anyway.
+	if (!view_id.IsTransactionLocal()) {
+		// TODO(hjiang): sync with https://github.com/duckdb/ducklake/pull/1069 to remove renamed views.
 		dropped_views.insert(view_id);
 	}
 }
