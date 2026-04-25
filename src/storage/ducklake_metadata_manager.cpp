@@ -230,9 +230,28 @@ void DuckLakeMetadataManager::ExecuteMigration(string migrate_query, bool allow_
 	}
 }
 
+static bool NameMappingHasPartitionColumn(DuckLakeTransaction &transaction) {
+	auto result = transaction.Query(R"(
+SELECT 1
+FROM pragma_table_info('ducklake_name_mapping')
+WHERE name = 'is_partition';
+)");
+	if (result->HasError()) {
+		result->GetErrorObject().Throw("Failed to read name mapping schema from DuckLake: ");
+	}
+	return result->Fetch() != nullptr;
+}
+
 void DuckLakeMetadataManager::MigrateV02(bool allow_failures) {
-	string migrate_query = R"(
-ALTER TABLE {METADATA_CATALOG}.ducklake_name_mapping ADD COLUMN {IF_NOT_EXISTS} is_partition BOOLEAN DEFAULT false;
+	bool skip_partition_column = false;
+	if (allow_failures) {
+		skip_partition_column = NameMappingHasPartitionColumn(transaction);
+	}
+	string migrate_query;
+	if (!skip_partition_column) {
+		migrate_query += "ALTER TABLE {METADATA_CATALOG}.ducklake_name_mapping ADD COLUMN {IF_NOT_EXISTS} is_partition BOOLEAN DEFAULT false;\n";
+	}
+	migrate_query += R"(
 ALTER TABLE {METADATA_CATALOG}.ducklake_snapshot_changes ADD COLUMN {IF_NOT_EXISTS} author VARCHAR DEFAULT NULL;
 ALTER TABLE {METADATA_CATALOG}.ducklake_snapshot_changes ADD COLUMN {IF_NOT_EXISTS} commit_message VARCHAR DEFAULT NULL;
 ALTER TABLE {METADATA_CATALOG}.ducklake_snapshot_changes ADD COLUMN {IF_NOT_EXISTS} commit_extra_info VARCHAR DEFAULT NULL;
