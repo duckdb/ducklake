@@ -3139,7 +3139,7 @@ void DuckLakeTransaction::AlterEntryInternal(DuckLakeViewEntry &view, unique_ptr
 			// view is transaction local - delete the old view from there
 			entries.DropEntry(view.name);
 		} else {
-			// view is not transaction local - add to rename list (preserves tags such as comments)
+			// view is not transaction local - add to rename list
 			auto view_id = view.GetViewId();
 			renamed_views.insert(view_id);
 		}
