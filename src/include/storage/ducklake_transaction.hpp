@@ -275,6 +275,9 @@ public:
 	const set<TableIndex> &GetRenamedTables() {
 		return renamed_tables;
 	}
+	const set<TableIndex> &GetRenamedViews() {
+		return renamed_views;
+	}
 	const case_insensitive_map_t<unique_ptr<DuckLakeCatalogSet>> &GetNewTables() {
 		return new_tables;
 	}
@@ -357,6 +360,7 @@ private:
 	set<MacroIndex> dropped_table_macros;
 
 	set<TableIndex> renamed_tables;
+	set<TableIndex> renamed_views;
 	set<TableIndex> dropped_views;
 	unordered_map<string, DataFileIndex> dropped_files;
 	set<TableIndex> tables_deleted_from;

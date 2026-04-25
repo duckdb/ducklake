@@ -727,8 +727,8 @@ Connection &DuckLakeTransaction::GetConnection() {
 
 bool DuckLakeTransaction::SchemaChangesMade() const {
 	return !new_tables.empty() || !dropped_tables.empty() || new_schemas || !dropped_schemas.empty() ||
-	       !dropped_views.empty() || !new_macros.empty() || !dropped_scalar_macros.empty() ||
-	       !dropped_table_macros.empty();
+	       !dropped_views.empty() || !renamed_views.empty() || !new_macros.empty() ||
+	       !dropped_scalar_macros.empty() || !dropped_table_macros.empty();
 }
 
 bool DuckLakeTransaction::ChangesMade() const {
@@ -2318,7 +2318,11 @@ string DuckLakeTransaction::CommitChanges(DuckLakeCommitState &commit_state,
 	}
 
 	if (!dropped_views.empty()) {
-		batch_queries += metadata_manager->DropViews(dropped_views);
+		batch_queries += metadata_manager->DropViews(dropped_views, false);
+	}
+
+	if (!renamed_views.empty()) {
+		batch_queries += metadata_manager->DropViews(renamed_views, true);
 	}
 
 	if (!dropped_scalar_macros.empty()) {
@@ -3059,7 +3063,10 @@ bool DuckLakeTransaction::IsRenamed(CatalogEntry &entry) {
 		auto &table_entry = entry.Cast<DuckLakeTableEntry>();
 		return renamed_tables.find(table_entry.GetTableId()) != renamed_tables.end();
 	}
-	case CatalogType::VIEW_ENTRY:
+	case CatalogType::VIEW_ENTRY: {
+		auto &view_entry = entry.Cast<DuckLakeViewEntry>();
+		return renamed_views.find(view_entry.GetViewId()) != renamed_views.end();
+	}
 	case CatalogType::MACRO_ENTRY:
 	case CatalogType::SCHEMA_ENTRY:
 	case CatalogType::TABLE_MACRO_ENTRY: {
@@ -3127,14 +3134,14 @@ void DuckLakeTransaction::AlterEntryInternal(DuckLakeViewEntry &view, unique_ptr
 	entries.CreateEntry(std::move(new_entry));
 	switch (new_view.GetLocalChange().type) {
 	case LocalChangeType::RENAMED: {
-		// rename - take care of the old table
+		// rename - take care of the old view
 		if (view.IsTransactionLocal()) {
-			// view is transaction local - delete the old table from there
+			// view is transaction local - delete the old view from there
 			entries.DropEntry(view.name);
 		} else {
-			// view is not transaction local - add to drop list
-			auto table_id = view.GetViewId();
-			dropped_views.insert(table_id);
+			// view is not transaction local - add to rename list (preserves tags such as comments)
+			auto view_id = view.GetViewId();
+			renamed_views.insert(view_id);
 		}
 		break;
 	}

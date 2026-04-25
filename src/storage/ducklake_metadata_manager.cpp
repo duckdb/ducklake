@@ -2037,9 +2037,11 @@ string DuckLakeMetadataManager::DropTables(const set<TableIndex> &ids, bool rena
 	return batch_query;
 }
 
-string DuckLakeMetadataManager::DropViews(const set<TableIndex> &ids) {
+string DuckLakeMetadataManager::DropViews(const set<TableIndex> &ids, bool renamed) {
 	string batch_query = FlushDrop("ducklake_view", "view_id", ids);
-	batch_query += FlushDrop("ducklake_tag", "object_id", ids);
+	if (!renamed) {
+		batch_query += FlushDrop("ducklake_tag", "object_id", ids);
+	}
 	return batch_query;
 }
 
