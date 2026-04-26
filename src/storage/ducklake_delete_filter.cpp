@@ -245,13 +245,44 @@ void DuckLakeDeleteFilter::Initialize(ClientContext &context, const DuckLakeFile
 
 void DuckLakeDeleteFilter::Initialize(const DuckLakeInlinedDataDeletes &inlined_deletes) {
 	D_ASSERT(std::is_sorted(delete_data->deleted_rows.begin(), delete_data->deleted_rows.end()));
-	auto mid_idx = delete_data->deleted_rows.size();
-	for (auto &idx : inlined_deletes.rows) {
-		delete_data->deleted_rows.push_back(idx);
+
+	// Fast path: existing delete data has no per-row snapshot tracking.
+	if (delete_data->snapshot_ids.empty()) {
+		int mid_idx = delete_data->deleted_rows.size();
+		for (auto &idx : inlined_deletes.rows) {
+			delete_data->deleted_rows.push_back(idx);
+		}
+		std::inplace_merge(delete_data->deleted_rows.begin(), delete_data->deleted_rows.begin() + mid_idx,
+		                   delete_data->deleted_rows.end());
+		return;
 	}
-	delete_data->snapshot_ids.clear();
-	std::inplace_merge(delete_data->deleted_rows.begin(), delete_data->deleted_rows.begin() + mid_idx,
-	                   delete_data->deleted_rows.end());
+
+	// Merge existing deletes with inlined deletes.
+	const idx_t merged_size = delete_data->deleted_rows.size() + inlined_deletes.rows.size();
+	vector<idx_t> merged_rows;
+	vector<idx_t> merged_snapshot_ids;
+	merged_rows.reserve(merged_size);
+	merged_snapshot_ids.reserve(merged_size);
+
+	auto lhs_row_it = delete_data->deleted_rows.begin();
+	auto lhs_snapshot_it = delete_data->snapshot_ids.begin();
+	auto rhs_row_it = inlined_deletes.rows.begin();
+	while (lhs_row_it != delete_data->deleted_rows.end() || rhs_row_it != inlined_deletes.rows.end()) {
+		if (rhs_row_it == inlined_deletes.rows.end() ||
+		    (lhs_row_it != delete_data->deleted_rows.end() && *lhs_row_it < *rhs_row_it)) {
+			merged_rows.push_back(*lhs_row_it);
+			merged_snapshot_ids.push_back(*lhs_snapshot_it);
+			lhs_row_it++;
+			lhs_snapshot_it++;
+		} else {
+			merged_rows.push_back(*rhs_row_it);
+			merged_snapshot_ids.push_back(0);
+			rhs_row_it++;
+		}
+	}
+
+	delete_data->deleted_rows = std::move(merged_rows);
+	delete_data->snapshot_ids = std::move(merged_snapshot_ids);
 }
 
 unordered_map<idx_t, idx_t> DuckLakeDeleteFilter::ScanDataFileRowIds(ClientContext &context,

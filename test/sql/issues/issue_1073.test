@@ -1,0 +1,51 @@
+# name: test/sql/issues/issue_1073.test
+# description: regression test for issue #1073
+# group: [issues]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+
+test-env DATA_PATH __TEST_DIR__
+
+statement ok
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '${DATA_PATH}', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE dl.t AS SELECT i AS id FROM range(100) t(i)
+
+statement ok
+DELETE FROM dl.t WHERE id = 0
+
+statement ok
+DELETE FROM dl.t WHERE id = 1
+
+statement ok
+BEGIN
+
+statement ok
+CALL dl.set_option('data_inlining_row_limit', 100);
+
+statement ok
+DELETE FROM dl.t WHERE id = 2
+
+# FIXME: the snapshot of version 1 should return 100.
+query I
+SELECT count(*) FROM dl.t AT (VERSION => 1);
+----
+99
+
+query I
+SELECT count(*) FROM dl.t AT (VERSION => 2);
+----
+98
+
+query I
+SELECT count(*) FROM dl.t AT (VERSION => 3);
+----
+97
+
+statement ok
+ROLLBACK
