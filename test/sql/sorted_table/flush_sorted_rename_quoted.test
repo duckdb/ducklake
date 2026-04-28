@@ -1,0 +1,35 @@
+# name: test/sql/sorted_table/flush_sorted_rename_quoted.test
+# description: flush sorted inlined data with deletes when column name requires SQL quoting
+# group: [sorted_table]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+
+test-env DATA_PATH __TEST_DIR__
+
+statement ok
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '${DATA_PATH}/rename_with_quote', DATA_INLINING_ROW_LIMIT 100)
+
+statement ok
+CREATE TABLE dl.t("My Col" INTEGER)
+
+statement ok
+INSERT INTO dl.t VALUES (3), (1), (2)
+
+statement ok
+DELETE FROM dl.t WHERE "My Col" = 1
+
+statement ok
+ALTER TABLE dl.t SET SORTED BY ("My Col" DESC)
+
+statement ok
+CALL ducklake_flush_inlined_data('dl', table_name => 't')
+
+query I
+SELECT "My Col" FROM dl.t ORDER BY "My Col" DESC
+----
+3
+2
