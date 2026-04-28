@@ -1270,7 +1270,14 @@ string DuckLakeMetadataManager::GenerateFilterPushdown(const TableFilter &filter
 				if (child.GetExpressionClass() != ExpressionClass::BOUND_CONSTANT) {
 					return string();
 				}
-				values.push_back(child.Cast<BoundConstantExpression>().value);
+				auto &constant_value = child.Cast<BoundConstantExpression>().value;
+				if (constant_value.IsNull()) {
+					return string();
+				}
+				values.push_back(constant_value);
+			}
+			if (values.empty()) {
+				return string();
 			}
 			InFilter in_filter(std::move(values));
 			return GenerateFilterPushdown(in_filter, referenced_stats);

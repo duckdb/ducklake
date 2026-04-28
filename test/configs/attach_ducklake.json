@@ -659,12 +659,6 @@
         "test/sql/storage/types/variant/variant_shredding_omit_untyped.test",
         "test/parquet/variant/variant_json_copy.test"
       ]
-    },
-    {
-      "reason": "FIXME: DuckLake filter pushdown crashes on NULL parameter to IN (InternalException: InFilter constant cannot be NULL)",
-      "paths": [
-        "test/sql/prepared/prepare_in.test"
-      ]
     }
   ]
 }
