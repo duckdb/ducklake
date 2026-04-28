@@ -24,6 +24,10 @@
 #include "duckdb/planner/expression.hpp"
 #include "duckdb/parser/parser.hpp"
 #include "duckdb/parser/expression/cast_expression.hpp"
+#include "duckdb/planner/filter/expression_filter.hpp"
+#include "duckdb/planner/expression/bound_comparison_expression.hpp"
+#include "duckdb/planner/expression/bound_constant_expression.hpp"
+#include "duckdb/planner/expression/bound_operator_expression.hpp"
 
 namespace duckdb {
 
@@ -1227,6 +1231,51 @@ string DuckLakeMetadataManager::GenerateFilterPushdown(const TableFilter &filter
 			result += "(" + child_str + ")";
 		}
 		return result;
+	}
+	case TableFilterType::EXPRESSION_FILTER: {
+		auto &expression_filter = filter.Cast<ExpressionFilter>();
+		if (!expression_filter.expr) {
+			return string();
+		}
+		auto expr_class = expression_filter.expr->GetExpressionClass();
+		if (expr_class == ExpressionClass::BOUND_COMPARISON) {
+			auto &comparison = expression_filter.expr->Cast<BoundComparisonExpression>();
+			auto &left = *comparison.left;
+			auto &right = *comparison.right;
+			ExpressionType comparison_type = comparison.GetExpressionType();
+			const BoundConstantExpression *constant_expr = nullptr;
+			if (left.GetExpressionClass() == ExpressionClass::BOUND_REF &&
+			    right.GetExpressionClass() == ExpressionClass::BOUND_CONSTANT) {
+				constant_expr = &right.Cast<BoundConstantExpression>();
+			} else if (right.GetExpressionClass() == ExpressionClass::BOUND_REF &&
+			           left.GetExpressionClass() == ExpressionClass::BOUND_CONSTANT) {
+				constant_expr = &left.Cast<BoundConstantExpression>();
+				comparison_type = FlipComparisonExpression(comparison_type);
+			} else {
+				return string();
+			}
+			ConstantFilter constant_filter(comparison_type, constant_expr->value);
+			return GenerateFilterPushdown(constant_filter, referenced_stats);
+		}
+		if (expr_class == ExpressionClass::BOUND_OPERATOR &&
+		    expression_filter.expr->GetExpressionType() == ExpressionType::COMPARE_IN) {
+			auto &op_expr = expression_filter.expr->Cast<BoundOperatorExpression>();
+			if (op_expr.children.size() < 2 ||
+			    op_expr.children[0]->GetExpressionClass() != ExpressionClass::BOUND_REF) {
+				return string();
+			}
+			vector<Value> values;
+			for (idx_t i = 1; i < op_expr.children.size(); i++) {
+				auto &child = *op_expr.children[i];
+				if (child.GetExpressionClass() != ExpressionClass::BOUND_CONSTANT) {
+					return string();
+				}
+				values.push_back(child.Cast<BoundConstantExpression>().value);
+			}
+			InFilter in_filter(std::move(values));
+			return GenerateFilterPushdown(in_filter, referenced_stats);
+		}
+		return string();
 	}
 	case TableFilterType::OPTIONAL_FILTER: {
 		auto &optional_filter = filter.Cast<OptionalFilter>();
