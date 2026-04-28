@@ -16,6 +16,7 @@
 #include "duckdb/execution/operator/projection/physical_projection.hpp"
 #include "duckdb/execution/operator/scan/physical_dummy_scan.hpp"
 #include "duckdb/execution/operator/persistent/physical_copy_to_file.hpp"
+#include "duckdb/parallel/base_pipeline_event.hpp"
 
 namespace duckdb {
 
@@ -166,14 +167,34 @@ static void FinalizeCopyToInsert(Pipeline &pipeline, Event &event, ClientContext
 	}
 }
 
+class DuckLakeFinalizeCopyToInsertEvent : public BasePipelineEvent {
+public:
+	DuckLakeFinalizeCopyToInsertEvent(Pipeline &pipeline_p, PhysicalOperator &copy_p, PhysicalOperator &insert_p,
+	                                  InterruptState interrupt_state_p)
+	    : BasePipelineEvent(pipeline_p), copy(copy_p), insert(insert_p), interrupt_state(std::move(interrupt_state_p)) {
+	}
+
+	void Schedule() override {
+		FinalizeCopyToInsert(*pipeline, *this, GetClientContext(), copy, insert, interrupt_state);
+	}
+
+private:
+	PhysicalOperator &copy;
+	PhysicalOperator &insert;
+	InterruptState interrupt_state;
+};
+
 SinkFinalizeType DuckLakeMergeInsert::Finalize(Pipeline &pipeline, Event &event, ClientContext &context,
                                                OperatorSinkFinalizeInput &input) const {
+	auto finalize_event =
+	    make_shared_ptr<DuckLakeFinalizeCopyToInsertEvent>(pipeline, copy, insert, input.interrupt_state);
+	event.InsertEvent(finalize_event);
+
 	OperatorSinkFinalizeInput copy_finalize {*copy.sink_state, input.interrupt_state};
 	auto finalize_result = copy.Finalize(pipeline, event, context, copy_finalize);
 	if (finalize_result == SinkFinalizeType::BLOCKED) {
 		return SinkFinalizeType::BLOCKED;
 	}
-	FinalizeCopyToInsert(pipeline, event, context, copy, insert, input.interrupt_state);
 	return SinkFinalizeType::READY;
 }
 
