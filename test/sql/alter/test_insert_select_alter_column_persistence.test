@@ -6,11 +6,17 @@ require ducklake
 
 require parquet
 
+require icu
+
 statement ok
 ATTACH 'ducklake:{TEST_DIR}/alter_insert_select.db' AS dl (DATA_PATH '{TEST_DIR}/alter_insert_select')
 
 statement ok
 USE dl
+
+statement ok
+SET timezone='UTC'
+
 
 statement ok
 CREATE TABLE t (id INT, name VARCHAR)
@@ -48,6 +54,9 @@ ATTACH 'ducklake:{TEST_DIR}/alter_insert_select.db' AS dl (DATA_PATH '{TEST_DIR}
 
 statement ok
 USE dl
+
+statement ok
+SET timezone='UTC'
 
 query IIT
 SELECT * FROM t ORDER BY id
