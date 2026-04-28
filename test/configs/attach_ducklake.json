@@ -21,7 +21,7 @@
     "RETURNING clause",
     "DuckLake does not support sequences",
     "DuckLake does not support user-defined types",
-    "Triggers are only supported for DuckDB tables",
+    "Triggers are not supported for this table type",
     "Parquet files do not support negative intervals",
     "The same row was updated multiple times - this is not (yet) supported in DuckLake",
     "Failed to convert DuckDB type to DuckLake - unsupported type",
