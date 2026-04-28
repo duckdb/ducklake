@@ -401,10 +401,15 @@ SinkFinalizeType DuckLakeMergeUpdate::Finalize(Pipeline &pipeline, Event &event,
 		inline_data_op->OperatorFinalize(pipeline, event, context, inline_finalize);
 	}
 
-	OperatorSinkFinalizeInput copy_finalize {*copy_op.sink_state, input.interrupt_state};
-	copy_op.Finalize(pipeline, event, context, copy_finalize);
+	auto finalize_event =
+	    make_shared_ptr<DuckLakeFinalizeCopyToInsertEvent>(pipeline, copy_op, insert_op, input.interrupt_state);
+	event.InsertEvent(finalize_event);
 
-	FinalizeCopyToInsert(pipeline, event, context, copy_op, insert_op, input.interrupt_state);
+	OperatorSinkFinalizeInput copy_finalize {*copy_op.sink_state, input.interrupt_state};
+	auto finalize_result = copy_op.Finalize(pipeline, event, context, copy_finalize);
+	if (finalize_result == SinkFinalizeType::BLOCKED) {
+		return SinkFinalizeType::BLOCKED;
+	}
 	return SinkFinalizeType::READY;
 }
 
