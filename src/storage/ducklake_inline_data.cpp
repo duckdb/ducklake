@@ -184,6 +184,52 @@ struct StatsFallbackOperator {
 	}
 };
 
+template <class T>
+DuckLakeColumnStats UpdateFloatStats(Vector &input_vec, const LogicalType &type, idx_t row_count) {
+	UnifiedVectorFormat format;
+	input_vec.ToUnifiedFormat(row_count, format);
+
+	auto data = UnifiedVectorFormat::GetData<T>(format);
+	auto &validity = format.validity;
+	DuckLakeColumnStats result(type);
+	result.any_valid = false;
+	result.has_null_count = true;
+	result.has_contains_nan = true;
+	optional_idx min_idx;
+	optional_idx max_idx;
+
+	for (idx_t i = 0; i < row_count; i++) {
+		auto idx = format.sel->get_index(i);
+		if (!validity.RowIsValid(idx)) {
+			result.null_count++;
+			continue;
+		}
+		auto val = data[idx];
+		if (Value::IsNan<T>(val)) {
+			result.contains_nan = true;
+			continue;
+		}
+		if (!min_idx.IsValid()) {
+			min_idx = idx;
+		} else if (val < data[min_idx.GetIndex()]) {
+			min_idx = idx;
+		}
+		if (!max_idx.IsValid()) {
+			max_idx = idx;
+		} else if (val > data[max_idx.GetIndex()]) {
+			max_idx = idx;
+		}
+		result.any_valid = true;
+	}
+	if (min_idx.IsValid()) {
+		result.has_min = true;
+		result.has_max = true;
+		result.min = Value::CreateValue<T>(data[min_idx.GetIndex()]).ToString();
+		result.max = Value::CreateValue<T>(data[max_idx.GetIndex()]).ToString();
+	}
+	return result;
+}
+
 template <class T, class OP>
 DuckLakeColumnStats TemplatedUpdateStats(Vector &input_vec, const LogicalType &type, idx_t row_count) {
 	UnifiedVectorFormat format;
@@ -227,10 +273,17 @@ DuckLakeColumnStats TemplatedUpdateStats(Vector &input_vec, const LogicalType &t
 
 DuckLakeColumnStats GetVectorStats(Vector &input_vec, idx_t row_count) {
 	auto &type = input_vec.GetType();
+	switch (type.id()) {
+	case LogicalTypeId::FLOAT:
+		return UpdateFloatStats<float>(input_vec, type, row_count);
+	case LogicalTypeId::DOUBLE:
+		return UpdateFloatStats<double>(input_vec, type, row_count);
+	default:
+		break;
+	}
 	Vector str_vector(LogicalType::VARCHAR, row_count);
 	VectorOperations::DefaultCast(input_vec, str_vector, row_count);
 	// FIXME: we can be more efficient here by templating on other types (numerics...)
-	// FIXME: we can gather nan statistics for FLOAT/DOUBLE
 	if (RequiresValueComparison(type)) {
 		return TemplatedUpdateStats<string_t, StatsNumericFallbackOperator>(str_vector, type, row_count);
 	}
