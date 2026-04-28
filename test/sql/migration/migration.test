@@ -18,9 +18,6 @@ unzip data/old_ducklake/v04-dev1.db.gz {TEST_DIR}/v04-dev1.db
 
 unzip data/old_ducklake/v04.db.gz {TEST_DIR}/v04.db
 
-# DuckDB parser is currently broken
-mode skip
-
 # test that automatic_migration defaults to false and throws an error
 foreach version v01 v02 v03-dev1 v03 v04-dev1 v04
 
