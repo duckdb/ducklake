@@ -1,0 +1,106 @@
+# name: test/sql/alter/comment_then_drop_same_transaction.test
+# description: ALTER followed by DROP in the same transaction must commit the DROP
+# group: [alter]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+
+statement ok
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '__TEST_DIR__/comment_then_drop/')
+
+statement ok
+USE dl
+
+# ============================================
+# TABLE: COMMENT ON TABLE + DROP TABLE in same transaction
+# ============================================
+
+statement ok
+CREATE TABLE t (i INT);
+
+statement ok
+INSERT INTO t VALUES (1), (2);
+
+statement ok
+BEGIN;
+
+statement ok
+COMMENT ON TABLE t IS 'foo';
+
+statement ok
+DROP TABLE t;
+
+statement ok
+COMMIT;
+
+statement error
+SELECT count(*) FROM t;
+----
+does not exist
+
+# ============================================
+# VIEW: COMMENT ON VIEW + DROP VIEW in same transaction
+# ============================================
+
+statement ok
+CREATE TABLE t (i INT);
+
+statement ok
+INSERT INTO t VALUES (1), (2);
+
+statement ok
+CREATE VIEW v AS SELECT * FROM t;
+
+statement ok
+BEGIN;
+
+statement ok
+COMMENT ON VIEW v IS 'foo';
+
+statement ok
+DROP VIEW v;
+
+statement ok
+COMMIT;
+
+statement error
+SELECT count(*) FROM v;
+----
+does not exist
+
+# ============================================
+# TABLE: RENAME TABLE + DROP TABLE in same transaction
+# ============================================
+
+statement ok
+CREATE TABLE t_rename (i INT);
+
+statement ok
+INSERT INTO t_rename VALUES (1), (2);
+
+statement ok
+BEGIN;
+
+statement ok
+ALTER TABLE t_rename RENAME TO t_rename2;
+
+statement ok
+DROP TABLE t_rename2;
+
+statement ok
+COMMIT;
+
+# the renamed-away name must not exist
+statement error
+SELECT count(*) FROM t_rename2;
+----
+does not exist
+
+# the original name must not exist either, the DROP must take effect
+statement error
+SELECT count(*) FROM t_rename;
+----
+does not exist
