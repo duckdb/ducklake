@@ -37,9 +37,19 @@ ErrorData DuckLakeTransactionManager::CommitTransaction(ClientContext &context, 
 
 void DuckLakeTransactionManager::RollbackTransaction(Transaction &transaction) {
 	auto &ducklake_transaction = transaction.Cast<DuckLakeTransaction>();
-	ducklake_transaction.Rollback();
-	lock_guard<mutex> l(transaction_lock);
-	transactions.erase(transaction);
+	ErrorData rollback_error;
+	try {
+		ducklake_transaction.Rollback();
+	} catch (std::exception &ex) {
+		rollback_error = ErrorData(ex);
+	}
+	{
+		lock_guard<mutex> l(transaction_lock);
+		transactions.erase(transaction);
+	}
+	if (rollback_error.HasError()) {
+		rollback_error.Throw();
+	}
 }
 
 } // namespace duckdb

@@ -94,7 +94,9 @@
     },{
       "reason": "Test only for Postgres as catalog",
       "paths": [
-        "test/sql/metadata/ducklake_settings_postgres.test"
+        "test/sql/metadata/ducklake_settings_postgres.test",
+        "test/sql/transaction/postgres_metadata_explicit_rollback_error.test",
+        "test/sql/transaction/postgres_metadata_rollback_error.test"
       ]
     },
     {
