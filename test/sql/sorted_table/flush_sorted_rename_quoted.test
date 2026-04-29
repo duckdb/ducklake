@@ -23,7 +23,7 @@ statement ok
 DELETE FROM dl.t WHERE "My Col" = 1
 
 statement ok
-ALTER TABLE dl.t SET SORTED BY ("My Col" DESC)
+ALTER TABLE dl.t SET SORTED BY ("my col" DESC)
 
 statement ok
 CALL ducklake_flush_inlined_data('dl', table_name => 't')
