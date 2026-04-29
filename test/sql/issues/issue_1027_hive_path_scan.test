@@ -6,13 +6,13 @@ require ducklake
 
 require parquet
 
-test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
 
 # DATA_PATH contains an incidental key=value segment
-test-env DATA_PATH __TEST_DIR__/issue_1027/site_id=42
+test-env DATA_PATH {TEST_DIR}/issue_1027/site_id=42
 
 statement ok
-ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}')
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}')
 
 statement ok
 CREATE TABLE ducklake.t AS SELECT i AS id FROM range(1000) t(i)

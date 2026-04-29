@@ -131,7 +131,7 @@ INSERT INTO ducklake.tinyints VALUES (50);
 query I
 SELECT stats(d) FROM ducklake.tinyints LIMIT 1
 ----
-<REGEX>:.*Min.*10.*Max.*50.*Has Null.*false.*
+<REGEX>:.*has_null.*false.*max.*50.*min.*10.*
 
 # decimal
 statement ok
@@ -146,7 +146,7 @@ INSERT INTO ducklake.decimals VALUES (99.99);
 query I
 SELECT stats(d) FROM ducklake.decimals LIMIT 1
 ----
-<REGEX>:.*Min.*12.50.*Max.*99.99.*Has Null.*false.*
+<REGEX>:.*has_null.*false.*max.*99.99.*min.*12.50.*
 
 # boolean
 statement ok
@@ -161,7 +161,7 @@ INSERT INTO ducklake.booleans VALUES (false);
 query I
 SELECT stats(d) FROM ducklake.booleans LIMIT 1
 ----
-<REGEX>:.*Min.*false.*Max.*true.*Has Null.*false.*
+<REGEX>:.*has_null.*false.*max.*true.*min.*false.*
 
 # uuid
 statement ok
@@ -176,7 +176,7 @@ INSERT INTO ducklake.uuids VALUES (NULL);
 query I
 SELECT stats(d) FROM ducklake.uuids LIMIT 1
 ----
-<REGEX>:.*Min.*550e8400.*Max.*550e8400.*Has Null.*true.*
+<REGEX>:.*has_null.*true.*max.*550e8400.*min.*550e8400.*
 
 # timestamp
 statement ok
@@ -188,7 +188,7 @@ INSERT INTO ducklake.timestamps VALUES (TIMESTAMP '2024-01-01 00:00:00');
 query I
 SELECT stats(d) FROM ducklake.timestamps LIMIT 1
 ----
-<REGEX>:.*Min.*2024-01-01.*Max.*2024-01-01.*Has Null.*false.*
+<REGEX>:.*has_null.*false.*max.*2024-01-01.*min.*2024-01-01.*
 
 statement ok
 INSERT INTO ducklake.timestamps VALUES (TIMESTAMP '2025-06-15 12:30:00');
@@ -196,7 +196,7 @@ INSERT INTO ducklake.timestamps VALUES (TIMESTAMP '2025-06-15 12:30:00');
 query I
 SELECT stats(d) FROM ducklake.timestamps LIMIT 1
 ----
-<REGEX>:.*Min.*2024-01-01.*Max.*2025-06-15.*Has Null.*false.*
+<REGEX>:.*has_null.*false.*max.*2025-06-15.*min.*2024-01-01.*
 
 # verify optimizer uses stats to eliminate impossible filters (EMPTY_RESULT)
 query II
