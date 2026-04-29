@@ -70,6 +70,8 @@ jobs:
           make release
 
       - name: Test MinIO - AWS
+        env:
+          DUCKDB_TPCH_ANSWERS_DIR: ${{ github.workspace }}/duckdb/extension/tpch/dbgen/answers
         run: |
           ./scripts/start-docker.sh
           build/release/test/unittest --test-config test/configs/minio.json "test/sql/*"
