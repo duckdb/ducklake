@@ -164,7 +164,7 @@ public:
 	virtual void RemoveFilesScheduledForCleanup(const vector<DuckLakeFileForCleanup> &cleaned_up_files);
 	virtual string DropSchemas(const set<SchemaIndex> &ids);
 	virtual string DropTables(const set<TableIndex> &ids, bool renamed);
-	virtual string DropViews(const set<TableIndex> &ids);
+	virtual string DropViews(const set<TableIndex> &ids, bool renamed);
 	virtual string DropMacros(const set<MacroIndex> &ids);
 
 	virtual string WriteNewSchemas(const vector<DuckLakeSchemaInfo> &new_schemas);
