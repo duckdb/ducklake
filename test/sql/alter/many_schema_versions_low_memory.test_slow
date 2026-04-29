@@ -6,18 +6,18 @@ require ducklake
 
 require parquet
 
-test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
 
-test-env DATA_PATH __TEST_DIR__
+test-env DATA_PATH {TEST_DIR}
 
 statement ok
-ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/ducklake_many_schema_versions')
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/ducklake_many_schema_versions')
 
 # Create many tables so each schema-version cache entry is sizeable.
 loop i 0 100
 
 statement ok
-CREATE TABLE ducklake.t${i} (id INTEGER, a INTEGER, b INTEGER, c INTEGER, d INTEGER, e INTEGER)
+CREATE TABLE ducklake.t{i} (id INTEGER, a INTEGER, b INTEGER, c INTEGER, d INTEGER, e INTEGER)
 
 endloop
 
@@ -41,7 +41,7 @@ SET memory_limit='100MB'
 loop i 0 150
 
 statement ok
-ALTER TABLE ducklake.target ADD COLUMN col_${i} INTEGER DEFAULT ${i}
+ALTER TABLE ducklake.target ADD COLUMN col_{i} INTEGER DEFAULT {i}
 
 endloop
 
@@ -69,7 +69,7 @@ CREATE TEMP TABLE mem_filler(i INTEGER, pad VARCHAR)
 loop j 0 2
 
 statement ok
-INSERT INTO mem_filler SELECT i + ${j} * 5000, repeat('x', 1000) FROM range(5000) t(i)
+INSERT INTO mem_filler SELECT i + {j} * 5000, repeat('x', 1000) FROM range(5000) t(i)
 
 endloop
 
@@ -78,7 +78,7 @@ endloop
 loop i 150 200
 
 statement ok
-ALTER TABLE ducklake.target ADD COLUMN col_${i} INTEGER DEFAULT ${i}
+ALTER TABLE ducklake.target ADD COLUMN col_{i} INTEGER DEFAULT {i}
 
 endloop
 
