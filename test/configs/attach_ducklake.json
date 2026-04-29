@@ -42,7 +42,8 @@
     "Unsupported ALTER TABLE",
     "reserved by DuckLake",
     "We cannot add a column with a non-literal default value",
-    "Can't convert TableFilterType"
+    "Can't convert TableFilterType",
+    "Triggers are not supported for this table type"
   ],
   "skip_tests": [
     {
@@ -113,7 +114,8 @@
         "test/sql/logging/logging_csv.test",
         "test/sql/storage/compression/roaring/roaring_bool_analyze_bitset.test",
         "test/sql/storage/compression/roaring/roaring_bool_analyze_run.test",
-        "test/sql/storage/compression/roaring/roaring_bool_analyze_array.test"
+        "test/sql/storage/compression/roaring/roaring_bool_analyze_array.test",
+        "test/sql/copy/parquet/multi_file/adaptive_filter_carryover.test"
       ]
     },
     {
@@ -145,7 +147,8 @@
         "test/optimizer/test_aggregate_function_rewrite.test",
         "test/optimizer/row_number_virtual_column.test",
         "test/sql/window/test_streaming_window.test",
-        "test/sql/transactions/test_cardinality_estimation_uncommitted.test"
+        "test/sql/transactions/test_cardinality_estimation_uncommitted.test",
+        "test/sql/filter/test_struct_pushdown.test"
       ]
     },
     {
@@ -202,6 +205,9 @@
         "test/sql/transactions/test_create_drop_conflict_variation1.test",
         "test/sql/copy/parquet/parquet_glob.test",
         "test/sql/alter/alter_table_set_table_options.test",
+        "test/sql/peg_parser/fuzzer/internal_0227.test",
+        "test/sql/peg_parser/transformer/drop_statement.test",
+        "test/sql/transactions/rollback_drop_table.test",
         "test/sql/function/variant/variant_extract_try_cast.test",
         "test/sql/alter/rename_table/test_rename_table_view.test"
       ]
@@ -538,6 +544,7 @@
     {
       "reason": "Checkpoint in DuckLake doesn't produce expected result. Notice these are not ducklake bugs just tests that do not fit.",
       "paths": [
+        "test/sql/storage/compression/rle/rle_filter.test",
         "test/fuzzer/pedro/incomplete_checkpoint.test",
         "test/sql/copy/csv/rejects/csv_rejects_read.test",
         "test/sql/copy/csv/test_csv_timestamp_tz.test",

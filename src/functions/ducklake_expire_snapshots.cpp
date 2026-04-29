@@ -59,7 +59,7 @@ static unique_ptr<FunctionData> DuckLakeExpireSnapshotsBind(ClientContext &conte
 	filter = "snapshot_id != (SELECT MAX(snapshot_id) FROM {METADATA_CATALOG}.ducklake_snapshot) AND ";
 	if (has_timestamp) {
 		auto timestamp_filter = DuckLakeTableFunctionUtil::FormatTimestampISO8601(timestamp_t(from_timestamp.value));
-		filter += StringUtil::Format("snapshot_time < '%s'", timestamp_filter);
+		filter += StringUtil::Format("snapshot_time::TIMESTAMPTZ < '%s'", timestamp_filter);
 	} else if (!has_versions && !older_than_default.empty()) {
 		interval_t interval;
 		if (!Interval::FromString(older_than_default, interval)) {
@@ -69,7 +69,7 @@ static unique_ptr<FunctionData> DuckLakeExpireSnapshotsBind(ClientContext &conte
 		auto target_timestamp =
 		    SubtractOperator::Operation<timestamp_t, interval_t, timestamp_t>(current_time, interval);
 		auto timestamp_filter = DuckLakeTableFunctionUtil::FormatTimestampISO8601(target_timestamp);
-		filter += StringUtil::Format("snapshot_time < '%s'", timestamp_filter);
+		filter += StringUtil::Format("snapshot_time::TIMESTAMPTZ < '%s'", timestamp_filter);
 	} else {
 		filter += StringUtil::Format("snapshot_id IN (%s)", snapshot_list);
 	}
@@ -112,7 +112,7 @@ void DuckLakeExpireSnapshotsExecute(ClientContext &context, TableFunctionInput &
 	while (state.offset < data.snapshots.size() && count < STANDARD_VECTOR_SIZE) {
 		auto row_values = DuckLakeSnapshotsFunction::GetSnapshotValues(data.snapshots[state.offset++]);
 		for (idx_t col_idx = 0; col_idx < row_values.size(); col_idx++) {
-			output.SetValue(col_idx, count, row_values[col_idx]);
+			output.data[col_idx].SetValue(count, row_values[col_idx]);
 		}
 		count++;
 	}

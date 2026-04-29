@@ -266,13 +266,21 @@ unique_ptr<BaseStatistics> DuckLakeColumnStats::ToStats() const {
 	case LogicalTypeId::TIMESTAMP_NS:
 		return CreateNumericStats();
 	case LogicalTypeId::FLOAT:
-	case LogicalTypeId::DOUBLE:
+	case LogicalTypeId::DOUBLE: {
 		// we only create stats if we know there are no NaN values
 		// FIXME: we can just set Max to NaN instead
 		if (has_contains_nan && !contains_nan) {
 			return CreateNumericStats();
 		}
-		return nullptr;
+		auto stats = NumericStats::CreateEmpty(type);
+		if (!has_null_count || null_count > 0) {
+			stats.SetHasNullFast();
+		}
+		if (!has_null_count || !has_num_values || null_count != num_values) {
+			stats.SetHasNoNullFast();
+		}
+		return stats.ToUnique();
+	}
 	case LogicalTypeId::VARCHAR:
 		return CreateStringStats();
 	case LogicalTypeId::GEOMETRY:

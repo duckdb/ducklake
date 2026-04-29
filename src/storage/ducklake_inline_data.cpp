@@ -259,7 +259,7 @@ void UpdateStats(vector<DuckLakeBaseColumnStats> &stats, idx_t c, Vector &data, 
 			break;
 		}
 		case LogicalTypeId::LIST: {
-			auto &child = ListVector::GetEntry(data);
+			auto &child = ListVector::GetChildMutable(data);
 			UpdateStats(column_stats.children, 0, child, ListVector::GetListSize(data), field_id.GetChildByIndex(0));
 			break;
 		}

@@ -26,6 +26,12 @@
         "test/sql/rewrite_data_files/test_rewrite_concurrency.test",
         "test/sql/rewrite_data_files/test_rewrite_db.test"
       ]
+    },
+    {
+      "reason": "Deletion vectors are written as puffin files, not *-del*.parquet, so the parquet glob assertion does not apply",
+      "paths": [
+        "test/sql/encryption/encryption.test"
+      ]
     }
   ]
 }

@@ -24,6 +24,10 @@
 #include "duckdb/planner/expression.hpp"
 #include "duckdb/parser/parser.hpp"
 #include "duckdb/parser/expression/cast_expression.hpp"
+#include "duckdb/planner/filter/expression_filter.hpp"
+#include "duckdb/planner/expression/bound_comparison_expression.hpp"
+#include "duckdb/planner/expression/bound_constant_expression.hpp"
+#include "duckdb/planner/expression/bound_operator_expression.hpp"
 
 namespace duckdb {
 
@@ -1228,6 +1232,58 @@ string DuckLakeMetadataManager::GenerateFilterPushdown(const TableFilter &filter
 		}
 		return result;
 	}
+	case TableFilterType::EXPRESSION_FILTER: {
+		auto &expression_filter = filter.Cast<ExpressionFilter>();
+		if (!expression_filter.expr) {
+			return string();
+		}
+		auto expr_class = expression_filter.expr->GetExpressionClass();
+		if (expr_class == ExpressionClass::BOUND_COMPARISON) {
+			auto &comparison = expression_filter.expr->Cast<BoundComparisonExpression>();
+			auto &left = *comparison.left;
+			auto &right = *comparison.right;
+			ExpressionType comparison_type = comparison.GetExpressionType();
+			const BoundConstantExpression *constant_expr = nullptr;
+			if (left.GetExpressionClass() == ExpressionClass::BOUND_REF &&
+			    right.GetExpressionClass() == ExpressionClass::BOUND_CONSTANT) {
+				constant_expr = &right.Cast<BoundConstantExpression>();
+			} else if (right.GetExpressionClass() == ExpressionClass::BOUND_REF &&
+			           left.GetExpressionClass() == ExpressionClass::BOUND_CONSTANT) {
+				constant_expr = &left.Cast<BoundConstantExpression>();
+				comparison_type = FlipComparisonExpression(comparison_type);
+			} else {
+				return string();
+			}
+			ConstantFilter constant_filter(comparison_type, constant_expr->value);
+			return GenerateFilterPushdown(constant_filter, referenced_stats);
+		}
+		if (expr_class == ExpressionClass::BOUND_OPERATOR &&
+		    expression_filter.expr->GetExpressionType() == ExpressionType::COMPARE_IN) {
+			auto &op_expr = expression_filter.expr->Cast<BoundOperatorExpression>();
+			if (op_expr.children.size() < 2 ||
+			    op_expr.children[0]->GetExpressionClass() != ExpressionClass::BOUND_REF) {
+				return string();
+			}
+			vector<Value> values;
+			for (idx_t i = 1; i < op_expr.children.size(); i++) {
+				auto &child = *op_expr.children[i];
+				if (child.GetExpressionClass() != ExpressionClass::BOUND_CONSTANT) {
+					return string();
+				}
+				auto &constant_value = child.Cast<BoundConstantExpression>().value;
+				if (constant_value.IsNull()) {
+					return string();
+				}
+				values.push_back(constant_value);
+			}
+			if (values.empty()) {
+				return string();
+			}
+			InFilter in_filter(std::move(values));
+			return GenerateFilterPushdown(in_filter, referenced_stats);
+		}
+		return string();
+	}
 	case TableFilterType::OPTIONAL_FILTER: {
 		auto &optional_filter = filter.Cast<OptionalFilter>();
 		return GenerateFilterPushdown(*optional_filter.child_filter, referenced_stats);
@@ -1361,7 +1417,7 @@ vector<DuckLakeFileListEntry> DuckLakeMetadataManager::GetFilesForTable(DuckLake
 				ExpressionType comparison_type;
 				{
 					lock_guard<mutex> l(dynamic->filter_data->lock);
-					comparison_type = dynamic->filter_data->filter->comparison_type;
+					comparison_type = dynamic->filter_data->comparison_type;
 				}
 				dynamic_filter_columns.push_back(
 				    {col_filter.column_field_index, comparison_type, col_filter.column_type});
@@ -3580,8 +3636,8 @@ FROM {METADATA_CATALOG}.ducklake_snapshot
 WHERE snapshot_id = (
 	SELECT snapshot_id
 	FROM {METADATA_CATALOG}.ducklake_snapshot
-	WHERE snapshot_time %s= %s
-	ORDER BY snapshot_time %s
+	WHERE snapshot_time::TIMESTAMPTZ %s= %s
+	ORDER BY snapshot_time::TIMESTAMPTZ %s
 	LIMIT 1);)",
 		    timestamp_condition, val.DefaultCastAs(LogicalType::VARCHAR).ToSQLString(), timestamp_order));
 	} else {

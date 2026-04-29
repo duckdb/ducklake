@@ -91,7 +91,7 @@ static DuckLakeDeleteFile WriteDeleteFileInternal(ClientContext &context, InputT
 	write_chunk.Initialize(input.context, types_to_write);
 	// the first vector is constant (the file name)
 	Value filename_val(input.data_file_path);
-	write_chunk.data[0].Reference(filename_val);
+	write_chunk.data[0].Reference(filename_val, count_t(STANDARD_VECTOR_SIZE));
 
 	optional_idx begin_snapshot;
 	idx_t row_count = 0;
@@ -610,7 +610,7 @@ SourceResultType DuckLakeDelete::GetDataInternal(ExecutionContext &context, Data
 	auto &global_state = sink_state->Cast<DuckLakeDeleteGlobalState>();
 	auto value = Value::BIGINT(NumericCast<int64_t>(global_state.total_deleted_count));
 	chunk.SetCardinality(1);
-	chunk.SetValue(0, 0, value);
+	chunk.data[0].SetValue(0, value);
 	return SourceResultType::FINISHED;
 }
 
