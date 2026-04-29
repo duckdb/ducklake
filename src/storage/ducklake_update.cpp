@@ -95,7 +95,7 @@ unique_ptr<OperatorState> DuckLakeUpdate::GetOperatorState(ExecutionContext &con
 	vector<LogicalType> expression_types;
 	result->expression_executor = make_uniq<ExpressionExecutor>(context.client, expressions);
 	for (auto &expr : result->expression_executor->expressions) {
-		expression_types.push_back(expr->return_type);
+		expression_types.push_back(expr->GetReturnType());
 	}
 
 	result->update_expression_chunk.Initialize(context.client, expression_types);
@@ -221,7 +221,7 @@ DuckLakeUpdate &DuckLakeUpdate::PlanUpdateOperator(ClientContext &context, Physi
                                                    LogicalUpdate &op, PhysicalOperator &child_plan,
                                                    DuckLakeCopyInput &copy_input) {
 	for (auto &expr : op.expressions) {
-		if (expr->type == ExpressionType::VALUE_DEFAULT) {
+		if (expr->GetExpressionType() == ExpressionType::VALUE_DEFAULT) {
 			throw BinderException("SET DEFAULT is not yet supported for updates of a DuckLake table");
 		}
 	}
@@ -250,7 +250,7 @@ DuckLakeUpdate &DuckLakeUpdate::PlanUpdateOperator(ClientContext &context, Physi
 	// set output types we use physical column types + BIGINT row_id
 	vector<LogicalType> update_output_types;
 	for (auto &expr : update_op.expressions) {
-		update_output_types.push_back(expr->return_type);
+		update_output_types.push_back(expr->GetReturnType());
 	}
 	update_output_types.push_back(LogicalType::BIGINT);
 	update_op.types = std::move(update_output_types);
@@ -272,7 +272,7 @@ PhysicalOperator &DuckLakeCatalog::PlanUpdate(ClientContext &context, PhysicalPl
 	optional_ptr<PhysicalOperator> plan = &update_op;
 	optional_ptr<DuckLakeInlineData> inline_data;
 
-	idx_t data_inlining_row_limit = GetInliningLimit(context, table, plan->types);
+	idx_t data_inlining_row_limit = GetInliningLimit(context, table);
 	if (data_inlining_row_limit > 0) {
 		plan = planner.Make<DuckLakeInlineData>(*plan, data_inlining_row_limit);
 		inline_data = plan->Cast<DuckLakeInlineData>();

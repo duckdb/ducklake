@@ -1,0 +1,38 @@
+# name: test/sql/compaction/expire_snapshots_invalid_params.test
+# description: test ducklake_expire_snapshots with invalid parameter combinations
+# group: [compaction]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/expire_snapshots_invalid_params', METADATA_CATALOG 'metadata')
+
+# Create table and make multiple snapshots
+statement ok
+CREATE TABLE ducklake.test(i INTEGER)
+
+statement ok
+INSERT INTO ducklake.test VALUES (1)
+
+statement ok
+INSERT INTO ducklake.test VALUES (2)
+
+statement ok
+INSERT INTO ducklake.test VALUES (3)
+
+query I
+SELECT COUNT(*) FROM ducklake_snapshots('ducklake')
+----
+5
+
+# Test invalid case, both versions AND older_than are specified
+statement error
+SELECT COUNT(*) FROM ducklake_expire_snapshots('ducklake', dry_run => true, versions => [1, 2], older_than => NOW())
+----
+cannot specify both 'versions' and 'older_than'

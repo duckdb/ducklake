@@ -75,7 +75,7 @@ vector<BoundOrderByNode> DuckLakeCompactor::BindSortOrders(Binder &binder, DuckL
 DuckLakeCompaction::DuckLakeCompaction(PhysicalPlan &physical_plan, const vector<LogicalType> &types,
                                        DuckLakeTableEntry &table, vector<DuckLakeCompactionFileEntry> source_files_p,
                                        string encryption_key_p, optional_idx partition_id,
-                                       vector<string> partition_values_p, optional_idx row_id_start,
+                                       vector<Value> partition_values_p, optional_idx row_id_start,
                                        PhysicalOperator &child, CompactionType type)
     : PhysicalOperator(physical_plan, PhysicalOperatorType::EXTENSION, types, 0), table(table),
       source_files(std::move(source_files_p)), encryption_key(std::move(encryption_key_p)), partition_id(partition_id),
@@ -198,7 +198,7 @@ struct DuckLakeCompactionCandidates {
 struct DuckLakeCompactionGroup {
 	idx_t schema_version;
 	optional_idx partition_id;
-	vector<string> partition_values;
+	vector<Value> partition_values;
 };
 
 struct DuckLakeCompactionGroupHash {
@@ -208,8 +208,12 @@ struct DuckLakeCompactionGroupHash {
 		if (group.partition_id.IsValid()) {
 			hash ^= std::hash<idx_t>()(group.partition_id.GetIndex());
 		}
-		for (auto &partition_val : group.partition_values) {
-			hash ^= std::hash<string>()(partition_val);
+		for (auto &val : group.partition_values) {
+			if (val.IsNull()) {
+				hash ^= 0x9E3779B97F4A7C15ULL;
+			} else {
+				hash ^= std::hash<string>()(val.ToString());
+			}
 		}
 		return hash;
 	}
@@ -217,8 +221,23 @@ struct DuckLakeCompactionGroupHash {
 
 struct DuckLakeCompactionGroupEquality {
 	bool operator()(const DuckLakeCompactionGroup &a, const DuckLakeCompactionGroup &b) const {
-		return a.schema_version == b.schema_version && a.partition_id == b.partition_id &&
-		       a.partition_values == b.partition_values;
+		if (a.schema_version != b.schema_version || a.partition_id != b.partition_id) {
+			return false;
+		}
+		if (a.partition_values.size() != b.partition_values.size()) {
+			return false;
+		}
+		for (idx_t i = 0; i < a.partition_values.size(); i++) {
+			const auto &av = a.partition_values[i];
+			const auto &bv = b.partition_values[i];
+			if (av.IsNull() != bv.IsNull()) {
+				return false;
+			}
+			if (!av.IsNull() && av.ToString() != bv.ToString()) {
+				return false;
+			}
+		}
+		return true;
 	}
 };
 
@@ -254,9 +273,10 @@ void DuckLakeCompactor::GenerateCompactions(DuckLakeTableEntry &table,
 			// (does not apply to REWRITE_DELETES - delete files must be rewritten regardless of data file size)
 			continue;
 		}
-		if ((!candidate.delete_files.empty() && type == CompactionType::MERGE_ADJACENT_TABLES) ||
-		    candidate.file.end_snapshot.IsValid() || candidate.has_inlined_deletions) {
-			// Merge Adjacent Tables doesn't perform the merge if delete files are present
+		if (((!candidate.delete_files.empty() || candidate.has_inlined_deletions) &&
+		     type == CompactionType::MERGE_ADJACENT_TABLES) ||
+		    candidate.file.end_snapshot.IsValid()) {
+			// Merge Adjacent Tables doesn't perform the merge if any deletes are present
 			continue;
 		}
 		// construct the compaction group for this file - i.e. the set of candidate files we can compact it with
@@ -318,6 +338,10 @@ void DuckLakeCompactor::GenerateCompactions(DuckLakeTableEntry &table,
 				idx_t compaction_file_count = compaction_idx - start_idx;
 				if (compaction_file_count == 1) {
 					// If we only have one file to compact, we have nothing to compact
+					compacted_files++;
+					if (compacted_files >= options.max_files) {
+						break;
+					}
 					continue;
 				}
 				vector<DuckLakeCompactionFileEntry> compaction_files;
@@ -413,9 +437,11 @@ DuckLakeCompactor::GenerateCompactionCommand(vector<DuckLakeCompactionFileEntry>
 	for (auto &source : source_files) {
 		DuckLakeFileListEntry result;
 		result.file = source.file.data;
+		result.file_id = source.file.id;
 		result.row_id_start = source.file.row_id_start;
 		result.snapshot_id = source.file.begin_snapshot;
 		result.mapping_id = source.file.mapping_id;
+		result.inlined_file_deletions = source.inlined_file_deletions;
 		switch (type) {
 		case CompactionType::REWRITE_DELETES: {
 			if (!source.delete_files.empty()) {

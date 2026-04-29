@@ -231,7 +231,7 @@ SourceResultType DuckLakeInsert::GetDataInternal(ExecutionContext &context, Data
 	auto &global_state = sink_state->Cast<DuckLakeInsertGlobalState>();
 	auto value = Value::BIGINT(NumericCast<int64_t>(global_state.total_insert_count));
 	chunk.SetCardinality(1);
-	chunk.SetValue(0, 0, value);
+	chunk.data[0].SetValue(0, value);
 	return SourceResultType::FINISHED;
 }
 //===--------------------------------------------------------------------===//
@@ -459,7 +459,7 @@ static void GeneratePartitionExpressions(ClientContext &context, DuckLakeCopyInp
 		auto expr = GetPartitionExpression(context, copy_input, field);
 		copy_options.names.push_back(GetPartitionExpressionName(copy_input, field, names));
 		names.insert(copy_options.names.back());
-		copy_options.expected_types.push_back(expr->return_type);
+		copy_options.expected_types.push_back(expr->GetReturnType());
 		copy_options.projection_list.push_back(std::move(expr));
 	}
 }
@@ -590,7 +590,7 @@ static void GenerateProjection(ClientContext &context, PhysicalPlanGenerator &pl
 	// push the projection
 	vector<LogicalType> types;
 	for (auto &expr : expressions) {
-		types.push_back(expr->return_type);
+		types.push_back(expr->GetReturnType());
 	}
 	auto &proj =
 	    planner.Make<PhysicalProjection>(std::move(types), std::move(expressions), plan->estimated_cardinality);
@@ -738,7 +738,7 @@ string DuckLakeCatalog::GenerateEncryptionKey(ClientContext &context) const {
 static void ResolveColumnRefs(unique_ptr<Expression> &expr) {
 	if (expr->GetExpressionClass() == ExpressionClass::BOUND_COLUMN_REF) {
 		auto &col_ref = expr->Cast<BoundColumnRefExpression>();
-		expr = make_uniq<BoundReferenceExpression>(col_ref.return_type,
+		expr = make_uniq<BoundReferenceExpression>(col_ref.GetReturnType(),
 		                                           NumericCast<storage_t>(col_ref.binding.column_index.GetIndex()));
 		return;
 	}
@@ -806,7 +806,7 @@ PhysicalOperator &DuckLakeCatalog::PlanInsert(ClientContext &context, PhysicalPl
 
 	optional_ptr<DuckLakeInlineData> inline_data;
 
-	idx_t data_inlining_row_limit = GetInliningLimit(context, ducklake_table, plan->types);
+	idx_t data_inlining_row_limit = GetInliningLimit(context, ducklake_table);
 	if (data_inlining_row_limit > 0) {
 		plan = planner.Make<DuckLakeInlineData>(*plan, data_inlining_row_limit);
 		inline_data = plan->Cast<DuckLakeInlineData>();
@@ -842,8 +842,7 @@ PhysicalOperator &DuckLakeCatalog::PlanCreateTableAs(ClientContext &context, Phy
 	optional_ptr<DuckLakeInlineData> inline_data;
 	idx_t data_inlining_row_limit = DataInliningRowLimit(context, duck_schema.GetSchemaId(), TableIndex());
 	auto &metadata_manager = duck_transaction.GetMetadataManager();
-	if (data_inlining_row_limit > 0 && !DuckLakeUtil::HasInlinedSystemColumnConflict(columns) &&
-	    metadata_manager.SupportsInliningTypes(plan.types)) {
+	if (data_inlining_row_limit > 0 && metadata_manager.CanInlineColumns(columns)) {
 		root = planner.Make<DuckLakeInlineData>(root.get(), data_inlining_row_limit);
 		inline_data = root.get().Cast<DuckLakeInlineData>();
 	}

@@ -25,6 +25,7 @@
 #include "duckdb/planner/table_filter.hpp"
 
 namespace duckdb {
+class ColumnList;
 class DuckLakeCatalogSet;
 class DuckLakeSchemaEntry;
 class DuckLakeTableEntry;
@@ -112,10 +113,16 @@ public:
 	virtual bool SupportsAppender() const {
 		return true;
 	}
-	//! Check if a set of LogicalTypes supports data inlining, recursing into nested types
-	bool SupportsInliningTypes(const vector<LogicalType> &types);
+	//! Maximum identifier length in bytes supported by this backend
+	virtual idx_t MaxIdentifierLength() const {
+		return NumericLimits<idx_t>::Maximum();
+	}
 	//! Check if columns (stored as DuckLakeColumnInfo) support inlining, recursing into children
 	bool SupportsInliningColumns(const vector<DuckLakeColumnInfo> &columns);
+
+	//! Check whether a table with the given columns can be inlined
+	bool CanInlineColumns(const ColumnList &columns);
+	bool CanInlineColumns(const vector<DuckLakeColumnInfo> &columns);
 
 	virtual string GetColumnTypeInternal(const LogicalType &column_type);
 	virtual string CastColumnToTarget(const string &column, const LogicalType &type);
@@ -213,6 +220,7 @@ public:
 	SnapshotDeletedFromFiles GetFilesDeletedOrDroppedAfterSnapshot(const DuckLakeSnapshot &start_snapshot) const;
 	virtual unique_ptr<DuckLakeSnapshot> GetSnapshot();
 	virtual unique_ptr<DuckLakeSnapshot> GetSnapshot(BoundAtClause &at_clause, SnapshotBound bound);
+
 	virtual idx_t GetNextColumnId(TableIndex table_id);
 	virtual unique_ptr<QueryResult> ReadInlinedData(DuckLakeSnapshot snapshot, const string &inlined_table_name,
 	                                                const vector<string> &columns_to_read);

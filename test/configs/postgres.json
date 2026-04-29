@@ -50,6 +50,12 @@
       ]
     },
     {
+      "reason": "Postgres 63-byte identifier limit disables inlining for long column names",
+      "paths": [
+        "test/sql/data_inlining/long_column_name_inlining.test"
+      ]
+    },
+    {
       "reason": "Postgres Locking (Not a bug, rather PG behavior)",
       "paths": [
         "test/sql/transaction/transaction_conflict_inlining.test"
