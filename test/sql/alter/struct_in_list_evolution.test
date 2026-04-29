@@ -83,9 +83,6 @@ ALTER TABLE ducklake.test ALTER COLUMN col1 SET DATA TYPE STRUCT(k INTEGER)[];
 statement ok
 INSERT INTO ducklake.test VALUES ([{'k': 10000}])
 
-# FIXME: Seems to be a duckdb's MultiFileColumnMapper issue
-mode skip
-
 query I
 FROM ducklake.test ORDER BY ALL
 ----

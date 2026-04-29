@@ -121,9 +121,6 @@ ALTER TABLE ducklake.test DROP COLUMN col1.element.j
 statement ok
 INSERT INTO ducklake.test VALUES ([{'k': 10000}])
 
-# FIXME: Seems to be a duckdb's MultiFileColumnMapper issue
-mode skip
-
 query I
 FROM ducklake.test ORDER BY ALL
 ----
