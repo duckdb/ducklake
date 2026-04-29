@@ -196,7 +196,9 @@ struct DuckLakeCompactionCandidates {
 };
 
 struct DuckLakeCompactionGroup {
-	idx_t schema_version;
+	//! Unset when cross-schema merging is allowed, so files from different
+	//! schema_versions fall into the same bucket.
+	optional_idx schema_version;
 	optional_idx partition_id;
 	vector<string> partition_values;
 };
@@ -204,7 +206,9 @@ struct DuckLakeCompactionGroup {
 struct DuckLakeCompactionGroupHash {
 	uint64_t operator()(const DuckLakeCompactionGroup &group) const {
 		uint64_t hash = 0;
-		hash ^= std::hash<idx_t>()(group.schema_version);
+		if (group.schema_version.IsValid()) {
+			hash ^= std::hash<idx_t>()(group.schema_version.GetIndex());
+		}
 		if (group.partition_id.IsValid()) {
 			hash ^= std::hash<idx_t>()(group.partition_id.GetIndex());
 		}
@@ -261,7 +265,14 @@ void DuckLakeCompactor::GenerateCompactions(DuckLakeTableEntry &table,
 		}
 		// construct the compaction group for this file - i.e. the set of candidate files we can compact it with
 		DuckLakeCompactionGroup group;
-		group.schema_version = candidate.schema_version;
+		if (!options.allow_cross_schema || type != CompactionType::MERGE_ADJACENT_TABLES) {
+			// by default, files written under different schema_versions must stay in
+			// separate groups. With allow_cross_schema we let them merge - the reader
+			// will project each file into the latest schema via its mapping_id.
+			// Cross-schema merging is only supported for MERGE_ADJACENT_TABLES; the
+			// REWRITE_DELETES path assumes the source and target schemas match.
+			group.schema_version = candidate.schema_version;
+		}
 		group.partition_id = candidate.file.partition_id;
 		group.partition_values = candidate.file.partition_values;
 
@@ -387,9 +398,20 @@ unique_ptr<LogicalOperator> DuckLakeCompactor::InsertSort(Binder &binder, unique
 
 unique_ptr<LogicalOperator>
 DuckLakeCompactor::GenerateCompactionCommand(vector<DuckLakeCompactionFileEntry> source_files) {
-	// get the table entry at the specified snapshot
-	auto snapshot_id = source_files[0].file.begin_snapshot;
-	DuckLakeSnapshot snapshot(snapshot_id, source_files[0].schema_version, 0, 0);
+	// Determine which snapshot to bind the scan + output schema against.
+	// Normally this is the schema_version that the source files were written
+	// under (they all share one, enforced by DuckLakeCompactionGroup). When
+	// allow_cross_schema is set for MERGE_ADJACENT_TABLES, the group may contain
+	// files from multiple schema_versions; in that case we bind against the
+	// latest snapshot so the merged output is written under the current schema,
+	// and let DuckLakeMultiFileReader project each source file via its
+	// per-file mapping_id.
+	const bool use_latest_snapshot =
+	    options.allow_cross_schema && type == CompactionType::MERGE_ADJACENT_TABLES;
+	DuckLakeSnapshot snapshot = use_latest_snapshot
+	                                ? transaction.GetSnapshot()
+	                                : DuckLakeSnapshot(source_files[0].file.begin_snapshot,
+	                                                   source_files[0].schema_version, 0, 0);
 
 	auto entry = catalog.GetEntryById(transaction, snapshot, table_id);
 	if (!entry) {
@@ -639,13 +661,14 @@ static void GenerateCompaction(ClientContext &context, DuckLakeTransaction &tran
                                DuckLakeCatalog &ducklake_catalog, TableFunctionBindInput &input,
                                DuckLakeTableEntry &cur_table, CompactionType type, double delete_threshold,
                                uint64_t max_files, optional_idx min_file_size, optional_idx max_file_size,
-                               vector<unique_ptr<LogicalOperator>> &compactions) {
+                               bool allow_cross_schema, vector<unique_ptr<LogicalOperator>> &compactions) {
 	switch (type) {
 	case CompactionType::MERGE_ADJACENT_TABLES: {
 		DuckLakeMergeAdjacentOptions options;
 		options.max_files = max_files;
 		options.min_file_size = min_file_size;
 		options.max_file_size = max_file_size;
+		options.allow_cross_schema = allow_cross_schema;
 		DuckLakeCompactor compactor(context, ducklake_catalog, transaction, *input.binder, cur_table.GetTableId(),
 		                            options);
 		compactor.GenerateCompactions(cur_table, compactions);
@@ -727,6 +750,15 @@ unique_ptr<LogicalOperator> BindCompaction(ClientContext &context, TableFunction
 		throw BinderException("The min_file_size must be less than max_file_size.");
 	}
 
+	bool allow_cross_schema = false;
+	auto allow_cross_schema_entry = input.named_parameters.find("allow_cross_schema");
+	if (allow_cross_schema_entry != input.named_parameters.end()) {
+		if (allow_cross_schema_entry->second.IsNull()) {
+			throw BinderException("The allow_cross_schema option must be a non-null boolean.");
+		}
+		allow_cross_schema = BooleanValue::Get(allow_cross_schema_entry->second);
+	}
+
 	if (input.inputs.size() == 1) {
 		// No default schema/table, we will perform rewrites on deletes in the whole database
 		auto schemas = ducklake_catalog.GetSchemas(context);
@@ -739,7 +771,8 @@ unique_ptr<LogicalOperator> BindCompaction(ClientContext &context, TableFunction
 					                                             cur_table.GetTableId(), "true") == "true") {
 						auto delete_threshold = GetDeleteThreshold(&dl_cur_schema, cur_table, ducklake_catalog, input);
 						GenerateCompaction(context, transaction, ducklake_catalog, input, cur_table, type,
-						                   delete_threshold, max_files, min_file_size, max_file_size, compactions);
+						                   delete_threshold, max_files, min_file_size, max_file_size,
+						                   allow_cross_schema, compactions);
 					}
 				}
 			});
@@ -773,7 +806,7 @@ unique_ptr<LogicalOperator> BindCompaction(ClientContext &context, TableFunction
 	if (auto_compact) {
 		auto delete_threshold = GetDeleteThreshold(dl_schema, ducklake_table, ducklake_catalog, input);
 		GenerateCompaction(context, transaction, ducklake_catalog, input, ducklake_table, type, delete_threshold,
-		                   max_files, min_file_size, max_file_size, compactions);
+		                   max_files, min_file_size, max_file_size, allow_cross_schema, compactions);
 	}
 
 	return GenerateCompactionOperator(input, bind_index, compactions);
@@ -797,6 +830,7 @@ TableFunctionSet DuckLakeMergeAdjacentFilesFunction::GetFunctions() {
 		function.named_parameters["min_file_size"] = LogicalType::UBIGINT;
 		function.named_parameters["max_file_size"] = LogicalType::UBIGINT;
 		function.named_parameters["max_compacted_files"] = LogicalType::UBIGINT;
+		function.named_parameters["allow_cross_schema"] = LogicalType::BOOLEAN;
 		if (type.size() == 2) {
 			function.named_parameters["schema"] = LogicalType::VARCHAR;
 		}

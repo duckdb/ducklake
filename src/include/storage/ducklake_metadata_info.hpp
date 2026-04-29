@@ -482,6 +482,10 @@ struct DuckLakeMergeAdjacentOptions {
 	uint64_t max_files;
 	optional_idx min_file_size;
 	optional_idx max_file_size;
+	//! When true, files written under different schema_versions may be merged
+	//! together into the current schema. Relies on the per-file mapping_id +
+	//! DuckLakeMultiFileReader to project each source into the latest schema.
+	bool allow_cross_schema = false;
 };
 
 struct DuckLakeFileSizeOptions {

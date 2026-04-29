@@ -1,0 +1,186 @@
+# name: test/sql/compaction/merge_adjacent_cross_schema.test
+# description: test allow_cross_schema flag on ducklake_merge_adjacent_files
+# group: [compaction]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/ducklake_cross_schema/')
+
+statement ok
+USE ducklake;
+
+#
+# Core scenario: ADD COLUMN between inserts. With allow_cross_schema => true,
+# files written under both schemas merge into a single file under the latest
+# schema. Old rows take NULL for the new column.
+#
+
+statement ok
+CREATE TABLE t AS SELECT range AS id FROM range(5);
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake');
+
+statement ok
+INSERT INTO t VALUES (5), (6);
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake');
+
+statement ok
+ALTER TABLE t ADD COLUMN label VARCHAR;
+
+statement ok
+INSERT INTO t VALUES (7, 'seven'), (8, 'eight');
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake');
+
+# three files exist, spanning two schema_versions
+query I
+SELECT COUNT(*) FROM ducklake_list_files('ducklake', 't')
+----
+3
+
+# merge everything across the schema_version boundary
+query III
+SELECT table_name, files_processed, files_created FROM ducklake_merge_adjacent_files('ducklake', 't', allow_cross_schema => true)
+----
+t	3	1
+
+statement ok
+CALL ducklake_cleanup_old_files('ducklake', cleanup_all => true);
+
+query I
+SELECT COUNT(*) FROM ducklake_list_files('ducklake', 't')
+----
+1
+
+# data integrity: old rows fill NULL on the new column, new rows keep their values
+query IT
+SELECT id, label FROM t ORDER BY id;
+----
+0	NULL
+1	NULL
+2	NULL
+3	NULL
+4	NULL
+5	NULL
+6	NULL
+7	seven
+8	eight
+
+#
+# Backward compat: without the flag, old + new schema files stay in separate
+# groups and only same-schema groups merge. This is the current behavior.
+#
+
+statement ok
+CREATE TABLE t_compat AS SELECT range AS id FROM range(3);
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake');
+
+statement ok
+INSERT INTO t_compat VALUES (3), (4);
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake');
+
+statement ok
+ALTER TABLE t_compat ADD COLUMN label VARCHAR;
+
+statement ok
+INSERT INTO t_compat VALUES (5, 'a'), (6, 'b');
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake');
+
+statement ok
+INSERT INTO t_compat VALUES (7, 'c'), (8, 'd');
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake');
+
+# 4 files: 2 pre-ALTER + 2 post-ALTER
+query I
+SELECT COUNT(*) FROM ducklake_list_files('ducklake', 't_compat')
+----
+4
+
+# default call: one merge per schema_version group (2 + 2 -> 1 + 1)
+query III
+SELECT table_name, files_processed, files_created FROM ducklake_merge_adjacent_files('ducklake', 't_compat') ORDER BY ALL
+----
+t_compat	2	1
+t_compat	2	1
+
+statement ok
+CALL ducklake_cleanup_old_files('ducklake', cleanup_all => true);
+
+# two files remain - one per schema_version
+query I
+SELECT COUNT(*) FROM ducklake_list_files('ducklake', 't_compat')
+----
+2
+
+#
+# Partition isolation: even with allow_cross_schema => true, files written
+# under different partition specs must not be merged together. The grouping
+# key still includes partition_id, and SET PARTITIONED BY mints a new one.
+#
+
+statement ok
+CREATE TABLE t_part (id INTEGER, part INTEGER);
+
+statement ok
+ALTER TABLE t_part SET PARTITIONED BY (part);
+
+statement ok
+INSERT INTO t_part VALUES (1, 0), (2, 0);
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake');
+
+statement ok
+INSERT INTO t_part VALUES (3, 0), (4, 0);
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake');
+
+# repartition - bumps partition_id (and schema_version)
+statement ok
+ALTER TABLE t_part SET PARTITIONED BY (id);
+
+statement ok
+INSERT INTO t_part VALUES (5, 0), (6, 0);
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake');
+
+statement ok
+INSERT INTO t_part VALUES (7, 0), (8, 0);
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake');
+
+# with allow_cross_schema => true, the two partition specs still isolate:
+# old spec has part=0 bucket with 2 files; new spec has 4 per-id buckets
+# with 1 file each. Only the old-spec (part=0) bucket has >=2 files and merges.
+query III
+SELECT table_name, files_processed, files_created FROM ducklake_merge_adjacent_files('ducklake', 't_part', allow_cross_schema => true) ORDER BY ALL
+----
+t_part	2	1
+
+# row count preserved
+query I
+SELECT COUNT(*) FROM t_part
+----
+8
