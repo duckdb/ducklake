@@ -107,7 +107,7 @@ DuckLakeTableEntry::DuckLakeTableEntry(DuckLakeTableEntry &parent, CreateTableIn
 }
 
 static void ReplaceColumnRefName(ParsedExpression &expr, const string &old_name, const string &new_name) {
-	if (expr.type == ExpressionType::COLUMN_REF) {
+	if (expr.GetExpressionType() == ExpressionType::COLUMN_REF) {
 		auto &colref = expr.Cast<ColumnRefExpression>();
 		if (!colref.IsQualified() && StringUtil::CIEquals(colref.GetColumnName(), old_name)) {
 			colref.column_names.back() = new_name;
@@ -457,7 +457,7 @@ DuckLakePartitionField GetPartitionField(DuckLakeTableEntry &table, ParsedExpres
 	string column_name;
 	DuckLakePartitionField field;
 
-	switch (expr.type) {
+	switch (expr.GetExpressionType()) {
 	case ExpressionType::COLUMN_REF: {
 		auto &colref = expr.Cast<ColumnRefExpression>();
 		column_name = GetPartitionColumnName(colref);
@@ -474,10 +474,10 @@ DuckLakePartitionField GetPartitionField(DuckLakeTableEntry &table, ParsedExpres
 			if (function.children.size() != 2) {
 				throw InvalidInputException("Expected bucket(bucket_count, column), but got %s", expr.ToString());
 			}
-			if (function.children[0]->type != ExpressionType::VALUE_CONSTANT) {
+			if (function.children[0]->GetExpressionType() != ExpressionType::VALUE_CONSTANT) {
 				throw InvalidInputException("Bucket count must be a constant integer, got %s", expr.ToString());
 			}
-			if (function.children[1]->type != ExpressionType::COLUMN_REF) {
+			if (function.children[1]->GetExpressionType() != ExpressionType::COLUMN_REF) {
 				throw InvalidInputException("Expected bucket(bucket_count, column), but got %s", expr.ToString());
 			}
 
@@ -509,7 +509,7 @@ DuckLakePartitionField GetPartitionField(DuckLakeTableEntry &table, ParsedExpres
 			    "Unsupported partition function %s - only year, month, day, hour, and bucket are supported", name);
 		}
 
-		if (function.children.size() != 1 || function.children[0]->type != ExpressionType::COLUMN_REF) {
+		if (function.children.size() != 1 || function.children[0]->GetExpressionType() != ExpressionType::COLUMN_REF) {
 			throw NotImplementedException("Expected %s(column), but got %s", name, expr.ToString());
 		}
 
@@ -704,7 +704,7 @@ unique_ptr<CatalogEntry> DuckLakeTableEntry::AlterTable(DuckLakeTransaction &tra
 		Value default_value;
 		if (info.new_column.HasDefaultValue()) {
 			auto &default_expr = info.new_column.DefaultValue();
-			if (default_expr.type == ExpressionType::VALUE_CONSTANT) {
+			if (default_expr.GetExpressionType() == ExpressionType::VALUE_CONSTANT) {
 				auto &constant_expr = default_expr.Cast<ConstantExpression>();
 				default_value = constant_expr.value.DefaultCastAs(new_col.Type());
 			}
@@ -863,11 +863,11 @@ bool TypePromotionIsAllowed(const LogicalType &source, const LogicalType &target
 }
 
 bool IsSimpleCast(const ParsedExpression &expr) {
-	if (expr.type != ExpressionType::OPERATOR_CAST) {
+	if (expr.GetExpressionType() != ExpressionType::OPERATOR_CAST) {
 		return false;
 	}
 	auto &cast = expr.Cast<CastExpression>();
-	if (cast.child->type != ExpressionType::COLUMN_REF) {
+	if (cast.child->GetExpressionType() != ExpressionType::COLUMN_REF) {
 		return false;
 	}
 	return true;
@@ -1056,7 +1056,7 @@ unique_ptr<CatalogEntry> DuckLakeTableEntry::AlterTable(DuckLakeTransaction &tra
 static void ExtractDefaultValue(const DuckLakeColumnData &col_data, DuckLakeColumnInfo &info) {
 	info.initial_default = col_data.initial_default;
 	if (col_data.default_value) {
-		if (col_data.default_value->type == ExpressionType::VALUE_CONSTANT) {
+		if (col_data.default_value->GetExpressionType() == ExpressionType::VALUE_CONSTANT) {
 			auto &constant_value = col_data.default_value->Cast<ConstantExpression>();
 			info.default_value = constant_value.value;
 			info.default_value_type = "literal";

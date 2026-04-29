@@ -459,7 +459,7 @@ static void GeneratePartitionExpressions(ClientContext &context, DuckLakeCopyInp
 		auto expr = GetPartitionExpression(context, copy_input, field);
 		copy_options.names.push_back(GetPartitionExpressionName(copy_input, field, names));
 		names.insert(copy_options.names.back());
-		copy_options.expected_types.push_back(expr->return_type);
+		copy_options.expected_types.push_back(expr->GetReturnType());
 		copy_options.projection_list.push_back(std::move(expr));
 	}
 }
@@ -590,7 +590,7 @@ static void GenerateProjection(ClientContext &context, PhysicalPlanGenerator &pl
 	// push the projection
 	vector<LogicalType> types;
 	for (auto &expr : expressions) {
-		types.push_back(expr->return_type);
+		types.push_back(expr->GetReturnType());
 	}
 	auto &proj =
 	    planner.Make<PhysicalProjection>(std::move(types), std::move(expressions), plan->estimated_cardinality);
@@ -738,7 +738,7 @@ string DuckLakeCatalog::GenerateEncryptionKey(ClientContext &context) const {
 static void ResolveColumnRefs(unique_ptr<Expression> &expr) {
 	if (expr->GetExpressionClass() == ExpressionClass::BOUND_COLUMN_REF) {
 		auto &col_ref = expr->Cast<BoundColumnRefExpression>();
-		expr = make_uniq<BoundReferenceExpression>(col_ref.return_type,
+		expr = make_uniq<BoundReferenceExpression>(col_ref.GetReturnType(),
 		                                           NumericCast<storage_t>(col_ref.binding.column_index.GetIndex()));
 		return;
 	}

@@ -59,7 +59,7 @@ static Value ExtractInitialValue(optional_ptr<const ParsedExpression> initial_ex
 	if (!initial_expr) {
 		return Value(type);
 	}
-	if (initial_expr->type != ExpressionType::VALUE_CONSTANT) {
+	if (initial_expr->GetExpressionType() != ExpressionType::VALUE_CONSTANT) {
 		if (!add_column) {
 			return Value(type);
 		}
@@ -330,7 +330,7 @@ shared_ptr<DuckLakeFieldData> DuckLakeFieldData::SetDefault(const DuckLakeFieldD
 	auto result = make_shared_ptr<DuckLakeFieldData>();
 	auto new_default =
 	    new_col.HasDefaultValue() ? optional_ptr<const ParsedExpression>(new_col.DefaultValue()) : nullptr;
-	if (new_default && new_default->type != ExpressionType::VALUE_CONSTANT && add_column) {
+	if (new_default && new_default->GetExpressionType() != ExpressionType::VALUE_CONSTANT && add_column) {
 		throw NotImplementedException("We cannot add a column with a non-literal default value. Add the column and "
 		                              "then explicitly set the default for new values using \"ALTER ... SET DEFAULT\"");
 	}

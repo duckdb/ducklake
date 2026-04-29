@@ -210,7 +210,7 @@ unique_ptr<LocalSinkState> DuckLakeMergeInsert::GetLocalSinkState(ExecutionConte
 		result->expression_executor = make_uniq<ExpressionExecutor>(context.client, extra_projections);
 		vector<LogicalType> insert_types;
 		for (auto &expr : result->expression_executor->expressions) {
-			insert_types.push_back(expr->return_type);
+			insert_types.push_back(expr->GetReturnType());
 		}
 		result->chunk.Initialize(context.client, insert_types);
 	}
@@ -306,7 +306,7 @@ unique_ptr<LocalSinkState> DuckLakeMergeUpdate::GetLocalSinkState(ExecutionConte
 		result->expression_executor = make_uniq<ExpressionExecutor>(context.client, extra_projections);
 		vector<LogicalType> projected_types;
 		for (auto &expr : result->expression_executor->expressions) {
-			projected_types.push_back(expr->return_type);
+			projected_types.push_back(expr->GetReturnType());
 		}
 		result->projected_chunk.Initialize(context.client, projected_types);
 	}

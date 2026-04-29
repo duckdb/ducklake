@@ -711,7 +711,7 @@ static unique_ptr<LogicalOperator> FlushInlinedDataBind(ClientContext &context, 
 	sum_args.push_back(make_uniq<BoundColumnRefExpression>(child->types[2], child_bindings[2]));
 
 	// Pick the right sum overload
-	auto sum_func = sum_entry.functions.GetFunctionByArguments(context, {sum_args[0]->return_type});
+	auto sum_func = sum_entry.functions.GetFunctionByArguments(context, {sum_args[0]->GetReturnType()});
 	FunctionBinder function_binder(context);
 	auto sum_aggregate =
 	    function_binder.BindAggregateFunction(sum_func,            // The SUM(BIGINT) -> HUGEINT function
