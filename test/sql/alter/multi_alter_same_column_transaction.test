@@ -1,0 +1,157 @@
+# name: test/sql/alter/multi_alter_same_column_transaction.test
+# description: Multiple ALTER operations on the same column within a single transaction
+# group: [alter]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+
+test-env DATA_PATH __TEST_DIR__
+
+statement ok
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/ducklake_multi_alter_same_col', DATA_INLINING_ROW_LIMIT 10)
+
+# Part 1: SET NOT NULL -> DROP NOT NULL -> SET DEFAULT -> RENAME
+statement ok
+CREATE TABLE ducklake.t (id INTEGER, col1 INTEGER);
+
+statement ok
+INSERT INTO ducklake.t VALUES (1, 10), (2, 20);
+
+statement ok
+BEGIN
+
+statement ok
+ALTER TABLE ducklake.t ALTER col1 SET NOT NULL
+
+statement ok
+ALTER TABLE ducklake.t ALTER col1 DROP NOT NULL
+
+statement ok
+ALTER TABLE ducklake.t ALTER col1 SET DEFAULT 42
+
+statement ok
+ALTER TABLE ducklake.t RENAME COLUMN col1 TO col1_final
+
+statement ok
+COMMIT
+
+statement ok
+INSERT INTO ducklake.t VALUES (3, NULL)
+
+statement ok
+INSERT INTO ducklake.t (id) VALUES (4)
+
+query II
+SELECT id, col1_final FROM ducklake.t ORDER BY id
+----
+1	10
+2	20
+3	NULL
+4	42
+
+# Part 2: ADD COLUMN + RENAME in the same transaction as flush
+statement ok
+CREATE TABLE ducklake.expression_column_test (unique_id INTEGER, sort_key_1 VARCHAR, sort_key_2 VARCHAR);
+
+statement ok
+INSERT INTO ducklake.expression_column_test (unique_id, sort_key_1, sort_key_2)
+VALUES
+    (0, 'a', 'val0'),
+    (1, 'c', 'val1'),
+    (2, 'b', 'val2'),
+    (3, 'a', 'val3'),
+    (4, 'c', 'val4');
+
+statement ok
+BEGIN
+
+statement ok
+ALTER TABLE ducklake.expression_column_test ADD COLUMN rename_column_1 VARCHAR;
+
+statement ok
+ALTER TABLE ducklake.expression_column_test RENAME COLUMN rename_column_1 TO rename_column_2;
+
+statement ok
+ALTER TABLE ducklake.expression_column_test RENAME COLUMN rename_column_2 TO rename_column_3;
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake', table_name => 'expression_column_test');
+
+statement ok
+COMMIT
+
+query I
+FROM ducklake.expression_column_test SELECT rename_column_3
+----
+NULL
+NULL
+NULL
+NULL
+NULL
+
+# Part 3: ADD + RENAME + DROP in the same transaction
+statement ok
+CREATE TABLE ducklake.add_rename_drop_test (id INTEGER, val VARCHAR);
+
+statement ok
+INSERT INTO ducklake.add_rename_drop_test VALUES (1, 'a'), (2, 'b');
+
+statement ok
+BEGIN
+
+statement ok
+ALTER TABLE ducklake.add_rename_drop_test ADD COLUMN tmp_col INTEGER;
+
+statement ok
+ALTER TABLE ducklake.add_rename_drop_test RENAME COLUMN tmp_col TO renamed_col;
+
+statement ok
+ALTER TABLE ducklake.add_rename_drop_test DROP COLUMN renamed_col;
+
+statement ok
+COMMIT
+
+query II
+SELECT * FROM ducklake.add_rename_drop_test ORDER BY id
+----
+1	a
+2	b
+
+# Part 4: ADD two columns and RENAME both in the same transaction
+statement ok
+CREATE TABLE ducklake.add_rename_two_cols_test (id INTEGER);
+
+statement ok
+INSERT INTO ducklake.add_rename_two_cols_test VALUES (1), (2), (3);
+
+statement ok
+BEGIN
+
+statement ok
+ALTER TABLE ducklake.add_rename_two_cols_test ADD COLUMN col_a VARCHAR;
+
+statement ok
+ALTER TABLE ducklake.add_rename_two_cols_test ADD COLUMN col_b INTEGER;
+
+statement ok
+ALTER TABLE ducklake.add_rename_two_cols_test RENAME COLUMN col_a TO col_a_renamed;
+
+statement ok
+ALTER TABLE ducklake.add_rename_two_cols_test RENAME COLUMN col_b TO col_b_renamed;
+
+statement ok
+COMMIT
+
+statement ok
+INSERT INTO ducklake.add_rename_two_cols_test VALUES (4, 'hello', 42);
+
+query III
+SELECT * FROM ducklake.add_rename_two_cols_test ORDER BY id
+----
+1	NULL	NULL
+2	NULL	NULL
+3	NULL	NULL
+4	hello	42

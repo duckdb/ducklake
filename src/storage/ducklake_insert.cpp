@@ -806,7 +806,7 @@ PhysicalOperator &DuckLakeCatalog::PlanInsert(ClientContext &context, PhysicalPl
 
 	optional_ptr<DuckLakeInlineData> inline_data;
 
-	idx_t data_inlining_row_limit = GetInliningLimit(context, ducklake_table, plan->types);
+	idx_t data_inlining_row_limit = GetInliningLimit(context, ducklake_table);
 	if (data_inlining_row_limit > 0) {
 		plan = planner.Make<DuckLakeInlineData>(*plan, data_inlining_row_limit);
 		inline_data = plan->Cast<DuckLakeInlineData>();
@@ -842,8 +842,7 @@ PhysicalOperator &DuckLakeCatalog::PlanCreateTableAs(ClientContext &context, Phy
 	optional_ptr<DuckLakeInlineData> inline_data;
 	idx_t data_inlining_row_limit = DataInliningRowLimit(context, duck_schema.GetSchemaId(), TableIndex());
 	auto &metadata_manager = duck_transaction.GetMetadataManager();
-	if (data_inlining_row_limit > 0 && !DuckLakeUtil::HasInlinedSystemColumnConflict(columns) &&
-	    metadata_manager.SupportsInliningTypes(plan.types)) {
+	if (data_inlining_row_limit > 0 && metadata_manager.CanInlineColumns(columns)) {
 		root = planner.Make<DuckLakeInlineData>(root.get(), data_inlining_row_limit);
 		inline_data = root.get().Cast<DuckLakeInlineData>();
 	}

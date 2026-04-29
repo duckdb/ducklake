@@ -84,15 +84,6 @@ bool DuckLakeMetadataManager::SupportsInlining(const LogicalType &type) {
 	return true;
 }
 
-bool DuckLakeMetadataManager::SupportsInliningTypes(const vector<LogicalType> &types) {
-	for (auto &type : types) {
-		if (TypeVisitor::Contains(type, [&](const LogicalType &t) { return !SupportsInlining(t); })) {
-			return false;
-		}
-	}
-	return true;
-}
-
 bool DuckLakeMetadataManager::SupportsInliningColumns(const vector<DuckLakeColumnInfo> &columns) {
 	for (auto &col : columns) {
 		auto col_type = DuckLakeTypes::FromString(col.type);
@@ -104,6 +95,35 @@ bool DuckLakeMetadataManager::SupportsInliningColumns(const vector<DuckLakeColum
 		}
 	}
 	return true;
+}
+
+bool DuckLakeMetadataManager::CanInlineColumns(const ColumnList &columns) {
+	auto max_identifier_length = MaxIdentifierLength();
+	for (auto &col : columns.Logical()) {
+		if (DuckLakeUtil::IsInlinedSystemColumn(col.Name())) {
+			return false;
+		}
+		if (col.Name().size() > max_identifier_length) {
+			return false;
+		}
+		if (TypeVisitor::Contains(col.Type(), [&](const LogicalType &t) { return !SupportsInlining(t); })) {
+			return false;
+		}
+	}
+	return true;
+}
+
+bool DuckLakeMetadataManager::CanInlineColumns(const vector<DuckLakeColumnInfo> &columns) {
+	auto max_identifier_length = MaxIdentifierLength();
+	for (auto &col : columns) {
+		if (DuckLakeUtil::IsInlinedSystemColumn(col.name)) {
+			return false;
+		}
+		if (col.name.size() > max_identifier_length) {
+			return false;
+		}
+	}
+	return SupportsInliningColumns(columns);
 }
 
 FileSystem &DuckLakeMetadataManager::GetFileSystem() {
@@ -1331,11 +1351,23 @@ FilterSQLResult DuckLakeMetadataManager::ConvertFilterPushdownToSQL(const Filter
 			null_checks += stat + " IS NULL OR ";
 		}
 
+		const bool needs_value_count_guard =
+		    referenced_stats.count("min_value") > 0 || referenced_stats.count("max_value") > 0;
+		if (needs_value_count_guard) {
+			referenced_stats.insert("value_count");
+		}
+
 		if (!conditions.empty()) {
 			conditions += " AND ";
 		}
-		conditions += StringUtil::Format("data.data_file_id IN (SELECT data_file_id FROM %s WHERE %s(%s))", cte_name,
-		                                 null_checks.c_str(), filter_condition.c_str());
+		if (needs_value_count_guard) {
+			conditions += StringUtil::Format("data.data_file_id IN (SELECT data_file_id FROM %s WHERE "
+			                                 "(value_count IS NULL OR value_count > 0) AND (%s(%s)))",
+			                                 cte_name, null_checks.c_str(), filter_condition.c_str());
+		} else {
+			conditions += StringUtil::Format("data.data_file_id IN (SELECT data_file_id FROM %s WHERE %s(%s))",
+			                                 cte_name, null_checks.c_str(), filter_condition.c_str());
+		}
 
 		CTERequirement req(column_filter.column_field_index, referenced_stats);
 		result.required_ctes.emplace(column_filter.column_field_index, std::move(req));
@@ -1892,9 +1924,9 @@ vector<DuckLakeCompactionFileEntry> DuckLakeMetadataManager::GetFilesForCompacti
 	string select_list = data_select_list + ", " + delete_select_list;
 	string deletion_threshold_clause;
 	if (type == CompactionType::REWRITE_DELETES) {
-		deletion_threshold_clause = StringUtil::Format(
-		    " AND CAST(del.delete_count AS FLOAT)/CAST(data.record_count AS FLOAT) >= %f and data.end_snapshot is null",
-		    deletion_threshold);
+		// Filter current data files in SQL, then apply the delete threshold in C++ so we can include
+		// metadata-only inlined file deletions as rewrite candidates.
+		deletion_threshold_clause = " AND data.end_snapshot is null";
 	}
 	// Add file size filtering for MERGE_ADJACENT_TABLES compaction
 	string file_size_filter_clause;
@@ -1904,6 +1936,7 @@ vector<DuckLakeCompactionFileEntry> DuckLakeMetadataManager::GetFilesForCompacti
 			    StringUtil::Format(" AND data.file_size_bytes >= %llu", options.min_file_size.GetIndex());
 		}
 		file_size_filter_clause += StringUtil::Format(" AND data.file_size_bytes < %llu", effective_max_file_size);
+		file_size_filter_clause += " AND data.end_snapshot IS NULL";
 	}
 	auto query = StringUtil::Format(R"(
 WITH snapshot_ranges AS (
@@ -1969,7 +2002,7 @@ ORDER BY data.begin_snapshot, data.row_id_start, data.data_file_id, del.begin_sn
 		if (!row.IsNull(col_idx)) {
 			auto list_val = row.GetValue<Value>(col_idx);
 			for (auto &entry : ListValue::GetChildren(list_val)) {
-				new_entry.file.partition_values.push_back(StringValue::Get(entry));
+				new_entry.file.partition_values.push_back(entry);
 			}
 		}
 		col_idx++;
@@ -1999,17 +2032,47 @@ ORDER BY data.begin_snapshot, data.row_id_start, data.data_file_id, del.begin_sn
 		file_entry.delete_files.push_back(std::move(delete_file));
 	}
 
-	// Check for inlined deletions and mark affected files
-	// Gather file IDs first, then query only for existence
-	vector<idx_t> file_ids;
-	file_ids.reserve(files.size());
-	for (auto &file : files) {
-		file_ids.push_back(file.file.id.index);
+	if (type == CompactionType::REWRITE_DELETES) {
+		// Full row-ID payload needed to compute delete ratio and perform the rewrite.
+		auto inlined_deletions = ReadInlinedFileDeletions(table_id, snapshot);
+		for (auto &file : files) {
+			auto entry = inlined_deletions.find(file.file.id.index);
+			if (entry != inlined_deletions.end()) {
+				file.inlined_file_deletions = std::move(entry->second);
+				file.has_inlined_deletions = true;
+			}
+		}
+	} else {
+		// Cheap existence-only check — avoids fetching every deleted row_id for non-rewrite paths.
+		vector<idx_t> file_ids;
+		file_ids.reserve(files.size());
+		for (auto &file : files) {
+			file_ids.push_back(file.file.id.index);
+		}
+		auto files_with_deletions = GetFileIdsWithInlinedDeletions(table_id, snapshot, file_ids);
+		for (auto &file : files) {
+			if (files_with_deletions.count(file.file.id.index)) {
+				file.has_inlined_deletions = true;
+			}
+		}
 	}
-	auto files_with_deletions = GetFileIdsWithInlinedDeletions(table_id, snapshot, file_ids);
-	for (auto &file : files) {
-		if (files_with_deletions.count(file.file.id.index)) {
-			file.has_inlined_deletions = true;
+
+	if (type == CompactionType::REWRITE_DELETES) {
+		for (idx_t file_idx = 0; file_idx < files.size(); file_idx++) {
+			auto &file = files[file_idx];
+			idx_t active_delete_count = 0;
+			if (!file.delete_files.empty() && !file.delete_files.back().end_snapshot.IsValid()) {
+				active_delete_count = file.delete_files.back().row_count;
+			}
+			auto total_delete_count = active_delete_count + file.inlined_file_deletions.size();
+			double delete_ratio = 0;
+			if (file.file.row_count > 0) {
+				delete_ratio = static_cast<double>(total_delete_count) / static_cast<double>(file.file.row_count);
+			}
+			if (total_delete_count == 0 || delete_ratio < deletion_threshold) {
+				files.erase_at(file_idx);
+				file_idx--;
+			}
 		}
 	}
 
@@ -2060,7 +2123,9 @@ string DuckLakeMetadataManager::DropTables(const set<TableIndex> &ids, bool rena
 }
 
 string DuckLakeMetadataManager::DropViews(const set<TableIndex> &ids) {
-	return FlushDrop("ducklake_view", "view_id", ids);
+	string batch_query = FlushDrop("ducklake_view", "view_id", ids);
+	batch_query += FlushDrop("ducklake_tag", "object_id", ids);
+	return batch_query;
 }
 
 unique_ptr<QueryResult> DuckLakeMetadataManager::Execute(DuckLakeSnapshot snapshot, string &query) {
@@ -2285,10 +2350,7 @@ string DuckLakeMetadataManager::WriteNewInlinedTables(DuckLakeSnapshot commit_sn
 			}
 		}
 		// FIXME: we are skipping columns that have conflicting names, we should resolve this
-		if (DuckLakeUtil::HasInlinedSystemColumnConflict(table_ptr->columns)) {
-			continue;
-		}
-		if (!SupportsInliningColumns(table_ptr->columns)) {
+		if (!CanInlineColumns(table_ptr->columns)) {
 			continue;
 		}
 		GetInlinedTableQueries(commit_snapshot, *table_ptr, inlined_tables, inlined_table_queries);
@@ -4210,7 +4272,7 @@ string DuckLakeMetadataManager::WriteDeleteRewrites(const vector<DuckLakeCompact
 	for (idx_t i = compactions.size(); i > 0; i--) {
 		auto &compaction = compactions[i - 1];
 		if (table_idx_last_snapshot.find(compaction.table_index.index) == table_idx_last_snapshot.end()) {
-			table_idx_last_snapshot[compaction.table_index.index] = compaction.delete_file_start_snapshot.GetIndex();
+			table_idx_last_snapshot[compaction.table_index.index] = compaction.rewrite_snapshot.GetIndex();
 		}
 	}
 
@@ -4218,11 +4280,11 @@ string DuckLakeMetadataManager::WriteDeleteRewrites(const vector<DuckLakeCompact
 	for (idx_t i = 0; i < compactions.size(); ++i) {
 		auto &compaction = compactions[i];
 		D_ASSERT(!compaction.path.empty());
-		if (!compaction.delete_file_end_snapshot.IsValid()) {
+		if (compaction.delete_file_id.IsValid() && !compaction.delete_file_end_snapshot.IsValid()) {
 			batch_query += StringUtil::Format(R"(
-			UPDATE {METADATA_CATALOG}.ducklake_delete_file SET end_snapshot = %llu
-			WHERE delete_file_id = %llu;
-			)",
+				UPDATE {METADATA_CATALOG}.ducklake_delete_file SET end_snapshot = %llu
+				WHERE delete_file_id = %llu;
+				)",
 			                                  table_idx_last_snapshot[compaction.table_index.index],
 			                                  compaction.delete_file_id.index);
 		}

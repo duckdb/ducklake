@@ -1,0 +1,30 @@
+# name: test/sql/issues/issue_1027_hive_path_scan.test
+# description: scanning a ducklake lake whose DATA_PATH contains key=value segments must not hive-auto-detect (#1027)
+# group: [issues]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+
+# DATA_PATH contains an incidental key=value segment
+test-env DATA_PATH __TEST_DIR__/issue_1027/site_id=42
+
+statement ok
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}')
+
+statement ok
+CREATE TABLE ducklake.t AS SELECT i AS id FROM range(1000) t(i)
+
+statement ok
+DELETE FROM ducklake.t WHERE id % 7 = 0
+
+# Second DELETE adds _ducklake_internal_snapshot_id to the delete file
+statement ok
+DELETE FROM ducklake.t WHERE id % 5 = 0
+
+query II
+SELECT COUNT(*), COUNT(*) FILTER (WHERE id % 7 = 0 OR id % 5 = 0) FROM ducklake.t
+----
+686	0

@@ -374,12 +374,12 @@ const string &DuckLakeTableEntry::DataPath() const {
 	return data_path;
 }
 
-optional_ptr<DuckLakeTableStats> DuckLakeTableEntry::GetTableStats(ClientContext &context) {
+shared_ptr<DuckLakeTableStats> DuckLakeTableEntry::GetTableStats(ClientContext &context) {
 	auto &transaction = DuckLakeTransaction::Get(context, ParentCatalog());
 	return GetTableStats(transaction);
 }
 
-optional_ptr<DuckLakeTableStats> DuckLakeTableEntry::GetTableStats(DuckLakeTransaction &transaction) {
+shared_ptr<DuckLakeTableStats> DuckLakeTableEntry::GetTableStats(DuckLakeTransaction &transaction) {
 	if (IsTransactionLocal()) {
 		// no stats for transaction local tables
 		return nullptr;

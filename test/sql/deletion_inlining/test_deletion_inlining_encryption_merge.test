@@ -1,0 +1,64 @@
+# name: test/sql/deletion_inlining/test_deletion_inlining_encryption_merge.test
+# description: Regression test for https://github.com/duckdb/ducklake/issues/950
+# group: [deletion_inlining]
+
+require ducklake
+
+require parquet
+
+require httpfs
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/ducklake_deletion_inlining_encryption_merge', ENCRYPTED, DATA_INLINING_ROW_LIMIT 10)
+
+statement ok
+USE ducklake
+
+# Create a data file (more rows than the inlining limit forces a Parquet file).
+statement ok
+CREATE TABLE t AS SELECT range a FROM range(50)
+
+# First round of inlined deletions.
+statement ok
+DELETE FROM t WHERE a < 5
+
+# Flush the inlined deletions - this materialises a Parquet delete file with an encryption key.
+statement ok
+CALL ducklake_flush_inlined_data('ducklake')
+
+query I
+SELECT COUNT(*) FROM GLOB('{DATA_PATH}/ducklake_deletion_inlining_encryption_merge/**/*-delete.parquet')
+----
+1
+
+# Second round of inlined deletions. These must be merged with the delete file created above.
+# Before the fix, the existing delete file's encryption key was read from the catalog as base64
+# and handed to AES-GCM without decoding, producing:
+#   Invalid Input Error: ... Computed AES tag differs from read AES tag, are you using the right key?
+statement ok
+DELETE FROM t WHERE a >= 5 AND a < 10
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake')
+
+# Both the original and the merged delete file exist on disk at this point
+# (the original is scheduled for deletion via cleanup but not yet removed).
+query I
+SELECT COUNT(*) FROM GLOB('{DATA_PATH}/ducklake_deletion_inlining_encryption_merge/**/*-delete.parquet')
+----
+2
+
+query II
+SELECT COUNT(*), SUM(a) FROM t
+----
+40	1180
+
+# Historical versions still read correctly.
+query II
+SELECT COUNT(*), SUM(a) FROM t AT (VERSION => 1)
+----
+50	1225
