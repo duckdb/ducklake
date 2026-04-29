@@ -24,7 +24,8 @@
         "test/sql/rewrite_data_files/test_last_snapshot_merge_rewrite.test",
         "test/sql/rewrite_data_files/test_last_snapshot_rewrite.test",
         "test/sql/rewrite_data_files/test_rewrite_concurrency.test",
-        "test/sql/rewrite_data_files/test_rewrite_db.test"
+        "test/sql/rewrite_data_files/test_rewrite_db.test",
+        "test/sql/issues/issue_1074.test"
       ]
     }
   ]
