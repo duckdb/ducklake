@@ -1,0 +1,63 @@
+# name: test/sql/compaction/repro_merge_adjacent_zero_output.test
+# description: reproduce DuckLakeCompaction "expected a single output file" assertion
+#              when merge_adjacent_files merges several empty parquet files.
+#              See https://github.com/duckdb/ducklake/issues/525
+# group: [compaction]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+SET threads=4;
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS lake (DATA_PATH '{DATA_PATH}/repro_merge_zero')
+
+statement ok
+USE lake;
+
+statement ok
+CALL lake.set_option('data_inlining_row_limit', 0);
+
+statement ok
+CALL lake.set_option('per_thread_output', 'true');
+
+statement ok
+CREATE TABLE t (id INT, payload VARCHAR);
+
+foreach N 1 2 3 4
+
+statement ok
+INSERT INTO t SELECT range, 'x' FROM range(100) WHERE range < 0;
+
+endloop
+
+query II
+SELECT count(*), COALESCE(sum(record_count), 0)
+FROM __ducklake_metadata_lake.ducklake_data_file
+WHERE end_snapshot IS NULL;
+----
+4	0
+
+# merge_adjacent_files should consume empty files without creating a replacement file.
+query IIII
+SELECT schema_name, table_name, files_processed, files_created FROM ducklake_merge_adjacent_files('lake');
+----
+main	t	4	0
+
+query II
+SELECT count(*), COALESCE(sum(record_count), 0)
+FROM __ducklake_metadata_lake.ducklake_data_file
+WHERE end_snapshot IS NULL;
+----
+0	0
+
+query I
+SELECT count(*) FROM t;
+----
+0

@@ -145,8 +145,18 @@ SinkFinalizeType DuckLakeCompaction::Finalize(Pipeline &pipeline, Event &event, 
 	if (global_state.written_files.size() > 1) {
 		throw InternalException("DuckLakeCompaction - expected at most a single output file");
 	}
-	if (global_state.written_files.empty() && type != CompactionType::REWRITE_DELETES) {
-		throw InternalException("DuckLakeCompaction - expected a single output file");
+	if (global_state.written_files.empty()) {
+		idx_t rows_to_write = 0;
+		for (auto &source : source_files) {
+			rows_to_write += source.file.row_count;
+			if (!source.delete_files.empty()) {
+				rows_to_write -= source.delete_files.back().row_count;
+			}
+			rows_to_write -= source.inlined_file_deletions.size();
+		}
+		if (rows_to_write != 0) {
+			throw InternalException("DuckLakeCompaction - expected a single output file for %llu rows", rows_to_write);
+		}
 	}
 	// set the partition values correctly
 	for (auto &file : global_state.written_files) {

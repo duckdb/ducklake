@@ -2458,11 +2458,7 @@ CompactionInformation DuckLakeTransaction::GetCompactionChanges(DuckLakeCommitSt
 			bool has_new_file = !compaction.written_file.file_name.empty();
 			DuckLakeFileInfo new_file;
 
-			if (!has_new_file) {
-				if (type != CompactionType::REWRITE_DELETES) {
-					throw InternalException("Compaction error - expected output file for non-rewrite compaction");
-				}
-			} else {
+			if (has_new_file) {
 				new_file = GetNewDataFile(compaction.written_file, commit_state, table_id, compaction.row_id_start);
 				switch (type) {
 				case CompactionType::REWRITE_DELETES:
@@ -2523,7 +2519,8 @@ CompactionInformation DuckLakeTransaction::GetCompactionChanges(DuckLakeCommitSt
 			}
 			if (!has_new_file && row_id_limit != 0) {
 				throw InternalException(
-				    "Compaction error - rewrite compaction without output file must fully delete source files");
+				    "Compaction error - compaction without output file must have zero live source rows (got %llu)",
+				    row_id_limit);
 			}
 			if (has_new_file) {
 				result.new_files.push_back(std::move(new_file));
