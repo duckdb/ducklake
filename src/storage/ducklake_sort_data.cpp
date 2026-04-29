@@ -16,7 +16,9 @@ string DuckLakeSort::BuildSortOrderSQL(const DuckLakeSort &sort_data, const Colu
 		// Check if expression matches a column name in the current table, then map to inlined table's name by index
 		string mapped_col;
 		for (idx_t i = 0; i < current_columns.PhysicalColumnCount(); i++) {
-			if (current_columns.GetColumn(PhysicalIndex(i)).Name() == field.expression) {
+			if (StringUtil::CIEquals(
+			        KeywordHelper::WriteOptionallyQuoted(current_columns.GetColumn(PhysicalIndex(i)).Name()),
+			        field.expression)) {
 				if (i < inlined_columns.PhysicalColumnCount()) {
 					mapped_col = inlined_columns.GetColumn(PhysicalIndex(i)).Name();
 				}
