@@ -275,9 +275,6 @@ public:
 	const set<TableIndex> &GetRenamedTables() {
 		return renamed_tables;
 	}
-	const set<TableIndex> &GetRenamedViews() {
-		return renamed_views;
-	}
 	const case_insensitive_map_t<unique_ptr<DuckLakeCatalogSet>> &GetNewTables() {
 		return new_tables;
 	}
