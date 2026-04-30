@@ -69,7 +69,8 @@
         "test/sql/general/missing_parquet.test",
         "test/sql/general/paths.test",
         "test/sql/issues/corrupted_catalog_fault_isolation.test",
-        "test/sql/secrets/ducklake_secrets.test"
+        "test/sql/secrets/ducklake_secrets.test",
+        "test/sql/remove_orphans/metadata_in_data_path.test"
       ]
     },
      {
