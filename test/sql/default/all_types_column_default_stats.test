@@ -1,0 +1,233 @@
+# name: test/sql/default/all_types_column_default_stats.test
+# description: verify min/max/null stats for all types are correct after ADD COLUMN with DEFAULT
+# group: [default]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+
+test-env DATA_PATH __TEST_DIR__
+
+statement ok
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/add_column_default_stats_files', METADATA_CATALOG 'ducklake_meta', DATA_INLINING_ROW_LIMIT 100)
+
+statement ok
+CREATE TABLE ducklake.t_all (
+  c_bool      BOOLEAN,
+  c_tinyint   TINYINT,
+  c_smallint  SMALLINT,
+  c_int       INTEGER,
+  c_bigint    BIGINT,
+  c_hugeint   HUGEINT,
+  c_utinyint  UTINYINT,
+  c_usmallint USMALLINT,
+  c_uint      UINTEGER,
+  c_ubigint   UBIGINT,
+  c_uhugeint  UHUGEINT,
+  c_float     FLOAT,
+  c_double    DOUBLE,
+  c_dec41     DECIMAL(4,1),
+  c_dec94     DECIMAL(9,4),
+  c_dec186    DECIMAL(18,6),
+  c_dec3810   DECIMAL(38,10),
+  c_date      DATE,
+  c_time      TIME,
+  c_time_tz   TIMETZ,
+  c_ts        TIMESTAMP,
+  c_ts_s      TIMESTAMP_S,
+  c_ts_ms     TIMESTAMP_MS,
+  c_ts_ns     TIMESTAMP_NS,
+  c_ts_tz     TIMESTAMPTZ,
+  c_interval  INTERVAL,
+  c_varchar   VARCHAR,
+  c_blob      BLOB,
+  c_uuid      UUID
+)
+
+statement ok
+BEGIN
+
+statement ok
+INSERT INTO ducklake.t_all VALUES
+  (false, 1, 10, 100, 1000, 10000, 1, 10, 100, 1000, 10000,
+   1.5, 1.5, 1.1, 1.11, 1.111, 1.1111,
+   '2020-01-01', '01:00:00', '01:00:00+00',
+   '2020-01-01 01:00:00', '2020-01-01 01:00:00', '2020-01-01 01:00:00.123',
+   '2020-01-01 01:00:00.123456789', '2020-01-01 01:00:00+00',
+   '1 day', 'a', 'a', '11111111-1111-1111-1111-111111111111'),
+  (true, 2, 20, 200, 2000, 20000, 2, 20, 200, 2000, 20000,
+   2.5, 2.5, 2.2, 2.22, 2.222, 2.2222,
+   '2021-02-02', '02:00:00', '02:00:00+00',
+   '2021-02-02 02:00:00', '2021-02-02 02:00:00', '2021-02-02 02:00:00.456',
+   '2021-02-02 02:00:00.234567890', '2021-02-02 02:00:00+00',
+   '2 days', 'b', 'b', '22222222-2222-2222-2222-222222222222'),
+  (true, 3, 30, 300, 3000, 30000, 3, 30, 300, 3000, 30000,
+   3.5, 3.5, 3.3, 3.33, 3.333, 3.3333,
+   '2022-03-03', '03:00:00', '03:00:00+00',
+   '2022-03-03 03:00:00', '2022-03-03 03:00:00', '2022-03-03 03:00:00.789',
+   '2022-03-03 03:00:00.345678901', '2022-03-03 03:00:00+00',
+   '3 days', 'c', 'c', '33333333-3333-3333-3333-333333333333')
+
+statement ok
+ALTER TABLE ducklake.t_all ADD COLUMN n_bool      BOOLEAN        DEFAULT 1
+
+statement ok
+ALTER TABLE ducklake.t_all ADD COLUMN n_tinyint   TINYINT        DEFAULT 7
+
+statement ok
+ALTER TABLE ducklake.t_all ADD COLUMN n_smallint  SMALLINT       DEFAULT 700
+
+statement ok
+ALTER TABLE ducklake.t_all ADD COLUMN n_int       INTEGER        DEFAULT -5
+
+statement ok
+ALTER TABLE ducklake.t_all ADD COLUMN n_bigint    BIGINT         DEFAULT 1234567890123
+
+statement ok
+ALTER TABLE ducklake.t_all ADD COLUMN n_hugeint   HUGEINT        DEFAULT 123456789012345678901234
+
+statement ok
+ALTER TABLE ducklake.t_all ADD COLUMN n_utinyint  UTINYINT       DEFAULT 250
+
+statement ok
+ALTER TABLE ducklake.t_all ADD COLUMN n_usmallint USMALLINT      DEFAULT 60000
+
+statement ok
+ALTER TABLE ducklake.t_all ADD COLUMN n_uint      UINTEGER       DEFAULT 4000000000
+
+statement ok
+ALTER TABLE ducklake.t_all ADD COLUMN n_ubigint   UBIGINT        DEFAULT 18000000000000000000
+
+statement ok
+ALTER TABLE ducklake.t_all ADD COLUMN n_uhugeint  UHUGEINT       DEFAULT 340000000000000000000000000000000000000
+
+statement ok
+ALTER TABLE ducklake.t_all ADD COLUMN n_float     FLOAT          DEFAULT 3.14
+
+statement ok
+ALTER TABLE ducklake.t_all ADD COLUMN n_double    DOUBLE         DEFAULT 2.71828
+
+statement ok
+ALTER TABLE ducklake.t_all ADD COLUMN n_dec41     DECIMAL(4,1)   DEFAULT 99.9
+
+statement ok
+ALTER TABLE ducklake.t_all ADD COLUMN n_dec94     DECIMAL(9,4)   DEFAULT 100.5
+
+statement ok
+ALTER TABLE ducklake.t_all ADD COLUMN n_dec186    DECIMAL(18,6)  DEFAULT 12.345678
+
+statement ok
+ALTER TABLE ducklake.t_all ADD COLUMN n_dec3810   DECIMAL(38,10) DEFAULT 12345678.90123456789
+
+statement ok
+ALTER TABLE ducklake.t_all ADD COLUMN n_date      DATE           DEFAULT '2024-06-15'
+
+statement ok
+ALTER TABLE ducklake.t_all ADD COLUMN n_time      TIME           DEFAULT '12:34:56'
+
+statement ok
+ALTER TABLE ducklake.t_all ADD COLUMN n_time_tz   TIMETZ         DEFAULT '12:34:56+02'
+
+statement ok
+ALTER TABLE ducklake.t_all ADD COLUMN n_ts        TIMESTAMP      DEFAULT '2024-06-15 12:34:56'
+
+statement ok
+ALTER TABLE ducklake.t_all ADD COLUMN n_ts_s      TIMESTAMP_S    DEFAULT '2024-06-15 12:34:56'
+
+statement ok
+ALTER TABLE ducklake.t_all ADD COLUMN n_ts_ms     TIMESTAMP_MS   DEFAULT '2024-06-15 12:34:56.789'
+
+statement ok
+ALTER TABLE ducklake.t_all ADD COLUMN n_ts_ns     TIMESTAMP_NS   DEFAULT '2024-06-15 12:34:56.123456789'
+
+statement ok
+ALTER TABLE ducklake.t_all ADD COLUMN n_ts_tz     TIMESTAMPTZ    DEFAULT '2024-06-15 12:34:56+00'
+
+statement ok
+ALTER TABLE ducklake.t_all ADD COLUMN n_interval  INTERVAL       DEFAULT '1 year 2 months'
+
+statement ok
+ALTER TABLE ducklake.t_all ADD COLUMN n_varchar   VARCHAR        DEFAULT 'hello'
+
+statement ok
+ALTER TABLE ducklake.t_all ADD COLUMN n_blob      BLOB           DEFAULT 'abc'
+
+statement ok
+ALTER TABLE ducklake.t_all ADD COLUMN n_uuid      UUID           DEFAULT '12345678-1234-1234-1234-123456789012'
+
+statement ok
+COMMIT
+
+query TITT
+SELECT
+    c.column_name,
+    s.contains_null::INTEGER AS contains_null,
+    s.min_value,
+    s.max_value
+FROM ducklake_meta.ducklake_table_column_stats s
+JOIN ducklake_meta.ducklake_table t USING (table_id)
+JOIN ducklake_meta.ducklake_column c USING (table_id, column_id)
+WHERE t.table_name = 't_all' AND t.end_snapshot IS NULL
+  AND c.end_snapshot IS NULL
+ORDER BY c.column_order
+----
+c_bool	0	false	true
+c_tinyint	0	1	3
+c_smallint	0	10	30
+c_int	0	100	300
+c_bigint	0	1000	3000
+c_hugeint	0	10000	30000
+c_utinyint	0	1	3
+c_usmallint	0	10	30
+c_uint	0	100	300
+c_ubigint	0	1000	3000
+c_uhugeint	0	10000	30000
+c_float	0	1.5	3.5
+c_double	0	1.5	3.5
+c_dec41	0	1.1	3.3
+c_dec94	0	1.1100	3.3300
+c_dec186	0	1.111000	3.333000
+c_dec3810	0	1.1111000000	3.3333000000
+c_date	0	2020-01-01	2022-03-03
+c_time	0	01:00:00	03:00:00
+c_time_tz	0	01:00:00+00	03:00:00+00
+c_ts	0	2020-01-01 01:00:00	2022-03-03 03:00:00
+c_ts_s	0	2020-01-01 01:00:00	2022-03-03 03:00:00
+c_ts_ms	0	2020-01-01 01:00:00.123	2022-03-03 03:00:00.789
+c_ts_ns	0	2020-01-01 01:00:00.123456789	2022-03-03 03:00:00.345678901
+c_ts_tz	0	2020-01-01 01:00:00+00	2022-03-03 03:00:00+00
+c_interval	0	1 day	3 days
+c_varchar	0	a	c
+c_blob	0	a	c
+c_uuid	0	11111111-1111-1111-1111-111111111111	33333333-3333-3333-3333-333333333333
+n_bool	0	true	true
+n_tinyint	0	7	7
+n_smallint	0	700	700
+n_int	0	-5	-5
+n_bigint	0	1234567890123	1234567890123
+n_hugeint	0	123456789012345678901234	123456789012345678901234
+n_utinyint	0	250	250
+n_usmallint	0	60000	60000
+n_uint	0	4000000000	4000000000
+n_ubigint	0	18000000000000000000	18000000000000000000
+n_uhugeint	0	340000000000000000000000000000000000000	340000000000000000000000000000000000000
+n_float	0	3.14	3.14
+n_double	0	2.71828	2.71828
+n_dec41	0	99.9	99.9
+n_dec94	0	100.5000	100.5000
+n_dec186	0	12.345678	12.345678
+n_dec3810	0	12345678.9012345679	12345678.9012345679
+n_date	0	2024-06-15	2024-06-15
+n_time	0	12:34:56	12:34:56
+n_time_tz	0	12:34:56+02	12:34:56+02
+n_ts	0	2024-06-15 12:34:56	2024-06-15 12:34:56
+n_ts_s	0	2024-06-15 12:34:56	2024-06-15 12:34:56
+n_ts_ms	0	2024-06-15 12:34:56.789	2024-06-15 12:34:56.789
+n_ts_ns	0	2024-06-15 12:34:56.123456789	2024-06-15 12:34:56.123456789
+n_ts_tz	0	2024-06-15 12:34:56+00	2024-06-15 12:34:56+00
+n_interval	0	1 year 2 months	1 year 2 months
+n_varchar	0	hello	hello
+n_blob	0	abc	abc
+n_uuid	0	12345678-1234-1234-1234-123456789012	12345678-1234-1234-1234-123456789012

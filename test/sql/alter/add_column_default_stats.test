@@ -1,0 +1,146 @@
+# name: test/sql/alter/add_column_default_stats.test
+# description: verify min/max/null stats are correct after ADD COLUMN with DEFAULT on inlined data
+# group: [default]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+
+test-env DATA_PATH __TEST_DIR__
+
+statement ok
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/add_column_default_stats_files', METADATA_CATALOG 'ducklake_meta', DATA_INLINING_ROW_LIMIT 100)
+
+# ============================================
+# Case 1: INSERT + ADD COLUMN with DEFAULT inside explicit transaction
+# The added column's min/max should reflect the default value.
+# ============================================
+
+statement ok
+CREATE TABLE ducklake.t1 (a INT)
+
+statement ok
+BEGIN
+
+statement ok
+INSERT INTO ducklake.t1 VALUES (1), (2), (3)
+
+statement ok
+ALTER TABLE ducklake.t1 ADD COLUMN b INT DEFAULT 42
+
+statement ok
+COMMIT
+
+# verify data is correct
+query II
+SELECT * FROM ducklake.t1 ORDER BY a
+----
+1	42
+2	42
+3	42
+
+# column b: all rows have the default value 42, so min=max=42
+query II
+SELECT min_value, max_value
+FROM ducklake_meta.ducklake_table_column_stats
+WHERE table_id = 1 AND column_id = 2
+----
+42	42
+
+# ============================================
+# Case 2: INSERT + ADD COLUMN DEFAULT + more INSERT inside explicit transaction
+# Verify that default-based stats merge correctly with explicit values.
+# ============================================
+
+statement ok
+CREATE TABLE ducklake.t2 (a INT)
+
+statement ok
+BEGIN
+
+statement ok
+INSERT INTO ducklake.t2 VALUES (10), (20), (30)
+
+statement ok
+ALTER TABLE ducklake.t2 ADD COLUMN b INT DEFAULT 99
+
+# insert another row with an explicit value for column b
+statement ok
+INSERT INTO ducklake.t2 VALUES (40, 200)
+
+statement ok
+COMMIT
+
+# verify data is correct
+query II
+SELECT * FROM ducklake.t2 ORDER BY a
+----
+10	99
+20	99
+30	99
+40	200
+
+# column b: min=99 (from default on 3 older rows), max=200 (from explicit insert)
+query II
+SELECT min_value, max_value
+FROM ducklake_meta.ducklake_table_column_stats
+WHERE table_id = 2 AND column_id = 2
+----
+99	200
+
+# insert another row with an explicit value for column b
+statement ok
+INSERT INTO ducklake.t2 VALUES (50, 20)
+
+# column b: min=20, max=200 (both from explicit insert)
+query II
+SELECT min_value, max_value
+FROM ducklake_meta.ducklake_table_column_stats
+WHERE table_id = 2 AND column_id = 2
+----
+20	200
+
+# ============================================
+# Case 3: INSERT + DELETE-all + ADD COLUMN DEFAULT + INSERT inside one transaction.
+# ============================================
+
+statement ok
+CREATE TABLE ducklake.t_del (a INT)
+
+statement ok
+BEGIN
+
+statement ok
+INSERT INTO ducklake.t_del VALUES (1), (2), (3)
+
+statement ok
+DELETE FROM ducklake.t_del
+
+statement ok
+ALTER TABLE ducklake.t_del ADD COLUMN b INT DEFAULT 999
+
+statement ok
+INSERT INTO ducklake.t_del VALUES (10, 5)
+
+statement ok
+COMMIT
+
+query II
+SELECT * FROM ducklake.t_del ORDER BY a
+----
+10	5
+
+# Only 5 is present in column b — min and max must both be 5.
+query II
+SELECT s.min_value, s.max_value
+FROM ducklake_meta.ducklake_table_column_stats s
+JOIN ducklake_meta.ducklake_table t USING (table_id)
+JOIN ducklake_meta.ducklake_column c USING (table_id, column_id)
+WHERE t.table_name = 't_del'
+  AND t.end_snapshot IS NULL
+  AND c.end_snapshot IS NULL
+  AND c.column_name = 'b'
+----
+5	5
