@@ -1,0 +1,46 @@
+# name: test/sql/comments/comment_on_view_column_conflict.test
+# description: Concurrent COMMENT ON COLUMN on the same view column conflicts
+# group: [comments]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/ducklake_view_col_comment_cf/')
+
+statement ok
+CREATE VIEW ducklake.vcf AS SELECT 100 AS k
+
+statement ok
+SET immediate_transaction_mode=true
+
+statement ok con1
+BEGIN
+
+statement ok con2
+BEGIN
+
+statement ok con1
+COMMENT ON COLUMN ducklake.vcf.k IS 'a'
+
+statement ok con2
+COMMENT ON COLUMN ducklake.vcf.k IS 'b'
+
+statement ok con1
+COMMIT
+
+statement error con2
+COMMIT
+----
+another transaction has altered it
+
+query I
+SELECT comment FROM duckdb_columns() WHERE table_name = 'vcf' AND column_name = 'k' AND database_name = 'ducklake'
+----
+a

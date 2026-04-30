@@ -16,6 +16,7 @@
 
 namespace duckdb {
 struct SetCommentInfo;
+struct SetColumnCommentInfo;
 class DuckLakeTransaction;
 
 class DuckLakeViewEntry : public ViewCatalogEntry {
@@ -52,6 +53,8 @@ public:
 public:
 	// ALTER VIEW
 	DuckLakeViewEntry(DuckLakeViewEntry &parent, CreateViewInfo &info, LocalChange local_change);
+
+	unique_ptr<CatalogEntry> Alter(DuckLakeTransaction &transaction, SetColumnCommentInfo &info);
 
 private:
 	unique_ptr<SelectStatement> ParseSelectStatement() const;

@@ -1,11 +1,16 @@
 #include "storage/ducklake_view_entry.hpp"
+#include "storage/ducklake_transaction.hpp"
 #include "duckdb/parser/parsed_data/create_view_info.hpp"
+#include "duckdb/parser/parsed_data/comment_on_column_info.hpp"
 #include "duckdb/parser/parser.hpp"
 #include "duckdb/parser/parsed_data/alter_info.hpp"
 #include "duckdb/parser/parsed_data/alter_table_info.hpp"
 #include "duckdb/parser/keyword_helper.hpp"
+#include "duckdb/common/exception/binder_exception.hpp"
 #include "duckdb/common/string_util.hpp"
 #include "common/ducklake_util.hpp"
+
+#include <algorithm>
 
 namespace duckdb {
 
@@ -48,6 +53,25 @@ unique_ptr<CatalogEntry> DuckLakeViewEntry::AlterEntry(ClientContext &context, A
 	default:
 		throw NotImplementedException("Unsupported ALTER type for VIEW");
 	}
+}
+
+unique_ptr<CatalogEntry> DuckLakeViewEntry::Alter(DuckLakeTransaction &transaction, SetColumnCommentInfo &info) {
+	auto context = transaction.context.lock();
+	if (!context) {
+		throw InternalException("Alter view column comment: missing client context");
+	}
+	BindView(*context);
+	auto view_columns = GetColumnInfo();
+	if (view_columns) {
+		auto &names = view_columns->names;
+		if (std::find(names.begin(), names.end(), info.column_name) == names.end()) {
+			throw BinderException("View \"%s\" does not have a column with name \"%s\"", name, info.column_name);
+		}
+	}
+	auto create_info = GetInfo();
+	auto &view_info = create_info->Cast<CreateViewInfo>();
+	view_info.column_comments_map[info.column_name] = info.comment_value;
+	return make_uniq<DuckLakeViewEntry>(*this, view_info, LocalChange::SetViewColumnComment(info.column_name));
 }
 
 unique_ptr<CreateInfo> DuckLakeViewEntry::GetInfo() const {

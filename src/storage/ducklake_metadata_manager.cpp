@@ -180,6 +180,7 @@ CREATE TABLE {METADATA_CATALOG}.ducklake_table(table_id BIGINT, table_uuid UUID,
 CREATE TABLE {METADATA_CATALOG}.ducklake_view(view_id BIGINT, view_uuid UUID, begin_snapshot BIGINT, end_snapshot BIGINT, schema_id BIGINT, view_name VARCHAR, dialect VARCHAR, sql VARCHAR, column_aliases VARCHAR);
 CREATE TABLE {METADATA_CATALOG}.ducklake_tag(object_id BIGINT, begin_snapshot BIGINT, end_snapshot BIGINT, key VARCHAR, value VARCHAR);
 CREATE TABLE {METADATA_CATALOG}.ducklake_column_tag(table_id BIGINT, column_id BIGINT, begin_snapshot BIGINT, end_snapshot BIGINT, key VARCHAR, value VARCHAR);
+CREATE TABLE {METADATA_CATALOG}.ducklake_view_column_tag(view_id BIGINT, column_name VARCHAR, begin_snapshot BIGINT, end_snapshot BIGINT, key VARCHAR, value VARCHAR);
 CREATE TABLE {METADATA_CATALOG}.ducklake_data_file(data_file_id BIGINT PRIMARY KEY, table_id BIGINT, begin_snapshot BIGINT, end_snapshot BIGINT, file_order BIGINT, path VARCHAR, path_is_relative BOOLEAN, file_format VARCHAR, record_count BIGINT, file_size_bytes BIGINT, footer_size BIGINT, row_id_start BIGINT, partition_id BIGINT, encryption_key VARCHAR,  mapping_id BIGINT, partial_max BIGINT);
 CREATE TABLE {METADATA_CATALOG}.ducklake_file_column_stats(data_file_id BIGINT, table_id BIGINT, column_id BIGINT, column_size_bytes BIGINT, value_count BIGINT, null_count BIGINT, min_value VARCHAR, max_value VARCHAR, contains_nan BOOLEAN, extra_stats VARCHAR);
 CREATE TABLE {METADATA_CATALOG}.ducklake_file_variant_stats(data_file_id BIGINT, table_id BIGINT, column_id BIGINT, variant_path VARCHAR, shredded_type VARCHAR, column_size_bytes BIGINT, value_count BIGINT, null_count BIGINT, min_value VARCHAR, max_value VARCHAR, contains_nan BOOLEAN, extra_stats VARCHAR);
@@ -335,6 +336,18 @@ UPDATE {METADATA_CATALOG}.ducklake_metadata SET value = '1.1-dev1' WHERE key = '
 	}
 }
 
+void DuckLakeMetadataManager::MigrateV11Dev1() {
+	auto result = transaction.Query(R"(
+CREATE TABLE IF NOT EXISTS {METADATA_CATALOG}.ducklake_view_column_tag(
+	view_id BIGINT, column_name VARCHAR, begin_snapshot BIGINT, end_snapshot BIGINT, key VARCHAR, value VARCHAR
+);
+UPDATE {METADATA_CATALOG}.ducklake_metadata SET value = '1.1-dev2' WHERE key = 'version';
+	)");
+	if (result->HasError()) {
+		result->GetErrorObject().Throw("Failed to migrate DuckLake from v1.1-dev1 to v1.1-dev2: ");
+	}
+}
+
 DuckLakeMetadata DuckLakeMetadataManager::LoadDuckLake() {
 	auto result = transaction.Query(R"(
 SELECT key, value, scope, scope_id FROM {METADATA_CATALOG}.ducklake_metadata
@@ -408,6 +421,26 @@ vector<DuckLakeTag> DuckLakeMetadataManager::LoadTags(const Value &tag_map) cons
 		tag_info.key = struct_children[0].ToString();
 		tag_info.value = struct_children[1].ToString();
 		result.push_back(std::move(tag_info));
+	}
+	return result;
+}
+
+vector<DuckLakeViewColumnTag> DuckLakeMetadataManager::LoadViewColumnTags(const Value &list) const {
+	vector<DuckLakeViewColumnTag> result;
+	if (list.IsNull()) {
+		return result;
+	}
+	for (auto &val : ListValue::GetChildren(list)) {
+		auto &struct_children = StructValue::GetChildren(val);
+		DuckLakeViewColumnTag tag;
+		tag.column_name = struct_children[0].ToString();
+		tag.key = struct_children[1].ToString();
+		if (struct_children.size() > 2) {
+			tag.value = struct_children[2].IsNull() ? Value() : struct_children[2];
+		} else {
+			tag.value = Value();
+		}
+		result.push_back(std::move(tag));
 	}
 	return result;
 }
@@ -580,6 +613,11 @@ WHERE {SNAPSHOT_ID} >= begin_snapshot AND ({SNAPSHOT_ID} < end_snapshot OR end_s
 	    {"name", "table_name"},
 	    {"schema_version", "schema_version"},
 	};
+	static const vector<pair<string, string>> VIEW_COLUMN_TAG_FIELDS = {
+	    {"column_name", "column_name"},
+	    {"key", "key"},
+	    {"value", "value"},
+	};
 
 	// load the table information
 	result = transaction.Query(snapshot, StringUtil::Format(R"(
@@ -705,11 +743,18 @@ SELECT view_id, view_uuid, schema_id, view_name, dialect, sql, column_aliases,
 		FROM {METADATA_CATALOG}.ducklake_tag tag
 		WHERE object_id=view_id AND
 		      {SNAPSHOT_ID} >= tag.begin_snapshot AND ({SNAPSHOT_ID} < tag.end_snapshot OR tag.end_snapshot IS NULL)
-	) AS tag
+	) AS tag,
+	(
+		SELECT %s
+		FROM {METADATA_CATALOG}.ducklake_view_column_tag vct
+		WHERE vct.view_id=view.view_id AND
+		      {SNAPSHOT_ID} >= vct.begin_snapshot AND ({SNAPSHOT_ID} < vct.end_snapshot OR vct.end_snapshot IS NULL)
+	) AS view_column_tags
 FROM {METADATA_CATALOG}.ducklake_view view
 WHERE {SNAPSHOT_ID} >= begin_snapshot AND ({SNAPSHOT_ID} < view.end_snapshot OR view.end_snapshot IS NULL)
 )",
-	                                                        ListAggregation(TAG_FIELDS)));
+	                                                        ListAggregation(TAG_FIELDS),
+	                                                        ListAggregation(VIEW_COLUMN_TAG_FIELDS)));
 	if (result->HasError()) {
 		result->GetErrorObject().Throw("Failed to get partition information from DuckLake: ");
 	}
@@ -726,6 +771,9 @@ WHERE {SNAPSHOT_ID} >= begin_snapshot AND ({SNAPSHOT_ID} < view.end_snapshot OR 
 		if (!row.IsNull(7)) {
 			auto tags = row.GetValue<Value>(7);
 			view_info.tags = LoadTags(tags);
+		}
+		if (!row.IsNull(8)) {
+			view_info.column_tags = LoadViewColumnTags(row.GetValue<Value>(8));
 		}
 		views.push_back(std::move(view_info));
 	}
@@ -2125,6 +2173,7 @@ string DuckLakeMetadataManager::DropTables(const set<TableIndex> &ids, bool rena
 string DuckLakeMetadataManager::DropViews(const set<TableIndex> &ids) {
 	string batch_query = FlushDrop("ducklake_view", "view_id", ids);
 	batch_query += FlushDrop("ducklake_tag", "object_id", ids);
+	batch_query += FlushDrop("ducklake_view_column_tag", "view_id", ids);
 	return batch_query;
 }
 
@@ -4006,6 +4055,45 @@ WHERE table_id=tid AND column_id=cid AND ducklake_column_tag.key=overwritten_tag
 	return batch_query;
 }
 
+string DuckLakeMetadataManager::WriteNewViewColumnTags(const vector<DuckLakeViewColumnTagInfo> &new_tags) {
+	if (new_tags.empty()) {
+		return {};
+	}
+	string tags_list;
+	for (auto &tag : new_tags) {
+		if (!tags_list.empty()) {
+			tags_list += ", ";
+		}
+		tags_list +=
+		    StringUtil::Format("(%d, %s, %s)", tag.view_id.index, SQLString(tag.column_name), SQLString(tag.key));
+	}
+
+	string batch_query = StringUtil::Format(R"(
+WITH overwritten_tags(vid, col, k) AS (
+VALUES %s
+)
+UPDATE {METADATA_CATALOG}.ducklake_view_column_tag
+SET end_snapshot = {SNAPSHOT_ID}
+FROM overwritten_tags
+WHERE view_id=vid AND ducklake_view_column_tag.column_name=overwritten_tags.col AND
+      ducklake_view_column_tag.key=overwritten_tags.k AND end_snapshot IS NULL
+;)",
+	                                        tags_list);
+
+	string new_tag_query;
+	for (auto &tag : new_tags) {
+		if (!new_tag_query.empty()) {
+			new_tag_query += ", ";
+		}
+		new_tag_query += StringUtil::Format("(%d, %s, {SNAPSHOT_ID}, NULL, %s, %s)", tag.view_id.index,
+		                                    SQLString(tag.column_name), SQLString(tag.key), tag.value.ToSQLString());
+	}
+
+	new_tag_query = "INSERT INTO {METADATA_CATALOG}.ducklake_view_column_tag VALUES " + new_tag_query + ";";
+	batch_query += new_tag_query;
+	return batch_query;
+}
+
 struct ColumnStatsSQL {
 	string contains_null;
 	string contains_nan;
@@ -4522,7 +4610,8 @@ WHERE table_id IN (%s);)",
 	}
 
 	// delete any views, schemas, macros, etc that are no longer referenced
-	tables_to_delete_from = {"ducklake_schema", "ducklake_view", "ducklake_tag", "ducklake_macro"};
+	tables_to_delete_from = {"ducklake_schema", "ducklake_view", "ducklake_view_column_tag", "ducklake_tag",
+	                         "ducklake_macro"};
 	for (auto &delete_tbl : tables_to_delete_from) {
 		auto result = transaction.Query(StringUtil::Format(R"(
 DELETE FROM {METADATA_CATALOG}.%s

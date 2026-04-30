@@ -49,7 +49,7 @@ SELECT COUNT(*) FROM metadata.ducklake_schema
 1
 
 # all traces of the schema are gone
-foreach tbl ducklake_view ducklake_table ducklake_column ducklake_table_stats ducklake_table_column_stats ducklake_data_file ducklake_delete_file
+foreach tbl ducklake_view ducklake_view_column_tag ducklake_table ducklake_column ducklake_table_stats ducklake_table_column_stats ducklake_data_file ducklake_delete_file
 
 query I
 SELECT COUNT(*) FROM metadata.{tbl}

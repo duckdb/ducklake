@@ -830,6 +830,13 @@ void GetTransactionViewChanges(reference<CatalogEntry> view_entry, TransactionCh
 			}
 			break;
 		}
+		case LocalChangeType::SET_COLUMN_COMMENT: {
+			auto view_id = view.GetViewId();
+			if (!IsTransactionLocal(view_id)) {
+				changes.altered_views.insert(view_id);
+			}
+			break;
+		}
 		case LocalChangeType::NONE:
 		case LocalChangeType::CREATED:
 		case LocalChangeType::RENAMED: {
@@ -1506,6 +1513,7 @@ struct NewTableInfo {
 	vector<DuckLakePartitionInfo> new_partition_keys;
 	vector<DuckLakeTagInfo> new_tags;
 	vector<DuckLakeColumnTagInfo> new_column_tags;
+	vector<DuckLakeViewColumnTagInfo> new_view_column_tags;
 	vector<DuckLakeDroppedColumn> dropped_columns;
 	vector<DuckLakeNewColumn> new_columns;
 	vector<DuckLakeTableInfo> new_inlined_data_tables;
@@ -1871,12 +1879,17 @@ void DuckLakeTransaction::GetNewViewInfo(DuckLakeCommitState &commit_state, Duck
 	}
 	// count comment operations for deduplication
 	idx_t view_comment_count = 0;
+	map<string, idx_t> view_column_comment_count;
 	for (idx_t view_idx = 0; view_idx < views.size(); view_idx++) {
-		if (views[view_idx].get().GetLocalChange().type == LocalChangeType::SET_COMMENT) {
+		auto lc = views[view_idx].get().GetLocalChange();
+		if (lc.type == LocalChangeType::SET_COMMENT) {
 			view_comment_count++;
+		} else if (lc.type == LocalChangeType::SET_COLUMN_COMMENT && !lc.view_column_comment_name.empty()) {
+			view_column_comment_count[lc.view_column_comment_name]++;
 		}
 	}
 	idx_t view_comment_remaining = view_comment_count;
+	map<string, idx_t> view_column_comment_remaining(std::move(view_column_comment_count));
 	// traverse in reverse order
 	for (idx_t view_idx = views.size(); view_idx > 0; view_idx--) {
 		auto &view = views[view_idx - 1].get();
@@ -1891,6 +1904,29 @@ void DuckLakeTransaction::GetNewViewInfo(DuckLakeCommitState &commit_state, Duck
 			comment_info.key = "comment";
 			comment_info.value = view.comment;
 			result.new_tags.push_back(std::move(comment_info));
+
+			transaction_changes.altered_views.insert(view.GetViewId());
+			break;
+		}
+		case LocalChangeType::SET_COLUMN_COMMENT: {
+			auto local_change = view.GetLocalChange();
+			if (local_change.view_column_comment_name.empty()) {
+				throw InternalException("SET_COLUMN_COMMENT on view without view_column_comment_name");
+			}
+			auto &rem = view_column_comment_remaining[local_change.view_column_comment_name];
+			rem--;
+			if (rem > 0) {
+				break;
+			}
+			DuckLakeViewColumnTagInfo comment_info;
+			comment_info.view_id = commit_state.GetViewId(view);
+			comment_info.column_name = local_change.view_column_comment_name;
+			comment_info.key = "comment";
+			auto create_info_ptr = view.GetInfo();
+			auto &view_info = create_info_ptr->Cast<CreateViewInfo>();
+			auto cit = view_info.column_comments_map.find(local_change.view_column_comment_name);
+			comment_info.value = cit != view_info.column_comments_map.end() ? cit->second : Value();
+			result.new_view_column_tags.push_back(std::move(comment_info));
 
 			transaction_changes.altered_views.insert(view.GetViewId());
 			break;
@@ -2358,6 +2394,7 @@ string DuckLakeTransaction::CommitChanges(DuckLakeCommitState &commit_state,
 		batch_queries += metadata_manager->WriteNewViews(result.new_views);
 		batch_queries += metadata_manager->WriteNewTags(result.new_tags);
 		batch_queries += metadata_manager->WriteNewColumnTags(result.new_column_tags);
+		batch_queries += metadata_manager->WriteNewViewColumnTags(result.new_view_column_tags);
 		batch_queries += metadata_manager->WriteDroppedColumns(result.dropped_columns);
 		batch_queries += metadata_manager->WriteNewColumns(result.new_columns);
 		batch_queries += metadata_manager->WriteNewInlinedTables(commit_snapshot, result.new_inlined_data_tables);
@@ -3145,6 +3182,7 @@ void DuckLakeTransaction::AlterEntryInternal(DuckLakeViewEntry &view, unique_ptr
 		break;
 	}
 	case LocalChangeType::SET_COMMENT:
+	case LocalChangeType::SET_COLUMN_COMMENT:
 		break;
 	default:
 		throw NotImplementedException("Alter type not supported in DuckLakeTransaction::AlterEntry");

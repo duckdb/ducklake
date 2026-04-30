@@ -182,6 +182,7 @@ public:
 	virtual string WriteNewColumns(const vector<DuckLakeNewColumn> &new_columns);
 	virtual string WriteNewTags(const vector<DuckLakeTagInfo> &new_tags);
 	virtual string WriteNewColumnTags(const vector<DuckLakeColumnTagInfo> &new_tags);
+	virtual string WriteNewViewColumnTags(const vector<DuckLakeViewColumnTagInfo> &new_tags);
 	virtual string WriteNewDataFiles(DuckLakeSnapshot &commit_snapshot, const vector<DuckLakeFileInfo> &new_files,
 	                                 const vector<DuckLakeTableInfo> &new_tables,
 	                                 vector<DuckLakeSchemaInfo> &new_schemas_result);
@@ -258,6 +259,7 @@ public:
 	virtual void MigrateV03(bool allow_failures = false);
 	virtual void MigrateV04();
 	virtual void MigrateV10();
+	virtual void MigrateV11Dev1();
 	virtual void ExecuteMigration(string migrate_query, bool allow_failures, const string &from_version,
 	                              const string &to_version);
 
@@ -274,6 +276,7 @@ protected:
 	virtual string ListAggregation(const vector<pair<string, string>> &fields) const;
 	//! Parse tag list from ListAggregation value
 	virtual vector<DuckLakeTag> LoadTags(const Value &tag_map) const;
+	virtual vector<DuckLakeViewColumnTag> LoadViewColumnTags(const Value &list) const;
 	//! Parse inlined data tables list from ListAggregation value
 	virtual vector<DuckLakeInlinedTableInfo> LoadInlinedDataTables(const Value &list) const;
 	//! Parse macro implementations list from ListAggregation value
