@@ -276,6 +276,13 @@ string DuckLakeUtil::ValueToSQL(DuckLakeMetadataManager &metadata_manager, Clien
 		auto str_val = val.CastAs(context, LogicalType::VARCHAR);
 		return ValueToSQL(metadata_manager, context, str_val);
 	}
+	const bool native_type = metadata_manager.TypeIsNativelySupported(val.type());
+	const bool nested_type = val.type().IsNested();
+	if (!native_type && nested_type) {
+		auto json_value = val.CastAs(context, LogicalType::JSON());
+		auto text = json_value.ToString();
+		return StringUtil::Format("%s", SQLString(text));
+	}
 	string result;
 	switch (val.type().id()) {
 	case LogicalTypeId::VARCHAR: {
@@ -284,6 +291,14 @@ string DuckLakeUtil::ValueToSQL(DuckLakeMetadataManager &metadata_manager, Clien
 			return ToByteaHexLiteral(str_val);
 		}
 		return EscapeVarcharForSQL(str_val);
+	}
+	case LogicalTypeId::BIT: {
+		auto bit_text = val.ToString();
+		if (!bit_text.empty() && (bit_text[0] == 'b' || bit_text[0] == 'B')) {
+			bit_text = bit_text.substr(1);
+		}
+		result = StringUtil::Format("%s", SQLString(bit_text));
+		break;
 	}
 	case LogicalTypeId::BLOB: {
 		if (!metadata_manager.TypeIsNativelySupported(LogicalType::BLOB)) {
@@ -295,7 +310,7 @@ string DuckLakeUtil::ValueToSQL(DuckLakeMetadataManager &metadata_manager, Clien
 	default:
 		result = ToSQLString(metadata_manager, val);
 	}
-	if (metadata_manager.TypeIsNativelySupported(val.type()) || !val.type().IsNested()) {
+	if (native_type || !val.type().IsNested()) {
 		return result;
 	}
 	return StringUtil::Format("%s", SQLString(result));

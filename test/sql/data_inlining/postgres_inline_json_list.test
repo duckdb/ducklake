@@ -1,0 +1,35 @@
+# name: test/sql/data_inlining/postgres_inline_json_list.test
+# description: check inline JSON[] flushing with postgres metadata
+# group: [data_inlining]
+
+require ducklake
+
+require parquet
+
+require json
+
+require postgres_scanner
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/ducklake_postgres_inline_json_list', METADATA_SCHEMA 'inline_json_list_{UUID}', DATA_INLINING_ROW_LIMIT 10)
+
+statement ok
+CREATE TABLE ducklake.events (id INTEGER, artifacts JSON[]);
+
+statement ok
+INSERT INTO ducklake.events VALUES (1, [ '{"data": 1}', '{"data": 2}' ]::JSON[]);
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake');
+
+query I
+SELECT array_length(artifacts) FROM ducklake.events;
+----
+2
+
+query I
+SELECT json_type(artifacts[1]) FROM ducklake.events;
+----
+OBJECT
