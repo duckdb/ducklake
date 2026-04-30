@@ -520,8 +520,7 @@ static unique_ptr<MergeIntoOperator> DuckLakePlanMergeIntoAction(DuckLakeCatalog
 		auto copy_options = DuckLakeInsert::GetCopyOptions(context, copy_input);
 
 		auto &physical_copy = DuckLakeInsert::PlanCopyForInsert(context, planner, copy_input, nullptr);
-		auto &copy_dummy =
-		    planner.Make<PhysicalDummyScan>(physical_copy.Cast<PhysicalCopyToFile>().expected_types, 1);
+		auto &copy_dummy = planner.Make<PhysicalDummyScan>(physical_copy.Cast<PhysicalCopyToFile>().expected_types, 1);
 		physical_copy.children.push_back(copy_dummy);
 		auto &insert =
 		    DuckLakeInsert::PlanInsert(context, planner, ducklake_table, std::move(copy_input.encryption_key));
