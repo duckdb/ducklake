@@ -694,13 +694,31 @@ void DuckLakeTransaction::Commit() {
 }
 
 void DuckLakeTransaction::Rollback() {
-	if (connection) {
-		// rollback any changes made to the metadata catalog
-		connection->Rollback();
-		connection.reset();
-	}
+	auto rollback_error = RollbackAndResetConnection();
 	CleanupFiles();
 	local_changes.Clear();
+	if (!rollback_error.empty()) {
+		throw TransactionException("Failed to rollback metadata transaction: %s", rollback_error);
+	}
+}
+
+string DuckLakeTransaction::RollbackAndResetConnection() {
+	string rollback_error;
+	if (!connection) {
+		return rollback_error;
+	}
+	try {
+		// rollback any changes made to the metadata catalog
+		auto has_active_transaction = connection->context->transaction.HasActiveTransaction();
+		if (has_active_transaction) {
+			connection->Rollback();
+		}
+	} catch (std::exception &ex) {
+		ErrorData error(ex);
+		rollback_error = error.Message();
+	}
+	connection.reset();
+	return rollback_error;
 }
 
 Connection &DuckLakeTransaction::GetConnection() {
@@ -2617,10 +2635,7 @@ void DuckLakeTransaction::FlushChanges() {
 		} catch (std::exception &ex) {
 			ErrorData error(ex);
 			// rollback if there is an active transaction
-			auto has_active_transaction = connection->context->transaction.HasActiveTransaction();
-			if (has_active_transaction) {
-				connection->Rollback();
-			}
+			auto rollback_error = RollbackAndResetConnection();
 			bool retry_on_error = RetryOnError(error.Message());
 			bool finished_retrying = i + 1 >= max_retry_count;
 			if (!can_retry || !retry_on_error || finished_retrying) {
@@ -2629,6 +2644,9 @@ void DuckLakeTransaction::FlushChanges() {
 				// Add additional information on the number of retries and suggest to increase it
 				std::ostringstream error_message;
 				error_message << "Failed to commit DuckLake transaction." << '\n';
+				if (!rollback_error.empty()) {
+					error_message << "Failed to rollback metadata transaction: " << rollback_error << '\n';
+				}
 				if (finished_retrying) {
 					error_message << "Exceeded the maximum retry count of " << max_retry_count
 					              << " set by the ducklake_max_retry_count setting." << '\n'
@@ -2650,7 +2668,7 @@ void DuckLakeTransaction::FlushChanges() {
 			// retry the transaction (with a new snapshot id)
 			// clear the inlined table caches - the rollback undid any table creation from the previous attempt
 			metadata_manager->ClearInlinedTableCaches();
-			connection->BeginTransaction();
+			GetConnection();
 			snapshot.reset();
 		}
 	}
