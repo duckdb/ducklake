@@ -5,6 +5,7 @@
 #include "storage/ducklake_scan.hpp"
 #include "storage/ducklake_transaction.hpp"
 
+#include "duckdb/common/sql_identifier.hpp"
 #include "duckdb/storage/statistics/base_statistics.hpp"
 #include "duckdb/storage/table_storage_info.hpp"
 #include "duckdb/function/table_function.hpp"
@@ -363,7 +364,7 @@ vector<string> DuckLakeTableEntry::GetPartitionSQLExpressions() const {
 	}
 	for (auto &field : partition_data->fields) {
 		auto &col = GetColumnByFieldId(field.field_id);
-		auto col_name = KeywordHelper::WriteOptionallyQuoted(col.GetName());
+		auto col_name = SQLIdentifier::ToString(col.GetName());
 		col_name = "CAST(" + col_name + " AS " + col.GetType().ToString() + ")";
 		result.push_back(DuckLakePartitionUtils::GetPartitionSQLExpression(field.transform, col_name));
 	}

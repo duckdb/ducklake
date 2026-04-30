@@ -4,6 +4,7 @@
 #include "common/ducklake_util.hpp"
 #include "duckdb/planner/tableref/bound_at_clause.hpp"
 #include "duckdb/common/types/blob.hpp"
+#include "duckdb/common/sql_identifier.hpp"
 #include "duckdb/common/type_visitor.hpp"
 #include "storage/ducklake_catalog.hpp"
 #include "common/ducklake_types.hpp"
@@ -2181,7 +2182,7 @@ static void ColumnToSQLRecursive(const DuckLakeColumnInfo &column, TableIndex ta
 	string parent_idx = parent.IsValid() ? to_string(parent.GetIndex()) : "NULL";
 
 	string initial_default_val =
-	    !column.initial_default.IsNull() ? KeywordHelper::WriteQuoted(column.initial_default.ToString(), '\'') : "NULL";
+	    !column.initial_default.IsNull() ? SQLString::ToString(column.initial_default.ToString()) : "NULL";
 
 	string default_val = "'NULL'";
 	string default_val_system = "'duckdb'";
@@ -2190,7 +2191,7 @@ static void ColumnToSQLRecursive(const DuckLakeColumnInfo &column, TableIndex ta
 	if (!column.default_value.IsNull()) {
 		auto value = column.default_value.GetValue<string>();
 		if (column.default_value_type == "literal") {
-			default_val = KeywordHelper::WriteQuoted(value, '\'');
+			default_val = SQLString::ToString(value);
 		} else if (column.default_value_type == "expression") {
 			if (value.empty()) {
 				default_val = "''";
@@ -2199,7 +2200,7 @@ static void ColumnToSQLRecursive(const DuckLakeColumnInfo &column, TableIndex ta
 				if (sql_expr.size() != 1) {
 					throw InternalException("Expected a single expression");
 				}
-				default_val = KeywordHelper::WriteQuoted(sql_expr[0]->ToString(), '\'');
+				default_val = SQLString::ToString(sql_expr[0]->ToString());
 			}
 		} else {
 			throw InvalidInputException("Expression type %s not implemented for default value",
@@ -3535,7 +3536,7 @@ static string SQLStringOrNull(const string &str) {
 	if (str.empty()) {
 		return "NULL";
 	}
-	return KeywordHelper::WriteQuoted(str, '\'');
+	return SQLString::ToString(str);
 }
 
 string DuckLakeMetadataManager::WriteSnapshotChanges(const SnapshotChangeInfo &change_info,

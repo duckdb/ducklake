@@ -3,6 +3,7 @@
 #include "common/ducklake_types.hpp"
 #include "common/ducklake_util.hpp"
 #include "duckdb/common/thread.hpp"
+#include "duckdb/common/sql_identifier.hpp"
 #include "duckdb/common/vector_operations/vector_operations.hpp"
 #include "duckdb/catalog/catalog_entry/scalar_macro_catalog_entry.hpp"
 #include "duckdb/common/types/uuid.hpp"
@@ -1060,41 +1061,41 @@ string DuckLakeTransaction::WriteSnapshotChanges(DuckLakeCommitState &commit_sta
 			change_info.changes_made += ",";
 		}
 		change_info.changes_made += "created_schema:";
-		change_info.changes_made += KeywordHelper::WriteQuoted(created_schema, '"');
+		change_info.changes_made += SQLQuotedIdentifier::ToString(created_schema);
 	}
 	for (auto &entry : changes.created_tables) {
 		auto &schema = entry.first;
-		auto schema_prefix = KeywordHelper::WriteQuoted(schema, '"') + ".";
+		auto schema_prefix = SQLQuotedIdentifier::ToString(schema) + ".";
 		for (auto &created_table : entry.second) {
 			if (!change_info.changes_made.empty()) {
 				change_info.changes_made += ",";
 			}
 			auto is_view = created_table.get().type == CatalogType::VIEW_ENTRY;
 			change_info.changes_made += is_view ? "created_view:" : "created_table:";
-			change_info.changes_made += schema_prefix + KeywordHelper::WriteQuoted(created_table.get().name, '"');
+			change_info.changes_made += schema_prefix + SQLQuotedIdentifier::ToString(created_table.get().name);
 		}
 	}
 
 	for (auto &entry : changes.created_scalar_macros) {
 		auto &schema = entry.first;
-		auto schema_prefix = KeywordHelper::WriteQuoted(schema, '"') + ".";
+		auto schema_prefix = SQLQuotedIdentifier::ToString(schema) + ".";
 		for (auto &created_macro : entry.second) {
 			if (!change_info.changes_made.empty()) {
 				change_info.changes_made += ",";
 			}
 			change_info.changes_made += "created_scalar_macro:";
-			change_info.changes_made += schema_prefix + KeywordHelper::WriteQuoted(created_macro.get().name, '"');
+			change_info.changes_made += schema_prefix + SQLQuotedIdentifier::ToString(created_macro.get().name);
 		}
 	}
 	for (auto &entry : changes.created_table_macros) {
 		auto &schema = entry.first;
-		auto schema_prefix = KeywordHelper::WriteQuoted(schema, '"') + ".";
+		auto schema_prefix = SQLQuotedIdentifier::ToString(schema) + ".";
 		for (auto &created_macro : entry.second) {
 			if (!change_info.changes_made.empty()) {
 				change_info.changes_made += ",";
 			}
 			change_info.changes_made += "created_table_macro:";
-			change_info.changes_made += schema_prefix + KeywordHelper::WriteQuoted(created_macro.get().name, '"');
+			change_info.changes_made += schema_prefix + SQLQuotedIdentifier::ToString(created_macro.get().name);
 		}
 	}
 

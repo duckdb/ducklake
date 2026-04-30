@@ -1,5 +1,6 @@
 #include "common/ducklake_util.hpp"
 #include "duckdb/common/string_util.hpp"
+#include "duckdb/common/sql_identifier.hpp"
 #include "duckdb/parser/keyword_helper.hpp"
 #include "duckdb/parser/parser.hpp"
 #include "duckdb/common/file_system.hpp"
@@ -40,7 +41,7 @@ string DuckLakeUtil::ToQuotedList(const vector<string> &input, char list_separat
 		if (!result.empty()) {
 			result += list_separator;
 		}
-		result += KeywordHelper::WriteQuoted(str, '"');
+		result += SQLQuotedIdentifier::ToString(str);
 	}
 	return result;
 }
