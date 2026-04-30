@@ -101,3 +101,46 @@ FROM ducklake_meta.ducklake_table_column_stats
 WHERE table_id = 2 AND column_id = 2
 ----
 20	200
+
+# ============================================
+# Case 3: INSERT + DELETE-all + ADD COLUMN DEFAULT + INSERT inside one transaction.
+# ============================================
+
+statement ok
+CREATE TABLE ducklake.t_del (a INT)
+
+statement ok
+BEGIN
+
+statement ok
+INSERT INTO ducklake.t_del VALUES (1), (2), (3)
+
+statement ok
+DELETE FROM ducklake.t_del
+
+statement ok
+ALTER TABLE ducklake.t_del ADD COLUMN b INT DEFAULT 999
+
+statement ok
+INSERT INTO ducklake.t_del VALUES (10, 5)
+
+statement ok
+COMMIT
+
+query II
+SELECT * FROM ducklake.t_del ORDER BY a
+----
+10	5
+
+# Only 5 is present in column b — min and max must both be 5.
+query II
+SELECT s.min_value, s.max_value
+FROM ducklake_meta.ducklake_table_column_stats s
+JOIN ducklake_meta.ducklake_table t USING (table_id)
+JOIN ducklake_meta.ducklake_column c USING (table_id, column_id)
+WHERE t.table_name = 't_del'
+  AND t.end_snapshot IS NULL
+  AND c.end_snapshot IS NULL
+  AND c.column_name = 'b'
+----
+5	5
