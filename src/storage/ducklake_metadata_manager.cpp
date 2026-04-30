@@ -2,6 +2,7 @@
 #include "storage/ducklake_transaction.hpp"
 #include "storage/ducklake_variant_stats.hpp"
 #include "common/ducklake_util.hpp"
+#include "duckdb/common/path.hpp"
 #include "duckdb/planner/tableref/bound_at_clause.hpp"
 #include "duckdb/common/types/blob.hpp"
 #include "duckdb/common/type_visitor.hpp"
@@ -3024,12 +3025,12 @@ DuckLakePath DuckLakeMetadataManager::GetRelativePath(const string &path, const 
 
 string DuckLakeMetadataManager::GetPathSeparator(const string &path) {
 	auto &catalog = transaction.GetCatalog();
-	if (!catalog.DataPath().empty()) {
-		// use the cached separator from the catalog
+	auto parsed = Path::FromString(path);
+	if (!catalog.DataPath().empty() && !parsed.IsAbsolute() && !parsed.HasDrive()) {
+		// use the cached separator from the catalog for relative paths
 		return catalog.Separator();
 	}
-	// if catalog is not loaded, use the file system
-	return GetFileSystem().PathSeparator(path);
+	return DuckLakeUtil::LocalOrRemoteSeparator(GetFileSystem(), path);
 }
 
 string DuckLakeMetadataManager::StorePath(string path) {
@@ -3052,7 +3053,8 @@ string DuckLakeMetadataManager::FromRelativePath(const DuckLakePath &path, const
 	if (!path.path_is_relative) {
 		return LoadPath(path.path);
 	}
-	return LoadPath(base_path + path.path);
+	auto &fs = GetFileSystem();
+	return LoadPath(DuckLakeUtil::JoinPath(fs, base_path, path.path));
 }
 
 string DuckLakeMetadataManager::FromRelativePath(const DuckLakePath &path) {
