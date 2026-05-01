@@ -1,5 +1,8 @@
 #include "storage/ducklake_transaction.hpp"
 
+#include <algorithm>
+#include <iterator>
+
 #include "common/ducklake_types.hpp"
 #include "common/ducklake_util.hpp"
 #include "duckdb/common/thread.hpp"
@@ -2309,6 +2312,23 @@ string DuckLakeTransaction::CommitChanges(DuckLakeCommitState &commit_state,
 		    "with \"CALL ducklake.set_commit_message('author_name', 'commit_message'); \n * Set the required commit "
 		    "message to false with \"CALL ducklake.set_option('require_commit_message', False)\" '\"");
 	}
+
+	// Invariant: a given table/view id can be either renamed OR dropped in a transaction, never both.
+#ifdef DEBUG
+	{
+		set<TableIndex> overlap;
+		std::set_intersection(dropped_tables.begin(), dropped_tables.end(), renamed_tables.begin(),
+		                      renamed_tables.end(), std::inserter(overlap, overlap.begin()));
+		D_ASSERT(overlap.empty());
+	}
+	{
+		set<TableIndex> overlap;
+		std::set_intersection(dropped_views.begin(), dropped_views.end(), renamed_views.begin(),
+		                      renamed_views.end(), std::inserter(overlap, overlap.begin()));
+		D_ASSERT(overlap.empty());
+	}
+#endif
+
 	string batch_queries;
 	// drop entries
 	if (!dropped_tables.empty()) {
