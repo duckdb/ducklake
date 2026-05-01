@@ -2975,7 +2975,7 @@ void DuckLakeTransaction::DropView(DuckLakeViewEntry &view) {
 
 	// The view exists before the transaction, drop the view anyway.
 	if (!view_id.IsTransactionLocal()) {
-		// TODO(hjiang): sync with https://github.com/duckdb/ducklake/pull/1069 to remove renamed views.
+		renamed_views.erase(view_id);
 		dropped_views.insert(view_id);
 	}
 }
