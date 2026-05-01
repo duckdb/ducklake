@@ -1522,6 +1522,7 @@ struct NewTableInfo {
 	vector<DuckLakeNewColumn> new_columns;
 	vector<DuckLakeTableInfo> new_inlined_data_tables;
 	vector<DuckLakeSortInfo> new_sort_keys;
+	vector<DuckLakeConfigOption> new_table_options;
 };
 
 struct NewMacroInfo {
@@ -1770,6 +1771,18 @@ void DuckLakeTransaction::GetNewTableInfo(DuckLakeCommitState &commit_state, Duc
 				if (table.GetSortData()) {
 					auto sort_key = GetNewSortKey(commit_state, table);
 					result.new_sort_keys.push_back(std::move(sort_key));
+				}
+			}
+			// CREATE TABLE / CTAS WITH (...) options. AlterEntryInternal drops the CREATED entry from
+			// the transaction-local set on rename, so a CREATE+RENAME chain arrives here as a single
+			// RENAMED entry with a still-transaction-local id — emit whenever old_table_id is local.
+			if (old_table_id.IsTransactionLocal()) {
+				auto &pending_options = table.GetPendingTableOptions();
+				for (auto &tag : pending_options) {
+					DuckLakeConfigOption opt;
+					opt.option = tag;
+					opt.table_id = new_table_id;
+					result.new_table_options.push_back(std::move(opt));
 				}
 			}
 			break;
@@ -2383,6 +2396,11 @@ string DuckLakeTransaction::CommitChanges(DuckLakeCommitState &commit_state,
 		batch_queries += metadata_manager->WriteNewColumns(result.new_columns);
 		batch_queries += metadata_manager->WriteNewInlinedTables(commit_snapshot, result.new_inlined_data_tables);
 		batch_queries += metadata_manager->WriteNewSortKeys(commit_snapshot, result.new_sort_keys);
+		batch_queries += metadata_manager->WriteNewTableConfigOptions(result.new_table_options);
+		// re-key in-memory options from the local id to the committed id
+		for (auto &opt : result.new_table_options) {
+			ducklake_catalog.SetConfigOption(opt);
+		}
 		new_tables_result = result.new_tables;
 		new_inlined_data_tables_result = result.new_inlined_data_tables;
 	}

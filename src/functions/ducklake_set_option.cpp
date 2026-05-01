@@ -15,17 +15,12 @@ struct DuckLakeSetOptionData : public TableFunctionData {
 	DuckLakeConfigOption option;
 };
 
-static unique_ptr<FunctionData> DuckLakeSetOptionBind(ClientContext &context, TableFunctionBindInput &input,
-                                                      vector<LogicalType> &return_types, vector<string> &names) {
-	auto &catalog = DuckLakeBaseMetadataFunction::GetCatalog(context, input.inputs[0]);
-	DuckLakeConfigOption config_option;
-	auto &option = config_option.option.key;
-	auto &value = config_option.option.value;
+DuckLakeTag ValidateDuckLakeConfigOption(ClientContext &context, const string &option_key, const Value &val) {
+	DuckLakeTag result;
+	auto option = StringUtil::Lower(option_key);
+	result.key = option;
+	auto &value = result.value;
 
-	option = StringUtil::Lower(StringValue::Get(input.inputs[1]));
-	auto &val = input.inputs[2];
-
-	// read the option
 	if (option == "parquet_compression") {
 		auto codec = val.DefaultCastAs(LogicalType::VARCHAR).GetValue<string>();
 		vector<string> supported_algorithms {"uncompressed", "snappy", "gzip", "zstd", "brotli", "lz4", "lz4_raw"};
@@ -82,9 +77,8 @@ static unique_ptr<FunctionData> DuckLakeSetOptionBind(ClientContext &context, Ta
 	} else if (option == "delete_older_than" || option == "expire_older_than") {
 		auto interval_value = val.ToString();
 		if (!interval_value.empty()) {
-			// Let's verify this is actually an interval
-			interval_t result;
-			if (!Interval::FromString(val.ToString(), result)) {
+			interval_t interval_result;
+			if (!Interval::FromString(val.ToString(), interval_result)) {
 				throw BinderException("%s is not a valid interval value.", option);
 			}
 		}
@@ -103,6 +97,16 @@ static unique_ptr<FunctionData> DuckLakeSetOptionBind(ClientContext &context, Ta
 	} else {
 		throw NotImplementedException("Unsupported option %s", option);
 	}
+	return result;
+}
+
+static unique_ptr<FunctionData> DuckLakeSetOptionBind(ClientContext &context, TableFunctionBindInput &input,
+                                                      vector<LogicalType> &return_types, vector<string> &names) {
+	auto &catalog = DuckLakeBaseMetadataFunction::GetCatalog(context, input.inputs[0]);
+	DuckLakeConfigOption config_option;
+	config_option.option =
+	    ValidateDuckLakeConfigOption(context, StringValue::Get(input.inputs[1]), input.inputs[2]);
+	auto &option = config_option.option.key;
 
 	// read the scope
 	string schema;

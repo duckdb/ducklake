@@ -84,6 +84,13 @@ public:
 	optional_ptr<const DuckLakeFieldId> GetFieldId(FieldIndex field_index) const;
 	void SetPartitionData(unique_ptr<DuckLakePartition> partition_data);
 	void SetSortData(unique_ptr<DuckLakeSort> sort_data);
+	//! Pending table-scoped config options collected from a CREATE TABLE / CTAS WITH (...) clause.
+	void SetPendingTableOptions(vector<DuckLakeTag> options) {
+		pending_table_options = std::move(options);
+	}
+	const vector<DuckLakeTag> &GetPendingTableOptions() const {
+		return pending_table_options;
+	}
 	shared_ptr<DuckLakeTableStats> GetTableStats(ClientContext &context);
 	shared_ptr<DuckLakeTableStats> GetTableStats(DuckLakeTransaction &transaction);
 	idx_t GetNetDataFileRowCount(DuckLakeTransaction &transaction);
@@ -187,6 +194,8 @@ private:
 	unique_ptr<DuckLakeSort> sort_data;
 	// only set for REMOVED_COLUMN
 	unique_ptr<ColumnChangeInfo> changed_fields;
+	// table-scoped config options collected from CREATE TABLE / CTAS WITH (...), pending until commit
+	vector<DuckLakeTag> pending_table_options;
 };
 
 } // namespace duckdb

@@ -28,11 +28,11 @@ CREATE TABLE bad_sort (a INTEGER) SORTED BY (nonexistent)
 ----
 <REGEX>:.*nonexistent.*
 
-# WITH (...) clause is rejected by SupportsCreateTable override (DuckLake has no WITH semantics)
+# WITH (...) accepts known DuckLake config option keys; unknown keys are rejected during validation
 statement error
 CREATE TABLE bad_with (a INTEGER) WITH (some_option='x')
 ----
-WITH clause is not supported for tables in a ducklake catalog
+<REGEX>:.*Unsupported option.*
 
 # unsupported transform function
 statement error

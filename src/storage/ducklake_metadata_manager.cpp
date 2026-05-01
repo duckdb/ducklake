@@ -4573,6 +4573,25 @@ WHERE {SNAPSHOT_ID} >= begin_snapshot AND ({SNAPSHOT_ID} < end_snapshot OR end_s
 	return table_sizes;
 }
 
+string DuckLakeMetadataManager::WriteNewTableConfigOptions(const vector<DuckLakeConfigOption> &new_options) {
+	if (new_options.empty()) {
+		return string();
+	}
+	// fresh committed table-id from LocalChangeType::CREATED only — no UPSERT needed
+	string query = "INSERT INTO {METADATA_CATALOG}.ducklake_metadata VALUES ";
+	for (idx_t i = 0; i < new_options.size(); i++) {
+		auto &opt = new_options[i];
+		D_ASSERT(opt.table_id.IsValid() && !opt.table_id.IsTransactionLocal());
+		if (i > 0) {
+			query += ", ";
+		}
+		query += StringUtil::Format("(%s, %s, 'table', %d)", SQLString(opt.option.key), SQLString(opt.option.value),
+		                            opt.table_id.index);
+	}
+	query += ";\n";
+	return query;
+}
+
 void DuckLakeMetadataManager::SetConfigOption(const DuckLakeConfigOption &option) {
 	// check if the option already exists
 	auto &option_key = option.option.key;

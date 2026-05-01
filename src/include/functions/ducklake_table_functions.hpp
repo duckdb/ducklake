@@ -15,6 +15,11 @@
 namespace duckdb {
 class DuckLakeCatalog;
 struct DuckLakeSnapshotInfo;
+struct DuckLakeTag;
+
+//! Validate and canonicalize a single (key, value) DuckLake config option.
+//! Shared by `CALL ducklake.set_option(...)` and CREATE TABLE / CTAS `WITH (...)`.
+DuckLakeTag ValidateDuckLakeConfigOption(ClientContext &context, const string &option_key, const Value &val);
 
 class DuckLakeTableFunctionUtil {
 public:

@@ -10,11 +10,13 @@
 #include "storage/ducklake_geo_stats.hpp"
 #include "common/ducklake_types.hpp"
 #include "functions/ducklake_compaction_functions.hpp"
+#include "functions/ducklake_table_functions.hpp"
 
 #include "duckdb/catalog/catalog_entry/copy_function_catalog_entry.hpp"
 #include "duckdb/execution/operator/order/physical_order.hpp"
 #include "duckdb/execution/operator/projection/physical_projection.hpp"
 #include "duckdb/execution/operator/scan/physical_table_scan.hpp"
+#include "duckdb/parser/expression/constant_expression.hpp"
 #include "duckdb/parser/parser.hpp"
 #include "duckdb/planner/binder.hpp"
 #include "duckdb/planner/expression_binder.hpp"
@@ -350,16 +352,43 @@ DuckLakeCopyInput::DuckLakeCopyInput(ClientContext &context, DuckLakeTableEntry 
 	schema_id = table.ParentSchema().Cast<DuckLakeSchemaEntry>().GetSchemaId();
 	table_id = table.GetTableId();
 	encryption_key = catalog.GenerateEncryptionKey(context);
+	// Surface CREATE TABLE / CTAS WITH (...) options for transaction-local tables: the catalog
+	// is not mutated for transaction-local ids, so the only source of truth is the table entry.
+	for (auto &tag : table.GetPendingTableOptions()) {
+		with_options[tag.key] = tag.value;
+	}
 }
 
 DuckLakeCopyInput::DuckLakeCopyInput(ClientContext &context, DuckLakeSchemaEntry &schema, const ColumnList &columns,
                                      const string &data_path_p, DuckLakeFieldData &field_data_p,
-                                     optional_ptr<DuckLakePartition> partition_data_p)
+                                     optional_ptr<DuckLakePartition> partition_data_p,
+                                     const case_insensitive_map_t<unique_ptr<ParsedExpression>> &create_with_options)
     : catalog(schema.ParentCatalog().Cast<DuckLakeCatalog>()), columns(columns), data_path(data_path_p) {
 	field_data = &field_data_p;
 	partition_data = partition_data_p;
 	schema_id = schema.GetSchemaId();
 	encryption_key = catalog.GenerateEncryptionKey(context);
+	// Validate CREATE TABLE AS ... WITH (key=value, ...) and surface as per-write overrides so the
+	// parquet files land with the requested compression / row group size, even though the new table_id
+	// won't be allocated until DuckLakeInsert::GetGlobalSinkState (long after this plan is built).
+	for (auto &option : create_with_options) {
+		if (!option.second || option.second->GetExpressionClass() != ExpressionClass::CONSTANT) {
+			throw BinderException(
+			    "WITH option \"%s\" must be a constant expression in DuckLake CREATE TABLE / CTAS", option.first);
+		}
+		auto &constant_expr = option.second->Cast<ConstantExpression>();
+		auto tag = ValidateDuckLakeConfigOption(context, option.first, constant_expr.value);
+		with_options[tag.key] = tag.value;
+	}
+}
+
+bool DuckLakeCopyInput::GetEffectiveOption(const string &key, string &out) const {
+	auto it = with_options.find(key);
+	if (it != with_options.end()) {
+		out = it->second;
+		return true;
+	}
+	return catalog.TryGetConfigOption(key, out, schema_id, table_id);
 }
 
 static void StripTrailingSeparator(FileSystem &fs, string &path) {
@@ -502,32 +531,38 @@ DuckLakeCopyOptions DuckLakeInsert::GetCopyOptions(ClientContext &context, DuckL
 	auto &schema_id = copy_input.schema_id;
 	auto &table_id = copy_input.table_id;
 	string parquet_compression;
-	if (catalog.TryGetConfigOption("parquet_compression", parquet_compression, schema_id, table_id)) {
+	if (copy_input.GetEffectiveOption("parquet_compression", parquet_compression)) {
 		info->options["compression"].emplace_back(parquet_compression);
 	}
 	string parquet_version;
-	if (catalog.TryGetConfigOption("parquet_version", parquet_version, schema_id, table_id)) {
+	if (copy_input.GetEffectiveOption("parquet_version", parquet_version)) {
 		info->options["parquet_version"].emplace_back(parquet_version);
 	}
 	string parquet_compression_level;
-	if (catalog.TryGetConfigOption("parquet_compression_level", parquet_compression_level, schema_id, table_id)) {
+	if (copy_input.GetEffectiveOption("parquet_compression_level", parquet_compression_level)) {
 		info->options["compression_level"].emplace_back(parquet_compression_level);
 	}
 	string row_group_size;
-	if (catalog.TryGetConfigOption("parquet_row_group_size", row_group_size, schema_id, table_id)) {
+	if (copy_input.GetEffectiveOption("parquet_row_group_size", row_group_size)) {
 		info->options["row_group_size"].emplace_back(row_group_size);
 	}
 	string row_group_size_bytes;
-	if (catalog.TryGetConfigOption("parquet_row_group_size_bytes", row_group_size_bytes, schema_id, table_id)) {
+	if (copy_input.GetEffectiveOption("parquet_row_group_size_bytes", row_group_size_bytes)) {
 		info->options["row_group_size_bytes"].emplace_back(row_group_size_bytes + " bytes");
 	}
 	string per_thread_output_str;
 	bool per_thread_output = false;
-	if (catalog.TryGetConfigOption("per_thread_output", per_thread_output_str, schema_id, table_id)) {
+	if (copy_input.GetEffectiveOption("per_thread_output", per_thread_output_str)) {
 		per_thread_output = per_thread_output_str == "true";
 	}
-	idx_t target_file_size = catalog.GetConfigOption<idx_t>("target_file_size", schema_id, table_id,
-	                                                        DuckLakeCatalog::DEFAULT_TARGET_FILE_SIZE);
+	string target_file_size_str;
+	idx_t target_file_size = DuckLakeCatalog::DEFAULT_TARGET_FILE_SIZE;
+	if (copy_input.GetEffectiveOption("target_file_size", target_file_size_str)) {
+		target_file_size = Value(target_file_size_str).GetValue<idx_t>();
+	} else {
+		target_file_size =
+		    catalog.GetConfigOption<idx_t>("target_file_size", schema_id, table_id, target_file_size);
+	}
 
 	// Always use native parquet geometry for writing
 	info->options["geoparquet_version"].emplace_back("NONE");
@@ -901,7 +936,8 @@ PhysicalOperator &DuckLakeCatalog::PlanCreateTableAs(ClientContext &context, Phy
 	auto table_data_path =
 	    duck_schema.DataPath() + DuckLakeCatalog::GeneratePathFromName(table_uuid, create_info.table);
 
-	DuckLakeCopyInput copy_input(context, duck_schema, columns, table_data_path, *field_data, partition_data.get());
+	DuckLakeCopyInput copy_input(context, duck_schema, columns, table_data_path, *field_data, partition_data.get(),
+	                             create_info.options);
 	auto &physical_copy = DuckLakeInsert::PlanCopyForInsert(context, planner, copy_input, root.get());
 
 	optional_idx insert_partition_id;

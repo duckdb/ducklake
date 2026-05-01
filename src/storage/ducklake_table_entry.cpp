@@ -75,6 +75,7 @@ DuckLakeTableEntry::DuckLakeTableEntry(DuckLakeTableEntry &parent, CreateTableIn
 	if (parent.sort_data) {
 		sort_data = make_uniq<DuckLakeSort>(*parent.sort_data);
 	}
+	pending_table_options = parent.pending_table_options;
 	CheckSupportedTypes();
 	if (local_change.type == LocalChangeType::ADD_COLUMN) {
 		LogicalIndex new_col_idx(columns.LogicalColumnCount() - 1);
@@ -99,6 +100,7 @@ DuckLakeTableEntry::DuckLakeTableEntry(DuckLakeTableEntry &parent, CreateTableIn
 	if (parent.sort_data) {
 		sort_data = make_uniq<DuckLakeSort>(*parent.sort_data);
 	}
+	pending_table_options = parent.pending_table_options;
 	CheckSupportedTypes();
 
 	auto changed_id = local_change.field_index;

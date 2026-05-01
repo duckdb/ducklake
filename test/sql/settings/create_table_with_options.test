@@ -1,0 +1,144 @@
+# name: test/sql/settings/create_table_with_options.test
+# description: Test CREATE TABLE / CTAS with WITH (...) table-scoped config options
+# group: [settings]
+
+require ducklake
+
+require parquet
+
+statement ok
+ATTACH 'ducklake:__TEST_DIR__/ducklake_create_with_options.db' AS ducklake (DATA_PATH '__TEST_DIR__/ducklake_create_with_options_files');
+
+# CREATE TABLE with a single WITH option persists to ducklake_metadata
+statement ok
+CREATE TABLE ducklake.t_compress(i INTEGER) WITH (parquet_compression='zstd');
+
+query III
+SELECT option_name, value, scope FROM ducklake.options() WHERE option_name='parquet_compression' AND scope='TABLE' AND scope_entry='main.t_compress'
+----
+parquet_compression	zstd	TABLE
+
+# inserting into the table uses the table-scoped option
+statement ok
+INSERT INTO ducklake.t_compress SELECT range FROM range(1000)
+
+query I
+SELECT DISTINCT compression FROM parquet_metadata('__TEST_DIR__/ducklake_create_with_options_files/main/t_compress/**')
+----
+ZSTD
+
+# CREATE TABLE with multiple WITH options
+statement ok
+CREATE TABLE ducklake.t_multi(i INTEGER) WITH (parquet_compression='gzip', parquet_row_group_size=512);
+
+query III
+SELECT option_name, value, scope FROM ducklake.options() WHERE scope='TABLE' AND scope_entry='main.t_multi' ORDER BY option_name
+----
+parquet_compression	gzip	TABLE
+parquet_row_group_size	512	TABLE
+
+# CTAS with WITH options - validates the option both takes effect and is persisted
+statement ok
+SET threads=1
+
+statement ok
+SET preserve_insertion_order=false
+
+statement ok
+CREATE TABLE ducklake.t_ctas WITH (parquet_compression='gzip', parquet_row_group_size=2048) AS SELECT i, 'hello' || i s FROM range(4000) t(i);
+
+query III
+SELECT option_name, value, scope FROM ducklake.options() WHERE scope='TABLE' AND scope_entry='main.t_ctas' ORDER BY option_name
+----
+parquet_compression	gzip	TABLE
+parquet_row_group_size	2048	TABLE
+
+# parquet files written by the CTAS use the configured compression
+query I
+SELECT DISTINCT compression FROM parquet_metadata('__TEST_DIR__/ducklake_create_with_options_files/main/t_ctas/**')
+----
+GZIP
+
+# 4000 rows at row_group_size=2048 produces at least 2 row groups
+query I
+SELECT COUNT(DISTINCT row_group_id) >= 2 FROM parquet_metadata('__TEST_DIR__/ducklake_create_with_options_files/main/t_ctas/**')
+----
+true
+
+# unsupported option key raises an error
+statement error
+CREATE TABLE ducklake.t_bad(i INTEGER) WITH (not_a_real_option='x');
+----
+Unsupported option
+
+# bad value also fails (parquet_compression rejects unknown codec)
+statement error
+CREATE TABLE ducklake.t_bad(i INTEGER) WITH (parquet_compression='bogus');
+----
+Unsupported codec
+
+statement ok
+DETACH ducklake
+
+# options survive a restart
+statement ok
+ATTACH 'ducklake:__TEST_DIR__/ducklake_create_with_options.db' AS ducklake (DATA_PATH '__TEST_DIR__/ducklake_create_with_options_files');
+
+query I
+SELECT value FROM ducklake.options() WHERE option_name='parquet_compression' AND scope='TABLE' AND scope_entry='main.t_compress'
+----
+zstd
+
+# CREATE OR REPLACE swaps in new options for the new table
+statement ok
+CREATE TABLE ducklake.t_repl(i INTEGER) WITH (parquet_compression='zstd');
+
+statement ok
+CREATE OR REPLACE TABLE ducklake.t_repl(i INTEGER) WITH (parquet_compression='gzip');
+
+query I
+SELECT value FROM ducklake.options() WHERE option_name='parquet_compression' AND scope='TABLE' AND scope_entry='main.t_repl'
+----
+gzip
+
+# CREATE TABLE IF NOT EXISTS does not mutate options on an existing table
+statement ok
+CREATE TABLE ducklake.t_ine(i INTEGER) WITH (parquet_compression='zstd');
+
+statement ok
+CREATE TABLE IF NOT EXISTS ducklake.t_ine(i INTEGER) WITH (parquet_compression='gzip');
+
+query I
+SELECT value FROM ducklake.options() WHERE option_name='parquet_compression' AND scope='TABLE' AND scope_entry='main.t_ine'
+----
+zstd
+
+# WITH (...) on a CTAS beats a schema-scope option for the same key
+statement ok
+CREATE SCHEMA ducklake.s_prec
+
+statement ok
+CALL ducklake.set_option('parquet_compression', 'gzip', schema => 's_prec')
+
+statement ok
+CREATE TABLE ducklake.s_prec.t_prec WITH (parquet_compression='zstd') AS SELECT i FROM range(1000) t(i)
+
+query I
+SELECT DISTINCT compression FROM parquet_metadata('__TEST_DIR__/ducklake_create_with_options_files/s_prec/t_prec/**')
+----
+ZSTD
+
+# option keys are case-insensitive and the value is canonicalized to lower
+statement ok
+CREATE TABLE ducklake.t_case(i INTEGER) WITH (PARQUET_COMPRESSION='GZIP')
+
+query II
+SELECT option_name, value FROM ducklake.options() WHERE scope='TABLE' AND scope_entry='main.t_case'
+----
+parquet_compression	gzip
+
+# non-constant value is rejected at plan time
+statement error
+CREATE TABLE ducklake.t_nonconst(i INTEGER) WITH (parquet_compression=upper('zstd'))
+----
+must be a constant expression
