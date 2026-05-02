@@ -94,7 +94,8 @@
     },{
       "reason": "Test only for Postgres as catalog",
       "paths": [
-        "test/sql/metadata/ducklake_settings_postgres.test"
+        "test/sql/metadata/ducklake_settings_postgres.test",
+        "test/sql/transaction/postgres_metadata_read_transactions.test"
       ]
     },
     {

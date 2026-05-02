@@ -1,0 +1,98 @@
+# name: test/sql/transaction/postgres_metadata_read_transactions.test
+# description: Metadata reads should not leave Postgres metadata transactions open
+# group: [transaction]
+
+require ducklake
+
+require parquet
+
+require postgres_scanner
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'dbname=ducklakedb' AS pg (TYPE postgres)
+
+statement ok
+CALL postgres_execute('pg', 'DROP SCHEMA IF EXISTS postgres_metadata_read_transactions CASCADE', use_transaction=false)
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION} application_name=ducklake_metadata_read_transactions' AS ducklake (DATA_PATH '{DATA_PATH}/postgres_metadata_read_transactions', METADATA_SCHEMA 'postgres_metadata_read_transactions')
+
+statement ok
+USE ducklake
+
+statement ok
+CREATE TABLE t(i INTEGER)
+
+statement ok
+INSERT INTO t VALUES (1), (2)
+
+statement ok
+SET immediate_transaction_mode=true
+
+statement ok
+BEGIN
+
+query I
+SELECT count(*) FROM postgres_query('pg', 'SELECT pid FROM pg_stat_activity WHERE application_name = ''ducklake_metadata_read_transactions'' AND state = ''idle in transaction''')
+----
+0
+
+query I
+SELECT sum(i) FROM t
+----
+3
+
+query I
+/* leading comment read */ SELECT sum(i) FROM t
+----
+3
+
+statement ok
+EXPLAIN SELECT sum(i) FROM t
+
+query I
+SELECT count(*) FROM postgres_query('pg', 'SELECT pid FROM pg_stat_activity WHERE application_name = ''ducklake_metadata_read_transactions'' AND state = ''idle in transaction''')
+----
+0
+
+statement ok
+ROLLBACK
+
+statement ok
+BEGIN
+
+statement ok
+CALL ducklake.set_option('parquet_compression', 'uncompressed')
+
+query I
+SELECT count(*) FROM postgres_query('pg', 'SELECT pid FROM pg_stat_activity WHERE application_name = ''ducklake_metadata_read_transactions'' AND state = ''idle in transaction''')
+----
+1
+
+statement ok
+ROLLBACK
+
+query I
+SELECT count(*) FROM __ducklake_metadata_ducklake.postgres_metadata_read_transactions.ducklake_metadata WHERE key = 'parquet_compression'
+----
+0
+
+statement ok
+BEGIN
+
+query I
+SELECT sum(i) FROM t
+----
+3
+
+query I
+SELECT count(*) FROM postgres_query('pg', 'SELECT pid FROM pg_stat_activity WHERE application_name = ''ducklake_metadata_read_transactions'' AND state = ''idle in transaction''')
+----
+0
+
+statement ok
+ROLLBACK

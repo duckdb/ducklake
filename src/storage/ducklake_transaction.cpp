@@ -686,19 +686,16 @@ void DuckLakeTransaction::Start() {
 void DuckLakeTransaction::Commit() {
 	if (ChangesMade()) {
 		FlushChanges();
-	} else if (connection) {
-		connection->Commit();
+	} else {
+		CommitMetadataTransactionIfActive();
 	}
 	connection.reset();
 	local_changes.Clear();
 }
 
 void DuckLakeTransaction::Rollback() {
-	if (connection) {
-		// rollback any changes made to the metadata catalog
-		connection->Rollback();
-		connection.reset();
-	}
+	RollbackMetadataTransactionIfActive();
+	connection.reset();
 	CleanupFiles();
 	local_changes.Clear();
 }
@@ -726,9 +723,36 @@ Connection &DuckLakeTransaction::GetConnection() {
 		if (metadata_type == "postgres" || metadata_type == "postgres_scanner") {
 			connection->Query("SET pg_experimental_filter_pushdown=false");
 		}
-		connection->BeginTransaction();
 	}
 	return *connection;
+}
+
+void DuckLakeTransaction::EnsureMetadataTransaction() {
+	auto &connection = GetConnection();
+	auto has_active_transaction = connection.context->transaction.HasActiveTransaction();
+	if (!has_active_transaction) {
+		connection.BeginTransaction();
+	}
+}
+
+void DuckLakeTransaction::CommitMetadataTransactionIfActive() {
+	if (!connection) {
+		return;
+	}
+	auto has_active_transaction = connection->context->transaction.HasActiveTransaction();
+	if (has_active_transaction) {
+		connection->Commit();
+	}
+}
+
+void DuckLakeTransaction::RollbackMetadataTransactionIfActive() {
+	if (!connection) {
+		return;
+	}
+	auto has_active_transaction = connection->context->transaction.HasActiveTransaction();
+	if (has_active_transaction) {
+		connection->Rollback();
+	}
 }
 
 bool DuckLakeTransaction::SchemaChangesMade() const {
@@ -2617,10 +2641,7 @@ void DuckLakeTransaction::FlushChanges() {
 		} catch (std::exception &ex) {
 			ErrorData error(ex);
 			// rollback if there is an active transaction
-			auto has_active_transaction = connection->context->transaction.HasActiveTransaction();
-			if (has_active_transaction) {
-				connection->Rollback();
-			}
+			RollbackMetadataTransactionIfActive();
 			bool retry_on_error = RetryOnError(error.Message());
 			bool finished_retrying = i + 1 >= max_retry_count;
 			if (!can_retry || !retry_on_error || finished_retrying) {
@@ -2650,7 +2671,7 @@ void DuckLakeTransaction::FlushChanges() {
 			// retry the transaction (with a new snapshot id)
 			// clear the inlined table caches - the rollback undid any table creation from the previous attempt
 			metadata_manager->ClearInlinedTableCaches();
-			connection->BeginTransaction();
+			EnsureMetadataTransaction();
 			snapshot.reset();
 		}
 	}
@@ -2689,7 +2710,7 @@ void DuckLakeTransaction::MarkInlinedDataForDeletion(DuckLakeInlinedTableInfo in
 	flushed_inlined_tables.push_back({std::move(inlined_table), flush_snapshot_id});
 }
 
-unique_ptr<QueryResult> DuckLakeTransaction::Query(string query) {
+unique_ptr<QueryResult> DuckLakeTransaction::QueryInternal(string query, bool ensure_metadata_transaction) {
 	auto &connection = GetConnection();
 	auto catalog_identifier = DuckLakeUtil::SQLIdentifierToString(ducklake_catalog.MetadataDatabaseName());
 	auto catalog_literal = DuckLakeUtil::SQLLiteralToString(ducklake_catalog.MetadataDatabaseName());
@@ -2706,6 +2727,9 @@ unique_ptr<QueryResult> DuckLakeTransaction::Query(string query) {
 	query = StringUtil::Replace(query, "{METADATA_SCHEMA_ESCAPED}", schema_identifier_escaped);
 	query = StringUtil::Replace(query, "{METADATA_PATH}", metadata_path);
 	query = StringUtil::Replace(query, "{DATA_PATH}", data_path);
+	if (ensure_metadata_transaction) {
+		EnsureMetadataTransaction();
+	}
 	auto start = std::chrono::steady_clock::now();
 	auto result = connection.Query(query);
 	auto end = std::chrono::steady_clock::now();
@@ -2720,7 +2744,16 @@ unique_ptr<QueryResult> DuckLakeTransaction::Query(string query) {
 	return result;
 }
 
-unique_ptr<QueryResult> DuckLakeTransaction::Query(DuckLakeSnapshot snapshot, string query) {
+unique_ptr<QueryResult> DuckLakeTransaction::Query(string query) {
+	return QueryInternal(std::move(query), false);
+}
+
+unique_ptr<QueryResult> DuckLakeTransaction::Execute(string query) {
+	return QueryInternal(std::move(query), true);
+}
+
+static string ReplaceSnapshotPlaceholders(DuckLakeSnapshot snapshot, string query,
+                                          const DuckLakeSnapshotCommit &commit_info) {
 	query = StringUtil::Replace(query, "{SNAPSHOT_ID}", to_string(snapshot.snapshot_id));
 	query = StringUtil::Replace(query, "{SCHEMA_VERSION}", to_string(snapshot.schema_version));
 	query = StringUtil::Replace(query, "{NEXT_CATALOG_ID}", to_string(snapshot.next_catalog_id));
@@ -2728,15 +2761,40 @@ unique_ptr<QueryResult> DuckLakeTransaction::Query(DuckLakeSnapshot snapshot, st
 	query = StringUtil::Replace(query, "{AUTHOR}", commit_info.author.ToSQLString());
 	query = StringUtil::Replace(query, "{COMMIT_MESSAGE}", commit_info.commit_message.ToSQLString());
 	query = StringUtil::Replace(query, "{COMMIT_EXTRA_INFO}", commit_info.commit_extra_info.ToSQLString());
+	return query;
+}
 
+unique_ptr<QueryResult> DuckLakeTransaction::Query(DuckLakeSnapshot snapshot, string query) {
+	query = ReplaceSnapshotPlaceholders(snapshot, std::move(query), commit_info);
 	return Query(std::move(query));
 }
 
+unique_ptr<QueryResult> DuckLakeTransaction::Execute(DuckLakeSnapshot snapshot, string query) {
+	query = ReplaceSnapshotPlaceholders(snapshot, std::move(query), commit_info);
+	return Execute(std::move(query));
+}
+
 string DuckLakeTransaction::GetDefaultSchemaName() {
-	auto &metadata_context = *connection->context;
-	auto &db_manager = DatabaseManager::Get(metadata_context);
-	auto metadb = db_manager.GetDatabase(metadata_context, ducklake_catalog.MetadataDatabaseName());
-	return metadb->GetCatalog().GetDefaultSchema();
+	auto &connection = GetConnection();
+	auto has_active_transaction = connection.context->transaction.HasActiveTransaction();
+	if (!has_active_transaction) {
+		connection.BeginTransaction();
+	}
+	try {
+		auto &metadata_context = *connection.context;
+		auto &db_manager = DatabaseManager::Get(metadata_context);
+		auto metadb = db_manager.GetDatabase(metadata_context, ducklake_catalog.MetadataDatabaseName());
+		auto result = metadb->GetCatalog().GetDefaultSchema();
+		if (!has_active_transaction) {
+			connection.Commit();
+		}
+		return result;
+	} catch (...) {
+		if (!has_active_transaction) {
+			connection.Rollback();
+		}
+		throw;
+	}
 }
 
 DuckLakeSnapshot DuckLakeTransaction::GetSnapshot() {

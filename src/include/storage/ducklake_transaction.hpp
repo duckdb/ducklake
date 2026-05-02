@@ -171,7 +171,10 @@ public:
 	}
 	unique_ptr<QueryResult> Query(DuckLakeSnapshot snapshot, string query);
 	unique_ptr<QueryResult> Query(string query);
+	unique_ptr<QueryResult> Execute(DuckLakeSnapshot snapshot, string query);
+	unique_ptr<QueryResult> Execute(string query);
 	Connection &GetConnection();
+	void EnsureMetadataTransaction();
 
 	DuckLakeSnapshot GetSnapshot();
 	DuckLakeSnapshot GetSnapshot(optional_ptr<BoundAtClause> at_clause,
@@ -337,6 +340,9 @@ private:
 	void AlterEntryInternal(DuckLakeViewEntry &old_entry, unique_ptr<CatalogEntry> new_entry);
 	void AddTableChanges(TableIndex table_id, const LocalTableDataChanges &table_changes,
 	                     TransactionChangeInformation &changes) const;
+	unique_ptr<QueryResult> QueryInternal(string query, bool ensure_metadata_transaction);
+	void CommitMetadataTransactionIfActive();
+	void RollbackMetadataTransactionIfActive();
 
 private:
 	DuckLakeCatalog &ducklake_catalog;

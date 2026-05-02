@@ -110,6 +110,7 @@ unique_ptr<QueryResult> PostgresMetadataManager::ExecuteQuery(DuckLakeSnapshot s
 	return connection.Query(StringUtil::Format("CALL %s(%s, %s)", command, catalog_literal, SQLString(query)));
 }
 unique_ptr<QueryResult> PostgresMetadataManager::Execute(DuckLakeSnapshot snapshot, string &query) {
+	transaction.EnsureMetadataTransaction();
 	return ExecuteQuery(snapshot, query, "postgres_execute");
 }
 
