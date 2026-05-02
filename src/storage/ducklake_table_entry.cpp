@@ -21,6 +21,7 @@
 #include "duckdb/parser/parsed_data/comment_on_column_info.hpp"
 #include "duckdb/parser/constraints/not_null_constraint.hpp"
 #include "duckdb/common/multi_file/multi_file_reader.hpp"
+#include "functions/ducklake_compaction_functions.hpp"
 #include "storage/ducklake_multi_file_reader.hpp"
 
 namespace duckdb {
@@ -727,6 +728,21 @@ unique_ptr<CatalogEntry> DuckLakeTableEntry::AlterTable(DuckLakeTransaction &tra
 				                       "change the partitioning on this table in order to drop this column",
 				                       col.Name());
 			}
+		}
+	}
+	// check if we are sorting on this column
+	if (sort_data) {
+		auto orders = DuckLakeCompactor::ParseSortOrders(*sort_data);
+		for (auto &order : orders) {
+			ParsedExpressionIterator::VisitExpression<ColumnRefExpression>(
+			    *order.expression, [&](const ColumnRefExpression &colref) {
+				    if (StringUtil::CIEquals(colref.GetColumnName(), col.Name())) {
+					    throw CatalogException(
+					        "Cannot drop column \"%s\" - the table is sorted by this column. Reset or "
+					        "change the sort order on this table in order to drop this column",
+					        col.Name());
+				    }
+			    });
 		}
 	}
 	if (transaction.HasTransactionInlinedData(GetTableId())) {

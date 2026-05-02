@@ -168,7 +168,7 @@ SELECT * FROM ducklake.test_add_sort_insert
 30	2
 10	3
 
-# test: BEGIN -> SET SORTED BY -> DROP that column -> INSERT should error -> ROLLBACK
+# test: BEGIN -> SET SORTED BY -> DROP that column should error -> ROLLBACK
 statement ok
 CREATE TABLE ducklake.test_sort_drop_insert(a INTEGER, b INTEGER)
 
@@ -178,18 +178,15 @@ BEGIN
 statement ok
 ALTER TABLE ducklake.test_sort_drop_insert SET SORTED BY (b ASC)
 
-statement ok
-ALTER TABLE ducklake.test_sort_drop_insert DROP COLUMN b
-
 statement error
-INSERT INTO ducklake.test_sort_drop_insert VALUES (1)
+ALTER TABLE ducklake.test_sort_drop_insert DROP COLUMN b
 ----
-Columns in the SET SORTED BY statement were not found
+the table is sorted by this column
 
 statement ok
 ROLLBACK
 
-# test: BEGIN -> SET SORTED BY -> DROP column -> ADD column back -> INSERT -> COMMIT
+# test: BEGIN -> SET SORTED BY -> RESET SORTED BY -> DROP column -> ADD column back -> SET SORTED BY -> INSERT -> COMMIT
 statement ok
 CREATE TABLE ducklake.test_sort_drop_readd(a INTEGER, b INTEGER)
 
@@ -200,10 +197,16 @@ statement ok
 ALTER TABLE ducklake.test_sort_drop_readd SET SORTED BY (b DESC)
 
 statement ok
+ALTER TABLE ducklake.test_sort_drop_readd RESET SORTED BY
+
+statement ok
 ALTER TABLE ducklake.test_sort_drop_readd DROP COLUMN b
 
 statement ok
 ALTER TABLE ducklake.test_sort_drop_readd ADD COLUMN b INTEGER
+
+statement ok
+ALTER TABLE ducklake.test_sort_drop_readd SET SORTED BY (b DESC)
 
 statement ok
 INSERT INTO ducklake.test_sort_drop_readd VALUES (10, 3), (20, 1), (30, 2)
