@@ -1,0 +1,36 @@
+# name: test/sql/issues/issue_1089_long_column_name.test
+# description: Column names exceeding 63 bytes should throw a clear error instead of crashing on flush
+# group: [issues]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/issue_1089')
+
+# 63-byte column name should succeed
+statement ok
+CREATE TABLE ducklake.test_pass ("_______________________________________________________________" INTEGER)
+
+# 64-byte column name should fail on CREATE TABLE
+statement error
+CREATE TABLE ducklake.test_fail ("________________________________________________________________" INTEGER)
+----
+exceeds the maximum length of 63 bytes and cannot be used with Postgres inlined data
+
+# 64-byte column name should fail on ADD COLUMN
+statement error
+ALTER TABLE ducklake.test_pass ADD COLUMN "________________________________________________________________" INTEGER
+----
+exceeds the maximum length of 63 bytes and cannot be used with Postgres inlined data
+
+# 64-byte column name should fail on RENAME COLUMN
+statement error
+ALTER TABLE ducklake.test_pass RENAME COLUMN "_______________________________________________________________" TO "________________________________________________________________"
+----
+exceeds the maximum length of 63 bytes and cannot be used with Postgres inlined data
