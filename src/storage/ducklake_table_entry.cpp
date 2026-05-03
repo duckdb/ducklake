@@ -631,9 +631,6 @@ unique_ptr<CatalogEntry> DuckLakeTableEntry::AlterTable(DuckLakeTransaction &tra
 	if (DuckLakeUtil::IsInlinedSystemColumn(info.new_name)) {
 		throw CatalogException("Column name \"%s\" is reserved by DuckLake for internal use", info.new_name);
 	}
-	if (info.new_name.size() >= 64) {
-		throw CatalogException("Column name \"%s\" exceeds the maximum length of 63 bytes and cannot be used with Postgres inlined data", info.new_name);
-	}
 	auto create_info = GetInfo();
 	auto &table_info = create_info->Cast<CreateTableInfo>();
 	if (!table_info.columns.ColumnExists(info.old_name)) {
@@ -672,9 +669,6 @@ void DuckLakeTableEntry::RequireNextColumnId(DuckLakeTransaction &transaction) {
 unique_ptr<CatalogEntry> DuckLakeTableEntry::AlterTable(DuckLakeTransaction &transaction, AddColumnInfo &info) {
 	if (DuckLakeUtil::IsInlinedSystemColumn(info.new_column.Name())) {
 		throw CatalogException("Column name \"%s\" is reserved by DuckLake for internal use", info.new_column.Name());
-	}
-	if (info.new_column.Name().size() >= 64) {
-		throw CatalogException("Column name \"%s\" exceeds the maximum length of 63 bytes and cannot be used with Postgres inlined data", info.new_column.Name());
 	}
 	auto create_info = GetInfo();
 	auto &table_info = create_info->Cast<CreateTableInfo>();
