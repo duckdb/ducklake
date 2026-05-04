@@ -1627,21 +1627,6 @@ vector<DuckLakeFileListEntry> DuckLakeMetadataManager::GetFilesForTable(DuckLake
 		query = components.cte_section;
 		where_clause = components.where_clause;
 	}
-	fprintf(stderr, "[DBG] filter_info=%p has_partition=%d\n", (void *)filter_info,
-	        table.GetPartitionData() ? 1 : 0);
-	if (filter_info) {
-		for (auto &e : filter_info->column_filters) {
-			fprintf(stderr, "[DBG]   column_field_index=%llu\n", (unsigned long long)e.first);
-		}
-	}
-	if (table.GetPartitionData()) {
-		for (auto &f : table.GetPartitionData()->fields) {
-			fprintf(stderr, "[DBG]   part field_id=%llu transform=%d bucket=%llu\n",
-			        (unsigned long long)f.field_id.index, (int)f.transform.type,
-			        (unsigned long long)f.transform.bucket_count);
-		}
-	}
-	fprintf(stderr, "[DBG] where_clause=%s\n", where_clause.c_str());
 
 	// Add base query
 	query += StringUtil::Format(R"(

@@ -225,16 +225,39 @@ DuckLakeColumnStats TemplatedUpdateStats(Vector &input_vec, const LogicalType &t
 	return result;
 }
 
+template <class T>
+static bool VectorContainsNaN(Vector &input_vec, idx_t row_count) {
+	UnifiedVectorFormat fmt;
+	input_vec.ToUnifiedFormat(row_count, fmt);
+	auto data = UnifiedVectorFormat::GetData<T>(fmt);
+	for (idx_t i = 0; i < row_count; i++) {
+		auto idx = fmt.sel->get_index(i);
+		if (fmt.validity.RowIsValid(idx) && Value::IsNan(data[idx])) {
+			return true;
+		}
+	}
+	return false;
+}
+
 DuckLakeColumnStats GetVectorStats(Vector &input_vec, idx_t row_count) {
 	auto &type = input_vec.GetType();
 	Vector str_vector(LogicalType::VARCHAR, row_count);
 	VectorOperations::DefaultCast(input_vec, str_vector, row_count);
 	// FIXME: we can be more efficient here by templating on other types (numerics...)
-	// FIXME: we can gather nan statistics for FLOAT/DOUBLE
+	DuckLakeColumnStats result(type);
 	if (RequiresValueComparison(type)) {
-		return TemplatedUpdateStats<string_t, StatsNumericFallbackOperator>(str_vector, type, row_count);
+		result = TemplatedUpdateStats<string_t, StatsNumericFallbackOperator>(str_vector, type, row_count);
+	} else {
+		result = TemplatedUpdateStats<string_t, StatsFallbackOperator>(str_vector, type, row_count);
 	}
-	return TemplatedUpdateStats<string_t, StatsFallbackOperator>(str_vector, type, row_count);
+	if (type.id() == LogicalTypeId::FLOAT) {
+		result.has_contains_nan = true;
+		result.contains_nan = VectorContainsNaN<float>(input_vec, row_count);
+	} else if (type.id() == LogicalTypeId::DOUBLE) {
+		result.has_contains_nan = true;
+		result.contains_nan = VectorContainsNaN<double>(input_vec, row_count);
+	}
+	return result;
 }
 
 void UpdateStats(vector<DuckLakeBaseColumnStats> &stats, idx_t c, Vector &data, idx_t row_count,
