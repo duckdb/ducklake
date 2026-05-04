@@ -71,6 +71,8 @@ jobs:
         make release
 
     - name: Test SQLite
+      env:
+        DUCKDB_TPCH_ANSWERS_DIR: ${{ github.workspace }}/duckdb/extension/tpch/dbgen/answers
       run: |
         build/release/test/unittest --test-config test/configs/sqlite.json --test-dir ./ "test/sql/*"
 
@@ -78,6 +80,7 @@ jobs:
       env:
         PGSERVICE: postgres
         LOCAL_EXTENSION_REPO: ${{ github.workspace }}/build/release/repository
+        DUCKDB_TPCH_ANSWERS_DIR: ${{ github.workspace }}/duckdb/extension/tpch/dbgen/answers
       run: |
         createdb ducklakedb
         build/release/test/unittest --test-config test/configs/postgres.json --test-dir ./ "test/sql/*"

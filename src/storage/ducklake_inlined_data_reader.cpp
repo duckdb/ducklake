@@ -197,7 +197,7 @@ bool DuckLakeInlinedDataReader::TryEvaluateExpression(ClientContext &context, id
 	expr_input.Initialize(Allocator::Get(context), {input_type});
 	expr_input.Reset();
 	expr_input.data[0].Reference(input_vector);
-	expr_input.SetCardinality(scan_chunk.size());
+	expr_input.SetChildCardinality(scan_chunk.size());
 	expr_it->second->ExecuteExpression(expr_input, output_vector);
 	return true;
 }

@@ -58,5 +58,7 @@ jobs:
         make release
 
     - name: Test extension (ducklake_default_version=1.0)
+      env:
+        DUCKDB_TPCH_ANSWERS_DIR: ${{ github.workspace }}/duckdb/extension/tpch/dbgen/answers
       run: |
         build/release/test/unittest --test-config test/configs/ducklake_version.json

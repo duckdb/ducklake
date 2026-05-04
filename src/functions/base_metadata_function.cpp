@@ -57,7 +57,7 @@ static void MetadataFunctionExecute(ClientContext &context, TableFunctionInput &
 		}
 		count++;
 	}
-	output.SetCardinality(count);
+	output.SetChildCardinality(count);
 }
 
 DuckLakeBaseMetadataFunction::DuckLakeBaseMetadataFunction(string name_p, table_function_bind_t bind)

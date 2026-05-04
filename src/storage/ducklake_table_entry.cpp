@@ -5,6 +5,7 @@
 #include "storage/ducklake_scan.hpp"
 #include "storage/ducklake_transaction.hpp"
 
+#include "duckdb/common/sql_identifier.hpp"
 #include "duckdb/storage/statistics/base_statistics.hpp"
 #include "duckdb/storage/table_storage_info.hpp"
 #include "duckdb/function/table_function.hpp"

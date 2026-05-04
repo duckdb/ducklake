@@ -157,7 +157,7 @@ void DuckLakeCleanupExecute(ClientContext &context, TableFunctionInput &data_p, 
 		output.data[0].Append(file.path);
 		count++;
 	}
-	output.SetCardinality(count);
+	output.SetChildCardinality(count);
 }
 
 DuckLakeCleanupOldFilesFunction::DuckLakeCleanupOldFilesFunction()

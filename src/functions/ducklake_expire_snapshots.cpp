@@ -122,7 +122,7 @@ void DuckLakeExpireSnapshotsExecute(ClientContext &context, TableFunctionInput &
 		}
 		count++;
 	}
-	output.SetCardinality(count);
+	output.SetChildCardinality(count);
 }
 
 DuckLakeExpireSnapshotsFunction::DuckLakeExpireSnapshotsFunction()

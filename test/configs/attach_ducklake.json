@@ -172,6 +172,12 @@
       ]
     },
     {
+      "reason": "FIXME: flaky in CI — concurrent ALTER ADD COLUMN with reads sometimes aborts the writer's transaction or segfaults under DuckLake",
+      "paths": [
+        "test/sql/parallelism/interquery/concurrent_reads_while_altering.test"
+      ]
+    },
+    {
       "reason": "Different Concurrency Behavior",
       "paths": [
         "test/sql/parallelism/interquery/concurrent_force_checkpoint.test",

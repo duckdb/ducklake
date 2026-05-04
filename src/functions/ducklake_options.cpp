@@ -169,7 +169,7 @@ void DuckLakeOptionsExecute(ClientContext &context, TableFunctionInput &data_p, 
 		output.data[4].Append(option.scope_entry.empty() ? Value() : Value(option.scope_entry));
 		count++;
 	}
-	output.SetCardinality(count);
+	output.SetChildCardinality(count);
 }
 
 DuckLakeOptionsFunction::DuckLakeOptionsFunction()
