@@ -4,6 +4,7 @@
 #include "common/ducklake_util.hpp"
 #include "duckdb/planner/tableref/bound_at_clause.hpp"
 #include "duckdb/common/types/blob.hpp"
+#include "duckdb/common/sql_identifier.hpp"
 #include "duckdb/common/type_visitor.hpp"
 #include "storage/ducklake_catalog.hpp"
 #include "common/ducklake_types.hpp"
@@ -23,6 +24,7 @@
 #include "duckdb/planner/filter/in_filter.hpp"
 #include "duckdb/planner/expression.hpp"
 #include "duckdb/parser/parser.hpp"
+#include "duckdb/common/sql_identifier.hpp"
 #include "duckdb/parser/expression/cast_expression.hpp"
 #include "duckdb/planner/filter/expression_filter.hpp"
 #include "duckdb/planner/expression/bound_comparison_expression.hpp"
@@ -1413,17 +1415,139 @@ DuckLakeMetadataManager::GenerateCTESectionFromRequirements(const unordered_map<
 	return cte_section + "\n";
 }
 
+static bool ExtractEqualityConstants(const TableFilter &filter, vector<Value> &out_values) {
+	switch (filter.filter_type) {
+	case TableFilterType::CONSTANT_COMPARISON: {
+		auto &cf = filter.Cast<ConstantFilter>();
+		if (cf.comparison_type != ExpressionType::COMPARE_EQUAL) {
+			return false;
+		}
+		if (cf.constant.IsNull()) {
+			return false;
+		}
+		out_values.push_back(cf.constant);
+		return true;
+	}
+	case TableFilterType::IN_FILTER: {
+		auto &inf = filter.Cast<InFilter>();
+		if (inf.values.empty()) {
+			return false;
+		}
+		for (auto &v : inf.values) {
+			if (v.IsNull()) {
+				return false;
+			}
+			out_values.push_back(v);
+		}
+		return true;
+	}
+	case TableFilterType::OPTIONAL_FILTER: {
+		auto &opt = filter.Cast<OptionalFilter>();
+		if (!opt.child_filter) {
+			return false;
+		}
+		return ExtractEqualityConstants(*opt.child_filter, out_values);
+	}
+	case TableFilterType::CONJUNCTION_AND: {
+		auto &conj = filter.Cast<ConjunctionAndFilter>();
+		// pick the first child that yields a usable constant set
+		for (auto &child : conj.child_filters) {
+			vector<Value> child_values;
+			if (ExtractEqualityConstants(*child, child_values)) {
+				out_values = std::move(child_values);
+				return true;
+			}
+		}
+		return false;
+	}
+	default:
+		return false;
+	}
+}
+
+string DuckLakeMetadataManager::GeneratePartitionPruneClause(const FilterPushdownInfo &filter_info,
+                                                              DuckLakeTableEntry &table) {
+	auto partition_data = table.GetPartitionData();
+	if (!partition_data) {
+		return string();
+	}
+	auto table_id = table.GetTableId();
+	string conditions;
+	for (auto &field : partition_data->fields) {
+		fprintf(stderr, "[DBG-PP] field_id=%llu transform=%d\n",
+		        (unsigned long long)field.field_id.index, (int)field.transform.type);
+		if (field.transform.type != DuckLakeTransformType::BUCKET) {
+			continue;
+		}
+		auto filter_entry = filter_info.column_filters.find(field.field_id.index);
+		if (filter_entry == filter_info.column_filters.end()) {
+			fprintf(stderr, "[DBG-PP]   no matching filter\n");
+			continue;
+		}
+		fprintf(stderr, "[DBG-PP]   filter type=%d\n",
+		        (int)filter_entry->second.table_filter->filter_type);
+		vector<Value> filter_values;
+		if (!ExtractEqualityConstants(*filter_entry->second.table_filter, filter_values)) {
+			fprintf(stderr, "[DBG-PP]   could not extract constants\n");
+			continue;
+		}
+		fprintf(stderr, "[DBG-PP]   extracted %zu constants\n", filter_values.size());
+		set<int32_t> bucket_values;
+		bool all_supported = true;
+		for (auto &v : filter_values) {
+			int32_t bucket;
+			if (!DuckLakePartitionUtils::TryComputeBucketValue(v, field.transform.bucket_count, bucket)) {
+				all_supported = false;
+				break;
+			}
+			bucket_values.insert(bucket);
+		}
+		if (!all_supported || bucket_values.empty()) {
+			continue;
+		}
+		string bucket_list;
+		for (auto &b : bucket_values) {
+			if (!bucket_list.empty()) {
+				bucket_list += ", ";
+			}
+			bucket_list += StringUtil::Format("'%d'", b);
+		}
+		// Allow files that lack a partition value for this key (e.g. unpartitioned legacy files):
+		// only exclude files where a row exists with a partition value NOT in our matched set.
+		string clause = StringUtil::Format(
+		    "NOT EXISTS (SELECT 1 FROM {METADATA_CATALOG}.ducklake_file_partition_value pv "
+		    "WHERE pv.data_file_id = data.data_file_id AND pv.table_id = %d "
+		    "AND pv.partition_key_index = %d AND pv.partition_value NOT IN (%s))",
+		    table_id.index, NumericCast<int64_t>(field.partition_key_index), bucket_list);
+		if (!conditions.empty()) {
+			conditions += " AND ";
+		}
+		conditions += clause;
+	}
+	return conditions;
+}
+
 FilterPushdownQueryComponents
-DuckLakeMetadataManager::GenerateFilterPushdownComponents(const FilterPushdownInfo &filter_info, TableIndex table_id) {
+DuckLakeMetadataManager::GenerateFilterPushdownComponents(const FilterPushdownInfo &filter_info,
+                                                          DuckLakeTableEntry &table) {
 	FilterPushdownQueryComponents result;
 
-	if (filter_info.column_filters.empty()) {
+	auto table_id = table.GetTableId();
+	string partition_prune = GeneratePartitionPruneClause(filter_info, table);
+
+	if (filter_info.column_filters.empty() && partition_prune.empty()) {
 		return result;
 	}
 
 	auto filter_result = ConvertFilterPushdownToSQL(filter_info);
 	result.cte_section = GenerateCTESectionFromRequirements(filter_result.required_ctes, table_id);
 	result.where_clause = filter_result.where_conditions;
+	if (!partition_prune.empty()) {
+		if (!result.where_clause.empty()) {
+			result.where_clause += " AND ";
+		}
+		result.where_clause += partition_prune;
+	}
 
 	return result;
 }
@@ -1499,7 +1623,7 @@ vector<DuckLakeFileListEntry> DuckLakeMetadataManager::GetFilesForTable(DuckLake
 
 	// Generate CTE section and WHERE clause if we have filter pushdown info
 	if (filter_info && !filter_info->column_filters.empty()) {
-		auto components = GenerateFilterPushdownComponents(*filter_info, table_id);
+		auto components = GenerateFilterPushdownComponents(*filter_info, table);
 		query = components.cte_section;
 		where_clause = components.where_clause;
 	}
@@ -1845,7 +1969,7 @@ DuckLakeMetadataManager::GetExtendedFilesForTable(DuckLakeTableEntry &table, Duc
 
 	// Generate CTE section and WHERE clause if we have filter pushdown info
 	if (filter_info && !filter_info->column_filters.empty()) {
-		auto components = GenerateFilterPushdownComponents(*filter_info, table_id);
+		auto components = GenerateFilterPushdownComponents(*filter_info, table);
 		query = components.cte_section;
 		where_clause = components.where_clause;
 	}
@@ -2181,7 +2305,7 @@ static void ColumnToSQLRecursive(const DuckLakeColumnInfo &column, TableIndex ta
 	string parent_idx = parent.IsValid() ? to_string(parent.GetIndex()) : "NULL";
 
 	string initial_default_val =
-	    !column.initial_default.IsNull() ? KeywordHelper::WriteQuoted(column.initial_default.ToString(), '\'') : "NULL";
+	    !column.initial_default.IsNull() ? SQLString::ToString(column.initial_default.ToString()) : "NULL";
 
 	string default_val = "'NULL'";
 	string default_val_system = "'duckdb'";
@@ -2190,7 +2314,7 @@ static void ColumnToSQLRecursive(const DuckLakeColumnInfo &column, TableIndex ta
 	if (!column.default_value.IsNull()) {
 		auto value = column.default_value.GetValue<string>();
 		if (column.default_value_type == "literal") {
-			default_val = KeywordHelper::WriteQuoted(value, '\'');
+			default_val = SQLString::ToString(value);
 		} else if (column.default_value_type == "expression") {
 			if (value.empty()) {
 				default_val = "''";
@@ -2199,7 +2323,7 @@ static void ColumnToSQLRecursive(const DuckLakeColumnInfo &column, TableIndex ta
 				if (sql_expr.size() != 1) {
 					throw InternalException("Expected a single expression");
 				}
-				default_val = KeywordHelper::WriteQuoted(sql_expr[0]->ToString(), '\'');
+				default_val = SQLString::ToString(sql_expr[0]->ToString());
 			}
 		} else {
 			throw InvalidInputException("Expression type %s not implemented for default value",
@@ -3535,7 +3659,7 @@ static string SQLStringOrNull(const string &str) {
 	if (str.empty()) {
 		return "NULL";
 	}
-	return KeywordHelper::WriteQuoted(str, '\'');
+	return SQLString::ToString(str);
 }
 
 string DuckLakeMetadataManager::WriteSnapshotChanges(const SnapshotChangeInfo &change_info,

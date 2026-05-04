@@ -6,8 +6,7 @@ require ducklake
 
 require parquet
 
-# Place the metadata DB directly inside the data path directory
-test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/metadata_in_data_path_{UUID}.db
 
 test-env DATA_PATH {TEST_DIR}
 
@@ -18,22 +17,22 @@ statement ok
 USE ducklake
 
 statement ok
-CREATE TABLE test (a integer)
+CREATE TABLE metadata_in_data_path_tbl (a integer)
 
 statement ok
-INSERT INTO test VALUES (1);
+INSERT INTO metadata_in_data_path_tbl VALUES (1);
 
 statement ok
 CALL ducklake_flush_inlined_data('ducklake')
 
 # The metadata DB and the parquet data file must exist before the call
 query I
-SELECT count(*) FROM GLOB('{DATA_PATH}/*.db')
+SELECT count(*) FROM GLOB('{DATA_PATH}/metadata_in_data_path_*.db')
 ----
 1
 
 query I
-SELECT count(*) FROM GLOB('{DATA_PATH}/**/*.parquet')
+SELECT count(*) FROM GLOB('{DATA_PATH}/**/metadata_in_data_path_tbl/*.parquet')
 ----
 1
 
@@ -42,12 +41,12 @@ CALL ducklake_delete_orphaned_files('ducklake', cleanup_all => true);
 
 # Verify the metadata DB file was NOT deleted
 query I
-SELECT count(*) FROM GLOB('{DATA_PATH}/*.db')
+SELECT count(*) FROM GLOB('{DATA_PATH}/metadata_in_data_path_*.db')
 ----
 1
 
 # Verify the parquet data file was NOT deleted
 query I
-SELECT count(*) FROM GLOB('{DATA_PATH}/**/*.parquet')
+SELECT count(*) FROM GLOB('{DATA_PATH}/**/metadata_in_data_path_tbl/*.parquet')
 ----
 1

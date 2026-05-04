@@ -116,10 +116,10 @@ SourceResultType DuckLakeCompaction::GetDataInternal(ExecutionContext &context, 
 	auto files_created = gstate.written_files.size();
 
 	chunk.SetCardinality(1);
-	chunk.data[0].SetValue(0, Value(table.schema.name));
-	chunk.data[1].SetValue(0, Value(table.name));
-	chunk.data[2].SetValue(0, Value::BIGINT(static_cast<int64_t>(source_files.size())));
-	chunk.data[3].SetValue(0, Value::BIGINT(static_cast<int64_t>(files_created)));
+	chunk.data[0].Append(Value(table.schema.name));
+	chunk.data[1].Append(Value(table.name));
+	chunk.data[2].Append(Value::BIGINT(static_cast<int64_t>(source_files.size())));
+	chunk.data[3].Append(Value::BIGINT(static_cast<int64_t>(files_created)));
 	return SourceResultType::FINISHED;
 }
 

@@ -154,10 +154,10 @@ void DuckLakeCleanupExecute(ClientContext &context, TableFunctionInput &data_p, 
 	idx_t count = 0;
 	while (state.offset < data.files.size() && count < STANDARD_VECTOR_SIZE) {
 		auto &file = data.files[state.offset++];
-		output.data[0].SetValue(count, file.path);
+		output.data[0].Append(file.path);
 		count++;
 	}
-	output.SetCardinality(count);
+	output.SetChildCardinality(count);
 }
 
 DuckLakeCleanupOldFilesFunction::DuckLakeCleanupOldFilesFunction()

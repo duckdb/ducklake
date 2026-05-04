@@ -155,20 +155,21 @@ void DuckLakeOptionsExecute(ClientContext &context, TableFunctionInput &data_p, 
 	auto &state = data_p.global_state->Cast<DuckLakeOptionsState>();
 
 	if (state.offset >= state.options.size()) {
+		output.SetCardinality(0);
 		return;
 	}
 
 	idx_t count = 0;
 	while (state.offset < state.options.size() && count < STANDARD_VECTOR_SIZE) {
 		auto &option = state.options[state.offset++];
-		output.data[0].SetValue(count, Value(option.option_name));
-		output.data[1].SetValue(count, option.description);
-		output.data[2].SetValue(count, Value(option.value));
-		output.data[3].SetValue(count, Value(option.scope));
-		output.data[4].SetValue(count, option.scope_entry.empty() ? Value() : Value(option.scope_entry));
+		output.data[0].Append(Value(option.option_name));
+		output.data[1].Append(option.description);
+		output.data[2].Append(Value(option.value));
+		output.data[3].Append(Value(option.scope));
+		output.data[4].Append(option.scope_entry.empty() ? Value() : Value(option.scope_entry));
 		count++;
 	}
-	output.SetCardinality(count);
+	output.SetChildCardinality(count);
 }
 
 DuckLakeOptionsFunction::DuckLakeOptionsFunction()
