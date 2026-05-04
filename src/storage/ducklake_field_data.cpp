@@ -67,7 +67,7 @@ static Value ExtractInitialValue(optional_ptr<const ParsedExpression> initial_ex
 		                              "then explicitly set the default for new values using \"ALTER ... SET DEFAULT\"");
 	}
 	auto &const_default = initial_expr->Cast<ConstantExpression>();
-	return const_default.value.DefaultCastAs(type);
+	return const_default.GetValue().DefaultCastAs(type);
 }
 
 unique_ptr<DuckLakeFieldId> DuckLakeFieldId::FieldIdFromType(const string &name, const LogicalType &type,
