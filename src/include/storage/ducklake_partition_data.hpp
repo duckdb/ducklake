@@ -68,10 +68,6 @@ struct DuckLakePartitionUtils {
 	//! Apply the appropriate partition transform to a column expression based on the field's transform type
 	static unique_ptr<Expression> ApplyPartitionTransform(ClientContext &context, unique_ptr<Expression> column_expr,
 	                                                      const DuckLakePartitionField &field);
-
-	//! Compute the Iceberg-compatible bucket id for a constant value. Returns false if the value type is
-	//! unsupported or the value is NULL (in which case bucket pruning must be skipped).
-	static bool TryComputeBucketValue(const Value &value, idx_t bucket_count, int32_t &out_bucket);
 };
 
 } // namespace duckdb
