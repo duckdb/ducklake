@@ -5,6 +5,7 @@
 #include "storage/ducklake_schema_entry.hpp"
 #include "storage/ducklake_table_entry.hpp"
 #include "duckdb/main/database.hpp"
+#include "duckdb/common/sql_identifier.hpp"
 
 namespace duckdb {
 
@@ -21,7 +22,7 @@ void DuckLakeTransactionManager::Checkpoint(ClientContext &context, bool force) 
 
 	for (const auto &query : checkpoint_queries) {
 		auto checkpoint_query =
-		    StringUtil::Replace(query, "{CATALOG}", KeywordHelper::WriteQuoted(ducklake_catalog.GetName(), '\''));
+		    StringUtil::Replace(query, "{CATALOG}", SQLString::ToString(ducklake_catalog.GetName()));
 		auto res = conn->Query(checkpoint_query);
 		if (res->HasError()) {
 			res->GetErrorObject().Throw("Failed to perform CHECKPOINT; in DuckLake:  ");

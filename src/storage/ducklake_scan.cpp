@@ -107,6 +107,13 @@ unique_ptr<BaseStatistics> DuckLakeStatistics(ClientContext &context, const Func
 	return table.GetStatistics(context, column_index);
 }
 
+unique_ptr<BaseStatistics> DuckLakeStatisticsExtended(ClientContext &context, TableFunctionGetStatisticsInput &input) {
+	if (input.column_index.IsVirtualColumn()) {
+		return nullptr;
+	}
+	return DuckLakeStatistics(context, input.bind_data.get(), input.column_index.GetPrimaryIndex());
+}
+
 BindInfo DuckLakeBindInfo(const optional_ptr<FunctionData> bind_data) {
 	auto &multi_file_data = bind_data->Cast<MultiFileBindData>();
 	auto &file_list = multi_file_data.file_list->Cast<DuckLakeMultiFileList>();
@@ -196,6 +203,7 @@ TableFunction DuckLakeFunctions::GetDuckLakeScanFunction(DatabaseInstance &insta
 	}
 
 	function.statistics = DuckLakeStatistics;
+	function.statistics_extended = DuckLakeStatisticsExtended;
 	function.get_bind_info = DuckLakeBindInfo;
 	function.get_virtual_columns = DuckLakeVirtualColumns;
 	function.get_row_id_columns = DuckLakeGetRowIdColumn;

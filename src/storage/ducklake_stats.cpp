@@ -264,6 +264,7 @@ unique_ptr<BaseStatistics> DuckLakeColumnStats::ToStats() const {
 	case LogicalTypeId::TIME:
 	case LogicalTypeId::TIMESTAMP:
 	case LogicalTypeId::TIMESTAMP_TZ:
+	case LogicalTypeId::TIMESTAMP_TZ_NS:
 	case LogicalTypeId::TIMESTAMP_SEC:
 	case LogicalTypeId::TIMESTAMP_MS:
 	case LogicalTypeId::TIMESTAMP_NS:

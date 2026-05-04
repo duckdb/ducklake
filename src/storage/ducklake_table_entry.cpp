@@ -22,6 +22,7 @@
 #include "duckdb/parser/constraints/not_null_constraint.hpp"
 #include "duckdb/common/multi_file/multi_file_reader.hpp"
 #include "storage/ducklake_multi_file_reader.hpp"
+#include "duckdb/common/sql_identifier.hpp"
 
 namespace duckdb {
 constexpr column_t DuckLakeMultiFileReader::COLUMN_IDENTIFIER_SNAPSHOT_ID;
@@ -363,7 +364,7 @@ vector<string> DuckLakeTableEntry::GetPartitionSQLExpressions() const {
 	}
 	for (auto &field : partition_data->fields) {
 		auto &col = GetColumnByFieldId(field.field_id);
-		auto col_name = KeywordHelper::WriteOptionallyQuoted(col.GetName());
+		auto col_name = SQLIdentifier::ToString(col.GetName());
 		col_name = "CAST(" + col_name + " AS " + col.GetType().ToString() + ")";
 		result.push_back(DuckLakePartitionUtils::GetPartitionSQLExpression(field.transform, col_name));
 	}

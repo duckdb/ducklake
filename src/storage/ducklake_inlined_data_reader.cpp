@@ -7,6 +7,7 @@
 #include "storage/ducklake_catalog.hpp"
 #include "storage/ducklake_delete_filter.hpp"
 #include "duckdb/common/vector_operations/vector_operations.hpp"
+#include "duckdb/common/sql_identifier.hpp"
 
 namespace duckdb {
 
@@ -63,12 +64,12 @@ bool DuckLakeInlinedDataReader::TryInitializeScan(ClientContext &context, Global
 					break;
 				}
 				if (!virtual_column.empty()) {
-					columns_to_read.push_back(KeywordHelper::WriteOptionallyQuoted(virtual_column));
+					columns_to_read.push_back(SQLIdentifier::ToString(virtual_column));
 					expected_types.push_back(LogicalType::BIGINT);
 					continue;
 				}
 			}
-			string projected_column = KeywordHelper::WriteOptionallyQuoted(columns[index].name);
+			string projected_column = SQLIdentifier::ToString(columns[index].name);
 			auto &metadata_type = ducklake_catalog.MetadataType();
 			bool needs_cast = !metadata_type.empty() && metadata_type != "duckdb";
 			if (needs_cast) {
@@ -88,13 +89,13 @@ bool DuckLakeInlinedDataReader::TryInitializeScan(ClientContext &context, Global
 				scan_column_ids.push_back(i);
 				virtual_columns.push_back(InlinedVirtualColumn::NONE);
 			}
-			columns_to_read.push_back(KeywordHelper::WriteOptionallyQuoted("row_id"));
+			columns_to_read.push_back(SQLIdentifier::ToString("row_id"));
 			expected_types.push_back(LogicalType::BIGINT);
 			virtual_columns.emplace_back(InlinedVirtualColumn::COLUMN_EMPTY);
 		}
 		if (columns_to_read.empty()) {
 			// COUNT(*) - read row_id but don't emit
-			columns_to_read.push_back(KeywordHelper::WriteOptionallyQuoted("row_id"));
+			columns_to_read.push_back(SQLIdentifier::ToString("row_id"));
 			expected_types.push_back(LogicalType::BIGINT);
 			virtual_columns.emplace_back(InlinedVirtualColumn::COLUMN_EMPTY);
 		}
@@ -237,6 +238,7 @@ AsyncResult DuckLakeInlinedDataReader::Scan(ClientContext &context, GlobalTableF
 						ordinal_data[r] = NumericCast<int64_t>(file_row_number + r);
 					}
 				}
+				FlatVector::SetSize(ordinal_vector, scan_chunk.size());
 				if (TryEvaluateExpression(context, c, ordinal_vector, LogicalType::BIGINT, chunk.data[c])) {
 					continue;
 				}
@@ -250,7 +252,7 @@ AsyncResult DuckLakeInlinedDataReader::Scan(ClientContext &context, GlobalTableF
 				break;
 			}
 		}
-		chunk.SetCardinality(scan_chunk.size());
+		chunk.SetChildCardinality(scan_chunk.size());
 	} else {
 		data->data->Scan(state, chunk);
 	}

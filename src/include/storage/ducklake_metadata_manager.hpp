@@ -317,7 +317,8 @@ private:
 	string GetFileSelectList(const string &prefix);
 	string GetDeleteFileSelectList(const string &prefix);
 	FilterPushdownQueryComponents GenerateFilterPushdownComponents(const FilterPushdownInfo &filter_info,
-	                                                               TableIndex table_id);
+	                                                               DuckLakeTableEntry &table);
+	string GeneratePartitionPruneClause(const FilterPushdownInfo &filter_info, DuckLakeTableEntry &table);
 	virtual FilterSQLResult ConvertFilterPushdownToSQL(const FilterPushdownInfo &filter_info);
 	virtual string GenerateCTESectionFromRequirements(const unordered_map<idx_t, CTERequirement> &requirements,
 	                                                  TableIndex table_id);

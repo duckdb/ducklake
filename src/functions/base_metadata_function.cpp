@@ -40,6 +40,7 @@ static void MetadataFunctionExecute(ClientContext &context, TableFunctionInput &
 	auto &state = data_p.global_state->Cast<MetadataFunctionData>();
 	if (state.offset >= data.rows.size()) {
 		// finished returning values
+		output.SetCardinality(0);
 		return;
 	}
 	// start returning values
@@ -52,7 +53,7 @@ static void MetadataFunctionExecute(ClientContext &context, TableFunctionInput &
 		}
 
 		for (idx_t c = 0; c < entry.size(); c++) {
-			output.data[c].SetValue(count, entry[c]);
+			output.data[c].Append(entry[c]);
 		}
 		count++;
 	}
