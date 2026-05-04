@@ -484,10 +484,11 @@ DuckLakePartitionField GetPartitionField(DuckLakeTableEntry &table, ParsedExpres
 			}
 
 			auto &bucket_expr = function.children[0]->Cast<ConstantExpression>();
-			if (!bucket_expr.value.DefaultTryCastAs(LogicalType::BIGINT)) {
+			auto bucket_value = bucket_expr.GetValue();
+			if (!bucket_value.DefaultTryCastAs(LogicalType::BIGINT)) {
 				throw InvalidInputException("Bucket count must be an integer");
 			}
-			auto bucket_count = bucket_expr.value.GetValue<int64_t>();
+			auto bucket_count = bucket_value.GetValue<int64_t>();
 			if (bucket_count <= 0) {
 				throw InvalidInputException("Bucket count must be positive");
 			}
@@ -708,7 +709,7 @@ unique_ptr<CatalogEntry> DuckLakeTableEntry::AlterTable(DuckLakeTransaction &tra
 			auto &default_expr = info.new_column.DefaultValue();
 			if (default_expr.GetExpressionType() == ExpressionType::VALUE_CONSTANT) {
 				auto &constant_expr = default_expr.Cast<ConstantExpression>();
-				default_value = constant_expr.value.DefaultCastAs(new_col.Type());
+				default_value = constant_expr.GetValue().DefaultCastAs(new_col.Type());
 			}
 		}
 
@@ -1060,7 +1061,7 @@ static void ExtractDefaultValue(const DuckLakeColumnData &col_data, DuckLakeColu
 	if (col_data.default_value) {
 		if (col_data.default_value->GetExpressionType() == ExpressionType::VALUE_CONSTANT) {
 			auto &constant_value = col_data.default_value->Cast<ConstantExpression>();
-			info.default_value = constant_value.value;
+			info.default_value = constant_value.GetValue();
 			info.default_value_type = "literal";
 		} else {
 			info.default_value = col_data.default_value->ToString();

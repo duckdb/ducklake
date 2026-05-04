@@ -1846,7 +1846,7 @@ void DuckLakeTransaction::GetNewMacroInfo(DuckLakeCommitState &commit_state, ref
 				parameter.default_value = value;
 
 				parameter.default_value_type = DuckLakeTypes::ToString(
-				    impl->default_parameters[parameter.parameter_name]->Cast<ConstantExpression>().value.type());
+				    impl->default_parameters[parameter.parameter_name]->Cast<ConstantExpression>().GetValue().type());
 			} else {
 				parameter.default_value_type = "unknown";
 			}
