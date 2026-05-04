@@ -489,6 +489,9 @@ DuckLakePartitionField GetPartitionField(DuckLakeTableEntry &table, ParsedExpres
 			if (bucket_count <= 0) {
 				throw InvalidInputException("Bucket count must be positive");
 			}
+			if (bucket_count > NumericLimits<int32_t>::Maximum()) {
+				throw InvalidInputException("Bucket count cannot exceed %d", NumericLimits<int32_t>::Maximum());
+			}
 
 			field.transform.bucket_count = bucket_count;
 			column_name = GetPartitionColumnName(function.children[1]->Cast<ColumnRefExpression>());
