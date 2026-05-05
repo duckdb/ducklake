@@ -5,7 +5,6 @@
 #include "duckdb/parser/parsed_data/create_view_info.hpp"
 #include "duckdb/parser/parsed_data/drop_info.hpp"
 #include "duckdb/parser/result_modifier.hpp"
-#include "duckdb/parser/expression/constant_expression.hpp"
 #include "duckdb/planner/parsed_data/bound_create_table_info.hpp"
 #include "functions/ducklake_table_functions.hpp"
 #include "storage/ducklake_catalog.hpp"
@@ -64,27 +63,6 @@ bool DuckLakeSchemaEntry::HandleCreateConflict(CatalogTransaction transaction, C
 	return true;
 }
 
-static vector<DuckLakeTag> ValidateCreateTableOptions(ClientContext &context, BoundCreateTableInfo &info) {
-	vector<DuckLakeTag> result;
-	auto &base_info = info.Base();
-	if (base_info.options.empty()) {
-		return result;
-	}
-	for (auto &option : base_info.options) {
-		if (!option.second) {
-			throw BinderException("WITH option \"%s\" requires a value", option.first);
-		}
-		if (option.second->GetExpressionClass() != ExpressionClass::CONSTANT) {
-			throw BinderException(
-			    "WITH option \"%s\" must be a constant expression in DuckLake CREATE TABLE / CTAS", option.first);
-		}
-		auto &constant_expr = option.second->Cast<ConstantExpression>();
-		auto tag = ValidateDuckLakeConfigOption(context, option.first, constant_expr.value);
-		result.push_back(std::move(tag));
-	}
-	return result;
-}
-
 optional_ptr<CatalogEntry>
 DuckLakeSchemaEntry::CreateTableExtended(CatalogTransaction transaction, BoundCreateTableInfo &info, string table_uuid,
                                          string table_data_path, unique_ptr<DuckLakePartition> prebuilt_partition_data,
@@ -102,7 +80,7 @@ DuckLakeSchemaEntry::CreateTableExtended(CatalogTransaction transaction, BoundCr
 		}
 	}
 	// validate WITH (...) options before any catalog mutation
-	auto validated_options = ValidateCreateTableOptions(transaction.GetContext(), info);
+	auto options_in_create_with = ValidateOptionsInCreateWith(transaction.GetContext(), base_info.options);
 	//! get a local table-id
 	auto table_id = TableIndex(duck_transaction.GetLocalCatalogId());
 	// generate field ids based on the column ids
@@ -140,12 +118,12 @@ DuckLakeSchemaEntry::CreateTableExtended(CatalogTransaction transaction, BoundCr
 		    DuckLakeTableEntry::BuildSortData(duck_transaction, table_entry->GetColumns(), orders));
 	}
 	// stash on the entry; same-transaction writers pick these up via DuckLakeCopyInput, and at commit
-	// time WriteNewTableConfigOptions persists them under the freshly-allocated committed table_id.
+	// time WriteOptionsInCreateWith persists them under the freshly-allocated committed table_id.
 	// Routing through the entry (instead of mutating catalog options under the transaction-local id)
 	// keeps the catalog free of dead entries on rollback, matching how new_tables / local_changes
 	// already scope transaction state.
-	if (!validated_options.empty()) {
-		table_entry->SetPendingTableOptions(validated_options);
+	if (!options_in_create_with.empty()) {
+		table_entry->SetOptionsInCreateWith(options_in_create_with);
 	}
 	auto result = table_entry.get();
 	duck_transaction.CreateEntry(std::move(table_entry));

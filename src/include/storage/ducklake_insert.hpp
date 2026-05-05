@@ -155,17 +155,18 @@ struct DuckLakeCopyInput {
 	//! CTAS-flavored: take the field-id mapping and (optional) partition spec from the planning-time-built
 	//! spec rather than from a DuckLakeTableEntry that hasn't been created yet. field_data is required
 	//! because the parquet writer always needs it; partition_data is null when CREATE TABLE AS has no
-	//! inline PARTITIONED BY clause. `create_with_options` is the raw `WITH (...)` clause from the parser;
-	//! it is validated and surfaced through `with_options` so the parquet write honors it.
+	//! inline PARTITIONED BY clause. `options_in_create_with` is the raw `WITH (...)` clause from the
+	//! parser; it is validated and surfaced through the `options_in_create_with` map so the parquet
+	//! write honors it.
 	DuckLakeCopyInput(ClientContext &context, DuckLakeSchemaEntry &schema, const ColumnList &columns,
 	                  const string &data_path_p, DuckLakeFieldData &field_data,
 	                  optional_ptr<DuckLakePartition> partition_data = nullptr,
-	                  const case_insensitive_map_t<unique_ptr<ParsedExpression>> &create_with_options = {});
+	                  const case_insensitive_map_t<unique_ptr<ParsedExpression>> &options_in_create_with = {});
 
 	//! Look up an effective DuckLake config option for this write: returns the WITH override if one is
-	//! present in `with_options`, otherwise falls through to the catalog's table/schema/global lookup.
-	//! Used by PlanCopyForInsert so a CTAS write whose new table_id is not yet allocated still picks
-	//! up the user's WITH (...) values.
+	//! present in `options_in_create_with`, otherwise falls through to the catalog's table/schema/global
+	//! lookup. Used by PlanCopyForInsert so a CTAS write whose new table_id is not yet allocated still
+	//! picks up the user's WITH (...) values.
 	bool GetEffectiveOption(const string &key, string &out) const;
 
 	DuckLakeCatalog &catalog;
@@ -180,7 +181,7 @@ struct DuckLakeCopyInput {
 	optional_idx get_table_index;
 	//! CREATE TABLE / CTAS WITH (...) options that override same-key catalog options for this write.
 	//! Empty for plain INSERT. Validated at plan time before reaching here.
-	option_map_t with_options;
+	option_map_t options_in_create_with;
 };
 
 } // namespace duckdb

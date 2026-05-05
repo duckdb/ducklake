@@ -16,7 +16,6 @@
 #include "duckdb/execution/operator/order/physical_order.hpp"
 #include "duckdb/execution/operator/projection/physical_projection.hpp"
 #include "duckdb/execution/operator/scan/physical_table_scan.hpp"
-#include "duckdb/parser/expression/constant_expression.hpp"
 #include "duckdb/parser/parser.hpp"
 #include "duckdb/planner/binder.hpp"
 #include "duckdb/planner/expression_binder.hpp"
@@ -354,15 +353,15 @@ DuckLakeCopyInput::DuckLakeCopyInput(ClientContext &context, DuckLakeTableEntry 
 	encryption_key = catalog.GenerateEncryptionKey(context);
 	// Surface CREATE TABLE / CTAS WITH (...) options for transaction-local tables: the catalog
 	// is not mutated for transaction-local ids, so the only source of truth is the table entry.
-	for (auto &tag : table.GetPendingTableOptions()) {
-		with_options[tag.key] = tag.value;
+	for (auto &tag : table.GetOptionsInCreateWith()) {
+		options_in_create_with[tag.key] = tag.value;
 	}
 }
 
 DuckLakeCopyInput::DuckLakeCopyInput(ClientContext &context, DuckLakeSchemaEntry &schema, const ColumnList &columns,
                                      const string &data_path_p, DuckLakeFieldData &field_data_p,
                                      optional_ptr<DuckLakePartition> partition_data_p,
-                                     const case_insensitive_map_t<unique_ptr<ParsedExpression>> &create_with_options)
+                                     const case_insensitive_map_t<unique_ptr<ParsedExpression>> &options_in_create_with)
     : catalog(schema.ParentCatalog().Cast<DuckLakeCatalog>()), columns(columns), data_path(data_path_p) {
 	field_data = &field_data_p;
 	partition_data = partition_data_p;
@@ -371,20 +370,14 @@ DuckLakeCopyInput::DuckLakeCopyInput(ClientContext &context, DuckLakeSchemaEntry
 	// Validate CREATE TABLE AS ... WITH (key=value, ...) and surface as per-write overrides so the
 	// parquet files land with the requested compression / row group size, even though the new table_id
 	// won't be allocated until DuckLakeInsert::GetGlobalSinkState (long after this plan is built).
-	for (auto &option : create_with_options) {
-		if (!option.second || option.second->GetExpressionClass() != ExpressionClass::CONSTANT) {
-			throw BinderException(
-			    "WITH option \"%s\" must be a constant expression in DuckLake CREATE TABLE / CTAS", option.first);
-		}
-		auto &constant_expr = option.second->Cast<ConstantExpression>();
-		auto tag = ValidateDuckLakeConfigOption(context, option.first, constant_expr.value);
-		with_options[tag.key] = tag.value;
+	for (auto &tag : ValidateOptionsInCreateWith(context, options_in_create_with)) {
+		this->options_in_create_with[tag.key] = tag.value;
 	}
 }
 
 bool DuckLakeCopyInput::GetEffectiveOption(const string &key, string &out) const {
-	auto it = with_options.find(key);
-	if (it != with_options.end()) {
+	auto it = options_in_create_with.find(key);
+	if (it != options_in_create_with.end()) {
 		out = it->second;
 		return true;
 	}

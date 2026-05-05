@@ -4,7 +4,39 @@
 #include "storage/ducklake_table_entry.hpp"
 #include "storage/ducklake_schema_entry.hpp"
 
+#include "duckdb/execution/expression_executor.hpp"
+#include "duckdb/parser/parsed_expression.hpp"
+#include "duckdb/planner/binder.hpp"
+#include "duckdb/planner/expression_binder/constant_binder.hpp"
+
 namespace duckdb {
+
+vector<DuckLakeTag> ValidateOptionsInCreateWith(
+    ClientContext &context, const case_insensitive_map_t<unique_ptr<ParsedExpression>> &options) {
+	// Bind via ConstantBinder so each value expression must fold to a literal (no column refs, no
+	// subqueries) — mirrors upstream ATTACH (bind_attach.cpp) and CREATE SECRET (bind_create.cpp).
+	// `allow_unfoldable=true` on EvaluateScalar lets volatile functions like random() through; that's
+	// fine here because we only persist the resulting Value, not the expression tree.
+	// Each expression is copied before binding because CTAS calls this twice (plan time + sink init)
+	// over the same options map; consuming the map (the upstream pattern) would break the second call.
+	auto binder = Binder::CreateBinder(context);
+	ConstantBinder option_binder(*binder, context, "DuckLake WITH option");
+	vector<DuckLakeTag> result;
+	result.reserve(options.size());
+	for (auto &option : options) {
+		if (!option.second) {
+			throw BinderException("WITH option \"%s\" requires a value", option.first);
+		}
+		auto expr_copy = option.second->Copy();
+		auto bound_expr = option_binder.Bind(expr_copy);
+		if (bound_expr->HasParameter()) {
+			throw ParameterNotResolvedException();
+		}
+		auto value = ExpressionExecutor::EvaluateScalar(context, *bound_expr, true);
+		result.push_back(ValidateDuckLakeConfigOption(context, option.first, value));
+	}
+	return result;
+}
 
 struct DuckLakeSetOptionData : public TableFunctionData {
 	DuckLakeSetOptionData(Catalog &catalog, DuckLakeConfigOption option_p)

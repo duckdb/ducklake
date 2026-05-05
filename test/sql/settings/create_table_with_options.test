@@ -137,8 +137,34 @@ SELECT option_name, value FROM ducklake.options() WHERE scope='TABLE' AND scope_
 ----
 parquet_compression	gzip
 
-# non-constant value is rejected at plan time
-statement error
-CREATE TABLE ducklake.t_nonconst(i INTEGER) WITH (parquet_compression=upper('zstd'))
+# foldable expressions (function calls) are accepted and folded to a literal
+statement ok
+CREATE TABLE ducklake.t_fold(i INTEGER) WITH (parquet_compression=upper('zstd'))
+
+query II
+SELECT option_name, value FROM ducklake.options() WHERE scope='TABLE' AND scope_entry='main.t_fold'
 ----
-must be a constant expression
+parquet_compression	zstd
+
+# session variables are read at bind time via getvariable(...) and feed the WITH clause
+statement ok
+SET VARIABLE an_option = (SELECT 'zstd')
+
+statement ok
+CREATE OR REPLACE TABLE ducklake.t_var WITH (parquet_compression=getvariable('an_option')) AS FROM range(42)
+
+query II
+SELECT option_name, value FROM ducklake.options() WHERE scope='TABLE' AND scope_entry='main.t_var'
+----
+parquet_compression	zstd
+
+query I
+SELECT DISTINCT compression FROM parquet_metadata('__TEST_DIR__/ducklake_create_with_options_files/main/t_var/**')
+----
+ZSTD
+
+# expressions that cannot fold to a literal (e.g. a column reference with no FROM) are rejected
+statement error
+CREATE TABLE ducklake.t_bad_col(i INTEGER) WITH (parquet_compression=some_unknown_column)
+----
+some_unknown_column

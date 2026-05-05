@@ -75,7 +75,7 @@ ZSTD
 
 # CREATE TABLE WITH (...) + same-transaction INSERT must apply the override even though the table
 # is still transaction-local (committed table_id has not been allocated yet). DuckLakeCopyInput pulls
-# the override from DuckLakeTableEntry::pending_table_options.
+# the override from DuckLakeTableEntry::options_in_create_with.
 statement ok
 BEGIN
 

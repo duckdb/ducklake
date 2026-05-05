@@ -14,12 +14,22 @@
 
 namespace duckdb {
 class DuckLakeCatalog;
+class ParsedExpression;
 struct DuckLakeSnapshotInfo;
 struct DuckLakeTag;
 
 //! Validate and canonicalize a single (key, value) DuckLake config option.
 //! Shared by `CALL ducklake.set_option(...)` and CREATE TABLE / CTAS `WITH (...)`.
 DuckLakeTag ValidateDuckLakeConfigOption(ClientContext &context, const string &option_key, const Value &val);
+
+//! Bind, fold, and validate every entry in a CREATE TABLE / CTAS `WITH (...)` options map.
+//! Each value expression must fold to a literal under ConstantBinder (constants, `getvariable(...)`,
+//! `upper('zstd')`, etc.); each key/value is then run through ValidateDuckLakeConfigOption.
+//! Empty input → empty output. Throws BinderException on any unbindable expression or unknown key.
+//! The input map is left intact — copies each expression before binding because CTAS calls this
+//! both at plan time (PlanCreateTableAs) and again during sink-state-init (CreateTableExtended).
+vector<DuckLakeTag> ValidateOptionsInCreateWith(
+    ClientContext &context, const case_insensitive_map_t<unique_ptr<ParsedExpression>> &options);
 
 class DuckLakeTableFunctionUtil {
 public:
