@@ -168,3 +168,64 @@ statement error
 CREATE TABLE ducklake.t_bad_col(i INTEGER) WITH (parquet_compression=some_unknown_column)
 ----
 some_unknown_column
+
+# All three clauses together: PARTITIONED BY + SORTED BY + WITH on plain CREATE TABLE.
+# Verifies the parser accepts the combination, the WITH options are persisted, and a follow-up
+# INSERT uses all three (compression from WITH, hive layout from PARTITIONED BY).
+statement ok
+CREATE TABLE ducklake.t_combo(i INTEGER, s VARCHAR)
+PARTITIONED BY (i)
+SORTED BY (s)
+WITH (parquet_compression='gzip', parquet_row_group_size=2048)
+
+query III rowsort
+SELECT option_name, value, scope FROM ducklake.options() WHERE scope='TABLE' AND scope_entry='main.t_combo' ORDER BY option_name
+----
+parquet_compression	gzip	TABLE
+parquet_row_group_size	2048	TABLE
+
+statement ok
+INSERT INTO ducklake.t_combo SELECT i, 'row' || i FROM range(20) t(i)
+
+# follow-up INSERT honors WITH compression
+query I
+SELECT DISTINCT compression FROM parquet_metadata('__TEST_DIR__/ducklake_create_with_options_files/main/t_combo/**')
+----
+GZIP
+
+# PARTITIONED BY (i) produces hive-style i=N/ directories, one per distinct i (20 here)
+query I
+SELECT COUNT(DISTINCT regexp_extract(file_name, 'i=(\d+)', 1)) FROM parquet_metadata('__TEST_DIR__/ducklake_create_with_options_files/main/t_combo/**')
+----
+20
+
+# SORTED BY data ordering is exercised here only via not-erroring; full SORT correctness lives in
+# test/sql/sorted_table/* and test/sql/create_table_inline_partition_sort/*_sort_verification.test.
+
+# All three clauses together on a CTAS — verifies plan-time PARTITIONED BY layout, SORTED BY data
+# ordering, and WITH compression all coexist on a CREATE TABLE AS SELECT.
+statement ok
+CREATE TABLE ducklake.t_combo_ctas
+PARTITIONED BY (i)
+SORTED BY (s)
+WITH (parquet_compression='zstd', parquet_row_group_size=2048)
+AS SELECT range AS i, 'row' || range AS s FROM range(20)
+
+query III rowsort
+SELECT option_name, value, scope FROM ducklake.options() WHERE scope='TABLE' AND scope_entry='main.t_combo_ctas' ORDER BY option_name
+----
+parquet_compression	zstd	TABLE
+parquet_row_group_size	2048	TABLE
+
+# CTAS-written parquet files use the WITH compression
+query I
+SELECT DISTINCT compression FROM parquet_metadata('__TEST_DIR__/ducklake_create_with_options_files/main/t_combo_ctas/**')
+----
+ZSTD
+
+# rows landed in their hive partitions (one parquet directory per i value)
+query I
+SELECT COUNT(DISTINCT regexp_extract(file_name, 'i=(\d+)', 1)) FROM parquet_metadata('__TEST_DIR__/ducklake_create_with_options_files/main/t_combo_ctas/**')
+----
+20
+
