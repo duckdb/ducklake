@@ -178,13 +178,6 @@ SET preserve_insertion_order=true
 # Verifies the parser accepts the combination, the WITH options are persisted, the partition layout
 # matches PARTITIONED BY, the WITH compression takes effect, and SORTED BY actually reorders rows
 # (per-rowgroup b stats are disjoint and ascending after sort).
-#
-# Layout (6144 rows, parquet_row_group_size=2048, single thread, preserve_insertion_order=true):
-#   PARTITIONED BY (p):  p = i // 3072 ∈ {0, 1}  → 2 hive directories (p=0/, p=1/)
-#   SORTED BY (b):       b = 6143 - i            → input is b DESCENDING; after sort, b ASCENDING
-#   Rowgroups per partition: 3072 rows ÷ 2048 = 2 rowgroups (sizes 2048, 1024)
-#   Partition p=0: b ∈ [3072, 6143]   →  rg 0: b ∈ [3072,5119]   rg 1: b ∈ [5120,6143]
-#   Partition p=1: b ∈ [0, 3071]      →  rg 0: b ∈ [0,2047]      rg 1: b ∈ [2048,3071]
 statement ok
 CREATE TABLE ducklake.t_combo(p INTEGER, b INTEGER)
 PARTITIONED BY (p)
