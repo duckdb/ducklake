@@ -49,7 +49,9 @@ DuckLakeTableEntry::DuckLakeTableEntry(Catalog &catalog, SchemaCatalogEntry &sch
 			throw NotImplementedException("Defining a compression type for a column is not supported in DuckLake");
 		}
 		if (col.Name().size() >= 64) {
-			throw CatalogException("Column name \"%s\" exceeds the maximum length of 63 bytes and cannot be used with Postgres inlined data", col.Name());
+			throw CatalogException("Column name \"%s\" exceeds the maximum length of 63 bytes and cannot be used with "
+			                       "Postgres inlined data",
+			                       col.Name());
 		}
 	}
 	for (auto &constraint : constraints) {

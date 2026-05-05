@@ -1,8 +1,9 @@
 # name: test/sql/compaction/repro_merge_adjacent_zero_output.test
 # description: reproduce DuckLakeCompaction "expected a single output file" assertion
+# group: [compaction]
+
 #              when merge_adjacent_files merges several empty parquet files.
 #              See https://github.com/duckdb/ducklake/issues/525
-# group: [compaction]
 
 require ducklake
 
