@@ -2313,22 +2313,6 @@ string DuckLakeTransaction::CommitChanges(DuckLakeCommitState &commit_state,
 		    "message to false with \"CALL ducklake.set_option('require_commit_message', False)\" '\"");
 	}
 
-	// Invariant: a given table/view id can be either renamed OR dropped in a transaction, never both.
-#ifdef DEBUG
-	{
-		set<TableIndex> overlap;
-		std::set_intersection(dropped_tables.begin(), dropped_tables.end(), renamed_tables.begin(),
-		                      renamed_tables.end(), std::inserter(overlap, overlap.begin()));
-		D_ASSERT(overlap.empty());
-	}
-	{
-		set<TableIndex> overlap;
-		std::set_intersection(dropped_views.begin(), dropped_views.end(), renamed_views.begin(),
-		                      renamed_views.end(), std::inserter(overlap, overlap.begin()));
-		D_ASSERT(overlap.empty());
-	}
-#endif
-
 	string batch_queries;
 	// drop entries
 	if (!dropped_tables.empty()) {
@@ -3131,6 +3115,8 @@ void DuckLakeTransaction::AlterEntryInternal(DuckLakeTableEntry &table, unique_p
 		} else {
 			// table is not transaction local - add to drop list
 			auto table_id = table.GetTableId();
+			// Invariant: a table id cannot be both renamed and dropped in the same transaction.
+			D_ASSERT(dropped_tables.find(table_id) == dropped_tables.end());
 			renamed_tables.insert(table_id);
 		}
 		break;
@@ -3165,6 +3151,8 @@ void DuckLakeTransaction::AlterEntryInternal(DuckLakeViewEntry &view, unique_ptr
 		} else {
 			// view is not transaction local - add to rename list
 			auto view_id = view.GetViewId();
+			// Invariant: a view id cannot be both renamed and dropped in the same transaction.
+			D_ASSERT(dropped_views.find(view_id) == dropped_views.end());
 			renamed_views.insert(view_id);
 		}
 		break;
