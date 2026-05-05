@@ -22,6 +22,7 @@ jobs:
       PIP_BREAK_SYSTEM_PACKAGES: 1
       BUILD_EXTENSION_TEST_DEPS: full
       S3_TEST_SERVER_AVAILABLE: 1
+      DUCKLAKE_CI: 1
 
     steps:
       - name: Install required ubuntu packages

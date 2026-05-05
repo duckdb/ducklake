@@ -26,6 +26,7 @@ jobs:
       ENABLE_SQLITE_SCANNER: ON
       ENABLE_POSTGRES_SCANNER: ON
       BUILD_EXTENSION_TEST_DEPS: full
+      DUCKLAKE_CI: 1
 
     steps:
     - name: Install required ubuntu packages

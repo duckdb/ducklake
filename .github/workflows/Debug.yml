@@ -24,6 +24,7 @@ jobs:
       GEN: Ninja
       VCPKG_TOOLCHAIN_PATH: ${{ github.workspace }}/vcpkg/scripts/buildsystems/vcpkg.cmake
       DISABLE_EXTENSIONS_FOR_TEST: ON
+      DUCKLAKE_CI: 1
 
     steps:
     - name: "node-cleanup"
