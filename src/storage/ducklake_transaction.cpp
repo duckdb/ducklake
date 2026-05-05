@@ -1,8 +1,5 @@
 #include "storage/ducklake_transaction.hpp"
 
-#include <algorithm>
-#include <iterator>
-
 #include "common/ducklake_types.hpp"
 #include "common/ducklake_util.hpp"
 #include "duckdb/common/thread.hpp"
