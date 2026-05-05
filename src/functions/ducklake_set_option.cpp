@@ -11,8 +11,8 @@
 
 namespace duckdb {
 
-vector<DuckLakeTag> ValidateOptionsInCreateWith(
-    ClientContext &context, const case_insensitive_map_t<unique_ptr<ParsedExpression>> &options) {
+vector<DuckLakeTag> ValidateOptionsInCreateWith(ClientContext &context,
+                                                const case_insensitive_map_t<unique_ptr<ParsedExpression>> &options) {
 	// Bind via ConstantBinder so each value expression must fold to a literal (no column refs, no
 	// subqueries) — mirrors upstream ATTACH (bind_attach.cpp) and CREATE SECRET (bind_create.cpp).
 	// `allow_unfoldable=true` on EvaluateScalar lets volatile functions like random() through; that's
@@ -136,8 +136,7 @@ static unique_ptr<FunctionData> DuckLakeSetOptionBind(ClientContext &context, Ta
                                                       vector<LogicalType> &return_types, vector<string> &names) {
 	auto &catalog = DuckLakeBaseMetadataFunction::GetCatalog(context, input.inputs[0]);
 	DuckLakeConfigOption config_option;
-	config_option.option =
-	    ValidateDuckLakeConfigOption(context, StringValue::Get(input.inputs[1]), input.inputs[2]);
+	config_option.option = ValidateDuckLakeConfigOption(context, StringValue::Get(input.inputs[1]), input.inputs[2]);
 	auto &option = config_option.option.key;
 
 	// read the scope

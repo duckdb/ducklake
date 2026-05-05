@@ -553,8 +553,7 @@ DuckLakeCopyOptions DuckLakeInsert::GetCopyOptions(ClientContext &context, DuckL
 	if (copy_input.GetEffectiveOption("target_file_size", target_file_size_str)) {
 		target_file_size = Value(target_file_size_str).GetValue<idx_t>();
 	} else {
-		target_file_size =
-		    catalog.GetConfigOption<idx_t>("target_file_size", schema_id, table_id, target_file_size);
+		target_file_size = catalog.GetConfigOption<idx_t>("target_file_size", schema_id, table_id, target_file_size);
 	}
 
 	// Always use native parquet geometry for writing

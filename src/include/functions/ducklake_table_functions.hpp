@@ -28,8 +28,8 @@ DuckLakeTag ValidateDuckLakeConfigOption(ClientContext &context, const string &o
 //! Empty input → empty output. Throws BinderException on any unbindable expression or unknown key.
 //! The input map is left intact — copies each expression before binding because CTAS calls this
 //! both at plan time (PlanCreateTableAs) and again during sink-state-init (CreateTableExtended).
-vector<DuckLakeTag> ValidateOptionsInCreateWith(
-    ClientContext &context, const case_insensitive_map_t<unique_ptr<ParsedExpression>> &options);
+vector<DuckLakeTag> ValidateOptionsInCreateWith(ClientContext &context,
+                                                const case_insensitive_map_t<unique_ptr<ParsedExpression>> &options);
 
 class DuckLakeTableFunctionUtil {
 public:
