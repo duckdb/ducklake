@@ -1,7 +1,4 @@
 name: Debug Mode Tests
-# Debug build is slow (>2h) and rarely fails on its own, so it runs nightly instead
-# of on every push/PR. Manual dispatch is also supported (e.g. before a release).
-# See https://github.com/duckdb/ducklake/pull/1106#discussion_r3183782680.
 on:
   workflow_dispatch:
   schedule:
