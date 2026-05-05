@@ -1,5 +1,11 @@
 name: Debug Mode Tests
-on: [workflow_dispatch]
+# Debug build is slow (>2h) and rarely fails on its own, so it runs nightly instead
+# of on every push/PR. Manual dispatch is also supported (e.g. before a release).
+# See https://github.com/duckdb/ducklake/pull/1106#discussion_r3183782680.
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '0 2 * * *'
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}-${{ github.head_ref || '' }}-${{ github.base_ref || '' }}-${{ github.ref != 'refs/heads/main' || github.sha }}
   cancel-in-progress: true
