@@ -227,7 +227,8 @@ void DuckLakeSchemaEntry::Alter(CatalogTransaction catalog_transaction, AlterInf
 		auto new_view = view.AlterEntry(context, alter);
 		if (alter.alter_view_type == AlterViewType::RENAME_VIEW) {
 			// We must check if this view name does not yet exist.
-			if (GetEntry(catalog_transaction, CatalogType::VIEW_ENTRY, new_view->name)) {
+			auto existing_view = GetEntry(catalog_transaction, CatalogType::VIEW_ENTRY, new_view->name);
+			if (StringUtil::Lower(alter.name) != StringUtil::Lower(new_view->name) && existing_view) {
 				throw CatalogException(
 				    "Could not rename view \"%s\" to \"%s\": another entry with this name already exists!", alter.name,
 				    new_view->name);
