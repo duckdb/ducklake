@@ -127,6 +127,84 @@ string PostgresMetadataManager::GetLatestSnapshotQuery() const {
 	)";
 }
 
+bool PostgresMetadataManager::HasFileColumnStatsIndex() {
+	if (file_column_stats_index_checked) {
+		return file_column_stats_index_exists;
+	}
+	file_column_stats_index_checked = true;
+
+	// Look for any index on ducklake_file_column_stats whose key columns include both
+	// table_id and column_id. Such an index lets PostgreSQL serve our CTE filter
+	// (WHERE table_id = ? AND column_id = ?) as an index scan instead of a full table copy.
+	string check_query = R"(
+		SELECT * FROM postgres_query({METADATA_CATALOG_NAME_LITERAL},
+			'SELECT 1
+			 FROM pg_index i
+			 WHERE i.indrelid = to_regclass(''{METADATA_SCHEMA_ESCAPED}.ducklake_file_column_stats'')
+			   AND EXISTS (SELECT 1 FROM pg_attribute a
+			               WHERE a.attrelid = i.indrelid
+			                 AND a.attname = ''table_id''
+			                 AND a.attnum = ANY(i.indkey::int2[]))
+			   AND EXISTS (SELECT 1 FROM pg_attribute a
+			               WHERE a.attrelid = i.indrelid
+			                 AND a.attname = ''column_id''
+			                 AND a.attnum = ANY(i.indkey::int2[]))
+			 LIMIT 1')
+	)";
+	auto result = transaction.Query(check_query);
+	if (result->HasError()) {
+		// On error (e.g. permissions), fall back to the standard CTE path.
+		return false;
+	}
+	auto chunk = result->Fetch();
+	file_column_stats_index_exists = chunk && chunk->size() > 0;
+	return file_column_stats_index_exists;
+}
+
+string PostgresMetadataManager::GenerateCTESectionFromRequirements(
+    const unordered_map<idx_t, CTERequirement> &requirements, TableIndex table_id) {
+	if (requirements.empty()) {
+		return "";
+	}
+	// Without a usable index, postgres_query() would still trigger a sequential scan on a
+	// large ducklake_file_column_stats and may be slower than the default scanner path.
+	// Only opt into the override when an index actually exists - users opt in by creating
+	// the index themselves on (table_id, column_id) (or (column_id, table_id)).
+	if (!HasFileColumnStatsIndex()) {
+		return DuckLakeMetadataManager::GenerateCTESectionFromRequirements(requirements, table_id);
+	}
+
+	// Use postgres_query() to push the filter down to PostgreSQL where it can use the index,
+	// instead of the postgres scanner bulk-COPYing the entire table over ctid-range batches.
+	// MATERIALIZED / NOT MATERIALIZED are DuckDB CTE hints; they are valid here because the
+	// CTEs themselves are processed by DuckDB - only the inner postgres_query() runs on PG.
+	string cte_section = "WITH ";
+	bool first_cte = true;
+	for (const auto &entry : requirements) {
+		const auto &req = entry.second;
+		if (!first_cte) {
+			cte_section += ",\n";
+		}
+		first_cte = false;
+
+		string select_list = "data_file_id";
+		for (const auto &stat : req.referenced_stats) {
+			select_list += ", " + stat;
+		}
+		string materialized_hint = (req.reference_count > 1) ? " AS MATERIALIZED" : " AS NOT MATERIALIZED";
+
+		cte_section += StringUtil::Format("col_%d_stats%s (\n", req.column_field_index, materialized_hint.c_str());
+		cte_section += StringUtil::Format(
+		    "  SELECT * FROM postgres_query({METADATA_CATALOG_NAME_LITERAL},\n"
+		    "    'SELECT %s\n"
+		    "     FROM {METADATA_SCHEMA_ESCAPED}.ducklake_file_column_stats\n"
+		    "     WHERE column_id = %d AND table_id = %d')\n",
+		    select_list.c_str(), req.column_field_index, table_id.index);
+		cte_section += ")";
+	}
+	return cte_section + "\n";
+}
+
 // We need a specialized function here to do a reinterpret for postgres from BLOB to VARCHAR
 shared_ptr<DuckLakeInlinedData>
 PostgresMetadataManager::TransformInlinedData(QueryResult &result, const vector<LogicalType> &expected_types) {
