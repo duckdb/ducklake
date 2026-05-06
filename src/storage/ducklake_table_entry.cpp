@@ -850,7 +850,7 @@ bool TypePromotionIsAllowed(const LogicalType &source, const LogicalType &target
 	case LogicalTypeId::USMALLINT:
 		return TypePromotionIsAllowedUSmallint(target);
 	case LogicalTypeId::UINTEGER:
-		return target.id() == LogicalTypeId::UBIGINT;
+		return target.id() == LogicalTypeId::UBIGINT || target.id() == LogicalTypeId::BIGINT;
 	case LogicalTypeId::UBIGINT:
 		return false;
 	case LogicalTypeId::FLOAT:

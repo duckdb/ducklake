@@ -37,6 +37,12 @@ FROM ducklake.test
 25
 1000
 
+statement ok
+ALTER TABLE ducklake.test ADD COLUMN col2 UINTEGER;
+
+statement ok
+ALTER TABLE ducklake.test ALTER COLUMN col2 TYPE BIGINT;
+
 # cannot widen type
 statement error
 ALTER TABLE ducklake.test ALTER COLUMN col1 SET DATA TYPE SMALLINT;
