@@ -1,0 +1,69 @@
+# name: test/sql/stats/filter_pushdown_postgres_index.test
+# description: Verify filter pushdown returns identical results with and without
+#              the (table_id, column_id) index on ducklake_file_column_stats.
+#              Without the index the override falls back to the base CTE; with
+#              the index it switches to a postgres_query() CTE that lets PG use
+#              an index scan instead of a full COPY.
+# group: [stats]
+
+require ducklake
+
+require parquet
+
+require postgres_scanner
+
+# Only meaningful on a Postgres metadata backend.
+require-env DUCKLAKE_CI
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/ducklake_pg_index_files', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE ducklake.t(v INTEGER, i INTEGER);
+
+# Multiple files so filter pushdown actually has work to do
+statement ok
+INSERT INTO ducklake.t SELECT i % 1000, i FROM range(0, 1000) tbl(i);
+
+statement ok
+INSERT INTO ducklake.t SELECT i % 1000, i FROM range(100000, 101000) tbl(i);
+
+statement ok
+INSERT INTO ducklake.t SELECT i % 1000, i FROM range(500000, 501000) tbl(i);
+
+# --- without the index: falls back to {METADATA_CATALOG}.ducklake_file_column_stats CTE ---
+query I
+SELECT COUNT(*) FROM ducklake.t WHERE i > 100998
+----
+1001
+
+query I
+SELECT COUNT(*) FROM ducklake.t WHERE i BETWEEN 500050 AND 500100
+----
+51
+
+# --- now create the (table_id, column_id) index and re-run the same queries ---
+# Re-attach below to refresh the per-manager "no index" cache.
+statement ok
+CALL postgres_execute('__ducklake_metadata_ducklake', 'CREATE INDEX IF NOT EXISTS idx_fcs_table_col ON public.ducklake_file_column_stats(table_id, column_id)')
+
+statement ok
+DETACH ducklake
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/ducklake_pg_index_files', DATA_INLINING_ROW_LIMIT 0)
+
+# --- with the index: hits the postgres_query() CTE override ---
+query I
+SELECT COUNT(*) FROM ducklake.t WHERE i > 100998
+----
+1001
+
+query I
+SELECT COUNT(*) FROM ducklake.t WHERE i BETWEEN 500050 AND 500100
+----
+51
