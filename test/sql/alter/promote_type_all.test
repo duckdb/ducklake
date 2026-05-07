@@ -1,0 +1,151 @@
+# name: test/sql/alter/promote_type_all.test
+# description: test ducklake type promotion rules (widening casts)
+# group: [alter]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+
+test-env DATA_PATH __TEST_DIR__
+
+statement ok
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/ducklake_promote_type_all', METADATA_CATALOG 'xx')
+
+# -------------------------------------------------------
+# Signed integer widening chain
+# -------------------------------------------------------
+statement ok
+CREATE TABLE ducklake.ti(c TINYINT);
+
+# allowed: TINYINT -> SMALLINT -> INTEGER -> BIGINT -> HUGEINT
+statement ok
+ALTER TABLE ducklake.ti ALTER COLUMN c SET DATA TYPE SMALLINT;
+
+statement ok
+ALTER TABLE ducklake.ti ALTER COLUMN c SET DATA TYPE INTEGER;
+
+statement ok
+ALTER TABLE ducklake.ti ALTER COLUMN c SET DATA TYPE BIGINT;
+
+statement ok
+ALTER TABLE ducklake.ti ALTER COLUMN c SET DATA TYPE HUGEINT;
+
+# rejected: narrowing back down
+statement error
+ALTER TABLE ducklake.ti ALTER COLUMN c SET DATA TYPE BIGINT;
+----
+only widening
+
+statement error
+ALTER TABLE ducklake.ti ALTER COLUMN c SET DATA TYPE INTEGER;
+----
+only widening
+
+# -------------------------------------------------------
+# TINYINT -> FLOAT -> DOUBLE
+# -------------------------------------------------------
+statement ok
+CREATE TABLE ducklake.ti_f(c TINYINT);
+
+statement ok
+ALTER TABLE ducklake.ti_f ALTER COLUMN c SET DATA TYPE FLOAT;
+
+statement ok
+ALTER TABLE ducklake.ti_f ALTER COLUMN c SET DATA TYPE DOUBLE;
+
+# rejected: DOUBLE -> FLOAT (narrowing)
+statement error
+ALTER TABLE ducklake.ti_f ALTER COLUMN c SET DATA TYPE FLOAT;
+----
+only widening
+
+# -------------------------------------------------------
+# Unsigned integer widening chain
+# -------------------------------------------------------
+statement ok
+CREATE TABLE ducklake.uti(c UTINYINT);
+
+# allowed: UTINYINT -> USMALLINT -> UINTEGER -> UBIGINT
+statement ok
+ALTER TABLE ducklake.uti ALTER COLUMN c SET DATA TYPE USMALLINT;
+
+statement ok
+ALTER TABLE ducklake.uti ALTER COLUMN c SET DATA TYPE UINTEGER;
+
+statement ok
+ALTER TABLE ducklake.uti ALTER COLUMN c SET DATA TYPE UBIGINT;
+
+# rejected: UBIGINT -> UINTEGER (narrowing)
+statement error
+ALTER TABLE ducklake.uti ALTER COLUMN c SET DATA TYPE UINTEGER;
+----
+only widening
+
+# -------------------------------------------------------
+# Unsigned -> Signed cross-family
+# -------------------------------------------------------
+statement ok
+CREATE TABLE ducklake.uti2(c UTINYINT);
+
+# allowed: UTINYINT -> SMALLINT
+statement ok
+ALTER TABLE ducklake.uti2 ALTER COLUMN c SET DATA TYPE SMALLINT;
+
+# -------------------------------------------------------
+# FLOAT -> DOUBLE
+# -------------------------------------------------------
+statement ok
+CREATE TABLE ducklake.fl(c FLOAT);
+
+statement ok
+ALTER TABLE ducklake.fl ALTER COLUMN c SET DATA TYPE DOUBLE;
+
+# rejected: DOUBLE -> FLOAT (narrowing)
+statement error
+ALTER TABLE ducklake.fl ALTER COLUMN c SET DATA TYPE FLOAT;
+----
+only widening
+
+# -------------------------------------------------------
+# TIMESTAMP -> TIMESTAMP WITH TIME ZONE
+# -------------------------------------------------------
+statement ok
+CREATE TABLE ducklake.ts(c TIMESTAMP);
+
+statement ok
+ALTER TABLE ducklake.ts ALTER COLUMN c SET DATA TYPE TIMESTAMPTZ;
+
+# rejected: TIMESTAMPTZ -> TIMESTAMP (narrowing)
+statement error
+ALTER TABLE ducklake.ts ALTER COLUMN c SET DATA TYPE TIMESTAMP;
+----
+only widening
+
+# -------------------------------------------------------
+# Rejected: incompatible type changes
+# -------------------------------------------------------
+statement ok
+CREATE TABLE ducklake.rej(c INTEGER);
+
+# rejected: INTEGER -> VARCHAR
+statement error
+ALTER TABLE ducklake.rej ALTER COLUMN c SET DATA TYPE VARCHAR;
+----
+only widening
+
+# rejected: INTEGER -> BOOLEAN
+statement error
+ALTER TABLE ducklake.rej ALTER COLUMN c SET DATA TYPE BOOLEAN;
+----
+only widening
+
+# -------------------------------------------------------
+# Same type is a no-op, not a promotion error
+# -------------------------------------------------------
+statement ok
+CREATE TABLE ducklake.same(c INTEGER);
+
+statement ok
+ALTER TABLE ducklake.same ALTER COLUMN c SET DATA TYPE INTEGER;

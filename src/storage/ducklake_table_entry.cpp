@@ -21,6 +21,7 @@
 #include "duckdb/parser/parsed_data/comment_on_column_info.hpp"
 #include "duckdb/parser/constraints/not_null_constraint.hpp"
 #include "duckdb/common/multi_file/multi_file_reader.hpp"
+#include "functions/ducklake_compaction_functions.hpp"
 #include "storage/ducklake_multi_file_reader.hpp"
 
 namespace duckdb {
@@ -496,6 +497,9 @@ DuckLakePartitionField GetPartitionField(const ColumnList &columns, DuckLakeFiel
 			if (bucket_count <= 0) {
 				throw InvalidInputException("Bucket count must be positive");
 			}
+			if (bucket_count > NumericLimits<int32_t>::Maximum()) {
+				throw InvalidInputException("Bucket count cannot exceed %d", NumericLimits<int32_t>::Maximum());
+			}
 
 			field.transform.bucket_count = bucket_count;
 			column_name = GetPartitionColumnName(function.children[1]->Cast<ColumnRefExpression>());
@@ -776,6 +780,21 @@ unique_ptr<CatalogEntry> DuckLakeTableEntry::AlterTable(DuckLakeTransaction &tra
 			}
 		}
 	}
+	// check if we are sorting on this column
+	if (sort_data) {
+		auto orders = DuckLakeCompactor::ParseSortOrders(*sort_data);
+		for (auto &order : orders) {
+			ParsedExpressionIterator::VisitExpression<ColumnRefExpression>(
+			    *order.expression, [&](const ColumnRefExpression &colref) {
+				    if (StringUtil::CIEquals(colref.GetColumnName(), col.Name())) {
+					    throw CatalogException(
+					        "Cannot drop column \"%s\" - the table is sorted by this column. Reset or "
+					        "change the sort order on this table in order to drop this column",
+					        col.Name());
+				    }
+			    });
+		}
+	}
 	if (transaction.HasTransactionInlinedData(GetTableId())) {
 		transaction.RemoveColumnFromLocalInlinedData(GetTableId(), col.Logical(), field_id);
 	}
@@ -816,78 +835,15 @@ unique_ptr<CatalogEntry> DuckLakeTableEntry::AlterTable(DuckLakeTransaction &tra
 	return std::move(new_entry);
 }
 
-static bool TypePromotionIsAllowedTinyint(const LogicalType &to) {
-	switch (to.id()) {
-	case LogicalTypeId::SMALLINT:
-	case LogicalTypeId::INTEGER:
-	case LogicalTypeId::BIGINT:
-		return true;
-	default:
-		return false;
-	}
-}
-
-static bool TypePromotionIsAllowedSmallint(const LogicalType &to) {
-	switch (to.id()) {
-	case LogicalTypeId::INTEGER:
-	case LogicalTypeId::BIGINT:
-		return true;
-	default:
-		return false;
-	}
-}
-
-static bool TypePromotionIsAllowedUTinyint(const LogicalType &to) {
-	switch (to.id()) {
-	case LogicalTypeId::SMALLINT:
-	case LogicalTypeId::INTEGER:
-	case LogicalTypeId::BIGINT:
-	case LogicalTypeId::USMALLINT:
-	case LogicalTypeId::UINTEGER:
-	case LogicalTypeId::UBIGINT:
-		return true;
-	default:
-		return false;
-	}
-}
-
-static bool TypePromotionIsAllowedUSmallint(const LogicalType &to) {
-	switch (to.id()) {
-	case LogicalTypeId::INTEGER:
-	case LogicalTypeId::BIGINT:
-	case LogicalTypeId::UINTEGER:
-	case LogicalTypeId::UBIGINT:
-		return true;
-	default:
-		return false;
-	}
-}
 bool TypePromotionIsAllowed(const LogicalType &source, const LogicalType &target) {
-	// FIXME: Rework to use DUCKDB_API static LogicalType MaxLogicalType
-	switch (source.id()) {
-	case LogicalTypeId::TINYINT:
-		return TypePromotionIsAllowedTinyint(target);
-	case LogicalTypeId::SMALLINT:
-		return TypePromotionIsAllowedSmallint(target);
-	case LogicalTypeId::INTEGER:
-		return target.id() == LogicalTypeId::BIGINT;
-	case LogicalTypeId::BIGINT:
-		return false;
-	case LogicalTypeId::UTINYINT:
-		return TypePromotionIsAllowedUTinyint(target);
-	case LogicalTypeId::USMALLINT:
-		return TypePromotionIsAllowedUSmallint(target);
-	case LogicalTypeId::UINTEGER:
-		return target.id() == LogicalTypeId::UBIGINT;
-	case LogicalTypeId::UBIGINT:
-		return false;
-	case LogicalTypeId::FLOAT:
-		return target.id() == LogicalTypeId::DOUBLE;
-	case LogicalTypeId::TIMESTAMP:
-		return target.id() == LogicalTypeId::TIMESTAMP_TZ;
-	default:
+	if (source == target) {
 		return false;
 	}
+	LogicalType result;
+	if (!LogicalType::TryGetMaxLogicalTypeUnchecked(source, target, result)) {
+		return false;
+	}
+	return result == target;
 }
 
 bool IsSimpleCast(const ParsedExpression &expr) {

@@ -3971,7 +3971,7 @@ WITH new_values(tid, cid, new_contains_null, new_contains_nan, new_min, new_max,
 VALUES %s
 )
 UPDATE {METADATA_CATALOG}.ducklake_table_column_stats
-SET contains_null=new_contains_null::boolean, contains_nan=new_contains_nan::boolean, min_value=new_min, max_value=new_max, extra_stats=new_extra_stats
+SET contains_null=CAST(new_contains_null AS boolean), contains_nan=CAST(new_contains_nan AS boolean), min_value=new_min, max_value=new_max, extra_stats=new_extra_stats
 FROM new_values
 WHERE table_id=tid AND column_id=cid;
 )",
