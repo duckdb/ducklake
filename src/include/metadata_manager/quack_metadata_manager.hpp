@@ -26,6 +26,10 @@ public:
 	unique_ptr<QueryResult> Execute(DuckLakeSnapshot snapshot, string &query) override;
 	unique_ptr<QueryResult> Query(DuckLakeSnapshot snapshot, string &query) override;
 	unique_ptr<QueryResult> Query(string &query) override;
+	unique_ptr<QueryResult> AttachMetadata(const string &attach_query) override;
+
+protected:
+	string MetadataExistsQuery() const override;
 };
 
 } // namespace duckdb

@@ -129,6 +129,12 @@ public:
 
 	DuckLakeMetadataManager &Get(DuckLakeTransaction &transaction);
 
+	virtual unique_ptr<QueryResult> AttachMetadata(const string &attach_query);
+
+	virtual bool MetadataExists();
+
+	virtual string MetadataExistsQuery() const;
+
 	//! Initialize a new DuckLake
 	virtual void InitializeDuckLake(bool has_explicit_schema, DuckLakeEncryption encryption);
 	virtual DuckLakeMetadata LoadDuckLake();

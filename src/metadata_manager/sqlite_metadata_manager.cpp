@@ -45,4 +45,10 @@ string SQLiteMetadataManager::GetColumnTypeInternal(const LogicalType &column_ty
 		return column_type.ToString();
 	}
 }
+
+string SQLiteMetadataManager::MetadataExistsQuery() const {
+	return "SELECT COUNT(*) FROM sqlite_master "
+	       "WHERE type = 'table' AND name = 'ducklake_metadata' "
+	       "AND {METADATA_SCHEMA_NAME_LITERAL} IS NOT NULL";
+}
 } // namespace duckdb

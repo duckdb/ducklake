@@ -27,6 +27,7 @@ public:
 	}
 
 	string GetColumnTypeInternal(const LogicalType &type) override;
+	string MetadataExistsQuery() const override;
 };
 
 } // namespace duckdb

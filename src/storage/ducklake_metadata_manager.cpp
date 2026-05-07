@@ -141,6 +141,32 @@ string DuckLakeMetadataManager::ListAggregation(const vector<pair<string, string
 	return "LIST({" + fields_part + "})";
 }
 
+unique_ptr<QueryResult> DuckLakeMetadataManager::AttachMetadata(const string &attach_query) {
+	auto query = attach_query;
+	SubstituteCatalogPlaceholders(query);
+	return transaction.ExecuteRaw(query);
+}
+
+string DuckLakeMetadataManager::MetadataExistsQuery() const {
+	return "SELECT COUNT(*) FROM duckdb_tables() "
+	       "WHERE database_name = {METADATA_CATALOG_NAME_LITERAL} "
+	       "  AND schema_name = {METADATA_SCHEMA_NAME_LITERAL} "
+	       "  AND table_name = 'ducklake_metadata'";
+}
+
+bool DuckLakeMetadataManager::MetadataExists() {
+	auto query = MetadataExistsQuery();
+	auto result = Query(query);
+	if (result->HasError()) {
+		result->GetErrorObject().Throw("Failed to probe DuckLake metadata: ");
+	}
+	auto chunk = result->Fetch();
+	if (!chunk || chunk->size() == 0) {
+		return false;
+	}
+	return chunk->GetValue(0, 0).GetValue<int64_t>() > 0;
+}
+
 void DuckLakeMetadataManager::InitializeDuckLake(bool has_explicit_schema, DuckLakeEncryption encryption) {
 	string initialize_query;
 	if (has_explicit_schema) {
