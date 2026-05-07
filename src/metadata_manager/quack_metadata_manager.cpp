@@ -39,7 +39,19 @@ unique_ptr<QueryResult> QuackMetadataManager::AttachMetadata(const string &attac
 	auto query = attach_query;
 	SubstituteCatalogPlaceholders(query);
 	Connection fresh_conn(transaction.GetCatalog().GetDatabase());
-	return fresh_conn.Query(query);
+	auto result = fresh_conn.Query(query);
+
+	for (idx_t attempt = 0; attempt < 5 && result->HasError(); attempt++) {
+		auto raw_message = result->GetErrorObject().RawMessage();
+		const bool retryable = StringUtil::Contains(raw_message, "Invalid connection id") ||
+		                       StringUtil::Contains(raw_message, "Couldn't connect to server") ||
+		                       StringUtil::Contains(raw_message, "Failed to send message");
+		if (!retryable) {
+			break;
+		}
+		result = fresh_conn.Query(query);
+	}
+	return result;
 }
 
 unique_ptr<QueryResult> QuackMetadataManager::Query(DuckLakeSnapshot snapshot, string &query) {
