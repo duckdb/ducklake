@@ -37,6 +37,8 @@ public:
 
 	unique_ptr<QueryResult> Query(DuckLakeSnapshot snapshot, string &query) override;
 
+	bool MetadataExists() override;
+
 protected:
 	string GetLatestSnapshotQuery() const override;
 

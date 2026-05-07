@@ -28,6 +28,8 @@ public:
 	unique_ptr<QueryResult> Query(string &query) override;
 	unique_ptr<QueryResult> AttachMetadata(const string &attach_query) override;
 
+	bool MetadataExists() override;
+
 protected:
 	string MetadataExistsQuery() const override;
 };
