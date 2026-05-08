@@ -1,7 +1,6 @@
 {
   "description": "Run DuckLake tests using a Quack RPC server as a catalog DBMS.",
-  "on_init": "LOAD httpfs; LOAD quack; CREATE OR REPLACE SECRET ducklake_test_quack (TYPE quack, TOKEN 'ducklake-test-token'); SET GLOBAL http_retries=10; SET GLOBAL http_retry_wait_ms=50; SET GLOBAL http_retry_backoff=2.0; SELECT * FROM quack_serve('quack://localhost:19999/', token := 'ducklake-test-token');",
-  "on_cleanup": "SELECT * FROM quack_stop('quack://localhost:19999/');",
+  "on_init": "LOAD httpfs; LOAD quack; CREATE OR REPLACE SECRET ducklake_test_quack (TYPE quack, TOKEN 'ducklake-test-token'); SELECT * FROM quack_serve('quack://localhost:19999/', token := 'ducklake-test-token');",
   "autoloading": "none",
   "statically_loaded_extensions": [
     "core_functions",
@@ -68,20 +67,6 @@
       ]
     },
     {
-      "reason": "Slow / resource-intensive tests overwhelm quack's 4-thread HttpQuackServer worker pool and 10s keep-alive, leaving the server unresponsive for subsequent tests",
-      "paths": [
-        "test/sql/deletion_inlining/test_multiple_files_flush.test_slow",
-        "test/sql/insert/insert_wide_table_low_memory.test_slow",
-        "test/sql/compaction/merge_adjacent_tiered.test_slow",
-        "test/sql/alter/many_schema_versions_low_memory.test_slow",
-        "test/sql/concurrent/concurrent_table_creation.test_slow",
-        "test/sql/partitioning/partition_tpch.test_slow",
-        "test/sql/tpch/tpch_sf1.test_slow",
-        "test/sql/clickbench/clickbench.test_slow",
-        "test/sql/merge/merge_into_tpch.test_slow"
-      ]
-    },
-    {
       "reason": "Test issues UPDATE against the metadata catalog directly; quack catalog only supports updates on base tables",
       "paths": [
         "test/sql/delete/delete_legacy_missing_mapping_after_rename_add_files.test"
@@ -139,6 +124,36 @@
       "reason": "Test requires the parquet extension to NOT be loaded so a CREATE TABLE AS fails with 'Missing Extension'; quack config statically links parquet.",
       "paths": [
         "test/sql/general/missing_parquet.test"
+      ]
+    },
+    {
+      "reason": "Test asserts that DETACHing the metadata catalog breaks subsequent DDL on the DuckLake catalog. Quack metadata access is RPC-based via `quack_query(uri, ...)` and does not depend on the local METADATA_CATALOG attachment, so DDL keeps working after the detach.",
+      "paths": [
+        "test/sql/general/detach_ducklake.test"
+      ]
+    },
+    {
+      "reason": "Flaky under quack load: ducklake_add_data_files runs `parquet_full_metadata` over ~50 small files and the planner's PhysicalBatchCollector occasionally hits 'batch index N is present in both collections' during combine when sharing the task scheduler with the quack HTTP server. Stable in the default config and when run alone.",
+      "paths": [
+        "test/sql/stats/filter_stress.test"
+      ]
+    },
+    {
+      "reason": "Memory-pressure test fails on commit with 'could not allocate block of size 256.0 KiB (47.4 MiB/47.6 MiB used)' because the in-process quack server shares the same in-memory DuckDB instance, doubling the memory footprint and pushing the test over its tight memory limit.",
+      "paths": [
+        "test/sql/insert/insert_wide_table_low_memory.test_slow"
+      ]
+    },
+    {
+      "reason": "Slow flush test exceeds quack's HTTP server keep-alive while committing 200k rows: 'Timeout was reached error for HTTP POST to http://localhost:19999/quack'. The quack HttpQuackServer worker pool stalls under sustained load.",
+      "paths": [
+        "test/sql/deletion_inlining/test_multiple_files_flush.test_slow"
+      ]
+    },
+    {
+      "reason": "`COPY FROM DATABASE memory TO ducklake (SCHEMA)` copies tpch's metadata-side schema, which on quack already contains internal columns like `begin_snapshot`, tripping 'Column name \"begin_snapshot\" is reserved by DuckLake for internal use'.",
+      "paths": [
+        "test/sql/partitioning/partition_tpch.test_slow"
       ]
     }
   ]
