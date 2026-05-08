@@ -27,6 +27,9 @@ public:
 	}
 
 	string GetColumnTypeInternal(const LogicalType &type) override;
+
+protected:
+	bool RetryOnMessage(const string &lower_message) const override;
 };
 
 } // namespace duckdb

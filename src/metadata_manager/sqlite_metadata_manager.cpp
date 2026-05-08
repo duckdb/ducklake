@@ -1,5 +1,6 @@
 #include "metadata_manager/sqlite_metadata_manager.hpp"
 #include "common/ducklake_util.hpp"
+#include "duckdb/common/string_util.hpp"
 #include "duckdb/main/database.hpp"
 #include "storage/ducklake_catalog.hpp"
 #include "storage/ducklake_transaction.hpp"
@@ -46,4 +47,12 @@ string SQLiteMetadataManager::GetColumnTypeInternal(const LogicalType &column_ty
 		return column_type.ToString();
 	}
 }
+
+bool SQLiteMetadataManager::RetryOnMessage(const string &lower_message) const {
+	if (DuckLakeMetadataManager::RetryOnMessage(lower_message)) {
+		return true;
+	}
+	return StringUtil::Contains(lower_message, "database is locked");
+}
+
 } // namespace duckdb

@@ -2542,23 +2542,6 @@ CompactionInformation DuckLakeTransaction::GetCompactionChanges(DuckLakeCommitSt
 	return result;
 }
 
-bool RetryOnError(const string &original_message) {
-	auto message = StringUtil::Lower(original_message);
-	// retry on primary key errors
-	if (StringUtil::Contains(message, "primary key") || StringUtil::Contains(message, "unique")) {
-		return true;
-	}
-	// retry on conflicts
-	if (StringUtil::Contains(message, "conflict")) {
-		return true;
-	}
-	// retry on concurrent access
-	if (StringUtil::Contains(message, "concurrent")) {
-		return true;
-	}
-	return false;
-}
-
 void DuckLakeTransaction::FlushChanges() {
 	if (!ChangesMade()) {
 		// read-only transactions don't need to do anything
@@ -2624,7 +2607,7 @@ void DuckLakeTransaction::FlushChanges() {
 			if (has_active_transaction) {
 				connection->Rollback();
 			}
-			bool retry_on_error = RetryOnError(error.Message());
+			bool retry_on_error = metadata_manager->Retry(error);
 			bool finished_retrying = i + 1 >= max_retry_count;
 			if (!can_retry || !retry_on_error || finished_retrying) {
 				// we abort after the max retry count
