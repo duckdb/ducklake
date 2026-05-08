@@ -640,7 +640,7 @@ unique_ptr<CatalogEntry> DuckLakeTableEntry::AlterTable(DuckLakeTransaction &tra
 	ColumnList new_columns;
 	for (auto &col : columns.Logical()) {
 		auto copy = col.Copy();
-		if (copy.Name() == info.old_name) {
+		if (StringUtil::CIEquals(copy.Name(), info.old_name)) {
 			copy.SetName(info.new_name);
 		}
 		new_columns.AddColumn(std::move(copy));
