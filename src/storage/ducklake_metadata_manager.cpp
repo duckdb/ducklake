@@ -1077,7 +1077,8 @@ string DuckLakeMetadataManager::CastStatsToTarget(const string &stats, const Log
 }
 
 string DuckLakeMetadataManager::CastColumnToTarget(const string &column, const LogicalType &type) {
-	return column + "::" + type.ToString();
+	// ANSI CAST(...) — same reason as elsewhere: SQLite rejects `::` casts.
+	return "CAST(" + column + " AS " + type.ToString() + ")";
 }
 
 string DuckLakeMetadataManager::GenerateConstantFilter(const ConstantFilter &constant_filter, const LogicalType &type,
@@ -3966,12 +3967,17 @@ string DuckLakeMetadataManager::UpdateGlobalTableStats(const DuckLakeGlobalStats
 		    "UPDATE {METADATA_CATALOG}.ducklake_table_stats SET record_count=%d, file_size_bytes=%d, "
 		    "next_row_id=%d WHERE table_id=%d;",
 		    stats.record_count, stats.table_size_bytes, stats.next_row_id, stats.table_id.index);
+		// Use ANSI CAST(... AS BOOLEAN) instead of the PostgreSQL-flavored
+		// `::boolean` operator. Both DuckDB and Postgres accept ANSI CAST,
+		// and SQLite's parser rejects `::` outright (SQLITE_ERROR:
+		// unrecognized token ":"), which breaks SQLite-backed metadata
+		// backends that ship this batch directly to SQLite.
 		batch_query += StringUtil::Format(R"(
 WITH new_values(tid, cid, new_contains_null, new_contains_nan, new_min, new_max, new_extra_stats) AS (
 VALUES %s
 )
 UPDATE {METADATA_CATALOG}.ducklake_table_column_stats
-SET contains_null=CAST(new_contains_null AS boolean), contains_nan=CAST(new_contains_nan AS boolean), min_value=new_min, max_value=new_max, extra_stats=new_extra_stats
+SET contains_null=CAST(new_contains_null AS BOOLEAN), contains_nan=CAST(new_contains_nan AS BOOLEAN), min_value=new_min, max_value=new_max, extra_stats=new_extra_stats
 FROM new_values
 WHERE table_id=tid AND column_id=cid;
 )",
