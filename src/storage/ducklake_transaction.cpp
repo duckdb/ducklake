@@ -1526,41 +1526,39 @@ struct NewMacroInfo {
 	vector<DuckLakeMacroInfo> new_macros;
 };
 
-void HandleChangedFields(TableIndex table_id, const ColumnChangeInfo &change_info, NewTableInfo &result,
-                         const set<FieldIndex> &columns_handled_by_later_ops,
-                         unordered_map<idx_t, idx_t> &txn_added_fields) {
-	for (auto &new_col_info : change_info.new_fields) {
-		// Skip adding columns that will be handled by a later operation (e.g., SET_DEFAULT after CHANGE_COLUMN_TYPE)
-		if (columns_handled_by_later_ops.find(new_col_info.column_info.id) != columns_handled_by_later_ops.end()) {
-			continue;
+void CancelOrDropField(TableIndex table_id, FieldIndex field_id, NewTableInfo &result,
+                       unordered_map<idx_t, idx_t> &txn_added_fields) {
+	auto it = txn_added_fields.find(field_id.index);
+	if (it != txn_added_fields.end()) {
+		auto erased_idx = it->second;
+		result.new_columns.erase(result.new_columns.begin() + erased_idx);
+		txn_added_fields.erase(it);
+		for (auto &entry : txn_added_fields) {
+			if (entry.second > erased_idx) {
+				entry.second--;
+			}
 		}
+		return;
+	}
+	// Column was not added in the same transaction, we emit a drop.
+	DuckLakeDroppedColumn dropped_col;
+	dropped_col.table_id = table_id;
+	dropped_col.field_id = field_id;
+	result.dropped_columns.push_back(dropped_col);
+}
+
+void HandleChangedFields(TableIndex table_id, const ColumnChangeInfo &change_info, NewTableInfo &result,
+                         unordered_map<idx_t, idx_t> &txn_added_fields) {
+	for (auto &dropped_field_id : change_info.dropped_fields) {
+		CancelOrDropField(table_id, dropped_field_id, result, txn_added_fields);
+	}
+	for (auto &new_col_info : change_info.new_fields) {
 		DuckLakeNewColumn new_column;
 		new_column.table_id = table_id;
 		new_column.column_info = new_col_info.column_info;
 		new_column.parent_idx = new_col_info.parent_idx;
+		txn_added_fields[new_col_info.column_info.id.index] = result.new_columns.size();
 		result.new_columns.push_back(std::move(new_column));
-	}
-	for (auto &dropped_field_id : change_info.dropped_fields) {
-		auto it = txn_added_fields.find(dropped_field_id.index);
-		if (it != txn_added_fields.end()) {
-			// Column was added in the same transaction, we cancel the add rather than emitting a drop.
-			auto erased_idx = it->second;
-			result.new_columns.erase(result.new_columns.begin() + erased_idx);
-			txn_added_fields.erase(it);
-			// Assume the number of columns to add and drop in the same transaction is not too large.
-			for (auto &entry : txn_added_fields) {
-				if (entry.second > erased_idx) {
-					entry.second--;
-				}
-			}
-			continue;
-		}
-
-		// Column was not added in the same transaction, we emit a drop.
-		DuckLakeDroppedColumn dropped_col;
-		dropped_col.table_id = table_id;
-		dropped_col.field_id = dropped_field_id;
-		result.dropped_columns.push_back(dropped_col);
 	}
 }
 
@@ -1579,7 +1577,6 @@ void DuckLakeTransaction::GetNewTableInfo(DuckLakeCommitState &commit_state, Duc
 		table_entry = table_entry.get().Child();
 	}
 
-	set<FieldIndex> columns_handled_by_later_ops;
 	// Maps from field index to the number of alter operations for that field.
 	map<FieldIndex, idx_t> field_alter_count;
 	// Number of table comment operations.
@@ -1594,7 +1591,6 @@ void DuckLakeTransaction::GetNewTableInfo(DuckLakeCommitState &commit_state, Duc
 		case LocalChangeType::DROP_NULL:
 		case LocalChangeType::RENAME_COLUMN:
 		case LocalChangeType::SET_DEFAULT:
-			columns_handled_by_later_ops.insert(local_change.field_index);
 			field_alter_count[local_change.field_index]++;
 			break;
 		case LocalChangeType::SET_COMMENT:
@@ -1683,25 +1679,17 @@ void DuckLakeTransaction::GetNewTableInfo(DuckLakeCommitState &commit_state, Duc
 				break;
 			}
 
-			// Check whether this field was added in the same transaction. If so, directly updating the
-			// existing new_columns entry in-place.
-			auto local_txn_column_iter = txn_added_fields.find(local_change.field_index.index);
-			if (local_txn_column_iter != txn_added_fields.end()) {
-				result.new_columns[local_txn_column_iter->second].column_info =
-				    table.GetColumnInfo(local_change.field_index);
-			} else {
-				// The field has been committed, drop the old committed entry.
-				DuckLakeDroppedColumn dropped_col;
-				dropped_col.table_id = commit_state.GetTableId(table);
-				dropped_col.field_id = local_change.field_index;
-				result.dropped_columns.push_back(dropped_col);
+			auto committed_table_id = commit_state.GetTableId(table);
 
-				// Insert the new column with the updated info.
-				DuckLakeNewColumn new_col;
-				new_col.table_id = commit_state.GetTableId(table);
-				new_col.column_info = table.GetColumnInfo(local_change.field_index);
-				result.new_columns.push_back(std::move(new_col));
-			}
+			// Cancel the previous txn-local add for this field, or drop the committed column.
+			CancelOrDropField(committed_table_id, local_change.field_index, result, txn_added_fields);
+
+			// Insert the new column with the updated info and register it.
+			DuckLakeNewColumn new_col;
+			new_col.table_id = committed_table_id;
+			new_col.column_info = table.GetColumnInfo(local_change.field_index);
+			txn_added_fields[local_change.field_index.index] = result.new_columns.size();
+			result.new_columns.push_back(std::move(new_col));
 
 			transaction_changes.altered_tables.insert(table_id);
 			transaction_changes.altered_tables_with_schema_version_changes.insert(table_id);
@@ -1720,7 +1708,7 @@ void DuckLakeTransaction::GetNewTableInfo(DuckLakeCommitState &commit_state, Duc
 			// drop the indicated column
 			// note that in case of nested types we might be dropping multiple columns here
 			HandleChangedFields(commit_state.GetTableId(table), table.GetChangedFields(), result,
-			                    columns_handled_by_later_ops, txn_added_fields);
+			                    txn_added_fields);
 			transaction_changes.altered_tables_with_schema_version_changes.insert(table_id);
 			column_schema_change = true;
 			break;
