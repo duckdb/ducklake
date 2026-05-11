@@ -4430,6 +4430,22 @@ VALUES %s;
 
 	// delete based on table id -> ducklake_table_stats, ducklake_table_column_stats, ducklake_partition_info
 	if (!deleted_table_ids.empty()) {
+		// Collect orphaned_inlined tables
+		vector<string> inlined_tables_to_drop;
+		{
+			auto result = transaction.Query(StringUtil::Format(R"(
+SELECT table_name
+FROM {METADATA_CATALOG}.ducklake_inlined_data_tables
+WHERE table_id IN (%s);)",
+			                                                   deleted_table_ids));
+			if (result->HasError()) {
+				result->GetErrorObject().Throw("Failed to read ducklake_inlined_data_tables for cleanup in DuckLake: ");
+			}
+			for (auto &row : *result) {
+				inlined_tables_to_drop.push_back(row.GetValue<string>(0));
+			}
+		}
+
 		tables_to_delete_from = {
 		    "ducklake_table",           "ducklake_table_stats",         "ducklake_table_column_stats",
 		    "ducklake_partition_info",  "ducklake_partition_column",    "ducklake_column",
@@ -4442,6 +4458,15 @@ WHERE table_id IN (%s);)",
 			                                                   delete_tbl, deleted_table_ids));
 			if (result->HasError()) {
 				result->GetErrorObject().Throw("Failed to delete from " + delete_tbl + " in DuckLake: ");
+			}
+		}
+
+		// Drop orphaned inlined tables
+		for (auto &inlined_table_name : inlined_tables_to_drop) {
+			auto result = transaction.Query(
+			    StringUtil::Format("DROP TABLE IF EXISTS {METADATA_CATALOG}.%s;", SQLIdentifier(inlined_table_name)));
+			if (result->HasError()) {
+				result->GetErrorObject().Throw("Failed to drop inlined-data table in DuckLake: ");
 			}
 		}
 	}
