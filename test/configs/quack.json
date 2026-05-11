@@ -7,7 +7,6 @@
     "parquet",
     "ducklake",
     "httpfs",
-    "quack",
     "icu"
   ],
   "skip_error_messages": [
@@ -53,7 +52,7 @@
       ]
     },
     {
-      "reason": "Uses SET immediate_transaction_mode=true with concurrent connections; the quack catalog has one server-side connection_id per ATTACH, so two ducklake transactions both eagerly issuing BEGIN collide with 'cannot start a transaction within a transaction'. Needs a quack-side change so each DuckLakeTransaction gets its own server-side connection.",
+      "reason": "FIXME:Uses SET immediate_transaction_mode=true with concurrent connections",
       "paths": [
         "test/sql/compaction/compaction_delete_conflict.test",
         "test/sql/rewrite_data_files/test_rewrite_transaction_conflict.test",
@@ -67,19 +66,19 @@
       ]
     },
     {
-      "reason": "Test issues UPDATE against the metadata catalog directly; quack catalog only supports updates on base tables",
+      "reason": "Test issues UPDATE against the metadata catalog directly",
       "paths": [
         "test/sql/delete/delete_legacy_missing_mapping_after_rename_add_files.test"
       ]
     },
     {
-      "reason": "PRAGMA database_size iterates all attached catalogs; quack catalog does not implement GetDatabaseSize",
+      "reason": "FIXME: quack catalog does not implement GetDatabaseSize",
       "paths": [
         "test/sql/general/database_size.test"
       ]
     },
     {
-      "reason": "Test appends a suffix to DUCKLAKE_CONNECTION; valid for file-based catalogs but not for the quack RPC URL",
+      "reason": "Test appends a suffix to DUCKLAKE_CONNECTION",
       "paths": [
         "test/sql/data_inlining/partition_inlining.test"
       ]
@@ -92,13 +91,13 @@
       ]
     },
     {
-      "reason": "Hangs in this config (require spatial path) and queries metadata catalog directly",
+      "reason": "require spatial",
       "paths": [
         "test/sql/sorted_table/merge_adjacent_sorted_spatial_hilbert.test"
       ]
     },
     {
-      "reason": "Hangs in this config \u2014 `require postgres_scanner` / `require sqlite_scanner` with autoloading:none stalls without erroring",
+      "reason": "require postgres_scanner",
       "paths": [
         "test/sql/autoloading/autoload_data_path.test",
         "test/sql/data_inlining/postgres_identifier_limit.test",
@@ -113,7 +112,7 @@
       ]
     },
     {
-      "reason": "Test relies on a file-based metadata catalog (auto-derived data path / metadata file co-located with data / META_TYPE='DUCKDB' override); quack is an RPC catalog with no on-disk file.",
+      "reason": "Test relies on a file-based metadata catalog.",
       "paths": [
         "test/sql/general/default_path.test",
         "test/sql/general/metadata_parameters.test",
@@ -121,43 +120,43 @@
       ]
     },
     {
-      "reason": "Test requires the parquet extension to NOT be loaded so a CREATE TABLE AS fails with 'Missing Extension'; quack config statically links parquet.",
+      "reason": "Test requires the parquet extension to NOT be loaded.",
       "paths": [
         "test/sql/general/missing_parquet.test"
       ]
     },
     {
-      "reason": "Test asserts that DETACHing the metadata catalog breaks subsequent DDL on the DuckLake catalog. Quack metadata access is RPC-based via `quack_query(uri, ...)` and does not depend on the local METADATA_CATALOG attachment, so DDL keeps working after the detach.",
+      "reason": "FIXME: DETACH assertion" ,
       "paths": [
         "test/sql/general/detach_ducklake.test"
       ]
     },
     {
-      "reason": "Flaky under quack load: ducklake_add_data_files runs `parquet_full_metadata` over ~50 small files and the planner's PhysicalBatchCollector occasionally hits 'batch index N is present in both collections' during combine when sharing the task scheduler with the quack HTTP server. Stable in the default config and when run alone.",
+      "reason": "FIXME: FLAKY",
       "paths": [
         "test/sql/stats/filter_stress.test"
       ]
     },
     {
-      "reason": "Memory-pressure test fails on commit with 'could not allocate block of size 256.0 KiB (47.4 MiB/47.6 MiB used)' because the in-process quack server shares the same in-memory DuckDB instance, doubling the memory footprint and pushing the test over its tight memory limit.",
+      "reason": "Memory-pressure test fails on commit.",
       "paths": [
         "test/sql/insert/insert_wide_table_low_memory.test_slow"
       ]
     },
     {
-      "reason": "Slow flush test exceeds quack's HTTP server keep-alive while committing 200k rows: 'Timeout was reached error for HTTP POST to http://localhost:19999/quack'. The quack HttpQuackServer worker pool stalls under sustained load.",
+      "reason": "FIXME: Timeout was reached error for HTTP POST to http://localhost:19999/quack",
       "paths": [
         "test/sql/deletion_inlining/test_multiple_files_flush.test_slow"
       ]
     },
     {
-      "reason": "`COPY FROM DATABASE memory TO ducklake (SCHEMA)` copies tpch's metadata-side schema, which on quack already contains internal columns like `begin_snapshot`, tripping 'Column name \"begin_snapshot\" is reserved by DuckLake for internal use'.",
+      "reason": "FIXME: Column name \"begin_snapshot\" is reserved by DuckLake for internal use",
       "paths": [
         "test/sql/partitioning/partition_tpch.test_slow"
       ]
     },
     {
-      "reason": "Test queries that JOIN/sub-select across two metadata-catalog tables in one statement hit 'Not implemented Error: Multiple streaming scans or streaming scans + CTAS / insert in the same query are not currently supported' from the quack RPC scan. Independent of caching; needs quack-side support for multiple concurrent streaming scans per query.",
+      "reason": "FIXME: Not implemented Error: Multiple streaming scans or streaming scans + CTAS / insert in the same query are not currently supported",
       "paths": [
         "test/sql/add_files/add_files_hive_many_columns.test",
         "test/sql/add_files/add_files_hive_partition_cast.test",
@@ -189,7 +188,7 @@
       ]
     },
     {
-      "reason": "ATTACH OR REPLACE on the metadata catalog calls QuackCatalog::GetDBPath, which throws 'NotImplementedException: GetDBPath not implemented yet'.",
+      "reason": "FIXME: NotImplementedException: GetDBPath not implemented yet",
       "paths": [
         "test/sql/attach/attach_replace.test"
       ]

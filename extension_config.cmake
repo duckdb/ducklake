@@ -5,19 +5,18 @@ duckdb_extension_load(ducklake
         SOURCE_DIR ${CMAKE_CURRENT_LIST_DIR}
 )
 
-# quack's CMakeLists.txt expects headers from its own duckdb submodule, but
-# FetchContent does not initialize submodules. Provide the two needed paths
-# from the parent project's populated duckdb checkout instead.
-include_directories(
-        ${CMAKE_CURRENT_LIST_DIR}/duckdb/third_party/httplib
-        ${CMAKE_CURRENT_LIST_DIR}/duckdb/extension/autocomplete/include
-)
+if($ENV{ENABLE_QUACK})
+    include_directories(
+            ${CMAKE_CURRENT_LIST_DIR}/duckdb/third_party/httplib
+            ${CMAKE_CURRENT_LIST_DIR}/duckdb/extension/autocomplete/include
+    )
 
-duckdb_extension_load(quack
-        LOAD_TESTS
-        GIT_URL git@github.com:pdet/duckdb-quack.git
-        GIT_TAG d1870ae6b95c1a903c0d97548d637096a4bf789a
-)
+    duckdb_extension_load(quack
+            LOAD_TESTS
+            GIT_URL git@github.com:pdet/duckdb-quack.git
+            GIT_TAG d1870ae6b95c1a903c0d97548d637096a4bf789a
+    )
+endif()
 
 if(NOT DEFINED ENV{DISABLE_EXTENSIONS_FOR_TEST})
     duckdb_extension_load(icu)
@@ -30,6 +29,6 @@ if($ENV{ENABLE_SQLITE_SCANNER})
     include("${EXTENSION_CONFIG_BASE_DIR}/sqlite_scanner.cmake")
 endif()
 
-#if($ENV{ENABLE_POSTGRES_SCANNER})
+if($ENV{ENABLE_POSTGRES_SCANNER})
     include("${EXTENSION_CONFIG_BASE_DIR}/postgres_scanner.cmake")
-#endif()
+endif()
