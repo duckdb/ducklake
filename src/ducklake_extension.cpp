@@ -34,6 +34,8 @@ static void LoadInternal(ExtensionLoader &loader) {
 	config.AddExtensionOption("ducklake_default_data_inlining_row_limit",
 	                          "Default row limit for data inlining (0 disables inlining)", LogicalType::UBIGINT,
 	                          Value::UBIGINT(10), nullptr, SetScope::GLOBAL);
+	config.AddExtensionOption("ducklake_target_file_size", "Target file size for insertion and compaction",
+	                          LogicalType::VARCHAR, Value(), nullptr, SetScope::GLOBAL);
 	config.AddExtensionOption(
 	    "ducklake_write_deletion_vectors",
 	    "[EXPERIMENTAL] Write Iceberg V3 deletion vectors (puffin) instead of positional delete files (parquet)",

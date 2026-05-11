@@ -116,6 +116,8 @@ public:
 	idx_t DataInliningRowLimit(ClientContext &context, SchemaIndex schema_index, TableIndex table_index) const;
 	//! Returns the inlining limit (0 if the table is not eligible)
 	idx_t GetInliningLimit(ClientContext &context, DuckLakeTableEntry &table);
+	idx_t GetTargetFileSize(ClientContext &context, SchemaIndex schema_id, TableIndex table_id) const;
+	idx_t GetTargetFileSize(ClientContext &context, DuckLakeTableEntry &table) const;
 	string &Separator() {
 		return separator;
 	}

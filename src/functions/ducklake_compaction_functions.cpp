@@ -259,11 +259,7 @@ void DuckLakeCompactor::GenerateCompactions(DuckLakeTableEntry &table,
 	auto &metadata_manager = transaction.GetMetadataManager();
 	auto snapshot = transaction.GetSnapshot();
 
-	idx_t target_file_size = DuckLakeCatalog::DEFAULT_TARGET_FILE_SIZE;
-	string target_file_size_str;
-	if (catalog.TryGetConfigOption("target_file_size", target_file_size_str, table)) {
-		target_file_size = Value(target_file_size_str).DefaultCastAs(LogicalType::UBIGINT).GetValue<idx_t>();
-	}
+	idx_t target_file_size = catalog.GetTargetFileSize(context, table);
 
 	DuckLakeFileSizeOptions filter_options;
 	filter_options.min_file_size = options.min_file_size;
