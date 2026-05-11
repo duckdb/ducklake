@@ -1,6 +1,6 @@
 {
   "description": "Run DuckLake tests using a Quack RPC server as a catalog DBMS.",
-  "on_init": "LOAD httpfs; LOAD quack; CREATE OR REPLACE SECRET ducklake_test_quack (TYPE quack, TOKEN 'ducklake-test-token'); SELECT * FROM quack_serve('quack://localhost:19999/', token := 'ducklake-test-token');",
+  "on_init": "LOAD httpfs; LOAD quack; SET enable_progress_bar=false; CREATE OR REPLACE SECRET ducklake_test_quack (TYPE quack, TOKEN 'ducklake-test-token');",
   "autoloading": "none",
   "statically_loaded_extensions": [
     "core_functions",

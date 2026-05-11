@@ -167,7 +167,7 @@ private:
 
 void DuckLakeFileProcessor::ReadParquetFullMetadata(const string &glob, vector<DuckLakeDataFile> &written_files) {
 	auto result = transaction.Query(StringUtil::Format(R"(
-SELECT 
+SELECT
     list_transform(parquet_file_metadata, lambda x: struct_pack(
         file_name := x.file_name,
         num_rows := x.num_rows,

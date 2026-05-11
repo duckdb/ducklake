@@ -13,8 +13,9 @@ include_directories(
         ${CMAKE_CURRENT_LIST_DIR}/duckdb/extension/autocomplete/include
 )
 duckdb_extension_load(quack
+        LOAD_TESTS
         GIT_URL git@github.com:pdet/duckdb-quack.git
-        GIT_TAG dee5f675188e12105459a3dd07942a8ce5c22267
+        GIT_TAG 7737a5bd2e692f5c7e8f164270b69b0d01041210
 )
 
 if(NOT DEFINED ENV{DISABLE_EXTENSIONS_FOR_TEST})
@@ -28,6 +29,6 @@ if($ENV{ENABLE_SQLITE_SCANNER})
     include("${EXTENSION_CONFIG_BASE_DIR}/sqlite_scanner.cmake")
 endif()
 
-if($ENV{ENABLE_POSTGRES_SCANNER})
+#if($ENV{ENABLE_POSTGRES_SCANNER})
     include("${EXTENSION_CONFIG_BASE_DIR}/postgres_scanner.cmake")
-endif()
+#endif()
