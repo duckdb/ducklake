@@ -2612,7 +2612,11 @@ void DuckLakeTransaction::FlushChanges() {
 			if (res->HasError()) {
 				res->GetErrorObject().Throw("Failed to flush changes into DuckLake: ");
 			}
+			bool flushed_inlined = !flushed_inlined_tables.empty();
 			connection->Commit();
+			if (flushed_inlined) {
+				metadata_manager->DropEmptySupersededInlinedTables();
+			}
 			catalog_version = commit_snapshot.schema_version;
 
 			// finished writing

@@ -4516,6 +4516,53 @@ WHERE NOT EXISTS (
 	}
 }
 
+void DuckLakeMetadataManager::DropEmptySupersededInlinedTables() {
+	// Gather the tables that are empty and have a later schema version, as it will be safe to delete their
+	// inlined tables.
+	auto targets = transaction.Query(R"(
+SELECT idt.table_id, idt.schema_version, idt.table_name
+FROM {METADATA_CATALOG}.ducklake_inlined_data_tables idt
+JOIN duckdb_tables() dt
+    ON dt.database_name = {METADATA_CATALOG_NAME_LITERAL}
+   AND dt.table_name = idt.table_name
+WHERE idt.schema_version < (
+    SELECT MAX(idt2.schema_version)
+    FROM {METADATA_CATALOG}.ducklake_inlined_data_tables idt2
+    WHERE idt2.table_id = idt.table_id
+)
+AND dt.estimated_size = 0;)");
+	if (targets->HasError()) {
+		targets->GetErrorObject().Throw("Failed to identify empty superseded inlined-data tables in DuckLake: ");
+	}
+	string drops;
+	for (auto &row : *targets) {
+		auto table_id = row.GetValue<idx_t>(0);
+		auto schema_version = row.GetValue<idx_t>(1);
+		auto table_name = row.GetValue<string>(2);
+		drops += StringUtil::Format(
+		    "DELETE FROM {METADATA_CATALOG}.ducklake_inlined_data_tables WHERE table_id=%d AND schema_version=%d;"
+		    "DROP TABLE IF EXISTS {METADATA_CATALOG}.%s;",
+		    table_id, schema_version, SQLIdentifier(table_name));
+	}
+	if (drops.empty()) {
+		return;
+	}
+	auto res = transaction.Query(drops);
+	if (res->HasError()) {
+		res->GetErrorObject().Throw("Failed to drop superseded inlined-data tables in DuckLake: ");
+	}
+	// We also need to invalidate the existing schema versions in our catalog
+	auto &catalog = transaction.GetCatalog();
+	auto snapshot_versions =
+	    transaction.Query("SELECT DISTINCT schema_version FROM {METADATA_CATALOG}.ducklake_snapshot;");
+	if (snapshot_versions->HasError()) {
+		snapshot_versions->GetErrorObject().Throw("Failed to list schema versions for cache invalidation: ");
+	}
+	for (auto &row : *snapshot_versions) {
+		catalog.InvalidateSchemaCache(row.GetValue<idx_t>(0));
+	}
+}
+
 void DuckLakeMetadataManager::DeleteInlinedData(const DuckLakeInlinedTableInfo &inlined_table) {
 	auto result = transaction.Query(StringUtil::Format(R"(
 		DELETE FROM {METADATA_CATALOG}.%s
