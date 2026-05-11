@@ -65,6 +65,11 @@ string QuackMetadataManager::MetadataExistsQuery() const {
 	       "WHERE table_name = 'ducklake_metadata' AND table_schema = {METADATA_SCHEMA_NAME_LITERAL}";
 }
 
+void QuackMetadataManager::ClearCache() {
+	string clear = "CALL quack_clear_cache();";
+	transaction.ExecuteRaw(clear);
+}
+
 bool QuackMetadataManager::MetadataExists() {
 	auto query = MetadataExistsQuery();
 	auto result = Query(query);

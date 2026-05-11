@@ -113,6 +113,18 @@ public:
 	virtual bool SupportsAppender() const {
 		return true;
 	}
+
+	virtual void ClearCache() {
+	}
+
+	void MarkPendingCacheClear() {
+		pending_cache_clear = true;
+	}
+	bool TakePendingCacheClear() {
+		bool pending = pending_cache_clear;
+		pending_cache_clear = false;
+		return pending;
+	}
 	//! Maximum identifier length in bytes supported by this backend
 	virtual idx_t MaxIdentifierLength() const {
 		return NumericLimits<idx_t>::Maximum();
@@ -366,6 +378,7 @@ protected:
 	mutex paths_lock;
 	map<SchemaIndex, string> schema_paths;
 	map<TableIndex, string> table_paths;
+	bool pending_cache_clear = false;
 };
 
 } // namespace duckdb

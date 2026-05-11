@@ -2606,6 +2606,9 @@ void DuckLakeTransaction::FlushChanges() {
 			if (res->HasError()) {
 				res->GetErrorObject().Throw("Failed to flush changes into DuckLake: ");
 			}
+			if (metadata_manager->TakePendingCacheClear()) {
+				metadata_manager->ClearCache();
+			}
 			connection->Commit();
 			catalog_version = commit_snapshot.schema_version;
 

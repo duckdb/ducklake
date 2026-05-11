@@ -2249,6 +2249,9 @@ string DuckLakeMetadataManager::GetInlinedTableQuery(const DuckLakeTableInfo &ta
 		}
 		columns += StringUtil::Format("%s %s", SQLIdentifier(col.name), GetColumnType(col));
 	}
+	// Every ducklake_inlined_data_<tid>_<ver> CREATE TABLE flows through here; flag the commit
+	// so backends with a cached catalog snapshot refresh after the batch executes.
+	MarkPendingCacheClear();
 	return StringUtil::Format("CREATE TABLE IF NOT EXISTS {METADATA_CATALOG}.%s(row_id BIGINT, begin_snapshot BIGINT, "
 	                          "end_snapshot BIGINT, %s);",
 	                          SQLIdentifier(table_name), columns);
@@ -2724,6 +2727,7 @@ string DuckLakeMetadataManager::GetInlinedDeletionTableName(TableIndex table_id,
 		}
 		// Only cache per-transaction — the CREATE is transactional and may be rolled back
 		delete_inlined_table_cache.insert(table_id.index);
+		ClearCache();
 		return table_name;
 	}
 

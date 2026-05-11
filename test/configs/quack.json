@@ -155,6 +155,44 @@
       "paths": [
         "test/sql/partitioning/partition_tpch.test_slow"
       ]
+    },
+    {
+      "reason": "Test queries that JOIN/sub-select across two metadata-catalog tables in one statement hit 'Not implemented Error: Multiple streaming scans or streaming scans + CTAS / insert in the same query are not currently supported' from the quack RPC scan. Independent of caching; needs quack-side support for multiple concurrent streaming scans per query.",
+      "paths": [
+        "test/sql/add_files/add_files_hive_many_columns.test",
+        "test/sql/add_files/add_files_hive_partition_cast.test",
+        "test/sql/add_files/add_files_nested_list_struct_nulls.test",
+        "test/sql/alter/add_column_default_stats.test",
+        "test/sql/compaction/compaction_partitioned_non_adjacent.test",
+        "test/sql/compaction/compaction_partitioned_table.test",
+        "test/sql/compaction/merge_rewrite_partial_file_info.test",
+        "test/sql/default/all_types_column_default_stats.test",
+        "test/sql/metadata/appender_data_files.test",
+        "test/sql/metadata/appender_partition_values.test",
+        "test/sql/metadata/appender_variant_stats.test",
+        "test/sql/partitioning/bucket_partitioning.test",
+        "test/sql/partitioning/merge_adjacent_null_partition.test",
+        "test/sql/rewrite_data_files/test_rewrite_partitioning.test",
+        "test/sql/sorted_table/merge_adjacent_sorted_basic.test",
+        "test/sql/sorted_table/merge_adjacent_sorted_drop_recreate.test",
+        "test/sql/sorted_table/merge_adjacent_sorted_expression.test",
+        "test/sql/sorted_table/merge_adjacent_sorted_macro_expression.test",
+        "test/sql/sorted_table/merge_adjacent_sorted_macro_expression_transaction.test",
+        "test/sql/sorted_table/merge_adjacent_sorted_nested_expression.test",
+        "test/sql/sorted_table/merge_adjacent_sorted_repeated.test",
+        "test/sql/sorted_table/merge_adjacent_sorted_reset.test",
+        "test/sql/sorted_table/merge_adjacent_sorted_transaction_alter_table_unrelated.test",
+        "test/sql/sorted_table/merge_adjacent_sorted_transaction_renamed.test",
+        "test/sql/sorted_table/schema_version_same_transaction.test",
+        "test/sql/sorted_table/set_sorted_by_rollback_basic.test",
+        "test/sql/sorted_table/set_sorted_by_rollback_mixed.test"
+      ]
+    },
+    {
+      "reason": "ATTACH OR REPLACE on the metadata catalog calls QuackCatalog::GetDBPath, which throws 'NotImplementedException: GetDBPath not implemented yet'.",
+      "paths": [
+        "test/sql/attach/attach_replace.test"
+      ]
     }
   ]
 }
