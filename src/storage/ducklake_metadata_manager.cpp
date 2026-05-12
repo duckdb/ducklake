@@ -1299,6 +1299,17 @@ FilterSQLResult DuckLakeMetadataManager::ConvertFilterPushdownToSQL(const Filter
 	return result;
 }
 
+string DuckLakeMetadataManager::GenerateFileColumnStatsCTEBody(const CTERequirement &req, TableIndex table_id) {
+	string select_list = "data_file_id";
+	for (const auto &stat : req.referenced_stats) {
+		select_list += ", " + stat;
+	}
+	return StringUtil::Format("  SELECT %s\n"
+	                          "  FROM {METADATA_CATALOG}.ducklake_file_column_stats\n"
+	                          "  WHERE column_id = %d AND table_id = %d\n",
+	                          select_list, req.column_field_index, table_id.index);
+}
+
 string
 DuckLakeMetadataManager::GenerateCTESectionFromRequirements(const unordered_map<idx_t, CTERequirement> &requirements,
                                                             TableIndex table_id) {
@@ -1317,18 +1328,9 @@ DuckLakeMetadataManager::GenerateCTESectionFromRequirements(const unordered_map<
 		}
 		first_cte = false;
 
-		string select_list = "data_file_id";
-		for (const auto &stat : req.referenced_stats) {
-			select_list += ", " + stat;
-		}
-
 		string materialized_hint = (req.reference_count > 1) ? " AS MATERIALIZED" : " AS NOT MATERIALIZED";
-
 		cte_section += StringUtil::Format("col_%d_stats%s (\n", req.column_field_index, materialized_hint.c_str());
-		cte_section += StringUtil::Format("  SELECT %s\n", select_list.c_str());
-		cte_section += "  FROM {METADATA_CATALOG}.ducklake_file_column_stats\n";
-		cte_section +=
-		    StringUtil::Format("  WHERE column_id = %d AND table_id = %d\n", req.column_field_index, table_id.index);
+		cte_section += GenerateFileColumnStatsCTEBody(req, table_id);
 		cte_section += ")";
 	}
 
