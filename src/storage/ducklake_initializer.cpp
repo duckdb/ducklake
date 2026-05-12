@@ -3,7 +3,6 @@
 #include "duckdb/storage/data_table.hpp"
 #include "duckdb/common/types/column/column_data_collection.hpp"
 #include "duckdb/common/types/uuid.hpp"
-#include "duckdb/common/string_util.hpp"
 #include "duckdb/main/connection.hpp"
 #include "duckdb/storage/storage_manager.hpp"
 
@@ -17,20 +16,6 @@ namespace duckdb {
 DuckLakeInitializer::DuckLakeInitializer(ClientContext &context, DuckLakeCatalog &catalog, DuckLakeOptions &options_p)
     : context(context), catalog(catalog), options(options_p) {
 	InitializeDataPath();
-}
-
-static string FormatMetadataParameter(const Value &value) {
-	// metadata_parameters arrives as MAP<VARCHAR, VARCHAR>, so boolean-looking values
-	// like "true"/"false" would otherwise be emitted as quoted SQL strings ('true')
-	// and the inner storage extension's binder cannot coerce those to BOOLEAN.
-	// Strip the quotes for true/false so they bind as boolean literals downstream.
-	if (!value.IsNull() && value.type().id() == LogicalTypeId::VARCHAR) {
-		auto lower = StringUtil::Lower(StringValue::Get(value));
-		if (lower == "true" || lower == "false") {
-			return lower;
-		}
-	}
-	return value.ToSQLString();
 }
 
 string DuckLakeInitializer::GetAttachOptions() {
@@ -48,7 +33,7 @@ string DuckLakeInitializer::GetAttachOptions() {
 		}
 	}
 	for (auto &option : options.metadata_parameters) {
-		attach_options.push_back(option.first + " " + FormatMetadataParameter(option.second));
+		attach_options.push_back(option.first + " " + option.second.ToSQLString());
 	}
 	const string metadata_type = catalog.MetadataType();
 	if (metadata_type.empty() || metadata_type == "duckdb") {
