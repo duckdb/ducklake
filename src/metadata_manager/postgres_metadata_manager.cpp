@@ -127,15 +127,8 @@ string PostgresMetadataManager::GetLatestSnapshotQuery() const {
 	)";
 }
 
-bool PostgresMetadataManager::HasFileColumnStatsIndex() {
-	if (file_column_stats_index_checked) {
-		return file_column_stats_index_exists;
-	}
-	file_column_stats_index_checked = true;
-
-	// Look for any index on ducklake_file_column_stats whose key columns include both
-	// table_id and column_id. Such an index lets PostgreSQL serve our CTE filter
-	// (WHERE table_id = ? AND column_id = ?) as an index scan instead of a full table copy.
+bool PostgresMetadataManager::DoesFileColumnStatsIndexExists() {
+	// Check is ColumStats has a usable index for postgres
 	string check_query = R"(
 		SELECT * FROM postgres_query({METADATA_CATALOG_NAME_LITERAL},
 			'SELECT 1
@@ -153,16 +146,15 @@ bool PostgresMetadataManager::HasFileColumnStatsIndex() {
 	)";
 	auto result = transaction.Query(check_query);
 	if (result->HasError()) {
-		// On error (e.g. permissions), fall back to the standard CTE path.
+		// If the above query errors, we just default to the standard duckdb query later on
 		return false;
 	}
 	auto chunk = result->Fetch();
-	file_column_stats_index_exists = chunk && chunk->size() > 0;
-	return file_column_stats_index_exists;
+	return chunk && chunk->size() > 0;
 }
 
 string PostgresMetadataManager::GenerateFileColumnStatsCTEBody(const CTERequirement &req, TableIndex table_id) {
-	if (!HasFileColumnStatsIndex()) {
+	if (!transaction.GetCatalog().HasFileColumnStatsIndex()) {
 		// If we dont have an index we do a duckdb scan
 		return DuckLakeMetadataManager::GenerateFileColumnStatsCTEBody(req, table_id);
 	}

@@ -250,6 +250,10 @@ public:
 	//! Cache the result of an inlined deletion table existence check
 	void CacheInlinedDeletionTableResult(TableIndex table_id, DuckLakeSnapshot snapshot, bool exists);
 
+	bool HasFileColumnStatsIndex() const {
+		return file_column_stats_index_present;
+	}
+
 private:
 	void DropSchema(ClientContext &context, DropInfo &info) override;
 	unique_ptr<DuckLakeCatalogSet> LoadSchemaForSnapshot(DuckLakeTransaction &transaction, DuckLakeSnapshot snapshot);
@@ -301,6 +305,8 @@ private:
 	optional_idx last_committed_snapshot;
 	//! Optional callback for instrumenting metadata queries
 	QueryCallback query_callback;
+	//! If index used for column stats exists, set once at attach time.
+	bool file_column_stats_index_present = false;
 };
 
 } // namespace duckdb

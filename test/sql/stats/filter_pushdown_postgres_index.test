@@ -8,7 +8,6 @@ require parquet
 
 require postgres_scanner
 
-# Only meaningful on a Postgres metadata backend.
 require-env DUCKLAKE_CI
 
 test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
@@ -74,10 +73,13 @@ WHERE query LIKE '%postgres_query(%' AND query LIKE '%ducklake_file_column_stats
 ----
 true
 
-# Drop Index midsession
+# Drop Index midsession (without re-attach)
 
 statement ok
 CALL postgres_execute('__ducklake_metadata_ducklake', 'DROP INDEX IF EXISTS idx_fcs_table_col')
+
+statement ok
+CALL truncate_duckdb_logs()
 
 query I
 SELECT COUNT(*) FROM ducklake.t WHERE i > 100998
@@ -88,3 +90,42 @@ query I
 SELECT COUNT(*) FROM ducklake.t WHERE i BETWEEN 500050 AND 500100
 ----
 51
+
+# We still use the index-ed query, as attach was not performed, but results are ok
+query I
+SELECT COUNT(*) > 0 FROM duckdb_logs_parsed('DuckLakeMetadata')
+WHERE query LIKE '%postgres_query(%' AND query LIKE '%ducklake_file_column_stats%'
+  AND query LIKE '%data_file_id%'
+----
+true
+
+
+# DETACH+ATTACH forces the probe to re-run and observe the missing index. After this,
+# the file-column-stats CTE drops the postgres_query() wrapper.
+
+statement ok
+DETACH ducklake
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/ducklake_pg_index_files', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CALL truncate_duckdb_logs()
+
+query I
+SELECT COUNT(*) FROM ducklake.t WHERE i > 100998
+----
+1001
+
+query I
+SELECT COUNT(*) FROM ducklake.t WHERE i BETWEEN 500050 AND 500100
+----
+51
+
+# Fresh attach reprobed and saw no index -- fall back to the standard CTE (no postgres_query() wrapper).
+query I
+SELECT COUNT(*) FROM duckdb_logs_parsed('DuckLakeMetadata')
+WHERE query LIKE '%postgres_query(%' AND query LIKE '%ducklake_file_column_stats%'
+  AND query LIKE '%data_file_id%'
+----
+0

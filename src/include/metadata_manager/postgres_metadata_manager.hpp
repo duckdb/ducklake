@@ -37,18 +37,15 @@ public:
 
 	unique_ptr<QueryResult> Query(DuckLakeSnapshot snapshot, string &query) override;
 
+	//! Look up whether ducklake_file_column_stats has a usable index.
+	bool DoesFileColumnStatsIndexExists() override;
+
 protected:
 	string GetLatestSnapshotQuery() const override;
 	string GenerateFileColumnStatsCTEBody(const CTERequirement &req, TableIndex table_id) override;
 
 private:
 	unique_ptr<QueryResult> ExecuteQuery(DuckLakeSnapshot snapshot, string &query, string command);
-	//! Lazily check whether ducklake_file_column_stats has a usable index covering (table_id, column_id).
-	//! Cached for the lifetime of this metadata manager (i.e. the enclosing transaction).
-	bool HasFileColumnStatsIndex();
-
-	bool file_column_stats_index_checked = false;
-	bool file_column_stats_index_exists = false;
 };
 
 } // namespace duckdb

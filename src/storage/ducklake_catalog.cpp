@@ -100,6 +100,8 @@ void DuckLakeCatalog::FinalizeLoad(optional_ptr<ClientContext> context) {
 	}
 	DuckLakeInitializer initializer(*context, *this, options);
 	initializer.Initialize();
+	auto &transaction = DuckLakeTransaction::Get(*context, *this);
+	file_column_stats_index_present = transaction.GetMetadataManager().DoesFileColumnStatsIndexExists();
 	db.tags["data_path"] = DataPath();
 	if (con) {
 		con->Commit();
