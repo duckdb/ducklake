@@ -41,11 +41,6 @@ public:
 
 protected:
 	string GetLatestSnapshotQuery() const override;
-
-	string ListAggregation(const vector<pair<string, string>> &fields) const override;
-	vector<DuckLakeTag> LoadTags(const Value &tag_map) const override;
-	vector<DuckLakeInlinedTableInfo> LoadInlinedDataTables(const Value &list) const override;
-	vector<DuckLakeMacroImplementation> LoadMacroImplementations(const Value &list) const override;
 	string MetadataExistsQuery() const override;
 
 private:

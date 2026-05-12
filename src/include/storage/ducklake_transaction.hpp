@@ -168,11 +168,7 @@ public:
 	}
 	unique_ptr<QueryResult> Query(DuckLakeSnapshot snapshot, string query);
 	unique_ptr<QueryResult> Query(string query);
-	//! Execute SQL on the metadata connection without placeholder substitution or
-	//! metadata-manager wrapping. This is the bottom of the stack — every metadata
-	//! query lands here. Default DuckLakeMetadataManager::Query calls it after
-	//! substituting placeholders; QuackMetadataManager calls it with the SQL wrapped
-	//! in `CALL system.main.quack_query(...)`.
+	//! Execute SQL on the metadata connection without placeholder substitution or metadata-manager wrapping.
 	unique_ptr<QueryResult> ExecuteRaw(string query);
 	Connection &GetConnection();
 

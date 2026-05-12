@@ -148,8 +148,6 @@ unique_ptr<QueryResult> DuckLakeMetadataManager::AttachMetadata(const string &at
 }
 
 string DuckLakeMetadataManager::MetadataExistsQuery() const {
-	// Probe the metadata table directly so we don't iterate every attached catalog via duckdb_tables();
-	// scanning siblings would surface schema-load errors from a corrupted DuckLake attached alongside this one.
 	return "SELECT NULL FROM {METADATA_CATALOG}.ducklake_metadata LIMIT 1";
 }
 
@@ -2249,8 +2247,7 @@ string DuckLakeMetadataManager::GetInlinedTableQuery(const DuckLakeTableInfo &ta
 		}
 		columns += StringUtil::Format("%s %s", SQLIdentifier(col.name), GetColumnType(col));
 	}
-	// Every ducklake_inlined_data_<tid>_<ver> CREATE TABLE flows through here; flag the commit
-	// so backends with a cached catalog snapshot refresh after the batch executes.
+	// We created a table here, flag we need to clear our cache at commit
 	MarkPendingCacheClear();
 	return StringUtil::Format("CREATE TABLE IF NOT EXISTS {METADATA_CATALOG}.%s(row_id BIGINT, begin_snapshot BIGINT, "
 	                          "end_snapshot BIGINT, %s);",
