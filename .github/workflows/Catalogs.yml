@@ -70,6 +70,10 @@ jobs:
       run: |
         make release
 
+    - name: Test Quack
+      run: |
+        python3 scripts/run_quack_tests.py --slow
+
     - name: Test SQLite
       run: |
         build/release/test/unittest --test-config test/configs/sqlite.json --test-dir ./ "test/sql/*"
@@ -89,3 +93,4 @@ jobs:
         cp "$REPO_DIR/postgres_scanner.duckdb_extension" "$EXT_DIR/"
         createdb ducklakedb
         build/release/test/unittest --test-config test/configs/postgres.json --test-dir ./ "test/sql/*"
+

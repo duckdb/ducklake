@@ -1,0 +1,197 @@
+{
+  "description": "Run DuckLake tests using a Quack RPC server as a catalog DBMS.",
+  "on_init": "LOAD httpfs; LOAD quack; SET enable_progress_bar=false; CREATE OR REPLACE SECRET ducklake_test_quack (TYPE quack, TOKEN 'ducklake-test-token');",
+  "autoloading": "none",
+  "statically_loaded_extensions": [
+    "core_functions",
+    "parquet",
+    "ducklake",
+    "httpfs",
+    "icu"
+  ],
+  "skip_error_messages": [
+    "__never_match__"
+  ],
+  "test_env": [
+    {
+      "env_name": "DUCKLAKE_CONNECTION",
+      "env_value": "quack:localhost:19999"
+    }
+  ],
+  "skip_tests": [
+    {
+      "reason": "Bespoke test starts and stops its own quack server",
+      "paths": [
+        "test/sql/quack/quack_basic.test"
+      ]
+    },
+    {
+      "reason": "Test only for SQLite as catalog",
+      "paths": [
+        "test/sql/metadata/ducklake_settings_sqlite.test"
+      ]
+    },
+    {
+      "reason": "Test only for Postgres as catalog",
+      "paths": [
+        "test/sql/metadata/ducklake_settings_postgres.test"
+      ]
+    },
+    {
+      "reason": "Modifies connection string",
+      "paths": [
+        "test/sql/catalog/quoted_identifiers.test",
+        "test/sql/stats/count_star_optimization_file_operations.test"
+      ]
+    },
+    {
+      "reason": "Migration tests assume specific catalog backend",
+      "paths": [
+        "test/sql/migration/v01.test",
+        "test/sql/migration/v01_partitioned.test"
+      ]
+    },
+    {
+      "reason": "FIXME:Uses SET immediate_transaction_mode=true with concurrent connections",
+      "paths": [
+        "test/sql/compaction/compaction_delete_conflict.test",
+        "test/sql/rewrite_data_files/test_rewrite_transaction_conflict.test",
+        "test/sql/stats/global_stats_transactions.test",
+        "test/sql/transaction/concurrent_table_creation.test",
+        "test/sql/transaction/transaction_conflict_cleanup.test",
+        "test/sql/transaction/transaction_conflict_inlining.test",
+        "test/sql/transaction/transaction_conflicts.test",
+        "test/sql/transaction/transaction_conflicts_delete.test",
+        "test/sql/transaction/transaction_conflicts_view.test"
+      ]
+    },
+    {
+      "reason": "Test issues UPDATE against the metadata catalog directly",
+      "paths": [
+        "test/sql/delete/delete_legacy_missing_mapping_after_rename_add_files.test"
+      ]
+    },
+    {
+      "reason": "FIXME: quack catalog does not implement GetDatabaseSize",
+      "paths": [
+        "test/sql/general/database_size.test"
+      ]
+    },
+    {
+      "reason": "Test appends a suffix to DUCKLAKE_CONNECTION",
+      "paths": [
+        "test/sql/data_inlining/partition_inlining.test"
+      ]
+    },
+    {
+      "reason": "MinIo",
+      "paths": [
+        "test/sql/delete/delete_metadata.test",
+        "test/sql/general/prepared_statement.test"
+      ]
+    },
+    {
+      "reason": "require spatial",
+      "paths": [
+        "test/sql/sorted_table/merge_adjacent_sorted_spatial_hilbert.test"
+      ]
+    },
+    {
+      "reason": "require postgres_scanner",
+      "paths": [
+        "test/sql/autoloading/autoload_data_path.test",
+        "test/sql/data_inlining/postgres_identifier_limit.test",
+        "test/sql/issues/issue_sqlite_snapshot_time.test",
+        "test/sql/metadata/ducklake_settings_minio.test"
+      ]
+    },
+    {
+      "reason": "ROLLBACK after ducklake_flush_inlined_data does not restore ducklake_inlined_delete_* rows on the quack-backed metadata catalog (line 162 expects 15 rows after rollback, gets 0). Each `CALL quack_query(uri, sql)` opens a fresh server-side connection that auto-commits independently of the outer DuckLake transaction. Proper fix needs metadata operations routed through a transaction-scoped server-side connection (e.g., reuse the local QuackCatalog's connection_id via quack_query_by_name and have the catalog's QuackTransaction lifecycle drive server-side BEGIN/COMMIT/ROLLBACK).",
+      "paths": [
+        "test/sql/deletion_inlining/test_deletion_inlining_transaction.test"
+      ]
+    },
+    {
+      "reason": "Test relies on a file-based metadata catalog.",
+      "paths": [
+        "test/sql/general/default_path.test",
+        "test/sql/general/metadata_parameters.test",
+        "test/sql/remove_orphans/metadata_in_data_path.test"
+      ]
+    },
+    {
+      "reason": "Test requires the parquet extension to NOT be loaded.",
+      "paths": [
+        "test/sql/general/missing_parquet.test"
+      ]
+    },
+    {
+      "reason": "FIXME: DETACH assertion" ,
+      "paths": [
+        "test/sql/general/detach_ducklake.test"
+      ]
+    },
+    {
+      "reason": "FIXME: FLAKY",
+      "paths": [
+        "test/sql/stats/filter_stress.test"
+      ]
+    },
+    {
+      "reason": "Memory-pressure test fails on commit.",
+      "paths": [
+        "test/sql/insert/insert_wide_table_low_memory.test_slow"
+      ]
+    },
+    {
+      "reason": "FIXME: Timeout was reached error for HTTP POST to http://localhost:19999/quack",
+      "paths": [
+        "test/sql/deletion_inlining/test_multiple_files_flush.test_slow"
+      ]
+    },
+    {
+      "reason": "FIXME: Column name \"begin_snapshot\" is reserved by DuckLake for internal use",
+      "paths": [
+        "test/sql/partitioning/partition_tpch.test_slow"
+      ]
+    },
+    {
+      "reason": "FIXME: Not implemented Error: Multiple streaming scans or streaming scans + CTAS / insert in the same query are not currently supported",
+      "paths": [
+        "test/sql/add_files/add_files_hive_many_columns.test",
+        "test/sql/add_files/add_files_hive_partition_cast.test",
+        "test/sql/add_files/add_files_nested_list_struct_nulls.test",
+        "test/sql/alter/add_column_default_stats.test",
+        "test/sql/compaction/compaction_partitioned_non_adjacent.test",
+        "test/sql/compaction/compaction_partitioned_table.test",
+        "test/sql/compaction/merge_rewrite_partial_file_info.test",
+        "test/sql/default/all_types_column_default_stats.test",
+        "test/sql/metadata/appender_data_files.test",
+        "test/sql/metadata/appender_partition_values.test",
+        "test/sql/metadata/appender_variant_stats.test",
+        "test/sql/partitioning/bucket_partitioning.test",
+        "test/sql/partitioning/merge_adjacent_null_partition.test",
+        "test/sql/rewrite_data_files/test_rewrite_partitioning.test",
+        "test/sql/sorted_table/merge_adjacent_sorted_basic.test",
+        "test/sql/sorted_table/merge_adjacent_sorted_drop_recreate.test",
+        "test/sql/sorted_table/merge_adjacent_sorted_expression.test",
+        "test/sql/sorted_table/merge_adjacent_sorted_macro_expression.test",
+        "test/sql/sorted_table/merge_adjacent_sorted_macro_expression_transaction.test",
+        "test/sql/sorted_table/merge_adjacent_sorted_nested_expression.test",
+        "test/sql/sorted_table/merge_adjacent_sorted_repeated.test",
+        "test/sql/sorted_table/merge_adjacent_sorted_reset.test",
+        "test/sql/sorted_table/merge_adjacent_sorted_transaction_alter_table_unrelated.test",
+        "test/sql/sorted_table/merge_adjacent_sorted_transaction_renamed.test",
+        "test/sql/sorted_table/schema_version_same_transaction.test",
+        "test/sql/sorted_table/set_sorted_by_rollback_basic.test",
+        "test/sql/sorted_table/set_sorted_by_rollback_mixed.test"
+      ]
+    },
+    {
+      "reason": "FIXME: NotImplementedException: GetDBPath not implemented yet",
+      "paths": [
+        "test/sql/attach/attach_replace.test"
+      ]
+    }
+  ]
+}
