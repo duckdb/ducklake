@@ -1101,7 +1101,8 @@ string DuckLakeMetadataManager::CastStatsToTarget(const string &stats, const Log
 }
 
 string DuckLakeMetadataManager::CastColumnToTarget(const string &column, const LogicalType &type) {
-	return column + "::" + type.ToString();
+	// ANSI CAST(...) — same reason as elsewhere: SQLite rejects `::` casts.
+	return "CAST(" + column + " AS " + type.ToString() + ")";
 }
 
 string DuckLakeMetadataManager::GenerateConstantFilter(const ConstantFilter &constant_filter, const LogicalType &type,
@@ -1322,6 +1323,17 @@ FilterSQLResult DuckLakeMetadataManager::ConvertFilterPushdownToSQL(const Filter
 	return result;
 }
 
+string DuckLakeMetadataManager::GenerateFileColumnStatsCTEBody(const CTERequirement &req, TableIndex table_id) {
+	string select_list = "data_file_id";
+	for (const auto &stat : req.referenced_stats) {
+		select_list += ", " + stat;
+	}
+	return StringUtil::Format("  SELECT %s\n"
+	                          "  FROM {METADATA_CATALOG}.ducklake_file_column_stats\n"
+	                          "  WHERE column_id = %d AND table_id = %d\n",
+	                          select_list, req.column_field_index, table_id.index);
+}
+
 string
 DuckLakeMetadataManager::GenerateCTESectionFromRequirements(const unordered_map<idx_t, CTERequirement> &requirements,
                                                             TableIndex table_id) {
@@ -1340,18 +1352,9 @@ DuckLakeMetadataManager::GenerateCTESectionFromRequirements(const unordered_map<
 		}
 		first_cte = false;
 
-		string select_list = "data_file_id";
-		for (const auto &stat : req.referenced_stats) {
-			select_list += ", " + stat;
-		}
-
 		string materialized_hint = (req.reference_count > 1) ? " AS MATERIALIZED" : " AS NOT MATERIALIZED";
-
 		cte_section += StringUtil::Format("col_%d_stats%s (\n", req.column_field_index, materialized_hint.c_str());
-		cte_section += StringUtil::Format("  SELECT %s\n", select_list.c_str());
-		cte_section += "  FROM {METADATA_CATALOG}.ducklake_file_column_stats\n";
-		cte_section +=
-		    StringUtil::Format("  WHERE column_id = %d AND table_id = %d\n", req.column_field_index, table_id.index);
+		cte_section += GenerateFileColumnStatsCTEBody(req, table_id);
 		cte_section += ")";
 	}
 
@@ -4029,12 +4032,17 @@ string DuckLakeMetadataManager::UpdateGlobalTableStats(const DuckLakeGlobalStats
 		    "UPDATE {METADATA_CATALOG}.ducklake_table_stats SET record_count=%d, file_size_bytes=%d, "
 		    "next_row_id=%d WHERE table_id=%d;",
 		    stats.record_count, stats.table_size_bytes, stats.next_row_id, stats.table_id.index);
+		// Use ANSI CAST(... AS BOOLEAN) instead of the PostgreSQL-flavored
+		// `::boolean` operator. Both DuckDB and Postgres accept ANSI CAST,
+		// and SQLite's parser rejects `::` outright (SQLITE_ERROR:
+		// unrecognized token ":"), which breaks SQLite-backed metadata
+		// backends that ship this batch directly to SQLite.
 		batch_query += StringUtil::Format(R"(
 WITH new_values(tid, cid, new_contains_null, new_contains_nan, new_min, new_max, new_extra_stats) AS (
 VALUES %s
 )
 UPDATE {METADATA_CATALOG}.ducklake_table_column_stats
-SET contains_null=new_contains_null::boolean, contains_nan=new_contains_nan::boolean, min_value=new_min, max_value=new_max, extra_stats=new_extra_stats
+SET contains_null=CAST(new_contains_null AS BOOLEAN), contains_nan=CAST(new_contains_nan AS BOOLEAN), min_value=new_min, max_value=new_max, extra_stats=new_extra_stats
 FROM new_values
 WHERE table_id=tid AND column_id=cid;
 )",
@@ -4487,6 +4495,22 @@ VALUES %s;
 
 	// delete based on table id -> ducklake_table_stats, ducklake_table_column_stats, ducklake_partition_info
 	if (!deleted_table_ids.empty()) {
+		// Collect orphaned_inlined tables
+		vector<string> inlined_tables_to_drop;
+		{
+			auto result = transaction.Query(StringUtil::Format(R"(
+SELECT table_name
+FROM {METADATA_CATALOG}.ducklake_inlined_data_tables
+WHERE table_id IN (%s);)",
+			                                                   deleted_table_ids));
+			if (result->HasError()) {
+				result->GetErrorObject().Throw("Failed to read ducklake_inlined_data_tables for cleanup in DuckLake: ");
+			}
+			for (auto &row : *result) {
+				inlined_tables_to_drop.push_back(row.GetValue<string>(0));
+			}
+		}
+
 		tables_to_delete_from = {
 		    "ducklake_table",           "ducklake_table_stats",         "ducklake_table_column_stats",
 		    "ducklake_partition_info",  "ducklake_partition_column",    "ducklake_column",
@@ -4499,6 +4523,15 @@ WHERE table_id IN (%s);)",
 			                                                   delete_tbl, deleted_table_ids));
 			if (result->HasError()) {
 				result->GetErrorObject().Throw("Failed to delete from " + delete_tbl + " in DuckLake: ");
+			}
+		}
+
+		// Drop orphaned inlined tables
+		for (auto &inlined_table_name : inlined_tables_to_drop) {
+			auto result = transaction.Query(
+			    StringUtil::Format("DROP TABLE IF EXISTS {METADATA_CATALOG}.%s;", SQLIdentifier(inlined_table_name)));
+			if (result->HasError()) {
+				result->GetErrorObject().Throw("Failed to drop inlined-data table in DuckLake: ");
 			}
 		}
 	}
@@ -4545,6 +4578,53 @@ WHERE NOT EXISTS (
 		if (result->HasError()) {
 			result->GetErrorObject().Throw("Failed to delete from ducklake_name_mapping in DuckLake: ");
 		}
+	}
+}
+
+void DuckLakeMetadataManager::DropEmptySupersededInlinedTables() {
+	// Gather the tables that are empty and have a later schema version, as it will be safe to delete their
+	// inlined tables.
+	auto targets = transaction.Query(R"(
+SELECT idt.table_id, idt.schema_version, idt.table_name
+FROM {METADATA_CATALOG}.ducklake_inlined_data_tables idt
+JOIN duckdb_tables() dt
+    ON dt.database_name = {METADATA_CATALOG_NAME_LITERAL}
+   AND dt.table_name = idt.table_name
+WHERE idt.schema_version < (
+    SELECT MAX(idt2.schema_version)
+    FROM {METADATA_CATALOG}.ducklake_inlined_data_tables idt2
+    WHERE idt2.table_id = idt.table_id
+)
+AND dt.estimated_size = 0;)");
+	if (targets->HasError()) {
+		targets->GetErrorObject().Throw("Failed to identify empty superseded inlined-data tables in DuckLake: ");
+	}
+	string drops;
+	for (auto &row : *targets) {
+		auto table_id = row.GetValue<idx_t>(0);
+		auto schema_version = row.GetValue<idx_t>(1);
+		auto table_name = row.GetValue<string>(2);
+		drops += StringUtil::Format(
+		    "DELETE FROM {METADATA_CATALOG}.ducklake_inlined_data_tables WHERE table_id=%d AND schema_version=%d;"
+		    "DROP TABLE IF EXISTS {METADATA_CATALOG}.%s;",
+		    table_id, schema_version, SQLIdentifier(table_name));
+	}
+	if (drops.empty()) {
+		return;
+	}
+	auto res = transaction.Query(drops);
+	if (res->HasError()) {
+		res->GetErrorObject().Throw("Failed to drop superseded inlined-data tables in DuckLake: ");
+	}
+	// We also need to invalidate the existing schema versions in our catalog
+	auto &catalog = transaction.GetCatalog();
+	auto snapshot_versions =
+	    transaction.Query("SELECT DISTINCT schema_version FROM {METADATA_CATALOG}.ducklake_snapshot;");
+	if (snapshot_versions->HasError()) {
+		snapshot_versions->GetErrorObject().Throw("Failed to list schema versions for cache invalidation: ");
+	}
+	for (auto &row : *snapshot_versions) {
+		catalog.InvalidateSchemaCache(row.GetValue<idx_t>(0));
 	}
 }
 

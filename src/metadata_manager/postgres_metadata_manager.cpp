@@ -128,6 +128,18 @@ string PostgresMetadataManager::GetLatestSnapshotQuery() const {
 	)";
 }
 
+string PostgresMetadataManager::GenerateFileColumnStatsCTEBody(const CTERequirement &req, TableIndex table_id) {
+	string select_list = "data_file_id";
+	for (const auto &stat : req.referenced_stats) {
+		select_list += ", " + stat;
+	}
+	return StringUtil::Format("  SELECT * FROM postgres_query({METADATA_CATALOG_NAME_LITERAL},\n"
+	                          "    'SELECT %s\n"
+	                          "     FROM {METADATA_SCHEMA_ESCAPED}.ducklake_file_column_stats\n"
+	                          "     WHERE column_id = %d AND table_id = %d')\n",
+	                          select_list, req.column_field_index, table_id.index);
+}
+
 // We need a specialized function here to do a reinterpret for postgres from BLOB to VARCHAR
 shared_ptr<DuckLakeInlinedData>
 PostgresMetadataManager::TransformInlinedData(QueryResult &result, const vector<LogicalType> &expected_types) {
