@@ -40,6 +40,8 @@ SET ducklake_debug_force_retryable_commit_failures=1
 
 statement error
 CREATE TABLE t_zero_retry(i INTEGER)
+----
+Exceeded the maximum retry count of 0 set by the ducklake_max_retry_count setting.
 
 query I
 SELECT COUNT(*) FROM information_schema.tables WHERE table_schema='main' AND table_name='t_zero_retry'
