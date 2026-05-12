@@ -1,0 +1,50 @@
+# name: test/sql/retry/commit_failure.test
+# description: deterministic regression test for retry budget off-by-one
+# group: [retry]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/retry_off_by_one_regression')
+
+statement ok
+USE ducklake
+
+# max_retry_count=1 allows one retry after the initial attempt.
+statement ok
+SET ducklake_max_retry_count=1
+
+statement ok
+SET ducklake_debug_force_retryable_commit_failures=1
+
+statement ok
+CREATE TABLE t_one_retry(i INTEGER)
+
+query I
+SELECT COUNT(*) FROM information_schema.tables WHERE table_schema='main' AND table_name='t_one_retry'
+----
+1
+
+# max_retry_count=0 allows no retries after the initial attempt.
+statement ok
+SET ducklake_max_retry_count=0
+
+statement ok
+SET ducklake_debug_force_retryable_commit_failures=1
+
+statement error
+CREATE TABLE t_zero_retry(i INTEGER)
+
+query I
+SELECT COUNT(*) FROM information_schema.tables WHERE table_schema='main' AND table_name='t_zero_retry'
+----
+0
+
+statement ok
+SET ducklake_debug_force_retryable_commit_failures=0
