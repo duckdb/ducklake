@@ -39,8 +39,7 @@ public:
 
 protected:
 	string GetLatestSnapshotQuery() const override;
-	string GenerateCTESectionFromRequirements(const unordered_map<idx_t, CTERequirement> &requirements,
-	                                          TableIndex table_id) override;
+	string GenerateFileColumnStatsCTEBody(const CTERequirement &req, TableIndex table_id) override;
 
 private:
 	unique_ptr<QueryResult> ExecuteQuery(DuckLakeSnapshot snapshot, string &query, string command);

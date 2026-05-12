@@ -161,48 +161,22 @@ bool PostgresMetadataManager::HasFileColumnStatsIndex() {
 	return file_column_stats_index_exists;
 }
 
-string PostgresMetadataManager::GenerateCTESectionFromRequirements(
-    const unordered_map<idx_t, CTERequirement> &requirements, TableIndex table_id) {
-	if (requirements.empty()) {
-		return "";
-	}
-	// Without a usable index, postgres_query() would still trigger a sequential scan on a
-	// large ducklake_file_column_stats and may be slower than the default scanner path.
-	// Only opt into the override when an index actually exists - users opt in by creating
-	// the index themselves on (table_id, column_id) (or (column_id, table_id)).
+string PostgresMetadataManager::GenerateFileColumnStatsCTEBody(const CTERequirement &req, TableIndex table_id) {
 	if (!HasFileColumnStatsIndex()) {
-		return DuckLakeMetadataManager::GenerateCTESectionFromRequirements(requirements, table_id);
+		// If we dont have an index we do a duckdb scan
+		return DuckLakeMetadataManager::GenerateFileColumnStatsCTEBody(req, table_id);
 	}
 
-	// Use postgres_query() to push the filter down to PostgreSQL where it can use the index,
-	// instead of the postgres scanner bulk-COPYing the entire table over ctid-range batches.
-	// MATERIALIZED / NOT MATERIALIZED are DuckDB CTE hints; they are valid here because the
-	// CTEs themselves are processed by DuckDB - only the inner postgres_query() runs on PG.
-	string cte_section = "WITH ";
-	bool first_cte = true;
-	for (const auto &entry : requirements) {
-		const auto &req = entry.second;
-		if (!first_cte) {
-			cte_section += ",\n";
-		}
-		first_cte = false;
-
-		string select_list = "data_file_id";
-		for (const auto &stat : req.referenced_stats) {
-			select_list += ", " + stat;
-		}
-		string materialized_hint = (req.reference_count > 1) ? " AS MATERIALIZED" : " AS NOT MATERIALIZED";
-
-		cte_section += StringUtil::Format("col_%d_stats%s (\n", req.column_field_index, materialized_hint.c_str());
-		cte_section += StringUtil::Format(
-		    "  SELECT * FROM postgres_query({METADATA_CATALOG_NAME_LITERAL},\n"
-		    "    'SELECT %s\n"
-		    "     FROM {METADATA_SCHEMA_ESCAPED}.ducklake_file_column_stats\n"
-		    "     WHERE column_id = %d AND table_id = %d')\n",
-		    select_list.c_str(), req.column_field_index, table_id.index);
-		cte_section += ")";
+	// If we have an index we execute the query directly in postgres to take advantage of it
+	string select_list = "data_file_id";
+	for (const auto &stat : req.referenced_stats) {
+		select_list += ", " + stat;
 	}
-	return cte_section + "\n";
+	return StringUtil::Format("  SELECT * FROM postgres_query({METADATA_CATALOG_NAME_LITERAL},\n"
+	                          "    'SELECT %s\n"
+	                          "     FROM {METADATA_SCHEMA_ESCAPED}.ducklake_file_column_stats\n"
+	                          "     WHERE column_id = %d AND table_id = %d')\n",
+	                          select_list, req.column_field_index, table_id.index);
 }
 
 // We need a specialized function here to do a reinterpret for postgres from BLOB to VARCHAR

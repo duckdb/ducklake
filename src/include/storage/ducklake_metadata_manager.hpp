@@ -262,8 +262,8 @@ public:
 
 protected:
 	virtual string GetLatestSnapshotQuery() const;
-	virtual string GenerateCTESectionFromRequirements(const unordered_map<idx_t, CTERequirement> &requirements,
-	                                                  TableIndex table_id);
+
+	virtual string GenerateFileColumnStatsCTEBody(const CTERequirement &req, TableIndex table_id);
 
 	//! Wrap field selections with list aggregation of struct objects (DBMS-specific)
 	//! For DuckDB: LIST({'key1': val1, 'key2': val2, ...})
@@ -315,6 +315,8 @@ private:
 	string GetDeleteFileSelectList(const string &prefix);
 	FilterPushdownQueryComponents GenerateFilterPushdownComponents(const FilterPushdownInfo &filter_info,
 	                                                               TableIndex table_id);
+	string GenerateCTESectionFromRequirements(const unordered_map<idx_t, CTERequirement> &requirements,
+	                                          TableIndex table_id);
 	virtual FilterSQLResult ConvertFilterPushdownToSQL(const FilterPushdownInfo &filter_info);
 	virtual string GenerateFilterFromTableFilter(const TableFilter &filter, const LogicalType &type,
 	                                             unordered_set<string> &referenced_stats);
