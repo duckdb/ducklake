@@ -250,6 +250,9 @@ public:
 	//! Cache the result of an inlined deletion table existence check
 	void CacheInlinedDeletionTableResult(TableIndex table_id, DuckLakeSnapshot snapshot, bool exists);
 
+	//! Invalidate the cached schema entry for a given schema_version.
+	void InvalidateSchemaCache(idx_t schema_version);
+
 private:
 	void DropSchema(ClientContext &context, DropInfo &info) override;
 	unique_ptr<DuckLakeCatalogSet> LoadSchemaForSnapshot(DuckLakeTransaction &transaction, DuckLakeSnapshot snapshot);
