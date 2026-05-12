@@ -8,8 +8,6 @@ require parquet
 
 require postgres_scanner
 
-require-env DUCKLAKE_CI
-
 test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
 
 test-env DATA_PATH {TEST_DIR}
@@ -76,32 +74,37 @@ true
 # Drop Index midsession (without re-attach)
 
 statement ok
-CALL postgres_execute('__ducklake_metadata_ducklake', 'DROP INDEX IF EXISTS idx_fcs_table_col')
+CREATE TEMP TABLE baseline_count AS
+SELECT COUNT(*) AS n FROM duckdb_logs_parsed('DuckLakeMetadata')
+WHERE query LIKE '%postgres_query(%' AND query LIKE '%ducklake_file_column_stats%'
+  AND query LIKE '%data_file_id%'
 
 statement ok
-CALL truncate_duckdb_logs()
+CALL postgres_execute('__ducklake_metadata_ducklake', 'DROP INDEX IF EXISTS idx_fcs_table_col')
+
+# Bump the snapshot so the next SELECT re-issues the file-list query and exercises the cached path.
+statement ok
+INSERT INTO ducklake.t VALUES (0, 700000)
 
 query I
 SELECT COUNT(*) FROM ducklake.t WHERE i > 100998
 ----
-1001
+1002
 
 query I
 SELECT COUNT(*) FROM ducklake.t WHERE i BETWEEN 500050 AND 500100
 ----
 51
 
-# We still use the index-ed query, as attach was not performed, but results are ok
+# New postgres_query()-wrapped CTE entries should have been logged
 query I
-SELECT COUNT(*) > 0 FROM duckdb_logs_parsed('DuckLakeMetadata')
-WHERE query LIKE '%postgres_query(%' AND query LIKE '%ducklake_file_column_stats%'
-  AND query LIKE '%data_file_id%'
+SELECT (SELECT COUNT(*) FROM duckdb_logs_parsed('DuckLakeMetadata')
+        WHERE query LIKE '%postgres_query(%' AND query LIKE '%ducklake_file_column_stats%'
+          AND query LIKE '%data_file_id%') > (SELECT n FROM baseline_count)
 ----
 true
 
-
-# DETACH+ATTACH forces the probe to re-run and observe the missing index. After this,
-# the file-column-stats CTE drops the postgres_query() wrapper.
+# DETACH+ATTACH forces the missing index
 
 statement ok
 DETACH ducklake
@@ -109,23 +112,36 @@ DETACH ducklake
 statement ok
 ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/ducklake_pg_index_files', DATA_INLINING_ROW_LIMIT 0)
 
+# Re-baseline after the new attach.
 statement ok
-CALL truncate_duckdb_logs()
+INSERT INTO ducklake.t VALUES (0, 700001)
+
+statement ok
+DROP TABLE baseline_count
+
+statement ok
+CREATE TEMP TABLE baseline_count AS
+SELECT COUNT(*) AS n FROM duckdb_logs_parsed('DuckLakeMetadata')
+WHERE query LIKE '%postgres_query(%' AND query LIKE '%ducklake_file_column_stats%'
+  AND query LIKE '%data_file_id%'
+
+statement ok
+INSERT INTO ducklake.t VALUES (0, 700002)
 
 query I
 SELECT COUNT(*) FROM ducklake.t WHERE i > 100998
 ----
-1001
+1004
 
 query I
 SELECT COUNT(*) FROM ducklake.t WHERE i BETWEEN 500050 AND 500100
 ----
 51
 
-# Fresh attach reprobed and saw no index -- fall back to the standard CTE (no postgres_query() wrapper).
+
 query I
-SELECT COUNT(*) FROM duckdb_logs_parsed('DuckLakeMetadata')
-WHERE query LIKE '%postgres_query(%' AND query LIKE '%ducklake_file_column_stats%'
-  AND query LIKE '%data_file_id%'
+SELECT (SELECT COUNT(*) FROM duckdb_logs_parsed('DuckLakeMetadata')
+        WHERE query LIKE '%postgres_query(%' AND query LIKE '%ducklake_file_column_stats%'
+          AND query LIKE '%data_file_id%') = (SELECT n FROM baseline_count)
 ----
-0
+true
