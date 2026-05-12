@@ -98,10 +98,9 @@ void DuckLakeInitializer::Initialize() {
 		LoadExistingDuckLake(transaction);
 	} else {
 		if (!options.create_if_not_exists) {
-			throw InvalidInputException(
-			    "Existing DuckLake at metadata catalog \"%s\" does not exist - and creating a "
-			    "new DuckLake is explicitly disabled",
-			    options.metadata_path);
+			throw InvalidInputException("Existing DuckLake at metadata catalog \"%s\" does not exist - and creating a "
+			                            "new DuckLake is explicitly disabled",
+			                            options.metadata_path);
 		}
 		InitializeNewDuckLake(transaction, has_explicit_schema);
 	}

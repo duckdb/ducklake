@@ -46,22 +46,4 @@ string SQLiteMetadataManager::GetColumnTypeInternal(const LogicalType &column_ty
 	}
 }
 
-string SQLiteMetadataManager::MetadataExistsQuery() const {
-	return "SELECT COUNT(*) FROM sqlite_master "
-	       "WHERE type = 'table' AND name = 'ducklake_metadata' "
-	       "AND {METADATA_SCHEMA_NAME_LITERAL} IS NOT NULL";
-}
-
-bool SQLiteMetadataManager::MetadataExists() {
-	auto query = MetadataExistsQuery();
-	auto result = Query(query);
-	if (result->HasError()) {
-		result->GetErrorObject().Throw("Failed to probe DuckLake metadata: ");
-	}
-	auto chunk = result->Fetch();
-	if (!chunk || chunk->size() == 0) {
-		return false;
-	}
-	return chunk->GetValue(0, 0).GetValue<int64_t>() > 0;
-}
 } // namespace duckdb

@@ -118,24 +118,6 @@ unique_ptr<QueryResult> PostgresMetadataManager::Query(DuckLakeSnapshot snapshot
 	return DuckLakeMetadataManager::Query(snapshot, query);
 }
 
-string PostgresMetadataManager::MetadataExistsQuery() const {
-	return "SELECT COUNT(*) FROM information_schema.tables "
-	       "WHERE table_name = 'ducklake_metadata' AND table_schema = {METADATA_SCHEMA_NAME_LITERAL}";
-}
-
-bool PostgresMetadataManager::MetadataExists() {
-	auto query = MetadataExistsQuery();
-	auto result = DuckLakeMetadataManager::Query(query);
-	if (result->HasError()) {
-		result->GetErrorObject().Throw("Failed to probe DuckLake metadata: ");
-	}
-	auto chunk = result->Fetch();
-	if (!chunk || chunk->size() == 0) {
-		return false;
-	}
-	return chunk->GetValue(0, 0).GetValue<int64_t>() > 0;
-}
-
 string PostgresMetadataManager::GetLatestSnapshotQuery() const {
 	return R"(
 	SELECT * FROM postgres_query({METADATA_CATALOG_NAME_LITERAL},
@@ -186,6 +168,5 @@ PostgresMetadataManager::TransformInlinedData(QueryResult &result, const vector<
 	inlined_data->data = std::move(data);
 	return inlined_data;
 }
-
 
 } // namespace duckdb

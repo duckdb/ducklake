@@ -36,12 +36,9 @@ DuckLakeMetadataManager::~DuckLakeMetadataManager() {
 optional_ptr<AttachedDatabase> GetDatabase(ClientContext &context, const string &name);
 
 unordered_map<string /* name */, DuckLakeMetadataManager::create_t> DuckLakeMetadataManager::metadata_managers = {
-    {"postgres", PostgresMetadataManager::Create},
-    {"postgres_scanner", PostgresMetadataManager::Create},
-    {"quack", QuackMetadataManager::Create},
-    {"quack_scanner", QuackMetadataManager::Create},
-    {"sqlite", SQLiteMetadataManager::Create},
-    {"sqlite_scanner", SQLiteMetadataManager::Create}};
+    {"postgres", PostgresMetadataManager::Create}, {"postgres_scanner", PostgresMetadataManager::Create},
+    {"quack", QuackMetadataManager::Create},       {"quack_scanner", QuackMetadataManager::Create},
+    {"sqlite", SQLiteMetadataManager::Create},     {"sqlite_scanner", SQLiteMetadataManager::Create}};
 
 mutex DuckLakeMetadataManager::metadata_managers_lock;
 

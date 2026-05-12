@@ -9,8 +9,7 @@
 
 namespace duckdb {
 
-QuackMetadataManager::QuackMetadataManager(DuckLakeTransaction &transaction)
-    : DuckLakeMetadataManager(transaction) {
+QuackMetadataManager::QuackMetadataManager(DuckLakeTransaction &transaction) : DuckLakeMetadataManager(transaction) {
 }
 
 unique_ptr<QueryResult> QuackMetadataManager::Query(string &query) {
@@ -19,13 +18,12 @@ unique_ptr<QueryResult> QuackMetadataManager::Query(string &query) {
 	query = StringUtil::Replace(query, "{METADATA_CATALOG}", schema_identifier);
 	SubstituteCatalogPlaceholders(query);
 
-	auto metadata_catalog_name_literal =
-	    DuckLakeUtil::SQLLiteralToString(ducklake_catalog.MetadataDatabaseName());
-	auto wrapper = StringUtil::Format("CALL system.main.quack_query_by_name(%s, %s)",
-	                                  metadata_catalog_name_literal, SQLString(query));
+	auto metadata_catalog_name_literal = DuckLakeUtil::SQLLiteralToString(ducklake_catalog.MetadataDatabaseName());
+	auto wrapper = StringUtil::Format("CALL system.main.quack_query_by_name(%s, %s)", metadata_catalog_name_literal,
+	                                  SQLString(query));
 	auto result = transaction.ExecuteRaw(std::move(wrapper));
 	if (result->HasError()) {
-		//cleanup
+		// cleanup
 		string reset = "ROLLBACK; BEGIN TRANSACTION;";
 		transaction.ExecuteRaw(reset);
 	}

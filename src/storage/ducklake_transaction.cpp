@@ -736,8 +736,8 @@ Connection &DuckLakeTransaction::GetConnection() {
 
 bool DuckLakeTransaction::SchemaChangesMade() const {
 	return !new_tables.empty() || !dropped_tables.empty() || new_schemas || !dropped_schemas.empty() ||
-	       !dropped_views.empty() || !renamed_views.empty() || !new_macros.empty() ||
-	       !dropped_scalar_macros.empty() || !dropped_table_macros.empty();
+	       !dropped_views.empty() || !renamed_views.empty() || !new_macros.empty() || !dropped_scalar_macros.empty() ||
+	       !dropped_table_macros.empty();
 }
 
 bool DuckLakeTransaction::ChangesMade() const {
