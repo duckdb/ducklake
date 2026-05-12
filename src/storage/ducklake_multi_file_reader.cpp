@@ -64,7 +64,7 @@ static void AddSnapshotFilter(BaseFileReader &reader, const ColumnIndex &col_idx
 	auto col_ref = make_uniq<BoundReferenceExpression>(col_type, static_cast<storage_t>(0));
 	auto bound_constant = make_uniq<BoundConstantExpression>(std::move(constant));
 	auto comparison =
-	    make_uniq<BoundComparisonExpression>(comparison_type, std::move(col_ref), std::move(bound_constant));
+	    BoundComparisonExpression::Create(comparison_type, std::move(col_ref), std::move(bound_constant));
 	auto filter = make_uniq<ExpressionFilter>(std::move(comparison));
 	reader.filters->PushFilter(ProjectionIndex(col_idx.GetPrimaryIndex()), std::move(filter));
 }

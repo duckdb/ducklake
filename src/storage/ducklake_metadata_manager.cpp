@@ -1260,10 +1260,11 @@ string DuckLakeMetadataManager::GenerateFilterPushdown(const TableFilter &filter
 			return string();
 		}
 		auto expr_class = expression_filter.expr->GetExpressionClass();
-		if (expr_class == ExpressionClass::BOUND_COMPARISON) {
-			auto &comparison = expression_filter.expr->Cast<BoundComparisonExpression>();
-			auto &left = *comparison.left;
-			auto &right = *comparison.right;
+		if (expr_class == ExpressionClass::BOUND_FUNCTION &&
+		    BoundComparisonExpression::IsComparison(*expression_filter.expr)) {
+			auto &comparison = expression_filter.expr->Cast<BoundFunctionExpression>();
+			auto &left = BoundComparisonExpression::Left(comparison);
+			auto &right = BoundComparisonExpression::Right(comparison);
 			ExpressionType comparison_type = comparison.GetExpressionType();
 			const BoundConstantExpression *constant_expr = nullptr;
 			if (left.GetExpressionClass() == ExpressionClass::BOUND_REF &&
