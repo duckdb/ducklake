@@ -250,10 +250,6 @@ public:
 	//! Cache the result of an inlined deletion table existence check
 	void CacheInlinedDeletionTableResult(TableIndex table_id, DuckLakeSnapshot snapshot, bool exists);
 
-	bool HasFileColumnStatsIndex() const {
-		return file_column_stats_index_present;
-	}
-
 	//! Invalidate the cached schema entry for a given schema_version.
 	void InvalidateSchemaCache(idx_t schema_version);
 
@@ -308,8 +304,6 @@ private:
 	optional_idx last_committed_snapshot;
 	//! Optional callback for instrumenting metadata queries
 	QueryCallback query_callback;
-	//! If index used for column stats exists, set once at attach time.
-	bool file_column_stats_index_present = false;
 };
 
 } // namespace duckdb

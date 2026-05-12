@@ -37,9 +37,6 @@ public:
 
 	unique_ptr<QueryResult> Query(DuckLakeSnapshot snapshot, string &query) override;
 
-	//! Look up whether ducklake_file_column_stats has a usable index.
-	bool DoesFileColumnStatsIndexExists() override;
-
 protected:
 	string GetLatestSnapshotQuery() const override;
 	string GenerateFileColumnStatsCTEBody(const CTERequirement &req, TableIndex table_id) override;

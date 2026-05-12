@@ -265,11 +265,6 @@ public:
 	string StorePath(string path);
 	string GetPathSeparator(const string &path);
 
-public:
-	virtual bool DoesFileColumnStatsIndexExists() {
-		return false;
-	}
-
 protected:
 	virtual string GetLatestSnapshotQuery() const;
 

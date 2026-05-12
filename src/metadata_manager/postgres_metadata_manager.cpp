@@ -127,39 +127,7 @@ string PostgresMetadataManager::GetLatestSnapshotQuery() const {
 	)";
 }
 
-bool PostgresMetadataManager::DoesFileColumnStatsIndexExists() {
-	// Check is ColumStats has a usable index for postgres
-	string check_query = R"(
-		SELECT * FROM postgres_query({METADATA_CATALOG_NAME_LITERAL},
-			'SELECT 1
-			 FROM pg_index i
-			 WHERE i.indrelid = to_regclass(''{METADATA_SCHEMA_ESCAPED}.ducklake_file_column_stats'')
-			   AND EXISTS (SELECT 1 FROM pg_attribute a
-			               WHERE a.attrelid = i.indrelid
-			                 AND a.attname = ''table_id''
-			                 AND a.attnum = ANY(i.indkey::int2[]))
-			   AND EXISTS (SELECT 1 FROM pg_attribute a
-			               WHERE a.attrelid = i.indrelid
-			                 AND a.attname = ''column_id''
-			                 AND a.attnum = ANY(i.indkey::int2[]))
-			 LIMIT 1')
-	)";
-	auto result = transaction.Query(check_query);
-	if (result->HasError()) {
-		// If the above query errors, we just default to the standard duckdb query later on
-		return false;
-	}
-	auto chunk = result->Fetch();
-	return chunk && chunk->size() > 0;
-}
-
 string PostgresMetadataManager::GenerateFileColumnStatsCTEBody(const CTERequirement &req, TableIndex table_id) {
-	if (!transaction.GetCatalog().HasFileColumnStatsIndex()) {
-		// If we dont have an index we do a duckdb scan
-		return DuckLakeMetadataManager::GenerateFileColumnStatsCTEBody(req, table_id);
-	}
-
-	// If we have an index we execute the query directly in postgres to take advantage of it
 	string select_list = "data_file_id";
 	for (const auto &stat : req.referenced_stats) {
 		select_list += ", " + stat;

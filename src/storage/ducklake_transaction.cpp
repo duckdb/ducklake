@@ -1707,8 +1707,7 @@ void DuckLakeTransaction::GetNewTableInfo(DuckLakeCommitState &commit_state, Duc
 		case LocalChangeType::CHANGE_COLUMN_TYPE: {
 			// drop the indicated column
 			// note that in case of nested types we might be dropping multiple columns here
-			HandleChangedFields(commit_state.GetTableId(table), table.GetChangedFields(), result,
-			                    txn_added_fields);
+			HandleChangedFields(commit_state.GetTableId(table), table.GetChangedFields(), result, txn_added_fields);
 			transaction_changes.altered_tables_with_schema_version_changes.insert(table_id);
 			column_schema_change = true;
 			break;
