@@ -1,0 +1,40 @@
+# name: test/sql/data_inlining/data_inlining_struct_non_native_types.test
+# description: STRUCT columns with non-natively-supported field types (e.g. TIMESTAMPTZ on Postgres)
+#              must round-trip correctly through inlining
+# group: [data_inlining]
+
+require ducklake
+
+require parquet
+
+#FIXME: ADD THIS TO PG CI WHEN IT GETS BACK
+require-env DUCKLAKE_CI
+
+test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+
+test-env DATA_PATH __TEST_DIR__
+
+statement ok
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/struct_non_native_files', DATA_INLINING_ROW_LIMIT 10)
+
+# STRUCT with TIMESTAMPTZ — non-native on Postgres, triggers CAST(... AS VARCHAR) in ToSQLString
+statement ok
+CREATE TABLE ducklake.t (id VARCHAR, attrs STRUCT(name VARCHAR, ts TIMESTAMPTZ));
+
+statement ok
+INSERT INTO ducklake.t VALUES ('row1', {'name': 'foo', 'ts': TIMESTAMPTZ '2026-05-13 04:56:37+00'});
+
+# Verify the row was inlined (no parquet file written)
+query I
+SELECT COUNT(*) FROM GLOB('${DATA_PATH}/struct_non_native_files/main/t/**/*.parquet')
+----
+0
+
+# Must round-trip without error
+statement ok
+SET timezone='UTC';
+
+query II
+SELECT id, attrs.ts FROM ducklake.t;
+----
+row1	2026-05-13 04:56:37+00
