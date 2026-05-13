@@ -29,5 +29,6 @@ if($ENV{ENABLE_QUACK})
             LOAD_TESTS
             GIT_URL https://github.com/duckdb/duckdb-quack.git
             GIT_TAG be9c9bb5bd703f5e6d7e08a47de89eeb4aa51a1b
+            SUBMODULES "extension-ci-tools"
     )
 endif()
