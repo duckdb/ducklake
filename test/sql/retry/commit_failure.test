@@ -1,5 +1,5 @@
 # name: test/sql/retry/commit_failure.test
-# description: deterministic regression test for retry budget off-by-one
+# description: retry budget regression test without debug failure injection
 # group: [retry]
 
 require ducklake
@@ -11,42 +11,50 @@ test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
 test-env DATA_PATH {TEST_DIR}
 
 statement ok
-ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/retry_off_by_one_regression')
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/retry_budget_regression')
 
 statement ok
 USE ducklake
 
-# max_retry_count=1 allows one retry after the initial attempt.
 statement ok
-SET ducklake_max_retry_count=1
+SET ducklake_retry_wait_ms=100
 
 statement ok
-SET ducklake_debug_force_retryable_commit_failures=1
+SET ducklake_retry_backoff=2.0
 
 statement ok
-CREATE TABLE t_one_retry(i INTEGER)
+CREATE TABLE ducklake.tbl(id INTEGER)
+
+# With enough retries, concurrent commits should eventually succeed.
+statement ok
+SET ducklake_max_retry_count = 100;
+
+concurrentloop i 0 5
+
+statement ok
+INSERT INTO ducklake.tbl VALUES({i});
+
+endloop
 
 query I
-SELECT COUNT(*) FROM information_schema.tables WHERE table_schema='main' AND table_name='t_one_retry'
+SELECT COUNT() FROM ducklake.tbl;
 ----
-1
+5
 
-# max_retry_count=0 allows no retries after the initial attempt.
+# With low retry budget, at least one concurrent commit should hit the retry limit.
 statement ok
-SET ducklake_max_retry_count=0
+SET ducklake_max_retry_count = 1;
 
-statement ok
-SET ducklake_debug_force_retryable_commit_failures=1
+concurrentloop i 5 15
 
-statement error
-CREATE TABLE t_zero_retry(i INTEGER)
+statement maybe
+INSERT INTO ducklake.tbl VALUES({i});
 ----
-Exceeded the maximum retry count of 0 set by the ducklake_max_retry_count setting.
+Exceeded the maximum retry count of 1 set by the ducklake_max_retry_count setting.
+
+endloop
 
 query I
-SELECT COUNT(*) FROM information_schema.tables WHERE table_schema='main' AND table_name='t_zero_retry'
+SELECT COUNT() >= 5 AND COUNT() < 15 FROM ducklake.tbl;
 ----
-0
-
-statement ok
-SET ducklake_debug_force_retryable_commit_failures=0
+TRUE

@@ -5,8 +5,8 @@
 #include "duckdb/parser/parser.hpp"
 #include "duckdb/common/file_system.hpp"
 #include "storage/ducklake_metadata_manager.hpp"
-#include "duckdb/planner/filter/optional_filter.hpp"
-#include "duckdb/planner/filter/dynamic_filter.hpp"
+#include "duckdb/planner/filter/expression_filter.hpp"
+#include "duckdb/planner/filter/table_filter_functions.hpp"
 #include "duckdb/function/scalar/variant_utils.hpp"
 
 #include <cmath>
@@ -321,19 +321,8 @@ string DuckLakeUtil::JoinPath(FileSystem &fs, const string &a, const string &b) 
 	}
 }
 
-DynamicFilter *DuckLakeUtil::GetOptionalDynamicFilter(const TableFilter &filter) {
-	if (filter.filter_type != TableFilterType::OPTIONAL_FILTER) {
-		return nullptr;
-	}
-	auto &optional = filter.Cast<OptionalFilter>();
-	if (!optional.child_filter || optional.child_filter->filter_type != TableFilterType::DYNAMIC_FILTER) {
-		return nullptr;
-	}
-	auto &dynamic = optional.child_filter->Cast<DynamicFilter>();
-	if (!dynamic.filter_data) {
-		return nullptr;
-	}
-	return &dynamic;
+shared_ptr<DynamicFilterData> DuckLakeUtil::GetOptionalDynamicFilterData(const TableFilter &filter) {
+	return ExpressionFilter::GetRootOptionalDynamicFilterData(filter);
 }
 
 bool DuckLakeUtil::IsInlinedSystemColumn(const string &name) {

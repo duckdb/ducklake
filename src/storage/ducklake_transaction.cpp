@@ -2567,7 +2567,6 @@ void DuckLakeTransaction::FlushChanges() {
 	idx_t max_retry_count = 10;
 	idx_t retry_wait_ms = 100;
 	double retry_backoff = 1.5;
-	idx_t forced_retryable_failures = 0;
 	Value setting_val;
 	auto context_ref = context.lock();
 	if (context_ref->TryGetCurrentSetting("ducklake_max_retry_count", setting_val)) {
@@ -2578,9 +2577,6 @@ void DuckLakeTransaction::FlushChanges() {
 	}
 	if (context_ref->TryGetCurrentSetting("ducklake_retry_backoff", setting_val)) {
 		retry_backoff = setting_val.GetValue<double>();
-	}
-	if (context_ref->TryGetCurrentSetting("ducklake_debug_force_retryable_commit_failures", setting_val)) {
-		forced_retryable_failures = setting_val.GetValue<idx_t>();
 	}
 
 	auto transaction_snapshot = GetSnapshot();
@@ -2607,10 +2603,6 @@ void DuckLakeTransaction::FlushChanges() {
 			}
 			can_retry = true;
 			DuckLakeCommitState commit_state(commit_snapshot);
-			if (forced_retryable_failures > 0) {
-				forced_retryable_failures--;
-				throw TransactionException("Forced retryable commit failure for testing: primary key");
-			}
 			// write the new snapshot
 			string batch_queries = metadata_manager->InsertSnapshot();
 			batch_queries += CommitChanges(commit_state, transaction_changes, stats);

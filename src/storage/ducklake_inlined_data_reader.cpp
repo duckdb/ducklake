@@ -269,7 +269,7 @@ AsyncResult DuckLakeInlinedDataReader::Scan(ClientContext &context, GlobalTableF
 		if (filters) {
 			for (auto &entry : *filters) {
 				auto &filter = entry.Filter();
-				if (filter.filter_type == TableFilterType::OPTIONAL_FILTER) {
+				if (ExpressionFilter::IsRootOptionalFilter(filter)) {
 					continue;
 				}
 				auto column_id = entry.GetIndex().GetIndex();
