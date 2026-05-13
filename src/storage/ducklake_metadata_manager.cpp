@@ -14,6 +14,7 @@
 #include "duckdb/main/appender.hpp"
 #include "metadata_manager/postgres_metadata_manager.hpp"
 #include "metadata_manager/sqlite_metadata_manager.hpp"
+#include "metadata_manager/sqlserver_metadata_manager.hpp"
 #include "duckdb/main/attached_database.hpp"
 #include "duckdb/main/database.hpp"
 #include "duckdb/planner/filter/constant_filter.hpp"
@@ -43,6 +44,8 @@ optional_ptr<AttachedDatabase> GetDatabase(ClientContext &context, const string 
 unordered_map<string /* name */, DuckLakeMetadataManager::create_t> DuckLakeMetadataManager::metadata_managers = {
     {"postgres", PostgresMetadataManager::Create},
     {"postgres_scanner", PostgresMetadataManager::Create},
+    {"mssql", SQLServerMetadataManager::Create},
+    {"sqlserver", SQLServerMetadataManager::Create},
     {"sqlite", SQLiteMetadataManager::Create},
     {"sqlite_scanner", SQLiteMetadataManager::Create}};
 

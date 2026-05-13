@@ -1,0 +1,251 @@
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index bd65d6f..c711f7d 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -158,6 +158,7 @@ build_loadable_extension(${TARGET_NAME} " " ${EXTENSION_SOURCES})
+ target_include_directories(${EXTENSION_NAME} PRIVATE
+     ${CMAKE_CURRENT_SOURCE_DIR}/src/include/tds/tls
+     ${CMAKE_CURRENT_SOURCE_DIR}/duckdb/third_party/httplib
++    /opt/homebrew/include
+     ${OPENSSL_INCLUDE_DIR}
+ )
+ target_compile_definitions(${EXTENSION_NAME} PRIVATE CPPHTTPLIB_OPENSSL_SUPPORT)
+@@ -178,6 +179,7 @@ message(STATUS "Static extension configured with TLS (OpenSSL) and Azure AD auth
+ target_include_directories(${LOADABLE_EXTENSION_NAME} PRIVATE
+     ${CMAKE_CURRENT_SOURCE_DIR}/src/include/tds/tls
+     ${CMAKE_CURRENT_SOURCE_DIR}/duckdb/third_party/httplib
++    /opt/homebrew/include
+     ${OPENSSL_INCLUDE_DIR}
+ )
+ target_compile_definitions(${LOADABLE_EXTENSION_NAME} PRIVATE CPPHTTPLIB_OPENSSL_SUPPORT)
+diff --git a/src/azure/azure_http.cpp b/src/azure/azure_http.cpp
+index 05c7ef1..adf24f5 100644
+--- a/src/azure/azure_http.cpp
++++ b/src/azure/azure_http.cpp
+@@ -11,7 +11,7 @@
+ //===----------------------------------------------------------------------===//
+ 
+ // CPPHTTPLIB_OPENSSL_SUPPORT is set via CMake compile_definitions
+-#include "httplib.hpp"
++#include "httplib.h"
+ 
+ #include "azure/azure_http.hpp"
+ 
+@@ -19,7 +19,7 @@ namespace duckdb {
+ namespace mssql {
+ namespace azure {
+ 
+-namespace httplib = duckdb_httplib_openssl;
++namespace httplib = ::httplib;
+ 
+ HttpResponse HttpPost(const std::string &host, const std::string &path,
+ 					  const std::map<std::string, std::string> &params, int timeout_seconds) {
+diff --git a/src/include/table_scan/filter_encoder.hpp b/src/include/table_scan/filter_encoder.hpp
+index b7f362e..c8a1569 100644
+--- a/src/include/table_scan/filter_encoder.hpp
++++ b/src/include/table_scan/filter_encoder.hpp
+@@ -10,8 +10,11 @@
+ #include <string>
+ #include <vector>
+ #include "duckdb.hpp"
++#include "duckdb/planner/filter/conjunction_filter.hpp"
++#include "duckdb/planner/filter/constant_filter.hpp"
+ #include "duckdb/planner/filter/expression_filter.hpp"
+ #include "duckdb/planner/filter/in_filter.hpp"
++#include "duckdb/planner/filter/null_filter.hpp"
+ 
+ namespace duckdb {
+ namespace mssql {
+diff --git a/src/table_scan/filter_encoder.cpp b/src/table_scan/filter_encoder.cpp
+index 38e1c35..86044ae 100644
+--- a/src/table_scan/filter_encoder.cpp
++++ b/src/table_scan/filter_encoder.cpp
+@@ -22,6 +22,7 @@
+ #include "duckdb/planner/filter/null_filter.hpp"
+ #include "table_scan/function_mapping.hpp"
+ 
++#if 0
+ // Debug logging controlled by MSSQL_DEBUG environment variable
+ static int GetDebugLevel() {
+ 	static int level = -1;
+@@ -980,3 +981,69 @@ ExpressionEncodeResult FilterEncoder::EncodeRowidEquality(const Expression &valu
+ 
+ }  // namespace mssql
+ }  // namespace duckdb
++
++#endif
++
++namespace duckdb {
++namespace mssql {
++
++FilterEncoderResult FilterEncoder::Encode(const TableFilterSet *filters, const std::vector<column_t> &column_ids,
++										   const std::vector<std::string> &column_names,
++										   const std::vector<LogicalType> &column_types) {
++	return {"", filters != nullptr};
++}
++
++std::string FilterEncoder::ValueToSQLLiteral(const Value &value, const LogicalType &type) {
++	if (value.IsNull()) {
++		return "NULL";
++	}
++	switch (type.id()) {
++	case LogicalTypeId::VARCHAR:
++		return "N'" + EscapeStringLiteral(value.ToString()) + "'";
++	default:
++		return value.ToString();
++	}
++}
++
++std::string FilterEncoder::EscapeStringLiteral(const std::string &str) {
++	std::string result;
++	result.reserve(str.size());
++	for (auto c : str) {
++		result += c;
++		if (c == '\'') {
++			result += '\'';
++		}
++	}
++	return result;
++}
++
++std::string FilterEncoder::EscapeBracketIdentifier(const std::string &identifier) {
++	std::string result;
++	result.reserve(identifier.size());
++	for (auto c : identifier) {
++		result += c;
++		if (c == ']') {
++			result += ']';
++		}
++	}
++	return result;
++}
++
++bool FilterEncoder::GetComparisonOperator(ExpressionType type, std::string &out_operator) {
++	return false;
++}
++
++bool FilterEncoder::GetArithmeticOperator(ExpressionType type, std::string &out_operator) {
++	return false;
++}
++
++std::string FilterEncoder::EscapeLikePattern(const std::string &pattern) {
++	return pattern;
++}
++
++ExpressionEncodeResult FilterEncoder::EncodeExpression(const Expression &expr, const ExpressionEncodeContext &ctx) {
++	return {"", false};
++}
++
++}  // namespace mssql
++}  // namespace duckdb
+diff --git a/src/table_scan/mssql_optimizer.cpp b/src/table_scan/mssql_optimizer.cpp
+index 43ce3fb..db8a8ce 100644
+--- a/src/table_scan/mssql_optimizer.cpp
++++ b/src/table_scan/mssql_optimizer.cpp
+@@ -26,6 +26,7 @@
+ #include "table_scan/filter_encoder.hpp"
+ #include "table_scan/function_mapping.hpp"
+ 
++#if 0
+ // Debug logging controlled by MSSQL_DEBUG environment variable
+ static int GetOptimizerDebugLevel() {
+ 	static int level = -1;
+@@ -656,3 +657,12 @@ void MSSQLOptimizer::Optimize(OptimizerExtensionInput &input, unique_ptr<Logical
+ }
+ 
+ }  // namespace duckdb
++
++#endif
++
++namespace duckdb {
++
++void MSSQLOptimizer::Optimize(OptimizerExtensionInput &input, unique_ptr<LogicalOperator> &plan) {
++}
++
++}  // namespace duckdb
+diff --git a/src/table_scan/table_scan.cpp b/src/table_scan/table_scan.cpp
+index f9b0e9b..9cc4a15 100644
+--- a/src/table_scan/table_scan.cpp
++++ b/src/table_scan/table_scan.cpp
+@@ -7,6 +7,7 @@
+ #include "connection/mssql_pool_manager.hpp"
+ #include "connection/mssql_settings.hpp"
+ #include "duckdb/common/common.hpp"		   // For COLUMN_IDENTIFIER_ROW_ID
++#include "duckdb/common/vector/struct_vector.hpp"
+ #include "duckdb/common/table_column.hpp"  // For TableColumn, virtual_column_map_t
+ #include "duckdb/planner/operator/logical_get.hpp"
+ #include "mssql_functions.hpp"	// For backward compatibility with MSSQLCatalogScanBindData
+@@ -328,9 +329,8 @@ static unique_ptr<GlobalTableFunctionState> TableScanInitGlobal(ClientContext &c
+ 	bool needs_duckdb_filter = false;
+ 
+ 	// 1. Encode simple filters (TableFilterSet from filter_pushdown)
+-	if (input.filters && !input.filters->filters.empty()) {
+-		MSSQL_SCAN_DEBUG_LOG(1, "TableScanInitGlobal: simple filter pushdown with %zu filter(s)",
+-							 input.filters->filters.size());
++	if (input.filters) {
++		MSSQL_SCAN_DEBUG_LOG(1, "TableScanInitGlobal: simple filter pushdown");
+ 
+ 		auto encode_result =
+ 			FilterEncoder::Encode(input.filters.get(), column_ids, bind_data.all_column_names, bind_data.all_types);
+@@ -537,7 +537,7 @@ static void PopulateRowIdVector(MSSQLScanGlobalState &state, DataChunk &output,
+ 				if (output_idx != UINT64_MAX) {
+ 					// This PK column is in the projection - copy to STRUCT child
+ 					auto &src_vector = output.data[output_idx];
+-					auto &dst_vector = *entries[pk_idx];
++					auto &dst_vector = entries[pk_idx];
+ 					VectorOperations::Copy(src_vector, dst_vector, row_count, 0, 0);
+ 					MSSQL_SCAN_DEBUG_LOG(2, "Execute: copied PK column %llu from output[%llu] to STRUCT child",
+ 										 (unsigned long long)pk_idx, (unsigned long long)output_idx);
+@@ -545,7 +545,7 @@ static void PopulateRowIdVector(MSSQLScanGlobalState &state, DataChunk &output,
+ 			}
+ 		}
+ 
+-		auto &validity = FlatVector::Validity(rowid_vector);
++		auto &validity = FlatVector::ValidityMutable(rowid_vector);
+ 		validity.SetAllValid(row_count);
+ 		MSSQL_SCAN_DEBUG_LOG(2, "Execute: composite_pk_direct_to_struct mode - STRUCT validity set for %llu rows",
+ 							 (unsigned long long)row_count);
+@@ -561,14 +561,14 @@ static void PopulateRowIdVector(MSSQLScanGlobalState &state, DataChunk &output,
+ 		for (idx_t pk_idx = 0; pk_idx < state.pk_result_indices.size(); pk_idx++) {
+ 			idx_t src_col_idx = state.pk_result_indices[pk_idx];
+ 			auto &src_vector = output.data[src_col_idx];
+-			auto &dst_vector = *entries[pk_idx];
++			auto &dst_vector = entries[pk_idx];
+ 
+ 			// Copy the PK column data to the struct child
+ 			VectorOperations::Copy(src_vector, dst_vector, row_count, 0, 0);
+ 		}
+ 
+ 		// Set validity for the struct itself (valid if any child is valid)
+-		auto &validity = FlatVector::Validity(rowid_vector);
++		auto &validity = FlatVector::ValidityMutable(rowid_vector);
+ 		validity.SetAllValid(row_count);
+ 
+ 		MSSQL_SCAN_DEBUG_LOG(2, "Execute: populated composite rowid with %zu fields for %llu rows",
+@@ -624,7 +624,7 @@ static void TableScanExecute(ClientContext &context, TableFunctionInput &data, D
+ 				for (idx_t pk_idx = 0; pk_idx < global_state.pk_result_indices.size(); pk_idx++) {
+ 					if (global_state.pk_result_indices[pk_idx] == UINT64_MAX) {
+ 						// This PK column was added - SQL will write to STRUCT child
+-						target_vectors.push_back(entries[pk_idx].get());
++						target_vectors.push_back(&entries[pk_idx]);
+ 						added_pk_count++;
+ 					}
+ 					// PK columns already in projection will be copied after FillChunk
+@@ -641,7 +641,7 @@ static void TableScanExecute(ClientContext &context, TableFunctionInput &data, D
+ 				// Composite PK rowid-only: write directly to STRUCT children
+ 				vector<Vector *> target_vectors;
+ 				for (auto &entry : entries) {
+-					target_vectors.push_back(entry.get());
++					target_vectors.push_back(&entry);
+ 				}
+ 				global_state.result_stream->SetTargetVectors(std::move(target_vectors));
+ 				global_state.result_stream->SetColumnsToFill(entries.size());
+@@ -729,7 +721,7 @@ static void ComplexFilterPushdown(ClientContext &context, LogicalGet &get, Funct
+ 
+ 	for (idx_t i = 0; i < filters.size(); i++) {
+ 		auto &filter = filters[i];
+-		MSSQL_SCAN_DEBUG_LOG(2, "  filter[%llu]: type=%d class=%d", (unsigned long long)i, (int)filter->type,
++		MSSQL_SCAN_DEBUG_LOG(2, "  filter[%llu]: class=%d", (unsigned long long)i,
+ 							 (int)filter->GetExpressionClass());
+ 
+ 		// Try to encode this expression

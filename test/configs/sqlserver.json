@@ -1,0 +1,49 @@
+{
+  "description": "Run DuckLake tests using SQL Server as a catalog DBMS.",
+  "autoloading": "none",
+  "statically_loaded_extensions": [
+    "core_functions",
+    "parquet",
+    "ducklake",
+    "httpfs",
+    "mssql",
+    "icu",
+    "json"
+  ],
+  "test_env": [{
+    "env_name": "DUCKLAKE_CONNECTION",
+    "env_value": "mssql:Server=localhost,1433;Database=ducklakedb;User Id=sa;Password=YourStrong!Passw0rd;TrustServerCertificate=true"
+  }],
+  "skip_tests": [
+    {
+      "reason": "Tests only for DuckDB as a catalog",
+      "paths": [
+        "test/sql/general/missing_parquet.test",
+        "test/sql/general/paths.test",
+        "test/sql/autoloading/autoload_data_path.test",
+        "test/sql/general/metadata_parameters.test",
+        "test/sql/issues/corrupted_catalog_fault_isolation.test",
+        "test/sql/metadata/ducklake_settings.test",
+        "test/sql/remove_orphans/metadata_in_data_path.test"
+      ]
+    },
+    {
+      "reason": "Test only for SQLite as catalog",
+      "paths": [
+        "test/sql/metadata/ducklake_settings_sqlite.test"
+      ]
+    },
+    {
+      "reason": "Test only for Postgres as catalog",
+      "paths": [
+        "test/sql/metadata/ducklake_settings_postgres.test"
+      ]
+    },
+    {
+      "reason": "SQL Server catalog support starts with metadata inlining disabled",
+      "paths": [
+        "test/sql/data_inlining/long_column_name_inlining.test"
+      ]
+    }
+  ]
+}

@@ -1,7 +1,7 @@
 add_library(
   ducklake_metadata_manager OBJECT
   ducklake_metadata_manager_v1_1.cpp postgres_metadata_manager.cpp
-  sqlite_metadata_manager.cpp)
+  sqlite_metadata_manager.cpp sqlserver_metadata_manager.cpp)
 set(ALL_OBJECT_FILES
     ${ALL_OBJECT_FILES} $<TARGET_OBJECTS:ducklake_metadata_manager>
     PARENT_SCOPE)

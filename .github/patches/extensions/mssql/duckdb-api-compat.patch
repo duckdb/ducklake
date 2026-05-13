@@ -1,0 +1,229 @@
+diff --git a/src/catalog/mssql_preload_catalog.cpp b/src/catalog/mssql_preload_catalog.cpp
+index da677c5..e9876b4 100644
+--- a/src/catalog/mssql_preload_catalog.cpp
++++ b/src/catalog/mssql_preload_catalog.cpp
+@@ -11,6 +11,7 @@
+ #include "duckdb/common/vector_operations/unary_executor.hpp"
+ #include "duckdb/function/scalar_function.hpp"
+ #include "duckdb/main/database.hpp"
++#include "duckdb/execution/expression_executor.hpp"
+ #include "duckdb/planner/expression/bound_function_expression.hpp"
+ 
+ namespace duckdb {
+@@ -19,8 +20,9 @@ namespace duckdb {
+ // Bind Function - Validates arguments at compile time
+ //===----------------------------------------------------------------------===//
+ 
+-static unique_ptr<FunctionData> MSSQLPreloadCatalogBind(ClientContext &context, ScalarFunction &bound_function,
+-														vector<unique_ptr<Expression>> &arguments) {
++static unique_ptr<FunctionData> MSSQLPreloadCatalogBind(BindScalarFunctionInput &input) {
++	auto &context = input.GetClientContext();
++	auto &arguments = input.GetArguments();
+ 	// First argument is the catalog name (must be constant)
+ 	if (arguments[0]->HasParameter()) {
+ 		throw InvalidInputException("mssql_preload_catalog: catalog_name must be a constant, not a parameter");
+@@ -159,9 +161,8 @@ static void MSSQLPreloadCatalogExecute(DataChunk &args, ExpressionState &state,
+ void RegisterMSSQLPreloadCatalogFunction(ExtensionLoader &loader) {
+ 	// mssql_preload_catalog(catalog_name VARCHAR [, schema_name VARCHAR]) -> VARCHAR
+ 	ScalarFunction func("mssql_preload_catalog", {LogicalType::VARCHAR}, LogicalType::VARCHAR,
+-						MSSQLPreloadCatalogExecute, MSSQLPreloadCatalogBind);
+-	func.varargs = LogicalType::VARCHAR;  // Optional schema_name
+-	func.null_handling = FunctionNullHandling::SPECIAL_HANDLING;
++						MSSQLPreloadCatalogExecute, MSSQLPreloadCatalogBind, nullptr, nullptr, LogicalType::VARCHAR,
++						FunctionStability::CONSISTENT, FunctionNullHandling::SPECIAL_HANDLING);
+ 	loader.RegisterFunction(func);
+ }
+ 
+diff --git a/src/mssql_functions.cpp b/src/mssql_functions.cpp
+index c521e23..4dc313a 100644
+--- a/src/mssql_functions.cpp
++++ b/src/mssql_functions.cpp
+@@ -225,14 +225,6 @@ void MSSQLScanFunction(ClientContext &context, TableFunctionInput &data, DataChu
+ 		return;
+ 	}
+ 
+-	// Check for query cancellation (Ctrl+C)
+-	if (context.interrupted) {
+-		global_state.result_stream->Cancel();
+-		global_state.done = true;
+-		output.SetCardinality(0);
+-		return;
+-	}
+-
+ 	// Fill chunk from result stream
+ 	try {
+ 		idx_t rows = global_state.result_stream->FillChunk(output);
+@@ -303,8 +295,9 @@ struct MSSQLExecBindData : public FunctionData {
+ };
+ 
+ // Bind function for mssql_exec
+-static unique_ptr<FunctionData> MSSQLExecBind(ClientContext &context, ScalarFunction &bound_function,
+-											  vector<unique_ptr<Expression>> &arguments) {
++static unique_ptr<FunctionData> MSSQLExecBind(BindScalarFunctionInput &input) {
++	auto &context = input.GetClientContext();
++	auto &arguments = input.GetArguments();
+ 	// First argument is the context name (attached database name, must be constant)
+ 	if (arguments[0]->HasParameter()) {
+ 		throw InvalidInputException("mssql_exec: context_name must be a constant, not a parameter");
+@@ -408,8 +401,8 @@ static void MSSQLExecExecute(DataChunk &args, ExpressionState &state, Vector &re
+ 
+ ScalarFunction MSSQLExecScalarFunction::GetFunction() {
+ 	ScalarFunction func(NAME, {LogicalType::VARCHAR, LogicalType::VARCHAR}, LogicalType::BIGINT, MSSQLExecExecute,
+-						MSSQLExecBind);
+-	func.null_handling = FunctionNullHandling::SPECIAL_HANDLING;
++						MSSQLExecBind, nullptr, nullptr, LogicalType(LogicalTypeId::INVALID),
++						FunctionStability::CONSISTENT, FunctionNullHandling::SPECIAL_HANDLING);
+ 	return func;
+ }
+ 
+diff --git a/src/tds/encoding/type_converter.cpp b/src/tds/encoding/type_converter.cpp
+index 7437755..2f8bdf4 100644
+--- a/src/tds/encoding/type_converter.cpp
++++ b/src/tds/encoding/type_converter.cpp
+@@ -3,6 +3,8 @@
+ #include <cstdlib>
+ #include <cstring>
+ #include "duckdb/common/exception.hpp"
++#include "duckdb/common/vector/flat_vector.hpp"
++#include "duckdb/common/vector/string_vector.hpp"
+ #include "duckdb/common/types/decimal.hpp"
+ #include "duckdb/common/types/uuid.hpp"
+ #include "tds/encoding/datetime_encoding.hpp"
+@@ -337,24 +339,24 @@ void TypeConverter::ConvertInteger(const std::vector<uint8_t> &value, const Colu
+ 	switch (len) {
+ 	case 1:
+ 		// SQL Server TINYINT is unsigned (0-255), use uint8_t
+-		FlatVector::GetData<uint8_t>(vector)[row_idx] = value[0];
++		FlatVector::GetDataMutable<uint8_t>(vector)[row_idx] = value[0];
+ 		break;
+ 	case 2: {
+ 		int16_t v = 0;
+ 		std::memcpy(&v, value.data(), 2);
+-		FlatVector::GetData<int16_t>(vector)[row_idx] = v;
++		FlatVector::GetDataMutable<int16_t>(vector)[row_idx] = v;
+ 		break;
+ 	}
+ 	case 4: {
+ 		int32_t v = 0;
+ 		std::memcpy(&v, value.data(), 4);
+-		FlatVector::GetData<int32_t>(vector)[row_idx] = v;
++		FlatVector::GetDataMutable<int32_t>(vector)[row_idx] = v;
+ 		break;
+ 	}
+ 	case 8: {
+ 		int64_t v = 0;
+ 		std::memcpy(&v, value.data(), 8);
+-		FlatVector::GetData<int64_t>(vector)[row_idx] = v;
++		FlatVector::GetDataMutable<int64_t>(vector)[row_idx] = v;
+ 		break;
+ 	}
+ 	default:
+@@ -364,7 +366,7 @@ void TypeConverter::ConvertInteger(const std::vector<uint8_t> &value, const Colu
+ 
+ void TypeConverter::ConvertBoolean(const std::vector<uint8_t> &value, Vector &vector, idx_t row_idx) {
+ 	bool b = !value.empty() && value[0] != 0;
+-	FlatVector::GetData<bool>(vector)[row_idx] = b;
++	FlatVector::GetDataMutable<bool>(vector)[row_idx] = b;
+ }
+ 
+ void TypeConverter::ConvertFloat(const std::vector<uint8_t> &value, const ColumnMetadata &column, Vector &vector,
+@@ -372,11 +374,11 @@ void TypeConverter::ConvertFloat(const std::vector<uint8_t> &value, const Column
+ 	if (value.size() == 4) {
+ 		float f = 0;
+ 		std::memcpy(&f, value.data(), 4);
+-		FlatVector::GetData<float>(vector)[row_idx] = f;
++		FlatVector::GetDataMutable<float>(vector)[row_idx] = f;
+ 	} else if (value.size() == 8) {
+ 		double d = 0;
+ 		std::memcpy(&d, value.data(), 8);
+-		FlatVector::GetData<double>(vector)[row_idx] = d;
++		FlatVector::GetDataMutable<double>(vector)[row_idx] = d;
+ 	}
+ }
+ 
+@@ -386,13 +388,13 @@ void TypeConverter::ConvertDecimal(const std::vector<uint8_t> &value, const Colu
+ 
+ 	// DuckDB DECIMAL uses different storage based on precision
+ 	if (column.precision <= 4) {
+-		FlatVector::GetData<int16_t>(vector)[row_idx] = static_cast<int16_t>(int_value.lower);
++		FlatVector::GetDataMutable<int16_t>(vector)[row_idx] = static_cast<int16_t>(int_value.lower);
+ 	} else if (column.precision <= 9) {
+-		FlatVector::GetData<int32_t>(vector)[row_idx] = static_cast<int32_t>(int_value.lower);
++		FlatVector::GetDataMutable<int32_t>(vector)[row_idx] = static_cast<int32_t>(int_value.lower);
+ 	} else if (column.precision <= 18) {
+-		FlatVector::GetData<int64_t>(vector)[row_idx] = static_cast<int64_t>(int_value.lower);
++		FlatVector::GetDataMutable<int64_t>(vector)[row_idx] = static_cast<int64_t>(int_value.lower);
+ 	} else {
+-		FlatVector::GetData<hugeint_t>(vector)[row_idx] = int_value;
++		FlatVector::GetDataMutable<hugeint_t>(vector)[row_idx] = int_value;
+ 	}
+ }
+ 
+@@ -403,11 +405,11 @@ void TypeConverter::ConvertMoney(const std::vector<uint8_t> &value, const Column
+ 	if (value.size() == 8) {
+ 		// MONEY (8 bytes) -> DECIMAL(19,4) requires hugeint_t storage
+ 		int_value = DecimalEncoding::ConvertMoney(value.data());
+-		FlatVector::GetData<hugeint_t>(vector)[row_idx] = int_value;
++		FlatVector::GetDataMutable<hugeint_t>(vector)[row_idx] = int_value;
+ 	} else if (value.size() == 4) {
+ 		// SMALLMONEY (4 bytes) -> DECIMAL(10,4) fits in int64_t
+ 		int_value = DecimalEncoding::ConvertSmallMoney(value.data());
+-		FlatVector::GetData<int64_t>(vector)[row_idx] = static_cast<int64_t>(int_value.lower);
++		FlatVector::GetDataMutable<int64_t>(vector)[row_idx] = static_cast<int64_t>(int_value.lower);
+ 	} else {
+ 		throw InvalidInputException("Invalid MONEY length: %d", value.size());
+ 	}
+@@ -439,7 +441,7 @@ void TypeConverter::ConvertString(const std::vector<uint8_t> &value, const Colum
+ 	}
+ 
+ 	auto add_start = std::chrono::steady_clock::now();
+-	FlatVector::GetData<string_t>(vector)[row_idx] = StringVector::AddString(vector, str);
++	FlatVector::GetDataMutable<string_t>(vector)[row_idx] = StringVector::AddString(vector, str);
+ 	auto add_end = std::chrono::steady_clock::now();
+ 
+ 	auto total_us = std::chrono::duration_cast<std::chrono::microseconds>(add_end - start).count();
+@@ -454,19 +456,19 @@ void TypeConverter::ConvertString(const std::vector<uint8_t> &value, const Colum
+ }
+ 
+ void TypeConverter::ConvertBinary(const std::vector<uint8_t> &value, Vector &vector, idx_t row_idx) {
+-	FlatVector::GetData<string_t>(vector)[row_idx] =
++	FlatVector::GetDataMutable<string_t>(vector)[row_idx] =
+ 		StringVector::AddStringOrBlob(vector, reinterpret_cast<const char *>(value.data()), value.size());
+ }
+ 
+ void TypeConverter::ConvertDate(const std::vector<uint8_t> &value, Vector &vector, idx_t row_idx) {
+ 	date_t d = DateTimeEncoding::ConvertDate(value.data());
+-	FlatVector::GetData<date_t>(vector)[row_idx] = d;
++	FlatVector::GetDataMutable<date_t>(vector)[row_idx] = d;
+ }
+ 
+ void TypeConverter::ConvertTime(const std::vector<uint8_t> &value, const ColumnMetadata &column, Vector &vector,
+ 								idx_t row_idx) {
+ 	dtime_t t = DateTimeEncoding::ConvertTime(value.data(), column.scale);
+-	FlatVector::GetData<dtime_t>(vector)[row_idx] = t;
++	FlatVector::GetDataMutable<dtime_t>(vector)[row_idx] = t;
+ }
+ 
+ void TypeConverter::ConvertDateTime(const std::vector<uint8_t> &value, const ColumnMetadata &column, Vector &vector,
+@@ -496,18 +498,18 @@ void TypeConverter::ConvertDateTime(const std::vector<uint8_t> &value, const Col
+ 		throw InvalidInputException("Unexpected datetime type: 0x%02X", column.type_id);
+ 	}
+ 
+-	FlatVector::GetData<timestamp_t>(vector)[row_idx] = ts;
++	FlatVector::GetDataMutable<timestamp_t>(vector)[row_idx] = ts;
+ }
+ 
+ void TypeConverter::ConvertDatetimeOffset(const std::vector<uint8_t> &value, const ColumnMetadata &column,
+ 										  Vector &vector, idx_t row_idx) {
+ 	timestamp_t ts = DateTimeEncoding::ConvertDatetimeOffset(value.data(), column.scale);
+-	FlatVector::GetData<timestamp_t>(vector)[row_idx] = ts;
++	FlatVector::GetDataMutable<timestamp_t>(vector)[row_idx] = ts;
+ }
+ 
+ void TypeConverter::ConvertGuid(const std::vector<uint8_t> &value, Vector &vector, idx_t row_idx) {
+ 	hugeint_t guid = GuidEncoding::ConvertGuid(value.data());
+-	FlatVector::GetData<hugeint_t>(vector)[row_idx] = guid;
++	FlatVector::GetDataMutable<hugeint_t>(vector)[row_idx] = guid;
+ }
+ 
+ }  // namespace encoding

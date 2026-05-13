@@ -1,0 +1,35 @@
+diff --git a/src/catalog/mssql_refresh_function.cpp b/src/catalog/mssql_refresh_function.cpp
+index 6510dc9..d088217 100644
+--- a/src/catalog/mssql_refresh_function.cpp
++++ b/src/catalog/mssql_refresh_function.cpp
+@@ -9,6 +9,7 @@
+ #include "duckdb/common/vector_operations/unary_executor.hpp"
+ #include "duckdb/function/scalar_function.hpp"
+ #include "duckdb/main/database.hpp"
++#include "duckdb/execution/expression_executor.hpp"
+ #include "duckdb/planner/expression/bound_function_expression.hpp"
+ 
+ namespace duckdb {
+@@ -17,8 +18,9 @@ namespace duckdb {
+ // Bind Function - Validates arguments at compile time
+ //===----------------------------------------------------------------------===//
+ 
+-static unique_ptr<FunctionData> MSSQLRefreshCacheBind(ClientContext &context, ScalarFunction &bound_function,
+-													  vector<unique_ptr<Expression>> &arguments) {
++static unique_ptr<FunctionData> MSSQLRefreshCacheBind(BindScalarFunctionInput &input) {
++	auto &context = input.GetClientContext();
++	auto &arguments = input.GetArguments();
+ 	// First argument is the catalog name (must be constant)
+ 	if (arguments[0]->HasParameter()) {
+ 		throw InvalidInputException("mssql_refresh_cache: catalog_name must be a constant, not a parameter");
+@@ -118,8 +120,8 @@ static void MSSQLRefreshCacheExecute(DataChunk &args, ExpressionState &state, Ve
+ void RegisterMSSQLRefreshCacheFunction(ExtensionLoader &loader) {
+ 	// mssql_refresh_cache(catalog_name VARCHAR) -> BOOLEAN
+ 	ScalarFunction func("mssql_refresh_cache", {LogicalType::VARCHAR}, LogicalType::BOOLEAN, MSSQLRefreshCacheExecute,
+-						MSSQLRefreshCacheBind);
+-	func.null_handling = FunctionNullHandling::SPECIAL_HANDLING;
++						MSSQLRefreshCacheBind, nullptr, nullptr, LogicalType(LogicalTypeId::INVALID),
++						FunctionStability::CONSISTENT, FunctionNullHandling::SPECIAL_HANDLING);
+ 	loader.RegisterFunction(func);
+ }
+ 

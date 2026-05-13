@@ -1,0 +1,93 @@
+diff --git a/src/copy/copy_function.cpp b/src/copy/copy_function.cpp
+index b68affd..3b0d954 100644
+--- a/src/copy/copy_function.cpp
++++ b/src/copy/copy_function.cpp
+@@ -458,12 +458,6 @@ void BCPCopySink(ExecutionContext &context, FunctionData &bind_data, GlobalFunct
+ 		return;
+ 	}
+ 
+-	// Check for interrupt (Ctrl+C) - allows user to cancel long-running COPY
+-	if (context.client.interrupted) {
+-		CopyDebugLog(1, "BCPCopySink: INTERRUPT detected at start");
+-		throw InterruptException();
+-	}
+-
+ 	// Check for errors
+ 	if (gdata.has_error) {
+ 		throw IOException("MSSQL COPY: Previous error occurred: %s", gdata.error_message);
+@@ -482,12 +476,6 @@ void BCPCopySink(ExecutionContext &context, FunctionData &bind_data, GlobalFunct
+ 		CopyDebugLog(2, "BCPCopySink: encoded %llu rows in %.2f ms, checking flush...",
+ 					 (unsigned long long)rows_written, write_ms);
+ 
+-		// Check for interrupt after encoding
+-		if (context.client.interrupted) {
+-			CopyDebugLog(1, "BCPCopySink: INTERRUPT detected after encoding");
+-			throw InterruptException();
+-		}
+-
+ 		// Check if we should flush to SQL Server
+ 		double flush_ms = 0;
+ 		if (bdata.config.ShouldFlushToServer(gdata.writer->GetRowsInCurrentBatch())) {
+@@ -504,12 +492,6 @@ void BCPCopySink(ExecutionContext &context, FunctionData &bind_data, GlobalFunct
+ 			CopyDebugLog(1, "BCPCopySink: server flush completed in %.2f ms", flush_ms);
+ 		}
+ 
+-		// Check for interrupt after flush
+-		if (context.client.interrupted) {
+-			CopyDebugLog(1, "BCPCopySink: INTERRUPT detected after flush");
+-			throw InterruptException();
+-		}
+-
+ 		double total_ms = ElapsedMs(start_sink);
+ 		if (GetCopyDebugLevel() >= 1) {
+ 			double rows_per_sec = (total_ms > 0) ? (rows_written * 1000.0 / total_ms) : 0;
+@@ -613,11 +595,6 @@ void BCPCopyFinalize(ClientContext &context, FunctionData &bind_data, GlobalFunc
+ 	auto &bdata = bind_data.Cast<MSSQLCopyBindData>();
+ 	auto &gdata = gstate.Cast<MSSQLCopyGlobalState>();
+ 
+-	// Check for interrupt before starting heavy finalize
+-	if (context.interrupted) {
+-		throw InterruptException();
+-	}
+-
+ 	CopyDebugLog(1, "BCPCopyFinalize: completing BCP stream");
+ 
+ 	// Get catalog early for potential cleanup
+diff --git a/src/table_scan/table_scan.cpp b/src/table_scan/table_scan.cpp
+index f9b0e9b..81f1efc 100644
+--- a/src/table_scan/table_scan.cpp
++++ b/src/table_scan/table_scan.cpp
+@@ -661,14 +661,6 @@ static void TableScanExecute(ClientContext &context, TableFunctionInput &data, D
+ 		return;
+ 	}
+ 
+-	// Check for query cancellation (Ctrl+C)
+-	if (context.interrupted) {
+-		global_state.result_stream->Cancel();
+-		global_state.done = true;
+-		output.SetCardinality(0);
+-		return;
+-	}
+-
+ 	// Fill chunk from result stream
+ 	try {
+ 		idx_t rows = global_state.result_stream->FillChunk(output);
+diff --git a/src/table_scan/table_scan_execute.cpp b/src/table_scan/table_scan_execute.cpp
+index e4f1746..ba89032 100644
+--- a/src/table_scan/table_scan_execute.cpp
++++ b/src/table_scan/table_scan_execute.cpp
+@@ -46,14 +46,6 @@ void TableScanExecute(ClientContext &context, TableFunctionInput &data, DataChun
+ 		return;
+ 	}
+ 
+-	// Check for query cancellation (Ctrl+C)
+-	if (context.interrupted) {
+-		global_state.result_stream->Cancel();
+-		global_state.done = true;
+-		output.SetCardinality(0);
+-		return;
+-	}
+-
+ 	// Fill chunk from result stream
+ 	try {
+ 		idx_t rows = global_state.result_stream->FillChunk(output);

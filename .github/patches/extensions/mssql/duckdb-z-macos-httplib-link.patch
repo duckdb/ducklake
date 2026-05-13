@@ -1,0 +1,24 @@
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index c711f7d..df24d33 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -162,6 +162,9 @@ target_include_directories(${EXTENSION_NAME} PRIVATE
+ )
+ target_compile_definitions(${EXTENSION_NAME} PRIVATE CPPHTTPLIB_OPENSSL_SUPPORT)
+ target_link_libraries(${EXTENSION_NAME} OpenSSL::SSL OpenSSL::Crypto)
++if(APPLE)
++    target_link_libraries(${EXTENSION_NAME} "-framework Security" "-framework CoreFoundation")
++endif()
+ if(WIN32)
+     # Windows: static OpenSSL and httplib need Windows system libraries (both MSVC and MinGW)
+     target_link_libraries(${EXTENSION_NAME} ws2_32 crypt32)
+@@ -181,6 +184,9 @@ target_include_directories(${LOADABLE_EXTENSION_NAME} PRIVATE
+ )
+ target_compile_definitions(${LOADABLE_EXTENSION_NAME} PRIVATE CPPHTTPLIB_OPENSSL_SUPPORT)
+ target_link_libraries(${LOADABLE_EXTENSION_NAME} OpenSSL::SSL OpenSSL::Crypto)
++if(APPLE)
++    target_link_libraries(${LOADABLE_EXTENSION_NAME} "-framework Security" "-framework CoreFoundation")
++endif()
+ if(WIN32)
+     # Windows: static OpenSSL and httplib need Windows system libraries (both MSVC and MinGW)
+     target_link_libraries(${LOADABLE_EXTENSION_NAME} ws2_32 crypt32)

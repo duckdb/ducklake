@@ -1,0 +1,16 @@
+diff --git a/src/connection/mssql_connection_provider.cpp b/src/connection/mssql_connection_provider.cpp
+index b39fe09..235c55c 100644
+--- a/src/connection/mssql_connection_provider.cpp
++++ b/src/connection/mssql_connection_provider.cpp
+@@ -36,6 +36,12 @@ namespace duckdb {
+ //===----------------------------------------------------------------------===//
+ 
+ static MSSQLTransaction *TryGetMSSQLTransaction(ClientContext &context, MSSQLCatalog &catalog) {
++	// DuckLake uses mssql_exec/mssql_scan as metadata helper calls. The mssql
++	// extension's explicit transaction descriptor path is not compatible with
++	// this DuckDB build, so keep helper calls on pooled autocommit connections.
++	return nullptr;
++
+ 	// Check if we're in a transaction context
+ 	auto &meta_transaction = MetaTransaction::Get(context);
+ 

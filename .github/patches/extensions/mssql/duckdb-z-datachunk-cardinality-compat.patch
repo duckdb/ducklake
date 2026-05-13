@@ -1,0 +1,13 @@
+diff --git a/src/query/mssql_result_stream.cpp b/src/query/mssql_result_stream.cpp
+index 088b915..3ce4a13 100644
+--- a/src/query/mssql_result_stream.cpp
++++ b/src/query/mssql_result_stream.cpp
+@@ -330,7 +330,7 @@ idx_t MSSQLResultStream::FillChunk(DataChunk &chunk) {
+ 	}
+ 
+ exit_loop:
+-	chunk.SetCardinality(row_count);
++	chunk.SetChildCardinality(row_count);
+ 
+ 	// Log timing summary
+ 	auto chunk_end = std::chrono::steady_clock::now();
