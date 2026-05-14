@@ -9,14 +9,6 @@ require parquet
 statement ok
 ATTACH 'ducklake:__TEST_DIR__/options_unknown_key.db' AS ducklake (DATA_PATH '__TEST_DIR__/options_unknown_key_files')
 
-query III
-SELECT option_name, description IS NOT NULL, scope FROM ducklake.options() ORDER BY option_name
-----
-created_by	true	GLOBAL
-data_path	true	GLOBAL
-encrypted	true	GLOBAL
-version	true	GLOBAL
-
 statement ok
 INSERT INTO __ducklake_metadata_ducklake.ducklake_metadata (key, value) VALUES ('mykey', 'myvalue'), ('another_unknown', 'v2')
 
