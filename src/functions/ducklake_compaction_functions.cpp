@@ -397,10 +397,7 @@ unique_ptr<LogicalOperator> DuckLakeCompactor::InsertSort(Binder &binder, unique
 
 	// Append (row_id, snapshot_id) as deterministic tiebreakers when requested so the file order
 	// exactly matches the deletes-position query's ORDER BY, including ties in the user sort key.
-	// We resolve binding positions by scanning the LogicalGet's column_ids for the virtual-column
-	// identifiers -- counting from latest_table.GetColumns().PhysicalColumnCount() would be wrong
-	// when the inlined-table physical layout differs from the latest table (e.g. after ALTER TABLE
-	// ADD COLUMN in the same transaction as the flush; covered by data_inlining_flush_sorted_alter_table.test).
+	// Handles ALTER TABLE ADD COLUMN in the same transaction as the flush
 	if (add_tiebreakers) {
 		LogicalOperator *get_op = plan.get();
 		while (get_op->type != LogicalOperatorType::LOGICAL_GET) {
