@@ -2573,12 +2573,13 @@ void DuckLakeTransaction::FlushChanges() {
 	optional_ptr<vector<DuckLakeGlobalStatsInfo>> stats;
 	for (idx_t i = 0; i < max_retry_count + 1; i++) {
 		bool can_retry;
+		auto attempt_changes = transaction_changes;
 		try {
 			can_retry = false;
 			if (i > 0) {
 				// we failed our first commit due to another transaction committing
 				// retry - but first check for conflicts
-				commit_stats_snapshot = CheckForConflicts(transaction_snapshot, transaction_changes);
+				commit_stats_snapshot = CheckForConflicts(transaction_snapshot, attempt_changes);
 				stats = &commit_stats_snapshot.stats;
 			} else {
 				commit_stats_snapshot.snapshot = GetSnapshot();
@@ -2592,9 +2593,9 @@ void DuckLakeTransaction::FlushChanges() {
 			DuckLakeCommitState commit_state(commit_snapshot);
 			// write the new snapshot
 			string batch_queries = metadata_manager->InsertSnapshot();
-			batch_queries += CommitChanges(commit_state, transaction_changes, stats);
+			batch_queries += CommitChanges(commit_state, attempt_changes, stats);
 
-			batch_queries += WriteSnapshotChanges(commit_state, transaction_changes);
+			batch_queries += WriteSnapshotChanges(commit_state, attempt_changes);
 			auto res = metadata_manager->Execute(commit_snapshot, batch_queries);
 			if (res->HasError()) {
 				res->GetErrorObject().Throw("Failed to flush changes into DuckLake: ");
