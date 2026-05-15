@@ -373,7 +373,7 @@ void DuckLakeCompactor::GenerateCompactions(DuckLakeTableEntry &table,
 
 unique_ptr<LogicalOperator> DuckLakeCompactor::InsertSort(Binder &binder, unique_ptr<LogicalOperator> &plan,
                                                           DuckLakeTableEntry &table,
-                                                          optional_ptr<DuckLakeSort> sort_data) {
+                                                          optional_ptr<DuckLakeSort> sort_data, bool add_tiebreakers) {
 	auto bindings = plan->GetColumnBindings();
 
 	// Parse the sort expressions from the sort_data
@@ -394,6 +394,44 @@ unique_ptr<LogicalOperator> DuckLakeCompactor::InsertSort(Binder &binder, unique
 
 	// Bind the ORDER BY expressions
 	auto orders = DuckLakeCompactor::BindSortOrders(binder, table, table_index, pre_bound_orders);
+
+	// Append (row_id, snapshot_id) as deterministic tiebreakers when requested so the file order
+	// exactly matches the deletes-position query's ORDER BY, including ties in the user sort key.
+	// We resolve binding positions by scanning the LogicalGet's column_ids for the virtual-column
+	// identifiers -- counting from latest_table.GetColumns().PhysicalColumnCount() would be wrong
+	// when the inlined-table physical layout differs from the latest table (e.g. after ALTER TABLE
+	// ADD COLUMN in the same transaction as the flush; covered by data_inlining_flush_sorted_alter_table.test).
+	if (add_tiebreakers) {
+		LogicalOperator *get_op = plan.get();
+		while (get_op->type != LogicalOperatorType::LOGICAL_GET) {
+			if (get_op->children.size() != 1) {
+				throw InternalException("DuckLakeCompactor::InsertSort: expected single-child operator chain to "
+				                        "LogicalGet when add_tiebreakers=true");
+			}
+			get_op = get_op->children[0].get();
+		}
+		auto &logical_get = get_op->Cast<LogicalGet>();
+		auto &column_ids = logical_get.GetColumnIds();
+		idx_t row_id_pos = DConstants::INVALID_INDEX;
+		idx_t snapshot_id_pos = DConstants::INVALID_INDEX;
+		for (idx_t i = 0; i < column_ids.size(); i++) {
+			auto primary = column_ids[i].GetPrimaryIndex();
+			if (primary == COLUMN_IDENTIFIER_ROW_ID) {
+				row_id_pos = i;
+			} else if (primary == DuckLakeMultiFileReader::COLUMN_IDENTIFIER_SNAPSHOT_ID) {
+				snapshot_id_pos = i;
+			}
+		}
+		if (row_id_pos == DConstants::INVALID_INDEX || snapshot_id_pos == DConstants::INVALID_INDEX ||
+		    row_id_pos >= bindings.size() || snapshot_id_pos >= bindings.size()) {
+			throw InternalException("DuckLakeCompactor::InsertSort: row_id and snapshot_id virtual columns must be "
+			                        "present in the LogicalGet's column_ids when add_tiebreakers=true");
+		}
+		orders.emplace_back(OrderType::ASCENDING, OrderByNullType::NULLS_LAST,
+		                    make_uniq<BoundColumnRefExpression>(LogicalType::BIGINT, bindings[row_id_pos]));
+		orders.emplace_back(OrderType::ASCENDING, OrderByNullType::NULLS_LAST,
+		                    make_uniq<BoundColumnRefExpression>(LogicalType::BIGINT, bindings[snapshot_id_pos]));
+	}
 
 	// Create the LogicalOrder operator
 	auto order = make_uniq<LogicalOrder>(std::move(orders));
