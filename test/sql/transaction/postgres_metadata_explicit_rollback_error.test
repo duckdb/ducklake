@@ -1,0 +1,45 @@
+# name: test/sql/transaction/postgres_metadata_explicit_rollback_error.test
+# description: Explicit rollback reports metadata rollback failures after cleanup
+# group: [transaction]
+
+require ducklake
+
+require parquet
+
+require postgres_scanner
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'dbname=ducklakedb' AS pg (TYPE postgres)
+
+statement ok
+CALL postgres_execute('pg', 'DROP SCHEMA IF EXISTS postgres_metadata_explicit_rollback_error CASCADE', use_transaction=false)
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION} application_name=ducklake_metadata_explicit_rollback_error' AS ducklake (DATA_PATH '{DATA_PATH}/postgres_metadata_explicit_rollback_error', METADATA_SCHEMA 'postgres_metadata_explicit_rollback_error')
+
+statement ok
+USE ducklake
+
+statement ok
+CREATE TABLE t(i INTEGER)
+
+statement ok
+BEGIN
+
+statement ok
+INSERT INTO t VALUES (1)
+
+statement ok
+CALL postgres_execute('pg', 'SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE application_name = ''ducklake_metadata_explicit_rollback_error''', use_transaction=false)
+
+statement error
+ROLLBACK
+----
+Failed to rollback metadata transaction
+
+statement ok
+CREATE TABLE after_rollback(i INTEGER)

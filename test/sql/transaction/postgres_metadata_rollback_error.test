@@ -1,0 +1,50 @@
+# name: test/sql/transaction/postgres_metadata_rollback_error.test
+# description: Postgres metadata rollback failures are reported when commit cleanup fails
+# group: [transaction]
+
+require ducklake
+
+require parquet
+
+require postgres_scanner
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'dbname=ducklakedb' AS pg (TYPE postgres)
+
+statement ok
+CALL postgres_execute('pg', 'DROP SCHEMA IF EXISTS postgres_metadata_rollback_error CASCADE', use_transaction=false)
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/postgres_metadata_rollback_error', METADATA_SCHEMA 'postgres_metadata_rollback_error', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+USE ducklake
+
+statement ok
+CREATE TABLE t(i INTEGER)
+
+statement ok
+CALL postgres_execute('pg', 'CREATE SEQUENCE postgres_metadata_rollback_error.disconnect_once_seq', use_transaction=false)
+
+statement ok
+CALL postgres_execute('pg', 'CREATE OR REPLACE FUNCTION postgres_metadata_rollback_error.disconnect_once() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF nextval(''postgres_metadata_rollback_error.disconnect_once_seq'') = 1 THEN PERFORM pg_terminate_backend(pg_backend_pid()); END IF; RETURN NEW; END; $$', use_transaction=false)
+
+statement ok
+CALL postgres_execute('pg', 'CREATE TRIGGER disconnect_once_before_snapshot_insert BEFORE INSERT ON postgres_metadata_rollback_error.ducklake_snapshot FOR EACH ROW EXECUTE FUNCTION postgres_metadata_rollback_error.disconnect_once()', use_transaction=false)
+
+statement ok
+SET ducklake_max_retry_count = 0
+
+statement error
+INSERT INTO t VALUES (1), (2), (3)
+----
+<REGEX>:.*Failed to rollback metadata transaction.*Failed to flush changes into DuckLake.*
+
+query I
+SELECT COUNT(*) FROM glob('{DATA_PATH}/postgres_metadata_rollback_error/**/*.parquet')
+----
+0
