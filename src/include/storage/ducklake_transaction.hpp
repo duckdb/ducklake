@@ -12,9 +12,12 @@
 #include "common/ducklake_data_file.hpp"
 #include "common/ducklake_snapshot.hpp"
 #include "duckdb/common/case_insensitive_map.hpp"
+#include "duckdb/common/exception.hpp"
 #include "duckdb/common/types/value_map.hpp"
 #include "duckdb/main/connection.hpp"
+#include "duckdb/main/query_result.hpp"
 #include "duckdb/transaction/transaction.hpp"
+#include <utility>
 #include "storage/ducklake_catalog_set.hpp"
 #include "storage/ducklake_inlined_data.hpp"
 #include "storage/ducklake_metadata_manager.hpp"
@@ -40,6 +43,36 @@ struct DuckLakePath;
 struct DuckLakeCommitState;
 class DuckLakeFieldId;
 class LocalTableChangeIterationHelper;
+
+inline unique_ptr<QueryResult> result_or_throw(unique_ptr<QueryResult> result, const string &err) {
+	if (result->HasError()) {
+		result->GetErrorObject().Throw(err);
+	}
+	return result;
+}
+
+inline void execute_or_throw(unique_ptr<QueryResult> result, const string &err) {
+	(void)result_or_throw(std::move(result), err);
+}
+
+template <class T>
+T query_scalar_or_throw(unique_ptr<QueryResult> result, const string &err) {
+	auto checked_result = result_or_throw(std::move(result), err);
+	auto chunk = checked_result->Fetch();
+	if (!chunk || chunk->size() == 0) {
+		throw InvalidInputException("Expected scalar result");
+	}
+	return chunk->GetValue(0, 0).template GetValue<T>();
+}
+
+template <class T>
+T query_scalar_or_zero(unique_ptr<QueryResult> result, const string &err) {
+	auto checked_result = result_or_throw(std::move(result), err);
+	for (auto &row : *checked_result) {
+		return row.template GetValue<T>(0);
+	}
+	return T {};
+}
 
 struct FlushedInlinedTableInfo {
 	DuckLakeInlinedTableInfo inlined_table;

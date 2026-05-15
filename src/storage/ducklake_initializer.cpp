@@ -61,15 +61,13 @@ string DuckLakeInitializer::GetAttachOptions() {
 void DuckLakeInitializer::Initialize() {
 	auto &transaction = DuckLakeTransaction::Get(context, catalog);
 	// attach the metadata database
-	auto result = transaction.Query("ATTACH OR REPLACE {METADATA_PATH} AS {METADATA_CATALOG_NAME_IDENTIFIER}" +
-	                                GetAttachOptions());
-	if (result->HasError()) {
-		auto &error_obj = result->GetErrorObject();
-		error_obj.Throw("Failed to attach DuckLake MetaData \"" + catalog.MetadataDatabaseName() + "\" at path + \"" +
-		                catalog.MetadataPath() + "\"");
-	}
+	execute_or_throw(
+	    transaction.Query("ATTACH OR REPLACE {METADATA_PATH} AS {METADATA_CATALOG_NAME_IDENTIFIER}" +
+	                      GetAttachOptions()),
+	    "Failed to attach DuckLake MetaData \"" + catalog.MetadataDatabaseName() + "\" at path + \"" +
+	        catalog.MetadataPath() + "\"");
 	// explicitly load all secrets - work-around to secret initialization bug
-	transaction.Query("FROM duckdb_secrets()");
+	execute_or_throw(transaction.Query("FROM duckdb_secrets()"), "Failed to load DuckDB secrets");
 
 	bool has_explicit_schema = !options.metadata_schema.empty();
 	if (options.metadata_schema.empty()) {
@@ -94,7 +92,7 @@ void DuckLakeInitializer::Initialize() {
 	// directly query a known ducklake metadata table to avoid scanning all attached catalogs via duckdb_tables()
 	// this prevents a corrupted ducklake catalog from blocking initialization of unrelated ducklake databases
 	// FIXME: verify that all ducklake tables are in the correct format
-	result = transaction.Query("SELECT NULL FROM {METADATA_CATALOG}.ducklake_metadata LIMIT 1");
+	auto result = transaction.Query("SELECT NULL FROM {METADATA_CATALOG}.ducklake_metadata LIMIT 1");
 	if (result->HasError()) {
 		auto &error_obj = result->GetErrorObject();
 		if (error_obj.Type() == ExceptionType::CATALOG) {
