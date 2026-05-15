@@ -28,6 +28,7 @@
 #include "duckdb/planner/filter/constant_filter.hpp"
 #include "duckdb/planner/filter/dynamic_filter.hpp"
 #include "duckdb/planner/filter/expression_filter.hpp"
+#include "duckdb/planner/filter/table_filter_functions.hpp"
 #include "duckdb/planner/filter/optional_filter.hpp"
 
 namespace duckdb {
@@ -63,8 +64,7 @@ static void AddSnapshotFilter(BaseFileReader &reader, const ColumnIndex &col_idx
 	auto constant = Value::UBIGINT(snapshot_value).DefaultCastAs(col_type);
 	auto col_ref = make_uniq<BoundReferenceExpression>(col_type, static_cast<storage_t>(0));
 	auto bound_constant = make_uniq<BoundConstantExpression>(std::move(constant));
-	auto comparison =
-	    make_uniq<BoundComparisonExpression>(comparison_type, std::move(col_ref), std::move(bound_constant));
+	auto comparison = BoundComparisonExpression::Create(comparison_type, std::move(col_ref), std::move(bound_constant));
 	auto filter = make_uniq<ExpressionFilter>(std::move(comparison));
 	reader.filters->PushFilter(ProjectionIndex(col_idx.GetPrimaryIndex()), std::move(filter));
 }
@@ -90,19 +90,19 @@ static bool CanSkipFileByTopNDynamicFilter(const DuckLakeFileListEntry &file_ent
 	}
 	for (auto &it : filter_info.column_filters) {
 		auto &col_filter = it.second;
-		auto *filter = DuckLakeUtil::GetOptionalDynamicFilter(*col_filter.table_filter);
-		if (!filter) {
+		auto filter_data = DuckLakeUtil::GetOptionalDynamicFilterData(*col_filter.table_filter);
+		if (!filter_data) {
 			continue;
 		}
 		ExpressionType comparison_type;
 		Value constant;
 		{
-			lock_guard<mutex> l(filter->filter_data->lock);
-			if (!filter->filter_data->initialized) {
+			lock_guard<mutex> l(filter_data->lock);
+			if (!filter_data->initialized) {
 				return false;
 			}
-			comparison_type = filter->filter_data->comparison_type;
-			constant = filter->filter_data->constant;
+			comparison_type = filter_data->comparison_type;
+			constant = filter_data->constant;
 		}
 
 		auto mm_it = file_entry.column_min_max.find(col_filter.column_field_index);

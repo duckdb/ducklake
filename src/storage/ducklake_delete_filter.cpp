@@ -139,8 +139,8 @@ DeleteFileScanResult DuckLakeDeleteFilter::ScanDeletionVectorFile(ClientContext 
 unique_ptr<ExpressionFilter> MakeComparisonFilter(ExpressionType comparison_type, Value constant) {
 	auto col_ref = make_uniq<BoundReferenceExpression>(LogicalType::BIGINT, storage_t(0));
 	auto bound_constant = make_uniq<BoundConstantExpression>(std::move(constant));
-	auto comparison = make_uniq<BoundComparisonExpression>(comparison_type, std::move(col_ref),
-			                                                      std::move(bound_constant));
+	auto comparison = BoundComparisonExpression::Create(comparison_type, std::move(col_ref),
+	                                                    std::move(bound_constant));
 	return make_uniq<ExpressionFilter>(std::move(comparison));
 }
 

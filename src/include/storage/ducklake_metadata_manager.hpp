@@ -22,6 +22,7 @@
 #include "common/ducklake_encryption.hpp"
 #include "common/ducklake_options.hpp"
 #include "common/index.hpp"
+#include "duckdb/planner/filter/expression_filter.hpp"
 #include "duckdb/planner/table_filter.hpp"
 
 namespace duckdb {
@@ -33,7 +34,6 @@ class DuckLakeTransaction;
 class BoundAtClause;
 class QueryResult;
 class FileSystem;
-class ConstantFilter;
 
 struct SnapshotAndStats;
 struct FlushedInlinedTableInfo;
@@ -62,15 +62,26 @@ struct FilterSQLResult {
 struct ColumnFilterInfo {
 	idx_t column_field_index;
 	LogicalType column_type;
-	unique_ptr<TableFilter> table_filter;
+	unique_ptr<ExpressionFilter> table_filter;
 
-	ColumnFilterInfo(idx_t col_idx, LogicalType type, unique_ptr<TableFilter> filter)
+	ColumnFilterInfo(idx_t col_idx, LogicalType type, unique_ptr<ExpressionFilter> filter)
 	    : column_field_index(col_idx), column_type(std::move(type)), table_filter(std::move(filter)) {
 	}
 
 	ColumnFilterInfo(const ColumnFilterInfo &other)
 	    : column_field_index(other.column_field_index), column_type(other.column_type),
 	      table_filter(other.table_filter->Copy()) {
+	}
+
+	ColumnFilterInfo(ColumnFilterInfo &&other) = default;
+	ColumnFilterInfo &operator=(ColumnFilterInfo &&other) = default;
+	ColumnFilterInfo &operator=(const ColumnFilterInfo &other) {
+		if (this != &other) {
+			column_field_index = other.column_field_index;
+			column_type = other.column_type;
+			table_filter = other.table_filter ? other.table_filter->Copy() : nullptr;
+		}
+		return *this;
 	}
 };
 
@@ -321,16 +332,19 @@ private:
 	virtual FilterSQLResult ConvertFilterPushdownToSQL(const FilterPushdownInfo &filter_info);
 	virtual string GenerateCTESectionFromRequirements(const unordered_map<idx_t, CTERequirement> &requirements,
 	                                                  TableIndex table_id);
-	virtual string GenerateFilterFromTableFilter(const TableFilter &filter, const LogicalType &type,
+	virtual string GenerateFilterFromTableFilter(const ExpressionFilter &filter, const LogicalType &type,
 	                                             unordered_set<string> &referenced_stats);
+	virtual string GenerateFilterFromExpression(const Expression &expr, const LogicalType *type,
+	                                            unordered_set<string> &referenced_stats);
 	virtual bool ValueIsFinite(const Value &val);
 	virtual string CastValueToTarget(const Value &val, const LogicalType &type);
 	virtual string CastStatsToTarget(const string &stats, const LogicalType &type);
-	virtual string GenerateConstantFilter(const ConstantFilter &constant_filter, const LogicalType &type,
+	virtual string GenerateConstantFilter(ExpressionType comparison_type, const Value &constant, const LogicalType &type,
 	                                      unordered_set<string> &referenced_stats);
-	virtual string GenerateConstantFilterDouble(const ConstantFilter &constant_filter, const LogicalType &type,
+	virtual string GenerateConstantFilterDouble(ExpressionType comparison_type, const Value &constant,
+	                                            const LogicalType &type,
 	                                            unordered_set<string> &referenced_stats);
-	virtual string GenerateFilterPushdown(const TableFilter &filter, unordered_set<string> &referenced_stats);
+	virtual string GenerateFilterPushdown(const ExpressionFilter &filter, unordered_set<string> &referenced_stats);
 
 public:
 	//! Read inlined file deletions for regular table scans (no snapshot info per row)

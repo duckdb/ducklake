@@ -16,7 +16,7 @@ namespace duckdb {
 class DuckLakeMetadataManager;
 class FileSystem;
 class TableFilter;
-class DynamicFilter;
+struct DynamicFilterData;
 
 struct ParsedCatalogEntry {
 	string schema;
@@ -36,7 +36,7 @@ public:
 	static ParsedCatalogEntry ParseCatalogEntry(const string &input);
 	static string JoinPath(FileSystem &fs, const string &a, const string &b);
 
-	static DynamicFilter *GetOptionalDynamicFilter(const TableFilter &filter);
+	static shared_ptr<DynamicFilterData> GetOptionalDynamicFilterData(const TableFilter &filter);
 
 	//! Create the data path directory if it does not yet exist
 	static void EnsureDirectoryExists(FileSystem &fs, const string &data_path);

@@ -2625,7 +2625,9 @@ void DuckLakeTransaction::FlushChanges() {
 				connection->Rollback();
 			}
 			bool retry_on_error = RetryOnError(error.Message());
-			bool finished_retrying = i + 1 >= max_retry_count;
+			// We perform one initial attempt plus up to max_retry_count retries.
+			// Since i is zero-based attempt index, we are done retrying once i reaches max_retry_count.
+			bool finished_retrying = i >= max_retry_count;
 			if (!can_retry || !retry_on_error || finished_retrying) {
 				// we abort after the max retry count
 				CleanupFiles();

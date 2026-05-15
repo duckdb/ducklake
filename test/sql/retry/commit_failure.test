@@ -1,0 +1,60 @@
+# name: test/sql/retry/commit_failure.test
+# description: retry budget regression test without debug failure injection
+# group: [retry]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/retry_budget_regression')
+
+statement ok
+USE ducklake
+
+statement ok
+SET ducklake_retry_wait_ms=100
+
+statement ok
+SET ducklake_retry_backoff=2.0
+
+statement ok
+CREATE TABLE ducklake.tbl(id INTEGER)
+
+# With enough retries, concurrent commits should eventually succeed.
+statement ok
+SET ducklake_max_retry_count = 100;
+
+concurrentloop i 0 5
+
+statement ok
+INSERT INTO ducklake.tbl VALUES({i});
+
+endloop
+
+query I
+SELECT COUNT() FROM ducklake.tbl;
+----
+5
+
+# With low retry budget, at least one concurrent commit should hit the retry limit.
+statement ok
+SET ducklake_max_retry_count = 1;
+
+concurrentloop i 5 15
+
+statement maybe
+INSERT INTO ducklake.tbl VALUES({i});
+----
+Exceeded the maximum retry count of 1 set by the ducklake_max_retry_count setting.
+
+endloop
+
+query I
+SELECT COUNT() >= 5 AND COUNT() < 15 FROM ducklake.tbl;
+----
+TRUE

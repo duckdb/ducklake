@@ -16,19 +16,16 @@
 #include "metadata_manager/sqlite_metadata_manager.hpp"
 #include "duckdb/main/attached_database.hpp"
 #include "duckdb/main/database.hpp"
-#include "duckdb/planner/filter/constant_filter.hpp"
-#include "duckdb/planner/filter/conjunction_filter.hpp"
-#include "duckdb/planner/filter/null_filter.hpp"
-#include "duckdb/planner/filter/optional_filter.hpp"
-#include "duckdb/planner/filter/dynamic_filter.hpp"
-#include "duckdb/planner/filter/in_filter.hpp"
 #include "duckdb/planner/expression.hpp"
 #include "duckdb/parser/parser.hpp"
 #include "duckdb/common/sql_identifier.hpp"
 #include "duckdb/parser/expression/cast_expression.hpp"
 #include "duckdb/planner/filter/expression_filter.hpp"
+#include "duckdb/planner/filter/table_filter_functions.hpp"
 #include "duckdb/planner/expression/bound_comparison_expression.hpp"
+#include "duckdb/planner/expression/bound_conjunction_expression.hpp"
 #include "duckdb/planner/expression/bound_constant_expression.hpp"
+#include "duckdb/planner/expression/bound_function_expression.hpp"
 #include "duckdb/planner/expression/bound_operator_expression.hpp"
 
 namespace duckdb {
@@ -1004,80 +1001,17 @@ static void SetSnapshotFilter(const DuckLakeSnapshot &snapshot, idx_t max_partia
 	file_entry.snapshot_filter_max = snapshot.snapshot_id;
 }
 
-string DuckLakeMetadataManager::GenerateFilterFromTableFilter(const TableFilter &filter, const LogicalType &type,
+static bool IsSimpleFilterSubject(const Expression &expr) {
+	return expr.GetExpressionClass() == ExpressionClass::BOUND_REF ||
+	       expr.GetExpressionClass() == ExpressionClass::BOUND_COLUMN_REF;
+}
+
+string DuckLakeMetadataManager::GenerateFilterFromTableFilter(const ExpressionFilter &filter, const LogicalType &type,
                                                               unordered_set<string> &referenced_stats) {
-	switch (filter.filter_type) {
-	case TableFilterType::CONSTANT_COMPARISON: {
-		auto &constant_filter = filter.Cast<ConstantFilter>();
-		switch (type.id()) {
-		case LogicalTypeId::BLOB:
-			return string();
-		case LogicalTypeId::FLOAT:
-		case LogicalTypeId::DOUBLE:
-			return GenerateConstantFilterDouble(constant_filter, type, referenced_stats);
-		default:
-			return GenerateConstantFilter(constant_filter, type, referenced_stats);
-		}
-	}
-	case TableFilterType::IS_NULL:
-		referenced_stats.insert("null_count");
-		return "null_count > 0";
-	case TableFilterType::IS_NOT_NULL:
-		referenced_stats.insert("value_count");
-		return "value_count > 0";
-	case TableFilterType::CONJUNCTION_OR: {
-		auto &conjunction_or_filter = filter.Cast<ConjunctionOrFilter>();
-		string result;
-		for (auto &child_filter : conjunction_or_filter.child_filters) {
-			if (!result.empty()) {
-				result += " OR ";
-			}
-			string child_str = GenerateFilterFromTableFilter(*child_filter, type, referenced_stats);
-			if (child_str.empty()) {
-				return string();
-			}
-			result += "(" + child_str + ")";
-		}
-		return result;
-	}
-	case TableFilterType::CONJUNCTION_AND: {
-		auto &conjunction_and_filter = filter.Cast<ConjunctionAndFilter>();
-		string result;
-		for (auto &child_filter : conjunction_and_filter.child_filters) {
-			string child_str = GenerateFilterFromTableFilter(*child_filter, type, referenced_stats);
-			if (child_str.empty()) {
-				continue;
-			}
-			if (!result.empty()) {
-				result += " AND ";
-			}
-			result += "(" + child_str + ")";
-		}
-		return result;
-	}
-	case TableFilterType::OPTIONAL_FILTER: {
-		auto &optional_filter = filter.Cast<OptionalFilter>();
-		return GenerateFilterFromTableFilter(*optional_filter.child_filter, type, referenced_stats);
-	}
-	case TableFilterType::IN_FILTER: {
-		auto &in_filter = filter.Cast<InFilter>();
-		string result;
-		for (auto &value : in_filter.values) {
-			if (!result.empty()) {
-				result += " OR ";
-			}
-			auto temporary_constant_filter = ConstantFilter(ExpressionType::COMPARE_EQUAL, value);
-			auto next_filter = GenerateFilterFromTableFilter(temporary_constant_filter, type, referenced_stats);
-			if (next_filter.empty()) {
-				return string();
-			}
-			result += "(" + next_filter + ")";
-		}
-		return result;
-	}
-	default:
+	if (!filter.expr) {
 		return string();
 	}
+	return GenerateFilterFromExpression(*filter.expr, &type, referenced_stats);
 }
 
 bool DuckLakeMetadataManager::ValueIsFinite(const Value &val) {
@@ -1109,12 +1043,13 @@ string DuckLakeMetadataManager::CastColumnToTarget(const string &column, const L
 	return column + "::" + type.ToString();
 }
 
-string DuckLakeMetadataManager::GenerateConstantFilter(const ConstantFilter &constant_filter, const LogicalType &type,
+string DuckLakeMetadataManager::GenerateConstantFilter(ExpressionType comparison_type, const Value &constant,
+                                                       const LogicalType &type,
                                                        unordered_set<string> &referenced_stats) {
-	auto constant_str = CastValueToTarget(constant_filter.constant, type);
+	auto constant_str = CastValueToTarget(constant, type);
 	auto min_value = CastStatsToTarget("min_value", type);
 	auto max_value = CastStatsToTarget("max_value", type);
-	switch (constant_filter.comparison_type) {
+	switch (comparison_type) {
 	case ExpressionType::COMPARE_EQUAL:
 		// x = constant
 		// this can only be true if "constant BETWEEN min AND max"
@@ -1153,12 +1088,12 @@ string DuckLakeMetadataManager::GenerateConstantFilter(const ConstantFilter &con
 	}
 }
 
-string DuckLakeMetadataManager::GenerateConstantFilterDouble(const ConstantFilter &constant_filter,
+string DuckLakeMetadataManager::GenerateConstantFilterDouble(ExpressionType comparison_type, const Value &constant,
                                                              const LogicalType &type,
                                                              unordered_set<string> &referenced_stats) {
-	double constant_val = constant_filter.constant.GetValue<double>();
+	double constant_val = constant.GetValue<double>();
 	bool constant_is_nan = Value::IsNan(constant_val);
-	switch (constant_filter.comparison_type) {
+	switch (comparison_type) {
 	case ExpressionType::COMPARE_EQUAL:
 		// x = constant
 		if (constant_is_nan) {
@@ -1167,7 +1102,7 @@ string DuckLakeMetadataManager::GenerateConstantFilterDouble(const ConstantFilte
 			return "contains_nan";
 		}
 		// else check as if this is a numeric
-		return GenerateConstantFilter(constant_filter, type, referenced_stats);
+		return GenerateConstantFilter(comparison_type, constant, type, referenced_stats);
 	case ExpressionType::COMPARE_GREATERTHANOREQUALTO:
 	case ExpressionType::COMPARE_GREATERTHAN: {
 		if (constant_is_nan) {
@@ -1177,7 +1112,7 @@ string DuckLakeMetadataManager::GenerateConstantFilterDouble(const ConstantFilte
 			return string();
 		}
 		// generate the numeric filter
-		string filter = GenerateConstantFilter(constant_filter, type, referenced_stats);
+		string filter = GenerateConstantFilter(comparison_type, constant, type, referenced_stats);
 		if (filter.empty()) {
 			return string();
 		}
@@ -1193,100 +1128,61 @@ string DuckLakeMetadataManager::GenerateConstantFilterDouble(const ConstantFilte
 			return string();
 		}
 		// these are equivalent to the numeric filter
-		return GenerateConstantFilter(constant_filter, type, referenced_stats);
+		return GenerateConstantFilter(comparison_type, constant, type, referenced_stats);
 	default:
 		// unsupported
 		return string();
 	}
 }
 
-string DuckLakeMetadataManager::GenerateFilterPushdown(const TableFilter &filter,
-                                                       unordered_set<string> &referenced_stats) {
-	switch (filter.filter_type) {
-	case TableFilterType::CONSTANT_COMPARISON: {
-		auto &constant_filter = filter.Cast<ConstantFilter>();
-		auto &type = constant_filter.constant.type();
-		switch (type.id()) {
+string DuckLakeMetadataManager::GenerateFilterFromExpression(const Expression &expr, const LogicalType *type,
+                                                             unordered_set<string> &referenced_stats) {
+	if (BoundComparisonExpression::IsComparison(expr)) {
+		auto &comparison = expr.Cast<BoundFunctionExpression>();
+		auto &left = BoundComparisonExpression::Left(comparison);
+		auto &right = BoundComparisonExpression::Right(comparison);
+		const BoundConstantExpression *constant_expr = nullptr;
+		auto comparison_type = comparison.GetExpressionType();
+		if (IsSimpleFilterSubject(left) && right.GetExpressionClass() == ExpressionClass::BOUND_CONSTANT) {
+			constant_expr = &right.Cast<BoundConstantExpression>();
+		} else if (IsSimpleFilterSubject(right) && left.GetExpressionClass() == ExpressionClass::BOUND_CONSTANT) {
+			constant_expr = &left.Cast<BoundConstantExpression>();
+			comparison_type = FlipComparisonExpression(comparison_type);
+		} else {
+			return string();
+		}
+		const auto &target_type = type ? *type : constant_expr->value.type();
+		switch (target_type.id()) {
 		case LogicalTypeId::BLOB:
 			return string();
 		case LogicalTypeId::FLOAT:
 		case LogicalTypeId::DOUBLE:
-			return GenerateConstantFilterDouble(constant_filter, type, referenced_stats);
+			return GenerateConstantFilterDouble(comparison_type, constant_expr->value, target_type, referenced_stats);
 		default:
-			return GenerateConstantFilter(constant_filter, type, referenced_stats);
+			return GenerateConstantFilter(comparison_type, constant_expr->value, target_type, referenced_stats);
 		}
 	}
-	case TableFilterType::IS_NULL:
-		// IS NULL can only be true if the file has any NULL values
-		referenced_stats.insert("null_count");
-		return "null_count > 0";
-	case TableFilterType::IS_NOT_NULL:
-		// IS NOT NULL can only be true if the file has any valid values
-		referenced_stats.insert("value_count");
-		return "value_count > 0";
-	case TableFilterType::CONJUNCTION_OR: {
-		auto &conjunction_or_filter = filter.Cast<ConjunctionOrFilter>();
-		string result;
-		for (auto &child_filter : conjunction_or_filter.child_filters) {
-			if (!result.empty()) {
-				result += " OR ";
-			}
-			string child_str = GenerateFilterPushdown(*child_filter, referenced_stats);
-			if (child_str.empty()) {
+	switch (expr.GetExpressionClass()) {
+	case ExpressionClass::BOUND_OPERATOR: {
+		auto &op_expr = expr.Cast<BoundOperatorExpression>();
+		switch (expr.GetExpressionType()) {
+		case ExpressionType::OPERATOR_IS_NULL:
+			if (op_expr.children.size() != 1 || !IsSimpleFilterSubject(*op_expr.children[0])) {
 				return string();
 			}
-			result += "(" + child_str + ")";
-		}
-		return result;
-	}
-	case TableFilterType::CONJUNCTION_AND: {
-		auto &conjunction_and_filter = filter.Cast<ConjunctionAndFilter>();
-		string result;
-		for (auto &child_filter : conjunction_and_filter.child_filters) {
-			string child_str = GenerateFilterPushdown(*child_filter, referenced_stats);
-			if (child_str.empty()) {
-				continue; // skip this child, we can still use other children
-			}
-			if (!result.empty()) {
-				result += " AND ";
-			}
-			result += "(" + child_str + ")";
-		}
-		return result;
-	}
-	case TableFilterType::EXPRESSION_FILTER: {
-		auto &expression_filter = filter.Cast<ExpressionFilter>();
-		if (!expression_filter.expr) {
-			return string();
-		}
-		auto expr_class = expression_filter.expr->GetExpressionClass();
-		if (expr_class == ExpressionClass::BOUND_COMPARISON) {
-			auto &comparison = expression_filter.expr->Cast<BoundComparisonExpression>();
-			auto &left = *comparison.left;
-			auto &right = *comparison.right;
-			ExpressionType comparison_type = comparison.GetExpressionType();
-			const BoundConstantExpression *constant_expr = nullptr;
-			if (left.GetExpressionClass() == ExpressionClass::BOUND_REF &&
-			    right.GetExpressionClass() == ExpressionClass::BOUND_CONSTANT) {
-				constant_expr = &right.Cast<BoundConstantExpression>();
-			} else if (right.GetExpressionClass() == ExpressionClass::BOUND_REF &&
-			           left.GetExpressionClass() == ExpressionClass::BOUND_CONSTANT) {
-				constant_expr = &left.Cast<BoundConstantExpression>();
-				comparison_type = FlipComparisonExpression(comparison_type);
-			} else {
+			referenced_stats.insert("null_count");
+			return "null_count > 0";
+		case ExpressionType::OPERATOR_IS_NOT_NULL:
+			if (op_expr.children.size() != 1 || !IsSimpleFilterSubject(*op_expr.children[0])) {
 				return string();
 			}
-			ConstantFilter constant_filter(comparison_type, constant_expr->value);
-			return GenerateFilterPushdown(constant_filter, referenced_stats);
-		}
-		if (expr_class == ExpressionClass::BOUND_OPERATOR &&
-		    expression_filter.expr->GetExpressionType() == ExpressionType::COMPARE_IN) {
-			auto &op_expr = expression_filter.expr->Cast<BoundOperatorExpression>();
-			if (op_expr.children.size() < 2 ||
-			    op_expr.children[0]->GetExpressionClass() != ExpressionClass::BOUND_REF) {
+			referenced_stats.insert("value_count");
+			return "value_count > 0";
+		case ExpressionType::COMPARE_IN: {
+			if (op_expr.children.size() < 2 || !IsSimpleFilterSubject(*op_expr.children[0])) {
 				return string();
 			}
-			vector<Value> values;
+			string result;
 			for (idx_t i = 1; i < op_expr.children.size(); i++) {
 				auto &child = *op_expr.children[i];
 				if (child.GetExpressionClass() != ExpressionClass::BOUND_CONSTANT) {
@@ -1296,40 +1192,81 @@ string DuckLakeMetadataManager::GenerateFilterPushdown(const TableFilter &filter
 				if (constant_value.IsNull()) {
 					return string();
 				}
-				values.push_back(constant_value);
+				const auto &target_type = type ? *type : constant_value.type();
+				string next_filter;
+				switch (target_type.id()) {
+				case LogicalTypeId::BLOB:
+					return string();
+				case LogicalTypeId::FLOAT:
+				case LogicalTypeId::DOUBLE:
+					next_filter = GenerateConstantFilterDouble(ExpressionType::COMPARE_EQUAL, constant_value,
+					                                           target_type, referenced_stats);
+					break;
+				default:
+					next_filter = GenerateConstantFilter(ExpressionType::COMPARE_EQUAL, constant_value, target_type,
+					                                     referenced_stats);
+					break;
+				}
+				if (next_filter.empty()) {
+					return string();
+				}
+				if (!result.empty()) {
+					result += " OR ";
+				}
+				result += "(" + next_filter + ")";
 			}
-			if (values.empty()) {
-				return string();
-			}
-			InFilter in_filter(std::move(values));
-			return GenerateFilterPushdown(in_filter, referenced_stats);
+			return result;
 		}
-		return string();
+		default:
+			return string();
+		}
 	}
-	case TableFilterType::OPTIONAL_FILTER: {
-		auto &optional_filter = filter.Cast<OptionalFilter>();
-		return GenerateFilterPushdown(*optional_filter.child_filter, referenced_stats);
-	}
-	case TableFilterType::IN_FILTER: {
-		auto &in_filter = filter.Cast<InFilter>();
+	case ExpressionClass::BOUND_CONJUNCTION: {
+		auto &conjunction = expr.Cast<BoundConjunctionExpression>();
 		string result;
-		for (auto &value : in_filter.values) {
+		const auto conjunction_type = expr.GetExpressionType();
+		for (auto &child : conjunction.children) {
+			auto child_str = GenerateFilterFromExpression(*child, type, referenced_stats);
+			if (child_str.empty()) {
+				if (conjunction_type == ExpressionType::CONJUNCTION_OR) {
+					return string();
+				}
+				continue;
+			}
 			if (!result.empty()) {
-				result += " OR ";
+				result += conjunction_type == ExpressionType::CONJUNCTION_OR ? " OR " : " AND ";
 			}
-			auto temporary_constant_filter = ConstantFilter(ExpressionType::COMPARE_EQUAL, value);
-			auto next_filter = GenerateFilterPushdown(temporary_constant_filter, referenced_stats);
-			if (next_filter.empty()) {
-				return string();
-			}
-			result += "(" + next_filter + ")";
+			result += "(" + child_str + ")";
 		}
 		return result;
 	}
-	default:
-		// unsupported filter
+	case ExpressionClass::BOUND_FUNCTION: {
+		auto &func = expr.Cast<BoundFunctionExpression>();
+		if (func.function.GetName() == OptionalFilterScalarFun::NAME && func.bind_info) {
+			auto &data = func.bind_info->Cast<OptionalFilterFunctionData>();
+			return data.child_filter_expr
+			           ? GenerateFilterFromExpression(*data.child_filter_expr, type, referenced_stats)
+			           : string();
+		}
+		if (func.function.GetName() == SelectivityOptionalFilterScalarFun::NAME && func.bind_info) {
+			auto &data = func.bind_info->Cast<SelectivityOptionalFilterFunctionData>();
+			return data.child_filter_expr
+			           ? GenerateFilterFromExpression(*data.child_filter_expr, type, referenced_stats)
+			           : string();
+		}
 		return string();
 	}
+	default:
+		return string();
+	}
+}
+
+string DuckLakeMetadataManager::GenerateFilterPushdown(const ExpressionFilter &filter,
+                                                       unordered_set<string> &referenced_stats) {
+	if (!filter.expr) {
+		return string();
+	}
+	return GenerateFilterFromExpression(*filter.expr, nullptr, referenced_stats);
 }
 
 FilterSQLResult DuckLakeMetadataManager::ConvertFilterPushdownToSQL(const FilterPushdownInfo &filter_info) {
@@ -1415,7 +1352,6 @@ DuckLakeMetadataManager::GenerateCTESectionFromRequirements(const unordered_map<
 	return cte_section + "\n";
 }
 
-
 FilterPushdownQueryComponents
 DuckLakeMetadataManager::GenerateFilterPushdownComponents(const FilterPushdownInfo &filter_info,
                                                           DuckLakeTableEntry &table) {
@@ -1450,12 +1386,12 @@ vector<DuckLakeFileListEntry> DuckLakeMetadataManager::GetFilesForTable(DuckLake
 	if (filter_info) {
 		for (auto &entry : filter_info->column_filters) {
 			auto &col_filter = entry.second;
-			auto *dynamic = DuckLakeUtil::GetOptionalDynamicFilter(*col_filter.table_filter);
-			if (dynamic) {
+			auto dynamic_filter_data = DuckLakeUtil::GetOptionalDynamicFilterData(*col_filter.table_filter);
+			if (dynamic_filter_data) {
 				ExpressionType comparison_type;
 				{
-					lock_guard<mutex> l(dynamic->filter_data->lock);
-					comparison_type = dynamic->filter_data->comparison_type;
+					lock_guard<mutex> l(dynamic_filter_data->lock);
+					comparison_type = dynamic_filter_data->comparison_type;
 				}
 				dynamic_filter_columns.push_back(
 				    {col_filter.column_field_index, comparison_type, col_filter.column_type});
