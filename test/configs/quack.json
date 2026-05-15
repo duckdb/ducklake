@@ -171,6 +171,7 @@
         "test/sql/metadata/appender_variant_stats.test",
         "test/sql/partitioning/bucket_partitioning.test",
         "test/sql/partitioning/merge_adjacent_null_partition.test",
+        "test/sql/partitioning/partition_rename_in_transaction.test",
         "test/sql/rewrite_data_files/test_rewrite_partitioning.test",
         "test/sql/sorted_table/merge_adjacent_sorted_basic.test",
         "test/sql/sorted_table/merge_adjacent_sorted_drop_recreate.test",

@@ -1547,6 +1547,16 @@ void CancelOrDropField(TableIndex table_id, FieldIndex field_id, NewTableInfo &r
 	result.dropped_columns.push_back(dropped_col);
 }
 
+template <typename T>
+void RenameEmittedEntry(vector<T> &entries, TableIndex remapped_id, const string &new_name) {
+	for (auto &entry : entries) {
+		if (entry.id == remapped_id) {
+			entry.name = new_name;
+			return;
+		}
+	}
+}
+
 void HandleChangedFields(TableIndex table_id, const ColumnChangeInfo &change_info, NewTableInfo &result,
                          unordered_map<idx_t, idx_t> &txn_added_fields) {
 	for (auto &dropped_field_id : change_info.dropped_fields) {
@@ -1729,6 +1739,14 @@ void DuckLakeTransaction::GetNewTableInfo(DuckLakeCommitState &commit_state, Duc
 		case LocalChangeType::CREATED:
 		case LocalChangeType::RENAMED: {
 			auto old_table_id = table.GetTableId();
+			if (local_change.type == LocalChangeType::RENAMED && old_table_id.IsTransactionLocal()) {
+				auto existing = commit_state.committed_tables.find(old_table_id);
+				if (existing != commit_state.committed_tables.end()) {
+					// If we are rename a table in the same transaction it was created, we need to patch it
+					RenameEmittedEntry(result.new_tables, existing->second, table.name);
+					break;
+				}
+			}
 			auto new_table = GetNewTable(commit_state, table);
 			auto new_table_id = new_table.id;
 			result.new_tables.push_back(std::move(new_table));
@@ -1889,6 +1907,14 @@ void DuckLakeTransaction::GetNewViewInfo(DuckLakeCommitState &commit_state, Duck
 		case LocalChangeType::CREATED:
 		case LocalChangeType::RENAMED: {
 			auto old_view_id = view.GetViewId();
+			if (view.GetLocalChange().type == LocalChangeType::RENAMED && old_view_id.IsTransactionLocal()) {
+				auto existing = commit_state.committed_tables.find(old_view_id);
+				if (existing != commit_state.committed_tables.end()) {
+					// renaming a view in the same transaction it was created - patch the name on the existing row
+					RenameEmittedEntry(result.new_views, existing->second, view.name);
+					break;
+				}
+			}
 			auto new_view = GetNewView(commit_state, view);
 			auto new_view_id = new_view.id;
 			result.new_views.push_back(std::move(new_view));
@@ -3083,23 +3109,35 @@ void DuckLakeTransaction::AlterEntry(CatalogEntry &entry, unique_ptr<CatalogEntr
 	}
 }
 
+static void HandleRenameOldEntry(DuckLakeCatalogSet &entries, const string &old_name, const string &new_name,
+                                 TableIndex id, bool entry_is_transaction_local, set<TableIndex> &renamed_set,
+                                 const set<TableIndex> &dropped_set) {
+	if (id.IsTransactionLocal()) {
+		// entry was created in this same transaction
+		auto dropped = entries.DropEntry(old_name);
+		auto new_entry_ptr = entries.GetEntry(new_name);
+		if (new_entry_ptr && dropped) {
+			new_entry_ptr->SetChild(std::move(dropped));
+		}
+	} else if (entry_is_transaction_local) {
+		// entry existed before this transaction and has already been renamed earlier in this txn
+		entries.DropEntry(old_name);
+	} else {
+		// first rename of a committed entry
+		// Invariant: an id cannot be both renamed and dropped in the same transaction.
+		D_ASSERT(dropped_set.find(id) == dropped_set.end());
+		renamed_set.insert(id);
+	}
+}
+
 void DuckLakeTransaction::AlterEntryInternal(DuckLakeTableEntry &table, unique_ptr<CatalogEntry> new_entry) {
 	auto &new_table = new_entry->Cast<DuckLakeTableEntry>();
 	auto &entries = GetOrCreateTransactionLocalEntries(table);
 	entries.CreateEntry(std::move(new_entry));
 	switch (new_table.GetLocalChange().type) {
 	case LocalChangeType::RENAMED: {
-		// rename - take care of the old table
-		if (table.IsTransactionLocal()) {
-			// table is transaction local - delete the old table from there
-			entries.DropEntry(table.name);
-		} else {
-			// table is not transaction local - add to drop list
-			auto table_id = table.GetTableId();
-			// Invariant: a table id cannot be both renamed and dropped in the same transaction.
-			D_ASSERT(dropped_tables.find(table_id) == dropped_tables.end());
-			renamed_tables.insert(table_id);
-		}
+		HandleRenameOldEntry(entries, table.name, new_table.name, table.GetTableId(), table.IsTransactionLocal(),
+		                     renamed_tables, dropped_tables);
 		break;
 	}
 	case LocalChangeType::ADD_COLUMN:
@@ -3125,17 +3163,8 @@ void DuckLakeTransaction::AlterEntryInternal(DuckLakeViewEntry &view, unique_ptr
 	entries.CreateEntry(std::move(new_entry));
 	switch (new_view.GetLocalChange().type) {
 	case LocalChangeType::RENAMED: {
-		// rename - take care of the old view
-		if (view.IsTransactionLocal()) {
-			// view is transaction local - delete the old view from there
-			entries.DropEntry(view.name);
-		} else {
-			// view is not transaction local - add to rename list
-			auto view_id = view.GetViewId();
-			// Invariant: a view id cannot be both renamed and dropped in the same transaction.
-			D_ASSERT(dropped_views.find(view_id) == dropped_views.end());
-			renamed_views.insert(view_id);
-		}
+		HandleRenameOldEntry(entries, view.name, new_view.name, view.GetViewId(), view.IsTransactionLocal(),
+		                     renamed_views, dropped_views);
 		break;
 	}
 	case LocalChangeType::SET_COMMENT:
