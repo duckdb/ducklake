@@ -166,7 +166,7 @@ private:
 };
 
 void DuckLakeFileProcessor::ReadParquetFullMetadata(const string &glob, vector<DuckLakeDataFile> &written_files) {
-	auto result = transaction.Query(StringUtil::Format(R"(
+	auto result = transaction.ExecuteRaw(StringUtil::Format(R"(
 SELECT
     list_transform(parquet_file_metadata, lambda x: struct_pack(
         file_name := x.file_name,
@@ -196,7 +196,7 @@ SELECT
     )) AS parquet_schema
 FROM parquet_full_metadata(%s)
 )",
-	                                                   SQLString(glob)));
+	                                                        SQLString(glob)));
 	if (result->HasError()) {
 		result->GetErrorObject().Throw("Failed to add data files to DuckLake: ");
 	}
