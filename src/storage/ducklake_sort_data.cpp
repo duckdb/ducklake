@@ -11,11 +11,9 @@
 namespace duckdb {
 
 // Round-trip user sort expressions through the parser so non-bare-column expressions (e.g.
-// `(id + 0)`) survive into the deletes-position query. Parser::ParseExpressionList rejects
-// malformed input; ParsedExpression::ToString is the canonical re-serializer; the rename
-// rewrite touches only ColumnRefExpression::column_names. Macros and other user-catalog
-// references emit verbatim and will fail at bind time on the metadata connection -- this is
-// a clean error (vs v1.5's silent wrong delete positions when there are inlined deletes).
+// `(id + 0)`) survive into the deletes-position query. 
+
+// FIXME: TODO: Macros and other user-catalog references will fail at bind time on the metadata connection 
 string DuckLakeSort::BuildSortOrderSQL(const DuckLakeSort &sort_data, const ColumnList &current_columns,
                                        const ColumnList &inlined_columns) {
 	// Build rename map: current physical name -> inlined physical name (only entries that differ).
@@ -37,8 +35,7 @@ string DuckLakeSort::BuildSortOrderSQL(const DuckLakeSort &sort_data, const Colu
 		if (!result.empty()) {
 			result += ", ";
 		}
-		// field.expression was produced by ParsedExpression::ToString() at ALTER time, so it is already
-		// canonical SQL. Only re-parse + rewrite when columns were renamed between the inlined-table
+		// Only re-parse + rewrite when columns were renamed between the inlined-table
 		// write and the flush.
 		if (rename_map.empty()) {
 			result += field.expression;
