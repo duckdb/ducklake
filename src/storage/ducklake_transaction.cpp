@@ -723,6 +723,7 @@ Connection &DuckLakeTransaction::GetConnection() {
 		// set max error reporting to 0 so that during error reporting we don't traverse other schemas / catalogs
 		auto &client_config = ClientConfig::GetConfig(*connection->context);
 		client_config.user_settings.SetUserSetting(CatalogErrorMaxSchemasSetting::SettingIndex, Value::UBIGINT(0));
+		connection->Query("SET default_transaction_invalidation_policy='SYNTACTIC_ERRORS_DO_NOT_INVALIDATE'");
 		// FIXME: disable postgres_scanner experimental filter pushdown for metadata queries
 		// it does not support all filter types DuckDB may push down (e.g. EXPRESSION_FILTER)
 		auto &metadata_type = ducklake_catalog.MetadataType();
