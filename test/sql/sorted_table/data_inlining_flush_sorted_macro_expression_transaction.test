@@ -76,7 +76,7 @@ ABC	XYZ	AXBYCZ
 statement error
 CALL ducklake_flush_inlined_data('ducklake', table_name => 'macro_sort_test');
 ----
-Catalog Error: Scalar Function with name zip_varchar does not exist!
+Scalar Function with name zip_varchar does not exist!
 
 statement ok
 ROLLBACK
