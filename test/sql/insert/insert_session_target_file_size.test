@@ -6,22 +6,32 @@ require ducklake
 
 require parquet
 
-test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
 
-test-env DATA_PATH {TEST_DIR}
-
+test-env DATA_PATH __TEST_DIR__
 
 statement ok
-ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/ducklake_session_target_file_size')
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/ducklake_session_target_file_size')
 
 statement ok
 CREATE TABLE ducklake.test(id INTEGER, s VARCHAR);
 
-# Set a large target_file_size in metadata so everything fits in one file
+# Set a large target_file_size in metadata at global, schema and table scope
 statement ok
 CALL ducklake.set_option('target_file_size', '512MB')
 
-# Override with a tiny session setting - should produce multiple files
+statement ok
+CALL ducklake.set_option('target_file_size', '512MB', schema => 'main')
+
+statement ok
+CALL ducklake.set_option('target_file_size', '512MB', table_name => 'test')
+
+# A borked string should fail at SET time
+statement error
+SET ducklake_target_file_size = 'not-a-size'
+----
+
+# Session setting overrides all metadata scopes - should produce multiple files
 statement ok
 SET ducklake_target_file_size = '10KB'
 
@@ -30,9 +40,9 @@ INSERT INTO ducklake.test SELECT i, concat('thisisalongstring', i) FROM range(50
 ----
 500000
 
-# Session setting should have taken precedence: multiple files expected
+# Session setting should have taken precedence over all metadata scopes: multiple files expected
 query I
-SELECT COUNT(*) > 1 FROM glob('{DATA_PATH}/ducklake_session_target_file_size/main/test/*.parquet')
+SELECT COUNT(*) > 1 FROM glob('${DATA_PATH}/ducklake_session_target_file_size/main/test/*.parquet')
 ----
 true
 
@@ -49,6 +59,6 @@ INSERT INTO ducklake.test2 SELECT i, concat('thisisalongstring', i) FROM range(5
 500000
 
 query I
-SELECT COUNT(*) = 1 FROM glob('{DATA_PATH}/ducklake_session_target_file_size/main/test2/*.parquet')
+SELECT COUNT(*) = 1 FROM glob('${DATA_PATH}/ducklake_session_target_file_size/main/test2/*.parquet')
 ----
 true
