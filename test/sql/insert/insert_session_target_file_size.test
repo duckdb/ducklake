@@ -31,6 +31,11 @@ statement error
 SET ducklake_target_file_size = 'not-a-size'
 ----
 
+# 0 should fail at SET time
+statement error
+SET ducklake_target_file_size = '0'
+----
+
 # Session setting overrides all metadata scopes - should produce multiple files
 statement ok
 SET ducklake_target_file_size = '10KB'
