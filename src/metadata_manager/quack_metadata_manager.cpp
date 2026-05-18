@@ -91,6 +91,15 @@ void QuackMetadataManager::FlushChangesServerSide(DuckLakeTransaction &flush_tra
 	staged.Write();
 	try {
 		flush_transaction.RunCommitLoop(transaction_snapshot, transaction_changes, retry_config);
+		auto &ducklake_catalog = transaction.GetCatalog();
+		auto call_sql = StringUtil::Format(
+		    "SELECT * FROM ducklake_commit(%s, %s);",
+		    DuckLakeUtil::SQLLiteralToString(ducklake_catalog.MetadataDatabaseName()),
+		    DuckLakeUtil::SQLLiteralToString(staged.CommitUUID()));
+		auto result = Query(call_sql);
+		if (result && result->HasError()) {
+			result->GetErrorObject().Throw("Failed to invoke server-side ducklake_commit: ");
+		}
 	} catch (...) {
 		staged.Drop();
 		throw;
