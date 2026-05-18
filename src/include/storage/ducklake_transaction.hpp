@@ -16,6 +16,7 @@
 #include "duckdb/main/connection.hpp"
 #include "duckdb/transaction/transaction.hpp"
 #include "storage/ducklake_catalog_set.hpp"
+#include "storage/ducklake_change_info.hpp"
 #include "storage/ducklake_inlined_data.hpp"
 #include "storage/ducklake_metadata_manager.hpp"
 
@@ -172,7 +173,7 @@ public:
 		return *metadata_manager;
 	}
 
-	DuckLakeSnapshotCommit &GetCommitInfo() {
+	ChangeInfo<DuckLakeSnapshotCommit, ChangeKind::COMMIT_HEADER> &GetCommitInfo() {
 		return commit_info;
 	}
 	unique_ptr<QueryResult> Query(DuckLakeSnapshot snapshot, string query);
@@ -271,7 +272,7 @@ public:
 	string GenerateUUID() const;
 	static string GenerateUUIDv7();
 
-	const LocalTableChanges &GetLocalChanges() const {
+	const ChangeInfo<LocalTableChanges, ChangeKind::DATA_FILES> &GetLocalChanges() const {
 		return local_changes;
 	}
 	const set<TableIndex> &GetDroppedTables() {
@@ -357,7 +358,7 @@ private:
 
 private:
 	DuckLakeCatalog &ducklake_catalog;
-	DuckLakeSnapshotCommit commit_info;
+	ChangeInfo<DuckLakeSnapshotCommit, ChangeKind::COMMIT_HEADER> commit_info;
 	DatabaseInstance &db;
 	unique_ptr<DuckLakeMetadataManager> metadata_manager;
 	mutex connection_lock;
@@ -384,8 +385,7 @@ private:
 	//! Schemas added by this transaction
 	unique_ptr<DuckLakeCatalogSet> new_schemas;
 	map<SchemaIndex, reference<DuckLakeSchemaEntry>> dropped_schemas;
-	//! Local changes made to tables
-	LocalTableChanges local_changes;
+	ChangeInfo<LocalTableChanges, ChangeKind::DATA_FILES> local_changes;
 	//! Inlined data tables that were flushed and should be cleaned up during commit (snapshot-bounded)
 	vector<FlushedInlinedTableInfo> flushed_inlined_tables;
 	//! Snapshot cache for the AT (...) conditions that are referenced in the transaction

@@ -80,7 +80,7 @@ string PostgresMetadataManager::GetColumnTypeInternal(const LogicalType &column_
 
 unique_ptr<QueryResult> PostgresMetadataManager::ExecuteQuery(DuckLakeSnapshot snapshot, string &query,
                                                               string command) {
-	auto &commit_info = transaction.GetCommitInfo();
+	auto &commit_info = transaction.GetCommitInfo().Items();
 
 	query = StringUtil::Replace(query, "{SNAPSHOT_ID}", to_string(snapshot.snapshot_id));
 	query = StringUtil::Replace(query, "{SCHEMA_VERSION}", to_string(snapshot.schema_version));

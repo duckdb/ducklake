@@ -2102,7 +2102,7 @@ void DuckLakeMetadataManager::SubstituteCatalogPlaceholders(string &query) const
 }
 
 void DuckLakeMetadataManager::SubstituteSnapshotPlaceholders(DuckLakeSnapshot snapshot, string &query) const {
-	auto &commit_info = transaction.GetCommitInfo();
+	auto &commit_info = transaction.GetCommitInfo().Items();
 	query = StringUtil::Replace(query, "{SNAPSHOT_ID}", to_string(snapshot.snapshot_id));
 	query = StringUtil::Replace(query, "{SCHEMA_VERSION}", to_string(snapshot.schema_version));
 	query = StringUtil::Replace(query, "{NEXT_CATALOG_ID}", to_string(snapshot.next_catalog_id));

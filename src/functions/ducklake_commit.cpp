@@ -5,16 +5,22 @@ namespace duckdb {
 
 struct DuckLakeCommitBindData : public TableFunctionData {
 	string commit_uuid;
+	int64_t snapshot_id = 0;
+	int64_t schema_version = 0;
 	bool emitted = false;
 };
 
 static unique_ptr<FunctionData> DuckLakeCommitBind(ClientContext &context, TableFunctionBindInput &input,
                                                    vector<LogicalType> &return_types, vector<string> &names) {
-	if (input.inputs[0].IsNull() || input.inputs[1].IsNull()) {
-		throw BinderException("ducklake_commit arguments cannot be NULL");
+	for (idx_t i = 0; i < 4; i++) {
+		if (input.inputs[i].IsNull()) {
+			throw BinderException("ducklake_commit arguments cannot be NULL");
+		}
 	}
 	auto result = make_uniq<DuckLakeCommitBindData>();
 	result->commit_uuid = input.inputs[1].GetValue<string>();
+	result->snapshot_id = input.inputs[2].GetValue<int64_t>();
+	result->schema_version = input.inputs[3].GetValue<int64_t>();
 
 	names.emplace_back("committed_snapshot_id");
 	return_types.emplace_back(LogicalType::BIGINT);
@@ -37,8 +43,9 @@ static void DuckLakeCommitExecute(ClientContext &context, TableFunctionInput &da
 }
 
 DuckLakeCommitFunction::DuckLakeCommitFunction()
-    : TableFunction("ducklake_commit", {LogicalType::VARCHAR, LogicalType::VARCHAR}, DuckLakeCommitExecute,
-                    DuckLakeCommitBind, DuckLakeCommitInit) {
+    : TableFunction("ducklake_commit",
+                    {LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::BIGINT, LogicalType::BIGINT},
+                    DuckLakeCommitExecute, DuckLakeCommitBind, DuckLakeCommitInit) {
 }
 
 } // namespace duckdb
