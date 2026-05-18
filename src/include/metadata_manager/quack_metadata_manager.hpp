@@ -23,6 +23,7 @@ public:
 	bool SupportsAppender() const override {
 		return false;
 	}
+	void ProbeServerCapabilities() override;
 	unique_ptr<QueryResult> Execute(DuckLakeSnapshot snapshot, string &query) override;
 	unique_ptr<QueryResult> Query(DuckLakeSnapshot snapshot, string &query) override;
 	unique_ptr<QueryResult> Query(string &query) override;

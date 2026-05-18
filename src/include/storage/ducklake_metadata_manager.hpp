@@ -114,6 +114,12 @@ public:
 		return true;
 	}
 
+	//! Probe the metadata server for optional capabilities, for now we only check for server-side retries
+	virtual void ProbeServerCapabilities() {
+	}
+	//! Whether or not the commit retry loop should be executed on the metadata server rather than the client.
+	bool ExecuteRetrialsServerSide() const;
+
 	virtual void ClearCache() {
 	}
 

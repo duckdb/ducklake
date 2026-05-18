@@ -68,6 +68,20 @@ void QuackMetadataManager::ClearCache() {
 	transaction.ExecuteRaw(clear);
 }
 
+void QuackMetadataManager::ProbeServerCapabilities() {
+	// Check whether the quack server has the ducklake_commit function loaded (i.e. the ducklake
+	// extension is available server-side).
+	string probe = "SELECT 1 FROM duckdb_functions() WHERE function_name = 'ducklake_commit' LIMIT 1";
+	auto result = Query(probe);
+	if (!result || result->HasError()) {
+		return;
+	}
+	auto chunk = result->Fetch();
+	if (chunk && chunk->size() > 0) {
+		transaction.GetCatalog().SetRetrialsServerSide(true);
+	}
+}
+
 bool QuackMetadataManager::MetadataExists() {
 	auto query = MetadataExistsQuery();
 	auto result = Query(query);

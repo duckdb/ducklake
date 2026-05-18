@@ -302,6 +302,9 @@ protected:
 private:
 	void CleanupFiles();
 	void FlushChanges();
+	void FlushChangesServerSide(DuckLakeSnapshot transaction_snapshot,
+	                            const TransactionChangeInformation &transaction_changes,
+	                            const DuckLakeRetryConfig &retry_config);
 	void RunCommitLoop(DuckLakeSnapshot transaction_snapshot,
 	                   const TransactionChangeInformation &transaction_changes,
 	                   const DuckLakeRetryConfig &retry_config);

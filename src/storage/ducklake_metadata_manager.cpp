@@ -65,6 +65,10 @@ unique_ptr<DuckLakeMetadataManager> DuckLakeMetadataManager::Create(DuckLakeTran
 	return make_uniq<DuckLakeMetadataManager>(transaction);
 }
 
+bool DuckLakeMetadataManager::ExecuteRetrialsServerSide() const {
+	return transaction.GetCatalog().RetrialsServerSide();
+}
+
 DuckLakeMetadataManager &DuckLakeMetadataManager::Get(DuckLakeTransaction &transaction) {
 	return transaction.GetMetadataManager();
 }
