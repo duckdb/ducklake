@@ -146,6 +146,15 @@ struct SnapshotAndStats {
 	vector<DuckLakeGlobalStatsInfo> stats;
 	DuckLakeSnapshot snapshot;
 };
+
+struct DuckLakeRetryConfig {
+	idx_t max_retry_count = 10;
+	idx_t retry_wait_ms = 100;
+	double retry_backoff = 1.5;
+
+	static DuckLakeRetryConfig FromContext(ClientContext &context);
+};
+
 class DuckLakeTransaction : public Transaction, public enable_shared_from_this<DuckLakeTransaction> {
 public:
 	DuckLakeTransaction(DuckLakeCatalog &ducklake_catalog, TransactionManager &manager, ClientContext &context);
@@ -293,6 +302,9 @@ protected:
 private:
 	void CleanupFiles();
 	void FlushChanges();
+	void RunCommitLoop(DuckLakeSnapshot transaction_snapshot,
+	                   const TransactionChangeInformation &transaction_changes,
+	                   const DuckLakeRetryConfig &retry_config);
 	void FlushSettingChanges();
 	string CommitChanges(DuckLakeCommitState &commit_state, TransactionChangeInformation &transaction_changes,
 	                     optional_ptr<vector<DuckLakeGlobalStatsInfo>> stats);

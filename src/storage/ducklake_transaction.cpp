@@ -2572,32 +2572,39 @@ bool RetryOnError(const string &original_message) {
 	return false;
 }
 
+DuckLakeRetryConfig DuckLakeRetryConfig::FromContext(ClientContext &context) {
+	DuckLakeRetryConfig config;
+	Value setting_val;
+	if (context.TryGetCurrentSetting("ducklake_max_retry_count", setting_val)) {
+		config.max_retry_count = setting_val.GetValue<idx_t>();
+	}
+	if (context.TryGetCurrentSetting("ducklake_retry_wait_ms", setting_val)) {
+		config.retry_wait_ms = setting_val.GetValue<idx_t>();
+	}
+	if (context.TryGetCurrentSetting("ducklake_retry_backoff", setting_val)) {
+		config.retry_backoff = setting_val.GetValue<double>();
+	}
+	return config;
+}
+
 void DuckLakeTransaction::FlushChanges() {
 	if (!ChangesMade()) {
 		// read-only transactions don't need to do anything
 		return;
 	}
-	idx_t max_retry_count = 10;
-	idx_t retry_wait_ms = 100;
-	double retry_backoff = 1.5;
-	Value setting_val;
-	auto context_ref = context.lock();
-	if (context_ref->TryGetCurrentSetting("ducklake_max_retry_count", setting_val)) {
-		max_retry_count = setting_val.GetValue<idx_t>();
-	}
-	if (context_ref->TryGetCurrentSetting("ducklake_retry_wait_ms", setting_val)) {
-		retry_wait_ms = setting_val.GetValue<idx_t>();
-	}
-	if (context_ref->TryGetCurrentSetting("ducklake_retry_backoff", setting_val)) {
-		retry_backoff = setting_val.GetValue<double>();
-	}
-
+	auto retry_config = DuckLakeRetryConfig::FromContext(*context.lock());
 	auto transaction_snapshot = GetSnapshot();
 	auto transaction_changes = GetTransactionChanges();
+	RunCommitLoop(transaction_snapshot, transaction_changes, retry_config);
+}
+
+void DuckLakeTransaction::RunCommitLoop(DuckLakeSnapshot transaction_snapshot,
+                                        const TransactionChangeInformation &transaction_changes,
+                                        const DuckLakeRetryConfig &retry_config) {
 	SnapshotAndStats commit_stats_snapshot;
 	auto &commit_snapshot = commit_stats_snapshot.snapshot;
 	optional_ptr<vector<DuckLakeGlobalStatsInfo>> stats;
-	for (idx_t i = 0; i < max_retry_count + 1; i++) {
+	for (idx_t i = 0; i < retry_config.max_retry_count + 1; i++) {
 		bool can_retry;
 		auto attempt_changes = transaction_changes;
 		try {
@@ -2646,7 +2653,7 @@ void DuckLakeTransaction::FlushChanges() {
 				connection->Rollback();
 			}
 			bool retry_on_error = RetryOnError(error.Message());
-			bool finished_retrying = i + 1 >= max_retry_count;
+			bool finished_retrying = i + 1 >= retry_config.max_retry_count;
 			if (!can_retry || !retry_on_error || finished_retrying) {
 				// we abort after the max retry count
 				CleanupFiles();
@@ -2654,10 +2661,10 @@ void DuckLakeTransaction::FlushChanges() {
 				std::ostringstream error_message;
 				error_message << "Failed to commit DuckLake transaction." << '\n';
 				if (finished_retrying) {
-					error_message << "Exceeded the maximum retry count of " << max_retry_count
+					error_message << "Exceeded the maximum retry count of " << retry_config.max_retry_count
 					              << " set by the ducklake_max_retry_count setting." << '\n'
 					              << ". Consider increasing the value with: e.g., \"SET ducklake_max_retry_count = "
-					              << max_retry_count * 10 << ";\"" << '\n';
+					              << retry_config.max_retry_count * 10 << ";\"" << '\n';
 				}
 				error.Throw(error_message.str());
 			}
@@ -2666,8 +2673,8 @@ void DuckLakeTransaction::FlushChanges() {
 			RandomEngine random;
 			// random multiplier between 0.5 - 1.0
 			double random_multiplier = (random.NextRandom() + 1.0) / 2.0;
-			uint64_t sleep_amount =
-			    (uint64_t)((double)retry_wait_ms * random_multiplier * pow(retry_backoff, static_cast<double>(i)));
+			uint64_t sleep_amount = (uint64_t)((double)retry_config.retry_wait_ms * random_multiplier *
+			                                   pow(retry_config.retry_backoff, static_cast<double>(i)));
 			std::this_thread::sleep_for(std::chrono::milliseconds(sleep_amount));
 #endif
 
