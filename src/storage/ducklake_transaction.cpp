@@ -2,6 +2,9 @@
 
 #include "common/ducklake_types.hpp"
 #include "common/ducklake_util.hpp"
+#include "metadata_manager/ducklake_metadata_manager_v1_1.hpp"
+#include "metadata_manager/postgres_metadata_manager.hpp"
+#include "metadata_manager/sqlite_metadata_manager.hpp"
 #include "duckdb/common/sql_identifier.hpp"
 #include "duckdb/common/thread.hpp"
 #include "duckdb/common/sql_identifier.hpp"
@@ -678,6 +681,18 @@ DuckLakeTransaction::DuckLakeTransaction(DuckLakeCatalog &ducklake_catalog, Tran
     : Transaction(manager, context), ducklake_catalog(ducklake_catalog), db(*context.db),
       local_catalog_id(DuckLakeConstants::TRANSACTION_LOCAL_ID_START), catalog_version(0) {
 	metadata_manager = DuckLakeMetadataManager::Create(*this);
+	auto resolved = ducklake_catalog.resolved_catalog_version;
+	if (resolved == DuckLakeVersion::V1_1_DEV_1) {
+		unique_ptr<DuckLakeMetadataManager> wrapped;
+		if (dynamic_cast<PostgresMetadataManager *>(metadata_manager.get())) {
+			wrapped = make_uniq<DuckLakeMetadataManagerV1_1<PostgresMetadataManager>>(*this);
+		} else if (dynamic_cast<SQLiteMetadataManager *>(metadata_manager.get())) {
+			wrapped = make_uniq<DuckLakeMetadataManagerV1_1<SQLiteMetadataManager>>(*this);
+		} else {
+			wrapped = make_uniq<DuckLakeMetadataManagerV1_1<DuckLakeMetadataManager>>(*this);
+		}
+		metadata_manager = std::move(wrapped);
+	}
 }
 
 DuckLakeTransaction::~DuckLakeTransaction() {
@@ -2675,26 +2690,28 @@ void DuckLakeTransaction::FlushChanges() {
 			}
 			// Own-writes visible pre-COMMIT. Row with a different stats_version
 			// means a concurrent committer's UPDATE won; our CAS matched zero.
-			for (auto &entry : commit_state.stats_verification) {
-				string check_sql = StringUtil::Format(
-				    "SELECT stats_version FROM {METADATA_CATALOG}.ducklake_table_stats WHERE table_id = %d",
-				    entry.first.index);
-				auto check_res = metadata_manager->Query(commit_snapshot, check_sql);
-				if (check_res->HasError()) {
-					check_res->GetErrorObject().Throw("Failed to verify stats_version post-commit: ");
-				}
-				auto chunk = check_res->Fetch();
-				if (!chunk || chunk->size() == 0) {
-					throw TransactionException(
-					    "concurrent update to ducklake_table_stats: row missing for table_id=%d, retrying",
+			if (metadata_manager->SupportsStatsVersionCAS()) {
+				for (auto &entry : commit_state.stats_verification) {
+					string check_sql = StringUtil::Format(
+					    "SELECT stats_version FROM {METADATA_CATALOG}.ducklake_table_stats WHERE table_id = %d",
 					    entry.first.index);
-				}
-				idx_t actual = chunk->data[0].GetValue(0).GetValue<uint64_t>();
-				if (actual != entry.second) {
-					throw TransactionException(
-					    "concurrent update to ducklake_table_stats detected (stats_version=%llu, "
-					    "expected=%llu for table_id=%d), retrying",
-					    (unsigned long long)actual, (unsigned long long)entry.second, entry.first.index);
+					auto check_res = metadata_manager->Query(commit_snapshot, check_sql);
+					if (check_res->HasError()) {
+						check_res->GetErrorObject().Throw("Failed to verify stats_version post-commit: ");
+					}
+					auto chunk = check_res->Fetch();
+					if (!chunk || chunk->size() == 0) {
+						throw TransactionException(
+						    "concurrent update to ducklake_table_stats: row missing for table_id=%d, retrying",
+						    entry.first.index);
+					}
+					idx_t actual = chunk->data[0].GetValue(0).GetValue<uint64_t>();
+					if (actual != entry.second) {
+						throw TransactionException(
+						    "concurrent update to ducklake_table_stats detected (stats_version=%llu, "
+						    "expected=%llu for table_id=%d), retrying",
+						    (unsigned long long)actual, (unsigned long long)entry.second, entry.first.index);
+					}
 				}
 			}
 			connection->Commit();

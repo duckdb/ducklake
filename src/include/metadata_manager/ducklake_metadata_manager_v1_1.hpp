@@ -20,6 +20,9 @@ public:
 
 	string GetCreateTableStatements() override;
 	string GetVersionString() override;
+	bool SupportsStatsVersionCAS() const override {
+		return true;
+	}
 };
 
 } // namespace duckdb

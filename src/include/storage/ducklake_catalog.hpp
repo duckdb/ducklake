@@ -11,6 +11,7 @@
 #include "common/ducklake_encryption.hpp"
 #include "common/ducklake_options.hpp"
 #include "common/ducklake_name_map.hpp"
+#include "common/ducklake_version.hpp"
 #include "duckdb/catalog/catalog.hpp"
 #include "duckdb/main/client_context_state.hpp"
 #include "duckdb/storage/object_cache.hpp"
@@ -292,6 +293,11 @@ private:
 	string instance_id;
 	//! Whether or not the catalog is initialized
 	bool initialized = false;
+
+public:
+	DuckLakeVersion resolved_catalog_version = DuckLakeVersion::UNSET;
+
+private:
 	//! Cache for inlined deletion table existence checks
 	mutex inlined_deletion_cache_lock;
 	//! Table IDs where the inlined deletion table is known to exist (permanent - never invalidated)

@@ -165,6 +165,7 @@ void DuckLakeInitializer::InitializeNewDuckLake(DuckLakeTransaction &transaction
 	// default to the latest version when creating a new DuckLake
 	auto version =
 	    options.ducklake_version == DuckLakeVersion::UNSET ? DUCKLAKE_LATEST_VERSION : options.ducklake_version;
+	catalog.resolved_catalog_version = version;
 	SetVersionedMetadataManager(transaction, version);
 	auto &metadata_manager = transaction.GetMetadataManager();
 	metadata_manager.InitializeDuckLake(has_explicit_schema, catalog.Encryption());
@@ -274,6 +275,7 @@ void DuckLakeInitializer::LoadExistingDuckLake(DuckLakeTransaction &transaction)
 		}
 	}
 	if (resolved_version != DuckLakeVersion::UNSET) {
+		catalog.resolved_catalog_version = resolved_version;
 		SetVersionedMetadataManager(transaction, resolved_version);
 	}
 }
