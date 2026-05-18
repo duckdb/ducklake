@@ -758,30 +758,6 @@ bool DuckLakeTransaction::ChangesMade() const {
 	       !new_name_maps.name_maps.empty();
 }
 
-struct TransactionChangeInformation {
-	case_insensitive_set_t created_schemas;
-	map<SchemaIndex, reference<DuckLakeSchemaEntry>> dropped_schemas;
-	case_insensitive_map_t<reference_set_t<CatalogEntry>> created_tables;
-	case_insensitive_map_t<reference_set_t<CatalogEntry>> created_scalar_macros;
-	case_insensitive_map_t<reference_set_t<CatalogEntry>> created_table_macros;
-
-	set<TableIndex> altered_tables;
-	set<TableIndex> altered_tables_with_schema_version_changes;
-	set<TableIndex> altered_views;
-	set<TableIndex> dropped_tables;
-	set<TableIndex> dropped_views;
-	set<MacroIndex> dropped_scalar_macros;
-	set<MacroIndex> dropped_table_macros;
-	set<TableIndex> tables_inserted_into;
-	set<TableIndex> tables_deleted_from;
-	set<TableIndex> tables_inserted_inlined;
-	set<TableIndex> tables_deleted_inlined;
-	set<TableIndex> tables_flushed_inlined;
-	set<TableIndex> tables_compacted;
-	set<TableIndex> tables_merge_adjacent;
-	set<TableIndex> tables_rewrite_delete;
-};
-
 void GetTransactionTableChanges(reference<CatalogEntry> table_entry, TransactionChangeInformation &changes) {
 	while (true) {
 		auto &table = table_entry.get().Cast<DuckLakeTableEntry>();
@@ -1002,7 +978,7 @@ void DuckLakeTransaction::AddTableChanges(TableIndex table_id, const LocalTableD
 	}
 
 	if (inserted_data) {
-		changes.tables_inserted_into.insert(table_id);
+		changes.tables_inserted_into.Items().insert(table_id);
 	}
 	if (flushed_inline_data) {
 		changes.tables_flushed_inlined.insert(table_id);
@@ -1124,7 +1100,7 @@ string DuckLakeTransaction::WriteSnapshotChanges(DuckLakeCommitState &commit_sta
 		change_info.changes_made += to_string(entry.index);
 	}
 
-	AddChangeInfo(commit_state, change_info, changes.tables_inserted_into, "inserted_into_table");
+	AddChangeInfo(commit_state, change_info, changes.tables_inserted_into.Items(), "inserted_into_table");
 	AddChangeInfo(commit_state, change_info, changes.tables_deleted_from, "deleted_from_table");
 	AddChangeInfo(commit_state, change_info, changes.altered_tables, "altered_table");
 	AddChangeInfo(commit_state, change_info, changes.altered_views, "altered_view");
@@ -1269,7 +1245,7 @@ void DuckLakeTransaction::CheckForConflicts(const TransactionChangeInformation &
 			}
 		}
 	}
-	for (auto &table_id : changes.tables_inserted_into) {
+	for (auto &table_id : changes.tables_inserted_into.Items()) {
 		ConflictCheck(table_id, other_changes.dropped_tables, "insert into table", "dropped it");
 		ConflictCheck(table_id, other_changes.altered_tables, "insert into table", "altered it");
 		ConflictCheck(table_id, other_changes.tables_deleted_from, "insert into table", "deleted from it");

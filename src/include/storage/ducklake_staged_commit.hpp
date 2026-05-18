@@ -9,19 +9,19 @@
 #pragma once
 
 #include "duckdb/common/common.hpp"
+#include "common/ducklake_snapshot.hpp"
 
 namespace duckdb {
 class DuckLakeMetadataManager;
+class DuckLakeTransaction;
+struct TransactionChangeInformation;
 
-//! Transforms the per-commit information to temporary staging tables and hand them off to the server
-//! via `ducklake_commit`.
 class DuckLakeStagedCommit {
 public:
 	DuckLakeStagedCommit(DuckLakeMetadataManager &manager, string commit_uuid);
 
-	//! Creates the staging tables
-	void Write();
-	//! Drops the staging tables
+	void Write(DuckLakeTransaction &transaction, DuckLakeSnapshot transaction_snapshot,
+	           const TransactionChangeInformation &transaction_changes);
 	void Drop();
 
 	const string &CommitUUID() const {

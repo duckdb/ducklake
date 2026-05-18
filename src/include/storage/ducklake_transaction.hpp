@@ -271,6 +271,9 @@ public:
 	string GenerateUUID() const;
 	static string GenerateUUIDv7();
 
+	const LocalTableChanges &GetLocalChanges() const {
+		return local_changes;
+	}
 	const set<TableIndex> &GetDroppedTables() {
 		return dropped_tables;
 	}

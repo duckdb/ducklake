@@ -7,6 +7,7 @@
 #include "storage/ducklake_catalog.hpp"
 #include "storage/ducklake_staged_commit.hpp"
 #include "storage/ducklake_transaction.hpp"
+#include "storage/ducklake_transaction_changes.hpp"
 
 namespace duckdb {
 
@@ -88,14 +89,13 @@ void QuackMetadataManager::FlushChangesServerSide(DuckLakeTransaction &flush_tra
                                                   const TransactionChangeInformation &transaction_changes,
                                                   const DuckLakeRetryConfig &retry_config) {
 	DuckLakeStagedCommit staged(*this, flush_transaction.GenerateUUID());
-	staged.Write();
+	staged.Write(flush_transaction, transaction_snapshot, transaction_changes);
 	try {
 		flush_transaction.RunCommitLoop(transaction_snapshot, transaction_changes, retry_config);
 		auto &ducklake_catalog = transaction.GetCatalog();
-		auto call_sql = StringUtil::Format(
-		    "SELECT * FROM ducklake_commit(%s, %s);",
-		    DuckLakeUtil::SQLLiteralToString(ducklake_catalog.MetadataDatabaseName()),
-		    DuckLakeUtil::SQLLiteralToString(staged.CommitUUID()));
+		auto call_sql = StringUtil::Format("SELECT * FROM ducklake_commit(%s, %s);",
+		                                   DuckLakeUtil::SQLLiteralToString(ducklake_catalog.MetadataDatabaseName()),
+		                                   DuckLakeUtil::SQLLiteralToString(staged.CommitUUID()));
 		auto result = Query(call_sql);
 		if (result && result->HasError()) {
 			result->GetErrorObject().Throw("Failed to invoke server-side ducklake_commit: ");
