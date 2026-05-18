@@ -30,6 +30,8 @@ class DuckLakeCatalogSet;
 class DuckLakeSchemaEntry;
 class DuckLakeTableEntry;
 class DuckLakeTransaction;
+struct DuckLakeRetryConfig;
+struct TransactionChangeInformation;
 class BoundAtClause;
 class QueryResult;
 class FileSystem;
@@ -119,6 +121,11 @@ public:
 	}
 	//! Whether or not the commit retry loop should be executed on the metadata server rather than the client.
 	bool ExecuteRetrialsServerSide() const;
+
+	//! Run the commit retry loop with the metadata server handling retries.
+	virtual void FlushChangesServerSide(DuckLakeTransaction &transaction, DuckLakeSnapshot transaction_snapshot,
+	                                    const TransactionChangeInformation &transaction_changes,
+	                                    const DuckLakeRetryConfig &retry_config);
 
 	virtual void ClearCache() {
 	}

@@ -69,6 +69,12 @@ bool DuckLakeMetadataManager::ExecuteRetrialsServerSide() const {
 	return transaction.GetCatalog().RetrialsServerSide();
 }
 
+void DuckLakeMetadataManager::FlushChangesServerSide(DuckLakeTransaction &, DuckLakeSnapshot,
+                                                     const TransactionChangeInformation &,
+                                                     const DuckLakeRetryConfig &) {
+	throw InternalException("FlushChangesServerSide invoked on a metadata backend without server-side commit support");
+}
+
 DuckLakeMetadataManager &DuckLakeMetadataManager::Get(DuckLakeTransaction &transaction) {
 	return transaction.GetMetadataManager();
 }

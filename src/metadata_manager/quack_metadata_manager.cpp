@@ -5,6 +5,7 @@
 #include "duckdb/main/connection.hpp"
 #include "duckdb/main/materialized_query_result.hpp"
 #include "storage/ducklake_catalog.hpp"
+#include "storage/ducklake_staged_commit.hpp"
 #include "storage/ducklake_transaction.hpp"
 
 namespace duckdb {
@@ -80,6 +81,21 @@ void QuackMetadataManager::ProbeServerCapabilities() {
 	if (chunk && chunk->size() > 0) {
 		transaction.GetCatalog().SetRetrialsServerSide(true);
 	}
+}
+
+void QuackMetadataManager::FlushChangesServerSide(DuckLakeTransaction &flush_transaction,
+                                                  DuckLakeSnapshot transaction_snapshot,
+                                                  const TransactionChangeInformation &transaction_changes,
+                                                  const DuckLakeRetryConfig &retry_config) {
+	DuckLakeStagedCommit staged(*this, flush_transaction.GenerateUUID());
+	staged.Write();
+	try {
+		flush_transaction.RunCommitLoop(transaction_snapshot, transaction_changes, retry_config);
+	} catch (...) {
+		staged.Drop();
+		throw;
+	}
+	staged.Drop();
 }
 
 bool QuackMetadataManager::MetadataExists() {

@@ -299,15 +299,13 @@ protected:
 		this->metadata_manager = std::move(metadata_manager);
 	}
 
+public:
+	void RunCommitLoop(DuckLakeSnapshot transaction_snapshot, const TransactionChangeInformation &transaction_changes,
+	                   const DuckLakeRetryConfig &retry_config);
+
 private:
 	void CleanupFiles();
 	void FlushChanges();
-	void FlushChangesServerSide(DuckLakeSnapshot transaction_snapshot,
-	                            const TransactionChangeInformation &transaction_changes,
-	                            const DuckLakeRetryConfig &retry_config);
-	void RunCommitLoop(DuckLakeSnapshot transaction_snapshot,
-	                   const TransactionChangeInformation &transaction_changes,
-	                   const DuckLakeRetryConfig &retry_config);
 	void FlushSettingChanges();
 	string CommitChanges(DuckLakeCommitState &commit_state, TransactionChangeInformation &transaction_changes,
 	                     optional_ptr<vector<DuckLakeGlobalStatsInfo>> stats);

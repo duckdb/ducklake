@@ -2596,17 +2596,10 @@ void DuckLakeTransaction::FlushChanges() {
 	auto transaction_snapshot = GetSnapshot();
 	auto transaction_changes = GetTransactionChanges();
 	if (metadata_manager->ExecuteRetrialsServerSide()) {
-		FlushChangesServerSide(transaction_snapshot, transaction_changes, retry_config);
+		metadata_manager->FlushChangesServerSide(*this, transaction_snapshot, transaction_changes, retry_config);
 	} else {
 		RunCommitLoop(transaction_snapshot, transaction_changes, retry_config);
 	}
-}
-
-void DuckLakeTransaction::FlushChangesServerSide(DuckLakeSnapshot transaction_snapshot,
-                                                 const TransactionChangeInformation &transaction_changes,
-                                                 const DuckLakeRetryConfig &retry_config) {
-	//FIXME: do the server side commit
-	RunCommitLoop(transaction_snapshot, transaction_changes, retry_config);
 }
 
 void DuckLakeTransaction::RunCommitLoop(DuckLakeSnapshot transaction_snapshot,
