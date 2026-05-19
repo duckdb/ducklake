@@ -174,6 +174,15 @@ protected:
 	void SubstituteSnapshotPlaceholders(DuckLakeSnapshot snapshot, string &query) const;
 
 public:
+	//! Pure SQL templates (use `{METADATA_CATALOG}` placeholder) — caller substitutes + executes.
+	//! Both used by the regular metadata-manager methods and by server-side commit, which runs the
+	//! SQL on a fresh Connection without going through the metadata-manager wrapper.
+	static string LatestSnapshotQuery();
+	static string GlobalTableStatsQuery();
+	//! Pure parsers for the results of the above queries.
+	static unique_ptr<DuckLakeSnapshot> ParseSnapshot(QueryResult &result);
+	static vector<DuckLakeGlobalStatsInfo> ParseGlobalTableStats(QueryResult &result);
+
 	//! Get the catalog information for a specific snapshot
 	virtual DuckLakeCatalogInfo GetCatalogForSnapshot(DuckLakeSnapshot snapshot);
 	virtual vector<DuckLakeGlobalStatsInfo> GetGlobalTableStats(DuckLakeSnapshot snapshot);

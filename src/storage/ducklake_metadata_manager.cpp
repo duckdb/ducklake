@@ -924,16 +924,24 @@ vector<DuckLakeGlobalStatsInfo> TransformGlobalStats(QueryResult &result) {
 	return global_stats;
 }
 
-vector<DuckLakeGlobalStatsInfo> DuckLakeMetadataManager::GetGlobalTableStats(DuckLakeSnapshot snapshot) {
-	// query the most recent stats
-	auto result = transaction.Query(snapshot, R"(
+string DuckLakeMetadataManager::GlobalTableStatsQuery() {
+	return R"(
 SELECT table_id, column_id, record_count, next_row_id, file_size_bytes, contains_null, contains_nan, min_value, max_value, extra_stats
 FROM {METADATA_CATALOG}.ducklake_table_stats
 LEFT JOIN {METADATA_CATALOG}.ducklake_table_column_stats USING (table_id)
 WHERE record_count IS NOT NULL AND file_size_bytes IS NOT NULL
 ORDER BY table_id;
-)");
-	return TransformGlobalStats(*result);
+)";
+}
+
+vector<DuckLakeGlobalStatsInfo> DuckLakeMetadataManager::ParseGlobalTableStats(QueryResult &result) {
+	return TransformGlobalStats(result);
+}
+
+vector<DuckLakeGlobalStatsInfo> DuckLakeMetadataManager::GetGlobalTableStats(DuckLakeSnapshot snapshot) {
+	string query = GlobalTableStatsQuery();
+	auto result = transaction.Query(snapshot, query);
+	return ParseGlobalTableStats(*result);
 }
 
 string DuckLakeMetadataManager::GetFileSelectList(const string &prefix) {
@@ -3642,7 +3650,7 @@ DuckLakeMetadataManager::GetFilesDeletedOrDroppedAfterSnapshot(const DuckLakeSna
 	return change_info;
 }
 
-static unique_ptr<DuckLakeSnapshot> TryGetSnapshotInternal(QueryResult &result) {
+unique_ptr<DuckLakeSnapshot> DuckLakeMetadataManager::ParseSnapshot(QueryResult &result) {
 	unique_ptr<DuckLakeSnapshot> snapshot;
 	for (auto &row : result) {
 		if (snapshot) {
@@ -3657,8 +3665,12 @@ static unique_ptr<DuckLakeSnapshot> TryGetSnapshotInternal(QueryResult &result) 
 	return snapshot;
 }
 
-string DuckLakeMetadataManager::GetLatestSnapshotQuery() const {
+string DuckLakeMetadataManager::LatestSnapshotQuery() {
 	return R"(SELECT snapshot_id, schema_version, next_catalog_id, next_file_id FROM {METADATA_CATALOG}.ducklake_snapshot WHERE snapshot_id = (SELECT MAX(snapshot_id) FROM {METADATA_CATALOG}.ducklake_snapshot);)";
+}
+
+string DuckLakeMetadataManager::GetLatestSnapshotQuery() const {
+	return LatestSnapshotQuery();
 }
 
 unique_ptr<DuckLakeSnapshot> DuckLakeMetadataManager::GetSnapshot() {
@@ -3666,7 +3678,7 @@ unique_ptr<DuckLakeSnapshot> DuckLakeMetadataManager::GetSnapshot() {
 	if (result->HasError()) {
 		result->GetErrorObject().Throw("Failed to query most recent snapshot for DuckLake: ");
 	}
-	auto snapshot = TryGetSnapshotInternal(*result);
+	auto snapshot = ParseSnapshot(*result);
 	if (!snapshot) {
 		throw InvalidInputException("No snapshot found in DuckLake");
 	}
@@ -3704,7 +3716,7 @@ WHERE snapshot_id = (
 		result->GetErrorObject().Throw(StringUtil::Format(
 		    "Failed to query snapshot at %s %s for DuckLake: ", StringUtil::Lower(unit), val.ToString()));
 	}
-	auto snapshot = TryGetSnapshotInternal(*result);
+	auto snapshot = ParseSnapshot(*result);
 	if (!snapshot) {
 		throw InvalidInputException("No snapshot found at %s %s", StringUtil::Lower(unit), val.ToString());
 	}
