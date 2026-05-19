@@ -2256,20 +2256,32 @@ string DuckLakeMetadataManager::GetColumnType(const DuckLakeColumnInfo &col) {
 	}
 }
 
-string DuckLakeMetadataManager::GetInlinedTableQuery(const DuckLakeTableInfo &table, const string &table_name) {
-	string columns;
+string DuckLakeMetadataManager::InlinedTableNameFor(idx_t table_id, idx_t schema_version) {
+	return StringUtil::Format("ducklake_inlined_data_%d_%d", table_id, schema_version);
+}
 
+string DuckLakeMetadataManager::InlinedTableDdlSql(const string &table_name, const string &column_defs) {
+	return StringUtil::Format("CREATE TABLE IF NOT EXISTS {METADATA_CATALOG}.%s(row_id BIGINT, begin_snapshot BIGINT, "
+	                          "end_snapshot BIGINT, %s);",
+	                          SQLIdentifier(table_name), column_defs);
+}
+
+string DuckLakeMetadataManager::InlinedTableRegistrationTuple(idx_t table_id, const string &table_name,
+                                                               idx_t schema_version) {
+	return StringUtil::Format("(%d, %s, %d)", table_id, SQLString(table_name), schema_version);
+}
+
+string DuckLakeMetadataManager::GetInlinedTableQuery(const DuckLakeTableInfo &table, const string &table_name) {
+	string column_defs;
 	for (auto &col : table.columns) {
-		if (!columns.empty()) {
-			columns += ", ";
+		if (!column_defs.empty()) {
+			column_defs += ", ";
 		}
-		columns += StringUtil::Format("%s %s", SQLIdentifier(col.name), GetColumnType(col));
+		column_defs += StringUtil::Format("%s %s", SQLIdentifier(col.name), GetColumnType(col));
 	}
 	// We created a table here, flag we need to clear our cache at commit
 	MarkPendingCacheClear();
-	return StringUtil::Format("CREATE TABLE IF NOT EXISTS {METADATA_CATALOG}.%s(row_id BIGINT, begin_snapshot BIGINT, "
-	                          "end_snapshot BIGINT, %s);",
-	                          SQLIdentifier(table_name), columns);
+	return InlinedTableDdlSql(table_name, column_defs);
 }
 
 string DuckLakeMetadataManager::WriteNewTables(DuckLakeSnapshot commit_snapshot,
@@ -2307,18 +2319,13 @@ string DuckLakeMetadataManager::WriteNewTables(DuckLakeSnapshot commit_snapshot,
 	return batch_query;
 }
 
-static string GetInlinedTableName(const DuckLakeTableInfo &table, const DuckLakeSnapshot &snapshot) {
-	return StringUtil::Format("ducklake_inlined_data_%d_%d", table.id.index, snapshot.schema_version);
-}
-
 string DuckLakeMetadataManager::GetInlinedTableQueries(DuckLakeSnapshot commit_snapshot, const DuckLakeTableInfo &table,
                                                        string &inlined_tables, string &inlined_table_queries) {
+	string inlined_table_name = InlinedTableNameFor(table.id.index, commit_snapshot.schema_version);
 	if (!inlined_tables.empty()) {
 		inlined_tables += ", ";
 	}
-	auto schema_version = commit_snapshot.schema_version;
-	string inlined_table_name = GetInlinedTableName(table, commit_snapshot);
-	inlined_tables += StringUtil::Format("(%d, %s, %d)", table.id.index, SQLString(inlined_table_name), schema_version);
+	inlined_tables += InlinedTableRegistrationTuple(table.id.index, inlined_table_name, commit_snapshot.schema_version);
 	if (!inlined_table_queries.empty()) {
 		inlined_table_queries += "\n";
 	}
@@ -2469,7 +2476,7 @@ string DuckLakeMetadataManager::WriteNewInlinedData(DuckLakeSnapshot &commit_sna
 		string inlined_table_name;
 		for (auto &inlined_table : new_inlined_data_tables_result) {
 			if (inlined_table.id == entry.table_id) {
-				inlined_table_name = GetInlinedTableName(inlined_table, commit_snapshot);
+				inlined_table_name = InlinedTableNameFor(inlined_table.id.index, commit_snapshot.schema_version);
 			}
 		}
 		if (inlined_table_name.empty()) {
