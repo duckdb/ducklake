@@ -29,5 +29,4 @@ private:
 	string identifier_suffix;
 };
 
-
 } // namespace duckdb

@@ -84,8 +84,7 @@ void QuackMetadataManager::ProbeServerCapabilities() {
 static bool HasUnsupportedDataFiles(const DuckLakeTransaction &t) {
 	for (auto &entry : t.GetLocalChanges().Changes()) {
 		for (auto &file : entry.GetTableChanges().new_data_files) {
-			if (file.mapping_id.IsValid() &&
-			    file.mapping_id.index >= DuckLakeConstants::TRANSACTION_LOCAL_ID_START) {
+			if (file.mapping_id.IsValid() && file.mapping_id.index >= DuckLakeConstants::TRANSACTION_LOCAL_ID_START) {
 				return true;
 			}
 			if (file.partition_id.IsValid() || !file.partition_values.empty()) {
@@ -102,16 +101,13 @@ static bool HasUnsupportedDataFiles(const DuckLakeTransaction &t) {
 }
 
 static bool IsDataOnlyCommit(const TransactionChangeInformation &c) {
-	return c.created_schemas.empty() && c.dropped_schemas.empty() &&
-	       c.created_tables.empty() && c.created_scalar_macros.empty() &&
-	       c.created_table_macros.empty() && c.altered_tables.empty() &&
+	return c.created_schemas.empty() && c.dropped_schemas.empty() && c.created_tables.empty() &&
+	       c.created_scalar_macros.empty() && c.created_table_macros.empty() && c.altered_tables.empty() &&
 	       c.altered_tables_with_schema_version_changes.empty() && c.altered_views.empty() &&
-	       c.dropped_tables.empty() && c.dropped_views.empty() &&
-	       c.dropped_scalar_macros.empty() && c.dropped_table_macros.empty() &&
-	       c.tables_deleted_from.empty() && c.tables_inserted_inlined.empty() &&
-	       c.tables_deleted_inlined.empty() && c.tables_flushed_inlined.empty() &&
-	       c.tables_compacted.empty() && c.tables_merge_adjacent.empty() &&
-	       c.tables_rewrite_delete.empty();
+	       c.dropped_tables.empty() && c.dropped_views.empty() && c.dropped_scalar_macros.empty() &&
+	       c.dropped_table_macros.empty() && c.tables_deleted_from.empty() && c.tables_inserted_inlined.empty() &&
+	       c.tables_deleted_inlined.empty() && c.tables_flushed_inlined.empty() && c.tables_compacted.empty() &&
+	       c.tables_merge_adjacent.empty() && c.tables_rewrite_delete.empty();
 }
 
 void QuackMetadataManager::FlushChangesServerSide(DuckLakeTransaction &flush_transaction,

@@ -12,8 +12,7 @@
 namespace duckdb {
 
 DuckLakeStagedCommit::DuckLakeStagedCommit(string commit_uuid)
-    : commit_uuid(std::move(commit_uuid)),
-      identifier_suffix(StringUtil::Replace(this->commit_uuid, "-", "")) {
+    : commit_uuid(std::move(commit_uuid)), identifier_suffix(StringUtil::Replace(this->commit_uuid, "-", "")) {
 }
 
 static string OptionalIdxOrNull(const optional_idx &v) {
@@ -36,9 +35,9 @@ static string EmitStagedCommitHeader(const DuckLakeSnapshotCommit &h, const stri
 	sql += StringUtil::Format("CREATE TABLE IF NOT EXISTS {METADATA_CATALOG}.ducklake_staged_commit_%s("
 	                          "commit_author VARCHAR, commit_message VARCHAR, commit_extra_info VARCHAR);",
 	                          sfx);
-	sql += StringUtil::Format("INSERT INTO {METADATA_CATALOG}.ducklake_staged_commit_%s VALUES (%s, %s, %s);", sfx,
-	                          h.author.ToSQLString(), h.commit_message.ToSQLString(),
-	                          h.commit_extra_info.ToSQLString());
+	sql +=
+	    StringUtil::Format("INSERT INTO {METADATA_CATALOG}.ducklake_staged_commit_%s VALUES (%s, %s, %s);", sfx,
+	                       h.author.ToSQLString(), h.commit_message.ToSQLString(), h.commit_extra_info.ToSQLString());
 	return sql;
 }
 
@@ -64,12 +63,11 @@ static string EmitStagedDataFiles(const LocalTableChanges &local_changes, const 
 	                          "row_id_start BIGINT, partition_id BIGINT, encryption_key VARCHAR, "
 	                          "mapping_id BIGINT, partial_max BIGINT);",
 	                          sfx);
-	sql += StringUtil::Format(
-	    "CREATE TABLE IF NOT EXISTS {METADATA_CATALOG}.ducklake_staged_data_file_column_stats_%s("
-	    "data_file_id BIGINT, table_id BIGINT, column_id BIGINT, "
-	    "column_size_bytes BIGINT, value_count BIGINT, null_count BIGINT, "
-	    "min_value VARCHAR, max_value VARCHAR, contains_nan BOOLEAN, extra_stats VARCHAR);",
-	    sfx);
+	sql += StringUtil::Format("CREATE TABLE IF NOT EXISTS {METADATA_CATALOG}.ducklake_staged_data_file_column_stats_%s("
+	                          "data_file_id BIGINT, table_id BIGINT, column_id BIGINT, "
+	                          "column_size_bytes BIGINT, value_count BIGINT, null_count BIGINT, "
+	                          "min_value VARCHAR, max_value VARCHAR, contains_nan BOOLEAN, extra_stats VARCHAR);",
+	                          sfx);
 
 	idx_t local_file_id = 0;
 	for (auto &entry : local_changes.Changes()) {
@@ -80,22 +78,21 @@ static string EmitStagedDataFiles(const LocalTableChanges &local_changes, const 
 			sql += StringUtil::Format(
 			    "INSERT INTO {METADATA_CATALOG}.ducklake_staged_data_file_%s VALUES "
 			    "(%llu, %llu, %llu, %s, false, 'parquet', %llu, %llu, %s, %s, %s, %s, %s, %s);",
-			    sfx, static_cast<unsigned long long>(local_file_id),
-			    static_cast<unsigned long long>(table_id.index), static_cast<unsigned long long>(file_order),
-			    SQLString(file.file_name), static_cast<unsigned long long>(file.row_count),
-			    static_cast<unsigned long long>(file.file_size_bytes), OptionalIdxOrNull(file.footer_size),
-			    OptionalIdxOrNull(file.flush_row_id_start), OptionalIdxOrNull(file.partition_id),
-			    EncryptionKeyLiteral(file.encryption_key), MappingIdOrNull(file.mapping_id),
-			    OptionalIdxOrNull(file.max_partial_file_snapshot));
+			    sfx, static_cast<unsigned long long>(local_file_id), static_cast<unsigned long long>(table_id.index),
+			    static_cast<unsigned long long>(file_order), SQLString(file.file_name),
+			    static_cast<unsigned long long>(file.row_count), static_cast<unsigned long long>(file.file_size_bytes),
+			    OptionalIdxOrNull(file.footer_size), OptionalIdxOrNull(file.flush_row_id_start),
+			    OptionalIdxOrNull(file.partition_id), EncryptionKeyLiteral(file.encryption_key),
+			    MappingIdOrNull(file.mapping_id), OptionalIdxOrNull(file.max_partial_file_snapshot));
 			for (auto &stat : file.column_stats) {
 				auto info = DuckLakeColumnStatsInfo::FromColumnStats(stat.first, stat.second);
 				sql += StringUtil::Format("INSERT INTO {METADATA_CATALOG}.ducklake_staged_data_file_column_stats_%s "
 				                          "VALUES (%llu, %llu, %llu, %s, %s, %s, %s, %s, %s, %s);",
 				                          sfx, static_cast<unsigned long long>(local_file_id),
 				                          static_cast<unsigned long long>(table_id.index),
-				                          static_cast<unsigned long long>(info.column_id.index),
-				                          info.column_size_bytes, info.value_count, info.null_count, info.min_val,
-				                          info.max_val, info.contains_nan, info.extra_stats);
+				                          static_cast<unsigned long long>(info.column_id.index), info.column_size_bytes,
+				                          info.value_count, info.null_count, info.min_val, info.max_val,
+				                          info.contains_nan, info.extra_stats);
 			}
 			local_file_id++;
 			file_order++;
@@ -114,9 +111,8 @@ string DuckLakeStagedCommit::Build(DuckLakeTransaction &transaction,
 	batch += EmitStagedChangeTouch(transaction_changes.tables_inserted_into, identifier_suffix);
 	batch += EmitStagedDataFiles(transaction.GetLocalChanges(), identifier_suffix);
 	batch += StringUtil::Format(
-	    "SELECT * FROM ducklake_commit(%s, %s, %lld);",
-	    DuckLakeUtil::SQLLiteralToString(identifier_suffix), DuckLakeUtil::SQLLiteralToString(schema_name),
-	    static_cast<long long>(transaction_snapshot.schema_version));
+	    "SELECT * FROM ducklake_commit(%s, %s, %lld);", DuckLakeUtil::SQLLiteralToString(identifier_suffix),
+	    DuckLakeUtil::SQLLiteralToString(schema_name), static_cast<long long>(transaction_snapshot.schema_version));
 	return batch;
 }
 

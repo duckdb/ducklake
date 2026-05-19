@@ -1,6 +1,6 @@
 #include "functions/ducklake_table_functions.hpp"
 
-#include "storage/ducklake_commit_runner.hpp"
+#include "storage/ducklake_server_side_commit.hpp"
 
 namespace duckdb {
 
@@ -42,7 +42,7 @@ static void DuckLakeCommitExecute(ClientContext &context, TableFunctionInput &da
 	data.emitted = true;
 
 	auto result =
-	    RunStagedDataOnlyCommit(context, data.metadata_schema_name, data.identifier_suffix, data.schema_version);
+	    RunServerSideCommit(context, data.metadata_schema_name, data.identifier_suffix, data.schema_version);
 
 	output.SetCardinality(1);
 	output.SetValue(0, 0, Value::BIGINT(result.committed_snapshot_id));

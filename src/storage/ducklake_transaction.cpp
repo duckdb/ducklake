@@ -1941,13 +1941,13 @@ NewMacroInfo DuckLakeTransaction::GetNewMacros(DuckLakeCommitState &commit_state
 	return result;
 }
 
-struct DuckLakeNewGlobalStats {
-	DuckLakeTableStats stats;
-	bool initialized = false;
-};
-
 string DuckLakeTransaction::UpdateGlobalTableStats(TableIndex table_id,
                                                    const DuckLakeNewGlobalStats &new_global_stats) {
+	return metadata_manager->UpdateGlobalTableStats(ConvertNewGlobalStats(table_id, new_global_stats));
+}
+
+DuckLakeGlobalStatsInfo DuckLakeTransaction::ConvertNewGlobalStats(TableIndex table_id,
+                                                                    const DuckLakeNewGlobalStats &new_global_stats) {
 	DuckLakeGlobalStatsInfo stats;
 	stats.table_id = table_id;
 
@@ -1983,8 +1983,7 @@ string DuckLakeTransaction::UpdateGlobalTableStats(TableIndex table_id,
 	stats.record_count = new_stats.record_count;
 	stats.next_row_id = new_stats.next_row_id;
 	stats.table_size_bytes = new_stats.table_size_bytes;
-	// finally update the stats in the tables
-	return metadata_manager->UpdateGlobalTableStats(stats);
+	return stats;
 }
 
 DuckLakeColumnStatsInfo DuckLakeColumnStatsInfo::FromColumnStats(FieldIndex field_id,

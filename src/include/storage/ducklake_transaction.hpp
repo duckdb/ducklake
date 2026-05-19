@@ -55,6 +55,11 @@ struct LocalTableDataChanges {
 	bool IsEmpty() const;
 };
 
+struct DuckLakeNewGlobalStats {
+	DuckLakeTableStats stats;
+	bool initialized = false;
+};
+
 struct LocalTableChanges {
 public:
 	void Clear();
@@ -307,6 +312,8 @@ public:
 	                   const DuckLakeRetryConfig &retry_config);
 	void ApplyServerSideCommit(idx_t schema_version);
 
+	static DuckLakeGlobalStatsInfo ConvertNewGlobalStats(TableIndex table_id,
+	                                                      const DuckLakeNewGlobalStats &new_global_stats);
 private:
 	void CleanupFiles();
 	void FlushChanges();
