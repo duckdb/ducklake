@@ -1,0 +1,136 @@
+# name: test/sql/concurrent/concurrent_pg_inlined_conflict.test
+# description: deterministic conflict-detection coverage for inlined-data
+#              transaction-change sets (tables_inserted_inlined,
+#              tables_deleted_inlined, tables_flushed_inlined) on the
+#              postgres metadata backend. The main concurrent test runs
+#              with DATA_INLINING_ROW_LIMIT 0 and never exercises these
+#              paths.
+# group: [concurrent]
+
+require notwindows
+
+require ducklake
+
+require parquet
+
+require postgres_scanner
+
+test-env DUCKLAKE_CONNECTION postgres:dbname=ducklakedb
+
+test-env PG_METADATA_CONN dbname=ducklakedb
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH '{PG_METADATA_CONN}' AS _clean_pg (TYPE postgres)
+
+statement ok
+CALL postgres_execute('_clean_pg',
+    'DROP SCHEMA IF EXISTS metadata_pg_inlined_test CASCADE')
+
+statement ok
+DETACH _clean_pg
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/ducklake_pg_inlined_files', METADATA_SCHEMA 'metadata_pg_inlined_test', DATA_INLINING_ROW_LIMIT 1000)
+
+statement ok con1
+SET ducklake_retry_wait_ms=20
+
+statement ok con1
+SET ducklake_max_retry_count=10
+
+statement ok con2
+SET ducklake_retry_wait_ms=20
+
+statement ok con2
+SET ducklake_max_retry_count=10
+
+
+# Scenario AA: INSERT-inlined vs DELETE-inlined same table (con1 inserts first).
+# Exercises tables_deleted_inlined ∩ tables_inserted_inlined via the
+# "delete from table - inserted into it" branch.
+statement ok
+CREATE TABLE dl.inl_ins_del(k INTEGER)
+
+statement ok
+INSERT INTO dl.inl_ins_del VALUES (1), (2), (3)
+
+statement ok con1
+BEGIN
+
+statement ok con2
+BEGIN
+
+statement ok con1
+INSERT INTO dl.inl_ins_del VALUES (100)
+
+statement ok con2
+DELETE FROM dl.inl_ins_del WHERE k = 1
+
+statement ok con1
+COMMIT
+
+statement error con2
+COMMIT
+----
+<REGEX>:.*Transaction conflict.*delete from table.*inserted.*
+
+
+# Scenario BB: FLUSH-inlined vs DELETE-inlined same table (con1 flushes first).
+# Exercises tables_flushed_inlined ∩ tables_deleted_inlined via the
+# "flush inline data - deleted from it" branch.
+statement ok
+CREATE TABLE dl.inl_flush_del(k INTEGER)
+
+statement ok
+INSERT INTO dl.inl_flush_del VALUES (1), (2), (3)
+
+statement ok con1
+BEGIN
+
+statement ok con2
+BEGIN
+
+statement ok con1
+CALL ducklake_flush_inlined_data('dl', table_name => 'inl_flush_del')
+
+statement ok con2
+DELETE FROM dl.inl_flush_del WHERE k = 1
+
+statement ok con1
+COMMIT
+
+statement error con2
+COMMIT
+----
+<REGEX>:.*Transaction conflict.*flush inline data.*deleted.*
+
+
+# Scenario CC: FLUSH-inlined vs FLUSH-inlined same table.
+# Exercises tables_flushed_inlined ∩ tables_flushed_inlined.
+statement ok
+CREATE TABLE dl.inl_flush_dup(k INTEGER)
+
+statement ok
+INSERT INTO dl.inl_flush_dup VALUES (1), (2), (3)
+
+statement ok con1
+BEGIN
+
+statement ok con2
+BEGIN
+
+statement ok con1
+CALL ducklake_flush_inlined_data('dl', table_name => 'inl_flush_dup')
+
+statement ok con2
+CALL ducklake_flush_inlined_data('dl', table_name => 'inl_flush_dup')
+
+statement ok con1
+COMMIT
+
+statement error con2
+COMMIT
+----
+<REGEX>:.*Transaction conflict.*flush inline data.*flushed.*

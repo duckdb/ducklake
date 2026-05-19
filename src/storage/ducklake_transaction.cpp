@@ -2606,24 +2606,41 @@ CompactionInformation DuckLakeTransaction::GetCompactionChanges(DuckLakeCommitSt
 
 bool RetryOnError(const string &original_message) {
 	auto message = StringUtil::Lower(original_message);
-	// retry on primary key errors
-	if (StringUtil::Contains(message, "primary key") || StringUtil::Contains(message, "unique")) {
+	// Explicit "concurrent:" prefix on DuckLake-thrown messages
+	// (commit lock acquisition failures, classid probe failures).
+	if (StringUtil::Contains(message, "concurrent:")) {
 		return true;
 	}
-	// retry on conflicts
-	if (StringUtil::Contains(message, "conflict")) {
+	// Optimistic stats-CAS lost the race against a concurrent committer.
+	if (StringUtil::Contains(message, "concurrent update to ducklake_")) {
 		return true;
 	}
-	// retry on concurrent access
-	if (StringUtil::Contains(message, "concurrent")) {
+	// PK / unique-constraint violations across backends:
+	//   pg:     "duplicate key value violates unique constraint"
+	//   sqlite: "UNIQUE constraint failed"
+	//   duckdb: "PRIMARY KEY or UNIQUE constraint violation"
+	if (StringUtil::Contains(message, "duplicate key value violates unique constraint") ||
+	    StringUtil::Contains(message, "unique constraint failed") ||
+	    StringUtil::Contains(message, "primary key or unique constraint violation") ||
+	    StringUtil::Contains(message, "violates primary key constraint") ||
+	    StringUtil::Contains(message, "violates unique constraint")) {
 		return true;
 	}
-	if (StringUtil::Contains(message, "server closed the connection") ||
-	    StringUtil::Contains(message, "connection to server") ||
-	    StringUtil::Contains(message, "connection reset")) {
+	// PostgreSQL serialisation failure (SQLSTATE 40001).
+	if (StringUtil::Contains(message, "could not serialize")) {
+		return true;
+	}
+	// DuckDB MVCC update-conflict on metadata catalog rows.
+	if (StringUtil::Contains(message, "conflict on update")) {
 		return true;
 	}
 	if (StringUtil::Contains(message, "deadlock")) {
+		return true;
+	}
+	// pg connection drops mid-commit.
+	if (StringUtil::Contains(message, "server closed the connection") ||
+	    StringUtil::Contains(message, "connection to server") ||
+	    StringUtil::Contains(message, "connection reset")) {
 		return true;
 	}
 	return false;

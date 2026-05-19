@@ -1041,8 +1041,14 @@ string DuckLakeMetadataManager::CastValueToTarget(const Value &val, const Logica
 		// for (finite) numerics we directly emit the number
 		return val.ToString();
 	}
-	// convert to a string
-	return DuckLakeUtil::SQLLiteralToString(val.ToString());
+	auto str = val.ToString();
+	for (auto c : str) {
+		if (c == '\0') {
+			// NUL bytes break pg/sqlite literal syntax — disable pushdown.
+			return "NULL";
+		}
+	}
+	return DuckLakeUtil::SQLLiteralToString(str);
 }
 
 string DuckLakeMetadataManager::CastStatsToTarget(const string &stats, const LogicalType &type) {

@@ -1,0 +1,59 @@
+# name: test/sql/concurrent/concurrent_pg_attach_bootstrap.test
+# description: concurrent ATTACH to the same fresh pg metadata schema must
+#              survive the EnsureIdSequences bootstrap race. CREATE SEQUENCE
+#              IF NOT EXISTS / CREATE UNIQUE INDEX IF NOT EXISTS are NOT
+#              concurrent-safe in pg; bootstrap is gated by session-level
+#              pg_advisory_lock and a skip-if-present probe.
+# group: [concurrent]
+
+require notwindows
+
+require ducklake
+
+require parquet
+
+require postgres_scanner
+
+test-env DUCKLAKE_CONNECTION postgres:dbname=ducklakedb
+
+test-env PG_METADATA_CONN dbname=ducklakedb
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH '{PG_METADATA_CONN}' AS _clean_pg (TYPE postgres)
+
+statement ok
+CALL postgres_execute('_clean_pg',
+    'DROP SCHEMA IF EXISTS metadata_pg_attach_race CASCADE')
+
+statement ok
+DETACH _clean_pg
+
+# Drive 4 concurrent ATTACHes against the same fresh metadata schema. Each
+# iter runs in its own duckdb Connection -> its own pg session. They race
+# inside EnsureIdSequences on CREATE SEQUENCE / CREATE UNIQUE INDEX DDL.
+# Without the advisory-lock gate, at least one would fail with pg_class
+# duplicate-key (SQLSTATE 42P07).
+concurrentloop i 0 4
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl_{i} (DATA_PATH '{DATA_PATH}/attach_race_{i}', METADATA_SCHEMA 'metadata_pg_attach_race', DATA_INLINING_ROW_LIMIT 0)
+
+endloop
+
+statement ok
+ATTACH '{PG_METADATA_CONN}' AS pg_meta (TYPE postgres)
+
+# Exactly one of each bootstrap object — racing attaches must not duplicate.
+query I
+SELECT COUNT(*)::BIGINT FROM postgres_query('pg_meta',
+    'SELECT 1 FROM pg_catalog.pg_class c
+     JOIN pg_catalog.pg_namespace n ON c.relnamespace = n.oid
+     WHERE n.nspname = ''metadata_pg_attach_race''
+       AND c.relname IN (''ducklake_snapshot_id_seq'',''ducklake_catalog_id_seq'',
+                         ''ducklake_file_id_seq'',''ducklake_schema_version_seq'',
+                         ''ducklake_schema_name_active_uidx'',''ducklake_table_name_active_uidx'',
+                         ''ducklake_view_name_active_uidx'',''ducklake_delete_file_active_uidx'')')
+----
+8

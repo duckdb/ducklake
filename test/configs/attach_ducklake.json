@@ -112,6 +112,7 @@
         "test/sql/logging/logging_types.test",
         "test/sql/logging/logging.test",
         "test/sql/logging/logging_csv.test",
+        "test/sql/logging/logging_buffer_size.test",
         "test/sql/storage/compression/roaring/roaring_bool_analyze_bitset.test",
         "test/sql/storage/compression/roaring/roaring_bool_analyze_run.test",
         "test/sql/storage/compression/roaring/roaring_bool_analyze_array.test",
@@ -128,6 +129,8 @@
     {
       "reason": "Different plans in Optimizer",
       "paths": [
+        "test/optimizer/compressed_materialization_grouping_sets.test",
+        "test/optimizer/joins/join_filter_build_side.test",
         "test/optimizer/statistics/statistics_null_comparison.test",
         "test/optimizer/pushdown/pushdown_unnest_into_cte.test",
         "test/optimizer/pushdown/timestamp_to_date_pushdown.test",
@@ -292,6 +295,7 @@
         "test/sql/storage/temp_directory/max_swap_space_explicit.test",
         "test/sql/storage/temp_directory/max_swap_space_inmemory.test",
         "test/sql/storage/temp_directory/max_swap_space_error.test",
+        "test/sql/storage/temp_directory/test_default_temp_directory.test",
         "test/sql/copy/parquet/writer/parquet_write_memory_usage.test",
         "test/fuzzer/sqlsmith/nullif_map_with_config.test",
         "test/sql/storage/buffer_manager_temp_dir.test",
@@ -307,7 +311,15 @@
         "test/sql/storage/partial_blocks/many_columns_rle.test",
         "test/sql/storage/partial_blocks/many_columns_strings.test",
         "test/sql/storage/partial_blocks/many_columns_storage.test",
+        "test/sql/storage/adaptive_segment_allocation.test",
         "test/sql/index/art/storage/test_art_auto_checkpoint.test"
+      ]
+    },
+    {
+      "reason": "DuckLake stats differ from DuckDB storage internals",
+      "paths": [
+        "test/sql/storage/extended_string_stats.test",
+        "test/sql/storage/total_string_length_repeated_insert.test"
       ]
     },
     {

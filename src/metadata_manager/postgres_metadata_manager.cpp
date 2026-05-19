@@ -165,22 +165,29 @@ idx_t PostgresMetadataManager::AllocateNextSchemaVersion(idx_t /*advisory*/) {
 	return FetchScalarSequenceValue("ducklake_schema_version_seq");
 }
 
+idx_t PostgresMetadataManager::EnsureCatalogClassid() {
+	if (commit_lock_classid.IsValid()) {
+		return commit_lock_classid.GetIndex();
+	}
+	DuckLakeSnapshot dummy {};
+	string probe = "SELECT hashtext({METADATA_CATALOG_NAME_LITERAL})::int4";
+	auto probe_result = Query(dummy, probe);
+	if (probe_result->HasError()) {
+		probe_result->GetErrorObject().Throw(
+		    "concurrent: failed to compute DuckLake advisory lock classid: ");
+	}
+	auto chunk = probe_result->Fetch();
+	if (!chunk || chunk->size() == 0) {
+		throw InternalException("ducklake: hashtext probe returned no row");
+	}
+	commit_lock_classid = static_cast<idx_t>(
+	    static_cast<uint32_t>(chunk->data[0].GetValue(0).GetValue<int32_t>()));
+	return commit_lock_classid.GetIndex();
+}
+
 void PostgresMetadataManager::AcquireCommitLock() {
 	DuckLakeSnapshot dummy {};
-	if (!commit_lock_classid.IsValid()) {
-		string probe = "SELECT hashtext({METADATA_CATALOG_NAME_LITERAL})::int4";
-		auto probe_result = Query(dummy, probe);
-		if (probe_result->HasError()) {
-			probe_result->GetErrorObject().Throw(
-			    "concurrent: failed to compute DuckLake commit lock classid: ");
-		}
-		auto chunk = probe_result->Fetch();
-		if (!chunk || chunk->size() == 0) {
-			throw InternalException("ducklake: hashtext probe returned no row");
-		}
-		commit_lock_classid = static_cast<idx_t>(
-		    static_cast<uint32_t>(chunk->data[0].GetValue(0).GetValue<int32_t>()));
-	}
+	auto classid = EnsureCatalogClassid();
 
 	string set_timeout = "SET LOCAL lock_timeout = '30s'";
 	auto timeout_res = Execute(dummy, set_timeout);
@@ -190,7 +197,7 @@ void PostgresMetadataManager::AcquireCommitLock() {
 
 	// "concurrent:" prefix -> RetryOnError matches, transient pg error retries.
 	string query = "SELECT pg_advisory_xact_lock(" +
-	               std::to_string(static_cast<int32_t>(commit_lock_classid.GetIndex())) + ", " +
+	               std::to_string(static_cast<int32_t>(classid)) + ", " +
 	               std::to_string(DUCKLAKE_COMMIT_ADVISORY_SUBKEY) + ")";
 	auto result = Execute(dummy, query);
 	if (result->HasError()) {
@@ -198,13 +205,65 @@ void PostgresMetadataManager::AcquireCommitLock() {
 	}
 }
 
+bool PostgresMetadataManager::BootstrapObjectsPresent() {
+	DuckLakeSnapshot dummy {};
+	string probe = R"(
+SELECT COUNT(*)::BIGINT FROM pg_catalog.pg_class c
+JOIN pg_catalog.pg_namespace n ON c.relnamespace = n.oid
+WHERE n.nspname = {METADATA_SCHEMA_NAME_LITERAL}
+  AND c.relname IN (
+    'ducklake_snapshot_id_seq','ducklake_catalog_id_seq',
+    'ducklake_file_id_seq','ducklake_schema_version_seq',
+    'ducklake_schema_name_active_uidx','ducklake_table_name_active_uidx',
+    'ducklake_view_name_active_uidx','ducklake_delete_file_active_uidx'
+  )
+)";
+	auto res = Query(dummy, probe);
+	if (res->HasError()) {
+		return false;
+	}
+	auto chunk = res->Fetch();
+	if (!chunk || chunk->size() == 0) {
+		return false;
+	}
+	auto v = chunk->data[0].GetValue(0).GetValue<int64_t>();
+	return v == 8;
+}
+
 void PostgresMetadataManager::EnsureIdSequences() {
 	// One statement per call: postgres_execute drops all but the first of a batch.
 	DuckLakeSnapshot dummy {0, 0, 0, 0};
 
+	if (BootstrapObjectsPresent()) {
+		return;
+	}
+
+	// IF NOT EXISTS is not concurrent-safe on pg DDL; serialise bootstrap.
+	auto classid = EnsureCatalogClassid();
+	string acquire = "SELECT pg_advisory_lock(" +
+	                 std::to_string(static_cast<int32_t>(classid)) + ", " +
+	                 std::to_string(DUCKLAKE_BOOTSTRAP_ADVISORY_SUBKEY) + ")";
+	auto acq_res = Execute(dummy, acquire);
+	if (acq_res->HasError()) {
+		acq_res->GetErrorObject().Throw("concurrent: DuckLake bootstrap serialisation lock failed: ");
+	}
+	string release = "SELECT pg_advisory_unlock(" +
+	                 std::to_string(static_cast<int32_t>(classid)) + ", " +
+	                 std::to_string(DUCKLAKE_BOOTSTRAP_ADVISORY_SUBKEY) + ")";
+	auto release_lock = [&]() {
+		auto r = Execute(dummy, release);
+		(void)r;
+	};
+
+	if (BootstrapObjectsPresent()) {
+		release_lock();
+		return;
+	}
+
 	auto run = [&](string query) {
 		auto result = Execute(dummy, query);
 		if (result->HasError()) {
+			release_lock();
 			result->GetErrorObject().Throw("Failed to ensure DuckLake id sequences: ");
 		}
 	};
@@ -263,6 +322,8 @@ void PostgresMetadataManager::EnsureIdSequences() {
 	run("CREATE UNIQUE INDEX IF NOT EXISTS ducklake_delete_file_active_uidx "
 	    "ON {METADATA_SCHEMA_ESCAPED}.ducklake_delete_file (data_file_id) "
 	    "WHERE end_snapshot IS NULL");
+
+	release_lock();
 }
 
 // We need a specialized function here to do a reinterpret for postgres from BLOB to VARCHAR

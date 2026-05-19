@@ -676,6 +676,235 @@ COMMIT
 <REGEX>:.*Transaction conflict.*alter view.*dropped.*
 
 
+# Scenario U: REWRITE_DELETE vs DELETE (con1 rewrites first).
+# Exercises tables_deleted_from ∩ tables_rewrite_delete.
+statement ok
+CREATE TABLE dl.rewrite_del(k INTEGER)
+
+statement ok
+INSERT INTO dl.rewrite_del SELECT i FROM range(8) t(i)
+
+statement ok
+INSERT INTO dl.rewrite_del SELECT i FROM range(8, 16) t(i)
+
+statement ok
+DELETE FROM dl.rewrite_del WHERE k = 1
+
+statement ok con1
+BEGIN
+
+statement ok con2
+BEGIN
+
+query III con1
+SELECT table_name, files_processed, files_created FROM ducklake_rewrite_data_files('dl', 'rewrite_del', delete_threshold => 0)
+----
+rewrite_del	2	1
+
+statement ok con2
+DELETE FROM dl.rewrite_del WHERE k = 2
+
+statement ok con1
+COMMIT
+
+statement error con2
+COMMIT
+----
+<REGEX>:.*Transaction conflict.*delete from table.*compacted.*
+
+
+# Scenario V: DELETE vs REWRITE_DELETE (con1 deletes first).
+# Exercises tables_rewrite_delete ∩ tables_deleted_from.
+statement ok
+CREATE TABLE dl.del_rewrite(k INTEGER)
+
+statement ok
+INSERT INTO dl.del_rewrite SELECT i FROM range(8) t(i)
+
+statement ok
+INSERT INTO dl.del_rewrite SELECT i FROM range(8, 16) t(i)
+
+statement ok
+DELETE FROM dl.del_rewrite WHERE k = 1
+
+statement ok con1
+BEGIN
+
+statement ok con2
+BEGIN
+
+statement ok con1
+DELETE FROM dl.del_rewrite WHERE k = 2
+
+query III con2
+SELECT table_name, files_processed, files_created FROM ducklake_rewrite_data_files('dl', 'del_rewrite', delete_threshold => 0)
+----
+del_rewrite	2	1
+
+statement ok con1
+COMMIT
+
+statement error con2
+COMMIT
+----
+<REGEX>:.*Transaction conflict.*compact table.*deleted.*
+
+
+# Scenario W: REWRITE_DELETE vs MERGE_ADJACENT same table.
+# Exercises tables_merge_adjacent ∩ tables_rewrite_delete.
+statement ok
+CREATE TABLE dl.rewrite_merge(k INTEGER)
+
+statement ok
+INSERT INTO dl.rewrite_merge SELECT i FROM range(8) t(i)
+
+statement ok
+INSERT INTO dl.rewrite_merge SELECT i FROM range(8, 16) t(i)
+
+statement ok
+DELETE FROM dl.rewrite_merge WHERE k = 1
+
+statement ok con1
+BEGIN
+
+statement ok con2
+BEGIN
+
+query III con1
+SELECT table_name, files_processed, files_created FROM ducklake_rewrite_data_files('dl', 'rewrite_merge', delete_threshold => 0)
+----
+rewrite_merge	2	1
+
+query III con2
+SELECT table_name, files_processed, files_created FROM ducklake_merge_adjacent_files('dl', 'rewrite_merge')
+----
+rewrite_merge	2	1
+
+statement ok con1
+COMMIT
+
+statement error con2
+COMMIT
+----
+<REGEX>:.*Transaction conflict.*compact table.*compacted.*
+
+
+# Scenario X: REWRITE_DELETE vs ALTER (con1 rewrites first).
+# Exercises altered_tables ∩ tables_rewrite_delete.
+statement ok
+CREATE TABLE dl.rewrite_alter(k INTEGER)
+
+statement ok
+INSERT INTO dl.rewrite_alter SELECT i FROM range(8) t(i)
+
+statement ok
+INSERT INTO dl.rewrite_alter SELECT i FROM range(8, 16) t(i)
+
+statement ok
+DELETE FROM dl.rewrite_alter WHERE k = 1
+
+statement ok con1
+BEGIN
+
+statement ok con2
+BEGIN
+
+query III con1
+SELECT table_name, files_processed, files_created FROM ducklake_rewrite_data_files('dl', 'rewrite_alter', delete_threshold => 0)
+----
+rewrite_alter	2	1
+
+statement ok con2
+ALTER TABLE dl.rewrite_alter ADD COLUMN x INTEGER
+
+statement ok con1
+COMMIT
+
+statement error con2
+COMMIT
+----
+<REGEX>:.*Transaction conflict.*alter table.*compacted.*
+
+
+# Scenario Y: REWRITE_DELETE vs REWRITE_DELETE on same table.
+# Exercises tables_rewrite_delete ∩ tables_rewrite_delete.
+statement ok
+CREATE TABLE dl.rewrite_dup(k INTEGER)
+
+statement ok
+INSERT INTO dl.rewrite_dup SELECT i FROM range(8) t(i)
+
+statement ok
+INSERT INTO dl.rewrite_dup SELECT i FROM range(8, 16) t(i)
+
+statement ok
+DELETE FROM dl.rewrite_dup WHERE k = 1
+
+statement ok con1
+BEGIN
+
+statement ok con2
+BEGIN
+
+query III con1
+SELECT table_name, files_processed, files_created FROM ducklake_rewrite_data_files('dl', 'rewrite_dup', delete_threshold => 0)
+----
+rewrite_dup	2	1
+
+query III con2
+SELECT table_name, files_processed, files_created FROM ducklake_rewrite_data_files('dl', 'rewrite_dup', delete_threshold => 0)
+----
+rewrite_dup	2	1
+
+statement ok con1
+COMMIT
+
+statement error con2
+COMMIT
+----
+<REGEX>:.*Transaction conflict.*compact table.*compacted.*
+
+
+# Scenario Z: INSERT vs COMPACT — negative control.
+# INSERT is intentionally absent from the conflict matrix against
+# tables_merge_adjacent / tables_rewrite_delete: new files do not
+# overlap rewritten files. Regression guard against accidentally
+# adding such a check.
+statement ok
+CREATE TABLE dl.insert_compact(k INTEGER)
+
+statement ok
+INSERT INTO dl.insert_compact SELECT i FROM range(8) t(i)
+
+statement ok
+INSERT INTO dl.insert_compact SELECT i FROM range(8, 16) t(i)
+
+statement ok con1
+BEGIN
+
+statement ok con2
+BEGIN
+
+query III con1
+SELECT table_name, files_processed, files_created FROM ducklake_merge_adjacent_files('dl', 'insert_compact')
+----
+insert_compact	2	1
+
+statement ok con2
+INSERT INTO dl.insert_compact VALUES (100)
+
+statement ok con1
+COMMIT
+
+statement ok con2
+COMMIT
+
+query I
+SELECT COUNT(*) FROM dl.insert_compact
+----
+17
+
+
 # Smoke: concurrent CREATE TABLE collisions converge under load.
 # Tests outcome, not mechanism — catches contention regressions the
 # deterministic scenarios miss.
