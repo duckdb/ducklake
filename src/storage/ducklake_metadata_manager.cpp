@@ -3291,20 +3291,35 @@ string DuckLakeMetadataManager::WriteNewDataFiles(DuckLakeSnapshot &commit_snaps
                                                   const vector<DuckLakeFileInfo> &new_files,
                                                   const vector<DuckLakeTableInfo> &new_tables,
                                                   vector<DuckLakeSchemaInfo> &new_schemas_result) {
-	string batch_query;
 	if (new_files.empty()) {
-		return batch_query;
+		return string();
 	}
 	// Use optimized appender path for DuckDB metadata (much faster for large inserts)
 	if (SupportsAppender()) {
 		return WriteNewDataFilesWithAppender(commit_snapshot, new_files, new_tables, new_schemas_result);
 	}
+	vector<DuckLakePath> resolved_paths;
+	resolved_paths.reserve(new_files.size());
+	for (auto &file : new_files) {
+		resolved_paths.push_back(GetRelativePath(file.table_id, file.file_name, new_tables, new_schemas_result));
+	}
+	return WriteNewDataFilesSqlBatch(new_files, resolved_paths);
+}
+
+string DuckLakeMetadataManager::WriteNewDataFilesSqlBatch(const vector<DuckLakeFileInfo> &new_files,
+                                                          const vector<DuckLakePath> &resolved_paths) {
+	if (new_files.empty()) {
+		return string();
+	}
+	D_ASSERT(new_files.size() == resolved_paths.size());
 	string data_file_insert_query;
 	string column_stats_insert_query;
 	string variant_stats_insert_query;
 	string partition_insert_query;
 
-	for (auto &file : new_files) {
+	for (idx_t i = 0; i < new_files.size(); i++) {
+		auto &file = new_files[i];
+		auto &path = resolved_paths[i];
 		if (!data_file_insert_query.empty()) {
 			data_file_insert_query += ",";
 		}
@@ -3320,13 +3335,11 @@ string DuckLakeMetadataManager::WriteNewDataFiles(DuckLakeSnapshot &commit_snaps
 		    file.max_partial_file_snapshot.IsValid() ? to_string(file.max_partial_file_snapshot.GetIndex()) : "NULL";
 		string footer_size = file.footer_size.IsValid() ? to_string(file.footer_size.GetIndex()) : "NULL";
 		string mapping = file.mapping_id.IsValid() ? to_string(file.mapping_id.index) : "NULL";
-		auto path = GetRelativePath(file.table_id, file.file_name, new_tables, new_schemas_result);
 		data_file_insert_query += StringUtil::Format(
 		    "(%d, %d, %s, NULL, NULL, %s, %s, 'parquet', %d, %d, %s, %s, %s, %s, %s, %s)", data_file_index, table_id,
 		    begin_snapshot, SQLString(path.path), path.path_is_relative ? "true" : "false", file.row_count,
 		    file.file_size_bytes, footer_size, row_id, partition_id, encryption_key, mapping, partial_max);
 		for (auto &raw_stats : file.column_stats) {
-			// Stringify stats to construct insert queries
 			auto column_stats = DuckLakeColumnStatsInfo::FromColumnStats(raw_stats.first, raw_stats.second);
 			if (!column_stats_insert_query.empty()) {
 				column_stats_insert_query += ",";
@@ -3370,13 +3383,13 @@ string DuckLakeMetadataManager::WriteNewDataFiles(DuckLakeSnapshot &commit_snaps
 	}
 
 	// insert the data files
+	string batch_query;
 	batch_query +=
 	    StringUtil::Format("INSERT INTO {METADATA_CATALOG}.ducklake_data_file VALUES %s;", data_file_insert_query);
 
 	// insert the column stats
 	batch_query += StringUtil::Format("INSERT INTO {METADATA_CATALOG}.ducklake_file_column_stats VALUES %s;",
 	                                  column_stats_insert_query);
-
 	if (!partition_insert_query.empty()) {
 		// insert the partition values
 		batch_query += StringUtil::Format("INSERT INTO {METADATA_CATALOG}.ducklake_file_partition_value VALUES %s;",

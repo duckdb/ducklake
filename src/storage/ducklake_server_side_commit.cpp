@@ -319,45 +319,15 @@ string DuckLakeServerSideCommit::EmitDataFilesSql(const vector<DuckLakeFileInfo>
 	if (files.empty()) {
 		return string();
 	}
-	const string snapshot_id_lit = std::to_string(commit_snapshot_id);
-	string data_file_values;
-	string column_stats_values;
+	// Staged paths are always absolute today — staging-side relativization is a separate concern.
+	vector<DuckLakePath> resolved_paths;
+	resolved_paths.reserve(files.size());
 	for (auto &file : files) {
-		if (!data_file_values.empty()) {
-			data_file_values += ",";
-		}
-		string begin_snapshot =
-		    file.begin_snapshot.IsValid() ? std::to_string(file.begin_snapshot.GetIndex()) : snapshot_id_lit;
-		string row_id = file.row_id_start.IsValid() ? std::to_string(file.row_id_start.GetIndex()) : "NULL";
-		string partition_id = file.partition_id.IsValid() ? std::to_string(file.partition_id.GetIndex()) : "NULL";
-		string encryption_key =
-		    file.encryption_key.empty() ? "NULL" : "'" + Blob::ToBase64(string_t(file.encryption_key)) + "'";
-		string partial_max = file.max_partial_file_snapshot.IsValid()
-		                         ? std::to_string(file.max_partial_file_snapshot.GetIndex())
-		                         : "NULL";
-		string footer_size = file.footer_size.IsValid() ? std::to_string(file.footer_size.GetIndex()) : "NULL";
-		string mapping = file.mapping_id.IsValid() ? std::to_string(file.mapping_id.index) : "NULL";
-		data_file_values += StringUtil::Format(
-		    "(%d, %d, %s, NULL, NULL, %s, false, 'parquet', %d, %d, %s, %s, %s, %s, %s, %s)", file.id.index,
-		    file.table_id.index, begin_snapshot, DuckLakeUtil::SQLLiteralToString(file.file_name), file.row_count,
-		    file.file_size_bytes, footer_size, row_id, partition_id, encryption_key, mapping, partial_max);
-		for (auto &raw : file.column_stats) {
-			auto info = DuckLakeColumnStatsInfo::FromColumnStats(raw.first, raw.second);
-			if (!column_stats_values.empty()) {
-				column_stats_values += ",";
-			}
-			column_stats_values += StringUtil::Format(
-			    "(%d, %d, %d, %s, %s, %s, %s, %s, %s, %s)", file.id.index, file.table_id.index, info.column_id.index,
-			    info.column_size_bytes, info.value_count, info.null_count, info.min_val, info.max_val,
-			    info.contains_nan, info.extra_stats);
-		}
+		resolved_paths.push_back({file.file_name, false});
 	}
-	string sql;
-	sql += StringUtil::Format("INSERT INTO %s.ducklake_data_file VALUES %s;", schema_id, data_file_values);
-	if (!column_stats_values.empty()) {
-		sql +=
-		    StringUtil::Format("INSERT INTO %s.ducklake_file_column_stats VALUES %s;", schema_id, column_stats_values);
-	}
+	auto sql = DuckLakeMetadataManager::WriteNewDataFilesSqlBatch(files, resolved_paths);
+	sql = StringUtil::Replace(sql, "{METADATA_CATALOG}", schema_id);
+	sql = StringUtil::Replace(sql, "{SNAPSHOT_ID}", std::to_string(commit_snapshot_id));
 	return sql;
 }
 

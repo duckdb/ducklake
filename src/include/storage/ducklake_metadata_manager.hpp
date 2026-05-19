@@ -228,6 +228,11 @@ public:
 	virtual string WriteNewDataFiles(DuckLakeSnapshot &commit_snapshot, const vector<DuckLakeFileInfo> &new_files,
 	                                 const vector<DuckLakeTableInfo> &new_tables,
 	                                 vector<DuckLakeSchemaInfo> &new_schemas_result);
+	//! SQL branch of WriteNewDataFiles, shared with the server-side commit path. Returns SQL with
+	//! {METADATA_CATALOG} / {SNAPSHOT_ID} placeholders. Caller supplies resolved paths (one per file,
+	//! same order) since path policy differs across callers (schema-relative vs. always-absolute).
+	static string WriteNewDataFilesSqlBatch(const vector<DuckLakeFileInfo> &new_files,
+	                                         const vector<DuckLakePath> &resolved_paths);
 	virtual string WriteNewInlinedData(DuckLakeSnapshot &commit_snapshot,
 	                                   const vector<DuckLakeInlinedDataInfo> &new_data,
 	                                   const vector<DuckLakeTableInfo> &new_tables,
