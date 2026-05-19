@@ -2020,9 +2020,8 @@ DuckLakeColumnStatsInfo DuckLakeColumnStatsInfo::FromColumnStats(FieldIndex fiel
 	return column_stats;
 }
 
-DuckLakeFileInfo DuckLakeTransaction::GetNewDataFile(const DuckLakeDataFile &file, DuckLakeCommitState &commit_state,
-                                                     TableIndex table_id, optional_idx row_id_start) {
-	auto &commit_snapshot = commit_state.commit_snapshot;
+DuckLakeFileInfo DuckLakeTransaction::BuildDataFileInfo(const DuckLakeDataFile &file, DuckLakeSnapshot &commit_snapshot,
+                                                         TableIndex table_id, optional_idx row_id_start) {
 	DuckLakeFileInfo data_file;
 	data_file.id = DataFileIndex(commit_snapshot.next_file_id++);
 	data_file.table_id = table_id;
@@ -2037,14 +2036,20 @@ DuckLakeFileInfo DuckLakeTransaction::GetNewDataFile(const DuckLakeDataFile &fil
 	data_file.begin_snapshot = file.begin_snapshot;
 	data_file.max_partial_file_snapshot = file.max_partial_file_snapshot;
 	data_file.column_stats = file.column_stats;
-	commit_state.RemapPartitionId(data_file.partition_id);
-	commit_state.RemapMappingIndex(data_file.mapping_id);
 	for (auto &partition_entry : file.partition_values) {
 		DuckLakeFilePartitionInfo partition_info;
 		partition_info.partition_column_idx = partition_entry.partition_column_idx;
 		partition_info.partition_value = partition_entry.partition_value;
 		data_file.partition_values.push_back(std::move(partition_info));
 	}
+	return data_file;
+}
+
+DuckLakeFileInfo DuckLakeTransaction::GetNewDataFile(const DuckLakeDataFile &file, DuckLakeCommitState &commit_state,
+                                                     TableIndex table_id, optional_idx row_id_start) {
+	auto data_file = BuildDataFileInfo(file, commit_state.commit_snapshot, table_id, row_id_start);
+	commit_state.RemapPartitionId(data_file.partition_id);
+	commit_state.RemapMappingIndex(data_file.mapping_id);
 	return data_file;
 }
 

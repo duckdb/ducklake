@@ -314,6 +314,9 @@ public:
 
 	static DuckLakeGlobalStatsInfo ConvertNewGlobalStats(TableIndex table_id,
 	                                                      const DuckLakeNewGlobalStats &new_global_stats);
+
+	static DuckLakeFileInfo BuildDataFileInfo(const DuckLakeDataFile &file, DuckLakeSnapshot &commit_snapshot,
+	                                           TableIndex table_id, optional_idx row_id_start);
 private:
 	void CleanupFiles();
 	void FlushChanges();
