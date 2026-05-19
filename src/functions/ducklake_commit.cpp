@@ -1,33 +1,35 @@
 #include "functions/ducklake_table_functions.hpp"
-#include "storage/ducklake_transaction.hpp"
+
+#include "storage/ducklake_commit_runner.hpp"
 
 namespace duckdb {
 
 struct DuckLakeCommitBindData : public TableFunctionData {
-	string commit_uuid;
-	int64_t snapshot_id = 0;
+	string identifier_suffix;
+	string metadata_schema_name;
 	int64_t schema_version = 0;
 	bool emitted = false;
 };
 
-static unique_ptr<FunctionData> DuckLakeCommitBind(ClientContext &context, TableFunctionBindInput &input,
+static unique_ptr<FunctionData> DuckLakeCommitBind(ClientContext &, TableFunctionBindInput &input,
                                                    vector<LogicalType> &return_types, vector<string> &names) {
-	for (idx_t i = 0; i < 4; i++) {
+	for (idx_t i = 0; i < input.inputs.size(); i++) {
 		if (input.inputs[i].IsNull()) {
 			throw BinderException("ducklake_commit arguments cannot be NULL");
 		}
 	}
 	auto result = make_uniq<DuckLakeCommitBindData>();
-	result->commit_uuid = input.inputs[1].GetValue<string>();
-	result->snapshot_id = input.inputs[2].GetValue<int64_t>();
-	result->schema_version = input.inputs[3].GetValue<int64_t>();
-
+	result->identifier_suffix = StringValue::Get(input.inputs[0]);
+	result->metadata_schema_name = StringValue::Get(input.inputs[1]);
+	result->schema_version = input.inputs[2].GetValue<int64_t>();
 	names.emplace_back("committed_snapshot_id");
+	return_types.emplace_back(LogicalType::BIGINT);
+	names.emplace_back("committed_schema_version");
 	return_types.emplace_back(LogicalType::BIGINT);
 	return std::move(result);
 }
 
-static unique_ptr<GlobalTableFunctionState> DuckLakeCommitInit(ClientContext &context, TableFunctionInitInput &input) {
+static unique_ptr<GlobalTableFunctionState> DuckLakeCommitInit(ClientContext &, TableFunctionInitInput &) {
 	return make_uniq<GlobalTableFunctionState>();
 }
 
@@ -38,13 +40,17 @@ static void DuckLakeCommitExecute(ClientContext &context, TableFunctionInput &da
 		return;
 	}
 	data.emitted = true;
+
+	auto result =
+	    RunStagedDataOnlyCommit(context, data.metadata_schema_name, data.identifier_suffix, data.schema_version);
+
 	output.SetCardinality(1);
-	output.SetValue(0, 0, Value::BIGINT(0));
+	output.SetValue(0, 0, Value::BIGINT(result.committed_snapshot_id));
+	output.SetValue(1, 0, Value::BIGINT(result.committed_schema_version));
 }
 
 DuckLakeCommitFunction::DuckLakeCommitFunction()
-    : TableFunction("ducklake_commit",
-                    {LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::BIGINT, LogicalType::BIGINT},
+    : TableFunction("ducklake_commit", {LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::BIGINT},
                     DuckLakeCommitExecute, DuckLakeCommitBind, DuckLakeCommitInit) {
 }
 
