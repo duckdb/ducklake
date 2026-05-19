@@ -258,6 +258,13 @@ public:
 	virtual string WriteSnapshotChanges(const SnapshotChangeInfo &change_info,
 	                                    const DuckLakeSnapshotCommit &commit_info);
 	virtual string UpdateGlobalTableStats(const DuckLakeGlobalStatsInfo &stats);
+	//! SQL templates with {METADATA_CATALOG} / {SNAPSHOT_ID} placeholders, shared with the
+	//! server-side commit path. The virtuals above delegate to these and only exist so backends
+	//! (e.g. Postgres) can override the dispatch — there are no overrides for these three today.
+	static string InsertSnapshotSql();
+	static string WriteSnapshotChangesSql(const SnapshotChangeInfo &change_info,
+	                                       const DuckLakeSnapshotCommit &commit_info);
+	static string UpdateGlobalTableStatsSql(const DuckLakeGlobalStatsInfo &stats);
 	virtual SnapshotChangeInfo GetSnapshotAndStatsAndChanges(DuckLakeSnapshot start_snapshot,
 	                                                         SnapshotAndStats &current_snapshot);
 	SnapshotDeletedFromFiles GetFilesDeletedOrDroppedAfterSnapshot(const DuckLakeSnapshot &start_snapshot) const;

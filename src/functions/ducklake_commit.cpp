@@ -41,8 +41,8 @@ static void DuckLakeCommitExecute(ClientContext &context, TableFunctionInput &da
 	}
 	data.emitted = true;
 
-	auto result =
-	    RunServerSideCommit(context, data.metadata_schema_name, data.identifier_suffix, data.schema_version);
+	DuckLakeServerSideCommit commit(context, data.metadata_schema_name, data.identifier_suffix, data.schema_version);
+	auto result = commit.Run();
 
 	output.SetCardinality(1);
 	output.SetValue(0, 0, Value::BIGINT(result.committed_snapshot_id));

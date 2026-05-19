@@ -3530,8 +3530,12 @@ string DuckLakeMetadataManager::WriteNewColumnMappings(const vector<DuckLakeColu
 	return batch_query;
 }
 
-string DuckLakeMetadataManager::InsertSnapshot() {
+string DuckLakeMetadataManager::InsertSnapshotSql() {
 	return R"(INSERT INTO {METADATA_CATALOG}.ducklake_snapshot VALUES ({SNAPSHOT_ID}, NOW(), {SCHEMA_VERSION}, {NEXT_CATALOG_ID}, {NEXT_FILE_ID});)";
+}
+
+string DuckLakeMetadataManager::InsertSnapshot() {
+	return InsertSnapshotSql();
 }
 
 static string SQLStringOrNull(const string &str) {
@@ -3541,13 +3545,17 @@ static string SQLStringOrNull(const string &str) {
 	return KeywordHelper::WriteQuoted(str, '\'');
 }
 
-string DuckLakeMetadataManager::WriteSnapshotChanges(const SnapshotChangeInfo &change_info,
-                                                     const DuckLakeSnapshotCommit &commit_info) {
-	// insert the snapshot changes
+string DuckLakeMetadataManager::WriteSnapshotChangesSql(const SnapshotChangeInfo &change_info,
+                                                         const DuckLakeSnapshotCommit &commit_info) {
 	return StringUtil::Format(
 	    R"(INSERT INTO {METADATA_CATALOG}.ducklake_snapshot_changes VALUES ({SNAPSHOT_ID}, %s, %s, %s, %s);)",
 	    SQLStringOrNull(change_info.changes_made), commit_info.author.ToSQLString(),
 	    commit_info.commit_message.ToSQLString(), commit_info.commit_extra_info.ToSQLString());
+}
+
+string DuckLakeMetadataManager::WriteSnapshotChanges(const SnapshotChangeInfo &change_info,
+                                                     const DuckLakeSnapshotCommit &commit_info) {
+	return WriteSnapshotChangesSql(change_info, commit_info);
 }
 
 SnapshotChangeInfo DuckLakeMetadataManager::GetSnapshotAndStatsAndChanges(DuckLakeSnapshot start_snapshot,
@@ -4014,6 +4022,10 @@ WHERE table_id=tid AND column_id=cid AND ducklake_column_tag.key=overwritten_tag
 }
 
 string DuckLakeMetadataManager::UpdateGlobalTableStats(const DuckLakeGlobalStatsInfo &stats) {
+	return UpdateGlobalTableStatsSql(stats);
+}
+
+string DuckLakeMetadataManager::UpdateGlobalTableStatsSql(const DuckLakeGlobalStatsInfo &stats) {
 	string column_stats_values;
 	for (auto &col_stats : stats.column_stats) {
 		if (!column_stats_values.empty()) {
