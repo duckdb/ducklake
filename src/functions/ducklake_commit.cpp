@@ -8,12 +8,14 @@ struct DuckLakeCommitBindData : public TableFunctionData {
 	string identifier_suffix;
 	string metadata_schema_name;
 	int64_t schema_version = 0;
+	DuckLakeRetryConfig retry_config;
+	bool has_retry_override = false;
 	bool emitted = false;
 };
 
 static unique_ptr<FunctionData> DuckLakeCommitBind(ClientContext &, TableFunctionBindInput &input,
                                                    vector<LogicalType> &return_types, vector<string> &names) {
-	for (idx_t i = 0; i < input.inputs.size(); i++) {
+	for (idx_t i = 0; i < 3; i++) {
 		if (input.inputs[i].IsNull()) {
 			throw BinderException("ducklake_commit arguments cannot be NULL");
 		}
@@ -22,6 +24,23 @@ static unique_ptr<FunctionData> DuckLakeCommitBind(ClientContext &, TableFunctio
 	result->identifier_suffix = StringValue::Get(input.inputs[0]);
 	result->metadata_schema_name = StringValue::Get(input.inputs[1]);
 	result->schema_version = input.inputs[2].GetValue<int64_t>();
+	for (auto &entry : input.named_parameters) {
+		if (entry.second.IsNull()) {
+			continue;
+		}
+		if (entry.first == "max_retry_count") {
+			result->retry_config.max_retry_count = static_cast<idx_t>(entry.second.GetValue<int64_t>());
+			result->has_retry_override = true;
+		} else if (entry.first == "retry_wait_ms") {
+			result->retry_config.retry_wait_ms = static_cast<idx_t>(entry.second.GetValue<int64_t>());
+			result->has_retry_override = true;
+		} else if (entry.first == "retry_backoff") {
+			result->retry_config.retry_backoff = entry.second.GetValue<double>();
+			result->has_retry_override = true;
+		} else {
+			throw BinderException("Unknown named parameter \"%s\" for ducklake_commit", entry.first);
+		}
+	}
 	names.emplace_back("committed_snapshot_id");
 	return_types.emplace_back(LogicalType::BIGINT);
 	names.emplace_back("committed_schema_version");
@@ -42,6 +61,9 @@ static void DuckLakeCommitExecute(ClientContext &context, TableFunctionInput &da
 	data.emitted = true;
 
 	DuckLakeServerSideCommit commit(context, data.metadata_schema_name, data.identifier_suffix, data.schema_version);
+	if (data.has_retry_override) {
+		commit.SetRetryConfigOverride(data.retry_config);
+	}
 	auto result = commit.Run();
 
 	output.SetCardinality(1);
@@ -52,6 +74,9 @@ static void DuckLakeCommitExecute(ClientContext &context, TableFunctionInput &da
 DuckLakeCommitFunction::DuckLakeCommitFunction()
     : TableFunction("ducklake_commit", {LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::BIGINT},
                     DuckLakeCommitExecute, DuckLakeCommitBind, DuckLakeCommitInit) {
+	named_parameters["max_retry_count"] = LogicalType::BIGINT;
+	named_parameters["retry_wait_ms"] = LogicalType::BIGINT;
+	named_parameters["retry_backoff"] = LogicalType::DOUBLE;
 }
 
 } // namespace duckdb
