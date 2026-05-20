@@ -2111,16 +2111,8 @@ NewDataInfo DuckLakeTransaction::GetNewDataFiles(string &batch_query, DuckLakeCo
 				delete_files.push_back(std::move(delete_file));
 			}
 
-			// merge the stats into the new global states
-			// files with max_partial_file_snapshot set are flushed from inlined data - don't count them again
-			if (!file.max_partial_file_snapshot.IsValid()) {
-				new_stats.record_count += file.row_count;
-				new_stats.next_row_id += file.row_count;
-			}
-			new_stats.table_size_bytes += file.file_size_bytes;
-			for (auto &entry : file.column_stats) {
-				new_stats.MergeStats(entry.first, entry.second);
-			}
+			// merge the stats into the new global state
+			new_stats.MergeFileStats(file);
 			result.new_files.push_back(std::move(data_file));
 		}
 		// add any delete files that were made on top of these transaction-local files
@@ -2301,12 +2293,7 @@ string DuckLakeTransaction::CommitChanges(DuckLakeCommitState &commit_state,
                                           optional_ptr<vector<DuckLakeGlobalStatsInfo>> stats) {
 	auto &commit_snapshot = commit_state.commit_snapshot;
 
-	if (ducklake_catalog.IsCommitInfoRequired() && !commit_info.is_commit_info_set) {
-		throw InvalidConfigurationException(
-		    "Commit Information for the snapshot is required but has not been provided. \n * Provide the information "
-		    "with \"CALL ducklake.set_commit_message('author_name', 'commit_message'); \n * Set the required commit "
-		    "message to false with \"CALL ducklake.set_option('require_commit_message', False)\" '\"");
-	}
+	ducklake_catalog.EnsureCommitInfoProvided(commit_info);
 
 	string batch_queries;
 	// drop entries
@@ -2535,7 +2522,7 @@ CompactionInformation DuckLakeTransaction::GetCompactionChanges(DuckLakeCommitSt
 	return result;
 }
 
-bool RetryOnError(const string &original_message) {
+bool DuckLakeTransaction::RetryOnError(const string &original_message) {
 	auto message = StringUtil::Lower(original_message);
 	// retry on primary key errors
 	if (StringUtil::Contains(message, "primary key") || StringUtil::Contains(message, "unique")) {

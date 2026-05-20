@@ -14,6 +14,7 @@
 namespace duckdb {
 class DuckLakeTransaction;
 struct TransactionChangeInformation;
+struct DuckLakeRetryConfig;
 
 class DuckLakeStagedCommit {
 public:
@@ -21,7 +22,7 @@ public:
 
 	//! Builds and returns the SQL of the tables with necessary data changes to perform the commit
 	string Build(DuckLakeTransaction &transaction, const TransactionChangeInformation &transaction_changes,
-	             DuckLakeSnapshot transaction_snapshot) const;
+	             const DuckLakeSnapshot &transaction_snapshot, const DuckLakeRetryConfig &retry_config) const;
 
 private:
 	string commit_uuid;

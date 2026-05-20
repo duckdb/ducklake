@@ -59,6 +59,16 @@ void DuckLakeSchemaPinState::Pin(shared_ptr<DuckLakeSchemaCacheEntry> entry) {
 	pins.emplace(raw, std::move(entry));
 }
 
+void DuckLakeCatalog::EnsureCommitInfoProvided(const DuckLakeSnapshotCommit &commit_info) const {
+	if (!IsCommitInfoRequired() || commit_info.is_commit_info_set) {
+		return;
+	}
+	throw InvalidConfigurationException(
+	    "Commit Information for the snapshot is required but has not been provided. \n * Provide the information "
+	    "with \"CALL ducklake.set_commit_message('author_name', 'commit_message'); \n * Set the required commit "
+	    "message to false with \"CALL ducklake.set_option('require_commit_message', False)\" '\"");
+}
+
 DuckLakeCatalog::DuckLakeCatalog(AttachedDatabase &db_p, DuckLakeOptions options_p)
     : Catalog(db_p), options(std::move(options_p)), last_uncommitted_catalog_version(TRANSACTION_ID_START),
       instance_id(UUID::ToString(UUID::GenerateRandomUUID())) {

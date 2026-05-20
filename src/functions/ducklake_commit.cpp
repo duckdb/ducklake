@@ -9,7 +9,6 @@ struct DuckLakeCommitBindData : public TableFunctionData {
 	string metadata_schema_name;
 	int64_t schema_version = 0;
 	DuckLakeRetryConfig retry_config;
-	bool has_retry_override = false;
 	bool emitted = false;
 };
 
@@ -24,19 +23,17 @@ static unique_ptr<FunctionData> DuckLakeCommitBind(ClientContext &, TableFunctio
 	result->identifier_suffix = StringValue::Get(input.inputs[0]);
 	result->metadata_schema_name = StringValue::Get(input.inputs[1]);
 	result->schema_version = input.inputs[2].GetValue<int64_t>();
+	result->retry_config.retry_wait_ms = 0;
 	for (auto &entry : input.named_parameters) {
 		if (entry.second.IsNull()) {
 			continue;
 		}
 		if (entry.first == "max_retry_count") {
 			result->retry_config.max_retry_count = static_cast<idx_t>(entry.second.GetValue<int64_t>());
-			result->has_retry_override = true;
 		} else if (entry.first == "retry_wait_ms") {
 			result->retry_config.retry_wait_ms = static_cast<idx_t>(entry.second.GetValue<int64_t>());
-			result->has_retry_override = true;
 		} else if (entry.first == "retry_backoff") {
 			result->retry_config.retry_backoff = entry.second.GetValue<double>();
-			result->has_retry_override = true;
 		} else {
 			throw BinderException("Unknown named parameter \"%s\" for ducklake_commit", entry.first);
 		}
@@ -61,9 +58,7 @@ static void DuckLakeCommitExecute(ClientContext &context, TableFunctionInput &da
 	data.emitted = true;
 
 	DuckLakeServerSideCommit commit(context, data.metadata_schema_name, data.identifier_suffix, data.schema_version);
-	if (data.has_retry_override) {
-		commit.SetRetryConfigOverride(data.retry_config);
-	}
+	commit.SetRetryConfigOverride(data.retry_config);
 	auto result = commit.Run();
 
 	output.SetCardinality(1);

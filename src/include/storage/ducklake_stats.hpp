@@ -12,6 +12,7 @@
 
 namespace duckdb {
 class BaseStatistics;
+struct DuckLakeDataFile;
 
 //! Returns true for types that require value-based (not lexicographic string) comparison for min/max stats
 inline bool RequiresValueComparison(const LogicalType &type) {
@@ -71,6 +72,8 @@ struct DuckLakeTableStats {
 	map<FieldIndex, DuckLakeColumnStats> column_stats;
 
 	void MergeStats(FieldIndex col_id, const DuckLakeColumnStats &file_stats);
+
+	void MergeFileStats(const DuckLakeDataFile &file);
 };
 
 struct DuckLakeStats {

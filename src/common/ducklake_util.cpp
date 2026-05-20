@@ -1,5 +1,6 @@
 #include "common/ducklake_util.hpp"
 #include "duckdb/common/string_util.hpp"
+#include "duckdb/common/types/blob.hpp"
 #include "duckdb/parser/keyword_helper.hpp"
 #include "duckdb/parser/parser.hpp"
 #include "duckdb/common/file_system.hpp"
@@ -398,6 +399,21 @@ string DuckLakeUtil::ReplaceSkippingQuotes(const string &sql, const string &from
 	}
 
 	return result;
+}
+
+string DuckLakeUtil::OptionalIdxOrNull(const optional_idx &v) {
+	return v.IsValid() ? std::to_string(v.GetIndex()) : "NULL";
+}
+
+string DuckLakeUtil::MappingIdOrNull(const MappingIndex &m) {
+	return m.IsValid() ? std::to_string(m.index) : "NULL";
+}
+
+string DuckLakeUtil::EncryptionKeyLiteral(const string &key) {
+	if (key.empty()) {
+		return "NULL";
+	}
+	return "'" + Blob::ToBase64(string_t(key)) + "'";
 }
 
 } // namespace duckdb

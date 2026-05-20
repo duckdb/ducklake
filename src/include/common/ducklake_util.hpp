@@ -8,7 +8,9 @@
 
 #pragma once
 
+#include "common/index.hpp"
 #include "duckdb/common/common.hpp"
+#include "duckdb/common/optional_idx.hpp"
 #include "duckdb/common/unordered_set.hpp"
 #include "duckdb/common/types/value.hpp"
 
@@ -47,6 +49,12 @@ public:
 
 	//! Returns true if the given column name conflicts with inlined data system columns
 	static bool IsInlinedSystemColumn(const string &name);
+
+	static string OptionalIdxOrNull(const optional_idx &v);
+
+	static string MappingIdOrNull(const MappingIndex &m);
+
+	static string EncryptionKeyLiteral(const string &key);
 };
 
 } // namespace duckdb

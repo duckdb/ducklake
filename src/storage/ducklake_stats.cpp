@@ -1,4 +1,5 @@
 #include "storage/ducklake_stats.hpp"
+#include "common/ducklake_data_file.hpp"
 #include "storage/ducklake_geo_stats.hpp"
 #include "storage/ducklake_variant_stats.hpp"
 #include "duckdb/common/types/string.hpp"
@@ -163,6 +164,17 @@ void DuckLakeTableStats::MergeStats(FieldIndex col_id, const DuckLakeColumnStats
 	// merge the stats
 	auto &current_stats = entry->second;
 	current_stats.MergeStats(file_stats);
+}
+
+void DuckLakeTableStats::MergeFileStats(const DuckLakeDataFile &file) {
+	if (!file.max_partial_file_snapshot.IsValid()) {
+		record_count += file.row_count;
+		next_row_id += file.row_count;
+	}
+	table_size_bytes += file.file_size_bytes;
+	for (auto &entry : file.column_stats) {
+		MergeStats(entry.first, entry.second);
+	}
 }
 
 unique_ptr<BaseStatistics> DuckLakeColumnStats::CreateNumericStats() const {

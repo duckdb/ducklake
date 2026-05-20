@@ -27,6 +27,7 @@ class ColumnList;
 class DuckLakeFieldData;
 struct DuckLakeFileListEntry;
 struct DuckLakeConfigOption;
+struct DuckLakeSnapshotCommit;
 struct DeleteFileMap;
 class LogicalGet;
 
@@ -188,6 +189,8 @@ public:
 		auto require = GetConfigOption<string>("require_commit_message", {}, {}, "false");
 		return require == "true";
 	}
+
+	void EnsureCommitInfoProvided(const DuckLakeSnapshotCommit &commit_info) const;
 
 	bool UseHiveFilePattern(bool default_value, SchemaIndex schema_id, TableIndex table_id) const {
 		auto hive_file_pattern =

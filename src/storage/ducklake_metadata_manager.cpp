@@ -2176,7 +2176,7 @@ static void ColumnToSQLRecursive(const DuckLakeColumnInfo &column, TableIndex ta
 	if (!result.empty()) {
 		result += ",";
 	}
-	string parent_idx = parent.IsValid() ? to_string(parent.GetIndex()) : "NULL";
+	string parent_idx = DuckLakeUtil::OptionalIdxOrNull(parent);
 
 	string initial_default_val =
 	    !column.initial_default.IsNull() ? KeywordHelper::WriteQuoted(column.initial_default.ToString(), '\'') : "NULL";
@@ -3330,18 +3330,16 @@ string DuckLakeMetadataManager::WriteNewDataFilesSqlBatch(const vector<DuckLakeF
 		if (!data_file_insert_query.empty()) {
 			data_file_insert_query += ",";
 		}
-		auto row_id = file.row_id_start.IsValid() ? to_string(file.row_id_start.GetIndex()) : "NULL";
-		auto partition_id = file.partition_id.IsValid() ? to_string(file.partition_id.GetIndex()) : "NULL";
+		auto row_id = DuckLakeUtil::OptionalIdxOrNull(file.row_id_start);
+		auto partition_id = DuckLakeUtil::OptionalIdxOrNull(file.partition_id);
 		auto begin_snapshot =
 		    file.begin_snapshot.IsValid() ? to_string(file.begin_snapshot.GetIndex()) : "{SNAPSHOT_ID}";
 		auto data_file_index = file.id.index;
 		auto table_id = file.table_id.index;
-		auto encryption_key =
-		    file.encryption_key.empty() ? "NULL" : "'" + Blob::ToBase64(string_t(file.encryption_key)) + "'";
-		string partial_max =
-		    file.max_partial_file_snapshot.IsValid() ? to_string(file.max_partial_file_snapshot.GetIndex()) : "NULL";
-		string footer_size = file.footer_size.IsValid() ? to_string(file.footer_size.GetIndex()) : "NULL";
-		string mapping = file.mapping_id.IsValid() ? to_string(file.mapping_id.index) : "NULL";
+		auto encryption_key = DuckLakeUtil::EncryptionKeyLiteral(file.encryption_key);
+		string partial_max = DuckLakeUtil::OptionalIdxOrNull(file.max_partial_file_snapshot);
+		string footer_size = DuckLakeUtil::OptionalIdxOrNull(file.footer_size);
+		string mapping = DuckLakeUtil::MappingIdOrNull(file.mapping_id);
 		data_file_insert_query += StringUtil::Format(
 		    "(%d, %d, %s, NULL, NULL, %s, %s, 'parquet', %d, %d, %s, %s, %s, %s, %s, %s)", data_file_index, table_id,
 		    begin_snapshot, SQLString(path.path), path.path_is_relative ? "true" : "false", file.row_count,
@@ -3465,13 +3463,12 @@ string DuckLakeMetadataManager::WriteNewDeleteFiles(const vector<DuckLakeDeleteF
 		auto delete_file_index = file.id.index;
 		auto table_id = file.table_id.index;
 		auto data_file_index = file.data_file_id.index;
-		auto encryption_key =
-		    file.encryption_key.empty() ? "NULL" : "'" + Blob::ToBase64(string_t(file.encryption_key)) + "'";
+		auto encryption_key = DuckLakeUtil::EncryptionKeyLiteral(file.encryption_key);
 		auto path = GetRelativePath(file.table_id, file.path, new_tables, new_schemas_result);
 		// Use explicit begin_snapshot if set (for flush operations), otherwise use commit snapshot
 		string begin_snapshot_str =
 		    file.begin_snapshot.IsValid() ? std::to_string(file.begin_snapshot.GetIndex()) : "{SNAPSHOT_ID}";
-		string partial_max = file.max_snapshot.IsValid() ? to_string(file.max_snapshot.GetIndex()) : "NULL";
+		string partial_max = DuckLakeUtil::OptionalIdxOrNull(file.max_snapshot);
 		delete_file_insert_query += StringUtil::Format(
 		    "(%d, %d, %s, NULL,  %d, %s, %s, %s, %d, %d, %d, %s, %s)", delete_file_index, table_id, begin_snapshot_str,
 		    data_file_index, SQLString(path.path), path.path_is_relative ? "true" : "false",
@@ -3535,8 +3532,7 @@ string DuckLakeMetadataManager::WriteNewColumnMappings(const vector<DuckLakeColu
 			if (!name_map_insert_query.empty()) {
 				name_map_insert_query += ", ";
 			}
-			string parent_column =
-			    name_map_column.parent_column.IsValid() ? to_string(name_map_column.parent_column.GetIndex()) : "NULL";
+			string parent_column = DuckLakeUtil::OptionalIdxOrNull(name_map_column.parent_column);
 			string is_partition = name_map_column.hive_partition ? "true" : "false";
 			name_map_insert_query +=
 			    StringUtil::Format("(%d, %d, %s, %d, %s, %s)", column_mapping.mapping_id.index,
