@@ -1578,17 +1578,17 @@ vector<DuckLakeFileListEntry> DuckLakeMetadataManager::GetFilesForTable(DuckLake
 		auto components = GenerateFilterPushdownComponents(*filter_info, table_id);
 		query = components.cte_section;
 		where_clause = components.where_clause;
-	}
 
-	// Add bucket-partition pruning for equality / IN-list predicates on bucket()-partitioned columns.
-	// This composes with the zone-map clause above — pruning narrows files, zone maps stay as a backstop.
-	if (filter_info) {
-		string bucket_clause = BuildBucketPartitionPruningClause(table, *filter_info);
-		if (!bucket_clause.empty()) {
-			if (!where_clause.empty()) {
-				where_clause += " AND ";
+		// Add bucket-partition pruning for equality / IN-list predicates on bucket()-partitioned columns.
+		// Composes with the zone-map clause above — pruning narrows files, zone maps stay as a backstop.
+		if (table.GetPartitionData()) {
+			string bucket_clause = BuildBucketPartitionPruningClause(table, *filter_info);
+			if (!bucket_clause.empty()) {
+				if (!where_clause.empty()) {
+					where_clause += " AND ";
+				}
+				where_clause += bucket_clause;
 			}
-			where_clause += bucket_clause;
 		}
 	}
 
@@ -1930,16 +1930,16 @@ DuckLakeMetadataManager::GetExtendedFilesForTable(DuckLakeTableEntry &table, Duc
 		auto components = GenerateFilterPushdownComponents(*filter_info, table_id);
 		query = components.cte_section;
 		where_clause = components.where_clause;
-	}
 
-	// Add bucket-partition pruning (see GetFilesForTable for rationale).
-	if (filter_info) {
-		string bucket_clause = BuildBucketPartitionPruningClause(table, *filter_info);
-		if (!bucket_clause.empty()) {
-			if (!where_clause.empty()) {
-				where_clause += " AND ";
+		// Add bucket-partition pruning (see GetFilesForTable for rationale).
+		if (table.GetPartitionData()) {
+			string bucket_clause = BuildBucketPartitionPruningClause(table, *filter_info);
+			if (!bucket_clause.empty()) {
+				if (!where_clause.empty()) {
+					where_clause += " AND ";
+				}
+				where_clause += bucket_clause;
 			}
-			where_clause += bucket_clause;
 		}
 	}
 
