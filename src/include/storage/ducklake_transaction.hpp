@@ -39,6 +39,7 @@ struct DuckLakePath;
 struct DuckLakeCommitState;
 class DuckLakeFieldId;
 class LocalTableChangeIterationHelper;
+class DuckLakeTransactionState;
 
 struct FlushedInlinedTableInfo {
 	DuckLakeInlinedTableInfo inlined_table;
@@ -161,6 +162,8 @@ struct DuckLakeRetryConfig {
 };
 
 class DuckLakeTransaction : public Transaction, public enable_shared_from_this<DuckLakeTransaction> {
+	friend class DuckLakeTransactionState;
+
 public:
 	DuckLakeTransaction(DuckLakeCatalog &ducklake_catalog, TransactionManager &manager, ClientContext &context);
 	~DuckLakeTransaction() override;
@@ -279,27 +282,13 @@ public:
 	string GenerateUUID() const;
 	static string GenerateUUIDv7();
 
-	const LocalTableChanges &GetLocalChanges() const {
-		return local_changes;
-	}
-	const set<TableIndex> &GetDroppedTables() {
-		return dropped_tables;
-	}
-	const set<TableIndex> &GetDroppedViews() {
-		return dropped_views;
-	}
-	const set<MacroIndex> &GetDroppedScalarMacros() {
-		return dropped_scalar_macros;
-	}
-	const set<MacroIndex> &GetDroppedTableMacros() {
-		return dropped_table_macros;
-	}
-	const set<TableIndex> &GetRenamedTables() {
-		return renamed_tables;
-	}
-	const case_insensitive_map_t<unique_ptr<DuckLakeCatalogSet>> &GetNewTables() {
-		return new_tables;
-	}
+	const LocalTableChanges &GetLocalChanges() const;
+	const set<TableIndex> &GetDroppedTables();
+	const set<TableIndex> &GetDroppedViews();
+	const set<MacroIndex> &GetDroppedScalarMacros();
+	const set<MacroIndex> &GetDroppedTableMacros();
+	const set<TableIndex> &GetRenamedTables();
+	const case_insensitive_map_t<unique_ptr<DuckLakeCatalogSet>> &GetNewTables();
 	//! Returns the current version of the catalog:
 	//! If there are no uncommitted changes, this is the schema version of the snapshot.
 	//! Otherwise, it is an id that is incremented whenever the schema changes (not stored between restarts)
@@ -323,12 +312,8 @@ public:
 private:
 	void CleanupFiles();
 	void FlushChanges();
-	void FlushSettingChanges();
 	string CommitChanges(DuckLakeCommitState &commit_state, TransactionChangeInformation &transaction_changes,
 	                     optional_ptr<vector<DuckLakeGlobalStatsInfo>> stats);
-	void CommitCompaction(DuckLakeSnapshot &commit_snapshot, TransactionChangeInformation &transaction_changes);
-	void FlushDrop(DuckLakeSnapshot commit_snapshot, const string &metadata_table_name, const string &id_name,
-	               unordered_set<idx_t> &dropped_entries);
 	vector<DuckLakeSchemaInfo> GetNewSchemas(DuckLakeCommitState &commit_state);
 	NewTableInfo GetNewTables(DuckLakeCommitState &commit_state, TransactionChangeInformation &transaction_changes);
 	NewMacroInfo GetNewMacros(DuckLakeCommitState &commit_state, TransactionChangeInformation &transaction_changes);
@@ -336,7 +321,6 @@ private:
 	DuckLakeSortInfo GetNewSortKey(DuckLakeCommitState &commit_state, DuckLakeTableEntry &tabletable_id);
 	DuckLakeTableInfo GetNewTable(DuckLakeCommitState &commit_state, DuckLakeTableEntry &table);
 	DuckLakeViewInfo GetNewView(DuckLakeCommitState &commit_state, DuckLakeViewEntry &view);
-	void FlushNewPartitionKey(DuckLakeSnapshot &commit_snapshot, DuckLakeTableEntry &table);
 	DuckLakeFileInfo GetNewDataFile(const DuckLakeDataFile &file, DuckLakeCommitState &commit_state,
 	                                TableIndex table_id, optional_idx row_id_start);
 	NewDataInfo GetNewDataFiles(string &batch_query, DuckLakeCommitState &commit_state,
@@ -380,27 +364,9 @@ private:
 	mutex snapshot_lock;
 	unique_ptr<DuckLakeSnapshot> snapshot;
 	idx_t local_catalog_id;
-	//! New tables added by this transaction
-	case_insensitive_map_t<unique_ptr<DuckLakeCatalogSet>> new_tables;
-	set<TableIndex> dropped_tables;
-
-	//! New macros added by this transaction.
-	case_insensitive_map_t<unique_ptr<DuckLakeCatalogSet>> new_scalar_macros;
-	case_insensitive_map_t<unique_ptr<DuckLakeCatalogSet>> new_table_macros;
-	set<MacroIndex> dropped_scalar_macros;
-	set<MacroIndex> dropped_table_macros;
-
-	set<TableIndex> renamed_tables;
-	set<TableIndex> renamed_views;
-	set<TableIndex> dropped_views;
-	unordered_map<string, DataFileIndex> dropped_files;
-	set<TableIndex> tables_deleted_from;
-	//! Schemas added by this transaction
-	unique_ptr<DuckLakeCatalogSet> new_schemas;
-	map<SchemaIndex, reference<DuckLakeSchemaEntry>> dropped_schemas;
-	LocalTableChanges local_changes;
-	//! Inlined data tables that were flushed and should be cleaned up during commit (snapshot-bounded)
-	vector<FlushedInlinedTableInfo> flushed_inlined_tables;
+	//! Per-transaction mutable change state (new/dropped/renamed entries, local file changes, flushed
+	//! inlined tables) and the Commit loop. Owns the data formerly held directly on the transaction.
+	unique_ptr<DuckLakeTransactionState> state;
 	//! Snapshot cache for the AT (...) conditions that are referenced in the transaction
 	value_map_t<DuckLakeSnapshot> snapshot_cache;
 	//! New set of transaction-local name maps
