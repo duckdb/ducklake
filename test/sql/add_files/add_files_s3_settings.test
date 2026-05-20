@@ -1,0 +1,59 @@
+# name: test/sql/add_files/add_files_s3_settings.test
+# description: ducklake_add_data_files inherits caller S3 settings for internal parquet metadata reads
+# group: [add_files]
+
+require ducklake
+
+require parquet
+
+require httpfs
+
+require-env S3_TEST_SERVER_AVAILABLE 1
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH s3://mybucket
+
+statement ok
+DROP SECRET IF EXISTS __default_s3;
+
+statement ok
+SET s3_region='us-east-1';
+
+statement ok
+SET s3_access_key_id='admin';
+
+statement ok
+SET s3_secret_access_key='password';
+
+statement ok
+SET s3_endpoint='127.0.0.1:9000';
+
+statement ok
+SET s3_url_style='path';
+
+statement ok
+SET s3_use_ssl=false;
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/settings_add_files/', METADATA_CATALOG 'metadata');
+
+statement ok
+CREATE TABLE ducklake.test(col1 INTEGER, col2 VARCHAR);
+
+statement ok
+COPY (SELECT 200 col1, 'world' col2) TO '{DATA_PATH}/settings_add_files/external.parquet';
+
+statement ok
+BEGIN;
+
+statement ok
+CALL ducklake_add_data_files('ducklake', 'test', '{DATA_PATH}/settings_add_files/external.parquet');
+
+query II
+FROM ducklake.test
+----
+200	world
+
+statement ok
+COMMIT;

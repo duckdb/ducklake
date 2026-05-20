@@ -24,10 +24,34 @@
 #include "duckdb/common/printer.hpp"
 #include "duckdb/logging/logger.hpp"
 #include "storage/ducklake_log_type.hpp"
+#include "duckdb/main/client_context.hpp"
 #include "duckdb/main/settings.hpp"
 #include "duckdb/main/client_config.hpp"
 
 namespace duckdb {
+
+static void CopyCurrentUserSetting(ClientContext &source, ClientContext &target, const char *setting) {
+	auto &db_config = DBConfig::GetConfig(source);
+	optional_ptr<const ConfigurationOption> option;
+	auto setting_index = db_config.TryGetSettingIndex(setting, option);
+	if (!setting_index.IsValid()) {
+		return;
+	}
+	Value value;
+	if (!source.TryGetCurrentUserSetting(setting_index.GetIndex(), value)) {
+		return;
+	}
+	ClientConfig::GetConfig(target).user_settings.SetUserSetting(setting_index.GetIndex(), std::move(value));
+}
+
+static void CopyFileAccessSettings(ClientContext &source, ClientContext &target) {
+	for (const auto &setting : {"s3_region", "s3_access_key_id", "s3_secret_access_key", "s3_session_token",
+	                           "s3_endpoint", "s3_url_style", "s3_use_ssl", "s3_url_compatibility_mode",
+	                           "s3_requester_pays", "s3_allow_recursive_globbing", "s3_kms_key_id",
+	                           "s3_version_id_pinning", "merge_http_secret_into_s3_request", "ca_cert_file"}) {
+		CopyCurrentUserSetting(source, target, setting);
+	}
+}
 
 bool LocalTableDataChanges::IsEmpty() const {
 	if (!new_data_files.empty()) {
@@ -757,6 +781,10 @@ Connection &DuckLakeTransaction::GetConnection() {
 	lock_guard<mutex> lock(connection_lock);
 	if (!connection) {
 		connection = make_uniq<Connection>(db);
+		auto parent_context = context.lock();
+		if (parent_context) {
+			CopyFileAccessSettings(*parent_context, *connection->context);
+		}
 		// set the search path to the metadata catalog
 		auto &client_data = ClientData::Get(*connection->context);
 		// ensure we are only looking in the ducklake catalog schema during querying
