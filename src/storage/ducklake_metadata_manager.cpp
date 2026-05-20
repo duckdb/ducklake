@@ -2271,6 +2271,14 @@ string DuckLakeMetadataManager::InlinedTableRegistrationTuple(idx_t table_id, co
 	return StringUtil::Format("(%d, %s, %d)", table_id, SQLString(table_name), schema_version);
 }
 
+string DuckLakeMetadataManager::LatestInlinedTableQuery(idx_t table_id) {
+	return StringUtil::Format(
+	    "SELECT table_name, schema_version FROM {METADATA_CATALOG}.ducklake_inlined_data_tables "
+	    "WHERE table_id = %d AND schema_version = ("
+	    "  SELECT MAX(schema_version) FROM {METADATA_CATALOG}.ducklake_inlined_data_tables WHERE table_id = %d)",
+	    table_id, table_id);
+}
+
 string DuckLakeMetadataManager::GetInlinedTableQuery(const DuckLakeTableInfo &table, const string &table_name) {
 	string column_defs;
 	for (auto &col : table.columns) {
@@ -2487,15 +2495,7 @@ string DuckLakeMetadataManager::WriteNewInlinedData(DuckLakeSnapshot &commit_sna
 			}
 		}
 		if (inlined_table_name.empty()) {
-			auto query = StringUtil::Format(R"(
-SELECT table_name
-FROM {METADATA_CATALOG}.ducklake_inlined_data_tables
-WHERE table_id = %d AND schema_version=(
-    SELECT MAX(schema_version)
-    FROM {METADATA_CATALOG}.ducklake_inlined_data_tables
-    WHERE table_id=%d
-);)",
-			                                entry.table_id.index, entry.table_id.index);
+			auto query = LatestInlinedTableQuery(entry.table_id.index) + ";";
 			auto result = transaction.Query(commit_snapshot, query);
 			for (auto &row : *result) {
 				inlined_table_name = row.GetValue<string>(0);

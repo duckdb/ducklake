@@ -249,6 +249,9 @@ public:
 	static string InlinedTableNameFor(idx_t table_id, idx_t schema_version);
 	static string InlinedTableDdlSql(const string &table_name, const string &column_defs);
 	static string InlinedTableRegistrationTuple(idx_t table_id, const string &table_name, idx_t schema_version);
+	//! SQL fragment returning (table_name, schema_version) of the latest registered inlined-data
+	//! table for `table_id`, or empty rows if none exists yet. Uses {METADATA_CATALOG} placeholder.
+	static string LatestInlinedTableQuery(idx_t table_id);
 	virtual string DropDataFiles(const set<DataFileIndex> &dropped_files);
 	virtual string DropDeleteFiles(const set<DataFileIndex> &dropped_files);
 	virtual string DeleteOverwrittenDeleteFiles(const vector<DuckLakeOverwrittenDeleteFile> &overwritten_files);
