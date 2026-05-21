@@ -29,6 +29,10 @@ struct DuckLakeCommitContext {
 	std::function<void()> try_rollback;
 	//! Resets per-attempt state before a retry.
 	std::function<void()> prepare_retry;
+	//! Runs a metadata-DB query during post-commit cleanup.
+	std::function<unique_ptr<QueryResult>(string)> query_metadata;
+	//! Invalidates the cached schema in the catalog for a given schema version.
+	std::function<void(idx_t)> invalidate_schema_cache;
 	//! Author / message / extra info for the snapshot row.
 	DuckLakeSnapshotCommit commit_info;
 };
@@ -53,10 +57,15 @@ public:
 	string WriteSnapshotChanges(DuckLakeCommitState &commit_state, TransactionChangeInformation &changes,
 	                            const DuckLakeSnapshotCommit &commit_info) const;
 
+	static void DropEmptySupersededInlinedTables(const DuckLakeCommitContext &context);
+
+	void CleanupFiles();
+
 	bool SchemaChangesMade() const;
 
 public:
 	DuckLakeTransaction &transaction;
+	DatabaseInstance &db;
 
 	case_insensitive_map_t<unique_ptr<DuckLakeCatalogSet>> new_tables;
 	set<TableIndex> dropped_tables;

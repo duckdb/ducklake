@@ -311,7 +311,6 @@ public:
 	                                          TableIndex table_id, optional_idx row_id_start);
 
 private:
-	void CleanupFiles();
 	void FlushChanges();
 	string CommitChanges(DuckLakeCommitState &commit_state, TransactionChangeInformation &transaction_changes,
 	                     optional_ptr<vector<DuckLakeGlobalStatsInfo>> stats);

@@ -17,10 +17,16 @@
 
 namespace duckdb {
 
-DuckLakeTransactionState::DuckLakeTransactionState(DuckLakeTransaction &transaction) : transaction(transaction) {
+DuckLakeTransactionState::DuckLakeTransactionState(DuckLakeTransaction &transaction)
+    : transaction(transaction), db(transaction.db) {
 }
 
 DuckLakeTransactionState::~DuckLakeTransactionState() {
+}
+
+void DuckLakeTransactionState::CleanupFiles() {
+	// remove any files that were written
+	local_changes.CleanupFiles(db);
 }
 
 bool DuckLakeTransactionState::SchemaChangesMade() const {
@@ -355,6 +361,53 @@ string DuckLakeTransactionState::WriteSnapshotChanges(DuckLakeCommitState &commi
 	return DuckLakeMetadataManager::WriteSnapshotChangesSql(change_info, commit_info);
 }
 
+void DuckLakeTransactionState::DropEmptySupersededInlinedTables(const DuckLakeCommitContext &context) {
+	// Gather the tables that are empty and have a later schema version, as it will be safe to delete their
+	// inlined tables.
+	string find_targets_sql = R"(
+SELECT idt.table_id, idt.schema_version, idt.table_name
+FROM {METADATA_CATALOG}.ducklake_inlined_data_tables idt
+JOIN duckdb_tables() dt
+    ON dt.database_name = {METADATA_CATALOG_NAME_LITERAL}
+   AND dt.table_name = idt.table_name
+WHERE idt.schema_version < (
+    SELECT MAX(idt2.schema_version)
+    FROM {METADATA_CATALOG}.ducklake_inlined_data_tables idt2
+    WHERE idt2.table_id = idt.table_id
+)
+AND dt.estimated_size = 0;)";
+	auto targets = context.query_metadata(find_targets_sql);
+	if (targets->HasError()) {
+		targets->GetErrorObject().Throw("Failed to identify empty superseded inlined-data tables in DuckLake: ");
+	}
+	string drops_sql;
+	for (auto &row : *targets) {
+		auto table_id = row.GetValue<idx_t>(0);
+		auto schema_version = row.GetValue<idx_t>(1);
+		auto table_name = row.GetValue<string>(2);
+		drops_sql += StringUtil::Format(
+		    "DELETE FROM {METADATA_CATALOG}.ducklake_inlined_data_tables WHERE table_id=%d AND schema_version=%d;"
+		    "DROP TABLE IF EXISTS {METADATA_CATALOG}.%s;",
+		    table_id, schema_version, SQLIdentifier(table_name));
+	}
+	if (drops_sql.empty()) {
+		return;
+	}
+	auto res = context.query_metadata(drops_sql);
+	if (res->HasError()) {
+		res->GetErrorObject().Throw("Failed to drop superseded inlined-data tables in DuckLake: ");
+	}
+	// We also need to invalidate the existing schema versions in our catalog
+	string snapshot_versions_sql = "SELECT DISTINCT schema_version FROM {METADATA_CATALOG}.ducklake_snapshot;";
+	auto snapshot_versions = context.query_metadata(snapshot_versions_sql);
+	if (snapshot_versions->HasError()) {
+		snapshot_versions->GetErrorObject().Throw("Failed to list schema versions for cache invalidation: ");
+	}
+	for (auto &row : *snapshot_versions) {
+		context.invalidate_schema_cache(row.GetValue<idx_t>(0));
+	}
+}
+
 SnapshotAndStats
 DuckLakeTransactionState::CheckForConflicts(DuckLakeSnapshot transaction_snapshot,
                                             const TransactionChangeInformation &changes,
@@ -412,7 +465,7 @@ void DuckLakeTransactionState::Commit(DuckLakeSnapshot transaction_snapshot,
 			}
 			context.commit_connection();
 			if (flushed_inlined) {
-				transaction.metadata_manager->DropEmptySupersededInlinedTables();
+				DropEmptySupersededInlinedTables(context);
 			}
 			transaction.catalog_version = commit_snapshot.schema_version;
 
@@ -426,7 +479,7 @@ void DuckLakeTransactionState::Commit(DuckLakeSnapshot transaction_snapshot,
 			bool finished_retrying = i + 1 >= retry_config.max_retry_count;
 			if (!can_retry || !retry_on_error || finished_retrying) {
 				// we abort after the max retry count
-				transaction.CleanupFiles();
+				CleanupFiles();
 				// Add additional information on the number of retries and suggest to increase it
 				std::ostringstream error_message;
 				error_message << "Failed to commit DuckLake transaction." << '\n';

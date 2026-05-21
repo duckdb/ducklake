@@ -733,7 +733,7 @@ void DuckLakeTransaction::Rollback() {
 		connection->Rollback();
 		connection.reset();
 	}
-	CleanupFiles();
+	state->CleanupFiles();
 	state->local_changes.Clear();
 }
 
@@ -977,11 +977,6 @@ void DuckLakeTransaction::AddTableChanges(TableIndex table_id, const LocalTableD
 			throw InternalException("Unknown compaction type");
 		}
 	}
-}
-
-void DuckLakeTransaction::CleanupFiles() {
-	// remove any files that were written
-	state->local_changes.CleanupFiles(db);
 }
 
 vector<DuckLakeSchemaInfo> DuckLakeTransaction::GetNewSchemas(DuckLakeCommitState &commit_state) {
@@ -2302,6 +2297,12 @@ void DuckLakeTransaction::RunCommitLoop(DuckLakeSnapshot transaction_snapshot,
 		metadata_manager->ClearInlinedTableCaches();
 		connection->BeginTransaction();
 		snapshot.reset();
+	};
+	context.query_metadata = [&](string q) {
+		return metadata_manager->Query(q);
+	};
+	context.invalidate_schema_cache = [&](idx_t schema_version) {
+		ducklake_catalog.InvalidateSchemaCache(schema_version);
 	};
 	context.commit_info = commit_info;
 	state->Commit(transaction_snapshot, transaction_changes, retry_config, context);
