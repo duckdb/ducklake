@@ -12,6 +12,15 @@
 
 namespace duckdb {
 
+struct DuckLakeCommitContext {
+	std::function<unique_ptr<QueryResult>(string)> conflict_query_executor;
+	std::function<DuckLakeSnapshot()> get_snapshot;
+	std::function<bool()> take_pending_cache_clear;
+	std::function<void()> clear_cache;
+	std::function<void()> commit_connection;
+	DuckLakeSnapshotCommit commit_info;
+};
+
 //! Holds the per-transaction mutable change state (new/dropped/renamed catalog entries, local file
 //! changes, flushed inlined tables) and owns the Commit() loop that flushes them into the metadata
 //! database. Owned by DuckLakeTransaction via a back-reference.
@@ -21,9 +30,7 @@ public:
 	~DuckLakeTransactionState();
 
 	void Commit(DuckLakeSnapshot transaction_snapshot, const TransactionChangeInformation &transaction_changes,
-	            const DuckLakeRetryConfig &retry_config,
-	            const std::function<unique_ptr<QueryResult>(string)> &conflict_query_executor,
-	            const DuckLakeSnapshotCommit &commit_info);
+	            const DuckLakeRetryConfig &retry_config, const DuckLakeCommitContext &context);
 
 	SnapshotAndStats CheckForConflicts(DuckLakeSnapshot transaction_snapshot,
 	                                   const TransactionChangeInformation &changes,

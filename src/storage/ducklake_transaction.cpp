@@ -939,7 +939,7 @@ TransactionChangeInformation DuckLakeTransaction::GetTransactionChanges() const 
 // DuckLakeCommitState is defined in storage/ducklake_commit_state.hpp
 
 void DuckLakeTransaction::AddTableChanges(TableIndex table_id, const LocalTableDataChanges &table_changes,
-                                          TransactionChangeInformation &changes) const {
+                                          TransactionChangeInformation &changes) {
 	bool inserted_data = false;
 	bool flushed_inline_data = false;
 	for (auto &file : table_changes.new_data_files) {
@@ -2018,8 +2018,7 @@ string DuckLakeTransaction::CommitChanges(DuckLakeCommitState &commit_state,
 		batch_queries += DuckLakeMetadataManager::WriteDroppedColumns(result.dropped_columns);
 		batch_queries += DuckLakeMetadataManager::WriteNewColumns(result.new_columns);
 		batch_queries += metadata_manager->WriteNewInlinedTables(commit_snapshot, result.new_inlined_data_tables);
-		batch_queries +=
-		    DuckLakeMetadataManager::WriteNewSortKeys(existing_catalog.sorts, result.new_sort_keys);
+		batch_queries += DuckLakeMetadataManager::WriteNewSortKeys(existing_catalog.sorts, result.new_sort_keys);
 		new_tables_result = result.new_tables;
 		new_inlined_data_tables_result = result.new_inlined_data_tables;
 	}
@@ -2094,9 +2093,9 @@ string DuckLakeTransaction::CommitChanges(DuckLakeCommitState &commit_state,
 		for (auto &compaction : compaction_merge_adjacent_changes.compacted_files) {
 			resolved_merge_paths.push_back(metadata_manager->GetRelativePath(compaction.path));
 		}
-		batch_queries += DuckLakeMetadataManager::WriteCompactions(
-		    compaction_merge_adjacent_changes.compacted_files, CompactionType::MERGE_ADJACENT_TABLES,
-		    resolved_merge_paths);
+		batch_queries +=
+		    DuckLakeMetadataManager::WriteCompactions(compaction_merge_adjacent_changes.compacted_files,
+		                                              CompactionType::MERGE_ADJACENT_TABLES, resolved_merge_paths);
 		batch_queries += metadata_manager->WriteNewDataFiles(
 		    commit_snapshot, compaction_merge_adjacent_changes.new_files, new_tables_result, new_schemas_result);
 
@@ -2104,9 +2103,8 @@ string DuckLakeTransaction::CommitChanges(DuckLakeCommitState &commit_state,
 		batch_queries += metadata_manager->WriteNewDataFiles(
 		    commit_snapshot, compaction_rewrite_delete_changes.new_files, new_tables_result, new_schemas_result);
 		// REWRITE_DELETES ignores resolved_paths; pass empty.
-		batch_queries +=
-		    DuckLakeMetadataManager::WriteCompactions(compaction_rewrite_delete_changes.compacted_files,
-		                                               CompactionType::REWRITE_DELETES, vector<DuckLakePath>());
+		batch_queries += DuckLakeMetadataManager::WriteCompactions(
+		    compaction_rewrite_delete_changes.compacted_files, CompactionType::REWRITE_DELETES, vector<DuckLakePath>());
 	}
 
 	// Tracking for tables that had schema changes
@@ -2271,7 +2269,8 @@ void DuckLakeTransaction::ApplyServerSideCommit(idx_t schema_version) {
 void DuckLakeTransaction::RunCommitLoop(DuckLakeSnapshot transaction_snapshot,
                                         const TransactionChangeInformation &transaction_changes,
                                         const DuckLakeRetryConfig &retry_config) {
-	auto conflict_query_executor = [&](string q) -> unique_ptr<QueryResult> {
+	DuckLakeCommitContext context;
+	context.conflict_query_executor = [&](string q) -> unique_ptr<QueryResult> {
 		auto result = metadata_manager->Query(transaction_snapshot, q);
 		if (result->HasError()) {
 			result->GetErrorObject().Throw("Failed to commit DuckLake transaction - failed to get snapshot and "
@@ -2279,7 +2278,20 @@ void DuckLakeTransaction::RunCommitLoop(DuckLakeSnapshot transaction_snapshot,
 		}
 		return result;
 	};
-	state->Commit(transaction_snapshot, transaction_changes, retry_config, conflict_query_executor, commit_info);
+	context.get_snapshot = [&]() {
+		return GetSnapshot();
+	};
+	context.take_pending_cache_clear = [&]() {
+		return metadata_manager->TakePendingCacheClear();
+	};
+	context.clear_cache = [&]() {
+		metadata_manager->ClearCache();
+	};
+	context.commit_connection = [&]() {
+		connection->Commit();
+	};
+	context.commit_info = commit_info;
+	state->Commit(transaction_snapshot, transaction_changes, retry_config, context);
 }
 
 void DuckLakeTransaction::SetConfigOption(const DuckLakeConfigOption &option) {

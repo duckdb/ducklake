@@ -345,8 +345,8 @@ private:
 
 	void AlterEntryInternal(DuckLakeTableEntry &old_entry, unique_ptr<CatalogEntry> new_entry);
 	void AlterEntryInternal(DuckLakeViewEntry &old_entry, unique_ptr<CatalogEntry> new_entry);
-	void AddTableChanges(TableIndex table_id, const LocalTableDataChanges &table_changes,
-	                     TransactionChangeInformation &changes) const;
+	static void AddTableChanges(TableIndex table_id, const LocalTableDataChanges &table_changes,
+	                            TransactionChangeInformation &changes);
 	case_insensitive_map_t<unique_ptr<DuckLakeCatalogSet>> &GetNewMacroMap(CatalogType type);
 
 private:

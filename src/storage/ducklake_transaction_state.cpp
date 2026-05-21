@@ -268,7 +268,7 @@ string DuckLakeTransactionState::WriteSnapshotChanges(DuckLakeCommitState &commi
 	for (auto &entry : local_changes.Changes()) {
 		auto table_id = commit_state.GetTableId(entry.GetTableIndex());
 		auto &table_changes = entry.GetTableChanges();
-		transaction.AddTableChanges(table_id, table_changes, changes);
+		DuckLakeTransaction::AddTableChanges(table_id, table_changes, changes);
 	}
 	for (auto &entry : changes.dropped_schemas) {
 		if (!change_info.changes_made.empty()) {
@@ -373,9 +373,7 @@ DuckLakeTransactionState::CheckForConflicts(DuckLakeSnapshot transaction_snapsho
 
 void DuckLakeTransactionState::Commit(DuckLakeSnapshot transaction_snapshot,
                                       const TransactionChangeInformation &transaction_changes,
-                                      const DuckLakeRetryConfig &retry_config,
-                                      const std::function<unique_ptr<QueryResult>(string)> &conflict_query_executor,
-                                      const DuckLakeSnapshotCommit &commit_info) {
+                                      const DuckLakeRetryConfig &retry_config, const DuckLakeCommitContext &context) {
 	SnapshotAndStats commit_stats_snapshot;
 	auto &commit_snapshot = commit_stats_snapshot.snapshot;
 	optional_ptr<vector<DuckLakeGlobalStatsInfo>> stats;
@@ -388,10 +386,10 @@ void DuckLakeTransactionState::Commit(DuckLakeSnapshot transaction_snapshot,
 				// we failed our first commit due to another transaction committing
 				// retry - but first check for conflicts
 				commit_stats_snapshot =
-				    CheckForConflicts(transaction_snapshot, attempt_changes, conflict_query_executor);
+				    CheckForConflicts(transaction_snapshot, attempt_changes, context.conflict_query_executor);
 				stats = &commit_stats_snapshot.stats;
 			} else {
-				commit_stats_snapshot.snapshot = transaction.GetSnapshot();
+				commit_stats_snapshot.snapshot = context.get_snapshot();
 			}
 			commit_snapshot.snapshot_id++;
 			if (SchemaChangesMade()) {
@@ -401,18 +399,18 @@ void DuckLakeTransactionState::Commit(DuckLakeSnapshot transaction_snapshot,
 			can_retry = true;
 			DuckLakeCommitState commit_state(commit_snapshot);
 			// write the new snapshot
-			string batch_queries = transaction.metadata_manager->InsertSnapshot();
+			string batch_queries = DuckLakeMetadataManager::InsertSnapshotSql();
 			batch_queries += transaction.CommitChanges(commit_state, attempt_changes, stats);
-			batch_queries += WriteSnapshotChanges(commit_state, attempt_changes, commit_info);
+			batch_queries += WriteSnapshotChanges(commit_state, attempt_changes, context.commit_info);
 			auto res = transaction.metadata_manager->Execute(commit_snapshot, batch_queries);
 			if (res->HasError()) {
 				res->GetErrorObject().Throw("Failed to flush changes into DuckLake: ");
 			}
 			bool flushed_inlined = !flushed_inlined_tables.empty();
-			if (transaction.metadata_manager->TakePendingCacheClear()) {
-				transaction.metadata_manager->ClearCache();
+			if (context.take_pending_cache_clear()) {
+				context.clear_cache();
 			}
-			transaction.connection->Commit();
+			context.commit_connection();
 			if (flushed_inlined) {
 				transaction.metadata_manager->DropEmptySupersededInlinedTables();
 			}

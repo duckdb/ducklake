@@ -2138,7 +2138,7 @@ string DuckLakeMetadataManager::DropMacros(const set<MacroIndex> &ids) {
 	return FlushDrop("ducklake_macro", "macro_id", ids);
 }
 string DuckLakeMetadataManager::WriteNewSchemas(const vector<DuckLakeSchemaInfo> &new_schemas,
-                                                 const vector<DuckLakePath> &resolved_paths) {
+                                                const vector<DuckLakePath> &resolved_paths) {
 	if (new_schemas.empty()) {
 		throw InternalException("No schemas to create - should be handled elsewhere");
 	}
@@ -3425,7 +3425,7 @@ string DuckLakeMetadataManager::DropDeleteFiles(const set<DataFileIndex> &droppe
 
 string
 DuckLakeMetadataManager::DeleteOverwrittenDeleteFiles(const vector<DuckLakeOverwrittenDeleteFile> &overwritten_files,
-                                                       const vector<DuckLakePath> &resolved_paths) {
+                                                      const vector<DuckLakePath> &resolved_paths) {
 	if (overwritten_files.empty()) {
 		return {};
 	}
@@ -4282,7 +4282,7 @@ idx_t DuckLakeMetadataManager::GetNextColumnId(TableIndex table_id) {
 }
 
 string DuckLakeMetadataManager::WriteMergeAdjacent(const vector<DuckLakeCompactedFileInfo> &compactions,
-                                                    const vector<DuckLakePath> &resolved_paths) {
+                                                   const vector<DuckLakePath> &resolved_paths) {
 	if (compactions.empty()) {
 		return {};
 	}
@@ -4370,8 +4370,7 @@ string DuckLakeMetadataManager::WriteDeleteRewrites(const vector<DuckLakeCompact
 }
 
 string DuckLakeMetadataManager::WriteCompactions(const vector<DuckLakeCompactedFileInfo> &compactions,
-                                                 CompactionType type,
-                                                 const vector<DuckLakePath> &resolved_paths) {
+                                                 CompactionType type, const vector<DuckLakePath> &resolved_paths) {
 	switch (type) {
 	case CompactionType::MERGE_ADJACENT_TABLES:
 		return WriteMergeAdjacent(compactions, resolved_paths);
