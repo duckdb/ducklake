@@ -263,6 +263,12 @@ public:
 	static string WriteNewInlinedDeletes(const vector<DuckLakeDeletedInlinedDataInfo> &new_deletes);
 	virtual string WriteNewInlinedFileDeletes(DuckLakeSnapshot &commit_snapshot,
 	                                          const vector<DuckLakeInlinedFileDeletionInfo> &new_deletes);
+	//! Static deterministic name of the per-table inlined deletion table.
+	static string InlinedFileDeletionTableName(TableIndex table_id);
+	//! SQL branch of WriteNewInlinedFileDeletes — returns the INSERT statements only. Callers must
+	//! ensure the per-table deletion tables already exist (the instance overload does that via
+	//! GetInlinedDeletionTableName with create_if_not_exists=true).
+	static string WriteNewInlinedFileDeletesSqlBatch(const vector<DuckLakeInlinedFileDeletionInfo> &new_deletes);
 	//! Get the name of the inlined deletion table for a given table ID
 	virtual string GetInlinedDeletionTableName(TableIndex table_id, DuckLakeSnapshot snapshot,
 	                                           bool create_if_not_exists = false);

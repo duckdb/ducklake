@@ -1311,7 +1311,7 @@ string DuckLakeTransactionState::CommitChanges(DuckLakeCommitState &commit_state
 
 		// write new inlined file deletes (for parquet files)
 		auto inlined_file_deletes = GetNewInlinedFileDeletes(commit_state);
-		batch_queries += metadata_manager.WriteNewInlinedFileDeletes(commit_snapshot, inlined_file_deletes);
+		batch_queries += DuckLakeMetadataManager::WriteNewInlinedFileDeletesSqlBatch(inlined_file_deletes);
 
 		// write compactions
 		auto compaction_merge_adjacent_changes =

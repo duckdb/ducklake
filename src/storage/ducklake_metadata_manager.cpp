@@ -2624,17 +2624,25 @@ WHERE row_id=deleted_row_id AND end_snapshot IS NULL AND begin_snapshot != {SNAP
 	return batch_queries;
 }
 
-string DuckLakeMetadataManager::WriteNewInlinedFileDeletes(DuckLakeSnapshot &commit_snapshot,
-                                                           const vector<DuckLakeInlinedFileDeletionInfo> &new_deletes) {
+string DuckLakeMetadataManager::InlinedFileDeletionTableName(TableIndex table_id) {
+	return StringUtil::Format("ducklake_inlined_delete_%d", table_id.index);
+}
+
+string DuckLakeMetadataManager::WriteNewInlinedFileDeletesSqlBatch(
+    const vector<DuckLakeInlinedFileDeletionInfo> &new_deletes) {
 	string batch_queries;
 	if (new_deletes.empty()) {
 		return batch_queries;
 	}
+	set<idx_t> created_tables;
 	for (auto &entry : new_deletes) {
-		// Get or create the inlined deletion table (handles caching internally)
-		auto table_name = GetInlinedDeletionTableName(entry.table_id, commit_snapshot, true);
-
-		// Build the values for the deletions
+		auto table_name = InlinedFileDeletionTableName(entry.table_id);
+		if (created_tables.insert(entry.table_id.index).second) {
+			batch_queries +=
+			    StringUtil::Format("CREATE TABLE IF NOT EXISTS {METADATA_CATALOG}.%s"
+			                       "(file_id BIGINT, row_id BIGINT, begin_snapshot BIGINT);\n",
+			                       table_name);
+		}
 		string values;
 		for (auto &file_entry : entry.file_deletions.file_deletes) {
 			auto file_id = file_entry.first;
@@ -2648,6 +2656,18 @@ string DuckLakeMetadataManager::WriteNewInlinedFileDeletes(DuckLakeSnapshot &com
 		batch_queries += StringUtil::Format("INSERT INTO {METADATA_CATALOG}.%s VALUES %s;\n", table_name, values);
 	}
 	return batch_queries;
+}
+
+string DuckLakeMetadataManager::WriteNewInlinedFileDeletes(DuckLakeSnapshot &commit_snapshot,
+                                                           const vector<DuckLakeInlinedFileDeletionInfo> &new_deletes) {
+	if (new_deletes.empty()) {
+		return string();
+	}
+	// Ensure each per-table deletion table exists (side effect; goes through transaction + cache).
+	for (auto &entry : new_deletes) {
+		GetInlinedDeletionTableName(entry.table_id, commit_snapshot, true);
+	}
+	return WriteNewInlinedFileDeletesSqlBatch(new_deletes);
 }
 
 void DuckLakeMetadataManager::ClearInlinedTableCaches() {
@@ -2737,7 +2757,7 @@ DuckLakeMetadataManager::ReadInlinedFileDeletionsForRange(TableIndex table_id, D
 string DuckLakeMetadataManager::GetInlinedDeletionTableName(TableIndex table_id, DuckLakeSnapshot snapshot,
                                                             bool create_if_not_exists) {
 	// The table name is always deterministic
-	string table_name = StringUtil::Format("ducklake_inlined_delete_%d", table_id.index);
+	string table_name = InlinedFileDeletionTableName(table_id);
 
 	// Check per-transaction cache first (covers tables created in this transaction)
 	if (delete_inlined_table_cache.find(table_id.index) != delete_inlined_table_cache.end()) {
