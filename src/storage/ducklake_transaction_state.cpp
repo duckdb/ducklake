@@ -23,6 +23,12 @@ DuckLakeTransactionState::DuckLakeTransactionState(DuckLakeTransaction &transact
 DuckLakeTransactionState::~DuckLakeTransactionState() {
 }
 
+bool DuckLakeTransactionState::SchemaChangesMade() const {
+	return !new_tables.empty() || !dropped_tables.empty() || new_schemas || !dropped_schemas.empty() ||
+	       !dropped_views.empty() || !renamed_views.empty() || !new_scalar_macros.empty() ||
+	       !new_table_macros.empty() || !dropped_scalar_macros.empty() || !dropped_table_macros.empty();
+}
+
 namespace {
 
 template <class T, class MAP>
@@ -272,7 +278,7 @@ void DuckLakeTransactionState::Commit(DuckLakeSnapshot transaction_snapshot,
 				commit_stats_snapshot.snapshot = transaction.GetSnapshot();
 			}
 			commit_snapshot.snapshot_id++;
-			if (transaction.SchemaChangesMade()) {
+			if (SchemaChangesMade()) {
 				// we changed the schema - need to get a new schema version
 				commit_snapshot.schema_version++;
 			}

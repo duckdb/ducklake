@@ -30,6 +30,8 @@ public:
 	void CheckForConflicts(const TransactionChangeInformation &changes, const SnapshotChangeInformation &other_changes,
 	                       DuckLakeSnapshot transaction_snapshot) const;
 
+	bool SchemaChangesMade() const;
+
 public:
 	DuckLakeTransaction &transaction;
 

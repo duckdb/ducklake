@@ -254,7 +254,6 @@ public:
 	//! Marks that inlined data have been deleted in a flush if retries are necessary
 	void MarkInlinedDataForDeletion(DuckLakeInlinedTableInfo inlined_table, idx_t flush_snapshot_id);
 
-	bool SchemaChangesMade() const;
 	bool ChangesMade() const;
 	idx_t GetLocalCatalogId();
 	static bool IsTransactionLocal(idx_t id) {

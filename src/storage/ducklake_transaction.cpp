@@ -772,15 +772,8 @@ case_insensitive_map_t<unique_ptr<DuckLakeCatalogSet>> &DuckLakeTransaction::Get
 	}
 }
 
-bool DuckLakeTransaction::SchemaChangesMade() const {
-	auto &s = *state;
-	return !s.new_tables.empty() || !s.dropped_tables.empty() || s.new_schemas || !s.dropped_schemas.empty() ||
-	       !s.dropped_views.empty() || !s.renamed_views.empty() || !s.new_scalar_macros.empty() ||
-	       !s.new_table_macros.empty() || !s.dropped_scalar_macros.empty() || !s.dropped_table_macros.empty();
-}
-
 bool DuckLakeTransaction::ChangesMade() const {
-	return SchemaChangesMade() || state->local_changes.HasChanges() || !state->dropped_files.empty() ||
+	return state->SchemaChangesMade() || state->local_changes.HasChanges() || !state->dropped_files.empty() ||
 	       !new_name_maps.name_maps.empty();
 }
 
