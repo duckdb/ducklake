@@ -13,11 +13,23 @@
 namespace duckdb {
 
 struct DuckLakeCommitContext {
+	//! Runs a metadata-DB query during conflict resolution.
 	std::function<unique_ptr<QueryResult>(string)> conflict_query_executor;
+	//! Returns the latest snapshot for the first commit attempt.
 	std::function<DuckLakeSnapshot()> get_snapshot;
+	//! Executes the batched snapshot/changes SQL against the metadata DB.
+	std::function<unique_ptr<QueryResult>(DuckLakeSnapshot, string &)> execute_commit_batch;
+	//! Returns and clears the pending metadata-cache-clear flag.
 	std::function<bool()> take_pending_cache_clear;
+	//! Clears the metadata manager cache.
 	std::function<void()> clear_cache;
+	//! Commits the underlying metadata connection.
 	std::function<void()> commit_connection;
+	//! Rolls back the metadata connection if a transaction is active.
+	std::function<void()> try_rollback;
+	//! Resets per-attempt state before a retry.
+	std::function<void()> prepare_retry;
+	//! Author / message / extra info for the snapshot row.
 	DuckLakeSnapshotCommit commit_info;
 };
 

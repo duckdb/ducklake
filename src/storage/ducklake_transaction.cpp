@@ -2281,6 +2281,9 @@ void DuckLakeTransaction::RunCommitLoop(DuckLakeSnapshot transaction_snapshot,
 	context.get_snapshot = [&]() {
 		return GetSnapshot();
 	};
+	context.execute_commit_batch = [&](DuckLakeSnapshot snapshot, string &query) {
+		return metadata_manager->Execute(snapshot, query);
+	};
 	context.take_pending_cache_clear = [&]() {
 		return metadata_manager->TakePendingCacheClear();
 	};
@@ -2289,6 +2292,16 @@ void DuckLakeTransaction::RunCommitLoop(DuckLakeSnapshot transaction_snapshot,
 	};
 	context.commit_connection = [&]() {
 		connection->Commit();
+	};
+	context.try_rollback = [&]() {
+		if (connection->context->transaction.HasActiveTransaction()) {
+			connection->Rollback();
+		}
+	};
+	context.prepare_retry = [&]() {
+		metadata_manager->ClearInlinedTableCaches();
+		connection->BeginTransaction();
+		snapshot.reset();
 	};
 	context.commit_info = commit_info;
 	state->Commit(transaction_snapshot, transaction_changes, retry_config, context);

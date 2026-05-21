@@ -402,7 +402,7 @@ void DuckLakeTransactionState::Commit(DuckLakeSnapshot transaction_snapshot,
 			string batch_queries = DuckLakeMetadataManager::InsertSnapshotSql();
 			batch_queries += transaction.CommitChanges(commit_state, attempt_changes, stats);
 			batch_queries += WriteSnapshotChanges(commit_state, attempt_changes, context.commit_info);
-			auto res = transaction.metadata_manager->Execute(commit_snapshot, batch_queries);
+			auto res = context.execute_commit_batch(commit_snapshot, batch_queries);
 			if (res->HasError()) {
 				res->GetErrorObject().Throw("Failed to flush changes into DuckLake: ");
 			}
@@ -421,10 +421,7 @@ void DuckLakeTransactionState::Commit(DuckLakeSnapshot transaction_snapshot,
 		} catch (std::exception &ex) {
 			ErrorData error(ex);
 			// rollback if there is an active transaction
-			auto has_active_transaction = transaction.connection->context->transaction.HasActiveTransaction();
-			if (has_active_transaction) {
-				transaction.connection->Rollback();
-			}
+			context.try_rollback();
 			bool retry_on_error = DuckLakeTransaction::RetryOnError(error.Message());
 			bool finished_retrying = i + 1 >= retry_config.max_retry_count;
 			if (!can_retry || !retry_on_error || finished_retrying) {
@@ -453,9 +450,7 @@ void DuckLakeTransactionState::Commit(DuckLakeSnapshot transaction_snapshot,
 
 			// retry the transaction (with a new snapshot id)
 			// clear the inlined table caches - the rollback undid any table creation from the previous attempt
-			transaction.metadata_manager->ClearInlinedTableCaches();
-			transaction.connection->BeginTransaction();
-			transaction.snapshot.reset();
+			context.prepare_retry();
 		}
 	}
 	// If we got here, this snapshot was successful
