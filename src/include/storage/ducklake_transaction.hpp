@@ -184,9 +184,7 @@ public:
 		return *metadata_manager;
 	}
 
-	DuckLakeSnapshotCommit &GetCommitInfo() {
-		return commit_info;
-	}
+	DuckLakeSnapshotCommit &GetCommitInfo();
 	unique_ptr<QueryResult> Query(DuckLakeSnapshot snapshot, string query);
 	unique_ptr<QueryResult> Query(string query);
 	//! Execute SQL on the metadata connection without placeholder substitution or metadata-manager wrapping.
@@ -234,12 +232,10 @@ public:
 	void RemoveColumnFromLocalInlinedData(TableIndex table_id, LogicalIndex removed_column_index,
 	                                      const DuckLakeFieldId &field_id);
 	optional_ptr<DuckLakeInlinedDataDeletes> GetInlinedDeletes(TableIndex table_id, const string &table_name) const;
-	vector<DuckLakeDeletedInlinedDataInfo> GetNewInlinedDeletes(DuckLakeCommitState &commit_state) const;
 
 	//! Add inlined file deletions (deletions from parquet files stored in metadata)
 	void AddNewInlinedFileDeletes(TableIndex table_id, idx_t file_id, set<idx_t> new_deletes);
 	//! Get all inlined file deletions for commit
-	vector<DuckLakeInlinedFileDeletionInfo> GetNewInlinedFileDeletes(DuckLakeCommitState &commit_state);
 
 	void DropSchema(DuckLakeSchemaEntry &schema);
 	void DropTable(DuckLakeTableEntry &table);
@@ -312,25 +308,17 @@ public:
 
 private:
 	void FlushChanges();
-	NewMacroInfo GetNewMacros(DuckLakeCommitState &commit_state, TransactionChangeInformation &transaction_changes);
 	static DuckLakePartitionInfo GetNewPartitionKey(DuckLakeCommitState &commit_state, DuckLakeTableEntry &table);
 	static DuckLakeSortInfo GetNewSortKey(DuckLakeCommitState &commit_state, DuckLakeTableEntry &table);
 	static DuckLakeTableInfo GetNewTable(DuckLakeCommitState &commit_state, DuckLakeTableEntry &table);
 	static DuckLakeViewInfo GetNewView(DuckLakeCommitState &commit_state, DuckLakeViewEntry &view);
 	DuckLakeFileInfo GetNewDataFile(const DuckLakeDataFile &file, DuckLakeCommitState &commit_state,
 	                                TableIndex table_id, optional_idx row_id_start);
-	NewDataInfo GetNewDataFiles(string &batch_query, DuckLakeCommitState &commit_state,
-	                            optional_ptr<vector<DuckLakeGlobalStatsInfo>> stats);
-	vector<DuckLakeDeleteFileInfo>
-	GetNewDeleteFiles(const DuckLakeCommitState &commit_state,
-	                  vector<DuckLakeOverwrittenDeleteFile> &overwritten_delete_files) const;
-	DuckLakeDeleteFileInfo GetNewDeleteFile(TableIndex table_id, const DuckLakeCommitState &commit_state,
-	                                        const DuckLakeDeleteFile &file) const;
+	static DuckLakeDeleteFileInfo GetNewDeleteFile(TableIndex table_id, const DuckLakeCommitState &commit_state,
+	                                               const DuckLakeDeleteFile &file);
 	string UpdateGlobalTableStats(TableIndex table_id, const DuckLakeNewGlobalStats &new_stats);
 	//! Return the set of changes made by this transaction
 	TransactionChangeInformation GetTransactionChanges() const;
-	void GetNewMacroInfo(DuckLakeCommitState &commit_state, reference<CatalogEntry> macro_entry, NewMacroInfo &result);
-	CompactionInformation GetCompactionChanges(DuckLakeCommitState &commit_state, CompactionType type);
 
 	void AlterEntryInternal(DuckLakeTableEntry &old_entry, unique_ptr<CatalogEntry> new_entry);
 	void AlterEntryInternal(DuckLakeViewEntry &old_entry, unique_ptr<CatalogEntry> new_entry);
@@ -340,7 +328,6 @@ private:
 
 private:
 	DuckLakeCatalog &ducklake_catalog;
-	DuckLakeSnapshotCommit commit_info;
 	DatabaseInstance &db;
 	unique_ptr<DuckLakeMetadataManager> metadata_manager;
 	mutex connection_lock;
