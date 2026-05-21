@@ -222,7 +222,6 @@ public:
 
 	MappingIndex AddNameMap(unique_ptr<DuckLakeNameMap> name_map);
 	const DuckLakeNameMap &GetMappingById(MappingIndex mapping_id);
-	NewNameMapInfo GetNewNameMaps(DuckLakeCommitState &commit_state);
 
 	void AppendInlinedData(TableIndex table_id, unique_ptr<DuckLakeInlinedData> collection);
 	void AddNewInlinedDeletes(TableIndex table_id, const string &table_name, set<idx_t> new_deletes);
@@ -312,11 +311,8 @@ private:
 	static DuckLakeSortInfo GetNewSortKey(DuckLakeCommitState &commit_state, DuckLakeTableEntry &table);
 	static DuckLakeTableInfo GetNewTable(DuckLakeCommitState &commit_state, DuckLakeTableEntry &table);
 	static DuckLakeViewInfo GetNewView(DuckLakeCommitState &commit_state, DuckLakeViewEntry &view);
-	DuckLakeFileInfo GetNewDataFile(const DuckLakeDataFile &file, DuckLakeCommitState &commit_state,
-	                                TableIndex table_id, optional_idx row_id_start);
 	static DuckLakeDeleteFileInfo GetNewDeleteFile(TableIndex table_id, const DuckLakeCommitState &commit_state,
 	                                               const DuckLakeDeleteFile &file);
-	string UpdateGlobalTableStats(TableIndex table_id, const DuckLakeNewGlobalStats &new_stats);
 	//! Return the set of changes made by this transaction
 	TransactionChangeInformation GetTransactionChanges() const;
 

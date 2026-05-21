@@ -44,7 +44,8 @@ struct DuckLakeCommitContext {
 //! database. Owned by DuckLakeTransaction via a back-reference.
 class DuckLakeTransactionState {
 public:
-	DuckLakeTransactionState(DuckLakeTransaction &transaction, DatabaseInstance &db, bool require_commit_message);
+	DuckLakeTransactionState(DuckLakeTransaction &transaction, DatabaseInstance &db, bool require_commit_message,
+	                         DuckLakeNameMapSet &new_name_maps);
 	~DuckLakeTransactionState();
 
 	void Commit(DuckLakeSnapshot transaction_snapshot, const TransactionChangeInformation &transaction_changes,
@@ -83,6 +84,9 @@ public:
 	                  vector<DuckLakeOverwrittenDeleteFile> &overwritten_delete_files) const;
 	vector<DuckLakeDeletedInlinedDataInfo> GetNewInlinedDeletes(DuckLakeCommitState &commit_state) const;
 	vector<DuckLakeInlinedFileDeletionInfo> GetNewInlinedFileDeletes(DuckLakeCommitState &commit_state);
+	NewNameMapInfo GetNewNameMaps(DuckLakeCommitState &commit_state);
+	static DuckLakeFileInfo GetNewDataFile(const DuckLakeDataFile &file, DuckLakeCommitState &commit_state,
+	                                       TableIndex table_id, optional_idx row_id_start);
 
 	static void DropEmptySupersededInlinedTables(const DuckLakeCommitContext &context);
 
@@ -96,6 +100,7 @@ public:
 	DuckLakeTransaction &transaction;
 	DatabaseInstance &db;
 	bool require_commit_message;
+	DuckLakeNameMapSet &new_name_maps;
 	DuckLakeSnapshotCommit commit_info;
 
 	case_insensitive_map_t<unique_ptr<DuckLakeCatalogSet>> new_tables;

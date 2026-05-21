@@ -4029,10 +4029,6 @@ WHERE table_id=tid AND column_id=cid AND ducklake_column_tag.key=overwritten_tag
 	return batch_query;
 }
 
-string DuckLakeMetadataManager::UpdateGlobalTableStats(const DuckLakeGlobalStatsInfo &stats) {
-	return UpdateGlobalTableStatsSql(stats);
-}
-
 string DuckLakeMetadataManager::UpdateGlobalTableStatsSql(const DuckLakeGlobalStatsInfo &stats) {
 	string column_stats_values;
 	for (auto &col_stats : stats.column_stats) {
