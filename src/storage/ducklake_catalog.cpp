@@ -5,6 +5,7 @@
 #include "duckdb/catalog/catalog_entry/schema_catalog_entry.hpp"
 #include "duckdb/catalog/catalog_entry/table_catalog_entry.hpp"
 #include "duckdb/main/attached_database.hpp"
+#include "duckdb/main/config.hpp"
 #include "duckdb/parser/constraints/not_null_constraint.hpp"
 #include "duckdb/parser/parsed_data/create_schema_info.hpp"
 #include "duckdb/parser/parsed_data/create_table_info.hpp"
@@ -899,6 +900,20 @@ idx_t DuckLakeCatalog::DataInliningRowLimit(ClientContext &context, SchemaIndex 
 		return setting_val.GetValue<idx_t>();
 	}
 	return 10;
+}
+
+idx_t DuckLakeCatalog::GetTargetFileSize(ClientContext &context, SchemaIndex schema_id, TableIndex table_id) const {
+	Value setting_val;
+	if (context.TryGetCurrentSetting("ducklake_target_file_size", setting_val) && !setting_val.IsNull() &&
+	    !setting_val.ToString().empty()) {
+		return DBConfig::ParseMemoryLimit(setting_val.ToString());
+	}
+	return GetConfigOption<idx_t>("target_file_size", schema_id, table_id, DEFAULT_TARGET_FILE_SIZE);
+}
+
+idx_t DuckLakeCatalog::GetTargetFileSize(ClientContext &context, DuckLakeTableEntry &table) const {
+	auto &schema = table.ParentSchema().Cast<DuckLakeSchemaEntry>();
+	return GetTargetFileSize(context, schema.GetSchemaId(), table.GetTableId());
 }
 
 idx_t DuckLakeCatalog::GetInliningLimit(ClientContext &context, DuckLakeTableEntry &table) {
