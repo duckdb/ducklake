@@ -22,11 +22,11 @@
 
 namespace duckdb {
 
-DuckLakeTransactionState::DuckLakeTransactionState(DuckLakeMetadataManager &metadata_manager, DatabaseInstance &db,
-                                                   bool require_commit_message, DuckLakeNameMapSet &new_name_maps,
-                                                   string data_path, string separator)
-    : metadata_manager(metadata_manager), db(db), require_commit_message(require_commit_message),
-      new_name_maps(new_name_maps), data_path(std::move(data_path)), separator(std::move(separator)) {
+DuckLakeTransactionState::DuckLakeTransactionState(DatabaseInstance &db, bool require_commit_message,
+                                                   DuckLakeNameMapSet &new_name_maps, string data_path,
+                                                   string separator)
+    : db(db), require_commit_message(require_commit_message), new_name_maps(new_name_maps),
+      data_path(std::move(data_path)), separator(std::move(separator)) {
 }
 
 DuckLakePath DuckLakeTransactionState::GetRelativePath(const string &path) const {
@@ -1226,7 +1226,7 @@ string DuckLakeTransactionState::CommitChanges(DuckLakeCommitState &commit_state
 		batch_queries += DuckLakeMetadataManager::WriteNewColumnTags(result.new_column_tags);
 		batch_queries += DuckLakeMetadataManager::WriteDroppedColumns(result.dropped_columns);
 		batch_queries += DuckLakeMetadataManager::WriteNewColumns(result.new_columns);
-		batch_queries += metadata_manager.WriteNewInlinedTables(commit_snapshot, result.new_inlined_data_tables);
+		batch_queries += context.write_inlined_tables(commit_snapshot, result.new_inlined_data_tables);
 		batch_queries += DuckLakeMetadataManager::WriteNewSortKeys(existing_catalog.sorts, result.new_sort_keys);
 		new_tables_result = result.new_tables;
 		new_inlined_data_tables_result = result.new_inlined_data_tables;
@@ -1267,8 +1267,8 @@ string DuckLakeTransactionState::CommitChanges(DuckLakeCommitState &commit_state
 	if (has_table_data_changes) {
 		auto result = GetNewDataFiles(batch_queries, commit_state, stats, context);
 		batch_queries += write_data_files_sql(result.new_files);
-		batch_queries += metadata_manager.WriteNewInlinedData(commit_snapshot, result.new_inlined_data,
-		                                                      new_tables_result, new_inlined_data_tables_result);
+		batch_queries += context.write_inlined_data(commit_snapshot, result.new_inlined_data, new_tables_result,
+		                                            new_inlined_data_tables_result);
 	}
 
 	// in case of a retry, we generate the deletion of inlined data from the tables

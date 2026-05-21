@@ -2638,10 +2638,9 @@ string DuckLakeMetadataManager::WriteNewInlinedFileDeletesSqlBatch(
 	for (auto &entry : new_deletes) {
 		auto table_name = InlinedFileDeletionTableName(entry.table_id);
 		if (created_tables.insert(entry.table_id.index).second) {
-			batch_queries +=
-			    StringUtil::Format("CREATE TABLE IF NOT EXISTS {METADATA_CATALOG}.%s"
-			                       "(file_id BIGINT, row_id BIGINT, begin_snapshot BIGINT);\n",
-			                       table_name);
+			batch_queries += StringUtil::Format("CREATE TABLE IF NOT EXISTS {METADATA_CATALOG}.%s"
+			                                    "(file_id BIGINT, row_id BIGINT, begin_snapshot BIGINT);\n",
+			                                    table_name);
 		}
 		string values;
 		for (auto &file_entry : entry.file_deletions.file_deletes) {
@@ -3477,9 +3476,9 @@ string DuckLakeMetadataManager::WriteNewDataFilesWithAppender(DuckLakeSnapshot &
 }
 
 bool DuckLakeMetadataManager::TryAppendDataFiles(DuckLakeSnapshot &commit_snapshot,
-                                                  const vector<DuckLakeFileInfo> &new_files,
-                                                  const vector<DuckLakeTableInfo> &new_tables,
-                                                  vector<DuckLakeSchemaInfo> &new_schemas_result) {
+                                                 const vector<DuckLakeFileInfo> &new_files,
+                                                 const vector<DuckLakeTableInfo> &new_tables,
+                                                 vector<DuckLakeSchemaInfo> &new_schemas_result) {
 	if (!SupportsAppender() || new_files.empty()) {
 		return false;
 	}

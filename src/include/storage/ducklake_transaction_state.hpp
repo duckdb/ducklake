@@ -36,6 +36,13 @@ struct DuckLakeCommitContext {
 	std::function<bool(DuckLakeSnapshot &, const vector<DuckLakeFileInfo> &, const vector<DuckLakeTableInfo> &,
 	                   vector<DuckLakeSchemaInfo> &)>
 	    try_append_data_files;
+	//! Emits the SQL that registers new inlined data tables (CREATE TABLE + ducklake_inlined_data_tables INSERT).
+	std::function<string(DuckLakeSnapshot, const vector<DuckLakeTableInfo> &)> write_inlined_tables;
+	//! Emits the SQL that appends inlined data for the given table changes (handles new inlined-table creation,
+	//! per-tx cache, and the per-row INSERT VALUES).
+	std::function<string(DuckLakeSnapshot &, const vector<DuckLakeInlinedDataInfo> &, const vector<DuckLakeTableInfo> &,
+	                     const vector<DuckLakeTableInfo> &)>
+	    write_inlined_data;
 	//! Returns the current global table stats for a single table id (first-attempt path).
 	std::function<shared_ptr<DuckLakeTableStats>(TableIndex)> get_table_stats;
 	//! Builds a DuckLakeStats map from a vector of per-snapshot global stats (retry path).
@@ -55,9 +62,8 @@ struct DuckLakeCommitContext {
 //! database. Owned by DuckLakeTransaction via a back-reference.
 class DuckLakeTransactionState {
 public:
-	DuckLakeTransactionState(DuckLakeMetadataManager &metadata_manager, DatabaseInstance &db,
-	                         bool require_commit_message, DuckLakeNameMapSet &new_name_maps, string data_path,
-	                         string separator);
+	DuckLakeTransactionState(DatabaseInstance &db, bool require_commit_message, DuckLakeNameMapSet &new_name_maps,
+	                         string data_path, string separator);
 	~DuckLakeTransactionState();
 
 	void Commit(DuckLakeSnapshot transaction_snapshot, const TransactionChangeInformation &transaction_changes,
@@ -112,7 +118,6 @@ public:
 	bool SchemaChangesMade() const;
 
 public:
-	DuckLakeMetadataManager &metadata_manager;
 	DatabaseInstance &db;
 	bool require_commit_message;
 	DuckLakeNameMapSet &new_name_maps;

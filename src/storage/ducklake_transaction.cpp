@@ -686,9 +686,9 @@ DuckLakeTransaction::DuckLakeTransaction(DuckLakeCatalog &ducklake_catalog, Tran
     : Transaction(manager, context), ducklake_catalog(ducklake_catalog), db(*context.db),
       local_catalog_id(DuckLakeConstants::TRANSACTION_LOCAL_ID_START), catalog_version(0) {
 	metadata_manager = DuckLakeMetadataManager::Create(*this);
-	state = make_uniq<DuckLakeTransactionState>(*metadata_manager, db, ducklake_catalog.IsCommitInfoRequired(),
-	                                            new_name_maps, ducklake_catalog.DataPath(),
-	                                            ducklake_catalog.Separator());
+	state =
+	    make_uniq<DuckLakeTransactionState>(*metadata_manager, db, ducklake_catalog.IsCommitInfoRequired(),
+	                                        new_name_maps, ducklake_catalog.DataPath(), ducklake_catalog.Separator());
 }
 
 DuckLakeTransaction::~DuckLakeTransaction() {
@@ -1344,6 +1344,14 @@ void DuckLakeTransaction::RunCommitLoop(DuckLakeSnapshot transaction_snapshot,
 	                                    const vector<DuckLakeTableInfo> &new_tables,
 	                                    vector<DuckLakeSchemaInfo> &new_schemas) {
 		return metadata_manager->TryAppendDataFiles(snapshot, files, new_tables, new_schemas);
+	};
+	context.write_inlined_tables = [&](DuckLakeSnapshot snapshot, const vector<DuckLakeTableInfo> &tables) {
+		return metadata_manager->WriteNewInlinedTables(snapshot, tables);
+	};
+	context.write_inlined_data = [&](DuckLakeSnapshot &snapshot, const vector<DuckLakeInlinedDataInfo> &new_data,
+	                                 const vector<DuckLakeTableInfo> &new_tables,
+	                                 const vector<DuckLakeTableInfo> &new_inlined_data_tables_result) {
+		return metadata_manager->WriteNewInlinedData(snapshot, new_data, new_tables, new_inlined_data_tables_result);
 	};
 	context.get_table_stats = [&](TableIndex table_id) {
 		return ducklake_catalog.GetTableStats(*this, table_id);
