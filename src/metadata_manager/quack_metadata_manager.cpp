@@ -64,8 +64,21 @@ string QuackMetadataManager::MetadataExistsQuery() const {
 }
 
 void QuackMetadataManager::ClearCache() {
-	string clear = "CALL quack_clear_cache();";
-	transaction.ExecuteRaw(clear);
+	auto &ducklake_catalog = transaction.GetCatalog();
+	string clear =
+	    StringUtil::Format("CALL quack_clear_cache(%s);", SQLString(ducklake_catalog.MetadataDatabaseName()));
+	auto result = transaction.ExecuteRaw(clear);
+	if (!result->HasError()) {
+		return;
+	}
+	auto raw_message = result->GetErrorObject().RawMessage();
+	if (!StringUtil::Contains(raw_message, "No function matches")) {
+		result->GetErrorObject().Throw("Failed to clear Quack metadata cache: ");
+	}
+	result = transaction.ExecuteRaw("CALL quack_clear_cache();");
+	if (result->HasError()) {
+		result->GetErrorObject().Throw("Failed to clear Quack metadata cache: ");
+	}
 }
 
 bool QuackMetadataManager::MetadataExists() {
