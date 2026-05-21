@@ -37,6 +37,7 @@ void DuckLakeColumnVariantStats::Merge(const DuckLakeColumnExtraStats &new_stats
 		}
 		// merge stats
 		entry.second.field_stats.MergeStats(other_entry->second.field_stats);
+		entry.second.shredded_type = entry.second.field_stats.type;
 	}
 	// erase any stats that do not occur in both
 	for (auto &entry : stats_to_erase) {

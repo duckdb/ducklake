@@ -72,7 +72,8 @@ DuckLakeColumnStats &DuckLakeColumnStats::operator=(const DuckLakeColumnStats &o
 }
 
 void DuckLakeColumnStats::MergeStats(const DuckLakeColumnStats &new_stats) {
-	if (type != new_stats.type) {
+	bool types_differ = type != new_stats.type;
+	if (types_differ) {
 		// handle type promotion - adopt the new type
 		type = new_stats.type;
 	}
@@ -100,6 +101,10 @@ void DuckLakeColumnStats::MergeStats(const DuckLakeColumnStats &new_stats) {
 
 	if (!new_stats.AnyValid()) {
 		// all values in the source are NULL - don't update min/max
+		if (types_differ) {
+			has_min = false;
+			has_max = false;
+		}
 		return;
 	}
 	if (!AnyValid()) {
@@ -111,37 +116,43 @@ void DuckLakeColumnStats::MergeStats(const DuckLakeColumnStats &new_stats) {
 		any_valid = true;
 		return;
 	}
-	if (!new_stats.has_min) {
+	if (types_differ) {
+		// min/max from different types cannot be compared - invalidate them
 		has_min = false;
-	} else if (has_min) {
-		// both stats have a min - select the smallest
-		if (RequiresValueComparison(type)) {
-			// for numerics/temporals we need to parse the stats
-			auto current_min = Value(min).DefaultCastAs(type);
-			auto new_min = Value(new_stats.min).DefaultCastAs(type);
-			if (new_min < current_min) {
+		has_max = false;
+	} else {
+		if (!new_stats.has_min) {
+			has_min = false;
+		} else if (has_min) {
+			// both stats have a min - select the smallest
+			if (RequiresValueComparison(type)) {
+				// for numerics/temporals we need to parse the stats
+				auto current_min = Value(min).DefaultCastAs(type);
+				auto new_min = Value(new_stats.min).DefaultCastAs(type);
+				if (new_min < current_min) {
+					min = new_stats.min;
+				}
+			} else if (new_stats.min < min) {
+				// for other types we can compare the strings directly
 				min = new_stats.min;
 			}
-		} else if (new_stats.min < min) {
-			// for other types we can compare the strings directly
-			min = new_stats.min;
 		}
-	}
 
-	if (!new_stats.has_max) {
-		has_max = false;
-	} else if (has_max) {
-		// both stats have a max - select the largest
-		if (RequiresValueComparison(type)) {
-			// for numerics/temporals we need to parse the stats
-			auto current_max = Value(max).DefaultCastAs(type);
-			auto new_max = Value(new_stats.max).DefaultCastAs(type);
-			if (new_max > current_max) {
+		if (!new_stats.has_max) {
+			has_max = false;
+		} else if (has_max) {
+			// both stats have a max - select the largest
+			if (RequiresValueComparison(type)) {
+				// for numerics/temporals we need to parse the stats
+				auto current_max = Value(max).DefaultCastAs(type);
+				auto new_max = Value(new_stats.max).DefaultCastAs(type);
+				if (new_max > current_max) {
+					max = new_stats.max;
+				}
+			} else if (new_stats.max > max) {
+				// for other types we can compare the strings directly
 				max = new_stats.max;
 			}
-		} else if (new_stats.max > max) {
-			// for other types we can compare the strings directly
-			max = new_stats.max;
 		}
 	}
 

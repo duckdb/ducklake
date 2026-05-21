@@ -1,0 +1,72 @@
+# name: test/sql/stats/variant_mixed_type_stats.test
+# description: test that variant stats are correct when merging files with different shredded types
+# group: [stats]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+
+test-env DATA_PATH __TEST_DIR__
+
+statement ok
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/ducklake_variant_mixed_type_stats', METADATA_CATALOG 'metadata', DATA_INLINING_ROW_LIMIT 0)
+
+# file 1: integer variant
+statement ok
+CREATE TABLE ducklake.tbl(v VARIANT)
+
+statement ok
+INSERT INTO ducklake.tbl SELECT 42::VARIANT
+
+# per-file stats should have integer type
+query IIII
+SELECT variant_path, shredded_type, min_value, max_value FROM metadata.ducklake_file_variant_stats WHERE data_file_id=0
+----
+root	int32	42	42
+
+# file 2: varchar variant - different shredded type for the same field
+statement ok
+INSERT INTO ducklake.tbl SELECT 'hello'::VARIANT
+
+query IIII
+SELECT variant_path, shredded_type, min_value, max_value FROM metadata.ducklake_file_variant_stats WHERE data_file_id=1
+----
+root	varchar	hello	hello
+
+# table-level stats should have invalidated min/max due to type mismatch
+query II
+SELECT min_value, max_value FROM metadata.ducklake_table_column_stats WHERE table_id=1
+----
+NULL	NULL
+
+# the table should still be queryable
+query I
+SELECT v FROM ducklake.tbl ORDER BY v::VARCHAR
+----
+42
+hello
+
+# stats() should not crash
+query I
+SELECT count(*) FROM (SELECT stats(v) FROM ducklake.tbl LIMIT 1)
+----
+1
+
+# file 3: another integer variant
+statement ok
+INSERT INTO ducklake.tbl SELECT 7::VARIANT
+
+# table-level min/max should still be invalidated (can't recover without recomputing from all files)
+query II
+SELECT min_value, max_value FROM metadata.ducklake_table_column_stats WHERE table_id=1
+----
+NULL	NULL
+
+query I
+SELECT v FROM ducklake.tbl ORDER BY v::VARCHAR
+----
+42
+7
+hello
