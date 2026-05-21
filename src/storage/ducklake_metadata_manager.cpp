@@ -23,6 +23,9 @@
 #include "duckdb/planner/filter/dynamic_filter.hpp"
 #include "duckdb/planner/filter/in_filter.hpp"
 #include "duckdb/planner/expression.hpp"
+#include "duckdb/planner/expression/bound_constant_expression.hpp"
+#include "duckdb/execution/expression_executor.hpp"
+#include "storage/ducklake_partition_data.hpp"
 #include "duckdb/parser/parser.hpp"
 #include "duckdb/parser/expression/cast_expression.hpp"
 
@@ -1389,6 +1392,131 @@ struct DynamicFilterColumn {
 	LogicalType column_type;
 };
 
+//! Fold a single constant through the bucket() transform, returning the resulting partition_value
+//! string ("6", "3", ...) that matches what the writer stores. Returns empty optional on any failure
+//! (cast error, evaluation error, NULL) so the caller can skip this filter and fall back to zone maps.
+static optional_idx FoldBucketValue(ClientContext &context, const Value &constant, const LogicalType &col_type,
+                                     idx_t bucket_count, string &out_partition_value) {
+	if (constant.IsNull()) {
+		return optional_idx();
+	}
+	Value casted;
+	if (!constant.DefaultTryCastAs(col_type, casted, nullptr)) {
+		return optional_idx();
+	}
+	auto const_expr = make_uniq<BoundConstantExpression>(std::move(casted));
+	auto bucket_expr = DuckLakePartitionUtils::ApplyBucketTransform(context, std::move(const_expr), bucket_count);
+	Value result;
+	if (!ExpressionExecutor::TryEvaluateScalar(context, *bucket_expr, result)) {
+		return optional_idx();
+	}
+	if (result.IsNull()) {
+		return optional_idx();
+	}
+	out_partition_value = result.ToString();
+	return optional_idx(1);
+}
+
+//! Walk a TableFilter and, for each foldable equality / IN-list constant, append the resulting
+//! partition_value string to `out`. Returns true if at least one valid constant was collected.
+//! Unsupported shapes (range comparisons, OR-conjunctions, dynamic filters, etc.) return false
+//! and pruning is skipped for this column — the existing zone-map path handles correctness.
+static bool CollectBucketEqualityValues(ClientContext &context, const TableFilter &filter,
+                                         const LogicalType &col_type, idx_t bucket_count, vector<string> &out) {
+	switch (filter.filter_type) {
+	case TableFilterType::CONSTANT_COMPARISON: {
+		auto &cf = filter.Cast<ConstantFilter>();
+		if (cf.comparison_type != ExpressionType::COMPARE_EQUAL) {
+			return false;
+		}
+		string partition_value;
+		if (!FoldBucketValue(context, cf.constant, col_type, bucket_count, partition_value).IsValid()) {
+			return false;
+		}
+		out.push_back(std::move(partition_value));
+		return true;
+	}
+	case TableFilterType::IN_FILTER: {
+		auto &in_filter = filter.Cast<InFilter>();
+		for (auto &val : in_filter.values) {
+			string partition_value;
+			if (!FoldBucketValue(context, val, col_type, bucket_count, partition_value).IsValid()) {
+				continue;
+			}
+			out.push_back(std::move(partition_value));
+		}
+		return !out.empty();
+	}
+	case TableFilterType::OPTIONAL_FILTER:
+		return CollectBucketEqualityValues(context, *filter.Cast<OptionalFilter>().child_filter, col_type,
+		                                    bucket_count, out);
+	case TableFilterType::CONJUNCTION_AND: {
+		// A child equality on this column gives a valid (tighter) prune. Over-inclusion from
+		// contradictory ANDs (a = 1 AND a = 2) is correctness-safe — the residual filter still runs.
+		auto &conj = filter.Cast<ConjunctionAndFilter>();
+		for (auto &child : conj.child_filters) {
+			CollectBucketEqualityValues(context, *child, col_type, bucket_count, out);
+		}
+		return !out.empty();
+	}
+	default:
+		return false;
+	}
+}
+
+string DuckLakeMetadataManager::BuildBucketPartitionPruningClause(DuckLakeTableEntry &table,
+                                                                  const FilterPushdownInfo &filter_info) {
+	auto partition_data = table.GetPartitionData();
+	if (!partition_data) {
+		return string();
+	}
+	auto context_ptr = transaction.context.lock();
+	if (!context_ptr) {
+		return string();
+	}
+	auto &context = *context_ptr;
+	auto table_id = table.GetTableId();
+	string result;
+
+	for (auto &field : partition_data->fields) {
+		if (field.transform.type != DuckLakeTransformType::BUCKET) {
+			continue;
+		}
+		auto it = filter_info.column_filters.find(field.field_id.index);
+		if (it == filter_info.column_filters.end()) {
+			continue;
+		}
+		const auto &col_filter = it->second;
+
+		vector<string> bucket_values;
+		if (!CollectBucketEqualityValues(context, *col_filter.table_filter, col_filter.column_type,
+		                                  field.transform.bucket_count, bucket_values)) {
+			continue;
+		}
+		if (bucket_values.empty()) {
+			continue;
+		}
+
+		string in_list;
+		for (auto &v : bucket_values) {
+			if (!in_list.empty()) {
+				in_list += ", ";
+			}
+			in_list += StringUtil::Format("%s", SQLString(v));
+		}
+		string clause = StringUtil::Format(
+		    "data.data_file_id IN (SELECT data_file_id FROM {METADATA_CATALOG}.ducklake_file_partition_value "
+		    "WHERE table_id = %d AND partition_key_index = %d AND partition_value IN (%s))",
+		    table_id.index, field.partition_key_index, in_list);
+
+		if (!result.empty()) {
+			result += " AND ";
+		}
+		result += clause;
+	}
+	return result;
+}
+
 vector<DuckLakeFileListEntry> DuckLakeMetadataManager::GetFilesForTable(DuckLakeTableEntry &table,
                                                                         DuckLakeSnapshot snapshot,
                                                                         const FilterPushdownInfo *filter_info) {
@@ -1457,6 +1585,18 @@ vector<DuckLakeFileListEntry> DuckLakeMetadataManager::GetFilesForTable(DuckLake
 		auto components = GenerateFilterPushdownComponents(*filter_info, table_id);
 		query = components.cte_section;
 		where_clause = components.where_clause;
+
+		// Add bucket-partition pruning for equality / IN-list predicates on bucket()-partitioned columns.
+		// Composes with the zone-map clause above — pruning narrows files, zone maps stay as a backstop.
+		if (table.GetPartitionData()) {
+			string bucket_clause = BuildBucketPartitionPruningClause(table, *filter_info);
+			if (!bucket_clause.empty()) {
+				if (!where_clause.empty()) {
+					where_clause += " AND ";
+				}
+				where_clause += bucket_clause;
+			}
+		}
 	}
 
 	// Add base query
@@ -1797,6 +1937,17 @@ DuckLakeMetadataManager::GetExtendedFilesForTable(DuckLakeTableEntry &table, Duc
 		auto components = GenerateFilterPushdownComponents(*filter_info, table_id);
 		query = components.cte_section;
 		where_clause = components.where_clause;
+
+		// Add bucket-partition pruning (see GetFilesForTable for rationale).
+		if (table.GetPartitionData()) {
+			string bucket_clause = BuildBucketPartitionPruningClause(table, *filter_info);
+			if (!bucket_clause.empty()) {
+				if (!where_clause.empty()) {
+					where_clause += " AND ";
+				}
+				where_clause += bucket_clause;
+			}
+		}
 	}
 
 	// Add base query
