@@ -305,6 +305,9 @@ public:
 	static DuckLakeFileInfo BuildDataFileInfo(const DuckLakeDataFile &file, DuckLakeSnapshot &commit_snapshot,
 	                                          TableIndex table_id, optional_idx row_id_start);
 
+	static void AddTableChanges(TableIndex table_id, const LocalTableDataChanges &table_changes,
+	                            TransactionChangeInformation &changes);
+
 private:
 	void FlushChanges();
 	static DuckLakePartitionInfo GetNewPartitionKey(DuckLakeCommitState &commit_state, DuckLakeTableEntry &table);
@@ -318,8 +321,6 @@ private:
 
 	void AlterEntryInternal(DuckLakeTableEntry &old_entry, unique_ptr<CatalogEntry> new_entry);
 	void AlterEntryInternal(DuckLakeViewEntry &old_entry, unique_ptr<CatalogEntry> new_entry);
-	static void AddTableChanges(TableIndex table_id, const LocalTableDataChanges &table_changes,
-	                            TransactionChangeInformation &changes);
 	case_insensitive_map_t<unique_ptr<DuckLakeCatalogSet>> &GetNewMacroMap(CatalogType type);
 
 private:

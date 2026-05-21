@@ -16,32 +16,18 @@ DuckLakeStagedCommit::DuckLakeStagedCommit(string commit_uuid)
     : commit_uuid(std::move(commit_uuid)), identifier_suffix(StringUtil::Replace(this->commit_uuid, "-", "")) {
 }
 
-static string EmitStagedCommitHeader(const DuckLakeSnapshotCommit &h, const string &sfx) {
+static string EmitStagedCommitHeader(const DuckLakeSnapshotCommit &h, const DuckLakeSnapshot &transaction_snapshot,
+                                     const string &data_path, const string &separator, const string &sfx) {
 	string sql;
 	sql += StringUtil::Format("CREATE TABLE IF NOT EXISTS {METADATA_CATALOG}.ducklake_staged_commit_%s("
-	                          "commit_author VARCHAR, commit_message VARCHAR, commit_extra_info VARCHAR);",
+	                          "commit_author VARCHAR, commit_message VARCHAR, commit_extra_info VARCHAR, "
+	                          "transaction_snapshot_id BIGINT, data_path VARCHAR, path_separator VARCHAR);",
 	                          sfx);
-	sql +=
-	    StringUtil::Format("INSERT INTO {METADATA_CATALOG}.ducklake_staged_commit_%s VALUES (%s, %s, %s);", sfx,
-	                       h.author.ToSQLString(), h.commit_message.ToSQLString(), h.commit_extra_info.ToSQLString());
-	return sql;
-}
-
-static string EmitStagedChangeTouch(const TransactionChangeInformation &changes, const string &sfx) {
-	string sql;
-	sql += StringUtil::Format("CREATE TABLE IF NOT EXISTS {METADATA_CATALOG}.ducklake_staged_change_touch_%s("
-	                          "kind VARCHAR, entity_id BIGINT);",
-	                          sfx);
-	for (auto &table_id : changes.tables_inserted_into) {
-		sql += StringUtil::Format(
-		    "INSERT INTO {METADATA_CATALOG}.ducklake_staged_change_touch_%s VALUES ('inserted_into', %llu);", sfx,
-		    table_id.index);
-	}
-	for (auto &table_id : changes.tables_inserted_inlined) {
-		sql += StringUtil::Format(
-		    "INSERT INTO {METADATA_CATALOG}.ducklake_staged_change_touch_%s VALUES ('inserted_inlined', %llu);", sfx,
-		    table_id.index);
-	}
+	sql += StringUtil::Format(
+	    "INSERT INTO {METADATA_CATALOG}.ducklake_staged_commit_%s VALUES (%s, %s, %s, %llu, %s, %s);", sfx,
+	    h.author.ToSQLString(), h.commit_message.ToSQLString(), h.commit_extra_info.ToSQLString(),
+	    transaction_snapshot.snapshot_id, DuckLakeUtil::SQLLiteralToString(data_path),
+	    DuckLakeUtil::SQLLiteralToString(separator));
 	return sql;
 }
 
@@ -180,11 +166,12 @@ string DuckLakeStagedCommit::Build(DuckLakeTransaction &transaction,
                                    const TransactionChangeInformation &transaction_changes,
                                    const DuckLakeSnapshot &transaction_snapshot,
                                    const DuckLakeRetryConfig &retry_config) const {
+	(void)transaction_changes; // server rebuilds the change set from LocalTableChanges
 	auto &ducklake_catalog = transaction.GetCatalog();
 	auto schema_name = ducklake_catalog.MetadataSchemaName();
 	string batch;
-	batch += EmitStagedCommitHeader(transaction.GetCommitInfo(), identifier_suffix);
-	batch += EmitStagedChangeTouch(transaction_changes, identifier_suffix);
+	batch += EmitStagedCommitHeader(transaction.GetCommitInfo(), transaction_snapshot, ducklake_catalog.DataPath(),
+	                                ducklake_catalog.Separator(), identifier_suffix);
 	batch += EmitStagedDataFiles(transaction.GetLocalChanges(), identifier_suffix);
 	batch += EmitStagedInlinedData(transaction.GetLocalChanges(), transaction, identifier_suffix);
 	batch += StringUtil::Format("SELECT * FROM ducklake_commit(%s, %s, %lld, "
