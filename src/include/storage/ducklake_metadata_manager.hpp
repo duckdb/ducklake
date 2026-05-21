@@ -252,6 +252,10 @@ public:
 	//! same order) since path policy differs across callers (schema-relative vs. always-absolute).
 	static string WriteNewDataFilesSqlBatch(const vector<DuckLakeFileInfo> &new_files,
 	                                        const vector<DuckLakePath> &resolved_paths);
+	//! Opt-in fast-path: if this backend supports the DuckDB Appender API, write the files directly
+	bool TryAppendDataFiles(DuckLakeSnapshot &commit_snapshot, const vector<DuckLakeFileInfo> &new_files,
+	                        const vector<DuckLakeTableInfo> &new_tables,
+	                        vector<DuckLakeSchemaInfo> &new_schemas_result);
 	virtual string WriteNewInlinedData(DuckLakeSnapshot &commit_snapshot,
 	                                   const vector<DuckLakeInlinedDataInfo> &new_data,
 	                                   const vector<DuckLakeTableInfo> &new_tables,

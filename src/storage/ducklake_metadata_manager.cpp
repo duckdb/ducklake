@@ -548,14 +548,12 @@ WHERE {SNAPSHOT_ID} >= begin_snapshot
 DuckLakeCatalogInfo DuckLakeMetadataManager::GetCatalogForSnapshot(DuckLakeSnapshot snapshot) {
 	auto &ducklake_catalog = transaction.GetCatalog();
 	return BuildCatalogForSnapshot(
-	    snapshot,
-	    [this](DuckLakeSnapshot s, string q) { return Query(s, q); },
-	    ducklake_catalog.DataPath(), ducklake_catalog.Separator());
+	    snapshot, [this](DuckLakeSnapshot s, string q) { return Query(s, q); }, ducklake_catalog.DataPath(),
+	    ducklake_catalog.Separator());
 }
 
 DuckLakeCatalogInfo DuckLakeMetadataManager::BuildCatalogForSnapshot(
-    DuckLakeSnapshot snapshot,
-    const std::function<unique_ptr<QueryResult>(DuckLakeSnapshot, string)> &query_executor,
+    DuckLakeSnapshot snapshot, const std::function<unique_ptr<QueryResult>(DuckLakeSnapshot, string)> &query_executor,
     const string &base_data_path, const string &separator) {
 	DuckLakeCatalogInfo catalog;
 	// load the schema information
@@ -598,7 +596,8 @@ WHERE {SNAPSHOT_ID} >= begin_snapshot AND ({SNAPSHOT_ID} < end_snapshot OR end_s
 	};
 
 	// load the table information
-	result = query_executor(snapshot, StringUtil::Format(R"(
+	result = query_executor(snapshot,
+	                        StringUtil::Format(R"(
 SELECT schema_id, tbl.table_id, table_uuid::VARCHAR, table_name,
 	(
 		SELECT %s
@@ -625,9 +624,8 @@ WHERE {SNAPSHOT_ID} >= tbl.begin_snapshot AND ({SNAPSHOT_ID} < tbl.end_snapshot 
   AND (({SNAPSHOT_ID} >= col.begin_snapshot AND ({SNAPSHOT_ID} < col.end_snapshot OR col.end_snapshot IS NULL)) OR column_id IS NULL)
 ORDER BY table_id, parent_column NULLS FIRST, column_order
 )",
-	                                                        ListAggregation(TAG_FIELDS),
-	                                                        ListAggregation(INLINED_DATA_TABLES_FIELDS),
-	                                                        ListAggregation(TAG_FIELDS)));
+	                                           ListAggregation(TAG_FIELDS), ListAggregation(INLINED_DATA_TABLES_FIELDS),
+	                                           ListAggregation(TAG_FIELDS)));
 	if (result->HasError()) {
 		result->GetErrorObject().Throw("Failed to get table information from DuckLake: ");
 	}
@@ -725,7 +723,7 @@ SELECT view_id, view_uuid, schema_id, view_name, dialect, sql, column_aliases,
 FROM {METADATA_CATALOG}.ducklake_view view
 WHERE {SNAPSHOT_ID} >= begin_snapshot AND ({SNAPSHOT_ID} < view.end_snapshot OR view.end_snapshot IS NULL)
 )",
-	                                                        ListAggregation(TAG_FIELDS)));
+	                                                     ListAggregation(TAG_FIELDS)));
 	if (result->HasError()) {
 		result->GetErrorObject().Throw("Failed to get partition information from DuckLake: ");
 	}
@@ -772,7 +770,7 @@ SELECT schema_id, ducklake_macro.macro_id, macro_name, (
 FROM {METADATA_CATALOG}.ducklake_macro
 WHERE  {SNAPSHOT_ID} >= ducklake_macro.begin_snapshot AND ({SNAPSHOT_ID} < ducklake_macro.end_snapshot OR ducklake_macro.end_snapshot IS NULL)
 )",
-	                                                        ListAggregation(MACRO_IMPL_FIELDS)));
+	                                                     ListAggregation(MACRO_IMPL_FIELDS)));
 	if (result->HasError()) {
 		result->GetErrorObject().Throw("Failed to get macro information from DuckLake: ");
 	}
@@ -3217,19 +3215,21 @@ WHERE table_id = %d;)",
 	                            table_id.index);
 }
 
-DuckLakePath DuckLakeMetadataManager::GetRelativePath(SchemaIndex schema_id, const string &path,
-                                                      const vector<DuckLakeSchemaInfo> &new_schemas_result,
-                                                      const std::function<unique_ptr<QueryResult>(string)> &query_executor,
-                                                      const string &base_data_path, const string &separator) {
-	return GetRelativePath(path, GetPathForSchema(schema_id, new_schemas_result, query_executor, base_data_path, separator),
-	                       separator);
+DuckLakePath
+DuckLakeMetadataManager::GetRelativePath(SchemaIndex schema_id, const string &path,
+                                         const vector<DuckLakeSchemaInfo> &new_schemas_result,
+                                         const std::function<unique_ptr<QueryResult>(string)> &query_executor,
+                                         const string &base_data_path, const string &separator) {
+	return GetRelativePath(
+	    path, GetPathForSchema(schema_id, new_schemas_result, query_executor, base_data_path, separator), separator);
 }
 
-DuckLakePath DuckLakeMetadataManager::GetRelativePath(TableIndex table_id, const string &path,
-                                                      const vector<DuckLakeTableInfo> &new_tables,
-                                                      const vector<DuckLakeSchemaInfo> &new_schemas_result,
-                                                      const std::function<unique_ptr<QueryResult>(string)> &query_executor,
-                                                      const string &base_data_path, const string &separator) {
+DuckLakePath
+DuckLakeMetadataManager::GetRelativePath(TableIndex table_id, const string &path,
+                                         const vector<DuckLakeTableInfo> &new_tables,
+                                         const vector<DuckLakeSchemaInfo> &new_schemas_result,
+                                         const std::function<unique_ptr<QueryResult>(string)> &query_executor,
+                                         const string &base_data_path, const string &separator) {
 	return GetRelativePath(
 	    path, GetPathForTable(table_id, new_tables, new_schemas_result, query_executor, base_data_path, separator),
 	    separator);
@@ -3454,6 +3454,17 @@ string DuckLakeMetadataManager::WriteNewDataFilesWithAppender(DuckLakeSnapshot &
 	variant_stats_appender.Close();
 
 	return "";
+}
+
+bool DuckLakeMetadataManager::TryAppendDataFiles(DuckLakeSnapshot &commit_snapshot,
+                                                  const vector<DuckLakeFileInfo> &new_files,
+                                                  const vector<DuckLakeTableInfo> &new_tables,
+                                                  vector<DuckLakeSchemaInfo> &new_schemas_result) {
+	if (!SupportsAppender() || new_files.empty()) {
+		return false;
+	}
+	WriteNewDataFilesWithAppender(commit_snapshot, new_files, new_tables, new_schemas_result);
+	return true;
 }
 
 string DuckLakeMetadataManager::WriteNewDataFiles(DuckLakeSnapshot &commit_snapshot,

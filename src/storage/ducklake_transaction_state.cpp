@@ -1243,12 +1243,30 @@ string DuckLakeTransactionState::CommitChanges(DuckLakeCommitState &commit_state
 		batch_queries += DuckLakeMetadataManager::WriteNewColumnMappings(result.new_column_mappings);
 	}
 
+	auto write_data_files_sql = [&](const vector<DuckLakeFileInfo> &files) {
+		if (files.empty()) {
+			return string();
+		}
+		if (context.try_append_data_files &&
+		    context.try_append_data_files(commit_snapshot, files, new_tables_result, new_schemas_result)) {
+			// fast-path: files were written directly via Appender, skip SQL emission
+			return string();
+		}
+		vector<DuckLakePath> resolved_paths;
+		resolved_paths.reserve(files.size());
+		for (auto &file : files) {
+			resolved_paths.push_back(DuckLakeMetadataManager::GetRelativePath(
+			    file.table_id, file.file_name, new_tables_result, new_schemas_result, context.query_metadata, data_path,
+			    separator));
+		}
+		return DuckLakeMetadataManager::WriteNewDataFilesSqlBatch(files, resolved_paths);
+	};
+
 	// write new data / data files
 	bool has_table_data_changes = local_changes.HasChanges();
 	if (has_table_data_changes) {
 		auto result = GetNewDataFiles(batch_queries, commit_state, stats, context);
-		batch_queries += metadata_manager.WriteNewDataFiles(commit_snapshot, result.new_files, new_tables_result,
-		                                                    new_schemas_result);
+		batch_queries += write_data_files_sql(result.new_files);
 		batch_queries += metadata_manager.WriteNewInlinedData(commit_snapshot, result.new_inlined_data,
 		                                                      new_tables_result, new_inlined_data_tables_result);
 	}
@@ -1281,9 +1299,9 @@ string DuckLakeTransactionState::CommitChanges(DuckLakeCommitState &commit_state
 		vector<DuckLakePath> resolved_delete_paths;
 		resolved_delete_paths.reserve(file_list.size());
 		for (auto &file : file_list) {
-			resolved_delete_paths.push_back(
-			    DuckLakeMetadataManager::GetRelativePath(file.table_id, file.path, new_tables_result, new_schemas_result,
-			                                             context.query_metadata, data_path, separator));
+			resolved_delete_paths.push_back(DuckLakeMetadataManager::GetRelativePath(
+			    file.table_id, file.path, new_tables_result, new_schemas_result, context.query_metadata, data_path,
+			    separator));
 		}
 		batch_queries += DuckLakeMetadataManager::WriteNewDeleteFiles(file_list, resolved_delete_paths);
 
@@ -1306,12 +1324,10 @@ string DuckLakeTransactionState::CommitChanges(DuckLakeCommitState &commit_state
 		batch_queries +=
 		    DuckLakeMetadataManager::WriteCompactions(compaction_merge_adjacent_changes.compacted_files,
 		                                              CompactionType::MERGE_ADJACENT_TABLES, resolved_merge_paths);
-		batch_queries += metadata_manager.WriteNewDataFiles(
-		    commit_snapshot, compaction_merge_adjacent_changes.new_files, new_tables_result, new_schemas_result);
+		batch_queries += write_data_files_sql(compaction_merge_adjacent_changes.new_files);
 
 		auto compaction_rewrite_delete_changes = GetCompactionChanges(commit_state, CompactionType::REWRITE_DELETES);
-		batch_queries += metadata_manager.WriteNewDataFiles(
-		    commit_snapshot, compaction_rewrite_delete_changes.new_files, new_tables_result, new_schemas_result);
+		batch_queries += write_data_files_sql(compaction_rewrite_delete_changes.new_files);
 		// REWRITE_DELETES ignores resolved_paths; pass empty.
 		batch_queries += DuckLakeMetadataManager::WriteCompactions(
 		    compaction_rewrite_delete_changes.compacted_files, CompactionType::REWRITE_DELETES, vector<DuckLakePath>());

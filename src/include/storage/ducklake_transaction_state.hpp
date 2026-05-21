@@ -32,6 +32,10 @@ struct DuckLakeCommitContext {
 	std::function<unique_ptr<QueryResult>(string)> query_metadata;
 	//! Runs a snapshot-templated metadata-DB query (handles {SNAPSHOT_ID} substitution).
 	std::function<unique_ptr<QueryResult>(DuckLakeSnapshot, string)> query_metadata_with_snapshot;
+	//! Optional Appender fast-path.
+	std::function<bool(DuckLakeSnapshot &, const vector<DuckLakeFileInfo> &, const vector<DuckLakeTableInfo> &,
+	                   vector<DuckLakeSchemaInfo> &)>
+	    try_append_data_files;
 	//! Returns the current global table stats for a single table id (first-attempt path).
 	std::function<shared_ptr<DuckLakeTableStats>(TableIndex)> get_table_stats;
 	//! Builds a DuckLakeStats map from a vector of per-snapshot global stats (retry path).
