@@ -211,22 +211,32 @@ public:
 	                                                          const string &separator);
 
 	virtual void RemoveFilesScheduledForCleanup(const vector<DuckLakeFileForCleanup> &cleaned_up_files);
-	virtual string DropSchemas(const set<SchemaIndex> &ids);
-	virtual string DropTables(const set<TableIndex> &ids, bool renamed);
-	virtual string DropViews(const set<TableIndex> &ids, bool renamed);
-	virtual string DropMacros(const set<MacroIndex> &ids);
+	static string DropSchemas(const set<SchemaIndex> &ids);
+	static string DropTables(const set<TableIndex> &ids, bool renamed);
+	static string DropViews(const set<TableIndex> &ids, bool renamed);
+	static string DropMacros(const set<MacroIndex> &ids);
 
-	virtual string WriteNewSchemas(const vector<DuckLakeSchemaInfo> &new_schemas);
-	virtual string WriteNewTables(DuckLakeSnapshot commit_snapshot, const vector<DuckLakeTableInfo> &new_tables,
-	                              vector<DuckLakeSchemaInfo> &new_schemas_result);
-	virtual string WriteNewViews(const vector<DuckLakeViewInfo> &new_views);
-	virtual string WriteNewPartitionKeys(DuckLakeSnapshot commit_snapshot,
+	//! Emits the INSERT for new schemas. Caller supplies resolved paths (one per schema, same order)
+	//! since path resolution depends on the catalog's data_path / separator (instance state).
+	static string WriteNewSchemas(const vector<DuckLakeSchemaInfo> &new_schemas,
+	                              const vector<DuckLakePath> &resolved_paths);
+	//! Emits the INSERT for new tables and their columns. Caller supplies resolved paths (one per
+	//! table, same order). commit_snapshot is currently unused by the body — kept off the signature.
+	static string WriteNewTables(const vector<DuckLakeTableInfo> &new_tables,
+	                              const vector<DuckLakePath> &resolved_paths);
+	static string WriteNewViews(const vector<DuckLakeViewInfo> &new_views);
+	//! Emits the partition-key diff SQL. Caller supplies the existing partition state (fetched
+	//! via GetCatalogForSnapshot) since the diff is computed against it.
+	static string WriteNewPartitionKeys(const vector<DuckLakePartitionInfo> &existing_partitions,
 	                                     const vector<DuckLakePartitionInfo> &new_partitions);
-	virtual string WriteNewSortKeys(DuckLakeSnapshot commit_snapshot, const vector<DuckLakeSortInfo> &new_sorts);
-	virtual string WriteDroppedColumns(const vector<DuckLakeDroppedColumn> &dropped_columns);
-	virtual string WriteNewColumns(const vector<DuckLakeNewColumn> &new_columns);
-	virtual string WriteNewTags(const vector<DuckLakeTagInfo> &new_tags);
-	virtual string WriteNewColumnTags(const vector<DuckLakeColumnTagInfo> &new_tags);
+	//! Emits the sort-key diff SQL. Caller supplies the existing sort state (fetched via
+	//! GetCatalogForSnapshot) since the diff is computed against it.
+	static string WriteNewSortKeys(const vector<DuckLakeSortInfo> &existing_sorts,
+	                                const vector<DuckLakeSortInfo> &new_sorts);
+	static string WriteDroppedColumns(const vector<DuckLakeDroppedColumn> &dropped_columns);
+	static string WriteNewColumns(const vector<DuckLakeNewColumn> &new_columns);
+	static string WriteNewTags(const vector<DuckLakeTagInfo> &new_tags);
+	static string WriteNewColumnTags(const vector<DuckLakeColumnTagInfo> &new_tags);
 	virtual string WriteNewDataFiles(DuckLakeSnapshot &commit_snapshot, const vector<DuckLakeFileInfo> &new_files,
 	                                 const vector<DuckLakeTableInfo> &new_tables,
 	                                 vector<DuckLakeSchemaInfo> &new_schemas_result);
@@ -239,7 +249,7 @@ public:
 	                                   const vector<DuckLakeInlinedDataInfo> &new_data,
 	                                   const vector<DuckLakeTableInfo> &new_tables,
 	                                   const vector<DuckLakeTableInfo> &new_inlined_data_tables_result);
-	virtual string WriteNewInlinedDeletes(const vector<DuckLakeDeletedInlinedDataInfo> &new_deletes);
+	static string WriteNewInlinedDeletes(const vector<DuckLakeDeletedInlinedDataInfo> &new_deletes);
 	virtual string WriteNewInlinedFileDeletes(DuckLakeSnapshot &commit_snapshot,
 	                                          const vector<DuckLakeInlinedFileDeletionInfo> &new_deletes);
 	//! Get the name of the inlined deletion table for a given table ID
@@ -252,19 +262,26 @@ public:
 	static string InlinedTableDdlSql(const string &table_name, const string &column_defs);
 	static string InlinedTableRegistrationTuple(idx_t table_id, const string &table_name, idx_t schema_version);
 	static string LatestInlinedTableQuery(idx_t table_id);
-	virtual string DropDataFiles(const set<DataFileIndex> &dropped_files);
-	virtual string DropDeleteFiles(const set<DataFileIndex> &dropped_files);
-	virtual string DeleteOverwrittenDeleteFiles(const vector<DuckLakeOverwrittenDeleteFile> &overwritten_files);
-	virtual string WriteNewDeleteFiles(const vector<DuckLakeDeleteFileInfo> &new_delete_files,
-	                                   const vector<DuckLakeTableInfo> &new_tables,
-	                                   vector<DuckLakeSchemaInfo> &new_schemas_result);
-	virtual string WriteNewMacros(const vector<DuckLakeMacroInfo> &new_macros);
+	static string DropDataFiles(const set<DataFileIndex> &dropped_files);
+	static string DropDeleteFiles(const set<DataFileIndex> &dropped_files);
+	//! Caller supplies one resolved path per overwritten file, in the same order.
+	static string DeleteOverwrittenDeleteFiles(const vector<DuckLakeOverwrittenDeleteFile> &overwritten_files,
+	                                            const vector<DuckLakePath> &resolved_paths);
+	//! Caller supplies one resolved path per new delete file, in the same order.
+	static string WriteNewDeleteFiles(const vector<DuckLakeDeleteFileInfo> &new_delete_files,
+	                                   const vector<DuckLakePath> &resolved_paths);
+	static string WriteNewMacros(const vector<DuckLakeMacroInfo> &new_macros);
 
 	virtual vector<DuckLakeColumnMappingInfo> GetColumnMappings(optional_idx start_from);
-	virtual string WriteNewColumnMappings(const vector<DuckLakeColumnMappingInfo> &new_column_mappings);
-	virtual string WriteMergeAdjacent(const vector<DuckLakeCompactedFileInfo> &compactions);
-	virtual string WriteDeleteRewrites(const vector<DuckLakeCompactedFileInfo> &compactions);
-	virtual string WriteCompactions(const vector<DuckLakeCompactedFileInfo> &compactions, CompactionType type);
+	static string WriteNewColumnMappings(const vector<DuckLakeColumnMappingInfo> &new_column_mappings);
+	//! Caller supplies one resolved path per compaction, in the same order.
+	static string WriteMergeAdjacent(const vector<DuckLakeCompactedFileInfo> &compactions,
+	                                  const vector<DuckLakePath> &resolved_paths);
+	static string WriteDeleteRewrites(const vector<DuckLakeCompactedFileInfo> &compactions);
+	//! For MERGE_ADJACENT_TABLES, resolved_paths is one path per compaction; for REWRITE_DELETES it
+	//! is ignored.
+	static string WriteCompactions(const vector<DuckLakeCompactedFileInfo> &compactions, CompactionType type,
+	                                const vector<DuckLakePath> &resolved_paths);
 	virtual string InsertSnapshot();
 	virtual string WriteSnapshotChanges(const SnapshotChangeInfo &change_info,
 	                                    const DuckLakeSnapshotCommit &commit_info);
@@ -306,8 +323,8 @@ public:
 	//! We delete at the flush
 	virtual void DeleteFlushedInlinedData(const DuckLakeInlinedTableInfo &inlined_table, idx_t flush_snapshot_id);
 	//! If it conflicts we batch everything at the retry
-	virtual string GenerateDeleteFlushedInlinedData(const vector<FlushedInlinedTableInfo> &flushed_tables);
-	virtual string InsertNewSchema(const DuckLakeSnapshot &snapshot, const set<TableIndex> &table_ids);
+	static string GenerateDeleteFlushedInlinedData(const vector<FlushedInlinedTableInfo> &flushed_tables);
+	static string InsertNewSchema(const DuckLakeSnapshot &snapshot, const set<TableIndex> &table_ids);
 
 	virtual vector<DuckLakeSnapshotInfo> GetAllSnapshots(const string &filter = string());
 	virtual void DeleteSnapshots(const vector<DuckLakeSnapshotInfo> &snapshots);
@@ -349,15 +366,7 @@ protected:
 	//! Parse macro implementations list from ListAggregation value
 	virtual vector<DuckLakeMacroImplementation> LoadMacroImplementations(const Value &list) const;
 
-protected:
-	string GetInlinedTableQuery(const DuckLakeTableInfo &table, const string &table_name);
-	string GetColumnType(const DuckLakeColumnInfo &col);
-
-	//! Optimized data file writing using DuckDB Appender API (only for DuckDB metadata manager)
-	string WriteNewDataFilesWithAppender(DuckLakeSnapshot &commit_snapshot, const vector<DuckLakeFileInfo> &new_files,
-	                                     const vector<DuckLakeTableInfo> &new_tables,
-	                                     vector<DuckLakeSchemaInfo> &new_schemas_result);
-
+public:
 	//! Get path relative to catalog path
 	DuckLakePath GetRelativePath(const string &path);
 	//! Get path relative to schema path
@@ -366,6 +375,15 @@ protected:
 	//! Get path relative to table path
 	DuckLakePath GetRelativePath(TableIndex table_id, const string &path, const vector<DuckLakeTableInfo> &new_tables,
 	                             vector<DuckLakeSchemaInfo> &new_schemas_result);
+
+protected:
+	string GetInlinedTableQuery(const DuckLakeTableInfo &table, const string &table_name);
+	string GetColumnType(const DuckLakeColumnInfo &col);
+
+	//! Optimized data file writing using DuckDB Appender API (only for DuckDB metadata manager)
+	string WriteNewDataFilesWithAppender(DuckLakeSnapshot &commit_snapshot, const vector<DuckLakeFileInfo> &new_files,
+	                                     const vector<DuckLakeTableInfo> &new_tables,
+	                                     vector<DuckLakeSchemaInfo> &new_schemas_result);
 	DuckLakePath GetRelativePath(const string &path, const string &data_path);
 	string FromRelativePath(const DuckLakePath &path, const string &base_path);
 	string FromRelativePath(const DuckLakePath &path);
@@ -377,7 +395,7 @@ protected:
 
 private:
 	template <class T>
-	string FlushDrop(const string &metadata_table_name, const string &id_name, const set<T> &dropped_entries);
+	static string FlushDrop(const string &metadata_table_name, const string &id_name, const set<T> &dropped_entries);
 	template <class T>
 	DuckLakeFileData ReadDataFile(DuckLakeTableEntry &table, T &row, idx_t &col_idx, bool is_encrypted);
 	template <class T>
