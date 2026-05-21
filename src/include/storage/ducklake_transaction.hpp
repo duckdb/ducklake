@@ -29,6 +29,7 @@ class DuckLakeTableEntry;
 class DuckLakeViewEntry;
 struct DuckLakeNewGlobalStats;
 struct DuckLakeTableStats;
+struct SnapshotChangeInfo;
 struct SnapshotChangeInformation;
 struct TransactionChangeInformation;
 struct NewDataInfo;
@@ -331,7 +332,6 @@ private:
 	DuckLakeDeleteFileInfo GetNewDeleteFile(TableIndex table_id, const DuckLakeCommitState &commit_state,
 	                                        const DuckLakeDeleteFile &file) const;
 	string UpdateGlobalTableStats(TableIndex table_id, const DuckLakeNewGlobalStats &new_stats);
-	string WriteSnapshotChanges(DuckLakeCommitState &commit_state, TransactionChangeInformation &changes) const;
 	//! Return the set of changes made by this transaction
 	TransactionChangeInformation GetTransactionChanges() const;
 	void GetNewTableInfo(DuckLakeCommitState &commit_state, DuckLakeCatalogSet &catalog_set,

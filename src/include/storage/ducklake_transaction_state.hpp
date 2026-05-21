@@ -22,13 +22,17 @@ public:
 
 	void Commit(DuckLakeSnapshot transaction_snapshot, const TransactionChangeInformation &transaction_changes,
 	            const DuckLakeRetryConfig &retry_config,
-	            const std::function<unique_ptr<QueryResult>(string)> &conflict_query_executor);
+	            const std::function<unique_ptr<QueryResult>(string)> &conflict_query_executor,
+	            const DuckLakeSnapshotCommit &commit_info);
 
 	SnapshotAndStats CheckForConflicts(DuckLakeSnapshot transaction_snapshot,
 	                                   const TransactionChangeInformation &changes,
 	                                   const std::function<unique_ptr<QueryResult>(string)> &executor);
 	void CheckForConflicts(const TransactionChangeInformation &changes, const SnapshotChangeInformation &other_changes,
 	                       DuckLakeSnapshot transaction_snapshot) const;
+
+	string WriteSnapshotChanges(DuckLakeCommitState &commit_state, TransactionChangeInformation &changes,
+	                            const DuckLakeSnapshotCommit &commit_info) const;
 
 	bool SchemaChangesMade() const;
 

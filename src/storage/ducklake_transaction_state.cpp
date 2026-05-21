@@ -240,6 +240,121 @@ void DuckLakeTransactionState::CheckForConflicts(const TransactionChangeInformat
 	}
 }
 
+namespace {
+
+template <class T>
+void AddChangeInfo(DuckLakeCommitState &commit_state, SnapshotChangeInfo &change_info, const set<T> &changes,
+                   const char *change_type) {
+	for (auto &entry : changes) {
+		if (!change_info.changes_made.empty()) {
+			change_info.changes_made += ",";
+		}
+		auto id = commit_state.GetTableId(entry);
+		change_info.changes_made += change_type;
+		change_info.changes_made += ":";
+		change_info.changes_made += to_string(id.index);
+	}
+}
+
+} // namespace
+
+string DuckLakeTransactionState::WriteSnapshotChanges(DuckLakeCommitState &commit_state,
+                                                      TransactionChangeInformation &changes,
+                                                      const DuckLakeSnapshotCommit &commit_info) const {
+	SnapshotChangeInfo change_info;
+
+	// re-add all inserted tables - transaction-local table identifiers should have been converted at this stage
+	changes.tables_deleted_from = tables_deleted_from;
+	for (auto &entry : local_changes.Changes()) {
+		auto table_id = commit_state.GetTableId(entry.GetTableIndex());
+		auto &table_changes = entry.GetTableChanges();
+		transaction.AddTableChanges(table_id, table_changes, changes);
+	}
+	for (auto &entry : changes.dropped_schemas) {
+		if (!change_info.changes_made.empty()) {
+			change_info.changes_made += ",";
+		}
+		auto schema_id = entry.first.index;
+		change_info.changes_made += "dropped_schema:";
+		change_info.changes_made += to_string(schema_id);
+	}
+	AddChangeInfo(commit_state, change_info, changes.dropped_tables, "dropped_table");
+	AddChangeInfo(commit_state, change_info, changes.dropped_views, "dropped_view");
+	for (auto &created_schema : changes.created_schemas) {
+		if (!change_info.changes_made.empty()) {
+			change_info.changes_made += ",";
+		}
+		change_info.changes_made += "created_schema:";
+		change_info.changes_made += KeywordHelper::WriteQuoted(created_schema, '"');
+	}
+	for (auto &entry : changes.created_tables) {
+		auto &schema = entry.first;
+		auto schema_prefix = KeywordHelper::WriteQuoted(schema, '"') + ".";
+		for (auto &created_table : entry.second) {
+			if (!change_info.changes_made.empty()) {
+				change_info.changes_made += ",";
+			}
+			auto is_view = created_table.get().type == CatalogType::VIEW_ENTRY;
+			change_info.changes_made += is_view ? "created_view:" : "created_table:";
+			change_info.changes_made += schema_prefix + KeywordHelper::WriteQuoted(created_table.get().name, '"');
+		}
+	}
+
+	for (auto &entry : changes.created_scalar_macros) {
+		auto &schema = entry.first;
+		auto schema_prefix = KeywordHelper::WriteQuoted(schema, '"') + ".";
+		for (auto &created_macro : entry.second) {
+			if (!change_info.changes_made.empty()) {
+				change_info.changes_made += ",";
+			}
+			change_info.changes_made += "created_scalar_macro:";
+			change_info.changes_made += schema_prefix + KeywordHelper::WriteQuoted(created_macro.get().name, '"');
+		}
+	}
+	for (auto &entry : changes.created_table_macros) {
+		auto &schema = entry.first;
+		auto schema_prefix = KeywordHelper::WriteQuoted(schema, '"') + ".";
+		for (auto &created_macro : entry.second) {
+			if (!change_info.changes_made.empty()) {
+				change_info.changes_made += ",";
+			}
+			change_info.changes_made += "created_table_macro:";
+			change_info.changes_made += schema_prefix + KeywordHelper::WriteQuoted(created_macro.get().name, '"');
+		}
+	}
+
+	for (auto &entry : changes.dropped_scalar_macros) {
+		if (!change_info.changes_made.empty()) {
+			change_info.changes_made += ",";
+		}
+		change_info.changes_made += "dropped_scalar_macro:";
+		change_info.changes_made += to_string(entry.index);
+	}
+
+	for (auto &entry : changes.dropped_table_macros) {
+		if (!change_info.changes_made.empty()) {
+			change_info.changes_made += ",";
+		}
+		change_info.changes_made += "dropped_table_macro:";
+		change_info.changes_made += to_string(entry.index);
+	}
+
+	AddChangeInfo(commit_state, change_info, changes.tables_inserted_into, "inserted_into_table");
+	AddChangeInfo(commit_state, change_info, changes.tables_deleted_from, "deleted_from_table");
+	AddChangeInfo(commit_state, change_info, changes.altered_tables, "altered_table");
+	AddChangeInfo(commit_state, change_info, changes.altered_views, "altered_view");
+	AddChangeInfo(commit_state, change_info, changes.tables_inserted_inlined, "inlined_insert");
+	AddChangeInfo(commit_state, change_info, changes.tables_deleted_inlined, "inlined_delete");
+	AddChangeInfo(commit_state, change_info, changes.tables_flushed_inlined, "inline_flush");
+	bool has_compaction = !changes.tables_merge_adjacent.empty() || !changes.tables_rewrite_delete.empty();
+	if (has_compaction && !change_info.changes_made.empty()) {
+		throw InvalidInputException("Transactions can either make changes OR perform compaction - not both");
+	}
+	AddChangeInfo(commit_state, change_info, changes.tables_merge_adjacent, "merge_adjacent");
+	AddChangeInfo(commit_state, change_info, changes.tables_rewrite_delete, "rewrite_delete");
+	return DuckLakeMetadataManager::WriteSnapshotChangesSql(change_info, commit_info);
+}
+
 SnapshotAndStats
 DuckLakeTransactionState::CheckForConflicts(DuckLakeSnapshot transaction_snapshot,
                                             const TransactionChangeInformation &changes,
@@ -259,7 +374,8 @@ DuckLakeTransactionState::CheckForConflicts(DuckLakeSnapshot transaction_snapsho
 void DuckLakeTransactionState::Commit(DuckLakeSnapshot transaction_snapshot,
                                       const TransactionChangeInformation &transaction_changes,
                                       const DuckLakeRetryConfig &retry_config,
-                                      const std::function<unique_ptr<QueryResult>(string)> &conflict_query_executor) {
+                                      const std::function<unique_ptr<QueryResult>(string)> &conflict_query_executor,
+                                      const DuckLakeSnapshotCommit &commit_info) {
 	SnapshotAndStats commit_stats_snapshot;
 	auto &commit_snapshot = commit_stats_snapshot.snapshot;
 	optional_ptr<vector<DuckLakeGlobalStatsInfo>> stats;
@@ -287,8 +403,7 @@ void DuckLakeTransactionState::Commit(DuckLakeSnapshot transaction_snapshot,
 			// write the new snapshot
 			string batch_queries = transaction.metadata_manager->InsertSnapshot();
 			batch_queries += transaction.CommitChanges(commit_state, attempt_changes, stats);
-
-			batch_queries += transaction.WriteSnapshotChanges(commit_state, attempt_changes);
+			batch_queries += WriteSnapshotChanges(commit_state, attempt_changes, commit_info);
 			auto res = transaction.metadata_manager->Execute(commit_snapshot, batch_queries);
 			if (res->HasError()) {
 				res->GetErrorObject().Throw("Failed to flush changes into DuckLake: ");
