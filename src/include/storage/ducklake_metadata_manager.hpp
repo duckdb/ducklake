@@ -369,6 +369,16 @@ public:
 	DuckLakePath GetRelativePath(TableIndex table_id, const string &path, const vector<DuckLakeTableInfo> &new_tables,
 	                             vector<DuckLakeSchemaInfo> &new_schemas_result);
 
+	static DuckLakePath GetRelativePath(SchemaIndex schema_id, const string &path,
+	                                    const vector<DuckLakeSchemaInfo> &new_schemas_result,
+	                                    const std::function<unique_ptr<QueryResult>(string)> &query_executor,
+	                                    const string &base_data_path, const string &separator);
+	static DuckLakePath GetRelativePath(TableIndex table_id, const string &path,
+	                                    const vector<DuckLakeTableInfo> &new_tables,
+	                                    const vector<DuckLakeSchemaInfo> &new_schemas_result,
+	                                    const std::function<unique_ptr<QueryResult>(string)> &query_executor,
+	                                    const string &base_data_path, const string &separator);
+
 protected:
 	string GetInlinedTableQuery(const DuckLakeTableInfo &table, const string &table_name);
 	string GetColumnType(const DuckLakeColumnInfo &col);
@@ -385,6 +395,18 @@ protected:
 	string GetPath(TableIndex table_id, const vector<DuckLakeTableInfo> &new_tables,
 	               const vector<DuckLakeSchemaInfo> &new_schemas_result);
 	FileSystem &GetFileSystem();
+
+	static string StorePath(string path, const string &separator);
+	static string LoadPath(string path, const string &separator);
+	static string FromRelativePath(const DuckLakePath &path, const string &base_path, const string &separator);
+	static DuckLakePath GetRelativePath(const string &path, const string &data_path, const string &separator);
+	static string GetPathForSchema(SchemaIndex schema_id, const vector<DuckLakeSchemaInfo> &new_schemas_result,
+	                               const std::function<unique_ptr<QueryResult>(string)> &query_executor,
+	                               const string &base_data_path, const string &separator);
+	static string GetPathForTable(TableIndex table_id, const vector<DuckLakeTableInfo> &new_tables,
+	                              const vector<DuckLakeSchemaInfo> &new_schemas_result,
+	                              const std::function<unique_ptr<QueryResult>(string)> &query_executor,
+	                              const string &base_data_path, const string &separator);
 
 private:
 	template <class T>

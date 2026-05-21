@@ -1213,8 +1213,8 @@ string DuckLakeTransactionState::CommitChanges(DuckLakeCommitState &commit_state
 		vector<DuckLakePath> resolved_table_paths;
 		resolved_table_paths.reserve(result.new_tables.size());
 		for (auto &table : result.new_tables) {
-			resolved_table_paths.push_back(
-			    metadata_manager.GetRelativePath(table.schema_id, table.path, new_schemas_result));
+			resolved_table_paths.push_back(DuckLakeMetadataManager::GetRelativePath(
+			    table.schema_id, table.path, new_schemas_result, context.query_metadata, data_path, separator));
 		}
 		batch_queries += DuckLakeMetadataManager::WriteNewTables(result.new_tables, resolved_table_paths);
 		auto existing_catalog = metadata_manager.GetCatalogForSnapshot(commit_snapshot);
@@ -1281,7 +1281,8 @@ string DuckLakeTransactionState::CommitChanges(DuckLakeCommitState &commit_state
 		resolved_delete_paths.reserve(file_list.size());
 		for (auto &file : file_list) {
 			resolved_delete_paths.push_back(
-			    metadata_manager.GetRelativePath(file.table_id, file.path, new_tables_result, new_schemas_result));
+			    DuckLakeMetadataManager::GetRelativePath(file.table_id, file.path, new_tables_result, new_schemas_result,
+			                                             context.query_metadata, data_path, separator));
 		}
 		batch_queries += DuckLakeMetadataManager::WriteNewDeleteFiles(file_list, resolved_delete_paths);
 

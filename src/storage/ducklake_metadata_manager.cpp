@@ -3081,6 +3081,151 @@ string DuckLakeMetadataManager::FromRelativePath(TableIndex table_id, const Duck
 	return FromRelativePath(path, GetPath(table_id, {}, {}));
 }
 
+string DuckLakeMetadataManager::StorePath(string path, const string &separator) {
+	if (separator == "/") {
+		return path;
+	}
+	return StringUtil::Replace(path, separator, "/");
+}
+
+string DuckLakeMetadataManager::LoadPath(string path, const string &separator) {
+	if (separator == "/") {
+		return path;
+	}
+	return StringUtil::Replace(path, "/", separator);
+}
+
+string DuckLakeMetadataManager::FromRelativePath(const DuckLakePath &path, const string &base_path,
+                                                 const string &separator) {
+	if (!path.path_is_relative) {
+		return LoadPath(path.path, separator);
+	}
+	return LoadPath(base_path + path.path, separator);
+}
+
+DuckLakePath DuckLakeMetadataManager::GetRelativePath(const string &path, const string &data_path,
+                                                      const string &separator) {
+	DuckLakePath result;
+	if (StringUtil::StartsWith(path, data_path)) {
+		result.path = path.substr(data_path.size());
+		result.path_is_relative = true;
+	} else {
+		result.path = path;
+		result.path_is_relative = false;
+	}
+	result.path = StorePath(std::move(result.path), separator);
+	return result;
+}
+
+string DuckLakeMetadataManager::GetPathForSchema(SchemaIndex schema_id,
+                                                 const vector<DuckLakeSchemaInfo> &new_schemas_result,
+                                                 const std::function<unique_ptr<QueryResult>(string)> &query_executor,
+                                                 const string &base_data_path, const string &separator) {
+	for (auto &schema : new_schemas_result) {
+		if (schema_id == schema.id) {
+			DuckLakePath path;
+			path.path = schema.path;
+			path.path_is_relative = false;
+			return FromRelativePath(path, base_data_path, separator);
+		}
+	}
+	auto query = StringUtil::Format(R"(
+SELECT path, path_is_relative
+FROM {METADATA_CATALOG}.ducklake_schema
+WHERE schema_id = %d;)",
+	                                schema_id.index);
+	auto result = query_executor(query);
+	for (auto &row : *result) {
+		DuckLakePath path;
+		path.path = row.GetValue<string>(0);
+		path.path_is_relative = row.GetValue<bool>(1);
+		return FromRelativePath(path, base_data_path, separator);
+	}
+	throw InvalidInputException("Failed to get path for schema with id %d - schema not found in metadata catalog",
+	                            schema_id.index);
+}
+
+string DuckLakeMetadataManager::GetPathForTable(TableIndex table_id, const vector<DuckLakeTableInfo> &new_tables,
+                                                const vector<DuckLakeSchemaInfo> &new_schemas_result,
+                                                const std::function<unique_ptr<QueryResult>(string)> &query_executor,
+                                                const string &base_data_path, const string &separator) {
+	for (const auto &new_table : new_tables) {
+		if (new_table.id == table_id) {
+			// new table - resolve its schema first
+			for (auto &schema : new_schemas_result) {
+				if (schema.id == new_table.schema_id) {
+					DuckLakePath schema_path;
+					schema_path.path = schema.path;
+					schema_path.path_is_relative = false;
+					auto resolved_schema_path = FromRelativePath(schema_path, base_data_path, separator);
+					DuckLakePath table_path;
+					table_path.path = new_table.path;
+					table_path.path_is_relative = false;
+					return FromRelativePath(table_path, resolved_schema_path, separator);
+				}
+			}
+			auto schema_query = StringUtil::Format(R"(
+SELECT s.path, s.path_is_relative
+FROM {METADATA_CATALOG}.ducklake_schema s
+WHERE schema_id = %d;)",
+			                                       new_table.schema_id.index);
+			auto result = query_executor(schema_query);
+			for (auto &row : *result) {
+				DuckLakePath schema_path;
+				schema_path.path = row.GetValue<string>(0);
+				schema_path.path_is_relative = row.GetValue<bool>(1);
+				auto resolved_schema_path = FromRelativePath(schema_path, base_data_path, separator);
+				DuckLakePath table_path;
+				table_path.path = new_table.path;
+				table_path.path_is_relative = false;
+				return FromRelativePath(table_path, resolved_schema_path, separator);
+			}
+		}
+	}
+	auto query = StringUtil::Format(R"(
+SELECT
+	s.path AS s_path,
+	s.path_is_relative AS s_path_is_relative,
+	t.path AS t_path,
+	t.path_is_relative AS t_path_is_relative
+FROM {METADATA_CATALOG}.ducklake_schema s
+JOIN {METADATA_CATALOG}.ducklake_table t
+USING (schema_id)
+WHERE table_id = %d;)",
+	                                table_id.index);
+	auto result = query_executor(query);
+	for (auto &row : *result) {
+		DuckLakePath schema_path;
+		schema_path.path = row.GetValue<string>(0);
+		schema_path.path_is_relative = row.GetValue<bool>(1);
+		auto resolved_schema_path = FromRelativePath(schema_path, base_data_path, separator);
+		DuckLakePath table_path;
+		table_path.path = row.GetValue<string>(2);
+		table_path.path_is_relative = row.GetValue<bool>(3);
+		return FromRelativePath(table_path, resolved_schema_path, separator);
+	}
+	throw InvalidInputException("Failed to get path for table with id %d - table not found in metadata catalog",
+	                            table_id.index);
+}
+
+DuckLakePath DuckLakeMetadataManager::GetRelativePath(SchemaIndex schema_id, const string &path,
+                                                      const vector<DuckLakeSchemaInfo> &new_schemas_result,
+                                                      const std::function<unique_ptr<QueryResult>(string)> &query_executor,
+                                                      const string &base_data_path, const string &separator) {
+	return GetRelativePath(path, GetPathForSchema(schema_id, new_schemas_result, query_executor, base_data_path, separator),
+	                       separator);
+}
+
+DuckLakePath DuckLakeMetadataManager::GetRelativePath(TableIndex table_id, const string &path,
+                                                      const vector<DuckLakeTableInfo> &new_tables,
+                                                      const vector<DuckLakeSchemaInfo> &new_schemas_result,
+                                                      const std::function<unique_ptr<QueryResult>(string)> &query_executor,
+                                                      const string &base_data_path, const string &separator) {
+	return GetRelativePath(
+	    path, GetPathForTable(table_id, new_tables, new_schemas_result, query_executor, base_data_path, separator),
+	    separator);
+}
+
 // Optimized version using DuckDB Appender API for much faster inserts
 string DuckLakeMetadataManager::WriteNewDataFilesWithAppender(DuckLakeSnapshot &commit_snapshot,
                                                               const vector<DuckLakeFileInfo> &new_files,
