@@ -136,7 +136,7 @@ FileSystem &DuckLakeMetadataManager::GetFileSystem() {
 	return FileSystem::GetFileSystem(transaction.GetCatalog().GetDatabase());
 }
 
-string DuckLakeMetadataManager::ListAggregation(const vector<pair<string, string>> &fields) const {
+string DuckLakeMetadataManager::ListAggregation(const vector<pair<string, string>> &fields) {
 	// DuckDB syntax: LIST({'key1': val1, 'key2': val2, ...})
 	string fields_part;
 	for (auto const &entry : fields) {
@@ -404,7 +404,7 @@ static bool AddChildColumn(vector<DuckLakeColumnInfo> &columns, FieldIndex paren
 	return false;
 }
 
-vector<DuckLakeTag> DuckLakeMetadataManager::LoadTags(const Value &tag_map) const {
+vector<DuckLakeTag> DuckLakeMetadataManager::LoadTags(const Value &tag_map) {
 	vector<DuckLakeTag> result;
 	for (auto &tag : ListValue::GetChildren(tag_map)) {
 		auto &struct_children = StructValue::GetChildren(tag);
@@ -419,7 +419,7 @@ vector<DuckLakeTag> DuckLakeMetadataManager::LoadTags(const Value &tag_map) cons
 	return result;
 }
 
-vector<DuckLakeInlinedTableInfo> DuckLakeMetadataManager::LoadInlinedDataTables(const Value &list) const {
+vector<DuckLakeInlinedTableInfo> DuckLakeMetadataManager::LoadInlinedDataTables(const Value &list) {
 	vector<DuckLakeInlinedTableInfo> result;
 	for (auto &val : ListValue::GetChildren(list)) {
 		auto &struct_children = StructValue::GetChildren(val);
@@ -431,7 +431,7 @@ vector<DuckLakeInlinedTableInfo> DuckLakeMetadataManager::LoadInlinedDataTables(
 	return result;
 }
 
-vector<DuckLakeMacroImplementation> DuckLakeMetadataManager::LoadMacroImplementations(const Value &list) const {
+vector<DuckLakeMacroImplementation> DuckLakeMetadataManager::LoadMacroImplementations(const Value &list) {
 	vector<DuckLakeMacroImplementation> result;
 	for (auto &val : ListValue::GetChildren(list)) {
 		auto &struct_children = StructValue::GetChildren(val);
@@ -547,10 +547,19 @@ WHERE {SNAPSHOT_ID} >= begin_snapshot
 
 DuckLakeCatalogInfo DuckLakeMetadataManager::GetCatalogForSnapshot(DuckLakeSnapshot snapshot) {
 	auto &ducklake_catalog = transaction.GetCatalog();
-	auto &base_data_path = ducklake_catalog.DataPath();
+	return BuildCatalogForSnapshot(
+	    snapshot,
+	    [this](DuckLakeSnapshot s, string q) { return Query(s, q); },
+	    ducklake_catalog.DataPath(), ducklake_catalog.Separator());
+}
+
+DuckLakeCatalogInfo DuckLakeMetadataManager::BuildCatalogForSnapshot(
+    DuckLakeSnapshot snapshot,
+    const std::function<unique_ptr<QueryResult>(DuckLakeSnapshot, string)> &query_executor,
+    const string &base_data_path, const string &separator) {
 	DuckLakeCatalogInfo catalog;
 	// load the schema information
-	auto result = transaction.Query(snapshot, R"(
+	auto result = query_executor(snapshot, R"(
 SELECT schema_id, schema_uuid::VARCHAR, schema_name, path, path_is_relative
 FROM {METADATA_CATALOG}.ducklake_schema
 WHERE {SNAPSHOT_ID} >= begin_snapshot AND ({SNAPSHOT_ID} < end_snapshot OR end_snapshot IS NULL)
@@ -573,7 +582,7 @@ WHERE {SNAPSHOT_ID} >= begin_snapshot AND ({SNAPSHOT_ID} < end_snapshot OR end_s
 			path.path = row.GetValue<string>(3);
 			path.path_is_relative = row.GetValue<bool>(4);
 
-			schema.path = FromRelativePath(path);
+			schema.path = FromRelativePath(path, base_data_path, separator);
 		}
 		schema_map[schema.id] = catalog.schemas.size();
 		catalog.schemas.push_back(std::move(schema));
@@ -589,7 +598,7 @@ WHERE {SNAPSHOT_ID} >= begin_snapshot AND ({SNAPSHOT_ID} < end_snapshot OR end_s
 	};
 
 	// load the table information
-	result = transaction.Query(snapshot, StringUtil::Format(R"(
+	result = query_executor(snapshot, StringUtil::Format(R"(
 SELECT schema_id, tbl.table_id, table_uuid::VARCHAR, table_name,
 	(
 		SELECT %s
@@ -660,7 +669,7 @@ ORDER BY table_id, parent_column NULLS FIRST, column_order
 				path.path = row.GetValue<string>(6);
 				path.path_is_relative = row.GetValue<bool>(7);
 
-				table_info.path = FromRelativePath(path, schema.path);
+				table_info.path = FromRelativePath(path, schema.path, separator);
 			}
 			tables.push_back(std::move(table_info));
 		}
@@ -705,7 +714,7 @@ ORDER BY table_id, parent_column NULLS FIRST, column_order
 		}
 	}
 	// load view information
-	result = transaction.Query(snapshot, StringUtil::Format(R"(
+	result = query_executor(snapshot, StringUtil::Format(R"(
 SELECT view_id, view_uuid, schema_id, view_name, dialect, sql, column_aliases,
 	(
 		SELECT %s
@@ -754,7 +763,7 @@ WHERE {SNAPSHOT_ID} >= begin_snapshot AND ({SNAPSHOT_ID} < view.end_snapshot OR 
 	    {"dialect", "dialect"}, {"sql", "sql"}, {"type", "type"}, {"params", macro_param_query}};
 
 	// load macro information
-	result = transaction.Query(snapshot, StringUtil::Format(R"(
+	result = query_executor(snapshot, StringUtil::Format(R"(
 SELECT schema_id, ducklake_macro.macro_id, macro_name, (
 		SELECT %s
 		FROM {METADATA_CATALOG}.ducklake_macro_impl
@@ -779,7 +788,7 @@ WHERE  {SNAPSHOT_ID} >= ducklake_macro.begin_snapshot AND ({SNAPSHOT_ID} < duckl
 	}
 
 	// load partition information
-	result = transaction.Query(snapshot, R"(
+	result = query_executor(snapshot, R"(
 SELECT partition_id, part.table_id, partition_key_index, column_id, transform
 FROM {METADATA_CATALOG}.ducklake_partition_info part
 JOIN {METADATA_CATALOG}.ducklake_partition_column part_col USING (partition_id)
@@ -810,7 +819,7 @@ ORDER BY part.table_id, partition_id, partition_key_index
 	}
 
 	// load sort information
-	result = transaction.Query(snapshot, R"(
+	result = query_executor(snapshot, R"(
 SELECT sort.sort_id, sort.table_id, sort_expr.sort_key_index, sort_expr.expression, sort_expr.dialect, sort_expr.sort_direction, sort_expr.null_order
 FROM {METADATA_CATALOG}.ducklake_sort_info sort
 JOIN {METADATA_CATALOG}.ducklake_sort_expression sort_expr USING (sort_id)

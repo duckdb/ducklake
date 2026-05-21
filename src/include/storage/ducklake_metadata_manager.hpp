@@ -187,6 +187,13 @@ public:
 
 	//! Get the catalog information for a specific snapshot
 	virtual DuckLakeCatalogInfo GetCatalogForSnapshot(DuckLakeSnapshot snapshot);
+	//! Transaction-free build of the catalog snapshot. Caller supplies a snapshot-aware query
+	//! executor (responsible for `{METADATA_CATALOG}` / `{SNAPSHOT_ID}` substitution) plus the
+	//! data path and separator used for resolving stored relative paths.
+	static DuckLakeCatalogInfo
+	BuildCatalogForSnapshot(DuckLakeSnapshot snapshot,
+	                        const std::function<unique_ptr<QueryResult>(DuckLakeSnapshot, string)> &query_executor,
+	                        const string &base_data_path, const string &separator);
 	virtual vector<DuckLakeGlobalStatsInfo> GetGlobalTableStats(DuckLakeSnapshot snapshot);
 	virtual vector<DuckLakeFileListEntry> GetFilesForTable(DuckLakeTableEntry &table, DuckLakeSnapshot snapshot,
 	                                                       const FilterPushdownInfo *filter_info = nullptr);
@@ -351,13 +358,13 @@ protected:
 	//! Wrap field selections with list aggregation of struct objects (DBMS-specific)
 	//! For DuckDB: LIST({'key1': val1, 'key2': val2, ...})
 	//! For Postgres: jsonb_agg(jsonb_build_object('key1', val1, 'key2', val2, ...))
-	virtual string ListAggregation(const vector<pair<string, string>> &fields) const;
+	static string ListAggregation(const vector<pair<string, string>> &fields);
 	//! Parse tag list from ListAggregation value
-	virtual vector<DuckLakeTag> LoadTags(const Value &tag_map) const;
+	static vector<DuckLakeTag> LoadTags(const Value &tag_map);
 	//! Parse inlined data tables list from ListAggregation value
-	virtual vector<DuckLakeInlinedTableInfo> LoadInlinedDataTables(const Value &list) const;
+	static vector<DuckLakeInlinedTableInfo> LoadInlinedDataTables(const Value &list);
 	//! Parse macro implementations list from ListAggregation value
-	virtual vector<DuckLakeMacroImplementation> LoadMacroImplementations(const Value &list) const;
+	static vector<DuckLakeMacroImplementation> LoadMacroImplementations(const Value &list);
 
 public:
 	//! Get path relative to catalog path

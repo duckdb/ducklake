@@ -30,6 +30,8 @@ struct DuckLakeCommitContext {
 	std::function<void()> prepare_retry;
 	//! Runs a metadata-DB query during post-commit cleanup.
 	std::function<unique_ptr<QueryResult>(string)> query_metadata;
+	//! Runs a snapshot-templated metadata-DB query (handles {SNAPSHOT_ID} substitution).
+	std::function<unique_ptr<QueryResult>(DuckLakeSnapshot, string)> query_metadata_with_snapshot;
 	//! Returns the current global table stats for a single table id (first-attempt path).
 	std::function<shared_ptr<DuckLakeTableStats>(TableIndex)> get_table_stats;
 	//! Builds a DuckLakeStats map from a vector of per-snapshot global stats (retry path).

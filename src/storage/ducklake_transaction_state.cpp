@@ -1217,7 +1217,8 @@ string DuckLakeTransactionState::CommitChanges(DuckLakeCommitState &commit_state
 			    table.schema_id, table.path, new_schemas_result, context.query_metadata, data_path, separator));
 		}
 		batch_queries += DuckLakeMetadataManager::WriteNewTables(result.new_tables, resolved_table_paths);
-		auto existing_catalog = metadata_manager.GetCatalogForSnapshot(commit_snapshot);
+		auto existing_catalog = DuckLakeMetadataManager::BuildCatalogForSnapshot(
+		    commit_snapshot, context.query_metadata_with_snapshot, data_path, separator);
 		batch_queries +=
 		    DuckLakeMetadataManager::WriteNewPartitionKeys(existing_catalog.partitions, result.new_partition_keys);
 		batch_queries += DuckLakeMetadataManager::WriteNewViews(result.new_views);

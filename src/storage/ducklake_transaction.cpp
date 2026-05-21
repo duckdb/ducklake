@@ -1337,6 +1337,9 @@ void DuckLakeTransaction::RunCommitLoop(DuckLakeSnapshot transaction_snapshot,
 	context.query_metadata = [&](string q) {
 		return metadata_manager->Query(q);
 	};
+	context.query_metadata_with_snapshot = [&](DuckLakeSnapshot s, string q) {
+		return metadata_manager->Query(s, q);
+	};
 	context.get_table_stats = [&](TableIndex table_id) {
 		return ducklake_catalog.GetTableStats(*this, table_id);
 	};
