@@ -20,6 +20,7 @@ DuckLakeInitializer::DuckLakeInitializer(ClientContext &context, DuckLakeCatalog
 
 string DuckLakeInitializer::GetAttachOptions() {
 	vector<string> attach_options;
+	const string metadata_type = catalog.MetadataType();
 	if (options.access_mode != AccessMode::AUTOMATIC) {
 		switch (options.access_mode) {
 		case AccessMode::READ_ONLY:
@@ -32,10 +33,13 @@ string DuckLakeInitializer::GetAttachOptions() {
 			throw InternalException("Unsupported access mode in DuckLake attach");
 		}
 	}
+	if ((metadata_type == "quack" || metadata_type == "quack_scanner") && !options.metadata_schema.empty() &&
+	    options.metadata_parameters.find("schema") == options.metadata_parameters.end()) {
+		attach_options.push_back("schema " + Value(options.metadata_schema).ToSQLString());
+	}
 	for (auto &option : options.metadata_parameters) {
 		attach_options.push_back(option.first + " " + option.second.ToSQLString());
 	}
-	const string metadata_type = catalog.MetadataType();
 	if (metadata_type.empty() || metadata_type == "duckdb") {
 		// this is duckdb, we always do latest storage
 		attach_options.push_back(StringUtil::Format("STORAGE_VERSION '%s'", "latest"));
