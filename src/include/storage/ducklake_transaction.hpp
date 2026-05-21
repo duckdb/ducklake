@@ -312,13 +312,11 @@ public:
 
 private:
 	void FlushChanges();
-	vector<DuckLakeSchemaInfo> GetNewSchemas(DuckLakeCommitState &commit_state);
-	NewTableInfo GetNewTables(DuckLakeCommitState &commit_state, TransactionChangeInformation &transaction_changes);
 	NewMacroInfo GetNewMacros(DuckLakeCommitState &commit_state, TransactionChangeInformation &transaction_changes);
-	DuckLakePartitionInfo GetNewPartitionKey(DuckLakeCommitState &commit_state, DuckLakeTableEntry &tabletable_id);
-	DuckLakeSortInfo GetNewSortKey(DuckLakeCommitState &commit_state, DuckLakeTableEntry &tabletable_id);
-	DuckLakeTableInfo GetNewTable(DuckLakeCommitState &commit_state, DuckLakeTableEntry &table);
-	DuckLakeViewInfo GetNewView(DuckLakeCommitState &commit_state, DuckLakeViewEntry &view);
+	static DuckLakePartitionInfo GetNewPartitionKey(DuckLakeCommitState &commit_state, DuckLakeTableEntry &table);
+	static DuckLakeSortInfo GetNewSortKey(DuckLakeCommitState &commit_state, DuckLakeTableEntry &table);
+	static DuckLakeTableInfo GetNewTable(DuckLakeCommitState &commit_state, DuckLakeTableEntry &table);
+	static DuckLakeViewInfo GetNewView(DuckLakeCommitState &commit_state, DuckLakeViewEntry &view);
 	DuckLakeFileInfo GetNewDataFile(const DuckLakeDataFile &file, DuckLakeCommitState &commit_state,
 	                                TableIndex table_id, optional_idx row_id_start);
 	NewDataInfo GetNewDataFiles(string &batch_query, DuckLakeCommitState &commit_state,
@@ -331,13 +329,7 @@ private:
 	string UpdateGlobalTableStats(TableIndex table_id, const DuckLakeNewGlobalStats &new_stats);
 	//! Return the set of changes made by this transaction
 	TransactionChangeInformation GetTransactionChanges() const;
-	void GetNewTableInfo(DuckLakeCommitState &commit_state, DuckLakeCatalogSet &catalog_set,
-	                     reference<CatalogEntry> table_entry, NewTableInfo &result,
-	                     TransactionChangeInformation &transaction_changes);
 	void GetNewMacroInfo(DuckLakeCommitState &commit_state, reference<CatalogEntry> macro_entry, NewMacroInfo &result);
-	void GetNewViewInfo(DuckLakeCommitState &commit_state, DuckLakeCatalogSet &catalog_set,
-	                    reference<CatalogEntry> table_entry, NewTableInfo &result,
-	                    TransactionChangeInformation &transaction_changes);
 	CompactionInformation GetCompactionChanges(DuckLakeCommitState &commit_state, CompactionType type);
 
 	void AlterEntryInternal(DuckLakeTableEntry &old_entry, unique_ptr<CatalogEntry> new_entry);

@@ -66,6 +66,15 @@ public:
 	string CommitChanges(DuckLakeCommitState &commit_state, TransactionChangeInformation &transaction_changes,
 	                     optional_ptr<vector<DuckLakeGlobalStatsInfo>> stats);
 
+	vector<DuckLakeSchemaInfo> GetNewSchemas(DuckLakeCommitState &commit_state);
+	NewTableInfo GetNewTables(DuckLakeCommitState &commit_state, TransactionChangeInformation &transaction_changes);
+	void GetNewTableInfo(DuckLakeCommitState &commit_state, DuckLakeCatalogSet &catalog_set,
+	                     reference<CatalogEntry> table_entry, NewTableInfo &result,
+	                     TransactionChangeInformation &transaction_changes);
+	void GetNewViewInfo(DuckLakeCommitState &commit_state, DuckLakeCatalogSet &catalog_set,
+	                    reference<CatalogEntry> view_entry, NewTableInfo &result,
+	                    TransactionChangeInformation &transaction_changes);
+
 	static void DropEmptySupersededInlinedTables(const DuckLakeCommitContext &context);
 
 	void CleanupFiles();
