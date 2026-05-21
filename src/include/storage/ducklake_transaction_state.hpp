@@ -63,6 +63,9 @@ public:
 	string WriteSnapshotChanges(DuckLakeCommitState &commit_state, TransactionChangeInformation &changes,
 	                            const DuckLakeSnapshotCommit &commit_info) const;
 
+	string CommitChanges(DuckLakeCommitState &commit_state, TransactionChangeInformation &transaction_changes,
+	                     optional_ptr<vector<DuckLakeGlobalStatsInfo>> stats);
+
 	static void DropEmptySupersededInlinedTables(const DuckLakeCommitContext &context);
 
 	void CleanupFiles();

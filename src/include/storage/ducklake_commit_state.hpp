@@ -11,11 +11,42 @@
 #include "common/ducklake_data_file.hpp"
 #include "common/ducklake_snapshot.hpp"
 #include "common/index.hpp"
+#include "storage/ducklake_metadata_info.hpp"
 #include "storage/ducklake_schema_entry.hpp"
 #include "storage/ducklake_table_entry.hpp"
 #include "storage/ducklake_view_entry.hpp"
 
 namespace duckdb {
+
+struct NewTableInfo {
+	vector<DuckLakeTableInfo> new_tables;
+	vector<DuckLakeViewInfo> new_views;
+	vector<DuckLakePartitionInfo> new_partition_keys;
+	vector<DuckLakeTagInfo> new_tags;
+	vector<DuckLakeColumnTagInfo> new_column_tags;
+	vector<DuckLakeDroppedColumn> dropped_columns;
+	vector<DuckLakeNewColumn> new_columns;
+	vector<DuckLakeTableInfo> new_inlined_data_tables;
+	vector<DuckLakeSortInfo> new_sort_keys;
+};
+
+struct NewMacroInfo {
+	vector<DuckLakeMacroInfo> new_macros;
+};
+
+struct NewNameMapInfo {
+	vector<DuckLakeColumnMappingInfo> new_column_mappings;
+};
+
+struct NewDataInfo {
+	vector<DuckLakeFileInfo> new_files;
+	vector<DuckLakeInlinedDataInfo> new_inlined_data;
+};
+
+struct CompactionInformation {
+	vector<DuckLakeCompactedFileInfo> compacted_files;
+	vector<DuckLakeFileInfo> new_files;
+};
 
 struct DuckLakeCommitState {
 	explicit DuckLakeCommitState(DuckLakeSnapshot &snapshot) : commit_snapshot(snapshot) {

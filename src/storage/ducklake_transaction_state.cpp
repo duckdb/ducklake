@@ -361,6 +361,188 @@ string DuckLakeTransactionState::WriteSnapshotChanges(DuckLakeCommitState &commi
 	return DuckLakeMetadataManager::WriteSnapshotChangesSql(change_info, commit_info);
 }
 
+string DuckLakeTransactionState::CommitChanges(DuckLakeCommitState &commit_state,
+                                               TransactionChangeInformation &transaction_changes,
+                                               optional_ptr<vector<DuckLakeGlobalStatsInfo>> stats) {
+	auto &commit_snapshot = commit_state.commit_snapshot;
+	auto &metadata_manager = transaction.metadata_manager;
+
+	transaction.ducklake_catalog.EnsureCommitInfoProvided(transaction.commit_info);
+
+	string batch_queries;
+	// drop entries
+	if (!dropped_tables.empty()) {
+		batch_queries += DuckLakeMetadataManager::DropTables(dropped_tables, false);
+	}
+
+	if (!renamed_tables.empty()) {
+		batch_queries += DuckLakeMetadataManager::DropTables(renamed_tables, true);
+	}
+
+	if (!dropped_views.empty()) {
+		batch_queries += DuckLakeMetadataManager::DropViews(dropped_views, false);
+	}
+
+	if (!renamed_views.empty()) {
+		batch_queries += DuckLakeMetadataManager::DropViews(renamed_views, true);
+	}
+
+	if (!dropped_scalar_macros.empty()) {
+		batch_queries += DuckLakeMetadataManager::DropMacros(dropped_scalar_macros);
+	}
+
+	if (!dropped_table_macros.empty()) {
+		batch_queries += DuckLakeMetadataManager::DropMacros(dropped_table_macros);
+	}
+	if (!dropped_schemas.empty()) {
+		set<SchemaIndex> dropped_schema_ids;
+		for (auto &entry : dropped_schemas) {
+			dropped_schema_ids.insert(entry.first);
+		}
+		batch_queries += DuckLakeMetadataManager::DropSchemas(dropped_schema_ids);
+	}
+	// write new schemas
+	vector<DuckLakeSchemaInfo> new_schemas_result;
+	if (new_schemas) {
+		new_schemas_result = transaction.GetNewSchemas(commit_state);
+		vector<DuckLakePath> resolved_schema_paths;
+		resolved_schema_paths.reserve(new_schemas_result.size());
+		for (auto &schema : new_schemas_result) {
+			resolved_schema_paths.push_back(metadata_manager->GetRelativePath(schema.path));
+		}
+		batch_queries += DuckLakeMetadataManager::WriteNewSchemas(new_schemas_result, resolved_schema_paths);
+	}
+
+	// write new tables
+	vector<DuckLakeTableInfo> new_tables_result;
+	vector<DuckLakeTableInfo> new_inlined_data_tables_result;
+	if (!new_tables.empty()) {
+		auto result = transaction.GetNewTables(commit_state, transaction_changes);
+		vector<DuckLakePath> resolved_table_paths;
+		resolved_table_paths.reserve(result.new_tables.size());
+		for (auto &table : result.new_tables) {
+			resolved_table_paths.push_back(
+			    metadata_manager->GetRelativePath(table.schema_id, table.path, new_schemas_result));
+		}
+		batch_queries += DuckLakeMetadataManager::WriteNewTables(result.new_tables, resolved_table_paths);
+		auto existing_catalog = metadata_manager->GetCatalogForSnapshot(commit_snapshot);
+		batch_queries +=
+		    DuckLakeMetadataManager::WriteNewPartitionKeys(existing_catalog.partitions, result.new_partition_keys);
+		batch_queries += DuckLakeMetadataManager::WriteNewViews(result.new_views);
+		batch_queries += DuckLakeMetadataManager::WriteNewTags(result.new_tags);
+		batch_queries += DuckLakeMetadataManager::WriteNewColumnTags(result.new_column_tags);
+		batch_queries += DuckLakeMetadataManager::WriteDroppedColumns(result.dropped_columns);
+		batch_queries += DuckLakeMetadataManager::WriteNewColumns(result.new_columns);
+		batch_queries += metadata_manager->WriteNewInlinedTables(commit_snapshot, result.new_inlined_data_tables);
+		batch_queries += DuckLakeMetadataManager::WriteNewSortKeys(existing_catalog.sorts, result.new_sort_keys);
+		new_tables_result = result.new_tables;
+		new_inlined_data_tables_result = result.new_inlined_data_tables;
+	}
+
+	if (!new_scalar_macros.empty() || !new_table_macros.empty()) {
+		auto result = transaction.GetNewMacros(commit_state, transaction_changes);
+		batch_queries += DuckLakeMetadataManager::WriteNewMacros(result.new_macros);
+	}
+
+	// write new name maps
+	if (!transaction.new_name_maps.name_maps.empty()) {
+		auto result = transaction.GetNewNameMaps(commit_state);
+		batch_queries += DuckLakeMetadataManager::WriteNewColumnMappings(result.new_column_mappings);
+	}
+
+	// write new data / data files
+	bool has_table_data_changes = local_changes.HasChanges();
+	if (has_table_data_changes) {
+		auto result = transaction.GetNewDataFiles(batch_queries, commit_state, stats);
+		batch_queries += metadata_manager->WriteNewDataFiles(commit_snapshot, result.new_files, new_tables_result,
+		                                                     new_schemas_result);
+		batch_queries += metadata_manager->WriteNewInlinedData(commit_snapshot, result.new_inlined_data,
+		                                                       new_tables_result, new_inlined_data_tables_result);
+	}
+
+	// in case of a retry, we generate the deletion of inlined data from the tables
+	if (!flushed_inlined_tables.empty()) {
+		batch_queries += DuckLakeMetadataManager::GenerateDeleteFlushedInlinedData(flushed_inlined_tables);
+	}
+
+	// drop data files
+	if (!dropped_files.empty()) {
+		set<DataFileIndex> dropped_indexes;
+		for (auto &entry : dropped_files) {
+			dropped_indexes.insert(entry.second);
+		}
+		batch_queries += DuckLakeMetadataManager::DropDataFiles(dropped_indexes);
+	}
+
+	if (has_table_data_changes) {
+		// write new delete files
+		vector<DuckLakeOverwrittenDeleteFile> overwritten_delete_files;
+		auto file_list = transaction.GetNewDeleteFiles(commit_state, overwritten_delete_files);
+		vector<DuckLakePath> resolved_overwritten_paths;
+		resolved_overwritten_paths.reserve(overwritten_delete_files.size());
+		for (auto &file : overwritten_delete_files) {
+			resolved_overwritten_paths.push_back(metadata_manager->GetRelativePath(file.path));
+		}
+		batch_queries +=
+		    DuckLakeMetadataManager::DeleteOverwrittenDeleteFiles(overwritten_delete_files, resolved_overwritten_paths);
+		vector<DuckLakePath> resolved_delete_paths;
+		resolved_delete_paths.reserve(file_list.size());
+		for (auto &file : file_list) {
+			resolved_delete_paths.push_back(
+			    metadata_manager->GetRelativePath(file.table_id, file.path, new_tables_result, new_schemas_result));
+		}
+		batch_queries += DuckLakeMetadataManager::WriteNewDeleteFiles(file_list, resolved_delete_paths);
+
+		// write new inlined deletes (for inlined data tables)
+		auto inlined_deletes = transaction.GetNewInlinedDeletes(commit_state);
+		batch_queries += DuckLakeMetadataManager::WriteNewInlinedDeletes(inlined_deletes);
+
+		// write new inlined file deletes (for parquet files)
+		auto inlined_file_deletes = transaction.GetNewInlinedFileDeletes(commit_state);
+		batch_queries += metadata_manager->WriteNewInlinedFileDeletes(commit_snapshot, inlined_file_deletes);
+
+		// write compactions
+		auto compaction_merge_adjacent_changes =
+		    transaction.GetCompactionChanges(commit_state, CompactionType::MERGE_ADJACENT_TABLES);
+		vector<DuckLakePath> resolved_merge_paths;
+		resolved_merge_paths.reserve(compaction_merge_adjacent_changes.compacted_files.size());
+		for (auto &compaction : compaction_merge_adjacent_changes.compacted_files) {
+			resolved_merge_paths.push_back(metadata_manager->GetRelativePath(compaction.path));
+		}
+		batch_queries +=
+		    DuckLakeMetadataManager::WriteCompactions(compaction_merge_adjacent_changes.compacted_files,
+		                                              CompactionType::MERGE_ADJACENT_TABLES, resolved_merge_paths);
+		batch_queries += metadata_manager->WriteNewDataFiles(
+		    commit_snapshot, compaction_merge_adjacent_changes.new_files, new_tables_result, new_schemas_result);
+
+		auto compaction_rewrite_delete_changes =
+		    transaction.GetCompactionChanges(commit_state, CompactionType::REWRITE_DELETES);
+		batch_queries += metadata_manager->WriteNewDataFiles(
+		    commit_snapshot, compaction_rewrite_delete_changes.new_files, new_tables_result, new_schemas_result);
+		// REWRITE_DELETES ignores resolved_paths; pass empty.
+		batch_queries += DuckLakeMetadataManager::WriteCompactions(
+		    compaction_rewrite_delete_changes.compacted_files, CompactionType::REWRITE_DELETES, vector<DuckLakePath>());
+	}
+
+	// Tracking for tables that had schema changes
+	set<TableIndex> tables_with_schema_changes;
+	for (auto &table_id : transaction_changes.altered_tables) {
+		if (!table_id.IsTransactionLocal() &&
+		    transaction_changes.altered_tables_with_schema_version_changes.find(table_id) !=
+		        transaction_changes.altered_tables_with_schema_version_changes.end()) {
+			tables_with_schema_changes.insert(table_id);
+		}
+	}
+	for (auto &new_table : new_tables_result) {
+		if (!new_table.id.IsTransactionLocal()) {
+			tables_with_schema_changes.insert(new_table.id);
+		}
+	}
+	batch_queries += DuckLakeMetadataManager::InsertNewSchema(commit_snapshot, tables_with_schema_changes);
+
+	return batch_queries;
+}
+
 SnapshotDeletedFromFiles DuckLakeTransactionState::GetFilesDeletedOrDroppedAfterSnapshot(
     const std::function<unique_ptr<QueryResult>(string)> &executor) {
 	// get all changes made to the system after the snapshot was started
@@ -478,7 +660,7 @@ void DuckLakeTransactionState::Commit(DuckLakeSnapshot transaction_snapshot,
 			DuckLakeCommitState commit_state(commit_snapshot);
 			// write the new snapshot
 			string batch_queries = DuckLakeMetadataManager::InsertSnapshotSql();
-			batch_queries += transaction.CommitChanges(commit_state, attempt_changes, stats);
+			batch_queries += CommitChanges(commit_state, attempt_changes, stats);
 			batch_queries += WriteSnapshotChanges(commit_state, attempt_changes, context.commit_info);
 			auto res = context.execute_commit_batch(commit_snapshot, batch_queries);
 			if (res->HasError()) {
