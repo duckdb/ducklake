@@ -19,10 +19,8 @@ struct DuckLakeCommitContext {
 	std::function<DuckLakeSnapshot()> get_snapshot;
 	//! Executes the batched snapshot/changes SQL against the metadata DB.
 	std::function<unique_ptr<QueryResult>(DuckLakeSnapshot, string &)> execute_commit_batch;
-	//! Returns and clears the pending metadata-cache-clear flag.
-	std::function<bool()> take_pending_cache_clear;
-	//! Clears the metadata manager cache.
-	std::function<void()> clear_cache;
+	//! Clears the metadata manager cache if a clear was pending.
+	std::function<void()> flush_cache_if_pending;
 	//! Commits the underlying metadata connection.
 	std::function<void()> commit_connection;
 	//! Rolls back the metadata connection if a transaction is active.
@@ -33,6 +31,10 @@ struct DuckLakeCommitContext {
 	std::function<unique_ptr<QueryResult>(string)> query_metadata;
 	//! Invalidates the cached schema in the catalog for a given schema version.
 	std::function<void(idx_t)> invalidate_schema_cache;
+	//! Publishes the new schema version onto the transaction.
+	std::function<void(idx_t)> set_catalog_version;
+	//! Records the committed snapshot id on the catalog.
+	std::function<void(idx_t)> set_committed_snapshot_id;
 	//! Author / message / extra info for the snapshot row.
 	DuckLakeSnapshotCommit commit_info;
 };
@@ -42,7 +44,7 @@ struct DuckLakeCommitContext {
 //! database. Owned by DuckLakeTransaction via a back-reference.
 class DuckLakeTransactionState {
 public:
-	explicit DuckLakeTransactionState(DuckLakeTransaction &transaction);
+	DuckLakeTransactionState(DuckLakeTransaction &transaction, DatabaseInstance &db);
 	~DuckLakeTransactionState();
 
 	void Commit(DuckLakeSnapshot transaction_snapshot, const TransactionChangeInformation &transaction_changes,

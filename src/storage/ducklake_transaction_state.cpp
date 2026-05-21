@@ -17,8 +17,8 @@
 
 namespace duckdb {
 
-DuckLakeTransactionState::DuckLakeTransactionState(DuckLakeTransaction &transaction)
-    : transaction(transaction), db(transaction.db) {
+DuckLakeTransactionState::DuckLakeTransactionState(DuckLakeTransaction &transaction, DatabaseInstance &db)
+    : transaction(transaction), db(db) {
 }
 
 DuckLakeTransactionState::~DuckLakeTransactionState() {
@@ -485,14 +485,12 @@ void DuckLakeTransactionState::Commit(DuckLakeSnapshot transaction_snapshot,
 				res->GetErrorObject().Throw("Failed to flush changes into DuckLake: ");
 			}
 			bool flushed_inlined = !flushed_inlined_tables.empty();
-			if (context.take_pending_cache_clear()) {
-				context.clear_cache();
-			}
+			context.flush_cache_if_pending();
 			context.commit_connection();
 			if (flushed_inlined) {
 				DropEmptySupersededInlinedTables(context);
 			}
-			transaction.catalog_version = commit_snapshot.schema_version;
+			context.set_catalog_version(commit_snapshot.schema_version);
 
 			// finished writing
 			break;
@@ -532,7 +530,7 @@ void DuckLakeTransactionState::Commit(DuckLakeSnapshot transaction_snapshot,
 		}
 	}
 	// If we got here, this snapshot was successful
-	transaction.ducklake_catalog.SetCommittedSnapshotId(commit_snapshot.snapshot_id);
+	context.set_committed_snapshot_id(commit_snapshot.snapshot_id);
 }
 
 } // namespace duckdb
