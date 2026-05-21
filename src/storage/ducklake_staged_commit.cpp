@@ -73,8 +73,7 @@ static string EmitStagedDataFiles(const LocalTableChanges &local_changes, const 
 			    file.file_size_bytes, DuckLakeUtil::OptionalIdxOrNull(file.footer_size),
 			    DuckLakeUtil::OptionalIdxOrNull(file.flush_row_id_start),
 			    DuckLakeUtil::OptionalIdxOrNull(file.partition_id),
-			    DuckLakeUtil::EncryptionKeyLiteral(file.encryption_key),
-			    DuckLakeUtil::MappingIdOrNull(file.mapping_id),
+			    DuckLakeUtil::EncryptionKeyLiteral(file.encryption_key), DuckLakeUtil::MappingIdOrNull(file.mapping_id),
 			    DuckLakeUtil::OptionalIdxOrNull(file.max_partial_file_snapshot));
 			for (auto &stat : file.column_stats) {
 				auto info = DuckLakeColumnStatsInfo::FromColumnStats(stat.first, stat.second);
@@ -188,12 +187,11 @@ string DuckLakeStagedCommit::Build(DuckLakeTransaction &transaction,
 	batch += EmitStagedChangeTouch(transaction_changes, identifier_suffix);
 	batch += EmitStagedDataFiles(transaction.GetLocalChanges(), identifier_suffix);
 	batch += EmitStagedInlinedData(transaction.GetLocalChanges(), transaction, identifier_suffix);
-	batch += StringUtil::Format(
-	    "SELECT * FROM ducklake_commit(%s, %s, %lld, "
-	    "max_retry_count => %llu, retry_wait_ms => %llu, retry_backoff => %f);",
-	    DuckLakeUtil::SQLLiteralToString(identifier_suffix), DuckLakeUtil::SQLLiteralToString(schema_name),
-	    transaction_snapshot.schema_version, retry_config.max_retry_count, retry_config.retry_wait_ms,
-	    retry_config.retry_backoff);
+	batch += StringUtil::Format("SELECT * FROM ducklake_commit(%s, %s, %lld, "
+	                            "max_retry_count => %llu, retry_wait_ms => %llu, retry_backoff => %f);",
+	                            DuckLakeUtil::SQLLiteralToString(identifier_suffix),
+	                            DuckLakeUtil::SQLLiteralToString(schema_name), transaction_snapshot.schema_version,
+	                            retry_config.max_retry_count, retry_config.retry_wait_ms, retry_config.retry_backoff);
 	return batch;
 }
 

@@ -2267,7 +2267,7 @@ string DuckLakeMetadataManager::InlinedTableDdlSql(const string &table_name, con
 }
 
 string DuckLakeMetadataManager::InlinedTableRegistrationTuple(idx_t table_id, const string &table_name,
-                                                               idx_t schema_version) {
+                                                              idx_t schema_version) {
 	return StringUtil::Format("(%d, %s, %d)", table_id, SQLString(table_name), schema_version);
 }
 
@@ -3562,7 +3562,7 @@ static string SQLStringOrNull(const string &str) {
 }
 
 string DuckLakeMetadataManager::WriteSnapshotChangesSql(const SnapshotChangeInfo &change_info,
-                                                         const DuckLakeSnapshotCommit &commit_info) {
+                                                        const DuckLakeSnapshotCommit &commit_info) {
 	return StringUtil::Format(
 	    R"(INSERT INTO {METADATA_CATALOG}.ducklake_snapshot_changes VALUES ({SNAPSHOT_ID}, %s, %s, %s, %s);)",
 	    SQLStringOrNull(change_info.changes_made), commit_info.author.ToSQLString(),
@@ -3574,10 +3574,8 @@ string DuckLakeMetadataManager::WriteSnapshotChanges(const SnapshotChangeInfo &c
 	return WriteSnapshotChangesSql(change_info, commit_info);
 }
 
-SnapshotChangeInfo DuckLakeMetadataManager::GetSnapshotAndStatsAndChanges(DuckLakeSnapshot start_snapshot,
-                                                                          SnapshotAndStats &current_snapshot) {
-	// get all changes made to the system after the snapshot was started
-	string query = R"(
+string DuckLakeMetadataManager::GetSnapshotAndStatsAndChangesQuery() {
+	return R"(
 SELECT
     snapshot_id,
     schema_version,
@@ -3626,16 +3624,13 @@ WHERE record_count IS NOT NULL
     AND file_size_bytes IS NOT NULL
 ORDER BY table_id NULLS FIRST;
 	)";
-	auto result = Query(start_snapshot, query);
-	if (result->HasError()) {
-		result->GetErrorObject().Throw("Failed to commit DuckLake transaction - failed to get snapshot and snapshot "
-		                               "changes for conflict resolution:");
-	}
-	// parse changes made by other transactions
-	SnapshotChangeInfo change_info;
+}
 
+SnapshotChangeInfo DuckLakeMetadataManager::ParseSnapshotAndStatsAndChanges(QueryResult &result,
+                                                                            SnapshotAndStats &current_snapshot) {
+	SnapshotChangeInfo change_info;
 	bool first_row = true;
-	for (auto &row : *result) {
+	for (auto &row : result) {
 		if (first_row) {
 			current_snapshot.snapshot.snapshot_id = row.GetValue<idx_t>(0);
 			current_snapshot.snapshot.schema_version = row.GetValue<idx_t>(1);
@@ -3648,6 +3643,13 @@ ORDER BY table_id NULLS FIRST;
 		first_row = false;
 	}
 	return change_info;
+}
+
+SnapshotChangeInfo
+DuckLakeMetadataManager::GetSnapshotAndStatsAndChanges(SnapshotAndStats &current_snapshot,
+                                                       const std::function<unique_ptr<QueryResult>(string)> &executor) {
+	auto result = executor(GetSnapshotAndStatsAndChangesQuery());
+	return ParseSnapshotAndStatsAndChanges(*result, current_snapshot);
 }
 
 SnapshotDeletedFromFiles

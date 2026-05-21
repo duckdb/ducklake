@@ -305,10 +305,11 @@ public:
 	void ApplyServerSideCommit(idx_t schema_version);
 
 	static DuckLakeGlobalStatsInfo ConvertNewGlobalStats(TableIndex table_id,
-	                                                      const DuckLakeNewGlobalStats &new_global_stats);
+	                                                     const DuckLakeNewGlobalStats &new_global_stats);
 
 	static DuckLakeFileInfo BuildDataFileInfo(const DuckLakeDataFile &file, DuckLakeSnapshot &commit_snapshot,
-	                                           TableIndex table_id, optional_idx row_id_start);
+	                                          TableIndex table_id, optional_idx row_id_start);
+
 private:
 	void CleanupFiles();
 	void FlushChanges();
@@ -331,10 +332,6 @@ private:
 	DuckLakeDeleteFileInfo GetNewDeleteFile(TableIndex table_id, const DuckLakeCommitState &commit_state,
 	                                        const DuckLakeDeleteFile &file) const;
 	string UpdateGlobalTableStats(TableIndex table_id, const DuckLakeNewGlobalStats &new_stats);
-	SnapshotAndStats CheckForConflicts(DuckLakeSnapshot transaction_snapshot,
-	                                   const TransactionChangeInformation &changes);
-	void CheckForConflicts(const TransactionChangeInformation &changes, const SnapshotChangeInformation &other_changes,
-	                       DuckLakeSnapshot transaction_snapshot) const;
 	string WriteSnapshotChanges(DuckLakeCommitState &commit_state, TransactionChangeInformation &changes) const;
 	//! Return the set of changes made by this transaction
 	TransactionChangeInformation GetTransactionChanges() const;

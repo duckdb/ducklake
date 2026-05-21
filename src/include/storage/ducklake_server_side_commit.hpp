@@ -28,9 +28,12 @@ struct DuckLakeServerSideCommitResult {
 class DuckLakeServerSideCommit {
 public:
 	DuckLakeServerSideCommit(ClientContext &context, string metadata_schema_name, string identifier_suffix,
-	                          int64_t schema_version);
+	                         int64_t schema_version);
 
 	DuckLakeServerSideCommitResult Run();
+
+	//! Override the retry configuration. If not called, defaults from DuckLakeRetryConfig apply.
+	void SetRetryConfigOverride(const DuckLakeRetryConfig &retry_config);
 
 private:
 	using ColumnKey = std::pair<TableIndex, FieldIndex>;
@@ -54,8 +57,8 @@ private:
 
 	// Phase 3 — merge file stats / allocate file IDs.
 	CommitData BuildCommitData(const map<TableIndex, vector<DuckLakeDataFile>> &files_per_table,
-	                            const map<TableIndex, DuckLakeTableStats> &existing_table_stats,
-	                            DuckLakeSnapshot &commit_snapshot);
+	                           const map<TableIndex, DuckLakeTableStats> &existing_table_stats,
+	                           DuckLakeSnapshot &commit_snapshot);
 
 	// Phase 4 — SQL emission. EmitTableStatsSql / EmitSnapshotSql / EmitSnapshotChangesSql delegate
 	// to DuckLakeMetadataManager statics (placeholder strings) and substitute {METADATA_CATALOG} /
@@ -66,7 +69,7 @@ private:
 	string EmitTableStatsSql(const map<TableIndex, DuckLakeNewGlobalStats> &table_stats) const;
 	string EmitSnapshotSql(const DuckLakeSnapshot &commit_snapshot) const;
 	string EmitSnapshotChangesSql(const DuckLakeSnapshot &commit_snapshot, const SnapshotChangeInfo &change_info,
-	                               const DuckLakeSnapshotCommit &commit_info) const;
+	                              const DuckLakeSnapshotCommit &commit_info) const;
 	string EmitDropStagingSql() const;
 	//! Substitute {METADATA_CATALOG} and snapshot placeholders ({SNAPSHOT_ID}, {SCHEMA_VERSION},
 	//! {NEXT_CATALOG_ID}, {NEXT_FILE_ID}) in SQL produced by DuckLakeMetadataManager statics.
@@ -82,6 +85,7 @@ private:
 	const string identifier_suffix;
 	const int64_t schema_version;
 	Connection fresh_conn;
+	DuckLakeRetryConfig retry_config;
 };
 
 } // namespace duckdb

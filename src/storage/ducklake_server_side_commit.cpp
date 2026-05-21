@@ -23,8 +23,8 @@ LogicalType ResolveType(const string &column_type) {
 }
 
 DuckLakeColumnStats StatsFromRow(const LogicalType &type, const Value &column_size_bytes, const Value &value_count,
-                                  const Value &null_count, const Value &min_value, const Value &max_value,
-                                  const Value &contains_nan) {
+                                 const Value &null_count, const Value &min_value, const Value &max_value,
+                                 const Value &contains_nan) {
 	DuckLakeColumnStats stats(type);
 	if (!column_size_bytes.IsNull()) {
 		stats.column_size_bytes = static_cast<idx_t>(column_size_bytes.GetValue<int64_t>());
@@ -62,10 +62,14 @@ DuckLakeColumnStats StatsFromRow(const LogicalType &type, const Value &column_si
 //===--------------------------------------------------------------------===//
 
 DuckLakeServerSideCommit::DuckLakeServerSideCommit(ClientContext &context_p, string metadata_schema_name_p,
-                                                    string identifier_suffix_p, int64_t schema_version_p)
+                                                   string identifier_suffix_p, int64_t schema_version_p)
     : context(context_p), metadata_schema_name(std::move(metadata_schema_name_p)),
       schema_id(DuckLakeUtil::SQLIdentifierToString(metadata_schema_name)),
       identifier_suffix(std::move(identifier_suffix_p)), schema_version(schema_version_p), fresh_conn(*context_p.db) {
+}
+
+void DuckLakeServerSideCommit::SetRetryConfigOverride(const DuckLakeRetryConfig &retry_config_p) {
+	retry_config = retry_config_p;
 }
 
 //===--------------------------------------------------------------------===//
@@ -113,15 +117,16 @@ map<DuckLakeServerSideCommit::ColumnKey, LogicalType> DuckLakeServerSideCommit::
 	// Load types for every column of every table we are touching in this commit. This covers both
 	// columns with new staged stats AND columns whose existing cumulative stats we need to read back.
 	map<ColumnKey, LogicalType> types;
-	auto query = StringUtil::Format("SELECT col.table_id, col.column_id, col.column_type "
-	                                 "FROM %s.ducklake_column col "
-	                                 "WHERE col.end_snapshot IS NULL "
-	                                 "AND col.table_id IN (SELECT DISTINCT table_id FROM %s.ducklake_staged_data_file_%s)",
-	                                 schema_id, schema_id, identifier_suffix);
+	auto query =
+	    StringUtil::Format("SELECT col.table_id, col.column_id, col.column_type "
+	                       "FROM %s.ducklake_column col "
+	                       "WHERE col.end_snapshot IS NULL "
+	                       "AND col.table_id IN (SELECT DISTINCT table_id FROM %s.ducklake_staged_data_file_%s)",
+	                       schema_id, schema_id, identifier_suffix);
 	auto result = RunQuery(query, "read column types");
 	for (auto &row : *result) {
 		types.emplace(ColumnKey {TableIndex(static_cast<idx_t>(row.GetValue<int64_t>(0))),
-		                          FieldIndex(static_cast<idx_t>(row.GetValue<int64_t>(1)))},
+		                         FieldIndex(static_cast<idx_t>(row.GetValue<int64_t>(1)))},
 		              ResolveType(row.GetValue<string>(2)));
 	}
 	return types;
@@ -130,11 +135,11 @@ map<DuckLakeServerSideCommit::ColumnKey, LogicalType> DuckLakeServerSideCommit::
 map<DataFileIndex, map<FieldIndex, DuckLakeColumnStats>>
 DuckLakeServerSideCommit::ReadStagedColumnStats(const map<ColumnKey, LogicalType> &column_types) {
 	map<DataFileIndex, map<FieldIndex, DuckLakeColumnStats>> per_file;
-	auto query = StringUtil::Format(
-	    "SELECT data_file_id, table_id, column_id, column_size_bytes, value_count, null_count, "
-	    "min_value, max_value, contains_nan "
-	    "FROM %s.ducklake_staged_data_file_column_stats_%s",
-	    schema_id, identifier_suffix);
+	auto query =
+	    StringUtil::Format("SELECT data_file_id, table_id, column_id, column_size_bytes, value_count, null_count, "
+	                       "min_value, max_value, contains_nan "
+	                       "FROM %s.ducklake_staged_data_file_column_stats_%s",
+	                       schema_id, identifier_suffix);
 	auto result = RunQuery(query, "read staged column stats");
 	for (auto &row : *result) {
 		DataFileIndex local_file_id(static_cast<idx_t>(row.GetValue<int64_t>(0)));
@@ -144,22 +149,20 @@ DuckLakeServerSideCommit::ReadStagedColumnStats(const map<ColumnKey, LogicalType
 		if (type_it == column_types.end()) {
 			continue;
 		}
-		per_file[local_file_id].emplace(key.second, StatsFromRow(type_it->second, row.GetBaseValue(3),
-		                                                          row.GetBaseValue(4), row.GetBaseValue(5),
-		                                                          row.GetBaseValue(6), row.GetBaseValue(7),
-		                                                          row.GetBaseValue(8)));
+		per_file[local_file_id].emplace(
+		    key.second, StatsFromRow(type_it->second, row.GetBaseValue(3), row.GetBaseValue(4), row.GetBaseValue(5),
+		                             row.GetBaseValue(6), row.GetBaseValue(7), row.GetBaseValue(8)));
 	}
 	return per_file;
 }
 
-map<TableIndex, vector<DuckLakeDataFile>>
-DuckLakeServerSideCommit::ReadStagedFiles(map<DataFileIndex, map<FieldIndex, DuckLakeColumnStats>> &per_file_column_stats) {
+map<TableIndex, vector<DuckLakeDataFile>> DuckLakeServerSideCommit::ReadStagedFiles(
+    map<DataFileIndex, map<FieldIndex, DuckLakeColumnStats>> &per_file_column_stats) {
 	map<TableIndex, vector<DuckLakeDataFile>> files_per_table;
-	auto query = StringUtil::Format(
-	    "SELECT data_file_id, table_id, path, record_count, file_size_bytes, footer_size, "
-	    "row_id_start, partition_id, encryption_key, mapping_id, partial_max "
-	    "FROM %s.ducklake_staged_data_file_%s ORDER BY table_id, file_order",
-	    schema_id, identifier_suffix);
+	auto query = StringUtil::Format("SELECT data_file_id, table_id, path, record_count, file_size_bytes, footer_size, "
+	                                "row_id_start, partition_id, encryption_key, mapping_id, partial_max "
+	                                "FROM %s.ducklake_staged_data_file_%s ORDER BY table_id, file_order",
+	                                schema_id, identifier_suffix);
 	auto result = RunQuery(query, "read staged files");
 	for (auto &row : *result) {
 		DataFileIndex local_file_id(static_cast<idx_t>(row.GetValue<int64_t>(0)));
@@ -195,12 +198,11 @@ DuckLakeServerSideCommit::ReadStagedFiles(map<DataFileIndex, map<FieldIndex, Duc
 }
 
 void DuckLakeServerSideCommit::ReadCommitHeader(SnapshotChangeInfo &change_info, DuckLakeSnapshotCommit &commit_info) {
-	auto query = StringUtil::Format(
-	    "SELECT (SELECT string_agg('inserted_into_table:' || entity_id::VARCHAR, ',') "
-	    "FROM %s.ducklake_staged_change_touch_%s WHERE kind = 'inserted_into') AS changes, "
-	    "commit_author, commit_message, commit_extra_info "
-	    "FROM %s.ducklake_staged_commit_%s",
-	    schema_id, identifier_suffix, schema_id, identifier_suffix);
+	auto query = StringUtil::Format("SELECT (SELECT string_agg('inserted_into_table:' || entity_id::VARCHAR, ',') "
+	                                "FROM %s.ducklake_staged_change_touch_%s WHERE kind = 'inserted_into') AS changes, "
+	                                "commit_author, commit_message, commit_extra_info "
+	                                "FROM %s.ducklake_staged_commit_%s",
+	                                schema_id, identifier_suffix, schema_id, identifier_suffix);
 	auto result = RunQuery(query, "read staged commit header");
 	auto chunk = result->Fetch();
 	if (!chunk || chunk->size() == 0) {
@@ -279,8 +281,8 @@ DuckLakeSnapshot DuckLakeServerSideCommit::ReadLatestSnapshot() {
 
 DuckLakeServerSideCommit::CommitData
 DuckLakeServerSideCommit::BuildCommitData(const map<TableIndex, vector<DuckLakeDataFile>> &files_per_table,
-                                           const map<TableIndex, DuckLakeTableStats> &existing_table_stats,
-                                           DuckLakeSnapshot &commit_snapshot) {
+                                          const map<TableIndex, DuckLakeTableStats> &existing_table_stats,
+                                          DuckLakeSnapshot &commit_snapshot) {
 	CommitData result;
 	for (auto &entry : files_per_table) {
 		auto table_id = entry.first;
@@ -315,7 +317,7 @@ DuckLakeServerSideCommit::BuildCommitData(const map<TableIndex, vector<DuckLakeD
 //===--------------------------------------------------------------------===//
 
 string DuckLakeServerSideCommit::EmitDataFilesSql(const vector<DuckLakeFileInfo> &files,
-                                                   idx_t commit_snapshot_id) const {
+                                                  idx_t commit_snapshot_id) const {
 	if (files.empty()) {
 		return string();
 	}
@@ -345,10 +347,10 @@ string DuckLakeServerSideCommit::EmitSnapshotSql(const DuckLakeSnapshot &commit_
 }
 
 string DuckLakeServerSideCommit::EmitSnapshotChangesSql(const DuckLakeSnapshot &commit_snapshot,
-                                                         const SnapshotChangeInfo &change_info,
-                                                         const DuckLakeSnapshotCommit &commit_info) const {
+                                                        const SnapshotChangeInfo &change_info,
+                                                        const DuckLakeSnapshotCommit &commit_info) const {
 	return SubstitutePlaceholders(DuckLakeMetadataManager::WriteSnapshotChangesSql(change_info, commit_info),
-	                               commit_snapshot);
+	                              commit_snapshot);
 }
 
 string DuckLakeServerSideCommit::SubstitutePlaceholders(string sql, const DuckLakeSnapshot &snapshot) const {
@@ -366,7 +368,7 @@ string DuckLakeServerSideCommit::EmitDropStagingSql() const {
 	sql += StringUtil::Format("DROP TABLE IF EXISTS %s.ducklake_staged_change_touch_%s;", schema_id, identifier_suffix);
 	sql += StringUtil::Format("DROP TABLE IF EXISTS %s.ducklake_staged_data_file_%s;", schema_id, identifier_suffix);
 	sql += StringUtil::Format("DROP TABLE IF EXISTS %s.ducklake_staged_data_file_column_stats_%s;", schema_id,
-	                           identifier_suffix);
+	                          identifier_suffix);
 	return sql;
 }
 

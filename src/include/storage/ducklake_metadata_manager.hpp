@@ -24,6 +24,8 @@
 #include "common/index.hpp"
 #include "duckdb/planner/table_filter.hpp"
 
+#include <functional>
+
 namespace duckdb {
 class ColumnList;
 class DuckLakeCatalogSet;
@@ -232,7 +234,7 @@ public:
 	//! {METADATA_CATALOG} / {SNAPSHOT_ID} placeholders. Caller supplies resolved paths (one per file,
 	//! same order) since path policy differs across callers (schema-relative vs. always-absolute).
 	static string WriteNewDataFilesSqlBatch(const vector<DuckLakeFileInfo> &new_files,
-	                                         const vector<DuckLakePath> &resolved_paths);
+	                                        const vector<DuckLakePath> &resolved_paths);
 	virtual string WriteNewInlinedData(DuckLakeSnapshot &commit_snapshot,
 	                                   const vector<DuckLakeInlinedDataInfo> &new_data,
 	                                   const vector<DuckLakeTableInfo> &new_tables,
@@ -272,10 +274,13 @@ public:
 	//! (e.g. Postgres) can override the dispatch — there are no overrides for these three today.
 	static string InsertSnapshotSql();
 	static string WriteSnapshotChangesSql(const SnapshotChangeInfo &change_info,
-	                                       const DuckLakeSnapshotCommit &commit_info);
+	                                      const DuckLakeSnapshotCommit &commit_info);
 	static string UpdateGlobalTableStatsSql(const DuckLakeGlobalStatsInfo &stats);
-	virtual SnapshotChangeInfo GetSnapshotAndStatsAndChanges(DuckLakeSnapshot start_snapshot,
-	                                                         SnapshotAndStats &current_snapshot);
+	static SnapshotChangeInfo
+	GetSnapshotAndStatsAndChanges(SnapshotAndStats &current_snapshot,
+	                              const std::function<unique_ptr<QueryResult>(string)> &executor);
+	static string GetSnapshotAndStatsAndChangesQuery();
+	static SnapshotChangeInfo ParseSnapshotAndStatsAndChanges(QueryResult &result, SnapshotAndStats &current_snapshot);
 	SnapshotDeletedFromFiles GetFilesDeletedOrDroppedAfterSnapshot(const DuckLakeSnapshot &start_snapshot) const;
 	virtual unique_ptr<DuckLakeSnapshot> GetSnapshot();
 	virtual unique_ptr<DuckLakeSnapshot> GetSnapshot(BoundAtClause &at_clause, SnapshotBound bound);

@@ -1104,225 +1104,6 @@ void DuckLakeTransaction::CleanupFiles() {
 	state->local_changes.CleanupFiles(db);
 }
 
-template <class T, class MAP>
-void ConflictCheck(T index, const MAP &conflict_map, const char *action, const char *conflict_action) {
-	if (conflict_map.find(index) != conflict_map.end()) {
-		throw TransactionException("Transaction conflict - attempting to %s with index \"%d\""
-		                           " - but another transaction has %s",
-		                           action, index.index, conflict_action);
-	}
-}
-
-template <class MAP>
-void ConflictCheck(const string &source_name, const MAP &conflict_map, const char *action,
-                   const char *conflict_action) {
-	if (conflict_map.find(source_name) != conflict_map.end()) {
-		throw TransactionException("Transaction conflict - attempting to %s with name \"%s\""
-		                           " - but another transaction has %s",
-		                           action, source_name, conflict_action);
-	}
-}
-
-string GetCatalogType(CatalogType type) {
-	switch (type) {
-	case CatalogType::TABLE_ENTRY:
-		return "table";
-	case CatalogType::VIEW_ENTRY:
-		return "view";
-	case CatalogType::MACRO_ENTRY:
-		return "scalar";
-	case CatalogType::TABLE_MACRO_ENTRY:
-		return "table";
-	default:
-		throw InternalException("Can't handle catalog type in GetCatalogType()");
-	}
-}
-void ConflictCheck(const case_insensitive_map_t<reference_set_t<CatalogEntry>> &created_changes,
-                   const set<SchemaIndex> &dropped_schemas,
-                   const case_insensitive_map_t<case_insensitive_map_t<string>> other_created_changes) {
-	for (auto &entry : created_changes) {
-		auto &schema_name = entry.first;
-		auto &created_entry = entry.second;
-		for (auto &catalog_ref : created_entry) {
-			auto &catalog_entry = catalog_ref.get();
-			auto &schema = catalog_entry.ParentSchema().Cast<DuckLakeSchemaEntry>();
-			auto entry_type = GetCatalogType(catalog_entry.type);
-			string action =
-			    StringUtil::Format("create %s \"%s\" in schema \"%s\"", entry_type, catalog_entry.name, schema_name);
-			ConflictCheck(schema.GetSchemaId(), dropped_schemas, action.c_str(), "dropped this schema");
-
-			auto tbl_entry = other_created_changes.find(schema_name);
-			if (tbl_entry != other_created_changes.end()) {
-				auto &other_created_tables = tbl_entry->second;
-				auto sub_entry = other_created_tables.find(catalog_entry.name);
-				if (sub_entry != other_created_tables.end()) {
-					// a table with this name in this schema was already created
-					throw TransactionException("Transaction conflict - attempting to create %s \"%s\" in schema \"%s\" "
-					                           "- but this %s has been created by another transaction already",
-					                           entry_type, catalog_entry.name, schema_name, sub_entry->second);
-				}
-			}
-		}
-	}
-}
-
-void DuckLakeTransaction::CheckForConflicts(const TransactionChangeInformation &changes,
-                                            const SnapshotChangeInformation &other_changes,
-                                            DuckLakeSnapshot transaction_snapshot) const {
-	// check if we are dropping the same table as another transaction
-	for (auto &dropped_idx : changes.dropped_tables) {
-		ConflictCheck(dropped_idx, other_changes.dropped_tables, "drop table", "dropped it already");
-	}
-	// check if we are dropping the same view as another transaction
-	for (auto &dropped_idx : changes.dropped_views) {
-		ConflictCheck(dropped_idx, other_changes.dropped_views, "drop view", "dropped it already");
-	}
-	// check if we are dropping the same macro as another transaction
-	for (auto &dropped_idx : changes.dropped_scalar_macros) {
-		ConflictCheck(dropped_idx, other_changes.dropped_scalar_macros, "drop macro", "dropped it already");
-	}
-	for (auto &dropped_idx : changes.dropped_table_macros) {
-		ConflictCheck(dropped_idx, other_changes.dropped_table_macros, "drop macro", "dropped it already");
-	}
-	// check if we are dropping the same schema as another transaction
-	for (auto &entry : changes.dropped_schemas) {
-		auto &dropped_schema = entry.second.get();
-		auto dropped_idx = entry.first;
-		ConflictCheck(dropped_idx, other_changes.dropped_schemas, "drop schema", "dropped it already");
-
-		ConflictCheck(dropped_schema.name, other_changes.created_tables, "drop schema",
-		              "created an entry in this schema");
-	}
-	// check if we are creating the same schema as another transaction
-	for (auto &created_schema : changes.created_schemas) {
-		ConflictCheck(created_schema, other_changes.created_schemas, "create schema",
-		              "created a schema with this name already");
-	}
-	// check if we are creating the same macro as another transaction
-	ConflictCheck(changes.created_table_macros, other_changes.dropped_schemas, other_changes.created_table_macros);
-	ConflictCheck(changes.created_scalar_macros, other_changes.dropped_schemas, other_changes.created_scalar_macros);
-	ConflictCheck(changes.created_tables, other_changes.dropped_schemas, other_changes.created_tables);
-	// check if we are creating the same table as another transaction
-	for (auto &entry : changes.created_tables) {
-		auto &schema_name = entry.first;
-		auto &created_tables = entry.second;
-		for (auto &table_ref : created_tables) {
-			auto &table = table_ref.get();
-			auto &schema = table.ParentSchema().Cast<DuckLakeSchemaEntry>();
-			auto entry_type = table.type == CatalogType::TABLE_ENTRY ? "table" : "view";
-
-			string action =
-			    StringUtil::Format("create %s \"%s\" in schema \"%s\"", entry_type, table.name, schema_name);
-			ConflictCheck(schema.GetSchemaId(), other_changes.dropped_schemas, action.c_str(), "dropped this schema");
-
-			auto tbl_entry = other_changes.created_tables.find(schema_name);
-			if (tbl_entry != other_changes.created_tables.end()) {
-				auto &other_created_tables = tbl_entry->second;
-				auto sub_entry = other_created_tables.find(table.name);
-				if (sub_entry != other_created_tables.end()) {
-					// a table with this name in this schema was already created
-					throw TransactionException("Transaction conflict - attempting to create %s \"%s\" in schema \"%s\" "
-					                           "- but this %s has been created by another transaction already",
-					                           entry_type, table.name, schema_name, sub_entry->second);
-				}
-			}
-		}
-	}
-	for (auto &table_id : changes.tables_inserted_into) {
-		ConflictCheck(table_id, other_changes.dropped_tables, "insert into table", "dropped it");
-		ConflictCheck(table_id, other_changes.altered_tables, "insert into table", "altered it");
-		ConflictCheck(table_id, other_changes.tables_deleted_from, "insert into table", "deleted from it");
-		ConflictCheck(table_id, other_changes.tables_deleted_inlined, "insert into table",
-		              "deleted inlined data from it");
-	}
-	for (auto &table_id : changes.tables_inserted_inlined) {
-		ConflictCheck(table_id, other_changes.dropped_tables, "insert into table", "dropped it");
-		ConflictCheck(table_id, other_changes.altered_tables, "insert into table", "altered it");
-		ConflictCheck(table_id, other_changes.tables_deleted_from, "insert into table", "deleted from it");
-		ConflictCheck(table_id, other_changes.tables_deleted_inlined, "insert into table",
-		              "deleted inlined data from it");
-	}
-	for (auto &table_id : changes.tables_deleted_from) {
-		ConflictCheck(table_id, other_changes.dropped_tables, "delete from table", "dropped it");
-		ConflictCheck(table_id, other_changes.altered_tables, "delete from table", "altered it");
-		ConflictCheck(table_id, other_changes.tables_merge_adjacent, "delete from table", "compacted it");
-		ConflictCheck(table_id, other_changes.tables_rewrite_delete, "delete from table", "compacted it");
-		ConflictCheck(table_id, other_changes.inserted_tables, "delete from table", "inserted into it");
-		ConflictCheck(table_id, other_changes.tables_inserted_inlined, "delete from table", "inserted into it");
-	}
-	if (!changes.tables_deleted_from.empty()) {
-		bool check_for_matches = false;
-		for (auto &table_id : changes.tables_deleted_from) {
-			if (other_changes.tables_deleted_from.find(table_id) != other_changes.tables_deleted_from.end()) {
-				check_for_matches = true;
-				break;
-			}
-		}
-		if (check_for_matches) {
-			// If we have deletes on the tables, check for files being deleted
-			const auto deleted_files = metadata_manager->GetFilesDeletedOrDroppedAfterSnapshot(transaction_snapshot);
-			for (auto &entry : state->local_changes.Changes()) {
-				auto &table_changes = entry.GetTableChanges();
-				for (auto &file_entry : table_changes.new_delete_files) {
-					for (auto &file : file_entry.second) {
-						ConflictCheck(file.data_file_id, deleted_files.deleted_from_files, "delete from file",
-						              "deleted from it");
-					}
-				}
-			}
-			for (auto &file : state->dropped_files) {
-				ConflictCheck(file.second, deleted_files.deleted_from_files, "delete from file", "deleted from it");
-			}
-		}
-	}
-	for (auto &table_id : changes.tables_deleted_inlined) {
-		ConflictCheck(table_id, other_changes.dropped_tables, "delete from table", "dropped it");
-		ConflictCheck(table_id, other_changes.altered_tables, "delete from table", "altered it");
-		ConflictCheck(table_id, other_changes.tables_deleted_inlined, "delete from table", "deleted from it");
-		ConflictCheck(table_id, other_changes.tables_flushed_inlined, "delete from table", "flushed the inlined data");
-		ConflictCheck(table_id, other_changes.inserted_tables, "delete from table", "inserted into it");
-		ConflictCheck(table_id, other_changes.tables_inserted_inlined, "delete from table", "inserted into it");
-	}
-	for (auto &table_id : changes.tables_flushed_inlined) {
-		ConflictCheck(table_id, other_changes.dropped_tables, "flush inline data", "dropped it");
-		ConflictCheck(table_id, other_changes.tables_deleted_inlined, "flush inline data", "deleted from it");
-		ConflictCheck(table_id, other_changes.tables_flushed_inlined, "flush inline data", "flushed it");
-	}
-	for (auto &table_id : changes.tables_merge_adjacent) {
-		ConflictCheck(table_id, other_changes.dropped_tables, "compact table", "dropped it");
-		ConflictCheck(table_id, other_changes.tables_deleted_from, "compact table", "deleted from it");
-		ConflictCheck(table_id, other_changes.tables_merge_adjacent, "compact table", "compacted it");
-		ConflictCheck(table_id, other_changes.tables_rewrite_delete, "compact table", "compacted it");
-	}
-	for (auto &table_id : changes.tables_rewrite_delete) {
-		ConflictCheck(table_id, other_changes.dropped_tables, "compact table", "dropped it");
-		ConflictCheck(table_id, other_changes.tables_deleted_from, "compact table", "deleted from it");
-		ConflictCheck(table_id, other_changes.tables_merge_adjacent, "compact table", "compacted it");
-		ConflictCheck(table_id, other_changes.tables_rewrite_delete, "compact table", "compacted it");
-	}
-	for (auto &table_id : changes.altered_tables) {
-		ConflictCheck(table_id, other_changes.dropped_tables, "alter table", "dropped it");
-		ConflictCheck(table_id, other_changes.altered_tables, "alter table", "altered it");
-	}
-	for (auto &view_id : changes.altered_views) {
-		ConflictCheck(view_id, other_changes.altered_views, "alter view", "altered it");
-	}
-}
-
-SnapshotAndStats DuckLakeTransaction::CheckForConflicts(DuckLakeSnapshot transaction_snapshot,
-                                                        const TransactionChangeInformation &changes) {
-	SnapshotAndStats snapshot_and_stats;
-	// get all changes made to the system after the current snapshot was started
-	auto changes_made = metadata_manager->GetSnapshotAndStatsAndChanges(transaction_snapshot, snapshot_and_stats);
-	// parse changes made by other transactions
-	auto other_changes = SnapshotChangeInformation::ParseChangesMade(changes_made.changes_made);
-
-	// now check for conflicts
-	CheckForConflicts(changes, other_changes, transaction_snapshot);
-
-	return snapshot_and_stats;
-}
-
 vector<DuckLakeSchemaInfo> DuckLakeTransaction::GetNewSchemas(DuckLakeCommitState &commit_state) {
 	vector<DuckLakeSchemaInfo> schemas;
 	for (auto &entry : state->new_schemas->GetEntries()) {
@@ -1930,7 +1711,7 @@ string DuckLakeTransaction::UpdateGlobalTableStats(TableIndex table_id,
 }
 
 DuckLakeGlobalStatsInfo DuckLakeTransaction::ConvertNewGlobalStats(TableIndex table_id,
-                                                                    const DuckLakeNewGlobalStats &new_global_stats) {
+                                                                   const DuckLakeNewGlobalStats &new_global_stats) {
 	DuckLakeGlobalStatsInfo stats;
 	stats.table_id = table_id;
 
@@ -2004,7 +1785,7 @@ DuckLakeColumnStatsInfo DuckLakeColumnStatsInfo::FromColumnStats(FieldIndex fiel
 }
 
 DuckLakeFileInfo DuckLakeTransaction::BuildDataFileInfo(const DuckLakeDataFile &file, DuckLakeSnapshot &commit_snapshot,
-                                                         TableIndex table_id, optional_idx row_id_start) {
+                                                        TableIndex table_id, optional_idx row_id_start) {
 	DuckLakeFileInfo data_file;
 	data_file.id = DataFileIndex(commit_snapshot.next_file_id++);
 	data_file.table_id = table_id;
@@ -2576,7 +2357,15 @@ void DuckLakeTransaction::ApplyServerSideCommit(idx_t schema_version) {
 void DuckLakeTransaction::RunCommitLoop(DuckLakeSnapshot transaction_snapshot,
                                         const TransactionChangeInformation &transaction_changes,
                                         const DuckLakeRetryConfig &retry_config) {
-	state->Commit(transaction_snapshot, transaction_changes, retry_config);
+	auto conflict_query_executor = [&](string q) -> unique_ptr<QueryResult> {
+		auto result = metadata_manager->Query(transaction_snapshot, q);
+		if (result->HasError()) {
+			result->GetErrorObject().Throw("Failed to commit DuckLake transaction - failed to get snapshot and "
+			                               "snapshot changes for conflict resolution:");
+		}
+		return result;
+	};
+	state->Commit(transaction_snapshot, transaction_changes, retry_config, conflict_query_executor);
 }
 
 void DuckLakeTransaction::SetConfigOption(const DuckLakeConfigOption &option) {
