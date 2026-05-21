@@ -685,9 +685,10 @@ DuckLakeTransaction::DuckLakeTransaction(DuckLakeCatalog &ducklake_catalog, Tran
                                          ClientContext &context)
     : Transaction(manager, context), ducklake_catalog(ducklake_catalog), db(*context.db),
       local_catalog_id(DuckLakeConstants::TRANSACTION_LOCAL_ID_START), catalog_version(0) {
-	state = make_uniq<DuckLakeTransactionState>(*this, db, ducklake_catalog.IsCommitInfoRequired(), new_name_maps,
-	                                            ducklake_catalog.DataPath(), ducklake_catalog.Separator());
 	metadata_manager = DuckLakeMetadataManager::Create(*this);
+	state =
+	    make_uniq<DuckLakeTransactionState>(*metadata_manager, db, ducklake_catalog.IsCommitInfoRequired(),
+	                                        new_name_maps, ducklake_catalog.DataPath(), ducklake_catalog.Separator());
 }
 
 DuckLakeTransaction::~DuckLakeTransaction() {
@@ -1335,6 +1336,13 @@ void DuckLakeTransaction::RunCommitLoop(DuckLakeSnapshot transaction_snapshot,
 	};
 	context.query_metadata = [&](string q) {
 		return metadata_manager->Query(q);
+	};
+	context.get_table_stats = [&](TableIndex table_id) {
+		return ducklake_catalog.GetTableStats(*this, table_id);
+	};
+	context.build_stats_map = [&](vector<DuckLakeGlobalStatsInfo> &stats) {
+		auto &schema = ducklake_catalog.GetSchemaForSnapshot(*this, GetSnapshot());
+		return DuckLakeCatalog::ConstructStatsMap(stats, schema);
 	};
 	context.invalidate_schema_cache = [&](idx_t schema_version) {
 		ducklake_catalog.InvalidateSchemaCache(schema_version);

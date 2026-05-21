@@ -8,6 +8,7 @@
 
 #pragma once
 
+#include "storage/ducklake_stats.hpp"
 #include "storage/ducklake_transaction.hpp"
 
 namespace duckdb {
@@ -29,6 +30,10 @@ struct DuckLakeCommitContext {
 	std::function<void()> prepare_retry;
 	//! Runs a metadata-DB query during post-commit cleanup.
 	std::function<unique_ptr<QueryResult>(string)> query_metadata;
+	//! Returns the current global table stats for a single table id (first-attempt path).
+	std::function<shared_ptr<DuckLakeTableStats>(TableIndex)> get_table_stats;
+	//! Builds a DuckLakeStats map from a vector of per-snapshot global stats (retry path).
+	std::function<unique_ptr<DuckLakeStats>(vector<DuckLakeGlobalStatsInfo> &)> build_stats_map;
 	//! Invalidates the cached schema in the catalog for a given schema version.
 	std::function<void(idx_t)> invalidate_schema_cache;
 	//! Publishes the new schema version onto the transaction.
@@ -44,8 +49,9 @@ struct DuckLakeCommitContext {
 //! database. Owned by DuckLakeTransaction via a back-reference.
 class DuckLakeTransactionState {
 public:
-	DuckLakeTransactionState(DuckLakeTransaction &transaction, DatabaseInstance &db, bool require_commit_message,
-	                         DuckLakeNameMapSet &new_name_maps, string data_path, string separator);
+	DuckLakeTransactionState(DuckLakeMetadataManager &metadata_manager, DatabaseInstance &db,
+	                         bool require_commit_message, DuckLakeNameMapSet &new_name_maps, string data_path,
+	                         string separator);
 	~DuckLakeTransactionState();
 
 	void Commit(DuckLakeSnapshot transaction_snapshot, const TransactionChangeInformation &transaction_changes,
@@ -65,7 +71,7 @@ public:
 	                            const DuckLakeSnapshotCommit &commit_info) const;
 
 	string CommitChanges(DuckLakeCommitState &commit_state, TransactionChangeInformation &transaction_changes,
-	                     optional_ptr<vector<DuckLakeGlobalStatsInfo>> stats);
+	                     optional_ptr<vector<DuckLakeGlobalStatsInfo>> stats, const DuckLakeCommitContext &context);
 
 	vector<DuckLakeSchemaInfo> GetNewSchemas(DuckLakeCommitState &commit_state);
 	NewTableInfo GetNewTables(DuckLakeCommitState &commit_state, TransactionChangeInformation &transaction_changes);
@@ -77,7 +83,8 @@ public:
 	                    TransactionChangeInformation &transaction_changes);
 	NewMacroInfo GetNewMacros(DuckLakeCommitState &commit_state, TransactionChangeInformation &transaction_changes);
 	NewDataInfo GetNewDataFiles(string &batch_query, DuckLakeCommitState &commit_state,
-	                            optional_ptr<vector<DuckLakeGlobalStatsInfo>> stats);
+	                            optional_ptr<vector<DuckLakeGlobalStatsInfo>> stats,
+	                            const DuckLakeCommitContext &context);
 	CompactionInformation GetCompactionChanges(DuckLakeCommitState &commit_state, CompactionType type);
 	vector<DuckLakeDeleteFileInfo>
 	GetNewDeleteFiles(const DuckLakeCommitState &commit_state,
@@ -99,7 +106,7 @@ public:
 	bool SchemaChangesMade() const;
 
 public:
-	DuckLakeTransaction &transaction;
+	DuckLakeMetadataManager &metadata_manager;
 	DatabaseInstance &db;
 	bool require_commit_message;
 	DuckLakeNameMapSet &new_name_maps;
