@@ -52,7 +52,11 @@ public:
 	                                   const TransactionChangeInformation &changes,
 	                                   const std::function<unique_ptr<QueryResult>(string)> &executor);
 	void CheckForConflicts(const TransactionChangeInformation &changes, const SnapshotChangeInformation &other_changes,
-	                       DuckLakeSnapshot transaction_snapshot) const;
+	                       DuckLakeSnapshot transaction_snapshot,
+	                       const std::function<unique_ptr<QueryResult>(string)> &executor) const;
+
+	static SnapshotDeletedFromFiles
+	GetFilesDeletedOrDroppedAfterSnapshot(const std::function<unique_ptr<QueryResult>(string)> &executor);
 
 	string WriteSnapshotChanges(DuckLakeCommitState &commit_state, TransactionChangeInformation &changes,
 	                            const DuckLakeSnapshotCommit &commit_info) const;

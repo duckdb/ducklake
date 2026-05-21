@@ -102,9 +102,10 @@ void ConflictCheck(const case_insensitive_map_t<reference_set_t<CatalogEntry>> &
 
 } // namespace
 
-void DuckLakeTransactionState::CheckForConflicts(const TransactionChangeInformation &changes,
-                                                 const SnapshotChangeInformation &other_changes,
-                                                 DuckLakeSnapshot transaction_snapshot) const {
+void DuckLakeTransactionState::CheckForConflicts(
+    const TransactionChangeInformation &changes, const SnapshotChangeInformation &other_changes,
+    DuckLakeSnapshot transaction_snapshot,
+    const std::function<unique_ptr<QueryResult>(string)> &executor) const {
 	// check if we are dropping the same table as another transaction
 	for (auto &dropped_idx : changes.dropped_tables) {
 		ConflictCheck(dropped_idx, other_changes.dropped_tables, "drop table", "dropped it already");
@@ -196,8 +197,7 @@ void DuckLakeTransactionState::CheckForConflicts(const TransactionChangeInformat
 		}
 		if (check_for_matches) {
 			// If we have deletes on the tables, check for files being deleted
-			const auto deleted_files =
-			    transaction.metadata_manager->GetFilesDeletedOrDroppedAfterSnapshot(transaction_snapshot);
+			const auto deleted_files = GetFilesDeletedOrDroppedAfterSnapshot(executor);
 			for (auto &entry : local_changes.Changes()) {
 				auto &table_changes = entry.GetTableChanges();
 				for (auto &file_entry : table_changes.new_delete_files) {
@@ -361,6 +361,31 @@ string DuckLakeTransactionState::WriteSnapshotChanges(DuckLakeCommitState &commi
 	return DuckLakeMetadataManager::WriteSnapshotChangesSql(change_info, commit_info);
 }
 
+SnapshotDeletedFromFiles DuckLakeTransactionState::GetFilesDeletedOrDroppedAfterSnapshot(
+    const std::function<unique_ptr<QueryResult>(string)> &executor) {
+	// get all changes made to the system after the snapshot was started
+	string sql = R"(
+	SELECT data_file_id
+	FROM {METADATA_CATALOG}.ducklake_delete_file
+	WHERE begin_snapshot > {SNAPSHOT_ID}
+	UNION ALL
+	SELECT data_file_id
+	FROM {METADATA_CATALOG}.ducklake_data_file
+	WHERE end_snapshot IS NOT NULL AND end_snapshot > {SNAPSHOT_ID}
+	)";
+	auto result = executor(sql);
+	if (result->HasError()) {
+		result->GetErrorObject().Throw(
+		    "Failed to commit DuckLake transaction - failed to get files with deletions for conflict resolution:");
+	}
+	// parse changes made by other transactions
+	SnapshotDeletedFromFiles change_info;
+	for (auto &row : *result) {
+		change_info.deleted_from_files.insert(DataFileIndex(row.GetValue<idx_t>(0)));
+	}
+	return change_info;
+}
+
 void DuckLakeTransactionState::DropEmptySupersededInlinedTables(const DuckLakeCommitContext &context) {
 	// Gather the tables that are empty and have a later schema version, as it will be safe to delete their
 	// inlined tables.
@@ -419,7 +444,7 @@ DuckLakeTransactionState::CheckForConflicts(DuckLakeSnapshot transaction_snapsho
 	auto other_changes = SnapshotChangeInformation::ParseChangesMade(changes_made.changes_made);
 
 	// now check for conflicts
-	CheckForConflicts(changes, other_changes, transaction_snapshot);
+	CheckForConflicts(changes, other_changes, transaction_snapshot, executor);
 
 	return snapshot_and_stats;
 }

@@ -3668,30 +3668,6 @@ DuckLakeMetadataManager::GetSnapshotAndStatsAndChanges(SnapshotAndStats &current
 	return ParseSnapshotAndStatsAndChanges(*result, current_snapshot);
 }
 
-SnapshotDeletedFromFiles
-DuckLakeMetadataManager::GetFilesDeletedOrDroppedAfterSnapshot(const DuckLakeSnapshot &start_snapshot) const {
-	// get all changes made to the system after the snapshot was started
-	auto result = transaction.Query(start_snapshot, R"(
-	SELECT data_file_id
-	FROM {METADATA_CATALOG}.ducklake_delete_file
-	WHERE begin_snapshot > {SNAPSHOT_ID}
-	UNION ALL
-	SELECT data_file_id
-	FROM {METADATA_CATALOG}.ducklake_data_file
-	WHERE end_snapshot IS NOT NULL AND end_snapshot > {SNAPSHOT_ID}
-	)");
-	if (result->HasError()) {
-		result->GetErrorObject().Throw(
-		    "Failed to commit DuckLake transaction - failed to get files with deletions for conflict resolution:");
-	}
-	// parse changes made by other transactions
-	SnapshotDeletedFromFiles change_info;
-	for (auto &row : *result) {
-		change_info.deleted_from_files.insert(DataFileIndex(row.GetValue<idx_t>(0)));
-	}
-	return change_info;
-}
-
 unique_ptr<DuckLakeSnapshot> DuckLakeMetadataManager::ParseSnapshot(QueryResult &result) {
 	unique_ptr<DuckLakeSnapshot> snapshot;
 	for (auto &row : result) {
