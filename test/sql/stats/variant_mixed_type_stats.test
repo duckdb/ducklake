@@ -54,6 +54,12 @@ SELECT count(*) FROM (SELECT stats(v) FROM ducklake.tbl LIMIT 1)
 ----
 1
 
+# verify shredded_type in extra_stats JSON reflects the promoted type (not the stale original)
+query I
+SELECT extra_stats LIKE '%"varchar"%' FROM metadata.ducklake_table_column_stats WHERE table_id=1
+----
+true
+
 # file 3: another integer variant
 statement ok
 INSERT INTO ducklake.tbl SELECT 7::VARIANT
