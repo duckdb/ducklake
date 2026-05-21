@@ -4582,28 +4582,33 @@ WHERE NOT EXISTS (
 }
 
 void DuckLakeMetadataManager::DropEmptySupersededInlinedTables() {
-	// Gather the tables that are empty and have a later schema version, as it will be safe to delete their
-	// inlined tables.
+	// Find inlined tables that have been superseded by a newer schema version.
 	auto targets = transaction.Query(R"(
 SELECT idt.table_id, idt.schema_version, idt.table_name
 FROM {METADATA_CATALOG}.ducklake_inlined_data_tables idt
-JOIN duckdb_tables() dt
-    ON dt.database_name = {METADATA_CATALOG_NAME_LITERAL}
-   AND dt.table_name = idt.table_name
 WHERE idt.schema_version < (
     SELECT MAX(idt2.schema_version)
     FROM {METADATA_CATALOG}.ducklake_inlined_data_tables idt2
     WHERE idt2.table_id = idt.table_id
-)
-AND dt.estimated_size = 0;)");
+);)");
 	if (targets->HasError()) {
-		targets->GetErrorObject().Throw("Failed to identify empty superseded inlined-data tables in DuckLake: ");
+		targets->GetErrorObject().Throw("Failed to identify superseded inlined-data tables in DuckLake: ");
 	}
+	// Only drop tables that are actually empty (data was flushed to files).
 	string drops;
 	for (auto &row : *targets) {
 		auto table_id = row.GetValue<idx_t>(0);
 		auto schema_version = row.GetValue<idx_t>(1);
 		auto table_name = row.GetValue<string>(2);
+		auto count_result = transaction.Query(
+		    StringUtil::Format("SELECT COUNT(*) FROM {METADATA_CATALOG}.%s", SQLIdentifier(table_name)));
+		if (count_result->HasError()) {
+			count_result->GetErrorObject().Throw(
+			    "Failed to check emptiness of superseded inlined-data table in DuckLake: ");
+		}
+		if ((*count_result->begin()).GetValue<idx_t>(0) != 0) {
+			continue;
+		}
 		drops += StringUtil::Format(
 		    "DELETE FROM {METADATA_CATALOG}.ducklake_inlined_data_tables WHERE table_id=%d AND schema_version=%d;"
 		    "DROP TABLE IF EXISTS {METADATA_CATALOG}.%s;",
