@@ -22,6 +22,12 @@ SELECT variant_path, shredded_type, min_value, max_value FROM __ducklake_metadat
 ----
 root	int32	42	42
 
+# with a single type, in-memory stats should show SHREDDED
+query I
+SELECT stats(v) FROM ducklake.tbl LIMIT 1
+----
+<REGEX>:.*SHREDDED.*INTEGER.*
+
 # file 2: varchar variant - different shredded type for the same field
 statement ok
 INSERT INTO ducklake.tbl SELECT 'hello'::VARIANT
@@ -44,23 +50,22 @@ SELECT v FROM ducklake.tbl ORDER BY v::VARCHAR
 42
 hello
 
-# stats() should not crash
+# in-memory stats should show INCONSISTENT after type mismatch
 query I
-SELECT count(*) FROM (SELECT stats(v) FROM ducklake.tbl LIMIT 1)
+SELECT stats(v) FROM ducklake.tbl LIMIT 1
 ----
-1
+<REGEX>:.*INCONSISTENT.*
 
-# after merging INT + VARCHAR, shredded_type should be varchar (not stale int32)
+# incompatible shredded types (INT vs VARCHAR) - shredded stats are dropped entirely
 query I
-SELECT extra_stats LIKE '%"varchar"%' FROM __ducklake_metadata_ducklake.ducklake_table_column_stats WHERE table_id=1
+SELECT extra_stats FROM __ducklake_metadata_ducklake.ducklake_table_column_stats WHERE table_id=1
 ----
-true
+NULL
 
 # file 3: another integer variant
 statement ok
 INSERT INTO ducklake.tbl SELECT 7::VARIANT
 
-# table-level min/max should still be invalidated (can't recover without recomputing from all files)
 query II
 SELECT min_value, max_value FROM __ducklake_metadata_ducklake.ducklake_table_column_stats WHERE table_id=1
 ----
@@ -80,13 +85,7 @@ DETACH ducklake
 statement ok
 ATTACH 'ducklake:__TEST_DIR__/ducklake_variant_mixed_type_stats.db' AS ducklake (DATA_PATH '__TEST_DIR__/ducklake_variant_mixed_type_stats_files', DATA_INLINING_ROW_LIMIT 0)
 
-query III
-SELECT min_value, max_value, extra_stats FROM __ducklake_metadata_ducklake.ducklake_table_column_stats WHERE table_id=1
-----
-NULL	NULL	[{"field_name":"root","shredded_type":"int32","null_count":0,"num_values":3,"column_size_bytes":92,"any_valid":true}]
-
-# verify shredded_type in extra_stats JSON reflects the promoted type (not the stale original)
 query I
-SELECT extra_stats LIKE '%"varchar"%' FROM __ducklake_metadata_ducklake.ducklake_table_column_stats WHERE table_id=1
+SELECT extra_stats FROM __ducklake_metadata_ducklake.ducklake_table_column_stats WHERE table_id=1
 ----
-true
+NULL

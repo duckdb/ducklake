@@ -74,7 +74,6 @@ DuckLakeColumnStats &DuckLakeColumnStats::operator=(const DuckLakeColumnStats &o
 void DuckLakeColumnStats::MergeStats(const DuckLakeColumnStats &new_stats) {
 	bool types_differ = type != new_stats.type;
 	if (types_differ) {
-		// handle type promotion - adopt the new type
 		type = new_stats.type;
 	}
 	if (!new_stats.has_null_count) {

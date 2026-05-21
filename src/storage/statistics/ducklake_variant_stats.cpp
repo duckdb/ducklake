@@ -35,9 +35,13 @@ void DuckLakeColumnVariantStats::Merge(const DuckLakeColumnExtraStats &new_stats
 			stats_to_erase.push_back(entry.first);
 			continue;
 		}
+		if (entry.second.shredded_type != other_entry->second.shredded_type) {
+			// incompatible shredded types - drop the field
+			stats_to_erase.push_back(entry.first);
+			continue;
+		}
 		// merge stats
 		entry.second.field_stats.MergeStats(other_entry->second.field_stats);
-		entry.second.shredded_type = entry.second.field_stats.type;
 	}
 	// erase any stats that do not occur in both
 	for (auto &entry : stats_to_erase) {
