@@ -685,7 +685,8 @@ DuckLakeTransaction::DuckLakeTransaction(DuckLakeCatalog &ducklake_catalog, Tran
                                          ClientContext &context)
     : Transaction(manager, context), ducklake_catalog(ducklake_catalog), db(*context.db),
       local_catalog_id(DuckLakeConstants::TRANSACTION_LOCAL_ID_START), catalog_version(0) {
-	state = make_uniq<DuckLakeTransactionState>(*this, db, ducklake_catalog.IsCommitInfoRequired(), new_name_maps);
+	state = make_uniq<DuckLakeTransactionState>(*this, db, ducklake_catalog.IsCommitInfoRequired(), new_name_maps,
+	                                            ducklake_catalog.DataPath(), ducklake_catalog.Separator());
 	metadata_manager = DuckLakeMetadataManager::Create(*this);
 }
 

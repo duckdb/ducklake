@@ -45,7 +45,7 @@ struct DuckLakeCommitContext {
 class DuckLakeTransactionState {
 public:
 	DuckLakeTransactionState(DuckLakeTransaction &transaction, DatabaseInstance &db, bool require_commit_message,
-	                         DuckLakeNameMapSet &new_name_maps);
+	                         DuckLakeNameMapSet &new_name_maps, string data_path, string separator);
 	~DuckLakeTransactionState();
 
 	void Commit(DuckLakeSnapshot transaction_snapshot, const TransactionChangeInformation &transaction_changes,
@@ -94,6 +94,8 @@ public:
 
 	void EnsureCommitInfoProvided(const DuckLakeSnapshotCommit &commit_info) const;
 
+	DuckLakePath GetRelativePath(const string &path) const;
+
 	bool SchemaChangesMade() const;
 
 public:
@@ -101,6 +103,8 @@ public:
 	DatabaseInstance &db;
 	bool require_commit_message;
 	DuckLakeNameMapSet &new_name_maps;
+	string data_path;
+	string separator;
 	DuckLakeSnapshotCommit commit_info;
 
 	case_insensitive_map_t<unique_ptr<DuckLakeCatalogSet>> new_tables;
