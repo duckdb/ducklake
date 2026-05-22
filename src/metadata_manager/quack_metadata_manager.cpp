@@ -105,9 +105,8 @@ static bool IsDataOnlyCommit(const TransactionChangeInformation &c) {
 	       c.created_scalar_macros.empty() && c.created_table_macros.empty() && c.altered_tables.empty() &&
 	       c.altered_tables_with_schema_version_changes.empty() && c.altered_views.empty() &&
 	       c.dropped_tables.empty() && c.dropped_views.empty() && c.dropped_scalar_macros.empty() &&
-	       c.dropped_table_macros.empty() && c.tables_deleted_from.empty() && c.tables_deleted_inlined.empty() &&
-	       c.tables_flushed_inlined.empty() && c.tables_compacted.empty() && c.tables_merge_adjacent.empty() &&
-	       c.tables_rewrite_delete.empty();
+	       c.dropped_table_macros.empty() && c.tables_deleted_from.empty() && c.tables_flushed_inlined.empty() &&
+	       c.tables_compacted.empty() && c.tables_merge_adjacent.empty() && c.tables_rewrite_delete.empty();
 }
 
 void QuackMetadataManager::FlushChangesServerSide(DuckLakeTransaction &flush_transaction,

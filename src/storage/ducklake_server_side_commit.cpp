@@ -105,9 +105,11 @@ DuckLakeServerSideCommitResult DuckLakeServerSideCommit::Run() {
 	// Reconstruct the DuckLakeTransactionState from staging — each method fills a slice.
 	ReadCommitHeader();       // creates state, fills commit_info/data_path/separator, sets transaction_snapshot
 	ReadColumnTypes();        // fills column_types (used by stats reconstruction below + retry closure)
-	ReadStagedDataFiles();    // fills state->local_changes (data files)
-	ReadStagedInlinedData();  // fills state->local_changes (inlined data) + staged_inlined_tuples
-	ReadExistingTableStats(); // fills existing_table_stats (first-attempt path for get_table_stats)
+	ReadStagedDataFiles();      // fills state->local_changes (data files)
+	ReadStagedInlinedData();    // fills state->local_changes (inlined data) + staged_inlined_tuples
+	ReadStagedInlinedDeletes();     // fills state->local_changes (inlined-data row deletes)
+	ReadStagedInlinedFileDeletes(); // fills state->local_changes (inlined deletes against parquet files)
+	ReadExistingTableStats();   // fills existing_table_stats (first-attempt path for get_table_stats)
 
 	// Derive transaction_changes the same way DuckLakeTransaction would — directly from
 	// the now-fully-hydrated local_changes (both data files and inlined data).
@@ -372,6 +374,70 @@ void DuckLakeServerSideCommit::ReadStagedInlinedData() {
 	}
 }
 
+void DuckLakeServerSideCommit::ReadStagedInlinedDeletes() {
+	// `ducklake_staged_inlined_delete_<sfx>(table_id, inlined_table_name, deleted_row_id)` — one row
+	// per deleted inlined-data row. Group by (table_id, inlined_table_name) and feed each group
+	// through LocalTableChanges::AddNewInlinedDeletes — same path the client uses for live deletes.
+	auto query = StringUtil::Format("SELECT table_id, inlined_table_name, deleted_row_id "
+	                                "FROM %s.ducklake_staged_inlined_delete_%s "
+	                                "ORDER BY table_id, inlined_table_name",
+	                                schema_id, identifier_suffix);
+	auto result = RunQuery(query, "read staged inlined deletes");
+
+	struct GroupKey {
+		TableIndex table_id;
+		string inlined_table_name;
+		bool operator<(const GroupKey &other) const {
+			if (table_id.index != other.table_id.index) {
+				return table_id.index < other.table_id.index;
+			}
+			return inlined_table_name < other.inlined_table_name;
+		}
+	};
+	map<GroupKey, set<idx_t>> grouped;
+	for (auto &row : *result) {
+		GroupKey key {TableIndex(static_cast<idx_t>(row.GetValue<int64_t>(0))), row.GetValue<string>(1)};
+		grouped[key].insert(static_cast<idx_t>(row.GetValue<int64_t>(2)));
+	}
+	for (auto &entry : grouped) {
+		state->local_changes.AddNewInlinedDeletes(entry.first.table_id, entry.first.inlined_table_name,
+		                                          std::move(entry.second));
+	}
+}
+
+void DuckLakeServerSideCommit::ReadStagedInlinedFileDeletes() {
+	// `ducklake_staged_inlined_file_delete_<sfx>(table_id, file_id, deleted_row_id)` — one row per
+	// row deleted from a parquet file that's recorded as metadata (in ducklake_inlined_delete_<id>)
+	// rather than as a delete-vector parquet file. Group by (table_id, file_id) and feed each group
+	// through LocalTableChanges::AddNewInlinedFileDeletes — same path the client uses.
+	auto query = StringUtil::Format("SELECT table_id, file_id, deleted_row_id "
+	                                "FROM %s.ducklake_staged_inlined_file_delete_%s "
+	                                "ORDER BY table_id, file_id",
+	                                schema_id, identifier_suffix);
+	auto result = RunQuery(query, "read staged inlined file deletes");
+
+	struct GroupKey {
+		TableIndex table_id;
+		idx_t file_id;
+		bool operator<(const GroupKey &other) const {
+			if (table_id.index != other.table_id.index) {
+				return table_id.index < other.table_id.index;
+			}
+			return file_id < other.file_id;
+		}
+	};
+	map<GroupKey, set<idx_t>> grouped;
+	for (auto &row : *result) {
+		GroupKey key {TableIndex(static_cast<idx_t>(row.GetValue<int64_t>(0))),
+		              static_cast<idx_t>(row.GetValue<int64_t>(1))};
+		grouped[key].insert(static_cast<idx_t>(row.GetValue<int64_t>(2)));
+	}
+	for (auto &entry : grouped) {
+		state->local_changes.AddNewInlinedFileDeletes(entry.first.table_id, entry.first.file_id,
+		                                              std::move(entry.second));
+	}
+}
+
 void DuckLakeServerSideCommit::ReadExistingTableStats() {
 	// Shared SQL + parser with DuckLakeMetadataManager::GetGlobalTableStats — single combined query
 	// over ducklake_table_stats LEFT JOIN ducklake_table_column_stats folded into per-table entries.
@@ -580,6 +646,10 @@ string DuckLakeServerSideCommit::EmitDropStagingSql() const {
 	sql += StringUtil::Format("DROP TABLE IF EXISTS %s.ducklake_staged_inlined_data_%s;", schema_id, identifier_suffix);
 	sql += StringUtil::Format("DROP TABLE IF EXISTS %s.ducklake_staged_inlined_row_%s;", schema_id, identifier_suffix);
 	sql += StringUtil::Format("DROP TABLE IF EXISTS %s.ducklake_staged_inlined_column_stats_%s;", schema_id,
+	                          identifier_suffix);
+	sql += StringUtil::Format("DROP TABLE IF EXISTS %s.ducklake_staged_inlined_delete_%s;", schema_id,
+	                          identifier_suffix);
+	sql += StringUtil::Format("DROP TABLE IF EXISTS %s.ducklake_staged_inlined_file_delete_%s;", schema_id,
 	                          identifier_suffix);
 	return sql;
 }

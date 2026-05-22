@@ -162,6 +162,52 @@ static string EmitStagedInlinedData(const LocalTableChanges &local_changes, Duck
 	return sql;
 }
 
+static string EmitStagedInlinedDeletes(const LocalTableChanges &local_changes, const string &sfx) {
+	string sql;
+	sql += StringUtil::Format("CREATE TABLE IF NOT EXISTS {METADATA_CATALOG}.ducklake_staged_inlined_delete_%s("
+	                          "table_id BIGINT, inlined_table_name VARCHAR, deleted_row_id BIGINT);",
+	                          sfx);
+	for (auto &entry : local_changes.Changes()) {
+		auto table_id = entry.GetTableIndex();
+		auto &table_changes = entry.GetTableChanges();
+		for (auto &deletes_entry : table_changes.new_inlined_data_deletes) {
+			auto &inlined_table_name = deletes_entry.first;
+			auto &deletes = *deletes_entry.second;
+			for (auto &row_id : deletes.rows) {
+				sql += StringUtil::Format("INSERT INTO {METADATA_CATALOG}.ducklake_staged_inlined_delete_%s "
+				                          "VALUES (%llu, %s, %llu);",
+				                          sfx, table_id.index, SQLString(inlined_table_name), row_id);
+			}
+		}
+	}
+	return sql;
+}
+
+static string EmitStagedInlinedFileDeletes(const LocalTableChanges &local_changes, const string &sfx) {
+	// Row-level deletes against parquet files that are recorded in metadata rather than written as
+	// delete-vector parquet (see ducklake_inlined_delete_<table_id>). Source: new_inlined_file_deletes.
+	string sql;
+	sql += StringUtil::Format("CREATE TABLE IF NOT EXISTS {METADATA_CATALOG}.ducklake_staged_inlined_file_delete_%s("
+	                          "table_id BIGINT, file_id BIGINT, deleted_row_id BIGINT);",
+	                          sfx);
+	for (auto &entry : local_changes.Changes()) {
+		auto table_id = entry.GetTableIndex();
+		auto &table_changes = entry.GetTableChanges();
+		if (!table_changes.new_inlined_file_deletes) {
+			continue;
+		}
+		for (auto &file_entry : table_changes.new_inlined_file_deletes->file_deletes) {
+			auto file_id = file_entry.first;
+			for (auto &row_id : file_entry.second) {
+				sql += StringUtil::Format("INSERT INTO {METADATA_CATALOG}.ducklake_staged_inlined_file_delete_%s "
+				                          "VALUES (%llu, %llu, %llu);",
+				                          sfx, table_id.index, file_id, row_id);
+			}
+		}
+	}
+	return sql;
+}
+
 string DuckLakeStagedCommit::Build(DuckLakeTransaction &transaction,
                                    const TransactionChangeInformation &transaction_changes,
                                    const DuckLakeSnapshot &transaction_snapshot,
@@ -174,6 +220,8 @@ string DuckLakeStagedCommit::Build(DuckLakeTransaction &transaction,
 	                                ducklake_catalog.Separator(), identifier_suffix);
 	batch += EmitStagedDataFiles(transaction.GetLocalChanges(), identifier_suffix);
 	batch += EmitStagedInlinedData(transaction.GetLocalChanges(), transaction, identifier_suffix);
+	batch += EmitStagedInlinedDeletes(transaction.GetLocalChanges(), identifier_suffix);
+	batch += EmitStagedInlinedFileDeletes(transaction.GetLocalChanges(), identifier_suffix);
 	batch += StringUtil::Format("SELECT * FROM ducklake_commit(%s, %s, %lld, "
 	                            "max_retry_count => %llu, retry_wait_ms => %llu, retry_backoff => %f);",
 	                            DuckLakeUtil::SQLLiteralToString(identifier_suffix),

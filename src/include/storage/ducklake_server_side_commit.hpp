@@ -46,6 +46,8 @@ private:
 	void ReadColumnTypes();
 	void ReadStagedDataFiles();
 	void ReadStagedInlinedData();
+	void ReadStagedInlinedDeletes();
+	void ReadStagedInlinedFileDeletes();
 	void ReadExistingTableStats();
 
 	// Closure backends.
