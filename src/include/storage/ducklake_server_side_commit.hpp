@@ -52,6 +52,7 @@ private:
 	void ReadStagedDeleteFiles();
 	void ReadStagedDroppedFiles();
 	void ReadStagedFlushedInlinedTables();
+	void ReadStagedCompactions();
 	void ReadExistingTableStats();
 
 	// Closure backends.
@@ -90,6 +91,11 @@ private:
 	//! Cache of inlined_table_name lookups (keyed by table_id.index) so we hit the metadata DB
 	//! once per table across the commit retry loop.
 	map<idx_t, string> inlined_table_name_cache;
+
+	//! Compaction-output DuckLakeDataFiles indexed by compaction_id, populated by
+	//! ReadStagedDataFiles. ReadStagedCompactions consumes them as the `written_file` of each
+	//! DuckLakeCompactionEntry. Set aside here so they don't land in local_changes.new_data_files.
+	map<idx_t, DuckLakeDataFile> compaction_output_files;
 };
 
 } // namespace duckdb

@@ -81,19 +81,34 @@ void QuackMetadataManager::ProbeServerCapabilities() {
 	}
 }
 
+static bool FileUnsupported(const DuckLakeDataFile &file) {
+	if (file.mapping_id.IsValid() && file.mapping_id.index >= DuckLakeConstants::TRANSACTION_LOCAL_ID_START) {
+		return true;
+	}
+	if (file.partition_id.IsValid() || !file.partition_values.empty()) {
+		return true;
+	}
+	for (auto &cs : file.column_stats) {
+		if (cs.second.extra_stats) {
+			return true;
+		}
+	}
+	return false;
+}
+
 static bool HasUnsupportedDataFiles(const DuckLakeTransaction &t) {
 	for (auto &entry : t.GetLocalChanges().Changes()) {
+		// New data files (regular INSERTs + flushed files).
 		for (auto &file : entry.GetTableChanges().new_data_files) {
-			if (file.mapping_id.IsValid() && file.mapping_id.index >= DuckLakeConstants::TRANSACTION_LOCAL_ID_START) {
+			if (FileUnsupported(file)) {
 				return true;
 			}
-			if (file.partition_id.IsValid() || !file.partition_values.empty()) {
+		}
+		// Compaction-output files live on each DuckLakeCompactionEntry::written_file and would
+		// otherwise slip through (they're not in new_data_files). Check them with the same rules.
+		for (auto &compaction : entry.GetTableChanges().compactions) {
+			if (!compaction.written_file.file_name.empty() && FileUnsupported(compaction.written_file)) {
 				return true;
-			}
-			for (auto &cs : file.column_stats) {
-				if (cs.second.extra_stats) {
-					return true;
-				}
 			}
 		}
 	}
@@ -105,8 +120,7 @@ static bool IsDataOnlyCommit(const TransactionChangeInformation &c) {
 	       c.created_scalar_macros.empty() && c.created_table_macros.empty() && c.altered_tables.empty() &&
 	       c.altered_tables_with_schema_version_changes.empty() && c.altered_views.empty() &&
 	       c.dropped_tables.empty() && c.dropped_views.empty() && c.dropped_scalar_macros.empty() &&
-	       c.dropped_table_macros.empty() && c.tables_compacted.empty() && c.tables_merge_adjacent.empty() &&
-	       c.tables_rewrite_delete.empty();
+	       c.dropped_table_macros.empty();
 }
 
 void QuackMetadataManager::FlushChangesServerSide(DuckLakeTransaction &flush_transaction,

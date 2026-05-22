@@ -31,14 +31,20 @@ static string EmitStagedCommitHeader(const DuckLakeSnapshotCommit &h, const Duck
 	return sql;
 }
 
-static string EmitStagedDataFiles(const LocalTableChanges &local_changes, const string &sfx) {
+static string EmitStagedDataFiles(const LocalTableChanges &local_changes, const string &sfx, idx_t &local_file_id) {
 	string sql;
+	// `compaction_id BIGINT` is NULL for regular new data files and set to a per-commit sequential
+	// id for compaction-output files (the `written_file` of a DuckLakeCompactionEntry). The server
+	// uses this to route the file into local_changes.compactions[i].written_file instead of
+	// local_changes.new_data_files; both paths share this staging table so column stats etc. are
+	// captured the same way.
 	sql += StringUtil::Format("CREATE TABLE IF NOT EXISTS {METADATA_CATALOG}.ducklake_staged_data_file_%s("
 	                          "data_file_id BIGINT, table_id BIGINT, file_order BIGINT, "
 	                          "path VARCHAR, path_is_relative BOOLEAN, file_format VARCHAR, "
 	                          "record_count BIGINT, file_size_bytes BIGINT, footer_size BIGINT, "
 	                          "row_id_start BIGINT, partition_id BIGINT, encryption_key VARCHAR, "
-	                          "mapping_id BIGINT, partial_max BIGINT, begin_snapshot BIGINT);",
+	                          "mapping_id BIGINT, partial_max BIGINT, begin_snapshot BIGINT, "
+	                          "compaction_id BIGINT);",
 	                          sfx);
 	sql += StringUtil::Format("CREATE TABLE IF NOT EXISTS {METADATA_CATALOG}.ducklake_staged_data_file_column_stats_%s("
 	                          "data_file_id BIGINT, table_id BIGINT, column_id BIGINT, "
@@ -60,7 +66,6 @@ static string EmitStagedDataFiles(const LocalTableChanges &local_changes, const 
 	                          "attached_local_file_id BIGINT);",
 	                          sfx);
 
-	idx_t local_file_id = 0;
 	for (auto &entry : local_changes.Changes()) {
 		auto table_id = entry.GetTableIndex();
 		auto &table_changes = entry.GetTableChanges();
@@ -68,7 +73,7 @@ static string EmitStagedDataFiles(const LocalTableChanges &local_changes, const 
 		for (auto &file : table_changes.new_data_files) {
 			sql += StringUtil::Format(
 			    "INSERT INTO {METADATA_CATALOG}.ducklake_staged_data_file_%s VALUES "
-			    "(%llu, %llu, %llu, %s, false, 'parquet', %llu, %llu, %s, %s, %s, %s, %s, %s, %s);",
+			    "(%llu, %llu, %llu, %s, false, 'parquet', %llu, %llu, %s, %s, %s, %s, %s, %s, %s, NULL);",
 			    sfx, local_file_id, table_id.index, file_order, SQLString(file.file_name), file.row_count,
 			    file.file_size_bytes, DuckLakeUtil::OptionalIdxOrNull(file.footer_size),
 			    DuckLakeUtil::OptionalIdxOrNull(file.flush_row_id_start),
@@ -253,6 +258,98 @@ static string EmitStagedDeleteFiles(const LocalTableChanges &local_changes, cons
 	return sql;
 }
 
+static string EmitStagedCompactions(const LocalTableChanges &local_changes, const string &sfx, idx_t &local_file_id) {
+	// Stages MERGE_ADJACENT and REWRITE_DELETES compactions. Each entry has:
+	//   - A compaction header (type, row_id_start, optional output file).
+	//   - One row per source file (with the LAST delete file inlined, which is all WriteCompactions reads).
+	// The compaction-output `written_file` reuses ducklake_staged_data_file with compaction_id set,
+	// so its column stats flow through the existing column-stats staging. The server-side reader
+	// routes those rows into the compaction entry instead of new_data_files.
+	string sql;
+	sql += StringUtil::Format("CREATE TABLE IF NOT EXISTS {METADATA_CATALOG}.ducklake_staged_compaction_%s("
+	                          "compaction_id BIGINT, table_id BIGINT, compaction_type VARCHAR, "
+	                          "row_id_start BIGINT, output_local_file_id BIGINT);",
+	                          sfx);
+	sql += StringUtil::Format("CREATE TABLE IF NOT EXISTS {METADATA_CATALOG}.ducklake_staged_compaction_source_%s("
+	                          "compaction_id BIGINT, source_order BIGINT, "
+	                          "source_data_file_id BIGINT, source_path VARCHAR, "
+	                          "source_row_count BIGINT, source_begin_snapshot BIGINT, "
+	                          "source_max_partial_file_snapshot BIGINT, source_inlined_delete_count BIGINT, "
+	                          "last_delete_file_id BIGINT, last_delete_path VARCHAR, "
+	                          "last_delete_row_count BIGINT, last_delete_end_snapshot BIGINT);",
+	                          sfx);
+
+	idx_t compaction_id = 0;
+	for (auto &entry : local_changes.Changes()) {
+		auto table_id = entry.GetTableIndex();
+		auto &table_changes = entry.GetTableChanges();
+		for (auto &compaction : table_changes.compactions) {
+			bool has_written_file = !compaction.written_file.file_name.empty();
+			string output_local_id = "NULL";
+			if (has_written_file) {
+				// Emit the written_file into the shared staged_data_file table with compaction_id
+				// set. column_stats follow via the same loop below (mirrors regular new_data_files).
+				auto &out = compaction.written_file;
+				sql += StringUtil::Format(
+				    "INSERT INTO {METADATA_CATALOG}.ducklake_staged_data_file_%s VALUES "
+				    "(%llu, %llu, 0, %s, false, 'parquet', %llu, %llu, %s, %s, %s, %s, %s, %s, %s, %llu);",
+				    sfx, local_file_id, table_id.index, SQLString(out.file_name), out.row_count, out.file_size_bytes,
+				    DuckLakeUtil::OptionalIdxOrNull(out.footer_size),
+				    DuckLakeUtil::OptionalIdxOrNull(out.flush_row_id_start),
+				    DuckLakeUtil::OptionalIdxOrNull(out.partition_id),
+				    DuckLakeUtil::EncryptionKeyLiteral(out.encryption_key),
+				    DuckLakeUtil::MappingIdOrNull(out.mapping_id),
+				    DuckLakeUtil::OptionalIdxOrNull(out.max_partial_file_snapshot),
+				    DuckLakeUtil::OptionalIdxOrNull(out.begin_snapshot), compaction_id);
+				for (auto &stat : out.column_stats) {
+					auto info = DuckLakeColumnStatsInfo::FromColumnStats(stat.first, stat.second);
+					sql += StringUtil::Format(
+					    "INSERT INTO {METADATA_CATALOG}.ducklake_staged_data_file_column_stats_%s "
+					    "VALUES (%llu, %llu, %llu, %s, %s, %s, %s, %s, %s, %s);",
+					    sfx, local_file_id, table_id.index, info.column_id.index, info.column_size_bytes,
+					    info.value_count, info.null_count, info.min_val, info.max_val, info.contains_nan,
+					    info.extra_stats);
+				}
+				output_local_id = std::to_string(local_file_id);
+				local_file_id++;
+			}
+
+			const char *type_str =
+			    compaction.type == CompactionType::REWRITE_DELETES ? "rewrite_delete" : "merge_adjacent";
+			sql += StringUtil::Format("INSERT INTO {METADATA_CATALOG}.ducklake_staged_compaction_%s "
+			                          "VALUES (%llu, %llu, %s, %s, %s);",
+			                          sfx, compaction_id, table_id.index, SQLString(type_str),
+			                          DuckLakeUtil::OptionalIdxOrNull(compaction.row_id_start), output_local_id);
+
+			idx_t source_order = 0;
+			for (auto &source : compaction.source_files) {
+				string last_id = "NULL";
+				string last_path = "NULL";
+				string last_row_count = "NULL";
+				string last_end_snap = "NULL";
+				if (!source.delete_files.empty()) {
+					auto &last = source.delete_files.back();
+					last_id = std::to_string(last.delete_file_id.index);
+					last_path = DuckLakeUtil::SQLLiteralToString(last.data.path);
+					last_row_count = std::to_string(last.row_count);
+					last_end_snap = DuckLakeUtil::OptionalIdxOrNull(last.end_snapshot);
+				}
+				sql += StringUtil::Format(
+				    "INSERT INTO {METADATA_CATALOG}.ducklake_staged_compaction_source_%s "
+				    "VALUES (%llu, %llu, %llu, %s, %llu, %llu, %s, %llu, %s, %s, %s, %s);",
+				    sfx, compaction_id, source_order, source.file.id.index,
+				    DuckLakeUtil::SQLLiteralToString(source.file.data.path), source.file.row_count,
+				    source.file.begin_snapshot, DuckLakeUtil::OptionalIdxOrNull(source.max_partial_file_snapshot),
+				    static_cast<idx_t>(source.inlined_file_deletions.size()), last_id, last_path, last_row_count,
+				    last_end_snap);
+				source_order++;
+			}
+			compaction_id++;
+		}
+	}
+	return sql;
+}
+
 static string EmitStagedFlushedInlinedTables(const vector<FlushedInlinedTableInfo> &flushed, const string &sfx) {
 	string sql;
 	sql += StringUtil::Format("CREATE TABLE IF NOT EXISTS {METADATA_CATALOG}.ducklake_staged_flushed_inlined_%s("
@@ -316,7 +413,9 @@ string DuckLakeStagedCommit::Build(DuckLakeTransaction &transaction,
 	string batch;
 	batch += EmitStagedCommitHeader(transaction.GetCommitInfo(), transaction_snapshot, ducklake_catalog.DataPath(),
 	                                ducklake_catalog.Separator(), identifier_suffix);
-	batch += EmitStagedDataFiles(transaction.GetLocalChanges(), identifier_suffix);
+	idx_t local_file_id = 0;
+	batch += EmitStagedDataFiles(transaction.GetLocalChanges(), identifier_suffix, local_file_id);
+	batch += EmitStagedCompactions(transaction.GetLocalChanges(), identifier_suffix, local_file_id);
 	batch += EmitStagedInlinedData(transaction.GetLocalChanges(), transaction, identifier_suffix);
 	batch += EmitStagedInlinedDeletes(transaction.GetLocalChanges(), identifier_suffix);
 	batch += EmitStagedInlinedFileDeletes(transaction.GetLocalChanges(), identifier_suffix);

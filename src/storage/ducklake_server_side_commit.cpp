@@ -112,6 +112,7 @@ DuckLakeServerSideCommitResult DuckLakeServerSideCommit::Run() {
 	ReadStagedDeleteFiles();        // fills state->local_changes (parquet delete-vector files)
 	ReadStagedDroppedFiles();       // fills state->dropped_files + state->tables_deleted_from
 	ReadStagedFlushedInlinedTables(); // fills state->flushed_inlined_tables (inlined → parquet flushes)
+	ReadStagedCompactions();          // fills state->local_changes.compactions (merge_adjacent / rewrite_delete)
 	ReadExistingTableStats();       // fills existing_table_stats (first-attempt path for get_table_stats)
 
 	// Derive transaction_changes the same way DuckLakeTransaction would — directly from
@@ -255,7 +256,8 @@ void DuckLakeServerSideCommit::ReadStagedDataFiles() {
 	map<TableIndex, vector<DuckLakeDataFile>> files_per_table;
 	auto files_query =
 	    StringUtil::Format("SELECT data_file_id, table_id, path, record_count, file_size_bytes, footer_size, "
-	                       "row_id_start, partition_id, encryption_key, mapping_id, partial_max, begin_snapshot "
+	                       "row_id_start, partition_id, encryption_key, mapping_id, partial_max, begin_snapshot, "
+	                       "compaction_id "
 	                       "FROM %s.ducklake_staged_data_file_%s ORDER BY table_id, file_order",
 	                       schema_id, identifier_suffix);
 	auto files_result = RunQuery(files_query, "read staged files");
@@ -293,6 +295,11 @@ void DuckLakeServerSideCommit::ReadStagedDataFiles() {
 		auto attached_it = attached_deletes.find(local_file_id.index);
 		if (attached_it != attached_deletes.end()) {
 			f.delete_files = std::move(attached_it->second);
+		}
+		// Compaction-output file: set aside for ReadStagedCompactions, don't push into new_data_files.
+		if (!row.IsNull(12)) {
+			compaction_output_files.emplace(static_cast<idx_t>(row.GetValue<int64_t>(12)), std::move(f));
+			continue;
 		}
 		files_per_table[TableIndex(static_cast<idx_t>(row.GetValue<int64_t>(1)))].push_back(std::move(f));
 	}
@@ -586,6 +593,99 @@ void DuckLakeServerSideCommit::ReadStagedFlushedInlinedTables() {
 	}
 }
 
+void DuckLakeServerSideCommit::ReadStagedCompactions() {
+	// Read compaction headers first into a per-id map; we'll fill in source_files in a second pass.
+	struct CompactionShell {
+		TableIndex table_id;
+		CompactionType type;
+		optional_idx row_id_start;
+		optional_idx output_local_file_id;
+	};
+	map<idx_t, CompactionShell> shells;
+	auto header_query =
+	    StringUtil::Format("SELECT compaction_id, table_id, compaction_type, row_id_start, output_local_file_id "
+	                       "FROM %s.ducklake_staged_compaction_%s",
+	                       schema_id, identifier_suffix);
+	auto header_result = RunQuery(header_query, "read staged compactions");
+	for (auto &row : *header_result) {
+		idx_t cid = static_cast<idx_t>(row.GetValue<int64_t>(0));
+		CompactionShell shell;
+		shell.table_id = TableIndex(static_cast<idx_t>(row.GetValue<int64_t>(1)));
+		auto type_str = row.GetValue<string>(2);
+		shell.type = type_str == "rewrite_delete" ? CompactionType::REWRITE_DELETES : CompactionType::MERGE_ADJACENT_TABLES;
+		if (!row.IsNull(3)) {
+			shell.row_id_start = static_cast<idx_t>(row.GetValue<int64_t>(3));
+		}
+		if (!row.IsNull(4)) {
+			shell.output_local_file_id = static_cast<idx_t>(row.GetValue<int64_t>(4));
+		}
+		shells.emplace(cid, std::move(shell));
+	}
+
+	// Group source files by compaction_id, ordered by source_order.
+	map<idx_t, vector<DuckLakeCompactionFileEntry>> sources_by_compaction;
+	auto sources_query =
+	    StringUtil::Format("SELECT compaction_id, source_data_file_id, source_path, source_row_count, "
+	                       "source_begin_snapshot, source_max_partial_file_snapshot, source_inlined_delete_count, "
+	                       "last_delete_file_id, last_delete_path, last_delete_row_count, last_delete_end_snapshot "
+	                       "FROM %s.ducklake_staged_compaction_source_%s "
+	                       "ORDER BY compaction_id, source_order",
+	                       schema_id, identifier_suffix);
+	auto sources_result = RunQuery(sources_query, "read staged compaction sources");
+	for (auto &row : *sources_result) {
+		idx_t cid = static_cast<idx_t>(row.GetValue<int64_t>(0));
+		DuckLakeCompactionFileEntry entry;
+		entry.file.id = DataFileIndex(static_cast<idx_t>(row.GetValue<int64_t>(1)));
+		entry.file.data.path = row.GetValue<string>(2);
+		entry.file.row_count = static_cast<idx_t>(row.GetValue<int64_t>(3));
+		entry.file.begin_snapshot = static_cast<idx_t>(row.GetValue<int64_t>(4));
+		if (!row.IsNull(5)) {
+			entry.max_partial_file_snapshot = static_cast<idx_t>(row.GetValue<int64_t>(5));
+		}
+		// inlined_file_deletions stored as a count — fill the set with placeholder values so
+		// GetCompactionChanges' `row_id_limit -= inlined_file_deletions.size()` works correctly.
+		auto inlined_count = static_cast<idx_t>(row.GetValue<int64_t>(6));
+		for (idx_t i = 0; i < inlined_count; i++) {
+			entry.inlined_file_deletions.insert(i);
+		}
+		entry.has_inlined_deletions = inlined_count > 0;
+		if (!row.IsNull(7)) {
+			DuckLakeCompactionDeleteFileData del;
+			del.delete_file_id = DataFileIndex(static_cast<idx_t>(row.GetValue<int64_t>(7)));
+			if (!row.IsNull(8)) {
+				del.data.path = row.GetValue<string>(8);
+			}
+			del.row_count = static_cast<idx_t>(row.GetValue<int64_t>(9));
+			if (!row.IsNull(10)) {
+				del.end_snapshot = static_cast<idx_t>(row.GetValue<int64_t>(10));
+			}
+			entry.delete_files.push_back(std::move(del));
+		}
+		sources_by_compaction[cid].push_back(std::move(entry));
+	}
+
+	// Assemble DuckLakeCompactionEntry per shell, pull written_file from compaction_output_files,
+	// and feed into LocalTableChanges via AddCompaction (same path the client uses).
+	for (auto &kv : shells) {
+		idx_t cid = kv.first;
+		auto &shell = kv.second;
+		DuckLakeCompactionEntry entry;
+		entry.type = shell.type;
+		entry.row_id_start = shell.row_id_start;
+		if (shell.output_local_file_id.IsValid()) {
+			auto it = compaction_output_files.find(shell.output_local_file_id.GetIndex());
+			if (it != compaction_output_files.end()) {
+				entry.written_file = std::move(it->second);
+			}
+		}
+		auto src_it = sources_by_compaction.find(cid);
+		if (src_it != sources_by_compaction.end()) {
+			entry.source_files = std::move(src_it->second);
+		}
+		state->local_changes.AddCompaction(shell.table_id, std::move(entry));
+	}
+}
+
 void DuckLakeServerSideCommit::ReadExistingTableStats() {
 	// Shared SQL + parser with DuckLakeMetadataManager::GetGlobalTableStats — single combined query
 	// over ducklake_table_stats LEFT JOIN ducklake_table_column_stats folded into per-table entries.
@@ -815,6 +915,9 @@ string DuckLakeServerSideCommit::EmitDropStagingSql() const {
 	sql += StringUtil::Format("DROP TABLE IF EXISTS %s.ducklake_staged_delete_file_%s;", schema_id, identifier_suffix);
 	sql += StringUtil::Format("DROP TABLE IF EXISTS %s.ducklake_staged_dropped_file_%s;", schema_id, identifier_suffix);
 	sql += StringUtil::Format("DROP TABLE IF EXISTS %s.ducklake_staged_flushed_inlined_%s;", schema_id,
+	                          identifier_suffix);
+	sql += StringUtil::Format("DROP TABLE IF EXISTS %s.ducklake_staged_compaction_%s;", schema_id, identifier_suffix);
+	sql += StringUtil::Format("DROP TABLE IF EXISTS %s.ducklake_staged_compaction_source_%s;", schema_id,
 	                          identifier_suffix);
 	return sql;
 }
