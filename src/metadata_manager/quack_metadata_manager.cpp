@@ -72,6 +72,7 @@ void QuackMetadataManager::ClearCache() {
 		return;
 	}
 	auto raw_message = result->GetErrorObject().RawMessage();
+	// Older Quack builds only expose the zero-arg quack_clear_cache; fall back when the one-arg overload is missing.
 	if (!StringUtil::Contains(raw_message, "No function matches")) {
 		result->GetErrorObject().Throw("Failed to clear Quack metadata cache: ");
 	}
