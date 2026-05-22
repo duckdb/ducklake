@@ -14,6 +14,7 @@
 #include "duckdb/parallel/thread_context.hpp"
 #include "duckdb/catalog/catalog_entry/table_catalog_entry.hpp"
 #include "duckdb/execution/operator/projection/physical_projection.hpp"
+#include "duckdb/parallel/event.hpp"
 
 namespace duckdb {
 
@@ -120,9 +121,59 @@ SinkCombineResultType DuckLakeMergeInsert::Combine(ExecutionContext &context, Op
 	return copy.Combine(context, combine_input);
 }
 
+
+namespace {
+
+//! Extend the Event class to be able to capture a created Event
+//! When an Event is created through 'Event::InsertEvent' it gets added to the 'parents'
+//! Through GetCapturedEvent we can access this newly created event
+class CaptureEvent : public Event {
+public:
+	explicit CaptureEvent(Executor &executor) : Event(executor) {
+	}
+
+	void Schedule() override {
+		// No-op
+	}
+
+	shared_ptr<Event> GetCapturedEvent() {
+		if (parents.empty()) {
+			return nullptr;
+		}
+		return parents[0].lock();
+	}
+};
+
+} // namespace
+
 // Scan copy operator source and sink into insert operator — shared by MergeInsert and MergeUpdate
-static void FinalizeCopyToInsert(Pipeline &pipeline, Event &event, ClientContext &context, PhysicalOperator &copy_op,
+static SinkFinalizeType FinalizeCopyToInsert(Pipeline &pipeline, Event &event, ClientContext &context, PhysicalOperator &copy_op,
                                  PhysicalOperator &insert_op, InterruptState &interrupt_state) {
+	OperatorSinkFinalizeInput copy_finalize {*copy_op.sink_state, interrupt_state};
+	CaptureEvent capture_event(pipeline.executor);
+	auto finalize_result = copy_op.Finalize(pipeline, capture_event, context, copy_finalize);
+	if (finalize_result == SinkFinalizeType::BLOCKED) {
+		return SinkFinalizeType::BLOCKED;
+	}
+
+	//! PhysicalCopyToFile creates an Event as part of Finalize
+	//! We need to intercept and execute this event's tasks, to finish the finalize work
+	auto captured_event = capture_event.GetCapturedEvent();
+	if (captured_event) {
+		// Schedule the event's tasks with our token
+		captured_event->Schedule();
+
+		// Work on tasks until the event is finished
+		shared_ptr<Task> task;
+		auto &token = pipeline.executor.GetToken();
+		while (!captured_event->IsFinished()) {
+			if (TaskScheduler::GetScheduler(context).GetTaskFromProducer(token, task)) {
+				task->Execute(TaskExecutionMode::PROCESS_ALL);
+				task.reset();
+			}
+		}
+	}
+
 	DataChunk chunk;
 	chunk.Initialize(context, copy_op.types);
 
@@ -162,18 +213,12 @@ static void FinalizeCopyToInsert(Pipeline &pipeline, Event &event, ClientContext
 	if (finalize_res == SinkFinalizeType::BLOCKED) {
 		throw InternalException("BLOCKED not supported in DuckLakeMerge");
 	}
+	return SinkFinalizeType::READY;
 }
 
 SinkFinalizeType DuckLakeMergeInsert::Finalize(Pipeline &pipeline, Event &event, ClientContext &context,
                                                OperatorSinkFinalizeInput &input) const {
-	OperatorSinkFinalizeInput copy_finalize {*copy.sink_state, input.interrupt_state};
-	auto finalize_result = copy.Finalize(pipeline, event, context, copy_finalize);
-	if (finalize_result == SinkFinalizeType::BLOCKED) {
-		return SinkFinalizeType::BLOCKED;
-	}
-
-	FinalizeCopyToInsert(pipeline, event, context, copy, insert, input.interrupt_state);
-	return SinkFinalizeType::READY;
+	return FinalizeCopyToInsert(pipeline, event, context, copy, insert, input.interrupt_state);
 }
 
 unique_ptr<GlobalSinkState> DuckLakeMergeInsert::GetGlobalSinkState(ClientContext &context) const {
@@ -379,11 +424,7 @@ SinkFinalizeType DuckLakeMergeUpdate::Finalize(Pipeline &pipeline, Event &event,
 		inline_data_op->OperatorFinalize(pipeline, event, context, inline_finalize);
 	}
 
-	OperatorSinkFinalizeInput copy_finalize {*copy_op.sink_state, input.interrupt_state};
-	copy_op.Finalize(pipeline, event, context, copy_finalize);
-
-	FinalizeCopyToInsert(pipeline, event, context, copy_op, insert_op, input.interrupt_state);
-	return SinkFinalizeType::READY;
+	return FinalizeCopyToInsert(pipeline, event, context, copy_op, insert_op, input.interrupt_state);
 }
 
 //===--------------------------------------------------------------------===//
