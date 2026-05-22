@@ -770,7 +770,7 @@ NewDataInfo DuckLakeTransactionState::GetNewDataFiles(string &batch_query, DuckL
 		if (table_changes.new_inlined_data) {
 			auto &inlined_data = *table_changes.new_inlined_data;
 
-			idx_t record_count = inlined_data.data->Count();
+			idx_t record_count = inlined_data.Count();
 
 			DuckLakeInlinedDataInfo new_inlined_data;
 			new_inlined_data.table_id = table_id;

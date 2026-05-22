@@ -105,8 +105,15 @@ DuckLakeServerSideCommitResult DuckLakeServerSideCommit::Run() {
 	// Reconstruct the DuckLakeTransactionState from staging — each method fills a slice.
 	ReadCommitHeader();       // creates state, fills commit_info/data_path/separator, sets transaction_snapshot
 	ReadColumnTypes();        // fills column_types (used by stats reconstruction below + retry closure)
-	ReadStagedDataFiles();    // fills state->local_changes + derives transaction_changes from it
+	ReadStagedDataFiles();    // fills state->local_changes (data files)
+	ReadStagedInlinedData();  // fills state->local_changes (inlined data) + staged_inlined_tuples
 	ReadExistingTableStats(); // fills existing_table_stats (first-attempt path for get_table_stats)
+
+	// Derive transaction_changes the same way DuckLakeTransaction would — directly from
+	// the now-fully-hydrated local_changes (both data files and inlined data).
+	for (auto &entry : state->local_changes.Changes()) {
+		DuckLakeTransaction::AddTableChanges(entry.GetTableIndex(), entry.GetTableChanges(), transaction_changes);
+	}
 
 	// Delegate to the unified commit loop. Closures capture committed_* by reference so we can
 	// return them; the state itself owns everything else needed for retry / conflict / SQL emission.
@@ -157,13 +164,17 @@ void DuckLakeServerSideCommit::ReadCommitHeader() {
 
 void DuckLakeServerSideCommit::ReadColumnTypes() {
 	// Load types for every column of every table touched in this commit — covers columns with staged
-	// per-file stats AND columns whose cumulative ducklake_table_column_stats row we read back.
+	// per-file stats AND columns whose cumulative ducklake_table_column_stats row we read back, plus
+	// columns of tables touched by staged inlined-data inserts.
 	auto query =
 	    StringUtil::Format("SELECT col.table_id, col.column_id, col.column_type "
 	                       "FROM %s.ducklake_column col "
 	                       "WHERE col.end_snapshot IS NULL "
-	                       "AND col.table_id IN (SELECT DISTINCT table_id FROM %s.ducklake_staged_data_file_%s)",
-	                       schema_id, schema_id, identifier_suffix);
+	                       "AND col.table_id IN ("
+	                       "  SELECT table_id FROM %s.ducklake_staged_data_file_%s "
+	                       "  UNION "
+	                       "  SELECT table_id FROM %s.ducklake_staged_inlined_data_%s)",
+	                       schema_id, schema_id, identifier_suffix, schema_id, identifier_suffix);
 	auto result = RunQuery(query, "read column types");
 	for (auto &row : *result) {
 		column_types.emplace(ColumnKey {TableIndex(static_cast<idx_t>(row.GetValue<int64_t>(0))),
@@ -238,10 +249,126 @@ void DuckLakeServerSideCommit::ReadStagedDataFiles() {
 	for (auto &entry : files_per_table) {
 		state->local_changes.AppendFiles(entry.first, std::move(entry.second));
 	}
+}
 
-	// Derive transaction_changes the same way DuckLakeTransaction would — directly from local_changes.
-	for (auto &entry : state->local_changes.Changes()) {
-		DuckLakeTransaction::AddTableChanges(entry.GetTableIndex(), entry.GetTableChanges(), transaction_changes);
+void DuckLakeServerSideCommit::ReadStagedInlinedData() {
+	// `ducklake_staged_inlined_data_<sfx>(table_id, has_preserved_row_ids)` — one row per table that
+	// has inlined inserts in this commit.
+	auto meta_query = StringUtil::Format("SELECT table_id, has_preserved_row_ids "
+	                                     "FROM %s.ducklake_staged_inlined_data_%s",
+	                                     schema_id, identifier_suffix);
+	auto meta_result = RunQuery(meta_query, "read staged inlined data meta");
+	struct PerTable {
+		bool has_preserved = false;
+	};
+	map<TableIndex, PerTable> per_table;
+	for (auto &row : *meta_result) {
+		TableIndex table_id(static_cast<idx_t>(row.GetValue<int64_t>(0)));
+		per_table[table_id].has_preserved = row.GetValue<bool>(1);
+	}
+	if (per_table.empty()) {
+		return;
+	}
+
+	// `ducklake_staged_inlined_row_<sfx>(table_id, row_order, preserved_row_id, value_literals)` —
+	// one row per inlined-data row; `value_literals` is the SQL tuple text produced by
+	// DuckLakeUtil::ValueToSQL at staging time. Group by table_id and order by row_order.
+	auto rows_query = StringUtil::Format("SELECT table_id, preserved_row_id, value_literals "
+	                                     "FROM %s.ducklake_staged_inlined_row_%s "
+	                                     "ORDER BY table_id, row_order",
+	                                     schema_id, identifier_suffix);
+	auto rows_result = RunQuery(rows_query, "read staged inlined rows");
+	for (auto &row : *rows_result) {
+		TableIndex table_id(static_cast<idx_t>(row.GetValue<int64_t>(0)));
+		auto pt_it = per_table.find(table_id);
+		if (pt_it == per_table.end()) {
+			continue;
+		}
+		staged_inlined_tuples[table_id].push_back(row.GetValue<string>(2));
+		if (pt_it->second.has_preserved) {
+			// preserved_row_id is NULL for INSERTed rows (transaction-local placeholder), real id
+			// for UPDATEd rows. Use TRANSACTION_LOCAL_ROW_ID_START as the placeholder so the state's
+			// next_row_id accounting matches the client-side path.
+			int64_t rid;
+			if (row.IsNull(1)) {
+				rid = static_cast<int64_t>(DuckLakeConstants::TRANSACTION_LOCAL_ROW_ID_START);
+			} else {
+				rid = row.GetValue<int64_t>(1);
+			}
+			staged_inlined_row_ids[table_id].push_back(rid);
+		}
+	}
+
+	// `ducklake_staged_inlined_column_stats_<sfx>` — one row per (table_id, column_id) of staged
+	// inlined-data stats, fed into MergeStats during state.CommitChanges so global stats track
+	// the new rows.
+	auto stats_query = StringUtil::Format(
+	    "SELECT table_id, column_id, column_size_bytes, has_num_values, num_values, has_null_count, null_count, "
+	    "has_min, min_value, has_max, max_value, has_contains_nan, contains_nan, any_valid, extra_stats "
+	    "FROM %s.ducklake_staged_inlined_column_stats_%s",
+	    schema_id, identifier_suffix);
+	auto stats_result = RunQuery(stats_query, "read staged inlined column stats");
+	map<TableIndex, map<FieldIndex, DuckLakeColumnStats>> stats_per_table;
+	for (auto &row : *stats_result) {
+		TableIndex table_id(static_cast<idx_t>(row.GetValue<int64_t>(0)));
+		FieldIndex column_id(static_cast<idx_t>(row.GetValue<int64_t>(1)));
+		auto type_it = column_types.find({table_id, column_id});
+		if (type_it == column_types.end()) {
+			continue;
+		}
+		DuckLakeColumnStats s(type_it->second);
+		if (!row.IsNull(2)) {
+			s.column_size_bytes = static_cast<idx_t>(row.GetValue<int64_t>(2));
+		}
+		s.has_num_values = !row.IsNull(3) && row.GetValue<bool>(3);
+		if (s.has_num_values && !row.IsNull(4)) {
+			s.num_values = static_cast<idx_t>(row.GetValue<int64_t>(4));
+		}
+		s.has_null_count = !row.IsNull(5) && row.GetValue<bool>(5);
+		if (s.has_null_count && !row.IsNull(6)) {
+			s.null_count = static_cast<idx_t>(row.GetValue<int64_t>(6));
+		}
+		if (!row.IsNull(7) && row.GetValue<bool>(7) && !row.IsNull(8)) {
+			s.has_min = true;
+			s.min = row.GetValue<string>(8);
+		}
+		if (!row.IsNull(9) && row.GetValue<bool>(9) && !row.IsNull(10)) {
+			s.has_max = true;
+			s.max = row.GetValue<string>(10);
+		}
+		s.has_contains_nan = !row.IsNull(11) && row.GetValue<bool>(11);
+		if (s.has_contains_nan && !row.IsNull(12)) {
+			s.contains_nan = row.GetValue<bool>(12);
+		}
+		if (!row.IsNull(13)) {
+			s.any_valid = row.GetValue<bool>(13);
+		}
+		if (!row.IsNull(14) && s.extra_stats) {
+			s.extra_stats->Deserialize(row.GetValue<string>(14));
+		}
+		stats_per_table[table_id].emplace(column_id, std::move(s));
+	}
+
+	// Build a DuckLakeInlinedData per table. `data` is null — the closure reads from
+	// `staged_inlined_tuples` instead of walking a ColumnDataCollection.
+	for (auto &entry : per_table) {
+		auto table_id = entry.first;
+		auto tuples_it = staged_inlined_tuples.find(table_id);
+		idx_t row_count = (tuples_it == staged_inlined_tuples.end()) ? 0 : tuples_it->second.size();
+
+		auto inlined = make_uniq<DuckLakeInlinedData>();
+		inlined->external_row_count = row_count;
+		auto stats_it = stats_per_table.find(table_id);
+		if (stats_it != stats_per_table.end()) {
+			inlined->column_stats = std::move(stats_it->second);
+		}
+		if (entry.second.has_preserved) {
+			auto row_ids_it = staged_inlined_row_ids.find(table_id);
+			if (row_ids_it != staged_inlined_row_ids.end()) {
+				inlined->row_ids = row_ids_it->second;
+			}
+		}
+		state->local_changes.AppendInlinedData(context, table_id, std::move(inlined));
 	}
 }
 
@@ -338,15 +465,77 @@ DuckLakeCommitContext DuckLakeServerSideCommit::BuildContext(idx_t &committed_sn
 	                               const vector<DuckLakeTableInfo> &, vector<DuckLakeSchemaInfo> &) {
 		return false;
 	};
-	// Inlined-data closures are unreachable today: the gate rejects tables_inserted_inlined, and
-	// the data-only commit path never produces new_tables — so CommitChanges never invokes these.
-	// Once we lift inlined emitters to statics they'll be wired here.
+	// `write_inlined_tables` (the CREATE TABLE part) is still unreachable: the data-only commit
+	// gate rejects `created_tables`, so `new_tables` is empty here. Once DDL lands this gets wired.
 	ctx.write_inlined_tables = [](DuckLakeSnapshot, const vector<DuckLakeTableInfo> &) {
 		return string();
 	};
-	ctx.write_inlined_data = [](DuckLakeSnapshot &, const vector<DuckLakeInlinedDataInfo> &,
-	                            const vector<DuckLakeTableInfo> &, const vector<DuckLakeTableInfo> &) {
-		return string();
+	// `write_inlined_data` emits INSERT INTO ducklake_inlined_data_<id>_<sv> VALUES (...).
+	// Staged value_literals already carry SQL-formatted column tuples (produced by
+	// DuckLakeUtil::ValueToSQL at staging time), so we splice them in directly rather than
+	// reconstruct a ColumnDataCollection on the server.
+	ctx.write_inlined_data = [this](DuckLakeSnapshot &, const vector<DuckLakeInlinedDataInfo> &new_data,
+	                                const vector<DuckLakeTableInfo> &,
+	                                const vector<DuckLakeTableInfo> &) -> string {
+		string batch;
+		for (auto &entry : new_data) {
+			auto tuples_it = staged_inlined_tuples.find(entry.table_id);
+			if (tuples_it == staged_inlined_tuples.end() || tuples_it->second.empty()) {
+				continue;
+			}
+			auto &tuples = tuples_it->second;
+			auto row_ids_it = staged_inlined_row_ids.find(entry.table_id);
+			const bool has_preserved = row_ids_it != staged_inlined_row_ids.end();
+
+			// Resolve the latest inlined-data table name for this table. Cache across retries so
+			// we only hit the metadata DB once per table_id per commit.
+			auto cache_it = inlined_table_name_cache.find(entry.table_id.index);
+			if (cache_it == inlined_table_name_cache.end()) {
+				auto lookup =
+				    StringUtil::Replace(DuckLakeMetadataManager::LatestInlinedTableQuery(entry.table_id.index),
+				                        "{METADATA_CATALOG}", schema_id) +
+				    ";";
+				auto result = RunQuery(lookup, "lookup inlined table name");
+				string name;
+				for (auto &row : *result) {
+					name = row.GetValue<string>(0);
+				}
+				cache_it = inlined_table_name_cache.emplace(entry.table_id.index, std::move(name)).first;
+			}
+			const string &inlined_table_name = cache_it->second;
+			if (inlined_table_name.empty()) {
+				// No inlined table yet — only reachable via CREATE TABLE in this commit, which is
+				// gated out. Skip rather than crash on a stray staged row.
+				continue;
+			}
+
+			idx_t row_id = entry.row_id_start;
+			string values;
+			for (idx_t i = 0; i < tuples.size(); i++) {
+				int64_t emit_rid;
+				if (has_preserved) {
+					int64_t staged_rid = row_ids_it->second[i];
+					if (DuckLakeConstants::IsTransactionLocalRowId(staged_rid)) {
+						emit_rid = static_cast<int64_t>(row_id++);
+					} else {
+						emit_rid = staged_rid;
+					}
+				} else {
+					emit_rid = static_cast<int64_t>(row_id++);
+				}
+				// Staged value_literals are wrapped as "(v1, v2, ...)". Strip the outer parens
+				// so we can splice the cells in after the (row_id, snapshot, NULL) prefix.
+				auto &tuple = tuples[i];
+				string inner = tuple.size() >= 2 ? tuple.substr(1, tuple.size() - 2) : tuple;
+				if (!values.empty()) {
+					values += ", ";
+				}
+				values += StringUtil::Format("(%lld, {SNAPSHOT_ID}, NULL, %s)", emit_rid, inner);
+			}
+			batch += StringUtil::Format("INSERT INTO {METADATA_CATALOG}.%s VALUES %s;",
+			                            SQLIdentifier(inlined_table_name), values);
+		}
+		return batch;
 	};
 	ctx.get_table_stats = [this](TableIndex table_id) -> shared_ptr<DuckLakeTableStats> {
 		auto it = existing_table_stats.find(table_id);

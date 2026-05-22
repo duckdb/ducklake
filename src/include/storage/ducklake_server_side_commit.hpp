@@ -45,6 +45,7 @@ private:
 	void ReadCommitHeader();
 	void ReadColumnTypes();
 	void ReadStagedDataFiles();
+	void ReadStagedInlinedData();
 	void ReadExistingTableStats();
 
 	// Closure backends.
@@ -72,6 +73,17 @@ private:
 	TransactionChangeInformation transaction_changes;
 	map<ColumnKey, LogicalType> column_types;
 	map<TableIndex, shared_ptr<DuckLakeTableStats>> existing_table_stats;
+
+	//! Per-table SQL literal tuples staged for inlined-data inserts. `write_inlined_data` reads
+	//! these directly instead of walking a ColumnDataCollection — the client has already
+	//! produced the per-cell SQL via DuckLakeUtil::ValueToSQL at staging time.
+	map<TableIndex, vector<string>> staged_inlined_tuples;
+	//! Parallel to `staged_inlined_tuples` — row_ids for update-inlining (transaction-local
+	//! placeholder for INSERTed rows, real id for UPDATEd rows). Empty if !HasPreservedRowIds.
+	map<TableIndex, vector<int64_t>> staged_inlined_row_ids;
+	//! Cache of inlined_table_name lookups (keyed by table_id.index) so we hit the metadata DB
+	//! once per table across the commit retry loop.
+	map<idx_t, string> inlined_table_name_cache;
 };
 
 } // namespace duckdb

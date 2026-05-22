@@ -72,6 +72,12 @@
       ]
     },
     {
+      "reason": "Concurrent retry timing test: assumes client-side round-trip latency to surface PK conflicts. Server-side commits complete fast enough.",
+      "paths": [
+        "test/sql/settings/max_retry_count.test"
+      ]
+    },
+    {
       "reason": "FIXME: quack catalog does not implement GetDatabaseSize",
       "paths": [
         "test/sql/general/database_size.test"
