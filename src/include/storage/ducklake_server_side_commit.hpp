@@ -53,6 +53,7 @@ private:
 	void ReadStagedDroppedFiles();
 	void ReadStagedFlushedInlinedTables();
 	void ReadStagedCompactions();
+	void ReadStagedNameMaps();
 	void ReadExistingTableStats();
 
 	// Closure backends.

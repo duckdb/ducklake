@@ -38,18 +38,24 @@ static string EmitStagedDataFiles(const LocalTableChanges &local_changes, const 
 	// uses this to route the file into local_changes.compactions[i].written_file instead of
 	// local_changes.new_data_files; both paths share this staging table so column stats etc. are
 	// captured the same way.
+	// `mapping_id UBIGINT`: name-map ids can be transaction-local sentinels (≥ 2^63), beyond BIGINT.
 	sql += StringUtil::Format("CREATE TABLE IF NOT EXISTS {METADATA_CATALOG}.ducklake_staged_data_file_%s("
 	                          "data_file_id BIGINT, table_id BIGINT, file_order BIGINT, "
 	                          "path VARCHAR, path_is_relative BOOLEAN, file_format VARCHAR, "
 	                          "record_count BIGINT, file_size_bytes BIGINT, footer_size BIGINT, "
 	                          "row_id_start BIGINT, partition_id BIGINT, encryption_key VARCHAR, "
-	                          "mapping_id BIGINT, partial_max BIGINT, begin_snapshot BIGINT, "
+	                          "mapping_id UBIGINT, partial_max BIGINT, begin_snapshot BIGINT, "
 	                          "compaction_id BIGINT);",
 	                          sfx);
 	sql += StringUtil::Format("CREATE TABLE IF NOT EXISTS {METADATA_CATALOG}.ducklake_staged_data_file_column_stats_%s("
 	                          "data_file_id BIGINT, table_id BIGINT, column_id BIGINT, "
 	                          "column_size_bytes BIGINT, value_count BIGINT, null_count BIGINT, "
 	                          "min_value VARCHAR, max_value VARCHAR, contains_nan BOOLEAN, extra_stats VARCHAR);",
+	                          sfx);
+	// Partition values per data file: one row per (file, partition_column_idx). Server attaches
+	// these to DuckLakeDataFile.partition_values; WriteNewDataFilesSqlBatch already handles them.
+	sql += StringUtil::Format("CREATE TABLE IF NOT EXISTS {METADATA_CATALOG}.ducklake_staged_data_file_partition_%s("
+	                          "local_file_id BIGINT, partition_column_idx BIGINT, partition_value VARCHAR);",
 	                          sfx);
 	// `attached_local_file_id BIGINT` lets us share this table between loose delete files
 	// (NULL → goes into LocalTableChanges::new_delete_files) and delete files attached to a
@@ -88,6 +94,17 @@ static string EmitStagedDataFiles(const LocalTableChanges &local_changes, const 
 				                          sfx, local_file_id, table_id.index, info.column_id.index,
 				                          info.column_size_bytes, info.value_count, info.null_count, info.min_val,
 				                          info.max_val, info.contains_nan, info.extra_stats);
+			}
+			// Partition values (for partitioned tables). partition_value is stored as VARCHAR;
+			// WriteNewDataFilesSqlBatch reads `.ToString()` from it, so round-tripping via VARCHAR
+			// is loss-free (all DuckLake metadata stores partition values as text anyway).
+			for (auto &part : file.partition_values) {
+				string val_literal = part.partition_value.IsNull()
+				                         ? string("NULL")
+				                         : DuckLakeUtil::SQLLiteralToString(part.partition_value.ToString());
+				sql += StringUtil::Format("INSERT INTO {METADATA_CATALOG}.ducklake_staged_data_file_partition_%s "
+				                          "VALUES (%llu, %llu, %s);",
+				                          sfx, local_file_id, part.partition_column_idx, val_literal);
 			}
 			// Delete files attached to this transaction-local data file (DELETE applied to rows
 			// of a file inserted in the same transaction). data_file_id is unknown at staging time.
@@ -310,6 +327,14 @@ static string EmitStagedCompactions(const LocalTableChanges &local_changes, cons
 					    info.value_count, info.null_count, info.min_val, info.max_val, info.contains_nan,
 					    info.extra_stats);
 				}
+				for (auto &part : out.partition_values) {
+					string val_literal = part.partition_value.IsNull()
+					                         ? string("NULL")
+					                         : DuckLakeUtil::SQLLiteralToString(part.partition_value.ToString());
+					sql += StringUtil::Format("INSERT INTO {METADATA_CATALOG}.ducklake_staged_data_file_partition_%s "
+					                          "VALUES (%llu, %llu, %s);",
+					                          sfx, local_file_id, part.partition_column_idx, val_literal);
+				}
 				output_local_id = std::to_string(local_file_id);
 				local_file_id++;
 			}
@@ -345,6 +370,44 @@ static string EmitStagedCompactions(const LocalTableChanges &local_changes, cons
 				source_order++;
 			}
 			compaction_id++;
+		}
+	}
+	return sql;
+}
+
+static void FlattenNameMapEntry(const DuckLakeNameMapEntry &entry, idx_t map_id, idx_t parent_id,
+                                idx_t &next_entry_id, const string &sfx, string &sql) {
+	idx_t entry_id = next_entry_id++;
+	string parent_literal = parent_id == NumericLimits<idx_t>::Maximum() ? string("NULL") : std::to_string(parent_id);
+	sql += StringUtil::Format("INSERT INTO {METADATA_CATALOG}.ducklake_staged_name_map_entry_%s "
+	                          "VALUES (%llu, %llu, %s, %s, %llu, %s);",
+	                          sfx, map_id, entry_id, parent_literal, SQLString(entry.source_name),
+	                          entry.target_field_id.index, entry.hive_partition ? "true" : "false");
+	for (auto &child : entry.child_entries) {
+		FlattenNameMapEntry(*child, map_id, entry_id, next_entry_id, sfx, sql);
+	}
+}
+
+static string EmitStagedNameMaps(const DuckLakeNameMapSet &name_maps, const string &sfx) {
+	// Transaction-local column mappings (`mapping_id.index >= TRANSACTION_LOCAL_ID_START` on data
+	// files). State.GetNewNameMaps allocates real IDs and remaps file references at commit time;
+	// we just need to ship the map tree.
+	string sql;
+	// `map_id UBIGINT`: transaction-local sentinel values exceed BIGINT range.
+	sql += StringUtil::Format("CREATE TABLE IF NOT EXISTS {METADATA_CATALOG}.ducklake_staged_name_map_%s("
+	                          "map_id UBIGINT, table_id BIGINT);",
+	                          sfx);
+	sql += StringUtil::Format("CREATE TABLE IF NOT EXISTS {METADATA_CATALOG}.ducklake_staged_name_map_entry_%s("
+	                          "map_id UBIGINT, entry_id BIGINT, parent_entry_id BIGINT, "
+	                          "source_name VARCHAR, target_field_id BIGINT, hive_partition BOOLEAN);",
+	                          sfx);
+	for (auto &entry : name_maps.name_maps) {
+		auto &map = *entry.second;
+		sql += StringUtil::Format("INSERT INTO {METADATA_CATALOG}.ducklake_staged_name_map_%s VALUES (%llu, %llu);", sfx,
+		                          map.id.index, map.table_id.index);
+		idx_t next_entry_id = 0;
+		for (auto &col : map.column_maps) {
+			FlattenNameMapEntry(*col, map.id.index, NumericLimits<idx_t>::Maximum(), next_entry_id, sfx, sql);
 		}
 	}
 	return sql;
@@ -422,6 +485,7 @@ string DuckLakeStagedCommit::Build(DuckLakeTransaction &transaction,
 	batch += EmitStagedDeleteFiles(transaction.GetLocalChanges(), identifier_suffix);
 	batch += EmitStagedDroppedFiles(transaction.GetDroppedFiles(), identifier_suffix);
 	batch += EmitStagedFlushedInlinedTables(transaction.GetFlushedInlinedTables(), identifier_suffix);
+	batch += EmitStagedNameMaps(transaction.GetNewNameMaps(), identifier_suffix);
 	batch += StringUtil::Format("SELECT * FROM ducklake_commit(%s, %s, %lld, "
 	                            "max_retry_count => %llu, retry_wait_ms => %llu, retry_backoff => %f);",
 	                            DuckLakeUtil::SQLLiteralToString(identifier_suffix),

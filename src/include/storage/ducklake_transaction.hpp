@@ -273,6 +273,9 @@ public:
 	bool HasDroppedFiles() const;
 	const unordered_map<string, DataFileIndex> &GetDroppedFiles() const;
 	const vector<FlushedInlinedTableInfo> &GetFlushedInlinedTables() const;
+	const DuckLakeNameMapSet &GetNewNameMaps() const {
+		return new_name_maps;
+	}
 	bool FileIsDropped(const string &path) const;
 	//! Check if there are any uncommitted changes for this table (inserts, deletes, or dropped files)
 	bool HasAnyLocalChanges(TableIndex table_id) const;
