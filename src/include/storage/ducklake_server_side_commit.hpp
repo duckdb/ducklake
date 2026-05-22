@@ -19,6 +19,7 @@ class ClientContext;
 struct DuckLakeServerSideCommitResult {
 	int64_t committed_snapshot_id = 0;
 	int64_t committed_schema_version = 0;
+	bool had_flushes = false;
 };
 
 //! Executes a DuckLake commit on the server side.
@@ -50,6 +51,7 @@ private:
 	void ReadStagedInlinedFileDeletes();
 	void ReadStagedDeleteFiles();
 	void ReadStagedDroppedFiles();
+	void ReadStagedFlushedInlinedTables();
 	void ReadExistingTableStats();
 
 	// Closure backends.

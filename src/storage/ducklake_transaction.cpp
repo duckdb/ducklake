@@ -1310,6 +1310,17 @@ void DuckLakeTransaction::ApplyServerSideCommit(idx_t schema_version) {
 	}
 }
 
+void DuckLakeTransaction::DropEmptySupersededInlinedTablesClientSide() {
+	DuckLakeCommitContext context;
+	context.query_metadata = [&](string q) {
+		return metadata_manager->Query(q);
+	};
+	context.invalidate_schema_cache = [&](idx_t schema_version) {
+		ducklake_catalog.InvalidateSchemaCache(schema_version);
+	};
+	DuckLakeTransactionState::DropEmptySupersededInlinedTables(context);
+}
+
 void DuckLakeTransaction::RunCommitLoop(DuckLakeSnapshot transaction_snapshot,
                                         const TransactionChangeInformation &transaction_changes,
                                         const DuckLakeRetryConfig &retry_config) {
@@ -1697,6 +1708,10 @@ bool DuckLakeTransaction::HasDroppedFiles() const {
 
 const unordered_map<string, DataFileIndex> &DuckLakeTransaction::GetDroppedFiles() const {
 	return state->dropped_files;
+}
+
+const vector<FlushedInlinedTableInfo> &DuckLakeTransaction::GetFlushedInlinedTables() const {
+	return state->flushed_inlined_tables;
 }
 
 bool DuckLakeTransaction::FileIsDropped(const string &path) const {

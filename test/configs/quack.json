@@ -77,7 +77,8 @@
         "test/sql/settings/max_retry_count.test",
         "test/sql/checkpoint/checkpoint_updates_interleaved.test",
         "test/sql/concurrent/concurrent_insert_delete_conflict.test",
-        "test/sql/deletion_inlining/test_deletion_inlining_concurrent.test"
+        "test/sql/deletion_inlining/test_deletion_inlining_concurrent.test",
+        "test/sql/data_inlining/flush_concurrent_insert.test"
       ]
     },
     {

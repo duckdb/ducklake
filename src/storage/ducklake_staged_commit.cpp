@@ -38,7 +38,7 @@ static string EmitStagedDataFiles(const LocalTableChanges &local_changes, const 
 	                          "path VARCHAR, path_is_relative BOOLEAN, file_format VARCHAR, "
 	                          "record_count BIGINT, file_size_bytes BIGINT, footer_size BIGINT, "
 	                          "row_id_start BIGINT, partition_id BIGINT, encryption_key VARCHAR, "
-	                          "mapping_id BIGINT, partial_max BIGINT);",
+	                          "mapping_id BIGINT, partial_max BIGINT, begin_snapshot BIGINT);",
 	                          sfx);
 	sql += StringUtil::Format("CREATE TABLE IF NOT EXISTS {METADATA_CATALOG}.ducklake_staged_data_file_column_stats_%s("
 	                          "data_file_id BIGINT, table_id BIGINT, column_id BIGINT, "
@@ -68,13 +68,14 @@ static string EmitStagedDataFiles(const LocalTableChanges &local_changes, const 
 		for (auto &file : table_changes.new_data_files) {
 			sql += StringUtil::Format(
 			    "INSERT INTO {METADATA_CATALOG}.ducklake_staged_data_file_%s VALUES "
-			    "(%llu, %llu, %llu, %s, false, 'parquet', %llu, %llu, %s, %s, %s, %s, %s, %s);",
+			    "(%llu, %llu, %llu, %s, false, 'parquet', %llu, %llu, %s, %s, %s, %s, %s, %s, %s);",
 			    sfx, local_file_id, table_id.index, file_order, SQLString(file.file_name), file.row_count,
 			    file.file_size_bytes, DuckLakeUtil::OptionalIdxOrNull(file.footer_size),
 			    DuckLakeUtil::OptionalIdxOrNull(file.flush_row_id_start),
 			    DuckLakeUtil::OptionalIdxOrNull(file.partition_id),
 			    DuckLakeUtil::EncryptionKeyLiteral(file.encryption_key), DuckLakeUtil::MappingIdOrNull(file.mapping_id),
-			    DuckLakeUtil::OptionalIdxOrNull(file.max_partial_file_snapshot));
+			    DuckLakeUtil::OptionalIdxOrNull(file.max_partial_file_snapshot),
+			    DuckLakeUtil::OptionalIdxOrNull(file.begin_snapshot));
 			for (auto &stat : file.column_stats) {
 				auto info = DuckLakeColumnStatsInfo::FromColumnStats(stat.first, stat.second);
 				sql += StringUtil::Format("INSERT INTO {METADATA_CATALOG}.ducklake_staged_data_file_column_stats_%s "
@@ -252,6 +253,20 @@ static string EmitStagedDeleteFiles(const LocalTableChanges &local_changes, cons
 	return sql;
 }
 
+static string EmitStagedFlushedInlinedTables(const vector<FlushedInlinedTableInfo> &flushed, const string &sfx) {
+	string sql;
+	sql += StringUtil::Format("CREATE TABLE IF NOT EXISTS {METADATA_CATALOG}.ducklake_staged_flushed_inlined_%s("
+	                          "inlined_table_name VARCHAR, schema_version BIGINT, flush_snapshot_id BIGINT);",
+	                          sfx);
+	for (auto &entry : flushed) {
+		sql += StringUtil::Format("INSERT INTO {METADATA_CATALOG}.ducklake_staged_flushed_inlined_%s "
+		                          "VALUES (%s, %llu, %llu);",
+		                          sfx, SQLString(entry.inlined_table.table_name), entry.inlined_table.schema_version,
+		                          entry.flush_snapshot_id);
+	}
+	return sql;
+}
+
 static string EmitStagedDroppedFiles(const unordered_map<string, DataFileIndex> &dropped_files, const string &sfx) {
 	// Whole-file drops (DELETE covering every live row of a file). Source: state->dropped_files.
 	string sql;
@@ -307,6 +322,7 @@ string DuckLakeStagedCommit::Build(DuckLakeTransaction &transaction,
 	batch += EmitStagedInlinedFileDeletes(transaction.GetLocalChanges(), identifier_suffix);
 	batch += EmitStagedDeleteFiles(transaction.GetLocalChanges(), identifier_suffix);
 	batch += EmitStagedDroppedFiles(transaction.GetDroppedFiles(), identifier_suffix);
+	batch += EmitStagedFlushedInlinedTables(transaction.GetFlushedInlinedTables(), identifier_suffix);
 	batch += StringUtil::Format("SELECT * FROM ducklake_commit(%s, %s, %lld, "
 	                            "max_retry_count => %llu, retry_wait_ms => %llu, retry_backoff => %f);",
 	                            DuckLakeUtil::SQLLiteralToString(identifier_suffix),

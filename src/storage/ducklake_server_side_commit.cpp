@@ -111,6 +111,7 @@ DuckLakeServerSideCommitResult DuckLakeServerSideCommit::Run() {
 	ReadStagedInlinedFileDeletes(); // fills state->local_changes (inlined deletes against parquet files)
 	ReadStagedDeleteFiles();        // fills state->local_changes (parquet delete-vector files)
 	ReadStagedDroppedFiles();       // fills state->dropped_files + state->tables_deleted_from
+	ReadStagedFlushedInlinedTables(); // fills state->flushed_inlined_tables (inlined → parquet flushes)
 	ReadExistingTableStats();       // fills existing_table_stats (first-attempt path for get_table_stats)
 
 	// Derive transaction_changes the same way DuckLakeTransaction would — directly from
@@ -135,6 +136,7 @@ DuckLakeServerSideCommitResult DuckLakeServerSideCommit::Run() {
 	DuckLakeServerSideCommitResult result;
 	result.committed_snapshot_id = static_cast<int64_t>(committed_snapshot_id);
 	result.committed_schema_version = static_cast<int64_t>(committed_schema_version);
+	result.had_flushes = !state->flushed_inlined_tables.empty();
 	return result;
 }
 
@@ -253,7 +255,7 @@ void DuckLakeServerSideCommit::ReadStagedDataFiles() {
 	map<TableIndex, vector<DuckLakeDataFile>> files_per_table;
 	auto files_query =
 	    StringUtil::Format("SELECT data_file_id, table_id, path, record_count, file_size_bytes, footer_size, "
-	                       "row_id_start, partition_id, encryption_key, mapping_id, partial_max "
+	                       "row_id_start, partition_id, encryption_key, mapping_id, partial_max, begin_snapshot "
 	                       "FROM %s.ducklake_staged_data_file_%s ORDER BY table_id, file_order",
 	                       schema_id, identifier_suffix);
 	auto files_result = RunQuery(files_query, "read staged files");
@@ -280,6 +282,9 @@ void DuckLakeServerSideCommit::ReadStagedDataFiles() {
 		}
 		if (!row.IsNull(10)) {
 			f.max_partial_file_snapshot = static_cast<idx_t>(row.GetValue<int64_t>(10));
+		}
+		if (!row.IsNull(11)) {
+			f.begin_snapshot = static_cast<idx_t>(row.GetValue<int64_t>(11));
 		}
 		auto stats_it = per_file_stats.find(local_file_id);
 		if (stats_it != per_file_stats.end()) {
@@ -562,6 +567,25 @@ void DuckLakeServerSideCommit::ReadStagedDroppedFiles() {
 	}
 }
 
+void DuckLakeServerSideCommit::ReadStagedFlushedInlinedTables() {
+	// `ducklake_staged_flushed_inlined_<sfx>(inlined_table_name, schema_version, flush_snapshot_id)` —
+	// one row per inlined-data table that just got flushed to parquet in this commit. Drives
+	// GenerateDeleteFlushedInlinedData (removes the inlined rows) and DropEmptySupersededInlinedTables
+	// (post-commit cleanup of empty inlined tables superseded by a flush).
+	auto query =
+	    StringUtil::Format("SELECT inlined_table_name, schema_version, flush_snapshot_id "
+	                       "FROM %s.ducklake_staged_flushed_inlined_%s",
+	                       schema_id, identifier_suffix);
+	auto result = RunQuery(query, "read staged flushed inlined tables");
+	for (auto &row : *result) {
+		FlushedInlinedTableInfo entry;
+		entry.inlined_table.table_name = row.GetValue<string>(0);
+		entry.inlined_table.schema_version = static_cast<idx_t>(row.GetValue<int64_t>(1));
+		entry.flush_snapshot_id = static_cast<idx_t>(row.GetValue<int64_t>(2));
+		state->flushed_inlined_tables.push_back(std::move(entry));
+	}
+}
+
 void DuckLakeServerSideCommit::ReadExistingTableStats() {
 	// Shared SQL + parser with DuckLakeMetadataManager::GetGlobalTableStats — single combined query
 	// over ducklake_table_stats LEFT JOIN ducklake_table_column_stats folded into per-table entries.
@@ -624,6 +648,10 @@ DuckLakeCommitContext DuckLakeServerSideCommit::BuildContext(idx_t &committed_sn
                                                              idx_t &committed_schema_version) {
 	DuckLakeCommitContext ctx;
 	ctx.commit_info = state->commit_info;
+	// Server-side: skip the post-commit DropEmptySupersededInlinedTables. The server's fresh_conn
+	// would happily drop the empty inlined tables, but the client's catalog cache still references
+	// them and the next read fails. Leftover empty tables are a space optimization concern only.
+	ctx.skip_drop_empty_inlined = true;
 	ctx.conflict_query_executor = [this](string q) -> unique_ptr<QueryResult> {
 		auto sql = SubstitutePlaceholders(std::move(q), transaction_snapshot);
 		return unique_ptr_cast<MaterializedQueryResult, QueryResult>(fresh_conn.Query(sql));
@@ -644,7 +672,11 @@ DuckLakeCommitContext DuckLakeServerSideCommit::BuildContext(idx_t &committed_sn
 	ctx.prepare_retry = []() {
 	};
 	ctx.query_metadata = [this](string q) -> unique_ptr<QueryResult> {
-		auto sql = StringUtil::Replace(std::move(q), "{METADATA_CATALOG}", schema_id);
+		// Use SubstitutePlaceholders so {METADATA_CATALOG_NAME_LITERAL} / {METADATA_SCHEMA_NAME_LITERAL}
+		// also resolve — DropEmptySupersededInlinedTables uses them. Snapshot-scoped placeholders
+		// are absent from this path; pass an empty snapshot so any stray substitution is a no-op.
+		DuckLakeSnapshot empty {};
+		auto sql = SubstitutePlaceholders(std::move(q), empty);
 		return unique_ptr_cast<MaterializedQueryResult, QueryResult>(fresh_conn.Query(sql));
 	};
 	ctx.query_metadata_with_snapshot = [this](DuckLakeSnapshot snapshot, string q) -> unique_ptr<QueryResult> {
@@ -753,6 +785,12 @@ DuckLakeCommitContext DuckLakeServerSideCommit::BuildContext(idx_t &committed_sn
 
 string DuckLakeServerSideCommit::SubstitutePlaceholders(string sql, const DuckLakeSnapshot &snapshot) const {
 	sql = StringUtil::Replace(sql, "{METADATA_CATALOG}", schema_id);
+	// State-emitted post-commit cleanup (e.g. DropEmptySupersededInlinedTables) joins against
+	// duckdb_tables() filtered by database_name = {METADATA_CATALOG_NAME_LITERAL}. Server-side we
+	// don't know the catalog name a priori, so resolve it via current_database() at execution time.
+	sql = StringUtil::Replace(sql, "{METADATA_CATALOG_NAME_LITERAL}", "(SELECT current_database())");
+	sql = StringUtil::Replace(sql, "{METADATA_SCHEMA_NAME_LITERAL}",
+	                          DuckLakeUtil::SQLLiteralToString(metadata_schema_name));
 	sql = StringUtil::Replace(sql, "{SNAPSHOT_ID}", std::to_string(snapshot.snapshot_id));
 	sql = StringUtil::Replace(sql, "{SCHEMA_VERSION}", std::to_string(snapshot.schema_version));
 	sql = StringUtil::Replace(sql, "{NEXT_CATALOG_ID}", std::to_string(snapshot.next_catalog_id));
@@ -776,6 +814,8 @@ string DuckLakeServerSideCommit::EmitDropStagingSql() const {
 	                          identifier_suffix);
 	sql += StringUtil::Format("DROP TABLE IF EXISTS %s.ducklake_staged_delete_file_%s;", schema_id, identifier_suffix);
 	sql += StringUtil::Format("DROP TABLE IF EXISTS %s.ducklake_staged_dropped_file_%s;", schema_id, identifier_suffix);
+	sql += StringUtil::Format("DROP TABLE IF EXISTS %s.ducklake_staged_flushed_inlined_%s;", schema_id,
+	                          identifier_suffix);
 	return sql;
 }
 

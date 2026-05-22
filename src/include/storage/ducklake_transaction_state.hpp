@@ -55,6 +55,8 @@ struct DuckLakeCommitContext {
 	std::function<void(idx_t)> set_committed_snapshot_id;
 	//! Author / message / extra info for the snapshot row.
 	DuckLakeSnapshotCommit commit_info;
+	//! When true, state. Commit skips the post-commit DropEmptySupersededInlinedTables cleanup.
+	bool skip_drop_empty_inlined = false;
 };
 
 //! Holds the per-transaction mutable change state (new/dropped/renamed catalog entries, local file

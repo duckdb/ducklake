@@ -105,8 +105,8 @@ static bool IsDataOnlyCommit(const TransactionChangeInformation &c) {
 	       c.created_scalar_macros.empty() && c.created_table_macros.empty() && c.altered_tables.empty() &&
 	       c.altered_tables_with_schema_version_changes.empty() && c.altered_views.empty() &&
 	       c.dropped_tables.empty() && c.dropped_views.empty() && c.dropped_scalar_macros.empty() &&
-	       c.dropped_table_macros.empty() && c.tables_flushed_inlined.empty() && c.tables_compacted.empty() &&
-	       c.tables_merge_adjacent.empty() && c.tables_rewrite_delete.empty();
+	       c.dropped_table_macros.empty() && c.tables_compacted.empty() && c.tables_merge_adjacent.empty() &&
+	       c.tables_rewrite_delete.empty();
 }
 
 void QuackMetadataManager::FlushChangesServerSide(DuckLakeTransaction &flush_transaction,
@@ -133,7 +133,12 @@ void QuackMetadataManager::FlushChangesServerSide(DuckLakeTransaction &flush_tra
 		throw IOException("Server-side ducklake_commit returned no rows");
 	}
 	auto committed_schema_version = chunk->GetValue(1, 0).GetValue<int64_t>();
+	auto had_flushes = !chunk->GetValue(2, 0).IsNull() && chunk->GetValue(2, 0).GetValue<bool>();
 	flush_transaction.ApplyServerSideCommit(static_cast<idx_t>(committed_schema_version));
+	if (had_flushes) {
+		// With quack we need to clear up superseded inlines tables on the client side to avoid dangling caching references
+		flush_transaction.DropEmptySupersededInlinedTablesClientSide();
+	}
 }
 
 bool QuackMetadataManager::MetadataExists() {
