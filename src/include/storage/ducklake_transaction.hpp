@@ -75,6 +75,7 @@ public:
 	shared_ptr<DuckLakeInlinedData> GetTransactionLocalInlinedData(ClientContext &context, TableIndex table_id) const;
 	void DropTransactionLocalFile(ClientContext &context, TableIndex table_id, const string &path);
 	void AppendFiles(TableIndex table_id, vector<DuckLakeDataFile> files);
+	void AppendDeleteFiles(TableIndex table_id, const string &data_file_path, vector<DuckLakeDeleteFile> files);
 	void AppendInlinedData(ClientContext &context, TableIndex table_id, unique_ptr<DuckLakeInlinedData> new_data);
 	void AddNewInlinedDeletes(TableIndex table_id, const string &table_name, set<idx_t> new_deletes);
 	void DeleteFromLocalInlinedData(ClientContext &context, TableIndex table_id, set<idx_t> new_deletes);
@@ -270,6 +271,7 @@ public:
 	void GetLocalInlinedFileDeletesForFile(TableIndex table_id, idx_t file_id, set<idx_t> &result) const;
 
 	bool HasDroppedFiles() const;
+	const unordered_map<string, DataFileIndex> &GetDroppedFiles() const;
 	bool FileIsDropped(const string &path) const;
 	//! Check if there are any uncommitted changes for this table (inserts, deletes, or dropped files)
 	bool HasAnyLocalChanges(TableIndex table_id) const;

@@ -45,6 +45,20 @@ static string EmitStagedDataFiles(const LocalTableChanges &local_changes, const 
 	                          "column_size_bytes BIGINT, value_count BIGINT, null_count BIGINT, "
 	                          "min_value VARCHAR, max_value VARCHAR, contains_nan BOOLEAN, extra_stats VARCHAR);",
 	                          sfx);
+	// `attached_local_file_id BIGINT` lets us share this table between loose delete files
+	// (NULL → goes into LocalTableChanges::new_delete_files) and delete files attached to a
+	// transaction-local data file (non-NULL → attached to the data file with that local_file_id
+	// in new_data_files[i].delete_files). The real `data_file_id` is unknown at staging time for
+	// attached deletes and gets assigned during state.CommitChanges.
+	sql += StringUtil::Format("CREATE TABLE IF NOT EXISTS {METADATA_CATALOG}.ducklake_staged_delete_file_%s("
+	                          "table_id BIGINT, data_file_path VARCHAR, data_file_id BIGINT, "
+	                          "file_name VARCHAR, format VARCHAR, delete_count BIGINT, "
+	                          "file_size_bytes BIGINT, footer_size BIGINT, encryption_key VARCHAR, "
+	                          "begin_snapshot BIGINT, max_snapshot BIGINT, source VARCHAR, "
+	                          "overwrites_existing_delete BOOLEAN, "
+	                          "overwrite_delete_file_id BIGINT, overwrite_delete_file_path VARCHAR, "
+	                          "attached_local_file_id BIGINT);",
+	                          sfx);
 
 	idx_t local_file_id = 0;
 	for (auto &entry : local_changes.Changes()) {
@@ -68,6 +82,19 @@ static string EmitStagedDataFiles(const LocalTableChanges &local_changes, const 
 				                          sfx, local_file_id, table_id.index, info.column_id.index,
 				                          info.column_size_bytes, info.value_count, info.null_count, info.min_val,
 				                          info.max_val, info.contains_nan, info.extra_stats);
+			}
+			// Delete files attached to this transaction-local data file (DELETE applied to rows
+			// of a file inserted in the same transaction). data_file_id is unknown at staging time.
+			for (auto &del : file.delete_files) {
+				sql += StringUtil::Format(
+				    "INSERT INTO {METADATA_CATALOG}.ducklake_staged_delete_file_%s VALUES "
+				    "(%llu, NULL, NULL, %s, %s, %llu, %llu, %llu, %s, %s, %s, %s, false, NULL, NULL, %llu);",
+				    sfx, table_id.index, SQLString(del.file_name), SQLString(DeleteFileFormatToString(del.format)),
+				    del.delete_count, del.file_size_bytes, del.footer_size,
+				    DuckLakeUtil::EncryptionKeyLiteral(del.encryption_key),
+				    DuckLakeUtil::OptionalIdxOrNull(del.begin_snapshot),
+				    DuckLakeUtil::OptionalIdxOrNull(del.max_snapshot),
+				    SQLString(del.source == DeleteFileSource::FLUSH ? "FLUSH" : "REGULAR"), local_file_id);
 			}
 			local_file_id++;
 			file_order++;
@@ -183,6 +210,62 @@ static string EmitStagedInlinedDeletes(const LocalTableChanges &local_changes, c
 	return sql;
 }
 
+static string EmitStagedDeleteFiles(const LocalTableChanges &local_changes, const string &sfx) {
+	// Loose delete-vector files (DELETE against pre-existing parquet files). Source:
+	// new_delete_files. The staged table is also written to by EmitStagedDataFiles for deletes
+	// attached to transaction-local data files; CREATE IF NOT EXISTS keeps it idempotent.
+	string sql;
+	sql += StringUtil::Format("CREATE TABLE IF NOT EXISTS {METADATA_CATALOG}.ducklake_staged_delete_file_%s("
+	                          "table_id BIGINT, data_file_path VARCHAR, data_file_id BIGINT, "
+	                          "file_name VARCHAR, format VARCHAR, delete_count BIGINT, "
+	                          "file_size_bytes BIGINT, footer_size BIGINT, encryption_key VARCHAR, "
+	                          "begin_snapshot BIGINT, max_snapshot BIGINT, source VARCHAR, "
+	                          "overwrites_existing_delete BOOLEAN, "
+	                          "overwrite_delete_file_id BIGINT, overwrite_delete_file_path VARCHAR, "
+	                          "attached_local_file_id BIGINT);",
+	                          sfx);
+	for (auto &entry : local_changes.Changes()) {
+		auto table_id = entry.GetTableIndex();
+		auto &table_changes = entry.GetTableChanges();
+		for (auto &delete_entry : table_changes.new_delete_files) {
+			auto &data_file_path = delete_entry.first;
+			for (auto &file : delete_entry.second) {
+				string overwrite_id = file.overwritten_delete_file.delete_file_id.IsValid()
+				                          ? std::to_string(file.overwritten_delete_file.delete_file_id.index)
+				                          : string("NULL");
+				string overwrite_path = file.overwritten_delete_file.path.empty()
+				                            ? string("NULL")
+				                            : DuckLakeUtil::SQLLiteralToString(file.overwritten_delete_file.path);
+				sql += StringUtil::Format(
+				    "INSERT INTO {METADATA_CATALOG}.ducklake_staged_delete_file_%s VALUES "
+				    "(%llu, %s, %llu, %s, %s, %llu, %llu, %llu, %s, %s, %s, %s, %s, %s, %s, NULL);",
+				    sfx, table_id.index, SQLString(data_file_path), file.data_file_id.index, SQLString(file.file_name),
+				    SQLString(DeleteFileFormatToString(file.format)), file.delete_count, file.file_size_bytes,
+				    file.footer_size, DuckLakeUtil::EncryptionKeyLiteral(file.encryption_key),
+				    DuckLakeUtil::OptionalIdxOrNull(file.begin_snapshot),
+				    DuckLakeUtil::OptionalIdxOrNull(file.max_snapshot),
+				    SQLString(file.source == DeleteFileSource::FLUSH ? "FLUSH" : "REGULAR"),
+				    file.overwrites_existing_delete ? "true" : "false", overwrite_id, overwrite_path);
+			}
+		}
+	}
+	return sql;
+}
+
+static string EmitStagedDroppedFiles(const unordered_map<string, DataFileIndex> &dropped_files, const string &sfx) {
+	// Whole-file drops (DELETE covering every live row of a file). Source: state->dropped_files.
+	string sql;
+	sql += StringUtil::Format("CREATE TABLE IF NOT EXISTS {METADATA_CATALOG}.ducklake_staged_dropped_file_%s("
+	                          "path VARCHAR, data_file_id BIGINT);",
+	                          sfx);
+	for (auto &entry : dropped_files) {
+		sql += StringUtil::Format("INSERT INTO {METADATA_CATALOG}.ducklake_staged_dropped_file_%s "
+		                          "VALUES (%s, %llu);",
+		                          sfx, SQLString(entry.first), entry.second.index);
+	}
+	return sql;
+}
+
 static string EmitStagedInlinedFileDeletes(const LocalTableChanges &local_changes, const string &sfx) {
 	// Row-level deletes against parquet files that are recorded in metadata rather than written as
 	// delete-vector parquet (see ducklake_inlined_delete_<table_id>). Source: new_inlined_file_deletes.
@@ -222,6 +305,8 @@ string DuckLakeStagedCommit::Build(DuckLakeTransaction &transaction,
 	batch += EmitStagedInlinedData(transaction.GetLocalChanges(), transaction, identifier_suffix);
 	batch += EmitStagedInlinedDeletes(transaction.GetLocalChanges(), identifier_suffix);
 	batch += EmitStagedInlinedFileDeletes(transaction.GetLocalChanges(), identifier_suffix);
+	batch += EmitStagedDeleteFiles(transaction.GetLocalChanges(), identifier_suffix);
+	batch += EmitStagedDroppedFiles(transaction.GetDroppedFiles(), identifier_suffix);
 	batch += StringUtil::Format("SELECT * FROM ducklake_commit(%s, %s, %lld, "
 	                            "max_retry_count => %llu, retry_wait_ms => %llu, retry_backoff => %f);",
 	                            DuckLakeUtil::SQLLiteralToString(identifier_suffix),

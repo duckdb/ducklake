@@ -48,6 +48,8 @@ private:
 	void ReadStagedInlinedData();
 	void ReadStagedInlinedDeletes();
 	void ReadStagedInlinedFileDeletes();
+	void ReadStagedDeleteFiles();
+	void ReadStagedDroppedFiles();
 	void ReadExistingTableStats();
 
 	// Closure backends.

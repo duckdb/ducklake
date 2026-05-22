@@ -179,6 +179,19 @@ void LocalTableChanges::AppendFiles(TableIndex table_id, vector<DuckLakeDataFile
 	}
 }
 
+void LocalTableChanges::AppendDeleteFiles(TableIndex table_id, const string &data_file_path,
+                                          vector<DuckLakeDeleteFile> files) {
+	if (files.empty()) {
+		return;
+	}
+	lock_guard<mutex> guard(lock);
+	auto &table_changes = changes[table_id];
+	auto &entry = table_changes.new_delete_files[data_file_path];
+	for (auto &f : files) {
+		entry.push_back(std::move(f));
+	}
+}
+
 void LocalTableChanges::AppendInlinedData(ClientContext &context, TableIndex table_id,
                                           unique_ptr<DuckLakeInlinedData> new_data) {
 	lock_guard<mutex> guard(lock);
@@ -1680,6 +1693,10 @@ void DuckLakeTransaction::DropFile(TableIndex table_id, DataFileIndex data_file_
 
 bool DuckLakeTransaction::HasDroppedFiles() const {
 	return !state->dropped_files.empty();
+}
+
+const unordered_map<string, DataFileIndex> &DuckLakeTransaction::GetDroppedFiles() const {
+	return state->dropped_files;
 }
 
 bool DuckLakeTransaction::FileIsDropped(const string &path) const {

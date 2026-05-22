@@ -72,9 +72,12 @@
       ]
     },
     {
-      "reason": "Concurrent retry timing test: assumes client-side round-trip latency to surface PK conflicts. Server-side commits complete fast enough.",
+      "reason": "Concurrent retry timing tests: assume client-side round-trip latency to surface PK conflicts or specific failure modes; server-side commits complete fast enough that conflict/visibility semantics differ. Same class as the FIXME:immediate_transaction_mode group above.",
       "paths": [
-        "test/sql/settings/max_retry_count.test"
+        "test/sql/settings/max_retry_count.test",
+        "test/sql/checkpoint/checkpoint_updates_interleaved.test",
+        "test/sql/concurrent/concurrent_insert_delete_conflict.test",
+        "test/sql/deletion_inlining/test_deletion_inlining_concurrent.test"
       ]
     },
     {
