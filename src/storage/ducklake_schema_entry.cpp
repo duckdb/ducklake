@@ -205,7 +205,7 @@ void DuckLakeSchemaEntry::Alter(CatalogTransaction catalog_transaction, AlterInf
 			throw BinderException("Cannot use ALTER TABLE on entry %s - it is not a table", alter.name);
 		}
 		auto &table = table_entry->Cast<DuckLakeTableEntry>();
-		auto new_table = table.Alter(transaction, alter);
+		auto new_table = table.Alter(context, transaction, alter);
 		if (alter.alter_table_type == AlterTableType::RENAME_TABLE) {
 			// We must check if this view name does not yet exist.
 			auto existing_table = GetEntry(catalog_transaction, CatalogType::TABLE_ENTRY, new_table->name);

@@ -108,3 +108,49 @@ has NULL values
 # after dropping the constraint - we can add NULL rows
 statement ok
 INSERT INTO ducklake.test VALUES (NULL, 84)
+
+# setting NOT NULL should inspect the live rows, not only stale insert-time stats
+statement ok
+CREATE TABLE ducklake.issue_1158(i INTEGER);
+
+statement ok
+INSERT INTO ducklake.issue_1158 VALUES (NULL), (1);
+
+statement ok
+DELETE FROM ducklake.issue_1158 WHERE i IS NULL;
+
+query I
+SELECT count(*) FROM ducklake.issue_1158 WHERE i IS NULL;
+----
+0
+
+statement ok
+ALTER TABLE ducklake.issue_1158 ALTER i SET NOT NULL;
+
+statement error
+INSERT INTO ducklake.issue_1158 VALUES (NULL);
+----
+NOT NULL constraint failed
+
+statement ok
+CREATE TABLE ducklake.issue_1158_transaction(i INTEGER);
+
+statement ok
+INSERT INTO ducklake.issue_1158_transaction VALUES (NULL), (1);
+
+statement ok
+BEGIN;
+
+statement ok
+DELETE FROM ducklake.issue_1158_transaction WHERE i IS NULL;
+
+statement ok
+ALTER TABLE ducklake.issue_1158_transaction ALTER i SET NOT NULL;
+
+statement ok
+COMMIT;
+
+statement error
+INSERT INTO ducklake.issue_1158_transaction VALUES (NULL);
+----
+NOT NULL constraint failed
