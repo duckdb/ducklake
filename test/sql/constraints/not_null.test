@@ -94,7 +94,7 @@ INSERT INTO ducklake.test VALUES (NULL, 84)
 statement error
 ALTER TABLE ducklake.test ALTER i SET NOT NULL;
 ----
-transaction-local
+has NULL values
 
 statement ok
 ROLLBACK
@@ -154,3 +154,32 @@ statement error
 INSERT INTO ducklake.issue_1158_transaction VALUES (NULL);
 ----
 NOT NULL constraint failed
+
+statement ok
+CREATE TABLE ducklake.not_null_after_local_insert(i INTEGER);
+
+statement ok
+BEGIN;
+
+statement ok
+INSERT INTO ducklake.not_null_after_local_insert VALUES (1);
+
+statement ok
+ALTER TABLE ducklake.not_null_after_local_insert ALTER i SET NOT NULL;
+
+statement ok
+ROLLBACK;
+
+statement ok
+BEGIN;
+
+statement ok
+INSERT INTO ducklake.not_null_after_local_insert VALUES (NULL);
+
+statement error
+ALTER TABLE ducklake.not_null_after_local_insert ALTER i SET NOT NULL;
+----
+has NULL values
+
+statement ok
+ROLLBACK;

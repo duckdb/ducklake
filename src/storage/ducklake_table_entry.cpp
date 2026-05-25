@@ -637,6 +637,20 @@ unique_ptr<CatalogEntry> DuckLakeTableEntry::AlterTable(ClientContext &context, 
 	auto &col = table_info.columns.GetColumn(info.column_name);
 	auto &field_id = GetFieldId(col.Physical());
 
+	// check if there is an existing constraint
+	auto existing_idx = FindNotNullConstraint(table_info, col.Logical());
+	if (existing_idx.IsValid()) {
+		throw CatalogException("Cannot SET NOT NULL on column %s - it already has a NOT NULL constraint",
+		                       col.GetName());
+	}
+
+	if (transaction.HasTransactionLocalInserts(GetTableId())) {
+		VerifyNoNullValues(context, transaction, *this, col);
+		table_info.constraints.push_back(make_uniq<NotNullConstraint>(col.Logical()));
+		auto new_entry = make_uniq<DuckLakeTableEntry>(*this, table_info, LocalChange::SetNull(field_id.GetFieldIndex()));
+		return std::move(new_entry);
+	}
+
 	// verify the column has no NULL values currently by looking at the stats
 	auto stats = GetTableStats(transaction);
 	if (!stats) {
@@ -656,12 +670,6 @@ unique_ptr<CatalogEntry> DuckLakeTableEntry::AlterTable(ClientContext &context, 
 		VerifyNoNullValues(context, transaction, *this, col);
 	}
 
-	// check if there is an existing constraint
-	auto existing_idx = FindNotNullConstraint(table_info, col.Logical());
-	if (existing_idx.IsValid()) {
-		throw CatalogException("Cannot SET NOT NULL on column %s - it already has a NOT NULL constraint",
-		                       col.GetName());
-	}
 	table_info.constraints.push_back(make_uniq<NotNullConstraint>(col.Logical()));
 
 	auto new_entry = make_uniq<DuckLakeTableEntry>(*this, table_info, LocalChange::SetNull(field_id.GetFieldIndex()));
