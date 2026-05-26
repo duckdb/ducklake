@@ -34,6 +34,14 @@ enum class CompactionType {
 	REWRITE_DELETES        // Rewrite deletes that delete more than a % of the table, might also do merge of files.
 };
 
+inline const char *CompactionTypeToString(CompactionType type) {
+	return type == CompactionType::REWRITE_DELETES ? "rewrite_delete" : "merge_adjacent";
+}
+
+inline CompactionType CompactionTypeFromString(const string &str) {
+	return str == "rewrite_delete" ? CompactionType::REWRITE_DELETES : CompactionType::MERGE_ADJACENT_TABLES;
+}
+
 enum class CleanupType {
 	OLD_FILES,     // If the files are old, e.g., from an expired snapshot and can now be removed.
 	ORPHANED_FILES // If the file is an orphan e.g., the file was generated but never committed to the catalog

@@ -416,4 +416,24 @@ string DuckLakeUtil::EncryptionKeyLiteral(const string &key) {
 	return "'" + Blob::ToBase64(string_t(key)) + "'";
 }
 
+const char *DuckLakeUtil::BoolLiteral(bool v) {
+	return v ? "true" : "false";
+}
+
+string DuckLakeUtil::PartitionValueLiteral(const Value &v) {
+	return v.IsNull() ? string("NULL") : SQLLiteralToString(v.ToString());
+}
+
+string DuckLakeUtil::ChunkRowToSQL(DuckLakeMetadataManager &metadata_manager, ClientContext &context, DataChunk &chunk,
+                                   idx_t row) {
+	string result;
+	for (idx_t c = 0; c < chunk.ColumnCount(); c++) {
+		if (c > 0) {
+			result += ", ";
+		}
+		result += ValueToSQL(metadata_manager, context, chunk.GetValue(c, row));
+	}
+	return result;
+}
+
 } // namespace duckdb

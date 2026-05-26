@@ -116,10 +116,12 @@ void QuackMetadataManager::FlushChangesServerSide(DuckLakeTransaction &flush_tra
 	auto had_flushes = !chunk->GetValue(2, 0).IsNull() && chunk->GetValue(2, 0).GetValue<bool>();
 	flush_transaction.ApplyServerSideCommit(static_cast<idx_t>(committed_schema_version));
 	if (had_flushes) {
-		// With quack we need to clear up superseded inlines tables on the client side to avoid dangling caching references
+		// With quack we need to clear up superseded inlines tables on the client side to avoid dangling caching
+		// references
 		flush_transaction.DropEmptySupersededInlinedTablesClientSide();
 	}
-	// We got clear the cache, if this creates inlined tables (e.g., `ducklake_inlined_data_<id>_<v>` or `ducklake_inlined_delete_<id>`)
+	// We got clear the cache, if this creates inlined tables (e.g., `ducklake_inlined_data_<id>_<v>` or
+	// `ducklake_inlined_delete_<id>`)
 	ClearCache();
 }
 

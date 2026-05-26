@@ -15,6 +15,7 @@
 #include "duckdb/common/types/value.hpp"
 
 namespace duckdb {
+class DataChunk;
 class DuckLakeMetadataManager;
 class FileSystem;
 class TableFilter;
@@ -55,6 +56,13 @@ public:
 	static string MappingIdOrNull(const MappingIndex &m);
 
 	static string EncryptionKeyLiteral(const string &key);
+
+	static const char *BoolLiteral(bool v);
+
+	static string PartitionValueLiteral(const Value &v);
+
+	static string ChunkRowToSQL(DuckLakeMetadataManager &metadata_manager, ClientContext &context, DataChunk &chunk,
+	                            idx_t row);
 };
 
 } // namespace duckdb

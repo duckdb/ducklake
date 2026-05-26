@@ -2557,19 +2557,11 @@ string DuckLakeMetadataManager::WriteNewInlinedData(DuckLakeSnapshot &commit_sna
 		vector<string> cells_per_row;
 		for (auto &chunk : entry.data->data->Chunks()) {
 			for (idx_t r = 0; r < chunk.size(); r++) {
-				string cells;
-				for (idx_t c = 0; c < chunk.ColumnCount(); c++) {
-					if (c > 0) {
-						cells += ", ";
-					}
-					cells += DuckLakeUtil::ValueToSQL(*this, context, chunk.GetValue(c, r));
-				}
-				cells_per_row.push_back(std::move(cells));
+				cells_per_row.push_back(DuckLakeUtil::ChunkRowToSQL(*this, context, chunk, r));
 			}
 		}
-		batch_query +=
-		    FormatInlinedDataInsert(inlined_table_name, entry.row_id_start, has_preserved_row_ids,
-		                            has_preserved_row_ids ? &entry.data->row_ids : nullptr, cells_per_row);
+		batch_query += FormatInlinedDataInsert(inlined_table_name, entry.row_id_start, has_preserved_row_ids,
+		                                       has_preserved_row_ids ? &entry.data->row_ids : nullptr, cells_per_row);
 	}
 	return batch_query;
 }
@@ -2586,8 +2578,8 @@ string DuckLakeMetadataManager::FormatInlinedDataInsert(const string &inlined_ta
 		int64_t emit_rid;
 		if (has_preserved_row_ids) {
 			int64_t staged_rid = (*row_ids)[i];
-			emit_rid = DuckLakeConstants::IsTransactionLocalRowId(staged_rid) ? static_cast<int64_t>(row_id++)
-			                                                                  : staged_rid;
+			emit_rid =
+			    DuckLakeConstants::IsTransactionLocalRowId(staged_rid) ? static_cast<int64_t>(row_id++) : staged_rid;
 		} else {
 			emit_rid = static_cast<int64_t>(row_id++);
 		}
@@ -2596,7 +2588,8 @@ string DuckLakeMetadataManager::FormatInlinedDataInsert(const string &inlined_ta
 		}
 		values += StringUtil::Format("(%lld, {SNAPSHOT_ID}, NULL, %s)", emit_rid, cells_per_row[i]);
 	}
-	return StringUtil::Format("INSERT INTO {METADATA_CATALOG}.%s VALUES %s;", SQLIdentifier(inlined_table_name), values);
+	return StringUtil::Format("INSERT INTO {METADATA_CATALOG}.%s VALUES %s;", SQLIdentifier(inlined_table_name),
+	                          values);
 }
 
 string DuckLakeMetadataManager::WriteNewInlinedDeletes(const vector<DuckLakeDeletedInlinedDataInfo> &new_deletes) {
