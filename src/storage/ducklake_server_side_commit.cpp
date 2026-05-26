@@ -1,9 +1,9 @@
 #include "storage/ducklake_server_side_commit.hpp"
 
+#include "common/ducklake_row_helpers.hpp"
 #include "common/ducklake_types.hpp"
 #include "common/ducklake_util.hpp"
 #include "duckdb/common/string_util.hpp"
-#include "duckdb/common/types/blob.hpp"
 #include "duckdb/main/client_context.hpp"
 #include "duckdb/main/database.hpp"
 #include "duckdb/main/materialized_query_result.hpp"
@@ -29,13 +29,16 @@ DuckLakeColumnStats StatsFromRow(const LogicalType &type, const Value &column_si
 	if (!column_size_bytes.IsNull()) {
 		stats.column_size_bytes = static_cast<idx_t>(column_size_bytes.GetValue<int64_t>());
 	}
-	if (!value_count.IsNull()) {
-		stats.num_values = static_cast<idx_t>(value_count.GetValue<int64_t>());
-		stats.has_num_values = true;
-	}
+	// Staged value_count is the non-null count; rebuild num_values = value_count + null_count
+	// so a later FromColumnStats round-trip preserves the original counts.
 	if (!null_count.IsNull()) {
 		stats.null_count = static_cast<idx_t>(null_count.GetValue<int64_t>());
 		stats.has_null_count = true;
+	}
+	if (!value_count.IsNull()) {
+		idx_t non_null = static_cast<idx_t>(value_count.GetValue<int64_t>());
+		stats.num_values = non_null + (stats.has_null_count ? stats.null_count : 0);
+		stats.has_num_values = true;
 	}
 	if (!min_value.IsNull()) {
 		stats.min = min_value.ToString();
@@ -52,8 +55,7 @@ DuckLakeColumnStats StatsFromRow(const LogicalType &type, const Value &column_si
 	if (stats.has_num_values && stats.has_null_count) {
 		stats.any_valid = stats.num_values > stats.null_count;
 	}
-	// extra_stats: serialized variant/geo blob — only types that allocate `stats.extra_stats` in the
-	// DuckLakeColumnStats constructor can consume it; for everything else the staged value is NULL.
+	// Only types that allocate stats.extra_stats can consume it.
 	if (!extra_stats.IsNull() && stats.extra_stats) {
 		stats.extra_stats->Deserialize(extra_stats.ToString());
 	}
@@ -78,15 +80,67 @@ DuckLakeColumnStats StatsFromGlobal(const LogicalType &type, const DuckLakeGloba
 	if (col.has_max) {
 		stats.max = col.max_val;
 	}
-	// any_valid drives MergeStats: when this is false the function copies new min/max and returns
-	// early, skipping the extra_stats merge. For types whose validity lives in extra_stats (geo
-	// bbox, variant shredded stats) rather than min/max, treat the presence of extra_stats as a
-	// validity signal so subsequent commits properly merge per-file extras into the global table.
+	// extra_stats counts as validity for types whose stats live there (geo bbox, variant).
 	stats.any_valid = stats.has_min || stats.has_max || col.has_extra_stats;
 	if (col.has_extra_stats && stats.extra_stats) {
 		stats.extra_stats->Deserialize(col.extra_stats);
 	}
 	return stats;
+}
+
+//! Read the 9 shared DuckLakeDeleteFile fields starting at `base` column.
+//! Layout: file_name, format, delete_count, file_size_bytes, footer_size,
+//! encryption_key, begin_snapshot, max_snapshot, source.
+template <class ROW>
+void FillDeleteFileCommon(DuckLakeDeleteFile &f, ROW &row, idx_t base) {
+	f.file_name = row.template GetValue<string>(base + 0);
+	f.format = DeleteFileFormatFromString(row.template GetValue<string>(base + 1));
+	f.delete_count = AsIdx(row, base + 2);
+	f.file_size_bytes = AsIdx(row, base + 3);
+	f.footer_size = AsIdx(row, base + 4);
+	ReadEncryptionKey(row, base + 5, f.encryption_key);
+	if (!row.IsNull(base + 6)) {
+		f.begin_snapshot = AsIdx(row, base + 6);
+	}
+	if (!row.IsNull(base + 7)) {
+		f.max_snapshot = AsIdx(row, base + 7);
+	}
+	f.source = row.template GetValue<string>(base + 8) == "FLUSH" ? DeleteFileSource::FLUSH : DeleteFileSource::REGULAR;
+}
+
+template <class ROW>
+DuckLakeColumnStats ReadInlinedStatsRow(ROW &row, const LogicalType &type) {
+	DuckLakeColumnStats s(type);
+	if (!row.IsNull(2)) {
+		s.column_size_bytes = AsIdx(row, 2);
+	}
+	s.has_num_values = OptBoolFalse(row, 3);
+	if (s.has_num_values && !row.IsNull(4)) {
+		s.num_values = AsIdx(row, 4);
+	}
+	s.has_null_count = OptBoolFalse(row, 5);
+	if (s.has_null_count && !row.IsNull(6)) {
+		s.null_count = AsIdx(row, 6);
+	}
+	if (OptBoolFalse(row, 7) && !row.IsNull(8)) {
+		s.has_min = true;
+		s.min = row.template GetValue<string>(8);
+	}
+	if (OptBoolFalse(row, 9) && !row.IsNull(10)) {
+		s.has_max = true;
+		s.max = row.template GetValue<string>(10);
+	}
+	s.has_contains_nan = OptBoolFalse(row, 11);
+	if (s.has_contains_nan && !row.IsNull(12)) {
+		s.contains_nan = row.template GetValue<bool>(12);
+	}
+	if (!row.IsNull(13)) {
+		s.any_valid = row.template GetValue<bool>(13);
+	}
+	if (!row.IsNull(14) && s.extra_stats) {
+		s.extra_stats->Deserialize(row.template GetValue<string>(14));
+	}
+	return s;
 }
 
 } // namespace
@@ -106,44 +160,48 @@ void DuckLakeServerSideCommit::SetRetryConfigOverride(const DuckLakeRetryConfig 
 	retry_config = retry_config_p;
 }
 
+string DuckLakeServerSideCommit::Staged(DuckLakeStagedTableType kind) const {
+	return DuckLakeStagedTable(kind, schema_id, identifier_suffix).FullQualifiedName();
+}
+
+string DuckLakeServerSideCommit::Select(const char *columns, DuckLakeStagedTableType kind, const char *tail) const {
+	return StringUtil::Format("SELECT %s FROM %s %s", columns, Staged(kind), tail);
+}
+
 //===--------------------------------------------------------------------===//
-// Run — hydrate state from staging, build context, delegate to DuckLakeTransactionState::Commit
+// Run
 //===--------------------------------------------------------------------===//
 
 DuckLakeServerSideCommitResult DuckLakeServerSideCommit::Run() {
-	// Reconstruct the DuckLakeTransactionState from staging — each method fills a slice.
-	ReadCommitHeader();             // creates state, fills commit_info/data_path/separator, sets transaction_snapshot
-	ReadColumnTypes();              // fills column_types (used by stats reconstruction below + retry closure)
-	ReadStagedDataFiles();          // fills state->local_changes (data files)
-	ReadStagedInlinedData();        // fills state->local_changes (inlined data) + staged_inlined_tuples
-	ReadStagedInlinedDeletes();     // fills state->local_changes (inlined-data row deletes)
-	ReadStagedInlinedFileDeletes(); // fills state->local_changes (inlined deletes against parquet files)
-	ReadStagedDeleteFiles();        // fills state->local_changes (parquet delete-vector files)
-	ReadStagedDroppedFiles();       // fills state->dropped_files + state->tables_deleted_from
-	ReadStagedFlushedInlinedTables(); // fills state->flushed_inlined_tables (inlined → parquet flushes)
-	ReadStagedCompactions();          // fills state->local_changes.compactions (merge_adjacent / rewrite_delete)
-	ReadStagedNameMaps();             // fills new_name_maps (transaction-local column mappings)
-	ReadExistingTableStats();       // fills existing_table_stats (first-attempt path for get_table_stats)
+	// Hydrate the DuckLakeTransactionState slice by slice.
+	ReadCommitHeader();
+	ReadColumnTypes();
+	ReadStagedDataFiles();
+	ReadStagedInlinedData();
+	ReadStagedInlinedDeletes();
+	ReadStagedInlinedFileDeletes();
+	ReadStagedDeleteFiles();
+	ReadStagedDroppedFiles();
+	ReadStagedFlushedInlinedTables();
+	ReadStagedCompactions();
+	ReadStagedNameMaps();
+	ReadExistingTableStats();
 
-	// Derive transaction_changes the same way DuckLakeTransaction would — directly from
-	// the now-fully-hydrated local_changes (both data files and inlined data).
+	// Derive transaction_changes from local_changes the same way DuckLakeTransaction does.
 	for (auto &entry : state->local_changes.Changes()) {
 		DuckLakeTransaction::AddTableChanges(entry.GetTableIndex(), entry.GetTableChanges(), transaction_changes);
 	}
-	// Whole-file drops live on state->tables_deleted_from rather than local_changes, so mirror them
-	// into the transaction_changes set the same way state.WriteSnapshotChanges does at commit time.
+	// Mirror whole-file drops into the conflict-detection set.
 	for (auto &table_id : state->tables_deleted_from) {
 		transaction_changes.tables_deleted_from.insert(table_id);
 	}
 
-	// Delegate to the unified commit loop. Closures capture committed_* by reference so we can
-	// return them; the state itself owns everything else needed for retry / conflict / SQL emission.
 	idx_t committed_snapshot_id = 0;
 	idx_t committed_schema_version = static_cast<idx_t>(schema_version);
 	state->Commit(transaction_snapshot, transaction_changes, retry_config,
 	              BuildContext(committed_snapshot_id, committed_schema_version));
 
-	RunQuery(EmitDropStagingSql(), "drop staging");
+	RunQuery(DuckLakeStagedTable::DropAllSql(schema_id, identifier_suffix), "drop staging");
 	DuckLakeServerSideCommitResult result;
 	result.committed_snapshot_id = static_cast<int64_t>(committed_snapshot_id);
 	result.committed_schema_version = static_cast<int64_t>(committed_schema_version);
@@ -152,14 +210,13 @@ DuckLakeServerSideCommitResult DuckLakeServerSideCommit::Run() {
 }
 
 //===--------------------------------------------------------------------===//
-// Hydration — each method populates a slice of `state` (or its sibling inputs)
+// Hydration
 //===--------------------------------------------------------------------===//
 
 void DuckLakeServerSideCommit::ReadCommitHeader() {
-	auto query = StringUtil::Format("SELECT commit_author, commit_message, commit_extra_info, "
-	                                "transaction_snapshot_id, data_path, path_separator "
-	                                "FROM %s.ducklake_staged_commit_%s",
-	                                schema_id, identifier_suffix);
+	auto query = Select("commit_author, commit_message, commit_extra_info, transaction_snapshot_id, "
+	                    "data_path, path_separator, transaction_next_catalog_id, transaction_next_file_id",
+	                    DuckLakeStagedTableType::COMMIT_HEADER);
 	auto result = RunQuery(query, "read staged commit header");
 	auto chunk = result->Fetch();
 	if (!chunk || chunk->size() == 0) {
@@ -182,143 +239,108 @@ void DuckLakeServerSideCommit::ReadCommitHeader() {
 
 	transaction_snapshot.snapshot_id = static_cast<idx_t>(chunk->GetValue(3, 0).GetValue<int64_t>());
 	transaction_snapshot.schema_version = static_cast<idx_t>(schema_version);
+	transaction_snapshot.next_catalog_id = static_cast<idx_t>(chunk->GetValue(6, 0).GetValue<uint64_t>());
+	transaction_snapshot.next_file_id = static_cast<idx_t>(chunk->GetValue(7, 0).GetValue<uint64_t>());
 }
 
 void DuckLakeServerSideCommit::ReadColumnTypes() {
-	// Load types for every column of every table touched in this commit — covers columns with staged
-	// per-file stats AND columns whose cumulative ducklake_table_column_stats row we read back, plus
-	// columns of tables touched by staged inlined-data inserts.
+	// Load types for every column of every table touched in this commit.
 	auto query = StringUtil::Format("SELECT col.table_id, col.column_id, col.column_type "
 	                                "FROM %s.ducklake_column col "
 	                                "WHERE col.end_snapshot IS NULL "
-	                                "AND col.table_id IN ("
-	                                "  SELECT table_id FROM %s.ducklake_staged_data_file_%s "
-	                                "  UNION "
-	                                "  SELECT table_id FROM %s.ducklake_staged_inlined_data_%s)",
-	                                schema_id, schema_id, identifier_suffix, schema_id, identifier_suffix);
+	                                "AND col.table_id IN (SELECT table_id FROM %s UNION SELECT table_id FROM %s)",
+	                                schema_id, Staged(DuckLakeStagedTableType::DATA_FILE),
+	                                Staged(DuckLakeStagedTableType::INLINED_DATA));
 	auto result = RunQuery(query, "read column types");
 	for (auto &row : *result) {
-		column_types.emplace(ColumnKey {TableIndex(static_cast<idx_t>(row.GetValue<int64_t>(0))),
-		                                FieldIndex(static_cast<idx_t>(row.GetValue<int64_t>(1)))},
+		column_types.emplace(ColumnKey {TableIndex(AsIdx(row, 0)), FieldIndex(AsIdx(row, 1))},
 		                     ResolveType(row.GetValue<string>(2)));
 	}
 }
 
 void DuckLakeServerSideCommit::ReadStagedDataFiles() {
-	// First fold per-file column stats so we can attach them to each DuckLakeDataFile in one pass.
+	// Per-file column stats keyed by local file id.
 	map<DataFileIndex, map<FieldIndex, DuckLakeColumnStats>> per_file_stats;
 	{
-		auto stats_query =
-		    StringUtil::Format("SELECT data_file_id, table_id, column_id, column_size_bytes, value_count, null_count, "
-		                       "min_value, max_value, contains_nan, extra_stats "
-		                       "FROM %s.ducklake_staged_data_file_column_stats_%s",
-		                       schema_id, identifier_suffix);
-		auto stats_result = RunQuery(stats_query, "read staged column stats");
+		auto stats_result = RunQuery(Select("data_file_id, table_id, column_id, column_size_bytes, value_count, "
+		                                    "null_count, min_value, max_value, contains_nan, extra_stats",
+		                                    DuckLakeStagedTableType::DATA_FILE_COLUMN_STATS),
+		                             "read staged column stats");
 		for (auto &row : *stats_result) {
-			DataFileIndex local_file_id(static_cast<idx_t>(row.GetValue<int64_t>(0)));
-			ColumnKey key {TableIndex(static_cast<idx_t>(row.GetValue<int64_t>(1))),
-			               FieldIndex(static_cast<idx_t>(row.GetValue<int64_t>(2)))};
+			DataFileIndex local_file_id(AsIdx(row, 0));
+			ColumnKey key {TableIndex(AsIdx(row, 1)), FieldIndex(AsIdx(row, 2))};
 			auto type_it = column_types.find(key);
 			if (type_it == column_types.end()) {
 				continue;
 			}
-			per_file_stats[local_file_id].emplace(
-			    key.second, StatsFromRow(type_it->second, row.GetBaseValue(3), row.GetBaseValue(4), row.GetBaseValue(5),
-			                             row.GetBaseValue(6), row.GetBaseValue(7), row.GetBaseValue(8),
-			                             row.GetBaseValue(9)));
+			per_file_stats[local_file_id].emplace(key.second, StatsFromRow(type_it->second, row.GetBaseValue(3),
+			                                                               row.GetBaseValue(4), row.GetBaseValue(5),
+			                                                               row.GetBaseValue(6), row.GetBaseValue(7),
+			                                                               row.GetBaseValue(8), row.GetBaseValue(9)));
 		}
 	}
 
-	// Read partition_values per local_file_id. Keyed by local_file_id, list of
-	// (partition_column_idx, Value). Value reconstructed as VARCHAR — WriteNewDataFilesSqlBatch
-	// reads `.ToString()` and DuckLake metadata stores partition values as text anyway.
+	// Partition values per local file id.
 	map<idx_t, vector<DuckLakeFilePartition>> partition_values_by_file;
 	{
-		auto part_query =
-		    StringUtil::Format("SELECT local_file_id, partition_column_idx, partition_value "
-		                       "FROM %s.ducklake_staged_data_file_partition_%s "
-		                       "ORDER BY local_file_id, partition_column_idx",
-		                       schema_id, identifier_suffix);
-		auto part_result = RunQuery(part_query, "read staged partition values");
+		auto part_result = RunQuery(Select("local_file_id, partition_column_idx, partition_value",
+		                                   DuckLakeStagedTableType::DATA_FILE_PARTITION,
+		                                   "ORDER BY local_file_id, partition_column_idx"),
+		                            "read staged partition values");
 		for (auto &row : *part_result) {
-			idx_t lfid = static_cast<idx_t>(row.GetValue<int64_t>(0));
 			DuckLakeFilePartition entry;
-			entry.partition_column_idx = static_cast<idx_t>(row.GetValue<int64_t>(1));
+			entry.partition_column_idx = AsIdx(row, 1);
 			entry.partition_value = row.IsNull(2) ? Value() : Value(row.GetValue<string>(2));
-			partition_values_by_file[lfid].push_back(std::move(entry));
+			partition_values_by_file[AsIdx(row, 0)].push_back(std::move(entry));
 		}
 	}
 
-	// Read delete files attached to transaction-local data files (DELETE applied to rows of a file
-	// inserted in the same transaction). Grouped by local_file_id so we can attach when building
-	// each DuckLakeDataFile below.
+	// Delete files attached to transaction-local data files.
 	map<idx_t, vector<DuckLakeDeleteFile>> attached_deletes;
 	{
-		auto attached_query =
-		    StringUtil::Format("SELECT attached_local_file_id, file_name, format, delete_count, file_size_bytes, "
-		                       "footer_size, encryption_key, begin_snapshot, max_snapshot, source "
-		                       "FROM %s.ducklake_staged_delete_file_%s "
-		                       "WHERE attached_local_file_id IS NOT NULL",
-		                       schema_id, identifier_suffix);
-		auto attached_result = RunQuery(attached_query, "read attached delete files");
+		auto attached_result =
+		    RunQuery(Select("attached_local_file_id, file_name, format, delete_count, file_size_bytes, "
+		                    "footer_size, encryption_key, begin_snapshot, max_snapshot, source",
+		                    DuckLakeStagedTableType::DELETE_FILE, "WHERE attached_local_file_id IS NOT NULL"),
+		             "read attached delete files");
 		for (auto &row : *attached_result) {
-			idx_t local_file_id = static_cast<idx_t>(row.GetValue<int64_t>(0));
 			DuckLakeDeleteFile f;
-			f.file_name = row.GetValue<string>(1);
-			f.format = DeleteFileFormatFromString(row.GetValue<string>(2));
-			f.delete_count = static_cast<idx_t>(row.GetValue<int64_t>(3));
-			f.file_size_bytes = static_cast<idx_t>(row.GetValue<int64_t>(4));
-			f.footer_size = static_cast<idx_t>(row.GetValue<int64_t>(5));
-			if (!row.IsNull(6)) {
-				f.encryption_key = Blob::FromBase64(string_t(row.GetValue<string>(6)));
-			}
-			if (!row.IsNull(7)) {
-				f.begin_snapshot = static_cast<idx_t>(row.GetValue<int64_t>(7));
-			}
-			if (!row.IsNull(8)) {
-				f.max_snapshot = static_cast<idx_t>(row.GetValue<int64_t>(8));
-			}
-			f.source = row.GetValue<string>(9) == "FLUSH" ? DeleteFileSource::FLUSH : DeleteFileSource::REGULAR;
-			attached_deletes[local_file_id].push_back(std::move(f));
+			FillDeleteFileCommon(f, row, /*base=*/1);
+			attached_deletes[AsIdx(row, 0)].push_back(std::move(f));
 		}
 	}
 
-	// Read the files themselves, attach stats + attached deletes, push into state->local_changes per table.
+	// Files themselves; attach stats/deletes/partitions; route compaction outputs aside.
 	map<TableIndex, vector<DuckLakeDataFile>> files_per_table;
-	auto files_query =
-	    StringUtil::Format("SELECT data_file_id, table_id, path, record_count, file_size_bytes, footer_size, "
-	                       "row_id_start, partition_id, encryption_key, mapping_id, partial_max, begin_snapshot, "
-	                       "compaction_id "
-	                       "FROM %s.ducklake_staged_data_file_%s ORDER BY table_id, file_order",
-	                       schema_id, identifier_suffix);
-	auto files_result = RunQuery(files_query, "read staged files");
+	auto files_result = RunQuery(Select("data_file_id, table_id, path, record_count, file_size_bytes, footer_size, "
+	                                    "row_id_start, partition_id, encryption_key, mapping_id, partial_max, "
+	                                    "begin_snapshot, compaction_id",
+	                                    DuckLakeStagedTableType::DATA_FILE, "ORDER BY table_id, file_order"),
+	                             "read staged files");
 	for (auto &row : *files_result) {
-		DataFileIndex local_file_id(static_cast<idx_t>(row.GetValue<int64_t>(0)));
+		DataFileIndex local_file_id(AsIdx(row, 0));
 		DuckLakeDataFile f;
 		f.file_name = row.GetValue<string>(2);
-		f.row_count = static_cast<idx_t>(row.GetValue<int64_t>(3));
-		f.file_size_bytes = static_cast<idx_t>(row.GetValue<int64_t>(4));
+		f.row_count = AsIdx(row, 3);
+		f.file_size_bytes = AsIdx(row, 4);
 		if (!row.IsNull(5)) {
-			f.footer_size = static_cast<idx_t>(row.GetValue<int64_t>(5));
+			f.footer_size = AsIdx(row, 5);
 		}
 		if (!row.IsNull(6)) {
-			f.flush_row_id_start = static_cast<idx_t>(row.GetValue<int64_t>(6));
+			f.flush_row_id_start = AsIdx(row, 6);
 		}
 		if (!row.IsNull(7)) {
-			f.partition_id = static_cast<idx_t>(row.GetValue<int64_t>(7));
+			f.partition_id = AsIdx(row, 7);
 		}
-		if (!row.IsNull(8)) {
-			f.encryption_key = Blob::FromBase64(string_t(row.GetValue<string>(8)));
-		}
+		ReadEncryptionKey(row, 8, f.encryption_key);
 		if (!row.IsNull(9)) {
-			// mapping_id staged as UBIGINT to fit transaction-local sentinels (≥ 2^63).
 			f.mapping_id = MappingIndex(static_cast<idx_t>(row.GetValue<uint64_t>(9)));
 		}
 		if (!row.IsNull(10)) {
-			f.max_partial_file_snapshot = static_cast<idx_t>(row.GetValue<int64_t>(10));
+			f.max_partial_file_snapshot = AsIdx(row, 10);
 		}
 		if (!row.IsNull(11)) {
-			f.begin_snapshot = static_cast<idx_t>(row.GetValue<int64_t>(11));
+			f.begin_snapshot = AsIdx(row, 11);
 		}
 		auto stats_it = per_file_stats.find(local_file_id);
 		if (stats_it != per_file_stats.end()) {
@@ -332,12 +354,12 @@ void DuckLakeServerSideCommit::ReadStagedDataFiles() {
 		if (part_it != partition_values_by_file.end()) {
 			f.partition_values = std::move(part_it->second);
 		}
-		// Compaction-output file: set aside for ReadStagedCompactions, don't push into new_data_files.
+		// Compaction-output file: routed by ReadStagedCompactions instead.
 		if (!row.IsNull(12)) {
-			compaction_output_files.emplace(static_cast<idx_t>(row.GetValue<int64_t>(12)), std::move(f));
+			compaction_output_files.emplace(AsIdx(row, 12), std::move(f));
 			continue;
 		}
-		files_per_table[TableIndex(static_cast<idx_t>(row.GetValue<int64_t>(1)))].push_back(std::move(f));
+		files_per_table[TableIndex(AsIdx(row, 1))].push_back(std::move(f));
 	}
 
 	for (auto &entry : files_per_table) {
@@ -346,105 +368,57 @@ void DuckLakeServerSideCommit::ReadStagedDataFiles() {
 }
 
 void DuckLakeServerSideCommit::ReadStagedInlinedData() {
-	// `ducklake_staged_inlined_data_<sfx>(table_id, has_preserved_row_ids)` — one row per table that
-	// has inlined inserts in this commit.
-	auto meta_query = StringUtil::Format("SELECT table_id, has_preserved_row_ids "
-	                                     "FROM %s.ducklake_staged_inlined_data_%s",
-	                                     schema_id, identifier_suffix);
-	auto meta_result = RunQuery(meta_query, "read staged inlined data meta");
 	struct PerTable {
 		bool has_preserved = false;
 	};
 	map<TableIndex, PerTable> per_table;
+
+	auto meta_result = RunQuery(Select("table_id, has_preserved_row_ids", DuckLakeStagedTableType::INLINED_DATA),
+	                            "read staged inlined data meta");
 	for (auto &row : *meta_result) {
-		TableIndex table_id(static_cast<idx_t>(row.GetValue<int64_t>(0)));
-		per_table[table_id].has_preserved = row.GetValue<bool>(1);
+		per_table[TableIndex(AsIdx(row, 0))].has_preserved = row.GetValue<bool>(1);
 	}
 	if (per_table.empty()) {
 		return;
 	}
 
-	// `ducklake_staged_inlined_row_<sfx>(table_id, row_order, preserved_row_id, value_literals)` —
-	// one row per inlined-data row; `value_literals` is the SQL tuple text produced by
-	// DuckLakeUtil::ValueToSQL at staging time. Group by table_id and order by row_order.
-	auto rows_query = StringUtil::Format("SELECT table_id, preserved_row_id, value_literals "
-	                                     "FROM %s.ducklake_staged_inlined_row_%s "
-	                                     "ORDER BY table_id, row_order",
-	                                     schema_id, identifier_suffix);
-	auto rows_result = RunQuery(rows_query, "read staged inlined rows");
+	// value_literals holds the SQL tuple text produced at staging time.
+	auto rows_result = RunQuery(Select("table_id, preserved_row_id, value_literals",
+	                                   DuckLakeStagedTableType::INLINED_ROW, "ORDER BY table_id, row_order"),
+	                            "read staged inlined rows");
 	for (auto &row : *rows_result) {
-		TableIndex table_id(static_cast<idx_t>(row.GetValue<int64_t>(0)));
+		TableIndex table_id(AsIdx(row, 0));
 		auto pt_it = per_table.find(table_id);
 		if (pt_it == per_table.end()) {
 			continue;
 		}
 		staged_inlined_tuples[table_id].push_back(row.GetValue<string>(2));
 		if (pt_it->second.has_preserved) {
-			// preserved_row_id is NULL for INSERTed rows (transaction-local placeholder), real id
-			// for UPDATEd rows. Use TRANSACTION_LOCAL_ROW_ID_START as the placeholder so the state's
-			// next_row_id accounting matches the client-side path.
-			int64_t rid;
-			if (row.IsNull(1)) {
-				rid = static_cast<int64_t>(DuckLakeConstants::TRANSACTION_LOCAL_ROW_ID_START);
-			} else {
-				rid = row.GetValue<int64_t>(1);
-			}
+			// NULL preserved_row_id = INSERTed row (placeholder); real id = UPDATEd row.
+			int64_t rid = row.IsNull(1) ? static_cast<int64_t>(DuckLakeConstants::TRANSACTION_LOCAL_ROW_ID_START)
+			                            : row.GetValue<int64_t>(1);
 			staged_inlined_row_ids[table_id].push_back(rid);
 		}
 	}
 
-	// `ducklake_staged_inlined_column_stats_<sfx>` — one row per (table_id, column_id) of staged
-	// inlined-data stats, fed into MergeStats during state.CommitChanges so global stats track
-	// the new rows.
-	auto stats_query = StringUtil::Format(
-	    "SELECT table_id, column_id, column_size_bytes, has_num_values, num_values, has_null_count, null_count, "
-	    "has_min, min_value, has_max, max_value, has_contains_nan, contains_nan, any_valid, extra_stats "
-	    "FROM %s.ducklake_staged_inlined_column_stats_%s",
-	    schema_id, identifier_suffix);
-	auto stats_result = RunQuery(stats_query, "read staged inlined column stats");
+	auto stats_result =
+	    RunQuery(Select("table_id, column_id, column_size_bytes, has_num_values, num_values, has_null_count, "
+	                    "null_count, has_min, min_value, has_max, max_value, has_contains_nan, contains_nan, "
+	                    "any_valid, extra_stats",
+	                    DuckLakeStagedTableType::INLINED_COLUMN_STATS),
+	             "read staged inlined column stats");
 	map<TableIndex, map<FieldIndex, DuckLakeColumnStats>> stats_per_table;
 	for (auto &row : *stats_result) {
-		TableIndex table_id(static_cast<idx_t>(row.GetValue<int64_t>(0)));
-		FieldIndex column_id(static_cast<idx_t>(row.GetValue<int64_t>(1)));
+		TableIndex table_id(AsIdx(row, 0));
+		FieldIndex column_id(AsIdx(row, 1));
 		auto type_it = column_types.find({table_id, column_id});
 		if (type_it == column_types.end()) {
 			continue;
 		}
-		DuckLakeColumnStats s(type_it->second);
-		if (!row.IsNull(2)) {
-			s.column_size_bytes = static_cast<idx_t>(row.GetValue<int64_t>(2));
-		}
-		s.has_num_values = !row.IsNull(3) && row.GetValue<bool>(3);
-		if (s.has_num_values && !row.IsNull(4)) {
-			s.num_values = static_cast<idx_t>(row.GetValue<int64_t>(4));
-		}
-		s.has_null_count = !row.IsNull(5) && row.GetValue<bool>(5);
-		if (s.has_null_count && !row.IsNull(6)) {
-			s.null_count = static_cast<idx_t>(row.GetValue<int64_t>(6));
-		}
-		if (!row.IsNull(7) && row.GetValue<bool>(7) && !row.IsNull(8)) {
-			s.has_min = true;
-			s.min = row.GetValue<string>(8);
-		}
-		if (!row.IsNull(9) && row.GetValue<bool>(9) && !row.IsNull(10)) {
-			s.has_max = true;
-			s.max = row.GetValue<string>(10);
-		}
-		s.has_contains_nan = !row.IsNull(11) && row.GetValue<bool>(11);
-		if (s.has_contains_nan && !row.IsNull(12)) {
-			s.contains_nan = row.GetValue<bool>(12);
-		}
-		if (!row.IsNull(13)) {
-			s.any_valid = row.GetValue<bool>(13);
-		}
-		if (!row.IsNull(14) && s.extra_stats) {
-			s.extra_stats->Deserialize(row.GetValue<string>(14));
-		}
-		stats_per_table[table_id].emplace(column_id, std::move(s));
+		stats_per_table[table_id].emplace(column_id, ReadInlinedStatsRow(row, type_it->second));
 	}
 
-	// Build a DuckLakeInlinedData per table. `data` is null — the closure reads from
-	// `staged_inlined_tuples` instead of walking a ColumnDataCollection.
+	// Build a DuckLakeInlinedData per table; data is null because tuples are spliced as SQL text.
 	for (auto &entry : per_table) {
 		auto table_id = entry.first;
 		auto tuples_it = staged_inlined_tuples.find(table_id);
@@ -467,119 +441,58 @@ void DuckLakeServerSideCommit::ReadStagedInlinedData() {
 }
 
 void DuckLakeServerSideCommit::ReadStagedInlinedDeletes() {
-	// `ducklake_staged_inlined_delete_<sfx>(table_id, inlined_table_name, deleted_row_id)` — one row
-	// per deleted inlined-data row. Group by (table_id, inlined_table_name) and feed each group
-	// through LocalTableChanges::AddNewInlinedDeletes — same path the client uses for live deletes.
-	auto query = StringUtil::Format("SELECT table_id, inlined_table_name, deleted_row_id "
-	                                "FROM %s.ducklake_staged_inlined_delete_%s "
-	                                "ORDER BY table_id, inlined_table_name",
-	                                schema_id, identifier_suffix);
-	auto result = RunQuery(query, "read staged inlined deletes");
+	auto result = RunQuery(Select("table_id, inlined_table_name, deleted_row_id",
+	                              DuckLakeStagedTableType::INLINED_DELETE, "ORDER BY table_id, inlined_table_name"),
+	                       "read staged inlined deletes");
 
-	struct GroupKey {
-		TableIndex table_id;
-		string inlined_table_name;
-		bool operator<(const GroupKey &other) const {
-			if (table_id.index != other.table_id.index) {
-				return table_id.index < other.table_id.index;
-			}
-			return inlined_table_name < other.inlined_table_name;
-		}
-	};
-	map<GroupKey, set<idx_t>> grouped;
+	using Key = std::pair<idx_t, string>; // table_id, inlined_table_name
+	map<Key, set<idx_t>> grouped;
 	for (auto &row : *result) {
-		GroupKey key {TableIndex(static_cast<idx_t>(row.GetValue<int64_t>(0))), row.GetValue<string>(1)};
-		grouped[key].insert(static_cast<idx_t>(row.GetValue<int64_t>(2)));
+		grouped[{AsIdx(row, 0), row.GetValue<string>(1)}].insert(AsIdx(row, 2));
 	}
 	for (auto &entry : grouped) {
-		state->local_changes.AddNewInlinedDeletes(entry.first.table_id, entry.first.inlined_table_name,
+		state->local_changes.AddNewInlinedDeletes(TableIndex(entry.first.first), entry.first.second,
 		                                          std::move(entry.second));
 	}
 }
 
 void DuckLakeServerSideCommit::ReadStagedInlinedFileDeletes() {
-	// `ducklake_staged_inlined_file_delete_<sfx>(table_id, file_id, deleted_row_id)` — one row per
-	// row deleted from a parquet file that's recorded as metadata (in ducklake_inlined_delete_<id>)
-	// rather than as a delete-vector parquet file. Group by (table_id, file_id) and feed each group
-	// through LocalTableChanges::AddNewInlinedFileDeletes — same path the client uses.
-	auto query = StringUtil::Format("SELECT table_id, file_id, deleted_row_id "
-	                                "FROM %s.ducklake_staged_inlined_file_delete_%s "
-	                                "ORDER BY table_id, file_id",
-	                                schema_id, identifier_suffix);
-	auto result = RunQuery(query, "read staged inlined file deletes");
+	auto result = RunQuery(Select("table_id, file_id, deleted_row_id", DuckLakeStagedTableType::INLINED_FILE_DELETE,
+	                              "ORDER BY table_id, file_id"),
+	                       "read staged inlined file deletes");
 
-	struct GroupKey {
-		TableIndex table_id;
-		idx_t file_id;
-		bool operator<(const GroupKey &other) const {
-			if (table_id.index != other.table_id.index) {
-				return table_id.index < other.table_id.index;
-			}
-			return file_id < other.file_id;
-		}
-	};
-	map<GroupKey, set<idx_t>> grouped;
+	using Key = std::pair<idx_t, idx_t>; // table_id, file_id
+	map<Key, set<idx_t>> grouped;
 	for (auto &row : *result) {
-		GroupKey key {TableIndex(static_cast<idx_t>(row.GetValue<int64_t>(0))),
-		              static_cast<idx_t>(row.GetValue<int64_t>(1))};
-		grouped[key].insert(static_cast<idx_t>(row.GetValue<int64_t>(2)));
+		grouped[{AsIdx(row, 0), AsIdx(row, 1)}].insert(AsIdx(row, 2));
 	}
 	for (auto &entry : grouped) {
-		state->local_changes.AddNewInlinedFileDeletes(entry.first.table_id, entry.first.file_id,
+		state->local_changes.AddNewInlinedFileDeletes(TableIndex(entry.first.first), entry.first.second,
 		                                              std::move(entry.second));
 	}
 }
 
 void DuckLakeServerSideCommit::ReadStagedDeleteFiles() {
-	// Loose delete-vector files (DELETE against pre-existing parquet files). Reconstruct
-	// DuckLakeDeleteFile entries (including overwrite metadata) and push into local_changes via
-	// AppendDeleteFiles — AddDeletes would RemoveFile() on overwritten files, which is the
-	// client's job and has already happened. WHERE attached_local_file_id IS NULL excludes the
-	// deletes that ReadStagedDataFiles already attached to their transaction-local data file.
-	auto query =
-	    StringUtil::Format("SELECT table_id, data_file_path, data_file_id, file_name, format, delete_count, "
-	                       "file_size_bytes, footer_size, encryption_key, begin_snapshot, max_snapshot, source, "
-	                       "overwrites_existing_delete, overwrite_delete_file_id, overwrite_delete_file_path "
-	                       "FROM %s.ducklake_staged_delete_file_%s "
-	                       "WHERE attached_local_file_id IS NULL "
-	                       "ORDER BY table_id, data_file_path",
-	                       schema_id, identifier_suffix);
-	auto result = RunQuery(query, "read staged delete files");
+	// Loose deletes only — attached deletes are handled in ReadStagedDataFiles.
+	auto result =
+	    RunQuery(Select("table_id, data_file_path, data_file_id, file_name, format, delete_count, file_size_bytes, "
+	                    "footer_size, encryption_key, begin_snapshot, max_snapshot, source, "
+	                    "overwrites_existing_delete, overwrite_delete_file_id, overwrite_delete_file_path",
+	                    DuckLakeStagedTableType::DELETE_FILE,
+	                    "WHERE attached_local_file_id IS NULL ORDER BY table_id, data_file_path"),
+	             "read staged delete files");
 
-	struct GroupKey {
-		TableIndex table_id;
-		string data_file_path;
-		bool operator<(const GroupKey &other) const {
-			if (table_id.index != other.table_id.index) {
-				return table_id.index < other.table_id.index;
-			}
-			return data_file_path < other.data_file_path;
-		}
-	};
-	map<GroupKey, vector<DuckLakeDeleteFile>> grouped;
+	using Key = std::pair<idx_t, string>; // table_id, data_file_path
+	map<Key, vector<DuckLakeDeleteFile>> grouped;
 	for (auto &row : *result) {
-		GroupKey key {TableIndex(static_cast<idx_t>(row.GetValue<int64_t>(0))), row.GetValue<string>(1)};
+		Key key {AsIdx(row, 0), row.GetValue<string>(1)};
 		DuckLakeDeleteFile f;
-		f.data_file_id = DataFileIndex(static_cast<idx_t>(row.GetValue<int64_t>(2)));
-		f.data_file_path = key.data_file_path;
-		f.file_name = row.GetValue<string>(3);
-		f.format = DeleteFileFormatFromString(row.GetValue<string>(4));
-		f.delete_count = static_cast<idx_t>(row.GetValue<int64_t>(5));
-		f.file_size_bytes = static_cast<idx_t>(row.GetValue<int64_t>(6));
-		f.footer_size = static_cast<idx_t>(row.GetValue<int64_t>(7));
-		if (!row.IsNull(8)) {
-			f.encryption_key = Blob::FromBase64(string_t(row.GetValue<string>(8)));
-		}
-		if (!row.IsNull(9)) {
-			f.begin_snapshot = static_cast<idx_t>(row.GetValue<int64_t>(9));
-		}
-		if (!row.IsNull(10)) {
-			f.max_snapshot = static_cast<idx_t>(row.GetValue<int64_t>(10));
-		}
-		f.source = row.GetValue<string>(11) == "FLUSH" ? DeleteFileSource::FLUSH : DeleteFileSource::REGULAR;
-		f.overwrites_existing_delete = !row.IsNull(12) && row.GetValue<bool>(12);
+		f.data_file_id = DataFileIndex(AsIdx(row, 2));
+		f.data_file_path = key.second;
+		FillDeleteFileCommon(f, row, /*base=*/3);
+		f.overwrites_existing_delete = OptBoolFalse(row, 12);
 		if (!row.IsNull(13)) {
-			f.overwritten_delete_file.delete_file_id = DataFileIndex(static_cast<idx_t>(row.GetValue<int64_t>(13)));
+			f.overwritten_delete_file.delete_file_id = DataFileIndex(AsIdx(row, 13));
 		}
 		if (!row.IsNull(14)) {
 			f.overwritten_delete_file.path = row.GetValue<string>(14);
@@ -587,50 +500,38 @@ void DuckLakeServerSideCommit::ReadStagedDeleteFiles() {
 		grouped[key].push_back(std::move(f));
 	}
 	for (auto &entry : grouped) {
-		state->local_changes.AppendDeleteFiles(entry.first.table_id, entry.first.data_file_path,
+		state->local_changes.AppendDeleteFiles(TableIndex(entry.first.first), entry.first.second,
 		                                       std::move(entry.second));
 	}
 }
 
 void DuckLakeServerSideCommit::ReadStagedDroppedFiles() {
-	// Whole-file drops. Populate state->dropped_files (the map state.CommitChanges iterates to
-	// emit DROP rows) and mirror into state->tables_deleted_from (drives WriteSnapshotChanges).
-	auto query = StringUtil::Format("SELECT t.path, t.data_file_id, f.table_id "
-	                                "FROM %s.ducklake_staged_dropped_file_%s t "
-	                                "LEFT JOIN %s.ducklake_data_file f ON f.data_file_id = t.data_file_id",
-	                                schema_id, identifier_suffix, schema_id);
-	auto result = RunQuery(query, "read staged dropped files");
-	for (auto &row : *result) {
-		auto path = row.GetValue<string>(0);
-		DataFileIndex file_id(static_cast<idx_t>(row.GetValue<int64_t>(1)));
-		state->dropped_files.emplace(std::move(path), file_id);
-		if (!row.IsNull(2)) {
-			state->tables_deleted_from.insert(TableIndex(static_cast<idx_t>(row.GetValue<int64_t>(2))));
-		}
+	auto dropped =
+	    RunQuery(Select("path, data_file_id", DuckLakeStagedTableType::DROPPED_FILE), "read staged dropped files");
+	for (auto &row : *dropped) {
+		state->dropped_files.emplace(row.GetValue<string>(0), DataFileIndex(AsIdx(row, 1)));
+	}
+	auto tables =
+	    RunQuery(Select("table_id", DuckLakeStagedTableType::TABLES_DELETED_FROM), "read staged tables_deleted_from");
+	for (auto &row : *tables) {
+		state->tables_deleted_from.insert(TableIndex(AsIdx(row, 0)));
 	}
 }
 
 void DuckLakeServerSideCommit::ReadStagedFlushedInlinedTables() {
-	// `ducklake_staged_flushed_inlined_<sfx>(inlined_table_name, schema_version, flush_snapshot_id)` —
-	// one row per inlined-data table that just got flushed to parquet in this commit. Drives
-	// GenerateDeleteFlushedInlinedData (removes the inlined rows) and DropEmptySupersededInlinedTables
-	// (post-commit cleanup of empty inlined tables superseded by a flush).
-	auto query =
-	    StringUtil::Format("SELECT inlined_table_name, schema_version, flush_snapshot_id "
-	                       "FROM %s.ducklake_staged_flushed_inlined_%s",
-	                       schema_id, identifier_suffix);
-	auto result = RunQuery(query, "read staged flushed inlined tables");
+	auto result = RunQuery(
+	    Select("inlined_table_name, schema_version, flush_snapshot_id", DuckLakeStagedTableType::FLUSHED_INLINED),
+	    "read staged flushed inlined tables");
 	for (auto &row : *result) {
 		FlushedInlinedTableInfo entry;
 		entry.inlined_table.table_name = row.GetValue<string>(0);
-		entry.inlined_table.schema_version = static_cast<idx_t>(row.GetValue<int64_t>(1));
-		entry.flush_snapshot_id = static_cast<idx_t>(row.GetValue<int64_t>(2));
+		entry.inlined_table.schema_version = AsIdx(row, 1);
+		entry.flush_snapshot_id = AsIdx(row, 2);
 		state->flushed_inlined_tables.push_back(std::move(entry));
 	}
 }
 
 void DuckLakeServerSideCommit::ReadStagedCompactions() {
-	// Read compaction headers first into a per-id map; we'll fill in source_files in a second pass.
 	struct CompactionShell {
 		TableIndex table_id;
 		CompactionType type;
@@ -638,72 +539,56 @@ void DuckLakeServerSideCommit::ReadStagedCompactions() {
 		optional_idx output_local_file_id;
 	};
 	map<idx_t, CompactionShell> shells;
-	auto header_query =
-	    StringUtil::Format("SELECT compaction_id, table_id, compaction_type, row_id_start, output_local_file_id "
-	                       "FROM %s.ducklake_staged_compaction_%s",
-	                       schema_id, identifier_suffix);
-	auto header_result = RunQuery(header_query, "read staged compactions");
+	auto header_result = RunQuery(Select("compaction_id, table_id, compaction_type, row_id_start, output_local_file_id",
+	                                     DuckLakeStagedTableType::COMPACTION),
+	                              "read staged compactions");
 	for (auto &row : *header_result) {
-		idx_t cid = static_cast<idx_t>(row.GetValue<int64_t>(0));
 		CompactionShell shell;
-		shell.table_id = TableIndex(static_cast<idx_t>(row.GetValue<int64_t>(1)));
-		auto type_str = row.GetValue<string>(2);
-		shell.type = type_str == "rewrite_delete" ? CompactionType::REWRITE_DELETES : CompactionType::MERGE_ADJACENT_TABLES;
-		if (!row.IsNull(3)) {
-			shell.row_id_start = static_cast<idx_t>(row.GetValue<int64_t>(3));
-		}
-		if (!row.IsNull(4)) {
-			shell.output_local_file_id = static_cast<idx_t>(row.GetValue<int64_t>(4));
-		}
-		shells.emplace(cid, std::move(shell));
+		shell.table_id = TableIndex(AsIdx(row, 1));
+		shell.type = CompactionTypeFromString(row.GetValue<string>(2));
+		shell.row_id_start = OptIdx(row, 3);
+		shell.output_local_file_id = OptIdx(row, 4);
+		shells.emplace(AsIdx(row, 0), std::move(shell));
 	}
 
-	// Group source files by compaction_id, ordered by source_order.
 	map<idx_t, vector<DuckLakeCompactionFileEntry>> sources_by_compaction;
-	auto sources_query =
-	    StringUtil::Format("SELECT compaction_id, source_data_file_id, source_path, source_row_count, "
-	                       "source_begin_snapshot, source_max_partial_file_snapshot, source_inlined_delete_count, "
-	                       "last_delete_file_id, last_delete_path, last_delete_row_count, last_delete_end_snapshot "
-	                       "FROM %s.ducklake_staged_compaction_source_%s "
-	                       "ORDER BY compaction_id, source_order",
-	                       schema_id, identifier_suffix);
-	auto sources_result = RunQuery(sources_query, "read staged compaction sources");
+	auto sources_result =
+	    RunQuery(Select("compaction_id, source_data_file_id, source_path, source_row_count, source_begin_snapshot, "
+	                    "source_max_partial_file_snapshot, source_inlined_delete_count, last_delete_file_id, "
+	                    "last_delete_path, last_delete_row_count, last_delete_end_snapshot",
+	                    DuckLakeStagedTableType::COMPACTION_SOURCE, "ORDER BY compaction_id, source_order"),
+	             "read staged compaction sources");
 	for (auto &row : *sources_result) {
-		idx_t cid = static_cast<idx_t>(row.GetValue<int64_t>(0));
 		DuckLakeCompactionFileEntry entry;
-		entry.file.id = DataFileIndex(static_cast<idx_t>(row.GetValue<int64_t>(1)));
+		entry.file.id = DataFileIndex(AsIdx(row, 1));
 		entry.file.data.path = row.GetValue<string>(2);
-		entry.file.row_count = static_cast<idx_t>(row.GetValue<int64_t>(3));
-		entry.file.begin_snapshot = static_cast<idx_t>(row.GetValue<int64_t>(4));
+		entry.file.row_count = AsIdx(row, 3);
+		entry.file.begin_snapshot = AsIdx(row, 4);
 		if (!row.IsNull(5)) {
-			entry.max_partial_file_snapshot = static_cast<idx_t>(row.GetValue<int64_t>(5));
+			entry.max_partial_file_snapshot = AsIdx(row, 5);
 		}
-		// inlined_file_deletions stored as a count — fill the set with placeholder values so
-		// GetCompactionChanges' `row_id_limit -= inlined_file_deletions.size()` works correctly.
-		auto inlined_count = static_cast<idx_t>(row.GetValue<int64_t>(6));
+		// inlined_file_deletions stored as a count; fill with placeholders so size() is correct.
+		auto inlined_count = AsIdx(row, 6);
 		for (idx_t i = 0; i < inlined_count; i++) {
 			entry.inlined_file_deletions.insert(i);
 		}
 		entry.has_inlined_deletions = inlined_count > 0;
 		if (!row.IsNull(7)) {
 			DuckLakeCompactionDeleteFileData del;
-			del.delete_file_id = DataFileIndex(static_cast<idx_t>(row.GetValue<int64_t>(7)));
+			del.delete_file_id = DataFileIndex(AsIdx(row, 7));
 			if (!row.IsNull(8)) {
 				del.data.path = row.GetValue<string>(8);
 			}
-			del.row_count = static_cast<idx_t>(row.GetValue<int64_t>(9));
+			del.row_count = AsIdx(row, 9);
 			if (!row.IsNull(10)) {
-				del.end_snapshot = static_cast<idx_t>(row.GetValue<int64_t>(10));
+				del.end_snapshot = AsIdx(row, 10);
 			}
 			entry.delete_files.push_back(std::move(del));
 		}
-		sources_by_compaction[cid].push_back(std::move(entry));
+		sources_by_compaction[AsIdx(row, 0)].push_back(std::move(entry));
 	}
 
-	// Assemble DuckLakeCompactionEntry per shell, pull written_file from compaction_output_files,
-	// and feed into LocalTableChanges via AddCompaction (same path the client uses).
 	for (auto &kv : shells) {
-		idx_t cid = kv.first;
 		auto &shell = kv.second;
 		DuckLakeCompactionEntry entry;
 		entry.type = shell.type;
@@ -714,7 +599,7 @@ void DuckLakeServerSideCommit::ReadStagedCompactions() {
 				entry.written_file = std::move(it->second);
 			}
 		}
-		auto src_it = sources_by_compaction.find(cid);
+		auto src_it = sources_by_compaction.find(kv.first);
 		if (src_it != sources_by_compaction.end()) {
 			entry.source_files = std::move(src_it->second);
 		}
@@ -723,9 +608,7 @@ void DuckLakeServerSideCommit::ReadStagedCompactions() {
 }
 
 void DuckLakeServerSideCommit::ReadStagedNameMaps() {
-	// Two staged tables: the map header (id, table_id) and a flattened entry tree (parent_entry_id
-	// linking children to their parent). Rebuild the tree per map, then push into new_name_maps.
-	// state.GetNewNameMaps allocates real MappingIndex IDs and remaps file references at commit time.
+	// Header (id, table_id) plus a flattened entry tree.
 	struct EntryShell {
 		idx_t entry_id;
 		optional_idx parent_entry_id;
@@ -735,37 +618,27 @@ void DuckLakeServerSideCommit::ReadStagedNameMaps() {
 	};
 	map<idx_t, vector<EntryShell>> entries_by_map;
 	{
-		auto query = StringUtil::Format(
-		    "SELECT map_id, entry_id, parent_entry_id, source_name, target_field_id, hive_partition "
-		    "FROM %s.ducklake_staged_name_map_entry_%s "
-		    "ORDER BY map_id, entry_id",
-		    schema_id, identifier_suffix);
-		auto result = RunQuery(query, "read staged name map entries");
+		auto result = RunQuery(Select("map_id, entry_id, parent_entry_id, source_name, target_field_id, hive_partition",
+		                              DuckLakeStagedTableType::NAME_MAP_ENTRY, "ORDER BY map_id, entry_id"),
+		                       "read staged name map entries");
 		for (auto &row : *result) {
-			idx_t map_id = static_cast<idx_t>(row.GetValue<uint64_t>(0));
 			EntryShell shell;
-			shell.entry_id = static_cast<idx_t>(row.GetValue<int64_t>(1));
-			if (!row.IsNull(2)) {
-				shell.parent_entry_id = static_cast<idx_t>(row.GetValue<int64_t>(2));
-			}
+			shell.entry_id = AsIdx(row, 1);
+			shell.parent_entry_id = OptIdx(row, 2);
 			shell.source_name = row.GetValue<string>(3);
-			shell.target_field_id = FieldIndex(static_cast<idx_t>(row.GetValue<int64_t>(4)));
-			shell.hive_partition = !row.IsNull(5) && row.GetValue<bool>(5);
-			entries_by_map[map_id].push_back(std::move(shell));
+			shell.target_field_id = FieldIndex(AsIdx(row, 4));
+			shell.hive_partition = OptBoolFalse(row, 5);
+			entries_by_map[static_cast<idx_t>(row.GetValue<uint64_t>(0))].push_back(std::move(shell));
 		}
 	}
 
-	auto header_query = StringUtil::Format("SELECT map_id, table_id FROM %s.ducklake_staged_name_map_%s",
-	                                       schema_id, identifier_suffix);
-	auto header_result = RunQuery(header_query, "read staged name maps");
+	auto header_result =
+	    RunQuery(Select("map_id, table_id", DuckLakeStagedTableType::NAME_MAP), "read staged name maps");
 	for (auto &row : *header_result) {
 		auto name_map = make_uniq<DuckLakeNameMap>();
 		name_map->id = MappingIndex(static_cast<idx_t>(row.GetValue<uint64_t>(0)));
-		name_map->table_id = TableIndex(static_cast<idx_t>(row.GetValue<int64_t>(1)));
+		name_map->table_id = TableIndex(AsIdx(row, 1));
 
-		// Rebuild the tree recursively: each call builds an entry and its descendants. Avoids
-		// the move-ordering bug where a child was moved into a parent before its own children
-		// could be attached (would null-deref on the second move).
 		auto entries_it = entries_by_map.find(name_map->id.index);
 		if (entries_it != entries_by_map.end()) {
 			std::map<idx_t, const EntryShell *> shell_by_id;
@@ -802,8 +675,7 @@ void DuckLakeServerSideCommit::ReadStagedNameMaps() {
 }
 
 void DuckLakeServerSideCommit::ReadExistingTableStats() {
-	// Shared SQL + parser with DuckLakeMetadataManager::GetGlobalTableStats — single combined query
-	// over ducklake_table_stats LEFT JOIN ducklake_table_column_stats folded into per-table entries.
+	// Shared SQL with DuckLakeMetadataManager::GetGlobalTableStats.
 	string sql = StringUtil::Replace(DuckLakeMetadataManager::GlobalTableStatsQuery(), "{METADATA_CATALOG}", schema_id);
 	auto result = RunQuery(sql, "read existing table stats");
 	auto global_stats = DuckLakeMetadataManager::ParseGlobalTableStats(*result);
@@ -839,8 +711,7 @@ DuckLakeSnapshot DuckLakeServerSideCommit::ReadLatestSnapshot() {
 }
 
 unique_ptr<DuckLakeStats> DuckLakeServerSideCommit::BuildStatsMap(vector<DuckLakeGlobalStatsInfo> &global_stats) {
-	// Mirrors DuckLakeCatalog::ConstructStatsMap but resolves column types via our column_types
-	// map instead of a DuckLakeCatalogSet (no catalog available server-side).
+	// Mirrors DuckLakeCatalog::ConstructStatsMap with server-side type resolution.
 	auto result = make_uniq<DuckLakeStats>();
 	for (auto &gs : global_stats) {
 		auto entry = make_uniq<DuckLakeTableStats>();
@@ -859,20 +730,67 @@ unique_ptr<DuckLakeStats> DuckLakeServerSideCommit::BuildStatsMap(vector<DuckLak
 	return result;
 }
 
+const string &DuckLakeServerSideCommit::ResolveInlinedTableName(TableIndex table_id) {
+	auto it = inlined_table_name_cache.find(table_id.index);
+	if (it != inlined_table_name_cache.end()) {
+		return it->second;
+	}
+	auto lookup = StringUtil::Replace(DuckLakeMetadataManager::LatestInlinedTableQuery(table_id.index),
+	                                  "{METADATA_CATALOG}", schema_id) +
+	              ";";
+	auto result = RunQuery(lookup, "lookup inlined table name");
+	string name;
+	for (auto &row : *result) {
+		name = row.GetValue<string>(0);
+	}
+	return inlined_table_name_cache.emplace(table_id.index, std::move(name)).first->second;
+}
+
+string DuckLakeServerSideCommit::BuildInlinedDataInserts(const vector<DuckLakeInlinedDataInfo> &new_data) {
+	// Strip the outer parens off staged tuples, then reuse the shared metadata-manager formatter.
+	string batch;
+	for (auto &entry : new_data) {
+		auto tuples_it = staged_inlined_tuples.find(entry.table_id);
+		if (tuples_it == staged_inlined_tuples.end() || tuples_it->second.empty()) {
+			continue;
+		}
+		auto &tuples = tuples_it->second;
+		auto row_ids_it = staged_inlined_row_ids.find(entry.table_id);
+		const bool has_preserved = row_ids_it != staged_inlined_row_ids.end();
+
+		const string &inlined_table_name = ResolveInlinedTableName(entry.table_id);
+		if (inlined_table_name.empty()) {
+			// No inlined table yet — only reachable via gated-out CREATE TABLE.
+			continue;
+		}
+
+		vector<string> cells_per_row;
+		cells_per_row.reserve(tuples.size());
+		for (auto &tuple : tuples) {
+			cells_per_row.push_back(tuple.size() >= 2 ? tuple.substr(1, tuple.size() - 2) : tuple);
+		}
+		batch += DuckLakeMetadataManager::FormatInlinedDataInsert(inlined_table_name, entry.row_id_start, has_preserved,
+		                                                          has_preserved ? &row_ids_it->second : nullptr,
+		                                                          cells_per_row);
+	}
+	return batch;
+}
+
 DuckLakeCommitContext DuckLakeServerSideCommit::BuildContext(idx_t &committed_snapshot_id,
                                                              idx_t &committed_schema_version) {
 	DuckLakeCommitContext ctx;
 	ctx.commit_info = state->commit_info;
-	// Server-side: skip the post-commit DropEmptySupersededInlinedTables. The server's fresh_conn
-	// would happily drop the empty inlined tables, but the client's catalog cache still references
-	// them and the next read fails. Leftover empty tables are a space optimization concern only.
+	// Skip post-commit DropEmptySupersededInlinedTables: the client catalog cache still references them.
 	ctx.skip_drop_empty_inlined = true;
 	ctx.conflict_query_executor = [this](string q) -> unique_ptr<QueryResult> {
 		auto sql = SubstitutePlaceholders(std::move(q), transaction_snapshot);
 		return unique_ptr_cast<MaterializedQueryResult, QueryResult>(fresh_conn.Query(sql));
 	};
+	// Return the transaction's snapshot (cached at BEGIN), NOT the latest.
+	// Returning latest would let concurrent commits each pick distinct new snapshot_ids,
+	// bypassing the PK collision that drives the retry loop.
 	ctx.get_snapshot = [this]() {
-		return ReadLatestSnapshot();
+		return transaction_snapshot;
 	};
 	ctx.execute_commit_batch = [this](DuckLakeSnapshot snapshot, string &query) -> unique_ptr<QueryResult> {
 		query = SubstitutePlaceholders(query, snapshot);
@@ -887,9 +805,7 @@ DuckLakeCommitContext DuckLakeServerSideCommit::BuildContext(idx_t &committed_sn
 	ctx.prepare_retry = []() {
 	};
 	ctx.query_metadata = [this](string q) -> unique_ptr<QueryResult> {
-		// Use SubstitutePlaceholders so {METADATA_CATALOG_NAME_LITERAL} / {METADATA_SCHEMA_NAME_LITERAL}
-		// also resolve — DropEmptySupersededInlinedTables uses them. Snapshot-scoped placeholders
-		// are absent from this path; pass an empty snapshot so any stray substitution is a no-op.
+		// Snapshot-scoped placeholders are absent on this path; empty snapshot is a no-op.
 		DuckLakeSnapshot empty {};
 		auto sql = SubstitutePlaceholders(std::move(q), empty);
 		return unique_ptr_cast<MaterializedQueryResult, QueryResult>(fresh_conn.Query(sql));
@@ -902,83 +818,17 @@ DuckLakeCommitContext DuckLakeServerSideCommit::BuildContext(idx_t &committed_sn
 	                               const vector<DuckLakeTableInfo> &, vector<DuckLakeSchemaInfo> &) {
 		return false;
 	};
-	// `write_inlined_tables` (the CREATE TABLE part) is still unreachable: the data-only commit
-	// gate rejects `created_tables`, so `new_tables` is empty here. Once DDL lands this gets wired.
+	// write_inlined_tables is unreachable while DDL is gated out of server-side commit.
 	ctx.write_inlined_tables = [](DuckLakeSnapshot, const vector<DuckLakeTableInfo> &) {
 		return string();
 	};
-	// `write_inlined_data` emits INSERT INTO ducklake_inlined_data_<id>_<sv> VALUES (...).
-	// Staged value_literals already carry SQL-formatted column tuples (produced by
-	// DuckLakeUtil::ValueToSQL at staging time), so we splice them in directly rather than
-	// reconstruct a ColumnDataCollection on the server.
 	ctx.write_inlined_data = [this](DuckLakeSnapshot &, const vector<DuckLakeInlinedDataInfo> &new_data,
 	                                const vector<DuckLakeTableInfo> &, const vector<DuckLakeTableInfo> &) -> string {
-		string batch;
-		for (auto &entry : new_data) {
-			auto tuples_it = staged_inlined_tuples.find(entry.table_id);
-			if (tuples_it == staged_inlined_tuples.end() || tuples_it->second.empty()) {
-				continue;
-			}
-			auto &tuples = tuples_it->second;
-			auto row_ids_it = staged_inlined_row_ids.find(entry.table_id);
-			const bool has_preserved = row_ids_it != staged_inlined_row_ids.end();
-
-			// Resolve the latest inlined-data table name for this table. Cache across retries so
-			// we only hit the metadata DB once per table_id per commit.
-			auto cache_it = inlined_table_name_cache.find(entry.table_id.index);
-			if (cache_it == inlined_table_name_cache.end()) {
-				auto lookup =
-				    StringUtil::Replace(DuckLakeMetadataManager::LatestInlinedTableQuery(entry.table_id.index),
-				                        "{METADATA_CATALOG}", schema_id) +
-				    ";";
-				auto result = RunQuery(lookup, "lookup inlined table name");
-				string name;
-				for (auto &row : *result) {
-					name = row.GetValue<string>(0);
-				}
-				cache_it = inlined_table_name_cache.emplace(entry.table_id.index, std::move(name)).first;
-			}
-			const string &inlined_table_name = cache_it->second;
-			if (inlined_table_name.empty()) {
-				// No inlined table yet — only reachable via CREATE TABLE in this commit, which is
-				// gated out. Skip rather than crash on a stray staged row.
-				continue;
-			}
-
-			idx_t row_id = entry.row_id_start;
-			string values;
-			for (idx_t i = 0; i < tuples.size(); i++) {
-				int64_t emit_rid;
-				if (has_preserved) {
-					int64_t staged_rid = row_ids_it->second[i];
-					if (DuckLakeConstants::IsTransactionLocalRowId(staged_rid)) {
-						emit_rid = static_cast<int64_t>(row_id++);
-					} else {
-						emit_rid = staged_rid;
-					}
-				} else {
-					emit_rid = static_cast<int64_t>(row_id++);
-				}
-				// Staged value_literals are wrapped as "(v1, v2, ...)". Strip the outer parens
-				// so we can splice the cells in after the (row_id, snapshot, NULL) prefix.
-				auto &tuple = tuples[i];
-				string inner = tuple.size() >= 2 ? tuple.substr(1, tuple.size() - 2) : tuple;
-				if (!values.empty()) {
-					values += ", ";
-				}
-				values += StringUtil::Format("(%lld, {SNAPSHOT_ID}, NULL, %s)", emit_rid, inner);
-			}
-			batch += StringUtil::Format("INSERT INTO {METADATA_CATALOG}.%s VALUES %s;",
-			                            SQLIdentifier(inlined_table_name), values);
-		}
-		return batch;
+		return BuildInlinedDataInserts(new_data);
 	};
 	ctx.get_table_stats = [this](TableIndex table_id) -> shared_ptr<DuckLakeTableStats> {
 		auto it = existing_table_stats.find(table_id);
-		if (it == existing_table_stats.end()) {
-			return nullptr;
-		}
-		return it->second;
+		return it == existing_table_stats.end() ? nullptr : it->second;
 	};
 	ctx.build_stats_map = [this](vector<DuckLakeGlobalStatsInfo> &stats) {
 		return BuildStatsMap(stats);
@@ -1000,9 +850,7 @@ DuckLakeCommitContext DuckLakeServerSideCommit::BuildContext(idx_t &committed_sn
 
 string DuckLakeServerSideCommit::SubstitutePlaceholders(string sql, const DuckLakeSnapshot &snapshot) const {
 	sql = StringUtil::Replace(sql, "{METADATA_CATALOG}", schema_id);
-	// State-emitted post-commit cleanup (e.g. DropEmptySupersededInlinedTables) joins against
-	// duckdb_tables() filtered by database_name = {METADATA_CATALOG_NAME_LITERAL}. Server-side we
-	// don't know the catalog name a priori, so resolve it via current_database() at execution time.
+	// State emits {METADATA_CATALOG_NAME_LITERAL} for duckdb_tables() joins; resolve at exec time.
 	sql = StringUtil::Replace(sql, "{METADATA_CATALOG_NAME_LITERAL}", "(SELECT current_database())");
 	sql = StringUtil::Replace(sql, "{METADATA_SCHEMA_NAME_LITERAL}",
 	                          DuckLakeUtil::SQLLiteralToString(metadata_schema_name));
@@ -1010,36 +858,6 @@ string DuckLakeServerSideCommit::SubstitutePlaceholders(string sql, const DuckLa
 	sql = StringUtil::Replace(sql, "{SCHEMA_VERSION}", std::to_string(snapshot.schema_version));
 	sql = StringUtil::Replace(sql, "{NEXT_CATALOG_ID}", std::to_string(snapshot.next_catalog_id));
 	sql = StringUtil::Replace(sql, "{NEXT_FILE_ID}", std::to_string(snapshot.next_file_id));
-	return sql;
-}
-
-string DuckLakeServerSideCommit::EmitDropStagingSql() const {
-	string sql;
-	sql += StringUtil::Format("DROP TABLE IF EXISTS %s.ducklake_staged_commit_%s;", schema_id, identifier_suffix);
-	sql += StringUtil::Format("DROP TABLE IF EXISTS %s.ducklake_staged_data_file_%s;", schema_id, identifier_suffix);
-	sql += StringUtil::Format("DROP TABLE IF EXISTS %s.ducklake_staged_data_file_column_stats_%s;", schema_id,
-	                          identifier_suffix);
-	sql += StringUtil::Format("DROP TABLE IF EXISTS %s.ducklake_staged_data_file_partition_%s;", schema_id,
-	                          identifier_suffix);
-	sql += StringUtil::Format("DROP TABLE IF EXISTS %s.ducklake_staged_inlined_data_%s;", schema_id, identifier_suffix);
-	sql += StringUtil::Format("DROP TABLE IF EXISTS %s.ducklake_staged_inlined_row_%s;", schema_id, identifier_suffix);
-	sql += StringUtil::Format("DROP TABLE IF EXISTS %s.ducklake_staged_inlined_column_stats_%s;", schema_id,
-	                          identifier_suffix);
-	sql +=
-	    StringUtil::Format("DROP TABLE IF EXISTS %s.ducklake_staged_inlined_delete_%s;", schema_id, identifier_suffix);
-	sql += StringUtil::Format("DROP TABLE IF EXISTS %s.ducklake_staged_inlined_file_delete_%s;", schema_id,
-	                          identifier_suffix);
-	sql += StringUtil::Format("DROP TABLE IF EXISTS %s.ducklake_staged_delete_file_%s;", schema_id, identifier_suffix);
-	sql += StringUtil::Format("DROP TABLE IF EXISTS %s.ducklake_staged_dropped_file_%s;", schema_id, identifier_suffix);
-	sql += StringUtil::Format("DROP TABLE IF EXISTS %s.ducklake_staged_flushed_inlined_%s;", schema_id,
-	                          identifier_suffix);
-	sql += StringUtil::Format("DROP TABLE IF EXISTS %s.ducklake_staged_compaction_%s;", schema_id, identifier_suffix);
-	sql += StringUtil::Format("DROP TABLE IF EXISTS %s.ducklake_staged_compaction_source_%s;", schema_id,
-	                          identifier_suffix);
-	sql +=
-	    StringUtil::Format("DROP TABLE IF EXISTS %s.ducklake_staged_name_map_%s;", schema_id, identifier_suffix);
-	sql += StringUtil::Format("DROP TABLE IF EXISTS %s.ducklake_staged_name_map_entry_%s;", schema_id,
-	                          identifier_suffix);
 	return sql;
 }
 
