@@ -935,7 +935,7 @@ string DuckLakeMetadataManager::GlobalTableStatsQuery() {
 	return R"(
 SELECT table_id, column_id, record_count, next_row_id, file_size_bytes, contains_null, contains_nan, min_value, max_value, extra_stats
 FROM {METADATA_CATALOG}.ducklake_table_stats
-LEFT JOIN {METADATA_CATALOG}.ducklake_table_column_stats USING (table_id)
+JOIN {METADATA_CATALOG}.ducklake_table_column_stats USING (table_id)
 WHERE record_count IS NOT NULL AND file_size_bytes IS NOT NULL
 ORDER BY table_id;
 )";
@@ -3815,7 +3815,7 @@ SELECT
     max_value,
     extra_stats
 FROM {METADATA_CATALOG}.ducklake_table_stats
-LEFT JOIN {METADATA_CATALOG}.ducklake_table_column_stats
+JOIN {METADATA_CATALOG}.ducklake_table_column_stats
     USING (table_id)
 WHERE record_count IS NOT NULL
     AND file_size_bytes IS NOT NULL
