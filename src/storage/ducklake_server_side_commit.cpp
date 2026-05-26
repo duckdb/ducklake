@@ -228,10 +228,21 @@ void DuckLakeServerSideCommit::ReadCommitHeader() {
 	state->commit_info.commit_message = chunk->GetValue(1, 0);
 	state->commit_info.commit_extra_info = chunk->GetValue(2, 0);
 
-	transaction_snapshot.snapshot_id = static_cast<idx_t>(chunk->GetValue(3, 0).GetValue<int64_t>());
-	transaction_snapshot.schema_version = static_cast<idx_t>(schema_version);
-	transaction_snapshot.next_catalog_id = chunk->GetValue(6, 0).GetValue<uint64_t>();
-	transaction_snapshot.next_file_id = chunk->GetValue(7, 0).GetValue<uint64_t>();
+	if (chunk->GetValue(3, 0).IsNull()) {
+		transaction_snapshot = ReadLatestSnapshot();
+	} else {
+		transaction_snapshot.snapshot_id = static_cast<idx_t>(chunk->GetValue(3, 0).GetValue<int64_t>());
+		transaction_snapshot.next_catalog_id = chunk->GetValue(6, 0).GetValue<uint64_t>();
+		transaction_snapshot.next_file_id = chunk->GetValue(7, 0).GetValue<uint64_t>();
+		transaction_snapshot.schema_version = static_cast<idx_t>(schema_version);
+	}
+	if (schema_version < 0) {
+		transaction_snapshot.schema_version = transaction_snapshot.snapshot_id != DConstants::INVALID_INDEX
+		                                         ? transaction_snapshot.schema_version
+		                                         : 0;
+	} else {
+		transaction_snapshot.schema_version = static_cast<idx_t>(schema_version);
+	}
 }
 
 void DuckLakeServerSideCommit::ReadColumnTypes() {

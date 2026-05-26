@@ -123,6 +123,8 @@ public:
 	}
 	//! Whether or not the commit retry loop should be executed on the metadata server rather than the client.
 	bool ExecuteRetrialsServerSide() const;
+	//! Whether the client can skip the snapshot fetch and let the server read it.
+	virtual bool CanSkipSnapshotFetch(const TransactionChangeInformation &changes) const;
 
 	//! Run the commit retry loop with the metadata server handling retries.
 	virtual void FlushChangesServerSide(DuckLakeTransaction &transaction, DuckLakeSnapshot transaction_snapshot,

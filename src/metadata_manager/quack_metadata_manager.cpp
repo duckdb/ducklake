@@ -89,6 +89,10 @@ static bool IsDataOnlyCommit(const TransactionChangeInformation &c) {
 	       c.dropped_table_macros.empty();
 }
 
+bool QuackMetadataManager::CanSkipSnapshotFetch(const TransactionChangeInformation &changes) const {
+	return ExecuteRetrialsServerSide() && IsDataOnlyCommit(changes);
+}
+
 void QuackMetadataManager::FlushChangesServerSide(DuckLakeTransaction &flush_transaction,
                                                   DuckLakeSnapshot transaction_snapshot,
                                                   const TransactionChangeInformation &transaction_changes,
@@ -112,8 +116,10 @@ void QuackMetadataManager::FlushChangesServerSide(DuckLakeTransaction &flush_tra
 	if (!chunk || chunk->size() == 0) {
 		throw IOException("Server-side ducklake_commit returned no rows");
 	}
+	auto committed_snapshot_id = chunk->GetValue(0, 0).GetValue<int64_t>();
 	auto committed_schema_version = chunk->GetValue(1, 0).GetValue<int64_t>();
 	auto had_flushes = !chunk->GetValue(2, 0).IsNull() && chunk->GetValue(2, 0).GetValue<bool>();
+	flush_transaction.GetCatalog().SetCommittedSnapshotId(static_cast<idx_t>(committed_snapshot_id));
 	flush_transaction.ApplyServerSideCommit(static_cast<idx_t>(committed_schema_version));
 	if (had_flushes) {
 		// With quack we need to clear up superseded inlines tables on the client side to avoid dangling caching

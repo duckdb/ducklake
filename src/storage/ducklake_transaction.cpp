@@ -1290,16 +1290,20 @@ DuckLakeRetryConfig DuckLakeRetryConfig::FromContext(ClientContext &context) {
 
 void DuckLakeTransaction::FlushChanges() {
 	if (!ChangesMade()) {
-		// read-only transactions don't need to do anything
 		return;
 	}
 	auto retry_config = DuckLakeRetryConfig::FromContext(*context.lock());
-	auto transaction_snapshot = GetSnapshot();
 	auto transaction_changes = GetTransactionChanges();
-	if (metadata_manager->ExecuteRetrialsServerSide()) {
-		metadata_manager->FlushChangesServerSide(*this, transaction_snapshot, transaction_changes, retry_config);
+	if (metadata_manager->CanSkipSnapshotFetch(transaction_changes)) {
+		DuckLakeSnapshot sentinel;
+		metadata_manager->FlushChangesServerSide(*this, sentinel, transaction_changes, retry_config);
 	} else {
-		RunCommitLoop(transaction_snapshot, transaction_changes, retry_config);
+		auto transaction_snapshot = GetSnapshot();
+		if (metadata_manager->ExecuteRetrialsServerSide()) {
+			metadata_manager->FlushChangesServerSide(*this, transaction_snapshot, transaction_changes, retry_config);
+		} else {
+			RunCommitLoop(transaction_snapshot, transaction_changes, retry_config);
+		}
 	}
 }
 

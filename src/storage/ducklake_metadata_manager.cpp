@@ -69,6 +69,10 @@ bool DuckLakeMetadataManager::ExecuteRetrialsServerSide() const {
 	return transaction.GetCatalog().RetrialsServerSide();
 }
 
+bool DuckLakeMetadataManager::CanSkipSnapshotFetch(const TransactionChangeInformation &) const {
+	return false;
+}
+
 void DuckLakeMetadataManager::FlushChangesServerSide(DuckLakeTransaction &, DuckLakeSnapshot,
                                                      const TransactionChangeInformation &,
                                                      const DuckLakeRetryConfig &) {

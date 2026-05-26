@@ -282,11 +282,15 @@ void DuckLakeStagedCommit::FlattenNameMapEntry(const DuckLakeNameMapEntry &entry
 
 string DuckLakeStagedCommit::EmitCommitHeader(const DuckLakeSnapshotCommit &h, const DuckLakeSnapshot &snap,
                                               const string &data_path, const string &separator) const {
-	return StringUtil::Format("INSERT INTO %s VALUES (%s, %s, %s, %llu, %s, %s, %llu, %llu);",
+	bool has_snapshot = snap.snapshot_id != DConstants::INVALID_INDEX;
+	string snap_id = has_snapshot ? std::to_string(snap.snapshot_id) : "NULL";
+	string next_cat = has_snapshot ? std::to_string(snap.next_catalog_id) : "NULL";
+	string next_file = has_snapshot ? std::to_string(snap.next_file_id) : "NULL";
+	return StringUtil::Format("INSERT INTO %s VALUES (%s, %s, %s, %s, %s, %s, %s, %s);",
 	                          StagedFullQualifyName(DuckLakeStagedTableType::COMMIT_HEADER), h.author.ToSQLString(),
-	                          h.commit_message.ToSQLString(), h.commit_extra_info.ToSQLString(), snap.snapshot_id,
+	                          h.commit_message.ToSQLString(), h.commit_extra_info.ToSQLString(), snap_id,
 	                          DuckLakeUtil::SQLLiteralToString(data_path), DuckLakeUtil::SQLLiteralToString(separator),
-	                          snap.next_catalog_id, snap.next_file_id);
+	                          next_cat, next_file);
 }
 
 string DuckLakeStagedCommit::EmitDataFiles(const LocalTableChanges &local_changes, idx_t &local_file_id) const {
@@ -515,11 +519,14 @@ string DuckLakeStagedCommit::Build(DuckLakeTransaction &transaction,
 	batch += EmitFlushedInlinedTables(transaction.GetFlushedInlinedTables());
 	batch += EmitNameMaps(transaction.GetNewNameMaps());
 
+	int64_t schema_version_param = transaction_snapshot.snapshot_id != DConstants::INVALID_INDEX
+	                                   ? static_cast<int64_t>(transaction_snapshot.schema_version)
+	                                   : -1;
 	batch += StringUtil::Format("SELECT * FROM ducklake_commit(%s, %s, %lld, "
 	                            "max_retry_count => %llu, retry_wait_ms => %llu, retry_backoff => %f);",
 	                            DuckLakeUtil::SQLLiteralToString(identifier_suffix),
 	                            DuckLakeUtil::SQLLiteralToString(ducklake_catalog.MetadataSchemaName()),
-	                            transaction_snapshot.schema_version, retry_config.max_retry_count,
+	                            schema_version_param, retry_config.max_retry_count,
 	                            retry_config.retry_wait_ms, retry_config.retry_backoff);
 	return batch;
 }
