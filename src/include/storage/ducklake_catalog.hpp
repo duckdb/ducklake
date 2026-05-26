@@ -50,8 +50,6 @@ struct DuckLakeTableStatsCacheEntry : public ObjectCacheEntry {
 
 //! Cache entry for a DuckLake schema version
 struct DuckLakeSchemaCacheEntry : public ObjectCacheEntry {
-	static constexpr idx_t ESTIMATED_BYTES_PER_ENTRY = 4096;
-
 	explicit DuckLakeSchemaCacheEntry(unique_ptr<DuckLakeCatalogSet> catalog_set_p)
 	    : catalog_set(std::move(*catalog_set_p)) {
 	}
