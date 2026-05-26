@@ -54,31 +54,13 @@
     {
       "reason": "FIXME:Uses SET immediate_transaction_mode=true with concurrent connections",
       "paths": [
-        "test/sql/compaction/compaction_delete_conflict.test",
-        "test/sql/rewrite_data_files/test_rewrite_transaction_conflict.test",
-        "test/sql/stats/global_stats_transactions.test",
-        "test/sql/transaction/concurrent_table_creation.test",
-        "test/sql/transaction/transaction_conflict_cleanup.test",
-        "test/sql/transaction/transaction_conflict_inlining.test",
-        "test/sql/transaction/transaction_conflicts.test",
-        "test/sql/transaction/transaction_conflicts_delete.test",
-        "test/sql/transaction/transaction_conflicts_view.test"
+        "test/sql/transaction/transaction_conflict_inlining.test"
       ]
     },
     {
       "reason": "Test issues UPDATE against the metadata catalog directly",
       "paths": [
         "test/sql/delete/delete_legacy_missing_mapping_after_rename_add_files.test"
-      ]
-    },
-    {
-      "reason": "Concurrent retry timing tests: assume client-side round-trip latency to surface PK conflicts or specific failure modes; server-side commits complete fast enough that conflict/visibility semantics differ. Same class as the FIXME:immediate_transaction_mode group above.",
-      "paths": [
-        "test/sql/settings/max_retry_count.test",
-        "test/sql/checkpoint/checkpoint_updates_interleaved.test",
-        "test/sql/concurrent/concurrent_insert_delete_conflict.test",
-        "test/sql/deletion_inlining/test_deletion_inlining_concurrent.test",
-        "test/sql/data_inlining/flush_concurrent_insert.test"
       ]
     },
     {

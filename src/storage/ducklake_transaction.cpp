@@ -1710,6 +1710,10 @@ const unordered_map<string, DataFileIndex> &DuckLakeTransaction::GetDroppedFiles
 	return state->dropped_files;
 }
 
+const set<TableIndex> &DuckLakeTransaction::GetTablesDeletedFrom() const {
+	return state->tables_deleted_from;
+}
+
 const vector<FlushedInlinedTableInfo> &DuckLakeTransaction::GetFlushedInlinedTables() const {
 	return state->flushed_inlined_tables;
 }

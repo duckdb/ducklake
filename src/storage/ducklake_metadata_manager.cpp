@@ -2551,48 +2551,52 @@ string DuckLakeMetadataManager::WriteNewInlinedData(DuckLakeSnapshot &commit_sna
 			batch_query += inlined_table_queries;
 		}
 
-		// append the data
+		// Build one cell list per row, then defer formatting to the shared helper.
 		// FIXME: we can do a much faster append than this
-		string values;
-		bool has_preserved_row_ids = entry.data->HasPreservedRowIds();
-		idx_t row_id = entry.row_id_start;
-		idx_t global_row_idx = 0;
+		const bool has_preserved_row_ids = entry.data->HasPreservedRowIds();
+		vector<string> cells_per_row;
 		for (auto &chunk : entry.data->data->Chunks()) {
 			for (idx_t r = 0; r < chunk.size(); r++) {
-				if (!values.empty()) {
-					values += ", ";
-				}
-				values += "(";
-				if (has_preserved_row_ids) {
-					auto rid = entry.data->row_ids[global_row_idx];
-					if (DuckLakeConstants::IsTransactionLocalRowId(rid)) {
-						// This is a INSERT row w a placeholder id, we assign sequential row_id
-						values += to_string(row_id);
-						row_id++;
-					} else {
-						// This is a UPDATE row, we use preserved row_id
-						values += to_string(rid);
-					}
-				} else {
-					values += to_string(row_id);
-					row_id++;
-				}
-				values += ", {SNAPSHOT_ID}, NULL";
+				string cells;
 				for (idx_t c = 0; c < chunk.ColumnCount(); c++) {
-					values += ", ";
-					values += DuckLakeUtil::ValueToSQL(*this, context, chunk.GetValue(c, r));
+					if (c > 0) {
+						cells += ", ";
+					}
+					cells += DuckLakeUtil::ValueToSQL(*this, context, chunk.GetValue(c, r));
 				}
-				values += ")";
-				global_row_idx++;
+				cells_per_row.push_back(std::move(cells));
 			}
 		}
-		if (!values.empty()) {
-			string append_query = StringUtil::Format("INSERT INTO {METADATA_CATALOG}.%s VALUES %s;",
-			                                         SQLIdentifier(inlined_table_name), values);
-			batch_query += append_query;
-		}
+		batch_query +=
+		    FormatInlinedDataInsert(inlined_table_name, entry.row_id_start, has_preserved_row_ids,
+		                            has_preserved_row_ids ? &entry.data->row_ids : nullptr, cells_per_row);
 	}
 	return batch_query;
+}
+
+string DuckLakeMetadataManager::FormatInlinedDataInsert(const string &inlined_table_name, idx_t row_id_start,
+                                                        bool has_preserved_row_ids, const vector<int64_t> *row_ids,
+                                                        const vector<string> &cells_per_row) {
+	if (cells_per_row.empty()) {
+		return string();
+	}
+	idx_t row_id = row_id_start;
+	string values;
+	for (idx_t i = 0; i < cells_per_row.size(); i++) {
+		int64_t emit_rid;
+		if (has_preserved_row_ids) {
+			int64_t staged_rid = (*row_ids)[i];
+			emit_rid = DuckLakeConstants::IsTransactionLocalRowId(staged_rid) ? static_cast<int64_t>(row_id++)
+			                                                                  : staged_rid;
+		} else {
+			emit_rid = static_cast<int64_t>(row_id++);
+		}
+		if (!values.empty()) {
+			values += ", ";
+		}
+		values += StringUtil::Format("(%lld, {SNAPSHOT_ID}, NULL, %s)", emit_rid, cells_per_row[i]);
+	}
+	return StringUtil::Format("INSERT INTO {METADATA_CATALOG}.%s VALUES %s;", SQLIdentifier(inlined_table_name), values);
 }
 
 string DuckLakeMetadataManager::WriteNewInlinedDeletes(const vector<DuckLakeDeletedInlinedDataInfo> &new_deletes) {
