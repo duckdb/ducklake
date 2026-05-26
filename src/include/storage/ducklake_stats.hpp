@@ -20,6 +20,7 @@ inline bool RequiresValueComparison(const LogicalType &type) {
 }
 
 struct DuckLakeColumnStats;
+struct DuckLakeGlobalColumnStatsInfo;
 
 struct DuckLakeColumnStats {
 	explicit DuckLakeColumnStats(LogicalType type_p);
@@ -54,6 +55,7 @@ struct DuckLakeColumnStats {
 	unique_ptr<DuckLakeColumnExtraStats> extra_stats;
 
 public:
+	static DuckLakeColumnStats FromGlobalStats(const LogicalType &type, const DuckLakeGlobalColumnStatsInfo &col);
 	unique_ptr<BaseStatistics> ToStats() const;
 	void MergeStats(const DuckLakeColumnStats &new_stats);
 

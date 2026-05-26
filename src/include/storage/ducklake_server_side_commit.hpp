@@ -29,56 +29,78 @@ public:
 	DuckLakeServerSideCommit(ClientContext &context, string metadata_schema_name, string identifier_suffix,
 	                         int64_t schema_version);
 
+	//! Transform staged tables to Objects and commit.
 	DuckLakeServerSideCommitResult Run();
-
-	//! Override the retry configuration; otherwise defaults apply.
+	//! Override the retry configuration
 	void SetRetryConfigOverride(const DuckLakeRetryConfig &retry_config);
 
 private:
-	using ColumnKey = std::pair<TableIndex, FieldIndex>;
+	struct ColumnKey {
+		TableIndex table_id;
+		FieldIndex column_id;
+		bool operator<(const ColumnKey &other) const {
+			if (table_id != other.table_id) {
+				return table_id < other.table_id;
+			}
+			return column_id < other.column_id;
+		}
+	};
 
-	// Each step hydrates a slice of `state` or its sibling inputs.
+	//! Read commit metadata (author, message, snapshot ids).
 	void ReadCommitHeader();
+	//! Load column types for every table touched in this commit.
 	void ReadColumnTypes();
+	//! Read staged data files and their per-file column stats.
 	void ReadStagedDataFiles();
+	//! Read staged inlined data rows, row ids, and column stats.
 	void ReadStagedInlinedData();
+	//! Read staged inlined row deletes grouped by table.
 	void ReadStagedInlinedDeletes();
+	//! Read staged inlined file-level deletes grouped by table.
 	void ReadStagedInlinedFileDeletes();
+	//! Read staged delete files not attached to data files.
 	void ReadStagedDeleteFiles();
+	//! Read staged dropped file paths and tables deleted from.
 	void ReadStagedDroppedFiles();
+	//! Read staged flushed inlined table entries.
 	void ReadStagedFlushedInlinedTables();
+	//! Read staged compaction headers and their source files.
 	void ReadStagedCompactions();
+	//! Read staged name maps and rebuild entry trees.
 	void ReadStagedNameMaps();
+	//! Load current global table stats from the metadata catalog.
 	void ReadExistingTableStats();
 
-	// Closure backends.
+	//! Query the metadata catalog for the latest snapshot.
 	DuckLakeSnapshot ReadLatestSnapshot();
+	//! Build a DuckLakeTableStats from parsed global stats.
+	unique_ptr<DuckLakeTableStats> BuildTableStats(const DuckLakeGlobalStatsInfo &gs);
+	//! Build a full DuckLakeStats map from global stats.
 	unique_ptr<DuckLakeStats> BuildStatsMap(vector<DuckLakeGlobalStatsInfo> &global_stats);
+	//! Assemble the DuckLakeCommitContext with all closures.
 	DuckLakeCommitContext BuildContext(idx_t &committed_snapshot_id, idx_t &committed_schema_version);
-
-	//! Build the INSERT batch returned by the write_inlined_data closure.
+	//! Build INSERT SQL from staged inlined tuples.
 	string BuildInlinedDataInserts(const vector<DuckLakeInlinedDataInfo> &new_data);
-	//! Resolve and cache the latest inlined-data table name for a table.
+	//! Resolve and cache the latest inlined-data table name.
 	const string &ResolveInlinedTableName(TableIndex table_id);
-
+	//! Replace {METADATA_CATALOG}, {SNAPSHOT_ID}, etc. in SQL.
 	string SubstitutePlaceholders(string sql, const DuckLakeSnapshot &snapshot) const;
+	//! Execute a query on the fresh connection; throw on error.
 	unique_ptr<MaterializedQueryResult> RunQuery(const string &query, const char *what);
 	//! Fully-qualified name of a staging table for this commit.
 	string Staged(DuckLakeStagedTableType kind) const;
-	//! Convenience: `SELECT <columns> FROM <staged> <tail>`.
+	//! SELECT columns FROM staged_table [tail].
 	string Select(const char *columns, DuckLakeStagedTableType kind, const char *tail = "") const;
 
 private:
 	ClientContext &context;
 	const string metadata_schema_name;
-	//! SQL-identifier form of `metadata_schema_name`.
 	const string schema_id;
 	const string identifier_suffix;
 	const int64_t schema_version;
 	Connection fresh_conn;
 	DuckLakeRetryConfig retry_config;
 
-	// Hydration outputs — populated during Run(), consumed by state->Commit().
 	DuckLakeNameMapSet new_name_maps;
 	unique_ptr<DuckLakeTransactionState> state;
 	DuckLakeSnapshot transaction_snapshot;

@@ -677,28 +677,7 @@ unique_ptr<DuckLakeStats> DuckLakeCatalog::ConstructStatsMap(vector<DuckLakeGlob
 				// column that this field id references was deleted
 				continue;
 			}
-			DuckLakeColumnStats column_stats(field->Type());
-			column_stats.has_null_count = col_stats.has_contains_null;
-			if (column_stats.has_null_count) {
-				column_stats.null_count = col_stats.contains_null ? 1 : 0;
-			}
-			column_stats.has_contains_nan = col_stats.has_contains_nan;
-			if (column_stats.has_contains_nan) {
-				column_stats.contains_nan = col_stats.contains_nan;
-			}
-			column_stats.has_min = col_stats.has_min;
-			if (column_stats.has_min) {
-				column_stats.min = col_stats.min_val;
-			}
-			column_stats.has_max = col_stats.has_max;
-			if (column_stats.has_max) {
-				column_stats.max = col_stats.max_val;
-			}
-			if (col_stats.has_extra_stats && column_stats.extra_stats) {
-				// The extra_stats should already be allocated in the constructor
-				// if the logical type requires extra stats.
-				column_stats.extra_stats->Deserialize(col_stats.extra_stats);
-			}
+			auto column_stats = DuckLakeColumnStats::FromGlobalStats(field->Type(), col_stats);
 			table_stats->column_stats.insert(make_pair(col_stats.column_id, std::move(column_stats)));
 		}
 		lake_stats->table_stats.insert(make_pair(stats.table_id, std::move(table_stats)));
