@@ -2595,7 +2595,8 @@ bool DuckLakeTransaction::TryMergeInlinedStats(DuckLakeTableEntry &table, DuckLa
 			auto col = DuckLakeUtil::SQLIdentifierToString(field_id->Name());
 			bool is_float =
 			    field_id->Type().id() == LogicalTypeId::FLOAT || field_id->Type().id() == LogicalTypeId::DOUBLE;
-			string nan_expr = is_float ? StringUtil::Format("COALESCE(BOOL_OR(isnan(%s)), false)", col) : string("false");
+			string nan_expr =
+			    is_float ? StringUtil::Format("COALESCE(BOOL_OR(isnan(%s)), false)", col) : string("false");
 			select_list +=
 			    StringUtil::Format(", MIN(%s)::VARCHAR, MAX(%s)::VARCHAR, COUNT(%s), %s", col, col, col, nan_expr);
 		}
