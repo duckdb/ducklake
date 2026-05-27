@@ -332,6 +332,17 @@ private:
 	                    reference<CatalogEntry> table_entry, NewTableInfo &result,
 	                    TransactionChangeInformation &transaction_changes);
 	CompactionInformation GetCompactionChanges(DuckLakeCommitState &commit_state, CompactionType type);
+	//! After a REWRITE_DELETES compaction, recompute EXACT global stats for `table_id` from the post-rewrite file set
+	//! (+ committed inlined data) and append the UpdateGlobalTableStats SQL to `batch_query`. No-op (leaving the
+	//! existing stale stats, and the scan fallback) if the table is not fully delete-free post-rewrite or the
+	//! inlined data cannot be accounted for exactly.
+	void RecomputeGlobalStatsAfterRewrite(string &batch_query, TableIndex table_id,
+	                                      const CompactionInformation &rewrite_changes,
+	                                      const set<DataFileIndex> &removed_source_ids);
+	//! Merge committed inlined data's per-column min/max into `target` via typed SQL aggregates. Returns false if the
+	//! inlined data cannot be accounted for exactly (e.g. a non-scalar column), in which case the caller must not
+	//! claim the recomputed stats are exact.
+	bool TryMergeInlinedStats(DuckLakeTableEntry &table, DuckLakeSnapshot snapshot, DuckLakeTableStats &target);
 
 	void AlterEntryInternal(DuckLakeTableEntry &old_entry, unique_ptr<CatalogEntry> new_entry);
 	void AlterEntryInternal(DuckLakeViewEntry &old_entry, unique_ptr<CatalogEntry> new_entry);

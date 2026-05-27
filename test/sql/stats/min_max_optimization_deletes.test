@@ -70,9 +70,8 @@ SELECT MIN(i), MAX(i), COUNT(*) FROM ducklake.big;
 2	99	98
 
 # ============================================
-# 2. Post-compaction: deletes rewritten away, but stats remain over-wide
-#    -> MIN/MAX must STILL fall back (guard keys off record_count != net_count,
-#       not the presence of delete files), and must STILL be correct.
+# 2. Post-compaction: rewriting the deletes away makes the table delete-free again, so the global
+#    stats are recomputed and MIN/MAX fold once more (see min_max_optimization_compaction.test).
 # ============================================
 
 statement ok
@@ -84,13 +83,7 @@ SELECT MIN(i), MAX(i), COUNT(*) FROM ducklake.big;
 2	99	98
 
 query II
-EXPLAIN ANALYZE SELECT MIN(i) FROM ducklake.big;
-----
-analyzed_plan	<REGEX>:.*TABLE_SCAN.*
-
-# count(*) still folds after compaction
-query II
-EXPLAIN ANALYZE SELECT COUNT(*) FROM ducklake.big;
+EXPLAIN ANALYZE SELECT MIN(i), MAX(i) FROM ducklake.big;
 ----
 analyzed_plan	<!REGEX>:.*TABLE_SCAN.*
 
