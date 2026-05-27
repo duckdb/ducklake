@@ -56,34 +56,12 @@ enum class DuckLakeStagedTableType : uint8_t {
 //! A staging table bound to a specific commit (schema + identifier suffix).
 class DuckLakeStagedTable {
 public:
-	DuckLakeStagedTable(DuckLakeStagedTableType type, string schema, string suffix);
-
-	DuckLakeStagedTableType Type() const {
-		return type;
-	}
-	//! Base name without schema or suffix (e.g. "ducklake_staged_data_file").
-	const char *BaseName() const;
-	//! schema.base_name_suffix (e.g. "my_schema.ducklake_staged_data_file_abc123").
-	string FullQualifiedName() const;
-	//! Static variant that takes explicit schema and suffix.
-	static string FullQualifiedName(DuckLakeStagedTableType type, const string &schema, const string &suffix);
-
-	//! Base name for a given staging table type.
+	static string FullQualifiedName(DuckLakeStagedTableType type, const string &suffix);
 	static const char *BaseName(DuckLakeStagedTableType type);
-	//! Column definitions for a given staging table type.
 	static const char *Columns(DuckLakeStagedTableType type);
-
-	//! All known staging table types, in definition order.
 	static const vector<DuckLakeStagedTableType> &AllTypes();
-	//! CREATE TABLE IF NOT EXISTS for every staging table.
-	static string CreateAllSql(const string &schema, const string &suffix);
-	//! DROP TABLE IF EXISTS for every staging table.
-	static string DropAllSql(const string &schema, const string &suffix);
-
-private:
-	DuckLakeStagedTableType type;
-	string schema;
-	string suffix;
+	static string CreateAllSql(const string &suffix);
+	static string DropAllSql(const string &suffix);
 };
 
 //! Builds the SQL batch that stages a commit into temporary tables and calls ducklake_commit.

@@ -87,6 +87,8 @@ private:
 	string SubstitutePlaceholders(string sql, const DuckLakeSnapshot &snapshot) const;
 	//! Execute a query on the fresh connection; throw on error.
 	unique_ptr<MaterializedQueryResult> RunQuery(const string &query, const char *what);
+	//! Scan a temporary staging table via the catalog API (no SQL, no lock).
+	unique_ptr<MaterializedQueryResult> ScanStagedTable(DuckLakeStagedTableType kind);
 	//! Fully-qualified name of a staging table for this commit.
 	string Staged(DuckLakeStagedTableType kind) const;
 	//! SELECT columns FROM staged_table [tail].
@@ -114,6 +116,8 @@ private:
 	map<TableIndex, vector<int64_t>> staged_inlined_row_ids;
 	//! Cache of inlined_table_name lookups across the commit retry loop.
 	map<idx_t, string> inlined_table_name_cache;
+	//! Delete files attached to transaction-local data files.
+	map<idx_t, vector<DuckLakeDeleteFile>> attached_deletes;
 	//! Compaction-output files indexed by compaction_id.
 	map<idx_t, DuckLakeDataFile> compaction_output_files;
 };

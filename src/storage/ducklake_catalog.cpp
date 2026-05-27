@@ -678,7 +678,7 @@ shared_ptr<DuckLakeTableStats> DuckLakeCatalog::GetTableStats(DuckLakeTransactio
 	auto key = StatsCacheKey(snapshot.next_file_id, table_id);
 	auto cached = cache.Get<DuckLakeTableStatsCacheEntry>(key);
 	if (cached) {
-		auto* raw = cached.get();
+		auto *raw = cached.get();
 		return shared_ptr<DuckLakeTableStats>(std::move(cached), &raw->stats);
 	}
 
@@ -700,7 +700,7 @@ shared_ptr<DuckLakeTableStats> DuckLakeCatalog::GetTableStats(DuckLakeTransactio
 
 	auto entry = make_shared_ptr<DuckLakeTableStatsCacheEntry>(std::move(*table_stats));
 	cache.Put(std::move(key), entry);
-	auto* raw = entry.get();
+	auto *raw = entry.get();
 	return shared_ptr<DuckLakeTableStats>(std::move(entry), &raw->stats);
 }
 
@@ -946,8 +946,8 @@ void DuckLakeCatalog::CacheInlinedDeletionTableResult(TableIndex table_id, DuckL
 }
 
 string DuckLakeCatalog::StatsCacheKey(idx_t next_file_id, TableIndex table_id) const {
-	return StringUtil::Format("ducklake:%s:%s:%s:stats:%llu:table:%llu",
-	                          GetName(), MetadataPath(), instance_id, next_file_id, table_id.index);
+	return StringUtil::Format("ducklake:%s:%s:%s:stats:%llu:table:%llu", GetName(), MetadataPath(), instance_id,
+	                          next_file_id, table_id.index);
 }
 
 string DuckLakeCatalog::SchemaCacheKey(idx_t schema_version) const {

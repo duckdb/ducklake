@@ -952,7 +952,8 @@ vector<DuckLakeGlobalStatsInfo> DuckLakeMetadataManager::ParseGlobalTableStats(Q
 	return TransformGlobalStats(result);
 }
 
-vector<DuckLakeGlobalStatsInfo> DuckLakeMetadataManager::GetGlobalTableStats(DuckLakeSnapshot snapshot, TableIndex table_id) {
+vector<DuckLakeGlobalStatsInfo> DuckLakeMetadataManager::GetGlobalTableStats(DuckLakeSnapshot snapshot,
+                                                                             TableIndex table_id) {
 	string query = StringUtil::Format(R"(
 SELECT table_id, column_id, record_count, next_row_id, file_size_bytes, contains_null, contains_nan, min_value, max_value, extra_stats
 FROM {METADATA_CATALOG}.ducklake_table_stats
@@ -961,7 +962,8 @@ WHERE table_id = %llu
   AND record_count IS NOT NULL
   AND file_size_bytes IS NOT NULL
 ORDER BY table_id;
-)", table_id.index);
+)",
+	                                  table_id.index);
 
 	auto result = transaction.Query(snapshot, query);
 	return TransformGlobalStats(*result);
@@ -1350,16 +1352,14 @@ FilterSQLResult DuckLakeMetadataManager::ConvertFilterPushdownToSQL(const Filter
 		// Files that have no stats entry for this column (i.e., written before the column was added) must
 		// NOT be pruned, we cannot determine filter satisfaction without stats.
 		if (needs_value_count_guard) {
-			conditions += StringUtil::Format(
-			    "(data.data_file_id NOT IN (SELECT data_file_id FROM %s) OR "
-			    "data.data_file_id IN (SELECT data_file_id FROM %s WHERE "
-			    "(value_count IS NULL OR value_count > 0) AND (%s(%s))))",
-			    cte_name, cte_name, null_checks.c_str(), filter_condition.c_str());
+			conditions += StringUtil::Format("(data.data_file_id NOT IN (SELECT data_file_id FROM %s) OR "
+			                                 "data.data_file_id IN (SELECT data_file_id FROM %s WHERE "
+			                                 "(value_count IS NULL OR value_count > 0) AND (%s(%s))))",
+			                                 cte_name, cte_name, null_checks.c_str(), filter_condition.c_str());
 		} else {
-			conditions += StringUtil::Format(
-			    "(data.data_file_id NOT IN (SELECT data_file_id FROM %s) OR "
-			    "data.data_file_id IN (SELECT data_file_id FROM %s WHERE %s(%s)))",
-			    cte_name, cte_name, null_checks.c_str(), filter_condition.c_str());
+			conditions += StringUtil::Format("(data.data_file_id NOT IN (SELECT data_file_id FROM %s) OR "
+			                                 "data.data_file_id IN (SELECT data_file_id FROM %s WHERE %s(%s)))",
+			                                 cte_name, cte_name, null_checks.c_str(), filter_condition.c_str());
 		}
 
 		CTERequirement req(column_filter.column_field_index, referenced_stats);
@@ -1434,7 +1434,7 @@ struct DynamicFilterColumn {
 //! string ("6", "3", ...) that matches what the writer stores. Returns empty optional on any failure
 //! (cast error, evaluation error, NULL) so the caller can skip this filter and fall back to zone maps.
 static optional_idx FoldBucketValue(ClientContext &context, const Value &constant, const LogicalType &col_type,
-                                     idx_t bucket_count, string &out_partition_value) {
+                                    idx_t bucket_count, string &out_partition_value) {
 	if (constant.IsNull()) {
 		return optional_idx();
 	}
@@ -1459,8 +1459,8 @@ static optional_idx FoldBucketValue(ClientContext &context, const Value &constan
 //! partition_value string to `out`. Returns true if at least one valid constant was collected.
 //! Unsupported shapes (range comparisons, OR-conjunctions, dynamic filters, etc.) return false
 //! and pruning is skipped for this column — the existing zone-map path handles correctness.
-static bool CollectBucketEqualityValues(ClientContext &context, const TableFilter &filter,
-                                         const LogicalType &col_type, idx_t bucket_count, vector<string> &out) {
+static bool CollectBucketEqualityValues(ClientContext &context, const TableFilter &filter, const LogicalType &col_type,
+                                        idx_t bucket_count, vector<string> &out) {
 	switch (filter.filter_type) {
 	case TableFilterType::CONSTANT_COMPARISON: {
 		auto &cf = filter.Cast<ConstantFilter>();
@@ -1486,8 +1486,8 @@ static bool CollectBucketEqualityValues(ClientContext &context, const TableFilte
 		return !out.empty();
 	}
 	case TableFilterType::OPTIONAL_FILTER:
-		return CollectBucketEqualityValues(context, *filter.Cast<OptionalFilter>().child_filter, col_type,
-		                                    bucket_count, out);
+		return CollectBucketEqualityValues(context, *filter.Cast<OptionalFilter>().child_filter, col_type, bucket_count,
+		                                   out);
 	case TableFilterType::CONJUNCTION_AND: {
 		// A child equality on this column gives a valid (tighter) prune. Over-inclusion from
 		// contradictory ANDs (a = 1 AND a = 2) is correctness-safe — the residual filter still runs.
@@ -1528,7 +1528,7 @@ string DuckLakeMetadataManager::BuildBucketPartitionPruningClause(DuckLakeTableE
 
 		vector<string> bucket_values;
 		if (!CollectBucketEqualityValues(context, *col_filter.table_filter, col_filter.column_type,
-		                                  field.transform.bucket_count, bucket_values)) {
+		                                 field.transform.bucket_count, bucket_values)) {
 			continue;
 		}
 		if (bucket_values.empty()) {
