@@ -121,10 +121,6 @@ const char *DuckLakeStagedTable::Columns(DuckLakeStagedTableType type) {
 	}
 }
 
-string DuckLakeStagedTable::FullQualifiedName(DuckLakeStagedTableType type, const string &suffix) {
-	return StringUtil::Format("%s_%s", BaseName(type), suffix);
-}
-
 const vector<DuckLakeStagedTableType> &DuckLakeStagedTable::AllTypes() {
 	static const vector<DuckLakeStagedTableType> kinds = {DuckLakeStagedTableType::COMMIT_HEADER,
 	                                                      DuckLakeStagedTableType::DATA_FILE,
@@ -146,29 +142,24 @@ const vector<DuckLakeStagedTableType> &DuckLakeStagedTable::AllTypes() {
 	return kinds;
 }
 
-string DuckLakeStagedTable::CreateAllSql(const string &suffix) {
+string DuckLakeStagedTable::CreateAllSql() {
 	string sql;
 	for (auto kind : AllTypes()) {
-		sql += StringUtil::Format("CREATE TEMPORARY TABLE IF NOT EXISTS %s_%s(%s);", BaseName(kind), suffix,
-		                          Columns(kind));
+		sql += StringUtil::Format("CREATE TEMPORARY TABLE IF NOT EXISTS %s(%s);", BaseName(kind), Columns(kind));
 	}
 	return sql;
 }
 
-string DuckLakeStagedTable::DropAllSql(const string &suffix) {
+string DuckLakeStagedTable::TruncateAllSql() {
 	string sql;
 	for (auto kind : AllTypes()) {
-		sql += StringUtil::Format("DROP TABLE IF EXISTS %s_%s;", BaseName(kind), suffix);
+		sql += StringUtil::Format("TRUNCATE %s;", BaseName(kind));
 	}
 	return sql;
 }
 
-DuckLakeStagedCommit::DuckLakeStagedCommit(string commit_uuid)
-    : commit_uuid(std::move(commit_uuid)), identifier_suffix(StringUtil::Replace(this->commit_uuid, "-", "")) {
-}
-
-string DuckLakeStagedCommit::StagedFullQualifyName(DuckLakeStagedTableType type) const {
-	return DuckLakeStagedTable::FullQualifiedName(type, identifier_suffix);
+string DuckLakeStagedCommit::StagedFullQualifyName(DuckLakeStagedTableType type) {
+	return DuckLakeStagedTable::BaseName(type);
 }
 
 void DuckLakeStagedCommit::EmitDataFileRow(string &sql, const DuckLakeDataFile &file, idx_t local_file_id,
@@ -492,7 +483,8 @@ string DuckLakeStagedCommit::Build(DuckLakeTransaction &transaction,
 	auto &local_changes = transaction.GetLocalChanges();
 
 	string batch;
-	batch += DuckLakeStagedTable::CreateAllSql(identifier_suffix);
+	batch += DuckLakeStagedTable::CreateAllSql();
+	batch += DuckLakeStagedTable::TruncateAllSql();
 	batch += EmitCommitHeader(transaction.GetCommitInfo(), transaction_snapshot, ducklake_catalog.DataPath(),
 	                          ducklake_catalog.Separator());
 	idx_t local_file_id = 0;
@@ -509,9 +501,8 @@ string DuckLakeStagedCommit::Build(DuckLakeTransaction &transaction,
 	int64_t schema_version_param = transaction_snapshot.snapshot_id != DConstants::INVALID_INDEX
 	                                   ? static_cast<int64_t>(transaction_snapshot.schema_version)
 	                                   : -1;
-	batch += StringUtil::Format("SELECT * FROM ducklake_commit(%s, %s, %lld, "
+	batch += StringUtil::Format("SELECT * FROM ducklake_commit(%s, %lld, "
 	                            "max_retry_count => %llu, retry_wait_ms => %llu, retry_backoff => %f);",
-	                            DuckLakeUtil::SQLLiteralToString(identifier_suffix),
 	                            DuckLakeUtil::SQLLiteralToString(ducklake_catalog.MetadataSchemaName()),
 	                            schema_version_param, retry_config.max_retry_count, retry_config.retry_wait_ms,
 	                            retry_config.retry_backoff);

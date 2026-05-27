@@ -155,22 +155,18 @@ DuckLakeColumnStats ReadInlinedStatsRow(ROW &row, const LogicalType &type) {
 }
 
 DuckLakeServerSideCommit::DuckLakeServerSideCommit(ClientContext &context_p, string metadata_schema_name_p,
-                                                   string identifier_suffix_p, int64_t schema_version_p)
+                                                   int64_t schema_version_p)
     : context(context_p), metadata_schema_name(std::move(metadata_schema_name_p)),
-      schema_id(DuckLakeUtil::SQLIdentifierToString(metadata_schema_name)),
-      identifier_suffix(std::move(identifier_suffix_p)), schema_version(schema_version_p), fresh_conn(*context_p.db) {
+      schema_id(DuckLakeUtil::SQLIdentifierToString(metadata_schema_name)), schema_version(schema_version_p),
+      fresh_conn(*context_p.db) {
 }
 
 void DuckLakeServerSideCommit::SetRetryConfigOverride(const DuckLakeRetryConfig &retry_config_p) {
 	retry_config = retry_config_p;
 }
 
-string DuckLakeServerSideCommit::Staged(DuckLakeStagedTableType kind) const {
-	return DuckLakeStagedTable::FullQualifiedName(kind, identifier_suffix);
-}
-
-string DuckLakeServerSideCommit::Select(const char *columns, DuckLakeStagedTableType kind, const char *tail) const {
-	return StringUtil::Format("SELECT %s FROM %s %s", columns, Staged(kind), tail);
+string DuckLakeServerSideCommit::Staged(DuckLakeStagedTableType kind) {
+	return DuckLakeStagedTable::BaseName(kind);
 }
 
 DuckLakeServerSideCommitResult DuckLakeServerSideCommit::Run() {

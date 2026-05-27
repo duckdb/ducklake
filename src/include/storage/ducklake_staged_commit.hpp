@@ -56,29 +56,23 @@ enum class DuckLakeStagedTableType : uint8_t {
 //! A staging table bound to a specific commit (schema + identifier suffix).
 class DuckLakeStagedTable {
 public:
-	static string FullQualifiedName(DuckLakeStagedTableType type, const string &suffix);
 	static const char *BaseName(DuckLakeStagedTableType type);
 	static const char *Columns(DuckLakeStagedTableType type);
 	static const vector<DuckLakeStagedTableType> &AllTypes();
-	static string CreateAllSql(const string &suffix);
-	static string DropAllSql(const string &suffix);
+	static string CreateAllSql();
+	static string TruncateAllSql();
 };
 
 //! Builds the SQL batch that stages a commit into temporary tables and calls ducklake_commit.
 class DuckLakeStagedCommit {
 public:
-	explicit DuckLakeStagedCommit(string commit_uuid);
-
 	//! Build the full SQL batch from transaction state.
 	string Build(DuckLakeTransaction &transaction, const TransactionChangeInformation &transaction_changes,
 	             const DuckLakeSnapshot &transaction_snapshot, const DuckLakeRetryConfig &retry_config) const;
 
 private:
-	string commit_uuid;
-	string identifier_suffix;
-
-	//! Builds the FQN for a staging table using {METADATA_CATALOG} as schema.
-	string StagedFullQualifyName(DuckLakeStagedTableType type) const;
+	//! Returns the fixed temp table name for a staging table type.
+	static string StagedFullQualifyName(DuckLakeStagedTableType type);
 
 	//! Emits INSERT for a single data file, its column stats, and partition values.
 	void EmitDataFileRow(string &sql, const DuckLakeDataFile &file, idx_t local_file_id, TableIndex table_id,

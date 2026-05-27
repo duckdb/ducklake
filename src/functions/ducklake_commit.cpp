@@ -5,7 +5,6 @@
 namespace duckdb {
 
 struct DuckLakeCommitBindData : public TableFunctionData {
-	string identifier_suffix;
 	string metadata_schema_name;
 	int64_t schema_version = 0;
 	DuckLakeRetryConfig retry_config;
@@ -14,15 +13,14 @@ struct DuckLakeCommitBindData : public TableFunctionData {
 
 static unique_ptr<FunctionData> DuckLakeCommitBind(ClientContext &, TableFunctionBindInput &input,
                                                    vector<LogicalType> &return_types, vector<string> &names) {
-	for (idx_t i = 0; i < 3; i++) {
+	for (idx_t i = 0; i < 2; i++) {
 		if (input.inputs[i].IsNull()) {
 			throw BinderException("ducklake_commit arguments cannot be NULL");
 		}
 	}
 	auto result = make_uniq<DuckLakeCommitBindData>();
-	result->identifier_suffix = StringValue::Get(input.inputs[0]);
-	result->metadata_schema_name = StringValue::Get(input.inputs[1]);
-	result->schema_version = input.inputs[2].GetValue<int64_t>();
+	result->metadata_schema_name = StringValue::Get(input.inputs[0]);
+	result->schema_version = input.inputs[1].GetValue<int64_t>();
 	result->retry_config.retry_wait_ms = 0;
 	for (auto &entry : input.named_parameters) {
 		if (entry.second.IsNull()) {
@@ -59,7 +57,7 @@ static void DuckLakeCommitExecute(ClientContext &context, TableFunctionInput &da
 	}
 	data.emitted = true;
 
-	DuckLakeServerSideCommit commit(context, data.metadata_schema_name, data.identifier_suffix, data.schema_version);
+	DuckLakeServerSideCommit commit(context, data.metadata_schema_name, data.schema_version);
 	commit.SetRetryConfigOverride(data.retry_config);
 	auto result = commit.Run();
 
@@ -70,8 +68,8 @@ static void DuckLakeCommitExecute(ClientContext &context, TableFunctionInput &da
 }
 
 DuckLakeCommitFunction::DuckLakeCommitFunction()
-    : TableFunction("ducklake_commit", {LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::BIGINT},
-                    DuckLakeCommitExecute, DuckLakeCommitBind, DuckLakeCommitInit) {
+    : TableFunction("ducklake_commit", {LogicalType::VARCHAR, LogicalType::BIGINT}, DuckLakeCommitExecute,
+                    DuckLakeCommitBind, DuckLakeCommitInit) {
 	named_parameters["max_retry_count"] = LogicalType::BIGINT;
 	named_parameters["retry_wait_ms"] = LogicalType::BIGINT;
 	named_parameters["retry_backoff"] = LogicalType::DOUBLE;

@@ -26,8 +26,7 @@ struct DuckLakeServerSideCommitResult {
 //! Executes a DuckLake commit server-side from staged tables.
 class DuckLakeServerSideCommit {
 public:
-	DuckLakeServerSideCommit(ClientContext &context, string metadata_schema_name, string identifier_suffix,
-	                         int64_t schema_version);
+	DuckLakeServerSideCommit(ClientContext &context, string metadata_schema_name, int64_t schema_version);
 
 	//! Transform staged tables to Objects and commit.
 	DuckLakeServerSideCommitResult Run();
@@ -89,16 +88,13 @@ private:
 	unique_ptr<MaterializedQueryResult> RunQuery(const string &query, const char *what);
 	//! Scan a temporary staging table via the catalog API (no SQL, no lock).
 	unique_ptr<MaterializedQueryResult> ScanStagedTable(DuckLakeStagedTableType kind);
-	//! Fully-qualified name of a staging table for this commit.
-	string Staged(DuckLakeStagedTableType kind) const;
-	//! SELECT columns FROM staged_table [tail].
-	string Select(const char *columns, DuckLakeStagedTableType kind, const char *tail = "") const;
+	//! Fixed temp table name for a staging table type.
+	static string Staged(DuckLakeStagedTableType kind);
 
 private:
 	ClientContext &context;
 	const string metadata_schema_name;
 	const string schema_id;
-	const string identifier_suffix;
 	const int64_t schema_version;
 	Connection fresh_conn;
 	DuckLakeRetryConfig retry_config;
