@@ -1295,8 +1295,13 @@ void DuckLakeTransaction::FlushChanges() {
 	auto retry_config = DuckLakeRetryConfig::FromContext(*context.lock());
 	auto transaction_changes = GetTransactionChanges();
 	if (metadata_manager->CanSkipSnapshotFetch(transaction_changes)) {
-		DuckLakeSnapshot sentinel;
-		metadata_manager->FlushChangesServerSide(*this, sentinel, transaction_changes, retry_config);
+		lock_guard<mutex> guard(snapshot_lock);
+		if (snapshot) {
+			metadata_manager->FlushChangesServerSide(*this, *snapshot, transaction_changes, retry_config);
+		} else {
+			DuckLakeSnapshot sentinel;
+			metadata_manager->FlushChangesServerSide(*this, sentinel, transaction_changes, retry_config);
+		}
 	} else {
 		auto transaction_snapshot = GetSnapshot();
 		if (metadata_manager->ExecuteRetrialsServerSide()) {
