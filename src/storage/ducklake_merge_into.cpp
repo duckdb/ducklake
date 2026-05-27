@@ -465,7 +465,8 @@ static unique_ptr<MergeIntoOperator> DuckLakePlanMergeIntoAction(DuckLakeCatalog
 		auto &copy_dummy = planner.Make<PhysicalDummyScan>(copy_op.Cast<PhysicalCopyToFile>().expected_types, 1);
 		copy_op.children.push_back(copy_dummy);
 		auto &insert_op =
-		    DuckLakeInsert::PlanInsert(context, planner, ducklake_table, std::move(copy_input.encryption_key));
+		    DuckLakeInsert::PlanInsert(context, planner, ducklake_table, std::move(copy_input.encryption_key),
+		                               copy_input.file_format);
 		if (inline_data) {
 			inline_data->insert = insert_op.Cast<DuckLakeInsert>();
 		}
@@ -524,7 +525,8 @@ static unique_ptr<MergeIntoOperator> DuckLakePlanMergeIntoAction(DuckLakeCatalog
 		    planner.Make<PhysicalDummyScan>(physical_copy.Cast<PhysicalCopyToFile>().expected_types, 1);
 		physical_copy.children.push_back(copy_dummy);
 		auto &insert =
-		    DuckLakeInsert::PlanInsert(context, planner, ducklake_table, std::move(copy_input.encryption_key));
+		    DuckLakeInsert::PlanInsert(context, planner, ducklake_table, std::move(copy_input.encryption_key),
+		                               copy_input.file_format);
 		insert.children.push_back(physical_copy);
 
 		auto &merge_insert =

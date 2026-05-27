@@ -279,7 +279,8 @@ PhysicalOperator &DuckLakeCatalog::PlanUpdate(ClientContext &context, PhysicalPl
 	}
 
 	auto &physical_copy = DuckLakeInsert::PlanCopyForInsert(context, planner, copy_input, plan);
-	auto &insert_op = DuckLakeInsert::PlanInsert(context, planner, table, std::move(copy_input.encryption_key));
+	auto &insert_op = DuckLakeInsert::PlanInsert(context, planner, table, std::move(copy_input.encryption_key),
+	                                            copy_input.file_format);
 	if (inline_data) {
 		inline_data->insert = insert_op.Cast<DuckLakeInsert>();
 	}

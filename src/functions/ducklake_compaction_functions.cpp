@@ -76,10 +76,12 @@ DuckLakeCompaction::DuckLakeCompaction(PhysicalPlan &physical_plan, const vector
                                        DuckLakeTableEntry &table, vector<DuckLakeCompactionFileEntry> source_files_p,
                                        string encryption_key_p, optional_idx partition_id,
                                        vector<Value> partition_values_p, optional_idx row_id_start,
-                                       PhysicalOperator &child, CompactionType type)
+                                       DuckLakeDataFileFormat file_format_p, PhysicalOperator &child,
+                                       CompactionType type)
     : PhysicalOperator(physical_plan, PhysicalOperatorType::EXTENSION, types, 0), table(table),
       source_files(std::move(source_files_p)), encryption_key(std::move(encryption_key_p)), partition_id(partition_id),
-      partition_values(std::move(partition_values_p)), row_id_start(row_id_start), type(type) {
+      partition_values(std::move(partition_values_p)), row_id_start(row_id_start), file_format(file_format_p),
+      type(type) {
 	children.push_back(child);
 }
 
@@ -132,7 +134,7 @@ unique_ptr<GlobalSinkState> DuckLakeCompaction::GetGlobalSinkState(ClientContext
 
 SinkResultType DuckLakeCompaction::Sink(ExecutionContext &context, DataChunk &chunk, OperatorSinkInput &input) const {
 	auto &global_state = input.global_state.Cast<DuckLakeInsertGlobalState>();
-	DuckLakeInsert::AddWrittenFiles(global_state, chunk, encryption_key, partition_id);
+	DuckLakeInsert::AddWrittenFiles(global_state, chunk, encryption_key, partition_id, file_format);
 	return SinkResultType::NEED_MORE_INPUT;
 }
 
@@ -593,7 +595,8 @@ DuckLakeCompactor::GenerateCompactionCommand(vector<DuckLakeCompactionFileEntry>
 	                                         std::move(copy_options.info));
 
 	auto &fs = FileSystem::GetFileSystem(context);
-	copy->file_path = copy_options.filename_pattern.CreateFilename(fs, copy_options.file_path, "parquet", 0);
+	copy->file_path =
+	    copy_options.filename_pattern.CreateFilename(fs, copy_options.file_path, copy_options.file_extension, 0);
 	copy->use_tmp_file = copy_options.use_tmp_file;
 	copy->filename_pattern = std::move(copy_options.filename_pattern);
 	copy->file_extension = std::move(copy_options.file_extension);
@@ -624,7 +627,7 @@ DuckLakeCompactor::GenerateCompactionCommand(vector<DuckLakeCompactionFileEntry>
 	// followed by the compaction operator (that writes the results back to the
 	auto compaction = make_uniq<DuckLakeLogicalCompaction>(
 	    binder.GenerateTableIndex(), table, std::move(actionable_source_files), std::move(copy_input.encryption_key),
-	    partition_id, std::move(partition_values), target_row_id_start, type);
+	    partition_id, std::move(partition_values), target_row_id_start, copy_input.file_format, type);
 	compaction->children.push_back(std::move(copy));
 	return std::move(compaction);
 }

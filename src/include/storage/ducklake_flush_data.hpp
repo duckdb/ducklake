@@ -22,13 +22,14 @@ class DuckLakeFlushData : public PhysicalOperator {
 public:
 	DuckLakeFlushData(PhysicalPlan &physical_plan, const vector<LogicalType> &types, DuckLakeTableEntry &table,
 	                  DuckLakeInlinedTableInfo inlined_table, string encryption_key, optional_idx partition_id,
-	                  string sort_order_sql, PhysicalOperator &child);
+	                  string sort_order_sql, DuckLakeDataFileFormat file_format, PhysicalOperator &child);
 
 	DuckLakeTableEntry &table;
 	DuckLakeInlinedTableInfo inlined_table;
 	string encryption_key;
 	optional_idx partition_id;
 	string sort_order_sql;
+	DuckLakeDataFileFormat file_format;
 
 public:
 	// // Source interface

@@ -26,6 +26,7 @@ add_library(
   ducklake_sort_data.cpp
   ducklake_stats.cpp
   ducklake_table_entry.cpp
+  ducklake_vortex_file_reader.cpp
   ducklake_initializer.cpp
   ducklake_autoload_helper.cpp
   ducklake_update.cpp

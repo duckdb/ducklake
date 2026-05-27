@@ -25,6 +25,7 @@
 #include "storage/ducklake_delete.hpp"
 #include "duckdb/function/function_binder.hpp"
 #include "storage/ducklake_inlined_data_reader.hpp"
+#include "storage/ducklake_vortex_file_reader.hpp"
 #include "duckdb/planner/filter/constant_filter.hpp"
 #include "duckdb/planner/filter/dynamic_filter.hpp"
 #include "duckdb/planner/filter/expression_filter.hpp"
@@ -400,11 +401,43 @@ shared_ptr<BaseFileReader> DuckLakeMultiFileReader::TryCreateInlinedDataReader(c
 	                                                  std::move(columns));
 }
 
+shared_ptr<BaseFileReader> DuckLakeMultiFileReader::TryCreateVortexFileReader(ClientContext &context,
+                                                                              const OpenFileInfo &file) {
+	if (!file.extended_info) {
+		return nullptr;
+	}
+	auto format_entry = file.extended_info->options.find("data_file_format");
+	if (format_entry == file.extended_info->options.end()) {
+		return nullptr;
+	}
+	auto format = DuckLakeDataFileFormatFromString(format_entry->second.GetValue<string>());
+	if (format != DuckLakeDataFileFormat::VORTEX) {
+		return nullptr;
+	}
+
+	DuckLakeFileData file_data;
+	file_data.path = file.path;
+	file_data.data_file_format = format;
+	auto file_size_entry = file.extended_info->options.find("file_size");
+	if (file_size_entry != file.extended_info->options.end()) {
+		file_data.file_size_bytes = file_size_entry->second.GetValue<idx_t>();
+	}
+	auto footer_size_entry = file.extended_info->options.find("footer_size");
+	if (footer_size_entry != file.extended_info->options.end()) {
+		file_data.footer_size = footer_size_entry->second.GetValue<idx_t>();
+	}
+	return make_shared_ptr<DuckLakeVortexFileReader>(context, file, std::move(file_data));
+}
+
 shared_ptr<BaseFileReader> DuckLakeMultiFileReader::CreateReader(ClientContext &context,
                                                                  GlobalTableFunctionState &gstate,
                                                                  const OpenFileInfo &file, idx_t file_idx,
                                                                  const MultiFileBindData &bind_data) {
 	auto reader = TryCreateInlinedDataReader(file);
+	if (reader) {
+		return reader;
+	}
+	reader = TryCreateVortexFileReader(context, file);
 	if (reader) {
 		return reader;
 	}
@@ -416,6 +449,10 @@ shared_ptr<BaseFileReader> DuckLakeMultiFileReader::CreateReader(ClientContext &
                                                                  const MultiFileOptions &file_options,
                                                                  MultiFileReaderInterface &interface) {
 	auto reader = TryCreateInlinedDataReader(file);
+	if (reader) {
+		return reader;
+	}
+	reader = TryCreateVortexFileReader(context, file);
 	if (reader) {
 		return reader;
 	}

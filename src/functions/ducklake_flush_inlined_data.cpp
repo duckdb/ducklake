@@ -52,10 +52,10 @@ static void AttachDeleteFilesToWrittenFiles(vector<DuckLakeDeleteFile> &delete_f
 DuckLakeFlushData::DuckLakeFlushData(PhysicalPlan &physical_plan, const vector<LogicalType> &types,
                                      DuckLakeTableEntry &table, DuckLakeInlinedTableInfo inlined_table_p,
                                      string encryption_key_p, optional_idx partition_id, string sort_order_sql_p,
-                                     PhysicalOperator &child)
+                                     DuckLakeDataFileFormat file_format_p, PhysicalOperator &child)
     : PhysicalOperator(physical_plan, PhysicalOperatorType::EXTENSION, types, 0), table(table),
       inlined_table(std::move(inlined_table_p)), encryption_key(std::move(encryption_key_p)),
-      partition_id(partition_id), sort_order_sql(std::move(sort_order_sql_p)) {
+      partition_id(partition_id), sort_order_sql(std::move(sort_order_sql_p)), file_format(file_format_p) {
 	children.push_back(child);
 }
 
@@ -101,7 +101,7 @@ unique_ptr<GlobalSinkState> DuckLakeFlushData::GetGlobalSinkState(ClientContext 
 
 SinkResultType DuckLakeFlushData::Sink(ExecutionContext &context, DataChunk &chunk, OperatorSinkInput &input) const {
 	auto &global_state = input.global_state.Cast<DuckLakeInsertGlobalState>();
-	DuckLakeInsert::AddWrittenFiles(global_state, chunk, encryption_key, partition_id, true);
+	DuckLakeInsert::AddWrittenFiles(global_state, chunk, encryption_key, partition_id, file_format, true);
 	return SinkResultType::NEED_MORE_INPUT;
 }
 
@@ -212,10 +212,11 @@ string DuckLakeFlushData::GetName() const {
 class DuckLakeLogicalFlush : public LogicalExtensionOperator {
 public:
 	DuckLakeLogicalFlush(TableIndex table_index, DuckLakeTableEntry &table, DuckLakeInlinedTableInfo inlined_table_p,
-	                     string encryption_key_p, optional_idx partition_id_p, string sort_order_sql_p)
+	                     string encryption_key_p, optional_idx partition_id_p, string sort_order_sql_p,
+	                     DuckLakeDataFileFormat file_format_p)
 	    : table_index(table_index), table(table), inlined_table(std::move(inlined_table_p)),
 	      encryption_key(std::move(encryption_key_p)), partition_id(partition_id_p),
-	      sort_order_sql(std::move(sort_order_sql_p)) {
+	      sort_order_sql(std::move(sort_order_sql_p)), file_format(file_format_p) {
 	}
 
 	TableIndex table_index;
@@ -224,12 +225,13 @@ public:
 	string encryption_key;
 	optional_idx partition_id;
 	string sort_order_sql;
+	DuckLakeDataFileFormat file_format;
 
 public:
 	PhysicalOperator &CreatePlan(ClientContext &context, PhysicalPlanGenerator &planner) override {
 		auto &child = planner.CreatePlan(*children[0]);
 		return planner.Make<DuckLakeFlushData>(types, table, std::move(inlined_table), std::move(encryption_key),
-		                                       partition_id, std::move(sort_order_sql), child);
+		                                       partition_id, std::move(sort_order_sql), file_format, child);
 	}
 
 	string GetName() const override {
@@ -391,7 +393,8 @@ unique_ptr<LogicalOperator> DuckLakeDataFlusher::GenerateFlushCommand() {
 	// followed by the compaction operator (that writes the results back to the
 	auto compaction =
 	    make_uniq<DuckLakeLogicalFlush>(binder.GenerateTableIndex(), table, inlined_table,
-	                                    std::move(copy_input.encryption_key), partition_id, std::move(sort_order_sql));
+	                                    std::move(copy_input.encryption_key), partition_id, std::move(sort_order_sql),
+	                                    copy_input.file_format);
 	compaction->children.push_back(std::move(copy));
 	return std::move(compaction);
 }

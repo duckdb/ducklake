@@ -3,6 +3,26 @@
 
 namespace duckdb {
 
+string DuckLakeDataFileFormatToString(DuckLakeDataFileFormat format) {
+	switch (format) {
+	case DuckLakeDataFileFormat::PARQUET:
+		return "parquet";
+	case DuckLakeDataFileFormat::VORTEX:
+		return "vortex";
+	default:
+		throw InternalException("Unknown DuckLakeDataFileFormat");
+	}
+}
+
+DuckLakeDataFileFormat DuckLakeDataFileFormatFromString(const string &str) {
+	if (StringUtil::CIEquals(str, "parquet")) {
+		return DuckLakeDataFileFormat::PARQUET;
+	} else if (StringUtil::CIEquals(str, "vortex")) {
+		return DuckLakeDataFileFormat::VORTEX;
+	}
+	throw InvalidInputException("Unknown data file format: %s", str);
+}
+
 string DeleteFileFormatToString(DeleteFileFormat format) {
 	switch (format) {
 	case DeleteFileFormat::PARQUET:
@@ -25,6 +45,7 @@ DeleteFileFormat DeleteFileFormatFromString(const string &str) {
 
 DuckLakeDataFile::DuckLakeDataFile(const DuckLakeDataFile &other) {
 	file_name = other.file_name;
+	format = other.format;
 	row_count = other.row_count;
 	file_size_bytes = other.file_size_bytes;
 	footer_size = other.footer_size;
@@ -42,6 +63,7 @@ DuckLakeDataFile::DuckLakeDataFile(const DuckLakeDataFile &other) {
 
 DuckLakeDataFile &DuckLakeDataFile::operator=(const DuckLakeDataFile &other) {
 	file_name = other.file_name;
+	format = other.format;
 	row_count = other.row_count;
 	file_size_bytes = other.file_size_bytes;
 	footer_size = other.footer_size;

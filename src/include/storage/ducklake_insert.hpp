@@ -43,11 +43,11 @@ class DuckLakeInsert : public PhysicalOperator {
 public:
 	//! INSERT INTO
 	DuckLakeInsert(PhysicalPlan &physical_plan, const vector<LogicalType> &types, DuckLakeTableEntry &table,
-	               optional_idx partition_id, string encryption_key);
+	               optional_idx partition_id, string encryption_key, DuckLakeDataFileFormat file_format);
 	//! CREATE TABLE AS
 	DuckLakeInsert(PhysicalPlan &physical_plan, const vector<LogicalType> &types, SchemaCatalogEntry &schema,
 	               unique_ptr<BoundCreateTableInfo> info, string table_uuid, string table_data_path,
-	               string encryption_key);
+	               string encryption_key, DuckLakeDataFileFormat file_format);
 
 	//! The table to insert into
 	optional_ptr<DuckLakeTableEntry> table;
@@ -61,8 +61,10 @@ public:
 	string table_data_path;
 	//! The partition id we are writing into (if any)
 	optional_idx partition_id;
-	//! The encryption key used for writing the Parquet files
+	//! The encryption key used for writing data files
 	string encryption_key;
+	//! The format used for data files written by this insert
+	DuckLakeDataFileFormat file_format;
 
 public:
 	// // Source interface
@@ -82,9 +84,11 @@ public:
 	static PhysicalOperator &PlanCopyForInsert(ClientContext &context, PhysicalPlanGenerator &planner,
 	                                           DuckLakeCopyInput &copy_input, optional_ptr<PhysicalOperator> plan);
 	static PhysicalOperator &PlanInsert(ClientContext &context, PhysicalPlanGenerator &planner,
-	                                    DuckLakeTableEntry &table, string encryption_key);
+	                                    DuckLakeTableEntry &table, string encryption_key,
+	                                    DuckLakeDataFileFormat file_format);
 	static void AddWrittenFiles(DuckLakeInsertGlobalState &gstate, DataChunk &chunk, const string &encryption_key,
-	                            optional_idx partition_id, bool set_snapshot_id = false);
+	                            optional_idx partition_id, DuckLakeDataFileFormat file_format,
+	                            bool set_snapshot_id = false);
 
 	static const DuckLakeFieldId &GetTopLevelColumn(DuckLakeCopyInput &copy_input, FieldIndex field_id,
 	                                                optional_idx &index);
@@ -130,6 +134,7 @@ struct DuckLakeCopyOptions {
 	bool partition_output;
 	bool write_partition_columns;
 	bool write_empty_file = true;
+	DuckLakeDataFileFormat file_format = DuckLakeDataFileFormat::PARQUET;
 	vector<idx_t> partition_columns;
 	vector<string> names;
 	vector<LogicalType> expected_types;
@@ -149,6 +154,7 @@ struct DuckLakeCopyInput {
 	const ColumnList &columns;
 	const string data_path;
 	string encryption_key;
+	DuckLakeDataFileFormat file_format = DuckLakeDataFileFormat::PARQUET;
 	SchemaIndex schema_id;
 	TableIndex table_id;
 	InsertVirtualColumns virtual_columns = InsertVirtualColumns::NONE;

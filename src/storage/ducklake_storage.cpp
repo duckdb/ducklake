@@ -50,6 +50,10 @@ static void HandleDuckLakeOption(DuckLakeOptions &options, const string &option,
 	} else if (lcase == "write_deletion_vectors") {
 		options.config_options["write_deletion_vectors"] =
 		    BooleanValue::Get(value.DefaultCastAs(LogicalType::BOOLEAN)) ? "true" : "false";
+	} else if (lcase == "data_file_format") {
+		auto format = value.DefaultCastAs(LogicalType::VARCHAR).GetValue<string>();
+		options.config_options["data_file_format"] =
+		    DuckLakeDataFileFormatToString(DuckLakeDataFileFormatFromString(format));
 	} else if (lcase == "create_if_not_exists") {
 		options.create_if_not_exists = BooleanValue::Get(value.DefaultCastAs(LogicalType::BOOLEAN));
 	} else if (lcase == "automatic_migration") {

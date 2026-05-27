@@ -182,6 +182,7 @@ OpenFileInfo DuckLakeMultiFileList::GetFile(idx_t i) const {
 		if (file.footer_size.IsValid()) {
 			extended_info->options["footer_size"] = Value::UBIGINT(file.footer_size.GetIndex());
 		}
+		extended_info->options["data_file_format"] = Value(DuckLakeDataFileFormatToString(file.data_file_format));
 		if (files[i].row_id_start.IsValid()) {
 			extended_info->options["row_id_start"] = Value::UBIGINT(files[i].row_id_start.GetIndex());
 		}
@@ -237,6 +238,7 @@ DuckLakeFileData GetFileData(const DuckLakeDataFile &file) {
 	result.encryption_key = file.encryption_key;
 	result.file_size_bytes = file.file_size_bytes;
 	result.footer_size = file.footer_size;
+	result.data_file_format = file.format;
 	return result;
 }
 

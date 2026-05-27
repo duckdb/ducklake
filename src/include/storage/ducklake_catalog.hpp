@@ -8,6 +8,7 @@
 
 #pragma once
 
+#include "common/ducklake_data_file.hpp"
 #include "common/ducklake_encryption.hpp"
 #include "common/ducklake_options.hpp"
 #include "common/ducklake_name_map.hpp"
@@ -199,6 +200,8 @@ public:
 		auto write_dv = GetConfigOption<string>("write_deletion_vectors", schema_id, table_id, "false");
 		return write_dv == "true";
 	}
+
+	DuckLakeDataFileFormat GetDataFileFormat(SchemaIndex schema_id, TableIndex table_id) const;
 
 	void SetEncryption(DuckLakeEncryption encryption);
 	// Generate an encryption key for writing (or empty if encryption is disabled)

@@ -159,6 +159,13 @@ void DuckLakeInitializer::InitializeNewDuckLake(DuckLakeTransaction &transaction
 	SetVersionedMetadataManager(transaction, version);
 	auto &metadata_manager = transaction.GetMetadataManager();
 	metadata_manager.InitializeDuckLake(has_explicit_schema, catalog.Encryption());
+	auto data_file_format = options.config_options.find("data_file_format");
+	if (data_file_format != options.config_options.end()) {
+		DuckLakeConfigOption option;
+		option.option.key = data_file_format->first;
+		option.option.value = data_file_format->second;
+		transaction.SetConfigOption(option);
+	}
 	if (catalog.Encryption() == DuckLakeEncryption::AUTOMATIC) {
 		// default to unencrypted
 		catalog.SetEncryption(DuckLakeEncryption::UNENCRYPTED);

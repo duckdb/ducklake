@@ -883,6 +883,11 @@ bool DuckLakeCatalog::TryGetConfigOption(const string &option, string &result, D
 	return TryGetConfigOption(option, result, schema_id, table_id);
 }
 
+DuckLakeDataFileFormat DuckLakeCatalog::GetDataFileFormat(SchemaIndex schema_id, TableIndex table_id) const {
+	auto format = GetConfigOption<string>("data_file_format", schema_id, table_id, "parquet");
+	return DuckLakeDataFileFormatFromString(format);
+}
+
 idx_t DuckLakeCatalog::DataInliningRowLimit(SchemaIndex schema_index, TableIndex table_index) const {
 	return GetConfigOption<idx_t>("data_inlining_row_limit", schema_index, table_index, 10);
 }

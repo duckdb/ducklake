@@ -326,6 +326,7 @@ private:
 
 	bool IsEncrypted() const;
 	string GetFileSelectList(const string &prefix);
+	string GetDataFileSelectList(const string &prefix);
 	string GetDeleteFileSelectList(const string &prefix);
 	FilterPushdownQueryComponents GenerateFilterPushdownComponents(const FilterPushdownInfo &filter_info,
 	                                                               DuckLakeTableEntry &table);

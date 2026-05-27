@@ -1,0 +1,72 @@
+# name: test/sql/settings/data_file_format.test
+# description: Test selectable DuckLake data file formats
+# group: [settings]
+
+require ducklake
+
+require parquet
+
+require vortex
+
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/ducklake_data_file_format.db' AS ducklake (
+    DATA_PATH '{TEST_DIR}/ducklake_data_file_format_files',
+    METADATA_CATALOG 'meta',
+    DATA_INLINING_ROW_LIMIT 0,
+    DATA_FILE_FORMAT 'vortex'
+)
+
+query I
+SELECT value FROM meta.ducklake_metadata WHERE key = 'data_file_format'
+----
+vortex
+
+statement ok
+CREATE TABLE ducklake.t(i INTEGER, s VARCHAR)
+
+query I
+INSERT INTO ducklake.t VALUES (1, 'one'), (2, 'two')
+----
+2
+
+query II
+SELECT i, s FROM ducklake.t ORDER BY i
+----
+1	one
+2	two
+
+query I
+SELECT COUNT(*) FROM glob('{TEST_DIR}/ducklake_data_file_format_files/**/*.vortex')
+----
+1
+
+query II
+SELECT file_format, COUNT(*) FROM meta.ducklake_data_file GROUP BY ALL ORDER BY ALL
+----
+vortex	1
+
+statement ok
+CALL ducklake.set_option('data_file_format', 'parquet', table_name => 't')
+
+query I
+INSERT INTO ducklake.t VALUES (3, 'three')
+----
+1
+
+query II
+SELECT i, s FROM ducklake.t ORDER BY i
+----
+1	one
+2	two
+3	three
+
+query II
+SELECT file_format, COUNT(*) FROM meta.ducklake_data_file GROUP BY ALL ORDER BY ALL
+----
+parquet	1
+vortex	1
+
+statement error
+CALL ducklake.set_option('data_file_format', 'orc')
+----
+Unknown data file format

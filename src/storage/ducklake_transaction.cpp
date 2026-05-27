@@ -2041,6 +2041,7 @@ DuckLakeFileInfo DuckLakeTransaction::GetNewDataFile(const DuckLakeDataFile &fil
 	data_file.id = DataFileIndex(commit_snapshot.next_file_id++);
 	data_file.table_id = table_id;
 	data_file.file_name = file.file_name;
+	data_file.format = file.format;
 	data_file.row_count = file.row_count;
 	data_file.file_size_bytes = file.file_size_bytes;
 	data_file.footer_size = file.footer_size;
