@@ -1,0 +1,57 @@
+# name: test/sql/stats/min_max_optimization_inlined.test
+# description: Test metadata-only MIN/MAX optimization with inlined data
+# group: [stats]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+
+test-env DATA_PATH __TEST_DIR__
+
+statement ok
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/min_max_inlined', DATA_INLINING_ROW_LIMIT 100)
+
+# data small enough to be inlined (never flushed to parquet)
+statement ok
+CREATE TABLE ducklake.inlined_test AS SELECT * FROM range(10, 60) t(i);
+
+query III
+SELECT MIN(i), MAX(i), COUNT(*) FROM ducklake.inlined_test;
+----
+10	59	50
+
+# committed inlined data is reflected in the global stats - MIN/MAX fold from metadata
+query II
+EXPLAIN ANALYZE SELECT MIN(i), MAX(i) FROM ducklake.inlined_test;
+----
+analyzed_plan	<!REGEX>:.*TABLE_SCAN.*
+
+# insert more inlined data that widens the range
+statement ok
+INSERT INTO ducklake.inlined_test VALUES (5), (100);
+
+query III
+SELECT MIN(i), MAX(i), COUNT(*) FROM ducklake.inlined_test;
+----
+5	100	52
+
+query II
+EXPLAIN ANALYZE SELECT MIN(i), MAX(i) FROM ducklake.inlined_test;
+----
+analyzed_plan	<!REGEX>:.*TABLE_SCAN.*
+
+# flushing inlined data to parquet must not change MIN/MAX and must still fold
+statement ok
+CALL ducklake_flush_inlined_data('ducklake')
+
+query III
+SELECT MIN(i), MAX(i), COUNT(*) FROM ducklake.inlined_test;
+----
+5	100	52
+
+query II
+EXPLAIN ANALYZE SELECT MIN(i), MAX(i) FROM ducklake.inlined_test;
+----
+analyzed_plan	<!REGEX>:.*TABLE_SCAN.*

@@ -1,0 +1,130 @@
+# name: test/sql/stats/min_max_optimization_deletes.test
+# description: MIN/MAX falls back to scanning (but stays correct) when deletes exist
+# group: [stats]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+
+test-env DATA_PATH __TEST_DIR__
+
+statement ok
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/min_max_deletes', DATA_INLINING_ROW_LIMIT 100)
+
+# ============================================
+# 1. Data-file deletes
+# ============================================
+
+statement ok
+CREATE TABLE ducklake.big(i INTEGER);
+
+statement ok
+INSERT INTO ducklake.big FROM range(1, 101);
+
+# flush to parquet so the deletes below are data-file deletes
+statement ok
+CALL ducklake_flush_inlined_data('ducklake')
+
+# baseline: no deletes -> MIN/MAX fold from metadata
+query III
+SELECT MIN(i), MAX(i), COUNT(*) FROM ducklake.big;
+----
+1	100	100
+
+query II
+EXPLAIN ANALYZE SELECT MIN(i) FROM ducklake.big;
+----
+analyzed_plan	<!REGEX>:.*TABLE_SCAN.*
+
+# delete the current minimum value
+statement ok
+DELETE FROM ducklake.big WHERE i = 1;
+
+# result is still correct (computed via a scan, since global stats are not tightened on delete)
+query III
+SELECT MIN(i), MAX(i), COUNT(*) FROM ducklake.big;
+----
+2	100	99
+
+# MIN now falls back to a real scan
+query II
+EXPLAIN ANALYZE SELECT MIN(i) FROM ducklake.big;
+----
+analyzed_plan	<REGEX>:.*TABLE_SCAN.*
+
+# ...but COUNT(*) is NOT regressed - it still folds from metadata
+query II
+EXPLAIN ANALYZE SELECT COUNT(*) FROM ducklake.big;
+----
+analyzed_plan	<!REGEX>:.*TABLE_SCAN.*
+
+# deleting the maximum is reflected too
+statement ok
+DELETE FROM ducklake.big WHERE i = 100;
+
+query III
+SELECT MIN(i), MAX(i), COUNT(*) FROM ducklake.big;
+----
+2	99	98
+
+# ============================================
+# 2. Post-compaction: deletes rewritten away, but stats remain over-wide
+#    -> MIN/MAX must STILL fall back (guard keys off record_count != net_count,
+#       not the presence of delete files), and must STILL be correct.
+# ============================================
+
+statement ok
+CALL ducklake_rewrite_data_files('ducklake', delete_threshold => 0);
+
+query III
+SELECT MIN(i), MAX(i), COUNT(*) FROM ducklake.big;
+----
+2	99	98
+
+query II
+EXPLAIN ANALYZE SELECT MIN(i) FROM ducklake.big;
+----
+analyzed_plan	<REGEX>:.*TABLE_SCAN.*
+
+# count(*) still folds after compaction
+query II
+EXPLAIN ANALYZE SELECT COUNT(*) FROM ducklake.big;
+----
+analyzed_plan	<!REGEX>:.*TABLE_SCAN.*
+
+# ============================================
+# 3. Inlined deletes
+# ============================================
+
+statement ok
+CREATE TABLE ducklake.small(i INTEGER);
+
+statement ok
+INSERT INTO ducklake.small FROM range(1, 51);
+
+# baseline folds (committed inlined data)
+query II
+EXPLAIN ANALYZE SELECT MIN(i) FROM ducklake.small;
+----
+analyzed_plan	<!REGEX>:.*TABLE_SCAN.*
+
+statement ok
+DELETE FROM ducklake.small WHERE i = 1;
+
+query III
+SELECT MIN(i), MAX(i), COUNT(*) FROM ducklake.small;
+----
+2	50	49
+
+# MIN falls back, COUNT(*) still folds
+query II
+EXPLAIN ANALYZE SELECT MIN(i) FROM ducklake.small;
+----
+analyzed_plan	<REGEX>:.*TABLE_SCAN.*
+
+query II
+EXPLAIN ANALYZE SELECT COUNT(*) FROM ducklake.small;
+----
+analyzed_plan	<!REGEX>:.*TABLE_SCAN.*
