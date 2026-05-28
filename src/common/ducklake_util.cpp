@@ -1,4 +1,5 @@
 #include "common/ducklake_util.hpp"
+#include "duckdb/parser/column_list.hpp"
 #include "duckdb/common/string_util.hpp"
 #include "duckdb/parser/keyword_helper.hpp"
 #include "duckdb/parser/parser.hpp"
@@ -342,6 +343,21 @@ bool DuckLakeUtil::IsInlinedSystemColumn(const string &name) {
 	return StringUtil::CIEquals(name, "row_id") || StringUtil::CIEquals(name, "begin_snapshot") ||
 	       StringUtil::CIEquals(name, "end_snapshot") || StringUtil::CIEquals(name, "_ducklake_internal_snapshot_id") ||
 	       StringUtil::CIEquals(name, "_ducklake_internal_row_id");
+}
+
+void DuckLakeUtil::ValidateNoInlinedSystemColumns(const ColumnList &columns, const string &table_name) {
+	for (auto &col : columns.Logical()) {
+		if (IsInlinedSystemColumn(col.Name())) {
+			if (table_name.empty()) {
+				throw BinderException("Column name \"%s\" is reserved by DuckLake for internal use when data inlining "
+				                      "is enabled - disable inlining by setting data_inlining_row_limit to 0",
+				                      col.Name());
+			}
+			throw BinderException("Cannot enable data inlining for table \"%s\" - column \"%s\" conflicts with a "
+			                      "reserved DuckLake internal column name used for inlining",
+			                      table_name, col.Name());
+		}
+	}
 }
 
 string DuckLakeUtil::ReplaceSkippingQuotes(const string &sql, const string &from, const string &to) {
