@@ -4497,13 +4497,9 @@ FROM {METADATA_CATALOG}.ducklake_files_scheduled_for_deletion
 	}
 	return result;
 }
-vector<DuckLakeFileForCleanup> DuckLakeMetadataManager::GetOrphanFilesForCleanup(const string &filter,
-                                                                                 const string &separator) {
-	auto query = R"(SELECT filename
-FROM read_blob({DATA_PATH} || '**')
-WHERE suffix(filename, '.parquet')
-AND filename NOT IN (
-SELECT REPLACE(
+
+string DuckLakeMetadataManager::GetKnownFilesForCleanupQuery(const string &separator) const {
+	auto query = R"(SELECT REPLACE(
            CASE
                WHEN NOT file_relative THEN file_path
                ELSE CASE
@@ -4537,9 +4533,19 @@ SELECT REPLACE(
            '{SEPARATOR}'
 ) AS full_path
 FROM {METADATA_CATALOG}.ducklake_files_scheduled_for_deletion f
-)
-)" + filter;
-	query = StringUtil::Replace(query, "{SEPARATOR}", separator);
+)";
+	return StringUtil::Replace(query, "{SEPARATOR}", separator);
+}
+
+vector<DuckLakeFileForCleanup> DuckLakeMetadataManager::GetOrphanFilesForCleanup(const string &filter,
+                                                                                 const string &separator) {
+	auto query = R"(SELECT filename
+FROM read_blob({DATA_PATH} || '**')
+WHERE suffix(filename, '.parquet')
+AND filename NOT IN (
+)" + GetKnownFilesForCleanupQuery(separator) +
+	             R"(
+))" + filter;
 	auto res = transaction.Query(query);
 	if (res->HasError()) {
 		res->GetErrorObject().Throw("Failed to get files scheduled for deletion from DuckLake: ");
