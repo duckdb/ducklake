@@ -68,15 +68,13 @@ CREATE TABLE ducklake.strings(v VARCHAR);
 statement ok
 INSERT INTO ducklake.strings VALUES ('banana'), ('apple'), ('cherry'), ('date');
 
+# NOTE: we only assert the value here, not that it folds. String min/max statistics may be stored as a
+# truncated prefix, so the optimizer conservatively refuses to answer string MIN/MAX from stats (it falls
+# back to a scan). The result must still be correct either way.
 query II
 SELECT MIN(v), MAX(v) FROM ducklake.strings;
 ----
 apple	date
-
-query II
-EXPLAIN ANALYZE SELECT MIN(v), MAX(v) FROM ducklake.strings;
-----
-analyzed_plan	<!REGEX>:.*TABLE_SCAN.*
 
 # ============================================
 # 3. Filtered MIN/MAX falls back to scanning but stays correct
