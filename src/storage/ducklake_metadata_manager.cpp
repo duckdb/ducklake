@@ -1316,16 +1316,14 @@ FilterSQLResult DuckLakeMetadataManager::ConvertFilterPushdownToSQL(const Filter
 		// Files that have no stats entry for this column (i.e., written before the column was added) must
 		// NOT be pruned, we cannot determine filter satisfaction without stats.
 		if (needs_value_count_guard) {
-			conditions += StringUtil::Format(
-			    "(data.data_file_id NOT IN (SELECT data_file_id FROM %s) OR "
-			    "data.data_file_id IN (SELECT data_file_id FROM %s WHERE "
-			    "(value_count IS NULL OR value_count > 0) AND (%s(%s))))",
-			    cte_name, cte_name, null_checks.c_str(), filter_condition.c_str());
+			conditions += StringUtil::Format("(data.data_file_id NOT IN (SELECT data_file_id FROM %s) OR "
+			                                 "data.data_file_id IN (SELECT data_file_id FROM %s WHERE "
+			                                 "(value_count IS NULL OR value_count > 0) AND (%s(%s))))",
+			                                 cte_name, cte_name, null_checks.c_str(), filter_condition.c_str());
 		} else {
-			conditions += StringUtil::Format(
-			    "(data.data_file_id NOT IN (SELECT data_file_id FROM %s) OR "
-			    "data.data_file_id IN (SELECT data_file_id FROM %s WHERE %s(%s)))",
-			    cte_name, cte_name, null_checks.c_str(), filter_condition.c_str());
+			conditions += StringUtil::Format("(data.data_file_id NOT IN (SELECT data_file_id FROM %s) OR "
+			                                 "data.data_file_id IN (SELECT data_file_id FROM %s WHERE %s(%s)))",
+			                                 cte_name, cte_name, null_checks.c_str(), filter_condition.c_str());
 		}
 
 		CTERequirement req(column_filter.column_field_index, referenced_stats);
