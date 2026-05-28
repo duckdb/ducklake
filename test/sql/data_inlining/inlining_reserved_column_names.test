@@ -152,3 +152,28 @@ query II
 SELECT * FROM ducklake.t_ok
 ----
 1	2
+
+
+# CREATE TABLE with reserved name while inlining is enabled - suggest disabling inlining
+statement error
+CREATE TABLE ducklake.t_msg(row_id INTEGER);
+----
+Column name "row_id" is reserved by DuckLake for internal use when data inlining is enabled. If you must use this column name, disable inlining by calling ducklake_set_option('data_inlining_row_limit', 0).
+
+# ALTER TABLE ADD COLUMN with reserved name while inlining is enabled - suggest disabling inlining
+statement error
+ALTER TABLE ducklake.t_ok ADD COLUMN row_id INTEGER;
+----
+Column name "row_id" is reserved by DuckLake for internal use when data inlining is enabled. If you must use this column name, disable inlining by calling ducklake_set_option('data_inlining_row_limit', 0).
+
+# ALTER TABLE RENAME COLUMN to reserved name while inlining is enabled - suggest disabling inlining
+statement error
+ALTER TABLE ducklake.t_ok RENAME COLUMN i TO row_id;
+----
+Column name "row_id" is reserved by DuckLake for internal use when data inlining is enabled. If you must use this column name, disable inlining by calling ducklake_set_option('data_inlining_row_limit', 0).
+
+# enabling inlining on a table that already has reserved column names - suggest renaming or dropping
+statement error
+CALL ducklake.set_option('data_inlining_row_limit', 10, table_name => 't_normal');
+----
+Cannot enable data inlining for table "t_normal". Column "row_id" conflicts with a reserved DuckLake internal column name used for inlining. To enable inlining for this table, rename or drop column "row_id".

@@ -630,9 +630,11 @@ unique_ptr<CatalogEntry> DuckLakeTableEntry::AlterTable(DuckLakeTransaction &tra
 	auto &duck_schema = ParentSchema().Cast<DuckLakeSchemaEntry>();
 	if (DuckLakeUtil::IsInlinedSystemColumn(info.new_name) &&
 	    duck_catalog.DataInliningRowLimit(duck_schema.GetSchemaId(), GetTableId()) > 0) {
-		throw CatalogException("Column name \"%s\" is reserved by DuckLake for internal use when data inlining is "
-		                       "enabled - disable inlining by setting data_inlining_row_limit to 0",
-		                       info.new_name);
+		throw CatalogException(
+		    "Column name \"%s\" is reserved by DuckLake for internal use when data inlining is enabled. If "
+		    "you must use this column name, disable inlining by calling "
+		    "ducklake_set_option('data_inlining_row_limit', 0).",
+		    info.new_name);
 	}
 	auto create_info = GetInfo();
 	auto &table_info = create_info->Cast<CreateTableInfo>();
@@ -674,9 +676,11 @@ unique_ptr<CatalogEntry> DuckLakeTableEntry::AlterTable(DuckLakeTransaction &tra
 	auto &duck_schema = ParentSchema().Cast<DuckLakeSchemaEntry>();
 	if (DuckLakeUtil::IsInlinedSystemColumn(info.new_column.Name()) &&
 	    duck_catalog.DataInliningRowLimit(duck_schema.GetSchemaId(), GetTableId()) > 0) {
-		throw CatalogException("Column name \"%s\" is reserved by DuckLake for internal use when data inlining is "
-		                       "enabled - disable inlining by setting data_inlining_row_limit to 0",
-		                       info.new_column.Name());
+		throw CatalogException(
+		    "Column name \"%s\" is reserved by DuckLake for internal use when data inlining is enabled. If "
+		    "you must use this column name, disable inlining by calling "
+		    "ducklake_set_option('data_inlining_row_limit', 0).",
+		    info.new_column.Name());
 	}
 	auto create_info = GetInfo();
 	auto &table_info = create_info->Cast<CreateTableInfo>();
