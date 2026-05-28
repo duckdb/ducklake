@@ -33,7 +33,6 @@ public:
 	unique_ptr<QueryResult> Query(string &query) override;
 	unique_ptr<QueryResult> AttachMetadata(const string &attach_query) override;
 	void ClearCache() override;
-	vector<DuckLakeFileForCleanup> GetOrphanFilesForCleanup(const string &filter, const string &separator) override;
 
 	bool MetadataExists() override;
 
