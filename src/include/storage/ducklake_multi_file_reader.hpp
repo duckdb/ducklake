@@ -80,21 +80,30 @@ public:
 
 private:
 	shared_ptr<BaseFileReader> TryCreateInlinedDataReader(const OpenFileInfo &file);
-	//! For deletion scans we need to get the snapshot_id values using per-row snapshot information
+	//! For deletion scans we need to get the snapshot_id values using per-row snapshot information.
+	//! rowid_output_col / snapshot_output_col are the resolved positions of the rowid and snapshot_id columns
+	//! within `chunk` (the FinalizeChunk output layout, see RemapDeletionScanOutputColumn). When either is
+	//! invalid there is nothing to gather and the call is a no-op.
 	void GatherDeletionScanSnapshots(BaseFileReader &reader, const MultiFileReaderData &reader_data, DataChunk &chunk,
-	                                 optional_idx rowid_col_override = optional_idx()) const;
+	                                 optional_idx rowid_output_col, optional_idx snapshot_output_col) const;
 
 private:
 	unique_ptr<MultiFileColumnDefinition> row_id_column;
 	unique_ptr<MultiFileColumnDefinition> snapshot_id_column;
 	//! Inlined transaction-local data
 	shared_ptr<DuckLakeInlinedData> transaction_local_data;
-	//! For deletion scans: output_chunk column index of snapshot_id in global_column_ids order, if projected
-	//! (set in CreateMapping).
+	//! For deletion scans: index of snapshot_id in global_column_ids order, if projected (set in CreateMapping).
+	//! Not necessarily the final output_chunk position: when DuckDB's filter-column-removal optimization drops a
+	//! filtered-only column from the projection, output_chunk is laid out in projection_ids order, so FinalizeChunk
+	//! must remap this index to the true output position before use.
 	optional_idx deletion_scan_snapshot_col;
-	//! For deletion scans: output_chunk column index of rowid in global_column_ids order, if projected.
-	//! Same semantics as deletion_scan_snapshot_col.
+	//! For deletion scans: index of rowid in global_column_ids order, if projected. Same semantics and remapping
+	//! requirement as deletion_scan_snapshot_col.
 	optional_idx deletion_scan_rowid_col;
+	//! For deletion scans where rowid was internally projected (not in the user's query): the index of the appended
+	//! rowid expression in reader_data.expressions. The executor does not emit this column when filter-column removal
+	//! is in effect (it is absent from projection_ids), so FinalizeChunk evaluates it explicitly.
+	optional_idx deletion_scan_internal_rowid_col;
 	//! Whether row_id was internally projected (not in user's query)
 	//! This is necessary for DCF queries over inlined deletions
 	bool internally_projected_rowid = false;
