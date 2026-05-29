@@ -837,8 +837,8 @@ void DuckLakeCatalog::SetConfigOption(const DuckLakeConfigOption &option) {
 	options.config_options[key] = value;
 }
 
-bool DuckLakeCatalog::TryGetConfigOption(const string &option, string &result, SchemaIndex schema_id,
-                                         TableIndex table_id) const {
+bool DuckLakeCatalog::TryGetScopedConfigOption(const string &option, string &result, SchemaIndex schema_id,
+                                               TableIndex table_id) const {
 	lock_guard<mutex> guard(config_lock);
 	// search options in-order
 	// table scope
@@ -863,8 +863,16 @@ bool DuckLakeCatalog::TryGetConfigOption(const string &option, string &result, S
 			}
 		}
 	}
+	return false;
+}
 
-	// global scope
+bool DuckLakeCatalog::TryGetConfigOption(const string &option, string &result, SchemaIndex schema_id,
+                                         TableIndex table_id) const {
+	// search options in-order: table scope, schema scope, then global scope
+	if (TryGetScopedConfigOption(option, result, schema_id, table_id)) {
+		return true;
+	}
+	lock_guard<mutex> guard(config_lock);
 	auto entry = options.config_options.find(option);
 	if (entry == options.config_options.end()) {
 		return false;
