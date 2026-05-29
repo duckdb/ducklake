@@ -183,3 +183,65 @@ has NULL values
 
 statement ok
 ROLLBACK;
+
+statement ok
+CREATE TABLE ducklake.not_null_after_update(i INTEGER);
+
+statement ok
+INSERT INTO ducklake.not_null_after_update VALUES (NULL), (1);
+
+statement ok
+UPDATE ducklake.not_null_after_update SET i = 2 WHERE i IS NULL;
+
+query I
+SELECT count(*) FROM ducklake.not_null_after_update WHERE i IS NULL;
+----
+0
+
+statement ok
+ALTER TABLE ducklake.not_null_after_update ALTER i SET NOT NULL;
+
+statement error
+INSERT INTO ducklake.not_null_after_update VALUES (NULL);
+----
+NOT NULL constraint failed
+
+# Conversely, updating a non-NULL row to NULL must block SET NOT NULL even though
+# the original insert-time stats had no NULLs.
+statement ok
+CREATE TABLE ducklake.not_null_update_introduces_null(i INTEGER);
+
+statement ok
+INSERT INTO ducklake.not_null_update_introduces_null VALUES (1), (2);
+
+statement ok
+UPDATE ducklake.not_null_update_introduces_null SET i = NULL WHERE i = 1;
+
+statement error
+ALTER TABLE ducklake.not_null_update_introduces_null ALTER i SET NOT NULL;
+----
+has NULL values
+
+# Transaction-local UPDATE that removes the NULL rows should also be visible.
+statement ok
+CREATE TABLE ducklake.not_null_after_update_transaction(i INTEGER);
+
+statement ok
+INSERT INTO ducklake.not_null_after_update_transaction VALUES (NULL), (1);
+
+statement ok
+BEGIN;
+
+statement ok
+UPDATE ducklake.not_null_after_update_transaction SET i = 2 WHERE i IS NULL;
+
+statement ok
+ALTER TABLE ducklake.not_null_after_update_transaction ALTER i SET NOT NULL;
+
+statement ok
+COMMIT;
+
+statement error
+INSERT INTO ducklake.not_null_after_update_transaction VALUES (NULL);
+----
+NOT NULL constraint failed
