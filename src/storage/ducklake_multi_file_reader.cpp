@@ -497,12 +497,23 @@ ReaderInitializeType DuckLakeMultiFileReader::CreateMapping(
 	auto &file_list = multi_file_list.Cast<DuckLakeMultiFileList>();
 	bool needs_internal_rowid = false;
 	if (file_list.IsDeleteScan()) {
-		// Check if row_id is already in global_column_ids
+		// Locate the output positions of the rowid and snapshot_id virtual columns. global_column_ids is the
+		// order in which the columns appear in the FinalizeChunk output_chunk, so these positions are what
+		// GatherDeletionScanSnapshots must use. We must NOT rely on the per-file local virtual-column index
+		// (the old behavior): the snapshot_id virtual column is emitted as a constant expression and therefore
+		// does not advance the local column counter, so when the projection puts snapshot_id before rowid the
+		// local index no longer lines up with the output_chunk layout and the per-row snapshot overwrite
+		// silently targets the wrong column (issue #1199).
+		deletion_scan_rowid_col = optional_idx();
+		deletion_scan_snapshot_col = optional_idx();
 		bool has_rowid = false;
-		for (auto &col_id : global_column_ids) {
-			if (col_id.GetPrimaryIndex() == COLUMN_IDENTIFIER_ROW_ID) {
+		for (idx_t out_idx = 0; out_idx < global_column_ids.size(); out_idx++) {
+			auto primary_index = global_column_ids[out_idx].GetPrimaryIndex();
+			if (primary_index == COLUMN_IDENTIFIER_ROW_ID) {
 				has_rowid = true;
-				break;
+				deletion_scan_rowid_col = out_idx;
+			} else if (primary_index == COLUMN_IDENTIFIER_SNAPSHOT_ID) {
+				deletion_scan_snapshot_col = out_idx;
 			}
 		}
 		// We need internal row_id if it's not in the user's query
@@ -558,7 +569,6 @@ unique_ptr<Expression> DuckLakeMultiFileReader::GetVirtualColumnExpression(
     idx_t &column_id, const LogicalType &type, MultiFileLocalIndex local_idx,
     optional_ptr<MultiFileColumnDefinition> &global_column_reference) {
 	if (column_id == COLUMN_IDENTIFIER_ROW_ID) {
-		deletion_scan_rowid_col = local_idx.GetIndex();
 		// row id column
 		// this is computed as row_id_start + file_row_number OR read from the file
 		// first check if the row id is explicitly defined in this file
@@ -598,7 +608,6 @@ unique_ptr<Expression> DuckLakeMultiFileReader::GetVirtualColumnExpression(
 		return function_expr;
 	}
 	if (column_id == COLUMN_IDENTIFIER_SNAPSHOT_ID) {
-		deletion_scan_snapshot_col = local_idx.GetIndex();
 		if (TryFindColumnByFieldId(local_columns, MultiFileReader::LAST_UPDATED_SEQUENCE_NUMBER_ID,
 		                           snapshot_id_column.get(), global_column_reference)) {
 			return nullptr;

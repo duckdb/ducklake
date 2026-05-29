@@ -1,0 +1,111 @@
+# name: test/sql/table_changes/ducklake_table_deletions_projection_order.test
+# description: ducklake_table_deletions must report the correct per-row delete snapshot_id on the real delete-file path (DATA_INLINING_ROW_LIMIT 0) regardless of virtual-column projection order (issue #1199)
+# group: [table_changes]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+
+test-env DATA_PATH __TEST_DIR__
+
+# DATA_INLINING_ROW_LIMIT 0 forces deletes onto the real delete-file path
+statement ok
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '${DATA_PATH}/ducklake_projection_order', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+USE dl
+
+# snapshot 1 - create table
+statement ok
+CREATE TABLE d (k INTEGER, v INTEGER)
+
+# snapshot 2 - insert three rows into one data file (positions 0,1,2)
+statement ok
+INSERT INTO d VALUES (1,100),(2,200),(3,300)
+
+# snapshot 3 - delete pos 0 (k=1)
+statement ok
+DELETE FROM d WHERE k=1
+
+# snapshot 4 - delete pos 1 (k=2); accumulates into the SAME delete file (begin_snapshot stays 3)
+statement ok
+DELETE FROM d WHERE k=2
+
+# CORRECT (rowid before snapshot_id) - already worked before the fix, must stay correct
+query III
+SELECT rowid, snapshot_id, k FROM ducklake_table_deletions('dl','main','d',2,4) ORDER BY rowid
+----
+0	3	1
+1	4	2
+
+# THE BUG: snapshot_id before rowid (as the table_changes macro projects).
+# Before the fix row 1 wrongly reports snapshot 3 (the delete file's begin_snapshot).
+query III
+SELECT snapshot_id, rowid, k FROM ducklake_table_deletions('dl','main','d',2,4) ORDER BY rowid
+----
+3	0	1
+4	1	2
+
+# CORRECT (no rowid projected) - internally-projected-rowid branch, must stay correct
+query II
+SELECT snapshot_id, k FROM ducklake_table_deletions('dl','main','d',2,4) ORDER BY snapshot_id
+----
+3	1
+4	2
+
+# Per-snapshot filtering must keep working (guards against the fix breaking filtering)
+query III
+SELECT snapshot_id, rowid, k FROM ducklake_table_deletions('dl','main','d',4,4) ORDER BY rowid
+----
+4	1	2
+
+query III
+SELECT snapshot_id, rowid, k FROM ducklake_table_deletions('dl','main','d',2,3) ORDER BY rowid
+----
+3	0	1
+
+# ---------------------------------------------------------------------------
+# table_changes: an in-place UPDATE must be a matched preimage/postimage pair
+# at the row's own snapshot, NOT split into delete@wrong-snapshot + insert.
+# ---------------------------------------------------------------------------
+
+# snapshot 5 - create second table
+statement ok
+CREATE TABLE c (k INTEGER, v INTEGER)
+
+# snapshot 6 - insert three rows
+statement ok
+INSERT INTO c VALUES (1,100),(2,200),(3,300)
+
+# snapshot 7 - update k=1
+statement ok
+UPDATE c SET v=111 WHERE k=1
+
+# snapshot 8 - update k=2 (same data file, later snapshot)
+statement ok
+UPDATE c SET v=222 WHERE k=2
+
+# The range includes the snapshot-6 INSERT, so the three original inserts appear.
+# The key assertion is that BOTH updates are matched preimage/postimage pairs at
+# their own update snapshot. Before the fix, k=2 (rowid 1) was split into
+# delete@7 + insert@8 instead of an update_preimage/update_postimage@8 pair.
+query IIIII
+SELECT snapshot_id, rowid, change_type, k, v
+FROM ducklake_table_changes('dl','main','c',6,8) ORDER BY rowid, change_type
+----
+6	0	insert	1	100
+7	0	update_postimage	1	111
+7	0	update_preimage	1	100
+6	1	insert	2	200
+8	1	update_postimage	2	222
+8	1	update_preimage	2	200
+6	2	insert	3	300
+
+# An in-place UPDATE must never surface as a bare delete in this range.
+# A non-zero count here is the exact symptom of issue #1199 (delete@wrong-snapshot).
+query I
+SELECT count(*) FROM ducklake_table_changes('dl','main','c',6,8) WHERE change_type = 'delete'
+----
+0
