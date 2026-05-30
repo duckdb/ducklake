@@ -1,0 +1,85 @@
+# name: test/sql/issues/issue_1084_parquet_inlined_delete_overlap.test
+# description: deleted rows must not reappear when parquet delete files and inlined tombstones overlap (issue #1084)
+# group: [issues]
+
+require ducklake
+
+require parquet
+
+# use a fixed connection path (not {UUID}) so the re-attach below resolves to the same catalog
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/issue_1084_parquet_inlined_delete_overlap.db
+
+test-env DATA_PATH {TEST_DIR}
+
+# disable data inlining so the data lands in a parquet data file and the deletes
+# produce a parquet delete file (rather than inlined deletes)
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/issue_1084_parquet_inlined_delete_overlap', DATA_INLINING_ROW_LIMIT 0, METADATA_CATALOG 'ducklake_meta')
+
+statement ok
+USE ducklake
+
+statement ok
+CREATE TABLE t AS SELECT range AS a FROM range(100);
+
+# delete positions 10..39 -> written to a parquet delete file
+statement ok
+DELETE FROM t WHERE a >= 10 AND a < 40;
+
+# sanity: one data file (id 0) and one parquet delete file covering 30 positions
+query II
+SELECT data_file_id, record_count FROM ducklake_meta.ducklake_data_file
+----
+0	100
+
+query I
+SELECT delete_count FROM ducklake_meta.ducklake_delete_file
+----
+30
+
+# inject inlined tombstones that OVERLAP positions already in the parquet delete file.
+# this overlap cannot be produced through normal SQL (a deleted row cannot be re-deleted),
+# so we write it directly into the catalog to mirror the corrupted state from issue #1084.
+statement ok
+CREATE TABLE IF NOT EXISTS ducklake_meta.ducklake_inlined_delete_1(file_id BIGINT, row_id BIGINT, begin_snapshot BIGINT);
+
+statement ok
+INSERT INTO ducklake_meta.ducklake_inlined_delete_1 VALUES (0, 10, 2), (0, 15, 2);
+
+# re-attach so the catalog re-reads the now-existing inlined-deletion table
+statement ok
+USE memory
+
+statement ok
+DETACH ducklake
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/issue_1084_parquet_inlined_delete_overlap', METADATA_CATALOG 'ducklake_meta')
+
+statement ok
+USE ducklake
+
+# the core correctness property: every position in 10..39 is deleted (by parquet and/or inlined
+# tombstones), so NONE of those values may be visible to a scan. Before the fix the duplicate
+# position gets the read filter stuck and rows 11..39 leak back into the result.
+# NB: this filter forces an actual scan; a bare count(*) is answered from catalog stats and is
+# a separate (unfixed) discrepancy - see the PR notes on COUNT(*)/stats reconciliation.
+query I
+SELECT count(*) FROM t WHERE a >= 10 AND a < 40;
+----
+0
+
+# the surviving rows around the deletion boundary are exactly 0..9 and 40..99
+query I
+SELECT a FROM t WHERE a >= 5 AND a < 45 ORDER BY a;
+----
+5
+6
+7
+8
+9
+40
+41
+42
+43
+44
