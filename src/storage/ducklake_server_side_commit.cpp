@@ -62,41 +62,39 @@ unique_ptr<DuckLakeNameMapEntry> BuildNameMapEntry(idx_t id, const std::map<idx_
 	return entry;
 }
 
-DuckLakeColumnStats StatsFromRow(const LogicalType &type, const Value &column_size_bytes, const Value &value_count,
-                                 const Value &null_count, const Value &min_value, const Value &max_value,
-                                 const Value &contains_nan, const Value &extra_stats) {
-	DuckLakeColumnStats stats(type);
-	if (!column_size_bytes.IsNull()) {
-		stats.column_size_bytes = static_cast<idx_t>(column_size_bytes.GetValue<int64_t>());
+template <class ROW>
+DuckLakeColumnStats ReadColumnStatsRow(ROW &row, idx_t base, const LogicalType &type) {
+	DuckLakeColumnStats s(type);
+	if (!row.IsNull(base + 0)) {
+		s.column_size_bytes = AsIdx(row, base + 0);
 	}
-	if (!null_count.IsNull()) {
-		stats.null_count = static_cast<idx_t>(null_count.GetValue<int64_t>());
-		stats.has_null_count = true;
+	s.has_num_values = OptBoolFalse(row, base + 1);
+	if (s.has_num_values && !row.IsNull(base + 2)) {
+		s.num_values = AsIdx(row, base + 2);
 	}
-	if (!value_count.IsNull()) {
-		idx_t non_null = static_cast<idx_t>(value_count.GetValue<int64_t>());
-		stats.num_values = non_null + (stats.has_null_count ? stats.null_count : 0);
-		stats.has_num_values = true;
+	s.has_null_count = OptBoolFalse(row, base + 3);
+	if (s.has_null_count && !row.IsNull(base + 4)) {
+		s.null_count = AsIdx(row, base + 4);
 	}
-	if (!min_value.IsNull()) {
-		stats.min = min_value.ToString();
-		stats.has_min = true;
+	if (OptBoolFalse(row, base + 5) && !row.IsNull(base + 6)) {
+		s.has_min = true;
+		s.min = row.template GetValue<string>(base + 6);
 	}
-	if (!max_value.IsNull()) {
-		stats.max = max_value.ToString();
-		stats.has_max = true;
+	if (OptBoolFalse(row, base + 7) && !row.IsNull(base + 8)) {
+		s.has_max = true;
+		s.max = row.template GetValue<string>(base + 8);
 	}
-	if (!contains_nan.IsNull()) {
-		stats.contains_nan = contains_nan.GetValue<bool>();
-		stats.has_contains_nan = true;
+	s.has_contains_nan = OptBoolFalse(row, base + 9);
+	if (s.has_contains_nan && !row.IsNull(base + 10)) {
+		s.contains_nan = row.template GetValue<bool>(base + 10);
 	}
-	if (stats.has_num_values && stats.has_null_count) {
-		stats.any_valid = stats.num_values > stats.null_count;
+	if (!row.IsNull(base + 11)) {
+		s.any_valid = row.template GetValue<bool>(base + 11);
 	}
-	if (!extra_stats.IsNull() && stats.extra_stats) {
-		stats.extra_stats->Deserialize(extra_stats.ToString());
+	if (!row.IsNull(base + 12) && s.extra_stats) {
+		s.extra_stats->Deserialize(row.template GetValue<string>(base + 12));
 	}
-	return stats;
+	return s;
 }
 
 //! Read the 9 shared DuckLakeDeleteFile fields starting at `base` column.
@@ -117,41 +115,6 @@ void FillDeleteFileCommon(DuckLakeDeleteFile &f, ROW &row, idx_t base) {
 		f.max_snapshot = AsIdx(row, base + 7);
 	}
 	f.source = row.template GetValue<string>(base + 8) == "FLUSH" ? DeleteFileSource::FLUSH : DeleteFileSource::REGULAR;
-}
-
-template <class ROW>
-DuckLakeColumnStats ReadInlinedStatsRow(ROW &row, const LogicalType &type) {
-	DuckLakeColumnStats s(type);
-	if (!row.IsNull(2)) {
-		s.column_size_bytes = AsIdx(row, 2);
-	}
-	s.has_num_values = OptBoolFalse(row, 3);
-	if (s.has_num_values && !row.IsNull(4)) {
-		s.num_values = AsIdx(row, 4);
-	}
-	s.has_null_count = OptBoolFalse(row, 5);
-	if (s.has_null_count && !row.IsNull(6)) {
-		s.null_count = AsIdx(row, 6);
-	}
-	if (OptBoolFalse(row, 7) && !row.IsNull(8)) {
-		s.has_min = true;
-		s.min = row.template GetValue<string>(8);
-	}
-	if (OptBoolFalse(row, 9) && !row.IsNull(10)) {
-		s.has_max = true;
-		s.max = row.template GetValue<string>(10);
-	}
-	s.has_contains_nan = OptBoolFalse(row, 11);
-	if (s.has_contains_nan && !row.IsNull(12)) {
-		s.contains_nan = row.template GetValue<bool>(12);
-	}
-	if (!row.IsNull(13)) {
-		s.any_valid = row.template GetValue<bool>(13);
-	}
-	if (!row.IsNull(14) && s.extra_stats) {
-		s.extra_stats->Deserialize(row.template GetValue<string>(14));
-	}
-	return s;
 }
 
 DuckLakeServerSideCommit::DuckLakeServerSideCommit(ClientContext &context_p, string metadata_schema_name_p,
@@ -283,10 +246,7 @@ void DuckLakeServerSideCommit::ReadStagedDataFiles() {
 			if (type_it == column_types.end()) {
 				continue;
 			}
-			per_file_stats[local_file_id].emplace(
-			    key.column_id,
-			    StatsFromRow(type_it->second, row.GetBaseValue(3), row.GetBaseValue(4), row.GetBaseValue(5),
-			                 row.GetBaseValue(6), row.GetBaseValue(7), row.GetBaseValue(8), row.GetBaseValue(9)));
+			per_file_stats[local_file_id].emplace(key.column_id, ReadColumnStatsRow(row, 3, type_it->second));
 		}
 	}
 
@@ -388,7 +348,7 @@ void DuckLakeServerSideCommit::ReadStagedInlinedData() {
 		if (type_it == column_types.end()) {
 			continue;
 		}
-		stats_per_table[table_id].emplace(column_id, ReadInlinedStatsRow(row, type_it->second));
+		stats_per_table[table_id].emplace(column_id, ReadColumnStatsRow(row, 2, type_it->second));
 	}
 
 	// Build a DuckLakeInlinedData per table, data is null because tuples are spliced as SQL text.

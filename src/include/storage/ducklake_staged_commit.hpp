@@ -57,7 +57,7 @@ enum class DuckLakeStagedTableType : uint8_t {
 class DuckLakeStagedTable {
 public:
 	static const char *BaseName(DuckLakeStagedTableType type);
-	static const char *Columns(DuckLakeStagedTableType type);
+	static string Columns(DuckLakeStagedTableType type);
 	static vector<string> ColumnNames(DuckLakeStagedTableType type);
 	static const vector<DuckLakeStagedTableType> &AllTypes();
 	static string CreateAllSql();
@@ -84,6 +84,9 @@ private:
 	//! Emits INSERT for a single inlined column stats row.
 	void EmitInlinedColumnStatsRow(string &sql, TableIndex table_id, FieldIndex column_id,
 	                               const DuckLakeColumnStats &s) const;
+	//! Builds the shared 13-value column-stats payload (column_size_bytes .. extra_stats) used by both
+	//! the data-file and inlined column-stats staging rows. Read back by ReadColumnStatsRow.
+	static string EmitColumnStatsValues(const DuckLakeColumnStats &s);
 	//! Recursively emits INSERT rows for a name map entry and its children.
 	void FlattenNameMapEntry(const DuckLakeNameMapEntry &entry, idx_t map_id, idx_t parent_id, idx_t &next_entry_id,
 	                         string &sql) const;

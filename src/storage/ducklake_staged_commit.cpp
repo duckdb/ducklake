@@ -12,6 +12,15 @@
 
 namespace duckdb {
 
+// Shared column-stats payload (matches DuckLakeStagedCommit::EmitColumnStatsValues /
+// DuckLakeServerSideCommit::ReadColumnStatsRow). Single definition used by both the data-file and
+// inlined column-stats staging tables.
+static const char *const STAGED_STAT_COLUMNS =
+    "column_size_bytes BIGINT, has_num_values BOOLEAN, num_values BIGINT, "
+    "has_null_count BOOLEAN, null_count BIGINT, has_min BOOLEAN, min_value VARCHAR, "
+    "has_max BOOLEAN, max_value VARCHAR, has_contains_nan BOOLEAN, contains_nan BOOLEAN, "
+    "any_valid BOOLEAN, extra_stats VARCHAR";
+
 const char *DuckLakeStagedTable::BaseName(DuckLakeStagedTableType type) {
 	switch (type) {
 	case DuckLakeStagedTableType::COMMIT_HEADER:
@@ -53,7 +62,7 @@ const char *DuckLakeStagedTable::BaseName(DuckLakeStagedTableType type) {
 	}
 }
 
-const char *DuckLakeStagedTable::Columns(DuckLakeStagedTableType type) {
+string DuckLakeStagedTable::Columns(DuckLakeStagedTableType type) {
 	switch (type) {
 	case DuckLakeStagedTableType::COMMIT_HEADER:
 		return "commit_author VARCHAR, commit_message VARCHAR, commit_extra_info VARCHAR, "
@@ -67,9 +76,7 @@ const char *DuckLakeStagedTable::Columns(DuckLakeStagedTableType type) {
 		       "mapping_id UBIGINT, partial_max BIGINT, begin_snapshot BIGINT, "
 		       "compaction_id BIGINT";
 	case DuckLakeStagedTableType::DATA_FILE_COLUMN_STATS:
-		return "data_file_id BIGINT, table_id BIGINT, column_id BIGINT, "
-		       "column_size_bytes BIGINT, value_count BIGINT, null_count BIGINT, "
-		       "min_value VARCHAR, max_value VARCHAR, contains_nan BOOLEAN, extra_stats VARCHAR";
+		return string("data_file_id BIGINT, table_id BIGINT, column_id BIGINT, ") + STAGED_STAT_COLUMNS;
 	case DuckLakeStagedTableType::DATA_FILE_PARTITION:
 		return "local_file_id BIGINT, partition_column_idx BIGINT, partition_value VARCHAR";
 	case DuckLakeStagedTableType::DELETE_FILE:
@@ -85,12 +92,7 @@ const char *DuckLakeStagedTable::Columns(DuckLakeStagedTableType type) {
 	case DuckLakeStagedTableType::INLINED_ROW:
 		return "table_id BIGINT, row_order BIGINT, preserved_row_id BIGINT, value_literals VARCHAR";
 	case DuckLakeStagedTableType::INLINED_COLUMN_STATS:
-		return "table_id BIGINT, column_id BIGINT, "
-		       "column_size_bytes BIGINT, has_num_values BOOLEAN, num_values BIGINT, "
-		       "has_null_count BOOLEAN, null_count BIGINT, "
-		       "has_min BOOLEAN, min_value VARCHAR, has_max BOOLEAN, max_value VARCHAR, "
-		       "has_contains_nan BOOLEAN, contains_nan BOOLEAN, "
-		       "any_valid BOOLEAN, extra_stats VARCHAR";
+		return string("table_id BIGINT, column_id BIGINT, ") + STAGED_STAT_COLUMNS;
 	case DuckLakeStagedTableType::INLINED_DELETE:
 		return "table_id BIGINT, inlined_table_name VARCHAR, deleted_row_id BIGINT";
 	case DuckLakeStagedTableType::INLINED_FILE_DELETE:
@@ -187,12 +189,9 @@ void DuckLakeStagedCommit::EmitDataFileRow(string &sql, const DuckLakeDataFile &
 	    DuckLakeUtil::MappingIdOrNull(file.mapping_id), DuckLakeUtil::OptionalIdxOrNull(file.max_partial_file_snapshot),
 	    DuckLakeUtil::OptionalIdxOrNull(file.begin_snapshot), compaction_id_literal);
 	for (auto &stat : file.column_stats) {
-		auto info = DuckLakeColumnStatsInfo::FromColumnStats(stat.first, stat.second);
-		sql += StringUtil::Format("INSERT INTO %s VALUES (%llu, %llu, %llu, %s, %s, %s, %s, %s, %s, %s);",
+		sql += StringUtil::Format("INSERT INTO %s VALUES (%llu, %llu, %llu, %s);",
 		                          DuckLakeStagedTable::BaseName(DuckLakeStagedTableType::DATA_FILE_COLUMN_STATS),
-		                          local_file_id, table_id.index, info.column_id.index, info.column_size_bytes,
-		                          info.value_count, info.null_count, info.min_val, info.max_val, info.contains_nan,
-		                          info.extra_stats);
+		                          local_file_id, table_id.index, stat.first.index, EmitColumnStatsValues(stat.second));
 	}
 	for (auto &part : file.partition_values) {
 		sql += StringUtil::Format("INSERT INTO %s VALUES (%llu, %llu, %s);",
@@ -234,8 +233,7 @@ void DuckLakeStagedCommit::EmitAttachedDeleteRow(string &sql, const DuckLakeDele
 	    SQLString(del.source == DeleteFileSource::FLUSH ? "FLUSH" : "REGULAR"), local_file_id);
 }
 
-void DuckLakeStagedCommit::EmitInlinedColumnStatsRow(string &sql, TableIndex table_id, FieldIndex column_id,
-                                                     const DuckLakeColumnStats &s) const {
+string DuckLakeStagedCommit::EmitColumnStatsValues(const DuckLakeColumnStats &s) {
 	string num_values = s.has_num_values ? std::to_string(s.num_values) : "NULL";
 	string null_count = s.has_null_count ? std::to_string(s.null_count) : "NULL";
 	string min_val = s.has_min ? DuckLakeUtil::StatsToString(s.min) : "NULL";
@@ -247,16 +245,23 @@ void DuckLakeStagedCommit::EmitInlinedColumnStatsRow(string &sql, TableIndex tab
 	if (s.extra_stats) {
 		string serialized;
 		if (s.extra_stats->TrySerialize(serialized) && !serialized.empty()) {
-			extra_stats = DuckLakeUtil::SQLLiteralToString(serialized);
+			// TrySerialize already returns a ready-to-emit SQL literal; emit it as-is.
+			extra_stats = serialized;
 		}
 	}
-	sql += StringUtil::Format(
-	    "INSERT INTO %s VALUES (%llu, %llu, %llu, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s);",
-	    DuckLakeStagedTable::BaseName(DuckLakeStagedTableType::INLINED_COLUMN_STATS), table_id.index, column_id.index,
-	    s.column_size_bytes, DuckLakeUtil::BoolLiteral(s.has_num_values), num_values,
-	    DuckLakeUtil::BoolLiteral(s.has_null_count), null_count, DuckLakeUtil::BoolLiteral(has_min_emit), min_val,
-	    DuckLakeUtil::BoolLiteral(has_max_emit), max_val, DuckLakeUtil::BoolLiteral(s.has_contains_nan), contains_nan,
-	    DuckLakeUtil::BoolLiteral(s.any_valid), extra_stats);
+	return StringUtil::Format("%llu, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s", s.column_size_bytes,
+	                          DuckLakeUtil::BoolLiteral(s.has_num_values), num_values,
+	                          DuckLakeUtil::BoolLiteral(s.has_null_count), null_count,
+	                          DuckLakeUtil::BoolLiteral(has_min_emit), min_val, DuckLakeUtil::BoolLiteral(has_max_emit),
+	                          max_val, DuckLakeUtil::BoolLiteral(s.has_contains_nan), contains_nan,
+	                          DuckLakeUtil::BoolLiteral(s.any_valid), extra_stats);
+}
+
+void DuckLakeStagedCommit::EmitInlinedColumnStatsRow(string &sql, TableIndex table_id, FieldIndex column_id,
+                                                     const DuckLakeColumnStats &s) const {
+	sql += StringUtil::Format("INSERT INTO %s VALUES (%llu, %llu, %s);",
+	                          DuckLakeStagedTable::BaseName(DuckLakeStagedTableType::INLINED_COLUMN_STATS),
+	                          table_id.index, column_id.index, EmitColumnStatsValues(s));
 }
 
 void DuckLakeStagedCommit::FlattenNameMapEntry(const DuckLakeNameMapEntry &entry, idx_t map_id, idx_t parent_id,
