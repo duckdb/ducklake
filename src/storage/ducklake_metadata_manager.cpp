@@ -881,6 +881,12 @@ void TransformGlobalStatsRow(const ROW &row, vector<DuckLakeGlobalStatsInfo> &gl
 
 	auto &stats_entry = global_stats.back();
 
+	if (row.IsNull(1 + from_column)) {
+		// table_stats row with no matching ducklake_table_column_stats row, we keep the
+		// table-level stats (record_count/next_row_id) without adding a column-stats entry.
+		return;
+	}
+
 	DuckLakeGlobalColumnStatsInfo column_stats;
 	column_stats.column_id = FieldIndex(row.template GetValue<uint64_t>(1 + from_column));
 
@@ -942,7 +948,7 @@ string DuckLakeMetadataManager::GlobalTableStatsQuery() {
 	return R"(
 SELECT table_id, column_id, record_count, next_row_id, file_size_bytes, contains_null, contains_nan, min_value, max_value, extra_stats
 FROM {METADATA_CATALOG}.ducklake_table_stats
-JOIN {METADATA_CATALOG}.ducklake_table_column_stats USING (table_id)
+LEFT JOIN {METADATA_CATALOG}.ducklake_table_column_stats USING (table_id)
 WHERE record_count IS NOT NULL AND file_size_bytes IS NOT NULL
 ORDER BY table_id;
 )";
@@ -3977,7 +3983,7 @@ SELECT
     max_value,
     extra_stats
 FROM {METADATA_CATALOG}.ducklake_table_stats
-JOIN {METADATA_CATALOG}.ducklake_table_column_stats
+LEFT JOIN {METADATA_CATALOG}.ducklake_table_column_stats
     USING (table_id)
 WHERE record_count IS NOT NULL
     AND file_size_bytes IS NOT NULL
