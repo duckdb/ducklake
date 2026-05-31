@@ -2330,7 +2330,15 @@ static void ColumnToSQLRecursive(const DuckLakeColumnInfo &column, TableIndex ta
 	if (!column.default_value.IsNull()) {
 		auto value = column.default_value.GetValue<string>();
 		if (column.default_value_type == "literal") {
-			default_val = KeywordHelper::WriteQuoted(value, '\'');
+			// Special handle "NULL" literal default value for VARCHAR columns.
+			// Normally we store constant default as literal type, but it's not enough to tell apart from (1) VARCHAR
+			// column with default value NULL; and (2) VARCHAR coluimn with default "NULL".
+			if (column.default_value.type().id() == LogicalTypeId::VARCHAR && value == "NULL") {
+				default_val = KeywordHelper::WriteQuoted(column.default_value.ToSQLString(), '\'');
+				default_val_type = "'expression'";
+			} else {
+				default_val = KeywordHelper::WriteQuoted(value, '\'');
+			}
 		} else if (column.default_value_type == "expression") {
 			if (value.empty()) {
 				default_val = "''";
