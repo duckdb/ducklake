@@ -58,6 +58,7 @@ class DuckLakeStagedTable {
 public:
 	static const char *BaseName(DuckLakeStagedTableType type);
 	static const char *Columns(DuckLakeStagedTableType type);
+	static vector<string> ColumnNames(DuckLakeStagedTableType type);
 	static const vector<DuckLakeStagedTableType> &AllTypes();
 	static string CreateAllSql();
 	static string TruncateAllSql();

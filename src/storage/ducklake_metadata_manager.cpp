@@ -3918,10 +3918,6 @@ string DuckLakeMetadataManager::InsertSnapshotSql() {
 	return R"(INSERT INTO {METADATA_CATALOG}.ducklake_snapshot VALUES ({SNAPSHOT_ID}, NOW(), {SCHEMA_VERSION}, {NEXT_CATALOG_ID}, {NEXT_FILE_ID});)";
 }
 
-string DuckLakeMetadataManager::InsertSnapshot() {
-	return InsertSnapshotSql();
-}
-
 static string SQLStringOrNull(const string &str) {
 	if (str.empty()) {
 		return "NULL";
@@ -3935,11 +3931,6 @@ string DuckLakeMetadataManager::WriteSnapshotChangesSql(const SnapshotChangeInfo
 	    R"(INSERT INTO {METADATA_CATALOG}.ducklake_snapshot_changes VALUES ({SNAPSHOT_ID}, %s, %s, %s, %s);)",
 	    SQLStringOrNull(change_info.changes_made), commit_info.author.ToSQLString(),
 	    commit_info.commit_message.ToSQLString(), commit_info.commit_extra_info.ToSQLString());
-}
-
-string DuckLakeMetadataManager::WriteSnapshotChanges(const SnapshotChangeInfo &change_info,
-                                                     const DuckLakeSnapshotCommit &commit_info) {
-	return WriteSnapshotChangesSql(change_info, commit_info);
 }
 
 string DuckLakeMetadataManager::GetSnapshotAndStatsAndChangesQuery() {

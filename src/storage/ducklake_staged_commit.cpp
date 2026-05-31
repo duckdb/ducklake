@@ -121,6 +121,22 @@ const char *DuckLakeStagedTable::Columns(DuckLakeStagedTableType type) {
 	}
 }
 
+vector<string> DuckLakeStagedTable::ColumnNames(DuckLakeStagedTableType type) {
+	vector<string> result;
+	for (auto &part : StringUtil::Split(Columns(type), ",")) {
+		idx_t start = 0;
+		while (start < part.size() && StringUtil::CharacterIsSpace(part[start])) {
+			start++;
+		}
+		idx_t end = start;
+		while (end < part.size() && !StringUtil::CharacterIsSpace(part[end])) {
+			end++;
+		}
+		result.push_back(StringUtil::Lower(part.substr(start, end - start)));
+	}
+	return result;
+}
+
 const vector<DuckLakeStagedTableType> &DuckLakeStagedTable::AllTypes() {
 	static const vector<DuckLakeStagedTableType> kinds = {DuckLakeStagedTableType::COMMIT_HEADER,
 	                                                      DuckLakeStagedTableType::DATA_FILE,

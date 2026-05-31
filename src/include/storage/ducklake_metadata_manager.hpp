@@ -305,12 +305,8 @@ public:
 	//! is ignored.
 	static string WriteCompactions(const vector<DuckLakeCompactedFileInfo> &compactions, CompactionType type,
 	                               const vector<DuckLakePath> &resolved_paths);
-	virtual string InsertSnapshot();
-	virtual string WriteSnapshotChanges(const SnapshotChangeInfo &change_info,
-	                                    const DuckLakeSnapshotCommit &commit_info);
 	//! SQL templates with {METADATA_CATALOG} / {SNAPSHOT_ID} placeholders, shared with the
-	//! server-side commit path. The virtuals above delegate to these and only exist so backends
-	//! (e.g. Postgres) can override the dispatch — there are no overrides for these three today.
+	//! server-side commit path.
 	static string InsertSnapshotSql();
 	static string WriteSnapshotChangesSql(const SnapshotChangeInfo &change_info,
 	                                      const DuckLakeSnapshotCommit &commit_info);

@@ -2,7 +2,6 @@
 # description: A superseded inlined-data table must be dropped once it is empty after a flush
 # group: [data_inlining]
 
-
 require ducklake
 
 require parquet
