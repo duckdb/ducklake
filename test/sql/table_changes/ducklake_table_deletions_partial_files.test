@@ -12,7 +12,7 @@ test-env DATA_PATH __TEST_DIR__
 
 # DATA_INLINING_ROW_LIMIT 0 forces deletes onto the real delete-file path (ducklake_delete_file),
 # which is what the "partial files" in this test's name actually refers to. Without it the deletes
-# are inlined and the real delete-file code path is never exercised (issue #1199).
+# are inlined and the real delete-file code path is never exercised.
 statement ok
 ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/ducklake_partial_deletions_files', DATA_INLINING_ROW_LIMIT 0)
 
@@ -125,10 +125,9 @@ SELECT rowid, i FROM ducklake_table_deletions('ducklake', 'main', 'test', 0, 10)
 11	21
 13	23
 
-# Same queries with snapshot_id projected BEFORE rowid (as the table_changes macro does).
-# This is the projection order that mis-attributed accumulated deletes before issue #1199 was
-# fixed: rows 3/8/13 (the second delete in each file, snapshots 8/9/10) would wrongly report
-# their delete file's begin_snapshot (5/6/7).
+# Same queries with snapshot_id projected BEFORE rowid (the order the table_changes macro uses).
+# Rows 3/8/13 (the second delete in each file, snapshots 8/9/10) must report their own delete
+# snapshot, not their delete file's begin_snapshot (5/6/7).
 query III
 SELECT snapshot_id, rowid, i FROM ducklake_table_deletions('ducklake', 'main', 'test', 5, 10) ORDER BY rowid
 ----

@@ -497,13 +497,10 @@ ReaderInitializeType DuckLakeMultiFileReader::CreateMapping(
 	auto &file_list = multi_file_list.Cast<DuckLakeMultiFileList>();
 	bool needs_internal_rowid = false;
 	if (file_list.IsDeleteScan()) {
-		// Locate the output positions of the rowid and snapshot_id virtual columns. global_column_ids is the
-		// order in which the columns appear in the FinalizeChunk output_chunk, so these positions are what
-		// GatherDeletionScanSnapshots must use. We must NOT rely on the per-file local virtual-column index
-		// (the old behavior): the snapshot_id virtual column is emitted as a constant expression and therefore
-		// does not advance the local column counter, so when the projection puts snapshot_id before rowid the
-		// local index no longer lines up with the output_chunk layout and the per-row snapshot overwrite
-		// silently targets the wrong column (issue #1199).
+		// Locate the rowid and snapshot_id virtual columns by their position in global_column_ids, which is the
+		// order in which the columns appear in the FinalizeChunk output_chunk. The per-file local virtual-column
+		// index cannot be used: the snapshot_id virtual column is emitted as a constant expression and does not
+		// advance the local column counter, so it does not line up with the output_chunk layout.
 		deletion_scan_rowid_col = optional_idx();
 		deletion_scan_snapshot_col = optional_idx();
 		bool has_rowid = false;
