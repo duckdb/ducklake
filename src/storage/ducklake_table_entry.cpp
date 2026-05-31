@@ -2,6 +2,7 @@
 #include "common/ducklake_util.hpp"
 #include "storage/ducklake_table_entry.hpp"
 #include "storage/ducklake_catalog.hpp"
+#include "storage/ducklake_schema_entry.hpp"
 #include "storage/ducklake_scan.hpp"
 #include "storage/ducklake_transaction.hpp"
 
@@ -625,8 +626,15 @@ unique_ptr<CatalogEntry> DuckLakeTableEntry::AlterTable(DuckLakeTransaction &tra
 }
 
 unique_ptr<CatalogEntry> DuckLakeTableEntry::AlterTable(DuckLakeTransaction &transaction, RenameColumnInfo &info) {
-	if (DuckLakeUtil::IsInlinedSystemColumn(info.new_name)) {
-		throw CatalogException("Column name \"%s\" is reserved by DuckLake for internal use", info.new_name);
+	auto &duck_catalog = ParentCatalog().Cast<DuckLakeCatalog>();
+	auto &duck_schema = ParentSchema().Cast<DuckLakeSchemaEntry>();
+	if (DuckLakeUtil::IsInlinedSystemColumn(info.new_name) &&
+	    duck_catalog.DataInliningRowLimit(duck_schema.GetSchemaId(), GetTableId()) > 0) {
+		throw CatalogException(
+		    "Column name \"%s\" is reserved by DuckLake for internal use when data inlining is enabled. If "
+		    "you must use this column name, disable inlining by calling "
+		    "ducklake_set_option('data_inlining_row_limit', 0).",
+		    info.new_name);
 	}
 	auto create_info = GetInfo();
 	auto &table_info = create_info->Cast<CreateTableInfo>();
@@ -664,8 +672,15 @@ void DuckLakeTableEntry::RequireNextColumnId(DuckLakeTransaction &transaction) {
 }
 
 unique_ptr<CatalogEntry> DuckLakeTableEntry::AlterTable(DuckLakeTransaction &transaction, AddColumnInfo &info) {
-	if (DuckLakeUtil::IsInlinedSystemColumn(info.new_column.Name())) {
-		throw CatalogException("Column name \"%s\" is reserved by DuckLake for internal use", info.new_column.Name());
+	auto &duck_catalog = ParentCatalog().Cast<DuckLakeCatalog>();
+	auto &duck_schema = ParentSchema().Cast<DuckLakeSchemaEntry>();
+	if (DuckLakeUtil::IsInlinedSystemColumn(info.new_column.Name()) &&
+	    duck_catalog.DataInliningRowLimit(duck_schema.GetSchemaId(), GetTableId()) > 0) {
+		throw CatalogException(
+		    "Column name \"%s\" is reserved by DuckLake for internal use when data inlining is enabled. If "
+		    "you must use this column name, disable inlining by calling "
+		    "ducklake_set_option('data_inlining_row_limit', 0).",
+		    info.new_column.Name());
 	}
 	auto create_info = GetInfo();
 	auto &table_info = create_info->Cast<CreateTableInfo>();

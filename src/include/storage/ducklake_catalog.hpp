@@ -121,6 +121,9 @@ public:
 	}
 	void SetConfigOption(const DuckLakeConfigOption &option);
 	bool TryGetConfigOption(const string &option, string &result, SchemaIndex schema_id, TableIndex table_id) const;
+	//! Check if a config option has a table-level or schema-level override (excluding global scope)
+	bool TryGetScopedConfigOption(const string &option, string &result, SchemaIndex schema_id,
+	                              TableIndex table_id) const;
 	template <class T>
 	T GetConfigOption(const string &option, SchemaIndex schema_id, TableIndex table_id, T default_value) const {
 		string value_str;
