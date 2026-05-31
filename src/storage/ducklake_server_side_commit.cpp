@@ -194,6 +194,8 @@ DuckLakeServerSideCommitResult DuckLakeServerSideCommit::Run() {
 
 	idx_t committed_snapshot_id = 0;
 	idx_t committed_schema_version = static_cast<idx_t>(schema_version);
+	// Run the whole commit batch (snapshot + data/stats + changes) in one transaction
+	fresh_conn.BeginTransaction();
 	state->Commit(transaction_snapshot, transaction_changes, retry_config,
 	              BuildContext(committed_snapshot_id, committed_schema_version));
 
@@ -714,11 +716,16 @@ DuckLakeCommitContext DuckLakeServerSideCommit::BuildContext(idx_t &committed_sn
 	};
 	ctx.flush_cache_if_pending = []() {
 	};
-	ctx.commit_connection = []() {
+	ctx.commit_connection = [this]() {
+		fresh_conn.Commit();
 	};
-	ctx.try_rollback = []() {
+	ctx.try_rollback = [this]() {
+		if (fresh_conn.context->transaction.HasActiveTransaction()) {
+			fresh_conn.Rollback();
+		}
 	};
-	ctx.prepare_retry = []() {
+	ctx.prepare_retry = [this]() {
+		fresh_conn.BeginTransaction();
 	};
 	ctx.query_metadata = [this](string q) -> unique_ptr<QueryResult> {
 		// Snapshot-scoped placeholders are absent on this path; empty snapshot is a no-op.
