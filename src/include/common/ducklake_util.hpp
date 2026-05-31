@@ -16,6 +16,7 @@
 
 namespace duckdb {
 class DataChunk;
+class ColumnList;
 class DuckLakeMetadataManager;
 class FileSystem;
 class TableFilter;
@@ -63,6 +64,8 @@ public:
 
 	static string ChunkRowToSQL(DuckLakeMetadataManager &metadata_manager, ClientContext &context, DataChunk &chunk,
 	                            idx_t row);
+	//! Throws if any column in the list conflicts with inlined data system columns
+	static void ValidateNoInlinedSystemColumns(const ColumnList &columns, const string &table_name = "");
 };
 
 } // namespace duckdb

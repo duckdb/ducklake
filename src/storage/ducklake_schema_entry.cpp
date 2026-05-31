@@ -70,11 +70,10 @@ optional_ptr<CatalogEntry> DuckLakeSchemaEntry::CreateTableExtended(CatalogTrans
 	if (!HandleCreateConflict(transaction, CatalogType::TABLE_ENTRY, base_info.table, base_info.on_conflict)) {
 		return nullptr;
 	}
-	// reject columns with reserved DuckLake internal names
-	for (auto &col : base_info.columns.Logical()) {
-		if (DuckLakeUtil::IsInlinedSystemColumn(col.Name())) {
-			throw BinderException("Column name \"%s\" is reserved by DuckLake for internal use", col.Name());
-		}
+	// reject columns with reserved DuckLake internal names when inlining is enabled
+	auto &duck_catalog = catalog.Cast<DuckLakeCatalog>();
+	if (duck_catalog.DataInliningRowLimit(transaction.GetContext(), schema_id, TableIndex()) > 0) {
+		DuckLakeUtil::ValidateNoInlinedSystemColumns(base_info.columns);
 	}
 	//! get a local table-id
 	auto table_id = TableIndex(duck_transaction.GetLocalCatalogId());
