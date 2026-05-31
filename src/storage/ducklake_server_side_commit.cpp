@@ -165,10 +165,6 @@ void DuckLakeServerSideCommit::SetRetryConfigOverride(const DuckLakeRetryConfig 
 	retry_config = retry_config_p;
 }
 
-string DuckLakeServerSideCommit::Staged(DuckLakeStagedTableType kind) {
-	return DuckLakeStagedTable::BaseName(kind);
-}
-
 DuckLakeServerSideCommitResult DuckLakeServerSideCommit::Run() {
 	ReadCommitHeader();
 	ReadColumnTypes();
@@ -714,8 +710,6 @@ DuckLakeCommitContext DuckLakeServerSideCommit::BuildContext(idx_t &committed_sn
 		query = SubstitutePlaceholders(query, snapshot);
 		return unique_ptr_cast<MaterializedQueryResult, QueryResult>(fresh_conn.Query(query));
 	};
-	ctx.flush_cache_if_pending = []() {
-	};
 	ctx.commit_connection = [this]() {
 		fresh_conn.Commit();
 	};
@@ -737,14 +731,6 @@ DuckLakeCommitContext DuckLakeServerSideCommit::BuildContext(idx_t &committed_sn
 		auto sql = SubstitutePlaceholders(std::move(q), snapshot);
 		return unique_ptr_cast<MaterializedQueryResult, QueryResult>(fresh_conn.Query(sql));
 	};
-	ctx.try_append_data_files = [](DuckLakeSnapshot &, const vector<DuckLakeFileInfo> &,
-	                               const vector<DuckLakeTableInfo> &, vector<DuckLakeSchemaInfo> &) {
-		return false;
-	};
-	// write_inlined_tables is unreachable while DDL is gated out of server-side commit.
-	ctx.write_inlined_tables = [](DuckLakeSnapshot, const vector<DuckLakeTableInfo> &) {
-		return string();
-	};
 	ctx.write_inlined_data = [this](DuckLakeSnapshot &, const vector<DuckLakeInlinedDataInfo> &new_data,
 	                                const vector<DuckLakeTableInfo> &, const vector<DuckLakeTableInfo> &) -> string {
 		return BuildInlinedDataInserts(new_data);
@@ -755,8 +741,6 @@ DuckLakeCommitContext DuckLakeServerSideCommit::BuildContext(idx_t &committed_sn
 	};
 	ctx.build_stats_map = [this](vector<DuckLakeGlobalStatsInfo> &stats) {
 		return BuildStatsMap(stats);
-	};
-	ctx.invalidate_schema_cache = [](idx_t) {
 	};
 	ctx.set_catalog_version = [&committed_schema_version](idx_t v) {
 		committed_schema_version = v;
@@ -788,7 +772,7 @@ unique_ptr<MaterializedQueryResult> DuckLakeServerSideCommit::RunQuery(const str
 }
 
 unique_ptr<MaterializedQueryResult> DuckLakeServerSideCommit::ScanStagedTable(DuckLakeStagedTableType kind) {
-	auto table_name = Staged(kind);
+	string table_name = DuckLakeStagedTable::BaseName(kind);
 	auto &temp_catalog = Catalog::GetCatalog(context, TEMP_CATALOG);
 	auto &table_entry =
 	    temp_catalog.GetEntry<TableCatalogEntry>(context, DEFAULT_SCHEMA, table_name).Cast<DuckTableEntry>();

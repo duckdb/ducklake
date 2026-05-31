@@ -104,7 +104,7 @@ void QuackMetadataManager::FlushChangesServerSide(DuckLakeTransaction &flush_tra
 	}
 	transaction.GetCatalog().EnsureCommitInfoProvided(flush_transaction.GetCommitInfo());
 	DuckLakeStagedCommit staged;
-	string batch = staged.Build(flush_transaction, transaction_changes, transaction_snapshot, retry_config);
+	string batch = staged.Build(flush_transaction, transaction_snapshot, retry_config);
 	auto result = Query(batch);
 	if (!result || result->HasError()) {
 		if (result) {

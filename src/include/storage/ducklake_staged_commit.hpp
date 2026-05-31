@@ -67,13 +67,10 @@ public:
 class DuckLakeStagedCommit {
 public:
 	//! Build the full SQL batch from transaction state.
-	string Build(DuckLakeTransaction &transaction, const TransactionChangeInformation &transaction_changes,
-	             const DuckLakeSnapshot &transaction_snapshot, const DuckLakeRetryConfig &retry_config) const;
+	string Build(DuckLakeTransaction &transaction, const DuckLakeSnapshot &transaction_snapshot,
+	             const DuckLakeRetryConfig &retry_config) const;
 
 private:
-	//! Returns the fixed temp table name for a staging table type.
-	static string StagedFullQualifyName(DuckLakeStagedTableType type);
-
 	//! Emits INSERT for a single data file, its column stats, and partition values.
 	void EmitDataFileRow(string &sql, const DuckLakeDataFile &file, idx_t local_file_id, TableIndex table_id,
 	                     idx_t file_order, const string &compaction_id_literal) const;

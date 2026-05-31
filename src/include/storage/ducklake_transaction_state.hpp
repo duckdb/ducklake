@@ -20,14 +20,19 @@ struct DuckLakeCommitContext {
 	std::function<DuckLakeSnapshot()> get_snapshot;
 	//! Executes the batched snapshot/changes SQL against the metadata DB.
 	std::function<unique_ptr<QueryResult>(DuckLakeSnapshot, string &)> execute_commit_batch;
+	//! Optional hooks below default to a no-op/constant; callers override only the ones they need.
 	//! Clears the metadata manager cache if a clear was pending.
-	std::function<void()> flush_cache_if_pending;
+	std::function<void()> flush_cache_if_pending = []() {
+	};
 	//! Commits the underlying metadata connection.
-	std::function<void()> commit_connection;
+	std::function<void()> commit_connection = []() {
+	};
 	//! Rolls back the metadata connection if a transaction is active.
-	std::function<void()> try_rollback;
+	std::function<void()> try_rollback = []() {
+	};
 	//! Resets per-attempt state before a retry.
-	std::function<void()> prepare_retry;
+	std::function<void()> prepare_retry = []() {
+	};
 	//! Runs a metadata-DB query during post-commit cleanup.
 	std::function<unique_ptr<QueryResult>(string)> query_metadata;
 	//! Runs a snapshot-templated metadata-DB query (handles {SNAPSHOT_ID} substitution).
@@ -35,9 +40,15 @@ struct DuckLakeCommitContext {
 	//! Optional Appender fast-path.
 	std::function<bool(DuckLakeSnapshot &, const vector<DuckLakeFileInfo> &, const vector<DuckLakeTableInfo> &,
 	                   vector<DuckLakeSchemaInfo> &)>
-	    try_append_data_files;
+	    try_append_data_files = [](DuckLakeSnapshot &, const vector<DuckLakeFileInfo> &,
+	                               const vector<DuckLakeTableInfo> &, vector<DuckLakeSchemaInfo> &) {
+		    return false;
+	    };
 	//! Emits the SQL that registers new inlined data tables (CREATE TABLE + ducklake_inlined_data_tables INSERT).
-	std::function<string(DuckLakeSnapshot, const vector<DuckLakeTableInfo> &)> write_inlined_tables;
+	std::function<string(DuckLakeSnapshot, const vector<DuckLakeTableInfo> &)> write_inlined_tables =
+	    [](DuckLakeSnapshot, const vector<DuckLakeTableInfo> &) {
+		    return string();
+	    };
 	//! Emits the SQL that appends inlined data for the given table changes (handles new inlined-table creation,
 	//! per-tx cache, and the per-row INSERT VALUES).
 	std::function<string(DuckLakeSnapshot &, const vector<DuckLakeInlinedDataInfo> &, const vector<DuckLakeTableInfo> &,
@@ -48,7 +59,8 @@ struct DuckLakeCommitContext {
 	//! Builds a DuckLakeStats map from a vector of per-snapshot global stats (retry path).
 	std::function<unique_ptr<DuckLakeStats>(vector<DuckLakeGlobalStatsInfo> &)> build_stats_map;
 	//! Invalidates the cached schema in the catalog for a given schema version.
-	std::function<void(idx_t)> invalidate_schema_cache;
+	std::function<void(idx_t)> invalidate_schema_cache = [](idx_t) {
+	};
 	//! Publishes the new schema version onto the transaction.
 	std::function<void(idx_t)> set_catalog_version;
 	//! Records the committed snapshot id on the catalog.

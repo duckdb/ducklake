@@ -88,8 +88,6 @@ private:
 	unique_ptr<MaterializedQueryResult> RunQuery(const string &query, const char *what);
 	//! Scan a temporary staging table via the catalog API (no SQL, no lock).
 	unique_ptr<MaterializedQueryResult> ScanStagedTable(DuckLakeStagedTableType kind);
-	//! Fixed temp table name for a staging table type.
-	static string Staged(DuckLakeStagedTableType kind);
 
 private:
 	ClientContext &context;
