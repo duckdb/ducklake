@@ -965,6 +965,10 @@ string DuckLakeCatalog::SchemaCacheKey(idx_t schema_version) const {
 	return StringUtil::Format("ducklake:%s:%s:%s:schema:%llu", GetName(), MetadataPath(), instance_id, schema_version);
 }
 
+void DuckLakeCatalog::InvalidateTableStatsCache(idx_t next_file_id, TableIndex table_id) {
+	GetObjectCacheInstance().Delete(StatsCacheKey(next_file_id, table_id));
+}
+
 void DuckLakeCatalog::InvalidateSchemaCache(idx_t schema_version) {
 	GetObjectCacheInstance().Delete(SchemaCacheKey(schema_version));
 }

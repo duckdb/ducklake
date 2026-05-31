@@ -297,6 +297,7 @@ struct DuckLakeSnapshotInfo {
 	idx_t id;
 	timestamp_tz_t time;
 	idx_t schema_version;
+	idx_t next_file_id;
 	SnapshotChangeInfo change_info;
 	Value author;
 	Value commit_message;
