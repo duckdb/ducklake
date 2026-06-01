@@ -57,7 +57,11 @@ idx_t EstimateTagMemory(const CatalogEntry &entry) {
 }
 
 idx_t EstimateTableEntryMemory(const DuckLakeTableEntry &table) {
-	idx_t estimate = EstimateTagMemory(table);
+	idx_t estimate = sizeof(DuckLakeTableEntry);
+	estimate += table.GetTableUUID().size();
+	estimate += table.DataPath().size();
+
+	estimate += EstimateTagMemory(table);
 	estimate += table.GetColumns().LogicalColumnCount() * sizeof(ColumnDefinition);
 	for (const auto &column : table.GetColumns().Logical()) {
 		estimate += EstimateStringMemory(column.Name());
@@ -86,7 +90,11 @@ idx_t EstimateTableEntryMemory(const DuckLakeTableEntry &table) {
 }
 
 idx_t EstimateViewEntryMemory(const DuckLakeViewEntry &view) {
-	idx_t estimate = EstimateTagMemory(view);
+	idx_t estimate = sizeof(DuckLakeViewEntry);
+	estimate += view.GetViewUUID().size();
+	estimate += view.GetQuerySQL().size();
+
+	estimate += EstimateTagMemory(view);
 	estimate += view.aliases.size() * sizeof(string);
 	for (const auto &alias : view.aliases) {
 		estimate += EstimateStringMemory(alias);
