@@ -21,7 +21,6 @@ static unique_ptr<FunctionData> DuckLakeCommitBind(ClientContext &, TableFunctio
 	auto result = make_uniq<DuckLakeCommitBindData>();
 	result->metadata_schema_name = StringValue::Get(input.inputs[0]);
 	result->schema_version = input.inputs[1].GetValue<int64_t>();
-	result->retry_config.retry_wait_ms = 0;
 	for (auto &entry : input.named_parameters) {
 		if (entry.second.IsNull()) {
 			continue;

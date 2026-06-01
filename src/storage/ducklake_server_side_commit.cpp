@@ -638,8 +638,9 @@ string DuckLakeServerSideCommit::BuildInlinedDataInserts(const vector<DuckLakeIn
 
 		const string &inlined_table_name = ResolveInlinedTableName(entry.table_id);
 		if (inlined_table_name.empty()) {
-			// No inlined table yet, only reachable via gated-out CREATE TABLE.
-			continue;
+			throw InternalException("Server-side ducklake_commit: no inlined-data table exists for table %llu - this "
+			                        "commit should have taken the client-side path",
+			                        entry.table_id.index);
 		}
 
 		vector<string> cells_per_row;

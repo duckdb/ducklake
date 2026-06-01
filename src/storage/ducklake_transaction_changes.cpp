@@ -3,6 +3,8 @@
 
 namespace duckdb {
 
+namespace {
+
 enum class ChangeType {
 	CREATED_TABLE,
 	CREATED_VIEW,
@@ -127,6 +129,8 @@ vector<ParsedChange> ParseChangesList(const string &changes_made) {
 	}
 	return result;
 }
+
+} // namespace
 
 SnapshotChangeInformation SnapshotChangeInformation::ParseChangesMade(const string &changes_made) {
 	auto change_list = ParseChangesList(changes_made);

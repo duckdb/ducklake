@@ -739,6 +739,7 @@ void DuckLakeTransaction::Commit() {
 	}
 	connection.reset();
 	state->local_changes.Clear();
+	SetRequiresNewInlinedTable(false);
 }
 
 void DuckLakeTransaction::Rollback() {
@@ -749,6 +750,7 @@ void DuckLakeTransaction::Rollback() {
 	}
 	state->CleanupFiles();
 	state->local_changes.Clear();
+	SetRequiresNewInlinedTable(false);
 }
 
 Connection &DuckLakeTransaction::GetConnection() {
@@ -1544,6 +1546,14 @@ void DuckLakeTransaction::AppendFiles(TableIndex table_id, vector<DuckLakeDataFi
 void DuckLakeTransaction::AppendInlinedData(TableIndex table_id, unique_ptr<DuckLakeInlinedData> new_data) {
 	auto context_ref = context.lock();
 	state->local_changes.AppendInlinedData(*context_ref, table_id, std::move(new_data));
+}
+
+void DuckLakeTransaction::SetRequiresNewInlinedTable(bool requires_new) {
+	requires_new_inlined_table = requires_new;
+}
+
+bool DuckLakeTransaction::GetRequiresNewInlinedTable() const {
+	return requires_new_inlined_table;
 }
 
 void DuckLakeTransaction::AddNewInlinedDeletes(TableIndex table_id, const string &table_name, set<idx_t> new_deletes) {

@@ -1,7 +1,8 @@
 # name: test/sql/stats/table_stats_without_column_stats.test
 # description: a ducklake_table_stats row with no matching ducklake_table_column_stats row must keep its
-#              next_row_id when seeding commit stats
 # group: [stats]
+
+#              next_row_id when seeding commit stats
 
 require ducklake
 

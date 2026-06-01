@@ -225,6 +225,8 @@ public:
 	const DuckLakeNameMap &GetMappingById(MappingIndex mapping_id);
 
 	void AppendInlinedData(TableIndex table_id, unique_ptr<DuckLakeInlinedData> collection);
+	void SetRequiresNewInlinedTable(bool requires_new);
+	bool GetRequiresNewInlinedTable() const;
 	void AddNewInlinedDeletes(TableIndex table_id, const string &table_name, set<idx_t> new_deletes);
 	void DeleteFromLocalInlinedData(TableIndex table_id, set<idx_t> new_deletes);
 	void AddColumnToLocalInlinedData(TableIndex table_id, const LogicalType &new_column_type,
@@ -342,6 +344,8 @@ private:
 	mutex snapshot_lock;
 	unique_ptr<DuckLakeSnapshot> snapshot;
 	idx_t local_catalog_id;
+	//! Set when this transaction inlines into a table that does not yet have an inlined-data table
+	atomic<bool> requires_new_inlined_table {false};
 	//! Per-transaction mutable change state (new/dropped/renamed entries, local file changes, flushed
 	//! inlined tables) and the Commit loop. Owns the data formerly held directly on the transaction.
 	unique_ptr<DuckLakeTransactionState> state;

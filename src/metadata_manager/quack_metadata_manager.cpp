@@ -90,6 +90,10 @@ static bool IsDataOnlyCommit(const TransactionChangeInformation &c) {
 }
 
 bool QuackMetadataManager::CanSkipSnapshotFetch(const TransactionChangeInformation &changes) const {
+	if (transaction.GetRequiresNewInlinedTable()) {
+		// the server-side commit cannot create the inlined-data table, take the client-side path instead
+		return false;
+	}
 	return ExecuteRetrialsServerSide() && IsDataOnlyCommit(changes);
 }
 
@@ -97,8 +101,7 @@ void QuackMetadataManager::FlushChangesServerSide(DuckLakeTransaction &flush_tra
                                                   DuckLakeSnapshot transaction_snapshot,
                                                   const TransactionChangeInformation &transaction_changes,
                                                   const DuckLakeRetryConfig &retry_config) {
-	if (!IsDataOnlyCommit(transaction_changes)) {
-		// We don't support server-side retrials yet for anything that is not just creating files
+	if (!IsDataOnlyCommit(transaction_changes) || flush_transaction.GetRequiresNewInlinedTable()) {
 		flush_transaction.RunCommitLoop(transaction_snapshot, transaction_changes, retry_config);
 		return;
 	}
