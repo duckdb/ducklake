@@ -13,6 +13,13 @@
       "paths": [
         "test/sql/general/missing_parquet.test"
       ]
+    },
+    {
+      "reason": "Test asserts reserved column names are rejected, which requires inlining to be enabled",
+      "paths": [
+        "test/sql/data_inlining/inlining_reserved_column_names.test",
+        "test/sql/alter/issue_944.test"
+      ]
     }
   ]
 }

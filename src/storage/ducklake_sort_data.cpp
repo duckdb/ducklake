@@ -11,9 +11,9 @@
 namespace duckdb {
 
 // Round-trip user sort expressions through the parser so non-bare-column expressions (e.g.
-// `(id + 0)`) survive into the deletes-position query. 
+// `(id + 0)`) survive into the deletes-position query.
 
-// FIXME: TODO: Macros and other user-catalog references will fail at bind time on the metadata connection 
+// FIXME: TODO: Macros and other user-catalog references will fail at bind time on the metadata connection
 string DuckLakeSort::BuildSortOrderSQL(const DuckLakeSort &sort_data, const ColumnList &current_columns,
                                        const ColumnList &inlined_columns) {
 	// Build rename map: current physical name -> inlined physical name (only entries that differ).
