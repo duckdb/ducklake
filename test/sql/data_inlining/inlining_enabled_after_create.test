@@ -49,6 +49,7 @@ query I
 SELECT count(*) FROM __ducklake_metadata_dl.ducklake_data_file
 ----
 0
+
 statement ok
 INSERT INTO dl.t SELECT * FROM range(100)
 
