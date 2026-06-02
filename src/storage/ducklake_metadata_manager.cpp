@@ -4446,7 +4446,7 @@ static timestamp_tz_t GetTimestampTZFromRow(ClientContext &context, const T &row
 
 vector<DuckLakeSnapshotInfo> DuckLakeMetadataManager::GetAllSnapshots(const string &filter) {
 	auto res = transaction.Query(StringUtil::Format(R"(
-SELECT snapshot_id, snapshot_time, schema_version, changes_made, author, commit_message, commit_extra_info
+SELECT snapshot_id, snapshot_time, schema_version, next_file_id, changes_made, author, commit_message, commit_extra_info
 FROM {METADATA_CATALOG}.ducklake_snapshot
 LEFT JOIN {METADATA_CATALOG}.ducklake_snapshot_changes USING (snapshot_id)
 %s %s
@@ -4464,10 +4464,11 @@ ORDER BY snapshot_id
 		snapshot_info.id = row.GetValue<idx_t>(0);
 		snapshot_info.time = GetTimestampTZFromRow(*context, row, 1);
 		snapshot_info.schema_version = row.GetValue<idx_t>(2);
-		snapshot_info.change_info.changes_made = row.IsNull(3) ? string() : row.GetValue<string>(3);
-		snapshot_info.author = row.GetChunk().GetValue(4, row.GetRowInChunk());
-		snapshot_info.commit_message = row.GetChunk().GetValue(5, row.GetRowInChunk());
-		snapshot_info.commit_extra_info = row.GetChunk().GetValue(6, row.GetRowInChunk());
+		snapshot_info.next_file_id = row.GetValue<idx_t>(3);
+		snapshot_info.change_info.changes_made = row.IsNull(4) ? string() : row.GetValue<string>(4);
+		snapshot_info.author = row.GetChunk().GetValue(5, row.GetRowInChunk());
+		snapshot_info.commit_message = row.GetChunk().GetValue(6, row.GetRowInChunk());
+		snapshot_info.commit_extra_info = row.GetChunk().GetValue(7, row.GetRowInChunk());
 		snapshots.push_back(std::move(snapshot_info));
 	}
 	return snapshots;
@@ -4712,6 +4713,16 @@ void DuckLakeMetadataManager::DeleteSnapshots(const vector<DuckLakeSnapshotInfo>
 		}
 		snapshot_ids += to_string(snapshot.id);
 	}
+
+	vector<TableIndex> stats_table_ids;
+	result = transaction.Query("SELECT DISTINCT table_id FROM {METADATA_CATALOG}.ducklake_table_stats;");
+	if (result->HasError()) {
+		result->GetErrorObject().Throw("Failed to list table stats for cache invalidation in DuckLake: ");
+	}
+	for (auto &row : *result) {
+		stats_table_ids.push_back(TableIndex(row.GetValue<idx_t>(0)));
+	}
+
 	vector<string> tables_to_delete_from {"ducklake_snapshot", "ducklake_snapshot_changes"};
 	for (auto &delete_tbl : tables_to_delete_from) {
 		result = transaction.Query(StringUtil::Format(R"(
@@ -4969,6 +4980,13 @@ WHERE NOT EXISTS (
 );)");
 		if (result->HasError()) {
 			result->GetErrorObject().Throw("Failed to delete from ducklake_name_mapping in DuckLake: ");
+		}
+	}
+
+	auto &catalog = transaction.GetCatalog();
+	for (auto &snapshot : snapshots) {
+		for (auto &table_id : stats_table_ids) {
+			catalog.InvalidateTableStatsCache(snapshot.next_file_id, table_id);
 		}
 	}
 }
