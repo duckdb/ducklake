@@ -9,6 +9,9 @@ require parquet
 require icu
 
 statement ok
+SET TimeZone='UTC';
+
+statement ok
 ATTACH 'ducklake:{TEST_DIR}/alter_insert_select.db' AS dl (DATA_PATH '{TEST_DIR}/alter_insert_select')
 
 statement ok

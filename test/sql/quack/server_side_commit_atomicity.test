@@ -1,0 +1,49 @@
+# name: test/sql/quack/server_side_commit_atomicity.test
+# description: A failed server-side (quack) commit must not leave an orphan snapshot
+# group: [quack]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+
+test-env DATA_PATH __TEST_DIR__
+
+statement ok
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/server_side_commit_atomicity')
+
+statement ok
+CREATE TABLE ducklake.test(i INTEGER);
+
+statement ok
+INSERT INTO ducklake.test VALUES (1);
+
+# CREATE TABLE -> snapshot 1, INSERT -> snapshot 2 (snapshot 0 is the empty catalog).
+query I
+SELECT max(snapshot_id) FROM __ducklake_metadata_ducklake.ducklake_snapshot;
+----
+2
+
+# Seed an orphan changes row at the next snapshot id (3) so the next commit collides on its
+# final ducklake_snapshot_changes insert. (A literal id is used because quack does not support
+# INSERT ... SELECT from the same catalog.)
+statement ok
+INSERT INTO __ducklake_metadata_ducklake.ducklake_snapshot_changes VALUES (3, 'orphan', NULL, NULL, NULL);
+
+# The commit fails on the colliding final statement.
+statement error
+INSERT INTO ducklake.test VALUES (2);
+----
+
+# The failed commit must not have left an orphan snapshot behind (id > 2).
+query I
+SELECT count(*) FROM __ducklake_metadata_ducklake.ducklake_snapshot WHERE snapshot_id > 2;
+----
+0
+
+# The table is still readable and unchanged by the failed commit.
+query I
+SELECT * FROM ducklake.test ORDER BY i;
+----
+1

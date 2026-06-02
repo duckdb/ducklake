@@ -2,6 +2,7 @@
 #include "duckdb/parser/column_list.hpp"
 #include "duckdb/common/string_util.hpp"
 #include "duckdb/common/sql_identifier.hpp"
+#include "duckdb/common/types/blob.hpp"
 #include "duckdb/parser/keyword_helper.hpp"
 #include "duckdb/parser/parser.hpp"
 #include "duckdb/common/file_system.hpp"
@@ -408,6 +409,41 @@ string DuckLakeUtil::ReplaceSkippingQuotes(const string &sql, const string &from
 		pos++;
 	}
 
+	return result;
+}
+
+string DuckLakeUtil::OptionalIdxOrNull(const optional_idx &v) {
+	return v.IsValid() ? std::to_string(v.GetIndex()) : "NULL";
+}
+
+string DuckLakeUtil::MappingIdOrNull(const MappingIndex &m) {
+	return m.IsValid() ? std::to_string(m.index) : "NULL";
+}
+
+string DuckLakeUtil::EncryptionKeyLiteral(const string &key) {
+	if (key.empty()) {
+		return "NULL";
+	}
+	return "'" + Blob::ToBase64(string_t(key)) + "'";
+}
+
+const char *DuckLakeUtil::BoolLiteral(bool v) {
+	return v ? "true" : "false";
+}
+
+string DuckLakeUtil::PartitionValueLiteral(const Value &v) {
+	return v.IsNull() ? string("NULL") : SQLLiteralToString(v.ToString());
+}
+
+string DuckLakeUtil::ChunkRowToSQL(DuckLakeMetadataManager &metadata_manager, ClientContext &context, DataChunk &chunk,
+                                   idx_t row) {
+	string result;
+	for (idx_t c = 0; c < chunk.ColumnCount(); c++) {
+		if (c > 0) {
+			result += ", ";
+		}
+		result += ValueToSQL(metadata_manager, context, chunk.GetValue(c, row));
+	}
 	return result;
 }
 

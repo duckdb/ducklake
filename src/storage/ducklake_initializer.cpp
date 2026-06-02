@@ -60,10 +60,11 @@ string DuckLakeInitializer::GetAttachOptions() {
 
 void DuckLakeInitializer::Initialize() {
 	auto &transaction = DuckLakeTransaction::Get(context, catalog);
+	auto &metadata_manager = transaction.GetMetadataManager();
 	// attach the metadata database
 	const string attach_query =
 	    "ATTACH OR REPLACE {METADATA_PATH} AS {METADATA_CATALOG_NAME_IDENTIFIER}" + GetAttachOptions();
-	auto result = transaction.GetMetadataManager().AttachMetadata(attach_query);
+	auto result = metadata_manager.AttachMetadata(attach_query);
 	if (result->HasError()) {
 		auto &error_obj = result->GetErrorObject();
 		error_obj.Throw("Failed to attach DuckLake MetaData \"" + catalog.MetadataDatabaseName() + "\" at path + \"" +
@@ -106,8 +107,12 @@ void DuckLakeInitializer::Initialize() {
 		InitializeNewDuckLake(transaction, has_explicit_schema);
 	}
 	// note: re-fetch the metadata manager here - InitializeNewDuckLake/LoadExistingDuckLake may have
-	// swapped it out via SetVersionedMetadataManager, so any reference held earlier would now dangle.
-	transaction.GetMetadataManager().ClearCache();
+	// swapped it out via SetVersionedMetadataManager, so the `metadata_manager` reference taken at the
+	// top of Initialize() would now dangle.
+	auto &current_metadata_manager = transaction.GetMetadataManager();
+	// probe the metadata server for optional capabilities (e.g. server-side commit retries) once per attach
+	current_metadata_manager.ProbeServerCapabilities();
+	current_metadata_manager.ClearCache();
 	if (options.at_clause) {
 		// if the user specified a snapshot try to load it to trigger an error if it does not exist
 		transaction.GetSnapshot();
