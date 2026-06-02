@@ -1,5 +1,7 @@
 #include "storage/ducklake_stats.hpp"
+#include "common/ducklake_data_file.hpp"
 #include "storage/ducklake_geo_stats.hpp"
+#include "storage/ducklake_metadata_info.hpp"
 #include "storage/ducklake_variant_stats.hpp"
 #include "duckdb/common/types/string.hpp"
 #include "duckdb/common/types/value.hpp"
@@ -69,6 +71,32 @@ DuckLakeColumnStats &DuckLakeColumnStats::operator=(const DuckLakeColumnStats &o
 		extra_stats.reset();
 	}
 	return *this;
+}
+
+DuckLakeColumnStats DuckLakeColumnStats::FromGlobalStats(const LogicalType &type,
+                                                         const DuckLakeGlobalColumnStatsInfo &col) {
+	DuckLakeColumnStats stats(type);
+	stats.has_null_count = col.has_contains_null;
+	if (col.has_contains_null) {
+		stats.null_count = col.contains_null ? 1 : 0;
+	}
+	stats.has_contains_nan = col.has_contains_nan;
+	if (col.has_contains_nan) {
+		stats.contains_nan = col.contains_nan;
+	}
+	stats.has_min = col.has_min;
+	if (col.has_min) {
+		stats.min = col.min_val;
+	}
+	stats.has_max = col.has_max;
+	if (col.has_max) {
+		stats.max = col.max_val;
+	}
+	stats.any_valid = stats.has_min || stats.has_max || col.has_extra_stats;
+	if (col.has_extra_stats && stats.extra_stats) {
+		stats.extra_stats->Deserialize(col.extra_stats);
+	}
+	return stats;
 }
 
 void DuckLakeColumnStats::MergeStats(const DuckLakeColumnStats &new_stats) {
@@ -173,6 +201,17 @@ void DuckLakeTableStats::MergeStats(FieldIndex col_id, const DuckLakeColumnStats
 	// merge the stats
 	auto &current_stats = entry->second;
 	current_stats.MergeStats(file_stats);
+}
+
+void DuckLakeTableStats::MergeFileStats(const DuckLakeDataFile &file) {
+	if (!file.max_partial_file_snapshot.IsValid()) {
+		record_count += file.row_count;
+		next_row_id += file.row_count;
+	}
+	table_size_bytes += file.file_size_bytes;
+	for (auto &entry : file.column_stats) {
+		MergeStats(entry.first, entry.second);
+	}
 }
 
 unique_ptr<BaseStatistics> DuckLakeColumnStats::CreateNumericStats() const {

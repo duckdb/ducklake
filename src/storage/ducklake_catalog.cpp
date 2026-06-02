@@ -57,6 +57,16 @@ void DuckLakeSchemaPinState::Pin(shared_ptr<DuckLakeSchemaCacheEntry> entry) {
 	pins.emplace(raw, std::move(entry));
 }
 
+void DuckLakeCatalog::EnsureCommitInfoProvided(const DuckLakeSnapshotCommit &commit_info) const {
+	if (!IsCommitInfoRequired() || commit_info.is_commit_info_set) {
+		return;
+	}
+	throw InvalidConfigurationException(
+	    "Commit Information for the snapshot is required but has not been provided. \n * Provide the information "
+	    "with \"CALL ducklake.set_commit_message('author_name', 'commit_message'); \n * Set the required commit "
+	    "message to false with \"CALL ducklake.set_option('require_commit_message', False)\" '\"");
+}
+
 DuckLakeCatalog::DuckLakeCatalog(AttachedDatabase &db_p, DuckLakeOptions options_p)
     : Catalog(db_p), options(std::move(options_p)), last_uncommitted_catalog_version(TRANSACTION_ID_START),
       instance_id(UUID::ToString(UUID::GenerateRandomUUID())) {
@@ -650,28 +660,7 @@ unique_ptr<DuckLakeStats> DuckLakeCatalog::ConstructStatsMap(vector<DuckLakeGlob
 				// column that this field id references was deleted
 				continue;
 			}
-			DuckLakeColumnStats column_stats(field->Type());
-			column_stats.has_null_count = col_stats.has_contains_null;
-			if (column_stats.has_null_count) {
-				column_stats.null_count = col_stats.contains_null ? 1 : 0;
-			}
-			column_stats.has_contains_nan = col_stats.has_contains_nan;
-			if (column_stats.has_contains_nan) {
-				column_stats.contains_nan = col_stats.contains_nan;
-			}
-			column_stats.has_min = col_stats.has_min;
-			if (column_stats.has_min) {
-				column_stats.min = col_stats.min_val;
-			}
-			column_stats.has_max = col_stats.has_max;
-			if (column_stats.has_max) {
-				column_stats.max = col_stats.max_val;
-			}
-			if (col_stats.has_extra_stats && column_stats.extra_stats) {
-				// The extra_stats should already be allocated in the constructor
-				// if the logical type requires extra stats.
-				column_stats.extra_stats->Deserialize(col_stats.extra_stats);
-			}
+			auto column_stats = DuckLakeColumnStats::FromGlobalStats(field->Type(), col_stats);
 			table_stats->column_stats.insert(make_pair(col_stats.column_id, std::move(column_stats)));
 		}
 		lake_stats->table_stats.insert(make_pair(stats.table_id, std::move(table_stats)));
@@ -689,7 +678,7 @@ shared_ptr<DuckLakeTableStats> DuckLakeCatalog::GetTableStats(DuckLakeTransactio
 	auto key = StatsCacheKey(snapshot.next_file_id, table_id);
 	auto cached = cache.Get<DuckLakeTableStatsCacheEntry>(key);
 	if (cached) {
-		auto* raw = cached.get();
+		auto *raw = cached.get();
 		return shared_ptr<DuckLakeTableStats>(std::move(cached), &raw->stats);
 	}
 
@@ -711,7 +700,7 @@ shared_ptr<DuckLakeTableStats> DuckLakeCatalog::GetTableStats(DuckLakeTransactio
 
 	auto entry = make_shared_ptr<DuckLakeTableStatsCacheEntry>(std::move(*table_stats));
 	cache.Put(std::move(key), entry);
-	auto* raw = entry.get();
+	auto *raw = entry.get();
 	return shared_ptr<DuckLakeTableStats>(std::move(entry), &raw->stats);
 }
 
@@ -965,8 +954,8 @@ void DuckLakeCatalog::CacheInlinedDeletionTableResult(TableIndex table_id, DuckL
 }
 
 string DuckLakeCatalog::StatsCacheKey(idx_t next_file_id, TableIndex table_id) const {
-	return StringUtil::Format("ducklake:%s:%s:%s:stats:%llu:table:%llu",
-	                          GetName(), MetadataPath(), instance_id, next_file_id, table_id.index);
+	return StringUtil::Format("ducklake:%s:%s:%s:stats:%llu:table:%llu", GetName(), MetadataPath(), instance_id,
+	                          next_file_id, table_id.index);
 }
 
 string DuckLakeCatalog::SchemaCacheKey(idx_t schema_version) const {

@@ -64,6 +64,7 @@ void DuckLakeColumnVariantStats::Serialize(DuckLakeColumnStatsInfo &column_stats
 		    DuckLakeColumnStatsInfo::FromColumnStats(column_stats.column_id, entry.second.field_stats);
 		column_stats.variant_stats.push_back(std::move(shredded_stats));
 	}
+	TrySerialize(column_stats.extra_stats);
 }
 
 static DuckLakeVariantStats DeserializeShreddedStats(const LogicalType &shredded_type, duckdb_yyjson::yyjson_val *obj) {

@@ -4,6 +4,13 @@
 
 namespace duckdb {
 
+idx_t DuckLakeInlinedData::Count() const {
+	if (data) {
+		return data->Count();
+	}
+	return external_row_count;
+}
+
 bool DuckLakeInlinedData::HasPreservedRowIds() const {
 	return !row_ids.empty();
 }

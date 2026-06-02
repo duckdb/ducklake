@@ -3,6 +3,8 @@
 
 namespace duckdb {
 
+namespace {
+
 enum class ChangeType {
 	CREATED_TABLE,
 	CREATED_VIEW,
@@ -26,7 +28,7 @@ enum class ChangeType {
 	DROPPED_TABLE_MACRO
 };
 
-struct ChangeInfo {
+struct ParsedChange {
 	ChangeType change_type;
 	string change_value;
 };
@@ -101,8 +103,8 @@ string ParseChangeValue(const string &changes_made, idx_t &pos) {
 	return changes_made.substr(start_pos, pos - start_pos);
 }
 
-ChangeInfo ParseChangeEntry(const string &changes_made, idx_t &pos) {
-	ChangeInfo info;
+ParsedChange ParseChangeEntry(const string &changes_made, idx_t &pos) {
+	ParsedChange info;
 	info.change_type = ParseChangeType(changes_made, pos);
 	if (pos >= changes_made.size() || changes_made[pos] != ':') {
 		throw InvalidInputException("Expected a colon after the change type");
@@ -112,8 +114,8 @@ ChangeInfo ParseChangeEntry(const string &changes_made, idx_t &pos) {
 	return info;
 }
 
-vector<ChangeInfo> ParseChangesList(const string &changes_made) {
-	vector<ChangeInfo> result;
+vector<ParsedChange> ParseChangesList(const string &changes_made) {
+	vector<ParsedChange> result;
 	idx_t pos = 0;
 	while (pos < changes_made.size()) {
 		result.push_back(ParseChangeEntry(changes_made, pos));
@@ -127,6 +129,8 @@ vector<ChangeInfo> ParseChangesList(const string &changes_made) {
 	}
 	return result;
 }
+
+} // namespace
 
 SnapshotChangeInformation SnapshotChangeInformation::ParseChangesMade(const string &changes_made) {
 	auto change_list = ParseChangesList(changes_made);

@@ -27,6 +27,7 @@ class ColumnList;
 class DuckLakeFieldData;
 struct DuckLakeFileListEntry;
 struct DuckLakeConfigOption;
+struct DuckLakeSnapshotCommit;
 struct DeleteFileMap;
 class LogicalGet;
 
@@ -194,6 +195,8 @@ public:
 		return require == "true";
 	}
 
+	void EnsureCommitInfoProvided(const DuckLakeSnapshotCommit &commit_info) const;
+
 	bool UseHiveFilePattern(bool default_value, SchemaIndex schema_id, TableIndex table_id) const {
 		auto hive_file_pattern =
 		    GetConfigOption<string>("hive_file_pattern", schema_id, table_id, default_value ? "true" : "false");
@@ -220,6 +223,14 @@ public:
 	void SetCommittedSnapshotId(idx_t value) {
 		lock_guard<mutex> guard(commit_lock);
 		last_committed_snapshot = value;
+	}
+
+	//! Whether the metadata server can execute the commit retry loop server-side.
+	bool RetrialsServerSide() const {
+		return retrials_server_side;
+	}
+	void SetRetrialsServerSide(bool value) {
+		retrials_server_side = value;
 	}
 
 	Value GetLastCommittedSnapshotId() const {
@@ -292,6 +303,8 @@ private:
 	string instance_id;
 	//! Whether or not the catalog is initialized
 	bool initialized = false;
+	//! Whether or not the metadata server can execute the commit retry loop server-side.
+	bool retrials_server_side = false;
 	//! Cache for inlined deletion table existence checks
 	mutex inlined_deletion_cache_lock;
 	//! Table IDs where the inlined deletion table is known to exist (permanent - never invalidated)
