@@ -112,6 +112,7 @@
         "test/sql/logging/logging_types.test",
         "test/sql/logging/logging.test",
         "test/sql/logging/logging_csv.test",
+        "test/sql/logging/logging_buffer_size.test",
         "test/sql/storage/compression/roaring/roaring_bool_analyze_bitset.test",
         "test/sql/storage/compression/roaring/roaring_bool_analyze_run.test",
         "test/sql/storage/compression/roaring/roaring_bool_analyze_array.test",
@@ -148,7 +149,23 @@
         "test/optimizer/row_number_virtual_column.test",
         "test/sql/window/test_streaming_window.test",
         "test/sql/transactions/test_cardinality_estimation_uncommitted.test",
-        "test/sql/filter/test_struct_pushdown.test"
+        "test/sql/filter/test_struct_pushdown.test",
+        "test/optimizer/compressed_materialization_grouping_sets.test",
+        "test/optimizer/joins/fkpk_composite_key_ce.test"
+      ]
+    },
+    {
+      "reason": "Locks DuckDB configuration (lock_configuration / allowed_configs), which prevents the DuckLake metadata catalog from operating and aborts its transaction. These tests exercise core config-locking, not DuckLake.",
+      "paths": [
+        "test/sql/settings/allowed_configs.test",
+        "test/sql/settings/lock_configuration_schema.test",
+        "test/sql/settings/test_lock_configuration.test"
+      ]
+    },
+    {
+      "reason": "Uses VACUUM for stats setup; DuckLake does not implement VACUUM, so the subsequent join-filter plan check cannot run.",
+      "paths": [
+        "test/optimizer/joins/join_filter_build_side.test"
       ]
     },
     {
@@ -299,7 +316,19 @@
         "test/sql/storage/buffer_manager_temp_dir.test",
         "test/issues/internal/test_5457.test",
         "test/sql/copy/csv/code_cov/csv_disk_reload.test",
-        "test/sql/table_function/duckdb_eviction_queues.test"
+        "test/sql/table_function/duckdb_eviction_queues.test",
+        "test/sql/storage/temp_directory/test_default_temp_directory.test"
+      ]
+    },
+    {
+      "reason": "Tests DuckDB native-storage internals (load vX / pragma_storage_info: segment allocation, column metadata reuse, on-disk string stats). DuckLake stores data in Parquet, so native segment layout and stats have no equivalent.",
+      "paths": [
+        "test/sql/storage/adaptive_segment_allocation.test",
+        "test/sql/storage/pragma_storage_info_scan_type.test",
+        "test/sql/storage/metadata/partial_column_metadata_reuse.test",
+        "test/sql/storage/metadata/partial_column_metadata_reuse_v7.test",
+        "test/sql/storage/extended_string_stats.test",
+        "test/sql/storage/total_string_length_repeated_insert.test"
       ]
     },
     {

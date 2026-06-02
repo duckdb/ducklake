@@ -1127,6 +1127,9 @@ string DuckLakeMetadataManager::GenerateConstantFilter(ExpressionType comparison
                                                        const LogicalType &type,
                                                        unordered_set<string> &referenced_stats) {
 	auto constant_str = CastValueToTarget(constant, type);
+	if (constant_str.find('\0') != string::npos) {
+		return string();
+	}
 	auto min_value = CastStatsToTarget("min_value", type);
 	auto max_value = CastStatsToTarget("max_value", type);
 	switch (comparison_type) {
