@@ -104,7 +104,7 @@ const SelectStatement &DuckLakeViewEntry::GetQuery() {
 	return *query;
 }
 
-string DuckLakeViewEntry::GetQuerySQL() {
+string DuckLakeViewEntry::GetQuerySQL() const {
 	return query_sql;
 }
 

@@ -55,12 +55,21 @@ public:
 	optional_ptr<DuckLakePartition> GetPartitionData() {
 		return partition_data.get();
 	}
+	optional_ptr<const DuckLakePartition> GetPartitionData() const {
+		return partition_data.get();
+	}
 	//! Returns SQL expressions for each partition field (e.g., "region", "year(ts)")
 	vector<string> GetPartitionSQLExpressions() const;
 	optional_ptr<DuckLakeSort> GetSortData() {
 		return sort_data.get();
 	}
+	optional_ptr<const DuckLakeSort> GetSortData() const {
+		return sort_data.get();
+	}
 	DuckLakeFieldData &GetFieldData() {
+		return *field_data;
+	}
+	const DuckLakeFieldData &GetFieldData() const {
 		return *field_data;
 	}
 	const ColumnChangeInfo &GetChangedFields() const {

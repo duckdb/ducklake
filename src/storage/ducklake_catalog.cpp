@@ -33,6 +33,126 @@
 
 namespace duckdb {
 
+namespace {
+
+idx_t EstimateStringMemory(const string &value) {
+	return sizeof(string) + value.length();
+}
+
+idx_t EstimateFieldIdCount(const DuckLakeFieldId &field_id) {
+	idx_t count = 1;
+	for (const auto &child : field_id.Children()) {
+		count += EstimateFieldIdCount(*child);
+	}
+	return count;
+}
+
+idx_t EstimateTagMemory(const CatalogEntry &entry) {
+	idx_t estimate = 0;
+	for (auto &tag : entry.tags) {
+		estimate += EstimateStringMemory(tag.first);
+		estimate += EstimateStringMemory(tag.second);
+	}
+	return estimate;
+}
+
+idx_t EstimateTableEntryMemory(const DuckLakeTableEntry &table) {
+	idx_t estimate = sizeof(DuckLakeTableEntry);
+	estimate += table.GetTableUUID().size();
+	estimate += table.DataPath().size();
+
+	estimate += EstimateTagMemory(table);
+	estimate += table.GetColumns().LogicalColumnCount() * sizeof(ColumnDefinition);
+	for (const auto &column : table.GetColumns().Logical()) {
+		estimate += EstimateStringMemory(column.Name());
+	}
+	estimate += table.GetConstraints().size() * sizeof(Constraint);
+	for (const auto &field_id : table.GetFieldData().GetFieldIds()) {
+		estimate += EstimateFieldIdCount(*field_id) * sizeof(DuckLakeFieldId);
+	}
+	estimate += table.GetInlinedDataTables().size() * sizeof(DuckLakeInlinedTableInfo);
+	for (const auto &inlined_table : table.GetInlinedDataTables()) {
+		estimate += EstimateStringMemory(inlined_table.table_name);
+	}
+	auto partition = table.GetPartitionData();
+	if (partition) {
+		estimate += sizeof(DuckLakePartition) + partition->fields.size() * sizeof(DuckLakePartitionField);
+	}
+	auto sort = table.GetSortData();
+	if (sort) {
+		estimate += sizeof(DuckLakeSort) + sort->fields.size() * sizeof(DuckLakeSortField);
+		for (const auto &field : sort->fields) {
+			estimate += EstimateStringMemory(field.expression);
+			estimate += EstimateStringMemory(field.dialect);
+		}
+	}
+	return estimate;
+}
+
+idx_t EstimateViewEntryMemory(const DuckLakeViewEntry &view) {
+	idx_t estimate = sizeof(DuckLakeViewEntry);
+	estimate += view.GetViewUUID().size();
+	estimate += view.GetQuerySQL().size();
+
+	estimate += EstimateTagMemory(view);
+	estimate += view.aliases.size() * sizeof(string);
+	for (const auto &alias : view.aliases) {
+		estimate += EstimateStringMemory(alias);
+	}
+	return estimate;
+}
+
+idx_t EstimateMacroEntryMemory(const MacroCatalogEntry &macro_entry) {
+	idx_t estimate = EstimateTagMemory(macro_entry);
+	estimate += macro_entry.macros.size() * sizeof(MacroFunction);
+	for (const auto &macro : macro_entry.macros) {
+		estimate += macro->ToSQL().size();
+		estimate += macro->parameters.size() * sizeof(ParsedExpression);
+		estimate += macro->types.size() * sizeof(LogicalType);
+	}
+	return estimate;
+}
+
+idx_t EstimateCatalogEntryMemory(const CatalogEntry &entry) {
+	switch (entry.type) {
+	case CatalogType::SCHEMA_ENTRY: {
+		return EstimateTagMemory(entry);
+	}
+	case CatalogType::TABLE_ENTRY:
+		return EstimateTableEntryMemory(entry.Cast<DuckLakeTableEntry>());
+	case CatalogType::VIEW_ENTRY:
+		return EstimateViewEntryMemory(entry.Cast<DuckLakeViewEntry>());
+	case CatalogType::MACRO_ENTRY:
+	case CatalogType::TABLE_MACRO_ENTRY:
+		return EstimateMacroEntryMemory(entry.Cast<MacroCatalogEntry>());
+	default:
+		return EstimateTagMemory(entry);
+	}
+}
+
+idx_t EstimateCatalogSetMemory(const DuckLakeCatalogSet &catalog_set) {
+	idx_t estimate = sizeof(DuckLakeCatalogSet);
+	estimate += catalog_set.GetEntries().size() * (sizeof(string) + sizeof(unique_ptr<CatalogEntry>));
+	estimate += catalog_set.TotalEntryCount() * (sizeof(idx_t) + sizeof(reference<CatalogEntry>));
+	for (auto &entry : catalog_set.GetEntries()) {
+		const auto &catalog_entry = *entry.second;
+		estimate += EstimateCatalogEntryMemory(catalog_entry);
+		if (catalog_entry.type != CatalogType::SCHEMA_ENTRY) {
+			continue;
+		}
+		const auto &schema = catalog_entry.Cast<DuckLakeSchemaEntry>();
+		schema.Scan(CatalogType::TABLE_ENTRY,
+		            [&](const CatalogEntry &child_entry) { estimate += EstimateCatalogEntryMemory(child_entry); });
+		schema.Scan(CatalogType::MACRO_ENTRY,
+		            [&](const CatalogEntry &child_entry) { estimate += EstimateCatalogEntryMemory(child_entry); });
+		schema.Scan(CatalogType::TABLE_MACRO_ENTRY,
+		            [&](const CatalogEntry &child_entry) { estimate += EstimateCatalogEntryMemory(child_entry); });
+	}
+	return estimate;
+}
+
+} // namespace
+
 optional_idx DuckLakeTableStatsCacheEntry::GetEstimatedCacheMemory() const {
 	idx_t estimate = sizeof(DuckLakeTableStats);
 	estimate += stats.column_stats.size() * ESTIMATED_BYTES_PER_COLUMN_STATS;
@@ -40,9 +160,7 @@ optional_idx DuckLakeTableStatsCacheEntry::GetEstimatedCacheMemory() const {
 }
 
 optional_idx DuckLakeSchemaCacheEntry::GetEstimatedCacheMemory() const {
-	idx_t estimate = sizeof(DuckLakeCatalogSet);
-	estimate += catalog_set.TotalEntryCount() * ESTIMATED_BYTES_PER_ENTRY;
-	return estimate;
+	return EstimateCatalogSetMemory(catalog_set);
 }
 
 void DuckLakeSchemaPinState::QueryEnd(ClientContext &context) {

@@ -314,6 +314,13 @@ void DuckLakeSchemaEntry::Scan(CatalogType type, const std::function<void(Catalo
 	}
 }
 
+void DuckLakeSchemaEntry::Scan(CatalogType type, const std::function<void(const CatalogEntry &)> &callback) const {
+	auto &catalog_set = GetCatalogSet(type);
+	for (auto &entry : catalog_set.GetEntries()) {
+		callback(*entry.second);
+	}
+}
+
 void DuckLakeSchemaEntry::DropEntry(ClientContext &context, DropInfo &info) {
 	if (info.cascade) {
 		throw NotImplementedException("Cascade Drop not supported in DuckLake");
@@ -543,6 +550,22 @@ void DuckLakeSchemaEntry::TryDropSchema(DuckLakeTransaction &transaction, bool c
 }
 
 DuckLakeCatalogSet &DuckLakeSchemaEntry::GetCatalogSet(CatalogType type) {
+	switch (type) {
+	case CatalogType::TABLE_ENTRY:
+	case CatalogType::VIEW_ENTRY:
+		return tables;
+	case CatalogType::MACRO_ENTRY:
+	case CatalogType::SCALAR_FUNCTION_ENTRY:
+		return scalar_macros;
+	case CatalogType::TABLE_FUNCTION_ENTRY:
+	case CatalogType::TABLE_MACRO_ENTRY:
+		return table_macros;
+	default:
+		throw NotImplementedException("Unsupported catalog type %s for DuckLake", CatalogTypeToString(type));
+	}
+}
+
+const DuckLakeCatalogSet &DuckLakeSchemaEntry::GetCatalogSet(CatalogType type) const {
 	switch (type) {
 	case CatalogType::TABLE_ENTRY:
 	case CatalogType::VIEW_ENTRY:
