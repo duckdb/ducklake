@@ -1,6 +1,7 @@
 #include "storage/ducklake_transaction_state.hpp"
 
 #include "common/ducklake_types.hpp"
+#include "common/ducklake_util.hpp"
 #include "duckdb/catalog/catalog_entry/macro_catalog_entry.hpp"
 #include "duckdb/function/scalar_macro_function.hpp"
 #include "duckdb/function/table_macro_function.hpp"
@@ -324,41 +325,41 @@ string DuckLakeTransactionState::WriteSnapshotChanges(DuckLakeCommitState &commi
 			change_info.changes_made += ",";
 		}
 		change_info.changes_made += "created_schema:";
-		change_info.changes_made += KeywordHelper::WriteQuoted(created_schema, '"');
+		change_info.changes_made += DuckLakeUtil::SQLIdentifierToString(created_schema);
 	}
 	for (auto &entry : changes.created_tables) {
 		auto &schema = entry.first;
-		auto schema_prefix = KeywordHelper::WriteQuoted(schema, '"') + ".";
+		auto schema_prefix = DuckLakeUtil::SQLIdentifierToString(schema) + ".";
 		for (auto &created_table : entry.second) {
 			if (!change_info.changes_made.empty()) {
 				change_info.changes_made += ",";
 			}
 			auto is_view = created_table.get().type == CatalogType::VIEW_ENTRY;
 			change_info.changes_made += is_view ? "created_view:" : "created_table:";
-			change_info.changes_made += schema_prefix + KeywordHelper::WriteQuoted(created_table.get().name, '"');
+			change_info.changes_made += schema_prefix + DuckLakeUtil::SQLIdentifierToString(created_table.get().name);
 		}
 	}
 
 	for (auto &entry : changes.created_scalar_macros) {
 		auto &schema = entry.first;
-		auto schema_prefix = KeywordHelper::WriteQuoted(schema, '"') + ".";
+		auto schema_prefix = DuckLakeUtil::SQLIdentifierToString(schema) + ".";
 		for (auto &created_macro : entry.second) {
 			if (!change_info.changes_made.empty()) {
 				change_info.changes_made += ",";
 			}
 			change_info.changes_made += "created_scalar_macro:";
-			change_info.changes_made += schema_prefix + KeywordHelper::WriteQuoted(created_macro.get().name, '"');
+			change_info.changes_made += schema_prefix + DuckLakeUtil::SQLIdentifierToString(created_macro.get().name);
 		}
 	}
 	for (auto &entry : changes.created_table_macros) {
 		auto &schema = entry.first;
-		auto schema_prefix = KeywordHelper::WriteQuoted(schema, '"') + ".";
+		auto schema_prefix = DuckLakeUtil::SQLIdentifierToString(schema) + ".";
 		for (auto &created_macro : entry.second) {
 			if (!change_info.changes_made.empty()) {
 				change_info.changes_made += ",";
 			}
 			change_info.changes_made += "created_table_macro:";
-			change_info.changes_made += schema_prefix + KeywordHelper::WriteQuoted(created_macro.get().name, '"');
+			change_info.changes_made += schema_prefix + DuckLakeUtil::SQLIdentifierToString(created_macro.get().name);
 		}
 	}
 
@@ -1505,7 +1506,9 @@ void DuckLakeTransactionState::Commit(DuckLakeSnapshot transaction_snapshot,
 			// rollback if there is an active transaction
 			context.try_rollback();
 			bool retry_on_error = DuckLakeTransaction::RetryOnError(error.Message());
-			bool finished_retrying = i + 1 >= retry_config.max_retry_count;
+			// We perform one initial attempt plus up to max_retry_count retries. Since i is the
+			// zero-based attempt index, we are done retrying once i reaches max_retry_count.
+			bool finished_retrying = i >= retry_config.max_retry_count;
 			if (!can_retry || !retry_on_error || finished_retrying) {
 				// we abort after the max retry count
 				CleanupFiles();

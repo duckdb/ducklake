@@ -971,12 +971,16 @@ vector<DuckLakeGlobalStatsInfo> TransformGlobalStats(QueryResult &result) {
 }
 
 string DuckLakeMetadataManager::GlobalTableStatsQuery() {
+	// Pure all-tables template (only {METADATA_CATALOG} is substituted by the caller; it is NOT run
+	// through StringUtil::Format). It must NOT contain a printf placeholder such as `WHERE table_id =
+	// %llu` - the server-side commit path (DuckLakeServerSideCommit::ReadExistingTableStats) executes
+	// the returned SQL verbatim, so a stray %llu would reach the parser and fail every server-side
+	// commit. The single-table GetGlobalTableStats() below keeps its own StringUtil::Format query.
 	return R"(
 SELECT table_id, column_id, record_count, next_row_id, file_size_bytes, contains_null, contains_nan, min_value, max_value, extra_stats
 FROM {METADATA_CATALOG}.ducklake_table_stats
 LEFT JOIN {METADATA_CATALOG}.ducklake_table_column_stats USING (table_id)
-WHERE table_id = %llu
-  AND record_count IS NOT NULL 
+WHERE record_count IS NOT NULL
   AND file_size_bytes IS NOT NULL
 ORDER BY table_id;
 )";
