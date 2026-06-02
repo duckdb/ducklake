@@ -4240,19 +4240,19 @@ struct ColumnStatsSQL {
 };
 
 string DuckLakeMetadataManager::UpdateGlobalTableStats(const DuckLakeGlobalStatsInfo &stats) {
-	string column_stats_values;
-	for (auto &col_stats : stats.column_stats) {
-		if (!column_stats_values.empty()) {
-			column_stats_values += ",";
-		}
-		auto sql = ColumnStatsSQL::FromColumnStats(col_stats);
-		column_stats_values +=
-		    StringUtil::Format("(%d, %d, %s, %s, %s, %s, %s)", stats.table_id.index, col_stats.column_id.index,
-		                       sql.contains_null, sql.contains_nan, sql.min_val, sql.max_val, sql.extra_stats);
-	}
 	string batch_query;
 
 	if (!stats.initialized) {
+		string column_stats_values;
+		for (auto &col_stats : stats.column_stats) {
+			if (!column_stats_values.empty()) {
+				column_stats_values += ",";
+			}
+			auto sql = ColumnStatsSQL::FromColumnStats(col_stats);
+			column_stats_values +=
+			    StringUtil::Format("(%d, %d, %s, %s, %s, %s, %s)", stats.table_id.index, col_stats.column_id.index,
+			                       sql.contains_null, sql.contains_nan, sql.min_val, sql.max_val, sql.extra_stats);
+		}
 		batch_query +=
 		    StringUtil::Format("INSERT INTO {METADATA_CATALOG}.ducklake_table_stats VALUES (%d, %d, %d, %d);",
 		                       stats.table_id.index, stats.record_count, stats.next_row_id, stats.table_size_bytes);
@@ -4264,21 +4264,26 @@ string DuckLakeMetadataManager::UpdateGlobalTableStats(const DuckLakeGlobalStats
 		    "UPDATE {METADATA_CATALOG}.ducklake_table_stats SET record_count=%d, file_size_bytes=%d, "
 		    "next_row_id=%d WHERE table_id=%d;",
 		    stats.record_count, stats.table_size_bytes, stats.next_row_id, stats.table_id.index);
+		// Emit one plain UPDATE per column rather than a single
+		// `UPDATE ... FROM (VALUES ...)`. A DuckDB-backed metadata catalog
+		// corrupts string payloads when an UPDATE pulls its new values from a
+		// multi-row VALUES list whose VARCHAR column mixes NULLs with long
+		// (heap-allocated) strings - exactly the shape produced by geometry
+		// (and other) extra_stats. Per-column UPDATEs sidestep that bug and
+		// work uniformly across DuckDB, Postgres and SQLite backends.
 		// Use ANSI CAST(... AS BOOLEAN) instead of the PostgreSQL-flavored
-		// `::boolean` operator. Both DuckDB and Postgres accept ANSI CAST,
+		// `::boolean` operator: both DuckDB and Postgres accept ANSI CAST,
 		// and SQLite's parser rejects `::` outright (SQLITE_ERROR:
-		// unrecognized token ":"), which breaks SQLite-backed metadata
-		// backends that ship this batch directly to SQLite.
-		batch_query += StringUtil::Format(R"(
-WITH new_values(tid, cid, new_contains_null, new_contains_nan, new_min, new_max, new_extra_stats) AS (
-VALUES %s
-)
-UPDATE {METADATA_CATALOG}.ducklake_table_column_stats
-SET contains_null=CAST(new_contains_null AS BOOLEAN), contains_nan=CAST(new_contains_nan AS BOOLEAN), min_value=new_min, max_value=new_max, extra_stats=new_extra_stats
-FROM new_values
-WHERE table_id=tid AND column_id=cid;
-)",
-		                                  column_stats_values);
+		// unrecognized token ":").
+		for (auto &col_stats : stats.column_stats) {
+			auto sql = ColumnStatsSQL::FromColumnStats(col_stats);
+			batch_query += StringUtil::Format(
+			    "UPDATE {METADATA_CATALOG}.ducklake_table_column_stats "
+			    "SET contains_null=CAST(%s AS BOOLEAN), contains_nan=CAST(%s AS BOOLEAN), min_value=%s, max_value=%s, "
+			    "extra_stats=%s WHERE table_id=%d AND column_id=%d;",
+			    sql.contains_null, sql.contains_nan, sql.min_val, sql.max_val, sql.extra_stats, stats.table_id.index,
+			    col_stats.column_id.index);
+		}
 	}
 	return batch_query;
 }

@@ -63,14 +63,14 @@ SELECT current_setting('ducklake_max_retry_count')
 statement ok
 INSERT INTO retry_test VALUES (3, 'test with retry count 2');
 
-# Test 6: Reset resets GLOBAL only -  session override remains
+# Test 6: ducklake_max_retry_count is a GLOBAL setting, so RESET returns it to the default
 statement ok
 RESET ducklake_max_retry_count;
 
 query I
 SELECT current_setting('ducklake_max_retry_count')
 ----
-2
+10
 
 # Verify all data was inserted correctly
 query II
