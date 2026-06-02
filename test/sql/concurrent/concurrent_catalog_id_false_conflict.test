@@ -8,12 +8,12 @@ require ducklake
 
 require parquet
 
-test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
 
-test-env DATA_PATH __TEST_DIR__
+test-env DATA_PATH {TEST_DIR}
 
 statement ok con1
-ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '${DATA_PATH}/ducklake_catalog_id_repro')
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/ducklake_catalog_id_repro')
 
 statement ok con1
 CREATE TABLE dl.seed AS SELECT 1 AS x

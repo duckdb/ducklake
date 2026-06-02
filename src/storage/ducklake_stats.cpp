@@ -231,16 +231,16 @@ unique_ptr<BaseStatistics> DuckLakeColumnStats::CreateGeometryStats() const {
 unique_ptr<BaseStatistics> DuckLakeColumnStats::CreateStringStats() const {
 	auto stats = StringStats::CreateEmpty(type);
 	if (has_min && has_max) {
-		StringStats::Update(stats, string_t(max));
-		StringStats::Update(stats, string_t(min));
+		StringStats::MergeInConstant(stats, string_t(max));
+		StringStats::MergeInConstant(stats, string_t(min));
 		StringStats::ResetMaxStringLength(stats);
 		StringStats::SetContainsUnicode(stats);
 	} else if (has_min) {
 		stats = StringStats::CreateUnknown(type);
-		StringStats::SetMin(stats, string_t(min));
+		StringStats::SetMin(stats, string_t(min), StringStatsType::TRUNCATED_STATS);
 	} else if (has_max) {
 		stats = StringStats::CreateUnknown(type);
-		StringStats::SetMax(stats, string_t(max));
+		StringStats::SetMax(stats, string_t(max), StringStatsType::TRUNCATED_STATS);
 	} else {
 		// No min/max stats available - use unknown stats to avoid
 		// false claims about max_string_length (CreateEmpty sets it to 0)

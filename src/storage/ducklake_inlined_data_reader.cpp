@@ -277,7 +277,7 @@ AsyncResult DuckLakeInlinedDataReader::Scan(ClientContext &context, GlobalTableF
 				auto &vec = chunk.data[column_id];
 
 				UnifiedVectorFormat vdata;
-				vec.ToUnifiedFormat(chunk.size(), vdata);
+				vec.ToUnifiedFormat(vdata);
 
 				auto filter_state = TableFilterState::Initialize(context, filter);
 

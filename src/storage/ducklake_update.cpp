@@ -119,8 +119,8 @@ OperatorResultType DuckLakeUpdate::Execute(ExecutionContext &context, DataChunk 
 	auto &row_number_vec = input.data[delete_idx_start + 2];
 
 	UnifiedVectorFormat file_index_data, row_number_data;
-	file_index_vec.ToUnifiedFormat(input.size(), file_index_data);
-	row_number_vec.ToUnifiedFormat(input.size(), row_number_data);
+	file_index_vec.ToUnifiedFormat(file_index_data);
+	row_number_vec.ToUnifiedFormat(row_number_data);
 	auto file_indices = UnifiedVectorFormat::GetData<uint64_t>(file_index_data);
 	auto row_numbers = UnifiedVectorFormat::GetData<int64_t>(row_number_data);
 

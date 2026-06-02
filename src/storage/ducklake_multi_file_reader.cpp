@@ -640,11 +640,11 @@ void DuckLakeMultiFileReader::GatherDeletionScanSnapshots(BaseFileReader &reader
 	auto &snapshot_vector = chunk.data[snapshot_col_idx.GetIndex()];
 
 	idx_t count = chunk.size();
-	snapshot_vector.Flatten(count);
+	snapshot_vector.Flatten();
 	auto snapshot_data = FlatVector::GetDataMutable<int64_t>(snapshot_vector);
 
 	UnifiedVectorFormat row_id_data;
-	rowid_vector.ToUnifiedFormat(count, row_id_data);
+	rowid_vector.ToUnifiedFormat(row_id_data);
 	auto row_id_ptr = UnifiedVectorFormat::GetData<int64_t>(row_id_data);
 
 	// Look up the snapshot_id for each row

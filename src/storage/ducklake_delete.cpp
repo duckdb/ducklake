@@ -301,14 +301,14 @@ SinkResultType DuckLakeDelete::Sink(ExecutionContext &context, DataChunk &chunk,
 	auto &file_row_number = chunk.data[row_id_indexes[2]];
 
 	UnifiedVectorFormat row_data;
-	file_row_number.ToUnifiedFormat(chunk.size(), row_data);
+	file_row_number.ToUnifiedFormat(row_data);
 	auto file_row_data = UnifiedVectorFormat::GetData<int64_t>(row_data);
 
 	UnifiedVectorFormat file_name_vdata;
-	file_name_vector.ToUnifiedFormat(chunk.size(), file_name_vdata);
+	file_name_vector.ToUnifiedFormat(file_name_vdata);
 
 	UnifiedVectorFormat file_index_vdata;
-	file_index_vector.ToUnifiedFormat(chunk.size(), file_index_vdata);
+	file_index_vector.ToUnifiedFormat(file_index_vdata);
 
 	auto file_index_data = UnifiedVectorFormat::GetData<uint64_t>(file_index_vdata);
 	for (idx_t i = 0; i < chunk.size(); i++) {

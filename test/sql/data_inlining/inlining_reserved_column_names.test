@@ -7,7 +7,7 @@ require ducklake
 require parquet
 
 statement ok
-ATTACH 'ducklake:__TEST_DIR__/ducklake_reserved_cols.db' AS ducklake (DATA_PATH '__TEST_DIR__/ducklake_reserved_cols_files')
+ATTACH 'ducklake:{TEST_DIR}/ducklake_reserved_cols.db' AS ducklake (DATA_PATH '{TEST_DIR}/ducklake_reserved_cols_files')
 
 statement error
 CREATE TABLE ducklake.t1(row_id INTEGER, v INTEGER);
@@ -82,7 +82,7 @@ CALL ducklake.set_option('data_inlining_row_limit', 10);
 
 # count existing files (t1 has data files since inlining was disabled for it)
 query I
-SELECT COUNT(*) AS baseline FROM GLOB('__TEST_DIR__/ducklake_reserved_cols_files/**')
+SELECT COUNT(*) AS baseline FROM GLOB('{TEST_DIR}/ducklake_reserved_cols_files/**')
 ----
 1
 
@@ -95,7 +95,7 @@ INSERT INTO ducklake.t2 VALUES (1, 2), (3, 4);
 
 # t2 data should be inlined - no new files created
 query I
-SELECT COUNT(*) FROM GLOB('__TEST_DIR__/ducklake_reserved_cols_files/**')
+SELECT COUNT(*) FROM GLOB('{TEST_DIR}/ducklake_reserved_cols_files/**')
 ----
 1
 
@@ -121,7 +121,7 @@ DETACH ducklake
 
 # test per-table inlining disable: global inlining on, table inlining off
 statement ok
-ATTACH 'ducklake:__TEST_DIR__/ducklake_reserved_cols2.db' AS ducklake (DATA_PATH '__TEST_DIR__/ducklake_reserved_cols2_files')
+ATTACH 'ducklake:{TEST_DIR}/ducklake_reserved_cols2.db' AS ducklake (DATA_PATH '{TEST_DIR}/ducklake_reserved_cols2_files')
 
 statement ok
 CREATE TABLE ducklake.t_normal(i INTEGER, j INTEGER);

@@ -7,7 +7,7 @@ require ducklake
 require parquet
 
 statement ok
-ATTACH 'ducklake:__TEST_DIR__/ducklake.db' AS ducklake (DATA_PATH '__TEST_DIR__/ducklake_files', METADATA_CATALOG 'ducklake_meta')
+ATTACH 'ducklake:{TEST_DIR}/ducklake.db' AS ducklake (DATA_PATH '{TEST_DIR}/ducklake_files', METADATA_CATALOG 'ducklake_meta')
 
 statement ok
 CREATE TABLE ducklake.ctas_table AS FROM range(10000)

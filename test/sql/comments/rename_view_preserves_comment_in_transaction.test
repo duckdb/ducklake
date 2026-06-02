@@ -6,10 +6,10 @@ require ducklake
 
 require parquet
 
-test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
 
 statement ok
-ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '__TEST_DIR__/rename_view_preserves_comment_in_transaction/')
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{TEST_DIR}/rename_view_preserves_comment_in_transaction/')
 
 statement ok
 USE dl

@@ -217,7 +217,7 @@ DeleteFileScanResult DuckLakeDeleteFilter::ScanDeleteFile(ClientContext &context
 		idx_t count = scan_chunk.size();
 
 		UnifiedVectorFormat pos_data;
-		scan_chunk.data[1].ToUnifiedFormat(count, pos_data);
+		scan_chunk.data[1].ToUnifiedFormat(pos_data);
 		auto row_ids = UnifiedVectorFormat::GetData<int64_t>(pos_data);
 
 		UnifiedVectorFormat snapshot_data;
@@ -237,7 +237,7 @@ DeleteFileScanResult DuckLakeDeleteFilter::ScanDeleteFile(ClientContext &context
 			last_delete = row_id;
 
 			if (has_snapshot_id) {
-				scan_chunk.data[2].ToUnifiedFormat(count, snapshot_data);
+				scan_chunk.data[2].ToUnifiedFormat(snapshot_data);
 				auto snapshot_ids = UnifiedVectorFormat::GetData<int64_t>(snapshot_data);
 				auto snap_idx = snapshot_data.sel->get_index(i);
 				if (!snapshot_data.validity.RowIsValid(snap_idx)) {
@@ -324,7 +324,7 @@ unordered_map<idx_t, idx_t> DuckLakeDeleteFilter::ScanDataFileRowIds(ClientConte
 
 		// Access the row_id column at its correct position
 		UnifiedVectorFormat row_id_data;
-		scan_chunk.data[row_id_col_idx.GetIndex()].ToUnifiedFormat(count, row_id_data);
+		scan_chunk.data[row_id_col_idx.GetIndex()].ToUnifiedFormat(row_id_data);
 		auto row_ids = UnifiedVectorFormat::GetData<int64_t>(row_id_data);
 
 		for (idx_t i = 0; i < count; i++) {

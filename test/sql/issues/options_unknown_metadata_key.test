@@ -7,7 +7,7 @@ require ducklake
 require parquet
 
 statement ok
-ATTACH 'ducklake:__TEST_DIR__/options_unknown_key.db' AS ducklake (DATA_PATH '__TEST_DIR__/options_unknown_key_files')
+ATTACH 'ducklake:{TEST_DIR}/options_unknown_key.db' AS ducklake (DATA_PATH '{TEST_DIR}/options_unknown_key_files')
 
 statement ok
 INSERT INTO __ducklake_metadata_ducklake.ducklake_metadata (key, value) VALUES ('mykey', 'myvalue'), ('another_unknown', 'v2')

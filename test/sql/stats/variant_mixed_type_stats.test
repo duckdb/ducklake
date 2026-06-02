@@ -7,7 +7,7 @@ require ducklake
 require parquet
 
 statement ok
-ATTACH 'ducklake:__TEST_DIR__/ducklake_variant_mixed_type_stats.db' AS ducklake (DATA_PATH '__TEST_DIR__/ducklake_variant_mixed_type_stats_files', DATA_INLINING_ROW_LIMIT 0)
+ATTACH 'ducklake:{TEST_DIR}/ducklake_variant_mixed_type_stats.db' AS ducklake (DATA_PATH '{TEST_DIR}/ducklake_variant_mixed_type_stats_files', DATA_INLINING_ROW_LIMIT 0)
 
 # ----------------------------------------
 # Setup
@@ -165,6 +165,6 @@ statement ok
 DETACH ducklake
 
 statement ok
-ATTACH 'ducklake:__TEST_DIR__/ducklake_variant_mixed_type_stats.db' AS ducklake (DATA_PATH '__TEST_DIR__/ducklake_variant_mixed_type_stats_files', DATA_INLINING_ROW_LIMIT 0)
+ATTACH 'ducklake:{TEST_DIR}/ducklake_variant_mixed_type_stats.db' AS ducklake (DATA_PATH '{TEST_DIR}/ducklake_variant_mixed_type_stats_files', DATA_INLINING_ROW_LIMIT 0)
 
 endloop

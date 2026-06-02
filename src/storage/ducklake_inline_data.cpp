@@ -187,7 +187,7 @@ struct StatsFallbackOperator {
 template <class T, class OP>
 DuckLakeColumnStats TemplatedUpdateStats(Vector &input_vec, const LogicalType &type, idx_t row_count) {
 	UnifiedVectorFormat format;
-	input_vec.ToUnifiedFormat(row_count, format);
+	input_vec.ToUnifiedFormat(format);
 
 	auto data = UnifiedVectorFormat::GetData<T>(format);
 	auto &validity = format.validity;
@@ -228,7 +228,7 @@ DuckLakeColumnStats TemplatedUpdateStats(Vector &input_vec, const LogicalType &t
 template <class T>
 static bool VectorContainsNaN(Vector &input_vec, idx_t row_count) {
 	UnifiedVectorFormat fmt;
-	input_vec.ToUnifiedFormat(row_count, fmt);
+	input_vec.ToUnifiedFormat(fmt);
 	auto data = UnifiedVectorFormat::GetData<T>(fmt);
 	for (idx_t i = 0; i < row_count; i++) {
 		auto idx = fmt.sel->get_index(i);
@@ -378,7 +378,7 @@ OperatorFinalResultType DuckLakeInlineData::OperatorFinalize(Pipeline &pipeline,
 			// extract row_ids from the row_id column
 			auto &row_id_vec = chunk.data[physical_col_count];
 			UnifiedVectorFormat row_id_format;
-			row_id_vec.ToUnifiedFormat(chunk.size(), row_id_format);
+			row_id_vec.ToUnifiedFormat(row_id_format);
 			auto row_id_data = UnifiedVectorFormat::GetData<int64_t>(row_id_format);
 			for (idx_t r = 0; r < chunk.size(); r++) {
 				auto idx = row_id_format.sel->get_index(r);
