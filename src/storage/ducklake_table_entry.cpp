@@ -902,7 +902,7 @@ bool TypePromotionIsAllowed(const LogicalType &source, const LogicalType &target
 		return false;
 	}
 	LogicalType result;
-	if (!LogicalType::TryGetMaxLogicalTypeUnchecked(source, target, result)) {
+	if (!LogicalType::DefaultTryGetMaxLogicalTypeUnchecked(source, target, result)) {
 		return false;
 	}
 	return result == target;

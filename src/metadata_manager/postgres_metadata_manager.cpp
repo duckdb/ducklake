@@ -175,7 +175,11 @@ PostgresMetadataManager::TransformInlinedData(QueryResult &result, const vector<
 		for (idx_t i = 0; i < expected_types.size(); i++) {
 			reinterpret_chunk.data[i].Reinterpret(chunk->data[i]);
 		}
-		reinterpret_chunk.SetCardinality(chunk->size());
+		// Use SetChildCardinality (not SetCardinality): on current duckdb SetCardinality only updates the
+		// chunk count, while ColumnDataCollection::Append reads each vector via ToUnifiedFormat(), which
+		// relies on the vector's own size. SetChildCardinality also FlatVector::SetSize()s every vector, so
+		// the reinterpreted (BLOB->VARCHAR) vectors are sized to the row count and the rows are appended.
+		reinterpret_chunk.SetChildCardinality(chunk->size());
 		data->Append(reinterpret_chunk);
 	}
 	auto inlined_data = make_shared_ptr<DuckLakeInlinedData>();
