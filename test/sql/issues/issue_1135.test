@@ -1,0 +1,31 @@
+# name: test/sql/issues/issue_1135.test
+# description: Test that filter pushdown works correctly with columns added via ALTER TABLE ADD COLUMN with DEFAULT
+# group: [issues]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+
+test-env DATA_PATH __TEST_DIR__
+
+statement ok
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS duck (DATA_PATH '${DATA_PATH}/issue_1135')
+
+statement ok
+CREATE TABLE duck.tbl (a INT);
+
+statement ok
+INSERT INTO duck.tbl SELECT i FROM range(10) t(i);
+
+statement ok
+CALL ducklake_flush_inlined_data('duck')
+
+statement ok
+ALTER TABLE duck.tbl ADD COLUMN b INT DEFAULT 42;
+
+query I
+SELECT count(*) FROM duck.tbl WHERE b = 42;
+----
+10

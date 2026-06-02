@@ -30,17 +30,17 @@ struct DuckLakeConfigOption;
 struct DeleteFileMap;
 class LogicalGet;
 
-//! Cache entry for DuckLake table statistics
-struct DuckLakeStatsCacheEntry : public ObjectCacheEntry {
+//! Per-table stats cache entry, keyed by <next_file_id, table_id>.
+struct DuckLakeTableStatsCacheEntry : public ObjectCacheEntry {
 	static constexpr idx_t ESTIMATED_BYTES_PER_COLUMN_STATS = 256;
 
-	explicit DuckLakeStatsCacheEntry(unique_ptr<DuckLakeStats> stats_p) : stats(std::move(*stats_p)) {
+	explicit DuckLakeTableStatsCacheEntry(DuckLakeTableStats stats_p) : stats(std::move(stats_p)) {
 	}
 
-	DuckLakeStats stats;
+	DuckLakeTableStats stats;
 
 	static string ObjectType() {
-		return "ducklake_stats";
+		return "ducklake_table_stats";
 	}
 	string GetObjectType() override {
 		return ObjectType();
@@ -116,11 +116,16 @@ public:
 	idx_t DataInliningRowLimit(ClientContext &context, SchemaIndex schema_index, TableIndex table_index) const;
 	//! Returns the inlining limit (0 if the table is not eligible)
 	idx_t GetInliningLimit(ClientContext &context, DuckLakeTableEntry &table);
+	idx_t GetTargetFileSize(ClientContext &context, SchemaIndex schema_id, TableIndex table_id) const;
+	idx_t GetTargetFileSize(ClientContext &context, DuckLakeTableEntry &table) const;
 	string &Separator() {
 		return separator;
 	}
 	void SetConfigOption(const DuckLakeConfigOption &option);
 	bool TryGetConfigOption(const string &option, string &result, SchemaIndex schema_id, TableIndex table_id) const;
+	//! Check if a config option has a table-level or schema-level override (excluding global scope)
+	bool TryGetScopedConfigOption(const string &option, string &result, SchemaIndex schema_id,
+	                              TableIndex table_id) const;
 	template <class T>
 	T GetConfigOption(const string &option, SchemaIndex schema_id, TableIndex table_id, T default_value) const {
 		string value_str;
@@ -250,21 +255,19 @@ public:
 	//! Cache the result of an inlined deletion table existence check
 	void CacheInlinedDeletionTableResult(TableIndex table_id, DuckLakeSnapshot snapshot, bool exists);
 
+	//! Invalidate the cached schema entry for a given schema_version.
+	void InvalidateSchemaCache(idx_t schema_version);
+
 private:
 	void DropSchema(ClientContext &context, DropInfo &info) override;
 	unique_ptr<DuckLakeCatalogSet> LoadSchemaForSnapshot(DuckLakeTransaction &transaction, DuckLakeSnapshot snapshot);
 	//! Look up (or load) the ObjectCache entry for a given snapshot.
 	shared_ptr<DuckLakeSchemaCacheEntry> GetSchemaCacheEntry(DuckLakeTransaction &transaction,
 	                                                         DuckLakeSnapshot snapshot);
-	shared_ptr<DuckLakeStatsCacheEntry> GetStatsForSnapshot(DuckLakeTransaction &transaction,
-	                                                        DuckLakeSnapshot snapshot);
 	//! Pin a schema cache entry for the duration of the current query to ensure safe memory access.
 	void PinSchemaForQuery(DuckLakeTransaction &transaction, shared_ptr<DuckLakeSchemaCacheEntry> entry);
-	unique_ptr<DuckLakeStats> LoadStatsForSnapshot(DuckLakeTransaction &transaction, DuckLakeSnapshot snapshot,
-	                                               DuckLakeCatalogSet &schema);
 	void LoadNameMaps(DuckLakeTransaction &transaction);
-	//! Generate a cache key for the ObjectCache
-	string StatsCacheKey(idx_t next_file_id) const;
+	string StatsCacheKey(idx_t next_file_id, TableIndex table_id) const;
 	string SchemaCacheKey(idx_t schema_version) const;
 	string SchemaPinStateKey() const;
 	ObjectCache &GetObjectCacheInstance();

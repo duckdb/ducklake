@@ -154,7 +154,8 @@
     {
       "reason": "Profiling",
       "paths": [
-        "test/sql/pragma/profiling/test_custom_profiling_rows_scanned.test"
+        "test/sql/pragma/profiling/test_custom_profiling_rows_scanned.test",
+        "test/sql/pragma/profiling/test_custom_profiling_row_group_metrics_local_storage.test"
       ]
     },
     {
@@ -274,7 +275,8 @@
       "reason": "Secret Manager Instantiation",
       "paths": [
         "test/sql/secrets/create_secret_hffs_autoload.test",
-        "test/sql/secrets/create_secret_persistence_no_client_context.test"
+        "test/sql/secrets/create_secret_persistence_no_client_context.test",
+        "test/sql/settings/test_external_access_metadata.test"
       ]
     },
     {

@@ -1,0 +1,47 @@
+# name: test/sql/catalog/macro_special_characters.test
+# description: Test creating macros with special characters
+# group: [catalog]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+
+statement ok
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '__TEST_DIR__/macro_special_chars/')
+
+statement ok
+USE ducklake;
+
+# macro name with single quote
+statement ok
+CREATE MACRO "it's_a_macro"() AS 42;
+
+query I
+SELECT "it's_a_macro"();
+----
+42
+
+# macro body that produces a string with a single quote
+statement ok
+CREATE MACRO greet(name) AS 'hello ' || name || '''s world';
+
+query I
+SELECT greet('bob');
+----
+hello bob's world
+
+# macro with a default parameter containing a single quote
+statement ok
+CREATE MACRO greeting(who := 'it''s me') AS 'hi ' || who;
+
+query I
+SELECT greeting();
+----
+hi it's me
+
+query I
+SELECT greeting('y''all');
+----
+hi y'all

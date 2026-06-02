@@ -61,8 +61,9 @@ string DuckLakeInitializer::GetAttachOptions() {
 void DuckLakeInitializer::Initialize() {
 	auto &transaction = DuckLakeTransaction::Get(context, catalog);
 	// attach the metadata database
-	auto result = transaction.Query("ATTACH OR REPLACE {METADATA_PATH} AS {METADATA_CATALOG_NAME_IDENTIFIER}" +
-	                                GetAttachOptions());
+	const string attach_query =
+	    "ATTACH OR REPLACE {METADATA_PATH} AS {METADATA_CATALOG_NAME_IDENTIFIER}" + GetAttachOptions();
+	auto result = transaction.GetMetadataManager().AttachMetadata(attach_query);
 	if (result->HasError()) {
 		auto &error_obj = result->GetErrorObject();
 		error_obj.Throw("Failed to attach DuckLake MetaData \"" + catalog.MetadataDatabaseName() + "\" at path + \"" +
@@ -94,24 +95,19 @@ void DuckLakeInitializer::Initialize() {
 	// directly query a known ducklake metadata table to avoid scanning all attached catalogs via duckdb_tables()
 	// this prevents a corrupted ducklake catalog from blocking initialization of unrelated ducklake databases
 	// FIXME: verify that all ducklake tables are in the correct format
-	result = transaction.Query("SELECT NULL FROM {METADATA_CATALOG}.ducklake_metadata LIMIT 1");
-	if (result->HasError()) {
-		auto &error_obj = result->GetErrorObject();
-		if (error_obj.Type() == ExceptionType::CATALOG) {
-			// table does not exist - this is a new ducklake
-			if (!options.create_if_not_exists) {
-				throw InvalidInputException(
-				    "Existing DuckLake at metadata catalog \"%s\" does not exist - and creating a "
-				    "new DuckLake is explicitly disabled",
-				    options.metadata_path);
-			}
-			InitializeNewDuckLake(transaction, has_explicit_schema);
-		} else {
-			error_obj.Throw("Failed to load DuckLake table data");
-		}
-	} else {
+	if (transaction.GetMetadataManager().MetadataExists()) {
 		LoadExistingDuckLake(transaction);
+	} else {
+		if (!options.create_if_not_exists) {
+			throw InvalidInputException("Existing DuckLake at metadata catalog \"%s\" does not exist - and creating a "
+			                            "new DuckLake is explicitly disabled",
+			                            options.metadata_path);
+		}
+		InitializeNewDuckLake(transaction, has_explicit_schema);
 	}
+	// note: re-fetch the metadata manager here - InitializeNewDuckLake/LoadExistingDuckLake may have
+	// swapped it out via SetVersionedMetadataManager, so any reference held earlier would now dangle.
+	transaction.GetMetadataManager().ClearCache();
 	if (options.at_clause) {
 		// if the user specified a snapshot try to load it to trigger an error if it does not exist
 		transaction.GetSnapshot();

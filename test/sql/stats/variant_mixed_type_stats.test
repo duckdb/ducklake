@@ -1,0 +1,170 @@
+# name: test/sql/stats/variant_mixed_type_stats.test
+# description: test that variant stats are correct when merging files with different shredded types
+# group: [stats]
+
+require ducklake
+
+require parquet
+
+statement ok
+ATTACH 'ducklake:__TEST_DIR__/ducklake_variant_mixed_type_stats.db' AS ducklake (DATA_PATH '__TEST_DIR__/ducklake_variant_mixed_type_stats_files', DATA_INLINING_ROW_LIMIT 0)
+
+# ----------------------------------------
+# Setup
+# ----------------------------------------
+
+# primitives: INT then VARCHAR then INT
+statement ok
+CREATE TABLE ducklake.primitives(v VARIANT)
+
+statement ok
+INSERT INTO ducklake.primitives SELECT 42::VARIANT
+
+# single type: in-memory stats should show SHREDDED
+query I
+SELECT stats(v) FROM ducklake.primitives LIMIT 1
+----
+<REGEX>:.*SHREDDED.*INTEGER.*
+
+statement ok
+INSERT INTO ducklake.primitives SELECT 'hello'::VARIANT
+
+# type mismatch: in-memory stats should transition to INCONSISTENT
+query I
+SELECT stats(v) FROM ducklake.primitives LIMIT 1
+----
+<REGEX>:.*INCONSISTENT.*
+
+statement ok
+INSERT INTO ducklake.primitives SELECT 7::VARIANT
+
+# structs: field "a" same type, field "b" different types
+statement ok
+CREATE TABLE ducklake.structs(v VARIANT)
+
+statement ok
+INSERT INTO ducklake.structs SELECT {'a': 1, 'b': 'hello'}::VARIANT
+
+statement ok
+INSERT INTO ducklake.structs SELECT {'a': 5, 'b': 100}::VARIANT
+
+# structs: completely disjoint fields
+statement ok
+CREATE TABLE ducklake.disjoint(v VARIANT)
+
+statement ok
+INSERT INTO ducklake.disjoint SELECT {'x': 1}::VARIANT
+
+statement ok
+INSERT INTO ducklake.disjoint SELECT {'y': 2}::VARIANT
+
+# lists: incompatible element types
+statement ok
+CREATE TABLE ducklake.lists(v VARIANT)
+
+statement ok
+INSERT INTO ducklake.lists SELECT [1, 2, 3]::VARIANT
+
+statement ok
+INSERT INTO ducklake.lists SELECT ['a', 'b']::VARIANT
+
+# struct vs primitive
+statement ok
+CREATE TABLE ducklake.shape_mismatch(v VARIANT)
+
+statement ok
+INSERT INTO ducklake.shape_mismatch SELECT {'a': 1}::VARIANT
+
+statement ok
+INSERT INTO ducklake.shape_mismatch SELECT 42::VARIANT
+
+# ----------------------------------------
+# Assertions - run twice: first in-memory, then after reload from disk
+# ----------------------------------------
+loop i 0 2
+
+# per-file stats preserve original shredded types
+query IIII
+SELECT variant_path, shredded_type, min_value, max_value FROM __ducklake_metadata_ducklake.ducklake_file_variant_stats WHERE data_file_id=0
+----
+root	int32	42	42
+
+query IIII
+SELECT variant_path, shredded_type, min_value, max_value FROM __ducklake_metadata_ducklake.ducklake_file_variant_stats WHERE data_file_id=1
+----
+root	varchar	hello	hello
+
+# primitives: incompatible types -> min/max and shredded stats dropped
+query III
+SELECT min_value, max_value, extra_stats FROM __ducklake_metadata_ducklake.ducklake_table_column_stats WHERE table_id=1
+----
+NULL	NULL	NULL
+
+query I
+SELECT stats(v) FROM ducklake.primitives LIMIT 1
+----
+<REGEX>:.*INCONSISTENT.*
+
+query I
+SELECT v FROM ducklake.primitives ORDER BY v::VARCHAR
+----
+42
+7
+hello
+
+# structs: field "a" (int32 both) kept, field "b" (varchar vs int32) dropped
+query III
+SELECT extra_stats IS NOT NULL, contains(extra_stats, '\"a\"'), contains(extra_stats, '\"b\"') FROM __ducklake_metadata_ducklake.ducklake_table_column_stats WHERE table_id=2
+----
+true	true	false
+
+query I
+SELECT v FROM ducklake.structs ORDER BY v::VARCHAR
+----
+{'a': 1, 'b': hello}
+{'a': 5, 'b': 100}
+
+# disjoint structs: no overlapping fields -> all stats dropped
+query I
+SELECT extra_stats FROM __ducklake_metadata_ducklake.ducklake_table_column_stats WHERE table_id=3
+----
+NULL
+
+query I
+SELECT v FROM ducklake.disjoint ORDER BY v::VARCHAR
+----
+{'x': 1}
+{'y': 2}
+
+# lists: element type mismatch -> stats dropped
+query I
+SELECT extra_stats FROM __ducklake_metadata_ducklake.ducklake_table_column_stats WHERE table_id=4
+----
+NULL
+
+query I
+SELECT v FROM ducklake.lists ORDER BY v::VARCHAR
+----
+[1, 2, 3]
+[a, b]
+
+# struct vs primitive: completely different shapes -> stats dropped
+query I
+SELECT extra_stats FROM __ducklake_metadata_ducklake.ducklake_table_column_stats WHERE table_id=5
+----
+NULL
+
+query I
+SELECT v FROM ducklake.shape_mismatch ORDER BY v::VARCHAR
+----
+42
+{'a': 1}
+
+# reload from disk for next iteration
+statement ok
+DETACH ducklake
+
+statement ok
+ATTACH 'ducklake:__TEST_DIR__/ducklake_variant_mixed_type_stats.db' AS ducklake (DATA_PATH '__TEST_DIR__/ducklake_variant_mixed_type_stats_files', DATA_INLINING_ROW_LIMIT 0)
+
+endloop

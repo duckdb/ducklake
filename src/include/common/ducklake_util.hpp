@@ -13,6 +13,7 @@
 #include "duckdb/common/types/value.hpp"
 
 namespace duckdb {
+class ColumnList;
 class DuckLakeMetadataManager;
 class FileSystem;
 class TableFilter;
@@ -47,6 +48,8 @@ public:
 
 	//! Returns true if the given column name conflicts with inlined data system columns
 	static bool IsInlinedSystemColumn(const string &name);
+	//! Throws if any column in the list conflicts with inlined data system columns
+	static void ValidateNoInlinedSystemColumns(const ColumnList &columns, const string &table_name = "");
 };
 
 } // namespace duckdb

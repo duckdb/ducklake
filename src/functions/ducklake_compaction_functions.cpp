@@ -146,8 +146,18 @@ SinkFinalizeType DuckLakeCompaction::Finalize(Pipeline &pipeline, Event &event, 
 	if (global_state.written_files.size() > 1) {
 		throw InternalException("DuckLakeCompaction - expected at most a single output file");
 	}
-	if (global_state.written_files.empty() && type != CompactionType::REWRITE_DELETES) {
-		throw InternalException("DuckLakeCompaction - expected a single output file");
+	if (global_state.written_files.empty()) {
+		idx_t rows_to_write = 0;
+		for (auto &source : source_files) {
+			rows_to_write += source.file.row_count;
+			if (!source.delete_files.empty()) {
+				rows_to_write -= source.delete_files.back().row_count;
+			}
+			rows_to_write -= source.inlined_file_deletions.size();
+		}
+		if (rows_to_write != 0) {
+			throw InternalException("DuckLakeCompaction - expected a single output file for %llu rows", rows_to_write);
+		}
 	}
 	// set the partition values correctly
 	for (auto &file : global_state.written_files) {
@@ -250,11 +260,7 @@ void DuckLakeCompactor::GenerateCompactions(DuckLakeTableEntry &table,
 	auto &metadata_manager = transaction.GetMetadataManager();
 	auto snapshot = transaction.GetSnapshot();
 
-	idx_t target_file_size = DuckLakeCatalog::DEFAULT_TARGET_FILE_SIZE;
-	string target_file_size_str;
-	if (catalog.TryGetConfigOption("target_file_size", target_file_size_str, table)) {
-		target_file_size = Value(target_file_size_str).DefaultCastAs(LogicalType::UBIGINT).GetValue<idx_t>();
-	}
+	idx_t target_file_size = catalog.GetTargetFileSize(context, table);
 
 	DuckLakeFileSizeOptions filter_options;
 	filter_options.min_file_size = options.min_file_size;
@@ -364,7 +370,7 @@ void DuckLakeCompactor::GenerateCompactions(DuckLakeTableEntry &table,
 
 unique_ptr<LogicalOperator> DuckLakeCompactor::InsertSort(Binder &binder, unique_ptr<LogicalOperator> &plan,
                                                           DuckLakeTableEntry &table,
-                                                          optional_ptr<DuckLakeSort> sort_data) {
+                                                          optional_ptr<DuckLakeSort> sort_data, bool add_tiebreakers) {
 	auto bindings = plan->GetColumnBindings();
 
 	// Parse the sort expressions from the sort_data
@@ -385,6 +391,41 @@ unique_ptr<LogicalOperator> DuckLakeCompactor::InsertSort(Binder &binder, unique
 
 	// Bind the ORDER BY expressions
 	auto orders = DuckLakeCompactor::BindSortOrders(binder, table, table_index, pre_bound_orders);
+
+	// Append (row_id, snapshot_id) as deterministic tiebreakers when requested so the file order
+	// exactly matches the deletes-position query's ORDER BY, including ties in the user sort key.
+	// Handles ALTER TABLE ADD COLUMN in the same transaction as the flush
+	if (add_tiebreakers) {
+		LogicalOperator *get_op = plan.get();
+		while (get_op->type != LogicalOperatorType::LOGICAL_GET) {
+			if (get_op->children.size() != 1) {
+				throw InternalException("DuckLakeCompactor::InsertSort: expected single-child operator chain to "
+				                        "LogicalGet when add_tiebreakers=true");
+			}
+			get_op = get_op->children[0].get();
+		}
+		auto &logical_get = get_op->Cast<LogicalGet>();
+		auto &column_ids = logical_get.GetColumnIds();
+		idx_t row_id_pos = DConstants::INVALID_INDEX;
+		idx_t snapshot_id_pos = DConstants::INVALID_INDEX;
+		for (idx_t i = 0; i < column_ids.size(); i++) {
+			auto primary = column_ids[i].GetPrimaryIndex();
+			if (primary == COLUMN_IDENTIFIER_ROW_ID) {
+				row_id_pos = i;
+			} else if (primary == DuckLakeMultiFileReader::COLUMN_IDENTIFIER_SNAPSHOT_ID) {
+				snapshot_id_pos = i;
+			}
+		}
+		if (row_id_pos == DConstants::INVALID_INDEX || snapshot_id_pos == DConstants::INVALID_INDEX ||
+		    row_id_pos >= bindings.size() || snapshot_id_pos >= bindings.size()) {
+			throw InternalException("DuckLakeCompactor::InsertSort: row_id and snapshot_id virtual columns must be "
+			                        "present in the LogicalGet's column_ids when add_tiebreakers=true");
+		}
+		orders.emplace_back(OrderType::ASCENDING, OrderByNullType::NULLS_LAST,
+		                    make_uniq<BoundColumnRefExpression>(LogicalType::BIGINT, bindings[row_id_pos]));
+		orders.emplace_back(OrderType::ASCENDING, OrderByNullType::NULLS_LAST,
+		                    make_uniq<BoundColumnRefExpression>(LogicalType::BIGINT, bindings[snapshot_id_pos]));
+	}
 
 	// Create the LogicalOrder operator
 	auto order = make_uniq<LogicalOrder>(std::move(orders));
