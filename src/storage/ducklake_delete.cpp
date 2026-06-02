@@ -681,7 +681,7 @@ PhysicalOperator &DuckLakeCatalog::PlanDelete(ClientContext &context, PhysicalPl
 	vector<idx_t> row_id_indexes;
 	for (idx_t i = 0; i < 3; i++) {
 		auto &bound_ref = op.expressions[i + 1]->Cast<BoundReferenceExpression>();
-		row_id_indexes.push_back(bound_ref.Index());
+		row_id_indexes.push_back(bound_ref.index);
 	}
 	return DuckLakeDelete::PlanDelete(context, planner, op.table.Cast<DuckLakeTableEntry>(), child_plan,
 	                                  std::move(row_id_indexes), std::move(encryption_key));
