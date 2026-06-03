@@ -1,0 +1,82 @@
+# name: test/sql/data_inlining/data_inlining_merge_insert.test
+# description: data inlining should apply to MERGE INTO ... WHEN NOT MATCHED THEN INSERT
+# group: [data_inlining]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/merge_insert_inlining_files', METADATA_CATALOG 'ducklake_meta', DATA_INLINING_ROW_LIMIT 10)
+
+statement ok
+USE ducklake
+
+statement ok
+CREATE TABLE test(site_id INTEGER, measured_at INTEGER, occurrences INTEGER);
+
+# insert new rows via MERGE - the 2 rows is less then the DATA_INLINING_ROW_LIMIT of 10 set above
+statement ok
+MERGE INTO test t
+    USING (VALUES (1, 100, 1), (2, 200, 1)) AS source(site_id, measured_at, occurrences)
+    ON t.site_id = source.site_id AND t.measured_at = source.measured_at
+    WHEN MATCHED THEN UPDATE SET occurrences = t.occurrences + 1
+    WHEN NOT MATCHED THEN INSERT BY NAME;
+
+query III
+SELECT * FROM test ORDER BY site_id
+----
+1	100	1
+2	200	1
+
+# the rows are below the inlining limit, so they should be inlined - no parquet files
+query I
+SELECT COUNT(*) FROM GLOB('{DATA_PATH}/merge_insert_inlining_files/**')
+----
+0
+
+# and the virtual filename column should report the rows as inlined
+query I
+SELECT DISTINCT filename LIKE 'ducklake_inlined_data%' FROM test
+----
+true
+
+# a second MERGE that inserts another new row should also stay inlined
+statement ok
+MERGE INTO test t
+    USING (VALUES (3, 300, 1)) AS source(site_id, measured_at, occurrences)
+    ON t.site_id = source.site_id AND t.measured_at = source.measured_at
+    WHEN MATCHED THEN UPDATE SET occurrences = t.occurrences + 1
+    WHEN NOT MATCHED THEN INSERT BY NAME;
+
+query I
+SELECT COUNT(*) FROM GLOB('{DATA_PATH}/merge_insert_inlining_files/**')
+----
+0
+
+query I
+SELECT COUNT(*) FROM test
+----
+3
+
+# inserting more rows than the inlining limit allows in a single MERGE writes a file
+statement ok
+MERGE INTO test t
+    USING (SELECT i + 10 AS site_id, i + 1000 AS measured_at, 1 AS occurrences FROM range(15) t(i)) AS source
+    ON t.site_id = source.site_id AND t.measured_at = source.measured_at
+    WHEN MATCHED THEN UPDATE SET occurrences = t.occurrences + 1
+    WHEN NOT MATCHED THEN INSERT BY NAME;
+
+query I
+SELECT COUNT(*) FROM GLOB('{DATA_PATH}/merge_insert_inlining_files/**')
+----
+1
+
+query I
+SELECT COUNT(*) FROM test
+----
+18
