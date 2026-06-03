@@ -280,8 +280,8 @@ public:
 	void InvalidateTableStatsCache(idx_t next_file_id, TableIndex table_id);
 	//! Invalidate the cached schema entry for a given schema_version.
 	void InvalidateSchemaCache(idx_t schema_version);
-	//! Invalidate cached name maps for deleted mapping IDs.
-	void InvalidateNameMapCache(const vector<MappingIndex> &mapping_ids);
+	//! Invalidate a cached name map for a deleted mapping ID.
+	void InvalidateNameMapCache(MappingIndex mapping_id);
 
 private:
 	void DropSchema(ClientContext &context, DropInfo &info) override;
