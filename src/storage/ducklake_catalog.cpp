@@ -1092,6 +1092,13 @@ void DuckLakeCatalog::InvalidateSchemaCache(idx_t schema_version) {
 	GetObjectCacheInstance().Delete(SchemaCacheKey(schema_version));
 }
 
+void DuckLakeCatalog::InvalidateNameMapCache(const vector<MappingIndex> &mapping_ids) {
+	lock_guard<mutex> guard(name_maps_lock);
+	for (auto &mapping_id : mapping_ids) {
+		name_maps.Remove(mapping_id);
+	}
+}
+
 string DuckLakeCatalog::SchemaPinStateKey() const {
 	return StringUtil::Format("ducklake_schema_pin:%s:%s:%s", GetName(), MetadataPath(), instance_id);
 }

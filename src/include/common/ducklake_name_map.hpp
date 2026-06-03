@@ -67,6 +67,7 @@ struct DuckLakeNameMapSet {
 	//! Try to find a compatible name map that already exists in the set
 	MappingIndex TryGetCompatibleNameMap(const DuckLakeNameMap &name_map);
 	void Add(unique_ptr<DuckLakeNameMap> name_map);
+	void Remove(MappingIndex mapping_id);
 };
 
 } // namespace duckdb

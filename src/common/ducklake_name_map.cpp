@@ -78,6 +78,18 @@ void DuckLakeNameMapSet::Add(unique_ptr<DuckLakeNameMap> mapping) {
 	name_map_compatibility_set.insert(ref);
 }
 
+void DuckLakeNameMapSet::Remove(MappingIndex mapping_id) {
+	auto entry = name_maps.find(mapping_id);
+	if (entry == name_maps.end()) {
+		return;
+	}
+	auto compatibility_entry = name_map_compatibility_set.find(*entry->second);
+	if (compatibility_entry != name_map_compatibility_set.end() && compatibility_entry->get().id == mapping_id) {
+		name_map_compatibility_set.erase(compatibility_entry);
+	}
+	name_maps.erase(entry);
+}
+
 vector<unique_ptr<DuckLakeNameMapEntry>>
 DuckLakeNameMap::CreatePositionalMapping(const vector<string> &source_names,
                                          const vector<FieldIndex> &target_field_ids) {

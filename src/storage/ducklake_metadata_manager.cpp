@@ -5246,8 +5246,23 @@ WHERE NOT EXISTS (
 	}
 
 	// clean up name mappings for deleted column mappings
+	vector<MappingIndex> deleted_name_maps;
 	{
 		auto result = transaction.Query(R"(
+SELECT DISTINCT tbl.mapping_id
+FROM {METADATA_CATALOG}.ducklake_name_mapping tbl
+WHERE NOT EXISTS (
+    SELECT 1 FROM {METADATA_CATALOG}.ducklake_column_mapping m
+    WHERE m.mapping_id = tbl.mapping_id
+);)");
+		if (result->HasError()) {
+			result->GetErrorObject().Throw("Failed to list deleted name mappings in DuckLake: ");
+		}
+		for (auto &row : *result) {
+			deleted_name_maps.push_back(MappingIndex(row.GetValue<idx_t>(0)));
+		}
+
+		result = transaction.Query(R"(
 DELETE FROM {METADATA_CATALOG}.ducklake_name_mapping tbl
 WHERE NOT EXISTS (
     SELECT 1 FROM {METADATA_CATALOG}.ducklake_column_mapping m
@@ -5259,6 +5274,7 @@ WHERE NOT EXISTS (
 	}
 
 	auto &catalog = transaction.GetCatalog();
+	catalog.InvalidateNameMapCache(deleted_name_maps);
 	for (auto &snapshot : snapshots) {
 		for (auto &table_id : stats_table_ids) {
 			catalog.InvalidateTableStatsCache(snapshot.next_file_id, table_id);
