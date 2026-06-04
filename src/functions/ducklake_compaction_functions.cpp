@@ -69,8 +69,7 @@ vector<BoundOrderByNode> DuckLakeCompactor::BindSortOrders(Binder &binder, const
 	return orders;
 }
 
-vector<BoundOrderByNode> DuckLakeCompactor::BindSortOrders(Binder &binder, DuckLakeTableEntry &table,
-                                                           idx_t table_index,
+vector<BoundOrderByNode> DuckLakeCompactor::BindSortOrders(Binder &binder, DuckLakeTableEntry &table, idx_t table_index,
                                                            vector<OrderByNode> &pre_bound_orders) {
 	return BindSortOrders(binder, table.GetColumns(), table.name, TableIndex(table_index), pre_bound_orders);
 }

@@ -1,9 +1,10 @@
 # name: test/sql/create_table_inline_partition_sort/create_table_inline_transactions.test
 # description: Transaction semantics for inline PARTITIONED BY / SORTED BY on CREATE TABLE / CTAS:
+# group: [create_table_inline_partition_sort]
+
 #              rollback discards everything (entry, files, transaction-local ids); concurrent CTAS with
 #              distinct names cannot conflict; concurrent CTAS with the same name produces a commit-time
 #              conflict; 
-# group: [create_table_inline_partition_sort]
 
 require ducklake
 

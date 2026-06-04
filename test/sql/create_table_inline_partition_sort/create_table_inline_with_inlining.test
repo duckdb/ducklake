@@ -1,12 +1,13 @@
 # name: test/sql/create_table_inline_partition_sort/create_table_inline_with_inlining.test
 # description: CTAS with inline PARTITIONED BY / SORTED BY interacting with the data-inlining row limit.
+# group: [create_table_inline_partition_sort]
+
 #              When a CTAS's row count is below DATA_INLINING_ROW_LIMIT, rows go to the per-table
 #              ducklake_inlined_data_<id>_<seq> catalog table instead of Parquet. Partition and sort
 #              metadata must still be recorded; the inline operator coordinates with the about-to-be-created
 #              table_id at sink-state-init time. Once a flush is called, inlined rows materialize as
 #              partition-aware Parquet files. (On-disk hive directory verification is intentionally omitted -
 #              that's covered by create_table_inline_basic.test / create_table_inline_ctas.test.)
-# group: [create_table_inline_partition_sort]
 
 require ducklake
 
