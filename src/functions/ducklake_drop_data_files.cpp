@@ -130,7 +130,8 @@ static void DuckLakeDropDataFilesExecute(ClientContext &context, TableFunctionIn
 				continue;
 			}
 			if (!bind_data.dry_run) {
-				transaction.DropFile(bind_data.table.GetTableId(), file.file_id, file.file.path);
+				transaction.DropFile(bind_data.table.GetTableId(), file.file_id, file.file.path, file.row_count,
+				                     file.file.file_size_bytes);
 			}
 			state.rows.push_back({Value(file.file.path), Value::UBIGINT(file.row_count)});
 		}
