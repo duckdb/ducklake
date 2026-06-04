@@ -89,7 +89,8 @@ public:
 	void GenerateCompactions(DuckLakeTableEntry &table, vector<unique_ptr<LogicalOperator>> &compactions);
 	unique_ptr<LogicalOperator> GenerateCompactionCommand(vector<DuckLakeCompactionFileEntry> source_files);
 	static unique_ptr<LogicalOperator> InsertSort(Binder &binder, unique_ptr<LogicalOperator> &plan,
-	                                              DuckLakeTableEntry &table, optional_ptr<DuckLakeSort> sort_data);
+	                                              DuckLakeTableEntry &table, optional_ptr<DuckLakeSort> sort_data,
+	                                              bool add_tiebreakers = false);
 	static vector<OrderByNode> ParseSortOrders(const DuckLakeSort &sort_data);
 	static vector<BoundOrderByNode> BindSortOrders(Binder &binder, DuckLakeTableEntry &table, idx_t table_index,
 	                                               vector<OrderByNode> &pre_bound_orders);

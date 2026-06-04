@@ -55,12 +55,21 @@ public:
 	optional_ptr<DuckLakePartition> GetPartitionData() {
 		return partition_data.get();
 	}
+	optional_ptr<const DuckLakePartition> GetPartitionData() const {
+		return partition_data.get();
+	}
 	//! Returns SQL expressions for each partition field (e.g., "region", "year(ts)")
 	vector<string> GetPartitionSQLExpressions() const;
 	optional_ptr<DuckLakeSort> GetSortData() {
 		return sort_data.get();
 	}
+	optional_ptr<const DuckLakeSort> GetSortData() const {
+		return sort_data.get();
+	}
 	DuckLakeFieldData &GetFieldData() {
+		return *field_data;
+	}
+	const DuckLakeFieldData &GetFieldData() const {
 		return *field_data;
 	}
 	const ColumnChangeInfo &GetChangedFields() const {
@@ -104,7 +113,7 @@ public:
 
 	TableStorageInfo GetStorageInfo(ClientContext &context) override;
 
-	unique_ptr<CatalogEntry> Alter(DuckLakeTransaction &transaction, AlterTableInfo &info);
+	unique_ptr<CatalogEntry> Alter(ClientContext &context, DuckLakeTransaction &transaction, AlterTableInfo &info);
 	unique_ptr<CatalogEntry> Alter(DuckLakeTransaction &transaction, SetCommentInfo &info);
 	unique_ptr<CatalogEntry> Alter(DuckLakeTransaction &transaction, SetColumnCommentInfo &info);
 
@@ -137,7 +146,7 @@ public:
 private:
 	unique_ptr<CatalogEntry> AlterTable(DuckLakeTransaction &transaction, RenameTableInfo &info);
 	unique_ptr<CatalogEntry> AlterTable(DuckLakeTransaction &transaction, SetPartitionedByInfo &info);
-	unique_ptr<CatalogEntry> AlterTable(DuckLakeTransaction &transaction, SetNotNullInfo &info);
+	unique_ptr<CatalogEntry> AlterTable(ClientContext &context, DuckLakeTransaction &transaction, SetNotNullInfo &info);
 	unique_ptr<CatalogEntry> AlterTable(DuckLakeTransaction &transaction, DropNotNullInfo &info);
 	unique_ptr<CatalogEntry> AlterTable(DuckLakeTransaction &transaction, RenameColumnInfo &info);
 	unique_ptr<CatalogEntry> AlterTable(DuckLakeTransaction &transaction, AddColumnInfo &info);

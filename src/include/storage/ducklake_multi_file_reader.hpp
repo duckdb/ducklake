@@ -89,9 +89,11 @@ private:
 	unique_ptr<MultiFileColumnDefinition> snapshot_id_column;
 	//! Inlined transaction-local data
 	shared_ptr<DuckLakeInlinedData> transaction_local_data;
-	//! For deletion scans: track which output column is snapshot_id (if any)
+	//! For deletion scans: output_chunk column index of snapshot_id in global_column_ids order, if projected
+	//! (set in CreateMapping).
 	optional_idx deletion_scan_snapshot_col;
-	//! For deletion scans: track which output column is rowid (if any)
+	//! For deletion scans: output_chunk column index of rowid in global_column_ids order, if projected.
+	//! Same semantics as deletion_scan_snapshot_col.
 	optional_idx deletion_scan_rowid_col;
 	//! Whether row_id was internally projected (not in user's query)
 	//! This is necessary for DCF queries over inlined deletions
