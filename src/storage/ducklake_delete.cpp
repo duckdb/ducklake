@@ -255,7 +255,8 @@ public:
 			}
 			count += file.row_count;
 			if (file.file_id.IsValid()) {
-				transaction.DropFile(table.GetTableId(), file.file_id, file.file.path);
+				transaction.DropFile(table.GetTableId(), file.file_id, file.file.path, file.row_count,
+				                     file.file.file_size_bytes);
 			} else {
 				transaction.DropTransactionLocalFile(table.GetTableId(), file.file.path);
 			}
@@ -443,7 +444,8 @@ bool DuckLakeDelete::TryDropFullyDeletedFile(DuckLakeTransaction &transaction, c
 	}
 	// ALL rows in this file are deleted - drop the file
 	if (delete_file.data_file_id.IsValid()) {
-		transaction.DropFile(table.GetTableId(), delete_file.data_file_id, data_file_info.file.path);
+		transaction.DropFile(table.GetTableId(), delete_file.data_file_id, data_file_info.file.path,
+		                     data_file_info.row_count, data_file_info.file.file_size_bytes);
 	} else {
 		transaction.DropTransactionLocalFile(table.GetTableId(), data_file_info.file.path);
 	}

@@ -1466,6 +1466,9 @@ void DuckLakeTransaction::RunCommitLoop(DuckLakeSnapshot transaction_snapshot,
 	context.set_committed_snapshot_id = [&](idx_t snapshot_id) {
 		ducklake_catalog.SetCommittedSnapshotId(snapshot_id);
 	};
+	context.invalidate_table_stats_cache = [&](idx_t next_file_id, TableIndex table_id) {
+		ducklake_catalog.InvalidateTableStatsCache(next_file_id, table_id);
+	};
 	context.commit_info = state->commit_info;
 	state->Commit(transaction_snapshot, transaction_changes, retry_config, context);
 }
@@ -1779,9 +1782,13 @@ void DuckLakeTransaction::DropTableMacro(DuckLakeTableMacroEntry &macro) {
 	state->dropped_table_macros.insert(macro.GetIndex());
 }
 
-void DuckLakeTransaction::DropFile(TableIndex table_id, DataFileIndex data_file_id, string path) {
+void DuckLakeTransaction::DropFile(TableIndex table_id, DataFileIndex data_file_id, string path, idx_t row_count,
+                                   idx_t file_size_bytes) {
 	state->tables_deleted_from.insert(table_id);
 	state->dropped_files.emplace(std::move(path), data_file_id);
+	auto &stats = state->dropped_file_stats[table_id];
+	stats.row_count += row_count;
+	stats.file_size_bytes += file_size_bytes;
 }
 
 bool DuckLakeTransaction::HasDroppedFiles() const {

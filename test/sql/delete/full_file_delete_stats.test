@@ -1,0 +1,78 @@
+# name: test/sql/delete/full_file_delete_stats.test
+# description: Deletes that drop a whole data file decrement table stats (and invalidate the stats cache)
+# group: [delete]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/full_file_delete_stats', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE ducklake.t AS SELECT range::INT id FROM range(100)
+
+# Materialize ids/sizes one scan at a time so the test also works against the
+# Postgres/SQLite metadata catalog (which cannot do multiple streaming scans per query).
+statement ok
+SET VARIABLE t_id = (SELECT table_id FROM __ducklake_metadata_ducklake.ducklake_table WHERE table_name = 't')
+
+statement ok
+SET VARIABLE initial_size = (SELECT file_size_bytes FROM __ducklake_metadata_ducklake.ducklake_table_stats WHERE table_id = getvariable('t_id'))
+
+# A partial delete writes a delete file and leaves the data file active, so table stats are unchanged.
+query I
+DELETE FROM ducklake.t WHERE id < 30
+----
+30
+
+query I
+SELECT COUNT(*) FROM __ducklake_metadata_ducklake.ducklake_delete_file WHERE table_id = getvariable('t_id') AND end_snapshot IS NULL
+----
+1
+
+query III
+SELECT record_count, next_row_id, file_size_bytes = getvariable('initial_size') FROM __ducklake_metadata_ducklake.ducklake_table_stats WHERE table_id = getvariable('t_id')
+----
+100	100	true
+
+# Deleting the remaining rows fully deletes the file: it is dropped, the stats are decremented to
+# zero, and next_row_id stays monotonic (no double subtraction with the earlier partial delete).
+query I
+DELETE FROM ducklake.t WHERE id >= 30
+----
+70
+
+query I
+SELECT COUNT(*) FROM ducklake.t
+----
+0
+
+query I
+SELECT COUNT(*) FROM __ducklake_metadata_ducklake.ducklake_data_file WHERE table_id = getvariable('t_id') AND end_snapshot IS NULL
+----
+0
+
+query III
+SELECT record_count, next_row_id, file_size_bytes FROM __ducklake_metadata_ducklake.ducklake_table_stats WHERE table_id = getvariable('t_id')
+----
+0	100	0
+
+# Re-insert after the drop in the same connection: the stats cache was invalidated, so the insert
+# starts from the decremented base (record_count 0), not the stale pre-delete value.
+statement ok
+INSERT INTO ducklake.t SELECT range::INT id FROM range(10)
+
+query I
+SELECT COUNT(*) FROM ducklake.t
+----
+10
+
+query II
+SELECT record_count, next_row_id FROM __ducklake_metadata_ducklake.ducklake_table_stats WHERE table_id = getvariable('t_id')
+----
+10	110
