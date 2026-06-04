@@ -1,0 +1,351 @@
+# name: test/sql/delete/delete_partition_metadata.test
+# description: partition-only DELETE retires matching DuckLake data files without row-level delete files
+# group: [delete]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/delete_partition_metadata/', METADATA_CATALOG 'metadata');
+
+statement ok
+USE ducklake;
+
+statement ok
+CREATE TABLE partitioned_t (id INT, source VARCHAR, value INT);
+
+statement ok
+ALTER TABLE partitioned_t SET PARTITIONED BY (source);
+
+statement ok
+INSERT INTO partitioned_t VALUES (1, 'a', 10), (2, 'a', 20), (3, 'b', 30), (4, 'b', 40), (5, 'c', 50);
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake')
+
+query I
+SELECT COUNT(*) FROM metadata.ducklake_data_file WHERE end_snapshot IS NULL;
+----
+3
+
+query II
+EXPLAIN DELETE FROM partitioned_t WHERE source = 'a';
+----
+physical_plan	<REGEX>:.*DUCKLAKE_METADATA_DELETE.*
+
+query I
+DELETE FROM partitioned_t WHERE source = 'a';
+----
+2
+
+query II
+SELECT source, COUNT(*) FROM partitioned_t GROUP BY source ORDER BY source;
+----
+b	2
+c	1
+
+query I
+SELECT COUNT(*) FROM metadata.ducklake_delete_file;
+----
+0
+
+query I
+SELECT COUNT(*) FROM metadata.ducklake_data_file WHERE table_id = (SELECT table_id FROM metadata.ducklake_table WHERE table_name = 'partitioned_t') AND end_snapshot IS NOT NULL;
+----
+1
+
+statement ok
+CREATE TABLE partitioned_in_t (id INT, source VARCHAR, value INT);
+
+statement ok
+ALTER TABLE partitioned_in_t SET PARTITIONED BY (source);
+
+statement ok
+INSERT INTO partitioned_in_t VALUES (1, 'a', 10), (2, 'a', 20), (3, 'b', 30), (4, 'c', 40);
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake')
+
+query II
+EXPLAIN DELETE FROM partitioned_in_t WHERE source IN ('a', 'b');
+----
+physical_plan	<REGEX>:.*DUCKLAKE_METADATA_DELETE.*
+
+query I
+DELETE FROM partitioned_in_t WHERE source IN ('a', 'b');
+----
+3
+
+query III
+SELECT id, source, value FROM partitioned_in_t ORDER BY id;
+----
+4	c	40
+
+statement ok
+CREATE TABLE same_column_and_t (id INT, source VARCHAR, value INT);
+
+statement ok
+ALTER TABLE same_column_and_t SET PARTITIONED BY (source);
+
+statement ok
+INSERT INTO same_column_and_t VALUES (1, 'a', 10), (2, 'a', 20), (3, 'b', 30), (4, 'c', 40);
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake')
+
+query II
+EXPLAIN DELETE FROM same_column_and_t WHERE source IN ('a', 'b') AND source = 'a';
+----
+physical_plan	<REGEX>:.*DUCKLAKE_METADATA_DELETE.*
+
+query I
+DELETE FROM same_column_and_t WHERE source IN ('a', 'b') AND source = 'a';
+----
+2
+
+query III
+SELECT id, source, value FROM same_column_and_t ORDER BY id;
+----
+3	b	30
+4	c	40
+
+statement ok
+CREATE TABLE same_column_in_intersect_t (id INT, source VARCHAR, value INT);
+
+statement ok
+ALTER TABLE same_column_in_intersect_t SET PARTITIONED BY (source);
+
+statement ok
+INSERT INTO same_column_in_intersect_t VALUES (1, 'a', 10), (2, 'b', 20), (3, 'b', 30), (4, 'c', 40);
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake')
+
+query II
+EXPLAIN DELETE FROM same_column_in_intersect_t WHERE source IN ('a', 'b') AND source IN ('b', 'c');
+----
+physical_plan	<REGEX>:.*DUCKLAKE_METADATA_DELETE.*
+
+query I
+DELETE FROM same_column_in_intersect_t WHERE source IN ('a', 'b') AND source IN ('b', 'c');
+----
+2
+
+query III
+SELECT id, source, value FROM same_column_in_intersect_t ORDER BY id;
+----
+1	a	10
+4	c	40
+
+statement ok
+CREATE TABLE legacy_partitioned_t (id INT, source VARCHAR, value INT);
+
+statement ok
+INSERT INTO legacy_partitioned_t VALUES (1, 'a', 10), (2, 'a', 20), (3, 'b', 30), (4, 'b', 40), (5, 'c', 50);
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake')
+
+statement ok
+ALTER TABLE legacy_partitioned_t SET PARTITIONED BY (source);
+
+query II
+EXPLAIN DELETE FROM legacy_partitioned_t WHERE source = 'a';
+----
+physical_plan	<!REGEX>:.*DUCKLAKE_METADATA_DELETE.*
+
+query I
+DELETE FROM legacy_partitioned_t WHERE source = 'a';
+----
+2
+
+query III
+SELECT id, source, value FROM legacy_partitioned_t ORDER BY id;
+----
+3	b	30
+4	b	40
+5	c	50
+
+query I
+SELECT COUNT(*) FROM metadata.ducklake_data_file WHERE table_id = (SELECT table_id FROM metadata.ducklake_table WHERE table_name = 'legacy_partitioned_t') AND end_snapshot IS NOT NULL;
+----
+0
+
+# A mixed partition + non-partition predicate must fall back to row-level deletes.
+query I
+DELETE FROM partitioned_t WHERE source = 'b' AND value > 30;
+----
+1
+
+query III
+SELECT id, source, value FROM partitioned_t ORDER BY id;
+----
+3	b	30
+5	c	50
+
+query I
+SELECT COUNT(*) FROM metadata.ducklake_data_file WHERE table_id = (SELECT table_id FROM metadata.ducklake_table WHERE table_name = 'partitioned_t') AND end_snapshot IS NOT NULL;
+----
+1
+
+# Existing row-level deletes make the visible row count differ from raw file rows, so this falls back.
+query II
+EXPLAIN DELETE FROM partitioned_t;
+----
+physical_plan	<!REGEX>:.*DUCKLAKE_METADATA_DELETE.*
+
+query I
+DELETE FROM partitioned_t;
+----
+2
+
+query I
+SELECT COUNT(*) FROM partitioned_t;
+----
+0
+
+# Full-table DELETE on a partitioned table with no existing deletes is metadata-only.
+statement ok
+CREATE TABLE full_partitioned_t (id INT, source VARCHAR);
+
+statement ok
+ALTER TABLE full_partitioned_t SET PARTITIONED BY (source);
+
+statement ok
+INSERT INTO full_partitioned_t VALUES (1, 'x'), (2, 'y');
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake')
+
+query II
+EXPLAIN DELETE FROM full_partitioned_t;
+----
+physical_plan	<REGEX>:.*DUCKLAKE_METADATA_DELETE.*
+
+query I
+DELETE FROM full_partitioned_t;
+----
+2
+
+query I
+SELECT COUNT(*) FROM metadata.ducklake_data_file WHERE table_id = (SELECT table_id FROM metadata.ducklake_table WHERE table_name = 'full_partitioned_t') AND end_snapshot IS NOT NULL;
+----
+2
+
+statement ok
+CREATE TABLE null_partitioned_t (id INT, source VARCHAR);
+
+statement ok
+ALTER TABLE null_partitioned_t SET PARTITIONED BY (source);
+
+statement ok
+INSERT INTO null_partitioned_t VALUES (1, NULL), (2, 'present');
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake')
+
+query II
+EXPLAIN DELETE FROM null_partitioned_t WHERE source IS NULL;
+----
+physical_plan	<!REGEX>:.*DUCKLAKE_METADATA_DELETE.*
+
+query I
+DELETE FROM null_partitioned_t WHERE source IS NULL;
+----
+1
+
+query II
+SELECT id, source FROM null_partitioned_t ORDER BY id;
+----
+2	present
+
+statement ok
+CREATE TABLE constant_false_t (id INT, source VARCHAR);
+
+statement ok
+ALTER TABLE constant_false_t SET PARTITIONED BY (source);
+
+statement ok
+INSERT INTO constant_false_t VALUES (1, 'a'), (2, 'b');
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake')
+
+query I
+DELETE FROM constant_false_t WHERE 1 = 0;
+----
+0
+
+query I
+SELECT COUNT(*) FROM constant_false_t;
+----
+2
+
+query I
+SELECT COUNT(*) FROM metadata.ducklake_data_file WHERE table_id = (SELECT table_id FROM metadata.ducklake_table WHERE table_name = 'constant_false_t') AND end_snapshot IS NOT NULL;
+----
+0
+
+statement ok
+CREATE TABLE transformed_t (id INT, ts TIMESTAMP, value INT);
+
+statement ok
+ALTER TABLE transformed_t SET PARTITIONED BY (year(ts));
+
+statement ok
+INSERT INTO transformed_t VALUES (1, TIMESTAMP '2024-01-15 00:00:00', 10), (2, TIMESTAMP '2024-01-16 00:00:00', 20);
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake')
+
+query II
+EXPLAIN DELETE FROM transformed_t WHERE ts = TIMESTAMP '2024-01-15 00:00:00';
+----
+physical_plan	<!REGEX>:.*DUCKLAKE_METADATA_DELETE.*
+
+query I
+DELETE FROM transformed_t WHERE ts = TIMESTAMP '2024-01-15 00:00:00';
+----
+1
+
+query III
+SELECT id, ts, value FROM transformed_t ORDER BY id;
+----
+2	2024-01-16 00:00:00	20
+
+query I
+SELECT COUNT(*) FROM metadata.ducklake_data_file WHERE table_id = (SELECT table_id FROM metadata.ducklake_table WHERE table_name = 'transformed_t') AND end_snapshot IS NOT NULL;
+----
+0
+
+statement ok
+CREATE TABLE mixed_or_t (id INT, source VARCHAR, value INT);
+
+statement ok
+ALTER TABLE mixed_or_t SET PARTITIONED BY (source);
+
+statement ok
+INSERT INTO mixed_or_t VALUES (1, 'x', 10), (2, 'x', 20), (5, 'y', 50), (6, 'y', 60);
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake')
+
+query II
+EXPLAIN DELETE FROM mixed_or_t WHERE source = 'x' OR id = 5;
+----
+physical_plan	<!REGEX>:.*DUCKLAKE_METADATA_DELETE.*
+
+query I
+DELETE FROM mixed_or_t WHERE source = 'x' OR id = 5;
+----
+3
+
+query III
+SELECT id, source, value FROM mixed_or_t ORDER BY id;
+----
+6	y	60

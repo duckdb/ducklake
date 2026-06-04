@@ -287,6 +287,12 @@ vector<DuckLakeFileListExtendedEntry> DuckLakeMultiFileList::GetFilesExtended() 
 		file_entry.file = GetFileData(file);
 		file_entry.delete_file = GetDeleteData(file);
 		file_entry.row_id_start = transaction_row_start;
+		for (auto &part_val : file.partition_values) {
+			DuckLakeFilePartitionInfo partition_value;
+			partition_value.partition_column_idx = part_val.partition_column_idx;
+			partition_value.partition_value = part_val.partition_value;
+			file_entry.partition_values.push_back(std::move(partition_value));
+		}
 		transaction_row_start += file.row_count;
 		result.push_back(std::move(file_entry));
 	}

@@ -1,0 +1,103 @@
+# name: test/sql/delete/delete_partition_metadata_atomicity.test
+# description: metadata partition DELETE composes atomically with ducklake_add_data_files
+# group: [delete]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/delete_partition_metadata_atomicity/', METADATA_CATALOG 'metadata');
+
+statement ok
+USE ducklake;
+
+statement ok
+CREATE TABLE partitioned_t (id INT, source VARCHAR, value INT);
+
+statement ok
+ALTER TABLE partitioned_t SET PARTITIONED BY (source);
+
+statement ok
+INSERT INTO partitioned_t VALUES (1, 'a', 10), (2, 'a', 20), (3, 'b', 30);
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake')
+
+statement ok
+SET VARIABLE before_replace_snapshot = (SELECT max(snapshot_id) FROM metadata.ducklake_snapshot);
+
+statement ok
+COPY (SELECT 100 AS id, 'a' AS source, 999 AS value) TO '{DATA_PATH}/delete_partition_metadata_atomicity/replace_a' (FORMAT parquet, PARTITION_BY (source));
+
+statement ok
+BEGIN;
+
+query I
+DELETE FROM partitioned_t WHERE source = 'a';
+----
+2
+
+statement ok
+CALL ducklake_add_data_files('ducklake', 'partitioned_t', '{DATA_PATH}/delete_partition_metadata_atomicity/replace_a/source=a/data_0.parquet');
+
+statement ok
+COMMIT;
+
+query I
+SELECT (max(snapshot_id) = getvariable('before_replace_snapshot') + 1)::INT FROM metadata.ducklake_snapshot;
+----
+1
+
+query III
+SELECT id, source, value FROM partitioned_t ORDER BY id;
+----
+3	b	30
+100	a	999
+
+query I
+SELECT COUNT(DISTINCT snap)
+FROM (
+  SELECT end_snapshot AS snap FROM metadata.ducklake_data_file WHERE end_snapshot IS NOT NULL
+  UNION
+  SELECT begin_snapshot AS snap FROM metadata.ducklake_data_file WHERE begin_snapshot = getvariable('before_replace_snapshot') + 1
+);
+----
+1
+
+# Transaction-local add_data_files data can be removed by DELETE before commit without deleting the external parquet.
+statement ok
+COPY (SELECT 300 AS id, 'c' AS source, 777 AS value) TO '{DATA_PATH}/delete_partition_metadata_atomicity/add_then_delete_c' (FORMAT parquet, PARTITION_BY (source));
+
+statement ok
+BEGIN;
+
+statement ok
+CALL ducklake_add_data_files('ducklake', 'partitioned_t', '{DATA_PATH}/delete_partition_metadata_atomicity/add_then_delete_c/source=c/data_0.parquet');
+
+query I
+SELECT COUNT(*) FROM partitioned_t WHERE source = 'c';
+----
+1
+
+query I
+DELETE FROM partitioned_t WHERE source = 'c';
+----
+1
+
+statement ok
+COMMIT;
+
+query I
+SELECT COUNT(*) FROM partitioned_t WHERE source = 'c';
+----
+0
+
+query I
+SELECT COUNT(*) FROM read_parquet('{DATA_PATH}/delete_partition_metadata_atomicity/add_then_delete_c/source=c/data_0.parquet');
+----
+1

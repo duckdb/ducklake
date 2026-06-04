@@ -8,9 +8,7 @@
 #include "storage/ducklake_table_entry.hpp"
 #include "duckdb/planner/operator/logical_update.hpp"
 #include "duckdb/planner/operator/logical_dummy_scan.hpp"
-#include "duckdb/planner/operator/logical_delete.hpp"
 #include "duckdb/planner/operator/logical_insert.hpp"
-#include "duckdb/planner/expression/bound_reference_expression.hpp"
 #include "duckdb/parallel/thread_context.hpp"
 #include "duckdb/catalog/catalog_entry/table_catalog_entry.hpp"
 #include "duckdb/execution/operator/projection/physical_projection.hpp"
@@ -479,16 +477,13 @@ static unique_ptr<MergeIntoOperator> DuckLakePlanMergeIntoAction(DuckLakeCatalog
 		break;
 	}
 	case MergeActionType::MERGE_DELETE: {
-		LogicalDelete delete_op(op.table, TableIndex(0));
-		delete_op.expressions.push_back(nullptr);
-
-		vector<LogicalType> row_id_types {LogicalType::VARCHAR, LogicalType::UBIGINT, LogicalType::BIGINT};
+		vector<idx_t> row_id_indexes;
 		for (idx_t i = 0; i < 3; i++) {
-			auto ref = make_uniq<BoundReferenceExpression>(row_id_types[i], op.row_id_start + i + 1);
-			delete_op.expressions.push_back(std::move(ref));
+			row_id_indexes.push_back(op.row_id_start + i + 1);
 		}
-		delete_op.bound_constraints = std::move(bound_constraints);
-		result->op = catalog.PlanDelete(context, planner, delete_op, child_plan);
+		auto encryption_key = catalog.GenerateEncryptionKey(context);
+		result->op = DuckLakeDelete::PlanDelete(context, planner, op.table.Cast<DuckLakeTableEntry>(), child_plan,
+		                                        std::move(row_id_indexes), std::move(encryption_key));
 		break;
 	}
 	case MergeActionType::MERGE_INSERT: {
