@@ -45,4 +45,5 @@ string SQLiteMetadataManager::GetColumnTypeInternal(const LogicalType &column_ty
 		return column_type.ToString();
 	}
 }
+
 } // namespace duckdb

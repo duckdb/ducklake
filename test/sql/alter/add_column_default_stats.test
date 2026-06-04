@@ -1,6 +1,6 @@
 # name: test/sql/alter/add_column_default_stats.test
 # description: verify min/max/null stats are correct after ADD COLUMN with DEFAULT on inlined data
-# group: [default]
+# group: [alter]
 
 require ducklake
 

@@ -687,7 +687,7 @@ unique_ptr<CatalogEntry> DuckLakeTableEntry::AlterTable(DuckLakeTransaction &tra
 	ColumnList new_columns;
 	for (auto &col : columns.Logical()) {
 		auto copy = col.Copy();
-		if (copy.Name() == info.old_name) {
+		if (StringUtil::CIEquals(copy.Name(), info.old_name)) {
 			copy.SetName(info.new_name);
 		}
 		new_columns.AddColumn(std::move(copy));
@@ -1411,9 +1411,7 @@ DuckLakeColumnInfo DuckLakeTableEntry::GetAddColumnInfo() const {
 TableStorageInfo DuckLakeTableEntry::GetStorageInfo(ClientContext &context) {
 	TableStorageInfo storage_info;
 	auto table_stats = GetTableStats(context);
-	if (table_stats) {
-		storage_info.cardinality = table_stats->record_count;
-	}
+	storage_info.cardinality = table_stats ? table_stats->record_count : 0;
 	return storage_info;
 }
 

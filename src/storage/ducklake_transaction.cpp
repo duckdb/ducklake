@@ -1536,41 +1536,49 @@ struct NewMacroInfo {
 	vector<DuckLakeMacroInfo> new_macros;
 };
 
-void HandleChangedFields(TableIndex table_id, const ColumnChangeInfo &change_info, NewTableInfo &result,
-                         const set<FieldIndex> &columns_handled_by_later_ops,
-                         unordered_map<idx_t, idx_t> &txn_added_fields) {
-	for (auto &new_col_info : change_info.new_fields) {
-		// Skip adding columns that will be handled by a later operation (e.g., SET_DEFAULT after CHANGE_COLUMN_TYPE)
-		if (columns_handled_by_later_ops.find(new_col_info.column_info.id) != columns_handled_by_later_ops.end()) {
-			continue;
+void CancelOrDropField(TableIndex table_id, FieldIndex field_id, NewTableInfo &result,
+                       unordered_map<idx_t, idx_t> &txn_added_fields) {
+	auto it = txn_added_fields.find(field_id.index);
+	if (it != txn_added_fields.end()) {
+		auto erased_idx = it->second;
+		result.new_columns.erase(result.new_columns.begin() + erased_idx);
+		txn_added_fields.erase(it);
+		for (auto &entry : txn_added_fields) {
+			if (entry.second > erased_idx) {
+				entry.second--;
+			}
 		}
+		return;
+	}
+	// Column was not added in the same transaction, we emit a drop.
+	DuckLakeDroppedColumn dropped_col;
+	dropped_col.table_id = table_id;
+	dropped_col.field_id = field_id;
+	result.dropped_columns.push_back(dropped_col);
+}
+
+template <typename T>
+void RenameEmittedEntry(vector<T> &entries, TableIndex remapped_id, const string &new_name) {
+	for (auto &entry : entries) {
+		if (entry.id == remapped_id) {
+			entry.name = new_name;
+			return;
+		}
+	}
+}
+
+void HandleChangedFields(TableIndex table_id, const ColumnChangeInfo &change_info, NewTableInfo &result,
+                         unordered_map<idx_t, idx_t> &txn_added_fields) {
+	for (auto &dropped_field_id : change_info.dropped_fields) {
+		CancelOrDropField(table_id, dropped_field_id, result, txn_added_fields);
+	}
+	for (auto &new_col_info : change_info.new_fields) {
 		DuckLakeNewColumn new_column;
 		new_column.table_id = table_id;
 		new_column.column_info = new_col_info.column_info;
 		new_column.parent_idx = new_col_info.parent_idx;
+		txn_added_fields[new_col_info.column_info.id.index] = result.new_columns.size();
 		result.new_columns.push_back(std::move(new_column));
-	}
-	for (auto &dropped_field_id : change_info.dropped_fields) {
-		auto it = txn_added_fields.find(dropped_field_id.index);
-		if (it != txn_added_fields.end()) {
-			// Column was added in the same transaction, we cancel the add rather than emitting a drop.
-			auto erased_idx = it->second;
-			result.new_columns.erase(result.new_columns.begin() + erased_idx);
-			txn_added_fields.erase(it);
-			// Assume the number of columns to add and drop in the same transaction is not too large.
-			for (auto &entry : txn_added_fields) {
-				if (entry.second > erased_idx) {
-					entry.second--;
-				}
-			}
-			continue;
-		}
-
-		// Column was not added in the same transaction, we emit a drop.
-		DuckLakeDroppedColumn dropped_col;
-		dropped_col.table_id = table_id;
-		dropped_col.field_id = dropped_field_id;
-		result.dropped_columns.push_back(dropped_col);
 	}
 }
 
@@ -1589,7 +1597,6 @@ void DuckLakeTransaction::GetNewTableInfo(DuckLakeCommitState &commit_state, Duc
 		table_entry = table_entry.get().Child();
 	}
 
-	set<FieldIndex> columns_handled_by_later_ops;
 	// Maps from field index to the number of alter operations for that field.
 	map<FieldIndex, idx_t> field_alter_count;
 	// Number of table comment operations.
@@ -1604,7 +1611,6 @@ void DuckLakeTransaction::GetNewTableInfo(DuckLakeCommitState &commit_state, Duc
 		case LocalChangeType::DROP_NULL:
 		case LocalChangeType::RENAME_COLUMN:
 		case LocalChangeType::SET_DEFAULT:
-			columns_handled_by_later_ops.insert(local_change.field_index);
 			field_alter_count[local_change.field_index]++;
 			break;
 		case LocalChangeType::SET_COMMENT:
@@ -1693,25 +1699,17 @@ void DuckLakeTransaction::GetNewTableInfo(DuckLakeCommitState &commit_state, Duc
 				break;
 			}
 
-			// Check whether this field was added in the same transaction. If so, directly updating the
-			// existing new_columns entry in-place.
-			auto local_txn_column_iter = txn_added_fields.find(local_change.field_index.index);
-			if (local_txn_column_iter != txn_added_fields.end()) {
-				result.new_columns[local_txn_column_iter->second].column_info =
-				    table.GetColumnInfo(local_change.field_index);
-			} else {
-				// The field has been committed, drop the old committed entry.
-				DuckLakeDroppedColumn dropped_col;
-				dropped_col.table_id = commit_state.GetTableId(table);
-				dropped_col.field_id = local_change.field_index;
-				result.dropped_columns.push_back(dropped_col);
+			auto committed_table_id = commit_state.GetTableId(table);
 
-				// Insert the new column with the updated info.
-				DuckLakeNewColumn new_col;
-				new_col.table_id = commit_state.GetTableId(table);
-				new_col.column_info = table.GetColumnInfo(local_change.field_index);
-				result.new_columns.push_back(std::move(new_col));
-			}
+			// Cancel the previous txn-local add for this field, or drop the committed column.
+			CancelOrDropField(committed_table_id, local_change.field_index, result, txn_added_fields);
+
+			// Insert the new column with the updated info and register it.
+			DuckLakeNewColumn new_col;
+			new_col.table_id = committed_table_id;
+			new_col.column_info = table.GetColumnInfo(local_change.field_index);
+			txn_added_fields[local_change.field_index.index] = result.new_columns.size();
+			result.new_columns.push_back(std::move(new_col));
 
 			transaction_changes.altered_tables.insert(table_id);
 			transaction_changes.altered_tables_with_schema_version_changes.insert(table_id);
@@ -1729,8 +1727,7 @@ void DuckLakeTransaction::GetNewTableInfo(DuckLakeCommitState &commit_state, Duc
 		case LocalChangeType::CHANGE_COLUMN_TYPE: {
 			// drop the indicated column
 			// note that in case of nested types we might be dropping multiple columns here
-			HandleChangedFields(commit_state.GetTableId(table), table.GetChangedFields(), result,
-			                    columns_handled_by_later_ops, txn_added_fields);
+			HandleChangedFields(commit_state.GetTableId(table), table.GetChangedFields(), result, txn_added_fields);
 			transaction_changes.altered_tables_with_schema_version_changes.insert(table_id);
 			column_schema_change = true;
 			break;
@@ -1752,6 +1749,14 @@ void DuckLakeTransaction::GetNewTableInfo(DuckLakeCommitState &commit_state, Duc
 		case LocalChangeType::CREATED:
 		case LocalChangeType::RENAMED: {
 			auto old_table_id = table.GetTableId();
+			if (local_change.type == LocalChangeType::RENAMED && old_table_id.IsTransactionLocal()) {
+				auto existing = commit_state.committed_tables.find(old_table_id);
+				if (existing != commit_state.committed_tables.end()) {
+					// If we are rename a table in the same transaction it was created, we need to patch it
+					RenameEmittedEntry(result.new_tables, existing->second, table.name);
+					break;
+				}
+			}
 			auto new_table = GetNewTable(commit_state, table);
 			auto new_table_id = new_table.id;
 			result.new_tables.push_back(std::move(new_table));
@@ -1780,9 +1785,10 @@ void DuckLakeTransaction::GetNewTableInfo(DuckLakeCommitState &commit_state, Duc
 					result.new_sort_keys.push_back(std::move(sort_key));
 				}
 			}
-			// CREATE TABLE / CTAS WITH (...) options. AlterEntryInternal drops the CREATED entry from
-			// the transaction-local set on rename, so a CREATE+RENAME chain arrives here as a single
-			// RENAMED entry with a still-transaction-local id — emit whenever old_table_id is local.
+			// CREATE TABLE / CTAS WITH (...) options. A CREATE+RENAME chain keeps the CREATED entry as
+			// a child (HandleRenameOldEntry), so the reverse traversal emits the options on the CREATED
+			// pass and the same-txn RENAMED pass breaks early above — emit whenever old_table_id is
+			// local, which covers CREATED and the fallback where a local RENAMED was not emitted yet.
 			if (old_table_id.IsTransactionLocal()) {
 				auto &options_in_create_with = table.GetOptionsInCreateWith();
 				for (auto &tag : options_in_create_with) {
@@ -1936,6 +1942,14 @@ void DuckLakeTransaction::GetNewViewInfo(DuckLakeCommitState &commit_state, Duck
 		case LocalChangeType::CREATED:
 		case LocalChangeType::RENAMED: {
 			auto old_view_id = view.GetViewId();
+			if (view.GetLocalChange().type == LocalChangeType::RENAMED && old_view_id.IsTransactionLocal()) {
+				auto existing = commit_state.committed_tables.find(old_view_id);
+				if (existing != commit_state.committed_tables.end()) {
+					// renaming a view in the same transaction it was created - patch the name on the existing row
+					RenameEmittedEntry(result.new_views, existing->second, view.name);
+					break;
+				}
+			}
 			auto new_view = GetNewView(commit_state, view);
 			auto new_view_id = new_view.id;
 			result.new_views.push_back(std::move(new_view));
@@ -2625,12 +2639,13 @@ void DuckLakeTransaction::FlushChanges() {
 	optional_ptr<vector<DuckLakeGlobalStatsInfo>> stats;
 	for (idx_t i = 0; i < max_retry_count + 1; i++) {
 		bool can_retry;
+		auto attempt_changes = transaction_changes;
 		try {
 			can_retry = false;
 			if (i > 0) {
 				// we failed our first commit due to another transaction committing
 				// retry - but first check for conflicts
-				commit_stats_snapshot = CheckForConflicts(transaction_snapshot, transaction_changes);
+				commit_stats_snapshot = CheckForConflicts(transaction_snapshot, attempt_changes);
 				stats = &commit_stats_snapshot.stats;
 			} else {
 				commit_stats_snapshot.snapshot = GetSnapshot();
@@ -2644,14 +2659,21 @@ void DuckLakeTransaction::FlushChanges() {
 			DuckLakeCommitState commit_state(commit_snapshot);
 			// write the new snapshot
 			string batch_queries = metadata_manager->InsertSnapshot();
-			batch_queries += CommitChanges(commit_state, transaction_changes, stats);
+			batch_queries += CommitChanges(commit_state, attempt_changes, stats);
 
-			batch_queries += WriteSnapshotChanges(commit_state, transaction_changes);
+			batch_queries += WriteSnapshotChanges(commit_state, attempt_changes);
 			auto res = metadata_manager->Execute(commit_snapshot, batch_queries);
 			if (res->HasError()) {
 				res->GetErrorObject().Throw("Failed to flush changes into DuckLake: ");
 			}
+			bool flushed_inlined = !flushed_inlined_tables.empty();
+			if (metadata_manager->TakePendingCacheClear()) {
+				metadata_manager->ClearCache();
+			}
 			connection->Commit();
+			if (flushed_inlined) {
+				metadata_manager->DropEmptySupersededInlinedTables();
+			}
 			catalog_version = commit_snapshot.schema_version;
 
 			// finished writing
@@ -2731,23 +2753,8 @@ void DuckLakeTransaction::MarkInlinedDataForDeletion(DuckLakeInlinedTableInfo in
 	flushed_inlined_tables.push_back({std::move(inlined_table), flush_snapshot_id});
 }
 
-unique_ptr<QueryResult> DuckLakeTransaction::Query(string query) {
+unique_ptr<QueryResult> DuckLakeTransaction::ExecuteRaw(string query) {
 	auto &connection = GetConnection();
-	auto catalog_identifier = DuckLakeUtil::SQLIdentifierToString(ducklake_catalog.MetadataDatabaseName());
-	auto catalog_literal = DuckLakeUtil::SQLLiteralToString(ducklake_catalog.MetadataDatabaseName());
-	auto schema_identifier = DuckLakeUtil::SQLIdentifierToString(ducklake_catalog.MetadataSchemaName());
-	auto schema_identifier_escaped = StringUtil::Replace(schema_identifier, "'", "''");
-	auto schema_literal = DuckLakeUtil::SQLLiteralToString(ducklake_catalog.MetadataSchemaName());
-	auto metadata_path = DuckLakeUtil::SQLLiteralToString(ducklake_catalog.MetadataPath());
-	auto data_path = DuckLakeUtil::SQLLiteralToString(ducklake_catalog.DataPath());
-
-	query = StringUtil::Replace(query, "{METADATA_CATALOG_NAME_LITERAL}", catalog_literal);
-	query = StringUtil::Replace(query, "{METADATA_CATALOG_NAME_IDENTIFIER}", catalog_identifier);
-	query = StringUtil::Replace(query, "{METADATA_SCHEMA_NAME_LITERAL}", schema_literal);
-	query = StringUtil::Replace(query, "{METADATA_CATALOG}", catalog_identifier + "." + schema_identifier);
-	query = StringUtil::Replace(query, "{METADATA_SCHEMA_ESCAPED}", schema_identifier_escaped);
-	query = StringUtil::Replace(query, "{METADATA_PATH}", metadata_path);
-	query = StringUtil::Replace(query, "{DATA_PATH}", data_path);
 	auto start = std::chrono::steady_clock::now();
 	auto result = connection.Query(query);
 	auto end = std::chrono::steady_clock::now();
@@ -2762,16 +2769,12 @@ unique_ptr<QueryResult> DuckLakeTransaction::Query(string query) {
 	return result;
 }
 
-unique_ptr<QueryResult> DuckLakeTransaction::Query(DuckLakeSnapshot snapshot, string query) {
-	query = StringUtil::Replace(query, "{SNAPSHOT_ID}", to_string(snapshot.snapshot_id));
-	query = StringUtil::Replace(query, "{SCHEMA_VERSION}", to_string(snapshot.schema_version));
-	query = StringUtil::Replace(query, "{NEXT_CATALOG_ID}", to_string(snapshot.next_catalog_id));
-	query = StringUtil::Replace(query, "{NEXT_FILE_ID}", to_string(snapshot.next_file_id));
-	query = StringUtil::Replace(query, "{AUTHOR}", commit_info.author.ToSQLString());
-	query = StringUtil::Replace(query, "{COMMIT_MESSAGE}", commit_info.commit_message.ToSQLString());
-	query = StringUtil::Replace(query, "{COMMIT_EXTRA_INFO}", commit_info.commit_extra_info.ToSQLString());
+unique_ptr<QueryResult> DuckLakeTransaction::Query(string query) {
+	return metadata_manager->Query(query);
+}
 
-	return Query(std::move(query));
+unique_ptr<QueryResult> DuckLakeTransaction::Query(DuckLakeSnapshot snapshot, string query) {
+	return metadata_manager->Query(snapshot, query);
 }
 
 string DuckLakeTransaction::GetDefaultSchemaName() {
@@ -3147,23 +3150,35 @@ void DuckLakeTransaction::AlterEntry(CatalogEntry &entry, unique_ptr<CatalogEntr
 	}
 }
 
+static void HandleRenameOldEntry(DuckLakeCatalogSet &entries, const string &old_name, const string &new_name,
+                                 TableIndex id, bool entry_is_transaction_local, set<TableIndex> &renamed_set,
+                                 const set<TableIndex> &dropped_set) {
+	if (id.IsTransactionLocal()) {
+		// entry was created in this same transaction
+		auto dropped = entries.DropEntry(old_name);
+		auto new_entry_ptr = entries.GetEntry(new_name);
+		if (new_entry_ptr && dropped) {
+			new_entry_ptr->SetChild(std::move(dropped));
+		}
+	} else if (entry_is_transaction_local) {
+		// entry existed before this transaction and has already been renamed earlier in this txn
+		entries.DropEntry(old_name);
+	} else {
+		// first rename of a committed entry
+		// Invariant: an id cannot be both renamed and dropped in the same transaction.
+		D_ASSERT(dropped_set.find(id) == dropped_set.end());
+		renamed_set.insert(id);
+	}
+}
+
 void DuckLakeTransaction::AlterEntryInternal(DuckLakeTableEntry &table, unique_ptr<CatalogEntry> new_entry) {
 	auto &new_table = new_entry->Cast<DuckLakeTableEntry>();
 	auto &entries = GetOrCreateTransactionLocalEntries(table);
 	entries.CreateEntry(std::move(new_entry));
 	switch (new_table.GetLocalChange().type) {
 	case LocalChangeType::RENAMED: {
-		// rename - take care of the old table
-		if (table.IsTransactionLocal()) {
-			// table is transaction local - delete the old table from there
-			entries.DropEntry(table.name);
-		} else {
-			// table is not transaction local - add to drop list
-			auto table_id = table.GetTableId();
-			// Invariant: a table id cannot be both renamed and dropped in the same transaction.
-			D_ASSERT(dropped_tables.find(table_id) == dropped_tables.end());
-			renamed_tables.insert(table_id);
-		}
+		HandleRenameOldEntry(entries, table.name, new_table.name, table.GetTableId(), table.IsTransactionLocal(),
+		                     renamed_tables, dropped_tables);
 		break;
 	}
 	case LocalChangeType::ADD_COLUMN:
@@ -3189,17 +3204,8 @@ void DuckLakeTransaction::AlterEntryInternal(DuckLakeViewEntry &view, unique_ptr
 	entries.CreateEntry(std::move(new_entry));
 	switch (new_view.GetLocalChange().type) {
 	case LocalChangeType::RENAMED: {
-		// rename - take care of the old view
-		if (view.IsTransactionLocal()) {
-			// view is transaction local - delete the old view from there
-			entries.DropEntry(view.name);
-		} else {
-			// view is not transaction local - add to rename list
-			auto view_id = view.GetViewId();
-			// Invariant: a view id cannot be both renamed and dropped in the same transaction.
-			D_ASSERT(dropped_views.find(view_id) == dropped_views.end());
-			renamed_views.insert(view_id);
-		}
+		HandleRenameOldEntry(entries, view.name, new_view.name, view.GetViewId(), view.IsTransactionLocal(),
+		                     renamed_views, dropped_views);
 		break;
 	}
 	case LocalChangeType::SET_COMMENT:

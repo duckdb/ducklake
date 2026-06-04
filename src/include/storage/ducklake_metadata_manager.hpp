@@ -113,6 +113,18 @@ public:
 	virtual bool SupportsAppender() const {
 		return true;
 	}
+
+	virtual void ClearCache() {
+	}
+
+	void MarkPendingCacheClear() {
+		pending_cache_clear = true;
+	}
+	bool TakePendingCacheClear() {
+		bool pending = pending_cache_clear;
+		pending_cache_clear = false;
+		return pending;
+	}
 	//! Maximum identifier length in bytes supported by this backend
 	virtual idx_t MaxIdentifierLength() const {
 		return NumericLimits<idx_t>::Maximum();
@@ -129,6 +141,12 @@ public:
 
 	DuckLakeMetadataManager &Get(DuckLakeTransaction &transaction);
 
+	virtual unique_ptr<QueryResult> AttachMetadata(const string &attach_query);
+
+	virtual bool MetadataExists();
+
+	virtual string MetadataExistsQuery() const;
+
 	//! Initialize a new DuckLake
 	virtual void InitializeDuckLake(bool has_explicit_schema, DuckLakeEncryption encryption);
 	virtual DuckLakeMetadata LoadDuckLake();
@@ -136,6 +154,13 @@ public:
 	virtual unique_ptr<QueryResult> Execute(DuckLakeSnapshot snapshot, string &query);
 
 	virtual unique_ptr<QueryResult> Query(DuckLakeSnapshot snapshot, string &query);
+	virtual unique_ptr<QueryResult> Query(string &query);
+
+protected:
+	void SubstituteCatalogPlaceholders(string &query) const;
+	void SubstituteSnapshotPlaceholders(DuckLakeSnapshot snapshot, string &query) const;
+
+public:
 	//! Get the catalog information for a specific snapshot
 	virtual DuckLakeCatalogInfo GetCatalogForSnapshot(DuckLakeSnapshot snapshot);
 	virtual vector<DuckLakeGlobalStatsInfo> GetGlobalTableStats(DuckLakeSnapshot snapshot);
@@ -244,6 +269,11 @@ public:
 
 	virtual vector<DuckLakeSnapshotInfo> GetAllSnapshots(const string &filter = string());
 	virtual void DeleteSnapshots(const vector<DuckLakeSnapshotInfo> &snapshots);
+	//! After a flush has emptied inlined-data rows, drop any (tid, sv) physical
+	//! table that is superseded by a newer schema_version on the same table_id
+	//! and is now empty. No more writes can land in such an entry, so the drop
+	//! is safe; invalidates the schema ObjectCache so in-session reads reload.
+	virtual void DropEmptySupersededInlinedTables();
 	virtual vector<DuckLakeTableSizeInfo> GetTableSizes(DuckLakeSnapshot snapshot);
 	virtual void SetConfigOption(const DuckLakeConfigOption &option);
 	virtual string GetPathForSchema(SchemaIndex schema_id, vector<DuckLakeSchemaInfo> &new_schemas_result);
@@ -263,6 +293,8 @@ public:
 
 protected:
 	virtual string GetLatestSnapshotQuery() const;
+
+	virtual string GenerateFileColumnStatsCTEBody(const CTERequirement &req, TableIndex table_id);
 
 	//! Wrap field selections with list aggregation of struct objects (DBMS-specific)
 	//! For DuckDB: LIST({'key1': val1, 'key2': val2, ...})
@@ -314,9 +346,9 @@ private:
 	string GetDeleteFileSelectList(const string &prefix);
 	FilterPushdownQueryComponents GenerateFilterPushdownComponents(const FilterPushdownInfo &filter_info,
 	                                                               TableIndex table_id);
+	string GenerateCTESectionFromRequirements(const unordered_map<idx_t, CTERequirement> &requirements,
+	                                          TableIndex table_id);
 	virtual FilterSQLResult ConvertFilterPushdownToSQL(const FilterPushdownInfo &filter_info);
-	virtual string GenerateCTESectionFromRequirements(const unordered_map<idx_t, CTERequirement> &requirements,
-	                                                  TableIndex table_id);
 	virtual string GenerateFilterFromTableFilter(const TableFilter &filter, const LogicalType &type,
 	                                             unordered_set<string> &referenced_stats);
 	virtual bool ValueIsFinite(const Value &val);
@@ -354,6 +386,7 @@ protected:
 	mutex paths_lock;
 	map<SchemaIndex, string> schema_paths;
 	map<TableIndex, string> table_paths;
+	bool pending_cache_clear = false;
 };
 
 } // namespace duckdb
