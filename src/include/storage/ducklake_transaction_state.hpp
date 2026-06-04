@@ -13,6 +13,8 @@
 
 namespace duckdb {
 
+struct CompactionStatsChange;
+
 struct DuckLakeColumnSchemaEntry {
 	FieldIndex field_index;
 	string column_name;
@@ -157,6 +159,12 @@ public:
 	string UpdateStatsForDroppedFiles(optional_ptr<vector<DuckLakeGlobalStatsInfo>> stats,
 	                                  const DuckLakeCommitContext &context,
 	                                  map<TableIndex, DroppedDataFileStats> &attempt_dropped_file_stats);
+	//! Apply a compaction's removed/added file deltas to `new_stats`.
+	static void ApplyCompactionStats(DuckLakeNewGlobalStats &new_stats, const CompactionStatsChange &stats_change);
+	//! Emit record_count / table_size_bytes updates reflecting compaction rewrites.
+	string UpdateStatsForCompactions(optional_ptr<vector<DuckLakeGlobalStatsInfo>> stats,
+	                                 const DuckLakeCommitContext &context,
+	                                 const map<TableIndex, CompactionStatsChange> &stats_changes);
 	CompactionInformation GetCompactionChanges(DuckLakeCommitState &commit_state, CompactionType type);
 	//! After a REWRITE_DELETES compaction, recompute EXACT global stats for `table_id` from the post-rewrite file set
 	//! (+ committed inlined data) and append the UpdateGlobalTableStats SQL to `batch_query`. No-op (leaving the

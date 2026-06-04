@@ -1,0 +1,257 @@
+# name: test/sql/compaction/compaction_table_stats.test
+# description: compaction rewrites keep ducklake_table_stats row and byte counts in sync
+# group: [compaction]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+
+test-env DATA_PATH __TEST_DIR__
+
+statement ok
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (
+    DATA_PATH '${DATA_PATH}/compaction_table_stats',
+    DATA_INLINING_ROW_LIMIT 0,
+    METADATA_CATALOG 'ducklake_meta'
+)
+
+statement ok
+USE ducklake
+
+statement ok
+CREATE TEMP VIEW compaction_stats_check AS
+SELECT
+    t.table_name,
+    s.record_count,
+    COALESCE(data_files.active_record_count, 0) AS active_record_count,
+    COALESCE(delete_files.active_delete_count, 0) AS active_delete_count,
+    CASE
+        WHEN s.file_size_bytes = COALESCE(data_files.active_file_size_bytes, 0) THEN 1
+        ELSE 0
+    END AS file_size_matches
+FROM ducklake_meta.ducklake_table t
+JOIN ducklake_meta.ducklake_table_stats s USING (table_id)
+LEFT JOIN (
+    SELECT table_id, SUM(record_count) AS active_record_count, SUM(file_size_bytes) AS active_file_size_bytes
+    FROM ducklake_meta.ducklake_data_file
+    WHERE end_snapshot IS NULL
+    GROUP BY table_id
+) data_files USING (table_id)
+LEFT JOIN (
+    SELECT table_id, SUM(delete_count) AS active_delete_count
+    FROM ducklake_meta.ducklake_delete_file
+    WHERE end_snapshot IS NULL
+    GROUP BY table_id
+) delete_files USING (table_id);
+
+statement ok
+CREATE TABLE rewrite_delete_stats(i INTEGER);
+
+statement ok
+INSERT INTO rewrite_delete_stats SELECT i::INTEGER FROM range(100) t(i);
+
+statement ok
+DELETE FROM rewrite_delete_stats WHERE i < 10;
+
+query III
+SELECT record_count, active_record_count, active_delete_count
+FROM compaction_stats_check
+WHERE table_name = 'rewrite_delete_stats';
+----
+100	100	10
+
+query I
+SELECT COUNT(*) FROM rewrite_delete_stats;
+----
+90
+
+query TII
+SELECT table_name, files_processed, files_created
+FROM ducklake_rewrite_data_files('ducklake', 'rewrite_delete_stats', delete_threshold => 0);
+----
+rewrite_delete_stats	1	1
+
+query IIII
+SELECT
+    record_count,
+    active_record_count,
+    active_delete_count,
+    file_size_matches
+FROM compaction_stats_check
+WHERE table_name = 'rewrite_delete_stats';
+----
+90	90	0	1
+
+query I
+SELECT COUNT(*) FROM rewrite_delete_stats;
+----
+90
+
+statement ok
+CALL ducklake_set_option('ducklake', 'target_file_size', '1MB');
+
+statement ok
+CREATE TABLE merge_adjacent_stats(i INTEGER, payload VARCHAR);
+
+statement ok
+INSERT INTO merge_adjacent_stats SELECT i::INTEGER, repeat('a', 100) FROM range(100) t(i);
+
+statement ok
+INSERT INTO merge_adjacent_stats SELECT (i + 100)::INTEGER, repeat('b', 100) FROM range(100) t(i);
+
+statement ok
+INSERT INTO merge_adjacent_stats SELECT (i + 200)::INTEGER, repeat('c', 100) FROM range(100) t(i);
+
+query TII
+SELECT table_name, files_processed, files_created
+FROM ducklake_merge_adjacent_files('ducklake', 'merge_adjacent_stats');
+----
+merge_adjacent_stats	3	1
+
+query III
+SELECT record_count, active_record_count, file_size_matches
+FROM compaction_stats_check
+WHERE table_name = 'merge_adjacent_stats';
+----
+300	300	1
+
+query I
+SELECT COUNT(*) FROM merge_adjacent_stats;
+----
+300
+
+statement ok
+DROP VIEW compaction_stats_check;
+
+statement ok
+USE memory;
+
+statement ok
+DETACH ducklake;
+
+statement ok
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}_inline' AS ducklake (
+    DATA_PATH '${DATA_PATH}/compaction_table_stats_inline',
+    DATA_INLINING_ROW_LIMIT 100,
+    METADATA_CATALOG 'ducklake_meta'
+)
+
+statement ok
+USE ducklake
+
+statement ok
+CREATE TEMP VIEW compaction_stats_check AS
+SELECT
+    t.table_name,
+    s.record_count,
+    COALESCE(data_files.active_record_count, 0) AS active_record_count,
+    COALESCE(delete_files.active_delete_count, 0) AS active_delete_count,
+    CASE
+        WHEN s.file_size_bytes = COALESCE(data_files.active_file_size_bytes, 0) THEN 1
+        ELSE 0
+    END AS file_size_matches
+FROM ducklake_meta.ducklake_table t
+JOIN ducklake_meta.ducklake_table_stats s USING (table_id)
+LEFT JOIN (
+    SELECT table_id, SUM(record_count) AS active_record_count, SUM(file_size_bytes) AS active_file_size_bytes
+    FROM ducklake_meta.ducklake_data_file
+    WHERE end_snapshot IS NULL
+    GROUP BY table_id
+) data_files USING (table_id)
+LEFT JOIN (
+    SELECT table_id, SUM(delete_count) AS active_delete_count
+    FROM ducklake_meta.ducklake_delete_file
+    WHERE end_snapshot IS NULL
+    GROUP BY table_id
+) delete_files USING (table_id);
+
+statement ok
+CREATE TABLE rewrite_inlined_delete_stats AS SELECT i::INTEGER AS i FROM range(101) t(i);
+
+statement ok
+DELETE FROM rewrite_inlined_delete_stats WHERE i = 25;
+
+query III
+SELECT
+    record_count,
+    active_record_count,
+    active_delete_count
+FROM compaction_stats_check
+WHERE table_name = 'rewrite_inlined_delete_stats';
+----
+101	101	0
+
+query I
+SELECT COUNT(*) FROM rewrite_inlined_delete_stats;
+----
+100
+
+query TII
+SELECT table_name, files_processed, files_created
+FROM ducklake_rewrite_data_files('ducklake', 'rewrite_inlined_delete_stats', delete_threshold => 0);
+----
+rewrite_inlined_delete_stats	1	1
+
+query IIII
+SELECT
+    record_count,
+    active_record_count,
+    active_delete_count,
+    file_size_matches
+FROM compaction_stats_check
+WHERE table_name = 'rewrite_inlined_delete_stats';
+----
+100	100	0	1
+
+query I
+SELECT COUNT(*) FROM rewrite_inlined_delete_stats;
+----
+100
+
+statement ok
+CREATE TABLE rewrite_zero_output_stats(i INTEGER);
+
+statement ok
+INSERT INTO rewrite_zero_output_stats SELECT i::INTEGER FROM range(20) t(i);
+
+statement ok
+DELETE FROM rewrite_zero_output_stats WHERE i < 20;
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake');
+
+query III
+SELECT record_count, active_record_count, active_delete_count
+FROM compaction_stats_check
+WHERE table_name = 'rewrite_zero_output_stats';
+----
+20	20	20
+
+query I
+SELECT COUNT(*) FROM rewrite_zero_output_stats;
+----
+0
+
+query TII
+SELECT table_name, files_processed, files_created
+FROM ducklake_rewrite_data_files('ducklake', 'rewrite_zero_output_stats', delete_threshold => 0);
+----
+rewrite_zero_output_stats	1	0
+
+query IIII
+SELECT
+    record_count,
+    active_record_count,
+    active_delete_count,
+    file_size_matches
+FROM compaction_stats_check
+WHERE table_name = 'rewrite_zero_output_stats';
+----
+0	0	0	1
+
+query I
+SELECT COUNT(*) FROM rewrite_zero_output_stats;
+----
+0

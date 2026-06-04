@@ -43,9 +43,17 @@ struct NewDataInfo {
 	vector<DuckLakeInlinedDataInfo> new_inlined_data;
 };
 
+struct CompactionStatsChange {
+	idx_t removed_record_count = 0;
+	idx_t removed_file_size_bytes = 0;
+	idx_t added_record_count = 0;
+	idx_t added_file_size_bytes = 0;
+};
+
 struct CompactionInformation {
 	vector<DuckLakeCompactedFileInfo> compacted_files;
 	vector<DuckLakeFileInfo> new_files;
+	map<TableIndex, CompactionStatsChange> stats_changes;
 };
 
 struct DuckLakeCommitState {
