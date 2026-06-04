@@ -531,22 +531,23 @@ DuckLakePartitionField GetPartitionField(DuckLakeTableEntry &table, ParsedExpres
 	}
 	case ExpressionType::FUNCTION: {
 		auto &function = expr.Cast<FunctionExpression>();
+		auto &args = function.GetArgumentsMutable();
 		auto name = StringUtil::Lower(function.FunctionName());
 
 		// BUCKET logic is different from the other transforms because it has two arguments.
 		if (name == "bucket") {
 			field.transform.type = DuckLakeTransformType::BUCKET;
-			if (function.GetChildren().size() != 2) {
+			if (args.size() != 2) {
 				throw InvalidInputException("Expected bucket(bucket_count, column), but got %s", expr.ToString());
 			}
-			if (function.GetChildren()[0]->GetExpressionType() != ExpressionType::VALUE_CONSTANT) {
+			if (args[0].GetExpressionMutable()->GetExpressionType() != ExpressionType::VALUE_CONSTANT) {
 				throw InvalidInputException("Bucket count must be a constant integer, got %s", expr.ToString());
 			}
-			if (function.GetChildren()[1]->GetExpressionType() != ExpressionType::COLUMN_REF) {
+			if (args[1].GetExpressionMutable()->GetExpressionType() != ExpressionType::COLUMN_REF) {
 				throw InvalidInputException("Expected bucket(bucket_count, column), but got %s", expr.ToString());
 			}
 
-			auto &bucket_expr = function.GetChildren()[0]->Cast<ConstantExpression>();
+			auto &bucket_expr = args[0].GetExpressionMutable()->Cast<ConstantExpression>();
 			auto bucket_value = bucket_expr.GetValue();
 			if (!bucket_value.DefaultTryCastAs(LogicalType::BIGINT)) {
 				throw InvalidInputException("Bucket count must be an integer");
@@ -560,7 +561,7 @@ DuckLakePartitionField GetPartitionField(DuckLakeTableEntry &table, ParsedExpres
 			}
 
 			field.transform.bucket_count = bucket_count;
-			column_name = GetPartitionColumnName(function.GetChildren()[1]->Cast<ColumnRefExpression>());
+			column_name = GetPartitionColumnName(args[1].GetExpressionMutable()->Cast<ColumnRefExpression>());
 			break;
 		}
 
@@ -578,11 +579,11 @@ DuckLakePartitionField GetPartitionField(DuckLakeTableEntry &table, ParsedExpres
 			    "Unsupported partition function %s - only year, month, day, hour, and bucket are supported", name);
 		}
 
-		if (function.GetChildren().size() != 1 || function.GetChildren()[0]->GetExpressionType() != ExpressionType::COLUMN_REF) {
+		if (args.size() != 1 || args[0].GetExpressionMutable()->GetExpressionType() != ExpressionType::COLUMN_REF) {
 			throw NotImplementedException("Expected %s(column), but got %s", name, expr.ToString());
 		}
 
-		column_name = GetPartitionColumnName(function.GetChildren()[0]->Cast<ColumnRefExpression>());
+		column_name = GetPartitionColumnName(args[0].GetExpressionMutable()->Cast<ColumnRefExpression>());
 		break;
 	}
 	default:
