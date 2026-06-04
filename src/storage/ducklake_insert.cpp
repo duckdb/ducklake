@@ -739,7 +739,7 @@ static void ResolveColumnRefs(unique_ptr<Expression> &expr) {
 	if (expr->GetExpressionClass() == ExpressionClass::BOUND_COLUMN_REF) {
 		auto &col_ref = expr->Cast<BoundColumnRefExpression>();
 		expr = make_uniq<BoundReferenceExpression>(col_ref.GetReturnType(),
-		                                           NumericCast<storage_t>(col_ref.binding.column_index.GetIndex()));
+		                                           NumericCast<storage_t>(col_ref.Binding().column_index.GetIndex()));
 		return;
 	}
 	ExpressionIterator::EnumerateChildren(*expr, [](unique_ptr<Expression> &child) { ResolveColumnRefs(child); });

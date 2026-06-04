@@ -1151,15 +1151,15 @@ string DuckLakeMetadataManager::GenerateFilterFromExpression(const Expression &e
 		} else {
 			return string();
 		}
-		const auto &target_type = type ? *type : constant_expr->value.type();
+		const auto &target_type = type ? *type : constant_expr->GetValue().type();
 		switch (target_type.id()) {
 		case LogicalTypeId::BLOB:
 			return string();
 		case LogicalTypeId::FLOAT:
 		case LogicalTypeId::DOUBLE:
-			return GenerateConstantFilterDouble(comparison_type, constant_expr->value, target_type, referenced_stats);
+			return GenerateConstantFilterDouble(comparison_type, constant_expr->GetValue(), target_type, referenced_stats);
 		default:
-			return GenerateConstantFilter(comparison_type, constant_expr->value, target_type, referenced_stats);
+			return GenerateConstantFilter(comparison_type, constant_expr->GetValue(), target_type, referenced_stats);
 		}
 	}
 	switch (expr.GetExpressionClass()) {
@@ -1167,28 +1167,28 @@ string DuckLakeMetadataManager::GenerateFilterFromExpression(const Expression &e
 		auto &op_expr = expr.Cast<BoundOperatorExpression>();
 		switch (expr.GetExpressionType()) {
 		case ExpressionType::OPERATOR_IS_NULL:
-			if (op_expr.children.size() != 1 || !IsSimpleFilterSubject(*op_expr.children[0])) {
+			if (op_expr.GetChildren().size() != 1 || !IsSimpleFilterSubject(*op_expr.GetChildren()[0])) {
 				return string();
 			}
 			referenced_stats.insert("null_count");
 			return "null_count > 0";
 		case ExpressionType::OPERATOR_IS_NOT_NULL:
-			if (op_expr.children.size() != 1 || !IsSimpleFilterSubject(*op_expr.children[0])) {
+			if (op_expr.GetChildren().size() != 1 || !IsSimpleFilterSubject(*op_expr.GetChildren()[0])) {
 				return string();
 			}
 			referenced_stats.insert("value_count");
 			return "value_count > 0";
 		case ExpressionType::COMPARE_IN: {
-			if (op_expr.children.size() < 2 || !IsSimpleFilterSubject(*op_expr.children[0])) {
+			if (op_expr.GetChildren().size() < 2 || !IsSimpleFilterSubject(*op_expr.GetChildren()[0])) {
 				return string();
 			}
 			string result;
-			for (idx_t i = 1; i < op_expr.children.size(); i++) {
-				auto &child = *op_expr.children[i];
+			for (idx_t i = 1; i < op_expr.GetChildren().size(); i++) {
+				auto &child = *op_expr.GetChildren()[i];
 				if (child.GetExpressionClass() != ExpressionClass::BOUND_CONSTANT) {
 					return string();
 				}
-				auto &constant_value = child.Cast<BoundConstantExpression>().value;
+				auto &constant_value = child.Cast<BoundConstantExpression>().GetValue();
 				if (constant_value.IsNull()) {
 					return string();
 				}
@@ -1225,7 +1225,7 @@ string DuckLakeMetadataManager::GenerateFilterFromExpression(const Expression &e
 		auto &conjunction = expr.Cast<BoundConjunctionExpression>();
 		string result;
 		const auto conjunction_type = expr.GetExpressionType();
-		for (auto &child : conjunction.children) {
+		for (auto &child : conjunction.GetChildren()) {
 			auto child_str = GenerateFilterFromExpression(*child, type, referenced_stats);
 			if (child_str.empty()) {
 				if (conjunction_type == ExpressionType::CONJUNCTION_OR) {
@@ -1242,14 +1242,14 @@ string DuckLakeMetadataManager::GenerateFilterFromExpression(const Expression &e
 	}
 	case ExpressionClass::BOUND_FUNCTION: {
 		auto &func = expr.Cast<BoundFunctionExpression>();
-		if (func.function.GetName() == OptionalFilterScalarFun::NAME && func.bind_info) {
-			auto &data = func.bind_info->Cast<OptionalFilterFunctionData>();
+		if (func.Function().GetName() == OptionalFilterScalarFun::NAME && func.BindInfo()) {
+			auto &data = func.BindInfo()->Cast<OptionalFilterFunctionData>();
 			return data.child_filter_expr
 			           ? GenerateFilterFromExpression(*data.child_filter_expr, type, referenced_stats)
 			           : string();
 		}
-		if (func.function.GetName() == SelectivityOptionalFilterScalarFun::NAME && func.bind_info) {
-			auto &data = func.bind_info->Cast<SelectivityOptionalFilterFunctionData>();
+		if (func.Function().GetName() == SelectivityOptionalFilterScalarFun::NAME && func.BindInfo()) {
+			auto &data = func.BindInfo()->Cast<SelectivityOptionalFilterFunctionData>();
 			return data.child_filter_expr
 			           ? GenerateFilterFromExpression(*data.child_filter_expr, type, referenced_stats)
 			           : string();
@@ -2103,7 +2103,7 @@ string GetExpressionType(ParsedExpression &expression) {
 	switch (expression.GetExpressionType()) {
 	case ExpressionType::OPERATOR_CAST: {
 		auto &cast_expression = expression.Cast<CastExpression>();
-		if (cast_expression.child->GetExpressionType() == ExpressionType::VALUE_CONSTANT) {
+		if (cast_expression.Child().GetExpressionType() == ExpressionType::VALUE_CONSTANT) {
 			return "literal";
 		}
 		return "expression";
