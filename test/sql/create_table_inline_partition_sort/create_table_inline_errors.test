@@ -79,8 +79,13 @@ SELECT count(*) FROM ducklake_metadata.ducklake_sort_info
 statement ok
 CREATE TABLE ok_after_errors (a INTEGER) PARTITIONED BY (a)
 
+# resolve the table_id in a separate statement - some metadata catalogs (e.g. Quack
+# ones) cannot scan two of their tables in a single query
+statement ok
+SET VARIABLE ok_after_errors_id = (SELECT table_id FROM ducklake_metadata.ducklake_table WHERE table_name = 'ok_after_errors')
+
 query I
-SELECT count(*) FROM ducklake_metadata.ducklake_partition_info WHERE table_id = (SELECT table_id FROM ducklake_metadata.ducklake_table WHERE table_name = 'ok_after_errors')
+SELECT count(*) FROM ducklake_metadata.ducklake_partition_info WHERE table_id = getvariable('ok_after_errors_id')
 ----
 1
 
@@ -89,8 +94,11 @@ SELECT count(*) FROM ducklake_metadata.ducklake_partition_info WHERE table_id = 
 statement ok
 CREATE TABLE ok_diff_transforms (ts TIMESTAMP) PARTITIONED BY (year(ts), month(ts))
 
+statement ok
+SET VARIABLE ok_diff_transforms_id = (SELECT table_id FROM ducklake_metadata.ducklake_table WHERE table_name = 'ok_diff_transforms')
+
 query II
-SELECT partition_key_index, transform FROM ducklake_metadata.ducklake_partition_column WHERE table_id = (SELECT table_id FROM ducklake_metadata.ducklake_table WHERE table_name = 'ok_diff_transforms') ORDER BY partition_key_index
+SELECT partition_key_index, transform FROM ducklake_metadata.ducklake_partition_column WHERE table_id = getvariable('ok_diff_transforms_id') ORDER BY partition_key_index
 ----
 0	year
 1	month

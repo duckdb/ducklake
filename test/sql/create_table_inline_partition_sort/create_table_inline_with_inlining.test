@@ -42,30 +42,35 @@ SELECT count(*) FROM small_part
 ----
 50
 
+# resolve the table_id in a separate statement - some metadata catalogs (e.g. Quack
+# ones) cannot scan two of their tables in a single query
+statement ok
+SET VARIABLE small_part_id = (SELECT table_id FROM ducklake_meta.ducklake_table WHERE table_name = 'small_part')
+
 # partition metadata recorded for the inlined CTAS
 query I
 SELECT count(*) FROM ducklake_meta.ducklake_partition_info
-WHERE table_id = (SELECT table_id FROM ducklake_meta.ducklake_table WHERE table_name = 'small_part')
+WHERE table_id = getvariable('small_part_id')
 ----
 1
 
 query II
 SELECT partition_key_index, transform FROM ducklake_meta.ducklake_partition_column
-WHERE table_id = (SELECT table_id FROM ducklake_meta.ducklake_table WHERE table_name = 'small_part')
+WHERE table_id = getvariable('small_part_id')
 ----
 0	identity
 
 # zero data_file rows: rows are sitting in the inlined-data catalog table, not on Parquet
 query I
 SELECT count(*) FROM ducklake_meta.ducklake_data_file
-WHERE table_id = (SELECT table_id FROM ducklake_meta.ducklake_table WHERE table_name = 'small_part')
+WHERE table_id = getvariable('small_part_id')
 ----
 0
 
 # the per-table inlined-data table exists in the metadata catalog
 query I
 SELECT count(*) FROM ducklake_meta.ducklake_inlined_data_tables
-WHERE table_id = (SELECT table_id FROM ducklake_meta.ducklake_table WHERE table_name = 'small_part')
+WHERE table_id = getvariable('small_part_id')
 ----
 1
 
@@ -83,29 +88,32 @@ SELECT count(*) FROM small_both
 ----
 20
 
+statement ok
+SET VARIABLE small_both_id = (SELECT table_id FROM ducklake_meta.ducklake_table WHERE table_name = 'small_both')
+
 query I
 SELECT count(*) FROM ducklake_meta.ducklake_partition_info
-WHERE table_id = (SELECT table_id FROM ducklake_meta.ducklake_table WHERE table_name = 'small_both')
+WHERE table_id = getvariable('small_both_id')
 ----
 1
 
 query I
 SELECT count(*) FROM ducklake_meta.ducklake_sort_info
-WHERE table_id = (SELECT table_id FROM ducklake_meta.ducklake_table WHERE table_name = 'small_both')
+WHERE table_id = getvariable('small_both_id')
 ----
 1
 
 # the sort_expression row carries the planning-time-allocated direction/null_order
 query III
 SELECT expression, sort_direction, null_order FROM ducklake_meta.ducklake_sort_expression
-WHERE table_id = (SELECT table_id FROM ducklake_meta.ducklake_table WHERE table_name = 'small_both')
+WHERE table_id = getvariable('small_both_id')
 ----
 v	ASC	NULLS_LAST
 
 # fully inlined: zero Parquet files
 query I
 SELECT count(*) FROM ducklake_meta.ducklake_data_file
-WHERE table_id = (SELECT table_id FROM ducklake_meta.ducklake_table WHERE table_name = 'small_both')
+WHERE table_id = getvariable('small_both_id')
 ----
 0
 
@@ -122,13 +130,13 @@ CALL ducklake_flush_inlined_data('ducklake')
 # path hands the spec through correctly)
 query I
 SELECT count(*) > 0 FROM ducklake_meta.ducklake_data_file
-WHERE table_id = (SELECT table_id FROM ducklake_meta.ducklake_table WHERE table_name = 'small_part')
+WHERE table_id = getvariable('small_part_id')
 ----
 true
 
 query I
 SELECT count(*) FROM ducklake_meta.ducklake_data_file
-WHERE table_id = (SELECT table_id FROM ducklake_meta.ducklake_table WHERE table_name = 'small_part')
+WHERE table_id = getvariable('small_part_id')
   AND partition_id IS NULL
 ----
 0
@@ -154,26 +162,32 @@ SELECT count(*) FROM overflow_part
 ----
 5000
 
+statement ok
+SET VARIABLE overflow_part_id = (SELECT table_id FROM ducklake_meta.ducklake_table WHERE table_name = 'overflow_part')
+
 # partition + sort metadata persist
-query II
-SELECT
-  (SELECT count(*) FROM ducklake_meta.ducklake_partition_info
-   WHERE table_id = (SELECT table_id FROM ducklake_meta.ducklake_table WHERE table_name = 'overflow_part')),
-  (SELECT count(*) FROM ducklake_meta.ducklake_sort_info
-   WHERE table_id = (SELECT table_id FROM ducklake_meta.ducklake_table WHERE table_name = 'overflow_part'))
+query I
+SELECT count(*) FROM ducklake_meta.ducklake_partition_info
+WHERE table_id = getvariable('overflow_part_id')
 ----
-1	1
+1
+
+query I
+SELECT count(*) FROM ducklake_meta.ducklake_sort_info
+WHERE table_id = getvariable('overflow_part_id')
+----
+1
 
 # overflow path: at least one Parquet file was written, and each has a non-null partition_id
 query I
 SELECT count(*) > 0 FROM ducklake_meta.ducklake_data_file
-WHERE table_id = (SELECT table_id FROM ducklake_meta.ducklake_table WHERE table_name = 'overflow_part')
+WHERE table_id = getvariable('overflow_part_id')
 ----
 true
 
 query I
 SELECT count(*) FROM ducklake_meta.ducklake_data_file
-WHERE table_id = (SELECT table_id FROM ducklake_meta.ducklake_table WHERE table_name = 'overflow_part')
+WHERE table_id = getvariable('overflow_part_id')
   AND partition_id IS NULL
 ----
 0
@@ -190,7 +204,7 @@ CALL ducklake_flush_inlined_data('ducklake')
 # overflow_part: zero rows in any inlined-data table after flush
 query I
 SELECT count(*) FROM ducklake_meta.ducklake_data_file
-WHERE table_id = (SELECT table_id FROM ducklake_meta.ducklake_table WHERE table_name = 'overflow_part')
+WHERE table_id = getvariable('overflow_part_id')
   AND partition_id IS NULL
 ----
 0
