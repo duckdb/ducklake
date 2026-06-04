@@ -1,0 +1,29 @@
+# name: test/sql/view/rename_view_case.test
+# description: Test renaming views with case-only changes in DuckLake
+# group: [view]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+
+test-env DATA_PATH __TEST_DIR__
+
+statement ok
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/rename_view_case')
+
+statement ok
+USE ducklake
+
+statement ok
+CREATE VIEW MY_VIEW AS SELECT 42 AS i
+
+# case-only rename should succeed
+statement ok
+ALTER VIEW MY_VIEW RENAME TO my_view
+
+query I
+SELECT * FROM my_view
+----
+42

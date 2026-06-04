@@ -25,6 +25,7 @@ jobs:
       VCPKG_TOOLCHAIN_PATH: ${{ github.workspace }}/vcpkg/scripts/buildsystems/vcpkg.cmake
       ENABLE_SQLITE_SCANNER: ON
       ENABLE_POSTGRES_SCANNER: ON
+      ENABLE_QUACK: ON
       BUILD_EXTENSION_TEST_DEPS: full
 
     steps:
@@ -70,6 +71,15 @@ jobs:
       run: |
         make release
 
+    - name: Test Quack
+      run: |
+        REPO_DIR=$(dirname $(find build/release/repository -name "quack.duckdb_extension" | head -1))
+        DUCKDB_VER=$(basename $(dirname "$REPO_DIR"))
+        EXT_DIR="$HOME/.duckdb/extensions/$DUCKDB_VER/${{ matrix.arch }}"
+        mkdir -p "$EXT_DIR"
+        cp "$REPO_DIR/quack.duckdb_extension" "$EXT_DIR/"
+        python3 scripts/run_quack_tests.py --slow --no-install
+
     - name: Test SQLite
       run: |
         build/release/test/unittest --test-config test/configs/sqlite.json --test-dir ./ "test/sql/*"
@@ -89,3 +99,4 @@ jobs:
         cp "$REPO_DIR/postgres_scanner.duckdb_extension" "$EXT_DIR/"
         createdb ducklakedb
         build/release/test/unittest --test-config test/configs/postgres.json --test-dir ./ "test/sql/*"
+

@@ -168,6 +168,8 @@ public:
 	}
 	unique_ptr<QueryResult> Query(DuckLakeSnapshot snapshot, string query);
 	unique_ptr<QueryResult> Query(string query);
+	//! Execute SQL on the metadata connection without placeholder substitution or metadata-manager wrapping.
+	unique_ptr<QueryResult> ExecuteRaw(string query);
 	Connection &GetConnection();
 
 	DuckLakeSnapshot GetSnapshot();
@@ -335,6 +337,7 @@ private:
 	void AlterEntryInternal(DuckLakeViewEntry &old_entry, unique_ptr<CatalogEntry> new_entry);
 	void AddTableChanges(TableIndex table_id, const LocalTableDataChanges &table_changes,
 	                     TransactionChangeInformation &changes) const;
+	case_insensitive_map_t<unique_ptr<DuckLakeCatalogSet>> &GetNewMacroMap(CatalogType type);
 
 private:
 	DuckLakeCatalog &ducklake_catalog;
@@ -351,8 +354,9 @@ private:
 	case_insensitive_map_t<unique_ptr<DuckLakeCatalogSet>> new_tables;
 	set<TableIndex> dropped_tables;
 
-	//! New macros added by this transaction
-	case_insensitive_map_t<unique_ptr<DuckLakeCatalogSet>> new_macros;
+	//! New macros added by this transaction.
+	case_insensitive_map_t<unique_ptr<DuckLakeCatalogSet>> new_scalar_macros;
+	case_insensitive_map_t<unique_ptr<DuckLakeCatalogSet>> new_table_macros;
 	set<MacroIndex> dropped_scalar_macros;
 	set<MacroIndex> dropped_table_macros;
 

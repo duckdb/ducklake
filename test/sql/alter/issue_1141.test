@@ -1,0 +1,38 @@
+# name: test/sql/alter/issue_1141.test
+# description: regression test for issue #1141
+# group: [alter]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+
+test-env DATA_PATH __TEST_DIR__
+
+statement ok
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/ducklake_promote_type_files', METADATA_CATALOG 'xx')
+
+statement ok
+CREATE TABLE ducklake.test(a TINYINT);
+
+statement ok
+BEGIN
+
+statement ok
+ALTER TABLE ducklake.test ADD COLUMN b INT;
+
+statement ok
+ALTER TABLE ducklake.test RENAME COLUMN b TO c;
+
+statement ok
+ALTER TABLE ducklake.test ALTER c SET DATA TYPE BIGINT;
+
+statement ok
+COMMIT
+
+query IIIIII
+DESCRIBE ducklake.test;
+----
+a	TINYINT	YES	NULL	NULL	NULL
+c	BIGINT	YES	NULL	NULL	NULL
