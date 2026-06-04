@@ -7,6 +7,7 @@ add_library(
   ducklake_expire_snapshots.cpp
   ducklake_flush_inlined_data.cpp
   ducklake_current_snapshot.cpp
+  ducklake_drop_data_files.cpp
   ducklake_last_committed_snapshot.cpp
   ducklake_list_files.cpp
   ducklake_compaction_functions.cpp

@@ -97,6 +97,9 @@ static void LoadInternal(ExtensionLoader &loader) {
 	auto add_files = DuckLakeAddDataFilesFunction::GetFunctions();
 	loader.RegisterFunction(add_files);
 
+	auto drop_files = DuckLakeDropDataFilesFunction::GetFunctions();
+	loader.RegisterFunction(drop_files);
+
 	DuckLakeCurrentSnapshotFunction current_snapshot;
 	loader.RegisterFunction(current_snapshot);
 

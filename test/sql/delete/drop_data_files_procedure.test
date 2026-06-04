@@ -1,0 +1,412 @@
+# name: test/sql/delete/drop_data_files_procedure.test
+# description: ducklake_drop_data_files retires files by explicit partition values
+# group: [delete]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/drop_data_files_procedure/', METADATA_CATALOG 'metadata');
+
+statement ok
+USE ducklake;
+
+statement ok
+CREATE TABLE partitioned_t (id INT, source VARCHAR, value INT);
+
+statement ok
+ALTER TABLE partitioned_t SET PARTITIONED BY (source);
+
+statement ok
+INSERT INTO partitioned_t VALUES (1, 'a', 10), (2, 'a', 20), (3, 'b', 30), (4, NULL, 40);
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake')
+
+query II
+SELECT COUNT(*), SUM(row_count) FROM ducklake_drop_data_files('ducklake', 'partitioned_t', partition_values => struct_pack(source := 'a'), dry_run => true);
+----
+1	2
+
+query I
+SELECT COUNT(*) FROM partitioned_t WHERE source = 'a';
+----
+2
+
+query II
+SELECT COUNT(*), SUM(row_count) FROM ducklake_drop_data_files('ducklake', 'partitioned_t', partition_values => struct_pack(source := 'a'));
+----
+1	2
+
+query II
+SELECT source, COUNT(*) FROM partitioned_t GROUP BY source ORDER BY source NULLS FIRST;
+----
+NULL	1
+b	1
+
+statement ok
+SET VARIABLE partitioned_t_table_id = (SELECT table_id FROM metadata.ducklake_table WHERE table_name = 'partitioned_t');
+
+query I
+SELECT COUNT(*) FROM metadata.ducklake_data_file WHERE table_id = getvariable('partitioned_t_table_id') AND end_snapshot IS NOT NULL;
+----
+1
+
+query II
+SELECT COUNT(*), SUM(row_count) FROM ducklake_drop_data_files('ducklake', 'partitioned_t', partition_values => struct_pack(source := NULL::VARCHAR));
+----
+1	1
+
+query II
+SELECT id, source FROM partitioned_t ORDER BY id;
+----
+3	b
+
+query II
+SELECT COUNT(*), COALESCE(SUM(row_count), 0) FROM ducklake_drop_data_files('ducklake', 'partitioned_t', partition_values => struct_pack(source := 'missing'));
+----
+0	0
+
+query II
+SELECT COUNT(*), SUM(row_count) FROM ducklake_drop_data_files('ducklake', 'partitioned_t', partition_values => struct_pack(source := 'b'));
+----
+1	1
+
+query I
+SELECT COUNT(*) FROM partitioned_t;
+----
+0
+
+statement ok
+CREATE TABLE transformed_t (id INT, ts TIMESTAMP, source VARCHAR);
+
+statement ok
+ALTER TABLE transformed_t SET PARTITIONED BY (year(ts), month(ts));
+
+statement ok
+INSERT INTO transformed_t VALUES
+  (1, TIMESTAMP '2024-01-15 00:00:00', 'a'),
+  (2, TIMESTAMP '2024-01-16 00:00:00', 'b'),
+  (3, TIMESTAMP '2024-02-01 00:00:00', 'c'),
+  (4, TIMESTAMP '2025-01-01 00:00:00', 'd');
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake')
+
+query II
+SELECT COUNT(*), SUM(row_count) FROM ducklake_drop_data_files('ducklake', 'transformed_t', partition_values => struct_pack(year := 2024, month := 1));
+----
+1	2
+
+query III
+SELECT id, year(ts), month(ts) FROM transformed_t ORDER BY id;
+----
+3	2024	2
+4	2025	1
+
+query II
+SELECT COUNT(*), SUM(row_count) FROM ducklake_drop_data_files('ducklake', 'transformed_t', partition_values => struct_pack(year := 2025));
+----
+1	1
+
+query I
+SELECT id FROM transformed_t ORDER BY id;
+----
+3
+
+statement error
+SELECT * FROM ducklake_drop_data_files('ducklake', 'transformed_t', partition_values => struct_pack(value := 10));
+----
+Unknown partition key
+
+statement error
+SELECT * FROM ducklake_drop_data_files('ducklake', 'transformed_t');
+----
+partition_values is required
+
+statement error
+SELECT * FROM ducklake_drop_data_files('ducklake', 'transformed_t', partition_values => map(['year'], ['2024']));
+----
+partition_values must be a STRUCT
+
+statement error
+SELECT * FROM ducklake_drop_data_files('ducklake', 'transformed_t', partition_values => struct_pack(year := 'not-a-year'));
+----
+Failed to cast partition value
+
+statement ok
+CREATE TABLE unpartitioned_t (id INT, source VARCHAR);
+
+statement error
+SELECT * FROM ducklake_drop_data_files('ducklake', 'unpartitioned_t', partition_values => struct_pack(source := 'a'));
+----
+requires a partitioned table
+
+statement ok
+CREATE TABLE existing_delete_t (id INT, source VARCHAR);
+
+statement ok
+ALTER TABLE existing_delete_t SET PARTITIONED BY (source);
+
+statement ok
+INSERT INTO existing_delete_t VALUES (1, 'a'), (2, 'a'), (3, 'b');
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake')
+
+query I
+DELETE FROM existing_delete_t WHERE id = 1;
+----
+1
+
+query II
+SELECT COUNT(*), SUM(row_count) FROM ducklake_drop_data_files('ducklake', 'existing_delete_t', partition_values => struct_pack(source := 'a'));
+----
+1	2
+
+query II
+SELECT id, source FROM existing_delete_t ORDER BY id;
+----
+3	b
+
+statement ok
+CREATE TABLE repeated_partition_t (id INT, source VARCHAR);
+
+statement ok
+ALTER TABLE repeated_partition_t SET PARTITIONED BY (source);
+
+statement ok
+INSERT INTO repeated_partition_t VALUES (1, 'a'), (2, 'b');
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake')
+
+statement ok
+INSERT INTO repeated_partition_t VALUES (3, 'a');
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake')
+
+query II
+SELECT COUNT(*), SUM(row_count) FROM ducklake_drop_data_files('ducklake', 'repeated_partition_t', partition_values => struct_pack(source := 'a'));
+----
+2	2
+
+query II
+SELECT id, source FROM repeated_partition_t ORDER BY id;
+----
+2	b
+
+statement ok
+CREATE TABLE partial_spec_t (id INT, ts TIMESTAMP);
+
+statement ok
+ALTER TABLE partial_spec_t SET PARTITIONED BY (year(ts), month(ts));
+
+statement ok
+INSERT INTO partial_spec_t VALUES
+  (1, TIMESTAMP '2024-01-01 00:00:00'),
+  (2, TIMESTAMP '2024-02-01 00:00:00'),
+  (3, TIMESTAMP '2025-01-01 00:00:00');
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake')
+
+query II
+SELECT COUNT(*), SUM(row_count) FROM ducklake_drop_data_files('ducklake', 'partial_spec_t', partition_values => struct_pack(year := 2024));
+----
+2	2
+
+query II
+SELECT id, year(ts) FROM partial_spec_t ORDER BY id;
+----
+3	2025
+
+statement ok
+CREATE TABLE evolved_partition_t (id INT, source VARCHAR, region VARCHAR);
+
+statement ok
+ALTER TABLE evolved_partition_t SET PARTITIONED BY (source);
+
+statement ok
+INSERT INTO evolved_partition_t VALUES (1, 'a', 'old'), (2, 'b', 'old');
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake')
+
+statement ok
+ALTER TABLE evolved_partition_t SET PARTITIONED BY (region, source);
+
+statement ok
+INSERT INTO evolved_partition_t VALUES (3, 'a', 'new'), (4, 'b', 'new');
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake')
+
+query II
+SELECT COUNT(*), SUM(row_count) FROM ducklake_drop_data_files('ducklake', 'evolved_partition_t', partition_values => struct_pack(source := 'a'));
+----
+1	1
+
+query III
+SELECT id, source, region FROM evolved_partition_t ORDER BY id;
+----
+1	a	old
+2	b	old
+4	b	new
+
+statement ok
+CREATE TABLE duplicate_transform_t (id INT, created_at TIMESTAMP, updated_at TIMESTAMP);
+
+statement ok
+ALTER TABLE duplicate_transform_t SET PARTITIONED BY (year(created_at), year(updated_at));
+
+statement ok
+INSERT INTO duplicate_transform_t VALUES
+  (1, TIMESTAMP '2024-01-01 00:00:00', TIMESTAMP '2025-01-01 00:00:00'),
+  (2, TIMESTAMP '2024-01-01 00:00:00', TIMESTAMP '2026-01-01 00:00:00'),
+  (3, TIMESTAMP '2023-01-01 00:00:00', TIMESTAMP '2025-01-01 00:00:00');
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake')
+
+query II
+SELECT COUNT(*), SUM(row_count) FROM ducklake_drop_data_files('ducklake', 'duplicate_transform_t', partition_values => struct_pack(year := 2024, year_updated_at := 2025));
+----
+1	1
+
+query III
+SELECT id, year(created_at), year(updated_at) FROM duplicate_transform_t ORDER BY id;
+----
+2	2024	2026
+3	2023	2025
+
+statement ok
+CREATE SCHEMA custom_schema;
+
+statement ok
+CREATE TABLE custom_schema.schema_t (id INT, source VARCHAR);
+
+statement ok
+ALTER TABLE custom_schema.schema_t SET PARTITIONED BY (source);
+
+statement ok
+INSERT INTO custom_schema.schema_t VALUES (1, 's'), (2, 't');
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake', schema_name => 'custom_schema', table_name => 'schema_t')
+
+query II
+SELECT COUNT(*), SUM(row_count) FROM ducklake_drop_data_files('ducklake', 'schema_t', schema => 'custom_schema', partition_values => struct_pack(source := 's'));
+----
+1	1
+
+query II
+SELECT id, source FROM custom_schema.schema_t ORDER BY id;
+----
+2	t
+
+statement ok
+CREATE TABLE rollback_t (id INT, source VARCHAR);
+
+statement ok
+ALTER TABLE rollback_t SET PARTITIONED BY (source);
+
+statement ok
+INSERT INTO rollback_t VALUES (1, 'r'), (2, 's');
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake')
+
+statement ok
+BEGIN;
+
+query II
+SELECT COUNT(*), SUM(row_count) FROM ducklake_drop_data_files('ducklake', 'rollback_t', partition_values => struct_pack(source := 'r'));
+----
+1	1
+
+statement ok
+ROLLBACK;
+
+query II
+SELECT id, source FROM rollback_t ORDER BY id;
+----
+1	r
+2	s
+
+statement ok
+CREATE TABLE add_then_drop_t (id INT, source VARCHAR, value INT);
+
+statement ok
+ALTER TABLE add_then_drop_t SET PARTITIONED BY (source);
+
+statement ok
+COPY (SELECT 10 AS id, 'x' AS source, 100 AS value) TO '{DATA_PATH}/drop_data_files_procedure/add_then_drop_x' (FORMAT parquet, PARTITION_BY (source));
+
+statement ok
+BEGIN;
+
+statement ok
+CALL ducklake_add_data_files('ducklake', 'add_then_drop_t', '{DATA_PATH}/drop_data_files_procedure/add_then_drop_x/source=x/data_0.parquet');
+
+query I
+SELECT COUNT(*) FROM add_then_drop_t;
+----
+1
+
+query II
+SELECT COUNT(*), SUM(row_count) FROM ducklake_drop_data_files('ducklake', 'add_then_drop_t', partition_values => struct_pack(source := 'x'));
+----
+1	1
+
+statement ok
+COMMIT;
+
+query I
+SELECT COUNT(*) FROM add_then_drop_t;
+----
+0
+
+query I
+SELECT COUNT(*) FROM read_parquet('{DATA_PATH}/drop_data_files_procedure/add_then_drop_x/source=x/data_0.parquet');
+----
+1
+
+statement ok
+CREATE TABLE dry_run_local_t (id INT, source VARCHAR, value INT);
+
+statement ok
+ALTER TABLE dry_run_local_t SET PARTITIONED BY (source);
+
+statement ok
+COPY (SELECT 20 AS id, 'z' AS source, 200 AS value) TO '{DATA_PATH}/drop_data_files_procedure/dry_run_local_z' (FORMAT parquet, PARTITION_BY (source));
+
+statement ok
+BEGIN;
+
+statement ok
+CALL ducklake_add_data_files('ducklake', 'dry_run_local_t', '{DATA_PATH}/drop_data_files_procedure/dry_run_local_z/source=z/data_0.parquet');
+
+query II
+SELECT COUNT(*), SUM(row_count) FROM ducklake_drop_data_files('ducklake', 'dry_run_local_t', partition_values => struct_pack(source := 'z'), dry_run => true);
+----
+1	1
+
+statement ok
+COMMIT;
+
+query I
+SELECT COUNT(*) FROM dry_run_local_t;
+----
+1
+
+query I
+SELECT COUNT(*) FROM read_parquet('{DATA_PATH}/drop_data_files_procedure/dry_run_local_z/source=z/data_0.parquet');
+----
+1

@@ -22,6 +22,7 @@ add_library(
   ducklake_deletion_vector.cpp
   ducklake_multi_file_reader.cpp
   ducklake_partition_data.cpp
+  ducklake_partition_filter.cpp
   ducklake_secret.cpp
   ducklake_sort_data.cpp
   ducklake_server_side_commit.cpp

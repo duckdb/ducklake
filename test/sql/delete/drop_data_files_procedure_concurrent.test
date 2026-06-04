@@ -1,0 +1,63 @@
+# name: test/sql/delete/drop_data_files_procedure_concurrent.test
+# description: concurrent ducklake_drop_data_files calls conflict on the same partition
+# group: [delete]
+
+require notwindows
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/drop_data_files_procedure_concurrent/', BUSY_TIMEOUT 10000)
+
+statement ok
+USE ducklake;
+
+statement ok
+CREATE TABLE tbl (id INTEGER, source VARCHAR);
+
+statement ok
+ALTER TABLE tbl SET PARTITIONED BY (source);
+
+statement ok
+INSERT INTO tbl VALUES (1, 'a'), (2, 'a'), (3, 'b');
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake');
+
+statement ok
+SET immediate_transaction_mode=true
+
+statement ok con1
+BEGIN
+
+statement ok con2
+BEGIN
+
+query II con1
+SELECT COUNT(*), SUM(row_count) FROM ducklake_drop_data_files('ducklake', 'tbl', partition_values => struct_pack(source := 'a'));
+----
+1	2
+
+query II con2
+SELECT COUNT(*), SUM(row_count) FROM ducklake_drop_data_files('ducklake', 'tbl', partition_values => struct_pack(source := 'a'));
+----
+1	2
+
+statement ok con1
+COMMIT
+
+statement error con2
+COMMIT
+----
+conflict
+
+query I
+SELECT COUNT(*) FROM ducklake.tbl WHERE source = 'a';
+----
+0

@@ -130,6 +130,11 @@ public:
 	static TableFunctionSet GetFunctions();
 };
 
+class DuckLakeDropDataFilesFunction : public TableFunction {
+public:
+	static TableFunctionSet GetFunctions();
+};
+
 class DuckLakeSettingsFunction : public DuckLakeBaseMetadataFunction {
 public:
 	DuckLakeSettingsFunction();
