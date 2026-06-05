@@ -550,9 +550,15 @@ DuckLakeCopyOptions DuckLakeInsert::GetCopyOptions(ClientContext &context, DuckL
 	}
 	string target_file_size_str;
 	idx_t target_file_size;
-	if (copy_input.GetEffectiveOption("target_file_size", target_file_size_str)) {
+	Value session_target_file_size;
+	bool has_session_target_file_size =
+	    context.TryGetCurrentSetting("ducklake_target_file_size", session_target_file_size) &&
+	    !session_target_file_size.IsNull() && !session_target_file_size.ToString().empty();
+	if (!has_session_target_file_size && copy_input.GetEffectiveOption("target_file_size", target_file_size_str)) {
+		// WITH (...) / metadata option - used unless the ducklake_target_file_size session setting overrides it
 		target_file_size = Value(target_file_size_str).GetValue<idx_t>();
 	} else {
+		// session setting, then global metadata option, then the default
 		target_file_size = catalog.GetTargetFileSize(context, schema_id, table_id);
 	}
 
