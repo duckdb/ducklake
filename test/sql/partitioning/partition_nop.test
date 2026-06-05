@@ -59,18 +59,19 @@ INSERT INTO partitioned_tbl VALUES (0, 'replacement_a'), (0, 'replacement_b');
 statement ok
 COMMIT;
 
+statement ok
+SET VARIABLE expected_partition_id = (
+    SELECT partition_id
+    FROM ducklake_metadata.ducklake_partition_info
+    WHERE table_id = 1
+);
+
 query I
 SELECT COUNT(*)
-FROM ducklake_metadata.ducklake_data_file df
-WHERE df.table_id = 1
-  AND df.end_snapshot IS NULL
-  AND df.partition_id IS NOT NULL
-  AND NOT EXISTS (
-      SELECT 1
-      FROM ducklake_metadata.ducklake_partition_info pi
-      WHERE pi.table_id = df.table_id
-        AND pi.partition_id = df.partition_id
-  );
+FROM ducklake_metadata.ducklake_data_file
+WHERE table_id = 1
+  AND end_snapshot IS NULL
+  AND partition_id IS DISTINCT FROM getvariable('expected_partition_id');
 ----
 0
 
