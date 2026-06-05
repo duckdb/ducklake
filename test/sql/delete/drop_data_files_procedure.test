@@ -353,7 +353,7 @@ statement ok
 BEGIN;
 
 statement ok
-CALL ducklake_add_data_files('ducklake', 'add_then_drop_t', '{DATA_PATH}/drop_data_files_procedure/add_then_drop_x/source=x/data_0.parquet');
+CALL ducklake_add_data_files('ducklake', 'add_then_drop_t', '{DATA_PATH}/drop_data_files_procedure/add_then_drop_x/source=x/*.parquet');
 
 query I
 SELECT COUNT(*) FROM add_then_drop_t;
@@ -374,7 +374,7 @@ SELECT COUNT(*) FROM add_then_drop_t;
 0
 
 query I
-SELECT COUNT(*) FROM read_parquet('{DATA_PATH}/drop_data_files_procedure/add_then_drop_x/source=x/data_0.parquet');
+SELECT COUNT(*) FROM read_parquet('{DATA_PATH}/drop_data_files_procedure/add_then_drop_x/source=x/*.parquet');
 ----
 1
 
@@ -391,7 +391,7 @@ statement ok
 BEGIN;
 
 statement ok
-CALL ducklake_add_data_files('ducklake', 'dry_run_local_t', '{DATA_PATH}/drop_data_files_procedure/dry_run_local_z/source=z/data_0.parquet');
+CALL ducklake_add_data_files('ducklake', 'dry_run_local_t', '{DATA_PATH}/drop_data_files_procedure/dry_run_local_z/source=z/*.parquet');
 
 query II
 SELECT COUNT(*), SUM(row_count) FROM ducklake_drop_data_files('ducklake', 'dry_run_local_t', partition_values => struct_pack(source := 'z'), dry_run => true);
@@ -407,6 +407,6 @@ SELECT COUNT(*) FROM dry_run_local_t;
 1
 
 query I
-SELECT COUNT(*) FROM read_parquet('{DATA_PATH}/drop_data_files_procedure/dry_run_local_z/source=z/data_0.parquet');
+SELECT COUNT(*) FROM read_parquet('{DATA_PATH}/drop_data_files_procedure/dry_run_local_z/source=z/*.parquet');
 ----
 1

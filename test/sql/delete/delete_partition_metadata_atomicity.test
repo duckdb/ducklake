@@ -43,7 +43,7 @@ DELETE FROM partitioned_t WHERE source = 'a';
 2
 
 statement ok
-CALL ducklake_add_data_files('ducklake', 'partitioned_t', '{DATA_PATH}/delete_partition_metadata_atomicity/replace_a/source=a/data_0.parquet');
+CALL ducklake_add_data_files('ducklake', 'partitioned_t', '{DATA_PATH}/delete_partition_metadata_atomicity/replace_a/source=a/*.parquet');
 
 statement ok
 COMMIT;
@@ -77,7 +77,7 @@ statement ok
 BEGIN;
 
 statement ok
-CALL ducklake_add_data_files('ducklake', 'partitioned_t', '{DATA_PATH}/delete_partition_metadata_atomicity/add_then_delete_c/source=c/data_0.parquet');
+CALL ducklake_add_data_files('ducklake', 'partitioned_t', '{DATA_PATH}/delete_partition_metadata_atomicity/add_then_delete_c/source=c/*.parquet');
 
 query I
 SELECT COUNT(*) FROM partitioned_t WHERE source = 'c';
@@ -98,6 +98,6 @@ SELECT COUNT(*) FROM partitioned_t WHERE source = 'c';
 0
 
 query I
-SELECT COUNT(*) FROM read_parquet('{DATA_PATH}/delete_partition_metadata_atomicity/add_then_delete_c/source=c/data_0.parquet');
+SELECT COUNT(*) FROM read_parquet('{DATA_PATH}/delete_partition_metadata_atomicity/add_then_delete_c/source=c/*.parquet');
 ----
 1
