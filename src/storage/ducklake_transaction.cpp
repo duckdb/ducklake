@@ -599,7 +599,9 @@ void LocalTableChanges::CleanupFiles(ClientContext &context, TableIndex table_id
 		auto &table_changes = table_entry->second;
 		auto &fs = FileSystem::GetFileSystem(context);
 		for (auto &file : table_changes.new_data_files) {
-			fs.RemoveFile(file.file_name);
+			if (file.created_by_ducklake) {
+				fs.RemoveFile(file.file_name);
+			}
 			for (auto &del_file : file.delete_files) {
 				fs.TryRemoveFile(del_file.file_name);
 			}
