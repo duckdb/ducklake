@@ -695,7 +695,8 @@ unique_ptr<CatalogEntry> DuckLakeTableEntry::AlterTable(ClientContext &context, 
 	if (transaction.HasTransactionLocalInserts(GetTableId())) {
 		VerifyNoNullValues(context, transaction, *this, col);
 		table_info.constraints.push_back(make_uniq<NotNullConstraint>(col.Logical()));
-		auto new_entry = make_uniq<DuckLakeTableEntry>(*this, table_info, LocalChange::SetNull(field_id.GetFieldIndex()));
+		auto new_entry =
+		    make_uniq<DuckLakeTableEntry>(*this, table_info, LocalChange::SetNull(field_id.GetFieldIndex()));
 		return std::move(new_entry);
 	}
 
