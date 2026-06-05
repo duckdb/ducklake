@@ -515,6 +515,10 @@ DuckLakeFileInfo DuckLakeTransactionState::GetNewDataFile(const DuckLakeDataFile
                                                           optional_idx row_id_start) {
 	auto data_file = DuckLakeTransaction::BuildDataFileInfo(file, commit_state.commit_snapshot, table_id, row_id_start);
 	commit_state.RemapPartitionId(data_file.partition_id);
+	if (data_file.partition_id.IsValid() &&
+	    data_file.partition_id.GetIndex() >= DuckLakeConstants::TRANSACTION_LOCAL_ID_START) {
+		throw InternalException("Cannot commit data file with transaction-local partition id");
+	}
 	commit_state.RemapMappingIndex(data_file.mapping_id);
 	return data_file;
 }
