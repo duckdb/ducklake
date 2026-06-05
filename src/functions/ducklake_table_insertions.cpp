@@ -22,6 +22,10 @@ TableCatalogEntry &GetTableEntry(ClientContext &context, Catalog &catalog, const
 	}
 	auto schema_name = schema.GetValue<string>();
 	auto entry = catalog.GetEntry(context, schema_name, lookup, OnEntryNotFound::THROW_EXCEPTION);
+	if (entry->type != CatalogType::TABLE_ENTRY) {
+		throw BinderException("\"%s\" is a %s, not a table. Data change feed functions only support tables.",
+		                      lookup.GetEntryName(), CatalogTypeToString(entry->type));
+	}
 	return entry->Cast<TableCatalogEntry>();
 }
 

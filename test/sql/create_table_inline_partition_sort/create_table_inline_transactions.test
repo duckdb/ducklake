@@ -1,9 +1,10 @@
 # name: test/sql/create_table_inline_partition_sort/create_table_inline_transactions.test
 # description: Transaction semantics for inline PARTITIONED BY / SORTED BY on CREATE TABLE / CTAS:
+# group: [create_table_inline_partition_sort]
+
 #              rollback discards everything (entry, files, transaction-local ids); concurrent CTAS with
 #              distinct names cannot conflict; concurrent CTAS with the same name produces a commit-time
-#              conflict; 
-# group: [create_table_inline_partition_sort]
+#              conflict;
 
 require ducklake
 
@@ -87,16 +88,21 @@ SELECT * FROM rollback_ctas
 ----
 <REGEX>:.*not exist.*
 
+# resolve the (now nonexistent -> NULL) table_id in a separate statement - some metadata catalogs
+# (e.g. Quack ones) cannot scan two of their tables in a single query
+statement ok
+SET VARIABLE rollback_ctas_id = (SELECT table_id FROM ducklake_meta.ducklake_table WHERE table_name = 'rollback_ctas')
+
 # verify the metadata catalog never saw the rolled-back partition_info / sort_info rows
 query I
 SELECT count(*) FROM ducklake_meta.ducklake_partition_info
-WHERE table_id IN (SELECT table_id FROM ducklake_meta.ducklake_table WHERE table_name = 'rollback_ctas')
+WHERE table_id = getvariable('rollback_ctas_id')
 ----
 0
 
 query I
 SELECT count(*) FROM ducklake_meta.ducklake_sort_info
-WHERE table_id IN (SELECT table_id FROM ducklake_meta.ducklake_table WHERE table_name = 'rollback_ctas')
+WHERE table_id = getvariable('rollback_ctas_id')
 ----
 0
 
@@ -148,10 +154,13 @@ statement error con2
 COMMIT
 ----
 
+statement ok
+SET VARIABLE conflict_same_name_id = (SELECT table_id FROM ducklake_meta.ducklake_table WHERE table_name = 'conflict_same_name')
+
 # con1's table is the surviving one - check its inline partition spec landed
 query I
 SELECT count(*) FROM ducklake_meta.ducklake_partition_info
-WHERE table_id IN (SELECT table_id FROM ducklake_meta.ducklake_table WHERE table_name = 'conflict_same_name')
+WHERE table_id = getvariable('conflict_same_name_id')
 ----
 1
 
@@ -184,21 +193,30 @@ COMMIT
 statement ok con2
 COMMIT
 
+statement ok
+SET VARIABLE concurrent_a_id = (SELECT table_id FROM ducklake_meta.ducklake_table WHERE table_name = 'concurrent_a')
+
+statement ok
+SET VARIABLE concurrent_b_id = (SELECT table_id FROM ducklake_meta.ducklake_table WHERE table_name = 'concurrent_b')
+
 # both tables exist and have their own partition_info rows
-query II
-SELECT
-  (SELECT count(*) FROM ducklake_meta.ducklake_partition_info
-   WHERE table_id IN (SELECT table_id FROM ducklake_meta.ducklake_table WHERE table_name = 'concurrent_a')),
-  (SELECT count(*) FROM ducklake_meta.ducklake_partition_info
-   WHERE table_id IN (SELECT table_id FROM ducklake_meta.ducklake_table WHERE table_name = 'concurrent_b'))
+query I
+SELECT count(*) FROM ducklake_meta.ducklake_partition_info
+WHERE table_id = getvariable('concurrent_a_id')
 ----
-1	1
+1
+
+query I
+SELECT count(*) FROM ducklake_meta.ducklake_partition_info
+WHERE table_id = getvariable('concurrent_b_id')
+----
+1
 
 # the two tables have DISTINCT committed partition_ids (proves the commit-time remap deduplicates the
 # transaction-local ids that started identical at planning time on each connection).
 query I
 SELECT count(DISTINCT partition_id) FROM ducklake_meta.ducklake_partition_info
-WHERE table_id IN (SELECT table_id FROM ducklake_meta.ducklake_table WHERE table_name IN ('concurrent_a', 'concurrent_b'))
+WHERE table_id IN (getvariable('concurrent_a_id'), getvariable('concurrent_b_id'))
 ----
 2
 
@@ -234,23 +252,26 @@ ALTER TABLE chain_winner SET SORTED BY (b DESC)
 statement ok
 COMMIT
 
+statement ok
+SET VARIABLE chain_winner_id = (SELECT table_id FROM ducklake_meta.ducklake_table WHERE table_name = 'chain_winner')
+
 # exactly one partition_info row (the last ALTER's) and one sort_info row (the last ALTER's)
 query I
 SELECT count(*) FROM ducklake_meta.ducklake_partition_info
-WHERE table_id IN (SELECT table_id FROM ducklake_meta.ducklake_table WHERE table_name = 'chain_winner')
+WHERE table_id = getvariable('chain_winner_id')
 ----
 1
 
 query I
 SELECT count(*) FROM ducklake_meta.ducklake_sort_info
-WHERE table_id IN (SELECT table_id FROM ducklake_meta.ducklake_table WHERE table_name = 'chain_winner')
+WHERE table_id = getvariable('chain_winner_id')
 ----
 1
 
 # the surviving sort row is `b DESC`, not the inline `a ASC`
 query III
 SELECT expression, sort_direction, null_order FROM ducklake_meta.ducklake_sort_expression
-WHERE table_id IN (SELECT table_id FROM ducklake_meta.ducklake_table WHERE table_name = 'chain_winner')
+WHERE table_id = getvariable('chain_winner_id')
 ----
 b	DESC	NULLS_LAST
 
@@ -271,9 +292,12 @@ SELECT * FROM error_ctas
 ----
 <REGEX>:.*not exist.*
 
+statement ok
+SET VARIABLE error_ctas_id = (SELECT table_id FROM ducklake_meta.ducklake_table WHERE table_name = 'error_ctas')
+
 query I
 SELECT count(*) FROM ducklake_meta.ducklake_partition_info
-WHERE table_id IN (SELECT table_id FROM ducklake_meta.ducklake_table WHERE table_name = 'error_ctas')
+WHERE table_id = getvariable('error_ctas_id')
 ----
 0
 
@@ -375,10 +399,17 @@ SELECT * FROM rb_b
 ----
 <REGEX>:.*not exist.*
 
+# both lookups yield NULL (the tables were rolled back), so the IN below matches no rows
+statement ok
+SET VARIABLE rb_a_id = (SELECT table_id FROM ducklake_meta.ducklake_table WHERE table_name = 'rb_a')
+
+statement ok
+SET VARIABLE rb_b_id = (SELECT table_id FROM ducklake_meta.ducklake_table WHERE table_name = 'rb_b')
+
 # neither rolled-back table left a partition_info row
 query I
 SELECT count(*) FROM ducklake_meta.ducklake_partition_info
-WHERE table_id IN (SELECT table_id FROM ducklake_meta.ducklake_table WHERE table_name IN ('rb_a','rb_b'))
+WHERE table_id IN (getvariable('rb_a_id'), getvariable('rb_b_id'))
 ----
 0
 
@@ -435,10 +466,13 @@ INSERT INTO same_tx_part VALUES (10, 110), (10, 111), (11, 112)
 statement ok
 COMMIT
 
+statement ok
+SET VARIABLE same_tx_part_id = (SELECT table_id FROM ducklake_meta.ducklake_table WHERE table_name='same_tx_part')
+
 # every data file references the partition_id - CTAS-written and INSERT-written alike
 query I
 SELECT count(*) FROM ducklake_meta.ducklake_data_file
-WHERE table_id = (SELECT table_id FROM ducklake_meta.ducklake_table WHERE table_name='same_tx_part')
+WHERE table_id = getvariable('same_tx_part_id')
   AND partition_id IS NULL
 ----
 0

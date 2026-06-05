@@ -1,0 +1,56 @@
+# name: test/sql/sorted_table/data_inlining_flush_sorted_expression_deletes_999_transaction.test
+# description: issue #999 in-transaction variant - non-bare-column SORT BY and inlined deletes inside BEGIN..COMMIT (non-macro)
+# group: [sorted_table]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+
+statement ok
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '__TEST_DIR__/issue_999_txn/', DATA_INLINING_ROW_LIMIT 100)
+
+statement ok
+USE dl
+
+statement ok
+CREATE TABLE t(id INTEGER, val INTEGER)
+
+statement ok
+INSERT INTO t VALUES (2, 0), (1, 0), (3, 0)
+
+statement ok
+UPDATE t SET val = val + 1 WHERE id = 2
+
+statement ok
+UPDATE t SET val = val + 1 WHERE id = 2
+
+statement ok
+UPDATE t SET val = val + 1 WHERE id = 2
+
+statement ok
+BEGIN
+
+statement ok
+ALTER TABLE t SET SORTED BY ((id + 0) ASC NULLS LAST)
+
+statement ok
+CALL ducklake_flush_inlined_data('dl', table_name => 't')
+
+query II
+SELECT id, val FROM t ORDER BY id
+----
+1	0
+2	3
+3	0
+
+statement ok
+COMMIT
+
+query II
+SELECT id, val FROM t ORDER BY id
+----
+1	0
+2	3
+3	0

@@ -1,4 +1,5 @@
 #include "functions/ducklake_table_functions.hpp"
+#include "common/ducklake_util.hpp"
 #include "storage/ducklake_transaction.hpp"
 #include "storage/ducklake_catalog.hpp"
 #include "storage/ducklake_table_entry.hpp"
@@ -10,6 +11,64 @@
 #include "duckdb/planner/expression_binder/constant_binder.hpp"
 
 namespace duckdb {
+// -------------------------------------------------------------------------//
+// Group of functions to validate if it's safe to change the inline option
+// ------------------------------------------------------------------------//
+
+static void ValidateTableScope(ClientContext &context, Catalog &catalog, const string &schema_name,
+                               const string &table_name) {
+	auto table_catalog_entry =
+	    catalog.GetEntry<TableCatalogEntry>(context, schema_name, table_name, OnEntryNotFound::THROW_EXCEPTION);
+	auto &ducklake_table = table_catalog_entry->Cast<DuckLakeTableEntry>();
+	DuckLakeUtil::ValidateNoInlinedSystemColumns(ducklake_table.GetColumns(), ducklake_table.name);
+}
+
+static void ValidateTablesInSchema(ClientContext &context, DuckLakeCatalog &duck_catalog,
+                                   DuckLakeSchemaEntry &schema_entry, SchemaIndex override_scope_id) {
+	schema_entry.Scan(context, CatalogType::TABLE_ENTRY, [&](CatalogEntry &entry) {
+		auto &ducklake_table = entry.Cast<DuckLakeTableEntry>();
+		string override_val;
+		if (duck_catalog.TryGetScopedConfigOption("data_inlining_row_limit", override_val, override_scope_id,
+		                                          ducklake_table.GetTableId()) &&
+		    std::stoull(override_val) == 0) {
+			return;
+		}
+		DuckLakeUtil::ValidateNoInlinedSystemColumns(ducklake_table.GetColumns(), ducklake_table.name);
+	});
+}
+
+static void ValidateSchemaScope(ClientContext &context, Catalog &catalog, const string &schema_name) {
+	auto &duck_catalog = catalog.Cast<DuckLakeCatalog>();
+	auto schema_catalog_entry = catalog.GetSchema(context, schema_name, OnEntryNotFound::THROW_EXCEPTION);
+	ValidateTablesInSchema(context, duck_catalog, schema_catalog_entry->Cast<DuckLakeSchemaEntry>(), SchemaIndex());
+}
+
+static void ValidateGlobalScope(ClientContext &context, Catalog &catalog) {
+	auto &duck_catalog = catalog.Cast<DuckLakeCatalog>();
+	duck_catalog.ScanSchemas(context, [&](SchemaCatalogEntry &schema) {
+		auto &schema_entry = schema.Cast<DuckLakeSchemaEntry>();
+		ValidateTablesInSchema(context, duck_catalog, schema_entry, schema_entry.GetSchemaId());
+	});
+}
+
+static void ValidateNoReservedInliningColumns(ClientContext &context, Catalog &catalog,
+                                              const TableFunctionBindInput &input) {
+	auto table_name_entry = input.named_parameters.find("table_name");
+	auto schema_param = input.named_parameters.find("schema");
+	bool has_table = table_name_entry != input.named_parameters.end() && !table_name_entry->second.IsNull();
+	bool has_schema = schema_param != input.named_parameters.end() && !schema_param->second.IsNull();
+	if (has_table) {
+		string schema_name = has_schema ? StringValue::Get(schema_param->second) : "";
+		ValidateTableScope(context, catalog, schema_name, StringValue::Get(table_name_entry->second));
+	} else if (has_schema) {
+		ValidateSchemaScope(context, catalog, StringValue::Get(schema_param->second));
+	} else {
+		ValidateGlobalScope(context, catalog);
+	}
+}
+
+// ------------------------------------------------------------------------//
+// ------------------------------------------------------------------------//
 
 vector<DuckLakeTag> ValidateOptionsInCreateWith(ClientContext &context,
                                                 const case_insensitive_map_t<unique_ptr<ParsedExpression>> &options) {
@@ -138,6 +197,10 @@ static unique_ptr<FunctionData> DuckLakeSetOptionBind(ClientContext &context, Ta
 	DuckLakeConfigOption config_option;
 	config_option.option = ValidateDuckLakeConfigOption(context, StringValue::Get(input.inputs[1]), input.inputs[2]);
 	auto &option = config_option.option.key;
+	// enabling inlining for existing tables requires that no table in scope uses reserved column names
+	if (option == "data_inlining_row_limit" && std::stoull(config_option.option.value) > 0) {
+		ValidateNoReservedInliningColumns(context, catalog, input);
+	}
 
 	// read the scope
 	string schema;

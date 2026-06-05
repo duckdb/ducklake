@@ -2,13 +2,17 @@
 #include "common/ducklake_util.hpp"
 #include "storage/ducklake_table_entry.hpp"
 #include "storage/ducklake_catalog.hpp"
+#include "storage/ducklake_schema_entry.hpp"
 #include "storage/ducklake_scan.hpp"
 #include "storage/ducklake_transaction.hpp"
 
 #include "duckdb/storage/statistics/base_statistics.hpp"
 #include "duckdb/storage/table_storage_info.hpp"
 #include "duckdb/function/table_function.hpp"
+#include "duckdb/common/vector_operations/vector_operations.hpp"
+#include "duckdb/execution/execution_context.hpp"
 #include "duckdb/main/client_context.hpp"
+#include "duckdb/parallel/thread_context.hpp"
 #include "duckdb/parser/tableref/table_function_ref.hpp"
 #include "duckdb/parser/parsed_data/create_table_info.hpp"
 #include "duckdb/parser/parser.hpp"
@@ -25,6 +29,64 @@
 #include "storage/ducklake_multi_file_reader.hpp"
 
 namespace duckdb {
+
+namespace {
+
+struct DuckLakeColumnScan {
+	TableFunction function;
+	unique_ptr<FunctionData> bind_data;
+	unique_ptr<GlobalTableFunctionState> global_state;
+	unique_ptr<LocalTableFunctionState> local_state;
+	unique_ptr<ThreadContext> thread_context;
+	unique_ptr<ExecutionContext> execution_context;
+
+	DuckLakeColumnScan(ClientContext &context, DuckLakeTransaction &transaction, DuckLakeTableEntry &table,
+	                   const ColumnDefinition &col) {
+		function = DuckLakeFunctions::GetDuckLakeScanFunction(*context.db);
+		function.function_info = DuckLakeFunctionInfo::Create(table, transaction, transaction.GetSnapshot());
+		bind_data = DuckLakeFunctions::BindDuckLakeScan(context, function);
+
+		vector<ColumnIndex> column_ids;
+		column_ids.emplace_back(col.Logical().index);
+		vector<idx_t> projection_ids;
+		TableFunctionInitInput init_input(bind_data.get(), column_ids, projection_ids, nullptr);
+
+		global_state = function.init_global(context, init_input);
+		thread_context = make_uniq<ThreadContext>(context);
+		execution_context = make_uniq<ExecutionContext>(context, *thread_context, nullptr);
+		local_state = function.init_local(*execution_context, init_input, global_state.get());
+	}
+
+	bool Scan(ClientContext &context, DataChunk &chunk) {
+		chunk.Reset();
+		TableFunctionInput input(bind_data.get(), local_state.get(), global_state.get());
+		input.async_result = AsyncResultType::IMPLICIT;
+		input.results_execution_mode = AsyncResultsExecutionMode::SYNCHRONOUS;
+		function.function(context, input, chunk);
+
+		auto result = input.async_result.GetResultType();
+		if (result == AsyncResultType::BLOCKED || result == AsyncResultType::INVALID) {
+			throw InternalException("Unexpected async table scan result while verifying NOT NULL constraint");
+		}
+		return result != AsyncResultType::FINISHED && chunk.size() > 0;
+	}
+};
+
+void VerifyNoNullValues(ClientContext &context, DuckLakeTransaction &transaction, DuckLakeTableEntry &table,
+                        const ColumnDefinition &col) {
+	DuckLakeColumnScan scan(context, transaction, table, col);
+	DataChunk chunk;
+	chunk.Initialize(context, {col.Type()});
+
+	while (scan.Scan(context, chunk)) {
+		if (VectorOperations::HasNull(chunk.data[0], chunk.size())) {
+			throw CatalogException("Cannot SET NOT NULL on column %s - the column has NULL values", col.GetName());
+		}
+	}
+}
+
+} // namespace
+
 constexpr column_t DuckLakeMultiFileReader::COLUMN_IDENTIFIER_SNAPSHOT_ID;
 
 void DuckLakeTableEntry::CheckSupportedTypes() {
@@ -613,7 +675,8 @@ optional_idx FindNotNullConstraint(CreateTableInfo &table_info, LogicalIndex ind
 	return optional_idx();
 }
 
-unique_ptr<CatalogEntry> DuckLakeTableEntry::AlterTable(DuckLakeTransaction &transaction, SetNotNullInfo &info) {
+unique_ptr<CatalogEntry> DuckLakeTableEntry::AlterTable(ClientContext &context, DuckLakeTransaction &transaction,
+                                                        SetNotNullInfo &info) {
 	auto create_info = GetInfo();
 	auto &table_info = create_info->Cast<CreateTableInfo>();
 	if (!table_info.columns.ColumnExists(info.column_name)) {
@@ -621,6 +684,20 @@ unique_ptr<CatalogEntry> DuckLakeTableEntry::AlterTable(DuckLakeTransaction &tra
 	}
 	auto &col = table_info.columns.GetColumn(info.column_name);
 	auto &field_id = GetFieldId(col.Physical());
+
+	// check if there is an existing constraint
+	auto existing_idx = FindNotNullConstraint(table_info, col.Logical());
+	if (existing_idx.IsValid()) {
+		throw CatalogException("Cannot SET NOT NULL on column %s - it already has a NOT NULL constraint",
+		                       col.GetName());
+	}
+
+	if (transaction.HasTransactionLocalInserts(GetTableId())) {
+		VerifyNoNullValues(context, transaction, *this, col);
+		table_info.constraints.push_back(make_uniq<NotNullConstraint>(col.Logical()));
+		auto new_entry = make_uniq<DuckLakeTableEntry>(*this, table_info, LocalChange::SetNull(field_id.GetFieldIndex()));
+		return std::move(new_entry);
+	}
 
 	// verify the column has no NULL values currently by looking at the stats
 	auto stats = GetTableStats(transaction);
@@ -634,17 +711,13 @@ unique_ptr<CatalogEntry> DuckLakeTableEntry::AlterTable(DuckLakeTransaction &tra
 	if (column_stats == stats->column_stats.end()) {
 		throw CatalogException("Cannot SET NOT NULL on table %s - no column stats are available", name);
 	}
+
+	// The table could have null values deleted, so we should check real rows.
 	auto &col_stats = column_stats->second;
 	if (col_stats.has_null_count && col_stats.null_count > 0) {
-		throw CatalogException("Cannot SET NOT NULL on column %s - the column has NULL values", col.GetName());
+		VerifyNoNullValues(context, transaction, *this, col);
 	}
 
-	// check if there is an existing constraint
-	auto existing_idx = FindNotNullConstraint(table_info, col.Logical());
-	if (existing_idx.IsValid()) {
-		throw CatalogException("Cannot SET NOT NULL on column %s - it already has a NOT NULL constraint",
-		                       col.GetName());
-	}
 	table_info.constraints.push_back(make_uniq<NotNullConstraint>(col.Logical()));
 
 	auto new_entry = make_uniq<DuckLakeTableEntry>(*this, table_info, LocalChange::SetNull(field_id.GetFieldIndex()));
@@ -672,8 +745,15 @@ unique_ptr<CatalogEntry> DuckLakeTableEntry::AlterTable(DuckLakeTransaction &tra
 }
 
 unique_ptr<CatalogEntry> DuckLakeTableEntry::AlterTable(DuckLakeTransaction &transaction, RenameColumnInfo &info) {
-	if (DuckLakeUtil::IsInlinedSystemColumn(info.new_name)) {
-		throw CatalogException("Column name \"%s\" is reserved by DuckLake for internal use", info.new_name);
+	auto &duck_catalog = ParentCatalog().Cast<DuckLakeCatalog>();
+	auto &duck_schema = ParentSchema().Cast<DuckLakeSchemaEntry>();
+	if (DuckLakeUtil::IsInlinedSystemColumn(info.new_name) &&
+	    duck_catalog.DataInliningRowLimit(duck_schema.GetSchemaId(), GetTableId()) > 0) {
+		throw CatalogException(
+		    "Column name \"%s\" is reserved by DuckLake for internal use when data inlining is enabled. If "
+		    "you must use this column name, disable inlining by calling "
+		    "ducklake_set_option('data_inlining_row_limit', 0).",
+		    info.new_name);
 	}
 	auto create_info = GetInfo();
 	auto &table_info = create_info->Cast<CreateTableInfo>();
@@ -711,8 +791,15 @@ void DuckLakeTableEntry::RequireNextColumnId(DuckLakeTransaction &transaction) {
 }
 
 unique_ptr<CatalogEntry> DuckLakeTableEntry::AlterTable(DuckLakeTransaction &transaction, AddColumnInfo &info) {
-	if (DuckLakeUtil::IsInlinedSystemColumn(info.new_column.Name())) {
-		throw CatalogException("Column name \"%s\" is reserved by DuckLake for internal use", info.new_column.Name());
+	auto &duck_catalog = ParentCatalog().Cast<DuckLakeCatalog>();
+	auto &duck_schema = ParentSchema().Cast<DuckLakeSchemaEntry>();
+	if (DuckLakeUtil::IsInlinedSystemColumn(info.new_column.Name()) &&
+	    duck_catalog.DataInliningRowLimit(duck_schema.GetSchemaId(), GetTableId()) > 0) {
+		throw CatalogException(
+		    "Column name \"%s\" is reserved by DuckLake for internal use when data inlining is enabled. If "
+		    "you must use this column name, disable inlining by calling "
+		    "ducklake_set_option('data_inlining_row_limit', 0).",
+		    info.new_column.Name());
 	}
 	auto create_info = GetInfo();
 	auto &table_info = create_info->Cast<CreateTableInfo>();
@@ -1272,7 +1359,8 @@ unique_ptr<CatalogEntry> DuckLakeTableEntry::AlterTable(DuckLakeTransaction &tra
 	return std::move(new_entry);
 }
 
-unique_ptr<CatalogEntry> DuckLakeTableEntry::Alter(DuckLakeTransaction &transaction, AlterTableInfo &info) {
+unique_ptr<CatalogEntry> DuckLakeTableEntry::Alter(ClientContext &context, DuckLakeTransaction &transaction,
+                                                   AlterTableInfo &info) {
 	if (transaction.HasTransactionInlinedData(GetTableId())) {
 		if (info.alter_table_type != AlterTableType::ADD_COLUMN &&
 		    info.alter_table_type != AlterTableType::REMOVE_COLUMN &&
@@ -1292,7 +1380,7 @@ unique_ptr<CatalogEntry> DuckLakeTableEntry::Alter(DuckLakeTransaction &transact
 	case AlterTableType::SET_PARTITIONED_BY:
 		return AlterTable(transaction, info.Cast<SetPartitionedByInfo>());
 	case AlterTableType::SET_NOT_NULL:
-		return AlterTable(transaction, info.Cast<SetNotNullInfo>());
+		return AlterTable(context, transaction, info.Cast<SetNotNullInfo>());
 	case AlterTableType::DROP_NOT_NULL:
 		return AlterTable(transaction, info.Cast<DropNotNullInfo>());
 	case AlterTableType::RENAME_COLUMN:

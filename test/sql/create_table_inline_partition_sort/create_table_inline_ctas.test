@@ -29,14 +29,19 @@ SELECT i, v FROM ctas_part ORDER BY i
 3	3
 4	4
 
+# resolve the table_id in a separate statement - some metadata catalogs (e.g. Quack
+# ones) cannot scan two of their tables in a single query
+statement ok
+SET VARIABLE ctas_part_id = (SELECT table_id FROM ducklake_metadata.ducklake_table WHERE table_name = 'ctas_part')
+
 query I
-SELECT count(*) FROM ducklake_metadata.ducklake_partition_info WHERE table_id = (SELECT table_id FROM ducklake_metadata.ducklake_table WHERE table_name = 'ctas_part')
+SELECT count(*) FROM ducklake_metadata.ducklake_partition_info WHERE table_id = getvariable('ctas_part_id')
 ----
 1
 
 # CTAS must hive-partition on the initial write: 5 distinct values from range(5) -> 5 hive directories
 query I
-SELECT DISTINCT regexp_extract(path, '.*(i=[0-9]+)[/\\].*', 1) FROM ducklake_metadata.ducklake_data_file WHERE table_id = (SELECT table_id FROM ducklake_metadata.ducklake_table WHERE table_name = 'ctas_part') ORDER BY 1
+SELECT DISTINCT regexp_extract(path, '.*(i=[0-9]+)[/\\].*', 1) FROM ducklake_metadata.ducklake_data_file WHERE table_id = getvariable('ctas_part_id') ORDER BY 1
 ----
 i=0
 i=1
@@ -64,8 +69,11 @@ SELECT i, j FROM ctas_sort
 1	8
 0	9
 
+statement ok
+SET VARIABLE ctas_sort_id = (SELECT table_id FROM ducklake_metadata.ducklake_table WHERE table_name = 'ctas_sort')
+
 query I
-SELECT count(*) FROM ducklake_metadata.ducklake_sort_info WHERE table_id = (SELECT table_id FROM ducklake_metadata.ducklake_table WHERE table_name = 'ctas_sort')
+SELECT count(*) FROM ducklake_metadata.ducklake_sort_info WHERE table_id = getvariable('ctas_sort_id')
 ----
 1
 
@@ -75,16 +83,22 @@ statement ok
 CREATE TABLE ctas_both PARTITIONED BY (g) SORTED BY (v) AS
 SELECT range % 3 AS g, 29 - range AS v FROM range(30)
 
-query II
-SELECT
-  (SELECT count(*) FROM ducklake_metadata.ducklake_partition_info WHERE table_id = (SELECT table_id FROM ducklake_metadata.ducklake_table WHERE table_name = 'ctas_both')),
-  (SELECT count(*) FROM ducklake_metadata.ducklake_sort_info WHERE table_id = (SELECT table_id FROM ducklake_metadata.ducklake_table WHERE table_name = 'ctas_both'))
+statement ok
+SET VARIABLE ctas_both_id = (SELECT table_id FROM ducklake_metadata.ducklake_table WHERE table_name = 'ctas_both')
+
+query I
+SELECT count(*) FROM ducklake_metadata.ducklake_partition_info WHERE table_id = getvariable('ctas_both_id')
 ----
-1	1
+1
+
+query I
+SELECT count(*) FROM ducklake_metadata.ducklake_sort_info WHERE table_id = getvariable('ctas_both_id')
+----
+1
 
 # 3 distinct partition values -> 3 hive directories
 query I
-SELECT count(DISTINCT regexp_extract(path, '.*(g=[0-9]+)[/\\].*', 1)) FROM ducklake_metadata.ducklake_data_file WHERE table_id = (SELECT table_id FROM ducklake_metadata.ducklake_table WHERE table_name = 'ctas_both')
+SELECT count(DISTINCT regexp_extract(path, '.*(g=[0-9]+)[/\\].*', 1)) FROM ducklake_metadata.ducklake_data_file WHERE table_id = getvariable('ctas_both_id')
 ----
 3
 
@@ -136,15 +150,21 @@ statement ok
 CREATE TABLE ctas_swap SORTED BY (v) PARTITIONED BY (g) AS
 SELECT range % 3 AS g, 29 - range AS v FROM range(30)
 
-query II
-SELECT
-  (SELECT count(*) FROM ducklake_metadata.ducklake_partition_info WHERE table_id = (SELECT table_id FROM ducklake_metadata.ducklake_table WHERE table_name = 'ctas_swap')),
-  (SELECT count(*) FROM ducklake_metadata.ducklake_sort_info WHERE table_id = (SELECT table_id FROM ducklake_metadata.ducklake_table WHERE table_name = 'ctas_swap'))
-----
-1	1
+statement ok
+SET VARIABLE ctas_swap_id = (SELECT table_id FROM ducklake_metadata.ducklake_table WHERE table_name = 'ctas_swap')
 
 query I
-SELECT count(DISTINCT regexp_extract(path, '.*(g=[0-9]+)[/\\].*', 1)) FROM ducklake_metadata.ducklake_data_file WHERE table_id = (SELECT table_id FROM ducklake_metadata.ducklake_table WHERE table_name = 'ctas_swap')
+SELECT count(*) FROM ducklake_metadata.ducklake_partition_info WHERE table_id = getvariable('ctas_swap_id')
+----
+1
+
+query I
+SELECT count(*) FROM ducklake_metadata.ducklake_sort_info WHERE table_id = getvariable('ctas_swap_id')
+----
+1
+
+query I
+SELECT count(DISTINCT regexp_extract(path, '.*(g=[0-9]+)[/\\].*', 1)) FROM ducklake_metadata.ducklake_data_file WHERE table_id = getvariable('ctas_swap_id')
 ----
 3
 
@@ -168,14 +188,17 @@ statement ok
 CREATE TABLE ctas_transform PARTITIONED BY (year(ts)) AS
 SELECT TIMESTAMP '2024-01-01' + INTERVAL (i) YEAR AS ts, i AS v FROM range(3) t(i)
 
+statement ok
+SET VARIABLE ctas_transform_id = (SELECT table_id FROM ducklake_metadata.ducklake_table WHERE table_name = 'ctas_transform')
+
 query II
-SELECT partition_key_index, transform FROM ducklake_metadata.ducklake_partition_column WHERE table_id = (SELECT table_id FROM ducklake_metadata.ducklake_table WHERE table_name = 'ctas_transform')
+SELECT partition_key_index, transform FROM ducklake_metadata.ducklake_partition_column WHERE table_id = getvariable('ctas_transform_id')
 ----
 0	year
 
 # CTAS with year() transform must hive-partition on the initial write
 query I
-SELECT DISTINCT regexp_extract(path, '.*(year=[0-9]+)[/\\].*', 1) FROM ducklake_metadata.ducklake_data_file WHERE table_id = (SELECT table_id FROM ducklake_metadata.ducklake_table WHERE table_name = 'ctas_transform') ORDER BY 1
+SELECT DISTINCT regexp_extract(path, '.*(year=[0-9]+)[/\\].*', 1) FROM ducklake_metadata.ducklake_data_file WHERE table_id = getvariable('ctas_transform_id') ORDER BY 1
 ----
 year=2024
 year=2025
@@ -196,8 +219,11 @@ SELECT a, b FROM ctas_multi
 2	tag_2
 3	tag_3
 
+statement ok
+SET VARIABLE ctas_multi_id = (SELECT table_id FROM ducklake_metadata.ducklake_table WHERE table_name = 'ctas_multi')
+
 query II
-SELECT sort_key_index, expression FROM ducklake_metadata.ducklake_sort_expression WHERE table_id = (SELECT table_id FROM ducklake_metadata.ducklake_table WHERE table_name = 'ctas_multi') ORDER BY sort_key_index
+SELECT sort_key_index, expression FROM ducklake_metadata.ducklake_sort_expression WHERE table_id = getvariable('ctas_multi_id') ORDER BY sort_key_index
 ----
 0	a
 1	b
@@ -239,9 +265,12 @@ SELECT g, v FROM ctas_cte WHERE g = 2
 2	5
 2	8
 
+statement ok
+SET VARIABLE ctas_cte_id = (SELECT table_id FROM ducklake_metadata.ducklake_table WHERE table_name = 'ctas_cte')
+
 # CTE-sourced CTAS must still partition on the initial write (regression: planner passes the spec through)
 query I
-SELECT DISTINCT regexp_extract(path, '.*(g=[0-9]+)[/\\].*', 1) FROM ducklake_metadata.ducklake_data_file WHERE table_id = (SELECT table_id FROM ducklake_metadata.ducklake_table WHERE table_name = 'ctas_cte') ORDER BY 1
+SELECT DISTINCT regexp_extract(path, '.*(g=[0-9]+)[/\\].*', 1) FROM ducklake_metadata.ducklake_data_file WHERE table_id = getvariable('ctas_cte_id') ORDER BY 1
 ----
 g=0
 g=1

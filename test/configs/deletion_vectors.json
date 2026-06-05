@@ -20,6 +20,8 @@
         "test/sql/delete/multi_deletes.test",
         "test/sql/table_changes/ducklake_table_deletions_compacted.test",
         "test/sql/table_changes/ducklake_table_deletions_large.test",
+        "test/sql/table_changes/ducklake_table_deletions_partial_files.test",
+        "test/sql/table_changes/ducklake_table_deletions_projection_order.test",
         "test/sql/rewrite_data_files/last_snapshot_multiple_inserts.test",
         "test/sql/rewrite_data_files/test_last_snapshot_merge_rewrite.test",
         "test/sql/rewrite_data_files/test_last_snapshot_rewrite.test",

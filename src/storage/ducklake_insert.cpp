@@ -549,11 +549,11 @@ DuckLakeCopyOptions DuckLakeInsert::GetCopyOptions(ClientContext &context, DuckL
 		per_thread_output = per_thread_output_str == "true";
 	}
 	string target_file_size_str;
-	idx_t target_file_size = DuckLakeCatalog::DEFAULT_TARGET_FILE_SIZE;
+	idx_t target_file_size;
 	if (copy_input.GetEffectiveOption("target_file_size", target_file_size_str)) {
 		target_file_size = Value(target_file_size_str).GetValue<idx_t>();
 	} else {
-		target_file_size = catalog.GetConfigOption<idx_t>("target_file_size", schema_id, table_id, target_file_size);
+		target_file_size = catalog.GetTargetFileSize(context, schema_id, table_id);
 	}
 
 	// Always use native parquet geometry for writing

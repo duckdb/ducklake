@@ -23,6 +23,11 @@ public:
 	bool SupportsAppender() const override {
 		return false;
 	}
+	void ProbeServerCapabilities() override;
+	bool CanSkipSnapshotFetch(const TransactionChangeInformation &changes) const override;
+	void FlushChangesServerSide(DuckLakeTransaction &transaction, DuckLakeSnapshot transaction_snapshot,
+	                            const TransactionChangeInformation &transaction_changes,
+	                            const DuckLakeRetryConfig &retry_config) override;
 	unique_ptr<QueryResult> Execute(DuckLakeSnapshot snapshot, string &query) override;
 	unique_ptr<QueryResult> Query(DuckLakeSnapshot snapshot, string &query) override;
 	unique_ptr<QueryResult> Query(string &query) override;

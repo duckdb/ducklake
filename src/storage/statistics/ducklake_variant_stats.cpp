@@ -35,6 +35,11 @@ void DuckLakeColumnVariantStats::Merge(const DuckLakeColumnExtraStats &new_stats
 			stats_to_erase.push_back(entry.first);
 			continue;
 		}
+		if (entry.second.shredded_type != other_entry->second.shredded_type) {
+			// incompatible shredded types - drop the field
+			stats_to_erase.push_back(entry.first);
+			continue;
+		}
 		// merge stats
 		entry.second.field_stats.MergeStats(other_entry->second.field_stats);
 	}
@@ -59,6 +64,7 @@ void DuckLakeColumnVariantStats::Serialize(DuckLakeColumnStatsInfo &column_stats
 		    DuckLakeColumnStatsInfo::FromColumnStats(column_stats.column_id, entry.second.field_stats);
 		column_stats.variant_stats.push_back(std::move(shredded_stats));
 	}
+	TrySerialize(column_stats.extra_stats);
 }
 
 static DuckLakeVariantStats DeserializeShreddedStats(const LogicalType &shredded_type, duckdb_yyjson::yyjson_val *obj) {

@@ -1,0 +1,69 @@
+# name: test/sql/insert/insert_session_target_file_size.test
+# description: test that ducklake_target_file_size session setting overrides metadata target_file_size
+# group: [insert]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+
+test-env DATA_PATH __TEST_DIR__
+
+statement ok
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/ducklake_session_target_file_size')
+
+statement ok
+CREATE TABLE ducklake.test(id INTEGER, s VARCHAR);
+
+# Set a large target_file_size in metadata at global, schema and table scope
+statement ok
+CALL ducklake.set_option('target_file_size', '512MB')
+
+statement ok
+CALL ducklake.set_option('target_file_size', '512MB', schema => 'main')
+
+statement ok
+CALL ducklake.set_option('target_file_size', '512MB', table_name => 'test')
+
+# A borked string should fail at SET time
+statement error
+SET ducklake_target_file_size = 'not-a-size'
+----
+
+# 0 should fail at SET time
+statement error
+SET ducklake_target_file_size = '0'
+----
+
+# Session setting overrides all metadata scopes - should produce multiple files
+statement ok
+SET ducklake_target_file_size = '10KB'
+
+query I
+INSERT INTO ducklake.test SELECT i, concat('thisisalongstring', i) FROM range(500000) t(i)
+----
+500000
+
+# Session setting should have taken precedence over all metadata scopes: multiple files expected
+query I
+SELECT COUNT(*) > 1 FROM glob('${DATA_PATH}/ducklake_session_target_file_size/main/test/*.parquet')
+----
+true
+
+# Reset the session setting - metadata value (512MB) should now govern: everything in one file
+statement ok
+RESET ducklake_target_file_size
+
+statement ok
+CREATE TABLE ducklake.test2(id INTEGER, s VARCHAR);
+
+query I
+INSERT INTO ducklake.test2 SELECT i, concat('thisisalongstring', i) FROM range(500000) t(i)
+----
+500000
+
+query I
+SELECT COUNT(*) = 1 FROM glob('${DATA_PATH}/ducklake_session_target_file_size/main/test2/*.parquet')
+----
+true

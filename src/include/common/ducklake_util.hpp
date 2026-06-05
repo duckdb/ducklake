@@ -8,11 +8,15 @@
 
 #pragma once
 
+#include "common/index.hpp"
 #include "duckdb/common/common.hpp"
+#include "duckdb/common/optional_idx.hpp"
 #include "duckdb/common/unordered_set.hpp"
 #include "duckdb/common/types/value.hpp"
 
 namespace duckdb {
+class DataChunk;
+class ColumnList;
 class DuckLakeMetadataManager;
 class FileSystem;
 class TableFilter;
@@ -47,6 +51,21 @@ public:
 
 	//! Returns true if the given column name conflicts with inlined data system columns
 	static bool IsInlinedSystemColumn(const string &name);
+
+	static string OptionalIdxOrNull(const optional_idx &v);
+
+	static string MappingIdOrNull(const MappingIndex &m);
+
+	static string EncryptionKeyLiteral(const string &key);
+
+	static const char *BoolLiteral(bool v);
+
+	static string PartitionValueLiteral(const Value &v);
+
+	static string ChunkRowToSQL(DuckLakeMetadataManager &metadata_manager, ClientContext &context, DataChunk &chunk,
+	                            idx_t row);
+	//! Throws if any column in the list conflicts with inlined data system columns
+	static void ValidateNoInlinedSystemColumns(const ColumnList &columns, const string &table_name = "");
 };
 
 } // namespace duckdb

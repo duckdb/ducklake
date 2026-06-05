@@ -34,6 +34,13 @@ static void LoadInternal(ExtensionLoader &loader) {
 	config.AddExtensionOption("ducklake_default_data_inlining_row_limit",
 	                          "Default row limit for data inlining (0 disables inlining)", LogicalType::UBIGINT,
 	                          Value::UBIGINT(10), nullptr, SetScope::GLOBAL);
+	auto set_target_file_size = [](ClientContext &, SetScope, Value &parameter) {
+		if (!parameter.IsNull() && !parameter.ToString().empty()) {
+			DBConfig::ParseMemoryLimit(parameter.ToString());
+		}
+	};
+	config.AddExtensionOption("ducklake_target_file_size", "Target file size for insertion and compaction",
+	                          LogicalType::VARCHAR, Value(), set_target_file_size, SetScope::GLOBAL);
 	config.AddExtensionOption(
 	    "ducklake_write_deletion_vectors",
 	    "[EXPERIMENTAL] Write Iceberg V3 deletion vectors (puffin) instead of positional delete files (parquet)",
@@ -95,6 +102,9 @@ static void LoadInternal(ExtensionLoader &loader) {
 
 	DuckLakeSettingsFunction settings;
 	loader.RegisterFunction(settings);
+
+	DuckLakeCommitFunction commit;
+	loader.RegisterFunction(commit);
 
 	// Register ducklake_scan so it can be found during deserialization
 	auto ducklake_scan = DuckLakeFunctions::GetDuckLakeScanFunction(loader.GetDatabaseInstance());
