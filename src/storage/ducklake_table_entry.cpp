@@ -1304,7 +1304,7 @@ unique_ptr<CatalogEntry> DuckLakeTableEntry::AlterTable(DuckLakeTransaction &tra
 		sort_field.sort_key_index = order_node_idx;
 		sort_field.expression = order_node.expression->ToString();
 		sort_field.dialect = "duckdb";
-		sort_field.sort_direction = order_node.type;
+		sort_field.sort_direction = order_node.type == OrderType::DESCENDING ? OrderType::DESCENDING : OrderType::ASCENDING;
 		sort_field.null_order = order_node.null_order;
 		sort_data->fields.push_back(sort_field);
 	}
