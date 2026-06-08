@@ -24,9 +24,6 @@ statement ok
 INSERT INTO ducklake.t FROM range(1, 201);
 
 statement ok
-CALL ducklake_flush_inlined_data('ducklake')
-
-statement ok
 DELETE FROM ducklake.t WHERE i = 1;
 
 statement ok
@@ -69,9 +66,6 @@ CREATE TABLE ducklake.mixed(i INTEGER);
 # large insert -> parquet file
 statement ok
 INSERT INTO ducklake.mixed FROM range(1, 201);
-
-statement ok
-CALL ducklake_flush_inlined_data('ducklake')
 
 # small insert -> stays inlined
 statement ok

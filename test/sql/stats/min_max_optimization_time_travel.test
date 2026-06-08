@@ -62,6 +62,12 @@ SELECT MIN(i), MAX(i) FROM ducklake.tt;
 ----
 -5	9999
 
+# transaction-local data forces fallback via HasTransactionLocalData()
+query II
+EXPLAIN ANALYZE SELECT MIN(i), MAX(i) FROM ducklake.tt;
+----
+analyzed_plan	<REGEX>:.*TABLE_SCAN.*
+
 statement ok
 ROLLBACK;
 

@@ -92,6 +92,11 @@ SELECT MIN(i) FROM ducklake.test WHERE i > 50;
 ----
 51
 
+query II
+EXPLAIN ANALYZE SELECT MIN(i) FROM ducklake.test WHERE i > 50;
+----
+analyzed_plan	<REGEX>:.*TABLE_SCAN.*
+
 # always-false filter -> empty result, must be NULL (and must not crash)
 query I
 SELECT MIN(i) FROM ducklake.test WHERE i > 100000;
