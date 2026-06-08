@@ -89,6 +89,8 @@ void DuckLakeInitializer::Initialize() {
 		}
 		InitializeNewDuckLake(transaction, has_explicit_schema);
 	}
+	// probe the metadata server for optional capabilities (e.g. server-side commit retries) once per attach
+	metadata_manager.ProbeServerCapabilities();
 	metadata_manager.ClearCache();
 	if (options.at_clause) {
 		// if the user specified a snapshot try to load it to trigger an error if it does not exist

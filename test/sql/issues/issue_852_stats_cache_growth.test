@@ -1,0 +1,71 @@
+# name: test/sql/issues/issue_852_stats_cache_growth.test
+# description: ducklake_expire_snapshots should release table stats ObjectCache entries for expired snapshots
+# group: [issues]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/issue_852_stats_cache_growth', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE ducklake.wide (
+	col_0 INTEGER, col_1 INTEGER, col_2 INTEGER, col_3 INTEGER,
+	col_4 INTEGER, col_5 INTEGER, col_6 INTEGER, col_7 INTEGER,
+	col_8 INTEGER, col_9 INTEGER, col_10 INTEGER, col_11 INTEGER,
+	col_12 INTEGER, col_13 INTEGER, col_14 INTEGER, col_15 INTEGER,
+	col_16 INTEGER, col_17 INTEGER, col_18 INTEGER, col_19 INTEGER,
+	col_20 INTEGER, col_21 INTEGER, col_22 INTEGER, col_23 INTEGER,
+	col_24 INTEGER, col_25 INTEGER, col_26 INTEGER, col_27 INTEGER,
+	col_28 INTEGER, col_29 INTEGER, col_30 INTEGER, col_31 INTEGER
+)
+
+statement ok
+INSERT INTO ducklake.wide (col_0) VALUES (1)
+
+statement ok
+CREATE TEMP TABLE baseline AS SELECT memory_usage_bytes AS bytes FROM duckdb_memory() WHERE tag = 'OBJECT_CACHE'
+
+# Materialize the stats cache entry for the first insert snapshot.
+statement ok
+SELECT * FROM ducklake.wide WHERE col_0 = 1
+
+query I
+SELECT (SELECT memory_usage_bytes FROM duckdb_memory() WHERE tag = 'OBJECT_CACHE') > (SELECT bytes FROM baseline)
+----
+true
+
+statement ok
+CREATE TEMP TABLE post_first_stats AS SELECT memory_usage_bytes AS bytes FROM duckdb_memory() WHERE tag = 'OBJECT_CACHE'
+
+statement ok
+INSERT INTO ducklake.wide (col_0) VALUES (2)
+
+statement ok
+SELECT * FROM ducklake.wide WHERE col_0 = 2
+
+query I
+SELECT (SELECT memory_usage_bytes FROM duckdb_memory() WHERE tag = 'OBJECT_CACHE') > (SELECT bytes FROM post_first_stats)
+----
+true
+
+statement ok
+CREATE TEMP TABLE post_churn AS SELECT memory_usage_bytes AS bytes FROM duckdb_memory() WHERE tag = 'OBJECT_CACHE'
+
+query I
+SELECT (SELECT memory_usage_bytes FROM duckdb_memory() WHERE tag = 'OBJECT_CACHE') >= (SELECT bytes FROM post_churn)
+----
+true
+
+statement ok
+CALL ducklake_expire_snapshots('ducklake', older_than => now())
+
+query I
+SELECT (SELECT memory_usage_bytes FROM duckdb_memory() WHERE tag = 'OBJECT_CACHE') < (SELECT bytes FROM post_churn)
+----
+true
