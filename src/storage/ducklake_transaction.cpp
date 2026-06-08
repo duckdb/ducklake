@@ -2600,13 +2600,8 @@ bool DuckLakeTransaction::TryMergeInlinedStats(DuckLakeTableEntry &table, DuckLa
 			select_list +=
 			    StringUtil::Format(", MIN(%s)::VARCHAR, MAX(%s)::VARCHAR, COUNT(%s), %s", col, col, col, nan_expr);
 		}
-		string query = StringUtil::Format(R"(
-SELECT %s
-FROM {METADATA_CATALOG}.%s
-WHERE {SNAPSHOT_ID} >= begin_snapshot AND ({SNAPSHOT_ID} < end_snapshot OR end_snapshot IS NULL);
-)",
-		                                  select_list, DuckLakeUtil::SQLIdentifierToString(inlined_table.table_name));
-		auto result = Query(snapshot, query);
+		auto result = GetMetadataManager().ReadInlinedDataAggregates(
+		    snapshot, DuckLakeUtil::SQLIdentifierToString(inlined_table.table_name), select_list);
 		if (result->HasError()) {
 			return false;
 		}
@@ -2670,19 +2665,7 @@ void DuckLakeTransaction::RecomputeGlobalStatsAfterRewrite(string &batch_query, 
 	idx_t parquet_gross_rows = 0;
 
 	// 1. Merge the per-file stats of the post-rewrite parquet files = (pre-commit visible files - removed) + new files.
-	string query = StringUtil::Format(R"(
-SELECT data.data_file_id, data.record_count, data.file_size_bytes,
-       stats.column_id, stats.value_count, stats.null_count, stats.min_value, stats.max_value,
-       stats.contains_nan, stats.extra_stats
-FROM {METADATA_CATALOG}.ducklake_data_file data
-LEFT JOIN {METADATA_CATALOG}.ducklake_file_column_stats stats ON stats.data_file_id = data.data_file_id
-WHERE data.table_id = %d
-  AND {SNAPSHOT_ID} >= data.begin_snapshot
-  AND ({SNAPSHOT_ID} < data.end_snapshot OR data.end_snapshot IS NULL)
-ORDER BY data.data_file_id;
-)",
-	                                  table_id.index);
-	auto result = Query(snapshot, query);
+	auto result = GetMetadataManager().ReadFileColumnStatsForTable(snapshot, table_id);
 	if (result->HasError()) {
 		return;
 	}

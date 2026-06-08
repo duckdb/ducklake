@@ -256,6 +256,13 @@ public:
 	virtual unique_ptr<QueryResult> ReadAllInlinedDataForFlush(DuckLakeSnapshot snapshot,
 	                                                           const string &inlined_table_name,
 	                                                           const vector<string> &columns_to_read);
+	//! Read pre-built per-column aggregates (e.g. MIN/MAX/COUNT) over the committed rows of an inlined-data table.
+	virtual unique_ptr<QueryResult> ReadInlinedDataAggregates(DuckLakeSnapshot snapshot,
+	                                                          const string &inlined_table_name,
+	                                                          const string &select_list);
+	//! Read per-file column stats for all visible data files of a table at the given snapshot.
+	//! Used to recompute global table stats after a delete-rewriting compaction.
+	virtual unique_ptr<QueryResult> ReadFileColumnStatsForTable(DuckLakeSnapshot snapshot, TableIndex table_id);
 	virtual shared_ptr<DuckLakeInlinedData> TransformInlinedData(QueryResult &result,
 	                                                             const vector<LogicalType> &expected_types);
 
