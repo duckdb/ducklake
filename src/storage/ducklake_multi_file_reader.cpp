@@ -714,10 +714,10 @@ void DuckLakeMultiFileReader::FinalizeChunk(ClientContext &context, const MultiF
 		}
 
 		// Copy only user columns (excluding internally projected row_id) to output_chunk
-		output_chunk.SetCardinality(temp_chunk.size());
 		for (idx_t i = 0; i < output_chunk.ColumnCount(); i++) {
 			output_chunk.data[i].Reference(temp_chunk.data[i]);
 		}
+		output_chunk.SetChildCardinality(temp_chunk.size());
 	} else {
 		MultiFileReader::FinalizeChunk(context, bind_data, reader, reader_data, input_chunk, output_chunk, executor,
 		                               global_state);

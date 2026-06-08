@@ -40,7 +40,7 @@ static void MetadataFunctionExecute(ClientContext &context, TableFunctionInput &
 	auto &state = data_p.global_state->Cast<MetadataFunctionData>();
 	if (state.offset >= data.rows.size()) {
 		// finished returning values
-		output.SetCardinality(0);
+		output.SetChildCardinality(0);
 		return;
 	}
 	// start returning values

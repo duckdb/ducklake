@@ -153,7 +153,7 @@ void DuckLakeOptionsExecute(ClientContext &context, TableFunctionInput &data_p, 
 	auto &state = data_p.global_state->Cast<DuckLakeOptionsState>();
 
 	if (state.offset >= state.options.size()) {
-		output.SetCardinality(0);
+		output.SetChildCardinality(0);
 		return;
 	}
 

@@ -81,7 +81,7 @@ void VerifyNoNullValues(ClientContext &context, DuckLakeTransaction &transaction
 	chunk.Initialize(context, {col.Type()});
 
 	while (scan.Scan(context, chunk)) {
-		if (VectorOperations::HasNull(chunk.data[0], chunk.size())) {
+		if (VectorOperations::HasNull(chunk.data[0])) {
 			throw CatalogException("Cannot SET NOT NULL on column %s - the column has NULL values", col.GetName());
 		}
 	}

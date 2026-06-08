@@ -389,7 +389,7 @@ OperatorFinalResultType DuckLakeInlineData::OperatorFinalize(Pipeline &pipeline,
 			for (idx_t i = 0; i < physical_col_count; i++) {
 				phys_chunk.data[i].Reference(chunk.data[i]);
 			}
-			phys_chunk.SetCardinality(chunk.size());
+			phys_chunk.SetChildCardinality(chunk.size());
 			phys_data->Append(append_state, phys_chunk);
 		}
 		result->data = std::move(phys_data);

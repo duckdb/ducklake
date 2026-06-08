@@ -139,6 +139,7 @@
         "test/sql/explain/explain_execute.test",
         "test/optimizer/pushdown/pushdown_filter_on_coalesced_equal_outer_join_keys.test",
         "test/optimizer/topn_window_elimination.test",
+        "test/sql/optimizer/topn_window_elimination_late_materialization.test",
         "test/optimizer/pushdown/filter_cannot_pushdown.test",
         "test/optimizer/pushdown/filters_on_limit_optimizer.test",
         "test/sql/explain/test_explain_table_scan.test",

@@ -150,8 +150,6 @@ OperatorResultType DuckLakeUpdate::Execute(ExecutionContext &context, DataChunk 
 	auto &update_expression_chunk = lstate.update_expression_chunk;
 	auto &insert_chunk = lstate.insert_chunk;
 
-	update_expression_chunk.SetCardinality(input.size());
-	insert_chunk.SetCardinality(input.size());
 	lstate.expression_executor->Execute(input, update_expression_chunk);
 
 	const idx_t physical_column_count = columns.size();
@@ -162,14 +160,15 @@ OperatorResultType DuckLakeUpdate::Execute(ExecutionContext &context, DataChunk 
 	}
 	// we place row_id right after physical columns
 	insert_chunk.data[physical_column_count].Reference(input.data[row_id_index]);
+	insert_chunk.SetChildCardinality(input.size());
 
 	chunk.Reference(insert_chunk);
 
 	auto &delete_chunk = lstate.delete_chunk;
-	delete_chunk.SetCardinality(input.size());
 	for (idx_t i = 0; i < DELETION_INFO_SIZE; i++) {
 		delete_chunk.data[i].Reference(input.data[delete_idx_start + i]);
 	}
+	delete_chunk.SetChildCardinality(input.size());
 
 	InterruptState interrupt_state;
 	OperatorSinkInput delete_input {*delete_op.sink_state, *lstate.delete_local_state, interrupt_state};

@@ -116,14 +116,14 @@ static DuckLakeDeleteFile WriteDeleteFileInternal(ClientContext &context, InputT
 		}
 		row_count++;
 		if (row_count >= STANDARD_VECTOR_SIZE) {
-			write_chunk.SetCardinality(row_count);
+			write_chunk.SetChildCardinality(row_count);
 			copy_fun.function.copy_to_sink(execution_context, *function_data, *copy_global_state, *copy_local_state,
 			                               write_chunk);
 			row_count = 0;
 		}
 	}
 	if (row_count > 0) {
-		write_chunk.SetCardinality(row_count);
+		write_chunk.SetChildCardinality(row_count);
 		copy_fun.function.copy_to_sink(execution_context, *function_data, *copy_global_state, *copy_local_state,
 		                               write_chunk);
 	}
@@ -257,13 +257,13 @@ public:
 		for (idx_t r = 0; r < local_entry.size(); ++r) {
 			data[chunk_size++] = local_entry[r];
 			if (chunk_size == STANDARD_VECTOR_SIZE) {
-				file_row_id_chunk.SetCardinality(chunk_size);
+				file_row_id_chunk.SetChildCardinality(chunk_size);
 				deleted_row_collection->Append(append_state, file_row_id_chunk);
 				chunk_size = 0;
 			}
 		}
 		if (chunk_size > 0) {
-			file_row_id_chunk.SetCardinality(chunk_size);
+			file_row_id_chunk.SetChildCardinality(chunk_size);
 			deleted_row_collection->Append(append_state, file_row_id_chunk);
 			chunk_size = 0;
 		}
@@ -609,8 +609,8 @@ SourceResultType DuckLakeDelete::GetDataInternal(ExecutionContext &context, Data
                                                  OperatorSourceInput &input) const {
 	auto &global_state = sink_state->Cast<DuckLakeDeleteGlobalState>();
 	auto value = Value::BIGINT(NumericCast<int64_t>(global_state.total_deleted_count));
-	chunk.SetCardinality(1);
 	chunk.data[0].Append(value);
+	chunk.SetChildCardinality(1);
 	return SourceResultType::FINISHED;
 }
 

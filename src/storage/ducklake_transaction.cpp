@@ -219,7 +219,7 @@ void LocalTableChanges::AppendInlinedData(ClientContext &context, TableIndex tab
 						casted_chunk.data[col_idx].Reference(chunk.data[col_idx]);
 					}
 				}
-				casted_chunk.SetCardinality(chunk.size());
+				casted_chunk.SetChildCardinality(chunk.size());
 				casted_data->Append(append_state, casted_chunk);
 			}
 			existing_data.data = std::move(casted_data);
@@ -359,7 +359,7 @@ void LocalTableChanges::AddColumnToLocalInlinedData(ClientContext &context, Tabl
 			ConstantVector::SetNull(new_col_vector, true);
 		}
 
-		new_chunk.SetCardinality(chunk.size());
+		new_chunk.SetChildCardinality(chunk.size());
 		new_data->Append(append_state, new_chunk);
 	}
 
@@ -433,7 +433,7 @@ void LocalTableChanges::RemoveColumnFromLocalInlinedData(ClientContext &context,
 			new_col_idx++;
 		}
 
-		new_chunk.SetCardinality(chunk.size());
+		new_chunk.SetChildCardinality(chunk.size());
 		new_data->Append(append_state, new_chunk);
 	}
 

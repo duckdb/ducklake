@@ -230,8 +230,8 @@ SourceResultType DuckLakeInsert::GetDataInternal(ExecutionContext &context, Data
                                                  OperatorSourceInput &input) const {
 	auto &global_state = sink_state->Cast<DuckLakeInsertGlobalState>();
 	auto value = Value::BIGINT(NumericCast<int64_t>(global_state.total_insert_count));
-	chunk.SetCardinality(1);
 	chunk.data[0].Append(value);
+	chunk.SetChildCardinality(1);
 	return SourceResultType::FINISHED;
 }
 //===--------------------------------------------------------------------===//
