@@ -612,10 +612,7 @@ vector<string> DuckLakeServerSideCommit::LookupInlinedTableNames(TableIndex tabl
 	vector<string> names;
 	auto sql =
 	    SubstitutePlaceholders(DuckLakeMetadataManager::GetInlinedTableNamesSql(table_id), transaction_snapshot);
-	auto result = fresh_conn.Query(sql);
-	if (!result || result->HasError()) {
-		return names;
-	}
+	auto result = RunQuery(sql, "lookup inlined table names");
 	for (auto &row : *result) {
 		names.push_back(row.GetValue<string>(0));
 	}
@@ -721,10 +718,7 @@ DuckLakeCommitContext DuckLakeServerSideCommit::BuildContext(idx_t &committed_sn
 		vector<DuckLakeColumnSchemaEntry> schema;
 		auto sql = SubstitutePlaceholders(DuckLakeMetadataManager::GetTableColumnSchemaSql(table_id),
 		                                  transaction_snapshot);
-		auto result = fresh_conn.Query(sql);
-		if (!result || result->HasError()) {
-			return schema;
-		}
+		auto result = RunQuery(sql, "read table column schema");
 		for (auto &row : *result) {
 			schema.push_back({FieldIndex(static_cast<idx_t>(row.GetValue<int64_t>(0))),
 			                  row.GetValue<string>(1), DuckLakeTypes::FromString(row.GetValue<string>(2))});
@@ -747,10 +741,7 @@ DuckLakeCommitContext DuckLakeServerSideCommit::BuildContext(idx_t &committed_sn
 		}
 		auto sql = SubstitutePlaceholders(
 		    DuckLakeMetadataManager::GetNetDataFileRowCountSql(table_id, inlined_deletion_table), transaction_snapshot);
-		auto result = fresh_conn.Query(sql);
-		if (!result || result->HasError()) {
-			return 0;
-		}
+		auto result = RunQuery(sql, "read net data file row count");
 		for (auto &row : *result) {
 			return row.GetValue<idx_t>(0);
 		}
@@ -761,10 +752,7 @@ DuckLakeCommitContext DuckLakeServerSideCommit::BuildContext(idx_t &committed_sn
 		for (auto &name : LookupInlinedTableNames(table_id)) {
 			auto sql =
 			    SubstitutePlaceholders(DuckLakeMetadataManager::GetNetInlinedRowCountSql(name), transaction_snapshot);
-			auto result = fresh_conn.Query(sql);
-			if (!result || result->HasError()) {
-				continue;
-			}
+			auto result = RunQuery(sql, "read net inlined row count");
 			for (auto &row : *result) {
 				total += row.GetValue<idx_t>(0);
 				break;
