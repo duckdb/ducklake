@@ -2603,7 +2603,7 @@ bool DuckLakeTransaction::TryMergeInlinedStats(DuckLakeTableEntry &table, DuckLa
 		auto result = GetMetadataManager().ReadInlinedDataAggregates(
 		    snapshot, DuckLakeUtil::SQLIdentifierToString(inlined_table.table_name), select_list);
 		if (result->HasError()) {
-			return false;
+			result->GetErrorObject().Throw("Failed to read inlined-data aggregates from DuckLake: ");
 		}
 		for (auto &row : *result) {
 			auto total = static_cast<idx_t>(row.template GetValue<int64_t>(0));
@@ -2667,7 +2667,7 @@ void DuckLakeTransaction::RecomputeGlobalStatsAfterRewrite(string &batch_query, 
 	// 1. Merge the per-file stats of the post-rewrite parquet files = (pre-commit visible files - removed) + new files.
 	auto result = GetMetadataManager().ReadFileColumnStatsForTable(snapshot, table_id);
 	if (result->HasError()) {
-		return;
+		result->GetErrorObject().Throw("Failed to read per-file column stats for rewrite from DuckLake: ");
 	}
 	bool have_file = false;
 	idx_t last_file_id = 0;
