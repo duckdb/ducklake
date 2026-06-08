@@ -1390,12 +1390,29 @@ void DuckLakeTransaction::RunCommitLoop(DuckLakeSnapshot transaction_snapshot,
 	context.get_table_stats = [&](TableIndex table_id) {
 		return ducklake_catalog.GetTableStats(*this, table_id);
 	};
-	context.get_table_entry = [&](TableIndex table_id) -> optional_ptr<DuckLakeTableEntry> {
+	context.get_table_column_schema = [&](TableIndex table_id) {
+		// All top-level columns at the commit snapshot — including nested STRUCT/LIST roots.
+		// The IsFoldableScalarType check in TryMergeInlinedStats bails on any non-scalar root.
+		vector<DuckLakeColumnSchemaEntry> schema;
 		auto entry = ducklake_catalog.GetEntryById(*this, transaction_snapshot, table_id);
 		if (!entry) {
-			return nullptr;
+			return schema;
 		}
-		return &entry->Cast<DuckLakeTableEntry>();
+		for (auto &field : entry->Cast<DuckLakeTableEntry>().GetFieldData().GetFieldIds()) {
+			schema.push_back({field->GetFieldIndex(), field->Name(), field->Type()});
+		}
+		return schema;
+	};
+	context.get_inlined_table_names = [&](TableIndex table_id) {
+		vector<string> names;
+		auto entry = ducklake_catalog.GetEntryById(*this, transaction_snapshot, table_id);
+		if (!entry) {
+			return names;
+		}
+		for (auto &t : entry->Cast<DuckLakeTableEntry>().GetInlinedDataTables()) {
+			names.push_back(t.table_name);
+		}
+		return names;
 	};
 	context.get_net_data_file_row_count = [&](TableIndex table_id) -> idx_t {
 		auto entry = ducklake_catalog.GetEntryById(*this, transaction_snapshot, table_id);

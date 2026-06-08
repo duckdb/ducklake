@@ -717,31 +717,31 @@ static bool IsFoldableScalarType(const LogicalType &type) {
 	return id == LogicalTypeId::VARCHAR || id == LogicalTypeId::BOOLEAN;
 }
 
-bool DuckLakeTransactionState::TryMergeInlinedStats(DuckLakeTableEntry &table, DuckLakeSnapshot snapshot,
-                                                    DuckLakeTableStats &target, const DuckLakeCommitContext &context) {
-	auto &field_data = table.GetFieldData();
-	auto &field_ids = field_data.GetFieldIds();
-	// We can only compute exact inlined min/max for top-level foldable scalar columns. If any column is nested or a
+bool DuckLakeTransactionState::TryMergeInlinedStats(const vector<DuckLakeColumnSchemaEntry> &columns,
+                                                    const vector<string> &inlined_table_names,
+                                                    DuckLakeSnapshot snapshot, DuckLakeTableStats &target,
+                                                    const DuckLakeCommitContext &context) {
+	// We can only compute exact inlined min/max for top-level foldable scalar columns. If any column is a
 	// non-scalar type we cannot account for the inlined rows exactly - bail (caller keeps the scan fallback).
-	for (auto &field_id : field_ids) {
-		if (field_id->HasChildren() || !IsFoldableScalarType(field_id->Type())) {
+	for (auto &col : columns) {
+		if (!IsFoldableScalarType(col.column_type)) {
 			return false;
 		}
 	}
-	for (auto &inlined_table : table.GetInlinedDataTables()) {
+	for (auto &inlined_table_name : inlined_table_names) {
 		// Build one aggregate query: COUNT(*) followed by (MIN, MAX, COUNT(col), nan-flag) per column.
 		string select_list = "COUNT(*)";
-		for (auto &field_id : field_ids) {
-			auto col = DuckLakeUtil::SQLIdentifierToString(field_id->Name());
+		for (auto &col : columns) {
+			auto col_ident = DuckLakeUtil::SQLIdentifierToString(col.column_name);
 			bool is_float =
-			    field_id->Type().id() == LogicalTypeId::FLOAT || field_id->Type().id() == LogicalTypeId::DOUBLE;
+			    col.column_type.id() == LogicalTypeId::FLOAT || col.column_type.id() == LogicalTypeId::DOUBLE;
 			string nan_expr =
-			    is_float ? StringUtil::Format("COALESCE(BOOL_OR(isnan(%s)), false)", col) : string("false");
-			select_list +=
-			    StringUtil::Format(", MIN(%s)::VARCHAR, MAX(%s)::VARCHAR, COUNT(%s), %s", col, col, col, nan_expr);
+			    is_float ? StringUtil::Format("COALESCE(BOOL_OR(isnan(%s)), false)", col_ident) : string("false");
+			select_list += StringUtil::Format(", MIN(%s)::VARCHAR, MAX(%s)::VARCHAR, COUNT(%s), %s", col_ident,
+			                                  col_ident, col_ident, nan_expr);
 		}
 		auto sql = DuckLakeMetadataManager::ReadInlinedDataAggregatesSql(
-		    DuckLakeUtil::SQLIdentifierToString(inlined_table.table_name), select_list);
+		    DuckLakeUtil::SQLIdentifierToString(inlined_table_name), select_list);
 		auto result = context.query_metadata_with_snapshot(snapshot, sql);
 		if (result->HasError()) {
 			result->GetErrorObject().Throw("Failed to read inlined-data aggregates from DuckLake: ");
@@ -752,11 +752,11 @@ bool DuckLakeTransactionState::TryMergeInlinedStats(DuckLakeTableEntry &table, D
 				break;
 			}
 			idx_t col_offset = 1;
-			for (auto &field_id : field_ids) {
+			for (auto &col : columns) {
 				bool is_float =
-				    field_id->Type().id() == LogicalTypeId::FLOAT || field_id->Type().id() == LogicalTypeId::DOUBLE;
+				    col.column_type.id() == LogicalTypeId::FLOAT || col.column_type.id() == LogicalTypeId::DOUBLE;
 				bool contains_nan = !row.IsNull(col_offset + 3) && row.template GetValue<bool>(col_offset + 3);
-				DuckLakeColumnStats col_stats(field_id->Type());
+				DuckLakeColumnStats col_stats(col.column_type);
 				auto non_null = static_cast<idx_t>(row.template GetValue<int64_t>(col_offset + 2));
 				col_stats.has_num_values = true;
 				col_stats.num_values = total;
@@ -777,7 +777,7 @@ bool DuckLakeTransactionState::TryMergeInlinedStats(DuckLakeTableEntry &table, D
 						col_stats.max = row.template GetValue<string>(col_offset + 1);
 					}
 				}
-				target.MergeStats(field_id->GetFieldIndex(), col_stats);
+				target.MergeStats(col.field_index, col_stats);
 				col_offset += 4;
 			}
 			break;
@@ -791,14 +791,20 @@ void DuckLakeTransactionState::RecomputeGlobalStatsAfterRewrite(string &batch_qu
                                                                  const CompactionInformation &rewrite_changes,
                                                                  const set<DataFileIndex> &removed_source_ids,
                                                                  const DuckLakeCommitContext &context) {
-	auto table = context.get_table_entry(table_id);
-	if (!table) {
-		return;
+	auto columns = context.get_table_column_schema(table_id);
+	if (columns.empty()) {
+		return; // no schema visible at the commit snapshot
 	}
 	auto current_stats = context.get_table_stats(table_id);
 	if (!current_stats) {
 		// no committed stats row exists yet - the UPDATE path of UpdateGlobalTableStats only refreshes existing rows
 		return;
+	}
+
+	// Build a field_index -> column_type map for per-file stats merge below.
+	map<FieldIndex, LogicalType> type_by_field;
+	for (auto &col : columns) {
+		type_by_field.insert(make_pair(col.field_index, col.column_type));
 	}
 
 	DuckLakeTableStats new_stats;
@@ -829,11 +835,11 @@ void DuckLakeTransactionState::RecomputeGlobalStatsAfterRewrite(string &batch_qu
 			continue; // file without column stats
 		}
 		FieldIndex field_idx(static_cast<idx_t>(row.GetValue<int64_t>(3)));
-		auto field = table->GetFieldId(field_idx);
-		if (!field) {
-			continue; // column no longer exists
+		auto type_it = type_by_field.find(field_idx);
+		if (type_it == type_by_field.end()) {
+			continue; // column no longer exists or is nested
 		}
-		DuckLakeColumnStats col_stats(field->Type());
+		DuckLakeColumnStats col_stats(type_it->second);
 		if (!row.IsNull(4) && !row.IsNull(5)) {
 			auto value_count = static_cast<idx_t>(row.GetValue<int64_t>(4));
 			auto null_count = static_cast<idx_t>(row.GetValue<int64_t>(5));
@@ -883,7 +889,8 @@ void DuckLakeTransactionState::RecomputeGlobalStatsAfterRewrite(string &batch_qu
 	// 3. Fold in committed inlined data (REWRITE_DELETES does not rewrite inlined data).
 	idx_t net_inlined = context.get_net_inlined_row_count(table_id);
 	if (net_inlined > 0) {
-		if (!TryMergeInlinedStats(*table, snapshot, new_stats, context)) {
+		auto inlined_table_names = context.get_inlined_table_names(table_id);
+		if (!TryMergeInlinedStats(columns, inlined_table_names, snapshot, new_stats, context)) {
 			return; // cannot account for inlined data exactly - keep the existing stats and the scan fallback
 		}
 		new_stats.record_count += net_inlined;
