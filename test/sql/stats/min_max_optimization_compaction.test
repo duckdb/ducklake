@@ -169,3 +169,41 @@ query I
 SELECT MIN(i) FROM ducklake.nested WHERE s.a > 500;
 ----
 51
+
+# ============================================
+# 5. All-in-one transaction: CREATE / INSERT / DELETE / rewrite / COMMIT in one BEGIN/COMMIT
+#    The rewrite is a no-op (transactional isolation hides the in-transaction delete), and the
+#    Phase 2 stats refresh is skipped because no committed stats row exists yet at recompute time.
+#    Correctness is preserved via the Phase 1 fallback.
+# ============================================
+
+statement ok
+BEGIN;
+
+statement ok
+CREATE TABLE ducklake.single_tx(i INTEGER);
+
+statement ok
+INSERT INTO ducklake.single_tx FROM range(1, 201);
+
+statement ok
+DELETE FROM ducklake.single_tx WHERE i = 1;
+
+statement ok
+CALL ducklake_rewrite_data_files('ducklake', delete_threshold => 0);
+
+statement ok
+COMMIT;
+
+# values are correct
+query III
+SELECT MIN(i), MAX(i), COUNT(*) FROM ducklake.single_tx;
+----
+2	200	199
+
+# MIN/MAX fell back to a scan: the Phase 2 recompute was skipped (no current_stats row at commit time),
+# so record_count (gross 200) != net_count (199), and the Phase 1 exactness guard forces a scan.
+query II
+EXPLAIN ANALYZE SELECT MIN(i) FROM ducklake.single_tx;
+----
+analyzed_plan	<REGEX>:.*TABLE_SCAN.*
