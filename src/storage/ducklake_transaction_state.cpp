@@ -896,11 +896,13 @@ void DuckLakeTransactionState::RecomputeGlobalStatsAfterRewrite(string &batch_qu
 		new_stats.record_count += net_inlined;
 	}
 
-	// 4. Make sure every committed leaf column appears so its global row is refreshed (a column with no live data
-	//    becomes "unknown" -> it is scanned at query time, which is correct).
-	for (auto &col_entry : current_stats->column_stats) {
-		if (new_stats.column_stats.find(col_entry.first) == new_stats.column_stats.end()) {
-			new_stats.column_stats.insert(make_pair(col_entry.first, DuckLakeColumnStats(col_entry.second.type)));
+	// 4. Make sure every committed top-level column appears so its global row is refreshed (a column with no
+	//    live data becomes "unknown" -> it is scanned at query time, which is correct). Use the snapshot
+	//    schema instead of current_stats->column_stats: the server-side stats cache is only populated for
+	//    tables with staged inserts, so a pure-rewrite commit can see an empty current_stats.column_stats.
+	for (auto &col : columns) {
+		if (new_stats.column_stats.find(col.field_index) == new_stats.column_stats.end()) {
+			new_stats.column_stats.insert(make_pair(col.field_index, DuckLakeColumnStats(col.column_type)));
 		}
 	}
 
