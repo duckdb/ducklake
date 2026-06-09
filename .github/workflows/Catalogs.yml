@@ -74,12 +74,7 @@ jobs:
 
     - name: Test Quack
       run: |
-        REPO_DIR=$(dirname $(find build/release/repository -name "quack.duckdb_extension" | head -1))
-        DUCKDB_VER=$(basename $(dirname "$REPO_DIR"))
-        EXT_DIR="$HOME/.duckdb/extensions/$DUCKDB_VER/${{ matrix.arch }}"
-        mkdir -p "$EXT_DIR"
-        cp "$REPO_DIR/quack.duckdb_extension" "$EXT_DIR/"
-        python3 scripts/run_quack_tests.py --slow --no-install
+        python3 scripts/run_quack_tests.py --slow
 
     - name: Test SQLite
       env:

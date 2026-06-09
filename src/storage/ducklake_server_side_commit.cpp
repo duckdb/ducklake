@@ -696,6 +696,10 @@ DuckLakeCommitContext DuckLakeServerSideCommit::BuildContext(idx_t &committed_sn
 	                                const vector<DuckLakeTableInfo> &, const vector<DuckLakeTableInfo> &) -> string {
 		return BuildInlinedDataInserts(new_data);
 	};
+	ctx.write_inlined_file_deletes = [](const vector<DuckLakeInlinedFileDeletionInfo> &new_deletes) -> string {
+		bool created_new_table = false;
+		return DuckLakeMetadataManager::WriteNewInlinedFileDeletesSql(new_deletes, created_new_table);
+	};
 	ctx.get_table_stats = [this](TableIndex table_id) -> shared_ptr<DuckLakeTableStats> {
 		auto it = existing_table_stats.find(table_id);
 		return it == existing_table_stats.end() ? nullptr : it->second;

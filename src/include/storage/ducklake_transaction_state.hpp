@@ -54,6 +54,12 @@ struct DuckLakeCommitContext {
 	std::function<string(DuckLakeSnapshot &, const vector<DuckLakeInlinedDataInfo> &, const vector<DuckLakeTableInfo> &,
 	                     const vector<DuckLakeTableInfo> &)>
 	    write_inlined_data;
+	//! Emits the SQL that creates+populates per-table inlined file-deletion tables (ducklake_inlined_delete_<id>)
+	//! and marks the metadata-manager cache for clearing when a new such table is created.
+	std::function<string(const vector<DuckLakeInlinedFileDeletionInfo> &)> write_inlined_file_deletes =
+	    [](const vector<DuckLakeInlinedFileDeletionInfo> &) {
+		    return string();
+	    };
 	//! Returns the current global table stats for a single table id (first-attempt path).
 	std::function<shared_ptr<DuckLakeTableStats>(TableIndex)> get_table_stats;
 	//! Builds a DuckLakeStats map from a vector of per-snapshot global stats (retry path).

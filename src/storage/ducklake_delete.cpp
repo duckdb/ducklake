@@ -512,6 +512,11 @@ void DuckLakeDelete::FlushDelete(DuckLakeTransaction &transaction, ClientContext
 		auto threshold = catalog.DataInliningRowLimit(context, schema.GetSchemaId(), table.GetTableId());
 		if (threshold > 0 && sorted_deletes.size() <= threshold) {
 			// use inlined file deletions
+			if (catalog.CheckInlinedDeletionTableCache(table.GetTableId(), transaction.GetSnapshot()) !=
+			    InlinedDeletionCacheResult::EXISTS) {
+				// this commit may create the inlined-delete table - take the client-side path
+				transaction.SetRequiresNewInlinedTable(true);
+			}
 			transaction.AddNewInlinedFileDeletes(table.GetTableId(), data_file_info.file_id.index,
 			                                     std::move(sorted_deletes));
 			return;

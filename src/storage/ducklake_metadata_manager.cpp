@@ -2881,8 +2881,9 @@ string DuckLakeMetadataManager::InlinedFileDeletionTableName(TableIndex table_id
 	return StringUtil::Format("ducklake_inlined_delete_%d", table_id.index);
 }
 
-string DuckLakeMetadataManager::WriteNewInlinedFileDeletesSqlBatch(
-    const vector<DuckLakeInlinedFileDeletionInfo> &new_deletes) {
+string DuckLakeMetadataManager::WriteNewInlinedFileDeletesSql(const vector<DuckLakeInlinedFileDeletionInfo> &new_deletes,
+                                                             bool &created_new_table) {
+	created_new_table = false;
 	string batch_queries;
 	if (new_deletes.empty()) {
 		return batch_queries;
@@ -2894,6 +2895,7 @@ string DuckLakeMetadataManager::WriteNewInlinedFileDeletesSqlBatch(
 			batch_queries += StringUtil::Format("CREATE TABLE IF NOT EXISTS {METADATA_CATALOG}.%s"
 			                                    "(file_id BIGINT, row_id BIGINT, begin_snapshot BIGINT);\n",
 			                                    table_name);
+			created_new_table = true;
 		}
 		string values;
 		for (auto &file_entry : entry.file_deletions.file_deletes) {
@@ -2906,6 +2908,17 @@ string DuckLakeMetadataManager::WriteNewInlinedFileDeletesSqlBatch(
 			}
 		}
 		batch_queries += StringUtil::Format("INSERT INTO {METADATA_CATALOG}.%s VALUES %s;\n", table_name, values);
+	}
+	return batch_queries;
+}
+
+string DuckLakeMetadataManager::WriteNewInlinedFileDeletesSqlBatch(
+    const vector<DuckLakeInlinedFileDeletionInfo> &new_deletes) {
+	bool created_new_table = false;
+	auto batch_queries = WriteNewInlinedFileDeletesSql(new_deletes, created_new_table);
+	if (created_new_table) {
+		// We create a table here, flag we need to clear our cache at commit
+		MarkPendingCacheClear();
 	}
 	return batch_queries;
 }

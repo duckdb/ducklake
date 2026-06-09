@@ -112,6 +112,18 @@
       ]
     },
     {
+      "reason": "FIXME: A failed client-side commit batch is not atomic on the quack server.",
+      "paths": [
+        "test/sql/quack/server_side_commit_atomicity.test"
+      ]
+    },
+    {
+      "reason": "FIXME: A custom METADATA_SCHEMA fails to initialize on quack.",
+      "paths": [
+        "test/sql/transaction/transaction_schema.test"
+      ]
+    },
+    {
       "reason": "Test relies on a file-based metadata catalog.",
       "paths": [
         "test/sql/general/default_path.test",

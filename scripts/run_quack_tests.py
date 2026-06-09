@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """CI entry point: run every DuckLake test under test/sql/ against a fresh quack sidecar.
 
-Before any test runs the script installs `quack` from the `core_nightly` extension
-repository (DuckLake's CI builds against duckdb v1.5.2, which has a matching nightly
-quack). If the install fails the script exits non-zero so CI surfaces it. Pass
-`--no-install` to skip when quack is already available (e.g. statically linked via
-ENABLE_QUACK=1 in a dev build).
+quack is always resolved from the locally-built extension under `<build-dir>/repository`
+(produced by `ENABLE_QUACK=ON make release`) — never from the network. Before any test
+runs, a pre-flight verifies that local quack loads so CI fails fast with a clear message
+instead of every sidecar dying mid-run. If it can't load the script exits non-zero. Pass
+`--no-install` to skip the pre-flight (e.g. when quack is statically linked).
 
 For each test file, this script:
   1. Spawns a sibling `duckdb -unsigned` process running `quack_serve(...)`.
@@ -79,11 +79,12 @@ def discover_tests(sql_dir: Path, include_slow: bool) -> list[Path]:
     return sorted(found)
 
 
-def install_quack(duckdb_bin: Path) -> tuple[bool, str]:
-    # Force-install so a stale local quack from a previous build doesn't shadow the nightly
-    # the CI was meant to test against. We run it via the same duckdb binary the sidecar
-    # uses so both processes resolve to the same extension directory.
-    sql = "FORCE INSTALL quack FROM core_nightly; LOAD quack; SELECT 1;"
+def verify_local_quack(duckdb_bin: Path, local_extension_repo: Path) -> tuple[bool, str]:
+    # Pre-flight: confirm the locally-built quack loads, so CI fails fast with a clear
+    # message instead of every sidecar dying mid-run. Force-install from the build
+    # repository (never the network) via the same duckdb binary the sidecar uses, so both
+    # resolve to the same extension directory and a stale quack can't shadow this build's.
+    sql = f"FORCE INSTALL quack FROM '{local_extension_repo}'; LOAD quack; SELECT 1;"
     try:
         proc = subprocess.run(
             [str(duckdb_bin), "-unsigned", "-c", sql],
@@ -284,7 +285,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--token", default=DEFAULT_TOKEN, help="auth token for quack_serve")
     p.add_argument("--no-skip-list", action="store_true", help="ignore skip_tests in quack.json (run them anyway)")
     p.add_argument("--stop-on-fail", action="store_true", help="stop after the first failing/timeout test")
-    p.add_argument("--no-install", action="store_true", help="skip the pre-flight 'INSTALL quack FROM core_nightly' (use when quack is already statically linked)")
+    p.add_argument("--no-install", action="store_true", help="skip the pre-flight that verifies the locally-built quack loads (use when quack is statically linked)")
     return p.parse_args()
 
 
@@ -313,8 +314,15 @@ def main() -> int:
     effective_config_path.write_text(json.dumps(cfg))
 
     if not args.no_install:
-        print("installing quack from core_nightly...", flush=True)
-        ok, detail = install_quack(duckdb_bin)
+        if not list(local_extension_repo.rglob("quack.duckdb_extension")):
+            print(
+                f"error: no quack.duckdb_extension under {local_extension_repo}\n"
+                "       build with ENABLE_QUACK=ON (e.g. `ENABLE_QUACK=ON make release`).",
+                file=sys.stderr,
+            )
+            return 2
+        print(f"verifying locally-built quack from {local_extension_repo} ...", flush=True)
+        ok, detail = verify_local_quack(duckdb_bin, local_extension_repo)
         if not ok:
             print(f"error: {detail}", file=sys.stderr)
             return 2
