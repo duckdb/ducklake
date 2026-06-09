@@ -554,11 +554,13 @@ idx_t DuckLakeMetadataManager::GetNetInlinedRowCount(const string &inlined_table
 }
 
 string DuckLakeMetadataManager::GetTableColumnSchemaSql(TableIndex table_id) {
+	// Return the full flattened schema: top-level roots (parent_column IS NULL) and every nested leaf, each with its
+	// own column_id (== FieldIndex) and its own leaf column_type. Callers distinguish roots from leaves via
+	// parent_column. column_order == column_id for every row, so the ordering stays deterministic.
 	return StringUtil::Format(R"(
-SELECT column_id, column_name, column_type
+SELECT column_id, column_name, column_type, parent_column
 FROM {METADATA_CATALOG}.ducklake_column
 WHERE table_id = %d
-  AND parent_column IS NULL
   AND {SNAPSHOT_ID} >= begin_snapshot
   AND ({SNAPSHOT_ID} < end_snapshot OR end_snapshot IS NULL)
 ORDER BY column_order)",

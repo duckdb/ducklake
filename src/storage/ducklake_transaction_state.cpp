@@ -801,7 +801,9 @@ void DuckLakeTransactionState::RecomputeGlobalStatsAfterRewrite(string &batch_qu
 		return;
 	}
 
-	// Build a field_index -> column_type map for per-file stats merge below.
+	// Build a field_index -> column_type map for the per-file stats merge below. `columns` is the full flattened
+	// schema (roots + nested leaves), so per-file stats keyed by a nested-leaf FieldIndex resolve here too - without
+	// the leaves, an un-rewritten file's nested-leaf stats would be dropped and the global min/max corrupted.
 	map<FieldIndex, LogicalType> type_by_field;
 	for (auto &col : columns) {
 		type_by_field.insert(make_pair(col.field_index, col.column_type));
@@ -886,20 +888,29 @@ void DuckLakeTransactionState::RecomputeGlobalStatsAfterRewrite(string &batch_qu
 		return;
 	}
 
-	// 3. Fold in committed inlined data (REWRITE_DELETES does not rewrite inlined data).
+	// 3. Fold in committed inlined data (REWRITE_DELETES does not rewrite inlined data). Pass only the top-level
+	//    roots: TryMergeInlinedStats references each column by name against the inlined table and bails on any
+	//    non-scalar root; feeding it nested leaves would emit MIN("<leaf>") against a column that does not exist.
 	idx_t net_inlined = context.get_net_inlined_row_count(table_id);
 	if (net_inlined > 0) {
+		vector<DuckLakeColumnSchemaEntry> root_columns;
+		for (auto &col : columns) {
+			if (col.is_root) {
+				root_columns.push_back(col);
+			}
+		}
 		auto inlined_table_names = context.get_inlined_table_names(table_id);
-		if (!TryMergeInlinedStats(columns, inlined_table_names, snapshot, new_stats, context)) {
+		if (!TryMergeInlinedStats(root_columns, inlined_table_names, snapshot, new_stats, context)) {
 			return; // cannot account for inlined data exactly - keep the existing stats and the scan fallback
 		}
 		new_stats.record_count += net_inlined;
 	}
 
-	// 4. Make sure every committed top-level column appears so its global row is refreshed (a column with no
-	//    live data becomes "unknown" -> it is scanned at query time, which is correct). Use the snapshot
-	//    schema instead of current_stats->column_stats: the server-side stats cache is only populated for
-	//    tables with staged inserts, so a pure-rewrite commit can see an empty current_stats.column_stats.
+	// 4. Make sure every committed column (root or nested leaf) appears so its global row is refreshed (a column with
+	//    no live data becomes "unknown" -> it is scanned at query time, which is correct). UpdateGlobalTableStatsSql
+	//    only UPDATEs existing rows, so entries with no committed stats row (e.g. struct containers) are harmless
+	//    no-ops. Use the snapshot schema instead of current_stats->column_stats: the server-side stats cache is only
+	//    populated for tables with staged inserts, so a pure-rewrite commit can see an empty current_stats.column_stats.
 	for (auto &col : columns) {
 		if (new_stats.column_stats.find(col.field_index) == new_stats.column_stats.end()) {
 			new_stats.column_stats.insert(make_pair(col.field_index, DuckLakeColumnStats(col.column_type)));

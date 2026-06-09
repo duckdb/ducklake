@@ -720,8 +720,10 @@ DuckLakeCommitContext DuckLakeServerSideCommit::BuildContext(idx_t &committed_sn
 		                                  transaction_snapshot);
 		auto result = RunQuery(sql, "read table column schema");
 		for (auto &row : *result) {
-			schema.push_back({FieldIndex(static_cast<idx_t>(row.GetValue<int64_t>(0))),
-			                  row.GetValue<string>(1), DuckLakeTypes::FromString(row.GetValue<string>(2))});
+			// parent_column IS NULL => top-level root; otherwise a nested leaf carrying its own leaf type.
+			bool is_root = row.IsNull(3);
+			schema.push_back({FieldIndex(static_cast<idx_t>(row.GetValue<int64_t>(0))), row.GetValue<string>(1),
+			                  DuckLakeTypes::FromString(row.GetValue<string>(2)), is_root});
 		}
 		return schema;
 	};

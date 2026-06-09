@@ -1391,15 +1391,24 @@ void DuckLakeTransaction::RunCommitLoop(DuckLakeSnapshot transaction_snapshot,
 		return ducklake_catalog.GetTableStats(*this, table_id);
 	};
 	context.get_table_column_schema = [&](TableIndex table_id) {
-		// All top-level columns at the commit snapshot — including nested STRUCT/LIST roots.
-		// The IsFoldableScalarType check in TryMergeInlinedStats bails on any non-scalar root.
+		// The full flattened schema at the commit snapshot: top-level roots (is_root=true) plus every nested
+		// struct/list/map/array leaf (is_root=false). Roots carry the inlined-data merge (TryMergeInlinedStats
+		// references columns by name and bails on any non-scalar root); leaves carry their own per-file stats keyed
+		// by leaf FieldIndex, which the rewrite recompute must merge. Each node uses its authoritative stored
+		// FieldIndex (ALTER ADD FIELD makes nested leaf ids non-contiguous, so they cannot be re-derived).
 		vector<DuckLakeColumnSchemaEntry> schema;
 		auto entry = ducklake_catalog.GetEntryById(*this, transaction_snapshot, table_id);
 		if (!entry) {
 			return schema;
 		}
+		std::function<void(const DuckLakeFieldId &, bool)> add_field = [&](const DuckLakeFieldId &field, bool is_root) {
+			schema.push_back({field.GetFieldIndex(), field.Name(), field.Type(), is_root});
+			for (auto &child : field.Children()) {
+				add_field(*child, false);
+			}
+		};
 		for (auto &field : entry->Cast<DuckLakeTableEntry>().GetFieldData().GetFieldIds()) {
-			schema.push_back({field->GetFieldIndex(), field->Name(), field->Type()});
+			add_field(*field, true);
 		}
 		return schema;
 	};

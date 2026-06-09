@@ -17,6 +17,10 @@ struct DuckLakeColumnSchemaEntry {
 	FieldIndex field_index;
 	string column_name;
 	LogicalType column_type;
+	//! false for nested struct/list/map/array leaves. Only top-level roots are safe to feed to the inlined-data
+	//! aggregate merge (which references the column by name); nested leaves still carry their own per-file stats.
+	//! (No default initializer: this struct must stay a C++11 aggregate; both producers set it explicitly.)
+	bool is_root;
 };
 
 struct DuckLakeCommitContext {
