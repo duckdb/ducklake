@@ -74,7 +74,7 @@ jobs:
 
     - name: Test Quack
       run: |
-        python3 scripts/run_quack_tests.py --slow
+        python3 scripts/run_quack_tests.py
 
     - name: Test SQLite
       env:
