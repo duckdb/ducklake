@@ -135,8 +135,13 @@ def wait_for_port(port: int, timeout: float, sidecar: subprocess.Popen) -> bool:
     return False
 
 
-def start_sidecar(duckdb_bin: Path, port: int, token: str, log_path: Path) -> subprocess.Popen:
+def start_sidecar(duckdb_bin: Path, port: int, token: str, log_path: Path,
+                  local_extension_repo: Path) -> subprocess.Popen:
     sql = (
+        # quack is built loadable (not statically linked); install the locally-built copy
+        # from the build repository so the sidecar's LOAD quack resolves without a network
+        # fetch or a pre-seeded ~/.duckdb.
+        f"FORCE INSTALL quack FROM '{local_extension_repo}';\n"
         "LOAD httpfs;\n"
         "LOAD quack;\n"
         f"SELECT * FROM quack_serve('quack://localhost:{port}/', token := '{token}');\n"
@@ -196,6 +201,7 @@ def run_one_test(
     port: int,
     token: str,
     timeout: float,
+    local_extension_repo: Path,
 ) -> TestResult:
     rel = test_path.relative_to(REPO_ROOT)
     start = time.monotonic()
@@ -204,7 +210,7 @@ def run_one_test(
         return TestResult(test_path, "infra", 0.0, f"port {port} already in use")
 
     sidecar_log = REPO_ROOT / "build" / "quack_sidecar.log"
-    sidecar = start_sidecar(duckdb_bin, port, token, sidecar_log)
+    sidecar = start_sidecar(duckdb_bin, port, token, sidecar_log, local_extension_repo)
     try:
         if not wait_for_port(port, SIDECAR_STARTUP_TIMEOUT, sidecar):
             stop_sidecar(sidecar)
@@ -288,6 +294,7 @@ def main() -> int:
     build_dir = Path(args.build_dir).resolve()
     unittest_bin = build_dir / "test" / "unittest"
     duckdb_bin = build_dir / "duckdb"
+    local_extension_repo = build_dir / "repository"
     config_path = REPO_ROOT / "test" / "configs" / "quack.json"
     sql_dir = REPO_ROOT / "test" / "sql"
 
@@ -295,6 +302,15 @@ def main() -> int:
         if not path.exists():
             print(f"error: missing {path}", file=sys.stderr)
             return 2
+
+    # quack is built as a loadable extension, and the unittest installs/loads extensions into a
+    # per-test temp dir (not ~/.duckdb) while quack.json disables autoloading — so on_init's
+    # `LOAD quack` can't find it. Bake an explicit install of the locally-built quack (from the
+    # build repository) into on_init so each test resolves it into its own extension dir.
+    effective_config_path = build_dir / "quack_config_effective.json"
+    cfg = json.loads(config_path.read_text())
+    cfg["on_init"] = f"FORCE INSTALL quack FROM '{local_extension_repo}'; " + cfg["on_init"]
+    effective_config_path.write_text(json.dumps(cfg))
 
     if not args.no_install:
         print("installing quack from core_nightly...", flush=True)
@@ -367,12 +383,13 @@ def main() -> int:
 
         result = run_one_test(
             unittest_bin=unittest_bin,
-            config_path=config_path,
+            config_path=effective_config_path,
             test_path=test_path,
             duckdb_bin=duckdb_bin,
             port=args.port,
             token=args.token,
             timeout=args.timeout,
+            local_extension_repo=local_extension_repo,
         )
         results.append(result)
         counts[result.status] = counts.get(result.status, 0) + 1
