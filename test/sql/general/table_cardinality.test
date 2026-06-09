@@ -1,0 +1,34 @@
+# name: test/sql/general/table_cardinality.test
+# description: test estimated_size/cardinality for tables created via CREATE TABLE vs CTAS
+# group: [general]
+
+require ducklake
+
+require parquet
+
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/ducklake.db' AS ducklake (DATA_PATH '{TEST_DIR}/ducklake_files', METADATA_CATALOG 'ducklake_meta')
+
+statement ok
+CREATE TABLE ducklake.ctas_table AS FROM range(10000)
+
+query I
+SELECT estimated_size FROM duckdb_tables() WHERE table_name = 'ctas_table'
+----
+10000
+
+statement ok
+CREATE TABLE ducklake.empty_table (i INTEGER);
+
+query I
+SELECT estimated_size FROM duckdb_tables() WHERE table_name = 'empty_table'
+----
+0
+
+statement ok
+INSERT INTO ducklake.empty_table VALUES (1), (2), (3);
+
+query I
+SELECT estimated_size FROM duckdb_tables() WHERE table_name = 'empty_table'
+----
+3

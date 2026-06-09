@@ -1,0 +1,39 @@
+# name: test/sql/stats/table_stats_without_column_stats.test
+# description: a ducklake_table_stats row with no matching ducklake_table_column_stats row must keep its
+# group: [stats]
+
+#              next_row_id when seeding commit stats
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/table_stats_without_column_stats', METADATA_CATALOG 'dl', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE ducklake.t(i INTEGER)
+
+# Seed a ducklake_table_stats row (next_row_id=5) with NO matching ducklake_table_column_stats row.
+statement ok
+INSERT INTO dl.ducklake_table_stats VALUES (1, 5, 5, 100)
+
+# Data insert: existing stats are seeded before assigning row ids.
+statement ok
+INSERT INTO ducklake.t VALUES (100), (101), (102)
+
+# The new data file's row_id_start must continue from next_row_id (5), not restart at 0.
+query I
+SELECT row_id_start FROM dl.ducklake_data_file
+----
+5
+
+# The seeded table_stats row must be updated in place, not treated as uninitialized and duplicated.
+query I
+SELECT count(*) FROM dl.ducklake_table_stats WHERE table_id=1
+----
+1

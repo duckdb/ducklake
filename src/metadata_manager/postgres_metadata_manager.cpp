@@ -3,6 +3,7 @@
 #include "duckdb/main/database.hpp"
 #include "storage/ducklake_catalog.hpp"
 #include "storage/ducklake_transaction.hpp"
+#include "storage/ducklake_metadata_info.hpp"
 
 namespace duckdb {
 
@@ -116,7 +117,7 @@ unique_ptr<QueryResult> PostgresMetadataManager::Execute(DuckLakeSnapshot snapsh
 }
 
 unique_ptr<QueryResult> PostgresMetadataManager::Query(DuckLakeSnapshot snapshot, string &query) {
-	return ExecuteQuery(snapshot, query, "postgres_query");
+	return DuckLakeMetadataManager::Query(snapshot, query);
 }
 
 string PostgresMetadataManager::GetLatestSnapshotQuery() const {
@@ -127,6 +128,18 @@ string PostgresMetadataManager::GetLatestSnapshotQuery() const {
 		     SELECT MAX(snapshot_id) FROM {METADATA_SCHEMA_ESCAPED}.ducklake_snapshot
 		 );')
 	)";
+}
+
+string PostgresMetadataManager::GenerateFileColumnStatsCTEBody(const CTERequirement &req, TableIndex table_id) {
+	string select_list = "data_file_id";
+	for (const auto &stat : req.referenced_stats) {
+		select_list += ", " + stat;
+	}
+	return StringUtil::Format("  SELECT * FROM postgres_query({METADATA_CATALOG_NAME_LITERAL},\n"
+	                          "    'SELECT %s\n"
+	                          "     FROM {METADATA_SCHEMA_ESCAPED}.ducklake_file_column_stats\n"
+	                          "     WHERE column_id = %d AND table_id = %d')\n",
+	                          select_list, req.column_field_index, table_id.index);
 }
 
 // We need a specialized function here to do a reinterpret for postgres from BLOB to VARCHAR
@@ -162,7 +175,11 @@ PostgresMetadataManager::TransformInlinedData(QueryResult &result, const vector<
 		for (idx_t i = 0; i < expected_types.size(); i++) {
 			reinterpret_chunk.data[i].Reinterpret(chunk->data[i]);
 		}
-		reinterpret_chunk.SetCardinality(chunk->size());
+		// Use SetChildCardinality (not SetCardinality): on current duckdb SetCardinality only updates the
+		// chunk count, while ColumnDataCollection::Append reads each vector via ToUnifiedFormat(), which
+		// relies on the vector's own size. SetChildCardinality also FlatVector::SetSize()s every vector, so
+		// the reinterpreted (BLOB->VARCHAR) vectors are sized to the row count and the rows are appended.
+		reinterpret_chunk.SetChildCardinality(chunk->size());
 		data->Append(reinterpret_chunk);
 	}
 	auto inlined_data = make_shared_ptr<DuckLakeInlinedData>();

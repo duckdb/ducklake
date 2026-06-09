@@ -1,0 +1,179 @@
+# name: test/sql/data_inlining/inlining_reserved_column_names.test
+# description: test that reserved inlining column names are allowed when inlining is disabled
+# group: [data_inlining]
+
+require ducklake
+
+require parquet
+
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/ducklake_reserved_cols.db' AS ducklake (DATA_PATH '{TEST_DIR}/ducklake_reserved_cols_files')
+
+statement error
+CREATE TABLE ducklake.t1(row_id INTEGER, v INTEGER);
+----
+reserved
+
+statement error
+CREATE TABLE ducklake.t1(begin_snapshot INTEGER, v INTEGER);
+----
+reserved
+
+statement error
+CREATE TABLE ducklake.t1(end_snapshot INTEGER, v INTEGER);
+----
+reserved
+
+# disable inlining globally, now reserved names should be allowed
+statement ok
+CALL ducklake.set_option('data_inlining_row_limit', 0);
+
+statement ok
+CREATE TABLE ducklake.t1(row_id INTEGER, v INTEGER);
+
+statement ok
+INSERT INTO ducklake.t1 VALUES (1, 10), (2, 20);
+
+query II
+SELECT * FROM ducklake.t1
+----
+1	10
+2	20
+
+# adding a reserved column name should work when inlining is disabled
+statement ok
+ALTER TABLE ducklake.t1 ADD COLUMN begin_snapshot INTEGER;
+
+query III
+SELECT * FROM ducklake.t1
+----
+1	10	NULL
+2	20	NULL
+
+# renaming to a reserved column name should work when inlining is disabled
+statement ok
+ALTER TABLE ducklake.t1 RENAME COLUMN v TO end_snapshot;
+
+query III
+SELECT * FROM ducklake.t1
+----
+1	10	NULL
+2	20	NULL
+
+# trying to enable inlining on a table with reserved column names should fail
+statement error
+CALL ducklake.set_option('data_inlining_row_limit', 10, table_name => 't1');
+----
+Cannot enable data inlining
+
+# trying to enable inlining globally should also fail because t1 has reserved column names
+statement error
+CALL ducklake.set_option('data_inlining_row_limit', 10);
+----
+Cannot enable data inlining
+
+# disable inlining specifically for t1 at the table level
+statement ok
+CALL ducklake.set_option('data_inlining_row_limit', 0, table_name => 't1');
+
+# now enabling inlining globally should succeed - t1 has a table-level override of 0
+statement ok
+CALL ducklake.set_option('data_inlining_row_limit', 10);
+
+# count existing files (t1 has data files since inlining was disabled for it)
+query I
+SELECT COUNT(*) AS baseline FROM GLOB('{TEST_DIR}/ducklake_reserved_cols_files/**')
+----
+1
+
+# create another table without reserved names - it should use inlining
+statement ok
+CREATE TABLE ducklake.t2(i INTEGER, j INTEGER);
+
+statement ok
+INSERT INTO ducklake.t2 VALUES (1, 2), (3, 4);
+
+# t2 data should be inlined - no new files created
+query I
+SELECT COUNT(*) FROM GLOB('{TEST_DIR}/ducklake_reserved_cols_files/**')
+----
+1
+
+# t1 should still work with its reserved column names
+statement ok
+INSERT INTO ducklake.t1 VALUES (3, 30, 300);
+
+query III
+SELECT * FROM ducklake.t1
+----
+1	10	NULL
+2	20	NULL
+3	30	300
+
+query II
+SELECT * FROM ducklake.t2
+----
+1	2
+3	4
+
+statement ok
+DETACH ducklake
+
+# test per-table inlining disable: global inlining on, table inlining off
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/ducklake_reserved_cols2.db' AS ducklake (DATA_PATH '{TEST_DIR}/ducklake_reserved_cols2_files')
+
+statement ok
+CREATE TABLE ducklake.t_normal(i INTEGER, j INTEGER);
+
+# disable inlining only for a specific table
+statement ok
+CALL ducklake.set_option('data_inlining_row_limit', 0, table_name => 't_normal');
+
+# now we should be able to add a column with a reserved name to this table
+statement ok
+ALTER TABLE ducklake.t_normal ADD COLUMN row_id INTEGER;
+
+# but creating a new table (governed by global inlining=10) should still fail with reserved names
+statement error
+CREATE TABLE ducklake.t_fail(row_id INTEGER, v INTEGER);
+----
+reserved
+
+# create a normal table without reserved names
+statement ok
+CREATE TABLE ducklake.t_ok(i INTEGER, j INTEGER);
+
+# this table should still have inlining enabled
+statement ok
+INSERT INTO ducklake.t_ok VALUES (1, 2);
+
+query II
+SELECT * FROM ducklake.t_ok
+----
+1	2
+
+
+# CREATE TABLE with reserved name while inlining is enabled - suggest disabling inlining
+statement error
+CREATE TABLE ducklake.t_msg(row_id INTEGER);
+----
+Column name "row_id" is reserved by DuckLake for internal use when data inlining is enabled. If you must use this column name, disable inlining by calling ducklake_set_option('data_inlining_row_limit', 0).
+
+# ALTER TABLE ADD COLUMN with reserved name while inlining is enabled - suggest disabling inlining
+statement error
+ALTER TABLE ducklake.t_ok ADD COLUMN row_id INTEGER;
+----
+Column name "row_id" is reserved by DuckLake for internal use when data inlining is enabled. If you must use this column name, disable inlining by calling ducklake_set_option('data_inlining_row_limit', 0).
+
+# ALTER TABLE RENAME COLUMN to reserved name while inlining is enabled - suggest disabling inlining
+statement error
+ALTER TABLE ducklake.t_ok RENAME COLUMN i TO row_id;
+----
+Column name "row_id" is reserved by DuckLake for internal use when data inlining is enabled. If you must use this column name, disable inlining by calling ducklake_set_option('data_inlining_row_limit', 0).
+
+# enabling inlining on a table that already has reserved column names - suggest renaming or dropping
+statement error
+CALL ducklake.set_option('data_inlining_row_limit', 10, table_name => 't_normal');
+----
+Cannot enable data inlining for table "t_normal". Column "row_id" conflicts with a reserved DuckLake internal column name used for inlining. To enable inlining for this table, rename or drop column "row_id".

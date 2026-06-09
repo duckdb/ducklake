@@ -1,0 +1,54 @@
+# name: test/sql/partitioning/partition_rename_in_transaction.test
+# description: Renaming a partitioned table inside a transaction must preserve partitioning info
+# group: [partitioning]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/ducklake_partition_rename_tx', METADATA_CATALOG 'ducklake_metadata')
+
+statement ok
+USE ducklake
+
+statement ok
+CREATE SCHEMA s
+
+statement ok
+BEGIN
+
+statement ok
+CREATE TABLE s.t1 (dt DATE)
+
+statement ok
+ALTER TABLE s.t1 SET PARTITIONED BY (dt)
+
+statement ok
+INSERT INTO s.t1 VALUES (DATE '2026-04-30'), (DATE '2026-04-29')
+
+statement ok
+ALTER TABLE s.t1 RENAME TO auto_probe_after
+
+statement ok
+COMMIT
+
+# partition_id and transform must be populated for the renamed table
+query IIII
+SELECT table_name, column_name, partition_key_index, transform
+FROM ducklake_metadata.ducklake_table
+JOIN ducklake_metadata.ducklake_column USING (table_id)
+JOIN ducklake_metadata.ducklake_partition_column USING (column_id)
+WHERE ducklake_table.end_snapshot IS NULL
+----
+auto_probe_after	dt	0	identity
+
+# ducklake_partition_column must not be empty
+query I
+SELECT COUNT(*) FROM ducklake_metadata.ducklake_partition_column
+----
+1

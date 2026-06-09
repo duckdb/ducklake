@@ -71,7 +71,8 @@ bool DuckLakeInlinedDataReader::TryInitializeScan(ClientContext &context, Global
 			}
 			string projected_column = SQLIdentifier::ToString(columns[index].name);
 			auto &metadata_type = ducklake_catalog.MetadataType();
-			bool needs_cast = !metadata_type.empty() && metadata_type != "duckdb";
+			bool needs_cast = !metadata_type.empty() && metadata_type != "duckdb" && metadata_type != "quack" &&
+			                  metadata_type != "quack_scanner";
 			if (needs_cast) {
 				// If it's not a duckdb catalog, we add a cast.
 				if (columns[index].type.id() != LogicalTypeId::VARCHAR) {
@@ -276,7 +277,7 @@ AsyncResult DuckLakeInlinedDataReader::Scan(ClientContext &context, GlobalTableF
 				auto &vec = chunk.data[column_id];
 
 				UnifiedVectorFormat vdata;
-				vec.ToUnifiedFormat(chunk.size(), vdata);
+				vec.ToUnifiedFormat(vdata);
 
 				auto filter_state = TableFilterState::Initialize(context, filter);
 

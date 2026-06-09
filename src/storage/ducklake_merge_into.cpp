@@ -94,7 +94,7 @@ static void ProjectAndCastForCopy(ClientContext &context, DataChunk &input_chunk
 			cast_chunk.data[i].Reference(chunk_ref.get().data[i]);
 		}
 	}
-	cast_chunk.SetCardinality(chunk_ref.get().size());
+	cast_chunk.SetChildCardinality(chunk_ref.get().size());
 }
 
 //===--------------------------------------------------------------------===//

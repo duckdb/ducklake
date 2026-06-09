@@ -1,0 +1,49 @@
+# name: test/sql/macros/test_multi_macro_transaction.test
+# description: test creating scalar + table macro with same name in one transaction
+# group: [macros]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/test_multi_macro_txn');
+
+statement ok
+USE ducklake;
+
+statement ok
+BEGIN
+
+statement ok
+CREATE MACRO bar(x) AS x + 1;
+
+statement ok
+CREATE MACRO bar(x, y) AS TABLE SELECT x AS a, y AS b;
+
+query I
+SELECT bar(41);
+----
+42
+
+query II
+FROM bar(10, 20);
+----
+10	20
+
+statement ok
+COMMIT
+
+query I
+SELECT bar(99);
+----
+100
+
+query II
+FROM bar(1, 2);
+----
+1	2

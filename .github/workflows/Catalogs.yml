@@ -25,6 +25,7 @@ jobs:
       VCPKG_TOOLCHAIN_PATH: ${{ github.workspace }}/vcpkg/scripts/buildsystems/vcpkg.cmake
       ENABLE_SQLITE_SCANNER: ON
       ENABLE_POSTGRES_SCANNER: ON
+      ENABLE_QUACK: ON
       BUILD_EXTENSION_TEST_DEPS: full
       DUCKLAKE_CI: 1
 
@@ -70,6 +71,10 @@ jobs:
         GEN: ninja
       run: |
         make release
+
+    - name: Test Quack
+      run: |
+        python3 scripts/run_quack_tests.py
 
     - name: Test SQLite
       env:

@@ -1,0 +1,38 @@
+# name: test/sql/table_changes/ducklake_table_changes_view_crash.test
+# description: change feed functions on a view must error, not crash (SIGSEGV/SIGBUS)
+# group: [table_changes]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/ducklake_table_changes_view_files');
+
+statement ok
+CREATE SCHEMA ducklake.s;
+
+statement ok
+CREATE TABLE ducklake.s.items (id INTEGER, name VARCHAR);
+
+statement ok
+INSERT INTO ducklake.s.items VALUES (1, 'Alice'), (2, 'Bob');
+
+# sanity check: works on a real table
+query II
+SELECT id, name FROM ducklake_table_insertions('ducklake', 's', 'items', 0, 3) ORDER BY id;
+----
+1	Alice
+2	Bob
+
+statement ok
+CREATE VIEW ducklake.s.items_view AS SELECT * FROM ducklake.s.items;
+
+statement error
+SELECT * FROM ducklake_table_insertions('ducklake', 's', 'items_view', TIMESTAMPTZ '1970-01-01', now());
+----
+"items_view" is a View, not a table. Data change feed functions only support tables.

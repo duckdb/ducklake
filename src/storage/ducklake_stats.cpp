@@ -1,5 +1,7 @@
 #include "storage/ducklake_stats.hpp"
+#include "common/ducklake_data_file.hpp"
 #include "storage/ducklake_geo_stats.hpp"
+#include "storage/ducklake_metadata_info.hpp"
 #include "storage/ducklake_variant_stats.hpp"
 #include "duckdb/common/types/string.hpp"
 #include "duckdb/common/types/value.hpp"
@@ -71,9 +73,35 @@ DuckLakeColumnStats &DuckLakeColumnStats::operator=(const DuckLakeColumnStats &o
 	return *this;
 }
 
+DuckLakeColumnStats DuckLakeColumnStats::FromGlobalStats(const LogicalType &type,
+                                                         const DuckLakeGlobalColumnStatsInfo &col) {
+	DuckLakeColumnStats stats(type);
+	stats.has_null_count = col.has_contains_null;
+	if (col.has_contains_null) {
+		stats.null_count = col.contains_null ? 1 : 0;
+	}
+	stats.has_contains_nan = col.has_contains_nan;
+	if (col.has_contains_nan) {
+		stats.contains_nan = col.contains_nan;
+	}
+	stats.has_min = col.has_min;
+	if (col.has_min) {
+		stats.min = col.min_val;
+	}
+	stats.has_max = col.has_max;
+	if (col.has_max) {
+		stats.max = col.max_val;
+	}
+	stats.any_valid = stats.has_min || stats.has_max || col.has_extra_stats;
+	if (col.has_extra_stats && stats.extra_stats) {
+		stats.extra_stats->Deserialize(col.extra_stats);
+	}
+	return stats;
+}
+
 void DuckLakeColumnStats::MergeStats(const DuckLakeColumnStats &new_stats) {
-	if (type != new_stats.type) {
-		// handle type promotion - adopt the new type
+	bool types_differ = type != new_stats.type;
+	if (types_differ) {
 		type = new_stats.type;
 	}
 	if (!new_stats.has_null_count) {
@@ -100,6 +128,10 @@ void DuckLakeColumnStats::MergeStats(const DuckLakeColumnStats &new_stats) {
 
 	if (!new_stats.AnyValid()) {
 		// all values in the source are NULL - don't update min/max
+		if (types_differ) {
+			has_min = false;
+			has_max = false;
+		}
 		return;
 	}
 	if (!AnyValid()) {
@@ -111,37 +143,43 @@ void DuckLakeColumnStats::MergeStats(const DuckLakeColumnStats &new_stats) {
 		any_valid = true;
 		return;
 	}
-	if (!new_stats.has_min) {
+	if (types_differ) {
+		// min/max from different types cannot be compared - invalidate them
 		has_min = false;
-	} else if (has_min) {
-		// both stats have a min - select the smallest
-		if (RequiresValueComparison(type)) {
-			// for numerics/temporals we need to parse the stats
-			auto current_min = Value(min).DefaultCastAs(type);
-			auto new_min = Value(new_stats.min).DefaultCastAs(type);
-			if (new_min < current_min) {
+		has_max = false;
+	} else {
+		if (!new_stats.has_min) {
+			has_min = false;
+		} else if (has_min) {
+			// both stats have a min - select the smallest
+			if (RequiresValueComparison(type)) {
+				// for numerics/temporals we need to parse the stats
+				auto current_min = Value(min).DefaultCastAs(type);
+				auto new_min = Value(new_stats.min).DefaultCastAs(type);
+				if (new_min < current_min) {
+					min = new_stats.min;
+				}
+			} else if (new_stats.min < min) {
+				// for other types we can compare the strings directly
 				min = new_stats.min;
 			}
-		} else if (new_stats.min < min) {
-			// for other types we can compare the strings directly
-			min = new_stats.min;
 		}
-	}
 
-	if (!new_stats.has_max) {
-		has_max = false;
-	} else if (has_max) {
-		// both stats have a max - select the largest
-		if (RequiresValueComparison(type)) {
-			// for numerics/temporals we need to parse the stats
-			auto current_max = Value(max).DefaultCastAs(type);
-			auto new_max = Value(new_stats.max).DefaultCastAs(type);
-			if (new_max > current_max) {
+		if (!new_stats.has_max) {
+			has_max = false;
+		} else if (has_max) {
+			// both stats have a max - select the largest
+			if (RequiresValueComparison(type)) {
+				// for numerics/temporals we need to parse the stats
+				auto current_max = Value(max).DefaultCastAs(type);
+				auto new_max = Value(new_stats.max).DefaultCastAs(type);
+				if (new_max > current_max) {
+					max = new_stats.max;
+				}
+			} else if (new_stats.max > max) {
+				// for other types we can compare the strings directly
 				max = new_stats.max;
 			}
-		} else if (new_stats.max > max) {
-			// for other types we can compare the strings directly
-			max = new_stats.max;
 		}
 	}
 
@@ -163,6 +201,17 @@ void DuckLakeTableStats::MergeStats(FieldIndex col_id, const DuckLakeColumnStats
 	// merge the stats
 	auto &current_stats = entry->second;
 	current_stats.MergeStats(file_stats);
+}
+
+void DuckLakeTableStats::MergeFileStats(const DuckLakeDataFile &file) {
+	if (!file.max_partial_file_snapshot.IsValid()) {
+		record_count += file.row_count;
+		next_row_id += file.row_count;
+	}
+	table_size_bytes += file.file_size_bytes;
+	for (auto &entry : file.column_stats) {
+		MergeStats(entry.first, entry.second);
+	}
 }
 
 unique_ptr<BaseStatistics> DuckLakeColumnStats::CreateNumericStats() const {
@@ -221,16 +270,16 @@ unique_ptr<BaseStatistics> DuckLakeColumnStats::CreateGeometryStats() const {
 unique_ptr<BaseStatistics> DuckLakeColumnStats::CreateStringStats() const {
 	auto stats = StringStats::CreateEmpty(type);
 	if (has_min && has_max) {
-		StringStats::Update(stats, string_t(max));
-		StringStats::Update(stats, string_t(min));
+		StringStats::MergeInConstant(stats, string_t(max));
+		StringStats::MergeInConstant(stats, string_t(min));
 		StringStats::ResetMaxStringLength(stats);
 		StringStats::SetContainsUnicode(stats);
 	} else if (has_min) {
 		stats = StringStats::CreateUnknown(type);
-		StringStats::SetMin(stats, string_t(min));
+		StringStats::SetMin(stats, string_t(min), StringStatsType::TRUNCATED_STATS);
 	} else if (has_max) {
 		stats = StringStats::CreateUnknown(type);
-		StringStats::SetMax(stats, string_t(max));
+		StringStats::SetMax(stats, string_t(max), StringStatsType::TRUNCATED_STATS);
 	} else {
 		// No min/max stats available - use unknown stats to avoid
 		// false claims about max_string_length (CreateEmpty sets it to 0)

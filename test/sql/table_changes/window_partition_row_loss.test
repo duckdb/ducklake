@@ -1,0 +1,79 @@
+# name: test/sql/table_changes/window_partition_row_loss.test
+# description: non-filtering window over ducklake change functions must not drop rows
+# group: [table_changes]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS lake (DATA_PATH '{DATA_PATH}/window_partition_row_loss_files');
+
+statement ok
+USE lake;
+
+statement ok
+CREATE TABLE t (id INTEGER, val INTEGER);
+
+statement ok
+INSERT INTO t VALUES (1, 100), (2, 200);
+
+statement ok
+UPDATE t SET val = 150 WHERE id = 1;
+
+query I
+SELECT count(*) FROM ducklake_table_insertions('lake','main','t',0,3);
+----
+3
+
+query I
+SELECT count(*) FROM (
+  SELECT MAX(snapshot_id) OVER (PARTITION BY rowid)
+  FROM ducklake_table_insertions('lake','main','t',0,3)
+);
+----
+3
+
+query I
+SELECT count(*) FROM (
+  SELECT MAX(snapshot_id) OVER (PARTITION BY rowid, snapshot_id)
+  FROM ducklake_table_insertions('lake','main','t',0,3)
+);
+----
+3
+
+query I
+SELECT count(*) FROM ducklake_table_changes('lake','main','t',0,3);
+----
+4
+
+query I
+SELECT count(*) FROM (
+  SELECT MAX(snapshot_id) OVER (PARTITION BY id, snapshot_id)
+  FROM ducklake_table_changes('lake','main','t',0,3)
+);
+----
+4
+
+statement ok
+CALL ducklake_flush_inlined_data('lake');
+
+query I
+SELECT count(*) FROM (
+  SELECT MAX(snapshot_id) OVER (PARTITION BY rowid, snapshot_id)
+  FROM ducklake_table_insertions('lake','main','t',0,3)
+);
+----
+3
+
+query I
+SELECT count(*) FROM (
+  SELECT MAX(snapshot_id) OVER (PARTITION BY id, snapshot_id)
+  FROM ducklake_table_changes('lake','main','t',0,3)
+);
+----
+4

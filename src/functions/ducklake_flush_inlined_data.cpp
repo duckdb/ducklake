@@ -85,10 +85,10 @@ SourceResultType DuckLakeFlushData::GetDataInternal(ExecutionContext &context, D
 	source_state.returned_result = true;
 
 	auto &gstate = this->sink_state->Cast<DuckLakeInsertGlobalState>();
-	chunk.SetCardinality(1);
 	chunk.data[0].Append(Value(table.schema.name));
 	chunk.data[1].Append(Value(table.name));
 	chunk.data[2].Append(Value::BIGINT(static_cast<int64_t>(gstate.rows_flushed)));
+	chunk.SetChildCardinality(1);
 	return SourceResultType::FINISHED;
 }
 
@@ -141,9 +141,9 @@ SinkFinalizeType DuckLakeFlushData::Finalize(Pipeline &pipeline, Event &event, C
 			string extra_filter = partition_filter.empty() ? "" : " AND " + partition_filter;
 			// When the table has sort metadata, the file is written in sorted order.
 			// The ORDER BY must match the actual file order so delete positions are correct.
-			string order_by = "row_id, begin_snapshot";
+			string order_by = "row_id ASC NULLS LAST, begin_snapshot ASC NULLS LAST";
 			if (!sort_order_sql.empty()) {
-				order_by = sort_order_sql + ", row_id, begin_snapshot";
+				order_by = sort_order_sql + ", row_id ASC NULLS LAST, begin_snapshot ASC NULLS LAST";
 			}
 			auto deleted_rows_result =
 			    transaction.Query(snapshot, StringUtil::Format(R"(
@@ -359,7 +359,7 @@ unique_ptr<LogicalOperator> DuckLakeDataFlusher::GenerateFlushCommand() {
 	string sort_order_sql;
 	auto sort_data = latest_table.GetSortData();
 	if (sort_data) {
-		root = DuckLakeCompactor::InsertSort(binder, root, latest_table, sort_data);
+		root = DuckLakeCompactor::InsertSort(binder, root, latest_table, sort_data, /*add_tiebreakers=*/true);
 		sort_order_sql = DuckLakeSort::BuildSortOrderSQL(*sort_data, latest_table.GetColumns(), table.GetColumns());
 	}
 

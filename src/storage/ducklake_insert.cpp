@@ -230,8 +230,8 @@ SourceResultType DuckLakeInsert::GetDataInternal(ExecutionContext &context, Data
                                                  OperatorSourceInput &input) const {
 	auto &global_state = sink_state->Cast<DuckLakeInsertGlobalState>();
 	auto value = Value::BIGINT(NumericCast<int64_t>(global_state.total_insert_count));
-	chunk.SetCardinality(1);
 	chunk.data[0].Append(value);
+	chunk.SetChildCardinality(1);
 	return SourceResultType::FINISHED;
 }
 //===--------------------------------------------------------------------===//
@@ -514,8 +514,7 @@ DuckLakeCopyOptions DuckLakeInsert::GetCopyOptions(ClientContext &context, DuckL
 	if (catalog.TryGetConfigOption("per_thread_output", per_thread_output_str, schema_id, table_id)) {
 		per_thread_output = per_thread_output_str == "true";
 	}
-	idx_t target_file_size = catalog.GetConfigOption<idx_t>("target_file_size", schema_id, table_id,
-	                                                        DuckLakeCatalog::DEFAULT_TARGET_FILE_SIZE);
+	idx_t target_file_size = catalog.GetTargetFileSize(context, schema_id, table_id);
 
 	// Always use native parquet geometry for writing
 	info->options["geoparquet_version"].emplace_back("NONE");
@@ -564,8 +563,13 @@ DuckLakeCopyOptions DuckLakeInsert::GetCopyOptions(ClientContext &context, DuckL
 		result.filename_pattern.SetFilenamePattern("ducklake-{uuidv7}");
 		result.partition_output = false;
 		result.write_empty_file = false;
-		// file_size_bytes is currently only supported for unpartitioned writes
-		result.file_size_bytes = target_file_size;
+		// file_size_bytes is currently only supported for unpartitioned writes.
+		// The parquet writer rotates files at row-group granularity; a target smaller than the minimum
+		// physical parquet file size makes that rotation loop never make progress (an infinite loop in
+		// PhysicalCopyToFile). Clamp the write target to a safe floor. This does not affect compaction,
+		// which reads the raw (unclamped) target via GetTargetFileSize for its file-skip decisions.
+		static constexpr idx_t MINIMUM_WRITE_FILE_SIZE = 4096;
+		result.file_size_bytes = MaxValue<idx_t>(target_file_size, MINIMUM_WRITE_FILE_SIZE);
 		result.rotate = true;
 	}
 	result.file_path = copy_input.data_path;
@@ -739,7 +743,7 @@ static void ResolveColumnRefs(unique_ptr<Expression> &expr) {
 	if (expr->GetExpressionClass() == ExpressionClass::BOUND_COLUMN_REF) {
 		auto &col_ref = expr->Cast<BoundColumnRefExpression>();
 		expr = make_uniq<BoundReferenceExpression>(col_ref.GetReturnType(),
-		                                           NumericCast<storage_t>(col_ref.binding.column_index.GetIndex()));
+		                                           NumericCast<storage_t>(col_ref.Binding().column_index.GetIndex()));
 		return;
 	}
 	ExpressionIterator::EnumerateChildren(*expr, [](unique_ptr<Expression> &child) { ResolveColumnRefs(child); });

@@ -255,10 +255,6 @@ SELECT id, value, partition_col FROM ducklake.test_null_stats WHERE partition_co
 # Verify internal metadata stats are correctly written for NULL partition columns
 # Query the file stats for the partition column (column_id=3)
 # Join with data_file to match by record_count to identify which file is which
-# Note: disable verification for this query to work around sqlite_scanner serialization issue
-statement ok
-PRAGMA disable_verification
-
 query IIII
 SELECT df.record_count, cs.null_count, cs.min_value, cs.max_value
 FROM "__ducklake_metadata_ducklake".ducklake_file_column_stats cs

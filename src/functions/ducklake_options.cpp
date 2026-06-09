@@ -2,7 +2,6 @@
 #include "storage/ducklake_transaction.hpp"
 #include "storage/ducklake_catalog.hpp"
 #include "storage/ducklake_metadata_manager.hpp"
-#include "duckdb/common/array.hpp"
 #include "duckdb/catalog/catalog_entry/table_catalog_entry.hpp"
 
 namespace duckdb {
@@ -12,35 +11,34 @@ struct DuckLakeOptionMetadata {
 	const char *description;
 };
 
-using ducklake_option_array = std::array<DuckLakeOptionMetadata, 21>;
-
-static constexpr const ducklake_option_array DUCKLAKE_OPTIONS = {
-    {{"data_inlining_row_limit", "Maximum amount of rows to inline in a single insert"},
-     {"parquet_compression",
-      "Compression algorithm for Parquet files (uncompressed, snappy, gzip, zstd, brotli, lz4, lz4_raw)"},
-     {"parquet_version", "Parquet format version (1 or 2)"},
-     {"parquet_compression_level", "Compression level for Parquet files"},
-     {"parquet_row_group_size", "Number of rows per row group in Parquet files"},
-     {"parquet_row_group_size_bytes", "Number of bytes per row group in Parquet files"},
-     {"hive_file_pattern", "If partitioned data should be written in a hive-like folder structure"},
-     {"target_file_size", "The target data file size for insertion and compaction operations"},
-     {"version", "DuckLake format version"},
-     {"created_by", "Tool used to write the DuckLake"},
-     {"data_path", "Path to data files"},
-     {"require_commit_message", "If an explicit commit message is required for a snapshot commit."},
-     {"rewrite_delete_threshold", "A threshold that determines the minimum amount of data that must be "
-                                  "removed from a file before a rewrite is warranted. From 0 - 1."},
-     {"delete_older_than", "How old unused files must be to be removed by the 'ducklake_delete_orphaned_files' and "
-                           "'ducklake_cleanup_old_files' cleanup functions."},
-     {"expire_older_than", "How old snapshots must be, by default, to be expired by: 'ducklake_expire_snapshots'"},
-     {"auto_compact", "Pre-defined schema used as a default value for the following compaction functions "
-                      "'ducklake_flush_inlined_data','ducklake_merge_adjacent_files', "
-                      "'ducklake_rewrite_data_files', 'ducklake_delete_orphaned_files'"},
-     {"encrypted", "Whether or not to encrypt Parquet files written to the data path"},
-     {"per_thread_output", "Whether to create separate output files per thread during parallel insertion"},
-     {"write_deletion_vectors", "[EXPERIMENTAL - do not use outside testing] Whether to write Iceberg V3 deletion "
-                                "vectors (puffin) instead of positional delete files (parquet)"},
-     {"sort_on_insert", "Whether to sort data on INSERT according to SET SORTED BY (default: true)"}}};
+static constexpr DuckLakeOptionMetadata DUCKLAKE_OPTIONS[] = {
+    {"data_inlining_row_limit", "Maximum amount of rows to inline in a single insert"},
+    {"parquet_compression",
+     "Compression algorithm for Parquet files (uncompressed, snappy, gzip, zstd, brotli, lz4, lz4_raw)"},
+    {"parquet_version", "Parquet format version (1 or 2)"},
+    {"parquet_compression_level", "Compression level for Parquet files"},
+    {"parquet_row_group_size", "Number of rows per row group in Parquet files"},
+    {"parquet_row_group_size_bytes", "Number of bytes per row group in Parquet files"},
+    {"hive_file_pattern", "If partitioned data should be written in a hive-like folder structure"},
+    {"target_file_size", "The target data file size for insertion and compaction operations"},
+    {"version", "DuckLake format version"},
+    {"created_by", "Tool used to write the DuckLake"},
+    {"data_path", "Path to data files"},
+    {"require_commit_message", "If an explicit commit message is required for a snapshot commit."},
+    {"rewrite_delete_threshold", "A threshold that determines the minimum amount of data that must be "
+                                 "removed from a file before a rewrite is warranted. From 0 - 1."},
+    {"delete_older_than", "How old unused files must be to be removed by the 'ducklake_delete_orphaned_files' and "
+                          "'ducklake_cleanup_old_files' cleanup functions."},
+    {"expire_older_than", "How old snapshots must be, by default, to be expired by: 'ducklake_expire_snapshots'"},
+    {"auto_compact", "Pre-defined schema used as a default value for the following compaction functions "
+                     "'ducklake_flush_inlined_data','ducklake_merge_adjacent_files', "
+                     "'ducklake_rewrite_data_files', 'ducklake_delete_orphaned_files'"},
+    {"encrypted", "Whether or not to encrypt Parquet files written to the data path"},
+    {"per_thread_output", "Whether to create separate output files per thread during parallel insertion"},
+    {"write_deletion_vectors", "[EXPERIMENTAL - do not use outside testing] Whether to write Iceberg V3 deletion "
+                               "vectors (puffin) instead of positional delete files (parquet)"},
+    {"sort_on_insert", "Whether to sort data on INSERT according to SET SORTED BY (default: true)"},
+};
 
 struct DuckLakeOptionsData : public TableFunctionData {
 	explicit DuckLakeOptionsData(Catalog &catalog) : catalog(catalog) {
@@ -155,7 +153,7 @@ void DuckLakeOptionsExecute(ClientContext &context, TableFunctionInput &data_p, 
 	auto &state = data_p.global_state->Cast<DuckLakeOptionsState>();
 
 	if (state.offset >= state.options.size()) {
-		output.SetCardinality(0);
+		output.SetChildCardinality(0);
 		return;
 	}
 

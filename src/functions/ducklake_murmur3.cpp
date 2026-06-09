@@ -11,7 +11,7 @@ static void Murmur3ScalarFunction(DataChunk &args, ExpressionState &state, Vecto
 	auto count = args.size();
 
 	UnifiedVectorFormat input_data;
-	input.ToUnifiedFormat(count, input_data);
+	input.ToUnifiedFormat(input_data);
 
 	auto result_data = FlatVector::GetDataMutable<int32_t>(result);
 	result.SetVectorType(VectorType::FLAT_VECTOR);

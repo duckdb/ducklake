@@ -51,9 +51,9 @@ SELECT current_setting('ducklake_max_retry_count')
 statement ok
 INSERT INTO retry_test VALUES (2, 'test with retry count 7');
 
-# Test 5: Test session scope
+# Test 5: Set to 2
 statement ok
-SET SESSION ducklake_max_retry_count = 2;
+SET ducklake_max_retry_count = 2;
 
 query I
 SELECT current_setting('ducklake_max_retry_count')
@@ -63,7 +63,7 @@ SELECT current_setting('ducklake_max_retry_count')
 statement ok
 INSERT INTO retry_test VALUES (3, 'test with retry count 2');
 
-# Test 6: Reset to default
+# Test 6: ducklake_max_retry_count is a GLOBAL setting, so RESET returns it to the default
 statement ok
 RESET ducklake_max_retry_count;
 

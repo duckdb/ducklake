@@ -47,7 +47,7 @@ public:
 
 	void BindView(ClientContext &context, BindViewAction action = BindViewAction::BIND_IF_UNBOUND) override;
 
-	string GetQuerySQL();
+	string GetQuerySQL() const;
 
 public:
 	// ALTER VIEW

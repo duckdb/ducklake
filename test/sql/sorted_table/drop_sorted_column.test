@@ -1,0 +1,33 @@
+# name: test/sql/sorted_table/drop_sorted_column.test
+# description: Dropping a column referenced by SET SORTED BY should be rejected
+# group: [sorted_table]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/ducklake_drop_sorted_column')
+
+statement ok
+CREATE TABLE ducklake.t(a INTEGER, b INTEGER)
+
+statement ok
+ALTER TABLE ducklake.t SET SORTED BY (b ASC)
+
+# cannot drop a column that is the sort key
+statement error
+ALTER TABLE ducklake.t DROP COLUMN b
+----
+the table is sorted by this column
+
+# reset sorted by, then drop works
+statement ok
+ALTER TABLE ducklake.t RESET SORTED BY
+
+statement ok
+ALTER TABLE ducklake.t DROP COLUMN b
