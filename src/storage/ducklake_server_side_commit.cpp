@@ -608,6 +608,17 @@ unique_ptr<DuckLakeStats> DuckLakeServerSideCommit::BuildStatsMap(vector<DuckLak
 	return result;
 }
 
+vector<string> DuckLakeServerSideCommit::LookupInlinedTableNames(TableIndex table_id) {
+	vector<string> names;
+	auto sql =
+	    SubstitutePlaceholders(DuckLakeMetadataManager::GetInlinedTableNamesSql(table_id), transaction_snapshot);
+	auto result = RunQuery(sql, "lookup inlined table names");
+	for (auto &row : *result) {
+		names.push_back(row.GetValue<string>(0));
+	}
+	return names;
+}
+
 const string &DuckLakeServerSideCommit::ResolveInlinedTableName(TableIndex table_id) {
 	auto it = inlined_table_name_cache.find(table_id.index);
 	if (it != inlined_table_name_cache.end()) {
@@ -706,6 +717,54 @@ DuckLakeCommitContext DuckLakeServerSideCommit::BuildContext(idx_t &committed_sn
 	};
 	ctx.build_stats_map = [this](vector<DuckLakeGlobalStatsInfo> &stats) {
 		return BuildStatsMap(stats);
+	};
+	ctx.get_table_column_schema = [this](TableIndex table_id) {
+		vector<DuckLakeColumnSchemaEntry> schema;
+		auto sql = SubstitutePlaceholders(DuckLakeMetadataManager::GetTableColumnSchemaSql(table_id),
+		                                  transaction_snapshot);
+		auto result = RunQuery(sql, "read table column schema");
+		for (auto &row : *result) {
+			// parent_column IS NULL => top-level root; otherwise a nested leaf carrying its own leaf type.
+			bool is_root = row.IsNull(3);
+			schema.push_back({FieldIndex(static_cast<idx_t>(row.GetValue<int64_t>(0))), row.GetValue<string>(1),
+			                  DuckLakeTypes::FromString(row.GetValue<string>(2)), is_root});
+		}
+		return schema;
+	};
+	ctx.get_inlined_table_names = [this](TableIndex table_id) {
+		return LookupInlinedTableNames(table_id);
+	};
+	ctx.get_net_data_file_row_count = [this](TableIndex table_id) -> idx_t {
+		// The inlined-file-deletion table is deterministically named but created lazily.
+		// Probe its existence; if absent, the SQL omits the inlined-deletion subterm.
+		auto inlined_deletion_table = DuckLakeMetadataManager::InlinedFileDeletionTableName(table_id);
+		auto probe_sql = SubstitutePlaceholders(
+		    StringUtil::Format("SELECT 1 FROM {METADATA_CATALOG}.%s LIMIT 0", inlined_deletion_table),
+		    transaction_snapshot);
+		auto probe = fresh_conn.Query(probe_sql);
+		if (!probe || probe->HasError()) {
+			inlined_deletion_table.clear();
+		}
+		auto sql = SubstitutePlaceholders(
+		    DuckLakeMetadataManager::GetNetDataFileRowCountSql(table_id, inlined_deletion_table), transaction_snapshot);
+		auto result = RunQuery(sql, "read net data file row count");
+		for (auto &row : *result) {
+			return row.GetValue<idx_t>(0);
+		}
+		return 0;
+	};
+	ctx.get_net_inlined_row_count = [this](TableIndex table_id) -> idx_t {
+		idx_t total = 0;
+		for (auto &name : LookupInlinedTableNames(table_id)) {
+			auto sql =
+			    SubstitutePlaceholders(DuckLakeMetadataManager::GetNetInlinedRowCountSql(name), transaction_snapshot);
+			auto result = RunQuery(sql, "read net inlined row count");
+			for (auto &row : *result) {
+				total += row.GetValue<idx_t>(0);
+				break;
+			}
+		}
+		return total;
 	};
 	ctx.set_catalog_version = [&committed_schema_version](idx_t v) {
 		committed_schema_version = v;

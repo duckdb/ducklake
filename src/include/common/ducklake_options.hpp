@@ -31,6 +31,7 @@ struct DuckLakeOptions {
 	DuckLakeEncryption encryption = DuckLakeEncryption::AUTOMATIC;
 	bool create_if_not_exists = true;
 	bool automatic_migration = false;
+	bool hide_metadata_catalog = true;
 	unique_ptr<BoundAtClause> at_clause;
 	case_insensitive_map_t<Value> metadata_parameters;
 	option_map_t config_options;

@@ -44,6 +44,9 @@ string DuckLakeInitializer::GetAttachOptions() {
 		// this is duckdb, we always do latest storage
 		attach_options.push_back(StringUtil::Format("STORAGE_VERSION '%s'", "latest"));
 	}
+	if (options.hide_metadata_catalog) {
+		attach_options.push_back("HIDDEN true");
+	}
 
 	if (attach_options.empty()) {
 		return string();

@@ -1,0 +1,203 @@
+# name: test/sql/stats/min_max_optimization_compaction.test
+# description: REWRITE_DELETES recomputes exact global stats so MIN/MAX fold from metadata again
+# group: [stats]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+
+test-env DATA_PATH __TEST_DIR__
+
+statement ok
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/min_max_compaction', DATA_INLINING_ROW_LIMIT 100)
+
+# ============================================
+# 1. After rewriting deletes away, MIN/MAX fold again
+# ============================================
+
+statement ok
+CREATE TABLE ducklake.t(i INTEGER);
+
+statement ok
+INSERT INTO ducklake.t FROM range(1, 201);
+
+statement ok
+DELETE FROM ducklake.t WHERE i = 1;
+
+statement ok
+DELETE FROM ducklake.t WHERE i = 200;
+
+# before the rewrite: deletes present -> MIN falls back to a scan (but is correct)
+query III
+SELECT MIN(i), MAX(i), COUNT(*) FROM ducklake.t;
+----
+2	199	198
+
+query II
+EXPLAIN ANALYZE SELECT MIN(i) FROM ducklake.t;
+----
+analyzed_plan	<REGEX>:.*TABLE_SCAN.*
+
+# rewrite the deletes away
+statement ok
+CALL ducklake_rewrite_data_files('ducklake', delete_threshold => 0);
+
+# values unchanged
+query III
+SELECT MIN(i), MAX(i), COUNT(*) FROM ducklake.t;
+----
+2	199	198
+
+# ...and MIN/MAX now fold from the recomputed metadata (no scan)
+query II
+EXPLAIN ANALYZE SELECT MIN(i), MAX(i) FROM ducklake.t;
+----
+analyzed_plan	<!REGEX>:.*TABLE_SCAN.*
+
+# ============================================
+# 2. Inlined data is folded into the recompute (parquet + inlined coexisting)
+# ============================================
+
+statement ok
+CREATE TABLE ducklake.mixed(i INTEGER);
+
+# large insert -> parquet file
+statement ok
+INSERT INTO ducklake.mixed FROM range(1, 201);
+
+# small insert -> stays inlined
+statement ok
+INSERT INTO ducklake.mixed FROM range(201, 251);
+
+# delete the min (parquet) and the max (inlined)
+statement ok
+DELETE FROM ducklake.mixed WHERE i = 1;
+
+statement ok
+DELETE FROM ducklake.mixed WHERE i = 250;
+
+query III
+SELECT MIN(i), MAX(i), COUNT(*) FROM ducklake.mixed;
+----
+2	249	248
+
+statement ok
+CALL ducklake_rewrite_data_files('ducklake', delete_threshold => 0);
+
+# correct values, including the inlined contribution, fold from metadata
+query III
+SELECT MIN(i), MAX(i), COUNT(*) FROM ducklake.mixed;
+----
+2	249	248
+
+query II
+EXPLAIN ANALYZE SELECT MIN(i), MAX(i) FROM ducklake.mixed;
+----
+analyzed_plan	<!REGEX>:.*TABLE_SCAN.*
+
+# ============================================
+# 3. Partial rewrite (deletes remain) -> recompute is skipped, MIN/MAX stay correct via fallback
+# ============================================
+
+statement ok
+CREATE TABLE ducklake.partial(i INTEGER);
+
+statement ok
+INSERT INTO ducklake.partial FROM range(1, 101);
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake')
+
+statement ok
+DELETE FROM ducklake.partial WHERE i = 1;
+
+# high threshold: the lightly-deleted file is NOT rewritten, so deletes remain
+statement ok
+CALL ducklake_rewrite_data_files('ducklake', delete_threshold => 0.9);
+
+# value still correct
+query III
+SELECT MIN(i), MAX(i), COUNT(*) FROM ducklake.partial;
+----
+2	100	99
+
+# deletes remain -> recompute skipped -> MIN still falls back to a scan
+query II
+EXPLAIN ANALYZE SELECT MIN(i) FROM ducklake.partial;
+----
+analyzed_plan	<REGEX>:.*TABLE_SCAN.*
+
+# ============================================
+# 4. Nested columns: scalar MIN/MAX still fold after a rewrite; nested column stays correct
+# ============================================
+
+statement ok
+CREATE TABLE ducklake.nested(i INTEGER, s STRUCT(a INTEGER, b VARCHAR));
+
+statement ok
+INSERT INTO ducklake.nested SELECT x, {'a': x * 10, 'b': 'v' || x} FROM range(1, 101) t(x);
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake')
+
+statement ok
+DELETE FROM ducklake.nested WHERE i = 1;
+
+statement ok
+CALL ducklake_rewrite_data_files('ducklake', delete_threshold => 0);
+
+query III
+SELECT MIN(i), MAX(i), COUNT(*) FROM ducklake.nested;
+----
+2	100	99
+
+query II
+EXPLAIN ANALYZE SELECT MIN(i) FROM ducklake.nested;
+----
+analyzed_plan	<!REGEX>:.*TABLE_SCAN.*
+
+# filter on the nested field still returns correct results
+query I
+SELECT MIN(i) FROM ducklake.nested WHERE s.a > 500;
+----
+51
+
+# ============================================
+# 5. All-in-one transaction: CREATE / INSERT / DELETE / rewrite / COMMIT in one BEGIN/COMMIT
+#    The rewrite is a no-op (transactional isolation hides the in-transaction delete), and the
+#    Phase 2 stats refresh is skipped because no committed stats row exists yet at recompute time.
+#    Correctness is preserved via the Phase 1 fallback.
+# ============================================
+
+statement ok
+BEGIN;
+
+statement ok
+CREATE TABLE ducklake.single_tx(i INTEGER);
+
+statement ok
+INSERT INTO ducklake.single_tx FROM range(1, 201);
+
+statement ok
+DELETE FROM ducklake.single_tx WHERE i = 1;
+
+statement ok
+CALL ducklake_rewrite_data_files('ducklake', delete_threshold => 0);
+
+statement ok
+COMMIT;
+
+# values are correct
+query III
+SELECT MIN(i), MAX(i), COUNT(*) FROM ducklake.single_tx;
+----
+2	200	199
+
+# MIN/MAX fell back to a scan: the Phase 2 recompute was skipped (no current_stats row at commit time),
+# so record_count (gross 200) != net_count (199), and the Phase 1 exactness guard forces a scan.
+query II
+EXPLAIN ANALYZE SELECT MIN(i) FROM ducklake.single_tx;
+----
+analyzed_plan	<REGEX>:.*TABLE_SCAN.*
