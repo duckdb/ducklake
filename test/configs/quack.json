@@ -162,6 +162,12 @@
       ]
     },
     {
+      "reason": "FIXME: Flaky timeout on quack.",
+      "paths": [
+        "test/sql/alter/many_schema_versions_low_memory.test_slow"
+      ]
+    },
+    {
       "reason": "FIXME: Column name \"begin_snapshot\" is reserved by DuckLake for internal use",
       "paths": [
         "test/sql/partitioning/partition_tpch.test_slow"
