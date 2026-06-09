@@ -13,6 +13,16 @@
 
 namespace duckdb {
 
+struct DuckLakeColumnSchemaEntry {
+	FieldIndex field_index;
+	string column_name;
+	LogicalType column_type;
+	//! false for nested struct/list/map/array leaves. Only top-level roots are safe to feed to the inlined-data
+	//! aggregate merge (which references the column by name); nested leaves still carry their own per-file stats.
+	//! (No default initializer: this struct must stay a C++11 aggregate; both producers set it explicitly.)
+	bool is_root;
+};
+
 struct DuckLakeCommitContext {
 	//! Runs a metadata-DB query during conflict resolution.
 	std::function<unique_ptr<QueryResult>(string)> conflict_query_executor;
@@ -56,6 +66,24 @@ struct DuckLakeCommitContext {
 	    write_inlined_data;
 	//! Returns the current global table stats for a single table id (first-attempt path).
 	std::function<shared_ptr<DuckLakeTableStats>(TableIndex)> get_table_stats;
+	//! Top-level columns of a table at the commit snapshot — needed by stats-refresh to iterate
+	//! columns and look up types when merging per-file stats.
+	std::function<vector<DuckLakeColumnSchemaEntry>(TableIndex)> get_table_column_schema =
+	    [](TableIndex) {
+		    return vector<DuckLakeColumnSchemaEntry>{};
+	    };
+	//! Names of the inlined-data tables associated with a table id at the commit snapshot.
+	std::function<vector<string>(TableIndex)> get_inlined_table_names = [](TableIndex) {
+		return vector<string>{};
+	};
+	//! Net (delete-adjusted) row count of a table's regular data files.
+	std::function<idx_t(TableIndex)> get_net_data_file_row_count = [](TableIndex) {
+		return 0;
+	};
+	//! Net (delete-adjusted) row count of a table's inlined-data tables.
+	std::function<idx_t(TableIndex)> get_net_inlined_row_count = [](TableIndex) {
+		return 0;
+	};
 	//! Builds a DuckLakeStats map from a vector of per-snapshot global stats (retry path).
 	std::function<unique_ptr<DuckLakeStats>(vector<DuckLakeGlobalStatsInfo> &)> build_stats_map;
 	//! Invalidates the cached schema in the catalog for a given schema version.
@@ -112,6 +140,20 @@ public:
 	                            optional_ptr<vector<DuckLakeGlobalStatsInfo>> stats,
 	                            const DuckLakeCommitContext &context);
 	CompactionInformation GetCompactionChanges(DuckLakeCommitState &commit_state, CompactionType type);
+	//! After a REWRITE_DELETES compaction, recompute EXACT global stats for `table_id` from the post-rewrite file set
+	//! (+ committed inlined data) and append the UpdateGlobalTableStats SQL to `batch_query`. No-op (leaving the
+	//! existing stale stats, and the scan fallback) if the table is not fully delete-free post-rewrite or the
+	//! inlined data cannot be accounted for exactly.
+	void RecomputeGlobalStatsAfterRewrite(string &batch_query, TableIndex table_id, DuckLakeSnapshot snapshot,
+	                                      const CompactionInformation &rewrite_changes,
+	                                      const set<DataFileIndex> &removed_source_ids,
+	                                      const DuckLakeCommitContext &context);
+	//! Merge committed inlined data's per-column min/max into `target` via typed SQL aggregates. Returns false if the
+	//! inlined data cannot be accounted for exactly (e.g. a non-scalar column), in which case the caller must not
+	//! claim the recomputed stats are exact.
+	bool TryMergeInlinedStats(const vector<DuckLakeColumnSchemaEntry> &columns,
+	                          const vector<string> &inlined_table_names, DuckLakeSnapshot snapshot,
+	                          DuckLakeTableStats &target, const DuckLakeCommitContext &context);
 	vector<DuckLakeDeleteFileInfo>
 	GetNewDeleteFiles(const DuckLakeCommitState &commit_state,
 	                  vector<DuckLakeOverwrittenDeleteFile> &overwritten_delete_files) const;

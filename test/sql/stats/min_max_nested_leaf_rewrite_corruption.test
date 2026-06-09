@@ -1,0 +1,77 @@
+# name: test/sql/stats/min_max_nested_leaf_rewrite_corruption.test
+# description: REWRITE_DELETES recompute must keep nested-leaf stats of un-rewritten files (struct/list/map)
+# group: [stats]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+
+test-env DATA_PATH __TEST_DIR__
+
+statement ok
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/nested_rewrite', METADATA_CATALOG 'metadata', DATA_INLINING_ROW_LIMIT 100);
+
+statement ok
+CREATE TABLE ducklake.t(i INTEGER, s STRUCT(a INTEGER), l INTEGER[], m MAP(INTEGER, INTEGER));
+
+# File A: every nested leaf in the low range [1,50]. This file holds the global leaf MINs.
+# It has NO deletes, so REWRITE_DELETES will NOT rewrite it -> its per-file stats are read back
+# via SQL (ReadFileColumnStatsForTableSql) during the post-rewrite stats recompute.
+statement ok
+INSERT INTO ducklake.t SELECT x, {'a': x}, [x], MAP([x], [x * 2]) FROM range(1, 51) t(x);
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake');
+
+# File B: every nested leaf in the high range [51,100]. This file WILL be rewritten (it gets a delete).
+statement ok
+INSERT INTO ducklake.t SELECT x, {'a': x}, [x], MAP([x], [x * 2]) FROM range(51, 101) t(x);
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake');
+
+# Delete one row that lives in File B only -> only File B has deletes.
+statement ok
+DELETE FROM ducklake.t WHERE i = 75;
+
+# Rewrite deletes away. Only File B is rewritten; File A is left untouched. The recompute then
+# recomputes EXACT global stats and replaces them. Before the fix, the nested leaves (s.a, l.element,
+# m.key, m.value) of File A were dropped (their leaf column_id was absent from the schema map), so
+# their global stat collapsed to File B's range and the optimizer pruned File A -> wrong results.
+statement ok
+CALL ducklake_rewrite_data_files('ducklake', delete_threshold => 0);
+
+# WRONG RESULT before the fix: File A (s.a in [1,50]) was pruned by the corrupt [51,100] stat.
+query I
+SELECT count(*) FROM ducklake.t WHERE s.a < 51;
+----
+50
+
+# WRONG RESULT before the fix: row with s.a = 10 lives in File A and was pruned away.
+query I
+SELECT count(*) FROM ducklake.t WHERE s.a = 10;
+----
+1
+
+# Control: the root scalar i (whose stat IS recomputed correctly) was always fine.
+query I
+SELECT count(*) FROM ducklake.t WHERE i < 51;
+----
+50
+
+# Stored global stats: every nested leaf must keep its full range, not the rewritten-file-only range.
+#   column_id 1 = i           -> [1,100]
+#   column_id 3 = s.a         -> [1,100]
+#   column_id 5 = l.element   -> [1,100]
+#   column_id 7 = m.key       -> [1,100]
+#   column_id 8 = m.value     -> [2,200]
+query III
+SELECT column_id, min_value, max_value FROM metadata.ducklake_table_column_stats ORDER BY column_id;
+----
+1	1	100
+3	1	100
+5	1	100
+7	1	100
+8	2	200

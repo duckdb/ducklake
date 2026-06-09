@@ -128,6 +128,31 @@ vector<column_t> DuckLakeGetRowIdColumn(ClientContext &context, optional_ptr<Fun
 	return result;
 }
 
+// Exposes DuckLake catalog column statistics to the optimizer's MIN/MAX aggregate pushdown.
+// DuckDB's StatisticsPropagator::TryExecuteAggregates folds MIN(col)/MAX(col) over a single scan into a
+// constant when the partition exposes (exact) column statistics through this interface.
+struct DuckLakePartitionRowGroup : public PartitionRowGroup {
+	DuckLakePartitionRowGroup(ClientContext &context, DuckLakeTableEntry &table, bool min_max_exact)
+	    : context(context), table(table), min_max_exact(min_max_exact) {
+	}
+
+	ClientContext &context;
+	DuckLakeTableEntry &table;
+	bool min_max_exact;
+
+	unique_ptr<BaseStatistics> GetColumnStatistics(const StorageIndex &storage_index) override {
+		if (storage_index.HasChildren()) {
+			// MIN/MAX over a nested sub-field - we only track stats for top-level columns, fall back to a scan
+			return nullptr;
+		}
+		return table.GetStatistics(context, storage_index.GetPrimaryIndex());
+	}
+
+	bool MinMaxIsExact(const BaseStatistics &stats, const StorageIndex &storage_index) override {
+		return min_max_exact;
+	}
+};
+
 vector<PartitionStatistics> DuckLakeGetPartitionStats(ClientContext &context, GetPartitionStatsInput &input) {
 	vector<PartitionStatistics> result;
 
@@ -171,12 +196,21 @@ vector<PartitionStatistics> DuckLakeGetPartitionStats(ClientContext &context, Ge
 		return result;
 	}
 
-	idx_t count = table.GetNetDataFileRowCount(*transaction) + table.GetNetInlinedRowCount(*transaction);
+	idx_t net_count = table.GetNetDataFileRowCount(*transaction) + table.GetNetInlinedRowCount(*transaction);
+
+	// MIN/MAX can be answered from the catalog column stats, but only when those stats are exact.
+	// Global column stats only ever widen on insert (via MergeStats) and are never tightened by deletes
+	// or compaction - so they are exact for the live data iff no row has ever been deleted, i.e. the gross
+	// record_count (total ever inserted) equals the net (delete-adjusted) row count. count(*) is unaffected
+	// either way: it does not consult MinMaxIsExact and subtracts delete counts independently.
+	auto table_stats = table.GetTableStats(*transaction);
+	bool min_max_exact = table_stats && table_stats->record_count == net_count;
 
 	// Return single partition with total count
 	PartitionStatistics stats;
-	stats.count = count;
+	stats.count = net_count;
 	stats.count_type = CountType::COUNT_EXACT;
+	stats.partition_row_group = make_shared_ptr<DuckLakePartitionRowGroup>(context, table, min_max_exact);
 	result.push_back(std::move(stats));
 	return result;
 }

@@ -1390,6 +1390,53 @@ void DuckLakeTransaction::RunCommitLoop(DuckLakeSnapshot transaction_snapshot,
 	context.get_table_stats = [&](TableIndex table_id) {
 		return ducklake_catalog.GetTableStats(*this, table_id);
 	};
+	context.get_table_column_schema = [&](TableIndex table_id) {
+		// The full flattened schema at the commit snapshot: top-level roots (is_root=true) plus every nested
+		// struct/list/map/array leaf (is_root=false). Roots carry the inlined-data merge (TryMergeInlinedStats
+		// references columns by name and bails on any non-scalar root); leaves carry their own per-file stats keyed
+		// by leaf FieldIndex, which the rewrite recompute must merge. Each node uses its authoritative stored
+		// FieldIndex (ALTER ADD FIELD makes nested leaf ids non-contiguous, so they cannot be re-derived).
+		vector<DuckLakeColumnSchemaEntry> schema;
+		auto entry = ducklake_catalog.GetEntryById(*this, transaction_snapshot, table_id);
+		if (!entry) {
+			return schema;
+		}
+		std::function<void(const DuckLakeFieldId &, bool)> add_field = [&](const DuckLakeFieldId &field, bool is_root) {
+			schema.push_back({field.GetFieldIndex(), field.Name(), field.Type(), is_root});
+			for (auto &child : field.Children()) {
+				add_field(*child, false);
+			}
+		};
+		for (auto &field : entry->Cast<DuckLakeTableEntry>().GetFieldData().GetFieldIds()) {
+			add_field(*field, true);
+		}
+		return schema;
+	};
+	context.get_inlined_table_names = [&](TableIndex table_id) {
+		vector<string> names;
+		auto entry = ducklake_catalog.GetEntryById(*this, transaction_snapshot, table_id);
+		if (!entry) {
+			return names;
+		}
+		for (auto &t : entry->Cast<DuckLakeTableEntry>().GetInlinedDataTables()) {
+			names.push_back(t.table_name);
+		}
+		return names;
+	};
+	context.get_net_data_file_row_count = [&](TableIndex table_id) -> idx_t {
+		auto entry = ducklake_catalog.GetEntryById(*this, transaction_snapshot, table_id);
+		if (!entry) {
+			return 0;
+		}
+		return entry->Cast<DuckLakeTableEntry>().GetNetDataFileRowCount(*this);
+	};
+	context.get_net_inlined_row_count = [&](TableIndex table_id) -> idx_t {
+		auto entry = ducklake_catalog.GetEntryById(*this, transaction_snapshot, table_id);
+		if (!entry) {
+			return 0;
+		}
+		return entry->Cast<DuckLakeTableEntry>().GetNetInlinedRowCount(*this);
+	};
 	context.build_stats_map = [&](vector<DuckLakeGlobalStatsInfo> &stats) {
 		auto &schema = ducklake_catalog.GetSchemaForSnapshot(*this, GetSnapshot());
 		return DuckLakeCatalog::ConstructStatsMap(stats, schema);
