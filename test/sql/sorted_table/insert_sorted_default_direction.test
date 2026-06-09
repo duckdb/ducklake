@@ -1,0 +1,47 @@
+# name: test/sql/sorted_table/insert_sorted_default_direction.test
+# description: test that omitted sort direction defaults to ascending for sorted inserts
+# group: [sorted_table]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+PRAGMA enable_verification
+
+statement ok
+COPY (
+    SELECT (DATE '2011-01-03' + (i::INTEGER))::DATE AS date, 0.0::FLOAT AS value FROM range(0, 20) t(i)
+    UNION ALL
+    SELECT (DATE '2025-10-20' + (i::INTEGER))::DATE AS date, 0.0::FLOAT AS value FROM range(0, 20) t(i)
+) TO '{DATA_PATH}/insert_sorted_default_direction.csv' (HEADER, DELIMITER ',')
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/insert_sorted_default_direction')
+
+statement ok
+USE ducklake
+
+statement ok
+BEGIN
+
+statement ok
+CREATE TABLE data (date DATE, value FLOAT)
+
+statement ok
+ALTER TABLE data SET SORTED BY (date)
+
+statement ok
+INSERT INTO data SELECT * FROM '{DATA_PATH}/insert_sorted_default_direction.csv' ORDER BY date
+
+statement ok
+COMMIT
+
+query T
+SELECT date FROM data ORDER BY rowid LIMIT 1
+----
+2011-01-03
