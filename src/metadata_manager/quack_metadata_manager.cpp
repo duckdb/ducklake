@@ -1,5 +1,6 @@
 #include "metadata_manager/quack_metadata_manager.hpp"
 #include "common/ducklake_util.hpp"
+#include "duckdb/catalog/catalog.hpp"
 #include "duckdb/main/connection.hpp"
 #include "storage/ducklake_catalog.hpp"
 #include "storage/ducklake_staged_commit.hpp"

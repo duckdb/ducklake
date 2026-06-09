@@ -4497,13 +4497,9 @@ FROM {METADATA_CATALOG}.ducklake_files_scheduled_for_deletion
 	}
 	return result;
 }
-vector<DuckLakeFileForCleanup> DuckLakeMetadataManager::GetOrphanFilesForCleanup(const string &filter,
-                                                                                 const string &separator) {
-	auto query = R"(SELECT filename
-FROM read_blob({DATA_PATH} || '**')
-WHERE suffix(filename, '.parquet')
-AND filename NOT IN (
-SELECT REPLACE(
+
+string DuckLakeMetadataManager::GetKnownFilesForCleanupQuery(const string &separator) const {
+	auto query = R"(SELECT REPLACE(
            CASE
                WHEN NOT file_relative THEN file_path
                ELSE CASE
@@ -4537,21 +4533,74 @@ SELECT REPLACE(
            '{SEPARATOR}'
 ) AS full_path
 FROM {METADATA_CATALOG}.ducklake_files_scheduled_for_deletion f
+)";
+	return StringUtil::Replace(query, "{SEPARATOR}", separator);
+}
+
+vector<DuckLakeFileForCleanup> DuckLakeMetadataManager::GetOrphanFilesForCleanup(const string &filter,
+                                                                                 const string &separator) {
+	auto known_files_query = GetKnownFilesForCleanupQuery(separator);
+	auto known_files_res = transaction.Query(known_files_query);
+	if (known_files_res->HasError()) {
+		known_files_res->GetErrorObject().Throw("Failed to get files scheduled for deletion from DuckLake: ");
+	}
+
+	vector<string> known_files;
+	for (auto &row : *known_files_res) {
+		known_files.push_back(row.GetValue<string>(0));
+	}
+
+	const string temp_table = "__ducklake_known_cleanup_files";
+	auto temp_table_identifier = DuckLakeUtil::SQLIdentifierToString(temp_table);
+
+	auto create_temp_query =
+	    StringUtil::Format("CREATE OR REPLACE TEMPORARY TABLE %s(full_path VARCHAR)", temp_table_identifier);
+	auto create_temp_res = transaction.ExecuteRaw(create_temp_query);
+	if (create_temp_res->HasError()) {
+		create_temp_res->GetErrorObject().Throw("Failed to create temporary file list for DuckLake cleanup: ");
+	}
+
+	auto drop_temp_table = [&]() {
+		try {
+			auto drop_temp_query = StringUtil::Format("DROP TABLE IF EXISTS %s", temp_table_identifier);
+			transaction.ExecuteRaw(drop_temp_query);
+		} catch (...) {
+		}
+	};
+
+	try {
+		Appender appender(transaction.GetConnection(), temp_table);
+		for (auto &known_file : known_files) {
+			appender.AppendRow(known_file.c_str());
+		}
+		appender.Close();
+
+		auto query = StringUtil::Format(R"(SELECT filename
+FROM read_blob({DATA_PATH} || '**') files
+WHERE suffix(filename, '.parquet')
+AND NOT EXISTS (
+	SELECT 1 FROM %s known_files WHERE known_files.full_path = files.filename
 )
-)" + filter;
-	query = StringUtil::Replace(query, "{SEPARATOR}", separator);
-	auto res = transaction.Query(query);
-	if (res->HasError()) {
-		res->GetErrorObject().Throw("Failed to get files scheduled for deletion from DuckLake: ");
+%s)",
+		                                temp_table_identifier, filter);
+		SubstituteCatalogPlaceholders(query);
+		auto res = transaction.ExecuteRaw(query);
+		if (res->HasError()) {
+			res->GetErrorObject().Throw("Failed to get files scheduled for deletion from DuckLake: ");
+		}
+
+		vector<DuckLakeFileForCleanup> result;
+		for (auto &row : *res) {
+			DuckLakeFileForCleanup info;
+			info.path = row.GetValue<string>(0);
+			result.push_back(std::move(info));
+		}
+		drop_temp_table();
+		return result;
+	} catch (...) {
+		drop_temp_table();
+		throw;
 	}
-	auto context = transaction.context.lock();
-	vector<DuckLakeFileForCleanup> result;
-	for (auto &row : *res) {
-		DuckLakeFileForCleanup info;
-		info.path = row.GetValue<string>(0);
-		result.push_back(std::move(info));
-	}
-	return result;
 }
 
 vector<DuckLakeFileForCleanup> DuckLakeMetadataManager::GetFilesForCleanup(const string &filter, CleanupType type,

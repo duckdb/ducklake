@@ -401,6 +401,7 @@ public:
 protected:
 	string GetInlinedTableQuery(const DuckLakeTableInfo &table, const string &table_name);
 	string GetColumnType(const DuckLakeColumnInfo &col);
+	string GetKnownFilesForCleanupQuery(const string &separator) const;
 
 	//! Optimized data file writing using DuckDB Appender API (only for DuckDB metadata manager)
 	string WriteNewDataFilesWithAppender(DuckLakeSnapshot &commit_snapshot, const vector<DuckLakeFileInfo> &new_files,
