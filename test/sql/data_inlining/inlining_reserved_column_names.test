@@ -177,3 +177,71 @@ statement error
 CALL ducklake.set_option('data_inlining_row_limit', 10, table_name => 't_normal');
 ----
 Cannot enable data inlining for table "t_normal". Column "row_id" conflicts with a reserved DuckLake internal column name used for inlining. To enable inlining for this table, rename or drop column "row_id".
+
+statement ok
+DETACH ducklake
+
+# Check Alter
+statement ok
+ATTACH 'ducklake:__TEST_DIR__/ducklake_reserved_cols3.db' AS ducklake (DATA_PATH '__TEST_DIR__/ducklake_reserved_cols3_files')
+
+statement ok
+SET ducklake_default_data_inlining_row_limit = 0;
+
+statement ok
+CREATE TABLE ducklake.t_setting(i INTEGER, j INTEGER);
+
+statement ok
+ALTER TABLE ducklake.t_setting ADD COLUMN row_id INTEGER;
+
+statement ok
+ALTER TABLE ducklake.t_setting RENAME COLUMN j TO begin_snapshot;
+
+# re-enabling inlining through the session setting makes the reserved names rejected again
+statement ok
+RESET ducklake_default_data_inlining_row_limit;
+
+statement ok
+CREATE TABLE ducklake.t_setting2(i INTEGER);
+
+statement error
+ALTER TABLE ducklake.t_setting2 ADD COLUMN row_id INTEGER;
+----
+reserved
+
+statement error
+ALTER TABLE ducklake.t_setting2 RENAME COLUMN i TO end_snapshot;
+----
+reserved
+
+# inlining is enabled, but disabled only for a given table
+statement ok
+CALL ducklake.set_option('data_inlining_row_limit', 0, table_name => 't_setting2');
+
+statement ok
+ALTER TABLE ducklake.t_setting2 ADD COLUMN row_id INTEGER;
+
+statement ok
+ALTER TABLE ducklake.t_setting2 RENAME COLUMN i TO end_snapshot;
+
+statement ok
+INSERT INTO ducklake.t_setting2 VALUES (1, 100);
+
+query II
+SELECT * FROM ducklake.t_setting2
+----
+1	100
+
+# other tables are still with the enabled inlining setting
+statement ok
+CREATE TABLE ducklake.t_setting3(i INTEGER);
+
+statement error
+ALTER TABLE ducklake.t_setting3 ADD COLUMN row_id INTEGER;
+----
+reserved
+
+statement error
+ALTER TABLE ducklake.t_setting3 RENAME COLUMN i TO begin_snapshot;
+----
+reserved
