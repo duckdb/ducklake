@@ -113,6 +113,22 @@ struct HivePartition {
 	DuckLakeTransformType transform_type;
 };
 
+struct HivePartitionLookupKey {
+	FieldIndex field_index;
+	DuckLakeTransformType transform_type;
+
+	bool operator==(const HivePartitionLookupKey &other) const {
+		return field_index.index == other.field_index.index && transform_type == other.transform_type;
+	}
+};
+
+struct HivePartitionLookupKeyHash {
+	hash_t operator()(const HivePartitionLookupKey &key) const {
+		auto result = Hash(key.field_index.index);
+		return CombineHash(result, Hash(static_cast<uint8_t>(key.transform_type)));
+	}
+};
+
 struct ParquetFileMetadata {
 	string filename;
 	vector<unique_ptr<ParquetColumn>> columns;
@@ -1217,7 +1233,8 @@ DuckLakeDataFile DuckLakeFileProcessor::AddFileToTable(ParquetFileMetadata &file
 			for (const auto &hive_partition_value : file.hive_partition_values) {
 				bool found_field = false;
 				for (const auto &field : partition_data->fields) {
-					if (field.field_id.index == hive_partition_value.field_index.index) {
+					if (field.field_id.index == hive_partition_value.field_index.index &&
+					    field.transform.type == hive_partition_value.transform_type) {
 						found_field = true;
 						break;
 					}
@@ -1232,13 +1249,19 @@ DuckLakeDataFile DuckLakeFileProcessor::AddFileToTable(ParquetFileMetadata &file
 			throw InvalidInputException("File \"%s\" contains an invalid partition value for the table configuration.",
 			                            file.filename);
 		}
-		unordered_map<idx_t, idx_t> field_partition_key_map;
+		unordered_map<HivePartitionLookupKey, idx_t, HivePartitionLookupKeyHash> field_partition_key_map;
 		for (auto &partition_fields : partition_data->fields) {
-			field_partition_key_map[partition_fields.field_id.index] = partition_fields.partition_key_index;
+			field_partition_key_map[{partition_fields.field_id, partition_fields.transform.type}] =
+			    partition_fields.partition_key_index;
 		}
 		for (auto &hive_partition : file.hive_partition_values) {
+			auto partition_key =
+			    field_partition_key_map.find({hive_partition.field_index, hive_partition.transform_type});
+			if (partition_key == field_partition_key_map.end()) {
+				throw InternalException("Missing partition key index for hive partition");
+			}
 			result.partition_values.push_back(
-			    {field_partition_key_map[hive_partition.field_index.index], hive_partition.hive_value});
+			    {partition_key->second, hive_partition.hive_value});
 		}
 		result.partition_id = partition_data->partition_id;
 	}
