@@ -10,7 +10,9 @@
 #include "storage/ducklake_commit_state.hpp"
 #include "storage/ducklake_metadata_manager.hpp"
 #include "storage/ducklake_schema_entry.hpp"
+#include "storage/ducklake_table_entry.hpp"
 #include "storage/ducklake_transaction_changes.hpp"
+#include "common/ducklake_util.hpp"
 #include "common/ducklake_snapshot.hpp"
 #include "duckdb/common/exception.hpp"
 #include "duckdb/common/random_engine.hpp"
@@ -708,6 +710,221 @@ CompactionInformation DuckLakeTransactionState::GetCompactionChanges(DuckLakeCom
 	return result;
 }
 
+static bool IsFoldableScalarType(const LogicalType &type) {
+	if (type.IsNumeric() || type.IsTemporal()) {
+		return true;
+	}
+	auto id = type.id();
+	return id == LogicalTypeId::VARCHAR || id == LogicalTypeId::BOOLEAN;
+}
+
+bool DuckLakeTransactionState::TryMergeInlinedStats(const vector<DuckLakeColumnSchemaEntry> &columns,
+                                                    const vector<string> &inlined_table_names,
+                                                    DuckLakeSnapshot snapshot, DuckLakeTableStats &target,
+                                                    const DuckLakeCommitContext &context) {
+	// We can only compute exact inlined min/max for top-level foldable scalar columns. If any column is a
+	// non-scalar type we cannot account for the inlined rows exactly - bail (caller keeps the scan fallback).
+	for (auto &col : columns) {
+		if (!IsFoldableScalarType(col.column_type)) {
+			return false;
+		}
+	}
+	for (auto &inlined_table_name : inlined_table_names) {
+		// Build one aggregate query: COUNT(*) followed by (MIN, MAX, COUNT(col), nan-flag) per column.
+		string select_list = "COUNT(*)";
+		for (auto &col : columns) {
+			auto col_ident = DuckLakeUtil::SQLIdentifierToString(col.column_name);
+			bool is_float =
+			    col.column_type.id() == LogicalTypeId::FLOAT || col.column_type.id() == LogicalTypeId::DOUBLE;
+			string nan_expr =
+			    is_float ? StringUtil::Format("COALESCE(BOOL_OR(isnan(%s)), false)", col_ident) : string("false");
+			select_list += StringUtil::Format(", MIN(%s)::VARCHAR, MAX(%s)::VARCHAR, COUNT(%s), %s", col_ident,
+			                                  col_ident, col_ident, nan_expr);
+		}
+		auto sql = DuckLakeMetadataManager::ReadInlinedDataAggregatesSql(
+		    DuckLakeUtil::SQLIdentifierToString(inlined_table_name), select_list);
+		auto result = context.query_metadata_with_snapshot(snapshot, sql);
+		if (result->HasError()) {
+			result->GetErrorObject().Throw("Failed to read inlined-data aggregates from DuckLake: ");
+		}
+		for (auto &row : *result) {
+			auto total = static_cast<idx_t>(row.template GetValue<int64_t>(0));
+			if (total == 0) {
+				break;
+			}
+			idx_t col_offset = 1;
+			for (auto &col : columns) {
+				bool is_float =
+				    col.column_type.id() == LogicalTypeId::FLOAT || col.column_type.id() == LogicalTypeId::DOUBLE;
+				bool contains_nan = !row.IsNull(col_offset + 3) && row.template GetValue<bool>(col_offset + 3);
+				DuckLakeColumnStats col_stats(col.column_type);
+				auto non_null = static_cast<idx_t>(row.template GetValue<int64_t>(col_offset + 2));
+				col_stats.has_num_values = true;
+				col_stats.num_values = total;
+				col_stats.has_null_count = true;
+				col_stats.null_count = total - non_null;
+				if (is_float) {
+					col_stats.has_contains_nan = true;
+					col_stats.contains_nan = contains_nan;
+				}
+				// do not record float min/max if NaN is present (matches the parquet stats behaviour)
+				if (!(is_float && contains_nan)) {
+					if (!row.IsNull(col_offset + 0)) {
+						col_stats.has_min = true;
+						col_stats.min = row.template GetValue<string>(col_offset + 0);
+					}
+					if (!row.IsNull(col_offset + 1)) {
+						col_stats.has_max = true;
+						col_stats.max = row.template GetValue<string>(col_offset + 1);
+					}
+				}
+				target.MergeStats(col.field_index, col_stats);
+				col_offset += 4;
+			}
+			break;
+		}
+	}
+	return true;
+}
+
+void DuckLakeTransactionState::RecomputeGlobalStatsAfterRewrite(string &batch_query, TableIndex table_id,
+                                                                 DuckLakeSnapshot snapshot,
+                                                                 const CompactionInformation &rewrite_changes,
+                                                                 const set<DataFileIndex> &removed_source_ids,
+                                                                 const DuckLakeCommitContext &context) {
+	auto columns = context.get_table_column_schema(table_id);
+	if (columns.empty()) {
+		return; // no schema visible at the commit snapshot
+	}
+	auto current_stats = context.get_table_stats(table_id);
+	if (!current_stats) {
+		// no committed stats row exists yet - the UPDATE path of UpdateGlobalTableStats only refreshes existing rows
+		return;
+	}
+
+	// Build a field_index -> column_type map for the per-file stats merge below. `columns` is the full flattened
+	// schema (roots + nested leaves), so per-file stats keyed by a nested-leaf FieldIndex resolve here too - without
+	// the leaves, an un-rewritten file's nested-leaf stats would be dropped and the global min/max corrupted.
+	map<FieldIndex, LogicalType> type_by_field;
+	for (auto &col : columns) {
+		type_by_field.insert(make_pair(col.field_index, col.column_type));
+	}
+
+	DuckLakeTableStats new_stats;
+	new_stats.next_row_id = current_stats->next_row_id; // monotonic - carried forward, never recomputed
+	idx_t parquet_gross_rows = 0;
+
+	// 1. Merge the per-file stats of the post-rewrite parquet files = (pre-commit visible files - removed) + new files.
+	auto result = context.query_metadata_with_snapshot(
+	    snapshot, DuckLakeMetadataManager::ReadFileColumnStatsForTableSql(table_id));
+	if (result->HasError()) {
+		result->GetErrorObject().Throw("Failed to read per-file column stats for rewrite from DuckLake: ");
+	}
+	bool have_file = false;
+	idx_t last_file_id = 0;
+	for (auto &row : *result) {
+		auto data_file_id = static_cast<idx_t>(row.GetValue<int64_t>(0));
+		if (removed_source_ids.find(DataFileIndex(data_file_id)) != removed_source_ids.end()) {
+			continue; // this file is being rewritten away
+		}
+		if (!have_file || data_file_id != last_file_id) {
+			have_file = true;
+			last_file_id = data_file_id;
+			new_stats.record_count += static_cast<idx_t>(row.GetValue<int64_t>(1));
+			new_stats.table_size_bytes += static_cast<idx_t>(row.GetValue<int64_t>(2));
+			parquet_gross_rows += static_cast<idx_t>(row.GetValue<int64_t>(1));
+		}
+		if (row.IsNull(3)) {
+			continue; // file without column stats
+		}
+		FieldIndex field_idx(static_cast<idx_t>(row.GetValue<int64_t>(3)));
+		auto type_it = type_by_field.find(field_idx);
+		if (type_it == type_by_field.end()) {
+			continue; // column no longer exists or is nested
+		}
+		DuckLakeColumnStats col_stats(type_it->second);
+		if (!row.IsNull(4) && !row.IsNull(5)) {
+			auto value_count = static_cast<idx_t>(row.GetValue<int64_t>(4));
+			auto null_count = static_cast<idx_t>(row.GetValue<int64_t>(5));
+			col_stats.has_num_values = true;
+			col_stats.num_values = value_count + null_count;
+			col_stats.has_null_count = true;
+			col_stats.null_count = null_count;
+		}
+		if (!row.IsNull(6)) {
+			col_stats.has_min = true;
+			col_stats.min = row.GetValue<string>(6);
+		}
+		if (!row.IsNull(7)) {
+			col_stats.has_max = true;
+			col_stats.max = row.GetValue<string>(7);
+		}
+		if (!row.IsNull(8)) {
+			col_stats.has_contains_nan = true;
+			col_stats.contains_nan = row.GetValue<bool>(8);
+		}
+		if (!row.IsNull(9) && col_stats.extra_stats) {
+			col_stats.extra_stats->Deserialize(row.GetValue<string>(9));
+		}
+		new_stats.MergeStats(field_idx, col_stats);
+	}
+
+	// add the new (rewritten, delete-free) files - their stats are available in memory
+	for (auto &file : rewrite_changes.new_files) {
+		if (file.table_id != table_id) {
+			continue;
+		}
+		new_stats.record_count += file.row_count;
+		new_stats.table_size_bytes += file.file_size_bytes;
+		parquet_gross_rows += file.row_count;
+		for (auto &col_entry : file.column_stats) {
+			new_stats.MergeStats(col_entry.first, col_entry.second);
+		}
+	}
+
+	// 2. Delete-free gate: the merged parquet stats are exact only if no deletions remain on the table's data files.
+	//    That holds iff the gross row count of the post-rewrite files equals the net (delete-adjusted) data-file count.
+	//    (Covers partial rewrites with delete_threshold > 0, leftover delete files, and inlined file deletions.)
+	if (parquet_gross_rows != context.get_net_data_file_row_count(table_id)) {
+		return;
+	}
+
+	// 3. Fold in committed inlined data (REWRITE_DELETES does not rewrite inlined data). Pass only the top-level
+	//    roots: TryMergeInlinedStats references each column by name against the inlined table and bails on any
+	//    non-scalar root; feeding it nested leaves would emit MIN("<leaf>") against a column that does not exist.
+	idx_t net_inlined = context.get_net_inlined_row_count(table_id);
+	if (net_inlined > 0) {
+		vector<DuckLakeColumnSchemaEntry> root_columns;
+		for (auto &col : columns) {
+			if (col.is_root) {
+				root_columns.push_back(col);
+			}
+		}
+		auto inlined_table_names = context.get_inlined_table_names(table_id);
+		if (!TryMergeInlinedStats(root_columns, inlined_table_names, snapshot, new_stats, context)) {
+			return; // cannot account for inlined data exactly - keep the existing stats and the scan fallback
+		}
+		new_stats.record_count += net_inlined;
+	}
+
+	// 4. Make sure every committed column (root or nested leaf) appears so its global row is refreshed (a column with
+	//    no live data becomes "unknown" -> it is scanned at query time, which is correct). UpdateGlobalTableStatsSql
+	//    only UPDATEs existing rows, so entries with no committed stats row (e.g. struct containers) are harmless
+	//    no-ops. Use the snapshot schema instead of current_stats->column_stats: the server-side stats cache is only
+	//    populated for tables with staged inserts, so a pure-rewrite commit can see an empty current_stats.column_stats.
+	for (auto &col : columns) {
+		if (new_stats.column_stats.find(col.field_index) == new_stats.column_stats.end()) {
+			new_stats.column_stats.insert(make_pair(col.field_index, DuckLakeColumnStats(col.column_type)));
+		}
+	}
+
+	DuckLakeNewGlobalStats new_globals;
+	new_globals.initialized = true;
+	new_globals.stats = std::move(new_stats);
+	batch_query += DuckLakeMetadataManager::UpdateGlobalTableStatsSql(
+	    DuckLakeTransaction::ConvertNewGlobalStats(table_id, new_globals));
+}
+
 NewDataInfo DuckLakeTransactionState::GetNewDataFiles(string &batch_query, DuckLakeCommitState &commit_state,
                                                       optional_ptr<vector<DuckLakeGlobalStatsInfo>> stats,
                                                       const DuckLakeCommitContext &context) {
@@ -1332,6 +1549,21 @@ string DuckLakeTransactionState::CommitChanges(DuckLakeCommitState &commit_state
 		// REWRITE_DELETES ignores resolved_paths; pass empty.
 		batch_queries += DuckLakeMetadataManager::WriteCompactions(
 		    compaction_rewrite_delete_changes.compacted_files, CompactionType::REWRITE_DELETES, vector<DuckLakePath>());
+
+		// Rewriting deletes physically removes deleted rows, so the affected tables can become delete-free
+		// again. Recompute their EXACT global stats from the post-rewrite file set so MIN/MAX can once more be
+		// answered from metadata (see DuckLakeGetPartitionStats). Safe no-op when a table is not fully delete-free.
+		if (!compaction_rewrite_delete_changes.compacted_files.empty()) {
+			map<TableIndex, set<DataFileIndex>> removed_source_ids_by_table;
+			for (auto &compacted : compaction_rewrite_delete_changes.compacted_files) {
+				removed_source_ids_by_table[compacted.table_index].insert(compacted.source_id);
+			}
+			auto recompute_snapshot = context.get_snapshot();
+			for (auto &table_entry : removed_source_ids_by_table) {
+				RecomputeGlobalStatsAfterRewrite(batch_queries, table_entry.first, recompute_snapshot,
+				                                 compaction_rewrite_delete_changes, table_entry.second, context);
+			}
+		}
 	}
 
 	// Tracking for tables that had schema changes
