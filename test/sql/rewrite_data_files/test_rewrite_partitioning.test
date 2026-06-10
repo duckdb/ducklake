@@ -105,11 +105,12 @@ SELECT * FROM partitioned ORDER BY part_key, id
 2	3	300
 
 # Merge adjacent files to consolidate (rewrite doesn't merge, just applies deletes)
+# each partition has 2 files: the flushed inlined MERGE rows and the rewritten initial file
 query III
 SELECT table_name, files_processed, files_created FROM ducklake_merge_adjacent_files('ducklake', 'partitioned') ORDER BY ALL
 ----
-partitioned	3	1
-partitioned	3	1
+partitioned	2	1
+partitioned	2	1
 
 # Cleanup old files
 statement ok

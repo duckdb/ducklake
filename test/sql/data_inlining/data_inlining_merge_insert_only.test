@@ -1,0 +1,44 @@
+# name: test/sql/data_inlining/data_inlining_merge_insert_only.test
+# description: data inlining applies to MERGE INTO's INSERTs
+# group: [data_inlining]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/merge_insert_only_inlining', METADATA_CATALOG 'ducklake_meta', DATA_INLINING_ROW_LIMIT 10)
+
+statement ok
+USE ducklake
+
+statement ok
+CREATE TABLE t (id INT, val VARCHAR);
+
+# MERGE with only WHEN NOT MATCHED THEN INSERT (no MATCHED branch)
+# The single new row is below the inlining limit - it should be inlined, not written to parquet
+statement ok
+MERGE INTO t AS tgt
+USING (VALUES (2, 'merge-insert')) AS src(id, val)
+    ON tgt.id = src.id
+WHEN NOT MATCHED THEN INSERT (id, val) VALUES (src.id, src.val);
+
+query II
+SELECT * FROM t ORDER BY id
+----
+2	merge-insert
+
+# no parquet files should exist - both rows should be inlined
+query I
+SELECT COUNT(*) FROM GLOB('{DATA_PATH}/merge_insert_only_inlining/**')
+----
+0
+
+query I
+SELECT DISTINCT filename LIKE 'ducklake_inlined_data%' FROM t
+----
+true
