@@ -623,6 +623,7 @@ unique_ptr<CatalogEntry> DuckLakeTableEntry::AlterTable(DuckLakeTransaction &tra
 	// create a complete copy of this table with the partition info added
 	auto partition_data = make_uniq<DuckLakePartition>();
 	partition_data->partition_id = transaction.GetLocalCatalogId();
+	partition_data->local_partition_id = partition_data->partition_id;
 	for (idx_t expr_idx = 0; expr_idx < info.partition_keys.size(); expr_idx++) {
 		auto &expr = *info.partition_keys[expr_idx];
 		auto partition_field = GetPartitionField(*this, expr);
