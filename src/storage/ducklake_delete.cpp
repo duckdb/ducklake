@@ -139,6 +139,9 @@ static DuckLakeDeleteFile WriteDeleteFileInternal(ClientContext &context, InputT
 	delete_file.delete_count = stats.row_count;
 	delete_file.file_size_bytes = stats.file_size_bytes;
 	delete_file.footer_size = stats.footer_size_bytes.GetValue<idx_t>();
+	if (!stats.row_group_count.IsNull()) {
+		delete_file.row_group_count = stats.row_group_count.GetValue<idx_t>();
+	}
 	delete_file.encryption_key = input.encryption_key;
 	delete_file.source = input.source;
 	if (with_snapshots) {

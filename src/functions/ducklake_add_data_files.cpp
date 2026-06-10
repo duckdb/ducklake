@@ -120,6 +120,7 @@ struct ParquetFileMetadata {
 	optional_idx row_count;
 	optional_idx file_size_bytes;
 	optional_idx footer_size;
+	optional_idx row_group_count;
 
 	// Store the column mapping entries once they are computed
 	vector<unique_ptr<DuckLakeNameMapEntry>> map_entries;
@@ -174,7 +175,8 @@ SELECT
         file_name := x.file_name,
         num_rows := x.num_rows,
         file_size_bytes := x.file_size_bytes,
-        footer_size := x.footer_size
+        footer_size := x.footer_size,
+        num_row_groups := x.num_row_groups
     )) AS parquet_file_metadata,
     list_transform(parquet_metadata, lambda x: struct_pack(
         column_id := x.column_id,
@@ -254,6 +256,8 @@ FROM parquet_full_metadata(%s)
 		file.file_size_bytes =
 		    FlatVector::GetData<uint64_t>(struct_children[2])[struct_idx]; // struct field: file_size_bytes
 		file.footer_size = FlatVector::GetData<uint64_t>(struct_children[3])[struct_idx]; // struct field: footer_size
+		file.row_group_count =
+		    NumericCast<idx_t>(FlatVector::GetData<int64_t>(struct_children[4])[struct_idx]); // num_row_groups
 
 		bool saw_root = false;
 		vector<idx_t> child_counts;
@@ -1199,6 +1203,7 @@ DuckLakeDataFile DuckLakeFileProcessor::AddFileToTable(ParquetFileMetadata &file
 	result.row_count = file.row_count.GetIndex();
 	result.file_size_bytes = file.file_size_bytes.GetIndex();
 	result.footer_size = file.footer_size.GetIndex();
+	result.row_group_count = file.row_group_count;
 
 	auto name_map = make_uniq<DuckLakeNameMap>();
 	name_map->table_id = table.GetTableId();
