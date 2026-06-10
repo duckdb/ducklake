@@ -1,0 +1,145 @@
+# name: test/sql/metadata/row_group_count.test
+# description: Test that the parquet row group count is stored in ducklake_data_file and ducklake_delete_file
+# group: [metadata]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/row_group_count_files', METADATA_CATALOG 'dl', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CALL ducklake.set_option('write_deletion_vectors', 'false')
+
+
+# Basic insert - a single row group
+statement ok
+CREATE TABLE ducklake.test(i INTEGER);
+
+statement ok
+INSERT INTO ducklake.test FROM range(1000);
+
+query II
+SELECT record_count, row_group_count FROM dl.ducklake_data_file
+WHERE table_id = (SELECT table_id FROM dl.ducklake_table WHERE table_name = 'test')
+----
+1000	1
+
+# Delete file - also a single row group
+query I
+DELETE FROM ducklake.test WHERE i < 100
+----
+100
+
+query II
+SELECT delete_count, row_group_count FROM dl.ducklake_delete_file
+WHERE table_id = (SELECT table_id FROM dl.ducklake_table WHERE table_name = 'test')
+----
+100	1
+
+# Multiple row groups
+statement ok
+CALL ducklake.set_option('parquet_row_group_size', '2048')
+
+statement ok
+CREATE TABLE ducklake.multi_rg(i INTEGER);
+
+statement ok
+INSERT INTO ducklake.multi_rg FROM range(10000);
+
+query II
+SELECT record_count, row_group_count > 1 FROM dl.ducklake_data_file
+WHERE table_id = (SELECT table_id FROM dl.ducklake_table WHERE table_name = 'multi_rg')
+----
+10000	true
+
+# Puffin deletion vectors are not parquet files - row_group_count is NULL
+statement ok
+CREATE TABLE ducklake.dv_test AS SELECT i FROM range(1000) t(i);
+
+statement ok
+CALL ducklake.set_option('write_deletion_vectors', 'true')
+
+query I
+DELETE FROM ducklake.dv_test WHERE i % 2 = 0
+----
+500
+
+query III
+SELECT format, delete_count, row_group_count FROM dl.ducklake_delete_file
+WHERE table_id = (SELECT table_id FROM dl.ducklake_table WHERE table_name = 'dv_test')
+----
+puffin	500	NULL
+
+statement ok
+CALL ducklake.set_option('write_deletion_vectors', 'false')
+
+# ducklake_add_data_files reads the row group count from the parquet footer
+statement ok
+COPY (FROM range(10000) t(i)) TO '{DATA_PATH}/row_group_count_files/added_file.parquet' (ROW_GROUP_SIZE 2048)
+
+statement ok
+CREATE TABLE ducklake.added(i BIGINT);
+
+statement ok
+CALL ducklake_add_data_files('ducklake', 'added', '{DATA_PATH}/row_group_count_files/added_file.parquet')
+
+statement ok
+SET VARIABLE added_rg_count = (SELECT num_row_groups FROM parquet_file_metadata('{DATA_PATH}/row_group_count_files/added_file.parquet'))
+
+query II
+SELECT record_count, row_group_count = getvariable('added_rg_count')
+FROM dl.ducklake_data_file
+WHERE table_id = (SELECT table_id FROM dl.ducklake_table WHERE table_name = 'added')
+----
+10000	true
+
+# Compaction - the rewritten file gets its own row group count
+statement ok
+CREATE TABLE ducklake.compact_me(i INTEGER);
+
+statement ok
+INSERT INTO ducklake.compact_me FROM range(100);
+
+statement ok
+INSERT INTO ducklake.compact_me FROM range(100, 200);
+
+statement ok
+CALL ducklake.merge_adjacent_files()
+
+query II
+SELECT record_count, row_group_count FROM dl.ducklake_data_file
+WHERE table_id = (SELECT table_id FROM dl.ducklake_table WHERE table_name = 'compact_me')
+  AND end_snapshot IS NULL
+----
+200	1
+
+# Flushing inlined data writes parquet files with a row group count
+statement ok
+CALL ducklake.set_option('data_inlining_row_limit', 10)
+
+statement ok
+CREATE TABLE ducklake.inline_test(i INTEGER);
+
+statement ok
+INSERT INTO ducklake.inline_test VALUES (1), (2), (3);
+
+query I
+SELECT COUNT(*) FROM dl.ducklake_data_file
+WHERE table_id = (SELECT table_id FROM dl.ducklake_table WHERE table_name = 'inline_test')
+----
+0
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake')
+
+query II
+SELECT record_count, row_group_count FROM dl.ducklake_data_file
+WHERE table_id = (SELECT table_id FROM dl.ducklake_table WHERE table_name = 'inline_test')
+----
+3	1
