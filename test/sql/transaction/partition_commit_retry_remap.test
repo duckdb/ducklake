@@ -71,11 +71,19 @@ WHERE table_id >= 9223372036854775808 OR partition_id >= 9223372036854775808;
 0
 
 # every committed data file must reference a partition id that exists
+# (materialize the partition ids first - scanner-backed metadata catalogs do not
+# support multiple streaming scans in one query)
+statement ok
+SET VARIABLE known_partition_ids = (
+    SELECT LIST(partition_id)
+    FROM metadata.ducklake_partition_info
+);
+
 query I
 SELECT COUNT(*)
 FROM metadata.ducklake_data_file
 WHERE partition_id IS NOT NULL
-  AND partition_id NOT IN (SELECT partition_id FROM metadata.ducklake_partition_info);
+  AND NOT list_contains(getvariable('known_partition_ids'), partition_id);
 ----
 0
 
@@ -107,10 +115,16 @@ WHERE table_id >= 9223372036854775808 OR partition_id >= 9223372036854775808;
 ----
 0
 
+statement ok
+SET VARIABLE known_partition_ids = (
+    SELECT LIST(partition_id)
+    FROM metadata.ducklake_partition_info
+);
+
 query I
 SELECT COUNT(*)
 FROM metadata.ducklake_data_file
 WHERE partition_id IS NOT NULL
-  AND partition_id NOT IN (SELECT partition_id FROM metadata.ducklake_partition_info);
+  AND NOT list_contains(getvariable('known_partition_ids'), partition_id);
 ----
 0
