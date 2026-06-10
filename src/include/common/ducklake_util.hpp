@@ -38,6 +38,7 @@ public:
 	static string ValueToSQL(DuckLakeMetadataManager &metadata_manager, ClientContext &context, const Value &val);
 
 	static ParsedCatalogEntry ParseCatalogEntry(const string &input);
+	static string LocalOrRemoteSeparator(FileSystem &fs, const string &path);
 	static string JoinPath(FileSystem &fs, const string &a, const string &b);
 
 	static shared_ptr<DynamicFilterData> GetOptionalDynamicFilterData(const TableFilter &filter);
