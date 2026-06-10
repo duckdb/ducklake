@@ -1,0 +1,120 @@
+# name: test/sql/compaction/merge_adjacent_partition_values.test
+# description: test partition_values filter for ducklake_merge_adjacent_files
+# group: [compaction]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/merge_adjacent_partition_values', METADATA_CATALOG 'metadata')
+
+statement ok
+CREATE TABLE ducklake.t(p INTEGER, v INTEGER);
+
+statement ok
+ALTER TABLE ducklake.t SET PARTITIONED BY (p);
+
+statement ok
+INSERT INTO ducklake.t VALUES (1, 10);
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake')
+
+statement ok
+INSERT INTO ducklake.t VALUES (1, 20);
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake')
+
+statement ok
+INSERT INTO ducklake.t VALUES (2, 100);
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake')
+
+statement ok
+INSERT INTO ducklake.t VALUES (2, 200);
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake')
+
+query III
+SELECT table_name, files_processed, files_created
+FROM ducklake_merge_adjacent_files('ducklake', 't', partition_values => struct_pack(p := 1))
+ORDER BY ALL
+----
+t	2	1
+
+query II
+SELECT partition_value, COUNT(*)
+FROM metadata.ducklake_data_file
+JOIN metadata.ducklake_file_partition_value USING (data_file_id)
+WHERE end_snapshot IS NULL
+GROUP BY partition_value
+ORDER BY partition_value
+----
+1	1
+2	2
+
+query I
+SELECT COUNT(*)
+FROM ducklake_merge_adjacent_files('ducklake', 't', partition_values => struct_pack(p := 99))
+----
+0
+
+query II
+SELECT p, v FROM ducklake.t ORDER BY ALL
+----
+1	10
+1	20
+2	100
+2	200
+
+statement ok
+CREATE TABLE ducklake.transformed_t(ts TIMESTAMP, v INTEGER);
+
+statement ok
+ALTER TABLE ducklake.transformed_t SET PARTITIONED BY (year(ts), month(ts));
+
+statement ok
+INSERT INTO ducklake.transformed_t VALUES (TIMESTAMP '2024-01-01 00:00:00', 1);
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake')
+
+statement ok
+INSERT INTO ducklake.transformed_t VALUES (TIMESTAMP '2024-01-02 00:00:00', 2);
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake')
+
+statement ok
+INSERT INTO ducklake.transformed_t VALUES (TIMESTAMP '2025-01-01 00:00:00', 3);
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake')
+
+query III
+SELECT table_name, files_processed, files_created
+FROM ducklake_merge_adjacent_files('ducklake', 'transformed_t', partition_values => struct_pack(year := 2024))
+ORDER BY ALL
+----
+transformed_t	2	1
+
+query II
+SELECT partition_value, COUNT(*)
+FROM metadata.ducklake_data_file df
+JOIN metadata.ducklake_file_partition_value pv USING (data_file_id, table_id)
+WHERE df.end_snapshot IS NULL
+  AND df.table_id = (SELECT table_id FROM metadata.ducklake_table WHERE table_name = 'transformed_t')
+  AND pv.partition_key_index = 0
+GROUP BY partition_value
+ORDER BY partition_value
+----
+2024	1
+2025	1

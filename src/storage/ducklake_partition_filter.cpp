@@ -122,4 +122,19 @@ bool DuckLakePartitionFilter::Matches(optional_idx file_partition_id,
 	return true;
 }
 
+bool DuckLakePartitionFilter::Matches(optional_idx file_partition_id, const vector<Value> &file_values) const {
+	if (partition_id.IsValid() && file_partition_id.IsValid() && partition_id != file_partition_id) {
+		return false;
+	}
+	for (auto &entry : values) {
+		if (entry.partition_key_index >= file_values.size()) {
+			return false;
+		}
+		if (!PartitionValueMatches(entry.value, file_values[entry.partition_key_index])) {
+			return false;
+		}
+	}
+	return true;
+}
+
 } // namespace duckdb

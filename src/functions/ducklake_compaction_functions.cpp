@@ -190,15 +190,17 @@ string DuckLakeCompaction::GetName() const {
 }
 
 DuckLakeCompactor::DuckLakeCompactor(ClientContext &context, DuckLakeCatalog &catalog, DuckLakeTransaction &transaction,
-                                     Binder &binder, TableIndex table_id, DuckLakeMergeAdjacentOptions options)
+                                     Binder &binder, TableIndex table_id, DuckLakeMergeAdjacentOptions options,
+                                     optional_ptr<const DuckLakePartitionFilter> partition_filter)
     : context(context), catalog(catalog), transaction(transaction), binder(binder), table_id(table_id),
-      options(options), type(CompactionType::MERGE_ADJACENT_TABLES) {
+      options(options), partition_filter(partition_filter), type(CompactionType::MERGE_ADJACENT_TABLES) {
 }
 
 DuckLakeCompactor::DuckLakeCompactor(ClientContext &context, DuckLakeCatalog &catalog, DuckLakeTransaction &transaction,
-                                     Binder &binder, TableIndex table_id, double delete_threshold_p)
+                                     Binder &binder, TableIndex table_id, double delete_threshold_p,
+                                     optional_ptr<const DuckLakePartitionFilter> partition_filter)
     : context(context), catalog(catalog), transaction(transaction), binder(binder), table_id(table_id),
-      delete_threshold(delete_threshold_p), type(CompactionType::REWRITE_DELETES) {
+      delete_threshold(delete_threshold_p), partition_filter(partition_filter), type(CompactionType::REWRITE_DELETES) {
 }
 
 struct DuckLakeCompactionCandidates {
@@ -274,6 +276,10 @@ void DuckLakeCompactor::GenerateCompactions(DuckLakeTableEntry &table,
 	compaction_map_t<DuckLakeCompactionCandidates> candidates;
 	for (idx_t file_idx = 0; file_idx < files.size(); file_idx++) {
 		auto &candidate = files[file_idx];
+		if (partition_filter &&
+		    !partition_filter->Matches(candidate.file.partition_id, candidate.file.partition_values)) {
+			continue;
+		}
 		if (candidate.file.data.file_size_bytes >= target_file_size && type != CompactionType::REWRITE_DELETES) {
 			// this file by itself exceeds the threshold - skip merging
 			// (does not apply to REWRITE_DELETES - delete files must be rewritten regardless of data file size)
@@ -706,6 +712,7 @@ static void GenerateCompaction(ClientContext &context, DuckLakeTransaction &tran
                                DuckLakeCatalog &ducklake_catalog, TableFunctionBindInput &input,
                                DuckLakeTableEntry &cur_table, CompactionType type, double delete_threshold,
                                uint64_t max_files, optional_idx min_file_size, optional_idx max_file_size,
+                               optional_ptr<const DuckLakePartitionFilter> partition_filter,
                                vector<unique_ptr<LogicalOperator>> &compactions) {
 	switch (type) {
 	case CompactionType::MERGE_ADJACENT_TABLES: {
@@ -714,13 +721,13 @@ static void GenerateCompaction(ClientContext &context, DuckLakeTransaction &tran
 		options.min_file_size = min_file_size;
 		options.max_file_size = max_file_size;
 		DuckLakeCompactor compactor(context, ducklake_catalog, transaction, *input.binder, cur_table.GetTableId(),
-		                            options);
+		                            options, partition_filter);
 		compactor.GenerateCompactions(cur_table, compactions);
 		break;
 	}
 	case CompactionType::REWRITE_DELETES: {
 		DuckLakeCompactor compactor(context, ducklake_catalog, transaction, *input.binder, cur_table.GetTableId(),
-		                            delete_threshold);
+		                            delete_threshold, partition_filter);
 		compactor.GenerateCompactions(cur_table, compactions);
 		break;
 	}
@@ -806,7 +813,8 @@ unique_ptr<LogicalOperator> BindCompaction(ClientContext &context, TableFunction
 					                                             cur_table.GetTableId(), "true") == "true") {
 						auto delete_threshold = GetDeleteThreshold(&dl_cur_schema, cur_table, ducklake_catalog, input);
 						GenerateCompaction(context, transaction, ducklake_catalog, input, cur_table, type,
-						                   delete_threshold, max_files, min_file_size, max_file_size, compactions);
+						                   delete_threshold, max_files, min_file_size, max_file_size, nullptr,
+						                   compactions);
 					}
 				}
 			});
@@ -837,10 +845,17 @@ unique_ptr<LogicalOperator> BindCompaction(ClientContext &context, TableFunction
 		    ducklake_catalog.GetConfigOption<string>("auto_compact", {}, ducklake_table.GetTableId(), "true") == "true";
 	}
 
+	unique_ptr<DuckLakePartitionFilter> partition_filter;
+	auto partition_values_entry = input.named_parameters.find("partition_values");
+	if (partition_values_entry != input.named_parameters.end()) {
+		partition_filter = make_uniq<DuckLakePartitionFilter>(
+		    DuckLakePartitionFilter::Parse(ducklake_table, partition_values_entry->second));
+	}
+
 	if (auto_compact) {
 		auto delete_threshold = GetDeleteThreshold(dl_schema, ducklake_table, ducklake_catalog, input);
 		GenerateCompaction(context, transaction, ducklake_catalog, input, ducklake_table, type, delete_threshold,
-		                   max_files, min_file_size, max_file_size, compactions);
+		                   max_files, min_file_size, max_file_size, partition_filter.get(), compactions);
 	}
 
 	return GenerateCompactionOperator(input, bind_index, compactions);
@@ -866,6 +881,7 @@ TableFunctionSet DuckLakeMergeAdjacentFilesFunction::GetFunctions() {
 		function.named_parameters["max_compacted_files"] = LogicalType::UBIGINT;
 		if (type.size() == 2) {
 			function.named_parameters["schema"] = LogicalType::VARCHAR;
+			function.named_parameters["partition_values"] = LogicalType::ANY;
 		}
 		set.AddFunction(function);
 	}
@@ -890,6 +906,7 @@ TableFunctionSet DuckLakeRewriteDataFilesFunction::GetFunctions() {
 		function.named_parameters["delete_threshold"] = LogicalType::DOUBLE;
 		if (type.size() == 2) {
 			function.named_parameters["schema"] = LogicalType::VARCHAR;
+			function.named_parameters["partition_values"] = LogicalType::ANY;
 		}
 		set.AddFunction(function);
 	}

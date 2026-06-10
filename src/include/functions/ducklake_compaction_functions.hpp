@@ -20,6 +20,7 @@
 #include "duckdb/planner/operator/logical_extension_operator.hpp"
 #include "duckdb/planner/operator/logical_set_operation.hpp"
 #include "storage/ducklake_compaction.hpp"
+#include "storage/ducklake_partition_filter.hpp"
 #include "duckdb/common/multi_file/multi_file_function.hpp"
 #include "storage/ducklake_multi_file_list.hpp"
 #include "duckdb/planner/tableref/bound_at_clause.hpp"
@@ -83,9 +84,11 @@ public:
 class DuckLakeCompactor {
 public:
 	DuckLakeCompactor(ClientContext &context, DuckLakeCatalog &catalog, DuckLakeTransaction &transaction,
-	                  Binder &binder, TableIndex table_id, DuckLakeMergeAdjacentOptions options);
+	                  Binder &binder, TableIndex table_id, DuckLakeMergeAdjacentOptions options,
+	                  optional_ptr<const DuckLakePartitionFilter> partition_filter);
 	DuckLakeCompactor(ClientContext &context, DuckLakeCatalog &catalog, DuckLakeTransaction &transaction,
-	                  Binder &binder, TableIndex table_id, double delete_threshold);
+	                  Binder &binder, TableIndex table_id, double delete_threshold,
+	                  optional_ptr<const DuckLakePartitionFilter> partition_filter);
 	void GenerateCompactions(DuckLakeTableEntry &table, vector<unique_ptr<LogicalOperator>> &compactions);
 	unique_ptr<LogicalOperator> GenerateCompactionCommand(vector<DuckLakeCompactionFileEntry> source_files);
 	static unique_ptr<LogicalOperator> InsertSort(Binder &binder, unique_ptr<LogicalOperator> &plan,
@@ -103,6 +106,7 @@ private:
 	TableIndex table_id;
 	double delete_threshold = 0.95;
 	DuckLakeMergeAdjacentOptions options;
+	optional_ptr<const DuckLakePartitionFilter> partition_filter;
 
 	CompactionType type;
 };
