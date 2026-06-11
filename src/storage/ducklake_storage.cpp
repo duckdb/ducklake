@@ -54,8 +54,6 @@ static void HandleDuckLakeOption(DuckLakeOptions &options, const string &option,
 		options.create_if_not_exists = BooleanValue::Get(value.DefaultCastAs(LogicalType::BOOLEAN));
 	} else if (lcase == "automatic_migration") {
 		options.automatic_migration = BooleanValue::Get(value.DefaultCastAs(LogicalType::BOOLEAN));
-	} else if (lcase == "hide_metadata_catalog") {
-		options.hide_metadata_catalog = BooleanValue::Get(value.DefaultCastAs(LogicalType::BOOLEAN));
 	} else if (lcase == "busy_timeout") {
 		options.busy_timeout = UBigIntValue::Get(value.DefaultCastAs(LogicalType::UBIGINT));
 	} else {
@@ -105,6 +103,7 @@ static unique_ptr<Catalog> DuckLakeAttach(optional_ptr<StorageExtensionInfo> sto
 	if (options.access_mode == AccessMode::READ_ONLY && !is_create_if_not_exists_set) {
 		options.create_if_not_exists = false;
 	}
+	options.hide_metadata_catalog = options.metadata_database.empty();
 	if (options.metadata_database.empty()) {
 		options.metadata_database = "__ducklake_metadata_" + name;
 	}
