@@ -723,6 +723,12 @@
         "test/sql/quack_active_connections.test",
         "test/sql/copy/csv/test_csv_httpfs.test"
       ]
+    },
+    {
+      "reason": "duckdb's CONNECT-over-quack test targets duckdb's older quack pin ",
+      "paths": [
+        "test/sql/connect/connect_quack.test"
+      ]
     }
   ]
 }
