@@ -147,7 +147,8 @@ void DuckLakeInitializer::InitializeDataPath() {
 
 void DuckLakeInitializer::InitializeNewDuckLake(DuckLakeTransaction &transaction, bool has_explicit_schema) {
 	if (options.data_path.empty()) {
-		auto &metadata_catalog = Catalog::GetCatalog(*transaction.GetConnection().context, options.metadata_database);
+		auto &metadata_catalog =
+		    Catalog::GetCatalog(*transaction.GetConnection().context, Identifier(options.metadata_database));
 		if (!metadata_catalog.IsDuckCatalog()) {
 			throw InvalidInputException(
 			    "Attempting to create a new ducklake instance but data_path is not set - set the "

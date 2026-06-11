@@ -258,9 +258,9 @@ DuckLakeFunctionInfo::DuckLakeFunctionInfo(DuckLakeTableEntry &table, DuckLakeTr
 shared_ptr<DuckLakeFunctionInfo>
 DuckLakeFunctionInfo::Create(DuckLakeTableEntry &table, DuckLakeTransaction &transaction, DuckLakeSnapshot snapshot) {
 	auto result = make_shared_ptr<DuckLakeFunctionInfo>(table, transaction, snapshot);
-	result->table_name = table.name;
+	result->table_name = table.name.GetIdentifierName();
 	for (auto &col : table.GetColumns().Logical()) {
-		result->column_names.push_back(col.Name());
+		result->column_names.push_back(col.Name().GetIdentifierName());
 		result->column_types.push_back(col.Type());
 	}
 	result->table_id = table.GetTableId();
@@ -319,11 +319,12 @@ unique_ptr<FunctionData> DuckLakeScanDeserialize(Deserializer &deserializer, Tab
 	}
 
 	// Look up the DuckLake catalog and table
-	auto &catalog = Catalog::GetCatalog(context, catalog_name);
+	auto &catalog = Catalog::GetCatalog(context, Identifier(catalog_name));
 	auto &transaction = DuckLakeTransaction::Get(context, catalog);
 
-	auto &table_entry =
-	    Catalog::GetEntry<TableCatalogEntry>(context, catalog_name, schema_name, table_name).Cast<DuckLakeTableEntry>();
+	auto &table_entry = Catalog::GetEntry<TableCatalogEntry>(context, Identifier(catalog_name),
+	                                                          Identifier(schema_name), Identifier(table_name))
+	                        .Cast<DuckLakeTableEntry>();
 
 	function.function_info = DuckLakeFunctionInfo::Create(table_entry, transaction, snapshot);
 	auto &func_info = function.function_info->Cast<DuckLakeFunctionInfo>();

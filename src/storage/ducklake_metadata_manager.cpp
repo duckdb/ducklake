@@ -116,7 +116,7 @@ bool DuckLakeMetadataManager::SupportsInliningColumns(const vector<DuckLakeColum
 bool DuckLakeMetadataManager::CanInlineColumns(const ColumnList &columns) {
 	auto max_identifier_length = MaxIdentifierLength();
 	for (auto &col : columns.Logical()) {
-		if (DuckLakeUtil::IsInlinedSystemColumn(col.Name())) {
+		if (DuckLakeUtil::IsInlinedSystemColumn(col.Name().GetIdentifierName())) {
 			return false;
 		}
 		if (col.Name().size() > max_identifier_length) {
@@ -3640,10 +3640,13 @@ string DuckLakeMetadataManager::WriteNewDataFilesWithAppender(DuckLakeSnapshot &
 	}
 
 	// Create appenders for each table
-	Appender data_file_appender(connection, db_name, schema_name, "ducklake_data_file");
-	Appender column_stats_appender(connection, db_name, schema_name, "ducklake_file_column_stats");
-	Appender partition_value_appender(connection, db_name, schema_name, "ducklake_file_partition_value");
-	Appender variant_stats_appender(connection, db_name, schema_name, "ducklake_file_variant_stats");
+	Appender data_file_appender(connection, Identifier(db_name), Identifier(schema_name), "ducklake_data_file");
+	Appender column_stats_appender(connection, Identifier(db_name), Identifier(schema_name),
+	                               "ducklake_file_column_stats");
+	Appender partition_value_appender(connection, Identifier(db_name), Identifier(schema_name),
+	                                  "ducklake_file_partition_value");
+	Appender variant_stats_appender(connection, Identifier(db_name), Identifier(schema_name),
+	                                "ducklake_file_variant_stats");
 
 	bool write_row_group_count = catalog.SupportsRowGroupCount();
 	for (auto &file : new_files) {
@@ -4792,7 +4795,7 @@ vector<DuckLakeFileForCleanup> DuckLakeMetadataManager::GetOrphanFilesForCleanup
 	};
 
 	try {
-		Appender appender(transaction.GetConnection(), temp_table);
+		Appender appender(transaction.GetConnection(), Identifier(temp_table));
 		for (auto &known_file : known_files) {
 			appender.AppendRow(known_file.c_str());
 		}

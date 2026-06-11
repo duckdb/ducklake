@@ -757,13 +757,16 @@ DuckLakeCommitContext DuckLakeServerSideCommit::BuildContext(idx_t &committed_sn
 	};
 	ctx.get_net_data_file_row_count = [this](TableIndex table_id) -> idx_t {
 		// The inlined-file-deletion table is deterministically named but created lazily.
-		// Probe its existence; if absent, the SQL omits the inlined-deletion subterm.
+		// Probe its existence via the catalog (an erroring probe would abort the transaction);
+		// if absent, the SQL omits the inlined-deletion subterm.
 		auto inlined_deletion_table = DuckLakeMetadataManager::InlinedFileDeletionTableName(table_id);
 		auto probe_sql = SubstitutePlaceholders(
-		    StringUtil::Format("SELECT 1 FROM {METADATA_CATALOG}.%s LIMIT 0", inlined_deletion_table),
+		    StringUtil::Format("SELECT 1 FROM duckdb_tables() WHERE database_name = current_database() AND "
+		                       "schema_name = {METADATA_SCHEMA_NAME_LITERAL} AND table_name = %s",
+		                       DuckLakeUtil::SQLLiteralToString(inlined_deletion_table)),
 		    transaction_snapshot);
 		auto probe = fresh_conn.Query(probe_sql);
-		if (!probe || probe->HasError()) {
+		if (!probe || probe->HasError() || probe->RowCount() == 0) {
 			inlined_deletion_table.clear();
 		}
 		auto sql = SubstitutePlaceholders(
@@ -820,7 +823,7 @@ unique_ptr<MaterializedQueryResult> DuckLakeServerSideCommit::ScanStagedTable(Du
 	string table_name = DuckLakeStagedTable::BaseName(kind);
 	auto &temp_catalog = Catalog::GetCatalog(context, TEMP_CATALOG);
 	auto &table_entry =
-	    temp_catalog.GetEntry<TableCatalogEntry>(context, DEFAULT_SCHEMA, table_name).Cast<DuckTableEntry>();
+	    temp_catalog.GetEntry<TableCatalogEntry>(context, DEFAULT_SCHEMA, Identifier(table_name)).Cast<DuckTableEntry>();
 	auto &storage = table_entry.GetStorage();
 
 	auto types = storage.GetTypes();
@@ -828,7 +831,7 @@ unique_ptr<MaterializedQueryResult> DuckLakeServerSideCommit::ScanStagedTable(Du
 	vector<string> names;
 	vector<StorageIndex> column_ids;
 	for (idx_t i = 0; i < columns.size(); i++) {
-		names.push_back(columns[i].Name());
+		names.push_back(columns[i].Name().GetIdentifierName());
 		column_ids.emplace_back(i);
 	}
 

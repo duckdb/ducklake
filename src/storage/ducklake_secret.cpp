@@ -10,7 +10,7 @@ unique_ptr<BaseSecret> DuckLakeSecret::CreateDuckLakeSecretFunction(ClientContex
 		throw InvalidInputException("metadata_path must be defined when creating a DuckLake secret");
 	}
 	for (const auto &named_param : input.options) {
-		result->secret_map[named_param.first] = named_param.second;
+		result->secret_map[Identifier(named_param.first)] = named_param.second;
 	}
 	return std::move(result);
 }

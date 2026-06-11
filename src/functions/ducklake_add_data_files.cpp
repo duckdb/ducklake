@@ -43,7 +43,8 @@ static unique_ptr<FunctionData> DuckLakeAddDataFilesBind(ClientContext &context,
 	const auto table_name = StringValue::Get(input.inputs[1]);
 
 	auto entry =
-	    catalog.GetEntry<TableCatalogEntry>(context, schema_name, table_name, OnEntryNotFound::THROW_EXCEPTION);
+	    catalog.GetEntry<TableCatalogEntry>(context, Identifier(schema_name), Identifier(table_name),
+	                                        OnEntryNotFound::THROW_EXCEPTION);
 	auto &table = entry->Cast<DuckLakeTableEntry>();
 
 	auto result = make_uniq<DuckLakeAddDataFilesData>(catalog, table);
@@ -62,7 +63,7 @@ static unique_ptr<FunctionData> DuckLakeAddDataFilesBind(ClientContext &context,
 		throw InvalidInputException("File list must be a string or a list of strings");
 	}
 	for (auto &entry : input.named_parameters) {
-		auto lower = StringUtil::Lower(entry.first);
+		auto lower = StringUtil::Lower(entry.first.GetIdentifierName());
 		if (lower == "allow_missing") {
 			result->allow_missing = BooleanValue::Get(entry.second);
 		} else if (lower == "ignore_extra_columns") {
@@ -670,7 +671,8 @@ bool DuckLakeParquetTypeChecker::CheckTypes(const vector<LogicalType> &types) {
 void DuckLakeParquetTypeChecker::Fail() {
 	string error_message =
 	    StringUtil::Format("Failed to map column \"%s%s\" from file \"%s\" to the column in table \"%s\"",
-	                       prefix.empty() ? prefix : prefix + ".", column.name, file_metadata.filename, table.name);
+	                       prefix.empty() ? prefix : prefix + ".", column.name, file_metadata.filename,
+	                       table.name.GetIdentifierName());
 	for (auto &failure : failures) {
 		error_message += "\n* " + failure;
 	}
@@ -1112,7 +1114,7 @@ DuckLakeFileProcessor::MapColumns(ParquetFileMetadata &file_metadata,
 			throw InvalidInputException("Column \"%s%s\" exists in file \"%s\" but was not found in table \"%s\"\n* "
 			                            "Set ignore_extra_columns => true to add the file anyway",
 			                            prefix.empty() ? prefix : prefix + ".", col->name, file_metadata.filename,
-			                            table.name);
+			                            table.name.GetIdentifierName());
 		}
 		auto hive_entry = hive_partitions.find(col->name);
 		if (hive_entry != hive_partitions.end()) {
@@ -1140,7 +1142,8 @@ DuckLakeFileProcessor::MapColumns(ParquetFileMetadata &file_metadata,
 			throw InvalidInputException(
 			    "Column \"%s%s\" exists in table \"%s\" but was not found in file \"%s\"\n* Set "
 			    "allow_missing => true to allow missing fields and columns",
-			    prefix.empty() ? prefix : prefix + ".", entry.second.get().Name(), table.name, file_metadata.filename);
+			    prefix.empty() ? prefix : prefix + ".", entry.second.get().Name(), table.name.GetIdentifierName(),
+			    file_metadata.filename);
 		}
 	}
 	return column_maps;

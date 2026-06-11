@@ -212,7 +212,7 @@ string DuckLakeUpdate::GetName() const {
 
 InsertionOrderPreservingMap<string> DuckLakeUpdate::ParamsToString() const {
 	InsertionOrderPreservingMap<string> result;
-	result["Table Name"] = table.name;
+	result["Table Name"] = table.name.GetIdentifierName();
 	return result;
 }
 
