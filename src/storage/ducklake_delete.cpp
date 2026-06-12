@@ -1,5 +1,7 @@
 #include "storage/ducklake_catalog.hpp"
 #include "storage/ducklake_deletion_vector.hpp"
+#include "storage/ducklake_puffin.hpp"
+#include "duckdb/common/map.hpp"
 #include "duckdb/planner/operator/logical_delete.hpp"
 #include "duckdb/planner/operator/logical_get.hpp"
 #include "duckdb/common/multi_file/multi_file_function.hpp"
@@ -156,31 +158,66 @@ DuckLakeDeleteFile DuckLakeDeleteFileWriter::WriteDeleteFileWithSnapshots(Client
 	return WriteDeleteFileInternal(context, input);
 }
 
-DuckLakeDeleteFile DuckLakeDeleteFileWriter::WriteDeletionVectorFile(ClientContext &context,
-                                                                     WriteDeleteFileInput &input) {
+template <typename InputType>
+static DuckLakeDeleteFile WritePuffinDeleteFile(InputType &input, const vector<DuckLakePuffinWriter::BlobInput> &blobs) {
 	auto delete_file_uuid = "ducklake-" + input.transaction.GenerateUUID() + "-delete.puffin";
 	string delete_file_path = DuckLakeUtil::JoinPath(input.fs, input.data_path, delete_file_uuid);
 
-	// Serialize positions to puffin blob
-	auto blob_data = DuckLakeDeletionVectorData::ToBlob(input.positions);
-
-	// Write blob to file
-	auto &fs = FileSystem::GetFileSystem(context);
-	DuckLakeUtil::EnsureDirectoryExists(fs, input.data_path);
-	auto file_handle =
-	    fs.OpenFile(delete_file_path, FileOpenFlags::FILE_FLAGS_WRITE | FileOpenFlags::FILE_FLAGS_FILE_CREATE);
-	file_handle->Write(blob_data.data(), blob_data.size());
-	file_handle->Close();
+	DuckLakeUtil::EnsureDirectoryExists(input.fs, input.data_path);
+	auto result = DuckLakePuffinWriter::Write(input.fs, delete_file_path, input.data_file_path, blobs);
 
 	DuckLakeDeleteFile delete_file;
 	delete_file.data_file_path = input.data_file_path;
 	delete_file.file_name = delete_file_path;
 	delete_file.format = DeleteFileFormat::PUFFIN;
-	delete_file.delete_count = input.positions.size();
-	delete_file.file_size_bytes = blob_data.size();
-	delete_file.footer_size = 0;
+	delete_file.delete_count = result.delete_count;
+	delete_file.file_size_bytes = result.file_size_bytes;
+	delete_file.footer_size = result.footer_size;
+	// puffin files are written in plaintext
 	delete_file.encryption_key = input.encryption_key;
 	delete_file.source = input.source;
+	return delete_file;
+}
+
+DuckLakeDeleteFile DuckLakeDeleteFileWriter::WriteDeletionVectorFile(ClientContext &context,
+                                                                     WriteDeleteFileInput &input) {
+	// single blob - its snapshot is the metadata begin_snapshot assigned at commit
+	vector<DuckLakePuffinWriter::BlobInput> blobs;
+	DuckLakePuffinWriter::BlobInput blob;
+	blob.positions = &input.positions;
+	blobs.push_back(blob);
+	return WritePuffinDeleteFile(input, blobs);
+}
+
+DuckLakeDeleteFile
+DuckLakeDeleteFileWriter::WriteDeletionVectorFileWithSnapshots(ClientContext &context,
+                                                               WriteDeleteFileWithSnapshotsInput &input) {
+	// group positions into per-snapshot deltas
+	map<idx_t, set<idx_t>> deltas;
+	for (auto &entry : input.positions) {
+		deltas[NumericCast<idx_t>(entry.snapshot_id)].insert(NumericCast<idx_t>(entry.position));
+	}
+	// one cumulative deletion vector per snapshot
+	vector<set<idx_t>> cumulative;
+	cumulative.reserve(deltas.size());
+	set<idx_t> running;
+	for (auto &entry : deltas) {
+		running.insert(entry.second.begin(), entry.second.end());
+		cumulative.push_back(running);
+	}
+	// snapshot ids are pre-commit values, matching the parquet writer
+	vector<DuckLakePuffinWriter::BlobInput> blobs;
+	idx_t blob_idx = 0;
+	for (auto &entry : deltas) {
+		DuckLakePuffinWriter::BlobInput blob;
+		blob.snapshot_id = entry.first;
+		blob.positions = &cumulative[blob_idx++];
+		blobs.push_back(blob);
+	}
+	auto delete_file = WritePuffinDeleteFile(input, blobs);
+	if (!deltas.empty()) {
+		delete_file.begin_snapshot = deltas.begin()->first;
+	}
 	return delete_file;
 }
 
