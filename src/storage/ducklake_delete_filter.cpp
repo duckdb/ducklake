@@ -1,6 +1,9 @@
 #include "storage/ducklake_delete_filter.hpp"
 #include "storage/ducklake_deletion_vector.hpp"
+#include "storage/ducklake_puffin.hpp"
 #include "common/parquet_file_scanner.hpp"
+#include "duckdb/common/algorithm.hpp"
+#include "duckdb/common/map.hpp"
 #include "duckdb/planner/filter/constant_filter.hpp"
 #include "duckdb/planner/table_filter.hpp"
 #include "duckdb/common/multi_file/multi_file_list.hpp"
@@ -110,23 +113,73 @@ idx_t DuckLakeDeleteFilter::Filter(row_t start_row_index, idx_t count, Selection
 }
 
 DeleteFileScanResult DuckLakeDeleteFilter::ScanDeletionVectorFile(ClientContext &context,
-                                                                  const DuckLakeFileData &delete_file) {
+                                                                  const DuckLakeFileData &delete_file,
+                                                                  optional_idx snapshot_filter_min,
+                                                                  optional_idx snapshot_filter_max) {
 	auto &fs = FileSystem::GetFileSystem(context);
 	auto file_handle = fs.OpenFile(delete_file.path, FileOpenFlags::FILE_FLAGS_READ);
-	auto file_size = file_handle->GetFileSize();
+	auto file_size = NumericCast<idx_t>(file_handle->GetFileSize());
 
 	auto buffer = make_unsafe_uniq_array<data_t>(file_size);
 	file_handle->Read(buffer.get(), file_size);
 
-	auto dv_data = DuckLakeDeletionVectorData::FromBlob(buffer.get(), file_size);
+	DuckLakePuffinReader reader(buffer.get(), file_size, delete_file.path);
+	auto &blobs = reader.Blobs();
+	if (blobs.empty()) {
+		throw InvalidInputException("Deletion vector file \"%s\" does not contain any deletion vectors",
+		                            delete_file.path);
+	}
+	idx_t snapshot_blob_count = 0;
+	for (auto &blob : blobs) {
+		if (blob.snapshot_id.IsValid()) {
+			snapshot_blob_count++;
+		}
+	}
 
 	DeleteFileScanResult result;
-	result.has_embedded_snapshots = false;
+	if (snapshot_blob_count == 0) {
+		result.has_embedded_snapshots = false;
+		set<idx_t> deleted_set;
+		for (auto &blob : blobs) {
+			reader.DecodeBlob(blob)->ToSet(deleted_set);
+		}
+		for (auto &pos : deleted_set) {
+			result.deleted_rows.push_back(pos);
+		}
+		return result;
+	}
+	if (snapshot_blob_count != blobs.size()) {
+		throw InvalidInputException(
+		    "Deletion vector file \"%s\" is corrupt - it mixes deletion vectors with and without a snapshot",
+		    delete_file.path);
+	}
 
-	set<idx_t> deleted_set;
-	dv_data->ToSet(deleted_set);
-	for (auto &pos : deleted_set) {
-		result.deleted_rows.push_back(pos);
+	// sort the blob metadata by ascending snapshot
+	auto sorted_blobs = blobs;
+	std::sort(sorted_blobs.begin(), sorted_blobs.end(), [](const DuckLakePuffinBlob &a, const DuckLakePuffinBlob &b) {
+		return a.snapshot_id.GetIndex() < b.snapshot_id.GetIndex();
+	});
+
+	map<idx_t, idx_t> position_to_snapshot;
+	for (auto &blob : sorted_blobs) {
+		auto snapshot_id = blob.snapshot_id.GetIndex();
+		if (snapshot_filter_max.IsValid() && snapshot_id > snapshot_filter_max.GetIndex()) {
+			break;
+		}
+		set<idx_t> positions;
+		reader.DecodeBlob(blob)->ToSet(positions);
+		for (auto &pos : positions) {
+			position_to_snapshot.emplace(pos, snapshot_id);
+		}
+	}
+
+	result.has_embedded_snapshots = true;
+	for (auto &entry : position_to_snapshot) {
+		if (snapshot_filter_min.IsValid() && entry.second < snapshot_filter_min.GetIndex()) {
+			continue;
+		}
+		result.deleted_rows.push_back(entry.first);
+		result.snapshot_ids.push_back(entry.second);
 	}
 	return result;
 }
@@ -136,7 +189,7 @@ DeleteFileScanResult DuckLakeDeleteFilter::ScanDeleteFile(ClientContext &context
                                                           optional_idx snapshot_filter_max) {
 	// Check if this is a puffin deletion vector file
 	if (delete_file.format == DeleteFileFormat::PUFFIN) {
-		return ScanDeletionVectorFile(context, delete_file);
+		return ScanDeletionVectorFile(context, delete_file, snapshot_filter_min, snapshot_filter_max);
 	}
 
 	// Set up custom MultiFileReader to avoid HEAD requests
