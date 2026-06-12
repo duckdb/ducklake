@@ -116,7 +116,7 @@ bool DuckLakeMetadataManager::SupportsInliningColumns(const vector<DuckLakeColum
 bool DuckLakeMetadataManager::CanInlineColumns(const ColumnList &columns) {
 	auto max_identifier_length = MaxIdentifierLength();
 	for (auto &col : columns.Logical()) {
-		if (DuckLakeUtil::IsInlinedSystemColumn(col.Name())) {
+		if (DuckLakeUtil::IsInlinedSystemColumn(col.Name().GetIdentifierName())) {
 			return false;
 		}
 		if (col.Name().size() > max_identifier_length) {
@@ -210,37 +210,93 @@ INSERT INTO {METADATA_CATALOG}.ducklake_schema VALUES (0, '%s'::UUID, 0, NULL, '
 	}
 }
 
+string DuckLakeMetadataManager::GetDataFileTableStatement() {
+	return "CREATE TABLE {METADATA_CATALOG}.ducklake_data_file(data_file_id BIGINT PRIMARY KEY, table_id BIGINT, "
+	       "begin_snapshot BIGINT, end_snapshot BIGINT, file_order BIGINT, path VARCHAR, path_is_relative BOOLEAN, "
+	       "file_format VARCHAR, record_count BIGINT, file_size_bytes BIGINT, footer_size BIGINT, row_id_start BIGINT, "
+	       "partition_id BIGINT, encryption_key VARCHAR,  mapping_id BIGINT, partial_max BIGINT);";
+}
+
+string DuckLakeMetadataManager::GetDeleteFileTableStatement() {
+	return "CREATE TABLE {METADATA_CATALOG}.ducklake_delete_file(delete_file_id BIGINT PRIMARY KEY, table_id BIGINT, "
+	       "begin_snapshot BIGINT, end_snapshot BIGINT, data_file_id BIGINT, path VARCHAR, path_is_relative BOOLEAN, "
+	       "format VARCHAR, delete_count BIGINT, file_size_bytes BIGINT, footer_size BIGINT, encryption_key VARCHAR, "
+	       "partial_max BIGINT);";
+}
+
 string DuckLakeMetadataManager::GetCreateTableStatements() {
-	return R"(
-CREATE TABLE {METADATA_CATALOG}.ducklake_metadata(key VARCHAR NOT NULL, value VARCHAR NOT NULL, scope VARCHAR, scope_id BIGINT);
-CREATE TABLE {METADATA_CATALOG}.ducklake_snapshot(snapshot_id BIGINT PRIMARY KEY, snapshot_time TIMESTAMPTZ, schema_version BIGINT, next_catalog_id BIGINT, next_file_id BIGINT);
-CREATE TABLE {METADATA_CATALOG}.ducklake_snapshot_changes(snapshot_id BIGINT PRIMARY KEY, changes_made VARCHAR, author VARCHAR, commit_message VARCHAR, commit_extra_info VARCHAR);
-CREATE TABLE {METADATA_CATALOG}.ducklake_schema(schema_id BIGINT PRIMARY KEY, schema_uuid UUID, begin_snapshot BIGINT, end_snapshot BIGINT, schema_name VARCHAR, path VARCHAR, path_is_relative BOOLEAN);
-CREATE TABLE {METADATA_CATALOG}.ducklake_table(table_id BIGINT, table_uuid UUID, begin_snapshot BIGINT, end_snapshot BIGINT, schema_id BIGINT, table_name VARCHAR, path VARCHAR, path_is_relative BOOLEAN);
-CREATE TABLE {METADATA_CATALOG}.ducklake_view(view_id BIGINT, view_uuid UUID, begin_snapshot BIGINT, end_snapshot BIGINT, schema_id BIGINT, view_name VARCHAR, dialect VARCHAR, sql VARCHAR, column_aliases VARCHAR);
-CREATE TABLE {METADATA_CATALOG}.ducklake_tag(object_id BIGINT, begin_snapshot BIGINT, end_snapshot BIGINT, key VARCHAR, value VARCHAR);
-CREATE TABLE {METADATA_CATALOG}.ducklake_column_tag(table_id BIGINT, column_id BIGINT, begin_snapshot BIGINT, end_snapshot BIGINT, key VARCHAR, value VARCHAR);
-CREATE TABLE {METADATA_CATALOG}.ducklake_data_file(data_file_id BIGINT PRIMARY KEY, table_id BIGINT, begin_snapshot BIGINT, end_snapshot BIGINT, file_order BIGINT, path VARCHAR, path_is_relative BOOLEAN, file_format VARCHAR, record_count BIGINT, file_size_bytes BIGINT, footer_size BIGINT, row_id_start BIGINT, partition_id BIGINT, encryption_key VARCHAR,  mapping_id BIGINT, partial_max BIGINT);
-CREATE TABLE {METADATA_CATALOG}.ducklake_file_column_stats(data_file_id BIGINT, table_id BIGINT, column_id BIGINT, column_size_bytes BIGINT, value_count BIGINT, null_count BIGINT, min_value VARCHAR, max_value VARCHAR, contains_nan BOOLEAN, extra_stats VARCHAR);
-CREATE TABLE {METADATA_CATALOG}.ducklake_file_variant_stats(data_file_id BIGINT, table_id BIGINT, column_id BIGINT, variant_path VARCHAR, shredded_type VARCHAR, column_size_bytes BIGINT, value_count BIGINT, null_count BIGINT, min_value VARCHAR, max_value VARCHAR, contains_nan BOOLEAN, extra_stats VARCHAR);
-CREATE TABLE {METADATA_CATALOG}.ducklake_delete_file(delete_file_id BIGINT PRIMARY KEY, table_id BIGINT, begin_snapshot BIGINT, end_snapshot BIGINT, data_file_id BIGINT, path VARCHAR, path_is_relative BOOLEAN, format VARCHAR, delete_count BIGINT, file_size_bytes BIGINT, footer_size BIGINT, encryption_key VARCHAR, partial_max BIGINT);
-CREATE TABLE {METADATA_CATALOG}.ducklake_column(column_id BIGINT, begin_snapshot BIGINT, end_snapshot BIGINT, table_id BIGINT, column_order BIGINT, column_name VARCHAR, column_type VARCHAR, initial_default VARCHAR, default_value VARCHAR, nulls_allowed BOOLEAN, parent_column BIGINT, default_value_type VARCHAR, default_value_dialect VARCHAR);
-CREATE TABLE {METADATA_CATALOG}.ducklake_table_stats(table_id BIGINT, record_count BIGINT, next_row_id BIGINT, file_size_bytes BIGINT);
-CREATE TABLE {METADATA_CATALOG}.ducklake_table_column_stats(table_id BIGINT, column_id BIGINT, contains_null BOOLEAN, contains_nan BOOLEAN, min_value VARCHAR, max_value VARCHAR, extra_stats VARCHAR);
-CREATE TABLE {METADATA_CATALOG}.ducklake_partition_info(partition_id BIGINT, table_id BIGINT, begin_snapshot BIGINT, end_snapshot BIGINT);
-CREATE TABLE {METADATA_CATALOG}.ducklake_partition_column(partition_id BIGINT, table_id BIGINT, partition_key_index BIGINT, column_id BIGINT, transform VARCHAR);
-CREATE TABLE {METADATA_CATALOG}.ducklake_file_partition_value(data_file_id BIGINT, table_id BIGINT, partition_key_index BIGINT, partition_value VARCHAR);
-CREATE TABLE {METADATA_CATALOG}.ducklake_files_scheduled_for_deletion(data_file_id BIGINT, path VARCHAR, path_is_relative BOOLEAN, schedule_start TIMESTAMPTZ);
-CREATE TABLE {METADATA_CATALOG}.ducklake_inlined_data_tables(table_id BIGINT, table_name VARCHAR, schema_version BIGINT);
-CREATE TABLE {METADATA_CATALOG}.ducklake_column_mapping(mapping_id BIGINT, table_id BIGINT, type VARCHAR);
-CREATE TABLE {METADATA_CATALOG}.ducklake_name_mapping(mapping_id BIGINT, column_id BIGINT, source_name VARCHAR, target_field_id BIGINT, parent_column BIGINT, is_partition BOOLEAN);
-CREATE TABLE {METADATA_CATALOG}.ducklake_schema_versions(begin_snapshot BIGINT, schema_version BIGINT, table_id BIGINT);
-CREATE TABLE {METADATA_CATALOG}.ducklake_macro(schema_id BIGINT, macro_id BIGINT, macro_name VARCHAR, begin_snapshot BIGINT, end_snapshot BIGINT);
-CREATE TABLE {METADATA_CATALOG}.ducklake_macro_impl(macro_id BIGINT, impl_id BIGINT, dialect VARCHAR, sql VARCHAR, type VARCHAR);
-CREATE TABLE {METADATA_CATALOG}.ducklake_macro_parameters(macro_id BIGINT, impl_id BIGINT,column_id BIGINT, parameter_name VARCHAR, parameter_type VARCHAR, default_value VARCHAR, default_value_type VARCHAR);
-CREATE TABLE {METADATA_CATALOG}.ducklake_sort_info(sort_id BIGINT, table_id BIGINT, begin_snapshot BIGINT, end_snapshot BIGINT);
-CREATE TABLE {METADATA_CATALOG}.ducklake_sort_expression(sort_id BIGINT, table_id BIGINT, sort_key_index BIGINT, expression VARCHAR, dialect VARCHAR, sort_direction VARCHAR, null_order VARCHAR);
-)";
+	vector<string> statements;
+	statements.push_back("CREATE TABLE {METADATA_CATALOG}.ducklake_metadata(key VARCHAR NOT NULL, value VARCHAR NOT "
+	                     "NULL, scope VARCHAR, scope_id BIGINT);");
+	statements.push_back(
+	    "CREATE TABLE {METADATA_CATALOG}.ducklake_snapshot(snapshot_id BIGINT PRIMARY KEY, snapshot_time TIMESTAMPTZ, "
+	    "schema_version BIGINT, next_catalog_id BIGINT, next_file_id BIGINT);");
+	statements.push_back("CREATE TABLE {METADATA_CATALOG}.ducklake_snapshot_changes(snapshot_id BIGINT PRIMARY KEY, "
+	                     "changes_made VARCHAR, author VARCHAR, commit_message VARCHAR, commit_extra_info VARCHAR);");
+	statements.push_back(
+	    "CREATE TABLE {METADATA_CATALOG}.ducklake_schema(schema_id BIGINT PRIMARY KEY, schema_uuid UUID, "
+	    "begin_snapshot BIGINT, end_snapshot BIGINT, schema_name VARCHAR, path VARCHAR, path_is_relative BOOLEAN);");
+	statements.push_back(
+	    "CREATE TABLE {METADATA_CATALOG}.ducklake_table(table_id BIGINT, table_uuid UUID, begin_snapshot BIGINT, "
+	    "end_snapshot BIGINT, schema_id BIGINT, table_name VARCHAR, path VARCHAR, path_is_relative BOOLEAN);");
+	statements.push_back("CREATE TABLE {METADATA_CATALOG}.ducklake_view(view_id BIGINT, view_uuid UUID, begin_snapshot "
+	                     "BIGINT, end_snapshot BIGINT, schema_id BIGINT, view_name VARCHAR, dialect VARCHAR, sql "
+	                     "VARCHAR, column_aliases VARCHAR);");
+	statements.push_back("CREATE TABLE {METADATA_CATALOG}.ducklake_tag(object_id BIGINT, begin_snapshot BIGINT, "
+	                     "end_snapshot BIGINT, key VARCHAR, value VARCHAR);");
+	statements.push_back("CREATE TABLE {METADATA_CATALOG}.ducklake_column_tag(table_id BIGINT, column_id BIGINT, "
+	                     "begin_snapshot BIGINT, end_snapshot BIGINT, key VARCHAR, value VARCHAR);");
+	statements.push_back(GetDataFileTableStatement());
+	statements.push_back("CREATE TABLE {METADATA_CATALOG}.ducklake_file_column_stats(data_file_id BIGINT, table_id "
+	                     "BIGINT, column_id BIGINT, column_size_bytes BIGINT, value_count BIGINT, null_count BIGINT, "
+	                     "min_value VARCHAR, max_value VARCHAR, contains_nan BOOLEAN, extra_stats VARCHAR);");
+	statements.push_back(
+	    "CREATE TABLE {METADATA_CATALOG}.ducklake_file_variant_stats(data_file_id BIGINT, table_id BIGINT, column_id "
+	    "BIGINT, variant_path VARCHAR, shredded_type VARCHAR, column_size_bytes BIGINT, value_count BIGINT, null_count "
+	    "BIGINT, min_value VARCHAR, max_value VARCHAR, contains_nan BOOLEAN, extra_stats VARCHAR);");
+	statements.push_back(GetDeleteFileTableStatement());
+	statements.push_back("CREATE TABLE {METADATA_CATALOG}.ducklake_column(column_id BIGINT, begin_snapshot BIGINT, "
+	                     "end_snapshot BIGINT, table_id BIGINT, column_order BIGINT, column_name VARCHAR, column_type "
+	                     "VARCHAR, initial_default VARCHAR, default_value VARCHAR, nulls_allowed BOOLEAN, "
+	                     "parent_column BIGINT, default_value_type VARCHAR, default_value_dialect VARCHAR);");
+	statements.push_back("CREATE TABLE {METADATA_CATALOG}.ducklake_table_stats(table_id BIGINT, record_count BIGINT, "
+	                     "next_row_id BIGINT, file_size_bytes BIGINT);");
+	statements.push_back(
+	    "CREATE TABLE {METADATA_CATALOG}.ducklake_table_column_stats(table_id BIGINT, column_id BIGINT, contains_null "
+	    "BOOLEAN, contains_nan BOOLEAN, min_value VARCHAR, max_value VARCHAR, extra_stats VARCHAR);");
+	statements.push_back("CREATE TABLE {METADATA_CATALOG}.ducklake_partition_info(partition_id BIGINT, table_id "
+	                     "BIGINT, begin_snapshot BIGINT, end_snapshot BIGINT);");
+	statements.push_back("CREATE TABLE {METADATA_CATALOG}.ducklake_partition_column(partition_id BIGINT, table_id "
+	                     "BIGINT, partition_key_index BIGINT, column_id BIGINT, transform VARCHAR);");
+	statements.push_back("CREATE TABLE {METADATA_CATALOG}.ducklake_file_partition_value(data_file_id BIGINT, table_id "
+	                     "BIGINT, partition_key_index BIGINT, partition_value VARCHAR);");
+	statements.push_back("CREATE TABLE {METADATA_CATALOG}.ducklake_files_scheduled_for_deletion(data_file_id BIGINT, "
+	                     "path VARCHAR, path_is_relative BOOLEAN, schedule_start TIMESTAMPTZ);");
+	statements.push_back("CREATE TABLE {METADATA_CATALOG}.ducklake_inlined_data_tables(table_id BIGINT, table_name "
+	                     "VARCHAR, schema_version BIGINT);");
+	statements.push_back(
+	    "CREATE TABLE {METADATA_CATALOG}.ducklake_column_mapping(mapping_id BIGINT, table_id BIGINT, type VARCHAR);");
+	statements.push_back("CREATE TABLE {METADATA_CATALOG}.ducklake_name_mapping(mapping_id BIGINT, column_id BIGINT, "
+	                     "source_name VARCHAR, target_field_id BIGINT, parent_column BIGINT, is_partition BOOLEAN);");
+	statements.push_back("CREATE TABLE {METADATA_CATALOG}.ducklake_schema_versions(begin_snapshot BIGINT, "
+	                     "schema_version BIGINT, table_id BIGINT);");
+	statements.push_back("CREATE TABLE {METADATA_CATALOG}.ducklake_macro(schema_id BIGINT, macro_id BIGINT, macro_name "
+	                     "VARCHAR, begin_snapshot BIGINT, end_snapshot BIGINT);");
+	statements.push_back("CREATE TABLE {METADATA_CATALOG}.ducklake_macro_impl(macro_id BIGINT, impl_id BIGINT, dialect "
+	                     "VARCHAR, sql VARCHAR, type VARCHAR);");
+	statements.push_back(
+	    "CREATE TABLE {METADATA_CATALOG}.ducklake_macro_parameters(macro_id BIGINT, impl_id BIGINT,column_id BIGINT, "
+	    "parameter_name VARCHAR, parameter_type VARCHAR, default_value VARCHAR, default_value_type VARCHAR);");
+	statements.push_back("CREATE TABLE {METADATA_CATALOG}.ducklake_sort_info(sort_id BIGINT, table_id BIGINT, "
+	                     "begin_snapshot BIGINT, end_snapshot BIGINT);");
+	statements.push_back(
+	    "CREATE TABLE {METADATA_CATALOG}.ducklake_sort_expression(sort_id BIGINT, table_id BIGINT, sort_key_index "
+	    "BIGINT, expression VARCHAR, dialect VARCHAR, sort_direction VARCHAR, null_order VARCHAR);");
+	string result = "\n";
+	for (auto &statement : statements) {
+		result += statement + "\n";
+	}
+	return result;
 }
 
 string DuckLakeMetadataManager::GetVersionString() {
@@ -366,13 +422,13 @@ UPDATE {METADATA_CATALOG}.ducklake_metadata SET value = '1.0' WHERE key = 'versi
 	}
 }
 
-void DuckLakeMetadataManager::MigrateV10() {
-	auto result = transaction.Query(R"(
+void DuckLakeMetadataManager::MigrateV10(bool allow_failures) {
+	string migrate_query = R"(
+ALTER TABLE {METADATA_CATALOG}.ducklake_data_file ADD COLUMN {IF_NOT_EXISTS} row_group_count BIGINT;
+ALTER TABLE {METADATA_CATALOG}.ducklake_delete_file ADD COLUMN {IF_NOT_EXISTS} row_group_count BIGINT;
 UPDATE {METADATA_CATALOG}.ducklake_metadata SET value = '1.1-dev1' WHERE key = 'version';
-	)");
-	if (result->HasError()) {
-		result->GetErrorObject().Throw("Failed to migrate DuckLake from v1.0 to v1.1-dev1: ");
-	}
+	)";
+	ExecuteMigration(migrate_query, allow_failures, "1.0", "1.1-dev1");
 }
 
 DuckLakeMetadata DuckLakeMetadataManager::LoadDuckLake() {
@@ -1263,7 +1319,8 @@ string DuckLakeMetadataManager::GenerateFilterFromExpression(const Expression &e
 			return string();
 		case LogicalTypeId::FLOAT:
 		case LogicalTypeId::DOUBLE:
-			return GenerateConstantFilterDouble(comparison_type, constant_expr->GetValue(), target_type, referenced_stats);
+			return GenerateConstantFilterDouble(comparison_type, constant_expr->GetValue(), target_type,
+			                                    referenced_stats);
 		default:
 			return GenerateConstantFilter(comparison_type, constant_expr->GetValue(), target_type, referenced_stats);
 		}
@@ -2904,8 +2961,9 @@ string DuckLakeMetadataManager::InlinedFileDeletionTableName(TableIndex table_id
 	return StringUtil::Format("ducklake_inlined_delete_%d", table_id.index);
 }
 
-string DuckLakeMetadataManager::WriteNewInlinedFileDeletesSql(const vector<DuckLakeInlinedFileDeletionInfo> &new_deletes,
-                                                             bool &created_new_table) {
+string
+DuckLakeMetadataManager::WriteNewInlinedFileDeletesSql(const vector<DuckLakeInlinedFileDeletionInfo> &new_deletes,
+                                                       bool &created_new_table) {
 	created_new_table = false;
 	string batch_queries;
 	if (new_deletes.empty()) {
@@ -3180,7 +3238,7 @@ ORDER BY row_id, begin_snapshot;)",
 }
 
 string DuckLakeMetadataManager::ReadInlinedDataAggregatesSql(const string &inlined_table_name,
-                                                              const string &select_list) {
+                                                             const string &select_list) {
 	return StringUtil::Format(R"(
 SELECT %s
 FROM {METADATA_CATALOG}.%s
@@ -3582,11 +3640,15 @@ string DuckLakeMetadataManager::WriteNewDataFilesWithAppender(DuckLakeSnapshot &
 	}
 
 	// Create appenders for each table
-	Appender data_file_appender(connection, db_name, schema_name, "ducklake_data_file");
-	Appender column_stats_appender(connection, db_name, schema_name, "ducklake_file_column_stats");
-	Appender partition_value_appender(connection, db_name, schema_name, "ducklake_file_partition_value");
-	Appender variant_stats_appender(connection, db_name, schema_name, "ducklake_file_variant_stats");
+	Appender data_file_appender(connection, Identifier(db_name), Identifier(schema_name), "ducklake_data_file");
+	Appender column_stats_appender(connection, Identifier(db_name), Identifier(schema_name),
+	                               "ducklake_file_column_stats");
+	Appender partition_value_appender(connection, Identifier(db_name), Identifier(schema_name),
+	                                  "ducklake_file_partition_value");
+	Appender variant_stats_appender(connection, Identifier(db_name), Identifier(schema_name),
+	                                "ducklake_file_variant_stats");
 
+	bool write_row_group_count = catalog.SupportsRowGroupCount();
 	for (auto &file : new_files) {
 		auto data_file_index = static_cast<int64_t>(file.id.index);
 		auto table_id = static_cast<int64_t>(file.table_id.index);
@@ -3598,7 +3660,7 @@ string DuckLakeMetadataManager::WriteNewDataFilesWithAppender(DuckLakeSnapshot &
 		// ducklake_data_file columns:
 		// data_file_id, table_id, begin_snapshot, end_snapshot, file_order, path, path_is_relative,
 		// file_format, record_count, file_size_bytes, footer_size, row_id_start, partition_id,
-		// encryption_key, mapping_id, partial_max
+		// encryption_key, mapping_id, partial_max, row_group_count (>= 1.1)
 		data_file_appender.BeginRow();
 		data_file_appender.Append<int64_t>(data_file_index);                            // data_file_id
 		data_file_appender.Append<int64_t>(table_id);                                   // table_id
@@ -3641,6 +3703,13 @@ string DuckLakeMetadataManager::WriteNewDataFilesWithAppender(DuckLakeSnapshot &
 			    static_cast<int64_t>(file.max_partial_file_snapshot.GetIndex())); // partial_max
 		} else {
 			data_file_appender.Append(Value());
+		}
+		if (write_row_group_count) {
+			if (file.row_group_count.IsValid()) {
+				data_file_appender.Append<int64_t>(static_cast<int64_t>(file.row_group_count.GetIndex()));
+			} else {
+				data_file_appender.Append(Value());
+			}
 		}
 		data_file_appender.EndRow();
 
@@ -3816,11 +3885,12 @@ string DuckLakeMetadataManager::WriteNewDataFiles(DuckLakeSnapshot &commit_snaps
 	for (auto &file : new_files) {
 		resolved_paths.push_back(GetRelativePath(file.table_id, file.file_name, new_tables, new_schemas_result));
 	}
-	return WriteNewDataFilesSqlBatch(new_files, resolved_paths);
+	return WriteNewDataFilesSqlBatch(new_files, resolved_paths, transaction.GetCatalog().SupportsRowGroupCount());
 }
 
 string DuckLakeMetadataManager::WriteNewDataFilesSqlBatch(const vector<DuckLakeFileInfo> &new_files,
-                                                          const vector<DuckLakePath> &resolved_paths) {
+                                                          const vector<DuckLakePath> &resolved_paths,
+                                                          bool write_row_group_count) {
 	if (new_files.empty()) {
 		return string();
 	}
@@ -3847,9 +3917,13 @@ string DuckLakeMetadataManager::WriteNewDataFilesSqlBatch(const vector<DuckLakeF
 		string footer_size = DuckLakeUtil::OptionalIdxOrNull(file.footer_size);
 		string mapping = DuckLakeUtil::MappingIdOrNull(file.mapping_id);
 		data_file_insert_query += StringUtil::Format(
-		    "(%d, %d, %s, NULL, NULL, %s, %s, 'parquet', %d, %d, %s, %s, %s, %s, %s, %s)", data_file_index, table_id,
+		    "(%d, %d, %s, NULL, NULL, %s, %s, 'parquet', %d, %d, %s, %s, %s, %s, %s, %s", data_file_index, table_id,
 		    begin_snapshot, SQLString(path.path), path.path_is_relative ? "true" : "false", file.row_count,
 		    file.file_size_bytes, footer_size, row_id, partition_id, encryption_key, mapping, partial_max);
+		if (write_row_group_count) {
+			data_file_insert_query += ", " + DuckLakeUtil::OptionalIdxOrNull(file.row_group_count);
+		}
+		data_file_insert_query += ")";
 		for (auto &raw_stats : file.column_stats) {
 			auto column_stats = DuckLakeColumnStatsInfo::FromColumnStats(raw_stats.first, raw_stats.second);
 			if (!column_stats_insert_query.empty()) {
@@ -3961,7 +4035,8 @@ WHERE delete_file_id IN (%s);
 }
 
 string DuckLakeMetadataManager::WriteNewDeleteFiles(const vector<DuckLakeDeleteFileInfo> &new_files,
-                                                    const vector<DuckLakePath> &resolved_paths) {
+                                                    const vector<DuckLakePath> &resolved_paths,
+                                                    bool write_row_group_count) {
 	if (new_files.empty()) {
 		return {};
 	}
@@ -3984,10 +4059,14 @@ string DuckLakeMetadataManager::WriteNewDeleteFiles(const vector<DuckLakeDeleteF
 		    file.begin_snapshot.IsValid() ? std::to_string(file.begin_snapshot.GetIndex()) : "{SNAPSHOT_ID}";
 		string partial_max = DuckLakeUtil::OptionalIdxOrNull(file.max_snapshot);
 		delete_file_insert_query += StringUtil::Format(
-		    "(%d, %d, %s, NULL,  %d, %s, %s, %s, %d, %d, %d, %s, %s)", delete_file_index, table_id, begin_snapshot_str,
+		    "(%d, %d, %s, NULL,  %d, %s, %s, %s, %d, %d, %d, %s, %s", delete_file_index, table_id, begin_snapshot_str,
 		    data_file_index, SQLString(path.path), path.path_is_relative ? "true" : "false",
 		    SQLString(DeleteFileFormatToString(file.format)), file.delete_count, file.file_size_bytes, file.footer_size,
 		    encryption_key, partial_max);
+		if (write_row_group_count) {
+			delete_file_insert_query += ", " + DuckLakeUtil::OptionalIdxOrNull(file.row_group_count);
+		}
+		delete_file_insert_query += ")";
 	}
 
 	// insert the data files
@@ -4716,7 +4795,7 @@ vector<DuckLakeFileForCleanup> DuckLakeMetadataManager::GetOrphanFilesForCleanup
 	};
 
 	try {
-		Appender appender(transaction.GetConnection(), temp_table);
+		Appender appender(transaction.GetConnection(), Identifier(temp_table));
 		for (auto &known_file : known_files) {
 			appender.AppendRow(known_file.c_str());
 		}

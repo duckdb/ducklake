@@ -179,6 +179,8 @@ public:
 	virtual void InitializeDuckLake(bool has_explicit_schema, DuckLakeEncryption encryption);
 	//! Get the CREATE TABLE statements for all metadata tables
 	virtual string GetCreateTableStatements();
+	virtual string GetDataFileTableStatement();
+	virtual string GetDeleteFileTableStatement();
 	//! Get the version string written to ducklake_metadata
 	virtual string GetVersionString();
 	virtual DuckLakeMetadata LoadDuckLake();
@@ -273,7 +275,7 @@ public:
 	//! {METADATA_CATALOG} / {SNAPSHOT_ID} placeholders. Caller supplies resolved paths (one per file,
 	//! same order) since path policy differs across callers (schema-relative vs. always-absolute).
 	static string WriteNewDataFilesSqlBatch(const vector<DuckLakeFileInfo> &new_files,
-	                                        const vector<DuckLakePath> &resolved_paths);
+	                                        const vector<DuckLakePath> &resolved_paths, bool write_row_group_count);
 	//! Opt-in fast-path: if this backend supports the DuckDB Appender API, write the files directly
 	bool TryAppendDataFiles(DuckLakeSnapshot &commit_snapshot, const vector<DuckLakeFileInfo> &new_files,
 	                        const vector<DuckLakeTableInfo> &new_tables,
@@ -315,7 +317,7 @@ public:
 	                                           const vector<DuckLakePath> &resolved_paths);
 	//! Caller supplies one resolved path per new delete file, in the same order.
 	static string WriteNewDeleteFiles(const vector<DuckLakeDeleteFileInfo> &new_delete_files,
-	                                  const vector<DuckLakePath> &resolved_paths);
+	                                  const vector<DuckLakePath> &resolved_paths, bool write_row_group_count);
 	static string WriteNewMacros(const vector<DuckLakeMacroInfo> &new_macros);
 
 	virtual vector<DuckLakeColumnMappingInfo> GetColumnMappings(optional_idx start_from);
@@ -387,7 +389,7 @@ public:
 	virtual void MigrateV02(bool allow_failures = false);
 	virtual void MigrateV03(bool allow_failures = false);
 	virtual void MigrateV04();
-	virtual void MigrateV10();
+	virtual void MigrateV10(bool allow_failures = false);
 	virtual void ExecuteMigration(string migrate_query, bool allow_failures, const string &from_version,
 	                              const string &to_version);
 

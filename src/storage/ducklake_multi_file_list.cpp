@@ -57,7 +57,7 @@ void DuckLakeMultiFileList::AddFilterToPushdownInfo(FilterPushdownInfo &pushdown
 
 unique_ptr<MultiFileList>
 DuckLakeMultiFileList::DynamicFilterPushdown(ClientContext &context, const MultiFileOptions &options,
-                                             const vector<string> &names, const vector<LogicalType> &types,
+                                             const vector<Identifier> &names, const vector<LogicalType> &types,
                                              const vector<column_t> &column_ids, TableFilterSet &filters) const {
 	if (read_info.scan_type != DuckLakeScanType::SCAN_TABLE || !filters.HasFilters()) {
 		// filter pushdown is only supported when scanning full tables

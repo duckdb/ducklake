@@ -144,7 +144,7 @@
       ]
     },
     {
-      "reason": "FIXME: DETACH assertion" ,
+      "reason": "FIXME: DETACH assertion",
       "paths": [
         "test/sql/general/detach_ducklake.test"
       ]
@@ -217,6 +217,13 @@
       "reason": "FIXME: NotImplementedException: GetDBPath not implemented yet",
       "paths": [
         "test/sql/attach/attach_replace.test"
+      ]
+    },
+    {
+      "reason": "FIXME: server-side quack commits serialize, so concurrent commits never exhaust the client retry budget these tests assert on.",
+      "paths": [
+        "test/sql/retry/commit_failure.test",
+        "test/sql/settings/max_retry_count.test"
       ]
     }
   ]

@@ -69,7 +69,7 @@ bool DuckLakeInlinedDataReader::TryInitializeScan(ClientContext &context, Global
 					continue;
 				}
 			}
-			string projected_column = SQLIdentifier::ToString(columns[index].name);
+			string projected_column = SQLIdentifier::ToString(columns[index].name.GetIdentifierName());
 			auto &metadata_type = ducklake_catalog.MetadataType();
 			bool needs_cast = !metadata_type.empty() && metadata_type != "duckdb" && metadata_type != "quack" &&
 			                  metadata_type != "quack_scanner";

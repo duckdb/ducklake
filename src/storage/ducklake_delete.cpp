@@ -67,7 +67,7 @@ static DuckLakeDeleteFile WriteDeleteFileInternal(ClientContext &context, InputT
 	auto &copy_fun = DuckLakeFunctions::GetCopyFunction(input.context, "parquet");
 	CopyFunctionBindInput bind_input(*info);
 
-	vector<string> names_to_write {"file_path", "pos"};
+	vector<Identifier> names_to_write {"file_path", "pos"};
 	vector<LogicalType> types_to_write {LogicalType::VARCHAR, LogicalType::BIGINT};
 	if (with_snapshots) {
 		names_to_write.push_back("_ducklake_internal_snapshot_id");
@@ -139,6 +139,10 @@ static DuckLakeDeleteFile WriteDeleteFileInternal(ClientContext &context, InputT
 	delete_file.delete_count = stats.row_count;
 	delete_file.file_size_bytes = stats.file_size_bytes;
 	delete_file.footer_size = stats.footer_size_bytes.GetValue<idx_t>();
+	auto rg_entry = stats.extra_info.find("row_group_count");
+	if (rg_entry != stats.extra_info.end() && !rg_entry->second.IsNull()) {
+		delete_file.row_group_count = rg_entry->second.GetValue<idx_t>();
+	}
 	delete_file.encryption_key = input.encryption_key;
 	delete_file.source = input.source;
 	if (with_snapshots) {
@@ -628,7 +632,7 @@ string DuckLakeDelete::GetName() const {
 
 InsertionOrderPreservingMap<string> DuckLakeDelete::ParamsToString() const {
 	InsertionOrderPreservingMap<string> result;
-	result["Table Name"] = table.name;
+	result["Table Name"] = table.name.GetIdentifierName();
 	return result;
 }
 

@@ -118,6 +118,18 @@ void DuckLakeInsert::AddWrittenFiles(DuckLakeInsertGlobalState &global_state, Da
 		data_file.row_count = chunk.GetValue(1, r).GetValue<idx_t>();
 		data_file.file_size_bytes = chunk.GetValue(2, r).GetValue<idx_t>();
 		data_file.footer_size = chunk.GetValue(3, r).GetValue<idx_t>();
+		if (chunk.ColumnCount() > 6) {
+			auto extra_info = chunk.GetValue(6, r);
+			if (!extra_info.IsNull()) {
+				for (auto &extra_entry : MapValue::GetChildren(extra_info)) {
+					auto &entry_children = StructValue::GetChildren(extra_entry);
+					if (StringValue::Get(entry_children[0]) == "row_group_count" && !entry_children[1].IsNull()) {
+						data_file.row_group_count =
+						    entry_children[1].DefaultCastAs(LogicalType::UBIGINT).GetValue<idx_t>();
+					}
+				}
+			}
+		}
 		data_file.encryption_key = encryption_key;
 		if (partition_id.IsValid()) {
 			data_file.partition_id = partition_id.GetIndex();
@@ -259,7 +271,7 @@ string DuckLakeInsert::GetName() const {
 
 InsertionOrderPreservingMap<string> DuckLakeInsert::ParamsToString() const {
 	InsertionOrderPreservingMap<string> result;
-	result["Table Name"] = table ? table->name : info->Base().table;
+	result["Table Name"] = (table ? table->name : info->Base().table).GetIdentifierName();
 	return result;
 }
 
@@ -279,8 +291,8 @@ CopyFunctionCatalogEntry &DuckLakeFunctions::GetCopyFunction(ClientContext &cont
 	D_ASSERT(!name.empty());
 	auto &system_catalog = Catalog::GetSystemCatalog(db);
 
-	auto entry =
-	    system_catalog.GetEntry<CopyFunctionCatalogEntry>(context, DEFAULT_SCHEMA, name, OnEntryNotFound::RETURN_NULL);
+	auto entry = system_catalog.GetEntry<CopyFunctionCatalogEntry>(context, DEFAULT_SCHEMA, Identifier(name),
+	                                                               OnEntryNotFound::RETURN_NULL);
 	if (!entry) {
 		throw MissingExtensionException(
 		    "Could not load the copy function for \"%s\". Try explicitly loading the \"%s\" extension", name, name);
@@ -548,7 +560,8 @@ DuckLakeCopyOptions DuckLakeInsert::GetCopyOptions(ClientContext &context, DuckL
 		}
 	}
 
-	auto function_data = copy_fun.function.copy_to_bind(context, bind_input, names_to_write, casted_types);
+	auto function_data =
+	    copy_fun.function.copy_to_bind(context, bind_input, StringsToIdentifiers(names_to_write), casted_types);
 
 	DuckLakeCopyOptions result(std::move(info), copy_fun.function);
 	result.bind_data = std::move(function_data);
@@ -700,7 +713,7 @@ PhysicalOperator &DuckLakeInsert::PlanCopyForInsert(ClientContext &context, Phys
 	physical_copy.write_partition_columns = copy_options.write_partition_columns;
 	physical_copy.write_empty_file = copy_options.write_empty_file;
 	physical_copy.partition_columns = std::move(copy_options.partition_columns);
-	physical_copy.names = std::move(copy_options.names);
+	physical_copy.names = StringsToIdentifiers(copy_options.names);
 	physical_copy.expected_types = std::move(copy_options.expected_types);
 	physical_copy.parallel = true;
 	physical_copy.hive_file_pattern =
@@ -855,7 +868,7 @@ PhysicalOperator &DuckLakeCatalog::PlanCreateTableAs(ClientContext &context, Phy
 	}
 	auto table_uuid = duck_transaction.GenerateUUID();
 	auto table_data_path =
-	    duck_schema.DataPath() + DuckLakeCatalog::GeneratePathFromName(table_uuid, create_info.table);
+	    duck_schema.DataPath() + DuckLakeCatalog::GeneratePathFromName(table_uuid, create_info.table.GetIdentifierName());
 
 	DuckLakeCopyInput copy_input(context, duck_schema, columns, table_data_path);
 	auto &physical_copy = DuckLakeInsert::PlanCopyForInsert(context, planner, copy_input, root.get());

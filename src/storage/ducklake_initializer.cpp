@@ -14,6 +14,7 @@
 #include "metadata_manager/ducklake_metadata_manager_v1_1.hpp"
 #include "metadata_manager/sqlite_metadata_manager.hpp"
 #include "metadata_manager/postgres_metadata_manager.hpp"
+#include "metadata_manager/quack_metadata_manager.hpp"
 
 namespace duckdb {
 
@@ -146,7 +147,8 @@ void DuckLakeInitializer::InitializeDataPath() {
 
 void DuckLakeInitializer::InitializeNewDuckLake(DuckLakeTransaction &transaction, bool has_explicit_schema) {
 	if (options.data_path.empty()) {
-		auto &metadata_catalog = Catalog::GetCatalog(*transaction.GetConnection().context, options.metadata_database);
+		auto &metadata_catalog =
+		    Catalog::GetCatalog(*transaction.GetConnection().context, Identifier(options.metadata_database));
 		if (!metadata_catalog.IsDuckCatalog()) {
 			throw InvalidInputException(
 			    "Attempting to create a new ducklake instance but data_path is not set - set the "
@@ -214,6 +216,10 @@ void DuckLakeInitializer::LoadExistingDuckLake(DuckLakeTransaction &transaction)
 			if (catalog_version == DuckLakeVersion::V0_4) {
 				metadata_manager.MigrateV04();
 				catalog_version = DuckLakeVersion::V1_0;
+			}
+			if (catalog_version == DuckLakeVersion::V1_1_DEV_1 && options.automatic_migration) {
+				// dev schemas evolve in place
+				metadata_manager.MigrateV10(true);
 			}
 			if (catalog_version >= target_version) {
 				resolved_version = catalog_version;
@@ -287,6 +293,7 @@ DuckLakeVersion DuckLakeInitializer::ResolveTargetVersion(DuckLakeVersion catalo
 }
 
 void DuckLakeInitializer::SetVersionedMetadataManager(DuckLakeTransaction &transaction, DuckLakeVersion version) {
+	catalog.SetDuckLakeVersion(version);
 	if (version == DuckLakeVersion::V1_0) {
 		// base metadata managers are already V1.0, nop
 		return;
@@ -294,7 +301,9 @@ void DuckLakeInitializer::SetVersionedMetadataManager(DuckLakeTransaction &trans
 	auto &current = transaction.GetMetadataManager();
 	unique_ptr<DuckLakeMetadataManager> new_manager;
 	if (version == DuckLakeVersion::V1_1_DEV_1) {
-		if (dynamic_cast<PostgresMetadataManager *>(&current)) {
+		if (dynamic_cast<QuackMetadataManager *>(&current)) {
+			new_manager = make_uniq<DuckLakeMetadataManagerV1_1<QuackMetadataManager>>(transaction);
+		} else if (dynamic_cast<PostgresMetadataManager *>(&current)) {
 			new_manager = make_uniq<DuckLakeMetadataManagerV1_1<PostgresMetadataManager>>(transaction);
 		} else if (dynamic_cast<SQLiteMetadataManager *>(&current)) {
 			new_manager = make_uniq<DuckLakeMetadataManagerV1_1<SQLiteMetadataManager>>(transaction);

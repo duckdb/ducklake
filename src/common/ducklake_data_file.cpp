@@ -28,6 +28,7 @@ DuckLakeDataFile::DuckLakeDataFile(const DuckLakeDataFile &other) {
 	row_count = other.row_count;
 	file_size_bytes = other.file_size_bytes;
 	footer_size = other.footer_size;
+	row_group_count = other.row_group_count;
 	partition_id = other.partition_id;
 	delete_files = other.delete_files;
 	column_stats = other.column_stats;
@@ -45,6 +46,7 @@ DuckLakeDataFile &DuckLakeDataFile::operator=(const DuckLakeDataFile &other) {
 	row_count = other.row_count;
 	file_size_bytes = other.file_size_bytes;
 	footer_size = other.footer_size;
+	row_group_count = other.row_group_count;
 	partition_id = other.partition_id;
 	delete_files = other.delete_files;
 	column_stats = other.column_stats;

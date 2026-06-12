@@ -97,7 +97,7 @@ static unique_ptr<Catalog> DuckLakeAttach(optional_ptr<StorageExtensionInfo> sto
 		// if we have a secret - handle the options
 		const auto &kv_secret = dynamic_cast<const KeyValueSecret &>(*secret->secret);
 		for (auto &entry : kv_secret.secret_map) {
-			HandleDuckLakeOption(options, entry.first, entry.second);
+			HandleDuckLakeOption(options, entry.first.GetIdentifierName(), entry.second);
 		}
 	}
 	options.access_mode = attach_options.access_mode;

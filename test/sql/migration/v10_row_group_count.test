@@ -1,0 +1,86 @@
+# name: test/sql/migration/v10_row_group_count.test
+# description: data and delete files written under v1.0 keep a NULL row_group_count after migrating to v1.1
+# group: [migration]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/v10_row_group_count.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/v10_row_group_count_files', METADATA_CATALOG 'dl', DATA_INLINING_ROW_LIMIT 0, DUCKLAKE_VERSION '1.0')
+
+statement ok
+CALL ducklake.set_option('write_deletion_vectors', 'false')
+
+statement ok
+CREATE TABLE ducklake.test(i INTEGER);
+
+statement ok
+INSERT INTO ducklake.test FROM range(1000);
+
+query I
+DELETE FROM ducklake.test WHERE i < 100
+----
+100
+
+query I
+SELECT COUNT(*) FROM dl.ducklake_data_file
+----
+1
+
+query I
+SELECT COUNT(*) FROM dl.ducklake_delete_file
+----
+1
+
+statement ok
+DETACH ducklake
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/v10_row_group_count_files', METADATA_CATALOG 'dl', DATA_INLINING_ROW_LIMIT 0, AUTOMATIC_MIGRATION TRUE)
+
+# files that existed before the migration have NULL row_group_count
+query II
+SELECT record_count, row_group_count FROM dl.ducklake_data_file
+----
+1000	NULL
+
+query II
+SELECT delete_count, row_group_count FROM dl.ducklake_delete_file
+----
+100	NULL
+
+query I
+SELECT COUNT(*) FROM ducklake.test
+----
+900
+
+# files written after the migration get a row group count
+statement ok
+INSERT INTO ducklake.test FROM range(1000, 2000);
+
+query I
+DELETE FROM ducklake.test WHERE i >= 1900
+----
+100
+
+query II
+SELECT record_count, row_group_count FROM dl.ducklake_data_file ORDER BY data_file_id
+----
+1000	NULL
+1000	1
+
+query II
+SELECT delete_count, row_group_count FROM dl.ducklake_delete_file ORDER BY delete_file_id
+----
+100	NULL
+100	1
+
+query I
+SELECT COUNT(*) FROM ducklake.test
+----
+1800

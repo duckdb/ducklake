@@ -124,7 +124,7 @@ unique_ptr<GlobalTableFunctionState> DuckLakeOptionsInit(ClientContext &context,
 		option_info.scope = "SCHEMA";
 		auto schema_entry = ducklake_catalog.GetEntryById(transaction, snapshot, schema_setting.schema_id);
 		if (schema_entry) {
-			option_info.scope_entry = schema_entry->name;
+			option_info.scope_entry = schema_entry->name.GetIdentifierName();
 		}
 		result->options.push_back(std::move(option_info));
 	}
