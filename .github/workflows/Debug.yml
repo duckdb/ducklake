@@ -1,5 +1,8 @@
 name: Debug Mode Tests
-on: [push, pull_request,repository_dispatch]
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '0 2 * * *'
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}-${{ github.head_ref || '' }}-${{ github.base_ref || '' }}-${{ github.ref != 'refs/heads/main' || github.sha }}
   cancel-in-progress: true
@@ -24,6 +27,7 @@ jobs:
       GEN: Ninja
       VCPKG_TOOLCHAIN_PATH: ${{ github.workspace }}/vcpkg/scripts/buildsystems/vcpkg.cmake
       DISABLE_EXTENSIONS_FOR_TEST: ON
+      DUCKLAKE_CI: 1
 
     steps:
     - name: "node-cleanup"
@@ -66,5 +70,7 @@ jobs:
         make debug
 
     - name: Test extension
+      env:
+        DUCKDB_TPCH_ANSWERS_DIR: ${{ github.workspace }}/duckdb/extension/tpch/dbgen/answers
       run: |
         build/debug/test/unittest

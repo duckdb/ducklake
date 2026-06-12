@@ -1,0 +1,19 @@
+# name: test/sql/issues/options_unknown_metadata_key.test
+# description: ducklake_options() works on unknown ducklake_metadata keys
+# group: [issues]
+
+require ducklake
+
+require parquet
+
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/options_unknown_key.db' AS ducklake (DATA_PATH '{TEST_DIR}/options_unknown_key_files')
+
+statement ok
+INSERT INTO __ducklake_metadata_ducklake.ducklake_metadata (key, value) VALUES ('mykey', 'myvalue'), ('another_unknown', 'v2')
+
+query IIIII
+SELECT option_name, description, value, scope, scope_entry FROM ducklake.options() WHERE option_name IN ('mykey', 'another_unknown') ORDER BY option_name
+----
+another_unknown	NULL	v2	GLOBAL	NULL
+mykey	NULL	myvalue	GLOBAL	NULL

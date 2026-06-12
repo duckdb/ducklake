@@ -117,3 +117,109 @@ SELECT * FROM ducklake.test WHERE i=100
 
 statement ok
 ROLLBACK
+
+# tinyint
+statement ok
+CREATE TABLE ducklake.tinyints(d TINYINT);
+
+statement ok
+INSERT INTO ducklake.tinyints VALUES (10);
+
+statement ok
+INSERT INTO ducklake.tinyints VALUES (50);
+
+query I
+SELECT stats(d) FROM ducklake.tinyints LIMIT 1
+----
+<REGEX>:.*has_null.*false.*max.*50.*min.*10.*
+
+# decimal
+statement ok
+CREATE TABLE ducklake.decimals(d DECIMAL(18, 2));
+
+statement ok
+INSERT INTO ducklake.decimals VALUES (12.50);
+
+statement ok
+INSERT INTO ducklake.decimals VALUES (99.99);
+
+query I
+SELECT stats(d) FROM ducklake.decimals LIMIT 1
+----
+<REGEX>:.*has_null.*false.*max.*99.99.*min.*12.50.*
+
+# boolean
+statement ok
+CREATE TABLE ducklake.booleans(d BOOLEAN);
+
+statement ok
+INSERT INTO ducklake.booleans VALUES (true);
+
+statement ok
+INSERT INTO ducklake.booleans VALUES (false);
+
+query I
+SELECT stats(d) FROM ducklake.booleans LIMIT 1
+----
+<REGEX>:.*has_null.*false.*max.*true.*min.*false.*
+
+# uuid
+statement ok
+CREATE TABLE ducklake.uuids(d UUID);
+
+statement ok
+INSERT INTO ducklake.uuids VALUES ('550e8400-e29b-41d4-a716-446655440000');
+
+statement ok
+INSERT INTO ducklake.uuids VALUES (NULL);
+
+query I
+SELECT stats(d) FROM ducklake.uuids LIMIT 1
+----
+<REGEX>:.*has_null.*true.*max.*550e8400.*min.*550e8400.*
+
+# timestamp
+statement ok
+CREATE TABLE ducklake.timestamps(d TIMESTAMP);
+
+statement ok
+INSERT INTO ducklake.timestamps VALUES (TIMESTAMP '2024-01-01 00:00:00');
+
+query I
+SELECT stats(d) FROM ducklake.timestamps LIMIT 1
+----
+<REGEX>:.*has_null.*false.*max.*2024-01-01.*min.*2024-01-01.*
+
+statement ok
+INSERT INTO ducklake.timestamps VALUES (TIMESTAMP '2025-06-15 12:30:00');
+
+query I
+SELECT stats(d) FROM ducklake.timestamps LIMIT 1
+----
+<REGEX>:.*has_null.*false.*max.*2025-06-15.*min.*2024-01-01.*
+
+# verify optimizer uses stats to eliminate impossible filters (EMPTY_RESULT)
+query II
+EXPLAIN ANALYZE SELECT * FROM ducklake.test WHERE i = -1;
+----
+analyzed_plan	<REGEX>:.*EMPTY_RESULT.*
+
+query II
+EXPLAIN ANALYZE SELECT * FROM ducklake.tinyints WHERE d = -1;
+----
+analyzed_plan	<REGEX>:.*EMPTY_RESULT.*
+
+query II
+EXPLAIN ANALYZE SELECT * FROM ducklake.decimals WHERE d = -1;
+----
+analyzed_plan	<REGEX>:.*EMPTY_RESULT.*
+
+query II
+EXPLAIN ANALYZE SELECT * FROM ducklake.dates WHERE d = DATE '1900-01-01';
+----
+analyzed_plan	<REGEX>:.*EMPTY_RESULT.*
+
+query II
+EXPLAIN ANALYZE SELECT * FROM ducklake.timestamps WHERE d = TIMESTAMP '1900-01-01';
+----
+analyzed_plan	<REGEX>:.*EMPTY_RESULT.*

@@ -19,3 +19,17 @@ endif()
 if($ENV{ENABLE_POSTGRES_SCANNER})
     include("${EXTENSION_CONFIG_BASE_DIR}/postgres_scanner.cmake")
 endif()
+
+if($ENV{ENABLE_QUACK})
+    include_directories(
+            ${CMAKE_CURRENT_LIST_DIR}/duckdb/third_party/httplib
+            ${CMAKE_CURRENT_LIST_DIR}/duckdb/extension/autocomplete/include
+    )
+    duckdb_extension_load(quack
+            LOAD_TESTS
+            GIT_URL https://github.com/duckdb/duckdb-quack.git
+            GIT_TAG b2f2d10fb8da520d4b00c2490fdffea1049349c7
+            SUBMODULES "extension-ci-tools"
+            APPLY_PATCHES
+    )
+endif()

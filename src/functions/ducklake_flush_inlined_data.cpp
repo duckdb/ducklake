@@ -25,7 +25,7 @@
 #include "duckdb/planner/expression/bound_aggregate_expression.hpp"
 #include "storage/ducklake_delete.hpp"
 #include "storage/ducklake_delete_filter.hpp"
-
+#include "duckdb/common/types/blob.hpp"
 #include "functions/ducklake_compaction_functions.hpp"
 #include "storage/ducklake_sort_data.hpp"
 
@@ -85,10 +85,10 @@ SourceResultType DuckLakeFlushData::GetDataInternal(ExecutionContext &context, D
 	source_state.returned_result = true;
 
 	auto &gstate = this->sink_state->Cast<DuckLakeInsertGlobalState>();
-	chunk.SetCardinality(1);
-	chunk.SetValue(0, 0, Value(table.schema.name));
-	chunk.SetValue(1, 0, Value(table.name));
-	chunk.SetValue(2, 0, Value::BIGINT(static_cast<int64_t>(gstate.rows_flushed)));
+	chunk.data[0].Append(Value(table.schema.name));
+	chunk.data[1].Append(Value(table.name));
+	chunk.data[2].Append(Value::BIGINT(static_cast<int64_t>(gstate.rows_flushed)));
+	chunk.SetChildCardinality(1);
 	return SourceResultType::FINISHED;
 }
 
@@ -141,9 +141,9 @@ SinkFinalizeType DuckLakeFlushData::Finalize(Pipeline &pipeline, Event &event, C
 			string extra_filter = partition_filter.empty() ? "" : " AND " + partition_filter;
 			// When the table has sort metadata, the file is written in sorted order.
 			// The ORDER BY must match the actual file order so delete positions are correct.
-			string order_by = "row_id, begin_snapshot";
+			string order_by = "row_id ASC NULLS LAST, begin_snapshot ASC NULLS LAST";
 			if (!sort_order_sql.empty()) {
-				order_by = sort_order_sql + ", row_id, begin_snapshot";
+				order_by = sort_order_sql + ", row_id ASC NULLS LAST, begin_snapshot ASC NULLS LAST";
 			}
 			auto deleted_rows_result =
 			    transaction.Query(snapshot, StringUtil::Format(R"(
@@ -359,7 +359,7 @@ unique_ptr<LogicalOperator> DuckLakeDataFlusher::GenerateFlushCommand() {
 	string sort_order_sql;
 	auto sort_data = latest_table.GetSortData();
 	if (sort_data) {
-		root = DuckLakeCompactor::InsertSort(binder, root, latest_table, sort_data);
+		root = DuckLakeCompactor::InsertSort(binder, root, latest_table, sort_data, /*add_tiebreakers=*/true);
 		sort_order_sql = DuckLakeSort::BuildSortOrderSQL(*sort_data, latest_table.GetColumns(), table.GetColumns());
 	}
 
@@ -477,7 +477,8 @@ LEFT JOIN (
 					file_info.existing_delete_path_is_relative = chunk->GetValue(7, row_idx).GetValue<bool>();
 					file_info.existing_delete_begin_snapshot = chunk->GetValue(8, row_idx).GetValue<idx_t>();
 					if (!chunk->GetValue(9, row_idx).IsNull()) {
-						file_info.existing_delete_encryption_key = chunk->GetValue(9, row_idx).GetValue<string>();
+						file_info.existing_delete_encryption_key =
+						    Blob::FromBase64(chunk->GetValue(9, row_idx).GetValue<string>());
 					}
 					if (!chunk->GetValue(10, row_idx).IsNull()) {
 						file_info.existing_delete_format =
@@ -710,7 +711,7 @@ static unique_ptr<LogicalOperator> FlushInlinedDataBind(ClientContext &context, 
 	sum_args.push_back(make_uniq<BoundColumnRefExpression>(child->types[2], child_bindings[2]));
 
 	// Pick the right sum overload
-	auto sum_func = sum_entry.functions.GetFunctionByArguments(context, {sum_args[0]->return_type});
+	auto sum_func = sum_entry.functions.GetFunctionByArguments(context, {sum_args[0]->GetReturnType()});
 	FunctionBinder function_binder(context);
 	auto sum_aggregate =
 	    function_binder.BindAggregateFunction(sum_func,            // The SUM(BIGINT) -> HUGEINT function
@@ -737,8 +738,8 @@ static unique_ptr<LogicalOperator> FlushInlinedDataBind(ClientContext &context, 
 	unique_ptr<Expression> sum_col_ref = make_uniq<BoundColumnRefExpression>(aggregate->types[2], agg_bindings[2]);
 	// Note: SUM(BIGINT) returns HUGEINT. We must use the its output type for the 0 constant
 	unique_ptr<Expression> zero_const = make_uniq<BoundConstantExpression>(Value::Numeric(aggregate->types[2], 0));
-	unique_ptr<Expression> filter_expr = make_uniq<BoundComparisonExpression>(
-	    ExpressionType::COMPARE_GREATERTHAN, std::move(sum_col_ref), std::move(zero_const));
+	unique_ptr<Expression> filter_expr =
+	    BoundComparisonExpression::Create(ExpressionType::COMPARE_GREATERTHAN, std::move(sum_col_ref), std::move(zero_const));
 
 	auto filter = make_uniq<LogicalFilter>(std::move(filter_expr));
 	filter->children.push_back(std::move(aggregate));

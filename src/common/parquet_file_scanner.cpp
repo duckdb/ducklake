@@ -25,6 +25,9 @@ ParquetFileScanner::ParquetFileScanner(ClientContext &context, const DuckLakeFil
 	vector<LogicalType> input_types;
 	vector<string> input_names;
 
+	// ducklake-managed paths may contain incidental key=value segments
+	named_params["hive_partitioning"] = Value::BOOLEAN(false);
+
 	if (!file.encryption_key.empty()) {
 		child_list_t<Value> encryption_values;
 		encryption_values.emplace_back("footer_key_value", Value::BLOB_RAW(file.encryption_key));

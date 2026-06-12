@@ -69,7 +69,8 @@
         "test/sql/general/missing_parquet.test",
         "test/sql/general/paths.test",
         "test/sql/issues/corrupted_catalog_fault_isolation.test",
-        "test/sql/secrets/ducklake_secrets.test"
+        "test/sql/secrets/ducklake_secrets.test",
+        "test/sql/remove_orphans/metadata_in_data_path.test"
       ]
     },
      {
@@ -94,7 +95,8 @@
     },{
       "reason": "Test only for Postgres as catalog",
       "paths": [
-        "test/sql/metadata/ducklake_settings_postgres.test"
+        "test/sql/metadata/ducklake_settings_postgres.test",
+        "test/sql/data_inlining/postgres_identifier_limit.test"
       ]
     },
     {

@@ -1,0 +1,50 @@
+# name: test/sql/concurrent/concurrent_catalog_id_false_conflict.test
+# description: false-positive transaction conflict on retry caused by catalog id reuse during the failed first commit attempt
+# group: [concurrent]
+
+require notwindows
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok con1
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/ducklake_catalog_id_repro')
+
+statement ok con1
+CREATE TABLE dl.seed AS SELECT 1 AS x
+
+# Both sessions begin and pin the same snapshot.
+statement ok con1
+BEGIN
+
+statement ok con1
+SELECT * FROM dl.seed
+
+statement ok con2
+BEGIN
+
+statement ok con2
+SELECT * FROM dl.seed
+
+# Both create a new table inside their own transaction.
+statement ok con1
+CREATE TABLE dl.tmp_a AS SELECT 1 AS x
+
+statement ok con2
+CREATE TABLE dl.tmp_b AS SELECT 2 AS x
+
+# Session A commits first.
+statement ok con1
+COMMIT
+
+# Session A then drops tmp_a in a second transaction
+statement ok con1
+DROP TABLE dl.tmp_a
+
+statement ok con2
+COMMIT

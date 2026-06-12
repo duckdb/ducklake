@@ -49,8 +49,39 @@ part_key=1
 part_key=__HIVE_DEFAULT_PARTITION__
 
 # verify files are pruned when querying the partitions
-# FIXME: we are currently also reading the file with all NULL values
 query II
 EXPLAIN ANALYZE SELECT COUNT(*) FROM partitioned_tbl WHERE part_key=1
 ----
-analyzed_plan	<REGEX>:.*Total Files Read: 2.*
+analyzed_plan	<REGEX>:.*Total Files Read: 1.*
+
+# inequality filters also prune all-NULL files
+query II
+EXPLAIN ANALYZE SELECT COUNT(*) FROM partitioned_tbl WHERE part_key > 0
+----
+analyzed_plan	<REGEX>:.*Total Files Read: 1.*
+
+# verify result correctness across all filter types
+query I
+SELECT COUNT(*) FROM partitioned_tbl WHERE part_key=1
+----
+3333
+
+query I
+SELECT COUNT(*) FROM partitioned_tbl WHERE part_key IS NULL
+----
+3334
+
+query I
+SELECT COUNT(*) FROM partitioned_tbl WHERE part_key > 0
+----
+3333
+
+query I
+SELECT COUNT(*) FROM partitioned_tbl WHERE part_key IS NOT NULL
+----
+6666
+
+query I
+SELECT COUNT(*) FROM partitioned_tbl
+----
+10000

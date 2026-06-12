@@ -1,8 +1,11 @@
 #include "storage/ducklake_partition_data.hpp"
+#include "common/ducklake_murmur3.hpp"
 #include "duckdb/common/types/value.hpp"
 #include "duckdb/function/function_binder.hpp"
 #include "duckdb/planner/expression.hpp"
 #include "duckdb/planner/expression/bound_constant_expression.hpp"
+
+#include <cstring>
 
 namespace duckdb {
 

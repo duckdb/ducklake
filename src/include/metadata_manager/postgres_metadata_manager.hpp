@@ -25,6 +25,9 @@ public:
 	bool SupportsAppender() const override {
 		return false;
 	}
+	idx_t MaxIdentifierLength() const override {
+		return 63;
+	}
 
 	string GetColumnTypeInternal(const LogicalType &type) override;
 	shared_ptr<DuckLakeInlinedData> TransformInlinedData(QueryResult &result,
@@ -36,6 +39,7 @@ public:
 
 protected:
 	string GetLatestSnapshotQuery() const override;
+	string GenerateFileColumnStatsCTEBody(const CTERequirement &req, TableIndex table_id) override;
 
 private:
 	unique_ptr<QueryResult> ExecuteQuery(DuckLakeSnapshot snapshot, string &query, string command);

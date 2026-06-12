@@ -44,11 +44,14 @@ public:
 		return entry->Cast<T>();
 	}
 
-	const ducklake_entries_map_t &GetEntries() {
+	const ducklake_entries_map_t &GetEntries() const {
 		return catalog_entries;
 	}
 	const map<SchemaIndex, reference<DuckLakeSchemaEntry>> &GetSchemaIdMap() {
 		return schema_entry_map;
+	}
+	idx_t TotalEntryCount() const {
+		return catalog_entries.size() + table_entry_map.size() + macro_entry_map.size();
 	}
 
 private:

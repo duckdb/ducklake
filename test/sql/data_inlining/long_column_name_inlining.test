@@ -1,0 +1,26 @@
+# name: test/sql/data_inlining/long_column_name_inlining.test
+# description: Tables with column names > 63 chars must still be inlined on duckdb/sqlite catalogs
+# group: [data_inlining]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/long_colname_inline_files', DATA_INLINING_ROW_LIMIT 10)
+
+# CREATE TABLE with a column name longer than 63 bytes
+statement ok
+CREATE TABLE ducklake.long_create(a_very_long_column_name_that_exceeds_postgres_sixty_three_char_limitx INTEGER, b INTEGER);
+
+statement ok
+INSERT INTO ducklake.long_create VALUES (1, 2);
+
+query II
+SELECT * FROM ducklake.long_create;
+----
+1	2

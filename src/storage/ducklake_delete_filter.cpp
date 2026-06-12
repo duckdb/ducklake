@@ -9,6 +9,11 @@
 #include "duckdb/common/multi_file/multi_file_list.hpp"
 #include "duckdb/common/multi_file/multi_file_reader.hpp"
 #include "duckdb/common/string_util.hpp"
+#include "duckdb/planner/filter/expression_filter.hpp"
+#include "duckdb/planner/expression/bound_comparison_expression.hpp"
+#include "duckdb/planner/expression/bound_constant_expression.hpp"
+#include "duckdb/planner/expression/bound_reference_expression.hpp"
+
 
 namespace duckdb {
 
@@ -184,6 +189,14 @@ DeleteFileScanResult DuckLakeDeleteFilter::ScanDeletionVectorFile(ClientContext 
 	return result;
 }
 
+unique_ptr<ExpressionFilter> MakeComparisonFilter(ExpressionType comparison_type, Value constant) {
+	auto col_ref = make_uniq<BoundReferenceExpression>(LogicalType::BIGINT, storage_t(0));
+	auto bound_constant = make_uniq<BoundConstantExpression>(std::move(constant));
+	auto comparison = BoundComparisonExpression::Create(comparison_type, std::move(col_ref),
+	                                                    std::move(bound_constant));
+	return make_uniq<ExpressionFilter>(std::move(comparison));
+}
+
 DeleteFileScanResult DuckLakeDeleteFilter::ScanDeleteFile(ClientContext &context, const DuckLakeFileData &delete_file,
                                                           optional_idx snapshot_filter_min,
                                                           optional_idx snapshot_filter_max) {
@@ -233,15 +246,15 @@ DeleteFileScanResult DuckLakeDeleteFilter::ScanDeleteFile(ClientContext &context
 
 		if (snapshot_filter_min.IsValid()) {
 			auto min_constant = Value::BIGINT(NumericCast<int64_t>(snapshot_filter_min.GetIndex()));
-			auto min_filter =
-			    make_uniq<ConstantFilter>(ExpressionType::COMPARE_GREATERTHANOREQUALTO, std::move(min_constant));
-			filters->PushFilter(snapshot_col_idx, std::move(min_filter));
+			filters->PushFilter(snapshot_col_idx,
+			                    MakeComparisonFilter(ExpressionType::COMPARE_GREATERTHANOREQUALTO,
+			                                           std::move(min_constant)));
 		}
 		if (snapshot_filter_max.IsValid()) {
 			auto max_constant = Value::BIGINT(NumericCast<int64_t>(snapshot_filter_max.GetIndex()));
-			auto max_filter =
-			    make_uniq<ConstantFilter>(ExpressionType::COMPARE_LESSTHANOREQUALTO, std::move(max_constant));
-			filters->PushFilter(snapshot_col_idx, std::move(max_filter));
+			filters->PushFilter(snapshot_col_idx,
+			                    MakeComparisonFilter(ExpressionType::COMPARE_LESSTHANOREQUALTO,
+			                                           std::move(max_constant)));
 		}
 		scanner.SetFilters(std::move(filters));
 	}
@@ -257,7 +270,7 @@ DeleteFileScanResult DuckLakeDeleteFilter::ScanDeleteFile(ClientContext &context
 		idx_t count = scan_chunk.size();
 
 		UnifiedVectorFormat pos_data;
-		scan_chunk.data[1].ToUnifiedFormat(count, pos_data);
+		scan_chunk.data[1].ToUnifiedFormat(pos_data);
 		auto row_ids = UnifiedVectorFormat::GetData<int64_t>(pos_data);
 
 		UnifiedVectorFormat snapshot_data;
@@ -277,7 +290,7 @@ DeleteFileScanResult DuckLakeDeleteFilter::ScanDeleteFile(ClientContext &context
 			last_delete = row_id;
 
 			if (has_snapshot_id) {
-				scan_chunk.data[2].ToUnifiedFormat(count, snapshot_data);
+				scan_chunk.data[2].ToUnifiedFormat(snapshot_data);
 				auto snapshot_ids = UnifiedVectorFormat::GetData<int64_t>(snapshot_data);
 				auto snap_idx = snapshot_data.sel->get_index(i);
 				if (!snapshot_data.validity.RowIsValid(snap_idx)) {
@@ -298,13 +311,44 @@ void DuckLakeDeleteFilter::Initialize(ClientContext &context, const DuckLakeFile
 
 void DuckLakeDeleteFilter::Initialize(const DuckLakeInlinedDataDeletes &inlined_deletes) {
 	D_ASSERT(std::is_sorted(delete_data->deleted_rows.begin(), delete_data->deleted_rows.end()));
-	auto mid_idx = delete_data->deleted_rows.size();
-	for (auto &idx : inlined_deletes.rows) {
-		delete_data->deleted_rows.push_back(idx);
+
+	// Fast path: existing delete data has no per-row snapshot tracking.
+	if (delete_data->snapshot_ids.empty()) {
+		int mid_idx = delete_data->deleted_rows.size();
+		for (auto &idx : inlined_deletes.rows) {
+			delete_data->deleted_rows.push_back(idx);
+		}
+		std::inplace_merge(delete_data->deleted_rows.begin(), delete_data->deleted_rows.begin() + mid_idx,
+		                   delete_data->deleted_rows.end());
+		return;
 	}
-	delete_data->snapshot_ids.clear();
-	std::inplace_merge(delete_data->deleted_rows.begin(), delete_data->deleted_rows.begin() + mid_idx,
-	                   delete_data->deleted_rows.end());
+
+	// Merge existing deletes with inlined deletes.
+	const idx_t merged_size = delete_data->deleted_rows.size() + inlined_deletes.rows.size();
+	vector<idx_t> merged_rows;
+	vector<idx_t> merged_snapshot_ids;
+	merged_rows.reserve(merged_size);
+	merged_snapshot_ids.reserve(merged_size);
+
+	auto lhs_row_it = delete_data->deleted_rows.begin();
+	auto lhs_snapshot_it = delete_data->snapshot_ids.begin();
+	auto rhs_row_it = inlined_deletes.rows.begin();
+	while (lhs_row_it != delete_data->deleted_rows.end() || rhs_row_it != inlined_deletes.rows.end()) {
+		if (rhs_row_it == inlined_deletes.rows.end() ||
+		    (lhs_row_it != delete_data->deleted_rows.end() && *lhs_row_it < *rhs_row_it)) {
+			merged_rows.push_back(*lhs_row_it);
+			merged_snapshot_ids.push_back(*lhs_snapshot_it);
+			lhs_row_it++;
+			lhs_snapshot_it++;
+		} else {
+			merged_rows.push_back(*rhs_row_it);
+			merged_snapshot_ids.push_back(0);
+			rhs_row_it++;
+		}
+	}
+
+	delete_data->deleted_rows = std::move(merged_rows);
+	delete_data->snapshot_ids = std::move(merged_snapshot_ids);
 }
 
 unordered_map<idx_t, idx_t> DuckLakeDeleteFilter::ScanDataFileRowIds(ClientContext &context,
@@ -333,7 +377,7 @@ unordered_map<idx_t, idx_t> DuckLakeDeleteFilter::ScanDataFileRowIds(ClientConte
 
 		// Access the row_id column at its correct position
 		UnifiedVectorFormat row_id_data;
-		scan_chunk.data[row_id_col_idx.GetIndex()].ToUnifiedFormat(count, row_id_data);
+		scan_chunk.data[row_id_col_idx.GetIndex()].ToUnifiedFormat(row_id_data);
 		auto row_ids = UnifiedVectorFormat::GetData<int64_t>(row_id_data);
 
 		for (idx_t i = 0; i < count; i++) {

@@ -8,17 +8,19 @@
 
 #pragma once
 
+#include "common/index.hpp"
 #include "duckdb/common/common.hpp"
+#include "duckdb/common/optional_idx.hpp"
 #include "duckdb/common/unordered_set.hpp"
 #include "duckdb/common/types/value.hpp"
 
 namespace duckdb {
+class DataChunk;
 class ColumnList;
 class DuckLakeMetadataManager;
 class FileSystem;
 class TableFilter;
-class DynamicFilter;
-struct DuckLakeColumnInfo;
+struct DynamicFilterData;
 
 struct ParsedCatalogEntry {
 	string schema;
@@ -38,7 +40,7 @@ public:
 	static ParsedCatalogEntry ParseCatalogEntry(const string &input);
 	static string JoinPath(FileSystem &fs, const string &a, const string &b);
 
-	static DynamicFilter *GetOptionalDynamicFilter(const TableFilter &filter);
+	static shared_ptr<DynamicFilterData> GetOptionalDynamicFilterData(const TableFilter &filter);
 
 	//! Create the data path directory if it does not yet exist
 	static void EnsureDirectoryExists(FileSystem &fs, const string &data_path);
@@ -49,9 +51,21 @@ public:
 
 	//! Returns true if the given column name conflicts with inlined data system columns
 	static bool IsInlinedSystemColumn(const string &name);
-	//! Returns true if any column name conflicts with inlined data system columns
-	static bool HasInlinedSystemColumnConflict(const ColumnList &columns);
-	static bool HasInlinedSystemColumnConflict(const vector<DuckLakeColumnInfo> &columns);
+
+	static string OptionalIdxOrNull(const optional_idx &v);
+
+	static string MappingIdOrNull(const MappingIndex &m);
+
+	static string EncryptionKeyLiteral(const string &key);
+
+	static const char *BoolLiteral(bool v);
+
+	static string PartitionValueLiteral(const Value &v);
+
+	static string ChunkRowToSQL(DuckLakeMetadataManager &metadata_manager, ClientContext &context, DataChunk &chunk,
+	                            idx_t row);
+	//! Throws if any column in the list conflicts with inlined data system columns
+	static void ValidateNoInlinedSystemColumns(const ColumnList &columns, const string &table_name = "");
 };
 
 } // namespace duckdb

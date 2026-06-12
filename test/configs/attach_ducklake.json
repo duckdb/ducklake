@@ -21,6 +21,7 @@
     "RETURNING clause",
     "DuckLake does not support sequences",
     "DuckLake does not support user-defined types",
+    "Unsupported user-defined type",
     "Parquet files do not support negative intervals",
     "The same row was updated multiple times - this is not (yet) supported in DuckLake",
     "Failed to convert DuckDB type to DuckLake - unsupported type",
@@ -42,7 +43,8 @@
     "Unsupported ALTER TABLE",
     "reserved by DuckLake",
     "We cannot add a column with a non-literal default value",
-    "Can't convert TableFilterType"
+    "Can't convert TableFilterType",
+    "Triggers are not supported for this table type"
   ],
   "skip_tests": [
     {
@@ -111,9 +113,11 @@
         "test/sql/logging/logging_types.test",
         "test/sql/logging/logging.test",
         "test/sql/logging/logging_csv.test",
+        "test/sql/logging/logging_buffer_size.test",
         "test/sql/storage/compression/roaring/roaring_bool_analyze_bitset.test",
         "test/sql/storage/compression/roaring/roaring_bool_analyze_run.test",
-        "test/sql/storage/compression/roaring/roaring_bool_analyze_array.test"
+        "test/sql/storage/compression/roaring/roaring_bool_analyze_array.test",
+        "test/sql/copy/parquet/multi_file/adaptive_filter_carryover.test"
       ]
     },
     {
@@ -136,6 +140,7 @@
         "test/sql/explain/explain_execute.test",
         "test/optimizer/pushdown/pushdown_filter_on_coalesced_equal_outer_join_keys.test",
         "test/optimizer/topn_window_elimination.test",
+        "test/sql/optimizer/topn_window_elimination_late_materialization.test",
         "test/optimizer/pushdown/filter_cannot_pushdown.test",
         "test/optimizer/pushdown/filters_on_limit_optimizer.test",
         "test/sql/explain/test_explain_table_scan.test",
@@ -145,13 +150,31 @@
         "test/optimizer/test_aggregate_function_rewrite.test",
         "test/optimizer/row_number_virtual_column.test",
         "test/sql/window/test_streaming_window.test",
-        "test/sql/transactions/test_cardinality_estimation_uncommitted.test"
+        "test/sql/transactions/test_cardinality_estimation_uncommitted.test",
+        "test/sql/filter/test_struct_pushdown.test",
+        "test/optimizer/compressed_materialization_grouping_sets.test",
+        "test/optimizer/joins/fkpk_composite_key_ce.test"
+      ]
+    },
+    {
+      "reason": "Locks DuckDB configuration (lock_configuration / allowed_configs), which prevents the DuckLake metadata catalog from operating and aborts its transaction. These tests exercise core config-locking, not DuckLake.",
+      "paths": [
+        "test/sql/settings/allowed_configs.test",
+        "test/sql/settings/lock_configuration_schema.test",
+        "test/sql/settings/test_lock_configuration.test"
+      ]
+    },
+    {
+      "reason": "Uses VACUUM for stats setup; DuckLake does not implement VACUUM, so the subsequent join-filter plan check cannot run.",
+      "paths": [
+        "test/optimizer/joins/join_filter_build_side.test"
       ]
     },
     {
       "reason": "Profiling",
       "paths": [
-        "test/sql/pragma/profiling/test_custom_profiling_rows_scanned.test"
+        "test/sql/pragma/profiling/test_custom_profiling_rows_scanned.test",
+        "test/sql/pragma/profiling/test_custom_profiling_row_group_metrics_local_storage.test"
       ]
     },
     {
@@ -166,6 +189,12 @@
       "paths": [
         "test/issues/rigger/test_709.test",
         "test/sql/join/natural/natural_join.test"
+      ]
+    },
+    {
+      "reason": "FIXME: flaky in CI — concurrent ALTER ADD COLUMN with reads sometimes aborts the writer's transaction or segfaults under DuckLake",
+      "paths": [
+        "test/sql/parallelism/interquery/concurrent_reads_while_altering.test"
       ]
     },
     {
@@ -202,6 +231,9 @@
         "test/sql/transactions/test_create_drop_conflict_variation1.test",
         "test/sql/copy/parquet/parquet_glob.test",
         "test/sql/alter/alter_table_set_table_options.test",
+        "test/sql/peg_parser/fuzzer/internal_0227.test",
+        "test/sql/peg_parser/transformer/drop_statement.test",
+        "test/sql/transactions/rollback_drop_table.test",
         "test/sql/function/variant/variant_extract_try_cast.test",
         "test/sql/alter/rename_table/test_rename_table_view.test"
       ]
@@ -262,7 +294,8 @@
       "reason": "Secret Manager Instantiation",
       "paths": [
         "test/sql/secrets/create_secret_hffs_autoload.test",
-        "test/sql/secrets/create_secret_persistence_no_client_context.test"
+        "test/sql/secrets/create_secret_persistence_no_client_context.test",
+        "test/sql/settings/test_external_access_metadata.test"
       ]
     },
     {
@@ -285,7 +318,19 @@
         "test/sql/storage/buffer_manager_temp_dir.test",
         "test/issues/internal/test_5457.test",
         "test/sql/copy/csv/code_cov/csv_disk_reload.test",
-        "test/sql/table_function/duckdb_eviction_queues.test"
+        "test/sql/table_function/duckdb_eviction_queues.test",
+        "test/sql/storage/temp_directory/test_default_temp_directory.test"
+      ]
+    },
+    {
+      "reason": "Tests DuckDB native-storage internals (load vX / pragma_storage_info: segment allocation, column metadata reuse, on-disk string stats). DuckLake stores data in Parquet, so native segment layout and stats have no equivalent.",
+      "paths": [
+        "test/sql/storage/adaptive_segment_allocation.test",
+        "test/sql/storage/pragma_storage_info_scan_type.test",
+        "test/sql/storage/metadata/partial_column_metadata_reuse.test",
+        "test/sql/storage/metadata/partial_column_metadata_reuse_v7.test",
+        "test/sql/storage/extended_string_stats.test",
+        "test/sql/storage/total_string_length_repeated_insert.test"
       ]
     },
     {
@@ -538,6 +583,7 @@
     {
       "reason": "Checkpoint in DuckLake doesn't produce expected result. Notice these are not ducklake bugs just tests that do not fit.",
       "paths": [
+        "test/sql/storage/compression/rle/rle_filter.test",
         "test/fuzzer/pedro/incomplete_checkpoint.test",
         "test/sql/copy/csv/rejects/csv_rejects_read.test",
         "test/sql/copy/csv/test_csv_timestamp_tz.test",

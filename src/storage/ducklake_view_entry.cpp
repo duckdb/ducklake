@@ -5,6 +5,7 @@
 #include "duckdb/parser/parsed_data/alter_table_info.hpp"
 #include "duckdb/parser/keyword_helper.hpp"
 #include "duckdb/common/string_util.hpp"
+#include "duckdb/common/sql_identifier.hpp"
 #include "common/ducklake_util.hpp"
 
 namespace duckdb {
@@ -61,11 +62,11 @@ unique_ptr<CreateInfo> DuckLakeViewEntry::GetInfo() const {
 
 string DuckLakeViewEntry::ToSQL() const {
 	string result = "CREATE VIEW ";
-	result += KeywordHelper::WriteOptionallyQuoted(name);
+	result += SQLIdentifier::ToString(name);
 	if (!aliases.empty()) {
 		result += " (";
 		result += StringUtil::Join(aliases, aliases.size(), ", ",
-		                           [](const string &alias) { return KeywordHelper::WriteOptionallyQuoted(alias); });
+		                           [](const string &alias) { return SQLIdentifier::ToString(alias); });
 		result += ")";
 	}
 	result += " AS ";
@@ -104,7 +105,7 @@ const SelectStatement &DuckLakeViewEntry::GetQuery() {
 	return *query;
 }
 
-string DuckLakeViewEntry::GetQuerySQL() {
+string DuckLakeViewEntry::GetQuerySQL() const {
 	return query_sql;
 }
 

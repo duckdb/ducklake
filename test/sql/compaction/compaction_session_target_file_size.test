@@ -1,0 +1,81 @@
+# name: test/sql/compaction/compaction_session_target_file_size.test
+# description: test that ducklake_target_file_size session setting governs compaction output target size
+# group: [compaction]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/compaction_session_target_file_size', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+USE ducklake;
+
+# Set a tiny metadata target_file_size at all scopes so compaction would produce many output files
+statement ok
+CALL ducklake_set_option('ducklake', 'target_file_size', '1B');
+
+statement ok
+CREATE TABLE example (id INTEGER, s VARCHAR);
+
+statement ok
+CALL ducklake_set_option('ducklake', 'target_file_size', '1B', schema => 'main');
+
+statement ok
+CALL ducklake_set_option('ducklake', 'target_file_size', '1B', table_name => 'example');
+
+statement ok
+INSERT INTO example SELECT i, concat('thisisalongstring', i) FROM range(10000) t(i);
+
+statement ok
+INSERT INTO example SELECT i + 10000, concat('thisisalongstring', i) FROM range(10000) t(i);
+
+statement ok
+INSERT INTO example SELECT i + 20000, concat('thisisalongstring', i) FROM range(10000) t(i);
+
+statement ok
+INSERT INTO example SELECT i + 30000, concat('thisisalongstring', i) FROM range(10000) t(i);
+
+query I
+SELECT COUNT(*) FROM __ducklake_metadata_ducklake.ducklake_data_file WHERE end_snapshot IS NULL
+----
+4
+
+# Session setting overrides metadata target - compaction merges all 4 files into 1
+statement ok
+SET ducklake_target_file_size = '512MB'
+
+query IIII
+SELECT schema_name, table_name, files_processed, files_created FROM ducklake_merge_adjacent_files('ducklake', 'example')
+----
+main	example	4	1
+
+query I
+SELECT COUNT(*) FROM example
+----
+40000
+
+# Reset the session - metadata target (1B) governs again
+statement ok
+RESET ducklake_target_file_size
+
+statement ok
+INSERT INTO example SELECT i, concat('thisisalongstring', i) FROM range(10000) t(i);
+
+statement ok
+INSERT INTO example SELECT i + 10000, concat('thisisalongstring', i) FROM range(10000) t(i);
+
+# With metadata target_file_size = 1B, files above target are not merged - compaction skips them
+query IIII
+SELECT schema_name, table_name, files_processed, files_created FROM ducklake_merge_adjacent_files('ducklake', 'example')
+----
+
+query I
+SELECT COUNT(*) FROM example
+----
+60000

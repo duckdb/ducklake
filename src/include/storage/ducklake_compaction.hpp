@@ -22,14 +22,14 @@ class DuckLakeCompaction : public PhysicalOperator {
 public:
 	DuckLakeCompaction(PhysicalPlan &physical_plan, const vector<LogicalType> &types, DuckLakeTableEntry &table,
 	                   vector<DuckLakeCompactionFileEntry> source_files_p, string encryption_key,
-	                   optional_idx partition_id, vector<string> partition_values, optional_idx row_id_start,
+	                   optional_idx partition_id, vector<Value> partition_values, optional_idx row_id_start,
 	                   PhysicalOperator &child, CompactionType type);
 
 	DuckLakeTableEntry &table;
 	vector<DuckLakeCompactionFileEntry> source_files;
 	string encryption_key;
 	optional_idx partition_id;
-	vector<string> partition_values;
+	vector<Value> partition_values;
 	optional_idx row_id_start;
 	CompactionType type;
 
