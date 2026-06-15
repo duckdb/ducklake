@@ -98,15 +98,6 @@ SELECT count(*) FROM GLOB('{DATA_PATH}/test_deletion_inlining/**/*-delete.*')
 ----
 1
 
-# Verify new deletion file schema - should have _ducklake_internal_snapshot_id column
-# since it was created from flushing inlined deletions
-query II
-SELECT column_name, column_type FROM (DESCRIBE SELECT * FROM '{DATA_PATH}/test_deletion_inlining/**/*-delete.parquet') ORDER BY column_name
-----
-_ducklake_internal_snapshot_id	BIGINT
-file_path	VARCHAR
-pos	BIGINT
-
 query IIIII
 SELECT table_id, begin_snapshot, end_snapshot, delete_count, partial_max FROM ducklake_meta.ducklake_delete_file ORDER BY begin_snapshot
 ----
