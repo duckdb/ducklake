@@ -94,7 +94,7 @@ SELECT file_id, row_id, begin_snapshot FROM ducklake_meta.ducklake_inlined_delet
 ----
 
 query I
-SELECT count(*) FROM GLOB('{DATA_PATH}/test_deletion_inlining/**/*-delete.parquet')
+SELECT count(*) FROM GLOB('{DATA_PATH}/test_deletion_inlining/**/*-delete.*')
 ----
 1
 
@@ -264,7 +264,7 @@ FROM T order by a
 65
 
 query I
-SELECT count(*) FROM GLOB('{DATA_PATH}/test_deletion_inlining/**/*-delete.parquet')
+SELECT count(*) FROM GLOB('{DATA_PATH}/test_deletion_inlining/**/*-delete.*')
 ----
 5
 
@@ -281,7 +281,7 @@ CALL ducklake_cleanup_old_files(
 );
 
 query I
-SELECT count(*) FROM GLOB('{DATA_PATH}/test_deletion_inlining/**/*-delete.parquet')
+SELECT count(*) FROM GLOB('{DATA_PATH}/test_deletion_inlining/**/*-delete.*')
 ----
 3
 
