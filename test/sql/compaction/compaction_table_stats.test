@@ -6,13 +6,13 @@ require ducklake
 
 require parquet
 
-test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
 
-test-env DATA_PATH __TEST_DIR__
+test-env DATA_PATH {TEST_DIR}
 
 statement ok
-ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (
-    DATA_PATH '${DATA_PATH}/compaction_table_stats',
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (
+    DATA_PATH '{DATA_PATH}/compaction_table_stats',
     DATA_INLINING_ROW_LIMIT 0,
     METADATA_CATALOG 'ducklake_meta'
 )
@@ -21,33 +21,14 @@ statement ok
 USE ducklake
 
 statement ok
-CREATE TEMP VIEW compaction_stats_check AS
-SELECT
-    t.table_name,
-    s.record_count,
-    COALESCE(data_files.active_record_count, 0) AS active_record_count,
-    COALESCE(delete_files.active_delete_count, 0) AS active_delete_count,
-    CASE
-        WHEN s.file_size_bytes = COALESCE(data_files.active_file_size_bytes, 0) THEN 1
-        ELSE 0
-    END AS file_size_matches
-FROM ducklake_meta.ducklake_table t
-JOIN ducklake_meta.ducklake_table_stats s USING (table_id)
-LEFT JOIN (
-    SELECT table_id, SUM(record_count) AS active_record_count, SUM(file_size_bytes) AS active_file_size_bytes
-    FROM ducklake_meta.ducklake_data_file
-    WHERE end_snapshot IS NULL
-    GROUP BY table_id
-) data_files USING (table_id)
-LEFT JOIN (
-    SELECT table_id, SUM(delete_count) AS active_delete_count
-    FROM ducklake_meta.ducklake_delete_file
-    WHERE end_snapshot IS NULL
-    GROUP BY table_id
-) delete_files USING (table_id);
+CREATE TABLE rewrite_delete_stats(i INTEGER);
 
 statement ok
-CREATE TABLE rewrite_delete_stats(i INTEGER);
+SET VARIABLE rewrite_delete_stats_table_id = (
+    SELECT table_id
+    FROM ducklake_meta.ducklake_table
+    WHERE table_name = 'rewrite_delete_stats'
+)
 
 statement ok
 INSERT INTO rewrite_delete_stats SELECT i::INTEGER FROM range(100) t(i);
@@ -55,12 +36,28 @@ INSERT INTO rewrite_delete_stats SELECT i::INTEGER FROM range(100) t(i);
 statement ok
 DELETE FROM rewrite_delete_stats WHERE i < 10;
 
-query III
-SELECT record_count, active_record_count, active_delete_count
-FROM compaction_stats_check
-WHERE table_name = 'rewrite_delete_stats';
+query I
+SELECT record_count
+FROM ducklake_meta.ducklake_table_stats
+WHERE table_id = getvariable('rewrite_delete_stats_table_id');
 ----
-100	100	10
+100
+
+query I
+SELECT COALESCE(SUM(record_count), 0)::BIGINT
+FROM ducklake_meta.ducklake_data_file
+WHERE table_id = getvariable('rewrite_delete_stats_table_id')
+  AND end_snapshot IS NULL;
+----
+100
+
+query I
+SELECT COALESCE(SUM(delete_count), 0)::BIGINT
+FROM ducklake_meta.ducklake_delete_file
+WHERE table_id = getvariable('rewrite_delete_stats_table_id')
+  AND end_snapshot IS NULL;
+----
+10
 
 query I
 SELECT COUNT(*) FROM rewrite_delete_stats;
@@ -73,16 +70,43 @@ FROM ducklake_rewrite_data_files('ducklake', 'rewrite_delete_stats', delete_thre
 ----
 rewrite_delete_stats	1	1
 
-query IIII
-SELECT
-    record_count,
-    active_record_count,
-    active_delete_count,
-    file_size_matches
-FROM compaction_stats_check
-WHERE table_name = 'rewrite_delete_stats';
+query I
+SELECT record_count
+FROM ducklake_meta.ducklake_table_stats
+WHERE table_id = getvariable('rewrite_delete_stats_table_id');
 ----
-90	90	0	1
+90
+
+query I
+SELECT COALESCE(SUM(record_count), 0)::BIGINT
+FROM ducklake_meta.ducklake_data_file
+WHERE table_id = getvariable('rewrite_delete_stats_table_id')
+  AND end_snapshot IS NULL;
+----
+90
+
+query I
+SELECT COALESCE(SUM(delete_count), 0)::BIGINT
+FROM ducklake_meta.ducklake_delete_file
+WHERE table_id = getvariable('rewrite_delete_stats_table_id')
+  AND end_snapshot IS NULL;
+----
+0
+
+statement ok
+SET VARIABLE rewrite_delete_stats_size = (
+    SELECT file_size_bytes
+    FROM ducklake_meta.ducklake_table_stats
+    WHERE table_id = getvariable('rewrite_delete_stats_table_id')
+)
+
+query I
+SELECT (COALESCE(SUM(file_size_bytes), 0)::BIGINT = getvariable('rewrite_delete_stats_size'))::INTEGER
+FROM ducklake_meta.ducklake_data_file
+WHERE table_id = getvariable('rewrite_delete_stats_table_id')
+  AND end_snapshot IS NULL;
+----
+1
 
 query I
 SELECT COUNT(*) FROM rewrite_delete_stats;
@@ -94,6 +118,13 @@ CALL ducklake_set_option('ducklake', 'target_file_size', '1MB');
 
 statement ok
 CREATE TABLE merge_adjacent_stats(i INTEGER, payload VARCHAR);
+
+statement ok
+SET VARIABLE merge_adjacent_stats_table_id = (
+    SELECT table_id
+    FROM ducklake_meta.ducklake_table
+    WHERE table_name = 'merge_adjacent_stats'
+)
 
 statement ok
 INSERT INTO merge_adjacent_stats SELECT i::INTEGER, repeat('a', 100) FROM range(100) t(i);
@@ -110,20 +141,40 @@ FROM ducklake_merge_adjacent_files('ducklake', 'merge_adjacent_stats');
 ----
 merge_adjacent_stats	3	1
 
-query III
-SELECT record_count, active_record_count, file_size_matches
-FROM compaction_stats_check
-WHERE table_name = 'merge_adjacent_stats';
+query I
+SELECT record_count
+FROM ducklake_meta.ducklake_table_stats
+WHERE table_id = getvariable('merge_adjacent_stats_table_id');
 ----
-300	300	1
+300
+
+query I
+SELECT COALESCE(SUM(record_count), 0)::BIGINT
+FROM ducklake_meta.ducklake_data_file
+WHERE table_id = getvariable('merge_adjacent_stats_table_id')
+  AND end_snapshot IS NULL;
+----
+300
+
+statement ok
+SET VARIABLE merge_adjacent_stats_size = (
+    SELECT file_size_bytes
+    FROM ducklake_meta.ducklake_table_stats
+    WHERE table_id = getvariable('merge_adjacent_stats_table_id')
+)
+
+query I
+SELECT (COALESCE(SUM(file_size_bytes), 0)::BIGINT = getvariable('merge_adjacent_stats_size'))::INTEGER
+FROM ducklake_meta.ducklake_data_file
+WHERE table_id = getvariable('merge_adjacent_stats_table_id')
+  AND end_snapshot IS NULL;
+----
+1
 
 query I
 SELECT COUNT(*) FROM merge_adjacent_stats;
 ----
 300
-
-statement ok
-DROP VIEW compaction_stats_check;
 
 statement ok
 USE memory;
@@ -132,8 +183,8 @@ statement ok
 DETACH ducklake;
 
 statement ok
-ATTACH 'ducklake:${DUCKLAKE_CONNECTION}_inline' AS ducklake (
-    DATA_PATH '${DATA_PATH}/compaction_table_stats_inline',
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}_inline' AS ducklake (
+    DATA_PATH '{DATA_PATH}/compaction_table_stats_inline',
     DATA_INLINING_ROW_LIMIT 100,
     METADATA_CATALOG 'ducklake_meta'
 )
@@ -142,46 +193,40 @@ statement ok
 USE ducklake
 
 statement ok
-CREATE TEMP VIEW compaction_stats_check AS
-SELECT
-    t.table_name,
-    s.record_count,
-    COALESCE(data_files.active_record_count, 0) AS active_record_count,
-    COALESCE(delete_files.active_delete_count, 0) AS active_delete_count,
-    CASE
-        WHEN s.file_size_bytes = COALESCE(data_files.active_file_size_bytes, 0) THEN 1
-        ELSE 0
-    END AS file_size_matches
-FROM ducklake_meta.ducklake_table t
-JOIN ducklake_meta.ducklake_table_stats s USING (table_id)
-LEFT JOIN (
-    SELECT table_id, SUM(record_count) AS active_record_count, SUM(file_size_bytes) AS active_file_size_bytes
-    FROM ducklake_meta.ducklake_data_file
-    WHERE end_snapshot IS NULL
-    GROUP BY table_id
-) data_files USING (table_id)
-LEFT JOIN (
-    SELECT table_id, SUM(delete_count) AS active_delete_count
-    FROM ducklake_meta.ducklake_delete_file
-    WHERE end_snapshot IS NULL
-    GROUP BY table_id
-) delete_files USING (table_id);
+CREATE TABLE rewrite_inlined_delete_stats AS SELECT i::INTEGER AS i FROM range(101) t(i);
 
 statement ok
-CREATE TABLE rewrite_inlined_delete_stats AS SELECT i::INTEGER AS i FROM range(101) t(i);
+SET VARIABLE rewrite_inlined_delete_stats_table_id = (
+    SELECT table_id
+    FROM ducklake_meta.ducklake_table
+    WHERE table_name = 'rewrite_inlined_delete_stats'
+)
 
 statement ok
 DELETE FROM rewrite_inlined_delete_stats WHERE i = 25;
 
-query III
-SELECT
-    record_count,
-    active_record_count,
-    active_delete_count
-FROM compaction_stats_check
-WHERE table_name = 'rewrite_inlined_delete_stats';
+query I
+SELECT record_count
+FROM ducklake_meta.ducklake_table_stats
+WHERE table_id = getvariable('rewrite_inlined_delete_stats_table_id');
 ----
-101	101	0
+101
+
+query I
+SELECT COALESCE(SUM(record_count), 0)::BIGINT
+FROM ducklake_meta.ducklake_data_file
+WHERE table_id = getvariable('rewrite_inlined_delete_stats_table_id')
+  AND end_snapshot IS NULL;
+----
+101
+
+query I
+SELECT COALESCE(SUM(delete_count), 0)::BIGINT
+FROM ducklake_meta.ducklake_delete_file
+WHERE table_id = getvariable('rewrite_inlined_delete_stats_table_id')
+  AND end_snapshot IS NULL;
+----
+0
 
 query I
 SELECT COUNT(*) FROM rewrite_inlined_delete_stats;
@@ -194,16 +239,43 @@ FROM ducklake_rewrite_data_files('ducklake', 'rewrite_inlined_delete_stats', del
 ----
 rewrite_inlined_delete_stats	1	1
 
-query IIII
-SELECT
-    record_count,
-    active_record_count,
-    active_delete_count,
-    file_size_matches
-FROM compaction_stats_check
-WHERE table_name = 'rewrite_inlined_delete_stats';
+query I
+SELECT record_count
+FROM ducklake_meta.ducklake_table_stats
+WHERE table_id = getvariable('rewrite_inlined_delete_stats_table_id');
 ----
-100	100	0	1
+100
+
+query I
+SELECT COALESCE(SUM(record_count), 0)::BIGINT
+FROM ducklake_meta.ducklake_data_file
+WHERE table_id = getvariable('rewrite_inlined_delete_stats_table_id')
+  AND end_snapshot IS NULL;
+----
+100
+
+query I
+SELECT COALESCE(SUM(delete_count), 0)::BIGINT
+FROM ducklake_meta.ducklake_delete_file
+WHERE table_id = getvariable('rewrite_inlined_delete_stats_table_id')
+  AND end_snapshot IS NULL;
+----
+0
+
+statement ok
+SET VARIABLE rewrite_inlined_delete_stats_size = (
+    SELECT file_size_bytes
+    FROM ducklake_meta.ducklake_table_stats
+    WHERE table_id = getvariable('rewrite_inlined_delete_stats_table_id')
+)
+
+query I
+SELECT (COALESCE(SUM(file_size_bytes), 0)::BIGINT = getvariable('rewrite_inlined_delete_stats_size'))::INTEGER
+FROM ducklake_meta.ducklake_data_file
+WHERE table_id = getvariable('rewrite_inlined_delete_stats_table_id')
+  AND end_snapshot IS NULL;
+----
+1
 
 query I
 SELECT COUNT(*) FROM rewrite_inlined_delete_stats;
@@ -214,6 +286,13 @@ statement ok
 CREATE TABLE rewrite_zero_output_stats(i INTEGER);
 
 statement ok
+SET VARIABLE rewrite_zero_output_stats_table_id = (
+    SELECT table_id
+    FROM ducklake_meta.ducklake_table
+    WHERE table_name = 'rewrite_zero_output_stats'
+)
+
+statement ok
 INSERT INTO rewrite_zero_output_stats SELECT i::INTEGER FROM range(20) t(i);
 
 statement ok
@@ -222,12 +301,28 @@ DELETE FROM rewrite_zero_output_stats WHERE i < 20;
 statement ok
 CALL ducklake_flush_inlined_data('ducklake');
 
-query III
-SELECT record_count, active_record_count, active_delete_count
-FROM compaction_stats_check
-WHERE table_name = 'rewrite_zero_output_stats';
+query I
+SELECT record_count
+FROM ducklake_meta.ducklake_table_stats
+WHERE table_id = getvariable('rewrite_zero_output_stats_table_id');
 ----
-20	20	20
+20
+
+query I
+SELECT COALESCE(SUM(record_count), 0)::BIGINT
+FROM ducklake_meta.ducklake_data_file
+WHERE table_id = getvariable('rewrite_zero_output_stats_table_id')
+  AND end_snapshot IS NULL;
+----
+20
+
+query I
+SELECT COALESCE(SUM(delete_count), 0)::BIGINT
+FROM ducklake_meta.ducklake_delete_file
+WHERE table_id = getvariable('rewrite_zero_output_stats_table_id')
+  AND end_snapshot IS NULL;
+----
+20
 
 query I
 SELECT COUNT(*) FROM rewrite_zero_output_stats;
@@ -240,16 +335,43 @@ FROM ducklake_rewrite_data_files('ducklake', 'rewrite_zero_output_stats', delete
 ----
 rewrite_zero_output_stats	1	0
 
-query IIII
-SELECT
-    record_count,
-    active_record_count,
-    active_delete_count,
-    file_size_matches
-FROM compaction_stats_check
-WHERE table_name = 'rewrite_zero_output_stats';
+query I
+SELECT record_count
+FROM ducklake_meta.ducklake_table_stats
+WHERE table_id = getvariable('rewrite_zero_output_stats_table_id');
 ----
-0	0	0	1
+0
+
+query I
+SELECT COALESCE(SUM(record_count), 0)::BIGINT
+FROM ducklake_meta.ducklake_data_file
+WHERE table_id = getvariable('rewrite_zero_output_stats_table_id')
+  AND end_snapshot IS NULL;
+----
+0
+
+query I
+SELECT COALESCE(SUM(delete_count), 0)::BIGINT
+FROM ducklake_meta.ducklake_delete_file
+WHERE table_id = getvariable('rewrite_zero_output_stats_table_id')
+  AND end_snapshot IS NULL;
+----
+0
+
+statement ok
+SET VARIABLE rewrite_zero_output_stats_size = (
+    SELECT file_size_bytes
+    FROM ducklake_meta.ducklake_table_stats
+    WHERE table_id = getvariable('rewrite_zero_output_stats_table_id')
+)
+
+query I
+SELECT (COALESCE(SUM(file_size_bytes), 0)::BIGINT = getvariable('rewrite_zero_output_stats_size'))::INTEGER
+FROM ducklake_meta.ducklake_data_file
+WHERE table_id = getvariable('rewrite_zero_output_stats_table_id')
+  AND end_snapshot IS NULL;
+----
+1
 
 query I
 SELECT COUNT(*) FROM rewrite_zero_output_stats;
