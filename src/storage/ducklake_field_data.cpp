@@ -83,7 +83,8 @@ unique_ptr<DuckLakeFieldId> DuckLakeFieldId::FieldIdFromType(const string &name,
 			throw NotImplementedException("Default value for STRUCT type not supported");
 		}
 		for (auto &entry : StructType::GetChildTypes(type)) {
-			field_children.push_back(FieldIdFromType(entry.first, entry.second, nullptr, column_id, add_column));
+			field_children.push_back(
+			    FieldIdFromType(entry.first.GetIdentifierName(), entry.second, nullptr, column_id, add_column));
 		}
 		break;
 	}
@@ -129,7 +130,8 @@ unique_ptr<ParsedExpression> DuckLakeFieldId::GetDefault() const {
 unique_ptr<DuckLakeFieldId> DuckLakeFieldId::FieldIdFromColumn(const ColumnDefinition &col, idx_t &column_id,
                                                                bool add_column) {
 	auto default_val = col.HasDefaultValue() ? optional_ptr<const ParsedExpression>(col.DefaultValue()) : nullptr;
-	return DuckLakeFieldId::FieldIdFromType(col.Name(), col.Type(), default_val, column_id, add_column);
+	return DuckLakeFieldId::FieldIdFromType(col.Name().GetIdentifierName(), col.Type(), default_val, column_id,
+	                                        add_column);
 }
 
 shared_ptr<DuckLakeFieldData> DuckLakeFieldData::FromColumns(const ColumnList &columns) {

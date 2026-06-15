@@ -73,7 +73,8 @@ static void AddSnapshotFilter(BaseFileReader &reader, const ColumnIndex &col_idx
 static void NormalizeListChildNames(vector<MultiFileColumnDefinition> &columns, bool parent_is_list = false) {
 	for (auto &col : columns) {
 		// basically array, element becomes list
-		if (parent_is_list && (col.name == "array" || col.name == "element")) {
+		if (parent_is_list &&
+		    (col.name.GetIdentifierName() == "array" || col.name.GetIdentifierName() == "element")) {
 			col.name = "list";
 		}
 		if (!col.children.empty()) {
@@ -220,20 +221,20 @@ vector<MultiFileColumnDefinition> DuckLakeMultiFileReader::ColumnsFromFieldData(
 }
 
 bool DuckLakeMultiFileReader::Bind(MultiFileOptions &options, MultiFileList &files, vector<LogicalType> &return_types,
-                                   vector<string> &names, MultiFileReaderBindData &bind_data) {
+                                   vector<Identifier> &names, MultiFileReaderBindData &bind_data) {
 	auto &field_data = read_info.table.GetFieldData();
 	auto &columns = bind_data.schema;
 	columns = ColumnsFromFieldData(field_data);
 	//	bind_data.file_row_number_idx = names.size();
 	bind_data.mapping = MultiFileColumnMappingMode::BY_FIELD_ID;
-	names = read_info.column_names;
+	names = StringsToIdentifiers(read_info.column_names);
 	return_types = read_info.column_types;
 	return true;
 }
 
 //! Override the Options bind
 void DuckLakeMultiFileReader::BindOptions(MultiFileOptions &options, MultiFileList &files,
-                                          vector<LogicalType> &return_types, vector<string> &names,
+                                          vector<LogicalType> &return_types, vector<Identifier> &names,
                                           MultiFileReaderBindData &bind_data) {
 }
 
@@ -553,7 +554,7 @@ ReaderInitializeType DuckLakeMultiFileReader::CreateMapping(
 		vector<string> source_names;
 		vector<FieldIndex> target_field_ids;
 		for (idx_t i = 0; i < MinValue(file_columns.size(), global_columns.size()); i++) {
-			source_names.push_back(file_columns[i].name);
+			source_names.push_back(file_columns[i].name.GetIdentifierName());
 			target_field_ids.emplace_back(global_columns[i].identifier.GetValue<idx_t>());
 		}
 		auto positional_map = DuckLakeNameMap::CreatePositionalMapping(source_names, target_field_ids);

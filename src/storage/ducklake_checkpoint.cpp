@@ -22,7 +22,7 @@ void DuckLakeTransactionManager::Checkpoint(ClientContext &context, bool force) 
 
 	for (const auto &query : checkpoint_queries) {
 		auto checkpoint_query =
-		    StringUtil::Replace(query, "{CATALOG}", SQLString::ToString(ducklake_catalog.GetName()));
+		    StringUtil::Replace(query, "{CATALOG}", SQLString::ToString(ducklake_catalog.GetName().GetIdentifierName()));
 		auto res = conn->Query(checkpoint_query);
 		if (res->HasError()) {
 			res->GetErrorObject().Throw("Failed to perform CHECKPOINT; in DuckLake:  ");

@@ -62,11 +62,12 @@ unique_ptr<CreateInfo> DuckLakeViewEntry::GetInfo() const {
 
 string DuckLakeViewEntry::ToSQL() const {
 	string result = "CREATE VIEW ";
-	result += SQLIdentifier::ToString(name);
+	result += SQLIdentifier::ToString(name.GetIdentifierName());
 	if (!aliases.empty()) {
 		result += " (";
-		result += StringUtil::Join(aliases, aliases.size(), ", ",
-		                           [](const string &alias) { return SQLIdentifier::ToString(alias); });
+		result += StringUtil::Join(aliases, aliases.size(), ", ", [](const Identifier &alias) {
+			return SQLIdentifier::ToString(alias.GetIdentifierName());
+		});
 		result += ")";
 	}
 	result += " AS ";

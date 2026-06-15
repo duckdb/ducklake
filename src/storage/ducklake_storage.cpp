@@ -54,6 +54,8 @@ static void HandleDuckLakeOption(DuckLakeOptions &options, const string &option,
 		options.create_if_not_exists = BooleanValue::Get(value.DefaultCastAs(LogicalType::BOOLEAN));
 	} else if (lcase == "automatic_migration") {
 		options.automatic_migration = BooleanValue::Get(value.DefaultCastAs(LogicalType::BOOLEAN));
+	} else if (lcase == "hide_metadata_catalog") {
+		options.hide_metadata_catalog = BooleanValue::Get(value.DefaultCastAs(LogicalType::BOOLEAN));
 	} else if (lcase == "busy_timeout") {
 		options.busy_timeout = UBigIntValue::Get(value.DefaultCastAs(LogicalType::UBIGINT));
 	} else if (lcase == "ducklake_version") {
@@ -95,7 +97,7 @@ static unique_ptr<Catalog> DuckLakeAttach(optional_ptr<StorageExtensionInfo> sto
 		// if we have a secret - handle the options
 		const auto &kv_secret = dynamic_cast<const KeyValueSecret &>(*secret->secret);
 		for (auto &entry : kv_secret.secret_map) {
-			HandleDuckLakeOption(options, entry.first, entry.second);
+			HandleDuckLakeOption(options, entry.first.GetIdentifierName(), entry.second);
 		}
 	}
 	options.access_mode = attach_options.access_mode;
