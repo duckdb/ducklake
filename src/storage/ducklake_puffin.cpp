@@ -7,11 +7,27 @@
 
 #include "yyjson.hpp"
 
+#include <cerrno>
 #include <cstdlib>
 
 namespace duckdb {
 
 using namespace duckdb_yyjson; // NOLINT
+
+namespace {
+
+struct YyjsonMutDocHolder {
+	explicit YyjsonMutDocHolder(yyjson_mut_doc *doc) : doc(doc) {
+	}
+	~YyjsonMutDocHolder() {
+		if (doc) {
+			yyjson_mut_doc_free(doc);
+		}
+	}
+	yyjson_mut_doc *doc;
+};
+
+} // namespace
 
 // https://iceberg.apache.org/puffin-spec/
 // File structure: Magic Blob1 ... BlobN Footer
@@ -28,7 +44,6 @@ static constexpr idx_t PUFFIN_FOOTER_STRUCT_SIZE = PUFFIN_MAGIC_SIZE + PUFFIN_FO
 static constexpr idx_t PUFFIN_MIN_FILE_SIZE = PUFFIN_MAGIC_SIZE + PUFFIN_FOOTER_STRUCT_SIZE;
 // Flags byte 0, bit 0: FooterPayload is LZ4-compressed
 static constexpr uint32_t PUFFIN_FOOTER_COMPRESSED_FLAG = 1;
-// The one and only, it seems
 static constexpr const char *DELETION_VECTOR_BLOB_TYPE = "deletion-vector-v1";
 static constexpr const char *DUCKLAKE_SNAPSHOT_PROPERTY = "ducklake-snapshot-id";
 
@@ -79,7 +94,8 @@ static void AddBlobMetadata(yyjson_mut_doc *doc, yyjson_mut_val *blob_arr,
 // FileMetadata payload: blobs (required) and properties (optional)
 static string WriteFooterPayload(const vector<DuckLakePuffinWriter::BlobInput> &blobs,
                                  const vector<DuckLakePuffinBlob> &blob_infos, const string &data_file_path) {
-	auto doc = yyjson_mut_doc_new(nullptr);
+	YyjsonMutDocHolder doc_holder(yyjson_mut_doc_new(nullptr));
+	auto doc = doc_holder.doc;
 	auto root = yyjson_mut_obj(doc);
 	yyjson_mut_doc_set_root(doc, root);
 
@@ -93,13 +109,10 @@ static string WriteFooterPayload(const vector<DuckLakePuffinWriter::BlobInput> &
 	size_t len = 0;
 	auto json = yyjson_mut_write(doc, 0, &len);
 	if (!json) {
-		yyjson_mut_doc_free(doc);
 		throw InternalException("Failed to write puffin footer payload");
 	}
-	string payload(json, len);
-	free(json);
-	yyjson_mut_doc_free(doc);
-	return payload;
+	unique_ptr<char, void (*)(void *)> json_holder(json, std::free);
+	return string(json, len);
 }
 
 // Footer: Magic | FooterPayload | FooterPayloadSize (little-endian) | Flags (all zero) | Magic
@@ -173,10 +186,11 @@ static idx_t ParseSnapshotProperty(const string &value, const string &path) {
 	return parsed;
 }
 
-// A bare deletion-vector-v1 blob starts with a 4-byte big-endian length followed by the blob magic
+// A bare deletion-vector-v1 blob is a 4-byte length prefix followed by the blob magic
 static bool IsBareDeletionVector(data_ptr_t data, idx_t size) {
-	constexpr const data_t DELETION_VECTOR_MAGIC[4] = {0xD1, 0xD3, 0x39, 0x64};
-	return size >= 8 && memcmp(data + PUFFIN_MAGIC_SIZE, DELETION_VECTOR_MAGIC, 4) == 0;
+	auto &magic = DuckLakeDeletionVectorData::DELETION_VECTOR_MAGIC;
+	return size >= sizeof(uint32_t) + sizeof(magic) &&
+	       memcmp(data + sizeof(uint32_t), magic, sizeof(magic)) == 0;
 }
 
 // Footer: Magic | FooterPayload | FooterPayloadSize (little-endian) | Flags | Magic
@@ -220,8 +234,13 @@ static bool TryParseBlobMetadata(yyjson_val *blob_val, idx_t blob_section_end, c
 	if (!offset_val || !yyjson_is_int(offset_val) || !length_val || !yyjson_is_int(length_val)) {
 		throw InvalidInputException("Puffin file \"%s\" is corrupt - blob without offset/length", path);
 	}
-	blob.offset = NumericCast<idx_t>(yyjson_get_sint(offset_val));
-	blob.length = NumericCast<idx_t>(yyjson_get_sint(length_val));
+	auto raw_offset = yyjson_get_sint(offset_val);
+	auto raw_length = yyjson_get_sint(length_val);
+	if (raw_offset < 0 || raw_length < 0) {
+		throw InvalidInputException("Puffin file \"%s\" is corrupt - blob offset/length out of range", path);
+	}
+	blob.offset = NumericCast<idx_t>(raw_offset);
+	blob.length = NumericCast<idx_t>(raw_length);
 	if (blob.offset < PUFFIN_MAGIC_SIZE || blob.length > blob_section_end ||
 	    blob.offset > blob_section_end - blob.length) {
 		throw InvalidInputException("Puffin file \"%s\" is corrupt - blob offset/length out of range", path);

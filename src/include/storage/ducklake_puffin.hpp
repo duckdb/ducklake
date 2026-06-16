@@ -10,6 +10,7 @@
 
 #include "duckdb/common/common.hpp"
 #include "duckdb/common/optional_idx.hpp"
+#include "duckdb/common/optional_ptr.hpp"
 #include "duckdb/common/set.hpp"
 
 namespace duckdb {
@@ -35,7 +36,7 @@ struct DuckLakePuffinWriter {
 	struct BlobInput {
 		optional_idx snapshot_id;
 		//! Complete deletion vector as of snapshot_id (cumulative, not a delta)
-		const set<idx_t> *positions = nullptr;
+		optional_ptr<const set<idx_t>> positions;
 	};
 
 	static DuckLakePuffinWriteResult Write(FileSystem &fs, const string &path, const string &data_file_path,

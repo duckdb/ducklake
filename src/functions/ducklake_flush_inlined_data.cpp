@@ -185,9 +185,7 @@ SinkFinalizeType DuckLakeFlushData::Finalize(Pipeline &pipeline, Event &event, C
 				                                              file_entry.first,
 				                                              file_entry.second,
 				                                              DeleteFileSource::FLUSH};
-				auto delete_file =
-				    use_deletion_vectors ? DuckLakeDeleteFileWriter::WriteDeletionVectorFileWithSnapshots(context, file_input)
-				                         : DuckLakeDeleteFileWriter::WriteDeleteFileWithSnapshots(context, file_input);
+				auto delete_file = DuckLakeDeleteFileWriter::Write(context, file_input, use_deletion_vectors);
 				delete_files.push_back(std::move(delete_file));
 			}
 			AttachDeleteFilesToWrittenFiles(delete_files, global_state.written_files);
@@ -564,9 +562,7 @@ LEFT JOIN (
 		                                              file_info.file_path,
 		                                              deletions_to_write,
 		                                              DeleteFileSource::FLUSH};
-		auto delete_file = use_deletion_vectors
-		                       ? DuckLakeDeleteFileWriter::WriteDeletionVectorFileWithSnapshots(context, file_input)
-		                       : DuckLakeDeleteFileWriter::WriteDeleteFileWithSnapshots(context, file_input);
+		auto delete_file = DuckLakeDeleteFileWriter::Write(context, file_input, use_deletion_vectors);
 		delete_file.data_file_id = DataFileIndex(file_id);
 		delete_file.max_snapshot = file_info.max_snapshot;
 

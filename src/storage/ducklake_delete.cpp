@@ -224,6 +224,17 @@ DuckLakeDeleteFileWriter::WriteDeletionVectorFileWithSnapshots(ClientContext &co
 	return delete_file;
 }
 
+DuckLakeDeleteFile DuckLakeDeleteFileWriter::Write(ClientContext &context, WriteDeleteFileInput &input,
+                                                   bool use_deletion_vectors) {
+	return use_deletion_vectors ? WriteDeletionVectorFile(context, input) : WriteDeleteFile(context, input);
+}
+
+DuckLakeDeleteFile DuckLakeDeleteFileWriter::Write(ClientContext &context, WriteDeleteFileWithSnapshotsInput &input,
+                                                   bool use_deletion_vectors) {
+	return use_deletion_vectors ? WriteDeletionVectorFileWithSnapshots(context, input)
+	                            : WriteDeleteFileWithSnapshots(context, input);
+}
+
 //===--------------------------------------------------------------------===//
 // DuckLakeDelete
 //===--------------------------------------------------------------------===//
@@ -454,9 +465,7 @@ void DuckLakeDelete::FlushDeleteWithSnapshots(DuckLakeTransaction &transaction, 
 	auto &catalog = table.catalog.Cast<DuckLakeCatalog>();
 	auto &schema = table.ParentSchema().Cast<DuckLakeSchemaEntry>();
 	bool use_deletion_vectors = catalog.WriteDeletionVectors(schema.GetSchemaId(), table.GetTableId());
-	auto written_file = use_deletion_vectors
-	                        ? DuckLakeDeleteFileWriter::WriteDeletionVectorFileWithSnapshots(context, input)
-	                        : DuckLakeDeleteFileWriter::WriteDeleteFileWithSnapshots(context, input);
+	auto written_file = DuckLakeDeleteFileWriter::Write(context, input, use_deletion_vectors);
 
 	written_file.data_file_id = delete_file.data_file_id;
 	written_file.overwrites_existing_delete = delete_file.overwrites_existing_delete;
@@ -568,8 +577,7 @@ void DuckLakeDelete::FlushDelete(DuckLakeTransaction &transaction, ClientContext
 	                            filename,
 	                            sorted_deletes,
 	                            DeleteFileSource::REGULAR};
-	auto written_file = use_deletion_vectors ? DuckLakeDeleteFileWriter::WriteDeletionVectorFile(context, input)
-	                                         : DuckLakeDeleteFileWriter::WriteDeleteFile(context, input);
+	auto written_file = DuckLakeDeleteFileWriter::Write(context, input, use_deletion_vectors);
 
 	written_file.data_file_id = delete_file.data_file_id;
 	written_file.overwrites_existing_delete = delete_file.overwrites_existing_delete;
