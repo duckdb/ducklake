@@ -111,7 +111,8 @@ struct HivePartition {
 	FieldIndex field_index;
 	LogicalType field_type;
 	Value hive_value;
-	DuckLakeTransformType transform_type;
+	DuckLakeTransform transform;
+	optional_idx partition_key_index;
 };
 
 struct ParquetFileMetadata {
@@ -913,6 +914,19 @@ static bool SupportsHivePartitioning(const LogicalType &type) {
 	return true;
 }
 
+static optional_idx GetIdentityPartitionKeyIndex(optional_ptr<DuckLakePartition> partition_data,
+                                                 FieldIndex field_index) {
+	if (!partition_data) {
+		return optional_idx();
+	}
+	for (auto &field : partition_data->fields) {
+		if (field.field_id == field_index && field.transform.type == DuckLakeTransformType::IDENTITY) {
+			return optional_idx(field.partition_key_index);
+		}
+	}
+	return optional_idx();
+}
+
 unique_ptr<DuckLakeNameMapEntry> DuckLakeFileProcessor::MapHiveColumn(ParquetFileMetadata &file_metadata,
                                                                       const DuckLakeFieldId &field_id,
                                                                       const Value &hive_value) {
@@ -932,8 +946,11 @@ unique_ptr<DuckLakeNameMapEntry> DuckLakeFileProcessor::MapHiveColumn(ParquetFil
 	}
 
 	// Store the hive partition information for later statistics processing
+	DuckLakeTransform transform;
+	transform.type = DuckLakeTransformType::IDENTITY;
+	auto partition_key_index = GetIdentityPartitionKeyIndex(table.GetPartitionData(), target_field_id);
 	file_metadata.hive_partition_values.emplace_back(
-	    HivePartition {target_field_id, field_id.Type(), hive_value, DuckLakeTransformType::IDENTITY});
+	    HivePartition {target_field_id, field_id.Type(), hive_value, transform, partition_key_index});
 
 	// return the map - the name is empty on purpose to signal this comes from a partition
 	auto result = make_uniq<DuckLakeNameMapEntry>();
@@ -1066,7 +1083,7 @@ void DuckLakeFileProcessor::MapColumnStats(ParquetFileMetadata &file_metadata, D
 
 	// Process statistics for hive partition columns
 	for (auto &entry : file_metadata.hive_partition_values) {
-		if (entry.transform_type == DuckLakeTransformType::BUCKET) {
+		if (entry.transform.type == DuckLakeTransformType::BUCKET) {
 			// Bucket partitioning uses the result of the hash for the folder names, so we can't get statistics from it
 			continue;
 		}
@@ -1185,7 +1202,8 @@ void DuckLakeFileProcessor::MapPartitionColumns(ParquetFileMetadata &file) {
 		auto hive_value =
 		    HivePartitioning::GetValue(context, partition_key_name, hive_entry->second, partition_key_type);
 		file.hive_partition_values.emplace_back(
-		    HivePartition {partition_field.field_id, partition_key_type, hive_value, partition_field.transform.type});
+		    HivePartition {partition_field.field_id, partition_key_type, hive_value, partition_field.transform,
+		                   optional_idx(partition_field.partition_key_index)});
 	}
 }
 
@@ -1222,31 +1240,39 @@ DuckLakeDataFile DuckLakeFileProcessor::AddFileToTable(ParquetFileMetadata &file
 		if (file.hive_partition_values.size() != partition_data->fields.size()) {
 			invalid_partition = true;
 		} else {
+			vector<bool> found_partition_keys(partition_data->fields.size(), false);
 			for (const auto &hive_partition_value : file.hive_partition_values) {
-				bool found_field = false;
-				for (const auto &field : partition_data->fields) {
-					if (field.field_id.index == hive_partition_value.field_index.index) {
-						found_field = true;
-						break;
-					}
-				}
-				if (!found_field) {
+				if (!hive_partition_value.partition_key_index.IsValid()) {
 					invalid_partition = true;
 					break;
 				}
+				auto partition_key_index = hive_partition_value.partition_key_index.GetIndex();
+				if (partition_key_index >= partition_data->fields.size() || found_partition_keys[partition_key_index]) {
+					invalid_partition = true;
+					break;
+				}
+				optional_ptr<const DuckLakePartitionField> partition_field;
+				for (const auto &field : partition_data->fields) {
+					if (field.partition_key_index == partition_key_index) {
+						partition_field = &field;
+						break;
+					}
+				}
+				if (!partition_field || partition_field->field_id != hive_partition_value.field_index ||
+				    !(partition_field->transform == hive_partition_value.transform)) {
+					invalid_partition = true;
+					break;
+				}
+				found_partition_keys[partition_key_index] = true;
 			}
 		}
 		if (invalid_partition) {
 			throw InvalidInputException("File \"%s\" contains an invalid partition value for the table configuration.",
 			                            file.filename);
 		}
-		unordered_map<idx_t, idx_t> field_partition_key_map;
-		for (auto &partition_fields : partition_data->fields) {
-			field_partition_key_map[partition_fields.field_id.index] = partition_fields.partition_key_index;
-		}
 		for (auto &hive_partition : file.hive_partition_values) {
 			result.partition_values.push_back(
-			    {field_partition_key_map[hive_partition.field_index.index], hive_partition.hive_value});
+			    {hive_partition.partition_key_index.GetIndex(), hive_partition.hive_value});
 		}
 		result.partition_id = partition_data->partition_id;
 	}
