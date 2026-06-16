@@ -78,6 +78,15 @@ SELECT COUNT(*) FILTER(WHERE footer_size = 0), COUNT(*) FILTER(WHERE footer_size
 ----
 1	1
 
+# footer_size exactly spans the puffin footer: the last footer_size bytes start with the PFA1 magic
+query I
+SELECT b.content[lf.delete_file_size_bytes - lf.delete_file_footer_size + 1 : lf.delete_file_size_bytes - lf.delete_file_footer_size + 4] = 'PFA1'::BLOB
+FROM ducklake_list_files('ducklake', 'test') lf
+JOIN read_blob('{DATA_PATH}/deletion_vector_files/**/*-delete.puffin') b ON b.filename = lf.delete_file
+WHERE lf.delete_file_footer_size > 0
+----
+true
+
 # time travel across the per-snapshot deletion vectors
 # version 3: after deleting the even rows (1000 rows remain)
 query II
