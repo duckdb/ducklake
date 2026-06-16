@@ -72,11 +72,11 @@ SELECT COUNT(*) FILTER(WHERE id < 100) FROM ducklake.test
 ----
 0
 
-# puffin files now carry a real footer, so footer_size must be non-zero
-query I
-SELECT DISTINCT footer_size > 0 FROM __ducklake_metadata_ducklake.ducklake_delete_file WHERE end_snapshot IS NULL
+# single-DV files are bare blobs (footer_size 0); the multi-snapshot file is a puffin container (footer_size > 0)
+query II
+SELECT COUNT(*) FILTER(WHERE footer_size = 0), COUNT(*) FILTER(WHERE footer_size > 0) FROM __ducklake_metadata_ducklake.ducklake_delete_file WHERE end_snapshot IS NULL
 ----
-true
+1	1
 
 # time travel across the per-snapshot deletion vectors
 # version 3: after deleting the even rows (1000 rows remain)

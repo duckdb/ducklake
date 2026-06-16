@@ -112,26 +112,35 @@ static void AppendFooter(vector<data_t> &file_data, const string &payload) {
 	AppendMagic(file_data);
 }
 
-// File structure: Magic Blob1 ... BlobN Footer
+// A single deletion vector is written as a bare deletion-vector-v1 blob (no puffin container/footer),
+// matching how Iceberg stores deletion vectors.
 DuckLakePuffinWriteResult DuckLakePuffinWriter::Write(FileSystem &fs, const string &path,
                                                       const string &data_file_path, const vector<BlobInput> &blobs) {
 	vector<data_t> file_data;
-	AppendMagic(file_data);
-	auto blob_infos = AppendBlobs(file_data, blobs);
-	auto payload = WriteFooterPayload(blobs, blob_infos, data_file_path);
-	AppendFooter(file_data, payload);
+	DuckLakePuffinWriteResult result;
+	if (blobs.size() == 1) {
+		// bare blob, no footer
+		file_data = DuckLakeDeletionVectorData::ToBlob(*blobs[0].positions);
+		result.delete_count = blobs[0].positions->size();
+		result.footer_size = 0;
+	} else {
+		// File structure: Magic Blob1 ... BlobN Footer
+		AppendMagic(file_data);
+		auto blob_infos = AppendBlobs(file_data, blobs);
+		auto payload = WriteFooterPayload(blobs, blob_infos, data_file_path);
+		AppendFooter(file_data, payload);
+		// blobs are cumulative, the latest blob holds the full deletion vector
+		for (auto &blob : blobs) {
+			result.delete_count = MaxValue<idx_t>(result.delete_count, blob.positions->size());
+		}
+		result.footer_size = payload.size() + PUFFIN_FOOTER_STRUCT_SIZE;
+	}
 
 	auto file_handle = fs.OpenFile(path, FileOpenFlags::FILE_FLAGS_WRITE | FileOpenFlags::FILE_FLAGS_FILE_CREATE_NEW);
 	file_handle->Write(file_data.data(), file_data.size());
 	file_handle->Close();
 
-	DuckLakePuffinWriteResult result;
-	// blobs are cumulative, the latest blob holds the full deletion vector
-	for (auto &blob : blobs) {
-		result.delete_count = MaxValue<idx_t>(result.delete_count, blob.positions->size());
-	}
 	result.file_size_bytes = file_data.size();
-	result.footer_size = payload.size() + PUFFIN_FOOTER_STRUCT_SIZE;
 	return result;
 }
 
@@ -164,18 +173,10 @@ static idx_t ParseSnapshotProperty(const string &value, const string &path) {
 	return parsed;
 }
 
-// File structure: the file must start with Magic
-static void CheckHeaderMagic(data_ptr_t data, idx_t size, const string &path) {
-	if (size >= PUFFIN_MIN_FILE_SIZE && memcmp(data, PUFFIN_MAGIC, PUFFIN_MAGIC_SIZE) == 0) {
-		return;
-	}
+// A bare deletion-vector-v1 blob starts with a 4-byte big-endian length followed by the blob magic
+static bool IsBareDeletionVector(data_ptr_t data, idx_t size) {
 	constexpr const data_t DELETION_VECTOR_MAGIC[4] = {0xD1, 0xD3, 0x39, 0x64};
-	if (size >= 8 && memcmp(data + PUFFIN_MAGIC_SIZE, DELETION_VECTOR_MAGIC, 4) == 0) {
-		throw InvalidInputException("Deletion vector file \"%s\" uses the footer-less pre-release format, which "
-		                            "is no longer supported - rewrite the deletes to upgrade the file",
-		                            path);
-	}
-	throw InvalidInputException("File \"%s\" is not a puffin file - magic mismatch", path);
+	return size >= 8 && memcmp(data + PUFFIN_MAGIC_SIZE, DELETION_VECTOR_MAGIC, 4) == 0;
 }
 
 // Footer: Magic | FooterPayload | FooterPayloadSize (little-endian) | Flags | Magic
@@ -265,13 +266,24 @@ DuckLakePuffinReader::DuckLakePuffinReader(data_ptr_t data, idx_t size, const st
 	ParseFooter();
 }
 
-// File structure: Magic Blob1 ... BlobN Footer
+// Puffin container: Magic Blob1 ... BlobN Footer, or a single bare deletion-vector-v1 blob
 void DuckLakePuffinReader::ParseFooter() {
-	CheckHeaderMagic(data, size, path);
-	auto payload_start = ValidateFooter(data, size, path);
-	auto payload_size = size - PUFFIN_FOOTER_TAIL_SIZE - payload_start;
-	auto blob_section_end = payload_start - PUFFIN_MAGIC_SIZE;
-	blobs = ParseFileMetadata(data + payload_start, payload_size, blob_section_end, path);
+	if (size >= PUFFIN_MIN_FILE_SIZE && memcmp(data, PUFFIN_MAGIC, PUFFIN_MAGIC_SIZE) == 0) {
+		auto payload_start = ValidateFooter(data, size, path);
+		auto payload_size = size - PUFFIN_FOOTER_TAIL_SIZE - payload_start;
+		auto blob_section_end = payload_start - PUFFIN_MAGIC_SIZE;
+		blobs = ParseFileMetadata(data + payload_start, payload_size, blob_section_end, path);
+		return;
+	}
+	if (IsBareDeletionVector(data, size)) {
+		// a single snapshot-less blob spanning the whole file, its snapshot is the metadata begin_snapshot
+		DuckLakePuffinBlob blob;
+		blob.offset = 0;
+		blob.length = size;
+		blobs.push_back(blob);
+		return;
+	}
+	throw InvalidInputException("File \"%s\" is not a valid deletion vector - magic mismatch", path);
 }
 
 unique_ptr<DuckLakeDeletionVectorData> DuckLakePuffinReader::DecodeBlob(const DuckLakePuffinBlob &blob) const {
