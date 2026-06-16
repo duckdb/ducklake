@@ -13,7 +13,8 @@ FULL_TEST_EXTENSION_DEPS=httpfs
 ifdef CI
 TEST_FLAGS:=--stabilize-tests
 endif
-T ?= $(TEST_FLAGS) "test/*"
+# ~[.] excludes hidden/slow (.test_slow) tests
+T ?= $(TEST_FLAGS) "~[.]test/*"
 
 # Aws and Azure have vcpkg dependencies and therefore need vcpkg merging
 ifeq (${BUILD_EXTENSION_TEST_DEPS}, full)
