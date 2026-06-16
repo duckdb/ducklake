@@ -10,6 +10,8 @@
 #include "duckdb/planner/filter/expression_filter.hpp"
 #include "duckdb/planner/filter/table_filter_functions.hpp"
 #include "duckdb/function/scalar/variant_utils.hpp"
+#include "duckdb/main/client_context.hpp"
+#include "duckdb/main/database.hpp"
 
 #include <cmath>
 
@@ -446,6 +448,25 @@ string DuckLakeUtil::ChunkRowToSQL(DuckLakeMetadataManager &metadata_manager, Cl
 		result += ValueToSQL(metadata_manager, context, chunk.GetValue(c, row));
 	}
 	return result;
+}
+
+void DuckLakeUtil::CopyExtensionSettings(ClientContext &from, ClientContext &to) {
+	auto &db_config = DBConfig::GetConfig(from);
+	for (auto &entry : db_config.GetExtensionSettings()) {
+		auto &option = entry.second;
+		if (!option.setting_index.IsValid()) {
+			continue;
+		}
+		auto setting_index = option.setting_index.GetIndex();
+		if (!from.config.user_settings.IsSet(setting_index)) {
+			continue;
+		}
+		Value value;
+		if (!from.TryGetCurrentSetting(entry.first, value)) {
+			continue;
+		}
+		to.config.user_settings.SetUserSetting(setting_index, value);
+	}
 }
 
 } // namespace duckdb
