@@ -1,0 +1,42 @@
+# name: test/sql/issues/issue_1212.test
+# description: Regression test for issue #1212, VARCHAR DEFAULT 'NULL' should not become SQL NULL
+# group: [issues]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+
+test-env DATA_PATH __TEST_DIR__
+
+statement ok
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/issue_1212')
+
+statement ok
+USE ducklake
+
+statement ok
+CREATE TABLE t (id INTEGER, t0 VARCHAR, t1 VARCHAR DEFAULT 'NULL');
+
+statement ok
+INSERT INTO t (id) VALUES (1);
+
+query III
+FROM t;
+----
+1	NULL	NULL
+
+query III
+FROM t WHERE t0 IS NULL;
+----
+1	NULL	NULL
+
+query III
+FROM t WHERE t1 IS NULL;
+----
+
+query I
+SELECT count(*) FROM t WHERE t1 = 'NULL';
+----
+1

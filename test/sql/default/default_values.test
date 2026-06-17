@@ -36,7 +36,7 @@ SELECT * FROM ducklake.test
 42	200
 
 statement ok
-CREATE TABLE ducklake.test_special_values(i INTEGER, s1 VARCHAR DEFAULT '', s2 VARCHAR DEFAULT 'NULL');
+CREATE TABLE ducklake.test_special_values(i INTEGER, s1 VARCHAR DEFAULT '', s2 VARCHAR DEFAULT NULL);
 
 statement ok
 INSERT INTO ducklake.test_special_values (i) VALUES (100)
