@@ -13,7 +13,7 @@ test-env DATA_PATH {TEST_DIR}
 
 
 statement ok
-ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/ducklake_partitioning_nop', METADATA_CATALOG 'ducklake_metadata')
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/ducklake_partitioning_nop', METADATA_CATALOG 'ducklake_metadata', DATA_INLINING_ROW_LIMIT 0)
 
 statement ok
 USE ducklake
@@ -41,6 +41,53 @@ query I
 select count(*) FROM ducklake_metadata.ducklake_partition_info
 ----
 1
+
+# A redundant partition change in a transaction that also writes files should keep
+# using the existing partition id.
+statement ok
+BEGIN;
+
+statement ok
+ALTER TABLE partitioned_tbl SET PARTITIONED BY (part_key);
+
+statement ok
+DELETE FROM partitioned_tbl WHERE part_key = 0;
+
+statement ok
+INSERT INTO partitioned_tbl VALUES (0, 'replacement_a'), (0, 'replacement_b');
+
+statement ok
+COMMIT;
+
+statement ok
+SET VARIABLE expected_partition_id = (
+    SELECT partition_id
+    FROM ducklake_metadata.ducklake_partition_info
+    WHERE table_id = 1
+);
+
+query I
+SELECT COUNT(*)
+FROM ducklake_metadata.ducklake_data_file
+WHERE table_id = 1
+  AND end_snapshot IS NULL
+  AND partition_id IS DISTINCT FROM getvariable('expected_partition_id');
+----
+0
+
+query I
+SELECT COUNT(DISTINCT partition_id)
+FROM ducklake_metadata.ducklake_data_file
+WHERE table_id = 1
+  AND end_snapshot IS NULL;
+----
+1
+
+query I
+SELECT MAX(schema_version)
+FROM ducklake_metadata.ducklake_snapshot;
+----
+2
 
 # This should now change the partition, since it's different
 statement ok
@@ -123,4 +170,3 @@ query I
 select count(*) FROM ducklake_metadata.ducklake_partition_info
 ----
 7
-

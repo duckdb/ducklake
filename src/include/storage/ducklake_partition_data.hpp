@@ -40,6 +40,10 @@ struct DuckLakePartitionField {
 
 struct DuckLakePartition {
 	idx_t partition_id = 0;
+	//! The transaction-local id this partition was assigned when it was created. Data files written in
+	//! the same transaction reference this id. Commit attempts overwrite partition_id with the id of
+	//! that attempt, so on retry the data-file remap must key off the original transaction-local id.
+	optional_idx local_partition_id;
 	vector<DuckLakePartitionField> fields;
 };
 
