@@ -1234,6 +1234,31 @@ void DuckLakeTransactionState::GetNewTableInfo(DuckLakeCommitState &commit_state
 			inlined_entry.uuid = latest_table.GetTableUUID();
 			inlined_entry.columns = latest_table.GetTableColumns();
 			result.new_inlined_data_tables.push_back(std::move(inlined_entry));
+
+			// CREATE TABLE ... PARTITIONED BY / SORTED BY
+			if (local_change.type == LocalChangeType::CREATED) {
+				if (table.GetPartitionData()) {
+					auto partition_key = DuckLakeTransaction::GetNewPartitionKey(commit_state, table);
+					result.new_partition_keys.push_back(std::move(partition_key));
+				}
+				if (table.GetSortData()) {
+					auto sort_key = DuckLakeTransaction::GetNewSortKey(commit_state, table);
+					result.new_sort_keys.push_back(std::move(sort_key));
+				}
+			}
+			// CREATE TABLE / CTAS WITH (...) options. A CREATE+RENAME chain keeps the CREATED entry as
+			// a child (HandleRenameOldEntry), so the reverse traversal emits the options on the CREATED
+			// pass and the same-txn RENAMED pass breaks early above — emit whenever old_table_id is
+			// local, which covers CREATED and the fallback where a local RENAMED was not emitted yet.
+			if (old_table_id.IsTransactionLocal()) {
+				auto &options_in_create_with = table.GetOptionsInCreateWith();
+				for (auto &tag : options_in_create_with) {
+					DuckLakeConfigOption opt;
+					opt.option = tag;
+					opt.table_id = new_table_id;
+					result.options_in_create_with.push_back(std::move(opt));
+				}
+			}
 			break;
 		}
 		default:
@@ -1445,6 +1470,11 @@ string DuckLakeTransactionState::CommitChanges(DuckLakeCommitState &commit_state
 		batch_queries += DuckLakeMetadataManager::WriteNewColumns(result.new_columns);
 		batch_queries += context.write_inlined_tables(commit_snapshot, result.new_inlined_data_tables);
 		batch_queries += DuckLakeMetadataManager::WriteNewSortKeys(existing_catalog.sorts, result.new_sort_keys);
+		batch_queries += DuckLakeMetadataManager::WriteOptionsInCreateWith(result.options_in_create_with);
+		// re-key in-memory options from the local id to the committed id
+		for (auto &opt : result.options_in_create_with) {
+			context.set_config_option(opt);
+		}
 		new_tables_result = result.new_tables;
 		new_inlined_data_tables_result = result.new_inlined_data_tables;
 	}

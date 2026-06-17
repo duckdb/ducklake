@@ -4,7 +4,9 @@
 #include "duckdb/parser/parsed_data/comment_on_column_info.hpp"
 #include "duckdb/parser/parsed_data/create_view_info.hpp"
 #include "duckdb/parser/parsed_data/drop_info.hpp"
+#include "duckdb/parser/result_modifier.hpp"
 #include "duckdb/planner/parsed_data/bound_create_table_info.hpp"
+#include "functions/ducklake_table_functions.hpp"
 #include "storage/ducklake_catalog.hpp"
 #include "storage/ducklake_table_entry.hpp"
 #include "storage/ducklake_transaction.hpp"
@@ -61,9 +63,10 @@ bool DuckLakeSchemaEntry::HandleCreateConflict(CatalogTransaction transaction, C
 	return true;
 }
 
-optional_ptr<CatalogEntry> DuckLakeSchemaEntry::CreateTableExtended(CatalogTransaction transaction,
-                                                                    BoundCreateTableInfo &info, string table_uuid,
-                                                                    string table_data_path) {
+optional_ptr<CatalogEntry>
+DuckLakeSchemaEntry::CreateTableExtended(CatalogTransaction transaction, BoundCreateTableInfo &info, string table_uuid,
+                                         string table_data_path, unique_ptr<DuckLakePartition> prebuilt_partition_data,
+                                         unique_ptr<DuckLakeSort> prebuilt_sort_data) {
 	auto &duck_transaction = transaction.transaction->Cast<DuckLakeTransaction>();
 	auto &base_info = info.Base();
 	// check if we have an existing entry with this name
@@ -75,6 +78,8 @@ optional_ptr<CatalogEntry> DuckLakeSchemaEntry::CreateTableExtended(CatalogTrans
 	if (duck_catalog.DataInliningRowLimit(transaction.GetContext(), schema_id, TableIndex()) > 0) {
 		DuckLakeUtil::ValidateNoInlinedSystemColumns(base_info.columns);
 	}
+	// validate WITH (...) options before any catalog mutation
+	auto options_in_create_with = ValidateOptionsInCreateWith(transaction.GetContext(), base_info.options);
 	//! get a local table-id
 	auto table_id = TableIndex(duck_transaction.GetLocalCatalogId());
 	// generate field ids based on the column ids
@@ -84,6 +89,41 @@ optional_ptr<CatalogEntry> DuckLakeSchemaEntry::CreateTableExtended(CatalogTrans
 	auto table_entry = make_uniq<DuckLakeTableEntry>(ParentCatalog(), *this, base_info, table_id, std::move(table_uuid),
 	                                                 std::move(table_data_path), std::move(field_data), column_id,
 	                                                 std::move(inlined_tables), LocalChangeType::CREATED);
+	// Two routes for partition / sort data:
+	//   (A) CTAS: partition_data and sort_data were pre-built at planning time so the planner-built physical
+	//       write could embed the right partition_id into the data files. Attach them as-is - rebuilding here
+	//       would allocate new ids that wouldn't match the ids baked into the on-disk files.
+	//   (B) Plain CREATE TABLE (non-CTAS): rebuild from the inline clauses on info.Base().partition_keys /
+	//       sort_keys. There's no planning-time write to coordinate with, so the id allocated here is the only id.
+	if (prebuilt_partition_data) {
+		table_entry->SetPartitionData(std::move(prebuilt_partition_data));
+	} else if (!base_info.partition_keys.empty()) {
+		table_entry->SetPartitionData(DuckLakeTableEntry::BuildPartitionData(
+		    duck_transaction, table_entry->GetColumns(), table_entry->GetFieldData(), base_info.partition_keys));
+	}
+	if (prebuilt_sort_data) {
+		table_entry->SetSortData(std::move(prebuilt_sort_data));
+	} else if (!base_info.sort_keys.empty()) {
+		// TODO: FIXME: Needs a fix in upstream DuckDB then a fix here
+		// CREATE TABLE ... SORTED BY (e) accepts only raw expressions (no ASC/DESC/NULLS modifiers).
+		// Wrap each in an OrderByNode using the same defaults the DuckDB transformer produces for a bare
+		// expression list (ASCENDING + ORDER_DEFAULT) - matches the ALTER TABLE ... SET SORTED BY (e) path.
+		vector<OrderByNode> orders;
+		orders.reserve(base_info.sort_keys.size());
+		for (auto &expr : base_info.sort_keys) {
+			orders.emplace_back(OrderType::ASCENDING, OrderByNullType::ORDER_DEFAULT, expr->Copy());
+		}
+		table_entry->SetSortData(
+		    DuckLakeTableEntry::BuildSortData(duck_transaction, table_entry->GetColumns(), orders));
+	}
+	// stash on the entry; same-transaction writers pick these up via DuckLakeCopyInput, and at commit
+	// time WriteOptionsInCreateWith persists them under the freshly-allocated committed table_id.
+	// Routing through the entry (instead of mutating catalog options under the transaction-local id)
+	// keeps the catalog free of dead entries on rollback, matching how new_tables / local_changes
+	// already scope transaction state.
+	if (!options_in_create_with.empty()) {
+		table_entry->SetOptionsInCreateWith(options_in_create_with);
+	}
 	auto result = table_entry.get();
 	duck_transaction.CreateEntry(std::move(table_entry));
 	return result;

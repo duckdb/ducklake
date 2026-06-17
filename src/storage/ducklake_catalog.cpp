@@ -11,6 +11,7 @@
 #include "duckdb/parser/parsed_data/create_table_info.hpp"
 #include "duckdb/parser/parsed_data/create_view_info.hpp"
 #include "duckdb/parser/parsed_data/drop_info.hpp"
+#include "duckdb/planner/parsed_data/bound_create_table_info.hpp"
 #include "duckdb/storage/database_size.hpp"
 #include "storage/ducklake_initializer.hpp"
 #include "storage/ducklake_schema_entry.hpp"
@@ -279,6 +280,12 @@ optional_ptr<CatalogEntry> DuckLakeCatalog::CreateSchema(CatalogTransaction tran
 	auto result = schema_entry.get();
 	duck_transaction.CreateEntry(std::move(schema_entry));
 	return result;
+}
+
+ErrorData DuckLakeCatalog::SupportsCreateTable(BoundCreateTableInfo &info) {
+	// DuckLake handles PARTITIONED BY, SORTED BY, and WITH (...) itself in DuckLakeSchemaEntry,
+	// so suppress the base-class rejection of all three.
+	return ErrorData();
 }
 
 void DuckLakeCatalog::DropSchema(ClientContext &context, DropInfo &info) {

@@ -14,14 +14,17 @@
 #include "duckdb/common/index_vector.hpp"
 #include "storage/ducklake_stats.hpp"
 #include "common/ducklake_data_file.hpp"
+#include "common/ducklake_options.hpp"
 #include "storage/ducklake_field_data.hpp"
+#include "storage/ducklake_partition_data.hpp"
+#include "storage/ducklake_sort_data.hpp"
 
 namespace duckdb {
 class DuckLakeCatalog;
 class DuckLakeSchemaEntry;
 class DuckLakeTableEntry;
+class ParsedExpression;
 class DuckLakeFieldData;
-struct DuckLakePartition;
 struct DuckLakeCopyOptions;
 struct DuckLakeCopyInput;
 
@@ -41,15 +44,19 @@ public:
 
 class DuckLakeInsert : public PhysicalOperator {
 public:
-	//! INSERT INTO
+	//! INSERT INTO an existing table.
 	DuckLakeInsert(PhysicalPlan &physical_plan, const vector<LogicalType> &types, DuckLakeTableEntry &table,
 	               optional_idx partition_id, string encryption_key);
-	//! CREATE TABLE AS
+	//! CREATE TABLE AS - the table is created in GetGlobalSinkState. Any inline
+	//! PARTITIONED BY / SORTED BY clauses are pre-built into ctas_partition_data / ctas_sort_data at planning
+	//! time so the physical_copy upstream of this operator can hive-partition the write with a partition_id
+	//! that matches what gets attached to the table entry at sink-state-init.
 	DuckLakeInsert(PhysicalPlan &physical_plan, const vector<LogicalType> &types, SchemaCatalogEntry &schema,
 	               unique_ptr<BoundCreateTableInfo> info, string table_uuid, string table_data_path,
-	               string encryption_key);
+	               unique_ptr<DuckLakePartition> ctas_partition_data, unique_ptr<DuckLakeSort> ctas_sort_data,
+	               optional_idx partition_id, string encryption_key);
 
-	//! The table to insert into
+	//! The table to insert into (only set for INSERT INTO; nullptr for CTAS until GetGlobalSinkState resolves)
 	optional_ptr<DuckLakeTableEntry> table;
 	//! Table schema, in case of CREATE TABLE AS
 	optional_ptr<SchemaCatalogEntry> schema;
@@ -59,6 +66,11 @@ public:
 	string table_uuid;
 	//! The table data path, in case of CREATE TABLE AS
 	string table_data_path;
+	//! Pre-built partition spec for CTAS (allocated at planning time so the physical write carries the
+	//! correct partition_id).
+	unique_ptr<DuckLakePartition> ctas_partition_data;
+	//! Pre-built sort spec for CTAS (same lifecycle as ctas_partition_data).
+	unique_ptr<DuckLakeSort> ctas_sort_data;
 	//! The partition id we are writing into (if any)
 	optional_idx partition_id;
 	//! The encryption key used for writing the Parquet files
@@ -140,8 +152,22 @@ struct DuckLakeCopyOptions {
 
 struct DuckLakeCopyInput {
 	explicit DuckLakeCopyInput(ClientContext &context, DuckLakeTableEntry &table, const string &hive_partition = "");
+	//! CTAS-flavored: take the field-id mapping and (optional) partition spec from the planning-time-built
+	//! spec rather than from a DuckLakeTableEntry that hasn't been created yet. field_data is required
+	//! because the parquet writer always needs it; partition_data is null when CREATE TABLE AS has no
+	//! inline PARTITIONED BY clause. `options_in_create_with` is the raw `WITH (...)` clause from the
+	//! parser; it is validated and surfaced through the `options_in_create_with` map so the parquet
+	//! write honors it.
 	DuckLakeCopyInput(ClientContext &context, DuckLakeSchemaEntry &schema, const ColumnList &columns,
-	                  const string &data_path_p);
+	                  const string &data_path_p, DuckLakeFieldData &field_data,
+	                  optional_ptr<DuckLakePartition> partition_data = nullptr,
+	                  const case_insensitive_map_t<unique_ptr<ParsedExpression>> &options_in_create_with = {});
+
+	//! Look up an effective DuckLake config option for this write: returns the WITH override if one is
+	//! present in `options_in_create_with`, otherwise falls through to the catalog's table/schema/global
+	//! lookup. Used by PlanCopyForInsert so a CTAS write whose new table_id is not yet allocated still
+	//! picks up the user's WITH (...) values.
+	bool GetEffectiveOption(const string &key, string &out) const;
 
 	DuckLakeCatalog &catalog;
 	optional_ptr<DuckLakePartition> partition_data;
@@ -153,6 +179,9 @@ struct DuckLakeCopyInput {
 	TableIndex table_id;
 	InsertVirtualColumns virtual_columns = InsertVirtualColumns::NONE;
 	optional_idx get_table_index;
+	//! CREATE TABLE / CTAS WITH (...) options that override same-key catalog options for this write.
+	//! Empty for plain INSERT. Validated at plan time before reaching here.
+	option_map_t options_in_create_with;
 };
 
 } // namespace duckdb

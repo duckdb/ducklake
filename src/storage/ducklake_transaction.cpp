@@ -1011,7 +1011,13 @@ DuckLakePartitionInfo DuckLakeTransaction::GetNewPartitionKey(DuckLakeCommitStat
 	auto local_partition_id = partition_data->partition_id;
 	auto partition_id = commit_state.commit_snapshot.next_catalog_id++;
 	partition_key.id = partition_id;
-	partition_data->partition_id = partition_id;
+	// Do NOT mutate partition_data->partition_id here. On commit retry (concurrent metadata-write
+	// conflicts), GetNewPartitionKey runs again with a fresh commit_state. If the in-memory partition
+	// data carried the previous attempt's committed id, local_partition_id above would be wrong and
+	// committed_partition_ids would never contain the actual local sentinel that data files were
+	// stamped with — RemapPartitionId would then leak TRANSACTION_LOCAL_ID_START (= 2^63) into the
+	// SQL, which Postgres bigint rejects (SQLite silently truncates). Keeping the in-memory value as
+	// the local id makes GetNewPartitionKey idempotent across retries.
 	for (auto &field : partition_data->fields) {
 		DuckLakePartitionFieldInfo partition_field;
 		partition_field.partition_key_index = field.partition_key_index;
@@ -1060,7 +1066,10 @@ DuckLakeSortInfo DuckLakeTransaction::GetNewSortKey(DuckLakeCommitState &commit_
 
 	auto sort_id = commit_state.commit_snapshot.next_catalog_id++;
 	sort_key.id = sort_id;
-	sort_data->sort_id = sort_id;
+	// Do NOT mutate sort_data->sort_id here — same retry-idempotency reasoning as GetNewPartitionKey.
+	// No downstream reader observes the mutated value (data files don't reference sort_id), so this
+	// is harmless today, but removing it keeps both code paths symmetric and prevents the same bug
+	// from being reintroduced if anyone adds a RemapSortId step later.
 	for (auto &field : sort_data->fields) {
 		DuckLakeSortFieldInfo sort_field;
 		sort_field.sort_key_index = field.sort_key_index;
@@ -1449,6 +1458,9 @@ void DuckLakeTransaction::RunCommitLoop(DuckLakeSnapshot transaction_snapshot,
 	};
 	context.set_committed_snapshot_id = [&](idx_t snapshot_id) {
 		ducklake_catalog.SetCommittedSnapshotId(snapshot_id);
+	};
+	context.set_config_option = [&](const DuckLakeConfigOption &option) {
+		ducklake_catalog.SetConfigOption(option);
 	};
 	context.commit_info = state->commit_info;
 	state->Commit(transaction_snapshot, transaction_changes, retry_config, context);

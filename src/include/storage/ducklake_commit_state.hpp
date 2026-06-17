@@ -28,6 +28,7 @@ struct NewTableInfo {
 	vector<DuckLakeNewColumn> new_columns;
 	vector<DuckLakeTableInfo> new_inlined_data_tables;
 	vector<DuckLakeSortInfo> new_sort_keys;
+	vector<DuckLakeConfigOption> options_in_create_with;
 };
 
 struct NewMacroInfo {

@@ -1,0 +1,94 @@
+# name: test/sql/settings/create_table_with_options_transaction.test
+# description: WITH (...) options on CREATE / CTAS persist correctly across same-transaction ALTER and rename
+# group: [settings]
+
+require ducklake
+
+require parquet
+
+statement ok
+ATTACH 'ducklake:__TEST_DIR__/ducklake_create_with_options_txn.db' AS ducklake (DATA_PATH '__TEST_DIR__/ducklake_create_with_options_txn_files');
+
+statement ok
+SET threads=1
+
+statement ok
+SET preserve_insertion_order=false
+
+# CTAS + RENAME within the same transaction: options must follow the new name and the parquet
+# files written during the CTAS must already honor the configured row group size.
+statement ok
+BEGIN
+
+statement ok
+CREATE TABLE ducklake.t_rename WITH (parquet_compression='gzip', parquet_row_group_size=500) AS SELECT i FROM range(2500) t(i);
+
+statement ok
+ALTER TABLE ducklake.t_rename RENAME TO t_renamed
+
+statement ok
+COMMIT
+
+query III rowsort
+SELECT option_name, value, scope FROM ducklake.options() WHERE scope='TABLE' AND scope_entry='main.t_renamed' ORDER BY option_name
+----
+parquet_compression	gzip	TABLE
+parquet_row_group_size	500	TABLE
+
+# no leftover options under the original name
+query I
+SELECT COUNT(*) FROM ducklake.options() WHERE scope='TABLE' AND scope_entry='main.t_rename'
+----
+0
+
+# data files were written with the configured compression (the CTAS happened before the rename)
+query I
+SELECT DISTINCT compression FROM parquet_metadata('__TEST_DIR__/ducklake_create_with_options_txn_files/main/**')
+----
+GZIP
+
+# CREATE TABLE + insert + rename within the same transaction
+statement ok
+BEGIN
+
+statement ok
+CREATE TABLE ducklake.t2(i INTEGER) WITH (parquet_compression='zstd');
+
+statement ok
+INSERT INTO ducklake.t2 SELECT range FROM range(1000);
+
+statement ok
+ALTER TABLE ducklake.t2 RENAME TO t2_after
+
+statement ok
+COMMIT
+
+query II
+SELECT option_name, value FROM ducklake.options() WHERE scope='TABLE' AND scope_entry='main.t2_after'
+----
+parquet_compression	zstd
+
+query I
+SELECT DISTINCT compression FROM parquet_metadata('__TEST_DIR__/ducklake_create_with_options_txn_files/main/t2*/**')
+----
+ZSTD
+
+# CREATE TABLE WITH (...) + same-transaction INSERT must apply the override even though the table
+# is still transaction-local (committed table_id has not been allocated yet). DuckLakeCopyInput pulls
+# the override from DuckLakeTableEntry::options_in_create_with.
+statement ok
+BEGIN
+
+statement ok
+CREATE TABLE ducklake.t_local(i INTEGER) WITH (parquet_compression='gzip')
+
+statement ok
+INSERT INTO ducklake.t_local SELECT i FROM range(1000) t(i)
+
+statement ok
+COMMIT
+
+query I
+SELECT DISTINCT compression FROM parquet_metadata('__TEST_DIR__/ducklake_create_with_options_txn_files/main/t_local/**')
+----
+GZIP

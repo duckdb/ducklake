@@ -1,0 +1,345 @@
+# name: test/sql/create_table_inline_partition_sort/create_table_inline_basic.test
+# description: CREATE TABLE with inline PARTITIONED BY / SORTED BY clauses
+# group: [create_table_inline_partition_sort]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/inline_basic', METADATA_CATALOG 'ducklake_metadata', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+USE ducklake
+
+# Test 1: CREATE TABLE with inline PARTITIONED BY only (single column)
+statement ok
+CREATE TABLE t_part (i INTEGER, v VARCHAR) PARTITIONED BY (i)
+
+statement ok
+INSERT INTO t_part VALUES (1, 'a'), (2, 'b'), (1, 'c')
+
+query II
+SELECT i, v FROM t_part ORDER BY i, v
+----
+1	a
+1	c
+2	b
+
+# resolve the table_id in a separate statement - some metadata catalogs (e.g. Quack
+# ones) cannot scan two of their tables in a single query
+statement ok
+SET VARIABLE t_part_id = (SELECT table_id FROM ducklake_metadata.ducklake_table WHERE table_name = 't_part')
+
+# verify partition metadata was persisted at CREATE time (no ALTER ran)
+query I
+SELECT count(*) FROM ducklake_metadata.ducklake_partition_info WHERE table_id = getvariable('t_part_id')
+----
+1
+
+query I
+SELECT count(*) FROM ducklake_metadata.ducklake_partition_column WHERE table_id = getvariable('t_part_id')
+----
+1
+
+# verify the on-disk Parquet files landed in hive-style partition-specific directories
+# (DATA_INLINING_ROW_LIMIT 0 forces INSERT to write Parquet directly; one file per partition value)
+query I
+SELECT count(*) FROM ducklake_metadata.ducklake_data_file WHERE table_id = getvariable('t_part_id')
+----
+2
+
+query I
+SELECT DISTINCT regexp_extract(path, '.*(i=[0-9]+)[/\\].*', 1) FROM ducklake_metadata.ducklake_data_file WHERE table_id = getvariable('t_part_id') ORDER BY 1
+----
+i=1
+i=2
+
+# Test 2: CREATE TABLE with inline SORTED BY only (single column)
+statement ok
+CREATE TABLE t_sort (i INTEGER, v VARCHAR) SORTED BY (i)
+
+statement ok
+INSERT INTO t_sort VALUES (3, 'x'), (1, 'y'), (2, 'z')
+
+# t_sort has a single file (DATA_INLINING_ROW_LIMIT 0, no partitioning, one INSERT batch).
+# SORTED BY (i) means rows are i-ascending in the file - SELECT without ORDER BY returns the
+# file's row order directly, which IS the sort verification.
+query II
+SELECT i, v FROM t_sort
+----
+1	y
+2	z
+3	x
+
+statement ok
+SET VARIABLE t_sort_id = (SELECT table_id FROM ducklake_metadata.ducklake_table WHERE table_name = 't_sort')
+
+query I
+SELECT count(*) FROM ducklake_metadata.ducklake_sort_info WHERE table_id = getvariable('t_sort_id')
+----
+1
+
+query II
+SELECT sort_key_index, expression FROM ducklake_metadata.ducklake_sort_expression WHERE table_id = getvariable('t_sort_id') ORDER BY sort_key_index
+----
+0	i
+
+# verify the inline path persisted the same defaults a bare ALTER TABLE ... SET SORTED BY (col) would
+# (the metadata writer collapses OrderType::ASCENDING -> "ASC" and OrderByNullType::ORDER_DEFAULT -> "NULLS_LAST")
+query III
+SELECT sort_direction, null_order, dialect FROM ducklake_metadata.ducklake_sort_expression WHERE table_id = getvariable('t_sort_id')
+----
+ASC	NULLS_LAST	duckdb
+
+# Test 3: CREATE TABLE with both clauses, PARTITIONED first
+statement ok
+CREATE TABLE t_both1 (a INTEGER, b INTEGER, v VARCHAR) PARTITIONED BY (a) SORTED BY (b)
+
+statement ok
+INSERT INTO t_both1 VALUES (1, 30, 'p'), (2, 10, 'q'), (1, 20, 'r')
+
+# t_both1 is PARTITIONED BY (a), so each value of a lives in its own file. SORTED BY (b) means
+# within each partition's file rows are b-ascending. Filter to one partition at a time and verify
+# row order without ORDER BY - that order IS the on-disk row order of the partition's file.
+query III
+SELECT a, b, v FROM t_both1 WHERE a = 1
+----
+1	20	r
+1	30	p
+
+statement ok
+SET VARIABLE t_both1_id = (SELECT table_id FROM ducklake_metadata.ducklake_table WHERE table_name = 't_both1')
+
+# on-disk: one Parquet file per distinct partition value (a=1 and a=2), each in its own a=N directory
+query I
+SELECT DISTINCT regexp_extract(path, '.*(a=[0-9]+)[/\\].*', 1) FROM ducklake_metadata.ducklake_data_file WHERE table_id = getvariable('t_both1_id') ORDER BY 1
+----
+a=1
+a=2
+
+# Test 4: CREATE TABLE with both clauses, SORTED first (verify either-order grammar)
+statement ok
+CREATE TABLE t_both2 (a INTEGER, b INTEGER) SORTED BY (b) PARTITIONED BY (a)
+
+statement ok
+SET VARIABLE t_both2_id = (SELECT table_id FROM ducklake_metadata.ducklake_table WHERE table_name = 't_both2')
+
+query I
+SELECT count(*) FROM ducklake_metadata.ducklake_partition_info WHERE table_id = getvariable('t_both2_id')
+----
+1
+
+query I
+SELECT count(*) FROM ducklake_metadata.ducklake_sort_info WHERE table_id = getvariable('t_both2_id')
+----
+1
+
+# Test 5: multi-column partition + multi-column sort
+statement ok
+CREATE TABLE t_multi (a INTEGER, b INTEGER, c INTEGER) PARTITIONED BY (a, b) SORTED BY (c, a)
+
+statement ok
+SET VARIABLE t_multi_id = (SELECT table_id FROM ducklake_metadata.ducklake_table WHERE table_name = 't_multi')
+
+query I
+SELECT count(*) FROM ducklake_metadata.ducklake_partition_column WHERE table_id = getvariable('t_multi_id')
+----
+2
+
+query I
+SELECT count(*) FROM ducklake_metadata.ducklake_sort_expression WHERE table_id = getvariable('t_multi_id')
+----
+2
+
+statement ok
+INSERT INTO t_multi VALUES (1, 1, 30), (1, 1, 10), (1, 2, 20), (2, 1, 5)
+
+# t_multi is PARTITIONED BY (a, b), so each (a, b) combination lives in its own file. SORTED BY
+# (c, a) means rows within a partition's file are (c, a)-ascending.
+query III
+SELECT a, b, c FROM t_multi WHERE a = 1 AND b = 1
+----
+1	1	10
+1	1	30
+
+# multi-column hive-style nesting: a=N/b=M/
+query II
+SELECT regexp_extract(path, '.*(a=[0-9]+)[/\\].*', 1) AS a_dir, regexp_extract(path, '.*(b=[0-9]+)[/\\].*', 1) AS b_dir
+FROM ducklake_metadata.ducklake_data_file
+WHERE table_id = getvariable('t_multi_id')
+ORDER BY a_dir, b_dir
+----
+a=1	b=1
+a=1	b=2
+a=2	b=1
+
+# the a directory must come *before* the b directory in the path (PARTITIONED BY (a, b) ordering)
+query I
+SELECT count(*) FROM ducklake_metadata.ducklake_data_file
+WHERE table_id = getvariable('t_multi_id')
+  AND regexp_matches(path, 'a=[0-9]+/b=[0-9]+')
+----
+3
+
+# Test 6: PARTITIONED BY with a transform function
+statement ok
+CREATE TABLE t_transform (ts TIMESTAMP, v INTEGER) PARTITIONED BY (year(ts))
+
+statement ok
+SET VARIABLE t_transform_id = (SELECT table_id FROM ducklake_metadata.ducklake_table WHERE table_name = 't_transform')
+
+query II
+SELECT partition_key_index, transform FROM ducklake_metadata.ducklake_partition_column WHERE table_id = getvariable('t_transform_id')
+----
+0	year
+
+statement ok
+INSERT INTO t_transform VALUES (TIMESTAMP '2023-06-01', 1), (TIMESTAMP '2023-09-15', 2), (TIMESTAMP '2024-03-10', 3)
+
+# year() transform produces hive directories named with the partition key NAME (year, not ts)
+query I
+SELECT DISTINCT regexp_extract(path, '.*(year=[0-9]+)[/\\].*', 1) FROM ducklake_metadata.ducklake_data_file WHERE table_id = getvariable('t_transform_id') ORDER BY 1
+----
+year=2023
+year=2024
+
+# Test 7: PARTITIONED BY only writes partition metadata, NOT sort metadata (asymmetric)
+statement ok
+CREATE TABLE t_only_part (a INTEGER) PARTITIONED BY (a)
+
+statement ok
+SET VARIABLE t_only_part_id = (SELECT table_id FROM ducklake_metadata.ducklake_table WHERE table_name = 't_only_part')
+
+query I
+SELECT count(*) FROM ducklake_metadata.ducklake_partition_info WHERE table_id = getvariable('t_only_part_id')
+----
+1
+
+query I
+SELECT count(*) FROM ducklake_metadata.ducklake_sort_info WHERE table_id = getvariable('t_only_part_id')
+----
+0
+
+statement ok
+INSERT INTO t_only_part VALUES (10), (20), (10)
+
+query I
+SELECT DISTINCT regexp_extract(path, '.*(a=[0-9]+)[/\\].*', 1) FROM ducklake_metadata.ducklake_data_file WHERE table_id = getvariable('t_only_part_id') ORDER BY 1
+----
+a=10
+a=20
+
+# Test 8: SORTED BY only writes sort metadata, NOT partition metadata (asymmetric)
+statement ok
+CREATE TABLE t_only_sort (a INTEGER) SORTED BY (a)
+
+statement ok
+SET VARIABLE t_only_sort_id = (SELECT table_id FROM ducklake_metadata.ducklake_table WHERE table_name = 't_only_sort')
+
+query I
+SELECT count(*) FROM ducklake_metadata.ducklake_partition_info WHERE table_id = getvariable('t_only_sort_id')
+----
+0
+
+query I
+SELECT count(*) FROM ducklake_metadata.ducklake_sort_info WHERE table_id = getvariable('t_only_sort_id')
+----
+1
+
+# Test 9: PARTITIONED BY with bucket(N, col) transform happy path
+statement ok
+CREATE TABLE t_bucket (id BIGINT, v VARCHAR) PARTITIONED BY (bucket(8, id))
+
+statement ok
+SET VARIABLE t_bucket_id = (SELECT table_id FROM ducklake_metadata.ducklake_table WHERE table_name = 't_bucket')
+
+query II
+SELECT partition_key_index, transform FROM ducklake_metadata.ducklake_partition_column WHERE table_id = getvariable('t_bucket_id')
+----
+0	bucket(8)
+
+statement ok
+INSERT INTO t_bucket VALUES (1, 'a'), (2, 'b'), (3, 'c'), (4, 'd'), (5, 'e'), (6, 'f'), (7, 'g'), (8, 'h')
+
+# bucket() transform writes into hive directories named "bucket=N" (modulo bucket count)
+# we don't fix specific bucket assignments (hash-dependent) but we assert at least 1 and at most 8 distinct buckets
+query I
+SELECT count(DISTINCT regexp_extract(path, '.*(bucket=[0-9]+)[/\\].*', 1)) BETWEEN 1 AND 8 FROM ducklake_metadata.ducklake_data_file WHERE table_id = getvariable('t_bucket_id')
+----
+true
+
+# every file must live in a bucket=N directory
+query I
+SELECT count(*) FROM ducklake_metadata.ducklake_data_file WHERE table_id = getvariable('t_bucket_id') AND NOT regexp_matches(path, 'bucket=[0-9]+')
+----
+0
+
+# Test 10: same-transaction CREATE-inline + ALTER-set must NOT emit duplicate partition rows.
+# The reverse-chain commit walk has to dedupe so only the latest (ALTER) wins.
+statement ok
+BEGIN
+
+statement ok
+CREATE TABLE t_create_then_alter (a INTEGER, b INTEGER) PARTITIONED BY (a) SORTED BY (a)
+
+statement ok
+ALTER TABLE t_create_then_alter SET PARTITIONED BY (b)
+
+statement ok
+ALTER TABLE t_create_then_alter SET SORTED BY (b DESC)
+
+statement ok
+COMMIT
+
+statement ok
+SET VARIABLE t_create_then_alter_id = (SELECT table_id FROM ducklake_metadata.ducklake_table WHERE table_name = 't_create_then_alter')
+
+# exactly one partition_info row (the ALTER's), not two
+query I
+SELECT count(*) FROM ducklake_metadata.ducklake_partition_info WHERE table_id = getvariable('t_create_then_alter_id')
+----
+1
+
+# resolve the column_id of b separately so the check below only scans one metadata table
+statement ok
+SET VARIABLE t_create_then_alter_b_col = (SELECT column_id FROM ducklake_metadata.ducklake_column WHERE table_id = getvariable('t_create_then_alter_id') AND column_name = 'b' AND end_snapshot IS NULL)
+
+# the surviving partition row references column b (the ALTER's choice), not a (the inline create table's).
+query III
+SELECT partition_key_index, column_id = getvariable('t_create_then_alter_b_col'), transform
+FROM ducklake_metadata.ducklake_partition_column
+WHERE table_id = getvariable('t_create_then_alter_id')
+----
+0	true	identity
+
+# exactly one sort_info row, and its expression is b DESC (the ALTER's), not a
+query I
+SELECT count(*) FROM ducklake_metadata.ducklake_sort_info WHERE table_id = getvariable('t_create_then_alter_id')
+----
+1
+
+query III
+SELECT expression, sort_direction, null_order FROM ducklake_metadata.ducklake_sort_expression WHERE table_id = getvariable('t_create_then_alter_id')
+----
+b	DESC	NULLS_LAST
+
+# INSERT after the chain: data must land in b=N directories (ALTER won), NOT a=N directories
+statement ok
+INSERT INTO t_create_then_alter VALUES (1, 100), (2, 100), (3, 200)
+
+query I
+SELECT DISTINCT regexp_extract(path, '.*(b=[0-9]+)[/\\].*', 1) FROM ducklake_metadata.ducklake_data_file WHERE table_id = getvariable('t_create_then_alter_id') ORDER BY 1
+----
+b=100
+b=200
+
+# none of the files should be under an a=N directory (regression guard for the dedup logic)
+query I
+SELECT count(*) FROM ducklake_metadata.ducklake_data_file WHERE table_id = getvariable('t_create_then_alter_id') AND regexp_matches(path, 'a=[0-9]+/')
+----
+0

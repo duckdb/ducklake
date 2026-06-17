@@ -1,0 +1,274 @@
+# name: test/sql/settings/create_table_with_options.test
+# description: Test CREATE TABLE / CTAS with WITH (...) table-scoped config options
+# group: [settings]
+
+require ducklake
+
+require parquet
+
+statement ok
+ATTACH 'ducklake:__TEST_DIR__/ducklake_create_with_options.db' AS ducklake (DATA_PATH '__TEST_DIR__/ducklake_create_with_options_files');
+
+# CREATE TABLE with a single WITH option persists to ducklake_metadata
+statement ok
+CREATE TABLE ducklake.t_compress(i INTEGER) WITH (parquet_compression='zstd');
+
+query III
+SELECT option_name, value, scope FROM ducklake.options() WHERE option_name='parquet_compression' AND scope='TABLE' AND scope_entry='main.t_compress'
+----
+parquet_compression	zstd	TABLE
+
+# inserting into the table uses the table-scoped option
+statement ok
+INSERT INTO ducklake.t_compress SELECT range FROM range(1000)
+
+query I
+SELECT DISTINCT compression FROM parquet_metadata('__TEST_DIR__/ducklake_create_with_options_files/main/t_compress/**')
+----
+ZSTD
+
+# CREATE TABLE with multiple WITH options
+statement ok
+CREATE TABLE ducklake.t_multi(i INTEGER) WITH (parquet_compression='gzip', parquet_row_group_size=512);
+
+query III
+SELECT option_name, value, scope FROM ducklake.options() WHERE scope='TABLE' AND scope_entry='main.t_multi' ORDER BY option_name
+----
+parquet_compression	gzip	TABLE
+parquet_row_group_size	512	TABLE
+
+# CTAS with WITH options - validates the option both takes effect and is persisted
+statement ok
+SET threads=1
+
+statement ok
+SET preserve_insertion_order=false
+
+statement ok
+CREATE TABLE ducklake.t_ctas WITH (parquet_compression='gzip', parquet_row_group_size=2048) AS SELECT i, 'hello' || i s FROM range(4000) t(i);
+
+query III
+SELECT option_name, value, scope FROM ducklake.options() WHERE scope='TABLE' AND scope_entry='main.t_ctas' ORDER BY option_name
+----
+parquet_compression	gzip	TABLE
+parquet_row_group_size	2048	TABLE
+
+# parquet files written by the CTAS use the configured compression
+query I
+SELECT DISTINCT compression FROM parquet_metadata('__TEST_DIR__/ducklake_create_with_options_files/main/t_ctas/**')
+----
+GZIP
+
+# 4000 rows at row_group_size=2048 produces at least 2 row groups
+query I
+SELECT COUNT(DISTINCT row_group_id) >= 2 FROM parquet_metadata('__TEST_DIR__/ducklake_create_with_options_files/main/t_ctas/**')
+----
+true
+
+# unsupported option key raises an error
+statement error
+CREATE TABLE ducklake.t_bad(i INTEGER) WITH (not_a_real_option='x');
+----
+Unsupported option
+
+# bad value also fails (parquet_compression rejects unknown codec)
+statement error
+CREATE TABLE ducklake.t_bad(i INTEGER) WITH (parquet_compression='bogus');
+----
+Unsupported codec
+
+statement ok
+DETACH ducklake
+
+# options survive a restart
+statement ok
+ATTACH 'ducklake:__TEST_DIR__/ducklake_create_with_options.db' AS ducklake (DATA_PATH '__TEST_DIR__/ducklake_create_with_options_files');
+
+query I
+SELECT value FROM ducklake.options() WHERE option_name='parquet_compression' AND scope='TABLE' AND scope_entry='main.t_compress'
+----
+zstd
+
+# CREATE OR REPLACE swaps in new options for the new table
+statement ok
+CREATE TABLE ducklake.t_repl(i INTEGER) WITH (parquet_compression='zstd');
+
+statement ok
+CREATE OR REPLACE TABLE ducklake.t_repl(i INTEGER) WITH (parquet_compression='gzip');
+
+query I
+SELECT value FROM ducklake.options() WHERE option_name='parquet_compression' AND scope='TABLE' AND scope_entry='main.t_repl'
+----
+gzip
+
+# CREATE TABLE IF NOT EXISTS does not mutate options on an existing table
+statement ok
+CREATE TABLE ducklake.t_ine(i INTEGER) WITH (parquet_compression='zstd');
+
+statement ok
+CREATE TABLE IF NOT EXISTS ducklake.t_ine(i INTEGER) WITH (parquet_compression='gzip');
+
+query I
+SELECT value FROM ducklake.options() WHERE option_name='parquet_compression' AND scope='TABLE' AND scope_entry='main.t_ine'
+----
+zstd
+
+# WITH (...) on a CTAS beats a schema-scope option for the same key
+statement ok
+CREATE SCHEMA ducklake.s_prec
+
+statement ok
+CALL ducklake.set_option('parquet_compression', 'gzip', schema => 's_prec')
+
+statement ok
+CREATE TABLE ducklake.s_prec.t_prec WITH (parquet_compression='zstd') AS SELECT i FROM range(1000) t(i)
+
+query I
+SELECT DISTINCT compression FROM parquet_metadata('__TEST_DIR__/ducklake_create_with_options_files/s_prec/t_prec/**')
+----
+ZSTD
+
+# option keys are case-insensitive and the value is canonicalized to lower
+statement ok
+CREATE TABLE ducklake.t_case(i INTEGER) WITH (PARQUET_COMPRESSION='GZIP')
+
+query II
+SELECT option_name, value FROM ducklake.options() WHERE scope='TABLE' AND scope_entry='main.t_case'
+----
+parquet_compression	gzip
+
+# foldable expressions (function calls) are accepted and folded to a literal
+statement ok
+CREATE TABLE ducklake.t_fold(i INTEGER) WITH (parquet_compression=upper('zstd'))
+
+query II
+SELECT option_name, value FROM ducklake.options() WHERE scope='TABLE' AND scope_entry='main.t_fold'
+----
+parquet_compression	zstd
+
+# session variables are read at bind time via getvariable(...) and feed the WITH clause
+statement ok
+SET VARIABLE an_option = (SELECT 'zstd')
+
+statement ok
+CREATE OR REPLACE TABLE ducklake.t_var WITH (parquet_compression=getvariable('an_option')) AS FROM range(42)
+
+query II
+SELECT option_name, value FROM ducklake.options() WHERE scope='TABLE' AND scope_entry='main.t_var'
+----
+parquet_compression	zstd
+
+query I
+SELECT DISTINCT compression FROM parquet_metadata('__TEST_DIR__/ducklake_create_with_options_files/main/t_var/**')
+----
+ZSTD
+
+# expressions that cannot fold to a literal (e.g. a column reference with no FROM) are rejected
+statement error
+CREATE TABLE ducklake.t_bad_col(i INTEGER) WITH (parquet_compression=some_unknown_column)
+----
+some_unknown_column
+
+# preserve_insertion_order=true keeps rowgroup boundaries deterministic so we can hardcode
+# per-rowgroup stats_min/max below to verify the sort actually reordered rows on disk.
+statement ok
+SET preserve_insertion_order=true
+
+# All three clauses together: PARTITIONED BY + SORTED BY + WITH on plain CREATE TABLE.
+# Verifies the parser accepts the combination, the WITH options are persisted, the partition layout
+# matches PARTITIONED BY, the WITH compression takes effect, and SORTED BY actually reorders rows
+# (per-rowgroup b stats are disjoint and ascending after sort).
+statement ok
+CREATE TABLE ducklake.t_combo(p INTEGER, b INTEGER)
+PARTITIONED BY (p)
+SORTED BY (b)
+WITH (parquet_compression='gzip', parquet_row_group_size=2048)
+
+query III rowsort
+SELECT option_name, value, scope FROM ducklake.options() WHERE scope='TABLE' AND scope_entry='main.t_combo' ORDER BY option_name
+----
+parquet_compression	gzip	TABLE
+parquet_row_group_size	2048	TABLE
+
+statement ok
+INSERT INTO ducklake.t_combo SELECT i // 3072 AS p, 6143 - i AS b FROM range(6144) t(i)
+
+# follow-up INSERT honors WITH compression
+query I
+SELECT DISTINCT compression FROM parquet_metadata('__TEST_DIR__/ducklake_create_with_options_files/main/t_combo/**') WHERE path_in_schema = 'b'
+----
+GZIP
+
+# PARTITIONED BY (p) produces 2 hive directories
+query I
+SELECT COUNT(DISTINCT regexp_extract(file_name, 'p=(\d+)', 1)) FROM parquet_metadata('__TEST_DIR__/ducklake_create_with_options_files/main/t_combo/**')
+----
+2
+
+# parquet_row_group_size=2048 from WITH produces 2 rowgroups per partition file (4 total)
+query I
+SELECT COUNT(*) FROM (SELECT DISTINCT file_name, row_group_id FROM parquet_metadata('__TEST_DIR__/ducklake_create_with_options_files/main/t_combo/**'))
+----
+4
+
+# SORTED BY (b) reordered the rows: per-rowgroup b stats are disjoint and ascending within each
+# partition file. (Input was b DESCENDING; without sort, rg 0's b would span the full input range.)
+query IIII
+SELECT regexp_extract(file_name, 'p=(\d+)', 1) AS partition,
+       row_group_id, stats_min::INTEGER AS rg_min, stats_max::INTEGER AS rg_max
+FROM parquet_metadata('__TEST_DIR__/ducklake_create_with_options_files/main/t_combo/**')
+WHERE path_in_schema = 'b'
+ORDER BY partition, row_group_id
+----
+0	0	3072	5119
+0	1	5120	6143
+1	0	0	2047
+1	1	2048	3071
+
+# All three clauses together on a CTAS — verifies plan-time PARTITIONED BY layout, SORTED BY data
+# ordering, and WITH compression all coexist on a CREATE TABLE AS SELECT.
+# Same data layout as t_combo (6144 rows, p=i//3072, b=6143-i) but compression=zstd this time.
+statement ok
+CREATE TABLE ducklake.t_combo_ctas
+PARTITIONED BY (p)
+SORTED BY (b)
+WITH (parquet_compression='zstd', parquet_row_group_size=2048)
+AS SELECT i // 3072 AS p, 6143 - i AS b FROM range(6144) t(i)
+
+query III rowsort
+SELECT option_name, value, scope FROM ducklake.options() WHERE scope='TABLE' AND scope_entry='main.t_combo_ctas' ORDER BY option_name
+----
+parquet_compression	zstd	TABLE
+parquet_row_group_size	2048	TABLE
+
+# CTAS-written parquet files use the WITH compression
+query I
+SELECT DISTINCT compression FROM parquet_metadata('__TEST_DIR__/ducklake_create_with_options_files/main/t_combo_ctas/**') WHERE path_in_schema = 'b'
+----
+ZSTD
+
+# 2 hive partition directories
+query I
+SELECT COUNT(DISTINCT regexp_extract(file_name, 'p=(\d+)', 1)) FROM parquet_metadata('__TEST_DIR__/ducklake_create_with_options_files/main/t_combo_ctas/**')
+----
+2
+
+# 2 rowgroups per partition file (4 total)
+query I
+SELECT COUNT(*) FROM (SELECT DISTINCT file_name, row_group_id FROM parquet_metadata('__TEST_DIR__/ducklake_create_with_options_files/main/t_combo_ctas/**'))
+----
+4
+
+# SORTED BY (b) on the CTAS path: same per-rowgroup hardcoded stats as t_combo.
+query IIII
+SELECT regexp_extract(file_name, 'p=(\d+)', 1) AS partition,
+       row_group_id, stats_min::INTEGER AS rg_min, stats_max::INTEGER AS rg_max
+FROM parquet_metadata('__TEST_DIR__/ducklake_create_with_options_files/main/t_combo_ctas/**')
+WHERE path_in_schema = 'b'
+ORDER BY partition, row_group_id
+----
+0	0	3072	5119
+0	1	5120	6143
+1	0	0	2047
+1	1	2048	3071
+

@@ -93,6 +93,13 @@ public:
 	optional_ptr<const DuckLakeFieldId> GetFieldId(FieldIndex field_index) const;
 	void SetPartitionData(unique_ptr<DuckLakePartition> partition_data);
 	void SetSortData(unique_ptr<DuckLakeSort> sort_data);
+	//! Table-scoped config options collected from a CREATE TABLE / CTAS WITH (...) clause.
+	void SetOptionsInCreateWith(vector<DuckLakeTag> options) {
+		options_in_create_with = std::move(options);
+	}
+	const vector<DuckLakeTag> &GetOptionsInCreateWith() const {
+		return options_in_create_with;
+	}
 	shared_ptr<DuckLakeTableStats> GetTableStats(ClientContext &context);
 	shared_ptr<DuckLakeTableStats> GetTableStats(DuckLakeTransaction &transaction);
 	idx_t GetNetDataFileRowCount(DuckLakeTransaction &transaction);
@@ -131,8 +138,17 @@ public:
 	virtual_column_map_t GetVirtualColumns() const override;
 	vector<column_t> GetRowIdColumns() const override;
 
-	//! Validates that all column references in sort expressions exist in the table
-	static void ValidateSortExpressionColumns(DuckLakeTableEntry &table, const vector<OrderByNode> &orders);
+	//! Validates that all column references in sort expressions exist in the column list.
+	//! Takes (columns) directly so it can run at CTAS planning time before a DuckLakeTableEntry exists.
+	static void ValidateSortExpressionColumns(const ColumnList &columns, const vector<OrderByNode> &orders);
+
+	//! Build a DuckLakePartition from raw partition expressions (allocates a transaction-local id).
+	static unique_ptr<DuckLakePartition> BuildPartitionData(DuckLakeTransaction &transaction, const ColumnList &columns,
+	                                                        DuckLakeFieldData &field_data,
+	                                                        const vector<unique_ptr<ParsedExpression>> &partition_keys);
+	//! Build a DuckLakeSort from a vector of OrderByNode (allocates a transaction-local id).
+	static unique_ptr<DuckLakeSort> BuildSortData(DuckLakeTransaction &transaction, const ColumnList &columns,
+	                                              const vector<OrderByNode> &orders);
 
 private:
 	unique_ptr<CatalogEntry> AlterTable(DuckLakeTransaction &transaction, RenameTableInfo &info);
@@ -188,6 +204,8 @@ private:
 	unique_ptr<DuckLakeSort> sort_data;
 	// only set for REMOVED_COLUMN
 	unique_ptr<ColumnChangeInfo> changed_fields;
+	// table-scoped config options collected from CREATE TABLE / CTAS WITH (...), pending until commit
+	vector<DuckLakeTag> options_in_create_with;
 };
 
 } // namespace duckdb
