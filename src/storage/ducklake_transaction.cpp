@@ -150,13 +150,16 @@ void LocalTableChanges::DropTransactionLocalFile(ClientContext &context, TableIn
 	for (idx_t i = 0; i < table_files.size(); i++) {
 		auto &file = table_files[i];
 		if (file.file_name == path) {
+			auto created_by_ducklake = file.created_by_ducklake;
 			for (auto &del_file : file.delete_files) {
 				fs.RemoveFile(del_file.file_name);
 			}
 			file.delete_files.clear();
-			// found the file - delete it from the table list and from disk
+			// found the file - delete it from the table list and from disk if DuckLake owns it
 			table_files.erase_at(i);
-			fs.RemoveFile(path);
+			if (created_by_ducklake) {
+				fs.RemoveFile(path);
+			}
 			if (table_changes.IsEmpty()) {
 				// no more files remaining
 				changes.erase(entry);
@@ -597,7 +600,9 @@ void LocalTableChanges::CleanupFiles(ClientContext &context, TableIndex table_id
 		auto &table_changes = table_entry->second;
 		auto &fs = FileSystem::GetFileSystem(context);
 		for (auto &file : table_changes.new_data_files) {
-			fs.RemoveFile(file.file_name);
+			if (file.created_by_ducklake) {
+				fs.RemoveFile(file.file_name);
+			}
 			for (auto &del_file : file.delete_files) {
 				fs.TryRemoveFile(del_file.file_name);
 			}
