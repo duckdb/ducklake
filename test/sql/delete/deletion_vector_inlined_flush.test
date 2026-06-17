@@ -10,9 +10,9 @@ test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
 
 test-env DATA_PATH {TEST_DIR}
 
-# default inlining limit keeps small deletes in metadata until flushed
+# explicit inlining limit keeps small deletes in metadata until flushed (independent of the global default)
 statement ok
-ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/dv_inlined_flush', WRITE_DELETION_VECTORS true)
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/dv_inlined_flush', WRITE_DELETION_VECTORS true, DATA_INLINING_ROW_LIMIT 10)
 
 statement ok
 USE dl
