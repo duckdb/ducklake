@@ -172,6 +172,9 @@ SinkFinalizeType DuckLakeFlushData::Finalize(Pipeline &pipeline, Event &event, C
 			auto &fs = FileSystem::GetFileSystem(context);
 			vector<DuckLakeDeleteFile> delete_files;
 
+			auto &catalog = table.catalog.Cast<DuckLakeCatalog>();
+			auto &schema = table.ParentSchema().Cast<DuckLakeSchemaEntry>();
+			bool use_deletion_vectors = catalog.WriteDeletionVectors(schema.GetSchemaId(), table.GetTableId());
 			for (auto &file_entry : deletes_per_file) {
 				// write single file, begin_snapshot is the minimum snapshot
 				WriteDeleteFileWithSnapshotsInput file_input {context,
@@ -182,7 +185,8 @@ SinkFinalizeType DuckLakeFlushData::Finalize(Pipeline &pipeline, Event &event, C
 				                                              file_entry.first,
 				                                              file_entry.second,
 				                                              DeleteFileSource::FLUSH};
-				delete_files.push_back(DuckLakeDeleteFileWriter::WriteDeleteFileWithSnapshots(context, file_input));
+				auto delete_file = DuckLakeDeleteFileWriter::Write(context, file_input, use_deletion_vectors);
+				delete_files.push_back(std::move(delete_file));
 			}
 			AttachDeleteFilesToWrittenFiles(delete_files, global_state.written_files);
 		}
@@ -514,6 +518,8 @@ LEFT JOIN (
 		encryption_key = catalog.GenerateEncryptionKey(context);
 	}
 
+	auto &schema = table.ParentSchema().Cast<DuckLakeSchemaEntry>();
+	bool use_deletion_vectors = catalog.WriteDeletionVectors(schema.GetSchemaId(), table.GetTableId());
 	for (auto &entry : files_to_flush) {
 		auto file_id = entry.first;
 		auto &file_info = entry.second;
@@ -556,7 +562,7 @@ LEFT JOIN (
 		                                              file_info.file_path,
 		                                              deletions_to_write,
 		                                              DeleteFileSource::FLUSH};
-		auto delete_file = DuckLakeDeleteFileWriter::WriteDeleteFileWithSnapshots(context, file_input);
+		auto delete_file = DuckLakeDeleteFileWriter::Write(context, file_input, use_deletion_vectors);
 		delete_file.data_file_id = DataFileIndex(file_id);
 		delete_file.max_snapshot = file_info.max_snapshot;
 

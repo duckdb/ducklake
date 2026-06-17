@@ -31,7 +31,7 @@ statement ok
 CALL ducklake_flush_inlined_data('ducklake')
 
 query I
-SELECT COUNT(*) FROM GLOB('{DATA_PATH}/ducklake_deletion_inlining_encryption_merge/**/*-delete.parquet')
+SELECT COUNT(*) FROM GLOB('{DATA_PATH}/ducklake_deletion_inlining_encryption_merge/**/*-delete.*')
 ----
 1
 
@@ -48,7 +48,7 @@ CALL ducklake_flush_inlined_data('ducklake')
 # Both the original and the merged delete file exist on disk at this point
 # (the original is scheduled for deletion via cleanup but not yet removed).
 query I
-SELECT COUNT(*) FROM GLOB('{DATA_PATH}/ducklake_deletion_inlining_encryption_merge/**/*-delete.parquet')
+SELECT COUNT(*) FROM GLOB('{DATA_PATH}/ducklake_deletion_inlining_encryption_merge/**/*-delete.*')
 ----
 2
 

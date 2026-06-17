@@ -71,7 +71,7 @@ SELECT COUNT(*), SUM(a) FROM t
 
 # No delete files yet, whole shebang is inlined
 query I
-SELECT COUNT(*) FROM GLOB('{DATA_PATH}/deletion_inlining_large/**/*-delete.parquet')
+SELECT COUNT(*) FROM GLOB('{DATA_PATH}/deletion_inlining_large/**/*-delete.*')
 ----
 0
 
@@ -84,7 +84,7 @@ statement ok
 CALL ducklake_flush_inlined_data('ducklake')
 
 query I
-SELECT COUNT(*) >= 1 FROM GLOB('{DATA_PATH}/deletion_inlining_large/**/*-delete.parquet')
+SELECT COUNT(*) >= 1 FROM GLOB('{DATA_PATH}/deletion_inlining_large/**/*-delete.*')
 ----
 true
 

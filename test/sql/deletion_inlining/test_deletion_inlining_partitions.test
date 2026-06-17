@@ -58,7 +58,7 @@ SELECT year(ts), COUNT(*) FROM partitioned_tbl GROUP BY year(ts) ORDER BY year(t
 2021	47
 
 query I
-SELECT COUNT(*) FROM GLOB('{DATA_PATH}/ducklake_deletion_inlining_partitions/**/*-delete.parquet')
+SELECT COUNT(*) FROM GLOB('{DATA_PATH}/ducklake_deletion_inlining_partitions/**/*-delete.*')
 ----
 0
 
@@ -71,7 +71,7 @@ statement ok
 CALL ducklake_flush_inlined_data('ducklake')
 
 query I
-SELECT COUNT(*) FROM GLOB('{DATA_PATH}/ducklake_deletion_inlining_partitions/**/*-delete.parquet')
+SELECT COUNT(*) FROM GLOB('{DATA_PATH}/ducklake_deletion_inlining_partitions/**/*-delete.*')
 ----
 3
 
