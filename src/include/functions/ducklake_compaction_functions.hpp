@@ -94,6 +94,10 @@ public:
 	static vector<OrderByNode> ParseSortOrders(const DuckLakeSort &sort_data);
 	static vector<BoundOrderByNode> BindSortOrders(Binder &binder, DuckLakeTableEntry &table, idx_t table_index,
 	                                               vector<OrderByNode> &pre_bound_orders);
+	//! Overload that takes (columns, table_name) directly so CTAS planning can sort-bind before any
+	//! DuckLakeTableEntry exists. Behaves identically to the entry-taking overload.
+	static vector<BoundOrderByNode> BindSortOrders(Binder &binder, const ColumnList &columns, const string &table_name,
+	                                               TableIndex table_index, vector<OrderByNode> &pre_bound_orders);
 
 private:
 	ClientContext &context;

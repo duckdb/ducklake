@@ -131,8 +131,17 @@ public:
 	virtual_column_map_t GetVirtualColumns() const override;
 	vector<column_t> GetRowIdColumns() const override;
 
-	//! Validates that all column references in sort expressions exist in the table
-	static void ValidateSortExpressionColumns(DuckLakeTableEntry &table, const vector<OrderByNode> &orders);
+	//! Validates that all column references in sort expressions exist in the column list.
+	//! Takes (columns) directly so it can run at CTAS planning time before a DuckLakeTableEntry exists.
+	static void ValidateSortExpressionColumns(const ColumnList &columns, const vector<OrderByNode> &orders);
+
+	//! Build a DuckLakePartition from raw partition expressions (allocates a transaction-local id).
+	static unique_ptr<DuckLakePartition> BuildPartitionData(DuckLakeTransaction &transaction, const ColumnList &columns,
+	                                                        DuckLakeFieldData &field_data,
+	                                                        const vector<unique_ptr<ParsedExpression>> &partition_keys);
+	//! Build a DuckLakeSort from a vector of OrderByNode (allocates a transaction-local id).
+	static unique_ptr<DuckLakeSort> BuildSortData(DuckLakeTransaction &transaction, const ColumnList &columns,
+	                                              const vector<OrderByNode> &orders);
 
 private:
 	unique_ptr<CatalogEntry> AlterTable(DuckLakeTransaction &transaction, RenameTableInfo &info);
