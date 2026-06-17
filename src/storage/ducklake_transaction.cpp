@@ -760,6 +760,10 @@ Connection &DuckLakeTransaction::GetConnection() {
 	lock_guard<mutex> lock(connection_lock);
 	if (!connection) {
 		connection = make_uniq<Connection>(db);
+		auto caller_context = context.lock();
+		if (caller_context) {
+			DuckLakeUtil::CopyExtensionSettings(*caller_context, *connection->context);
+		}
 		// set the search path to the metadata catalog
 		auto &client_data = ClientData::Get(*connection->context);
 		// ensure we are only looking in the ducklake catalog schema during querying
