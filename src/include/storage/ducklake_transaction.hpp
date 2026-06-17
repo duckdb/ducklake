@@ -48,6 +48,11 @@ struct FlushedInlinedTableInfo {
 	idx_t flush_snapshot_id;
 };
 
+struct DroppedDataFileStats {
+	idx_t row_count = 0;
+	idx_t file_size_bytes = 0;
+};
+
 struct LocalTableDataChanges {
 	vector<DuckLakeDataFile> new_data_files;
 	unique_ptr<DuckLakeInlinedData> new_inlined_data;
@@ -246,7 +251,7 @@ public:
 	void DropView(DuckLakeViewEntry &view);
 	void DropScalarMacro(DuckLakeScalarMacroEntry &macro);
 	void DropTableMacro(DuckLakeTableMacroEntry &macro);
-	void DropFile(TableIndex table_id, DataFileIndex data_file_id, string path);
+	void DropFile(TableIndex table_id, DataFileIndex data_file_id, string path, idx_t row_count, idx_t file_size_bytes);
 
 	void DeleteSnapshots(const vector<DuckLakeSnapshotInfo> &snapshots);
 	void DeleteInlinedData(const DuckLakeInlinedTableInfo &inlined_table);

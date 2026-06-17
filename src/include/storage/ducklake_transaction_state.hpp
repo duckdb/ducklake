@@ -99,6 +99,9 @@ struct DuckLakeCommitContext {
 	std::function<void(idx_t)> set_catalog_version;
 	//! Records the committed snapshot id on the catalog.
 	std::function<void(idx_t)> set_committed_snapshot_id;
+	//! Invalidates the cached stats entry for a table after a stats-affecting file drop.
+	std::function<void(idx_t, TableIndex)> invalidate_table_stats_cache = [](idx_t, TableIndex) {
+	};
 	//! Author / message / extra info for the snapshot row.
 	DuckLakeSnapshotCommit commit_info;
 	//! When true, Commit() skips the post-commit DropEmptySupersededInlinedTables cleanup.
@@ -133,7 +136,8 @@ public:
 	                            const DuckLakeSnapshotCommit &commit_info) const;
 
 	string CommitChanges(DuckLakeCommitState &commit_state, TransactionChangeInformation &transaction_changes,
-	                     optional_ptr<vector<DuckLakeGlobalStatsInfo>> stats, const DuckLakeCommitContext &context);
+	                     optional_ptr<vector<DuckLakeGlobalStatsInfo>> stats, const DuckLakeCommitContext &context,
+	                     map<TableIndex, DroppedDataFileStats> &attempt_dropped_file_stats);
 
 	vector<DuckLakeSchemaInfo> GetNewSchemas(DuckLakeCommitState &commit_state);
 	NewTableInfo GetNewTables(DuckLakeCommitState &commit_state, TransactionChangeInformation &transaction_changes);
@@ -146,7 +150,16 @@ public:
 	NewMacroInfo GetNewMacros(DuckLakeCommitState &commit_state, TransactionChangeInformation &transaction_changes);
 	NewDataInfo GetNewDataFiles(string &batch_query, DuckLakeCommitState &commit_state,
 	                            optional_ptr<vector<DuckLakeGlobalStatsInfo>> stats,
-	                            const DuckLakeCommitContext &context);
+	                            const DuckLakeCommitContext &context,
+	                            map<TableIndex, DroppedDataFileStats> &attempt_dropped_file_stats);
+	//! Decrement table-level stats for files dropped this commit. Returns true when live rows remain in the table,
+	//! in which case the caller must delete the table column-stats rows (table-level min/max became unknowable
+	//! without a scan). When the table is emptied, the column stats are reset in place to NULL instead.
+	static bool ApplyDroppedFileStats(TableIndex table_id, DuckLakeNewGlobalStats &new_stats,
+	                                  map<TableIndex, DroppedDataFileStats> &attempt_dropped_file_stats);
+	string UpdateStatsForDroppedFiles(optional_ptr<vector<DuckLakeGlobalStatsInfo>> stats,
+	                                  const DuckLakeCommitContext &context,
+	                                  map<TableIndex, DroppedDataFileStats> &attempt_dropped_file_stats);
 	CompactionInformation GetCompactionChanges(DuckLakeCommitState &commit_state, CompactionType type);
 	//! After a REWRITE_DELETES compaction, recompute EXACT global stats for `table_id` from the post-rewrite file set
 	//! (+ committed inlined data) and append the UpdateGlobalTableStats SQL to `batch_query`. No-op (leaving the
@@ -201,6 +214,7 @@ public:
 	set<TableIndex> renamed_views;
 	set<TableIndex> dropped_views;
 	unordered_map<string, DataFileIndex> dropped_files;
+	map<TableIndex, DroppedDataFileStats> dropped_file_stats;
 	set<TableIndex> tables_deleted_from;
 	unique_ptr<DuckLakeCatalogSet> new_schemas;
 	map<SchemaIndex, reference<DuckLakeSchemaEntry>> dropped_schemas;

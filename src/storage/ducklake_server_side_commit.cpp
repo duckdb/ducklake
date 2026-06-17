@@ -47,6 +47,17 @@ struct EntryShell {
 	bool hive_partition;
 };
 
+static string JoinIds(const vector<idx_t> &ids) {
+	string result;
+	for (auto id : ids) {
+		if (!result.empty()) {
+			result += ",";
+		}
+		result += to_string(id);
+	}
+	return result;
+}
+
 unique_ptr<DuckLakeNameMapEntry> BuildNameMapEntry(idx_t id, const std::map<idx_t, const EntryShell *> &shell_by_id,
                                                    const std::map<idx_t, vector<idx_t>> &children_of) {
 	auto &shell = *shell_by_id.at(id);
@@ -212,6 +223,20 @@ void DuckLakeServerSideCommit::ReadColumnTypes() {
 	auto inlined = ScanStagedTable(DuckLakeStagedTableType::INLINED_DATA);
 	for (auto &row : *inlined) {
 		table_ids.insert(AsIdx(row, 0));
+	}
+	vector<idx_t> dropped_file_ids;
+	auto dropped_files = ScanStagedTable(DuckLakeStagedTableType::DROPPED_FILE);
+	for (auto &row : *dropped_files) {
+		dropped_file_ids.push_back(AsIdx(row, 1));
+	}
+	if (!dropped_file_ids.empty()) {
+		auto dropped_tables = RunQuery(
+		    StringUtil::Format("SELECT DISTINCT table_id FROM %s.ducklake_data_file WHERE data_file_id IN (%s)",
+		                       schema_id, JoinIds(dropped_file_ids)),
+		    "read dropped file table ids");
+		for (auto &row : *dropped_tables) {
+			table_ids.insert(AsIdx(row, 0));
+		}
 	}
 	if (table_ids.empty()) {
 		return;
@@ -445,8 +470,23 @@ void DuckLakeServerSideCommit::ReadStagedDeleteFiles() {
 
 void DuckLakeServerSideCommit::ReadStagedDroppedFiles() {
 	auto dropped = ScanStagedTable(DuckLakeStagedTableType::DROPPED_FILE);
+	vector<idx_t> dropped_file_ids;
 	for (auto &row : *dropped) {
-		state->dropped_files.emplace(row.GetValue<string>(0), DataFileIndex(AsIdx(row, 1)));
+		auto file_id = AsIdx(row, 1);
+		state->dropped_files.emplace(row.GetValue<string>(0), DataFileIndex(file_id));
+		dropped_file_ids.push_back(file_id);
+	}
+	if (!dropped_file_ids.empty()) {
+		auto dropped_stats = RunQuery(
+		    StringUtil::Format(
+		        "SELECT table_id, record_count, file_size_bytes FROM %s.ducklake_data_file WHERE data_file_id IN (%s)",
+		        schema_id, JoinIds(dropped_file_ids)),
+		    "read dropped file stats");
+		for (auto &row : *dropped_stats) {
+			auto &stats = state->dropped_file_stats[TableIndex(AsIdx(row, 0))];
+			stats.row_count += AsIdx(row, 1);
+			stats.file_size_bytes += AsIdx(row, 2);
+		}
 	}
 	auto tables = ScanStagedTable(DuckLakeStagedTableType::TABLES_DELETED_FROM);
 	for (auto &row : *tables) {
