@@ -45,3 +45,46 @@ jobs:
       ci_tools_version: main
       deploy_latest: ${{ startsWith(github.ref, 'refs/heads/v') }}
       deploy_versioned: ${{ startsWith(github.ref, 'refs/heads/v') }}
+
+  relassert:
+    name: Build relassert
+    runs-on: ${{ github.repository_owner == 'duckdb' && 'namespace-profile-linux-x64' || 'ubuntu-latest' }}
+    env:
+      GEN: ninja
+      CC: clang-20
+      CXX: clang++-20
+      # Enable -DDEBUG slow verifiers (expression verifier, operator
+      # round-trips, etc.) without changing the optimization level.
+      FORCE_DEBUG: 1
+      FORCE_ASSERT: 1
+      ASAN_OPTIONS: "detect_leaks=1:halt_on_error=1:abort_on_error=0"
+      UBSAN_OPTIONS: "halt_on_error=1:print_stacktrace=1"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          submodules: 'true'
+      - name: Install tools
+        run: python3 duckdb/scripts/ci/retry.py -- make -C duckdb toolsci
+      - name: Fix ASan runtime
+        # libclang_rt.asan_static.a is missing in ubuntu 24.04 — workaround
+        # mirrored from upstream Main.yml.
+        run: |
+          asan_static_dir="/usr/lib/llvm-20/lib/clang/20/lib/x86_64-pc-linux-gnu"
+          asan_static_target="/usr/lib/llvm-20/lib/clang/20/lib/linux/libclang_rt.asan_static-x86_64.a"
+          if [[ ! -e "${asan_static_dir}/libclang_rt.asan_static.a" && -e "${asan_static_target}" ]]; then
+            sudo mkdir -p "${asan_static_dir}"
+            sudo ln -sf "${asan_static_target}" "${asan_static_dir}/libclang_rt.asan_static.a"
+          fi
+      - name: Setup Ccache
+        uses: hendrikmuhs/ccache-action@main
+        with:
+          max-size: 5GB
+          evict-old-files: job
+      - name: Build (relassert → ASan + UBSan + LSan)
+        uses: duckdb/duckdb-ci/build-duckdb@main
+        with:
+          build-type: relassert
+          build: python3 duckdb/scripts/ci/retry.py -- make relassert
+          test: make unittest_relassert
+          vcpkg-commit: 84bab45d415d22042bd0b9081aea57f362da3f35
