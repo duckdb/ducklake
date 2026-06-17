@@ -12,10 +12,14 @@ statement ok
 SET TimeZone='UTC';
 
 statement ok
-ATTACH 'ducklake:__TEST_DIR__/alter_insert_select.db' AS dl (DATA_PATH '__TEST_DIR__/alter_insert_select')
+ATTACH 'ducklake:{TEST_DIR}/alter_insert_select.db' AS dl (DATA_PATH '{TEST_DIR}/alter_insert_select')
 
 statement ok
 USE dl
+
+statement ok
+SET timezone='UTC'
+
 
 statement ok
 CREATE TABLE t (id INT, name VARCHAR)
@@ -49,10 +53,13 @@ statement ok
 DETACH dl
 
 statement ok
-ATTACH 'ducklake:__TEST_DIR__/alter_insert_select.db' AS dl (DATA_PATH '__TEST_DIR__/alter_insert_select')
+ATTACH 'ducklake:{TEST_DIR}/alter_insert_select.db' AS dl (DATA_PATH '{TEST_DIR}/alter_insert_select')
 
 statement ok
 USE dl
+
+statement ok
+SET timezone='UTC'
 
 query IIT
 SELECT * FROM t ORDER BY id

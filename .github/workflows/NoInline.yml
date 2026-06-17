@@ -23,12 +23,13 @@ jobs:
       VCPKG_TARGET_TRIPLET: ${{ matrix.vcpkg_triplet }}
       GEN: Ninja
       VCPKG_TOOLCHAIN_PATH: ${{ github.workspace }}/vcpkg/scripts/buildsystems/vcpkg.cmake
+      DUCKLAKE_CI: 1
 
     steps:
     - name: Install required ubuntu packages
       run: |
         sudo apt-get update -y -qq
-        sudo apt-get install -y -qq build-essential cmake ninja-build ccache python3
+        sudo apt-get install -y -qq build-essential cmake ninja-build ccache python3 mold
 
     - uses: actions/checkout@v3
       with:
@@ -58,5 +59,7 @@ jobs:
         make release
 
     - name: Test extension (no inlining)
+      env:
+        DUCKDB_TPCH_ANSWERS_DIR: ${{ github.workspace }}/duckdb/extension/tpch/dbgen/answers
       run: |
         build/release/test/unittest --test-config test/configs/no_inline.json

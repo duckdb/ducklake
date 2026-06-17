@@ -1,13 +1,17 @@
 #include "common/ducklake_util.hpp"
 #include "duckdb/parser/column_list.hpp"
 #include "duckdb/common/string_util.hpp"
+#include "duckdb/common/sql_identifier.hpp"
+#include "duckdb/common/types/blob.hpp"
 #include "duckdb/parser/keyword_helper.hpp"
 #include "duckdb/parser/parser.hpp"
 #include "duckdb/common/file_system.hpp"
 #include "storage/ducklake_metadata_manager.hpp"
-#include "duckdb/planner/filter/optional_filter.hpp"
-#include "duckdb/planner/filter/dynamic_filter.hpp"
+#include "duckdb/planner/filter/expression_filter.hpp"
+#include "duckdb/planner/filter/table_filter_functions.hpp"
 #include "duckdb/function/scalar/variant_utils.hpp"
+#include "duckdb/main/client_context.hpp"
+#include "duckdb/main/database.hpp"
 
 #include <cmath>
 
@@ -41,7 +45,7 @@ string DuckLakeUtil::ToQuotedList(const vector<string> &input, char list_separat
 		if (!result.empty()) {
 			result += list_separator;
 		}
-		result += KeywordHelper::WriteQuoted(str, '"');
+		result += SQLQuotedIdentifier::ToString(str);
 	}
 	return result;
 }
@@ -139,6 +143,7 @@ string ToSQLString(DuckLakeMetadataManager &metadata_manager, const Value &value
 	case LogicalTypeId::TIMESTAMP:
 	case LogicalTypeId::TIME_TZ:
 	case LogicalTypeId::TIMESTAMP_TZ:
+	case LogicalTypeId::TIMESTAMP_TZ_NS:
 	case LogicalTypeId::TIMESTAMP_SEC:
 	case LogicalTypeId::TIMESTAMP_MS:
 	case LogicalTypeId::TIMESTAMP_NS:
@@ -158,9 +163,9 @@ string ToSQLString(DuckLakeMetadataManager &metadata_manager, const Value &value
 	case LogicalTypeId::ENUM:
 		return EscapeVarcharForSQL(value.ToString());
 	case LogicalTypeId::VARIANT: {
-		Vector tmp(value);
+		Vector tmp(value, count_t(1));
 		RecursiveUnifiedVectorFormat format;
-		Vector::RecursiveToUnifiedFormat(tmp, 1, format);
+		Vector::RecursiveToUnifiedFormat(tmp, format);
 		UnifiedVariantVectorData vector_data(format);
 		auto val = VariantUtils::ConvertVariantToValue(vector_data, 0, 0);
 		if (!use_native_type) {
@@ -183,7 +188,8 @@ string ToSQLString(DuckLakeMetadataManager &metadata_manager, const Value &value
 			if (is_unnamed) {
 				ret += ToSQLString(metadata_manager, child);
 			} else {
-				ret += "'" + StringUtil::Replace(name, "'", "''") + "': " + ToSQLString(metadata_manager, child);
+				ret += "'" + StringUtil::Replace(name.GetIdentifierName(), "'", "''") + "': " +
+				       ToSQLString(metadata_manager, child);
 			}
 			if (i < struct_values.size() - 1) {
 				ret += ", ";
@@ -324,19 +330,8 @@ string DuckLakeUtil::JoinPath(FileSystem &fs, const string &a, const string &b) 
 	}
 }
 
-DynamicFilter *DuckLakeUtil::GetOptionalDynamicFilter(const TableFilter &filter) {
-	if (filter.filter_type != TableFilterType::OPTIONAL_FILTER) {
-		return nullptr;
-	}
-	auto &optional = filter.Cast<OptionalFilter>();
-	if (!optional.child_filter || optional.child_filter->filter_type != TableFilterType::DYNAMIC_FILTER) {
-		return nullptr;
-	}
-	auto &dynamic = optional.child_filter->Cast<DynamicFilter>();
-	if (!dynamic.filter_data || !dynamic.filter_data->filter) {
-		return nullptr;
-	}
-	return &dynamic;
+shared_ptr<DynamicFilterData> DuckLakeUtil::GetOptionalDynamicFilterData(const TableFilter &filter) {
+	return ExpressionFilter::GetRootOptionalDynamicFilterData(filter);
 }
 
 bool DuckLakeUtil::IsInlinedSystemColumn(const string &name) {
@@ -347,19 +342,19 @@ bool DuckLakeUtil::IsInlinedSystemColumn(const string &name) {
 
 void DuckLakeUtil::ValidateNoInlinedSystemColumns(const ColumnList &columns, const string &table_name) {
 	for (auto &col : columns.Logical()) {
-		if (IsInlinedSystemColumn(col.Name())) {
+		if (IsInlinedSystemColumn(col.Name().GetIdentifierName())) {
 			if (table_name.empty()) {
 				throw BinderException(
 				    "Column name \"%s\" is reserved by DuckLake for internal use when data inlining is enabled. If "
 				    "you must use this column name, disable inlining by calling "
 				    "ducklake_set_option('data_inlining_row_limit', 0).",
-				    col.Name());
+				    col.Name().GetIdentifierName());
 			}
 			throw BinderException(
 			    "Cannot enable data inlining for table \"%s\". Column \"%s\" conflicts with a reserved DuckLake "
 			    "internal column name used for inlining. To enable inlining for this table, rename or drop column "
 			    "\"%s\".",
-			    table_name, col.Name(), col.Name());
+			    table_name, col.Name().GetIdentifierName(), col.Name().GetIdentifierName());
 		}
 	}
 }
@@ -418,6 +413,60 @@ string DuckLakeUtil::ReplaceSkippingQuotes(const string &sql, const string &from
 	}
 
 	return result;
+}
+
+string DuckLakeUtil::OptionalIdxOrNull(const optional_idx &v) {
+	return v.IsValid() ? std::to_string(v.GetIndex()) : "NULL";
+}
+
+string DuckLakeUtil::MappingIdOrNull(const MappingIndex &m) {
+	return m.IsValid() ? std::to_string(m.index) : "NULL";
+}
+
+string DuckLakeUtil::EncryptionKeyLiteral(const string &key) {
+	if (key.empty()) {
+		return "NULL";
+	}
+	return "'" + Blob::ToBase64(string_t(key)) + "'";
+}
+
+const char *DuckLakeUtil::BoolLiteral(bool v) {
+	return v ? "true" : "false";
+}
+
+string DuckLakeUtil::PartitionValueLiteral(const Value &v) {
+	return v.IsNull() ? string("NULL") : SQLLiteralToString(v.ToString());
+}
+
+string DuckLakeUtil::ChunkRowToSQL(DuckLakeMetadataManager &metadata_manager, ClientContext &context, DataChunk &chunk,
+                                   idx_t row) {
+	string result;
+	for (idx_t c = 0; c < chunk.ColumnCount(); c++) {
+		if (c > 0) {
+			result += ", ";
+		}
+		result += ValueToSQL(metadata_manager, context, chunk.GetValue(c, row));
+	}
+	return result;
+}
+
+void DuckLakeUtil::CopyExtensionSettings(ClientContext &from, ClientContext &to) {
+	auto &db_config = DBConfig::GetConfig(from);
+	for (auto &entry : db_config.GetExtensionSettings()) {
+		auto &option = entry.second;
+		if (!option.setting_index.IsValid()) {
+			continue;
+		}
+		auto setting_index = option.setting_index.GetIndex();
+		if (!from.config.user_settings.IsSet(setting_index)) {
+			continue;
+		}
+		Value value;
+		if (!from.TryGetCurrentSetting(entry.first, value)) {
+			continue;
+		}
+		to.config.user_settings.SetUserSetting(setting_index, value);
+	}
 }
 
 } // namespace duckdb

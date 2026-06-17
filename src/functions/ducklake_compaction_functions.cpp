@@ -4,6 +4,7 @@
 #include "storage/ducklake_schema_entry.hpp"
 #include "storage/ducklake_table_entry.hpp"
 #include "storage/ducklake_insert.hpp"
+#include "storage/ducklake_partition_data.hpp"
 #include "storage/ducklake_multi_file_reader.hpp"
 #include "duckdb/planner/operator/logical_get.hpp"
 #include "duckdb/planner/operator/logical_copy_to_file.hpp"
@@ -47,7 +48,8 @@ vector<OrderByNode> DuckLakeCompactor::ParseSortOrders(const DuckLakeSort &sort_
 }
 
 //! Binds ORDER BY expressions directly using ExpressionBinder.
-vector<BoundOrderByNode> DuckLakeCompactor::BindSortOrders(Binder &binder, DuckLakeTableEntry &table, idx_t table_index,
+vector<BoundOrderByNode> DuckLakeCompactor::BindSortOrders(Binder &binder, DuckLakeTableEntry &table,
+                                                           TableIndex table_index,
                                                            vector<OrderByNode> &pre_bound_orders) {
 	auto &columns = table.GetColumns();
 	auto column_names = columns.GetColumnNames();
@@ -55,7 +57,8 @@ vector<BoundOrderByNode> DuckLakeCompactor::BindSortOrders(Binder &binder, DuckL
 
 	// Create a child binder with the table columns in scope
 	auto child_binder = Binder::CreateBinder(binder.context, &binder);
-	child_binder->bind_context.AddGenericBinding(table_index, table.name, column_names, column_types);
+	child_binder->bind_context.AddGenericBinding(table_index, table.name, StringsToIdentifiers(column_names),
+	                                             column_types);
 
 	// Bind each ORDER BY expression directly
 	vector<BoundOrderByNode> orders;
@@ -114,11 +117,11 @@ SourceResultType DuckLakeCompaction::GetDataInternal(ExecutionContext &context, 
 	auto &gstate = this->sink_state->Cast<DuckLakeInsertGlobalState>();
 	auto files_created = gstate.written_files.size();
 
-	chunk.SetCardinality(1);
-	chunk.SetValue(0, 0, Value(table.schema.name));
-	chunk.SetValue(1, 0, Value(table.name));
-	chunk.SetValue(2, 0, Value::BIGINT(static_cast<int64_t>(source_files.size())));
-	chunk.SetValue(3, 0, Value::BIGINT(static_cast<int64_t>(files_created)));
+	chunk.data[0].Append(Value(table.schema.name));
+	chunk.data[1].Append(Value(table.name));
+	chunk.data[2].Append(Value::BIGINT(static_cast<int64_t>(source_files.size())));
+	chunk.data[3].Append(Value::BIGINT(static_cast<int64_t>(files_created)));
+	chunk.SetChildCardinality(1);
 	return SourceResultType::FINISHED;
 }
 
@@ -525,28 +528,9 @@ DuckLakeCompactor::GenerateCompactionCommand(vector<DuckLakeCompactionFileEntry>
 
 	// generate the LogicalGet
 	auto &columns = table.GetColumns();
-	auto table_path = table.DataPath();
 	string data_path;
 	if (partition_id.IsValid()) {
-		data_path = actionable_source_files[0].file.data.path;
-		data_path = StringUtil::Replace(data_path, table_path, "");
-		auto path_result = StringUtil::Split(data_path, catalog.Separator());
-		data_path = "";
-		if (path_result.size() > 1) {
-			// This means we have a hive partition.
-			for (idx_t i = 0; i < path_result.size() - 1; i++) {
-				data_path += path_result[i];
-				if (i != path_result.size() - 2) {
-					data_path += catalog.Separator();
-				}
-			}
-			// If we do have a hive partition, let's verify all files have the same one.
-			for (idx_t i = 1; i < actionable_source_files.size(); i++) {
-				if (!StringUtil::Contains(actionable_source_files[i].file.data.path, data_path)) {
-					throw InternalException("DuckLakeCompactor: Files have different hive partition path");
-				}
-			}
-		}
+		data_path = DuckLakePartitionUtils::BuildHivePartitionPath(table, partition_values, catalog.Separator());
 	}
 
 	bool write_row_id = false;
@@ -585,7 +569,7 @@ DuckLakeCompactor::GenerateCompactionCommand(vector<DuckLakeCompactionFileEntry>
 	auto virtual_columns = table.GetVirtualColumns();
 	auto ducklake_scan =
 	    make_uniq<LogicalGet>(table_idx, std::move(scan_function), std::move(bind_data), copy_options.expected_types,
-	                          copy_options.names, std::move(virtual_columns));
+	                          StringsToIdentifiers(copy_options.names), std::move(virtual_columns));
 
 	auto &column_ids = ducklake_scan->GetMutableColumnIds();
 	for (idx_t i = 0; i < columns.PhysicalColumnCount(); i++) {
@@ -613,7 +597,9 @@ DuckLakeCompactor::GenerateCompactionCommand(vector<DuckLakeCompactionFileEntry>
 	// and instead pull the latest sort setting
 	// First, see if there are transaction local changes to the table
 	// Then fall back to latest snapshot if no local changes
-	auto latest_entry = transaction.GetTransactionLocalEntry(CatalogType::TABLE_ENTRY, table.schema.name, table.name);
+	auto latest_entry = transaction.GetTransactionLocalEntry(CatalogType::TABLE_ENTRY,
+	                                                          table.schema.name.GetIdentifierName(),
+	                                                          table.name.GetIdentifierName());
 	if (!latest_entry) {
 		auto latest_snapshot = transaction.GetSnapshot();
 		latest_entry = catalog.GetEntryById(transaction, latest_snapshot, table_id);
@@ -643,11 +629,13 @@ DuckLakeCompactor::GenerateCompactionCommand(vector<DuckLakeCompactionFileEntry>
 	copy->rotate = copy_options.rotate;
 	copy->return_type = copy_options.return_type;
 
+	copy->batch_size = DEFAULT_ROW_GROUP_SIZE;
+
 	copy->partition_output = copy_options.partition_output;
 	copy->write_partition_columns = copy_options.write_partition_columns;
 	copy->write_empty_file = false;
 	copy->partition_columns = std::move(copy_options.partition_columns);
-	copy->names = std::move(copy_options.names);
+	copy->names = StringsToIdentifiers(copy_options.names);
 	copy->expected_types = std::move(copy_options.expected_types);
 	copy->preserve_order = PreserveOrderType::PRESERVE_ORDER;
 	copy->file_size_bytes = optional_idx();
@@ -670,16 +658,16 @@ DuckLakeCompactor::GenerateCompactionCommand(vector<DuckLakeCompactionFileEntry>
 //===--------------------------------------------------------------------===//
 // Function
 //===--------------------------------------------------------------------===//
-static unique_ptr<LogicalOperator> GenerateCompactionOperator(TableFunctionBindInput &input, idx_t bind_index,
+static unique_ptr<LogicalOperator> GenerateCompactionOperator(TableFunctionBindInput &input, TableIndex bind_index,
                                                               vector<unique_ptr<LogicalOperator>> &compactions) {
 	if (compactions.empty()) {
 		// nothing to compact - generate an empty result
 		vector<ColumnBinding> bindings;
 		vector<LogicalType> return_types;
-		bindings.emplace_back(bind_index, 0);
-		bindings.emplace_back(bind_index, 1);
-		bindings.emplace_back(bind_index, 2);
-		bindings.emplace_back(bind_index, 3);
+		bindings.emplace_back(bind_index, ProjectionIndex(0));
+		bindings.emplace_back(bind_index, ProjectionIndex(1));
+		bindings.emplace_back(bind_index, ProjectionIndex(2));
+		bindings.emplace_back(bind_index, ProjectionIndex(3));
 		return_types.emplace_back(LogicalType::VARCHAR);
 		return_types.emplace_back(LogicalType::VARCHAR);
 		return_types.emplace_back(LogicalType::BIGINT);
@@ -746,7 +734,7 @@ double GetDeleteThreshold(optional_ptr<DuckLakeSchemaEntry> schema_entry, const 
 	return delete_threshold;
 }
 
-unique_ptr<LogicalOperator> BindCompaction(ClientContext &context, TableFunctionBindInput &input, idx_t bind_index,
+unique_ptr<LogicalOperator> BindCompaction(ClientContext &context, TableFunctionBindInput &input, TableIndex bind_index,
                                            CompactionType type) {
 	auto &catalog = DuckLakeBaseMetadataFunction::GetCatalog(context, input.inputs[0]);
 	auto &ducklake_catalog = catalog.Cast<DuckLakeCatalog>();
@@ -818,13 +806,14 @@ unique_ptr<LogicalOperator> BindCompaction(ClientContext &context, TableFunction
 	if (schema_entry != input.named_parameters.end()) {
 		schema = StringValue::Get(schema_entry->second);
 	}
-	EntryLookupInfo table_lookup(CatalogType::TABLE_ENTRY, table, nullptr, QueryErrorContext());
-	auto table_entry = catalog.GetEntry(context, schema, table_lookup, OnEntryNotFound::THROW_EXCEPTION);
+	EntryLookupInfo table_lookup(CatalogType::TABLE_ENTRY, Identifier(table), nullptr, QueryErrorContext());
+	auto table_entry = catalog.GetEntry(context, Identifier(schema), table_lookup, OnEntryNotFound::THROW_EXCEPTION);
 	auto &ducklake_table = table_entry->Cast<DuckLakeTableEntry>();
 	optional_ptr<DuckLakeSchemaEntry> dl_schema;
 	bool auto_compact;
 	if (!schema.empty()) {
-		auto schema_catalog = catalog.GetSchema(context, catalog.GetName(), schema, OnEntryNotFound::THROW_EXCEPTION);
+		auto schema_catalog =
+		    catalog.GetSchema(context, catalog.GetName(), Identifier(schema), OnEntryNotFound::THROW_EXCEPTION);
 		dl_schema = &schema_catalog->Cast<DuckLakeSchemaEntry>();
 		auto_compact = ducklake_catalog.GetConfigOption<string>("auto_compact", dl_schema.get()->GetSchemaId(),
 		                                                        ducklake_table.GetTableId(), "true") == "true";
@@ -844,7 +833,7 @@ unique_ptr<LogicalOperator> BindCompaction(ClientContext &context, TableFunction
 }
 
 static unique_ptr<LogicalOperator> MergeAdjacentFilesBind(ClientContext &context, TableFunctionBindInput &input,
-                                                          idx_t bind_index, vector<string> &return_names) {
+                                                          TableIndex bind_index, vector<string> &return_names) {
 	return_names.push_back("schema_name");
 	return_names.push_back("table_name");
 	return_names.push_back("files_processed");
@@ -870,7 +859,7 @@ TableFunctionSet DuckLakeMergeAdjacentFilesFunction::GetFunctions() {
 }
 
 static unique_ptr<LogicalOperator> RewriteFilesBind(ClientContext &context, TableFunctionBindInput &input,
-                                                    idx_t bind_index, vector<string> &return_names) {
+                                                    TableIndex bind_index, vector<string> &return_names) {
 	return_names.push_back("schema_name");
 	return_names.push_back("table_name");
 	return_names.push_back("files_processed");

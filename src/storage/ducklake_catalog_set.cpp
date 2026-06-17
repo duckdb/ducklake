@@ -16,7 +16,7 @@ DuckLakeCatalogSet::DuckLakeCatalogSet(ducklake_entries_map_t catalog_entries_p)
 }
 
 void DuckLakeCatalogSet::CreateEntry(unique_ptr<CatalogEntry> catalog_entry) {
-	auto name = catalog_entry->name;
+	auto name = catalog_entry->name.GetIdentifierName();
 	auto entry = catalog_entries.find(name);
 	if (entry != catalog_entries.end()) {
 		catalog_entry->SetChild(std::move(entry->second));

@@ -7,7 +7,7 @@ require ducklake
 require parquet
 
 statement ok
-ATTACH 'ducklake:__TEST_DIR__/view_literal.db' AS dl (DATA_PATH '__TEST_DIR__/view_literal_data')
+ATTACH 'ducklake:{TEST_DIR}/view_literal.db' AS dl (DATA_PATH '{TEST_DIR}/view_literal_data')
 
 statement ok
 CREATE TABLE dl.main.t(i INTEGER)
@@ -29,7 +29,7 @@ DETACH dl
 
 # Re-attach under a different catalog name
 statement ok
-ATTACH 'ducklake:__TEST_DIR__/view_literal.db' AS other_name (DATA_PATH '__TEST_DIR__/view_literal_data')
+ATTACH 'ducklake:{TEST_DIR}/view_literal.db' AS other_name (DATA_PATH '{TEST_DIR}/view_literal_data')
 
 # The string literal must still be 'dl.hello', NOT 'other_name.hello'
 query I

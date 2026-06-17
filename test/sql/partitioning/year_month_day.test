@@ -7,13 +7,13 @@ require ducklake
 require parquet
 
 # partitioning based on a column
-test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
 
-test-env DATA_PATH __TEST_DIR__
+test-env DATA_PATH {TEST_DIR}
 
 
 statement ok
-ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/ducklake_partition_transform', METADATA_CATALOG 'ducklake_metadata')
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/ducklake_partition_transform', METADATA_CATALOG 'ducklake_metadata')
 
 statement ok
 USE ducklake
@@ -35,7 +35,7 @@ SELECT year(ts), COUNT(*), MIN(values), MAX(values) FROM partitioned_tbl GROUP B
 
 query II
 SELECT regexp_extract(path, '.*year=([0-9]+)[/\\].*', 1)::INT AS year_part, regexp_extract(path, '.*month=([0-9]+)[/\\].*', 1)::INT AS month_part
-FROM glob('${DATA_PATH}/ducklake_partition_transform/**') t(path) ORDER BY ALL
+FROM glob('{DATA_PATH}/ducklake_partition_transform/**') t(path) ORDER BY ALL
 ----
 2020	1
 2020	2

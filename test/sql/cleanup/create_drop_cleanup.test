@@ -6,13 +6,13 @@ require ducklake
 
 require parquet
 
-test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
 
-test-env DATA_PATH __TEST_DIR__
+test-env DATA_PATH {TEST_DIR}
 
 
 statement ok
-ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/ducklake_createq_drop_cleanup', DATA_INLINING_ROW_LIMIT 0)
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/ducklake_createq_drop_cleanup', DATA_INLINING_ROW_LIMIT 0)
 
 statement ok
 BEGIN
@@ -24,7 +24,7 @@ statement ok
 INSERT INTO ducklake.tbl VALUES (42);
 
 query I
-SELECT COUNT(*) FROM glob('${DATA_PATH}/ducklake_createq_drop_cleanup/main/tbl/*.parquet')
+SELECT COUNT(*) FROM glob('{DATA_PATH}/ducklake_createq_drop_cleanup/main/tbl/*.parquet')
 ----
 1
 
@@ -32,7 +32,7 @@ statement ok
 DROP TABLE ducklake.tbl
 
 query I
-SELECT COUNT(*) FROM glob('${DATA_PATH}/ducklake_createq_drop_cleanup/main/tbl/*.parquet')
+SELECT COUNT(*) FROM glob('{DATA_PATH}/ducklake_createq_drop_cleanup/main/tbl/*.parquet')
 ----
 0
 

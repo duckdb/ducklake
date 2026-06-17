@@ -1,5 +1,7 @@
 #include "storage/ducklake_stats.hpp"
+#include "common/ducklake_data_file.hpp"
 #include "storage/ducklake_geo_stats.hpp"
+#include "storage/ducklake_metadata_info.hpp"
 #include "storage/ducklake_variant_stats.hpp"
 #include "duckdb/common/types/string.hpp"
 #include "duckdb/common/types/value.hpp"
@@ -69,6 +71,32 @@ DuckLakeColumnStats &DuckLakeColumnStats::operator=(const DuckLakeColumnStats &o
 		extra_stats.reset();
 	}
 	return *this;
+}
+
+DuckLakeColumnStats DuckLakeColumnStats::FromGlobalStats(const LogicalType &type,
+                                                         const DuckLakeGlobalColumnStatsInfo &col) {
+	DuckLakeColumnStats stats(type);
+	stats.has_null_count = col.has_contains_null;
+	if (col.has_contains_null) {
+		stats.null_count = col.contains_null ? 1 : 0;
+	}
+	stats.has_contains_nan = col.has_contains_nan;
+	if (col.has_contains_nan) {
+		stats.contains_nan = col.contains_nan;
+	}
+	stats.has_min = col.has_min;
+	if (col.has_min) {
+		stats.min = col.min_val;
+	}
+	stats.has_max = col.has_max;
+	if (col.has_max) {
+		stats.max = col.max_val;
+	}
+	stats.any_valid = stats.has_min || stats.has_max || col.has_extra_stats;
+	if (col.has_extra_stats && stats.extra_stats) {
+		stats.extra_stats->Deserialize(col.extra_stats);
+	}
+	return stats;
 }
 
 void DuckLakeColumnStats::MergeStats(const DuckLakeColumnStats &new_stats) {
@@ -175,6 +203,17 @@ void DuckLakeTableStats::MergeStats(FieldIndex col_id, const DuckLakeColumnStats
 	current_stats.MergeStats(file_stats);
 }
 
+void DuckLakeTableStats::MergeFileStats(const DuckLakeDataFile &file) {
+	if (!file.max_partial_file_snapshot.IsValid()) {
+		record_count += file.row_count;
+		next_row_id += file.row_count;
+	}
+	table_size_bytes += file.file_size_bytes;
+	for (auto &entry : file.column_stats) {
+		MergeStats(entry.first, entry.second);
+	}
+}
+
 unique_ptr<BaseStatistics> DuckLakeColumnStats::CreateNumericStats() const {
 	auto stats = NumericStats::CreateEmpty(type);
 	if (has_min) {
@@ -231,16 +270,16 @@ unique_ptr<BaseStatistics> DuckLakeColumnStats::CreateGeometryStats() const {
 unique_ptr<BaseStatistics> DuckLakeColumnStats::CreateStringStats() const {
 	auto stats = StringStats::CreateEmpty(type);
 	if (has_min && has_max) {
-		StringStats::Update(stats, string_t(max));
-		StringStats::Update(stats, string_t(min));
+		StringStats::MergeInConstant(stats, string_t(max));
+		StringStats::MergeInConstant(stats, string_t(min));
 		StringStats::ResetMaxStringLength(stats);
 		StringStats::SetContainsUnicode(stats);
 	} else if (has_min) {
 		stats = StringStats::CreateUnknown(type);
-		StringStats::SetMin(stats, string_t(min));
+		StringStats::SetMin(stats, string_t(min), StringStatsType::TRUNCATED_STATS);
 	} else if (has_max) {
 		stats = StringStats::CreateUnknown(type);
-		StringStats::SetMax(stats, string_t(max));
+		StringStats::SetMax(stats, string_t(max), StringStatsType::TRUNCATED_STATS);
 	} else {
 		// No min/max stats available - use unknown stats to avoid
 		// false claims about max_string_length (CreateEmpty sets it to 0)
@@ -274,19 +313,28 @@ unique_ptr<BaseStatistics> DuckLakeColumnStats::ToStats() const {
 	case LogicalTypeId::TIME:
 	case LogicalTypeId::TIMESTAMP:
 	case LogicalTypeId::TIMESTAMP_TZ:
+	case LogicalTypeId::TIMESTAMP_TZ_NS:
 	case LogicalTypeId::TIMESTAMP_SEC:
 	case LogicalTypeId::TIMESTAMP_MS:
 	case LogicalTypeId::TIMESTAMP_NS:
 	case LogicalTypeId::UUID:
 		return CreateNumericStats();
 	case LogicalTypeId::FLOAT:
-	case LogicalTypeId::DOUBLE:
+	case LogicalTypeId::DOUBLE: {
 		// we only create stats if we know there are no NaN values
 		// FIXME: we can just set Max to NaN instead
 		if (has_contains_nan && !contains_nan) {
 			return CreateNumericStats();
 		}
-		return nullptr;
+		auto stats = NumericStats::CreateEmpty(type);
+		if (!has_null_count || null_count > 0) {
+			stats.SetHasNullFast();
+		}
+		if (!has_null_count || !has_num_values || null_count != num_values) {
+			stats.SetHasNoNullFast();
+		}
+		return stats.ToUnique();
+	}
 	case LogicalTypeId::VARCHAR:
 		return CreateStringStats();
 	case LogicalTypeId::GEOMETRY:

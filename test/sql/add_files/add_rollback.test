@@ -6,12 +6,12 @@ require ducklake
 
 require parquet
 
-test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
 
-test-env DATA_PATH __TEST_DIR__
+test-env DATA_PATH {TEST_DIR}
 
 statement ok
-ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/add_rollback');
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/add_rollback');
 
 statement ok
 USE ducklake
@@ -23,19 +23,19 @@ statement ok
 INSERT INTO test VALUES (1,2);
 
 statement ok
-COPY (SELECT 200 col1, 'world' col2 LIMIT 1) TO '${DATA_PATH}/add_rollback/file.parquet';
+COPY (SELECT 200 col1, 'world' col2 LIMIT 1) TO '{DATA_PATH}/add_rollback/file.parquet';
 
 statement ok
 BEGIN
 
 statement ok
-CALL ducklake_add_data_files('ducklake', 'test', '${DATA_PATH}/add_rollback/file.parquet');
+CALL ducklake_add_data_files('ducklake', 'test', '{DATA_PATH}/add_rollback/file.parquet');
 
 statement ok
 ROLLBACK
 
 # Our file should still be alive
 query I
-SELECT COUNT(*) FROM GLOB('${DATA_PATH}/add_rollback/*.parquet')
+SELECT COUNT(*) FROM GLOB('{DATA_PATH}/add_rollback/*.parquet')
 ----
 1

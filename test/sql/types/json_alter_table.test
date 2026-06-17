@@ -9,7 +9,7 @@ require parquet
 require json
 
 statement ok
-ATTACH 'ducklake:__TEST_DIR__/ducklake_json_alter_table.db' AS ducklake (DATA_PATH '__TEST_DIR__/json_alter_table')
+ATTACH 'ducklake:{TEST_DIR}/ducklake_json_alter_table.db' AS ducklake (DATA_PATH '{TEST_DIR}/json_alter_table')
 
 statement ok
 use ducklake;

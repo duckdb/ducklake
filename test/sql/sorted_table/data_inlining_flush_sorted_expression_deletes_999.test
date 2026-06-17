@@ -6,10 +6,10 @@ require ducklake
 
 require parquet
 
-test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
 
 statement ok
-ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '__TEST_DIR__/issue_999/', DATA_INLINING_ROW_LIMIT 100)
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{TEST_DIR}/issue_999/', DATA_INLINING_ROW_LIMIT 100)
 
 statement ok
 USE dl

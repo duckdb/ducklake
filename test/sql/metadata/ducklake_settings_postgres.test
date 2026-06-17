@@ -8,12 +8,13 @@ require parquet
 
 require postgres_scanner
 
-test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+#FIXME: ADD THIS TO PG CI WHEN IT GETS BACK
+require-env DUCKLAKE_CI
 
-test-env DATA_PATH __TEST_DIR__
+test-env DATA_PATH {TEST_DIR}
 
 statement ok
-ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/files')
+ATTACH 'ducklake:postgres:dbname=ducklakedb' AS ducklake (DATA_PATH '{DATA_PATH}/files')
 
 statement ok
 use ducklake

@@ -2,6 +2,7 @@
 #include "storage/ducklake_transaction.hpp"
 #include "common/ducklake_util.hpp"
 #include "storage/ducklake_transaction_changes.hpp"
+#include "duckdb/common/sql_identifier.hpp"
 
 namespace duckdb {
 
@@ -25,9 +26,9 @@ Value NameListToValue(const case_insensitive_set_t &list_val) {
 Value CatalogListToValue(const case_insensitive_map_t<case_insensitive_set_t> &list_val) {
 	vector<Value> list_values;
 	for (auto &entry : list_val) {
-		auto schema = KeywordHelper::WriteOptionallyQuoted(entry.first);
+		auto schema = SQLIdentifier::ToString(entry.first);
 		for (auto &entry_name : entry.second) {
-			auto table = KeywordHelper::WriteOptionallyQuoted(entry_name);
+			auto table = SQLIdentifier::ToString(entry_name);
 			list_values.emplace_back(schema + "." + table);
 		}
 	}

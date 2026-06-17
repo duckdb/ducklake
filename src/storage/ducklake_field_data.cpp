@@ -59,7 +59,7 @@ static Value ExtractInitialValue(optional_ptr<const ParsedExpression> initial_ex
 	if (!initial_expr) {
 		return Value(type);
 	}
-	if (initial_expr->type != ExpressionType::VALUE_CONSTANT) {
+	if (initial_expr->GetExpressionType() != ExpressionType::VALUE_CONSTANT) {
 		if (!add_column) {
 			return Value(type);
 		}
@@ -67,7 +67,7 @@ static Value ExtractInitialValue(optional_ptr<const ParsedExpression> initial_ex
 		                              "then explicitly set the default for new values using \"ALTER ... SET DEFAULT\"");
 	}
 	auto &const_default = initial_expr->Cast<ConstantExpression>();
-	return const_default.value.DefaultCastAs(type);
+	return const_default.GetValue().DefaultCastAs(type);
 }
 
 unique_ptr<DuckLakeFieldId> DuckLakeFieldId::FieldIdFromType(const string &name, const LogicalType &type,
@@ -83,7 +83,8 @@ unique_ptr<DuckLakeFieldId> DuckLakeFieldId::FieldIdFromType(const string &name,
 			throw NotImplementedException("Default value for STRUCT type not supported");
 		}
 		for (auto &entry : StructType::GetChildTypes(type)) {
-			field_children.push_back(FieldIdFromType(entry.first, entry.second, nullptr, column_id, add_column));
+			field_children.push_back(
+			    FieldIdFromType(entry.first.GetIdentifierName(), entry.second, nullptr, column_id, add_column));
 		}
 		break;
 	}
@@ -129,7 +130,8 @@ unique_ptr<ParsedExpression> DuckLakeFieldId::GetDefault() const {
 unique_ptr<DuckLakeFieldId> DuckLakeFieldId::FieldIdFromColumn(const ColumnDefinition &col, idx_t &column_id,
                                                                bool add_column) {
 	auto default_val = col.HasDefaultValue() ? optional_ptr<const ParsedExpression>(col.DefaultValue()) : nullptr;
-	return DuckLakeFieldId::FieldIdFromType(col.Name(), col.Type(), default_val, column_id, add_column);
+	return DuckLakeFieldId::FieldIdFromType(col.Name().GetIdentifierName(), col.Type(), default_val, column_id,
+	                                        add_column);
 }
 
 shared_ptr<DuckLakeFieldData> DuckLakeFieldData::FromColumns(const ColumnList &columns) {
@@ -330,7 +332,7 @@ shared_ptr<DuckLakeFieldData> DuckLakeFieldData::SetDefault(const DuckLakeFieldD
 	auto result = make_shared_ptr<DuckLakeFieldData>();
 	auto new_default =
 	    new_col.HasDefaultValue() ? optional_ptr<const ParsedExpression>(new_col.DefaultValue()) : nullptr;
-	if (new_default && new_default->type != ExpressionType::VALUE_CONSTANT && add_column) {
+	if (new_default && new_default->GetExpressionType() != ExpressionType::VALUE_CONSTANT && add_column) {
 		throw NotImplementedException("We cannot add a column with a non-literal default value. Add the column and "
 		                              "then explicitly set the default for new values using \"ALTER ... SET DEFAULT\"");
 	}

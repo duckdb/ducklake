@@ -1,0 +1,103 @@
+# name: test/sql/stats/min_max_optimization_time_travel.test
+# description: MIN/MAX with time travel and transaction-local changes (fall back, stay correct)
+# group: [stats]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+
+test-env DATA_PATH __TEST_DIR__
+
+statement ok
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/min_max_time_travel')
+
+statement ok
+CREATE TABLE ducklake.tt(i INTEGER);
+
+statement ok
+INSERT INTO ducklake.tt FROM range(1, 101);
+
+# snapshot 2 == after the first insert (1..100)
+query I
+SELECT MAX(snapshot_id) FROM ducklake.snapshots();
+----
+2
+
+statement ok
+INSERT INTO ducklake.tt FROM range(101, 201);
+
+# current MIN/MAX over all rows
+query II
+SELECT MIN(i), MAX(i) FROM ducklake.tt;
+----
+1	200
+
+# time travel to snapshot 2 -> MAX should be 100, not 200 (falls back to scanning)
+query II
+SELECT MIN(i), MAX(i) FROM ducklake.tt AT (VERSION => 2);
+----
+1	100
+
+# the time travel query reads files (it cannot be folded from current metadata)
+query II
+EXPLAIN ANALYZE SELECT MAX(i) FROM ducklake.tt AT (VERSION => 2);
+----
+analyzed_plan	<REGEX>:.*TABLE_SCAN.*
+
+# ============================================
+# Transaction-local changes
+# ============================================
+
+# uncommitted insert that widens the range
+statement ok
+BEGIN;
+
+statement ok
+INSERT INTO ducklake.tt VALUES (-5), (9999);
+
+query II
+SELECT MIN(i), MAX(i) FROM ducklake.tt;
+----
+-5	9999
+
+# transaction-local data forces fallback via HasTransactionLocalData()
+query II
+EXPLAIN ANALYZE SELECT MIN(i), MAX(i) FROM ducklake.tt;
+----
+analyzed_plan	<REGEX>:.*TABLE_SCAN.*
+
+statement ok
+ROLLBACK;
+
+# after rollback the committed MIN/MAX are visible again (and fold from metadata)
+query II
+SELECT MIN(i), MAX(i) FROM ducklake.tt;
+----
+1	200
+
+query II
+EXPLAIN ANALYZE SELECT MIN(i), MAX(i) FROM ducklake.tt;
+----
+analyzed_plan	<!REGEX>:.*TABLE_SCAN.*
+
+# uncommitted delete of the current minimum
+statement ok
+BEGIN;
+
+statement ok
+DELETE FROM ducklake.tt WHERE i = 1;
+
+query I
+SELECT MIN(i) FROM ducklake.tt;
+----
+2
+
+statement ok
+ROLLBACK;
+
+query I
+SELECT MIN(i) FROM ducklake.tt;
+----
+1

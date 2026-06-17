@@ -6,31 +6,31 @@ require ducklake
 
 require parquet
 
-test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
 
-test-env DATA_PATH __TEST_DIR__
+test-env DATA_PATH {TEST_DIR}
 
-
-statement ok
-ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/ducklake_add_files_type_nested')
 
 statement ok
-COPY (SELECT [true]::BOOL[] AS col1) TO '${DATA_PATH}/bool_list.parquet';
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/ducklake_add_files_type_nested')
 
 statement ok
-COPY (SELECT [42]::INT[] AS col1) TO '${DATA_PATH}/int_list.parquet';
+COPY (SELECT [true]::BOOL[] AS col1) TO '{DATA_PATH}/bool_list.parquet';
 
 statement ok
-COPY (SELECT {'list': true} AS col1) TO '${DATA_PATH}/bool_struct.parquet';
+COPY (SELECT [42]::INT[] AS col1) TO '{DATA_PATH}/int_list.parquet';
 
 statement ok
-COPY (SELECT {'list': 42::INTEGER} AS col1) TO '${DATA_PATH}/int_struct.parquet';
+COPY (SELECT {'list': true} AS col1) TO '{DATA_PATH}/bool_struct.parquet';
 
 statement ok
-COPY (SELECT MAP([true], [false]) AS col1) TO '${DATA_PATH}/bool_map.parquet';
+COPY (SELECT {'list': 42::INTEGER} AS col1) TO '{DATA_PATH}/int_struct.parquet';
 
 statement ok
-COPY (SELECT MAP([42], [84]) AS col1) TO '${DATA_PATH}/int_map.parquet';
+COPY (SELECT MAP([true], [false]) AS col1) TO '{DATA_PATH}/bool_map.parquet';
+
+statement ok
+COPY (SELECT MAP([42], [84]) AS col1) TO '{DATA_PATH}/int_map.parquet';
 
 ############
 # int list #
@@ -39,17 +39,17 @@ statement ok
 CREATE OR REPLACE TABLE ducklake.test(col1 INT[]);
 
 statement error
-CALL ducklake_add_data_files('ducklake', 'test', '${DATA_PATH}/bool_list.parquet')
+CALL ducklake_add_data_files('ducklake', 'test', '{DATA_PATH}/bool_list.parquet')
 ----
 BOOLEAN
 
 statement error
-CALL ducklake_add_data_files('ducklake', 'test', '${DATA_PATH}/int_struct.parquet')
+CALL ducklake_add_data_files('ducklake', 'test', '{DATA_PATH}/int_struct.parquet')
 ----
 STRUCT
 
 statement ok
-CALL ducklake_add_data_files('ducklake', 'test', '${DATA_PATH}/int_list.parquet')
+CALL ducklake_add_data_files('ducklake', 'test', '{DATA_PATH}/int_list.parquet')
 
 query I
 FROM ducklake.test
@@ -63,17 +63,17 @@ statement ok
 CREATE OR REPLACE TABLE ducklake.test(col1 STRUCT(list INT));
 
 statement error
-CALL ducklake_add_data_files('ducklake', 'test', '${DATA_PATH}/bool_struct.parquet')
+CALL ducklake_add_data_files('ducklake', 'test', '{DATA_PATH}/bool_struct.parquet')
 ----
 BOOLEAN
 
 statement error
-CALL ducklake_add_data_files('ducklake', 'test', '${DATA_PATH}/int_list.parquet')
+CALL ducklake_add_data_files('ducklake', 'test', '{DATA_PATH}/int_list.parquet')
 ----
 LIST
 
 statement ok
-CALL ducklake_add_data_files('ducklake', 'test', '${DATA_PATH}/int_struct.parquet')
+CALL ducklake_add_data_files('ducklake', 'test', '{DATA_PATH}/int_struct.parquet')
 
 query I
 FROM ducklake.test
@@ -87,17 +87,17 @@ statement ok
 CREATE OR REPLACE TABLE ducklake.test(col1 MAP(INT, INT));
 
 statement error
-CALL ducklake_add_data_files('ducklake', 'test', '${DATA_PATH}/bool_map.parquet')
+CALL ducklake_add_data_files('ducklake', 'test', '{DATA_PATH}/bool_map.parquet')
 ----
 BOOLEAN
 
 statement error
-CALL ducklake_add_data_files('ducklake', 'test', '${DATA_PATH}/int_list.parquet')
+CALL ducklake_add_data_files('ducklake', 'test', '{DATA_PATH}/int_list.parquet')
 ----
 LIST
 
 statement ok
-CALL ducklake_add_data_files('ducklake', 'test', '${DATA_PATH}/int_map.parquet')
+CALL ducklake_add_data_files('ducklake', 'test', '{DATA_PATH}/int_map.parquet')
 
 query I
 FROM ducklake.test

@@ -9,7 +9,7 @@ require parquet
 require httpfs
 
 statement ok
-ATTACH 'ducklake:__TEST_DIR__/ducklake_encryption.db' AS ducklake (DATA_PATH '__TEST_DIR__/ducklake_encryption_files', ENCRYPTED)
+ATTACH 'ducklake:{TEST_DIR}/ducklake_encryption.db' AS ducklake (DATA_PATH '{TEST_DIR}/ducklake_encryption_files', ENCRYPTED)
 
 statement ok
 BEGIN
@@ -34,7 +34,7 @@ SELECT COUNT(*), SUM(id) FROM ducklake.test
 
 # we cannot read the files using a regular parquet read as they have been encrypted - we need the encryption key
 statement error
-SELECT * FROM '__TEST_DIR__/ducklake_encryption_files/**/*.parquet'
+SELECT * FROM '{TEST_DIR}/ducklake_encryption_files/**/*.parquet'
 ----
 encrypted
 
@@ -60,7 +60,7 @@ SELECT COUNT(*), SUM(id) FROM ducklake.test
 
 # similarly we cannot read deletes, as they are encrypted
 statement error
-SELECT * FROM '__TEST_DIR__/ducklake_encryption_files/**/*-del*.parquet'
+SELECT * FROM '{TEST_DIR}/ducklake_encryption_files/**/*-del*.parquet'
 ----
 encrypted
 
@@ -69,7 +69,7 @@ statement ok
 DETACH ducklake
 
 statement ok
-ATTACH 'ducklake:__TEST_DIR__/ducklake_encryption.db' AS ducklake
+ATTACH 'ducklake:{TEST_DIR}/ducklake_encryption.db' AS ducklake
 
 query II
 SELECT COUNT(*), SUM(id) FROM ducklake.test

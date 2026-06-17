@@ -6,12 +6,12 @@ require ducklake
 
 require parquet
 
-test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
 
-test-env DATA_PATH __TEST_DIR__
+test-env DATA_PATH {TEST_DIR}
 
 statement ok
-ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/ducklake_metadata_parameters', META_TYPE 'DUCKDB')
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/ducklake_metadata_parameters', META_TYPE 'DUCKDB')
 
 statement ok
 CREATE TABLE ducklake.tbl AS FROM range(1000) t(i);
@@ -22,6 +22,6 @@ SELECT COUNT(*) FROM ducklake.tbl
 1000
 
 statement error
-ATTACH 'ducklake:${DATA_PATH}/ducklake_metadata_parametersxx.db' AS s (DATA_PATH '${DATA_PATH}/ducklake_metadata_parameters', META_TYPE 'DUCKDBXX')
+ATTACH 'ducklake:{DATA_PATH}/ducklake_metadata_parametersxx.db' AS s (DATA_PATH '{DATA_PATH}/ducklake_metadata_parameters', META_TYPE 'DUCKDBXX')
 ----
 duckdbxx

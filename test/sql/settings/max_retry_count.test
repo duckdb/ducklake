@@ -6,13 +6,13 @@ require ducklake
 
 require parquet
 
-test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
 
-test-env DATA_PATH __TEST_DIR__
+test-env DATA_PATH {TEST_DIR}
 
 
 statement ok
-ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/ducklake_retry_test_files');
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/ducklake_retry_test_files');
 
 statement ok
 USE ducklake
@@ -51,9 +51,9 @@ SELECT current_setting('ducklake_max_retry_count')
 statement ok
 INSERT INTO retry_test VALUES (2, 'test with retry count 7');
 
-# Test 5: Test session scope
+# Test 5: Set to 2
 statement ok
-SET SESSION ducklake_max_retry_count = 2;
+SET ducklake_max_retry_count = 2;
 
 query I
 SELECT current_setting('ducklake_max_retry_count')
@@ -63,14 +63,14 @@ SELECT current_setting('ducklake_max_retry_count')
 statement ok
 INSERT INTO retry_test VALUES (3, 'test with retry count 2');
 
-# Test 6: Reset resets GLOBAL only -  session override remains
+# Test 6: ducklake_max_retry_count is a GLOBAL setting, so RESET returns it to the default
 statement ok
 RESET ducklake_max_retry_count;
 
 query I
 SELECT current_setting('ducklake_max_retry_count')
 ----
-2
+10
 
 # Verify all data was inserted correctly
 query II
@@ -143,7 +143,7 @@ statement ok
 SET ducklake_max_retry_count = 100;
 
 statement ok
-INSERT INTO ducklake.tbl VALUES(${i});
+INSERT INTO ducklake.tbl VALUES({i});
 
 endloop
 
@@ -159,7 +159,7 @@ SET ducklake_max_retry_count = 1;
 concurrentloop i 0 10
 
 statement maybe
-INSERT INTO ducklake.tbl VALUES(${i});
+INSERT INTO ducklake.tbl VALUES({i});
 ----
 Exceeded the maximum retry count of 1 set by the ducklake_max_retry_count setting.
 

@@ -22,8 +22,8 @@ string DuckLakeSort::BuildSortOrderSQL(const DuckLakeSort &sort_data, const Colu
 	for (idx_t i = 0; i < column_count; i++) {
 		auto &current_name = current_columns.GetColumn(PhysicalIndex(i)).Name();
 		auto &inlined_name = inlined_columns.GetColumn(PhysicalIndex(i)).Name();
-		if (current_name != inlined_name) {
-			rename_map[current_name] = inlined_name;
+		if (current_name.GetIdentifierName() != inlined_name.GetIdentifierName()) {
+			rename_map[current_name.GetIdentifierName()] = inlined_name.GetIdentifierName();
 		}
 	}
 
@@ -44,9 +44,9 @@ string DuckLakeSort::BuildSortOrderSQL(const DuckLakeSort &sort_data, const Colu
 			D_ASSERT(parsed.size() == 1);
 			ParsedExpressionIterator::VisitExpressionMutable<ColumnRefExpression>(
 			    *parsed[0], [&](ColumnRefExpression &colref) {
-				    auto entry = rename_map.find(colref.GetColumnName());
+				    auto entry = rename_map.find(colref.GetColumnName().GetIdentifierName());
 				    if (entry != rename_map.end()) {
-					    colref.column_names.back() = entry->second;
+					    colref.ColumnNamesMutable().back() = Identifier(entry->second);
 				    }
 			    });
 			result += parsed[0]->ToString();

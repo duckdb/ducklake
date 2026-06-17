@@ -8,13 +8,13 @@ require parquet
 
 require httpfs
 
-test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
 
-test-env DATA_PATH __TEST_DIR__
+test-env DATA_PATH {TEST_DIR}
 
 
 statement ok
-ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/ducklake_compaction_encrypted_files', ENCRYPTED)
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/ducklake_compaction_encrypted_files', ENCRYPTED)
 
 statement ok
 CREATE TABLE ducklake.test(i INTEGER);
@@ -48,13 +48,13 @@ CALL ducklake_cleanup_old_files('ducklake', cleanup_all => true);
 
 # all files have been compacted into one file
 query I
-SELECT COUNT(*) FROM GLOB('${DATA_PATH}/ducklake_compaction_encrypted_files/**/*')
+SELECT COUNT(*) FROM GLOB('{DATA_PATH}/ducklake_compaction_encrypted_files/**/*')
 ----
 1
 
 # verify the file is encrypted
 statement error
-SELECT * FROM '${DATA_PATH}/ducklake_compaction_encrypted_files/**/*.parquet'
+SELECT * FROM '{DATA_PATH}/ducklake_compaction_encrypted_files/**/*.parquet'
 ----
 encrypted
 

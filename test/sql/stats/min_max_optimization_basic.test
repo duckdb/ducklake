@@ -1,0 +1,134 @@
+# name: test/sql/stats/min_max_optimization_basic.test
+# description: Test metadata-only MIN/MAX optimization
+# group: [stats]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+
+test-env DATA_PATH __TEST_DIR__
+
+statement ok
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/min_max_optimization')
+
+# ============================================
+# 1. MIN/MAX answered from catalog metadata
+# ============================================
+
+statement ok
+CREATE TABLE ducklake.test(i INTEGER);
+
+statement ok
+INSERT INTO ducklake.test FROM range(1, 1001);
+
+query III
+SELECT MIN(i), MAX(i), COUNT(*) FROM ducklake.test;
+----
+1	1000	1000
+
+# the MIN/MAX/COUNT(*) are folded to constants - no files are read
+query II
+EXPLAIN ANALYZE SELECT MIN(i), MAX(i), COUNT(*) FROM ducklake.test;
+----
+analyzed_plan	<!REGEX>:.*TABLE_SCAN.*
+
+query II
+EXPLAIN ANALYZE SELECT MIN(i) FROM ducklake.test;
+----
+analyzed_plan	<!REGEX>:.*TABLE_SCAN.*
+
+query II
+EXPLAIN ANALYZE SELECT MAX(i) FROM ducklake.test;
+----
+analyzed_plan	<!REGEX>:.*TABLE_SCAN.*
+
+# the optimization still holds after additional inserts (stats widen)
+statement ok
+INSERT INTO ducklake.test VALUES (-50), (5000);
+
+query III
+SELECT MIN(i), MAX(i), COUNT(*) FROM ducklake.test;
+----
+-50	5000	1002
+
+query II
+EXPLAIN ANALYZE SELECT MIN(i), MAX(i) FROM ducklake.test;
+----
+analyzed_plan	<!REGEX>:.*TABLE_SCAN.*
+
+# ============================================
+# 2. String MIN/MAX
+# ============================================
+
+statement ok
+CREATE TABLE ducklake.strings(v VARCHAR);
+
+statement ok
+INSERT INTO ducklake.strings VALUES ('banana'), ('apple'), ('cherry'), ('date');
+
+# NOTE: we only assert the value here, not that it folds. String min/max statistics may be stored as a
+# truncated prefix, so the optimizer conservatively refuses to answer string MIN/MAX from stats (it falls
+# back to a scan). The result must still be correct either way.
+query II
+SELECT MIN(v), MAX(v) FROM ducklake.strings;
+----
+apple	date
+
+# ============================================
+# 3. Filtered MIN/MAX falls back to scanning but stays correct
+# ============================================
+
+# always-true filter over the whole range still folds
+query I
+SELECT MIN(i) FROM ducklake.test WHERE i >= -50;
+----
+-50
+
+# partial filter -> falls back to a scan
+query I
+SELECT MIN(i) FROM ducklake.test WHERE i > 50;
+----
+51
+
+query II
+EXPLAIN ANALYZE SELECT MIN(i) FROM ducklake.test WHERE i > 50;
+----
+analyzed_plan	<REGEX>:.*TABLE_SCAN.*
+
+# always-false filter -> empty result, must be NULL (and must not crash)
+query I
+SELECT MIN(i) FROM ducklake.test WHERE i > 100000;
+----
+NULL
+
+# ============================================
+# 4. All-NULL column -> MIN/MAX is NULL (via fallback)
+# ============================================
+
+statement ok
+CREATE TABLE ducklake.nulls(n INTEGER);
+
+statement ok
+INSERT INTO ducklake.nulls VALUES (NULL), (NULL), (NULL);
+
+query II
+SELECT MIN(n), MAX(n) FROM ducklake.nulls;
+----
+NULL	NULL
+
+# ============================================
+# 5. FLOAT/DOUBLE MIN/MAX are correct (fold or fallback, value must match)
+# ============================================
+
+statement ok
+CREATE TABLE ducklake.doubles(d DOUBLE);
+
+statement ok
+INSERT INTO ducklake.doubles VALUES (1.5), (-3.25), (2.0), (100.125);
+
+query II
+SELECT MIN(d), MAX(d) FROM ducklake.doubles;
+----
+-3.25	100.125

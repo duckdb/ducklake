@@ -6,14 +6,14 @@ require ducklake
 
 require parquet
 
-test-env DATA_PATH __TEST_DIR__
+test-env DATA_PATH {TEST_DIR}
 
-unzip data/old_ducklake/v01_partitioned.db.gz ${DATA_PATH}/v01_partitioned.db
+unzip data/old_ducklake/v01_partitioned.db.gz {DATA_PATH}/v01_partitioned.db
 
-test-env DUCKLAKE_CONNECTION __TEST_DIR__/v01_partitioned.db
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/v01_partitioned.db
 
 statement ok
-ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/ducklake_migrate_v01_partitioned', METADATA_CATALOG 'ducklake_metadata', OVERRIDE_DATA_PATH TRUE, AUTOMATIC_MIGRATION TRUE)
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/ducklake_migrate_v01_partitioned', METADATA_CATALOG 'ducklake_metadata', OVERRIDE_DATA_PATH TRUE, AUTOMATIC_MIGRATION TRUE)
 
 statement ok
 INSERT INTO ducklake.partitioned_tbl SELECT NULL, i%2, concat('thisisastring_', i) FROM range(10000) t(i)
@@ -21,16 +21,16 @@ INSERT INTO ducklake.partitioned_tbl SELECT NULL, i%2, concat('thisisastring_', 
 statement ok
 INSERT INTO ducklake.other_partitioned_tbl SELECT i%2, concat('thisisastring_', i) FROM range(10000) t(i)
 
-query III
-SELECT data_file_id, partition_id, regexp_extract(path, '([a-zA-Z0-9_]+=[0-9])[/\\].*', 1) FROM ducklake_metadata.ducklake_data_file
-ORDER BY ALL
+query II
+SELECT partition_id, regexp_extract(path, '([a-zA-Z0-9_]+=[0-9])[/\\].*', 1) AS part FROM ducklake_metadata.ducklake_data_file
+ORDER BY partition_id, part
 ----
-0	3	part_key=0
-1	3	part_key=1
-2	4	other_part_key=0
-3	4	other_part_key=1
+3	part_key=0
+3	part_key=1
+4	other_part_key=0
+4	other_part_key=1
 
 query I
-SELECT COUNT(*) FROM glob('${DATA_PATH}/ducklake_migrate_v01_partitioned/**/*.parquet')
+SELECT COUNT(*) FROM glob('{DATA_PATH}/ducklake_migrate_v01_partitioned/**/*.parquet')
 ----
 4

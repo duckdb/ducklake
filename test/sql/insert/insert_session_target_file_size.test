@@ -6,12 +6,12 @@ require ducklake
 
 require parquet
 
-test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
 
-test-env DATA_PATH __TEST_DIR__
+test-env DATA_PATH {TEST_DIR}
 
 statement ok
-ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/ducklake_session_target_file_size')
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/ducklake_session_target_file_size')
 
 statement ok
 CREATE TABLE ducklake.test(id INTEGER, s VARCHAR);
@@ -47,7 +47,7 @@ INSERT INTO ducklake.test SELECT i, concat('thisisalongstring', i) FROM range(50
 
 # Session setting should have taken precedence over all metadata scopes: multiple files expected
 query I
-SELECT COUNT(*) > 1 FROM glob('${DATA_PATH}/ducklake_session_target_file_size/main/test/*.parquet')
+SELECT COUNT(*) > 1 FROM glob('{DATA_PATH}/ducklake_session_target_file_size/main/test/*.parquet')
 ----
 true
 
@@ -64,6 +64,6 @@ INSERT INTO ducklake.test2 SELECT i, concat('thisisalongstring', i) FROM range(5
 500000
 
 query I
-SELECT COUNT(*) = 1 FROM glob('${DATA_PATH}/ducklake_session_target_file_size/main/test2/*.parquet')
+SELECT COUNT(*) = 1 FROM glob('{DATA_PATH}/ducklake_session_target_file_size/main/test2/*.parquet')
 ----
 true

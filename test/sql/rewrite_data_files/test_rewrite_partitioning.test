@@ -6,13 +6,13 @@ require ducklake
 
 require parquet
 
-test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
 
-test-env DATA_PATH __TEST_DIR__
+test-env DATA_PATH {TEST_DIR}
 
 
 statement ok
-ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/rewrite_partitioned', METADATA_CATALOG 'ducklake_metadata')
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/rewrite_partitioned', METADATA_CATALOG 'ducklake_metadata')
 
 statement ok
 USE ducklake
@@ -41,7 +41,7 @@ CALL ducklake_flush_inlined_data('ducklake')
 
 # We should have 2 data files (one per insert, but inserts had multiple rows)
 query I
-SELECT COUNT(*) FROM GLOB('${DATA_PATH}/rewrite_partitioned/**/*.parquet')
+SELECT COUNT(*) FROM GLOB('{DATA_PATH}/rewrite_partitioned/**/*.parquet')
 ----
 2
 

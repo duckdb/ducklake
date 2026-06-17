@@ -10,7 +10,7 @@ unique_ptr<BaseSecret> DuckLakeSecret::CreateDuckLakeSecretFunction(ClientContex
 		throw InvalidInputException("metadata_path must be defined when creating a DuckLake secret");
 	}
 	for (const auto &named_param : input.options) {
-		result->secret_map[named_param.first] = named_param.second;
+		result->secret_map[Identifier(named_param.first)] = named_param.second;
 	}
 	return std::move(result);
 }
@@ -45,6 +45,7 @@ CreateSecretFunction DuckLakeSecret::GetFunction() {
 	function.named_parameters["metadata_path"] = LogicalType::VARCHAR;
 	function.named_parameters["metadata_parameters"] = LogicalType::MAP(LogicalType::VARCHAR, LogicalType::VARCHAR);
 	function.named_parameters["encrypted"] = LogicalType::BOOLEAN;
+	function.named_parameters["ducklake_version"] = LogicalType::VARCHAR;
 	return function;
 }
 

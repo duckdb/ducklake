@@ -27,6 +27,8 @@
 #include "storage/ducklake_inlined_data_reader.hpp"
 #include "duckdb/planner/filter/constant_filter.hpp"
 #include "duckdb/planner/filter/dynamic_filter.hpp"
+#include "duckdb/planner/filter/expression_filter.hpp"
+#include "duckdb/planner/filter/table_filter_functions.hpp"
 #include "duckdb/planner/filter/optional_filter.hpp"
 
 namespace duckdb {
@@ -60,15 +62,19 @@ static bool TryFindColumnByFieldId(const vector<MultiFileColumnDefinition> &loca
 static void AddSnapshotFilter(BaseFileReader &reader, const ColumnIndex &col_idx, const LogicalType &col_type,
                               idx_t snapshot_value, ExpressionType comparison_type) {
 	auto constant = Value::UBIGINT(snapshot_value).DefaultCastAs(col_type);
-	auto filter = make_uniq<ConstantFilter>(comparison_type, std::move(constant));
-	reader.filters->PushFilter(col_idx, std::move(filter));
+	auto col_ref = make_uniq<BoundReferenceExpression>(col_type, static_cast<storage_t>(0));
+	auto bound_constant = make_uniq<BoundConstantExpression>(std::move(constant));
+	auto comparison = BoundComparisonExpression::Create(comparison_type, std::move(col_ref), std::move(bound_constant));
+	auto filter = make_uniq<ExpressionFilter>(std::move(comparison));
+	reader.filters->PushFilter(ProjectionIndex(col_idx.GetPrimaryIndex()), std::move(filter));
 }
 
 // recursively normalize LIST child names from legacy formats blame legacy Avro/Parquet formats
 static void NormalizeListChildNames(vector<MultiFileColumnDefinition> &columns, bool parent_is_list = false) {
 	for (auto &col : columns) {
 		// basically array, element becomes list
-		if (parent_is_list && (col.name == "array" || col.name == "element")) {
+		if (parent_is_list &&
+		    (col.name.GetIdentifierName() == "array" || col.name.GetIdentifierName() == "element")) {
 			col.name = "list";
 		}
 		if (!col.children.empty()) {
@@ -85,19 +91,19 @@ static bool CanSkipFileByTopNDynamicFilter(const DuckLakeFileListEntry &file_ent
 	}
 	for (auto &it : filter_info.column_filters) {
 		auto &col_filter = it.second;
-		auto *filter = DuckLakeUtil::GetOptionalDynamicFilter(*col_filter.table_filter);
-		if (!filter) {
+		auto filter_data = DuckLakeUtil::GetOptionalDynamicFilterData(*col_filter.table_filter);
+		if (!filter_data) {
 			continue;
 		}
 		ExpressionType comparison_type;
 		Value constant;
 		{
-			lock_guard<mutex> l(filter->filter_data->lock);
-			if (!filter->filter_data->initialized) {
+			lock_guard<mutex> l(filter_data->lock);
+			if (!filter_data->initialized) {
 				return false;
 			}
-			comparison_type = filter->filter_data->filter->comparison_type;
-			constant = filter->filter_data->filter->constant;
+			comparison_type = filter_data->comparison_type;
+			constant = filter_data->constant;
 		}
 
 		auto mm_it = file_entry.column_min_max.find(col_filter.column_field_index);
@@ -215,20 +221,20 @@ vector<MultiFileColumnDefinition> DuckLakeMultiFileReader::ColumnsFromFieldData(
 }
 
 bool DuckLakeMultiFileReader::Bind(MultiFileOptions &options, MultiFileList &files, vector<LogicalType> &return_types,
-                                   vector<string> &names, MultiFileReaderBindData &bind_data) {
+                                   vector<Identifier> &names, MultiFileReaderBindData &bind_data) {
 	auto &field_data = read_info.table.GetFieldData();
 	auto &columns = bind_data.schema;
 	columns = ColumnsFromFieldData(field_data);
 	//	bind_data.file_row_number_idx = names.size();
 	bind_data.mapping = MultiFileColumnMappingMode::BY_FIELD_ID;
-	names = read_info.column_names;
+	names = StringsToIdentifiers(read_info.column_names);
 	return_types = read_info.column_types;
 	return true;
 }
 
 //! Override the Options bind
 void DuckLakeMultiFileReader::BindOptions(MultiFileOptions &options, MultiFileList &files,
-                                          vector<LogicalType> &return_types, vector<string> &names,
+                                          vector<LogicalType> &return_types, vector<Identifier> &names,
                                           MultiFileReaderBindData &bind_data) {
 }
 
@@ -551,7 +557,7 @@ ReaderInitializeType DuckLakeMultiFileReader::CreateMapping(
 		vector<string> source_names;
 		vector<FieldIndex> target_field_ids;
 		for (idx_t i = 0; i < MinValue(file_columns.size(), global_columns.size()); i++) {
-			source_names.push_back(file_columns[i].name);
+			source_names.push_back(file_columns[i].name.GetIdentifierName());
 			target_field_ids.emplace_back(global_columns[i].identifier.GetValue<idx_t>());
 		}
 		auto positional_map = DuckLakeNameMap::CreatePositionalMapping(source_names, target_field_ids);
@@ -662,11 +668,11 @@ void DuckLakeMultiFileReader::GatherDeletionScanSnapshots(BaseFileReader &reader
 	auto &snapshot_vector = chunk.data[snapshot_col_idx.GetIndex()];
 
 	idx_t count = chunk.size();
-	snapshot_vector.Flatten(count);
-	auto snapshot_data = FlatVector::GetData<int64_t>(snapshot_vector);
+	snapshot_vector.Flatten();
+	auto snapshot_data = FlatVector::GetDataMutable<int64_t>(snapshot_vector);
 
 	UnifiedVectorFormat row_id_data;
-	rowid_vector.ToUnifiedFormat(count, row_id_data);
+	rowid_vector.ToUnifiedFormat(row_id_data);
 	auto row_id_ptr = UnifiedVectorFormat::GetData<int64_t>(row_id_data);
 
 	// Look up the snapshot_id for each row
@@ -695,7 +701,7 @@ void DuckLakeMultiFileReader::GatherDeletionScanSnapshots(BaseFileReader &reader
 
 		auto snapshot = delete_filter.delete_data->GetSnapshotForRow(lookup_key);
 		if (snapshot.IsValid()) {
-			snapshot_data[i] = NumericCast<int64_t>(snapshot.GetIndex());
+			snapshot_data[i] = snapshot.GetIndex();
 		}
 	}
 }
@@ -737,10 +743,10 @@ void DuckLakeMultiFileReader::FinalizeChunk(ClientContext &context, const MultiF
 		}
 
 		// Copy only user columns (excluding internally projected row_id) to output_chunk
-		output_chunk.SetCardinality(temp_chunk.size());
 		for (idx_t i = 0; i < output_chunk.ColumnCount(); i++) {
 			output_chunk.data[i].Reference(temp_chunk.data[i]);
 		}
+		output_chunk.SetChildCardinality(temp_chunk.size());
 	} else {
 		MultiFileReader::FinalizeChunk(context, bind_data, reader, reader_data, input_chunk, output_chunk, executor,
 		                               global_state);

@@ -27,6 +27,7 @@ class ColumnList;
 class DuckLakeFieldData;
 struct DuckLakeFileListEntry;
 struct DuckLakeConfigOption;
+struct DuckLakeSnapshotCommit;
 struct DeleteFileMap;
 class LogicalGet;
 
@@ -50,8 +51,6 @@ struct DuckLakeTableStatsCacheEntry : public ObjectCacheEntry {
 
 //! Cache entry for a DuckLake schema version
 struct DuckLakeSchemaCacheEntry : public ObjectCacheEntry {
-	static constexpr idx_t ESTIMATED_BYTES_PER_ENTRY = 4096;
-
 	explicit DuckLakeSchemaCacheEntry(unique_ptr<DuckLakeCatalogSet> catalog_set_p)
 	    : catalog_set(std::move(*catalog_set_p)) {
 	}
@@ -194,6 +193,8 @@ public:
 		return require == "true";
 	}
 
+	void EnsureCommitInfoProvided(const DuckLakeSnapshotCommit &commit_info) const;
+
 	bool UseHiveFilePattern(bool default_value, SchemaIndex schema_id, TableIndex table_id) const {
 		auto hive_file_pattern =
 		    GetConfigOption<string>("hive_file_pattern", schema_id, table_id, default_value ? "true" : "false");
@@ -206,8 +207,20 @@ public:
 	}
 
 	void SetEncryption(DuckLakeEncryption encryption);
-	// Generate an encryption key for writing (or empty if encryption is disabled)
+	//! Generate an encryption key for writing (or empty if encryption is disabled)
 	string GenerateEncryptionKey(ClientContext &context) const;
+
+	//! The resolved DuckLake spec version of the attached catalog
+	DuckLakeVersion GetDuckLakeVersion() const {
+		return ducklake_version;
+	}
+	void SetDuckLakeVersion(DuckLakeVersion version) {
+		ducklake_version = version;
+	}
+	//! Whether the metadata schema has the row_group_count columns (added in 1.1-dev1)
+	bool SupportsRowGroupCount() const {
+		return ducklake_version >= DuckLakeVersion::V1_1_DEV_1;
+	}
 
 	void OnDetach(ClientContext &context) override;
 
@@ -220,6 +233,14 @@ public:
 	void SetCommittedSnapshotId(idx_t value) {
 		lock_guard<mutex> guard(commit_lock);
 		last_committed_snapshot = value;
+	}
+
+	//! Whether the metadata server can execute the commit retry loop server-side.
+	bool RetrialsServerSide() const {
+		return retrials_server_side;
+	}
+	void SetRetrialsServerSide(bool value) {
+		retrials_server_side = value;
 	}
 
 	Value GetLastCommittedSnapshotId() const {
@@ -255,6 +276,8 @@ public:
 	//! Cache the result of an inlined deletion table existence check
 	void CacheInlinedDeletionTableResult(TableIndex table_id, DuckLakeSnapshot snapshot, bool exists);
 
+	//! Invalidate the cached table stats entry for a given stats cache key.
+	void InvalidateTableStatsCache(idx_t next_file_id, TableIndex table_id);
 	//! Invalidate the cached schema entry for a given schema_version.
 	void InvalidateSchemaCache(idx_t schema_version);
 
@@ -288,10 +311,14 @@ private:
 	atomic<idx_t> last_uncommitted_catalog_version;
 	//! The metadata server type
 	string metadata_type;
+	//! The resolved DuckLake spec version of the attached catalog
+	DuckLakeVersion ducklake_version = DuckLakeVersion::V1_0;
 	//! A per-instance identifier used to scope ObjectCache keys.
 	string instance_id;
 	//! Whether or not the catalog is initialized
 	bool initialized = false;
+	//! Whether or not the metadata server can execute the commit retry loop server-side.
+	bool retrials_server_side = false;
 	//! Cache for inlined deletion table existence checks
 	mutex inlined_deletion_cache_lock;
 	//! Table IDs where the inlined deletion table is known to exist (permanent - never invalidated)

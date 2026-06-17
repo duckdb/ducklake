@@ -8,12 +8,12 @@ require ducklake
 
 require parquet
 
-test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
 
-test-env DATA_PATH __TEST_DIR__
+test-env DATA_PATH {TEST_DIR}
 
 statement ok
-ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '__TEST_DIR__/ducklake_files', METADATA_CATALOG 'ducklake_meta')
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{TEST_DIR}/ducklake_files', METADATA_CATALOG 'ducklake_meta')
 
 statement ok
 USE ducklake;
@@ -40,7 +40,7 @@ select * from t2;
 query I
 SELECT stats(g) FROM t2;
 ----
- {a: [Extent: [X: [1.000000, 1.000000], Y: [2.000000, 2.000000], Z: [inf, -inf], M: [inf, -inf]], Types: [point], Flags: [Has Empty Geom: true, Has No Empty Geom: true, Has Empty Part: true, Has No Empty Part: true]][Has Null: false, Has No Null: true]}[Has Null: true, Has No Null: true]
+{'child_stats': {'a': {'extent': {'x_max': 1.0, 'x_min': 1.0, 'y_max': 2.0, 'y_min': 2.0}, 'has_empty_geom': true, 'has_empty_part': true, 'has_no_null': true, 'has_non_empty_geom': true, 'has_non_empty_part': true, 'has_null': false}}, 'has_no_null': true, 'has_null': true}
 
 query I
 select extra_stats from ducklake_meta.ducklake_file_column_stats;

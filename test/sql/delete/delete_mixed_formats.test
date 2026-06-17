@@ -1,0 +1,94 @@
+# name: test/sql/delete/delete_mixed_formats.test
+# description: One table whose delete history alternates between puffin and parquet delete files
+# group: [delete]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/delete_mixed', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+USE dl
+
+statement ok
+CREATE TABLE mix AS SELECT i id FROM range(100) t(i);
+
+statement ok
+SET VARIABLE v_create = (SELECT max(snapshot_id) FROM ducklake_snapshots('dl'));
+
+# delete 1 -> bare puffin
+statement ok
+CALL dl.set_option('write_deletion_vectors', 'true')
+
+statement ok
+DELETE FROM mix WHERE id < 10
+
+statement ok
+SET VARIABLE v1 = (SELECT max(snapshot_id) FROM ducklake_snapshots('dl'));
+
+query III
+SELECT format, delete_count, footer_size FROM __ducklake_metadata_dl.ducklake_delete_file WHERE end_snapshot IS NULL
+----
+puffin	10	0
+
+# delete 2 -> parquet (reads the bare puffin, re-emits with snapshots)
+statement ok
+CALL dl.set_option('write_deletion_vectors', 'false')
+
+statement ok
+DELETE FROM mix WHERE id >= 10 AND id < 20
+
+statement ok
+SET VARIABLE v2 = (SELECT max(snapshot_id) FROM ducklake_snapshots('dl'));
+
+query II
+SELECT format, delete_count FROM __ducklake_metadata_dl.ducklake_delete_file WHERE end_snapshot IS NULL
+----
+parquet	20
+
+# delete 3 -> multi-blob puffin (reads the parquet, re-emits as a container)
+statement ok
+CALL dl.set_option('write_deletion_vectors', 'true')
+
+statement ok
+DELETE FROM mix WHERE id >= 20 AND id < 30
+
+statement ok
+SET VARIABLE v3 = (SELECT max(snapshot_id) FROM ducklake_snapshots('dl'));
+
+query III
+SELECT format, delete_count, footer_size > 0 FROM __ducklake_metadata_dl.ducklake_delete_file WHERE end_snapshot IS NULL
+----
+puffin	30	true
+
+query II
+SELECT COUNT(*), MIN(id) FROM mix
+----
+70	30
+
+# time travel survives every format switch
+query I
+SELECT COUNT(*) FROM mix AT (VERSION => getvariable('v_create'))
+----
+100
+
+query II
+SELECT COUNT(*), MIN(id) FROM mix AT (VERSION => getvariable('v1'))
+----
+90	10
+
+query II
+SELECT COUNT(*), MIN(id) FROM mix AT (VERSION => getvariable('v2'))
+----
+80	20
+
+query II
+SELECT COUNT(*), MIN(id) FROM mix AT (VERSION => getvariable('v3'))
+----
+70	30

@@ -5,22 +5,22 @@ require ducklake
 
 require parquet
 
-test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
 
-test-env DATA_PATH __TEST_DIR__
+test-env DATA_PATH {TEST_DIR}
 
 statement ok
-ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (
-	DATA_PATH '${DATA_PATH}/ducklake_files',
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (
+	DATA_PATH '{DATA_PATH}/ducklake_files',
 	METADATA_CATALOG 'ducklake_meta'
 )
 
 # Copy over a test parquet file with geometry column
 statement ok
-COPY (select 'POINT(5 5)'::GEOMETRY as g) TO '${DATA_PATH}/points_geoparquet.parquet' (FORMAT PARQUET);
+COPY (select 'POINT(5 5)'::GEOMETRY as g) TO '{DATA_PATH}/points_geoparquet.parquet' (FORMAT PARQUET);
 
 statement ok
-COPY (select 'POINT(5 5)'::GEOMETRY as g) TO '${DATA_PATH}/points.parquet' (FORMAT PARQUET, GEOPARQUET_VERSION NONE);
+COPY (select 'POINT(5 5)'::GEOMETRY as g) TO '{DATA_PATH}/points.parquet' (FORMAT PARQUET, GEOPARQUET_VERSION NONE);
 
 statement ok
 USE ducklake;
@@ -30,10 +30,10 @@ create table t1 (g GEOMETRY);
 
 # Now add the file
 statement ok
-CALL ducklake_add_data_files('ducklake', 't1', '${DATA_PATH}/points.parquet');
+CALL ducklake_add_data_files('ducklake', 't1', '{DATA_PATH}/points.parquet');
 
 statement error
-CALL ducklake_add_data_files('ducklake', 't1', '${DATA_PATH}/points_geoparquet.parquet');
+CALL ducklake_add_data_files('ducklake', 't1', '{DATA_PATH}/points_geoparquet.parquet');
 ----
 * Expected type "GEOMETRY" but found type "BLOB". Is this a GeoParquet v1.*.* file? DuckLake only supports GEOMETRY types stored in native Parquet(V3) format, not GeoParquet(v1.*.*)
 
