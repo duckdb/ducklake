@@ -14,6 +14,7 @@
 
 namespace duckdb {
 class BaseStatistics;
+class DuckLakeTableEntry;
 
 enum class DuckLakeTransformType { IDENTITY, BUCKET, YEAR, MONTH, DAY, HOUR };
 
@@ -56,6 +57,10 @@ struct DuckLakePartitionUtils {
 	//! Build a SQL WHERE filter matching the given partition values (e.g., "region = 'east' AND year(ts) = 2020")
 	static string BuildPartitionFilter(const vector<string> &partition_sql_exprs,
 	                                   const vector<Value> &partition_values);
+
+	//! Build a relative Hive partition path from the table partition spec and values (e.g., "region=east/year=2020/")
+	static string BuildHivePartitionPath(DuckLakeTableEntry &table, const vector<Value> &partition_values,
+	                                     const string &separator);
 
 	//! Wrap a column expression in a named scalar function (e.g. "year", "hash")
 	static unique_ptr<Expression> ApplyScalarFunction(ClientContext &context, const string &function_name,
