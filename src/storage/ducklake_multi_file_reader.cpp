@@ -522,9 +522,7 @@ ReaderInitializeType DuckLakeMultiFileReader::CreateMapping(
 	internally_projected_rowid = needs_internal_rowid;
 	deletion_scan_internal_rowid_col = optional_idx();
 	if (needs_internal_rowid) {
-		// The rowid is appended at the end of the column list, so its expression lands at this index in
-		// reader_data.expressions (which is built one-per-column in this order). FinalizeChunk evaluates it
-		// explicitly because the executor omits it under filter-column removal.
+		// rowid is appended last, so its expression lands at this index in reader_data.expressions
 		deletion_scan_internal_rowid_col = global_column_ids.size();
 		extended_column_ids = global_column_ids;
 		extended_column_ids.emplace_back(COLUMN_IDENTIFIER_ROW_ID);
@@ -629,14 +627,8 @@ unique_ptr<Expression> DuckLakeMultiFileReader::GetVirtualColumnExpression(
 	                                                   global_column_reference);
 }
 
-// Map an index in global_column_ids space (the space deletion_scan_*_col live in) to its position in the
-// FinalizeChunk output_chunk. output_chunk is produced by `executor`, which holds one expression per output column
-// in projection_ids order; executor.expressions[k] is the same Expression pointer the reader stored at
-// reader_data.expressions[projection_ids[k]], and reader_data.expressions is built one-per-global_column_ids entry.
-// When DuckDB's filter-column-removal optimization drops a filtered-only column from the projection,
-// projection_ids order diverges from global_column_ids order, so we resolve the output position by matching the
-// expression pointer. When projection_ids is identity this returns the input index unchanged. Returns an invalid
-// optional_idx when the column is not present in the output (e.g. not projected) -- the caller then skips it.
+// Map a global_column_ids index to its output_chunk position by matching the expression pointer (handles
+// projection_ids reordering under filter-column removal); invalid when the column is not in the output
 static optional_idx RemapDeletionScanOutputColumn(const ExpressionExecutor &executor,
                                                   const MultiFileReaderData &reader_data, optional_idx global_idx) {
 	if (!global_idx.IsValid() || global_idx.GetIndex() >= reader_data.expressions.size()) {
@@ -656,10 +648,7 @@ void DuckLakeMultiFileReader::GatherDeletionScanSnapshots(BaseFileReader &reader
                                                           optional_idx rowid_output_col,
                                                           optional_idx snapshot_output_col) const {
 	auto &delete_filter = static_cast<DuckLakeDeleteFilter &>(*reader.deletion_filter);
-	// rowid_output_col / snapshot_output_col are already resolved to positions within `chunk` by the caller
-	// (FinalizeChunk via RemapDeletionScanOutputColumn). We deliberately do NOT fall back to the raw
-	// deletion_scan_*_col members here: those are global_column_ids indices, which do not match the
-	// projection_ids-ordered output layout when filter-column removal is in effect.
+	// Positions are already resolved to `chunk` by the caller; do not fall back to the raw global_column_ids members
 	optional_idx snapshot_col_idx = snapshot_output_col;
 	optional_idx rowid_col_idx = rowid_output_col;
 
@@ -733,12 +722,8 @@ void DuckLakeMultiFileReader::FinalizeChunk(ClientContext &context, const MultiF
 		MultiFileReader::FinalizeChunk(context, bind_data, reader, reader_data, input_chunk, temp_chunk, executor,
 		                               global_state);
 
-		// Gather deletion scan snapshots using the temp chunk (which has row_id at its last position).
-		// The base executor fills temp_chunk columns [0, executor.expressions.size()). When projection_ids is
-		// identity it includes the internally-projected rowid and fills this slot; under DuckDB's
-		// filter-column-removal optimization the internal rowid is absent from projection_ids, so the executor
-		// leaves the slot unfilled and we must evaluate the rowid expression explicitly. The
-		// snapshot_id column is remapped to its position within temp_chunk (filled by the executor).
+		// Gather snapshots from temp_chunk (rowid at its last slot). Under filter-column removal the executor omits
+		// the internal rowid, so evaluate it explicitly; the snapshot_id column is remapped to its temp_chunk position.
 		if (reader.deletion_filter) {
 			idx_t internal_rowid_col = output_chunk.ColumnCount(); // last column in temp_chunk
 			if (executor.expressions.size() <= internal_rowid_col && deletion_scan_internal_rowid_col.IsValid() &&
@@ -760,9 +745,7 @@ void DuckLakeMultiFileReader::FinalizeChunk(ClientContext &context, const MultiF
 		MultiFileReader::FinalizeChunk(context, bind_data, reader, reader_data, input_chunk, output_chunk, executor,
 		                               global_state);
 
-		// We need to gather the snapshot_id information correctly for scan deletions if the files are partial deletion
-		// files. deletion_scan_*_col are global_column_ids indices; remap them to the true output_chunk positions in
-		// case DuckDB's filter-column-removal optimization reordered/narrowed the output via projection_ids.
+		// Gather snapshot_id for partial deletion files; remap the global_column_ids indices to output_chunk positions
 		if (read_info.scan_type == DuckLakeScanType::SCAN_DELETIONS && reader.deletion_filter) {
 			auto rowid_out = RemapDeletionScanOutputColumn(executor, reader_data, deletion_scan_rowid_col);
 			auto snapshot_out = RemapDeletionScanOutputColumn(executor, reader_data, deletion_scan_snapshot_col);
