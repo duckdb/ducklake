@@ -6,13 +6,13 @@ require ducklake
 
 require parquet
 
-test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
 
-test-env DATA_PATH __TEST_DIR__
+test-env DATA_PATH {TEST_DIR}
 
 
 statement ok
-ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/ducklake_parquet_row_group_size_bytes')
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/ducklake_parquet_row_group_size_bytes')
 
 statement ok
 CALL ducklake.set_option('parquet_row_group_size_bytes', '10KB')
@@ -28,7 +28,7 @@ statement ok
 CREATE TABLE ducklake.tbl AS SELECT i, 'hello world' || i str FROM range(100000) t(i)
 
 query I
-SELECT COUNT(DISTINCT row_group_id)>10 FROM parquet_metadata('${DATA_PATH}/ducklake_parquet_row_group_size_bytes/**')
+SELECT COUNT(DISTINCT row_group_id)>10 FROM parquet_metadata('{DATA_PATH}/ducklake_parquet_row_group_size_bytes/**')
 ----
 true
 

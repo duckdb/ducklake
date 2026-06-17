@@ -7,7 +7,7 @@ require ducklake
 require parquet
 
 statement ok
-ATTACH 'ducklake:__TEST_DIR__/view_missing_table.db' AS ducklake (DATA_PATH '__TEST_DIR__/view_missing_table')
+ATTACH 'ducklake:{TEST_DIR}/view_missing_table.db' AS ducklake (DATA_PATH '{TEST_DIR}/view_missing_table')
 
 statement ok
 use ducklake
@@ -20,7 +20,7 @@ CREATE TABLE my_table (a INTEGER, b VARCHAR)
 loop i 0 10
 
 statement ok
-CREATE VIEW view_${i} AS FROM ducklake.main.my_table
+CREATE VIEW view_{i} AS FROM ducklake.main.my_table
 
 endloop
 
@@ -32,7 +32,7 @@ statement ok
 DETACH ducklake
 
 statement ok
-ATTACH 'ducklake:__TEST_DIR__/view_missing_table.db' AS ducklake (DATA_PATH '__TEST_DIR__/view_missing_table')
+ATTACH 'ducklake:{TEST_DIR}/view_missing_table.db' AS ducklake (DATA_PATH '{TEST_DIR}/view_missing_table')
 
 # drop the table before binding
 statement ok

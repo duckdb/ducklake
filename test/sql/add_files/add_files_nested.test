@@ -6,13 +6,13 @@ require ducklake
 
 require parquet
 
-test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
 
-test-env DATA_PATH __TEST_DIR__
+test-env DATA_PATH {TEST_DIR}
 
 
 statement ok
-ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/ducklake_add_files_nested');
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/ducklake_add_files_nested');
 
 statement ok
 CREATE TABLE ducklake.test(col1 STRUCT(i INTEGER, j INTEGER), col2 STRUCT(col1 INTEGER, col2 INTEGER));
@@ -21,10 +21,10 @@ statement ok
 BEGIN
 
 statement ok
-COPY (SELECT {'i': 1, 'j': 2} col1, {'col1': 100, 'col2': 200} col2) TO '${DATA_PATH}/nested1.parquet';
+COPY (SELECT {'i': 1, 'j': 2} col1, {'col1': 100, 'col2': 200} col2) TO '{DATA_PATH}/nested1.parquet';
 
 statement ok
-CALL ducklake_add_data_files('ducklake', 'test', '${DATA_PATH}/nested1.parquet')
+CALL ducklake_add_data_files('ducklake', 'test', '{DATA_PATH}/nested1.parquet')
 
 query II
 FROM ducklake.test
@@ -41,10 +41,10 @@ FROM ducklake.test
 
 # columns can be arbitrarily re-ordered, as can struct fields
 statement ok
-COPY (SELECT  {'col2': 400, 'col1': 200} col2, {'j': 20, 'i': 10} col1) TO '${DATA_PATH}/nested2.parquet';
+COPY (SELECT  {'col2': 400, 'col1': 200} col2, {'j': 20, 'i': 10} col1) TO '{DATA_PATH}/nested2.parquet';
 
 statement ok
-CALL ducklake_add_data_files('ducklake', 'test', '${DATA_PATH}/nested2.parquet')
+CALL ducklake_add_data_files('ducklake', 'test', '{DATA_PATH}/nested2.parquet')
 
 query II
 FROM ducklake.test

@@ -8,12 +8,12 @@ require parquet
 
 require httpfs
 
-test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
 
-test-env DATA_PATH __TEST_DIR__
+test-env DATA_PATH {TEST_DIR}
 
 statement ok
-ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/ducklake_inlining_encryption_files', ENCRYPTED, DATA_INLINING_ROW_LIMIT 10000)
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/ducklake_inlining_encryption_files', ENCRYPTED, DATA_INLINING_ROW_LIMIT 10000)
 
 statement ok
 CREATE TABLE ducklake.test AS SELECT i id FROM range(1000) t(i);
@@ -25,7 +25,7 @@ SELECT COUNT(*), SUM(id) FROM ducklake.test
 
 # data is inlined
 query I
-SELECT COUNT(*) FROM GLOB('${DATA_PATH}/ducklake_inlining_encryption_files/main/test/**')
+SELECT COUNT(*) FROM GLOB('{DATA_PATH}/ducklake_inlining_encryption_files/main/test/**')
 ----
 0
 
@@ -37,13 +37,13 @@ main	test	1000
 
 # now we have a file
 query I
-SELECT COUNT(*) FROM GLOB('${DATA_PATH}/ducklake_inlining_encryption_files/main/test/**')
+SELECT COUNT(*) FROM GLOB('{DATA_PATH}/ducklake_inlining_encryption_files/main/test/**')
 ----
 1
 
 # that file is encrypted
 statement error
-SELECT * FROM '${DATA_PATH}/ducklake_inlining_encryption_files/main/test/*.parquet'
+SELECT * FROM '{DATA_PATH}/ducklake_inlining_encryption_files/main/test/*.parquet'
 ----
 encrypted
 

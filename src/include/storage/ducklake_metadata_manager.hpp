@@ -22,6 +22,7 @@
 #include "common/ducklake_encryption.hpp"
 #include "common/ducklake_options.hpp"
 #include "common/index.hpp"
+#include "duckdb/planner/filter/expression_filter.hpp"
 #include "duckdb/planner/table_filter.hpp"
 
 #include <functional>
@@ -37,7 +38,6 @@ struct TransactionChangeInformation;
 class BoundAtClause;
 class QueryResult;
 class FileSystem;
-class ConstantFilter;
 
 struct SnapshotAndStats;
 struct FlushedInlinedTableInfo;
@@ -66,15 +66,26 @@ struct FilterSQLResult {
 struct ColumnFilterInfo {
 	idx_t column_field_index;
 	LogicalType column_type;
-	unique_ptr<TableFilter> table_filter;
+	unique_ptr<ExpressionFilter> table_filter;
 
-	ColumnFilterInfo(idx_t col_idx, LogicalType type, unique_ptr<TableFilter> filter)
+	ColumnFilterInfo(idx_t col_idx, LogicalType type, unique_ptr<ExpressionFilter> filter)
 	    : column_field_index(col_idx), column_type(std::move(type)), table_filter(std::move(filter)) {
 	}
 
 	ColumnFilterInfo(const ColumnFilterInfo &other)
 	    : column_field_index(other.column_field_index), column_type(other.column_type),
 	      table_filter(other.table_filter->Copy()) {
+	}
+
+	ColumnFilterInfo(ColumnFilterInfo &&other) = default;
+	ColumnFilterInfo &operator=(ColumnFilterInfo &&other) = default;
+	ColumnFilterInfo &operator=(const ColumnFilterInfo &other) {
+		if (this != &other) {
+			column_field_index = other.column_field_index;
+			column_type = other.column_type;
+			table_filter = other.table_filter ? other.table_filter->Copy() : nullptr;
+		}
+		return *this;
 	}
 };
 
@@ -166,6 +177,12 @@ public:
 
 	//! Initialize a new DuckLake
 	virtual void InitializeDuckLake(bool has_explicit_schema, DuckLakeEncryption encryption);
+	//! Get the CREATE TABLE statements for all metadata tables
+	virtual string GetCreateTableStatements();
+	virtual string GetDataFileTableStatement();
+	virtual string GetDeleteFileTableStatement();
+	//! Get the version string written to ducklake_metadata
+	virtual string GetVersionString();
 	virtual DuckLakeMetadata LoadDuckLake();
 
 	virtual unique_ptr<QueryResult> Execute(DuckLakeSnapshot snapshot, string &query);
@@ -214,6 +231,11 @@ public:
 	virtual idx_t GetBeginSnapshotForSchemaVersion(TableIndex table_id, idx_t schema_version);
 	virtual idx_t GetNetDataFileRowCount(TableIndex table_id, DuckLakeSnapshot snapshot);
 	virtual idx_t GetNetInlinedRowCount(const string &inlined_table_name, DuckLakeSnapshot snapshot);
+	//! SQL builders for stats-refresh metadata lookups; caller substitutes placeholders + executes.
+	static string GetNetDataFileRowCountSql(TableIndex table_id, const string &inlined_deletion_table);
+	static string GetNetInlinedRowCountSql(const string &inlined_table_name);
+	static string GetTableColumnSchemaSql(TableIndex table_id);
+	static string GetInlinedTableNamesSql(TableIndex table_id);
 	virtual vector<DuckLakeFileForCleanup> GetOldFilesForCleanup(const string &filter);
 	virtual vector<DuckLakeFileForCleanup> GetOrphanFilesForCleanup(const string &filter, const string &separator);
 	virtual vector<DuckLakeFileForCleanup> GetFilesForCleanup(const string &filter, CleanupType type,
@@ -253,7 +275,7 @@ public:
 	//! {METADATA_CATALOG} / {SNAPSHOT_ID} placeholders. Caller supplies resolved paths (one per file,
 	//! same order) since path policy differs across callers (schema-relative vs. always-absolute).
 	static string WriteNewDataFilesSqlBatch(const vector<DuckLakeFileInfo> &new_files,
-	                                        const vector<DuckLakePath> &resolved_paths);
+	                                        const vector<DuckLakePath> &resolved_paths, bool write_row_group_count);
 	//! Opt-in fast-path: if this backend supports the DuckDB Appender API, write the files directly
 	bool TryAppendDataFiles(DuckLakeSnapshot &commit_snapshot, const vector<DuckLakeFileInfo> &new_files,
 	                        const vector<DuckLakeTableInfo> &new_tables,
@@ -271,10 +293,13 @@ public:
 	                                          const vector<DuckLakeInlinedFileDeletionInfo> &new_deletes);
 	//! Static deterministic name of the per-table inlined deletion table.
 	static string InlinedFileDeletionTableName(TableIndex table_id);
-	//! SQL branch of WriteNewInlinedFileDeletes — returns the INSERT statements only. Callers must
-	//! ensure the per-table deletion tables already exist (the instance overload does that via
-	//! GetInlinedDeletionTableName with create_if_not_exists=true).
-	static string WriteNewInlinedFileDeletesSqlBatch(const vector<DuckLakeInlinedFileDeletionInfo> &new_deletes);
+	//! Pure SQL builder for inlined file deletions (CREATE TABLE IF NOT EXISTS + INSERT). Sets
+	//! created_new_table when a new ducklake_inlined_delete_<id> table was emitted.
+	static string WriteNewInlinedFileDeletesSql(const vector<DuckLakeInlinedFileDeletionInfo> &new_deletes,
+	                                            bool &created_new_table);
+	//! SQL branch of WriteNewInlinedFileDeletes — returns the CREATE/INSERT statements and marks the
+	//! metadata-manager cache for clearing when a new per-table deletion table is created.
+	string WriteNewInlinedFileDeletesSqlBatch(const vector<DuckLakeInlinedFileDeletionInfo> &new_deletes);
 	//! Get the name of the inlined deletion table for a given table ID
 	virtual string GetInlinedDeletionTableName(TableIndex table_id, DuckLakeSnapshot snapshot,
 	                                           bool create_if_not_exists = false);
@@ -292,7 +317,7 @@ public:
 	                                           const vector<DuckLakePath> &resolved_paths);
 	//! Caller supplies one resolved path per new delete file, in the same order.
 	static string WriteNewDeleteFiles(const vector<DuckLakeDeleteFileInfo> &new_delete_files,
-	                                  const vector<DuckLakePath> &resolved_paths);
+	                                  const vector<DuckLakePath> &resolved_paths, bool write_row_group_count);
 	static string WriteNewMacros(const vector<DuckLakeMacroInfo> &new_macros);
 
 	virtual vector<DuckLakeColumnMappingInfo> GetColumnMappings(optional_idx start_from);
@@ -333,6 +358,10 @@ public:
 	virtual unique_ptr<QueryResult> ReadAllInlinedDataForFlush(DuckLakeSnapshot snapshot,
 	                                                           const string &inlined_table_name,
 	                                                           const vector<string> &columns_to_read);
+	//! SQL builders for the stats-refresh queries used by DuckLakeTransactionState::RecomputeGlobalStatsAfterRewrite.
+	//! Caller substitutes `{METADATA_CATALOG}` / `{SNAPSHOT_ID}` and executes via the commit context's executor.
+	static string ReadInlinedDataAggregatesSql(const string &inlined_table_name, const string &select_list);
+	static string ReadFileColumnStatsForTableSql(TableIndex table_id);
 	virtual shared_ptr<DuckLakeInlinedData> TransformInlinedData(QueryResult &result,
 	                                                             const vector<LogicalType> &expected_types);
 
@@ -345,6 +374,11 @@ public:
 
 	virtual vector<DuckLakeSnapshotInfo> GetAllSnapshots(const string &filter = string());
 	virtual void DeleteSnapshots(const vector<DuckLakeSnapshotInfo> &snapshots);
+	//! After a flush has emptied inlined-data rows, drop any (tid, sv) physical
+	//! table that is superseded by a newer schema_version on the same table_id
+	//! and is now empty. No more writes can land in such an entry, so the drop
+	//! is safe; invalidates the schema ObjectCache so in-session reads reload.
+	virtual void DropEmptySupersededInlinedTables();
 	virtual vector<DuckLakeTableSizeInfo> GetTableSizes(DuckLakeSnapshot snapshot);
 	virtual void SetConfigOption(const DuckLakeConfigOption &option);
 	virtual string GetPathForSchema(SchemaIndex schema_id, vector<DuckLakeSchemaInfo> &new_schemas_result);
@@ -355,6 +389,7 @@ public:
 	virtual void MigrateV02(bool allow_failures = false);
 	virtual void MigrateV03(bool allow_failures = false);
 	virtual void MigrateV04();
+	virtual void MigrateV10(bool allow_failures = false);
 	virtual void ExecuteMigration(string migrate_query, bool allow_failures, const string &from_version,
 	                              const string &to_version);
 
@@ -401,6 +436,7 @@ public:
 protected:
 	string GetInlinedTableQuery(const DuckLakeTableInfo &table, const string &table_name);
 	string GetColumnType(const DuckLakeColumnInfo &col);
+	string GetKnownFilesForCleanupQuery(const string &separator) const;
 
 	//! Optimized data file writing using DuckDB Appender API (only for DuckDB metadata manager)
 	string WriteNewDataFilesWithAppender(DuckLakeSnapshot &commit_snapshot, const vector<DuckLakeFileInfo> &new_files,
@@ -439,25 +475,28 @@ private:
 	string GetFileSelectList(const string &prefix);
 	string GetDeleteFileSelectList(const string &prefix);
 	FilterPushdownQueryComponents GenerateFilterPushdownComponents(const FilterPushdownInfo &filter_info,
-	                                                               TableIndex table_id);
+	                                                               DuckLakeTableEntry &table);
 	//! Build an additional WHERE fragment that prunes files by bucket() partition value.
 	//! Returns "" when no foldable equality / IN-list predicate exists on a bucket-partitioned column.
 	//! The fragment uses only string equality against ducklake_file_partition_value, so it works against
 	//! any metadata backend (DuckDB / Postgres / SQLite). Bucket hashes are pre-computed in C++.
 	string BuildBucketPartitionPruningClause(DuckLakeTableEntry &table, const FilterPushdownInfo &filter_info);
-	string GenerateCTESectionFromRequirements(const unordered_map<idx_t, CTERequirement> &requirements,
-	                                          TableIndex table_id);
 	virtual FilterSQLResult ConvertFilterPushdownToSQL(const FilterPushdownInfo &filter_info);
-	virtual string GenerateFilterFromTableFilter(const TableFilter &filter, const LogicalType &type,
+	virtual string GenerateCTESectionFromRequirements(const unordered_map<idx_t, CTERequirement> &requirements,
+	                                                  TableIndex table_id);
+	virtual string GenerateFilterFromTableFilter(const ExpressionFilter &filter, const LogicalType &type,
 	                                             unordered_set<string> &referenced_stats);
+	virtual string GenerateFilterFromExpression(const Expression &expr, const LogicalType *type,
+	                                            unordered_set<string> &referenced_stats);
 	virtual bool ValueIsFinite(const Value &val);
 	virtual string CastValueToTarget(const Value &val, const LogicalType &type);
 	virtual string CastStatsToTarget(const string &stats, const LogicalType &type);
-	virtual string GenerateConstantFilter(const ConstantFilter &constant_filter, const LogicalType &type,
+	virtual string GenerateConstantFilter(ExpressionType comparison_type, const Value &constant, const LogicalType &type,
 	                                      unordered_set<string> &referenced_stats);
-	virtual string GenerateConstantFilterDouble(const ConstantFilter &constant_filter, const LogicalType &type,
+	virtual string GenerateConstantFilterDouble(ExpressionType comparison_type, const Value &constant,
+	                                            const LogicalType &type,
 	                                            unordered_set<string> &referenced_stats);
-	virtual string GenerateFilterPushdown(const TableFilter &filter, unordered_set<string> &referenced_stats);
+	virtual string GenerateFilterPushdown(const ExpressionFilter &filter, unordered_set<string> &referenced_stats);
 
 public:
 	//! Read inlined file deletions for regular table scans (no snapshot info per row)

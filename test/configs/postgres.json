@@ -1,6 +1,6 @@
 {
   "description": "Run DuckLake tests using Postgres as a catalog DBMS.",
-  "on_init": "ATTACH 'dbname=ducklakedb' AS pg (TYPE postgres); USE pg; DROP SCHEMA public CASCADE; DROP SCHEMA IF EXISTS metadata_s1 CASCADE; DROP SCHEMA IF EXISTS metadata_s2 CASCADE; CREATE SCHEMA public;USE memory; DETACH pg;",
+  "on_init": "ATTACH 'dbname=ducklakedb' AS pg (TYPE postgres); USE pg; DROP SCHEMA public CASCADE; DROP SCHEMA IF EXISTS metadata_s1 CASCADE; DROP SCHEMA IF EXISTS metadata_s2 CASCADE; CREATE SCHEMA public;USE memory; DETACH pg; SET pg_experimental_filter_pushdown=false; SET pg_order_pushdown=false;",
   "autoloading": "none",
   "statically_loaded_extensions": [
     "core_functions",
@@ -11,10 +11,12 @@
     "icu",
     "httpfs"
   ],
-    "test_env": [{
-      "env_name":  "DUCKLAKE_CONNECTION",
+  "test_env": [
+    {
+      "env_name": "DUCKLAKE_CONNECTION",
       "env_value": "postgres:dbname=ducklakedb"
-   }],
+    }
+  ],
   "skip_tests": [
     {
       "reason": "Tests only for DuckDB as a catalog",
@@ -65,6 +67,12 @@
       "reason": "Current transaction is aborted",
       "paths": [
         "test/sql/deletion_inlining/test_deletion_inlining_concurrent.test"
+      ]
+    },
+    {
+      "reason": "Test appends a suffix to DUCKLAKE_CONNECTION (needs a second postgres database 'ducklakedb_del').",
+      "paths": [
+        "test/sql/data_inlining/partition_inlining.test"
       ]
     }
   ]

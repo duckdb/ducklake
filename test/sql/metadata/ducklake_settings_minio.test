@@ -8,14 +8,14 @@ require parquet
 
 require httpfs
 
-test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
 
-test-env DATA_PATH __TEST_DIR__
+test-env DATA_PATH {TEST_DIR}
 
 require-env S3_TEST_SERVER_AVAILABLE 1
 
 statement ok
-ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/files')
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/files')
 
 statement ok
 use ducklake

@@ -7,7 +7,7 @@ require ducklake
 require parquet
 
 statement ok
-ATTACH 'ducklake:__TEST_DIR__/some.db' AS a_ducklake (DATA_PATH '__TEST_DIR__/some/');
+ATTACH 'ducklake:{TEST_DIR}/some.db' AS a_ducklake (DATA_PATH '{TEST_DIR}/some/');
 
 statement ok
 USE a_ducklake;
@@ -25,12 +25,12 @@ statement ok
 DETACH a_ducklake;
 
 statement error
-ATTACH 'ducklake:__TEST_DIR__/some.db' AS other_ducklake (DATA_PATH '__TEST_DIR__/other_path/');
+ATTACH 'ducklake:{TEST_DIR}/some.db' AS other_ducklake (DATA_PATH '{TEST_DIR}/other_path/');
 ----
 does not match existing data path in the catalog
 
 statement ok
-ATTACH 'ducklake:__TEST_DIR__/some.db' AS other_ducklake (DATA_PATH '__TEST_DIR__/other_path/', OVERRIDE_DATA_PATH TRUE);
+ATTACH 'ducklake:{TEST_DIR}/some.db' AS other_ducklake (DATA_PATH '{TEST_DIR}/other_path/', OVERRIDE_DATA_PATH TRUE);
 
 # This will obviously not work, different OSs have different error messages saying file not found
 statement error

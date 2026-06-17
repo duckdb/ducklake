@@ -270,16 +270,16 @@ unique_ptr<BaseStatistics> DuckLakeColumnStats::CreateGeometryStats() const {
 unique_ptr<BaseStatistics> DuckLakeColumnStats::CreateStringStats() const {
 	auto stats = StringStats::CreateEmpty(type);
 	if (has_min && has_max) {
-		StringStats::Update(stats, string_t(max));
-		StringStats::Update(stats, string_t(min));
+		StringStats::MergeInConstant(stats, string_t(max));
+		StringStats::MergeInConstant(stats, string_t(min));
 		StringStats::ResetMaxStringLength(stats);
 		StringStats::SetContainsUnicode(stats);
 	} else if (has_min) {
 		stats = StringStats::CreateUnknown(type);
-		StringStats::SetMin(stats, string_t(min));
+		StringStats::SetMin(stats, string_t(min), StringStatsType::TRUNCATED_STATS);
 	} else if (has_max) {
 		stats = StringStats::CreateUnknown(type);
-		StringStats::SetMax(stats, string_t(max));
+		StringStats::SetMax(stats, string_t(max), StringStatsType::TRUNCATED_STATS);
 	} else {
 		// No min/max stats available - use unknown stats to avoid
 		// false claims about max_string_length (CreateEmpty sets it to 0)
@@ -313,19 +313,28 @@ unique_ptr<BaseStatistics> DuckLakeColumnStats::ToStats() const {
 	case LogicalTypeId::TIME:
 	case LogicalTypeId::TIMESTAMP:
 	case LogicalTypeId::TIMESTAMP_TZ:
+	case LogicalTypeId::TIMESTAMP_TZ_NS:
 	case LogicalTypeId::TIMESTAMP_SEC:
 	case LogicalTypeId::TIMESTAMP_MS:
 	case LogicalTypeId::TIMESTAMP_NS:
 	case LogicalTypeId::UUID:
 		return CreateNumericStats();
 	case LogicalTypeId::FLOAT:
-	case LogicalTypeId::DOUBLE:
+	case LogicalTypeId::DOUBLE: {
 		// we only create stats if we know there are no NaN values
 		// FIXME: we can just set Max to NaN instead
 		if (has_contains_nan && !contains_nan) {
 			return CreateNumericStats();
 		}
-		return nullptr;
+		auto stats = NumericStats::CreateEmpty(type);
+		if (!has_null_count || null_count > 0) {
+			stats.SetHasNullFast();
+		}
+		if (!has_null_count || !has_num_values || null_count != num_values) {
+			stats.SetHasNoNullFast();
+		}
+		return stats.ToUnique();
+	}
 	case LogicalTypeId::VARCHAR:
 		return CreateStringStats();
 	case LogicalTypeId::GEOMETRY:

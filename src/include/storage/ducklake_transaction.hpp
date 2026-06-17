@@ -23,6 +23,7 @@ namespace duckdb {
 struct NewMacroInfo;
 class DuckLakeCatalog;
 class DuckLakeCatalogSet;
+class DuckLakeInitializer;
 class DuckLakeMetadataManager;
 class DuckLakeSchemaEntry;
 class DuckLakeTableEntry;
@@ -165,6 +166,7 @@ struct DuckLakeRetryConfig {
 
 class DuckLakeTransaction : public Transaction, public enable_shared_from_this<DuckLakeTransaction> {
 	friend class DuckLakeTransactionState;
+	friend class DuckLakeInitializer;
 
 public:
 	DuckLakeTransaction(DuckLakeCatalog &ducklake_catalog, TransactionManager &manager, ClientContext &context);

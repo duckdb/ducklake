@@ -9,7 +9,7 @@ require parquet
 require json
 
 statement ok
-ATTACH 'ducklake:__TEST_DIR__/ducklake_json.db' AS ducklake (DATA_PATH '__TEST_DIR__/ducklake_json_files')
+ATTACH 'ducklake:{TEST_DIR}/ducklake_json.db' AS ducklake (DATA_PATH '{TEST_DIR}/ducklake_json_files')
 
 statement ok
 CREATE TABLE ducklake.test(l JSON);
@@ -35,7 +35,7 @@ statement ok
 DETACH ducklake
 
 statement ok
-ATTACH 'ducklake:__TEST_DIR__/ducklake_json.db' AS ducklake (DATA_PATH '__TEST_DIR__/ducklake_json_files')
+ATTACH 'ducklake:{TEST_DIR}/ducklake_json.db' AS ducklake (DATA_PATH '{TEST_DIR}/ducklake_json_files')
 
 query I
 SELECT * FROM ducklake.test

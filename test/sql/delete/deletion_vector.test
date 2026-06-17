@@ -6,12 +6,12 @@ require ducklake
 
 require parquet
 
-test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
 
-test-env DATA_PATH __TEST_DIR__
+test-env DATA_PATH {TEST_DIR}
 
 statement ok
-ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/deletion_vector_files', WRITE_DELETION_VECTORS true)
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/deletion_vector_files', WRITE_DELETION_VECTORS true)
 
 statement ok
 CREATE TABLE ducklake.test AS SELECT i id FROM range(1000) t(i);
@@ -72,6 +72,34 @@ SELECT COUNT(*) FILTER(WHERE id < 100) FROM ducklake.test
 ----
 0
 
+# single-DV files are bare blobs (footer_size 0); the multi-snapshot file is a puffin container (footer_size > 0)
+query II
+SELECT COUNT(*) FILTER(WHERE footer_size = 0), COUNT(*) FILTER(WHERE footer_size > 0) FROM __ducklake_metadata_ducklake.ducklake_delete_file WHERE end_snapshot IS NULL
+----
+1	1
+
+# footer_size exactly spans the puffin footer: the last footer_size bytes start with the PFA1 magic
+query I
+SELECT b.content[lf.delete_file_size_bytes - lf.delete_file_footer_size + 1 : lf.delete_file_size_bytes - lf.delete_file_footer_size + 4] = 'PFA1'::BLOB
+FROM ducklake_list_files('ducklake', 'test') lf
+JOIN read_blob('{DATA_PATH}/deletion_vector_files/**/*-delete.puffin') b ON regexp_replace(b.filename, '\\', '/', 'g') = regexp_replace(lf.delete_file, '\\', '/', 'g')
+WHERE lf.delete_file_footer_size > 0
+----
+true
+
+# time travel across the per-snapshot deletion vectors
+# version 3: after deleting the even rows (1000 rows remain)
+query II
+SELECT COUNT(*), COUNT(*) FILTER(WHERE id%2=0) FROM ducklake.test AT (VERSION => 3)
+----
+1000	0
+
+# version 4: after additionally deleting id < 100 (950 rows remain)
+query II
+SELECT COUNT(*), COUNT(*) FILTER(WHERE id < 100) FROM ducklake.test AT (VERSION => 4)
+----
+950	0
+
 # delete all remaining rows from one file to test full file drop
 query I
 DELETE FROM ducklake.test WHERE id >= 0 AND id < 1000
@@ -82,3 +110,9 @@ query I
 SELECT COUNT(*) FROM ducklake.test
 ----
 500
+
+# time travel still works after the file was fully dropped
+query I
+SELECT COUNT(*) FROM ducklake.test AT (VERSION => 4)
+----
+950

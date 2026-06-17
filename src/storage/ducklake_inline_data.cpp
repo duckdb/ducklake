@@ -6,6 +6,9 @@
 #include "storage/ducklake_table_entry.hpp"
 #include "storage/ducklake_transaction.hpp"
 #include "duckdb/common/types/column/column_data_collection.hpp"
+#include "duckdb/common/vector/list_vector.hpp"
+#include "duckdb/common/vector/struct_vector.hpp"
+#include "duckdb/common/vector/map_vector.hpp"
 
 namespace duckdb {
 
@@ -184,7 +187,7 @@ struct StatsFallbackOperator {
 template <class T, class OP>
 DuckLakeColumnStats TemplatedUpdateStats(Vector &input_vec, const LogicalType &type, idx_t row_count) {
 	UnifiedVectorFormat format;
-	input_vec.ToUnifiedFormat(row_count, format);
+	input_vec.ToUnifiedFormat(format);
 
 	auto data = UnifiedVectorFormat::GetData<T>(format);
 	auto &validity = format.validity;
@@ -222,16 +225,39 @@ DuckLakeColumnStats TemplatedUpdateStats(Vector &input_vec, const LogicalType &t
 	return result;
 }
 
+template <class T>
+static bool VectorContainsNaN(Vector &input_vec, idx_t row_count) {
+	UnifiedVectorFormat fmt;
+	input_vec.ToUnifiedFormat(fmt);
+	auto data = UnifiedVectorFormat::GetData<T>(fmt);
+	for (idx_t i = 0; i < row_count; i++) {
+		auto idx = fmt.sel->get_index(i);
+		if (fmt.validity.RowIsValid(idx) && Value::IsNan(data[idx])) {
+			return true;
+		}
+	}
+	return false;
+}
+
 DuckLakeColumnStats GetVectorStats(Vector &input_vec, idx_t row_count) {
 	auto &type = input_vec.GetType();
 	Vector str_vector(LogicalType::VARCHAR, row_count);
 	VectorOperations::DefaultCast(input_vec, str_vector, row_count);
 	// FIXME: we can be more efficient here by templating on other types (numerics...)
-	// FIXME: we can gather nan statistics for FLOAT/DOUBLE
+	DuckLakeColumnStats result(type);
 	if (RequiresValueComparison(type)) {
-		return TemplatedUpdateStats<string_t, StatsNumericFallbackOperator>(str_vector, type, row_count);
+		result = TemplatedUpdateStats<string_t, StatsNumericFallbackOperator>(str_vector, type, row_count);
+	} else {
+		result = TemplatedUpdateStats<string_t, StatsFallbackOperator>(str_vector, type, row_count);
 	}
-	return TemplatedUpdateStats<string_t, StatsFallbackOperator>(str_vector, type, row_count);
+	if (type.id() == LogicalTypeId::FLOAT) {
+		result.has_contains_nan = true;
+		result.contains_nan = VectorContainsNaN<float>(input_vec, row_count);
+	} else if (type.id() == LogicalTypeId::DOUBLE) {
+		result.has_contains_nan = true;
+		result.contains_nan = VectorContainsNaN<double>(input_vec, row_count);
+	}
+	return result;
 }
 
 void UpdateStats(vector<DuckLakeBaseColumnStats> &stats, idx_t c, Vector &data, idx_t row_count,
@@ -250,13 +276,13 @@ void UpdateStats(vector<DuckLakeBaseColumnStats> &stats, idx_t c, Vector &data, 
 		case LogicalTypeId::STRUCT: {
 			auto &children = StructVector::GetEntries(data);
 			for (idx_t child_idx = 0; child_idx < children.size(); child_idx++) {
-				UpdateStats(column_stats.children, child_idx, *children[child_idx], row_count,
+				UpdateStats(column_stats.children, child_idx, children[child_idx], row_count,
 				            field_id.GetChildByIndex(child_idx));
 			}
 			break;
 		}
 		case LogicalTypeId::LIST: {
-			auto &child = ListVector::GetEntry(data);
+			auto &child = ListVector::GetChildMutable(data);
 			UpdateStats(column_stats.children, 0, child, ListVector::GetListSize(data), field_id.GetChildByIndex(0));
 			break;
 		}
@@ -336,7 +362,7 @@ OperatorFinalResultType DuckLakeInlineData::OperatorFinalize(Pipeline &pipeline,
 
 		if (column_stats.stats.null_count > 0) {
 			auto column_name = table.GetColumn(LogicalIndex(c)).GetName();
-			if (not_null_fields.count(column_name)) {
+			if (not_null_fields.count(column_name.GetIdentifierName())) {
 				throw ConstraintException("NOT NULL constraint failed: %s.%s", table.name, column_name);
 			}
 		}
@@ -352,7 +378,7 @@ OperatorFinalResultType DuckLakeInlineData::OperatorFinalize(Pipeline &pipeline,
 			// extract row_ids from the row_id column
 			auto &row_id_vec = chunk.data[physical_col_count];
 			UnifiedVectorFormat row_id_format;
-			row_id_vec.ToUnifiedFormat(chunk.size(), row_id_format);
+			row_id_vec.ToUnifiedFormat(row_id_format);
 			auto row_id_data = UnifiedVectorFormat::GetData<int64_t>(row_id_format);
 			for (idx_t r = 0; r < chunk.size(); r++) {
 				auto idx = row_id_format.sel->get_index(r);
@@ -363,7 +389,7 @@ OperatorFinalResultType DuckLakeInlineData::OperatorFinalize(Pipeline &pipeline,
 			for (idx_t i = 0; i < physical_col_count; i++) {
 				phys_chunk.data[i].Reference(chunk.data[i]);
 			}
-			phys_chunk.SetCardinality(chunk.size());
+			phys_chunk.SetChildCardinality(chunk.size());
 			phys_data->Append(append_state, phys_chunk);
 		}
 		result->data = std::move(phys_data);

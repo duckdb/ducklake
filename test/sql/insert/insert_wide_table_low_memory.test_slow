@@ -6,12 +6,12 @@ require ducklake
 
 require parquet
 
-test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
 
-test-env DATA_PATH __TEST_DIR__
+test-env DATA_PATH {TEST_DIR}
 
 statement ok
-ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/ducklake_wide_low_mem')
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/ducklake_wide_low_mem')
 
 # disable inlining so each insert creates a separate parquet file and stats entry
 statement ok
@@ -56,7 +56,7 @@ SET memory_limit='50MB'
 loop i 0 500
 
 statement ok
-INSERT INTO ducklake.wide_table (col_0, col_1, col_2) VALUES (${i}, ${i} * 10, ${i} * 100)
+INSERT INTO ducklake.wide_table (col_0, col_1, col_2) VALUES ({i}, {i} * 10, {i} * 100)
 
 endloop
 
@@ -85,7 +85,7 @@ CREATE TEMP TABLE mem_filler(i INTEGER, pad VARCHAR)
 loop j 0 3
 
 statement ok
-INSERT INTO mem_filler SELECT i + ${j} * 5000, repeat('x', 1000) FROM range(5000) t(i)
+INSERT INTO mem_filler SELECT i + {j} * 5000, repeat('x', 1000) FROM range(5000) t(i)
 
 endloop
 
@@ -93,7 +93,7 @@ endloop
 loop i 500 600
 
 statement ok
-INSERT INTO ducklake.wide_table (col_0, col_1, col_2) VALUES (${i}, ${i} * 10, ${i} * 100)
+INSERT INTO ducklake.wide_table (col_0, col_1, col_2) VALUES ({i}, {i} * 10, {i} * 100)
 
 endloop
 

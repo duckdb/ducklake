@@ -21,9 +21,9 @@ struct CleanupBindData : public TableFunctionData {
 		}
 		switch (type) {
 		case CleanupType::OLD_FILES:
-			return StringUtil::Format("WHERE schedule_start < '%s'", timestamp_filter);
+			return StringUtil::Format("WHERE schedule_start::TIMESTAMPTZ < '%s'", timestamp_filter);
 		case CleanupType::ORPHANED_FILES:
-			return StringUtil::Format(" AND last_modified < '%s'", timestamp_filter);
+			return StringUtil::Format(" AND last_modified::TIMESTAMPTZ < '%s'", timestamp_filter);
 		default:
 			throw InternalException("Unknown Cleanup type for GetFilter()");
 		}
@@ -62,12 +62,11 @@ static unique_ptr<FunctionData> CleanupBind(ClientContext &context, TableFunctio
 	bool has_timestamp = false;
 	bool cleanup_all = false;
 	for (auto &entry : input.named_parameters) {
-		if (StringUtil::CIEquals(entry.first, "dry_run")) {
+		if (entry.first == "dry_run") {
 			result->dry_run = entry.second.GetValue<bool>();
-			;
-		} else if (StringUtil::CIEquals(entry.first, "cleanup_all")) {
+		} else if (entry.first == "cleanup_all") {
 			cleanup_all = entry.second.GetValue<bool>();
-		} else if (StringUtil::CIEquals(entry.first, "older_than")) {
+		} else if (entry.first == "older_than") {
 			from_timestamp = entry.second.GetValue<timestamp_tz_t>();
 			has_timestamp = true;
 		} else {
@@ -154,10 +153,10 @@ void DuckLakeCleanupExecute(ClientContext &context, TableFunctionInput &data_p, 
 	idx_t count = 0;
 	while (state.offset < data.files.size() && count < STANDARD_VECTOR_SIZE) {
 		auto &file = data.files[state.offset++];
-		output.SetValue(0, count, file.path);
+		output.data[0].Append(file.path);
 		count++;
 	}
-	output.SetCardinality(count);
+	output.SetChildCardinality(count);
 }
 
 DuckLakeCleanupOldFilesFunction::DuckLakeCleanupOldFilesFunction()

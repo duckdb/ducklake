@@ -6,14 +6,14 @@ require ducklake
 
 require parquet
 
-test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
 
-test-env DUCKLAKE_CONNECTION_2 __TEST_DIR__/{UUID}_2.db
+test-env DUCKLAKE_CONNECTION_2 {TEST_DIR}/{UUID}_2.db
 
-test-env DATA_PATH __TEST_DIR__
+test-env DATA_PATH {TEST_DIR}
 
 statement ok
-ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/sort_on_insert_option')
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/sort_on_insert_option')
 
 # -----------------------------------------------
 # Test 1: Default behavior - INSERT sorts (sort_on_insert not set, defaults to true)
@@ -191,7 +191,7 @@ statement ok
 DETACH ducklake
 
 statement ok
-ATTACH 'ducklake:${DUCKLAKE_CONNECTION_2}' AS ducklake2 (DATA_PATH '${DATA_PATH}/sort_on_insert_flush', DATA_INLINING_ROW_LIMIT 10)
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION_2}' AS ducklake2 (DATA_PATH '{DATA_PATH}/sort_on_insert_flush', DATA_INLINING_ROW_LIMIT 10)
 
 statement ok
 CALL ducklake_set_option('ducklake2', 'sort_on_insert', 'false')
@@ -238,7 +238,7 @@ SELECT * FROM ducklake2.test_flush
 0
 
 query I
-SELECT COUNT(*) FROM GLOB('${DATA_PATH}/sort_on_insert_flush/**')
+SELECT COUNT(*) FROM GLOB('{DATA_PATH}/sort_on_insert_flush/**')
 ----
 1
 
@@ -276,7 +276,7 @@ SELECT * FROM ducklake2.test_flush
 10
 
 query I
-SELECT COUNT(*) FROM GLOB('${DATA_PATH}/sort_on_insert_flush/**')
+SELECT COUNT(*) FROM GLOB('{DATA_PATH}/sort_on_insert_flush/**')
 ----
 2
 
@@ -314,7 +314,7 @@ SELECT * FROM ducklake2.test_flush
 21
 
 query I
-SELECT COUNT(*) FROM GLOB('${DATA_PATH}/sort_on_insert_flush/**')
+SELECT COUNT(*) FROM GLOB('{DATA_PATH}/sort_on_insert_flush/**')
 ----
 2
 
@@ -367,7 +367,7 @@ SELECT * FROM ducklake2.test_flush
 
 
 query I
-SELECT COUNT(*) FROM GLOB('${DATA_PATH}/sort_on_insert_flush/**')
+SELECT COUNT(*) FROM GLOB('{DATA_PATH}/sort_on_insert_flush/**')
 ----
 3
 

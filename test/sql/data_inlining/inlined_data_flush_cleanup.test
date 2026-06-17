@@ -7,7 +7,7 @@ require ducklake
 require parquet
 
 statement ok
-ATTACH 'ducklake:__TEST_DIR__/inlined_data_flush_cache.db' AS ducklake (DATA_PATH '__TEST_DIR__/inlined_data_flush_cache_files', METADATA_CATALOG 'ducklake_meta', DATA_INLINING_ROW_LIMIT 10)
+ATTACH 'ducklake:{TEST_DIR}/inlined_data_flush_cache.db' AS ducklake (DATA_PATH '{TEST_DIR}/inlined_data_flush_cache_files', METADATA_CATALOG 'ducklake_meta', DATA_INLINING_ROW_LIMIT 10)
 
 statement ok
 CREATE TABLE ducklake.t(i INTEGER)

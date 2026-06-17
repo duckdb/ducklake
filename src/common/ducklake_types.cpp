@@ -12,7 +12,7 @@ struct DefaultType {
 	LogicalTypeId id;
 };
 
-using ducklake_type_array = std::array<DefaultType, 32>;
+using ducklake_type_array = std::array<DefaultType, 33>;
 
 static constexpr const ducklake_type_array DUCKLAKE_TYPES {{{"boolean", LogicalTypeId::BOOLEAN},
                                                             {"int8", LogicalTypeId::TINYINT},
@@ -37,6 +37,7 @@ static constexpr const ducklake_type_array DUCKLAKE_TYPES {{{"boolean", LogicalT
                                                             {"timestamp_ns", LogicalTypeId::TIMESTAMP_NS},
                                                             {"timestamp_s", LogicalTypeId::TIMESTAMP_SEC},
                                                             {"timestamptz", LogicalTypeId::TIMESTAMP_TZ},
+                                                            {"timestamptz_ns", LogicalTypeId::TIMESTAMP_TZ_NS},
                                                             {"timetz", LogicalTypeId::TIME_TZ},
                                                             {"interval", LogicalTypeId::INTERVAL},
                                                             {"varchar", LogicalTypeId::VARCHAR},

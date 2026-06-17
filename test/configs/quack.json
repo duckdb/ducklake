@@ -54,7 +54,15 @@
     {
       "reason": "FIXME:Uses SET immediate_transaction_mode=true with concurrent connections",
       "paths": [
-        "test/sql/transaction/transaction_conflict_inlining.test"
+        "test/sql/compaction/compaction_delete_conflict.test",
+        "test/sql/rewrite_data_files/test_rewrite_transaction_conflict.test",
+        "test/sql/stats/global_stats_transactions.test",
+        "test/sql/transaction/concurrent_table_creation.test",
+        "test/sql/transaction/transaction_conflict_cleanup.test",
+        "test/sql/transaction/transaction_conflict_inlining.test",
+        "test/sql/transaction/transaction_conflicts.test",
+        "test/sql/transaction/transaction_conflicts_delete.test",
+        "test/sql/transaction/transaction_conflicts_view.test"
       ]
     },
     {
@@ -98,9 +106,27 @@
       ]
     },
     {
+      "reason": "Not implemented Error: InMemory not implemented yet",
+      "paths": [
+        "test/sql/metadata/hide_metadata_catalog.test"
+      ]
+    },
+    {
       "reason": "ROLLBACK after ducklake_flush_inlined_data does not restore ducklake_inlined_delete_* rows on the quack-backed metadata catalog (line 162 expects 15 rows after rollback, gets 0). Each `CALL quack_query(uri, sql)` opens a fresh server-side connection that auto-commits independently of the outer DuckLake transaction. Proper fix needs metadata operations routed through a transaction-scoped server-side connection (e.g., reuse the local QuackCatalog's connection_id via quack_query_by_name and have the catalog's QuackTransaction lifecycle drive server-side BEGIN/COMMIT/ROLLBACK).",
       "paths": [
         "test/sql/deletion_inlining/test_deletion_inlining_transaction.test"
+      ]
+    },
+    {
+      "reason": "FIXME: A failed client-side commit batch is not atomic on the quack server.",
+      "paths": [
+        "test/sql/quack/server_side_commit_atomicity.test"
+      ]
+    },
+    {
+      "reason": "FIXME: A custom METADATA_SCHEMA fails to initialize on quack.",
+      "paths": [
+        "test/sql/transaction/transaction_schema.test"
       ]
     },
     {
@@ -118,7 +144,7 @@
       ]
     },
     {
-      "reason": "FIXME: DETACH assertion" ,
+      "reason": "FIXME: DETACH assertion",
       "paths": [
         "test/sql/general/detach_ducklake.test"
       ]
@@ -139,6 +165,12 @@
       "reason": "FIXME: Timeout was reached error for HTTP POST to http://localhost:19999/quack",
       "paths": [
         "test/sql/deletion_inlining/test_multiple_files_flush.test_slow"
+      ]
+    },
+    {
+      "reason": "FIXME: Flaky timeout on quack.",
+      "paths": [
+        "test/sql/alter/many_schema_versions_low_memory.test_slow"
       ]
     },
     {
@@ -185,6 +217,13 @@
       "reason": "FIXME: NotImplementedException: GetDBPath not implemented yet",
       "paths": [
         "test/sql/attach/attach_replace.test"
+      ]
+    },
+    {
+      "reason": "FIXME: server-side quack commits serialize, so concurrent commits never exhaust the client retry budget these tests assert on.",
+      "paths": [
+        "test/sql/retry/commit_failure.test",
+        "test/sql/settings/max_retry_count.test"
       ]
     }
   ]

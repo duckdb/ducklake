@@ -6,12 +6,12 @@ require ducklake
 
 require parquet
 
-test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
 
-test-env DATA_PATH __TEST_DIR__
+test-env DATA_PATH {TEST_DIR}
 
 statement ok
-ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/ducklake_empty_files/', METADATA_CATALOG 'metadata');
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/ducklake_empty_files/', METADATA_CATALOG 'metadata');
 
 statement ok
 CREATE TABLE ducklake.test(col1 INTEGER, col2 VARCHAR);
@@ -21,14 +21,14 @@ INSERT INTO ducklake.test VALUES (100, 'hello');
 
 # write a parquet file outside of DuckLake
 statement ok
-COPY (SELECT 200 col1, 'world' col2 LIMIT 0) TO '${DATA_PATH}/ducklake_empty_files/main/test/empty_file.parquet';
+COPY (SELECT 200 col1, 'world' col2 LIMIT 0) TO '{DATA_PATH}/ducklake_empty_files/main/test/empty_file.parquet';
 
 statement ok
 BEGIN
 
 # make its existence known to DuckLake
 statement ok
-CALL ducklake_add_data_files('ducklake', 'test', '${DATA_PATH}/ducklake_empty_files/main/test/empty_file.parquet')
+CALL ducklake_add_data_files('ducklake', 'test', '{DATA_PATH}/ducklake_empty_files/main/test/empty_file.parquet')
 
 query II
 FROM ducklake.test

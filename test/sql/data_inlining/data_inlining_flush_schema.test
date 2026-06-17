@@ -6,13 +6,13 @@ require ducklake
 
 require parquet
 
-test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
 
-test-env DATA_PATH __TEST_DIR__
+test-env DATA_PATH {TEST_DIR}
 
 
 statement ok
-ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/ducklake_inlining_flush_schema_data', DATA_INLINING_ROW_LIMIT 10)
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/ducklake_inlining_flush_schema_data', DATA_INLINING_ROW_LIMIT 10)
 
 statement ok
 CREATE SCHEMA ducklake.s1
@@ -46,7 +46,7 @@ INSERT INTO ducklake.s2.test VALUES (42, 84)
 
 # all data is inlined
 query I
-SELECT COUNT(*) FROM GLOB('${DATA_PATH}/ducklake_inlining_flush_schema_data/**')
+SELECT COUNT(*) FROM GLOB('{DATA_PATH}/ducklake_inlining_flush_schema_data/**')
 ----
 0
 
@@ -57,7 +57,7 @@ SELECT table_name, rows_flushed FROM ducklake_flush_inlined_data('ducklake', tab
 test	1
 
 query I
-SELECT COUNT(*) FROM GLOB('${DATA_PATH}/ducklake_inlining_flush_schema_data/**')
+SELECT COUNT(*) FROM GLOB('{DATA_PATH}/ducklake_inlining_flush_schema_data/**')
 ----
 1
 
@@ -69,7 +69,7 @@ test	1
 test2	1
 
 query I
-SELECT COUNT(*) FROM GLOB('${DATA_PATH}/ducklake_inlining_flush_schema_data/**')
+SELECT COUNT(*) FROM GLOB('{DATA_PATH}/ducklake_inlining_flush_schema_data/**')
 ----
 3
 
@@ -80,7 +80,7 @@ SELECT table_name, rows_flushed FROM ducklake_flush_inlined_data('ducklake', sch
 test	1
 
 query I
-SELECT COUNT(*) FROM GLOB('${DATA_PATH}/ducklake_inlining_flush_schema_data/**')
+SELECT COUNT(*) FROM GLOB('{DATA_PATH}/ducklake_inlining_flush_schema_data/**')
 ----
 4
 

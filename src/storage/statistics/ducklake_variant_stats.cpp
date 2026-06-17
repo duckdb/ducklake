@@ -8,6 +8,7 @@
 #include "duckdb/common/type_visitor.hpp"
 #include "storage/ducklake_insert.hpp"
 #include "duckdb/parser/keyword_helper.hpp"
+#include "duckdb/common/sql_identifier.hpp"
 #include "storage/ducklake_metadata_info.hpp"
 #include "yyjson.hpp"
 #include "common/ducklake_util.hpp"
@@ -406,7 +407,7 @@ bool DuckLakeColumnVariantStats::ParseStats(const string &stats_name, const vect
 }
 
 string QuoteVariantFieldName(const string &field_name) {
-	return KeywordHelper::WriteQuoted(field_name, '"');
+	return SQLQuotedIdentifier::ToString(field_name);
 }
 
 vector<string> ExtractVariantFieldNames(const vector<string> &path, idx_t variant_field_start) {

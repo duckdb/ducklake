@@ -72,6 +72,8 @@ private:
 
 	//! Query the metadata catalog for the latest snapshot.
 	DuckLakeSnapshot ReadLatestSnapshot();
+	//! Whether the metadata schema has the row_group_count columns (DuckLake >= 1.1).
+	bool ReadSupportsRowGroupCount();
 	//! Build a DuckLakeTableStats from parsed global stats.
 	unique_ptr<DuckLakeTableStats> BuildTableStats(const DuckLakeGlobalStatsInfo &gs);
 	//! Build a full DuckLakeStats map from global stats.
@@ -82,6 +84,8 @@ private:
 	string BuildInlinedDataInserts(const vector<DuckLakeInlinedDataInfo> &new_data);
 	//! Resolve and cache the latest inlined-data table name.
 	const string &ResolveInlinedTableName(TableIndex table_id);
+	//! All inlined-data table names registered for a table id (any schema version).
+	vector<string> LookupInlinedTableNames(TableIndex table_id);
 	//! Replace {METADATA_CATALOG}, {SNAPSHOT_ID}, etc. in SQL.
 	string SubstitutePlaceholders(string sql, const DuckLakeSnapshot &snapshot) const;
 	//! Execute a query on the fresh connection; throw on error.

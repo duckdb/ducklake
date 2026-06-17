@@ -1,0 +1,110 @@
+# name: test/sql/delete/deletion_vector_multi_snapshot.test
+# description: Multiple deletes on one file across snapshots produce one multi-blob puffin file with per-snapshot time travel
+# group: [delete]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/dv_multi_snapshot', WRITE_DELETION_VECTORS true, DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+USE dl
+
+statement ok
+CREATE TABLE test AS SELECT i id FROM range(10) t(i);
+
+statement ok
+SET VARIABLE v_create = (SELECT max(snapshot_id) FROM ducklake_snapshots('dl'));
+
+# three deletes against the same data file, one per snapshot
+statement ok
+DELETE FROM test WHERE id = 0
+
+statement ok
+SET VARIABLE v_d1 = (SELECT max(snapshot_id) FROM ducklake_snapshots('dl'));
+
+statement ok
+DELETE FROM test WHERE id = 1
+
+statement ok
+SET VARIABLE v_d2 = (SELECT max(snapshot_id) FROM ducklake_snapshots('dl'));
+
+statement ok
+DELETE FROM test WHERE id = 2
+
+statement ok
+SET VARIABLE v_d3 = (SELECT max(snapshot_id) FROM ducklake_snapshots('dl'));
+
+# exactly one active delete file, holding all three snapshots
+query I
+SELECT COUNT(*) FROM __ducklake_metadata_dl.ducklake_delete_file WHERE end_snapshot IS NULL
+----
+1
+
+# the consolidated file: puffin, cardinality of the latest cumulative blob = 3, spanning d1..d3
+query IIIII
+SELECT format, delete_count, begin_snapshot = getvariable('v_d1'), partial_max = getvariable('v_d3'), end_snapshot IS NULL
+FROM __ducklake_metadata_dl.ducklake_delete_file WHERE end_snapshot IS NULL
+----
+puffin	3	true	true	true
+
+# current state: ids 3..9
+query II
+SELECT COUNT(*), MIN(id) FROM test
+----
+7	3
+
+# per-snapshot time travel reads the right cumulative blob
+query I
+SELECT COUNT(*) FROM test AT (VERSION => getvariable('v_create'))
+----
+10
+
+query II
+SELECT COUNT(*), MIN(id) FROM test AT (VERSION => getvariable('v_d1'))
+----
+9	1
+
+query II
+SELECT COUNT(*), MIN(id) FROM test AT (VERSION => getvariable('v_d2'))
+----
+8	2
+
+query II
+SELECT COUNT(*), MIN(id) FROM test AT (VERSION => getvariable('v_d3'))
+----
+7	3
+
+# deletion scan over the full history: each row reports its own delete snapshot (first-seen attribution)
+query II
+SELECT id, snapshot_id = getvariable('v_d1') + id
+FROM ducklake_table_deletions('dl', 'main', 'test', getvariable('v_create'), getvariable('v_d3'))
+ORDER BY id
+----
+0	true
+1	true
+2	true
+
+# deletion scan excluding the earliest blob: range starts at the second delete snapshot
+query I
+SELECT id
+FROM ducklake_table_deletions('dl', 'main', 'test', getvariable('v_d2'), getvariable('v_d3'))
+ORDER BY id
+----
+1
+2
+
+# after cleanup the superseded puffin files are gone, leaving one delete file on disk
+statement ok
+CALL ducklake_cleanup_old_files('dl', cleanup_all => true)
+
+query I
+SELECT COUNT(*) FROM glob('{DATA_PATH}/dv_multi_snapshot/main/test/*-delete.puffin')
+----
+1

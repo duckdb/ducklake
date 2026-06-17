@@ -6,13 +6,13 @@ require ducklake
 
 require parquet
 
-test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
 
-test-env DATA_PATH __TEST_DIR__
+test-env DATA_PATH {TEST_DIR}
 
 # DATA_INLINING_ROW_LIMIT 0 forces deletes onto the real delete-file path
 statement ok
-ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '${DATA_PATH}/ducklake_projection_order', DATA_INLINING_ROW_LIMIT 0)
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/ducklake_projection_order', DATA_INLINING_ROW_LIMIT 0)
 
 statement ok
 USE dl

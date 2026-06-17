@@ -6,13 +6,13 @@ require ducklake
 
 require parquet
 
-test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
 
-test-env DATA_PATH __TEST_DIR__
+test-env DATA_PATH {TEST_DIR}
 
 
 statement ok
-ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/ducklake_add_files_hive/', METADATA_CATALOG 'metadata', DATA_INLINING_ROW_LIMIT 0);
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/ducklake_add_files_hive/', METADATA_CATALOG 'metadata', DATA_INLINING_ROW_LIMIT 0);
 
 statement ok
 CREATE TABLE partitioned_tbl(part_key INT, part_key2 INT, val VARCHAR);
@@ -21,19 +21,19 @@ statement ok
 INSERT INTO partitioned_tbl VALUES (1, 10, 'hello'), (2, 10, 'world'), (2, 20, 'abc')
 
 statement ok
-COPY partitioned_tbl TO '${DATA_PATH}/ducklake_add_files_hive/' (FORMAT PARQUET, PARTITION_BY(part_key, part_key2));
+COPY partitioned_tbl TO '{DATA_PATH}/ducklake_add_files_hive/' (FORMAT PARQUET, PARTITION_BY(part_key, part_key2));
 
 statement ok
 CREATE TABLE ducklake.test(part_key INT, part_key2 INT, val VARCHAR);
 
 # we need the hive partition columns
 statement error
-CALL ducklake_add_data_files('ducklake', 'test', '${DATA_PATH}/ducklake_add_files_hive/**/*.parquet', hive_partitioning => false)
+CALL ducklake_add_data_files('ducklake', 'test', '{DATA_PATH}/ducklake_add_files_hive/**/*.parquet', hive_partitioning => false)
 ----
 allow_missing
 
 statement ok
-CALL ducklake_add_data_files('ducklake', 'test', '${DATA_PATH}/ducklake_add_files_hive/**/*.parquet', hive_partitioning => true)
+CALL ducklake_add_data_files('ducklake', 'test', '{DATA_PATH}/ducklake_add_files_hive/**/*.parquet', hive_partitioning => true)
 
 query III
 SELECT part_key, part_key2, val FROM ducklake.test ORDER BY ALL
@@ -67,11 +67,11 @@ SELECT new_part_key, part_key2, val FROM ducklake.test ORDER BY ALL
 
 # add new values post-rename
 statement ok
-COPY (FROM (VALUES (1, 10, 'new value')) t(new_part_key, part_key2, val)) TO '${DATA_PATH}/ducklake_add_files_hive/' (FORMAT PARQUET, PARTITION_BY(new_part_key, part_key2), APPEND);
+COPY (FROM (VALUES (1, 10, 'new value')) t(new_part_key, part_key2, val)) TO '{DATA_PATH}/ducklake_add_files_hive/' (FORMAT PARQUET, PARTITION_BY(new_part_key, part_key2), APPEND);
 
 # hive partitioning is automatically detected by default
 statement ok
-CALL ducklake_add_data_files('ducklake', 'test', '${DATA_PATH}/ducklake_add_files_hive/new_part_key=*/**/*.parquet')
+CALL ducklake_add_data_files('ducklake', 'test', '{DATA_PATH}/ducklake_add_files_hive/new_part_key=*/**/*.parquet')
 
 query III
 SELECT new_part_key, part_key2, val FROM ducklake.test ORDER BY ALL

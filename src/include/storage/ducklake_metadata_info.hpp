@@ -160,6 +160,7 @@ struct DuckLakeFileInfo {
 	idx_t row_count;
 	idx_t file_size_bytes;
 	optional_idx footer_size;
+	optional_idx row_group_count;
 	optional_idx row_id_start;
 	optional_idx partition_id;
 	optional_idx begin_snapshot;
@@ -198,6 +199,7 @@ struct DuckLakeDeleteFileInfo {
 	idx_t delete_count;
 	idx_t file_size_bytes;
 	idx_t footer_size;
+	optional_idx row_group_count;
 	string encryption_key;
 	optional_idx begin_snapshot;
 	//! Optional max_snapshot information for partial deletion files.
@@ -305,6 +307,7 @@ struct DuckLakeSnapshotInfo {
 	idx_t id;
 	timestamp_tz_t time;
 	idx_t schema_version;
+	idx_t next_file_id;
 	SnapshotChangeInfo change_info;
 	Value author;
 	Value commit_message;

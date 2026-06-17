@@ -1,0 +1,81 @@
+# name: test/sql/rewrite_data_files/rewrite_deletion_vectors.test
+# description: Rewriting a data file with a multi-snapshot puffin deletion vector preserves data and time travel
+# group: [rewrite_data_files]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/rewrite_dv', WRITE_DELETION_VECTORS true, DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+USE dl
+
+statement ok
+CREATE TABLE test AS SELECT i id FROM range(1000) t(i);
+
+statement ok
+SET VARIABLE v_create = (SELECT max(snapshot_id) FROM ducklake_snapshots('dl'));
+
+# two deletes accumulate into one multi-snapshot puffin deletion vector
+statement ok
+DELETE FROM test WHERE id < 100
+
+statement ok
+SET VARIABLE v_d1 = (SELECT max(snapshot_id) FROM ducklake_snapshots('dl'));
+
+statement ok
+DELETE FROM test WHERE id >= 100 AND id < 200
+
+statement ok
+SET VARIABLE v_d2 = (SELECT max(snapshot_id) FROM ducklake_snapshots('dl'));
+
+# the active delete file is a puffin DV spanning both delete snapshots
+query III
+SELECT format, begin_snapshot = getvariable('v_d1'), partial_max = getvariable('v_d2')
+FROM __ducklake_metadata_dl.ducklake_delete_file WHERE end_snapshot IS NULL
+----
+puffin	true	true
+
+query I
+SELECT COUNT(*) FROM test
+----
+800
+
+# 20% deleted exceeds the threshold, so the file is rewritten
+query III
+SELECT table_name, files_processed, files_created FROM ducklake_rewrite_data_files('dl', 'test', delete_threshold => 0.1)
+----
+test	1	1
+
+# after the rewrite the live data is unchanged and carries no active delete file
+query II
+SELECT COUNT(*), MIN(id) FROM test
+----
+800	200
+
+query I
+SELECT COUNT(*) FROM __ducklake_metadata_dl.ducklake_delete_file WHERE end_snapshot IS NULL
+----
+0
+
+# time travel through the pre-rewrite deletion vector still works
+query I
+SELECT COUNT(*) FROM test AT (VERSION => getvariable('v_create'))
+----
+1000
+
+query II
+SELECT COUNT(*), MIN(id) FROM test AT (VERSION => getvariable('v_d1'))
+----
+900	100
+
+query II
+SELECT COUNT(*), MIN(id) FROM test AT (VERSION => getvariable('v_d2'))
+----
+800	200

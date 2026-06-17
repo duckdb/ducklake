@@ -1,0 +1,68 @@
+# name: test/sql/remove_orphans/concurrent_insert_orphan_cleanup.test
+# description: Test concurrent inserts while orphan cleanup runs
+# group: [remove_orphans]
+
+require notwindows
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+
+test-env DATA_PATH __TEST_DIR__
+
+statement ok
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/concurrent_insert_orphan_cleanup', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE ducklake.tbl(id INTEGER);
+
+statement ok
+INSERT INTO ducklake.tbl SELECT i FROM range(10) t(i);
+
+# Add a known orphan before the concurrent workload starts.
+statement ok
+COPY ducklake.tbl TO '${DATA_PATH}/concurrent_insert_orphan_cleanup/main/tbl/orphan.parquet';
+
+query I
+SELECT count(*) FROM ducklake_delete_orphaned_files('ducklake', cleanup_all => true, dry_run => true);
+----
+1
+
+# Run the cleanup function concurrently with writers. The cleanup calls use the
+# normal age guard rather than cleanup_all, so fresh in-flight files are not
+# intentionally eligible for deletion.
+concurrentloop threadid 0 10
+
+loop j 0 5
+
+statement maybe
+INSERT INTO ducklake.tbl VALUES (1000 + ${threadid} * 100 + ${j});
+----
+
+statement maybe
+CALL ducklake_delete_orphaned_files('ducklake');
+----
+
+endloop
+
+endloop
+
+statement ok
+CALL ducklake_delete_orphaned_files('ducklake', cleanup_all => true);
+
+query I
+SELECT count(*) FROM ducklake_delete_orphaned_files('ducklake', cleanup_all => true, dry_run => true);
+----
+0
+
+query I
+SELECT count(*) FROM (SELECT id, count(*) cnt FROM ducklake.tbl GROUP BY id HAVING count(*) > 1);
+----
+0
+
+query I
+SELECT count(*) BETWEEN 10 AND 60 FROM ducklake.tbl;
+----
+true

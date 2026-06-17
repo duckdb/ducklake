@@ -22,6 +22,7 @@ jobs:
       PIP_BREAK_SYSTEM_PACKAGES: 1
       BUILD_EXTENSION_TEST_DEPS: full
       S3_TEST_SERVER_AVAILABLE: 1
+      DUCKLAKE_CI: 1
 
     steps:
       - name: Install required ubuntu packages
@@ -30,7 +31,7 @@ jobs:
           sudo apt-get install -y -qq software-properties-common
           sudo add-apt-repository ppa:git-core/ppa
           sudo apt-get update -y -qq
-          sudo apt-get install -y -qq build-essential cmake ninja-build ccache python3
+          sudo apt-get install -y -qq build-essential cmake ninja-build ccache python3 mold
           sudo curl -L "https://github.com/docker/compose/releases/download/1.29.2/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose
           sudo chmod +x /usr/local/bin/docker-compose
 
@@ -70,6 +71,8 @@ jobs:
           make release
 
       - name: Test MinIO - AWS
+        env:
+          DUCKDB_TPCH_ANSWERS_DIR: ${{ github.workspace }}/duckdb/extension/tpch/dbgen/answers
         run: |
           ./scripts/start-docker.sh
           build/release/test/unittest --test-config test/configs/minio.json "test/sql/*"

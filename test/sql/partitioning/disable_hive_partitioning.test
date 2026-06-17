@@ -7,13 +7,13 @@ require ducklake
 require parquet
 
 # partitioning based on a column
-test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
 
-test-env DATA_PATH __TEST_DIR__
+test-env DATA_PATH {TEST_DIR}
 
 
 statement ok
-ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/ducklake_partition_use_hive', METADATA_CATALOG 'ducklake_metadata', DATA_INLINING_ROW_LIMIT 0)
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/ducklake_partition_use_hive', METADATA_CATALOG 'ducklake_metadata', DATA_INLINING_ROW_LIMIT 0)
 
 statement ok
 USE ducklake
@@ -35,7 +35,7 @@ INSERT INTO partitioned_tbl SELECT i%2, concat('thisisastring_', i) FROM range(5
 
 # This is partitioned
 query II
-FROM '${DATA_PATH}/ducklake_partition_use_hive/main/partitioned_tbl/part_key=0/*.parquet'
+FROM '{DATA_PATH}/ducklake_partition_use_hive/main/partitioned_tbl/part_key=0/*.parquet'
 ----
 0	thisisastring_0
 0	thisisastring_2
@@ -48,7 +48,7 @@ statement ok
 INSERT INTO hiveless_partitioned_tbl SELECT i%2, concat('thisisastring_', i) FROM range(5) t(i)
 
 statement error
-FROM '${DATA_PATH}/ducklake_partition_use_hive/main/hiveless_partitioned_tbl/part_key=0/*.parquet'
+FROM '{DATA_PATH}/ducklake_partition_use_hive/main/hiveless_partitioned_tbl/part_key=0/*.parquet'
 ----
 No files found that match the pattern
 
@@ -62,7 +62,7 @@ INSERT INTO partitioned_tbl SELECT i%2, concat('thisisastring_', i) FROM range(5
 
 # Data remains the same
 query II
-FROM '${DATA_PATH}/ducklake_partition_use_hive/main/partitioned_tbl/part_key=0/*.parquet'
+FROM '{DATA_PATH}/ducklake_partition_use_hive/main/partitioned_tbl/part_key=0/*.parquet'
 ----
 0	thisisastring_0
 0	thisisastring_2

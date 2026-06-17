@@ -14,12 +14,12 @@ require ducklake
 
 require parquet
 
-test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
 
-test-env DATA_PATH __TEST_DIR__
+test-env DATA_PATH {TEST_DIR}
 
 statement ok
-ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/nested_nulls_data', METADATA_CATALOG 'metadata');
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/nested_nulls_data', METADATA_CATALOG 'metadata');
 
 # ============================================================================
 # Test 1: Validate value_count = num_values - null_count with simple columns
@@ -40,7 +40,7 @@ COPY (
         (NULL, 's'),
         (NULL, NULL)
     ) AS t(a, b)
-) TO '${DATA_PATH}/simple_test.parquet';
+) TO '{DATA_PATH}/simple_test.parquet';
 
 # First, let's see what parquet reports for num_values and null_count
 query IIII
@@ -49,14 +49,14 @@ SELECT
     num_values,
     stats_null_count,
     num_values - stats_null_count as expected_value_count
-FROM parquet_metadata('${DATA_PATH}/simple_test.parquet')
+FROM parquet_metadata('{DATA_PATH}/simple_test.parquet')
 ORDER BY column_id
 ----
 0	5	2	3
 1	5	1	4
 
 statement ok
-CALL ducklake_add_data_files('ducklake', 'simple_test', '${DATA_PATH}/simple_test.parquet')
+CALL ducklake_add_data_files('ducklake', 'simple_test', '{DATA_PATH}/simple_test.parquet')
 
 # Verify value_count equals num_values - null_count (the fix we implemented)
 # Column 'a' (column_id 1): num_values=5, null_count=2 -> value_count should be 3
@@ -143,10 +143,10 @@ COPY (
             'tags': NULL
         }]
     )
-) TO '${DATA_PATH}/nested_test.parquet';
+) TO '{DATA_PATH}/nested_test.parquet';
 
 statement ok
-CALL ducklake_add_data_files('ducklake', 'nested_test', '${DATA_PATH}/nested_test.parquet')
+CALL ducklake_add_data_files('ducklake', 'nested_test', '{DATA_PATH}/nested_test.parquet')
 
 # Verify data can be read
 query I
@@ -193,10 +193,10 @@ COPY (
             END as items
         FROM range(100)
     )
-) TO '${DATA_PATH}/nested_large.parquet';
+) TO '{DATA_PATH}/nested_large.parquet';
 
 statement ok
-CALL ducklake_add_data_files('ducklake', 'nested_test', '${DATA_PATH}/nested_large.parquet')
+CALL ducklake_add_data_files('ducklake', 'nested_test', '{DATA_PATH}/nested_large.parquet')
 
 # Verify all data can be read
 query I

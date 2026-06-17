@@ -6,29 +6,29 @@ require ducklake
 
 require parquet
 
-test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
 
-test-env DATA_PATH __TEST_DIR__
+test-env DATA_PATH {TEST_DIR}
 
 
 statement ok
-ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/ducklake_add_files_type_mismatch')
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/ducklake_add_files_type_mismatch')
 
 # create a bunch of parquet files with different types
 statement ok
-COPY (SELECT true col1) TO '${DATA_PATH}/bool.parquet'
+COPY (SELECT true col1) TO '{DATA_PATH}/bool.parquet'
 
 foreach SIGNED_TYPE tinyint smallint int bigint
 
 statement ok
-COPY (SELECT -1::${SIGNED_TYPE} col1) TO '${DATA_PATH}/${SIGNED_TYPE}.parquet'
+COPY (SELECT -1::{SIGNED_TYPE} col1) TO '{DATA_PATH}/{SIGNED_TYPE}.parquet'
 
 endloop
 
 foreach UNSIGNED_TYPE utinyint usmallint uinteger ubigint
 
 statement ok
-COPY (SELECT 42::${UNSIGNED_TYPE} col1) TO '${DATA_PATH}/${UNSIGNED_TYPE}.parquet'
+COPY (SELECT 42::{UNSIGNED_TYPE} col1) TO '{DATA_PATH}/{UNSIGNED_TYPE}.parquet'
 
 endloop
 
@@ -39,12 +39,12 @@ statement ok
 CREATE OR REPLACE TABLE ducklake.test(col1 BOOLEAN);
 
 statement error
-CALL ducklake_add_data_files('ducklake', 'test', '${DATA_PATH}/int.parquet')
+CALL ducklake_add_data_files('ducklake', 'test', '{DATA_PATH}/int.parquet')
 ----
 BOOLEAN
 
 statement ok
-CALL ducklake_add_data_files('ducklake', 'test', '${DATA_PATH}/bool.parquet')
+CALL ducklake_add_data_files('ducklake', 'test', '{DATA_PATH}/bool.parquet')
 
 query I
 FROM ducklake.test
@@ -61,12 +61,12 @@ statement ok
 CREATE OR REPLACE TABLE ducklake.test(col1 TINYINT);
 
 statement error
-CALL ducklake_add_data_files('ducklake', 'test', '${DATA_PATH}/int.parquet')
+CALL ducklake_add_data_files('ducklake', 'test', '{DATA_PATH}/int.parquet')
 ----
 TINYINT
 
 statement ok
-CALL ducklake_add_data_files('ducklake', 'test', '${DATA_PATH}/tinyint.parquet')
+CALL ducklake_add_data_files('ducklake', 'test', '{DATA_PATH}/tinyint.parquet')
 
 query I
 FROM ducklake.test
@@ -82,7 +82,7 @@ CREATE OR REPLACE TABLE ducklake.test(col1 SMALLINT);
 foreach UNACCEPTED_TYPE bool int bigint uinteger ubigint
 
 statement error
-CALL ducklake_add_data_files('ducklake', 'test', '${DATA_PATH}/${UNACCEPTED_TYPE}.parquet')
+CALL ducklake_add_data_files('ducklake', 'test', '{DATA_PATH}/{UNACCEPTED_TYPE}.parquet')
 ----
 SMALLINT
 
@@ -91,7 +91,7 @@ endloop
 foreach ACCEPTED_TYPE tinyint smallint utinyint
 
 statement ok
-CALL ducklake_add_data_files('ducklake', 'test', '${DATA_PATH}/${ACCEPTED_TYPE}.parquet')
+CALL ducklake_add_data_files('ducklake', 'test', '{DATA_PATH}/{ACCEPTED_TYPE}.parquet')
 
 endloop
 
@@ -111,7 +111,7 @@ CREATE OR REPLACE TABLE ducklake.test(col1 INTEGER);
 foreach UNACCEPTED_TYPE bool bigint uinteger ubigint
 
 statement error
-CALL ducklake_add_data_files('ducklake', 'test', '${DATA_PATH}/${UNACCEPTED_TYPE}.parquet')
+CALL ducklake_add_data_files('ducklake', 'test', '{DATA_PATH}/{UNACCEPTED_TYPE}.parquet')
 ----
 Expected
 
@@ -120,7 +120,7 @@ endloop
 foreach ACCEPTED_TYPE tinyint smallint int utinyint usmallint
 
 statement ok
-CALL ducklake_add_data_files('ducklake', 'test', '${DATA_PATH}/${ACCEPTED_TYPE}.parquet')
+CALL ducklake_add_data_files('ducklake', 'test', '{DATA_PATH}/{ACCEPTED_TYPE}.parquet')
 
 endloop
 
@@ -142,7 +142,7 @@ CREATE OR REPLACE TABLE ducklake.test(col1 BIGINT);
 foreach UNACCEPTED_TYPE bool ubigint
 
 statement error
-CALL ducklake_add_data_files('ducklake', 'test', '${DATA_PATH}/${UNACCEPTED_TYPE}.parquet')
+CALL ducklake_add_data_files('ducklake', 'test', '{DATA_PATH}/{UNACCEPTED_TYPE}.parquet')
 ----
 Expected
 
@@ -151,7 +151,7 @@ endloop
 foreach ACCEPTED_TYPE tinyint smallint int bigint utinyint usmallint uinteger
 
 statement ok
-CALL ducklake_add_data_files('ducklake', 'test', '${DATA_PATH}/${ACCEPTED_TYPE}.parquet')
+CALL ducklake_add_data_files('ducklake', 'test', '{DATA_PATH}/{ACCEPTED_TYPE}.parquet')
 
 endloop
 
@@ -173,12 +173,12 @@ statement ok
 CREATE OR REPLACE TABLE ducklake.test(col1 UTINYINT);
 
 statement error
-CALL ducklake_add_data_files('ducklake', 'test', '${DATA_PATH}/int.parquet')
+CALL ducklake_add_data_files('ducklake', 'test', '{DATA_PATH}/int.parquet')
 ----
 UTINYINT
 
 statement ok
-CALL ducklake_add_data_files('ducklake', 'test', '${DATA_PATH}/utinyint.parquet')
+CALL ducklake_add_data_files('ducklake', 'test', '{DATA_PATH}/utinyint.parquet')
 
 query I
 FROM ducklake.test
@@ -194,7 +194,7 @@ CREATE OR REPLACE TABLE ducklake.test(col1 USMALLINT);
 foreach UNACCEPTED_TYPE bool tinyint smallint int bigint uinteger ubigint
 
 statement error
-CALL ducklake_add_data_files('ducklake', 'test', '${DATA_PATH}/${UNACCEPTED_TYPE}.parquet')
+CALL ducklake_add_data_files('ducklake', 'test', '{DATA_PATH}/{UNACCEPTED_TYPE}.parquet')
 ----
 USMALLINT
 
@@ -203,7 +203,7 @@ endloop
 foreach ACCEPTED_TYPE utinyint usmallint
 
 statement ok
-CALL ducklake_add_data_files('ducklake', 'test', '${DATA_PATH}/${ACCEPTED_TYPE}.parquet')
+CALL ducklake_add_data_files('ducklake', 'test', '{DATA_PATH}/{ACCEPTED_TYPE}.parquet')
 
 endloop
 
@@ -222,7 +222,7 @@ CREATE OR REPLACE TABLE ducklake.test(col1 UINTEGER);
 foreach UNACCEPTED_TYPE bool tinyint smallint int bigint ubigint
 
 statement error
-CALL ducklake_add_data_files('ducklake', 'test', '${DATA_PATH}/${UNACCEPTED_TYPE}.parquet')
+CALL ducklake_add_data_files('ducklake', 'test', '{DATA_PATH}/{UNACCEPTED_TYPE}.parquet')
 ----
 UINTEGER
 
@@ -231,7 +231,7 @@ endloop
 foreach ACCEPTED_TYPE utinyint usmallint uinteger
 
 statement ok
-CALL ducklake_add_data_files('ducklake', 'test', '${DATA_PATH}/${ACCEPTED_TYPE}.parquet')
+CALL ducklake_add_data_files('ducklake', 'test', '{DATA_PATH}/{ACCEPTED_TYPE}.parquet')
 
 endloop
 
@@ -251,7 +251,7 @@ CREATE OR REPLACE TABLE ducklake.test(col1 UBIGINT);
 foreach UNACCEPTED_TYPE bool tinyint smallint int bigint
 
 statement error
-CALL ducklake_add_data_files('ducklake', 'test', '${DATA_PATH}/${UNACCEPTED_TYPE}.parquet')
+CALL ducklake_add_data_files('ducklake', 'test', '{DATA_PATH}/{UNACCEPTED_TYPE}.parquet')
 ----
 UBIGINT
 
@@ -260,7 +260,7 @@ endloop
 foreach ACCEPTED_TYPE utinyint usmallint uinteger ubigint
 
 statement ok
-CALL ducklake_add_data_files('ducklake', 'test', '${DATA_PATH}/${ACCEPTED_TYPE}.parquet')
+CALL ducklake_add_data_files('ducklake', 'test', '{DATA_PATH}/{ACCEPTED_TYPE}.parquet')
 
 endloop
 

@@ -20,7 +20,7 @@ class ColumnList;
 class DuckLakeMetadataManager;
 class FileSystem;
 class TableFilter;
-class DynamicFilter;
+struct DynamicFilterData;
 
 struct ParsedCatalogEntry {
 	string schema;
@@ -40,7 +40,7 @@ public:
 	static ParsedCatalogEntry ParseCatalogEntry(const string &input);
 	static string JoinPath(FileSystem &fs, const string &a, const string &b);
 
-	static DynamicFilter *GetOptionalDynamicFilter(const TableFilter &filter);
+	static shared_ptr<DynamicFilterData> GetOptionalDynamicFilterData(const TableFilter &filter);
 
 	//! Create the data path directory if it does not yet exist
 	static void EnsureDirectoryExists(FileSystem &fs, const string &data_path);
@@ -66,6 +66,10 @@ public:
 	                            idx_t row);
 	//! Throws if any column in the list conflicts with inlined data system columns
 	static void ValidateNoInlinedSystemColumns(const ColumnList &columns, const string &table_name = "");
+
+	//! Copy extension-registered settings from one context onto another. Core engine settings
+	//! are not copied.
+	static void CopyExtensionSettings(ClientContext &from, ClientContext &to);
 };
 
 } // namespace duckdb

@@ -6,13 +6,13 @@ require ducklake
 
 require parquet
 
-test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
 
-test-env DATA_PATH __TEST_DIR__
+test-env DATA_PATH {TEST_DIR}
 
 
 statement ok
-ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/ducklake_inlining_update_files', METADATA_CATALOG 'ducklake_meta', DATA_INLINING_ROW_LIMIT 10)
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/ducklake_inlining_update_files', METADATA_CATALOG 'ducklake_meta', DATA_INLINING_ROW_LIMIT 10)
 
 statement ok
 CREATE TABLE ducklake.test AS SELECT 1 i, 2 j UNION ALL SELECT NULL, 3 UNION ALL SELECT 10, 20
@@ -39,7 +39,7 @@ COMMIT
 query I
 SELECT stats(i) FROM ducklake.test LIMIT 1
 ----
-[Min: 1, Max: 101][Has Null: true, Has No Null: true]
+{'has_no_null': true, 'has_null': true, 'max': 101, 'min': 1}
 
 query IIII
 SELECT rowid, snapshot_id, * FROM ducklake.test ORDER BY rowid
