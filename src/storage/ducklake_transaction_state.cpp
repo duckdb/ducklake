@@ -934,8 +934,11 @@ void DuckLakeTransactionState::RecomputeGlobalStatsAfterRewrite(string &batch_qu
 	    DuckLakeTransaction::ConvertNewGlobalStats(table_id, new_globals));
 }
 
-static idx_t SaturatingSubtract(idx_t value, idx_t decrement) {
-	return decrement > value ? 0 : value - decrement;
+static idx_t SubtractDroppedFileStat(idx_t value, idx_t decrement) {
+	if (decrement > value) {
+		throw InternalException("Dropped DuckLake file stats exceed current table stats");
+	}
+	return value - decrement;
 }
 
 static string DeleteTableColumnStatsSql(TableIndex table_id) {
@@ -951,18 +954,18 @@ bool DuckLakeTransactionState::ApplyDroppedFileStats(
 		return false;
 	}
 	auto &stats = new_stats.stats;
-	stats.record_count = SaturatingSubtract(stats.record_count, entry->second.row_count);
-	stats.table_size_bytes = SaturatingSubtract(stats.table_size_bytes, entry->second.file_size_bytes);
-	attempt_dropped_file_stats.erase(entry);
-	// File drops can make table-level min/max stale. If live rows remain in files we did not drop, the caller
-	// deletes the column-stats rows so later inserts do not rebuild stats from only the newly inserted files.
-	// If the table is now empty, there are no surviving rows, so reset the column stats to NULL in place instead.
+	auto dropped_stats = entry->second;
+	stats.record_count = SubtractDroppedFileStat(stats.record_count, dropped_stats.row_count);
 	bool live_rows_remain = stats.record_count > 0;
-	if (!live_rows_remain) {
+	if (live_rows_remain) {
+		stats.table_size_bytes = SubtractDroppedFileStat(stats.table_size_bytes, dropped_stats.file_size_bytes);
+	} else {
+		stats.table_size_bytes = 0;
 		for (auto &column_stats : stats.column_stats) {
 			column_stats.second = DuckLakeColumnStats(column_stats.second.type);
 		}
 	}
+	attempt_dropped_file_stats.erase(entry);
 	return live_rows_remain;
 }
 
@@ -1000,7 +1003,7 @@ string DuckLakeTransactionState::UpdateStatsForDroppedFiles(
 			current_stats = current_stats_pin.get();
 		}
 		if (!current_stats) {
-			continue;
+			throw InternalException("Missing DuckLake table stats for table with dropped data files");
 		}
 
 		DuckLakeNewGlobalStats new_globals;

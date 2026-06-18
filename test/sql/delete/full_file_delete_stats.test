@@ -110,3 +110,64 @@ query TT
 SELECT min_value, max_value FROM __ducklake_metadata_ducklake.ducklake_table_column_stats WHERE table_id = getvariable('t_id')
 ----
 100	109
+
+statement ok
+CREATE TABLE ducklake.merge_then_drop AS SELECT range::INT id FROM range(50)
+
+statement ok
+INSERT INTO ducklake.merge_then_drop SELECT range::INT id FROM range(50, 100)
+
+statement ok
+INSERT INTO ducklake.merge_then_drop SELECT range::INT id FROM range(100, 150)
+
+statement ok
+INSERT INTO ducklake.merge_then_drop SELECT range::INT id FROM range(150, 200)
+
+statement ok
+SET VARIABLE merge_id = (SELECT table_id FROM __ducklake_metadata_ducklake.ducklake_table WHERE table_name = 'merge_then_drop')
+
+statement ok
+CALL ducklake_merge_adjacent_files('ducklake', 'merge_then_drop')
+
+query I
+DELETE FROM ducklake.merge_then_drop
+----
+200
+
+query III
+SELECT record_count, next_row_id, file_size_bytes FROM __ducklake_metadata_ducklake.ducklake_table_stats WHERE table_id = getvariable('merge_id')
+----
+0	200	0
+
+statement ok
+CREATE TABLE ducklake.rewrite_then_drop AS SELECT range::INT id FROM range(50)
+
+statement ok
+INSERT INTO ducklake.rewrite_then_drop SELECT range::INT id FROM range(50, 100)
+
+statement ok
+INSERT INTO ducklake.rewrite_then_drop SELECT range::INT id FROM range(100, 150)
+
+statement ok
+INSERT INTO ducklake.rewrite_then_drop SELECT range::INT id FROM range(150, 200)
+
+statement ok
+SET VARIABLE rewrite_id = (SELECT table_id FROM __ducklake_metadata_ducklake.ducklake_table WHERE table_name = 'rewrite_then_drop')
+
+query I
+DELETE FROM ducklake.rewrite_then_drop WHERE id % 2 = 0
+----
+100
+
+statement ok
+CALL ducklake_rewrite_data_files('ducklake', 'rewrite_then_drop', delete_threshold => 0)
+
+query I
+DELETE FROM ducklake.rewrite_then_drop
+----
+100
+
+query III
+SELECT record_count, next_row_id, file_size_bytes FROM __ducklake_metadata_ducklake.ducklake_table_stats WHERE table_id = getvariable('rewrite_id')
+----
+0	200	0

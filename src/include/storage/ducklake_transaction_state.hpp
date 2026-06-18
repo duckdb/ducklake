@@ -152,9 +152,7 @@ public:
 	                            optional_ptr<vector<DuckLakeGlobalStatsInfo>> stats,
 	                            const DuckLakeCommitContext &context,
 	                            map<TableIndex, DroppedDataFileStats> &attempt_dropped_file_stats);
-	//! Decrement table-level stats for files dropped this commit. Returns true when live rows remain in the table,
-	//! in which case the caller must delete the table column-stats rows (table-level min/max became unknowable
-	//! without a scan). When the table is emptied, the column stats are reset in place to NULL instead.
+	//! Decrement table-level stats for files dropped this commit; returns true if live rows remain.
 	static bool ApplyDroppedFileStats(TableIndex table_id, DuckLakeNewGlobalStats &new_stats,
 	                                  map<TableIndex, DroppedDataFileStats> &attempt_dropped_file_stats);
 	string UpdateStatsForDroppedFiles(optional_ptr<vector<DuckLakeGlobalStatsInfo>> stats,
