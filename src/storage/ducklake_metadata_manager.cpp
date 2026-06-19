@@ -2368,11 +2368,10 @@ ORDER BY data.begin_snapshot, data.row_id_start, data.data_file_id, del.begin_sn
 				active_delete_count = file.delete_files.back().row_count;
 			}
 			auto total_delete_count = active_delete_count + file.inlined_file_deletions.size();
-			double delete_ratio = 0;
 			if (file.file.row_count > 0) {
-				delete_ratio = static_cast<double>(total_delete_count) / static_cast<double>(file.file.row_count);
+				file.delete_ratio = static_cast<double>(total_delete_count) / static_cast<double>(file.file.row_count);
 			}
-			if (total_delete_count == 0 || delete_ratio < deletion_threshold) {
+			if (total_delete_count == 0 || file.delete_ratio < deletion_threshold) {
 				files.erase_at(file_idx);
 				file_idx--;
 			}

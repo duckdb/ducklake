@@ -295,30 +295,13 @@ void DuckLakeCompactor::GenerateCompactions(DuckLakeTableEntry &table,
 
 		candidates[group].candidate_files.push_back(file_idx);
 	}
-	if (type == CompactionType::REWRITE_DELETES) {
-		// For REWRITE_DELETES, generate one compaction command per partition group
-		for (auto &entry : candidates) {
-			auto &candidate_list = entry.second.candidate_files;
-			if (candidate_list.empty()) {
-				continue;
-			}
-			vector<DuckLakeCompactionFileEntry> partition_files;
-			for (auto &candidate_idx : candidate_list) {
-				partition_files.push_back(std::move(files[candidate_idx]));
-			}
-			auto compaction_command = GenerateCompactionCommand(std::move(partition_files));
-			if (compaction_command) {
-				compactions.push_back(std::move(compaction_command));
-			}
-		}
-		return;
-	}
+
 	// we have gathered all the candidate files per compaction group
 	// iterate over them to generate actual compaction commands
 	uint64_t compacted_files = 0;
 	for (auto &entry : candidates) {
 		auto &candidate_list = entry.second.candidate_files;
-		if (candidate_list.size() <= 1) {
+		if (type == CompactionType::MERGE_ADJACENT_TABLES && candidate_list.size() <= 1) {
 			// we need at least 2 files to consider a merge
 			continue;
 		}
@@ -327,15 +310,17 @@ void DuckLakeCompactor::GenerateCompactions(DuckLakeTableEntry &table,
 			idx_t current_file_size = 0;
 			idx_t compaction_idx;
 			for (compaction_idx = start_idx; compaction_idx < candidate_list.size(); compaction_idx++) {
-				if (current_file_size >= target_file_size) {
-					// we hit the target size already - stop
-					break;
-				}
 				auto candidate_idx = candidate_list[compaction_idx];
 				auto &candidate = files[candidate_idx];
 				idx_t file_size = candidate.file.data.file_size_bytes;
-				if (file_size >= target_file_size) {
-					// don't consider merging if the file is larger than the target size
+				if (type == CompactionType::REWRITE_DELETES) {
+					// estimate size of remaining rows
+					file_size *= (1 - candidate.delete_ratio);
+				}
+				const int64_t current_size_diff = NumericCast<int64_t>(current_file_size) - target_file_size;
+				const int64_t merged_size_diff = NumericCast<int64_t>(current_file_size + file_size) - target_file_size;
+				if (current_file_size > 0 && std::abs(merged_size_diff) >= std::abs(current_size_diff)) {
+					// adding this file would move away from target_file_size - stop
 					break;
 				}
 				// this file can be compacted along with the neighbors
@@ -344,8 +329,8 @@ void DuckLakeCompactor::GenerateCompactions(DuckLakeTableEntry &table,
 
 			if (start_idx < compaction_idx) {
 				idx_t compaction_file_count = compaction_idx - start_idx;
-				if (compaction_file_count == 1) {
-					// If we only have one file to compact, we have nothing to compact
+				if (type == CompactionType::MERGE_ADJACENT_TABLES && compaction_file_count == 1) {
+					// If we only have one file to merge, we have nothing to compact
 					compacted_files++;
 					if (compacted_files >= options.max_files) {
 						break;
@@ -360,11 +345,11 @@ void DuckLakeCompactor::GenerateCompactions(DuckLakeTableEntry &table,
 				start_idx += compaction_file_count - 1;
 			}
 			compacted_files++;
-			if (compacted_files >= options.max_files) {
+			if (type == CompactionType::MERGE_ADJACENT_TABLES && compacted_files >= options.max_files) {
 				break;
 			}
 		}
-		if (compacted_files >= options.max_files) {
+		if (type == CompactionType::MERGE_ADJACENT_TABLES && compacted_files >= options.max_files) {
 			break;
 		}
 	}
