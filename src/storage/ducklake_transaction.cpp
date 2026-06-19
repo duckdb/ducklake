@@ -26,6 +26,7 @@
 #include "duckdb/common/printer.hpp"
 #include "duckdb/logging/logger.hpp"
 #include "storage/ducklake_log_type.hpp"
+#include "duckdb/main/client_context.hpp"
 #include "duckdb/main/settings.hpp"
 #include "duckdb/main/client_config.hpp"
 
