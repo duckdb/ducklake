@@ -101,6 +101,41 @@ static void ProjectAndCastForCopy(ClientContext &context, DataChunk &input_chunk
 	cast_chunk.SetChildCardinality(chunk_ref.get().size());
 }
 
+// Run a chunk through the optional inline-data operator or send it straight to the copy sink.
+static void SinkInlineOrCopy(ExecutionContext &context, DataChunk &execute_input,
+                             optional_ptr<DuckLakeInlineData> inline_data_op, PhysicalOperator &physical_copy,
+                             optional_ptr<GlobalOperatorState> inline_data_gstate,
+                             optional_ptr<OperatorState> inline_data_lstate, DataChunk &inline_output,
+                             ExpressionExecutor *expression_executor, DataChunk &projected_chunk, DataChunk &cast_chunk,
+                             LocalSinkState &copy_sink_state, InterruptState &interrupt_state) {
+	
+	auto sink_to_copy = [&](DataChunk &chunk) {
+		ProjectAndCastForCopy(context.client, chunk, physical_copy, expression_executor, projected_chunk, cast_chunk);
+		OperatorSinkInput copy_input {*physical_copy.sink_state, copy_sink_state, interrupt_state};
+		physical_copy.Sink(context, cast_chunk, copy_input);
+	};
+
+	// if we have an inline data operator, we need to execute through it, it will either inline it or pass it through to the CopyToFile sink
+	if (inline_data_op) {
+		inline_output.Reset();
+		auto result = 
+			  inline_data_op->Execute(context, execute_input, inline_output, *inline_data_gstate, *inline_data_lstate);
+		if (inline_output.size() > 0) {
+			sink_to_copy(inline_output);
+		}
+		while (result == OperatorResultType::HAVE_MORE_OUTPUT) {
+			inline_output.Reset();
+			result = 
+					inline_data_op->Execute(context, execute_input, inline_output, *inline_data_gstate, *inline_data_lstate);
+			if (inline_output.size() > 0) {
+				sink_to_copy(inline_output);
+			}
+		}
+	} else {
+		sink_to_copy(execute_input);
+	}
+}
+
 //===--------------------------------------------------------------------===//
 // Sink
 //===--------------------------------------------------------------------===//
@@ -125,54 +160,28 @@ SinkResultType DuckLakeMergeInsert::Sink(ExecutionContext &context, DataChunk &c
 	auto &lstate = input.local_state.Cast<DuckLakeMergeIntoLocalState>();
 
 	DataChunk &execute_input = chunk;
-	// if we have an inline data operator, we need to execute through it, it will either inline it or pass it through to the CopyToFile sink
-	if (inline_data_op) {
-		auto &inline_output = lstate.inline_output;
-		inline_output.Reset();
-		auto result = inline_data_op->Execute(context, execute_input, inline_output, *gstate.inline_data_gstate,
-		                                      *lstate.inline_data_lstate);
-		if (inline_output.size() > 0) {
-			ProjectAndCastForCopy(context.client, inline_output, physical_copy, lstate.expression_executor.get(),
-			                      lstate.projected_chunk, lstate.cast_chunk);
-			OperatorSinkInput copy_input {*physical_copy.sink_state, *lstate.copy_sink_state, input.interrupt_state};
-			physical_copy.Sink(context, lstate.cast_chunk, copy_input);
-		}
-		while (result == OperatorResultType::HAVE_MORE_OUTPUT) {
-			inline_output.Reset();
-			result = inline_data_op->Execute(context, execute_input, inline_output, *gstate.inline_data_gstate,
-			                                 *lstate.inline_data_lstate);
-			if (inline_output.size() > 0) {
-				ProjectAndCastForCopy(context.client, inline_output, physical_copy, lstate.expression_executor.get(),
-                              lstate.projected_chunk, lstate.cast_chunk);
-				OperatorSinkInput copy_input {*physical_copy.sink_state, *lstate.copy_sink_state, input.interrupt_state};
-				physical_copy.Sink(context, lstate.cast_chunk, copy_input);
-			}
-		}
-	} else {
-		ProjectAndCastForCopy(context.client, execute_input, physical_copy, lstate.expression_executor.get(),
-		                      lstate.projected_chunk, lstate.cast_chunk);
-		OperatorSinkInput sink_input {*physical_copy.sink_state, *lstate.copy_sink_state, input.interrupt_state};
-		physical_copy.Sink(context, lstate.cast_chunk, sink_input);
-	}
+	SinkInlineOrCopy(context, execute_input, inline_data_op, physical_copy, gstate.inline_data_gstate.get(),
+	                 lstate.inline_data_lstate.get(), lstate.inline_output, lstate.expression_executor.get(),
+	                 lstate.projected_chunk, lstate.cast_chunk, *lstate.copy_sink_state, input.interrupt_state);
 	return SinkResultType::NEED_MORE_INPUT;
 }
 
 SinkCombineResultType DuckLakeMergeInsert::Combine(ExecutionContext &context, OperatorSinkCombineInput &input) const {
 	auto &gstate = input.global_state.Cast<DuckLakeMergeIntoGlobalState>();
-	auto &local_state = input.local_state.Cast<DuckLakeMergeIntoLocalState>();
+	auto &lstate = input.local_state.Cast<DuckLakeMergeIntoLocalState>();
 
 	// drain inline data
 	if (inline_data_op) {
-		auto &inline_output = local_state.inline_output;
+		auto &inline_output = lstate.inline_output;
 		while (true) {
 			inline_output.Reset();
 			auto fresult = inline_data_op->FinalExecute(context, inline_output, *gstate.inline_data_gstate,
-			                                            *local_state.inline_data_lstate);
+			                                            *lstate.inline_data_lstate);
 			if (inline_output.size() > 0) {
-				ProjectAndCastForCopy(context.client, inline_output, physical_copy, local_state.expression_executor.get(),
-				                      local_state.projected_chunk, local_state.cast_chunk);
-				OperatorSinkInput copy_input {*physical_copy.sink_state, *local_state.copy_sink_state, input.interrupt_state};
-				physical_copy.Sink(context, local_state.cast_chunk, copy_input);
+				ProjectAndCastForCopy(context.client, inline_output, physical_copy, lstate.expression_executor.get(),
+				                      lstate.projected_chunk, lstate.cast_chunk);
+				OperatorSinkInput copy_input {*physical_copy.sink_state, *lstate.copy_sink_state, input.interrupt_state};
+				physical_copy.Sink(context, lstate.cast_chunk, copy_input);
 			}
 			if (fresult == OperatorFinalizeResultType::FINISHED) {
 				break;
@@ -180,8 +189,9 @@ SinkCombineResultType DuckLakeMergeInsert::Combine(ExecutionContext &context, Op
 		}
 	}
 
-	OperatorSinkCombineInput combine_input {*physical_copy.sink_state, *local_state.copy_sink_state, input.interrupt_state};
-	return physical_copy.Combine(context, combine_input);
+	OperatorSinkCombineInput combine_input {*physical_copy.sink_state, *lstate.copy_sink_state, input.interrupt_state};
+	physical_copy.Combine(context, combine_input);
+	return SinkCombineResultType::FINISHED;
 }
 
 
@@ -426,36 +436,9 @@ SinkResultType DuckLakeMergeUpdate::Sink(ExecutionContext &context, DataChunk &c
 	}
 
 	DataChunk &execute_input = lstate.update_output;
-	// if we have an inline data operator, we need to execute through it, it will either inline it or pass it
-	// through to the CopyToFile sink
-	if (inline_data_op) {
-		auto &inline_output = lstate.inline_output;
-		inline_output.Reset();
-		auto result = inline_data_op->Execute(context, execute_input, inline_output, *gstate.inline_data_gstate,
-		                                      *lstate.inline_data_lstate);
-		if (inline_output.size() > 0) {
-			ProjectAndCastForCopy(context.client, inline_output, physical_copy, lstate.expression_executor.get(),
-			                      lstate.projected_chunk, lstate.cast_chunk);
-			OperatorSinkInput copy_input {*physical_copy.sink_state, *lstate.copy_sink_state, input.interrupt_state};
-			physical_copy.Sink(context, lstate.cast_chunk, copy_input);
-		}
-		while (result == OperatorResultType::HAVE_MORE_OUTPUT) {
-			inline_output.Reset();
-			result = inline_data_op->Execute(context, execute_input, inline_output, *gstate.inline_data_gstate,
-			                                 *lstate.inline_data_lstate);
-			if (inline_output.size() > 0) {
-				ProjectAndCastForCopy(context.client, inline_output, physical_copy, lstate.expression_executor.get(),
-                              lstate.projected_chunk, lstate.cast_chunk);
-				OperatorSinkInput copy_input {*physical_copy.sink_state, *lstate.copy_sink_state, input.interrupt_state};
-				physical_copy.Sink(context, lstate.cast_chunk, copy_input);
-			}
-		}
-	} else {
-		ProjectAndCastForCopy(context.client, execute_input, physical_copy, lstate.expression_executor.get(),
-				                  lstate.projected_chunk, lstate.cast_chunk);
-		OperatorSinkInput sink_input {*physical_copy.sink_state, *lstate.copy_sink_state, input.interrupt_state};
-		physical_copy.Sink(context, lstate.cast_chunk, sink_input);
-	}
+	SinkInlineOrCopy(context, execute_input, inline_data_op, physical_copy, gstate.inline_data_gstate.get(),
+	                 lstate.inline_data_lstate.get(), lstate.inline_output, lstate.expression_executor.get(),
+	                 lstate.projected_chunk, lstate.cast_chunk, *lstate.copy_sink_state, input.interrupt_state);
 	return SinkResultType::NEED_MORE_INPUT;
 }
 
