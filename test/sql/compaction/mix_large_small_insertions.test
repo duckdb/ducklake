@@ -16,7 +16,7 @@ ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/duck
 
 # set target file size very small
 statement ok
-CALL ducklake.set_option('target_file_size', '2KB');
+CALL ducklake.set_option('target_file_size', '4KB');
 
 # snapshot 1
 statement ok
@@ -84,10 +84,10 @@ SELECT COUNT(*) FROM GLOB('{DATA_PATH}/ducklake_compaction_mix_files/**/*.parque
 7
 
 # now compact and cleanup
-query II
-SELECT table_name, files_created FROM ducklake_merge_adjacent_files('ducklake')
+query III
+SELECT table_name, files_processed, files_created FROM ducklake_merge_adjacent_files('ducklake')
 ----
-tbl	1
+tbl	5	1
 
 statement ok
 CALL ducklake_cleanup_old_files('ducklake', cleanup_all => true);
