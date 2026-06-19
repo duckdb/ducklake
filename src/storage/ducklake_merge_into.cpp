@@ -101,50 +101,16 @@ static void ProjectAndCastForCopy(ClientContext &context, DataChunk &input_chunk
 	cast_chunk.SetChildCardinality(chunk_ref.get().size());
 }
 
-// Run a chunk through the optional inline-data operator or send it straight to the copy sink.
-static void SinkInlineOrCopy(ExecutionContext &context, DataChunk &execute_input,
-                             optional_ptr<DuckLakeInlineData> inline_data_op, PhysicalOperator &physical_copy,
-                             optional_ptr<GlobalOperatorState> inline_data_gstate,
-                             optional_ptr<OperatorState> inline_data_lstate, DataChunk &inline_output,
-                             ExpressionExecutor *expression_executor, DataChunk &projected_chunk, DataChunk &cast_chunk,
-                             LocalSinkState &copy_sink_state, InterruptState &interrupt_state) {
-	
-	auto sink_to_copy = [&](DataChunk &chunk) {
-		ProjectAndCastForCopy(context.client, chunk, physical_copy, expression_executor, projected_chunk, cast_chunk);
-		OperatorSinkInput copy_input {*physical_copy.sink_state, copy_sink_state, interrupt_state};
-		physical_copy.Sink(context, cast_chunk, copy_input);
-	};
-
-	// if we have an inline data operator, we need to execute through it, it will either inline it or pass it through to the CopyToFile sink
-	if (inline_data_op) {
-		inline_output.Reset();
-		auto result = 
-			  inline_data_op->Execute(context, execute_input, inline_output, *inline_data_gstate, *inline_data_lstate);
-		if (inline_output.size() > 0) {
-			sink_to_copy(inline_output);
-		}
-		while (result == OperatorResultType::HAVE_MORE_OUTPUT) {
-			inline_output.Reset();
-			result = 
-					inline_data_op->Execute(context, execute_input, inline_output, *inline_data_gstate, *inline_data_lstate);
-			if (inline_output.size() > 0) {
-				sink_to_copy(inline_output);
-			}
-		}
-	} else {
-		sink_to_copy(execute_input);
-	}
-}
-
 //===--------------------------------------------------------------------===//
 // Sink
 //===--------------------------------------------------------------------===//
-class DuckLakeMergeIntoGlobalState : public GlobalSinkState {
+// Shared sink state for the merge operators that copy/inline rows (DuckLakeMergeInsert and DuckLakeMergeUpdate).
+class DuckLakeMergeSinkGlobalState : public GlobalSinkState {
 public:
 	unique_ptr<GlobalOperatorState> inline_data_gstate;
 };
 
-class DuckLakeMergeIntoLocalState : public LocalSinkState {
+class DuckLakeMergeSinkLocalState : public LocalSinkState {
 public:
 	unique_ptr<LocalSinkState> copy_sink_state;
 	unique_ptr<OperatorState> inline_data_lstate;
@@ -155,26 +121,57 @@ public:
 	unique_ptr<ExpressionExecutor> expression_executor;
 };
 
-SinkResultType DuckLakeMergeInsert::Sink(ExecutionContext &context, DataChunk &chunk, OperatorSinkInput &input) const {
-	auto &gstate = input.global_state.Cast<DuckLakeMergeIntoGlobalState>();
-	auto &lstate = input.local_state.Cast<DuckLakeMergeIntoLocalState>();
+// Run a chunk through the optional inline-data operator or send it straight to the copy sink.
+static void SinkInlineOrCopy(ExecutionContext &context, DataChunk &execute_input,
+                             optional_ptr<DuckLakeInlineData> inline_data_op, PhysicalOperator &physical_copy,
+                             DuckLakeMergeSinkGlobalState &gstate, DuckLakeMergeSinkLocalState &lstate,
+                             InterruptState &interrupt_state) {
+	auto sink_to_copy = [&](DataChunk &chunk) {
+		ProjectAndCastForCopy(context.client, chunk, physical_copy, lstate.expression_executor.get(),
+		                      lstate.projected_chunk, lstate.cast_chunk);
+		OperatorSinkInput copy_input {*physical_copy.sink_state, *lstate.copy_sink_state, interrupt_state};
+		physical_copy.Sink(context, lstate.cast_chunk, copy_input);
+	};
 
-	DataChunk &execute_input = chunk;
-	SinkInlineOrCopy(context, execute_input, inline_data_op, physical_copy, gstate.inline_data_gstate.get(),
-	                 lstate.inline_data_lstate.get(), lstate.inline_output, lstate.expression_executor.get(),
-	                 lstate.projected_chunk, lstate.cast_chunk, *lstate.copy_sink_state, input.interrupt_state);
+	// run the chunk through the inline data operator - it inlines what fits and passes the rest to the copy sink
+	if (inline_data_op) {
+		lstate.inline_output.Reset();
+		auto result = inline_data_op->Execute(context, execute_input, lstate.inline_output, *gstate.inline_data_gstate,
+																					*lstate.inline_data_lstate);
+		if (lstate.inline_output.size() > 0) {
+			sink_to_copy(lstate.inline_output);
+		}
+		while (result == OperatorResultType::HAVE_MORE_OUTPUT) {
+			lstate.inline_output.Reset();
+			result = inline_data_op->Execute(context, execute_input, lstate.inline_output, *gstate.inline_data_gstate,
+																			 *lstate.inline_data_lstate);
+			if (lstate.inline_output.size() > 0) {
+				sink_to_copy(lstate.inline_output);
+			}
+		}
+	} else {
+		sink_to_copy(execute_input);
+		return;
+	}
+}
+
+SinkResultType DuckLakeMergeInsert::Sink(ExecutionContext &context, DataChunk &chunk, OperatorSinkInput &input) const {
+	auto &gstate = input.global_state.Cast<DuckLakeMergeSinkGlobalState>();
+	auto &lstate = input.local_state.Cast<DuckLakeMergeSinkLocalState>();
+
+	SinkInlineOrCopy(context, chunk, inline_data_op, physical_copy, gstate, lstate, input.interrupt_state);
 	return SinkResultType::NEED_MORE_INPUT;
 }
 
 SinkCombineResultType DuckLakeMergeInsert::Combine(ExecutionContext &context, OperatorSinkCombineInput &input) const {
-	auto &gstate = input.global_state.Cast<DuckLakeMergeIntoGlobalState>();
-	auto &lstate = input.local_state.Cast<DuckLakeMergeIntoLocalState>();
+	auto &gstate = input.global_state.Cast<DuckLakeMergeSinkGlobalState>();
+	auto &lstate = input.local_state.Cast<DuckLakeMergeSinkLocalState>();
 
 	// drain inline data
 	if (inline_data_op) {
 		auto &inline_output = lstate.inline_output;
 		while (true) {
-			inline_output.Reset();
+			lstate.inline_output.Reset();
 			auto fresult = inline_data_op->FinalExecute(context, inline_output, *gstate.inline_data_gstate,
 			                                            *lstate.inline_data_lstate);
 			if (inline_output.size() > 0) {
@@ -292,7 +289,7 @@ static SinkFinalizeType FinalizeCopyToInsert(Pipeline &pipeline, Event &event, C
 SinkFinalizeType DuckLakeMergeInsert::Finalize(Pipeline &pipeline, Event &event, ClientContext &context,
                                                OperatorSinkFinalizeInput &input) const {
 	if (inline_data_op) {
-		auto &gstate = input.global_state.Cast<DuckLakeMergeIntoGlobalState>();
+		auto &gstate = input.global_state.Cast<DuckLakeMergeSinkGlobalState>();
 		OperatorFinalizeInput inline_finalize {*gstate.inline_data_gstate, input.interrupt_state};
 		inline_data_op->OperatorFinalize(pipeline, event, context, inline_finalize);
 	}
@@ -301,7 +298,7 @@ SinkFinalizeType DuckLakeMergeInsert::Finalize(Pipeline &pipeline, Event &event,
 }
 
 unique_ptr<GlobalSinkState> DuckLakeMergeInsert::GetGlobalSinkState(ClientContext &context) const {
-	auto result = make_uniq<DuckLakeMergeIntoGlobalState>();
+	auto result = make_uniq<DuckLakeMergeSinkGlobalState>();
 	if (inline_data_op) {
 		result->inline_data_gstate = inline_data_op->GetGlobalOperatorState(context);
 	}
@@ -310,7 +307,7 @@ unique_ptr<GlobalSinkState> DuckLakeMergeInsert::GetGlobalSinkState(ClientContex
 }
 
 unique_ptr<LocalSinkState> DuckLakeMergeInsert::GetLocalSinkState(ExecutionContext &context) const {
-	auto result = make_uniq<DuckLakeMergeIntoLocalState>();
+	auto result = make_uniq<DuckLakeMergeSinkLocalState>();
 	result->copy_sink_state = physical_copy.GetLocalSinkState(context);
 	if (inline_data_op) {
 		result->inline_data_lstate = inline_data_op->GetOperatorState(context);
@@ -374,23 +371,15 @@ public:
 	                          OperatorSinkFinalizeInput &input) const override;
 };
 
-class DuckLakeMergeUpdateGlobalState : public GlobalSinkState {
+class DuckLakeMergeUpdateGlobalState : public DuckLakeMergeSinkGlobalState {
 public:
 	unique_ptr<GlobalOperatorState> update_gstate;
-	unique_ptr<GlobalOperatorState> inline_data_gstate;
 };
 
-class DuckLakeMergeUpdateLocalState : public LocalSinkState {
+class DuckLakeMergeUpdateLocalState : public DuckLakeMergeSinkLocalState {
 public:
 	unique_ptr<OperatorState> update_lstate;
-	unique_ptr<OperatorState> inline_data_lstate;
-	unique_ptr<LocalSinkState> copy_sink_state;
 	DataChunk update_output;
-	DataChunk inline_output;
-	//! Projection and cast chunks for partition columns (same pattern as DuckLakeMergeInsert)
-	unique_ptr<ExpressionExecutor> expression_executor;
-	DataChunk projected_chunk;
-	DataChunk cast_chunk;
 };
 
 unique_ptr<GlobalSinkState> DuckLakeMergeUpdate::GetGlobalSinkState(ClientContext &context) const {
@@ -435,10 +424,7 @@ SinkResultType DuckLakeMergeUpdate::Sink(ExecutionContext &context, DataChunk &c
 		return SinkResultType::NEED_MORE_INPUT;
 	}
 
-	DataChunk &execute_input = lstate.update_output;
-	SinkInlineOrCopy(context, execute_input, inline_data_op, physical_copy, gstate.inline_data_gstate.get(),
-	                 lstate.inline_data_lstate.get(), lstate.inline_output, lstate.expression_executor.get(),
-	                 lstate.projected_chunk, lstate.cast_chunk, *lstate.copy_sink_state, input.interrupt_state);
+	SinkInlineOrCopy(context, lstate.update_output, inline_data_op, physical_copy, gstate, lstate, input.interrupt_state);
 	return SinkResultType::NEED_MORE_INPUT;
 }
 
@@ -450,7 +436,7 @@ SinkCombineResultType DuckLakeMergeUpdate::Combine(ExecutionContext &context, Op
 	if (inline_data_op) {
 		auto &inline_output = lstate.inline_output;
 		while (true) {
-			inline_output.Reset();
+			lstate.inline_output.Reset();
 			auto fresult = inline_data_op->FinalExecute(context, inline_output, *gstate.inline_data_gstate,
 			                                            *lstate.inline_data_lstate);
 			if (inline_output.size() > 0) {
