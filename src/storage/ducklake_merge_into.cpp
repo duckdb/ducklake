@@ -578,8 +578,7 @@ static unique_ptr<MergeIntoOperator> DuckLakePlanMergeIntoAction(DuckLakeCatalog
 		optional_ptr<DuckLakeInlineData> inline_data_op;
 		idx_t data_inlining_row_limit = catalog.GetInliningLimit(context, ducklake_table);
 		if (data_inlining_row_limit > 0) {
-			// the inlined chunks hold only the table's physical columns - the generated partition columns are
-			// only projected (through the extra projections) for data that is passed through to the copy
+			// slice to just the physical columns, because the inlined data does not have the partition columns
 			auto &expected_types = physical_copy.Cast<PhysicalCopyToFile>().expected_types;
 			vector<LogicalType> inline_types(expected_types.begin(),
 			                                 expected_types.begin() +
