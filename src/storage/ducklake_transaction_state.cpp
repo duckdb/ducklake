@@ -962,7 +962,10 @@ bool DuckLakeTransactionState::ApplyDroppedFileStats(
 	} else {
 		stats.table_size_bytes = 0;
 		for (auto &column_stats : stats.column_stats) {
-			column_stats.second = DuckLakeColumnStats(column_stats.second.type);
+			auto reset = DuckLakeColumnStats(column_stats.second.type);
+			// Let same-commit inserts seed min/max after the table was emptied.
+			reset.any_valid = false;
+			column_stats.second = std::move(reset);
 		}
 	}
 	attempt_dropped_file_stats.erase(entry);

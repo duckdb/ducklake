@@ -1,0 +1,64 @@
+# name: test/sql/delete/full_file_delete_stats_reinsert.test
+# description: Dropping every file then re-inserting in the same transaction keeps column stats accurate
+# group: [delete]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/full_file_delete_stats_reinsert', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE ducklake.t AS SELECT range::INT id FROM range(100)
+
+statement ok
+SET VARIABLE t_id = (SELECT table_id FROM __ducklake_metadata_ducklake.ducklake_table WHERE table_name = 't')
+
+# Same transaction: drop the whole file (empties the table) then insert a disjoint range 200..209.
+statement ok
+BEGIN
+
+statement ok
+DELETE FROM ducklake.t
+
+statement ok
+INSERT INTO ducklake.t SELECT range::INT id FROM range(200, 210)
+
+statement ok
+COMMIT
+
+query I
+SELECT record_count FROM __ducklake_metadata_ducklake.ducklake_table_stats WHERE table_id = getvariable('t_id')
+----
+10
+
+# The column stats reflect the re-inserted rows, not NULL: the dropped file's min/max must not erase them.
+query TT
+SELECT min_value, max_value FROM __ducklake_metadata_ducklake.ducklake_table_column_stats WHERE table_id = getvariable('t_id')
+----
+200	209
+
+# A narrower insert in a separate transaction widens the min but keeps the max. Table holds {50..59, 200..209}.
+statement ok
+INSERT INTO ducklake.t SELECT range::INT id FROM range(50, 60)
+
+# Point lookup that relies on min/max pruning: row 205 exists and must not be pruned away.
+query I
+SELECT COUNT(*) FROM ducklake.t WHERE id = 205
+----
+1
+
+query I
+SELECT COUNT(*) FROM ducklake.t WHERE id > 100
+----
+10
+
+query I
+SELECT COUNT(*) FROM ducklake.t
+----
+20
