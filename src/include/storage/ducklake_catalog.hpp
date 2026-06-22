@@ -221,6 +221,10 @@ public:
 	bool SupportsRowGroupCount() const {
 		return ducklake_version >= DuckLakeVersion::V1_1_DEV_1;
 	}
+	//! Whether the metadata schema has view column tags (added in 1.1-dev2)
+	bool SupportsViewColumnTags() const {
+		return ducklake_version >= DuckLakeVersion::V1_1_DEV_2;
+	}
 
 	void OnDetach(ClientContext &context) override;
 

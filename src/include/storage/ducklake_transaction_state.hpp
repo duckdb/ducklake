@@ -74,13 +74,12 @@ struct DuckLakeCommitContext {
 	std::function<shared_ptr<DuckLakeTableStats>(TableIndex)> get_table_stats;
 	//! Top-level columns of a table at the commit snapshot — needed by stats-refresh to iterate
 	//! columns and look up types when merging per-file stats.
-	std::function<vector<DuckLakeColumnSchemaEntry>(TableIndex)> get_table_column_schema =
-	    [](TableIndex) {
-		    return vector<DuckLakeColumnSchemaEntry>{};
-	    };
+	std::function<vector<DuckLakeColumnSchemaEntry>(TableIndex)> get_table_column_schema = [](TableIndex) {
+		return vector<DuckLakeColumnSchemaEntry> {};
+	};
 	//! Names of the inlined-data tables associated with a table id at the commit snapshot.
 	std::function<vector<string>(TableIndex)> get_inlined_table_names = [](TableIndex) {
-		return vector<string>{};
+		return vector<string> {};
 	};
 	//! Net (delete-adjusted) row count of a table's regular data files.
 	std::function<idx_t(TableIndex)> get_net_data_file_row_count = [](TableIndex) {
@@ -105,6 +104,8 @@ struct DuckLakeCommitContext {
 	bool skip_drop_empty_inlined = false;
 	//! Whether the metadata schema has the row_group_count columns (DuckLake >= 1.1).
 	bool write_row_group_count = false;
+	//! Whether the metadata schema has view column tags (DuckLake >= 1.1-dev2).
+	bool load_view_column_tags = false;
 };
 
 //! Holds the per-transaction mutable change state (new/dropped/renamed catalog entries, local file

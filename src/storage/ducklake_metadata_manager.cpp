@@ -246,8 +246,6 @@ string DuckLakeMetadataManager::GetCreateTableStatements() {
 	                     "end_snapshot BIGINT, key VARCHAR, value VARCHAR);");
 	statements.push_back("CREATE TABLE {METADATA_CATALOG}.ducklake_column_tag(table_id BIGINT, column_id BIGINT, "
 	                     "begin_snapshot BIGINT, end_snapshot BIGINT, key VARCHAR, value VARCHAR);");
-	statements.push_back("CREATE TABLE {METADATA_CATALOG}.ducklake_view_column_tag(view_id BIGINT, column_name "
-	                     "VARCHAR, begin_snapshot BIGINT, end_snapshot BIGINT, key VARCHAR, value VARCHAR);");
 	statements.push_back(GetDataFileTableStatement());
 	statements.push_back("CREATE TABLE {METADATA_CATALOG}.ducklake_file_column_stats(data_file_id BIGINT, table_id "
 	                     "BIGINT, column_id BIGINT, column_size_bytes BIGINT, value_count BIGINT, null_count BIGINT, "
@@ -695,12 +693,12 @@ DuckLakeCatalogInfo DuckLakeMetadataManager::GetCatalogForSnapshot(DuckLakeSnaps
 	auto &ducklake_catalog = transaction.GetCatalog();
 	return BuildCatalogForSnapshot(
 	    snapshot, [this](DuckLakeSnapshot s, string q) { return Query(s, q); }, ducklake_catalog.DataPath(),
-	    ducklake_catalog.Separator());
+	    ducklake_catalog.Separator(), ducklake_catalog.SupportsViewColumnTags());
 }
 
 DuckLakeCatalogInfo DuckLakeMetadataManager::BuildCatalogForSnapshot(
     DuckLakeSnapshot snapshot, const std::function<unique_ptr<QueryResult>(DuckLakeSnapshot, string)> &query_executor,
-    const string &base_data_path, const string &separator) {
+    const string &base_data_path, const string &separator, bool load_view_column_tags) {
 	DuckLakeCatalogInfo catalog;
 	// load the schema information
 	auto result = query_executor(snapshot, R"(
@@ -863,7 +861,8 @@ ORDER BY table_id, parent_column NULLS FIRST, column_order
 		}
 	}
 	// load view information
-	result = query_executor(snapshot, StringUtil::Format(R"(
+	if (load_view_column_tags) {
+		result = query_executor(snapshot, StringUtil::Format(R"(
 SELECT view_id, view_uuid, schema_id, view_name, dialect, sql, column_aliases,
 	(
 		SELECT %s
@@ -880,8 +879,23 @@ SELECT view_id, view_uuid, schema_id, view_name, dialect, sql, column_aliases,
 FROM {METADATA_CATALOG}.ducklake_view view
 WHERE {SNAPSHOT_ID} >= begin_snapshot AND ({SNAPSHOT_ID} < view.end_snapshot OR view.end_snapshot IS NULL)
 )",
-	                                                        ListAggregation(TAG_FIELDS),
-	                                                        ListAggregation(VIEW_COLUMN_TAG_FIELDS)));
+		                                                     ListAggregation(TAG_FIELDS),
+		                                                     ListAggregation(VIEW_COLUMN_TAG_FIELDS)));
+	} else {
+		result = query_executor(snapshot, StringUtil::Format(R"(
+SELECT view_id, view_uuid, schema_id, view_name, dialect, sql, column_aliases,
+	(
+		SELECT %s
+		FROM {METADATA_CATALOG}.ducklake_tag tag
+		WHERE object_id=view_id AND
+		      {SNAPSHOT_ID} >= tag.begin_snapshot AND ({SNAPSHOT_ID} < tag.end_snapshot OR tag.end_snapshot IS NULL)
+	) AS tag,
+	NULL AS view_column_tags
+FROM {METADATA_CATALOG}.ducklake_view view
+WHERE {SNAPSHOT_ID} >= begin_snapshot AND ({SNAPSHOT_ID} < view.end_snapshot OR view.end_snapshot IS NULL)
+)",
+		                                                     ListAggregation(TAG_FIELDS)));
+	}
 	if (result->HasError()) {
 		result->GetErrorObject().Throw("Failed to get partition information from DuckLake: ");
 	}

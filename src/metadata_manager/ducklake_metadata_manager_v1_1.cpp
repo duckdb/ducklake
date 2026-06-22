@@ -24,6 +24,14 @@ string DuckLakeMetadataManagerV1_1<Base>::GetDeleteFileTableStatement() {
 }
 
 template <typename Base>
+string DuckLakeMetadataManagerV1_1<Base>::GetCreateTableStatements() {
+	auto result = Base::GetCreateTableStatements();
+	result += "CREATE TABLE {METADATA_CATALOG}.ducklake_view_column_tag(view_id BIGINT, column_name VARCHAR, "
+	          "begin_snapshot BIGINT, end_snapshot BIGINT, key VARCHAR, value VARCHAR);\n";
+	return result;
+}
+
+template <typename Base>
 string DuckLakeMetadataManagerV1_1<Base>::GetVersionString() {
 	constexpr auto VERSION = DuckLakeVersion::V1_1_DEV_2;
 	return DuckLakeVersionToString(VERSION);
