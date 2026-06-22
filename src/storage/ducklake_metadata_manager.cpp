@@ -2487,11 +2487,13 @@ string DuckLakeMetadataManager::DropTables(const set<TableIndex> &ids, bool rena
 	return batch_query;
 }
 
-string DuckLakeMetadataManager::DropViews(const set<TableIndex> &ids, bool renamed) {
+string DuckLakeMetadataManager::DropViews(const set<TableIndex> &ids, bool renamed, bool drop_view_column_tags) {
 	string batch_query = FlushDrop("ducklake_view", "view_id", ids);
 	if (!renamed) {
 		batch_query += FlushDrop("ducklake_tag", "object_id", ids);
-		batch_query += FlushDrop("ducklake_view_column_tag", "view_id", ids);
+		if (drop_view_column_tags) {
+			batch_query += FlushDrop("ducklake_view_column_tag", "view_id", ids);
+		}
 	}
 	return batch_query;
 }
@@ -5335,8 +5337,10 @@ WHERE table_id IN (%s);)",
 	}
 
 	// delete any views, schemas, macros, etc that are no longer referenced
-	tables_to_delete_from = {"ducklake_schema", "ducklake_view", "ducklake_view_column_tag", "ducklake_tag",
-	                         "ducklake_macro"};
+	tables_to_delete_from = {"ducklake_schema", "ducklake_view", "ducklake_tag", "ducklake_macro"};
+	if (transaction.GetCatalog().SupportsViewColumnTags()) {
+		tables_to_delete_from.insert(tables_to_delete_from.begin() + 2, "ducklake_view_column_tag");
+	}
 	for (auto &delete_tbl : tables_to_delete_from) {
 		auto result = Execute(StringUtil::Format(R"(
 DELETE FROM {METADATA_CATALOG}.%s

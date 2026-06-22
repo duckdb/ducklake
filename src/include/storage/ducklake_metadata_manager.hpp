@@ -254,7 +254,7 @@ public:
 	virtual void RemoveFilesScheduledForCleanup(const vector<DuckLakeFileForCleanup> &cleaned_up_files);
 	static string DropSchemas(const set<SchemaIndex> &ids);
 	static string DropTables(const set<TableIndex> &ids, bool renamed);
-	static string DropViews(const set<TableIndex> &ids, bool renamed);
+	static string DropViews(const set<TableIndex> &ids, bool renamed, bool drop_view_column_tags = false);
 	static string DropMacros(const set<MacroIndex> &ids);
 
 	//! Emits the INSERT for new schemas. Caller supplies resolved paths (one per schema, same order)
