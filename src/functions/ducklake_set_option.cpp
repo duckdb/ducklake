@@ -1,10 +1,69 @@
 #include "functions/ducklake_table_functions.hpp"
+#include "common/ducklake_util.hpp"
 #include "storage/ducklake_transaction.hpp"
 #include "storage/ducklake_catalog.hpp"
 #include "storage/ducklake_table_entry.hpp"
 #include "storage/ducklake_schema_entry.hpp"
 
 namespace duckdb {
+// -------------------------------------------------------------------------//
+// Group of functions to validate if it's safe to change the inline option
+// ------------------------------------------------------------------------//
+
+static void ValidateTableScope(ClientContext &context, Catalog &catalog, const string &schema_name,
+                               const string &table_name) {
+	auto table_catalog_entry = catalog.GetEntry<TableCatalogEntry>(context, Identifier(schema_name),
+	                                                               Identifier(table_name), OnEntryNotFound::THROW_EXCEPTION);
+	auto &ducklake_table = table_catalog_entry->Cast<DuckLakeTableEntry>();
+	DuckLakeUtil::ValidateNoInlinedSystemColumns(ducklake_table.GetColumns(), ducklake_table.name.GetIdentifierName());
+}
+
+static void ValidateTablesInSchema(ClientContext &context, DuckLakeCatalog &duck_catalog,
+                                   DuckLakeSchemaEntry &schema_entry, SchemaIndex override_scope_id) {
+	schema_entry.Scan(context, CatalogType::TABLE_ENTRY, [&](CatalogEntry &entry) {
+		auto &ducklake_table = entry.Cast<DuckLakeTableEntry>();
+		string override_val;
+		if (duck_catalog.TryGetScopedConfigOption("data_inlining_row_limit", override_val, override_scope_id,
+		                                          ducklake_table.GetTableId()) &&
+		    std::stoull(override_val) == 0) {
+			return;
+		}
+		DuckLakeUtil::ValidateNoInlinedSystemColumns(ducklake_table.GetColumns(), ducklake_table.name.GetIdentifierName());
+	});
+}
+
+static void ValidateSchemaScope(ClientContext &context, Catalog &catalog, const string &schema_name) {
+	auto &duck_catalog = catalog.Cast<DuckLakeCatalog>();
+	auto schema_catalog_entry = catalog.GetSchema(context, Identifier(schema_name), OnEntryNotFound::THROW_EXCEPTION);
+	ValidateTablesInSchema(context, duck_catalog, schema_catalog_entry->Cast<DuckLakeSchemaEntry>(), SchemaIndex());
+}
+
+static void ValidateGlobalScope(ClientContext &context, Catalog &catalog) {
+	auto &duck_catalog = catalog.Cast<DuckLakeCatalog>();
+	duck_catalog.ScanSchemas(context, [&](SchemaCatalogEntry &schema) {
+		auto &schema_entry = schema.Cast<DuckLakeSchemaEntry>();
+		ValidateTablesInSchema(context, duck_catalog, schema_entry, schema_entry.GetSchemaId());
+	});
+}
+
+static void ValidateNoReservedInliningColumns(ClientContext &context, Catalog &catalog,
+                                              const TableFunctionBindInput &input) {
+	auto table_name_entry = input.named_parameters.find("table_name");
+	auto schema_param = input.named_parameters.find("schema");
+	bool has_table = table_name_entry != input.named_parameters.end() && !table_name_entry->second.IsNull();
+	bool has_schema = schema_param != input.named_parameters.end() && !schema_param->second.IsNull();
+	if (has_table) {
+		string schema_name = has_schema ? StringValue::Get(schema_param->second) : "";
+		ValidateTableScope(context, catalog, schema_name, StringValue::Get(table_name_entry->second));
+	} else if (has_schema) {
+		ValidateSchemaScope(context, catalog, StringValue::Get(schema_param->second));
+	} else {
+		ValidateGlobalScope(context, catalog);
+	}
+}
+
+// ------------------------------------------------------------------------//
+// ------------------------------------------------------------------------//
 
 struct DuckLakeSetOptionData : public TableFunctionData {
 	DuckLakeSetOptionData(Catalog &catalog, DuckLakeConfigOption option_p)
@@ -69,6 +128,9 @@ static unique_ptr<FunctionData> DuckLakeSetOptionBind(ClientContext &context, Ta
 	} else if (option == "data_inlining_row_limit") {
 		auto data_inlining_row_limit = val.DefaultCastAs(LogicalType::UBIGINT).GetValue<idx_t>();
 		value = to_string(data_inlining_row_limit);
+		if (data_inlining_row_limit > 0) {
+			ValidateNoReservedInliningColumns(context, catalog, input);
+		}
 	} else if (option == "require_commit_message") {
 		value = val.GetValue<bool>() ? "true" : "false";
 	} else if (option == "rewrite_delete_threshold") {
@@ -117,8 +179,8 @@ static unique_ptr<FunctionData> DuckLakeSetOptionBind(ClientContext &context, Ta
 	}
 	if (!table.empty()) {
 		// find the scope
-		auto table_catalog_entry =
-		    catalog.GetEntry<TableCatalogEntry>(context, schema, table, OnEntryNotFound::THROW_EXCEPTION);
+		auto table_catalog_entry = catalog.GetEntry<TableCatalogEntry>(context, Identifier(schema), Identifier(table),
+		                                                               OnEntryNotFound::THROW_EXCEPTION);
 		auto &ducklake_table = table_catalog_entry->Cast<DuckLakeTableEntry>();
 		config_option.table_id = ducklake_table.GetTableId();
 		if (IsTransactionLocal(config_option.table_id)) {
@@ -126,7 +188,7 @@ static unique_ptr<FunctionData> DuckLakeSetOptionBind(ClientContext &context, Ta
 		}
 	} else if (!schema.empty()) {
 		// find the scope
-		auto schema_catalog_entry = catalog.GetSchema(context, schema, OnEntryNotFound::THROW_EXCEPTION);
+		auto schema_catalog_entry = catalog.GetSchema(context, Identifier(schema), OnEntryNotFound::THROW_EXCEPTION);
 		auto &ducklake_schema = schema_catalog_entry->Cast<DuckLakeSchemaEntry>();
 		config_option.schema_id = ducklake_schema.GetSchemaId();
 		if (config_option.schema_id.IsTransactionLocal()) {

@@ -19,6 +19,10 @@ namespace duckdb {
 //! Follows the Iceberg deletion-vector-v1 blob format (puffin spec).
 struct DuckLakeDeletionVectorData {
 public:
+	//! Iceberg deletion-vector-v1 blob magic bytes
+	static constexpr data_t DELETION_VECTOR_MAGIC[4] = {0xD1, 0xD3, 0x39, 0x64};
+
+public:
 	//! Deserialize a deletion vector from a puffin blob
 	static unique_ptr<DuckLakeDeletionVectorData> FromBlob(data_ptr_t blob_start, idx_t blob_length);
 	//! Serialize deleted row positions into a deletion-vector-v1 puffin blob

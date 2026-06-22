@@ -10,8 +10,11 @@ test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
 
 test-env DATA_PATH {TEST_DIR}
 
+# DATA_INLINING_ROW_LIMIT 0 forces deletes onto the real delete-file path (ducklake_delete_file),
+# which is what the "partial files" in this test's name actually refers to. Without it the deletes
+# are inlined and the real delete-file code path is never exercised.
 statement ok
-ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/ducklake_partial_deletions_files')
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/ducklake_partial_deletions_files', DATA_INLINING_ROW_LIMIT 0)
 
 # snapshot 1 - Create table and insert data into multiple files
 statement ok
@@ -121,6 +124,24 @@ SELECT rowid, i FROM ducklake_table_deletions('ducklake', 'main', 'test', 0, 10)
 8	13
 11	21
 13	23
+
+# Same queries with snapshot_id projected BEFORE rowid (the order the table_changes macro uses).
+# Rows 3/8/13 (the second delete in each file, snapshots 8/9/10) must report their own delete
+# snapshot, not their delete file's begin_snapshot (5/6/7).
+query III
+SELECT snapshot_id, rowid, i FROM ducklake_table_deletions('ducklake', 'main', 'test', 5, 10) ORDER BY rowid
+----
+5	1	1
+8	3	3
+6	6	11
+9	8	13
+7	11	21
+10	13	23
+
+query III
+SELECT snapshot_id, rowid, i FROM ducklake_table_deletions('ducklake', 'main', 'test', 8, 8) ORDER BY rowid
+----
+8	3	3
 
 statement ok
 DELETE FROM ducklake.test WHERE i < 10

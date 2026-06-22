@@ -1,0 +1,91 @@
+# name: test/sql/delete/deletion_vector_inlined_flush.test
+# description: Flushing inlined file deletions writes puffin deletion vectors when WRITE_DELETION_VECTORS is enabled
+# group: [delete]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+# explicit inlining limit keeps small deletes in metadata until flushed (independent of the global default)
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/dv_inlined_flush', WRITE_DELETION_VECTORS true, DATA_INLINING_ROW_LIMIT 10)
+
+statement ok
+USE dl
+
+# 100 rows exceed the inline limit, so this materializes a real data file
+statement ok
+CREATE TABLE test AS SELECT i id FROM range(100) t(i);
+
+statement ok
+SET VARIABLE v_data = (SELECT max(snapshot_id) FROM ducklake_snapshots('dl'));
+
+# small deletes land as inlined file deletions (no delete file yet)
+statement ok
+DELETE FROM test WHERE id = 0
+
+statement ok
+DELETE FROM test WHERE id = 1
+
+# no delete file on disk before the flush
+query I
+SELECT COUNT(*) FROM glob('{DATA_PATH}/dv_inlined_flush/main/test/*-delete.*')
+----
+0
+
+statement ok
+CALL ducklake_flush_inlined_data('dl')
+
+# the flush produced a puffin deletion vector
+query I
+SELECT DISTINCT format FROM __ducklake_metadata_dl.ducklake_delete_file WHERE end_snapshot IS NULL
+----
+puffin
+
+query II
+SELECT COUNT(*), COUNT(*) FILTER (WHERE id IN (0, 1)) FROM test
+----
+98	0
+
+# time travel back to before the deletes
+query I
+SELECT COUNT(*) FROM test AT (VERSION => getvariable('v_data'))
+----
+100
+
+statement ok
+SET VARIABLE v_flush1 = (SELECT max(snapshot_id) FROM ducklake_snapshots('dl'));
+
+# a further delete + flush must merge into the existing puffin deletion vector
+statement ok
+DELETE FROM test WHERE id = 2
+
+statement ok
+CALL ducklake_flush_inlined_data('dl')
+
+# still exactly one active delete file
+query I
+SELECT COUNT(*) FROM __ducklake_metadata_dl.ducklake_delete_file WHERE end_snapshot IS NULL
+----
+1
+
+# and it is still puffin
+query I
+SELECT DISTINCT format FROM __ducklake_metadata_dl.ducklake_delete_file WHERE end_snapshot IS NULL
+----
+puffin
+
+query II
+SELECT COUNT(*), COUNT(*) FILTER (WHERE id IN (0, 1, 2)) FROM test
+----
+97	0
+
+# time travel to the state after the first flush (id 2 still present)
+query II
+SELECT COUNT(*), COUNT(*) FILTER (WHERE id = 2) FROM test AT (VERSION => getvariable('v_flush1'))
+----
+98	1

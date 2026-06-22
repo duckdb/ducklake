@@ -1,0 +1,59 @@
+# name: test/sql/data_inlining/inlining_enabled_after_create.test
+# description: Enabling data inlining after table creation must not lose rows. Regression: the server-side (quack) commit path dropped lazily-inlined rows because it could not create the inlined-data table.
+# group: [data_inlining]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/ducklake_lazy_inline', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE dl.t(i INTEGER)
+
+statement ok
+CALL dl.set_option('data_inlining_row_limit', 10)
+
+statement ok
+INSERT INTO dl.t VALUES (42)
+
+query II
+SELECT count(*), sum(i) FROM dl.t
+----
+1	42
+
+query I
+SELECT count(*) FROM __ducklake_metadata_dl.ducklake_data_file
+----
+0
+
+query I
+SELECT count(*) FROM __ducklake_metadata_dl.ducklake_inlined_data_tables
+----
+1
+
+statement ok
+INSERT INTO dl.t VALUES (1), (2), (3)
+
+query II
+SELECT count(*), sum(i) FROM dl.t
+----
+4	48
+
+query I
+SELECT count(*) FROM __ducklake_metadata_dl.ducklake_data_file
+----
+0
+
+statement ok
+INSERT INTO dl.t SELECT * FROM range(100)
+
+query II
+SELECT count(*), sum(i) FROM dl.t
+----
+104	4998

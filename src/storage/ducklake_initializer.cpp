@@ -14,6 +14,7 @@
 #include "metadata_manager/ducklake_metadata_manager_v1_1.hpp"
 #include "metadata_manager/sqlite_metadata_manager.hpp"
 #include "metadata_manager/postgres_metadata_manager.hpp"
+#include "metadata_manager/quack_metadata_manager.hpp"
 
 namespace duckdb {
 
@@ -44,6 +45,9 @@ string DuckLakeInitializer::GetAttachOptions() {
 		// this is duckdb, we always do latest storage
 		attach_options.push_back(StringUtil::Format("STORAGE_VERSION '%s'", "latest"));
 	}
+	if (options.hide_metadata_catalog) {
+		attach_options.push_back("HIDDEN true");
+	}
 
 	if (attach_options.empty()) {
 		return string();
@@ -60,9 +64,11 @@ string DuckLakeInitializer::GetAttachOptions() {
 
 void DuckLakeInitializer::Initialize() {
 	auto &transaction = DuckLakeTransaction::Get(context, catalog);
+	auto &metadata_manager = transaction.GetMetadataManager();
 	// attach the metadata database
-	auto result = transaction.Query("ATTACH OR REPLACE {METADATA_PATH} AS {METADATA_CATALOG_NAME_IDENTIFIER}" +
-	                                GetAttachOptions());
+	const string attach_query =
+	    "ATTACH OR REPLACE {METADATA_PATH} AS {METADATA_CATALOG_NAME_IDENTIFIER}" + GetAttachOptions();
+	auto result = metadata_manager.AttachMetadata(attach_query);
 	if (result->HasError()) {
 		auto &error_obj = result->GetErrorObject();
 		error_obj.Throw("Failed to attach DuckLake MetaData \"" + catalog.MetadataDatabaseName() + "\" at path + \"" +
@@ -94,24 +100,23 @@ void DuckLakeInitializer::Initialize() {
 	// directly query a known ducklake metadata table to avoid scanning all attached catalogs via duckdb_tables()
 	// this prevents a corrupted ducklake catalog from blocking initialization of unrelated ducklake databases
 	// FIXME: verify that all ducklake tables are in the correct format
-	result = transaction.Query("SELECT NULL FROM {METADATA_CATALOG}.ducklake_metadata LIMIT 1");
-	if (result->HasError()) {
-		auto &error_obj = result->GetErrorObject();
-		if (error_obj.Type() == ExceptionType::CATALOG) {
-			// table does not exist - this is a new ducklake
-			if (!options.create_if_not_exists) {
-				throw InvalidInputException(
-				    "Existing DuckLake at metadata catalog \"%s\" does not exist - and creating a "
-				    "new DuckLake is explicitly disabled",
-				    options.metadata_path);
-			}
-			InitializeNewDuckLake(transaction, has_explicit_schema);
-		} else {
-			error_obj.Throw("Failed to load DuckLake table data");
-		}
-	} else {
+	if (transaction.GetMetadataManager().MetadataExists()) {
 		LoadExistingDuckLake(transaction);
+	} else {
+		if (!options.create_if_not_exists) {
+			throw InvalidInputException("Existing DuckLake at metadata catalog \"%s\" does not exist - and creating a "
+			                            "new DuckLake is explicitly disabled",
+			                            options.metadata_path);
+		}
+		InitializeNewDuckLake(transaction, has_explicit_schema);
 	}
+	// note: re-fetch the metadata manager here - InitializeNewDuckLake/LoadExistingDuckLake may have
+	// swapped it out via SetVersionedMetadataManager, so the `metadata_manager` reference taken at the
+	// top of Initialize() would now dangle.
+	auto &current_metadata_manager = transaction.GetMetadataManager();
+	// probe the metadata server for optional capabilities (e.g. server-side commit retries) once per attach
+	current_metadata_manager.ProbeServerCapabilities();
+	current_metadata_manager.ClearCache();
 	if (options.at_clause) {
 		// if the user specified a snapshot try to load it to trigger an error if it does not exist
 		transaction.GetSnapshot();
@@ -142,7 +147,8 @@ void DuckLakeInitializer::InitializeDataPath() {
 
 void DuckLakeInitializer::InitializeNewDuckLake(DuckLakeTransaction &transaction, bool has_explicit_schema) {
 	if (options.data_path.empty()) {
-		auto &metadata_catalog = Catalog::GetCatalog(*transaction.GetConnection().context, options.metadata_database);
+		auto &metadata_catalog =
+		    Catalog::GetCatalog(*transaction.GetConnection().context, Identifier(options.metadata_database));
 		if (!metadata_catalog.IsDuckCatalog()) {
 			throw InvalidInputException(
 			    "Attempting to create a new ducklake instance but data_path is not set - set the "
@@ -210,6 +216,10 @@ void DuckLakeInitializer::LoadExistingDuckLake(DuckLakeTransaction &transaction)
 			if (catalog_version == DuckLakeVersion::V0_4) {
 				metadata_manager.MigrateV04();
 				catalog_version = DuckLakeVersion::V1_0;
+			}
+			if (catalog_version == DuckLakeVersion::V1_1_DEV_1 && options.automatic_migration) {
+				// dev schemas evolve in place
+				metadata_manager.MigrateV10(true);
 			}
 			if (catalog_version >= target_version) {
 				resolved_version = catalog_version;
@@ -287,6 +297,7 @@ DuckLakeVersion DuckLakeInitializer::ResolveTargetVersion(DuckLakeVersion catalo
 }
 
 void DuckLakeInitializer::SetVersionedMetadataManager(DuckLakeTransaction &transaction, DuckLakeVersion version) {
+	catalog.SetDuckLakeVersion(version);
 	if (version == DuckLakeVersion::V1_0) {
 		// base metadata managers are already V1.0, nop
 		return;
@@ -294,7 +305,9 @@ void DuckLakeInitializer::SetVersionedMetadataManager(DuckLakeTransaction &trans
 	auto &current = transaction.GetMetadataManager();
 	unique_ptr<DuckLakeMetadataManager> new_manager;
 	if (version == DuckLakeVersion::V1_1_DEV_1 || version == DuckLakeVersion::V1_1_DEV_2) {
-		if (dynamic_cast<PostgresMetadataManager *>(&current)) {
+		if (dynamic_cast<QuackMetadataManager *>(&current)) {
+			new_manager = make_uniq<DuckLakeMetadataManagerV1_1<QuackMetadataManager>>(transaction);
+		} else if (dynamic_cast<PostgresMetadataManager *>(&current)) {
 			new_manager = make_uniq<DuckLakeMetadataManagerV1_1<PostgresMetadataManager>>(transaction);
 		} else if (dynamic_cast<SQLiteMetadataManager *>(&current)) {
 			new_manager = make_uniq<DuckLakeMetadataManagerV1_1<SQLiteMetadataManager>>(transaction);

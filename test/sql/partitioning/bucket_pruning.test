@@ -1,0 +1,133 @@
+# name: test/sql/partitioning/bucket_pruning.test
+# description: Test transform-aware file pruning for bucket() partition transforms
+# group: [partitioning]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/ducklake_bucket_prune', METADATA_CATALOG 'ducklake_metadata', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+USE ducklake
+
+statement ok
+CREATE TABLE b1_no_stats (i INT);
+
+statement ok
+ALTER TABLE b1_no_stats SET PARTITIONED BY (bucket(10, i));
+
+statement ok
+INSERT INTO b1_no_stats SELECT i::INT FROM range(-10000, 10001) g(i);
+
+# All 10 bucket files must exist
+query I
+SELECT COUNT(DISTINCT fpv.partition_value)
+FROM ducklake_metadata.ducklake_file_partition_value fpv
+JOIN ducklake_metadata.ducklake_data_file df ON fpv.data_file_id = df.data_file_id
+JOIN ducklake_metadata.ducklake_table t ON df.table_id = t.table_id
+WHERE t.table_name = 'b1_no_stats' AND df.end_snapshot IS NULL
+----
+10
+
+# Correctness: pruning must not lose rows
+query I
+SELECT COUNT(*) FROM b1_no_stats WHERE i = 0
+----
+1
+
+query I
+SELECT i FROM b1_no_stats WHERE i = 0
+----
+0
+
+# Pruning: only one bucket file (bucket=6 for i=0 with bucket(10)) should be read
+query II
+EXPLAIN ANALYZE SELECT * FROM b1_no_stats WHERE i = 0
+----
+analyzed_plan	<REGEX>:.*Total Files Read: 1.*
+
+# Pruning works for a different value too
+query II
+EXPLAIN ANALYZE SELECT * FROM b1_no_stats WHERE i = 42
+----
+analyzed_plan	<REGEX>:.*Total Files Read: 1.*
+
+# IN-list: prunes to the union of matching buckets (at most 2 files for 2 distinct values)
+query I
+SELECT COUNT(*) FROM b1_no_stats WHERE i IN (0, 1)
+----
+2
+
+query II
+EXPLAIN ANALYZE SELECT * FROM b1_no_stats WHERE i IN (0, 1)
+----
+analyzed_plan	<REGEX>:.*Total Files Read: [12].*
+
+# Range predicates: cannot be folded across the bucket hash — must fall through to zone maps.
+# Correctness is the contract here; we don't assert a file count.
+query I
+SELECT COUNT(*) FROM b1_no_stats WHERE i > 9998
+----
+2
+
+# VARCHAR-typed bucket column — make sure pruning works for non-int input types
+statement ok
+CREATE TABLE bucketed_str (s VARCHAR);
+
+statement ok
+ALTER TABLE bucketed_str SET PARTITIONED BY (bucket(4, s));
+
+statement ok
+INSERT INTO bucketed_str SELECT 'value_' || i::VARCHAR FROM range(0, 200) g(i);
+
+query I
+SELECT COUNT(*) FROM bucketed_str WHERE s = 'value_0'
+----
+1
+
+query II
+EXPLAIN ANALYZE SELECT * FROM bucketed_str WHERE s = 'value_0'
+----
+analyzed_plan	<REGEX>:.*Total Files Read: 1.*
+
+# Multi-key partition spec with bucket — each key adds its own IN-clause; both apply.
+statement ok
+CREATE TABLE multi_bucket (a INT, b INT);
+
+statement ok
+ALTER TABLE multi_bucket SET PARTITIONED BY (bucket(4, a), bucket(4, b));
+
+statement ok
+INSERT INTO multi_bucket SELECT i % 100, (i * 7) % 100 FROM range(0, 1000) g(i);
+
+query I
+SELECT COUNT(*) FROM multi_bucket WHERE a = 5 AND b = 35
+----
+10
+
+# With both keys pinned, we should hit a single (a-bucket, b-bucket) combination.
+query II
+EXPLAIN ANALYZE SELECT * FROM multi_bucket WHERE a = 5 AND b = 35
+----
+analyzed_plan	<REGEX>:.*Total Files Read: 1.*
+
+# Identity partitioning continues to work (unaffected by the new code path).
+statement ok
+CREATE TABLE identity_tbl (g INT, payload INT);
+
+statement ok
+ALTER TABLE identity_tbl SET PARTITIONED BY (g);
+
+statement ok
+INSERT INTO identity_tbl SELECT i % 10, i FROM range(0, 1000) g(i);
+
+query II
+EXPLAIN ANALYZE SELECT * FROM identity_tbl WHERE g = 3
+----
+analyzed_plan	<REGEX>:.*Total Files Read: 1.*

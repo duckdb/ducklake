@@ -1,0 +1,130 @@
+# name: test/sql/transaction/partition_commit_retry_remap.test
+# description: data files keep a valid partition id when a commit attempt is retried after a concurrent snapshot
+# group: [transaction]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/repro_partition_retry/', METADATA_CATALOG 'metadata', DATA_INLINING_ROW_LIMIT 0);
+
+statement ok
+USE ducklake;
+
+statement ok
+SET immediate_transaction_mode=true
+
+statement ok
+COPY (
+    SELECT 1 AS id, 'google_ads_data_hub' AS source, 10 AS value
+    UNION ALL
+    SELECT 2 AS id, 'google_ads_data_hub' AS source, 20 AS value
+    UNION ALL
+    SELECT 3 AS id, 'bing' AS source, 30 AS value
+) TO '{DATA_PATH}/repro_slice.parquet' (FORMAT parquet);
+
+statement ok con1
+USE ducklake;
+
+statement ok con2
+USE ducklake;
+
+statement ok con1
+BEGIN;
+
+statement ok con1
+CREATE TABLE first_write AS SELECT * FROM read_parquet('{DATA_PATH}/repro_slice.parquet') LIMIT 0;
+
+statement ok con1
+ALTER TABLE first_write SET PARTITIONED BY (source);
+
+query I con1
+DELETE FROM first_write WHERE source IN ('google_ads_data_hub');
+----
+0
+
+statement ok con1
+INSERT INTO first_write BY NAME SELECT * FROM read_parquet('{DATA_PATH}/repro_slice.parquet');
+
+# concurrent unrelated commit forces con1's first commit attempt to fail retryably
+statement ok con2
+CREATE TABLE unrelated_table(i INTEGER);
+
+statement ok con1
+COMMIT;
+
+query I con1
+SELECT COUNT(*) FROM first_write;
+----
+3
+
+query I
+SELECT COUNT(*)
+FROM metadata.ducklake_data_file
+WHERE table_id >= 9223372036854775808 OR partition_id >= 9223372036854775808;
+----
+0
+
+# every committed data file must reference a partition id that exists
+# (materialize the partition ids first - scanner-backed metadata catalogs do not
+# support multiple streaming scans in one query)
+statement ok
+SET VARIABLE known_partition_ids = (
+    SELECT LIST(partition_id)
+    FROM metadata.ducklake_partition_info
+);
+
+query I
+SELECT COUNT(*)
+FROM metadata.ducklake_data_file
+WHERE partition_id IS NOT NULL
+  AND NOT list_contains(getvariable('known_partition_ids'), partition_id);
+----
+0
+
+# same scenario on a pre-existing table: re-partition + insert with a concurrent snapshot mid-transaction
+statement ok con1
+BEGIN;
+
+statement ok con1
+ALTER TABLE first_write SET PARTITIONED BY (id);
+
+statement ok con1
+INSERT INTO first_write BY NAME SELECT * FROM read_parquet('{DATA_PATH}/repro_slice.parquet');
+
+statement ok con2
+INSERT INTO unrelated_table VALUES (1);
+
+statement ok con1
+COMMIT;
+
+query I con1
+SELECT COUNT(*) FROM first_write;
+----
+6
+
+query I
+SELECT COUNT(*)
+FROM metadata.ducklake_data_file
+WHERE table_id >= 9223372036854775808 OR partition_id >= 9223372036854775808;
+----
+0
+
+statement ok
+SET VARIABLE known_partition_ids = (
+    SELECT LIST(partition_id)
+    FROM metadata.ducklake_partition_info
+);
+
+query I
+SELECT COUNT(*)
+FROM metadata.ducklake_data_file
+WHERE partition_id IS NOT NULL
+  AND NOT list_contains(getvariable('known_partition_ids'), partition_id);
+----
+0

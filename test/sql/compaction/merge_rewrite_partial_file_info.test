@@ -112,7 +112,7 @@ SET VARIABLE snap_E = (SELECT MAX(snapshot_id) FROM ducklake_snapshots('ducklake
 
 # Set small target file size so only D & E get merged
 statement ok
-CALL ducklake_set_option('ducklake', 'target_file_size', '1KB');
+CALL ducklake_set_option('ducklake', 'target_file_size', '1.5KB');
 
 # Capture expected partial_max for D+E merge: max begin_snapshot of files created after the first merge
 statement ok

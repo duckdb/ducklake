@@ -1,0 +1,60 @@
+# name: test/sql/data_inlining/inlined_data_flush_cleanup.test
+# description: validate inlined data of a superseeded schema gets deleted at flush
+# group: [data_inlining]
+
+require ducklake
+
+require parquet
+
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/inlined_data_flush_cache.db' AS ducklake (DATA_PATH '{TEST_DIR}/inlined_data_flush_cache_files', METADATA_CATALOG 'ducklake_meta', DATA_INLINING_ROW_LIMIT 10)
+
+statement ok
+CREATE TABLE ducklake.t(i INTEGER)
+
+statement ok
+INSERT INTO ducklake.t VALUES (1), (2), (3)
+
+statement ok
+ALTER TABLE ducklake.t ADD COLUMN j INTEGER
+
+statement ok
+INSERT INTO ducklake.t VALUES (4, 40)
+
+query I
+SELECT snapshot_id FROM ducklake_snapshots('ducklake') WHERE schema_version = 1 ORDER BY snapshot_id LIMIT 1
+----
+1
+
+query I
+SELECT COUNT(*) FROM ducklake.t AT (VERSION => 2)
+----
+3
+
+query I
+SELECT COUNT(*) FROM ducklake.t
+----
+4
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake')
+
+query I
+SELECT COUNT(*) FROM duckdb_tables() WHERE database_name='ducklake_meta' AND table_name = 'ducklake_inlined_data_1_1'
+----
+0
+
+query II
+SELECT COUNT(*), SUM(i) FROM ducklake.t
+----
+4	10
+
+query I
+SELECT COUNT(*) FROM ducklake.t AT (VERSION => 2)
+----
+3
+
+query II
+SELECT COUNT(*), SUM(i) FROM ducklake.t AT (VERSION => 4)
+----
+4	10

@@ -95,7 +95,7 @@ static unique_ptr<Catalog> DuckLakeAttach(optional_ptr<StorageExtensionInfo> sto
 		// if we have a secret - handle the options
 		const auto &kv_secret = dynamic_cast<const KeyValueSecret &>(*secret->secret);
 		for (auto &entry : kv_secret.secret_map) {
-			HandleDuckLakeOption(options, entry.first, entry.second);
+			HandleDuckLakeOption(options, entry.first.GetIdentifierName(), entry.second);
 		}
 	}
 	options.access_mode = attach_options.access_mode;
@@ -109,6 +109,7 @@ static unique_ptr<Catalog> DuckLakeAttach(optional_ptr<StorageExtensionInfo> sto
 	if (options.access_mode == AccessMode::READ_ONLY && !is_create_if_not_exists_set) {
 		options.create_if_not_exists = false;
 	}
+	options.hide_metadata_catalog = options.metadata_database.empty();
 	if (options.metadata_database.empty()) {
 		options.metadata_database = "__ducklake_metadata_" + name;
 	}

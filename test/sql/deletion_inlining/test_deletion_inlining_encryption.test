@@ -36,7 +36,7 @@ SELECT COUNT(*), SUM(a) FROM t
 45	1215
 
 query I
-SELECT COUNT(*) FROM GLOB('{DATA_PATH}/ducklake_deletion_inlining_encryption/**/*-delete.parquet')
+SELECT COUNT(*) FROM GLOB('{DATA_PATH}/ducklake_deletion_inlining_encryption/**/*-delete.*')
 ----
 0
 
@@ -44,7 +44,7 @@ statement ok
 CALL ducklake_flush_inlined_data('ducklake')
 
 query I
-SELECT COUNT(*) FROM GLOB('{DATA_PATH}/ducklake_deletion_inlining_encryption/**/*-delete.parquet')
+SELECT COUNT(*) FROM GLOB('{DATA_PATH}/ducklake_deletion_inlining_encryption/**/*-delete.*')
 ----
 1
 

@@ -16,7 +16,7 @@
 #include "duckdb/execution/operator/projection/physical_projection.hpp"
 #include "duckdb/execution/operator/scan/physical_dummy_scan.hpp"
 #include "duckdb/execution/operator/persistent/physical_copy_to_file.hpp"
-#include "duckdb/parallel/base_pipeline_event.hpp"
+#include "duckdb/parallel/event.hpp"
 
 namespace duckdb {
 
@@ -25,13 +25,15 @@ namespace duckdb {
 //===--------------------------------------------------------------------===//
 class DuckLakeMergeInsert : public PhysicalOperator {
 public:
-	DuckLakeMergeInsert(PhysicalPlan &physical_plan, const vector<LogicalType> &types, PhysicalOperator &insert,
-	                    PhysicalOperator &copy);
+	DuckLakeMergeInsert(PhysicalPlan &physical_plan, const vector<LogicalType> &types, PhysicalOperator &catalog_insert,
+	                    optional_ptr<DuckLakeInlineData> inline_data_op, PhysicalOperator &physical_copy);
 
 	//! The copy operator that writes to the file
-	PhysicalOperator &copy;
+	PhysicalOperator &physical_copy;
 	//! The final insert operator
-	PhysicalOperator &insert;
+	PhysicalOperator &catalog_insert;
+	//! The inline data operator (if data inlining is enabled)
+	optional_ptr<DuckLakeInlineData> inline_data_op;
 	//! Extra Projections
 	vector<unique_ptr<Expression>> extra_projections;
 
@@ -63,8 +65,10 @@ public:
 };
 
 DuckLakeMergeInsert::DuckLakeMergeInsert(PhysicalPlan &physical_plan, const vector<LogicalType> &types,
-                                         PhysicalOperator &insert, PhysicalOperator &copy)
-    : PhysicalOperator(physical_plan, PhysicalOperatorType::EXTENSION, types, 1), copy(copy), insert(insert) {
+                                         PhysicalOperator &catalog_insert, optional_ptr<DuckLakeInlineData> inline_data_op,
+                                         PhysicalOperator &physical_copy)
+    : PhysicalOperator(physical_plan, PhysicalOperatorType::EXTENSION, types, 1), physical_copy(physical_copy), catalog_insert(catalog_insert),
+      inline_data_op(inline_data_op) {
 }
 
 SourceResultType DuckLakeMergeInsert::GetDataInternal(ExecutionContext &context, DataChunk &chunk,
@@ -94,38 +98,156 @@ static void ProjectAndCastForCopy(ClientContext &context, DataChunk &input_chunk
 			cast_chunk.data[i].Reference(chunk_ref.get().data[i]);
 		}
 	}
-	cast_chunk.SetCardinality(chunk_ref.get().size());
+	cast_chunk.SetChildCardinality(chunk_ref.get().size());
 }
 
 //===--------------------------------------------------------------------===//
 // Sink
 //===--------------------------------------------------------------------===//
-class DuckLakeMergeIntoLocalState : public LocalSinkState {
+// Shared sink state for the merge operators that copy/inline rows (DuckLakeMergeInsert and DuckLakeMergeUpdate).
+class DuckLakeMergeSinkGlobalState : public GlobalSinkState {
+public:
+	unique_ptr<GlobalOperatorState> inline_data_gstate;
+};
+
+class DuckLakeMergeSinkLocalState : public LocalSinkState {
 public:
 	unique_ptr<LocalSinkState> copy_sink_state;
+	unique_ptr<OperatorState> inline_data_lstate;
+	DataChunk inline_output;
 	//! Used if we have extra projections
 	DataChunk cast_chunk;
-	DataChunk chunk;
+	DataChunk projected_chunk;
 	unique_ptr<ExpressionExecutor> expression_executor;
 };
 
+// Run a chunk through the optional inline-data operator or send it straight to the copy sink.
+static void SinkInlineOrCopy(ExecutionContext &context, DataChunk &execute_input,
+                             optional_ptr<DuckLakeInlineData> inline_data_op, PhysicalOperator &physical_copy,
+                             DuckLakeMergeSinkGlobalState &gstate, DuckLakeMergeSinkLocalState &lstate,
+                             InterruptState &interrupt_state) {
+	auto sink_to_copy = [&](DataChunk &chunk) {
+		ProjectAndCastForCopy(context.client, chunk, physical_copy, lstate.expression_executor.get(),
+		                      lstate.projected_chunk, lstate.cast_chunk);
+		OperatorSinkInput copy_input {*physical_copy.sink_state, *lstate.copy_sink_state, interrupt_state};
+		physical_copy.Sink(context, lstate.cast_chunk, copy_input);
+	};
+
+	// run the chunk through the inline data operator - it inlines what fits and passes the rest to the copy sink
+	if (inline_data_op) {
+		lstate.inline_output.Reset();
+		auto result = inline_data_op->Execute(context, execute_input, lstate.inline_output, *gstate.inline_data_gstate,
+																					*lstate.inline_data_lstate);
+		if (lstate.inline_output.size() > 0) {
+			sink_to_copy(lstate.inline_output);
+		}
+		while (result == OperatorResultType::HAVE_MORE_OUTPUT) {
+			lstate.inline_output.Reset();
+			result = inline_data_op->Execute(context, execute_input, lstate.inline_output, *gstate.inline_data_gstate,
+																			 *lstate.inline_data_lstate);
+			if (lstate.inline_output.size() > 0) {
+				sink_to_copy(lstate.inline_output);
+			}
+		}
+	} else {
+		sink_to_copy(execute_input);
+		return;
+	}
+}
+
+static void DrainInlineData(optional_ptr<DuckLakeInlineData> inline_data_op, ExecutionContext &context, OperatorSinkCombineInput &input, PhysicalOperator &physical_copy, DuckLakeMergeSinkGlobalState &gstate, DuckLakeMergeSinkLocalState &lstate) {
+	auto &inline_output = lstate.inline_output;
+	while (true) {
+		lstate.inline_output.Reset();
+		auto fresult = inline_data_op->FinalExecute(context, inline_output, *gstate.inline_data_gstate,
+		                                            *lstate.inline_data_lstate);
+		if (inline_output.size() > 0) {
+			ProjectAndCastForCopy(context.client, inline_output, physical_copy, lstate.expression_executor.get(),
+			                      lstate.projected_chunk, lstate.cast_chunk);
+			OperatorSinkInput copy_input {*physical_copy.sink_state, *lstate.copy_sink_state, input.interrupt_state};
+			physical_copy.Sink(context, lstate.cast_chunk, copy_input);
+		}
+		if (fresult == OperatorFinalizeResultType::FINISHED) {
+			break;
+		}
+	}
+}
+
 SinkResultType DuckLakeMergeInsert::Sink(ExecutionContext &context, DataChunk &chunk, OperatorSinkInput &input) const {
-	auto &local_state = input.local_state.Cast<DuckLakeMergeIntoLocalState>();
-	ProjectAndCastForCopy(context.client, chunk, copy, local_state.expression_executor.get(), local_state.chunk,
-	                      local_state.cast_chunk);
-	OperatorSinkInput sink_input {*copy.sink_state, *local_state.copy_sink_state, input.interrupt_state};
-	return copy.Sink(context, local_state.cast_chunk, sink_input);
+	auto &gstate = input.global_state.Cast<DuckLakeMergeSinkGlobalState>();
+	auto &lstate = input.local_state.Cast<DuckLakeMergeSinkLocalState>();
+
+	SinkInlineOrCopy(context, chunk, inline_data_op, physical_copy, gstate, lstate, input.interrupt_state);
+	return SinkResultType::NEED_MORE_INPUT;
 }
 
 SinkCombineResultType DuckLakeMergeInsert::Combine(ExecutionContext &context, OperatorSinkCombineInput &input) const {
-	auto &local_state = input.local_state.Cast<DuckLakeMergeIntoLocalState>();
-	OperatorSinkCombineInput combine_input {*copy.sink_state, *local_state.copy_sink_state, input.interrupt_state};
-	return copy.Combine(context, combine_input);
+	auto &gstate = input.global_state.Cast<DuckLakeMergeSinkGlobalState>();
+	auto &lstate = input.local_state.Cast<DuckLakeMergeSinkLocalState>();
+
+	// drain inline data
+	if (inline_data_op) {
+		DrainInlineData(inline_data_op, context, input, physical_copy, gstate, lstate);
+	}
+
+	OperatorSinkCombineInput combine_input {*physical_copy.sink_state, *lstate.copy_sink_state, input.interrupt_state};
+	physical_copy.Combine(context, combine_input);
+	return SinkCombineResultType::FINISHED;
 }
 
+
+namespace {
+
+//! Extend the Event class to be able to capture a created Event
+//! When an Event is created through 'Event::InsertEvent' it gets added to the 'parents'
+//! Through GetCapturedEvent we can access this newly created event
+class CaptureEvent : public Event {
+public:
+	explicit CaptureEvent(Executor &executor) : Event(executor) {
+	}
+
+	void Schedule() override {
+		// No-op
+	}
+
+	shared_ptr<Event> GetCapturedEvent() {
+		if (parents.empty()) {
+			return nullptr;
+		}
+		return parents[0].lock();
+	}
+};
+
+} // namespace
+
 // Scan copy operator source and sink into insert operator — shared by MergeInsert and MergeUpdate
-static void FinalizeCopyToInsert(Pipeline &pipeline, Event &event, ClientContext &context, PhysicalOperator &copy_op,
+static SinkFinalizeType FinalizeCopyToInsert(Pipeline &pipeline, Event &event, ClientContext &context, PhysicalOperator &copy_op,
                                  PhysicalOperator &insert_op, InterruptState &interrupt_state) {
+	OperatorSinkFinalizeInput copy_finalize {*copy_op.sink_state, interrupt_state};
+	CaptureEvent capture_event(pipeline.executor);
+	auto finalize_result = copy_op.Finalize(pipeline, capture_event, context, copy_finalize);
+	if (finalize_result == SinkFinalizeType::BLOCKED) {
+		return SinkFinalizeType::BLOCKED;
+	}
+
+	//! PhysicalCopyToFile creates an Event as part of Finalize
+	//! We need to intercept and execute this event's tasks, to finish the finalize work
+	auto captured_event = capture_event.GetCapturedEvent();
+	if (captured_event) {
+		// Schedule the event's tasks with our token
+		captured_event->Schedule();
+
+		// Work on tasks until the event is finished
+		shared_ptr<Task> task;
+		auto &token = pipeline.executor.GetToken();
+		while (!captured_event->IsFinished()) {
+			if (TaskScheduler::GetScheduler(context).GetTaskFromProducer(token, task)) {
+				task->Execute(TaskExecutionMode::PROCESS_ALL);
+				task.reset();
+			}
+		}
+	}
+
 	DataChunk chunk;
 	chunk.Initialize(context, copy_op.types);
 
@@ -165,56 +287,45 @@ static void FinalizeCopyToInsert(Pipeline &pipeline, Event &event, ClientContext
 	if (finalize_res == SinkFinalizeType::BLOCKED) {
 		throw InternalException("BLOCKED not supported in DuckLakeMerge");
 	}
-}
-
-class DuckLakeFinalizeCopyToInsertEvent : public BasePipelineEvent {
-public:
-	DuckLakeFinalizeCopyToInsertEvent(Pipeline &pipeline_p, PhysicalOperator &copy_p, PhysicalOperator &insert_p,
-	                                  InterruptState interrupt_state_p)
-	    : BasePipelineEvent(pipeline_p), copy(copy_p), insert(insert_p), interrupt_state(std::move(interrupt_state_p)) {
-	}
-
-	void Schedule() override {
-		FinalizeCopyToInsert(*pipeline, *this, GetClientContext(), copy, insert, interrupt_state);
-	}
-
-private:
-	PhysicalOperator &copy;
-	PhysicalOperator &insert;
-	InterruptState interrupt_state;
-};
-
-SinkFinalizeType DuckLakeMergeInsert::Finalize(Pipeline &pipeline, Event &event, ClientContext &context,
-                                               OperatorSinkFinalizeInput &input) const {
-	auto finalize_event =
-	    make_shared_ptr<DuckLakeFinalizeCopyToInsertEvent>(pipeline, copy, insert, input.interrupt_state);
-	event.InsertEvent(finalize_event);
-
-	OperatorSinkFinalizeInput copy_finalize {*copy.sink_state, input.interrupt_state};
-	auto finalize_result = copy.Finalize(pipeline, event, context, copy_finalize);
-	if (finalize_result == SinkFinalizeType::BLOCKED) {
-		return SinkFinalizeType::BLOCKED;
-	}
 	return SinkFinalizeType::READY;
 }
 
+SinkFinalizeType DuckLakeMergeInsert::Finalize(Pipeline &pipeline, Event &event, ClientContext &context,
+                                               OperatorSinkFinalizeInput &input) const {
+	if (inline_data_op) {
+		auto &gstate = input.global_state.Cast<DuckLakeMergeSinkGlobalState>();
+		OperatorFinalizeInput inline_finalize {*gstate.inline_data_gstate, input.interrupt_state};
+		inline_data_op->OperatorFinalize(pipeline, event, context, inline_finalize);
+	}
+
+	return FinalizeCopyToInsert(pipeline, event, context, physical_copy, catalog_insert, input.interrupt_state);
+}
+
 unique_ptr<GlobalSinkState> DuckLakeMergeInsert::GetGlobalSinkState(ClientContext &context) const {
-	copy.sink_state = copy.GetGlobalSinkState(context);
-	return make_uniq<GlobalSinkState>();
+	auto result = make_uniq<DuckLakeMergeSinkGlobalState>();
+	if (inline_data_op) {
+		result->inline_data_gstate = inline_data_op->GetGlobalOperatorState(context);
+	}
+	physical_copy.sink_state = physical_copy.GetGlobalSinkState(context);
+	return std::move(result);
 }
 
 unique_ptr<LocalSinkState> DuckLakeMergeInsert::GetLocalSinkState(ExecutionContext &context) const {
-	auto result = make_uniq<DuckLakeMergeIntoLocalState>();
-	result->copy_sink_state = copy.GetLocalSinkState(context);
+	auto result = make_uniq<DuckLakeMergeSinkLocalState>();
+	result->copy_sink_state = physical_copy.GetLocalSinkState(context);
+	if (inline_data_op) {
+		result->inline_data_lstate = inline_data_op->GetOperatorState(context);
+		result->inline_output.Initialize(context.client, inline_data_op->types);
+	}
 	if (!extra_projections.empty()) {
 		result->expression_executor = make_uniq<ExpressionExecutor>(context.client, extra_projections);
 		vector<LogicalType> insert_types;
 		for (auto &expr : result->expression_executor->expressions) {
 			insert_types.push_back(expr->GetReturnType());
 		}
-		result->chunk.Initialize(context.client, insert_types);
+		result->projected_chunk.Initialize(context.client, insert_types);
 	}
-	result->cast_chunk.Initialize(context.client, copy.Cast<PhysicalCopyToFile>().expected_types);
+	result->cast_chunk.Initialize(context.client, physical_copy.Cast<PhysicalCopyToFile>().expected_types);
 
 	return std::move(result);
 }
@@ -225,16 +336,16 @@ unique_ptr<LocalSinkState> DuckLakeMergeInsert::GetLocalSinkState(ExecutionConte
 class DuckLakeMergeUpdate : public PhysicalOperator {
 public:
 	DuckLakeMergeUpdate(PhysicalPlan &physical_plan, const vector<LogicalType> &types, DuckLakeUpdate &update_op,
-	                    optional_ptr<DuckLakeInlineData> inline_data_op, PhysicalOperator &copy_op,
-	                    PhysicalOperator &insert_op)
+	                    optional_ptr<DuckLakeInlineData> inline_data_op, PhysicalOperator &physical_copy,
+	                    PhysicalOperator &catalog_insert)
 	    : PhysicalOperator(physical_plan, PhysicalOperatorType::EXTENSION, types, 1), update_op(update_op),
-	      inline_data_op(inline_data_op), copy_op(copy_op), insert_op(insert_op) {
+	      inline_data_op(inline_data_op), physical_copy(physical_copy), catalog_insert(catalog_insert) {
 	}
 
 	DuckLakeUpdate &update_op;
 	optional_ptr<DuckLakeInlineData> inline_data_op;
-	PhysicalOperator &copy_op;
-	PhysicalOperator &insert_op;
+	PhysicalOperator &physical_copy;
+	PhysicalOperator &catalog_insert;
 	//! Extra projections for partition columns
 	vector<unique_ptr<Expression>> extra_projections;
 
@@ -264,23 +375,15 @@ public:
 	                          OperatorSinkFinalizeInput &input) const override;
 };
 
-class DuckLakeMergeUpdateGlobalState : public GlobalSinkState {
+class DuckLakeMergeUpdateGlobalState : public DuckLakeMergeSinkGlobalState {
 public:
 	unique_ptr<GlobalOperatorState> update_gstate;
-	unique_ptr<GlobalOperatorState> inline_data_gstate;
 };
 
-class DuckLakeMergeUpdateLocalState : public LocalSinkState {
+class DuckLakeMergeUpdateLocalState : public DuckLakeMergeSinkLocalState {
 public:
 	unique_ptr<OperatorState> update_lstate;
-	unique_ptr<OperatorState> inline_data_lstate;
-	unique_ptr<LocalSinkState> copy_lstate;
 	DataChunk update_output;
-	DataChunk inline_output;
-	//! Projection and cast chunks for partition columns (same pattern as DuckLakeMergeInsert)
-	unique_ptr<ExpressionExecutor> expression_executor;
-	DataChunk projected_chunk;
-	DataChunk cast_chunk;
 };
 
 unique_ptr<GlobalSinkState> DuckLakeMergeUpdate::GetGlobalSinkState(ClientContext &context) const {
@@ -289,7 +392,7 @@ unique_ptr<GlobalSinkState> DuckLakeMergeUpdate::GetGlobalSinkState(ClientContex
 	if (inline_data_op) {
 		result->inline_data_gstate = inline_data_op->GetGlobalOperatorState(context);
 	}
-	copy_op.sink_state = copy_op.GetGlobalSinkState(context);
+	physical_copy.sink_state = physical_copy.GetGlobalSinkState(context);
 	return std::move(result);
 }
 
@@ -300,7 +403,7 @@ unique_ptr<LocalSinkState> DuckLakeMergeUpdate::GetLocalSinkState(ExecutionConte
 		result->inline_data_lstate = inline_data_op->GetOperatorState(context);
 		result->inline_output.Initialize(context.client, inline_data_op->types);
 	}
-	result->copy_lstate = copy_op.GetLocalSinkState(context);
+	result->copy_sink_state = physical_copy.GetLocalSinkState(context);
 	result->update_output.Initialize(context.client, update_op.types);
 	if (!extra_projections.empty()) {
 		result->expression_executor = make_uniq<ExpressionExecutor>(context.client, extra_projections);
@@ -310,7 +413,7 @@ unique_ptr<LocalSinkState> DuckLakeMergeUpdate::GetLocalSinkState(ExecutionConte
 		}
 		result->projected_chunk.Initialize(context.client, projected_types);
 	}
-	result->cast_chunk.Initialize(context.client, copy_op.Cast<PhysicalCopyToFile>().expected_types);
+	result->cast_chunk.Initialize(context.client, physical_copy.Cast<PhysicalCopyToFile>().expected_types);
 	return std::move(result);
 }
 
@@ -325,36 +428,7 @@ SinkResultType DuckLakeMergeUpdate::Sink(ExecutionContext &context, DataChunk &c
 		return SinkResultType::NEED_MORE_INPUT;
 	}
 
-	// if we have an inline data operator, we need to execute through it, it will either inline it or pass it
-	// through to the CopyToFile sink
-	if (inline_data_op) {
-		auto &inline_output = lstate.inline_output;
-		inline_output.Reset();
-		auto result = inline_data_op->Execute(context, lstate.update_output, inline_output, *gstate.inline_data_gstate,
-		                                      *lstate.inline_data_lstate);
-		if (inline_output.size() > 0) {
-			ProjectAndCastForCopy(context.client, inline_output, copy_op, lstate.expression_executor.get(),
-			                      lstate.projected_chunk, lstate.cast_chunk);
-			OperatorSinkInput copy_input {*copy_op.sink_state, *lstate.copy_lstate, input.interrupt_state};
-			copy_op.Sink(context, lstate.cast_chunk, copy_input);
-		}
-		while (result == OperatorResultType::HAVE_MORE_OUTPUT) {
-			inline_output.Reset();
-			result = inline_data_op->Execute(context, lstate.update_output, inline_output, *gstate.inline_data_gstate,
-			                                 *lstate.inline_data_lstate);
-			if (inline_output.size() > 0) {
-				ProjectAndCastForCopy(context.client, inline_output, copy_op, lstate.expression_executor.get(),
-				                      lstate.projected_chunk, lstate.cast_chunk);
-				OperatorSinkInput copy_input {*copy_op.sink_state, *lstate.copy_lstate, input.interrupt_state};
-				copy_op.Sink(context, lstate.cast_chunk, copy_input);
-			}
-		}
-	} else {
-		ProjectAndCastForCopy(context.client, lstate.update_output, copy_op, lstate.expression_executor.get(),
-		                      lstate.projected_chunk, lstate.cast_chunk);
-		OperatorSinkInput copy_input {*copy_op.sink_state, *lstate.copy_lstate, input.interrupt_state};
-		copy_op.Sink(context, lstate.cast_chunk, copy_input);
-	}
+	SinkInlineOrCopy(context, lstate.update_output, inline_data_op, physical_copy, gstate, lstate, input.interrupt_state);
 	return SinkResultType::NEED_MORE_INPUT;
 }
 
@@ -362,30 +436,15 @@ SinkCombineResultType DuckLakeMergeUpdate::Combine(ExecutionContext &context, Op
 	auto &gstate = input.global_state.Cast<DuckLakeMergeUpdateGlobalState>();
 	auto &lstate = input.local_state.Cast<DuckLakeMergeUpdateLocalState>();
 
-	// drain inline data
 	if (inline_data_op) {
-		auto &inline_output = lstate.inline_output;
-		while (true) {
-			inline_output.Reset();
-			auto fresult = inline_data_op->FinalExecute(context, inline_output, *gstate.inline_data_gstate,
-			                                            *lstate.inline_data_lstate);
-			if (inline_output.size() > 0) {
-				ProjectAndCastForCopy(context.client, inline_output, copy_op, lstate.expression_executor.get(),
-				                      lstate.projected_chunk, lstate.cast_chunk);
-				OperatorSinkInput copy_input {*copy_op.sink_state, *lstate.copy_lstate, input.interrupt_state};
-				copy_op.Sink(context, lstate.cast_chunk, copy_input);
-			}
-			if (fresult == OperatorFinalizeResultType::FINISHED) {
-				break;
-			}
-		}
+		DrainInlineData(inline_data_op, context, input, physical_copy, gstate, lstate);
 	}
 
 	DataChunk dummy;
 	update_op.FinalExecute(context, dummy, *gstate.update_gstate, *lstate.update_lstate);
 
-	OperatorSinkCombineInput copy_combine {*copy_op.sink_state, *lstate.copy_lstate, input.interrupt_state};
-	copy_op.Combine(context, copy_combine);
+	OperatorSinkCombineInput copy_combine {*physical_copy.sink_state, *lstate.copy_sink_state, input.interrupt_state};
+	physical_copy.Combine(context, copy_combine);
 	return SinkCombineResultType::FINISHED;
 }
 
@@ -401,16 +460,7 @@ SinkFinalizeType DuckLakeMergeUpdate::Finalize(Pipeline &pipeline, Event &event,
 		inline_data_op->OperatorFinalize(pipeline, event, context, inline_finalize);
 	}
 
-	auto finalize_event =
-	    make_shared_ptr<DuckLakeFinalizeCopyToInsertEvent>(pipeline, copy_op, insert_op, input.interrupt_state);
-	event.InsertEvent(finalize_event);
-
-	OperatorSinkFinalizeInput copy_finalize {*copy_op.sink_state, input.interrupt_state};
-	auto finalize_result = copy_op.Finalize(pipeline, event, context, copy_finalize);
-	if (finalize_result == SinkFinalizeType::BLOCKED) {
-		return SinkFinalizeType::BLOCKED;
-	}
-	return SinkFinalizeType::READY;
+	return FinalizeCopyToInsert(pipeline, event, context, physical_copy, catalog_insert, input.interrupt_state);
 }
 
 //===--------------------------------------------------------------------===//
@@ -451,28 +501,28 @@ static unique_ptr<MergeIntoOperator> DuckLakePlanMergeIntoAction(DuckLakeCatalog
 		update_op.row_id_index = child_plan.types.size() - DuckLakeUpdate::DELETION_INFO_SIZE - 1;
 
 		// maybe wrap with InlineData if we hit the row limit
-		optional_ptr<DuckLakeInlineData> inline_data;
+		optional_ptr<DuckLakeInlineData> inline_data_op;
 		idx_t data_inlining_row_limit = catalog.GetInliningLimit(context, ducklake_table);
 		if (data_inlining_row_limit > 0) {
 			auto &inline_op =
 			    planner.Make<DuckLakeInlineData>(update_op, data_inlining_row_limit).Cast<DuckLakeInlineData>();
-			inline_data = &inline_op;
+			inline_data_op = &inline_op;
 		}
 
 		// plan copy and insert
 		auto copy_options = DuckLakeInsert::GetCopyOptions(context, copy_input);
-		auto &copy_op = DuckLakeInsert::PlanCopyForInsert(context, planner, copy_input, nullptr);
-		auto &copy_dummy = planner.Make<PhysicalDummyScan>(copy_op.Cast<PhysicalCopyToFile>().expected_types, 1);
-		copy_op.children.push_back(copy_dummy);
-		auto &insert_op =
+		auto &physical_copy = DuckLakeInsert::PlanCopyForInsert(context, planner, copy_input, nullptr);
+		auto &copy_dummy = planner.Make<PhysicalDummyScan>(physical_copy.Cast<PhysicalCopyToFile>().expected_types, 1);
+		physical_copy.children.push_back(copy_dummy);
+		auto &catalog_insert =
 		    DuckLakeInsert::PlanInsert(context, planner, ducklake_table, std::move(copy_input.encryption_key));
-		if (inline_data) {
-			inline_data->insert = insert_op.Cast<DuckLakeInsert>();
+		if (inline_data_op) {
+			inline_data_op->insert = catalog_insert.Cast<DuckLakeInsert>();
 		}
-		insert_op.children.push_back(copy_op);
+		catalog_insert.children.push_back(physical_copy);
 
 		// wrap in DuckLakeMergeUpdate
-		auto &merge_update = planner.Make<DuckLakeMergeUpdate>(return_types, update_op, inline_data, copy_op, insert_op)
+		auto &merge_update = planner.Make<DuckLakeMergeUpdate>(return_types, update_op, inline_data_op, physical_copy, catalog_insert)
 		                         .Cast<DuckLakeMergeUpdate>();
 		merge_update.extra_projections = std::move(copy_options.projection_list);
 		result->op = merge_update;
@@ -522,12 +572,31 @@ static unique_ptr<MergeIntoOperator> DuckLakePlanMergeIntoAction(DuckLakeCatalog
 		auto &physical_copy = DuckLakeInsert::PlanCopyForInsert(context, planner, copy_input, nullptr);
 		auto &copy_dummy = planner.Make<PhysicalDummyScan>(physical_copy.Cast<PhysicalCopyToFile>().expected_types, 1);
 		physical_copy.children.push_back(copy_dummy);
-		auto &insert =
-		    DuckLakeInsert::PlanInsert(context, planner, ducklake_table, std::move(copy_input.encryption_key));
-		insert.children.push_back(physical_copy);
 
-		auto &merge_insert =
-		    planner.Make<DuckLakeMergeInsert>(insert.types, insert, physical_copy).Cast<DuckLakeMergeInsert>();
+		// maybe wrap with InlineData if we hit the row limit
+		optional_ptr<DuckLakeInlineData> inline_data_op;
+		idx_t data_inlining_row_limit = catalog.GetInliningLimit(context, ducklake_table);
+		if (data_inlining_row_limit > 0) {
+			// slice to just the physical columns, because the inlined data does not have the partition columns
+			auto &expected_types = physical_copy.Cast<PhysicalCopyToFile>().expected_types;
+			vector<LogicalType> inline_types(expected_types.begin(),
+			                                 expected_types.begin() +
+			                                     ducklake_table.GetColumns().PhysicalColumnCount());
+			auto &inline_dummy = planner.Make<PhysicalDummyScan>(std::move(inline_types), 1);
+			auto &inline_op =
+			    planner.Make<DuckLakeInlineData>(inline_dummy, data_inlining_row_limit).Cast<DuckLakeInlineData>();
+			inline_data_op = &inline_op;
+		}
+
+		auto &catalog_insert =
+		    DuckLakeInsert::PlanInsert(context, planner, ducklake_table, std::move(copy_input.encryption_key));
+		if (inline_data_op) {
+			inline_data_op->insert = catalog_insert.Cast<DuckLakeInsert>();
+		}
+		catalog_insert.children.push_back(physical_copy);
+
+		auto &merge_insert = planner.Make<DuckLakeMergeInsert>(return_types, catalog_insert, inline_data_op, physical_copy)
+		                         .Cast<DuckLakeMergeInsert>();
 		merge_insert.extra_projections = std::move(copy_options.projection_list);
 		result->op = merge_insert;
 		break;

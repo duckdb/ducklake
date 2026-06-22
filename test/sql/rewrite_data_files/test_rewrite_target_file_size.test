@@ -1,0 +1,99 @@
+# name: test/sql/rewrite_data_files/test_rewrite_target_file_size.test
+# description: Test that rewrite_data_files respects target_file_size
+# group: [rewrite_data_files]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/rewrite_target_file_size', METADATA_CATALOG 'ducklake_metadata')
+
+# set target file size very small
+statement ok
+CALL ducklake.set_option('target_file_size', '4KB');
+
+statement ok
+CREATE TABLE ducklake.tbl(id INTEGER, str VARCHAR);
+
+# create four data files
+statement ok
+INSERT INTO ducklake.tbl SELECT i, concat('thisisastring', i) FROM range(1000) t(i)
+
+statement ok
+INSERT INTO ducklake.tbl SELECT 1000 + i, concat('thisisalsoastring', i) FROM range(1000) t(i)
+
+statement ok
+INSERT INTO ducklake.tbl SELECT 2000 + i, concat('thisisastringtoo', i) FROM range(1000) t(i)
+
+statement ok
+INSERT INTO ducklake.tbl SELECT 3000 + i, concat('thisisafinalstring', i) FROM range(1000) t(i)
+
+# verify we have 4 data files
+query I
+SELECT count(*) FROM ducklake_metadata.ducklake_data_file WHERE end_snapshot IS NULL
+----
+4
+
+# delete one row from each of the first three files (inlined deletes)
+statement ok
+DELETE FROM ducklake.tbl WHERE id % 1000 = 0 AND id < 3000
+
+# rewrite deletes (each file should be rewritten separately due to small target_file_size)
+query III
+SELECT table_name, files_processed, files_created FROM ducklake_rewrite_data_files('ducklake', delete_threshold => 0)
+----
+tbl	1	1
+tbl	1	1
+tbl	1	1
+
+# verify we still have 4 data files, and no delete files
+query I
+SELECT count(*) FROM ducklake_metadata.ducklake_data_file WHERE end_snapshot IS NULL
+----
+4
+
+query I
+SELECT count(*) FROM ducklake_metadata.ducklake_delete_file WHERE end_snapshot IS NULL
+----
+0
+
+# delete all but one row from the first three files (so that they are merged together)
+statement ok
+DELETE FROM ducklake.tbl WHERE id < 3000 AND id % 1000 != 1
+
+# also delete one row from the final file so that it is compacted (but not merged)
+statement ok
+DELETE FROM ducklake.tbl WHERE id = 3000
+
+# verify we now have at least 3 delete files
+query I
+SELECT count(*) >= 3 FROM ducklake_metadata.ducklake_delete_file WHERE end_snapshot IS NULL
+----
+true
+
+# rewrite deletes (first three files should be merged because estimated size < target_file_size)
+query III
+SELECT table_name, files_processed, files_created FROM ducklake_rewrite_data_files('ducklake', delete_threshold => 0) ORDER BY ALL
+----
+tbl	1	1
+tbl	3	1
+
+# verify data correctness
+query I
+SELECT count(*) FROM ducklake.tbl
+----
+1002
+
+query II
+SELECT * FROM ducklake.tbl ORDER BY ALL LIMIT 4
+----
+1	thisisastring1
+1001	thisisalsoastring1
+2001	thisisastringtoo1
+3001	thisisafinalstring1

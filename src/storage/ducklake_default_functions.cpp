@@ -2,6 +2,7 @@
 #include "storage/ducklake_schema_entry.hpp"
 #include "duckdb/catalog/catalog_entry/table_macro_catalog_entry.hpp"
 #include "storage/ducklake_transaction_manager.hpp"
+#include "duckdb/common/sql_identifier.hpp"
 
 namespace duckdb {
 
@@ -25,8 +26,8 @@ static const DefaultTableMacro ducklake_table_macros[] = {
 
 optional_ptr<CatalogEntry> DuckLakeSchemaEntry::LoadBuiltInFunction(DefaultTableMacro macro) {
 	string macro_def = macro.macro;
-	macro_def = StringUtil::Replace(macro_def, "{CATALOG}", KeywordHelper::WriteQuoted(catalog.GetName(), '\''));
-	macro_def = StringUtil::Replace(macro_def, "{SCHEMA}", KeywordHelper::WriteQuoted(name, '\''));
+	macro_def = StringUtil::Replace(macro_def, "{CATALOG}", SQLString::ToString(catalog.GetName().GetIdentifierName()));
+	macro_def = StringUtil::Replace(macro_def, "{SCHEMA}", SQLString::ToString(name.GetIdentifierName()));
 	macro.macro = macro_def.c_str();
 	auto info = DefaultTableFunctionGenerator::CreateTableMacroInfo(macro);
 	auto table_macro =

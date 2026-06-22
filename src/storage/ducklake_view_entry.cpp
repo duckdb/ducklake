@@ -8,6 +8,7 @@
 #include "duckdb/parser/keyword_helper.hpp"
 #include "duckdb/common/exception/binder_exception.hpp"
 #include "duckdb/common/string_util.hpp"
+#include "duckdb/common/sql_identifier.hpp"
 #include "common/ducklake_util.hpp"
 
 #include <algorithm>
@@ -71,7 +72,8 @@ unique_ptr<CatalogEntry> DuckLakeViewEntry::Alter(DuckLakeTransaction &transacti
 	auto create_info = GetInfo();
 	auto &view_info = create_info->Cast<CreateViewInfo>();
 	view_info.column_comments_map[info.column_name] = info.comment_value;
-	return make_uniq<DuckLakeViewEntry>(*this, view_info, LocalChange::SetViewColumnComment(info.column_name));
+	return make_uniq<DuckLakeViewEntry>(*this, view_info,
+	                                    LocalChange::SetViewColumnComment(info.column_name.GetIdentifierName()));
 }
 
 unique_ptr<CreateInfo> DuckLakeViewEntry::GetInfo() const {
@@ -85,11 +87,12 @@ unique_ptr<CreateInfo> DuckLakeViewEntry::GetInfo() const {
 
 string DuckLakeViewEntry::ToSQL() const {
 	string result = "CREATE VIEW ";
-	result += KeywordHelper::WriteOptionallyQuoted(name);
+	result += SQLIdentifier::ToString(name.GetIdentifierName());
 	if (!aliases.empty()) {
 		result += " (";
-		result += StringUtil::Join(aliases, aliases.size(), ", ",
-		                           [](const string &alias) { return KeywordHelper::WriteOptionallyQuoted(alias); });
+		result += StringUtil::Join(aliases, aliases.size(), ", ", [](const Identifier &alias) {
+			return SQLIdentifier::ToString(alias.GetIdentifierName());
+		});
 		result += ")";
 	}
 	result += " AS ";
@@ -128,7 +131,7 @@ const SelectStatement &DuckLakeViewEntry::GetQuery() {
 	return *query;
 }
 
-string DuckLakeViewEntry::GetQuerySQL() {
+string DuckLakeViewEntry::GetQuerySQL() const {
 	return query_sql;
 }
 

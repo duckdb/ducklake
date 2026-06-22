@@ -119,8 +119,8 @@ OperatorResultType DuckLakeUpdate::Execute(ExecutionContext &context, DataChunk 
 	auto &row_number_vec = input.data[delete_idx_start + 2];
 
 	UnifiedVectorFormat file_index_data, row_number_data;
-	file_index_vec.ToUnifiedFormat(input.size(), file_index_data);
-	row_number_vec.ToUnifiedFormat(input.size(), row_number_data);
+	file_index_vec.ToUnifiedFormat(file_index_data);
+	row_number_vec.ToUnifiedFormat(row_number_data);
 	auto file_indices = UnifiedVectorFormat::GetData<uint64_t>(file_index_data);
 	auto row_numbers = UnifiedVectorFormat::GetData<int64_t>(row_number_data);
 
@@ -150,8 +150,6 @@ OperatorResultType DuckLakeUpdate::Execute(ExecutionContext &context, DataChunk 
 	auto &update_expression_chunk = lstate.update_expression_chunk;
 	auto &insert_chunk = lstate.insert_chunk;
 
-	update_expression_chunk.SetCardinality(input.size());
-	insert_chunk.SetCardinality(input.size());
 	lstate.expression_executor->Execute(input, update_expression_chunk);
 
 	const idx_t physical_column_count = columns.size();
@@ -162,14 +160,15 @@ OperatorResultType DuckLakeUpdate::Execute(ExecutionContext &context, DataChunk 
 	}
 	// we place row_id right after physical columns
 	insert_chunk.data[physical_column_count].Reference(input.data[row_id_index]);
+	insert_chunk.SetChildCardinality(input.size());
 
 	chunk.Reference(insert_chunk);
 
 	auto &delete_chunk = lstate.delete_chunk;
-	delete_chunk.SetCardinality(input.size());
 	for (idx_t i = 0; i < DELETION_INFO_SIZE; i++) {
 		delete_chunk.data[i].Reference(input.data[delete_idx_start + i]);
 	}
+	delete_chunk.SetChildCardinality(input.size());
 
 	InterruptState interrupt_state;
 	OperatorSinkInput delete_input {*delete_op.sink_state, *lstate.delete_local_state, interrupt_state};
@@ -213,7 +212,7 @@ string DuckLakeUpdate::GetName() const {
 
 InsertionOrderPreservingMap<string> DuckLakeUpdate::ParamsToString() const {
 	InsertionOrderPreservingMap<string> result;
-	result["Table Name"] = table.name;
+	result["Table Name"] = table.name.GetIdentifierName();
 	return result;
 }
 

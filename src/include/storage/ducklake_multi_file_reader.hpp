@@ -36,12 +36,12 @@ public:
 
 	//! Override the regular parquet bind using the MultiFileReader Bind. The bind from these are what DuckDB's file
 	//! readers will try read
-	bool Bind(MultiFileOptions &options, MultiFileList &files, vector<LogicalType> &return_types, vector<string> &names,
-	          MultiFileReaderBindData &bind_data) override;
+	bool Bind(MultiFileOptions &options, MultiFileList &files, vector<LogicalType> &return_types,
+	          vector<Identifier> &names, MultiFileReaderBindData &bind_data) override;
 
 	//! Override the Options bind
 	void BindOptions(MultiFileOptions &options, MultiFileList &files, vector<LogicalType> &return_types,
-	                 vector<string> &names, MultiFileReaderBindData &bind_data) override;
+	                 vector<Identifier> &names, MultiFileReaderBindData &bind_data) override;
 
 	ReaderInitializeType InitializeReader(MultiFileReaderData &reader_data, const MultiFileBindData &bind_data,
 	                                      const vector<MultiFileColumnDefinition> &global_columns,
@@ -80,19 +80,21 @@ public:
 
 private:
 	shared_ptr<BaseFileReader> TryCreateInlinedDataReader(const OpenFileInfo &file);
-	//! For deletion scans we need to get the snapshot_id values using per-row snapshot information
+	//! Gather per-row snapshot_id values; rowid_output_col/snapshot_output_col are positions within `chunk` (no-op if invalid)
 	void GatherDeletionScanSnapshots(BaseFileReader &reader, const MultiFileReaderData &reader_data, DataChunk &chunk,
-	                                 optional_idx rowid_col_override = optional_idx()) const;
+	                                 optional_idx rowid_output_col, optional_idx snapshot_output_col) const;
 
 private:
 	unique_ptr<MultiFileColumnDefinition> row_id_column;
 	unique_ptr<MultiFileColumnDefinition> snapshot_id_column;
 	//! Inlined transaction-local data
 	shared_ptr<DuckLakeInlinedData> transaction_local_data;
-	//! For deletion scans: track which output column is snapshot_id (if any)
+	//! For deletion scans: snapshot_id index in global_column_ids order, if projected; FinalizeChunk remaps it to the output position
 	optional_idx deletion_scan_snapshot_col;
-	//! For deletion scans: track which output column is rowid (if any)
+	//! For deletion scans: rowid index in global_column_ids order, if projected; same remapping as deletion_scan_snapshot_col
 	optional_idx deletion_scan_rowid_col;
+	//! For deletion scans with internally-projected rowid: index of the appended rowid expression, evaluated explicitly when the executor omits it
+	optional_idx deletion_scan_internal_rowid_col;
 	//! Whether row_id was internally projected (not in user's query)
 	//! This is necessary for DCF queries over inlined deletions
 	bool internally_projected_rowid = false;

@@ -31,9 +31,9 @@ static unique_ptr<FunctionData> DuckLakeExpireSnapshotsBind(ClientContext &conte
 	const auto older_than_default = ducklake_catalog.GetConfigOption<string>("expire_older_than", {}, {}, "");
 
 	for (auto &entry : input.named_parameters) {
-		if (StringUtil::CIEquals(entry.first, "dry_run")) {
+		if (entry.first == "dry_run") {
 			result->dry_run = BooleanValue::Get(entry.second);
-		} else if (StringUtil::CIEquals(entry.first, "versions")) {
+		} else if (entry.first == "versions") {
 			has_versions = true;
 			for (auto &snapshot_id : ListValue::GetChildren(entry.second)) {
 				if (!snapshot_list.empty()) {
@@ -41,7 +41,7 @@ static unique_ptr<FunctionData> DuckLakeExpireSnapshotsBind(ClientContext &conte
 				}
 				snapshot_list += snapshot_id.ToString();
 			}
-		} else if (StringUtil::CIEquals(entry.first, "older_than")) {
+		} else if (entry.first == "older_than") {
 			from_timestamp = entry.second.GetValue<timestamp_tz_t>();
 			has_timestamp = true;
 		} else {
@@ -111,6 +111,10 @@ void DuckLakeExpireSnapshotsExecute(ClientContext &context, TableFunctionInput &
 	if (!state.executed && !data.dry_run) {
 		auto &transaction = DuckLakeTransaction::Get(context, data.catalog);
 		transaction.DeleteSnapshots(data.snapshots);
+		auto &ducklake_catalog = data.catalog.Cast<DuckLakeCatalog>();
+		for (auto &snapshot : data.snapshots) {
+			ducklake_catalog.InvalidateSchemaCache(snapshot.schema_version);
+		}
 		state.executed = true;
 	}
 
@@ -118,11 +122,11 @@ void DuckLakeExpireSnapshotsExecute(ClientContext &context, TableFunctionInput &
 	while (state.offset < data.snapshots.size() && count < STANDARD_VECTOR_SIZE) {
 		auto row_values = DuckLakeSnapshotsFunction::GetSnapshotValues(data.snapshots[state.offset++]);
 		for (idx_t col_idx = 0; col_idx < row_values.size(); col_idx++) {
-			output.data[col_idx].SetValue(count, row_values[col_idx]);
+			output.data[col_idx].Append(row_values[col_idx]);
 		}
 		count++;
 	}
-	output.SetCardinality(count);
+	output.SetChildCardinality(count);
 }
 
 DuckLakeExpireSnapshotsFunction::DuckLakeExpireSnapshotsFunction()

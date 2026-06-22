@@ -66,16 +66,12 @@ unique_ptr<DuckLakeDeletionVectorData> DuckLakeDeletionVectorData::FromBlob(data
 	blob_start += sizeof(uint32_t);
 	D_ASSERT(blob_start < blob_end);
 
-	constexpr char DELETION_VECTOR_MAGIC[] = {'\xD1', '\xD3', '\x39', '\x64'};
-	char magic_bytes[4];
-
 	auto checksummed_data_start = blob_start;
-	memcpy(magic_bytes, blob_start, 4);
+	auto memcmp_res = memcmp(DELETION_VECTOR_MAGIC, blob_start, 4);
 	blob_start += 4;
 	vector_size -= 4;
 	D_ASSERT(blob_start < blob_end);
 
-	auto memcmp_res = memcmp(DELETION_VECTOR_MAGIC, magic_bytes, 4);
 	if (memcmp_res != 0) {
 		throw InvalidInputException("Magic bytes mismatch, deletion vector is corrupt!");
 	}
@@ -151,7 +147,6 @@ vector<data_t> DuckLakeDeletionVectorData::ToBlob(const set<idx_t> &positions) {
 	blob_ptr += sizeof(uint32_t);
 
 	auto checksummed_data_start = blob_ptr;
-	constexpr uint8_t DELETION_VECTOR_MAGIC[4] = {0xD1, 0xD3, 0x39, 0x64};
 	memcpy(blob_ptr, DELETION_VECTOR_MAGIC, 4);
 	blob_ptr += sizeof(uint32_t);
 
