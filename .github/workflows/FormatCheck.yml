@@ -35,6 +35,7 @@ jobs:
           sudo apt-get update -y -qq
           sudo apt-get install -y -qq ninja-build clang-format-11
           sudo pip3 install cmake-format 'black==24.*' cxxheaderparser pcpp 'clang_format==11.0.1'
+          sudo update-alternatives --install /usr/bin/clang-format clang-format /usr/bin/clang-format-11 100
 
       - name: List Installed Packages
         run: pip3 freeze
