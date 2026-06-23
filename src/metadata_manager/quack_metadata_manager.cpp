@@ -47,7 +47,7 @@ unique_ptr<QueryResult> QuackMetadataManager::AttachMetadata(const string &attac
 		}
 		result = fresh_conn.Query(query);
 	}
-	return result;
+	return std::move(result);
 }
 
 unique_ptr<QueryResult> QuackMetadataManager::Query(DuckLakeSnapshot snapshot, string &query) {

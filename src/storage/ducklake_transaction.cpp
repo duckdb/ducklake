@@ -1528,7 +1528,7 @@ unique_ptr<QueryResult> DuckLakeTransaction::ExecuteRaw(string query) {
 	if (cb) {
 		cb(query, end - start);
 	}
-	return result;
+	return std::move(result);
 }
 
 unique_ptr<QueryResult> DuckLakeTransaction::Query(string query) {

@@ -33,9 +33,51 @@ jobs:
       ci_tools_version: v1.5-variegata
       extension_name: ducklake
 
+  # Regression test, see https://github.com/duckdb/ducklake/pull/1256 for more details.
+  gcc12-compatibility-build:
+    name: Build with GCC 12
+    runs-on: ubuntu-22.04
+    env:
+      VCPKG_TARGET_TRIPLET: x64-linux
+      GEN: Ninja
+      VCPKG_TOOLCHAIN_PATH: ${{ github.workspace }}/vcpkg/scripts/buildsystems/vcpkg.cmake
+      CC: gcc-12
+      CXX: g++-12
+      CMAKE_BUILD_PARALLEL_LEVEL: 2
+    steps:
+      - name: Install required ubuntu packages
+        run: |
+          sudo apt-get update -y -qq
+          sudo apt-get install -y -qq build-essential gcc-12 g++-12 cmake ninja-build ccache python3 mold
+
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          submodules: 'true'
+
+      - name: Checkout DuckDB to version
+        run: |
+          cd duckdb
+          git checkout $(cat ../.github/duckdb-version)
+
+      - name: Setup Ccache
+        uses: hendrikmuhs/ccache-action@main
+        with:
+          key: gcc12-compatibility-build
+          save: ${{ github.ref == 'refs/heads/main' || github.repository != 'duckdb/ducklake' }}
+
+      - name: Setup vcpkg
+        uses: lukka/run-vcpkg@v11.1
+        with:
+          vcpkgGitCommitId: a42af01b72c28a8e1d7b48107b33e4f286a55ef6
+
+      - name: Build extension
+        run: |
+          make release
+
   duckdb-next-deploy:
     name: Deploy extension binaries
-    needs: [get-duckdb-version, duckdb-next-build]
+    needs: [get-duckdb-version, duckdb-next-build, gcc12-compatibility-build]
     if: github.ref != 'refs/heads/main'
     uses: duckdb/extension-ci-tools/.github/workflows/_extension_deploy.yml@main
     secrets: inherit
