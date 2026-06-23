@@ -229,10 +229,6 @@ void DuckLakeInitializer::LoadExistingDuckLake(DuckLakeTransaction &transaction)
 				metadata_manager.MigrateV10();
 				catalog_version = DuckLakeVersion::V1_1_DEV_1;
 			}
-			if (catalog_version == DuckLakeVersion::V1_1_DEV_1) {
-				metadata_manager.MigrateV11Dev1();
-				catalog_version = DuckLakeVersion::V1_1_DEV_2;
-			}
 			if (catalog_version != DUCKLAKE_LATEST_VERSION) {
 				throw NotImplementedException("Unsupported DuckLake version '%s'",
 				                              DuckLakeVersionToString(catalog_version));
@@ -304,7 +300,7 @@ void DuckLakeInitializer::SetVersionedMetadataManager(DuckLakeTransaction &trans
 	}
 	auto &current = transaction.GetMetadataManager();
 	unique_ptr<DuckLakeMetadataManager> new_manager;
-	if (version == DuckLakeVersion::V1_1_DEV_1 || version == DuckLakeVersion::V1_1_DEV_2) {
+	if (version == DuckLakeVersion::V1_1_DEV_1) {
 		if (dynamic_cast<QuackMetadataManager *>(&current)) {
 			new_manager = make_uniq<DuckLakeMetadataManagerV1_1<QuackMetadataManager>>(transaction);
 		} else if (dynamic_cast<PostgresMetadataManager *>(&current)) {

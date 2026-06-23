@@ -426,21 +426,12 @@ void DuckLakeMetadataManager::MigrateV10(bool allow_failures) {
 	string migrate_query = R"(
 ALTER TABLE {METADATA_CATALOG}.ducklake_data_file ADD COLUMN {IF_NOT_EXISTS} row_group_count BIGINT;
 ALTER TABLE {METADATA_CATALOG}.ducklake_delete_file ADD COLUMN {IF_NOT_EXISTS} row_group_count BIGINT;
+CREATE TABLE {IF_NOT_EXISTS} {METADATA_CATALOG}.ducklake_view_column_tag(
+	view_id BIGINT, column_name VARCHAR, begin_snapshot BIGINT, end_snapshot BIGINT, key VARCHAR, value VARCHAR
+);
 UPDATE {METADATA_CATALOG}.ducklake_metadata SET value = '1.1-dev1' WHERE key = 'version';
 	)";
 	ExecuteMigration(migrate_query, allow_failures, "1.0", "1.1-dev1");
-}
-
-void DuckLakeMetadataManager::MigrateV11Dev1() {
-	auto result = transaction.Query(R"(
-CREATE TABLE IF NOT EXISTS {METADATA_CATALOG}.ducklake_view_column_tag(
-	view_id BIGINT, column_name VARCHAR, begin_snapshot BIGINT, end_snapshot BIGINT, key VARCHAR, value VARCHAR
-);
-UPDATE {METADATA_CATALOG}.ducklake_metadata SET value = '1.1-dev2' WHERE key = 'version';
-	)");
-	if (result->HasError()) {
-		result->GetErrorObject().Throw("Failed to migrate DuckLake from v1.1-dev1 to v1.1-dev2: ");
-	}
 }
 
 DuckLakeMetadata DuckLakeMetadataManager::LoadDuckLake() {

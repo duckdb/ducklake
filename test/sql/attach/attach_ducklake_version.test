@@ -82,7 +82,7 @@ ATTACH 'ducklake:{TEST_DIR}/ducklake_version_10.db' AS ducklake(DATA_PATH '{TEST
 query I
 SELECT value FROM __ducklake_metadata_ducklake.ducklake_metadata WHERE key = 'version'
 ----
-1.1-dev2
+1.1-dev1
 
 query I
 SELECT * FROM ducklake.t1
@@ -92,14 +92,14 @@ SELECT * FROM ducklake.t1
 statement ok
 DETACH ducklake
 
-# after migration, re-attach without version should succeed (now at 1.1-dev2)
+# after migration, re-attach without version should succeed (now at 1.1-dev1)
 statement ok
 ATTACH 'ducklake:{TEST_DIR}/ducklake_version_10.db' AS ducklake(DATA_PATH '{TEST_DIR}/ducklake_version_10_files')
 
 query I
 SELECT value FROM __ducklake_metadata_ducklake.ducklake_metadata WHERE key = 'version'
 ----
-1.1-dev2
+1.1-dev1
 
 query I
 SELECT * FROM ducklake.t1
@@ -109,20 +109,20 @@ SELECT * FROM ducklake.t1
 statement ok
 DETACH ducklake
 
-# cannot downgrade: attach a 1.1-dev2 catalog with DUCKLAKE_VERSION '1.0'
+# cannot downgrade: attach a 1.1-dev1 catalog with DUCKLAKE_VERSION '1.0'
 statement error
 ATTACH 'ducklake:{TEST_DIR}/ducklake_version_10.db' AS ducklake(DATA_PATH '{TEST_DIR}/ducklake_version_10_files', DUCKLAKE_VERSION '1.0')
 ----
 Cannot downgrade
 
-# create a new database with default version (1.1-dev2)
+# create a new database with default version (1.1-dev1)
 statement ok
 ATTACH 'ducklake:{TEST_DIR}/ducklake_version_default.db' AS ducklake(DATA_PATH '{TEST_DIR}/ducklake_version_default_files')
 
 query I
 SELECT value FROM __ducklake_metadata_ducklake.ducklake_metadata WHERE key = 'version'
 ----
-1.1-dev2
+1.1-dev1
 
 statement ok
 CREATE TABLE ducklake.t2(j INT);
@@ -145,7 +145,7 @@ ATTACH 'ducklake:{TEST_DIR}/ducklake_version_default.db' AS ducklake(DATA_PATH '
 query I
 SELECT value FROM __ducklake_metadata_ducklake.ducklake_metadata WHERE key = 'version'
 ----
-1.1-dev2
+1.1-dev1
 
 query I
 SELECT * FROM ducklake.t2

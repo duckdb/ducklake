@@ -104,7 +104,7 @@ struct DuckLakeCommitContext {
 	bool skip_drop_empty_inlined = false;
 	//! Whether the metadata schema has the row_group_count columns (DuckLake >= 1.1).
 	bool write_row_group_count = false;
-	//! Whether the metadata schema has view column tags (DuckLake >= 1.1-dev2).
+	//! Whether the metadata schema has view column tags (DuckLake >= 1.1-dev1).
 	bool load_view_column_tags = false;
 };
 
