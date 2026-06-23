@@ -1,0 +1,48 @@
+name: Format Check
+on:
+  pull_request:
+    types: [opened, reopened, synchronize]
+  push:
+    branches:
+      - main
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ github.head_ref || '' }}-${{ github.base_ref || '' }}-${{ github.ref != 'refs/heads/main' || github.sha }}
+  cancel-in-progress: true
+
+jobs:
+  format-check:
+    name: Check Code Format
+    runs-on: ubuntu-22.04
+    env:
+      CC: gcc-10
+      CXX: g++-10
+      GEN: ninja
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          submodules: 'true'
+
+      - name: Checkout DuckDB to version
+        run: |
+          cd duckdb
+          git checkout $(cat ../.github/duckdb-version)
+
+      - name: Install formatting tools
+        run: |
+          sudo apt-get update -y -qq
+          sudo apt-get install -y -qq ninja-build python3-venv
+          python3 -m venv .cache/format-venv
+          .cache/format-venv/bin/python -m pip install cmake-format 'black==24.*' cxxheaderparser pcpp 'clang_format==11.0.1'
+
+      - name: List Installed Packages
+        run: .cache/format-venv/bin/python -m pip freeze
+
+      - name: Check format
+        run: |
+          .cache/format-venv/bin/clang-format --version
+          .cache/format-venv/bin/clang-format --dump-config
+          .cache/format-venv/bin/black --version
+          .cache/format-venv/bin/python duckdb/scripts/format.py --all --check --directories src test

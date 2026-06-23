@@ -322,8 +322,8 @@ unique_ptr<FunctionData> DuckLakeScanDeserialize(Deserializer &deserializer, Tab
 	auto &catalog = Catalog::GetCatalog(context, Identifier(catalog_name));
 	auto &transaction = DuckLakeTransaction::Get(context, catalog);
 
-	auto &table_entry = Catalog::GetEntry<TableCatalogEntry>(context, Identifier(catalog_name),
-	                                                          Identifier(schema_name), Identifier(table_name))
+	auto &table_entry = Catalog::GetEntry<TableCatalogEntry>(context, Identifier(catalog_name), Identifier(schema_name),
+	                                                         Identifier(table_name))
 	                        .Cast<DuckLakeTableEntry>();
 
 	function.function_info = DuckLakeFunctionInfo::Create(table_entry, transaction, snapshot);

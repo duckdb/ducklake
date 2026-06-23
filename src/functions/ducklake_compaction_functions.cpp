@@ -503,10 +503,9 @@ DuckLakeCompactor::GenerateCompactionCommand(vector<DuckLakeCompactionFileEntry>
                                              bool bind_to_latest_schema) {
 	// Cross-schema groups bind to the latest snapshot so the merged file is written under the current schema (the
 	// reader projects each source via its own mapping_id); same-schema groups bind to the source schema_version.
-	DuckLakeSnapshot snapshot = bind_to_latest_schema
-	                                ? transaction.GetSnapshot()
-	                                : DuckLakeSnapshot(source_files[0].file.begin_snapshot,
-	                                                   source_files[0].schema_version, 0, 0);
+	DuckLakeSnapshot snapshot = bind_to_latest_schema ? transaction.GetSnapshot()
+	                                                  : DuckLakeSnapshot(source_files[0].file.begin_snapshot,
+	                                                                     source_files[0].schema_version, 0, 0);
 
 	auto entry = catalog.GetEntryById(transaction, snapshot, table_id);
 	if (!entry) {
@@ -647,9 +646,8 @@ DuckLakeCompactor::GenerateCompactionCommand(vector<DuckLakeCompactionFileEntry>
 	// and instead pull the latest sort setting
 	// First, see if there are transaction local changes to the table
 	// Then fall back to latest snapshot if no local changes
-	auto latest_entry = transaction.GetTransactionLocalEntry(CatalogType::TABLE_ENTRY,
-	                                                          table.schema.name.GetIdentifierName(),
-	                                                          table.name.GetIdentifierName());
+	auto latest_entry = transaction.GetTransactionLocalEntry(
+	    CatalogType::TABLE_ENTRY, table.schema.name.GetIdentifierName(), table.name.GetIdentifierName());
 	if (!latest_entry) {
 		auto latest_snapshot = transaction.GetSnapshot();
 		latest_entry = catalog.GetEntryById(transaction, latest_snapshot, table_id);

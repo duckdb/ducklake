@@ -14,7 +14,6 @@
 #include "duckdb/planner/expression/bound_constant_expression.hpp"
 #include "duckdb/planner/expression/bound_reference_expression.hpp"
 
-
 namespace duckdb {
 
 //! FunctionInfo to pass delete file metadata to the MultiFileReader
@@ -192,8 +191,7 @@ DeleteFileScanResult DuckLakeDeleteFilter::ScanDeletionVectorFile(ClientContext 
 unique_ptr<ExpressionFilter> MakeComparisonFilter(ExpressionType comparison_type, Value constant) {
 	auto col_ref = make_uniq<BoundReferenceExpression>(LogicalType::BIGINT, storage_t(0));
 	auto bound_constant = make_uniq<BoundConstantExpression>(std::move(constant));
-	auto comparison = BoundComparisonExpression::Create(comparison_type, std::move(col_ref),
-	                                                    std::move(bound_constant));
+	auto comparison = BoundComparisonExpression::Create(comparison_type, std::move(col_ref), std::move(bound_constant));
 	return make_uniq<ExpressionFilter>(std::move(comparison));
 }
 
@@ -246,15 +244,13 @@ DeleteFileScanResult DuckLakeDeleteFilter::ScanDeleteFile(ClientContext &context
 
 		if (snapshot_filter_min.IsValid()) {
 			auto min_constant = Value::BIGINT(NumericCast<int64_t>(snapshot_filter_min.GetIndex()));
-			filters->PushFilter(snapshot_col_idx,
-			                    MakeComparisonFilter(ExpressionType::COMPARE_GREATERTHANOREQUALTO,
-			                                           std::move(min_constant)));
+			filters->PushFilter(snapshot_col_idx, MakeComparisonFilter(ExpressionType::COMPARE_GREATERTHANOREQUALTO,
+			                                                           std::move(min_constant)));
 		}
 		if (snapshot_filter_max.IsValid()) {
 			auto max_constant = Value::BIGINT(NumericCast<int64_t>(snapshot_filter_max.GetIndex()));
-			filters->PushFilter(snapshot_col_idx,
-			                    MakeComparisonFilter(ExpressionType::COMPARE_LESSTHANOREQUALTO,
-			                                           std::move(max_constant)));
+			filters->PushFilter(snapshot_col_idx, MakeComparisonFilter(ExpressionType::COMPARE_LESSTHANOREQUALTO,
+			                                                           std::move(max_constant)));
 		}
 		scanner.SetFilters(std::move(filters));
 	}
