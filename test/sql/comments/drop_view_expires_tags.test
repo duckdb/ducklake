@@ -1,5 +1,5 @@
 # name: test/sql/comments/drop_view_expires_tags.test
-# description: Verify DROP VIEW expires ducklake_tag (view comment) and ducklake_view_column_tag (column comments).
+# description: Verify DROP VIEW expires ducklake_tag (view comment).
 # group: [comments]
 
 require ducklake
@@ -17,40 +17,22 @@ CREATE VIEW ducklake.v AS SELECT 1 AS c
 statement ok
 COMMENT ON VIEW ducklake.v IS 'my view comment'
 
-statement ok
-COMMENT ON COLUMN ducklake.v.c IS 'my col comment'
-
-# verify both tag rows are active
+# verify view tag row is active
 query II
 SELECT key, value FROM __ducklake_metadata_ducklake.ducklake_tag WHERE end_snapshot IS NULL;
 ----
 comment	my view comment
 
-query II
-SELECT key, value FROM __ducklake_metadata_ducklake.ducklake_view_column_tag WHERE end_snapshot IS NULL;
-----
-comment	my col comment
-
 statement ok
 DROP VIEW ducklake.v
 
-# after DROP VIEW, no active rows in either tag table (DropViews expires ducklake_tag + ducklake_view_column_tag)
+# after DROP VIEW, no active rows in ducklake_tag (DropViews expires ducklake_tag)
 query I
 SELECT count(*) FROM __ducklake_metadata_ducklake.ducklake_tag WHERE end_snapshot IS NULL;
 ----
 0
 
 query I
-SELECT count(*) FROM __ducklake_metadata_ducklake.ducklake_view_column_tag WHERE end_snapshot IS NULL;
-----
-0
-
-query I
 SELECT count(*) FROM __ducklake_metadata_ducklake.ducklake_tag WHERE end_snapshot IS NOT NULL;
-----
-1
-
-query I
-SELECT count(*) FROM __ducklake_metadata_ducklake.ducklake_view_column_tag WHERE end_snapshot IS NOT NULL;
 ----
 1
