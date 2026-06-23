@@ -797,10 +797,10 @@ bool DuckLakeTransactionState::TryMergeInlinedStats(const vector<DuckLakeColumnS
 }
 
 void DuckLakeTransactionState::RecomputeGlobalStatsAfterRewrite(string &batch_query, TableIndex table_id,
-                                                                 DuckLakeSnapshot snapshot,
-                                                                 const CompactionInformation &rewrite_changes,
-                                                                 const set<DataFileIndex> &removed_source_ids,
-                                                                 const DuckLakeCommitContext &context) {
+                                                                DuckLakeSnapshot snapshot,
+                                                                const CompactionInformation &rewrite_changes,
+                                                                const set<DataFileIndex> &removed_source_ids,
+                                                                const DuckLakeCommitContext &context) {
 	auto columns = context.get_table_column_schema(table_id);
 	if (columns.empty()) {
 		return; // no schema visible at the commit snapshot
@@ -920,7 +920,8 @@ void DuckLakeTransactionState::RecomputeGlobalStatsAfterRewrite(string &batch_qu
 	//    no live data becomes "unknown" -> it is scanned at query time, which is correct). UpdateGlobalTableStatsSql
 	//    only UPDATEs existing rows, so entries with no committed stats row (e.g. struct containers) are harmless
 	//    no-ops. Use the snapshot schema instead of current_stats->column_stats: the server-side stats cache is only
-	//    populated for tables with staged inserts, so a pure-rewrite commit can see an empty current_stats.column_stats.
+	//    populated for tables with staged inserts, so a pure-rewrite commit can see an empty
+	//    current_stats.column_stats.
 	for (auto &col : columns) {
 		if (new_stats.column_stats.find(col.field_index) == new_stats.column_stats.end()) {
 			new_stats.column_stats.insert(make_pair(col.field_index, DuckLakeColumnStats(col.column_type)));
@@ -1486,8 +1487,7 @@ string DuckLakeTransactionState::CommitChanges(DuckLakeCommitState &commit_state
 			    file.table_id, file.file_name, new_tables_result, new_schemas_result, context.query_metadata, data_path,
 			    separator));
 		}
-		return DuckLakeMetadataManager::WriteNewDataFilesSqlBatch(files, resolved_paths,
-		                                                          context.write_row_group_count);
+		return DuckLakeMetadataManager::WriteNewDataFilesSqlBatch(files, resolved_paths, context.write_row_group_count);
 	};
 
 	// write new data / data files
@@ -1531,8 +1531,8 @@ string DuckLakeTransactionState::CommitChanges(DuckLakeCommitState &commit_state
 			    file.table_id, file.path, new_tables_result, new_schemas_result, context.query_metadata, data_path,
 			    separator));
 		}
-		batch_queries +=
-		    DuckLakeMetadataManager::WriteNewDeleteFiles(file_list, resolved_delete_paths, context.write_row_group_count);
+		batch_queries += DuckLakeMetadataManager::WriteNewDeleteFiles(file_list, resolved_delete_paths,
+		                                                              context.write_row_group_count);
 
 		// write new inlined deletes (for inlined data tables)
 		auto inlined_deletes = GetNewInlinedDeletes(commit_state);

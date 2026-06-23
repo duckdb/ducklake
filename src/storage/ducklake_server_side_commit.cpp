@@ -630,8 +630,7 @@ unique_ptr<DuckLakeStats> DuckLakeServerSideCommit::BuildStatsMap(vector<DuckLak
 
 vector<string> DuckLakeServerSideCommit::LookupInlinedTableNames(TableIndex table_id) {
 	vector<string> names;
-	auto sql =
-	    SubstitutePlaceholders(DuckLakeMetadataManager::GetInlinedTableNamesSql(table_id), transaction_snapshot);
+	auto sql = SubstitutePlaceholders(DuckLakeMetadataManager::GetInlinedTableNamesSql(table_id), transaction_snapshot);
 	auto result = RunQuery(sql, "lookup inlined table names");
 	for (auto &row : *result) {
 		names.push_back(row.GetValue<string>(0));
@@ -741,8 +740,8 @@ DuckLakeCommitContext DuckLakeServerSideCommit::BuildContext(idx_t &committed_sn
 	};
 	ctx.get_table_column_schema = [this](TableIndex table_id) {
 		vector<DuckLakeColumnSchemaEntry> schema;
-		auto sql = SubstitutePlaceholders(DuckLakeMetadataManager::GetTableColumnSchemaSql(table_id),
-		                                  transaction_snapshot);
+		auto sql =
+		    SubstitutePlaceholders(DuckLakeMetadataManager::GetTableColumnSchemaSql(table_id), transaction_snapshot);
 		auto result = RunQuery(sql, "read table column schema");
 		for (auto &row : *result) {
 			// parent_column IS NULL => top-level root; otherwise a nested leaf carrying its own leaf type.
@@ -822,8 +821,8 @@ unique_ptr<MaterializedQueryResult> DuckLakeServerSideCommit::RunQuery(const str
 unique_ptr<MaterializedQueryResult> DuckLakeServerSideCommit::ScanStagedTable(DuckLakeStagedTableType kind) {
 	string table_name = DuckLakeStagedTable::BaseName(kind);
 	auto &temp_catalog = Catalog::GetCatalog(context, TEMP_CATALOG);
-	auto &table_entry =
-	    temp_catalog.GetEntry<TableCatalogEntry>(context, DEFAULT_SCHEMA, Identifier(table_name)).Cast<DuckTableEntry>();
+	auto &table_entry = temp_catalog.GetEntry<TableCatalogEntry>(context, DEFAULT_SCHEMA, Identifier(table_name))
+	                        .Cast<DuckTableEntry>();
 	auto &storage = table_entry.GetStorage();
 
 	auto types = storage.GetTypes();

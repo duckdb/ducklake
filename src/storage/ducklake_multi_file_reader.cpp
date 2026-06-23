@@ -73,8 +73,7 @@ static void AddSnapshotFilter(BaseFileReader &reader, const ColumnIndex &col_idx
 static void NormalizeListChildNames(vector<MultiFileColumnDefinition> &columns, bool parent_is_list = false) {
 	for (auto &col : columns) {
 		// basically array, element becomes list
-		if (parent_is_list &&
-		    (col.name.GetIdentifierName() == "array" || col.name.GetIdentifierName() == "element")) {
+		if (parent_is_list && (col.name.GetIdentifierName() == "array" || col.name.GetIdentifierName() == "element")) {
 			col.name = "list";
 		}
 		if (!col.children.empty()) {
@@ -734,8 +733,8 @@ void DuckLakeMultiFileReader::FinalizeChunk(ClientContext &context, const MultiF
 			idx_t internal_rowid_col = output_chunk.ColumnCount(); // last column in temp_chunk
 			if (executor.expressions.size() <= internal_rowid_col && deletion_scan_internal_rowid_col.IsValid() &&
 			    deletion_scan_internal_rowid_col.GetIndex() < reader_data.expressions.size()) {
-				ExpressionExecutor rowid_executor(context,
-				                                  *reader_data.expressions[deletion_scan_internal_rowid_col.GetIndex()]);
+				ExpressionExecutor rowid_executor(
+				    context, *reader_data.expressions[deletion_scan_internal_rowid_col.GetIndex()]);
 				rowid_executor.ExecuteExpression(input_chunk, temp_chunk.data[internal_rowid_col]);
 			}
 			auto snapshot_out = RemapDeletionScanOutputColumn(executor, reader_data, deletion_scan_snapshot_col);

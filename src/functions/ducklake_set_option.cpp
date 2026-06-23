@@ -12,8 +12,8 @@ namespace duckdb {
 
 static void ValidateTableScope(ClientContext &context, Catalog &catalog, const string &schema_name,
                                const string &table_name) {
-	auto table_catalog_entry = catalog.GetEntry<TableCatalogEntry>(context, Identifier(schema_name),
-	                                                               Identifier(table_name), OnEntryNotFound::THROW_EXCEPTION);
+	auto table_catalog_entry = catalog.GetEntry<TableCatalogEntry>(
+	    context, Identifier(schema_name), Identifier(table_name), OnEntryNotFound::THROW_EXCEPTION);
 	auto &ducklake_table = table_catalog_entry->Cast<DuckLakeTableEntry>();
 	DuckLakeUtil::ValidateNoInlinedSystemColumns(ducklake_table.GetColumns(), ducklake_table.name.GetIdentifierName());
 }
@@ -28,7 +28,8 @@ static void ValidateTablesInSchema(ClientContext &context, DuckLakeCatalog &duck
 		    std::stoull(override_val) == 0) {
 			return;
 		}
-		DuckLakeUtil::ValidateNoInlinedSystemColumns(ducklake_table.GetColumns(), ducklake_table.name.GetIdentifierName());
+		DuckLakeUtil::ValidateNoInlinedSystemColumns(ducklake_table.GetColumns(),
+		                                             ducklake_table.name.GetIdentifierName());
 	});
 }
 

@@ -72,9 +72,8 @@ static vector<DuckLakePuffinBlob> AppendBlobs(vector<data_t> &file_data,
 
 // BlobMetadata: type, fields, snapshot-id, sequence-number, offset, length, properties
 // snapshot-id/sequence-number must be -1 for deletion vectors
-static void AddBlobMetadata(yyjson_mut_doc *doc, yyjson_mut_val *blob_arr,
-                            const DuckLakePuffinWriter::BlobInput &input, const DuckLakePuffinBlob &info,
-                            const string &data_file_path) {
+static void AddBlobMetadata(yyjson_mut_doc *doc, yyjson_mut_val *blob_arr, const DuckLakePuffinWriter::BlobInput &input,
+                            const DuckLakePuffinBlob &info, const string &data_file_path) {
 	auto blob_obj = yyjson_mut_arr_add_obj(doc, blob_arr);
 	yyjson_mut_obj_add_str(doc, blob_obj, "type", DELETION_VECTOR_BLOB_TYPE);
 	yyjson_mut_obj_add_arr(doc, blob_obj, "fields");
@@ -127,8 +126,8 @@ static void AppendFooter(vector<data_t> &file_data, const string &payload) {
 
 // A single deletion vector is written as a bare deletion-vector-v1 blob (no puffin container/footer),
 // matching how Iceberg stores deletion vectors.
-DuckLakePuffinWriteResult DuckLakePuffinWriter::Write(FileSystem &fs, const string &path,
-                                                      const string &data_file_path, const vector<BlobInput> &blobs) {
+DuckLakePuffinWriteResult DuckLakePuffinWriter::Write(FileSystem &fs, const string &path, const string &data_file_path,
+                                                      const vector<BlobInput> &blobs) {
 	vector<data_t> file_data;
 	DuckLakePuffinWriteResult result;
 	if (blobs.size() == 1) {
@@ -189,8 +188,7 @@ static idx_t ParseSnapshotProperty(const string &value, const string &path) {
 // A bare deletion-vector-v1 blob is a 4-byte length prefix followed by the blob magic
 static bool IsBareDeletionVector(data_ptr_t data, idx_t size) {
 	auto &magic = DuckLakeDeletionVectorData::DELETION_VECTOR_MAGIC;
-	return size >= sizeof(uint32_t) + sizeof(magic) &&
-	       memcmp(data + sizeof(uint32_t), magic, sizeof(magic)) == 0;
+	return size >= sizeof(uint32_t) + sizeof(magic) && memcmp(data + sizeof(uint32_t), magic, sizeof(magic)) == 0;
 }
 
 // Footer: Magic | FooterPayload | FooterPayloadSize (little-endian) | Flags | Magic
