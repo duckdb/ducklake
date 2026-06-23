@@ -21,16 +21,6 @@
         "test/sql/metadata/row_group_count.test",
         "test/sql/migration/v10_row_group_count.test"
       ]
-    },
-    {
-      "reason": "View column comments (ducklake_view_column_tag) were added in 1.1-dev1 and are not available when ducklake_default_version is pinned to 1.0",
-      "paths": [
-        "test/sql/comments/comment_on_view_column.test",
-        "test/sql/comments/comment_on_view_column_conflict.test",
-        "test/sql/comments/comment_on_view_column_update.test",
-        "test/sql/comments/drop_view_expires_tags.test",
-        "test/sql/compaction/expire_snapshots_schema.test"
-      ]
     }
   ]
 }
