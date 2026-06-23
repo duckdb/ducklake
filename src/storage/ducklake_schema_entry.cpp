@@ -145,6 +145,20 @@ optional_ptr<CatalogEntry> DuckLakeSchemaEntry::CreateIndex(CatalogTransaction t
 }
 
 optional_ptr<CatalogEntry> DuckLakeSchemaEntry::CreateView(CatalogTransaction transaction, CreateViewInfo &info) {
+	// Replace our catalog name with a generic {DUCKLAKE_CATALOG}.
+	auto query_sql = info.query->ToString();
+	auto &catalog_name = ParentCatalog().GetName();
+	query_sql = DuckLakeUtil::ReplaceSkippingQuotes(query_sql, catalog_name + ".", "{DUCKLAKE_CATALOG}.");
+
+	if (info.on_conflict == OnCreateConflict::REPLACE_ON_CONFLICT) {
+		auto existing_entry = GetEntry(transaction, CatalogType::VIEW_ENTRY, info.view_name);
+		if (existing_entry && existing_entry->type == CatalogType::VIEW_ENTRY) {
+			auto &existing_view = existing_entry->Cast<DuckLakeViewEntry>();
+			if (existing_view.GetQuerySQL() == query_sql && existing_view.aliases == info.aliases) {
+				return existing_entry;
+			}
+		}
+	}
 	// check if we have an existing entry with this name
 	if (!HandleCreateConflict(transaction, CatalogType::VIEW_ENTRY, info.view_name.GetIdentifierName(),
 	                          info.on_conflict)) {
@@ -154,11 +168,6 @@ optional_ptr<CatalogEntry> DuckLakeSchemaEntry::CreateView(CatalogTransaction tr
 	// get a local view-id
 	auto view_id = TableIndex(duck_transaction.GetLocalCatalogId());
 	auto view_uuid = UUID::ToString(UUID::GenerateRandomUUID());
-
-	// replace our catalog name with a generic {DUCKLAKE_CATALOG}.
-	auto query_sql = info.query->ToString();
-	auto &catalog_name = ParentCatalog().GetName();
-	query_sql = DuckLakeUtil::ReplaceSkippingQuotes(query_sql, catalog_name + ".", "{DUCKLAKE_CATALOG}.");
 
 	auto view_entry = make_uniq<DuckLakeViewEntry>(ParentCatalog(), *this, info, view_id, std::move(view_uuid),
 	                                               query_sql, LocalChangeType::CREATED);
