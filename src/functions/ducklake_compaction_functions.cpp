@@ -503,10 +503,9 @@ DuckLakeCompactor::GenerateCompactionCommand(vector<DuckLakeCompactionFileEntry>
                                              bool bind_to_latest_schema) {
 	// Cross-schema groups bind to the latest snapshot so the merged file is written under the current schema (the
 	// reader projects each source via its own mapping_id); same-schema groups bind to the source schema_version.
-	DuckLakeSnapshot snapshot = bind_to_latest_schema
-	                                ? transaction.GetSnapshot()
-	                                : DuckLakeSnapshot(source_files[0].file.begin_snapshot,
-	                                                   source_files[0].schema_version, 0, 0);
+	DuckLakeSnapshot snapshot = bind_to_latest_schema ? transaction.GetSnapshot()
+	                                                  : DuckLakeSnapshot(source_files[0].file.begin_snapshot,
+	                                                                     source_files[0].schema_version, 0, 0);
 
 	auto entry = catalog.GetEntryById(transaction, snapshot, table_id);
 	if (!entry) {
