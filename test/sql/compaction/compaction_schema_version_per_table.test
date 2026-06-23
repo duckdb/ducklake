@@ -129,17 +129,17 @@ SELECT COUNT(*) FROM ducklake_list_files('ducklake', 'another_table')
 ----
 4
 
+# another_table only added a column (schema_version 3 -> 4), so all four files merge into the latest schema
 query III
 SELECT table_name, files_processed, files_created FROM ducklake_merge_adjacent_files('ducklake', 'another_table') ORDER BY ALL
 ----
-another_table	2	1
-another_table	2	1
+another_table	4	1
 
-# after cleanup we should have 2 file for another_table
+# after cleanup we should have 1 file for another_table
 query I
 SELECT COUNT(*) FROM ducklake_list_files('ducklake', 'another_table')
 ----
-2
+1
 
 query II
 FROM another_table ORDER BY ALL;
