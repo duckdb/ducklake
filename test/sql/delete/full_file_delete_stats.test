@@ -86,10 +86,10 @@ SELECT record_count, next_row_id FROM __ducklake_metadata_ducklake.ducklake_tabl
 ----
 200	400
 
-query I
-SELECT COUNT(*) FROM __ducklake_metadata_ducklake.ducklake_table_column_stats WHERE table_id = getvariable('partial_id')
+query TT
+SELECT min_value, max_value FROM __ducklake_metadata_ducklake.ducklake_table_column_stats WHERE table_id = getvariable('partial_id')
 ----
-0
+1000	1199
 
 # Re-insert after the drop in the same connection: the stats cache was invalidated, so the insert
 # starts from the decremented base (record_count 0), not the stale pre-delete value.
@@ -171,3 +171,33 @@ query III
 SELECT record_count, next_row_id, file_size_bytes FROM __ducklake_metadata_ducklake.ducklake_table_stats WHERE table_id = getvariable('rewrite_id')
 ----
 0	200	0
+
+# Full-file drop with committed inlined data across schema versions must fall back instead of
+# querying current-schema columns from older inlined physical tables.
+statement ok
+CALL ducklake.set_option('data_inlining_row_limit', 100)
+
+statement ok
+CREATE TABLE ducklake.inlined_schema_evolution(i INTEGER)
+
+statement ok
+INSERT INTO ducklake.inlined_schema_evolution SELECT range::INT FROM range(200)
+
+statement ok
+INSERT INTO ducklake.inlined_schema_evolution VALUES (1000)
+
+statement ok
+ALTER TABLE ducklake.inlined_schema_evolution ADD COLUMN j INTEGER DEFAULT 0
+
+statement ok
+INSERT INTO ducklake.inlined_schema_evolution VALUES (1001, 10)
+
+query I
+DELETE FROM ducklake.inlined_schema_evolution WHERE i < 200
+----
+200
+
+query III
+SELECT COUNT(*), MIN(i), MAX(i) FROM ducklake.inlined_schema_evolution
+----
+2	1000	1001

@@ -1447,16 +1447,12 @@ void DuckLakeTransaction::RunCommitLoop(DuckLakeSnapshot transaction_snapshot,
 		}
 		return schema;
 	};
-	context.get_inlined_table_names = [&](TableIndex table_id) {
-		vector<string> names;
+	context.get_inlined_tables = [&](TableIndex table_id) {
 		auto entry = ducklake_catalog.GetEntryById(*this, transaction_snapshot, table_id);
 		if (!entry) {
-			return names;
+			return vector<DuckLakeInlinedTableInfo> {};
 		}
-		for (auto &t : entry->Cast<DuckLakeTableEntry>().GetInlinedDataTables()) {
-			names.push_back(t.table_name);
-		}
-		return names;
+		return entry->Cast<DuckLakeTableEntry>().GetInlinedDataTables();
 	};
 	context.get_net_data_file_row_count = [&](TableIndex table_id) -> idx_t {
 		auto entry = ducklake_catalog.GetEntryById(*this, transaction_snapshot, table_id);
@@ -1803,7 +1799,7 @@ void DuckLakeTransaction::DropTableMacro(DuckLakeTableMacroEntry &macro) {
 }
 
 void DuckLakeTransaction::DropFile(TableIndex table_id, DataFileIndex data_file_id, string path, idx_t row_count,
-                                   idx_t file_size_bytes) {
+                                   idx_t live_row_count, idx_t file_size_bytes) {
 	state->tables_deleted_from.insert(table_id);
 	auto inserted = state->dropped_files.emplace(std::move(path), data_file_id);
 	if (!inserted.second) {
@@ -1811,7 +1807,9 @@ void DuckLakeTransaction::DropFile(TableIndex table_id, DataFileIndex data_file_
 	}
 	auto &stats = state->dropped_file_stats[table_id];
 	stats.row_count += row_count;
+	stats.live_row_count += live_row_count;
 	stats.file_size_bytes += file_size_bytes;
+	stats.data_file_ids.insert(data_file_id);
 }
 
 bool DuckLakeTransaction::HasDroppedFiles() const {

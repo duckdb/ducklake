@@ -245,7 +245,8 @@ public:
 	static string GetNetDataFileRowCountSql(TableIndex table_id, const string &inlined_deletion_table);
 	static string GetNetInlinedRowCountSql(const string &inlined_table_name);
 	static string GetTableColumnSchemaSql(TableIndex table_id);
-	static string GetInlinedTableNamesSql(TableIndex table_id);
+	static string GetInlinedTableInfosSql(TableIndex table_id);
+	static string GetCurrentTableSchemaVersionSql(TableIndex table_id);
 	virtual vector<DuckLakeFileForCleanup> GetOldFilesForCleanup(const string &filter);
 	virtual vector<DuckLakeFileForCleanup> GetOrphanFilesForCleanup(const string &filter, const string &separator);
 	virtual vector<DuckLakeFileForCleanup> GetFilesForCleanup(const string &filter, CleanupType type,
