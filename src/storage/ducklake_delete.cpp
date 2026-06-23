@@ -412,7 +412,8 @@ bool DuckLakeDelete::TryDropFullyDeletedFile(DuckLakeTransaction &transaction, c
 	}
 	// ALL rows in this file are deleted - drop the file
 	if (delete_file.data_file_id.IsValid()) {
-		transaction.DropFile(table.GetTableId(), delete_file.data_file_id, data_file_info.file.path);
+		transaction.DropFile(table.GetTableId(), delete_file.data_file_id, data_file_info.file.path,
+		                     data_file_info.row_count, data_file_info.file.file_size_bytes);
 	} else {
 		transaction.DropTransactionLocalFile(table.GetTableId(), data_file_info.file.path);
 	}
@@ -517,6 +518,11 @@ void DuckLakeDelete::FlushDelete(DuckLakeTransaction &transaction, ClientContext
 	delete_file.data_file_id = data_file_info.file_id;
 	// check if the file already has deletes
 	auto existing_delete_data = delete_map->GetDeleteData(filename);
+
+	if (!existing_delete_data &&
+	    TryDropFullyDeletedFile(transaction, delete_file, data_file_info, sorted_deletes.size())) {
+		return;
+	}
 
 	// check if we should use inlined file deletions instead of creating a delete file
 	if (data_file_info.file_id.IsValid()) {
