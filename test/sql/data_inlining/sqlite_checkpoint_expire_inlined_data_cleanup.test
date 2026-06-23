@@ -1,0 +1,43 @@
+# name: test/sql/data_inlining/sqlite_checkpoint_expire_inlined_data_cleanup.test
+# description: SQLite catalogs should drop empty inlined-data metadata after checkpoint and snapshot expiry
+# group: [data_inlining]
+
+require ducklake
+
+require parquet
+
+require sqlite_scanner
+
+statement ok
+ATTACH 'ducklake:sqlite:{TEST_DIR}/sqlite_checkpoint_expire_inlined_data_cleanup.db' AS ducklake (DATA_PATH '{TEST_DIR}/sqlite_checkpoint_expire_inlined_data_cleanup_files')
+
+statement ok
+USE ducklake
+
+statement ok
+CREATE TABLE test1 AS FROM test_vector_types(NULL::FLOAT, NULL::INT, NULL::FLOAT)
+
+statement ok
+CREATE TABLE test2 AS FROM test_vector_types(NULL::FLOAT, NULL::INT, NULL::FLOAT)
+
+statement ok
+CREATE TABLE test3 AS FROM test_vector_types(NULL::FLOAT, NULL::INT, NULL::FLOAT)
+
+query I
+SELECT COUNT(*) FROM sqlite_scan('{TEST_DIR}/sqlite_checkpoint_expire_inlined_data_cleanup.db', 'ducklake_inlined_data_tables')
+----
+3
+
+statement ok
+CHECKPOINT
+
+statement ok
+CALL ducklake_expire_snapshots('ducklake', older_than => now())
+
+statement ok
+CHECKPOINT
+
+query I
+SELECT COUNT(*) FROM sqlite_scan('{TEST_DIR}/sqlite_checkpoint_expire_inlined_data_cleanup.db', 'ducklake_inlined_data_tables')
+----
+0
