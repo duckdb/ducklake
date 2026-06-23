@@ -1,0 +1,233 @@
+# name: test/sql/compaction/merge_adjacent_cross_schema.test
+# description: ducklake_merge_adjacent_files merges files across a schema_version boundary when the schema only had columns added (the incompatible/isolation cases live in merge_adjacent_cross_schema_isolation.test)
+# group: [compaction]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/ducklake_cross_schema/')
+
+statement ok
+USE ducklake;
+
+#
+# Core scenario: ADD COLUMN between inserts. Files written under both schemas merge into a single file under the
+# latest schema by default - no option required. Old rows read NULL for the new column.
+#
+
+statement ok
+CREATE TABLE t AS SELECT range AS id FROM range(5);
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake');
+
+# Capture snapshot ids for time travel below - hardcoding version numbers is unsafe because the
+# snapshot count depends on the data inlining config (flushes are no-ops under no_inline.json).
+statement ok
+SET VARIABLE v_after_create = (SELECT max(snapshot_id) FROM ducklake.snapshots());
+
+statement ok
+INSERT INTO t VALUES (5), (6);
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake');
+
+# snapshot before the ALTER (rows 0-6, only the id column exists)
+statement ok
+SET VARIABLE v_before_alter = (SELECT max(snapshot_id) FROM ducklake.snapshots());
+
+statement ok
+ALTER TABLE t ADD COLUMN label VARCHAR;
+
+statement ok
+INSERT INTO t VALUES (7, 'seven'), (8, 'eight');
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake');
+
+# three files exist, spanning two schema_versions
+query I
+SELECT COUNT(*) FROM ducklake_list_files('ducklake', 't')
+----
+3
+
+# merge everything across the schema_version boundary into the latest schema
+query III
+SELECT table_name, files_processed, files_created FROM ducklake_merge_adjacent_files('ducklake', 't')
+----
+t	3	1
+
+statement ok
+CALL ducklake_cleanup_old_files('ducklake', cleanup_all => true);
+
+query I
+SELECT COUNT(*) FROM ducklake_list_files('ducklake', 't')
+----
+1
+
+# data integrity: old rows read NULL for the new column, new rows keep their values
+query IT
+SELECT id, label FROM t ORDER BY id;
+----
+0	NULL
+1	NULL
+2	NULL
+3	NULL
+4	NULL
+5	NULL
+6	NULL
+7	seven
+8	eight
+
+# time travel keeps working over the merged file even after the original files have been cleaned up.
+# v_before_alter is the last snapshot before ADD COLUMN (rows 0-6, only the id column exists).
+query I
+SELECT id FROM t AT (VERSION => getvariable('v_before_alter')) ORDER BY id;
+----
+0
+1
+2
+3
+4
+5
+6
+
+# v_after_create is right after the table was created and flushed (rows 0-4).
+query I
+SELECT id FROM t AT (VERSION => getvariable('v_after_create')) ORDER BY id;
+----
+0
+1
+2
+3
+4
+
+# the new column cannot be referenced at a snapshot where it did not exist yet
+statement error
+SELECT label FROM t AT (VERSION => getvariable('v_before_alter'))
+----
+<REGEX>:.*abel.*
+
+#
+# Added column with a DEFAULT: old rows read the column default after the merge, not NULL.
+#
+
+statement ok
+CREATE TABLE t_default AS SELECT range AS id FROM range(3);
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake');
+
+statement ok
+INSERT INTO t_default VALUES (3), (4);
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake');
+
+statement ok
+ALTER TABLE t_default ADD COLUMN status VARCHAR DEFAULT 'unknown';
+
+statement ok
+INSERT INTO t_default VALUES (5, 'ok'), (6, 'ok');
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake');
+
+query III
+SELECT table_name, files_processed, files_created FROM ducklake_merge_adjacent_files('ducklake', 't_default')
+----
+t_default	3	1
+
+statement ok
+CALL ducklake_cleanup_old_files('ducklake', cleanup_all => true);
+
+query IT
+SELECT id, status FROM t_default ORDER BY id;
+----
+0	unknown
+1	unknown
+2	unknown
+3	unknown
+4	unknown
+5	ok
+6	ok
+
+#
+# Re-compaction safety: a merged cross-schema file inherits the oldest source's (older) begin_snapshot but is written
+# under the latest schema. Merging it again must keep rewriting it under the latest schema so the added column survives.
+#
+
+statement ok
+CREATE TABLE t_again AS SELECT range AS id FROM range(5);
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake');
+
+statement ok
+INSERT INTO t_again VALUES (5), (6);
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake');
+
+statement ok
+ALTER TABLE t_again ADD COLUMN label VARCHAR;
+
+statement ok
+INSERT INTO t_again VALUES (7, 'seven'), (8, 'eight');
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake');
+
+query III
+SELECT table_name, files_processed, files_created FROM ducklake_merge_adjacent_files('ducklake', 't_again')
+----
+t_again	3	1
+
+statement ok
+CALL ducklake_cleanup_old_files('ducklake', cleanup_all => true);
+
+statement ok
+INSERT INTO t_again VALUES (9, 'nine');
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake');
+
+statement ok
+INSERT INTO t_again VALUES (10, 'ten');
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake');
+
+query III
+SELECT table_name, files_processed, files_created FROM ducklake_merge_adjacent_files('ducklake', 't_again')
+----
+t_again	3	1
+
+statement ok
+CALL ducklake_cleanup_old_files('ducklake', cleanup_all => true);
+
+query I
+SELECT COUNT(*) FROM ducklake_list_files('ducklake', 't_again')
+----
+1
+
+query IT
+SELECT id, label FROM t_again ORDER BY id;
+----
+0	NULL
+1	NULL
+2	NULL
+3	NULL
+4	NULL
+5	NULL
+6	NULL
+7	seven
+8	eight
+9	nine
+10	ten
