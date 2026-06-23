@@ -13,7 +13,7 @@ concurrency:
 jobs:
   format-check:
     name: Check Code Format
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     env:
       CC: gcc-10
       CXX: g++-10
