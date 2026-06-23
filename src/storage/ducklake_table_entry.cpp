@@ -755,8 +755,9 @@ unique_ptr<CatalogEntry> DuckLakeTableEntry::AlterTable(ClientContext &context, 
 	}
 	table_info.columns = std::move(new_columns);
 
-	auto new_entry = make_uniq<DuckLakeTableEntry>(
-	    *this, table_info, LocalChange::RenameColumn(field_id.GetFieldIndex()), info.new_name.GetIdentifierName());
+	auto new_entry =
+	    make_uniq<DuckLakeTableEntry>(*this, table_info, LocalChange::RenameColumn(field_id.GetFieldIndex()),
+	                                  info.new_name.GetIdentifierName());
 	return std::move(new_entry);
 }
 

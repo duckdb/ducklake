@@ -25,7 +25,7 @@ DuckLakeVersion DuckLakeVersionFromString(const string &version_str) {
 	if (version_str == "1.0") {
 		return DuckLakeVersion::V1_0;
 	}
-	if (version_str == "1.1-dev1" || version_str == "1.1-dev2") {
+	if (version_str == "1.1-dev1") {
 		return DuckLakeVersion::V1_1_DEV_1;
 	}
 	throw InvalidInputException("Unsupported ducklake_version '%s'", version_str);

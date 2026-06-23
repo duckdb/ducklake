@@ -188,8 +188,8 @@ string ToSQLString(DuckLakeMetadataManager &metadata_manager, const Value &value
 			if (is_unnamed) {
 				ret += ToSQLString(metadata_manager, child);
 			} else {
-				ret += "'" + StringUtil::Replace(name.GetIdentifierName(), "'", "''") +
-				       "': " + ToSQLString(metadata_manager, child);
+				ret += "'" + StringUtil::Replace(name.GetIdentifierName(), "'", "''") + "': " +
+				       ToSQLString(metadata_manager, child);
 			}
 			if (i < struct_values.size() - 1) {
 				ret += ", ";

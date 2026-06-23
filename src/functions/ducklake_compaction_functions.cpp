@@ -582,8 +582,9 @@ DuckLakeCompactor::GenerateCompactionCommand(vector<DuckLakeCompactionFileEntry>
 	// and instead pull the latest sort setting
 	// First, see if there are transaction local changes to the table
 	// Then fall back to latest snapshot if no local changes
-	auto latest_entry = transaction.GetTransactionLocalEntry(
-	    CatalogType::TABLE_ENTRY, table.schema.name.GetIdentifierName(), table.name.GetIdentifierName());
+	auto latest_entry = transaction.GetTransactionLocalEntry(CatalogType::TABLE_ENTRY,
+	                                                          table.schema.name.GetIdentifierName(),
+	                                                          table.name.GetIdentifierName());
 	if (!latest_entry) {
 		auto latest_snapshot = transaction.GetSnapshot();
 		latest_entry = catalog.GetEntryById(transaction, latest_snapshot, table_id);

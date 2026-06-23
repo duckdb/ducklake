@@ -162,8 +162,7 @@ DuckLakeDeleteFile DuckLakeDeleteFileWriter::WriteDeleteFileWithSnapshots(Client
 }
 
 template <typename InputType>
-static DuckLakeDeleteFile WritePuffinDeleteFile(InputType &input,
-                                                const vector<DuckLakePuffinWriter::BlobInput> &blobs) {
+static DuckLakeDeleteFile WritePuffinDeleteFile(InputType &input, const vector<DuckLakePuffinWriter::BlobInput> &blobs) {
 	auto delete_file_uuid = "ducklake-" + input.transaction.GenerateUUID() + "-delete.puffin";
 	string delete_file_path = DuckLakeUtil::JoinPath(input.fs, input.data_path, delete_file_uuid);
 

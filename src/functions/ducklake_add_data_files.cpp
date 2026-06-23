@@ -42,8 +42,9 @@ static unique_ptr<FunctionData> DuckLakeAddDataFilesBind(ClientContext &context,
 	}
 	const auto table_name = StringValue::Get(input.inputs[1]);
 
-	auto entry = catalog.GetEntry<TableCatalogEntry>(context, Identifier(schema_name), Identifier(table_name),
-	                                                 OnEntryNotFound::THROW_EXCEPTION);
+	auto entry =
+	    catalog.GetEntry<TableCatalogEntry>(context, Identifier(schema_name), Identifier(table_name),
+	                                        OnEntryNotFound::THROW_EXCEPTION);
 	auto &table = entry->Cast<DuckLakeTableEntry>();
 
 	auto result = make_uniq<DuckLakeAddDataFilesData>(catalog, table);
@@ -669,9 +670,10 @@ bool DuckLakeParquetTypeChecker::CheckTypes(const vector<LogicalType> &types) {
 }
 
 void DuckLakeParquetTypeChecker::Fail() {
-	string error_message = StringUtil::Format(
-	    "Failed to map column \"%s%s\" from file \"%s\" to the column in table \"%s\"",
-	    prefix.empty() ? prefix : prefix + ".", column.name, file_metadata.filename, table.name.GetIdentifierName());
+	string error_message =
+	    StringUtil::Format("Failed to map column \"%s%s\" from file \"%s\" to the column in table \"%s\"",
+	                       prefix.empty() ? prefix : prefix + ".", column.name, file_metadata.filename,
+	                       table.name.GetIdentifierName());
 	for (auto &failure : failures) {
 		error_message += "\n* " + failure;
 	}
@@ -1199,9 +1201,9 @@ void DuckLakeFileProcessor::MapPartitionColumns(ParquetFileMetadata &file) {
 		    DuckLakePartitionUtils::GetPartitionKeyType(partition_field.transform.type, field_id->Type());
 		auto hive_value =
 		    HivePartitioning::GetValue(context, partition_key_name, hive_entry->second, partition_key_type);
-		file.hive_partition_values.emplace_back(HivePartition {partition_field.field_id, partition_key_type, hive_value,
-		                                                       partition_field.transform,
-		                                                       optional_idx(partition_field.partition_key_index)});
+		file.hive_partition_values.emplace_back(
+		    HivePartition {partition_field.field_id, partition_key_type, hive_value, partition_field.transform,
+		                   optional_idx(partition_field.partition_key_index)});
 	}
 }
 

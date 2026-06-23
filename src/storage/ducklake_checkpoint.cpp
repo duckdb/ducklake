@@ -24,8 +24,8 @@ void DuckLakeTransactionManager::Checkpoint(ClientContext &context, bool force) 
 	    "CALL ducklake_cleanup_old_files({CATALOG})",    "CALL ducklake_delete_orphaned_files({CATALOG})"};
 
 	for (const auto &query : checkpoint_queries) {
-		auto checkpoint_query = StringUtil::Replace(
-		    query, "{CATALOG}", SQLString::ToString(ducklake_catalog.GetName().GetIdentifierName()));
+		auto checkpoint_query =
+		    StringUtil::Replace(query, "{CATALOG}", SQLString::ToString(ducklake_catalog.GetName().GetIdentifierName()));
 		auto res = conn->Query(checkpoint_query);
 		if (res->HasError()) {
 			res->GetErrorObject().Throw("Failed to perform CHECKPOINT; in DuckLake:  ");
