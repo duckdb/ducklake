@@ -423,6 +423,8 @@ struct DuckLakeFileListExtendedEntry {
 	idx_t delete_count = 0;
 	MappingIndex mapping_id;
 	DuckLakeDataType data_type = DuckLakeDataType::DATA_FILE;
+	optional_idx partition_id;
+	vector<DuckLakeFilePartitionInfo> partition_values;
 };
 
 struct DuckLakeCompactionBaseFileData {

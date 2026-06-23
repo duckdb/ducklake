@@ -167,7 +167,9 @@ public:
 	static PhysicalOperator &PlanDelete(ClientContext &context, PhysicalPlanGenerator &planner,
 	                                    DuckLakeTableEntry &table, PhysicalOperator &child_plan,
 	                                    vector<idx_t> row_id_indexes, string encryption_key,
-	                                    bool allow_duplicates = true);
+	                                    bool allow_duplicates = true,
+	                                    unordered_map<idx_t, vector<Value>> metadata_delete_partition_values = {},
+	                                    bool can_use_metadata_delete = false);
 
 public:
 	// Sink interface
