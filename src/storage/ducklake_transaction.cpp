@@ -710,6 +710,20 @@ DuckLakeTransaction::DuckLakeTransaction(DuckLakeCatalog &ducklake_catalog, Tran
 DuckLakeTransaction::~DuckLakeTransaction() {
 }
 
+void DuckLakeTransaction::PinSchemaCacheEntry(shared_ptr<DuckLakeSchemaCacheEntry> entry) {
+	if (!entry) {
+		return;
+	}
+	lock_guard<mutex> guard(schema_pin_lock);
+	auto *raw = entry.get();
+	schema_pins.emplace(raw, std::move(entry));
+}
+
+void DuckLakeTransaction::ClearSchemaCachePins() {
+	lock_guard<mutex> guard(schema_pin_lock);
+	schema_pins.clear();
+}
+
 const LocalTableChanges &DuckLakeTransaction::GetLocalChanges() const {
 	return state->local_changes;
 }
@@ -744,6 +758,7 @@ void DuckLakeTransaction::Commit() {
 	connection.reset();
 	state->local_changes.Clear();
 	SetRequiresNewInlinedTable(false);
+	ClearSchemaCachePins();
 }
 
 void DuckLakeTransaction::Rollback() {
@@ -755,6 +770,7 @@ void DuckLakeTransaction::Rollback() {
 	state->CleanupFiles();
 	state->local_changes.Clear();
 	SetRequiresNewInlinedTable(false);
+	ClearSchemaCachePins();
 }
 
 Connection &DuckLakeTransaction::GetConnection() {

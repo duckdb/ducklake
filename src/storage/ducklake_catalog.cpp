@@ -362,6 +362,7 @@ shared_ptr<DuckLakeSchemaCacheEntry> DuckLakeCatalog::GetSchemaCacheEntry(DuckLa
 
 DuckLakeCatalogSet &DuckLakeCatalog::GetSchemaForSnapshot(DuckLakeTransaction &transaction, DuckLakeSnapshot snapshot) {
 	auto entry = GetSchemaCacheEntry(transaction, snapshot);
+	transaction.PinSchemaCacheEntry(entry);
 	PinSchemaForQuery(transaction, entry);
 	return entry->catalog_set;
 }
