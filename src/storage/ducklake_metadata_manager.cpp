@@ -1282,7 +1282,6 @@ string DuckLakeMetadataManager::GenerateConstantFilterDouble(ExpressionType comp
 		referenced_stats.insert("contains_nan");
 		return filter + " OR contains_nan";
 	}
-	case ExpressionType::COMPARE_NOTEQUAL:
 	case ExpressionType::COMPARE_LESSTHANOREQUALTO:
 	case ExpressionType::COMPARE_LESSTHAN:
 		if (constant_is_nan) {
@@ -1291,6 +1290,23 @@ string DuckLakeMetadataManager::GenerateConstantFilterDouble(ExpressionType comp
 		}
 		// these are equivalent to the numeric filter
 		return GenerateConstantFilter(comparison_type, constant, type, referenced_stats);
+	case ExpressionType::COMPARE_NOTEQUAL: {
+		// x <> constant
+		if (constant_is_nan) {
+			// x <> NaN is true for every non-NaN value and false only for NaN.
+			// proving a file can be pruned would require knowing all its values are NaN, which min/max
+			// cannot express - so never prune.
+			return string();
+		}
+		// generate the numeric filter
+		string filter = GenerateConstantFilter(comparison_type, constant, type, referenced_stats);
+		if (filter.empty()) {
+			return string();
+		}
+		// NaN <> constant is always true, so we must also keep files that contain NaN
+		referenced_stats.insert("contains_nan");
+		return filter + " OR contains_nan";
+	}
 	default:
 		// unsupported
 		return string();
