@@ -2842,6 +2842,22 @@ string DuckLakeMetadataManager::LatestInlinedTableQuery(idx_t table_id) {
 	    table_id, table_id);
 }
 
+string DuckLakeMetadataManager::InlinedDataTableCleanupTargetsSql(bool superseded_only) {
+	string sql = R"(
+SELECT idt.table_id, idt.schema_version, idt.table_name
+FROM {METADATA_CATALOG}.ducklake_inlined_data_tables idt)";
+	if (superseded_only) {
+		sql += R"(
+WHERE idt.schema_version < (
+    SELECT MAX(idt2.schema_version)
+    FROM {METADATA_CATALOG}.ducklake_inlined_data_tables idt2
+    WHERE idt2.table_id = idt.table_id
+))";
+	}
+	sql += ";";
+	return sql;
+}
+
 string DuckLakeMetadataManager::GetInlinedTableQuery(const DuckLakeTableInfo &table, const string &table_name) {
 	string column_defs;
 	for (auto &col : table.columns) {
@@ -5594,6 +5610,8 @@ WHERE NOT EXISTS (
 		}
 	}
 
+	DropEmptyInlinedTables();
+
 	for (auto &snapshot : snapshots) {
 		for (auto &table_id : stats_table_ids) {
 			catalog.InvalidateTableStatsCache(snapshot.next_file_id, table_id);
@@ -5601,30 +5619,28 @@ WHERE NOT EXISTS (
 	}
 }
 
-void DuckLakeMetadataManager::DropEmptySupersededInlinedTables() {
-	// Find inlined tables that have been superseded by a newer schema version.
-	auto targets = Query(R"(
-SELECT idt.table_id, idt.schema_version, idt.table_name
-FROM {METADATA_CATALOG}.ducklake_inlined_data_tables idt
-WHERE idt.schema_version < (
-    SELECT MAX(idt2.schema_version)
-    FROM {METADATA_CATALOG}.ducklake_inlined_data_tables idt2
-    WHERE idt2.table_id = idt.table_id
-);)");
+void DuckLakeMetadataManager::DropEmptyInlinedTablesInternal(bool superseded_only) {
+	auto targets = Query(InlinedDataTableCleanupTargetsSql(superseded_only));
 	if (targets->HasError()) {
-		targets->GetErrorObject().Throw("Failed to identify superseded inlined-data tables in DuckLake: ");
+		targets->GetErrorObject().Throw("Failed to identify empty inlined-data tables in DuckLake: ");
 	}
+	struct InlinedTableCleanupTarget {
+		idx_t table_id;
+		idx_t schema_version;
+		string table_name;
+	};
+	vector<InlinedTableCleanupTarget> candidates;
+	for (auto &row : *targets) {
+		candidates.push_back({row.GetValue<idx_t>(0), row.GetValue<idx_t>(1), row.GetValue<string>(2)});
+	}
+
 	// Only drop tables that are actually empty (data was flushed to files).
 	string drops;
-	for (auto &row : *targets) {
-		auto table_id = row.GetValue<idx_t>(0);
-		auto schema_version = row.GetValue<idx_t>(1);
-		auto table_name = row.GetValue<string>(2);
+	for (auto &candidate : candidates) {
 		auto count_result =
-		    Query(StringUtil::Format("SELECT COUNT(*) FROM {METADATA_CATALOG}.%s", SQLIdentifier(table_name)));
+		    Query(StringUtil::Format("SELECT COUNT(*) FROM {METADATA_CATALOG}.%s", SQLIdentifier(candidate.table_name)));
 		if (count_result->HasError()) {
-			count_result->GetErrorObject().Throw(
-			    "Failed to check emptiness of superseded inlined-data table in DuckLake: ");
+			count_result->GetErrorObject().Throw("Failed to check emptiness of inlined-data table in DuckLake: ");
 		}
 		if ((*count_result->begin()).GetValue<idx_t>(0) != 0) {
 			continue;
@@ -5632,14 +5648,14 @@ WHERE idt.schema_version < (
 		drops += StringUtil::Format(
 		    "DELETE FROM {METADATA_CATALOG}.ducklake_inlined_data_tables WHERE table_id=%d AND schema_version=%d;"
 		    "DROP TABLE IF EXISTS {METADATA_CATALOG}.%s;",
-		    table_id, schema_version, SQLIdentifier(table_name));
+		    candidate.table_id, candidate.schema_version, SQLIdentifier(candidate.table_name));
 	}
 	if (drops.empty()) {
 		return;
 	}
 	auto res = Execute(drops);
 	if (res->HasError()) {
-		res->GetErrorObject().Throw("Failed to drop superseded inlined-data tables in DuckLake: ");
+		res->GetErrorObject().Throw("Failed to drop empty inlined-data tables in DuckLake: ");
 	}
 	// We also need to invalidate the existing schema versions in our catalog
 	auto &catalog = transaction.GetCatalog();
@@ -5650,6 +5666,14 @@ WHERE idt.schema_version < (
 	for (auto &row : *snapshot_versions) {
 		catalog.InvalidateSchemaCache(row.GetValue<idx_t>(0));
 	}
+}
+
+void DuckLakeMetadataManager::DropEmptyInlinedTables() {
+	DropEmptyInlinedTablesInternal(false);
+}
+
+void DuckLakeMetadataManager::DropEmptySupersededInlinedTables() {
+	DropEmptyInlinedTablesInternal(true);
 }
 
 void DuckLakeMetadataManager::DeleteInlinedData(const DuckLakeInlinedTableInfo &inlined_table) {

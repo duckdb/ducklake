@@ -347,6 +347,7 @@ public:
 	DuckLakeInlinedColNames InlinedColNames() const;
 	static string InlinedTableRegistrationTuple(idx_t table_id, const string &table_name, idx_t schema_version);
 	static string LatestInlinedTableQuery(idx_t table_id);
+	static string InlinedDataTableCleanupTargetsSql(bool superseded_only);
 	static string DropDataFiles(const set<DataFileIndex> &dropped_files);
 	static string DropDeleteFiles(const set<DataFileIndex> &dropped_files);
 	//! Caller supplies one resolved path per overwritten file, in the same order.
@@ -416,6 +417,9 @@ public:
 
 	virtual vector<DuckLakeSnapshotInfo> GetAllSnapshots(const string &filter = string());
 	virtual void DeleteSnapshots(const vector<DuckLakeSnapshotInfo> &snapshots);
+	//! After snapshots are expired, empty inlined-data tables can be dropped even if they are the latest
+	//! schema_version for their table.
+	virtual void DropEmptyInlinedTables();
 	//! After a flush has emptied inlined-data rows, drop any (tid, sv) physical
 	//! table that is superseded by a newer schema_version on the same table_id
 	//! and is now empty. No more writes can land in such an entry, so the drop
@@ -541,6 +545,7 @@ private:
 	virtual string GenerateConstantFilterDouble(ExpressionType comparison_type, const Value &constant,
 	                                            const LogicalType &type, unordered_set<string> &referenced_stats);
 	virtual string GenerateFilterPushdown(const ExpressionFilter &filter, unordered_set<string> &referenced_stats);
+	void DropEmptyInlinedTablesInternal(bool superseded_only);
 
 public:
 	//! Read inlined file deletions for regular table scans (no snapshot info per row)
