@@ -5293,7 +5293,7 @@ WHERE NOT EXISTS (
 			result->GetErrorObject().Throw("Failed to list deleted name mappings in DuckLake: ");
 		}
 		for (auto &row : *result) {
-			catalog.InvalidateNameMapCache(MappingIndex(row.GetValue<idx_t>(0)));
+			transaction.DeferNameMapCacheInvalidation(MappingIndex(row.GetValue<idx_t>(0)));
 		}
 
 		result = Execute(R"(

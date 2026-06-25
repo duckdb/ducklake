@@ -141,6 +141,9 @@ SELECT * FROM ducklake.to_drop
 ----
 42	duck
 
+statement ok
+SET VARIABLE name_map_snapshot = (SELECT max(snapshot_id) FROM ducklake_snapshots('ducklake'))
+
 query I
 SELECT count(*) > 0 FROM metadata.ducklake_column_mapping
 ----
@@ -153,6 +156,20 @@ true
 
 statement ok
 DROP TABLE ducklake.to_drop
+
+statement ok
+BEGIN
+
+statement ok
+CALL ducklake_expire_snapshots('ducklake', older_than => now())
+
+statement ok
+ROLLBACK
+
+query II
+SELECT * FROM ducklake.to_drop AT (VERSION => getvariable('name_map_snapshot'))
+----
+42	duck
 
 statement ok
 CALL ducklake_expire_snapshots('ducklake', dry_run => true, older_than => now())
