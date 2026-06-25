@@ -229,7 +229,7 @@ public:
 	void AddCompaction(TableIndex table_id, DuckLakeCompactionEntry entry);
 
 	MappingIndex AddNameMap(unique_ptr<DuckLakeNameMap> name_map);
-	const DuckLakeNameMap &GetMappingById(MappingIndex mapping_id);
+	shared_ptr<const DuckLakeNameMap> GetMappingById(MappingIndex mapping_id);
 	//! Queue a name map cache invalidation that should only be applied after this transaction commits.
 	void DeferNameMapCacheInvalidation(MappingIndex mapping_id);
 

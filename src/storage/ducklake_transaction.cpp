@@ -2130,16 +2130,16 @@ MappingIndex DuckLakeTransaction::AddNameMap(unique_ptr<DuckLakeNameMap> name_ma
 	return new_index;
 }
 
-const DuckLakeNameMap &DuckLakeTransaction::GetMappingById(MappingIndex mapping_id) {
+shared_ptr<const DuckLakeNameMap> DuckLakeTransaction::GetMappingById(MappingIndex mapping_id) {
 	// search the transaction-local name maps
 	auto entry = new_name_maps.name_maps.find(mapping_id);
 	if (entry != new_name_maps.name_maps.end()) {
-		return *entry->second;
+		return entry->second;
 	}
 	// search the catalog name maps
 	auto name_map = ducklake_catalog.TryGetMappingById(*this, mapping_id);
 	if (name_map) {
-		return *name_map;
+		return name_map;
 	}
 	throw InvalidInputException("Unknown name map id %d when trying to map file", mapping_id.index);
 }

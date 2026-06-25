@@ -735,18 +735,18 @@ void DuckLakeCatalog::LoadNameMaps(DuckLakeTransaction &transaction) {
 	loaded_name_map_index = snapshot.next_file_id;
 }
 
-optional_ptr<const DuckLakeNameMap> DuckLakeCatalog::TryGetMappingById(DuckLakeTransaction &transaction,
-                                                                       MappingIndex mapping_id) {
+shared_ptr<const DuckLakeNameMap> DuckLakeCatalog::TryGetMappingById(DuckLakeTransaction &transaction,
+                                                                     MappingIndex mapping_id) {
 	lock_guard<mutex> guard(name_maps_lock);
 	auto entry = name_maps.name_maps.find(mapping_id);
 	if (entry != name_maps.name_maps.end()) {
-		return entry->second.get();
+		return entry->second;
 	}
 	LoadNameMaps(transaction);
 	// try to fetch the name map again
 	entry = name_maps.name_maps.find(mapping_id);
 	if (entry != name_maps.name_maps.end()) {
-		return entry->second.get();
+		return entry->second;
 	}
 	// still no success - return nullptr
 	return nullptr;
