@@ -183,7 +183,7 @@ DETACH ducklake
 
 # Check Alter
 statement ok
-ATTACH 'ducklake:__TEST_DIR__/ducklake_reserved_cols3.db' AS ducklake (DATA_PATH '__TEST_DIR__/ducklake_reserved_cols3_files')
+ATTACH 'ducklake:{TEST_DIR}/ducklake_reserved_cols3.db' AS ducklake (DATA_PATH '{TEST_DIR}/ducklake_reserved_cols3_files')
 
 statement ok
 SET ducklake_default_data_inlining_row_limit = 0;

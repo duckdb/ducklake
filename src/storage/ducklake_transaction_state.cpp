@@ -1027,11 +1027,9 @@ string DuckLakeTransactionState::UpdateStatsForDroppedFiles(
 	return result;
 }
 
-NewDataInfo DuckLakeTransactionState::GetNewDataFiles(string &batch_query, DuckLakeCommitState &commit_state,
-                                                      optional_ptr<vector<DuckLakeGlobalStatsInfo>> stats,
-                                                      const DuckLakeCommitContext &context,
-                                                      map<TableIndex, DroppedDataFileStats>
-                                                          &attempt_dropped_file_stats) {
+NewDataInfo DuckLakeTransactionState::GetNewDataFiles(
+    string &batch_query, DuckLakeCommitState &commit_state, optional_ptr<vector<DuckLakeGlobalStatsInfo>> stats,
+    const DuckLakeCommitContext &context, map<TableIndex, DroppedDataFileStats> &attempt_dropped_file_stats) {
 	NewDataInfo result;
 	// get the global table stats
 	DuckLakeNewGlobalStats new_globals;
