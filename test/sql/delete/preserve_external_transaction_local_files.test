@@ -1,0 +1,97 @@
+# name: test/sql/delete/preserve_external_transaction_local_files.test
+# description: Transaction-local drops of externally registered files preserve the files on disk
+# group: [delete]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/preserve_external_transaction_local_files', METADATA_CATALOG 'ducklake_meta')
+
+statement ok
+CREATE TABLE ducklake.delete_t(id INTEGER, payload VARCHAR)
+
+statement ok
+COPY (
+    SELECT 1 AS id, 'a' AS payload
+    UNION ALL
+    SELECT 2 AS id, 'b' AS payload
+    UNION ALL
+    SELECT 3 AS id, 'c' AS payload
+) TO '{DATA_PATH}/preserve_external_delete.parquet'
+
+statement ok
+BEGIN
+
+statement ok
+CALL ducklake_add_data_files('ducklake', 'delete_t', '{DATA_PATH}/preserve_external_delete.parquet')
+
+query I
+SELECT COUNT(*) FROM ducklake.delete_t
+----
+3
+
+query I
+DELETE FROM ducklake.delete_t
+----
+3
+
+statement ok
+COMMIT
+
+query I
+SELECT COUNT(*) FROM ducklake.delete_t
+----
+0
+
+query I
+SELECT COUNT(*) FROM read_parquet('{DATA_PATH}/preserve_external_delete.parquet')
+----
+3
+
+query I
+SELECT COUNT(*) FROM ducklake_meta.ducklake_data_file WHERE path LIKE '%preserve_external_delete.parquet'
+----
+0
+
+statement ok
+COPY (
+    SELECT 10 AS id, 'x' AS payload
+    UNION ALL
+    SELECT 20 AS id, 'y' AS payload
+) TO '{DATA_PATH}/preserve_external_drop_table.parquet'
+
+statement ok
+BEGIN
+
+statement ok
+CREATE TABLE ducklake.drop_t(id INTEGER, payload VARCHAR)
+
+statement ok
+CALL ducklake_add_data_files('ducklake', 'drop_t', '{DATA_PATH}/preserve_external_drop_table.parquet')
+
+query I
+SELECT COUNT(*) FROM ducklake.drop_t
+----
+2
+
+statement ok
+DROP TABLE ducklake.drop_t
+
+query I
+SELECT COUNT(*) FROM read_parquet('{DATA_PATH}/preserve_external_drop_table.parquet')
+----
+2
+
+statement ok
+ROLLBACK
+
+query I
+SELECT COUNT(*) FROM read_parquet('{DATA_PATH}/preserve_external_drop_table.parquet')
+----
+2

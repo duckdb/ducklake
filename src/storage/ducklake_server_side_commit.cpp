@@ -47,6 +47,10 @@ struct EntryShell {
 	bool hive_partition;
 };
 
+static string JoinIds(const vector<idx_t> &ids) {
+	return StringUtil::Join(ids, ids.size(), ",", [](const idx_t &id) { return to_string(id); });
+}
+
 unique_ptr<DuckLakeNameMapEntry> BuildNameMapEntry(idx_t id, const std::map<idx_t, const EntryShell *> &shell_by_id,
                                                    const std::map<idx_t, vector<idx_t>> &children_of) {
 	auto &shell = *shell_by_id.at(id);
@@ -203,6 +207,32 @@ void DuckLakeServerSideCommit::ReadCommitHeader() {
 	}
 }
 
+void DuckLakeServerSideCommit::ReadStagedDroppedFileEntries() {
+	if (staged_dropped_files_read) {
+		return;
+	}
+	vector<idx_t> dropped_file_ids;
+	auto dropped_files = ScanStagedTable(DuckLakeStagedTableType::DROPPED_FILE);
+	for (auto &row : *dropped_files) {
+		auto file_id = AsIdx(row, 1);
+		staged_dropped_files.emplace_back(row.GetValue<string>(0), file_id);
+		dropped_file_ids.push_back(file_id);
+	}
+	if (!dropped_file_ids.empty()) {
+		auto dropped_stats = RunQuery(
+		    StringUtil::Format(
+		        "SELECT table_id, record_count, file_size_bytes FROM %s.ducklake_data_file WHERE data_file_id IN (%s)",
+		        schema_id, JoinIds(dropped_file_ids)),
+		    "read dropped file stats");
+		for (auto &row : *dropped_stats) {
+			auto &stats = staged_dropped_file_stats[TableIndex(AsIdx(row, 0))];
+			stats.row_count += AsIdx(row, 1);
+			stats.file_size_bytes += AsIdx(row, 2);
+		}
+	}
+	staged_dropped_files_read = true;
+}
+
 void DuckLakeServerSideCommit::ReadColumnTypes() {
 	unordered_set<idx_t> table_ids;
 	auto data_files = ScanStagedTable(DuckLakeStagedTableType::DATA_FILE);
@@ -212,6 +242,10 @@ void DuckLakeServerSideCommit::ReadColumnTypes() {
 	auto inlined = ScanStagedTable(DuckLakeStagedTableType::INLINED_DATA);
 	for (auto &row : *inlined) {
 		table_ids.insert(AsIdx(row, 0));
+	}
+	ReadStagedDroppedFileEntries();
+	for (auto &entry : staged_dropped_file_stats) {
+		table_ids.insert(entry.first.index);
 	}
 	if (table_ids.empty()) {
 		return;
@@ -444,9 +478,13 @@ void DuckLakeServerSideCommit::ReadStagedDeleteFiles() {
 }
 
 void DuckLakeServerSideCommit::ReadStagedDroppedFiles() {
-	auto dropped = ScanStagedTable(DuckLakeStagedTableType::DROPPED_FILE);
-	for (auto &row : *dropped) {
-		state->dropped_files.emplace(row.GetValue<string>(0), DataFileIndex(AsIdx(row, 1)));
+	ReadStagedDroppedFileEntries();
+	for (auto &entry : staged_dropped_files) {
+		auto file_id = entry.second;
+		state->dropped_files.emplace(entry.first, DataFileIndex(file_id));
+	}
+	for (auto &entry : staged_dropped_file_stats) {
+		state->dropped_file_stats[entry.first] = entry.second;
 	}
 	auto tables = ScanStagedTable(DuckLakeStagedTableType::TABLES_DELETED_FROM);
 	for (auto &row : *tables) {
@@ -630,8 +668,7 @@ unique_ptr<DuckLakeStats> DuckLakeServerSideCommit::BuildStatsMap(vector<DuckLak
 
 vector<string> DuckLakeServerSideCommit::LookupInlinedTableNames(TableIndex table_id) {
 	vector<string> names;
-	auto sql =
-	    SubstitutePlaceholders(DuckLakeMetadataManager::GetInlinedTableNamesSql(table_id), transaction_snapshot);
+	auto sql = SubstitutePlaceholders(DuckLakeMetadataManager::GetInlinedTableNamesSql(table_id), transaction_snapshot);
 	auto result = RunQuery(sql, "lookup inlined table names");
 	for (auto &row : *result) {
 		names.push_back(row.GetValue<string>(0));
@@ -741,8 +778,8 @@ DuckLakeCommitContext DuckLakeServerSideCommit::BuildContext(idx_t &committed_sn
 	};
 	ctx.get_table_column_schema = [this](TableIndex table_id) {
 		vector<DuckLakeColumnSchemaEntry> schema;
-		auto sql = SubstitutePlaceholders(DuckLakeMetadataManager::GetTableColumnSchemaSql(table_id),
-		                                  transaction_snapshot);
+		auto sql =
+		    SubstitutePlaceholders(DuckLakeMetadataManager::GetTableColumnSchemaSql(table_id), transaction_snapshot);
 		auto result = RunQuery(sql, "read table column schema");
 		for (auto &row : *result) {
 			// parent_column IS NULL => top-level root; otherwise a nested leaf carrying its own leaf type.
@@ -822,8 +859,8 @@ unique_ptr<MaterializedQueryResult> DuckLakeServerSideCommit::RunQuery(const str
 unique_ptr<MaterializedQueryResult> DuckLakeServerSideCommit::ScanStagedTable(DuckLakeStagedTableType kind) {
 	string table_name = DuckLakeStagedTable::BaseName(kind);
 	auto &temp_catalog = Catalog::GetCatalog(context, TEMP_CATALOG);
-	auto &table_entry =
-	    temp_catalog.GetEntry<TableCatalogEntry>(context, DEFAULT_SCHEMA, Identifier(table_name)).Cast<DuckTableEntry>();
+	auto &table_entry = temp_catalog.GetEntry<TableCatalogEntry>(context, DEFAULT_SCHEMA, Identifier(table_name))
+	                        .Cast<DuckTableEntry>();
 	auto &storage = table_entry.GetStorage();
 
 	auto types = storage.GetTypes();

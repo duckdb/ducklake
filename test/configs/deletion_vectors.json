@@ -15,25 +15,16 @@
       ]
     },
     {
-      "reason": "Deletion vectors do not support per-position snapshot tracking, breaking tests that rely on precise time travel across multiple deletes",
-      "paths": [
-        "test/sql/delete/multi_deletes.test",
-        "test/sql/table_changes/ducklake_table_deletions_compacted.test",
-        "test/sql/table_changes/ducklake_table_deletions_large.test",
-        "test/sql/table_changes/ducklake_table_deletions_partial_files.test",
-        "test/sql/table_changes/ducklake_table_deletions_projection_order.test",
-        "test/sql/rewrite_data_files/last_snapshot_multiple_inserts.test",
-        "test/sql/rewrite_data_files/test_last_snapshot_merge_rewrite.test",
-        "test/sql/rewrite_data_files/test_last_snapshot_rewrite.test",
-        "test/sql/rewrite_data_files/test_rewrite_concurrency.test",
-        "test/sql/rewrite_data_files/test_rewrite_db.test",
-        "test/sql/issues/issue_1074.test"
-      ]
-    },
-    {
       "reason": "Deletion vectors are written as puffin files, not *-del*.parquet, so the parquet glob assertion does not apply",
       "paths": [
         "test/sql/encryption/encryption.test"
+      ]
+    },
+    {
+      "reason": "Reads the delete file directly as parquet (DESCRIBE/SELECT of *-delete.parquet) to inspect its columns/contents",
+      "paths": [
+        "test/sql/delete/parquet_deletion_describe.test",
+        "test/sql/deletion_inlining/test_deletion_inlining_encryption.test"
       ]
     }
   ]

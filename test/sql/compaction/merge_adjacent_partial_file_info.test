@@ -22,7 +22,7 @@ CREATE TABLE t (id INTEGER, data VARCHAR);
 
 # Set small target file size to control merging behavior (VERSION 1)
 statement ok
-CALL ducklake_set_option('ducklake', 'target_file_size', '1KB');
+CALL ducklake_set_option('ducklake', 'target_file_size', '1.5KB');
 
 # Create small files A (VERSION 2)
 statement ok

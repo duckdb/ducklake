@@ -26,6 +26,7 @@
 #include "duckdb/common/printer.hpp"
 #include "duckdb/logging/logger.hpp"
 #include "storage/ducklake_log_type.hpp"
+#include "duckdb/main/client_context.hpp"
 #include "duckdb/main/settings.hpp"
 #include "duckdb/main/client_config.hpp"
 
@@ -149,13 +150,16 @@ void LocalTableChanges::DropTransactionLocalFile(ClientContext &context, TableIn
 	for (idx_t i = 0; i < table_files.size(); i++) {
 		auto &file = table_files[i];
 		if (file.file_name == path) {
+			auto created_by_ducklake = file.created_by_ducklake;
 			for (auto &del_file : file.delete_files) {
 				fs.RemoveFile(del_file.file_name);
 			}
 			file.delete_files.clear();
-			// found the file - delete it from the table list and from disk
+			// found the file - delete it from the table list and from disk if DuckLake owns it
 			table_files.erase_at(i);
-			fs.RemoveFile(path);
+			if (created_by_ducklake) {
+				fs.RemoveFile(path);
+			}
 			if (table_changes.IsEmpty()) {
 				// no more files remaining
 				changes.erase(entry);
@@ -596,7 +600,9 @@ void LocalTableChanges::CleanupFiles(ClientContext &context, TableIndex table_id
 		auto &table_changes = table_entry->second;
 		auto &fs = FileSystem::GetFileSystem(context);
 		for (auto &file : table_changes.new_data_files) {
-			fs.RemoveFile(file.file_name);
+			if (file.created_by_ducklake) {
+				fs.RemoveFile(file.file_name);
+			}
 			for (auto &del_file : file.delete_files) {
 				fs.TryRemoveFile(del_file.file_name);
 			}
@@ -760,6 +766,10 @@ Connection &DuckLakeTransaction::GetConnection() {
 	lock_guard<mutex> lock(connection_lock);
 	if (!connection) {
 		connection = make_uniq<Connection>(db);
+		auto caller_context = context.lock();
+		if (caller_context) {
+			DuckLakeUtil::CopyExtensionSettings(*caller_context, *connection->context);
+		}
 		// set the search path to the metadata catalog
 		auto &client_data = ClientData::Get(*connection->context);
 		// ensure we are only looking in the ducklake catalog schema during querying
@@ -1018,7 +1028,11 @@ DuckLakePartitionInfo DuckLakeTransaction::GetNewPartitionKey(DuckLakeCommitStat
 		// dropping partition data - insert the empty partition key data for this table
 		return partition_key;
 	}
-	auto local_partition_id = partition_data->partition_id;
+	// key the remap off the original transaction-local id: a previous failed commit attempt may have
+	// already overwritten partition_id, while data files still reference the transaction-local id
+	auto local_partition_id = partition_data->local_partition_id.IsValid()
+	                              ? partition_data->local_partition_id.GetIndex()
+	                              : partition_data->partition_id;
 	auto partition_id = commit_state.commit_snapshot.next_catalog_id++;
 	partition_key.id = partition_id;
 	partition_data->partition_id = partition_id;
@@ -1328,6 +1342,11 @@ void DuckLakeTransaction::FlushChanges() {
 }
 
 void DuckLakeTransaction::ApplyServerSideCommit(idx_t schema_version) {
+	if (snapshot) {
+		for (auto &entry : state->dropped_file_stats) {
+			ducklake_catalog.InvalidateTableStatsCache(snapshot->next_file_id, entry.first);
+		}
+	}
 	catalog_version = schema_version;
 	if (connection) {
 		connection->Commit();
@@ -1466,6 +1485,9 @@ void DuckLakeTransaction::RunCommitLoop(DuckLakeSnapshot transaction_snapshot,
 	context.set_committed_snapshot_id = [&](idx_t snapshot_id) {
 		ducklake_catalog.SetCommittedSnapshotId(snapshot_id);
 	};
+	context.invalidate_table_stats_cache = [&](idx_t next_file_id, TableIndex table_id) {
+		ducklake_catalog.InvalidateTableStatsCache(next_file_id, table_id);
+	};
 	context.commit_info = state->commit_info;
 	context.write_row_group_count = ducklake_catalog.SupportsRowGroupCount();
 	state->Commit(transaction_snapshot, transaction_changes, retry_config, context);
@@ -1519,7 +1541,7 @@ unique_ptr<QueryResult> DuckLakeTransaction::ExecuteRaw(string query) {
 	if (cb) {
 		cb(query, end - start);
 	}
-	return result;
+	return std::move(result);
 }
 
 unique_ptr<QueryResult> DuckLakeTransaction::Query(string query) {
@@ -1780,9 +1802,16 @@ void DuckLakeTransaction::DropTableMacro(DuckLakeTableMacroEntry &macro) {
 	state->dropped_table_macros.insert(macro.GetIndex());
 }
 
-void DuckLakeTransaction::DropFile(TableIndex table_id, DataFileIndex data_file_id, string path) {
+void DuckLakeTransaction::DropFile(TableIndex table_id, DataFileIndex data_file_id, string path, idx_t row_count,
+                                   idx_t file_size_bytes) {
 	state->tables_deleted_from.insert(table_id);
-	state->dropped_files.emplace(std::move(path), data_file_id);
+	auto inserted = state->dropped_files.emplace(std::move(path), data_file_id);
+	if (!inserted.second) {
+		return;
+	}
+	auto &stats = state->dropped_file_stats[table_id];
+	stats.row_count += row_count;
+	stats.file_size_bytes += file_size_bytes;
 }
 
 bool DuckLakeTransaction::HasDroppedFiles() const {

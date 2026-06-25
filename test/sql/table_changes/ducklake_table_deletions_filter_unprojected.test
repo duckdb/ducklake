@@ -1,0 +1,127 @@
+# name: test/sql/table_changes/ducklake_table_deletions_filter_unprojected.test
+# description: ducklake_table_deletions / ducklake_table_changes must not crash and must return correct rowid/snapshot_id when filtering on a column that is NOT in the SELECT projection (real delete-file path)
+# group: [table_changes]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+# DATA_INLINING_ROW_LIMIT 0 forces deletes onto the real delete-file path
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/ducklake_filter_unprojected', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+USE dl
+
+# snapshot 1 - create table
+statement ok
+CREATE TABLE d (k INTEGER, v INTEGER);
+
+# snapshot 2 - one data file with 5 rows (rowids 0..4 for k=1..5)
+statement ok
+INSERT INTO d VALUES (1,10),(2,20),(3,30),(4,40),(5,50);
+
+# snapshot 3 - delete k=2 (rowid 1)
+statement ok
+DELETE FROM d WHERE k = 2;
+
+# snapshot 4 - delete k=4 (rowid 3); accumulates into the same delete file as snapshot 3
+statement ok
+DELETE FROM d WHERE k = 4;
+
+# --- control: filter on a PROJECTED column (k); projection_ids is identity. ---
+query III
+SELECT rowid, snapshot_id, k FROM ducklake_table_deletions('dl', 'main', 'd', 2, 4) WHERE k > 0 ORDER BY rowid
+----
+1	3	2
+3	4	4
+
+# --- filter on an UNPROJECTED column (v); v = 10*k so this must equal the control above ---
+query III
+SELECT rowid, snapshot_id, k FROM ducklake_table_deletions('dl', 'main', 'd', 2, 4) WHERE v > 0 ORDER BY rowid
+----
+1	3	2
+3	4	4
+
+# --- projection-shape variants under filter-column removal (all filter on unprojected v) ---
+
+# snapshot_id projected first
+query III
+SELECT snapshot_id, rowid, k FROM ducklake_table_deletions('dl', 'main', 'd', 2, 4) WHERE v > 0 ORDER BY rowid
+----
+3	1	2
+4	3	4
+
+# data column projected first, rowid last
+query III
+SELECT k, snapshot_id, rowid FROM ducklake_table_deletions('dl', 'main', 'd', 2, 4) WHERE v > 0 ORDER BY rowid
+----
+2	3	1
+4	4	3
+
+# --- internally-projected rowid: rowid NOT projected, filter on unprojected v ---
+query II
+SELECT snapshot_id, k FROM ducklake_table_deletions('dl', 'main', 'd', 2, 4) WHERE v > 0 ORDER BY snapshot_id
+----
+3	2
+4	4
+
+# --- per-snapshot filtering still works while filtering on unprojected v ---
+query III
+SELECT rowid, snapshot_id, k FROM ducklake_table_deletions('dl', 'main', 'd', 3, 3) WHERE v > 0 ORDER BY rowid
+----
+1	3	2
+
+query III
+SELECT rowid, snapshot_id, k FROM ducklake_table_deletions('dl', 'main', 'd', 4, 4) WHERE v > 0 ORDER BY rowid
+----
+3	4	4
+
+# --- empty result while filtering on an unprojected column (exercises count==0 path) ---
+query III
+SELECT rowid, snapshot_id, k FROM ducklake_table_deletions('dl', 'main', 'd', 2, 4) WHERE v > 1000 ORDER BY rowid
+----
+
+# --- integration: ducklake_table_changes under a filter on an unprojected column ---
+query III
+SELECT rowid, snapshot_id, change_type FROM ducklake_table_changes('dl', 'main', 'd', 2, 4) WHERE v > 0 AND change_type = 'delete' ORDER BY rowid
+----
+1	3	delete
+3	4	delete
+
+# --- multiple data files: per-file row_id_start must be applied under filter-column removal ---
+statement ok
+CREATE TABLE m (k INTEGER, v INTEGER);
+
+# file 1 (rowids 0..2)
+statement ok
+INSERT INTO m VALUES (1,10),(2,20),(3,30);
+
+# file 2 (rowids 3..5)
+statement ok
+INSERT INTO m VALUES (4,40),(5,50),(6,60);
+
+# delete k=2 (file 1, rowid 1) then k=5 (file 2, rowid 4) in separate snapshots
+statement ok
+DELETE FROM m WHERE k = 2;
+
+statement ok
+DELETE FROM m WHERE k = 5;
+
+# filter on unprojected v: each deleted row reports its own snapshot (8 for file 1, 9 for file 2)
+query III
+SELECT rowid, snapshot_id, k FROM ducklake_table_deletions('dl', 'main', 'm', 1, 9) WHERE v > 0 ORDER BY rowid
+----
+1	8	2
+4	9	5
+
+# control: filter on projected k must match the unprojected-v result above
+query III
+SELECT rowid, snapshot_id, k FROM ducklake_table_deletions('dl', 'main', 'm', 1, 9) WHERE k > 0 ORDER BY rowid
+----
+1	8	2
+4	9	5

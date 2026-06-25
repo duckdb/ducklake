@@ -141,6 +141,23 @@ COPY (SELECT 10 AS id, 'x' as value, '2024-02-10'::DATE as dt) TO '{DATA_PATH}/a
 statement ok
 CALL ducklake_add_data_files('ducklake', 'multi_partition_t', '{DATA_PATH}/add_file_partitioned/main/multi_partition_t/year=2024/month=2/day=10/full_match.parquet')
 
+statement ok
+SET VARIABLE full_match_data_file_id = (
+	SELECT data_file_id
+	FROM metadata.ducklake_data_file
+	WHERE path LIKE '%full_match.parquet'
+)
+
+query IT
+SELECT partition_key_index, partition_value
+FROM metadata.ducklake_file_partition_value
+WHERE data_file_id = getvariable('full_match_data_file_id')
+ORDER BY partition_key_index
+----
+0	2024
+1	2
+2	10
+
 query III
 FROM multi_partition_t WHERE id = 10;
 ----

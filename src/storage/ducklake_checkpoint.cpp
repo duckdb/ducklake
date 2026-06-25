@@ -1,16 +1,19 @@
 #include "ducklake_extension.hpp"
 #include "duckdb/main/attached_database.hpp"
+#include "duckdb/main/connection.hpp"
 #include "storage/ducklake_transaction_manager.hpp"
 #include "storage/ducklake_catalog.hpp"
 #include "storage/ducklake_schema_entry.hpp"
 #include "storage/ducklake_table_entry.hpp"
 #include "duckdb/main/database.hpp"
 #include "duckdb/common/sql_identifier.hpp"
+#include "common/ducklake_util.hpp"
 
 namespace duckdb {
 
 void DuckLakeTransactionManager::Checkpoint(ClientContext &context, bool force) {
 	auto conn = make_uniq<Connection>(ducklake_catalog.GetDatabase());
+	DuckLakeUtil::CopyExtensionSettings(context, *conn->context);
 	// 1. We first flush inlined data, since these can generate many files, which would be important for compaction
 	// 2. We expire snapshots since these can create more compaction opportunities.
 	// 3. We call the compaction functions, merge_adjacent and rewrite, unclear what is the best order here.
@@ -21,8 +24,8 @@ void DuckLakeTransactionManager::Checkpoint(ClientContext &context, bool force) 
 	    "CALL ducklake_cleanup_old_files({CATALOG})",    "CALL ducklake_delete_orphaned_files({CATALOG})"};
 
 	for (const auto &query : checkpoint_queries) {
-		auto checkpoint_query =
-		    StringUtil::Replace(query, "{CATALOG}", SQLString::ToString(ducklake_catalog.GetName().GetIdentifierName()));
+		auto checkpoint_query = StringUtil::Replace(
+		    query, "{CATALOG}", SQLString::ToString(ducklake_catalog.GetName().GetIdentifierName()));
 		auto res = conn->Query(checkpoint_query);
 		if (res->HasError()) {
 			res->GetErrorObject().Throw("Failed to perform CHECKPOINT; in DuckLake:  ");

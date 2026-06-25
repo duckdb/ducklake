@@ -514,10 +514,9 @@ void DuckLakeSchemaEntry::TryDropSchema(DuckLakeTransaction &transaction, bool c
 		string error_string = "Cannot drop schema \"" + name + "\" because there are entries that depend on it\n";
 		for (auto &dependent : dependents) {
 			auto &dep = dependent.get();
-			error_string += StringUtil::Format("%s \"%s\" depends on %s \"%s\".\n",
-			                                   StringUtil::Lower(CatalogTypeToString(dep.type)),
-			                                   dep.name.GetIdentifierName(),
-			                                   StringUtil::Lower(CatalogTypeToString(type)), name.GetIdentifierName());
+			error_string += StringUtil::Format(
+			    "%s \"%s\" depends on %s \"%s\".\n", StringUtil::Lower(CatalogTypeToString(dep.type)),
+			    dep.name.GetIdentifierName(), StringUtil::Lower(CatalogTypeToString(type)), name.GetIdentifierName());
 		}
 		error_string += "Use DROP...CASCADE to drop all dependents.";
 		throw CatalogException(error_string);

@@ -10,8 +10,9 @@ test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
 
 test-env DATA_PATH {TEST_DIR}
 
+# this test verifies the partition values of written files - disable inlining so the MERGE writes a file
 statement ok
-ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/merge_partition_bug', METADATA_CATALOG 'meta')
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/merge_partition_bug', METADATA_CATALOG 'meta', DATA_INLINING_ROW_LIMIT 0)
 
 statement ok
 USE ducklake

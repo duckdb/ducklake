@@ -1,0 +1,113 @@
+# name: test/sql/delete/full_file_delete_stats_default_inlining.test
+# description: Whole-file-drop stats accounting under the default data inlining row limit
+# group: [delete]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+# No DATA_INLINING_ROW_LIMIT override: the catalog uses the default (10), so inlined file deletes are active.
+# This is the path the shipped full_file_delete_stats.test cannot reach because it disables inlining.
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/full_file_delete_stats_default_inlining')
+
+# A whole-file delete at or below the inline limit still drops the data file before considering an
+# inlined delete, and decrements table stats to zero.
+statement ok
+CREATE TABLE ducklake.small_dropped AS SELECT range::INT id FROM range(5)
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake')
+
+statement ok
+SET VARIABLE small_dropped_id = (SELECT table_id FROM __ducklake_metadata_ducklake.ducklake_table WHERE table_name = 'small_dropped')
+
+query I
+SELECT COUNT(*) FROM __ducklake_metadata_ducklake.ducklake_data_file WHERE table_id = getvariable('small_dropped_id') AND end_snapshot IS NULL
+----
+1
+
+query I
+DELETE FROM ducklake.small_dropped
+----
+5
+
+query I
+SELECT COUNT(*) FROM ducklake.small_dropped
+----
+0
+
+query I
+SELECT COUNT(*) FROM __ducklake_metadata_ducklake.ducklake_data_file WHERE table_id = getvariable('small_dropped_id') AND end_snapshot IS NULL
+----
+0
+
+query II
+SELECT record_count, file_size_bytes FROM __ducklake_metadata_ducklake.ducklake_table_stats WHERE table_id = getvariable('small_dropped_id')
+----
+0	0
+
+# A delete larger than the inline limit fully empties the file: it is dropped (not inlined) and table stats
+# are decremented to zero - the stats fix works under default inlining, not only with inlining disabled.
+statement ok
+CREATE TABLE ducklake.dropped AS SELECT range::INT id FROM range(100)
+
+statement ok
+SET VARIABLE dropped_id = (SELECT table_id FROM __ducklake_metadata_ducklake.ducklake_table WHERE table_name = 'dropped')
+
+query I
+SELECT COUNT(*) FROM __ducklake_metadata_ducklake.ducklake_data_file WHERE table_id = getvariable('dropped_id') AND end_snapshot IS NULL
+----
+1
+
+query I
+DELETE FROM ducklake.dropped
+----
+100
+
+query I
+SELECT COUNT(*) FROM ducklake.dropped
+----
+0
+
+query I
+SELECT COUNT(*) FROM __ducklake_metadata_ducklake.ducklake_data_file WHERE table_id = getvariable('dropped_id') AND end_snapshot IS NULL
+----
+0
+
+query II
+SELECT record_count, file_size_bytes FROM __ducklake_metadata_ducklake.ducklake_table_stats WHERE table_id = getvariable('dropped_id')
+----
+0	0
+
+# A delete within the inline limit is inlined as file deletes: the data file stays active and table stats are
+# unchanged. This guards the default inlined-delete behavior - the stats accounting does not drop the file early.
+statement ok
+CREATE TABLE ducklake.inlined AS SELECT range::INT id FROM range(100)
+
+statement ok
+SET VARIABLE inlined_id = (SELECT table_id FROM __ducklake_metadata_ducklake.ducklake_table WHERE table_name = 'inlined')
+
+query I
+DELETE FROM ducklake.inlined WHERE id < 5
+----
+5
+
+query I
+SELECT COUNT(*) FROM ducklake.inlined
+----
+95
+
+query I
+SELECT COUNT(*) FROM __ducklake_metadata_ducklake.ducklake_data_file WHERE table_id = getvariable('inlined_id') AND end_snapshot IS NULL
+----
+1
+
+query I
+SELECT record_count FROM __ducklake_metadata_ducklake.ducklake_table_stats WHERE table_id = getvariable('inlined_id')
+----
+100

@@ -462,6 +462,7 @@ struct DuckLakeCompactionFileEntry {
 	set<idx_t> inlined_file_deletions;
 	//! Whether this file has any inlined deletions (cheap flag; set for all compaction types).
 	bool has_inlined_deletions = false;
+	double delete_ratio = 0;
 };
 
 struct DuckLakeRewriteFileEntry {

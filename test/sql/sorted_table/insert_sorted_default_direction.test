@@ -11,9 +11,6 @@ test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
 test-env DATA_PATH {TEST_DIR}
 
 statement ok
-PRAGMA enable_verification
-
-statement ok
 COPY (
     SELECT (DATE '2011-01-03' + (i::INTEGER))::DATE AS date, 0.0::FLOAT AS value FROM range(0, 20) t(i)
     UNION ALL

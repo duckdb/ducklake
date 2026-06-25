@@ -1,0 +1,173 @@
+# name: test/sql/delete/full_file_delete_stats.test
+# description: Deletes that drop a whole data file decrement table stats
+# group: [delete]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/full_file_delete_stats', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE ducklake.t AS SELECT range::INT id FROM range(100)
+
+# Materialize ids/sizes one scan at a time so this also works against
+# metadata catalogs that cannot run multiple streaming scans per query.
+statement ok
+SET VARIABLE t_id = (SELECT table_id FROM __ducklake_metadata_ducklake.ducklake_table WHERE table_name = 't')
+
+statement ok
+SET VARIABLE initial_size = (SELECT file_size_bytes FROM __ducklake_metadata_ducklake.ducklake_table_stats WHERE table_id = getvariable('t_id'))
+
+# A partial delete writes a delete file and leaves the data file active, so table stats are unchanged.
+query I
+DELETE FROM ducklake.t WHERE id < 30
+----
+30
+
+query I
+SELECT COUNT(*) FROM __ducklake_metadata_ducklake.ducklake_delete_file WHERE table_id = getvariable('t_id') AND end_snapshot IS NULL
+----
+1
+
+query III
+SELECT record_count, next_row_id, file_size_bytes = getvariable('initial_size') FROM __ducklake_metadata_ducklake.ducklake_table_stats WHERE table_id = getvariable('t_id')
+----
+100	100	true
+
+# Deleting the remaining rows fully deletes the file: it is dropped, the stats are decremented to
+# zero, and next_row_id stays monotonic.
+query I
+DELETE FROM ducklake.t WHERE id >= 30
+----
+70
+
+query I
+SELECT COUNT(*) FROM ducklake.t
+----
+0
+
+query I
+SELECT COUNT(*) FROM __ducklake_metadata_ducklake.ducklake_data_file WHERE table_id = getvariable('t_id') AND end_snapshot IS NULL
+----
+0
+
+query III
+SELECT record_count, next_row_id, file_size_bytes FROM __ducklake_metadata_ducklake.ducklake_table_stats WHERE table_id = getvariable('t_id')
+----
+0	100	0
+
+query II
+SELECT (min_value IS NULL)::INT, (max_value IS NULL)::INT FROM __ducklake_metadata_ducklake.ducklake_table_column_stats WHERE table_id = getvariable('t_id')
+----
+1	1
+
+statement ok
+CREATE TABLE ducklake.partial AS SELECT range::INT id FROM range(200)
+
+statement ok
+SET VARIABLE partial_id = (SELECT table_id FROM __ducklake_metadata_ducklake.ducklake_table WHERE table_name = 'partial')
+
+statement ok
+INSERT INTO ducklake.partial SELECT range::INT id FROM range(1000, 1200)
+
+query I
+DELETE FROM ducklake.partial WHERE id < 200
+----
+200
+
+query II
+SELECT record_count, next_row_id FROM __ducklake_metadata_ducklake.ducklake_table_stats WHERE table_id = getvariable('partial_id')
+----
+200	400
+
+query I
+SELECT COUNT(*) FROM __ducklake_metadata_ducklake.ducklake_table_column_stats WHERE table_id = getvariable('partial_id')
+----
+0
+
+# Re-insert after the drop in the same connection: the stats cache was invalidated, so the insert
+# starts from the decremented base (record_count 0), not the stale pre-delete value.
+statement ok
+INSERT INTO ducklake.t SELECT range::INT id FROM range(100, 110)
+
+query III
+SELECT COUNT(*), MIN(id), MAX(id) FROM ducklake.t
+----
+10	100	109
+
+query II
+SELECT record_count, next_row_id FROM __ducklake_metadata_ducklake.ducklake_table_stats WHERE table_id = getvariable('t_id')
+----
+10	110
+
+query TT
+SELECT min_value, max_value FROM __ducklake_metadata_ducklake.ducklake_table_column_stats WHERE table_id = getvariable('t_id')
+----
+100	109
+
+statement ok
+CREATE TABLE ducklake.merge_then_drop AS SELECT range::INT id FROM range(50)
+
+statement ok
+INSERT INTO ducklake.merge_then_drop SELECT range::INT id FROM range(50, 100)
+
+statement ok
+INSERT INTO ducklake.merge_then_drop SELECT range::INT id FROM range(100, 150)
+
+statement ok
+INSERT INTO ducklake.merge_then_drop SELECT range::INT id FROM range(150, 200)
+
+statement ok
+SET VARIABLE merge_id = (SELECT table_id FROM __ducklake_metadata_ducklake.ducklake_table WHERE table_name = 'merge_then_drop')
+
+statement ok
+CALL ducklake_merge_adjacent_files('ducklake', 'merge_then_drop')
+
+query I
+DELETE FROM ducklake.merge_then_drop
+----
+200
+
+query III
+SELECT record_count, next_row_id, file_size_bytes FROM __ducklake_metadata_ducklake.ducklake_table_stats WHERE table_id = getvariable('merge_id')
+----
+0	200	0
+
+statement ok
+CREATE TABLE ducklake.rewrite_then_drop AS SELECT range::INT id FROM range(50)
+
+statement ok
+INSERT INTO ducklake.rewrite_then_drop SELECT range::INT id FROM range(50, 100)
+
+statement ok
+INSERT INTO ducklake.rewrite_then_drop SELECT range::INT id FROM range(100, 150)
+
+statement ok
+INSERT INTO ducklake.rewrite_then_drop SELECT range::INT id FROM range(150, 200)
+
+statement ok
+SET VARIABLE rewrite_id = (SELECT table_id FROM __ducklake_metadata_ducklake.ducklake_table WHERE table_name = 'rewrite_then_drop')
+
+query I
+DELETE FROM ducklake.rewrite_then_drop WHERE id % 2 = 0
+----
+100
+
+statement ok
+CALL ducklake_rewrite_data_files('ducklake', 'rewrite_then_drop', delete_threshold => 0)
+
+query I
+DELETE FROM ducklake.rewrite_then_drop
+----
+100
+
+query III
+SELECT record_count, next_row_id, file_size_bytes FROM __ducklake_metadata_ducklake.ducklake_table_stats WHERE table_id = getvariable('rewrite_id')
+----
+0	200	0

@@ -66,6 +66,10 @@ public:
 	                            idx_t row);
 	//! Throws if any column in the list conflicts with inlined data system columns
 	static void ValidateNoInlinedSystemColumns(const ColumnList &columns, const string &table_name = "");
+
+	//! Copy extension-registered settings from one context onto another. Core engine settings
+	//! are not copied.
+	static void CopyExtensionSettings(ClientContext &from, ClientContext &to);
 };
 
 } // namespace duckdb

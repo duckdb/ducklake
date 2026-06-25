@@ -1,17 +1,18 @@
 # name: test/sql/metadata/hide_metadata_catalog.test
-# description: test that the internal metadata catalog is hidden from catalog/table listings by default
+# description: test that the internal metadata catalog is hidden by default only when METADATA_CATALOG is not explicitly set
 # group: [metadata]
 
 require ducklake
 
 require parquet
 
-test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
 
-test-env DATA_PATH __TEST_DIR__
+test-env DATA_PATH {TEST_DIR}
 
+# no explicit METADATA_CATALOG, we hide catalog by default
 statement ok
-ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS lake (DATA_PATH '${DATA_PATH}/hide_metadata_default_files', METADATA_CATALOG 'ducklake_meta')
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS lake (DATA_PATH '{DATA_PATH}/hide_metadata_default_files')
 
 statement ok
 CREATE TABLE lake.test(i INTEGER);
@@ -21,25 +22,25 @@ INSERT INTO lake.test FROM range(10);
 
 # the metadata catalog does not show up in duckdb_databases()
 query I
-SELECT count(*) FROM duckdb_databases() WHERE database_name = 'ducklake_meta';
+SELECT count(*) FROM duckdb_databases() WHERE database_name = '__ducklake_metadata_lake';
 ----
 0
 
 # none of the internal ducklake_* tables show up in duckdb_tables()
 query I
-SELECT count(*) FROM duckdb_tables() WHERE database_name = 'ducklake_meta';
+SELECT count(*) FROM duckdb_tables() WHERE database_name = '__ducklake_metadata_lake';
 ----
 0
 
 # the metadata catalog is also hidden from SHOW ALL TABLES
 query I
-SELECT count(*) FROM (SHOW ALL TABLES) WHERE database = 'ducklake_meta';
+SELECT count(*) FROM (SHOW ALL TABLES) WHERE database = '__ducklake_metadata_lake';
 ----
 0
 
 # ... and from the information_schema
 query I
-SELECT count(*) FROM information_schema.tables WHERE table_catalog = 'ducklake_meta';
+SELECT count(*) FROM information_schema.tables WHERE table_catalog = '__ducklake_metadata_lake';
 ----
 0
 
@@ -51,17 +52,17 @@ test	10	1
 
 # the metadata catalog remains fully accessible by qualified name
 query I
-SELECT count(*) > 0 FROM ducklake_meta.ducklake_snapshot;
+SELECT count(*) > 0 FROM __ducklake_metadata_lake.ducklake_snapshot;
 ----
 true
 
 statement ok
 DETACH lake
 
+# explicit METADATA_CATALOG, the metadata catalog is visible
 statement ok
-ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS lake (DATA_PATH '${DATA_PATH}/hide_metadata_default_files', METADATA_CATALOG 'ducklake_meta', HIDE_METADATA_CATALOG false)
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS lake (DATA_PATH '{DATA_PATH}/hide_metadata_default_files', METADATA_CATALOG 'ducklake_meta')
 
-# now the metadata catalog shows up
 query I
 SELECT count(*) FROM duckdb_databases() WHERE database_name = 'ducklake_meta';
 ----
@@ -72,17 +73,6 @@ query I
 SELECT count(*) > 0 FROM duckdb_tables() WHERE database_name = 'ducklake_meta';
 ----
 true
-
-statement ok
-DETACH lake
-
-statement ok
-ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS lake (DATA_PATH '${DATA_PATH}/hide_metadata_default_files', METADATA_CATALOG 'ducklake_meta', HIDE_METADATA_CATALOG true)
-
-query I
-SELECT count(*) FROM duckdb_databases() WHERE database_name = 'ducklake_meta';
-----
-0
 
 statement ok
 DETACH lake

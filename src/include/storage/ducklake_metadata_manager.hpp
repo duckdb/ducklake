@@ -186,9 +186,19 @@ public:
 	virtual DuckLakeMetadata LoadDuckLake();
 
 	virtual unique_ptr<QueryResult> Execute(DuckLakeSnapshot snapshot, string &query);
+	virtual unique_ptr<QueryResult> Execute(string &query);
 
 	virtual unique_ptr<QueryResult> Query(DuckLakeSnapshot snapshot, string &query);
 	virtual unique_ptr<QueryResult> Query(string &query);
+
+	//! Rvalue sugar so call sites can pass `R"(...)"` and `StringUtil::Format(...)` directly.
+	//! Named-rvalue decays to an lvalue inside, so the virtual dispatch still picks up the
+	//! string-ref overrides without derived classes needing to add anything. Defined out-of-line
+	//! since QueryResult is only forward-declared here.
+	unique_ptr<QueryResult> Execute(DuckLakeSnapshot snapshot, string &&query);
+	unique_ptr<QueryResult> Execute(string &&query);
+	unique_ptr<QueryResult> Query(DuckLakeSnapshot snapshot, string &&query);
+	unique_ptr<QueryResult> Query(string &&query);
 
 protected:
 	void SubstituteCatalogPlaceholders(string &query) const;
@@ -491,11 +501,10 @@ private:
 	virtual bool ValueIsFinite(const Value &val);
 	virtual string CastValueToTarget(const Value &val, const LogicalType &type);
 	virtual string CastStatsToTarget(const string &stats, const LogicalType &type);
-	virtual string GenerateConstantFilter(ExpressionType comparison_type, const Value &constant, const LogicalType &type,
-	                                      unordered_set<string> &referenced_stats);
+	virtual string GenerateConstantFilter(ExpressionType comparison_type, const Value &constant,
+	                                      const LogicalType &type, unordered_set<string> &referenced_stats);
 	virtual string GenerateConstantFilterDouble(ExpressionType comparison_type, const Value &constant,
-	                                            const LogicalType &type,
-	                                            unordered_set<string> &referenced_stats);
+	                                            const LogicalType &type, unordered_set<string> &referenced_stats);
 	virtual string GenerateFilterPushdown(const ExpressionFilter &filter, unordered_set<string> &referenced_stats);
 
 public:
