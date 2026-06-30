@@ -82,8 +82,14 @@ void LocalTableChanges::CleanupFiles(DatabaseInstance &db) {
 				fs.TryRemoveFile(delete_files.file_name);
 			}
 		}
+		for (auto &compaction : table_changes.compactions) {
+			for (auto &file : compaction.written_files) {
+				fs.TryRemoveFile(file.file_name);
+			}
+		}
 		table_changes.new_data_files.clear();
 		table_changes.new_delete_files.clear();
+		table_changes.compactions.clear();
 	}
 }
 
@@ -605,6 +611,11 @@ void LocalTableChanges::CleanupFiles(ClientContext &context, TableIndex table_id
 		for (auto &file : table_changes.new_delete_files) {
 			for (auto &delete_files : file.second) {
 				fs.TryRemoveFile(delete_files.file_name);
+			}
+		}
+		for (auto &compaction : table_changes.compactions) {
+			for (auto &file : compaction.written_files) {
+				fs.TryRemoveFile(file.file_name);
 			}
 		}
 		changes.erase(table_entry);
