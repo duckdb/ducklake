@@ -567,23 +567,16 @@ DuckLakeCopyOptions DuckLakeInsert::GetCopyOptions(ClientContext &context, DuckL
 	result.bind_data = std::move(function_data);
 
 	result.use_tmp_file = false;
+	result.filename_pattern.SetFilenamePattern("ducklake-{uuidv7}");
+	static constexpr idx_t MINIMUM_WRITE_FILE_SIZE = 4096;
+	result.file_size_bytes = MaxValue<idx_t>(target_file_size, MINIMUM_WRITE_FILE_SIZE);
+	result.rotate = true;
 	if (copy_input.partition_data) {
-		result.filename_pattern.SetFilenamePattern("ducklake-{uuidv7}");
 		result.partition_output = true;
 		result.write_empty_file = true;
-		result.rotate = false;
 	} else {
-		result.filename_pattern.SetFilenamePattern("ducklake-{uuidv7}");
 		result.partition_output = false;
 		result.write_empty_file = false;
-		// file_size_bytes is currently only supported for unpartitioned writes.
-		// The parquet writer rotates files at row-group granularity; a target smaller than the minimum
-		// physical parquet file size makes that rotation loop never make progress (an infinite loop in
-		// PhysicalCopyToFile). Clamp the write target to a safe floor. This does not affect compaction,
-		// which reads the raw (unclamped) target via GetTargetFileSize for its file-skip decisions.
-		static constexpr idx_t MINIMUM_WRITE_FILE_SIZE = 4096;
-		result.file_size_bytes = MaxValue<idx_t>(target_file_size, MINIMUM_WRITE_FILE_SIZE);
-		result.rotate = true;
 	}
 	result.file_path = copy_input.data_path;
 	StripTrailingSeparator(fs, result.file_path);
