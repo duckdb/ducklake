@@ -33,6 +33,36 @@ WHERE table_name = 'v' AND column_name = 'col_a' AND schema_name = 'main' AND da
 1
 
 statement ok
+COMMENT ON COLUMN ducklake.v.COL_A IS 'upper-case update'
+
+query I
+SELECT count(*) FROM __ducklake_metadata_ducklake.ducklake_view_column_tag WHERE end_snapshot IS NULL
+----
+1
+
+query II
+SELECT column_name, value FROM __ducklake_metadata_ducklake.ducklake_view_column_tag WHERE end_snapshot IS NULL
+----
+col_a	upper-case update
+
+statement ok
+CREATE VIEW ducklake.va(a1) AS SELECT 1 AS x
+
+statement ok
+COMMENT ON COLUMN ducklake.va.a1 IS 'real'
+
+statement error
+COMMENT ON COLUMN ducklake.va.x IS 'phantom comment'
+----
+View "va" does not have a column with name "x"
+
+query I
+SELECT count(*) FROM duckdb_columns()
+WHERE table_name = 'va' AND column_name = 'a1' AND schema_name = 'main' AND database_name = 'ducklake' AND comment = 'real'
+----
+1
+
+statement ok
 USE memory
 
 statement ok
@@ -46,6 +76,12 @@ USE ducklake
 
 query I
 SELECT count(*) FROM duckdb_columns()
-WHERE table_name = 'v' AND column_name = 'col_a' AND schema_name = 'main' AND database_name = 'ducklake' AND comment = 'view column note'
+WHERE table_name = 'v' AND column_name = 'col_a' AND schema_name = 'main' AND database_name = 'ducklake' AND comment = 'upper-case update'
+----
+1
+
+query I
+SELECT count(*) FROM duckdb_columns()
+WHERE table_name = 'va' AND column_name = 'a1' AND schema_name = 'main' AND database_name = 'ducklake' AND comment = 'real'
 ----
 1

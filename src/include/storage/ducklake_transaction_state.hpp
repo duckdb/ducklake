@@ -102,10 +102,8 @@ struct DuckLakeCommitContext {
 	DuckLakeSnapshotCommit commit_info;
 	//! When true, Commit() skips the post-commit DropEmptySupersededInlinedTables cleanup.
 	bool skip_drop_empty_inlined = false;
-	//! Whether the metadata schema has the row_group_count columns (DuckLake >= 1.1).
-	bool write_row_group_count = false;
-	//! Whether the metadata schema has view column tags (DuckLake >= 1.1-dev1).
-	bool load_view_column_tags = false;
+	//! Whether the metadata schema has the >= 1.1-dev1 additions.
+	bool supports_v1_1_metadata = false;
 };
 
 //! Holds the per-transaction mutable change state (new/dropped/renamed catalog entries, local file

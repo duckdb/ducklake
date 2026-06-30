@@ -600,17 +600,7 @@ void DuckLakeServerSideCommit::ReadExistingTableStats() {
 	}
 }
 
-bool DuckLakeServerSideCommit::ReadSupportsRowGroupCount() {
-	string sql = StringUtil::Replace("SELECT value FROM {METADATA_CATALOG}.ducklake_metadata WHERE key = 'version'",
-	                                 "{METADATA_CATALOG}", schema_id);
-	auto result = RunQuery(sql, "read catalog version");
-	for (auto &row : *result) {
-		return DuckLakeVersionFromString(row.GetValue<string>(0)) >= DuckLakeVersion::V1_1_DEV_1;
-	}
-	return false;
-}
-
-bool DuckLakeServerSideCommit::ReadSupportsViewColumnTags() {
+bool DuckLakeServerSideCommit::ReadSupportsV1_1Metadata() {
 	string sql = StringUtil::Replace("SELECT value FROM {METADATA_CATALOG}.ducklake_metadata WHERE key = 'version'",
 	                                 "{METADATA_CATALOG}", schema_id);
 	auto result = RunQuery(sql, "read catalog version");
@@ -700,8 +690,7 @@ DuckLakeCommitContext DuckLakeServerSideCommit::BuildContext(idx_t &committed_sn
 	DuckLakeCommitContext ctx;
 	ctx.commit_info = state->commit_info;
 	ctx.skip_drop_empty_inlined = true;
-	ctx.write_row_group_count = ReadSupportsRowGroupCount();
-	ctx.load_view_column_tags = ReadSupportsViewColumnTags();
+	ctx.supports_v1_1_metadata = ReadSupportsV1_1Metadata();
 	ctx.conflict_query_executor = [this](string q) -> unique_ptr<QueryResult> {
 		auto sql = SubstitutePlaceholders(std::move(q), transaction_snapshot);
 		return unique_ptr_cast<MaterializedQueryResult, QueryResult>(fresh_conn.Query(sql));

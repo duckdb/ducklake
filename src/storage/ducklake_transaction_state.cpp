@@ -280,6 +280,7 @@ void DuckLakeTransactionState::CheckForConflicts(const TransactionChangeInformat
 		ConflictCheck(table_id, other_changes.altered_tables, "alter table", "altered it");
 	}
 	for (auto &view_id : changes.altered_views) {
+		ConflictCheck(view_id, other_changes.dropped_views, "alter view", "dropped it");
 		ConflictCheck(view_id, other_changes.altered_views, "alter view", "altered it");
 	}
 }
@@ -1361,6 +1362,22 @@ void DuckLakeTransactionState::GetNewViewInfo(DuckLakeCommitState &commit_state,
 
 			// remap the view in the commit state
 			commit_state.committed_tables.emplace(old_view_id, new_view_id);
+			if (view.GetLocalChange().type == LocalChangeType::RENAMED) {
+				auto create_info_ptr = view.GetInfo();
+				auto &view_info = create_info_ptr->Cast<CreateViewInfo>();
+				for (auto &entry : view_info.column_comments_map) {
+					auto column_name = entry.first.GetIdentifierName();
+					if (view_column_comment_count.find(column_name) != view_column_comment_count.end()) {
+						continue;
+					}
+					DuckLakeViewColumnTagInfo comment_info;
+					comment_info.view_id = new_view_id;
+					comment_info.column_name = column_name;
+					comment_info.key = "comment";
+					comment_info.value = entry.second;
+					result.new_view_column_tags.push_back(std::move(comment_info));
+				}
+			}
 			break;
 		}
 		default:
@@ -1428,11 +1445,11 @@ string DuckLakeTransactionState::CommitChanges(DuckLakeCommitState &commit_state
 	}
 
 	if (!dropped_views.empty()) {
-		batch_queries += DuckLakeMetadataManager::DropViews(dropped_views, false, context.load_view_column_tags);
+		batch_queries += DuckLakeMetadataManager::DropViews(dropped_views, false, context.supports_v1_1_metadata);
 	}
 
 	if (!renamed_views.empty()) {
-		batch_queries += DuckLakeMetadataManager::DropViews(renamed_views, true, context.load_view_column_tags);
+		batch_queries += DuckLakeMetadataManager::DropViews(renamed_views, true, context.supports_v1_1_metadata);
 	}
 
 	if (!dropped_scalar_macros.empty()) {
@@ -1473,14 +1490,15 @@ string DuckLakeTransactionState::CommitChanges(DuckLakeCommitState &commit_state
 			    table.schema_id, table.path, new_schemas_result, context.query_metadata, data_path, separator));
 		}
 		batch_queries += DuckLakeMetadataManager::WriteNewTables(result.new_tables, resolved_table_paths);
-		auto existing_catalog = DuckLakeMetadataManager::BuildCatalogForSnapshot(
-		    commit_snapshot, context.query_metadata_with_snapshot, data_path, separator, context.load_view_column_tags);
+		auto existing_catalog =
+		    DuckLakeMetadataManager::BuildCatalogForSnapshot(commit_snapshot, context.query_metadata_with_snapshot,
+		                                                     data_path, separator, context.supports_v1_1_metadata);
 		batch_queries +=
 		    DuckLakeMetadataManager::WriteNewPartitionKeys(existing_catalog.partitions, result.new_partition_keys);
 		batch_queries += DuckLakeMetadataManager::WriteNewViews(result.new_views);
 		batch_queries += DuckLakeMetadataManager::WriteNewTags(result.new_tags);
 		batch_queries += DuckLakeMetadataManager::WriteNewColumnTags(result.new_column_tags);
-		if (context.load_view_column_tags) {
+		if (context.supports_v1_1_metadata) {
 			batch_queries += DuckLakeMetadataManager::WriteNewViewColumnTags(result.new_view_column_tags);
 		}
 		batch_queries += DuckLakeMetadataManager::WriteDroppedColumns(result.dropped_columns);
@@ -1518,7 +1536,8 @@ string DuckLakeTransactionState::CommitChanges(DuckLakeCommitState &commit_state
 			    file.table_id, file.file_name, new_tables_result, new_schemas_result, context.query_metadata, data_path,
 			    separator));
 		}
-		return DuckLakeMetadataManager::WriteNewDataFilesSqlBatch(files, resolved_paths, context.write_row_group_count);
+		return DuckLakeMetadataManager::WriteNewDataFilesSqlBatch(files, resolved_paths,
+		                                                          context.supports_v1_1_metadata);
 	};
 
 	// write new data / data files
@@ -1563,7 +1582,7 @@ string DuckLakeTransactionState::CommitChanges(DuckLakeCommitState &commit_state
 			    separator));
 		}
 		batch_queries += DuckLakeMetadataManager::WriteNewDeleteFiles(file_list, resolved_delete_paths,
-		                                                              context.write_row_group_count);
+		                                                              context.supports_v1_1_metadata);
 
 		// write new inlined deletes (for inlined data tables)
 		auto inlined_deletes = GetNewInlinedDeletes(commit_state);
