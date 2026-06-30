@@ -118,6 +118,12 @@
       ]
     },
     {
+      "reason": "ROLLBACK after ducklake_expire_snapshots does not restore expired snapshot rows on the quack-backed metadata catalog. DuckLake sends metadata SQL through quack_query_by_name, which sends a PrepareRequestMessage directly and does not route through QuackTransaction's remote BEGIN/ROLLBACK path.",
+      "paths": [
+        "test/sql/issues/issue_852_cache_growth.test"
+      ]
+    },
+    {
       "reason": "FIXME: A failed client-side commit batch is not atomic on the quack server.",
       "paths": [
         "test/sql/quack/server_side_commit_atomicity.test"

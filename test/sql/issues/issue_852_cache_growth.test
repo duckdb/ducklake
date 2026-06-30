@@ -1,0 +1,203 @@
+# name: test/sql/issues/issue_852_cache_growth.test
+# description: ducklake_expire_snapshots should release issue-852 cache entries for expired snapshots
+# group: [issues]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/issue_852_cache_growth', METADATA_CATALOG 'metadata', DATA_INLINING_ROW_LIMIT 0)
+
+# Schema cache entries
+statement ok
+CREATE TABLE ducklake.anchor (id INTEGER)
+
+statement ok
+SELECT * FROM ducklake.anchor LIMIT 0
+
+statement ok
+CREATE TEMP TABLE schema_baseline AS SELECT memory_usage_bytes AS bytes FROM duckdb_memory() WHERE tag = 'OBJECT_CACHE'
+
+loop i 0 3
+
+statement ok
+CREATE TABLE ducklake.stage_{i} AS SELECT * FROM ducklake.anchor LIMIT 0
+
+statement ok
+SELECT * FROM ducklake.anchor LIMIT 0
+
+statement ok
+DROP TABLE ducklake.stage_{i}
+
+statement ok
+SELECT * FROM ducklake.anchor LIMIT 0
+
+endloop
+
+query I
+SELECT (SELECT memory_usage_bytes FROM duckdb_memory() WHERE tag = 'OBJECT_CACHE') > (SELECT bytes FROM schema_baseline)
+----
+true
+
+statement ok
+CREATE TEMP TABLE schema_post_churn AS SELECT memory_usage_bytes AS bytes FROM duckdb_memory() WHERE tag = 'OBJECT_CACHE'
+
+statement ok
+CALL ducklake_expire_snapshots('ducklake', dry_run => true, older_than => now())
+
+query I
+SELECT (SELECT memory_usage_bytes FROM duckdb_memory() WHERE tag = 'OBJECT_CACHE') >= (SELECT bytes FROM schema_post_churn)
+----
+true
+
+statement ok
+CHECKPOINT
+
+statement ok
+CALL ducklake_expire_snapshots('ducklake', older_than => now())
+
+query I
+SELECT (SELECT memory_usage_bytes FROM duckdb_memory() WHERE tag = 'OBJECT_CACHE') < (SELECT bytes FROM schema_post_churn)
+----
+true
+
+# Table stats cache entries
+statement ok
+CREATE TABLE ducklake.wide (
+	col_0 INTEGER, col_1 INTEGER, col_2 INTEGER, col_3 INTEGER,
+	col_4 INTEGER, col_5 INTEGER, col_6 INTEGER, col_7 INTEGER,
+	col_8 INTEGER, col_9 INTEGER, col_10 INTEGER, col_11 INTEGER,
+	col_12 INTEGER, col_13 INTEGER, col_14 INTEGER, col_15 INTEGER,
+	col_16 INTEGER, col_17 INTEGER, col_18 INTEGER, col_19 INTEGER,
+	col_20 INTEGER, col_21 INTEGER, col_22 INTEGER, col_23 INTEGER,
+	col_24 INTEGER, col_25 INTEGER, col_26 INTEGER, col_27 INTEGER,
+	col_28 INTEGER, col_29 INTEGER, col_30 INTEGER, col_31 INTEGER
+)
+
+statement ok
+INSERT INTO ducklake.wide (col_0) VALUES (1)
+
+statement ok
+CREATE TEMP TABLE stats_baseline AS SELECT memory_usage_bytes AS bytes FROM duckdb_memory() WHERE tag = 'OBJECT_CACHE'
+
+statement ok
+SELECT * FROM ducklake.wide WHERE col_0 = 1
+
+query I
+SELECT (SELECT memory_usage_bytes FROM duckdb_memory() WHERE tag = 'OBJECT_CACHE') > (SELECT bytes FROM stats_baseline)
+----
+true
+
+statement ok
+CREATE TEMP TABLE post_first_stats AS SELECT memory_usage_bytes AS bytes FROM duckdb_memory() WHERE tag = 'OBJECT_CACHE'
+
+statement ok
+INSERT INTO ducklake.wide (col_0) VALUES (2)
+
+statement ok
+SELECT * FROM ducklake.wide WHERE col_0 = 2
+
+query I
+SELECT (SELECT memory_usage_bytes FROM duckdb_memory() WHERE tag = 'OBJECT_CACHE') > (SELECT bytes FROM post_first_stats)
+----
+true
+
+statement ok
+CREATE TEMP TABLE stats_post_churn AS SELECT memory_usage_bytes AS bytes FROM duckdb_memory() WHERE tag = 'OBJECT_CACHE'
+
+statement ok
+CALL ducklake_expire_snapshots('ducklake', dry_run => true, older_than => now())
+
+query I
+SELECT (SELECT memory_usage_bytes FROM duckdb_memory() WHERE tag = 'OBJECT_CACHE') >= (SELECT bytes FROM stats_post_churn)
+----
+true
+
+statement ok
+CALL ducklake_expire_snapshots('ducklake', older_than => now())
+
+query I
+SELECT (SELECT memory_usage_bytes FROM duckdb_memory() WHERE tag = 'OBJECT_CACHE') < (SELECT bytes FROM stats_post_churn)
+----
+true
+
+# Name map cache entries
+statement ok
+CREATE TABLE ducklake.to_drop (col_0 INTEGER, col_1 VARCHAR)
+
+statement ok
+COPY (SELECT 42 AS col_0, 'duck' AS col_1) TO '{DATA_PATH}/issue_852_name_map_cache_growth.parquet'
+
+statement ok
+CALL ducklake_add_data_files('ducklake', 'to_drop', '{DATA_PATH}/issue_852_name_map_cache_growth.parquet')
+
+query II
+SELECT * FROM ducklake.to_drop
+----
+42	duck
+
+statement ok
+SET VARIABLE name_map_snapshot = (SELECT max(snapshot_id) FROM ducklake_snapshots('ducklake'))
+
+query I
+SELECT count(*) > 0 FROM metadata.ducklake_column_mapping
+----
+true
+
+query I
+SELECT count(*) > 0 FROM metadata.ducklake_name_mapping
+----
+true
+
+statement ok
+DROP TABLE ducklake.to_drop
+
+statement ok
+BEGIN
+
+statement ok
+CALL ducklake_expire_snapshots('ducklake', older_than => now())
+
+statement ok
+ROLLBACK
+
+query II
+SELECT * FROM ducklake.to_drop AT (VERSION => getvariable('name_map_snapshot'))
+----
+42	duck
+
+statement ok
+CALL ducklake_expire_snapshots('ducklake', dry_run => true, older_than => now())
+
+query I
+SELECT count(*) > 0 FROM metadata.ducklake_column_mapping
+----
+true
+
+query I
+SELECT count(*) > 0 FROM metadata.ducklake_name_mapping
+----
+true
+
+statement ok
+CALL ducklake_expire_snapshots('ducklake', older_than => now())
+
+query I
+SELECT count(*) FROM metadata.ducklake_column_mapping
+----
+0
+
+query I
+SELECT count(*) FROM metadata.ducklake_name_mapping
+----
+0
+
+query I
+SELECT count(*) = 1 FROM ducklake_snapshots('ducklake')
+----
+true

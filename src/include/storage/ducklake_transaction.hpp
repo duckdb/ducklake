@@ -229,7 +229,9 @@ public:
 	void AddCompaction(TableIndex table_id, DuckLakeCompactionEntry entry);
 
 	MappingIndex AddNameMap(unique_ptr<DuckLakeNameMap> name_map);
-	const DuckLakeNameMap &GetMappingById(MappingIndex mapping_id);
+	shared_ptr<const DuckLakeNameMap> GetMappingById(MappingIndex mapping_id);
+	//! Queue a name map cache invalidation that should only be applied after this transaction commits.
+	void DeferNameMapCacheInvalidation(MappingIndex mapping_id);
 
 	void AppendInlinedData(TableIndex table_id, unique_ptr<DuckLakeInlinedData> collection);
 	void SetRequiresNewInlinedTable(bool requires_new);
@@ -328,6 +330,7 @@ public:
 
 private:
 	void FlushChanges();
+	void FlushNameMapCacheInvalidations();
 	static DuckLakePartitionInfo GetNewPartitionKey(DuckLakeCommitState &commit_state, DuckLakeTableEntry &table);
 	static DuckLakeSortInfo GetNewSortKey(DuckLakeCommitState &commit_state, DuckLakeTableEntry &table);
 	static DuckLakeTableInfo GetNewTable(DuckLakeCommitState &commit_state, DuckLakeTableEntry &table);
@@ -360,6 +363,8 @@ private:
 	value_map_t<DuckLakeSnapshot> snapshot_cache;
 	//! New set of transaction-local name maps
 	DuckLakeNameMapSet new_name_maps;
+	//! Name maps deleted by direct metadata operations, applied to the catalog cache on commit
+	vector<MappingIndex> pending_name_map_cache_invalidations;
 
 	atomic<idx_t> catalog_version;
 };

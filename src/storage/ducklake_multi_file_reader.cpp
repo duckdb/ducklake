@@ -541,9 +541,9 @@ ReaderInitializeType DuckLakeMultiFileReader::CreateMapping(
 		if (entry != file_options.end()) {
 			auto mapping_id = MappingIndex(entry->second.GetValue<idx_t>());
 			auto transaction = read_info.transaction.lock();
-			auto &mapping = transaction->GetMappingById(mapping_id);
+			auto mapping = transaction->GetMappingById(mapping_id);
 			// use the mapping to generate a new set of global columns for this file
-			auto mapped_columns = CreateNewMapping(context, reader_data, global_columns, mapping);
+			auto mapped_columns = CreateNewMapping(context, reader_data, global_columns, *mapping);
 			return MultiFileReader::CreateMapping(context, reader_data, mapped_columns, column_ids_to_use, filters,
 			                                      multi_file_list, bind_data, virtual_columns,
 			                                      MultiFileColumnMappingMode::BY_NAME);
