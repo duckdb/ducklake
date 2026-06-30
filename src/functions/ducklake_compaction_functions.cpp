@@ -594,8 +594,8 @@ DuckLakeCompactor::GenerateCompactionCommand(vector<DuckLakeCompactionFileEntry>
 		root = DuckLakeCompactor::InsertSort(binder, root, latest_table, sort_data);
 	}
 
-	// honor the configured row group size so rotation can approximate the target file size
-	idx_t batch_size = DuckLakeInsert::GetCopyBatchSize(copy_options);
+	// read the configured row group size before copy_options.info is moved into the LogicalCopyToFile
+	idx_t configured_row_group_size = DuckLakeInsert::GetCopyBatchSize(copy_options);
 
 	// generate the LogicalCopyToFile
 	auto copy = make_uniq<LogicalCopyToFile>(std::move(copy_options.copy_function), std::move(copy_options.bind_data),
@@ -603,37 +603,30 @@ DuckLakeCompactor::GenerateCompactionCommand(vector<DuckLakeCompactionFileEntry>
 
 	auto &fs = FileSystem::GetFileSystem(context);
 	if (write_row_id) {
-		// rotation writes multiple files into the directory using the filename pattern
 		copy->file_path = copy_options.file_path;
+		copy->batch_size = configured_row_group_size;
+		copy->file_size_bytes = copy_options.file_size_bytes;
+		copy->rotate = copy_options.rotate;
+		copy->preserve_order = PreserveOrderType::DONT_PRESERVE_ORDER;
 	} else {
 		copy->file_path = copy_options.filename_pattern.CreateFilename(fs, copy_options.file_path, "parquet", 0);
+		copy->batch_size = DEFAULT_ROW_GROUP_SIZE;
+		copy->file_size_bytes = optional_idx();
+		copy->rotate = false;
+		copy->preserve_order = PreserveOrderType::PRESERVE_ORDER;
 	}
 	copy->use_tmp_file = copy_options.use_tmp_file;
 	copy->filename_pattern = std::move(copy_options.filename_pattern);
 	copy->file_extension = std::move(copy_options.file_extension);
 	copy->overwrite_mode = copy_options.overwrite_mode;
 	copy->per_thread_output = false;
-	copy->file_size_bytes = copy_options.file_size_bytes;
-	copy->rotate = copy_options.rotate;
 	copy->return_type = copy_options.return_type;
-
-	copy->batch_size = batch_size;
-
 	copy->partition_output = copy_options.partition_output;
 	copy->write_partition_columns = copy_options.write_partition_columns;
 	copy->write_empty_file = false;
 	copy->partition_columns = std::move(copy_options.partition_columns);
 	copy->names = StringsToIdentifiers(copy_options.names);
 	copy->expected_types = std::move(copy_options.expected_types);
-	if (write_row_id) {
-		// if we have embedded rows we can rotate
-		copy->preserve_order = PreserveOrderType::DONT_PRESERVE_ORDER;
-	} else {
-		// positional row-ids require preserved order, no rotation
-		copy->preserve_order = PreserveOrderType::PRESERVE_ORDER;
-		copy->file_size_bytes = optional_idx();
-		copy->rotate = false;
-	}
 	copy->children.push_back(std::move(root));
 
 	optional_idx target_row_id_start;
