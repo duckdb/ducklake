@@ -306,7 +306,8 @@ void DuckLakeServerSideCommit::ReadStagedDataFiles() {
 			f.partition_values = std::move(part_it->second);
 		}
 		if (!row.IsNull(15)) {
-			compaction_output_files.emplace(AsIdx(row, 15), std::move(f));
+			// row 15 = compaction_id, row 2 = file_order (preserves output order)
+			compaction_output_files[AsIdx(row, 15)][AsIdx(row, 2)] = std::move(f);
 			continue;
 		}
 		files_per_table[TableIndex(AsIdx(row, 1))].push_back(std::move(f));
@@ -470,7 +471,6 @@ void DuckLakeServerSideCommit::ReadStagedCompactions() {
 		TableIndex table_id;
 		CompactionType type;
 		optional_idx row_id_start;
-		optional_idx output_local_file_id;
 	};
 	map<idx_t, CompactionShell> shells;
 	auto header_result = ScanStagedTable(DuckLakeStagedTableType::COMPACTION);
@@ -479,7 +479,6 @@ void DuckLakeServerSideCommit::ReadStagedCompactions() {
 		shell.table_id = TableIndex(AsIdx(row, 1));
 		shell.type = CompactionTypeFromString(row.GetValue<string>(2));
 		shell.row_id_start = OptIdx(row, 3);
-		shell.output_local_file_id = OptIdx(row, 4);
 		shells.emplace(AsIdx(row, 0), std::move(shell));
 	}
 
@@ -519,10 +518,10 @@ void DuckLakeServerSideCommit::ReadStagedCompactions() {
 		DuckLakeCompactionEntry entry;
 		entry.type = shell.type;
 		entry.row_id_start = shell.row_id_start;
-		if (shell.output_local_file_id.IsValid()) {
-			auto it = compaction_output_files.find(shell.output_local_file_id.GetIndex());
-			if (it != compaction_output_files.end()) {
-				entry.written_file = std::move(it->second);
+		auto it = compaction_output_files.find(kv.first);
+		if (it != compaction_output_files.end()) {
+			for (auto &output : it->second) {
+				entry.written_files.push_back(std::move(output.second));
 			}
 		}
 		auto src_it = sources_by_compaction.find(kv.first);

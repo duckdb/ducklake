@@ -116,8 +116,8 @@ private:
 	map<idx_t, string> inlined_table_name_cache;
 	//! Delete files attached to transaction-local data files.
 	map<idx_t, vector<DuckLakeDeleteFile>> attached_deletes;
-	//! Compaction-output files indexed by compaction_id.
-	map<idx_t, DuckLakeDataFile> compaction_output_files;
+	//! Compaction-output files indexed by compaction_id, then ordered by file_order.
+	map<idx_t, map<idx_t, DuckLakeDataFile>> compaction_output_files;
 };
 
 } // namespace duckdb

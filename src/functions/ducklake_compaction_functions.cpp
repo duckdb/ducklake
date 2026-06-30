@@ -145,9 +145,6 @@ SinkFinalizeType DuckLakeCompaction::Finalize(Pipeline &pipeline, Event &event, 
                                               OperatorSinkFinalizeInput &input) const {
 	auto &global_state = input.global_state.Cast<DuckLakeInsertGlobalState>();
 
-	if (global_state.written_files.size() > 1) {
-		throw InternalException("DuckLakeCompaction - expected at most a single output file");
-	}
 	if (global_state.written_files.empty()) {
 		idx_t rows_to_write = 0;
 		for (auto &source : source_files) {
@@ -158,7 +155,7 @@ SinkFinalizeType DuckLakeCompaction::Finalize(Pipeline &pipeline, Event &event, 
 			rows_to_write -= source.inlined_file_deletions.size();
 		}
 		if (rows_to_write != 0) {
-			throw InternalException("DuckLakeCompaction - expected a single output file for %llu rows", rows_to_write);
+			throw InternalException("DuckLakeCompaction - expected output files for %llu rows", rows_to_write);
 		}
 	}
 	// set the partition values correctly
@@ -174,9 +171,7 @@ SinkFinalizeType DuckLakeCompaction::Finalize(Pipeline &pipeline, Event &event, 
 	DuckLakeCompactionEntry compaction_entry;
 	compaction_entry.row_id_start = row_id_start;
 	compaction_entry.source_files = source_files;
-	if (!global_state.written_files.empty()) {
-		compaction_entry.written_file = global_state.written_files[0];
-	}
+	compaction_entry.written_files = global_state.written_files;
 	compaction_entry.type = type;
 
 	auto &transaction = DuckLakeTransaction::Get(context, global_state.table.catalog);
@@ -599,12 +594,20 @@ DuckLakeCompactor::GenerateCompactionCommand(vector<DuckLakeCompactionFileEntry>
 		root = DuckLakeCompactor::InsertSort(binder, root, latest_table, sort_data);
 	}
 
+	// honor the configured row group size so rotation can approximate the target file size
+	idx_t batch_size = DuckLakeInsert::GetCopyBatchSize(copy_options);
+
 	// generate the LogicalCopyToFile
 	auto copy = make_uniq<LogicalCopyToFile>(std::move(copy_options.copy_function), std::move(copy_options.bind_data),
 	                                         std::move(copy_options.info));
 
 	auto &fs = FileSystem::GetFileSystem(context);
-	copy->file_path = copy_options.filename_pattern.CreateFilename(fs, copy_options.file_path, "parquet", 0);
+	if (write_row_id) {
+		// rotation writes multiple files into the directory using the filename pattern
+		copy->file_path = copy_options.file_path;
+	} else {
+		copy->file_path = copy_options.filename_pattern.CreateFilename(fs, copy_options.file_path, "parquet", 0);
+	}
 	copy->use_tmp_file = copy_options.use_tmp_file;
 	copy->filename_pattern = std::move(copy_options.filename_pattern);
 	copy->file_extension = std::move(copy_options.file_extension);
@@ -614,7 +617,7 @@ DuckLakeCompactor::GenerateCompactionCommand(vector<DuckLakeCompactionFileEntry>
 	copy->rotate = copy_options.rotate;
 	copy->return_type = copy_options.return_type;
 
-	copy->batch_size = DEFAULT_ROW_GROUP_SIZE;
+	copy->batch_size = batch_size;
 
 	copy->partition_output = copy_options.partition_output;
 	copy->write_partition_columns = copy_options.write_partition_columns;
@@ -622,9 +625,15 @@ DuckLakeCompactor::GenerateCompactionCommand(vector<DuckLakeCompactionFileEntry>
 	copy->partition_columns = std::move(copy_options.partition_columns);
 	copy->names = StringsToIdentifiers(copy_options.names);
 	copy->expected_types = std::move(copy_options.expected_types);
-	copy->preserve_order = PreserveOrderType::PRESERVE_ORDER;
-	copy->file_size_bytes = optional_idx();
-	copy->rotate = false;
+	if (write_row_id) {
+		// if we have embedded rows we can rotate
+		copy->preserve_order = PreserveOrderType::DONT_PRESERVE_ORDER;
+	} else {
+		// positional row-ids require preserved order, no rotation
+		copy->preserve_order = PreserveOrderType::PRESERVE_ORDER;
+		copy->file_size_bytes = optional_idx();
+		copy->rotate = false;
+	}
 	copy->children.push_back(std::move(root));
 
 	optional_idx target_row_id_start;
