@@ -79,17 +79,19 @@ static unique_ptr<Catalog> DuckLakeAttach(optional_ptr<StorageExtensionInfo> sto
 			throw InvalidInputException(
 			    "Default secret was not found - either specify a path to attach to directly, or create the secret");
 		}
-	} else if (DuckLakeSecret::PathIsSecret(info.path)) {
-		// if the path is a plain name - load the secret name
+	} else {
+		// Secret names can be quoted identifiers, so first try an exact lookup before treating path-like names as
+		// paths.
 		secret = DuckLakeSecret::GetSecret(context, info.path);
 		if (!secret) {
-			throw InvalidInputException(
-			    "Secret \"%s\" was not found - if this was meant to be a path to a DuckDB file, use duckdb:%s instead",
-			    info.path, info.path);
+			if (DuckLakeSecret::PathIsSecret(info.path)) {
+				throw InvalidInputException("Secret \"%s\" was not found - if this was meant to be a path to a DuckDB "
+				                            "file, use duckdb:%s instead",
+				                            info.path, info.path);
+			}
+			// otherwise set the remainder of the path as the metadata path
+			options.metadata_path = info.path;
 		}
-	} else {
-		// otherwise set the remainder of the path as the metadata path
-		options.metadata_path = info.path;
 	}
 	if (secret) {
 		// if we have a secret - handle the options
