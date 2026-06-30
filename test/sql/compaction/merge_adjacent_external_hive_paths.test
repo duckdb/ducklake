@@ -6,12 +6,12 @@ require ducklake
 
 require parquet
 
-test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
 
-test-env DATA_PATH __TEST_DIR__
+test-env DATA_PATH {TEST_DIR}
 
 statement ok
-ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/canonical_files', METADATA_CATALOG 'metadata')
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/canonical_files', METADATA_CATALOG 'metadata')
 
 statement ok
 CREATE TABLE ducklake.t(id INTEGER, source VARCHAR);
@@ -23,14 +23,14 @@ ALTER TABLE ducklake.t SET PARTITIONED BY (source);
 
 statement ok
 COPY (SELECT 1 AS id, 'audio' AS source)
-TO '${DATA_PATH}/external_source' (FORMAT parquet, PARTITION_BY (source));
+TO '{DATA_PATH}/external_source' (FORMAT parquet, PARTITION_BY (source));
 
 statement ok
 COPY (SELECT 2 AS id, 'audio' AS source)
-TO '${DATA_PATH}/external_source' (FORMAT parquet, PARTITION_BY (source), APPEND);
+TO '{DATA_PATH}/external_source' (FORMAT parquet, PARTITION_BY (source), APPEND);
 
 statement ok
-CALL ducklake_add_data_files('ducklake', 't', '${DATA_PATH}/external_source/source=audio/*.parquet');
+CALL ducklake_add_data_files('ducklake', 't', '{DATA_PATH}/external_source/source=audio/*.parquet');
 
 query II
 SELECT id, source FROM ducklake.t ORDER BY ALL
@@ -52,12 +52,12 @@ ORDER BY ALL
 <REGEX>:source=audio/ducklake-.*\.parquet
 
 query I
-SELECT COUNT(*) FROM glob('${DATA_PATH}/canonical_files/main/t/source=audio/*.parquet')
+SELECT COUNT(*) FROM glob('{DATA_PATH}/canonical_files/main/t/source=audio/*.parquet')
 ----
 1
 
 query I
-SELECT COUNT(*) FROM glob('${DATA_PATH}/canonical_files/**/*.parquet') WHERE file LIKE '%external_source%'
+SELECT COUNT(*) FROM glob('{DATA_PATH}/canonical_files/**/*.parquet') WHERE file LIKE '%external_source%'
 ----
 0
 
@@ -65,14 +65,14 @@ SELECT COUNT(*) FROM glob('${DATA_PATH}/canonical_files/**/*.parquet') WHERE fil
 
 statement ok
 COPY (SELECT 3 AS id, NULL::VARCHAR AS source)
-TO '${DATA_PATH}/external_null' (FORMAT parquet, PARTITION_BY (source));
+TO '{DATA_PATH}/external_null' (FORMAT parquet, PARTITION_BY (source));
 
 statement ok
 COPY (SELECT 4 AS id, NULL::VARCHAR AS source)
-TO '${DATA_PATH}/external_null' (FORMAT parquet, PARTITION_BY (source), APPEND);
+TO '{DATA_PATH}/external_null' (FORMAT parquet, PARTITION_BY (source), APPEND);
 
 statement ok
-CALL ducklake_add_data_files('ducklake', 't', '${DATA_PATH}/external_null/source=__HIVE_DEFAULT_PARTITION__/*.parquet');
+CALL ducklake_add_data_files('ducklake', 't', '{DATA_PATH}/external_null/source=__HIVE_DEFAULT_PARTITION__/*.parquet');
 
 query II
 SELECT id, source FROM ducklake.t ORDER BY ALL
@@ -101,12 +101,12 @@ SELECT COUNT(*) FROM metadata.ducklake_file_partition_value WHERE partition_valu
 1
 
 query I
-SELECT COUNT(*) FROM glob('${DATA_PATH}/canonical_files/main/t/source=__HIVE_DEFAULT_PARTITION__/*.parquet')
+SELECT COUNT(*) FROM glob('{DATA_PATH}/canonical_files/main/t/source=__HIVE_DEFAULT_PARTITION__/*.parquet')
 ----
 1
 
 query I
-SELECT COUNT(*) FROM glob('${DATA_PATH}/canonical_files/**/*.parquet') WHERE file LIKE '%external_null%'
+SELECT COUNT(*) FROM glob('{DATA_PATH}/canonical_files/**/*.parquet') WHERE file LIKE '%external_null%'
 ----
 0
 
@@ -122,16 +122,16 @@ statement ok
 COPY (
 	SELECT 10 AS id, TIMESTAMP '2024-05-01 00:00:00' AS ts, 2024 AS year, 5 AS month
 )
-TO '${DATA_PATH}/external_transform' (FORMAT parquet, PARTITION_BY (year, month));
+TO '{DATA_PATH}/external_transform' (FORMAT parquet, PARTITION_BY (year, month));
 
 statement ok
 COPY (
 	SELECT 11 AS id, TIMESTAMP '2024-05-02 00:00:00' AS ts, 2024 AS year, 5 AS month
 )
-TO '${DATA_PATH}/external_transform' (FORMAT parquet, PARTITION_BY (year, month), APPEND);
+TO '{DATA_PATH}/external_transform' (FORMAT parquet, PARTITION_BY (year, month), APPEND);
 
 statement ok
-CALL ducklake_add_data_files('ducklake', 'transformed_t', '${DATA_PATH}/external_transform/year=2024/month=5/*.parquet');
+CALL ducklake_add_data_files('ducklake', 'transformed_t', '{DATA_PATH}/external_transform/year=2024/month=5/*.parquet');
 
 query II
 SELECT id, ts::DATE FROM ducklake.transformed_t ORDER BY ALL
@@ -153,7 +153,7 @@ ORDER BY ALL
 <REGEX>:.*year=2024/month=5/ducklake-.*\.parquet
 
 query I
-SELECT COUNT(*) FROM glob('${DATA_PATH}/canonical_files/main/transformed_t/year=2024/month=5/*.parquet')
+SELECT COUNT(*) FROM glob('{DATA_PATH}/canonical_files/main/transformed_t/year=2024/month=5/*.parquet')
 ----
 1
 
@@ -167,14 +167,14 @@ ALTER TABLE ducklake.weird_t SET PARTITIONED BY (weird);
 
 statement ok
 COPY (SELECT 20 AS id, 'a/b=c% d' AS weird)
-TO '${DATA_PATH}/external_weird' (FORMAT parquet, PARTITION_BY (weird));
+TO '{DATA_PATH}/external_weird' (FORMAT parquet, PARTITION_BY (weird));
 
 statement ok
 COPY (SELECT 21 AS id, 'a/b=c% d' AS weird)
-TO '${DATA_PATH}/external_weird' (FORMAT parquet, PARTITION_BY (weird), APPEND);
+TO '{DATA_PATH}/external_weird' (FORMAT parquet, PARTITION_BY (weird), APPEND);
 
 statement ok
-CALL ducklake_add_data_files('ducklake', 'weird_t', '${DATA_PATH}/external_weird/weird=*/*.parquet');
+CALL ducklake_add_data_files('ducklake', 'weird_t', '{DATA_PATH}/external_weird/weird=*/*.parquet');
 
 query II
 SELECT id, weird FROM ducklake.weird_t ORDER BY ALL
@@ -191,7 +191,7 @@ query I
 SELECT COUNT(*)
 FROM (
 	SELECT regexp_extract(file, '(weird=[^/\\]*)[/\\]', 1) AS partition_segment
-	FROM glob('${DATA_PATH}/external_weird/weird=*/*.parquet')
+	FROM glob('{DATA_PATH}/external_weird/weird=*/*.parquet')
 	INTERSECT
 	SELECT regexp_extract(path, '(weird=[^/\\]*)[/\\]', 1) AS partition_segment
 	FROM metadata.ducklake_data_file
@@ -201,6 +201,6 @@ FROM (
 1
 
 query I
-SELECT COUNT(*) FROM glob('${DATA_PATH}/canonical_files/main/weird_t/weird=*/*.parquet')
+SELECT COUNT(*) FROM glob('{DATA_PATH}/canonical_files/main/weird_t/weird=*/*.parquet')
 ----
 1

@@ -162,7 +162,8 @@ DuckLakeDeleteFile DuckLakeDeleteFileWriter::WriteDeleteFileWithSnapshots(Client
 }
 
 template <typename InputType>
-static DuckLakeDeleteFile WritePuffinDeleteFile(InputType &input, const vector<DuckLakePuffinWriter::BlobInput> &blobs) {
+static DuckLakeDeleteFile WritePuffinDeleteFile(InputType &input,
+                                                const vector<DuckLakePuffinWriter::BlobInput> &blobs) {
 	auto delete_file_uuid = "ducklake-" + input.transaction.GenerateUUID() + "-delete.puffin";
 	string delete_file_path = DuckLakeUtil::JoinPath(input.fs, input.data_path, delete_file_uuid);
 
@@ -411,7 +412,8 @@ bool DuckLakeDelete::TryDropFullyDeletedFile(DuckLakeTransaction &transaction, c
 	}
 	// ALL rows in this file are deleted - drop the file
 	if (delete_file.data_file_id.IsValid()) {
-		transaction.DropFile(table.GetTableId(), delete_file.data_file_id, data_file_info.file.path);
+		transaction.DropFile(table.GetTableId(), delete_file.data_file_id, data_file_info.file.path,
+		                     data_file_info.row_count, data_file_info.file.file_size_bytes);
 	} else {
 		transaction.DropTransactionLocalFile(table.GetTableId(), data_file_info.file.path);
 	}
@@ -516,6 +518,11 @@ void DuckLakeDelete::FlushDelete(DuckLakeTransaction &transaction, ClientContext
 	delete_file.data_file_id = data_file_info.file_id;
 	// check if the file already has deletes
 	auto existing_delete_data = delete_map->GetDeleteData(filename);
+
+	if (!existing_delete_data &&
+	    TryDropFullyDeletedFile(transaction, delete_file, data_file_info, sorted_deletes.size())) {
+		return;
+	}
 
 	// check if we should use inlined file deletions instead of creating a delete file
 	if (data_file_info.file_id.IsValid()) {

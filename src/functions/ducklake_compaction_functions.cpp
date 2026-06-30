@@ -192,15 +192,16 @@ string DuckLakeCompaction::GetName() const {
 }
 
 DuckLakeCompactor::DuckLakeCompactor(ClientContext &context, DuckLakeCatalog &catalog, DuckLakeTransaction &transaction,
-                                     Binder &binder, TableIndex table_id, DuckLakeMergeAdjacentOptions options)
+                                     Binder &binder, TableIndex table_id, uint64_t max_files,
+                                     DuckLakeMergeAdjacentOptions options)
     : context(context), catalog(catalog), transaction(transaction), binder(binder), table_id(table_id),
-      options(options), type(CompactionType::MERGE_ADJACENT_TABLES) {
+      max_files(max_files), options(options), type(CompactionType::MERGE_ADJACENT_TABLES) {
 }
 
 DuckLakeCompactor::DuckLakeCompactor(ClientContext &context, DuckLakeCatalog &catalog, DuckLakeTransaction &transaction,
-                                     Binder &binder, TableIndex table_id, double delete_threshold_p)
+                                     Binder &binder, TableIndex table_id, uint64_t max_files, double delete_threshold_p)
     : context(context), catalog(catalog), transaction(transaction), binder(binder), table_id(table_id),
-      delete_threshold(delete_threshold_p), type(CompactionType::REWRITE_DELETES) {
+      max_files(max_files), delete_threshold(delete_threshold_p), type(CompactionType::REWRITE_DELETES) {
 }
 
 struct DuckLakeCompactionCandidates {
@@ -208,7 +209,9 @@ struct DuckLakeCompactionCandidates {
 };
 
 struct DuckLakeCompactionGroup {
-	idx_t schema_version;
+	//! Unset when the file can be rewritten under the latest schema (compatible files then share one bucket);
+	//! otherwise the file's own schema_version, keeping incompatible files isolated.
+	optional_idx schema_version;
 	optional_idx partition_id;
 	vector<Value> partition_values;
 };
@@ -216,7 +219,9 @@ struct DuckLakeCompactionGroup {
 struct DuckLakeCompactionGroupHash {
 	uint64_t operator()(const DuckLakeCompactionGroup &group) const {
 		uint64_t hash = 0;
-		hash ^= std::hash<idx_t>()(group.schema_version);
+		if (group.schema_version.IsValid()) {
+			hash ^= std::hash<idx_t>()(group.schema_version.GetIndex());
+		}
 		if (group.partition_id.IsValid()) {
 			hash ^= std::hash<idx_t>()(group.partition_id.GetIndex());
 		}
@@ -257,6 +262,28 @@ template <typename T>
 using compaction_map_t =
     unordered_map<DuckLakeCompactionGroup, T, DuckLakeCompactionGroupHash, DuckLakeCompactionGroupEquality>;
 
+//! Returns true if every field in `older_fields` still exists in `latest` with an identical field id, name and type.
+//! New fields in `latest` (ADD COLUMN) are allowed; a dropped, renamed, retyped or nested-changed field is not.
+static bool FieldsPreservedInLatest(const vector<unique_ptr<DuckLakeFieldId>> &older_fields,
+                                    const DuckLakeFieldData &latest) {
+	for (auto &older_field : older_fields) {
+		auto latest_field = latest.GetByFieldIndex(older_field->GetFieldIndex());
+		if (!latest_field) {
+			return false;
+		}
+		if (older_field->Name() != latest_field->Name()) {
+			return false;
+		}
+		if (older_field->Type() != latest_field->Type()) {
+			return false;
+		}
+		if (!FieldsPreservedInLatest(older_field->Children(), latest)) {
+			return false;
+		}
+	}
+	return true;
+}
+
 void DuckLakeCompactor::GenerateCompactions(DuckLakeTableEntry &table,
                                             vector<unique_ptr<LogicalOperator>> &compactions) {
 	auto &metadata_manager = transaction.GetMetadataManager();
@@ -271,6 +298,36 @@ void DuckLakeCompactor::GenerateCompactions(DuckLakeTableEntry &table,
 	// FIXME: pass in the sort_data so that list of files is approximately sorted in the same way
 	// (sorted by the min/max metadata)
 	auto files = metadata_manager.GetFilesForCompaction(table, type, delete_threshold, snapshot, filter_options);
+
+	// Resolve, per schema_version (cached), whether a file written under it can be rewritten under the latest schema.
+	auto latest_entry = catalog.GetEntryById(transaction, snapshot, table_id);
+	auto &latest_table = latest_entry ? latest_entry->Cast<DuckLakeTableEntry>() : table;
+	auto &latest_field_data = latest_table.GetFieldData();
+	const idx_t latest_schema_version = snapshot.schema_version;
+	unordered_map<idx_t, bool> merges_into_latest_schema;
+	auto can_merge_into_latest = [&](idx_t schema_version) -> bool {
+		if (type != CompactionType::MERGE_ADJACENT_TABLES) {
+			// REWRITE_DELETES assumes the source and target schemas match - never merge across schemas
+			return false;
+		}
+		if (schema_version == latest_schema_version) {
+			return true;
+		}
+		auto cached = merges_into_latest_schema.find(schema_version);
+		if (cached != merges_into_latest_schema.end()) {
+			return cached->second;
+		}
+		auto begin_snapshot = catalog.GetBeginSnapshotForSchemaVersion(table_id, schema_version, transaction);
+		DuckLakeSnapshot version_snapshot(begin_snapshot, schema_version, 0, 0);
+		auto version_entry = catalog.GetEntryById(transaction, version_snapshot, table_id);
+		bool result = false;
+		if (version_entry) {
+			auto &version_table = version_entry->Cast<DuckLakeTableEntry>();
+			result = FieldsPreservedInLatest(version_table.GetFieldData().GetFieldIds(), latest_field_data);
+		}
+		merges_into_latest_schema[schema_version] = result;
+		return result;
+	};
 
 	// iterate over the files and split into separate compaction groups
 	compaction_map_t<DuckLakeCompactionCandidates> candidates;
@@ -289,7 +346,10 @@ void DuckLakeCompactor::GenerateCompactions(DuckLakeTableEntry &table,
 		}
 		// construct the compaction group for this file - i.e. the set of candidate files we can compact it with
 		DuckLakeCompactionGroup group;
-		group.schema_version = candidate.schema_version;
+		if (!can_merge_into_latest(candidate.schema_version)) {
+			// incompatible with the latest schema - keep this file isolated in its own schema_version group
+			group.schema_version = candidate.schema_version;
+		}
 		group.partition_id = candidate.file.partition_id;
 		group.partition_values = candidate.file.partition_values;
 
@@ -305,6 +365,8 @@ void DuckLakeCompactor::GenerateCompactions(DuckLakeTableEntry &table,
 			// we need at least 2 files to consider a merge
 			continue;
 		}
+		// groups with an unset schema_version contain files that must be rewritten under the latest schema
+		const bool bind_to_latest = !entry.first.schema_version.IsValid();
 		for (idx_t start_idx = 0; start_idx < candidate_list.size(); start_idx++) {
 			// check if we can merge this file with subsequent files
 			idx_t current_file_size = 0;
@@ -332,7 +394,7 @@ void DuckLakeCompactor::GenerateCompactions(DuckLakeTableEntry &table,
 				if (type == CompactionType::MERGE_ADJACENT_TABLES && compaction_file_count == 1) {
 					// If we only have one file to merge, we have nothing to compact
 					compacted_files++;
-					if (compacted_files >= options.max_files) {
+					if (compacted_files >= max_files) {
 						break;
 					}
 					continue;
@@ -341,15 +403,15 @@ void DuckLakeCompactor::GenerateCompactions(DuckLakeTableEntry &table,
 				for (idx_t i = start_idx; i < compaction_idx; i++) {
 					compaction_files.push_back(std::move(files[candidate_list[i]]));
 				}
-				compactions.push_back(GenerateCompactionCommand(std::move(compaction_files)));
+				compactions.push_back(GenerateCompactionCommand(std::move(compaction_files), bind_to_latest));
 				start_idx += compaction_file_count - 1;
 			}
 			compacted_files++;
-			if (type == CompactionType::MERGE_ADJACENT_TABLES && compacted_files >= options.max_files) {
+			if (compacted_files >= max_files) {
 				break;
 			}
 		}
-		if (type == CompactionType::MERGE_ADJACENT_TABLES && compacted_files >= options.max_files) {
+		if (compacted_files >= max_files) {
 			break;
 		}
 	}
@@ -438,10 +500,13 @@ unique_ptr<LogicalOperator> DuckLakeCompactor::InsertSort(Binder &binder, unique
 }
 
 unique_ptr<LogicalOperator>
-DuckLakeCompactor::GenerateCompactionCommand(vector<DuckLakeCompactionFileEntry> source_files) {
-	// get the table entry at the specified snapshot
-	auto snapshot_id = source_files[0].file.begin_snapshot;
-	DuckLakeSnapshot snapshot(snapshot_id, source_files[0].schema_version, 0, 0);
+DuckLakeCompactor::GenerateCompactionCommand(vector<DuckLakeCompactionFileEntry> source_files,
+                                             bool bind_to_latest_schema) {
+	// Cross-schema groups bind to the latest snapshot so the merged file is written under the current schema (the
+	// reader projects each source via its own mapping_id); same-schema groups bind to the source schema_version.
+	DuckLakeSnapshot snapshot = bind_to_latest_schema ? transaction.GetSnapshot()
+	                                                  : DuckLakeSnapshot(source_files[0].file.begin_snapshot,
+	                                                                     source_files[0].schema_version, 0, 0);
 
 	auto entry = catalog.GetEntryById(transaction, snapshot, table_id);
 	if (!entry) {
@@ -582,9 +647,8 @@ DuckLakeCompactor::GenerateCompactionCommand(vector<DuckLakeCompactionFileEntry>
 	// and instead pull the latest sort setting
 	// First, see if there are transaction local changes to the table
 	// Then fall back to latest snapshot if no local changes
-	auto latest_entry = transaction.GetTransactionLocalEntry(CatalogType::TABLE_ENTRY,
-	                                                          table.schema.name.GetIdentifierName(),
-	                                                          table.name.GetIdentifierName());
+	auto latest_entry = transaction.GetTransactionLocalEntry(
+	    CatalogType::TABLE_ENTRY, table.schema.name.GetIdentifierName(), table.name.GetIdentifierName());
 	if (!latest_entry) {
 		auto latest_snapshot = transaction.GetSnapshot();
 		latest_entry = catalog.GetEntryById(transaction, latest_snapshot, table_id);
@@ -680,17 +744,16 @@ static void GenerateCompaction(ClientContext &context, DuckLakeTransaction &tran
 	switch (type) {
 	case CompactionType::MERGE_ADJACENT_TABLES: {
 		DuckLakeMergeAdjacentOptions options;
-		options.max_files = max_files;
 		options.min_file_size = min_file_size;
 		options.max_file_size = max_file_size;
 		DuckLakeCompactor compactor(context, ducklake_catalog, transaction, *input.binder, cur_table.GetTableId(),
-		                            options);
+		                            max_files, options);
 		compactor.GenerateCompactions(cur_table, compactions);
 		break;
 	}
 	case CompactionType::REWRITE_DELETES: {
 		DuckLakeCompactor compactor(context, ducklake_catalog, transaction, *input.binder, cur_table.GetTableId(),
-		                            delete_threshold);
+		                            max_files, delete_threshold);
 		compactor.GenerateCompactions(cur_table, compactions);
 		break;
 	}
@@ -859,6 +922,7 @@ TableFunctionSet DuckLakeRewriteDataFilesFunction::GetFunctions() {
 		TableFunction function("ducklake_rewrite_data_files", type, nullptr, nullptr, nullptr);
 		function.bind_operator = RewriteFilesBind;
 		function.named_parameters["delete_threshold"] = LogicalType::DOUBLE;
+		function.named_parameters["max_compacted_files"] = LogicalType::UBIGINT;
 		if (type.size() == 2) {
 			function.named_parameters["schema"] = LogicalType::VARCHAR;
 		}

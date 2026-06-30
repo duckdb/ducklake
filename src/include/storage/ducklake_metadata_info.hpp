@@ -508,7 +508,6 @@ struct DuckLakeCompactedFileInfo {
 };
 
 struct DuckLakeMergeAdjacentOptions {
-	uint64_t max_files;
 	optional_idx min_file_size;
 	optional_idx max_file_size;
 };
