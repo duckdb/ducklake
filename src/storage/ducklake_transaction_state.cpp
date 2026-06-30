@@ -1684,11 +1684,7 @@ string DuckLakeTransactionState::CommitChanges(DuckLakeCommitState &commit_state
 			    separator));
 		}
 		batch_queries += DuckLakeMetadataManager::WriteNewDeleteFiles(file_list, resolved_delete_paths,
-<<<<<<< HEAD
 		                                                              context.supports_v1_1_metadata);
-=======
-		                                                              context.write_row_group_count);
->>>>>>> main
 
 		// write new inlined deletes (for inlined data tables)
 		auto inlined_deletes = GetNewInlinedDeletes(commit_state);
