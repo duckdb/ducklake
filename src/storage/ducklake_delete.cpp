@@ -405,15 +405,15 @@ SinkCombineResultType DuckLakeDelete::Combine(ExecutionContext &context, Operato
 // Finalize
 //===--------------------------------------------------------------------===//
 bool DuckLakeDelete::TryDropFullyDeletedFile(DuckLakeTransaction &transaction, const DuckLakeDeleteFile &delete_file,
-                                             const DuckLakeFileListExtendedEntry &data_file_info,
-                                             idx_t delete_count) const {
+                                             const DuckLakeFileListExtendedEntry &data_file_info, idx_t delete_count,
+                                             idx_t live_delete_count) const {
 	if (delete_count != data_file_info.row_count) {
 		return false;
 	}
 	// ALL rows in this file are deleted - drop the file
 	if (delete_file.data_file_id.IsValid()) {
 		transaction.DropFile(table.GetTableId(), delete_file.data_file_id, data_file_info.file.path,
-		                     data_file_info.row_count, data_file_info.file.file_size_bytes);
+		                     data_file_info.row_count, live_delete_count, data_file_info.file.file_size_bytes);
 	} else {
 		transaction.DropTransactionLocalFile(table.GetTableId(), data_file_info.file.path);
 	}
@@ -451,7 +451,14 @@ void DuckLakeDelete::FlushDeleteWithSnapshots(DuckLakeTransaction &transaction, 
 	// set the delete file as overwriting existing deletes
 	delete_file.overwrites_existing_delete = true;
 
-	if (TryDropFullyDeletedFile(transaction, delete_file, data_file_info, sorted_deletes_with_snapshots.size())) {
+	idx_t live_delete_count = 0;
+	for (auto &entry : sorted_deletes_with_snapshots) {
+		if (static_cast<idx_t>(entry.snapshot_id) > current_snapshot.snapshot_id) {
+			live_delete_count++;
+		}
+	}
+	if (TryDropFullyDeletedFile(transaction, delete_file, data_file_info, sorted_deletes_with_snapshots.size(),
+	                            live_delete_count)) {
 		return;
 	}
 
@@ -519,8 +526,8 @@ void DuckLakeDelete::FlushDelete(DuckLakeTransaction &transaction, ClientContext
 	// check if the file already has deletes
 	auto existing_delete_data = delete_map->GetDeleteData(filename);
 
-	if (!existing_delete_data &&
-	    TryDropFullyDeletedFile(transaction, delete_file, data_file_info, sorted_deletes.size())) {
+	if (!existing_delete_data && TryDropFullyDeletedFile(transaction, delete_file, data_file_info,
+	                                                     sorted_deletes.size(), sorted_deletes.size())) {
 		return;
 	}
 
@@ -567,7 +574,8 @@ void DuckLakeDelete::FlushDelete(DuckLakeTransaction &transaction, ClientContext
 		// set the delete file as overwriting existing deletes
 		delete_file.overwrites_existing_delete = true;
 	}
-	if (TryDropFullyDeletedFile(transaction, delete_file, data_file_info, sorted_deletes.size())) {
+	if (TryDropFullyDeletedFile(transaction, delete_file, data_file_info, sorted_deletes.size(),
+	                            sorted_deletes.size())) {
 		return;
 	}
 
