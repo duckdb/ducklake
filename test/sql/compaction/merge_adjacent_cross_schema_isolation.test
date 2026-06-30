@@ -1,0 +1,207 @@
+# name: test/sql/compaction/merge_adjacent_cross_schema_isolation.test
+# description: ducklake_merge_adjacent_files keeps files isolated across a schema_version boundary when the schema change is not column-add-only (the merge cases live in merge_adjacent_cross_schema.test)
+# group: [compaction]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/ducklake_cross_schema_isolation/')
+
+statement ok
+USE ducklake;
+
+#
+# RENAME COLUMN bumps the schema_version incompatibly: pre- and post-rename files must not merge - only the two
+# same-schema (pre-rename) files merge, the post-rename file is left untouched.
+#
+
+statement ok
+CREATE TABLE t_rename AS SELECT range AS id FROM range(3);
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake');
+
+statement ok
+INSERT INTO t_rename VALUES (3), (4);
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake');
+
+statement ok
+ALTER TABLE t_rename RENAME COLUMN id TO ident;
+
+statement ok
+INSERT INTO t_rename VALUES (5), (6);
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake');
+
+query III
+SELECT table_name, files_processed, files_created FROM ducklake_merge_adjacent_files('ducklake', 't_rename') ORDER BY ALL
+----
+t_rename	2	1
+
+statement ok
+CALL ducklake_cleanup_old_files('ducklake', cleanup_all => true);
+
+# the same-schema pair merged (2 -> 1), the post-rename file is separate => 2 files remain
+query I
+SELECT COUNT(*) FROM ducklake_list_files('ducklake', 't_rename')
+----
+2
+
+query I
+SELECT ident FROM t_rename ORDER BY ident;
+----
+0
+1
+2
+3
+4
+5
+6
+
+#
+# DROP COLUMN. Files written before the drop still carry the dropped column and must not be merged into the latest
+# (smaller) schema.
+#
+
+statement ok
+CREATE TABLE t_drop AS SELECT range AS id, range AS extra FROM range(3);
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake');
+
+statement ok
+INSERT INTO t_drop VALUES (3, 3), (4, 4);
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake');
+
+statement ok
+ALTER TABLE t_drop DROP COLUMN extra;
+
+statement ok
+INSERT INTO t_drop VALUES (5), (6);
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake');
+
+query III
+SELECT table_name, files_processed, files_created FROM ducklake_merge_adjacent_files('ducklake', 't_drop') ORDER BY ALL
+----
+t_drop	2	1
+
+statement ok
+CALL ducklake_cleanup_old_files('ducklake', cleanup_all => true);
+
+query I
+SELECT COUNT(*) FROM ducklake_list_files('ducklake', 't_drop')
+----
+2
+
+query I
+SELECT id FROM t_drop ORDER BY id;
+----
+0
+1
+2
+3
+4
+5
+6
+
+#
+# ALTER COLUMN TYPE. The column type differs across the boundary so files must stay isolated.
+#
+
+statement ok
+CREATE TABLE t_type AS SELECT range::INTEGER AS id FROM range(3);
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake');
+
+statement ok
+INSERT INTO t_type VALUES (3), (4);
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake');
+
+statement ok
+ALTER TABLE t_type ALTER id TYPE BIGINT;
+
+statement ok
+INSERT INTO t_type VALUES (5), (6);
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake');
+
+query III
+SELECT table_name, files_processed, files_created FROM ducklake_merge_adjacent_files('ducklake', 't_type') ORDER BY ALL
+----
+t_type	2	1
+
+statement ok
+CALL ducklake_cleanup_old_files('ducklake', cleanup_all => true);
+
+query I
+SELECT COUNT(*) FROM ducklake_list_files('ducklake', 't_type')
+----
+2
+
+#
+# Partition isolation: even when the column schema is unchanged across the boundary, files written under different
+# partition specs must not be merged together. The grouping key still includes partition_id / partition_values.
+#
+
+statement ok
+CREATE TABLE t_part (id INTEGER, part INTEGER);
+
+statement ok
+ALTER TABLE t_part SET PARTITIONED BY (part);
+
+statement ok
+INSERT INTO t_part VALUES (1, 0), (2, 0);
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake');
+
+statement ok
+INSERT INTO t_part VALUES (3, 0), (4, 0);
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake');
+
+# repartition - bumps partition_id (and schema_version) without changing the columns
+statement ok
+ALTER TABLE t_part SET PARTITIONED BY (id);
+
+statement ok
+INSERT INTO t_part VALUES (5, 0), (6, 0);
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake');
+
+statement ok
+INSERT INTO t_part VALUES (7, 0), (8, 0);
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake');
+
+# the two partition specs still isolate: only the old-spec part=0 bucket has >= 2 files and merges
+query III
+SELECT table_name, files_processed, files_created FROM ducklake_merge_adjacent_files('ducklake', 't_part') ORDER BY ALL
+----
+t_part	2	1
+
+# row count preserved
+query I
+SELECT COUNT(*) FROM t_part
+----
+8
