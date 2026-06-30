@@ -703,6 +703,7 @@ DuckLakeTransaction::DuckLakeTransaction(DuckLakeCatalog &ducklake_catalog, Tran
     : Transaction(manager, context), ducklake_catalog(ducklake_catalog), db(*context.db),
       local_catalog_id(DuckLakeConstants::TRANSACTION_LOCAL_ID_START), catalog_version(0) {
 	metadata_manager = DuckLakeMetadataManager::Create(*this);
+	schema_pins = make_uniq<DuckLakeSchemaPinState>();
 	state = make_uniq<DuckLakeTransactionState>(db, ducklake_catalog.IsCommitInfoRequired(), new_name_maps,
 	                                            ducklake_catalog.DataPath(), ducklake_catalog.Separator());
 }
@@ -714,14 +715,11 @@ void DuckLakeTransaction::PinSchemaCacheEntry(shared_ptr<DuckLakeSchemaCacheEntr
 	if (!entry) {
 		return;
 	}
-	lock_guard<mutex> guard(schema_pin_lock);
-	auto *raw = entry.get();
-	schema_pins.emplace(raw, std::move(entry));
+	schema_pins->Pin(std::move(entry));
 }
 
 void DuckLakeTransaction::ClearSchemaCachePins() {
-	lock_guard<mutex> guard(schema_pin_lock);
-	schema_pins.clear();
+	schema_pins->Clear();
 }
 
 const LocalTableChanges &DuckLakeTransaction::GetLocalChanges() const {

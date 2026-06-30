@@ -40,6 +40,7 @@ struct CompactionInformation;
 struct DuckLakePath;
 struct DuckLakeCommitState;
 struct DuckLakeSchemaCacheEntry;
+class DuckLakeSchemaPinState;
 class DuckLakeFieldId;
 class LocalTableChangeIterationHelper;
 class DuckLakeTransactionState;
@@ -355,9 +356,7 @@ private:
 	atomic<bool> requires_new_inlined_table {false};
 	//! Schema cache entries referenced by this transaction's catalog entries. These pins keep transaction-local
 	//! parent references valid even if another transaction invalidates the global object-cache entry.
-	//! Maps from cache entry pointer to the shared pointer to the cache entry.
-	mutex schema_pin_lock;
-	unordered_map<DuckLakeSchemaCacheEntry *, shared_ptr<DuckLakeSchemaCacheEntry>> schema_pins;
+	unique_ptr<DuckLakeSchemaPinState> schema_pins;
 	//! Per-transaction mutable change state (new/dropped/renamed entries, local file changes, flushed
 	//! inlined tables) and the Commit loop. Owns the data formerly held directly on the transaction.
 	unique_ptr<DuckLakeTransactionState> state;

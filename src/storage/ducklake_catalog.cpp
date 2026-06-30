@@ -164,6 +164,10 @@ optional_idx DuckLakeSchemaCacheEntry::GetEstimatedCacheMemory() const {
 }
 
 void DuckLakeSchemaPinState::QueryEnd(ClientContext &context) {
+	Clear();
+}
+
+void DuckLakeSchemaPinState::Clear() {
 	lock_guard<mutex> guard(lock);
 	pins.clear();
 }
