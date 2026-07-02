@@ -583,6 +583,11 @@ unique_ptr<DuckLakeCatalogSet> DuckLakeCatalog::LoadSchemaForSnapshot(DuckLakeTr
 				create_view_info->tags[tag.key] = tag.value;
 			}
 		}
+		for (auto &ct : view.column_tags) {
+			if (ct.key == "comment") {
+				create_view_info->column_comments_map[Identifier(ct.column_name)] = ct.value;
+			}
+		}
 		auto view_entry =
 		    make_uniq<DuckLakeViewEntry>(*this, schema_entry, *create_view_info, view.id, std::move(view.uuid),
 		                                 std::move(view.sql), LocalChangeType::NONE);

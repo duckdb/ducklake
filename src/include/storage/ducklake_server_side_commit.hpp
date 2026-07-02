@@ -74,8 +74,8 @@ private:
 
 	//! Query the metadata catalog for the latest snapshot.
 	DuckLakeSnapshot ReadLatestSnapshot();
-	//! Whether the metadata schema has the row_group_count columns (DuckLake >= 1.1).
-	bool ReadSupportsRowGroupCount();
+	//! Whether the metadata schema has the >= 1.1-dev1 additions.
+	bool ReadSupportsV1_1Metadata();
 	//! Build a DuckLakeTableStats from parsed global stats.
 	unique_ptr<DuckLakeTableStats> BuildTableStats(const DuckLakeGlobalStatsInfo &gs);
 	//! Build a full DuckLakeStats map from global stats.
