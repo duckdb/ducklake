@@ -39,7 +39,16 @@ string DuckLakePartitionUtils::GetPartitionKeyName(DuckLakeTransformType transfo
 	if (used_names.find(prefix) == used_names.end()) {
 		return prefix;
 	}
-	return prefix + "_" + field_name;
+	string base_name = prefix + "_" + field_name;
+	if (used_names.find(base_name) == used_names.end()) {
+		return base_name;
+	}
+	string candidate = base_name;
+	int counter = 2;
+	while (used_names.find(candidate) != used_names.end()) {
+		candidate = base_name + "_" + to_string(counter++);
+	}
+	return candidate;
 }
 
 string DuckLakePartitionUtils::GetPartitionSQLExpression(const DuckLakeTransform &transform, const string &col_name) {
