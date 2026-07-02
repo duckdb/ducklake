@@ -164,6 +164,10 @@ optional_idx DuckLakeSchemaCacheEntry::GetEstimatedCacheMemory() const {
 }
 
 void DuckLakeSchemaPinState::QueryEnd(ClientContext &context) {
+	Clear();
+}
+
+void DuckLakeSchemaPinState::Clear() {
 	lock_guard<mutex> guard(lock);
 	pins.clear();
 }
@@ -362,6 +366,7 @@ shared_ptr<DuckLakeSchemaCacheEntry> DuckLakeCatalog::GetSchemaCacheEntry(DuckLa
 
 DuckLakeCatalogSet &DuckLakeCatalog::GetSchemaForSnapshot(DuckLakeTransaction &transaction, DuckLakeSnapshot snapshot) {
 	auto entry = GetSchemaCacheEntry(transaction, snapshot);
+	transaction.PinSchemaCacheEntry(entry);
 	PinSchemaForQuery(transaction, entry);
 	return entry->catalog_set;
 }
