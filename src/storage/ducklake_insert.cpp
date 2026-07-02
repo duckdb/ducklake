@@ -567,23 +567,16 @@ DuckLakeCopyOptions DuckLakeInsert::GetCopyOptions(ClientContext &context, DuckL
 	result.bind_data = std::move(function_data);
 
 	result.use_tmp_file = false;
+	result.filename_pattern.SetFilenamePattern("ducklake-{uuidv7}");
+	static constexpr idx_t MINIMUM_WRITE_FILE_SIZE = 4096;
+	result.file_size_bytes = MaxValue<idx_t>(target_file_size, MINIMUM_WRITE_FILE_SIZE);
+	result.rotate = true;
 	if (copy_input.partition_data) {
-		result.filename_pattern.SetFilenamePattern("ducklake-{uuidv7}");
 		result.partition_output = true;
 		result.write_empty_file = true;
-		result.rotate = false;
 	} else {
-		result.filename_pattern.SetFilenamePattern("ducklake-{uuidv7}");
 		result.partition_output = false;
 		result.write_empty_file = false;
-		// file_size_bytes is currently only supported for unpartitioned writes.
-		// The parquet writer rotates files at row-group granularity; a target smaller than the minimum
-		// physical parquet file size makes that rotation loop never make progress (an infinite loop in
-		// PhysicalCopyToFile). Clamp the write target to a safe floor. This does not affect compaction,
-		// which reads the raw (unclamped) target via GetTargetFileSize for its file-skip decisions.
-		static constexpr idx_t MINIMUM_WRITE_FILE_SIZE = 4096;
-		result.file_size_bytes = MaxValue<idx_t>(target_file_size, MINIMUM_WRITE_FILE_SIZE);
-		result.rotate = true;
 	}
 	result.file_path = copy_input.data_path;
 	StripTrailingSeparator(fs, result.file_path);
@@ -656,6 +649,14 @@ unique_ptr<LogicalOperator> DuckLakeInsert::InsertCasts(Binder &binder, unique_p
 	return std::move(result);
 }
 
+idx_t DuckLakeInsert::GetCopyBatchSize(const DuckLakeCopyOptions &copy_options) {
+	auto rgs_entry = copy_options.info->options.find("row_group_size");
+	if (rgs_entry != copy_options.info->options.end() && !rgs_entry->second.empty()) {
+		return std::stoull(rgs_entry->second[0].ToString());
+	}
+	return DEFAULT_ROW_GROUP_SIZE;
+}
+
 PhysicalOperator &DuckLakeInsert::PlanCopyForInsert(ClientContext &context, PhysicalPlanGenerator &planner,
                                                     DuckLakeCopyInput &copy_input,
                                                     optional_ptr<PhysicalOperator> plan) {
@@ -696,12 +697,7 @@ PhysicalOperator &DuckLakeInsert::PlanCopyForInsert(ClientContext &context, Phys
 	physical_copy.overwrite_mode = copy_options.overwrite_mode;
 	physical_copy.per_thread_output = copy_options.per_thread_output;
 	physical_copy.file_size_bytes = copy_options.file_size_bytes;
-	auto rgs_entry = copy_options.info->options.find("row_group_size");
-	if (rgs_entry != copy_options.info->options.end() && !rgs_entry->second.empty()) {
-		physical_copy.batch_size = std::stoull(rgs_entry->second[0].ToString());
-	} else {
-		physical_copy.batch_size = DEFAULT_ROW_GROUP_SIZE;
-	}
+	physical_copy.batch_size = GetCopyBatchSize(copy_options);
 	auto rgsb_entry = copy_options.info->options.find("row_group_size_bytes");
 	if (rgsb_entry != copy_options.info->options.end() && !rgsb_entry->second.empty()) {
 		auto bytes_str = rgsb_entry->second[0].ToString();

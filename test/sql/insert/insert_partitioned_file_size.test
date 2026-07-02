@@ -1,0 +1,52 @@
+# name: test/sql/insert/insert_partitioned_file_size.test
+# description: target_file_size rotates files within each partition (issue #563)
+# group: [insert]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/partitioned_file_size', METADATA_CATALOG 'ducklake_metadata', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+USE ducklake
+
+statement ok
+CALL ducklake.set_option('parquet_compression', 'uncompressed')
+
+statement ok
+CALL ducklake.set_option('parquet_row_group_size', '2500')
+
+
+statement ok
+CREATE TABLE rotated(part_key INTEGER, id INTEGER, s VARCHAR);
+
+statement ok
+ALTER TABLE rotated SET PARTITIONED BY (part_key)
+
+statement ok
+CALL ducklake.set_option('target_file_size', '16KB')
+
+statement ok
+INSERT INTO rotated SELECT i % 2, i, repeat('x', 100) FROM range(40000) t(i)
+
+# data round-trips correctly
+query II
+SELECT COUNT(*), SUM(id) FROM rotated
+----
+40000	799980000
+
+# both partitions rotated into 5 files each
+query II
+SELECT regexp_extract(file, 'part_key=[0-9]+') AS p, COUNT(*) AS cnt
+FROM GLOB('{DATA_PATH}/partitioned_file_size/main/rotated/**/*.parquet')
+GROUP BY p ORDER BY p
+----
+part_key=0	5
+part_key=1	5
+
