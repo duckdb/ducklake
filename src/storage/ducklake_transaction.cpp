@@ -1299,6 +1299,11 @@ bool DuckLakeTransaction::RetryOnError(const string &original_message) {
 	if (StringUtil::Contains(message, "concurrent")) {
 		return true;
 	}
+	// retry on stale dropped-file stats (another transaction already committed the same drop;
+	// CheckForConflicts on retry reports this properly as a conflict)
+	if (StringUtil::Contains(message, "dropped ducklake file stats exceed current table stats")) {
+		return true;
+	}
 	return false;
 }
 
@@ -1375,6 +1380,9 @@ void DuckLakeTransaction::RunCommitLoop(DuckLakeSnapshot transaction_snapshot,
 			                               "snapshot changes for conflict resolution:");
 		}
 		return result;
+	};
+	context.snapshot_and_stats_query = [&]() {
+		return metadata_manager->GetSnapshotAndStatsAndChangesQuery();
 	};
 	context.get_snapshot = [&]() {
 		return GetSnapshot();

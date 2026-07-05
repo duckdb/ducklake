@@ -733,6 +733,9 @@ DuckLakeCommitContext DuckLakeServerSideCommit::BuildContext(idx_t &committed_sn
 		auto sql = SubstitutePlaceholders(std::move(q), transaction_snapshot);
 		return unique_ptr_cast<MaterializedQueryResult, QueryResult>(fresh_conn.Query(sql));
 	};
+	ctx.snapshot_and_stats_query = []() {
+		return DuckLakeMetadataManager::BaseSnapshotAndStatsAndChangesQuery();
+	};
 	ctx.get_snapshot = [this]() {
 		return transaction_snapshot;
 	};
