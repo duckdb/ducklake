@@ -131,6 +131,204 @@ string PostgresMetadataManager::GetLatestSnapshotQuery() const {
 	)";
 }
 
+idx_t PostgresMetadataManager::FetchScalarSequenceValue(const string &seq_name) {
+	DuckLakeSnapshot dummy {0, 0, 0, 0};
+	string query = "SELECT nextval('{METADATA_SCHEMA_ESCAPED}." + seq_name + "')";
+	auto result = Query(dummy, query);
+	if (result->HasError()) {
+		result->GetErrorObject().Throw("Failed to allocate next value from " + seq_name + ": ");
+	}
+	auto chunk = result->Fetch();
+	if (!chunk || chunk->size() == 0) {
+		throw InternalException("ducklake: %s returned no value from nextval()", seq_name);
+	}
+	auto v = chunk->data[0].GetValue(0).GetValue<int64_t>();
+	if (v < 0) {
+		throw InternalException("ducklake: %s returned negative value: %lld", seq_name, (long long)v);
+	}
+	return static_cast<idx_t>(v);
+}
+
+idx_t PostgresMetadataManager::AllocateNextSnapshotId(idx_t /*current_snapshot_id*/) {
+	return FetchScalarSequenceValue("ducklake_snapshot_id_seq");
+}
+
+idx_t PostgresMetadataManager::AllocateNextCatalogId(idx_t /*current_next_catalog_id*/) {
+	return FetchScalarSequenceValue("ducklake_catalog_id_seq");
+}
+
+idx_t PostgresMetadataManager::AllocateNextFileId(idx_t /*current_next_file_id*/) {
+	return FetchScalarSequenceValue("ducklake_file_id_seq");
+}
+
+idx_t PostgresMetadataManager::AllocateNextSchemaVersion(idx_t /*current_schema_version*/) {
+	// Sequence-allocated: the schema cache keys on schema_version, and concurrent commits both
+	// computing base+1 client-side would collide on one schema_version with different active sets.
+	return FetchScalarSequenceValue("ducklake_schema_version_seq");
+}
+
+idx_t PostgresMetadataManager::EnsureCatalogClassid() {
+	if (commit_lock_classid.IsValid()) {
+		return commit_lock_classid.GetIndex();
+	}
+	DuckLakeSnapshot dummy {};
+	string probe = "SELECT hashtext({METADATA_CATALOG_NAME_LITERAL})::int4";
+	auto probe_result = Query(dummy, probe);
+	if (probe_result->HasError()) {
+		probe_result->GetErrorObject().Throw("concurrent: failed to compute DuckLake advisory lock classid: ");
+	}
+	auto chunk = probe_result->Fetch();
+	if (!chunk || chunk->size() == 0) {
+		throw InternalException("ducklake: hashtext probe returned no row");
+	}
+	commit_lock_classid = static_cast<idx_t>(static_cast<uint32_t>(chunk->data[0].GetValue(0).GetValue<int32_t>()));
+	return commit_lock_classid.GetIndex();
+}
+
+void PostgresMetadataManager::AcquireCommitLock() {
+	DuckLakeSnapshot dummy {};
+	auto classid = EnsureCatalogClassid();
+
+	string set_timeout = "SET LOCAL lock_timeout = '30s'";
+	auto timeout_res = Execute(dummy, set_timeout);
+	if (timeout_res->HasError()) {
+		timeout_res->GetErrorObject().Throw("concurrent: failed to set lock_timeout: ");
+	}
+
+	// "concurrent:" prefix so RetryOnError's broad "concurrent" match retries a transient lock/timeout failure.
+	string query = "SELECT pg_advisory_xact_lock(" + std::to_string(static_cast<int32_t>(classid)) + ", " +
+	               std::to_string(DUCKLAKE_COMMIT_ADVISORY_SUBKEY) + ")";
+	auto result = Execute(dummy, query);
+	if (result->HasError()) {
+		result->GetErrorObject().Throw("concurrent: DuckLake commit serialization lock failed: ");
+	}
+}
+
+bool PostgresMetadataManager::BootstrapObjectsPresent() {
+	DuckLakeSnapshot dummy {};
+	string probe = R"(
+SELECT COUNT(*)::BIGINT FROM pg_catalog.pg_class c
+JOIN pg_catalog.pg_namespace n ON c.relnamespace = n.oid
+WHERE n.nspname = {METADATA_SCHEMA_NAME_LITERAL}
+  AND c.relname IN (
+    'ducklake_snapshot_id_seq','ducklake_catalog_id_seq',
+    'ducklake_file_id_seq','ducklake_schema_version_seq',
+    'ducklake_schema_name_active_uidx','ducklake_table_name_active_uidx',
+    'ducklake_view_name_active_uidx','ducklake_delete_file_active_uidx'
+  )
+)";
+	auto res = Query(dummy, probe);
+	if (res->HasError()) {
+		return false;
+	}
+	auto chunk = res->Fetch();
+	if (!chunk || chunk->size() == 0) {
+		return false;
+	}
+	auto v = chunk->data[0].GetValue(0).GetValue<int64_t>();
+	return v == 8;
+}
+
+void PostgresMetadataManager::EnsureIdSequences() {
+	// One statement per call: postgres_execute drops all but the first of a batch.
+	DuckLakeSnapshot dummy {0, 0, 0, 0};
+
+	if (BootstrapObjectsPresent()) {
+		return;
+	}
+
+	// IF NOT EXISTS is not concurrency-safe on postgres DDL; serialize bootstrap.
+	auto classid = EnsureCatalogClassid();
+	string acquire =
+	    "SELECT pg_advisory_lock(" + std::to_string(static_cast<int32_t>(classid)) + ", " +
+	    std::to_string(DUCKLAKE_BOOTSTRAP_ADVISORY_SUBKEY) + ")";
+	auto acq_res = Execute(dummy, acquire);
+	if (acq_res->HasError()) {
+		acq_res->GetErrorObject().Throw("concurrent: DuckLake bootstrap serialization lock failed: ");
+	}
+	string release =
+	    "SELECT pg_advisory_unlock(" + std::to_string(static_cast<int32_t>(classid)) + ", " +
+	    std::to_string(DUCKLAKE_BOOTSTRAP_ADVISORY_SUBKEY) + ")";
+	auto release_lock = [&]() {
+		auto r = Execute(dummy, release);
+		(void)r;
+	};
+
+	if (BootstrapObjectsPresent()) {
+		release_lock();
+		return;
+	}
+
+	auto run = [&](string query) {
+		auto result = Execute(dummy, query);
+		if (result->HasError()) {
+			release_lock();
+			result->GetErrorObject().Throw("Failed to ensure DuckLake id sequences: ");
+		}
+	};
+
+	// file_id_seq needs MINVALUE 0: bootstrap next_file_id=0 and the first allocation must be able to return 0.
+	// CACHE > 1 breaks MAX(...)-as-horizon calibration (last_value would lag a pre-cached backend's nextval).
+	run("CREATE SEQUENCE IF NOT EXISTS {METADATA_SCHEMA_ESCAPED}.ducklake_snapshot_id_seq CACHE 1");
+	run("CREATE SEQUENCE IF NOT EXISTS {METADATA_SCHEMA_ESCAPED}.ducklake_catalog_id_seq CACHE 1");
+	run("CREATE SEQUENCE IF NOT EXISTS {METADATA_SCHEMA_ESCAPED}.ducklake_file_id_seq MINVALUE 0 START WITH 0 CACHE 1");
+	run("CREATE SEQUENCE IF NOT EXISTS {METADATA_SCHEMA_ESCAPED}.ducklake_schema_version_seq CACHE 1");
+	// Defensive setval (GREATEST, never lowers): recovers a crash between CREATE SEQUENCE and calibration,
+	// where CREATE ... IF NOT EXISTS would otherwise no-op on an orphaned uncalibrated sequence.
+	run(R"(SELECT setval(
+  '{METADATA_SCHEMA_ESCAPED}.ducklake_snapshot_id_seq',
+  GREATEST(
+    (SELECT last_value FROM {METADATA_SCHEMA_ESCAPED}.ducklake_snapshot_id_seq),
+    GREATEST(1, COALESCE((SELECT MAX(snapshot_id) FROM {METADATA_SCHEMA_ESCAPED}.ducklake_snapshot), 0))
+  ),
+  COALESCE((SELECT MAX(snapshot_id) FROM {METADATA_SCHEMA_ESCAPED}.ducklake_snapshot), 1) >= 1
+))");
+	run(R"(SELECT setval(
+  '{METADATA_SCHEMA_ESCAPED}.ducklake_catalog_id_seq',
+  GREATEST(
+    (SELECT last_value FROM {METADATA_SCHEMA_ESCAPED}.ducklake_catalog_id_seq),
+    GREATEST(1, COALESCE((SELECT MAX(next_catalog_id) - 1 FROM {METADATA_SCHEMA_ESCAPED}.ducklake_snapshot), 0))
+  ),
+  COALESCE((SELECT MAX(next_catalog_id) - 1 FROM {METADATA_SCHEMA_ESCAPED}.ducklake_snapshot), 0) >= 1
+))");
+	run(R"(SELECT setval(
+  '{METADATA_SCHEMA_ESCAPED}.ducklake_file_id_seq',
+  GREATEST(
+    (SELECT last_value FROM {METADATA_SCHEMA_ESCAPED}.ducklake_file_id_seq),
+    GREATEST(0, COALESCE((SELECT MAX(next_file_id) - 1 FROM {METADATA_SCHEMA_ESCAPED}.ducklake_snapshot), 0))
+  ),
+  COALESCE((SELECT MAX(next_file_id) - 1 FROM {METADATA_SCHEMA_ESCAPED}.ducklake_snapshot), 0) >= 1
+))");
+	run(R"(SELECT setval(
+  '{METADATA_SCHEMA_ESCAPED}.ducklake_schema_version_seq',
+  GREATEST(
+    (SELECT last_value FROM {METADATA_SCHEMA_ESCAPED}.ducklake_schema_version_seq),
+    GREATEST(1, COALESCE((SELECT MAX(schema_version) FROM {METADATA_SCHEMA_ESCAPED}.ducklake_snapshot), 0))
+  ),
+  COALESCE((SELECT MAX(schema_version) FROM {METADATA_SCHEMA_ESCAPED}.ducklake_snapshot), 1) >= 1
+))");
+
+	// Replace the PK-violation signal the sequence allocator eliminates: at most one active row per name.
+	// Created LAST (after all setvals above) so BootstrapObjectsPresent()'s count == 8 implies calibration
+	// already ran - do not reorder these before the setvals.
+	run("CREATE UNIQUE INDEX IF NOT EXISTS ducklake_schema_name_active_uidx "
+	    "ON {METADATA_SCHEMA_ESCAPED}.ducklake_schema (schema_name) "
+	    "WHERE end_snapshot IS NULL");
+	run("CREATE UNIQUE INDEX IF NOT EXISTS ducklake_table_name_active_uidx "
+	    "ON {METADATA_SCHEMA_ESCAPED}.ducklake_table (schema_id, table_name) "
+	    "WHERE end_snapshot IS NULL");
+	run("CREATE UNIQUE INDEX IF NOT EXISTS ducklake_view_name_active_uidx "
+	    "ON {METADATA_SCHEMA_ESCAPED}.ducklake_view (schema_id, view_name) "
+	    "WHERE end_snapshot IS NULL");
+	// One live delete_file per data_file: without it, concurrent DELETEs double-count rows by applying
+	// both delete masks as independent variants.
+	run("CREATE UNIQUE INDEX IF NOT EXISTS ducklake_delete_file_active_uidx "
+	    "ON {METADATA_SCHEMA_ESCAPED}.ducklake_delete_file (data_file_id) "
+	    "WHERE end_snapshot IS NULL");
+
+	release_lock();
+}
+
 string PostgresMetadataManager::GenerateFileColumnStatsCTEBody(const CTERequirement &req, TableIndex table_id) {
 	string select_list = "data_file_id";
 	for (const auto &stat : req.referenced_stats) {

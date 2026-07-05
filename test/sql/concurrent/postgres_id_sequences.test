@@ -1,0 +1,312 @@
+# name: test/sql/concurrent/postgres_id_sequences.test
+# description: Postgres metadata backend allocates ids from race-free sequences, calibrated and recoverable across bootstrap crashes
+# group: [concurrent]
+
+require ducklake
+
+require parquet
+
+require postgres_scanner
+
+require-env DUCKLAKE_CI
+
+test-env DATA_PATH {TEST_DIR}
+
+# Raw postgres attach used to inspect/manipulate the metadata schema directly, independent of
+# any DuckLake attach's own metadata sub-catalog (which disappears on DETACH).
+statement ok
+ATTACH 'dbname=ducklakedb' AS pgraw (TYPE postgres)
+
+# Scenario 5.1 + 5.3: fresh bootstrap creates all 8 objects, calibrated so the first nextval()
+# equals the next-to-assign id (MAX starts at 0 rows -> first snapshot_id must be 1)
+statement ok
+ATTACH 'ducklake:postgres:dbname=ducklakedb' AS dl (DATA_PATH '{DATA_PATH}/seq_fresh', METADATA_SCHEMA 'metadata_s1')
+
+statement ok
+USE dl
+
+statement ok
+CREATE TABLE dl.t(i INTEGER)
+
+statement ok
+INSERT INTO dl.t VALUES (1)
+
+statement ok
+USE memory
+
+statement ok
+DETACH dl
+
+query I
+SELECT COUNT(*) FROM pgraw.pg_catalog.pg_class c JOIN pgraw.pg_catalog.pg_namespace n ON c.relnamespace = n.oid
+WHERE n.nspname = 'metadata_s1' AND c.relname IN (
+  'ducklake_snapshot_id_seq','ducklake_catalog_id_seq',
+  'ducklake_file_id_seq','ducklake_schema_version_seq',
+  'ducklake_schema_name_active_uidx','ducklake_table_name_active_uidx',
+  'ducklake_view_name_active_uidx','ducklake_delete_file_active_uidx'
+)
+----
+8
+
+# snapshot_id sequence is calibrated: is_called is true, last_value covers every committed snapshot
+query I
+SELECT is_called FROM pgraw.metadata_s1.ducklake_snapshot_id_seq
+----
+true
+
+query I
+SELECT (SELECT last_value FROM pgraw.metadata_s1.ducklake_snapshot_id_seq) >= (SELECT MAX(snapshot_id) FROM pgraw.metadata_s1.ducklake_snapshot)
+----
+true
+
+# Scenario 5.2: two concurrent connections inserting into the same table get distinct snapshot_ids
+# and neither hits the id-collision retry path
+statement ok
+ATTACH 'ducklake:postgres:dbname=ducklakedb' AS dl2 (DATA_PATH '{DATA_PATH}/seq_concurrent', METADATA_SCHEMA 'metadata_s2')
+
+statement ok
+USE dl2
+
+statement ok
+CREATE TABLE dl2.t(i INTEGER)
+
+statement ok con1
+BEGIN
+
+statement ok con2
+BEGIN
+
+statement ok con1
+INSERT INTO dl2.t VALUES (1)
+
+statement ok con2
+INSERT INTO dl2.t VALUES (2)
+
+statement ok con1
+COMMIT
+
+statement ok con2
+COMMIT
+
+query I
+SELECT COUNT(*) FROM dl2.t
+----
+2
+
+statement ok
+USE memory
+
+statement ok
+DETACH dl2
+
+query I
+SELECT COUNT(*) = COUNT(DISTINCT snapshot_id) FROM pgraw.metadata_s2.ducklake_snapshot
+----
+true
+
+# Scenario 5.7: two connections concurrently creating a same-named table -> exactly one active row survives
+statement ok
+ATTACH 'ducklake:postgres:dbname=ducklakedb' AS dl3 (DATA_PATH '{DATA_PATH}/seq_uidx', METADATA_SCHEMA 'metadata_s3')
+
+statement ok
+USE dl3
+
+statement ok con1
+BEGIN
+
+statement ok con2
+BEGIN
+
+statement ok con1
+CREATE TABLE dl3.dup(i INTEGER)
+
+statement ok con2
+CREATE TABLE dl3.dup(i INTEGER)
+
+statement ok con1
+COMMIT
+
+statement error con2
+COMMIT
+----
+<REGEX>:.*(Transaction conflict|duplicate key).*
+
+statement ok
+USE memory
+
+statement ok
+DETACH dl3
+
+query I
+SELECT COUNT(*) FROM pgraw.metadata_s3.ducklake_table WHERE table_name = 'dup' AND end_snapshot IS NULL
+----
+1
+
+# Scenario 5.4: partial-bootstrap recovery (C2/C3) - drop only the active-row indexes, re-attach,
+# and confirm EnsureIdSequences re-creates them without disturbing the already-calibrated sequences
+statement ok
+ATTACH 'ducklake:postgres:dbname=ducklakedb' AS dl4 (DATA_PATH '{DATA_PATH}/seq_partial', METADATA_SCHEMA 'metadata_s4')
+
+statement ok
+USE dl4
+
+statement ok
+CREATE TABLE dl4.t(i INTEGER)
+
+statement ok
+INSERT INTO dl4.t VALUES (1)
+
+statement ok
+USE memory
+
+statement ok
+DETACH dl4
+
+statement ok
+DROP INDEX pgraw.metadata_s4.ducklake_table_name_active_uidx
+
+statement ok
+ATTACH 'ducklake:postgres:dbname=ducklakedb' AS dl4b (DATA_PATH '{DATA_PATH}/seq_partial', METADATA_SCHEMA 'metadata_s4')
+
+statement ok
+USE dl4b
+
+statement ok
+CREATE TABLE dl4b.t2(i INTEGER)
+
+statement ok
+USE memory
+
+statement ok
+DETACH dl4b
+
+query I
+SELECT COUNT(*) FROM pgraw.pg_catalog.pg_class c JOIN pgraw.pg_catalog.pg_namespace n ON c.relnamespace = n.oid
+WHERE n.nspname = 'metadata_s4' AND c.relname = 'ducklake_table_name_active_uidx'
+----
+1
+
+query I
+SELECT MAX(next_file_id) > 0 FROM pgraw.metadata_s4.ducklake_snapshot
+----
+true
+
+# Scenario 5.5: uncalibrated-sequence recovery (C1) - simulate a crash between CREATE SEQUENCE and
+# calibration by resetting a sequence to its born value below the catalog's true MAX; re-attach must
+# self-heal via the defensive setval before the next nextval() is issued
+statement ok
+ATTACH 'ducklake:postgres:dbname=ducklakedb' AS dl5 (DATA_PATH '{DATA_PATH}/seq_uncalibrated', METADATA_SCHEMA 'metadata_s5')
+
+statement ok
+USE dl5
+
+statement ok
+CREATE TABLE dl5.t(i INTEGER)
+
+statement ok
+INSERT INTO dl5.t VALUES (1)
+
+statement ok
+INSERT INTO dl5.t VALUES (2)
+
+statement ok
+INSERT INTO dl5.t VALUES (3)
+
+statement ok
+USE memory
+
+statement ok
+DETACH dl5
+
+# Roll the sequence back to a value below the catalog's true MAX(snapshot_id) - simulates C1
+statement ok
+SELECT setval('pgraw.metadata_s5.ducklake_snapshot_id_seq', 1, true)
+
+statement ok
+ATTACH 'ducklake:postgres:dbname=ducklakedb' AS dl5b (DATA_PATH '{DATA_PATH}/seq_uncalibrated', METADATA_SCHEMA 'metadata_s5')
+
+statement ok
+USE dl5b
+
+statement ok
+INSERT INTO dl5b.t VALUES (4)
+
+query I
+SELECT COUNT(*) FROM dl5b.t
+----
+4
+
+statement ok
+USE memory
+
+statement ok
+DETACH dl5b
+
+# every committed snapshot_id is distinct - no PK collision occurred on the post-heal commit
+query I
+SELECT COUNT(*) = COUNT(DISTINCT snapshot_id) FROM pgraw.metadata_s5.ducklake_snapshot
+----
+true
+
+# Scenario 5.6: migration from a pre-sequence catalog - drop all 4 sequences (simulating a catalog
+# created before this change), re-attach, and confirm EnsureIdSequences recreates and calibrates them
+statement ok
+ATTACH 'ducklake:postgres:dbname=ducklakedb' AS dl6 (DATA_PATH '{DATA_PATH}/seq_migration', METADATA_SCHEMA 'metadata_s6')
+
+statement ok
+USE dl6
+
+statement ok
+CREATE TABLE dl6.t(i INTEGER)
+
+statement ok
+INSERT INTO dl6.t VALUES (1)
+
+statement ok
+USE memory
+
+statement ok
+DETACH dl6
+
+statement ok
+DROP SEQUENCE pgraw.metadata_s6.ducklake_snapshot_id_seq, pgraw.metadata_s6.ducklake_catalog_id_seq, pgraw.metadata_s6.ducklake_file_id_seq, pgraw.metadata_s6.ducklake_schema_version_seq
+
+statement ok
+DROP INDEX pgraw.metadata_s6.ducklake_schema_name_active_uidx, pgraw.metadata_s6.ducklake_table_name_active_uidx, pgraw.metadata_s6.ducklake_view_name_active_uidx, pgraw.metadata_s6.ducklake_delete_file_active_uidx
+
+statement ok
+ATTACH 'ducklake:postgres:dbname=ducklakedb' AS dl6b (DATA_PATH '{DATA_PATH}/seq_migration', METADATA_SCHEMA 'metadata_s6')
+
+statement ok
+USE dl6b
+
+statement ok
+INSERT INTO dl6b.t VALUES (2)
+
+query I
+SELECT COUNT(*) FROM dl6b.t
+----
+2
+
+statement ok
+USE memory
+
+statement ok
+DETACH dl6b
+
+query I
+SELECT COUNT(*) FROM pgraw.pg_catalog.pg_class c JOIN pgraw.pg_catalog.pg_namespace n ON c.relnamespace = n.oid
+WHERE n.nspname = 'metadata_s6' AND c.relname IN (
+  'ducklake_snapshot_id_seq','ducklake_catalog_id_seq',
+  'ducklake_file_id_seq','ducklake_schema_version_seq',
+  'ducklake_schema_name_active_uidx','ducklake_table_name_active_uidx',
+  'ducklake_view_name_active_uidx','ducklake_delete_file_active_uidx'
+)
+----
+8
+
+statement ok
+USE memory
+
+statement ok
+DETACH pgraw

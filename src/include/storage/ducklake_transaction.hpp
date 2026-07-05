@@ -184,6 +184,8 @@ public:
 
 	//! Returns true if `message` indicates a retryable conflict (PK/unique/conflict/concurrent).
 	static bool RetryOnError(const string &message);
+	//! As above, but also treats a DuckLake-thrown ExceptionType::TRANSACTION as a logical conflict by type.
+	static bool RetryOnError(const string &message, ExceptionType type);
 
 	DuckLakeCatalog &GetCatalog() {
 		return ducklake_catalog;
@@ -320,7 +322,7 @@ public:
 	static DuckLakeGlobalStatsInfo ConvertNewGlobalStats(TableIndex table_id,
 	                                                     const DuckLakeNewGlobalStats &new_global_stats);
 
-	static DuckLakeFileInfo BuildDataFileInfo(const DuckLakeDataFile &file, DuckLakeSnapshot &commit_snapshot,
+	static DuckLakeFileInfo BuildDataFileInfo(const DuckLakeDataFile &file, DuckLakeCommitState &commit_state,
 	                                          TableIndex table_id, optional_idx row_id_start);
 
 	static void AddTableChanges(TableIndex table_id, const LocalTableDataChanges &table_changes,

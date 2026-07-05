@@ -37,13 +37,20 @@ string DuckLakeInitializer::GetAttachOptions() {
 			throw InternalException("Unsupported access mode in DuckLake attach");
 		}
 	}
+	bool has_isolation_level_override = false;
 	for (auto &option : options.metadata_parameters) {
+		if (StringUtil::CIEquals(option.first, "isolation_level")) {
+			has_isolation_level_override = true;
+		}
 		attach_options.push_back(option.first + " " + option.second.ToSQLString());
 	}
 	const string metadata_type = catalog.MetadataType();
 	if (metadata_type.empty() || metadata_type == "duckdb") {
 		// this is duckdb, we always do latest storage
 		attach_options.push_back(StringUtil::Format("STORAGE_VERSION '%s'", "latest"));
+	}
+	if ((metadata_type == "postgres" || metadata_type == "postgres_scanner") && !has_isolation_level_override) {
+		attach_options.push_back("isolation_level 'read committed'");
 	}
 	if (options.hide_metadata_catalog) {
 		attach_options.push_back("HIDDEN true");
@@ -114,6 +121,9 @@ void DuckLakeInitializer::Initialize() {
 	// swapped it out via SetVersionedMetadataManager, so the `metadata_manager` reference taken at the
 	// top of Initialize() would now dangle.
 	auto &current_metadata_manager = transaction.GetMetadataManager();
+	if (options.access_mode != AccessMode::READ_ONLY) {
+		current_metadata_manager.EnsureIdSequences();
+	}
 	// probe the metadata server for optional capabilities (e.g. server-side commit retries) once per attach
 	current_metadata_manager.ProbeServerCapabilities();
 	current_metadata_manager.ClearCache();

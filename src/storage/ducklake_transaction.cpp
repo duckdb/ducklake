@@ -974,6 +974,22 @@ TransactionChangeInformation DuckLakeTransaction::GetTransactionChanges() const 
 
 // DuckLakeCommitState is defined in storage/ducklake_commit_state.hpp
 
+idx_t DuckLakeCommitState::AllocateCatalogId() const {
+	idx_t id = context.allocate_catalog_id(commit_snapshot.next_catalog_id);
+	if (id + 1 > commit_snapshot.next_catalog_id) {
+		commit_snapshot.next_catalog_id = id + 1;
+	}
+	return id;
+}
+
+idx_t DuckLakeCommitState::AllocateFileId() const {
+	idx_t id = context.allocate_file_id(commit_snapshot.next_file_id);
+	if (id + 1 > commit_snapshot.next_file_id) {
+		commit_snapshot.next_file_id = id + 1;
+	}
+	return id;
+}
+
 void DuckLakeTransaction::AddTableChanges(TableIndex table_id, const LocalTableDataChanges &table_changes,
                                           TransactionChangeInformation &changes) {
 	bool inserted_data = false;
@@ -1033,7 +1049,7 @@ DuckLakePartitionInfo DuckLakeTransaction::GetNewPartitionKey(DuckLakeCommitStat
 	auto local_partition_id = partition_data->local_partition_id.IsValid()
 	                              ? partition_data->local_partition_id.GetIndex()
 	                              : partition_data->partition_id;
-	auto partition_id = commit_state.commit_snapshot.next_catalog_id++;
+	auto partition_id = commit_state.AllocateCatalogId();
 	partition_key.id = partition_id;
 	partition_data->partition_id = partition_id;
 	for (auto &field : partition_data->fields) {
@@ -1082,7 +1098,7 @@ DuckLakeSortInfo DuckLakeTransaction::GetNewSortKey(DuckLakeCommitState &commit_
 		return sort_key;
 	}
 
-	auto sort_id = commit_state.commit_snapshot.next_catalog_id++;
+	auto sort_id = commit_state.AllocateCatalogId();
 	sort_key.id = sort_id;
 	sort_data->sort_id = sort_id;
 	for (auto &field : sort_data->fields) {
@@ -1130,7 +1146,7 @@ DuckLakeTableInfo DuckLakeTransaction::GetNewTable(DuckLakeCommitState &commit_s
 	auto original_id = table_entry.id;
 	bool is_new_table;
 	if (IsTransactionLocal(original_id.index)) {
-		table_entry.id = TableIndex(commit_state.commit_snapshot.next_catalog_id++);
+		table_entry.id = TableIndex(commit_state.AllocateCatalogId());
 		is_new_table = true;
 	} else {
 		// this table already has an id - keep it
@@ -1151,7 +1167,7 @@ DuckLakeViewInfo DuckLakeTransaction::GetNewView(DuckLakeCommitState &commit_sta
 	DuckLakeViewInfo view_entry;
 	auto original_id = view.GetViewId();
 	if (IsTransactionLocal(original_id.index)) {
-		view_entry.id = TableIndex(commit_state.commit_snapshot.next_catalog_id++);
+		view_entry.id = TableIndex(commit_state.AllocateCatalogId());
 	} else {
 		// this view already has an id - keep it
 		// this happens if e.g. this view is renamed
@@ -1240,10 +1256,10 @@ DuckLakeColumnStatsInfo DuckLakeColumnStatsInfo::FromColumnStats(FieldIndex fiel
 	return column_stats;
 }
 
-DuckLakeFileInfo DuckLakeTransaction::BuildDataFileInfo(const DuckLakeDataFile &file, DuckLakeSnapshot &commit_snapshot,
+DuckLakeFileInfo DuckLakeTransaction::BuildDataFileInfo(const DuckLakeDataFile &file, DuckLakeCommitState &commit_state,
                                                         TableIndex table_id, optional_idx row_id_start) {
 	DuckLakeFileInfo data_file;
-	data_file.id = DataFileIndex(commit_snapshot.next_file_id++);
+	data_file.id = DataFileIndex(commit_state.AllocateFileId());
 	data_file.table_id = table_id;
 	data_file.file_name = file.file_name;
 	data_file.row_count = file.row_count;
@@ -1270,7 +1286,7 @@ DuckLakeDeleteFileInfo DuckLakeTransaction::GetNewDeleteFile(TableIndex table_id
                                                              const DuckLakeCommitState &commit_state,
                                                              const DuckLakeDeleteFile &file) {
 	DuckLakeDeleteFileInfo delete_file;
-	delete_file.id = DataFileIndex(commit_state.commit_snapshot.next_file_id++);
+	delete_file.id = DataFileIndex(commit_state.AllocateFileId());
 	delete_file.table_id = table_id;
 	delete_file.data_file_id = file.data_file_id;
 	delete_file.path = file.file_name;
@@ -1286,17 +1302,37 @@ DuckLakeDeleteFileInfo DuckLakeTransaction::GetNewDeleteFile(TableIndex table_id
 }
 
 bool DuckLakeTransaction::RetryOnError(const string &original_message) {
+	return RetryOnError(original_message, ExceptionType::INVALID);
+}
+
+bool DuckLakeTransaction::RetryOnError(const string &original_message, ExceptionType type) {
+	// DuckLake's own logical conflicts are thrown as TransactionException; classify those by type,
+	// matching DuckDB core's MVCC handling. Backend (postgres) errors cross back untyped, so the
+	// checks below fall back to the message string.
+	if (type == ExceptionType::TRANSACTION) {
+		return true;
+	}
 	auto message = StringUtil::Lower(original_message);
-	// retry on primary key errors
 	if (StringUtil::Contains(message, "primary key") || StringUtil::Contains(message, "unique")) {
 		return true;
 	}
-	// retry on conflicts
 	if (StringUtil::Contains(message, "conflict")) {
 		return true;
 	}
-	// retry on concurrent access
 	if (StringUtil::Contains(message, "concurrent")) {
+		return true;
+	}
+	// postgres serialization failure (SQLSTATE 40001)
+	if (StringUtil::Contains(message, "could not serialize")) {
+		return true;
+	}
+	// deadlock (postgres 40P01 / duckdb): a victim is rolled back, retry can succeed
+	if (StringUtil::Contains(message, "deadlock")) {
+		return true;
+	}
+	// connection dropped mid-commit: outcome unknown, re-attempt under the conflict check
+	if (StringUtil::Contains(message, "server closed the connection") ||
+	    StringUtil::Contains(message, "connection to server") || StringUtil::Contains(message, "connection reset")) {
 		return true;
 	}
 	return false;
@@ -1378,6 +1414,21 @@ void DuckLakeTransaction::RunCommitLoop(DuckLakeSnapshot transaction_snapshot,
 	};
 	context.get_snapshot = [&]() {
 		return GetSnapshot();
+	};
+	context.allocate_snapshot_id = [&](idx_t current) {
+		return metadata_manager->AllocateNextSnapshotId(current);
+	};
+	context.allocate_catalog_id = [&](idx_t current) {
+		return metadata_manager->AllocateNextCatalogId(current);
+	};
+	context.allocate_file_id = [&](idx_t current) {
+		return metadata_manager->AllocateNextFileId(current);
+	};
+	context.allocate_schema_version = [&](idx_t current) {
+		return metadata_manager->AllocateNextSchemaVersion(current);
+	};
+	context.acquire_commit_lock = [&]() {
+		metadata_manager->AcquireCommitLock();
 	};
 	context.execute_commit_batch = [&](DuckLakeSnapshot snapshot, string &query) {
 		return metadata_manager->Execute(snapshot, query);

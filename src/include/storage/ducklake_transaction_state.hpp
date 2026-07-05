@@ -24,6 +24,25 @@ struct DuckLakeColumnSchemaEntry {
 };
 
 struct DuckLakeCommitContext {
+	//! Id allocation hooks. Default to today's client-side semantics (snapshot/schema_version = current+1,
+	//! catalog/file = current, i.e. the caller's own ++). Postgres overrides these to draw from
+	//! server-side sequences whose nextval() is race-free across concurrent committers.
+	std::function<idx_t(idx_t)> allocate_snapshot_id = [](idx_t current) {
+		return current + 1;
+	};
+	std::function<idx_t(idx_t)> allocate_catalog_id = [](idx_t current) {
+		return current;
+	};
+	std::function<idx_t(idx_t)> allocate_file_id = [](idx_t current) {
+		return current;
+	};
+	std::function<idx_t(idx_t)> allocate_schema_version = [](idx_t current) {
+		return current + 1;
+	};
+	//! Serializes commit attempts so conflict detection sees every prior committer. Default no-op (no
+	//! cross-connection race); postgres wires this to an advisory lock held for the whole attempt.
+	std::function<void()> acquire_commit_lock = []() {
+	};
 	//! Runs a metadata-DB query during conflict resolution.
 	std::function<unique_ptr<QueryResult>(string)> conflict_query_executor;
 	//! Returns the latest snapshot for the first commit attempt.

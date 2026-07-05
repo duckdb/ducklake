@@ -185,6 +185,20 @@ public:
 	virtual string GetVersionString();
 	virtual DuckLakeMetadata LoadDuckLake();
 
+	//! Id allocation hooks. The base (duckdb/sqlite) keeps client-side MAX+1 semantics; postgres
+	//! overrides these to draw from server-side sequences whose nextval() is race-free.
+	virtual idx_t AllocateNextSnapshotId(idx_t current_snapshot_id);
+	virtual idx_t AllocateNextCatalogId(idx_t current_next_catalog_id);
+	virtual idx_t AllocateNextFileId(idx_t current_next_file_id);
+	virtual idx_t AllocateNextSchemaVersion(idx_t current_schema_version);
+	//! Backends with non-transactional id allocation override to create/calibrate the sequences.
+	virtual void EnsureIdSequences() {
+	}
+	//! Serializes commit attempts so conflict detection sees every prior committer. The base (duckdb/sqlite)
+	//! has no cross-connection race, so this is a no-op; postgres overrides with an advisory lock.
+	virtual void AcquireCommitLock() {
+	}
+
 	virtual unique_ptr<QueryResult> Execute(DuckLakeSnapshot snapshot, string &query);
 	virtual unique_ptr<QueryResult> Execute(string &query);
 
