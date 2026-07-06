@@ -15,7 +15,7 @@ test-env DATA_PATH {TEST_DIR}
 # Raw postgres attach used to inspect/manipulate the metadata schema directly, independent of
 # any DuckLake attach's own metadata sub-catalog (which disappears on DETACH).
 statement ok
-ATTACH 'dbname=ducklakedb' AS pgraw (TYPE postgres)
+ATTACH 'host=localhost dbname=ducklakedb' AS pgraw (TYPE postgres)
 
 # Scenario 5.1 + 5.3: fresh bootstrap creates all 8 objects, calibrated so the first nextval()
 # equals the next-to-assign id (MAX starts at 0 rows -> first snapshot_id must be 1)

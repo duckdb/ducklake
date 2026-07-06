@@ -15,7 +15,7 @@ test-env DATA_PATH {TEST_DIR}
 
 # Scenario: no user override -> read committed applied
 statement ok
-ATTACH 'ducklake:postgres:dbname=ducklakedb' AS dl (DATA_PATH '{DATA_PATH}/iso_default')
+ATTACH 'ducklake:postgres:host=localhost dbname=ducklakedb' AS dl (DATA_PATH '{DATA_PATH}/iso_default')
 
 statement ok
 USE dl

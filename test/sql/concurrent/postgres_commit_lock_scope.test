@@ -13,7 +13,7 @@ require-env DUCKLAKE_CI
 test-env DATA_PATH {TEST_DIR}
 
 statement ok
-ATTACH 'dbname=ducklakedb' AS pgraw (TYPE postgres)
+ATTACH 'host=localhost dbname=ducklakedb' AS pgraw (TYPE postgres)
 
 # Scenario: comment-only ALTER TABLE does not bump schema_version, so a concurrent
 # data-only commit on another table must not be blocked by it, and must not
