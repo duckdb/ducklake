@@ -178,12 +178,16 @@ COMMIT
 statement ok con2
 COMMIT
 
-# both schema changes visible, each with a distinct, correctly-ordered schema_version
+# both schema changes visible, each with a distinct, correctly-ordered schema_version:
+# con1's and con2's snapshots (the two most recent) must carry two DIFFERENT
+# schema_versions, since both alters are real bumps (unlike scenario 1's comment-only alter).
 statement ok
 CALL pg_clear_cache()
 
 query I
-SELECT COUNT(DISTINCT schema_version) FROM pgraw.metadata_ls3.ducklake_snapshot WHERE schema_version IS NOT NULL
+SELECT COUNT(DISTINCT schema_version) FROM (
+  SELECT schema_version FROM pgraw.metadata_ls3.ducklake_snapshot ORDER BY snapshot_id DESC LIMIT 2
+) t
 ----
 2
 

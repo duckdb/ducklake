@@ -253,16 +253,14 @@ void PostgresMetadataManager::EnsureIdSequences() {
 
 	// IF NOT EXISTS is not concurrency-safe on postgres DDL; serialize bootstrap.
 	auto classid = EnsureCatalogClassid();
-	string acquire =
-	    "SELECT pg_advisory_lock(" + std::to_string(static_cast<int32_t>(classid)) + ", " +
-	    std::to_string(DUCKLAKE_BOOTSTRAP_ADVISORY_SUBKEY) + ")";
+	string acquire = "SELECT pg_advisory_lock(" + std::to_string(static_cast<int32_t>(classid)) + ", " +
+	                 std::to_string(DUCKLAKE_BOOTSTRAP_ADVISORY_SUBKEY) + ")";
 	auto acq_res = Execute(dummy, acquire);
 	if (acq_res->HasError()) {
 		acq_res->GetErrorObject().Throw("concurrent: DuckLake bootstrap serialization lock failed: ");
 	}
-	string release =
-	    "SELECT pg_advisory_unlock(" + std::to_string(static_cast<int32_t>(classid)) + ", " +
-	    std::to_string(DUCKLAKE_BOOTSTRAP_ADVISORY_SUBKEY) + ")";
+	string release = "SELECT pg_advisory_unlock(" + std::to_string(static_cast<int32_t>(classid)) + ", " +
+	                 std::to_string(DUCKLAKE_BOOTSTRAP_ADVISORY_SUBKEY) + ")";
 	auto release_lock = [&]() {
 		auto r = Execute(dummy, release);
 		(void)r;
