@@ -47,6 +47,11 @@ struct DuckLakeCommitContext {
 	    };
 	//! Runs a metadata-DB query during conflict resolution.
 	std::function<unique_ptr<QueryResult>(string)> conflict_query_executor;
+	//! Builds the query text for GetSnapshotAndStatsAndChanges. Postgres wires this to wrap the query in
+	//! postgres_query(...) so the snapshot-row and stats-row branches of its UNION ALL are read in a
+	//! single Postgres statement/snapshot instead of two separate remote scans, which can otherwise
+	//! observe different commits under concurrency.
+	std::function<string()> snapshot_and_stats_query;
 	//! Returns the latest snapshot for the first commit attempt.
 	std::function<DuckLakeSnapshot()> get_snapshot;
 	//! Executes the batched snapshot/changes SQL against the metadata DB.
@@ -144,7 +149,8 @@ public:
 
 	SnapshotAndStats CheckForConflicts(DuckLakeSnapshot transaction_snapshot,
 	                                   const TransactionChangeInformation &changes,
-	                                   const std::function<unique_ptr<QueryResult>(string)> &executor);
+	                                   const std::function<unique_ptr<QueryResult>(string)> &executor,
+	                                   const std::function<string()> &snapshot_and_stats_query);
 	void CheckForConflicts(const TransactionChangeInformation &changes, const SnapshotChangeInformation &other_changes,
 	                       DuckLakeSnapshot transaction_snapshot,
 	                       const std::function<unique_ptr<QueryResult>(string)> &executor) const;

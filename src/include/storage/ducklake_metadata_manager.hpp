@@ -363,8 +363,13 @@ public:
 	static string UpdateGlobalTableStatsSql(const DuckLakeGlobalStatsInfo &stats);
 	static SnapshotChangeInfo
 	GetSnapshotAndStatsAndChanges(SnapshotAndStats &current_snapshot,
-	                              const std::function<unique_ptr<QueryResult>(string)> &executor);
-	static string GetSnapshotAndStatsAndChangesQuery();
+	                              const std::function<unique_ptr<QueryResult>(string)> &executor,
+	                              const std::function<string()> &query_builder);
+	//! Plain, backend-agnostic query text. Postgres overrides GetSnapshotAndStatsAndChangesQuery()
+	//! (protected section below) to wrap this in postgres_query(...) so both UNION ALL branches read a
+	//! single Postgres statement/snapshot instead of two separate remote scans.
+	static string BaseSnapshotAndStatsAndChangesQuery();
+	virtual string GetSnapshotAndStatsAndChangesQuery();
 	static SnapshotChangeInfo ParseSnapshotAndStatsAndChanges(QueryResult &result, SnapshotAndStats &current_snapshot);
 	virtual unique_ptr<DuckLakeSnapshot> GetSnapshot();
 	virtual unique_ptr<DuckLakeSnapshot> GetSnapshot(BoundAtClause &at_clause, SnapshotBound bound);

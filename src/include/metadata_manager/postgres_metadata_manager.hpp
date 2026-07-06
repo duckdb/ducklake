@@ -47,6 +47,7 @@ public:
 
 protected:
 	string GetLatestSnapshotQuery() const override;
+	string GetSnapshotAndStatsAndChangesQuery() override;
 	string GenerateFileColumnStatsCTEBody(const CTERequirement &req, TableIndex table_id) override;
 
 private:

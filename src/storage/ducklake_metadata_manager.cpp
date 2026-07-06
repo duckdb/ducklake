@@ -4210,6 +4210,10 @@ string DuckLakeMetadataManager::WriteSnapshotChangesSql(const SnapshotChangeInfo
 }
 
 string DuckLakeMetadataManager::GetSnapshotAndStatsAndChangesQuery() {
+	return BaseSnapshotAndStatsAndChangesQuery();
+}
+
+string DuckLakeMetadataManager::BaseSnapshotAndStatsAndChangesQuery() {
 	return R"(
 SELECT
     0 AS branch_order,
@@ -4284,8 +4288,9 @@ SnapshotChangeInfo DuckLakeMetadataManager::ParseSnapshotAndStatsAndChanges(Quer
 
 SnapshotChangeInfo
 DuckLakeMetadataManager::GetSnapshotAndStatsAndChanges(SnapshotAndStats &current_snapshot,
-                                                       const std::function<unique_ptr<QueryResult>(string)> &executor) {
-	auto result = executor(GetSnapshotAndStatsAndChangesQuery());
+                                                       const std::function<unique_ptr<QueryResult>(string)> &executor,
+                                                       const std::function<string()> &query_builder) {
+	auto result = executor(query_builder());
 	return ParseSnapshotAndStatsAndChanges(*result, current_snapshot);
 }
 

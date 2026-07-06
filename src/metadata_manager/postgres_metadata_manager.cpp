@@ -132,6 +132,13 @@ string PostgresMetadataManager::GetLatestSnapshotQuery() const {
 	)";
 }
 
+string PostgresMetadataManager::GetSnapshotAndStatsAndChangesQuery() {
+	auto inner_query = StringUtil::Replace(DuckLakeMetadataManager::BaseSnapshotAndStatsAndChangesQuery(),
+	                                       "{METADATA_CATALOG}", "{METADATA_SCHEMA_ESCAPED}");
+	inner_query = StringUtil::Replace(inner_query, "'", "''");
+	return "SELECT * FROM postgres_query({METADATA_CATALOG_NAME_LITERAL}, '" + inner_query + "')";
+}
+
 idx_t PostgresMetadataManager::FetchScalarSequenceValue(const string &seq_name) {
 	DuckLakeSnapshot dummy {0, 0, 0, 0};
 	string query = "SELECT * FROM postgres_query({METADATA_CATALOG_NAME_LITERAL}, "

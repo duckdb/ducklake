@@ -1794,10 +1794,12 @@ WHERE idt.schema_version < (
 SnapshotAndStats
 DuckLakeTransactionState::CheckForConflicts(DuckLakeSnapshot transaction_snapshot,
                                             const TransactionChangeInformation &changes,
-                                            const std::function<unique_ptr<QueryResult>(string)> &executor) {
+                                            const std::function<unique_ptr<QueryResult>(string)> &executor,
+                                            const std::function<string()> &snapshot_and_stats_query) {
 	SnapshotAndStats snapshot_and_stats;
 	// get all changes made to the system after the current snapshot was started
-	auto changes_made = DuckLakeMetadataManager::GetSnapshotAndStatsAndChanges(snapshot_and_stats, executor);
+	auto changes_made =
+	    DuckLakeMetadataManager::GetSnapshotAndStatsAndChanges(snapshot_and_stats, executor, snapshot_and_stats_query);
 	// parse changes made by other transactions
 	auto other_changes = SnapshotChangeInformation::ParseChangesMade(changes_made.changes_made);
 
@@ -1827,7 +1829,8 @@ void DuckLakeTransactionState::Commit(DuckLakeSnapshot transaction_snapshot,
 			// again - so gate retry off across this call only.
 			can_retry = false;
 			commit_stats_snapshot =
-			    CheckForConflicts(transaction_snapshot, attempt_changes, context.conflict_query_executor);
+			    CheckForConflicts(transaction_snapshot, attempt_changes, context.conflict_query_executor,
+			                      context.snapshot_and_stats_query);
 			stats = &commit_stats_snapshot.stats;
 			can_retry = true;
 			commit_snapshot.snapshot_id = context.allocate_snapshot_id(commit_snapshot.snapshot_id);
