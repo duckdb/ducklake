@@ -102,7 +102,10 @@
         "test/sql/autoloading/autoload_data_path.test",
         "test/sql/data_inlining/postgres_identifier_limit.test",
         "test/sql/issues/issue_sqlite_snapshot_time.test",
-        "test/sql/metadata/ducklake_settings_minio.test"
+        "test/sql/metadata/ducklake_settings_minio.test",
+        "test/sql/concurrent/postgres_commit_lock_scope.test",
+        "test/sql/concurrent/postgres_id_sequences.test",
+        "test/sql/concurrent/postgres_isolation_level.test"
       ]
     },
     {

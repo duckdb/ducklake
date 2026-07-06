@@ -37,6 +37,9 @@ USE memory
 statement ok
 DETACH dl
 
+statement ok
+CALL pg_clear_cache()
+
 query I
 SELECT COUNT(*) FROM pgraw.pg_catalog.pg_class c JOIN pgraw.pg_catalog.pg_namespace n ON c.relnamespace = n.oid
 WHERE n.nspname = 'metadata_s1' AND c.relname IN (
@@ -99,6 +102,9 @@ USE memory
 statement ok
 DETACH dl2
 
+statement ok
+CALL pg_clear_cache()
+
 query I
 SELECT COUNT(*) = COUNT(DISTINCT snapshot_id) FROM pgraw.metadata_s2.ducklake_snapshot
 ----
@@ -137,6 +143,9 @@ USE memory
 statement ok
 DETACH dl3
 
+statement ok
+CALL pg_clear_cache()
+
 query I
 SELECT COUNT(*) FROM pgraw.metadata_s3.ducklake_table WHERE table_name = 'dup' AND end_snapshot IS NULL
 ----
@@ -161,6 +170,9 @@ USE memory
 
 statement ok
 DETACH dl4
+
+statement ok
+CALL pg_clear_cache()
 
 statement ok
 DROP INDEX pgraw.metadata_s4.ducklake_table_name_active_uidx
@@ -220,6 +232,9 @@ DETACH dl5
 
 # Roll the sequence back to a value below the catalog's true MAX(snapshot_id) - simulates C1
 statement ok
+CALL pg_clear_cache()
+
+statement ok
 SELECT setval('pgraw.metadata_s5.ducklake_snapshot_id_seq', 1, true)
 
 statement ok
@@ -267,6 +282,9 @@ USE memory
 
 statement ok
 DETACH dl6
+
+statement ok
+CALL pg_clear_cache()
 
 statement ok
 DROP SEQUENCE pgraw.metadata_s6.ducklake_snapshot_id_seq, pgraw.metadata_s6.ducklake_catalog_id_seq, pgraw.metadata_s6.ducklake_file_id_seq, pgraw.metadata_s6.ducklake_schema_version_seq
