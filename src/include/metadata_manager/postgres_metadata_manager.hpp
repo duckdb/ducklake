@@ -41,7 +41,7 @@ public:
 	idx_t AllocateNextCatalogId(idx_t current_next_catalog_id) override;
 	idx_t AllocateNextFileId(idx_t current_next_file_id) override;
 	idx_t AllocateNextSchemaVersion(idx_t current_schema_version) override;
-	void AcquireCommitLock() override;
+	void AcquireCommitLock(const TransactionChangeInformation &changes) override;
 
 	void EnsureIdSequences() override;
 

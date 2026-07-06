@@ -1822,7 +1822,7 @@ void DuckLakeTransactionState::Commit(DuckLakeSnapshot transaction_snapshot,
 			// serialize commit attempts (no-op unless the backend has a cross-connection commit race) so
 			// conflict detection below sees every prior committer that has since committed. A transient
 			// lock failure (e.g. lock_timeout) is retriable.
-			context.acquire_commit_lock();
+			context.acquire_commit_lock(attempt_changes);
 			// Logical conflicts raised here are not retriable - the same transaction state would throw
 			// again - so gate retry off across this call only.
 			can_retry = false;

@@ -1427,8 +1427,8 @@ void DuckLakeTransaction::RunCommitLoop(DuckLakeSnapshot transaction_snapshot,
 	context.allocate_schema_version = [&](idx_t current) {
 		return metadata_manager->AllocateNextSchemaVersion(current);
 	};
-	context.acquire_commit_lock = [&]() {
-		metadata_manager->AcquireCommitLock();
+	context.acquire_commit_lock = [&](const TransactionChangeInformation &changes) {
+		metadata_manager->AcquireCommitLock(changes);
 	};
 	context.execute_commit_batch = [&](DuckLakeSnapshot snapshot, string &query) {
 		return metadata_manager->Execute(snapshot, query);

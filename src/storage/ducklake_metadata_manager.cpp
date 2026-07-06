@@ -4212,6 +4212,7 @@ string DuckLakeMetadataManager::WriteSnapshotChangesSql(const SnapshotChangeInfo
 string DuckLakeMetadataManager::GetSnapshotAndStatsAndChangesQuery() {
 	return R"(
 SELECT
+    0 AS branch_order,
     snapshot_id,
     schema_version,
     next_catalog_id,
@@ -4237,6 +4238,7 @@ SELECT
         FROM {METADATA_CATALOG}.ducklake_snapshot)
 UNION ALL
 SELECT
+    1 AS branch_order,
     NULL,
     NULL,
     NULL,
@@ -4257,7 +4259,7 @@ LEFT JOIN {METADATA_CATALOG}.ducklake_table_column_stats
     USING (table_id)
 WHERE record_count IS NOT NULL
     AND file_size_bytes IS NOT NULL
-ORDER BY table_id NULLS FIRST;
+ORDER BY branch_order, table_id NULLS FIRST;
 	)";
 }
 
@@ -4267,13 +4269,13 @@ SnapshotChangeInfo DuckLakeMetadataManager::ParseSnapshotAndStatsAndChanges(Quer
 	bool first_row = true;
 	for (auto &row : result) {
 		if (first_row) {
-			current_snapshot.snapshot.snapshot_id = row.GetValue<idx_t>(0);
-			current_snapshot.snapshot.schema_version = row.GetValue<idx_t>(1);
-			current_snapshot.snapshot.next_catalog_id = row.GetValue<idx_t>(2);
-			current_snapshot.snapshot.next_file_id = row.GetValue<idx_t>(3);
-			change_info.changes_made = row.GetValue<string>(4);
+			current_snapshot.snapshot.snapshot_id = row.GetValue<idx_t>(1);
+			current_snapshot.snapshot.schema_version = row.GetValue<idx_t>(2);
+			current_snapshot.snapshot.next_catalog_id = row.GetValue<idx_t>(3);
+			current_snapshot.snapshot.next_file_id = row.GetValue<idx_t>(4);
+			change_info.changes_made = row.GetValue<string>(5);
 		} else {
-			TransformGlobalStatsRow(row, current_snapshot.stats, 5);
+			TransformGlobalStatsRow(row, current_snapshot.stats, 6);
 		}
 		first_row = false;
 	}

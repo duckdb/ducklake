@@ -218,4 +218,12 @@ SnapshotChangeInformation SnapshotChangeInformation::ParseChangesMade(const stri
 	return result;
 }
 
+bool RequiresCommitLock(const TransactionChangeInformation &changes) {
+	return !changes.created_tables.empty() || !changes.dropped_tables.empty() || !changes.created_schemas.empty() ||
+	       !changes.dropped_schemas.empty() || !changes.dropped_views.empty() ||
+	       !changes.created_scalar_macros.empty() || !changes.created_table_macros.empty() ||
+	       !changes.dropped_scalar_macros.empty() || !changes.dropped_table_macros.empty() ||
+	       !changes.altered_tables_with_schema_version_changes.empty();
+}
+
 } // namespace duckdb

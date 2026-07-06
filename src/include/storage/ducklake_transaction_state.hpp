@@ -40,9 +40,11 @@ struct DuckLakeCommitContext {
 		return current + 1;
 	};
 	//! Serializes commit attempts so conflict detection sees every prior committer. Default no-op (no
-	//! cross-connection race); postgres wires this to an advisory lock held for the whole attempt.
-	std::function<void()> acquire_commit_lock = []() {
-	};
+	//! cross-connection race); postgres wires this to an advisory lock held for the whole attempt, taken
+	//! only when RequiresCommitLock(changes) is true (adr/0001-postgres-commit-lock-gating-predicate.md).
+	std::function<void(const TransactionChangeInformation &)> acquire_commit_lock =
+	    [](const TransactionChangeInformation &) {
+	    };
 	//! Runs a metadata-DB query during conflict resolution.
 	std::function<unique_ptr<QueryResult>(string)> conflict_query_executor;
 	//! Returns the latest snapshot for the first commit attempt.

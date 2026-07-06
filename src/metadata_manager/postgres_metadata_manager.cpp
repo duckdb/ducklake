@@ -3,6 +3,7 @@
 #include "duckdb/main/database.hpp"
 #include "storage/ducklake_catalog.hpp"
 #include "storage/ducklake_transaction.hpp"
+#include "storage/ducklake_transaction_changes.hpp"
 #include "storage/ducklake_metadata_info.hpp"
 
 namespace duckdb {
@@ -133,7 +134,9 @@ string PostgresMetadataManager::GetLatestSnapshotQuery() const {
 
 idx_t PostgresMetadataManager::FetchScalarSequenceValue(const string &seq_name) {
 	DuckLakeSnapshot dummy {0, 0, 0, 0};
-	string query = "SELECT nextval('{METADATA_SCHEMA_ESCAPED}." + seq_name + "')";
+	string query = "SELECT * FROM postgres_query({METADATA_CATALOG_NAME_LITERAL}, "
+	               "'SELECT nextval(''{METADATA_SCHEMA_ESCAPED}." +
+	               seq_name + "'')')";
 	auto result = Query(dummy, query);
 	if (result->HasError()) {
 		result->GetErrorObject().Throw("Failed to allocate next value from " + seq_name + ": ");
@@ -172,7 +175,8 @@ idx_t PostgresMetadataManager::EnsureCatalogClassid() {
 		return commit_lock_classid.GetIndex();
 	}
 	DuckLakeSnapshot dummy {};
-	string probe = "SELECT hashtext({METADATA_CATALOG_NAME_LITERAL})::int4";
+	string probe = "SELECT * FROM postgres_query({METADATA_CATALOG_NAME_LITERAL}, "
+	               "'SELECT hashtext(''{METADATA_SCHEMA_ESCAPED}'')::int4')";
 	auto probe_result = Query(dummy, probe);
 	if (probe_result->HasError()) {
 		probe_result->GetErrorObject().Throw("concurrent: failed to compute DuckLake advisory lock classid: ");
@@ -185,7 +189,10 @@ idx_t PostgresMetadataManager::EnsureCatalogClassid() {
 	return commit_lock_classid.GetIndex();
 }
 
-void PostgresMetadataManager::AcquireCommitLock() {
+void PostgresMetadataManager::AcquireCommitLock(const TransactionChangeInformation &changes) {
+	if (!RequiresCommitLock(changes)) {
+		return;
+	}
 	DuckLakeSnapshot dummy {};
 	auto classid = EnsureCatalogClassid();
 

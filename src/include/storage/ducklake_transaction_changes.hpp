@@ -43,6 +43,12 @@ struct TransactionChangeInformation {
 	set<TableIndex> tables_rewrite_delete;
 };
 
+//! True if this commit changes anything the schema cache's schema_version-allocation-order invariant
+//! cares about, per adr/0001-postgres-commit-lock-gating-predicate.md. Every field on
+//! TransactionChangeInformation must be classified here (either checked below or explicitly excluded)
+//! - see the ADR before adding a new field.
+bool RequiresCommitLock(const TransactionChangeInformation &changes);
+
 struct SnapshotChangeInformation {
 	case_insensitive_set_t created_schemas;
 	set<SchemaIndex> dropped_schemas;

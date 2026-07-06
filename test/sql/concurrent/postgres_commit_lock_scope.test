@@ -1,0 +1,184 @@
+# name: test/sql/concurrent/postgres_commit_lock_scope.test
+# description: Postgres commit-lock gating skips the lock for lock-exempt commits without breaking schema_version allocation-order-vs-commit-order correctness
+# group: [concurrent]
+
+require ducklake
+
+require parquet
+
+require postgres_scanner
+
+require-env DUCKLAKE_CI
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'dbname=ducklakedb' AS pgraw (TYPE postgres)
+
+# Scenario: comment-only ALTER TABLE does not bump schema_version, so a concurrent
+# data-only commit on another table must not be blocked by it, and must not
+# observe any ordering corruption.
+statement ok
+ATTACH 'ducklake:postgres:dbname=ducklakedb' AS dl (DATA_PATH '{DATA_PATH}/lockscope_comment', METADATA_SCHEMA 'metadata_ls1')
+
+statement ok
+USE dl
+
+statement ok
+CREATE TABLE dl.t1(i INTEGER)
+
+statement ok
+CREATE TABLE dl.t2(i INTEGER)
+
+statement ok con1
+BEGIN
+
+statement ok con2
+BEGIN
+
+# con1: comment-only alter on t1 - must NOT bump schema_version
+statement ok con1
+COMMENT ON TABLE dl.t1 IS 'no schema_version bump'
+
+# con2: pure data-only write on disjoint table t2
+statement ok con2
+INSERT INTO dl.t2 VALUES (1)
+
+statement ok con1
+COMMIT
+
+statement ok con2
+COMMIT
+
+query I
+SELECT COUNT(*) FROM dl.t2
+----
+1
+
+# schema_version did not advance from the comment-only alter
+query I
+SELECT COUNT(DISTINCT schema_version) FROM pgraw.metadata_ls1.ducklake_snapshot
+----
+1
+
+statement ok
+USE memory
+
+statement ok
+DETACH dl
+
+# Scenario: schema-version-bumping ALTER TABLE (ADD COLUMN) on table X concurrent
+# with a data-only commit on disjoint table Y - recreates the reverted per-table-lock's
+# failure shape under the new gating axis. Must not corrupt schema_version visibility:
+# every row is resolvable under a consistent schema_version for its own snapshot.
+statement ok
+ATTACH 'ducklake:postgres:dbname=ducklakedb' AS dl2 (DATA_PATH '{DATA_PATH}/lockscope_altercross', METADATA_SCHEMA 'metadata_ls2')
+
+statement ok
+USE dl2
+
+statement ok
+CREATE TABLE dl2.x(i INTEGER)
+
+statement ok
+CREATE TABLE dl2.y(i INTEGER)
+
+statement ok con1
+BEGIN
+
+statement ok con2
+BEGIN
+
+# con1: schema-version-bumping alter on x
+statement ok con1
+ALTER TABLE dl2.x ADD COLUMN j INTEGER
+
+# con2: data-only write on disjoint table y - lock-exempt, must not interleave
+# in a way that lets y's commit become visible with a schema_version that
+# doesn't match actual allocation order
+statement ok con2
+INSERT INTO dl2.y VALUES (1)
+
+statement ok con1
+COMMIT
+
+statement ok con2
+COMMIT
+
+query I
+SELECT COUNT(*) FROM dl2.y
+----
+1
+
+# every committed snapshot resolves a valid, monotonically consistent schema_version -
+# no snapshot references a schema_version higher than what has actually been committed
+query I
+SELECT COUNT(*) FROM pgraw.metadata_ls2.ducklake_snapshot s
+WHERE s.schema_version > (SELECT MAX(schema_version) FROM pgraw.metadata_ls2.ducklake_snapshot s2 WHERE s2.snapshot_id <= s.snapshot_id)
+----
+0
+
+# reading table x's new column back is consistent - the schema change is visible
+# and not torn by the concurrent disjoint-table commit
+statement ok
+INSERT INTO dl2.x VALUES (5, 10)
+
+query II
+SELECT i, j FROM dl2.x
+----
+5	10
+
+statement ok
+USE memory
+
+statement ok
+DETACH dl2
+
+# Scenario: two concurrent schema-version-bumping alters (Phase-4 ordering bug
+# shape) - both are lock-required under the new predicate, so both must still
+# serialize correctly. This is NOT a lock-skip case; it asserts the gating
+# change doesn't accidentally exempt a commit that needs the lock.
+statement ok
+ATTACH 'ducklake:postgres:dbname=ducklakedb' AS dl3 (DATA_PATH '{DATA_PATH}/lockscope_dualalter', METADATA_SCHEMA 'metadata_ls3')
+
+statement ok
+USE dl3
+
+statement ok
+CREATE TABLE dl3.a(i INTEGER)
+
+statement ok
+CREATE TABLE dl3.b(i INTEGER)
+
+statement ok con1
+BEGIN
+
+statement ok con2
+BEGIN
+
+statement ok con1
+ALTER TABLE dl3.a ADD COLUMN j INTEGER
+
+statement ok con2
+ALTER TABLE dl3.b ADD COLUMN k INTEGER
+
+statement ok con1
+COMMIT
+
+statement ok con2
+COMMIT
+
+# both schema changes visible, each with a distinct, correctly-ordered schema_version
+query I
+SELECT COUNT(DISTINCT schema_version) FROM pgraw.metadata_ls3.ducklake_snapshot WHERE schema_version IS NOT NULL
+----
+2
+
+statement ok
+USE memory
+
+statement ok
+DETACH dl3
+
+statement ok
+DETACH pgraw

@@ -195,8 +195,9 @@ public:
 	virtual void EnsureIdSequences() {
 	}
 	//! Serializes commit attempts so conflict detection sees every prior committer. The base (duckdb/sqlite)
-	//! has no cross-connection race, so this is a no-op; postgres overrides with an advisory lock.
-	virtual void AcquireCommitLock() {
+	//! has no cross-connection race, so this is a no-op; postgres overrides with an advisory lock, taken only
+	//! when RequiresCommitLock(changes) is true (see adr/0001-postgres-commit-lock-gating-predicate.md).
+	virtual void AcquireCommitLock(const TransactionChangeInformation &changes) {
 	}
 
 	virtual unique_ptr<QueryResult> Execute(DuckLakeSnapshot snapshot, string &query);
