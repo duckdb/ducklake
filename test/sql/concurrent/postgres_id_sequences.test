@@ -52,13 +52,15 @@ WHERE n.nspname = 'metadata_s1' AND c.relname IN (
 8
 
 # snapshot_id sequence is calibrated: is_called is true, last_value covers every committed snapshot
+# (postgres_scanner does not catalog sequences as relations, so raw dotted access to a sequence
+# is not possible - go through postgres_query() instead, which runs the SQL text as-is on Postgres)
 query I
-SELECT is_called FROM pgraw.metadata_s1.ducklake_snapshot_id_seq
+SELECT is_called FROM postgres_query('pgraw', 'SELECT is_called FROM metadata_s1.ducklake_snapshot_id_seq') t(is_called)
 ----
 true
 
 query I
-SELECT (SELECT last_value FROM pgraw.metadata_s1.ducklake_snapshot_id_seq) >= (SELECT MAX(snapshot_id) FROM pgraw.metadata_s1.ducklake_snapshot)
+SELECT (SELECT last_value FROM postgres_query('pgraw', 'SELECT last_value FROM metadata_s1.ducklake_snapshot_id_seq') t(last_value)) >= (SELECT MAX(snapshot_id) FROM pgraw.metadata_s1.ducklake_snapshot)
 ----
 true
 
@@ -231,11 +233,12 @@ statement ok
 DETACH dl5
 
 # Roll the sequence back to a value below the catalog's true MAX(snapshot_id) - simulates C1
+# (setval() must run on Postgres itself via postgres_query(), not DuckDB's own engine)
 statement ok
 CALL pg_clear_cache()
 
 statement ok
-SELECT setval('pgraw.metadata_s5.ducklake_snapshot_id_seq', 1, true)
+SELECT * FROM postgres_query('pgraw', 'SELECT setval(''metadata_s5.ducklake_snapshot_id_seq'', 1, true)')
 
 statement ok
 ATTACH 'ducklake:postgres:dbname=ducklakedb' AS dl5b (DATA_PATH '{DATA_PATH}/seq_uncalibrated', METADATA_SCHEMA 'metadata_s5')
@@ -286,11 +289,13 @@ DETACH dl6
 statement ok
 CALL pg_clear_cache()
 
+# DuckDB's own DROP grammar can only drop one object at a time - run the multi-object
+# DROP as raw SQL directly on Postgres via postgres_execute() instead.
 statement ok
-DROP SEQUENCE pgraw.metadata_s6.ducklake_snapshot_id_seq, pgraw.metadata_s6.ducklake_catalog_id_seq, pgraw.metadata_s6.ducklake_file_id_seq, pgraw.metadata_s6.ducklake_schema_version_seq
+CALL postgres_execute('pgraw', 'DROP SEQUENCE metadata_s6.ducklake_snapshot_id_seq, metadata_s6.ducklake_catalog_id_seq, metadata_s6.ducklake_file_id_seq, metadata_s6.ducklake_schema_version_seq')
 
 statement ok
-DROP INDEX pgraw.metadata_s6.ducklake_schema_name_active_uidx, pgraw.metadata_s6.ducklake_table_name_active_uidx, pgraw.metadata_s6.ducklake_view_name_active_uidx, pgraw.metadata_s6.ducklake_delete_file_active_uidx
+CALL postgres_execute('pgraw', 'DROP INDEX metadata_s6.ducklake_schema_name_active_uidx, metadata_s6.ducklake_table_name_active_uidx, metadata_s6.ducklake_view_name_active_uidx, metadata_s6.ducklake_delete_file_active_uidx')
 
 statement ok
 ATTACH 'ducklake:postgres:dbname=ducklakedb' AS dl6b (DATA_PATH '{DATA_PATH}/seq_migration', METADATA_SCHEMA 'metadata_s6')
