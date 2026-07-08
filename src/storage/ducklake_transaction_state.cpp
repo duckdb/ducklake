@@ -1869,6 +1869,10 @@ void DuckLakeTransactionState::Commit(DuckLakeSnapshot transaction_snapshot,
 				DropEmptySupersededInlinedTables(context);
 			}
 			context.set_catalog_version(commit_snapshot.schema_version);
+			if (SchemaChangesMade()) {
+				// No-op if the previous schema version doesn't exist in cache.
+				context.invalidate_schema_cache(commit_snapshot.schema_version - 1);
+			}
 
 			// finished writing
 			break;
