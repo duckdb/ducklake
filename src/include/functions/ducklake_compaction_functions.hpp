@@ -93,9 +93,7 @@ public:
 	                                              DuckLakeTableEntry &table, optional_ptr<DuckLakeSort> sort_data,
 	                                              bool add_tiebreakers = false);
 	static vector<OrderByNode> ParseSortOrders(const DuckLakeSort &sort_data);
-	static vector<BoundOrderByNode> BindSortOrders(Binder &binder, DuckLakeTableEntry &table, TableIndex table_index,
-	                                               vector<OrderByNode> &pre_bound_orders);
-	//! Overload taking columns+table_name directly (CTAS planning, before the table entry exists).
+	//! Bind ORDER BY expressions against a column list + table name (works before a table entry exists).
 	static vector<BoundOrderByNode> BindSortOrders(Binder &binder, const ColumnList &columns,
 	                                               const Identifier &table_name, TableIndex table_index,
 	                                               vector<OrderByNode> &pre_bound_orders);

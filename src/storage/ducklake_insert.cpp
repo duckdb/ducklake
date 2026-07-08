@@ -35,20 +35,20 @@
 namespace duckdb {
 
 DuckLakeInsert::DuckLakeInsert(PhysicalPlan &physical_plan, const vector<LogicalType> &types, DuckLakeTableEntry &table,
-                               optional_idx partition_id, string encryption_key_p)
+                               optional_idx partition_id_p, string encryption_key_p)
     : PhysicalOperator(physical_plan, PhysicalOperatorType::EXTENSION, types, 1), table(&table), schema(nullptr),
-      partition_id(partition_id), encryption_key(std::move(encryption_key_p)) {
+      partition_id(partition_id_p), encryption_key(std::move(encryption_key_p)) {
 }
 
 DuckLakeInsert::DuckLakeInsert(PhysicalPlan &physical_plan, const vector<LogicalType> &types,
                                SchemaCatalogEntry &schema, unique_ptr<BoundCreateTableInfo> info, string table_uuid_p,
                                string table_data_path_p, unique_ptr<DuckLakePartition> ctas_partition_data_p,
-                               unique_ptr<DuckLakeSort> ctas_sort_data_p, optional_idx partition_id,
+                               unique_ptr<DuckLakeSort> ctas_sort_data_p, optional_idx partition_id_p,
                                string encryption_key_p)
     : PhysicalOperator(physical_plan, PhysicalOperatorType::EXTENSION, types, 1), table(nullptr), schema(&schema),
       info(std::move(info)), table_uuid(std::move(table_uuid_p)), table_data_path(std::move(table_data_path_p)),
       ctas_partition_data(std::move(ctas_partition_data_p)), ctas_sort_data(std::move(ctas_sort_data_p)),
-      partition_id(partition_id), encryption_key(std::move(encryption_key_p)) {
+      partition_id(partition_id_p), encryption_key(std::move(encryption_key_p)) {
 }
 
 //===--------------------------------------------------------------------===//
@@ -866,7 +866,7 @@ PhysicalOperator &DuckLakeCatalog::PlanCreateTableAs(ClientContext &context, Phy
 
 	reference<PhysicalOperator> root = plan;
 
-	// CTAS has no table_id yet, so honor only the schema-level sort_on_insert (default true).
+	// No table_id yet, so the table-level override can't apply; schema/global/default still do.
 	bool sort_on_insert =
 	    GetConfigOption<string>("sort_on_insert", duck_schema.GetSchemaId(), TableIndex(), "true") == "true";
 	if (sort_data && sort_on_insert) {

@@ -70,12 +70,6 @@ vector<BoundOrderByNode> DuckLakeCompactor::BindSortOrders(Binder &binder, const
 	return orders;
 }
 
-vector<BoundOrderByNode> DuckLakeCompactor::BindSortOrders(Binder &binder, DuckLakeTableEntry &table,
-                                                           TableIndex table_index,
-                                                           vector<OrderByNode> &pre_bound_orders) {
-	return BindSortOrders(binder, table.GetColumns(), table.name, table_index, pre_bound_orders);
-}
-
 //===--------------------------------------------------------------------===//
 // Compaction Operator
 //===--------------------------------------------------------------------===//
@@ -439,7 +433,8 @@ unique_ptr<LogicalOperator> DuckLakeCompactor::InsertSort(Binder &binder, unique
 	auto table_index = bindings[0].table_index;
 
 	// Bind the ORDER BY expressions
-	auto orders = DuckLakeCompactor::BindSortOrders(binder, table, table_index, pre_bound_orders);
+	auto orders =
+	    DuckLakeCompactor::BindSortOrders(binder, table.GetColumns(), table.name, table_index, pre_bound_orders);
 
 	// Append (row_id, snapshot_id) as deterministic tiebreakers when requested so the file order
 	// exactly matches the deletes-position query's ORDER BY, including ties in the user sort key.
