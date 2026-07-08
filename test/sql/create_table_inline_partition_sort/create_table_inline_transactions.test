@@ -1,0 +1,488 @@
+# name: test/sql/create_table_inline_partition_sort/create_table_inline_transactions.test
+# description: Transaction semantics for inline PARTITIONED BY / SORTED BY on CREATE TABLE / CTAS:
+# group: [create_table_inline_partition_sort]
+
+#              rollback discards everything (entry, files, transaction-local ids); concurrent CTAS with
+#              distinct names cannot conflict; concurrent CTAS with the same name produces a commit-time
+#              conflict;
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/inline_tx', METADATA_CATALOG 'ducklake_meta', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+SET immediate_transaction_mode=true
+
+statement ok
+USE ducklake
+
+# ----------------------------------------------------------------------------------------------------------------------
+# Test 1: ROLLBACK after a successful inline-partitioned CREATE+INSERT.
+# Rollback must discard the table entry, the planning-time-allocated partition_id/sort_id, and the data files.
+# ----------------------------------------------------------------------------------------------------------------------
+
+statement ok
+BEGIN
+
+statement ok
+CREATE TABLE rollback_part (i INTEGER, v VARCHAR) PARTITIONED BY (i)
+
+statement ok
+INSERT INTO rollback_part VALUES (1, 'a'), (2, 'b')
+
+# table is visible inside the transaction
+query I
+SELECT count(*) FROM rollback_part
+----
+2
+
+statement ok
+ROLLBACK
+
+# table is gone after rollback
+statement error
+SELECT * FROM rollback_part
+----
+<REGEX>:.*not exist.*
+
+# the next inline CTAS proceeds cleanly - no leftover transaction-local catalog state poisoning subsequent
+# planning (regression guard for the planning-time partition_id allocator).
+statement ok
+CREATE TABLE post_rollback PARTITIONED BY (a) AS SELECT 1 AS a
+
+query I
+SELECT * FROM post_rollback
+----
+1
+
+# ----------------------------------------------------------------------------------------------------------------------
+# Test 2: ROLLBACK after CTAS with both inline clauses. The most invasive shape - exercises the full
+# planning-time field_data + partition_data + sort_data construction, the sink-time CreateTableExtended
+# branch, the data-file write, and the rollback cleanup.
+# ----------------------------------------------------------------------------------------------------------------------
+
+statement ok
+BEGIN
+
+statement ok
+CREATE TABLE rollback_ctas PARTITIONED BY (g) SORTED BY (v) AS
+SELECT i % 3 AS g, i AS v FROM range(9) t(i)
+
+query I
+SELECT count(*) FROM rollback_ctas
+----
+9
+
+statement ok
+ROLLBACK
+
+statement error
+SELECT * FROM rollback_ctas
+----
+<REGEX>:.*not exist.*
+
+# resolve the (now nonexistent -> NULL) table_id in a separate statement - some metadata catalogs
+# (e.g. Quack ones) cannot scan two of their tables in a single query
+statement ok
+SET VARIABLE rollback_ctas_id = (SELECT table_id FROM ducklake_meta.ducklake_table WHERE table_name = 'rollback_ctas')
+
+# verify the metadata catalog never saw the rolled-back partition_info / sort_info rows
+query I
+SELECT count(*) FROM ducklake_meta.ducklake_partition_info
+WHERE table_id = getvariable('rollback_ctas_id')
+----
+0
+
+query I
+SELECT count(*) FROM ducklake_meta.ducklake_sort_info
+WHERE table_id = getvariable('rollback_ctas_id')
+----
+0
+
+# ----------------------------------------------------------------------------------------------------------------------
+# Test 3: ROLLBACK + same-name CREATE in a fresh transaction succeeds. The rolled-back table_id /
+# partition_id were transaction-local and should not leak into the next transaction's namespace.
+# ----------------------------------------------------------------------------------------------------------------------
+
+statement ok
+BEGIN
+
+statement ok
+CREATE TABLE name_reuse PARTITIONED BY (a) AS SELECT 1 AS a, 'x' AS v
+
+statement ok
+ROLLBACK
+
+# Same name, same partition column - works because the rollback wiped the prior attempt entirely.
+statement ok
+CREATE TABLE name_reuse PARTITIONED BY (a) AS SELECT 99 AS a, 'y' AS v
+
+query II
+SELECT a, v FROM name_reuse
+----
+99	y
+
+# ----------------------------------------------------------------------------------------------------------------------
+# Test 4: Two concurrent transactions both CREATE TABLE foo PARTITIONED BY ... AS SELECT with the SAME
+# name. First to commit wins; second errors at COMMIT time. This is a name-collision conflict - the new
+# inline clauses don't introduce a different conflict mode.
+# ----------------------------------------------------------------------------------------------------------------------
+
+statement ok con1
+BEGIN
+
+statement ok con2
+BEGIN
+
+statement ok con1
+CREATE TABLE ducklake.conflict_same_name PARTITIONED BY (i) AS SELECT 1 AS i
+
+statement ok con2
+CREATE TABLE ducklake.conflict_same_name SORTED BY (i) AS SELECT 2 AS i
+
+statement ok con1
+COMMIT
+
+statement error con2
+COMMIT
+----
+
+statement ok
+SET VARIABLE conflict_same_name_id = (SELECT table_id FROM ducklake_meta.ducklake_table WHERE table_name = 'conflict_same_name')
+
+# con1's table is the surviving one - check its inline partition spec landed
+query I
+SELECT count(*) FROM ducklake_meta.ducklake_partition_info
+WHERE table_id = getvariable('conflict_same_name_id')
+----
+1
+
+query I
+SELECT * FROM ducklake.conflict_same_name
+----
+1
+
+# ----------------------------------------------------------------------------------------------------------------------
+# Test 5: Two concurrent CTAS-with-inline-spec with DIFFERENT names. No conflict - each transaction
+# allocates partition_id from its own counter; commit-time remap assigns globally-unique committed ids.
+# This proves the planning-time partition_id allocation isn't a serialization point.
+# ----------------------------------------------------------------------------------------------------------------------
+
+statement ok con1
+BEGIN
+
+statement ok con2
+BEGIN
+
+statement ok con1
+CREATE TABLE ducklake.concurrent_a PARTITIONED BY (i) AS SELECT range AS i, 'a' AS src FROM range(5)
+
+statement ok con2
+CREATE TABLE ducklake.concurrent_b PARTITIONED BY (i) SORTED BY (i) AS SELECT range AS i, 'b' AS src FROM range(7)
+
+statement ok con1
+COMMIT
+
+statement ok con2
+COMMIT
+
+statement ok
+SET VARIABLE concurrent_a_id = (SELECT table_id FROM ducklake_meta.ducklake_table WHERE table_name = 'concurrent_a')
+
+statement ok
+SET VARIABLE concurrent_b_id = (SELECT table_id FROM ducklake_meta.ducklake_table WHERE table_name = 'concurrent_b')
+
+# both tables exist and have their own partition_info rows
+query I
+SELECT count(*) FROM ducklake_meta.ducklake_partition_info
+WHERE table_id = getvariable('concurrent_a_id')
+----
+1
+
+query I
+SELECT count(*) FROM ducklake_meta.ducklake_partition_info
+WHERE table_id = getvariable('concurrent_b_id')
+----
+1
+
+# the two tables have DISTINCT committed partition_ids (proves the commit-time remap deduplicates the
+# transaction-local ids that started identical at planning time on each connection).
+query I
+SELECT count(DISTINCT partition_id) FROM ducklake_meta.ducklake_partition_info
+WHERE table_id IN (getvariable('concurrent_a_id'), getvariable('concurrent_b_id'))
+----
+2
+
+query II
+SELECT count(*), max(i) FROM ducklake.concurrent_a
+----
+5	4
+
+query II
+SELECT count(*), max(i) FROM ducklake.concurrent_b
+----
+7	6
+
+# ----------------------------------------------------------------------------------------------------------------------
+# Test 6: Same-transaction inline CTAS + ALTER SET PARTITIONED BY + COMMIT. Last writer wins (the
+# metadata-layer dedup collapses by table_id; final on-disk state references the ALTER's partition column).
+# This is regression coverage for the chain-walk behavior change in this branch.
+# ----------------------------------------------------------------------------------------------------------------------
+
+statement ok
+BEGIN
+
+statement ok
+CREATE TABLE chain_winner PARTITIONED BY (a) SORTED BY (a) AS
+SELECT range AS a, range + 100 AS b FROM range(3)
+
+statement ok
+ALTER TABLE chain_winner SET PARTITIONED BY (b)
+
+statement ok
+ALTER TABLE chain_winner SET SORTED BY (b DESC)
+
+statement ok
+COMMIT
+
+statement ok
+SET VARIABLE chain_winner_id = (SELECT table_id FROM ducklake_meta.ducklake_table WHERE table_name = 'chain_winner')
+
+# exactly one partition_info row (the last ALTER's) and one sort_info row (the last ALTER's)
+query I
+SELECT count(*) FROM ducklake_meta.ducklake_partition_info
+WHERE table_id = getvariable('chain_winner_id')
+----
+1
+
+query I
+SELECT count(*) FROM ducklake_meta.ducklake_sort_info
+WHERE table_id = getvariable('chain_winner_id')
+----
+1
+
+# the surviving sort row is `b DESC`, not the inline `a ASC`
+query III
+SELECT expression, sort_direction, null_order FROM ducklake_meta.ducklake_sort_expression
+WHERE table_id = getvariable('chain_winner_id')
+----
+b	DESC	NULLS_LAST
+
+# ----------------------------------------------------------------------------------------------------------------------
+# Test 7: CTAS that errors mid-execution because of a runtime constraint violation. The transaction must
+# unwind cleanly - no zombie entry, no partition_info row
+# ----------------------------------------------------------------------------------------------------------------------
+
+statement error
+CREATE TABLE error_ctas PARTITIONED BY (i) AS
+SELECT CAST(range AS UTINYINT) AS i FROM range(300)
+----
+<REGEX>:.*[Cc]onversion.*out of range.*
+
+# the failed CTAS must not have partially registered the table
+statement error
+SELECT * FROM error_ctas
+----
+<REGEX>:.*not exist.*
+
+statement ok
+SET VARIABLE error_ctas_id = (SELECT table_id FROM ducklake_meta.ducklake_table WHERE table_name = 'error_ctas')
+
+query I
+SELECT count(*) FROM ducklake_meta.ducklake_partition_info
+WHERE table_id = getvariable('error_ctas_id')
+----
+0
+
+# ----------------------------------------------------------------------------------------------------------------------
+# Test 8: CTAS that errors at the BINDER stage (unknown column in PARTITIONED BY). This fails in
+# PlanCreateTableAs *before* any planning-time partition_id allocation completes, so transaction state
+# must be uncorrupted.
+# ----------------------------------------------------------------------------------------------------------------------
+
+statement ok
+BEGIN
+
+statement error
+CREATE TABLE binder_error PARTITIONED BY (nonexistent) AS SELECT 1 AS i
+----
+<REGEX>:.*nonexistent.*
+
+# a binder error aborts the enclosing transaction, so roll back before continuing
+statement ok
+ROLLBACK
+
+# after rollback the connection is fully usable - the failed CTAS corrupted no transaction state
+statement ok
+CREATE TABLE recovers_after_binder_error (i INTEGER) PARTITIONED BY (i)
+
+statement ok
+INSERT INTO recovers_after_binder_error VALUES (42)
+
+query I
+SELECT i FROM recovers_after_binder_error
+----
+42
+
+# ----------------------------------------------------------------------------------------------------------------------
+# Test 9: Long transaction that mixes inline CTAS + plain INSERT into other tables. Verifies the inline
+# clauses don't disturb the transaction's broader commit logic.
+# ----------------------------------------------------------------------------------------------------------------------
+
+statement ok
+CREATE TABLE existing_target (k INTEGER, v VARCHAR)
+
+statement ok
+BEGIN
+
+statement ok
+INSERT INTO existing_target VALUES (1, 'first')
+
+statement ok
+CREATE TABLE long_tx_ctas PARTITIONED BY (g) AS SELECT i AS g, i + 100 AS v FROM range(4) t(i)
+
+statement ok
+INSERT INTO existing_target VALUES (2, 'second')
+
+statement ok
+INSERT INTO long_tx_ctas VALUES (10, 110), (11, 111)
+
+statement ok
+COMMIT
+
+query II
+SELECT k, v FROM existing_target ORDER BY k
+----
+1	first
+2	second
+
+query II
+SELECT g, count(*) FROM long_tx_ctas GROUP BY g ORDER BY g
+----
+0	1
+1	1
+2	1
+3	1
+10	1
+11	1
+
+# ----------------------------------------------------------------------------------------------------------------------
+# Test 10: Two inline CTAS in one transaction, ROLLBACK. Both tables AND both partition specs unwind.
+# Guards against any per-CTAS state that might accumulate beyond the transaction-local catalog set.
+# ----------------------------------------------------------------------------------------------------------------------
+
+statement ok
+BEGIN
+
+statement ok
+CREATE TABLE rb_a PARTITIONED BY (i) AS SELECT range AS i FROM range(3)
+
+statement ok
+CREATE TABLE rb_b PARTITIONED BY (j) SORTED BY (j) AS SELECT range AS j FROM range(4)
+
+statement ok
+ROLLBACK
+
+statement error
+SELECT * FROM rb_a
+----
+<REGEX>:.*not exist.*
+
+statement error
+SELECT * FROM rb_b
+----
+<REGEX>:.*not exist.*
+
+# both lookups yield NULL (the tables were rolled back), so the IN below matches no rows
+statement ok
+SET VARIABLE rb_a_id = (SELECT table_id FROM ducklake_meta.ducklake_table WHERE table_name = 'rb_a')
+
+statement ok
+SET VARIABLE rb_b_id = (SELECT table_id FROM ducklake_meta.ducklake_table WHERE table_name = 'rb_b')
+
+# neither rolled-back table left a partition_info row
+query I
+SELECT count(*) FROM ducklake_meta.ducklake_partition_info
+WHERE table_id IN (getvariable('rb_a_id'), getvariable('rb_b_id'))
+----
+0
+
+# subsequent CTAS in fresh transaction succeeds and gets fresh ids - no collision with rolled-back local ids
+statement ok
+CREATE TABLE rb_after PARTITIONED BY (i) AS SELECT 1 AS i
+
+query I
+SELECT * FROM rb_after
+----
+1
+
+# ----------------------------------------------------------------------------------------------------------------------
+# Test 11: Snapshot isolation. con2 begins BEFORE con1's inline-partitioned CTAS commits. con2 must NOT
+# observe the new table even though it's already committed in the metadata DB. The partition_info row's
+# begin_snapshot is the visibility gate.
+# ----------------------------------------------------------------------------------------------------------------------
+
+statement ok con2
+BEGIN
+
+statement ok con1
+CREATE TABLE ducklake.snap_iso PARTITIONED BY (i) AS SELECT 1 AS i
+
+# con2's snapshot predates the CTAS commit
+statement error con2
+SELECT * FROM ducklake.snap_iso
+----
+<REGEX>:.*not exist.*
+
+statement ok con2
+COMMIT
+
+# new transaction sees it
+query I
+SELECT * FROM ducklake.snap_iso
+----
+1
+
+# ----------------------------------------------------------------------------------------------------------------------
+# Test 12: Same-transaction INSERT after inline CTAS uses the partition spec. After commit, every data
+# file (CTAS-written + INSERT-written) carries a partition_id, and on-disk paths are hive-partitioned.
+# ----------------------------------------------------------------------------------------------------------------------
+
+statement ok
+BEGIN
+
+statement ok
+CREATE TABLE same_tx_part PARTITIONED BY (g) AS SELECT range AS g, range + 100 AS v FROM range(3)
+
+statement ok
+INSERT INTO same_tx_part VALUES (10, 110), (10, 111), (11, 112)
+
+statement ok
+COMMIT
+
+statement ok
+SET VARIABLE same_tx_part_id = (SELECT table_id FROM ducklake_meta.ducklake_table WHERE table_name='same_tx_part')
+
+# every data file references the partition_id - CTAS-written and INSERT-written alike
+query I
+SELECT count(*) FROM ducklake_meta.ducklake_data_file
+WHERE table_id = getvariable('same_tx_part_id')
+  AND partition_id IS NULL
+----
+0
+
+query II
+SELECT g, count(*) FROM same_tx_part GROUP BY g ORDER BY g
+----
+0	1
+1	1
+2	1
+10	2
+11	1

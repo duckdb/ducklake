@@ -11,6 +11,7 @@
 #include "duckdb/parser/parsed_data/create_table_info.hpp"
 #include "duckdb/parser/parsed_data/create_view_info.hpp"
 #include "duckdb/parser/parsed_data/drop_info.hpp"
+#include "duckdb/planner/parsed_data/bound_create_table_info.hpp"
 #include "duckdb/storage/database_size.hpp"
 #include "storage/ducklake_initializer.hpp"
 #include "storage/ducklake_schema_entry.hpp"
@@ -280,6 +281,16 @@ optional_ptr<CatalogEntry> DuckLakeCatalog::CreateSchema(CatalogTransaction tran
 	auto result = schema_entry.get();
 	duck_transaction.CreateEntry(std::move(schema_entry));
 	return result;
+}
+
+ErrorData DuckLakeCatalog::SupportsCreateTable(BoundCreateTableInfo &info) {
+	auto &base = info.Base().Cast<CreateTableInfo>();
+	if (!base.options.empty()) {
+		return ErrorData(
+		    ExceptionType::CATALOG,
+		    StringUtil::Format("WITH clause is not supported for tables in a %s catalog", GetCatalogType()));
+	}
+	return ErrorData();
 }
 
 void DuckLakeCatalog::DropSchema(ClientContext &context, DropInfo &info) {
