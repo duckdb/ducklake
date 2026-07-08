@@ -39,6 +39,8 @@ struct NewNameMapInfo;
 struct CompactionInformation;
 struct DuckLakePath;
 struct DuckLakeCommitState;
+struct DuckLakeSchemaCacheEntry;
+class DuckLakeSchemaPinState;
 class DuckLakeFieldId;
 class LocalTableChangeIterationHelper;
 class DuckLakeTransactionState;
@@ -202,6 +204,7 @@ public:
 	DuckLakeSnapshot GetSnapshot();
 	DuckLakeSnapshot GetSnapshot(optional_ptr<BoundAtClause> at_clause,
 	                             SnapshotBound bound = SnapshotBound::UPPER_BOUND);
+	void PinSchemaCacheEntry(shared_ptr<DuckLakeSchemaCacheEntry> entry);
 
 	static DuckLakeTransaction &Get(ClientContext &context, Catalog &catalog);
 
@@ -344,6 +347,9 @@ private:
 	void AlterEntryInternal(DuckLakeViewEntry &old_entry, unique_ptr<CatalogEntry> new_entry);
 	case_insensitive_map_t<unique_ptr<DuckLakeCatalogSet>> &GetNewMacroMap(CatalogType type);
 
+	// Invoked at transaction completion, invalidates all schema cache entries referenced by this transaction.
+	void ClearSchemaCachePins();
+
 private:
 	DuckLakeCatalog &ducklake_catalog;
 	DatabaseInstance &db;
@@ -356,6 +362,9 @@ private:
 	idx_t local_catalog_id;
 	//! Set when this transaction inlines into a table that does not yet have an inlined-data table
 	atomic<bool> requires_new_inlined_table {false};
+	//! Schema cache entries referenced by this transaction's catalog entries. These pins keep transaction-local
+	//! parent references valid even if another transaction invalidates the global object-cache entry.
+	unique_ptr<DuckLakeSchemaPinState> schema_pins;
 	//! Per-transaction mutable change state (new/dropped/renamed entries, local file changes, flushed
 	//! inlined tables) and the Commit loop. Owns the data formerly held directly on the transaction.
 	unique_ptr<DuckLakeTransactionState> state;

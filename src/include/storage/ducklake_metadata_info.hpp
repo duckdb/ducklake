@@ -474,7 +474,7 @@ struct DuckLakeRewriteFileEntry {
 
 struct DuckLakeCompactionEntry {
 	vector<DuckLakeCompactionFileEntry> source_files;
-	DuckLakeDataFile written_file;
+	vector<DuckLakeDataFile> written_files;
 	optional_idx row_id_start;
 	CompactionType type;
 };
@@ -494,7 +494,6 @@ struct DuckLakeCompactedFileInfo {
 };
 
 struct DuckLakeMergeAdjacentOptions {
-	uint64_t max_files;
 	optional_idx min_file_size;
 	optional_idx max_file_size;
 };

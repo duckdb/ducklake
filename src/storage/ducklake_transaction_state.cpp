@@ -643,17 +643,18 @@ CompactionInformation DuckLakeTransactionState::GetCompactionChanges(DuckLakeCom
 			if (type != compaction.type) {
 				continue;
 			}
-			bool has_new_file = !compaction.written_file.file_name.empty();
-			DuckLakeFileInfo new_file;
+			bool has_new_files = !compaction.written_files.empty();
 
-			if (has_new_file) {
-				new_file = GetNewDataFile(compaction.written_file, commit_state, table_id, compaction.row_id_start);
+			// determine the shared snapshot bounds for the output file(s)
+			idx_t output_begin_snapshot = 0;
+			optional_idx output_max_partial_snapshot;
+			if (has_new_files) {
 				switch (type) {
 				case CompactionType::REWRITE_DELETES:
-					new_file.begin_snapshot = commit_snapshot.snapshot_id;
+					output_begin_snapshot = commit_snapshot.snapshot_id;
 					break;
 				case CompactionType::MERGE_ADJACENT_TABLES: {
-					// For MERGE_ADJACENT_TABLES, track the max partial snapshot across all source files
+					// track the max partial snapshot across all source files
 					optional_idx merged_max_partial_snapshot;
 					idx_t first_begin_snapshot = compaction.source_files[0].file.begin_snapshot;
 					for (auto &compacted_file : compaction.source_files) {
@@ -665,10 +666,10 @@ CompactionInformation DuckLakeTransactionState::GetCompactionChanges(DuckLakeCom
 							merged_max_partial_snapshot = file_max_snapshot;
 						}
 					}
-					// Use the first source file's begin_snapshot for proper time travel support
-					new_file.begin_snapshot = first_begin_snapshot;
+					// use the first source file's begin_snapshot for proper time travel support
+					output_begin_snapshot = first_begin_snapshot;
 					if (compaction.source_files.size() > 1) {
-						new_file.max_partial_file_snapshot = merged_max_partial_snapshot;
+						output_max_partial_snapshot = merged_max_partial_snapshot;
 					}
 					break;
 				}
@@ -676,6 +677,26 @@ CompactionInformation DuckLakeTransactionState::GetCompactionChanges(DuckLakeCom
 					throw InternalException(
 					    "DuckLakeTransactionState::GetCompactionChanges Compaction type is invalid");
 				}
+			}
+
+			vector<DuckLakeFileInfo> output_files;
+			optional_idx first_new_id;
+			idx_t output_row_count = 0;
+			for (auto &written_file : compaction.written_files) {
+				optional_idx file_row_id_start;
+				if (compaction.row_id_start.IsValid()) {
+					file_row_id_start = compaction.row_id_start.GetIndex() + output_row_count;
+				}
+				auto new_file = GetNewDataFile(written_file, commit_state, table_id, file_row_id_start);
+				new_file.begin_snapshot = output_begin_snapshot;
+				if (output_max_partial_snapshot.IsValid()) {
+					new_file.max_partial_file_snapshot = output_max_partial_snapshot;
+				}
+				if (!first_new_id.IsValid()) {
+					first_new_id = new_file.id.index;
+				}
+				output_row_count += new_file.row_count;
+				output_files.push_back(std::move(new_file));
 			}
 
 			idx_t row_id_limit = 0;
@@ -690,8 +711,8 @@ CompactionInformation DuckLakeTransactionState::GetCompactionChanges(DuckLakeCom
 				file_info.source_id = compacted_file.file.id;
 				file_info.table_index = entry.GetTableIndex();
 				file_info.rewrite_snapshot = commit_snapshot.snapshot_id;
-				if (has_new_file) {
-					file_info.new_id = new_file.id;
+				if (has_new_files) {
+					file_info.new_id = DataFileIndex(first_new_id.GetIndex());
 				}
 
 				if (!compacted_file.delete_files.empty()) {
@@ -701,17 +722,18 @@ CompactionInformation DuckLakeTransactionState::GetCompactionChanges(DuckLakeCom
 					file_info.delete_file_start_snapshot = commit_snapshot.snapshot_id;
 					file_info.delete_file_end_snapshot = compacted_file.delete_files.back().end_snapshot;
 				}
-				if (has_new_file && row_id_limit > new_file.row_count) {
-					throw InternalException("Compaction error - row id limit is larger than the row count of the file");
-				}
 				result.compacted_files.push_back(std::move(file_info));
 			}
-			if (!has_new_file && row_id_limit != 0) {
+			if (has_new_files && row_id_limit > output_row_count) {
+				throw InternalException("Compaction error - live source rows (%llu) exceed output rows (%llu)",
+				                        row_id_limit, output_row_count);
+			}
+			if (!has_new_files && row_id_limit != 0) {
 				throw InternalException(
 				    "Compaction error - compaction without output file must have zero live source rows (got %llu)",
 				    row_id_limit);
 			}
-			if (has_new_file) {
+			for (auto &new_file : output_files) {
 				result.new_files.push_back(std::move(new_file));
 			}
 		}
@@ -1847,6 +1869,10 @@ void DuckLakeTransactionState::Commit(DuckLakeSnapshot transaction_snapshot,
 				DropEmptySupersededInlinedTables(context);
 			}
 			context.set_catalog_version(commit_snapshot.schema_version);
+			if (SchemaChangesMade()) {
+				// No-op if the previous schema version doesn't exist in cache.
+				context.invalidate_schema_cache(commit_snapshot.schema_version - 1);
+			}
 
 			// finished writing
 			break;

@@ -178,6 +178,10 @@ static unique_ptr<FunctionData> DuckLakeSetOptionBind(ClientContext &context, Ta
 	if (table_entry != input.named_parameters.end() && !table_entry->second.IsNull()) {
 		table = StringValue::Get(table_entry->second);
 	}
+	if ((!table.empty() || !schema.empty()) && (option == "expire_older_than" || option == "delete_older_than")) {
+		throw InvalidInputException("The '%s' option can only be set globally, not for a specific schema or table",
+		                            option);
+	}
 	if (!table.empty()) {
 		// find the scope
 		auto table_catalog_entry = catalog.GetEntry<TableCatalogEntry>(context, Identifier(schema), Identifier(table),

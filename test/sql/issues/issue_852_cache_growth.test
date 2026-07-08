@@ -13,7 +13,7 @@ test-env DATA_PATH {TEST_DIR}
 statement ok
 ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/issue_852_cache_growth', METADATA_CATALOG 'metadata', DATA_INLINING_ROW_LIMIT 0)
 
-# Schema cache entries
+# Schema cache entries are invalidated on every DDL commit, so repeated schema churn does NOT grow ObjectCache memory unboundedly.
 statement ok
 CREATE TABLE ducklake.anchor (id INTEGER)
 
@@ -40,31 +40,18 @@ SELECT * FROM ducklake.anchor LIMIT 0
 endloop
 
 query I
-SELECT (SELECT memory_usage_bytes FROM duckdb_memory() WHERE tag = 'OBJECT_CACHE') > (SELECT bytes FROM schema_baseline)
+SELECT (SELECT memory_usage_bytes FROM duckdb_memory() WHERE tag = 'OBJECT_CACHE') <= (SELECT bytes * 2 FROM schema_baseline)
 ----
 true
-
-statement ok
-CREATE TEMP TABLE schema_post_churn AS SELECT memory_usage_bytes AS bytes FROM duckdb_memory() WHERE tag = 'OBJECT_CACHE'
 
 statement ok
 CALL ducklake_expire_snapshots('ducklake', dry_run => true, older_than => now())
-
-query I
-SELECT (SELECT memory_usage_bytes FROM duckdb_memory() WHERE tag = 'OBJECT_CACHE') >= (SELECT bytes FROM schema_post_churn)
-----
-true
 
 statement ok
 CHECKPOINT
 
 statement ok
 CALL ducklake_expire_snapshots('ducklake', older_than => now())
-
-query I
-SELECT (SELECT memory_usage_bytes FROM duckdb_memory() WHERE tag = 'OBJECT_CACHE') < (SELECT bytes FROM schema_post_churn)
-----
-true
 
 # Table stats cache entries
 statement ok

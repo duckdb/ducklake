@@ -71,6 +71,8 @@ class DuckLakeSchemaPinState : public ClientContextState {
 public:
 	void QueryEnd(ClientContext &context) override;
 	void Pin(shared_ptr<DuckLakeSchemaCacheEntry> entry);
+	//! Clear all pinned schema cache entries for this pin state.
+	void Clear();
 
 private:
 	mutex lock;

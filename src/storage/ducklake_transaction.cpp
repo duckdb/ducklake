@@ -82,8 +82,14 @@ void LocalTableChanges::CleanupFiles(DatabaseInstance &db) {
 				fs.TryRemoveFile(delete_files.file_name);
 			}
 		}
+		for (auto &compaction : table_changes.compactions) {
+			for (auto &file : compaction.written_files) {
+				fs.TryRemoveFile(file.file_name);
+			}
+		}
 		table_changes.new_data_files.clear();
 		table_changes.new_delete_files.clear();
+		table_changes.compactions.clear();
 	}
 }
 
@@ -612,6 +618,11 @@ void LocalTableChanges::CleanupFiles(ClientContext &context, TableIndex table_id
 				fs.TryRemoveFile(delete_files.file_name);
 			}
 		}
+		for (auto &compaction : table_changes.compactions) {
+			for (auto &file : compaction.written_files) {
+				fs.TryRemoveFile(file.file_name);
+			}
+		}
 		changes.erase(table_entry);
 	}
 }
@@ -708,11 +719,23 @@ DuckLakeTransaction::DuckLakeTransaction(DuckLakeCatalog &ducklake_catalog, Tran
     : Transaction(manager, context), ducklake_catalog(ducklake_catalog), db(*context.db),
       local_catalog_id(DuckLakeConstants::TRANSACTION_LOCAL_ID_START), catalog_version(0) {
 	metadata_manager = DuckLakeMetadataManager::Create(*this);
+	schema_pins = make_uniq<DuckLakeSchemaPinState>();
 	state = make_uniq<DuckLakeTransactionState>(db, ducklake_catalog.IsCommitInfoRequired(), new_name_maps,
 	                                            ducklake_catalog.DataPath(), ducklake_catalog.Separator());
 }
 
 DuckLakeTransaction::~DuckLakeTransaction() {
+}
+
+void DuckLakeTransaction::PinSchemaCacheEntry(shared_ptr<DuckLakeSchemaCacheEntry> entry) {
+	if (!entry) {
+		return;
+	}
+	schema_pins->Pin(std::move(entry));
+}
+
+void DuckLakeTransaction::ClearSchemaCachePins() {
+	schema_pins->Clear();
 }
 
 const LocalTableChanges &DuckLakeTransaction::GetLocalChanges() const {
@@ -750,6 +773,7 @@ void DuckLakeTransaction::Commit() {
 	connection.reset();
 	state->local_changes.Clear();
 	SetRequiresNewInlinedTable(false);
+	ClearSchemaCachePins();
 }
 
 void DuckLakeTransaction::Rollback() {
@@ -762,6 +786,7 @@ void DuckLakeTransaction::Rollback() {
 	state->local_changes.Clear();
 	pending_name_map_cache_invalidations.clear();
 	SetRequiresNewInlinedTable(false);
+	ClearSchemaCachePins();
 }
 
 Connection &DuckLakeTransaction::GetConnection() {

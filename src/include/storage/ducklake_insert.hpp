@@ -79,6 +79,8 @@ public:
 
 	static DuckLakeColumnStats ParseColumnStats(const LogicalType &type, const vector<Value> &stats);
 	static DuckLakeCopyOptions GetCopyOptions(ClientContext &context, DuckLakeCopyInput &copy_input);
+	//! Row group size (batch size) configured for a copy, defaulting to DEFAULT_ROW_GROUP_SIZE.
+	static idx_t GetCopyBatchSize(const DuckLakeCopyOptions &copy_options);
 	static PhysicalOperator &PlanCopyForInsert(ClientContext &context, PhysicalPlanGenerator &planner,
 	                                           DuckLakeCopyInput &copy_input, optional_ptr<PhysicalOperator> plan);
 	static PhysicalOperator &PlanInsert(ClientContext &context, PhysicalPlanGenerator &planner,

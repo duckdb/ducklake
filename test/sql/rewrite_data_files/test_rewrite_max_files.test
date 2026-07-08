@@ -1,0 +1,117 @@
+# name: test/sql/rewrite_data_files/test_rewrite_max_files.test
+# description: test ducklake rewrite data files files max_compacted_files option
+# group: [rewrite_data_files]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+# DATA_INLINING_ROW_LIMIT 1 implies our insertions will not be inlined, but deletions will be
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/rewrite_max_files', DATA_INLINING_ROW_LIMIT 1)
+
+statement ok
+USE ducklake;
+
+statement ok
+CREATE TABLE example (key integer);
+
+# Generate 6 files
+loop i 0 6
+
+statement ok
+INSERT INTO example SELECT 10 * {i} + range FROM range(10);
+
+endloop
+
+# Ensure files each delete file is processed individually (adjacent files are not merged)
+statement ok
+CALL ducklake.set_option('target_file_size', '1B');
+
+statement ok
+DELETE FROM example WHERE key % 10 = 0;
+
+query III
+SELECT table_name, files_processed, files_created FROM ducklake_rewrite_data_files('ducklake', delete_threshold => 0, max_compacted_files => 1)
+----
+example	1	1
+
+query III
+SELECT table_name, files_processed, files_created FROM ducklake_rewrite_data_files('ducklake', delete_threshold => 0, max_compacted_files => 2)
+----
+example	1	1
+example	1	1
+
+query III
+SELECT count(*), bool_and(files_processed = 1), bool_and(files_created = 1) FROM ducklake_rewrite_data_files('ducklake', delete_threshold => 0)
+----
+3	true	true
+
+# Allow merging of adjacent files
+statement ok
+CALL ducklake.set_option('target_file_size', '512MB');
+
+statement ok
+DELETE FROM example WHERE key % 10 = 1;
+
+query III
+SELECT table_name, files_processed, files_created FROM ducklake_rewrite_data_files('ducklake', delete_threshold => 0, max_compacted_files => 2)
+----
+example	6	1
+
+# max_compacted_files should work per table
+statement ok
+CREATE TABLE example2(key integer);
+
+statement ok
+INSERT INTO example2 FROM range(10);
+
+statement ok
+INSERT INTO example2 SELECT range + 10 FROM range(10);
+
+statement ok
+CALL ducklake.set_option('target_file_size', '1B');
+
+statement ok
+DELETE FROM example WHERE key % 10 = 2;
+
+statement ok
+DELETE FROM example2 WHERE key % 10 = 2;
+
+query III
+SELECT table_name, files_processed, files_created FROM ducklake_rewrite_data_files('ducklake', delete_threshold => 0, max_compacted_files => 1) ORDER BY ALL
+----
+example	1	1
+example2	1	1
+
+# Ensure data correctness
+query I
+SELECT count(*) FROM example
+----
+42
+
+query I
+SELECT count(*) FROM example2
+----
+18
+
+
+# Input validation
+statement error
+CALL ducklake_rewrite_data_files('ducklake', max_compacted_files=>-1);
+----
+Type INT32 with value -1 can't be cast
+
+statement error
+CALL ducklake_rewrite_data_files('ducklake', max_compacted_files=>NULL);
+----
+The max_compacted_files option must be a non-null integer
+
+statement error
+CALL ducklake_rewrite_data_files('ducklake', max_compacted_files=>0);
+----
+The max_compacted_files option must be greater than zero.
