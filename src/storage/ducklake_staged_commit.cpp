@@ -104,8 +104,7 @@ string DuckLakeStagedTable::Columns(DuckLakeStagedTableType type) {
 	case DuckLakeStagedTableType::FLUSHED_INLINED:
 		return "inlined_table_name VARCHAR, schema_version BIGINT, flush_snapshot_id BIGINT";
 	case DuckLakeStagedTableType::COMPACTION:
-		return "compaction_id BIGINT, table_id BIGINT, compaction_type VARCHAR, "
-		       "row_id_start BIGINT, output_local_file_id BIGINT";
+		return "compaction_id BIGINT, table_id BIGINT, compaction_type VARCHAR, row_id_start BIGINT";
 	case DuckLakeStagedTableType::COMPACTION_SOURCE:
 		return "compaction_id BIGINT, source_order BIGINT, "
 		       "source_data_file_id BIGINT, source_path VARCHAR, "
@@ -415,18 +414,18 @@ string DuckLakeStagedCommit::EmitCompactions(const LocalTableChanges &local_chan
 		auto table_id = entry.GetTableIndex();
 		auto &table_changes = entry.GetTableChanges();
 		for (auto &compaction : table_changes.compactions) {
-			string output_local_id = "NULL";
-			if (!compaction.written_file.file_name.empty()) {
-				EmitDataFileRow(sql, compaction.written_file, local_file_id, table_id, 0,
+			idx_t output_order = 0;
+			for (auto &written_file : compaction.written_files) {
+				EmitDataFileRow(sql, written_file, local_file_id, table_id, output_order,
 				                std::to_string(compaction_id));
-				output_local_id = std::to_string(local_file_id);
 				local_file_id++;
+				output_order++;
 			}
 
-			sql += StringUtil::Format("INSERT INTO %s VALUES (%llu, %llu, %s, %s, %s);",
+			sql += StringUtil::Format("INSERT INTO %s VALUES (%llu, %llu, %s, %s);",
 			                          DuckLakeStagedTable::BaseName(DuckLakeStagedTableType::COMPACTION), compaction_id,
 			                          table_id.index, SQLString(CompactionTypeToString(compaction.type)),
-			                          DuckLakeUtil::OptionalIdxOrNull(compaction.row_id_start), output_local_id);
+			                          DuckLakeUtil::OptionalIdxOrNull(compaction.row_id_start));
 
 			idx_t source_order = 0;
 			for (auto &source : compaction.source_files) {
