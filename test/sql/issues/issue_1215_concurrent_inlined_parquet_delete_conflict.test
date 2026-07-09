@@ -184,3 +184,160 @@ statement error con2
 COMMIT
 ----
 conflict
+
+# ----------------------------------------------------------------------------------------------
+# Cross-store, different stores: an inlined-file delete concurrent with an inlined-data delete on one
+# table. The file-level check probes the inlined-file-delete table, which is created lazily and does
+# not exist when the other transaction only deleted inlined data. That probe must tolerate its absence:
+# a missing table means "no inlined-file deletes", not a commit error. The table-granular inlined check
+# still reports a conflict here (relaxed to a clean commit once the check is narrowed to inlined-data).
+# ----------------------------------------------------------------------------------------------
+
+# 100 rows land in a parquet data file; a small insert of 5 rows is kept as inlined data
+statement ok
+CREATE TABLE ducklake.test_e AS FROM range(100) t(i)
+
+statement ok
+INSERT INTO ducklake.test_e VALUES (1000), (1001), (1002), (1003), (1004)
+
+statement ok con1
+BEGIN
+
+statement ok con2
+BEGIN
+
+# con1: single-row delete of an inlined-data row (1000) -> inlined data delete, no delete table created
+query I con1
+DELETE FROM ducklake.test_e WHERE i = 1000
+----
+1
+
+# con2: single-row delete of a parquet-file row (5) -> inlined file delete on a different store
+query I con2
+DELETE FROM ducklake.test_e WHERE i = 5
+----
+1
+
+statement ok con1
+COMMIT
+
+# con2 must not crash on the absent inlined-delete table; it reports a proper conflict, not an internal error
+statement error con2
+COMMIT
+----
+conflict
+
+# ----------------------------------------------------------------------------------------------
+# Mirror of the case above: the inlined-file delete commits first, the inlined-data delete second.
+# The second committer records no inlined-file deletes, so it never probes the delete table; the
+# table-granular inlined check still reports a conflict. This must also avoid an internal error.
+# ----------------------------------------------------------------------------------------------
+
+statement ok
+CREATE TABLE ducklake.test_f AS FROM range(100) t(i)
+
+statement ok
+INSERT INTO ducklake.test_f VALUES (1000), (1001), (1002), (1003), (1004)
+
+statement ok con1
+BEGIN
+
+statement ok con2
+BEGIN
+
+# con1: single-row delete of a parquet-file row (5) -> inlined file delete
+query I con1
+DELETE FROM ducklake.test_f WHERE i = 5
+----
+1
+
+# con2: single-row delete of an inlined-data row (1000) -> inlined data delete, no delete table created
+query I con2
+DELETE FROM ducklake.test_f WHERE i = 1000
+----
+1
+
+statement ok con1
+COMMIT
+
+statement error con2
+COMMIT
+----
+conflict
+
+# ----------------------------------------------------------------------------------------------
+# Concurrency preserved: cross-store deletes to different tables must not conflict. An inlined-file
+# delete on one table and an inlined-data delete on another share no table, so both must commit.
+# ----------------------------------------------------------------------------------------------
+
+# test_g_a has a parquet data file; test_g_b (5 rows) is kept as inlined data
+statement ok
+CREATE TABLE ducklake.test_g_a AS FROM range(100) t(i)
+
+statement ok
+CREATE TABLE ducklake.test_g_b AS FROM range(5) t(i)
+
+statement ok con1
+BEGIN
+
+statement ok con2
+BEGIN
+
+# con1: inlined file delete on test_g_a
+query I con1
+DELETE FROM ducklake.test_g_a WHERE i = 5
+----
+1
+
+# con2: inlined data delete on test_g_b (a different table)
+query I con2
+DELETE FROM ducklake.test_g_b WHERE i = 2
+----
+1
+
+statement ok con1
+COMMIT
+
+# different tables -> con2 must commit cleanly
+statement ok con2
+COMMIT
+
+# ----------------------------------------------------------------------------------------------
+# One transaction deleting from both stores of a table: con2 records an inlined-file delete and an
+# inlined-data delete on the same table, concurrent with con1's inlined-data delete on that table.
+# con2 probes the inlined-delete table for its own file delete while its inlined-data delete conflicts
+# with con1 at table granularity - the probe must tolerate the not-yet-created table, not error.
+# ----------------------------------------------------------------------------------------------
+
+statement ok
+CREATE TABLE ducklake.test_h AS FROM range(100) t(i)
+
+statement ok
+INSERT INTO ducklake.test_h VALUES (1000), (1001), (1002), (1003), (1004)
+
+statement ok con1
+BEGIN
+
+statement ok con2
+BEGIN
+
+# con1: inlined data delete (1001)
+query I con1
+DELETE FROM ducklake.test_h WHERE i = 1001
+----
+1
+
+# con2: an inlined file delete (parquet row 5) and an inlined data delete (inline row 1000) at once
+query I con2
+DELETE FROM ducklake.test_h WHERE i = 5 OR i = 1000
+----
+2
+
+statement ok con1
+COMMIT
+
+# con2's inlined-data delete conflicts with con1 at table granularity; must be a conflict, not an error
+statement error con2
+COMMIT
+----
+conflict
