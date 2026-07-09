@@ -151,6 +151,20 @@ set<DataFileIndex> GetInlinedFileDeletesAfterSnapshot(const std::function<unique
 		file_id_list += to_string(file_id);
 	}
 	auto table_name = DuckLakeMetadataManager::InlinedFileDeletionTableName(table_id);
+	// the inlined-file-deletion table is created lazily, so a missing table means no inlined-file deletes
+	auto exists_sql = StringUtil::Format(
+	    "SELECT 1 FROM information_schema.tables WHERE table_schema = {METADATA_SCHEMA_NAME_LITERAL} "
+	    "AND table_name = %s",
+	    DuckLakeUtil::SQLLiteralToString(table_name));
+	auto exists_result = executor(exists_sql);
+	bool table_exists = false;
+	for (auto &row : *exists_result) {
+		table_exists = true;
+		break;
+	}
+	if (!table_exists) {
+		return result;
+	}
 	auto sql = StringUtil::Format("SELECT DISTINCT file_id FROM {METADATA_CATALOG}.%s "
 	                              "WHERE file_id IN (%s) AND begin_snapshot > {SNAPSHOT_ID}",
 	                              table_name, file_id_list);
