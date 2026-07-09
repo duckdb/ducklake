@@ -140,6 +140,9 @@ DuckLakeTableEntry::DuckLakeTableEntry(DuckLakeTableEntry &parent, CreateTableIn
 	if (parent.sort_data) {
 		sort_data = make_uniq<DuckLakeSort>(*parent.sort_data);
 	}
+	if (!parent.options_in_create_with.empty()) {
+		options_in_create_with = parent.options_in_create_with;
+	}
 	CheckSupportedTypes();
 	if (local_change.type == LocalChangeType::ADD_COLUMN) {
 		LogicalIndex new_col_idx(columns.LogicalColumnCount() - 1);
@@ -163,6 +166,9 @@ DuckLakeTableEntry::DuckLakeTableEntry(DuckLakeTableEntry &parent, CreateTableIn
 	}
 	if (parent.sort_data) {
 		sort_data = make_uniq<DuckLakeSort>(*parent.sort_data);
+	}
+	if (!parent.options_in_create_with.empty()) {
+		options_in_create_with = parent.options_in_create_with;
 	}
 	CheckSupportedTypes();
 

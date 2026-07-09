@@ -284,12 +284,7 @@ optional_ptr<CatalogEntry> DuckLakeCatalog::CreateSchema(CatalogTransaction tran
 }
 
 ErrorData DuckLakeCatalog::SupportsCreateTable(BoundCreateTableInfo &info) {
-	auto &base = info.Base().Cast<CreateTableInfo>();
-	if (!base.options.empty()) {
-		return ErrorData(
-		    ExceptionType::CATALOG,
-		    StringUtil::Format("WITH clause is not supported for tables in a %s catalog", GetCatalogType()));
-	}
+	// DuckLake handles PARTITIONED BY / SORTED BY / WITH (...) itself, so suppress the base-class rejection.
 	return ErrorData();
 }
 

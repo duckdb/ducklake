@@ -5,6 +5,7 @@
 #include "duckdb/parser/parsed_data/create_view_info.hpp"
 #include "duckdb/parser/parsed_data/drop_info.hpp"
 #include "duckdb/planner/parsed_data/bound_create_table_info.hpp"
+#include "functions/ducklake_table_functions.hpp"
 #include "storage/ducklake_catalog.hpp"
 #include "storage/ducklake_table_entry.hpp"
 #include "storage/ducklake_transaction.hpp"
@@ -77,6 +78,8 @@ DuckLakeSchemaEntry::CreateTableExtended(CatalogTransaction transaction, BoundCr
 	if (duck_catalog.DataInliningRowLimit(transaction.GetContext(), schema_id, TableIndex()) > 0) {
 		DuckLakeUtil::ValidateNoInlinedSystemColumns(base_info.columns);
 	}
+	// validate WITH (...) options before any catalog mutation
+	auto options_in_create_with = ValidateOptionsInCreateWith(transaction.GetContext(), base_info.options);
 	//! get a local table-id
 	auto table_id = TableIndex(duck_transaction.GetLocalCatalogId());
 	// generate field ids based on the column ids
@@ -98,6 +101,10 @@ DuckLakeSchemaEntry::CreateTableExtended(CatalogTransaction transaction, BoundCr
 	} else if (!base_info.sort_keys.empty()) {
 		table_entry->SetSortData(
 		    DuckLakeTableEntry::BuildSortData(duck_transaction, table_entry->GetColumns(), base_info.sort_keys));
+	}
+	// Stash on the entry (not the catalog) so it scopes to the transaction; persisted at commit under the real id.
+	if (!options_in_create_with.empty()) {
+		table_entry->SetOptionsInCreateWith(options_in_create_with);
 	}
 	auto result = table_entry.get();
 	duck_transaction.CreateEntry(std::move(table_entry));

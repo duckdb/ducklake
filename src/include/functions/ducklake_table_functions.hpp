@@ -14,7 +14,16 @@
 
 namespace duckdb {
 class DuckLakeCatalog;
+class ParsedExpression;
 struct DuckLakeSnapshotInfo;
+struct DuckLakeTag;
+
+//! Validate and canonicalize a single (key, value) DuckLake config option; shared by set_option and WITH (...).
+DuckLakeTag ValidateDuckLakeConfigOption(ClientContext &context, const string &option_key, const Value &val);
+
+//! Bind, fold, and validate every entry in a CREATE TABLE / CTAS WITH (...) map; input left intact.
+vector<DuckLakeTag> ValidateOptionsInCreateWith(ClientContext &context,
+                                                const case_insensitive_map_t<unique_ptr<ParsedExpression>> &options);
 
 class DuckLakeTableFunctionUtil {
 public:

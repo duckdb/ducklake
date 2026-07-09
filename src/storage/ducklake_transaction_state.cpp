@@ -1379,6 +1379,16 @@ void DuckLakeTransactionState::GetNewTableInfo(DuckLakeCommitState &commit_state
 					result.new_sort_keys.push_back(std::move(sort_key));
 				}
 			}
+			// Emit WITH (...) options whenever the pre-commit table id is transaction-local (CREATE + local RENAME).
+			if (IsTransactionLocal(old_table_id)) {
+				auto &options_in_create_with = table.GetOptionsInCreateWith();
+				for (auto &tag : options_in_create_with) {
+					DuckLakeConfigOption opt;
+					opt.option = tag;
+					opt.table_id = new_table_id;
+					result.options_in_create_with.push_back(std::move(opt));
+				}
+			}
 			break;
 		}
 		default:
@@ -1591,6 +1601,11 @@ string DuckLakeTransactionState::CommitChanges(DuckLakeCommitState &commit_state
 		batch_queries += DuckLakeMetadataManager::WriteNewColumns(result.new_columns);
 		batch_queries += context.write_inlined_tables(commit_snapshot, result.new_inlined_data_tables);
 		batch_queries += DuckLakeMetadataManager::WriteNewSortKeys(existing_catalog.sorts, result.new_sort_keys);
+		batch_queries += DuckLakeMetadataManager::WriteOptionsInCreateWith(result.options_in_create_with);
+		// re-key in-memory options from the local id to the committed id
+		for (auto &opt : result.options_in_create_with) {
+			context.set_config_option(opt);
+		}
 		new_tables_result = result.new_tables;
 		new_inlined_data_tables_result = result.new_inlined_data_tables;
 	}

@@ -1499,6 +1499,9 @@ void DuckLakeTransaction::RunCommitLoop(DuckLakeSnapshot transaction_snapshot,
 	context.invalidate_table_stats_cache = [&](idx_t next_file_id, TableIndex table_id) {
 		ducklake_catalog.InvalidateTableStatsCache(next_file_id, table_id);
 	};
+	context.set_config_option = [&](const DuckLakeConfigOption &option) {
+		ducklake_catalog.SetConfigOption(option);
+	};
 	context.commit_info = state->commit_info;
 	context.write_row_group_count = ducklake_catalog.SupportsRowGroupCount();
 	state->Commit(transaction_snapshot, transaction_changes, retry_config, context);

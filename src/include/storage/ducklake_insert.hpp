@@ -14,6 +14,7 @@
 #include "duckdb/common/index_vector.hpp"
 #include "storage/ducklake_stats.hpp"
 #include "common/ducklake_data_file.hpp"
+#include "common/ducklake_options.hpp"
 #include "storage/ducklake_field_data.hpp"
 #include "storage/ducklake_partition_data.hpp"
 #include "storage/ducklake_sort_data.hpp"
@@ -22,6 +23,7 @@ namespace duckdb {
 class DuckLakeCatalog;
 class DuckLakeSchemaEntry;
 class DuckLakeTableEntry;
+class ParsedExpression;
 class DuckLakeFieldData;
 struct DuckLakeCopyOptions;
 struct DuckLakeCopyInput;
@@ -148,10 +150,15 @@ struct DuckLakeCopyOptions {
 
 struct DuckLakeCopyInput {
 	explicit DuckLakeCopyInput(ClientContext &context, DuckLakeTableEntry &table, const string &hive_partition = "");
-	//! CTAS ctor: field_data (required) + optional partition_data supplied directly, before the table entry exists.
+	//! CTAS ctor: field_data (required) + optional partition_data + raw WITH options, before the table entry exists.
 	DuckLakeCopyInput(ClientContext &context, DuckLakeSchemaEntry &schema, const ColumnList &columns,
 	                  const string &data_path_p, DuckLakeFieldData &field_data,
-	                  optional_ptr<DuckLakePartition> partition_data = nullptr);
+	                  optional_ptr<DuckLakePartition> partition_data = nullptr,
+	                  const case_insensitive_map_t<unique_ptr<ParsedExpression>> &options_in_create_with = {});
+
+	//! Effective option for this write: the WITH (...) override if present, else the catalog table/schema/global
+	//! lookup.
+	bool GetEffectiveOption(const string &key, string &out) const;
 
 	DuckLakeCatalog &catalog;
 	optional_ptr<DuckLakePartition> partition_data;
@@ -163,6 +170,9 @@ struct DuckLakeCopyInput {
 	TableIndex table_id;
 	InsertVirtualColumns virtual_columns = InsertVirtualColumns::NONE;
 	optional_idx get_table_index;
+	//! CREATE TABLE / CTAS WITH (...) options that override same-key catalog options for this write.
+	//! Empty for plain INSERT. Validated at plan time before reaching here.
+	option_map_t options_in_create_with;
 };
 
 } // namespace duckdb
