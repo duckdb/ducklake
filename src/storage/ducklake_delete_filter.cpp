@@ -316,6 +316,10 @@ void DuckLakeDeleteFilter::Initialize(const DuckLakeInlinedDataDeletes &inlined_
 		}
 		std::inplace_merge(delete_data->deleted_rows.begin(), delete_data->deleted_rows.begin() + mid_idx,
 		                   delete_data->deleted_rows.end());
+		// Deduplicate: a position can appear in both the delete file and the inlined deletes,
+		// which would make Filter() stall; keep deleted_rows strictly increasing.
+		delete_data->deleted_rows.erase(std::unique(delete_data->deleted_rows.begin(), delete_data->deleted_rows.end()),
+		                                delete_data->deleted_rows.end());
 		return;
 	}
 
@@ -345,6 +349,11 @@ void DuckLakeDeleteFilter::Initialize(const DuckLakeInlinedDataDeletes &inlined_
 
 	delete_data->deleted_rows = std::move(merged_rows);
 	delete_data->snapshot_ids = std::move(merged_snapshot_ids);
+
+	// Deduplicate: a position can appear in both the delete file and the inlined deletes,
+	// which would make Filter() stall; keep deleted_rows strictly increasing.
+	delete_data->deleted_rows.erase(std::unique(delete_data->deleted_rows.begin(), delete_data->deleted_rows.end()),
+	                                delete_data->deleted_rows.end());
 }
 
 unordered_map<idx_t, idx_t> DuckLakeDeleteFilter::ScanDataFileRowIds(ClientContext &context,

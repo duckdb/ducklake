@@ -1,0 +1,94 @@
+# name: test/sql/issues/issue_1084_parquet_inlined_delete_overlap.test
+# description: deleted rows must not reappear when parquet delete files and inlined tombstones overlap (issue #1084)
+# group: [issues]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+# inlining row limit 10: a DELETE of <=10 rows is stored as inlined file deletes,
+# a DELETE of >10 rows is stored as a parquet delete file
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/issue_1084_parquet_inlined_delete_overlap', DATA_INLINING_ROW_LIMIT 10, METADATA_CATALOG 'ducklake_meta')
+
+statement ok
+SET immediate_transaction_mode=true
+
+# 100 rows land in a parquet data file (100 > inlining limit)
+statement ok
+CREATE TABLE ducklake.test AS FROM range(100) t(i)
+
+# sanity: one data file, no delete files yet
+query I
+SELECT count(*) FROM ducklake_meta.ducklake_data_file
+----
+1
+
+# Two concurrent transactions delete the SAME row of the SAME data file. Because the
+# delete sizes straddle the inlining limit, one tombstone is written to the inlined-deletes
+# catalog table and the other to a parquet delete file - and a committed inlined delete is
+# NOT detected as conflicting with a committed parquet delete file (and vice versa), so both
+# commit. This is the user-facing path that produces the parquet/inlined position overlap
+# from issue #1084 - no manual catalog editing required.
+statement ok con1
+BEGIN
+
+statement ok con2
+BEGIN
+
+# con1: single-row delete (1 <= 10) -> inlined file delete for the row at position 50
+query I con1
+DELETE FROM ducklake.test WHERE i = 50
+----
+1
+
+# con2: 30-row delete incl. value 50 (30 > 10) -> parquet delete file covering positions 50..79
+query I con2
+DELETE FROM ducklake.test WHERE i >= 50 AND i < 80
+----
+30
+
+statement ok con1
+COMMIT
+
+# con2 does not conflict with con1's inlined delete, so it commits and position 50 now lives
+# in both the parquet delete file and the inlined-deletes table
+statement ok con2
+COMMIT
+
+# confirm the overlap was actually produced: one parquet delete file AND an inlined delete
+# entry for position 50 on the same data file
+query III
+SELECT
+  (SELECT count(*) FROM ducklake_meta.ducklake_delete_file)                       AS parquet_delete_files,
+  (SELECT count(*) FROM ducklake_meta.ducklake_inlined_delete_1)                  AS inlined_delete_rows,
+  (SELECT count(*) FROM ducklake_meta.ducklake_inlined_delete_1 WHERE row_id = 50) AS inlined_has_pos_50
+----
+1	1	1
+
+# the core correctness property: every position in 50..79 is deleted (by parquet and/or inlined
+# tombstones), so NONE of those values may be visible to a scan. Before the fix the duplicate
+# position 50 gets the read filter stuck and rows 51..79 leak back into the result.
+query I
+SELECT count(*) FROM ducklake.test WHERE i >= 50 AND i < 80
+----
+0
+
+# the surviving rows around the deletion boundary are exactly 45..49 and 80..84
+query I
+SELECT i FROM ducklake.test WHERE i >= 45 AND i < 85 ORDER BY i
+----
+45
+46
+47
+48
+49
+80
+81
+82
+83
+84
