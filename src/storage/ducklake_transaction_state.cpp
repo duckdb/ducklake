@@ -137,6 +137,36 @@ void ConflictCheck(const case_insensitive_map_t<reference_set_t<CatalogEntry>> &
 	}
 }
 
+//! Returns which of `file_ids` (in table `table_id`) another transaction tombstoned via an inlined delete
+//! committed after this transaction's snapshot, for cross-store delete conflict detection (#1215).
+set<DataFileIndex> GetInlinedFileDeletesAfterSnapshot(const std::function<unique_ptr<QueryResult>(string)> &executor,
+                                                      TableIndex table_id, const vector<idx_t> &file_ids) {
+	set<DataFileIndex> result;
+	if (file_ids.empty()) {
+		return result;
+	}
+	string file_id_list;
+	for (auto &file_id : file_ids) {
+		if (!file_id_list.empty()) {
+			file_id_list += ", ";
+		}
+		file_id_list += to_string(file_id);
+	}
+	auto table_name = DuckLakeMetadataManager::InlinedFileDeletionTableName(table_id);
+	auto sql = StringUtil::Format("SELECT DISTINCT file_id FROM {METADATA_CATALOG}.%s "
+	                              "WHERE file_id IN (%s) AND begin_snapshot > {SNAPSHOT_ID}",
+	                              table_name, file_id_list);
+	auto query_result = executor(sql);
+	if (query_result->HasError()) {
+		query_result->GetErrorObject().Throw(
+		    "Failed to commit DuckLake transaction - failed to check for inlined delete conflicts:");
+	}
+	for (auto &row : *query_result) {
+		result.insert(DataFileIndex(row.GetValue<idx_t>(0)));
+	}
+	return result;
+}
+
 } // namespace
 
 void DuckLakeTransactionState::CheckForConflicts(const TransactionChangeInformation &changes,
@@ -225,23 +255,49 @@ void DuckLakeTransactionState::CheckForConflicts(const TransactionChangeInformat
 		ConflictCheck(table_id, other_changes.inserted_tables, "delete from table", "inserted into it");
 		ConflictCheck(table_id, other_changes.tables_inserted_inlined, "delete from table", "inserted into it");
 	}
-	if (!changes.tables_deleted_from.empty()) {
+	// file-level cross-store delete conflict check: same data file conflicts, whether parquet or inlined (#1215)
+	bool self_deletes = !changes.tables_deleted_from.empty() || !changes.tables_deleted_inlined.empty();
+	bool other_deletes = !other_changes.tables_deleted_from.empty() || !other_changes.tables_deleted_inlined.empty();
+	if (self_deletes && other_deletes) {
+		// iterate the deleted-table id sets (not local file changes) so full-table file drops are included
 		bool check_for_matches = false;
-		for (auto &table_id : changes.tables_deleted_from) {
-			if (other_changes.tables_deleted_from.find(table_id) != other_changes.tables_deleted_from.end()) {
-				check_for_matches = true;
+		for (auto &deleted_set : {&changes.tables_deleted_from, &changes.tables_deleted_inlined}) {
+			for (auto &table_id : *deleted_set) {
+				if (other_changes.tables_deleted_from.find(table_id) != other_changes.tables_deleted_from.end() ||
+				    other_changes.tables_deleted_inlined.find(table_id) != other_changes.tables_deleted_inlined.end()) {
+					check_for_matches = true;
+					break;
+				}
+			}
+			if (check_for_matches) {
 				break;
 			}
 		}
 		if (check_for_matches) {
-			// If we have deletes on the tables, check for files being deleted
 			const auto deleted_files = GetFilesDeletedOrDroppedAfterSnapshot(executor);
 			for (auto &entry : local_changes.Changes()) {
+				auto table_id = entry.GetTableIndex();
 				auto &table_changes = entry.GetTableChanges();
+				vector<idx_t> deleted_file_ids;
 				for (auto &file_entry : table_changes.new_delete_files) {
 					for (auto &file : file_entry.second) {
 						ConflictCheck(file.data_file_id, deleted_files.deleted_from_files, "delete from file",
 						              "deleted from it");
+						deleted_file_ids.push_back(file.data_file_id.index);
+					}
+				}
+				if (table_changes.new_inlined_file_deletes) {
+					for (auto &file_entry : table_changes.new_inlined_file_deletes->file_deletes) {
+						ConflictCheck(DataFileIndex(file_entry.first), deleted_files.deleted_from_files,
+						              "delete from file", "deleted from it");
+						deleted_file_ids.push_back(file_entry.first);
+					}
+				}
+				// also check our files against the other transaction's inlined deletes
+				if (other_changes.tables_deleted_inlined.find(table_id) != other_changes.tables_deleted_inlined.end()) {
+					auto inlined_deleted = GetInlinedFileDeletesAfterSnapshot(executor, table_id, deleted_file_ids);
+					for (auto &file_id : deleted_file_ids) {
+						ConflictCheck(DataFileIndex(file_id), inlined_deleted, "delete from file", "deleted from it");
 					}
 				}
 			}
