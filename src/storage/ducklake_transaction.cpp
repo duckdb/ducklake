@@ -769,6 +769,7 @@ void DuckLakeTransaction::Commit() {
 	} else if (connection) {
 		connection->Commit();
 	}
+	FlushNameMapCacheInvalidations();
 	connection.reset();
 	state->local_changes.Clear();
 	SetRequiresNewInlinedTable(false);
@@ -783,6 +784,7 @@ void DuckLakeTransaction::Rollback() {
 	}
 	state->CleanupFiles();
 	state->local_changes.Clear();
+	pending_name_map_cache_invalidations.clear();
 	SetRequiresNewInlinedTable(false);
 	ClearSchemaCachePins();
 }
@@ -836,6 +838,17 @@ case_insensitive_map_t<unique_ptr<DuckLakeCatalogSet>> &DuckLakeTransaction::Get
 bool DuckLakeTransaction::ChangesMade() const {
 	return state->SchemaChangesMade() || state->local_changes.HasChanges() || !state->dropped_files.empty() ||
 	       !new_name_maps.name_maps.empty();
+}
+
+void DuckLakeTransaction::DeferNameMapCacheInvalidation(MappingIndex mapping_id) {
+	pending_name_map_cache_invalidations.push_back(mapping_id);
+}
+
+void DuckLakeTransaction::FlushNameMapCacheInvalidations() {
+	for (auto &mapping_id : pending_name_map_cache_invalidations) {
+		ducklake_catalog.InvalidateNameMapCache(mapping_id);
+	}
+	pending_name_map_cache_invalidations.clear();
 }
 
 void GetTransactionTableChanges(reference<CatalogEntry> table_entry, TransactionChangeInformation &changes) {
@@ -2142,16 +2155,16 @@ MappingIndex DuckLakeTransaction::AddNameMap(unique_ptr<DuckLakeNameMap> name_ma
 	return new_index;
 }
 
-const DuckLakeNameMap &DuckLakeTransaction::GetMappingById(MappingIndex mapping_id) {
+shared_ptr<const DuckLakeNameMap> DuckLakeTransaction::GetMappingById(MappingIndex mapping_id) {
 	// search the transaction-local name maps
 	auto entry = new_name_maps.name_maps.find(mapping_id);
 	if (entry != new_name_maps.name_maps.end()) {
-		return *entry->second;
+		return entry->second;
 	}
 	// search the catalog name maps
 	auto name_map = ducklake_catalog.TryGetMappingById(*this, mapping_id);
 	if (name_map) {
-		return *name_map;
+		return name_map;
 	}
 	throw InvalidInputException("Unknown name map id %d when trying to map file", mapping_id.index);
 }
