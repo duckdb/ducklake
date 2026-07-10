@@ -597,17 +597,42 @@ DuckLakePartitionField GetPartitionField(DuckLakeTableEntry &table, ParsedExpres
 	return field;
 }
 
+static bool PartitionFieldsMatch(optional_ptr<DuckLakePartition> current_partition,
+                                 const DuckLakePartition &requested_partition) {
+	if (!current_partition) {
+		return requested_partition.fields.empty();
+	}
+	if (current_partition->fields.size() != requested_partition.fields.size()) {
+		return false;
+	}
+	for (idx_t i = 0; i < current_partition->fields.size(); i++) {
+		auto &current_field = current_partition->fields[i];
+		auto &requested_field = requested_partition.fields[i];
+		if (current_field.partition_key_index != requested_field.partition_key_index ||
+		    current_field.field_id != requested_field.field_id ||
+		    current_field.transform.type != requested_field.transform.type ||
+		    current_field.transform.bucket_count != requested_field.transform.bucket_count) {
+			return false;
+		}
+	}
+	return true;
+}
+
 unique_ptr<CatalogEntry> DuckLakeTableEntry::AlterTable(DuckLakeTransaction &transaction, SetPartitionedByInfo &info) {
 	auto create_info = GetInfo();
 	auto &table_info = create_info->Cast<CreateTableInfo>();
 	// create a complete copy of this table with the partition info added
 	auto partition_data = make_uniq<DuckLakePartition>();
 	partition_data->partition_id = transaction.GetLocalCatalogId();
+	partition_data->local_partition_id = partition_data->partition_id;
 	for (idx_t expr_idx = 0; expr_idx < info.partition_keys.size(); expr_idx++) {
 		auto &expr = *info.partition_keys[expr_idx];
 		auto partition_field = GetPartitionField(*this, expr);
 		partition_field.partition_key_index = expr_idx;
 		partition_data->fields.push_back(partition_field);
+	}
+	if (PartitionFieldsMatch(GetPartitionData(), *partition_data)) {
+		return nullptr;
 	}
 
 	auto new_entry = make_uniq<DuckLakeTableEntry>(*this, table_info, std::move(partition_data));
