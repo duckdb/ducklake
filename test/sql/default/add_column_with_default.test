@@ -121,3 +121,25 @@ statement error
 ALTER TABLE ducklake.test ALTER nonexistent_column DROP DEFAULT
 ----
 nonexistent_column
+
+# ADD COLUMN with a cast-decorated constant default (see issue_add_column_cast_default).
+# A folded cast default is accepted and back-fills existing rows, but is persisted as an
+# "expression" default with a NULL initial_default (the folded value is not inlined the way
+# a bare literal is). Pin that representation so a future change to it is re-reviewed.
+statement ok
+ALTER TABLE ducklake.test ADD COLUMN k INTEGER DEFAULT '5'::INTEGER
+
+query IIII
+SELECT column_id, initial_default, default_value, default_value_type FROM xx.ducklake_column WHERE column_name = 'k'
+----
+3	NULL	CAST('5' AS INTEGER)	expression
+
+query III
+SELECT i, j, k FROM ducklake.test ORDER BY ALL
+----
+1	42	5
+2	42	5
+100	100	5
+1000	NULL	5
+1000	NULL	5
+NULL	42	5

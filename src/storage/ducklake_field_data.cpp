@@ -2,6 +2,7 @@
 
 #include "duckdb/common/exception/catalog_exception.hpp"
 #include "duckdb/parser/column_list.hpp"
+#include "duckdb/parser/expression/cast_expression.hpp"
 #include "duckdb/parser/expression/constant_expression.hpp"
 
 namespace duckdb {
@@ -54,20 +55,55 @@ static unique_ptr<ParsedExpression> ExtractDefaultExpression(optional_ptr<const 
 	return default_expr->Copy();
 }
 
+static bool TryFoldConstantDefault(const ParsedExpression &expr, const LogicalType &type, Value &result) {
+	reference<const ParsedExpression> inner(expr);
+	auto column_id = type.id();
+	if (column_id == LogicalTypeId::UNBOUND) {
+		column_id = TransformStringToLogicalTypeId(type.ToString());
+	}
+	if (expr.GetExpressionType() == ExpressionType::OPERATOR_CAST) {
+		auto &cast_expr = expr.Cast<CastExpression>();
+		bool try_cast_may_return_null = cast_expr.IsTryCast();
+		if (try_cast_may_return_null) {
+			return false;
+		}
+		auto decoration_id = TransformStringToLogicalTypeId(cast_expr.TargetType().ToString());
+		bool decoration_may_change_value = decoration_id != LogicalTypeId::UNBOUND &&
+		                                   column_id != LogicalTypeId::UNBOUND && decoration_id != column_id;
+		if (decoration_may_change_value) {
+			return false;
+		}
+		inner = cast_expr.Child();
+	}
+	bool inner_is_bare_constant = inner.get().GetExpressionType() == ExpressionType::VALUE_CONSTANT;
+	if (!inner_is_bare_constant) {
+		return false;
+	}
+	result = inner.get().Cast<ConstantExpression>().GetValue();
+	bool column_type_resolved = column_id != LogicalTypeId::UNBOUND;
+	if (!column_type_resolved) {
+		return true;
+	}
+	if (type.id() != LogicalTypeId::UNBOUND && type.id() != result.type().id()) {
+		result = result.DefaultCastAs(type);
+	}
+	return true;
+}
+
 static Value ExtractInitialValue(optional_ptr<const ParsedExpression> initial_expr, const LogicalType &type,
                                  bool add_column) {
 	if (!initial_expr) {
 		return Value(type);
 	}
-	if (initial_expr->GetExpressionType() != ExpressionType::VALUE_CONSTANT) {
+	Value initial_value;
+	if (!TryFoldConstantDefault(*initial_expr, type, initial_value)) {
 		if (!add_column) {
 			return Value(type);
 		}
 		throw NotImplementedException("We cannot add a column with a non-literal default value. Add the column and "
 		                              "then explicitly set the default for new values using \"ALTER ... SET DEFAULT\"");
 	}
-	auto &const_default = initial_expr->Cast<ConstantExpression>();
-	return const_default.GetValue().DefaultCastAs(type);
+	return initial_value;
 }
 
 unique_ptr<DuckLakeFieldId> DuckLakeFieldId::FieldIdFromType(const string &name, const LogicalType &type,
@@ -332,9 +368,13 @@ shared_ptr<DuckLakeFieldData> DuckLakeFieldData::SetDefault(const DuckLakeFieldD
 	auto result = make_shared_ptr<DuckLakeFieldData>();
 	auto new_default =
 	    new_col.HasDefaultValue() ? optional_ptr<const ParsedExpression>(new_col.DefaultValue()) : nullptr;
-	if (new_default && new_default->GetExpressionType() != ExpressionType::VALUE_CONSTANT && add_column) {
-		throw NotImplementedException("We cannot add a column with a non-literal default value. Add the column and "
-		                              "then explicitly set the default for new values using \"ALTER ... SET DEFAULT\"");
+	if (new_default && add_column) {
+		Value folded;
+		if (!TryFoldConstantDefault(*new_default, new_col.Type(), folded)) {
+			throw NotImplementedException("We cannot add a column with a non-literal default value. Add the column and "
+			                              "then explicitly set the default for new values using \"ALTER ... SET "
+			                              "DEFAULT\"");
+		}
 	}
 	for (auto &existing_id : field_data.field_ids) {
 		unique_ptr<DuckLakeFieldId> field_id;
