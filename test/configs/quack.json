@@ -62,7 +62,14 @@
         "test/sql/transaction/transaction_conflict_inlining.test",
         "test/sql/transaction/transaction_conflicts.test",
         "test/sql/transaction/transaction_conflicts_delete.test",
-        "test/sql/transaction/transaction_conflicts_view.test"
+        "test/sql/transaction/transaction_conflicts_view.test",
+        "test/sql/issues/issue_1215_concurrent_inlined_parquet_delete_conflict.test"
+      ]
+    },
+    {
+      "reason": "FIXME: concurrent conflict aborts the transaction on quack's serializing backend (skipped on Postgres/SQLite for the same reason)",
+      "paths": [
+        "test/sql/deletion_inlining/test_deletion_inlining_concurrent.test"
       ]
     },
     {

@@ -139,8 +139,10 @@ void ConflictCheck(const case_insensitive_map_t<reference_set_t<CatalogEntry>> &
 
 //! Returns which of `file_ids` (in table `table_id`) another transaction tombstoned via an inlined delete
 //! committed after this transaction's snapshot, for cross-store delete conflict detection (#1215).
-set<DataFileIndex> GetInlinedFileDeletesAfterSnapshot(const std::function<unique_ptr<QueryResult>(string)> &executor,
-                                                      TableIndex table_id, const vector<idx_t> &file_ids) {
+set<DataFileIndex>
+GetInlinedFileDeletesAfterSnapshot(const std::function<unique_ptr<QueryResult>(string)> &executor,
+                                   const std::function<string(const string &)> &inlined_delete_exists_query,
+                                   TableIndex table_id, const vector<idx_t> &file_ids) {
 	set<DataFileIndex> result;
 	if (file_ids.empty()) {
 		return result;
@@ -154,11 +156,12 @@ set<DataFileIndex> GetInlinedFileDeletesAfterSnapshot(const std::function<unique
 	}
 	auto table_name = DuckLakeMetadataManager::InlinedFileDeletionTableName(table_id);
 	// the inlined-file-deletion table is created lazily, so it is absent when the other transaction only
-	// deleted inlined data; treat a missing table as "no inlined-file deletes" instead of erroring the commit
-	auto exists_sql = StringUtil::Format(
-	    "SELECT 1 FROM information_schema.tables WHERE table_schema = {METADATA_SCHEMA_NAME_LITERAL} "
-	    "AND table_name = %s",
-	    DuckLakeUtil::SQLLiteralToString(table_name));
+	// deleted inlined data; probe its existence (backend-specific, reads live catalog state) and treat a
+	// missing table as "no inlined-file deletes" instead of erroring the commit
+	if (!inlined_delete_exists_query) {
+		throw InternalException("Missing inlined-delete existence query for cross-store conflict check");
+	}
+	auto exists_sql = inlined_delete_exists_query(table_name);
 	auto exists_result = executor(exists_sql);
 	bool table_exists = false;
 	for (auto &row : *exists_result) {
@@ -184,10 +187,10 @@ set<DataFileIndex> GetInlinedFileDeletesAfterSnapshot(const std::function<unique
 
 } // namespace
 
-void DuckLakeTransactionState::CheckForConflicts(const TransactionChangeInformation &changes,
-                                                 const SnapshotChangeInformation &other_changes,
-                                                 DuckLakeSnapshot transaction_snapshot,
-                                                 const std::function<unique_ptr<QueryResult>(string)> &executor) const {
+void DuckLakeTransactionState::CheckForConflicts(
+    const TransactionChangeInformation &changes, const SnapshotChangeInformation &other_changes,
+    DuckLakeSnapshot transaction_snapshot, const std::function<unique_ptr<QueryResult>(string)> &executor,
+    const std::function<string(const string &)> &inlined_delete_exists_query) const {
 	// check if we are dropping the same table as another transaction
 	for (auto &dropped_idx : changes.dropped_tables) {
 		ConflictCheck(dropped_idx, other_changes.dropped_tables, "drop table", "dropped it already");
@@ -310,7 +313,8 @@ void DuckLakeTransactionState::CheckForConflicts(const TransactionChangeInformat
 				}
 				// also check our files against the other transaction's inlined deletes
 				if (other_changes.tables_deleted_inlined.find(table_id) != other_changes.tables_deleted_inlined.end()) {
-					auto inlined_deleted = GetInlinedFileDeletesAfterSnapshot(executor, table_id, deleted_file_ids);
+					auto inlined_deleted = GetInlinedFileDeletesAfterSnapshot(executor, inlined_delete_exists_query,
+					                                                          table_id, deleted_file_ids);
 					for (auto &file_id : deleted_file_ids) {
 						ConflictCheck(DataFileIndex(file_id), inlined_deleted, "delete from file", "deleted from it");
 					}
@@ -1881,7 +1885,8 @@ WHERE idt.schema_version < (
 SnapshotAndStats
 DuckLakeTransactionState::CheckForConflicts(DuckLakeSnapshot transaction_snapshot,
                                             const TransactionChangeInformation &changes,
-                                            const std::function<unique_ptr<QueryResult>(string)> &executor) {
+                                            const std::function<unique_ptr<QueryResult>(string)> &executor,
+                                            const std::function<string(const string &)> &inlined_delete_exists_query) {
 	SnapshotAndStats snapshot_and_stats;
 	// get all changes made to the system after the current snapshot was started
 	auto changes_made = DuckLakeMetadataManager::GetSnapshotAndStatsAndChanges(snapshot_and_stats, executor);
@@ -1889,7 +1894,7 @@ DuckLakeTransactionState::CheckForConflicts(DuckLakeSnapshot transaction_snapsho
 	auto other_changes = SnapshotChangeInformation::ParseChangesMade(changes_made.changes_made);
 
 	// now check for conflicts
-	CheckForConflicts(changes, other_changes, transaction_snapshot, executor);
+	CheckForConflicts(changes, other_changes, transaction_snapshot, executor, inlined_delete_exists_query);
 
 	return snapshot_and_stats;
 }
@@ -1910,7 +1915,8 @@ void DuckLakeTransactionState::Commit(DuckLakeSnapshot transaction_snapshot,
 				// we failed our first commit due to another transaction committing
 				// retry - but first check for conflicts
 				commit_stats_snapshot =
-				    CheckForConflicts(transaction_snapshot, attempt_changes, context.conflict_query_executor);
+				    CheckForConflicts(transaction_snapshot, attempt_changes, context.conflict_query_executor,
+				                      context.inlined_delete_exists_query);
 				stats = &commit_stats_snapshot.stats;
 			} else {
 				commit_stats_snapshot.snapshot = context.get_snapshot();
