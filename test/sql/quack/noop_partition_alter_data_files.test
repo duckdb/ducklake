@@ -1,0 +1,63 @@
+# name: test/sql/quack/noop_partition_alter_data_files.test
+# description: Redundant partition alters must not poison Quack data-file metadata
+# group: [quack]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+
+test-env DATA_PATH __TEST_DIR__
+
+statement ok
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/quack_noop_partition_alter_data_files', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+USE ducklake
+
+statement ok
+CREATE TABLE partitioned_tbl(part_key INTEGER, values VARCHAR);
+
+statement ok
+ALTER TABLE partitioned_tbl SET PARTITIONED BY (part_key);
+
+statement ok
+INSERT INTO partitioned_tbl SELECT i % 2, concat('value_', i) FROM range(5) t(i);
+
+statement ok
+BEGIN;
+
+statement ok
+ALTER TABLE partitioned_tbl SET PARTITIONED BY (part_key);
+
+statement ok
+DELETE FROM partitioned_tbl WHERE part_key = 0;
+
+statement ok
+INSERT INTO partitioned_tbl VALUES (0, 'replacement_a'), (0, 'replacement_b');
+
+statement ok
+COMMIT;
+
+query I
+SELECT COUNT(*)
+FROM __ducklake_metadata_ducklake.ducklake_partition_info
+WHERE table_id = 1
+  AND end_snapshot IS NULL;
+----
+1
+
+query I
+SELECT COUNT(DISTINCT partition_id)
+FROM __ducklake_metadata_ducklake.ducklake_data_file
+WHERE table_id = 1
+  AND end_snapshot IS NULL;
+----
+1
+
+query I
+SELECT MAX(schema_version)
+FROM __ducklake_metadata_ducklake.ducklake_snapshot;
+----
+2
