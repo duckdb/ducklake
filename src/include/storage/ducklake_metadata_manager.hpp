@@ -176,6 +176,8 @@ public:
 
 	virtual string MetadataExistsQuery() const;
 
+	virtual string InlinedDeleteTableExistsQuery(const string &table_name) const;
+
 	//! Initialize a new DuckLake
 	virtual void InitializeDuckLake(bool has_explicit_schema, DuckLakeEncryption encryption);
 	//! Get the CREATE TABLE statements for all metadata tables

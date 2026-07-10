@@ -121,6 +121,19 @@ unique_ptr<QueryResult> PostgresMetadataManager::Query(DuckLakeSnapshot snapshot
 	return DuckLakeMetadataManager::Query(snapshot, query);
 }
 
+string PostgresMetadataManager::InlinedDeleteTableExistsQuery(const string &table_name) const {
+	// DuckDB's cached view of the attached catalog can be stale for a table another transaction created.
+	// Multiple DuckLake catalogs can share one Postgres database, hence the schema filter.
+	// Both values cross two parsers, DuckDB's then Postgres', so they escape twice.
+	auto &ducklake_catalog = transaction.GetCatalog();
+	auto schema_literal =
+	    StringUtil::Replace(DuckLakeUtil::SQLLiteralToString(ducklake_catalog.MetadataSchemaName()), "'", "''");
+	auto table_literal = StringUtil::Replace(DuckLakeUtil::SQLLiteralToString(table_name), "'", "''");
+	return StringUtil::Format("SELECT 1 FROM postgres_query({METADATA_CATALOG_NAME_LITERAL}, "
+	                          "'SELECT 1 FROM information_schema.tables WHERE table_schema = %s AND table_name = %s')",
+	                          schema_literal, table_literal);
+}
+
 string PostgresMetadataManager::GetLatestSnapshotQuery() const {
 	return R"(
 	SELECT * FROM postgres_query({METADATA_CATALOG_NAME_LITERAL},

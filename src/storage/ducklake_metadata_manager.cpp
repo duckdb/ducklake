@@ -169,6 +169,13 @@ string DuckLakeMetadataManager::MetadataExistsQuery() const {
 	return "SELECT NULL FROM {METADATA_CATALOG}.ducklake_metadata LIMIT 1";
 }
 
+string DuckLakeMetadataManager::InlinedDeleteTableExistsQuery(const string &table_name) const {
+	// the metadata catalog is a local DuckDB database, so its information_schema reflects the current state
+	return StringUtil::Format("SELECT 1 FROM information_schema.tables WHERE table_schema = "
+	                          "{METADATA_SCHEMA_NAME_LITERAL} AND table_name = %s",
+	                          DuckLakeUtil::SQLLiteralToString(table_name));
+}
+
 bool DuckLakeMetadataManager::MetadataExists() {
 	auto query = MetadataExistsQuery();
 	auto result = Query(query);
