@@ -1008,7 +1008,11 @@ DuckLakePartitionInfo DuckLakeTransaction::GetNewPartitionKey(DuckLakeCommitStat
 		// dropping partition data - insert the empty partition key data for this table
 		return partition_key;
 	}
-	auto local_partition_id = partition_data->partition_id;
+	// key the remap off the original transaction-local id: a previous failed commit attempt may have
+	// already overwritten partition_id, while data files still reference the transaction-local id
+	auto local_partition_id = partition_data->local_partition_id.IsValid()
+	                              ? partition_data->local_partition_id.GetIndex()
+	                              : partition_data->partition_id;
 	auto partition_id = commit_state.commit_snapshot.next_catalog_id++;
 	partition_key.id = partition_id;
 	partition_data->partition_id = partition_id;
