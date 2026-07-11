@@ -146,9 +146,16 @@ string PostgresMetadataManager::GenerateFileColumnStatsCTEBody(const CTERequirem
 // We need a specialized function here to do a reinterpret for postgres from BLOB to VARCHAR
 shared_ptr<DuckLakeInlinedData>
 PostgresMetadataManager::TransformInlinedData(QueryResult &result, const vector<LogicalType> &expected_types) {
+	if (result.HasError()) {
+		result.GetErrorObject().Throw("Failed to read inlined data from DuckLake: ");
+	}
 	bool needs_reinterpret = false;
 	if (!expected_types.empty()) {
-		D_ASSERT(expected_types.size() == result.types.size());
+		if (result.types.size() < expected_types.size()) {
+			throw InvalidInputException(
+			    "Failed to read inlined data from DuckLake: expected %llu columns but read %llu",
+			    expected_types.size(), result.types.size());
+		}
 		for (idx_t i = 0; i < expected_types.size(); i++) {
 			if (result.types[i] != expected_types[i]) {
 				D_ASSERT(result.types[i].id() == LogicalTypeId::BLOB &&
@@ -161,9 +168,6 @@ PostgresMetadataManager::TransformInlinedData(QueryResult &result, const vector<
 		return DuckLakeMetadataManager::TransformInlinedData(result, expected_types);
 	}
 
-	if (result.HasError()) {
-		result.GetErrorObject().Throw("Failed to read inlined data from DuckLake: ");
-	}
 	auto context = transaction.context.lock();
 	auto data = make_uniq<ColumnDataCollection>(*context, expected_types);
 	DataChunk reinterpret_chunk;
