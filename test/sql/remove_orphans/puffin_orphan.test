@@ -56,7 +56,8 @@ CALL ducklake_delete_orphaned_files('ducklake', cleanup_all => true)
 
 query I
 SELECT count(*)
-FROM glob('{DATA_PATH}/ducklake_puffin_orphan/main/test/orphan-delete.puffin')
+FROM glob('{DATA_PATH}/ducklake_puffin_orphan/main/test/*-delete.puffin')
+WHERE ends_with(file, '/orphan-delete.puffin')
 ----
 0
 
