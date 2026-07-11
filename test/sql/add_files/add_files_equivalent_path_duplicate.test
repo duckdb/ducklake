@@ -1,0 +1,59 @@
+# name: test/sql/add_files/add_files_equivalent_path_duplicate.test
+# description: ducklake_add_data_files should deduplicate equivalent local file paths
+# group: [add_files]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (
+  DATA_PATH '{DATA_PATH}/add_files_equivalent_path_duplicate',
+  METADATA_CATALOG 'metadata',
+  DATA_INLINING_ROW_LIMIT 0
+)
+
+statement ok
+COPY (SELECT 42::INT AS i) TO '{DATA_PATH}/one.parquet' (FORMAT parquet)
+
+statement ok
+CREATE TABLE ducklake.exact_repeat(i INTEGER)
+
+statement ok
+CALL ducklake_add_data_files('ducklake', 'exact_repeat', [
+  '{DATA_PATH}/one.parquet',
+  '{DATA_PATH}/one.parquet'
+])
+
+query I
+SELECT COUNT(*) FROM ducklake.exact_repeat
+----
+1
+
+statement ok
+CREATE TABLE ducklake.equivalent_repeat(i INTEGER)
+
+statement ok
+CALL ducklake_add_data_files('ducklake', 'equivalent_repeat', [
+  '{DATA_PATH}/one.parquet',
+  '{DATA_PATH}/./one.parquet'
+])
+
+query I
+SELECT COUNT(*) FROM ducklake.equivalent_repeat
+----
+1
+
+query I
+SELECT COUNT(*) FROM metadata.ducklake_data_file
+WHERE table_id = (
+  SELECT table_id
+  FROM metadata.ducklake_table
+  WHERE table_name = 'equivalent_repeat'
+)
+----
+1
