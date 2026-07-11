@@ -126,7 +126,7 @@ static bool IsValidTransformedHivePartitionValue(const HivePartition &hive_parti
 	if (bucket_value < 0) {
 		return false;
 	}
-	return UnsafeNumericCast<idx_t>(bucket_value) < partition_field.transform.bucket_count;
+	return NumericCast<idx_t>(bucket_value) < partition_field.transform.bucket_count;
 }
 
 struct ParquetFileMetadata {
