@@ -114,6 +114,21 @@ struct HivePartition {
 	optional_idx partition_key_index;
 };
 
+static bool IsValidTransformedHivePartitionValue(const HivePartition &hive_partition,
+                                                 const DuckLakePartitionField &partition_field) {
+	if (partition_field.transform.type != DuckLakeTransformType::BUCKET) {
+		return true;
+	}
+	if (hive_partition.hive_value.IsNull()) {
+		return false;
+	}
+	auto bucket_value = hive_partition.hive_value.GetValue<int32_t>();
+	if (bucket_value < 0) {
+		return false;
+	}
+	return UnsafeNumericCast<idx_t>(bucket_value) < partition_field.transform.bucket_count;
+}
+
 struct ParquetFileMetadata {
 	string filename;
 	vector<unique_ptr<ParquetColumn>> columns;
@@ -1258,6 +1273,10 @@ DuckLakeDataFile DuckLakeFileProcessor::AddFileToTable(ParquetFileMetadata &file
 				}
 				if (!partition_field || partition_field->field_id != hive_partition_value.field_index ||
 				    !(partition_field->transform == hive_partition_value.transform)) {
+					invalid_partition = true;
+					break;
+				}
+				if (!IsValidTransformedHivePartitionValue(hive_partition_value, *partition_field)) {
 					invalid_partition = true;
 					break;
 				}
