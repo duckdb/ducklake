@@ -150,6 +150,9 @@ private:
 	                                                    vector<unique_ptr<ParquetColumn>> &parquet_columns,
 	                                                    const vector<unique_ptr<DuckLakeFieldId>> &field_ids,
 	                                                    const string &prefix = string());
+	void CollectLiveFieldIds(const vector<unique_ptr<DuckLakeFieldId>> &field_ids, unordered_set<idx_t> &result);
+	void ValidateParquetFieldIds(const ParquetFileMetadata &file, const vector<unique_ptr<ParquetColumn>> &columns,
+	                             const unordered_set<idx_t> &live_field_ids, const string &prefix = string());
 	void MapColumnStats(ParquetFileMetadata &file_metadata, DuckLakeDataFile &result);
 	unique_ptr<DuckLakeNameMapEntry> MapHiveColumn(ParquetFileMetadata &file_metadata, const DuckLakeFieldId &field_id,
 	                                               const Value &hive_value);
@@ -1164,6 +1167,36 @@ DuckLakeFileProcessor::MapColumns(ParquetFileMetadata &file_metadata,
 	return column_maps;
 }
 
+static bool IsDuckLakeInternalColumn(const string &name) {
+	return name == "duckdb_schema" || StringUtil::StartsWith(name, "_ducklake_internal_");
+}
+
+void DuckLakeFileProcessor::CollectLiveFieldIds(const vector<unique_ptr<DuckLakeFieldId>> &field_ids,
+                                                unordered_set<idx_t> &result) {
+	for (auto &field_id : field_ids) {
+		result.insert(field_id->GetFieldIndex().index);
+		CollectLiveFieldIds(field_id->Children(), result);
+	}
+}
+
+void DuckLakeFileProcessor::ValidateParquetFieldIds(const ParquetFileMetadata &file,
+                                                    const vector<unique_ptr<ParquetColumn>> &columns,
+                                                    const unordered_set<idx_t> &live_field_ids, const string &prefix) {
+	for (auto &column : columns) {
+		const auto full_name = prefix.empty() ? column->name : StringUtil::Format("%s.%s", prefix, column->name);
+		if (!IsDuckLakeInternalColumn(column->name) && column->field_id.IsValid()) {
+			const auto source_field_id = column->field_id.GetIndex();
+			if (live_field_ids.find(source_field_id) == live_field_ids.end()) {
+				throw InvalidInputException(
+				    "Parquet field ID mismatch for column \"%s\" in file \"%s\": field ID %d is not a live field in "
+				    "table \"%s\"",
+				    full_name, file.filename, source_field_id, table.name.GetIdentifierName());
+			}
+		}
+		ValidateParquetFieldIds(file, column->child_columns, live_field_ids, full_name);
+	}
+}
+
 void DuckLakeFileProcessor::MapPartitionColumns(ParquetFileMetadata &file) {
 	auto partition_data = table.GetPartitionData();
 	if (!partition_data) {
@@ -1212,6 +1245,11 @@ void DuckLakeFileProcessor::DetermineMapping(ParquetFileMetadata &file) {
 	}
 
 	MapPartitionColumns(file);
+
+	// Before we map parquet columns to DuckLake columns, we need to validate that the parquet field ids are live.
+	unordered_set<idx_t> live_field_ids;
+	CollectLiveFieldIds(table.GetFieldData().GetFieldIds(), live_field_ids);
+	ValidateParquetFieldIds(file, file.columns, live_field_ids);
 
 	file.map_entries = MapColumns(file, file.columns, table.GetFieldData().GetFieldIds());
 }
