@@ -1,0 +1,33 @@
+# name: test/sql/compaction/expire_snapshots_empty_versions.test
+# description: expiring an empty list of snapshot versions is a no-op
+# group: [compaction]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (
+    DATA_PATH '{DATA_PATH}/ducklake_expire_empty_versions'
+)
+
+statement ok
+CREATE TABLE ducklake.test(i INTEGER)
+
+statement ok
+INSERT INTO ducklake.test VALUES (42)
+
+query I
+SELECT count(*)
+FROM ducklake_expire_snapshots('ducklake', versions => [], dry_run => true)
+----
+0
+
+query I
+SELECT count(*) FROM ducklake.test
+----
+1
