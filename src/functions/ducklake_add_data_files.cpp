@@ -241,6 +241,7 @@ FROM parquet_full_metadata(%s)
 		auto filepath =
 		    FlatVector::GetData<string_t>(struct_children[0])[struct_idx].GetString(); // struct field: file_name
 
+		// Use canonicalize path to detect duplicate files
 		auto &fs = FileSystem::GetFileSystem(context);
 		auto canonical_filepath = fs.CanonicalizePath(filepath);
 
@@ -252,7 +253,7 @@ FROM parquet_full_metadata(%s)
 		processed_files.insert(canonical_filepath);
 
 		ParquetFileMetadata file;
-		file.filepath = std::move(canonical_filepath);
+		file.filepath = std::move(filepath);
 
 		file.row_count = FlatVector::GetData<int64_t>(struct_children[1])[struct_idx]; // struct field: num_rows
 		file.file_size_bytes =
