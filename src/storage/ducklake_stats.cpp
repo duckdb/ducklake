@@ -99,8 +99,26 @@ DuckLakeColumnStats DuckLakeColumnStats::FromGlobalStats(const LogicalType &type
 	return stats;
 }
 
+// Cast a string-encoded stat to a new column type after ALTER COLUMN ... TYPE, so a same-transaction
+// retype+INSERT keeps min/max instead of discarding them. Callers must skip FLOAT sources: a float's
+// stored string is not bit-faithful when reparsed at a wider type (#1307), giving a value-wrong bound.
+static bool ReconcileStatToType(string &value, const LogicalType &target) {
+	// DefaultTryCastAs still throws for nested targets (STRUCT/LIST/MAP/VARIANT), aborting the commit.
+	if (!RequiresValueComparison(target)) {
+		return false;
+	}
+	Value casted;
+	string error;
+	if (Value(value).DefaultTryCastAs(target, casted, &error) && !casted.IsNull()) {
+		value = casted.ToString();
+		return true;
+	}
+	return false;
+}
+
 void DuckLakeColumnStats::MergeStats(const DuckLakeColumnStats &new_stats) {
 	bool types_differ = type != new_stats.type;
+	auto source_type = type;
 	if (types_differ) {
 		type = new_stats.type;
 	}
@@ -126,12 +144,20 @@ void DuckLakeColumnStats::MergeStats(const DuckLakeColumnStats &new_stats) {
 		}
 	}
 
-	if (!new_stats.AnyValid()) {
-		// all values in the source are NULL - don't update min/max
-		if (types_differ) {
+	if (types_differ) {
+		// Column was retyped: cast min/max to the new type, invalidating only what cannot be represented.
+		// A FLOAT source is stored as a float-precision string that is not bit-faithful when reparsed at a
+		// wider type (#1307), so discard its min/max rather than keep a value-wrong bound.
+		bool source_is_float = source_type.id() == LogicalTypeId::FLOAT;
+		if (has_min && (source_is_float || !ReconcileStatToType(min, type))) {
 			has_min = false;
+		}
+		if (has_max && (source_is_float || !ReconcileStatToType(max, type))) {
 			has_max = false;
 		}
+	}
+	if (!new_stats.AnyValid()) {
+		// all values in the source are NULL - don't update min/max
 		return;
 	}
 	if (!AnyValid()) {
@@ -143,43 +169,37 @@ void DuckLakeColumnStats::MergeStats(const DuckLakeColumnStats &new_stats) {
 		any_valid = true;
 		return;
 	}
-	if (types_differ) {
-		// min/max from different types cannot be compared - invalidate them
+	if (!new_stats.has_min) {
 		has_min = false;
-		has_max = false;
-	} else {
-		if (!new_stats.has_min) {
-			has_min = false;
-		} else if (has_min) {
-			// both stats have a min - select the smallest
-			if (RequiresValueComparison(type)) {
-				// for numerics/temporals we need to parse the stats
-				auto current_min = Value(min).DefaultCastAs(type);
-				auto new_min = Value(new_stats.min).DefaultCastAs(type);
-				if (new_min < current_min) {
-					min = new_stats.min;
-				}
-			} else if (new_stats.min < min) {
-				// for other types we can compare the strings directly
+	} else if (has_min) {
+		// both stats have a min - select the smallest
+		if (RequiresValueComparison(type)) {
+			// for numerics/temporals we need to parse the stats
+			auto current_min = Value(min).DefaultCastAs(type);
+			auto new_min = Value(new_stats.min).DefaultCastAs(type);
+			if (new_min < current_min) {
 				min = new_stats.min;
 			}
+		} else if (new_stats.min < min) {
+			// for other types we can compare the strings directly
+			min = new_stats.min;
 		}
+	}
 
-		if (!new_stats.has_max) {
-			has_max = false;
-		} else if (has_max) {
-			// both stats have a max - select the largest
-			if (RequiresValueComparison(type)) {
-				// for numerics/temporals we need to parse the stats
-				auto current_max = Value(max).DefaultCastAs(type);
-				auto new_max = Value(new_stats.max).DefaultCastAs(type);
-				if (new_max > current_max) {
-					max = new_stats.max;
-				}
-			} else if (new_stats.max > max) {
-				// for other types we can compare the strings directly
+	if (!new_stats.has_max) {
+		has_max = false;
+	} else if (has_max) {
+		// both stats have a max - select the largest
+		if (RequiresValueComparison(type)) {
+			// for numerics/temporals we need to parse the stats
+			auto current_max = Value(max).DefaultCastAs(type);
+			auto new_max = Value(new_stats.max).DefaultCastAs(type);
+			if (new_max > current_max) {
 				max = new_stats.max;
 			}
+		} else if (new_stats.max > max) {
+			// for other types we can compare the strings directly
+			max = new_stats.max;
 		}
 	}
 
