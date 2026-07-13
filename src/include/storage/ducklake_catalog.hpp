@@ -35,10 +35,16 @@ class LogicalGet;
 struct DuckLakeTableStatsCacheEntry : public ObjectCacheEntry {
 	static constexpr idx_t ESTIMATED_BYTES_PER_COLUMN_STATS = 256;
 
-	explicit DuckLakeTableStatsCacheEntry(DuckLakeTableStats stats_p) : stats(std::move(stats_p)) {
+	explicit DuckLakeTableStatsCacheEntry(DuckLakeTableStats stats_p)
+	    : stats(std::move(stats_p)), has_stats(true) {
+	}
+	// Negative entry: the table has no stats at this snapshot (e.g. it is empty).
+	// This must be cached too — see DuckLakeCatalog::GetTableStats.
+	DuckLakeTableStatsCacheEntry() : has_stats(false) {
 	}
 
 	DuckLakeTableStats stats;
+	bool has_stats;
 
 	static string ObjectType() {
 		return "ducklake_table_stats";
