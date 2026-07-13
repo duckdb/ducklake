@@ -657,6 +657,25 @@ WHERE table_id = %d)",
 	                          table_id.index);
 }
 
+vector<DuckLakeInlinedTableInfo> DuckLakeMetadataManager::GetInlinedDataTablesForTable(TableIndex table_id) {
+	auto result = Query(StringUtil::Format(R"(
+SELECT table_name, schema_version
+FROM {METADATA_CATALOG}.ducklake_inlined_data_tables
+WHERE table_id = %d)",
+	                                       table_id.index));
+	if (result->HasError()) {
+		result->GetErrorObject().Throw("Failed to read inlined data tables from DuckLake: ");
+	}
+	vector<DuckLakeInlinedTableInfo> inlined_data_tables;
+	for (auto &row : *result) {
+		DuckLakeInlinedTableInfo inlined_data_table;
+		inlined_data_table.table_name = row.GetValue<string>(0);
+		inlined_data_table.schema_version = row.GetValue<idx_t>(1);
+		inlined_data_tables.push_back(std::move(inlined_data_table));
+	}
+	return inlined_data_tables;
+}
+
 DuckLakeCatalogInfo DuckLakeMetadataManager::GetCatalogForSnapshot(DuckLakeSnapshot snapshot) {
 	auto &ducklake_catalog = transaction.GetCatalog();
 	return BuildCatalogForSnapshot(
@@ -5354,7 +5373,7 @@ WHERE idt.schema_version < (
 	if (res->HasError()) {
 		res->GetErrorObject().Throw("Failed to drop superseded inlined-data tables in DuckLake: ");
 	}
-	// We also need to invalidate the existing schema versions in our catalog
+	// Refresh this instance's entry-cached membership; read and cardinality paths resolve it per snapshot_id.
 	auto &catalog = transaction.GetCatalog();
 	auto snapshot_versions = Query("SELECT DISTINCT schema_version FROM {METADATA_CATALOG}.ducklake_snapshot;");
 	if (snapshot_versions->HasError()) {

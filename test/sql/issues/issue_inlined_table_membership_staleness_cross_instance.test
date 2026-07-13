@@ -1,0 +1,54 @@
+# name: test/sql/issues/issue_inlined_table_membership_staleness_cross_instance.test
+# description: a reader attached separately from the flushing writer must not keep a stale inlined-table name after a concurrent flush drops a superseded inlined table (heals only on reconnect)
+# group: [issues]
+
+require ducklake
+
+require parquet
+
+# Two DuckLake catalogs over one shared metadata store (METADATA_CATALOG 'm'), so the
+# reader and the writer are distinct catalog instances with distinct instance_ids and
+# therefore distinct schema-cache namespaces -- the same split as two independent
+# connections/processes on a shared metadata backend. The writer's cache invalidation
+# after a flush only reaches its own instance, so the reader is left stale.
+
+statement ok
+ATTACH 'ducklake:__TEST_DIR__/membership_xi.db' AS dl_w (DATA_PATH '__TEST_DIR__/membership_xi_data', DATA_INLINING_ROW_LIMIT 100, METADATA_CATALOG 'm')
+
+statement ok
+ATTACH 'ducklake:__TEST_DIR__/membership_xi.db' AS dl_r (DATA_PATH '__TEST_DIR__/membership_xi_data', DATA_INLINING_ROW_LIMIT 100, METADATA_CATALOG 'm')
+
+statement ok
+CREATE TABLE dl_w.t (id INTEGER, v INTEGER)
+
+# first inline generation lands in ducklake_inlined_data_<id>_1
+statement ok
+INSERT INTO dl_w.t VALUES (1, 10)
+
+# the ALTER bumps schema_version, so the next inline write starts a second generation
+# (ducklake_inlined_data_<id>_2) and the first generation becomes superseded
+statement ok
+ALTER TABLE dl_w.t ADD COLUMN w INTEGER DEFAULT 0
+
+statement ok
+INSERT INTO dl_w.t VALUES (2, 20, 200)
+
+# the reader (a separate catalog instance) resolves t and caches its inlined membership
+# {gen_1, gen_2} in its own schema_version-keyed cache entry
+query I
+SELECT sum(v) FROM dl_r.t
+----
+30
+
+# the flush materializes both generations to parquet and drops the emptied, superseded
+# gen_1 table; the writer invalidates only its own instance's schema cache
+statement ok
+CALL ducklake_flush_inlined_data('dl_w')
+
+# the reader re-resolves the same schema_version from its own (un-invalidated) cache and
+# must not hand the inlined reader the name of the dropped gen_1 table
+# pre-fix: Catalog Error: ... ducklake_inlined_data_<id>_1 does not exist
+query I
+SELECT sum(v) FROM dl_r.t
+----
+30

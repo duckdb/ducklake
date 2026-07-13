@@ -163,6 +163,15 @@ optional_idx DuckLakeSchemaCacheEntry::GetEstimatedCacheMemory() const {
 	return EstimateCatalogSetMemory(catalog_set);
 }
 
+optional_idx DuckLakeInlinedDataTablesCacheEntry::GetEstimatedCacheMemory() const {
+	idx_t estimate = sizeof(DuckLakeInlinedDataTablesCacheEntry);
+	estimate += inlined_data_tables.size() * sizeof(DuckLakeInlinedTableInfo);
+	for (const auto &inlined_table : inlined_data_tables) {
+		estimate += EstimateStringMemory(inlined_table.table_name);
+	}
+	return estimate;
+}
+
 void DuckLakeSchemaPinState::QueryEnd(ClientContext &context) {
 	Clear();
 }
@@ -382,6 +391,25 @@ void DuckLakeCatalog::PinSchemaForQuery(DuckLakeTransaction &transaction, shared
 	auto &registered = *context_ref->registered_state;
 	auto pin_state = registered.GetOrCreate<DuckLakeSchemaPinState>(SchemaPinStateKey());
 	pin_state->Pin(std::move(entry));
+}
+
+vector<DuckLakeInlinedTableInfo> DuckLakeCatalog::GetInlinedDataTables(DuckLakeTransaction &transaction,
+                                                                       DuckLakeTableEntry &table) {
+	// Transaction-local tables are not in the metadata store yet; their membership lives on the entry.
+	if (table.IsTransactionLocal()) {
+		return table.GetInlinedDataTables();
+	}
+	auto table_id = table.GetTableId();
+	auto &cache = GetObjectCacheInstance();
+	// Key on the transaction's committed snapshot, not any per-read time-travel target.
+	auto key = InlinedDataTablesCacheKey(transaction.GetSnapshot().snapshot_id, table_id);
+	auto cached = cache.Get<DuckLakeInlinedDataTablesCacheEntry>(key);
+	if (cached) {
+		return cached->inlined_data_tables;
+	}
+	auto inlined_data_tables = transaction.GetMetadataManager().GetInlinedDataTablesForTable(table_id);
+	cache.Put(std::move(key), make_shared_ptr<DuckLakeInlinedDataTablesCacheEntry>(inlined_data_tables));
+	return inlined_data_tables;
 }
 
 static unique_ptr<DuckLakeFieldId> TransformColumnType(DuckLakeColumnInfo &col) {
@@ -1087,6 +1115,11 @@ string DuckLakeCatalog::StatsCacheKey(idx_t next_file_id, TableIndex table_id) c
 
 string DuckLakeCatalog::SchemaCacheKey(idx_t schema_version) const {
 	return StringUtil::Format("ducklake:%s:%s:%s:schema:%llu", GetName(), MetadataPath(), instance_id, schema_version);
+}
+
+string DuckLakeCatalog::InlinedDataTablesCacheKey(idx_t snapshot_id, TableIndex table_id) const {
+	return StringUtil::Format("ducklake:%s:%s:%s:inlined_tables:%llu:table:%llu", GetName(), MetadataPath(),
+	                          instance_id, snapshot_id, table_id.index);
 }
 
 void DuckLakeCatalog::InvalidateTableStatsCache(idx_t next_file_id, TableIndex table_id) {
