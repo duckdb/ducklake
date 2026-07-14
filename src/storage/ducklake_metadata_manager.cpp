@@ -4836,7 +4836,7 @@ vector<DuckLakeFileForCleanup> DuckLakeMetadataManager::GetOrphanFilesForCleanup
 
 		auto query = StringUtil::Format(R"(SELECT filename
 FROM read_blob({DATA_PATH} || '**') files
-WHERE suffix(filename, '.parquet')
+WHERE (suffix(filename, '.parquet') OR suffix(filename, '.puffin'))
 AND NOT EXISTS (
 	SELECT 1 FROM %s known_files WHERE known_files.full_path = REPLACE(files.filename, '\', '/')
 )
