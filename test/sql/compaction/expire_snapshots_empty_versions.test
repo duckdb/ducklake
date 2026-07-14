@@ -28,6 +28,24 @@ FROM ducklake_expire_snapshots('ducklake', versions => [], dry_run => true)
 0
 
 query I
+SELECT count(*)
+FROM ducklake_expire_snapshots('ducklake', versions => NULL, dry_run => true)
+----
+0
+
+query I
+SELECT count(*)
+FROM ducklake_expire_snapshots('ducklake', versions => [NULL], dry_run => true)
+----
+0
+
+query I
+SELECT count(*)
+FROM ducklake_expire_snapshots('ducklake', versions => [1, NULL, 2], dry_run => true)
+----
+1
+
+query I
 SELECT count(*) FROM ducklake.test
 ----
 1

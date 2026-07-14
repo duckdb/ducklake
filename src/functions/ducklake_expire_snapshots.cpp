@@ -32,16 +32,28 @@ static unique_ptr<FunctionData> DuckLakeExpireSnapshotsBind(ClientContext &conte
 
 	for (auto &entry : input.named_parameters) {
 		if (entry.first == "dry_run") {
+			if (entry.second.IsNull()) {
+				throw BinderException("The dry_run option must be a non-null boolean.");
+			}
 			result->dry_run = BooleanValue::Get(entry.second);
 		} else if (entry.first == "versions") {
 			has_versions = true;
+			if (entry.second.IsNull()) {
+				continue;
+			}
 			for (auto &snapshot_id : ListValue::GetChildren(entry.second)) {
+				if (snapshot_id.IsNull()) {
+					continue;
+				}
 				if (!snapshot_list.empty()) {
 					snapshot_list += ", ";
 				}
 				snapshot_list += snapshot_id.ToString();
 			}
 		} else if (entry.first == "older_than") {
+			if (entry.second.IsNull()) {
+				throw BinderException("The older_than option must be a non-null timestamp.");
+			}
 			from_timestamp = entry.second.GetValue<timestamp_tz_t>();
 			has_timestamp = true;
 		} else {
