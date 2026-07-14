@@ -64,6 +64,7 @@ DuckLakeMultiFileList::DynamicFilterPushdown(ClientContext &context, const Multi
 		return nullptr;
 	}
 
+	// DuckDB passes the final filter set, including both static and Top-N dynamic filters.
 	auto pushdown_info = make_uniq<FilterPushdownInfo>();
 
 	for (auto &entry : filters) {
