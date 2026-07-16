@@ -86,29 +86,29 @@ SELECT id, b, d, ts, n, s FROM dl.t WHERE id = 4
 ----
 4	7	2020-01-01	2020-01-01 00:00:00	5	abc
 
-# the guard must stay closed for genuinely non-constant / value-changing casts:
+# these spellings are constant folds too, and are accepted with the same values stock
+# DuckDB produces for them. See test/sql/default/add_column_default_folding.test for the
+# full family; the guard now only closes on defaults that have no single foldable value.
 
-# TRY_CAST has a NULL-on-failure contract, not a constant fold
-statement error
+statement ok
 ALTER TABLE dl.t ADD COLUMN e INTEGER DEFAULT TRY_CAST('5' AS INTEGER)
-----
-non-literal default value
 
-# a cast whose decoration names a different type than the column can change the value
-# ('3.9'::DOUBLE rounds to 4 on an INTEGER column, whereas '3.9'::INTEGER errors)
-statement error
+statement ok
 ALTER TABLE dl.t ADD COLUMN f INTEGER DEFAULT '3.9'::DOUBLE
-----
-non-literal default value
 
-# a cast decoration wider than but different from the column type is not folded either
-statement error
+statement ok
 ALTER TABLE dl.t ADD COLUMN h INTEGER DEFAULT '5'::BIGINT
-----
-non-literal default value
 
-# nested casts are not a single-layer constant fold
-statement error
+statement ok
 ALTER TABLE dl.t ADD COLUMN g INTEGER DEFAULT '3.9'::DOUBLE::INTEGER
+
+query IIII
+SELECT e, f, h, g FROM dl.t WHERE id = 1
+----
+5	4	5	4
+
+# a VOLATILE default still has no single value to back-fill with
+statement error
+ALTER TABLE dl.t ADD COLUMN r DOUBLE DEFAULT random()
 ----
 non-literal default value

@@ -18,6 +18,7 @@ namespace duckdb {
 struct AlterTableInfo;
 struct SetPartitionedByInfo;
 class DuckLakeTransaction;
+class ClientContext;
 class ColumnDefinition;
 class ColumnList;
 
@@ -70,10 +71,12 @@ public:
 	unique_ptr<ParsedExpression> GetDefault() const;
 
 	static unique_ptr<DuckLakeFieldId> FieldIdFromColumn(const ColumnDefinition &col, idx_t &column_id,
-	                                                     bool add_column = false);
+	                                                     bool add_column = false,
+	                                                     optional_ptr<ClientContext> context = nullptr);
 	static unique_ptr<DuckLakeFieldId> FieldIdFromType(const string &name, const LogicalType &type,
 	                                                   optional_ptr<const ParsedExpression> default_expr,
-	                                                   idx_t &column_id, bool add_column);
+	                                                   idx_t &column_id, bool add_column,
+	                                                   optional_ptr<ClientContext> context = nullptr);
 	static unique_ptr<DuckLakeFieldId> Rename(const DuckLakeFieldId &field_id, const string &new_name);
 	static unique_ptr<DuckLakeFieldId> SetDefault(const DuckLakeFieldId &field_id,
 	                                              optional_ptr<const ParsedExpression> default_expr);
@@ -121,9 +124,11 @@ public:
 	                                                  const string &new_name);
 	static shared_ptr<DuckLakeFieldData> DropColumn(const DuckLakeFieldData &field_data, FieldIndex drop_index);
 	static shared_ptr<DuckLakeFieldData> AddColumn(const DuckLakeFieldData &field_data, const ColumnDefinition &new_col,
-	                                               idx_t &next_column_id);
+	                                               idx_t &next_column_id,
+	                                               optional_ptr<ClientContext> context = nullptr);
 	static shared_ptr<DuckLakeFieldData> SetDefault(const DuckLakeFieldData &field_data, FieldIndex field_index,
-	                                                const ColumnDefinition &new_col, bool add_column);
+	                                                const ColumnDefinition &new_col, bool add_column,
+	                                                optional_ptr<ClientContext> context = nullptr);
 
 private:
 	vector<unique_ptr<DuckLakeFieldId>> field_ids;

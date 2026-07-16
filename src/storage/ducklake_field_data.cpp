@@ -1,9 +1,12 @@
 #include "storage/ducklake_field_data.hpp"
 
+#include "duckdb/common/exception/binder_exception.hpp"
 #include "duckdb/common/exception/catalog_exception.hpp"
+#include "duckdb/execution/expression_executor.hpp"
 #include "duckdb/parser/column_list.hpp"
-#include "duckdb/parser/expression/cast_expression.hpp"
 #include "duckdb/parser/expression/constant_expression.hpp"
+#include "duckdb/planner/binder.hpp"
+#include "duckdb/planner/expression_binder/constant_binder.hpp"
 
 namespace duckdb {
 
@@ -55,48 +58,51 @@ static unique_ptr<ParsedExpression> ExtractDefaultExpression(optional_ptr<const 
 	return default_expr->Copy();
 }
 
-static bool TryFoldConstantDefault(const ParsedExpression &expr, const LogicalType &type, Value &result) {
-	reference<const ParsedExpression> inner(expr);
-	auto column_id = type.id();
-	if (column_id == LogicalTypeId::UNBOUND) {
-		column_id = TransformStringToLogicalTypeId(type.ToString());
-	}
-	if (expr.GetExpressionType() == ExpressionType::OPERATOR_CAST) {
-		auto &cast_expr = expr.Cast<CastExpression>();
-		bool try_cast_may_return_null = cast_expr.IsTryCast();
-		if (try_cast_may_return_null) {
+// Bind and constant-fold a DEFAULT expression with DuckDB's own machinery, accepting exactly what DuckDB
+// accepts on a plain table. ExtractInitialValue folds a bare constant into initial_default; SetDefault uses
+// it only to accept or reject an added column's default, since for a non-constant default the parser's
+// ADD COLUMN rewrite has already back-filled existing rows with its own UPDATE. IsFoldable() rejects
+// VOLATILE (random(), uuid()); now() is CONSISTENT_WITHIN_QUERY and folds.
+static bool TryFoldConstantDefault(optional_ptr<ClientContext> context, const ParsedExpression &expr,
+                                   const LogicalType &type, Value &result) {
+	if (!context) {
+		// no context on this path - only a bare constant can be folded without a binder
+		if (expr.GetExpressionType() != ExpressionType::VALUE_CONSTANT) {
 			return false;
 		}
-		auto decoration_id = TransformStringToLogicalTypeId(cast_expr.TargetType().ToString());
-		bool decoration_may_change_value = decoration_id != LogicalTypeId::UNBOUND &&
-		                                   column_id != LogicalTypeId::UNBOUND && decoration_id != column_id;
-		if (decoration_may_change_value) {
-			return false;
-		}
-		inner = cast_expr.Child();
-	}
-	bool inner_is_bare_constant = inner.get().GetExpressionType() == ExpressionType::VALUE_CONSTANT;
-	if (!inner_is_bare_constant) {
-		return false;
-	}
-	result = inner.get().Cast<ConstantExpression>().GetValue();
-	bool column_type_resolved = column_id != LogicalTypeId::UNBOUND;
-	if (!column_type_resolved) {
+		result = expr.Cast<ConstantExpression>().GetValue().DefaultCastAs(type);
 		return true;
 	}
-	if (type.id() != LogicalTypeId::UNBOUND && type.id() != result.type().id()) {
-		result = result.DefaultCastAs(type);
+	auto bind_expr = expr.Copy();
+	auto binder = Binder::CreateBinder(*context);
+	ConstantBinder default_binder(*binder, *context, "DEFAULT value");
+	if (type.id() != LogicalTypeId::UNBOUND) {
+		default_binder.target_type = type;
 	}
-	return true;
+	unique_ptr<Expression> bound_default;
+	try {
+		bound_default = default_binder.Bind(bind_expr);
+	} catch (const InternalException &) {
+		throw;
+	} catch (const BinderException &) {
+		// ConstantBinder's message is more precise than the caller's generic non-literal error
+		throw;
+	} catch (const std::exception &) {
+		return false;
+	}
+	if (!bound_default->IsFoldable()) {
+		return false;
+	}
+	return ExpressionExecutor::TryEvaluateScalar(*context, *bound_default, result);
 }
 
-static Value ExtractInitialValue(optional_ptr<const ParsedExpression> initial_expr, const LogicalType &type,
-                                 bool add_column) {
+static Value ExtractInitialValue(optional_ptr<ClientContext> context, optional_ptr<const ParsedExpression> initial_expr,
+                                 const LogicalType &type, bool add_column) {
 	if (!initial_expr) {
 		return Value(type);
 	}
 	Value initial_value;
-	if (!TryFoldConstantDefault(*initial_expr, type, initial_value)) {
+	if (!TryFoldConstantDefault(context, *initial_expr, type, initial_value)) {
 		if (!add_column) {
 			return Value(type);
 		}
@@ -108,7 +114,8 @@ static Value ExtractInitialValue(optional_ptr<const ParsedExpression> initial_ex
 
 unique_ptr<DuckLakeFieldId> DuckLakeFieldId::FieldIdFromType(const string &name, const LogicalType &type,
                                                              optional_ptr<const ParsedExpression> default_expr,
-                                                             idx_t &column_id, bool add_column) {
+                                                             idx_t &column_id, bool add_column,
+                                                             optional_ptr<ClientContext> context) {
 	DuckLakeColumnData column_data;
 	column_data.id = FieldIndex(column_id++);
 	vector<unique_ptr<DuckLakeFieldId>> field_children;
@@ -119,8 +126,8 @@ unique_ptr<DuckLakeFieldId> DuckLakeFieldId::FieldIdFromType(const string &name,
 			throw NotImplementedException("Default value for STRUCT type not supported");
 		}
 		for (auto &entry : StructType::GetChildTypes(type)) {
-			field_children.push_back(
-			    FieldIdFromType(entry.first.GetIdentifierName(), entry.second, nullptr, column_id, add_column));
+			field_children.push_back(FieldIdFromType(entry.first.GetIdentifierName(), entry.second, nullptr, column_id,
+			                                         add_column, context));
 		}
 		break;
 	}
@@ -129,26 +136,28 @@ unique_ptr<DuckLakeFieldId> DuckLakeFieldId::FieldIdFromType(const string &name,
 			throw NotImplementedException("Default value for LIST type not supported");
 		}
 		field_children.push_back(
-		    FieldIdFromType("element", ListType::GetChildType(type), nullptr, column_id, add_column));
+		    FieldIdFromType("element", ListType::GetChildType(type), nullptr, column_id, add_column, context));
 		break;
 	case LogicalTypeId::ARRAY:
 		if (default_expr) {
 			throw NotImplementedException("Default value for LIST type not supported");
 		}
 		field_children.push_back(
-		    FieldIdFromType("element", ArrayType::GetChildType(type), nullptr, column_id, add_column));
+		    FieldIdFromType("element", ArrayType::GetChildType(type), nullptr, column_id, add_column, context));
 		break;
 	case LogicalTypeId::MAP:
 		if (default_expr) {
 			throw NotImplementedException("Default value for MAP type not supported");
 		}
-		field_children.push_back(FieldIdFromType("key", MapType::KeyType(type), nullptr, column_id, add_column));
-		field_children.push_back(FieldIdFromType("value", MapType::ValueType(type), nullptr, column_id, add_column));
+		field_children.push_back(
+		    FieldIdFromType("key", MapType::KeyType(type), nullptr, column_id, add_column, context));
+		field_children.push_back(
+		    FieldIdFromType("value", MapType::ValueType(type), nullptr, column_id, add_column, context));
 		break;
 	default:
 		break;
 	}
-	column_data.initial_default = ExtractInitialValue(default_expr, type, add_column);
+	column_data.initial_default = ExtractInitialValue(context, default_expr, type, add_column);
 	if (default_expr) {
 		column_data.default_value = default_expr->Copy();
 	}
@@ -164,10 +173,10 @@ unique_ptr<ParsedExpression> DuckLakeFieldId::GetDefault() const {
 }
 
 unique_ptr<DuckLakeFieldId> DuckLakeFieldId::FieldIdFromColumn(const ColumnDefinition &col, idx_t &column_id,
-                                                               bool add_column) {
+                                                               bool add_column, optional_ptr<ClientContext> context) {
 	auto default_val = col.HasDefaultValue() ? optional_ptr<const ParsedExpression>(col.DefaultValue()) : nullptr;
 	return DuckLakeFieldId::FieldIdFromType(col.Name().GetIdentifierName(), col.Type(), default_val, column_id,
-	                                        add_column);
+	                                        add_column, context);
 }
 
 shared_ptr<DuckLakeFieldData> DuckLakeFieldData::FromColumns(const ColumnList &columns) {
@@ -341,12 +350,13 @@ shared_ptr<DuckLakeFieldData> DuckLakeFieldData::RenameColumn(const DuckLakeFiel
 }
 
 shared_ptr<DuckLakeFieldData> DuckLakeFieldData::AddColumn(const DuckLakeFieldData &field_data,
-                                                           const ColumnDefinition &new_col, idx_t &next_column_id) {
+                                                           const ColumnDefinition &new_col, idx_t &next_column_id,
+                                                           optional_ptr<ClientContext> context) {
 	auto result = make_shared_ptr<DuckLakeFieldData>();
 	for (auto &existing_id : field_data.field_ids) {
 		result->Add(existing_id->Copy());
 	}
-	auto field_id = DuckLakeFieldId::FieldIdFromColumn(new_col, next_column_id, true);
+	auto field_id = DuckLakeFieldId::FieldIdFromColumn(new_col, next_column_id, true, context);
 	result->Add(std::move(field_id));
 	return result;
 }
@@ -364,13 +374,14 @@ shared_ptr<DuckLakeFieldData> DuckLakeFieldData::DropColumn(const DuckLakeFieldD
 }
 
 shared_ptr<DuckLakeFieldData> DuckLakeFieldData::SetDefault(const DuckLakeFieldData &field_data, FieldIndex field_index,
-                                                            const ColumnDefinition &new_col, bool add_column) {
+                                                            const ColumnDefinition &new_col, bool add_column,
+                                                            optional_ptr<ClientContext> context) {
 	auto result = make_shared_ptr<DuckLakeFieldData>();
 	auto new_default =
 	    new_col.HasDefaultValue() ? optional_ptr<const ParsedExpression>(new_col.DefaultValue()) : nullptr;
 	if (new_default && add_column) {
 		Value folded;
-		if (!TryFoldConstantDefault(*new_default, new_col.Type(), folded)) {
+		if (!TryFoldConstantDefault(context, *new_default, new_col.Type(), folded)) {
 			throw NotImplementedException("We cannot add a column with a non-literal default value. Add the column and "
 			                              "then explicitly set the default for new values using \"ALTER ... SET "
 			                              "DEFAULT\"");

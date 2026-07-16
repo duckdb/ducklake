@@ -130,7 +130,8 @@ DuckLakeTableEntry::DuckLakeTableEntry(Catalog &catalog, SchemaCatalogEntry &sch
 }
 
 // ALTER TABLE RENAME/SET COMMENT/ADD COLUMN/DROP COLUMN
-DuckLakeTableEntry::DuckLakeTableEntry(DuckLakeTableEntry &parent, CreateTableInfo &info, LocalChange local_change)
+DuckLakeTableEntry::DuckLakeTableEntry(DuckLakeTableEntry &parent, CreateTableInfo &info, LocalChange local_change,
+                                       optional_ptr<ClientContext> context)
     : DuckLakeTableEntry(parent.ParentCatalog(), parent.ParentSchema(), info, parent.GetTableId(),
                          parent.GetTableUUID(), parent.DataPath(), parent.field_data, parent.next_column_id,
                          parent.inlined_data_tables, local_change) {
@@ -145,7 +146,7 @@ DuckLakeTableEntry::DuckLakeTableEntry(DuckLakeTableEntry &parent, CreateTableIn
 		LogicalIndex new_col_idx(columns.LogicalColumnCount() - 1);
 		auto &new_col = GetColumn(new_col_idx);
 		idx_t next_col = next_column_id.GetIndex();
-		field_data = DuckLakeFieldData::AddColumn(*field_data, new_col, next_col);
+		field_data = DuckLakeFieldData::AddColumn(*field_data, new_col, next_col, context);
 		next_column_id = next_col;
 	} else if (local_change.type == LocalChangeType::REMOVE_COLUMN) {
 		auto changed_id = local_change.field_index;
@@ -154,7 +155,7 @@ DuckLakeTableEntry::DuckLakeTableEntry(DuckLakeTableEntry &parent, CreateTableIn
 }
 
 DuckLakeTableEntry::DuckLakeTableEntry(DuckLakeTableEntry &parent, CreateTableInfo &info,
-                                       SetDefaultLocalChange local_change)
+                                       SetDefaultLocalChange local_change, optional_ptr<ClientContext> context)
     : DuckLakeTableEntry(parent.ParentCatalog(), parent.ParentSchema(), info, parent.GetTableId(),
                          parent.GetTableUUID(), parent.DataPath(), parent.field_data, parent.next_column_id,
                          parent.inlined_data_tables, local_change) {
@@ -168,7 +169,7 @@ DuckLakeTableEntry::DuckLakeTableEntry(DuckLakeTableEntry &parent, CreateTableIn
 
 	auto changed_id = local_change.field_index;
 	field_data = DuckLakeFieldData::SetDefault(*field_data, changed_id, GetColumnByFieldId(changed_id),
-	                                           local_change.is_column_new);
+	                                           local_change.is_column_new, context);
 }
 
 static void ReplaceColumnRefName(ParsedExpression &expr, const string &old_name, const string &new_name) {
@@ -792,7 +793,7 @@ unique_ptr<CatalogEntry> DuckLakeTableEntry::AlterTable(ClientContext &context, 
 	table_info.columns.AddColumn(info.new_column.Copy());
 
 	RequireNextColumnId(transaction);
-	auto new_entry = make_uniq<DuckLakeTableEntry>(*this, table_info, LocalChangeType::ADD_COLUMN);
+	auto new_entry = make_uniq<DuckLakeTableEntry>(*this, table_info, LocalChangeType::ADD_COLUMN, context);
 
 	if (transaction.HasTransactionInlinedData(GetTableId())) {
 		auto &new_table = new_entry->Cast<DuckLakeTableEntry>();
@@ -1300,7 +1301,8 @@ unique_ptr<CatalogEntry> DuckLakeTableEntry::AlterTable(DuckLakeTransaction &tra
 	return std::move(new_entry);
 }
 
-unique_ptr<CatalogEntry> DuckLakeTableEntry::AlterTable(DuckLakeTransaction &transaction, SetDefaultInfo &info) {
+unique_ptr<CatalogEntry> DuckLakeTableEntry::AlterTable(ClientContext &context, DuckLakeTransaction &transaction,
+                                                        SetDefaultInfo &info) {
 	auto create_info = GetInfo();
 	auto &table_info = create_info->Cast<CreateTableInfo>();
 	if (!ColumnExists(info.column_name)) {
@@ -1314,7 +1316,7 @@ unique_ptr<CatalogEntry> DuckLakeTableEntry::AlterTable(DuckLakeTransaction &tra
 	                                                                             col.GetName().GetIdentifierName());
 
 	auto new_entry = make_uniq<DuckLakeTableEntry>(
-	    *this, table_info, SetDefaultLocalChange::SetDefault(field_id.GetFieldIndex(), new_column));
+	    *this, table_info, SetDefaultLocalChange::SetDefault(field_id.GetFieldIndex(), new_column), context);
 	return std::move(new_entry);
 }
 
@@ -1389,7 +1391,7 @@ unique_ptr<CatalogEntry> DuckLakeTableEntry::Alter(ClientContext &context, DuckL
 	case AlterTableType::RENAME_FIELD:
 		return AlterTable(transaction, info.Cast<RenameFieldInfo>());
 	case AlterTableType::SET_DEFAULT:
-		return AlterTable(transaction, info.Cast<SetDefaultInfo>());
+		return AlterTable(context, transaction, info.Cast<SetDefaultInfo>());
 	case AlterTableType::SET_SORTED_BY:
 		return AlterTable(transaction, info.Cast<SetSortedByInfo>());
 	default:

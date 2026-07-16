@@ -1,0 +1,147 @@
+# name: test/sql/default/add_column_default_folding.test
+# description: ADD COLUMN DEFAULT folds any constant-foldable expression, matching stock DuckDB
+# group: [default]
+
+require ducklake
+
+require parquet
+
+# a fixed metadata path (not {UUID}) so the DETACH / re-ATTACH below reloads the same catalog
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/defaultfold.db' AS dl (DATA_PATH '{TEST_DIR}/defaultfold_data')
+
+statement ok
+CREATE TABLE dl.t (id INTEGER)
+
+statement ok
+INSERT INTO dl.t VALUES (1), (2)
+
+# every spelling below is a compile-time constant that stock DuckDB accepts on a plain table
+
+statement ok
+ALTER TABLE dl.t ADD COLUMN arith INTEGER DEFAULT 1+1
+
+# a nested cast is still a constant fold
+statement ok
+ALTER TABLE dl.t ADD COLUMN nested INTEGER DEFAULT '3.9'::DOUBLE::INTEGER
+
+# a cast decoration naming a type wider than the column
+statement ok
+ALTER TABLE dl.t ADD COLUMN widened INTEGER DEFAULT '5'::BIGINT
+
+# a cast decoration naming a different type than the column: '3.9'::DOUBLE rounds to 4 on
+# an INTEGER column, exactly as it does outside DuckLake
+statement ok
+ALTER TABLE dl.t ADD COLUMN rounded INTEGER DEFAULT '3.9'::DOUBLE
+
+statement ok
+ALTER TABLE dl.t ADD COLUMN trycast_ok INTEGER DEFAULT TRY_CAST('5' AS INTEGER)
+
+# TRY_CAST's NULL-on-failure contract survives the fold
+statement ok
+ALTER TABLE dl.t ADD COLUMN trycast_null INTEGER DEFAULT TRY_CAST('abc' AS INTEGER)
+
+# rows 1 and 2 pre-date every ALTER above, so these are back-filled values
+query IIIIIII
+SELECT id, arith, nested, widened, rounded, trycast_ok, trycast_null FROM dl.t ORDER BY id
+----
+1	2	4	5	4	5	NULL
+2	2	4	5	4	5	NULL
+
+# row 3 omits the added columns, so its values come from the insert path rather than the
+# back-fill. The two must agree: computing the back-fill by hand instead of through the
+# binder is exactly how the same DEFAULT clause ends up disagreeing with a later INSERT.
+statement ok
+INSERT INTO dl.t (id) VALUES (3)
+
+query IIIIIII
+SELECT id, arith, nested, widened, rounded, trycast_ok, trycast_null FROM dl.t ORDER BY id
+----
+1	2	4	5	4	5	NULL
+2	2	4	5	4	5	NULL
+3	2	4	5	4	5	NULL
+
+# the same must hold once the back-fill runs against a written parquet file
+statement ok
+CALL ducklake_flush_inlined_data('dl')
+
+query I
+SELECT count(*) FROM dl.t WHERE arith <> 2 OR nested <> 4 OR widened <> 5 OR rounded <> 4 OR trycast_ok <> 5 OR trycast_null IS NOT NULL
+----
+0
+
+# a VOLATILE default has no single value to back-fill with, so it stays rejected
+statement error
+ALTER TABLE dl.t ADD COLUMN r DOUBLE DEFAULT random()
+----
+non-literal default value
+
+statement error
+ALTER TABLE dl.t ADD COLUMN u UUID DEFAULT uuid()
+----
+non-literal default value
+
+# the SET DEFAULT path folds as well, and only affects rows inserted afterwards
+statement ok
+ALTER TABLE dl.t ALTER COLUMN arith SET DEFAULT 2+3
+
+statement ok
+INSERT INTO dl.t (id) VALUES (4)
+
+query II
+SELECT id, arith FROM dl.t ORDER BY id
+----
+1	2
+2	2
+3	2
+4	5
+
+# now() is CONSISTENT_WITHIN_QUERY rather than VOLATILE, so it folds. Existing rows are
+# stamped with the single ALTER-time instant while new inserts keep evaluating now() per row.
+statement ok
+CREATE TABLE dl.tnow (id INTEGER)
+
+statement ok
+INSERT INTO dl.tnow VALUES (1), (2)
+
+statement ok
+ALTER TABLE dl.tnow ADD COLUMN created TIMESTAMP DEFAULT now()
+
+# both pre-existing rows share one frozen, non-NULL instant
+query III
+SELECT count(*), count(DISTINCT created), count(created) FROM dl.tnow
+----
+2	1	2
+
+statement ok
+SELECT pg_sleep(0.2)
+
+statement ok
+INSERT INTO dl.tnow (id) VALUES (3)
+
+# the new row is evaluated at insert time, strictly later than the frozen back-fill
+query I
+SELECT (SELECT created FROM dl.tnow WHERE id = 3) > (SELECT DISTINCT created FROM dl.tnow WHERE id < 3)
+----
+true
+
+# folded values must survive a catalog reload
+statement ok
+DETACH dl
+
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/defaultfold.db' AS dl (DATA_PATH '{TEST_DIR}/defaultfold_data')
+
+query IIIIIII
+SELECT id, arith, nested, widened, rounded, trycast_ok, trycast_null FROM dl.t ORDER BY id
+----
+1	2	4	5	4	5	NULL
+2	2	4	5	4	5	NULL
+3	2	4	5	4	5	NULL
+4	5	4	5	4	5	NULL
+
+# the ALTER-time instant is persisted, not recomputed on reload
+query III
+SELECT count(*), count(DISTINCT created), count(created) FROM dl.tnow WHERE id < 3
+----
+2	1	2
