@@ -120,7 +120,7 @@ static bool IsValidTransformedHivePartitionValue(const HivePartition &hive_parti
 		return true;
 	}
 	if (hive_partition.hive_value.IsNull()) {
-		return false;
+		return true;
 	}
 	auto bucket_value = hive_partition.hive_value.GetValue<int32_t>();
 	if (bucket_value < 0) {
