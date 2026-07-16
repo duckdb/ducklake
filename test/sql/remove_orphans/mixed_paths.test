@@ -48,6 +48,12 @@ SELECT count(*) FROM ducklake_delete_orphaned_files('ducklake', cleanup_all => t
 statement ok
 CALL ducklake_add_data_files('ducklake', 'test', '{DATA_PATH}/mixed_paths/main/test/bla.parquet');
 
+query T
+SELECT path FROM ducklake_metadata.ducklake_data_file
+WHERE path LIKE '%bla.parquet';
+----
+bla.parquet
+
 query I
 SELECT count(*) FROM ducklake_delete_orphaned_files('ducklake', cleanup_all => true, dry_run => true);
 ----

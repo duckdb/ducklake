@@ -4,6 +4,7 @@
 #include "storage/ducklake_transaction_changes.hpp"
 #include "storage/ducklake_table_entry.hpp"
 #include "storage/ducklake_insert.hpp"
+#include "storage/ducklake_catalog.hpp"
 #include "duckdb/common/file_system.hpp"
 #include "duckdb/common/constants.hpp"
 #include "duckdb/common/hive_partitioning.hpp"
@@ -252,8 +253,24 @@ FROM parquet_full_metadata(%s)
 		}
 		processed_files.insert(canonical_filepath);
 
+		// Keep paths inside the DuckLake data directory in the configured path namespace. Canonicalization can rewrite
+		// a symlinked prefix (for example /tmp to /private/tmp), while orphan cleanup scans the configured data path.
+		// The canonical path remains the deduplication key, but the rebased path is persisted.
+		auto persisted_filepath = canonical_filepath;
+		auto &data_path = transaction.GetCatalog().DataPath();
+		if (!data_path.empty()) {
+			auto canonical_data_path = fs.CanonicalizePath(data_path);
+			auto path_separator = fs.PathSeparator(data_path);
+			if (!StringUtil::EndsWith(canonical_data_path, path_separator)) {
+				canonical_data_path += path_separator;
+			}
+			if (StringUtil::StartsWith(canonical_filepath, canonical_data_path)) {
+				persisted_filepath = data_path + canonical_filepath.substr(canonical_data_path.size());
+			}
+		}
+
 		ParquetFileMetadata file;
-		file.filepath = std::move(filepath);
+		file.filepath = std::move(persisted_filepath);
 
 		file.row_count = FlatVector::GetData<int64_t>(struct_children[1])[struct_idx]; // struct field: num_rows
 		file.file_size_bytes =
