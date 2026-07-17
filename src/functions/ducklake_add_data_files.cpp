@@ -4,6 +4,8 @@
 #include "storage/ducklake_transaction_changes.hpp"
 #include "storage/ducklake_table_entry.hpp"
 #include "storage/ducklake_insert.hpp"
+#include "storage/ducklake_catalog.hpp"
+#include "duckdb/common/file_system.hpp"
 #include "duckdb/common/constants.hpp"
 #include "duckdb/common/hive_partitioning.hpp"
 #include "duckdb/common/types/value.hpp"
@@ -115,7 +117,7 @@ struct HivePartition {
 };
 
 struct ParquetFileMetadata {
-	string filename;
+	string filepath;
 	vector<unique_ptr<ParquetColumn>> columns;
 	unordered_map<idx_t, reference<ParquetColumn>> column_id_map;
 	optional_idx row_count;
@@ -233,25 +235,42 @@ FROM parquet_full_metadata(%s)
 		auto parquet_schema_offset = parquet_schema_entry.offset;
 		auto parquet_schema_length = parquet_schema_entry.length;
 
-		// Extract filename from the file metadata struct
+		// Extract the file path from the file metadata struct
 		auto &struct_children = StructVector::GetEntries(file_metadata_list_entries);
 		idx_t struct_idx = file_metadata_offset;
 
-		auto filename =
+		auto filepath =
 		    FlatVector::GetData<string_t>(struct_children[0])[struct_idx].GetString(); // struct field: file_name
 
-		// Normalize path separators for consistent deduplication across platforms (Windows uses backslashes)
-		auto normalized_filename = StringUtil::Replace(filename, "\\", "/");
+		// Use canonicalize path to detect duplicate files
+		auto &fs = FileSystem::GetFileSystem(context);
+		auto canonical_filepath = fs.CanonicalizePath(filepath);
 
 		// Check if we've already processed this file (can happen with overlapping globs)
-		if (processed_files.count(normalized_filename)) {
+		if (processed_files.count(canonical_filepath)) {
 			// File already processed in a previous glob, skip
 			continue;
 		}
-		processed_files.insert(normalized_filename);
+		processed_files.insert(canonical_filepath);
+
+		// Keep paths inside the DuckLake data directory in the configured path namespace. Canonicalization can rewrite
+		// a symlinked prefix (for example /tmp to /private/tmp), while orphan cleanup scans the configured data path.
+		// The canonical path remains the deduplication key, but the rebased path is persisted.
+		auto persisted_filepath = canonical_filepath;
+		auto &data_path = transaction.GetCatalog().DataPath();
+		if (!data_path.empty()) {
+			auto canonical_data_path = fs.CanonicalizePath(data_path);
+			auto path_separator = fs.PathSeparator(data_path);
+			if (!StringUtil::EndsWith(canonical_data_path, path_separator)) {
+				canonical_data_path += path_separator;
+			}
+			if (StringUtil::StartsWith(canonical_filepath, canonical_data_path)) {
+				persisted_filepath = data_path + canonical_filepath.substr(canonical_data_path.size());
+			}
+		}
 
 		ParquetFileMetadata file;
-		file.filename = std::move(filename);
+		file.filepath = std::move(persisted_filepath);
 
 		file.row_count = FlatVector::GetData<int64_t>(struct_children[1])[struct_idx]; // struct field: num_rows
 		file.file_size_bytes =
@@ -671,7 +690,7 @@ bool DuckLakeParquetTypeChecker::CheckTypes(const vector<LogicalType> &types) {
 void DuckLakeParquetTypeChecker::Fail() {
 	string error_message = StringUtil::Format(
 	    "Failed to map column \"%s%s\" from file \"%s\" to the column in table \"%s\"",
-	    prefix.empty() ? prefix : prefix + ".", column.name, file_metadata.filename, table.name.GetIdentifierName());
+	    prefix.empty() ? prefix : prefix + ".", column.name, file_metadata.filepath, table.name.GetIdentifierName());
 	for (auto &failure : failures) {
 		error_message += "\n* " + failure;
 	}
@@ -1128,7 +1147,7 @@ DuckLakeFileProcessor::MapColumns(ParquetFileMetadata &file_metadata,
 			}
 			throw InvalidInputException("Column \"%s%s\" exists in file \"%s\" but was not found in table \"%s\"\n* "
 			                            "Set ignore_extra_columns => true to add the file anyway",
-			                            prefix.empty() ? prefix : prefix + ".", col->name, file_metadata.filename,
+			                            prefix.empty() ? prefix : prefix + ".", col->name, file_metadata.filepath,
 			                            table.name.GetIdentifierName());
 		}
 		auto hive_entry = hive_partitions.find(col->name);
@@ -1158,7 +1177,7 @@ DuckLakeFileProcessor::MapColumns(ParquetFileMetadata &file_metadata,
 			    "Column \"%s%s\" exists in table \"%s\" but was not found in file \"%s\"\n* Set "
 			    "allow_missing => true to allow missing fields and columns",
 			    prefix.empty() ? prefix : prefix + ".", entry.second.get().Name(), table.name.GetIdentifierName(),
-			    file_metadata.filename);
+			    file_metadata.filepath);
 		}
 	}
 	return column_maps;
@@ -1208,7 +1227,7 @@ void DuckLakeFileProcessor::MapPartitionColumns(ParquetFileMetadata &file) {
 void DuckLakeFileProcessor::DetermineMapping(ParquetFileMetadata &file) {
 	if (hive_partitioning != HivePartitioningType::NO) {
 		// we are mapping hive partitions - check if there are any hive partitioned columns
-		hive_partitions = HivePartitioning::Parse(file.filename);
+		hive_partitions = HivePartitioning::Parse(file.filepath);
 	}
 
 	MapPartitionColumns(file);
@@ -1218,7 +1237,7 @@ void DuckLakeFileProcessor::DetermineMapping(ParquetFileMetadata &file) {
 
 DuckLakeDataFile DuckLakeFileProcessor::AddFileToTable(ParquetFileMetadata &file) {
 	DuckLakeDataFile result;
-	result.file_name = file.filename;
+	result.file_name = file.filepath;
 	result.row_count = file.row_count.GetIndex();
 	result.file_size_bytes = file.file_size_bytes.GetIndex();
 	result.footer_size = file.footer_size.GetIndex();
@@ -1266,7 +1285,7 @@ DuckLakeDataFile DuckLakeFileProcessor::AddFileToTable(ParquetFileMetadata &file
 		}
 		if (invalid_partition) {
 			throw InvalidInputException("File \"%s\" contains an invalid partition value for the table configuration.",
-			                            file.filename);
+			                            file.filepath);
 		}
 		for (auto &hive_partition : file.hive_partition_values) {
 			result.partition_values.push_back(
