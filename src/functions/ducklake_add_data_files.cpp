@@ -1130,11 +1130,11 @@ void DuckLakeFileProcessor::MapColumnStats(ParquetFileMetadata &file_metadata, D
 		column_stats.has_num_values = true;
 		column_stats.num_values = file_metadata.row_count.GetIndex();
 		column_stats.has_null_count = true;
-		if (!hive_value.IsNull()) {
+		if (entry.transform.type == DuckLakeTransformType::IDENTITY && !hive_value.IsNull()) {
 			column_stats.min = column_stats.max = hive_value.ToString();
 			column_stats.has_min = column_stats.has_max = true;
 		} else {
-			// All rows in this file have NULL for this partition column
+			// for non-identity transforms the partition value is the transform output, not a value of the source column
 			column_stats.null_count = file_metadata.row_count.GetIndex();
 			column_stats.any_valid = false;
 		};
