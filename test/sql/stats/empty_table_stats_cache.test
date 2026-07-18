@@ -13,21 +13,12 @@ test-env DATA_PATH __TEST_DIR__
 statement ok
 ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/ducklake_empty_stats_files')
 
-# A table with no data has no stats row. GetTableStats() used to return nullptr
-# WITHOUT caching that answer, so every call missed the cache and re-ran
-# GetGlobalTableStats() -- a full query against the metadata catalog. Because
-# GetStatistics() is called once per referenced column while planning, an empty
-# table paid one metadata query PER COLUMN, on every query, and never warmed up.
-#
-# Caching the negative result fixes that. The risk it introduces is staleness:
-# the "no stats" answer must not survive the table gaining rows. That is what
-# this test pins down.
+# negative results are cached; verify they're invalidated after rows are added
 
 statement ok
 CREATE TABLE ducklake.t(a INTEGER, b INTEGER, c INTEGER);
 
-# Empty: no rows, and planning must work (this is the path that caches the
-# negative result). Query it twice so the second call goes through the cache.
+# query twice: first populates cache, second hits it
 query I
 SELECT COUNT(*) FROM ducklake.t
 ----
@@ -42,8 +33,7 @@ query III
 SELECT * FROM ducklake.t
 ----
 
-# Now give it rows. The snapshot advances, so the cached "no stats" entry for the
-# previous snapshot must NOT be reused.
+# verify cache is invalidated after insert
 statement ok
 INSERT INTO ducklake.t SELECT i, i * 2, i * 3 FROM range(1000) s(i);
 
@@ -57,21 +47,19 @@ SELECT * FROM ducklake.t WHERE a = 500
 ----
 500	1000	1500
 
-# Min/max stats must be live, not the empty table's absent ones. If the negative
-# entry were sticky, filter pushdown would have nothing to work with and these
-# would be wrong.
+# verify stats are accurate after insert
 query II
 SELECT MIN(a), MAX(a) FROM ducklake.t
 ----
 0	999
 
-# A filter outside the actual range must prune to nothing (and not error).
+# verify filter pushdown with valid stats
 query I
 SELECT COUNT(*) FROM ducklake.t WHERE a > 100000
 ----
 0
 
-# ...and back again: emptying the table must not resurrect the old stats.
+# emptying must not resurrect old cached stats
 statement ok
 DELETE FROM ducklake.t
 
@@ -85,7 +73,7 @@ SELECT MIN(a), MAX(a) FROM ducklake.t
 ----
 NULL	NULL
 
-# Refilling must be seen too.
+# refilling must be seen too
 statement ok
 INSERT INTO ducklake.t VALUES (7, 8, 9);
 

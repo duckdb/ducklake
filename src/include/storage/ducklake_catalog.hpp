@@ -38,8 +38,7 @@ struct DuckLakeTableStatsCacheEntry : public ObjectCacheEntry {
 	explicit DuckLakeTableStatsCacheEntry(DuckLakeTableStats stats_p)
 	    : stats(std::move(stats_p)), has_stats(true) {
 	}
-	// Negative entry: the table has no stats at this snapshot (e.g. it is empty).
-	// This must be cached too — see DuckLakeCatalog::GetTableStats.
+	//! Negative entry: table has no stats at this snapshot.
 	DuckLakeTableStatsCacheEntry() : has_stats(false) {
 	}
 

@@ -805,7 +805,7 @@ shared_ptr<DuckLakeTableStats> DuckLakeCatalog::GetTableStats(DuckLakeTransactio
 	auto cached = cache.Get<DuckLakeTableStatsCacheEntry>(key);
 	if (cached) {
 		if (!cached->has_stats) {
-			// Cached negative result - the table has no stats at this snapshot.
+			// cached negative result
 			return nullptr;
 		}
 		auto *raw = cached.get();
@@ -824,15 +824,7 @@ shared_ptr<DuckLakeTableStats> DuckLakeCatalog::GetTableStats(DuckLakeTransactio
 	}
 
 	if (!table_stats) {
-		// Table had no stats row for this snapshot (e.g. it is empty, or did not
-		// exist at the snapshot). Cache the NEGATIVE result.
-		//
-		// Without this, an empty table is never cached, and GetStatistics() is
-		// called once per referenced column during planning — so every column
-		// re-runs GetGlobalTableStats(), which is a full query against the
-		// metadata catalog. That made planning cost ~4.5ms per column with no
-		// warm-up: an EXPLAIN of a 12-column scan of an EMPTY DuckLake table took
-		// ~100ms, versus ~5ms for the same schema once it held a single row.
+		// cache negative result to avoid repeated metadata queries on empty tables
 		cache.Put(std::move(key), make_shared_ptr<DuckLakeTableStatsCacheEntry>());
 		return nullptr;
 	}
