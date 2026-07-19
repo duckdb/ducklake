@@ -63,6 +63,14 @@ WHERE table_name = 'va' AND column_name = 'a1' AND schema_name = 'main' AND data
 1
 
 statement ok
+CREATE VIEW ducklake.pv(a1) AS SELECT 1 AS x, 2 AS y
+
+statement error
+COMMENT ON COLUMN ducklake.pv.y IS 'note'
+----
+View "pv" does not have a column with name "y"
+
+statement ok
 USE memory
 
 statement ok

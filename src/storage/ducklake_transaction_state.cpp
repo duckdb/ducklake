@@ -1467,7 +1467,7 @@ void DuckLakeTransactionState::GetNewViewInfo(DuckLakeCommitState &commit_state,
 				auto &view_info = create_info_ptr->Cast<CreateViewInfo>();
 				for (auto &entry : view_info.column_comments_map) {
 					auto column_name = entry.first.GetIdentifierName();
-					if (view_column_comment_count.find(column_name) != view_column_comment_count.end()) {
+					if (view_column_comment_remaining.find(column_name) != view_column_comment_remaining.end()) {
 						continue;
 					}
 					DuckLakeViewColumnTagInfo comment_info;
