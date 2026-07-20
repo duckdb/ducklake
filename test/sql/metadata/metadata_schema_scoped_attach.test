@@ -1,0 +1,103 @@
+# name: test/sql/metadata/metadata_schema_scoped_attach.test
+# description: Postgres metadata attach is scoped to METADATA_SCHEMA (issue #1064)
+# group: [metadata]
+
+require ducklake
+
+require parquet
+
+require postgres_scanner
+
+require-env DUCKLAKE_CI
+
+test-env DATA_PATH {TEST_DIR}
+
+# set up an unrelated schema in the metadata database - it should not be reflected by DuckLake attaches
+statement ok
+ATTACH 'postgres:dbname=ducklakedb' AS pg_setup
+
+statement ok
+CALL postgres_execute('pg_setup', 'DROP SCHEMA IF EXISTS junk_1064 CASCADE; DROP SCHEMA IF EXISTS scoped_meta_1064 CASCADE; CREATE SCHEMA junk_1064; CREATE TABLE junk_1064.junk_tbl(i INTEGER);')
+
+statement ok
+DETACH pg_setup
+
+# create a new DuckLake in a METADATA_SCHEMA that does not exist yet in Postgres
+statement ok
+ATTACH 'ducklake:postgres:dbname=ducklakedb' AS lake (DATA_PATH '{DATA_PATH}/scoped_files', METADATA_SCHEMA 'scoped_meta_1064', METADATA_CATALOG 'pgmeta')
+
+statement ok
+CREATE TABLE lake.tbl(i INTEGER);
+
+statement ok
+INSERT INTO lake.tbl VALUES (42);
+
+query I
+SELECT * FROM lake.tbl
+----
+42
+
+# the underlying Postgres attach is scoped to the metadata schema - unrelated schemas are not reflected
+query I
+SELECT COUNT(*) FROM duckdb_schemas() WHERE database_name='pgmeta' AND schema_name='junk_1064'
+----
+0
+
+query I
+SELECT COUNT(*) FROM duckdb_schemas() WHERE database_name='pgmeta' AND schema_name='scoped_meta_1064'
+----
+1
+
+statement ok
+DETACH lake
+
+# re-attaching an existing DuckLake is scoped as well
+statement ok
+ATTACH 'ducklake:postgres:dbname=ducklakedb' AS lake2 (DATA_PATH '{DATA_PATH}/scoped_files', METADATA_SCHEMA 'scoped_meta_1064', METADATA_CATALOG 'pgmeta2')
+
+query I
+SELECT * FROM lake2.tbl
+----
+42
+
+query I
+SELECT COUNT(*) FROM duckdb_schemas() WHERE database_name='pgmeta2' AND schema_name='junk_1064'
+----
+0
+
+statement ok
+DETACH lake2
+
+# an explicit META_SCHEMA passthrough keeps working
+statement ok
+ATTACH 'ducklake:postgres:dbname=ducklakedb' AS lake3 (DATA_PATH '{DATA_PATH}/scoped_files', METADATA_SCHEMA 'scoped_meta_1064', METADATA_CATALOG 'pgmeta3', META_SCHEMA 'scoped_meta_1064')
+
+query I
+SELECT * FROM lake3.tbl
+----
+42
+
+query I
+SELECT COUNT(*) FROM duckdb_schemas() WHERE database_name='pgmeta3' AND schema_name='junk_1064'
+----
+0
+
+statement ok
+DETACH lake3
+
+# META_SCHEMA '' opts out of the automatic scoping - the attach reflects all schemas again
+statement ok
+ATTACH 'ducklake:postgres:dbname=ducklakedb' AS lake4 (DATA_PATH '{DATA_PATH}/scoped_files', METADATA_SCHEMA 'scoped_meta_1064', METADATA_CATALOG 'pgmeta4', META_SCHEMA '')
+
+query I
+SELECT * FROM lake4.tbl
+----
+42
+
+query I
+SELECT COUNT(*) FROM duckdb_schemas() WHERE database_name='pgmeta4' AND schema_name='junk_1064'
+----
+1
+
+statement ok
+DETACH lake4

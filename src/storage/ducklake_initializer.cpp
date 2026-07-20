@@ -10,6 +10,7 @@
 #include "storage/ducklake_catalog.hpp"
 #include "storage/ducklake_transaction.hpp"
 #include "storage/ducklake_schema_entry.hpp"
+#include "common/ducklake_util.hpp"
 
 namespace duckdb {
 
@@ -39,6 +40,15 @@ string DuckLakeInitializer::GetAttachOptions() {
 	if (metadata_type.empty() || metadata_type == "duckdb") {
 		// this is duckdb, we always do latest storage
 		attach_options.push_back(StringUtil::Format("STORAGE_VERSION '%s'", "latest"));
+	}
+	// scope the underlying Postgres attach to the metadata schema - otherwise the postgres extension reflects
+	// every schema in the database on attach, which is very slow on large or multi-tenant catalogs.
+	// only done when the user explicitly set METADATA_SCHEMA - the default schema is not known until after attach.
+	// an explicit META_SCHEMA (including META_SCHEMA '') takes precedence and disables this.
+	bool is_postgres = metadata_type == "postgres" || metadata_type == "postgres_scanner";
+	bool user_set_schema = options.metadata_parameters.find("schema") != options.metadata_parameters.end();
+	if (is_postgres && !user_set_schema && !options.metadata_schema.empty()) {
+		attach_options.push_back("SCHEMA " + DuckLakeUtil::SQLLiteralToString(options.metadata_schema));
 	}
 	if (options.hide_metadata_catalog) {
 		attach_options.push_back("HIDDEN true");
