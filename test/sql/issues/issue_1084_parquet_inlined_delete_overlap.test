@@ -92,3 +92,34 @@ SELECT i FROM ducklake.test WHERE i >= 45 AND i < 85 ORDER BY i
 82
 83
 84
+
+# a later DELETE must still take effect: pre-fix the stuck filter also swallowed future tombstones
+query I
+DELETE FROM ducklake.test WHERE i = 90
+----
+1
+
+query I
+SELECT count(*) FROM ducklake.test WHERE i = 90
+----
+0
+
+# time travel at snapshot 3 (both overlapping deletes committed) must not leak either
+query I
+SELECT count(*) FROM ducklake.test AT (VERSION => 3) WHERE i >= 50 AND i < 80
+----
+0
+
+query I
+SELECT i FROM ducklake.test AT (VERSION => 3) WHERE i >= 45 AND i < 85 ORDER BY i
+----
+45
+46
+47
+48
+49
+80
+81
+82
+83
+84
