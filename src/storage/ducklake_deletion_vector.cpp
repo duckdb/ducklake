@@ -2,6 +2,8 @@
 
 #include "duckdb/common/bswap.hpp"
 
+#include <array>
+
 namespace duckdb {
 
 namespace {
@@ -9,32 +11,13 @@ namespace {
 class CRC32 {
 public:
 	CRC32() : crc(0xFFFFFFFF) {
-		InitTable();
-	}
-
-public:
-	static void InitTable() {
-		if (table_initialized)
-			return;
-
-		for (uint32_t i = 0; i < 256; i++) {
-			uint32_t c = i;
-			for (int j = 0; j < 8; j++) {
-				if (c & 1) {
-					c = 0xEDB88320 ^ (c >> 1);
-				} else {
-					c = c >> 1;
-				}
-			}
-			crc_table[i] = c;
-		}
-		table_initialized = true;
 	}
 
 public:
 	void Update(const data_t *data, idx_t length) {
+		auto &table = GetTable();
 		for (idx_t i = 0; i < length; i++) {
-			crc = crc_table[(crc ^ data[i]) & 0xFF] ^ (crc >> 8);
+			crc = table[(crc ^ data[i]) & 0xFF] ^ (crc >> 8);
 		}
 	}
 
@@ -43,13 +26,23 @@ public:
 	}
 
 private:
-	uint32_t crc;
-	static uint32_t crc_table[256];
-	static bool table_initialized;
-};
+	static const uint32_t *GetTable() {
+		static const auto table = []() {
+			std::array<uint32_t, 256> t {};
+			for (uint32_t i = 0; i < 256; i++) {
+				uint32_t c = i;
+				for (int j = 0; j < 8; j++) {
+					c = (c & 1) ? (0xEDB88320 ^ (c >> 1)) : (c >> 1);
+				}
+				t[i] = c;
+			}
+			return t;
+		}();
+		return table.data();
+	}
 
-uint32_t CRC32::crc_table[256];
-bool CRC32::table_initialized = false;
+	uint32_t crc;
+};
 
 } // namespace
 
