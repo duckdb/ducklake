@@ -2269,10 +2269,13 @@ vector<DuckLakeCompactionFileEntry> DuckLakeMetadataManager::GetFilesForCompacti
 	// Determine the effective max file size threshold for filtering
 	idx_t effective_max_file_size =
 	    options.max_file_size.IsValid() ? options.max_file_size.GetIndex() : options.target_file_size;
-	string data_select_list = "data.data_file_id, data.record_count, data.row_id_start, data.begin_snapshot, "
-	                          "data.end_snapshot, data.mapping_id, sr.schema_version , data.partial_max, "
-	                          "data.partition_id, partition_info.keys, " +
-	                          GetFileSelectList("data");
+	string data_select_list =
+	    "data.data_file_id, data.record_count, data.row_id_start, data.begin_snapshot, "
+	    "data.end_snapshot, data.mapping_id, sr.schema_version , data.partial_max, "
+	    "data.partition_id, "
+	    "COALESCE(partition_spec.end_snapshot - 1, data.begin_snapshot) AS partition_snapshot_id, "
+	    "partition_sr.schema_version AS partition_schema_version, partition_info.keys, " +
+	    GetFileSelectList("data");
 	string delete_select_list = "del.data_file_id AS del_data_file_id,"
 	                            "del.delete_file_id AS del_delete_file_id, "
 	                            "del.delete_count, "
@@ -2314,6 +2317,11 @@ SELECT %s
 FROM {METADATA_CATALOG}.ducklake_data_file data
 LEFT JOIN snapshot_ranges sr
   ON data.begin_snapshot >= sr.begin_snapshot AND data.begin_snapshot < sr.end_snapshot
+LEFT JOIN {METADATA_CATALOG}.ducklake_partition_info partition_spec
+  ON data.partition_id = partition_spec.partition_id AND data.table_id = partition_spec.table_id
+LEFT JOIN snapshot_ranges partition_sr
+  ON COALESCE(partition_spec.end_snapshot - 1, data.begin_snapshot) >= partition_sr.begin_snapshot
+ AND COALESCE(partition_spec.end_snapshot - 1, data.begin_snapshot) < partition_sr.end_snapshot
 LEFT JOIN (
 	SELECT *
     FROM {METADATA_CATALOG}.ducklake_delete_file
@@ -2357,6 +2365,10 @@ ORDER BY data.begin_snapshot, data.row_id_start, data.data_file_id, del.begin_sn
 		}
 		col_idx++;
 		new_entry.file.partition_id = row.IsNull(col_idx) ? optional_idx() : row.GetValue<idx_t>(col_idx);
+		col_idx++;
+		new_entry.partition_snapshot_id = row.IsNull(col_idx) ? optional_idx() : row.GetValue<idx_t>(col_idx);
+		col_idx++;
+		new_entry.partition_schema_version = row.IsNull(col_idx) ? optional_idx() : row.GetValue<idx_t>(col_idx);
 		col_idx++;
 		if (!row.IsNull(col_idx)) {
 			auto list_val = row.GetValue<Value>(col_idx);

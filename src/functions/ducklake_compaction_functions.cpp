@@ -575,7 +575,28 @@ DuckLakeCompactor::GenerateCompactionCommand(vector<DuckLakeCompactionFileEntry>
 	auto &columns = table.GetColumns();
 	string data_path;
 	if (partition_id.IsValid()) {
-		data_path = DuckLakePartitionUtils::BuildHivePartitionPath(table, partition_values, catalog.Separator());
+		auto partition_table = &table;
+		auto partition_data = partition_table->GetPartitionData();
+		if (!partition_data || partition_data->partition_id != partition_id.GetIndex()) {
+			auto partition_snapshot_id = source_files[0].partition_snapshot_id;
+			auto partition_schema_version = source_files[0].partition_schema_version;
+			if (!partition_snapshot_id.IsValid() || !partition_schema_version.IsValid()) {
+				throw InternalException("DuckLakeCompactor: failed to find partition schema");
+			}
+			DuckLakeSnapshot partition_snapshot(partition_snapshot_id.GetIndex(), partition_schema_version.GetIndex(),
+			                                    0, 0);
+			auto partition_entry = catalog.GetSchemaForSnapshot(transaction, partition_snapshot).GetEntryById(table_id);
+			if (!partition_entry) {
+				throw InternalException("DuckLakeCompactor: failed to find table entry for partition schema");
+			}
+			partition_table = &partition_entry->Cast<DuckLakeTableEntry>();
+		}
+		partition_data = partition_table->GetPartitionData();
+		if (!partition_data || partition_data->partition_id != partition_id.GetIndex()) {
+			throw InternalException("DuckLakeCompactor: failed to find partition spec");
+		}
+		data_path =
+		    DuckLakePartitionUtils::BuildHivePartitionPath(*partition_table, partition_values, catalog.Separator());
 	}
 
 	bool write_row_id = false;

@@ -1,0 +1,130 @@
+# name: test/sql/rewrite_data_files/test_rewrite_after_partition_evolution.test
+# description: rewriting a file repeatedly after partition evolution remains valid
+# group: [rewrite_data_files]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/rewrite_after_partition_evolution', METADATA_CATALOG 'metadata', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE ducklake.t(source VARCHAR, dt DATE, v INTEGER)
+
+statement ok
+ALTER TABLE ducklake.t SET PARTITIONED BY (source)
+
+statement ok
+INSERT INTO ducklake.t VALUES
+	('same', DATE '2026-01-01', 1),
+	('same', DATE '2026-01-01', 2),
+	('same', DATE '2026-01-01', 3)
+
+statement ok
+ALTER TABLE ducklake.t SET PARTITIONED BY (source, year(dt), month(dt))
+
+statement ok
+DELETE FROM ducklake.t WHERE v = 1
+
+query III
+SELECT table_name, files_processed, files_created
+FROM ducklake_rewrite_data_files('ducklake', 't', delete_threshold => 0)
+----
+t	1	1
+
+statement ok
+CALL ducklake_expire_snapshots('ducklake', versions => [1, 2, 3, 4, 5])
+
+statement ok
+DELETE FROM ducklake.t WHERE v = 2
+
+query III
+SELECT table_name, files_processed, files_created
+FROM ducklake_rewrite_data_files('ducklake', 't', delete_threshold => 0)
+----
+t	1	1
+
+query I
+SELECT v FROM ducklake.t ORDER BY ALL
+----
+3
+
+# A partition change with the same number of fields must use the old field name, not merely match value counts.
+
+statement ok
+CREATE TABLE ducklake.same_cardinality(source VARCHAR, id VARCHAR, v INTEGER)
+
+statement ok
+ALTER TABLE ducklake.same_cardinality SET PARTITIONED BY (source)
+
+statement ok
+INSERT INTO ducklake.same_cardinality VALUES
+	('old', 'new', 1),
+	('old', 'new', 2),
+	('old', 'new', 3)
+
+statement ok
+ALTER TABLE ducklake.same_cardinality SET PARTITIONED BY (id)
+
+statement ok
+DELETE FROM ducklake.same_cardinality WHERE v = 1
+
+statement ok
+CALL ducklake_rewrite_data_files('ducklake', 'same_cardinality', delete_threshold => 0)
+
+statement ok
+DELETE FROM ducklake.same_cardinality WHERE v = 2
+
+statement ok
+CALL ducklake_rewrite_data_files('ducklake', 'same_cardinality', delete_threshold => 0)
+
+query T
+SELECT regexp_extract(data_file, '.*(source=old)[/\\].*', 1)
+FROM ducklake_list_files('ducklake', 'same_cardinality')
+----
+source=old
+
+# Path construction must still resolve an old partition field after it has been dropped from the current schema.
+
+statement ok
+CREATE TABLE ducklake.dropped_field(source VARCHAR, v INTEGER)
+
+statement ok
+ALTER TABLE ducklake.dropped_field SET PARTITIONED BY (source)
+
+statement ok
+INSERT INTO ducklake.dropped_field VALUES ('old', 1), ('old', 2), ('old', 3)
+
+statement ok
+ALTER TABLE ducklake.dropped_field RESET PARTITIONED BY
+
+statement ok
+ALTER TABLE ducklake.dropped_field DROP COLUMN source
+
+statement ok
+DELETE FROM ducklake.dropped_field WHERE v = 1
+
+statement ok
+CALL ducklake_rewrite_data_files('ducklake', 'dropped_field', delete_threshold => 0)
+
+statement ok
+DELETE FROM ducklake.dropped_field WHERE v = 2
+
+statement ok
+CALL ducklake_rewrite_data_files('ducklake', 'dropped_field', delete_threshold => 0)
+
+query T
+SELECT regexp_extract(data_file, '.*(source=old)[/\\].*', 1)
+FROM ducklake_list_files('ducklake', 'dropped_field')
+----
+source=old
+
+query I
+SELECT v FROM ducklake.dropped_field
+----
+3
