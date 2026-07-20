@@ -40,6 +40,7 @@ public:
 protected:
 	string GetLatestSnapshotQuery() const override;
 	string GenerateFileColumnStatsCTEBody(const CTERequirement &req, TableIndex table_id) override;
+	unique_ptr<QueryResult> QueryPostgres(DuckLakeSnapshot snapshot, string query);
 
 private:
 	unique_ptr<QueryResult> ExecuteQuery(DuckLakeSnapshot snapshot, string &query, string command);

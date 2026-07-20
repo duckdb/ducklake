@@ -3,6 +3,25 @@
 
 namespace duckdb {
 
+set<TableIndex> TransactionChangeInformation::GetStatsTableIds() const {
+	set<TableIndex> result;
+	auto add = [&](const set<TableIndex> &source) {
+		result.insert(source.begin(), source.end());
+	};
+	add(altered_tables);
+	add(altered_tables_with_schema_version_changes);
+	add(dropped_tables);
+	add(tables_inserted_into);
+	add(tables_deleted_from);
+	add(tables_inserted_inlined);
+	add(tables_deleted_inlined);
+	add(tables_flushed_inlined);
+	add(tables_compacted);
+	add(tables_merge_adjacent);
+	add(tables_rewrite_delete);
+	return result;
+}
+
 namespace {
 
 enum class ChangeType {

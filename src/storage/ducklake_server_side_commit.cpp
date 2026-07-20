@@ -145,7 +145,6 @@ DuckLakeServerSideCommitResult DuckLakeServerSideCommit::Run() {
 	ReadStagedFlushedInlinedTables();
 	ReadStagedCompactions();
 	ReadStagedNameMaps();
-	ReadExistingTableStats();
 
 	// Derive transaction_changes from local_changes the same way DuckLakeTransaction does.
 	for (auto &entry : state->local_changes.Changes()) {
@@ -155,6 +154,11 @@ DuckLakeServerSideCommitResult DuckLakeServerSideCommit::Run() {
 	for (auto &table_id : state->tables_deleted_from) {
 		transaction_changes.tables_deleted_from.insert(table_id);
 	}
+	auto stats_table_ids = transaction_changes.GetStatsTableIds();
+	for (auto &entry : staged_dropped_file_stats) {
+		stats_table_ids.insert(entry.first);
+	}
+	ReadExistingTableStats(stats_table_ids);
 
 	idx_t committed_snapshot_id = 0;
 	idx_t committed_schema_version = static_cast<idx_t>(schema_version);
@@ -627,8 +631,9 @@ unique_ptr<DuckLakeTableStats> DuckLakeServerSideCommit::BuildTableStats(const D
 	return entry;
 }
 
-void DuckLakeServerSideCommit::ReadExistingTableStats() {
-	string sql = StringUtil::Replace(DuckLakeMetadataManager::GlobalTableStatsQuery(), "{METADATA_CATALOG}", schema_id);
+void DuckLakeServerSideCommit::ReadExistingTableStats(const set<TableIndex> &table_ids) {
+	string sql =
+	    StringUtil::Replace(DuckLakeMetadataManager::GlobalTableStatsQuery(table_ids), "{METADATA_CATALOG}", schema_id);
 	auto result = RunQuery(sql, "read existing table stats");
 	auto global_stats = DuckLakeMetadataManager::ParseGlobalTableStats(*result);
 

@@ -1,6 +1,7 @@
 #include "metadata_manager/ducklake_metadata_manager_v1_1.hpp"
 #include "metadata_manager/sqlite_metadata_manager.hpp"
 #include "metadata_manager/postgres_metadata_manager.hpp"
+#include "metadata_manager/postgres_fast_metadata_manager.hpp"
 #include "metadata_manager/quack_metadata_manager.hpp"
 #include "common/ducklake_version.hpp"
 
@@ -41,6 +42,7 @@ string DuckLakeMetadataManagerV1_1<Base>::GetVersionString() {
 template class DuckLakeMetadataManagerV1_1<DuckLakeMetadataManager>;
 template class DuckLakeMetadataManagerV1_1<SQLiteMetadataManager>;
 template class DuckLakeMetadataManagerV1_1<PostgresMetadataManager>;
+template class DuckLakeMetadataManagerV1_1<PostgresFastMetadataManager>;
 template class DuckLakeMetadataManagerV1_1<QuackMetadataManager>;
 
 } // namespace duckdb

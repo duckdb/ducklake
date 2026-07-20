@@ -312,6 +312,9 @@ struct DuckLakeSnapshotInfo {
 	Value author;
 	Value commit_message;
 	Value commit_extra_info;
+	// Internal handle used by metadata adapters that keep a server-side expiration selection.
+	string expiration_selection;
+	idx_t expiration_selection_size = 0;
 };
 
 struct DuckLakeViewColumnTag {

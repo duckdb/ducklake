@@ -1,0 +1,4 @@
+__pycache__/
+results/*.jsonl
+!results/release.jsonl
+!results/commit_stats.jsonl

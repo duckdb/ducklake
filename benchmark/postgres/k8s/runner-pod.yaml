@@ -1,0 +1,37 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: ducklake-bench-runner
+  namespace: ducklake-bench
+  annotations:
+    karpenter.sh/do-not-disrupt: "true"
+  labels:
+    app.kubernetes.io/name: ducklake-bench-runner
+spec:
+  restartPolicy: Never
+  containers:
+    - name: runner
+      image: ubuntu:24.04
+      command: ["sleep", "infinity"]
+      envFrom:
+        - secretRef:
+            name: metadata-postgres
+      env:
+        - name: DEBIAN_FRONTEND
+          value: noninteractive
+      resources:
+        requests:
+          cpu: "4"
+          memory: 16Gi
+          ephemeral-storage: 40Gi
+        limits:
+          cpu: "8"
+          memory: 32Gi
+          ephemeral-storage: 80Gi
+      volumeMounts:
+        - name: work
+          mountPath: /work
+  volumes:
+    - name: work
+      emptyDir:
+        sizeLimit: 80Gi

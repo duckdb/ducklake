@@ -121,6 +121,10 @@ unique_ptr<QueryResult> PostgresMetadataManager::Query(DuckLakeSnapshot snapshot
 	return DuckLakeMetadataManager::Query(snapshot, query);
 }
 
+unique_ptr<QueryResult> PostgresMetadataManager::QueryPostgres(DuckLakeSnapshot snapshot, string query) {
+	return ExecuteQuery(snapshot, query, "postgres_query");
+}
+
 string PostgresMetadataManager::GetLatestSnapshotQuery() const {
 	return R"(
 	SELECT * FROM postgres_query({METADATA_CATALOG_NAME_LITERAL},

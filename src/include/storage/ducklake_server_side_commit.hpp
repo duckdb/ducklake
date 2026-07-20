@@ -70,7 +70,7 @@ private:
 	//! Read staged name maps and rebuild entry trees.
 	void ReadStagedNameMaps();
 	//! Load current global table stats from the metadata catalog.
-	void ReadExistingTableStats();
+	void ReadExistingTableStats(const set<TableIndex> &table_ids);
 
 	//! Query the metadata catalog for the latest snapshot.
 	DuckLakeSnapshot ReadLatestSnapshot();

@@ -1,0 +1,102 @@
+# name: test/sql/metadata/postgres_fast_adapter.test
+# description: exercise PostgreSQL-native metadata operations and snapshot cleanup
+# group: [metadata]
+
+require ducklake
+
+require parquet
+
+require-env DUCKLAKE_POSTGRES_FAST 1
+
+test-env DUCKLAKE_CONNECTION ignored
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS lake (DATA_PATH '{DATA_PATH}/postgres_fast', METADATA_CATALOG 'fast_meta', METADATA_SCHEMA 'postgres_fast_metadata', METADATA_ADAPTER 'postgres_fast', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE lake.main.events(i BIGINT)
+
+statement ok
+INSERT INTO lake.main.events SELECT * FROM range(1000)
+
+query III
+SELECT count(*), sum(file_count), sum(delete_file_count) FROM ducklake_table_info('lake')
+----
+1	1	0
+
+query I
+SELECT count(*) FROM ducklake_list_files('lake', 'events', schema => 'main')
+----
+1
+
+statement ok
+INSERT INTO lake.main.events VALUES (1000)
+
+statement ok
+ALTER TABLE lake.main.events RENAME TO events_renamed
+
+statement ok
+BEGIN
+
+statement ok
+PREPARE expire_v2 AS SELECT snapshot_id FROM ducklake_expire_snapshots('lake', versions => [2])
+
+statement ok
+PREPARE expire_v3 AS SELECT snapshot_id FROM ducklake_expire_snapshots('lake', versions => [3])
+
+query I
+EXECUTE expire_v2
+----
+2
+
+statement ok
+COMMIT
+
+query II
+SELECT snapshot_id, count(*)
+FROM fast_meta.postgres_fast_metadata.ducklake_snapshot
+WHERE snapshot_id IN (2, 3)
+GROUP BY snapshot_id
+ORDER BY snapshot_id
+----
+3	1
+
+statement ok
+DELETE FROM lake.main.events_renamed
+
+statement ok
+DROP TABLE lake.main.events_renamed
+
+query I
+SELECT count(*) FROM fast_meta.postgres_fast_metadata.ducklake_files_scheduled_for_deletion
+----
+0
+
+statement ok
+CALL ducklake_expire_snapshots('lake', older_than => NOW())
+
+query I
+SELECT count(*) FROM fast_meta.postgres_fast_metadata.ducklake_files_scheduled_for_deletion
+----
+2
+
+query I
+SELECT count(*)
+FROM fast_meta.postgres_fast_metadata.ducklake_files_scheduled_for_deletion
+WHERE path IS NULL OR path_is_relative
+----
+0
+
+foreach tbl ducklake_table ducklake_column ducklake_table_stats ducklake_table_column_stats ducklake_data_file ducklake_delete_file
+
+query I
+SELECT count(*) FROM fast_meta.postgres_fast_metadata.{tbl}
+----
+0
+
+endloop
+
+statement ok
+DETACH lake

@@ -20,6 +20,8 @@ class CatalogEntry;
 class DuckLakeSchemaEntry;
 
 struct TransactionChangeInformation {
+	set<TableIndex> GetStatsTableIds() const;
+
 	case_insensitive_set_t created_schemas;
 	map<SchemaIndex, reference<DuckLakeSchemaEntry>> dropped_schemas;
 	case_insensitive_map_t<reference_set_t<CatalogEntry>> created_tables;

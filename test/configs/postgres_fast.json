@@ -1,0 +1,14 @@
+{
+  "description": "Run DuckLake tests with the PostgreSQLFast metadata adapter enabled where requested.",
+  "base_config": "test/configs/postgres.json",
+  "test_env": [
+    {
+      "env_name": "DUCKLAKE_CONNECTION",
+      "env_value": "postgres:dbname=ducklakedb"
+    },
+    {
+      "env_name": "DUCKLAKE_POSTGRES_FAST",
+      "env_value": "1"
+    }
+  ]
+}

@@ -210,6 +210,7 @@ public:
 	//! SQL on a fresh Connection without going through the metadata-manager wrapper.
 	static string LatestSnapshotQuery();
 	static string GlobalTableStatsQuery();
+	static string GlobalTableStatsQuery(const set<TableIndex> &table_ids);
 	//! Pure parsers for the results of the above queries.
 	static unique_ptr<DuckLakeSnapshot> ParseSnapshot(QueryResult &result);
 	static vector<DuckLakeGlobalStatsInfo> ParseGlobalTableStats(QueryResult &result);
@@ -350,6 +351,11 @@ public:
 	static SnapshotChangeInfo
 	GetSnapshotAndStatsAndChanges(SnapshotAndStats &current_snapshot,
 	                              const std::function<unique_ptr<QueryResult>(string)> &executor);
+	static SnapshotChangeInfo
+	GetSnapshotAndStatsAndChanges(SnapshotAndStats &current_snapshot,
+	                              const std::function<unique_ptr<QueryResult>(string)> &executor,
+	                              const set<TableIndex> &stats_table_ids);
+	static string GetSnapshotAndStatsAndChangesQuery(const set<TableIndex> &stats_table_ids);
 	static string GetSnapshotAndStatsAndChangesQuery();
 	static SnapshotChangeInfo ParseSnapshotAndStatsAndChanges(QueryResult &result, SnapshotAndStats &current_snapshot);
 	virtual unique_ptr<DuckLakeSnapshot> GetSnapshot();

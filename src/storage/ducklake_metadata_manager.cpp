@@ -13,6 +13,7 @@
 #include "duckdb.hpp"
 #include "duckdb/main/appender.hpp"
 #include "metadata_manager/postgres_metadata_manager.hpp"
+#include "metadata_manager/postgres_fast_metadata_manager.hpp"
 #include "metadata_manager/quack_metadata_manager.hpp"
 #include "metadata_manager/sqlite_metadata_manager.hpp"
 #include "duckdb/main/attached_database.hpp"
@@ -57,9 +58,19 @@ void DuckLakeMetadataManager::Register(const string &name, DuckLakeMetadataManag
 }
 
 unique_ptr<DuckLakeMetadataManager> DuckLakeMetadataManager::Create(DuckLakeTransaction &transaction) {
-	lock_guard<mutex> lock(metadata_managers_lock);
 	auto &catalog = transaction.GetCatalog();
 	auto catalog_type = catalog.MetadataType();
+	auto adapter = catalog.MetadataAdapter();
+	if (!adapter.empty() && adapter != "generic" && adapter != "postgres_fast") {
+		throw InvalidInputException("Unsupported DuckLake metadata adapter '%s'", adapter);
+	}
+	if (adapter == "postgres_fast" && catalog_type != "postgres" && catalog_type != "postgres_scanner") {
+		throw InvalidInputException("The 'postgres_fast' metadata adapter requires PostgreSQL metadata");
+	}
+	if (adapter == "postgres_fast") {
+		return PostgresFastMetadataManager::Create(transaction);
+	}
+	lock_guard<mutex> lock(metadata_managers_lock);
 	auto metadata_manager_iter = metadata_managers.find(catalog_type);
 	if (metadata_manager_iter != metadata_managers.end()) {
 		auto create = metadata_manager_iter->second;
@@ -1089,20 +1100,39 @@ vector<DuckLakeGlobalStatsInfo> TransformGlobalStats(QueryResult &result) {
 	return global_stats;
 }
 
-string DuckLakeMetadataManager::GlobalTableStatsQuery() {
-	// Pure all-tables template (only {METADATA_CATALOG} is substituted by the caller; it is NOT run
-	// through StringUtil::Format). It must NOT contain a printf placeholder such as `WHERE table_id =
-	// %llu` - the server-side commit path (DuckLakeServerSideCommit::ReadExistingTableStats) executes
-	// the returned SQL verbatim, so a stray %llu would reach the parser and fail every server-side
-	// commit. The single-table GetGlobalTableStats() below keeps its own StringUtil::Format query.
-	return R"(
+static string StatsTableIdFilter(const set<TableIndex> &table_ids) {
+	if (table_ids.empty()) {
+		return "FALSE";
+	}
+	string ids;
+	for (auto &table_id : table_ids) {
+		if (!ids.empty()) {
+			ids += ", ";
+		}
+		ids += to_string(table_id.index);
+	}
+	return "table_id IN (" + ids + ")";
+}
+
+static string BuildGlobalTableStatsQuery(const string &filter) {
+	return StringUtil::Format(R"(
 SELECT table_id, column_id, record_count, next_row_id, file_size_bytes, contains_null, contains_nan, min_value, max_value, extra_stats
 FROM {METADATA_CATALOG}.ducklake_table_stats
 LEFT JOIN {METADATA_CATALOG}.ducklake_table_column_stats USING (table_id)
 WHERE record_count IS NOT NULL
   AND file_size_bytes IS NOT NULL
+  AND %s
 ORDER BY table_id;
-)";
+)",
+	                          filter);
+}
+
+string DuckLakeMetadataManager::GlobalTableStatsQuery() {
+	return BuildGlobalTableStatsQuery("TRUE");
+}
+
+string DuckLakeMetadataManager::GlobalTableStatsQuery(const set<TableIndex> &table_ids) {
+	return BuildGlobalTableStatsQuery(StatsTableIdFilter(table_ids));
 }
 
 vector<DuckLakeGlobalStatsInfo> DuckLakeMetadataManager::ParseGlobalTableStats(QueryResult &result) {
@@ -4234,8 +4264,8 @@ string DuckLakeMetadataManager::WriteSnapshotChangesSql(const SnapshotChangeInfo
 	    commit_info.commit_message.ToSQLString(), commit_info.commit_extra_info.ToSQLString());
 }
 
-string DuckLakeMetadataManager::GetSnapshotAndStatsAndChangesQuery() {
-	return R"(
+static string GetSnapshotAndStatsAndChangesQueryInternal(const string &stats_filter) {
+	return StringUtil::Format(R"(
 SELECT
     snapshot_id,
     schema_version,
@@ -4282,8 +4312,18 @@ LEFT JOIN {METADATA_CATALOG}.ducklake_table_column_stats
     USING (table_id)
 WHERE record_count IS NOT NULL
     AND file_size_bytes IS NOT NULL
+    AND %s
 ORDER BY table_id NULLS FIRST;
-	)";
+	)",
+	                          stats_filter);
+}
+
+string DuckLakeMetadataManager::GetSnapshotAndStatsAndChangesQuery(const set<TableIndex> &stats_table_ids) {
+	return GetSnapshotAndStatsAndChangesQueryInternal(StatsTableIdFilter(stats_table_ids));
+}
+
+string DuckLakeMetadataManager::GetSnapshotAndStatsAndChangesQuery() {
+	return GetSnapshotAndStatsAndChangesQueryInternal("TRUE");
 }
 
 SnapshotChangeInfo DuckLakeMetadataManager::ParseSnapshotAndStatsAndChanges(QueryResult &result,
@@ -4309,6 +4349,14 @@ SnapshotChangeInfo
 DuckLakeMetadataManager::GetSnapshotAndStatsAndChanges(SnapshotAndStats &current_snapshot,
                                                        const std::function<unique_ptr<QueryResult>(string)> &executor) {
 	auto result = executor(GetSnapshotAndStatsAndChangesQuery());
+	return ParseSnapshotAndStatsAndChanges(*result, current_snapshot);
+}
+
+SnapshotChangeInfo
+DuckLakeMetadataManager::GetSnapshotAndStatsAndChanges(SnapshotAndStats &current_snapshot,
+                                                       const std::function<unique_ptr<QueryResult>(string)> &executor,
+                                                       const set<TableIndex> &stats_table_ids) {
+	auto result = executor(GetSnapshotAndStatsAndChangesQuery(stats_table_ids));
 	return ParseSnapshotAndStatsAndChanges(*result, current_snapshot);
 }
 

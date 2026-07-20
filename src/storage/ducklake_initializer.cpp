@@ -14,6 +14,7 @@
 #include "metadata_manager/ducklake_metadata_manager_v1_1.hpp"
 #include "metadata_manager/sqlite_metadata_manager.hpp"
 #include "metadata_manager/postgres_metadata_manager.hpp"
+#include "metadata_manager/postgres_fast_metadata_manager.hpp"
 #include "metadata_manager/quack_metadata_manager.hpp"
 
 namespace duckdb {
@@ -303,6 +304,8 @@ void DuckLakeInitializer::SetVersionedMetadataManager(DuckLakeTransaction &trans
 	if (version == DuckLakeVersion::V1_1_DEV_1) {
 		if (dynamic_cast<QuackMetadataManager *>(&current)) {
 			new_manager = make_uniq<DuckLakeMetadataManagerV1_1<QuackMetadataManager>>(transaction);
+		} else if (dynamic_cast<PostgresFastMetadataManager *>(&current)) {
+			new_manager = make_uniq<DuckLakeMetadataManagerV1_1<PostgresFastMetadataManager>>(transaction);
 		} else if (dynamic_cast<PostgresMetadataManager *>(&current)) {
 			new_manager = make_uniq<DuckLakeMetadataManagerV1_1<PostgresMetadataManager>>(transaction);
 		} else if (dynamic_cast<SQLiteMetadataManager *>(&current)) {

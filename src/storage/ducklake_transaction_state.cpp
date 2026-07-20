@@ -1863,7 +1863,12 @@ DuckLakeTransactionState::CheckForConflicts(DuckLakeSnapshot transaction_snapsho
                                             const std::function<unique_ptr<QueryResult>(string)> &executor) {
 	SnapshotAndStats snapshot_and_stats;
 	// get all changes made to the system after the current snapshot was started
-	auto changes_made = DuckLakeMetadataManager::GetSnapshotAndStatsAndChanges(snapshot_and_stats, executor);
+	auto stats_table_ids = changes.GetStatsTableIds();
+	for (auto &entry : dropped_file_stats) {
+		stats_table_ids.insert(entry.first);
+	}
+	auto changes_made =
+	    DuckLakeMetadataManager::GetSnapshotAndStatsAndChanges(snapshot_and_stats, executor, stats_table_ids);
 	// parse changes made by other transactions
 	auto other_changes = SnapshotChangeInformation::ParseChangesMade(changes_made.changes_made);
 
