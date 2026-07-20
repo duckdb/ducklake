@@ -5289,6 +5289,9 @@ WHERE table_id IN (%s);)",
 				inlined_tables_to_drop.push_back(row.GetValue<string>(0));
 			}
 		}
+		for (auto &table_id : cleanup_tables) {
+			inlined_tables_to_drop.push_back(InlinedFileDeletionTableName(table_id));
+		}
 
 		tables_to_delete_from = {
 		    "ducklake_table",           "ducklake_table_stats",         "ducklake_table_column_stats",
