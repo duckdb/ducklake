@@ -314,6 +314,12 @@ struct DuckLakeSnapshotInfo {
 	Value commit_extra_info;
 };
 
+struct DuckLakeViewColumnTag {
+	string column_name;
+	string key;
+	Value value;
+};
+
 struct DuckLakeViewInfo {
 	TableIndex id;
 	SchemaIndex schema_id;
@@ -323,6 +329,14 @@ struct DuckLakeViewInfo {
 	vector<string> column_aliases;
 	string sql;
 	vector<DuckLakeTag> tags;
+	vector<DuckLakeViewColumnTag> column_tags;
+};
+
+struct DuckLakeViewColumnTagInfo {
+	TableIndex view_id;
+	string column_name;
+	string key;
+	Value value;
 };
 
 struct DuckLakeTagInfo {
