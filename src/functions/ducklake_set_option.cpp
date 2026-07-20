@@ -4,6 +4,7 @@
 #include "storage/ducklake_catalog.hpp"
 #include "storage/ducklake_table_entry.hpp"
 #include "storage/ducklake_schema_entry.hpp"
+#include "duckdb/main/config.hpp"
 
 namespace duckdb {
 // -------------------------------------------------------------------------//

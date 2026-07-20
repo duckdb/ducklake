@@ -178,7 +178,7 @@ bool DuckLakeInlinedDataReader::TryInitializeScan(ClientContext &context, Global
 		data->data->InitializeScan(state, scan_column_ids);
 	}
 	for (auto &entry : expression_map) {
-		expression_executors[entry.first] = make_uniq<ExpressionExecutor>(context, *entry.second);
+		expression_executors[entry.first] = make_uniq<ExpressionExecutor>(context, *entry.second.expression);
 	}
 	return true;
 }

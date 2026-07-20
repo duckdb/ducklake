@@ -23,6 +23,7 @@
 #include "storage/ducklake_multi_file_list.hpp"
 #include "duckdb/parallel/thread_context.hpp"
 #include "duckdb/execution/operator/scan/physical_table_scan.hpp"
+#include "duckdb/execution/physical_plan_generator.hpp"
 #include "storage/ducklake_multi_file_reader.hpp"
 #include "duckdb/common/types/column/column_data_collection.hpp"
 #include "common/ducklake_util.hpp"

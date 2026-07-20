@@ -4,6 +4,8 @@
 #include "storage/ducklake_catalog.hpp"
 #include "storage/ducklake_transaction_manager.hpp"
 #include "storage/ducklake_secret.hpp"
+#include "duckdb/parser/parsed_data/attach_info.hpp"
+#include "duckdb/main/attached_database.hpp"
 
 namespace duckdb {
 

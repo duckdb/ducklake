@@ -3,6 +3,7 @@
 #include "storage/ducklake_puffin.hpp"
 #include "common/parquet_file_scanner.hpp"
 #include "duckdb/common/algorithm.hpp"
+#include "duckdb/common/file_system.hpp"
 #include "duckdb/common/map.hpp"
 #include "duckdb/planner/filter/constant_filter.hpp"
 #include "duckdb/planner/table_filter.hpp"

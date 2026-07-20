@@ -152,8 +152,12 @@ struct DuckLakePartitionRowGroup : public PartitionRowGroup {
 		return table.GetStatistics(context, storage_index.GetPrimaryIndex());
 	}
 
-	bool MinMaxIsExact(const BaseStatistics &stats, const StorageIndex &storage_index) override {
+	bool MinMaxIsExact(const StorageIndex &storage_index) override {
 		return min_max_exact;
+	}
+
+	bool HasPendingWrites() override {
+		return false;
 	}
 };
 

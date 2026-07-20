@@ -1,4 +1,5 @@
 #include "storage/ducklake_catalog.hpp"
+#include "duckdb/main/config.hpp"
 #include "storage/ducklake_schema_entry.hpp"
 #include "storage/ducklake_field_data.hpp"
 #include "storage/ducklake_insert.hpp"
@@ -271,7 +272,7 @@ string DuckLakeInsert::GetName() const {
 
 InsertionOrderPreservingMap<string> DuckLakeInsert::ParamsToString() const {
 	InsertionOrderPreservingMap<string> result;
-	result["Table Name"] = (table ? table->name : info->Base().table).GetIdentifierName();
+	result["Table Name"] = (table ? table->name : info->Base().GetTableName()).GetIdentifierName();
 	return result;
 }
 
@@ -863,8 +864,8 @@ PhysicalOperator &DuckLakeCatalog::PlanCreateTableAs(ClientContext &context, Phy
 		DuckLakeTypes::CheckSupportedType(col.Type());
 	}
 	auto table_uuid = duck_transaction.GenerateUUID();
-	auto table_data_path = duck_schema.DataPath() +
-	                       DuckLakeCatalog::GeneratePathFromName(table_uuid, create_info.table.GetIdentifierName());
+	auto table_data_path = duck_schema.DataPath() + DuckLakeCatalog::GeneratePathFromName(
+	                                                    table_uuid, create_info.GetTableName().GetIdentifierName());
 
 	DuckLakeCopyInput copy_input(context, duck_schema, columns, table_data_path);
 	auto &physical_copy = DuckLakeInsert::PlanCopyForInsert(context, planner, copy_input, root.get());

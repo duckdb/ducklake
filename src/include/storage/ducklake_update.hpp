@@ -12,6 +12,8 @@
 
 namespace duckdb {
 
+class LogicalUpdate;
+
 class DuckLakeUpdate : public PhysicalOperator {
 public:
 	DuckLakeUpdate(PhysicalPlan &physical_plan, DuckLakeTableEntry &table, vector<PhysicalIndex> columns,

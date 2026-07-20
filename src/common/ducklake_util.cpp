@@ -1,4 +1,5 @@
 #include "common/ducklake_util.hpp"
+#include "duckdb/main/config.hpp"
 #include "duckdb/parser/column_list.hpp"
 #include "duckdb/common/string_util.hpp"
 #include "duckdb/common/sql_identifier.hpp"

@@ -6,6 +6,8 @@
 #include "duckdb/catalog/catalog_entry/table_catalog_entry.hpp"
 #include "duckdb/main/attached_database.hpp"
 #include "duckdb/main/config.hpp"
+#include "duckdb/main/database.hpp"
+#include "duckdb/main/database_manager.hpp"
 #include "duckdb/parser/constraints/not_null_constraint.hpp"
 #include "duckdb/parser/parsed_data/create_schema_info.hpp"
 #include "duckdb/parser/parsed_data/create_table_info.hpp"
@@ -259,18 +261,18 @@ string DuckLakeCatalog::GeneratePathFromName(const string &uuid, const string &n
 }
 
 optional_ptr<CatalogEntry> DuckLakeCatalog::CreateSchema(CatalogTransaction transaction, CreateSchemaInfo &info) {
-	auto schema = GetSchema(transaction, info.schema, OnEntryNotFound::RETURN_NULL);
+	auto schema = GetSchema(transaction, info.SchemaName(), OnEntryNotFound::RETURN_NULL);
 	if (schema) {
 		if (info.on_conflict == OnCreateConflict::IGNORE_ON_CONFLICT) {
 			return nullptr;
 		}
 		if (info.on_conflict == OnCreateConflict::ERROR_ON_CONFLICT) {
-			throw CatalogException::EntryAlreadyExists(CatalogType::SCHEMA_ENTRY, info.schema);
+			throw CatalogException::EntryAlreadyExists(CatalogType::SCHEMA_ENTRY, info.SchemaName());
 		}
 		// drop the existing entry
 		DropInfo drop_info;
 		drop_info.type = CatalogType::SCHEMA_ENTRY;
-		drop_info.name = info.schema;
+		drop_info.SetName(info.SchemaName());
 		DropSchema(transaction.GetContext(), drop_info);
 	}
 	auto &duck_transaction = transaction.transaction->Cast<DuckLakeTransaction>();
@@ -278,7 +280,7 @@ optional_ptr<CatalogEntry> DuckLakeCatalog::CreateSchema(CatalogTransaction tran
 	auto schema_id = SchemaIndex(duck_transaction.GetLocalCatalogId());
 	auto schema_uuid = duck_transaction.GenerateUUID();
 	auto schema_data_path =
-	    DataPath() + DuckLakeCatalog::GeneratePathFromName(schema_uuid, info.schema.GetIdentifierName());
+	    DataPath() + DuckLakeCatalog::GeneratePathFromName(schema_uuid, info.SchemaName().GetIdentifierName());
 	auto schema_entry =
 	    make_uniq<DuckLakeSchemaEntry>(*this, info, schema_id, std::move(schema_uuid), std::move(schema_data_path));
 	auto result = schema_entry.get();
@@ -287,7 +289,7 @@ optional_ptr<CatalogEntry> DuckLakeCatalog::CreateSchema(CatalogTransaction tran
 }
 
 void DuckLakeCatalog::DropSchema(ClientContext &context, DropInfo &info) {
-	auto schema = GetSchema(GetCatalogTransaction(context), info.name, info.if_not_found);
+	auto schema = GetSchema(GetCatalogTransaction(context), info.GetQualifiedName().Name(), info.if_not_found);
 	if (!schema) {
 		return;
 	}
@@ -458,8 +460,8 @@ unique_ptr<CreateMacroInfo> CreateMacroInfoFromDucklake(ClientContext &context, 
 		throw NotImplementedException("Macro type %s is not implemented", macro.implementations.front().type);
 	}
 	auto macro_info = make_uniq<CreateMacroInfo>(type);
-	macro_info->name = Identifier(macro.macro_name);
-	macro_info->schema = Identifier(schema_name);
+	macro_info->SetFunctionName(Identifier(macro.macro_name));
+	macro_info->SetSchema(Identifier(schema_name));
 	macro_info->temporary = false;
 	macro_info->internal = false;
 	for (auto &impl : macro.implementations) {
@@ -509,7 +511,7 @@ unique_ptr<DuckLakeCatalogSet> DuckLakeCatalog::LoadSchemaForSnapshot(DuckLakeTr
 	ducklake_entries_map_t schema_map;
 	for (auto &schema : catalog.schemas) {
 		CreateSchemaInfo schema_info;
-		schema_info.schema = Identifier(schema.name);
+		schema_info.SetQualifiedName(QualifiedName({Identifier(schema.name)}, Identifier()));
 		auto schema_entry = make_uniq<DuckLakeSchemaEntry>(*this, schema_info, schema.id, std::move(schema.uuid),
 		                                                   std::move(schema.path));
 		schema_map.insert(make_pair(std::move(schema.name), std::move(schema_entry)));

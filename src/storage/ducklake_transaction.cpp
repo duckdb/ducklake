@@ -802,8 +802,8 @@ Connection &DuckLakeTransaction::GetConnection() {
 		// ensure we are only looking in the ducklake catalog schema during querying
 		CatalogSearchEntry metadata_entry(Identifier(ducklake_catalog.MetadataDatabaseName()),
 		                                  Identifier(ducklake_catalog.MetadataSchemaName()));
-		if (metadata_entry.schema.empty()) {
-			metadata_entry.schema = "main";
+		if (metadata_entry.GetSchema().empty()) {
+			metadata_entry.SetSchema("main");
 		}
 		client_data.catalog_search_path->Set(metadata_entry, CatalogSetPathType::SET_DIRECTLY);
 

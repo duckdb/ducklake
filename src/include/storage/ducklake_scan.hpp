@@ -17,6 +17,7 @@ namespace duckdb {
 class DuckLakeMultiFileList;
 class DuckLakeTableEntry;
 class DuckLakeTransaction;
+class CopyFunctionCatalogEntry;
 class Serializer;
 class Deserializer;
 
