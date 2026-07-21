@@ -1,0 +1,35 @@
+# name: test/sql/comments/comment_on_view_column_update.test
+# description: Updating a view column comment expires the prior ducklake_view_column_tag row
+# group: [comments]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/ducklake_view_col_comment_upd/')
+
+statement ok
+CREATE VIEW ducklake.vw AS SELECT 42 AS x
+
+statement ok
+COMMENT ON COLUMN ducklake.vw.x IS 'first'
+
+statement ok
+COMMENT ON COLUMN ducklake.vw.x IS 'second'
+
+query III
+SELECT column_name, key, value FROM __ducklake_metadata_ducklake.ducklake_view_column_tag WHERE end_snapshot IS NULL ORDER BY key
+----
+x	comment	second
+
+query IIII
+SELECT column_name, key, value, end_snapshot IS NOT NULL FROM __ducklake_metadata_ducklake.ducklake_view_column_tag ORDER BY begin_snapshot
+----
+x	comment	first	true
+x	comment	second	false

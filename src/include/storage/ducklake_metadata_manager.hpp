@@ -222,7 +222,7 @@ public:
 	static DuckLakeCatalogInfo
 	BuildCatalogForSnapshot(DuckLakeSnapshot snapshot,
 	                        const std::function<unique_ptr<QueryResult>(DuckLakeSnapshot, string)> &query_executor,
-	                        const string &base_data_path, const string &separator);
+	                        const string &base_data_path, const string &separator, bool load_view_column_tags = false);
 	virtual vector<DuckLakeGlobalStatsInfo> GetGlobalTableStats(DuckLakeSnapshot snapshot, TableIndex table_id);
 	virtual vector<DuckLakeFileListEntry> GetFilesForTable(DuckLakeTableEntry &table, DuckLakeSnapshot snapshot,
 	                                                       const FilterPushdownInfo *filter_info = nullptr);
@@ -256,7 +256,7 @@ public:
 	virtual void RemoveFilesScheduledForCleanup(const vector<DuckLakeFileForCleanup> &cleaned_up_files);
 	static string DropSchemas(const set<SchemaIndex> &ids);
 	static string DropTables(const set<TableIndex> &ids, bool renamed);
-	static string DropViews(const set<TableIndex> &ids, bool renamed);
+	static string DropViews(const set<TableIndex> &ids, bool renamed, bool drop_view_column_tags = false);
 	static string DropMacros(const set<MacroIndex> &ids);
 
 	//! Emits the INSERT for new schemas. Caller supplies resolved paths (one per schema, same order)
@@ -280,6 +280,7 @@ public:
 	static string WriteNewColumns(const vector<DuckLakeNewColumn> &new_columns);
 	static string WriteNewTags(const vector<DuckLakeTagInfo> &new_tags);
 	static string WriteNewColumnTags(const vector<DuckLakeColumnTagInfo> &new_tags);
+	static string WriteNewViewColumnTags(const vector<DuckLakeViewColumnTagInfo> &new_tags);
 	virtual string WriteNewDataFiles(DuckLakeSnapshot &commit_snapshot, const vector<DuckLakeFileInfo> &new_files,
 	                                 const vector<DuckLakeTableInfo> &new_tables,
 	                                 vector<DuckLakeSchemaInfo> &new_schemas_result);
@@ -420,6 +421,7 @@ protected:
 	static string ListAggregation(const vector<pair<string, string>> &fields);
 	//! Parse tag list from ListAggregation value
 	static vector<DuckLakeTag> LoadTags(const Value &tag_map);
+	static vector<DuckLakeViewColumnTag> LoadViewColumnTags(const Value &list);
 	//! Parse inlined data tables list from ListAggregation value
 	static vector<DuckLakeInlinedTableInfo> LoadInlinedDataTables(const Value &list);
 	//! Parse macro implementations list from ListAggregation value
