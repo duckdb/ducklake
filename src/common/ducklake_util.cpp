@@ -149,9 +149,19 @@ string ToSQLString(DuckLakeMetadataManager &metadata_manager, const Value &value
 		// `'value'::type` operator: SQLite's parser rejects `::` outright,
 		// which breaks SQLite-backed metadata backends that ship these
 		// inlined-INSERT batches directly to SQLite.
+		if (!use_native_type) {
+			// When the backend stores this type as VARCHAR, emit a plain quoted
+			// string with no type annotation. The CAST(... AS VARCHAR) suffix
+			// survives verbatim inside STRUCT string literals and breaks the
+			// struct-from-string parser on read-back.
+			return EscapeVarcharForSQL(value.ToString());
+		}
 		return StringUtil::Format("CAST('%s' AS %s)", value.ToString(), value_type);
 	case LogicalTypeId::INTERVAL: {
 		auto interval = IntervalValue::Get(value);
+		if (!use_native_type) {
+			return EscapeVarcharForSQL(value.ToString());
+		}
 		return StringUtil::Format("CAST('%d months %d days %lld microseconds' AS %s)", interval.months, interval.days,
 		                          interval.micros, value_type);
 	}
