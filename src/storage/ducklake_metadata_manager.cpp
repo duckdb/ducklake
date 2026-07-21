@@ -426,6 +426,9 @@ void DuckLakeMetadataManager::MigrateV10(bool allow_failures) {
 	string migrate_query = R"(
 ALTER TABLE {METADATA_CATALOG}.ducklake_data_file ADD COLUMN {IF_NOT_EXISTS} row_group_count BIGINT;
 ALTER TABLE {METADATA_CATALOG}.ducklake_delete_file ADD COLUMN {IF_NOT_EXISTS} row_group_count BIGINT;
+CREATE TABLE {IF_NOT_EXISTS} {METADATA_CATALOG}.ducklake_view_column_tag(
+	view_id BIGINT, column_name VARCHAR, begin_snapshot BIGINT, end_snapshot BIGINT, key VARCHAR, value VARCHAR
+);
 UPDATE {METADATA_CATALOG}.ducklake_metadata SET value = '1.1-dev1' WHERE key = 'version';
 	)";
 	ExecuteMigration(migrate_query, allow_failures, "1.0", "1.1-dev1");
@@ -504,6 +507,26 @@ vector<DuckLakeTag> DuckLakeMetadataManager::LoadTags(const Value &tag_map) {
 		tag_info.key = struct_children[0].ToString();
 		tag_info.value = struct_children[1].ToString();
 		result.push_back(std::move(tag_info));
+	}
+	return result;
+}
+
+vector<DuckLakeViewColumnTag> DuckLakeMetadataManager::LoadViewColumnTags(const Value &list) {
+	vector<DuckLakeViewColumnTag> result;
+	if (list.IsNull()) {
+		return result;
+	}
+	for (auto &val : ListValue::GetChildren(list)) {
+		auto &struct_children = StructValue::GetChildren(val);
+		DuckLakeViewColumnTag tag;
+		tag.column_name = struct_children[0].ToString();
+		tag.key = struct_children[1].ToString();
+		if (struct_children.size() > 2) {
+			tag.value = struct_children[2].IsNull() ? Value() : struct_children[2];
+		} else {
+			tag.value = Value();
+		}
+		result.push_back(std::move(tag));
 	}
 	return result;
 }
@@ -661,12 +684,12 @@ DuckLakeCatalogInfo DuckLakeMetadataManager::GetCatalogForSnapshot(DuckLakeSnaps
 	auto &ducklake_catalog = transaction.GetCatalog();
 	return BuildCatalogForSnapshot(
 	    snapshot, [this](DuckLakeSnapshot s, string q) { return Query(s, q); }, ducklake_catalog.DataPath(),
-	    ducklake_catalog.Separator());
+	    ducklake_catalog.Separator(), ducklake_catalog.SupportsViewColumnTags());
 }
 
 DuckLakeCatalogInfo DuckLakeMetadataManager::BuildCatalogForSnapshot(
     DuckLakeSnapshot snapshot, const std::function<unique_ptr<QueryResult>(DuckLakeSnapshot, string)> &query_executor,
-    const string &base_data_path, const string &separator) {
+    const string &base_data_path, const string &separator, bool load_view_column_tags) {
 	DuckLakeCatalogInfo catalog;
 	// load the schema information
 	auto result = query_executor(snapshot, R"(
@@ -705,6 +728,11 @@ WHERE {SNAPSHOT_ID} >= begin_snapshot AND ({SNAPSHOT_ID} < end_snapshot OR end_s
 	static const vector<pair<string, string>> INLINED_DATA_TABLES_FIELDS = {
 	    {"name", "table_name"},
 	    {"schema_version", "schema_version"},
+	};
+	static const vector<pair<string, string>> VIEW_COLUMN_TAG_FIELDS = {
+	    {"column_name", "column_name"},
+	    {"key", "key"},
+	    {"value", "value"},
 	};
 
 	// load the table information
@@ -824,6 +852,15 @@ ORDER BY table_id, parent_column NULLS FIRST, column_order
 		}
 	}
 	// load view information
+	auto view_column_tags_select = load_view_column_tags ? StringUtil::Format(R"(,
+	(
+		SELECT %s
+		FROM {METADATA_CATALOG}.ducklake_view_column_tag vct
+		WHERE vct.view_id=view.view_id AND
+		      {SNAPSHOT_ID} >= vct.begin_snapshot AND ({SNAPSHOT_ID} < vct.end_snapshot OR vct.end_snapshot IS NULL)
+	) AS view_column_tags)",
+	                                                                          ListAggregation(VIEW_COLUMN_TAG_FIELDS))
+	                                                     : ",\n\tNULL AS view_column_tags";
 	result = query_executor(snapshot, StringUtil::Format(R"(
 SELECT view_id, view_uuid, schema_id, view_name, dialect, sql, column_aliases,
 	(
@@ -831,11 +868,11 @@ SELECT view_id, view_uuid, schema_id, view_name, dialect, sql, column_aliases,
 		FROM {METADATA_CATALOG}.ducklake_tag tag
 		WHERE object_id=view_id AND
 		      {SNAPSHOT_ID} >= tag.begin_snapshot AND ({SNAPSHOT_ID} < tag.end_snapshot OR tag.end_snapshot IS NULL)
-	) AS tag
+	) AS tag%s
 FROM {METADATA_CATALOG}.ducklake_view view
 WHERE {SNAPSHOT_ID} >= begin_snapshot AND ({SNAPSHOT_ID} < view.end_snapshot OR view.end_snapshot IS NULL)
 )",
-	                                                     ListAggregation(TAG_FIELDS)));
+	                                                     ListAggregation(TAG_FIELDS), view_column_tags_select));
 	if (result->HasError()) {
 		result->GetErrorObject().Throw("Failed to get partition information from DuckLake: ");
 	}
@@ -852,6 +889,9 @@ WHERE {SNAPSHOT_ID} >= begin_snapshot AND ({SNAPSHOT_ID} < view.end_snapshot OR 
 		if (!row.IsNull(7)) {
 			auto tags = row.GetValue<Value>(7);
 			view_info.tags = LoadTags(tags);
+		}
+		if (!row.IsNull(8)) {
+			view_info.column_tags = LoadViewColumnTags(row.GetValue<Value>(8));
 		}
 		views.push_back(std::move(view_info));
 	}
@@ -2440,10 +2480,13 @@ string DuckLakeMetadataManager::DropTables(const set<TableIndex> &ids, bool rena
 	return batch_query;
 }
 
-string DuckLakeMetadataManager::DropViews(const set<TableIndex> &ids, bool renamed) {
+string DuckLakeMetadataManager::DropViews(const set<TableIndex> &ids, bool renamed, bool drop_view_column_tags) {
 	string batch_query = FlushDrop("ducklake_view", "view_id", ids);
 	if (!renamed) {
 		batch_query += FlushDrop("ducklake_tag", "object_id", ids);
+		if (drop_view_column_tags) {
+			batch_query += FlushDrop("ducklake_view_column_tag", "view_id", ids);
+		}
 	}
 	return batch_query;
 }
@@ -4589,45 +4632,70 @@ WHERE object_id=tid AND ducklake_tag.key=overwritten_tags.key AND end_snapshot I
 	return batch_query;
 }
 
-string DuckLakeMetadataManager::WriteNewColumnTags(const vector<DuckLakeColumnTagInfo> &new_tags) {
+template <class T, class OverwrittenValues, class NewValues>
+static string WriteNewColumnTagBatch(const vector<T> &new_tags, const string &cte_columns, const string &metadata_table,
+                                     const string &update_condition, OverwrittenValues overwritten_values,
+                                     NewValues new_values) {
 	if (new_tags.empty()) {
 		return {};
 	}
-	// update old tags (if there were any)
-	// get a list of all tags
 	string tags_list;
 	for (auto &tag : new_tags) {
 		if (!tags_list.empty()) {
 			tags_list += ", ";
 		}
-		tags_list += StringUtil::Format("(%d, %d, %s)", tag.table_id.index, tag.field_index.index, SQLString(tag.key));
+		tags_list += overwritten_values(tag);
 	}
 
-	// overwrite the snapshot for the old tags
 	string batch_query = StringUtil::Format(R"(
-WITH overwritten_tags(tid, cid, key) AS (
+WITH overwritten_tags(%s) AS (
 VALUES %s
 )
-UPDATE {METADATA_CATALOG}.ducklake_column_tag
+UPDATE {METADATA_CATALOG}.%s
 SET end_snapshot = {SNAPSHOT_ID}
 FROM overwritten_tags
-WHERE table_id=tid AND column_id=cid AND ducklake_column_tag.key=overwritten_tags.key AND end_snapshot IS NULL
+WHERE %s AND end_snapshot IS NULL
 ;)",
-	                                        tags_list);
+	                                        cte_columns, tags_list, metadata_table, update_condition);
 
-	// now insert the new tags
 	string new_tag_query;
 	for (auto &tag : new_tags) {
 		if (!new_tag_query.empty()) {
 			new_tag_query += ", ";
 		}
-		new_tag_query += StringUtil::Format("(%d, %d, {SNAPSHOT_ID}, NULL, %s, %s)", tag.table_id.index,
-		                                    tag.field_index.index, SQLString(tag.key), tag.value.ToSQLString());
+		new_tag_query += new_values(tag);
 	}
 
-	new_tag_query = "INSERT INTO {METADATA_CATALOG}.ducklake_column_tag VALUES " + new_tag_query + ";";
-	batch_query += new_tag_query;
+	batch_query += StringUtil::Format("INSERT INTO {METADATA_CATALOG}.%s VALUES %s;", metadata_table, new_tag_query);
 	return batch_query;
+}
+
+string DuckLakeMetadataManager::WriteNewColumnTags(const vector<DuckLakeColumnTagInfo> &new_tags) {
+	return WriteNewColumnTagBatch(
+	    new_tags, "tid, cid, key", "ducklake_column_tag",
+	    "table_id=tid AND column_id=cid AND ducklake_column_tag.key=overwritten_tags.key",
+	    [](const DuckLakeColumnTagInfo &tag) {
+		    return StringUtil::Format("(%d, %d, %s)", tag.table_id.index, tag.field_index.index, SQLString(tag.key));
+	    },
+	    [](const DuckLakeColumnTagInfo &tag) {
+		    return StringUtil::Format("(%d, %d, {SNAPSHOT_ID}, NULL, %s, %s)", tag.table_id.index,
+		                              tag.field_index.index, SQLString(tag.key), tag.value.ToSQLString());
+	    });
+}
+
+string DuckLakeMetadataManager::WriteNewViewColumnTags(const vector<DuckLakeViewColumnTagInfo> &new_tags) {
+	return WriteNewColumnTagBatch(
+	    new_tags, "vid, col, k", "ducklake_view_column_tag",
+	    "view_id=vid AND ducklake_view_column_tag.column_name=overwritten_tags.col AND "
+	    "ducklake_view_column_tag.key=overwritten_tags.k",
+	    [](const DuckLakeViewColumnTagInfo &tag) {
+		    return StringUtil::Format("(%d, %s, %s)", tag.view_id.index, SQLString(tag.column_name),
+		                              SQLString(tag.key));
+	    },
+	    [](const DuckLakeViewColumnTagInfo &tag) {
+		    return StringUtil::Format("(%d, %s, {SNAPSHOT_ID}, NULL, %s, %s)", tag.view_id.index,
+		                              SQLString(tag.column_name), SQLString(tag.key), tag.value.ToSQLString());
+	    });
 }
 
 struct ColumnStatsSQL {
@@ -4836,7 +4904,7 @@ vector<DuckLakeFileForCleanup> DuckLakeMetadataManager::GetOrphanFilesForCleanup
 
 		auto query = StringUtil::Format(R"(SELECT filename
 FROM read_blob({DATA_PATH} || '**') files
-WHERE suffix(filename, '.parquet')
+WHERE (suffix(filename, '.parquet') OR suffix(filename, '.puffin'))
 AND NOT EXISTS (
 	SELECT 1 FROM %s known_files WHERE known_files.full_path = REPLACE(files.filename, '\', '/')
 )
@@ -5249,6 +5317,9 @@ WHERE table_id IN (%s);)",
 
 	// delete any views, schemas, macros, etc that are no longer referenced
 	tables_to_delete_from = {"ducklake_schema", "ducklake_view", "ducklake_tag", "ducklake_macro"};
+	if (transaction.GetCatalog().SupportsViewColumnTags()) {
+		tables_to_delete_from.insert(tables_to_delete_from.begin() + 2, "ducklake_view_column_tag");
+	}
 	for (auto &delete_tbl : tables_to_delete_from) {
 		auto result = Execute(StringUtil::Format(R"(
 DELETE FROM {METADATA_CATALOG}.%s

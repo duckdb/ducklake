@@ -196,6 +196,42 @@ optional_ptr<CatalogEntry> DuckLakeSchemaEntry::CreateType(CatalogTransaction tr
 	throw NotImplementedException("DuckLake does not support user-defined types");
 }
 
+namespace {
+
+bool TryApplySetColumnCommentToTable(DuckLakeTransaction &transaction, CatalogTransaction catalog_transaction,
+                                     DuckLakeSchemaEntry &schema, SetColumnCommentInfo &alter) {
+	auto table_entry = schema.GetEntry(catalog_transaction, CatalogType::TABLE_ENTRY, alter.name);
+	if (!table_entry || table_entry->type != CatalogType::TABLE_ENTRY) {
+		return false;
+	}
+	auto &table = table_entry->Cast<DuckLakeTableEntry>();
+	auto new_table = table.Alter(transaction, alter);
+	transaction.AlterEntry(table, std::move(new_table));
+	return true;
+}
+
+void ApplySetColumnCommentToTable(DuckLakeTransaction &transaction, CatalogTransaction catalog_transaction,
+                                  DuckLakeSchemaEntry &schema, SetColumnCommentInfo &alter,
+                                  const char *not_a_table_message) {
+	if (!TryApplySetColumnCommentToTable(transaction, catalog_transaction, schema, alter)) {
+		throw BinderException(not_a_table_message, alter.name);
+	}
+}
+
+void ApplySetColumnCommentToView(DuckLakeTransaction &transaction, CatalogTransaction catalog_transaction,
+                                 DuckLakeSchemaEntry &schema, SetColumnCommentInfo &alter,
+                                 const char *not_a_view_message) {
+	auto view_entry = schema.GetEntry(catalog_transaction, CatalogType::VIEW_ENTRY, alter.name);
+	if (!view_entry || view_entry->type != CatalogType::VIEW_ENTRY) {
+		throw BinderException(not_a_view_message, alter.name);
+	}
+	auto &view = view_entry->Cast<DuckLakeViewEntry>();
+	auto new_view = view.Alter(transaction, alter);
+	transaction.AlterEntry(view, std::move(new_view));
+}
+
+} // namespace
+
 void DuckLakeSchemaEntry::Alter(CatalogTransaction catalog_transaction, AlterInfo &info) {
 	auto &context = catalog_transaction.GetContext();
 	auto &transaction = DuckLakeTransaction::Get(context, catalog);
@@ -269,13 +305,16 @@ void DuckLakeSchemaEntry::Alter(CatalogTransaction catalog_transaction, AlterInf
 	}
 	case AlterType::SET_COLUMN_COMMENT: {
 		auto &alter = info.Cast<SetColumnCommentInfo>();
-		auto table_entry = GetEntry(catalog_transaction, CatalogType::TABLE_ENTRY, alter.name);
-		if (table_entry->type != CatalogType::TABLE_ENTRY) {
-			throw BinderException("Cannot comment on columns for entry %s - it is not a table", alter.name);
+		if (alter.catalog_entry_type == CatalogType::VIEW_ENTRY) {
+			ApplySetColumnCommentToView(transaction, catalog_transaction, *this, alter,
+			                            "Cannot comment on columns for entry %s - it is not a view");
+		} else if (alter.catalog_entry_type == CatalogType::TABLE_ENTRY) {
+			ApplySetColumnCommentToTable(transaction, catalog_transaction, *this, alter,
+			                             "Cannot comment on columns for entry %s - it is not a table");
+		} else if (!TryApplySetColumnCommentToTable(transaction, catalog_transaction, *this, alter)) {
+			ApplySetColumnCommentToView(transaction, catalog_transaction, *this, alter,
+			                            "Cannot comment on columns for entry %s - could not find table or view");
 		}
-		auto &table = table_entry->Cast<DuckLakeTableEntry>();
-		auto new_table = table.Alter(transaction, alter);
-		transaction.AlterEntry(table, std::move(new_table));
 		break;
 	}
 	default:

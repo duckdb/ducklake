@@ -915,6 +915,13 @@ void GetTransactionViewChanges(reference<CatalogEntry> view_entry, TransactionCh
 			}
 			break;
 		}
+		case LocalChangeType::SET_COLUMN_COMMENT: {
+			auto view_id = view.GetViewId();
+			if (!IsTransactionLocal(view_id)) {
+				changes.altered_views.insert(view_id);
+			}
+			break;
+		}
 		case LocalChangeType::NONE:
 		case LocalChangeType::CREATED:
 		case LocalChangeType::RENAMED: {
@@ -1527,7 +1534,7 @@ void DuckLakeTransaction::RunCommitLoop(DuckLakeSnapshot transaction_snapshot,
 		ducklake_catalog.InvalidateTableStatsCache(next_file_id, table_id);
 	};
 	context.commit_info = state->commit_info;
-	context.write_row_group_count = ducklake_catalog.SupportsRowGroupCount();
+	context.supports_v1_1_metadata = ducklake_catalog.SupportsRowGroupCount();
 	state->Commit(transaction_snapshot, transaction_changes, retry_config, context);
 }
 
@@ -2036,6 +2043,7 @@ void DuckLakeTransaction::AlterEntryInternal(DuckLakeViewEntry &view, unique_ptr
 		break;
 	}
 	case LocalChangeType::SET_COMMENT:
+	case LocalChangeType::SET_COLUMN_COMMENT:
 		break;
 	default:
 		throw NotImplementedException("Alter type not supported in DuckLakeTransaction::AlterEntry");
