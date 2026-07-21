@@ -1,12 +1,18 @@
 #include "storage/ducklake_view_entry.hpp"
+#include "storage/ducklake_transaction.hpp"
+#include "storage/ducklake_catalog.hpp"
 #include "duckdb/parser/parsed_data/create_view_info.hpp"
+#include "duckdb/parser/parsed_data/comment_on_column_info.hpp"
 #include "duckdb/parser/parser.hpp"
 #include "duckdb/parser/parsed_data/alter_info.hpp"
 #include "duckdb/parser/parsed_data/alter_table_info.hpp"
 #include "duckdb/parser/keyword_helper.hpp"
+#include "duckdb/common/exception/binder_exception.hpp"
 #include "duckdb/common/string_util.hpp"
 #include "duckdb/common/sql_identifier.hpp"
 #include "common/ducklake_util.hpp"
+
+#include <algorithm>
 
 namespace duckdb {
 
@@ -49,6 +55,48 @@ unique_ptr<CatalogEntry> DuckLakeViewEntry::AlterEntry(ClientContext &context, A
 	default:
 		throw NotImplementedException("Unsupported ALTER type for VIEW");
 	}
+}
+
+unique_ptr<CatalogEntry> DuckLakeViewEntry::Alter(DuckLakeTransaction &transaction, SetColumnCommentInfo &info) {
+	if (!transaction.GetCatalog().SupportsViewColumnTags()) {
+		throw InvalidInputException("DuckLake 1.0 does not support COMMENT ON COLUMN for views");
+	}
+
+	auto context = transaction.context.lock();
+	if (!context) {
+		throw InternalException("Alter view column comment: missing client context");
+	}
+	BindView(*context);
+	auto resolved_column_name = info.column_name;
+	auto view_columns = GetColumnInfo();
+	if (view_columns) {
+		auto &names = view_columns->names;
+		auto match_name = [&](const auto &column_name) {
+			return resolved_column_name == column_name;
+		};
+		if (!aliases.empty()) {
+			auto alias_entry = std::find_if(aliases.begin(), aliases.end(), match_name);
+			if (alias_entry == aliases.end()) {
+				throw BinderException("View \"%s\" does not have a column with name \"%s\"", name,
+				                      resolved_column_name);
+			}
+			auto alias_index = NumericCast<idx_t>(std::distance(aliases.begin(), alias_entry));
+			D_ASSERT(alias_index < names.size());
+			resolved_column_name = names[alias_index];
+		} else {
+			auto entry = std::find_if(names.begin(), names.end(), match_name);
+			if (entry == names.end()) {
+				throw BinderException("View \"%s\" does not have a column with name \"%s\"", name,
+				                      resolved_column_name);
+			}
+			resolved_column_name = *entry;
+		}
+	}
+	auto column_name = resolved_column_name.GetIdentifierName();
+	auto create_info = GetInfo();
+	auto &view_info = create_info->Cast<CreateViewInfo>();
+	view_info.column_comments_map[Identifier(column_name)] = info.comment_value;
+	return make_uniq<DuckLakeViewEntry>(*this, view_info, LocalChange::SetViewColumnComment(column_name));
 }
 
 unique_ptr<CreateInfo> DuckLakeViewEntry::GetInfo() const {
