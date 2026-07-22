@@ -140,7 +140,7 @@ optional_ptr<CatalogEntry> DuckLakeCatalog::CreateSchema(CatalogTransaction tran
 		// drop the existing entry
 		DropInfo drop_info;
 		drop_info.type = CatalogType::SCHEMA_ENTRY;
-		drop_info.name = info.schema;
+		drop_info.NameMutable() = info.schema;
 		DropSchema(transaction.GetContext(), drop_info);
 	}
 	auto &duck_transaction = transaction.transaction->Cast<DuckLakeTransaction>();
@@ -156,7 +156,7 @@ optional_ptr<CatalogEntry> DuckLakeCatalog::CreateSchema(CatalogTransaction tran
 }
 
 void DuckLakeCatalog::DropSchema(ClientContext &context, DropInfo &info) {
-	auto schema = GetSchema(GetCatalogTransaction(context), info.name, info.if_not_found);
+	auto schema = GetSchema(GetCatalogTransaction(context), info.Name(), info.if_not_found);
 	if (!schema) {
 		return;
 	}
