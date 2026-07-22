@@ -4864,6 +4864,14 @@ FROM {METADATA_CATALOG}.ducklake_files_scheduled_for_deletion f
 	return StringUtil::Replace(query, "{SEPARATOR}", separator);
 }
 
+//! Returns true for the specific "backend cannot supply per-object mtime" failure we tolerate
+//! during older_than orphan cleanup (ducklake#1042): a filesystem without mtime support (e.g.
+//! gcsfs reading a GCS composite object) surfaces this exact KeyError from its info() dictionary.
+//! Any other enumeration error (auth, network, ...) must still surface loudly.
+static bool IsMissingMTimeError(const ErrorData &error) {
+	return StringUtil::Contains(error.Message(), "KeyError: 'mtime'");
+}
+
 vector<DuckLakeFileForCleanup> DuckLakeMetadataManager::GetOrphanFilesForCleanup(const string &filter,
                                                                                  const string &separator) {
 	auto known_files_query = GetKnownFilesForCleanupQuery(separator);
@@ -4902,18 +4910,61 @@ vector<DuckLakeFileForCleanup> DuckLakeMetadataManager::GetOrphanFilesForCleanup
 		}
 		appender.Close();
 
-		auto query = StringUtil::Format(R"(SELECT filename
+		// Enumerate orphan candidate files. When no timestamp filter is requested
+		// (cleanup_all mode), enumerate with `glob` rather than `read_blob`: glob
+		// only lists entries and never touches per-object metadata, so this mode
+		// does not depend on the storage backend supplying `mtime`.
+		//
+		// When a timestamp filter is requested (older_than mode - this includes
+		// CHECKPOINT, which runs ducklake_delete_orphaned_files with the default
+		// 'delete_older_than' setting), the `last_modified` comparison requires
+		// per-object mtime. Some backends cannot supply it for every object (e.g.
+		// gcsfs raises KeyError: 'mtime' for GCS composite objects, see
+		// ducklake#1042), which aborts the query - and with it the whole
+		// CHECKPOINT. That specific capability failure is tolerated by degrading
+		// to "retain all" for this round: skipping cleanup of orphans whose age
+		// cannot be determined is always safe (never over-delete), and they can
+		// still be removed via cleanup_all, which does not need mtime. Any other
+		// enumeration error (auth, network, ...) is rethrown - silently
+		// suppressing those would disable orphan cleanup without any signal.
+		unique_ptr<QueryResult> res;
+		if (filter.empty()) {
+			auto query = StringUtil::Format(R"(SELECT file
+FROM glob({DATA_PATH} || '**') files
+WHERE (suffix(file, '.parquet') OR suffix(file, '.puffin'))
+AND NOT EXISTS (
+	SELECT 1 FROM %s known_files WHERE known_files.full_path = REPLACE(files.file, '\', '/')
+))",
+			                                temp_table_identifier);
+			SubstituteCatalogPlaceholders(query);
+			res = transaction.ExecuteRaw(query);
+			if (res->HasError()) {
+				res->GetErrorObject().Throw("Failed to get files scheduled for deletion from DuckLake: ");
+			}
+		} else {
+			auto query = StringUtil::Format(R"(SELECT filename
 FROM read_blob({DATA_PATH} || '**') files
 WHERE (suffix(filename, '.parquet') OR suffix(filename, '.puffin'))
 AND NOT EXISTS (
 	SELECT 1 FROM %s known_files WHERE known_files.full_path = REPLACE(files.filename, '\', '/')
 )
 %s)",
-		                                temp_table_identifier, filter);
-		SubstituteCatalogPlaceholders(query);
-		auto res = transaction.ExecuteRaw(query);
-		if (res->HasError()) {
-			res->GetErrorObject().Throw("Failed to get files scheduled for deletion from DuckLake: ");
+			                                temp_table_identifier, filter);
+			SubstituteCatalogPlaceholders(query);
+			res = transaction.ExecuteRaw(query);
+			if (res->HasError()) {
+				auto &error = res->GetErrorObject();
+				if (IsMissingMTimeError(error)) {
+					// mtime-dependent enumeration failed (e.g. objects without mtime
+					// on the storage backend). Retain all orphans this round;
+					// CHECKPOINT must stay usable. The aged-out orphans will be
+					// picked up on a later run once the backend can supply mtime,
+					// or via cleanup_all.
+					drop_temp_table();
+					return {};
+				}
+				error.Throw("Failed to get files scheduled for deletion from DuckLake: ");
+			}
 		}
 
 		vector<DuckLakeFileForCleanup> result;
