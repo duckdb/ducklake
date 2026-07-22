@@ -730,6 +730,7 @@ Connection &DuckLakeTransaction::GetConnection() {
 			connection->Query("SET pg_experimental_filter_pushdown=false");
 		}
 		connection->BeginTransaction();
+		connection->Query("SET current_transaction_invalidation_policy='SYNTACTIC_ERRORS_DO_NOT_INVALIDATE'");
 	}
 	return *connection;
 }
