@@ -93,6 +93,9 @@ static void Murmur3ScalarFunction(DataChunk &args, ExpressionState &state, Vecto
 		}
 		}
 	}
+	if (args.AllConstant()) {
+		result.SetVectorType(VectorType::CONSTANT_VECTOR);
+	}
 }
 
 ScalarFunction DuckLakeMurmur3Function() {

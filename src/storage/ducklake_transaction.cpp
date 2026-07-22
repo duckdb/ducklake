@@ -768,6 +768,9 @@ void DuckLakeTransaction::Commit() {
 		FlushChanges();
 	} else if (connection) {
 		connection->Commit();
+		if (!state->flushed_inlined_tables.empty()) {
+			DropEmptySupersededInlinedTablesClientSide();
+		}
 	}
 	FlushNameMapCacheInvalidations();
 	connection.reset();
