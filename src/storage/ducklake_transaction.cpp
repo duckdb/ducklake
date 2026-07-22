@@ -1986,20 +1986,22 @@ void DuckLakeTransaction::AlterEntry(CatalogEntry &entry, unique_ptr<CatalogEntr
 static void HandleRenameOldEntry(DuckLakeCatalogSet &entries, const string &old_name, const string &new_name,
                                  TableIndex id, bool entry_is_transaction_local, set<TableIndex> &renamed_set,
                                  const set<TableIndex> &dropped_set) {
-	if (IsTransactionLocal(id)) {
-		// entry was created in this same transaction
-		auto dropped = entries.DropEntry(old_name);
-		auto new_entry_ptr = entries.GetEntry(new_name);
-		if (new_entry_ptr && dropped) {
-			new_entry_ptr->SetChild(std::move(dropped));
-		}
-	} else if (entry_is_transaction_local) {
-		// entry existed before this transaction and has already been renamed earlier in this txn
-		entries.DropEntry(old_name);
-	} else {
-		// first rename of a committed entry
+	if (!IsTransactionLocal(id) && !entry_is_transaction_local) {
+		// first rename of a committed entry that was untouched earlier in this transaction
 		// Invariant: an id cannot be both renamed and dropped in the same transaction.
 		D_ASSERT(dropped_set.find(id) == dropped_set.end());
+		renamed_set.insert(id);
+		return;
+	}
+	// so any columns added / types changed / prior renames earlier in this
+	// transaction still get committed, re-parent the old version under the new name
+	auto dropped = entries.DropEntry(old_name);
+	auto new_entry_ptr = entries.GetEntry(new_name);
+	if (new_entry_ptr && dropped) {
+		new_entry_ptr->SetChild(std::move(dropped));
+	}
+	if (!IsTransactionLocal(id)) {
+		// committed entry that was altered earlier in this transaction - the old row still needs closing
 		renamed_set.insert(id);
 	}
 }
