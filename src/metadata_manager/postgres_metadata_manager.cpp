@@ -153,8 +153,8 @@ PostgresMetadataManager::TransformInlinedData(QueryResult &result, const vector<
 	if (!expected_types.empty()) {
 		if (result.types.size() < expected_types.size()) {
 			throw InvalidInputException(
-			    "Failed to read inlined data from DuckLake: expected %llu columns but read %llu",
-			    expected_types.size(), result.types.size());
+			    "Failed to read inlined data from DuckLake: expected %llu columns but read %llu", expected_types.size(),
+			    result.types.size());
 		}
 		for (idx_t i = 0; i < expected_types.size(); i++) {
 			if (result.types[i] != expected_types[i]) {
