@@ -279,9 +279,9 @@ CopyFunctionCatalogEntry &DuckLakeFunctions::GetCopyFunction(ClientContext &cont
 	D_ASSERT(!name.empty());
 	auto &system_catalog = Catalog::GetSystemCatalog(db);
 
-	auto entry =
-	    system_catalog.GetEntry<CopyFunctionCatalogEntry>(context, Identifier::DefaultSchema(), Identifier(name),
-	                                                      OnEntryNotFound::RETURN_NULL);
+	auto entry = system_catalog.GetEntry<CopyFunctionCatalogEntry>(
+	    context, QualifiedName(system_catalog.GetName(), Identifier::DefaultSchema(), Identifier(name)),
+	    OnEntryNotFound::RETURN_NULL);
 	if (!entry) {
 		throw MissingExtensionException(
 		    "Could not load the copy function for \"%s\". Try explicitly loading the \"%s\" extension", name, name);
@@ -550,7 +550,8 @@ DuckLakeCopyOptions DuckLakeInsert::GetCopyOptions(ClientContext &context, DuckL
 		}
 	}
 
-	auto function_data = copy_fun.function.copy_to_bind(context, bind_input, StringsToIdentifiers(names_to_write), casted_types);
+	auto function_data =
+	    copy_fun.function.copy_to_bind(context, bind_input, StringsToIdentifiers(names_to_write), casted_types);
 
 	DuckLakeCopyOptions result(std::move(info), copy_fun.function);
 	result.bind_data = std::move(function_data);
@@ -851,8 +852,8 @@ PhysicalOperator &DuckLakeCatalog::PlanCreateTableAs(ClientContext &context, Phy
 		DuckLakeTypes::CheckSupportedType(col.Type());
 	}
 	auto table_uuid = duck_transaction.GenerateUUID();
-	auto table_data_path =
-	    duck_schema.DataPath() + DuckLakeCatalog::GeneratePathFromName(table_uuid, create_info.GetTableName().GetIdentifierName());
+	auto table_data_path = duck_schema.DataPath() + DuckLakeCatalog::GeneratePathFromName(
+	                                                    table_uuid, create_info.GetTableName().GetIdentifierName());
 
 	DuckLakeCopyInput copy_input(context, duck_schema, columns, table_data_path);
 	auto &physical_copy = DuckLakeInsert::PlanCopyForInsert(context, planner, copy_input, root.get());

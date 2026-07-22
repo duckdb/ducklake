@@ -346,7 +346,8 @@ unique_ptr<LogicalOperator> DuckLakeDataFlusher::GenerateFlushCommand() {
 	// and instead pull the latest sort setting
 	// First, see if there are transaction local changes to the table
 	// Then fall back to latest snapshot if no local changes
-	auto latest_entry = transaction.GetTransactionLocalEntry(CatalogType::TABLE_ENTRY, table.schema.name.GetIdentifierName(), table.name.GetIdentifierName());
+	auto latest_entry = transaction.GetTransactionLocalEntry(
+	    CatalogType::TABLE_ENTRY, table.schema.name.GetIdentifierName(), table.name.GetIdentifierName());
 	if (!latest_entry) {
 		auto latest_snapshot = transaction.GetSnapshot();
 		latest_entry = catalog.GetEntryById(transaction, latest_snapshot, table_id);
@@ -630,9 +631,9 @@ static unique_ptr<LogicalOperator> FlushInlinedDataBind(ClientContext &context, 
 		}
 	} else {
 		// specific table - fetch the table
-		auto table_catalog_entry =
-		    ducklake_catalog.GetEntry<TableCatalogEntry>(context, Identifier(schema), Identifier(table),
-	                                                 OnEntryNotFound::THROW_EXCEPTION);
+		auto table_catalog_entry = ducklake_catalog.GetEntry<TableCatalogEntry>(
+		    context, QualifiedName(ducklake_catalog.GetName(), Identifier(schema), Identifier(table)),
+		    OnEntryNotFound::THROW_EXCEPTION);
 		auto &dl_schema = table_catalog_entry->schema.Cast<DuckLakeSchemaEntry>();
 		schema_table_map[dl_schema.Cast<DuckLakeSchemaEntry>().GetSchemaId().index].push_back(
 		    table_catalog_entry.get()->Cast<DuckLakeTableEntry>());
@@ -706,7 +707,8 @@ static unique_ptr<LogicalOperator> FlushInlinedDataBind(ClientContext &context, 
 
 	// Create SUM(rows_flushed) aggregate
 	auto &system_catalog = Catalog::GetSystemCatalog(context);
-	auto &sum_entry = system_catalog.GetEntry<AggregateFunctionCatalogEntry>(context, Identifier::DefaultSchema(), "sum");
+	auto &sum_entry = system_catalog.GetEntry<AggregateFunctionCatalogEntry>(
+	    context, QualifiedName(system_catalog.GetName(), Identifier::DefaultSchema(), "sum"));
 
 	vector<unique_ptr<Expression>> sum_args;
 	sum_args.push_back(make_uniq<BoundColumnRefExpression>(child->types[2], child_bindings[2]));
@@ -739,8 +741,8 @@ static unique_ptr<LogicalOperator> FlushInlinedDataBind(ClientContext &context, 
 	unique_ptr<Expression> sum_col_ref = make_uniq<BoundColumnRefExpression>(aggregate->types[2], agg_bindings[2]);
 	// Note: SUM(BIGINT) returns HUGEINT. We must use the its output type for the 0 constant
 	unique_ptr<Expression> zero_const = make_uniq<BoundConstantExpression>(Value::Numeric(aggregate->types[2], 0));
-	unique_ptr<Expression> filter_expr =
-	    BoundComparisonExpression::Create(ExpressionType::COMPARE_GREATERTHAN, std::move(sum_col_ref), std::move(zero_const));
+	unique_ptr<Expression> filter_expr = BoundComparisonExpression::Create(
+	    ExpressionType::COMPARE_GREATERTHAN, std::move(sum_col_ref), std::move(zero_const));
 
 	auto filter = make_uniq<LogicalFilter>(std::move(filter_expr));
 	filter->children.push_back(std::move(aggregate));

@@ -117,9 +117,9 @@ static unique_ptr<FunctionData> DuckLakeSetOptionBind(ClientContext &context, Ta
 	}
 	if (!table.empty()) {
 		// find the scope
-		auto table_catalog_entry =
-		    catalog.GetEntry<TableCatalogEntry>(context, Identifier(schema), Identifier(table),
-		                                                       OnEntryNotFound::THROW_EXCEPTION);
+		auto table_catalog_entry = catalog.GetEntry<TableCatalogEntry>(
+		    context, QualifiedName(catalog.GetName(), Identifier(schema), Identifier(table)),
+		    OnEntryNotFound::THROW_EXCEPTION);
 		auto &ducklake_table = table_catalog_entry->Cast<DuckLakeTableEntry>();
 		config_option.table_id = ducklake_table.GetTableId();
 		if (IsTransactionLocal(config_option.table_id)) {

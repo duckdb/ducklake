@@ -147,7 +147,8 @@ optional_ptr<CatalogEntry> DuckLakeCatalog::CreateSchema(CatalogTransaction tran
 	//! get a local table-id
 	auto schema_id = SchemaIndex(duck_transaction.GetLocalCatalogId());
 	auto schema_uuid = duck_transaction.GenerateUUID();
-	auto schema_data_path = DataPath() + DuckLakeCatalog::GeneratePathFromName(schema_uuid, info.GetQualifiedName().Schema().GetIdentifierName());
+	auto schema_data_path = DataPath() + DuckLakeCatalog::GeneratePathFromName(
+	                                         schema_uuid, info.GetQualifiedName().Schema().GetIdentifierName());
 	auto schema_entry =
 	    make_uniq<DuckLakeSchemaEntry>(*this, info, schema_id, std::move(schema_uuid), std::move(schema_data_path));
 	auto result = schema_entry.get();
@@ -327,7 +328,8 @@ unique_ptr<CreateMacroInfo> CreateMacroInfoFromDucklake(ClientContext &context, 
 	}
 	auto macro_info = make_uniq<CreateMacroInfo>(type);
 	macro_info->SetFunctionName(Identifier(macro.macro_name));
-	macro_info->SchemaMutable() = Identifier(schema_name);
+	macro_info->SetQualifiedName(QualifiedName(macro_info->GetQualifiedName().Catalog(), Identifier(schema_name),
+	                                           macro_info->GetQualifiedName().Name()));
 	macro_info->temporary = false;
 	macro_info->internal = false;
 	for (auto &impl : macro.implementations) {
@@ -376,7 +378,8 @@ unique_ptr<DuckLakeCatalogSet> DuckLakeCatalog::LoadSchemaForSnapshot(DuckLakeTr
 	ducklake_entries_map_t schema_map;
 	for (auto &schema : catalog.schemas) {
 		CreateSchemaInfo schema_info;
-		schema_info.SchemaMutable() = Identifier(schema.name);
+		schema_info.SetQualifiedName(QualifiedName(schema_info.GetQualifiedName().Catalog(), Identifier(schema.name),
+		                                           schema_info.GetQualifiedName().Name()));
 		auto schema_entry = make_uniq<DuckLakeSchemaEntry>(*this, schema_info, schema.id, std::move(schema.uuid),
 		                                                   std::move(schema.path));
 		schema_map.insert(make_pair(std::move(schema.name), std::move(schema_entry)));
@@ -470,7 +473,8 @@ unique_ptr<DuckLakeCatalogSet> DuckLakeCatalog::LoadSchemaForSnapshot(DuckLakeTr
 			    macro.macro_name);
 		}
 		auto &schema_entry = entry->second.get();
-		auto create_macro = CreateMacroInfoFromDucklake(*transaction.context.lock(), macro, schema_entry.name.GetIdentifierName());
+		auto create_macro =
+		    CreateMacroInfoFromDucklake(*transaction.context.lock(), macro, schema_entry.name.GetIdentifierName());
 		if (macro.implementations.front().type == "scalar") {
 			auto macro_catalog_entry =
 			    make_uniq<DuckLakeScalarMacroEntry>(*this, schema_entry, *create_macro, macro.macro_id);
