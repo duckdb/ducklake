@@ -145,8 +145,8 @@ unique_ptr<Expression> DuckLakePartitionUtils::ApplyScalarFunction(ClientContext
 	children.push_back(std::move(column_expr));
 	ErrorData error;
 	FunctionBinder binder(context);
-	auto function =
-	    binder.BindScalarFunction(Identifier::DefaultSchema(), Identifier(function_name), std::move(children), error, false);
+	auto function = binder.BindScalarFunction(Identifier::DefaultSchema(), Identifier(function_name),
+	                                          std::move(children), error, false);
 	if (!function) {
 		error.Throw();
 	}

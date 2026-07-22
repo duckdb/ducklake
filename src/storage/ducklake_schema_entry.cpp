@@ -203,7 +203,7 @@ namespace {
 
 bool TryApplySetColumnCommentToTable(DuckLakeTransaction &transaction, CatalogTransaction catalog_transaction,
                                      DuckLakeSchemaEntry &schema, SetColumnCommentInfo &alter) {
-	auto table_entry = schema.GetEntry(catalog_transaction, CatalogType::TABLE_ENTRY, alter.name);
+	auto table_entry = schema.GetEntry(catalog_transaction, CatalogType::TABLE_ENTRY, alter.GetQualifiedName().Name());
 	if (!table_entry || table_entry->type != CatalogType::TABLE_ENTRY) {
 		return false;
 	}
@@ -217,16 +217,16 @@ void ApplySetColumnCommentToTable(DuckLakeTransaction &transaction, CatalogTrans
                                   DuckLakeSchemaEntry &schema, SetColumnCommentInfo &alter,
                                   const char *not_a_table_message) {
 	if (!TryApplySetColumnCommentToTable(transaction, catalog_transaction, schema, alter)) {
-		throw BinderException(not_a_table_message, alter.name);
+		throw BinderException(not_a_table_message, alter.GetQualifiedName().Name());
 	}
 }
 
 void ApplySetColumnCommentToView(DuckLakeTransaction &transaction, CatalogTransaction catalog_transaction,
                                  DuckLakeSchemaEntry &schema, SetColumnCommentInfo &alter,
                                  const char *not_a_view_message) {
-	auto view_entry = schema.GetEntry(catalog_transaction, CatalogType::VIEW_ENTRY, alter.name);
+	auto view_entry = schema.GetEntry(catalog_transaction, CatalogType::VIEW_ENTRY, alter.GetQualifiedName().Name());
 	if (!view_entry || view_entry->type != CatalogType::VIEW_ENTRY) {
-		throw BinderException(not_a_view_message, alter.name);
+		throw BinderException(not_a_view_message, alter.GetQualifiedName().Name());
 	}
 	auto &view = view_entry->Cast<DuckLakeViewEntry>();
 	auto new_view = view.Alter(transaction, alter);
@@ -243,7 +243,8 @@ void DuckLakeSchemaEntry::Alter(CatalogTransaction catalog_transaction, AlterInf
 		auto &alter = info.Cast<AlterTableInfo>();
 		auto table_entry = GetEntry(catalog_transaction, CatalogType::TABLE_ENTRY, alter.GetQualifiedName().Name());
 		if (table_entry->type != CatalogType::TABLE_ENTRY) {
-			throw BinderException("Cannot use ALTER TABLE on entry %s - it is not a table", alter.GetQualifiedName().Name());
+			throw BinderException("Cannot use ALTER TABLE on entry %s - it is not a table",
+			                      alter.GetQualifiedName().Name());
 		}
 		auto &table = table_entry->Cast<DuckLakeTableEntry>();
 		auto new_table = table.Alter(context, transaction, alter);
@@ -252,8 +253,7 @@ void DuckLakeSchemaEntry::Alter(CatalogTransaction catalog_transaction, AlterInf
 			auto existing_table = GetEntry(catalog_transaction, CatalogType::TABLE_ENTRY, new_table->name);
 			if (alter.GetQualifiedName().Name() != new_table->name && existing_table) {
 				throw BinderException("Cannot rename table %s to %s, since %s already exists.",
-				                      alter.GetQualifiedName().Name(),
-				                      new_table->name, new_table->name);
+				                      alter.GetQualifiedName().Name(), new_table->name, new_table->name);
 			}
 		}
 		transaction.AlterEntry(table, std::move(new_table));
@@ -263,17 +263,18 @@ void DuckLakeSchemaEntry::Alter(CatalogTransaction catalog_transaction, AlterInf
 		auto &alter = info.Cast<AlterViewInfo>();
 		auto view_entry = GetEntry(catalog_transaction, CatalogType::VIEW_ENTRY, alter.GetQualifiedName().Name());
 		if (view_entry->type != CatalogType::VIEW_ENTRY) {
-			throw BinderException("Cannot use ALTER VIEW on entry %s - it is not a view", alter.GetQualifiedName().Name());
+			throw BinderException("Cannot use ALTER VIEW on entry %s - it is not a view",
+			                      alter.GetQualifiedName().Name());
 		}
 		auto &view = view_entry->Cast<DuckLakeViewEntry>();
 		auto new_view = view.AlterEntry(context, alter);
 		if (alter.alter_view_type == AlterViewType::RENAME_VIEW) {
 			// We must check if this view name does not yet exist.
 			auto existing_view = GetEntry(catalog_transaction, CatalogType::VIEW_ENTRY, new_view->name);
-			if (alter.name != new_view->name && existing_view) {
+			if (alter.GetQualifiedName().Name() != new_view->name && existing_view) {
 				throw CatalogException(
 				    "Could not rename view \"%s\" to \"%s\": another entry with this name already exists!",
-				    alter.name.GetIdentifierName(), new_view->name.GetIdentifierName());
+				    alter.GetQualifiedName().Name().GetIdentifierName(), new_view->name.GetIdentifierName());
 			}
 		}
 		transaction.AlterEntry(view, std::move(new_view));
@@ -285,7 +286,8 @@ void DuckLakeSchemaEntry::Alter(CatalogTransaction catalog_transaction, AlterInf
 		case CatalogType::TABLE_ENTRY: {
 			auto table_entry = GetEntry(catalog_transaction, CatalogType::TABLE_ENTRY, alter.GetQualifiedName().Name());
 			if (table_entry->type != CatalogType::TABLE_ENTRY) {
-				throw BinderException("Cannot use ALTER TABLE on entry %s - it is not a table", alter.GetQualifiedName().Name());
+				throw BinderException("Cannot use ALTER TABLE on entry %s - it is not a table",
+				                      alter.GetQualifiedName().Name());
 			}
 			auto &table = table_entry->Cast<DuckLakeTableEntry>();
 			auto new_table = table.Alter(transaction, alter);
@@ -295,7 +297,8 @@ void DuckLakeSchemaEntry::Alter(CatalogTransaction catalog_transaction, AlterInf
 		case CatalogType::VIEW_ENTRY: {
 			auto view_entry = GetEntry(catalog_transaction, CatalogType::VIEW_ENTRY, alter.GetQualifiedName().Name());
 			if (view_entry->type != CatalogType::VIEW_ENTRY) {
-				throw BinderException("Cannot use ALTER VIEW on entry %s - it is not a view", alter.GetQualifiedName().Name());
+				throw BinderException("Cannot use ALTER VIEW on entry %s - it is not a view",
+				                      alter.GetQualifiedName().Name());
 			}
 			auto &view = view_entry->Cast<DuckLakeViewEntry>();
 			auto new_view = view.AlterEntry(context, alter);

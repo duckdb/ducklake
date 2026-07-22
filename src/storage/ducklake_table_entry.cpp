@@ -252,7 +252,8 @@ const DuckLakeFieldId &DuckLakeTableEntry::GetFieldId(const vector<Identifier> &
                                                       optional_ptr<optional_idx> name_offset) const {
 	auto result = TryGetFieldId(column_names, name_offset);
 	if (!result) {
-		throw BinderException("Column \"%s\" does not exist", StringUtil::Join(IdentifiersToStrings(column_names), "."));
+		throw BinderException("Column \"%s\" does not exist",
+		                      StringUtil::Join(IdentifiersToStrings(column_names), "."));
 	}
 	return *result;
 }
@@ -1150,7 +1151,7 @@ unique_ptr<CatalogEntry> DuckLakeTableEntry::AlterTable(DuckLakeTransaction &tra
 	auto change_info = make_uniq<ColumnChangeInfo>();
 	RequireNextColumnId(transaction);
 
-	auto &parent_id = GetFieldId(IdentifiersToStrings(info.column_path));
+	auto &parent_id = GetFieldId(info.column_path);
 	if (parent_id.Type().id() != LogicalTypeId::STRUCT) {
 		throw CatalogException("Fields can only be added to structs - %s is a %s", parent_id.Name(), parent_id.Type());
 	}
@@ -1179,7 +1180,7 @@ unique_ptr<CatalogEntry> DuckLakeTableEntry::AlterTable(DuckLakeTransaction &tra
 	for (idx_t col_idx = 0; col_idx < current_field_ids.size(); col_idx++) {
 		auto &field_id = current_field_ids[col_idx];
 		if (child_field_id && field_id->Name() == info.column_path[0]) {
-			auto new_field_id = field_id->AddField(IdentifiersToStrings(info.column_path), std::move(child_field_id));
+			auto new_field_id = field_id->AddField(info.column_path, std::move(child_field_id));
 			auto &col = table_info.columns.GetColumnMutable(PhysicalIndex(col_idx));
 			col.SetType(new_field_id->Type());
 			new_field_ids->Add(std::move(new_field_id));
@@ -1212,9 +1213,9 @@ unique_ptr<CatalogEntry> DuckLakeTableEntry::AlterTable(DuckLakeTransaction &tra
 	}
 	optional_ptr<const DuckLakeFieldId> removed_id_ptr;
 	if (info.if_column_exists) {
-		removed_id_ptr = TryGetFieldId(IdentifiersToStrings(info.column_path));
+		removed_id_ptr = TryGetFieldId(info.column_path);
 	} else {
-		removed_id_ptr = GetFieldId(IdentifiersToStrings(info.column_path));
+		removed_id_ptr = GetFieldId(info.column_path);
 	}
 	if (!removed_id_ptr) {
 		return nullptr;
@@ -1231,7 +1232,7 @@ unique_ptr<CatalogEntry> DuckLakeTableEntry::AlterTable(DuckLakeTransaction &tra
 	for (idx_t col_idx = 0; col_idx < current_field_ids.size(); col_idx++) {
 		auto &field_id = current_field_ids[col_idx];
 		if (field_id->Name() == info.column_path[0]) {
-			auto new_field_id = field_id->RemoveField(IdentifiersToStrings(info.column_path));
+			auto new_field_id = field_id->RemoveField(info.column_path);
 			auto &col = table_info.columns.GetColumnMutable(PhysicalIndex(col_idx));
 			col.SetType(new_field_id->Type());
 			new_field_ids->Add(std::move(new_field_id));
@@ -1262,8 +1263,8 @@ unique_ptr<CatalogEntry> DuckLakeTableEntry::AlterTable(DuckLakeTransaction &tra
 	auto create_info = GetInfo();
 	auto &table_info = create_info->Cast<CreateTableInfo>();
 
-	auto &renamed_id = GetFieldId(IdentifiersToStrings(info.column_path));
-	auto parent_path = IdentifiersToStrings(info.column_path);
+	auto &renamed_id = GetFieldId(info.column_path);
+	auto parent_path = info.column_path;
 	parent_path.pop_back();
 	auto &parent_id = GetFieldId(parent_path);
 	if (parent_id.Type().id() != LogicalTypeId::STRUCT) {
@@ -1274,7 +1275,7 @@ unique_ptr<CatalogEntry> DuckLakeTableEntry::AlterTable(DuckLakeTransaction &tra
 			throw CatalogException(
 			    "Failed to rename field \"%s\" to \"%s\" - field with this name already exists in column \"%s\"",
 			    info.column_path.back().GetIdentifierName(), info.new_name.GetIdentifierName(),
-			    StringUtil::Join(parent_path, "."));
+			    StringUtil::Join(IdentifiersToStrings(parent_path), "."));
 		}
 	}
 
@@ -1288,8 +1289,7 @@ unique_ptr<CatalogEntry> DuckLakeTableEntry::AlterTable(DuckLakeTransaction &tra
 	for (idx_t col_idx = 0; col_idx < current_field_ids.size(); col_idx++) {
 		auto &field_id = current_field_ids[col_idx];
 		if (field_id->Name() == info.column_path[0]) {
-			auto new_field_id =
-			    field_id->RenameField(IdentifiersToStrings(info.column_path), info.new_name.GetIdentifierName());
+			auto new_field_id = field_id->RenameField(info.column_path, info.new_name.GetIdentifierName());
 			auto &col = table_info.columns.GetColumnMutable(PhysicalIndex(col_idx));
 			col.SetType(new_field_id->Type());
 			new_field_ids->Add(std::move(new_field_id));

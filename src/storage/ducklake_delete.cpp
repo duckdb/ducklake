@@ -80,7 +80,7 @@ static DuckLakeDeleteFile WriteDeleteFileInternal(ClientContext &context, InputT
 
 	DuckLakeUtil::EnsureDirectoryExists(input.fs, input.data_path);
 
-	auto function_data = copy_fun.function.copy_to_bind(input.context, bind_input, StringsToIdentifiers(names_to_write), types_to_write);
+	auto function_data = copy_fun.function.copy_to_bind(input.context, bind_input, names_to_write, types_to_write);
 	auto copy_global_state = copy_fun.function.copy_to_initialize_global(context, *function_data, delete_file_path);
 
 	// set up stats to get them from function
