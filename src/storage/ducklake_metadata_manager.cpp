@@ -2103,7 +2103,7 @@ string GetExpressionType(ParsedExpression &expression) {
 	switch (expression.GetExpressionType()) {
 	case ExpressionType::OPERATOR_CAST: {
 		auto &cast_expression = expression.Cast<CastExpression>();
-		if (cast_expression.child->GetExpressionType() == ExpressionType::VALUE_CONSTANT) {
+		if (cast_expression.Child().GetExpressionType() == ExpressionType::VALUE_CONSTANT) {
 			return "literal";
 		}
 		return "expression";

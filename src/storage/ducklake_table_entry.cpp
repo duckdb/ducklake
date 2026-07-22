@@ -870,7 +870,7 @@ bool IsSimpleCast(const ParsedExpression &expr) {
 		return false;
 	}
 	auto &cast = expr.Cast<CastExpression>();
-	if (cast.child->GetExpressionType() != ExpressionType::COLUMN_REF) {
+	if (cast.Child().GetExpressionType() != ExpressionType::COLUMN_REF) {
 		return false;
 	}
 	return true;
