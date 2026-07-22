@@ -36,7 +36,7 @@ struct MetadataBindData : public TableFunctionData {
 
 class DuckLakeBaseMetadataFunction : public TableFunction {
 public:
-	DuckLakeBaseMetadataFunction(string name, table_function_bind_t bind);
+	DuckLakeBaseMetadataFunction(Identifier name, table_function_bind_t bind);
 
 	static Catalog &GetCatalog(ClientContext &context, const Value &input);
 };

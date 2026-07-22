@@ -31,7 +31,7 @@ unique_ptr<CreateInfo> DuckLakeSchemaEntry::GetInfo() const {
 
 bool DuckLakeSchemaEntry::HandleCreateConflict(CatalogTransaction transaction, CatalogType catalog_type,
                                                const string &entry_name, OnCreateConflict on_conflict) {
-	auto existing_entry = GetEntry(transaction, catalog_type, entry_name);
+	auto existing_entry = GetEntry(transaction, catalog_type, Identifier(entry_name));
 	if (!existing_entry) {
 		// no conflict
 		return true;
@@ -51,7 +51,7 @@ bool DuckLakeSchemaEntry::HandleCreateConflict(CatalogTransaction transaction, C
 		// try to drop the entry prior to creating
 		DropInfo info;
 		info.type = catalog_type;
-		info.name = entry_name;
+		info.name = Identifier(entry_name);
 		DropEntry(transaction.GetContext(), info);
 		break;
 	}
@@ -67,12 +67,12 @@ optional_ptr<CatalogEntry> DuckLakeSchemaEntry::CreateTableExtended(CatalogTrans
 	auto &duck_transaction = transaction.transaction->Cast<DuckLakeTransaction>();
 	auto &base_info = info.Base();
 	// check if we have an existing entry with this name
-	if (!HandleCreateConflict(transaction, CatalogType::TABLE_ENTRY, base_info.table, base_info.on_conflict)) {
+	if (!HandleCreateConflict(transaction, CatalogType::TABLE_ENTRY, base_info.table.GetIdentifierName(), base_info.on_conflict)) {
 		return nullptr;
 	}
 	// reject columns with reserved DuckLake internal names
 	for (auto &col : base_info.columns.Logical()) {
-		if (DuckLakeUtil::IsInlinedSystemColumn(col.Name())) {
+		if (DuckLakeUtil::IsInlinedSystemColumn(col.Name().GetIdentifierName())) {
 			throw BinderException("Column name \"%s\" is reserved by DuckLake for internal use", col.Name());
 		}
 	}
@@ -96,7 +96,7 @@ optional_ptr<CatalogEntry> DuckLakeSchemaEntry::CreateTable(CatalogTransaction t
 	auto &duck_catalog = catalog.Cast<DuckLakeCatalog>();
 	auto &base_info = info.Base();
 	auto table_uuid = duck_transaction.GenerateUUID();
-	auto table_data_path = DataPath() + duck_catalog.GeneratePathFromName(table_uuid, base_info.table);
+	auto table_data_path = DataPath() + duck_catalog.GeneratePathFromName(table_uuid, base_info.table.GetIdentifierName());
 	return CreateTableExtended(transaction, info, std::move(table_uuid), std::move(table_data_path));
 }
 
@@ -129,7 +129,7 @@ optional_ptr<CatalogEntry> DuckLakeSchemaEntry::CreateFunction(CatalogTransactio
 		throw NotImplementedException("DuckLake does not support %s functions", CatalogTypeToString(info.type));
 	}
 	// We check if there is a conflict, as multi-macro implementations are only supported if they do not exist yet
-	if (!HandleCreateConflict(transaction, info.type, info.name, info.on_conflict)) {
+	if (!HandleCreateConflict(transaction, info.type, info.name.GetIdentifierName(), info.on_conflict)) {
 		return nullptr;
 	}
 	auto &duck_transaction = transaction.transaction->Cast<DuckLakeTransaction>();
@@ -145,7 +145,7 @@ optional_ptr<CatalogEntry> DuckLakeSchemaEntry::CreateIndex(CatalogTransaction t
 
 optional_ptr<CatalogEntry> DuckLakeSchemaEntry::CreateView(CatalogTransaction transaction, CreateViewInfo &info) {
 	// check if we have an existing entry with this name
-	if (!HandleCreateConflict(transaction, CatalogType::VIEW_ENTRY, info.view_name, info.on_conflict)) {
+	if (!HandleCreateConflict(transaction, CatalogType::VIEW_ENTRY, info.view_name.GetIdentifierName(), info.on_conflict)) {
 		return nullptr;
 	}
 	auto &duck_transaction = transaction.transaction->Cast<DuckLakeTransaction>();
@@ -209,7 +209,7 @@ void DuckLakeSchemaEntry::Alter(CatalogTransaction catalog_transaction, AlterInf
 		if (alter.alter_table_type == AlterTableType::RENAME_TABLE) {
 			// We must check if this view name does not yet exist.
 			auto existing_table = GetEntry(catalog_transaction, CatalogType::TABLE_ENTRY, new_table->name);
-			if (StringUtil::Lower(alter.name) != StringUtil::Lower(new_table->name) && existing_table) {
+			if (StringUtil::Lower(alter.name.GetIdentifierName()) != StringUtil::Lower(new_table->name.GetIdentifierName()) && existing_table) {
 				throw BinderException("Cannot rename table %s to %s, since %s already exists.", alter.name,
 				                      new_table->name, new_table->name);
 			}
@@ -287,7 +287,7 @@ void DuckLakeSchemaEntry::Scan(ClientContext &context, CatalogType type,
 	}
 	// scan transaction-local entries
 	auto &duck_transaction = DuckLakeTransaction::Get(context, ParentCatalog());
-	auto local_set = duck_transaction.GetTransactionLocalEntries(type, name);
+	auto local_set = duck_transaction.GetTransactionLocalEntries(type, name.GetIdentifierName());
 	if (local_set) {
 		for (auto &entry : local_set->GetEntries()) {
 			callback(*entry.second);
@@ -299,7 +299,7 @@ void DuckLakeSchemaEntry::Scan(ClientContext &context, CatalogType type,
 		if (duck_transaction.IsDeleted(*entry.second) || duck_transaction.IsRenamed(*entry.second)) {
 			continue;
 		}
-		if (local_set && local_set->GetEntry(entry.second->name)) {
+		if (local_set && local_set->GetEntry(entry.second->name.GetIdentifierName())) {
 			// this entry exists in both the local and global set - emit only the transaction-local entry
 			continue;
 		}
@@ -348,7 +348,7 @@ optional_ptr<CatalogEntry> DuckLakeSchemaEntry::LookupEntry(CatalogTransaction t
 	}
 	auto &duck_transaction = transaction.transaction->Cast<DuckLakeTransaction>();
 	//! search in transaction local storage first
-	auto transaction_entry = duck_transaction.GetTransactionLocalEntry(catalog_type, name, entry_name);
+	auto transaction_entry = duck_transaction.GetTransactionLocalEntry(catalog_type, name.GetIdentifierName(), entry_name);
 	if (transaction_entry) {
 		return transaction_entry;
 	}
@@ -373,13 +373,13 @@ SimilarCatalogEntry DuckLakeSchemaEntry::GetSimilarEntry(CatalogTransaction tran
 	}
 	auto &duck_transaction = transaction.transaction->Cast<DuckLakeTransaction>();
 	// check transaction local first
-	auto local_set = duck_transaction.GetTransactionLocalEntries(catalog_type, name);
+	auto local_set = duck_transaction.GetTransactionLocalEntries(catalog_type, name.GetIdentifierName());
 	if (local_set) {
 		for (auto &entry : local_set->GetEntries()) {
-			auto entry_score = StringUtil::SimilarityRating(entry.second->name, entry_name);
+			auto entry_score = StringUtil::SimilarityRating(entry.second->name.GetIdentifierName(), entry_name);
 			if (entry_score > result.score) {
 				result.score = entry_score;
-				result.name = entry.second->name;
+				result.name = Identifier(entry.second->name.GetIdentifierName());
 				result.schema = this;
 			}
 		}
@@ -391,10 +391,10 @@ SimilarCatalogEntry DuckLakeSchemaEntry::GetSimilarEntry(CatalogTransaction tran
 			// this changed
 			continue;
 		}
-		auto entry_score = StringUtil::SimilarityRating(entry.second->name, entry_name);
+		auto entry_score = StringUtil::SimilarityRating(entry.second->name.GetIdentifierName(), entry_name);
 		if (entry_score > result.score) {
 			result.score = entry_score;
-			result.name = entry.second->name;
+			result.name = Identifier(entry.second->name.GetIdentifierName());
 			result.schema = this;
 		}
 	}
@@ -407,8 +407,8 @@ void DuckLakeSchemaEntry::AddEntry(CatalogType type, unique_ptr<CatalogEntry> en
 }
 
 void DuckLakeSchemaEntry::TryDropSchema(DuckLakeTransaction &transaction, bool cascade) {
-	auto local_tables = transaction.GetTransactionLocalEntries(CatalogType::TABLE_ENTRY, name);
-	auto local_macros = transaction.GetTransactionLocalEntries(CatalogType::MACRO_ENTRY, name);
+	auto local_tables = transaction.GetTransactionLocalEntries(CatalogType::TABLE_ENTRY, name.GetIdentifierName());
+	auto local_macros = transaction.GetTransactionLocalEntries(CatalogType::MACRO_ENTRY, name.GetIdentifierName());
 	if (!cascade) {
 		// get a list of all dependents
 		vector<reference<CatalogEntry>> dependents;

@@ -31,9 +31,9 @@ static unique_ptr<FunctionData> DuckLakeExpireSnapshotsBind(ClientContext &conte
 	const auto older_than_default = ducklake_catalog.GetConfigOption<string>("expire_older_than", {}, {}, "");
 
 	for (auto &entry : input.named_parameters) {
-		if (StringUtil::CIEquals(entry.first, "dry_run")) {
+		if (entry.first == "dry_run") {
 			result->dry_run = BooleanValue::Get(entry.second);
-		} else if (StringUtil::CIEquals(entry.first, "versions")) {
+		} else if (entry.first == "versions") {
 			has_versions = true;
 			for (auto &snapshot_id : ListValue::GetChildren(entry.second)) {
 				if (!snapshot_list.empty()) {
@@ -41,7 +41,7 @@ static unique_ptr<FunctionData> DuckLakeExpireSnapshotsBind(ClientContext &conte
 				}
 				snapshot_list += snapshot_id.ToString();
 			}
-		} else if (StringUtil::CIEquals(entry.first, "older_than")) {
+		} else if (entry.first == "older_than") {
 			from_timestamp = entry.second.GetValue<timestamp_tz_t>();
 			has_timestamp = true;
 		} else {
