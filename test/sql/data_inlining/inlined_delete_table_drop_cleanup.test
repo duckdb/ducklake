@@ -1,0 +1,52 @@
+# name: test/sql/data_inlining/inlined_delete_table_drop_cleanup.test
+# description: inlined delete tables must be reclaimed after DROP TABLE + expire + cleanup
+# group: [data_inlining]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/inlined_delete_drop_files', METADATA_CATALOG 'ducklake_meta', DATA_INLINING_ROW_LIMIT 10)
+
+statement ok
+CREATE TABLE ducklake.t AS SELECT range AS i FROM range(100)
+
+statement ok
+DELETE FROM ducklake.t WHERE i IN (3, 5, 7)
+
+statement ok
+INSERT INTO ducklake.t VALUES (200), (201)
+
+statement ok
+DROP TABLE ducklake.t
+
+statement ok
+CALL ducklake_expire_snapshots('ducklake', older_than => now())
+
+statement ok
+CALL ducklake_cleanup_old_files('ducklake', cleanup_all => true)
+
+statement ok
+CALL ducklake_delete_orphaned_files('ducklake', older_than => now())
+
+# the inlined data table of the dropped table is reclaimed
+query I
+SELECT COUNT(*) FROM duckdb_tables() WHERE database_name='ducklake_meta' AND table_name LIKE 'ducklake_inlined_data_1%'
+----
+0
+
+query I
+SELECT COUNT(*) FROM ducklake_meta.ducklake_inlined_data_tables
+----
+0
+
+# the inlined delete table must be reclaimed as well
+query I
+SELECT COUNT(*) FROM duckdb_tables() WHERE database_name='ducklake_meta' AND table_name LIKE 'ducklake_inlined_delete_%'
+----
+0
