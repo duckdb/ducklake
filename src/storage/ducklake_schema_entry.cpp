@@ -67,7 +67,7 @@ optional_ptr<CatalogEntry> DuckLakeSchemaEntry::CreateTableExtended(CatalogTrans
 	auto &duck_transaction = transaction.transaction->Cast<DuckLakeTransaction>();
 	auto &base_info = info.Base();
 	// check if we have an existing entry with this name
-	if (!HandleCreateConflict(transaction, CatalogType::TABLE_ENTRY, base_info.table.GetIdentifierName(), base_info.on_conflict)) {
+	if (!HandleCreateConflict(transaction, CatalogType::TABLE_ENTRY, base_info.GetTableName().GetIdentifierName(), base_info.on_conflict)) {
 		return nullptr;
 	}
 	// reject columns with reserved DuckLake internal names
@@ -96,7 +96,7 @@ optional_ptr<CatalogEntry> DuckLakeSchemaEntry::CreateTable(CatalogTransaction t
 	auto &duck_catalog = catalog.Cast<DuckLakeCatalog>();
 	auto &base_info = info.Base();
 	auto table_uuid = duck_transaction.GenerateUUID();
-	auto table_data_path = DataPath() + duck_catalog.GeneratePathFromName(table_uuid, base_info.table.GetIdentifierName());
+	auto table_data_path = DataPath() + duck_catalog.GeneratePathFromName(table_uuid, base_info.GetTableName().GetIdentifierName());
 	return CreateTableExtended(transaction, info, std::move(table_uuid), std::move(table_data_path));
 }
 
@@ -129,7 +129,7 @@ optional_ptr<CatalogEntry> DuckLakeSchemaEntry::CreateFunction(CatalogTransactio
 		throw NotImplementedException("DuckLake does not support %s functions", CatalogTypeToString(info.type));
 	}
 	// We check if there is a conflict, as multi-macro implementations are only supported if they do not exist yet
-	if (!HandleCreateConflict(transaction, info.type, info.name.GetIdentifierName(), info.on_conflict)) {
+	if (!HandleCreateConflict(transaction, info.type, info.GetFunctionName().GetIdentifierName(), info.on_conflict)) {
 		return nullptr;
 	}
 	auto &duck_transaction = transaction.transaction->Cast<DuckLakeTransaction>();
@@ -145,7 +145,7 @@ optional_ptr<CatalogEntry> DuckLakeSchemaEntry::CreateIndex(CatalogTransaction t
 
 optional_ptr<CatalogEntry> DuckLakeSchemaEntry::CreateView(CatalogTransaction transaction, CreateViewInfo &info) {
 	// check if we have an existing entry with this name
-	if (!HandleCreateConflict(transaction, CatalogType::VIEW_ENTRY, info.view_name.GetIdentifierName(), info.on_conflict)) {
+	if (!HandleCreateConflict(transaction, CatalogType::VIEW_ENTRY, info.GetViewName().GetIdentifierName(), info.on_conflict)) {
 		return nullptr;
 	}
 	auto &duck_transaction = transaction.transaction->Cast<DuckLakeTransaction>();

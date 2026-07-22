@@ -415,7 +415,7 @@ idx_t DuckLakeTableEntry::GetNetInlinedRowCount(DuckLakeTransaction &transaction
 unique_ptr<CatalogEntry> DuckLakeTableEntry::AlterTable(DuckLakeTransaction &transaction, RenameTableInfo &info) {
 	auto create_info = GetInfo();
 	auto &table_info = create_info->Cast<CreateTableInfo>();
-	table_info.table = info.new_table_name;
+	table_info.SetTableName(info.new_table_name);
 	// create a complete copy of this table with only the name changed
 	return make_uniq<DuckLakeTableEntry>(*this, table_info, LocalChangeType::RENAMED);
 }
@@ -1257,7 +1257,7 @@ unique_ptr<CatalogEntry> DuckLakeTableEntry::AlterTable(DuckLakeTransaction &tra
 	auto &col = table_info.columns.GetColumnMutable(info.column_name);
 	auto &field_id = GetFieldId(col.Physical());
 	col.SetDefaultValue(std::move(info.expression));
-	bool new_column = !transaction.GetMetadataManager().IsColumnCreatedWithTable(table_info.table.GetIdentifierName(), col.GetName().GetIdentifierName());
+	bool new_column = !transaction.GetMetadataManager().IsColumnCreatedWithTable(table_info.GetTableName().GetIdentifierName(), col.GetName().GetIdentifierName());
 
 	auto new_entry = make_uniq<DuckLakeTableEntry>(
 	    *this, table_info, SetDefaultLocalChange::SetDefault(field_id.GetFieldIndex(), new_column));

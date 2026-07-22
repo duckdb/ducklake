@@ -259,7 +259,7 @@ string DuckLakeInsert::GetName() const {
 
 InsertionOrderPreservingMap<string> DuckLakeInsert::ParamsToString() const {
 	InsertionOrderPreservingMap<string> result;
-	result["Table Name"] = table ? table->name.GetIdentifierName() : info->Base().table.GetIdentifierName();
+	result["Table Name"] = table ? table->name.GetIdentifierName() : info->Base().GetTableName().GetIdentifierName();
 	return result;
 }
 
@@ -852,7 +852,7 @@ PhysicalOperator &DuckLakeCatalog::PlanCreateTableAs(ClientContext &context, Phy
 	}
 	auto table_uuid = duck_transaction.GenerateUUID();
 	auto table_data_path =
-	    duck_schema.DataPath() + DuckLakeCatalog::GeneratePathFromName(table_uuid, create_info.table.GetIdentifierName());
+	    duck_schema.DataPath() + DuckLakeCatalog::GeneratePathFromName(table_uuid, create_info.GetTableName().GetIdentifierName());
 
 	DuckLakeCopyInput copy_input(context, duck_schema, columns, table_data_path);
 	auto &physical_copy = DuckLakeInsert::PlanCopyForInsert(context, planner, copy_input, root.get());

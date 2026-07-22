@@ -38,7 +38,7 @@ unique_ptr<CatalogEntry> DuckLakeViewEntry::AlterEntry(ClientContext &context, A
 			auto &rename_view = alter_view.Cast<RenameViewInfo>();
 			auto create_info = GetInfo();
 			auto &view_info = create_info->Cast<CreateViewInfo>();
-			view_info.view_name = rename_view.new_view_name;
+			view_info.SetViewName(rename_view.new_view_name);
 			// create a complete copy of this view with only the name changed
 			return make_uniq<DuckLakeViewEntry>(*this, view_info, LocalChangeType::RENAMED);
 		}
