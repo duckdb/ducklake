@@ -112,7 +112,7 @@ static void ReplaceColumnRefName(ParsedExpression &expr, const string &old_name,
 	if (expr.GetExpressionType() == ExpressionType::COLUMN_REF) {
 		auto &colref = expr.Cast<ColumnRefExpression>();
 		if (!colref.IsQualified() && StringUtil::CIEquals(colref.GetColumnName(), old_name)) {
-			colref.column_names.back() = new_name;
+			colref.ColumnNamesMutable().back() = new_name;
 		}
 		return;
 	}
