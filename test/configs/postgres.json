@@ -19,6 +19,12 @@
   ],
   "skip_tests": [
     {
+      "reason": "on_init initializes the secret manager, so SET secret_directory (needed for the persistent secret storage) cannot be applied; the cross-storage lookup is catalog-agnostic and is covered under the default config",
+      "paths": [
+        "test/sql/secrets/ducklake_secret_storages.test"
+      ]
+    },
+    {
       "reason": "Tests only for DuckDB as a catalog",
       "paths": [
         "test/sql/general/missing_parquet.test",
