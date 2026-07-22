@@ -1,4 +1,5 @@
 #include "storage/ducklake_metadata_manager.hpp"
+#include "duckdb/common/file_system.hpp"
 #include "storage/ducklake_transaction.hpp"
 #include "storage/ducklake_variant_stats.hpp"
 #include "common/ducklake_util.hpp"

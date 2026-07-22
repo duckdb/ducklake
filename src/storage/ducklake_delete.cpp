@@ -1,4 +1,7 @@
 #include "storage/ducklake_catalog.hpp"
+#include "duckdb/execution/physical_plan_generator.hpp"
+#include "duckdb/common/file_system.hpp"
+#include "duckdb/common/file_open_flags.hpp"
 #include "storage/ducklake_deletion_vector.hpp"
 #include "duckdb/planner/operator/logical_delete.hpp"
 #include "duckdb/planner/operator/logical_get.hpp"

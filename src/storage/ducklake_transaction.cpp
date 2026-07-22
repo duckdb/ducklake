@@ -1,4 +1,6 @@
 #include "storage/ducklake_transaction.hpp"
+#include "duckdb/main/database.hpp"
+#include "duckdb/common/file_system.hpp"
 
 #include "common/ducklake_types.hpp"
 #include "common/ducklake_util.hpp"

@@ -9,6 +9,7 @@
 #pragma once
 
 #include "duckdb/catalog/catalog_entry/view_catalog_entry.hpp"
+#include "duckdb/catalog/catalog_entry/schema_catalog_entry.hpp"
 #include "duckdb/common/mutex.hpp"
 #include "common/index.hpp"
 #include "common/local_change.hpp"

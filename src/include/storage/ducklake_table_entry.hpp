@@ -9,6 +9,7 @@
 #pragma once
 
 #include "duckdb/catalog/catalog_entry/table_catalog_entry.hpp"
+#include "duckdb/catalog/catalog_entry/schema_catalog_entry.hpp"
 #include "duckdb/parser/parsed_data/alter_table_info.hpp"
 #include "storage/ducklake_stats.hpp"
 #include "storage/ducklake_partition_data.hpp"

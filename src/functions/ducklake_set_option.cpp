@@ -1,4 +1,6 @@
 #include "functions/ducklake_table_functions.hpp"
+#include "duckdb/main/config.hpp"
+#include "duckdb/catalog/catalog_entry/table_catalog_entry.hpp"
 #include "storage/ducklake_transaction.hpp"
 #include "storage/ducklake_catalog.hpp"
 #include "storage/ducklake_table_entry.hpp"

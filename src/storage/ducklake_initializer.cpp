@@ -1,4 +1,5 @@
 #include "duckdb/main/attached_database.hpp"
+#include "duckdb/common/file_system.hpp"
 #include "duckdb/transaction/meta_transaction.hpp"
 #include "duckdb/storage/data_table.hpp"
 #include "duckdb/common/types/column/column_data_collection.hpp"

@@ -1,4 +1,6 @@
 #include "storage/ducklake_catalog.hpp"
+#include "duckdb/planner/logical_operator.hpp"
+#include "duckdb/main/database_manager.hpp"
 
 #include "common/ducklake_types.hpp"
 #include "duckdb/catalog/catalog_entry/macro_catalog_entry.hpp"

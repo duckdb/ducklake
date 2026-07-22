@@ -1,4 +1,6 @@
 #include "storage/ducklake_scan.hpp"
+#include "duckdb/catalog/catalog_entry/table_catalog_entry.hpp"
+#include "duckdb/main/database.hpp"
 #include "storage/ducklake_catalog.hpp"
 #include "storage/ducklake_multi_file_reader.hpp"
 #include "storage/ducklake_multi_file_list.hpp"

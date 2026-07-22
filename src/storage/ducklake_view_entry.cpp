@@ -1,4 +1,5 @@
 #include "storage/ducklake_view_entry.hpp"
+#include "duckdb/catalog/catalog_entry/schema_catalog_entry.hpp"
 #include "duckdb/parser/parsed_data/create_view_info.hpp"
 #include "duckdb/parser/parser.hpp"
 #include "duckdb/parser/parsed_data/alter_info.hpp"

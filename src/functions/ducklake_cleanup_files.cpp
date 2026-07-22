@@ -1,4 +1,5 @@
 #include "functions/ducklake_table_functions.hpp"
+#include "duckdb/common/file_system.hpp"
 
 #include "duckdb/common/operator/subtract.hpp"
 #include "duckdb/common/string.hpp"
