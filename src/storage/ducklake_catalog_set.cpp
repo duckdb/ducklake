@@ -21,7 +21,7 @@ void DuckLakeCatalogSet::CreateEntry(unique_ptr<CatalogEntry> catalog_entry) {
 	if (entry != catalog_entries.end()) {
 		catalog_entry->SetChild(std::move(entry->second));
 	}
-	catalog_entries[std::move(name)] = std::move(catalog_entry);
+	catalog_entries[name] = std::move(catalog_entry);
 }
 
 unique_ptr<CatalogEntry> DuckLakeCatalogSet::DropEntry(const string &name) {

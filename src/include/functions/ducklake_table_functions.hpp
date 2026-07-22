@@ -9,6 +9,7 @@
 #pragma once
 
 #include "duckdb/function/table_function.hpp"
+#include "duckdb/catalog/catalog.hpp"
 #include "duckdb/parser/parsed_data/create_macro_info.hpp"
 #include "duckdb/function/function_set.hpp"
 
@@ -36,7 +37,7 @@ struct MetadataBindData : public TableFunctionData {
 
 class DuckLakeBaseMetadataFunction : public TableFunction {
 public:
-	DuckLakeBaseMetadataFunction(string name, table_function_bind_t bind);
+	DuckLakeBaseMetadataFunction(Identifier name, table_function_bind_t bind);
 
 	static Catalog &GetCatalog(ClientContext &context, const Value &input);
 };

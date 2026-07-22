@@ -1,6 +1,9 @@
 #include "storage/ducklake_catalog.hpp"
 #include "storage/ducklake_puffin.hpp"
 #include "duckdb/common/map.hpp"
+#include "duckdb/execution/physical_plan_generator.hpp"
+#include "duckdb/common/file_system.hpp"
+#include "duckdb/common/file_open_flags.hpp"
 #include "duckdb/planner/operator/logical_delete.hpp"
 #include "duckdb/planner/operator/logical_get.hpp"
 #include "duckdb/common/multi_file/multi_file_function.hpp"
@@ -77,7 +80,7 @@ static DuckLakeDeleteFile WriteDeleteFileInternal(ClientContext &context, InputT
 
 	DuckLakeUtil::EnsureDirectoryExists(input.fs, input.data_path);
 
-	auto function_data = copy_fun.function.copy_to_bind(input.context, bind_input, names_to_write, types_to_write);
+	auto function_data = copy_fun.function.copy_to_bind(input.context, bind_input, StringsToIdentifiers(names_to_write), types_to_write);
 	auto copy_global_state = copy_fun.function.copy_to_initialize_global(context, *function_data, delete_file_path);
 
 	// set up stats to get them from function

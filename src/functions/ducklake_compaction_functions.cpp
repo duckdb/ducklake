@@ -1,4 +1,6 @@
 #include "functions/ducklake_table_functions.hpp"
+#include "duckdb/planner/logical_operator.hpp"
+#include "duckdb/common/file_system.hpp"
 #include "storage/ducklake_transaction.hpp"
 #include "storage/ducklake_catalog.hpp"
 #include "storage/ducklake_schema_entry.hpp"
@@ -117,8 +119,8 @@ SourceResultType DuckLakeCompaction::GetDataInternal(ExecutionContext &context, 
 	auto &gstate = this->sink_state->Cast<DuckLakeInsertGlobalState>();
 	auto files_created = gstate.written_files.size();
 
-	chunk.data[0].Append(Value(table.schema.name));
-	chunk.data[1].Append(Value(table.name));
+	chunk.data[0].Append(Value(table.schema.name.GetIdentifierName()));
+	chunk.data[1].Append(Value(table.name.GetIdentifierName()));
 	chunk.data[2].Append(Value::BIGINT(static_cast<int64_t>(source_files.size())));
 	chunk.data[3].Append(Value::BIGINT(static_cast<int64_t>(files_created)));
 	chunk.SetChildCardinality(1);

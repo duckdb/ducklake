@@ -1,4 +1,7 @@
 #include "storage/ducklake_scan.hpp"
+#include "duckdb/catalog/catalog.hpp"
+#include "duckdb/catalog/catalog_entry/table_catalog_entry.hpp"
+#include "duckdb/main/database.hpp"
 #include "storage/ducklake_catalog.hpp"
 #include "storage/ducklake_multi_file_reader.hpp"
 #include "storage/ducklake_multi_file_list.hpp"
@@ -246,7 +249,7 @@ TableFunction DuckLakeFunctions::GetDuckLakeScanFunction(DatabaseInstance &insta
 	function.to_string = DuckLakeFunctionToString;
 	function.get_metrics = DuckLakeGetMetrics;
 
-	function.name = "ducklake_scan";
+	function.SetName("ducklake_scan");
 	return function;
 }
 

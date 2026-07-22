@@ -1,4 +1,5 @@
 #include "storage/ducklake_transaction_manager.hpp"
+#include "duckdb/main/attached_database.hpp"
 
 #include "duckdb/main/settings.hpp"
 
