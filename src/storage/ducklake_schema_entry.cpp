@@ -14,6 +14,7 @@
 #include "duckdb/catalog/catalog_entry/table_macro_catalog_entry.hpp"
 #include "storage/ducklake_macro_entry.hpp"
 #include "common/ducklake_util.hpp"
+#include "common/ducklake_types.hpp"
 
 namespace duckdb {
 
@@ -75,6 +76,11 @@ optional_ptr<CatalogEntry> DuckLakeSchemaEntry::CreateTableExtended(CatalogTrans
 	auto &duck_catalog = catalog.Cast<DuckLakeCatalog>();
 	if (duck_catalog.DataInliningRowLimit(transaction.GetContext(), schema_id, TableIndex()) > 0) {
 		DuckLakeUtil::ValidateNoInlinedSystemColumns(base_info.columns);
+	}
+	for (auto &col : base_info.columns.Logical()) {
+		if (DuckLakeTypes::RequiresCast(col.Type())) {
+			base_info.columns.GetColumnMutable(col.Logical()).SetType(DuckLakeTypes::GetCastedType(col.Type()));
+		}
 	}
 	//! get a local table-id
 	auto table_id = TableIndex(duck_transaction.GetLocalCatalogId());

@@ -38,7 +38,7 @@ SELECT MIN(i), MAX(i), COUNT(*) FROM ducklake.t;
 query II
 EXPLAIN ANALYZE SELECT MIN(i) FROM ducklake.t;
 ----
-analyzed_plan	<REGEX>:.*TABLE_SCAN.*
+analyzed_plan	<REGEX>:.*Table Scan.*
 
 # rewrite the deletes away
 statement ok
@@ -54,7 +54,7 @@ SELECT MIN(i), MAX(i), COUNT(*) FROM ducklake.t;
 query II
 EXPLAIN ANALYZE SELECT MIN(i), MAX(i) FROM ducklake.t;
 ----
-analyzed_plan	<!REGEX>:.*TABLE_SCAN.*
+analyzed_plan	<!REGEX>:.*Table Scan.*
 
 # ============================================
 # 2. Inlined data is folded into the recompute (parquet + inlined coexisting)
@@ -95,7 +95,7 @@ SELECT MIN(i), MAX(i), COUNT(*) FROM ducklake.mixed;
 query II
 EXPLAIN ANALYZE SELECT MIN(i), MAX(i) FROM ducklake.mixed;
 ----
-analyzed_plan	<!REGEX>:.*TABLE_SCAN.*
+analyzed_plan	<!REGEX>:.*Table Scan.*
 
 # ============================================
 # 3. Partial rewrite (deletes remain) -> recompute is skipped, MIN/MAX stay correct via fallback
@@ -127,7 +127,7 @@ SELECT MIN(i), MAX(i), COUNT(*) FROM ducklake.partial;
 query II
 EXPLAIN ANALYZE SELECT MIN(i) FROM ducklake.partial;
 ----
-analyzed_plan	<REGEX>:.*TABLE_SCAN.*
+analyzed_plan	<REGEX>:.*Table Scan.*
 
 # ============================================
 # 4. Nested columns: scalar MIN/MAX still fold after a rewrite; nested column stays correct
@@ -156,7 +156,7 @@ SELECT MIN(i), MAX(i), COUNT(*) FROM ducklake.nested;
 query II
 EXPLAIN ANALYZE SELECT MIN(i) FROM ducklake.nested;
 ----
-analyzed_plan	<!REGEX>:.*TABLE_SCAN.*
+analyzed_plan	<!REGEX>:.*Table Scan.*
 
 # filter on the nested field still returns correct results
 query I
@@ -200,4 +200,4 @@ SELECT MIN(i), MAX(i), COUNT(*) FROM ducklake.single_tx;
 query II
 EXPLAIN ANALYZE SELECT MIN(i) FROM ducklake.single_tx;
 ----
-analyzed_plan	<REGEX>:.*TABLE_SCAN.*
+analyzed_plan	<REGEX>:.*Table Scan.*

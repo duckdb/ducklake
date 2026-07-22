@@ -850,6 +850,7 @@ void DuckLakeParquetTypeChecker::CheckMatchingType() {
 	case LogicalTypeId::DOUBLE:
 		CheckFloatingPoints();
 		break;
+	case LogicalTypeId::TUPLE:
 	case LogicalTypeId::STRUCT:
 	case LogicalTypeId::LIST:
 	case LogicalTypeId::MAP:
@@ -907,6 +908,7 @@ unique_ptr<DuckLakeNameMapEntry> DuckLakeFileProcessor::MapColumn(ParquetFileMet
 	if (field_id.HasChildren()) {
 		auto &field_children = field_id.Children();
 		switch (field_id.Type().id()) {
+		case LogicalTypeId::TUPLE:
 		case LogicalTypeId::STRUCT:
 			map_entry->child_entries = MapColumns(file_metadata, column.child_columns, field_id.Children(), prefix);
 			break;

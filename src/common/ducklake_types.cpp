@@ -78,8 +78,7 @@ static string ToStringBaseType(const LogicalType &type) {
 }
 
 bool DuckLakeTypes::RequiresCast(const LogicalType &type) {
-	// There are no types that requires casts as of DuckDB v1.5
-	return false;
+	return TypeVisitor::Contains(type, LogicalTypeId::TUPLE);
 }
 
 bool DuckLakeTypes::RequiresCast(const vector<LogicalType> &types) {
@@ -92,8 +91,12 @@ bool DuckLakeTypes::RequiresCast(const vector<LogicalType> &types) {
 }
 
 LogicalType DuckLakeTypes::GetCastedType(const LogicalType &type) {
-	// There are no types that requires casts as of DuckDB v1.5
-	return type;
+	return TypeVisitor::VisitReplace(type, [](const LogicalType &child) {
+		if (child.id() == LogicalTypeId::TUPLE) {
+			return LogicalType::STRUCT(TupleType::NamedChildren(child));
+		}
+		return child;
+	});
 }
 
 LogicalType DuckLakeTypes::FromString(const string &type) {
@@ -126,6 +129,7 @@ string DuckLakeTypes::ToString(const LogicalType &type) {
 	}
 	switch (type.id()) {
 	case LogicalTypeId::STRUCT:
+	case LogicalTypeId::TUPLE:
 		return "struct";
 	case LogicalTypeId::VARIANT:
 		return "variant";

@@ -12,6 +12,7 @@ SQLiteMetadataManager::SQLiteMetadataManager(DuckLakeTransaction &transaction) :
 bool SQLiteMetadataManager::TypeIsNativelySupported(const LogicalType &type) {
 	switch (type.id()) {
 	// Unnamed composite types are not supported.
+	case LogicalTypeId::TUPLE:
 	case LogicalTypeId::STRUCT:
 	case LogicalTypeId::MAP:
 	case LogicalTypeId::LIST:

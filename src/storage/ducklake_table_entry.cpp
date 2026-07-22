@@ -283,6 +283,7 @@ unique_ptr<BaseStatistics> GetColumnStats(const DuckLakeFieldId &field_id, const
 	}
 	// nested type
 	switch (field_id.Type().id()) {
+	case LogicalTypeId::TUPLE:
 	case LogicalTypeId::STRUCT: {
 		auto struct_stats = StructStats::CreateUnknown(field_id.Type());
 		for (idx_t child_idx = 0; child_idx < field_children.size(); ++child_idx) {
@@ -933,6 +934,7 @@ idx_t GetNestedChildCount(const LogicalType &type) {
 		return 1;
 	case LogicalTypeId::MAP:
 		return 2;
+	case LogicalTypeId::TUPLE:
 	case LogicalTypeId::STRUCT:
 		return StructType::GetChildTypes(type).size();
 	default:
@@ -946,6 +948,7 @@ string GetNestedChildName(const LogicalType &type, idx_t index) {
 		return "element";
 	case LogicalTypeId::MAP:
 		return index == 0 ? "key" : "value";
+	case LogicalTypeId::TUPLE:
 	case LogicalTypeId::STRUCT:
 		return StructType::GetChildTypes(type)[index].first.GetIdentifierName();
 	default:
@@ -958,6 +961,7 @@ const LogicalType &GetNestedChildType(const LogicalType &type, idx_t index) {
 		return ListType::GetChildType(type);
 	case LogicalTypeId::MAP:
 		return index == 0 ? MapType::KeyType(type) : MapType::ValueType(type);
+	case LogicalTypeId::TUPLE:
 	case LogicalTypeId::STRUCT:
 		return StructType::GetChildTypes(type)[index].second;
 	default:
@@ -1443,8 +1447,9 @@ DuckLakeColumnInfo DuckLakeTableEntry::ConvertColumn(const string &name, const L
 	column_entry.nulls_allowed = true;
 	column_entry.type = DuckLakeTypes::ToString(type);
 	switch (type.id()) {
+	case LogicalTypeId::TUPLE:
 	case LogicalTypeId::STRUCT: {
-		auto &struct_children = StructType::GetChildTypes(type);
+		auto struct_children = TupleType::NamedChildren(type);
 		for (idx_t child_idx = 0; child_idx < struct_children.size(); ++child_idx) {
 			auto &child = struct_children[child_idx];
 			auto &child_id = field_id.GetChildByIndex(child_idx);

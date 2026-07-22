@@ -273,6 +273,7 @@ void UpdateStats(vector<DuckLakeBaseColumnStats> &stats, idx_t c, Vector &data, 
 	if (type.IsNested() && type.id() != LogicalTypeId::VARIANT) {
 		// nested - recurse into children
 		switch (data.GetType().id()) {
+		case LogicalTypeId::TUPLE:
 		case LogicalTypeId::STRUCT: {
 			auto &children = StructVector::GetEntries(data);
 			for (idx_t child_idx = 0; child_idx < children.size(); child_idx++) {

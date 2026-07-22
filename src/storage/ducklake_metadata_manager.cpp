@@ -2656,6 +2656,7 @@ string DuckLakeMetadataManager::GetColumnType(const DuckLakeColumnInfo &col) {
 		return "VARCHAR";
 	}
 	switch (column_type.id()) {
+	case LogicalTypeId::TUPLE:
 	case LogicalTypeId::STRUCT: {
 		string result;
 		for (auto &child : col.children) {

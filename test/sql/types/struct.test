@@ -57,3 +57,36 @@ query I
 SELECT stats(s.i) FROM ducklake.test LIMIT 1
 ----
 <REGEX>:.*max.*6.*min.*1.*
+
+# unnamed struct (TUPLE) columns are stored as a named STRUCT with synthesized
+# positional member names, since DuckLake stores struct members by name
+statement ok
+CREATE TABLE ducklake.unnamed AS SELECT row(1, 'a') AS t;
+
+statement ok
+INSERT INTO ducklake.unnamed VALUES (row(2, 'b'));
+
+query I
+SELECT typeof(t) FROM ducklake.unnamed LIMIT 1
+----
+STRUCT(element1 INTEGER, element2 VARCHAR)
+
+query I
+SELECT * FROM ducklake.unnamed ORDER BY t.element1
+----
+{'element1': 1, 'element2': a}
+{'element1': 2, 'element2': b}
+
+# nested unnamed struct inside a list round-trips the same way
+statement ok
+CREATE TABLE ducklake.nested_unnamed AS SELECT [row(1, 2), row(3, 4)] AS l;
+
+query I
+SELECT typeof(l) FROM ducklake.nested_unnamed
+----
+STRUCT(element1 INTEGER, element2 INTEGER)[]
+
+query I
+SELECT * FROM ducklake.nested_unnamed
+----
+[{'element1': 1, 'element2': 2}, {'element1': 3, 'element2': 4}]

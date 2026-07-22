@@ -202,24 +202,24 @@ SELECT stats(d) FROM ducklake.timestamps LIMIT 1
 query II
 EXPLAIN ANALYZE SELECT * FROM ducklake.test WHERE i = -1;
 ----
-analyzed_plan	<REGEX>:.*EMPTY_RESULT.*
+analyzed_plan	<REGEX>:.*Empty Result.*
 
 query II
 EXPLAIN ANALYZE SELECT * FROM ducklake.tinyints WHERE d = -1;
 ----
-analyzed_plan	<REGEX>:.*EMPTY_RESULT.*
+analyzed_plan	<REGEX>:.*Empty Result.*
 
 query II
 EXPLAIN ANALYZE SELECT * FROM ducklake.decimals WHERE d = -1;
 ----
-analyzed_plan	<REGEX>:.*EMPTY_RESULT.*
+analyzed_plan	<REGEX>:.*Empty Result.*
 
 query II
 EXPLAIN ANALYZE SELECT * FROM ducklake.dates WHERE d = DATE '1900-01-01';
 ----
-analyzed_plan	<REGEX>:.*EMPTY_RESULT.*
+analyzed_plan	<REGEX>:.*Empty Result.*
 
 query II
 EXPLAIN ANALYZE SELECT * FROM ducklake.timestamps WHERE d = TIMESTAMP '1900-01-01';
 ----
-analyzed_plan	<REGEX>:.*EMPTY_RESULT.*
+analyzed_plan	<REGEX>:.*Empty Result.*

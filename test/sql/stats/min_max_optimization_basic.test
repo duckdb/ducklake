@@ -32,17 +32,17 @@ SELECT MIN(i), MAX(i), COUNT(*) FROM ducklake.test;
 query II
 EXPLAIN ANALYZE SELECT MIN(i), MAX(i), COUNT(*) FROM ducklake.test;
 ----
-analyzed_plan	<!REGEX>:.*TABLE_SCAN.*
+analyzed_plan	<!REGEX>:.*Table Scan.*
 
 query II
 EXPLAIN ANALYZE SELECT MIN(i) FROM ducklake.test;
 ----
-analyzed_plan	<!REGEX>:.*TABLE_SCAN.*
+analyzed_plan	<!REGEX>:.*Table Scan.*
 
 query II
 EXPLAIN ANALYZE SELECT MAX(i) FROM ducklake.test;
 ----
-analyzed_plan	<!REGEX>:.*TABLE_SCAN.*
+analyzed_plan	<!REGEX>:.*Table Scan.*
 
 # the optimization still holds after additional inserts (stats widen)
 statement ok
@@ -56,7 +56,7 @@ SELECT MIN(i), MAX(i), COUNT(*) FROM ducklake.test;
 query II
 EXPLAIN ANALYZE SELECT MIN(i), MAX(i) FROM ducklake.test;
 ----
-analyzed_plan	<!REGEX>:.*TABLE_SCAN.*
+analyzed_plan	<!REGEX>:.*Table Scan.*
 
 # ============================================
 # 2. String MIN/MAX
@@ -95,7 +95,7 @@ SELECT MIN(i) FROM ducklake.test WHERE i > 50;
 query II
 EXPLAIN ANALYZE SELECT MIN(i) FROM ducklake.test WHERE i > 50;
 ----
-analyzed_plan	<REGEX>:.*TABLE_SCAN.*
+analyzed_plan	<REGEX>:.*Table Scan.*
 
 # always-false filter -> empty result, must be NULL (and must not crash)
 query I

@@ -77,12 +77,13 @@ unique_ptr<DuckLakeFieldId> DuckLakeFieldId::FieldIdFromType(const string &name,
 	column_data.id = FieldIndex(column_id++);
 	vector<unique_ptr<DuckLakeFieldId>> field_children;
 	switch (type.id()) {
+	case LogicalTypeId::TUPLE:
 	case LogicalTypeId::STRUCT: {
 		// FIXME: check for struct pack
 		if (default_expr) {
 			throw NotImplementedException("Default value for STRUCT type not supported");
 		}
-		for (auto &entry : StructType::GetChildTypes(type)) {
+		for (auto &entry : TupleType::NamedChildren(type)) {
 			field_children.push_back(
 			    FieldIdFromType(entry.first.GetIdentifierName(), entry.second, nullptr, column_id, add_column));
 		}
@@ -182,6 +183,7 @@ LogicalType GetNewNestedType(const LogicalType &type, const vector<unique_ptr<Du
 	switch (type.id()) {
 	case LogicalTypeId::LIST:
 		return LogicalType::LIST(new_children[0]->Type());
+	case LogicalTypeId::TUPLE:
 	case LogicalTypeId::STRUCT:
 		return GetStructType(new_children);
 	case LogicalTypeId::MAP:

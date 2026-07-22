@@ -175,6 +175,7 @@ string ToSQLString(DuckLakeMetadataManager &metadata_manager, const Value &value
 		// variant can just be stored as a variant
 		return ToSQLString(metadata_manager, val);
 	}
+	case LogicalTypeId::TUPLE:
 	case LogicalTypeId::STRUCT: {
 		auto &child_types = StructType::GetChildTypes(value.type());
 		auto &struct_values = StructValue::GetChildren(value);
