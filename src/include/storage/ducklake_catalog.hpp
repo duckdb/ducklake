@@ -9,6 +9,7 @@
 #pragma once
 
 #include "common/ducklake_encryption.hpp"
+#include "duckdb/main/attached_database.hpp"
 #include "duckdb/catalog/catalog_entry/schema_catalog_entry.hpp"
 #include "duckdb/catalog/catalog_entry/table_catalog_entry.hpp"
 #include "duckdb/execution/physical_plan_generator.hpp"
