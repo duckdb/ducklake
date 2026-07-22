@@ -9,6 +9,7 @@
 #pragma once
 
 #include "ducklake_macro_entry.hpp"
+#include "duckdb/catalog/catalog.hpp"
 #include "duckdb/main/database.hpp"
 #include "common/ducklake_data_file.hpp"
 #include "common/ducklake_snapshot.hpp"

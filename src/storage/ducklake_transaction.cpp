@@ -1,4 +1,5 @@
 #include "storage/ducklake_transaction.hpp"
+#include "duckdb/catalog/catalog.hpp"
 #include "duckdb/main/database.hpp"
 #include "duckdb/common/file_system.hpp"
 
