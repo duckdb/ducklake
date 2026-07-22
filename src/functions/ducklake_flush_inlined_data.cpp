@@ -20,6 +20,7 @@
 #include "duckdb/planner/operator/logical_filter.hpp"
 #include "duckdb/planner/expression/bound_comparison_expression.hpp"
 #include "duckdb/planner/expression/bound_constant_expression.hpp"
+#include "duckdb/planner/expression/bound_reference_expression.hpp"
 #include "duckdb/catalog/catalog_entry/aggregate_function_catalog_entry.hpp"
 #include "duckdb/function/function_binder.hpp"
 #include "duckdb/planner/expression/bound_aggregate_expression.hpp"
@@ -389,6 +390,14 @@ unique_ptr<LogicalOperator> DuckLakeDataFlusher::GenerateFlushCommand() {
 	copy->write_partition_columns = copy_options.write_partition_columns;
 	copy->write_empty_file = copy_options.write_empty_file;
 	copy->partition_columns = std::move(copy_options.partition_columns);
+	if (copy->partition_output && sort_order_sql.empty()) {
+		auto row_id_idx = columns.PhysicalColumnCount();
+		auto snapshot_id_idx = row_id_idx + 1;
+		copy->order_columns.emplace_back(OrderType::ASCENDING, OrderByNullType::NULLS_LAST,
+		                                 make_uniq<BoundReferenceExpression>(LogicalType::BIGINT, row_id_idx));
+		copy->order_columns.emplace_back(OrderType::ASCENDING, OrderByNullType::NULLS_LAST,
+		                                 make_uniq<BoundReferenceExpression>(LogicalType::BIGINT, snapshot_id_idx));
+	}
 	copy->names = StringsToIdentifiers(copy_options.names);
 	copy->expected_types = std::move(copy_options.expected_types);
 
