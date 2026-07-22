@@ -53,7 +53,7 @@ bool DuckLakeSchemaEntry::HandleCreateConflict(CatalogTransaction transaction, C
 		// try to drop the entry prior to creating
 		DropInfo info;
 		info.type = catalog_type;
-		info.NameMutable() = Identifier(entry_name);
+		info.SetName(Identifier(entry_name));
 		DropEntry(transaction.GetContext(), info);
 		break;
 	}
