@@ -1,0 +1,38 @@
+# name: test/sql/stats/variant_shredded_type_merge.test
+# description: CHECKPOINT must not crash when a shredded VARIANT column's stats are merged across a type mismatch (#1305)
+# group: [stats]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/variant_shredded_type_merge_files', METADATA_CATALOG 'ducklake_meta')
+
+statement ok
+USE ducklake
+
+statement ok
+SET variant_minimum_shredding_size = 0
+
+statement ok
+SET force_variant_shredding = 'STRUCT(a INT, b INT)'
+
+statement ok
+CREATE TABLE shredded (col VARIANT)
+
+statement ok
+INSERT INTO shredded VALUES ({'a': 1, 'b': 100}), ({'a': 10, 'b': NULL}), ({'a': 100}), ({'a': NULL, 'b': NULL})
+
+# pre-#1305 the stats merge cast the min/max toward a non-scalar type and aborted the commit
+statement ok
+CHECKPOINT
+
+query I
+SELECT count(*) FROM shredded
+----
+4
