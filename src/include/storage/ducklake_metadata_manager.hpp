@@ -176,6 +176,11 @@ public:
 
 	virtual string MetadataExistsQuery() const;
 
+	//! Query that returns >=1 row iff a lazily-created inlined-file-delete table exists (cross-store conflict check).
+	//! Overridden per backend so the check reads live catalog state even when DuckDB's view of an attached
+	//! catalog is stale for cross-transaction DDL.
+	virtual string InlinedDeleteTableExistsQuery(const string &table_name) const;
+
 	//! Initialize a new DuckLake
 	virtual void InitializeDuckLake(bool has_explicit_schema, DuckLakeEncryption encryption);
 	//! Get the CREATE TABLE statements for all metadata tables
