@@ -1344,10 +1344,11 @@ void DuckLakeTransactionState::GetNewTableInfo(DuckLakeCommitState &commit_state
 		case LocalChangeType::CREATED:
 		case LocalChangeType::RENAMED: {
 			auto old_table_id = table.GetTableId();
-			if (local_change.type == LocalChangeType::RENAMED && IsTransactionLocal(old_table_id)) {
+			if (local_change.type == LocalChangeType::RENAMED) {
 				auto existing = commit_state.committed_tables.find(old_table_id);
 				if (existing != commit_state.committed_tables.end()) {
-					// If we are rename a table in the same transaction it was created, we need to patch it
+					// we already emitted a row for this table earlier in the chain (it was created or
+					// renamed in this same transaction) - patch the name instead of emitting a second row
 					RenameEmittedEntry(result.new_tables, existing->second, table.name.GetIdentifierName());
 					break;
 				}
@@ -1470,10 +1471,11 @@ void DuckLakeTransactionState::GetNewViewInfo(DuckLakeCommitState &commit_state,
 		case LocalChangeType::CREATED:
 		case LocalChangeType::RENAMED: {
 			auto old_view_id = view.GetViewId();
-			if (view.GetLocalChange().type == LocalChangeType::RENAMED && IsTransactionLocal(old_view_id)) {
+			if (view.GetLocalChange().type == LocalChangeType::RENAMED) {
 				auto existing = commit_state.committed_tables.find(old_view_id);
 				if (existing != commit_state.committed_tables.end()) {
-					// renaming a view in the same transaction it was created - patch the name on the existing row
+					// we already emitted a row for this view earlier in the chain (it was created or
+					// renamed in this same transaction) - patch the name instead of emitting a second row
 					RenameEmittedEntry(result.new_views, existing->second, view.name.GetIdentifierName());
 					break;
 				}

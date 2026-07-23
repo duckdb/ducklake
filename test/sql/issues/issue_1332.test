@@ -1,0 +1,366 @@
+# name: test/sql/issues/issue_1332.test
+# description: regression test for issue #1332 - altering a committed table then renaming it in the same transaction
+# group: [issues]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/issue_1332.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+USE dl
+
+# ADD COLUMN + RENAME TABLE
+statement ok
+CREATE TABLE t_add (id INT)
+
+statement ok
+BEGIN
+
+statement ok
+ALTER TABLE t_add ADD COLUMN c0 INT DEFAULT 7
+
+statement ok
+ALTER TABLE t_add RENAME TO t_add2
+
+statement ok
+COMMIT
+
+query II
+SELECT * FROM t_add2
+----
+
+# SET DEFAULT + RENAME TABLE
+statement ok
+CREATE TABLE t_def (id INT)
+
+statement ok
+BEGIN
+
+statement ok
+ALTER TABLE t_def ALTER COLUMN id SET DEFAULT 5
+
+statement ok
+ALTER TABLE t_def RENAME TO t_def2
+
+statement ok
+COMMIT
+
+statement ok
+INSERT INTO t_def2 DEFAULT VALUES
+
+query I
+SELECT * FROM t_def2
+----
+5
+
+# RENAME COLUMN + RENAME TABLE
+statement ok
+CREATE TABLE t_col (id INT)
+
+statement ok
+BEGIN
+
+statement ok
+ALTER TABLE t_col RENAME COLUMN id TO id2
+
+statement ok
+ALTER TABLE t_col RENAME TO t_col2
+
+statement ok
+COMMIT
+
+query I
+SELECT id2 FROM t_col2
+----
+
+# ALTER TYPE + RENAME TABLE
+statement ok
+CREATE TABLE t_type (id INT)
+
+statement ok
+BEGIN
+
+statement ok
+ALTER TABLE t_type ALTER COLUMN id TYPE BIGINT
+
+statement ok
+ALTER TABLE t_type RENAME TO t_type2
+
+statement ok
+COMMIT
+
+query I
+SELECT id FROM t_type2
+----
+
+# RENAME TABLE twice (must still work - no duplicate rows)
+statement ok
+CREATE TABLE t_rr (id INT)
+
+statement ok
+BEGIN
+
+statement ok
+ALTER TABLE t_rr RENAME TO t_rr_mid
+
+statement ok
+ALTER TABLE t_rr_mid RENAME TO t_rr2
+
+statement ok
+COMMIT
+
+query I
+SELECT id FROM t_rr2
+----
+
+# RENAME TABLE first, THEN alter a column in the same txn (reverse of the cases above)
+statement ok
+CREATE TABLE t_rev (id INT)
+
+statement ok
+BEGIN
+
+statement ok
+ALTER TABLE t_rev RENAME TO t_rev2
+
+statement ok
+ALTER TABLE t_rev2 ADD COLUMN c0 INT DEFAULT 7
+
+statement ok
+COMMIT
+
+query II
+SELECT * FROM t_rev2
+----
+
+# ALTER + RENAME + ALTER + RENAME - a chain that holds more than one rename entry
+statement ok
+CREATE TABLE t_chain (id INT)
+
+statement ok
+BEGIN
+
+statement ok
+ALTER TABLE t_chain ADD COLUMN x INT DEFAULT 1
+
+statement ok
+ALTER TABLE t_chain RENAME TO t_chain2
+
+statement ok
+ALTER TABLE t_chain2 ADD COLUMN y INT DEFAULT 2
+
+statement ok
+ALTER TABLE t_chain2 RENAME TO t_chain3
+
+statement ok
+COMMIT
+
+query III
+SELECT * FROM t_chain3
+----
+
+# CREATE + ADD COLUMN + RENAME all in one txn (transaction-local id must not emit a stale row)
+statement ok
+BEGIN
+
+statement ok
+CREATE TABLE t_local (id INT)
+
+statement ok
+ALTER TABLE t_local ADD COLUMN c0 INT DEFAULT 3
+
+statement ok
+ALTER TABLE t_local RENAME TO t_local2
+
+statement ok
+COMMIT
+
+query II
+SELECT * FROM t_local2
+----
+
+# ADD COLUMN + RENAME, then insert and read in a later txn - the default and data must round-trip
+statement ok
+CREATE TABLE t_data (id INT)
+
+statement ok
+INSERT INTO t_data VALUES (100)
+
+statement ok
+BEGIN
+
+statement ok
+ALTER TABLE t_data ADD COLUMN c0 INT DEFAULT 7
+
+statement ok
+ALTER TABLE t_data RENAME TO t_data2
+
+statement ok
+COMMIT
+
+statement ok
+INSERT INTO t_data2 (id) VALUES (200)
+
+query II
+SELECT * FROM t_data2 ORDER BY id
+----
+100	7
+200	7
+
+# ROLLBACK of ADD COLUMN + RENAME leaves the original table untouched
+statement ok
+CREATE TABLE t_rb (id INT)
+
+statement ok
+INSERT INTO t_rb VALUES (42)
+
+statement ok
+BEGIN
+
+statement ok
+ALTER TABLE t_rb ADD COLUMN c0 INT DEFAULT 7
+
+statement ok
+ALTER TABLE t_rb RENAME TO t_rb2
+
+statement ok
+ROLLBACK
+
+query I
+SELECT id FROM t_rb
+----
+42
+
+statement error
+SELECT * FROM t_rb2
+----
+
+# COMMENT ON VIEW + RENAME VIEW
+statement ok
+CREATE TABLE vbase (id INT)
+
+statement ok
+CREATE VIEW v1 AS SELECT * FROM vbase
+
+statement ok
+BEGIN
+
+statement ok
+COMMENT ON VIEW v1 IS 'hello'
+
+statement ok
+ALTER VIEW v1 RENAME TO v2
+
+statement ok
+COMMIT
+
+query I
+SELECT comment FROM duckdb_views() WHERE view_name = 'v2'
+----
+hello
+
+# same fix with data inlining left at its default (row limit 10) rather than disabled - covers the
+# inlined-data flush path adjacent to #740, including a reattach where the corruption would surface
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/issue_1332_inline.db' AS dli (DATA_PATH '{DATA_PATH}')
+
+statement ok
+USE dli
+
+statement ok
+CREATE TABLE t_in (id INT)
+
+statement ok
+INSERT INTO t_in VALUES (1), (2)
+
+statement ok
+BEGIN
+
+statement ok
+ALTER TABLE t_in ADD COLUMN c0 INT DEFAULT 7
+
+statement ok
+ALTER TABLE t_in RENAME TO t_in2
+
+statement ok
+COMMIT
+
+query II
+SELECT * FROM t_in2 ORDER BY id
+----
+1	7
+2	7
+
+statement ok
+USE memory
+
+statement ok
+DETACH dli
+
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/issue_1332_inline.db' AS dli (DATA_PATH '{DATA_PATH}')
+
+query II
+SELECT * FROM dli.t_in2 ORDER BY id
+----
+1	7
+2	7
+
+statement ok
+DETACH dli
+
+# force a fresh catalog load to prove the metadata is intact
+statement ok
+USE memory
+
+statement ok
+DETACH dl
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}')
+
+query II
+SELECT * FROM dl.t_add2
+----
+
+query III
+SELECT * FROM dl.t_chain3
+----
+
+query II
+SELECT * FROM dl.t_local2
+----
+
+query II
+SELECT * FROM dl.t_data2 ORDER BY id
+----
+100	7
+200	7
+
+query I
+SELECT dl.t_col2.id2 FROM dl.t_col2
+----
+
+query I
+SELECT comment FROM duckdb_views() WHERE view_name = 'v2'
+----
+hello
+
+# every renamed table has exactly one live row in ducklake_table (the pre-rename rows were closed)
+statement ok
+DETACH dl
+
+statement ok
+ATTACH '{DUCKLAKE_CONNECTION}' AS meta
+
+query I
+SELECT count(*) FROM meta.ducklake_table WHERE end_snapshot IS NULL AND table_name IN ('t_add', 't_add2', 't_def', 't_def2', 't_col', 't_col2', 't_type', 't_type2', 't_rr', 't_rr_mid', 't_rr2', 't_rev', 't_rev2', 't_chain', 't_chain2', 't_chain3', 't_local', 't_local2', 't_data', 't_data2', 't_rb', 't_rb2')
+----
+10
