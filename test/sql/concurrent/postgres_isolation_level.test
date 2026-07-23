@@ -1,0 +1,57 @@
+# name: test/sql/concurrent/postgres_isolation_level.test
+# description: DuckLake defaults postgres metadata connections to READ COMMITTED so commit-time conflict checks observe concurrent committers
+# group: [concurrent]
+
+require ducklake
+
+require parquet
+
+require postgres_scanner
+
+#FIXME: ADD THIS TO PG CI WHEN IT GETS BACK
+require-env DUCKLAKE_CI
+
+test-env DATA_PATH {TEST_DIR}
+
+# Scenario: no user override -> read committed applied
+statement ok
+ATTACH 'ducklake:postgres:dbname=ducklakedb' AS dl (DATA_PATH '{DATA_PATH}/iso_default', METADATA_SCHEMA 'iso_default')
+
+statement ok
+USE dl
+
+# create a table so the metadata connection has committed state to read back
+statement ok
+CREATE TABLE dl.t AS SELECT 1 AS x
+
+query I
+SELECT setting FROM postgres_query('__ducklake_metadata_dl', 'SELECT current_setting(''transaction_isolation'')') t(setting)
+----
+read committed
+
+statement ok
+USE memory
+
+statement ok
+DETACH dl
+
+# Scenario: user override -> respected as-is (repeatable read, not read committed)
+statement ok
+ATTACH 'ducklake:postgres:dbname=ducklakedb' AS dl_override (DATA_PATH '{DATA_PATH}/iso_override', METADATA_SCHEMA 'iso_override', METADATA_PARAMETERS MAP {'isolation_level': 'repeatable read'})
+
+statement ok
+USE dl_override
+
+statement ok
+CREATE TABLE dl_override.t AS SELECT 1 AS x
+
+query I
+SELECT setting FROM postgres_query('__ducklake_metadata_dl_override', 'SELECT current_setting(''transaction_isolation'')') t(setting)
+----
+repeatable read
+
+statement ok
+USE memory
+
+statement ok
+DETACH dl_override
