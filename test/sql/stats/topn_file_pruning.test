@@ -68,6 +68,60 @@ EXPLAIN ANALYZE SELECT * FROM ducklake.events WHERE timestamp > TIMESTAMP '2026-
 ----
 analyzed_plan	<REGEX>:.*optional: Dynamic Filter.*
 
+# Log only the metadata query generated for the combined static and dynamic Top-N filter below.
+statement ok
+CALL enable_logging('DuckLakeMetadata')
+
+# Verify correctness when the static and dynamic filters use the same column.
+query II
+SELECT * FROM ducklake.events WHERE timestamp > TIMESTAMP '2026-01-02 00:00:00' ORDER BY timestamp DESC LIMIT 2
+----
+2026-01-04 00:01:39	d
+2026-01-04 00:01:38	d
+
+# The static predicate must be included only once when it shares a column with the Top-N dynamic filter.
+query I
+SELECT COUNT(*) = 1
+FROM duckdb_logs_parsed('DuckLakeMetadata')
+WHERE query LIKE '%LEFT JOIN col_1_stats%'
+  AND query LIKE '%2026-01-02 00:00:00%'
+  AND length(query) - length(replace(query, '2026-01-02 00:00:00', '')) =
+      length('2026-01-02 00:00:00');
+----
+true
+
+# PostgreSQL metadata uses a selective postgres_query() CTE for the Top-N min/max stats.
+statement ok
+USE ducklake
+
+query I
+SELECT CASE WHEN (SELECT catalog_type FROM settings()) = 'postgres' THEN
+    (SELECT COUNT(*) > 0
+     FROM duckdb_logs_parsed('DuckLakeMetadata')
+     WHERE query LIKE '%postgres_query%'
+       AND query LIKE '%ducklake_file_column_stats%'
+       AND query LIKE '%WHERE column_id = 1 AND table_id = 1%'
+       AND query LIKE '%col_1_stats AS MATERIALIZED%'
+       AND query LIKE '%LEFT JOIN col_1_stats%'
+       AND query LIKE '%min_value%'
+       AND query LIKE '%max_value%'
+       AND query LIKE '%value_count%'
+       AND length(query) - length(replace(query, 'col_1_stats AS MATERIALIZED', '')) =
+           length('col_1_stats AS MATERIALIZED'))
+    ELSE true END;
+----
+true
+
+# The Top-N query must not directly scan the attached PostgreSQL statistics relation.
+query I
+SELECT CASE WHEN (SELECT catalog_type FROM settings()) = 'postgres' THEN
+    (SELECT COUNT(*) = 0
+     FROM duckdb_logs_parsed('DuckLakeMetadata')
+     WHERE query LIKE '%"__ducklake_metadata_ducklake"."public".ducklake_file_column_stats%')
+    ELSE true END;
+----
+true
+
 # Test with multiple sort orders - should still prune using first column
 query II
 EXPLAIN ANALYZE SELECT * FROM ducklake.events ORDER BY timestamp DESC, user_id ASC LIMIT 1
