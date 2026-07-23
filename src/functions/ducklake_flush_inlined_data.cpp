@@ -1,4 +1,10 @@
 #include "functions/ducklake_table_functions.hpp"
+#include "duckdb/catalog/catalog.hpp"
+#include "duckdb/catalog/catalog_entry/schema_catalog_entry.hpp"
+#include "duckdb/catalog/catalog_entry/table_catalog_entry.hpp"
+#include "duckdb/execution/physical_plan_generator.hpp"
+#include "duckdb/planner/logical_operator.hpp"
+#include "duckdb/common/file_system.hpp"
 #include "storage/ducklake_transaction.hpp"
 #include "storage/ducklake_catalog.hpp"
 #include "storage/ducklake_schema_entry.hpp"
@@ -85,8 +91,8 @@ SourceResultType DuckLakeFlushData::GetDataInternal(ExecutionContext &context, D
 	source_state.returned_result = true;
 
 	auto &gstate = this->sink_state->Cast<DuckLakeInsertGlobalState>();
-	chunk.data[0].Append(Value(table.schema.name));
-	chunk.data[1].Append(Value(table.name));
+	chunk.data[0].Append(Value(table.schema.name.GetIdentifierName()));
+	chunk.data[1].Append(Value(table.name.GetIdentifierName()));
 	chunk.data[2].Append(Value::BIGINT(static_cast<int64_t>(gstate.rows_flushed)));
 	chunk.SetChildCardinality(1);
 	return SourceResultType::FINISHED;
@@ -323,7 +329,7 @@ unique_ptr<LogicalOperator> DuckLakeDataFlusher::GenerateFlushCommand() {
 	auto virtual_columns = table.GetVirtualColumns();
 	auto ducklake_scan =
 	    make_uniq<LogicalGet>(table_idx, std::move(scan_function), std::move(bind_data), copy_options.expected_types,
-	                          StringsToIdentifiers(copy_options.names), std::move(virtual_columns));
+	                          copy_options.names, std::move(virtual_columns));
 	auto &column_ids = ducklake_scan->GetMutableColumnIds();
 	for (idx_t i = 0; i < columns.PhysicalColumnCount(); i++) {
 		column_ids.emplace_back(i);
@@ -389,7 +395,7 @@ unique_ptr<LogicalOperator> DuckLakeDataFlusher::GenerateFlushCommand() {
 	copy->write_partition_columns = copy_options.write_partition_columns;
 	copy->write_empty_file = copy_options.write_empty_file;
 	copy->partition_columns = std::move(copy_options.partition_columns);
-	copy->names = StringsToIdentifiers(copy_options.names);
+	copy->names = copy_options.names;
 	copy->expected_types = std::move(copy_options.expected_types);
 
 	copy->children.push_back(std::move(root));
@@ -639,7 +645,8 @@ static unique_ptr<LogicalOperator> FlushInlinedDataBind(ClientContext &context, 
 	} else {
 		// specific table - fetch the table
 		auto table_catalog_entry = ducklake_catalog.GetEntry<TableCatalogEntry>(
-		    context, Identifier(schema), Identifier(table), OnEntryNotFound::THROW_EXCEPTION);
+		    context, QualifiedName(ducklake_catalog.GetName(), Identifier(schema), Identifier(table)),
+		    OnEntryNotFound::THROW_EXCEPTION);
 		auto &dl_schema = table_catalog_entry->schema.Cast<DuckLakeSchemaEntry>();
 		schema_table_map[dl_schema.Cast<DuckLakeSchemaEntry>().GetSchemaId().index].push_back(
 		    table_catalog_entry.get()->Cast<DuckLakeTableEntry>());
@@ -713,7 +720,8 @@ static unique_ptr<LogicalOperator> FlushInlinedDataBind(ClientContext &context, 
 
 	// Create SUM(rows_flushed) aggregate
 	auto &system_catalog = Catalog::GetSystemCatalog(context);
-	auto &sum_entry = system_catalog.GetEntry<AggregateFunctionCatalogEntry>(context, DEFAULT_SCHEMA, "sum");
+	auto &sum_entry = system_catalog.GetEntry<AggregateFunctionCatalogEntry>(
+	    context, QualifiedName(system_catalog.GetName(), Identifier::DefaultSchema(), "sum"));
 
 	vector<unique_ptr<Expression>> sum_args;
 	sum_args.push_back(make_uniq<BoundColumnRefExpression>(child->types[2], child_bindings[2]));

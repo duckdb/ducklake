@@ -1,4 +1,6 @@
 #include "functions/ducklake_table_functions.hpp"
+#include "duckdb/catalog/catalog.hpp"
+#include "duckdb/catalog/catalog_entry/table_catalog_entry.hpp"
 #include "storage/ducklake_transaction.hpp"
 #include "common/ducklake_util.hpp"
 #include "storage/ducklake_transaction_changes.hpp"
@@ -44,8 +46,9 @@ static unique_ptr<FunctionData> DuckLakeAddDataFilesBind(ClientContext &context,
 	}
 	const auto table_name = StringValue::Get(input.inputs[1]);
 
-	auto entry = catalog.GetEntry<TableCatalogEntry>(context, Identifier(schema_name), Identifier(table_name),
-	                                                 OnEntryNotFound::THROW_EXCEPTION);
+	auto entry = catalog.GetEntry<TableCatalogEntry>(
+	    context, QualifiedName(catalog.GetName(), Identifier(schema_name), Identifier(table_name)),
+	    OnEntryNotFound::THROW_EXCEPTION);
 	auto &table = entry->Cast<DuckLakeTableEntry>();
 
 	auto result = make_uniq<DuckLakeAddDataFilesData>(catalog, table);

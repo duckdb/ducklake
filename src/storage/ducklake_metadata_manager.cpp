@@ -1,4 +1,5 @@
 #include "storage/ducklake_metadata_manager.hpp"
+#include "duckdb/common/file_system.hpp"
 #include "storage/ducklake_transaction.hpp"
 #include "storage/ducklake_variant_stats.hpp"
 #include "common/ducklake_util.hpp"
@@ -3716,13 +3717,14 @@ string DuckLakeMetadataManager::WriteNewDataFilesWithAppender(DuckLakeSnapshot &
 	}
 
 	// Create appenders for each table
-	Appender data_file_appender(connection, Identifier(db_name), Identifier(schema_name), "ducklake_data_file");
+	Appender data_file_appender(connection, Identifier(db_name), Identifier(schema_name),
+	                            Identifier("ducklake_data_file"));
 	Appender column_stats_appender(connection, Identifier(db_name), Identifier(schema_name),
-	                               "ducklake_file_column_stats");
+	                               Identifier("ducklake_file_column_stats"));
 	Appender partition_value_appender(connection, Identifier(db_name), Identifier(schema_name),
-	                                  "ducklake_file_partition_value");
+	                                  Identifier("ducklake_file_partition_value"));
 	Appender variant_stats_appender(connection, Identifier(db_name), Identifier(schema_name),
-	                                "ducklake_file_variant_stats");
+	                                Identifier("ducklake_file_variant_stats"));
 
 	bool write_row_group_count = catalog.SupportsRowGroupCount();
 	for (auto &file : new_files) {
@@ -5288,6 +5290,9 @@ WHERE table_id IN (%s);)",
 			for (auto &row : *result) {
 				inlined_tables_to_drop.push_back(row.GetValue<string>(0));
 			}
+		}
+		for (auto &table_id : cleanup_tables) {
+			inlined_tables_to_drop.push_back(InlinedFileDeletionTableName(table_id));
 		}
 
 		tables_to_delete_from = {

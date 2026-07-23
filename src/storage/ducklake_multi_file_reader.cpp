@@ -43,15 +43,12 @@ static bool ColumnsHaveFieldIds(const vector<MultiFileColumnDefinition> &columns
 }
 
 //! Try to find a column in local_columns that matches the given field_id
-static bool TryFindColumnByFieldId(const vector<MultiFileColumnDefinition> &local_columns, int32_t field_id,
-                                   MultiFileColumnDefinition *fallback_column,
-                                   optional_ptr<MultiFileColumnDefinition> &global_column_reference) {
+static bool TryFindColumnByFieldId(const vector<MultiFileColumnDefinition> &local_columns, int32_t field_id) {
 	for (auto &col : local_columns) {
 		if (col.identifier.IsNull()) {
 			continue;
 		}
 		if (col.identifier.GetValue<int32_t>() == field_id) {
-			global_column_reference = fallback_column;
 			return true;
 		}
 	}
@@ -569,17 +566,15 @@ ReaderInitializeType DuckLakeMultiFileReader::CreateMapping(
 	                                      multi_file_list, bind_data, virtual_columns);
 }
 
-unique_ptr<Expression> DuckLakeMultiFileReader::GetVirtualColumnExpression(
+MultiFileReaderVirtualColumnBinding DuckLakeMultiFileReader::GetVirtualColumnExpression(
     ClientContext &context, MultiFileReaderData &reader_data, const vector<MultiFileColumnDefinition> &local_columns,
-    idx_t &column_id, const LogicalType &type, MultiFileLocalIndex local_idx,
-    optional_ptr<MultiFileColumnDefinition> &global_column_reference) {
+    const idx_t column_id, const LogicalType &type, MultiFileLocalIndex local_idx) {
 	if (column_id == COLUMN_IDENTIFIER_ROW_ID) {
 		// row id column
 		// this is computed as row_id_start + file_row_number OR read from the file
 		// first check if the row id is explicitly defined in this file
-		if (TryFindColumnByFieldId(local_columns, MultiFileReader::ROW_ID_FIELD_ID, row_id_column.get(),
-		                           global_column_reference)) {
-			return nullptr;
+		if (TryFindColumnByFieldId(local_columns, MultiFileReader::ROW_ID_FIELD_ID)) {
+			return MultiFileReaderVirtualColumnBinding(*row_id_column.get());
 		}
 		// get the row id start for this file
 		if (!reader_data.file_to_be_opened.extended_info) {
@@ -596,9 +591,6 @@ unique_ptr<Expression> DuckLakeMultiFileReader::GetVirtualColumnExpression(
 		auto row_id_expr = make_uniq<BoundConstantExpression>(entry->second);
 		auto file_row_number = make_uniq<BoundReferenceExpression>(type, local_idx.GetIndex());
 
-		// transform this virtual column to file_row_number
-		column_id = MultiFileReader::COLUMN_IDENTIFIER_FILE_ROW_NUMBER;
-
 		// generate the addition
 		vector<unique_ptr<Expression>> children;
 		children.push_back(std::move(row_id_expr));
@@ -606,16 +598,18 @@ unique_ptr<Expression> DuckLakeMultiFileReader::GetVirtualColumnExpression(
 
 		FunctionBinder binder(context);
 		ErrorData error;
-		auto function_expr = binder.BindScalarFunction(DEFAULT_SCHEMA, "+", std::move(children), error, true, nullptr);
+		auto function_expr =
+		    binder.BindScalarFunction(Identifier::DefaultSchema(), "+", std::move(children), error, true, nullptr);
 		if (error.HasError()) {
 			error.Throw();
 		}
-		return function_expr;
+		vector<column_t> column_ids;
+		column_ids.push_back(MultiFileReader::COLUMN_IDENTIFIER_FILE_ROW_NUMBER);
+		return MultiFileReaderVirtualColumnBinding(std::move(function_expr), std::move(column_ids));
 	}
 	if (column_id == COLUMN_IDENTIFIER_SNAPSHOT_ID) {
-		if (TryFindColumnByFieldId(local_columns, MultiFileReader::LAST_UPDATED_SEQUENCE_NUMBER_ID,
-		                           snapshot_id_column.get(), global_column_reference)) {
-			return nullptr;
+		if (TryFindColumnByFieldId(local_columns, MultiFileReader::LAST_UPDATED_SEQUENCE_NUMBER_ID)) {
+			return MultiFileReaderVirtualColumnBinding(*snapshot_id_column.get());
 		}
 		// get the row id start for this file
 		if (!reader_data.file_to_be_opened.extended_info) {
@@ -626,10 +620,9 @@ unique_ptr<Expression> DuckLakeMultiFileReader::GetVirtualColumnExpression(
 		if (entry == options.end()) {
 			throw InternalException("snapshot_id not found for reading snapshot_id column");
 		}
-		return make_uniq<BoundConstantExpression>(entry->second);
+		return MultiFileReaderVirtualColumnBinding(entry->second);
 	}
-	return MultiFileReader::GetVirtualColumnExpression(context, reader_data, local_columns, column_id, type, local_idx,
-	                                                   global_column_reference);
+	return MultiFileReader::GetVirtualColumnExpression(context, reader_data, local_columns, column_id, type, local_idx);
 }
 
 // Map a global_column_ids index to its output_chunk position by matching the expression pointer (handles
