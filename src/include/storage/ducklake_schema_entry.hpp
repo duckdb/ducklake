@@ -13,6 +13,8 @@
 #include "duckdb/catalog/catalog_entry/table_catalog_entry.hpp"
 #include "duckdb/planner/parsed_data/bound_create_table_info.hpp"
 #include "storage/ducklake_catalog_set.hpp"
+#include "storage/ducklake_partition_data.hpp"
+#include "storage/ducklake_sort_data.hpp"
 
 namespace duckdb {
 class DuckLakeTransaction;
@@ -35,8 +37,11 @@ public:
 	}
 
 public:
+	//! Create + register a DuckLakeTableEntry; prebuilt_* specs are supplied by CTAS.
 	optional_ptr<CatalogEntry> CreateTableExtended(CatalogTransaction transaction, BoundCreateTableInfo &info,
-	                                               string table_uuid, string table_data_path);
+	                                               string table_uuid, string table_data_path,
+	                                               unique_ptr<DuckLakePartition> prebuilt_partition_data = nullptr,
+	                                               unique_ptr<DuckLakeSort> prebuilt_sort_data = nullptr);
 	unique_ptr<CreateInfo> GetInfo() const override;
 	optional_ptr<CatalogEntry> CreateTable(CatalogTransaction transaction, BoundCreateTableInfo &info) override;
 	optional_ptr<CatalogEntry> CreateFunction(CatalogTransaction transaction, CreateFunctionInfo &info) override;

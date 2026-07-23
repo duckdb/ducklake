@@ -34,6 +34,7 @@ struct DuckLakeFileListEntry;
 struct DuckLakeConfigOption;
 struct DuckLakeSnapshotCommit;
 struct DeleteFileMap;
+struct BoundCreateTableInfo;
 class LogicalGet;
 
 //! Per-table stats cache entry, keyed by <next_file_id, table_id>.
@@ -148,6 +149,8 @@ public:
 	optional_ptr<BoundAtClause> CatalogSnapshot() const;
 
 	optional_ptr<CatalogEntry> CreateSchema(CatalogTransaction transaction, CreateSchemaInfo &info) override;
+
+	ErrorData SupportsCreateTable(BoundCreateTableInfo &info) override;
 
 	void ScanSchemas(ClientContext &context, std::function<void(SchemaCatalogEntry &)> callback) override;
 

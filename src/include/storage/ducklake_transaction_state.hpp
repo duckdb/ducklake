@@ -94,6 +94,10 @@ struct DuckLakeCommitContext {
 	//! Invalidates the cached schema in the catalog for a given schema version.
 	std::function<void(idx_t)> invalidate_schema_cache = [](idx_t) {
 	};
+	//! Re-keys an in-memory table-scoped config option from the local id to the committed id
+	//! (client-side only - the server-side commit path never handles new tables).
+	std::function<void(const DuckLakeConfigOption &)> set_config_option = [](const DuckLakeConfigOption &) {
+	};
 	//! Publishes the new schema version onto the transaction.
 	std::function<void(idx_t)> set_catalog_version;
 	//! Records the committed snapshot id on the catalog.
