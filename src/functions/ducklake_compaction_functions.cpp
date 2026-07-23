@@ -48,16 +48,15 @@ vector<OrderByNode> DuckLakeCompactor::ParseSortOrders(const DuckLakeSort &sort_
 }
 
 //! Binds ORDER BY expressions directly using ExpressionBinder.
-vector<BoundOrderByNode> DuckLakeCompactor::BindSortOrders(Binder &binder, DuckLakeTableEntry &table,
-                                                           TableIndex table_index,
+vector<BoundOrderByNode> DuckLakeCompactor::BindSortOrders(Binder &binder, const ColumnList &columns,
+                                                           const Identifier &table_name, TableIndex table_index,
                                                            vector<OrderByNode> &pre_bound_orders) {
-	auto &columns = table.GetColumns();
 	auto column_names = columns.GetColumnNames();
 	auto column_types = columns.GetColumnTypes();
 
 	// Create a child binder with the table columns in scope
 	auto child_binder = Binder::CreateBinder(binder.context, &binder);
-	child_binder->bind_context.AddGenericBinding(table_index, table.name, StringsToIdentifiers(column_names),
+	child_binder->bind_context.AddGenericBinding(table_index, table_name, StringsToIdentifiers(column_names),
 	                                             column_types);
 
 	// Bind each ORDER BY expression directly
@@ -425,7 +424,7 @@ unique_ptr<LogicalOperator> DuckLakeCompactor::InsertSort(Binder &binder, unique
 	}
 
 	// Validate all column references in sort expressions exist in the table
-	DuckLakeTableEntry::ValidateSortExpressionColumns(table, pre_bound_orders);
+	DuckLakeTableEntry::ValidateSortExpressionColumns(table.GetColumns(), pre_bound_orders);
 
 	// Resolve types for the input plan (could be LogicalGet or LogicalProjection)
 	plan->ResolveOperatorTypes();
@@ -434,7 +433,8 @@ unique_ptr<LogicalOperator> DuckLakeCompactor::InsertSort(Binder &binder, unique
 	auto table_index = bindings[0].table_index;
 
 	// Bind the ORDER BY expressions
-	auto orders = DuckLakeCompactor::BindSortOrders(binder, table, table_index, pre_bound_orders);
+	auto orders =
+	    DuckLakeCompactor::BindSortOrders(binder, table.GetColumns(), table.name, table_index, pre_bound_orders);
 
 	// Append (row_id, snapshot_id) as deterministic tiebreakers when requested so the file order
 	// exactly matches the deletes-position query's ORDER BY, including ties in the user sort key.
