@@ -145,8 +145,8 @@ unique_ptr<Expression> DuckLakePartitionUtils::ApplyScalarFunction(ClientContext
 	children.push_back(std::move(column_expr));
 	ErrorData error;
 	FunctionBinder binder(context);
-	auto function =
-	    binder.BindScalarFunction(DEFAULT_SCHEMA, Identifier(function_name), std::move(children), error, false);
+	auto function = binder.BindScalarFunction(Identifier::DefaultSchema(), Identifier(function_name),
+	                                          std::move(children), error, false);
 	if (!function) {
 		error.Throw();
 	}
@@ -169,7 +169,7 @@ unique_ptr<Expression> DuckLakePartitionUtils::ApplyBucketTransform(ClientContex
 
 	ErrorData error;
 	FunctionBinder binder(context);
-	auto and_expr = binder.BindScalarFunction(DEFAULT_SCHEMA, "&", std::move(and_children), error, false);
+	auto and_expr = binder.BindScalarFunction(Identifier::DefaultSchema(), "&", std::move(and_children), error, false);
 	if (!and_expr) {
 		error.Throw();
 	}
@@ -178,7 +178,7 @@ unique_ptr<Expression> DuckLakePartitionUtils::ApplyBucketTransform(ClientContex
 	mod_children.push_back(std::move(and_expr));
 	mod_children.push_back(make_uniq<BoundConstantExpression>(Value::INTEGER(NumericCast<int32_t>(bucket_count))));
 
-	auto mod_expr = binder.BindScalarFunction(DEFAULT_SCHEMA, "%", std::move(mod_children), error, false);
+	auto mod_expr = binder.BindScalarFunction(Identifier::DefaultSchema(), "%", std::move(mod_children), error, false);
 	if (!mod_expr) {
 		error.Throw();
 	}

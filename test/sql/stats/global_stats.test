@@ -12,6 +12,9 @@ test-env DATA_PATH {TEST_DIR}
 
 
 statement ok
+SET profiling_renderer_settings = MAP {'operator_casing': 'upper'};
+
+statement ok
 ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/ducklake_global_stats', METADATA_CATALOG 'ducklake_meta')
 
 # test tracking of stats

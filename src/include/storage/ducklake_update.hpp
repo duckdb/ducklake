@@ -9,6 +9,7 @@
 #pragma once
 
 #include "storage/ducklake_insert.hpp"
+#include "duckdb/execution/physical_plan_generator.hpp"
 
 namespace duckdb {
 

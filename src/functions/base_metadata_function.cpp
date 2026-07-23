@@ -1,4 +1,5 @@
 #include "functions/ducklake_table_functions.hpp"
+#include "duckdb/catalog/catalog.hpp"
 #include "duckdb/main/attached_database.hpp"
 #include "duckdb/main/database_manager.hpp"
 
@@ -60,9 +61,8 @@ static void MetadataFunctionExecute(ClientContext &context, TableFunctionInput &
 	output.SetChildCardinality(count);
 }
 
-DuckLakeBaseMetadataFunction::DuckLakeBaseMetadataFunction(string name_p, table_function_bind_t bind)
-    : TableFunction(Identifier(std::move(name_p)), {LogicalType::VARCHAR}, MetadataFunctionExecute, bind,
-                    MetadataFunctionInit) {
+DuckLakeBaseMetadataFunction::DuckLakeBaseMetadataFunction(Identifier name_p, table_function_bind_t bind)
+    : TableFunction(std::move(name_p), {LogicalType::VARCHAR}, MetadataFunctionExecute, bind, MetadataFunctionInit) {
 }
 
 } // namespace duckdb

@@ -1,0 +1,34 @@
+# name: test/sql/transaction/immediate_transaction_mode_attach.test
+# description: Attach an existing DuckLake with immediate_transaction_mode enabled
+# group: [transaction]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/imm_txn_attach.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/immediate_txn_attach_files')
+
+statement ok
+CREATE TABLE ducklake.tbl(i INTEGER);
+
+statement ok
+INSERT INTO ducklake.tbl VALUES (42);
+
+statement ok
+DETACH ducklake
+
+statement ok
+SET immediate_transaction_mode=true
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/immediate_txn_attach_files')
+
+query I
+SELECT * FROM ducklake.tbl
+----
+42

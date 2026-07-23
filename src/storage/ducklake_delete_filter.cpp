@@ -1,4 +1,6 @@
 #include "storage/ducklake_delete_filter.hpp"
+#include "duckdb/common/file_system.hpp"
+#include "duckdb/common/file_open_flags.hpp"
 #include "storage/ducklake_deletion_vector.hpp"
 #include "storage/ducklake_puffin.hpp"
 #include "common/parquet_file_scanner.hpp"
