@@ -4,7 +4,6 @@
 #include "common/ducklake_util.hpp"
 #include "duckdb/planner/tableref/bound_at_clause.hpp"
 #include "duckdb/common/types/blob.hpp"
-#include "duckdb/common/sql_identifier.hpp"
 #include "duckdb/common/type_visitor.hpp"
 #include "storage/ducklake_catalog.hpp"
 #include "common/ducklake_types.hpp"
@@ -18,7 +17,6 @@
 #include "duckdb/main/attached_database.hpp"
 #include "duckdb/main/database.hpp"
 #include "duckdb/planner/expression.hpp"
-#include "duckdb/planner/expression/bound_constant_expression.hpp"
 #include "duckdb/execution/expression_executor.hpp"
 #include "storage/ducklake_partition_data.hpp"
 #include "duckdb/parser/parser.hpp"
@@ -39,8 +37,6 @@ DuckLakeMetadataManager::DuckLakeMetadataManager(DuckLakeTransaction &transactio
 
 DuckLakeMetadataManager::~DuckLakeMetadataManager() {
 }
-optional_ptr<AttachedDatabase> GetDatabase(ClientContext &context, const string &name);
-
 unordered_map<string /* name */, DuckLakeMetadataManager::create_t> DuckLakeMetadataManager::metadata_managers = {
     {"postgres", PostgresMetadataManager::Create}, {"postgres_scanner", PostgresMetadataManager::Create},
     {"quack", QuackMetadataManager::Create},       {"quack_scanner", QuackMetadataManager::Create},
@@ -64,9 +60,6 @@ unique_ptr<DuckLakeMetadataManager> DuckLakeMetadataManager::Create(DuckLakeTran
 	if (metadata_manager_iter != metadata_managers.end()) {
 		auto create = metadata_manager_iter->second;
 		return create(transaction);
-	}
-	if (catalog_type == "sqlite_scanner") {
-		return make_uniq<SQLiteMetadataManager>(transaction);
 	}
 	return make_uniq<DuckLakeMetadataManager>(transaction);
 }
@@ -874,7 +867,7 @@ WHERE {SNAPSHOT_ID} >= begin_snapshot AND ({SNAPSHOT_ID} < view.end_snapshot OR 
 )",
 	                                                     ListAggregation(TAG_FIELDS), view_column_tags_select));
 	if (result->HasError()) {
-		result->GetErrorObject().Throw("Failed to get partition information from DuckLake: ");
+		result->GetErrorObject().Throw("Failed to get view information from DuckLake: ");
 	}
 	auto &views = catalog.views;
 	for (auto &row : *result) {
