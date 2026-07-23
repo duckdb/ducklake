@@ -2867,6 +2867,30 @@ WHERE table_id=tid AND column_id=cid AND end_snapshot IS NULL
 	                          dropped_cols);
 }
 
+string DuckLakeMetadataManager::WriteExpiredColumnTags(const vector<DuckLakeDroppedColumn> &dropped_columns) {
+	if (dropped_columns.empty()) {
+		return {};
+	}
+	string dropped_cols;
+	for (auto &dropped_col : dropped_columns) {
+		if (!dropped_cols.empty()) {
+			dropped_cols += ", ";
+		}
+		dropped_cols += StringUtil::Format("(%d, %d)", dropped_col.table_id.index, dropped_col.field_id.index);
+	}
+	// expire any active tags of the dropped columns (GH #1310)
+	return StringUtil::Format(R"(
+WITH dropped_cols(tid, cid) AS (
+VALUES %s
+)
+UPDATE {METADATA_CATALOG}.ducklake_column_tag
+SET end_snapshot = {SNAPSHOT_ID}
+FROM dropped_cols
+WHERE table_id=tid AND column_id=cid AND end_snapshot IS NULL
+;)",
+	                          dropped_cols);
+}
+
 string DuckLakeMetadataManager::WriteNewColumns(const vector<DuckLakeNewColumn> &new_columns) {
 	if (new_columns.empty()) {
 		return {};

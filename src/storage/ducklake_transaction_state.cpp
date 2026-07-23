@@ -447,6 +447,28 @@ void HandleChangedFields(TableIndex table_id, const ColumnChangeInfo &change_inf
 		txn_added_fields[new_col_info.column_info.id.index] = result.new_columns.size();
 		result.new_columns.push_back(std::move(new_column));
 	}
+	// A field that is dropped without being re-added under the same field id in the same change
+	// (i.e. an actual DROP COLUMN, not a rename/alter type) ceases to exist - discard any column
+	// tags queued for it in this transaction; already-committed tags are expired when writing the
+	// dropped columns (GH #1310).
+	for (auto &dropped_field_id : change_info.dropped_fields) {
+		bool readded = false;
+		for (auto &new_col : change_info.new_fields) {
+			if (new_col.column_info.id.index == dropped_field_id.index) {
+				readded = true;
+				break;
+			}
+		}
+		if (readded) {
+			continue;
+		}
+		result.new_column_tags.erase(std::remove_if(result.new_column_tags.begin(), result.new_column_tags.end(),
+		                                            [&](const DuckLakeColumnTagInfo &tag) {
+			                                            return tag.table_id.index == table_id.index &&
+			                                                   tag.field_index.index == dropped_field_id.index;
+		                                            }),
+		                             result.new_column_tags.end());
+	}
 }
 
 void GetNewMacroInfo(DuckLakeCommitState &commit_state, reference<CatalogEntry> entry, NewMacroInfo &result) {
@@ -1625,6 +1647,23 @@ string DuckLakeTransactionState::CommitChanges(DuckLakeCommitState &commit_state
 			batch_queries += DuckLakeMetadataManager::WriteNewViewColumnTags(result.new_view_column_tags);
 		}
 		batch_queries += DuckLakeMetadataManager::WriteDroppedColumns(result.dropped_columns);
+		// Truly dropped columns - i.e. not re-added under the same field id in this commit, as
+		// happens for RENAME/ALTER - also expire their committed column tags (GH #1310).
+		vector<DuckLakeDroppedColumn> expired_column_tags;
+		for (auto &dropped_col : result.dropped_columns) {
+			bool readded = false;
+			for (auto &new_col : result.new_columns) {
+				if (new_col.table_id.index == dropped_col.table_id.index &&
+				    new_col.column_info.id.index == dropped_col.field_id.index) {
+					readded = true;
+					break;
+				}
+			}
+			if (!readded) {
+				expired_column_tags.push_back(dropped_col);
+			}
+		}
+		batch_queries += DuckLakeMetadataManager::WriteExpiredColumnTags(expired_column_tags);
 		batch_queries += DuckLakeMetadataManager::WriteNewColumns(result.new_columns);
 		batch_queries += context.write_inlined_tables(commit_snapshot, result.new_inlined_data_tables);
 		batch_queries += DuckLakeMetadataManager::WriteNewSortKeys(existing_catalog.sorts, result.new_sort_keys);
