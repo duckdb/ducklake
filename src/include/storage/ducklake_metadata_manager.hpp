@@ -276,6 +276,7 @@ public:
 	static string WriteNewSortKeys(const vector<DuckLakeSortInfo> &existing_sorts,
 	                               const vector<DuckLakeSortInfo> &new_sorts);
 	static string WriteDroppedColumns(const vector<DuckLakeDroppedColumn> &dropped_columns);
+	static string WriteExpiredColumnTags(const vector<DuckLakeDroppedColumn> &dropped_columns);
 	static string WriteNewColumns(const vector<DuckLakeNewColumn> &new_columns);
 	static string WriteNewTags(const vector<DuckLakeTagInfo> &new_tags);
 	static string WriteNewColumnTags(const vector<DuckLakeColumnTagInfo> &new_tags);
