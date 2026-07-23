@@ -1846,7 +1846,7 @@ WHERE idt.schema_version < (
 	if (res->HasError()) {
 		res->GetErrorObject().Throw("Failed to drop superseded inlined-data tables in DuckLake: ");
 	}
-	// We also need to invalidate the existing schema versions in our catalog
+	// Refresh this instance's entry-cached membership; read and cardinality paths resolve it per snapshot_id.
 	string snapshot_versions_sql = "SELECT DISTINCT schema_version FROM {METADATA_CATALOG}.ducklake_snapshot;";
 	auto snapshot_versions = context.query_metadata(snapshot_versions_sql);
 	if (snapshot_versions->HasError()) {

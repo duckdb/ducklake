@@ -20,6 +20,7 @@
 #include "duckdb/main/client_context_state.hpp"
 #include "duckdb/storage/object_cache.hpp"
 #include "storage/ducklake_catalog_set.hpp"
+#include "storage/ducklake_metadata_info.hpp"
 #include "storage/ducklake_partition_data.hpp"
 #include "storage/ducklake_stats.hpp"
 
@@ -64,6 +65,23 @@ struct DuckLakeSchemaCacheEntry : public ObjectCacheEntry {
 
 	static string ObjectType() {
 		return "ducklake_schema";
+	}
+	string GetObjectType() override {
+		return ObjectType();
+	}
+	optional_idx GetEstimatedCacheMemory() const override;
+};
+
+//! Per-table inlined-data-table membership cache entry, keyed by <snapshot_id, table_id>.
+struct DuckLakeInlinedDataTablesCacheEntry : public ObjectCacheEntry {
+	explicit DuckLakeInlinedDataTablesCacheEntry(vector<DuckLakeInlinedTableInfo> inlined_data_tables_p)
+	    : inlined_data_tables(std::move(inlined_data_tables_p)) {
+	}
+
+	vector<DuckLakeInlinedTableInfo> inlined_data_tables;
+
+	static string ObjectType() {
+		return "ducklake_inlined_data_tables";
 	}
 	string GetObjectType() override {
 		return ObjectType();
@@ -275,6 +293,10 @@ public:
 	//! Return the schema for the given snapshot - loading it if it is not yet loaded
 	DuckLakeCatalogSet &GetSchemaForSnapshot(DuckLakeTransaction &transaction, DuckLakeSnapshot snapshot);
 
+	//! Resolve a table's live inlined-data-table membership, memoized per the transaction's snapshot_id
+	//! rather than schema_version so a new transaction picks up a concurrent flush of a superseded table.
+	vector<DuckLakeInlinedTableInfo> GetInlinedDataTables(DuckLakeTransaction &transaction, DuckLakeTableEntry &table);
+
 	//! Callback type for instrumenting metadata queries
 	using QueryCallback = std::function<void(const string &query, std::chrono::steady_clock::duration elapsed)>;
 
@@ -308,6 +330,7 @@ private:
 	void LoadNameMaps(DuckLakeTransaction &transaction);
 	string StatsCacheKey(idx_t next_file_id, TableIndex table_id) const;
 	string SchemaCacheKey(idx_t schema_version) const;
+	string InlinedDataTablesCacheKey(idx_t snapshot_id, TableIndex table_id) const;
 	string SchemaPinStateKey() const;
 	ObjectCache &GetObjectCacheInstance();
 
