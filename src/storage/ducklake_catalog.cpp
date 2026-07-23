@@ -813,6 +813,10 @@ shared_ptr<DuckLakeTableStats> DuckLakeCatalog::GetTableStats(DuckLakeTransactio
 	auto key = StatsCacheKey(snapshot.next_file_id, table_id);
 	auto cached = cache.Get<DuckLakeTableStatsCacheEntry>(key);
 	if (cached) {
+		if (!cached->has_stats) {
+			// cached negative result
+			return nullptr;
+		}
 		auto *raw = cached.get();
 		return shared_ptr<DuckLakeTableStats>(std::move(cached), &raw->stats);
 	}
@@ -829,7 +833,8 @@ shared_ptr<DuckLakeTableStats> DuckLakeCatalog::GetTableStats(DuckLakeTransactio
 	}
 
 	if (!table_stats) {
-		// Table had no stats row for this snapshot (or did not exist at the snapshot)
+		// cache negative result to avoid repeated metadata queries on empty tables
+		cache.Put(std::move(key), make_shared_ptr<DuckLakeTableStatsCacheEntry>());
 		return nullptr;
 	}
 
