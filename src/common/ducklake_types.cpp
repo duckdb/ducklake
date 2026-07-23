@@ -126,6 +126,9 @@ string DuckLakeTypes::ToString(const LogicalType &type) {
 	}
 	switch (type.id()) {
 	case LogicalTypeId::STRUCT:
+		if (StructType::GetChildCount(type) == 0) {
+			throw InvalidInputException("Failed to convert DuckDB type to DuckLake - unsupported type %s", type);
+		}
 		return "struct";
 	case LogicalTypeId::VARIANT:
 		return "variant";

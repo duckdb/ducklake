@@ -118,6 +118,9 @@ public:
 	const string &MetadataType() const {
 		return metadata_type;
 	}
+	bool IsInitialized() const {
+		return initialized;
+	}
 	idx_t DataInliningRowLimit(SchemaIndex schema_index, TableIndex table_index) const;
 	idx_t DataInliningRowLimit(ClientContext &context, SchemaIndex schema_index, TableIndex table_index) const;
 	//! Returns the inlining limit (0 if the table is not eligible)
