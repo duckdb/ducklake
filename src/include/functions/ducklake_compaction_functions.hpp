@@ -99,6 +99,10 @@ public:
 	                                               vector<OrderByNode> &pre_bound_orders);
 
 private:
+	optional_ptr<DuckLakeTableEntry> ResolvePartitionSpecTable(DuckLakeTableEntry &table,
+	                                                           const DuckLakeCompactionFileEntry &source_file,
+	                                                           idx_t partition_id);
+
 	ClientContext &context;
 	DuckLakeCatalog &catalog;
 	DuckLakeTransaction &transaction;
