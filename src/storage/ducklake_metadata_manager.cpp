@@ -673,11 +673,21 @@ ORDER BY column_order)",
 	                          table_id.index);
 }
 
-string DuckLakeMetadataManager::GetInlinedTableNamesSql(TableIndex table_id) {
+string DuckLakeMetadataManager::GetInlinedTableInfosSql(TableIndex table_id) {
 	return StringUtil::Format(R"(
-SELECT DISTINCT table_name
+SELECT DISTINCT table_name, schema_version
 FROM {METADATA_CATALOG}.ducklake_inlined_data_tables
 WHERE table_id = %d)",
+	                          table_id.index);
+}
+
+string DuckLakeMetadataManager::GetCurrentTableSchemaVersionSql(TableIndex table_id) {
+	return StringUtil::Format(R"(
+SELECT schema_version
+FROM {METADATA_CATALOG}.ducklake_schema_versions
+WHERE table_id = %d AND begin_snapshot <= {SNAPSHOT_ID}
+ORDER BY begin_snapshot DESC
+LIMIT 1)",
 	                          table_id.index);
 }
 

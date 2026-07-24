@@ -77,9 +77,9 @@ struct DuckLakeCommitContext {
 	std::function<vector<DuckLakeColumnSchemaEntry>(TableIndex)> get_table_column_schema = [](TableIndex) {
 		return vector<DuckLakeColumnSchemaEntry> {};
 	};
-	//! Names of the inlined-data tables associated with a table id at the commit snapshot.
-	std::function<vector<string>(TableIndex)> get_inlined_table_names = [](TableIndex) {
-		return vector<string> {};
+	//! Inlined-data tables associated with a table id at the commit snapshot.
+	std::function<vector<DuckLakeInlinedTableInfo>(TableIndex)> get_inlined_tables = [](TableIndex) {
+		return vector<DuckLakeInlinedTableInfo> {};
 	};
 	//! Net (delete-adjusted) row count of a table's regular data files.
 	std::function<idx_t(TableIndex)> get_net_data_file_row_count = [](TableIndex) {
@@ -158,6 +158,10 @@ public:
 	                                  const DuckLakeCommitContext &context,
 	                                  map<TableIndex, DroppedDataFileStats> &attempt_dropped_file_stats);
 	CompactionInformation GetCompactionChanges(DuckLakeCommitState &commit_state, CompactionType type);
+	bool TryRecomputeGlobalStatsFromFiles(DuckLakeNewGlobalStats &new_globals, TableIndex table_id,
+	                                      DuckLakeSnapshot snapshot, const vector<DuckLakeFileInfo> &new_files,
+	                                      const set<DataFileIndex> &removed_file_ids, idx_t expected_data_file_rows,
+	                                      const DuckLakeCommitContext &context);
 	//! After a REWRITE_DELETES compaction, recompute EXACT global stats for `table_id` from the post-rewrite file set
 	//! (+ committed inlined data) and append the UpdateGlobalTableStats SQL to `batch_query`. No-op (leaving the
 	//! existing stale stats, and the scan fallback) if the table is not fully delete-free post-rewrite or the
@@ -170,8 +174,9 @@ public:
 	//! inlined data cannot be accounted for exactly (e.g. a non-scalar column), in which case the caller must not
 	//! claim the recomputed stats are exact.
 	bool TryMergeInlinedStats(const vector<DuckLakeColumnSchemaEntry> &columns,
-	                          const vector<string> &inlined_table_names, DuckLakeSnapshot snapshot,
-	                          DuckLakeTableStats &target, const DuckLakeCommitContext &context);
+	                          const vector<DuckLakeInlinedTableInfo> &inlined_tables,
+	                          idx_t current_table_schema_version, DuckLakeSnapshot snapshot, DuckLakeTableStats &target,
+	                          const DuckLakeCommitContext &context);
 	vector<DuckLakeDeleteFileInfo>
 	GetNewDeleteFiles(const DuckLakeCommitState &commit_state,
 	                  vector<DuckLakeOverwrittenDeleteFile> &overwritten_delete_files) const;

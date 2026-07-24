@@ -86,8 +86,10 @@ private:
 	string BuildInlinedDataInserts(const vector<DuckLakeInlinedDataInfo> &new_data);
 	//! Resolve and cache the latest inlined-data table name.
 	const string &ResolveInlinedTableName(TableIndex table_id);
-	//! All inlined-data table names registered for a table id (any schema version).
-	vector<string> LookupInlinedTableNames(TableIndex table_id);
+	//! All inlined-data tables registered for a table id (any schema version).
+	vector<DuckLakeInlinedTableInfo> LookupInlinedTables(TableIndex table_id);
+	//! Resolve the lazily-created inlined file deletion table if it exists.
+	string ExistingInlinedDeletionTableName(TableIndex table_id);
 	//! Replace {METADATA_CATALOG}, {SNAPSHOT_ID}, etc. in SQL.
 	string SubstitutePlaceholders(string sql, const DuckLakeSnapshot &snapshot) const;
 	//! Execute a query on the fresh connection; throw on error.

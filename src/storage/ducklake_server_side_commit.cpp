@@ -39,6 +39,13 @@ struct TableFileIdKey {
 	}
 };
 
+static idx_t SubtractServerSideCount(idx_t value, idx_t decrement) {
+	if (decrement > value) {
+		throw InternalException("DuckLake delete counts exceed data file row count");
+	}
+	return value - decrement;
+}
+
 struct EntryShell {
 	idx_t entry_id;
 	optional_idx parent_entry_id;
@@ -212,6 +219,9 @@ void DuckLakeServerSideCommit::ReadStagedDroppedFileEntries() {
 		return;
 	}
 	vector<idx_t> dropped_file_ids;
+	map<idx_t, idx_t> live_rows_by_file_id;
+	map<idx_t, TableIndex> table_by_file_id;
+	map<TableIndex, vector<idx_t>> files_by_table;
 	auto dropped_files = ScanStagedTable(DuckLakeStagedTableType::DROPPED_FILE);
 	for (auto &row : *dropped_files) {
 		auto file_id = AsIdx(row, 1);
@@ -219,15 +229,72 @@ void DuckLakeServerSideCommit::ReadStagedDroppedFileEntries() {
 		dropped_file_ids.push_back(file_id);
 	}
 	if (!dropped_file_ids.empty()) {
-		auto dropped_stats = RunQuery(
-		    StringUtil::Format(
-		        "SELECT table_id, record_count, file_size_bytes FROM %s.ducklake_data_file WHERE data_file_id IN (%s)",
-		        schema_id, JoinIds(dropped_file_ids)),
-		    "read dropped file stats");
+		auto dropped_stats = RunQuery(StringUtil::Format("SELECT table_id, data_file_id, record_count, file_size_bytes "
+		                                                 "FROM %s.ducklake_data_file WHERE data_file_id IN (%s)",
+		                                                 schema_id, JoinIds(dropped_file_ids)),
+		                              "read dropped file stats");
 		for (auto &row : *dropped_stats) {
+			auto file_id = AsIdx(row, 1);
+			auto table_id = TableIndex(AsIdx(row, 0));
+			auto live_row_count = AsIdx(row, 2);
+			live_rows_by_file_id.emplace(file_id, live_row_count);
+			table_by_file_id.emplace(file_id, table_id);
+			files_by_table[table_id].push_back(file_id);
+
 			auto &stats = staged_dropped_file_stats[TableIndex(AsIdx(row, 0))];
-			stats.row_count += AsIdx(row, 1);
-			stats.file_size_bytes += AsIdx(row, 2);
+			stats.data_file_ids.insert(DataFileIndex(file_id));
+			stats.row_count += AsIdx(row, 2);
+			stats.file_size_bytes += AsIdx(row, 3);
+		}
+
+		auto active_delete_stats =
+		    RunQuery(SubstitutePlaceholders(StringUtil::Format(R"(
+SELECT data_file_id, SUM(delete_count)
+FROM %s.ducklake_delete_file
+WHERE data_file_id IN (%s)
+  AND {SNAPSHOT_ID} >= begin_snapshot
+  AND ({SNAPSHOT_ID} < end_snapshot OR end_snapshot IS NULL)
+GROUP BY data_file_id)",
+		                                                       schema_id, JoinIds(dropped_file_ids)),
+		                                    transaction_snapshot),
+		             "read dropped file delete counts");
+		for (auto &row : *active_delete_stats) {
+			auto file_id = AsIdx(row, 0);
+			auto entry = live_rows_by_file_id.find(file_id);
+			if (entry != live_rows_by_file_id.end()) {
+				entry->second = SubtractServerSideCount(entry->second, AsIdx(row, 1));
+			}
+		}
+
+		for (auto &entry : files_by_table) {
+			auto inlined_deletion_table = ExistingInlinedDeletionTableName(entry.first);
+			if (inlined_deletion_table.empty()) {
+				continue;
+			}
+			auto inlined_delete_stats = RunQuery(
+			    SubstitutePlaceholders(StringUtil::Format(R"(
+SELECT file_id, COUNT(*)
+FROM %s.%s
+WHERE file_id IN (%s)
+  AND begin_snapshot <= {SNAPSHOT_ID}
+GROUP BY file_id)",
+			                                              schema_id, inlined_deletion_table, JoinIds(entry.second)),
+			                           transaction_snapshot),
+			    "read dropped file inlined delete counts");
+			for (auto &row : *inlined_delete_stats) {
+				auto file_id = AsIdx(row, 0);
+				auto live_entry = live_rows_by_file_id.find(file_id);
+				if (live_entry != live_rows_by_file_id.end()) {
+					live_entry->second = SubtractServerSideCount(live_entry->second, AsIdx(row, 1));
+				}
+			}
+		}
+
+		for (auto &entry : live_rows_by_file_id) {
+			auto table_entry = table_by_file_id.find(entry.first);
+			if (table_entry != table_by_file_id.end()) {
+				staged_dropped_file_stats[table_entry->second].live_row_count += entry.second;
+			}
 		}
 	}
 	staged_dropped_files_read = true;
@@ -665,14 +732,28 @@ unique_ptr<DuckLakeStats> DuckLakeServerSideCommit::BuildStatsMap(vector<DuckLak
 	return result;
 }
 
-vector<string> DuckLakeServerSideCommit::LookupInlinedTableNames(TableIndex table_id) {
-	vector<string> names;
-	auto sql = SubstitutePlaceholders(DuckLakeMetadataManager::GetInlinedTableNamesSql(table_id), transaction_snapshot);
-	auto result = RunQuery(sql, "lookup inlined table names");
+vector<DuckLakeInlinedTableInfo> DuckLakeServerSideCommit::LookupInlinedTables(TableIndex table_id) {
+	vector<DuckLakeInlinedTableInfo> tables;
+	auto sql = SubstitutePlaceholders(DuckLakeMetadataManager::GetInlinedTableInfosSql(table_id), transaction_snapshot);
+	auto result = RunQuery(sql, "lookup inlined tables");
 	for (auto &row : *result) {
-		names.push_back(row.GetValue<string>(0));
+		DuckLakeInlinedTableInfo table;
+		table.table_name = row.GetValue<string>(0);
+		table.schema_version = row.GetValue<idx_t>(1);
+		tables.push_back(std::move(table));
 	}
-	return names;
+	return tables;
+}
+
+string DuckLakeServerSideCommit::ExistingInlinedDeletionTableName(TableIndex table_id) {
+	auto table_name = DuckLakeMetadataManager::InlinedFileDeletionTableName(table_id);
+	auto probe_sql = SubstitutePlaceholders(
+	    StringUtil::Format("SELECT 1 FROM duckdb_tables() WHERE database_name = current_database() AND "
+	                       "schema_name = {METADATA_SCHEMA_NAME_LITERAL} AND table_name = %s",
+	                       DuckLakeUtil::SQLLiteralToString(table_name)),
+	    transaction_snapshot);
+	auto probe = fresh_conn.Query(probe_sql);
+	return !probe || probe->HasError() || probe->RowCount() == 0 ? string() : table_name;
 }
 
 const string &DuckLakeServerSideCommit::ResolveInlinedTableName(TableIndex table_id) {
@@ -788,23 +869,11 @@ DuckLakeCommitContext DuckLakeServerSideCommit::BuildContext(idx_t &committed_sn
 		}
 		return schema;
 	};
-	ctx.get_inlined_table_names = [this](TableIndex table_id) {
-		return LookupInlinedTableNames(table_id);
+	ctx.get_inlined_tables = [this](TableIndex table_id) {
+		return LookupInlinedTables(table_id);
 	};
 	ctx.get_net_data_file_row_count = [this](TableIndex table_id) -> idx_t {
-		// The inlined-file-deletion table is deterministically named but created lazily.
-		// Probe its existence via the catalog (an erroring probe would abort the transaction);
-		// if absent, the SQL omits the inlined-deletion subterm.
-		auto inlined_deletion_table = DuckLakeMetadataManager::InlinedFileDeletionTableName(table_id);
-		auto probe_sql = SubstitutePlaceholders(
-		    StringUtil::Format("SELECT 1 FROM duckdb_tables() WHERE database_name = current_database() AND "
-		                       "schema_name = {METADATA_SCHEMA_NAME_LITERAL} AND table_name = %s",
-		                       DuckLakeUtil::SQLLiteralToString(inlined_deletion_table)),
-		    transaction_snapshot);
-		auto probe = fresh_conn.Query(probe_sql);
-		if (!probe || probe->HasError() || probe->RowCount() == 0) {
-			inlined_deletion_table.clear();
-		}
+		auto inlined_deletion_table = ExistingInlinedDeletionTableName(table_id);
 		auto sql = SubstitutePlaceholders(
 		    DuckLakeMetadataManager::GetNetDataFileRowCountSql(table_id, inlined_deletion_table), transaction_snapshot);
 		auto result = RunQuery(sql, "read net data file row count");
@@ -815,9 +884,9 @@ DuckLakeCommitContext DuckLakeServerSideCommit::BuildContext(idx_t &committed_sn
 	};
 	ctx.get_net_inlined_row_count = [this](TableIndex table_id) -> idx_t {
 		idx_t total = 0;
-		for (auto &name : LookupInlinedTableNames(table_id)) {
-			auto sql =
-			    SubstitutePlaceholders(DuckLakeMetadataManager::GetNetInlinedRowCountSql(name), transaction_snapshot);
+		for (auto &table : LookupInlinedTables(table_id)) {
+			auto sql = SubstitutePlaceholders(DuckLakeMetadataManager::GetNetInlinedRowCountSql(table.table_name),
+			                                  transaction_snapshot);
 			auto result = RunQuery(sql, "read net inlined row count");
 			for (auto &row : *result) {
 				total += row.GetValue<idx_t>(0);

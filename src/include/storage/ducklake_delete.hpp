@@ -201,7 +201,8 @@ private:
 	                              DuckLakeDeleteFile &delete_file) const;
 	//! Try to drop a file if all rows are deleted. Returns true if the file was dropped.
 	bool TryDropFullyDeletedFile(DuckLakeTransaction &transaction, const DuckLakeDeleteFile &delete_file,
-	                             const DuckLakeFileListExtendedEntry &data_file_info, idx_t delete_count) const;
+	                             const DuckLakeFileListExtendedEntry &data_file_info, idx_t delete_count,
+	                             idx_t live_delete_count) const;
 };
 
 } // namespace duckdb
