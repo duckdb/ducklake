@@ -1,0 +1,68 @@
+# name: test/sql/view/ducklake_view_replace_noop.test
+# description: Verify replacing a view with an identical definition does not create a snapshot
+# group: [view]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/ducklake_view_replace_noop')
+
+statement ok
+CREATE VIEW ducklake.v AS SELECT 42
+
+query I
+FROM ducklake_current_snapshot('ducklake')
+----
+1
+
+# An identical replacement is a no-op.
+statement ok
+CREATE OR REPLACE VIEW ducklake.v AS SELECT 42
+
+query I
+FROM ducklake_current_snapshot('ducklake')
+----
+1
+
+# Changing the aliases replaces the view.
+statement ok
+CREATE OR REPLACE VIEW ducklake.v(answer) AS SELECT 42
+
+query I
+FROM ducklake_current_snapshot('ducklake')
+----
+2
+
+query I
+SELECT answer FROM ducklake.v
+----
+42
+
+# Repeating the aliased definition is also a no-op.
+statement ok
+CREATE OR REPLACE VIEW ducklake.v(answer) AS SELECT 42
+
+query I
+FROM ducklake_current_snapshot('ducklake')
+----
+2
+
+# Changing the query replaces the view.
+statement ok
+CREATE OR REPLACE VIEW ducklake.v(answer) AS SELECT 84
+
+query I
+FROM ducklake_current_snapshot('ducklake')
+----
+3
+
+query I
+SELECT answer FROM ducklake.v
+----
+84
