@@ -960,7 +960,8 @@ void DuckLakeTransactionState::RecomputeGlobalStatsAfterRewrite(string &batch_qu
 
 static idx_t SubtractDroppedFileStat(idx_t value, idx_t decrement) {
 	if (decrement > value) {
-		throw InternalException("Dropped DuckLake file stats exceed current table stats");
+		throw TransactionException("Transaction conflict - attempting to drop file stats"
+		                           " - but another transaction has already dropped this data");
 	}
 	return value - decrement;
 }
