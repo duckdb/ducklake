@@ -2273,7 +2273,9 @@ vector<DuckLakeCompactionFileEntry> DuckLakeMetadataManager::GetFilesForCompacti
 	    "data.data_file_id, data.record_count, data.row_id_start, data.begin_snapshot, "
 	    "data.end_snapshot, data.mapping_id, sr.schema_version , data.partial_max, "
 	    "data.partition_id, "
-	    "COALESCE(partition_spec.end_snapshot - 1, data.begin_snapshot) AS partition_snapshot_id, "
+	    "CASE WHEN partition_spec.partition_id IS NOT NULL AND "
+	    "(partition_spec.end_snapshot IS NULL OR partition_spec.begin_snapshot < partition_spec.end_snapshot) "
+	    "THEN COALESCE(partition_spec.end_snapshot - 1, data.begin_snapshot) END AS partition_snapshot_id, "
 	    "partition_sr.schema_version AS partition_schema_version, partition_info.keys, " +
 	    GetFileSelectList("data");
 	string delete_select_list = "del.data_file_id AS del_data_file_id,"
@@ -2320,7 +2322,9 @@ LEFT JOIN snapshot_ranges sr
 LEFT JOIN {METADATA_CATALOG}.ducklake_partition_info partition_spec
   ON data.partition_id = partition_spec.partition_id AND data.table_id = partition_spec.table_id
 LEFT JOIN snapshot_ranges partition_sr
-  ON COALESCE(partition_spec.end_snapshot - 1, data.begin_snapshot) >= partition_sr.begin_snapshot
+  ON partition_spec.partition_id IS NOT NULL
+ AND (partition_spec.end_snapshot IS NULL OR partition_spec.begin_snapshot < partition_spec.end_snapshot)
+ AND COALESCE(partition_spec.end_snapshot - 1, data.begin_snapshot) >= partition_sr.begin_snapshot
  AND COALESCE(partition_spec.end_snapshot - 1, data.begin_snapshot) < partition_sr.end_snapshot
 LEFT JOIN (
 	SELECT *
@@ -4441,44 +4445,58 @@ string DuckLakeMetadataManager::WriteNewPartitionKeys(const vector<DuckLakeParti
 	string new_partition_values;
 	string insert_partition_cols;
 
-	auto new_partition_map = GetNewPartitions(existing_partitions, new_partitions);
-	if (new_partition_map.empty()) {
-		return {};
+	auto append_partition = [&](const DuckLakePartitionInfo &partition, const string &end_snapshot) {
+		if (!partition.id.IsValid()) {
+			return;
+		}
+		auto partition_id = partition.id.GetIndex();
+		if (!new_partition_values.empty()) {
+			new_partition_values += ", ";
+		}
+		new_partition_values +=
+		    StringUtil::Format("(%d, %d, {SNAPSHOT_ID}, %s)", partition_id, partition.table_id.index, end_snapshot);
+		for (auto &field : partition.fields) {
+			if (!insert_partition_cols.empty()) {
+				insert_partition_cols += ", ";
+			}
+			insert_partition_cols +=
+			    StringUtil::Format("(%d, %d, %d, %d, %s)", partition_id, partition.table_id.index,
+			                       field.partition_key_index, field.field_id.index, SQLString(field.transform));
+		}
+	};
+
+	unordered_map<idx_t, idx_t> last_partition_index;
+	for (idx_t i = 0; i < new_partitions.size(); i++) {
+		last_partition_index[new_partitions[i].table_id.index] = i;
 	}
+	for (idx_t i = 0; i < new_partitions.size(); i++) {
+		auto &partition = new_partitions[i];
+		if (i != last_partition_index[partition.table_id.index] && !partition.fields.empty()) {
+			// Files written before another partition change in the same transaction can still reference this spec.
+			append_partition(partition, "{SNAPSHOT_ID}");
+		}
+	}
+
+	auto new_partition_map = GetNewPartitions(existing_partitions, new_partitions);
 	for (auto &new_partition : new_partition_map) {
 		// set old partition data as no longer valid
 		if (!old_partition_table_ids.empty()) {
 			old_partition_table_ids += ", ";
 		}
 		old_partition_table_ids += to_string(new_partition.second.table_id.index);
-		if (!new_partition.second.id.IsValid()) {
-			// dropping partition data - we don't need to do anything
-			return {};
-		}
-		auto partition_id = new_partition.second.id.GetIndex();
-		if (!new_partition_values.empty()) {
-			new_partition_values += ", ";
-		}
-		new_partition_values +=
-		    StringUtil::Format(R"((%d, %d, {SNAPSHOT_ID}, NULL))", partition_id, new_partition.second.table_id.index);
-		for (auto &field : new_partition.second.fields) {
-			if (!insert_partition_cols.empty()) {
-				insert_partition_cols += ", ";
-			}
-			insert_partition_cols +=
-			    StringUtil::Format("(%d, %d, %d, %d, %s)", partition_id, new_partition.second.table_id.index,
-			                       field.partition_key_index, field.field_id.index, SQLString(field.transform));
-		}
+		append_partition(new_partition.second, "NULL");
 	}
 
-	// update old partition information for any tables that have been altered
-	auto update_partition_query = StringUtil::Format(R"(
+	string batch_query;
+	if (!old_partition_table_ids.empty()) {
+		// update old partition information for any tables that have been altered
+		batch_query = StringUtil::Format(R"(
 UPDATE {METADATA_CATALOG}.ducklake_partition_info
 SET end_snapshot = {SNAPSHOT_ID}
 WHERE table_id IN (%s) AND end_snapshot IS NULL
 ;)",
-	                                                 old_partition_table_ids);
-	string batch_query = update_partition_query;
+		                                 old_partition_table_ids);
+	}
 
 	if (!new_partition_values.empty()) {
 		new_partition_values =

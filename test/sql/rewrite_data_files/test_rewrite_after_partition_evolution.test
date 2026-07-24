@@ -60,6 +60,9 @@ statement ok
 CREATE TABLE ducklake.same_cardinality(source VARCHAR, id VARCHAR, v INTEGER)
 
 statement ok
+BEGIN
+
+statement ok
 ALTER TABLE ducklake.same_cardinality SET PARTITIONED BY (source)
 
 statement ok
@@ -70,6 +73,23 @@ INSERT INTO ducklake.same_cardinality VALUES
 
 statement ok
 ALTER TABLE ducklake.same_cardinality SET PARTITIONED BY (id)
+
+statement ok
+COMMIT
+
+statement ok
+SET VARIABLE known_partition_ids = (
+	SELECT LIST(partition_id)
+	FROM metadata.ducklake_partition_info
+)
+
+query I
+SELECT COUNT(*)
+FROM metadata.ducklake_data_file
+WHERE partition_id IS NOT NULL
+	AND NOT list_contains(getvariable('known_partition_ids'), partition_id)
+----
+0
 
 statement ok
 DELETE FROM ducklake.same_cardinality WHERE v = 1
