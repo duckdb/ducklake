@@ -1,0 +1,307 @@
+# name: test/sql/delete/delete_partition_metadata_identity.test
+# description: Metadata delete for single identity partition equality and IN predicates
+# group: [delete]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/delete_partition_metadata_identity', METADATA_CATALOG 'md', DATA_INLINING_ROW_LIMIT 0)
+
+# Single identity partition equality can drop matching files without writing delete files.
+statement ok
+CREATE TABLE ducklake.eq_t(id INTEGER, p VARCHAR, v INTEGER)
+
+statement ok
+ALTER TABLE ducklake.eq_t SET PARTITIONED BY (p)
+
+statement ok
+INSERT INTO ducklake.eq_t VALUES (1, 'drop', 10), (2, 'drop', 20), (3, 'keep', 30)
+
+statement ok
+SET VARIABLE eq_id = (SELECT table_id FROM md.ducklake_table WHERE table_name = 'eq_t')
+
+query II
+EXPLAIN DELETE FROM ducklake.eq_t WHERE p = 'drop'
+----
+physical_plan	<REGEX>:.*DUCKLAKE_METADATA_DELETE.*
+
+query I
+DELETE FROM ducklake.eq_t WHERE p = 'drop'
+----
+2
+
+query TI
+SELECT p, COUNT(*) FROM ducklake.eq_t GROUP BY p ORDER BY p
+----
+keep	1
+
+query I
+SELECT COUNT(*) FROM md.ducklake_delete_file WHERE table_id = getvariable('eq_id') AND end_snapshot IS NULL
+----
+0
+
+query I
+SELECT COUNT(*)
+FROM md.ducklake_data_file data
+JOIN md.ducklake_file_partition_value part USING (data_file_id, table_id)
+WHERE data.table_id = getvariable('eq_id') AND data.end_snapshot IS NULL AND part.partition_value = 'drop'
+----
+0
+
+# IN over one identity partition column can drop all matching partition files.
+statement ok
+CREATE TABLE ducklake.in_t(id INTEGER, p VARCHAR, v INTEGER)
+
+statement ok
+ALTER TABLE ducklake.in_t SET PARTITIONED BY (p)
+
+statement ok
+INSERT INTO ducklake.in_t VALUES (1, 'a', 10), (2, 'b', 20), (3, 'c', 30), (4, 'd', 40)
+
+statement ok
+SET VARIABLE in_id = (SELECT table_id FROM md.ducklake_table WHERE table_name = 'in_t')
+
+query II
+EXPLAIN DELETE FROM ducklake.in_t WHERE p IN ('a', 'c')
+----
+physical_plan	<REGEX>:.*DUCKLAKE_METADATA_DELETE.*
+
+query I
+DELETE FROM ducklake.in_t WHERE p IN ('a', 'c')
+----
+2
+
+query TI
+SELECT p, COUNT(*) FROM ducklake.in_t GROUP BY p ORDER BY p
+----
+b	1
+d	1
+
+query I
+SELECT COUNT(*) FROM md.ducklake_delete_file WHERE table_id = getvariable('in_id') AND end_snapshot IS NULL
+----
+0
+
+query I
+SELECT COUNT(*)
+FROM md.ducklake_data_file data
+JOIN md.ducklake_file_partition_value part USING (data_file_id, table_id)
+WHERE data.table_id = getvariable('in_id') AND data.end_snapshot IS NULL AND part.partition_value IN ('a', 'c')
+----
+0
+
+# Same-key OR is equivalent to an IN proof for one identity partition key.
+statement ok
+CREATE TABLE ducklake.or_t(id INTEGER, p VARCHAR, v INTEGER)
+
+statement ok
+ALTER TABLE ducklake.or_t SET PARTITIONED BY (p)
+
+statement ok
+INSERT INTO ducklake.or_t VALUES (1, 'a', 10), (2, 'b', 20), (3, 'c', 30), (4, 'd', 40)
+
+query II
+EXPLAIN DELETE FROM ducklake.or_t WHERE p = 'a' OR p = 'c'
+----
+physical_plan	<REGEX>:.*DUCKLAKE_METADATA_DELETE.*
+
+query I
+DELETE FROM ducklake.or_t WHERE p = 'a' OR p = 'c'
+----
+2
+
+query TI
+SELECT p, COUNT(*) FROM ducklake.or_t GROUP BY p ORDER BY p
+----
+b	1
+d	1
+
+# column = column is not a partition-value proof. It must fall back to row-level delete.
+statement ok
+CREATE TABLE ducklake.col_eq_t(a INTEGER, b INTEGER, v INTEGER)
+
+statement ok
+ALTER TABLE ducklake.col_eq_t SET PARTITIONED BY (a, b)
+
+statement ok
+INSERT INTO ducklake.col_eq_t VALUES (1, 1, 10), (1, 2, 20), (2, 2, 30), (2, 3, 40), (3, 3, 50)
+
+query I
+DELETE FROM ducklake.col_eq_t WHERE a = b
+----
+3
+
+query III
+SELECT COUNT(*), MIN(v), MAX(v) FROM ducklake.col_eq_t
+----
+2	20	40
+
+# A predicate on one identity key in a multi-key partition spec is still a single-key proof.
+statement ok
+CREATE TABLE ducklake.multi_key_single_predicate_t(a INTEGER, b INTEGER, v INTEGER)
+
+statement ok
+ALTER TABLE ducklake.multi_key_single_predicate_t SET PARTITIONED BY (a, b)
+
+statement ok
+INSERT INTO ducklake.multi_key_single_predicate_t VALUES (1, 1, 10), (1, 2, 20), (2, 1, 30), (2, 2, 40)
+
+query II
+EXPLAIN DELETE FROM ducklake.multi_key_single_predicate_t WHERE a = 1
+----
+physical_plan	<REGEX>:.*DUCKLAKE_METADATA_DELETE.*
+
+query I
+DELETE FROM ducklake.multi_key_single_predicate_t WHERE a = 1
+----
+2
+
+query III
+SELECT COUNT(*), MIN(v), MAX(v) FROM ducklake.multi_key_single_predicate_t
+----
+2	30	40
+
+# Cross-key predicate algebra is a later slice. It must fall back to row-level delete.
+statement ok
+CREATE TABLE ducklake.multi_key_and_t(a INTEGER, b INTEGER, v INTEGER)
+
+statement ok
+ALTER TABLE ducklake.multi_key_and_t SET PARTITIONED BY (a, b)
+
+statement ok
+INSERT INTO ducklake.multi_key_and_t VALUES (1, 1, 10), (1, 2, 20), (2, 1, 30), (2, 2, 40)
+
+query II
+EXPLAIN DELETE FROM ducklake.multi_key_and_t WHERE a = 1 AND b = 1
+----
+physical_plan	<REGEX>:.*DUCKLAKE_DELETE.*
+
+query I
+DELETE FROM ducklake.multi_key_and_t WHERE a = 1 AND b = 1
+----
+1
+
+query III
+SELECT COUNT(*), MIN(v), MAX(v) FROM ducklake.multi_key_and_t
+----
+3	20	40
+
+# Cross-key OR is also outside this slice. It must fall back instead of dropping the union of files.
+statement ok
+CREATE TABLE ducklake.multi_key_or_t(a INTEGER, b INTEGER, v INTEGER)
+
+statement ok
+ALTER TABLE ducklake.multi_key_or_t SET PARTITIONED BY (a, b)
+
+statement ok
+INSERT INTO ducklake.multi_key_or_t VALUES (1, 1, 10), (1, 2, 20), (2, 1, 30), (2, 2, 40)
+
+query II
+EXPLAIN DELETE FROM ducklake.multi_key_or_t WHERE a = 1 OR b = 1
+----
+physical_plan	<REGEX>:.*DUCKLAKE_DELETE.*
+
+query I
+DELETE FROM ducklake.multi_key_or_t WHERE a = 1 OR b = 1
+----
+3
+
+query III
+SELECT COUNT(*), MIN(v), MAX(v) FROM ducklake.multi_key_or_t
+----
+1	40	40
+
+# A non-partition residual is not a partition-value proof, even when one conjunct targets the partition key.
+statement ok
+CREATE TABLE ducklake.residual_t(id INTEGER, p VARCHAR, v INTEGER)
+
+statement ok
+ALTER TABLE ducklake.residual_t SET PARTITIONED BY (p)
+
+statement ok
+INSERT INTO ducklake.residual_t VALUES (1, 'x', 5), (2, 'x', 20), (3, 'y', 30)
+
+statement ok
+SET VARIABLE residual_id = (SELECT table_id FROM md.ducklake_table WHERE table_name = 'residual_t')
+
+query I
+DELETE FROM ducklake.residual_t WHERE p = 'x' AND v > 10
+----
+1
+
+query III
+SELECT COUNT(*), MIN(id), MAX(id) FROM ducklake.residual_t
+----
+2	1	3
+
+query I
+SELECT COUNT(*) FROM md.ducklake_delete_file WHERE table_id = getvariable('residual_id') AND end_snapshot IS NULL
+----
+1
+
+# Repartitioning can reuse partition_key_index. Current-spec partition_id must match before values are trusted.
+statement ok
+CREATE TABLE ducklake.repartition_t(a VARCHAR, b VARCHAR, v INTEGER)
+
+statement ok
+ALTER TABLE ducklake.repartition_t SET PARTITIONED BY (a)
+
+statement ok
+INSERT INTO ducklake.repartition_t VALUES ('x', 'aaa', 1), ('x', 'zzz', 2)
+
+statement ok
+ALTER TABLE ducklake.repartition_t SET PARTITIONED BY (b)
+
+statement ok
+INSERT INTO ducklake.repartition_t VALUES ('q', 'x', 3)
+
+query II
+EXPLAIN DELETE FROM ducklake.repartition_t WHERE b = 'x'
+----
+physical_plan	<REGEX>:.*DUCKLAKE_DELETE.*
+
+query I
+DELETE FROM ducklake.repartition_t WHERE b = 'x'
+----
+1
+
+query III
+SELECT COUNT(*), MIN(v), MAX(v) FROM ducklake.repartition_t
+----
+2	1	2
+
+# Existing row-level deletes make raw file row counts larger than visible rows, so metadata delete must fall back.
+statement ok
+CREATE TABLE ducklake.existing_delete_t(id INTEGER, p VARCHAR, v INTEGER)
+
+statement ok
+ALTER TABLE ducklake.existing_delete_t SET PARTITIONED BY (p)
+
+statement ok
+INSERT INTO ducklake.existing_delete_t VALUES (1, 'x', 10), (2, 'x', 20), (3, 'y', 30)
+
+query I
+DELETE FROM ducklake.existing_delete_t WHERE p = 'x' AND v = 10
+----
+1
+
+query II
+EXPLAIN DELETE FROM ducklake.existing_delete_t WHERE p = 'x'
+----
+physical_plan	<REGEX>:.*DUCKLAKE_DELETE.*
+
+query I
+DELETE FROM ducklake.existing_delete_t WHERE p = 'x'
+----
+1
+
+query III
+SELECT COUNT(*), MIN(id), MAX(id) FROM ducklake.existing_delete_t
+----
+1	3	3
