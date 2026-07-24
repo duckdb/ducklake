@@ -8,7 +8,6 @@ require parquet
 
 require postgres_scanner
 
-#FIXME: ADD THIS TO PG CI WHEN IT GETS BACK
 require-env DUCKLAKE_CI
 
 test-env DATA_PATH {TEST_DIR}
