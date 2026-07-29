@@ -91,8 +91,8 @@ SELECT min_value, max_value FROM __ducklake_metadata_ducklake.ducklake_table_col
 ----
 1000	1199
 
-# Re-insert after the drop in the same connection: the stats cache was invalidated, so the insert
-# starts from the decremented base (record_count 0), not the stale pre-delete value.
+# Re-insert after the drop in the same connection: the new snapshot has its own stats cache entry,
+# so the insert starts from the decremented base (record_count 0), not the stale pre-delete value.
 statement ok
 INSERT INTO ducklake.t SELECT range::INT id FROM range(100, 110)
 

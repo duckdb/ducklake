@@ -108,6 +108,7 @@ private:
 	DuckLakeNameMapSet new_name_maps;
 	unique_ptr<DuckLakeTransactionState> state;
 	DuckLakeSnapshot transaction_snapshot;
+	DuckLakeSnapshot attempt_snapshot;
 	TransactionChangeInformation transaction_changes;
 	map<ColumnKey, LogicalType> column_types;
 	map<TableIndex, shared_ptr<DuckLakeTableStats>> existing_table_stats;

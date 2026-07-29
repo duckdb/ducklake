@@ -749,12 +749,13 @@ bool DuckLakeTransactionState::TryMergeInlinedStats(const vector<DuckLakeColumnS
 		string select_list = "COUNT(*)";
 		for (auto &col : columns) {
 			auto col_ident = DuckLakeUtil::SQLIdentifierToString(col.column_name);
+			auto logical_col = context.project_inlined_column(col_ident, col.column_type);
 			bool is_float =
 			    col.column_type.id() == LogicalTypeId::FLOAT || col.column_type.id() == LogicalTypeId::DOUBLE;
 			string nan_expr =
-			    is_float ? StringUtil::Format("COALESCE(BOOL_OR(isnan(%s)), false)", col_ident) : string("false");
-			select_list += StringUtil::Format(", MIN(%s)::VARCHAR, MAX(%s)::VARCHAR, COUNT(%s), %s", col_ident,
-			                                  col_ident, col_ident, nan_expr);
+			    is_float ? StringUtil::Format("COALESCE(BOOL_OR(isnan(%s)), false)", logical_col) : string("false");
+			select_list += StringUtil::Format(", CAST(MIN(%s) AS VARCHAR), CAST(MAX(%s) AS VARCHAR), COUNT(%s), %s",
+			                                  logical_col, logical_col, logical_col, nan_expr);
 		}
 		auto sql = DuckLakeMetadataManager::ReadInlinedDataAggregatesSql(
 		    DuckLakeUtil::SQLIdentifierToString(inlined_table.table_name), select_list);
@@ -1896,12 +1897,13 @@ void DuckLakeTransactionState::Commit(DuckLakeSnapshot transaction_snapshot,
 			} else {
 				commit_stats_snapshot.snapshot = context.get_snapshot();
 			}
+			can_retry = true;
+			context.set_attempt_snapshot(commit_snapshot);
 			commit_snapshot.snapshot_id++;
 			if (SchemaChangesMade()) {
 				// we changed the schema - need to get a new schema version
 				commit_snapshot.schema_version++;
 			}
-			can_retry = true;
 			DuckLakeCommitState commit_state(commit_snapshot);
 			// write the new snapshot
 			string batch_queries = DuckLakeMetadataManager::InsertSnapshotSql();
@@ -1914,9 +1916,6 @@ void DuckLakeTransactionState::Commit(DuckLakeSnapshot transaction_snapshot,
 			bool flushed_inlined = !flushed_inlined_tables.empty();
 			context.flush_cache_if_pending();
 			context.commit_connection();
-			for (auto &entry : dropped_file_stats) {
-				context.invalidate_table_stats_cache(commit_snapshot.next_file_id, entry.first);
-			}
 			if (flushed_inlined && !context.skip_drop_empty_inlined) {
 				DropEmptySupersededInlinedTables(context);
 			}

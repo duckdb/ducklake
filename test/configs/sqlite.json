@@ -43,6 +43,7 @@
         "test/sql/compaction/compaction_delete_conflict.test",
         "test/sql/concurrent/concurrent_insert_conflict.test",
         "test/sql/concurrent/concurrent_insert_data_inlining.test",
+        "test/sql/delete/full_file_delete_stats_concurrent.test",
         "test/sql/rewrite_data_files/test_rewrite_concurrency.test",
         "test/sql/rewrite_data_files/test_rewrite_transaction_conflict.test",
         "test/sql/settings/max_retry_count.test",

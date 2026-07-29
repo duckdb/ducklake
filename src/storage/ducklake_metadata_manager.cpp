@@ -17,6 +17,8 @@
 #include "metadata_manager/sqlite_metadata_manager.hpp"
 #include "duckdb/main/attached_database.hpp"
 #include "duckdb/main/database.hpp"
+#include "duckdb/catalog/catalog.hpp"
+#include "duckdb/catalog/catalog_entry/table_catalog_entry.hpp"
 #include "duckdb/planner/expression.hpp"
 #include "duckdb/planner/expression/bound_constant_expression.hpp"
 #include "duckdb/execution/expression_executor.hpp"
@@ -612,6 +614,9 @@ SELECT
 idx_t DuckLakeMetadataManager::GetNetDataFileRowCount(TableIndex table_id, DuckLakeSnapshot snapshot) {
 	auto query = GetNetDataFileRowCountSql(table_id, GetInlinedDeletionTableName(table_id, snapshot));
 	auto result = Query(snapshot, query);
+	if (result->HasError()) {
+		result->GetErrorObject().Throw("Failed to get net data file row count from DuckLake: ");
+	}
 	for (auto &row : *result) {
 		return row.GetValue<idx_t>(0);
 	}
@@ -629,6 +634,9 @@ WHERE {SNAPSHOT_ID} >= begin_snapshot
 
 idx_t DuckLakeMetadataManager::GetNetInlinedRowCount(const string &inlined_table_name, DuckLakeSnapshot snapshot) {
 	auto result = Query(snapshot, GetNetInlinedRowCountSql(inlined_table_name));
+	if (result->HasError()) {
+		result->GetErrorObject().Throw("Failed to get net inlined row count from DuckLake: ");
+	}
 	for (auto &row : *result) {
 		return row.GetValue<idx_t>(0);
 	}
@@ -1080,9 +1088,11 @@ vector<DuckLakeGlobalStatsInfo> DuckLakeMetadataManager::ParseGlobalTableStats(Q
 }
 
 vector<DuckLakeGlobalStatsInfo> DuckLakeMetadataManager::GetGlobalTableStats(DuckLakeSnapshot snapshot,
-                                                                             TableIndex table_id) {
+                                                                             TableIndex table_id,
+                                                                             idx_t &latest_snapshot_id) {
 	string query = StringUtil::Format(R"(
-SELECT table_id, column_id, record_count, next_row_id, file_size_bytes, contains_null, contains_nan, min_value, max_value, extra_stats
+SELECT table_id, column_id, record_count, next_row_id, file_size_bytes, contains_null, contains_nan, min_value, max_value,
+       extra_stats, (SELECT MAX(snapshot_id) FROM {METADATA_CATALOG}.ducklake_snapshot) AS latest_snapshot_id
 FROM {METADATA_CATALOG}.ducklake_table_stats
 LEFT JOIN {METADATA_CATALOG}.ducklake_table_column_stats USING (table_id)
 WHERE table_id = %llu
@@ -1093,7 +1103,15 @@ ORDER BY table_id;
 	                                  table_id.index);
 
 	auto result = Query(snapshot, query);
-	return TransformGlobalStats(*result);
+	if (result->HasError()) {
+		result->GetErrorObject().Throw("Failed to get global stats information from DuckLake: ");
+	}
+	vector<DuckLakeGlobalStatsInfo> global_stats;
+	for (auto &row : *result) {
+		latest_snapshot_id = row.GetValue<idx_t>(10);
+		TransformGlobalStatsRow(row, global_stats);
+	}
+	return global_stats;
 }
 
 string DuckLakeMetadataManager::GetFileSelectList(const string &prefix) {
@@ -3129,6 +3147,14 @@ DuckLakeMetadataManager::ReadInlinedFileDeletionsForRange(TableIndex table_id, D
 	return result;
 }
 
+bool DuckLakeMetadataManager::InlinedDeletionTableExists(const string &table_name) {
+	auto &catalog = transaction.GetCatalog();
+	auto &context = *transaction.GetConnection().context;
+	return Catalog::GetEntry<TableCatalogEntry>(context, Identifier(catalog.MetadataDatabaseName()),
+	                                            Identifier(catalog.MetadataSchemaName()), Identifier(table_name),
+	                                            OnEntryNotFound::RETURN_NULL) != nullptr;
+}
+
 string DuckLakeMetadataManager::GetInlinedDeletionTableName(TableIndex table_id, DuckLakeSnapshot snapshot,
                                                             bool create_if_not_exists) {
 	// The table name is always deterministic
@@ -3143,7 +3169,14 @@ string DuckLakeMetadataManager::GetInlinedDeletionTableName(TableIndex table_id,
 	auto &catalog = transaction.GetCatalog();
 	auto cache_result = catalog.CheckInlinedDeletionTableCache(table_id, snapshot);
 	if (cache_result == InlinedDeletionCacheResult::EXISTS) {
-		return table_name; // known to exist (committed)
+		// A transaction older than the CREATE must still establish visibility in its own catalog snapshot.
+		if (InlinedDeletionTableExists(table_name)) {
+			delete_inlined_table_cache.insert(table_id.index);
+			return table_name;
+		}
+		if (!create_if_not_exists) {
+			return string();
+		}
 	}
 	if (cache_result == InlinedDeletionCacheResult::DOES_NOT_EXIST && !create_if_not_exists) {
 		return string(); // known to not exist
@@ -3163,13 +3196,8 @@ string DuckLakeMetadataManager::GetInlinedDeletionTableName(TableIndex table_id,
 		return table_name;
 	}
 
-	// Read path: table visibility implies it was committed, safe to cache at catalog level
-	auto query = StringUtil::Format("SELECT NULL FROM {METADATA_CATALOG}.%s LIMIT 1", table_name);
-	auto result = Query(snapshot, query);
-	// TODO: Using the error state to check for existence here is fragile.
-	// Even if the table exists, a transient error in the catalog query would lead us to assume it does not exist.
-	// Maybe persist the existence of the deletion inlining table on the table metadata instead?
-	if (!result->HasError()) {
+	// Read path: table visibility implies it was committed, safe to cache at catalog level.
+	if (InlinedDeletionTableExists(table_name)) {
 		delete_inlined_table_cache.insert(table_id.index);
 		catalog.CacheInlinedDeletionTableResult(table_id, snapshot, true);
 		return table_name;
@@ -5288,7 +5316,7 @@ WHERE NOT EXISTS (
 	auto &catalog = transaction.GetCatalog();
 	for (auto &snapshot : snapshots) {
 		for (auto &table_id : stats_table_ids) {
-			catalog.InvalidateTableStatsCache(snapshot.next_file_id, table_id);
+			catalog.InvalidateTableStatsCache(snapshot.id, table_id);
 		}
 	}
 }
