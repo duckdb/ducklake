@@ -74,8 +74,8 @@ private:
 
 	//! Query the metadata catalog for the latest snapshot.
 	DuckLakeSnapshot ReadLatestSnapshot();
-	//! Whether the metadata schema has the row_group_count columns (DuckLake >= 1.1).
-	bool ReadSupportsRowGroupCount();
+	//! Whether the metadata schema has the >= 1.1-dev1 additions.
+	bool ReadSupportsV1_1Metadata();
 	//! Build a DuckLakeTableStats from parsed global stats.
 	unique_ptr<DuckLakeTableStats> BuildTableStats(const DuckLakeGlobalStatsInfo &gs);
 	//! Build a full DuckLakeStats map from global stats.
@@ -124,8 +124,8 @@ private:
 	map<idx_t, string> inlined_table_name_cache;
 	//! Delete files attached to transaction-local data files.
 	map<idx_t, vector<DuckLakeDeleteFile>> attached_deletes;
-	//! Compaction-output files indexed by compaction_id.
-	map<idx_t, DuckLakeDataFile> compaction_output_files;
+	//! Compaction-output files indexed by compaction_id, then ordered by file_order.
+	map<idx_t, map<idx_t, DuckLakeDataFile>> compaction_output_files;
 };
 
 } // namespace duckdb

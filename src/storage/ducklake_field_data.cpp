@@ -191,7 +191,7 @@ LogicalType GetNewNestedType(const LogicalType &type, const vector<unique_ptr<Du
 	}
 }
 
-unique_ptr<DuckLakeFieldId> DuckLakeFieldId::AddField(const vector<string> &column_path,
+unique_ptr<DuckLakeFieldId> DuckLakeFieldId::AddField(const vector<Identifier> &column_path,
                                                       unique_ptr<DuckLakeFieldId> new_child, idx_t depth) const {
 	vector<unique_ptr<DuckLakeFieldId>> new_children;
 	if (depth >= column_path.size()) {
@@ -206,7 +206,7 @@ unique_ptr<DuckLakeFieldId> DuckLakeFieldId::AddField(const vector<string> &colu
 		bool found = false;
 		for (idx_t child_idx = 0; child_idx < children.size(); child_idx++) {
 			auto &child = *children[child_idx];
-			if (!found && StringUtil::CIEquals(child.Name(), column_path[depth])) {
+			if (!found && child.Name() == column_path[depth]) {
 				// found it!
 				auto new_field = child.AddField(column_path, std::move(new_child), depth + 1);
 				new_child.reset();
@@ -225,12 +225,12 @@ unique_ptr<DuckLakeFieldId> DuckLakeFieldId::AddField(const vector<string> &colu
 	return make_uniq<DuckLakeFieldId>(column_data.Copy(), Name(), std::move(new_type), std::move(new_children));
 }
 
-unique_ptr<DuckLakeFieldId> DuckLakeFieldId::RemoveField(const vector<string> &column_path, idx_t depth) const {
+unique_ptr<DuckLakeFieldId> DuckLakeFieldId::RemoveField(const vector<Identifier> &column_path, idx_t depth) const {
 	vector<unique_ptr<DuckLakeFieldId>> new_children;
 	bool found = false;
 	for (idx_t child_idx = 0; child_idx < children.size(); child_idx++) {
 		auto &child = *children[child_idx];
-		if (StringUtil::CIEquals(child.Name(), column_path[depth])) {
+		if (child.Name() == column_path[depth]) {
 			if (column_path.size() == 2 && (type.id() == LogicalTypeId::MAP || type.id() == LogicalTypeId::LIST)) {
 				throw CatalogException("Cannot drop field '%s' from column '%s' - it's not a struct", child.Name(),
 				                       name);
@@ -256,14 +256,14 @@ unique_ptr<DuckLakeFieldId> DuckLakeFieldId::RemoveField(const vector<string> &c
 	return make_uniq<DuckLakeFieldId>(column_data.Copy(), Name(), std::move(new_type), std::move(new_children));
 }
 
-unique_ptr<DuckLakeFieldId> DuckLakeFieldId::RenameField(const vector<string> &column_path, const string &new_name,
+unique_ptr<DuckLakeFieldId> DuckLakeFieldId::RenameField(const vector<Identifier> &column_path, const string &new_name,
                                                          idx_t depth) const {
 	vector<unique_ptr<DuckLakeFieldId>> new_children;
 	bool found = false;
 	idx_t child_idx;
 	for (child_idx = 0; child_idx < children.size(); child_idx++) {
 		auto &child = *children[child_idx];
-		if (StringUtil::CIEquals(child.Name(), column_path[depth])) {
+		if (child.Name() == column_path[depth]) {
 			// found it!
 			found = true;
 			if (depth + 1 >= column_path.size()) {
@@ -372,7 +372,8 @@ const DuckLakeFieldId &DuckLakeFieldId::GetChildByIndex(idx_t index) const {
 	return *children[index];
 }
 
-optional_ptr<const DuckLakeFieldId> DuckLakeFieldData::GetByNames(PhysicalIndex id, const vector<string> &column_names,
+optional_ptr<const DuckLakeFieldId> DuckLakeFieldData::GetByNames(PhysicalIndex id,
+                                                                  const vector<Identifier> &column_names,
                                                                   optional_ptr<optional_idx> name_offset) const {
 	const_reference<DuckLakeFieldId> result = GetByRootIndex(id);
 	for (idx_t i = 1; i <= column_names.size(); ++i) {
@@ -383,13 +384,13 @@ optional_ptr<const DuckLakeFieldId> DuckLakeFieldData::GetByNames(PhysicalIndex 
 			}
 			throw InvalidInputException(
 			    "Column path %s points to child of variant column %s - but no name_offset is provided",
-			    StringUtil::Join(column_names, "."), result.get().Name());
+			    StringUtil::Join(IdentifiersToStrings(column_names), "."), result.get().Name());
 		}
 		if (i >= column_names.size()) {
 			break;
 		}
 		auto &current = result.get();
-		auto next_child = current.GetChildByName(column_names[i]);
+		auto next_child = current.GetChildByName(column_names[i].GetIdentifierName());
 		if (!next_child) {
 			return nullptr;
 		}

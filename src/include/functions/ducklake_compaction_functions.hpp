@@ -9,6 +9,8 @@
 #pragma once
 
 #include "functions/ducklake_table_functions.hpp"
+#include "duckdb/execution/physical_plan_generator.hpp"
+#include "duckdb/planner/logical_operator.hpp"
 #include "storage/ducklake_transaction.hpp"
 #include "storage/ducklake_catalog.hpp"
 #include "storage/ducklake_schema_entry.hpp"
@@ -83,9 +85,9 @@ public:
 class DuckLakeCompactor {
 public:
 	DuckLakeCompactor(ClientContext &context, DuckLakeCatalog &catalog, DuckLakeTransaction &transaction,
-	                  Binder &binder, TableIndex table_id, DuckLakeMergeAdjacentOptions options);
+	                  Binder &binder, TableIndex table_id, uint64_t max_files, DuckLakeMergeAdjacentOptions options);
 	DuckLakeCompactor(ClientContext &context, DuckLakeCatalog &catalog, DuckLakeTransaction &transaction,
-	                  Binder &binder, TableIndex table_id, double delete_threshold);
+	                  Binder &binder, TableIndex table_id, uint64_t max_files, double delete_threshold);
 	void GenerateCompactions(DuckLakeTableEntry &table, vector<unique_ptr<LogicalOperator>> &compactions);
 	unique_ptr<LogicalOperator> GenerateCompactionCommand(vector<DuckLakeCompactionFileEntry> source_files,
 	                                                      bool bind_to_latest_schema = false);
@@ -97,11 +99,16 @@ public:
 	                                               vector<OrderByNode> &pre_bound_orders);
 
 private:
+	optional_ptr<DuckLakeTableEntry> ResolvePartitionSpecTable(DuckLakeTableEntry &table,
+	                                                           const DuckLakeCompactionFileEntry &source_file,
+	                                                           idx_t partition_id);
+
 	ClientContext &context;
 	DuckLakeCatalog &catalog;
 	DuckLakeTransaction &transaction;
 	Binder &binder;
 	TableIndex table_id;
+	uint64_t max_files;
 	double delete_threshold = 0.95;
 	DuckLakeMergeAdjacentOptions options;
 

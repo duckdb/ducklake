@@ -10,6 +10,7 @@
 
 #include "common/index.hpp"
 #include "duckdb/common/common.hpp"
+#include "duckdb/common/file_system.hpp"
 #include "duckdb/common/optional_idx.hpp"
 #include "duckdb/common/unordered_set.hpp"
 #include "duckdb/common/types/value.hpp"

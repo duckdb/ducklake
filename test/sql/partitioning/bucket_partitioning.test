@@ -675,7 +675,7 @@ statement ok
 ALTER TABLE bucket_add_source SET PARTITIONED BY (bucket(4, user_id));
 
 statement ok
-INSERT INTO bucket_add_source VALUES ('alice', 1), ('bob', 2), ('charlie', 3);
+INSERT INTO bucket_add_source VALUES ('alice', 1), ('bob', 2), ('charlie', 3), (NULL, 4);
 
 # Capture the glob pattern for the files that were written
 query I
@@ -707,6 +707,7 @@ SELECT user_id, value FROM bucket_add_target ORDER BY user_id
 alice	1
 bob	2
 charlie	3
+NULL	4
 
 # ----------------------------------------------------------------------------------------------------------------------
 # DETACH/ATTACH round-trip test

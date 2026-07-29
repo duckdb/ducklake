@@ -73,9 +73,22 @@ MappingIndex DuckLakeNameMapSet::TryGetCompatibleNameMap(const DuckLakeNameMap &
 
 void DuckLakeNameMapSet::Add(unique_ptr<DuckLakeNameMap> mapping) {
 	auto mapping_id = mapping->id;
-	auto &ref = *mapping;
-	name_maps.emplace(mapping_id, std::move(mapping));
+	auto shared_mapping = shared_ptr<DuckLakeNameMap>(std::move(mapping));
+	auto &ref = *shared_mapping;
+	name_maps.emplace(mapping_id, std::move(shared_mapping));
 	name_map_compatibility_set.insert(ref);
+}
+
+void DuckLakeNameMapSet::Remove(MappingIndex mapping_id) {
+	auto entry = name_maps.find(mapping_id);
+	if (entry == name_maps.end()) {
+		return;
+	}
+	auto compatibility_entry = name_map_compatibility_set.find(*entry->second);
+	if (compatibility_entry != name_map_compatibility_set.end() && compatibility_entry->get().id == mapping_id) {
+		name_map_compatibility_set.erase(compatibility_entry);
+	}
+	name_maps.erase(entry);
 }
 
 vector<unique_ptr<DuckLakeNameMapEntry>>

@@ -6,13 +6,13 @@ require ducklake
 
 require parquet
 
-test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
 
-test-env DATA_PATH __TEST_DIR__
+test-env DATA_PATH {TEST_DIR}
 
 # no explicit METADATA_CATALOG, we hide catalog by default
 statement ok
-ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS lake (DATA_PATH '${DATA_PATH}/hide_metadata_default_files')
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS lake (DATA_PATH '{DATA_PATH}/hide_metadata_default_files')
 
 statement ok
 CREATE TABLE lake.test(i INTEGER);
@@ -61,7 +61,7 @@ DETACH lake
 
 # explicit METADATA_CATALOG, the metadata catalog is visible
 statement ok
-ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS lake (DATA_PATH '${DATA_PATH}/hide_metadata_default_files', METADATA_CATALOG 'ducklake_meta')
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS lake (DATA_PATH '{DATA_PATH}/hide_metadata_default_files', METADATA_CATALOG 'ducklake_meta')
 
 query I
 SELECT count(*) FROM duckdb_databases() WHERE database_name = 'ducklake_meta';

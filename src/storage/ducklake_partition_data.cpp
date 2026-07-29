@@ -39,7 +39,16 @@ string DuckLakePartitionUtils::GetPartitionKeyName(DuckLakeTransformType transfo
 	if (used_names.find(prefix) == used_names.end()) {
 		return prefix;
 	}
-	return prefix + "_" + field_name;
+	string base_name = prefix + "_" + field_name;
+	if (used_names.find(base_name) == used_names.end()) {
+		return base_name;
+	}
+	string candidate = base_name;
+	int counter = 2;
+	while (used_names.find(candidate) != used_names.end()) {
+		candidate = base_name + "_" + to_string(counter++);
+	}
+	return candidate;
 }
 
 string DuckLakePartitionUtils::GetPartitionSQLExpression(const DuckLakeTransform &transform, const string &col_name) {
@@ -136,8 +145,8 @@ unique_ptr<Expression> DuckLakePartitionUtils::ApplyScalarFunction(ClientContext
 	children.push_back(std::move(column_expr));
 	ErrorData error;
 	FunctionBinder binder(context);
-	auto function =
-	    binder.BindScalarFunction(DEFAULT_SCHEMA, Identifier(function_name), std::move(children), error, false);
+	auto function = binder.BindScalarFunction(Identifier::DefaultSchema(), Identifier(function_name),
+	                                          std::move(children), error, false);
 	if (!function) {
 		error.Throw();
 	}
@@ -160,7 +169,7 @@ unique_ptr<Expression> DuckLakePartitionUtils::ApplyBucketTransform(ClientContex
 
 	ErrorData error;
 	FunctionBinder binder(context);
-	auto and_expr = binder.BindScalarFunction(DEFAULT_SCHEMA, "&", std::move(and_children), error, false);
+	auto and_expr = binder.BindScalarFunction(Identifier::DefaultSchema(), "&", std::move(and_children), error, false);
 	if (!and_expr) {
 		error.Throw();
 	}
@@ -169,7 +178,7 @@ unique_ptr<Expression> DuckLakePartitionUtils::ApplyBucketTransform(ClientContex
 	mod_children.push_back(std::move(and_expr));
 	mod_children.push_back(make_uniq<BoundConstantExpression>(Value::INTEGER(NumericCast<int32_t>(bucket_count))));
 
-	auto mod_expr = binder.BindScalarFunction(DEFAULT_SCHEMA, "%", std::move(mod_children), error, false);
+	auto mod_expr = binder.BindScalarFunction(Identifier::DefaultSchema(), "%", std::move(mod_children), error, false);
 	if (!mod_expr) {
 		error.Throw();
 	}

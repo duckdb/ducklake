@@ -193,7 +193,7 @@
       ]
     },
     {
-      "reason": "FIXME: flaky in CI — concurrent ALTER ADD COLUMN with reads sometimes aborts the writer's transaction or segfaults under DuckLake",
+      "reason": "FIXME: flaky in CI \u2014 concurrent ALTER ADD COLUMN with reads sometimes aborts the writer's transaction or segfaults under DuckLake",
       "paths": [
         "test/sql/parallelism/interquery/concurrent_reads_while_altering.test"
       ]
@@ -728,6 +728,138 @@
       "reason": "duckdb's CONNECT-over-quack test targets duckdb's older quack pin ",
       "paths": [
         "test/sql/connect/connect_quack.test"
+      ]
+    },
+    {
+      "reason": "Asserts DuckDB-native storage plans and statistics (row-group pruning, string statistics, sequential-scan operators) that do not apply to DuckLake's parquet storage.",
+      "paths": [
+        "test/optimizer/compressed_materialization_variant.test",
+        "test/optimizer/partition_stats_exactness.test",
+        "test/optimizer/pushdown/join_filter_pushdown_cast_variant.test",
+        "test/optimizer/pushdown/starts_with_pushdown.test",
+        "test/optimizer/statistics/statistics_contains.test",
+        "test/optimizer/statistics/statistics_string_length.test",
+        "test/optimizer/statistics/statistics_suffix.test",
+        "test/optimizer/string_prefix.test",
+        "test/sql/optimizer/empty_string_concat_pruning.test",
+        "test/sql/optimizer/instr_zonemap_pruning.test",
+        "test/sql/optimizer/late_materialization_table_filters.test",
+        "test/sql/optimizer/monotone_function_zonemap_pruning.test",
+        "test/sql/optimizer/monotone_preimage.test",
+        "test/sql/optimizer/not_conjunction_simplification.test",
+        "test/sql/optimizer/power_zonemap_pruning.test",
+        "test/sql/optimizer/test_rowid_pruning.test",
+        "test/sql/sample/test_system_rows.test"
+      ]
+    },
+    {
+      "reason": "Asserts DuckDB-native BASE_TABLE memory accounting via duckdb_memory().",
+      "paths": [
+        "test/sql/delete/bulk_delete_version_info_memory.test",
+        "test/sql/delete/delete_compression_blocked_by_old_snapshot.test"
+      ]
+    },
+    {
+      "reason": "Asserts native-storage write-write conflict behavior on full-vector deletes; DuckLake resolves these without conflict.",
+      "paths": [
+        "test/sql/delete/full_vector_delete_conflict.test",
+        "test/sql/delete/full_vector_delete_rollback.test"
+      ]
+    },
+    {
+      "reason": "DuckLake does not support nested schemas.",
+      "paths": [
+        "test/sql/catalog/nested_schema/create_nested_schema.test",
+        "test/sql/catalog/nested_schema/drop_nested_schema.test",
+        "test/sql/catalog/nested_schema/drop_nested_schema_persist.test",
+        "test/sql/catalog/nested_schema/nested_schema_storage_version.test",
+        "test/sql/catalog/nested_schema/nested_table.test",
+        "test/sql/catalog/nested_schema/nested_table_persist.test",
+        "test/sql/catalog/nested_schema/persist.test"
+      ]
+    },
+    {
+      "reason": "DuckLake reports a different error message for a missing schema.",
+      "paths": [
+        "test/sql/catalog/sequence/test_sequence_google_fuzz.test"
+      ]
+    },
+    {
+      "reason": "DuckLake table entries get a new object id on ALTER, the test asserts oid stability.",
+      "paths": [
+        "test/sql/catalog/test_alter_oid_stability.test"
+      ]
+    },
+    {
+      "reason": "Test assumes tables vanish on restart (in-memory catalog); DuckLake persists them.",
+      "paths": [
+        "test/sql/aggregate/aggregate_state_export/test_state_export_quantile.test",
+        "test/sql/aggregate/aggregate_state_export/test_state_export_string_agg.test"
+      ]
+    },
+    {
+      "reason": "DuckDB-native compression and storage-file internals (pragma_storage_info, native string statistics, corrupted duckdb files).",
+      "paths": [
+        "test/sql/storage/compression/default_storage_dict_fsst.test",
+        "test/sql/storage/compression/dict_fsst/dict_fsst_expression_filter.test",
+        "test/sql/storage/compression/dict_fsst/repeated_string_stats.test",
+        "test/sql/storage/compression/dictionary/total_string_length_dictionary.test",
+        "test/sql/storage/compression/patas/patas_corrupted_file.test",
+        "test/sql/storage/compression/rle/rle_corrupted_count_offset.test"
+      ]
+    },
+    {
+      "reason": "Native database-file invalidation, checkpoint and WAL-revert semantics.",
+      "paths": [
+        "test/sql/storage/attach/attach_invalidation_default_db.test",
+        "test/sql/storage/checkpoint/initial_database_autocheckpoint_failure.test",
+        "test/sql/transactions/commit_revert_failure.test"
+      ]
+    },
+    {
+      "reason": "Parquet writer does not support non-root VARIANT columns; native shredded-variant statistics do not apply.",
+      "paths": [
+        "test/sql/storage/types/variant/variant_comparator_stats.test",
+        "test/sql/storage/types/variant/variant_shredded_extract_non_object.test",
+        "test/sql/types/variant/variant_map_to_variant_filter.test"
+      ]
+    },
+    {
+      "reason": "FIXME: inlined data flush renders shredded-variant struct values with empty keys as positional arguments in generated SQL.",
+      "paths": [
+        "test/sql/storage/types/variant/variant_shredding_empty_keys.test"
+      ]
+    },
+    {
+      "reason": "FIXME: reading transaction-local inlined data after in-transaction ALTER TYPE looks up the inlined table of the new schema version, which is only created at commit.",
+      "paths": [
+        "test/sql/alter/alter_type/test_alter_type_active_transaction_visibility.test"
+      ]
+    },
+    {
+      "reason": "Native geometry statistics propagation differs through parquet storage.",
+      "paths": [
+        "test/sql/types/geo/geometry_from_wkb_stats.test",
+        "test/sql/types/geo/geometry_vertex_extract.test"
+      ]
+    },
+    {
+      "reason": "The DuckLake catalog is the default catalog (USE dl), so unqualified names do not resolve in the attached/system catalog the test expects.",
+      "paths": [
+        "test/sql/function/string/regex_operators_v1_5_view.test",
+        "test/sql/table_function/external_resource_logging.test"
+      ]
+    },
+    {
+      "reason": "icu is statically loaded, enabling TIMESTAMPTZ casts the test expects to fail.",
+      "paths": [
+        "test/sql/cast/timestamp_casts.test"
+      ]
+    },
+    {
+      "reason": "TIMETZ offsets with second precision are quantized by parquet storage.",
+      "paths": [
+        "test/sql/function/timetz/test_extract.test"
       ]
     }
   ]

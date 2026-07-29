@@ -9,6 +9,8 @@
 #pragma once
 
 #include "duckdb/common/common.hpp"
+#include "duckdb/catalog/catalog_entry/copy_function_catalog_entry.hpp"
+#include "duckdb/main/database.hpp"
 #include "duckdb/function/table_function.hpp"
 #include "common/ducklake_snapshot.hpp"
 #include "common/index.hpp"

@@ -1,4 +1,7 @@
 #include "duckdb.hpp"
+#include "duckdb/catalog/catalog.hpp"
+#include "duckdb/main/attached_database.hpp"
+#include "duckdb/parser/parsed_data/attach_info.hpp"
 
 #include "storage/ducklake_storage.hpp"
 #include "storage/ducklake_catalog.hpp"

@@ -331,7 +331,28 @@ string DuckLakeUtil::JoinPath(FileSystem &fs, const string &a, const string &b) 
 }
 
 shared_ptr<DynamicFilterData> DuckLakeUtil::GetOptionalDynamicFilterData(const TableFilter &filter) {
-	return ExpressionFilter::GetRootOptionalDynamicFilterData(filter);
+	auto dynamic_filter_data = ExpressionFilter::GetRootOptionalDynamicFilterData(filter);
+	if (dynamic_filter_data) {
+		return dynamic_filter_data;
+	}
+
+	auto &expression_filter =
+	    ExpressionFilter::GetExpressionFilter(filter, "DuckLakeUtil::GetOptionalDynamicFilterData");
+	if (expression_filter.expr->GetExpressionClass() != ExpressionClass::BOUND_CONJUNCTION) {
+		return nullptr;
+	}
+	auto &conjunction = expression_filter.expr->Cast<BoundConjunctionExpression>();
+	if (conjunction.GetExpressionType() != ExpressionType::CONJUNCTION_AND) {
+		return nullptr;
+	}
+	for (auto &child : conjunction.GetChildren()) {
+		ExpressionFilter child_filter(child->Copy());
+		dynamic_filter_data = GetOptionalDynamicFilterData(child_filter);
+		if (dynamic_filter_data) {
+			return dynamic_filter_data;
+		}
+	}
+	return nullptr;
 }
 
 bool DuckLakeUtil::IsInlinedSystemColumn(const string &name) {

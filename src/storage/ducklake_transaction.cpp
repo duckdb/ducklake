@@ -1,4 +1,7 @@
 #include "storage/ducklake_transaction.hpp"
+#include "duckdb/catalog/catalog.hpp"
+#include "duckdb/main/database.hpp"
+#include "duckdb/common/file_system.hpp"
 
 #include "storage/ducklake_commit_state.hpp"
 #include "storage/ducklake_transaction_state.hpp"
@@ -82,8 +85,14 @@ void LocalTableChanges::CleanupFiles(DatabaseInstance &db) {
 				fs.TryRemoveFile(delete_files.file_name);
 			}
 		}
+		for (auto &compaction : table_changes.compactions) {
+			for (auto &file : compaction.written_files) {
+				fs.TryRemoveFile(file.file_name);
+			}
+		}
 		table_changes.new_data_files.clear();
 		table_changes.new_delete_files.clear();
+		table_changes.compactions.clear();
 	}
 }
 
@@ -612,6 +621,11 @@ void LocalTableChanges::CleanupFiles(ClientContext &context, TableIndex table_id
 				fs.TryRemoveFile(delete_files.file_name);
 			}
 		}
+		for (auto &compaction : table_changes.compactions) {
+			for (auto &file : compaction.written_files) {
+				fs.TryRemoveFile(file.file_name);
+			}
+		}
 		changes.erase(table_entry);
 	}
 }
@@ -708,11 +722,23 @@ DuckLakeTransaction::DuckLakeTransaction(DuckLakeCatalog &ducklake_catalog, Tran
     : Transaction(manager, context), ducklake_catalog(ducklake_catalog), db(*context.db),
       local_catalog_id(DuckLakeConstants::TRANSACTION_LOCAL_ID_START), catalog_version(0) {
 	metadata_manager = DuckLakeMetadataManager::Create(*this);
+	schema_pins = make_uniq<DuckLakeSchemaPinState>();
 	state = make_uniq<DuckLakeTransactionState>(db, ducklake_catalog.IsCommitInfoRequired(), new_name_maps,
 	                                            ducklake_catalog.DataPath(), ducklake_catalog.Separator());
 }
 
 DuckLakeTransaction::~DuckLakeTransaction() {
+}
+
+void DuckLakeTransaction::PinSchemaCacheEntry(shared_ptr<DuckLakeSchemaCacheEntry> entry) {
+	if (!entry) {
+		return;
+	}
+	schema_pins->Pin(std::move(entry));
+}
+
+void DuckLakeTransaction::ClearSchemaCachePins() {
+	schema_pins->Clear();
 }
 
 const LocalTableChanges &DuckLakeTransaction::GetLocalChanges() const {
@@ -745,10 +771,15 @@ void DuckLakeTransaction::Commit() {
 		FlushChanges();
 	} else if (connection) {
 		connection->Commit();
+		if (!state->flushed_inlined_tables.empty()) {
+			DropEmptySupersededInlinedTablesClientSide();
+		}
 	}
+	FlushNameMapCacheInvalidations();
 	connection.reset();
 	state->local_changes.Clear();
 	SetRequiresNewInlinedTable(false);
+	ClearSchemaCachePins();
 }
 
 void DuckLakeTransaction::Rollback() {
@@ -759,7 +790,9 @@ void DuckLakeTransaction::Rollback() {
 	}
 	state->CleanupFiles();
 	state->local_changes.Clear();
+	pending_name_map_cache_invalidations.clear();
 	SetRequiresNewInlinedTable(false);
+	ClearSchemaCachePins();
 }
 
 Connection &DuckLakeTransaction::GetConnection() {
@@ -775,8 +808,8 @@ Connection &DuckLakeTransaction::GetConnection() {
 		// ensure we are only looking in the ducklake catalog schema during querying
 		CatalogSearchEntry metadata_entry(Identifier(ducklake_catalog.MetadataDatabaseName()),
 		                                  Identifier(ducklake_catalog.MetadataSchemaName()));
-		if (metadata_entry.schema.empty()) {
-			metadata_entry.schema = "main";
+		if (metadata_entry.GetSchema().empty()) {
+			metadata_entry.SetSchema("main");
 		}
 		client_data.catalog_search_path->Set(metadata_entry, CatalogSetPathType::SET_DIRECTLY);
 
@@ -811,6 +844,17 @@ case_insensitive_map_t<unique_ptr<DuckLakeCatalogSet>> &DuckLakeTransaction::Get
 bool DuckLakeTransaction::ChangesMade() const {
 	return state->SchemaChangesMade() || state->local_changes.HasChanges() || !state->dropped_files.empty() ||
 	       !new_name_maps.name_maps.empty();
+}
+
+void DuckLakeTransaction::DeferNameMapCacheInvalidation(MappingIndex mapping_id) {
+	pending_name_map_cache_invalidations.push_back(mapping_id);
+}
+
+void DuckLakeTransaction::FlushNameMapCacheInvalidations() {
+	for (auto &mapping_id : pending_name_map_cache_invalidations) {
+		ducklake_catalog.InvalidateNameMapCache(mapping_id);
+	}
+	pending_name_map_cache_invalidations.clear();
 }
 
 void GetTransactionTableChanges(reference<CatalogEntry> table_entry, TransactionChangeInformation &changes) {
@@ -872,6 +916,13 @@ void GetTransactionViewChanges(reference<CatalogEntry> view_entry, TransactionCh
 			// this table was altered
 			auto view_id = view.GetViewId();
 			// don't report transaction-local views yet - these will get added later on
+			if (!IsTransactionLocal(view_id)) {
+				changes.altered_views.insert(view_id);
+			}
+			break;
+		}
+		case LocalChangeType::SET_COLUMN_COMMENT: {
+			auto view_id = view.GetViewId();
 			if (!IsTransactionLocal(view_id)) {
 				changes.altered_views.insert(view_id);
 			}
@@ -1488,7 +1539,7 @@ void DuckLakeTransaction::RunCommitLoop(DuckLakeSnapshot transaction_snapshot,
 		ducklake_catalog.SetCommittedSnapshotId(snapshot_id);
 	};
 	context.commit_info = state->commit_info;
-	context.write_row_group_count = ducklake_catalog.SupportsRowGroupCount();
+	context.supports_v1_1_metadata = ducklake_catalog.SupportsRowGroupCount();
 	state->Commit(transaction_snapshot, transaction_changes, retry_config, context);
 }
 
@@ -1942,20 +1993,24 @@ void DuckLakeTransaction::AlterEntry(CatalogEntry &entry, unique_ptr<CatalogEntr
 static void HandleRenameOldEntry(DuckLakeCatalogSet &entries, const string &old_name, const string &new_name,
                                  TableIndex id, bool entry_is_transaction_local, set<TableIndex> &renamed_set,
                                  const set<TableIndex> &dropped_set) {
-	if (IsTransactionLocal(id)) {
-		// entry was created in this same transaction
+	if (!IsTransactionLocal(id) && !entry_is_transaction_local) {
+		// first rename of a committed entry that was untouched earlier in this transaction
+		// Invariant: an id cannot be both renamed and dropped in the same transaction.
+		D_ASSERT(dropped_set.find(id) == dropped_set.end());
+		renamed_set.insert(id);
+		return;
+	}
+	// changes made earlier in this transaction must still commit under the new name, but when the
+	// name does not change they are already chained under it and the drop would take them with it
+	if (!StringUtil::CIEquals(old_name, new_name)) {
 		auto dropped = entries.DropEntry(old_name);
 		auto new_entry_ptr = entries.GetEntry(new_name);
 		if (new_entry_ptr && dropped) {
 			new_entry_ptr->SetChild(std::move(dropped));
 		}
-	} else if (entry_is_transaction_local) {
-		// entry existed before this transaction and has already been renamed earlier in this txn
-		entries.DropEntry(old_name);
-	} else {
-		// first rename of a committed entry
-		// Invariant: an id cannot be both renamed and dropped in the same transaction.
-		D_ASSERT(dropped_set.find(id) == dropped_set.end());
+	}
+	if (!IsTransactionLocal(id)) {
+		// committed entry that was altered earlier in this transaction - the old row still needs closing
 		renamed_set.insert(id);
 	}
 }
@@ -1999,6 +2054,7 @@ void DuckLakeTransaction::AlterEntryInternal(DuckLakeViewEntry &view, unique_ptr
 		break;
 	}
 	case LocalChangeType::SET_COMMENT:
+	case LocalChangeType::SET_COLUMN_COMMENT:
 		break;
 	default:
 		throw NotImplementedException("Alter type not supported in DuckLakeTransaction::AlterEntry");
@@ -2118,16 +2174,16 @@ MappingIndex DuckLakeTransaction::AddNameMap(unique_ptr<DuckLakeNameMap> name_ma
 	return new_index;
 }
 
-const DuckLakeNameMap &DuckLakeTransaction::GetMappingById(MappingIndex mapping_id) {
+shared_ptr<const DuckLakeNameMap> DuckLakeTransaction::GetMappingById(MappingIndex mapping_id) {
 	// search the transaction-local name maps
 	auto entry = new_name_maps.name_maps.find(mapping_id);
 	if (entry != new_name_maps.name_maps.end()) {
-		return *entry->second;
+		return entry->second;
 	}
 	// search the catalog name maps
 	auto name_map = ducklake_catalog.TryGetMappingById(*this, mapping_id);
 	if (name_map) {
-		return *name_map;
+		return name_map;
 	}
 	throw InvalidInputException("Unknown name map id %d when trying to map file", mapping_id.index);
 }
