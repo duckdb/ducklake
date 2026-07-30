@@ -16,11 +16,9 @@ ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/alte
 statement ok
 CREATE TABLE ducklake.t (id INTEGER, v INTEGER)
 
-# batch 1: pre-ALTER rows, v ranges over [1000, 1063]
 statement ok
 INSERT INTO ducklake.t SELECT i, 1000 + (i % 64) FROM range(4096) t(i)
 
-# sanity: table-level stats for v reflect the pre-ALTER file
 query II
 SELECT min_value, max_value
 FROM ducklake_meta.ducklake_table_column_stats
@@ -28,23 +26,18 @@ WHERE table_id = 1 AND column_id = 2
 ----
 1000	1063
 
-# widening retype + insert in one transaction: the merge sees the pre-ALTER (INTEGER)
-# min/max and the post-ALTER (BIGINT) file. Pre-fix, MergeStats dropped min/max on the
-# type change instead of casting them across.
 statement ok
 BEGIN
 
 statement ok
 ALTER TABLE ducklake.t ALTER COLUMN v TYPE BIGINT
 
-# batch 2: post-ALTER rows, v ranges over [5000, 5063]
 statement ok
 INSERT INTO ducklake.t SELECT 100000 + i, 5000 + (i % 64) FROM range(4096) t(i)
 
 statement ok
 COMMIT
 
-# merged min/max must still span both files (1000..5063); pre-fix they came back NULL
 query II
 SELECT min_value, max_value
 FROM ducklake_meta.ducklake_table_column_stats
@@ -52,7 +45,6 @@ WHERE table_id = 1 AND column_id = 2
 ----
 1000	5063
 
-# recorded stats must bound the real min/max
 query I
 SELECT count(*)
 FROM ducklake_meta.ducklake_table_column_stats s
@@ -62,17 +54,12 @@ WHERE s.table_id = 1 AND s.column_id = 2
 ----
 0
 
-# pre-ALTER rows must still read back their original values
 query I
 SELECT count(*) FROM ducklake.t WHERE id < 4096 AND v <> 1000 + (id % 64)
 ----
 0
 
-# ============================================
-# post-ALTER batch lowers the min: min comes from the new batch (0), max from the
-# pre-ALTER batch (1063, cast up) - checks the compare works in both directions
-# ============================================
-
+# the post-ALTER batch lowers the min, exercising the compare in the other direction
 statement ok
 CREATE TABLE ducklake.t2 (id INTEGER, v INTEGER)
 
@@ -98,10 +85,7 @@ WHERE table_id = 2 AND column_id = 2
 ----
 0	1063
 
-# ============================================
-# a different widening family (DECIMAL precision), not just integers
-# ============================================
-
+# widening the decimal precision leaves the scale alone
 statement ok
 CREATE TABLE ducklake.t3 (id INTEGER, v DECIMAL(9,2))
 
@@ -127,11 +111,7 @@ WHERE table_id = 3 AND column_id = 2
 ----
 1000.00	5063.00
 
-# ============================================
-# same retype across separate commits (not one transaction) - green today, pinned so
-# both commit shapes stay consistent
-# ============================================
-
+# the same retype over separate commits has to land on the same stats
 statement ok
 CREATE TABLE ducklake.t4 (id INTEGER, v INTEGER)
 
@@ -151,14 +131,7 @@ WHERE table_id = 4 AND column_id = 2
 ----
 1000	5063
 
-# ============================================
-# FLOAT -> DOUBLE widening: the stored min/max string is not bit-faithful when reparsed as
-# DOUBLE (a FLOAT 0.1 widens to 0.10000000149..., not the double nearest "0.1"). Casting it
-# across would persist a value-wrong bound, so min/max are discarded for a FLOAT source
-# (matching pre-#1308 behavior). Keeping the wrong bound made SELECT max(v) answer from the
-# corrupt stat (0.1) instead of the real value (a separate reload-path bug is tracked in #1307).
-# ============================================
-
+# a FLOAT 0.1 widens to 0.10000000149..., so the stat string "0.1" cannot be carried over
 statement ok
 CREATE TABLE ducklake.t5 (v FLOAT)
 
@@ -177,13 +150,12 @@ INSERT INTO ducklake.t5 VALUES (0.05)
 statement ok
 COMMIT
 
-# max(v) must be the real widened value, not the corrupt stat bound 0.1 (aggregate pushdown)
+# max(v) folds from the stat, so a kept bound would answer 0.1 here
 query I
 SELECT max(v) FROM ducklake.t5
 ----
 0.10000000149011612
 
-# the FLOAT-source min/max must be discarded (NULL), not kept as a value-wrong bound
 query II
 SELECT min_value, max_value
 FROM ducklake_meta.ducklake_table_column_stats
@@ -191,12 +163,7 @@ WHERE table_id = 5 AND column_id = 1
 ----
 NULL	NULL
 
-# ============================================
-# nested container retype: a STRUCT field widens INTEGER -> BIGINT. Stats live on the leaf
-# field (v.a is column_id 3), so the same-transaction merge must cast the leaf min/max across
-# just like a scalar column.
-# ============================================
-
+# stats live on the STRUCT leaf field, which is column_id 3 here
 statement ok
 CREATE TABLE ducklake.t6 (id INTEGER, v STRUCT(a INTEGER))
 
@@ -222,11 +189,7 @@ WHERE table_id = 6 AND column_id = 3
 ----
 1000	5063
 
-# ============================================
-# temporal widening (DATE -> TIMESTAMP): the other promotable family besides numerics. Both
-# are value-comparison types, so min/max must cast across just like the integer ladder.
-# ============================================
-
+# DATE widens to TIMESTAMP at midnight
 statement ok
 CREATE TABLE ducklake.t7 (v DATE)
 
@@ -251,3 +214,70 @@ FROM ducklake_meta.ducklake_table_column_stats
 WHERE table_id = 7 AND column_id = 1
 ----
 2019-01-01 00:00:00	2021-01-01 00:00:00
+
+# these widen through a rounding cast, so the stat has to round the way the data does
+statement ok
+CREATE TABLE ducklake.t8 (v BIGINT)
+
+statement ok
+INSERT INTO ducklake.t8 VALUES (9007199254740993), (1)
+
+statement ok
+BEGIN
+
+statement ok
+ALTER TABLE ducklake.t8 ALTER COLUMN v TYPE DOUBLE
+
+statement ok
+INSERT INTO ducklake.t8 VALUES (2.5)
+
+statement ok
+COMMIT
+
+query II
+SELECT min_value, max_value
+FROM ducklake_meta.ducklake_table_column_stats
+WHERE table_id = 8 AND column_id = 1
+----
+1.0	9007199254740992.0
+
+# v + 0 blocks the pushdown, so this compares the stat against the files
+query I
+SELECT count(*) FROM (SELECT v + 0 AS v FROM ducklake.t8)
+WHERE v < (SELECT min_value::DOUBLE FROM ducklake_meta.ducklake_table_column_stats WHERE table_id = 8 AND column_id = 1)
+   OR v > (SELECT max_value::DOUBLE FROM ducklake_meta.ducklake_table_column_stats WHERE table_id = 8 AND column_id = 1)
+----
+0
+
+# a DECIMAL wider than DOUBLE's mantissa
+statement ok
+CREATE TABLE ducklake.t9 (v DECIMAL(38,10))
+
+statement ok
+INSERT INTO ducklake.t9 VALUES (0.1000000001), (12345678901234567890.1234567891)
+
+statement ok
+BEGIN
+
+statement ok
+ALTER TABLE ducklake.t9 ALTER COLUMN v TYPE DOUBLE
+
+statement ok
+INSERT INTO ducklake.t9 VALUES (0.05)
+
+statement ok
+COMMIT
+
+query II
+SELECT min_value, max_value
+FROM ducklake_meta.ducklake_table_column_stats
+WHERE table_id = 9 AND column_id = 1
+----
+0.05	1.2345678901234567e+19
+
+query I
+SELECT count(*) FROM (SELECT v + 0 AS v FROM ducklake.t9)
+WHERE v < (SELECT min_value::DOUBLE FROM ducklake_meta.ducklake_table_column_stats WHERE table_id = 9 AND column_id = 1)
+   OR v > (SELECT max_value::DOUBLE FROM ducklake_meta.ducklake_table_column_stats WHERE table_id = 9 AND column_id = 1)
+----
+0

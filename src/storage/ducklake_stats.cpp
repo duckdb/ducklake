@@ -99,11 +99,27 @@ DuckLakeColumnStats DuckLakeColumnStats::FromGlobalStats(const LogicalType &type
 	return stats;
 }
 
-// Cast a string-encoded stat to a new column type after ALTER COLUMN ... TYPE, so a same-transaction
-// retype+INSERT keeps min/max instead of discarding them. Callers must skip FLOAT sources: a float's
-// stored string is not bit-faithful when reparsed at a wider type (#1307), giving a value-wrong bound.
-static bool ReconcileStatToType(string &value, const LogicalType &target) {
-	// DefaultTryCastAs still throws for nested targets (STRUCT/LIST/MAP/VARIANT), aborting the commit.
+static bool IsTimeZoneAware(const LogicalType &type) {
+	switch (type.id()) {
+	case LogicalTypeId::TIME_TZ:
+	case LogicalTypeId::TIMESTAMP_TZ:
+	case LogicalTypeId::TIMESTAMP_TZ_NS:
+		return true;
+	default:
+		return false;
+	}
+}
+
+static bool ReconcileStatToType(string &value, const LogicalType &source, const LogicalType &target) {
+	// a FLOAT stat is stored at float precision and reparses wider as a different value than the data
+	if (source.id() == LogicalTypeId::FLOAT) {
+		return false;
+	}
+	// naive stats resolve against the reader's time zone - casting here would pin them to UTC
+	if (IsTimeZoneAware(source) != IsTimeZoneAware(target)) {
+		return false;
+	}
+	// DefaultTryCastAs throws for nested targets instead of returning false
 	if (!RequiresValueComparison(target)) {
 		return false;
 	}
@@ -145,14 +161,10 @@ void DuckLakeColumnStats::MergeStats(const DuckLakeColumnStats &new_stats) {
 	}
 
 	if (types_differ) {
-		// Column was retyped: cast min/max to the new type, invalidating only what cannot be represented.
-		// A FLOAT source is stored as a float-precision string that is not bit-faithful when reparsed at a
-		// wider type (#1307), so discard its min/max rather than keep a value-wrong bound.
-		bool source_is_float = source_type.id() == LogicalTypeId::FLOAT;
-		if (has_min && (source_is_float || !ReconcileStatToType(min, type))) {
+		if (has_min && !ReconcileStatToType(min, source_type, type)) {
 			has_min = false;
 		}
-		if (has_max && (source_is_float || !ReconcileStatToType(max, type))) {
+		if (has_max && !ReconcileStatToType(max, source_type, type)) {
 			has_max = false;
 		}
 	}

@@ -28,7 +28,7 @@ CREATE TABLE shredded (col VARIANT)
 statement ok
 INSERT INTO shredded VALUES ({'a': 1, 'b': 100}), ({'a': 10, 'b': NULL}), ({'a': 100}), ({'a': NULL, 'b': NULL})
 
-# pre-#1305 the stats merge cast the min/max toward a non-scalar type and aborted the commit
+# the stats merge used to cast min/max toward a non-scalar type and abort the commit
 statement ok
 CHECKPOINT
 
