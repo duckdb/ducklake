@@ -192,6 +192,7 @@
         "test/sql/add_files/add_files_hive_partition_cast.test",
         "test/sql/add_files/add_files_nested_list_struct_nulls.test",
         "test/sql/alter/add_column_default_stats.test",
+        "test/sql/alter/alter_column_type_stats.test",
         "test/sql/compaction/compaction_partitioned_non_adjacent.test",
         "test/sql/compaction/compaction_partitioned_table.test",
         "test/sql/compaction/merge_rewrite_partial_file_info.test",
