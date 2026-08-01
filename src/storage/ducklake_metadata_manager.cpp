@@ -4522,6 +4522,43 @@ ORDER BY snapshot_id
 	return snapshots;
 }
 
+unordered_set<idx_t>
+DuckLakeMetadataManager::GetStillReferencedFiles(const vector<DuckLakeFileForCleanup> &cleanup_files) {
+	unordered_set<idx_t> result;
+	if (cleanup_files.empty()) {
+		return result;
+	}
+	string file_ids;
+	for (auto &file : cleanup_files) {
+		if (!file_ids.empty()) {
+			file_ids += ", ";
+		}
+		file_ids += to_string(file.id.index);
+	}
+	// the same file can be registered more than once - e.g. ducklake_add_data_files called with the same external
+	// file for two tables. Relative paths are resolved against the table they belong to, so those only match within
+	// the same table.
+	auto query = StringUtil::Format(R"(
+SELECT c.data_file_id
+FROM {METADATA_CATALOG}.ducklake_data_file c
+WHERE c.data_file_id IN (%s) AND EXISTS(
+    SELECT 1
+    FROM {METADATA_CATALOG}.ducklake_data_file o
+    WHERE o.path = c.path AND o.path_is_relative = c.path_is_relative
+      AND (NOT c.path_is_relative OR o.table_id = c.table_id)
+      AND o.data_file_id NOT IN (%s)
+);)",
+	                                file_ids, file_ids);
+	auto query_result = Query(query);
+	if (query_result->HasError()) {
+		query_result->GetErrorObject().Throw("Failed to check for files that are still referenced in DuckLake: ");
+	}
+	for (auto &row : *query_result) {
+		result.insert(row.GetValue<idx_t>(0));
+	}
+	return result;
+}
+
 vector<DuckLakeFileForCleanup> DuckLakeMetadataManager::GetOldFilesForCleanup(const string &filter) {
 	auto query = R"(
 SELECT data_file_id, path, path_is_relative, schedule_start
@@ -4890,6 +4927,7 @@ WHERE %s (end_snapshot IS NOT NULL AND NOT EXISTS(
 	}
 	string deleted_file_ids;
 	if (!cleanup_files.empty()) {
+		auto still_referenced = GetStillReferencedFiles(cleanup_files);
 		string files_scheduled_for_cleanup;
 		for (auto &file : cleanup_files) {
 			if (!deleted_file_ids.empty()) {
@@ -4897,6 +4935,11 @@ WHERE %s (end_snapshot IS NOT NULL AND NOT EXISTS(
 			}
 			deleted_file_ids += to_string(file.id.index);
 
+			if (still_referenced.find(file.id.index) != still_referenced.end()) {
+				// another data file entry that is not being cleaned up points at the same file - the metadata entry
+				// goes away, but the file itself must stay on disk
+				continue;
+			}
 			if (!files_scheduled_for_cleanup.empty()) {
 				files_scheduled_for_cleanup += ", ";
 			}
@@ -4919,13 +4962,15 @@ WHERE data_file_id IN (%s);
 			}
 		}
 		// insert the to-be-cleaned-up files
-		result = transaction.Query(StringUtil::Format(R"(
+		if (!files_scheduled_for_cleanup.empty()) {
+			result = transaction.Query(StringUtil::Format(R"(
 INSERT INTO {METADATA_CATALOG}.ducklake_files_scheduled_for_deletion
 VALUES %s;
 )",
-		                                              files_scheduled_for_cleanup));
-		if (result->HasError()) {
-			result->GetErrorObject().Throw("Failed to schedule files for clean-up in DuckLake: ");
+			                                              files_scheduled_for_cleanup));
+			if (result->HasError()) {
+				result->GetErrorObject().Throw("Failed to schedule files for clean-up in DuckLake: ");
+			}
 		}
 	}
 

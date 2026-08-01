@@ -220,6 +220,8 @@ public:
 	static string GetTableColumnSchemaSql(TableIndex table_id);
 	static string GetInlinedTableNamesSql(TableIndex table_id);
 	virtual vector<DuckLakeFileForCleanup> GetOldFilesForCleanup(const string &filter);
+	//! Of the given files, the ones whose path is still pointed at by a data file entry that is not being cleaned up
+	unordered_set<idx_t> GetStillReferencedFiles(const vector<DuckLakeFileForCleanup> &cleanup_files);
 	virtual vector<DuckLakeFileForCleanup> GetOrphanFilesForCleanup(const string &filter, const string &separator);
 	virtual vector<DuckLakeFileForCleanup> GetFilesForCleanup(const string &filter, CleanupType type,
 	                                                          const string &separator);
