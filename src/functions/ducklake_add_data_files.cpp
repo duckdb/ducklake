@@ -147,6 +147,7 @@ private:
 	                                                    const vector<unique_ptr<DuckLakeFieldId>> &field_ids,
 	                                                    const string &prefix = string());
 	void MapColumnStats(ParquetFileMetadata &file_metadata, DuckLakeDataFile &result);
+	void CheckNotNullConstraints(const ParquetFileMetadata &file, const DuckLakeDataFile &data_file);
 	unique_ptr<DuckLakeNameMapEntry> MapHiveColumn(ParquetFileMetadata &file_metadata, const DuckLakeFieldId &field_id,
 	                                               const Value &hive_value);
 	void DetermineMapping(ParquetFileMetadata &file);
@@ -1086,6 +1087,50 @@ void DuckLakeFileProcessor::MapColumnStats(ParquetFileMetadata &file_metadata, D
 	}
 }
 
+void DuckLakeFileProcessor::CheckNotNullConstraints(const ParquetFileMetadata &file,
+                                                    const DuckLakeDataFile &data_file) {
+	auto not_null_fields = table.GetNotNullFields();
+	if (not_null_fields.empty()) {
+		return;
+	}
+	// gather the fields for which the file provides values - either as a column or as a hive partition
+	unordered_set<idx_t> provided_fields;
+	for (auto &entry : file.column_id_to_field_map) {
+		provided_fields.insert(entry.second.first.index);
+	}
+	for (auto &hive_partition : file.hive_partition_values) {
+		provided_fields.insert(hive_partition.field_index.index);
+	}
+	for (auto &field_id : table.GetFieldData().GetFieldIds()) {
+		if (!not_null_fields.count(field_id->Name())) {
+			continue;
+		}
+		auto field_index = field_id->GetFieldIndex();
+		auto stats_entry = data_file.column_stats.find(field_index);
+		if (stats_entry != data_file.column_stats.end()) {
+			auto &stats = stats_entry->second;
+			if (stats.has_null_count && stats.null_count > 0) {
+				throw InvalidInputException(
+				    "Failed to add file \"%s\" - column \"%s\" has a NOT NULL constraint, but the file contains %llu "
+				    "NULL value(s) for it",
+				    data_file.file_name, field_id->Name(), stats.null_count);
+			}
+			continue;
+		}
+		if (field_id->HasChildren() || provided_fields.count(field_index.index)) {
+			// nested columns are only checked through their statistics, and a column that is present in the file
+			// without statistics could contain any value - we cannot tell
+			continue;
+		}
+		if (data_file.row_count > 0 && field_id->GetColumnData().initial_default.IsNull()) {
+			// the file has rows but no values for this column - every row would read as NULL
+			throw InvalidInputException("Failed to add file \"%s\" - column \"%s\" has a NOT NULL constraint, but the "
+			                            "file does not contain values for it",
+			                            data_file.file_name, field_id->Name());
+		}
+	}
+}
+
 vector<unique_ptr<DuckLakeNameMapEntry>>
 DuckLakeFileProcessor::MapColumns(ParquetFileMetadata &file_metadata,
                                   vector<unique_ptr<ParquetColumn>> &parquet_columns,
@@ -1201,6 +1246,7 @@ DuckLakeDataFile DuckLakeFileProcessor::AddFileToTable(ParquetFileMetadata &file
 	auto name_map = make_uniq<DuckLakeNameMap>();
 	name_map->table_id = table.GetTableId();
 	MapColumnStats(file, result);
+	CheckNotNullConstraints(file, result);
 	name_map->column_maps = std::move(file.map_entries);
 
 	// we successfully mapped this file - register the name map and refer to it in the file

@@ -1,0 +1,93 @@
+# name: test/sql/add_files/add_files_not_null_constraints.test
+# description: ducklake_add_data_files must reject files that violate NOT NULL constraints
+# group: [add_files]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/add_files_not_null', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+COPY (SELECT * FROM (VALUES (1, 10), (2, NULL)) v(id, x)) TO '{DATA_PATH}/not_null_with_nulls.parquet' (FORMAT parquet)
+
+statement ok
+COPY (SELECT * FROM (VALUES (3, 30), (4, 40)) v(id, x)) TO '{DATA_PATH}/not_null_no_nulls.parquet' (FORMAT parquet)
+
+statement ok
+CREATE TABLE ducklake.tbl(id INTEGER, x INTEGER NOT NULL)
+
+statement error
+CALL ducklake_add_data_files('ducklake', 'tbl', '{DATA_PATH}/not_null_with_nulls.parquet')
+----
+NOT NULL constraint
+
+# nothing was added
+query I
+SELECT COUNT(*) FROM ducklake_list_files('ducklake', 'tbl')
+----
+0
+
+# a file without NULL values is accepted
+statement ok
+CALL ducklake_add_data_files('ducklake', 'tbl', '{DATA_PATH}/not_null_no_nulls.parquet')
+
+query II
+SELECT id, x FROM ducklake.tbl ORDER BY id
+----
+3	30
+4	40
+
+# adding a violating file leaves the previously added file untouched
+statement error
+CALL ducklake_add_data_files('ducklake', 'tbl', '{DATA_PATH}/not_null_with_nulls.parquet')
+----
+NOT NULL constraint
+
+query II
+SELECT id, x FROM ducklake.tbl ORDER BY id
+----
+3	30
+4	40
+
+# NULL values in a column without the constraint are fine
+statement ok
+CREATE TABLE ducklake.nullable_tbl(id INTEGER, x INTEGER)
+
+statement ok
+CALL ducklake_add_data_files('ducklake', 'nullable_tbl', '{DATA_PATH}/not_null_with_nulls.parquet')
+
+query II
+SELECT id, x FROM ducklake.nullable_tbl ORDER BY id
+----
+1	10
+2	NULL
+
+# a missing column is all-NULL for the added file - rejected as well
+statement ok
+COPY (SELECT 5 AS id) TO '{DATA_PATH}/not_null_missing_column.parquet' (FORMAT parquet)
+
+statement error
+CALL ducklake_add_data_files('ducklake', 'tbl', '{DATA_PATH}/not_null_missing_column.parquet', allow_missing => true)
+----
+NOT NULL constraint
+
+# SET NOT NULL on an existing column also guards later adds
+statement ok
+CREATE TABLE ducklake.later_tbl(id INTEGER, x INTEGER)
+
+statement ok
+INSERT INTO ducklake.later_tbl VALUES (1, 1)
+
+statement ok
+ALTER TABLE ducklake.later_tbl ALTER COLUMN x SET NOT NULL
+
+statement error
+CALL ducklake_add_data_files('ducklake', 'later_tbl', '{DATA_PATH}/not_null_with_nulls.parquet')
+----
+NOT NULL constraint
