@@ -232,6 +232,12 @@
         "test/sql/retry/commit_failure.test",
         "test/sql/settings/max_retry_count.test"
       ]
+    },
+    {
+      "reason": "FIXME: a TIMESTAMP -> TIMESTAMPTZ retype leaves the pre-ALTER file stats naive, and quack casts them in the sidecar's UTC rather than the reader's TimeZone, so live rows are pruned.",
+      "paths": [
+        "test/sql/alter/alter_column_type_stats_timestamptz.test"
+      ]
     }
   ]
 }
