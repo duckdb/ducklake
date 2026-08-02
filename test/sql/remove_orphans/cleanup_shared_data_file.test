@@ -63,3 +63,39 @@ query I
 SELECT COUNT(*) FROM GLOB('{DATA_PATH}/cleanup_shared_file.parquet')
 ----
 0
+
+# the two entries do not have to store the same path - the same file can be added through paths that only
+# match once they are canonicalized
+statement ok
+COPY (SELECT 7 AS id) TO '{DATA_PATH}/cleanup_mixed_path.parquet' (FORMAT parquet)
+
+statement ok
+CREATE TABLE lake.m1(id INTEGER)
+
+statement ok
+CREATE TABLE lake.m2(id INTEGER)
+
+statement ok
+CALL ducklake_add_data_files('lake', 'm1', '{DATA_PATH}/cleanup_mixed_path.parquet')
+
+statement ok
+CALL ducklake_add_data_files('lake', 'm2', '{DATA_PATH}/./cleanup_mixed_path.parquet')
+
+statement ok
+DROP TABLE lake.m1
+
+statement ok
+CALL ducklake_expire_snapshots('lake', older_than => NOW())
+
+statement ok
+CALL ducklake_cleanup_old_files('lake', cleanup_all => true)
+
+query I
+SELECT COUNT(*) FROM GLOB('{DATA_PATH}/cleanup_mixed_path.parquet')
+----
+1
+
+query I
+SELECT id FROM lake.m2
+----
+7

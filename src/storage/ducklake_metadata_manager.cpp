@@ -3088,7 +3088,7 @@ ORDER BY row_id, begin_snapshot;)",
 }
 
 string DuckLakeMetadataManager::ReadInlinedDataAggregatesSql(const string &inlined_table_name,
-                                                              const string &select_list) {
+                                                             const string &select_list) {
 	return StringUtil::Format(R"(
 SELECT %s
 FROM {METADATA_CATALOG}.%s
@@ -4528,33 +4528,61 @@ DuckLakeMetadataManager::GetStillReferencedFiles(const vector<DuckLakeFileForCle
 	if (cleanup_files.empty()) {
 		return result;
 	}
+	auto context_ptr = transaction.context.lock();
+	if (!context_ptr) {
+		return result;
+	}
+	auto &fs = FileSystem::GetFileSystem(*context_ptr);
+
+	// the same file can be registered more than once - e.g. ducklake_add_data_files called with the same external
+	// file for two tables. The stored paths of two such entries need not be equal (one can be relative to the data
+	// path, the other absolute), so we compare canonicalized paths rather than what is stored.
+	unordered_map<string, vector<idx_t>> ids_by_path;
 	string file_ids;
+	string name_filter;
+	case_insensitive_set_t filtered_names;
 	for (auto &file : cleanup_files) {
 		if (!file_ids.empty()) {
 			file_ids += ", ";
 		}
 		file_ids += to_string(file.id.index);
+		ids_by_path[fs.CanonicalizePath(file.path)].push_back(file.id.index);
+
+		// only fetch entries that end in the same file name - the name is the selective part of the path
+		auto file_name = StringUtil::GetFileName(file.path);
+		if (file_name.empty() || !filtered_names.insert(file_name).second) {
+			continue;
+		}
+		if (!name_filter.empty()) {
+			name_filter += " OR ";
+		}
+		name_filter +=
+		    StringUtil::Format("path = %s OR path LIKE %s", SQLString(file_name), SQLString("%" + file_name));
 	}
-	// the same file can be registered more than once - e.g. ducklake_add_data_files called with the same external
-	// file for two tables. Relative paths are resolved against the table they belong to, so those only match within
-	// the same table.
+	if (name_filter.empty()) {
+		return result;
+	}
 	auto query = StringUtil::Format(R"(
-SELECT c.data_file_id
-FROM {METADATA_CATALOG}.ducklake_data_file c
-WHERE c.data_file_id IN (%s) AND EXISTS(
-    SELECT 1
-    FROM {METADATA_CATALOG}.ducklake_data_file o
-    WHERE o.path = c.path AND o.path_is_relative = c.path_is_relative
-      AND (NOT c.path_is_relative OR o.table_id = c.table_id)
-      AND o.data_file_id NOT IN (%s)
-);)",
-	                                file_ids, file_ids);
+SELECT table_id, path, path_is_relative
+FROM {METADATA_CATALOG}.ducklake_data_file
+WHERE data_file_id NOT IN (%s) AND (%s);)",
+	                                file_ids, name_filter);
 	auto query_result = Query(query);
 	if (query_result->HasError()) {
 		query_result->GetErrorObject().Throw("Failed to check for files that are still referenced in DuckLake: ");
 	}
 	for (auto &row : *query_result) {
-		result.insert(row.GetValue<idx_t>(0));
+		TableIndex table_id(row.GetValue<idx_t>(0));
+		DuckLakePath path;
+		path.path = row.GetValue<string>(1);
+		path.path_is_relative = row.GetValue<bool>(2);
+		auto entry = ids_by_path.find(fs.CanonicalizePath(FromRelativePath(table_id, path)));
+		if (entry == ids_by_path.end()) {
+			continue;
+		}
+		for (auto &id : entry->second) {
+			result.insert(id);
+		}
 	}
 	return result;
 }
