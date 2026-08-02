@@ -1,0 +1,101 @@
+# name: test/sql/remove_orphans/cleanup_shared_data_file.test
+# description: a data file referenced by more than one table must not be deleted while any reference is live
+# group: [remove_orphans]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS lake (DATA_PATH '{DATA_PATH}/cleanup_shared', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+COPY (SELECT 42 AS id) TO '{DATA_PATH}/cleanup_shared_file.parquet' (FORMAT parquet)
+
+statement ok
+CREATE TABLE lake.t1(id INTEGER)
+
+statement ok
+CREATE TABLE lake.t2(id INTEGER)
+
+statement ok
+CALL ducklake_add_data_files('lake', 't1', '{DATA_PATH}/cleanup_shared_file.parquet')
+
+statement ok
+CALL ducklake_add_data_files('lake', 't2', '{DATA_PATH}/cleanup_shared_file.parquet')
+
+# drop one of the two tables that reference the file, then expire and clean up
+statement ok
+DROP TABLE lake.t1
+
+statement ok
+CALL ducklake_expire_snapshots('lake', older_than => NOW())
+
+statement ok
+CALL ducklake_cleanup_old_files('lake', cleanup_all => true)
+
+# t2 still references the file - it must survive on disk and remain readable
+query I
+SELECT COUNT(*) FROM GLOB('{DATA_PATH}/cleanup_shared_file.parquet')
+----
+1
+
+query I
+SELECT id FROM lake.t2
+----
+42
+
+# once the last reference goes away the file is cleaned up as before
+statement ok
+DROP TABLE lake.t2
+
+statement ok
+CALL ducklake_expire_snapshots('lake', older_than => NOW())
+
+statement ok
+CALL ducklake_cleanup_old_files('lake', cleanup_all => true)
+
+query I
+SELECT COUNT(*) FROM GLOB('{DATA_PATH}/cleanup_shared_file.parquet')
+----
+0
+
+# the two entries do not have to store the same path - the same file can be added through paths that only
+# match once they are canonicalized
+statement ok
+COPY (SELECT 7 AS id) TO '{DATA_PATH}/cleanup_mixed_path.parquet' (FORMAT parquet)
+
+statement ok
+CREATE TABLE lake.m1(id INTEGER)
+
+statement ok
+CREATE TABLE lake.m2(id INTEGER)
+
+statement ok
+CALL ducklake_add_data_files('lake', 'm1', '{DATA_PATH}/cleanup_mixed_path.parquet')
+
+statement ok
+CALL ducklake_add_data_files('lake', 'm2', '{DATA_PATH}/./cleanup_mixed_path.parquet')
+
+statement ok
+DROP TABLE lake.m1
+
+statement ok
+CALL ducklake_expire_snapshots('lake', older_than => NOW())
+
+statement ok
+CALL ducklake_cleanup_old_files('lake', cleanup_all => true)
+
+query I
+SELECT COUNT(*) FROM GLOB('{DATA_PATH}/cleanup_mixed_path.parquet')
+----
+1
+
+query I
+SELECT id FROM lake.m2
+----
+7
