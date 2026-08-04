@@ -720,7 +720,18 @@ string DuckLakeCatalog::GenerateEncryptionKey(ClientContext &context) const {
 	// Generate an encryption key using DuckDB's cryptographic RNG (mbedtls-backed) - the same
 	// source used for GCM nonces and WAL/block encryption. The general-purpose RandomEngine is a
 	// non-cryptographic PRNG (PCG) and must never be used to produce key material.
-	static constexpr const idx_t ENCRYPTION_KEY_SIZE = 16;
+	//
+	// 32 bytes = AES-256. The size was previously hardcoded to 16 (AES-128) with no way to raise
+	// it. Parquet modular encryption accepts 128, 192 or 256-bit keys - DuckDB's own writer says
+	// so explicitly ("Invalid AES key. Must have a length of 128, 192, or 256 bits (16, 24, or 32
+	// bytes)", parquet_crypto.cpp) and its mbedtls wrapper switches on all three - so 256 costs
+	// nothing but the extra 16 bytes per file in the catalog.
+	//
+	// This affects key GENERATION only. The key length is never assumed on the read path: a stored
+	// key is used at whatever length it was written, so data files encrypted with the older 16-byte
+	// keys keep decrypting unchanged. There is no migration and no re-encryption implied by this
+	// change - it only means keys minted from here on are 256-bit.
+	static constexpr const idx_t ENCRYPTION_KEY_SIZE = 32;
 	auto &db = DatabaseInstance::GetDatabase(context);
 	auto metadata =
 	    make_uniq<EncryptionStateMetadata>(EncryptionTypes::GCM, ENCRYPTION_KEY_SIZE, EncryptionTypes::V0_1);
