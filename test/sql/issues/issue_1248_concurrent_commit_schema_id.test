@@ -1,0 +1,48 @@
+# name: test/sql/issues/issue_1248_concurrent_commit_schema_id.test
+# description: https://github.com/duckdb/ducklake/issues/1248 - concurrent transactions must commit their new tables into the right schema
+# group: [issues]
+
+require notwindows
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+
+test-env DATA_PATH __TEST_DIR__
+
+statement ok
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/issue_1248')
+
+statement ok
+SET memory_limit='2GB'
+
+# Committing used to pick up a bogus schema id when another transaction committed in the meantime.
+concurrentloop threadid 0 8
+
+loop i 0 5
+
+statement ok
+BEGIN
+
+statement ok
+CREATE OR REPLACE TABLE ducklake.t_${threadid}_${i} AS SELECT r AS id, r % 100 AS grp FROM range(1000) t(r)
+
+statement ok
+COMMIT
+
+endloop
+
+endloop
+
+query I
+SELECT count(*) FROM duckdb_tables() WHERE database_name='ducklake'
+----
+40
+
+# The tables must have landed in a schema we can still reach them through.
+query I
+SELECT count(*) FROM ducklake.t_0_0
+----
+1000

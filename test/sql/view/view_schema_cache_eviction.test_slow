@@ -1,0 +1,131 @@
+# name: test/sql/view/view_schema_cache_eviction.test_slow
+# description: test that a view created in a long-running transaction lands in the right schema under memory pressure
+# group: [view]
+
+require ducklake
+
+require parquet
+
+# con1 creates a view and holds its transaction open while con2 churns the schema under a low memory
+# limit. The view must still land in its own schema when con1 finally commits.
+
+statement ok
+ATTACH 'ducklake:__TEST_DIR__/view_schema_cache.db' AS ducklake (DATA_PATH '__TEST_DIR__/view_schema_cache_files', METADATA_CATALOG 'metadata')
+
+# Several schemas, so a misfiled view has somewhere else to land.
+statement ok
+CREATE SCHEMA ducklake.target
+
+loop i 0 8
+
+statement ok
+CREATE SCHEMA ducklake.filler_${i}
+
+endloop
+
+# Many tables, so each cached copy of the schema is big enough to be evicted under the memory limit.
+loop i 0 100
+
+statement ok
+CREATE TABLE ducklake.t${i} (id INTEGER, a INTEGER, b INTEGER, c INTEGER, d INTEGER, e INTEGER)
+
+endloop
+
+# A single table that we'll ALTER to churn the schema.
+statement ok
+CREATE TABLE ducklake.churn (id INTEGER)
+
+# Disable temp_directory so DuckDB cannot spill blocks for temporary tables to disk.
+# This directs the memory pressure below onto the cached schemas instead.
+statement ok
+SET temp_directory=''
+
+statement ok
+SET memory_limit='100MB'
+
+# con1 creates a view in `target` and leaves the transaction open.
+statement ok con1
+BEGIN
+
+statement ok con1
+CREATE VIEW ducklake.target.v1 AS SELECT 42 AS i
+
+# Phase 1: con2 churns the schema, so the version con1 read is no longer the current one.
+loop i 0 30
+
+statement ok con2
+ALTER TABLE ducklake.churn ADD COLUMN col_${i} INTEGER DEFAULT ${i}
+
+statement ok con2
+SELECT COUNT(*) FROM ducklake.churn
+
+endloop
+
+# Phase 2: allocate blocks that cannot be spilled, so the schema con1 read is evicted from the cache.
+statement ok con2
+CREATE TEMP TABLE mem_filler(i INTEGER, pad VARCHAR)
+
+loop j 0 3
+
+statement ok con2
+INSERT INTO mem_filler SELECT i + ${j} * 5000, repeat('x', 1000) FROM range(5000) t(i)
+
+endloop
+
+# Phase 3: more churn, so the memory the evicted copy occupied is reused.
+loop i 30 400
+
+statement ok con2
+ALTER TABLE ducklake.churn ADD COLUMN col_${i} INTEGER DEFAULT ${i}
+
+statement ok con2
+SELECT COUNT(*) FROM ducklake.churn
+
+endloop
+
+# con1 commits, long after the schema it read was evicted.
+statement ok con1
+COMMIT
+
+# The view must be recorded against `target`.
+query II
+SELECT s.schema_name, v.view_name
+FROM metadata.ducklake_view v
+JOIN metadata.ducklake_schema s ON s.schema_id = v.schema_id
+WHERE v.end_snapshot IS NULL
+----
+target	v1
+
+query II
+SELECT schema_name, view_name FROM duckdb_views() WHERE database_name='ducklake'
+----
+target	v1
+
+query I
+SELECT * FROM ducklake.target.v1
+----
+42
+
+# No live view may point at a dropped schema, otherwise the catalog fails to load.
+query I
+SELECT COUNT(*)
+FROM metadata.ducklake_view v
+WHERE v.end_snapshot IS NULL
+  AND NOT EXISTS (
+    SELECT 1 FROM metadata.ducklake_schema s
+    WHERE s.schema_id = v.schema_id AND s.end_snapshot IS NULL
+  )
+----
+0
+
+# Reloading the catalog from scratch must find the view again.
+statement ok
+DETACH ducklake
+
+statement ok
+ATTACH 'ducklake:__TEST_DIR__/view_schema_cache.db' AS ducklake (DATA_PATH '__TEST_DIR__/view_schema_cache_files')
+
+query I
+SELECT * FROM ducklake.target.v1
+----
+42

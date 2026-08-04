@@ -203,10 +203,14 @@ public:
 	unique_ptr<QueryResult> ExecuteRaw(string query);
 	Connection &GetConnection();
 
+	//! Keep a schema cache entry alive for as long as this transaction lives. Transaction-local catalog entries hold
+	//! bare references into the cached catalog set, and those references are read again at commit time, so the entry
+	//! must not be evicted from the ObjectCache in between.
+	void PinSchemaCacheEntry(shared_ptr<DuckLakeSchemaCacheEntry> entry);
+
 	DuckLakeSnapshot GetSnapshot();
 	DuckLakeSnapshot GetSnapshot(optional_ptr<BoundAtClause> at_clause,
 	                             SnapshotBound bound = SnapshotBound::UPPER_BOUND);
-	void PinSchemaCacheEntry(shared_ptr<DuckLakeSchemaCacheEntry> entry);
 
 	static DuckLakeTransaction &Get(ClientContext &context, Catalog &catalog);
 
