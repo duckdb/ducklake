@@ -584,6 +584,11 @@ WHERE table_id = {TABLE_ID})";
 }
 
 idx_t DuckLakeMetadataManager::GetBeginSnapshotForSchemaVersion(TableIndex table_id, idx_t schema_version) {
+	auto &catalog = transaction.GetCatalog();
+	auto cached_snapshot = catalog.TryGetSchemaVersionBeginSnapshot(table_id, schema_version);
+	if (cached_snapshot.IsValid()) {
+		return cached_snapshot.GetIndex();
+	}
 	string query = R"(
 SELECT begin_snapshot
 FROM {METADATA_CATALOG}.ducklake_schema_versions
@@ -592,7 +597,13 @@ WHERE table_id = {TABLE_ID} AND schema_version = {SCHEMA_VERSION})";
 	query = StringUtil::Replace(query, "{SCHEMA_VERSION}", to_string(schema_version));
 	auto result = Query(query);
 	for (auto &row : *result) {
-		return row.GetValue<idx_t>(0);
+		auto begin_snapshot = row.GetValue<idx_t>(0);
+		// only cache rows that are already committed - a schema version written by this transaction can still
+		// be rolled back, and the fallback below is not stable either
+		if (!transaction.ChangesMade()) {
+			catalog.CacheSchemaVersionBeginSnapshot(table_id, schema_version, begin_snapshot);
+		}
+		return begin_snapshot;
 	}
 	// We need to fallback to GetBeginSnapshotForTable if this table doesnt have an alter yet
 	return GetBeginSnapshotForTable(table_id);
@@ -1794,51 +1805,14 @@ vector<DuckLakeFileListEntry> DuckLakeMetadataManager::GetFilesForTable(DuckLake
 		}
 	}
 
-	string stats_select_list;
-	string stats_join_list;
-	string order_by_clause;
-	for (idx_t i = 0; i < dynamic_filter_columns.size(); i++) {
-		auto &dfc = dynamic_filter_columns[i];
-		auto alias = StringUtil::Format("stats_%d", NumericCast<int64_t>(i));
-		stats_select_list += StringUtil::Format(", %s.min_value, %s.max_value", alias.c_str(), alias.c_str());
-		stats_join_list += StringUtil::Format(
-		    "\nLEFT JOIN {METADATA_CATALOG}.ducklake_file_column_stats %s ON %s.data_file_id = data.data_file_id AND "
-		    "%s.table_id = data.table_id AND %s.column_id = %d",
-		    alias.c_str(), alias.c_str(), alias.c_str(), alias.c_str(), NumericCast<int64_t>(dfc.column_field_index));
-
-		// Generate ORDER BY clause to optimize Top-N queries - order files by their min/max stats
-		// so we find satisfying rows early and can skip remaining files via dynamic filter pruning.
-		// We only order by the first dynamic filter column: Top-N typically has a single ordering column,
-		// and multiple columns would have conflicting requirements (e.g., ORDER BY a DESC, b ASC).
-		if (order_by_clause.empty()) {
-			const bool seeking_high_values = dfc.comparison_type == ExpressionType::COMPARE_GREATERTHAN ||
-			                                 dfc.comparison_type == ExpressionType::COMPARE_GREATERTHANOREQUALTO;
-			const bool seeking_low_values = dfc.comparison_type == ExpressionType::COMPARE_LESSTHAN ||
-			                                dfc.comparison_type == ExpressionType::COMPARE_LESSTHANOREQUALTO;
-			if (seeking_high_values) {
-				// For DESC Top-N (seeking high values), order by max_value DESC so files with highest values come first
-				auto cast_expr = CastStatsToTarget(alias + ".max_value", dfc.column_type);
-				order_by_clause = StringUtil::Format("\nORDER BY %s DESC NULLS LAST", cast_expr);
-			} else if (seeking_low_values) {
-				// For ASC Top-N (seeking low values), order by min_value ASC so files with lowest values come first
-				auto cast_expr = CastStatsToTarget(alias + ".min_value", dfc.column_type);
-				order_by_clause = StringUtil::Format("\nORDER BY %s ASC NULLS LAST", cast_expr);
-			}
-		}
-	}
-
-	string select_list = "data.data_file_id, " + GetFileSelectList("data") +
-	                     ", data.row_id_start, data.begin_snapshot, data.partial_max, data.mapping_id, " +
-	                     GetDeleteFileSelectList("del") + stats_select_list;
-
 	string query;
 	string where_clause;
+	FilterSQLResult filter_result;
 
-	// Generate CTE section and WHERE clause if we have filter pushdown info
+	// Collect static filter CTE requirements before adding Top-N dynamic filter requirements.
 	if (filter_info && !filter_info->column_filters.empty()) {
-		auto components = GenerateFilterPushdownComponents(*filter_info, table);
-		query = components.cte_section;
-		where_clause = components.where_clause;
+		filter_result = ConvertFilterPushdownToSQL(*filter_info);
+		where_clause = filter_result.where_conditions;
 
 		// Add bucket-partition pruning for equality / IN-list predicates on bucket()-partitioned columns.
 		// Composes with the zone-map clause above — pruning narrows files, zone maps stay as a backstop.
@@ -1852,6 +1826,54 @@ vector<DuckLakeFileListEntry> DuckLakeMetadataManager::GetFilesForTable(DuckLake
 			}
 		}
 	}
+
+	for (auto &dfc : dynamic_filter_columns) {
+		auto entry = filter_result.required_ctes.find(dfc.column_field_index);
+		if (entry == filter_result.required_ctes.end()) {
+			filter_result.required_ctes.emplace(dfc.column_field_index,
+			                                    CTERequirement(dfc.column_field_index, {"min_value", "max_value"}));
+		} else {
+			entry->second.referenced_stats.insert("min_value");
+			entry->second.referenced_stats.insert("max_value");
+			// The static filter has two references to this CTE; the Top-N stats join adds one more.
+			entry->second.reference_count++;
+		}
+	}
+	query = GenerateCTESectionFromRequirements(filter_result.required_ctes, table_id);
+
+	string stats_select_list;
+	string stats_join_list;
+	string order_by_clause;
+	for (auto &dfc : dynamic_filter_columns) {
+		auto cte_name = StringUtil::Format("col_%d_stats", NumericCast<int64_t>(dfc.column_field_index));
+		stats_select_list += StringUtil::Format(", %s.min_value, %s.max_value", cte_name.c_str(), cte_name.c_str());
+		stats_join_list += StringUtil::Format("\nLEFT JOIN %s ON %s.data_file_id = data.data_file_id", cte_name.c_str(),
+		                                      cte_name.c_str());
+
+		// Generate ORDER BY clause to optimize Top-N queries - order files by their min/max stats
+		// so we find satisfying rows early and can skip remaining files via dynamic filter pruning.
+		// We only order by the first dynamic filter column: Top-N typically has a single ordering column,
+		// and multiple columns would have conflicting requirements (e.g., ORDER BY a DESC, b ASC).
+		if (order_by_clause.empty()) {
+			const bool seeking_high_values = dfc.comparison_type == ExpressionType::COMPARE_GREATERTHAN ||
+			                                 dfc.comparison_type == ExpressionType::COMPARE_GREATERTHANOREQUALTO;
+			const bool seeking_low_values = dfc.comparison_type == ExpressionType::COMPARE_LESSTHAN ||
+			                                dfc.comparison_type == ExpressionType::COMPARE_LESSTHANOREQUALTO;
+			if (seeking_high_values) {
+				// For DESC Top-N (seeking high values), order by max_value DESC so files with highest values come first
+				auto cast_expr = CastStatsToTarget(cte_name + ".max_value", dfc.column_type);
+				order_by_clause = StringUtil::Format("\nORDER BY %s DESC NULLS LAST", cast_expr);
+			} else if (seeking_low_values) {
+				// For ASC Top-N (seeking low values), order by min_value ASC so files with lowest values come first
+				auto cast_expr = CastStatsToTarget(cte_name + ".min_value", dfc.column_type);
+				order_by_clause = StringUtil::Format("\nORDER BY %s ASC NULLS LAST", cast_expr);
+			}
+		}
+	}
+
+	string select_list = "data.data_file_id, " + GetFileSelectList("data") +
+	                     ", data.row_id_start, data.begin_snapshot, data.partial_max, data.mapping_id, " +
+	                     GetDeleteFileSelectList("del") + stats_select_list;
 
 	// Add base query
 	query += StringUtil::Format(R"(
@@ -2270,10 +2292,15 @@ vector<DuckLakeCompactionFileEntry> DuckLakeMetadataManager::GetFilesForCompacti
 	// Determine the effective max file size threshold for filtering
 	idx_t effective_max_file_size =
 	    options.max_file_size.IsValid() ? options.max_file_size.GetIndex() : options.target_file_size;
-	string data_select_list = "data.data_file_id, data.record_count, data.row_id_start, data.begin_snapshot, "
-	                          "data.end_snapshot, data.mapping_id, sr.schema_version , data.partial_max, "
-	                          "data.partition_id, partition_info.keys, " +
-	                          GetFileSelectList("data");
+	string data_select_list =
+	    "data.data_file_id, data.record_count, data.row_id_start, data.begin_snapshot, "
+	    "data.end_snapshot, data.mapping_id, sr.schema_version , data.partial_max, "
+	    "data.partition_id, "
+	    "CASE WHEN partition_spec.partition_id IS NOT NULL AND "
+	    "(partition_spec.end_snapshot IS NULL OR partition_spec.begin_snapshot < partition_spec.end_snapshot) "
+	    "THEN COALESCE(partition_spec.end_snapshot - 1, data.begin_snapshot) END AS partition_snapshot_id, "
+	    "partition_sr.schema_version AS partition_schema_version, partition_info.keys, " +
+	    GetFileSelectList("data");
 	string delete_select_list = "del.data_file_id AS del_data_file_id,"
 	                            "del.delete_file_id AS del_delete_file_id, "
 	                            "del.delete_count, "
@@ -2315,6 +2342,13 @@ SELECT %s
 FROM {METADATA_CATALOG}.ducklake_data_file data
 LEFT JOIN snapshot_ranges sr
   ON data.begin_snapshot >= sr.begin_snapshot AND data.begin_snapshot < sr.end_snapshot
+LEFT JOIN {METADATA_CATALOG}.ducklake_partition_info partition_spec
+  ON data.partition_id = partition_spec.partition_id AND data.table_id = partition_spec.table_id
+LEFT JOIN snapshot_ranges partition_sr
+  ON partition_spec.partition_id IS NOT NULL
+ AND (partition_spec.end_snapshot IS NULL OR partition_spec.begin_snapshot < partition_spec.end_snapshot)
+ AND COALESCE(partition_spec.end_snapshot - 1, data.begin_snapshot) >= partition_sr.begin_snapshot
+ AND COALESCE(partition_spec.end_snapshot - 1, data.begin_snapshot) < partition_sr.end_snapshot
 LEFT JOIN (
 	SELECT *
     FROM {METADATA_CATALOG}.ducklake_delete_file
@@ -2358,6 +2392,10 @@ ORDER BY data.begin_snapshot, data.row_id_start, data.data_file_id, del.begin_sn
 		}
 		col_idx++;
 		new_entry.file.partition_id = row.IsNull(col_idx) ? optional_idx() : row.GetValue<idx_t>(col_idx);
+		col_idx++;
+		new_entry.partition_snapshot_id = row.IsNull(col_idx) ? optional_idx() : row.GetValue<idx_t>(col_idx);
+		col_idx++;
+		new_entry.partition_schema_version = row.IsNull(col_idx) ? optional_idx() : row.GetValue<idx_t>(col_idx);
 		col_idx++;
 		if (!row.IsNull(col_idx)) {
 			auto list_val = row.GetValue<Value>(col_idx);
@@ -2860,6 +2898,30 @@ WITH dropped_cols(tid, cid) AS (
 VALUES %s
 )
 UPDATE {METADATA_CATALOG}.ducklake_column
+SET end_snapshot = {SNAPSHOT_ID}
+FROM dropped_cols
+WHERE table_id=tid AND column_id=cid AND end_snapshot IS NULL
+;)",
+	                          dropped_cols);
+}
+
+string DuckLakeMetadataManager::WriteExpiredColumnTags(const vector<DuckLakeDroppedColumn> &dropped_columns) {
+	if (dropped_columns.empty()) {
+		return {};
+	}
+	string dropped_cols;
+	for (auto &dropped_col : dropped_columns) {
+		if (!dropped_cols.empty()) {
+			dropped_cols += ", ";
+		}
+		dropped_cols += StringUtil::Format("(%d, %d)", dropped_col.table_id.index, dropped_col.field_id.index);
+	}
+	// expire any active tags of the dropped columns (GH #1310)
+	return StringUtil::Format(R"(
+WITH dropped_cols(tid, cid) AS (
+VALUES %s
+)
+UPDATE {METADATA_CATALOG}.ducklake_column_tag
 SET end_snapshot = {SNAPSHOT_ID}
 FROM dropped_cols
 WHERE table_id=tid AND column_id=cid AND end_snapshot IS NULL
@@ -4431,44 +4493,58 @@ string DuckLakeMetadataManager::WriteNewPartitionKeys(const vector<DuckLakeParti
 	string new_partition_values;
 	string insert_partition_cols;
 
-	auto new_partition_map = GetNewPartitions(existing_partitions, new_partitions);
-	if (new_partition_map.empty()) {
-		return {};
+	auto append_partition = [&](const DuckLakePartitionInfo &partition, const string &end_snapshot) {
+		if (!partition.id.IsValid()) {
+			return;
+		}
+		auto partition_id = partition.id.GetIndex();
+		if (!new_partition_values.empty()) {
+			new_partition_values += ", ";
+		}
+		new_partition_values +=
+		    StringUtil::Format("(%d, %d, {SNAPSHOT_ID}, %s)", partition_id, partition.table_id.index, end_snapshot);
+		for (auto &field : partition.fields) {
+			if (!insert_partition_cols.empty()) {
+				insert_partition_cols += ", ";
+			}
+			insert_partition_cols +=
+			    StringUtil::Format("(%d, %d, %d, %d, %s)", partition_id, partition.table_id.index,
+			                       field.partition_key_index, field.field_id.index, SQLString(field.transform));
+		}
+	};
+
+	unordered_map<idx_t, idx_t> last_partition_index;
+	for (idx_t i = 0; i < new_partitions.size(); i++) {
+		last_partition_index[new_partitions[i].table_id.index] = i;
 	}
+	for (idx_t i = 0; i < new_partitions.size(); i++) {
+		auto &partition = new_partitions[i];
+		if (i != last_partition_index[partition.table_id.index] && !partition.fields.empty()) {
+			// Files written before another partition change in the same transaction can still reference this spec.
+			append_partition(partition, "{SNAPSHOT_ID}");
+		}
+	}
+
+	auto new_partition_map = GetNewPartitions(existing_partitions, new_partitions);
 	for (auto &new_partition : new_partition_map) {
 		// set old partition data as no longer valid
 		if (!old_partition_table_ids.empty()) {
 			old_partition_table_ids += ", ";
 		}
 		old_partition_table_ids += to_string(new_partition.second.table_id.index);
-		if (!new_partition.second.id.IsValid()) {
-			// dropping partition data - we don't need to do anything
-			return {};
-		}
-		auto partition_id = new_partition.second.id.GetIndex();
-		if (!new_partition_values.empty()) {
-			new_partition_values += ", ";
-		}
-		new_partition_values +=
-		    StringUtil::Format(R"((%d, %d, {SNAPSHOT_ID}, NULL))", partition_id, new_partition.second.table_id.index);
-		for (auto &field : new_partition.second.fields) {
-			if (!insert_partition_cols.empty()) {
-				insert_partition_cols += ", ";
-			}
-			insert_partition_cols +=
-			    StringUtil::Format("(%d, %d, %d, %d, %s)", partition_id, new_partition.second.table_id.index,
-			                       field.partition_key_index, field.field_id.index, SQLString(field.transform));
-		}
+		append_partition(new_partition.second, "NULL");
 	}
 
-	// update old partition information for any tables that have been altered
-	auto update_partition_query = StringUtil::Format(R"(
+	string batch_query;
+	if (!old_partition_table_ids.empty()) {
+		// update old partition information for any tables that have been altered
+		batch_query = StringUtil::Format(R"(
 UPDATE {METADATA_CATALOG}.ducklake_partition_info
 SET end_snapshot = {SNAPSHOT_ID}
 WHERE table_id IN (%s) AND end_snapshot IS NULL
 ;)",
-	                                                 old_partition_table_ids);
-	string batch_query = update_partition_query;
+		                                 old_partition_table_ids);
+	}
 
 	if (!new_partition_values.empty()) {
 		new_partition_values =

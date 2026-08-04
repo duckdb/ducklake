@@ -496,6 +496,30 @@ unique_ptr<LogicalOperator> DuckLakeCompactor::InsertSort(Binder &binder, unique
 	return std::move(projected);
 }
 
+optional_ptr<DuckLakeTableEntry>
+DuckLakeCompactor::ResolvePartitionSpecTable(DuckLakeTableEntry &table, const DuckLakeCompactionFileEntry &source_file,
+                                             idx_t partition_id) {
+	auto partition_data = table.GetPartitionData();
+	if (partition_data && partition_data->partition_id == partition_id) {
+		return &table;
+	}
+	if (!source_file.partition_snapshot_id.IsValid() || !source_file.partition_schema_version.IsValid()) {
+		return nullptr;
+	}
+	DuckLakeSnapshot partition_snapshot(source_file.partition_snapshot_id.GetIndex(),
+	                                    source_file.partition_schema_version.GetIndex(), 0, 0);
+	auto partition_entry = catalog.GetEntryById(transaction, partition_snapshot, table_id);
+	if (!partition_entry) {
+		throw InternalException("DuckLakeCompactor: failed to find table entry for partition schema");
+	}
+	auto &partition_table = partition_entry->Cast<DuckLakeTableEntry>();
+	partition_data = partition_table.GetPartitionData();
+	if (!partition_data || partition_data->partition_id != partition_id) {
+		throw InternalException("DuckLakeCompactor: failed to find partition spec");
+	}
+	return &partition_table;
+}
+
 unique_ptr<LogicalOperator>
 DuckLakeCompactor::GenerateCompactionCommand(vector<DuckLakeCompactionFileEntry> source_files,
                                              bool bind_to_latest_schema) {
@@ -577,7 +601,23 @@ DuckLakeCompactor::GenerateCompactionCommand(vector<DuckLakeCompactionFileEntry>
 	auto &columns = table.GetColumns();
 	string data_path;
 	if (partition_id.IsValid()) {
-		data_path = DuckLakePartitionUtils::BuildHivePartitionPath(table, partition_values, catalog.Separator());
+		auto partition_table = ResolvePartitionSpecTable(table, source_files[0], partition_id.GetIndex());
+		if (partition_table) {
+			data_path =
+			    DuckLakePartitionUtils::BuildHivePartitionPath(*partition_table, partition_values, catalog.Separator());
+		} else {
+			auto &file_path = source_files[0].file.data.path;
+			auto &table_path = table.DataPath();
+			if (!StringUtil::StartsWith(file_path, table_path)) {
+				throw InternalException("DuckLakeCompactor: failed to resolve partition path");
+			}
+			auto relative_path = file_path.substr(table_path.size());
+			auto separator_pos = relative_path.rfind(catalog.Separator());
+			if (separator_pos == string::npos) {
+				throw InternalException("DuckLakeCompactor: failed to resolve partition path");
+			}
+			data_path = relative_path.substr(0, separator_pos + catalog.Separator().size());
+		}
 	}
 
 	bool write_row_id = false;

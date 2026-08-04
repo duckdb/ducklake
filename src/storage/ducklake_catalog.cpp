@@ -1089,6 +1089,20 @@ void DuckLakeCatalog::CacheInlinedDeletionTableResult(TableIndex table_id, DuckL
 	}
 }
 
+optional_idx DuckLakeCatalog::TryGetSchemaVersionBeginSnapshot(TableIndex table_id, idx_t schema_version) {
+	lock_guard<mutex> guard(schema_version_snapshot_lock);
+	auto entry = schema_version_begin_snapshots.find(make_pair(table_id.index, schema_version));
+	if (entry == schema_version_begin_snapshots.end()) {
+		return optional_idx();
+	}
+	return entry->second;
+}
+
+void DuckLakeCatalog::CacheSchemaVersionBeginSnapshot(TableIndex table_id, idx_t schema_version, idx_t begin_snapshot) {
+	lock_guard<mutex> guard(schema_version_snapshot_lock);
+	schema_version_begin_snapshots[make_pair(table_id.index, schema_version)] = begin_snapshot;
+}
+
 string DuckLakeCatalog::StatsCacheKey(idx_t next_file_id, TableIndex table_id) const {
 	return StringUtil::Format("ducklake:%s:%s:%s:stats:%llu:table:%llu", GetName(), MetadataPath(), instance_id,
 	                          next_file_id, table_id.index);

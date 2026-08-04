@@ -1,0 +1,42 @@
+# name: test/sql/issues/inlined_reader_empty_read.test
+# description: An errored inlined-data read on a Postgres catalog must raise a catchable error, not invalidate the instance
+# group: [issues]
+
+require ducklake
+
+require parquet
+
+require postgres_scanner
+
+require-env DUCKLAKE_CI
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/inlined_empty_read', DATA_INLINING_ROW_LIMIT 10)
+
+statement ok
+CREATE TABLE dl.t(i INTEGER, v VARCHAR)
+
+statement ok
+INSERT INTO dl.t VALUES (1, 'hello'), (2, 'world')
+
+query IT
+SELECT i, v FROM dl.t ORDER BY i
+----
+1	hello
+2	world
+
+# force an errored inlined read by dropping the backing inlined-data table
+statement ok
+DROP TABLE __ducklake_metadata_dl.ducklake_inlined_data_1_1
+
+statement error
+SELECT i, v FROM dl.t ORDER BY i
+----
+Failed to read inlined data from DuckLake
+
+statement ok
+SELECT 1
