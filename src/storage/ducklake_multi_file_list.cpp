@@ -55,11 +55,8 @@ void DuckLakeMultiFileList::AddFilterToPushdownInfo(FilterPushdownInfo &pushdown
 	pushdown_info.column_filters.emplace(field_index, std::move(filter_info_entry));
 }
 
-unique_ptr<MultiFileList>
-DuckLakeMultiFileList::DynamicFilterPushdown(ClientContext &context, const MultiFileOptions &options,
-                                             const vector<Identifier> &names, const vector<LogicalType> &types,
-                                             const vector<column_t> &column_ids, TableFilterSet &filters) const {
-	if (read_info.scan_type != DuckLakeScanType::SCAN_TABLE || !filters.HasFilters()) {
+unique_ptr<MultiFileList> DuckLakeMultiFileList::DynamicFilterPushdown(MultiFileDynamicPushdownInfo &pushdown) const {
+	if (read_info.scan_type != DuckLakeScanType::SCAN_TABLE || !pushdown.filters.HasFilters()) {
 		// filter pushdown is only supported when scanning full tables
 		return nullptr;
 	}
@@ -67,8 +64,8 @@ DuckLakeMultiFileList::DynamicFilterPushdown(ClientContext &context, const Multi
 	// DuckDB passes the final filter set, including both static and Top-N dynamic filters.
 	auto pushdown_info = make_uniq<FilterPushdownInfo>();
 
-	for (auto &entry : filters) {
-		auto column_id = column_ids[entry.GetIndex().GetIndex()];
+	for (auto &entry : pushdown.filters) {
+		auto column_id = pushdown.column_ids[entry.GetIndex().GetIndex()];
 		AddFilterToPushdownInfo(
 		    *pushdown_info, column_id,
 		    ExpressionFilter::GetExpressionFilter(entry.Filter(), "DuckLakeMultiFileList::DynamicFilterPushdown")

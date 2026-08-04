@@ -3297,7 +3297,7 @@ shared_ptr<DuckLakeInlinedData> DuckLakeMetadataManager::TransformInlinedData(Qu
 	}
 
 	auto context = transaction.context.lock();
-	auto data = make_uniq<ColumnDataCollection>(*context, result.types);
+	auto data = make_uniq<ColumnDataCollection>(*context, result.GetTypes());
 	while (true) {
 		auto chunk = result.Fetch();
 		if (!chunk) {
@@ -4412,7 +4412,7 @@ unique_ptr<DuckLakeSnapshot> DuckLakeMetadataManager::GetSnapshot() {
 }
 
 unique_ptr<DuckLakeSnapshot> DuckLakeMetadataManager::GetSnapshot(BoundAtClause &at_clause, SnapshotBound bound) {
-	auto &unit = at_clause.Unit();
+	auto unit = at_clause.Unit().GetIdentifierName();
 	auto &val = at_clause.GetValue();
 	unique_ptr<QueryResult> result;
 	const string timestamp_order = bound == SnapshotBound::LOWER_BOUND ? "ASC" : "DESC";

@@ -151,14 +151,14 @@ PostgresMetadataManager::TransformInlinedData(QueryResult &result, const vector<
 	}
 	bool needs_reinterpret = false;
 	if (!expected_types.empty()) {
-		if (result.types.size() < expected_types.size()) {
+		if (result.GetTypes().size() < expected_types.size()) {
 			throw InvalidInputException(
 			    "Failed to read inlined data from DuckLake: expected %llu columns but read %llu", expected_types.size(),
-			    result.types.size());
+			    result.GetTypes().size());
 		}
 		for (idx_t i = 0; i < expected_types.size(); i++) {
-			if (result.types[i] != expected_types[i]) {
-				D_ASSERT(result.types[i].id() == LogicalTypeId::BLOB &&
+			if (result.GetTypes()[i] != expected_types[i]) {
+				D_ASSERT(result.GetTypes()[i].id() == LogicalTypeId::BLOB &&
 				         expected_types[i].id() == LogicalTypeId::VARCHAR);
 				needs_reinterpret = true;
 			}
