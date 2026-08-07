@@ -3021,7 +3021,7 @@ string DuckLakeMetadataManager::WriteNewInlinedData(DuckLakeSnapshot &commit_sna
 			// write the new inlined table
 			string inlined_tables;
 			string inlined_table_queries;
-			commit_snapshot.schema_version++;
+			commit_snapshot.schema_version = AllocateNextSchemaVersion(commit_snapshot.schema_version);
 			inlined_table_name =
 			    GetInlinedTableQueries(commit_snapshot, table_info, inlined_tables, inlined_table_queries);
 			batch_query += "INSERT INTO {METADATA_CATALOG}.ducklake_inlined_data_tables VALUES " + inlined_tables + ";";
@@ -4281,6 +4281,22 @@ string DuckLakeMetadataManager::WriteNewColumnMappings(const vector<DuckLakeColu
 
 string DuckLakeMetadataManager::InsertSnapshotSql() {
 	return R"(INSERT INTO {METADATA_CATALOG}.ducklake_snapshot VALUES ({SNAPSHOT_ID}, NOW(), {SCHEMA_VERSION}, {NEXT_CATALOG_ID}, {NEXT_FILE_ID});)";
+}
+
+idx_t DuckLakeMetadataManager::AllocateNextSnapshotId(idx_t current_snapshot_id) {
+	return current_snapshot_id + 1;
+}
+
+idx_t DuckLakeMetadataManager::AllocateNextCatalogId(idx_t current_next_catalog_id) {
+	return current_next_catalog_id;
+}
+
+idx_t DuckLakeMetadataManager::AllocateNextFileId(idx_t current_next_file_id) {
+	return current_next_file_id;
+}
+
+idx_t DuckLakeMetadataManager::AllocateNextSchemaVersion(idx_t current_schema_version) {
+	return current_schema_version + 1;
 }
 
 static string SQLStringOrNull(const string &str) {

@@ -116,6 +116,9 @@ void DuckLakeInitializer::Initialize() {
 	// swapped it out via SetVersionedMetadataManager, so the `metadata_manager` reference taken at the
 	// top of Initialize() would now dangle.
 	auto &current_metadata_manager = transaction.GetMetadataManager();
+	if (options.access_mode != AccessMode::READ_ONLY) {
+		current_metadata_manager.EnsureIdSequences();
+	}
 	// probe the metadata server for optional capabilities (e.g. server-side commit retries) once per attach
 	current_metadata_manager.ProbeServerCapabilities();
 	current_metadata_manager.ClearCache();
