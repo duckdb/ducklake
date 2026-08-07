@@ -268,12 +268,14 @@ void DuckLakeTransactionState::CheckForConflicts(const TransactionChangeInformat
 		ConflictCheck(table_id, other_changes.tables_deleted_from, "compact table", "deleted from it");
 		ConflictCheck(table_id, other_changes.tables_merge_adjacent, "compact table", "compacted it");
 		ConflictCheck(table_id, other_changes.tables_rewrite_delete, "compact table", "compacted it");
+		ConflictCheck(table_id, other_changes.inserted_tables, "compact table", "inserted into it");
 	}
 	for (auto &table_id : changes.tables_rewrite_delete) {
 		ConflictCheck(table_id, other_changes.dropped_tables, "compact table", "dropped it");
 		ConflictCheck(table_id, other_changes.tables_deleted_from, "compact table", "deleted from it");
 		ConflictCheck(table_id, other_changes.tables_merge_adjacent, "compact table", "compacted it");
 		ConflictCheck(table_id, other_changes.tables_rewrite_delete, "compact table", "compacted it");
+		ConflictCheck(table_id, other_changes.inserted_tables, "compact table", "inserted into it");
 	}
 	for (auto &table_id : changes.altered_tables) {
 		ConflictCheck(table_id, other_changes.dropped_tables, "alter table", "dropped it");
@@ -976,8 +978,10 @@ void DuckLakeTransactionState::RecomputeGlobalStatsAfterRewrite(string &batch_qu
 	DuckLakeNewGlobalStats new_globals;
 	new_globals.initialized = true;
 	new_globals.stats = std::move(new_stats);
-	batch_query += DuckLakeMetadataManager::UpdateGlobalTableStatsSql(
-	    DuckLakeTransaction::ConvertNewGlobalStats(table_id, new_globals));
+	// OVERWRITE: recomputed from every surviving file - a merge would make this a no-op.
+	batch_query +=
+	    context.update_global_table_stats_sql(DuckLakeTransaction::ConvertNewGlobalStats(table_id, new_globals),
+	                                          DuckLakeMetadataManager::GlobalStatsWrite::OVERWRITE);
 }
 
 static idx_t SubtractDroppedFileStat(idx_t value, idx_t decrement) {
@@ -1063,8 +1067,10 @@ string DuckLakeTransactionState::UpdateStatsForDroppedFiles(
 			// the rows are deleted below - drop them from the update so we do not write values we then delete
 			new_globals.stats.column_stats.clear();
 		}
-		result += DuckLakeMetadataManager::UpdateGlobalTableStatsSql(
-		    DuckLakeTransaction::ConvertNewGlobalStats(table_id, new_globals));
+		// OVERWRITE: ApplyDroppedFileStats produces narrowing writes a merge would swallow.
+		result +=
+		    context.update_global_table_stats_sql(DuckLakeTransaction::ConvertNewGlobalStats(table_id, new_globals),
+		                                          DuckLakeMetadataManager::GlobalStatsWrite::OVERWRITE);
 		if (delete_column_stats) {
 			result += DeleteTableColumnStatsSql(table_id);
 		}
@@ -1174,8 +1180,9 @@ NewDataInfo DuckLakeTransactionState::GetNewDataFiles(
 			new_stats.column_stats.clear();
 		}
 		// update the global stats for this table based on the newly written data
-		batch_query += DuckLakeMetadataManager::UpdateGlobalTableStatsSql(
-		    DuckLakeTransaction::ConvertNewGlobalStats(table_id, new_globals));
+		batch_query +=
+		    context.update_global_table_stats_sql(DuckLakeTransaction::ConvertNewGlobalStats(table_id, new_globals),
+		                                          DuckLakeMetadataManager::GlobalStatsWrite::MERGE);
 		if (clear_column_stats) {
 			batch_query += DeleteTableColumnStatsSql(table_id);
 		}
@@ -1914,9 +1921,37 @@ DuckLakeTransactionState::CheckForConflicts(DuckLakeSnapshot transaction_snapsho
 	return snapshot_and_stats;
 }
 
+void DuckLakeCommitContext::ValidateRequiredClosures() const {
+	struct RequiredClosure {
+		const char *name;
+		bool assigned;
+	};
+	const RequiredClosure required[] = {
+	    {"conflict_query_executor", static_cast<bool>(conflict_query_executor)},
+	    {"get_snapshot", static_cast<bool>(get_snapshot)},
+	    {"execute_commit_batch", static_cast<bool>(execute_commit_batch)},
+	    {"query_metadata", static_cast<bool>(query_metadata)},
+	    {"query_metadata_with_snapshot", static_cast<bool>(query_metadata_with_snapshot)},
+	    {"write_inlined_data", static_cast<bool>(write_inlined_data)},
+	    {"get_table_stats", static_cast<bool>(get_table_stats)},
+	    {"update_global_table_stats_sql", static_cast<bool>(update_global_table_stats_sql)},
+	    {"build_stats_map", static_cast<bool>(build_stats_map)},
+	    {"set_catalog_version", static_cast<bool>(set_catalog_version)},
+	    {"set_committed_snapshot_id", static_cast<bool>(set_committed_snapshot_id)},
+	};
+	for (auto &entry : required) {
+		if (!entry.assigned) {
+			throw InternalException(
+			    "DuckLakeCommitContext is missing required closure \"%s\" - a BuildContext site did not assign it",
+			    entry.name);
+		}
+	}
+}
+
 void DuckLakeTransactionState::Commit(DuckLakeSnapshot transaction_snapshot,
                                       const TransactionChangeInformation &transaction_changes,
                                       const DuckLakeRetryConfig &retry_config, const DuckLakeCommitContext &context) {
+	context.ValidateRequiredClosures();
 	SnapshotAndStats commit_stats_snapshot;
 	auto &commit_snapshot = commit_stats_snapshot.snapshot;
 	optional_ptr<vector<DuckLakeGlobalStatsInfo>> stats;

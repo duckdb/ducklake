@@ -129,7 +129,17 @@ public:
 	virtual bool SupportsAppender() const {
 		return true;
 	}
-
+	virtual const char *ScalarLeastFunction() const {
+		return "LEAST";
+	}
+	virtual const char *ScalarGreatestFunction() const {
+		return "GREATEST";
+	}
+	//! False only for SQLite. Backends returning false fall back to a non-atomic
+	//! insert-or-update, which cannot make two concurrent first-inserts merge.
+	virtual bool SupportsUpsert() const {
+		return true;
+	}
 	//! Probe the metadata server for optional capabilities, for now we only check for server-side retries
 	virtual void ProbeServerCapabilities() {
 	}
@@ -357,7 +367,21 @@ public:
 	static string InsertSnapshotSql();
 	static string WriteSnapshotChangesSql(const SnapshotChangeInfo &change_info,
 	                                      const DuckLakeSnapshotCommit &commit_info);
-	static string UpdateGlobalTableStatsSql(const DuckLakeGlobalStatsInfo &stats);
+	//! MERGE: incoming is a per-commit delta - widen, so concurrent appends cannot lose each other.
+	//! OVERWRITE: incoming was recomputed from every surviving file - it must be able to NARROW,
+	//! or compaction can never tighten bounds after deletes.
+	enum class GlobalStatsWrite { MERGE, OVERWRITE };
+	struct StatsMergeDialect {
+		const char *least_fn = "LEAST";
+		const char *greatest_fn = "GREATEST";
+		bool supports_upsert = true;
+		std::function<string(const LogicalType &)> column_type = [](const LogicalType &type) {
+			return type.ToString();
+		};
+	};
+	StatsMergeDialect GetStatsMergeDialect();
+	static string UpdateGlobalTableStatsSql(const DuckLakeGlobalStatsInfo &stats, GlobalStatsWrite write_mode,
+	                                        const StatsMergeDialect &dialect);
 	static SnapshotChangeInfo
 	GetSnapshotAndStatsAndChanges(SnapshotAndStats &current_snapshot,
 	                              const std::function<unique_ptr<QueryResult>(string)> &executor);

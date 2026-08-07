@@ -52,3 +52,41 @@ query I
 SELECT stats(i) FROM ducklake.test LIMIT 1
 ----
 <REGEX>:.*max.*84.*min.*42.*
+
+# compaction's recompute must conflict with a concurrent insert, or it loses the insert's bounds
+statement ok
+CALL ducklake.set_option('data_inlining_row_limit', 0);
+
+statement ok
+CREATE TABLE ducklake.compact_test(i INTEGER);
+
+statement ok
+INSERT INTO ducklake.compact_test VALUES (10);
+
+statement ok
+INSERT INTO ducklake.compact_test VALUES (20);
+
+statement ok con1
+BEGIN
+
+statement ok con2
+BEGIN
+
+statement ok con1
+CALL ducklake_merge_adjacent_files('ducklake', 'compact_test');
+
+statement ok con2
+INSERT INTO ducklake.compact_test VALUES (999);
+
+statement ok con2
+COMMIT
+
+statement error con1
+COMMIT
+----
+Transaction conflict
+
+query I
+SELECT stats(i) FROM ducklake.compact_test LIMIT 1
+----
+<REGEX>:.*max.*999.*min.*10.*
