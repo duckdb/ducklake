@@ -262,9 +262,12 @@ string DuckLakeMetadataManager::GetCreateTableStatements() {
 	                     "parent_column BIGINT, default_value_type VARCHAR, default_value_dialect VARCHAR);");
 	statements.push_back("CREATE TABLE {METADATA_CATALOG}.ducklake_table_stats(table_id BIGINT, record_count BIGINT, "
 	                     "next_row_id BIGINT, file_size_bytes BIGINT);");
+	// PRIMARY KEY arbitrates the ON CONFLICT in UpdateGlobalTableStatsSql. Inline because DuckDB and
+	// SQLite reject each other's CREATE INDEX schema-qualification.
 	statements.push_back(
 	    "CREATE TABLE {METADATA_CATALOG}.ducklake_table_column_stats(table_id BIGINT, column_id BIGINT, contains_null "
-	    "BOOLEAN, contains_nan BOOLEAN, min_value VARCHAR, max_value VARCHAR, extra_stats VARCHAR);");
+	    "BOOLEAN, contains_nan BOOLEAN, min_value VARCHAR, max_value VARCHAR, extra_stats VARCHAR, PRIMARY "
+	    "KEY(table_id, column_id));");
 	statements.push_back("CREATE TABLE {METADATA_CATALOG}.ducklake_partition_info(partition_id BIGINT, table_id "
 	                     "BIGINT, begin_snapshot BIGINT, end_snapshot BIGINT);");
 	statements.push_back("CREATE TABLE {METADATA_CATALOG}.ducklake_partition_column(partition_id BIGINT, table_id "
@@ -430,6 +433,25 @@ ALTER TABLE {METADATA_CATALOG}.ducklake_delete_file ADD COLUMN {IF_NOT_EXISTS} r
 CREATE TABLE {IF_NOT_EXISTS} {METADATA_CATALOG}.ducklake_view_column_tag(
 	view_id BIGINT, column_name VARCHAR, begin_snapshot BIGINT, end_snapshot BIGINT, key VARCHAR, value VARCHAR
 );
+-- Rebuild-and-swap: an existing table cannot acquire a PRIMARY KEY by ALTER on these backends, and
+-- CREATE INDEX is not portable here (DuckDB and SQLite reject each other's schema-qualification).
+-- The GROUP BY collapses duplicate (table_id, column_id) rows, which a keyed table cannot hold and
+-- which a v1.0 catalog can genuinely contain: the pre-upsert INSERT branch had no key and no
+-- conflict clause, so two concurrent first-inserts into one table each wrote their own row.
+-- Both readers LEFT JOIN this table USING (table_id), so a duplicate fans the join out.
+CREATE TABLE {IF_NOT_EXISTS} {METADATA_CATALOG}.__ducklake_column_stats_rebuild(
+	table_id BIGINT, column_id BIGINT, contains_null BOOLEAN, contains_nan BOOLEAN,
+	min_value VARCHAR, max_value VARCHAR, extra_stats VARCHAR, PRIMARY KEY(table_id, column_id)
+);
+INSERT INTO {METADATA_CATALOG}.__ducklake_column_stats_rebuild
+SELECT table_id, column_id,
+       MAX(CASE WHEN contains_null THEN 1 WHEN contains_null IS NULL THEN NULL ELSE 0 END) = 1,
+       MAX(CASE WHEN contains_nan THEN 1 WHEN contains_nan IS NULL THEN NULL ELSE 0 END) = 1,
+       MIN(min_value), MAX(max_value), MAX(extra_stats)
+FROM {METADATA_CATALOG}.ducklake_table_column_stats
+GROUP BY table_id, column_id;
+DROP TABLE {METADATA_CATALOG}.ducklake_table_column_stats;
+ALTER TABLE {METADATA_CATALOG}.__ducklake_column_stats_rebuild RENAME TO ducklake_table_column_stats;
 UPDATE {METADATA_CATALOG}.ducklake_metadata SET value = '1.1-dev1' WHERE key = 'version';
 	)";
 	ExecuteMigration(migrate_query, allow_failures, "1.0", "1.1-dev1");
@@ -4794,25 +4816,111 @@ struct ColumnStatsSQL {
 	}
 };
 
-string DuckLakeMetadataManager::UpdateGlobalTableStatsSql(const DuckLakeGlobalStatsInfo &stats) {
+struct MergedColumnStatsSQL {
+	string contains_null;
+	string contains_nan;
+	string min_val;
+	string max_val;
+};
+
+// min_value/max_value are VARCHAR, so without the cast LEAST('9','10') would be '9'.
+static string MergeBoundExpression(const DuckLakeMetadataManager::StatsMergeDialect &dialect,
+                                   const DuckLakeGlobalColumnStatsInfo &col_stats, const string &column,
+                                   const string &incoming, bool is_min) {
+	auto fn = is_min ? dialect.least_fn : dialect.greatest_fn;
+	if (!col_stats.has_type || !RequiresValueComparison(col_stats.type)) {
+		return StringUtil::Format("%s(%s, %s)", fn, column, incoming);
+	}
+	// Return the winning VARCHAR verbatim: casting the result back re-serializes it ('1.0' -> '1').
+	auto cast_type = dialect.column_type(col_stats.type);
+	auto cmp = is_min ? "<=" : ">=";
+	return StringUtil::Format("CASE WHEN CAST(%s AS %s) %s CAST(%s AS %s) THEN %s ELSE %s END", column, cast_type, cmp,
+	                          incoming, cast_type, column, incoming);
+}
+
+// `qualifier` must be the table name inside ON CONFLICT DO UPDATE - Postgres rejects a bare column there.
+static MergedColumnStatsSQL MergeColumnStatsAssignments(const DuckLakeMetadataManager::StatsMergeDialect &dialect,
+                                                        const DuckLakeGlobalColumnStatsInfo &col_stats,
+                                                        const ColumnStatsSQL &sql, const string &qualifier = string()) {
+	MergedColumnStatsSQL result;
+	auto stored = [&qualifier](const char *column) {
+		return qualifier.empty() ? string(column) : qualifier + "." + column;
+	};
+	auto stored_null = stored("contains_null");
+	auto stored_nan = stored("contains_nan");
+	auto stored_min = stored("min_value");
+	auto stored_max = stored("max_value");
+	// NULL incoming means unknown - propagate it, do not fall back to the stale stored bound.
+	if (!col_stats.has_min || sql.min_val == "NULL") {
+		result.min_val = "NULL";
+	} else {
+		result.min_val = StringUtil::Format("CASE WHEN %s IS NULL THEN %s ELSE %s END", stored_min, sql.min_val,
+		                                    MergeBoundExpression(dialect, col_stats, stored_min, sql.min_val, true));
+	}
+	if (!col_stats.has_max || sql.max_val == "NULL") {
+		result.max_val = "NULL";
+	} else {
+		result.max_val = StringUtil::Format("CASE WHEN %s IS NULL THEN %s ELSE %s END", stored_max, sql.max_val,
+		                                    MergeBoundExpression(dialect, col_stats, stored_max, sql.max_val, false));
+	}
+	result.contains_null =
+	    sql.contains_null == "NULL"
+	        ? stored_null
+	        : StringUtil::Format("CAST(%s AS BOOLEAN) OR COALESCE(%s, FALSE)", sql.contains_null, stored_null);
+	result.contains_nan = sql.contains_nan == "NULL" ? stored_nan
+	                                                 : StringUtil::Format("CAST(%s AS BOOLEAN) OR COALESCE(%s, FALSE)",
+	                                                                      sql.contains_nan, stored_nan);
+	return result;
+}
+
+DuckLakeMetadataManager::StatsMergeDialect DuckLakeMetadataManager::GetStatsMergeDialect() {
+	StatsMergeDialect dialect;
+	dialect.least_fn = ScalarLeastFunction();
+	dialect.greatest_fn = ScalarGreatestFunction();
+	dialect.supports_upsert = SupportsUpsert() && transaction.GetCatalog().SupportsStatsUpsert();
+	dialect.column_type = [this](const LogicalType &type) {
+		return GetColumnTypeInternal(type);
+	};
+	return dialect;
+}
+
+string DuckLakeMetadataManager::UpdateGlobalTableStatsSql(const DuckLakeGlobalStatsInfo &stats,
+                                                          GlobalStatsWrite write_mode,
+                                                          const StatsMergeDialect &dialect) {
 	string batch_query;
 
 	if (!stats.initialized) {
-		string column_stats_values;
-		for (auto &col_stats : stats.column_stats) {
-			if (!column_stats_values.empty()) {
-				column_stats_values += ",";
-			}
-			auto sql = ColumnStatsSQL::FromColumnStats(col_stats);
-			column_stats_values +=
-			    StringUtil::Format("(%d, %d, %s, %s, %s, %s, %s)", stats.table_id.index, col_stats.column_id.index,
-			                       sql.contains_null, sql.contains_nan, sql.min_val, sql.max_val, sql.extra_stats);
-		}
 		batch_query +=
 		    StringUtil::Format("INSERT INTO {METADATA_CATALOG}.ducklake_table_stats VALUES (%d, %d, %d, %d);",
 		                       stats.table_id.index, stats.record_count, stats.next_row_id, stats.table_size_bytes);
-		batch_query += StringUtil::Format("INSERT INTO {METADATA_CATALOG}.ducklake_table_column_stats VALUES %s;",
-		                                  column_stats_values);
+		if (!dialect.supports_upsert) {
+			string column_stats_values;
+			for (auto &col_stats : stats.column_stats) {
+				if (!column_stats_values.empty()) {
+					column_stats_values += ",";
+				}
+				auto sql = ColumnStatsSQL::FromColumnStats(col_stats);
+				column_stats_values +=
+				    StringUtil::Format("(%d, %d, %s, %s, %s, %s, %s)", stats.table_id.index, col_stats.column_id.index,
+				                       sql.contains_null, sql.contains_nan, sql.min_val, sql.max_val, sql.extra_stats);
+			}
+			batch_query += StringUtil::Format("INSERT INTO {METADATA_CATALOG}.ducklake_table_column_stats VALUES %s;",
+			                                  column_stats_values);
+			return batch_query;
+		}
+		// Upsert, NOT a plain INSERT: `initialized` is read pre-commit, so two concurrent first-inserts
+		// both reach this branch and a plain INSERT lets one win wholesale.
+		for (auto &col_stats : stats.column_stats) {
+			auto sql = ColumnStatsSQL::FromColumnStats(col_stats);
+			auto assignments = MergeColumnStatsAssignments(dialect, col_stats, sql, "ducklake_table_column_stats");
+			batch_query += StringUtil::Format(
+			    "INSERT INTO {METADATA_CATALOG}.ducklake_table_column_stats VALUES (%d, %d, %s, %s, %s, %s, %s) "
+			    "ON CONFLICT (table_id, column_id) DO UPDATE SET "
+			    "contains_null=%s, contains_nan=%s, min_value=%s, max_value=%s, extra_stats=%s;",
+			    stats.table_id.index, col_stats.column_id.index, sql.contains_null, sql.contains_nan, sql.min_val,
+			    sql.max_val, sql.extra_stats, assignments.contains_null, assignments.contains_nan, assignments.min_val,
+			    assignments.max_val, sql.extra_stats);
+		}
 	} else {
 		// stats have been initialized - update them
 		batch_query += StringUtil::Format(
@@ -4830,14 +4938,20 @@ string DuckLakeMetadataManager::UpdateGlobalTableStatsSql(const DuckLakeGlobalSt
 		// `::boolean` operator: both DuckDB and Postgres accept ANSI CAST,
 		// and SQLite's parser rejects `::` outright (SQLITE_ERROR:
 		// unrecognized token ":").
+		// Under READ COMMITTED a self-referencing UPDATE blocks on the row lock and re-reads the committed
+		// value, so MERGE needs no lock, CAS column or retry.
 		for (auto &col_stats : stats.column_stats) {
 			auto sql = ColumnStatsSQL::FromColumnStats(col_stats);
-			batch_query += StringUtil::Format(
-			    "UPDATE {METADATA_CATALOG}.ducklake_table_column_stats "
-			    "SET contains_null=CAST(%s AS BOOLEAN), contains_nan=CAST(%s AS BOOLEAN), min_value=%s, max_value=%s, "
-			    "extra_stats=%s WHERE table_id=%d AND column_id=%d;",
-			    sql.contains_null, sql.contains_nan, sql.min_val, sql.max_val, sql.extra_stats, stats.table_id.index,
-			    col_stats.column_id.index);
+			auto assignments =
+			    write_mode == GlobalStatsWrite::MERGE
+			        ? MergeColumnStatsAssignments(dialect, col_stats, sql)
+			        : MergedColumnStatsSQL {sql.contains_null, sql.contains_nan, sql.min_val, sql.max_val};
+			batch_query += StringUtil::Format("UPDATE {METADATA_CATALOG}.ducklake_table_column_stats "
+			                                  "SET contains_null=%s, contains_nan=%s, min_value=%s, max_value=%s, "
+			                                  "extra_stats=%s WHERE table_id=%d AND column_id=%d;",
+			                                  assignments.contains_null, assignments.contains_nan, assignments.min_val,
+			                                  assignments.max_val, sql.extra_stats, stats.table_id.index,
+			                                  col_stats.column_id.index);
 		}
 	}
 	return batch_query;

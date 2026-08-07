@@ -284,6 +284,9 @@ struct DuckLakeGlobalColumnStatsInfo {
 
 	string extra_stats;
 	bool has_extra_stats = false;
+
+	LogicalType type;
+	bool has_type = false;
 };
 
 struct DuckLakeGlobalStatsInfo {
