@@ -43,6 +43,8 @@ struct TransactionChangeInformation {
 	set<TableIndex> tables_rewrite_delete;
 };
 
+bool RequiresCommitLock(const TransactionChangeInformation &changes);
+
 struct SnapshotChangeInformation {
 	case_insensitive_set_t created_schemas;
 	set<SchemaIndex> dropped_schemas;

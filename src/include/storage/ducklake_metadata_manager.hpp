@@ -186,6 +186,15 @@ public:
 	virtual string GetVersionString();
 	virtual DuckLakeMetadata LoadDuckLake();
 
+	virtual idx_t AllocateNextSnapshotId(idx_t current_snapshot_id);
+	virtual idx_t AllocateNextCatalogId(idx_t current_next_catalog_id);
+	virtual idx_t AllocateNextFileId(idx_t current_next_file_id);
+	virtual idx_t AllocateNextSchemaVersion(idx_t current_schema_version);
+	virtual void EnsureIdSequences() {
+	}
+	virtual void AcquireCommitLock(const TransactionChangeInformation &changes) {
+	}
+
 	virtual unique_ptr<QueryResult> Execute(DuckLakeSnapshot snapshot, string &query);
 	virtual unique_ptr<QueryResult> Execute(string &query);
 

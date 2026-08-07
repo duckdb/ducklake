@@ -24,6 +24,21 @@ struct DuckLakeColumnSchemaEntry {
 };
 
 struct DuckLakeCommitContext {
+	std::function<idx_t(idx_t)> allocate_snapshot_id = [](idx_t current) {
+		return current + 1;
+	};
+	std::function<idx_t(idx_t)> allocate_catalog_id = [](idx_t current) {
+		return current;
+	};
+	std::function<idx_t(idx_t)> allocate_file_id = [](idx_t current) {
+		return current;
+	};
+	std::function<idx_t(idx_t)> allocate_schema_version = [](idx_t current) {
+		return current + 1;
+	};
+	std::function<void(const TransactionChangeInformation &)> acquire_commit_lock =
+	    [](const TransactionChangeInformation &) {
+	    };
 	//! Runs a metadata-DB query during conflict resolution.
 	std::function<unique_ptr<QueryResult>(string)> conflict_query_executor;
 	//! Builds the query text for GetSnapshotAndStatsAndChanges.

@@ -3,6 +3,7 @@
 #include "duckdb/main/database.hpp"
 #include "storage/ducklake_catalog.hpp"
 #include "storage/ducklake_transaction.hpp"
+#include "storage/ducklake_transaction_changes.hpp"
 #include "storage/ducklake_metadata_info.hpp"
 
 namespace duckdb {
@@ -136,6 +137,195 @@ string PostgresMetadataManager::GetSnapshotAndStatsAndChangesQuery() {
 	                                       "{METADATA_CATALOG}", "{METADATA_SCHEMA_ESCAPED}");
 	inner_query = StringUtil::Replace(inner_query, "'", "''");
 	return "SELECT * FROM postgres_query({METADATA_CATALOG_NAME_LITERAL}, '" + inner_query + "')";
+}
+
+idx_t PostgresMetadataManager::FetchScalarSequenceValue(const string &seq_name) {
+	DuckLakeSnapshot dummy {0, 0, 0, 0};
+	string query = "SELECT * FROM postgres_query({METADATA_CATALOG_NAME_LITERAL}, "
+	               "'SELECT nextval(''{METADATA_SCHEMA_ESCAPED}." +
+	               seq_name + "'')')";
+	auto result = Query(dummy, query);
+	if (result->HasError()) {
+		result->GetErrorObject().Throw("Failed to allocate next value from " + seq_name + ": ");
+	}
+	auto chunk = result->Fetch();
+	if (!chunk || chunk->size() == 0) {
+		throw InternalException("ducklake: %s returned no value from nextval()", seq_name);
+	}
+	auto v = chunk->data[0].GetValue(0).GetValue<int64_t>();
+	if (v < 0) {
+		throw InternalException("ducklake: %s returned negative value: %lld", seq_name, (long long)v);
+	}
+	return static_cast<idx_t>(v);
+}
+
+idx_t PostgresMetadataManager::AllocateNextSnapshotId(idx_t /*current_snapshot_id*/) {
+	return FetchScalarSequenceValue("ducklake_snapshot_id_seq");
+}
+
+idx_t PostgresMetadataManager::AllocateNextCatalogId(idx_t /*current_next_catalog_id*/) {
+	return FetchScalarSequenceValue("ducklake_catalog_id_seq");
+}
+
+idx_t PostgresMetadataManager::AllocateNextFileId(idx_t /*current_next_file_id*/) {
+	return FetchScalarSequenceValue("ducklake_file_id_seq");
+}
+
+idx_t PostgresMetadataManager::AllocateNextSchemaVersion(idx_t /*current_schema_version*/) {
+	return FetchScalarSequenceValue("ducklake_schema_version_seq");
+}
+
+idx_t PostgresMetadataManager::EnsureCatalogClassid() {
+	if (catalog_classid.IsValid()) {
+		return catalog_classid.GetIndex();
+	}
+	DuckLakeSnapshot dummy {};
+	string probe = "SELECT * FROM postgres_query({METADATA_CATALOG_NAME_LITERAL}, "
+	               "'SELECT hashtext(''{METADATA_SCHEMA_ESCAPED}'')::int4')";
+	auto probe_result = Query(dummy, probe);
+	if (probe_result->HasError()) {
+		probe_result->GetErrorObject().Throw("concurrent: failed to compute DuckLake advisory lock classid: ");
+	}
+	auto chunk = probe_result->Fetch();
+	if (!chunk || chunk->size() == 0) {
+		throw InternalException("ducklake: hashtext probe returned no row");
+	}
+	catalog_classid = static_cast<idx_t>(static_cast<uint32_t>(chunk->data[0].GetValue(0).GetValue<int32_t>()));
+	return catalog_classid.GetIndex();
+}
+
+void PostgresMetadataManager::AcquireCommitLock(const TransactionChangeInformation &changes) {
+	if (!RequiresCommitLock(changes)) {
+		return;
+	}
+	DuckLakeSnapshot dummy {};
+	auto classid = EnsureCatalogClassid();
+
+	string set_timeout = "SET LOCAL lock_timeout = '30s'";
+	auto timeout_res = Execute(dummy, set_timeout);
+	if (timeout_res->HasError()) {
+		timeout_res->GetErrorObject().Throw("concurrent: failed to set lock_timeout: ");
+	}
+
+	string query = "SELECT pg_advisory_xact_lock(" + std::to_string(static_cast<int32_t>(classid)) + ", " +
+	               std::to_string(DUCKLAKE_COMMIT_ADVISORY_SUBKEY) + ")";
+	auto result = Execute(dummy, query);
+	if (result->HasError()) {
+		result->GetErrorObject().Throw("concurrent: DuckLake commit serialization lock failed: ");
+	}
+}
+
+bool PostgresMetadataManager::BootstrapObjectsPresent() {
+	DuckLakeSnapshot dummy {};
+	string probe = R"(
+SELECT * FROM postgres_query({METADATA_CATALOG_NAME_LITERAL},
+'SELECT COUNT(*)::BIGINT FROM pg_catalog.pg_class c
+JOIN pg_catalog.pg_namespace n ON c.relnamespace = n.oid
+WHERE n.nspname = ''{METADATA_SCHEMA_ESCAPED}''
+  AND c.relname IN (
+    ''ducklake_snapshot_id_seq'',''ducklake_catalog_id_seq'',
+    ''ducklake_file_id_seq'',''ducklake_schema_version_seq'',
+    ''ducklake_schema_name_active_uidx'',''ducklake_table_name_active_uidx'',
+    ''ducklake_view_name_active_uidx'',''ducklake_delete_file_active_uidx''
+  )')
+)";
+	auto res = Query(dummy, probe);
+	if (res->HasError()) {
+		return false;
+	}
+	auto chunk = res->Fetch();
+	if (!chunk || chunk->size() == 0) {
+		return false;
+	}
+	auto v = chunk->data[0].GetValue(0).GetValue<int64_t>();
+	return v == 8;
+}
+
+void PostgresMetadataManager::EnsureIdSequences() {
+	DuckLakeSnapshot dummy {0, 0, 0, 0};
+
+	if (BootstrapObjectsPresent()) {
+		return;
+	}
+
+	auto classid = EnsureCatalogClassid();
+	string acquire = "SELECT pg_advisory_lock(" + std::to_string(static_cast<int32_t>(classid)) + ", " +
+	                 std::to_string(DUCKLAKE_BOOTSTRAP_ADVISORY_SUBKEY) + ")";
+	auto acq_res = Execute(dummy, acquire);
+	if (acq_res->HasError()) {
+		acq_res->GetErrorObject().Throw("concurrent: DuckLake bootstrap serialization lock failed: ");
+	}
+	string release = "SELECT pg_advisory_unlock(" + std::to_string(static_cast<int32_t>(classid)) + ", " +
+	                 std::to_string(DUCKLAKE_BOOTSTRAP_ADVISORY_SUBKEY) + ")";
+	auto release_lock = [&]() {
+		auto r = Execute(dummy, release);
+		(void)r;
+	};
+
+	if (BootstrapObjectsPresent()) {
+		release_lock();
+		return;
+	}
+
+	auto run = [&](string query) {
+		auto result = Execute(dummy, query);
+		if (result->HasError()) {
+			release_lock();
+			result->GetErrorObject().Throw("Failed to ensure DuckLake id sequences: ");
+		}
+	};
+
+	run("CREATE SEQUENCE IF NOT EXISTS {METADATA_SCHEMA_ESCAPED}.ducklake_snapshot_id_seq CACHE 1");
+	run("CREATE SEQUENCE IF NOT EXISTS {METADATA_SCHEMA_ESCAPED}.ducklake_catalog_id_seq CACHE 1");
+	run("CREATE SEQUENCE IF NOT EXISTS {METADATA_SCHEMA_ESCAPED}.ducklake_file_id_seq MINVALUE 0 START WITH 0 CACHE 1");
+	run("CREATE SEQUENCE IF NOT EXISTS {METADATA_SCHEMA_ESCAPED}.ducklake_schema_version_seq CACHE 1");
+	run(R"(SELECT setval(
+  '{METADATA_SCHEMA_ESCAPED}.ducklake_snapshot_id_seq',
+  GREATEST(
+    (SELECT last_value FROM {METADATA_SCHEMA_ESCAPED}.ducklake_snapshot_id_seq),
+    GREATEST(1, COALESCE((SELECT MAX(snapshot_id) FROM {METADATA_SCHEMA_ESCAPED}.ducklake_snapshot), 0))
+  ),
+  COALESCE((SELECT MAX(snapshot_id) FROM {METADATA_SCHEMA_ESCAPED}.ducklake_snapshot), 1) >= 1
+))");
+	run(R"(SELECT setval(
+  '{METADATA_SCHEMA_ESCAPED}.ducklake_catalog_id_seq',
+  GREATEST(
+    (SELECT last_value FROM {METADATA_SCHEMA_ESCAPED}.ducklake_catalog_id_seq),
+    GREATEST(1, COALESCE((SELECT MAX(next_catalog_id) - 1 FROM {METADATA_SCHEMA_ESCAPED}.ducklake_snapshot), 0))
+  ),
+  COALESCE((SELECT MAX(next_catalog_id) - 1 FROM {METADATA_SCHEMA_ESCAPED}.ducklake_snapshot), 0) >= 1
+))");
+	run(R"(SELECT setval(
+  '{METADATA_SCHEMA_ESCAPED}.ducklake_file_id_seq',
+  GREATEST(
+    (SELECT last_value FROM {METADATA_SCHEMA_ESCAPED}.ducklake_file_id_seq),
+    GREATEST(0, COALESCE((SELECT MAX(next_file_id) - 1 FROM {METADATA_SCHEMA_ESCAPED}.ducklake_snapshot), 0))
+  ),
+  COALESCE((SELECT MAX(next_file_id) - 1 FROM {METADATA_SCHEMA_ESCAPED}.ducklake_snapshot), 0) >= 1
+))");
+	run(R"(SELECT setval(
+  '{METADATA_SCHEMA_ESCAPED}.ducklake_schema_version_seq',
+  GREATEST(
+    (SELECT last_value FROM {METADATA_SCHEMA_ESCAPED}.ducklake_schema_version_seq),
+    GREATEST(1, COALESCE((SELECT MAX(schema_version) FROM {METADATA_SCHEMA_ESCAPED}.ducklake_snapshot), 0))
+  ),
+  COALESCE((SELECT MAX(schema_version) FROM {METADATA_SCHEMA_ESCAPED}.ducklake_snapshot), 1) >= 1
+))");
+
+	run("CREATE UNIQUE INDEX IF NOT EXISTS ducklake_schema_name_active_uidx "
+	    "ON {METADATA_SCHEMA_ESCAPED}.ducklake_schema (schema_name) "
+	    "WHERE end_snapshot IS NULL");
+	run("CREATE UNIQUE INDEX IF NOT EXISTS ducklake_table_name_active_uidx "
+	    "ON {METADATA_SCHEMA_ESCAPED}.ducklake_table (schema_id, table_name) "
+	    "WHERE end_snapshot IS NULL");
+	run("CREATE UNIQUE INDEX IF NOT EXISTS ducklake_view_name_active_uidx "
+	    "ON {METADATA_SCHEMA_ESCAPED}.ducklake_view (schema_id, view_name) "
+	    "WHERE end_snapshot IS NULL");
+	run("CREATE UNIQUE INDEX IF NOT EXISTS ducklake_delete_file_active_uidx "
+	    "ON {METADATA_SCHEMA_ESCAPED}.ducklake_delete_file (data_file_id) "
+	    "WHERE end_snapshot IS NULL");
+
+	release_lock();
 }
 
 string PostgresMetadataManager::GenerateFileColumnStatsCTEBody(const CTERequirement &req, TableIndex table_id) {

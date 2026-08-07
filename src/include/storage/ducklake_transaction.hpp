@@ -327,7 +327,7 @@ public:
 	static DuckLakeGlobalStatsInfo ConvertNewGlobalStats(TableIndex table_id,
 	                                                     const DuckLakeNewGlobalStats &new_global_stats);
 
-	static DuckLakeFileInfo BuildDataFileInfo(const DuckLakeDataFile &file, DuckLakeSnapshot &commit_snapshot,
+	static DuckLakeFileInfo BuildDataFileInfo(const DuckLakeDataFile &file, DuckLakeCommitState &commit_state,
 	                                          TableIndex table_id, optional_idx row_id_start);
 
 	static void AddTableChanges(TableIndex table_id, const LocalTableDataChanges &table_changes,
