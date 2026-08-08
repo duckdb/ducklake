@@ -433,8 +433,12 @@ ALTER TABLE {METADATA_CATALOG}.ducklake_delete_file ADD COLUMN {IF_NOT_EXISTS} r
 CREATE TABLE {IF_NOT_EXISTS} {METADATA_CATALOG}.ducklake_view_column_tag(
 	view_id BIGINT, column_name VARCHAR, begin_snapshot BIGINT, end_snapshot BIGINT, key VARCHAR, value VARCHAR
 );
--- Rebuild-and-swap: an existing table cannot acquire a PRIMARY KEY by ALTER on these backends.
--- The GROUP BY also collapses duplicate rows, which a keyed table could not hold.
+-- Rebuild-and-swap: an existing table cannot acquire a PRIMARY KEY by ALTER on these backends, and
+-- CREATE INDEX is not portable here (DuckDB and SQLite reject each other's schema-qualification).
+-- The GROUP BY collapses duplicate (table_id, column_id) rows, which a keyed table cannot hold and
+-- which a v1.0 catalog can genuinely contain: the pre-upsert INSERT branch had no key and no
+-- conflict clause, so two concurrent first-inserts into one table each wrote their own row.
+-- Both readers LEFT JOIN this table USING (table_id), so a duplicate fans the join out.
 CREATE TABLE {IF_NOT_EXISTS} {METADATA_CATALOG}.__ducklake_column_stats_rebuild(
 	table_id BIGINT, column_id BIGINT, contains_null BOOLEAN, contains_nan BOOLEAN,
 	min_value VARCHAR, max_value VARCHAR, extra_stats VARCHAR, PRIMARY KEY(table_id, column_id)
@@ -4889,7 +4893,7 @@ DuckLakeMetadataManager::StatsMergeDialect DuckLakeMetadataManager::GetStatsMerg
 	StatsMergeDialect dialect;
 	dialect.least_fn = ScalarLeastFunction();
 	dialect.greatest_fn = ScalarGreatestFunction();
-	dialect.supports_upsert = SupportsUpsert();
+	dialect.supports_upsert = SupportsUpsert() && transaction.GetCatalog().SupportsStatsUpsert();
 	dialect.column_type = [this](const LogicalType &type) {
 		return GetColumnTypeInternal(type);
 	};
@@ -4909,7 +4913,8 @@ string DuckLakeMetadataManager::UpdateGlobalTableStatsSql(const DuckLakeGlobalSt
 		// concurrent first-inserts BOTH reach this branch and a plain INSERT lets one win wholesale,
 		// narrowing the range and pruning live rows.
 		if (!dialect.supports_upsert) {
-			// SQLite keeps the pre-upsert path and its lost update. See SQLiteMetadataManager.
+			// Pre-upsert path, keeping its lost update: either the backend rejects ON CONFLICT
+			// (SQLite) or the catalog predates the key it targets (SupportsStatsUpsert).
 			string column_stats_values;
 			for (auto &col_stats : stats.column_stats) {
 				if (!column_stats_values.empty()) {

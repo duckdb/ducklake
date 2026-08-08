@@ -227,6 +227,12 @@ public:
 	void SetDuckLakeVersion(DuckLakeVersion version) {
 		ducklake_version = version;
 	}
+	//! Whether ducklake_table_column_stats has the (table_id, column_id) key the stats upsert
+	//! needs as its ON CONFLICT target (added in 1.1-dev1). A catalog pinned to an older version
+	//! has no key, so it keeps the pre-upsert write and its concurrent-first-insert lost update.
+	bool SupportsStatsUpsert() const {
+		return ducklake_version >= DuckLakeVersion::V1_1_DEV_1;
+	}
 	//! Whether the metadata schema has the row_group_count columns (added in 1.1-dev1)
 	bool SupportsRowGroupCount() const {
 		return ducklake_version >= DuckLakeVersion::V1_1_DEV_1;
