@@ -1024,6 +1024,15 @@ ORDER BY sort.table_id, sort.sort_id, sort_expr.sort_key_index
 
 template <class ROW>
 void TransformGlobalStatsRow(const ROW &row, vector<DuckLakeGlobalStatsInfo> &global_stats, idx_t from_column = 0) {
+	static constexpr const char *REQUIRED_FIELDS[] = {"table_id", "record_count", "next_row_id", "file_size_bytes"};
+	static constexpr idx_t REQUIRED_FIELD_OFFSETS[] = {0, 2, 3, 4};
+	for (idx_t field_idx = 0; field_idx < 4; field_idx++) {
+		if (row.IsNull(REQUIRED_FIELD_OFFSETS[field_idx] + from_column)) {
+			throw TransactionException("DuckLake conflict metadata incomplete: ducklake_table_stats.%s is NULL",
+			                           REQUIRED_FIELDS[field_idx]);
+		}
+	}
+
 	auto table_id = TableIndex(row.template GetValue<uint64_t>(0 + from_column));
 
 	if (global_stats.empty() || global_stats.back().table_id != table_id) {

@@ -1,0 +1,33 @@
+# name: test/sql/stats/table_stats_null_required_field.test
+# description: a NULL required table-stats field must fail cleanly without invalidating DuckDB
+# group: [stats]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/table_stats_null_required_field', METADATA_CATALOG 'dl', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE ducklake.t(i INTEGER)
+
+# A required table-level stats value must be validated before GetValueInternal.
+statement ok
+INSERT INTO dl.ducklake_table_stats VALUES (1, 5, NULL, 100)
+
+statement error
+INSERT INTO ducklake.t VALUES (100)
+----
+DuckLake conflict metadata incomplete: ducklake_table_stats.next_row_id is NULL
+
+# TransactionException is recoverable; unlike InternalException, it must not
+# invalidate the entire embedded DuckDB instance.
+query I
+SELECT 42
+----
+42
