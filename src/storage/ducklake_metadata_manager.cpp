@@ -4847,9 +4847,12 @@ static string MergeBoundExpression(const DuckLakeMetadataManager::StatsMergeDial
 	if (!col_stats.has_type || !RequiresValueComparison(col_stats.type)) {
 		return StringUtil::Format("%s(%s, %s)", fn, column, incoming);
 	}
+	// Compare as the declared type, but return the winning VARCHAR verbatim. Casting the comparison
+	// result back to VARCHAR would re-serialize the literal and lose its formatting ('1.0' -> '1').
 	auto cast_type = dialect.column_type(col_stats.type);
-	return StringUtil::Format("CAST(%s(CAST(%s AS %s), CAST(%s AS %s)) AS VARCHAR)", fn, column, cast_type, incoming,
-	                          cast_type);
+	auto cmp = is_min ? "<=" : ">=";
+	return StringUtil::Format("CASE WHEN CAST(%s AS %s) %s CAST(%s AS %s) THEN %s ELSE %s END", column, cast_type, cmp,
+	                          incoming, cast_type, column, incoming);
 }
 
 // `qualifier` prefixes the STORED row. Empty for a plain UPDATE; inside ON CONFLICT DO UPDATE it
