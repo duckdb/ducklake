@@ -433,17 +433,9 @@ ALTER TABLE {METADATA_CATALOG}.ducklake_delete_file ADD COLUMN {IF_NOT_EXISTS} r
 CREATE TABLE {IF_NOT_EXISTS} {METADATA_CATALOG}.ducklake_view_column_tag(
 	view_id BIGINT, column_name VARCHAR, begin_snapshot BIGINT, end_snapshot BIGINT, key VARCHAR, value VARCHAR
 );
--- Give ducklake_table_column_stats its (table_id, column_id) PRIMARY KEY, which is what arbitrates
--- the ON CONFLICT in UpdateGlobalTableStatsSql. An existing table cannot acquire a key by ALTER on
--- these backends, so it is rebuilt and swapped - and since the rebuild is a GROUP BY, it also
--- collapses any duplicate rows, which a keyed table could not hold anyway.
--- Duplicates are never two facts: the row is meant to be one merged bound per column, and a seeding
--- bug shipped in development produced two. They are also already harmful - both stats readers
--- LEFT JOIN this table USING (table_id), so a duplicate fans the join out and feeds one column's
--- stats in twice. The collapse uses the same widen-only semantics as the merge itself (MIN/MAX
--- bounds, OR'd flags), so it can only relax a bound, never lose a row's contribution.
-DROP TABLE {IF_EXISTS} {METADATA_CATALOG}.__ducklake_column_stats_rebuild;
-CREATE TABLE {METADATA_CATALOG}.__ducklake_column_stats_rebuild(
+-- Rebuild-and-swap: an existing table cannot acquire a PRIMARY KEY by ALTER on these backends.
+-- The GROUP BY also collapses duplicate rows, which a keyed table could not hold.
+CREATE TABLE {IF_NOT_EXISTS} {METADATA_CATALOG}.__ducklake_column_stats_rebuild(
 	table_id BIGINT, column_id BIGINT, contains_null BOOLEAN, contains_nan BOOLEAN,
 	min_value VARCHAR, max_value VARCHAR, extra_stats VARCHAR, PRIMARY KEY(table_id, column_id)
 );

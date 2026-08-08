@@ -1116,7 +1116,11 @@ NewDataInfo DuckLakeTransactionState::GetNewDataFiles(
 			new_globals.stats = *current_stats;
 			new_globals.initialized = true;
 		}
+		bool dropped_files = attempt_dropped_file_stats.find(table_id) != attempt_dropped_file_stats.end();
 		bool clear_column_stats = ApplyDroppedFileStats(table_id, new_globals, attempt_dropped_file_stats);
+		// This commit dropped every file, so the column stats below describe only rows it wrote itself:
+		// they are absolute, and merging them against the bounds of the rows just deleted resurrects them.
+		bool emptied_table = dropped_files && !clear_column_stats;
 		auto &new_stats = new_globals.stats;
 		vector<DuckLakeDeleteFile> delete_files;
 		for (auto &file : table_changes.new_data_files) {
@@ -1182,7 +1186,8 @@ NewDataInfo DuckLakeTransactionState::GetNewDataFiles(
 		// update the global stats for this table based on the newly written data
 		batch_query +=
 		    context.update_global_table_stats_sql(DuckLakeTransaction::ConvertNewGlobalStats(table_id, new_globals),
-		                                          DuckLakeMetadataManager::GlobalStatsWrite::MERGE);
+		                                          emptied_table ? DuckLakeMetadataManager::GlobalStatsWrite::OVERWRITE
+		                                                        : DuckLakeMetadataManager::GlobalStatsWrite::MERGE);
 		if (clear_column_stats) {
 			batch_query += DeleteTableColumnStatsSql(table_id);
 		}
