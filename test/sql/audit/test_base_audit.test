@@ -168,10 +168,13 @@ CALL ducklake.set_commit_message('Pedro', 'Adding Morgana');
 statement ok
 Commit;
 
-query III
-SELECT snapshot_id, author, commit_message FROM ducklake.snapshots() where snapshot_id = 9
+# A failed commit consumes a snapshot id on backends that allocate from a sequence, so anchor
+# to the newest snapshot rather than a literal id from here on.
+query II
+SELECT author, commit_message FROM ducklake.snapshots()
+    where snapshot_id = (SELECT MAX(snapshot_id) FROM ducklake.snapshots())
 ----
-9	Pedro	Adding Morgana
+Pedro	Adding Morgana
 
 
 statement error
@@ -187,10 +190,11 @@ CALL ducklake.set_option('require_commit_message', False)
 statement ok
 INSERT INTO ducklake.test VALUES (8, 'Odara');
 
-query III
-SELECT snapshot_id, author, commit_message FROM ducklake.snapshots() where snapshot_id = 10
+query II
+SELECT author, commit_message FROM ducklake.snapshots()
+    where snapshot_id = (SELECT MAX(snapshot_id) FROM ducklake.snapshots())
 ----
-10	NULL	NULL
+NULL	NULL
 
 # Changing commit message afterwards
 statement ok
@@ -209,16 +213,18 @@ statement ok
 COMMIT;
 
 # Last set should survive
-query III
-SELECT snapshot_id, author, commit_message FROM ducklake.snapshots() where snapshot_id = 11
+query II
+SELECT author, commit_message FROM ducklake.snapshots()
+    where snapshot_id = (SELECT MAX(snapshot_id) FROM ducklake.snapshots())
 ----
-11	Mark	Inserting Teddy
+Mark	Inserting Teddy
 
 # Lets check that our previous insertion has a null value for extra info
-query IIII
-SELECT snapshot_id, author, commit_message, commit_extra_info FROM ducklake.snapshots() where snapshot_id = 11
+query III
+SELECT author, commit_message, commit_extra_info FROM ducklake.snapshots()
+    where snapshot_id = (SELECT MAX(snapshot_id) FROM ducklake.snapshots())
 ----
-11	Mark	Inserting Teddy	NULL
+Mark	Inserting Teddy	NULL
 
 # Let's add some extra info to the next commit
 
@@ -235,10 +241,11 @@ statement ok
 COMMIT;
 
 # Lets check ollie is inserted with the correct extra_info
-query IIII
-SELECT snapshot_id, author, commit_message, commit_extra_info FROM ducklake.snapshots() where snapshot_id = 12
+query III
+SELECT author, commit_message, commit_extra_info FROM ducklake.snapshots()
+    where snapshot_id = (SELECT MAX(snapshot_id) FROM ducklake.snapshots())
 ----
-12	Pedro	Inserting Ollie	{'barks':7, 'cuteness':10}
+Pedro	Inserting Ollie	{'barks':7, 'cuteness':10}
 
 # Empty is also valid
 statement ok
@@ -254,10 +261,11 @@ statement ok
 COMMIT;
 
 # Lets check ollie is inserted with the correct extra_info
-query IIII
-SELECT snapshot_id, author, commit_message, commit_extra_info FROM ducklake.snapshots() where snapshot_id = 13
+query III
+SELECT author, commit_message, commit_extra_info FROM ducklake.snapshots()
+    where snapshot_id = (SELECT MAX(snapshot_id) FROM ducklake.snapshots())
 ----
-13	Pedro	Inserting the greatest musician of the world.	(empty)
+Pedro	Inserting the greatest musician of the world.	(empty)
 
 # Check all data was inserted correctly at the end
 query II
