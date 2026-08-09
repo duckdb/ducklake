@@ -175,6 +175,26 @@ idx_t PostgresMetadataManager::AllocateNextSchemaVersion(idx_t /*current_schema_
 	return FetchScalarSequenceValue("ducklake_schema_version_seq");
 }
 
+idx_t PostgresMetadataManager::PeekSchemaVersion(idx_t current_schema_version) {
+	DuckLakeSnapshot dummy {0, 0, 0, 0};
+	string query = "SELECT * FROM postgres_query({METADATA_CATALOG_NAME_LITERAL}, "
+	               "'SELECT CASE WHEN is_called THEN last_value ELSE 0 END "
+	               "FROM {METADATA_SCHEMA_ESCAPED}.ducklake_schema_version_seq')";
+	auto result = Query(dummy, query);
+	if (result->HasError()) {
+		return current_schema_version;
+	}
+	auto chunk = result->Fetch();
+	if (!chunk || chunk->size() == 0) {
+		return current_schema_version;
+	}
+	auto v = chunk->data[0].GetValue(0).GetValue<int64_t>();
+	if (v < 0 || static_cast<idx_t>(v) < current_schema_version) {
+		return current_schema_version;
+	}
+	return static_cast<idx_t>(v);
+}
+
 idx_t PostgresMetadataManager::EnsureCatalogClassid() {
 	if (catalog_classid.IsValid()) {
 		return catalog_classid.GetIndex();

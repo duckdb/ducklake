@@ -36,6 +36,12 @@ struct DuckLakeCommitContext {
 	std::function<idx_t(idx_t)> allocate_schema_version = [](idx_t current) {
 		return current + 1;
 	};
+	//! Highest schema version already handed out, without consuming one. Backends that allocate
+	//! schema versions independently of snapshot ids must override this, or a commit that makes no
+	//! schema change can write back a stale version and alias two catalog states onto one cache key.
+	std::function<idx_t(idx_t)> peek_schema_version = [](idx_t current) {
+		return current;
+	};
 	std::function<void(const TransactionChangeInformation &)> acquire_commit_lock =
 	    [](const TransactionChangeInformation &) {
 	    };

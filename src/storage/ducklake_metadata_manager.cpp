@@ -4237,6 +4237,10 @@ idx_t DuckLakeMetadataManager::AllocateNextSchemaVersion(idx_t current_schema_ve
 	return current_schema_version + 1;
 }
 
+idx_t DuckLakeMetadataManager::PeekSchemaVersion(idx_t current_schema_version) {
+	return current_schema_version;
+}
+
 static string SQLStringOrNull(const string &str) {
 	if (str.empty()) {
 		return "NULL";

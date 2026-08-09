@@ -190,6 +190,7 @@ public:
 	virtual idx_t AllocateNextCatalogId(idx_t current_next_catalog_id);
 	virtual idx_t AllocateNextFileId(idx_t current_next_file_id);
 	virtual idx_t AllocateNextSchemaVersion(idx_t current_schema_version);
+	virtual idx_t PeekSchemaVersion(idx_t current_schema_version);
 	virtual void EnsureIdSequences() {
 	}
 	virtual void AcquireCommitLock(const TransactionChangeInformation &changes) {

@@ -1899,6 +1899,11 @@ void DuckLakeTransactionState::Commit(DuckLakeSnapshot transaction_snapshot,
 			if (SchemaChangesMade()) {
 				// we changed the schema - need to get a new schema version
 				commit_snapshot.schema_version = context.allocate_schema_version(commit_snapshot.schema_version);
+			} else {
+				// No schema change: keep the version we read, but never let it move backwards. The seed comes
+				// from MAX(snapshot_id), which under concurrency can predate a schema bump another commit
+				// already made - writing it back would alias two catalog states onto one schema cache key.
+				commit_snapshot.schema_version = context.peek_schema_version(commit_snapshot.schema_version);
 			}
 			DuckLakeCommitState commit_state(commit_snapshot, context);
 			// write the new snapshot
