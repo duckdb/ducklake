@@ -219,11 +219,18 @@ SnapshotChangeInformation SnapshotChangeInformation::ParseChangesMade(const stri
 }
 
 bool RequiresCommitLock(const TransactionChangeInformation &changes) {
+	// Compaction is here because its conflict check is scoped by snapshot id
+	// (`snapshot_changes WHERE snapshot_id > {SNAPSHOT_ID}`), which cannot see a
+	// concurrent committer that has not committed yet. Two compactions starting
+	// before either commits therefore both find an empty change set and both
+	// commit, rewriting the same files twice and duplicating rows. Serializing
+	// them puts the loser's check after the winner's commit, where it fires.
 	return !changes.created_tables.empty() || !changes.dropped_tables.empty() || !changes.created_schemas.empty() ||
 	       !changes.dropped_schemas.empty() || !changes.dropped_views.empty() ||
 	       !changes.created_scalar_macros.empty() || !changes.created_table_macros.empty() ||
 	       !changes.dropped_scalar_macros.empty() || !changes.dropped_table_macros.empty() ||
-	       !changes.altered_tables_with_schema_version_changes.empty();
+	       !changes.altered_tables_with_schema_version_changes.empty() || !changes.tables_merge_adjacent.empty() ||
+	       !changes.tables_rewrite_delete.empty();
 }
 
 } // namespace duckdb
