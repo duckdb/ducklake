@@ -10,7 +10,7 @@ require parquet
 # limit. The view must still land in its own schema when con1 finally commits.
 
 statement ok
-ATTACH 'ducklake:__TEST_DIR__/view_schema_cache.db' AS ducklake (DATA_PATH '__TEST_DIR__/view_schema_cache_files', METADATA_CATALOG 'metadata')
+ATTACH 'ducklake:{TEST_DIR}/view_schema_cache.db' AS ducklake (DATA_PATH '{TEST_DIR}/view_schema_cache_files', METADATA_CATALOG 'metadata')
 
 # Several schemas, so a misfiled view has somewhere else to land.
 statement ok
@@ -19,7 +19,7 @@ CREATE SCHEMA ducklake.target
 loop i 0 8
 
 statement ok
-CREATE SCHEMA ducklake.filler_${i}
+CREATE SCHEMA ducklake.filler_{i}
 
 endloop
 
@@ -27,7 +27,7 @@ endloop
 loop i 0 100
 
 statement ok
-CREATE TABLE ducklake.t${i} (id INTEGER, a INTEGER, b INTEGER, c INTEGER, d INTEGER, e INTEGER)
+CREATE TABLE ducklake.t{i} (id INTEGER, a INTEGER, b INTEGER, c INTEGER, d INTEGER, e INTEGER)
 
 endloop
 
@@ -54,7 +54,7 @@ CREATE VIEW ducklake.target.v1 AS SELECT 42 AS i
 loop i 0 30
 
 statement ok con2
-ALTER TABLE ducklake.churn ADD COLUMN col_${i} INTEGER DEFAULT ${i}
+ALTER TABLE ducklake.churn ADD COLUMN col_{i} INTEGER DEFAULT {i}
 
 statement ok con2
 SELECT COUNT(*) FROM ducklake.churn
@@ -68,7 +68,7 @@ CREATE TEMP TABLE mem_filler(i INTEGER, pad VARCHAR)
 loop j 0 3
 
 statement ok con2
-INSERT INTO mem_filler SELECT i + ${j} * 5000, repeat('x', 1000) FROM range(5000) t(i)
+INSERT INTO mem_filler SELECT i + {j} * 5000, repeat('x', 1000) FROM range(5000) t(i)
 
 endloop
 
@@ -76,7 +76,7 @@ endloop
 loop i 30 400
 
 statement ok con2
-ALTER TABLE ducklake.churn ADD COLUMN col_${i} INTEGER DEFAULT ${i}
+ALTER TABLE ducklake.churn ADD COLUMN col_{i} INTEGER DEFAULT {i}
 
 statement ok con2
 SELECT COUNT(*) FROM ducklake.churn
@@ -123,7 +123,7 @@ statement ok
 DETACH ducklake
 
 statement ok
-ATTACH 'ducklake:__TEST_DIR__/view_schema_cache.db' AS ducklake (DATA_PATH '__TEST_DIR__/view_schema_cache_files')
+ATTACH 'ducklake:{TEST_DIR}/view_schema_cache.db' AS ducklake (DATA_PATH '{TEST_DIR}/view_schema_cache_files')
 
 query I
 SELECT * FROM ducklake.target.v1
