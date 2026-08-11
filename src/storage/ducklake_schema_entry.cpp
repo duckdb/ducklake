@@ -8,6 +8,7 @@
 #include "duckdb/parser/parsed_data/create_view_info.hpp"
 #include "duckdb/parser/parsed_data/drop_info.hpp"
 #include "duckdb/planner/parsed_data/bound_create_table_info.hpp"
+#include "functions/ducklake_table_functions.hpp"
 #include "storage/ducklake_catalog.hpp"
 #include "storage/ducklake_table_entry.hpp"
 #include "storage/ducklake_transaction.hpp"
@@ -64,9 +65,10 @@ bool DuckLakeSchemaEntry::HandleCreateConflict(CatalogTransaction transaction, C
 	return true;
 }
 
-optional_ptr<CatalogEntry> DuckLakeSchemaEntry::CreateTableExtended(CatalogTransaction transaction,
-                                                                    BoundCreateTableInfo &info, string table_uuid,
-                                                                    string table_data_path) {
+optional_ptr<CatalogEntry>
+DuckLakeSchemaEntry::CreateTableExtended(CatalogTransaction transaction, BoundCreateTableInfo &info, string table_uuid,
+                                         string table_data_path, unique_ptr<DuckLakePartition> prebuilt_partition_data,
+                                         unique_ptr<DuckLakeSort> prebuilt_sort_data) {
 	auto &duck_transaction = transaction.transaction->Cast<DuckLakeTransaction>();
 	auto &base_info = info.Base();
 	// check if we have an existing entry with this name
@@ -79,6 +81,8 @@ optional_ptr<CatalogEntry> DuckLakeSchemaEntry::CreateTableExtended(CatalogTrans
 	if (duck_catalog.DataInliningRowLimit(transaction.GetContext(), schema_id, TableIndex()) > 0) {
 		DuckLakeUtil::ValidateNoInlinedSystemColumns(base_info.columns);
 	}
+	// validate WITH (...) options before any catalog mutation
+	auto options_in_create_with = ValidateOptionsInCreateWith(transaction.GetContext(), base_info.options);
 	//! get a local table-id
 	auto table_id = TableIndex(duck_transaction.GetLocalCatalogId());
 	// generate field ids based on the column ids
@@ -88,6 +92,23 @@ optional_ptr<CatalogEntry> DuckLakeSchemaEntry::CreateTableExtended(CatalogTrans
 	auto table_entry = make_uniq<DuckLakeTableEntry>(ParentCatalog(), *this, base_info, table_id, std::move(table_uuid),
 	                                                 std::move(table_data_path), std::move(field_data), column_id,
 	                                                 std::move(inlined_tables), LocalChangeType::CREATED);
+	// CTAS passes prebuilt specs (ids must match the on-disk files); plain CREATE rebuilds from the inline clauses.
+	if (prebuilt_partition_data) {
+		table_entry->SetPartitionData(std::move(prebuilt_partition_data));
+	} else if (!base_info.partition_keys.empty()) {
+		table_entry->SetPartitionData(DuckLakeTableEntry::BuildPartitionData(
+		    duck_transaction, table_entry->GetColumns(), table_entry->GetFieldData(), base_info.partition_keys));
+	}
+	if (prebuilt_sort_data) {
+		table_entry->SetSortData(std::move(prebuilt_sort_data));
+	} else if (!base_info.sort_keys.empty()) {
+		table_entry->SetSortData(
+		    DuckLakeTableEntry::BuildSortData(duck_transaction, table_entry->GetColumns(), base_info.sort_keys));
+	}
+	// Stash on the entry (not the catalog) so it scopes to the transaction; persisted at commit under the real id.
+	if (!options_in_create_with.empty()) {
+		table_entry->SetOptionsInCreateWith(options_in_create_with);
+	}
 	auto result = table_entry.get();
 	duck_transaction.CreateEntry(std::move(table_entry));
 	return result;

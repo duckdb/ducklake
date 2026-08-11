@@ -8,6 +8,11 @@
 #include "storage/ducklake_table_entry.hpp"
 #include "storage/ducklake_schema_entry.hpp"
 
+#include "duckdb/execution/expression_executor.hpp"
+#include "duckdb/parser/parsed_expression.hpp"
+#include "duckdb/planner/binder.hpp"
+#include "duckdb/planner/expression_binder/constant_binder.hpp"
+
 namespace duckdb {
 // -------------------------------------------------------------------------//
 // Group of functions to validate if it's safe to change the inline option
@@ -69,6 +74,28 @@ static void ValidateNoReservedInliningColumns(ClientContext &context, Catalog &c
 // ------------------------------------------------------------------------//
 // ------------------------------------------------------------------------//
 
+vector<DuckLakeTag> ValidateOptionsInCreateWith(ClientContext &context,
+                                                const case_insensitive_map_t<unique_ptr<ParsedExpression>> &options) {
+	// Each value must fold to a literal under ConstantBinder; copy before binding since CTAS calls this twice.
+	auto binder = Binder::CreateBinder(context);
+	ConstantBinder option_binder(*binder, context, "DuckLake WITH option");
+	vector<DuckLakeTag> result;
+	result.reserve(options.size());
+	for (auto &option : options) {
+		if (!option.second) {
+			throw BinderException("WITH option \"%s\" requires a value", option.first);
+		}
+		auto expr_copy = option.second->Copy();
+		auto bound_expr = option_binder.Bind(expr_copy);
+		if (bound_expr->HasParameter()) {
+			throw ParameterNotResolvedException();
+		}
+		auto value = ExpressionExecutor::EvaluateScalar(context, *bound_expr, true);
+		result.push_back(ValidateDuckLakeConfigOption(context, option.first, value));
+	}
+	return result;
+}
+
 struct DuckLakeSetOptionData : public TableFunctionData {
 	DuckLakeSetOptionData(Catalog &catalog, DuckLakeConfigOption option_p)
 	    : catalog(catalog), option(std::move(option_p)) {
@@ -78,17 +105,12 @@ struct DuckLakeSetOptionData : public TableFunctionData {
 	DuckLakeConfigOption option;
 };
 
-static unique_ptr<FunctionData> DuckLakeSetOptionBind(ClientContext &context, TableFunctionBindInput &input,
-                                                      vector<LogicalType> &return_types, vector<string> &names) {
-	auto &catalog = DuckLakeBaseMetadataFunction::GetCatalog(context, input.inputs[0]);
-	DuckLakeConfigOption config_option;
-	auto &option = config_option.option.key;
-	auto &value = config_option.option.value;
+DuckLakeTag ValidateDuckLakeConfigOption(ClientContext &context, const string &option_key, const Value &val) {
+	DuckLakeTag result;
+	auto option = StringUtil::Lower(option_key);
+	result.key = option;
+	auto &value = result.value;
 
-	option = StringUtil::Lower(StringValue::Get(input.inputs[1]));
-	auto &val = input.inputs[2];
-
-	// read the option
 	if (option == "parquet_compression") {
 		auto codec = val.DefaultCastAs(LogicalType::VARCHAR).GetValue<string>();
 		vector<string> supported_algorithms {"uncompressed", "snappy", "gzip", "zstd", "brotli", "lz4", "lz4_raw"};
@@ -132,9 +154,6 @@ static unique_ptr<FunctionData> DuckLakeSetOptionBind(ClientContext &context, Ta
 	} else if (option == "data_inlining_row_limit") {
 		auto data_inlining_row_limit = val.DefaultCastAs(LogicalType::UBIGINT).GetValue<idx_t>();
 		value = to_string(data_inlining_row_limit);
-		if (data_inlining_row_limit > 0) {
-			ValidateNoReservedInliningColumns(context, catalog, input);
-		}
 	} else if (option == "require_commit_message") {
 		value = val.GetValue<bool>() ? "true" : "false";
 	} else if (option == "rewrite_delete_threshold") {
@@ -148,9 +167,8 @@ static unique_ptr<FunctionData> DuckLakeSetOptionBind(ClientContext &context, Ta
 	} else if (option == "delete_older_than" || option == "expire_older_than") {
 		auto interval_value = val.ToString();
 		if (!interval_value.empty()) {
-			// Let's verify this is actually an interval
-			interval_t result;
-			if (!Interval::FromString(val.ToString(), result)) {
+			interval_t interval_result;
+			if (!Interval::FromString(val.ToString(), interval_result)) {
 				throw BinderException("%s is not a valid interval value.", option);
 			}
 		}
@@ -168,6 +186,19 @@ static unique_ptr<FunctionData> DuckLakeSetOptionBind(ClientContext &context, Ta
 		value = val.CastAs(context, LogicalType::BOOLEAN).GetValue<bool>() ? "true" : "false";
 	} else {
 		throw NotImplementedException("Unsupported option %s", option);
+	}
+	return result;
+}
+
+static unique_ptr<FunctionData> DuckLakeSetOptionBind(ClientContext &context, TableFunctionBindInput &input,
+                                                      vector<LogicalType> &return_types, vector<string> &names) {
+	auto &catalog = DuckLakeBaseMetadataFunction::GetCatalog(context, input.inputs[0]);
+	DuckLakeConfigOption config_option;
+	config_option.option = ValidateDuckLakeConfigOption(context, StringValue::Get(input.inputs[1]), input.inputs[2]);
+	auto &option = config_option.option.key;
+	// enabling inlining for existing tables requires that no table in scope uses reserved column names
+	if (option == "data_inlining_row_limit" && std::stoull(config_option.option.value) > 0) {
+		ValidateNoReservedInliningColumns(context, catalog, input);
 	}
 
 	// read the scope

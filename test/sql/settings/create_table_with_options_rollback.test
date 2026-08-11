@@ -1,0 +1,59 @@
+# name: test/sql/settings/create_table_with_options_rollback.test
+# description: A rolled-back CREATE TABLE WITH (...) must not leak across transactions.
+# group: [settings]
+
+require ducklake
+
+require parquet
+
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/ducklake_with_rollback.db' AS ducklake (DATA_PATH '{TEST_DIR}/ducklake_with_rollback_files');
+
+statement ok
+SET threads=1
+
+statement ok
+SET preserve_insertion_order=false
+
+# create a table with a WITH override, then ROLLBACK. The transaction-local table_id used in this
+# transaction is reset for the next DuckLakeTransaction (each starts at TRANSACTION_LOCAL_ID_START),
+# so a leaked override under that local id would silently contaminate any subsequent transaction
+# whose first new table happens to land on the same local id.
+statement ok
+BEGIN
+
+statement ok
+CREATE TABLE ducklake.t_rolled (i INTEGER) WITH (parquet_compression='gzip')
+
+statement ok
+INSERT INTO ducklake.t_rolled SELECT i FROM range(100) t(i)
+
+statement ok
+ROLLBACK
+
+# nothing about the rolled-back table should remain in metadata
+query I
+SELECT COUNT(*) FROM ducklake.options() WHERE scope='TABLE'
+----
+0
+
+# next transaction creates a plain table (no WITH) and writes to it BEFORE commit, so the
+# INSERT planner looks up options under the transaction-local id. With the leak, that id
+# resolves to the rolled-back gzip override; the parquet write would silently be gzip.
+statement ok
+BEGIN
+
+statement ok
+CREATE TABLE ducklake.t_clean(i INTEGER)
+
+statement ok
+INSERT INTO ducklake.t_clean SELECT i FROM range(2000) t(i)
+
+statement ok
+COMMIT
+
+# default parquet compression in DuckDB is snappy
+query I
+SELECT DISTINCT compression FROM parquet_metadata('{TEST_DIR}/ducklake_with_rollback_files/main/t_clean/**')
+----
+SNAPPY

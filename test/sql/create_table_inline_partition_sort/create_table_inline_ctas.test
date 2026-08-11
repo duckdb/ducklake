@@ -1,0 +1,277 @@
+# name: test/sql/create_table_inline_partition_sort/create_table_inline_ctas.test
+# description: CREATE TABLE AS SELECT with inline PARTITIONED BY / SORTED BY clauses
+# group: [create_table_inline_partition_sort]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/inline_ctas', METADATA_CATALOG 'ducklake_metadata', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+USE ducklake
+
+# Test 1: CTAS with PARTITIONED BY only
+statement ok
+CREATE TABLE ctas_part PARTITIONED BY (i) AS SELECT range AS i, range::VARCHAR AS v FROM range(5)
+
+query II
+SELECT i, v FROM ctas_part ORDER BY i
+----
+0	0
+1	1
+2	2
+3	3
+4	4
+
+# resolve the table_id in a separate statement - some metadata catalogs (e.g. Quack
+# ones) cannot scan two of their tables in a single query
+statement ok
+SET VARIABLE ctas_part_id = (SELECT table_id FROM ducklake_metadata.ducklake_table WHERE table_name = 'ctas_part')
+
+query I
+SELECT count(*) FROM ducklake_metadata.ducklake_partition_info WHERE table_id = getvariable('ctas_part_id')
+----
+1
+
+# CTAS must hive-partition on the initial write: 5 distinct values from range(5) -> 5 hive directories
+query I
+SELECT DISTINCT regexp_extract(path, '.*(i=[0-9]+)[/\\].*', 1) FROM ducklake_metadata.ducklake_data_file WHERE table_id = getvariable('ctas_part_id') ORDER BY 1
+----
+i=0
+i=1
+i=2
+i=3
+i=4
+
+# Test 2: CTAS with SORTED BY only.
+statement ok
+CREATE TABLE ctas_sort SORTED BY (j) AS SELECT range AS i, 9 - range AS j FROM range(10)
+
+# ctas_sort is non-partitioned; CTAS produces a single file. SELECT without ORDER BY returns the
+# file's row order directly. SORTED BY (j) means j-ascending; i is forced descending by construction.
+query II
+SELECT i, j FROM ctas_sort
+----
+9	0
+8	1
+7	2
+6	3
+5	4
+4	5
+3	6
+2	7
+1	8
+0	9
+
+statement ok
+SET VARIABLE ctas_sort_id = (SELECT table_id FROM ducklake_metadata.ducklake_table WHERE table_name = 'ctas_sort')
+
+query I
+SELECT count(*) FROM ducklake_metadata.ducklake_sort_info WHERE table_id = getvariable('ctas_sort_id')
+----
+1
+
+# Test 3: CTAS with both clauses, PARTITIONED first. 30 rows partitioned into 3 groups of 10;
+# sort key v = (29 - i) is the inverse of the SELECT's natural order so the sort has real work.
+statement ok
+CREATE TABLE ctas_both PARTITIONED BY (g) SORTED BY (v) AS
+SELECT range % 3 AS g, 29 - range AS v FROM range(30)
+
+statement ok
+SET VARIABLE ctas_both_id = (SELECT table_id FROM ducklake_metadata.ducklake_table WHERE table_name = 'ctas_both')
+
+query I
+SELECT count(*) FROM ducklake_metadata.ducklake_partition_info WHERE table_id = getvariable('ctas_both_id')
+----
+1
+
+query I
+SELECT count(*) FROM ducklake_metadata.ducklake_sort_info WHERE table_id = getvariable('ctas_both_id')
+----
+1
+
+# 3 distinct partition values -> 3 hive directories
+query I
+SELECT count(DISTINCT regexp_extract(path, '.*(g=[0-9]+)[/\\].*', 1)) FROM ducklake_metadata.ducklake_data_file WHERE table_id = getvariable('ctas_both_id')
+----
+3
+
+# verify sort actually happened: each partition's file holds rows in v-ascending order
+query II
+SELECT g, v FROM ctas_both WHERE g = 0
+----
+0	2
+0	5
+0	8
+0	11
+0	14
+0	17
+0	20
+0	23
+0	26
+0	29
+
+query II
+SELECT g, v FROM ctas_both WHERE g = 1
+----
+1	1
+1	4
+1	7
+1	10
+1	13
+1	16
+1	19
+1	22
+1	25
+1	28
+
+query II
+SELECT g, v FROM ctas_both WHERE g = 2
+----
+2	0
+2	3
+2	6
+2	9
+2	12
+2	15
+2	18
+2	21
+2	24
+2	27
+
+# Test 4: CTAS with SORTED first then PARTITIONED (either-order grammar). Same shape as Test 3 but
+statement ok
+CREATE TABLE ctas_swap SORTED BY (v) PARTITIONED BY (g) AS
+SELECT range % 3 AS g, 29 - range AS v FROM range(30)
+
+statement ok
+SET VARIABLE ctas_swap_id = (SELECT table_id FROM ducklake_metadata.ducklake_table WHERE table_name = 'ctas_swap')
+
+query I
+SELECT count(*) FROM ducklake_metadata.ducklake_partition_info WHERE table_id = getvariable('ctas_swap_id')
+----
+1
+
+query I
+SELECT count(*) FROM ducklake_metadata.ducklake_sort_info WHERE table_id = getvariable('ctas_swap_id')
+----
+1
+
+query I
+SELECT count(DISTINCT regexp_extract(path, '.*(g=[0-9]+)[/\\].*', 1)) FROM ducklake_metadata.ducklake_data_file WHERE table_id = getvariable('ctas_swap_id')
+----
+3
+
+# partition g=1's file
+query II
+SELECT g, v FROM ctas_swap WHERE g = 1
+----
+1	1
+1	4
+1	7
+1	10
+1	13
+1	16
+1	19
+1	22
+1	25
+1	28
+
+# Test 5: CTAS partitioning by a transform expression
+statement ok
+CREATE TABLE ctas_transform PARTITIONED BY (year(ts)) AS
+SELECT TIMESTAMP '2024-01-01' + INTERVAL (i) YEAR AS ts, i AS v FROM range(3) t(i)
+
+statement ok
+SET VARIABLE ctas_transform_id = (SELECT table_id FROM ducklake_metadata.ducklake_table WHERE table_name = 'ctas_transform')
+
+query II
+SELECT partition_key_index, transform FROM ducklake_metadata.ducklake_partition_column WHERE table_id = getvariable('ctas_transform_id')
+----
+0	year
+
+# CTAS with year() transform must hive-partition on the initial write
+query I
+SELECT DISTINCT regexp_extract(path, '.*(year=[0-9]+)[/\\].*', 1) FROM ducklake_metadata.ducklake_data_file WHERE table_id = getvariable('ctas_transform_id') ORDER BY 1
+----
+year=2024
+year=2025
+year=2026
+
+# Test 6: CTAS with multi-column SORTED BY using string and integer columns
+statement ok
+CREATE TABLE ctas_multi SORTED BY (a, b) AS
+SELECT i AS a, ('tag_' || i) AS b FROM range(4) t(i)
+
+# ctas_multi is non-partitioned; CTAS produces a single file. SORTED BY (a, b) means rows are
+# (a, b)-ascending in that file - SELECT without ORDER BY returns the file's actual row order.
+query II
+SELECT a, b FROM ctas_multi
+----
+0	tag_0
+1	tag_1
+2	tag_2
+3	tag_3
+
+statement ok
+SET VARIABLE ctas_multi_id = (SELECT table_id FROM ducklake_metadata.ducklake_table WHERE table_name = 'ctas_multi')
+
+query II
+SELECT sort_key_index, expression FROM ducklake_metadata.ducklake_sort_expression WHERE table_id = getvariable('ctas_multi_id') ORDER BY sort_key_index
+----
+0	a
+1	b
+
+# Test 7: CTAS with a CTE source (regression: planning shape differs from a flat SELECT)
+statement ok
+CREATE TABLE ctas_cte PARTITIONED BY (g) SORTED BY (v) AS
+WITH src AS (SELECT i % 3 AS g, i AS v FROM range(9) t(i))
+SELECT g, v FROM src
+
+query II
+SELECT g, count(*) FROM ctas_cte GROUP BY g ORDER BY g
+----
+0	3
+1	3
+2	3
+
+# ctas_cte is PARTITIONED BY (g), so each value of g lives in its own file. SORTED BY (v) means
+# rows within each partition's file are v-ascending. Filter to one partition; the row order
+# returned IS the on-disk file order.
+query II
+SELECT g, v FROM ctas_cte WHERE g = 0
+----
+0	0
+0	3
+0	6
+
+query II
+SELECT g, v FROM ctas_cte WHERE g = 1
+----
+1	1
+1	4
+1	7
+
+query II
+SELECT g, v FROM ctas_cte WHERE g = 2
+----
+2	2
+2	5
+2	8
+
+statement ok
+SET VARIABLE ctas_cte_id = (SELECT table_id FROM ducklake_metadata.ducklake_table WHERE table_name = 'ctas_cte')
+
+# CTE-sourced CTAS must still partition on the initial write (regression: planner passes the spec through)
+query I
+SELECT DISTINCT regexp_extract(path, '.*(g=[0-9]+)[/\\].*', 1) FROM ducklake_metadata.ducklake_data_file WHERE table_id = getvariable('ctas_cte_id') ORDER BY 1
+----
+g=0
+g=1
+g=2
