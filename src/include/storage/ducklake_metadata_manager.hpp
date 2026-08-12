@@ -351,8 +351,10 @@ public:
 	static string UpdateGlobalTableStatsSql(const DuckLakeGlobalStatsInfo &stats);
 	static SnapshotChangeInfo
 	GetSnapshotAndStatsAndChanges(SnapshotAndStats &current_snapshot,
-	                              const std::function<unique_ptr<QueryResult>(string)> &executor);
-	static string GetSnapshotAndStatsAndChangesQuery();
+	                              const std::function<unique_ptr<QueryResult>(string)> &executor,
+	                              const std::function<string()> &query_builder);
+	static string BaseSnapshotAndStatsAndChangesQuery();
+	virtual string GetSnapshotAndStatsAndChangesQuery();
 	static SnapshotChangeInfo ParseSnapshotAndStatsAndChanges(QueryResult &result, SnapshotAndStats &current_snapshot);
 	virtual unique_ptr<DuckLakeSnapshot> GetSnapshot();
 	virtual unique_ptr<DuckLakeSnapshot> GetSnapshot(BoundAtClause &at_clause, SnapshotBound bound);

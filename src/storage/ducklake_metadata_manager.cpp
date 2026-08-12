@@ -4298,6 +4298,10 @@ string DuckLakeMetadataManager::WriteSnapshotChangesSql(const SnapshotChangeInfo
 }
 
 string DuckLakeMetadataManager::GetSnapshotAndStatsAndChangesQuery() {
+	return BaseSnapshotAndStatsAndChangesQuery();
+}
+
+string DuckLakeMetadataManager::BaseSnapshotAndStatsAndChangesQuery() {
 	return R"(
 SELECT
     snapshot_id,
@@ -4355,6 +4359,10 @@ SnapshotChangeInfo DuckLakeMetadataManager::ParseSnapshotAndStatsAndChanges(Quer
 	bool first_row = true;
 	for (auto &row : result) {
 		if (first_row) {
+			if (row.IsNull(0)) {
+				throw TransactionException("Transaction conflict - attempting to read the current snapshot"
+				                           " - but another transaction has concurrently modified it");
+			}
 			current_snapshot.snapshot.snapshot_id = row.GetValue<idx_t>(0);
 			current_snapshot.snapshot.schema_version = row.GetValue<idx_t>(1);
 			current_snapshot.snapshot.next_catalog_id = row.GetValue<idx_t>(2);
@@ -4370,8 +4378,9 @@ SnapshotChangeInfo DuckLakeMetadataManager::ParseSnapshotAndStatsAndChanges(Quer
 
 SnapshotChangeInfo
 DuckLakeMetadataManager::GetSnapshotAndStatsAndChanges(SnapshotAndStats &current_snapshot,
-                                                       const std::function<unique_ptr<QueryResult>(string)> &executor) {
-	auto result = executor(GetSnapshotAndStatsAndChangesQuery());
+                                                       const std::function<unique_ptr<QueryResult>(string)> &executor,
+                                                       const std::function<string()> &query_builder) {
+	auto result = executor(query_builder());
 	return ParseSnapshotAndStatsAndChanges(*result, current_snapshot);
 }
 
