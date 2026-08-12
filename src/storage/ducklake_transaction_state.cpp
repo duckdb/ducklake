@@ -476,7 +476,7 @@ void GetNewMacroInfo(DuckLakeCommitState &commit_state, reference<CatalogEntry> 
 	auto &macro_entry = entry.get().Cast<MacroCatalogEntry>();
 	auto &ducklake_schema = macro_entry.schema.Cast<DuckLakeSchemaEntry>();
 
-	new_macro_info.macro_id = MacroIndex(commit_state.commit_snapshot.next_catalog_id++);
+	new_macro_info.macro_id = MacroIndex(commit_state.AllocateCatalogId());
 	new_macro_info.macro_name = macro_entry.name.GetIdentifierName();
 	new_macro_info.schema_id = commit_state.GetSchemaId(ducklake_schema);
 	// Let's do the implementations
@@ -541,7 +541,7 @@ static void ConvertNameMapColumn(const DuckLakeNameMapEntry &name_map_entry, Map
 DuckLakeFileInfo DuckLakeTransactionState::GetNewDataFile(const DuckLakeDataFile &file,
                                                           DuckLakeCommitState &commit_state, TableIndex table_id,
                                                           optional_idx row_id_start) {
-	auto data_file = DuckLakeTransaction::BuildDataFileInfo(file, commit_state.commit_snapshot, table_id, row_id_start);
+	auto data_file = DuckLakeTransaction::BuildDataFileInfo(file, commit_state, table_id, row_id_start);
 	commit_state.RemapPartitionId(data_file.partition_id);
 	if (data_file.partition_id.IsValid() &&
 	    data_file.partition_id.GetIndex() >= DuckLakeConstants::TRANSACTION_LOCAL_ID_START) {
@@ -558,7 +558,7 @@ NewNameMapInfo DuckLakeTransactionState::GetNewNameMaps(DuckLakeCommitState &com
 		// generate a new mapping id
 		auto local_map_id = entry.first;
 		auto &mapping = *entry.second;
-		MappingIndex new_map_id(commit_state.commit_snapshot.next_file_id++);
+		MappingIndex new_map_id(commit_state.AllocateFileId());
 
 		DuckLakeColumnMappingInfo map_info;
 		map_info.table_id = commit_state.GetTableId(mapping.table_id);
@@ -982,7 +982,8 @@ void DuckLakeTransactionState::RecomputeGlobalStatsAfterRewrite(string &batch_qu
 
 static idx_t SubtractDroppedFileStat(idx_t value, idx_t decrement) {
 	if (decrement > value) {
-		throw InternalException("Dropped DuckLake file stats exceed current table stats");
+		throw TransactionException("Transaction conflict - attempting to drop file stats"
+		                           " - but another transaction has already dropped this data");
 	}
 	return value - decrement;
 }
@@ -1166,7 +1167,7 @@ NewDataInfo DuckLakeTransactionState::GetNewDataFiles(
 
 			if (table_changes.new_data_files.empty()) {
 				// force an increment of file_id to signal a data change if we have only inlined data changes
-				commit_state.commit_snapshot.next_file_id++;
+				commit_state.AllocateFileId();
 			}
 		}
 		if (clear_column_stats) {
@@ -1558,7 +1559,7 @@ vector<DuckLakeSchemaInfo> DuckLakeTransactionState::GetNewSchemas(DuckLakeCommi
 		auto &schema_entry = entry.second->Cast<DuckLakeSchemaEntry>();
 		auto old_id = schema_entry.GetSchemaId();
 		DuckLakeSchemaInfo schema_info;
-		schema_info.id = SchemaIndex(commit_state.commit_snapshot.next_catalog_id++);
+		schema_info.id = SchemaIndex(commit_state.AllocateCatalogId());
 		schema_info.uuid = schema_entry.GetSchemaUUID();
 		schema_info.name = schema_entry.name.GetIdentifierName();
 		schema_info.path = schema_entry.DataPath();
@@ -1901,10 +1902,12 @@ WHERE idt.schema_version < (
 SnapshotAndStats
 DuckLakeTransactionState::CheckForConflicts(DuckLakeSnapshot transaction_snapshot,
                                             const TransactionChangeInformation &changes,
-                                            const std::function<unique_ptr<QueryResult>(string)> &executor) {
+                                            const std::function<unique_ptr<QueryResult>(string)> &executor,
+                                            const std::function<string()> &snapshot_and_stats_query) {
 	SnapshotAndStats snapshot_and_stats;
 	// get all changes made to the system after the current snapshot was started
-	auto changes_made = DuckLakeMetadataManager::GetSnapshotAndStatsAndChanges(snapshot_and_stats, executor);
+	auto changes_made =
+	    DuckLakeMetadataManager::GetSnapshotAndStatsAndChanges(snapshot_and_stats, executor, snapshot_and_stats_query);
 	// parse changes made by other transactions
 	auto other_changes = SnapshotChangeInformation::ParseChangesMade(changes_made.changes_made);
 
@@ -1925,23 +1928,25 @@ void DuckLakeTransactionState::Commit(DuckLakeSnapshot transaction_snapshot,
 		auto attempt_changes = transaction_changes;
 		auto attempt_dropped_file_stats = dropped_file_stats;
 		try {
+			can_retry = true;
+			context.acquire_commit_lock(attempt_changes);
 			can_retry = false;
-			if (i > 0) {
-				// we failed our first commit due to another transaction committing
-				// retry - but first check for conflicts
-				commit_stats_snapshot =
-				    CheckForConflicts(transaction_snapshot, attempt_changes, context.conflict_query_executor);
-				stats = &commit_stats_snapshot.stats;
-			} else {
-				commit_stats_snapshot.snapshot = context.get_snapshot();
-			}
-			commit_snapshot.snapshot_id++;
+			commit_stats_snapshot =
+			    CheckForConflicts(transaction_snapshot, attempt_changes, context.conflict_query_executor,
+			                      context.snapshot_and_stats_query);
+			stats = &commit_stats_snapshot.stats;
+			can_retry = true;
+			commit_snapshot.snapshot_id = context.allocate_snapshot_id(commit_snapshot.snapshot_id);
 			if (SchemaChangesMade()) {
 				// we changed the schema - need to get a new schema version
-				commit_snapshot.schema_version++;
+				commit_snapshot.schema_version = context.allocate_schema_version(commit_snapshot.schema_version);
+			} else {
+				// No schema change: keep the version we read, but never let it move backwards. The seed comes
+				// from MAX(snapshot_id), which under concurrency can predate a schema bump another commit
+				// already made - writing it back would alias two catalog states onto one schema cache key.
+				commit_snapshot.schema_version = context.peek_schema_version(commit_snapshot.schema_version);
 			}
-			can_retry = true;
-			DuckLakeCommitState commit_state(commit_snapshot);
+			DuckLakeCommitState commit_state(commit_snapshot, context);
 			// write the new snapshot
 			string batch_queries = DuckLakeMetadataManager::InsertSnapshotSql();
 			batch_queries += CommitChanges(commit_state, attempt_changes, stats, context, attempt_dropped_file_stats);

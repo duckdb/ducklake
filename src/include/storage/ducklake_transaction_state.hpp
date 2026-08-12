@@ -24,8 +24,31 @@ struct DuckLakeColumnSchemaEntry {
 };
 
 struct DuckLakeCommitContext {
+	std::function<idx_t(idx_t)> allocate_snapshot_id = [](idx_t current) {
+		return current + 1;
+	};
+	std::function<idx_t(idx_t)> allocate_catalog_id = [](idx_t current) {
+		return current;
+	};
+	std::function<idx_t(idx_t)> allocate_file_id = [](idx_t current) {
+		return current;
+	};
+	std::function<idx_t(idx_t)> allocate_schema_version = [](idx_t current) {
+		return current + 1;
+	};
+	//! Highest schema version already handed out, without consuming one. Backends that allocate
+	//! schema versions independently of snapshot ids must override this, or a commit that makes no
+	//! schema change can write back a stale version and alias two catalog states onto one cache key.
+	std::function<idx_t(idx_t)> peek_schema_version = [](idx_t current) {
+		return current;
+	};
+	std::function<void(const TransactionChangeInformation &)> acquire_commit_lock =
+	    [](const TransactionChangeInformation &) {
+	    };
 	//! Runs a metadata-DB query during conflict resolution.
 	std::function<unique_ptr<QueryResult>(string)> conflict_query_executor;
+	//! Builds the query text for GetSnapshotAndStatsAndChanges.
+	std::function<string()> snapshot_and_stats_query;
 	//! Returns the latest snapshot for the first commit attempt.
 	std::function<DuckLakeSnapshot()> get_snapshot;
 	//! Executes the batched snapshot/changes SQL against the metadata DB.
@@ -123,7 +146,8 @@ public:
 
 	SnapshotAndStats CheckForConflicts(DuckLakeSnapshot transaction_snapshot,
 	                                   const TransactionChangeInformation &changes,
-	                                   const std::function<unique_ptr<QueryResult>(string)> &executor);
+	                                   const std::function<unique_ptr<QueryResult>(string)> &executor,
+	                                   const std::function<string()> &snapshot_and_stats_query);
 	void CheckForConflicts(const TransactionChangeInformation &changes, const SnapshotChangeInformation &other_changes,
 	                       DuckLakeSnapshot transaction_snapshot,
 	                       const std::function<unique_ptr<QueryResult>(string)> &executor) const;
