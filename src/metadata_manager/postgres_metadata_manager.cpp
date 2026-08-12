@@ -126,8 +126,8 @@ string PostgresMetadataManager::InlinedDeleteTableExistsQuery(const string &tabl
 	// Multiple DuckLake catalogs can share one Postgres database, hence the schema filter.
 	// Both values cross two parsers, DuckDB's then Postgres', so they escape twice.
 	auto &ducklake_catalog = transaction.GetCatalog();
-	auto schema_literal =
-	    StringUtil::Replace(DuckLakeUtil::SQLLiteralToString(ducklake_catalog.MetadataSchemaName()), "'", "''");
+	auto schema_literal = StringUtil::Replace(
+	    DuckLakeUtil::SQLLiteralToString(ducklake_catalog.MetadataSchemaName().GetIdentifierName()), "'", "''");
 	auto table_literal = StringUtil::Replace(DuckLakeUtil::SQLLiteralToString(table_name), "'", "''");
 	return StringUtil::Format("SELECT 1 FROM postgres_query({METADATA_CATALOG_NAME_LITERAL}, "
 	                          "'SELECT 1 FROM information_schema.tables WHERE table_schema = %s AND table_name = %s')",
