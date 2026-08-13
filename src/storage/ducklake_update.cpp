@@ -1,4 +1,5 @@
 #include "storage/ducklake_update.hpp"
+#include "duckdb/execution/physical_plan_generator.hpp"
 
 #include "duckdb/common/mutex.hpp"
 #include "duckdb/common/types/hash.hpp"

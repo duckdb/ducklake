@@ -9,6 +9,8 @@
 #pragma once
 
 #include "functions/ducklake_table_functions.hpp"
+#include "duckdb/execution/physical_plan_generator.hpp"
+#include "duckdb/planner/logical_operator.hpp"
 #include "storage/ducklake_transaction.hpp"
 #include "storage/ducklake_catalog.hpp"
 #include "storage/ducklake_schema_entry.hpp"
@@ -97,6 +99,10 @@ public:
 	                                               vector<OrderByNode> &pre_bound_orders);
 
 private:
+	optional_ptr<DuckLakeTableEntry> ResolvePartitionSpecTable(DuckLakeTableEntry &table,
+	                                                           const DuckLakeCompactionFileEntry &source_file,
+	                                                           idx_t partition_id);
+
 	ClientContext &context;
 	DuckLakeCatalog &catalog;
 	DuckLakeTransaction &transaction;

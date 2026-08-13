@@ -9,6 +9,8 @@
 #pragma once
 
 #include "duckdb/catalog/catalog_entry/table_catalog_entry.hpp"
+#include "duckdb/catalog/catalog.hpp"
+#include "duckdb/catalog/catalog_entry/schema_catalog_entry.hpp"
 #include "duckdb/parser/parsed_data/alter_table_info.hpp"
 #include "storage/ducklake_stats.hpp"
 #include "storage/ducklake_partition_data.hpp"
@@ -84,10 +86,10 @@ public:
 	//! Returns the field id of a column by a column path.
 	// If name_offset is provided and column_names points to a field **within** the variant, the variant column is
 	// returned and the offset in the column_names vector where the variant is located
-	const DuckLakeFieldId &GetFieldId(const vector<string> &column_names,
+	const DuckLakeFieldId &GetFieldId(const vector<Identifier> &column_names,
 	                                  optional_ptr<optional_idx> name_offset = nullptr) const;
 	//! Returns the field id of a column by a column path if it exists (and nullptr otherwise)
-	optional_ptr<const DuckLakeFieldId> TryGetFieldId(const vector<string> &column_names,
+	optional_ptr<const DuckLakeFieldId> TryGetFieldId(const vector<Identifier> &column_names,
 	                                                  optional_ptr<optional_idx> name_offset = nullptr) const;
 	//! Returns the field id of a column by a field index
 	optional_ptr<const DuckLakeFieldId> GetFieldId(FieldIndex field_index) const;

@@ -9,6 +9,11 @@
 #pragma once
 
 #include "common/ducklake_encryption.hpp"
+#include "duckdb/main/attached_database.hpp"
+#include "duckdb/catalog/catalog_entry/schema_catalog_entry.hpp"
+#include "duckdb/catalog/catalog_entry/table_catalog_entry.hpp"
+#include "duckdb/execution/physical_plan_generator.hpp"
+#include "duckdb/planner/logical_operator.hpp"
 #include "common/ducklake_options.hpp"
 #include "common/ducklake_name_map.hpp"
 #include "duckdb/catalog/catalog.hpp"
@@ -35,10 +40,14 @@ class LogicalGet;
 struct DuckLakeTableStatsCacheEntry : public ObjectCacheEntry {
 	static constexpr idx_t ESTIMATED_BYTES_PER_COLUMN_STATS = 256;
 
-	explicit DuckLakeTableStatsCacheEntry(DuckLakeTableStats stats_p) : stats(std::move(stats_p)) {
+	explicit DuckLakeTableStatsCacheEntry(DuckLakeTableStats stats_p) : stats(std::move(stats_p)), has_stats(true) {
+	}
+	//! Negative entry: table has no stats at this snapshot.
+	DuckLakeTableStatsCacheEntry() : has_stats(false) {
 	}
 
 	DuckLakeTableStats stats;
+	bool has_stats;
 
 	static string ObjectType() {
 		return "ducklake_table_stats";
@@ -101,7 +110,7 @@ public:
 	const string &MetadataDatabaseName() const {
 		return options.metadata_database;
 	}
-	const string &MetadataSchemaName() const {
+	const Identifier &MetadataSchemaName() const {
 		return options.metadata_schema;
 	}
 	const string &MetadataPath() const {
@@ -112,6 +121,9 @@ public:
 	}
 	const string &MetadataType() const {
 		return metadata_type;
+	}
+	bool IsInitialized() const {
+		return initialized;
 	}
 	idx_t DataInliningRowLimit(SchemaIndex schema_index, TableIndex table_index) const;
 	idx_t DataInliningRowLimit(ClientContext &context, SchemaIndex schema_index, TableIndex table_index) const;
@@ -227,6 +239,10 @@ public:
 	bool SupportsViewColumnTags() const {
 		return ducklake_version >= DuckLakeVersion::V1_1_DEV_1;
 	}
+	//! Whether the catalog may contain epoch partition transforms (added in 1.1-dev1)
+	bool SupportsEpochPartitionTransforms() const {
+		return ducklake_version >= DuckLakeVersion::V1_1_DEV_1;
+	}
 
 	void OnDetach(ClientContext &context) override;
 
@@ -282,6 +298,12 @@ public:
 	//! Cache the result of an inlined deletion table existence check
 	void CacheInlinedDeletionTableResult(TableIndex table_id, DuckLakeSnapshot snapshot, bool exists);
 
+	//! Look up the cached begin snapshot of a (table, schema version) pair, if it has been resolved before
+	optional_idx TryGetSchemaVersionBeginSnapshot(TableIndex table_id, idx_t schema_version);
+	//! Cache the begin snapshot of a committed (table, schema version) pair. The row that backs it is written
+	//! once when the schema version is created and never updated, so the mapping is permanent.
+	void CacheSchemaVersionBeginSnapshot(TableIndex table_id, idx_t schema_version, idx_t begin_snapshot);
+
 	//! Invalidate the cached table stats entry for a given stats cache key.
 	void InvalidateTableStatsCache(idx_t next_file_id, TableIndex table_id);
 	//! Invalidate the cached schema entry for a given schema_version.
@@ -334,6 +356,10 @@ private:
 	//! Table IDs where the inlined deletion table is known to NOT exist, with the snapshot_id at which we checked
 	//! Valid as long as current snapshot.snapshot_id <= cached snapshot_id
 	unordered_map<idx_t, idx_t> inlined_deletion_not_exists;
+	//! Cache of (table_id, schema_version) -> begin_snapshot. The backing row is written once when the schema
+	//! version is created and is never updated, so entries are permanent (only committed rows are cached)
+	mutex schema_version_snapshot_lock;
+	map<pair<idx_t, idx_t>, idx_t> schema_version_begin_snapshots;
 	//! The id of the last committed snapshot, set at FlushChanges on a successful commit
 	mutable mutex commit_lock;
 	optional_idx last_committed_snapshot;

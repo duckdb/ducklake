@@ -1,0 +1,77 @@
+# name: test/sql/stats/count_not_null_optimization_time_travel.test
+# description: Column stats with time travel, change feeds and pinned catalogs (fall back, stay correct)
+# group: [stats]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/count_not_null_time_travel.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+SET profiling_renderer_settings = MAP {'operator_casing': 'upper'};
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/count_not_null_time_travel', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE ducklake.history(i INTEGER);
+
+# the only snapshot that ever contained a NULL
+statement ok
+INSERT INTO ducklake.history VALUES (NULL), (1);
+
+query I
+SELECT MAX(snapshot_id) FROM ducklake.snapshots();
+----
+2
+
+statement ok
+DELETE FROM ducklake.history WHERE i IS NULL;
+
+# REWRITE_DELETES recomputes exact global stats, which now record no NULLs
+statement ok
+CALL ducklake_rewrite_data_files('ducklake', 'history', delete_threshold => 0);
+
+# the current scan may still answer count(i) from those stats without reading files
+query II
+EXPLAIN ANALYZE SELECT count(i) FROM ducklake.history;
+----
+analyzed_plan	<!REGEX>:.*TABLE_SCAN.*
+
+query II
+SELECT count(i), count(*) FROM ducklake.history;
+----
+1	1
+
+# snapshot 2 still holds the NULL, so the current stats must not be applied to it
+query II
+SELECT count(i), count(*) FROM ducklake.history AT (VERSION => 2);
+----
+1	2
+
+# nor may they eliminate a predicate that the snapshot's rows do satisfy
+query I
+SELECT count(*) FROM ducklake.history AT (VERSION => 2) WHERE i IS NULL;
+----
+1
+
+# nor may they be applied to a change feed reading that snapshot
+query II
+SELECT count(i), count(*) FROM ducklake_table_insertions('ducklake', 'main', 'history', 2, 2);
+----
+1	2
+
+statement ok
+DETACH ducklake;
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (SNAPSHOT_VERSION 2);
+
+# nor to a catalog pinned at that snapshot
+query II
+SELECT count(i), count(*) FROM ducklake.history;
+----
+1	2

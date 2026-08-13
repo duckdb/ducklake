@@ -1,6 +1,8 @@
 #include "storage/ducklake_view_entry.hpp"
 #include "storage/ducklake_transaction.hpp"
 #include "storage/ducklake_catalog.hpp"
+#include "duckdb/catalog/catalog.hpp"
+#include "duckdb/catalog/catalog_entry/schema_catalog_entry.hpp"
 #include "duckdb/parser/parsed_data/create_view_info.hpp"
 #include "duckdb/parser/parsed_data/comment_on_column_info.hpp"
 #include "duckdb/parser/parser.hpp"
@@ -44,7 +46,7 @@ unique_ptr<CatalogEntry> DuckLakeViewEntry::AlterEntry(ClientContext &context, A
 			auto &rename_view = alter_view.Cast<RenameViewInfo>();
 			auto create_info = GetInfo();
 			auto &view_info = create_info->Cast<CreateViewInfo>();
-			view_info.view_name = rename_view.new_view_name;
+			view_info.SetViewName(rename_view.new_view_name);
 			// create a complete copy of this view with only the name changed
 			return make_uniq<DuckLakeViewEntry>(*this, view_info, LocalChangeType::RENAMED);
 		}
