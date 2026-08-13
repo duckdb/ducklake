@@ -34,6 +34,7 @@ public:
 	static string ToQuotedList(const vector<string> &input, char list_separator = ',');
 	static vector<string> ParseQuotedList(const string &input, char list_separator = ',');
 	static string SQLIdentifierToString(const string &text);
+	static string SQLIdentifierToString(const Identifier &identifier);
 	static string SQLLiteralToString(const string &text);
 	static string StatsToString(const string &text);
 	static string ValueToSQL(DuckLakeMetadataManager &metadata_manager, ClientContext &context, const Value &val);

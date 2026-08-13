@@ -807,7 +807,7 @@ Connection &DuckLakeTransaction::GetConnection() {
 		auto &client_data = ClientData::Get(*connection->context);
 		// ensure we are only looking in the ducklake catalog schema during querying
 		CatalogSearchEntry metadata_entry(Identifier(ducklake_catalog.MetadataDatabaseName()),
-		                                  Identifier(ducklake_catalog.MetadataSchemaName()));
+		                                  ducklake_catalog.MetadataSchemaName());
 		if (metadata_entry.GetSchema().empty()) {
 			metadata_entry.SetSchema("main");
 		}
@@ -1106,6 +1106,18 @@ DuckLakePartitionInfo DuckLakeTransaction::GetNewPartitionKey(DuckLakeCommitStat
 			break;
 		case DuckLakeTransformType::HOUR:
 			partition_field.transform = "hour";
+			break;
+		case DuckLakeTransformType::EPOCH_YEAR:
+			partition_field.transform = "epoch_year";
+			break;
+		case DuckLakeTransformType::EPOCH_MONTH:
+			partition_field.transform = "epoch_month";
+			break;
+		case DuckLakeTransformType::EPOCH_DAY:
+			partition_field.transform = "epoch_day";
+			break;
+		case DuckLakeTransformType::EPOCH_HOUR:
+			partition_field.transform = "epoch_hour";
 			break;
 		case DuckLakeTransformType::BUCKET:
 			partition_field.transform = StringUtil::Format("bucket(%d)", field.transform.bucket_count);
@@ -1602,7 +1614,7 @@ unique_ptr<QueryResult> DuckLakeTransaction::Query(DuckLakeSnapshot snapshot, st
 	return metadata_manager->Query(snapshot, query);
 }
 
-string DuckLakeTransaction::GetDefaultSchemaName() {
+Identifier DuckLakeTransaction::GetDefaultSchemaName() {
 	auto &metadata_context = *connection->context;
 	auto &db_manager = DatabaseManager::Get(metadata_context);
 	auto metadb = db_manager.GetDatabase(metadata_context, Identifier(ducklake_catalog.MetadataDatabaseName()));

@@ -377,7 +377,7 @@ unique_ptr<LogicalOperator> DuckLakeDataFlusher::GenerateFlushCommand() {
 
 	// generate the LogicalCopyToFile
 	auto copy = make_uniq<LogicalCopyToFile>(std::move(copy_options.copy_function), std::move(copy_options.bind_data),
-	                                         std::move(copy_options.info));
+	                                         std::move(copy_options.info), binder.GenerateTableIndex());
 
 	copy->file_path = std::move(copy_options.file_path);
 	copy->use_tmp_file = copy_options.use_tmp_file;
@@ -598,7 +598,7 @@ LEFT JOIN (
 // Function
 //===--------------------------------------------------------------------===//
 static unique_ptr<LogicalOperator> FlushInlinedDataBind(ClientContext &context, TableFunctionBindInput &input,
-                                                        TableIndex bind_index, vector<string> &return_names) {
+                                                        TableIndex bind_index, vector<Identifier> &return_names) {
 	input.binder->SetAlwaysRequireRebind();
 	// gather a list of files to compact
 	auto &catalog = DuckLakeBaseMetadataFunction::GetCatalog(context, input.inputs[0]);

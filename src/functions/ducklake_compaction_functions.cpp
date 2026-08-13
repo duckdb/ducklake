@@ -705,7 +705,7 @@ DuckLakeCompactor::GenerateCompactionCommand(vector<DuckLakeCompactionFileEntry>
 
 	// generate the LogicalCopyToFile
 	auto copy = make_uniq<LogicalCopyToFile>(std::move(copy_options.copy_function), std::move(copy_options.bind_data),
-	                                         std::move(copy_options.info));
+	                                         std::move(copy_options.info), binder.GenerateTableIndex());
 
 	auto &fs = FileSystem::GetFileSystem(context);
 	if (write_row_id) {
@@ -925,7 +925,7 @@ unique_ptr<LogicalOperator> BindCompaction(ClientContext &context, TableFunction
 }
 
 static unique_ptr<LogicalOperator> MergeAdjacentFilesBind(ClientContext &context, TableFunctionBindInput &input,
-                                                          TableIndex bind_index, vector<string> &return_names) {
+                                                          TableIndex bind_index, vector<Identifier> &return_names) {
 	return_names.push_back("schema_name");
 	return_names.push_back("table_name");
 	return_names.push_back("files_processed");
@@ -951,7 +951,7 @@ TableFunctionSet DuckLakeMergeAdjacentFilesFunction::GetFunctions() {
 }
 
 static unique_ptr<LogicalOperator> RewriteFilesBind(ClientContext &context, TableFunctionBindInput &input,
-                                                    TableIndex bind_index, vector<string> &return_names) {
+                                                    TableIndex bind_index, vector<Identifier> &return_names) {
 	return_names.push_back("schema_name");
 	return_names.push_back("table_name");
 	return_names.push_back("files_processed");

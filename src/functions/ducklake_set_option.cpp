@@ -79,7 +79,7 @@ struct DuckLakeSetOptionData : public TableFunctionData {
 };
 
 static unique_ptr<FunctionData> DuckLakeSetOptionBind(ClientContext &context, TableFunctionBindInput &input,
-                                                      vector<LogicalType> &return_types, vector<string> &names) {
+                                                      vector<LogicalType> &return_types, vector<Identifier> &names) {
 	auto &catalog = DuckLakeBaseMetadataFunction::GetCatalog(context, input.inputs[0]);
 	DuckLakeConfigOption config_option;
 	auto &option = config_option.option.key;

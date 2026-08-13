@@ -35,7 +35,7 @@ Value CatalogListToValue(const case_insensitive_map_t<case_insensitive_set_t> &l
 	return Value::LIST(LogicalType::VARCHAR, std::move(list_values));
 }
 
-void DuckLakeSnapshotsFunction::GetSnapshotTypes(vector<LogicalType> &return_types, vector<string> &names) {
+void DuckLakeSnapshotsFunction::GetSnapshotTypes(vector<LogicalType> &return_types, vector<Identifier> &names) {
 	names.emplace_back("snapshot_id");
 	return_types.emplace_back(LogicalType::BIGINT);
 
@@ -154,7 +154,7 @@ vector<Value> DuckLakeSnapshotsFunction::GetSnapshotValues(const DuckLakeSnapsho
 }
 
 static unique_ptr<FunctionData> DuckLakeSnapshotsBind(ClientContext &context, TableFunctionBindInput &input,
-                                                      vector<LogicalType> &return_types, vector<string> &names) {
+                                                      vector<LogicalType> &return_types, vector<Identifier> &names) {
 	auto &catalog = DuckLakeBaseMetadataFunction::GetCatalog(context, input.inputs[0]);
 	auto &transaction = DuckLakeTransaction::Get(context, catalog);
 

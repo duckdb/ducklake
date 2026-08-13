@@ -35,7 +35,7 @@ struct DuckLakeAddDataFilesData : public TableFunctionData {
 };
 
 static unique_ptr<FunctionData> DuckLakeAddDataFilesBind(ClientContext &context, TableFunctionBindInput &input,
-                                                         vector<LogicalType> &return_types, vector<string> &names) {
+                                                         vector<LogicalType> &return_types, vector<Identifier> &names) {
 	auto &catalog = DuckLakeBaseMetadataFunction::GetCatalog(context, input.inputs[0]);
 	string schema_name;
 	if (input.inputs[1].IsNull()) {
@@ -1121,8 +1121,9 @@ void DuckLakeFileProcessor::MapColumnStats(ParquetFileMetadata &file_metadata, D
 
 	// Process statistics for hive partition columns
 	for (auto &entry : file_metadata.hive_partition_values) {
-		if (entry.transform.type == DuckLakeTransformType::BUCKET) {
-			// Bucket partitioning uses the result of the hash for the folder names, so we can't get statistics from it
+		if (entry.transform.type == DuckLakeTransformType::BUCKET ||
+		    DuckLakePartitionUtils::IsEpochTransform(entry.transform.type)) {
+			// Hash/epoch-ordinal folder values are not source column values, so no statistics from them
 			continue;
 		}
 

@@ -154,7 +154,10 @@
         "test/sql/transactions/test_cardinality_estimation_uncommitted.test",
         "test/sql/filter/test_struct_pushdown.test",
         "test/optimizer/compressed_materialization_grouping_sets.test",
-        "test/optimizer/joins/fkpk_composite_key_ce.test"
+        "test/optimizer/joins/fkpk_composite_key_ce.test",
+        "test/optimizer/partitioned_execution_coverage.test",
+        "test/sql/cte/materialized/materialized_cte_order_preservation.test",
+        "test/sql/cte/materialized/materialized_cte_parallel_buffered.test"
       ]
     },
     {
@@ -193,7 +196,7 @@
       ]
     },
     {
-      "reason": "FIXME: flaky in CI \u2014 concurrent ALTER ADD COLUMN with reads sometimes aborts the writer's transaction or segfaults under DuckLake",
+      "reason": "FIXME: flaky in CI — concurrent ALTER ADD COLUMN with reads sometimes aborts the writer's transaction or segfaults under DuckLake",
       "paths": [
         "test/sql/parallelism/interquery/concurrent_reads_while_altering.test"
       ]
@@ -440,7 +443,8 @@
         "test/sql/join/inner/equality_join_limits.test",
         "test/sql/aggregate/group/group_by_limits.test",
         "test/sql/storage/types/test_uhugeint_storage.test",
-        "test/sql/export/parquet/export_parquet_hugeint.test"
+        "test/sql/export/parquet/export_parquet_hugeint.test",
+        "test/optimizer/statistics/statistics_numeric.test"
       ]
     },
     {
@@ -646,6 +650,12 @@
       ]
     },
     {
+      "reason": "Flaky upstream: segment count sometimes 2 instead of 1, disabled in duckdb db513b8b51 (after current pin)",
+      "paths": [
+        "test/sql/storage/compression/fsst/fsst_greedy_long_strings.test"
+      ]
+    },
+    {
       "reason": "FIXME: CI Deadlock?",
       "paths": [
         "test/sql/update/test_stress_update_issue_19688.test"
@@ -696,7 +706,8 @@
       "paths": [
         "test/parquet/variant/variant_comparison.test",
         "test/sql/storage/types/variant/variant_shredding_omit_untyped.test",
-        "test/parquet/variant/variant_json_copy.test"
+        "test/parquet/variant/variant_json_copy.test",
+        "test/sql/function/variant/variant_extract_string_shredded.test"
       ]
     },
     {
@@ -749,14 +760,18 @@
         "test/sql/optimizer/not_conjunction_simplification.test",
         "test/sql/optimizer/power_zonemap_pruning.test",
         "test/sql/optimizer/test_rowid_pruning.test",
-        "test/sql/sample/test_system_rows.test"
+        "test/sql/sample/test_system_rows.test",
+        "test/sql/optimizer/substring_zonemap_pruning.test"
       ]
     },
     {
       "reason": "Asserts DuckDB-native BASE_TABLE memory accounting via duckdb_memory().",
       "paths": [
         "test/sql/delete/bulk_delete_version_info_memory.test",
-        "test/sql/delete/delete_compression_blocked_by_old_snapshot.test"
+        "test/sql/delete/delete_compression_blocked_by_old_snapshot.test",
+        "test/sql/delete/partial_delete_version_info_memory.test",
+        "test/sql/storage/partial_delete_pending_compress.test",
+        "test/sql/storage/partial_delete_checkpoint_mask.test"
       ]
     },
     {
@@ -781,7 +796,9 @@
     {
       "reason": "DuckLake reports a different error message for a missing schema.",
       "paths": [
-        "test/sql/catalog/sequence/test_sequence_google_fuzz.test"
+        "test/sql/catalog/sequence/test_sequence_google_fuzz.test",
+        "test/sql/attach/attach_hidden.test",
+        "test/sql/settings/test_disabled_file_systems.test"
       ]
     },
     {
@@ -860,6 +877,21 @@
       "reason": "TIMETZ offsets with second precision are quantized by parquet storage.",
       "paths": [
         "test/sql/function/timetz/test_extract.test"
+      ]
+    },
+    {
+      "reason": "FIXME: NavigateNestedSchema unchecked cast breaks DuckLake nested schema DDL",
+      "paths": [
+        "test/sql/catalog/nested_schema/nested_alter.test",
+        "test/sql/catalog/nested_schema/nested_constraints.test",
+        "test/sql/catalog/nested_schema/nested_entries.test",
+        "test/sql/catalog/nested_schema/nested_entries_persist.test",
+        "test/sql/catalog/nested_schema/nested_export.test",
+        "test/sql/catalog/nested_schema/nested_schema_limits.test",
+        "test/sql/catalog/nested_schema/nested_table_columnref.test",
+        "test/sql/catalog/nested_schema/nested_table_dml.test",
+        "test/sql/catalog/nested_schema/nested_table_dml_persist.test",
+        "test/sql/catalog/nested_schema/nested_wal_replay.test"
       ]
     }
   ]

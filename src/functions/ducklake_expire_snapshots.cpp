@@ -19,7 +19,8 @@ struct ExpireSnapshotsBindData : public TableFunctionData {
 };
 
 static unique_ptr<FunctionData> DuckLakeExpireSnapshotsBind(ClientContext &context, TableFunctionBindInput &input,
-                                                            vector<LogicalType> &return_types, vector<string> &names) {
+                                                            vector<LogicalType> &return_types,
+                                                            vector<Identifier> &names) {
 	auto &catalog = DuckLakeBaseMetadataFunction::GetCatalog(context, input.inputs[0]);
 	auto result = make_uniq<ExpireSnapshotsBindData>(catalog);
 	timestamp_tz_t from_timestamp;

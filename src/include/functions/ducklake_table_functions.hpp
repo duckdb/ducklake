@@ -46,7 +46,7 @@ class DuckLakeSnapshotsFunction : public DuckLakeBaseMetadataFunction {
 public:
 	DuckLakeSnapshotsFunction();
 
-	static void GetSnapshotTypes(vector<LogicalType> &return_types, vector<string> &names);
+	static void GetSnapshotTypes(vector<LogicalType> &return_types, vector<Identifier> &names);
 	static vector<Value> GetSnapshotValues(const DuckLakeSnapshotInfo &snapshot);
 };
 

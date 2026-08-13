@@ -40,10 +40,14 @@ class LogicalGet;
 struct DuckLakeTableStatsCacheEntry : public ObjectCacheEntry {
 	static constexpr idx_t ESTIMATED_BYTES_PER_COLUMN_STATS = 256;
 
-	explicit DuckLakeTableStatsCacheEntry(DuckLakeTableStats stats_p) : stats(std::move(stats_p)) {
+	explicit DuckLakeTableStatsCacheEntry(DuckLakeTableStats stats_p) : stats(std::move(stats_p)), has_stats(true) {
+	}
+	//! Negative entry: table has no stats at this snapshot.
+	DuckLakeTableStatsCacheEntry() : has_stats(false) {
 	}
 
 	DuckLakeTableStats stats;
+	bool has_stats;
 
 	static string ObjectType() {
 		return "ducklake_table_stats";
@@ -106,7 +110,7 @@ public:
 	const string &MetadataDatabaseName() const {
 		return options.metadata_database;
 	}
-	const string &MetadataSchemaName() const {
+	const Identifier &MetadataSchemaName() const {
 		return options.metadata_schema;
 	}
 	const string &MetadataPath() const {
@@ -236,6 +240,10 @@ public:
 	}
 	//! Whether the metadata schema has view column tags (added in 1.1-dev1)
 	bool SupportsViewColumnTags() const {
+		return ducklake_version >= DuckLakeVersion::V1_1_DEV_1;
+	}
+	//! Whether the catalog may contain epoch partition transforms (added in 1.1-dev1)
+	bool SupportsEpochPartitionTransforms() const {
 		return ducklake_version >= DuckLakeVersion::V1_1_DEV_1;
 	}
 

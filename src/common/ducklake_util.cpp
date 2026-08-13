@@ -88,6 +88,10 @@ string DuckLakeUtil::SQLIdentifierToString(const string &text) {
 	return "\"" + StringUtil::Replace(text, "\"", "\"\"") + "\"";
 }
 
+string DuckLakeUtil::SQLIdentifierToString(const Identifier &identifier) {
+	return SQLQuotedIdentifier::ToString(identifier.GetIdentifierName());
+}
+
 string DuckLakeUtil::SQLLiteralToString(const string &text) {
 	return "'" + StringUtil::Replace(text, "'", "''") + "'";
 }

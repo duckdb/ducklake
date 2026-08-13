@@ -647,6 +647,14 @@ unique_ptr<DuckLakeCatalogSet> DuckLakeCatalog::LoadSchemaForSnapshot(DuckLakeTr
 				partition_field.transform.type = DuckLakeTransformType::DAY;
 			} else if (field.transform == "hour") {
 				partition_field.transform.type = DuckLakeTransformType::HOUR;
+			} else if (field.transform == "epoch_year") {
+				partition_field.transform.type = DuckLakeTransformType::EPOCH_YEAR;
+			} else if (field.transform == "epoch_month") {
+				partition_field.transform.type = DuckLakeTransformType::EPOCH_MONTH;
+			} else if (field.transform == "epoch_day") {
+				partition_field.transform.type = DuckLakeTransformType::EPOCH_DAY;
+			} else if (field.transform == "epoch_hour") {
+				partition_field.transform.type = DuckLakeTransformType::EPOCH_HOUR;
 			} else if (field.transform == "identity") {
 				partition_field.transform.type = DuckLakeTransformType::IDENTITY;
 			} else if (StringUtil::StartsWith(field.transform, "bucket(")) {
@@ -824,6 +832,10 @@ shared_ptr<DuckLakeTableStats> DuckLakeCatalog::GetTableStatsInternal(DuckLakeTr
 	auto key = StatsCacheKey(snapshot.snapshot_id, table_id);
 	auto cached = cache.Get<DuckLakeTableStatsCacheEntry>(key);
 	if (cached) {
+		if (!cached->has_stats) {
+			// cached negative result
+			return nullptr;
+		}
 		auto *raw = cached.get();
 		return shared_ptr<DuckLakeTableStats>(std::move(cached), &raw->stats);
 	}
@@ -851,7 +863,8 @@ shared_ptr<DuckLakeTableStats> DuckLakeCatalog::GetTableStatsInternal(DuckLakeTr
 	}
 
 	if (!table_stats) {
-		// Table had no stats row for this snapshot (or did not exist at the snapshot)
+		// cache negative result to avoid repeated metadata queries on empty tables
+		cache.Put(std::move(key), make_shared_ptr<DuckLakeTableStatsCacheEntry>());
 		return nullptr;
 	}
 

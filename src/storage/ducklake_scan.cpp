@@ -172,8 +172,7 @@ vector<PartitionStatistics> DuckLakeGetPartitionStats(ClientContext &context, Ge
 	}
 	auto &func_info = input.table_function.function_info->Cast<DuckLakeFunctionInfo>();
 
-	// Only use partition stats for regular table scans
-	if (func_info.scan_type != DuckLakeScanType::SCAN_TABLE) {
+	if (!func_info.CanUseGlobalStats()) {
 		return result;
 	}
 
@@ -184,8 +183,6 @@ vector<PartitionStatistics> DuckLakeGetPartitionStats(ClientContext &context, Ge
 	}
 	auto &table = file_list.GetTable();
 	auto transaction = func_info.GetTransaction();
-
-	auto table_id = table.GetTableId();
 
 	idx_t net_count = table.GetNetDataFileRowCount(*transaction) + table.GetNetInlinedRowCount(*transaction);
 
@@ -261,6 +258,15 @@ shared_ptr<DuckLakeTransaction> DuckLakeFunctionInfo::GetTransaction() {
 		    "Scanning a DuckLake table after the transaction has ended - this use case is not yet supported");
 	}
 	return result;
+}
+
+bool DuckLakeFunctionInfo::CanUseGlobalStats() {
+	if (scan_type != DuckLakeScanType::SCAN_TABLE) {
+		return false;
+	}
+	auto active_transaction = GetTransaction();
+	return snapshot.snapshot_id == active_transaction->GetSnapshot().snapshot_id &&
+	       !active_transaction->GetCatalog().CatalogSnapshot();
 }
 
 void DuckLakeScanSerialize(Serializer &serializer, const optional_ptr<FunctionData> bind_data,

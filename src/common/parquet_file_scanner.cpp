@@ -55,7 +55,7 @@ const vector<LogicalType> &ParquetFileScanner::GetTypes() const {
 	return return_types;
 }
 
-const vector<string> &ParquetFileScanner::GetNames() const {
+const vector<Identifier> &ParquetFileScanner::GetNames() const {
 	return return_names;
 }
 

@@ -90,9 +90,10 @@ string PostgresMetadataManager::CastColumnToTarget(const string &column, const L
 
 bool PostgresMetadataManager::InlinedDeletionTableExists(const string &table_name) {
 	auto &catalog = transaction.GetCatalog();
-	auto remote_query = StringUtil::Format(
-	    "SELECT 1 FROM pg_catalog.pg_tables WHERE schemaname = %s AND tablename = %s LIMIT 1",
-	    DuckLakeUtil::SQLLiteralToString(catalog.MetadataSchemaName()), DuckLakeUtil::SQLLiteralToString(table_name));
+	auto remote_query =
+	    StringUtil::Format("SELECT 1 FROM pg_catalog.pg_tables WHERE schemaname = %s AND tablename = %s LIMIT 1",
+	                       DuckLakeUtil::SQLLiteralToString(catalog.MetadataSchemaName().GetIdentifierName()),
+	                       DuckLakeUtil::SQLLiteralToString(table_name));
 	auto query =
 	    StringUtil::Format("SELECT 1 FROM postgres_query({METADATA_CATALOG_NAME_LITERAL}, %s, use_transaction = true)",
 	                       DuckLakeUtil::SQLLiteralToString(remote_query));
@@ -121,7 +122,7 @@ unique_ptr<QueryResult> PostgresMetadataManager::ExecuteQuery(DuckLakeSnapshot s
 	auto catalog_literal = DuckLakeUtil::SQLLiteralToString(ducklake_catalog.MetadataDatabaseName());
 	auto schema_identifier = DuckLakeUtil::SQLIdentifierToString(ducklake_catalog.MetadataSchemaName());
 	auto schema_identifier_escaped = StringUtil::Replace(schema_identifier, "'", "''");
-	auto schema_literal = DuckLakeUtil::SQLLiteralToString(ducklake_catalog.MetadataSchemaName());
+	auto schema_literal = DuckLakeUtil::SQLLiteralToString(ducklake_catalog.MetadataSchemaName().GetIdentifierName());
 	auto metadata_path = DuckLakeUtil::SQLLiteralToString(ducklake_catalog.MetadataPath());
 	auto data_path = DuckLakeUtil::SQLLiteralToString(ducklake_catalog.DataPath());
 
@@ -174,14 +175,15 @@ PostgresMetadataManager::TransformInlinedData(QueryResult &result, const vector<
 	}
 	bool needs_reinterpret = false;
 	if (!expected_types.empty()) {
-		if (result.types.size() < expected_types.size()) {
+		auto &result_types = result.GetTypes();
+		if (result_types.size() < expected_types.size()) {
 			throw InvalidInputException(
 			    "Failed to read inlined data from DuckLake: expected %llu columns but read %llu", expected_types.size(),
-			    result.types.size());
+			    result_types.size());
 		}
 		for (idx_t i = 0; i < expected_types.size(); i++) {
-			if (result.types[i] != expected_types[i]) {
-				D_ASSERT(result.types[i].id() == LogicalTypeId::BLOB &&
+			if (result_types[i] != expected_types[i]) {
+				D_ASSERT(result_types[i].id() == LogicalTypeId::BLOB &&
 				         expected_types[i].id() == LogicalTypeId::VARCHAR);
 				needs_reinterpret = true;
 			}

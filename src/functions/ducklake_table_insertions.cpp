@@ -45,7 +45,7 @@ BoundAtClause AtClauseFromValue(const Value &input) {
 }
 
 static unique_ptr<FunctionData> DuckLakeTableChangesBind(ClientContext &context, TableFunctionBindInput &input,
-                                                         vector<LogicalType> &return_types, vector<string> &names,
+                                                         vector<LogicalType> &return_types, vector<Identifier> &names,
                                                          DuckLakeScanType scan_type) {
 	auto start_at_clause = AtClauseFromValue(input.inputs[3]);
 	auto end_at_clause = AtClauseFromValue(input.inputs[4]);
@@ -60,7 +60,7 @@ static unique_ptr<FunctionData> DuckLakeTableChangesBind(ClientContext &context,
 	input.table_function = table.GetScanFunction(context, bind_data, lookup);
 
 	auto &function_info = input.table_function.function_info->Cast<DuckLakeFunctionInfo>();
-	names = function_info.column_names;
+	names = StringsToIdentifiers(function_info.column_names);
 	return_types = function_info.column_types;
 	function_info.start_snapshot =
 	    make_uniq<DuckLakeSnapshot>(transaction.GetSnapshot(start_at_clause, SnapshotBound::LOWER_BOUND));
@@ -69,12 +69,14 @@ static unique_ptr<FunctionData> DuckLakeTableChangesBind(ClientContext &context,
 }
 
 static unique_ptr<FunctionData> DuckLakeTableInsertionsBind(ClientContext &context, TableFunctionBindInput &input,
-                                                            vector<LogicalType> &return_types, vector<string> &names) {
+                                                            vector<LogicalType> &return_types,
+                                                            vector<Identifier> &names) {
 	return DuckLakeTableChangesBind(context, input, return_types, names, DuckLakeScanType::SCAN_INSERTIONS);
 }
 
 static unique_ptr<FunctionData> DuckLakeTableDeletionsBind(ClientContext &context, TableFunctionBindInput &input,
-                                                           vector<LogicalType> &return_types, vector<string> &names) {
+                                                           vector<LogicalType> &return_types,
+                                                           vector<Identifier> &names) {
 	return DuckLakeTableChangesBind(context, input, return_types, names, DuckLakeScanType::SCAN_DELETIONS);
 }
 

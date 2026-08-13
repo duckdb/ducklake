@@ -2564,7 +2564,7 @@ void DuckLakeMetadataManager::SubstituteCatalogPlaceholders(string &query) const
 	auto catalog_literal = DuckLakeUtil::SQLLiteralToString(ducklake_catalog.MetadataDatabaseName());
 	auto schema_identifier = DuckLakeUtil::SQLIdentifierToString(ducklake_catalog.MetadataSchemaName());
 	auto schema_identifier_escaped = StringUtil::Replace(schema_identifier, "'", "''");
-	auto schema_literal = DuckLakeUtil::SQLLiteralToString(ducklake_catalog.MetadataSchemaName());
+	auto schema_literal = DuckLakeUtil::SQLLiteralToString(ducklake_catalog.MetadataSchemaName().GetIdentifierName());
 	auto metadata_path = DuckLakeUtil::SQLLiteralToString(ducklake_catalog.MetadataPath());
 	auto data_path = DuckLakeUtil::SQLLiteralToString(ducklake_catalog.DataPath());
 
@@ -3337,7 +3337,7 @@ shared_ptr<DuckLakeInlinedData> DuckLakeMetadataManager::TransformInlinedData(Qu
 	}
 
 	auto context = transaction.context.lock();
-	auto data = make_uniq<ColumnDataCollection>(*context, result.types);
+	auto data = make_uniq<ColumnDataCollection>(*context, result.GetTypes());
 	while (true) {
 		auto chunk = result.Fetch();
 		if (!chunk) {
@@ -3819,13 +3819,12 @@ string DuckLakeMetadataManager::WriteNewDataFilesWithAppender(DuckLakeSnapshot &
 	}
 
 	// Create appenders for each table
-	Appender data_file_appender(connection, Identifier(db_name), Identifier(schema_name),
-	                            Identifier("ducklake_data_file"));
-	Appender column_stats_appender(connection, Identifier(db_name), Identifier(schema_name),
+	Appender data_file_appender(connection, Identifier(db_name), schema_name, Identifier("ducklake_data_file"));
+	Appender column_stats_appender(connection, Identifier(db_name), schema_name,
 	                               Identifier("ducklake_file_column_stats"));
-	Appender partition_value_appender(connection, Identifier(db_name), Identifier(schema_name),
+	Appender partition_value_appender(connection, Identifier(db_name), schema_name,
 	                                  Identifier("ducklake_file_partition_value"));
-	Appender variant_stats_appender(connection, Identifier(db_name), Identifier(schema_name),
+	Appender variant_stats_appender(connection, Identifier(db_name), schema_name,
 	                                Identifier("ducklake_file_variant_stats"));
 
 	bool write_row_group_count = catalog.SupportsRowGroupCount();
@@ -4457,13 +4456,13 @@ unique_ptr<DuckLakeSnapshot> DuckLakeMetadataManager::GetSnapshot(BoundAtClause 
 	unique_ptr<QueryResult> result;
 	const string timestamp_order = bound == SnapshotBound::LOWER_BOUND ? "ASC" : "DESC";
 	const string timestamp_condition = bound == SnapshotBound::LOWER_BOUND ? ">" : "<";
-	if (StringUtil::CIEquals(unit, "version")) {
+	if (unit == "version") {
 		result = Query(StringUtil::Format(R"(
 SELECT snapshot_id, schema_version, next_catalog_id, next_file_id
 FROM {METADATA_CATALOG}.ducklake_snapshot
 WHERE snapshot_id = %llu;)",
 		                                  val.DefaultCastAs(LogicalType::UBIGINT).GetValue<idx_t>()));
-	} else if (StringUtil::CIEquals(unit, "timestamp")) {
+	} else if (unit == "timestamp") {
 		result = Query(StringUtil::Format(
 		    R"(
 SELECT snapshot_id, schema_version, next_catalog_id, next_file_id
@@ -4479,12 +4478,13 @@ WHERE snapshot_id = (
 		throw InvalidInputException("Unsupported AT clause unit - %s", unit);
 	}
 	if (result->HasError()) {
-		result->GetErrorObject().Throw(StringUtil::Format(
-		    "Failed to query snapshot at %s %s for DuckLake: ", StringUtil::Lower(unit), val.ToString()));
+		result->GetErrorObject().Throw(StringUtil::Format("Failed to query snapshot at %s %s for DuckLake: ",
+		                                                  StringUtil::Lower(unit.GetIdentifierName()), val.ToString()));
 	}
 	auto snapshot = ParseSnapshot(*result);
 	if (!snapshot) {
-		throw InvalidInputException("No snapshot found at %s %s", StringUtil::Lower(unit), val.ToString());
+		throw InvalidInputException("No snapshot found at %s %s", StringUtil::Lower(unit.GetIdentifierName()),
+		                            val.ToString());
 	}
 	return snapshot;
 }
