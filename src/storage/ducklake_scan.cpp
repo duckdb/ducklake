@@ -1,4 +1,7 @@
 #include "storage/ducklake_scan.hpp"
+#include "duckdb/catalog/catalog.hpp"
+#include "duckdb/catalog/catalog_entry/table_catalog_entry.hpp"
+#include "duckdb/main/database.hpp"
 #include "storage/ducklake_catalog.hpp"
 #include "storage/ducklake_multi_file_reader.hpp"
 #include "storage/ducklake_multi_file_list.hpp"
@@ -95,9 +98,7 @@ unique_ptr<BaseStatistics> DuckLakeStatistics(ClientContext &context, const Func
 	}
 	auto &multi_file_data = bind_data->Cast<MultiFileBindData>();
 	auto &file_list = multi_file_data.file_list->Cast<DuckLakeMultiFileList>();
-	if (file_list.HasTransactionLocalData()) {
-		// don't read stats if we have transaction-local inserts
-		// FIXME: we could unify the stats with the global stats
+	if (!file_list.CanUseGlobalStats()) {
 		return nullptr;
 	}
 	auto &table = file_list.GetTable();
@@ -152,8 +153,14 @@ struct DuckLakePartitionRowGroup : public PartitionRowGroup {
 		return table.GetStatistics(context, storage_index.GetPrimaryIndex());
 	}
 
-	bool MinMaxIsExact(const BaseStatistics &stats, const StorageIndex &storage_index) override {
+	bool MinMaxIsExact(const StorageIndex &storage_index) override {
 		return min_max_exact;
+	}
+
+	// DuckLakeGetPartitionStats bails out when the transaction has local changes, so
+	// any constructed row group only ever describes durably committed data.
+	bool HasPendingWrites() override {
+		return false;
 	}
 };
 
@@ -165,8 +172,7 @@ vector<PartitionStatistics> DuckLakeGetPartitionStats(ClientContext &context, Ge
 	}
 	auto &func_info = input.table_function.function_info->Cast<DuckLakeFunctionInfo>();
 
-	// Only use partition stats for regular table scans
-	if (func_info.scan_type != DuckLakeScanType::SCAN_TABLE) {
+	if (!func_info.CanUseGlobalStats()) {
 		return result;
 	}
 
@@ -176,17 +182,6 @@ vector<PartitionStatistics> DuckLakeGetPartitionStats(ClientContext &context, Ge
 	auto transaction = func_info.GetTransaction();
 
 	auto table_id = table.GetTableId();
-
-	// Check if this is a time travel query - if so, fall back to scanning
-	// After merge_adjacent_files, multiple files are merged into one with a combined record_count.
-	// The merged file contains an embedded snapshot_id column for time travel filtering,
-	// but the metadata record_count represents ALL rows, not per-snapshot counts.
-	// Only a full scan can filter by snapshot_id to get the correct historical count.
-	// Time travel can occur via: (1) per-query AT clause, or (2) catalog attached at historical snapshot
-	auto current_snapshot = transaction->GetSnapshot();
-	if (func_info.snapshot.snapshot_id != current_snapshot.snapshot_id || transaction->GetCatalog().CatalogSnapshot()) {
-		return result;
-	}
 
 	// Check if this is a transaction-local table (no committed stats)
 	if (table.IsTransactionLocal()) {
@@ -246,7 +241,7 @@ TableFunction DuckLakeFunctions::GetDuckLakeScanFunction(DatabaseInstance &insta
 	function.to_string = DuckLakeFunctionToString;
 	function.get_metrics = DuckLakeGetMetrics;
 
-	function.name = "ducklake_scan";
+	function.SetName("ducklake_scan");
 	return function;
 }
 
@@ -274,6 +269,15 @@ shared_ptr<DuckLakeTransaction> DuckLakeFunctionInfo::GetTransaction() {
 		    "Scanning a DuckLake table after the transaction has ended - this use case is not yet supported");
 	}
 	return result;
+}
+
+bool DuckLakeFunctionInfo::CanUseGlobalStats() {
+	if (scan_type != DuckLakeScanType::SCAN_TABLE) {
+		return false;
+	}
+	auto active_transaction = GetTransaction();
+	return snapshot.snapshot_id == active_transaction->GetSnapshot().snapshot_id &&
+	       !active_transaction->GetCatalog().CatalogSnapshot();
 }
 
 void DuckLakeScanSerialize(Serializer &serializer, const optional_ptr<FunctionData> bind_data,

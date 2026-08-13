@@ -9,6 +9,8 @@
 #pragma once
 
 #include "ducklake_macro_entry.hpp"
+#include "duckdb/catalog/catalog.hpp"
+#include "duckdb/main/database.hpp"
 #include "common/ducklake_data_file.hpp"
 #include "common/ducklake_snapshot.hpp"
 #include "duckdb/common/case_insensitive_map.hpp"
@@ -274,7 +276,7 @@ public:
 
 	void SetCommitMessage(const DuckLakeSnapshotCommit &option);
 
-	string GetDefaultSchemaName();
+	Identifier GetDefaultSchemaName();
 
 	bool HasLocalDeletes(TableIndex table_id) const;
 	bool HasLocalDeleteForFile(TableIndex table_id, const string &path) const;

@@ -4,6 +4,8 @@
 
 require ducklake
 
+require notmusl
+
 require parquet
 
 test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
