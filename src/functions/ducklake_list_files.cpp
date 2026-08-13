@@ -33,7 +33,7 @@ static void AddFileInfo(DuckLakeFileData &file_info, vector<Value> &row_values) 
 }
 
 static unique_ptr<FunctionData> DuckLakeListFilesBind(ClientContext &context, TableFunctionBindInput &input,
-                                                      vector<LogicalType> &return_types, vector<string> &names) {
+                                                      vector<LogicalType> &return_types, vector<Identifier> &names) {
 	auto &catalog = DuckLakeBaseMetadataFunction::GetCatalog(context, input.inputs[0]);
 	auto &transaction = DuckLakeTransaction::Get(context, catalog);
 

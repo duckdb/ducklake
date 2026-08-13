@@ -314,6 +314,12 @@ struct DuckLakeSnapshotInfo {
 	Value commit_extra_info;
 };
 
+struct DuckLakeViewColumnTag {
+	string column_name;
+	string key;
+	Value value;
+};
+
 struct DuckLakeViewInfo {
 	TableIndex id;
 	SchemaIndex schema_id;
@@ -323,6 +329,14 @@ struct DuckLakeViewInfo {
 	vector<string> column_aliases;
 	string sql;
 	vector<DuckLakeTag> tags;
+	vector<DuckLakeViewColumnTag> column_tags;
+};
+
+struct DuckLakeViewColumnTagInfo {
+	TableIndex view_id;
+	string column_name;
+	string key;
+	Value value;
 };
 
 struct DuckLakeTagInfo {
@@ -458,6 +472,9 @@ struct DuckLakeCompactionFileEntry {
 	vector<DuckLakeCompactionDeleteFileData> delete_files;
 	optional_idx max_partial_file_snapshot;
 	idx_t schema_version;
+	//! Snapshot and schema version used to resolve the file's partition spec.
+	optional_idx partition_snapshot_id;
+	optional_idx partition_schema_version;
 	//! Inlined file deletions stored in the metadata database rather than delete files.
 	set<idx_t> inlined_file_deletions;
 	//! Whether this file has any inlined deletions (cheap flag; set for all compaction types).

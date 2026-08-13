@@ -28,7 +28,8 @@ if($ENV{ENABLE_QUACK})
     duckdb_extension_load(quack
             LOAD_TESTS
             GIT_URL https://github.com/duckdb/duckdb-quack.git
-            GIT_TAG 552fccc484c8326f654027d9a2740fcff30a5a04
+            GIT_TAG b2f2d10fb8da520d4b00c2490fdffea1049349c7
             SUBMODULES "extension-ci-tools"
+            APPLY_PATCHES
     )
 endif()

@@ -1,5 +1,8 @@
 #include "functions/ducklake_table_functions.hpp"
 #include "common/ducklake_util.hpp"
+#include "duckdb/catalog/catalog.hpp"
+#include "duckdb/main/config.hpp"
+#include "duckdb/catalog/catalog_entry/table_catalog_entry.hpp"
 #include "storage/ducklake_transaction.hpp"
 #include "storage/ducklake_catalog.hpp"
 #include "storage/ducklake_table_entry.hpp"
@@ -76,7 +79,7 @@ struct DuckLakeSetOptionData : public TableFunctionData {
 };
 
 static unique_ptr<FunctionData> DuckLakeSetOptionBind(ClientContext &context, TableFunctionBindInput &input,
-                                                      vector<LogicalType> &return_types, vector<string> &names) {
+                                                      vector<LogicalType> &return_types, vector<Identifier> &names) {
 	auto &catalog = DuckLakeBaseMetadataFunction::GetCatalog(context, input.inputs[0]);
 	DuckLakeConfigOption config_option;
 	auto &option = config_option.option.key;
@@ -184,8 +187,9 @@ static unique_ptr<FunctionData> DuckLakeSetOptionBind(ClientContext &context, Ta
 	}
 	if (!table.empty()) {
 		// find the scope
-		auto table_catalog_entry = catalog.GetEntry<TableCatalogEntry>(context, Identifier(schema), Identifier(table),
-		                                                               OnEntryNotFound::THROW_EXCEPTION);
+		auto table_catalog_entry = catalog.GetEntry<TableCatalogEntry>(
+		    context, QualifiedName(catalog.GetName(), Identifier(schema), Identifier(table)),
+		    OnEntryNotFound::THROW_EXCEPTION);
 		auto &ducklake_table = table_catalog_entry->Cast<DuckLakeTableEntry>();
 		config_option.table_id = ducklake_table.GetTableId();
 		if (IsTransactionLocal(config_option.table_id)) {
