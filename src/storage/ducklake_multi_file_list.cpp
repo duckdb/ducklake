@@ -260,7 +260,7 @@ DuckLakeFileData GetDeleteData(const DuckLakeDataFile &file) {
 	return result;
 }
 
-vector<DuckLakeFileListExtendedEntry> DuckLakeMultiFileList::GetFilesExtended() const {
+vector<DuckLakeFileListExtendedEntry> DuckLakeMultiFileList::GetFilesExtended(bool include_partition_values) const {
 	lock_guard<mutex> l(file_lock);
 	vector<DuckLakeFileListExtendedEntry> result;
 	auto transaction_ref = read_info.GetTransaction();
@@ -268,7 +268,8 @@ vector<DuckLakeFileListExtendedEntry> DuckLakeMultiFileList::GetFilesExtended() 
 	if (!IsTransactionLocal(read_info.table_id)) {
 		// not a transaction local table - read the file list from the metadata store
 		auto &metadata_manager = transaction.GetMetadataManager();
-		result = metadata_manager.GetExtendedFilesForTable(read_info.table, read_info.snapshot, filter_info.get());
+		result = metadata_manager.GetExtendedFilesForTable(read_info.table, read_info.snapshot, filter_info.get(),
+		                                                   include_partition_values);
 	}
 	if (transaction.HasDroppedFiles()) {
 		for (idx_t file_idx = 0; file_idx < result.size(); file_idx++) {

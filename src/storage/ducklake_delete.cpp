@@ -1389,40 +1389,9 @@ MetadataDeleteFileMatch GetMetadataDeleteFileMatch(DuckLakeTableEntry &table, co
 	return found ? MetadataDeleteFileMatch::MATCH : MetadataDeleteFileMatch::UNKNOWN;
 }
 
-bool HasActiveDeleteFilesForDataFiles(DuckLakeTransaction &transaction, TableIndex table_id,
-                                      const vector<DuckLakeFileListExtendedEntry> &files) {
-	string file_ids;
-	for (auto &file : files) {
-		if (!file.file_id.IsValid()) {
-			continue;
-		}
-		if (!file_ids.empty()) {
-			file_ids += ",";
-		}
-		file_ids += to_string(file.file_id.index);
-	}
-	if (file_ids.empty()) {
-		return false;
-	}
-	auto result = transaction.Query(transaction.GetSnapshot(), StringUtil::Format(R"(
-SELECT COUNT(*)
-FROM {METADATA_CATALOG}.ducklake_delete_file
-WHERE table_id=%d AND data_file_id IN (%s)
-  AND {SNAPSHOT_ID} >= begin_snapshot AND ({SNAPSHOT_ID} < end_snapshot OR end_snapshot IS NULL)
-)",
-	                                                                              table_id.index, file_ids));
-	if (result->HasError()) {
-		result->GetErrorObject().Throw("Failed to check active DuckLake delete files: ");
-	}
-	for (auto &row : *result) {
-		return row.GetValue<idx_t>(0) > 0;
-	}
-	return false;
-}
-
 bool CanUseMetadataDelete(ClientContext &context, DuckLakeTableEntry &table, PhysicalOperator &child_plan,
                           const unordered_map<idx_t, vector<Value>> &planned_partition_values,
-                          vector<DuckLakeFileListExtendedEntry> &files) {
+                          unique_ptr<vector<DuckLakeFileListExtendedEntry>> &files) {
 	auto partition_values = planned_partition_values;
 	auto scan = FindMetadataDeleteSource(table, child_plan, partition_values);
 	auto partition_data = table.GetPartitionData();
@@ -1449,10 +1418,11 @@ bool CanUseMetadataDelete(ClientContext &context, DuckLakeTableEntry &table, Phy
 		return false;
 	}
 
-	auto extended_files = file_list.GetFilesExtended();
-	vector<DuckLakeFileListExtendedEntry> data_files;
+	files = make_uniq<vector<DuckLakeFileListExtendedEntry>>(file_list.GetFilesExtended(true));
+	vector<idx_t> matching_file_indexes;
 	optional_idx inlined_row_count;
-	for (auto &file : extended_files) {
+	for (idx_t file_idx = 0; file_idx < files->size(); file_idx++) {
+		auto &file = (*files)[file_idx];
 		if (file.data_type != DuckLakeDataType::DATA_FILE) {
 			if (file.data_type == DuckLakeDataType::INLINED_DATA) {
 				if (!inlined_row_count.IsValid()) {
@@ -1477,12 +1447,14 @@ bool CanUseMetadataDelete(ClientContext &context, DuckLakeTableEntry &table, Phy
 		if (file_match == MetadataDeleteFileMatch::NO_MATCH) {
 			continue;
 		}
-		data_files.push_back(std::move(file));
+		matching_file_indexes.push_back(file_idx);
 	}
-	if (HasActiveDeleteFilesForDataFiles(transaction, table.GetTableId(), data_files)) {
-		return false;
+	vector<DuckLakeFileListExtendedEntry> data_files;
+	data_files.reserve(matching_file_indexes.size());
+	for (auto file_idx : matching_file_indexes) {
+		data_files.push_back(std::move((*files)[file_idx]));
 	}
-	files = std::move(data_files);
+	*files = std::move(data_files);
 	return true;
 }
 
@@ -1491,10 +1463,10 @@ PhysicalOperator &DuckLakeDelete::PlanDelete(ClientContext &context, PhysicalPla
                                              vector<idx_t> row_id_indexes, string encryption_key, bool allow_duplicates,
                                              unordered_map<idx_t, vector<Value>> metadata_delete_partition_values,
                                              bool can_use_metadata_delete) {
-	vector<DuckLakeFileListExtendedEntry> metadata_delete_files;
+	unique_ptr<vector<DuckLakeFileListExtendedEntry>> extended_files;
 	if (allow_duplicates && can_use_metadata_delete &&
-	    CanUseMetadataDelete(context, table, child_plan, metadata_delete_partition_values, metadata_delete_files)) {
-		return planner.Make<DuckLakeMetadataDelete>(table, std::move(metadata_delete_files));
+	    CanUseMetadataDelete(context, table, child_plan, metadata_delete_partition_values, extended_files)) {
+		return planner.Make<DuckLakeMetadataDelete>(table, std::move(*extended_files));
 	}
 
 	auto delete_source = FindDeleteSource(child_plan);
@@ -1503,7 +1475,7 @@ PhysicalOperator &DuckLakeDelete::PlanDelete(ClientContext &context, PhysicalPla
 		auto &bind_data = delete_source->bind_data->Cast<MultiFileBindData>();
 		auto &reader = bind_data.multi_file_reader->Cast<DuckLakeMultiFileReader>();
 		auto &file_list = bind_data.file_list->Cast<DuckLakeMultiFileList>();
-		auto files = file_list.GetFilesExtended();
+		auto files = extended_files ? std::move(*extended_files) : file_list.GetFilesExtended();
 		for (auto &file_entry : files) {
 			delete_map->AddExtendedFileInfo(std::move(file_entry));
 		}

@@ -26,10 +26,13 @@ INSERT INTO ducklake.eq_t VALUES (1, 'drop', 10), (2, 'drop', 20), (3, 'keep', 3
 statement ok
 SET VARIABLE eq_id = (SELECT table_id FROM md.ducklake_table WHERE table_name = 'eq_t')
 
+statement ok
+CALL enable_logging('DuckLakeMetadata')
+
 query II
 EXPLAIN DELETE FROM ducklake.eq_t WHERE p = 'drop'
 ----
-physical_plan	<REGEX>:.*DUCKLAKE_METADATA_DELETE.*
+physical_plan	<REGEX>:.*Ducklake Metadata Delete.*
 
 query I
 DELETE FROM ducklake.eq_t WHERE p = 'drop'
@@ -43,6 +46,13 @@ keep	1
 
 query I
 SELECT COUNT(*) FROM md.ducklake_delete_file WHERE table_id = getvariable('eq_id') AND end_snapshot IS NULL
+----
+0
+
+# Extended file metadata already includes active delete files; no second file-id query is needed.
+query I
+SELECT COUNT(*) FROM duckdb_logs_parsed('DuckLakeMetadata')
+WHERE query LIKE '%SELECT COUNT(*)%FROM %ducklake_delete_file%WHERE table_id=%AND data_file_id IN (%'
 ----
 0
 
@@ -70,7 +80,7 @@ SET VARIABLE in_id = (SELECT table_id FROM md.ducklake_table WHERE table_name = 
 query II
 EXPLAIN DELETE FROM ducklake.in_t WHERE p IN ('a', 'c')
 ----
-physical_plan	<REGEX>:.*DUCKLAKE_METADATA_DELETE.*
+physical_plan	<REGEX>:.*Ducklake Metadata Delete.*
 
 query I
 DELETE FROM ducklake.in_t WHERE p IN ('a', 'c')
@@ -109,7 +119,7 @@ INSERT INTO ducklake.or_t VALUES (1, 'a', 10), (2, 'b', 20), (3, 'c', 30), (4, '
 query II
 EXPLAIN DELETE FROM ducklake.or_t WHERE p = 'a' OR p = 'c'
 ----
-physical_plan	<REGEX>:.*DUCKLAKE_METADATA_DELETE.*
+physical_plan	<REGEX>:.*Ducklake Metadata Delete.*
 
 query I
 DELETE FROM ducklake.or_t WHERE p = 'a' OR p = 'c'
@@ -155,7 +165,7 @@ INSERT INTO ducklake.multi_key_single_predicate_t VALUES (1, 1, 10), (1, 2, 20),
 query II
 EXPLAIN DELETE FROM ducklake.multi_key_single_predicate_t WHERE a = 1
 ----
-physical_plan	<REGEX>:.*DUCKLAKE_METADATA_DELETE.*
+physical_plan	<REGEX>:.*Ducklake Metadata Delete.*
 
 query I
 DELETE FROM ducklake.multi_key_single_predicate_t WHERE a = 1
@@ -180,7 +190,7 @@ INSERT INTO ducklake.multi_key_and_t VALUES (1, 1, 10), (1, 2, 20), (2, 1, 30), 
 query II
 EXPLAIN DELETE FROM ducklake.multi_key_and_t WHERE a = 1 AND b = 1
 ----
-physical_plan	<REGEX>:.*DUCKLAKE_DELETE.*
+physical_plan	<REGEX>:.*Ducklake Delete.*
 
 query I
 DELETE FROM ducklake.multi_key_and_t WHERE a = 1 AND b = 1
@@ -205,7 +215,7 @@ INSERT INTO ducklake.multi_key_or_t VALUES (1, 1, 10), (1, 2, 20), (2, 1, 30), (
 query II
 EXPLAIN DELETE FROM ducklake.multi_key_or_t WHERE a = 1 OR b = 1
 ----
-physical_plan	<REGEX>:.*DUCKLAKE_DELETE.*
+physical_plan	<REGEX>:.*Ducklake Delete.*
 
 query I
 DELETE FROM ducklake.multi_key_or_t WHERE a = 1 OR b = 1
@@ -230,6 +240,10 @@ INSERT INTO ducklake.residual_t VALUES (1, 'x', 5), (2, 'x', 20), (3, 'y', 30)
 statement ok
 SET VARIABLE residual_id = (SELECT table_id FROM md.ducklake_table WHERE table_name = 'residual_t')
 
+statement ok
+SET VARIABLE partition_query_count = (SELECT COUNT(*) FROM duckdb_logs_parsed('DuckLakeMetadata')
+                                      WHERE query LIKE '%ARRAY_AGG(partition_key_index%')
+
 query I
 DELETE FROM ducklake.residual_t WHERE p = 'x' AND v > 10
 ----
@@ -244,6 +258,14 @@ query I
 SELECT COUNT(*) FROM md.ducklake_delete_file WHERE table_id = getvariable('residual_id') AND end_snapshot IS NULL
 ----
 1
+
+# Row-level fallback does not load partition values it will not use.
+query I
+SELECT COUNT(*) - getvariable('partition_query_count')
+FROM duckdb_logs_parsed('DuckLakeMetadata')
+WHERE query LIKE '%ARRAY_AGG(partition_key_index%'
+----
+0
 
 # Repartitioning can reuse partition_key_index. Current-spec partition_id must match before values are trusted.
 statement ok
@@ -264,7 +286,7 @@ INSERT INTO ducklake.repartition_t VALUES ('q', 'x', 3)
 query II
 EXPLAIN DELETE FROM ducklake.repartition_t WHERE b = 'x'
 ----
-physical_plan	<REGEX>:.*DUCKLAKE_DELETE.*
+physical_plan	<REGEX>:.*Ducklake Delete.*
 
 query I
 DELETE FROM ducklake.repartition_t WHERE b = 'x'
@@ -294,7 +316,7 @@ DELETE FROM ducklake.existing_delete_t WHERE p = 'x' AND v = 10
 query II
 EXPLAIN DELETE FROM ducklake.existing_delete_t WHERE p = 'x'
 ----
-physical_plan	<REGEX>:.*DUCKLAKE_DELETE.*
+physical_plan	<REGEX>:.*Ducklake Delete.*
 
 query I
 DELETE FROM ducklake.existing_delete_t WHERE p = 'x'

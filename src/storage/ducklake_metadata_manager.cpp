@@ -2206,7 +2206,8 @@ FROM main_results
 
 vector<DuckLakeFileListExtendedEntry>
 DuckLakeMetadataManager::GetExtendedFilesForTable(DuckLakeTableEntry &table, DuckLakeSnapshot snapshot,
-                                                  const FilterPushdownInfo *filter_info) {
+                                                  const FilterPushdownInfo *filter_info,
+                                                  bool include_partition_values) {
 	auto table_id = table.GetTableId();
 	string select_list = GetFileSelectList("data") + ", data.row_id_start, data.mapping_id, " +
 	                     GetDeleteFileSelectList("del") + ", del.begin_snapshot";
@@ -2232,17 +2233,12 @@ DuckLakeMetadataManager::GetExtendedFilesForTable(DuckLakeTableEntry &table, Duc
 		}
 	}
 
-	// Add base query
-	query += StringUtil::Format(R"(
-SELECT data.data_file_id, del.delete_file_id, data.record_count, data.partition_id,
-       partition_values.partition_key_indexes, partition_values.partition_value_list, %s
-FROM {METADATA_CATALOG}.ducklake_data_file data
-LEFT JOIN (
-	SELECT *
-    FROM {METADATA_CATALOG}.ducklake_delete_file
-    WHERE table_id=%d  AND {SNAPSHOT_ID} >= begin_snapshot
-          AND ({SNAPSHOT_ID} < end_snapshot OR end_snapshot IS NULL)
-    ) del USING (data_file_id)
+	string partition_select_list = "NULL, NULL, NULL";
+	string partition_join;
+	if (include_partition_values) {
+		partition_select_list =
+		    "data.partition_id, partition_values.partition_key_indexes, partition_values.partition_value_list";
+		partition_join = StringUtil::Format(R"(
 LEFT JOIN (
 	SELECT data_file_id,
 	       ARRAY_AGG(partition_key_index ORDER BY partition_key_index) partition_key_indexes,
@@ -2251,9 +2247,24 @@ LEFT JOIN (
 	WHERE table_id=%d
 	GROUP BY data_file_id
 	) partition_values USING (data_file_id)
+)",
+		                                    table_id.index);
+	}
+
+	// Add base query
+	query += StringUtil::Format(R"(
+SELECT data.data_file_id, del.delete_file_id, data.record_count, %s, %s
+FROM {METADATA_CATALOG}.ducklake_data_file data
+LEFT JOIN (
+	SELECT *
+    FROM {METADATA_CATALOG}.ducklake_delete_file
+    WHERE table_id=%d  AND {SNAPSHOT_ID} >= begin_snapshot
+          AND ({SNAPSHOT_ID} < end_snapshot OR end_snapshot IS NULL)
+	) del USING (data_file_id)
+%s
 WHERE data.table_id=%d AND {SNAPSHOT_ID} >= data.begin_snapshot AND ({SNAPSHOT_ID} < data.end_snapshot OR data.end_snapshot IS NULL)
 		)",
-	                            select_list, table_id.index, table_id.index, table_id.index);
+	                            partition_select_list, select_list, table_id.index, partition_join, table_id.index);
 
 	// Add WHERE clause from filters if it was generated
 	if (!where_clause.empty()) {
