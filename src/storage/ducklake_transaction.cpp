@@ -1,4 +1,7 @@
 #include "storage/ducklake_transaction.hpp"
+#include "duckdb/catalog/catalog.hpp"
+#include "duckdb/main/database.hpp"
+#include "duckdb/common/file_system.hpp"
 
 #include "storage/ducklake_commit_state.hpp"
 #include "storage/ducklake_transaction_state.hpp"
@@ -768,6 +771,9 @@ void DuckLakeTransaction::Commit() {
 		FlushChanges();
 	} else if (connection) {
 		connection->Commit();
+		if (!state->flushed_inlined_tables.empty()) {
+			DropEmptySupersededInlinedTablesClientSide();
+		}
 	}
 	FlushNameMapCacheInvalidations();
 	connection.reset();
@@ -801,9 +807,9 @@ Connection &DuckLakeTransaction::GetConnection() {
 		auto &client_data = ClientData::Get(*connection->context);
 		// ensure we are only looking in the ducklake catalog schema during querying
 		CatalogSearchEntry metadata_entry(Identifier(ducklake_catalog.MetadataDatabaseName()),
-		                                  Identifier(ducklake_catalog.MetadataSchemaName()));
-		if (metadata_entry.schema.empty()) {
-			metadata_entry.schema = "main";
+		                                  ducklake_catalog.MetadataSchemaName());
+		if (metadata_entry.GetSchema().empty()) {
+			metadata_entry.SetSchema("main");
 		}
 		client_data.catalog_search_path->Set(metadata_entry, CatalogSetPathType::SET_DIRECTLY);
 
@@ -1100,6 +1106,18 @@ DuckLakePartitionInfo DuckLakeTransaction::GetNewPartitionKey(DuckLakeCommitStat
 			break;
 		case DuckLakeTransformType::HOUR:
 			partition_field.transform = "hour";
+			break;
+		case DuckLakeTransformType::EPOCH_YEAR:
+			partition_field.transform = "epoch_year";
+			break;
+		case DuckLakeTransformType::EPOCH_MONTH:
+			partition_field.transform = "epoch_month";
+			break;
+		case DuckLakeTransformType::EPOCH_DAY:
+			partition_field.transform = "epoch_day";
+			break;
+		case DuckLakeTransformType::EPOCH_HOUR:
+			partition_field.transform = "epoch_hour";
 			break;
 		case DuckLakeTransformType::BUCKET:
 			partition_field.transform = StringUtil::Format("bucket(%d)", field.transform.bucket_count);
@@ -1597,7 +1615,7 @@ unique_ptr<QueryResult> DuckLakeTransaction::Query(DuckLakeSnapshot snapshot, st
 	return metadata_manager->Query(snapshot, query);
 }
 
-string DuckLakeTransaction::GetDefaultSchemaName() {
+Identifier DuckLakeTransaction::GetDefaultSchemaName() {
 	auto &metadata_context = *connection->context;
 	auto &db_manager = DatabaseManager::Get(metadata_context);
 	auto metadb = db_manager.GetDatabase(metadata_context, Identifier(ducklake_catalog.MetadataDatabaseName()));
@@ -1986,20 +2004,24 @@ void DuckLakeTransaction::AlterEntry(CatalogEntry &entry, unique_ptr<CatalogEntr
 static void HandleRenameOldEntry(DuckLakeCatalogSet &entries, const string &old_name, const string &new_name,
                                  TableIndex id, bool entry_is_transaction_local, set<TableIndex> &renamed_set,
                                  const set<TableIndex> &dropped_set) {
-	if (IsTransactionLocal(id)) {
-		// entry was created in this same transaction
+	if (!IsTransactionLocal(id) && !entry_is_transaction_local) {
+		// first rename of a committed entry that was untouched earlier in this transaction
+		// Invariant: an id cannot be both renamed and dropped in the same transaction.
+		D_ASSERT(dropped_set.find(id) == dropped_set.end());
+		renamed_set.insert(id);
+		return;
+	}
+	// changes made earlier in this transaction must still commit under the new name, but when the
+	// name does not change they are already chained under it and the drop would take them with it
+	if (!StringUtil::CIEquals(old_name, new_name)) {
 		auto dropped = entries.DropEntry(old_name);
 		auto new_entry_ptr = entries.GetEntry(new_name);
 		if (new_entry_ptr && dropped) {
 			new_entry_ptr->SetChild(std::move(dropped));
 		}
-	} else if (entry_is_transaction_local) {
-		// entry existed before this transaction and has already been renamed earlier in this txn
-		entries.DropEntry(old_name);
-	} else {
-		// first rename of a committed entry
-		// Invariant: an id cannot be both renamed and dropped in the same transaction.
-		D_ASSERT(dropped_set.find(id) == dropped_set.end());
+	}
+	if (!IsTransactionLocal(id)) {
+		// committed entry that was altered earlier in this transaction - the old row still needs closing
 		renamed_set.insert(id);
 	}
 }

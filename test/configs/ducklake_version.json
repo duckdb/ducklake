@@ -19,7 +19,8 @@
       "paths": [
         "test/sql/attach/attach_ducklake_version.test",
         "test/sql/metadata/row_group_count.test",
-        "test/sql/migration/v10_row_group_count.test"
+        "test/sql/migration/v10_row_group_count.test",
+        "test/sql/partitioning/epoch_version_gate.test"
       ]
     },
     {
@@ -30,6 +31,16 @@
         "test/sql/comments/comment_on_view_column_invalid.test",
         "test/sql/comments/comment_on_view_column_update.test",
         "test/sql/comments/drop_view_expires_view_column_tags.test"
+      ]
+    },
+    {
+      "reason": "Epoch partition transforms were added in 1.1-dev1 and are not available when ducklake_default_version is pinned to 1.0",
+      "paths": [
+        "test/sql/add_files/add_file_epoch_partitioned.test",
+        "test/sql/data_inlining/data_inlining_epoch_partitions.test",
+        "test/sql/partitioning/epoch_timestamptz.test",
+        "test/sql/partitioning/epoch_transforms.test",
+        "test/sql/partitioning/update_partition_epoch.test"
       ]
     }
   ]

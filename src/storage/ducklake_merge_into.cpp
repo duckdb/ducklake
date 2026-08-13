@@ -1,4 +1,5 @@
 #include "storage/ducklake_catalog.hpp"
+#include "duckdb/execution/physical_plan_generator.hpp"
 #include "duckdb/execution/operator/persistent/physical_merge_into.hpp"
 #include "duckdb/planner/operator/logical_merge_into.hpp"
 #include "storage/ducklake_update.hpp"

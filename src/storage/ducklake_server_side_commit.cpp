@@ -864,10 +864,10 @@ unique_ptr<MaterializedQueryResult> DuckLakeServerSideCommit::ScanStagedTable(Du
 
 	auto types = storage.GetTypes();
 	auto &columns = storage.Columns();
-	vector<string> names;
+	vector<Identifier> names;
 	vector<StorageIndex> column_ids;
 	for (idx_t i = 0; i < columns.size(); i++) {
-		names.push_back(columns[i].Name().GetIdentifierName());
+		names.push_back(columns[i].Name());
 		column_ids.emplace_back(i);
 	}
 
