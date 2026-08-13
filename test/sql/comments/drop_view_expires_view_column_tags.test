@@ -1,0 +1,38 @@
+# name: test/sql/comments/drop_view_expires_view_column_tags.test
+# description: Verify DROP VIEW expires ducklake_view_column_tag (view column comments).
+# group: [comments]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{TEST_DIR}/drop_view_expires_view_column_tags/')
+
+statement ok
+CREATE VIEW ducklake.v AS SELECT 1 AS c
+
+statement ok
+COMMENT ON COLUMN ducklake.v.c IS 'my col comment'
+
+# verify view column tag row is active
+query II
+SELECT key, value FROM __ducklake_metadata_ducklake.ducklake_view_column_tag WHERE end_snapshot IS NULL;
+----
+comment	my col comment
+
+statement ok
+DROP VIEW ducklake.v
+
+# after DROP VIEW, no active rows in ducklake_view_column_tag (DropViews expires ducklake_view_column_tag)
+query I
+SELECT count(*) FROM __ducklake_metadata_ducklake.ducklake_view_column_tag WHERE end_snapshot IS NULL;
+----
+0
+
+query I
+SELECT count(*) FROM __ducklake_metadata_ducklake.ducklake_view_column_tag WHERE end_snapshot IS NOT NULL;
+----
+1

@@ -1,0 +1,91 @@
+# name: test/sql/compaction/merge_adjacent_rotation_mode.test
+# description: merge_adjacent embeds row-ids (rotation valid) for non-adjacent files, keeps positional row-ids (rotation invalid) for adjacent files
+# group: [compaction]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/merge_rotation_mode', METADATA_CATALOG 'ducklake_metadata', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+USE dl
+
+statement ok
+SET threads TO 1
+
+#  rotation is invalid, row-ids stay positional
+
+statement ok
+CREATE TABLE adj(id INTEGER, v INTEGER);
+
+statement ok
+INSERT INTO adj SELECT i, i * 2 FROM range(0, 1000) t(i)
+
+statement ok
+INSERT INTO adj SELECT i, i * 2 FROM range(1000, 2000) t(i)
+
+statement ok
+INSERT INTO adj SELECT i, i * 2 FROM range(2000, 3000) t(i)
+
+# 3 adjacent files merge into a single file
+query II
+SELECT SUM(files_processed), SUM(files_created) FROM ducklake_merge_adjacent_files('dl', 'adj')
+----
+3	1
+
+# rotation invalid: the merged file keeps a positional row_id_start (NOT NULL)
+query I
+SELECT COUNT(*) FILTER (WHERE row_id_start IS NOT NULL) = COUNT(*)
+FROM ducklake_metadata.ducklake_data_file WHERE end_snapshot IS NULL
+----
+true
+
+# data + row-ids preserved
+query II
+SELECT SUM(id), SUM(rowid) FROM adj
+----
+4498500	4498500
+
+# rotation is valid, row-ids are embedded
+
+statement ok
+CREATE TABLE nonadj(pk INTEGER, id INTEGER, v INTEGER);
+
+statement ok
+ALTER TABLE nonadj SET PARTITIONED BY (pk)
+
+statement ok
+INSERT INTO nonadj SELECT 0, i, i * 2 FROM range(0, 1000) t(i)
+
+statement ok
+INSERT INTO nonadj SELECT 1, i, i * 2 FROM range(1000, 2000) t(i)
+
+statement ok
+INSERT INTO nonadj SELECT 0, i, i * 2 FROM range(2000, 3000) t(i)
+
+statement ok
+INSERT INTO nonadj SELECT 1, i, i * 2 FROM range(3000, 4000) t(i)
+
+query II
+SELECT SUM(files_processed), SUM(files_created) FROM ducklake_merge_adjacent_files('dl', 'nonadj')
+----
+4	2
+
+query I
+SELECT COUNT(*) FILTER (WHERE df.row_id_start IS NULL) = COUNT(*)
+FROM ducklake_metadata.ducklake_data_file df
+JOIN ducklake_metadata.ducklake_file_partition_value pv ON df.data_file_id = pv.data_file_id
+WHERE df.end_snapshot IS NULL
+----
+true
+
+query II
+SELECT SUM(id), SUM(rowid) FROM nonadj
+----
+7998000	7998000

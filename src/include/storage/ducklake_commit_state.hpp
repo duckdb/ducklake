@@ -24,6 +24,7 @@ struct NewTableInfo {
 	vector<DuckLakePartitionInfo> new_partition_keys;
 	vector<DuckLakeTagInfo> new_tags;
 	vector<DuckLakeColumnTagInfo> new_column_tags;
+	vector<DuckLakeViewColumnTagInfo> new_view_column_tags;
 	vector<DuckLakeDroppedColumn> dropped_columns;
 	vector<DuckLakeNewColumn> new_columns;
 	vector<DuckLakeTableInfo> new_inlined_data_tables;

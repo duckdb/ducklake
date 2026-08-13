@@ -30,10 +30,7 @@ public:
 	DuckLakeMultiFileList(DuckLakeFunctionInfo &read_info, vector<DuckLakeFileListEntry> files_to_scan);
 	DuckLakeMultiFileList(DuckLakeFunctionInfo &read_info, const DuckLakeInlinedTableInfo &inlined_table);
 
-	unique_ptr<MultiFileList> DynamicFilterPushdown(ClientContext &context, const MultiFileOptions &options,
-	                                                const vector<Identifier> &names, const vector<LogicalType> &types,
-	                                                const vector<column_t> &column_ids,
-	                                                TableFilterSet &filters) const override;
+	unique_ptr<MultiFileList> DynamicFilterPushdown(MultiFileDynamicPushdownInfo &pushdown_info) const override;
 
 	unique_ptr<MultiFileList> ComplexFilterPushdown(ClientContext &context, const MultiFileOptions &options,
 	                                                MultiFilePushdownInfo &info,
@@ -45,9 +42,6 @@ public:
 	unique_ptr<NodeStatistics> GetCardinality(ClientContext &context) const override;
 	DuckLakeTableEntry &GetTable();
 	unique_ptr<MultiFileList> Copy() const override;
-	bool HasTransactionLocalData() const {
-		return !transaction_local_files.empty() || transaction_local_data;
-	}
 	vector<DuckLakeFileListExtendedEntry> GetFilesExtended() const;
 	const vector<DuckLakeFileListEntry> &GetFiles() const;
 	const DuckLakeFileListEntry &GetFileEntry(idx_t file_idx) const;
@@ -55,6 +49,7 @@ public:
 		return filter_info.get();
 	}
 
+	bool CanUseGlobalStats() const;
 	bool IsDeleteScan() const;
 	const DuckLakeDeleteScanEntry &GetDeleteScanEntry(idx_t file_idx);
 

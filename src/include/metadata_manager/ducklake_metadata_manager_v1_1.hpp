@@ -20,6 +20,7 @@ public:
 
 	string GetDataFileTableStatement() override;
 	string GetDeleteFileTableStatement() override;
+	string GetCreateTableStatements() override;
 	string GetVersionString() override;
 };
 

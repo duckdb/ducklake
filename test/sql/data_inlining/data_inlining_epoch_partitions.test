@@ -1,0 +1,99 @@
+# name: test/sql/data_inlining/data_inlining_epoch_partitions.test
+# description: Test data inlining with epoch partitioning transforms, including deletes before flush
+# group: [data_inlining]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/ducklake_inlining_epoch', METADATA_CATALOG 'ducklake_metadata', DATA_INLINING_ROW_LIMIT 1000)
+
+statement ok
+USE ducklake
+
+statement ok
+CREATE TABLE partitioned_tbl(id INTEGER, ts TIMESTAMP, v VARCHAR);
+
+statement ok
+ALTER TABLE partitioned_tbl SET PARTITIONED BY (epoch_year(ts), epoch_month(ts));
+
+loop i 0 10
+
+statement ok
+INSERT INTO partitioned_tbl SELECT i, TIMESTAMP '2020-01-01' + interval (i) hours, concat('str_', i) FROM range(1000 * {i}, 1000 * ({i} + 1)) t(i)
+
+endloop
+
+# all data is inlined
+query I
+SELECT COUNT(*) FROM GLOB('{DATA_PATH}/ducklake_inlining_epoch/main/partitioned_tbl/**')
+----
+0
+
+query IIII
+SELECT date_diff('year', DATE '1970-01-01', ts), COUNT(*), MIN(id), MAX(id) FROM partitioned_tbl GROUP BY 1 ORDER BY 1
+----
+50	8784	0	8783
+51	1216	8784	9999
+
+# delete some inlined rows before flushing
+query I
+DELETE FROM partitioned_tbl WHERE id < 100
+----
+100
+
+query I
+SELECT COUNT(*) FROM partitioned_tbl
+----
+9900
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake')
+
+query IIII
+SELECT date_diff('year', DATE '1970-01-01', ts), COUNT(*), MIN(id), MAX(id) FROM partitioned_tbl GROUP BY 1 ORDER BY 1
+----
+50	8684	100	8783
+51	1216	8784	9999
+
+# January 2020 (month ordinal 600) has 744 hours, 100 were deleted
+query I
+SELECT COUNT(*) FROM partitioned_tbl WHERE date_diff('month', DATE '1970-01-01', ts) = 600
+----
+644
+
+# time travel before the delete still sees all rows
+query I
+SELECT COUNT(*) FROM partitioned_tbl AT (version => 12)
+----
+10000
+
+query IIII
+SELECT date_diff('year', DATE '1970-01-01', ts), COUNT(*), MIN(id), MAX(id) FROM partitioned_tbl AT (version => 4) GROUP BY 1 ORDER BY 1
+----
+50	2000	0	1999
+
+# flushed files are hive partitioned by epoch ordinals
+query II
+SELECT DISTINCT regexp_extract(path, '.*epoch_year=(-?[0-9]+)[/\\].*', 1)::INT AS years_part, regexp_extract(path, '.*epoch_month=(-?[0-9]+)[/\\].*', 1)::INT AS epoch_month_part
+FROM glob('{DATA_PATH}/ducklake_inlining_epoch/**') t(path) WHERE contains(path, 'epoch_year=') ORDER BY ALL
+----
+50	600
+50	601
+50	602
+50	603
+50	604
+50	605
+50	606
+50	607
+50	608
+50	609
+50	610
+50	611
+51	612
+51	613

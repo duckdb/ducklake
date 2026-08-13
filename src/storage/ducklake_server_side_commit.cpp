@@ -340,7 +340,8 @@ void DuckLakeServerSideCommit::ReadStagedDataFiles() {
 			f.partition_values = std::move(part_it->second);
 		}
 		if (!row.IsNull(15)) {
-			compaction_output_files.emplace(AsIdx(row, 15), std::move(f));
+			// row 15 = compaction_id, row 2 = file_order (preserves output order)
+			compaction_output_files[AsIdx(row, 15)][AsIdx(row, 2)] = std::move(f);
 			continue;
 		}
 		files_per_table[TableIndex(AsIdx(row, 1))].push_back(std::move(f));
@@ -508,7 +509,6 @@ void DuckLakeServerSideCommit::ReadStagedCompactions() {
 		TableIndex table_id;
 		CompactionType type;
 		optional_idx row_id_start;
-		optional_idx output_local_file_id;
 	};
 	map<idx_t, CompactionShell> shells;
 	auto header_result = ScanStagedTable(DuckLakeStagedTableType::COMPACTION);
@@ -517,7 +517,6 @@ void DuckLakeServerSideCommit::ReadStagedCompactions() {
 		shell.table_id = TableIndex(AsIdx(row, 1));
 		shell.type = CompactionTypeFromString(row.GetValue<string>(2));
 		shell.row_id_start = OptIdx(row, 3);
-		shell.output_local_file_id = OptIdx(row, 4);
 		shells.emplace(AsIdx(row, 0), std::move(shell));
 	}
 
@@ -557,10 +556,10 @@ void DuckLakeServerSideCommit::ReadStagedCompactions() {
 		DuckLakeCompactionEntry entry;
 		entry.type = shell.type;
 		entry.row_id_start = shell.row_id_start;
-		if (shell.output_local_file_id.IsValid()) {
-			auto it = compaction_output_files.find(shell.output_local_file_id.GetIndex());
-			if (it != compaction_output_files.end()) {
-				entry.written_file = std::move(it->second);
+		auto it = compaction_output_files.find(kv.first);
+		if (it != compaction_output_files.end()) {
+			for (auto &output : it->second) {
+				entry.written_files.push_back(std::move(output.second));
 			}
 		}
 		auto src_it = sources_by_compaction.find(kv.first);
@@ -638,7 +637,7 @@ void DuckLakeServerSideCommit::ReadExistingTableStats() {
 	}
 }
 
-bool DuckLakeServerSideCommit::ReadSupportsRowGroupCount() {
+bool DuckLakeServerSideCommit::ReadSupportsV1_1Metadata() {
 	string sql = StringUtil::Replace("SELECT value FROM {METADATA_CATALOG}.ducklake_metadata WHERE key = 'version'",
 	                                 "{METADATA_CATALOG}", schema_id);
 	auto result = RunQuery(sql, "read catalog version");
@@ -728,7 +727,7 @@ DuckLakeCommitContext DuckLakeServerSideCommit::BuildContext(idx_t &committed_sn
 	DuckLakeCommitContext ctx;
 	ctx.commit_info = state->commit_info;
 	ctx.skip_drop_empty_inlined = true;
-	ctx.write_row_group_count = ReadSupportsRowGroupCount();
+	ctx.supports_v1_1_metadata = ReadSupportsV1_1Metadata();
 	ctx.conflict_query_executor = [this](string q) -> unique_ptr<QueryResult> {
 		auto sql = SubstitutePlaceholders(std::move(q), transaction_snapshot);
 		return unique_ptr_cast<MaterializedQueryResult, QueryResult>(fresh_conn.Query(sql));
@@ -865,10 +864,10 @@ unique_ptr<MaterializedQueryResult> DuckLakeServerSideCommit::ScanStagedTable(Du
 
 	auto types = storage.GetTypes();
 	auto &columns = storage.Columns();
-	vector<string> names;
+	vector<Identifier> names;
 	vector<StorageIndex> column_ids;
 	for (idx_t i = 0; i < columns.size(); i++) {
-		names.push_back(columns[i].Name().GetIdentifierName());
+		names.push_back(columns[i].Name());
 		column_ids.emplace_back(i);
 	}
 

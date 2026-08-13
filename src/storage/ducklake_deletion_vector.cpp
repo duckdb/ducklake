@@ -1,6 +1,9 @@
 #include "storage/ducklake_deletion_vector.hpp"
 
 #include "duckdb/common/bswap.hpp"
+#include "duckdb/common/operator/numeric_cast.hpp"
+
+#include <array>
 
 namespace duckdb {
 
@@ -9,32 +12,13 @@ namespace {
 class CRC32 {
 public:
 	CRC32() : crc(0xFFFFFFFF) {
-		InitTable();
-	}
-
-public:
-	static void InitTable() {
-		if (table_initialized)
-			return;
-
-		for (uint32_t i = 0; i < 256; i++) {
-			uint32_t c = i;
-			for (int j = 0; j < 8; j++) {
-				if (c & 1) {
-					c = 0xEDB88320 ^ (c >> 1);
-				} else {
-					c = c >> 1;
-				}
-			}
-			crc_table[i] = c;
-		}
-		table_initialized = true;
 	}
 
 public:
 	void Update(const data_t *data, idx_t length) {
+		auto table = GetTable();
 		for (idx_t i = 0; i < length; i++) {
-			crc = crc_table[(crc ^ data[i]) & 0xFF] ^ (crc >> 8);
+			crc = table[(crc ^ data[i]) & 0xFF] ^ (crc >> 8);
 		}
 	}
 
@@ -43,13 +27,23 @@ public:
 	}
 
 private:
-	uint32_t crc;
-	static uint32_t crc_table[256];
-	static bool table_initialized;
-};
+	static const uint32_t *GetTable() {
+		static const auto table = []() {
+			std::array<uint32_t, 256> t {};
+			for (uint32_t i = 0; i < 256; i++) {
+				uint32_t c = i;
+				for (int j = 0; j < 8; j++) {
+					c = (c & 1) ? (0xEDB88320 ^ (c >> 1)) : (c >> 1);
+				}
+				t[i] = c;
+			}
+			return t;
+		}();
+		return table.data();
+	}
 
-uint32_t CRC32::crc_table[256];
-bool CRC32::table_initialized = false;
+	uint32_t crc;
+};
 
 } // namespace
 
@@ -64,45 +58,76 @@ unique_ptr<DuckLakeDeletionVectorData> DuckLakeDeletionVectorData::FromBlob(data
 	auto vector_size = Load<uint32_t>(blob_start);
 	vector_size = BSwap(vector_size);
 	blob_start += sizeof(uint32_t);
-	D_ASSERT(blob_start < blob_end);
+	if (blob_start >= blob_end) {
+		throw InvalidInputException("Deletion vector blob truncated after vector_size field");
+	}
 
 	auto checksummed_data_start = blob_start;
 	auto memcmp_res = memcmp(DELETION_VECTOR_MAGIC, blob_start, 4);
 	blob_start += 4;
+	if (vector_size < 4) {
+		throw InvalidInputException("Deletion vector vector_size too small for magic bytes");
+	}
 	vector_size -= 4;
-	D_ASSERT(blob_start < blob_end);
+	if (blob_start >= blob_end) {
+		throw InvalidInputException("Deletion vector blob truncated after magic bytes");
+	}
 
 	if (memcmp_res != 0) {
 		throw InvalidInputException("Magic bytes mismatch, deletion vector is corrupt!");
 	}
 
+	if (vector_size < sizeof(int64_t)) {
+		throw InvalidInputException("Deletion vector vector_size too small for bitmap count");
+	}
 	int64_t amount_of_bitmaps = Load<int64_t>(blob_start);
 	blob_start += sizeof(int64_t);
 	vector_size -= sizeof(int64_t);
-	D_ASSERT(blob_start < blob_end);
+	if (blob_start >= blob_end) {
+		throw InvalidInputException("Deletion vector blob truncated after bitmap count");
+	}
+	if (amount_of_bitmaps < 0) {
+		throw InvalidInputException("Deletion vector has negative bitmap count: %lld", amount_of_bitmaps);
+	}
 
 	auto result = make_uniq<DuckLakeDeletionVectorData>();
-	result->bitmaps.reserve(amount_of_bitmaps);
+	result->bitmaps.reserve(NumericCast<idx_t>(amount_of_bitmaps));
 	for (int64_t i = 0; i < amount_of_bitmaps; i++) {
+		if (vector_size < sizeof(int32_t)) {
+			throw InvalidInputException("Deletion vector vector_size too small for bitmap key at index %lld", i);
+		}
 		auto key = Load<int32_t>(blob_start);
 		blob_start += sizeof(int32_t);
 		vector_size -= sizeof(int32_t);
-		D_ASSERT(blob_start < blob_end);
+		if (blob_start >= blob_end) {
+			throw InvalidInputException("Deletion vector blob truncated at bitmap key %lld", i);
+		}
 
 		size_t bitmap_size =
 		    roaring::api::roaring_bitmap_portable_deserialize_size((const char *)blob_start, vector_size);
+		if (bitmap_size > vector_size) {
+			throw InvalidInputException("Deletion vector bitmap %lld exceeds remaining data", i);
+		}
 		auto bitmap = roaring::Roaring::readSafe((const char *)blob_start, bitmap_size);
 		blob_start += bitmap_size;
 		vector_size -= bitmap_size;
-		D_ASSERT(blob_start < blob_end);
+		if (blob_start >= blob_end) {
+			throw InvalidInputException("Deletion vector blob truncated after bitmap %lld", i);
+		}
 		result->bitmaps.emplace(key, std::move(bitmap));
 	}
 
 	//! Compute and compare the checksum
 	auto checksummed_data_length = blob_start - checksummed_data_start;
+	if (blob_start + sizeof(uint32_t) > blob_end) {
+		throw InvalidInputException("Deletion vector blob truncated before checksum");
+	}
 	auto stored_checksum = BSwap(Load<uint32_t>(blob_start));
 	blob_start += sizeof(uint32_t);
-	D_ASSERT(blob_start == blob_end);
+	if (blob_start != blob_end) {
+		throw InvalidInputException("Deletion vector blob has %lld unexpected trailing bytes",
+		                            NumericCast<int64_t>(blob_end - blob_start));
+	}
 
 	CRC32 crc;
 	crc.Update(checksummed_data_start, checksummed_data_length);

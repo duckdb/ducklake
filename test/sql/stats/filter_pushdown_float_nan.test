@@ -1,0 +1,27 @@
+# name: test/sql/stats/filter_pushdown_float_nan.test
+# description: Regression: float/double <> must not prune NaN-containing files
+# group: [stats]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/ducklake_float_nan_files', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE ducklake.dbl(x DOUBLE);
+
+# single file with stats min_value = max_value = 1.0, contains_nan
+statement ok
+INSERT INTO ducklake.dbl VALUES (1.0), ('NaN');
+
+# bug: previously returned 0 (file pruned away, dropping the NaN row)
+query I
+SELECT COUNT(*) FROM ducklake.dbl WHERE x <> 1.0;
+----
+1

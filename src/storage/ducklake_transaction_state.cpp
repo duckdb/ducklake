@@ -280,6 +280,7 @@ void DuckLakeTransactionState::CheckForConflicts(const TransactionChangeInformat
 		ConflictCheck(table_id, other_changes.altered_tables, "alter table", "altered it");
 	}
 	for (auto &view_id : changes.altered_views) {
+		ConflictCheck(view_id, other_changes.dropped_views, "alter view", "dropped it");
 		ConflictCheck(view_id, other_changes.altered_views, "alter view", "altered it");
 	}
 }
@@ -445,6 +446,28 @@ void HandleChangedFields(TableIndex table_id, const ColumnChangeInfo &change_inf
 		new_column.parent_idx = new_col_info.parent_idx;
 		txn_added_fields[new_col_info.column_info.id.index] = result.new_columns.size();
 		result.new_columns.push_back(std::move(new_column));
+	}
+	// A field that is dropped without being re-added under the same field id in the same change
+	// (i.e. an actual DROP COLUMN, not a rename/alter type) ceases to exist - discard any column
+	// tags queued for it in this transaction; already-committed tags are expired when writing the
+	// dropped columns (GH #1310).
+	for (auto &dropped_field_id : change_info.dropped_fields) {
+		bool readded = false;
+		for (auto &new_col : change_info.new_fields) {
+			if (new_col.column_info.id.index == dropped_field_id.index) {
+				readded = true;
+				break;
+			}
+		}
+		if (readded) {
+			continue;
+		}
+		result.new_column_tags.erase(std::remove_if(result.new_column_tags.begin(), result.new_column_tags.end(),
+		                                            [&](const DuckLakeColumnTagInfo &tag) {
+			                                            return tag.table_id.index == table_id.index &&
+			                                                   tag.field_index.index == dropped_field_id.index;
+		                                            }),
+		                             result.new_column_tags.end());
 	}
 }
 
@@ -643,17 +666,18 @@ CompactionInformation DuckLakeTransactionState::GetCompactionChanges(DuckLakeCom
 			if (type != compaction.type) {
 				continue;
 			}
-			bool has_new_file = !compaction.written_file.file_name.empty();
-			DuckLakeFileInfo new_file;
+			bool has_new_files = !compaction.written_files.empty();
 
-			if (has_new_file) {
-				new_file = GetNewDataFile(compaction.written_file, commit_state, table_id, compaction.row_id_start);
+			// determine the shared snapshot bounds for the output file(s)
+			idx_t output_begin_snapshot = 0;
+			optional_idx output_max_partial_snapshot;
+			if (has_new_files) {
 				switch (type) {
 				case CompactionType::REWRITE_DELETES:
-					new_file.begin_snapshot = commit_snapshot.snapshot_id;
+					output_begin_snapshot = commit_snapshot.snapshot_id;
 					break;
 				case CompactionType::MERGE_ADJACENT_TABLES: {
-					// For MERGE_ADJACENT_TABLES, track the max partial snapshot across all source files
+					// track the max partial snapshot across all source files
 					optional_idx merged_max_partial_snapshot;
 					idx_t first_begin_snapshot = compaction.source_files[0].file.begin_snapshot;
 					for (auto &compacted_file : compaction.source_files) {
@@ -665,10 +689,10 @@ CompactionInformation DuckLakeTransactionState::GetCompactionChanges(DuckLakeCom
 							merged_max_partial_snapshot = file_max_snapshot;
 						}
 					}
-					// Use the first source file's begin_snapshot for proper time travel support
-					new_file.begin_snapshot = first_begin_snapshot;
+					// use the first source file's begin_snapshot for proper time travel support
+					output_begin_snapshot = first_begin_snapshot;
 					if (compaction.source_files.size() > 1) {
-						new_file.max_partial_file_snapshot = merged_max_partial_snapshot;
+						output_max_partial_snapshot = merged_max_partial_snapshot;
 					}
 					break;
 				}
@@ -676,6 +700,26 @@ CompactionInformation DuckLakeTransactionState::GetCompactionChanges(DuckLakeCom
 					throw InternalException(
 					    "DuckLakeTransactionState::GetCompactionChanges Compaction type is invalid");
 				}
+			}
+
+			vector<DuckLakeFileInfo> output_files;
+			optional_idx first_new_id;
+			idx_t output_row_count = 0;
+			for (auto &written_file : compaction.written_files) {
+				optional_idx file_row_id_start;
+				if (compaction.row_id_start.IsValid()) {
+					file_row_id_start = compaction.row_id_start.GetIndex() + output_row_count;
+				}
+				auto new_file = GetNewDataFile(written_file, commit_state, table_id, file_row_id_start);
+				new_file.begin_snapshot = output_begin_snapshot;
+				if (output_max_partial_snapshot.IsValid()) {
+					new_file.max_partial_file_snapshot = output_max_partial_snapshot;
+				}
+				if (!first_new_id.IsValid()) {
+					first_new_id = new_file.id.index;
+				}
+				output_row_count += new_file.row_count;
+				output_files.push_back(std::move(new_file));
 			}
 
 			idx_t row_id_limit = 0;
@@ -690,8 +734,8 @@ CompactionInformation DuckLakeTransactionState::GetCompactionChanges(DuckLakeCom
 				file_info.source_id = compacted_file.file.id;
 				file_info.table_index = entry.GetTableIndex();
 				file_info.rewrite_snapshot = commit_snapshot.snapshot_id;
-				if (has_new_file) {
-					file_info.new_id = new_file.id;
+				if (has_new_files) {
+					file_info.new_id = DataFileIndex(first_new_id.GetIndex());
 				}
 
 				if (!compacted_file.delete_files.empty()) {
@@ -701,17 +745,18 @@ CompactionInformation DuckLakeTransactionState::GetCompactionChanges(DuckLakeCom
 					file_info.delete_file_start_snapshot = commit_snapshot.snapshot_id;
 					file_info.delete_file_end_snapshot = compacted_file.delete_files.back().end_snapshot;
 				}
-				if (has_new_file && row_id_limit > new_file.row_count) {
-					throw InternalException("Compaction error - row id limit is larger than the row count of the file");
-				}
 				result.compacted_files.push_back(std::move(file_info));
 			}
-			if (!has_new_file && row_id_limit != 0) {
+			if (has_new_files && row_id_limit > output_row_count) {
+				throw InternalException("Compaction error - live source rows (%llu) exceed output rows (%llu)",
+				                        row_id_limit, output_row_count);
+			}
+			if (!has_new_files && row_id_limit != 0) {
 				throw InternalException(
 				    "Compaction error - compaction without output file must have zero live source rows (got %llu)",
 				    row_id_limit);
 			}
-			if (has_new_file) {
+			for (auto &new_file : output_files) {
 				result.new_files.push_back(std::move(new_file));
 			}
 		}
@@ -1321,10 +1366,11 @@ void DuckLakeTransactionState::GetNewTableInfo(DuckLakeCommitState &commit_state
 		case LocalChangeType::CREATED:
 		case LocalChangeType::RENAMED: {
 			auto old_table_id = table.GetTableId();
-			if (local_change.type == LocalChangeType::RENAMED && IsTransactionLocal(old_table_id)) {
+			if (local_change.type == LocalChangeType::RENAMED) {
 				auto existing = commit_state.committed_tables.find(old_table_id);
 				if (existing != commit_state.committed_tables.end()) {
-					// If we are rename a table in the same transaction it was created, we need to patch it
+					// we already emitted a row for this table earlier in the chain (it was created or
+					// renamed in this same transaction) - patch the name instead of emitting a second row
 					RenameEmittedEntry(result.new_tables, existing->second, table.name.GetIdentifierName());
 					break;
 				}
@@ -1391,12 +1437,17 @@ void DuckLakeTransactionState::GetNewViewInfo(DuckLakeCommitState &commit_state,
 	}
 	// count comment operations for deduplication
 	idx_t view_comment_count = 0;
+	map<string, idx_t> view_column_comment_count;
 	for (idx_t view_idx = 0; view_idx < views.size(); view_idx++) {
-		if (views[view_idx].get().GetLocalChange().type == LocalChangeType::SET_COMMENT) {
+		auto lc = views[view_idx].get().GetLocalChange();
+		if (lc.type == LocalChangeType::SET_COMMENT) {
 			view_comment_count++;
+		} else if (lc.type == LocalChangeType::SET_COLUMN_COMMENT && !lc.view_column_comment_name.empty()) {
+			view_column_comment_count[lc.view_column_comment_name]++;
 		}
 	}
 	idx_t view_comment_remaining = view_comment_count;
+	map<string, idx_t> view_column_comment_remaining(std::move(view_column_comment_count));
 	// traverse in reverse order
 	for (idx_t view_idx = views.size(); view_idx > 0; view_idx--) {
 		auto &view = views[view_idx - 1].get();
@@ -1415,14 +1466,38 @@ void DuckLakeTransactionState::GetNewViewInfo(DuckLakeCommitState &commit_state,
 			transaction_changes.altered_views.insert(view.GetViewId());
 			break;
 		}
+		case LocalChangeType::SET_COLUMN_COMMENT: {
+			auto local_change = view.GetLocalChange();
+			if (local_change.view_column_comment_name.empty()) {
+				throw InternalException("SET_COLUMN_COMMENT on view without view_column_comment_name");
+			}
+			auto &rem = view_column_comment_remaining[local_change.view_column_comment_name];
+			rem--;
+			if (rem > 0) {
+				break;
+			}
+			DuckLakeViewColumnTagInfo comment_info;
+			comment_info.view_id = commit_state.GetViewId(view);
+			comment_info.column_name = local_change.view_column_comment_name;
+			comment_info.key = "comment";
+			auto create_info_ptr = view.GetInfo();
+			auto &view_info = create_info_ptr->Cast<CreateViewInfo>();
+			auto cit = view_info.column_comments_map.find(Identifier(local_change.view_column_comment_name));
+			comment_info.value = cit != view_info.column_comments_map.end() ? cit->second : Value();
+			result.new_view_column_tags.push_back(std::move(comment_info));
+
+			transaction_changes.altered_views.insert(view.GetViewId());
+			break;
+		}
 		case LocalChangeType::NONE:
 		case LocalChangeType::CREATED:
 		case LocalChangeType::RENAMED: {
 			auto old_view_id = view.GetViewId();
-			if (view.GetLocalChange().type == LocalChangeType::RENAMED && IsTransactionLocal(old_view_id)) {
+			if (view.GetLocalChange().type == LocalChangeType::RENAMED) {
 				auto existing = commit_state.committed_tables.find(old_view_id);
 				if (existing != commit_state.committed_tables.end()) {
-					// renaming a view in the same transaction it was created - patch the name on the existing row
+					// we already emitted a row for this view earlier in the chain (it was created or
+					// renamed in this same transaction) - patch the name instead of emitting a second row
 					RenameEmittedEntry(result.new_views, existing->second, view.name.GetIdentifierName());
 					break;
 				}
@@ -1433,6 +1508,22 @@ void DuckLakeTransactionState::GetNewViewInfo(DuckLakeCommitState &commit_state,
 
 			// remap the view in the commit state
 			commit_state.committed_tables.emplace(old_view_id, new_view_id);
+			if (view.GetLocalChange().type == LocalChangeType::RENAMED) {
+				auto create_info_ptr = view.GetInfo();
+				auto &view_info = create_info_ptr->Cast<CreateViewInfo>();
+				for (auto &entry : view_info.column_comments_map) {
+					auto column_name = entry.first.GetIdentifierName();
+					if (view_column_comment_remaining.find(column_name) != view_column_comment_remaining.end()) {
+						continue;
+					}
+					DuckLakeViewColumnTagInfo comment_info;
+					comment_info.view_id = new_view_id;
+					comment_info.column_name = column_name;
+					comment_info.key = "comment";
+					comment_info.value = entry.second;
+					result.new_view_column_tags.push_back(std::move(comment_info));
+				}
+			}
 			break;
 		}
 		default:
@@ -1501,11 +1592,11 @@ string DuckLakeTransactionState::CommitChanges(DuckLakeCommitState &commit_state
 	}
 
 	if (!dropped_views.empty()) {
-		batch_queries += DuckLakeMetadataManager::DropViews(dropped_views, false);
+		batch_queries += DuckLakeMetadataManager::DropViews(dropped_views, false, context.supports_v1_1_metadata);
 	}
 
 	if (!renamed_views.empty()) {
-		batch_queries += DuckLakeMetadataManager::DropViews(renamed_views, true);
+		batch_queries += DuckLakeMetadataManager::DropViews(renamed_views, true, context.supports_v1_1_metadata);
 	}
 
 	if (!dropped_scalar_macros.empty()) {
@@ -1546,14 +1637,35 @@ string DuckLakeTransactionState::CommitChanges(DuckLakeCommitState &commit_state
 			    table.schema_id, table.path, new_schemas_result, context.query_metadata, data_path, separator));
 		}
 		batch_queries += DuckLakeMetadataManager::WriteNewTables(result.new_tables, resolved_table_paths);
-		auto existing_catalog = DuckLakeMetadataManager::BuildCatalogForSnapshot(
-		    commit_snapshot, context.query_metadata_with_snapshot, data_path, separator);
+		auto existing_catalog =
+		    DuckLakeMetadataManager::BuildCatalogForSnapshot(commit_snapshot, context.query_metadata_with_snapshot,
+		                                                     data_path, separator, context.supports_v1_1_metadata);
 		batch_queries +=
 		    DuckLakeMetadataManager::WriteNewPartitionKeys(existing_catalog.partitions, result.new_partition_keys);
 		batch_queries += DuckLakeMetadataManager::WriteNewViews(result.new_views);
 		batch_queries += DuckLakeMetadataManager::WriteNewTags(result.new_tags);
 		batch_queries += DuckLakeMetadataManager::WriteNewColumnTags(result.new_column_tags);
+		if (context.supports_v1_1_metadata) {
+			batch_queries += DuckLakeMetadataManager::WriteNewViewColumnTags(result.new_view_column_tags);
+		}
 		batch_queries += DuckLakeMetadataManager::WriteDroppedColumns(result.dropped_columns);
+		// Truly dropped columns - i.e. not re-added under the same field id in this commit, as
+		// happens for RENAME/ALTER - also expire their committed column tags (GH #1310).
+		vector<DuckLakeDroppedColumn> expired_column_tags;
+		for (auto &dropped_col : result.dropped_columns) {
+			bool readded = false;
+			for (auto &new_col : result.new_columns) {
+				if (new_col.table_id.index == dropped_col.table_id.index &&
+				    new_col.column_info.id.index == dropped_col.field_id.index) {
+					readded = true;
+					break;
+				}
+			}
+			if (!readded) {
+				expired_column_tags.push_back(dropped_col);
+			}
+		}
+		batch_queries += DuckLakeMetadataManager::WriteExpiredColumnTags(expired_column_tags);
 		batch_queries += DuckLakeMetadataManager::WriteNewColumns(result.new_columns);
 		batch_queries += context.write_inlined_tables(commit_snapshot, result.new_inlined_data_tables);
 		batch_queries += DuckLakeMetadataManager::WriteNewSortKeys(existing_catalog.sorts, result.new_sort_keys);
@@ -1588,7 +1700,8 @@ string DuckLakeTransactionState::CommitChanges(DuckLakeCommitState &commit_state
 			    file.table_id, file.file_name, new_tables_result, new_schemas_result, context.query_metadata, data_path,
 			    separator));
 		}
-		return DuckLakeMetadataManager::WriteNewDataFilesSqlBatch(files, resolved_paths, context.write_row_group_count);
+		return DuckLakeMetadataManager::WriteNewDataFilesSqlBatch(files, resolved_paths,
+		                                                          context.supports_v1_1_metadata);
 	};
 
 	// write new data / data files
@@ -1634,7 +1747,7 @@ string DuckLakeTransactionState::CommitChanges(DuckLakeCommitState &commit_state
 			    separator));
 		}
 		batch_queries += DuckLakeMetadataManager::WriteNewDeleteFiles(file_list, resolved_delete_paths,
-		                                                              context.write_row_group_count);
+		                                                              context.supports_v1_1_metadata);
 
 		// write new inlined deletes (for inlined data tables)
 		auto inlined_deletes = GetNewInlinedDeletes(commit_state);
@@ -1847,6 +1960,10 @@ void DuckLakeTransactionState::Commit(DuckLakeSnapshot transaction_snapshot,
 				DropEmptySupersededInlinedTables(context);
 			}
 			context.set_catalog_version(commit_snapshot.schema_version);
+			if (SchemaChangesMade()) {
+				// No-op if the previous schema version doesn't exist in cache.
+				context.invalidate_schema_cache(commit_snapshot.schema_version - 1);
+			}
 
 			// finished writing
 			break;
