@@ -1248,6 +1248,8 @@ DuckLakeGlobalStatsInfo DuckLakeTransaction::ConvertNewGlobalStats(TableIndex ta
 		if (column_stats.has_contains_nan) {
 			col_stats.contains_nan = column_stats.contains_nan;
 		}
+		col_stats.type = column_stats.type;
+		col_stats.has_type = true;
 		col_stats.has_min = column_stats.has_min;
 		if (column_stats.has_min) {
 			col_stats.min_val = column_stats.min;
@@ -1487,6 +1489,11 @@ void DuckLakeTransaction::RunCommitLoop(DuckLakeSnapshot transaction_snapshot,
 	};
 	context.get_table_stats = [&](TableIndex table_id) {
 		return ducklake_catalog.GetTableStats(*this, table_id);
+	};
+	context.update_global_table_stats_sql = [&](const DuckLakeGlobalStatsInfo &stats,
+	                                            DuckLakeMetadataManager::GlobalStatsWrite write_mode) {
+		return DuckLakeMetadataManager::UpdateGlobalTableStatsSql(stats, write_mode,
+		                                                          metadata_manager->GetStatsMergeDialect());
 	};
 	context.get_table_column_schema = [&](TableIndex table_id) {
 		// The full flattened schema at the commit snapshot: top-level roots (is_root=true) plus every nested
