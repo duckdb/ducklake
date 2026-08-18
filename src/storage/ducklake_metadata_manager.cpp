@@ -5075,6 +5075,24 @@ static bool IsMissingMTimeError(const ErrorData &error) {
 	return error.Type() == ExceptionType::INVALID && StringUtil::Contains(error.RawMessage(), "KeyError: 'mtime'");
 }
 
+//! Orphan-candidate enumeration query shared by both cleanup modes: the suffix filter and the
+//! anti-join against the known-files temp table are identical. The modes differ only in the
+//! enumeration source and its path column (cleanup_all enumerates with glob, column "file";
+//! older_than with read_blob, column "filename") and in the trailing timestamp filter, which is
+//! empty for cleanup_all.
+static string GetOrphanCandidateQuery(const string &source, const string &path_column, const string &known_files_table,
+                                      const string &extra_filter) {
+	return StringUtil::Format(R"(SELECT %s
+FROM %s({DATA_PATH} || '**') files
+WHERE (suffix(%s, '.parquet') OR suffix(%s, '.puffin'))
+AND NOT EXISTS (
+	SELECT 1 FROM %s known_files WHERE known_files.full_path = REPLACE(files.%s, '\', '/')
+)
+%s)",
+	                          path_column, source, path_column, path_column, known_files_table, path_column,
+	                          extra_filter);
+}
+
 vector<DuckLakeFileForCleanup> DuckLakeMetadataManager::GetOrphanFilesForCleanup(const string &filter,
                                                                                  const string &separator) {
 	auto known_files_query = GetKnownFilesForCleanupQuery(separator);
@@ -5130,44 +5148,23 @@ vector<DuckLakeFileForCleanup> DuckLakeMetadataManager::GetOrphanFilesForCleanup
 		// still be removed via cleanup_all, which does not need mtime. Any other
 		// enumeration error (auth, network, ...) is rethrown - silently
 		// suppressing those would disable orphan cleanup without any signal.
-		unique_ptr<QueryResult> res;
-		if (filter.empty()) {
-			auto query = StringUtil::Format(R"(SELECT file
-FROM glob({DATA_PATH} || '**') files
-WHERE (suffix(file, '.parquet') OR suffix(file, '.puffin'))
-AND NOT EXISTS (
-	SELECT 1 FROM %s known_files WHERE known_files.full_path = REPLACE(files.file, '\', '/')
-))",
-			                                temp_table_identifier);
-			SubstituteCatalogPlaceholders(query);
-			res = transaction.ExecuteRaw(query);
-			if (res->HasError()) {
-				res->GetErrorObject().Throw("Failed to get files scheduled for deletion from DuckLake: ");
+		const bool cleanup_all = filter.empty();
+		auto query = cleanup_all ? GetOrphanCandidateQuery("glob", "file", temp_table_identifier, string())
+		                         : GetOrphanCandidateQuery("read_blob", "filename", temp_table_identifier, filter);
+		SubstituteCatalogPlaceholders(query);
+		auto res = transaction.ExecuteRaw(query);
+		if (res->HasError()) {
+			auto &error = res->GetErrorObject();
+			if (!cleanup_all && IsMissingMTimeError(error)) {
+				// mtime-dependent enumeration failed (e.g. objects without mtime
+				// on the storage backend). Retain all orphans this round;
+				// CHECKPOINT must stay usable. The aged-out orphans will be
+				// picked up on a later run once the backend can supply mtime,
+				// or via cleanup_all.
+				drop_temp_table();
+				return {};
 			}
-		} else {
-			auto query = StringUtil::Format(R"(SELECT filename
-FROM read_blob({DATA_PATH} || '**') files
-WHERE (suffix(filename, '.parquet') OR suffix(filename, '.puffin'))
-AND NOT EXISTS (
-	SELECT 1 FROM %s known_files WHERE known_files.full_path = REPLACE(files.filename, '\', '/')
-)
-%s)",
-			                                temp_table_identifier, filter);
-			SubstituteCatalogPlaceholders(query);
-			res = transaction.ExecuteRaw(query);
-			if (res->HasError()) {
-				auto &error = res->GetErrorObject();
-				if (IsMissingMTimeError(error)) {
-					// mtime-dependent enumeration failed (e.g. objects without mtime
-					// on the storage backend). Retain all orphans this round;
-					// CHECKPOINT must stay usable. The aged-out orphans will be
-					// picked up on a later run once the backend can supply mtime,
-					// or via cleanup_all.
-					drop_temp_table();
-					return {};
-				}
-				error.Throw("Failed to get files scheduled for deletion from DuckLake: ");
-			}
+			error.Throw("Failed to get files scheduled for deletion from DuckLake: ");
 		}
 
 		vector<DuckLakeFileForCleanup> result;
