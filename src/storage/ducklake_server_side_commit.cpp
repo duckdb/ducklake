@@ -622,7 +622,8 @@ unique_ptr<DuckLakeTableStats> DuckLakeServerSideCommit::BuildTableStats(const D
 		if (type_it == column_types.end()) {
 			continue;
 		}
-		entry->column_stats.emplace(col.column_id, DuckLakeColumnStats::FromGlobalStats(type_it->second, col));
+		entry->column_stats.emplace(col.column_id,
+		                            DuckLakeColumnStats::FromGlobalStats(type_it->second, col, gs.record_count > 0));
 	}
 	return entry;
 }

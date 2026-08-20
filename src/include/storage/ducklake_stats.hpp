@@ -43,6 +43,8 @@ struct DuckLakeColumnStats {
 	bool has_min = false;
 	bool has_max = false;
 	bool any_valid = true;
+	//! Invalidated bounds must never be reseeded
+	bool bounds_unknown = false;
 	bool has_contains_nan = false;
 
 	bool AnyValid() const {
@@ -55,7 +57,9 @@ struct DuckLakeColumnStats {
 	unique_ptr<DuckLakeColumnExtraStats> extra_stats;
 
 public:
-	static DuckLakeColumnStats FromGlobalStats(const LogicalType &type, const DuckLakeGlobalColumnStatsInfo &col);
+	static DuckLakeColumnStats FromGlobalStats(const LogicalType &type, const DuckLakeGlobalColumnStatsInfo &col,
+	                                           bool table_has_rows);
+	static bool BoundsSurviveTypePromotion(const LogicalType &source, const LogicalType &target);
 	unique_ptr<BaseStatistics> ToStats() const;
 	void MergeStats(const DuckLakeColumnStats &new_stats);
 

@@ -283,6 +283,10 @@ unique_ptr<BaseStatistics> GetColumnStats(const DuckLakeFieldId &field_id, const
 		if (entry == table_stats.column_stats.end()) {
 			return nullptr;
 		}
+		if (entry->second.type != field_id.Type()) {
+			// don't serve stale stats from before a retype
+			return nullptr;
+		}
 		return entry->second.ToStats();
 	}
 	// nested type
