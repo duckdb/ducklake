@@ -1349,17 +1349,35 @@ DuckLakeDeleteFileInfo DuckLakeTransaction::GetNewDeleteFile(TableIndex table_id
 }
 
 bool DuckLakeTransaction::RetryOnError(const string &original_message) {
+	return RetryOnError(original_message, ExceptionType::INVALID);
+}
+
+bool DuckLakeTransaction::RetryOnError(const string &original_message, ExceptionType type) {
+	// DuckLake's own conflicts are typed; backend errors cross back untyped and fall through to
+	// the message checks below.
+	if (type == ExceptionType::TRANSACTION) {
+		return true;
+	}
 	auto message = StringUtil::Lower(original_message);
-	// retry on primary key errors
 	if (StringUtil::Contains(message, "primary key") || StringUtil::Contains(message, "unique")) {
 		return true;
 	}
-	// retry on conflicts
 	if (StringUtil::Contains(message, "conflict")) {
 		return true;
 	}
-	// retry on concurrent access
 	if (StringUtil::Contains(message, "concurrent")) {
+		return true;
+	}
+	// postgres 40001 serialization failure, 40P01 deadlock
+	if (StringUtil::Contains(message, "could not serialize")) {
+		return true;
+	}
+	if (StringUtil::Contains(message, "deadlock")) {
+		return true;
+	}
+	// dropped mid-commit: outcome unknown, re-attempt under the conflict check
+	if (StringUtil::Contains(message, "server closed the connection") ||
+	    StringUtil::Contains(message, "connection to server") || StringUtil::Contains(message, "connection reset")) {
 		return true;
 	}
 	return false;
