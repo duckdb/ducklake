@@ -150,6 +150,7 @@ void DuckLakeTransactionState::CheckForConflicts(const TransactionChangeInformat
 	// check if we are dropping the same view as another transaction
 	for (auto &dropped_idx : changes.dropped_views) {
 		ConflictCheck(dropped_idx, other_changes.dropped_views, "drop view", "dropped it already");
+		ConflictCheck(dropped_idx, other_changes.altered_views, "drop view", "altered it");
 	}
 	// check if we are dropping the same macro as another transaction
 	for (auto &dropped_idx : changes.dropped_scalar_macros) {
@@ -268,16 +269,20 @@ void DuckLakeTransactionState::CheckForConflicts(const TransactionChangeInformat
 		ConflictCheck(table_id, other_changes.tables_deleted_from, "compact table", "deleted from it");
 		ConflictCheck(table_id, other_changes.tables_merge_adjacent, "compact table", "compacted it");
 		ConflictCheck(table_id, other_changes.tables_rewrite_delete, "compact table", "compacted it");
+		ConflictCheck(table_id, other_changes.altered_tables, "compact table", "altered it");
 	}
 	for (auto &table_id : changes.tables_rewrite_delete) {
 		ConflictCheck(table_id, other_changes.dropped_tables, "compact table", "dropped it");
 		ConflictCheck(table_id, other_changes.tables_deleted_from, "compact table", "deleted from it");
 		ConflictCheck(table_id, other_changes.tables_merge_adjacent, "compact table", "compacted it");
 		ConflictCheck(table_id, other_changes.tables_rewrite_delete, "compact table", "compacted it");
+		ConflictCheck(table_id, other_changes.altered_tables, "compact table", "altered it");
 	}
 	for (auto &table_id : changes.altered_tables) {
 		ConflictCheck(table_id, other_changes.dropped_tables, "alter table", "dropped it");
 		ConflictCheck(table_id, other_changes.altered_tables, "alter table", "altered it");
+		ConflictCheck(table_id, other_changes.tables_merge_adjacent, "alter table", "compacted it");
+		ConflictCheck(table_id, other_changes.tables_rewrite_delete, "alter table", "compacted it");
 	}
 	for (auto &view_id : changes.altered_views) {
 		ConflictCheck(view_id, other_changes.dropped_views, "alter view", "dropped it");
