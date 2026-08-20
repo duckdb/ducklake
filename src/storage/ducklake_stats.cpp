@@ -99,8 +99,42 @@ DuckLakeColumnStats DuckLakeColumnStats::FromGlobalStats(const LogicalType &type
 	return stats;
 }
 
+static bool IsTimeZoneAware(const LogicalType &type) {
+	switch (type.id()) {
+	case LogicalTypeId::TIME_TZ:
+	case LogicalTypeId::TIMESTAMP_TZ:
+	case LogicalTypeId::TIMESTAMP_TZ_NS:
+		return true;
+	default:
+		return false;
+	}
+}
+
+static bool ReconcileStatToType(string &value, const LogicalType &source, const LogicalType &target) {
+	// a FLOAT stat is stored at float precision and reparses wider as a different value than the data
+	if (source.id() == LogicalTypeId::FLOAT) {
+		return false;
+	}
+	// naive stats resolve against the reader's time zone - casting here would pin them to UTC
+	if (IsTimeZoneAware(source) != IsTimeZoneAware(target)) {
+		return false;
+	}
+	// DefaultTryCastAs throws for nested targets instead of returning false
+	if (!RequiresValueComparison(target)) {
+		return false;
+	}
+	Value casted;
+	string error;
+	if (Value(value).DefaultTryCastAs(target, casted, &error) && !casted.IsNull()) {
+		value = casted.ToString();
+		return true;
+	}
+	return false;
+}
+
 void DuckLakeColumnStats::MergeStats(const DuckLakeColumnStats &new_stats) {
 	bool types_differ = type != new_stats.type;
+	auto source_type = type;
 	if (types_differ) {
 		type = new_stats.type;
 	}
@@ -126,12 +160,16 @@ void DuckLakeColumnStats::MergeStats(const DuckLakeColumnStats &new_stats) {
 		}
 	}
 
-	if (!new_stats.AnyValid()) {
-		// all values in the source are NULL - don't update min/max
-		if (types_differ) {
+	if (types_differ) {
+		if (has_min && !ReconcileStatToType(min, source_type, type)) {
 			has_min = false;
+		}
+		if (has_max && !ReconcileStatToType(max, source_type, type)) {
 			has_max = false;
 		}
+	}
+	if (!new_stats.AnyValid()) {
+		// all values in the source are NULL - don't update min/max
 		return;
 	}
 	if (!AnyValid()) {
@@ -143,43 +181,37 @@ void DuckLakeColumnStats::MergeStats(const DuckLakeColumnStats &new_stats) {
 		any_valid = true;
 		return;
 	}
-	if (types_differ) {
-		// min/max from different types cannot be compared - invalidate them
+	if (!new_stats.has_min) {
 		has_min = false;
-		has_max = false;
-	} else {
-		if (!new_stats.has_min) {
-			has_min = false;
-		} else if (has_min) {
-			// both stats have a min - select the smallest
-			if (RequiresValueComparison(type)) {
-				// for numerics/temporals we need to parse the stats
-				auto current_min = Value(min).DefaultCastAs(type);
-				auto new_min = Value(new_stats.min).DefaultCastAs(type);
-				if (new_min < current_min) {
-					min = new_stats.min;
-				}
-			} else if (new_stats.min < min) {
-				// for other types we can compare the strings directly
+	} else if (has_min) {
+		// both stats have a min - select the smallest
+		if (RequiresValueComparison(type)) {
+			// for numerics/temporals we need to parse the stats
+			auto current_min = Value(min).DefaultCastAs(type);
+			auto new_min = Value(new_stats.min).DefaultCastAs(type);
+			if (new_min < current_min) {
 				min = new_stats.min;
 			}
+		} else if (new_stats.min < min) {
+			// for other types we can compare the strings directly
+			min = new_stats.min;
 		}
+	}
 
-		if (!new_stats.has_max) {
-			has_max = false;
-		} else if (has_max) {
-			// both stats have a max - select the largest
-			if (RequiresValueComparison(type)) {
-				// for numerics/temporals we need to parse the stats
-				auto current_max = Value(max).DefaultCastAs(type);
-				auto new_max = Value(new_stats.max).DefaultCastAs(type);
-				if (new_max > current_max) {
-					max = new_stats.max;
-				}
-			} else if (new_stats.max > max) {
-				// for other types we can compare the strings directly
+	if (!new_stats.has_max) {
+		has_max = false;
+	} else if (has_max) {
+		// both stats have a max - select the largest
+		if (RequiresValueComparison(type)) {
+			// for numerics/temporals we need to parse the stats
+			auto current_max = Value(max).DefaultCastAs(type);
+			auto new_max = Value(new_stats.max).DefaultCastAs(type);
+			if (new_max > current_max) {
 				max = new_stats.max;
 			}
+		} else if (new_stats.max > max) {
+			// for other types we can compare the strings directly
+			max = new_stats.max;
 		}
 	}
 
