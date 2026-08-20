@@ -8,6 +8,7 @@
 
 #pragma once
 
+#include "storage/ducklake_commit_state.hpp"
 #include "storage/ducklake_stats.hpp"
 #include "storage/ducklake_transaction.hpp"
 
@@ -154,13 +155,15 @@ public:
 	NewDataInfo GetNewDataFiles(string &batch_query, DuckLakeCommitState &commit_state,
 	                            optional_ptr<vector<DuckLakeGlobalStatsInfo>> stats,
 	                            const DuckLakeCommitContext &context,
-	                            map<TableIndex, DroppedDataFileStats> &attempt_dropped_file_stats);
+	                            map<TableIndex, DroppedDataFileStats> &attempt_dropped_file_stats,
+	                            const DuckLakeRetypePlan &retype_plan);
 	//! Decrement table-level stats for files dropped this commit; returns true if live rows remain.
 	static bool ApplyDroppedFileStats(TableIndex table_id, DuckLakeNewGlobalStats &new_stats,
 	                                  map<TableIndex, DroppedDataFileStats> &attempt_dropped_file_stats);
 	string UpdateStatsForDroppedFiles(optional_ptr<vector<DuckLakeGlobalStatsInfo>> stats,
 	                                  const DuckLakeCommitContext &context,
-	                                  map<TableIndex, DroppedDataFileStats> &attempt_dropped_file_stats);
+	                                  map<TableIndex, DroppedDataFileStats> &attempt_dropped_file_stats,
+	                                  const DuckLakeRetypePlan &retype_plan, set<TableIndex> &globals_written);
 	CompactionInformation GetCompactionChanges(DuckLakeCommitState &commit_state, CompactionType type);
 	//! After a REWRITE_DELETES compaction, recompute EXACT global stats for `table_id` from the post-rewrite file set
 	//! (+ committed inlined data) and append the UpdateGlobalTableStats SQL to `batch_query`. No-op (leaving the
@@ -170,6 +173,15 @@ public:
 	                                      const CompactionInformation &rewrite_changes,
 	                                      const set<DataFileIndex> &removed_source_ids,
 	                                      const DuckLakeCommitContext &context);
+	//! Min/max are persisted as strings written under the column's type, so an ALTER COLUMN TYPE reinterprets them
+	//! under the new type. Where that disagrees with the stored value widened through the old type, the bound stops
+	//! covering the data and the zone map prunes live rows.
+	//! Only rows already committed at `commit_snapshot`; rows this commit writes itself are corrected in memory
+	//! where they are built.
+	void RecastCommittedStats(string &batch_query, DuckLakeSnapshot commit_snapshot, const DuckLakeRetypePlan &plan,
+	                          const set<TableIndex> &globals_written,
+	                          const set<DataFileIndex> &files_written_this_commit,
+	                          const DuckLakeCommitContext &context);
 	//! Merge committed inlined data's per-column min/max into `target` via typed SQL aggregates. Returns false if the
 	//! inlined data cannot be accounted for exactly (e.g. a non-scalar column), in which case the caller must not
 	//! claim the recomputed stats are exact.

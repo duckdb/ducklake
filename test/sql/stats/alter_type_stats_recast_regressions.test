@@ -1,0 +1,631 @@
+# name: test/sql/stats/alter_type_stats_recast_regressions.test
+# description: promotion chains, failed casts, and retype-plus-insert in one transaction, where a naive #1307 recast writes a bound that excludes live rows
+# group: [stats]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/alter_type_recast_regr', METADATA_CATALOG 'metadata', DATA_INLINING_ROW_LIMIT 0);
+
+# F1: a promotion chain leaves the catalog holding an intermediate type the parquet file never had.
+# A catalog-only retype never rewrites the file, so the reader casts the file's physical INTEGER
+# straight to DOUBLE. Casting the stored string through the catalog's FLOAT instead applies a
+# rounding step the data never underwent, and the recorded bound stops covering the row.
+# 16777217 is 2^24+1, the first integer FLOAT cannot represent.
+
+statement ok
+CREATE TABLE ducklake.chain(c INTEGER);
+
+statement ok
+INSERT INTO ducklake.chain VALUES (16777217);
+
+statement ok
+ALTER TABLE ducklake.chain ALTER COLUMN c SET DATA TYPE FLOAT;
+
+statement ok
+ALTER TABLE ducklake.chain ALTER COLUMN c SET DATA TYPE DOUBLE;
+
+# The file still holds the exact integer, so both bounds have to cover it. Each takes the wider of the
+# two candidate readings, which leaves the max on the string it already had.
+query II
+SELECT min_value, max_value FROM metadata.ducklake_table_column_stats WHERE table_id = (SELECT table_id FROM metadata.ducklake_table WHERE table_name = 'chain');
+----
+16777216.0	16777217
+
+query I
+SELECT count(*) FROM ducklake.chain WHERE c = 16777217.0;
+----
+1
+
+# F1, time travel. Stats rows are rewritten in place and carry no snapshot range, so a wrong recast
+# also corrupts what a pre-ALTER snapshot prunes with. At this version the column is still INTEGER.
+query I
+SELECT count(*) FROM ducklake.chain AT (VERSION => 2) WHERE c = 16777217;
+----
+1
+
+# F2: DefaultTryCastAs with a null error pointer throws instead of returning false, so the guards
+# around it are unreachable and a stats string that will not parse aborts the whole commit. The
+# recast is best-effort by design: a stat it cannot interpret must be left alone, not fatal.
+
+statement ok
+CREATE TABLE ducklake.faraway(c DATE);
+
+statement ok
+INSERT INTO ducklake.faraway VALUES ('5000-01-01'::DATE);
+
+statement ok
+ALTER TABLE ducklake.faraway ALTER COLUMN c SET DATA TYPE TIMESTAMP_NS;
+
+query I
+SELECT column_type FROM metadata.ducklake_column WHERE column_name = 'c' AND end_snapshot IS NULL AND table_id = (SELECT table_id FROM metadata.ducklake_table WHERE table_name = 'faraway');
+----
+timestamp_ns
+
+# F3: a transaction that both writes and retypes. GetNewDataFiles emits its global-stats write after
+# the recast, overwriting it, and the new file's own per-file stats are never recast at all. This
+# shape is not a regression from the recast, it is #1307 surviving in the case a migration script is
+# most likely to use.
+
+statement ok
+CREATE TABLE ducklake.mixed(c FLOAT);
+
+statement ok
+INSERT INTO ducklake.mixed VALUES (0.03), (0.1);
+
+statement ok
+BEGIN;
+
+statement ok
+INSERT INTO ducklake.mixed VALUES (0.2), (0.3);
+
+statement ok
+ALTER TABLE ducklake.mixed ALTER COLUMN c SET DATA TYPE DOUBLE;
+
+statement ok
+COMMIT;
+
+query II
+SELECT min_value, max_value FROM metadata.ducklake_table_column_stats WHERE table_id = (SELECT table_id FROM metadata.ducklake_table WHERE table_name = 'mixed');
+----
+0.029999999329447746	0.30000001192092896
+
+# the file this same commit wrote was staged before the retype, so its stats are rendered under FLOAT
+# just like the committed file's
+query II
+SELECT min_value, max_value FROM metadata.ducklake_file_column_stats WHERE table_id = (SELECT table_id FROM metadata.ducklake_table WHERE table_name = 'mixed') ORDER BY data_file_id;
+----
+0.029999999329447746	0.10000000149011612
+0.20000000298023224	0.30000001192092896
+
+# pushdown is wrong here whatever the persisted stats say, see alter_type_stats_recast.test
+statement ok
+SET disabled_optimizers='filter_pushdown';
+
+query I
+SELECT count(*) FROM ducklake.mixed WHERE c > 0.3;
+----
+1
+
+statement ok
+RESET disabled_optimizers;
+
+# min/max come off the stats, so a stale bound reports a value no row holds
+query II
+SELECT min(c), max(c) FROM ducklake.mixed;
+----
+0.029999999329447746	0.30000001192092896
+
+# Compaction does write a new file, but under the sources' physical type rather than the catalog's
+# current one: the merged file here is still INT32 after the ALTER to FLOAT, and it inherits its
+# sources' begin_snapshot rather than taking the compaction's. So a merged file can carry a physical
+# type two catalog types stale, and it is only reachable at all by a per-file read that resolves files
+# by snapshot range.
+
+statement ok
+CREATE TABLE ducklake.compacted(c INTEGER);
+
+statement ok
+INSERT INTO ducklake.compacted VALUES (16777217);
+
+statement ok
+INSERT INTO ducklake.compacted VALUES (16777219);
+
+statement ok
+ALTER TABLE ducklake.compacted ALTER COLUMN c SET DATA TYPE FLOAT;
+
+statement ok
+CALL ducklake_merge_adjacent_files('ducklake', 'compacted');
+
+# one live file, and its begin_snapshot predates the compaction that created it
+query II
+SELECT count(*), sum(CASE WHEN begin_snapshot < (SELECT max(snapshot_id) FROM metadata.ducklake_snapshot) THEN 1 ELSE 0 END) FROM metadata.ducklake_data_file WHERE table_id = (SELECT table_id FROM metadata.ducklake_table WHERE table_name = 'compacted') AND end_snapshot IS NULL;
+----
+1	1
+
+statement ok
+ALTER TABLE ducklake.compacted ALTER COLUMN c SET DATA TYPE DOUBLE;
+
+# widened in both directions, because through FLOAT 16777217 rounds down and 16777219 rounds up
+query II
+SELECT min_value, max_value FROM metadata.ducklake_file_column_stats WHERE table_id = (SELECT table_id FROM metadata.ducklake_table WHERE table_name = 'compacted') AND data_file_id IN (SELECT data_file_id FROM metadata.ducklake_data_file WHERE end_snapshot IS NULL);
+----
+16777216.0	16777220.0
+
+statement ok
+SET disabled_optimizers='filter_pushdown';
+
+# the INT32 the file still holds reads back exact, so both rows sit strictly inside that envelope
+query I
+SELECT count(*) FROM ducklake.compacted WHERE c BETWEEN 16777217.0 AND 16777219.0;
+----
+2
+
+statement ok
+RESET disabled_optimizers;
+
+# nothing under this table was written under the catalog's FLOAT type, the merged file included
+query I
+SELECT DISTINCT type FROM parquet_schema('{DATA_PATH}/alter_type_recast_regr/main/compacted/*.parquet') WHERE name = 'c';
+----
+INT32
+
+# One-sided rewrites. FLOAT 0.03 widens downwards and 0.6 upwards, so each table moves exactly one
+# bound and the UPDATE must leave the other column alone rather than writing it back as NULL.
+
+statement ok
+CREATE TABLE ducklake.min_only(c FLOAT);
+
+statement ok
+INSERT INTO ducklake.min_only VALUES (0.03), (0.5);
+
+statement ok
+ALTER TABLE ducklake.min_only ALTER COLUMN c SET DATA TYPE DOUBLE;
+
+query II
+SELECT min_value, max_value FROM metadata.ducklake_table_column_stats WHERE table_id = (SELECT table_id FROM metadata.ducklake_table WHERE table_name = 'min_only');
+----
+0.029999999329447746	0.5
+
+statement ok
+CREATE TABLE ducklake.max_only(c FLOAT);
+
+statement ok
+INSERT INTO ducklake.max_only VALUES (0.5), (0.6);
+
+statement ok
+ALTER TABLE ducklake.max_only ALTER COLUMN c SET DATA TYPE DOUBLE;
+
+query II
+SELECT min_value, max_value FROM metadata.ducklake_table_column_stats WHERE table_id = (SELECT table_id FROM metadata.ducklake_table WHERE table_name = 'max_only');
+----
+0.5	0.6000000238418579
+
+# NULL stats: an all-NULL column has no min/max to recast, and the ALTER must not invent one
+
+statement ok
+CREATE TABLE ducklake.all_null(c FLOAT);
+
+statement ok
+INSERT INTO ducklake.all_null VALUES (NULL), (NULL);
+
+statement ok
+ALTER TABLE ducklake.all_null ALTER COLUMN c SET DATA TYPE DOUBLE;
+
+query II
+SELECT min_value IS NULL, max_value IS NULL FROM metadata.ducklake_file_column_stats WHERE table_id = (SELECT table_id FROM metadata.ducklake_table WHERE table_name = 'all_null');
+----
+true	true
+
+query I
+SELECT count(*) FROM ducklake.all_null WHERE c IS NULL;
+----
+2
+
+# Multiple files, one ALTER: every file's stats are corrected, not just the first one read. Each file
+# holds a single value, so only the bound that has to move moves: 0.03 widens FLOAT->DOUBLE downwards
+# and rewrites the min, 0.1 and 0.2 widen upwards and rewrite the max.
+
+statement ok
+CREATE TABLE ducklake.many(c FLOAT);
+
+statement ok
+INSERT INTO ducklake.many VALUES (0.03);
+
+statement ok
+INSERT INTO ducklake.many VALUES (0.1);
+
+statement ok
+INSERT INTO ducklake.many VALUES (0.2);
+
+statement ok
+ALTER TABLE ducklake.many ALTER COLUMN c SET DATA TYPE DOUBLE;
+
+query II
+SELECT min_value, max_value FROM metadata.ducklake_file_column_stats WHERE table_id = (SELECT table_id FROM metadata.ducklake_table WHERE table_name = 'many') ORDER BY data_file_id;
+----
+0.029999999329447746	0.03
+0.1	0.10000000149011612
+0.2	0.20000000298023224
+
+statement ok
+SET disabled_optimizers='filter_pushdown';
+
+query I
+SELECT count(*) FROM ducklake.many WHERE c > 0.2;
+----
+1
+
+query I
+SELECT count(*) FROM ducklake.many WHERE c < 0.03;
+----
+1
+
+statement ok
+RESET disabled_optimizers;
+
+# Retype plus data in one transaction, in both orders, with no bound to inherit from before the
+# commit. File stats are built with the field's type as of the write, so that type says which side of
+# the ALTER a staged file landed on: a file written before it needs correcting, one written after is
+# already exact and must be left alone. With no committed bound in the merge the write-time type is
+# the whole provenance, so the correction is exact in both directions rather than widened - a widened
+# bound covers, but a folded MIN or MAX off it reports a value no row holds. Both bounds are asserted
+# in both orders for that reason.
+
+statement ok
+CREATE TABLE ducklake.insert_then_retype(c FLOAT);
+
+statement ok
+INSERT INTO ducklake.insert_then_retype VALUES (NULL);
+
+statement ok
+BEGIN;
+
+statement ok
+INSERT INTO ducklake.insert_then_retype VALUES (0.2);
+
+statement ok
+ALTER TABLE ducklake.insert_then_retype ALTER COLUMN c SET DATA TYPE DOUBLE;
+
+statement ok
+COMMIT;
+
+# written as FLOAT, so both bounds move to what the row actually reads back as
+query II
+SELECT min_value, max_value FROM metadata.ducklake_table_column_stats WHERE table_id = (SELECT table_id FROM metadata.ducklake_table WHERE table_name = 'insert_then_retype');
+----
+0.20000000298023224	0.20000000298023224
+
+query III
+SELECT min(c), max(c), count(*) FILTER (WHERE c > 0.2) FROM ducklake.insert_then_retype;
+----
+0.20000000298023224	0.20000000298023224	1
+
+# a later insert must not re-seed the global from its own file alone - the 0.2 row is still there
+statement ok
+INSERT INTO ducklake.insert_then_retype VALUES (100.0);
+
+query II
+SELECT min(c), count(*) FILTER (WHERE c < 50) FROM ducklake.insert_then_retype;
+----
+0.20000000298023224	1
+
+statement ok
+CREATE TABLE ducklake.retype_then_insert(c FLOAT);
+
+statement ok
+INSERT INTO ducklake.retype_then_insert VALUES (NULL);
+
+statement ok
+BEGIN;
+
+statement ok
+ALTER TABLE ducklake.retype_then_insert ALTER COLUMN c SET DATA TYPE DOUBLE;
+
+statement ok
+INSERT INTO ducklake.retype_then_insert VALUES (0.2);
+
+statement ok
+COMMIT;
+
+# written as DOUBLE, so 0.2 is already exact and must be left alone entirely
+query II
+SELECT min_value, max_value FROM metadata.ducklake_table_column_stats WHERE table_id = (SELECT table_id FROM metadata.ducklake_table WHERE table_name = 'retype_then_insert');
+----
+0.2	0.2
+
+query III
+SELECT min(c), max(c), count(*) FILTER (WHERE c > 0.2) FROM ducklake.retype_then_insert;
+----
+0.2	0.2	0
+
+statement ok
+CREATE TABLE ducklake.retype_then_insert_empty(c FLOAT);
+
+statement ok
+BEGIN;
+
+statement ok
+ALTER TABLE ducklake.retype_then_insert_empty ALTER COLUMN c SET DATA TYPE DOUBLE;
+
+statement ok
+INSERT INTO ducklake.retype_then_insert_empty VALUES (0.3);
+
+statement ok
+COMMIT;
+
+query II
+SELECT min(c), max(c) FROM ducklake.retype_then_insert_empty;
+----
+0.3	0.3
+
+# A committed bound in the merge means the catalog's source type is only a guess (a promotion chain
+# or a compaction can outdate it), so that correction stays widened rather than exact.
+
+statement ok
+CREATE TABLE ducklake.chain_plus_new(c INTEGER);
+
+statement ok
+INSERT INTO ducklake.chain_plus_new VALUES (16777217);
+
+statement ok
+ALTER TABLE ducklake.chain_plus_new ALTER COLUMN c SET DATA TYPE FLOAT;
+
+statement ok
+BEGIN;
+
+statement ok
+INSERT INTO ducklake.chain_plus_new VALUES (5);
+
+statement ok
+ALTER TABLE ducklake.chain_plus_new ALTER COLUMN c SET DATA TYPE DOUBLE;
+
+statement ok
+COMMIT;
+
+# the file still holds INT32 16777217, and the widened max keeps covering it
+statement ok
+SET disabled_optimizers='filter_pushdown';
+
+query II
+SELECT count(*) FILTER (WHERE c = 16777217.0), count(*) FROM ducklake.chain_plus_new;
+----
+1	2
+
+statement ok
+RESET disabled_optimizers;
+
+# Committed data plus a post-ALTER insert in one transaction. The committed file is corrected by the
+# SQL pass while the new file keeps its exact bound; the merged global goes unknown because the two
+# renderings cannot be compared, which is pre-existing MergeStats behaviour and falls back to a scan.
+
+statement ok
+CREATE TABLE ducklake.committed_plus_new(c FLOAT);
+
+statement ok
+INSERT INTO ducklake.committed_plus_new VALUES (0.03), (0.1);
+
+statement ok
+BEGIN;
+
+statement ok
+ALTER TABLE ducklake.committed_plus_new ALTER COLUMN c SET DATA TYPE DOUBLE;
+
+statement ok
+INSERT INTO ducklake.committed_plus_new VALUES (0.5);
+
+statement ok
+COMMIT;
+
+query II
+SELECT min_value, max_value FROM metadata.ducklake_file_column_stats WHERE table_id = (SELECT table_id FROM metadata.ducklake_table WHERE table_name = 'committed_plus_new') ORDER BY data_file_id;
+----
+0.029999999329447746	0.10000000149011612
+0.5	0.5
+
+statement ok
+SET disabled_optimizers='filter_pushdown';
+
+query III
+SELECT count(*) FILTER (WHERE c < 0.03), count(*) FILTER (WHERE c > 0.1), count(*) FROM ducklake.committed_plus_new;
+----
+1	2	3
+
+query I
+SELECT min(c) FROM ducklake.committed_plus_new;
+----
+0.029999999329447746
+
+statement ok
+RESET disabled_optimizers;
+
+# The table is created in the same transaction as the ALTER, so there is no committed schema row to read
+# the pre-ALTER type from. The type is carried on the change info instead (GH #1307).
+
+statement ok
+BEGIN;
+
+statement ok
+CREATE TABLE ducklake.created_and_retyped(c FLOAT);
+
+statement ok
+INSERT INTO ducklake.created_and_retyped VALUES (0.03), (0.05), (0.07), (0.1);
+
+statement ok
+ALTER TABLE ducklake.created_and_retyped ALTER COLUMN c SET DATA TYPE DOUBLE;
+
+statement ok
+COMMIT;
+
+query II
+SELECT min_value, max_value FROM metadata.ducklake_file_column_stats WHERE table_id = (SELECT table_id FROM metadata.ducklake_table WHERE table_name = 'created_and_retyped');
+----
+0.029999999329447746	0.10000000149011612
+
+statement ok
+SET disabled_optimizers='filter_pushdown';
+
+query III
+SELECT count(*) FILTER (WHERE c > 0.1), count(*) FILTER (WHERE c < 0.03), count(*) FROM ducklake.created_and_retyped;
+----
+1	1	4
+
+statement ok
+RESET disabled_optimizers;
+
+# An exact-source promotion is skipped entirely, so it stays a metadata-only operation. Nothing to correct:
+# an integer renders the same text under either type.
+
+statement ok
+CREATE TABLE ducklake.exact_promotion(c INTEGER);
+
+statement ok
+INSERT INTO ducklake.exact_promotion VALUES (1), (16777217);
+
+statement ok
+ALTER TABLE ducklake.exact_promotion ALTER COLUMN c SET DATA TYPE BIGINT;
+
+query II
+SELECT min_value, max_value FROM metadata.ducklake_table_column_stats WHERE table_id = (SELECT table_id FROM metadata.ducklake_table WHERE table_name = 'exact_promotion');
+----
+1	16777217
+
+query I
+SELECT count(*) FROM ducklake.exact_promotion WHERE c = 16777217;
+----
+1
+
+# Two retypes in one transaction, with no committed bound. The plan collapses to the last ALTER, so
+# its source is FLOAT, an intermediate the file never held. The correction has to cast through the
+# file's own write-time type instead, or the recorded max drops below the INT32 the file still holds.
+#
+# This also pins the Appender interaction: write_data_files_sql inserts new file rows eagerly, so they
+# are visible to the SQL pass that runs later in the commit. That pass must skip them, or it re-applies
+# the widened correction over the exact one and puts the intermediate rounding back.
+
+statement ok
+CREATE TABLE ducklake.chain_one_txn(c INTEGER);
+
+statement ok
+BEGIN;
+
+statement ok
+INSERT INTO ducklake.chain_one_txn VALUES (16777217);
+
+statement ok
+ALTER TABLE ducklake.chain_one_txn ALTER COLUMN c SET DATA TYPE FLOAT;
+
+statement ok
+ALTER TABLE ducklake.chain_one_txn ALTER COLUMN c SET DATA TYPE DOUBLE;
+
+statement ok
+COMMIT;
+
+query II
+SELECT min_value, max_value FROM metadata.ducklake_file_column_stats WHERE table_id = (SELECT table_id FROM metadata.ducklake_table WHERE table_name = 'chain_one_txn');
+----
+16777217	16777217
+
+query II
+SELECT min_value, max_value FROM metadata.ducklake_table_column_stats WHERE table_id = (SELECT table_id FROM metadata.ducklake_table WHERE table_name = 'chain_one_txn');
+----
+16777217	16777217
+
+statement ok
+SET disabled_optimizers='filter_pushdown';
+
+query III
+SELECT min(c), max(c), count(*) FILTER (WHERE c = 16777217.0) FROM ducklake.chain_one_txn;
+----
+16777217.0	16777217.0	1
+
+statement ok
+RESET disabled_optimizers;
+
+# and the same chain with the CREATE inside the transaction too
+
+statement ok
+BEGIN;
+
+statement ok
+CREATE TABLE ducklake.chain_one_txn_create(c INTEGER);
+
+statement ok
+INSERT INTO ducklake.chain_one_txn_create VALUES (16777217);
+
+statement ok
+ALTER TABLE ducklake.chain_one_txn_create ALTER COLUMN c SET DATA TYPE FLOAT;
+
+statement ok
+ALTER TABLE ducklake.chain_one_txn_create ALTER COLUMN c SET DATA TYPE DOUBLE;
+
+statement ok
+COMMIT;
+
+query II
+SELECT min_value, max_value FROM metadata.ducklake_table_column_stats WHERE table_id = (SELECT table_id FROM metadata.ducklake_table WHERE table_name = 'chain_one_txn_create');
+----
+16777217	16777217
+
+statement ok
+SET disabled_optimizers='filter_pushdown';
+
+query III
+SELECT min(c), max(c), count(*) FILTER (WHERE c = 16777217.0) FROM ducklake.chain_one_txn_create;
+----
+16777217.0	16777217.0	1
+
+statement ok
+RESET disabled_optimizers;
+
+
+# A file written before ADD COLUMN has no stats row for the new column at all, so the recast's
+# per-file read never returns it. Nothing to correct there is the right answer, but the column filter
+# is what makes the row disappear, so the skip is worth pinning: the reader still has to see the
+# pre-ADD file's rows as NULL and the retyped bound still has to widen on the file that does have one.
+
+statement ok
+CREATE TABLE ducklake.added_then_retyped(a FLOAT);
+
+statement ok
+INSERT INTO ducklake.added_then_retyped VALUES (0.1);
+
+statement ok
+ALTER TABLE ducklake.added_then_retyped ADD COLUMN b FLOAT;
+
+statement ok
+INSERT INTO ducklake.added_then_retyped VALUES (0.2, 0.3);
+
+query II
+SELECT column_id, count(*) FROM metadata.ducklake_file_column_stats WHERE table_id = (SELECT table_id FROM metadata.ducklake_table WHERE table_name = 'added_then_retyped') GROUP BY column_id ORDER BY column_id;
+----
+1	2
+2	1
+
+statement ok
+ALTER TABLE ducklake.added_then_retyped ALTER COLUMN b SET DATA TYPE DOUBLE;
+
+# only the one file that carries a bound for b is corrected, and column a is untouched
+query III
+SELECT column_id, min_value, max_value FROM metadata.ducklake_file_column_stats WHERE table_id = (SELECT table_id FROM metadata.ducklake_table WHERE table_name = 'added_then_retyped') ORDER BY column_id, min_value;
+----
+1	0.1	0.1
+1	0.2	0.2
+2	0.3	0.30000001192092896
+
+statement ok
+SET disabled_optimizers='filter_pushdown';
+
+query III
+SELECT count(*), count(*) FILTER (WHERE b > 0.3), count(*) FILTER (WHERE b IS NULL) FROM ducklake.added_then_retyped;
+----
+2	1	1
+
+statement ok
+RESET disabled_optimizers;

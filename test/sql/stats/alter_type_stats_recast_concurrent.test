@@ -1,0 +1,230 @@
+# name: test/sql/stats/alter_type_stats_recast_concurrent.test
+# description: the stats recast must survive a commit replay and a competing writer on the retyped column (issue #1307)
+# group: [stats]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/alter_type_stats_concurrent', METADATA_CATALOG 'metadata', DATA_INLINING_ROW_LIMIT 0);
+
+# without this a BEGIN does not pin a snapshot, so nothing below actually races.
+# the setting is per connection, so con1 needs it in its own right
+statement ok
+SET immediate_transaction_mode=true
+
+statement ok con1
+SET immediate_transaction_mode=true
+
+statement ok con2
+SET immediate_transaction_mode=true
+
+# -------------------------------------------------------
+# a retype whose commit loses a race replays CommitChanges, so the recast runs
+# twice; it must land on the same stats as the uncontended retype
+# -------------------------------------------------------
+
+statement ok
+CREATE TABLE ducklake.serial(c FLOAT);
+
+statement ok
+CREATE TABLE ducklake.retried(c FLOAT);
+
+# unrelated table, so the competing commit advances the snapshot without conflicting
+statement ok
+CREATE TABLE ducklake.bystander(x INTEGER);
+
+statement ok
+INSERT INTO ducklake.serial VALUES (0.03), (0.05), (0.07), (0.1);
+
+statement ok
+INSERT INTO ducklake.retried VALUES (0.03), (0.05), (0.07), (0.1);
+
+statement ok
+ALTER TABLE ducklake.serial ALTER COLUMN c SET DATA TYPE DOUBLE;
+
+statement ok con1
+BEGIN
+
+statement ok con1
+ALTER TABLE ducklake.retried ALTER COLUMN c SET DATA TYPE DOUBLE;
+
+statement ok con2
+INSERT INTO ducklake.bystander VALUES (1);
+
+statement ok con1
+COMMIT
+
+query II
+SELECT min_value, max_value FROM metadata.ducklake_table_column_stats WHERE table_id = (SELECT table_id FROM metadata.ducklake_table WHERE table_name = 'retried');
+----
+0.029999999329447746	0.10000000149011612
+
+# byte-identical, not merely correct: a second recast pass that shifted a bound would agree
+# with neither
+query I
+SELECT (SELECT list(min_value || '|' || max_value) FROM metadata.ducklake_table_column_stats WHERE table_id = (SELECT table_id FROM metadata.ducklake_table WHERE table_name = 'retried'))
+     = (SELECT list(min_value || '|' || max_value) FROM metadata.ducklake_table_column_stats WHERE table_id = (SELECT table_id FROM metadata.ducklake_table WHERE table_name = 'serial'));
+----
+true
+
+query I
+SELECT (SELECT list(min_value || '|' || max_value) FROM metadata.ducklake_file_column_stats WHERE table_id = (SELECT table_id FROM metadata.ducklake_table WHERE table_name = 'retried'))
+     = (SELECT list(min_value || '|' || max_value) FROM metadata.ducklake_file_column_stats WHERE table_id = (SELECT table_id FROM metadata.ducklake_table WHERE table_name = 'serial'));
+----
+true
+
+# -------------------------------------------------------
+# a retype that also writes data in the same transaction: those files are staged
+# with the old-type stats and corrected in memory, in place, on the way into the
+# batch. that is the one recast that does not re-read the catalog, so a replay is
+# the only thing that would apply it twice
+# -------------------------------------------------------
+
+statement ok
+CREATE TABLE ducklake.serial2(c FLOAT);
+
+statement ok
+CREATE TABLE ducklake.retried2(c FLOAT);
+
+statement ok
+INSERT INTO ducklake.serial2 VALUES (0.03), (0.05);
+
+statement ok
+INSERT INTO ducklake.retried2 VALUES (0.03), (0.05);
+
+statement ok
+BEGIN
+
+statement ok
+INSERT INTO ducklake.serial2 VALUES (0.07), (0.1);
+
+statement ok
+ALTER TABLE ducklake.serial2 ALTER COLUMN c SET DATA TYPE DOUBLE;
+
+statement ok
+COMMIT
+
+statement ok con1
+BEGIN
+
+statement ok con1
+INSERT INTO ducklake.retried2 VALUES (0.07), (0.1);
+
+statement ok con1
+ALTER TABLE ducklake.retried2 ALTER COLUMN c SET DATA TYPE DOUBLE;
+
+statement ok con2
+INSERT INTO ducklake.bystander VALUES (2);
+
+statement ok con1
+COMMIT
+
+query I
+SELECT (SELECT list(min_value || '|' || max_value ORDER BY data_file_id) FROM metadata.ducklake_file_column_stats WHERE table_id = (SELECT table_id FROM metadata.ducklake_table WHERE table_name = 'retried2'))
+     = (SELECT list(min_value || '|' || max_value ORDER BY data_file_id) FROM metadata.ducklake_file_column_stats WHERE table_id = (SELECT table_id FROM metadata.ducklake_table WHERE table_name = 'serial2'));
+----
+true
+
+query II
+SELECT min_value, max_value FROM metadata.ducklake_table_column_stats WHERE table_id = (SELECT table_id FROM metadata.ducklake_table WHERE table_name = 'retried2');
+----
+0.029999999329447746	0.10000000149011612
+
+# -------------------------------------------------------
+# competing writer on the retyped column itself: con2's file is written with
+# FLOAT-typed stats and commits first, so con1's retype must correct a file it
+# never saw when it started
+# -------------------------------------------------------
+
+statement ok
+CREATE TABLE ducklake.contended(c FLOAT);
+
+statement ok
+INSERT INTO ducklake.contended VALUES (0.03), (0.05);
+
+statement ok con1
+BEGIN
+
+statement ok con1
+ALTER TABLE ducklake.contended ALTER COLUMN c SET DATA TYPE DOUBLE;
+
+statement ok con2
+INSERT INTO ducklake.contended VALUES (0.2);
+
+statement ok con1
+COMMIT
+
+query I
+SELECT count(*) FROM ducklake.contended;
+----
+3
+
+# two files: con1's, retyped from its own transaction, and con2's, which con1 had
+# never seen when it started. only the bounds that widen are rewritten - con2's
+# min stays the raw "0.2" because raising it to the DOUBLE that FLOAT 0.2 widens
+# to would narrow the range, and a narrowed bound prunes live rows
+query III
+SELECT column_id, min_value, max_value FROM metadata.ducklake_file_column_stats WHERE table_id = (SELECT table_id FROM metadata.ducklake_table WHERE table_name = 'contended') ORDER BY data_file_id;
+----
+1	0.029999999329447746	0.05000000074505806
+1	0.2	0.20000000298023224
+
+# https://github.com/duckdb/duckdb/issues/24900 makes pushdown return 0 regardless of stats
+statement ok
+SET disabled_optimizers='filter_pushdown';
+
+# (FLOAT 0.2)::DOUBLE = 0.20000000298023224, so a max still persisted as "0.2"
+# prunes this row away
+query I
+SELECT count(*) FROM ducklake.contended WHERE c > 0.2;
+----
+1
+
+query I
+SELECT count(*) FROM ducklake.contended WHERE c < 0.03;
+----
+1
+
+statement ok
+RESET disabled_optimizers;
+
+# -------------------------------------------------------
+# two retypes of the same column must conflict rather than merge
+# -------------------------------------------------------
+
+statement ok
+CREATE TABLE ducklake.both(c INTEGER);
+
+statement ok
+INSERT INTO ducklake.both VALUES (3), (10);
+
+statement ok con1
+BEGIN
+
+statement ok con2
+BEGIN
+
+statement ok con1
+ALTER TABLE ducklake.both ALTER COLUMN c SET DATA TYPE BIGINT;
+
+statement ok con2
+ALTER TABLE ducklake.both ALTER COLUMN c SET DATA TYPE DOUBLE;
+
+statement ok con1
+COMMIT
+
+statement error con2
+COMMIT
+----
+Transaction conflict
+
+query I
+SELECT column_type FROM metadata.ducklake_column WHERE column_name = 'c' AND end_snapshot IS NULL AND table_id = (SELECT table_id FROM metadata.ducklake_table WHERE table_name = 'both');
+----
+int64

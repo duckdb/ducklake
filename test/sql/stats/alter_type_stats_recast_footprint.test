@@ -1,0 +1,74 @@
+# name: test/sql/stats/alter_type_stats_recast_footprint.test
+# description: the #1307 recast must leave every stats row it did not correct byte-identical
+# group: [stats]
+
+# Separate file so the quack skip does not have to cover the rest of the regressions.
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/alter_type_recast_footprint', METADATA_CATALOG 'metadata', DATA_INLINING_ROW_LIMIT 0);
+
+# The recast writes catalog metadata in place, so it has to leave alone everything it did not
+# correct. Diffing the stats tables both ways round catches a neighbouring column losing a
+# tri-state contains_nan or an extra_stats payload, which asserting the retyped column's own bounds
+# never would.
+
+statement ok
+CREATE TABLE ducklake.footprint(x FLOAT, y FLOAT, z VARCHAR);
+
+statement ok
+INSERT INTO ducklake.footprint VALUES (0.1, 'NaN'::FLOAT, 'a'), (0.3, NULL, 'zz');
+
+# y carries contains_null and contains_nan, z carries string bounds and a NULL contains_nan, so the
+# untouched rows are not vacuous. CAST because a SQLite catalog stores the booleans as 0/1.
+query IIIII
+SELECT column_id, CAST(contains_null AS BOOLEAN), CAST(contains_nan AS BOOLEAN), min_value, max_value FROM metadata.ducklake_table_column_stats WHERE table_id = (SELECT table_id FROM metadata.ducklake_table WHERE table_name = 'footprint') ORDER BY column_id;
+----
+1	false	false	0.1	0.3
+2	true	true	NULL	NULL
+3	false	NULL	a	zz
+
+statement ok
+CREATE TEMP TABLE footprint_before_col AS SELECT * FROM metadata.ducklake_table_column_stats WHERE table_id = (SELECT table_id FROM metadata.ducklake_table WHERE table_name = 'footprint');
+
+statement ok
+CREATE TEMP TABLE footprint_before_file AS SELECT * FROM metadata.ducklake_file_column_stats WHERE table_id = (SELECT table_id FROM metadata.ducklake_table WHERE table_name = 'footprint');
+
+statement ok
+CREATE TEMP TABLE footprint_before_tbl AS SELECT * FROM metadata.ducklake_table_stats WHERE table_id = (SELECT table_id FROM metadata.ducklake_table WHERE table_name = 'footprint');
+
+statement ok
+ALTER TABLE ducklake.footprint ALTER COLUMN x SET DATA TYPE DOUBLE;
+
+query III
+SELECT column_id, min_value, max_value FROM (SELECT * FROM metadata.ducklake_table_column_stats WHERE table_id = (SELECT table_id FROM metadata.ducklake_table WHERE table_name = 'footprint') EXCEPT ALL SELECT * FROM footprint_before_col) ORDER BY column_id;
+----
+1	0.1	0.30000001192092896
+
+query III
+SELECT column_id, min_value, max_value FROM (SELECT * FROM footprint_before_col EXCEPT ALL SELECT * FROM metadata.ducklake_table_column_stats WHERE table_id = (SELECT table_id FROM metadata.ducklake_table WHERE table_name = 'footprint')) ORDER BY column_id;
+----
+1	0.1	0.3
+
+query III
+SELECT column_id, min_value, max_value FROM (SELECT * FROM metadata.ducklake_file_column_stats WHERE table_id = (SELECT table_id FROM metadata.ducklake_table WHERE table_name = 'footprint') EXCEPT ALL SELECT * FROM footprint_before_file) ORDER BY column_id;
+----
+1	0.1	0.30000001192092896
+
+query III
+SELECT column_id, min_value, max_value FROM (SELECT * FROM footprint_before_file EXCEPT ALL SELECT * FROM metadata.ducklake_file_column_stats WHERE table_id = (SELECT table_id FROM metadata.ducklake_table WHERE table_name = 'footprint')) ORDER BY column_id;
+----
+1	0.1	0.3
+
+# record_count, next_row_id and file_size_bytes are monotonic and are not the recast's to rewrite
+query I
+SELECT count(*) FROM ((SELECT * FROM metadata.ducklake_table_stats WHERE table_id = (SELECT table_id FROM metadata.ducklake_table WHERE table_name = 'footprint') EXCEPT ALL SELECT * FROM footprint_before_tbl) UNION ALL (SELECT * FROM footprint_before_tbl EXCEPT ALL SELECT * FROM metadata.ducklake_table_stats WHERE table_id = (SELECT table_id FROM metadata.ducklake_table WHERE table_name = 'footprint')));
+----
+0

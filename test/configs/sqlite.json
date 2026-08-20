@@ -48,6 +48,7 @@
         "test/sql/settings/max_retry_count.test",
         "test/sql/snapshot_info/ducklake_current_commit.test",
         "test/sql/snapshot_info/ducklake_last_commit.test",
+        "test/sql/stats/alter_type_stats_recast_concurrent.test",
         "test/sql/stats/global_stats_transactions.test",
         "test/sql/transaction/concurrent_table_creation.test",
         "test/sql/transaction/transaction_conflict_cleanup.test",
