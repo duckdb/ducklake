@@ -399,9 +399,19 @@ public:
 	//! Caller substitutes `{METADATA_CATALOG}` / `{SNAPSHOT_ID}` and executes via the commit context's executor.
 	static string ReadInlinedDataAggregatesSql(const string &inlined_table_name, const string &select_list,
 	                                           const DuckLakeInlinedColNames &col_names);
-	static string ReadFileColumnStatsForTableSql(TableIndex table_id);
+	//! An empty `column_ids` reads every column. The recast pass passes the retyped columns only: it runs over every
+	//! file of the table, so it must not also drag in every column of a wide one. A non-empty filter also drops files
+	//! that have no stats row at all, which the LEFT JOIN would otherwise keep.
+	static string ReadFileColumnStatsForTableSql(TableIndex table_id, const set<FieldIndex> &column_ids = {});
 	//! Throws on a failed inlined data read, hinting at the migration for legacy named catalogs
 	void CheckInlinedDataReadError(QueryResult &result, const string &inlined_table_name);
+	//! `min_value`/`max_value` are already-quoted SQL literals (see DuckLakeUtil::StatsToString); empty leaves that
+	//! column unwritten, and empty for both yields no statement.
+	static string UpdateFileColumnStatsMinMaxSql(const vector<DataFileIndex> &data_file_ids, FieldIndex column_id,
+	                                             const string &min_value, const string &max_value);
+	static string UpdateTableColumnStatsMinMaxSql(TableIndex table_id, FieldIndex column_id, const string &min_value,
+	                                              const string &max_value);
+	static string ReadTableColumnStatsMinMaxSql(TableIndex table_id);
 	virtual shared_ptr<DuckLakeInlinedData> TransformInlinedData(QueryResult &result,
 	                                                             const vector<LogicalType> &expected_types,
 	                                                             const string &inlined_table_name);
