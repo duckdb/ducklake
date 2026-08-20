@@ -53,6 +53,10 @@ unique_ptr<SecretEntry> DuckLakeSecret::GetSecret(ClientContext &context, const 
 	auto &secret_manager = SecretManager::Get(context);
 	auto transaction = CatalogTransaction::GetSystemCatalogTransaction(context);
 	// omitting the storage searches all registered secret storages, including extension-registered ones
-	return secret_manager.GetSecretByName(transaction, secret_name);
+	auto secret_entry = secret_manager.GetSecretByName(transaction, secret_name);
+	if (secret_entry && secret_entry->secret->GetType() == "ducklake") {
+		return secret_entry;
+	}
+	return nullptr;
 }
 } // namespace duckdb
