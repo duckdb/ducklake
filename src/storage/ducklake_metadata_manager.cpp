@@ -3509,7 +3509,18 @@ WHERE {SNAPSHOT_ID} >= %s AND ({SNAPSHOT_ID} < %s OR %s IS NULL);
 	                          col_names.end_snapshot);
 }
 
-string DuckLakeMetadataManager::ReadFileColumnStatsForTableSql(TableIndex table_id) {
+string DuckLakeMetadataManager::ReadFileColumnStatsForTableSql(TableIndex table_id, const set<FieldIndex> &column_ids) {
+	string column_filter;
+	if (!column_ids.empty()) {
+		string column_list;
+		for (auto &column_id : column_ids) {
+			if (!column_list.empty()) {
+				column_list += ", ";
+			}
+			column_list += to_string(column_id.index);
+		}
+		column_filter = "  AND stats.column_id IN (" + column_list + ")\n";
+	}
 	return StringUtil::Format(R"(
 SELECT data.data_file_id, data.record_count, data.file_size_bytes,
        stats.column_id, stats.value_count, stats.null_count, stats.min_value, stats.max_value,
@@ -3517,9 +3528,62 @@ SELECT data.data_file_id, data.record_count, data.file_size_bytes,
 FROM {METADATA_CATALOG}.ducklake_data_file data
 LEFT JOIN {METADATA_CATALOG}.ducklake_file_column_stats stats ON stats.data_file_id = data.data_file_id
 WHERE data.table_id = %d
-  AND {SNAPSHOT_ID} >= data.begin_snapshot
+%s  AND {SNAPSHOT_ID} >= data.begin_snapshot
   AND ({SNAPSHOT_ID} < data.end_snapshot OR data.end_snapshot IS NULL)
 ORDER BY data.data_file_id;
+)",
+	                          table_id.index, column_filter);
+}
+
+static string BuildMinMaxSetClause(const string &min_value, const string &max_value) {
+	string set_clause;
+	if (!min_value.empty()) {
+		set_clause += "min_value=" + min_value;
+	}
+	if (!max_value.empty()) {
+		if (!set_clause.empty()) {
+			set_clause += ", ";
+		}
+		set_clause += "max_value=" + max_value;
+	}
+	return set_clause;
+}
+
+string DuckLakeMetadataManager::UpdateFileColumnStatsMinMaxSql(const vector<DataFileIndex> &data_file_ids,
+                                                               FieldIndex column_id, const string &min_value,
+                                                               const string &max_value) {
+	auto set_clause = BuildMinMaxSetClause(min_value, max_value);
+	if (set_clause.empty() || data_file_ids.empty()) {
+		return string();
+	}
+	string file_list;
+	for (auto &data_file_id : data_file_ids) {
+		if (!file_list.empty()) {
+			file_list += ", ";
+		}
+		file_list += to_string(data_file_id.index);
+	}
+	return StringUtil::Format(
+	    "UPDATE {METADATA_CATALOG}.ducklake_file_column_stats SET %s WHERE data_file_id IN (%s) AND column_id=%d;",
+	    set_clause, file_list, column_id.index);
+}
+
+string DuckLakeMetadataManager::UpdateTableColumnStatsMinMaxSql(TableIndex table_id, FieldIndex column_id,
+                                                                const string &min_value, const string &max_value) {
+	auto set_clause = BuildMinMaxSetClause(min_value, max_value);
+	if (set_clause.empty()) {
+		return string();
+	}
+	return StringUtil::Format(
+	    "UPDATE {METADATA_CATALOG}.ducklake_table_column_stats SET %s WHERE table_id=%d AND column_id=%d;", set_clause,
+	    table_id.index, column_id.index);
+}
+
+string DuckLakeMetadataManager::ReadTableColumnStatsMinMaxSql(TableIndex table_id) {
+	return StringUtil::Format(R"(
+SELECT column_id, min_value, max_value
+FROM {METADATA_CATALOG}.ducklake_table_column_stats
+WHERE table_id = %d;
 )",
 	                          table_id.index);
 }
