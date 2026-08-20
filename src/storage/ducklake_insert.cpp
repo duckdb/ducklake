@@ -40,6 +40,19 @@
 
 namespace duckdb {
 
+static bool PerThreadOutputEnabled(DuckLakeCatalog &catalog, DuckLakeTableEntry &table) {
+	string per_thread_output_str;
+	return catalog.TryGetConfigOption("per_thread_output", per_thread_output_str, table) &&
+	       per_thread_output_str == "true";
+}
+
+static bool IsSchemaOnlyInlinedInsertOutput(const DuckLakeInsertGlobalState &global_state,
+                                            const DuckLakeDataFile &file) {
+	// DuckLakeInlineData has already absorbed rows into inlined storage, so a zero-row
+	// file reported here is the schema-only COPY output produced by per_thread_output.
+	return global_state.total_insert_count > 0 && file.row_count == 0;
+}
+
 DuckLakeInsert::DuckLakeInsert(PhysicalPlan &physical_plan, const vector<LogicalType> &types, DuckLakeTableEntry &table,
                                optional_idx partition_id, string encryption_key_p)
     : PhysicalOperator(physical_plan, PhysicalOperatorType::EXTENSION, types, 1), table(&table), schema(nullptr),
@@ -259,6 +272,17 @@ SinkFinalizeType DuckLakeInsert::Finalize(Pipeline &pipeline, Event &event, Clie
                                           OperatorSinkFinalizeInput &input) const {
 	auto &global_state = input.global_state.Cast<DuckLakeInsertGlobalState>();
 
+	auto &catalog = global_state.table.catalog.Cast<DuckLakeCatalog>();
+	if (PerThreadOutputEnabled(catalog, global_state.table)) {
+		// Do not register schema-only COPY output as a live data file after inlining.
+		// Zero-row files from non-inlined inserts are still preserved for merge_adjacent_files.
+		global_state.written_files.erase(std::remove_if(global_state.written_files.begin(),
+		                                                global_state.written_files.end(),
+		                                                [&](const DuckLakeDataFile &file) {
+			                                                return IsSchemaOnlyInlinedInsertOutput(global_state, file);
+		                                                }),
+		                                 global_state.written_files.end());
+	}
 	for (auto &data_file : global_state.written_files) {
 		global_state.total_insert_count += data_file.row_count;
 	}
