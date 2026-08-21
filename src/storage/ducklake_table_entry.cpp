@@ -472,7 +472,8 @@ idx_t DuckLakeTableEntry::GetNetInlinedRowCount(DuckLakeTransaction &transaction
 	auto &metadata_manager = transaction.GetMetadataManager();
 	auto snapshot = transaction.GetSnapshot();
 	idx_t total = 0;
-	for (auto &inlined_table : inlined_data_tables) {
+	// Resolve live membership, not this entry's cached copy (see DuckLakeCatalog::GetInlinedDataTables).
+	for (auto &inlined_table : transaction.GetCatalog().GetInlinedDataTables(transaction, *this)) {
 		total += metadata_manager.GetNetInlinedRowCount(inlined_table.table_name, snapshot);
 	}
 	return total;
