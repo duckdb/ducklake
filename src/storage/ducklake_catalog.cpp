@@ -166,10 +166,6 @@ optional_idx DuckLakeSchemaCacheEntry::GetEstimatedCacheMemory() const {
 	return EstimateCatalogSetMemory(catalog_set);
 }
 
-void DuckLakeSchemaPinState::QueryEnd(ClientContext &context) {
-	Clear();
-}
-
 void DuckLakeSchemaPinState::Clear() {
 	lock_guard<mutex> guard(lock);
 	pins.clear();
@@ -369,22 +365,9 @@ shared_ptr<DuckLakeSchemaCacheEntry> DuckLakeCatalog::GetSchemaCacheEntry(DuckLa
 
 DuckLakeCatalogSet &DuckLakeCatalog::GetSchemaForSnapshot(DuckLakeTransaction &transaction, DuckLakeSnapshot snapshot) {
 	auto entry = GetSchemaCacheEntry(transaction, snapshot);
-	transaction.PinSchemaCacheEntry(entry);
-	PinSchemaForQuery(transaction, entry);
-	return entry->catalog_set;
-}
-
-void DuckLakeCatalog::PinSchemaForQuery(DuckLakeTransaction &transaction, shared_ptr<DuckLakeSchemaCacheEntry> entry) {
-	if (!entry) {
-		return;
-	}
-	auto context_ref = transaction.context.lock();
-	if (!context_ref) {
-		return;
-	}
-	auto &registered = *context_ref->registered_state;
-	auto pin_state = registered.GetOrCreate<DuckLakeSchemaPinState>(SchemaPinStateKey());
-	pin_state->Pin(std::move(entry));
+	auto &catalog_set = entry->catalog_set;
+	transaction.PinSchemaCacheEntry(std::move(entry));
+	return catalog_set;
 }
 
 static unique_ptr<DuckLakeFieldId> TransformColumnType(DuckLakeColumnInfo &col) {
@@ -1136,10 +1119,6 @@ void DuckLakeCatalog::InvalidateSchemaCache(idx_t schema_version) {
 void DuckLakeCatalog::InvalidateNameMapCache(MappingIndex mapping_id) {
 	lock_guard<mutex> guard(name_maps_lock);
 	name_maps.Remove(mapping_id);
-}
-
-string DuckLakeCatalog::SchemaPinStateKey() const {
-	return StringUtil::Format("ducklake_schema_pin:%s:%s:%s", GetName(), MetadataPath(), instance_id);
 }
 
 ObjectCache &DuckLakeCatalog::GetObjectCacheInstance() {
