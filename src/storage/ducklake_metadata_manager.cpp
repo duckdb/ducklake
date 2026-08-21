@@ -2233,11 +2233,11 @@ DuckLakeMetadataManager::GetExtendedFilesForTable(DuckLakeTableEntry &table, Duc
 		}
 	}
 
-	string partition_select_list = "NULL, NULL, NULL";
+	string partition_select;
 	string partition_join;
 	if (include_partition_values) {
-		partition_select_list =
-		    "data.partition_id, partition_values.partition_key_indexes, partition_values.partition_value_list";
+		partition_select =
+		    ", data.partition_id, partition_values.partition_key_indexes, partition_values.partition_value_list";
 		partition_join = StringUtil::Format(R"(
 LEFT JOIN (
 	SELECT data_file_id,
@@ -2253,7 +2253,7 @@ LEFT JOIN (
 
 	// Add base query
 	query += StringUtil::Format(R"(
-SELECT data.data_file_id, del.delete_file_id, data.record_count, %s, %s
+SELECT data.data_file_id, del.delete_file_id, data.record_count%s, %s
 FROM {METADATA_CATALOG}.ducklake_data_file data
 LEFT JOIN (
 	SELECT *
@@ -2264,7 +2264,7 @@ LEFT JOIN (
 %s
 WHERE data.table_id=%d AND {SNAPSHOT_ID} >= data.begin_snapshot AND ({SNAPSHOT_ID} < data.end_snapshot OR data.end_snapshot IS NULL)
 		)",
-	                            partition_select_list, select_list, table_id.index, partition_join, table_id.index);
+	                            partition_select, select_list, table_id.index, partition_join, table_id.index);
 
 	// Add WHERE clause from filters if it was generated
 	if (!where_clause.empty()) {
@@ -2283,23 +2283,27 @@ WHERE data.table_id=%d AND {SNAPSHOT_ID} >= data.begin_snapshot AND ({SNAPSHOT_I
 			file_entry.delete_file_id = DataFileIndex(row.GetValue<idx_t>(1));
 		}
 		file_entry.row_count = row.GetValue<idx_t>(2);
-		if (!row.IsNull(3)) {
-			file_entry.partition_id = row.GetValue<idx_t>(3);
-		}
-		if (!row.IsNull(4) && !row.IsNull(5)) {
-			auto partition_key_indexes = row.GetValue<Value>(4);
-			auto partition_values = row.GetValue<Value>(5);
-			auto &partition_key_children = ListValue::GetChildren(partition_key_indexes);
-			auto &partition_value_children = ListValue::GetChildren(partition_values);
-			D_ASSERT(partition_key_children.size() == partition_value_children.size());
-			for (idx_t i = 0; i < partition_key_children.size(); i++) {
-				DuckLakeFilePartitionInfo partition_value;
-				partition_value.partition_column_idx = partition_key_children[i].GetValue<idx_t>();
-				partition_value.partition_value = partition_value_children[i];
-				file_entry.partition_values.push_back(std::move(partition_value));
+		idx_t col_idx = 3;
+		if (include_partition_values) {
+			if (!row.IsNull(col_idx)) {
+				file_entry.partition_id = row.GetValue<idx_t>(col_idx);
 			}
+			col_idx++;
+			if (!row.IsNull(col_idx) && !row.IsNull(col_idx + 1)) {
+				auto partition_key_indexes = row.GetValue<Value>(col_idx);
+				auto partition_values = row.GetValue<Value>(col_idx + 1);
+				auto &partition_key_children = ListValue::GetChildren(partition_key_indexes);
+				auto &partition_value_children = ListValue::GetChildren(partition_values);
+				D_ASSERT(partition_key_children.size() == partition_value_children.size());
+				for (idx_t i = 0; i < partition_key_children.size(); i++) {
+					DuckLakeFilePartitionInfo partition_value;
+					partition_value.partition_column_idx = partition_key_children[i].GetValue<idx_t>();
+					partition_value.partition_value = partition_value_children[i];
+					file_entry.partition_values.push_back(std::move(partition_value));
+				}
+			}
+			col_idx += 2;
 		}
-		idx_t col_idx = 6;
 		file_entry.file = ReadDataFile(table, row, col_idx, IsEncrypted());
 		if (!row.IsNull(col_idx)) {
 			file_entry.row_id_start = row.GetValue<idx_t>(col_idx);

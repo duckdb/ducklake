@@ -1,5 +1,5 @@
 # name: test/sql/delete/delete_partition_metadata_identity.test
-# description: Metadata delete for single identity partition equality and IN predicates
+# description: Metadata delete for predicates over a single identity partition
 # group: [delete]
 
 require ducklake
@@ -131,6 +131,57 @@ SELECT p, COUNT(*) FROM ducklake.or_t GROUP BY p ORDER BY p
 ----
 b	1
 d	1
+
+# Other deterministic predicates over the same identity partition key use the same proof.
+statement ok
+CREATE TABLE ducklake.range_t(id INTEGER, p INTEGER)
+
+statement ok
+ALTER TABLE ducklake.range_t SET PARTITIONED BY (p)
+
+statement ok
+INSERT INTO ducklake.range_t VALUES (1, 1), (2, 2), (3, 3), (4, 4)
+
+query II
+EXPLAIN DELETE FROM ducklake.range_t WHERE p BETWEEN 2 AND 3
+----
+physical_plan	<REGEX>:.*Ducklake Metadata Delete.*
+
+query I
+DELETE FROM ducklake.range_t WHERE p BETWEEN 2 AND 3
+----
+2
+
+query I rowsort
+SELECT p FROM ducklake.range_t
+----
+1
+4
+
+# Volatile residuals cannot be proven from file metadata and must fall back.
+statement ok
+CREATE TABLE ducklake.volatile_t(id INTEGER, p VARCHAR)
+
+statement ok
+ALTER TABLE ducklake.volatile_t SET PARTITIONED BY (p)
+
+statement ok
+INSERT INTO ducklake.volatile_t VALUES (1, 'x'), (2, 'x'), (3, 'y')
+
+query II
+EXPLAIN DELETE FROM ducklake.volatile_t WHERE p = 'x' AND random() >= 0
+----
+physical_plan	<REGEX>:.*Ducklake Delete.*
+
+query I
+DELETE FROM ducklake.volatile_t WHERE p = 'x' AND random() >= 0
+----
+2
+
+query TI
+SELECT p, COUNT(*) FROM ducklake.volatile_t GROUP BY p
+----
+y	1
 
 # column = column is not a partition-value proof. It must fall back to row-level delete.
 statement ok
