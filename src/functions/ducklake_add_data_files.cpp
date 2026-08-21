@@ -1131,22 +1131,32 @@ void DuckLakeFileProcessor::MapColumnStats(ParquetFileMetadata &file_metadata, D
 		auto &field_type = entry.field_type;
 		auto &hive_value = entry.hive_value;
 
+		// the identity entry must take precedence: it reflects the actual column data
+		const auto is_identity = entry.transform.type == DuckLakeTransformType::IDENTITY;
+		if (!is_identity && result.column_stats.find(field_index) != result.column_stats.end()) {
+			continue;
+		}
+
 		DuckLakeColumnStats column_stats(field_type);
 		// num_values and null_count both needed to write count
 		// metadata in DuckLakeColumnStatsInfo::FromColumnStats
 		column_stats.has_num_values = true;
 		column_stats.num_values = file_metadata.row_count.GetIndex();
 		column_stats.has_null_count = true;
-		if (!hive_value.IsNull()) {
+		if (is_identity && !hive_value.IsNull()) {
 			column_stats.min = column_stats.max = hive_value.ToString();
 			column_stats.has_min = column_stats.has_max = true;
 		} else {
-			// All rows in this file have NULL for this partition column
+			// for non-identity transforms the partition value is the transform output, not a value of the source column
 			column_stats.null_count = file_metadata.row_count.GetIndex();
 			column_stats.any_valid = false;
 		};
 
-		result.column_stats.emplace(field_index, std::move(column_stats));
+		if (is_identity) {
+			result.column_stats.insert_or_assign(field_index, std::move(column_stats));
+		} else {
+			result.column_stats.emplace(field_index, std::move(column_stats));
+		}
 	}
 }
 
