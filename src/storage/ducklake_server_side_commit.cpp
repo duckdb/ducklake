@@ -732,6 +732,13 @@ DuckLakeCommitContext DuckLakeServerSideCommit::BuildContext(idx_t &committed_sn
 		auto sql = SubstitutePlaceholders(std::move(q), transaction_snapshot);
 		return unique_ptr_cast<MaterializedQueryResult, QueryResult>(fresh_conn.Query(sql));
 	};
+	ctx.inlined_delete_exists_query = [](const string &table_name) {
+		// No metadata-manager instance here, so the virtual is unreachable. The other transaction's
+		// metadata SQL runs against this same server catalog, so its new table is visible.
+		return StringUtil::Format("SELECT 1 FROM duckdb_tables() WHERE database_name = current_database() AND "
+		                          "schema_name = {METADATA_SCHEMA_NAME_LITERAL} AND table_name = %s",
+		                          DuckLakeUtil::SQLLiteralToString(table_name));
+	};
 	ctx.get_snapshot = [this]() {
 		return transaction_snapshot;
 	};
