@@ -548,12 +548,16 @@ unique_ptr<DuckLakeCatalogSet> DuckLakeCatalog::LoadSchemaForSnapshot(DuckLakeTr
 				not_null_columns.insert(col_info.name);
 			}
 			ColumnDefinition column(Identifier(std::move(col_info.name)), field_id->Type());
+			InsertionOrderPreservingMap<string> column_tags;
 			for (auto &tag : col_info.tags) {
 				if (tag.key == "comment") {
 					column.SetComment(tag.value);
 				} else {
-					throw NotImplementedException("Only comment tags are supported for columns currently");
+					column_tags.insert(tag.key, tag.value);
 				}
+			}
+			if (!column_tags.empty()) {
+				column.SetTags(std::move(column_tags));
 			}
 			auto default_val = field_id->GetDefault();
 			if (default_val) {

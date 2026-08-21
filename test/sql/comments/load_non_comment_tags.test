@@ -1,0 +1,38 @@
+# name: test/sql/comments/load_non_comment_tags.test
+# description: Loading a catalog with non-comment tags on tables and columns should not fail
+# group: [comments]
+
+require ducklake
+
+require parquet
+
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/load_non_comment_tags.db' AS ducklake (DATA_PATH '{TEST_DIR}/load_non_comment_tags/')
+
+statement ok
+CREATE TABLE ducklake.tbl (i INT);
+
+# manually insert non-comment tags on the table and on column i, alongside comments
+statement ok
+INSERT INTO __ducklake_metadata_ducklake.ducklake_tag VALUES (1, 2, NULL, 'owner', 'alice'), (1, 2, NULL, 'comment', 'table comment');
+
+statement ok
+INSERT INTO __ducklake_metadata_ducklake.ducklake_column_tag VALUES (1, 0, 2, NULL, 'pii', 'true'), (1, 0, 2, NULL, 'comment', 'col comment');
+
+# force a fresh catalog load - this previously threw for the non-comment column tag
+statement ok
+DETACH ducklake;
+
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/load_non_comment_tags.db' AS ducklake (DATA_PATH '{TEST_DIR}/load_non_comment_tags/')
+
+# the catalog loads and the comments are surfaced as comments
+query II
+SELECT table_name, comment FROM duckdb_tables() WHERE database_name='ducklake';
+----
+tbl	table comment
+
+query II
+SELECT column_name, comment FROM duckdb_columns() WHERE database_name='ducklake' AND table_name='tbl';
+----
+i	col comment
