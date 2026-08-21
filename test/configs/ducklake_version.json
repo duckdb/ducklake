@@ -34,6 +34,23 @@
       ]
     },
     {
+      "reason": "The _ducklake_ reserved prefix and the inlined column rename migration were added in 1.1-dev1 and are not exercised when ducklake_default_version is pinned to 1.0",
+      "paths": [
+        "test/sql/data_inlining/inlining_reserved_column_names.test",
+        "test/sql/alter/issue_944.test",
+        "test/sql/migration/inlined_column_rename.test",
+        "test/sql/migration/inlined_column_rename_conflict.test",
+        "test/sql/migration/inlined_column_rename_partial.test",
+        "test/sql/migration/inlined_column_rename_dev_conflict.test",
+        "test/sql/migration/inlined_column_rename_missing_table.test",
+        "test/sql/migration/inlined_column_rename_remigrate.test",
+        "test/sql/migration/inlined_column_rename_hint.test",
+        "test/sql/migration/inlined_column_rename_reverse_hint.test",
+        "test/sql/migration/inlined_column_rename_stats_hint.test",
+        "test/sql/migration/inlined_column_rename_dev_missing_table.test"
+      ]
+    },
+    {
       "reason": "Epoch partition transforms were added in 1.1-dev1 and are not available when ducklake_default_version is pinned to 1.0",
       "paths": [
         "test/sql/add_files/add_file_epoch_partitioned.test",

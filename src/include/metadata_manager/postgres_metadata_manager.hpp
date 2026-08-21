@@ -32,8 +32,8 @@ public:
 	string GetColumnTypeInternal(const LogicalType &type) override;
 	string CastColumnToTarget(const string &column, const LogicalType &type) override;
 	bool InlinedDeletionTableExists(const string &table_name) override;
-	shared_ptr<DuckLakeInlinedData> TransformInlinedData(QueryResult &result,
-	                                                     const vector<LogicalType> &expected_types) override;
+	shared_ptr<DuckLakeInlinedData> TransformInlinedData(QueryResult &result, const vector<LogicalType> &expected_types,
+	                                                     const string &inlined_table_name) override;
 
 	unique_ptr<QueryResult> Execute(DuckLakeSnapshot snapshot, string &query) override;
 

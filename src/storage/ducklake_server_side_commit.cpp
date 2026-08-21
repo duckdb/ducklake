@@ -890,11 +890,13 @@ DuckLakeCommitContext DuckLakeServerSideCommit::BuildContext(idx_t &committed_sn
 		}
 		return 0;
 	};
-	ctx.get_net_inlined_row_count = [this](TableIndex table_id) -> idx_t {
+	auto inlined_col_names = ctx.InlinedColNames();
+	ctx.get_net_inlined_row_count = [this, inlined_col_names](TableIndex table_id) -> idx_t {
 		idx_t total = 0;
 		for (auto &table : LookupInlinedTables(table_id)) {
-			auto sql = SubstitutePlaceholders(DuckLakeMetadataManager::GetNetInlinedRowCountSql(table.table_name),
-			                                  attempt_snapshot);
+			auto sql = SubstitutePlaceholders(
+			    DuckLakeMetadataManager::GetNetInlinedRowCountSql(table.table_name, inlined_col_names),
+			    attempt_snapshot);
 			auto result = RunQuery(sql, "read net inlined row count");
 			for (auto &row : *result) {
 				total += row.GetValue<idx_t>(0);

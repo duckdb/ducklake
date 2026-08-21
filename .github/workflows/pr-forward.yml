@@ -8,16 +8,20 @@ name: Forward PR events to pr-tracker
 # EVENT MATRIX (extend here — the payload envelope is the contract):
 #   pull_request_target  opened / reopened / ready_for_review /
 #                        converted_to_draft / closed   -> tracking issue lifecycle
+#   pull_request_target  labeled / unlabeled            -> author-input labels move the card in/out
 #   pull_request_review  submitted                      -> "review happened" comment
+#     (NON-FORK PRs ONLY — see below; fork reviews go via review-task-forward.yml)
 #   (future) workflow_run / status / check_suite        -> CI Passing/Failure labels
 # To add an event: add the trigger, surface its fields as env below, include them
 # in the jq payload, and add a branch in pr_tracker.ingest. No rewrite needed.
 #
 # SECURITY — this is the public-repo trust boundary, read before editing:
-#   * pull_request_target / pull_request_review (NOT pull_request): both run in
-#     the trusted base context WITH secrets, so they can authenticate the
-#     dispatch. A fork-triggered pull_request gets a read-only token and no
-#     secrets and could not.
+#   * pull_request_target runs in the trusted base context WITH secrets even for
+#     fork PRs, so it can authenticate the dispatch. pull_request_review, however,
+#     gets NO secrets on a PR from a fork — so that run has an empty token and is
+#     skipped (green) by the guard below; the fork review-done signal comes from
+#     review-task-forward.yml instead. A fork-triggered pull_request (not used
+#     here) also gets a read-only token and no secrets.
 #   * We do NOT checkout or run any PR-head (fork-supplied) code.
 #   * We send coordinates + a few GitHub-supplied review fields (login / state
 #     enum / URL) — never PR title/body/branch. The payload is built with jq from
@@ -31,7 +35,7 @@ name: Forward PR events to pr-tracker
 
 on:
   pull_request_target:
-    types: [opened, reopened, ready_for_review, converted_to_draft, closed]
+    types: [opened, reopened, ready_for_review, converted_to_draft, closed, labeled, unlabeled]
   pull_request_review:
     types: [submitted]
 
@@ -54,7 +58,17 @@ jobs:
           REVIEWER: ${{ github.event.review.user.login }}
           REVIEW_URL: ${{ github.event.review.html_url }}
           REVIEW_ID: ${{ github.event.review.id }}
+          # Present only on labeled/unlabeled; empty otherwise.
+          LABEL: ${{ github.event.label.name }}
         run: |
+          # A pull_request_review on a fork PR runs without secrets, so the token
+          # is empty. That path can't dispatch — skip cleanly (green) instead of
+          # failing loudly on the source repo. Fork-PR reviews are handled via the
+          # reviewer closing their task (see forwarder/review-task-forward.yml).
+          if [ -z "$GH_TOKEN" ]; then
+            echo "No dispatch token (fork PR — secrets withheld); skipping." >&2
+            exit 0
+          fi
           jq -n \
             --arg event "$EVENT_KIND" \
             --arg action "$EVENT_ACTION" \
@@ -64,9 +78,10 @@ jobs:
             --arg reviewer "$REVIEWER" \
             --arg review_url "$REVIEW_URL" \
             --arg review_id "$REVIEW_ID" \
+            --arg label "$LABEL" \
             '{event_type: "pr-event", client_payload: {
                event: $event, action: $action, repo: $repo, number: $number,
                review_state: $review_state, reviewer: $reviewer, review_url: $review_url,
-               review_id: $review_id
+               review_id: $review_id, label: $label
              }}' \
           | gh api -X POST /repos/duckdblabs/pr-tracker/dispatches --input -
