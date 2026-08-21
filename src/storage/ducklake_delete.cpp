@@ -18,7 +18,11 @@
 #include "duckdb/planner/operator/logical_filter.hpp"
 #include "duckdb/planner/operator/logical_set_operation.hpp"
 #include "duckdb/planner/operator/logical_empty_result.hpp"
+#include "duckdb/planner/expression_iterator.hpp"
+#include "duckdb/planner/filter/expression_filter.hpp"
 #include "duckdb/common/types/uuid.hpp"
+#include "duckdb/execution/operator/filter/physical_filter.hpp"
+#include "duckdb/execution/operator/projection/physical_projection.hpp"
 #include "storage/ducklake_delete.hpp"
 #include "storage/ducklake_table_entry.hpp"
 #include "storage/ducklake_schema_entry.hpp"
@@ -250,6 +254,73 @@ DuckLakeDelete::DuckLakeDelete(PhysicalPlan &physical_plan, DuckLakeTableEntry &
       encryption_key(std::move(encryption_key_p)), allow_duplicates(allow_duplicates) {
 	children.push_back(child);
 }
+
+class DuckLakeMetadataDeleteGlobalState : public GlobalSourceState {
+public:
+	mutex lock;
+	bool finished = false;
+};
+
+class DuckLakeMetadataDelete : public PhysicalOperator {
+public:
+	DuckLakeMetadataDelete(PhysicalPlan &physical_plan, DuckLakeTableEntry &table,
+	                       vector<DuckLakeFileListExtendedEntry> files)
+	    : PhysicalOperator(physical_plan, PhysicalOperatorType::EXTENSION, {LogicalType::BIGINT}, 1), table(table),
+	      files(std::move(files)) {
+	}
+
+	DuckLakeTableEntry &table;
+	vector<DuckLakeFileListExtendedEntry> files;
+
+public:
+	bool IsSource() const override {
+		return true;
+	}
+
+	unique_ptr<GlobalSourceState> GetGlobalSourceState(ClientContext &context) const override {
+		return make_uniq<DuckLakeMetadataDeleteGlobalState>();
+	}
+
+	SourceResultType GetDataInternal(ExecutionContext &context, DataChunk &chunk,
+	                                 OperatorSourceInput &input) const override {
+		auto &state = input.global_state.Cast<DuckLakeMetadataDeleteGlobalState>();
+		lock_guard<mutex> guard(state.lock);
+		if (state.finished) {
+			return SourceResultType::FINISHED;
+		}
+
+		auto &transaction = DuckLakeTransaction::Get(context.client, table.catalog);
+		idx_t count = 0;
+		for (auto &file : files) {
+			if (file.data_type != DuckLakeDataType::DATA_FILE) {
+				throw InternalException("DuckLakeMetadataDelete can only drop data files");
+			}
+			count += file.row_count;
+			if (file.file_id.IsValid()) {
+				transaction.DropFile(table.GetTableId(), file.file_id, file.file.path, file.row_count,
+				                     file.file.file_size_bytes);
+			} else {
+				transaction.DropTransactionLocalFile(table.GetTableId(), file.file.path);
+			}
+		}
+
+		chunk.SetChildCardinality(1);
+		chunk.data[0].SetValue(0, Value::BIGINT(NumericCast<int64_t>(count)));
+		state.finished = true;
+		return SourceResultType::HAVE_MORE_OUTPUT;
+	}
+
+	string GetName() const override {
+		return "DUCKLAKE_METADATA_DELETE";
+	}
+
+	InsertionOrderPreservingMap<string> ParamsToString() const override {
+		InsertionOrderPreservingMap<string> result;
+		result["Table Name"] = table.name.GetIdentifierName();
+		result["Files"] = std::to_string(files.size());
+		return result;
+	}
+};
 
 //===--------------------------------------------------------------------===//
 // States
@@ -678,17 +749,375 @@ optional_ptr<PhysicalTableScan> FindDeleteSource(PhysicalOperator &plan) {
 	return nullptr;
 }
 
+bool GetIdentityPartitionKeyIndex(DuckLakeTableEntry &table, idx_t field_index, optional_idx &partition_key_index) {
+	auto partition_data = table.GetPartitionData();
+	if (!partition_data) {
+		return false;
+	}
+	for (auto &field : partition_data->fields) {
+		if (field.field_id.index == field_index && field.transform.type == DuckLakeTransformType::IDENTITY) {
+			partition_key_index = field.partition_key_index;
+			return true;
+		}
+	}
+	return false;
+}
+
+bool IsRootOptionalTableFilter(const TableFilter &filter) {
+	if (filter.filter_type == TableFilterType::LEGACY_OPTIONAL_FILTER) {
+		return true;
+	}
+	if (filter.filter_type != TableFilterType::EXPRESSION_FILTER) {
+		return false;
+	}
+	return ExpressionFilter::IsRootOptionalFilter(filter);
+}
+
+bool GetScanPartitionKeyIndex(DuckLakeTableEntry &table, PhysicalTableScan &scan, idx_t column_index,
+                              optional_idx &partition_key_index) {
+	if (column_index >= scan.column_ids.size()) {
+		return false;
+	}
+	auto &column_id = scan.column_ids[column_index];
+	if (column_id.IsVirtualColumn()) {
+		return false;
+	}
+	auto &field_id = table.GetFieldId(PhysicalIndex(column_id.GetPrimaryIndex()));
+	return GetIdentityPartitionKeyIndex(table, field_id.GetFieldIndex().index, partition_key_index);
+}
+
+bool AddPartitionKey(optional_idx &partition_key_index, idx_t new_partition_key_index) {
+	if (partition_key_index.IsValid()) {
+		return partition_key_index.GetIndex() == new_partition_key_index;
+	}
+	partition_key_index = new_partition_key_index;
+	return true;
+}
+
+bool CollectPartitionKeys(DuckLakeTableEntry &table, PhysicalTableScan &scan, const Expression &expr,
+                          optional_idx &partition_key_index, bool &has_filter) {
+	if (expr.GetExpressionClass() == ExpressionClass::BOUND_REF) {
+		optional_idx expression_partition_key;
+		if (!GetScanPartitionKeyIndex(table, scan, expr.Cast<BoundReferenceExpression>().Index(),
+		                              expression_partition_key) ||
+		    !AddPartitionKey(partition_key_index, expression_partition_key.GetIndex())) {
+			return false;
+		}
+		has_filter = true;
+		return true;
+	}
+	if (expr.GetExpressionClass() == ExpressionClass::BOUND_COLUMN_REF) {
+		return false;
+	}
+	bool success = true;
+	ExpressionIterator::EnumerateChildren(expr, [&](const Expression &child) {
+		if (success && !CollectPartitionKeys(table, scan, child, partition_key_index, has_filter)) {
+			success = false;
+		}
+	});
+	return success;
+}
+
+bool IsPassThroughProjection(PhysicalProjection &projection) {
+	for (idx_t expr_idx = 0; expr_idx < projection.select_list.size(); expr_idx++) {
+		auto &expr = projection.select_list[expr_idx];
+		if (!expr || expr->GetExpressionClass() != ExpressionClass::BOUND_REF) {
+			return false;
+		}
+		if (expr->Cast<BoundReferenceExpression>().Index() != expr_idx) {
+			return false;
+		}
+	}
+	return true;
+}
+
+optional_ptr<PhysicalTableScan> FindMetadataDeleteSource(PhysicalOperator &plan,
+                                                         vector<const Expression *> &filter_expressions) {
+	if (plan.type == PhysicalOperatorType::TABLE_SCAN) {
+		return plan.Cast<PhysicalTableScan>();
+	}
+	if (plan.type == PhysicalOperatorType::PROJECTION && plan.children.size() == 1) {
+		auto &projection = plan.Cast<PhysicalProjection>();
+		if (!IsPassThroughProjection(projection)) {
+			return nullptr;
+		}
+		return FindMetadataDeleteSource(plan.children[0].get(), filter_expressions);
+	}
+	if (plan.type == PhysicalOperatorType::FILTER && plan.children.size() == 1) {
+		auto scan = FindMetadataDeleteSource(plan.children[0].get(), filter_expressions);
+		if (!scan) {
+			return nullptr;
+		}
+		auto &filter = plan.Cast<PhysicalFilter>();
+		if (!filter.expression) {
+			return nullptr;
+		}
+		filter_expressions.push_back(filter.expression.get());
+		return scan;
+	}
+	return nullptr;
+}
+
+bool ValidateMetadataDeleteFilters(DuckLakeTableEntry &table, PhysicalTableScan &scan, DuckLakeMultiFileList &file_list,
+                                   const vector<const Expression *> &filter_expressions,
+                                   optional_idx &partition_key_index) {
+	if (scan.dynamic_filters && scan.dynamic_filters->HasFilters()) {
+		return false;
+	}
+	bool has_filter = false;
+	for (auto filter_expr : filter_expressions) {
+		if (!filter_expr || !CollectPartitionKeys(table, scan, *filter_expr, partition_key_index, has_filter)) {
+			return false;
+		}
+	}
+	auto filter_info = file_list.GetFilterInfo();
+	if (filter_info) {
+		for (auto &entry : filter_info->column_filters) {
+			optional_idx filter_partition_key;
+			if (!entry.second.table_filter || !GetIdentityPartitionKeyIndex(table, entry.first, filter_partition_key) ||
+			    !AddPartitionKey(partition_key_index, filter_partition_key.GetIndex())) {
+				return false;
+			}
+			if (!IsRootOptionalTableFilter(*entry.second.table_filter)) {
+				has_filter = true;
+			}
+		}
+	}
+	if (scan.table_filters) {
+		for (auto &entry : *scan.table_filters) {
+			if (!entry.iterator->second) {
+				continue;
+			}
+			optional_idx filter_partition_key;
+			if (!GetScanPartitionKeyIndex(table, scan, entry.GetIndex().GetIndex(), filter_partition_key) ||
+			    !AddPartitionKey(partition_key_index, filter_partition_key.GetIndex())) {
+				return false;
+			}
+			if (!IsRootOptionalTableFilter(entry.Filter())) {
+				has_filter = true;
+			}
+		}
+	}
+	return has_filter && partition_key_index.IsValid();
+}
+
+bool GetPartitionKeyType(DuckLakeTableEntry &table, idx_t partition_key_index, LogicalType &partition_type) {
+	auto partition_data = table.GetPartitionData();
+	if (!partition_data) {
+		return false;
+	}
+	for (auto &field : partition_data->fields) {
+		if (field.partition_key_index != partition_key_index ||
+		    field.transform.type != DuckLakeTransformType::IDENTITY) {
+			continue;
+		}
+		auto field_id = table.GetFieldId(field.field_id);
+		if (!field_id) {
+			return false;
+		}
+		partition_type = DuckLakePartitionUtils::GetPartitionKeyType(field.transform.type, field_id->Type());
+		return true;
+	}
+	return false;
+}
+
+bool GetFilePartitionValue(DuckLakeTableEntry &table, const DuckLakeFileListExtendedEntry &file,
+                           idx_t partition_key_index, Value &partition_value) {
+	auto partition_data = table.GetPartitionData();
+	// partition_key_index can be reused across specs; only current partition_id values are authoritative.
+	if (!partition_data || file.partition_id != partition_data->partition_id) {
+		return false;
+	}
+	optional_ptr<const DuckLakeFilePartitionInfo> matching_partition;
+	for (auto &file_partition : file.partition_values) {
+		if (file_partition.partition_column_idx != partition_key_index) {
+			continue;
+		}
+		if (matching_partition) {
+			return false;
+		}
+		matching_partition = file_partition;
+	}
+	if (!matching_partition) {
+		return false;
+	}
+	LogicalType partition_type;
+	if (!GetPartitionKeyType(table, partition_key_index, partition_type)) {
+		return false;
+	}
+	if (matching_partition->partition_value.IsNull()) {
+		partition_value = Value(partition_type);
+		return true;
+	}
+	return matching_partition->partition_value.DefaultTryCastAs(partition_type, partition_value, nullptr, true);
+}
+
+enum class MetadataDeleteFileMatch { MATCH, NO_MATCH, UNKNOWN };
+
+bool ReplacePartitionReferences(DuckLakeTableEntry &table, PhysicalTableScan &scan, idx_t partition_key_index,
+                                const Value &partition_value, unique_ptr<Expression> &expr) {
+	if (expr->GetExpressionClass() == ExpressionClass::BOUND_REF) {
+		optional_idx expression_partition_key;
+		if (!GetScanPartitionKeyIndex(table, scan, expr->Cast<BoundReferenceExpression>().Index(),
+		                              expression_partition_key) ||
+		    expression_partition_key.GetIndex() != partition_key_index) {
+			return false;
+		}
+		expr = make_uniq<BoundConstantExpression>(partition_value);
+		return true;
+	}
+	bool success = true;
+	ExpressionIterator::EnumerateChildren(*expr, [&](unique_ptr<Expression> &child) {
+		if (success && !ReplacePartitionReferences(table, scan, partition_key_index, partition_value, child)) {
+			success = false;
+		}
+	});
+	return success;
+}
+
+MetadataDeleteFileMatch EvaluatePartitionExpression(ClientContext &context, DuckLakeTableEntry &table,
+                                                    PhysicalTableScan &scan, idx_t partition_key_index,
+                                                    const Value &partition_value, const Expression &expr) {
+	auto expr_copy = expr.Copy();
+	if (!ReplacePartitionReferences(table, scan, partition_key_index, partition_value, expr_copy)) {
+		return MetadataDeleteFileMatch::UNKNOWN;
+	}
+	Value result;
+	if (!expr_copy->IsScalar() || !expr_copy->IsFoldable() ||
+	    !ExpressionExecutor::TryEvaluateScalar(context, *expr_copy, result) ||
+	    result.type().id() != LogicalTypeId::BOOLEAN) {
+		return MetadataDeleteFileMatch::UNKNOWN;
+	}
+	return !result.IsNull() && result.GetValue<bool>() ? MetadataDeleteFileMatch::MATCH
+	                                                   : MetadataDeleteFileMatch::NO_MATCH;
+}
+
+bool EvaluateTableFilter(ClientContext &context, const TableFilter &filter, const Value &partition_value) {
+	auto expression_filter = ExpressionFilter::FromTableFilter(filter, partition_value.type());
+	return expression_filter->EvaluateWithConstant(context, partition_value);
+}
+
+MetadataDeleteFileMatch GetMetadataDeleteFileMatch(ClientContext &context, DuckLakeTableEntry &table,
+                                                   PhysicalTableScan &scan, DuckLakeMultiFileList &file_list,
+                                                   const vector<const Expression *> &filter_expressions,
+                                                   idx_t partition_key_index,
+                                                   const DuckLakeFileListExtendedEntry &file) {
+	Value partition_value;
+	if (!GetFilePartitionValue(table, file, partition_key_index, partition_value)) {
+		return MetadataDeleteFileMatch::UNKNOWN;
+	}
+	for (auto filter_expr : filter_expressions) {
+		auto match =
+		    EvaluatePartitionExpression(context, table, scan, partition_key_index, partition_value, *filter_expr);
+		if (match != MetadataDeleteFileMatch::MATCH) {
+			return match;
+		}
+	}
+	auto filter_info = file_list.GetFilterInfo();
+	if (filter_info) {
+		for (auto &entry : filter_info->column_filters) {
+			if (IsRootOptionalTableFilter(*entry.second.table_filter)) {
+				continue;
+			}
+			if (!entry.second.table_filter->EvaluateWithConstant(context, partition_value)) {
+				return MetadataDeleteFileMatch::NO_MATCH;
+			}
+		}
+	}
+	if (scan.table_filters) {
+		for (auto &entry : *scan.table_filters) {
+			if (!entry.iterator->second || IsRootOptionalTableFilter(entry.Filter())) {
+				continue;
+			}
+			if (!EvaluateTableFilter(context, entry.Filter(), partition_value)) {
+				return MetadataDeleteFileMatch::NO_MATCH;
+			}
+		}
+	}
+	return MetadataDeleteFileMatch::MATCH;
+}
+
+bool CanUseMetadataDelete(ClientContext &context, DuckLakeTableEntry &table, PhysicalOperator &child_plan,
+                          unique_ptr<vector<DuckLakeFileListExtendedEntry>> &files) {
+	vector<const Expression *> filter_expressions;
+	auto scan = FindMetadataDeleteSource(child_plan, filter_expressions);
+	if (!scan || !table.GetPartitionData()) {
+		return false;
+	}
+
+	auto &bind_data = scan->bind_data->Cast<MultiFileBindData>();
+	auto &file_list = bind_data.file_list->Cast<DuckLakeMultiFileList>();
+	optional_idx partition_key_index;
+	if (!ValidateMetadataDeleteFilters(table, *scan, file_list, filter_expressions, partition_key_index)) {
+		return false;
+	}
+	auto &transaction = DuckLakeTransaction::Get(context, table.catalog);
+	if (transaction.HasLocalInlinedFileDeletes(table.GetTableId())) {
+		return false;
+	}
+	if (!transaction.GetMetadataManager()
+	         .GetInlinedDeletionTableName(table.GetTableId(), transaction.GetSnapshot())
+	         .empty()) {
+		return false;
+	}
+
+	files = make_uniq<vector<DuckLakeFileListExtendedEntry>>(file_list.GetFilesExtended(true));
+	vector<idx_t> matching_file_indexes;
+	optional_idx inlined_row_count;
+	for (idx_t file_idx = 0; file_idx < files->size(); file_idx++) {
+		auto &file = (*files)[file_idx];
+		if (file.data_type != DuckLakeDataType::DATA_FILE) {
+			if (file.data_type == DuckLakeDataType::INLINED_DATA) {
+				if (!inlined_row_count.IsValid()) {
+					inlined_row_count = table.GetNetInlinedRowCount(transaction);
+				}
+				if (inlined_row_count.GetIndex() == 0) {
+					continue;
+				}
+			} else if (file.data_type == DuckLakeDataType::TRANSACTION_LOCAL_INLINED_DATA && file.row_count == 0) {
+				continue;
+			}
+			return false;
+		}
+		// Existing row-level deletes make the raw file row count different from the visible DELETE count.
+		if (file.delete_file_id.IsValid() || !file.delete_file.path.empty()) {
+			return false;
+		}
+		auto file_match = GetMetadataDeleteFileMatch(context, table, *scan, file_list, filter_expressions,
+		                                             partition_key_index.GetIndex(), file);
+		if (file_match == MetadataDeleteFileMatch::UNKNOWN) {
+			return false;
+		}
+		if (file_match == MetadataDeleteFileMatch::NO_MATCH) {
+			continue;
+		}
+		matching_file_indexes.push_back(file_idx);
+	}
+	vector<DuckLakeFileListExtendedEntry> data_files;
+	data_files.reserve(matching_file_indexes.size());
+	for (auto file_idx : matching_file_indexes) {
+		data_files.push_back(std::move((*files)[file_idx]));
+	}
+	*files = std::move(data_files);
+	return true;
+}
+
 PhysicalOperator &DuckLakeDelete::PlanDelete(ClientContext &context, PhysicalPlanGenerator &planner,
                                              DuckLakeTableEntry &table, PhysicalOperator &child_plan,
                                              vector<idx_t> row_id_indexes, string encryption_key,
                                              bool allow_duplicates) {
+	unique_ptr<vector<DuckLakeFileListExtendedEntry>> extended_files;
+	if (allow_duplicates && CanUseMetadataDelete(context, table, child_plan, extended_files)) {
+		return planner.Make<DuckLakeMetadataDelete>(table, std::move(*extended_files));
+	}
+
 	auto delete_source = FindDeleteSource(child_plan);
 	auto delete_map = make_shared_ptr<DuckLakeDeleteMap>();
 	if (delete_source) {
 		auto &bind_data = delete_source->bind_data->Cast<MultiFileBindData>();
 		auto &reader = bind_data.multi_file_reader->Cast<DuckLakeMultiFileReader>();
 		auto &file_list = bind_data.file_list->Cast<DuckLakeMultiFileList>();
-		auto files = file_list.GetFilesExtended();
+		auto files = extended_files ? std::move(*extended_files) : file_list.GetFilesExtended();
 		for (auto &file_entry : files) {
 			delete_map->AddExtendedFileInfo(std::move(file_entry));
 		}
