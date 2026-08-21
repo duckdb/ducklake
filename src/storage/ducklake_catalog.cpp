@@ -817,8 +817,19 @@ shared_ptr<DuckLakeTableStats> DuckLakeCatalog::GetTableStats(DuckLakeTransactio
 
 shared_ptr<DuckLakeTableStats> DuckLakeCatalog::GetTableStats(DuckLakeTransaction &transaction,
                                                               DuckLakeSnapshot snapshot, TableIndex table_id) {
+	return GetTableStatsInternal(transaction, snapshot, table_id, false);
+}
+
+shared_ptr<DuckLakeTableStats> DuckLakeCatalog::GetTableStatsForCommit(DuckLakeTransaction &transaction,
+                                                                       DuckLakeSnapshot snapshot, TableIndex table_id) {
+	return GetTableStatsInternal(transaction, snapshot, table_id, true);
+}
+
+shared_ptr<DuckLakeTableStats> DuckLakeCatalog::GetTableStatsInternal(DuckLakeTransaction &transaction,
+                                                                      DuckLakeSnapshot snapshot, TableIndex table_id,
+                                                                      bool retry_on_snapshot_mismatch) {
 	auto &cache = GetObjectCacheInstance();
-	auto key = StatsCacheKey(snapshot.next_file_id, table_id);
+	auto key = StatsCacheKey(snapshot.snapshot_id, table_id);
 	auto cached = cache.Get<DuckLakeTableStatsCacheEntry>(key);
 	if (cached) {
 		if (!cached->has_stats) {
@@ -830,8 +841,19 @@ shared_ptr<DuckLakeTableStats> DuckLakeCatalog::GetTableStats(DuckLakeTransactio
 	}
 
 	// Load from the metadata manager
+	idx_t latest_snapshot_id = DConstants::INVALID_INDEX;
+	auto global_stats = transaction.GetMetadataManager().GetGlobalTableStats(snapshot, table_id, latest_snapshot_id);
+	if (global_stats.empty()) {
+		return nullptr;
+	}
+	if (latest_snapshot_id != snapshot.snapshot_id) {
+		// Global stats are mutable. A cache miss for an older snapshot must not consume newer, narrowed bounds.
+		if (retry_on_snapshot_mismatch) {
+			throw TransactionException("Transaction conflict - concurrent DuckLake commit changed table statistics");
+		}
+		return nullptr;
+	}
 	auto schema_entry = GetSchemaCacheEntry(transaction, snapshot);
-	auto global_stats = transaction.GetMetadataManager().GetGlobalTableStats(snapshot, table_id);
 	auto lake_stats = ConstructStatsMap(global_stats, schema_entry->catalog_set);
 
 	unique_ptr<DuckLakeTableStats> table_stats;
@@ -1116,17 +1138,17 @@ void DuckLakeCatalog::CacheSchemaVersionBeginSnapshot(TableIndex table_id, idx_t
 	schema_version_begin_snapshots[make_pair(table_id.index, schema_version)] = begin_snapshot;
 }
 
-string DuckLakeCatalog::StatsCacheKey(idx_t next_file_id, TableIndex table_id) const {
+string DuckLakeCatalog::StatsCacheKey(idx_t snapshot_id, TableIndex table_id) const {
 	return StringUtil::Format("ducklake:%s:%s:%s:stats:%llu:table:%llu", GetName(), MetadataPath(), instance_id,
-	                          next_file_id, table_id.index);
+	                          snapshot_id, table_id.index);
 }
 
 string DuckLakeCatalog::SchemaCacheKey(idx_t schema_version) const {
 	return StringUtil::Format("ducklake:%s:%s:%s:schema:%llu", GetName(), MetadataPath(), instance_id, schema_version);
 }
 
-void DuckLakeCatalog::InvalidateTableStatsCache(idx_t next_file_id, TableIndex table_id) {
-	GetObjectCacheInstance().Delete(StatsCacheKey(next_file_id, table_id));
+void DuckLakeCatalog::InvalidateTableStatsCache(idx_t snapshot_id, TableIndex table_id) {
+	GetObjectCacheInstance().Delete(StatsCacheKey(snapshot_id, table_id));
 }
 
 void DuckLakeCatalog::InvalidateSchemaCache(idx_t schema_version) {
