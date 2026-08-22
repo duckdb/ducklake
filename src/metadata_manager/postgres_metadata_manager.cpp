@@ -144,11 +144,10 @@ string PostgresMetadataManager::GenerateFileColumnStatsCTEBody(const CTERequirem
 }
 
 // We need a specialized function here to do a reinterpret for postgres from BLOB to VARCHAR
-shared_ptr<DuckLakeInlinedData>
-PostgresMetadataManager::TransformInlinedData(QueryResult &result, const vector<LogicalType> &expected_types) {
-	if (result.HasError()) {
-		result.GetErrorObject().Throw("Failed to read inlined data from DuckLake: ");
-	}
+shared_ptr<DuckLakeInlinedData> PostgresMetadataManager::TransformInlinedData(QueryResult &result,
+                                                                              const vector<LogicalType> &expected_types,
+                                                                              const string &inlined_table_name) {
+	CheckInlinedDataReadError(result, inlined_table_name);
 	bool needs_reinterpret = false;
 	if (!expected_types.empty()) {
 		auto &result_types = result.GetTypes();
@@ -166,7 +165,7 @@ PostgresMetadataManager::TransformInlinedData(QueryResult &result, const vector<
 		}
 	}
 	if (!needs_reinterpret) {
-		return DuckLakeMetadataManager::TransformInlinedData(result, expected_types);
+		return DuckLakeMetadataManager::TransformInlinedData(result, expected_types, inlined_table_name);
 	}
 
 	auto context = transaction.context.lock();
