@@ -14,6 +14,8 @@
 
 namespace duckdb {
 
+class DuckLakeMetadataManager;
+
 class ColumnList;
 
 struct DuckLakeSortField {
@@ -30,7 +32,7 @@ struct DuckLakeSort {
 
 	//! Build a SQL ORDER BY clause from the sort fields, mapping inlined columns
 	static string BuildSortOrderSQL(const DuckLakeSort &sort_data, const ColumnList &current_columns,
-	                                const ColumnList &inlined_columns);
+	                                const ColumnList &inlined_columns, DuckLakeMetadataManager &metadata_manager);
 };
 
 } // namespace duckdb

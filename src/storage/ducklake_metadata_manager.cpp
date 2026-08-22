@@ -1334,6 +1334,15 @@ string DuckLakeMetadataManager::CastColumnToTarget(const string &column, const L
 	return "CAST(" + column + " AS " + type.ToString() + ")";
 }
 
+string DuckLakeMetadataManager::CastInlinedColumnToTarget(const string &column, const LogicalType &type) {
+	// only VARCHAR is exempt: casting it back escapes its non-printable bytes, which reorders it.
+	// every other type can reach the sort as text, where text order is not value order
+	if (type.id() == LogicalTypeId::VARCHAR) {
+		return column;
+	}
+	return CastColumnToTarget(column, type);
+}
+
 string DuckLakeMetadataManager::GenerateConstantFilter(ExpressionType comparison_type, const Value &constant,
                                                        const LogicalType &type,
                                                        unordered_set<string> &referenced_stats) {

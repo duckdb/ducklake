@@ -378,7 +378,8 @@ unique_ptr<LogicalOperator> DuckLakeDataFlusher::GenerateFlushCommand() {
 	auto sort_data = latest_table.GetSortData();
 	if (sort_data) {
 		root = DuckLakeCompactor::InsertSort(binder, root, latest_table, sort_data, /*add_tiebreakers=*/true);
-		sort_order_sql = DuckLakeSort::BuildSortOrderSQL(*sort_data, latest_table.GetColumns(), table.GetColumns());
+		sort_order_sql = DuckLakeSort::BuildSortOrderSQL(*sort_data, latest_table.GetColumns(), table.GetColumns(),
+		                                                 transaction.GetMetadataManager());
 	}
 
 	// generate the LogicalCopyToFile
