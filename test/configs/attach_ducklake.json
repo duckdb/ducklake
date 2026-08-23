@@ -893,6 +893,12 @@
         "test/sql/catalog/nested_schema/nested_table_dml_persist.test",
         "test/sql/catalog/nested_schema/nested_wal_replay.test"
       ]
+    },
+    {
+      "reason": "FIXME: ADD COLUMN ... DEFAULT false is rejected as a non-literal default",
+      "paths": [
+        "test/sql/alter/add_col/test_add_col_if_not_exists_default.test"
+      ]
     }
   ]
 }

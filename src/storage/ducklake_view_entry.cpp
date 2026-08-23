@@ -60,7 +60,7 @@ unique_ptr<CatalogEntry> DuckLakeViewEntry::AlterEntry(ClientContext &context, A
 }
 
 unique_ptr<CatalogEntry> DuckLakeViewEntry::Alter(DuckLakeTransaction &transaction, SetColumnCommentInfo &info) {
-	if (!transaction.GetCatalog().SupportsViewColumnTags()) {
+	if (!transaction.GetCatalog().SupportsV1_1Metadata()) {
 		throw InvalidInputException("DuckLake 1.0 does not support COMMENT ON COLUMN for views");
 	}
 

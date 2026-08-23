@@ -15,10 +15,24 @@
       ]
     },
     {
-      "reason": "Test asserts reserved column names are rejected, which requires inlining to be enabled",
+      "reason": "Test asserts small inserts are inlined and exercises inlining dependent guard behavior",
       "paths": [
-        "test/sql/data_inlining/inlining_reserved_column_names.test",
-        "test/sql/alter/issue_944.test"
+        "test/sql/data_inlining/inlining_reserved_column_names.test"
+      ]
+    },
+    {
+      "reason": "The inlined column rename migration requires inlined tables, which are never created with inlining disabled",
+      "paths": [
+        "test/sql/migration/inlined_column_rename.test",
+        "test/sql/migration/inlined_column_rename_conflict.test",
+        "test/sql/migration/inlined_column_rename_partial.test",
+        "test/sql/migration/inlined_column_rename_dev_conflict.test",
+        "test/sql/migration/inlined_column_rename_missing_table.test",
+        "test/sql/migration/inlined_column_rename_remigrate.test",
+        "test/sql/migration/inlined_column_rename_hint.test",
+        "test/sql/migration/inlined_column_rename_reverse_hint.test",
+        "test/sql/migration/inlined_column_rename_stats_hint.test",
+        "test/sql/migration/inlined_column_rename_dev_missing_table.test"
       ]
     }
   ]

@@ -38,6 +38,7 @@ bool DuckLakeInlinedDataReader::TryInitializeScan(ClientContext &context, Global
 		auto transaction = read_info.GetTransaction();
 		auto &metadata_manager = transaction->GetMetadataManager();
 		auto &ducklake_catalog = transaction->GetCatalog();
+		auto col_names = metadata_manager.InlinedColNames();
 		// push the projections directly into the read
 		vector<string> columns_to_read;
 		vector<LogicalType> expected_types;
@@ -50,14 +51,14 @@ bool DuckLakeInlinedDataReader::TryInitializeScan(ClientContext &context, Global
 				switch (identifier) {
 				case MultiFileReader::ORDINAL_FIELD_ID:
 				case MultiFileReader::ROW_ID_FIELD_ID:
-					virtual_column = "row_id";
+					virtual_column = col_names.row_id;
 					break;
 				case MultiFileReader::LAST_UPDATED_SEQUENCE_NUMBER_ID:
 					if (read_info.scan_type == DuckLakeScanType::SCAN_DELETIONS) {
 						// when scanning deletions end_snapshot is the snapshot marker
-						virtual_column = "end_snapshot";
+						virtual_column = col_names.end_snapshot;
 					} else {
-						virtual_column = "begin_snapshot";
+						virtual_column = col_names.begin_snapshot;
 					}
 					break;
 				default:
@@ -90,13 +91,13 @@ bool DuckLakeInlinedDataReader::TryInitializeScan(ClientContext &context, Global
 				scan_column_ids.push_back(i);
 				virtual_columns.push_back(InlinedVirtualColumn::NONE);
 			}
-			columns_to_read.push_back(SQLIdentifier::ToString("row_id"));
+			columns_to_read.push_back(SQLIdentifier::ToString(col_names.row_id));
 			expected_types.push_back(LogicalType::BIGINT);
 			virtual_columns.emplace_back(InlinedVirtualColumn::COLUMN_EMPTY);
 		}
 		if (columns_to_read.empty()) {
 			// COUNT(*) - read row_id but don't emit
-			columns_to_read.push_back(SQLIdentifier::ToString("row_id"));
+			columns_to_read.push_back(SQLIdentifier::ToString(col_names.row_id));
 			expected_types.push_back(LogicalType::BIGINT);
 			virtual_columns.emplace_back(InlinedVirtualColumn::COLUMN_EMPTY);
 		}
@@ -125,7 +126,7 @@ bool DuckLakeInlinedDataReader::TryInitializeScan(ClientContext &context, Global
 		default:
 			throw InternalException("Unknown DuckLake scan type");
 		}
-		data = metadata_manager.TransformInlinedData(*query_result, expected_types);
+		data = metadata_manager.TransformInlinedData(*query_result, expected_types, table_name);
 		if (!virtual_columns.empty()) {
 			auto scan_types = data->data->Types();
 			scan_chunk.Initialize(context, scan_types);

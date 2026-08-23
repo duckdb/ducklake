@@ -1552,7 +1552,7 @@ void DuckLakeTransaction::RunCommitLoop(DuckLakeSnapshot transaction_snapshot,
 		ducklake_catalog.InvalidateTableStatsCache(next_file_id, table_id);
 	};
 	context.commit_info = state->commit_info;
-	context.supports_v1_1_metadata = ducklake_catalog.SupportsRowGroupCount();
+	context.supports_v1_1_metadata = ducklake_catalog.SupportsV1_1Metadata();
 	state->Commit(transaction_snapshot, transaction_changes, retry_config, context);
 }
 

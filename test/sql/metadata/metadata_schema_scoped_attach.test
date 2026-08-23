@@ -82,3 +82,13 @@ SELECT COUNT(*) FROM duckdb_schemas() WHERE database_name='pgmeta3' AND schema_n
 
 statement ok
 DETACH lake3
+
+# the metadata database is shared between tests - leave no schemas behind
+statement ok
+ATTACH 'postgres:dbname=ducklakedb' AS pg_cleanup
+
+statement ok
+CALL postgres_execute('pg_cleanup', 'DROP SCHEMA IF EXISTS junk_1064 CASCADE; DROP SCHEMA IF EXISTS scoped_meta_1064 CASCADE;')
+
+statement ok
+DETACH pg_cleanup

@@ -114,10 +114,17 @@ bool DuckLakeMetadataManager::SupportsInliningColumns(const vector<DuckLakeColum
 	return true;
 }
 
+bool DuckLakeInlinedColNames::ConflictsWith(const string &name) const {
+	return StringUtil::CIEquals(name, row_id) || StringUtil::CIEquals(name, begin_snapshot) ||
+	       StringUtil::CIEquals(name, end_snapshot) || StringUtil::CIEquals(name, "_ducklake_internal_snapshot_id") ||
+	       StringUtil::CIEquals(name, "_ducklake_internal_row_id");
+}
+
 bool DuckLakeMetadataManager::CanInlineColumns(const ColumnList &columns) {
 	auto max_identifier_length = MaxIdentifierLength();
+	auto col_names = InlinedColNames();
 	for (auto &col : columns.Logical()) {
-		if (DuckLakeUtil::IsInlinedSystemColumn(col.Name().GetIdentifierName())) {
+		if (col_names.ConflictsWith(col.Name().GetIdentifierName())) {
 			return false;
 		}
 		if (col.Name().size() > max_identifier_length) {
@@ -132,8 +139,9 @@ bool DuckLakeMetadataManager::CanInlineColumns(const ColumnList &columns) {
 
 bool DuckLakeMetadataManager::CanInlineColumns(const vector<DuckLakeColumnInfo> &columns) {
 	auto max_identifier_length = MaxIdentifierLength();
+	auto col_names = InlinedColNames();
 	for (auto &col : columns) {
-		if (DuckLakeUtil::IsInlinedSystemColumn(col.name)) {
+		if (col_names.ConflictsWith(col.name)) {
 			return false;
 		}
 		if (col.name.size() > max_identifier_length) {
@@ -432,7 +440,76 @@ CREATE TABLE {IF_NOT_EXISTS} {METADATA_CATALOG}.ducklake_view_column_tag(
 );
 UPDATE {METADATA_CATALOG}.ducklake_metadata SET value = '1.1-dev1' WHERE key = 'version';
 	)";
+	// rename first so a conflict aborts while the catalog is still at v1.0
+	MigrateInlinedColumnNames();
 	ExecuteMigration(migrate_query, allow_failures, "1.0", "1.1-dev1");
+}
+
+void DuckLakeMetadataManager::MigrateInlinedColumnNames() {
+	auto tables = Query(R"(
+SELECT idt.table_name AS inlined_table_name, tbl.table_name AS user_table_name
+FROM {METADATA_CATALOG}.ducklake_inlined_data_tables idt
+LEFT JOIN {METADATA_CATALOG}.ducklake_table tbl ON idt.table_id = tbl.table_id AND tbl.end_snapshot IS NULL)");
+	if (tables->HasError()) {
+		tables->GetErrorObject().Throw("Failed to list inlined-data tables while migrating to v1.1-dev1: ");
+	}
+	DuckLakeInlinedColNames old_names(false);
+	DuckLakeInlinedColNames new_names(true);
+	vector<pair<string, string>> col_renames {{old_names.row_id, new_names.row_id},
+	                                          {old_names.begin_snapshot, new_names.begin_snapshot},
+	                                          {old_names.end_snapshot, new_names.end_snapshot}};
+	for (auto &row : *tables) {
+		auto table_name = row.GetValue<string>(0);
+		auto user_table_name = row.IsNull(1) ? table_name : row.GetValue<string>(1);
+		auto probe =
+		    Query(StringUtil::Format("SELECT * FROM {METADATA_CATALOG}.%s LIMIT 0", SQLIdentifier(table_name)));
+		if (probe->HasError()) {
+			probe->GetErrorObject().Throw(StringUtil::Format(
+			    "Failed to read inlined-data table \"%s\" while migrating to v1.1-dev1: ", table_name));
+		}
+		// the metadata columns are always the first three columns, user columns follow
+		auto &names = probe->GetNames();
+		case_insensitive_set_t user_columns;
+		for (idx_t i = col_renames.size(); i < names.size(); i++) {
+			user_columns.insert(names[i].GetIdentifierName());
+		}
+		string renames;
+		bool unexpected_layout = names.size() < col_renames.size();
+		for (idx_t i = 0; i < col_renames.size() && !unexpected_layout; i++) {
+			auto &entry = col_renames[i];
+			auto name = names[i].GetIdentifierName();
+			if (StringUtil::CIEquals(name, entry.second)) {
+				continue;
+			}
+			if (!StringUtil::CIEquals(name, entry.first)) {
+				unexpected_layout = true;
+				break;
+			}
+			if (user_columns.count(entry.second)) {
+				throw InvalidInputException(
+				    "Failed to rename inlined-data metadata columns while migrating to v1.1-dev1: table \"%s\" has a "
+				    "column \"%s\" colliding with the renamed metadata column. Rename the column and call "
+				    "ducklake_flush_inlined_data() before migrating",
+				    user_table_name, entry.second);
+			}
+			renames += StringUtil::Format("ALTER TABLE {METADATA_CATALOG}.%s RENAME COLUMN %s TO %s;",
+			                              SQLIdentifier(table_name), entry.first, entry.second);
+		}
+		if (unexpected_layout) {
+			throw InvalidInputException(
+			    "Failed to rename inlined-data metadata columns of \"%s\" while migrating to v1.1-dev1: the table has "
+			    "an unexpected column layout",
+			    table_name);
+		}
+		if (renames.empty()) {
+			continue;
+		}
+		auto result = Execute(renames);
+		if (result->HasError()) {
+			result->GetErrorObject().Throw(StringUtil::Format(
+			    "Failed to rename inlined-data metadata columns of \"%s\" while migrating to v1.1-dev1: ", table_name));
+		}
+	}
 }
 
 DuckLakeMetadata DuckLakeMetadataManager::LoadDuckLake() {
@@ -653,17 +730,20 @@ idx_t DuckLakeMetadataManager::GetNetDataFileRowCount(TableIndex table_id, DuckL
 	return 0;
 }
 
-string DuckLakeMetadataManager::GetNetInlinedRowCountSql(const string &inlined_table_name) {
+string DuckLakeMetadataManager::GetNetInlinedRowCountSql(const string &inlined_table_name,
+                                                         const DuckLakeInlinedColNames &col_names) {
 	return StringUtil::Format(R"(
 SELECT COUNT(*)
 FROM {METADATA_CATALOG}.%s
-WHERE {SNAPSHOT_ID} >= begin_snapshot
-  AND ({SNAPSHOT_ID} < end_snapshot OR end_snapshot IS NULL))",
-	                          inlined_table_name);
+WHERE {SNAPSHOT_ID} >= %s
+  AND ({SNAPSHOT_ID} < %s OR %s IS NULL))",
+	                          inlined_table_name, col_names.begin_snapshot, col_names.end_snapshot,
+	                          col_names.end_snapshot);
 }
 
 idx_t DuckLakeMetadataManager::GetNetInlinedRowCount(const string &inlined_table_name, DuckLakeSnapshot snapshot) {
-	auto result = Query(snapshot, GetNetInlinedRowCountSql(inlined_table_name));
+	auto result = Query(snapshot, GetNetInlinedRowCountSql(inlined_table_name, InlinedColNames()));
+	CheckInlinedDataReadError(*result, inlined_table_name);
 	for (auto &row : *result) {
 		return row.GetValue<idx_t>(0);
 	}
@@ -696,7 +776,7 @@ DuckLakeCatalogInfo DuckLakeMetadataManager::GetCatalogForSnapshot(DuckLakeSnaps
 	auto &ducklake_catalog = transaction.GetCatalog();
 	return BuildCatalogForSnapshot(
 	    snapshot, [this](DuckLakeSnapshot s, string q) { return Query(s, q); }, ducklake_catalog.DataPath(),
-	    ducklake_catalog.Separator(), ducklake_catalog.SupportsViewColumnTags());
+	    ducklake_catalog.Separator(), ducklake_catalog.SupportsV1_1Metadata());
 }
 
 DuckLakeCatalogInfo DuckLakeMetadataManager::BuildCatalogForSnapshot(
@@ -2725,10 +2805,16 @@ string DuckLakeMetadataManager::InlinedTableNameFor(idx_t table_id, idx_t schema
 	return StringUtil::Format("ducklake_inlined_data_%d_%d", table_id, schema_version);
 }
 
-string DuckLakeMetadataManager::InlinedTableDdlSql(const string &table_name, const string &column_defs) {
-	return StringUtil::Format("CREATE TABLE IF NOT EXISTS {METADATA_CATALOG}.%s(row_id BIGINT, begin_snapshot BIGINT, "
-	                          "end_snapshot BIGINT, %s);",
-	                          SQLIdentifier(table_name), column_defs);
+DuckLakeInlinedColNames DuckLakeMetadataManager::InlinedColNames() const {
+	return DuckLakeInlinedColNames(transaction.GetCatalog().SupportsV1_1Metadata());
+}
+
+string DuckLakeMetadataManager::InlinedTableDdlSql(const string &table_name, const string &column_defs,
+                                                   const DuckLakeInlinedColNames &col_names) {
+	return StringUtil::Format("CREATE TABLE IF NOT EXISTS {METADATA_CATALOG}.%s(%s BIGINT, %s BIGINT, "
+	                          "%s BIGINT, %s);",
+	                          SQLIdentifier(table_name), col_names.row_id, col_names.begin_snapshot,
+	                          col_names.end_snapshot, column_defs);
 }
 
 string DuckLakeMetadataManager::InlinedTableRegistrationTuple(idx_t table_id, const string &table_name,
@@ -2754,7 +2840,7 @@ string DuckLakeMetadataManager::GetInlinedTableQuery(const DuckLakeTableInfo &ta
 	}
 	// We created a table here, flag we need to clear our cache at commit
 	MarkPendingCacheClear();
-	return InlinedTableDdlSql(table_name, column_defs);
+	return InlinedTableDdlSql(table_name, column_defs, InlinedColNames());
 }
 
 string DuckLakeMetadataManager::WriteNewTables(const vector<DuckLakeTableInfo> &new_tables,
@@ -3069,7 +3155,8 @@ string DuckLakeMetadataManager::FormatInlinedDataInsert(const string &inlined_ta
 	                          values);
 }
 
-string DuckLakeMetadataManager::WriteNewInlinedDeletes(const vector<DuckLakeDeletedInlinedDataInfo> &new_deletes) {
+string DuckLakeMetadataManager::WriteNewInlinedDeletes(const vector<DuckLakeDeletedInlinedDataInfo> &new_deletes,
+                                                       const DuckLakeInlinedColNames &col_names) {
 	string batch_queries;
 	if (new_deletes.empty()) {
 		return batch_queries;
@@ -3089,11 +3176,12 @@ WITH deleted_row_list(deleted_row_id) AS (
 VALUES %s
 )
 UPDATE {METADATA_CATALOG}.%s
-SET end_snapshot = {SNAPSHOT_ID}
+SET %s = {SNAPSHOT_ID}
 FROM deleted_row_list
-WHERE row_id=deleted_row_id AND end_snapshot IS NULL AND begin_snapshot != {SNAPSHOT_ID};
+WHERE %s=deleted_row_id AND %s IS NULL AND %s != {SNAPSHOT_ID};
 )",
-		                                    row_id_list, entry.table_name);
+		                                    row_id_list, entry.table_name, col_names.end_snapshot, col_names.row_id,
+		                                    col_names.end_snapshot, col_names.begin_snapshot);
 	}
 	return batch_queries;
 }
@@ -3290,11 +3378,36 @@ string DuckLakeMetadataManager::GetInlinedDeletionTableName(TableIndex table_id,
 	return string();
 }
 
-shared_ptr<DuckLakeInlinedData> DuckLakeMetadataManager::TransformInlinedData(QueryResult &result,
-                                                                              const vector<LogicalType> &) {
-	if (result.HasError()) {
-		result.GetErrorObject().Throw("Failed to read inlined data from DuckLake: ");
+void DuckLakeMetadataManager::CheckInlinedDataReadError(QueryResult &result, const string &inlined_table_name) {
+	if (!result.HasError()) {
+		return;
 	}
+	if (!inlined_table_name.empty()) {
+		// the leading metadata column reveals whether the table matches this session's catalog version
+		auto probe =
+		    Query(StringUtil::Format("SELECT * FROM {METADATA_CATALOG}.%s LIMIT 0", SQLIdentifier(inlined_table_name)));
+		if (!probe->HasError() && !probe->GetNames().empty()) {
+			auto &first_column = probe->GetNames()[0].GetIdentifierName();
+			bool prefixed_catalog = transaction.GetCatalog().SupportsV1_1Metadata();
+			if (prefixed_catalog && StringUtil::CIEquals(first_column, DuckLakeInlinedColNames(false).row_id)) {
+				result.GetErrorObject().Throw(
+				    "Failed to read inlined data from DuckLake. If this catalog was written by an older DuckLake "
+				    "version, reattach with AUTOMATIC_MIGRATION TRUE to rename the inlined metadata columns: ");
+			}
+			if (!prefixed_catalog && StringUtil::CIEquals(first_column, DuckLakeInlinedColNames(true).row_id)) {
+				result.GetErrorObject().Throw(
+				    "Failed to read inlined data from DuckLake. The catalog was migrated by another connection, "
+				    "reattach to pick up the new version: ");
+			}
+		}
+	}
+	result.GetErrorObject().Throw("Failed to read inlined data from DuckLake: ");
+}
+
+shared_ptr<DuckLakeInlinedData> DuckLakeMetadataManager::TransformInlinedData(QueryResult &result,
+                                                                              const vector<LogicalType> &,
+                                                                              const string &inlined_table_name) {
+	CheckInlinedDataReadError(result, inlined_table_name);
 
 	auto context = transaction.context.lock();
 	auto data = make_uniq<ColumnDataCollection>(*context, result.GetTypes());
@@ -3328,12 +3441,14 @@ unique_ptr<QueryResult> DuckLakeMetadataManager::ReadInlinedData(DuckLakeSnapsho
                                                                  const string &inlined_table_name,
                                                                  const vector<string> &columns_to_read) {
 	auto projection = GetProjection(columns_to_read);
+	auto col_names = InlinedColNames();
 	auto result = Query(snapshot, StringUtil::Format(R"(
 SELECT %s
 FROM {METADATA_CATALOG}.%s inlined_data
-WHERE {SNAPSHOT_ID} >= begin_snapshot AND ({SNAPSHOT_ID} < end_snapshot OR end_snapshot IS NULL)
-ORDER BY row_id;)",
-	                                                 projection, inlined_table_name));
+WHERE {SNAPSHOT_ID} >= %s AND ({SNAPSHOT_ID} < %s OR %s IS NULL)
+ORDER BY %s;)",
+	                                                 projection, inlined_table_name, col_names.begin_snapshot,
+	                                                 col_names.end_snapshot, col_names.end_snapshot, col_names.row_id));
 	return result;
 }
 
@@ -3342,11 +3457,13 @@ unique_ptr<QueryResult> DuckLakeMetadataManager::ReadInlinedDataInsertions(DuckL
                                                                            const string &inlined_table_name,
                                                                            const vector<string> &columns_to_read) {
 	auto projection = GetProjection(columns_to_read);
+	auto col_names = InlinedColNames();
 	auto result = Query(end_snapshot, StringUtil::Format(R"(
 SELECT %s
 FROM {METADATA_CATALOG}.%s inlined_data
-WHERE inlined_data.begin_snapshot >= %d AND inlined_data.begin_snapshot <= {SNAPSHOT_ID};)",
-	                                                     projection, inlined_table_name, start_snapshot.snapshot_id));
+WHERE inlined_data.%s >= %d AND inlined_data.%s <= {SNAPSHOT_ID};)",
+	                                                     projection, inlined_table_name, col_names.begin_snapshot,
+	                                                     start_snapshot.snapshot_id, col_names.begin_snapshot));
 	return result;
 }
 
@@ -3355,11 +3472,13 @@ unique_ptr<QueryResult> DuckLakeMetadataManager::ReadInlinedDataDeletions(DuckLa
                                                                           const string &inlined_table_name,
                                                                           const vector<string> &columns_to_read) {
 	auto projection = GetProjection(columns_to_read);
+	auto col_names = InlinedColNames();
 	auto result = Query(end_snapshot, StringUtil::Format(R"(
 SELECT %s
 FROM {METADATA_CATALOG}.%s inlined_data
-WHERE inlined_data.end_snapshot >= %d AND inlined_data.end_snapshot <= {SNAPSHOT_ID};)",
-	                                                     projection, inlined_table_name, start_snapshot.snapshot_id));
+WHERE inlined_data.%s >= %d AND inlined_data.%s <= {SNAPSHOT_ID};)",
+	                                                     projection, inlined_table_name, col_names.end_snapshot,
+	                                                     start_snapshot.snapshot_id, col_names.end_snapshot));
 	return result;
 }
 
@@ -3367,23 +3486,27 @@ unique_ptr<QueryResult> DuckLakeMetadataManager::ReadAllInlinedDataForFlush(Duck
                                                                             const string &inlined_table_name,
                                                                             const vector<string> &columns_to_read) {
 	auto projection = GetProjection(columns_to_read);
+	auto col_names = InlinedColNames();
 	auto result = Query(snapshot, StringUtil::Format(R"(
 SELECT %s
 FROM {METADATA_CATALOG}.%s inlined_data
-WHERE {SNAPSHOT_ID} >= begin_snapshot
-ORDER BY row_id, begin_snapshot;)",
-	                                                 projection, inlined_table_name));
+WHERE {SNAPSHOT_ID} >= %s
+ORDER BY %s, %s;)",
+	                                                 projection, inlined_table_name, col_names.begin_snapshot,
+	                                                 col_names.row_id, col_names.begin_snapshot));
 	return result;
 }
 
 string DuckLakeMetadataManager::ReadInlinedDataAggregatesSql(const string &inlined_table_name,
-                                                             const string &select_list) {
+                                                             const string &select_list,
+                                                             const DuckLakeInlinedColNames &col_names) {
 	return StringUtil::Format(R"(
 SELECT %s
 FROM {METADATA_CATALOG}.%s
-WHERE {SNAPSHOT_ID} >= begin_snapshot AND ({SNAPSHOT_ID} < end_snapshot OR end_snapshot IS NULL);
+WHERE {SNAPSHOT_ID} >= %s AND ({SNAPSHOT_ID} < %s OR %s IS NULL);
 )",
-	                          select_list, inlined_table_name);
+	                          select_list, inlined_table_name, col_names.begin_snapshot, col_names.end_snapshot,
+	                          col_names.end_snapshot);
 }
 
 string DuckLakeMetadataManager::ReadFileColumnStatsForTableSql(TableIndex table_id) {
@@ -3787,7 +3910,7 @@ string DuckLakeMetadataManager::WriteNewDataFilesWithAppender(DuckLakeSnapshot &
 	Appender variant_stats_appender(connection, Identifier(db_name), schema_name,
 	                                Identifier("ducklake_file_variant_stats"));
 
-	bool write_row_group_count = catalog.SupportsRowGroupCount();
+	bool write_row_group_count = catalog.SupportsV1_1Metadata();
 	for (auto &file : new_files) {
 		auto data_file_index = static_cast<int64_t>(file.id.index);
 		auto table_id = static_cast<int64_t>(file.table_id.index);
@@ -4024,7 +4147,7 @@ string DuckLakeMetadataManager::WriteNewDataFiles(DuckLakeSnapshot &commit_snaps
 	for (auto &file : new_files) {
 		resolved_paths.push_back(GetRelativePath(file.table_id, file.file_name, new_tables, new_schemas_result));
 	}
-	return WriteNewDataFilesSqlBatch(new_files, resolved_paths, transaction.GetCatalog().SupportsRowGroupCount());
+	return WriteNewDataFilesSqlBatch(new_files, resolved_paths, transaction.GetCatalog().SupportsV1_1Metadata());
 }
 
 string DuckLakeMetadataManager::WriteNewDataFilesSqlBatch(const vector<DuckLakeFileInfo> &new_files,
@@ -5398,7 +5521,7 @@ WHERE table_id IN (%s);)",
 
 	// delete any views, schemas, macros, etc that are no longer referenced
 	tables_to_delete_from = {"ducklake_schema", "ducklake_view", "ducklake_tag", "ducklake_macro"};
-	if (transaction.GetCatalog().SupportsViewColumnTags()) {
+	if (transaction.GetCatalog().SupportsV1_1Metadata()) {
 		tables_to_delete_from.insert(tables_to_delete_from.begin() + 2, "ducklake_view_column_tag");
 	}
 	for (auto &delete_tbl : tables_to_delete_from) {
@@ -5531,21 +5654,23 @@ void DuckLakeMetadataManager::DeleteInlinedData(const DuckLakeInlinedTableInfo &
 void DuckLakeMetadataManager::DeleteFlushedInlinedData(const DuckLakeInlinedTableInfo &inlined_table,
                                                        idx_t flush_snapshot_id) {
 	auto result = Execute(StringUtil::Format(R"(
-		DELETE FROM {METADATA_CATALOG}.%s WHERE begin_snapshot <= %d
+		DELETE FROM {METADATA_CATALOG}.%s WHERE %s <= %d
 )",
-	                                         SQLIdentifier(inlined_table.table_name), flush_snapshot_id));
+	                                         SQLIdentifier(inlined_table.table_name), InlinedColNames().begin_snapshot,
+	                                         flush_snapshot_id));
 	if (result->HasError()) {
 		result->GetErrorObject().Throw("Failed to delete flushed inlined data in DuckLake from table " +
 		                               inlined_table.table_name + ": ");
 	}
 }
 
-string
-DuckLakeMetadataManager::GenerateDeleteFlushedInlinedData(const vector<FlushedInlinedTableInfo> &flushed_tables) {
+string DuckLakeMetadataManager::GenerateDeleteFlushedInlinedData(const vector<FlushedInlinedTableInfo> &flushed_tables,
+                                                                 const DuckLakeInlinedColNames &col_names) {
 	string result;
 	for (auto &flushed : flushed_tables) {
-		result += StringUtil::Format("DELETE FROM {METADATA_CATALOG}.%s WHERE begin_snapshot <= %d;\n",
-		                             SQLIdentifier(flushed.inlined_table.table_name), flushed.flush_snapshot_id);
+		result += StringUtil::Format("DELETE FROM {METADATA_CATALOG}.%s WHERE %s <= %d;\n",
+		                             SQLIdentifier(flushed.inlined_table.table_name), col_names.begin_snapshot,
+		                             flushed.flush_snapshot_id);
 	}
 	return result;
 }

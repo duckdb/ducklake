@@ -127,6 +127,15 @@ SinkFinalizeType DuckLakeFlushData::Finalize(Pipeline &pipeline, Event &event, C
 		DeletesPerFile deletes_per_file;
 		auto partition_sql_exprs = table.GetPartitionSQLExpressions();
 
+		// When the table has sort metadata, the file is written in sorted order.
+		// The ORDER BY must match the actual file order so delete positions are correct.
+		auto col_names = metadata_manager.InlinedColNames();
+		string order_by =
+		    StringUtil::Format("%s ASC NULLS LAST, %s ASC NULLS LAST", col_names.row_id, col_names.begin_snapshot);
+		if (!sort_order_sql.empty()) {
+			order_by = sort_order_sql + ", " + order_by;
+		}
+
 		// Track cumulative row offset per partition so each file knows its range
 		unordered_map<string, idx_t> partition_row_offsets;
 
@@ -146,25 +155,21 @@ SinkFinalizeType DuckLakeFlushData::Finalize(Pipeline &pipeline, Event &event, C
 
 			// Query deleted rows within this file's row range, filtered to its partition
 			string extra_filter = partition_filter.empty() ? "" : " AND " + partition_filter;
-			// When the table has sort metadata, the file is written in sorted order.
-			// The ORDER BY must match the actual file order so delete positions are correct.
-			string order_by = "row_id ASC NULLS LAST, begin_snapshot ASC NULLS LAST";
-			if (!sort_order_sql.empty()) {
-				order_by = sort_order_sql + ", row_id ASC NULLS LAST, begin_snapshot ASC NULLS LAST";
-			}
-			auto deleted_rows_result =
-			    metadata_manager.Query(snapshot, StringUtil::Format(R"(
+			auto deleted_rows_result = metadata_manager.Query(
+			    snapshot,
+			    StringUtil::Format(R"(
 				WITH all_rows AS (
-					SELECT end_snapshot, ROW_NUMBER() OVER (ORDER BY %s) - 1 AS output_position
+					SELECT %s AS end_snapshot, ROW_NUMBER() OVER (ORDER BY %s) - 1 AS output_position
 					FROM {METADATA_CATALOG}.%s
-					WHERE {SNAPSHOT_ID} >= begin_snapshot%s
+					WHERE {SNAPSHOT_ID} >= %s%s
 				)
 				SELECT end_snapshot, output_position
 				FROM all_rows
 				WHERE end_snapshot IS NOT NULL
 				AND output_position >= %d AND output_position < %d;)",
-			                                                        order_by, inlined_table.table_name, extra_filter,
-			                                                        file_offset, file_offset + file.row_count));
+			                       col_names.end_snapshot, order_by, inlined_table.table_name, col_names.begin_snapshot,
+			                       extra_filter, file_offset, file_offset + file.row_count));
+			metadata_manager.CheckInlinedDataReadError(*deleted_rows_result, inlined_table.table_name);
 
 			for (auto &row : *deleted_rows_result) {
 				auto end_snap = row.GetValue<int64_t>(0);
@@ -324,6 +329,7 @@ unique_ptr<LogicalOperator> DuckLakeDataFlusher::GenerateFlushCommand() {
 	copy_input.get_table_index = table_idx.index;
 	copy_input.virtual_columns = InsertVirtualColumns::WRITE_ROW_ID_AND_SNAPSHOT_ID;
 
+	bool is_encrypted = !copy_input.encryption_key.empty();
 	auto copy_options = DuckLakeInsert::GetCopyOptions(context, copy_input);
 
 	auto virtual_columns = table.GetVirtualColumns();
@@ -397,6 +403,9 @@ unique_ptr<LogicalOperator> DuckLakeDataFlusher::GenerateFlushCommand() {
 	copy->partition_columns = std::move(copy_options.partition_columns);
 	copy->names = copy_options.names;
 	copy->expected_types = std::move(copy_options.expected_types);
+
+	copy->hive_file_pattern =
+	    copy_input.catalog.UseHiveFilePattern(!is_encrypted, copy_input.schema_id, copy_input.table_id);
 
 	copy->children.push_back(std::move(root));
 
