@@ -191,6 +191,26 @@ void DuckLakeSchemaPinState::Pin(shared_ptr<DuckLakeSchemaCacheEntry> entry) {
 	pins.emplace(raw, std::move(entry));
 }
 
+void DuckLakeInlinedTablesQueryState::QueryEnd(ClientContext &context) {
+	lock_guard<mutex> guard(lock);
+	entries.clear();
+}
+
+bool DuckLakeInlinedTablesQueryState::TryGet(TableIndex table_id, vector<DuckLakeInlinedTableInfo> &result) {
+	lock_guard<mutex> guard(lock);
+	auto entry = entries.find(table_id.index);
+	if (entry == entries.end()) {
+		return false;
+	}
+	result = entry->second;
+	return true;
+}
+
+void DuckLakeInlinedTablesQueryState::Put(TableIndex table_id, vector<DuckLakeInlinedTableInfo> entry) {
+	lock_guard<mutex> guard(lock);
+	entries[table_id.index] = std::move(entry);
+}
+
 void DuckLakeCatalog::EnsureCommitInfoProvided(const DuckLakeSnapshotCommit &commit_info) const {
 	if (!IsCommitInfoRequired() || commit_info.is_commit_info_set) {
 		return;
@@ -403,15 +423,32 @@ vector<DuckLakeInlinedTableInfo> DuckLakeCatalog::GetInlinedDataTables(DuckLakeT
 		return table.GetInlinedDataTables();
 	}
 	auto table_id = table.GetTableId();
-	auto &cache = GetObjectCacheInstance();
-	// Key on the transaction's committed snapshot, not any per-read time-travel target.
-	auto key = InlinedDataTablesCacheKey(transaction.GetSnapshot().snapshot_id, table_id);
-	auto cached = cache.Get<DuckLakeInlinedDataTablesCacheEntry>(key);
-	if (cached) {
-		return cached->inlined_data_tables;
+	auto context_ref = transaction.context.lock();
+	if (!context_ref) {
+		return transaction.GetMetadataManager().GetInlinedDataTablesForTable(table_id);
+	}
+	// snapshot_id advances between statements only for an unpinned reader in auto-commit; any other
+	// reader keeps one cache entry across a concurrent flush and can be handed a dropped table name.
+	if (!CatalogSnapshot() && context_ref->transaction.IsAutoCommit()) {
+		auto &cache = GetObjectCacheInstance();
+		// Key on the transaction's committed snapshot, not any per-read time-travel target.
+		auto key = InlinedDataTablesCacheKey(transaction.GetSnapshot().snapshot_id, table_id);
+		auto cached = cache.Get<DuckLakeInlinedDataTablesCacheEntry>(key);
+		if (cached) {
+			return cached->inlined_data_tables;
+		}
+		auto cached_tables = transaction.GetMetadataManager().GetInlinedDataTablesForTable(table_id);
+		cache.Put(std::move(key), make_shared_ptr<DuckLakeInlinedDataTablesCacheEntry>(cached_tables));
+		return cached_tables;
+	}
+	auto &registered = *context_ref->registered_state;
+	auto memo = registered.GetOrCreate<DuckLakeInlinedTablesQueryState>(InlinedTablesQueryStateKey());
+	vector<DuckLakeInlinedTableInfo> memoized;
+	if (memo->TryGet(table_id, memoized)) {
+		return memoized;
 	}
 	auto inlined_data_tables = transaction.GetMetadataManager().GetInlinedDataTablesForTable(table_id);
-	cache.Put(std::move(key), make_shared_ptr<DuckLakeInlinedDataTablesCacheEntry>(inlined_data_tables));
+	memo->Put(table_id, inlined_data_tables);
 	return inlined_data_tables;
 }
 
@@ -1173,6 +1210,10 @@ void DuckLakeCatalog::InvalidateNameMapCache(MappingIndex mapping_id) {
 
 string DuckLakeCatalog::SchemaPinStateKey() const {
 	return StringUtil::Format("ducklake_schema_pin:%s:%s:%s", GetName(), MetadataPath(), instance_id);
+}
+
+string DuckLakeCatalog::InlinedTablesQueryStateKey() const {
+	return StringUtil::Format("ducklake_inlined_tables_memo:%s:%s:%s", GetName(), MetadataPath(), instance_id);
 }
 
 ObjectCache &DuckLakeCatalog::GetObjectCacheInstance() {

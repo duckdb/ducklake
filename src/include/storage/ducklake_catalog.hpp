@@ -107,6 +107,18 @@ private:
 	unordered_map<DuckLakeSchemaCacheEntry *, shared_ptr<DuckLakeSchemaCacheEntry>> pins;
 };
 
+//! Statement-scoped memo of inlined-data table membership, for readers whose snapshot does not advance.
+class DuckLakeInlinedTablesQueryState : public ClientContextState {
+public:
+	void QueryEnd(ClientContext &context) override;
+	bool TryGet(TableIndex table_id, vector<DuckLakeInlinedTableInfo> &result);
+	void Put(TableIndex table_id, vector<DuckLakeInlinedTableInfo> entry);
+
+private:
+	mutex lock;
+	unordered_map<idx_t, vector<DuckLakeInlinedTableInfo>> entries;
+};
+
 enum class InlinedDeletionCacheResult { EXISTS, DOES_NOT_EXIST, UNKNOWN };
 
 class DuckLakeCatalog : public Catalog {
@@ -338,6 +350,7 @@ private:
 	string SchemaCacheKey(idx_t schema_version) const;
 	string InlinedDataTablesCacheKey(idx_t snapshot_id, TableIndex table_id) const;
 	string SchemaPinStateKey() const;
+	string InlinedTablesQueryStateKey() const;
 	ObjectCache &GetObjectCacheInstance();
 
 private:
