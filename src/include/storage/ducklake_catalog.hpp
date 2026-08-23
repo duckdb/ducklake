@@ -231,16 +231,8 @@ public:
 	void SetDuckLakeVersion(DuckLakeVersion version) {
 		ducklake_version = version;
 	}
-	//! Whether the metadata schema has the row_group_count columns (added in 1.1-dev1)
-	bool SupportsRowGroupCount() const {
-		return ducklake_version >= DuckLakeVersion::V1_1_DEV_1;
-	}
-	//! Whether the metadata schema has view column tags (added in 1.1-dev1)
-	bool SupportsViewColumnTags() const {
-		return ducklake_version >= DuckLakeVersion::V1_1_DEV_1;
-	}
-	//! Whether the catalog may contain epoch partition transforms (added in 1.1-dev1)
-	bool SupportsEpochPartitionTransforms() const {
+	//! Whether the catalog has the v1.1 metadata features
+	bool SupportsV1_1Metadata() const {
 		return ducklake_version >= DuckLakeVersion::V1_1_DEV_1;
 	}
 
