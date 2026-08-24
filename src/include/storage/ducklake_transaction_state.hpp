@@ -30,6 +30,10 @@ struct DuckLakeCommitContext {
 	std::function<DuckLakeSnapshot()> get_snapshot;
 	//! Executes the batched snapshot/changes SQL against the metadata DB.
 	std::function<unique_ptr<QueryResult>(DuckLakeSnapshot, string &)> execute_commit_batch;
+	//! Classifies metadata-catalog errors that are safe to retry.
+	std::function<bool(const string &)> is_retryable_metadata_error = [](const string &) {
+		return false;
+	};
 	//! Optional hooks below default to a no-op/constant; callers override only the ones they need.
 	//! Clears the metadata manager cache if a clear was pending.
 	std::function<void()> flush_cache_if_pending = []() {
@@ -100,6 +104,9 @@ struct DuckLakeCommitContext {
 	std::function<void(idx_t)> set_committed_snapshot_id;
 	//! Invalidates the cached stats entry for a table after a stats-affecting file drop.
 	std::function<void(idx_t, TableIndex)> invalidate_table_stats_cache = [](idx_t, TableIndex) {
+	};
+	//! Reports a failure after the metadata commit is already durable.
+	std::function<void(const string &)> report_post_commit_error = [](const string &) {
 	};
 	//! Author / message / extra info for the snapshot row.
 	DuckLakeSnapshotCommit commit_info;
