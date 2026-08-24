@@ -5637,8 +5637,8 @@ void DuckLakeMetadataManager::DropEmptyInlinedTablesInternal(bool superseded_onl
 	// Only drop tables that are actually empty (data was flushed to files).
 	string drops;
 	for (auto &candidate : candidates) {
-		auto count_result =
-		    Query(StringUtil::Format("SELECT COUNT(*) FROM {METADATA_CATALOG}.%s", SQLIdentifier(candidate.table_name)));
+		auto count_result = Query(
+		    StringUtil::Format("SELECT COUNT(*) FROM {METADATA_CATALOG}.%s", SQLIdentifier(candidate.table_name)));
 		if (count_result->HasError()) {
 			count_result->GetErrorObject().Throw("Failed to check emptiness of inlined-data table in DuckLake: ");
 		}
