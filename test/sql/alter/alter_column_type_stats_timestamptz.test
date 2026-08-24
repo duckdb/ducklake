@@ -1,0 +1,125 @@
+# name: test/sql/alter/alter_column_type_stats_timestamptz.test
+# description: ALTER COLUMN ... TYPE TIMESTAMPTZ must not leave min/max stats pinned to a time zone
+# group: [alter]
+
+require ducklake
+
+require parquet
+
+require icu
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+SET TimeZone='America/New_York'
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/alter_column_type_stats_timestamptz_files', METADATA_CATALOG 'ducklake_meta')
+
+statement ok
+CREATE TABLE ducklake.t (id INTEGER, v TIMESTAMP)
+
+statement ok
+INSERT INTO ducklake.t SELECT i, TIMESTAMP '2020-06-15 12:00:00' + INTERVAL (i) SECOND FROM range(4096) t(i)
+
+statement ok
+BEGIN
+
+statement ok
+ALTER TABLE ducklake.t ALTER COLUMN v TYPE TIMESTAMPTZ
+
+statement ok
+INSERT INTO ducklake.t SELECT 100000 + i, TIMESTAMPTZ '2019-01-01 00:00:00+00' + INTERVAL (i) SECOND FROM range(4096) t(i)
+
+statement ok
+COMMIT
+
+# the pre-ALTER stats are naive, so the reader's time zone decides what they mean
+query II
+SELECT min_value, max_value
+FROM ducklake_meta.ducklake_table_column_stats
+WHERE table_id = 1 AND column_id = 2
+----
+NULL	NULL
+
+query II
+SELECT min(v), max(v) FROM ducklake.t
+----
+2018-12-31 19:00:00-05	2020-06-15 13:08:15-04
+
+# epoch() blocks the aggregate pushdown, so this reads the files and not the stats
+query II
+SELECT min(epoch(v)), max(epoch(v)) FROM ducklake.t
+----
+1546300800.0	1592240895.0
+
+# a stat frozen as UTC prunes all of these rows
+query I
+SELECT count(*) FROM ducklake.t WHERE v > TIMESTAMPTZ '2020-06-15 13:08:15+00'
+----
+4096
+
+query I
+SELECT count(*) FROM ducklake.t WHERE epoch(v) > 1592226495
+----
+4096
+
+# a DATE crosses the same boundary, so its stats go too
+statement ok
+CREATE TABLE ducklake.t2 (v DATE)
+
+statement ok
+INSERT INTO ducklake.t2 VALUES (DATE '2020-06-15')
+
+statement ok
+BEGIN
+
+statement ok
+ALTER TABLE ducklake.t2 ALTER COLUMN v TYPE TIMESTAMPTZ
+
+statement ok
+INSERT INTO ducklake.t2 VALUES (TIMESTAMPTZ '2019-01-01 00:00:00+00')
+
+statement ok
+COMMIT
+
+query II
+SELECT min_value, max_value
+FROM ducklake_meta.ducklake_table_column_stats
+WHERE table_id = 2 AND column_id = 1
+----
+NULL	NULL
+
+query I
+SELECT v FROM ducklake.t2 ORDER BY v
+----
+2018-12-31 19:00:00-05
+2020-06-15 00:00:00-04
+
+# staying time zone naive still carries the stats across
+statement ok
+CREATE TABLE ducklake.t3 (v TIMESTAMP)
+
+statement ok
+INSERT INTO ducklake.t3 VALUES (TIMESTAMP '2020-06-15 12:00:00'), (TIMESTAMP '2020-06-15 13:00:00')
+
+statement ok
+BEGIN
+
+statement ok
+ALTER TABLE ducklake.t3 ALTER COLUMN v TYPE TIMESTAMP_NS
+
+statement ok
+INSERT INTO ducklake.t3 VALUES (TIMESTAMP_NS '2019-01-01 00:00:00'), (TIMESTAMP_NS '2021-01-01 00:00:00')
+
+statement ok
+COMMIT
+
+query II
+SELECT min_value, max_value
+FROM ducklake_meta.ducklake_table_column_stats
+WHERE table_id = 3 AND column_id = 1
+----
+2019-01-01 00:00:00	2021-01-01 00:00:00
