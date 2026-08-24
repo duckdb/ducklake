@@ -186,7 +186,7 @@ public:
 	virtual void Commit();
 	virtual void Rollback();
 
-	//! Returns true if `message` indicates a retryable conflict (PK/unique/conflict/concurrent).
+	//! Returns true if `message` indicates a retryable conflict.
 	static bool RetryOnError(const string &message);
 
 	DuckLakeCatalog &GetCatalog() {

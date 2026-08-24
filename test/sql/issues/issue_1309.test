@@ -1,0 +1,102 @@
+# name: test/sql/issues/issue_1309.test
+# description: Retry SQLite catalog locks without repeating the DuckLake write
+# group: [issues]
+
+require ducklake
+
+require parquet
+
+require sqlite_scanner
+
+test-env CATALOG_PATH {TEST_DIR}/{UUID}.sqlite
+
+test-env DATA_PATH {TEST_DIR}/issue_1309_data
+
+statement ok
+ATTACH 'ducklake:sqlite:{CATALOG_PATH}' AS lake (
+    DATA_PATH '{DATA_PATH}',
+    METADATA_CATALOG 'meta',
+    META_BUSY_TIMEOUT 10000
+)
+
+statement ok
+CREATE TABLE lake.items(id INTEGER)
+
+statement ok
+CREATE TABLE meta.application_lease(id INTEGER PRIMARY KEY, value INTEGER)
+
+statement ok
+INSERT INTO meta.application_lease VALUES (1, 0)
+
+statement ok
+SET ducklake_max_retry_count=100
+
+statement ok
+SET ducklake_retry_wait_ms=50
+
+statement ok
+SET ducklake_retry_backoff=1.0
+
+concurrentloop threadid 0 2
+
+onlyif threadid=1
+statement ok
+SELECT sleep_ms(1000)
+
+onlyif threadid=0
+statement ok
+BEGIN
+
+onlyif threadid=0
+statement ok
+INSERT INTO lake.items VALUES (42)
+
+onlyif threadid=0
+statement ok
+SELECT sleep_ms(2000)
+
+onlyif threadid=1
+statement ok
+BEGIN
+
+onlyif threadid=1
+statement ok
+UPDATE meta.application_lease SET value=value+1 WHERE id=1
+
+onlyif threadid=1
+statement ok
+SELECT sleep_ms(3000)
+
+onlyif threadid=0
+statement ok
+COMMIT
+
+onlyif threadid=1
+statement ok
+COMMIT
+
+endloop
+
+query I
+SELECT count(*) FROM lake.items
+----
+1
+
+query I
+SELECT value FROM meta.application_lease
+----
+1
+
+statement ok
+SET ducklake_max_retry_count=2
+
+statement ok
+SET ducklake_retry_wait_ms=1
+
+statement ok
+DROP TABLE meta.ducklake_snapshot_changes
+
+statement error
+INSERT INTO lake.items VALUES (126)
+----
+<REGEX>:.*Failed to commit DuckLake transaction\.\nFailed to flush changes into DuckLake: Table with name ducklake_snapshot_changes does not exist!.*
