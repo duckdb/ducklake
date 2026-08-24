@@ -1362,10 +1362,6 @@ bool DuckLakeTransaction::RetryOnError(const string &original_message) {
 	if (StringUtil::Contains(message, "concurrent")) {
 		return true;
 	}
-	// SQLite can skip its busy handler when waiting would deadlock.
-	if (StringUtil::Contains(message, "database is locked")) {
-		return true;
-	}
 	return false;
 }
 
@@ -1448,6 +1444,16 @@ void DuckLakeTransaction::RunCommitLoop(DuckLakeSnapshot transaction_snapshot,
 	};
 	context.execute_commit_batch = [&](DuckLakeSnapshot snapshot, string &query) {
 		return metadata_manager->Execute(snapshot, query);
+	};
+	context.is_retryable_metadata_error = [&](const string &message) {
+		auto &metadata_type = ducklake_catalog.MetadataType();
+		if (metadata_type != "sqlite" && metadata_type != "sqlite_scanner") {
+			return false;
+		}
+		auto lower_message = StringUtil::Lower(message);
+		StringUtil::Trim(lower_message);
+		return StringUtil::EndsWith(lower_message, "database is locked") &&
+		       !StringUtil::Contains(lower_message, "failed to execute query \"commit\": database is locked");
 	};
 	context.flush_cache_if_pending = [&]() {
 		if (metadata_manager->TakePendingCacheClear()) {
@@ -1554,6 +1560,9 @@ void DuckLakeTransaction::RunCommitLoop(DuckLakeSnapshot transaction_snapshot,
 	};
 	context.invalidate_table_stats_cache = [&](idx_t next_file_id, TableIndex table_id) {
 		ducklake_catalog.InvalidateTableStatsCache(next_file_id, table_id);
+	};
+	context.report_post_commit_error = [&](const string &message) {
+		DUCKDB_LOG_WARNING(db, StringUtil::Format("DuckLake post-commit cleanup failed: %s", message));
 	};
 	context.commit_info = state->commit_info;
 	context.supports_v1_1_metadata = ducklake_catalog.SupportsV1_1Metadata();

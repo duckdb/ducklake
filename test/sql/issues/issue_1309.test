@@ -29,6 +29,61 @@ statement ok
 INSERT INTO meta.application_lease VALUES (1, 0)
 
 statement ok
+SET ducklake_max_retry_count=0
+
+concurrentloop threadid 0 2
+
+onlyif threadid=1
+statement ok
+SELECT sleep_ms(1000)
+
+onlyif threadid=0
+statement ok
+BEGIN
+
+onlyif threadid=0
+statement ok
+INSERT INTO lake.items VALUES (84)
+
+onlyif threadid=0
+statement ok
+SELECT sleep_ms(2000)
+
+onlyif threadid=1
+statement ok
+BEGIN
+
+onlyif threadid=1
+statement ok
+UPDATE meta.application_lease SET value=value+1 WHERE id=1
+
+onlyif threadid=1
+statement ok
+SELECT sleep_ms(3000)
+
+onlyif threadid=0
+statement error
+COMMIT
+----
+<REGEX>:.*Exceeded the maximum retry count of 0 set by the ducklake_max_retry_count setting\.\n\. Consider increasing the value with: e\.g\., "SET ducklake_max_retry_count = 0;"\nFailed to flush changes into DuckLake: database is locked.*
+
+onlyif threadid=1
+statement ok
+COMMIT
+
+endloop
+
+query I
+SELECT count(*) FROM lake.items
+----
+0
+
+query I
+SELECT value FROM meta.application_lease
+----
+1
+
+statement ok
 SET ducklake_max_retry_count=100
 
 statement ok
@@ -85,7 +140,7 @@ SELECT count(*) FROM lake.items
 query I
 SELECT value FROM meta.application_lease
 ----
-1
+2
 
 statement ok
 SET ducklake_max_retry_count=2
