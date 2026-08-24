@@ -1362,6 +1362,10 @@ bool DuckLakeTransaction::RetryOnError(const string &original_message) {
 	if (StringUtil::Contains(message, "concurrent")) {
 		return true;
 	}
+	// SQLite can skip its busy handler when waiting would deadlock.
+	if (StringUtil::Contains(message, "database is locked")) {
+		return true;
+	}
 	return false;
 }
 
