@@ -31,29 +31,40 @@ ALTER TABLE ducklake.a ADD COLUMN c4 INTEGER
 statement ok
 ALTER TABLE ducklake.a ADD COLUMN c5 INTEGER
 
+# each statement adds an empty inlined data table
+query I
+SELECT COUNT(*) FROM ducklake_meta.ducklake_inlined_data_tables
+----
+6
+
+# flushing the inlined data drops previous inlined tables
+# but keeps the last one which might still be needed
 statement ok
 CALL ducklake_flush_inlined_data('ducklake')
+
+query I
+SELECT COUNT(*) FROM ducklake_meta.ducklake_inlined_data_tables
+----
+1
 
 statement ok
 CHECKPOINT ducklake
 
+# expiring snapshots deletes the final inlined data if it has already been
+# flushed
 statement ok
 CALL ducklake_expire_snapshots('ducklake', older_than => now())
+
+query I
+SELECT COUNT(*) FROM ducklake_meta.ducklake_inlined_data_tables
+----
+0
 
 statement ok
 CALL ducklake_cleanup_old_files('ducklake', cleanup_all => true)
 
 query I
 SELECT COUNT(*) FROM ducklake_meta.ducklake_snapshot
-----
-1
-
-# only the inlined table for the current schema version may remain.
-# The registry row and its physical table are dropped together in one batch, so the
-# registry count is the backend-portable source of truth (duckdb_tables() cannot see
-# a remote quack-backed metadata catalog).
-query I
-SELECT COUNT(*) FROM ducklake_meta.ducklake_inlined_data_tables
 ----
 1
 
@@ -64,3 +75,8 @@ query IIIIII
 SELECT c0, c1, c2, c3, c4, c5 FROM ducklake.a
 ----
 1	2	3	4	5	6
+
+query I
+SELECT COUNT(*) FROM ducklake_meta.ducklake_inlined_data_tables
+----
+1
