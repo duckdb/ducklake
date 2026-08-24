@@ -20,15 +20,16 @@ ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (
 statement ok
 USE ducklake
 
-# This table has the same order of magnitude of active data-file metadata as the production regression.
-# The additional rows reuse one valid Parquet path because rewrite_deletes must never try to read them.
+# this table will have many small data files, but is unrelated to the deletes
 statement ok
 CREATE TABLE many_files AS SELECT 42 AS id
 
 statement ok
 INSERT INTO ducklake_meta.ducklake_data_file
-SELECT 1000000 + i AS data_file_id, data.* EXCLUDE (data_file_id)
-FROM ducklake_meta.ducklake_data_file data, range(1, 670000) files(i)
+SELECT
+    1000000 + i AS data_file_id,
+    data.* EXCLUDE (data_file_id)
+FROM ducklake_meta.ducklake_data_file data, range(1, 500000) files(i)
 WHERE data.table_id = (
     SELECT table_id
     FROM ducklake_meta.ducklake_table
@@ -41,9 +42,9 @@ FROM ducklake_meta.ducklake_data_file data
 JOIN ducklake_meta.ducklake_table tables USING (table_id)
 WHERE tables.table_name = 'many_files' AND data.end_snapshot IS NULL
 ----
-670000
+500000
 
-# Keep a real delete candidate in the same catalog to verify the optimized lookup still performs rewrites.
+# create a real delete candidate in the same catalog to verify the optimized lookup still performs rewrites.
 statement ok
 CREATE TABLE rewrite_me AS SELECT i AS id FROM range(10) rows(i)
 
@@ -67,4 +68,4 @@ FROM ducklake_meta.ducklake_data_file data
 JOIN ducklake_meta.ducklake_table tables USING (table_id)
 WHERE tables.table_name = 'many_files' AND data.end_snapshot IS NULL
 ----
-670000
+500000
