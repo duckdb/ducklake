@@ -1968,7 +1968,16 @@ void DuckLakeTransactionState::Commit(DuckLakeSnapshot transaction_snapshot,
 			// We perform one initial attempt plus up to max_retry_count retries. Since i is the
 			// zero-based attempt index, we are done retrying once i reaches max_retry_count.
 			bool finished_retrying = i >= retry_config.max_retry_count;
-			if ((!can_retry && !retryable_metadata_error) || !retry_on_error || finished_retrying) {
+			bool should_abort = finished_retrying;
+			if (!retry_on_error) {
+				should_abort = true;
+			}
+			if (!can_retry) {
+				if (!retryable_metadata_error) {
+					should_abort = true;
+				}
+			}
+			if (should_abort) {
 				// we abort after the max retry count
 				CleanupFiles();
 				// Add additional information on the number of retries and suggest to increase it
