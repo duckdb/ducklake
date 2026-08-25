@@ -295,7 +295,7 @@ void UpdateStats(vector<DuckLakeBaseColumnStats> &stats, idx_t c, Vector &data, 
 			break;
 		}
 		default:
-			throw InternalException("Unsupported nested type for inline data stats: %s", data.GetType().ToString());
+			throw NotImplementedException("FIXME: unsupported nested type");
 		}
 		return;
 	}
