@@ -1,0 +1,52 @@
+# name: test/sql/issues/issue_inlined_membership_pinned_reader.test
+# description: a reader pinned with SNAPSHOT_VERSION must not keep serving an inlined table that a concurrent flush dropped
+# group: [issues]
+
+require ducklake
+
+require parquet
+
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/membership_pin.db' AS dl_w (DATA_PATH '{TEST_DIR}/membership_pin_data', DATA_INLINING_ROW_LIMIT 100, METADATA_CATALOG 'm')
+
+statement ok
+CREATE TABLE dl_w.t (id INTEGER, v INTEGER)
+
+statement ok
+INSERT INTO dl_w.t VALUES (1, 10)
+
+# the ALTER bumps schema_version, so the next inline write starts a second generation
+# and the first generation becomes superseded
+statement ok
+ALTER TABLE dl_w.t ADD COLUMN w INTEGER DEFAULT 0
+
+statement ok
+INSERT INTO dl_w.t VALUES (2, 20, 200)
+
+# a reader pinned at the current version. Its transaction snapshot never advances, so a
+# cache keyed on snapshot_id is never displaced for it - the case an unpinned reader escapes
+# by moving to the next snapshot after the flush.
+# SNAPSHOT_VERSION counts the statements above: 1 CREATE TABLE, 2 INSERT, 3 ALTER, 4 INSERT.
+# Inserting a statement above this line makes the attach fail with "No snapshot found at version 4".
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/membership_pin.db' AS dl_r (DATA_PATH '{TEST_DIR}/membership_pin_data', METADATA_CATALOG 'm', SNAPSHOT_VERSION 4)
+
+query I
+SELECT sum(v) FROM dl_r.t
+----
+30
+
+statement ok
+CALL ducklake_flush_inlined_data('dl_w')
+
+# pre-fix: Catalog Error: ... ducklake_inlined_data_<id>_1 does not exist
+query I
+SELECT sum(v) FROM dl_r.t
+----
+30
+
+# and it stays fixed, rather than healing only on re-attach
+query I
+SELECT sum(v) FROM dl_r.t
+----
+30

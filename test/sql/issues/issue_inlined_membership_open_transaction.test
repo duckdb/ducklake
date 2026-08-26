@@ -1,0 +1,62 @@
+# name: test/sql/issues/issue_inlined_membership_open_transaction.test
+# description: a reader inside an open transaction must not keep serving an inlined table that a concurrent flush dropped
+# group: [issues]
+
+require ducklake
+
+require parquet
+
+require sqlite_scanner
+
+# A SQLite metadata store on purpose: a DuckDB metadata catalog gives the reader's metadata
+# connection transaction-lifetime MVCC, so the dropped table stays visible to it and the stale
+# name resolves instead of erroring. sqlite_scanner offers no such guarantee.
+# WAL is required as well - without it the reader's open transaction blocks the writer's commit
+# and the flush never runs, which makes this test pass for the wrong reason.
+statement ok con_w
+ATTACH 'ducklake:sqlite:{TEST_DIR}/membership_txn.sqlite' AS dl_w (DATA_PATH '{TEST_DIR}/membership_txn_data', DATA_INLINING_ROW_LIMIT 100, METADATA_CATALOG 'm', METADATA_PARAMETERS MAP {'journal_mode': 'WAL'})
+
+statement ok con_w
+CREATE TABLE dl_w.t (id INTEGER, v INTEGER)
+
+statement ok con_w
+INSERT INTO dl_w.t VALUES (1, 10)
+
+# the ALTER bumps schema_version, so the next inline write starts a second generation
+# and the first generation becomes superseded
+statement ok con_w
+ALTER TABLE dl_w.t ADD COLUMN w INTEGER DEFAULT 0
+
+statement ok con_w
+INSERT INTO dl_w.t VALUES (2, 20, 200)
+
+statement ok con_r
+ATTACH 'ducklake:sqlite:{TEST_DIR}/membership_txn.sqlite' AS dl_r (DATA_PATH '{TEST_DIR}/membership_txn_data', METADATA_CATALOG 'm2', METADATA_PARAMETERS MAP {'journal_mode': 'WAL'})
+
+# inside an explicit transaction the reader's snapshot never advances, exactly like a pinned
+# attach - so a cache keyed on snapshot_id is never displaced for the rest of the transaction
+statement ok con_r
+BEGIN
+
+query I con_r
+SELECT sum(v) FROM dl_r.t
+----
+30
+
+statement ok con_w
+CALL ducklake_flush_inlined_data('dl_w')
+
+# pre-fix: Invalid Error: ... no such table: ducklake_inlined_data_<id>_1, after which the
+# reader's whole transaction is aborted
+query I con_r
+SELECT sum(v) FROM dl_r.t
+----
+30
+
+statement ok con_r
+COMMIT
+
+query I con_r
+SELECT sum(v) FROM dl_r.t
+----
+30
