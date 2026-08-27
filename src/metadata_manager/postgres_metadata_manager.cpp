@@ -4,8 +4,166 @@
 #include "storage/ducklake_catalog.hpp"
 #include "storage/ducklake_transaction.hpp"
 #include "storage/ducklake_metadata_info.hpp"
+#include "storage/ducklake_table_entry.hpp"
 
 namespace duckdb {
+
+static bool IsDigit(char c) {
+	return c >= '0' && c <= '9';
+}
+
+static bool HasFourDigitDatePrefix(const string &value) {
+	return value.size() >= 10 && IsDigit(value[0]) && IsDigit(value[1]) && IsDigit(value[2]) && IsDigit(value[3]) &&
+	       value[4] == '-' && IsDigit(value[5]) && IsDigit(value[6]) && value[7] == '-' && IsDigit(value[8]) &&
+	       IsDigit(value[9]);
+}
+
+static string WithPostgresBinaryCollation(const string &expression) {
+	return "(" + expression + " COLLATE \"C\")";
+}
+
+static bool IsPostgresTemporalStatsType(const LogicalType &type) {
+	switch (type.id()) {
+	case LogicalTypeId::DATE:
+	case LogicalTypeId::TIMESTAMP:
+	case LogicalTypeId::TIMESTAMP_SEC:
+	case LogicalTypeId::TIMESTAMP_MS:
+	case LogicalTypeId::TIMESTAMP_TZ:
+		return true;
+	default:
+		return false;
+	}
+}
+
+static string GetPostgresStatsType(const LogicalType &type) {
+	switch (type.id()) {
+	case LogicalTypeId::BOOLEAN:
+		return "BOOLEAN";
+	case LogicalTypeId::TINYINT:
+	case LogicalTypeId::SMALLINT:
+		return "SMALLINT";
+	case LogicalTypeId::INTEGER:
+	case LogicalTypeId::UTINYINT:
+	case LogicalTypeId::USMALLINT:
+		return "INTEGER";
+	case LogicalTypeId::BIGINT:
+	case LogicalTypeId::UINTEGER:
+		return "BIGINT";
+	case LogicalTypeId::UBIGINT:
+	case LogicalTypeId::HUGEINT:
+	case LogicalTypeId::UHUGEINT:
+		return "NUMERIC";
+	case LogicalTypeId::FLOAT:
+		return "REAL";
+	case LogicalTypeId::DOUBLE:
+		return "DOUBLE PRECISION";
+	case LogicalTypeId::DATE:
+		return "DATE";
+	case LogicalTypeId::TIMESTAMP:
+	case LogicalTypeId::TIMESTAMP_SEC:
+	case LogicalTypeId::TIMESTAMP_MS:
+		return "TIMESTAMP";
+	case LogicalTypeId::TIMESTAMP_TZ:
+		return "TIMESTAMPTZ";
+	case LogicalTypeId::DECIMAL:
+		return type.ToString();
+	default:
+		return string();
+	}
+}
+
+static bool CanCastPostgresStatsForValueComparison(const LogicalType &type) {
+	return type.IsNumeric() || type.id() == LogicalTypeId::BOOLEAN || IsPostgresTemporalStatsType(type);
+}
+
+static bool CanCastPostgresTemporalValue(const Value &value, const LogicalType &type) {
+	auto string_value = value.ToString();
+	if (!HasFourDigitDatePrefix(string_value)) {
+		return false;
+	}
+	return type.id() != LogicalTypeId::DATE || string_value.size() == 10;
+}
+
+static string PostgresCastValueToTarget(const Value &value, const LogicalType &type) {
+	if (value.IsNull() || value.ToString().find('\0') != string::npos || type.id() == LogicalTypeId::BLOB) {
+		return string();
+	}
+	if (RequiresValueComparison(type) &&
+	    (!CanCastPostgresStatsForValueComparison(type) ||
+	     ((value.type().id() == LogicalTypeId::FLOAT || value.type().id() == LogicalTypeId::DOUBLE) &&
+	      !Value::IsFinite(value.GetValue<double>())))) {
+		return string();
+	}
+	if (!RequiresValueComparison(type) && type.id() != LogicalTypeId::VARCHAR) {
+		return string();
+	}
+	if (IsPostgresTemporalStatsType(type) && !CanCastPostgresTemporalValue(value, type)) {
+		return string();
+	}
+	if (type.IsNumeric()) {
+		return value.ToString();
+	}
+	auto literal = DuckLakeUtil::SQLLiteralToString(value.ToString());
+	if (type.id() == LogicalTypeId::VARCHAR) {
+		return WithPostgresBinaryCollation(literal);
+	}
+	if (IsPostgresTemporalStatsType(type)) {
+		return literal + "::" + GetPostgresStatsType(type);
+	}
+	if (type.id() == LogicalTypeId::BOOLEAN) {
+		return literal + "::BOOLEAN";
+	}
+	return string();
+}
+
+static string PostgresSafeTemporalStatsCast(const string &stats, const LogicalType &type) {
+	string regex;
+	if (type.id() == LogicalTypeId::DATE) {
+		regex = "'^[0-9]{4}-(0[1-9]|1[0-2])-([0][1-9]|[12][0-9]|3[01])$'";
+	} else if (type.id() == LogicalTypeId::TIMESTAMP_TZ) {
+		regex = "'^[0-9]{4}-(0[1-9]|1[0-2])-([0][1-9]|[12][0-9]|3[01]) "
+		        "([01][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9](\\.[0-9]{1,6})?"
+		        "(Z|[+-](0[0-9]|1[0-5])(:[0-5][0-9])?)$'";
+	} else {
+		regex = "'^[0-9]{4}-(0[1-9]|1[0-2])-([0][1-9]|[12][0-9]|3[01])"
+		        "( ([01][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9](\\.[0-9]{1,6})?)?$'";
+	}
+
+	auto year = StringUtil::Format("substring(%s FROM 1 FOR 4)::INTEGER", stats);
+	auto month = StringUtil::Format("substring(%s FROM 6 FOR 2)::INTEGER", stats);
+	auto day = StringUtil::Format("substring(%s FROM 9 FOR 2)::INTEGER", stats);
+	auto max_day = StringUtil::Format(
+	    "(CASE WHEN %s = 2 THEN CASE WHEN mod(%s, 4) = 0 AND (mod(%s, 100) <> 0 OR mod(%s, 400) = 0) "
+	    "THEN 29 ELSE 28 END WHEN %s IN (4, 6, 9, 11) THEN 30 ELSE 31 END)",
+	    month, year, year, year, month);
+	auto valid_date = StringUtil::Format("%s > 0 AND %s <= %s", year, day, max_day);
+	return StringUtil::Format("(CASE WHEN %s ~ %s THEN CASE WHEN %s THEN %s::%s END END)", stats, regex, valid_date,
+	                          stats, GetPostgresStatsType(type));
+}
+
+static string PostgresCastStatsToTarget(const string &stats, const LogicalType &type) {
+	if (IsPostgresTemporalStatsType(type)) {
+		return PostgresSafeTemporalStatsCast(stats, type);
+	}
+	if (CanCastPostgresStatsForValueComparison(type)) {
+		return stats + "::" + GetPostgresStatsType(type);
+	}
+	if (type.id() == LogicalTypeId::VARCHAR) {
+		return WithPostgresBinaryCollation(stats);
+	}
+	return string();
+}
+
+static string GeneratePostgresNativeFileColumnStatsCTEBody(const CTERequirement &requirement, TableIndex table_id) {
+	string select_list = "data_file_id";
+	for (const auto &stat : requirement.referenced_stats) {
+		select_list += ", " + stat;
+	}
+	return StringUtil::Format("  SELECT %s\n"
+	                          "  FROM {METADATA_SCHEMA_ESCAPED}.ducklake_file_column_stats\n"
+	                          "  WHERE column_id = %d AND table_id = %d\n",
+	                          select_list, requirement.column_field_index, table_id.index);
+}
 
 PostgresMetadataManager::PostgresMetadataManager(DuckLakeTransaction &transaction)
     : DuckLakeMetadataManager(transaction) {
@@ -141,6 +299,103 @@ string PostgresMetadataManager::GenerateFileColumnStatsCTEBody(const CTERequirem
 	                          "     FROM {METADATA_SCHEMA_ESCAPED}.ducklake_file_column_stats\n"
 	                          "     WHERE column_id = %d AND table_id = %d')\n",
 	                          select_list, req.column_field_index, table_id.index);
+}
+
+string PostgresMetadataManager::GenerateFileListQuery(DuckLakeTableEntry &table, const FilterPushdownInfo *filter_info,
+                                                      const vector<DuckLakeFileListDynamicFilter> &dynamic_filters) {
+	auto table_id = table.GetTableId();
+	FilterSQLResult filter_result;
+	if (filter_info && !filter_info->column_filters.empty()) {
+		ColumnStatsFilterSQL filter_sql;
+		filter_sql.cast_value = PostgresCastValueToTarget;
+		filter_sql.cast_stats = [](const string &stats, const LogicalType &type, bool is_min) {
+			auto cast = PostgresCastStatsToTarget(stats, type);
+			if (cast.empty() || !IsPostgresTemporalStatsType(type)) {
+				return cast;
+			}
+			return StringUtil::Format("COALESCE(%s, '%s'::%s)", cast, is_min ? "-infinity" : "infinity",
+			                          GetPostgresStatsType(type));
+		};
+		filter_result = ConvertFilterPushdownToSQL(*filter_info, &filter_sql);
+
+		auto bucket_clause = BuildBucketPartitionPruningClause(
+		    table, *filter_info, "{METADATA_SCHEMA_ESCAPED}.ducklake_file_partition_value");
+		if (!bucket_clause.empty()) {
+			if (!filter_result.where_conditions.empty()) {
+				filter_result.where_conditions += " AND ";
+			}
+			filter_result.where_conditions += bucket_clause;
+		}
+	}
+
+	for (const auto &dynamic_filter : dynamic_filters) {
+		auto entry = filter_result.required_ctes.find(dynamic_filter.column_field_index);
+		if (entry == filter_result.required_ctes.end()) {
+			filter_result.required_ctes.emplace(
+			    dynamic_filter.column_field_index,
+			    CTERequirement(dynamic_filter.column_field_index, {"min_value", "max_value"}));
+		} else {
+			entry->second.referenced_stats.insert("min_value");
+			entry->second.referenced_stats.insert("max_value");
+			entry->second.reference_count++;
+		}
+	}
+
+	string remote_query = GenerateCTESectionFromRequirements(filter_result.required_ctes, table_id,
+	                                                         GeneratePostgresNativeFileColumnStatsCTEBody);
+	string stats_select_list;
+	string stats_join_list;
+	string order_by_clause;
+	for (const auto &dynamic_filter : dynamic_filters) {
+		auto cte_name = StringUtil::Format("col_%d_stats", NumericCast<int64_t>(dynamic_filter.column_field_index));
+		stats_select_list += StringUtil::Format(", %s.min_value, %s.max_value", cte_name.c_str(), cte_name.c_str());
+		stats_join_list += StringUtil::Format("\nLEFT JOIN %s ON %s.data_file_id = data.data_file_id", cte_name.c_str(),
+		                                      cte_name.c_str());
+
+		if (order_by_clause.empty() && (dynamic_filter.column_type.id() == LogicalTypeId::VARCHAR ||
+		                                CanCastPostgresStatsForValueComparison(dynamic_filter.column_type))) {
+			const bool seeking_high_values =
+			    dynamic_filter.comparison_type == ExpressionType::COMPARE_GREATERTHAN ||
+			    dynamic_filter.comparison_type == ExpressionType::COMPARE_GREATERTHANOREQUALTO;
+			const bool seeking_low_values = dynamic_filter.comparison_type == ExpressionType::COMPARE_LESSTHAN ||
+			                                dynamic_filter.comparison_type == ExpressionType::COMPARE_LESSTHANOREQUALTO;
+			if (seeking_high_values) {
+				auto stats_expression = PostgresCastStatsToTarget(cte_name + ".max_value", dynamic_filter.column_type);
+				if (!stats_expression.empty()) {
+					order_by_clause = StringUtil::Format("\nORDER BY %s DESC NULLS LAST", stats_expression);
+				}
+			} else if (seeking_low_values) {
+				auto stats_expression = PostgresCastStatsToTarget(cte_name + ".min_value", dynamic_filter.column_type);
+				if (!stats_expression.empty()) {
+					order_by_clause = StringUtil::Format("\nORDER BY %s ASC NULLS LAST", stats_expression);
+				}
+			}
+		}
+	}
+
+	string select_list = "data.data_file_id, " + GetFileSelectList("data") +
+	                     ", data.row_id_start, data.begin_snapshot, data.partial_max, data.mapping_id, " +
+	                     GetDeleteFileSelectList("del") + stats_select_list;
+	remote_query += StringUtil::Format(R"(
+SELECT %s
+FROM {METADATA_SCHEMA_ESCAPED}.ducklake_data_file data
+%s
+LEFT JOIN (
+    SELECT *
+    FROM {METADATA_SCHEMA_ESCAPED}.ducklake_delete_file
+    WHERE table_id=%d AND {SNAPSHOT_ID} >= begin_snapshot
+          AND ({SNAPSHOT_ID} < end_snapshot OR end_snapshot IS NULL)
+    ) del ON del.data_file_id = data.data_file_id
+WHERE data.table_id=%d AND {SNAPSHOT_ID} >= data.begin_snapshot AND ({SNAPSHOT_ID} < data.end_snapshot OR data.end_snapshot IS NULL)
+		)",
+	                                   select_list, stats_join_list, table_id.index, table_id.index);
+	if (!filter_result.where_conditions.empty()) {
+		remote_query += "\nAND " + filter_result.where_conditions;
+	}
+	remote_query += order_by_clause;
+
+	return StringUtil::Format("SELECT * FROM postgres_query({METADATA_CATALOG_NAME_LITERAL}, %s)",
+	                          SQLString(remote_query));
 }
 
 // We need a specialized function here to do a reinterpret for postgres from BLOB to VARCHAR
