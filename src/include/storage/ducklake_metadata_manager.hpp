@@ -131,6 +131,26 @@ struct FilterPushdownQueryComponents {
 	string order_by_clause;
 };
 
+struct DuckLakeFileListDynamicFilter {
+	idx_t column_field_index;
+	ExpressionType comparison_type;
+	LogicalType column_type;
+};
+
+struct DuckLakeFileListBucketConstraint {
+	idx_t partition_key_index;
+	vector<string> partition_values;
+};
+
+//! Structured description of the metadata lookup backing GetFilesForTable.
+struct DuckLakeFileListOperation {
+	TableIndex table_id;
+	DuckLakeSnapshot snapshot;
+	const FilterPushdownInfo *filter_info = nullptr;
+	vector<DuckLakeFileListDynamicFilter> dynamic_filters;
+	vector<DuckLakeFileListBucketConstraint> bucket_constraints;
+};
+
 //! The DuckLake metadata manger is the communication layer between the system and the metadata catalog
 class DuckLakeMetadataManager {
 public:
@@ -445,6 +465,7 @@ protected:
 	virtual string GetLatestSnapshotQuery() const;
 
 	virtual string GenerateFileColumnStatsCTEBody(const CTERequirement &req, TableIndex table_id);
+	virtual string GenerateFileListQuery(const DuckLakeFileListOperation &operation);
 
 	//! Wrap field selections with list aggregation of struct objects (DBMS-specific)
 	//! For DuckDB: LIST({'key1': val1, 'key2': val2, ...})
@@ -517,30 +538,51 @@ private:
 	DuckLakeFileData ReadDeleteFile(DuckLakeTableEntry &table, T &row, idx_t &col_idx, bool is_encrypted);
 
 	bool IsEncrypted() const;
+
+protected:
+	struct ColumnStatsFilterSQL {
+		std::function<bool(const Value &, const LogicalType &)> can_compare;
+		std::function<string(const Value &, const LogicalType &)> cast_value;
+		std::function<string(const string &, const LogicalType &, bool)> cast_stats;
+	};
+	using FileColumnStatsCTEBodyGenerator = std::function<string(const CTERequirement &, TableIndex)>;
+
 	string GetFileSelectList(const string &prefix);
 	string GetDeleteFileSelectList(const string &prefix);
 	FilterPushdownQueryComponents GenerateFilterPushdownComponents(const FilterPushdownInfo &filter_info,
 	                                                               DuckLakeTableEntry &table);
+	vector<DuckLakeFileListBucketConstraint>
+	GetBucketPartitionPruningConstraints(DuckLakeTableEntry &table, const FilterPushdownInfo &filter_info);
+	string GenerateBucketPartitionPruningClause(const vector<DuckLakeFileListBucketConstraint> &constraints,
+	                                            TableIndex table_id, const string &partition_value_table);
 	//! Build an additional WHERE fragment that prunes files by bucket() partition value.
 	//! Returns "" when no foldable equality / IN-list predicate exists on a bucket-partitioned column.
 	//! The fragment uses only string equality against ducklake_file_partition_value, so it works against
 	//! any metadata backend (DuckDB / Postgres / SQLite). Bucket hashes are pre-computed in C++.
 	string BuildBucketPartitionPruningClause(DuckLakeTableEntry &table, const FilterPushdownInfo &filter_info);
-	virtual FilterSQLResult ConvertFilterPushdownToSQL(const FilterPushdownInfo &filter_info);
+	virtual FilterSQLResult ConvertFilterPushdownToSQL(const FilterPushdownInfo &filter_info,
+	                                                   const ColumnStatsFilterSQL *filter_sql = nullptr);
 	virtual string GenerateCTESectionFromRequirements(const unordered_map<idx_t, CTERequirement> &requirements,
-	                                                  TableIndex table_id);
+	                                                  TableIndex table_id,
+	                                                  FileColumnStatsCTEBodyGenerator body_generator = nullptr);
 	virtual string GenerateFilterFromTableFilter(const ExpressionFilter &filter, const LogicalType &type,
 	                                             unordered_set<string> &referenced_stats);
 	virtual string GenerateFilterFromExpression(const Expression &expr, const LogicalType *type,
-	                                            unordered_set<string> &referenced_stats);
+	                                            unordered_set<string> &referenced_stats,
+	                                            const ColumnStatsFilterSQL *filter_sql = nullptr);
 	virtual bool ValueIsFinite(const Value &val);
 	virtual string CastValueToTarget(const Value &val, const LogicalType &type);
 	virtual string CastStatsToTarget(const string &stats, const LogicalType &type);
 	virtual string GenerateConstantFilter(ExpressionType comparison_type, const Value &constant,
-	                                      const LogicalType &type, unordered_set<string> &referenced_stats);
+	                                      const LogicalType &type, unordered_set<string> &referenced_stats,
+	                                      const ColumnStatsFilterSQL *filter_sql = nullptr);
 	virtual string GenerateConstantFilterDouble(ExpressionType comparison_type, const Value &constant,
-	                                            const LogicalType &type, unordered_set<string> &referenced_stats);
-	virtual string GenerateFilterPushdown(const ExpressionFilter &filter, unordered_set<string> &referenced_stats);
+	                                            const LogicalType &type, unordered_set<string> &referenced_stats,
+	                                            const ColumnStatsFilterSQL *filter_sql = nullptr);
+	virtual string GenerateFilterPushdown(const ExpressionFilter &filter, unordered_set<string> &referenced_stats,
+	                                      const ColumnStatsFilterSQL *filter_sql = nullptr);
+	static void MergeColumnStatsRequirement(unordered_map<idx_t, CTERequirement> &requirements,
+	                                        const CTERequirement &new_requirement);
 
 public:
 	//! Read inlined file deletions for regular table scans (no snapshot info per row)

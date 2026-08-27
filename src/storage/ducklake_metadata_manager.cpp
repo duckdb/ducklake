@@ -1336,14 +1336,19 @@ string DuckLakeMetadataManager::CastColumnToTarget(const string &column, const L
 }
 
 string DuckLakeMetadataManager::GenerateConstantFilter(ExpressionType comparison_type, const Value &constant,
-                                                       const LogicalType &type,
-                                                       unordered_set<string> &referenced_stats) {
-	auto constant_str = CastValueToTarget(constant, type);
-	if (constant_str.find('\0') != string::npos) {
+                                                       const LogicalType &type, unordered_set<string> &referenced_stats,
+                                                       const ColumnStatsFilterSQL *filter_sql) {
+	if (filter_sql && !filter_sql->can_compare(constant, type)) {
 		return string();
 	}
-	auto min_value = CastStatsToTarget("min_value", type);
-	auto max_value = CastStatsToTarget("max_value", type);
+	auto constant_str = filter_sql ? filter_sql->cast_value(constant, type) : CastValueToTarget(constant, type);
+	auto min_value =
+	    filter_sql ? filter_sql->cast_stats("min_value", type, true) : CastStatsToTarget("min_value", type);
+	auto max_value =
+	    filter_sql ? filter_sql->cast_stats("max_value", type, false) : CastStatsToTarget("max_value", type);
+	if (constant_str.empty() || min_value.empty() || max_value.empty() || constant_str.find('\0') != string::npos) {
+		return string();
+	}
 	switch (comparison_type) {
 	case ExpressionType::COMPARE_EQUAL:
 		// x = constant
@@ -1385,7 +1390,8 @@ string DuckLakeMetadataManager::GenerateConstantFilter(ExpressionType comparison
 
 string DuckLakeMetadataManager::GenerateConstantFilterDouble(ExpressionType comparison_type, const Value &constant,
                                                              const LogicalType &type,
-                                                             unordered_set<string> &referenced_stats) {
+                                                             unordered_set<string> &referenced_stats,
+                                                             const ColumnStatsFilterSQL *filter_sql) {
 	double constant_val = constant.GetValue<double>();
 	bool constant_is_nan = Value::IsNan(constant_val);
 	switch (comparison_type) {
@@ -1397,7 +1403,7 @@ string DuckLakeMetadataManager::GenerateConstantFilterDouble(ExpressionType comp
 			return "contains_nan";
 		}
 		// else check as if this is a numeric
-		return GenerateConstantFilter(comparison_type, constant, type, referenced_stats);
+		return GenerateConstantFilter(comparison_type, constant, type, referenced_stats, filter_sql);
 	case ExpressionType::COMPARE_GREATERTHANOREQUALTO:
 	case ExpressionType::COMPARE_GREATERTHAN: {
 		if (constant_is_nan) {
@@ -1407,7 +1413,7 @@ string DuckLakeMetadataManager::GenerateConstantFilterDouble(ExpressionType comp
 			return string();
 		}
 		// generate the numeric filter
-		string filter = GenerateConstantFilter(comparison_type, constant, type, referenced_stats);
+		string filter = GenerateConstantFilter(comparison_type, constant, type, referenced_stats, filter_sql);
 		if (filter.empty()) {
 			return string();
 		}
@@ -1422,7 +1428,7 @@ string DuckLakeMetadataManager::GenerateConstantFilterDouble(ExpressionType comp
 			return string();
 		}
 		// these are equivalent to the numeric filter
-		return GenerateConstantFilter(comparison_type, constant, type, referenced_stats);
+		return GenerateConstantFilter(comparison_type, constant, type, referenced_stats, filter_sql);
 	case ExpressionType::COMPARE_NOTEQUAL: {
 		// x <> constant
 		if (constant_is_nan) {
@@ -1432,7 +1438,7 @@ string DuckLakeMetadataManager::GenerateConstantFilterDouble(ExpressionType comp
 			return string();
 		}
 		// generate the numeric filter
-		string filter = GenerateConstantFilter(comparison_type, constant, type, referenced_stats);
+		string filter = GenerateConstantFilter(comparison_type, constant, type, referenced_stats, filter_sql);
 		if (filter.empty()) {
 			return string();
 		}
@@ -1447,7 +1453,8 @@ string DuckLakeMetadataManager::GenerateConstantFilterDouble(ExpressionType comp
 }
 
 string DuckLakeMetadataManager::GenerateFilterFromExpression(const Expression &expr, const LogicalType *type,
-                                                             unordered_set<string> &referenced_stats) {
+                                                             unordered_set<string> &referenced_stats,
+                                                             const ColumnStatsFilterSQL *filter_sql) {
 	if (BoundComparisonExpression::IsComparison(expr)) {
 		auto &comparison = expr.Cast<BoundFunctionExpression>();
 		auto &left = BoundComparisonExpression::Left(comparison);
@@ -1469,9 +1476,10 @@ string DuckLakeMetadataManager::GenerateFilterFromExpression(const Expression &e
 		case LogicalTypeId::FLOAT:
 		case LogicalTypeId::DOUBLE:
 			return GenerateConstantFilterDouble(comparison_type, constant_expr->GetValue(), target_type,
-			                                    referenced_stats);
+			                                    referenced_stats, filter_sql);
 		default:
-			return GenerateConstantFilter(comparison_type, constant_expr->GetValue(), target_type, referenced_stats);
+			return GenerateConstantFilter(comparison_type, constant_expr->GetValue(), target_type, referenced_stats,
+			                              filter_sql);
 		}
 	}
 	switch (expr.GetExpressionClass()) {
@@ -1512,11 +1520,11 @@ string DuckLakeMetadataManager::GenerateFilterFromExpression(const Expression &e
 				case LogicalTypeId::FLOAT:
 				case LogicalTypeId::DOUBLE:
 					next_filter = GenerateConstantFilterDouble(ExpressionType::COMPARE_EQUAL, constant_value,
-					                                           target_type, referenced_stats);
+					                                           target_type, referenced_stats, filter_sql);
 					break;
 				default:
 					next_filter = GenerateConstantFilter(ExpressionType::COMPARE_EQUAL, constant_value, target_type,
-					                                     referenced_stats);
+					                                     referenced_stats, filter_sql);
 					break;
 				}
 				if (next_filter.empty()) {
@@ -1538,7 +1546,7 @@ string DuckLakeMetadataManager::GenerateFilterFromExpression(const Expression &e
 		string result;
 		const auto conjunction_type = expr.GetExpressionType();
 		for (auto &child : conjunction.GetChildren()) {
-			auto child_str = GenerateFilterFromExpression(*child, type, referenced_stats);
+			auto child_str = GenerateFilterFromExpression(*child, type, referenced_stats, filter_sql);
 			if (child_str.empty()) {
 				if (conjunction_type == ExpressionType::CONJUNCTION_OR) {
 					return string();
@@ -1557,13 +1565,13 @@ string DuckLakeMetadataManager::GenerateFilterFromExpression(const Expression &e
 		if (func.Function().GetName() == OptionalFilterScalarFun::NAME && func.BindInfo()) {
 			auto &data = func.BindInfo()->Cast<OptionalFilterFunctionData>();
 			return data.child_filter_expr
-			           ? GenerateFilterFromExpression(*data.child_filter_expr, type, referenced_stats)
+			           ? GenerateFilterFromExpression(*data.child_filter_expr, type, referenced_stats, filter_sql)
 			           : string();
 		}
 		if (func.Function().GetName() == SelectivityOptionalFilterScalarFun::NAME && func.BindInfo()) {
 			auto &data = func.BindInfo()->Cast<SelectivityOptionalFilterFunctionData>();
 			return data.child_filter_expr
-			           ? GenerateFilterFromExpression(*data.child_filter_expr, type, referenced_stats)
+			           ? GenerateFilterFromExpression(*data.child_filter_expr, type, referenced_stats, filter_sql)
 			           : string();
 		}
 		return string();
@@ -1574,22 +1582,27 @@ string DuckLakeMetadataManager::GenerateFilterFromExpression(const Expression &e
 }
 
 string DuckLakeMetadataManager::GenerateFilterPushdown(const ExpressionFilter &filter,
-                                                       unordered_set<string> &referenced_stats) {
+                                                       unordered_set<string> &referenced_stats,
+                                                       const ColumnStatsFilterSQL *filter_sql) {
 	if (!filter.expr) {
 		return string();
 	}
-	return GenerateFilterFromExpression(*filter.expr, nullptr, referenced_stats);
+	return GenerateFilterFromExpression(*filter.expr, nullptr, referenced_stats, filter_sql);
 }
 
-FilterSQLResult DuckLakeMetadataManager::ConvertFilterPushdownToSQL(const FilterPushdownInfo &filter_info) {
+FilterSQLResult DuckLakeMetadataManager::ConvertFilterPushdownToSQL(const FilterPushdownInfo &filter_info,
+                                                                    const ColumnStatsFilterSQL *filter_sql) {
 	FilterSQLResult result;
 	string conditions;
 
 	for (const auto &entry : filter_info.column_filters) {
 		const auto &column_filter = entry.second;
+		if (!column_filter.table_filter) {
+			continue;
+		}
 
 		unordered_set<string> referenced_stats;
-		auto filter_condition = GenerateFilterPushdown(*column_filter.table_filter, referenced_stats);
+		auto filter_condition = GenerateFilterPushdown(*column_filter.table_filter, referenced_stats, filter_sql);
 
 		if (filter_condition.empty()) {
 			continue;
@@ -1646,7 +1659,8 @@ string DuckLakeMetadataManager::GenerateFileColumnStatsCTEBody(const CTERequirem
 
 string
 DuckLakeMetadataManager::GenerateCTESectionFromRequirements(const unordered_map<idx_t, CTERequirement> &requirements,
-                                                            TableIndex table_id) {
+                                                            TableIndex table_id,
+                                                            FileColumnStatsCTEBodyGenerator body_generator) {
 	if (requirements.empty()) {
 		return "";
 	}
@@ -1664,7 +1678,7 @@ DuckLakeMetadataManager::GenerateCTESectionFromRequirements(const unordered_map<
 
 		string materialized_hint = (req.reference_count > 1) ? " AS MATERIALIZED" : " AS NOT MATERIALIZED";
 		cte_section += StringUtil::Format("col_%d_stats%s (\n", req.column_field_index, materialized_hint.c_str());
-		cte_section += GenerateFileColumnStatsCTEBody(req, table_id);
+		cte_section += body_generator ? body_generator(req, table_id) : GenerateFileColumnStatsCTEBody(req, table_id);
 		cte_section += ")";
 	}
 
@@ -1689,11 +1703,17 @@ DuckLakeMetadataManager::GenerateFilterPushdownComponents(const FilterPushdownIn
 	return result;
 }
 
-struct DynamicFilterColumn {
-	idx_t column_field_index;
-	ExpressionType comparison_type;
-	LogicalType column_type;
-};
+void DuckLakeMetadataManager::MergeColumnStatsRequirement(unordered_map<idx_t, CTERequirement> &requirements,
+                                                          const CTERequirement &new_requirement) {
+	auto entry = requirements.find(new_requirement.column_field_index);
+	if (entry == requirements.end()) {
+		requirements.emplace(new_requirement.column_field_index, new_requirement);
+		return;
+	}
+	entry->second.referenced_stats.insert(new_requirement.referenced_stats.begin(),
+	                                      new_requirement.referenced_stats.end());
+	entry->second.reference_count += new_requirement.reference_count;
+}
 
 //! Fold a single constant through the bucket() transform, returning the resulting partition_value
 //! string ("6", "3", ...) that matches what the writer stores. Returns empty optional on any failure
@@ -1807,19 +1827,19 @@ static bool CollectBucketEqualityValues(ClientContext &context, const Expression
 	}
 }
 
-string DuckLakeMetadataManager::BuildBucketPartitionPruningClause(DuckLakeTableEntry &table,
-                                                                  const FilterPushdownInfo &filter_info) {
+vector<DuckLakeFileListBucketConstraint>
+DuckLakeMetadataManager::GetBucketPartitionPruningConstraints(DuckLakeTableEntry &table,
+                                                              const FilterPushdownInfo &filter_info) {
 	auto partition_data = table.GetPartitionData();
 	if (!partition_data) {
-		return string();
+		return {};
 	}
 	auto context_ptr = transaction.context.lock();
 	if (!context_ptr) {
-		return string();
+		return {};
 	}
 	auto &context = *context_ptr;
-	auto table_id = table.GetTableId();
-	string result;
+	vector<DuckLakeFileListBucketConstraint> result;
 
 	for (auto &field : partition_data->fields) {
 		if (field.transform.type != DuckLakeTransformType::BUCKET) {
@@ -1843,110 +1863,81 @@ string DuckLakeMetadataManager::BuildBucketPartitionPruningClause(DuckLakeTableE
 			continue;
 		}
 
-		string in_list;
-		for (auto &v : bucket_values) {
-			if (!in_list.empty()) {
-				in_list += ", ";
-			}
-			in_list += StringUtil::Format("%s", SQLString(v));
-		}
-		string clause = StringUtil::Format(
-		    "data.data_file_id IN (SELECT data_file_id FROM {METADATA_CATALOG}.ducklake_file_partition_value "
-		    "WHERE table_id = %d AND partition_key_index = %d AND partition_value IN (%s))",
-		    table_id.index, field.partition_key_index, in_list);
-
-		if (!result.empty()) {
-			result += " AND ";
-		}
-		result += clause;
+		result.push_back({field.partition_key_index, std::move(bucket_values)});
 	}
 	return result;
 }
 
-vector<DuckLakeFileListEntry> DuckLakeMetadataManager::GetFilesForTable(DuckLakeTableEntry &table,
-                                                                        DuckLakeSnapshot snapshot,
-                                                                        const FilterPushdownInfo *filter_info) {
-	auto table_id = table.GetTableId();
-
-	// If we have Top-N dynamic filter pushdown, include file-level min/max stats for pruning and ordering
-	vector<DynamicFilterColumn> dynamic_filter_columns;
-	if (filter_info) {
-		for (auto &entry : filter_info->column_filters) {
-			auto &col_filter = entry.second;
-			auto dynamic_filter_data = DuckLakeUtil::GetOptionalDynamicFilterData(*col_filter.table_filter);
-			if (dynamic_filter_data) {
-				ExpressionType comparison_type;
-				{
-					lock_guard<mutex> l(dynamic_filter_data->lock);
-					comparison_type = dynamic_filter_data->comparison_type;
-				}
-				dynamic_filter_columns.push_back(
-				    {col_filter.column_field_index, comparison_type, col_filter.column_type});
+string DuckLakeMetadataManager::GenerateBucketPartitionPruningClause(
+    const vector<DuckLakeFileListBucketConstraint> &constraints, TableIndex table_id,
+    const string &partition_value_table) {
+	string result;
+	for (const auto &constraint : constraints) {
+		string in_list;
+		for (const auto &value : constraint.partition_values) {
+			if (!in_list.empty()) {
+				in_list += ", ";
 			}
+			in_list += SQLString(value);
 		}
+		if (!result.empty()) {
+			result += " AND ";
+		}
+		result += StringUtil::Format(
+		    "data.data_file_id IN (SELECT data_file_id FROM %s WHERE table_id = %d AND partition_key_index = %d "
+		    "AND partition_value IN (%s))",
+		    partition_value_table, table_id.index, constraint.partition_key_index, in_list);
 	}
+	return result;
+}
 
-	string query;
-	string where_clause;
+string DuckLakeMetadataManager::BuildBucketPartitionPruningClause(DuckLakeTableEntry &table,
+                                                                  const FilterPushdownInfo &filter_info) {
+	return GenerateBucketPartitionPruningClause(GetBucketPartitionPruningConstraints(table, filter_info),
+	                                            table.GetTableId(), "{METADATA_CATALOG}.ducklake_file_partition_value");
+}
+
+string DuckLakeMetadataManager::GenerateFileListQuery(const DuckLakeFileListOperation &operation) {
 	FilterSQLResult filter_result;
-
-	// Collect static filter CTE requirements before adding Top-N dynamic filter requirements.
-	if (filter_info && !filter_info->column_filters.empty()) {
-		filter_result = ConvertFilterPushdownToSQL(*filter_info);
-		where_clause = filter_result.where_conditions;
-
-		// Add bucket-partition pruning for equality / IN-list predicates on bucket()-partitioned columns.
-		// Composes with the zone-map clause above — pruning narrows files, zone maps stay as a backstop.
-		if (table.GetPartitionData()) {
-			string bucket_clause = BuildBucketPartitionPruningClause(table, *filter_info);
-			if (!bucket_clause.empty()) {
-				if (!where_clause.empty()) {
-					where_clause += " AND ";
-				}
-				where_clause += bucket_clause;
-			}
-		}
+	if (operation.filter_info && !operation.filter_info->column_filters.empty()) {
+		filter_result = ConvertFilterPushdownToSQL(*operation.filter_info);
 	}
 
-	for (auto &dfc : dynamic_filter_columns) {
-		auto entry = filter_result.required_ctes.find(dfc.column_field_index);
-		if (entry == filter_result.required_ctes.end()) {
-			filter_result.required_ctes.emplace(dfc.column_field_index,
-			                                    CTERequirement(dfc.column_field_index, {"min_value", "max_value"}));
-		} else {
-			entry->second.referenced_stats.insert("min_value");
-			entry->second.referenced_stats.insert("max_value");
-			// The static filter has two references to this CTE; the Top-N stats join adds one more.
-			entry->second.reference_count++;
+	auto bucket_clause = GenerateBucketPartitionPruningClause(operation.bucket_constraints, operation.table_id,
+	                                                          "{METADATA_CATALOG}.ducklake_file_partition_value");
+	if (!bucket_clause.empty()) {
+		if (!filter_result.where_conditions.empty()) {
+			filter_result.where_conditions += " AND ";
 		}
+		filter_result.where_conditions += bucket_clause;
 	}
-	query = GenerateCTESectionFromRequirements(filter_result.required_ctes, table_id);
 
+	for (const auto &dynamic_filter : operation.dynamic_filters) {
+		MergeColumnStatsRequirement(filter_result.required_ctes,
+		                            CTERequirement(dynamic_filter.column_field_index, {"min_value", "max_value"}));
+	}
+
+	string query = GenerateCTESectionFromRequirements(filter_result.required_ctes, operation.table_id);
 	string stats_select_list;
 	string stats_join_list;
 	string order_by_clause;
-	for (auto &dfc : dynamic_filter_columns) {
-		auto cte_name = StringUtil::Format("col_%d_stats", NumericCast<int64_t>(dfc.column_field_index));
+	for (const auto &dynamic_filter : operation.dynamic_filters) {
+		auto cte_name = StringUtil::Format("col_%d_stats", NumericCast<int64_t>(dynamic_filter.column_field_index));
 		stats_select_list += StringUtil::Format(", %s.min_value, %s.max_value", cte_name.c_str(), cte_name.c_str());
 		stats_join_list += StringUtil::Format("\nLEFT JOIN %s ON %s.data_file_id = data.data_file_id", cte_name.c_str(),
 		                                      cte_name.c_str());
 
-		// Generate ORDER BY clause to optimize Top-N queries - order files by their min/max stats
-		// so we find satisfying rows early and can skip remaining files via dynamic filter pruning.
-		// We only order by the first dynamic filter column: Top-N typically has a single ordering column,
-		// and multiple columns would have conflicting requirements (e.g., ORDER BY a DESC, b ASC).
 		if (order_by_clause.empty()) {
-			const bool seeking_high_values = dfc.comparison_type == ExpressionType::COMPARE_GREATERTHAN ||
-			                                 dfc.comparison_type == ExpressionType::COMPARE_GREATERTHANOREQUALTO;
-			const bool seeking_low_values = dfc.comparison_type == ExpressionType::COMPARE_LESSTHAN ||
-			                                dfc.comparison_type == ExpressionType::COMPARE_LESSTHANOREQUALTO;
+			const bool seeking_high_values =
+			    dynamic_filter.comparison_type == ExpressionType::COMPARE_GREATERTHAN ||
+			    dynamic_filter.comparison_type == ExpressionType::COMPARE_GREATERTHANOREQUALTO;
+			const bool seeking_low_values = dynamic_filter.comparison_type == ExpressionType::COMPARE_LESSTHAN ||
+			                                dynamic_filter.comparison_type == ExpressionType::COMPARE_LESSTHANOREQUALTO;
 			if (seeking_high_values) {
-				// For DESC Top-N (seeking high values), order by max_value DESC so files with highest values come first
-				auto cast_expr = CastStatsToTarget(cte_name + ".max_value", dfc.column_type);
+				auto cast_expr = CastStatsToTarget(cte_name + ".max_value", dynamic_filter.column_type);
 				order_by_clause = StringUtil::Format("\nORDER BY %s DESC NULLS LAST", cast_expr);
 			} else if (seeking_low_values) {
-				// For ASC Top-N (seeking low values), order by min_value ASC so files with lowest values come first
-				auto cast_expr = CastStatsToTarget(cte_name + ".min_value", dfc.column_type);
+				auto cast_expr = CastStatsToTarget(cte_name + ".min_value", dynamic_filter.column_type);
 				order_by_clause = StringUtil::Format("\nORDER BY %s ASC NULLS LAST", cast_expr);
 			}
 		}
@@ -1955,8 +1946,6 @@ vector<DuckLakeFileListEntry> DuckLakeMetadataManager::GetFilesForTable(DuckLake
 	string select_list = "data.data_file_id, " + GetFileSelectList("data") +
 	                     ", data.row_id_start, data.begin_snapshot, data.partial_max, data.mapping_id, " +
 	                     GetDeleteFileSelectList("del") + stats_select_list;
-
-	// Add base query
 	query += StringUtil::Format(R"(
 SELECT %s
 FROM {METADATA_CATALOG}.ducklake_data_file data
@@ -1969,15 +1958,46 @@ LEFT JOIN (
     ) del ON del.data_file_id = data.data_file_id
 WHERE data.table_id=%d AND {SNAPSHOT_ID} >= data.begin_snapshot AND ({SNAPSHOT_ID} < data.end_snapshot OR data.end_snapshot IS NULL)
 		)",
-	                            select_list, stats_join_list, table_id.index, table_id.index);
-
-	// Add WHERE clause from filters if it was generated
-	if (!where_clause.empty()) {
-		query += "\nAND " + where_clause;
+	                            select_list, stats_join_list, operation.table_id.index, operation.table_id.index);
+	if (!filter_result.where_conditions.empty()) {
+		query += "\nAND " + filter_result.where_conditions;
 	}
-	// Add ORDER BY clause for Top-N optimization if generated
-	query += order_by_clause;
-	auto result = Query(snapshot, query);
+	return query + order_by_clause;
+}
+
+vector<DuckLakeFileListEntry> DuckLakeMetadataManager::GetFilesForTable(DuckLakeTableEntry &table,
+                                                                        DuckLakeSnapshot snapshot,
+                                                                        const FilterPushdownInfo *filter_info) {
+	auto table_id = table.GetTableId();
+	DuckLakeFileListOperation operation;
+	operation.table_id = table_id;
+	operation.snapshot = snapshot;
+	operation.filter_info = filter_info;
+
+	// If we have Top-N dynamic filter pushdown, include file-level min/max stats for pruning and ordering
+	auto &dynamic_filter_columns = operation.dynamic_filters;
+	if (filter_info) {
+		for (auto &entry : filter_info->column_filters) {
+			auto &col_filter = entry.second;
+			if (!col_filter.table_filter) {
+				continue;
+			}
+			auto dynamic_filter_data = DuckLakeUtil::GetOptionalDynamicFilterData(*col_filter.table_filter);
+			if (dynamic_filter_data) {
+				ExpressionType comparison_type;
+				{
+					lock_guard<mutex> l(dynamic_filter_data->lock);
+					comparison_type = dynamic_filter_data->comparison_type;
+				}
+				dynamic_filter_columns.push_back(
+				    {col_filter.column_field_index, comparison_type, col_filter.column_type});
+			}
+		}
+		operation.bucket_constraints = GetBucketPartitionPruningConstraints(table, *filter_info);
+	}
+
+	auto query = GenerateFileListQuery(operation);
+	auto result = Query(operation.snapshot, query);
 	if (result->HasError()) {
 		result->GetErrorObject().Throw("Failed to get data file list from DuckLake: ");
 	}
