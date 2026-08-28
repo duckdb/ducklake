@@ -8,14 +8,11 @@
 
 namespace duckdb {
 
-static bool IsDigit(char c) {
-	return c >= '0' && c <= '9';
-}
-
 static bool HasFourDigitDatePrefix(const string &value) {
-	return value.size() >= 10 && IsDigit(value[0]) && IsDigit(value[1]) && IsDigit(value[2]) && IsDigit(value[3]) &&
-	       value[4] == '-' && IsDigit(value[5]) && IsDigit(value[6]) && value[7] == '-' && IsDigit(value[8]) &&
-	       IsDigit(value[9]);
+	return value.size() >= 10 && StringUtil::CharacterIsDigit(value[0]) && StringUtil::CharacterIsDigit(value[1]) &&
+	       StringUtil::CharacterIsDigit(value[2]) && StringUtil::CharacterIsDigit(value[3]) && value[4] == '-' &&
+	       StringUtil::CharacterIsDigit(value[5]) && StringUtil::CharacterIsDigit(value[6]) && value[7] == '-' &&
+	       StringUtil::CharacterIsDigit(value[8]) && StringUtil::CharacterIsDigit(value[9]);
 }
 
 static string WithPostgresBinaryCollation(const string &expression) {

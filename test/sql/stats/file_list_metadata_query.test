@@ -154,3 +154,36 @@ WHERE ts = TIMESTAMP '2026-01-05' AND score IS NULL
 ORDER BY score DESC LIMIT 1
 ----
 2026-01-05 00:00:00
+
+# FLOAT stats must use PostgreSQL's REAL type for both static pruning and Top-N ordering.
+statement ok
+CREATE TABLE float_events(value FLOAT)
+
+statement ok
+INSERT INTO float_events VALUES (0.25)
+
+statement ok
+INSERT INTO float_events VALUES (2.5)
+
+query I
+SELECT value = 2.5::FLOAT FROM float_events
+WHERE value > 1
+ORDER BY value DESC LIMIT 1
+----
+true
+
+query I
+SELECT CASE WHEN (SELECT catalog_type FROM settings()) = 'postgres' THEN
+    (SELECT COUNT(*) = 1
+     FROM (
+         SELECT lower(regexp_replace(query, '\s+', '', 'g')) AS query
+         FROM duckdb_logs_parsed('DuckLakeMetadata')
+     ) logs
+     WHERE query LIKE 'select*frompostgres_query(%'
+       AND query LIKE '%wherecolumn_id=1andtable_id=3%'
+       AND query LIKE '%col_1_statsasmaterialized%'
+       AND query LIKE '%max_value::real>%'
+       AND query LIKE '%orderbycol_1_stats.max_value::realdescnullslast%')
+    ELSE true END
+----
+true
