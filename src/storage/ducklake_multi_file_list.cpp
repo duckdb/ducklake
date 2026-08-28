@@ -47,83 +47,6 @@ DuckLakeMultiFileList::DuckLakeMultiFileList(DuckLakeFunctionInfo &read_info,
 	inlined_data_tables.push_back(inlined_table);
 }
 
-//! Combine two filters on the same column - both must hold, so AND their conjuncts and drop duplicates
-static unique_ptr<Expression> MergeFilterExpressions(unique_ptr<Expression> left, unique_ptr<Expression> right) {
-	vector<unique_ptr<Expression>> conjuncts;
-	conjuncts.push_back(std::move(left));
-	conjuncts.push_back(std::move(right));
-	LogicalFilter::SplitPredicates(conjuncts);
-
-	vector<unique_ptr<Expression>> merged;
-	for (auto &conjunct : conjuncts) {
-		bool is_duplicate = false;
-		for (auto &existing : merged) {
-			if (existing->Equals(*conjunct)) {
-				is_duplicate = true;
-				break;
-			}
-		}
-		if (!is_duplicate) {
-			merged.push_back(std::move(conjunct));
-		}
-	}
-	if (merged.size() == 1) {
-		return std::move(merged[0]);
-	}
-	auto result = make_uniq<BoundConjunctionExpression>(ExpressionType::CONJUNCTION_AND);
-	for (auto &conjunct : merged) {
-		result->GetChildrenMutable().push_back(std::move(conjunct));
-	}
-	return std::move(result);
-}
-
-static bool IsStructExtract(const Expression &expr) {
-	if (expr.GetExpressionClass() != ExpressionClass::BOUND_FUNCTION) {
-		return false;
-	}
-	auto &func = expr.Cast<BoundFunctionExpression>();
-	return func.Function().GetName() == "struct_extract" && func.GetChildren().size() == 2 &&
-	       func.GetChildren()[1]->GetExpressionClass() == ExpressionClass::BOUND_CONSTANT;
-}
-
-//! Collect the maximal sub-expressions a filter reads a column through, without descending into them
-static void CollectFilterSubjects(const Expression &expr, vector<reference<const Expression>> &subjects) {
-	if (expr.GetExpressionClass() == ExpressionClass::BOUND_COLUMN_REF ||
-	    expr.GetExpressionClass() == ExpressionClass::BOUND_REF || IsStructExtract(expr)) {
-		subjects.push_back(expr);
-		return;
-	}
-	ExpressionIterator::EnumerateChildren(expr,
-	                                      [&](const Expression &child) { CollectFilterSubjects(child, subjects); });
-}
-
-//! Find the single sub-expression a filter constrains, or nullptr if it does not constrain exactly one
-static optional_ptr<const Expression> GetFilterSubject(const Expression &expr) {
-	vector<reference<const Expression>> subjects;
-	CollectFilterSubjects(expr, subjects);
-	if (subjects.empty()) {
-		return nullptr;
-	}
-	for (idx_t i = 1; i < subjects.size(); i++) {
-		if (!subjects[i].get().Equals(subjects[0].get())) {
-			return nullptr;
-		}
-	}
-	return subjects[0].get();
-}
-
-//! Rewrite the subject to the column placeholder an ExpressionFilter is evaluated against
-static unique_ptr<Expression> ReplaceFilterSubject(const Expression &expr, const Expression &subject,
-                                                   const LogicalType &type) {
-	if (expr.Equals(subject)) {
-		return make_uniq<BoundReferenceExpression>(type, 0U);
-	}
-	auto result = expr.Copy();
-	ExpressionIterator::EnumerateChildren(
-	    *result, [&](unique_ptr<Expression> &child) { child = ReplaceFilterSubject(*child, subject, type); });
-	return result;
-}
-
 optional_ptr<const DuckLakeFieldId> DuckLakeMultiFileList::ResolveFilterField(const Expression &subject,
                                                                               column_t column_id) const {
 	if (IsVirtualColumn(column_id)) {
@@ -132,7 +55,7 @@ optional_ptr<const DuckLakeFieldId> DuckLakeMultiFileList::ResolveFilterField(co
 	// peel the struct_extract chain, the innermost extract names the outermost field
 	vector<string> path;
 	reference<const Expression> current = subject;
-	while (IsStructExtract(current.get())) {
+	while (DuckLakeUtil::IsStructExtract(current.get())) {
 		auto &func = current.get().Cast<BoundFunctionExpression>();
 		auto &key = func.GetChildren()[1]->Cast<BoundConstantExpression>().GetValue();
 		if (key.IsNull() || key.type().id() != LogicalTypeId::VARCHAR) {
@@ -157,9 +80,9 @@ optional_ptr<const DuckLakeFieldId> DuckLakeMultiFileList::ResolveFilterField(co
 
 unique_ptr<DuckLakeFilterNode> DuckLakeMultiFileList::GetColumnFilterNode(column_t column_id, const Expression &expr,
                                                                           const LogicalType &column_type) const {
-	auto subject = GetFilterSubject(expr);
+	auto subject = DuckLakeUtil::GetFilterSubject(expr);
 	if (subject) {
-		if (!IsStructExtract(*subject)) {
+		if (!DuckLakeUtil::IsStructExtract(*subject)) {
 			return make_uniq<DuckLakeFilterNode>(
 			    ColumnFilterInfo(read_info.table.GetFieldId(PhysicalIndex(column_id)).GetFieldIndex().index,
 			                     column_type, make_uniq<ExpressionFilter>(expr.Copy())));
@@ -169,7 +92,7 @@ unique_ptr<DuckLakeFilterNode> DuckLakeMultiFileList::GetColumnFilterNode(column
 		if (!field_id) {
 			return nullptr;
 		}
-		auto rewritten = ReplaceFilterSubject(expr, *subject, field_id->Type());
+		auto rewritten = DuckLakeUtil::ReplaceFilterSubject(expr, *subject, field_id->Type());
 		return make_uniq<DuckLakeFilterNode>(ColumnFilterInfo(field_id->GetFieldIndex().index, field_id->Type(),
 		                                                      make_uniq<ExpressionFilter>(std::move(rewritten))));
 	}
@@ -207,13 +130,13 @@ unique_ptr<DuckLakeFilterNode> DuckLakeMultiFileList::GetFilterNode(column_t col
 
 unique_ptr<DuckLakeFilterNode> DuckLakeMultiFileList::GetExpressionFilterNode(MultiFilePushdownInfo &info,
                                                                               const Expression &expr) const {
-	auto subject = GetFilterSubject(expr);
+	auto subject = DuckLakeUtil::GetFilterSubject(expr);
 	if (!subject) {
 		return nullptr;
 	}
 	// the innermost reference identifies the column, the projection index is the same space the filter set uses
 	reference<const Expression> root = *subject;
-	while (IsStructExtract(root.get())) {
+	while (DuckLakeUtil::IsStructExtract(root.get())) {
 		root = *root.get().Cast<BoundFunctionExpression>().GetChildren()[0];
 	}
 	if (root.get().GetExpressionClass() != ExpressionClass::BOUND_COLUMN_REF) {
@@ -228,7 +151,7 @@ unique_ptr<DuckLakeFilterNode> DuckLakeMultiFileList::GetExpressionFilterNode(Mu
 	if (!field_id) {
 		return nullptr;
 	}
-	auto rewritten = ReplaceFilterSubject(expr, *subject, field_id->Type());
+	auto rewritten = DuckLakeUtil::ReplaceFilterSubject(expr, *subject, field_id->Type());
 	return make_uniq<DuckLakeFilterNode>(ColumnFilterInfo(field_id->GetFieldIndex().index, field_id->Type(),
 	                                                      make_uniq<ExpressionFilter>(std::move(rewritten))));
 }
@@ -260,8 +183,8 @@ void DuckLakeMultiFileList::AddFilterNodeToPushdownInfo(FilterPushdownInfo &push
 		return;
 	}
 	auto &existing_filter = entry->second.table_filter;
-	existing_filter = make_uniq<ExpressionFilter>(
-	    MergeFilterExpressions(std::move(existing_filter->expr), std::move(column_filter.table_filter->expr)));
+	existing_filter = make_uniq<ExpressionFilter>(DuckLakeUtil::MergeFilterExpressions(
+	    std::move(existing_filter->expr), std::move(column_filter.table_filter->expr)));
 }
 
 unique_ptr<MultiFileList>

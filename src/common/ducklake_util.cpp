@@ -7,6 +7,12 @@
 #include "duckdb/parser/parser.hpp"
 #include "duckdb/common/file_system.hpp"
 #include "storage/ducklake_metadata_manager.hpp"
+#include "duckdb/planner/expression/bound_constant_expression.hpp"
+#include "duckdb/planner/expression/bound_function_expression.hpp"
+#include "duckdb/planner/expression/bound_reference_expression.hpp"
+#include "duckdb/planner/expression/bound_conjunction_expression.hpp"
+#include "duckdb/planner/expression_iterator.hpp"
+#include "duckdb/planner/operator/logical_filter.hpp"
 #include "duckdb/planner/filter/expression_filter.hpp"
 #include "duckdb/planner/filter/table_filter_functions.hpp"
 #include "duckdb/function/scalar/variant_utils.hpp"
@@ -358,6 +364,84 @@ shared_ptr<DynamicFilterData> DuckLakeUtil::GetOptionalDynamicFilterData(const T
 		}
 	}
 	return nullptr;
+}
+
+//! Combine two filters on the same column - both must hold, so AND their conjuncts and drop duplicates
+unique_ptr<Expression> DuckLakeUtil::MergeFilterExpressions(unique_ptr<Expression> left, unique_ptr<Expression> right) {
+	vector<unique_ptr<Expression>> conjuncts;
+	conjuncts.push_back(std::move(left));
+	conjuncts.push_back(std::move(right));
+	LogicalFilter::SplitPredicates(conjuncts);
+
+	vector<unique_ptr<Expression>> merged;
+	for (auto &conjunct : conjuncts) {
+		bool is_duplicate = false;
+		for (auto &existing : merged) {
+			if (existing->Equals(*conjunct)) {
+				is_duplicate = true;
+				break;
+			}
+		}
+		if (!is_duplicate) {
+			merged.push_back(std::move(conjunct));
+		}
+	}
+	if (merged.size() == 1) {
+		return std::move(merged[0]);
+	}
+	auto result = make_uniq<BoundConjunctionExpression>(ExpressionType::CONJUNCTION_AND);
+	for (auto &conjunct : merged) {
+		result->GetChildrenMutable().push_back(std::move(conjunct));
+	}
+	return std::move(result);
+}
+
+bool DuckLakeUtil::IsStructExtract(const Expression &expr) {
+	if (expr.GetExpressionClass() != ExpressionClass::BOUND_FUNCTION) {
+		return false;
+	}
+	auto &func = expr.Cast<BoundFunctionExpression>();
+	return func.Function().GetName() == "struct_extract" && func.GetChildren().size() == 2 &&
+	       func.GetChildren()[1]->GetExpressionClass() == ExpressionClass::BOUND_CONSTANT;
+}
+
+//! Collect the maximal sub-expressions a filter reads a column through, without descending into them
+static void CollectFilterSubjects(const Expression &expr, vector<reference<const Expression>> &subjects) {
+	if (expr.GetExpressionClass() == ExpressionClass::BOUND_COLUMN_REF ||
+	    expr.GetExpressionClass() == ExpressionClass::BOUND_REF || DuckLakeUtil::IsStructExtract(expr)) {
+		subjects.push_back(expr);
+		return;
+	}
+	ExpressionIterator::EnumerateChildren(expr,
+	                                      [&](const Expression &child) { CollectFilterSubjects(child, subjects); });
+}
+
+//! Find the single sub-expression a filter constrains, or nullptr if it does not constrain exactly one
+optional_ptr<const Expression> DuckLakeUtil::GetFilterSubject(const Expression &expr) {
+	vector<reference<const Expression>> subjects;
+	CollectFilterSubjects(expr, subjects);
+	if (subjects.empty()) {
+		return nullptr;
+	}
+	for (idx_t i = 1; i < subjects.size(); i++) {
+		if (!subjects[i].get().Equals(subjects[0].get())) {
+			return nullptr;
+		}
+	}
+	return subjects[0].get();
+}
+
+//! Rewrite the subject to the column placeholder an ExpressionFilter is evaluated against
+unique_ptr<Expression> DuckLakeUtil::ReplaceFilterSubject(const Expression &expr, const Expression &subject,
+                                                          const LogicalType &type) {
+	if (expr.Equals(subject)) {
+		return make_uniq<BoundReferenceExpression>(type, 0U);
+	}
+	auto result = expr.Copy();
+	ExpressionIterator::EnumerateChildren(*result, [&](unique_ptr<Expression> &child) {
+		child = DuckLakeUtil::ReplaceFilterSubject(*child, subject, type);
+	});
+	return result;
 }
 
 bool DuckLakeUtil::IsInlinedSystemColumn(const string &name, bool prefixed_inlined_columns) {
