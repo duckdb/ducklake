@@ -41,7 +41,10 @@ protected:
 	string GetLatestSnapshotQuery() const override;
 	string GenerateFileColumnStatsCTEBody(const CTERequirement &req, TableIndex table_id) override;
 	string GenerateFileListQuery(DuckLakeTableEntry &table, const FilterPushdownInfo *filter_info,
-	                             const vector<DuckLakeFileListDynamicFilter> &dynamic_filters) override;
+	                             const vector<DuckLakeFileListDynamicFilter> &dynamic_filters,
+	                             const string &metadata_table_prefix, const ColumnStatsFilterSQL *filter_sql,
+	                             const FileColumnStatsCTEBodyGenerator &generate_cte_body,
+	                             const FileListStatsCastGenerator &cast_stats) override;
 
 private:
 	unique_ptr<QueryResult> ExecuteQuery(DuckLakeSnapshot snapshot, string &query, string command);

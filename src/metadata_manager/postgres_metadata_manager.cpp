@@ -299,7 +299,10 @@ string PostgresMetadataManager::GenerateFileColumnStatsCTEBody(const CTERequirem
 }
 
 string PostgresMetadataManager::GenerateFileListQuery(DuckLakeTableEntry &table, const FilterPushdownInfo *filter_info,
-                                                      const vector<DuckLakeFileListDynamicFilter> &dynamic_filters) {
+                                                      const vector<DuckLakeFileListDynamicFilter> &dynamic_filters,
+                                                      const string &, const ColumnStatsFilterSQL *,
+                                                      const FileColumnStatsCTEBodyGenerator &,
+                                                      const FileListStatsCastGenerator &) {
 	ColumnStatsFilterSQL filter_sql;
 	filter_sql.cast_value = PostgresCastValueToTarget;
 	filter_sql.cast_stats = [](const string &stats, const LogicalType &type, bool is_min) {

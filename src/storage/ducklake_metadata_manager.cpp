@@ -1875,21 +1875,24 @@ string DuckLakeMetadataManager::BuildBucketPartitionPruningClause(DuckLakeTableE
 }
 
 string DuckLakeMetadataManager::GenerateFileListQuery(DuckLakeTableEntry &table, const FilterPushdownInfo *filter_info,
-                                                      const vector<DuckLakeFileListDynamicFilter> &dynamic_filters) {
-	return GenerateFileListQuery(
-	    table, filter_info, dynamic_filters, "{METADATA_CATALOG}", nullptr,
-	    [this](const CTERequirement &req, TableIndex table_id) {
-		    return GenerateFileColumnStatsCTEBody(req, table_id);
-	    },
-	    [this](const string &stats, const LogicalType &type) { return CastStatsToTarget(stats, type); });
-}
-
-string DuckLakeMetadataManager::GenerateFileListQuery(DuckLakeTableEntry &table, const FilterPushdownInfo *filter_info,
                                                       const vector<DuckLakeFileListDynamicFilter> &dynamic_filters,
                                                       const string &metadata_table_prefix,
                                                       const ColumnStatsFilterSQL *filter_sql,
                                                       const FileColumnStatsCTEBodyGenerator &generate_cte_body,
                                                       const FileListStatsCastGenerator &cast_stats) {
+	auto cte_body = generate_cte_body;
+	if (!cte_body) {
+		cte_body = [this](const CTERequirement &req, TableIndex table_id) {
+			return GenerateFileColumnStatsCTEBody(req, table_id);
+		};
+	}
+	auto stats_cast = cast_stats;
+	if (!stats_cast) {
+		stats_cast = [this](const string &stats, const LogicalType &type) {
+			return CastStatsToTarget(stats, type);
+		};
+	}
+
 	FilterSQLResult filter_result;
 	if (filter_info && !filter_info->column_filters.empty()) {
 		filter_result = ConvertFilterPushdownToSQL(*filter_info, filter_sql);
@@ -1919,7 +1922,7 @@ string DuckLakeMetadataManager::GenerateFileListQuery(DuckLakeTableEntry &table,
 			entry->second.reference_count++;
 		}
 	}
-	string query = GenerateCTESectionFromRequirements(filter_result.required_ctes, table_id, generate_cte_body);
+	string query = GenerateCTESectionFromRequirements(filter_result.required_ctes, table_id, cte_body);
 
 	string stats_select_list;
 	string stats_join_list;
@@ -1942,13 +1945,13 @@ string DuckLakeMetadataManager::GenerateFileListQuery(DuckLakeTableEntry &table,
 			                                dynamic_filter.comparison_type == ExpressionType::COMPARE_LESSTHANOREQUALTO;
 			if (seeking_high_values) {
 				// For DESC Top-N (seeking high values), order by max_value DESC so files with highest values come first
-				auto cast_expr = cast_stats(cte_name + ".max_value", dynamic_filter.column_type);
+				auto cast_expr = stats_cast(cte_name + ".max_value", dynamic_filter.column_type);
 				if (!cast_expr.empty()) {
 					order_by_clause = StringUtil::Format("\nORDER BY %s DESC NULLS LAST", cast_expr);
 				}
 			} else if (seeking_low_values) {
 				// For ASC Top-N (seeking low values), order by min_value ASC so files with lowest values come first
-				auto cast_expr = cast_stats(cte_name + ".min_value", dynamic_filter.column_type);
+				auto cast_expr = stats_cast(cte_name + ".min_value", dynamic_filter.column_type);
 				if (!cast_expr.empty()) {
 					order_by_clause = StringUtil::Format("\nORDER BY %s ASC NULLS LAST", cast_expr);
 				}
