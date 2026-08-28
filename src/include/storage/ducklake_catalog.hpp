@@ -35,9 +35,15 @@ class LogicalGet;
 struct DuckLakeTableStatsCacheEntry : public ObjectCacheEntry {
 	static constexpr idx_t ESTIMATED_BYTES_PER_COLUMN_STATS = 256;
 
-	explicit DuckLakeTableStatsCacheEntry(DuckLakeTableStats stats_p) : stats(std::move(stats_p)) {
+	DuckLakeTableStatsCacheEntry(idx_t schema_version, DuckLakeTableStats stats_p)
+	    : schema_version(schema_version), stats(std::move(stats_p)) {
+	}
+	//! Negative entry: table has no stats at this snapshot.
+	explicit DuckLakeTableStatsCacheEntry(idx_t schema_version) : schema_version(schema_version) {
 	}
 
+	//! Schema version that stamped the stats types
+	idx_t schema_version;
 	DuckLakeTableStats stats;
 
 	static string ObjectType() {
