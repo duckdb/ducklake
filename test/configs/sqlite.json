@@ -38,6 +38,14 @@
       ]
     },
     {
+      "reason": "High retry counts can stall under SQLite metadata contention",
+      "paths": [
+        "test/sql/issues/issue_1248_concurrent_commit_schema_id.test",
+        "test/sql/retry/commit_failure.test",
+        "test/sql/settings/max_retry_count.test"
+      ]
+    },
+    {
       "reason": "Require DATA_PATH",
       "paths": [
         "test/sql/general/default_path.test",
