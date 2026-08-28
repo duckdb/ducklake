@@ -401,12 +401,25 @@ bool DuckLakeUtil::IsStructExtract(const Expression &expr) {
 		return false;
 	}
 	auto &func = expr.Cast<BoundFunctionExpression>();
-	if (func.Function().GetName() != "struct_extract" || func.GetChildren().size() != 2 ||
+	auto &name = func.Function().GetName();
+	if ((name != "struct_extract" && name != "struct_extract_at") || func.GetChildren().size() != 2 ||
 	    func.GetChildren()[1]->GetExpressionClass() != ExpressionClass::BOUND_CONSTANT) {
 		return false;
 	}
 	auto &key = func.GetChildren()[1]->Cast<BoundConstantExpression>().GetValue();
-	return !key.IsNull() && key.type().id() == LogicalTypeId::VARCHAR;
+	if (key.IsNull()) {
+		return false;
+	}
+	if (name == "struct_extract") {
+		return key.type().id() == LogicalTypeId::VARCHAR;
+	}
+	// struct_extract_at takes a one-based position, which only resolves against a struct of known width
+	auto &input_type = func.GetChildren()[0]->GetReturnType();
+	if (!key.type().IsIntegral() || input_type.id() != LogicalTypeId::STRUCT) {
+		return false;
+	}
+	auto position = key.GetValue<int64_t>();
+	return position >= 1 && static_cast<idx_t>(position) <= StructType::GetChildCount(input_type);
 }
 
 //! Walk to the sub-expressions a filter reads a column through, without descending into them
@@ -438,7 +451,14 @@ const Expression &DuckLakeUtil::GetFilterSubjectPath(const Expression &subject, 
 	reference<const Expression> current = subject;
 	while (IsStructExtract(current.get())) {
 		auto &func = current.get().Cast<BoundFunctionExpression>();
-		path.push_back(StringValue::Get(func.GetChildren()[1]->Cast<BoundConstantExpression>().GetValue()));
+		auto &key = func.GetChildren()[1]->Cast<BoundConstantExpression>().GetValue();
+		auto &input_type = func.GetChildren()[0]->GetReturnType();
+		if (key.type().id() == LogicalTypeId::VARCHAR) {
+			path.push_back(StringValue::Get(key));
+		} else {
+			auto position = static_cast<idx_t>(key.GetValue<int64_t>() - 1);
+			path.push_back(StructType::GetChildName(input_type, position).GetIdentifierName());
+		}
 		current = *func.GetChildren()[0];
 	}
 	return current.get();
