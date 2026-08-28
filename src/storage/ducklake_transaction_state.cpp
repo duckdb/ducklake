@@ -1964,20 +1964,12 @@ void DuckLakeTransactionState::Commit(DuckLakeSnapshot transaction_snapshot,
 			// rollback if there is an active transaction
 			context.try_rollback();
 			retryable_metadata_error = retryable_metadata_error || context.is_retryable_metadata_error(error.Message());
-			bool retry_on_error = retryable_metadata_error || DuckLakeTransaction::RetryOnError(error.Message());
+			bool retry_on_error =
+			    retryable_metadata_error || (can_retry && DuckLakeTransaction::RetryOnError(error.Message()));
 			// We perform one initial attempt plus up to max_retry_count retries. Since i is the
 			// zero-based attempt index, we are done retrying once i reaches max_retry_count.
 			bool finished_retrying = i >= retry_config.max_retry_count;
-			bool should_abort = finished_retrying;
-			if (!retry_on_error) {
-				should_abort = true;
-			}
-			if (!can_retry) {
-				if (!retryable_metadata_error) {
-					should_abort = true;
-				}
-			}
-			if (should_abort) {
+			if (!retry_on_error || finished_retrying) {
 				// we abort after the max retry count
 				CleanupFiles();
 				// Add additional information on the number of retries and suggest to increase it
@@ -2008,20 +2000,20 @@ void DuckLakeTransactionState::Commit(DuckLakeSnapshot transaction_snapshot,
 	}
 	// If we got here, this snapshot was successful
 	context.set_committed_snapshot_id(commit_snapshot.snapshot_id);
-	try {
-		for (auto &entry : dropped_file_stats) {
-			context.invalidate_table_stats_cache(commit_snapshot.next_file_id, entry.first);
-		}
-		if (flushed_inlined && !context.skip_drop_empty_inlined) {
+	for (auto &entry : dropped_file_stats) {
+		context.invalidate_table_stats_cache(commit_snapshot.next_file_id, entry.first);
+	}
+	if (flushed_inlined && !context.skip_drop_empty_inlined) {
+		try {
 			DropEmptySupersededInlinedTables(context);
+		} catch (std::exception &ex) {
+			context.report_post_commit_error(ErrorData(ex).Message());
 		}
-		context.set_catalog_version(commit_snapshot.schema_version);
-		if (SchemaChangesMade()) {
-			// No-op if the previous schema version doesn't exist in cache.
-			context.invalidate_schema_cache(commit_snapshot.schema_version - 1);
-		}
-	} catch (std::exception &ex) {
-		context.report_post_commit_error(ErrorData(ex).Message());
+	}
+	context.set_catalog_version(commit_snapshot.schema_version);
+	if (SchemaChangesMade()) {
+		// No-op if the previous schema version doesn't exist in cache.
+		context.invalidate_schema_cache(commit_snapshot.schema_version - 1);
 	}
 }
 

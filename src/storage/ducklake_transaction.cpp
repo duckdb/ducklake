@@ -1446,14 +1446,7 @@ void DuckLakeTransaction::RunCommitLoop(DuckLakeSnapshot transaction_snapshot,
 		return metadata_manager->Execute(snapshot, query);
 	};
 	context.is_retryable_metadata_error = [&](const string &message) {
-		auto &metadata_type = ducklake_catalog.MetadataType();
-		if (metadata_type != "sqlite" && metadata_type != "sqlite_scanner") {
-			return false;
-		}
-		auto lower_message = StringUtil::Lower(message);
-		StringUtil::Trim(lower_message);
-		return StringUtil::EndsWith(lower_message, "database is locked") &&
-		       !StringUtil::Contains(lower_message, "failed to execute query \"commit\": database is locked");
+		return metadata_manager->IsRetryableCommitError(message);
 	};
 	context.flush_cache_if_pending = [&]() {
 		if (metadata_manager->TakePendingCacheClear()) {
