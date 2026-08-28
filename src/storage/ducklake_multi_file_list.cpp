@@ -131,7 +131,12 @@ unique_ptr<DuckLakeFilterNode> DuckLakeMultiFileList::GetExpressionFilterNode(Mu
 	if (root.GetExpressionClass() != ExpressionClass::BOUND_COLUMN_REF) {
 		return nullptr;
 	}
-	auto projection_index = root.Cast<BoundColumnRefExpression>().Binding().column_index;
+	auto &binding = root.Cast<BoundColumnRefExpression>().Binding();
+	if (binding.table_index != info.table_index) {
+		// a reference to a different table tells us nothing about this one
+		return nullptr;
+	}
+	auto projection_index = binding.column_index;
 	if (projection_index >= info.column_ids.size()) {
 		return nullptr;
 	}
