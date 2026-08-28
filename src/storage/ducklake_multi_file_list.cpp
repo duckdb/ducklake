@@ -137,9 +137,6 @@ DuckLakeMultiFileList::DynamicFilterPushdown(MultiFileDynamicPushdownInfo &dynam
 	                                        std::move(pushdown_info));
 }
 
-//! Bounds the size of a generated filter tree so that pathological predicates cannot blow up the query
-static constexpr idx_t FILTER_TREE_NODE_BUDGET = 64;
-
 //! Reduce an expression to per-column filters using the combiner, which also propagates equalities
 unique_ptr<DuckLakeFilterNode> DuckLakeMultiFileList::CombineFilterNode(ClientContext &context,
                                                                         MultiFilePushdownInfo &info,
@@ -175,11 +172,12 @@ unique_ptr<DuckLakeFilterNode> DuckLakeMultiFileList::CombineFilterNode(ClientCo
 
 unique_ptr<DuckLakeFilterNode> DuckLakeMultiFileList::BuildFilterTree(ClientContext &context,
                                                                       MultiFilePushdownInfo &info,
-                                                                      const Expression &expr, idx_t &budget) const {
-	if (budget == 0) {
+                                                                      const Expression &expr,
+                                                                      FilterTreeState &state) const {
+	if (state.budget == 0) {
 		return nullptr;
 	}
-	budget--;
+	state.budget--;
 
 	const bool is_or = expr.GetExpressionType() == ExpressionType::CONJUNCTION_OR;
 	if (!is_or) {
@@ -196,7 +194,7 @@ unique_ptr<DuckLakeFilterNode> DuckLakeMultiFileList::BuildFilterTree(ClientCont
 		                                                  : DuckLakeFilterNodeType::CONJUNCTION_AND);
 		bool complete = true;
 		for (auto &child : conjunction.GetChildren()) {
-			auto node = BuildFilterTree(context, info, *child, budget);
+			auto node = BuildFilterTree(context, info, *child, state);
 			if (!node) {
 				// a branch we cannot express prunes nothing, so the whole disjunction prunes nothing
 				if (is_or) {
@@ -208,6 +206,7 @@ unique_ptr<DuckLakeFilterNode> DuckLakeMultiFileList::BuildFilterTree(ClientCont
 			if (node->type == DuckLakeFilterNodeType::MATCH_NONE) {
 				// a branch that matches nothing drops out of a disjunction and decides a conjunction
 				if (is_or) {
+					state.removed_branch = true;
 					continue;
 				}
 				return node;
@@ -228,6 +227,17 @@ unique_ptr<DuckLakeFilterNode> DuckLakeMultiFileList::BuildFilterTree(ClientCont
 		return CombineFilterNode(context, info, expr);
 	}
 	return nullptr;
+}
+
+//! Collect the columns a filter tree references
+static void GetFilterTreeColumns(const DuckLakeFilterNode &node, unordered_set<idx_t> &columns) {
+	if (node.type == DuckLakeFilterNodeType::COLUMN_FILTER) {
+		columns.insert(node.column_filter->column_field_index);
+		return;
+	}
+	for (const auto &child : node.children) {
+		GetFilterTreeColumns(*child, columns);
+	}
 }
 
 unique_ptr<MultiFileList> DuckLakeMultiFileList::ComplexFilterPushdown(ClientContext &context,
@@ -267,9 +277,15 @@ unique_ptr<MultiFileList> DuckLakeMultiFileList::ComplexFilterPushdown(ClientCon
 		if (already_pushed) {
 			continue;
 		}
-		idx_t budget = FILTER_TREE_NODE_BUDGET;
-		auto root = BuildFilterTree(context, info, *filter, budget);
+		FilterTreeState state;
+		auto root = BuildFilterTree(context, info, *filter, state);
 		if (!root) {
+			continue;
+		}
+		unordered_set<idx_t> columns;
+		GetFilterTreeColumns(*root, columns);
+		if (columns.size() < 2 && !state.removed_branch) {
+			// a disjunction over a single column is already covered by the per-column filters
 			continue;
 		}
 		DuckLakeFilterTree tree;

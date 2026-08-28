@@ -68,9 +68,17 @@ private:
 	//! Reduce an expression to per-column filters using the FilterCombiner
 	unique_ptr<DuckLakeFilterNode> CombineFilterNode(ClientContext &context, MultiFilePushdownInfo &info,
 	                                                 const Expression &expr) const;
+	//! Tracks what building a filter tree cost and whether it found anything per-column filters cannot express
+	struct FilterTreeState {
+		//! Bounds the tree size so that pathological predicates cannot blow up the generated query
+		static constexpr idx_t NODE_BUDGET = 64;
+
+		idx_t budget = NODE_BUDGET;
+		bool removed_branch = false;
+	};
 	//! Build a filter tree for an expression, or nullptr if it cannot prune files
 	unique_ptr<DuckLakeFilterNode> BuildFilterTree(ClientContext &context, MultiFilePushdownInfo &info,
-	                                               const Expression &expr, idx_t &budget) const;
+	                                               const Expression &expr, FilterTreeState &state) const;
 	//! Get the row_id_start for transaction-local inlined data.
 	idx_t GetTransactionLocalRowIdStart(idx_t transaction_row_start) const;
 
