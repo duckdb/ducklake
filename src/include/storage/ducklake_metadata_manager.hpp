@@ -524,6 +524,8 @@ private:
 	//! The fragment uses only string equality against ducklake_file_partition_value, so it works against
 	//! any metadata backend (DuckDB / Postgres / SQLite). Bucket hashes are pre-computed in C++.
 	string BuildBucketPartitionPruningClause(DuckLakeTableEntry &table, const FilterPushdownInfo &filter_info);
+	//! Emit the condition for a single-column filter, registering the stats its CTE must project
+	string GenerateColumnFilterCondition(const ColumnFilterInfo &column_filter, FilterSQLResult &result);
 	virtual FilterSQLResult ConvertFilterPushdownToSQL(const FilterPushdownInfo &filter_info);
 	virtual string GenerateCTESectionFromRequirements(const map<idx_t, CTERequirement> &requirements,
 	                                                  TableIndex table_id);
