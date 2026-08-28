@@ -1876,34 +1876,50 @@ string DuckLakeMetadataManager::BuildBucketPartitionPruningClause(DuckLakeTableE
 
 string DuckLakeMetadataManager::GenerateFileListQuery(DuckLakeTableEntry &table, const FilterPushdownInfo *filter_info,
                                                       const vector<DuckLakeFileListDynamicFilter> &dynamic_filters) {
-	auto table_id = table.GetTableId();
-	string query;
-	string where_clause;
+	auto filter_result = GenerateFileListFilterResult(table, filter_info);
+	return AssembleFileListQuery(
+	    table, std::move(filter_result), dynamic_filters, "{METADATA_CATALOG}",
+	    [this](const CTERequirement &req, TableIndex table_id) {
+		    return GenerateFileColumnStatsCTEBody(req, table_id);
+	    },
+	    [this](const string &stats, const LogicalType &type) { return CastStatsToTarget(stats, type); });
+}
+
+FilterSQLResult DuckLakeMetadataManager::GenerateFileListFilterResult(DuckLakeTableEntry &table,
+                                                                      const FilterPushdownInfo *filter_info,
+                                                                      const ColumnStatsFilterSQL *filter_sql,
+                                                                      const string &partition_value_table) {
 	FilterSQLResult filter_result;
-
-	// Collect static filter CTE requirements before adding Top-N dynamic filter requirements.
-	if (filter_info && !filter_info->column_filters.empty()) {
-		filter_result = ConvertFilterPushdownToSQL(*filter_info);
-		where_clause = filter_result.where_conditions;
-
-		// Add bucket-partition pruning for equality / IN-list predicates on bucket()-partitioned columns.
-		// Composes with the zone-map clause above — pruning narrows files, zone maps stay as a backstop.
-		if (table.GetPartitionData()) {
-			string bucket_clause = BuildBucketPartitionPruningClause(table, *filter_info);
-			if (!bucket_clause.empty()) {
-				if (!where_clause.empty()) {
-					where_clause += " AND ";
-				}
-				where_clause += bucket_clause;
-			}
-		}
+	if (!filter_info || filter_info->column_filters.empty()) {
+		return filter_result;
 	}
 
-	for (const auto &dfc : dynamic_filters) {
-		auto entry = filter_result.required_ctes.find(dfc.column_field_index);
+	filter_result = ConvertFilterPushdownToSQL(*filter_info, filter_sql);
+	if (table.GetPartitionData()) {
+		auto bucket_clause = BuildBucketPartitionPruningClause(table, *filter_info, partition_value_table);
+		if (!bucket_clause.empty()) {
+			if (!filter_result.where_conditions.empty()) {
+				filter_result.where_conditions += " AND ";
+			}
+			filter_result.where_conditions += bucket_clause;
+		}
+	}
+	return filter_result;
+}
+
+string DuckLakeMetadataManager::AssembleFileListQuery(DuckLakeTableEntry &table, FilterSQLResult filter_result,
+                                                      const vector<DuckLakeFileListDynamicFilter> &dynamic_filters,
+                                                      const string &metadata_table_prefix,
+                                                      const FileColumnStatsCTEBodyGenerator &generate_cte_body,
+                                                      const FileListStatsCastGenerator &cast_stats) {
+	auto table_id = table.GetTableId();
+
+	for (const auto &dynamic_filter : dynamic_filters) {
+		auto entry = filter_result.required_ctes.find(dynamic_filter.column_field_index);
 		if (entry == filter_result.required_ctes.end()) {
-			filter_result.required_ctes.emplace(dfc.column_field_index,
-			                                    CTERequirement(dfc.column_field_index, {"min_value", "max_value"}));
+			filter_result.required_ctes.emplace(
+			    dynamic_filter.column_field_index,
+			    CTERequirement(dynamic_filter.column_field_index, {"min_value", "max_value"}));
 		} else {
 			entry->second.referenced_stats.insert("min_value");
 			entry->second.referenced_stats.insert("max_value");
@@ -1911,13 +1927,13 @@ string DuckLakeMetadataManager::GenerateFileListQuery(DuckLakeTableEntry &table,
 			entry->second.reference_count++;
 		}
 	}
-	query = GenerateCTESectionFromRequirements(filter_result.required_ctes, table_id);
+	string query = GenerateCTESectionFromRequirements(filter_result.required_ctes, table_id, generate_cte_body);
 
 	string stats_select_list;
 	string stats_join_list;
 	string order_by_clause;
-	for (const auto &dfc : dynamic_filters) {
-		auto cte_name = StringUtil::Format("col_%d_stats", NumericCast<int64_t>(dfc.column_field_index));
+	for (const auto &dynamic_filter : dynamic_filters) {
+		auto cte_name = StringUtil::Format("col_%d_stats", NumericCast<int64_t>(dynamic_filter.column_field_index));
 		stats_select_list += StringUtil::Format(", %s.min_value, %s.max_value", cte_name.c_str(), cte_name.c_str());
 		stats_join_list += StringUtil::Format("\nLEFT JOIN %s ON %s.data_file_id = data.data_file_id", cte_name.c_str(),
 		                                      cte_name.c_str());
@@ -1927,18 +1943,23 @@ string DuckLakeMetadataManager::GenerateFileListQuery(DuckLakeTableEntry &table,
 		// We only order by the first dynamic filter column: Top-N typically has a single ordering column,
 		// and multiple columns would have conflicting requirements (e.g., ORDER BY a DESC, b ASC).
 		if (order_by_clause.empty()) {
-			const bool seeking_high_values = dfc.comparison_type == ExpressionType::COMPARE_GREATERTHAN ||
-			                                 dfc.comparison_type == ExpressionType::COMPARE_GREATERTHANOREQUALTO;
-			const bool seeking_low_values = dfc.comparison_type == ExpressionType::COMPARE_LESSTHAN ||
-			                                dfc.comparison_type == ExpressionType::COMPARE_LESSTHANOREQUALTO;
+			const bool seeking_high_values =
+			    dynamic_filter.comparison_type == ExpressionType::COMPARE_GREATERTHAN ||
+			    dynamic_filter.comparison_type == ExpressionType::COMPARE_GREATERTHANOREQUALTO;
+			const bool seeking_low_values = dynamic_filter.comparison_type == ExpressionType::COMPARE_LESSTHAN ||
+			                                dynamic_filter.comparison_type == ExpressionType::COMPARE_LESSTHANOREQUALTO;
 			if (seeking_high_values) {
 				// For DESC Top-N (seeking high values), order by max_value DESC so files with highest values come first
-				auto cast_expr = CastStatsToTarget(cte_name + ".max_value", dfc.column_type);
-				order_by_clause = StringUtil::Format("\nORDER BY %s DESC NULLS LAST", cast_expr);
+				auto cast_expr = cast_stats(cte_name + ".max_value", dynamic_filter.column_type);
+				if (!cast_expr.empty()) {
+					order_by_clause = StringUtil::Format("\nORDER BY %s DESC NULLS LAST", cast_expr);
+				}
 			} else if (seeking_low_values) {
 				// For ASC Top-N (seeking low values), order by min_value ASC so files with lowest values come first
-				auto cast_expr = CastStatsToTarget(cte_name + ".min_value", dfc.column_type);
-				order_by_clause = StringUtil::Format("\nORDER BY %s ASC NULLS LAST", cast_expr);
+				auto cast_expr = cast_stats(cte_name + ".min_value", dynamic_filter.column_type);
+				if (!cast_expr.empty()) {
+					order_by_clause = StringUtil::Format("\nORDER BY %s ASC NULLS LAST", cast_expr);
+				}
 			}
 		}
 	}
@@ -1950,20 +1971,21 @@ string DuckLakeMetadataManager::GenerateFileListQuery(DuckLakeTableEntry &table,
 	// Add base query
 	query += StringUtil::Format(R"(
 SELECT %s
-FROM {METADATA_CATALOG}.ducklake_data_file data
+FROM %s.ducklake_data_file data
 %s
 LEFT JOIN (
     SELECT *
-    FROM {METADATA_CATALOG}.ducklake_delete_file
+    FROM %s.ducklake_delete_file
     WHERE table_id=%d  AND {SNAPSHOT_ID} >= begin_snapshot
           AND ({SNAPSHOT_ID} < end_snapshot OR end_snapshot IS NULL)
     ) del ON del.data_file_id = data.data_file_id
 WHERE data.table_id=%d AND {SNAPSHOT_ID} >= data.begin_snapshot AND ({SNAPSHOT_ID} < data.end_snapshot OR data.end_snapshot IS NULL)
 		)",
-	                            select_list, stats_join_list, table_id.index, table_id.index);
+	                            select_list, metadata_table_prefix, stats_join_list, metadata_table_prefix,
+	                            table_id.index, table_id.index);
 
-	if (!where_clause.empty()) {
-		query += "\nAND " + where_clause;
+	if (!filter_result.where_conditions.empty()) {
+		query += "\nAND " + filter_result.where_conditions;
 	}
 	return query + order_by_clause;
 }
