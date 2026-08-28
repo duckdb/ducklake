@@ -206,7 +206,7 @@ DuckLakeMultiFileList::DynamicFilterPushdown(MultiFileDynamicPushdownInfo &dynam
 		        .Copy());
 	}
 
-	if (pushdown_info->column_filters.empty()) {
+	if (pushdown_info->Empty()) {
 		// no pushdown possible
 		return nullptr;
 	}

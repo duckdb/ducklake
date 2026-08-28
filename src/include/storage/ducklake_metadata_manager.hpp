@@ -94,7 +94,7 @@ struct ColumnFilterInfo {
 
 	ColumnFilterInfo(const ColumnFilterInfo &other)
 	    : column_field_index(other.column_field_index), column_type(other.column_type),
-	      table_filter(other.table_filter->Copy()) {
+	      table_filter(other.table_filter ? other.table_filter->Copy() : nullptr) {
 	}
 
 	ColumnFilterInfo(ColumnFilterInfo &&other) = default;
