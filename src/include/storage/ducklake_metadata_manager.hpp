@@ -113,17 +113,17 @@ enum class DuckLakeFilterNodeType : uint8_t { COLUMN_FILTER, CONJUNCTION_AND, CO
 
 //! A node in a filter tree - leaves filter a single column, inner nodes combine them across columns
 struct DuckLakeFilterNode {
-	explicit DuckLakeFilterNode(DuckLakeFilterNodeType type_p) : type(type_p) {
-	}
-	explicit DuckLakeFilterNode(ColumnFilterInfo filter)
-	    : type(DuckLakeFilterNodeType::COLUMN_FILTER), column_filter(make_uniq<ColumnFilterInfo>(std::move(filter))) {
-	}
-
 	DuckLakeFilterNodeType type;
 	//! Set for COLUMN_FILTER nodes
 	unique_ptr<ColumnFilterInfo> column_filter;
 	//! Set for conjunction nodes
 	vector<unique_ptr<DuckLakeFilterNode>> children;
+
+	explicit DuckLakeFilterNode(DuckLakeFilterNodeType type_p) : type(type_p) {
+	}
+	explicit DuckLakeFilterNode(ColumnFilterInfo filter)
+	    : type(DuckLakeFilterNodeType::COLUMN_FILTER), column_filter(make_uniq<ColumnFilterInfo>(std::move(filter))) {
+	}
 
 	unique_ptr<DuckLakeFilterNode> Copy() const {
 		if (type == DuckLakeFilterNodeType::COLUMN_FILTER) {

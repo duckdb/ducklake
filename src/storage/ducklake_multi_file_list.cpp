@@ -52,22 +52,13 @@ optional_ptr<const DuckLakeFieldId> DuckLakeMultiFileList::ResolveFilterField(co
 	if (IsVirtualColumn(column_id)) {
 		return nullptr;
 	}
-	// peel the struct_extract chain, the innermost extract names the outermost field
 	vector<string> path;
-	reference<const Expression> current = subject;
-	while (DuckLakeUtil::IsStructExtract(current.get())) {
-		auto &func = current.get().Cast<BoundFunctionExpression>();
-		auto &key = func.GetChildren()[1]->Cast<BoundConstantExpression>().GetValue();
-		if (key.IsNull() || key.type().id() != LogicalTypeId::VARCHAR) {
-			return nullptr;
-		}
-		path.push_back(StringValue::Get(key));
-		current = *func.GetChildren()[0];
-	}
-	if (current.get().GetExpressionClass() != ExpressionClass::BOUND_COLUMN_REF &&
-	    current.get().GetExpressionClass() != ExpressionClass::BOUND_REF) {
+	auto &root = DuckLakeUtil::GetFilterSubjectPath(subject, path);
+	if (root.GetExpressionClass() != ExpressionClass::BOUND_COLUMN_REF &&
+	    root.GetExpressionClass() != ExpressionClass::BOUND_REF) {
 		return nullptr;
 	}
+	// the path was collected from the outside in, so walk it backwards from the containing column
 	optional_ptr<const DuckLakeFieldId> field_id = read_info.table.GetFieldId(PhysicalIndex(column_id));
 	for (auto it = path.rbegin(); it != path.rend(); it++) {
 		field_id = field_id->GetChildByName(*it);
@@ -134,15 +125,13 @@ unique_ptr<DuckLakeFilterNode> DuckLakeMultiFileList::GetExpressionFilterNode(Mu
 	if (!subject) {
 		return nullptr;
 	}
-	// the innermost reference identifies the column, the projection index is the same space the filter set uses
-	reference<const Expression> root = *subject;
-	while (DuckLakeUtil::IsStructExtract(root.get())) {
-		root = *root.get().Cast<BoundFunctionExpression>().GetChildren()[0];
-	}
-	if (root.get().GetExpressionClass() != ExpressionClass::BOUND_COLUMN_REF) {
+	// the reference underneath identifies the column, in the same projection space the filter set uses
+	vector<string> path;
+	auto &root = DuckLakeUtil::GetFilterSubjectPath(*subject, path);
+	if (root.GetExpressionClass() != ExpressionClass::BOUND_COLUMN_REF) {
 		return nullptr;
 	}
-	auto projection_index = root.get().Cast<BoundColumnRefExpression>().Binding().column_index;
+	auto projection_index = root.Cast<BoundColumnRefExpression>().Binding().column_index;
 	if (projection_index >= info.column_ids.size()) {
 		return nullptr;
 	}

@@ -401,34 +401,47 @@ bool DuckLakeUtil::IsStructExtract(const Expression &expr) {
 		return false;
 	}
 	auto &func = expr.Cast<BoundFunctionExpression>();
-	return func.Function().GetName() == "struct_extract" && func.GetChildren().size() == 2 &&
-	       func.GetChildren()[1]->GetExpressionClass() == ExpressionClass::BOUND_CONSTANT;
+	if (func.Function().GetName() != "struct_extract" || func.GetChildren().size() != 2 ||
+	    func.GetChildren()[1]->GetExpressionClass() != ExpressionClass::BOUND_CONSTANT) {
+		return false;
+	}
+	auto &key = func.GetChildren()[1]->Cast<BoundConstantExpression>().GetValue();
+	return !key.IsNull() && key.type().id() == LogicalTypeId::VARCHAR;
 }
 
-//! Collect the maximal sub-expressions a filter reads a column through, without descending into them
-static void CollectFilterSubjects(const Expression &expr, vector<reference<const Expression>> &subjects) {
-	if (expr.GetExpressionClass() == ExpressionClass::BOUND_COLUMN_REF ||
-	    expr.GetExpressionClass() == ExpressionClass::BOUND_REF || DuckLakeUtil::IsStructExtract(expr)) {
-		subjects.push_back(expr);
+//! Walk to the sub-expressions a filter reads a column through, without descending into them
+static void FindFilterSubject(const Expression &expr, optional_ptr<const Expression> &subject, bool &conflict) {
+	if (conflict) {
 		return;
 	}
-	ExpressionIterator::EnumerateChildren(expr,
-	                                      [&](const Expression &child) { CollectFilterSubjects(child, subjects); });
+	if (expr.GetExpressionClass() == ExpressionClass::BOUND_COLUMN_REF ||
+	    expr.GetExpressionClass() == ExpressionClass::BOUND_REF || DuckLakeUtil::IsStructExtract(expr)) {
+		if (subject && !subject->Equals(expr)) {
+			conflict = true;
+		} else {
+			subject = expr;
+		}
+		return;
+	}
+	ExpressionIterator::EnumerateChildren(
+	    expr, [&](const Expression &child) { FindFilterSubject(child, subject, conflict); });
 }
 
-//! Find the single sub-expression a filter constrains, or nullptr if it does not constrain exactly one
 optional_ptr<const Expression> DuckLakeUtil::GetFilterSubject(const Expression &expr) {
-	vector<reference<const Expression>> subjects;
-	CollectFilterSubjects(expr, subjects);
-	if (subjects.empty()) {
-		return nullptr;
+	optional_ptr<const Expression> subject;
+	bool conflict = false;
+	FindFilterSubject(expr, subject, conflict);
+	return conflict ? nullptr : subject;
+}
+
+const Expression &DuckLakeUtil::GetFilterSubjectPath(const Expression &subject, vector<string> &path) {
+	reference<const Expression> current = subject;
+	while (IsStructExtract(current.get())) {
+		auto &func = current.get().Cast<BoundFunctionExpression>();
+		path.push_back(StringValue::Get(func.GetChildren()[1]->Cast<BoundConstantExpression>().GetValue()));
+		current = *func.GetChildren()[0];
 	}
-	for (idx_t i = 1; i < subjects.size(); i++) {
-		if (!subjects[i].get().Equals(subjects[0].get())) {
-			return nullptr;
-		}
-	}
-	return subjects[0].get();
+	return current.get();
 }
 
 //! Rewrite the subject to the column placeholder an ExpressionFilter is evaluated against
