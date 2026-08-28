@@ -65,6 +65,15 @@ private:
 	                             unique_ptr<TableFilter> filter) const;
 	//! Build a leaf node for a single-column filter, or nullptr for virtual columns
 	unique_ptr<DuckLakeFilterNode> GetFilterNode(column_t column_id, unique_ptr<TableFilter> filter) const;
+	//! Build the node for a filter expression known to read a single column
+	unique_ptr<DuckLakeFilterNode> GetColumnFilterNode(column_t column_id, const Expression &expr,
+	                                                   const LogicalType &column_type) const;
+	//! Record the leaves of a node as single-column filters
+	void AddFilterNodeToPushdownInfo(FilterPushdownInfo &pushdown_info, DuckLakeFilterNode &node) const;
+	//! Build a leaf node directly from an expression that constrains a single column
+	unique_ptr<DuckLakeFilterNode> GetExpressionFilterNode(MultiFilePushdownInfo &info, const Expression &expr) const;
+	//! Resolve the field a filter subject reads, descending into nested fields
+	optional_ptr<const DuckLakeFieldId> ResolveFilterField(const Expression &subject, column_t column_id) const;
 	//! Reduce an expression to per-column filters using the FilterCombiner
 	unique_ptr<DuckLakeFilterNode> CombineFilterNode(ClientContext &context, MultiFilePushdownInfo &info,
 	                                                 const Expression &expr) const;

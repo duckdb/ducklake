@@ -65,6 +65,29 @@ SELECT COUNT(*) FROM ducklake.t WHERE (id < 50 OR category = 3) AND (id > 20 OR 
 ----
 129
 
+# a null check is not expressible as a per-column filter, but still prunes inside a disjunction
+statement ok
+CREATE TABLE ducklake.n(id INTEGER, v INTEGER);
+
+statement ok
+INSERT INTO ducklake.n SELECT i, i FROM range(1, 101) t(i);
+
+statement ok
+INSERT INTO ducklake.n SELECT i, NULL FROM range(101, 201) t(i);
+
+statement ok
+INSERT INTO ducklake.n SELECT i, i FROM range(201, 301) t(i);
+
+query I
+SELECT COUNT(*) FROM ducklake.n WHERE v IS NULL OR id = 250;
+----
+101
+
+query II
+EXPLAIN ANALYZE SELECT COUNT(*) FROM ducklake.n WHERE v IS NULL OR id = 250;
+----
+analyzed_plan	<REGEX>:.*Total Files Read: 2.*
+
 # a branch we cannot express prunes nothing
 query I
 SELECT COUNT(*) FROM ducklake.t WHERE id = 50 OR category::VARCHAR LIKE '%9%';

@@ -11,7 +11,12 @@
 #include "duckdb/main/query_profiler.hpp"
 #include "duckdb/main/secret/secret_manager.hpp"
 #include "duckdb/optimizer/filter_combiner.hpp"
+#include "duckdb/planner/expression/bound_columnref_expression.hpp"
 #include "duckdb/planner/expression/bound_conjunction_expression.hpp"
+#include "duckdb/planner/expression/bound_constant_expression.hpp"
+#include "duckdb/planner/expression/bound_function_expression.hpp"
+#include "duckdb/planner/expression/bound_reference_expression.hpp"
+#include "duckdb/planner/expression_iterator.hpp"
 #include "duckdb/planner/operator/logical_filter.hpp"
 #include "duckdb/planner/table_filter.hpp"
 #include "storage/ducklake_table_entry.hpp"
@@ -72,27 +77,183 @@ static unique_ptr<Expression> MergeFilterExpressions(unique_ptr<Expression> left
 	return std::move(result);
 }
 
+static bool IsStructExtract(const Expression &expr) {
+	if (expr.GetExpressionClass() != ExpressionClass::BOUND_FUNCTION) {
+		return false;
+	}
+	auto &func = expr.Cast<BoundFunctionExpression>();
+	return func.Function().GetName() == "struct_extract" && func.GetChildren().size() == 2 &&
+	       func.GetChildren()[1]->GetExpressionClass() == ExpressionClass::BOUND_CONSTANT;
+}
+
+//! Collect the maximal sub-expressions a filter reads a column through, without descending into them
+static void CollectFilterSubjects(const Expression &expr, vector<reference<const Expression>> &subjects) {
+	if (expr.GetExpressionClass() == ExpressionClass::BOUND_COLUMN_REF ||
+	    expr.GetExpressionClass() == ExpressionClass::BOUND_REF || IsStructExtract(expr)) {
+		subjects.push_back(expr);
+		return;
+	}
+	ExpressionIterator::EnumerateChildren(expr,
+	                                      [&](const Expression &child) { CollectFilterSubjects(child, subjects); });
+}
+
+//! Find the single sub-expression a filter constrains, or nullptr if it does not constrain exactly one
+static optional_ptr<const Expression> GetFilterSubject(const Expression &expr) {
+	vector<reference<const Expression>> subjects;
+	CollectFilterSubjects(expr, subjects);
+	if (subjects.empty()) {
+		return nullptr;
+	}
+	for (idx_t i = 1; i < subjects.size(); i++) {
+		if (!subjects[i].get().Equals(subjects[0].get())) {
+			return nullptr;
+		}
+	}
+	return subjects[0].get();
+}
+
+//! Rewrite the subject to the column placeholder an ExpressionFilter is evaluated against
+static unique_ptr<Expression> ReplaceFilterSubject(const Expression &expr, const Expression &subject,
+                                                   const LogicalType &type) {
+	if (expr.Equals(subject)) {
+		return make_uniq<BoundReferenceExpression>(type, 0U);
+	}
+	auto result = expr.Copy();
+	ExpressionIterator::EnumerateChildren(
+	    *result, [&](unique_ptr<Expression> &child) { child = ReplaceFilterSubject(*child, subject, type); });
+	return result;
+}
+
+optional_ptr<const DuckLakeFieldId> DuckLakeMultiFileList::ResolveFilterField(const Expression &subject,
+                                                                              column_t column_id) const {
+	if (IsVirtualColumn(column_id)) {
+		return nullptr;
+	}
+	// peel the struct_extract chain, the innermost extract names the outermost field
+	vector<string> path;
+	reference<const Expression> current = subject;
+	while (IsStructExtract(current.get())) {
+		auto &func = current.get().Cast<BoundFunctionExpression>();
+		auto &key = func.GetChildren()[1]->Cast<BoundConstantExpression>().GetValue();
+		if (key.IsNull() || key.type().id() != LogicalTypeId::VARCHAR) {
+			return nullptr;
+		}
+		path.push_back(StringValue::Get(key));
+		current = *func.GetChildren()[0];
+	}
+	if (current.get().GetExpressionClass() != ExpressionClass::BOUND_COLUMN_REF &&
+	    current.get().GetExpressionClass() != ExpressionClass::BOUND_REF) {
+		return nullptr;
+	}
+	optional_ptr<const DuckLakeFieldId> field_id = read_info.table.GetFieldId(PhysicalIndex(column_id));
+	for (auto it = path.rbegin(); it != path.rend(); it++) {
+		field_id = field_id->GetChildByName(*it);
+		if (!field_id) {
+			return nullptr;
+		}
+	}
+	return field_id;
+}
+
+unique_ptr<DuckLakeFilterNode> DuckLakeMultiFileList::GetColumnFilterNode(column_t column_id, const Expression &expr,
+                                                                          const LogicalType &column_type) const {
+	auto subject = GetFilterSubject(expr);
+	if (subject) {
+		if (!IsStructExtract(*subject)) {
+			return make_uniq<DuckLakeFilterNode>(
+			    ColumnFilterInfo(read_info.table.GetFieldId(PhysicalIndex(column_id)).GetFieldIndex().index,
+			                     column_type, make_uniq<ExpressionFilter>(expr.Copy())));
+		}
+		// stats for a nested field are stored against that field, not against the column that contains it
+		auto field_id = ResolveFilterField(*subject, column_id);
+		if (!field_id) {
+			return nullptr;
+		}
+		auto rewritten = ReplaceFilterSubject(expr, *subject, field_id->Type());
+		return make_uniq<DuckLakeFilterNode>(ColumnFilterInfo(field_id->GetFieldIndex().index, field_id->Type(),
+		                                                      make_uniq<ExpressionFilter>(std::move(rewritten))));
+	}
+	// a conjunction may constrain several nested fields of the same column, each with their own stats
+	if (expr.GetExpressionType() != ExpressionType::CONJUNCTION_AND) {
+		return nullptr;
+	}
+	auto result = make_uniq<DuckLakeFilterNode>(DuckLakeFilterNodeType::CONJUNCTION_AND);
+	for (auto &child : expr.Cast<BoundConjunctionExpression>().GetChildren()) {
+		auto node = GetColumnFilterNode(column_id, *child, column_type);
+		if (node) {
+			result->children.push_back(std::move(node));
+		}
+	}
+	if (result->children.empty()) {
+		return nullptr;
+	}
+	return std::move(result);
+}
+
 unique_ptr<DuckLakeFilterNode> DuckLakeMultiFileList::GetFilterNode(column_t column_id,
                                                                     unique_ptr<TableFilter> filter) const {
 	if (IsVirtualColumn(column_id)) {
 		return nullptr;
 	}
 	auto column_index = PhysicalIndex(column_id);
-	auto &root_id = read_info.table.GetFieldId(column_index);
-	auto field_index = root_id.GetFieldIndex().index;
 	// Get the column type from the table schema, not from the scan types array
 	const auto &column_type = read_info.column_types[column_index.index];
 	auto expr_filter = ExpressionFilter::FromTableFilter(*filter, column_type);
-	return make_uniq<DuckLakeFilterNode>(ColumnFilterInfo(field_index, column_type, std::move(expr_filter)));
+	if (!expr_filter->expr) {
+		return nullptr;
+	}
+	return GetColumnFilterNode(column_id, *expr_filter->expr, column_type);
+}
+
+unique_ptr<DuckLakeFilterNode> DuckLakeMultiFileList::GetExpressionFilterNode(MultiFilePushdownInfo &info,
+                                                                              const Expression &expr) const {
+	auto subject = GetFilterSubject(expr);
+	if (!subject) {
+		return nullptr;
+	}
+	// the innermost reference identifies the column, the projection index is the same space the filter set uses
+	reference<const Expression> root = *subject;
+	while (IsStructExtract(root.get())) {
+		root = *root.get().Cast<BoundFunctionExpression>().GetChildren()[0];
+	}
+	if (root.get().GetExpressionClass() != ExpressionClass::BOUND_COLUMN_REF) {
+		return nullptr;
+	}
+	auto projection_index = root.get().Cast<BoundColumnRefExpression>().Binding().column_index;
+	if (projection_index >= info.column_ids.size()) {
+		return nullptr;
+	}
+	auto column_id = info.column_ids[projection_index];
+	auto field_id = ResolveFilterField(*subject, column_id);
+	if (!field_id) {
+		return nullptr;
+	}
+	auto rewritten = ReplaceFilterSubject(expr, *subject, field_id->Type());
+	return make_uniq<DuckLakeFilterNode>(ColumnFilterInfo(field_id->GetFieldIndex().index, field_id->Type(),
+	                                                      make_uniq<ExpressionFilter>(std::move(rewritten))));
 }
 
 void DuckLakeMultiFileList::AddFilterToPushdownInfo(FilterPushdownInfo &pushdown_info, column_t column_id,
                                                     unique_ptr<TableFilter> filter) const {
 	auto node = GetFilterNode(column_id, std::move(filter));
-	if (!node) {
+	if (node) {
+		AddFilterNodeToPushdownInfo(pushdown_info, *node);
+	}
+}
+
+void DuckLakeMultiFileList::AddFilterNodeToPushdownInfo(FilterPushdownInfo &pushdown_info,
+                                                        DuckLakeFilterNode &node) const {
+	if (node.type == DuckLakeFilterNodeType::CONJUNCTION_AND) {
+		// every conjunct has to hold, so each can be filtered on separately
+		for (auto &child : node.children) {
+			AddFilterNodeToPushdownInfo(pushdown_info, *child);
+		}
 		return;
 	}
-	auto &column_filter = *node->column_filter;
+	if (node.type != DuckLakeFilterNodeType::COLUMN_FILTER) {
+		return;
+	}
+	auto &column_filter = *node.column_filter;
 	auto entry = pushdown_info.column_filters.find(column_filter.column_field_index);
 	if (entry == pushdown_info.column_filters.end()) {
 		pushdown_info.column_filters.emplace(column_filter.column_field_index, std::move(column_filter));
@@ -224,9 +385,13 @@ unique_ptr<DuckLakeFilterNode> DuckLakeMultiFileList::BuildFilterTree(ClientCont
 
 	if (is_or) {
 		// the branches did not work out - the combiner may still express the disjunction on a single column
-		return CombineFilterNode(context, info, expr);
+		auto node = CombineFilterNode(context, info, expr);
+		if (node) {
+			return node;
+		}
 	}
-	return nullptr;
+	// the combiner only expresses a subset of what we can evaluate against column stats
+	return GetExpressionFilterNode(info, expr);
 }
 
 //! Collect the columns a filter tree references
