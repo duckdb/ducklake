@@ -63,6 +63,14 @@ private:
 	void GetTableDeletions() const;
 	void AddFilterToPushdownInfo(FilterPushdownInfo &pushdown_info, column_t column_id,
 	                             unique_ptr<TableFilter> filter) const;
+	//! Build a leaf node for a single-column filter, or nullptr for virtual columns
+	unique_ptr<DuckLakeFilterNode> GetFilterNode(column_t column_id, unique_ptr<TableFilter> filter) const;
+	//! Reduce an expression to per-column filters using the FilterCombiner
+	unique_ptr<DuckLakeFilterNode> CombineFilterNode(ClientContext &context, MultiFilePushdownInfo &info,
+	                                                 const Expression &expr) const;
+	//! Build a filter tree for an expression, or nullptr if it cannot prune files
+	unique_ptr<DuckLakeFilterNode> BuildFilterTree(ClientContext &context, MultiFilePushdownInfo &info,
+	                                               const Expression &expr, idx_t &budget) const;
 	//! Get the row_id_start for transaction-local inlined data.
 	idx_t GetTransactionLocalRowIdStart(idx_t transaction_row_start) const;
 

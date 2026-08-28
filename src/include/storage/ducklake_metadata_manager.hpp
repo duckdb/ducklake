@@ -109,15 +109,66 @@ struct ColumnFilterInfo {
 	}
 };
 
+enum class DuckLakeFilterNodeType : uint8_t { COLUMN_FILTER, CONJUNCTION_AND, CONJUNCTION_OR, MATCH_NONE };
+
+//! A node in a filter tree - leaves filter a single column, inner nodes combine them across columns
+struct DuckLakeFilterNode {
+	explicit DuckLakeFilterNode(DuckLakeFilterNodeType type_p) : type(type_p) {
+	}
+	explicit DuckLakeFilterNode(ColumnFilterInfo filter)
+	    : type(DuckLakeFilterNodeType::COLUMN_FILTER), column_filter(make_uniq<ColumnFilterInfo>(std::move(filter))) {
+	}
+
+	DuckLakeFilterNodeType type;
+	//! Set for COLUMN_FILTER nodes
+	unique_ptr<ColumnFilterInfo> column_filter;
+	//! Set for conjunction nodes
+	vector<unique_ptr<DuckLakeFilterNode>> children;
+
+	unique_ptr<DuckLakeFilterNode> Copy() const {
+		if (type == DuckLakeFilterNodeType::COLUMN_FILTER) {
+			return make_uniq<DuckLakeFilterNode>(*column_filter);
+		}
+		auto result = make_uniq<DuckLakeFilterNode>(type);
+		for (const auto &child : children) {
+			result->children.push_back(child->Copy());
+		}
+		return result;
+	}
+};
+
+//! A filter tree together with the expression it was derived from
+struct DuckLakeFilterTree {
+	unique_ptr<DuckLakeFilterNode> root;
+	//! Used to recognize the same filter being pushed down again
+	unique_ptr<Expression> source;
+
+	DuckLakeFilterTree Copy() const {
+		DuckLakeFilterTree result;
+		result.root = root->Copy();
+		result.source = source->Copy();
+		return result;
+	}
+};
+
 struct FilterPushdownInfo {
 	unordered_map<idx_t, ColumnFilterInfo> column_filters;
+	//! Cross-column filter trees, which must hold alongside the single-column filters above
+	vector<DuckLakeFilterTree> filter_trees;
 
 	FilterPushdownInfo() = default;
+
+	bool Empty() const {
+		return column_filters.empty() && filter_trees.empty();
+	}
 
 	unique_ptr<FilterPushdownInfo> Copy() const {
 		auto result = make_uniq<FilterPushdownInfo>();
 		for (const auto &entry : column_filters) {
 			result->column_filters.emplace(entry.first, entry.second);
+		}
+		for (const auto &tree : filter_trees) {
+			result->filter_trees.push_back(tree.Copy());
 		}
 		return result;
 	}
@@ -526,6 +577,8 @@ private:
 	string BuildBucketPartitionPruningClause(DuckLakeTableEntry &table, const FilterPushdownInfo &filter_info);
 	//! Emit the condition for a single-column filter, registering the stats its CTE must project
 	string GenerateColumnFilterCondition(const ColumnFilterInfo &column_filter, FilterSQLResult &result);
+	//! Emit the condition for a filter tree, combining the per-column conditions of its leaves
+	string GenerateFilterTreeCondition(const DuckLakeFilterNode &node, FilterSQLResult &result);
 	virtual FilterSQLResult ConvertFilterPushdownToSQL(const FilterPushdownInfo &filter_info);
 	virtual string GenerateCTESectionFromRequirements(const map<idx_t, CTERequirement> &requirements,
 	                                                  TableIndex table_id);

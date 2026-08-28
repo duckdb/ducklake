@@ -1587,6 +1587,18 @@ string DuckLakeMetadataManager::GenerateFilterPushdown(const ExpressionFilter &f
 	return GenerateFilterFromExpression(*filter.expr, nullptr, referenced_stats, stats_alias);
 }
 
+//! Register the stats a column CTE must project - a tree may reference the same column from several
+//! leaves, each asking for its own stats
+static void AddCTERequirement(map<idx_t, CTERequirement> &requirements, idx_t column_field_index,
+                              const unordered_set<string> &referenced_stats) {
+	auto entry = requirements.find(column_field_index);
+	if (entry == requirements.end()) {
+		requirements.emplace(column_field_index, CTERequirement(column_field_index, referenced_stats));
+		return;
+	}
+	entry->second.referenced_stats.insert(referenced_stats.begin(), referenced_stats.end());
+}
+
 string DuckLakeMetadataManager::GenerateColumnFilterCondition(const ColumnFilterInfo &column_filter,
                                                               FilterSQLResult &result) {
 	auto cte_name = StatsCteName(column_filter.column_field_index);
@@ -1625,9 +1637,37 @@ string DuckLakeMetadataManager::GenerateColumnFilterCondition(const ColumnFilter
 		                               filter_condition.c_str());
 	}
 
-	result.required_ctes.emplace(column_filter.column_field_index,
-	                             CTERequirement(column_filter.column_field_index, referenced_stats));
+	AddCTERequirement(result.required_ctes, column_filter.column_field_index, referenced_stats);
 	return condition;
+}
+
+string DuckLakeMetadataManager::GenerateFilterTreeCondition(const DuckLakeFilterNode &node, FilterSQLResult &result) {
+	if (node.type == DuckLakeFilterNodeType::MATCH_NONE) {
+		return "1=0";
+	}
+	if (node.type == DuckLakeFilterNodeType::COLUMN_FILTER) {
+		return GenerateColumnFilterCondition(*node.column_filter, result);
+	}
+	const bool is_or = node.type == DuckLakeFilterNodeType::CONJUNCTION_OR;
+	string condition;
+	for (const auto &child : node.children) {
+		auto child_condition = GenerateFilterTreeCondition(*child, result);
+		if (child_condition.empty()) {
+			// a branch we cannot express prunes nothing, so the whole disjunction prunes nothing
+			if (is_or) {
+				return string();
+			}
+			continue;
+		}
+		if (!condition.empty()) {
+			condition += is_or ? " OR " : " AND ";
+		}
+		condition += child_condition;
+	}
+	if (condition.empty()) {
+		return string();
+	}
+	return "(" + condition + ")";
 }
 
 FilterSQLResult DuckLakeMetadataManager::ConvertFilterPushdownToSQL(const FilterPushdownInfo &filter_info) {
@@ -1641,6 +1681,17 @@ FilterSQLResult DuckLakeMetadataManager::ConvertFilterPushdownToSQL(const Filter
 		}
 		if (!conditions.empty()) {
 			conditions += "\n  AND ";
+		}
+		conditions += condition;
+	}
+
+	for (const auto &tree : filter_info.filter_trees) {
+		auto condition = GenerateFilterTreeCondition(*tree.root, result);
+		if (condition.empty()) {
+			continue;
+		}
+		if (!conditions.empty()) {
+			conditions += " AND ";
 		}
 		conditions += condition;
 	}
@@ -1703,7 +1754,7 @@ DuckLakeMetadataManager::GenerateFilterPushdownComponents(const FilterPushdownIn
 
 	auto table_id = table.GetTableId();
 
-	if (filter_info.column_filters.empty()) {
+	if (filter_info.Empty()) {
 		return result;
 	}
 
@@ -1917,7 +1968,7 @@ vector<DuckLakeFileListEntry> DuckLakeMetadataManager::GetFilesForTable(DuckLake
 	FilterSQLResult filter_result;
 
 	// Collect static filter CTE requirements before adding Top-N dynamic filter requirements.
-	if (filter_info && !filter_info->column_filters.empty()) {
+	if (filter_info && !filter_info->Empty()) {
 		filter_result = ConvertFilterPushdownToSQL(*filter_info);
 		where_clause = filter_result.where_conditions;
 
@@ -2316,7 +2367,7 @@ DuckLakeMetadataManager::GetExtendedFilesForTable(DuckLakeTableEntry &table, Duc
 	string where_clause;
 
 	// Generate CTE section and WHERE clause if we have filter pushdown info
-	if (filter_info && !filter_info->column_filters.empty()) {
+	if (filter_info && !filter_info->Empty()) {
 		auto components = GenerateFilterPushdownComponents(*filter_info, table);
 		query = components.cte_section;
 		join_clause = components.join_clause;
