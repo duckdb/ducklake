@@ -1876,42 +1876,34 @@ string DuckLakeMetadataManager::BuildBucketPartitionPruningClause(DuckLakeTableE
 
 string DuckLakeMetadataManager::GenerateFileListQuery(DuckLakeTableEntry &table, const FilterPushdownInfo *filter_info,
                                                       const vector<DuckLakeFileListDynamicFilter> &dynamic_filters) {
-	auto filter_result = GenerateFileListFilterResult(table, filter_info);
-	return AssembleFileListQuery(
-	    table, std::move(filter_result), dynamic_filters, "{METADATA_CATALOG}",
+	return GenerateFileListQuery(
+	    table, filter_info, dynamic_filters, "{METADATA_CATALOG}", nullptr,
 	    [this](const CTERequirement &req, TableIndex table_id) {
 		    return GenerateFileColumnStatsCTEBody(req, table_id);
 	    },
 	    [this](const string &stats, const LogicalType &type) { return CastStatsToTarget(stats, type); });
 }
 
-FilterSQLResult DuckLakeMetadataManager::GenerateFileListFilterResult(DuckLakeTableEntry &table,
-                                                                      const FilterPushdownInfo *filter_info,
-                                                                      const ColumnStatsFilterSQL *filter_sql,
-                                                                      const string &partition_value_table) {
-	FilterSQLResult filter_result;
-	if (!filter_info || filter_info->column_filters.empty()) {
-		return filter_result;
-	}
-
-	filter_result = ConvertFilterPushdownToSQL(*filter_info, filter_sql);
-	if (table.GetPartitionData()) {
-		auto bucket_clause = BuildBucketPartitionPruningClause(table, *filter_info, partition_value_table);
-		if (!bucket_clause.empty()) {
-			if (!filter_result.where_conditions.empty()) {
-				filter_result.where_conditions += " AND ";
-			}
-			filter_result.where_conditions += bucket_clause;
-		}
-	}
-	return filter_result;
-}
-
-string DuckLakeMetadataManager::AssembleFileListQuery(DuckLakeTableEntry &table, FilterSQLResult filter_result,
+string DuckLakeMetadataManager::GenerateFileListQuery(DuckLakeTableEntry &table, const FilterPushdownInfo *filter_info,
                                                       const vector<DuckLakeFileListDynamicFilter> &dynamic_filters,
                                                       const string &metadata_table_prefix,
+                                                      const ColumnStatsFilterSQL *filter_sql,
                                                       const FileColumnStatsCTEBodyGenerator &generate_cte_body,
                                                       const FileListStatsCastGenerator &cast_stats) {
+	FilterSQLResult filter_result;
+	if (filter_info && !filter_info->column_filters.empty()) {
+		filter_result = ConvertFilterPushdownToSQL(*filter_info, filter_sql);
+		if (table.GetPartitionData()) {
+			auto partition_value_table = metadata_table_prefix + ".ducklake_file_partition_value";
+			auto bucket_clause = BuildBucketPartitionPruningClause(table, *filter_info, partition_value_table);
+			if (!bucket_clause.empty()) {
+				if (!filter_result.where_conditions.empty()) {
+					filter_result.where_conditions += " AND ";
+				}
+				filter_result.where_conditions += bucket_clause;
+			}
+		}
+	}
 	auto table_id = table.GetTableId();
 
 	for (const auto &dynamic_filter : dynamic_filters) {

@@ -545,13 +545,9 @@ protected:
 	                                                   const ColumnStatsFilterSQL *filter_sql = nullptr);
 	using FileColumnStatsCTEBodyGenerator = std::function<string(const CTERequirement &, TableIndex)>;
 	using FileListStatsCastGenerator = std::function<string(const string &, const LogicalType &)>;
-	FilterSQLResult GenerateFileListFilterResult(
-	    DuckLakeTableEntry &table, const FilterPushdownInfo *filter_info,
-	    const ColumnStatsFilterSQL *filter_sql = nullptr,
-	    const string &partition_value_table = "{METADATA_CATALOG}.ducklake_file_partition_value");
-	string AssembleFileListQuery(DuckLakeTableEntry &table, FilterSQLResult filter_result,
+	string GenerateFileListQuery(DuckLakeTableEntry &table, const FilterPushdownInfo *filter_info,
 	                             const vector<DuckLakeFileListDynamicFilter> &dynamic_filters,
-	                             const string &metadata_table_prefix,
+	                             const string &metadata_table_prefix, const ColumnStatsFilterSQL *filter_sql,
 	                             const FileColumnStatsCTEBodyGenerator &generate_cte_body,
 	                             const FileListStatsCastGenerator &cast_stats);
 	string GenerateCTESectionFromRequirements(const unordered_map<idx_t, CTERequirement> &requirements,

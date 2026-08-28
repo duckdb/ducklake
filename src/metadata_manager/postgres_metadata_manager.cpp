@@ -310,11 +310,9 @@ string PostgresMetadataManager::GenerateFileListQuery(DuckLakeTableEntry &table,
 		return StringUtil::Format("COALESCE(%s, '%s'::%s)", cast, is_min ? "-infinity" : "infinity",
 		                          GetPostgresStatsType(type));
 	};
-	auto filter_result = GenerateFileListFilterResult(table, filter_info, &filter_sql,
-	                                                  "{METADATA_SCHEMA_ESCAPED}.ducklake_file_partition_value");
-	auto remote_query =
-	    AssembleFileListQuery(table, std::move(filter_result), dynamic_filters, "{METADATA_SCHEMA_ESCAPED}",
-	                          GeneratePostgresNativeFileColumnStatsCTEBody, PostgresCastStatsToTarget);
+	auto remote_query = DuckLakeMetadataManager::GenerateFileListQuery(
+	    table, filter_info, dynamic_filters, "{METADATA_SCHEMA_ESCAPED}", &filter_sql,
+	    GeneratePostgresNativeFileColumnStatsCTEBody, PostgresCastStatsToTarget);
 
 	return StringUtil::Format("SELECT * FROM postgres_query({METADATA_CATALOG_NAME_LITERAL}, %s)",
 	                          SQLString(remote_query));
