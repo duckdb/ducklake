@@ -11,6 +11,8 @@
 #include "duckdb/main/query_profiler.hpp"
 #include "duckdb/main/secret/secret_manager.hpp"
 #include "duckdb/optimizer/filter_combiner.hpp"
+#include "duckdb/planner/expression/bound_conjunction_expression.hpp"
+#include "duckdb/planner/operator/logical_filter.hpp"
 #include "duckdb/planner/table_filter.hpp"
 #include "storage/ducklake_table_entry.hpp"
 
@@ -40,6 +42,36 @@ DuckLakeMultiFileList::DuckLakeMultiFileList(DuckLakeFunctionInfo &read_info,
 	inlined_data_tables.push_back(inlined_table);
 }
 
+//! Combine two filters on the same column - both must hold, so AND their conjuncts and drop duplicates
+static unique_ptr<Expression> MergeFilterExpressions(unique_ptr<Expression> left, unique_ptr<Expression> right) {
+	vector<unique_ptr<Expression>> conjuncts;
+	conjuncts.push_back(std::move(left));
+	conjuncts.push_back(std::move(right));
+	LogicalFilter::SplitPredicates(conjuncts);
+
+	vector<unique_ptr<Expression>> merged;
+	for (auto &conjunct : conjuncts) {
+		bool is_duplicate = false;
+		for (auto &existing : merged) {
+			if (existing->Equals(*conjunct)) {
+				is_duplicate = true;
+				break;
+			}
+		}
+		if (!is_duplicate) {
+			merged.push_back(std::move(conjunct));
+		}
+	}
+	if (merged.size() == 1) {
+		return std::move(merged[0]);
+	}
+	auto result = make_uniq<BoundConjunctionExpression>(ExpressionType::CONJUNCTION_AND);
+	for (auto &conjunct : merged) {
+		result->GetChildrenMutable().push_back(std::move(conjunct));
+	}
+	return std::move(result);
+}
+
 void DuckLakeMultiFileList::AddFilterToPushdownInfo(FilterPushdownInfo &pushdown_info, column_t column_id,
                                                     unique_ptr<TableFilter> filter) const {
 	if (IsVirtualColumn(column_id)) {
@@ -51,8 +83,15 @@ void DuckLakeMultiFileList::AddFilterToPushdownInfo(FilterPushdownInfo &pushdown
 	// Get the column type from the table schema, not from the scan types array
 	const auto &column_type = read_info.column_types[column_index.index];
 	auto expr_filter = ExpressionFilter::FromTableFilter(*filter, column_type);
-	ColumnFilterInfo filter_info_entry(field_index, column_type, std::move(expr_filter));
-	pushdown_info.column_filters.emplace(field_index, std::move(filter_info_entry));
+	auto entry = pushdown_info.column_filters.find(field_index);
+	if (entry == pushdown_info.column_filters.end()) {
+		ColumnFilterInfo filter_info_entry(field_index, column_type, std::move(expr_filter));
+		pushdown_info.column_filters.emplace(field_index, std::move(filter_info_entry));
+		return;
+	}
+	auto &existing_filter = entry->second.table_filter;
+	existing_filter = make_uniq<ExpressionFilter>(
+	    MergeFilterExpressions(std::move(existing_filter->expr), std::move(expr_filter->expr)));
 }
 
 unique_ptr<MultiFileList>
@@ -69,8 +108,8 @@ DuckLakeMultiFileList::DynamicFilterPushdown(MultiFileDynamicPushdownInfo &dynam
 		return nullptr;
 	}
 
-	// DuckDB passes the final filter set, including both static and Top-N dynamic filters.
-	auto pushdown_info = make_uniq<FilterPushdownInfo>();
+	// the final filter set does not always carry over the filters we pushed down earlier - merge into those
+	auto pushdown_info = filter_info ? filter_info->Copy() : make_uniq<FilterPushdownInfo>();
 
 	for (auto &entry : filters) {
 		auto column_id = column_ids[entry.GetIndex().GetIndex()];
