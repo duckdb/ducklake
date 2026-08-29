@@ -195,8 +195,14 @@ DuckLakeMultiFileList::DynamicFilterPushdown(MultiFileDynamicPushdownInfo &dynam
 		return nullptr;
 	}
 
-	// the final filter set does not always carry over the filters we pushed down earlier - merge into those
-	auto pushdown_info = filter_info ? filter_info->Copy() : make_uniq<FilterPushdownInfo>();
+	// the filter set carries the static filters over, so the per-column filters are rebuilt from it - but a
+	// TableFilterSet cannot round-trip a tree, so those have to be carried over by hand
+	auto pushdown_info = make_uniq<FilterPushdownInfo>();
+	if (filter_info) {
+		for (const auto &tree : filter_info->filter_trees) {
+			pushdown_info->filter_trees.push_back(tree.Copy());
+		}
+	}
 
 	for (auto &entry : filters) {
 		auto column_id = column_ids[entry.GetIndex().GetIndex()];
@@ -215,11 +221,46 @@ DuckLakeMultiFileList::DynamicFilterPushdown(MultiFileDynamicPushdownInfo &dynam
 	                                        std::move(pushdown_info));
 }
 
+//! What a node costs in the generated query - one stats condition per leaf
+static idx_t CountFilterTreeLeaves(const DuckLakeFilterNode &node) {
+	if (node.type == DuckLakeFilterNodeType::COLUMN_FILTER) {
+		return 1;
+	}
+	idx_t result = 0;
+	for (const auto &child : node.children) {
+		result += CountFilterTreeLeaves(*child);
+	}
+	return result;
+}
+
+bool DuckLakeMultiFileList::FilterTreeState::VisitNode() {
+	if (exhausted) {
+		return false;
+	}
+	if (++visited_nodes > MAX_VISITED_NODES) {
+		exhausted = true;
+		return false;
+	}
+	return true;
+}
+
+bool DuckLakeMultiFileList::FilterTreeState::AddLeaves(const DuckLakeFilterNode &node) {
+	if (exhausted) {
+		return false;
+	}
+	leaves += CountFilterTreeLeaves(node);
+	if (leaves > MAX_LEAVES) {
+		exhausted = true;
+		return false;
+	}
+	return true;
+}
+
 //! Reduce an expression to per-column filters using the combiner, which also propagates equalities
 unique_ptr<DuckLakeFilterNode> DuckLakeMultiFileList::CombineFilterNode(ClientContext &context,
                                                                         MultiFilePushdownInfo &info,
                                                                         const Expression &expr) const {
-	// the combiner is fed one conjunct at a time, the optimizer splits them before they reach it
+	// the optimizer splits the conjuncts it hands us, but an OR branch reached by recursion arrives whole
 	vector<unique_ptr<Expression>> conjuncts;
 	conjuncts.push_back(expr.Copy());
 	LogicalFilter::SplitPredicates(conjuncts);
@@ -252,17 +293,16 @@ unique_ptr<DuckLakeFilterNode> DuckLakeMultiFileList::BuildFilterTree(ClientCont
                                                                       MultiFilePushdownInfo &info,
                                                                       const Expression &expr,
                                                                       FilterTreeState &state) const {
-	if (state.budget == 0) {
+	if (!state.VisitNode()) {
 		return nullptr;
 	}
-	state.budget--;
 
 	const bool is_or = expr.GetExpressionType() == ExpressionType::CONJUNCTION_OR;
 	if (!is_or) {
 		// the combiner sees all conjuncts at once, so let it try before splitting them up
 		auto node = CombineFilterNode(context, info, expr);
 		if (node) {
-			return node;
+			return state.AddLeaves(*node) ? std::move(node) : nullptr;
 		}
 	}
 
@@ -300,15 +340,23 @@ unique_ptr<DuckLakeFilterNode> DuckLakeMultiFileList::BuildFilterTree(ClientCont
 		}
 	}
 
+	if (state.exhausted) {
+		// no point trying the fallbacks, they can only add leaves we have no budget for
+		return nullptr;
+	}
 	if (is_or) {
 		// the branches did not work out - the combiner may still express the disjunction on a single column
 		auto node = CombineFilterNode(context, info, expr);
 		if (node) {
-			return node;
+			return state.AddLeaves(*node) ? std::move(node) : nullptr;
 		}
 	}
 	// the combiner only expresses a subset of what we can evaluate against column stats
-	return GetExpressionFilterNode(info, expr);
+	auto node = GetExpressionFilterNode(info, expr);
+	if (!node) {
+		return nullptr;
+	}
+	return state.AddLeaves(*node) ? std::move(node) : nullptr;
 }
 
 //! Collect the columns a filter tree references
@@ -361,7 +409,8 @@ unique_ptr<MultiFileList> DuckLakeMultiFileList::ComplexFilterPushdown(ClientCon
 		}
 		FilterTreeState state;
 		auto root = BuildFilterTree(context, info, *filter, state);
-		if (!root) {
+		if (!root || state.exhausted) {
+			// too big to express as a tree - the per-column filters still apply
 			continue;
 		}
 		unordered_set<idx_t> columns;

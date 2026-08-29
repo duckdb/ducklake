@@ -153,7 +153,8 @@ struct DuckLakeFilterTree {
 
 struct FilterPushdownInfo {
 	unordered_map<idx_t, ColumnFilterInfo> column_filters;
-	//! Cross-column filter trees, which must hold alongside the single-column filters above
+	//! Filter trees, which must hold alongside the single-column filters above. Usually cross-column -
+	//! a single-column tree is only kept when it expresses something the per-column filters cannot.
 	vector<DuckLakeFilterTree> filter_trees;
 
 	FilterPushdownInfo() = default;

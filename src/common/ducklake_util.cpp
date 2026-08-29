@@ -366,7 +366,6 @@ shared_ptr<DynamicFilterData> DuckLakeUtil::GetOptionalDynamicFilterData(const T
 	return nullptr;
 }
 
-//! Combine two filters on the same column - both must hold, so AND their conjuncts and drop duplicates
 unique_ptr<Expression> DuckLakeUtil::MergeFilterExpressions(unique_ptr<Expression> left, unique_ptr<Expression> right) {
 	vector<unique_ptr<Expression>> conjuncts;
 	conjuncts.push_back(std::move(left));
