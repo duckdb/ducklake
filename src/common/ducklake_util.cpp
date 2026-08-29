@@ -489,6 +489,21 @@ string DuckLakeUtil::EncryptionKeyLiteral(const string &key) {
 	return "'" + Blob::ToBase64(string_t(key)) + "'";
 }
 
+string DuckLakeUtil::StoredEncryptionKeyLiteral(const string &stored_key) {
+	if (stored_key.empty()) {
+		return "NULL";
+	}
+	return SQLLiteralToString(stored_key);
+}
+
+void DuckLakeUtil::EncodeStoredEncryptionKeys(vector<string> &keys) {
+	for (auto &key : keys) {
+		if (!key.empty()) {
+			key = Blob::ToBase64(string_t(key));
+		}
+	}
+}
+
 const char *DuckLakeUtil::BoolLiteral(bool v) {
 	return v ? "true" : "false";
 }

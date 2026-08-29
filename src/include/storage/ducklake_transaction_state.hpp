@@ -8,6 +8,7 @@
 
 #pragma once
 
+#include "common/ducklake_util.hpp"
 #include "storage/ducklake_stats.hpp"
 #include "storage/ducklake_transaction.hpp"
 
@@ -53,6 +54,12 @@ struct DuckLakeCommitContext {
 	    try_append_data_files = [](DuckLakeSnapshot &, const vector<DuckLakeFileInfo> &,
 	                               const vector<DuckLakeTableInfo> &, vector<DuckLakeSchemaInfo> &) {
 		    return false;
+	    };
+	//! Puts per-file encryption keys into the form stored in the catalog. A wrapped key is bound to the
+	//! path it is stored under, so this runs once paths are resolved and before any writer emits them.
+	std::function<void(const vector<TableIndex> &, const vector<string> &, bool, vector<string> &)> prepare_file_keys =
+	    [](const vector<TableIndex> &, const vector<string> &, bool, vector<string> &keys) {
+		    DuckLakeUtil::EncodeStoredEncryptionKeys(keys);
 	    };
 	//! Emits the SQL that registers new inlined data tables (CREATE TABLE + ducklake_inlined_data_tables INSERT).
 	std::function<string(DuckLakeSnapshot, const vector<DuckLakeTableInfo> &)> write_inlined_tables =

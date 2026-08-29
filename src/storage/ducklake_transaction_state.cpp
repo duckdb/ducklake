@@ -1572,6 +1572,29 @@ vector<DuckLakeSchemaInfo> DuckLakeTransactionState::GetNewSchemas(DuckLakeCommi
 	return schemas;
 }
 
+//! Hands every file's key to the commit context together with the path it will be stored under, and
+//! writes the stored form back. FILE is DuckLakeFileInfo or DuckLakeDeleteFileInfo.
+template <class FILE>
+static void PrepareFileKeys(const DuckLakeCommitContext &context, vector<FILE> &files,
+                            const vector<DuckLakePath> &resolved_paths, bool is_delete_file) {
+	D_ASSERT(files.size() == resolved_paths.size());
+	vector<TableIndex> table_ids;
+	vector<string> stored_paths;
+	vector<string> keys;
+	table_ids.reserve(files.size());
+	stored_paths.reserve(files.size());
+	keys.reserve(files.size());
+	for (idx_t i = 0; i < files.size(); i++) {
+		table_ids.push_back(files[i].table_id);
+		stored_paths.push_back(resolved_paths[i].path);
+		keys.push_back(files[i].encryption_key);
+	}
+	context.prepare_file_keys(table_ids, stored_paths, is_delete_file, keys);
+	for (idx_t i = 0; i < files.size(); i++) {
+		files[i].encryption_key = keys[i];
+	}
+}
+
 string DuckLakeTransactionState::CommitChanges(DuckLakeCommitState &commit_state,
                                                TransactionChangeInformation &transaction_changes,
                                                optional_ptr<vector<DuckLakeGlobalStatsInfo>> stats,
@@ -1684,13 +1707,8 @@ string DuckLakeTransactionState::CommitChanges(DuckLakeCommitState &commit_state
 		batch_queries += DuckLakeMetadataManager::WriteNewColumnMappings(result.new_column_mappings);
 	}
 
-	auto write_data_files_sql = [&](const vector<DuckLakeFileInfo> &files) {
+	auto write_data_files_sql = [&](vector<DuckLakeFileInfo> &files) {
 		if (files.empty()) {
-			return string();
-		}
-		if (context.try_append_data_files &&
-		    context.try_append_data_files(commit_snapshot, files, new_tables_result, new_schemas_result)) {
-			// fast-path: files were written directly via Appender, skip SQL emission
 			return string();
 		}
 		vector<DuckLakePath> resolved_paths;
@@ -1699,6 +1717,13 @@ string DuckLakeTransactionState::CommitChanges(DuckLakeCommitState &commit_state
 			resolved_paths.push_back(DuckLakeMetadataManager::GetRelativePath(
 			    file.table_id, file.file_name, new_tables_result, new_schemas_result, context.query_metadata, data_path,
 			    separator));
+		}
+		// Before the Appender fast-path too: both writers emit encryption_key verbatim.
+		PrepareFileKeys(context, files, resolved_paths, false);
+		if (context.try_append_data_files &&
+		    context.try_append_data_files(commit_snapshot, files, new_tables_result, new_schemas_result)) {
+			// fast-path: files were written directly via Appender, skip SQL emission
+			return string();
 		}
 		return DuckLakeMetadataManager::WriteNewDataFilesSqlBatch(files, resolved_paths,
 		                                                          context.supports_v1_1_metadata);
@@ -1747,6 +1772,7 @@ string DuckLakeTransactionState::CommitChanges(DuckLakeCommitState &commit_state
 			    file.table_id, file.path, new_tables_result, new_schemas_result, context.query_metadata, data_path,
 			    separator));
 		}
+		PrepareFileKeys(context, file_list, resolved_delete_paths, true);
 		batch_queries += DuckLakeMetadataManager::WriteNewDeleteFiles(file_list, resolved_delete_paths,
 		                                                              context.supports_v1_1_metadata);
 

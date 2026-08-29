@@ -191,6 +191,55 @@ void DuckLakeCatalog::EnsureCommitInfoProvided(const DuckLakeSnapshotCommit &com
 DuckLakeCatalog::DuckLakeCatalog(AttachedDatabase &db_p, DuckLakeOptions options_p)
     : Catalog(db_p), options(std::move(options_p)), last_uncommitted_catalog_version(TRANSACTION_ID_START),
       instance_id(UUID::ToString(UUID::GenerateRandomUUID())) {
+	// Checked outside the socket gate: encryption_cache_ttl_seconds does not itself turn the envelope
+	// on, so supplying it alone would be silently ignored.
+	if (options.encryption_cache_ttl_seconds_supplied && !options.encryption_socket_supplied) {
+		throw InvalidInputException(
+		    "encryption_cache_ttl_seconds requires encryption_socket - drop it, or configure an encryption envelope");
+	}
+	if (options.encryption_socket_supplied || options.encryption_lake_id_supplied) {
+		if (!options.encryption_socket_supplied) {
+			throw InvalidInputException("encryption_lake_id requires encryption_socket - supply both, or neither");
+		}
+		if (options.encryption_socket.empty()) {
+			throw InvalidInputException("encryption_socket was set to an empty string - supply the address of the key "
+			                            "service, or omit the option to run without an encryption envelope");
+		}
+		if (options.encryption_lake_id.empty()) {
+			throw InvalidInputException("encryption_socket requires a non-empty encryption_lake_id - without it keys "
+			                            "are interchangeable between lakes");
+		}
+		if (options.encryption_cache_ttl_seconds < 0 ||
+		    options.encryption_cache_ttl_seconds > DuckLakeEncryptionProvider::MAX_CACHE_TTL_SECONDS) {
+			throw InvalidInputException("encryption_cache_ttl_seconds must be between 0 and %lld, not %lld",
+			                            DuckLakeEncryptionProvider::MAX_CACHE_TTL_SECONDS,
+			                            options.encryption_cache_ttl_seconds);
+		}
+		if (options.encryption == DuckLakeEncryption::UNENCRYPTED) {
+			throw InvalidInputException("an encryption envelope was configured on an UNENCRYPTED DuckLake - there are "
+			                            "no per-file keys to wrap. Add ENCRYPTED, or drop the envelope options");
+		}
+		// Refuse an explicit limit rather than silently forcing it to 0; DataInliningRowLimit() below
+		// forces the shipped default.
+		auto inlining_entry = options.config_options.find("data_inlining_row_limit");
+		if (inlining_entry != options.config_options.end() && Value(inlining_entry->second).GetValue<idx_t>() > 0) {
+			throw InvalidInputException("data_inlining_row_limit=%s cannot be combined with an encryption envelope - "
+			                            "inlined rows are stored as cleartext literals in the metadata catalog, which "
+			                            "the envelope does not cover. Set data_inlining_row_limit to 0",
+			                            inlining_entry->second);
+		}
+		auto ttl_seconds = options.encryption_cache_ttl_seconds_supplied
+		                       ? options.encryption_cache_ttl_seconds
+		                       : DuckLakeEncryptionProvider::DEFAULT_CACHE_TTL_SECONDS;
+		auto &factory = DuckLakeEncryptionProvider::GetFactory();
+		if (!factory) {
+			throw InvalidInputException("encryption_socket was set but this build has no encryption provider - link an "
+			                            "implementation of DuckLakeEncryptionProvider, or drop the envelope options to "
+			                            "store the per-file keys unwrapped");
+		}
+		encryption_provider = factory(db_p.GetDatabase(), options.encryption_socket, options.encryption_lake_id,
+		                              NumericCast<idx_t>(ttl_seconds));
+	}
 	// figure out the metadata server type
 	auto entry = options.metadata_parameters.find("type");
 	if (entry != options.metadata_parameters.end()) {
@@ -221,6 +270,12 @@ void DuckLakeCatalog::FinalizeLoad(optional_ptr<ClientContext> context) {
 		con->BeginTransaction();
 		context = con->context.get();
 	}
+	// Both no-ops without a provider. The self-test runs at ATTACH so an unreachable key service
+	// surfaces here rather than on the first read.
+	RequireEncryptedTempSpill(*context);
+	if (encryption_provider) {
+		encryption_provider->SelfTest();
+	}
 	if (options.config_options.find("write_deletion_vectors") == options.config_options.end()) {
 		Value setting_val;
 		if (context->TryGetCurrentSetting("ducklake_write_deletion_vectors", setting_val)) {
@@ -229,6 +284,16 @@ void DuckLakeCatalog::FinalizeLoad(optional_ptr<ClientContext> context) {
 	}
 	DuckLakeInitializer initializer(*context, *this, options);
 	initializer.Initialize();
+	// Only the initializer resolves an AUTOMATIC encryption mode, so this cannot move up to the
+	// constructor alongside the explicit-UNENCRYPTED refusal.
+	if (encryption_provider && Encryption() != DuckLakeEncryption::ENCRYPTED) {
+		if (options.encryption == DuckLakeEncryption::ENCRYPTED) {
+			throw InvalidInputException("encryption_socket was set, but this DuckLake already exists and is "
+			                            "unencrypted - ATTACH cannot change that. Drop the envelope options");
+		}
+		throw InvalidInputException("encryption_socket was set, but this DuckLake is unencrypted - there are no "
+		                            "per-file keys to wrap. Add ENCRYPTED, or drop the envelope options");
+	}
 	db.tags["data_path"] = DataPath();
 	if (con) {
 		con->Commit();
@@ -1010,11 +1075,19 @@ bool DuckLakeCatalog::TryGetConfigOption(const string &option, string &result, D
 }
 
 idx_t DuckLakeCatalog::DataInliningRowLimit(SchemaIndex schema_index, TableIndex table_index) const {
+	// An enveloped lake never inlines rows: inlined rows and their stats live in the metadata catalog
+	// in cleartext, which no per-file key covers. Every inlining decision funnels through here.
+	if (EncryptionProvider()) {
+		return 0;
+	}
 	return GetConfigOption<idx_t>("data_inlining_row_limit", schema_index, table_index, 10);
 }
 
 idx_t DuckLakeCatalog::DataInliningRowLimit(ClientContext &context, SchemaIndex schema_index,
                                             TableIndex table_index) const {
+	if (EncryptionProvider()) {
+		return 0;
+	}
 	string value_str;
 	if (TryGetConfigOption("data_inlining_row_limit", value_str, schema_index, table_index)) {
 		return Value(value_str).GetValue<idx_t>();

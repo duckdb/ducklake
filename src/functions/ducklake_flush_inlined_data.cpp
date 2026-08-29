@@ -498,8 +498,11 @@ LEFT JOIN (
 					file_info.existing_delete_path_is_relative = chunk->GetValue(7, row_idx).GetValue<bool>();
 					file_info.existing_delete_begin_snapshot = chunk->GetValue(8, row_idx).GetValue<idx_t>();
 					if (!chunk->GetValue(9, row_idx).IsNull()) {
-						file_info.existing_delete_encryption_key =
-						    Blob::FromBase64(chunk->GetValue(9, row_idx).GetValue<string>());
+						auto resolved = file_info.existing_delete_path_is_relative
+						                    ? table.DataPath() + file_info.existing_delete_path
+						                    : file_info.existing_delete_path;
+						file_info.existing_delete_encryption_key = transaction.GetCatalog().ResolveStoredEncryptionKey(
+						    table_id, file_info.existing_delete_path, resolved, true, chunk->GetValue(9, row_idx));
 					}
 					if (!chunk->GetValue(10, row_idx).IsNull()) {
 						file_info.existing_delete_format =

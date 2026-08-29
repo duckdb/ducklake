@@ -1474,6 +1474,10 @@ void DuckLakeTransaction::RunCommitLoop(DuckLakeSnapshot transaction_snapshot,
 	                                    vector<DuckLakeSchemaInfo> &new_schemas) {
 		return metadata_manager->TryAppendDataFiles(snapshot, files, new_tables, new_schemas);
 	};
+	context.prepare_file_keys = [&](const vector<TableIndex> &table_ids, const vector<string> &stored_paths,
+	                                bool is_delete_file, vector<string> &keys) {
+		ducklake_catalog.PrepareFileKeysForCommit(table_ids, stored_paths, is_delete_file, keys);
+	};
 	context.write_inlined_tables = [&](DuckLakeSnapshot snapshot, const vector<DuckLakeTableInfo> &tables) {
 		return metadata_manager->WriteNewInlinedTables(snapshot, tables);
 	};

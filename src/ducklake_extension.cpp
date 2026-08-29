@@ -124,6 +124,11 @@ static void LoadInternal(ExtensionLoader &loader) {
 	// Register murmur3_32 scalar function for Iceberg-compatible bucket partitioning
 	auto murmur3_func = DuckLakeMurmur3Function();
 	loader.RegisterFunction(murmur3_func);
+
+	auto rewrap_keys = DuckLakeRewrapKeysFunction();
+	loader.RegisterFunction(rewrap_keys);
+	auto self_test = DuckLakeSelfTestFunction();
+	loader.RegisterFunction(self_test);
 }
 
 void DucklakeExtension::Load(ExtensionLoader &loader) {

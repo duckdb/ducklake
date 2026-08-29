@@ -9,6 +9,7 @@
 #pragma once
 
 #include "common/ducklake_encryption.hpp"
+#include "storage/ducklake_encryption_provider.hpp"
 #include "duckdb/main/attached_database.hpp"
 #include "duckdb/catalog/catalog_entry/schema_catalog_entry.hpp"
 #include "duckdb/catalog/catalog_entry/table_catalog_entry.hpp"
@@ -226,6 +227,35 @@ public:
 	//! Generate an encryption key for writing (or empty if encryption is disabled)
 	string GenerateEncryptionKey(ClientContext &context) const;
 
+	//! The encryption envelope provider for this lake, or nullptr when none is configured.
+	optional_ptr<DuckLakeEncryptionProvider> EncryptionProvider() const {
+		return encryption_provider.get();
+	}
+	//! `stored_path` must be the path as persisted in the catalog, not one resolved against the data path.
+	DuckLakeFileIdentity BuildEncryptionIdentity(TableIndex table_id, const string &stored_path,
+	                                             bool is_delete_file) const;
+	//! Throws if `stored_key` is a wrapped value while this lake has no provider, so ciphertext is
+	//! never handed to the Parquet reader as a key.
+	void RefuseWrappedKeyWithoutProvider(const string &file_path, const string &stored_key) const;
+	//! Throws if this lake is ENCRYPTED and the stored key is NULL. A NULL is the ordinary case on an
+	//! unencrypted lake, where this returns.
+	void RefuseMissingEncryptionKey(const string &file_path) const;
+	//! Throws unless `decoded_key` is a length AES accepts: 16, 24 or 32 bytes.
+	void RefuseUnusableEncryptionKey(const string &file_path, const string &decoded_key) const;
+	//! The key-resolution choke point: turns a stored `encryption_key` value into the raw key bytes
+	//! the Parquet reader wants, through the provider when one is configured.
+	string ResolveStoredEncryptionKey(TableIndex table_id, const string &stored_path, const string &resolved_path,
+	                                  bool is_delete_file, const Value &stored_key) const;
+	//! Turns each non-empty raw key in `keys` into the value `encryption_key` must carry, in place.
+	//! One commit is one `WrapKeys` call. Empty keys are left empty.
+	void PrepareFileKeysForCommit(const vector<TableIndex> &table_ids, const vector<string> &stored_paths,
+	                              bool is_delete_file, vector<string> &keys) const;
+	//! Turns on `temp_file_encryption` at ATTACH for an enveloped lake, refusing the ATTACH if it
+	//! cannot be turned on.
+	void RequireEncryptedTempSpill(ClientContext &context);
+	//! Refuses to touch an enveloped lake's key material while this process would spill in the clear.
+	void RefuseUnencryptedTempSpill(const string &what) const;
+
 	//! The resolved DuckLake spec version of the attached catalog
 	DuckLakeVersion GetDuckLakeVersion() const {
 		return ducklake_version;
@@ -326,6 +356,8 @@ private:
 	mutable mutex config_lock;
 	//! The DuckLake options
 	DuckLakeOptions options;
+	//! The encryption envelope provider, or nullptr when none is configured
+	unique_ptr<DuckLakeEncryptionProvider> encryption_provider;
 	//! The path separator
 	string separator = "/";
 	//! A unique tracker for catalog changes in uncommitted transactions.

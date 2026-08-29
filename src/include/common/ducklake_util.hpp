@@ -60,7 +60,14 @@ public:
 
 	static string MappingIdOrNull(const MappingIndex &m);
 
+	//! SQL literal for an encryption_key column, base64-encoding the raw key.
 	static string EncryptionKeyLiteral(const string &key);
+
+	//! SQL literal for an encryption_key column whose value is already in its stored form.
+	static string StoredEncryptionKeyLiteral(const string &stored_key);
+
+	//! Puts raw encryption keys into the form stored in encryption_key columns. Empty keys stay empty.
+	static void EncodeStoredEncryptionKeys(vector<string> &keys);
 
 	static const char *BoolLiteral(bool v);
 
