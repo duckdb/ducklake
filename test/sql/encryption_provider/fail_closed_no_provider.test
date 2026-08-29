@@ -1,0 +1,91 @@
+# name: test/sql/encryption_provider/fail_closed_no_provider.test
+# description: Fail-closed guards on an enveloped DuckLake - missing provider, missing ENCRYPTED, data inlining
+# group: [encryption_provider]
+
+require ducklake
+
+require parquet
+
+require-env DUCKLAKE_TEST_REFERENCE_ENCRYPTION_PROVIDER 1
+
+# The reference provider takes its crypto from the database. Without an OpenSSL-backed
+# implementation loaded, only the mbedtls one can generate the GCM nonces it needs.
+statement ok
+SET force_mbedtls_unsafe = true;
+
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/ducklake_ref_provider_failclosed.db' AS lake (
+    DATA_PATH '{TEST_DIR}/ducklake_ref_provider_failclosed_files',
+    ENCRYPTED,
+    ENCRYPTION_SOCKET 'reference-test-socket',
+    ENCRYPTION_LAKE_ID 'failclosed_lake'
+)
+
+statement ok
+CREATE TABLE lake.t AS SELECT i id FROM range(20) t(i);
+
+query II
+SELECT COUNT(*), SUM(id) FROM lake.t
+----
+20	190
+
+statement ok
+DETACH lake
+
+# the same catalog, attached with no envelope options: the stored keys are still wrapped, and
+# nothing here can unwrap them
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/ducklake_ref_provider_failclosed.db' AS lake
+
+statement error
+SELECT * FROM lake.t
+----
+carries a wrapped encryption key
+
+statement ok
+DETACH lake
+
+# contrast: ENCRYPTED on its own needs no provider, so a lake that never had one still reads. More
+# than data_inlining_row_limit rows, so this writes a real data file with a real key.
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/ducklake_ref_provider_failclosed_plain.db' AS plain_lake (
+    DATA_PATH '{TEST_DIR}/ducklake_ref_provider_failclosed_plain_files',
+    ENCRYPTED
+)
+
+statement ok
+CREATE TABLE plain_lake.t AS SELECT i id FROM range(20) t(i);
+
+query II
+SELECT COUNT(*), SUM(id) FROM plain_lake.t
+----
+20	190
+
+statement ok
+DETACH plain_lake
+
+# a new lake with envelope options but no ENCRYPTED has no per-file keys to wrap, so the envelope
+# would protect nothing. Only a fresh lake: an existing one adopts its stored encryption tag.
+statement error
+ATTACH 'ducklake:{TEST_DIR}/ducklake_ref_provider_notencrypted.db' AS not_encrypted (
+    DATA_PATH '{TEST_DIR}/ducklake_ref_provider_notencrypted_files',
+    ENCRYPTION_SOCKET 'reference-test-socket',
+    ENCRYPTION_LAKE_ID 'not_encrypted_lake'
+)
+----
+this DuckLake is unencrypted
+
+# inlined rows live in the metadata catalog as cleartext literals, which no per-file key covers, so
+# the limit cannot be raised back up on an enveloped lake
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/ducklake_ref_provider_inlining.db' AS inlining_lake (
+    DATA_PATH '{TEST_DIR}/ducklake_ref_provider_inlining_files',
+    ENCRYPTED,
+    ENCRYPTION_SOCKET 'reference-test-socket',
+    ENCRYPTION_LAKE_ID 'inlining_lake'
+)
+
+statement error
+CALL inlining_lake.set_option('data_inlining_row_limit', 100)
+----
+data_inlining_row_limit must stay 0

@@ -1,0 +1,55 @@
+# name: test/sql/encryption_provider/self_test.test
+# description: ducklake_self_test() with no lake named, an enveloped lake, and a lake with no envelope
+# group: [encryption_provider]
+
+require ducklake
+
+require parquet
+
+require-env DUCKLAKE_TEST_REFERENCE_ENCRYPTION_PROVIDER 1
+
+# The reference provider takes its crypto from the database. Without an OpenSSL-backed
+# implementation loaded, only the mbedtls one can generate the GCM nonces it needs.
+statement ok
+SET force_mbedtls_unsafe = true;
+
+# no lake named - cheap pass, extension loaded and callable
+query I
+SELECT load_ok FROM ducklake_self_test()
+----
+true
+
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/ducklake_ref_provider_selftest.db' AS lake (
+    DATA_PATH '{TEST_DIR}/ducklake_ref_provider_selftest_files',
+    ENCRYPTED,
+    ENCRYPTION_SOCKET 'reference-test-socket',
+    ENCRYPTION_LAKE_ID 'selftest_lake'
+)
+
+# lake named, provider configured and reachable - full health check passes
+query I
+SELECT load_ok FROM ducklake_self_test('lake')
+----
+true
+
+query I
+SELECT starts_with(provider_kind, 'ducklake reference encryption provider ok') FROM ducklake_self_test('lake')
+----
+true
+
+statement ok
+DETACH lake
+
+# a plain (non-enveloped) lake reports load_ok = true with provider_kind
+# 'catalog_has_no_provider' - it never claims a KMS health check it did not
+# perform.
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/ducklake_ref_provider_selftest_plain.db' AS plain_lake (
+    DATA_PATH '{TEST_DIR}/ducklake_ref_provider_selftest_plain_files'
+)
+
+query II
+SELECT load_ok, provider_kind FROM ducklake_self_test('plain_lake')
+----
+true	catalog_has_no_provider

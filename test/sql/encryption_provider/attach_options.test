@@ -1,0 +1,42 @@
+# name: test/sql/encryption_provider/attach_options.test
+# description: ATTACH refuses malformed encryption envelope options
+# group: [encryption_provider]
+
+require ducklake
+
+require parquet
+
+require-env DUCKLAKE_TEST_REFERENCE_ENCRYPTION_PROVIDER 1
+
+# a lake id on its own configures nothing
+statement error
+ATTACH 'ducklake:{TEST_DIR}/ducklake_ref_provider_opts_lakeid.db' AS bad (
+    DATA_PATH '{TEST_DIR}/ducklake_ref_provider_opts_lakeid_files',
+    ENCRYPTED,
+    ENCRYPTION_LAKE_ID 'orphan_lake'
+)
+----
+encryption_lake_id requires encryption_socket
+
+# an empty socket is a misconfiguration, not a request to run without an envelope
+statement error
+ATTACH 'ducklake:{TEST_DIR}/ducklake_ref_provider_opts_empty.db' AS bad (
+    DATA_PATH '{TEST_DIR}/ducklake_ref_provider_opts_empty_files',
+    ENCRYPTED,
+    ENCRYPTION_SOCKET '',
+    ENCRYPTION_LAKE_ID 'empty_socket_lake'
+)
+----
+encryption_socket was set to an empty string
+
+# the cache TTL is capped so it cannot be raised to an effectively unbounded one
+statement error
+ATTACH 'ducklake:{TEST_DIR}/ducklake_ref_provider_opts_ttl.db' AS bad (
+    DATA_PATH '{TEST_DIR}/ducklake_ref_provider_opts_ttl_files',
+    ENCRYPTED,
+    ENCRYPTION_SOCKET 'reference-test-socket',
+    ENCRYPTION_LAKE_ID 'ttl_lake',
+    ENCRYPTION_CACHE_TTL_SECONDS 4000
+)
+----
+must be between 0 and 3600

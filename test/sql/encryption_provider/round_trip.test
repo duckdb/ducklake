@@ -1,0 +1,82 @@
+# name: test/sql/encryption_provider/round_trip.test
+# description: End-to-end round trip through a DuckLakeEncryptionProvider - the catalog holds wrapped keys
+# group: [encryption_provider]
+
+require ducklake
+
+require parquet
+
+require-env DUCKLAKE_TEST_REFERENCE_ENCRYPTION_PROVIDER 1
+
+# The reference provider takes its crypto from the database. Without an OpenSSL-backed
+# implementation loaded, only the mbedtls one can generate the GCM nonces it needs.
+statement ok
+SET force_mbedtls_unsafe = true;
+
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/ducklake_ref_provider_roundtrip.db' AS lake (
+    DATA_PATH '{TEST_DIR}/ducklake_ref_provider_roundtrip_files',
+    METADATA_CATALOG 'lake_meta',
+    ENCRYPTED,
+    ENCRYPTION_SOCKET 'reference-test-socket',
+    ENCRYPTION_LAKE_ID 'roundtrip_lake',
+    ENCRYPTION_CACHE_TTL_SECONDS 60
+)
+
+statement ok
+CREATE TABLE lake.t (id INTEGER, val VARCHAR);
+
+statement ok
+INSERT INTO lake.t VALUES (1, 'alpha'), (2, 'beta'), (3, 'gamma');
+
+query II
+SELECT id, val FROM lake.t ORDER BY id
+----
+1	alpha
+2	beta
+3	gamma
+
+# the catalog holds wrapped keys, not keys: every stored value carries the envelope header and is
+# longer than the base64 of a raw 32-byte key
+query III
+SELECT count(*), count(*) FILTER (WHERE starts_with(encryption_key, 'RExL')), count(*) FILTER (WHERE length(encryption_key) > 44) FROM lake_meta.ducklake_data_file
+----
+1	1	1
+
+# the parquet files really are encrypted
+statement error
+SELECT * FROM '{TEST_DIR}/ducklake_ref_provider_roundtrip_files/**/*.parquet'
+----
+encrypted
+
+# delete files get their own wrapped key. Reading the rows back proves the file-kind bit reaches the
+# provider the same way on the write and the read side: were it not, unwrapping would fail the tag check.
+statement ok
+DELETE FROM lake.t WHERE id = 2
+
+query III
+SELECT count(*), count(*) FILTER (WHERE starts_with(encryption_key, 'RExL')), count(*) FILTER (WHERE length(encryption_key) > 44) FROM lake_meta.ducklake_delete_file
+----
+1	1	1
+
+query II
+SELECT id, val FROM lake.t ORDER BY id
+----
+1	alpha
+3	gamma
+
+statement ok
+DETACH lake
+
+# a fresh attach still decrypts, so it is the stored wrapped keys doing the work, not a cache
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/ducklake_ref_provider_roundtrip.db' AS lake (
+    ENCRYPTION_SOCKET 'reference-test-socket',
+    ENCRYPTION_LAKE_ID 'roundtrip_lake'
+)
+
+query II
+SELECT id, val FROM lake.t ORDER BY id
+----
+1	alpha
+3	gamma
