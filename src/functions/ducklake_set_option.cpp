@@ -109,10 +109,10 @@ static string ResolveSkippedStatsColumns(DuckLakeTableEntry &table, const Value 
 		auto whole = raw_value;
 		StringUtil::Trim(whole);
 		if (whole.find(',') != string::npos && table.TryGetFieldId(StringsToIdentifiers({whole}))) {
-			throw BinderException("Column \"%s\" contains a comma, so it cannot be named in a comma-separated "
-			                      "list - pass a list instead, e.g. set_option('%s', ['%s'], table_name => '%s')",
-			                      whole, DuckLakeConstants::SKIP_STATS_COLUMNS_OPTION, whole,
-			                      table.name.GetIdentifierName());
+			throw BinderException(
+			    "Column \"%s\" contains a comma, so it cannot be named in a comma-separated list - pass a list "
+			    "instead, e.g. set_option('skip_stats_columns', ['%s'], table_name => '%s')",
+			    whole, whole, table.name.GetIdentifierName());
 		}
 		auto entries = StringUtil::Split(raw_value, ',');
 		column_names.reserve(entries.size());
@@ -242,7 +242,7 @@ static unique_ptr<FunctionData> DuckLakeSetOptionBind(ClientContext &context, Ta
 		value = val.CastAs(context, LogicalType::BOOLEAN).GetValue<bool>() ? "true" : "false";
 	} else if (option == "sort_on_insert") {
 		value = val.CastAs(context, LogicalType::BOOLEAN).GetValue<bool>() ? "true" : "false";
-	} else if (option == DuckLakeConstants::SKIP_STATS_COLUMNS_OPTION) {
+	} else if (option == "skip_stats_columns") {
 		// the column names are resolved to field ids below, once the table scope is known
 		value = val.IsNull() || val.type().id() == LogicalTypeId::LIST
 		            ? string()
@@ -266,7 +266,7 @@ static unique_ptr<FunctionData> DuckLakeSetOptionBind(ClientContext &context, Ta
 		throw InvalidInputException("The '%s' option can only be set globally, not for a specific schema or table",
 		                            option);
 	}
-	if (option == DuckLakeConstants::SKIP_STATS_COLUMNS_OPTION && table.empty()) {
+	if (option == "skip_stats_columns" && table.empty()) {
 		throw InvalidInputException("The '%s' option can only be set for a specific table - pass table_name", option);
 	}
 	if (!table.empty()) {
@@ -279,7 +279,7 @@ static unique_ptr<FunctionData> DuckLakeSetOptionBind(ClientContext &context, Ta
 		if (IsTransactionLocal(config_option.table_id)) {
 			throw NotImplementedException("Settings cannot be set for transaction-local tables");
 		}
-		if (option == DuckLakeConstants::SKIP_STATS_COLUMNS_OPTION) {
+		if (option == "skip_stats_columns") {
 			value = ResolveSkippedStatsColumns(ducklake_table, val, value);
 		}
 	} else if (!schema.empty()) {

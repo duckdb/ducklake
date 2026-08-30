@@ -667,8 +667,8 @@ unique_ptr<CatalogEntry> DuckLakeTableEntry::AlterTable(DuckLakeTransaction &tra
 			auto field_id = field_data->GetByFieldIndex(field.field_id);
 			throw InvalidInputException(
 			    "Cannot partition by column \"%s\" - it is listed in the '%s' option of table \"%s\"",
-			    field_id ? field_id->Name() : to_string(field.field_id.index),
-			    DuckLakeConstants::SKIP_STATS_COLUMNS_OPTION, name.GetIdentifierName());
+			    field_id ? field_id->Name() : to_string(field.field_id.index), "skip_stats_columns",
+			    name.GetIdentifierName());
 		}
 	}
 
@@ -1195,8 +1195,8 @@ unique_ptr<CatalogEntry> DuckLakeTableEntry::AlterTable(DuckLakeTransaction &tra
 		throw NotImplementedException(
 		    "Cannot add %s field \"%s\" to column \"%s\" - it is listed in the '%s' option, and statistics "
 		    "cannot be skipped for %s",
-		    unsupported->Type().ToString(), unsupported->Name(), parent_id.Name(),
-		    DuckLakeConstants::SKIP_STATS_COLUMNS_OPTION, unsupported->Type().ToString());
+		    unsupported->Type().ToString(), unsupported->Name(), parent_id.Name(), "skip_stats_columns",
+		    unsupported->Type().ToString());
 	}
 
 	// generate the new to-be-inserted columns
@@ -1475,7 +1475,7 @@ unordered_set<idx_t> DuckLakeTableEntry::GetSkippedStatsFields() const {
 	auto &catalog = ParentCatalog().Cast<DuckLakeCatalog>();
 	string option_value;
 	// a field id names a different column in each table, so only this table's own row can apply
-	if (!catalog.TryGetTableConfigOption(DuckLakeConstants::SKIP_STATS_COLUMNS_OPTION, option_value, GetTableId())) {
+	if (!catalog.TryGetTableConfigOption("skip_stats_columns", option_value, GetTableId())) {
 		return result;
 	}
 	// re-read on every write to this table - unusable entries are ignored, never raised

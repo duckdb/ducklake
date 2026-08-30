@@ -167,8 +167,7 @@ unique_ptr<GlobalTableFunctionState> DuckLakeOptionsInit(ClientContext &context,
 			auto &table_catalog_entry = table_entry->Cast<TableCatalogEntry>();
 			option_info.scope_entry = table_catalog_entry.ParentSchema().name + "." + table_entry->name;
 			// scope_id can name a view in a hand-edited catalog, which has no field data
-			if (table_entry->type == CatalogType::TABLE_ENTRY &&
-			    table_setting.tag.key == DuckLakeConstants::SKIP_STATS_COLUMNS_OPTION) {
+			if (table_entry->type == CatalogType::TABLE_ENTRY && table_setting.tag.key == "skip_stats_columns") {
 				option_info.value =
 				    SkippedStatsColumnNames(table_entry->Cast<DuckLakeTableEntry>(), table_setting.tag.value);
 			}
