@@ -219,7 +219,8 @@
         "test/sql/sorted_table/merge_adjacent_sorted_transaction_renamed.test",
         "test/sql/sorted_table/schema_version_same_transaction.test",
         "test/sql/sorted_table/set_sorted_by_rollback_basic.test",
-        "test/sql/sorted_table/set_sorted_by_rollback_mixed.test"
+        "test/sql/sorted_table/set_sorted_by_rollback_mixed.test",
+        "test/sql/stats/skip_stats_columns.test"
       ]
     },
     {
