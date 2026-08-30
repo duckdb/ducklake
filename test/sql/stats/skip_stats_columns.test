@@ -31,12 +31,12 @@ SELECT value, scope FROM ducklake_meta.ducklake_metadata WHERE key='skip_stats_c
 ----
 2,3	table
 
-# rendered back as names - and only for this option, other table-scoped options are untouched
+# the stored value is surfaced as-is, like every other option
 query II
 SELECT option_name, value FROM ducklake.options() WHERE scope='TABLE' ORDER BY option_name
 ----
 parquet_compression	zstd
-skip_stats_columns	s, d
+skip_stats_columns	2,3
 
 # setting it mid-life must invalidate the table bounds, which would otherwise still claim
 # ['aaa','aaa'] for rows written outside them
@@ -94,14 +94,20 @@ SELECT count(*), min(s), max(s) FROM ducklake.t
 ----
 5	aaa	updated
 
-# field ids survive a rename, so the option follows the column
+# ids are stored rather than names, so a rename must not silently re-enable the bounds
 statement ok
 ALTER TABLE ducklake.t RENAME COLUMN s TO renamed
 
-query I
-SELECT value FROM ducklake.options() WHERE option_name='skip_stats_columns'
+statement ok
+INSERT INTO ducklake.t VALUES (7, 'after rename', 7.5)
+
+query II
+SELECT f.min_value IS NULL, f.max_value IS NULL
+FROM ducklake_meta.ducklake_file_column_stats f JOIN ducklake_meta.ducklake_data_file d USING (data_file_id)
+WHERE f.column_id=2 AND d.end_snapshot IS NULL
+  AND d.data_file_id=(SELECT max(data_file_id) FROM ducklake_meta.ducklake_data_file)
 ----
-renamed, d
+true	true
 
 # clearing records bounds again, but the table bounds stay unknown while any live file is bound-less
 statement ok
@@ -238,10 +244,6 @@ SELECT value FROM ducklake_meta.ducklake_metadata WHERE key='skip_stats_columns'
 ----
 1
 
-query I
-SELECT value FROM ducklake.options() WHERE scope_entry='main.commas'
-----
-a,b
 
 # add_data_files takes bounds from the parquet footer, and hive columns from the folder value -
 # the skip has to reach both paths
@@ -425,11 +427,11 @@ DETACH ducklake
 statement ok
 ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/skip_stats_columns', METADATA_CATALOG 'ducklake_meta', DATA_INLINING_ROW_LIMIT 0)
 
-# an entry resolving to no live column has no effect, and must not render like one that does
+# options() reports the stored value untouched, malformed or not
 query I
 SELECT value FROM ducklake.options() WHERE scope_entry='main.nested'
 ----
-999 (unresolved), notanumber (unresolved), x, -1 (unresolved)
+999, notanumber, , 3 ,-1
 
 statement ok
 INSERT INTO ducklake.nested VALUES (3, {'x': 3, 'y': 'r', 'z': 3})
