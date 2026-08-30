@@ -457,8 +457,8 @@ FROM parquet_full_metadata(%s)
 			auto &column = column_entry->second.get();
 			auto &column_field = column_field_entry->second;
 			DuckLakeColumnStats stats(column_field.second);
-			// this is the only place footer bounds are copied out, so a skipped column never
-			// materializes them rather than dropping them again later
+			// min/max are copied out of the footer here, once per row group, so a skipped column
+			// never materializes them - the geo bbox below is untouched, as ClearBounds was too
 			if (!column.skip_bounds && stats_min_validity.RowIsValid(metadata_idx)) {
 				stats.has_min = true;
 				stats.min = stats_min_data[metadata_idx].GetString();

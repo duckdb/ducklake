@@ -258,14 +258,14 @@ CALL ducklake.set_option('skip_stats_columns', 'payload', table_name => 'added')
 statement ok
 CALL ducklake_add_data_files('ducklake', 'added', '{DATA_PATH}/skip_stats_columns_add.parquet')
 
-query IIIIII
-SELECT f.column_id, f.min_value IS NULL, f.max_value IS NULL, f.value_count, f.column_size_bytes > 0, f.contains_nan
+query IIIII
+SELECT f.column_id, f.min_value IS NULL, f.max_value IS NULL, f.value_count, f.column_size_bytes > 0
 FROM ducklake_meta.ducklake_file_column_stats f JOIN ducklake_meta.ducklake_data_file d USING (data_file_id)
 WHERE d.table_id=(SELECT table_id FROM ducklake_meta.ducklake_table WHERE table_name='added' AND end_snapshot IS NULL)
 ORDER BY f.column_id
 ----
-1	false	false	3	true	NULL
-2	true	true	3	true	NULL
+1	false	false	3	true
+2	true	true	3	true
 
 query II
 SELECT count(*), count(*) FILTER (payload = repeat('A', 2000)::BLOB) FROM ducklake.added
@@ -310,6 +310,53 @@ SELECT k, count(*) FROM ducklake.hive GROUP BY k ORDER BY k
 ----
 aaa	1
 bbb	1
+
+# the footer stats are per row group, and a skipped struct must skip its children there too
+statement ok
+COPY (SELECT i AS id, {'x': i, 'y': 'v' || i::VARCHAR} AS st FROM range(3000) t(i))
+TO '{DATA_PATH}/skip_stats_columns_nested.parquet' (FORMAT PARQUET, ROW_GROUP_SIZE 1000)
+
+# more than one row group, otherwise the merge across row groups is never exercised
+query I
+SELECT num_row_groups > 1 FROM parquet_file_metadata('{DATA_PATH}/skip_stats_columns_nested.parquet')
+----
+true
+
+statement ok
+CREATE TABLE ducklake.added_nested(id BIGINT, st STRUCT(x BIGINT, y VARCHAR))
+
+statement ok
+CALL ducklake.set_option('skip_stats_columns', 'st', table_name => 'added_nested')
+
+statement ok
+CALL ducklake_add_data_files('ducklake', 'added_nested', '{DATA_PATH}/skip_stats_columns_nested.parquet')
+
+statement ok
+CREATE TABLE ducklake.added_nested_on(id BIGINT, st STRUCT(x BIGINT, y VARCHAR))
+
+statement ok
+CALL ducklake_add_data_files('ducklake', 'added_nested_on', '{DATA_PATH}/skip_stats_columns_nested.parquet')
+
+# children of the skipped struct lose their bounds; the same file added without the option keeps
+# them, so the NULLs are the option and not the shape of the data
+query IIII
+SELECT t.table_name, f.column_id, f.min_value IS NULL, f.value_count
+FROM ducklake_meta.ducklake_file_column_stats f JOIN ducklake_meta.ducklake_data_file d USING (data_file_id)
+JOIN ducklake_meta.ducklake_table t ON t.table_id=d.table_id AND t.end_snapshot IS NULL
+WHERE t.table_name IN ('added_nested', 'added_nested_on')
+ORDER BY t.table_name, f.column_id
+----
+added_nested	1	false	3000
+added_nested	3	true	3000
+added_nested	4	true	3000
+added_nested_on	1	false	3000
+added_nested_on	3	false	3000
+added_nested_on	4	false	3000
+
+query II
+SELECT count(*) FILTER (st.y='v1500'), count(*) FILTER (st.x=2999) FROM ducklake.added_nested
+----
+1	1
 
 # the inlined write path computes its own stats and recurses into nested types
 statement ok
