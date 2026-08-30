@@ -254,14 +254,14 @@ CALL ducklake.set_option('skip_stats_columns', 'payload', table_name => 'added')
 statement ok
 CALL ducklake_add_data_files('ducklake', 'added', '{DATA_PATH}/skip_stats_columns_add.parquet')
 
-query IIII
-SELECT f.column_id, f.min_value IS NULL, f.max_value IS NULL, f.value_count
+query IIIIII
+SELECT f.column_id, f.min_value IS NULL, f.max_value IS NULL, f.value_count, f.column_size_bytes > 0, f.contains_nan
 FROM ducklake_meta.ducklake_file_column_stats f JOIN ducklake_meta.ducklake_data_file d USING (data_file_id)
 WHERE d.table_id=(SELECT table_id FROM ducklake_meta.ducklake_table WHERE table_name='added' AND end_snapshot IS NULL)
 ORDER BY f.column_id
 ----
-1	false	false	3
-2	true	true	3
+1	false	false	3	true	NULL
+2	true	true	3	true	NULL
 
 query II
 SELECT count(*), count(*) FILTER (payload = repeat('A', 2000)::BLOB) FROM ducklake.added

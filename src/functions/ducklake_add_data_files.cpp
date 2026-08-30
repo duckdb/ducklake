@@ -106,6 +106,8 @@ struct ParquetColumn {
 	optional_idx precision;
 	optional_idx field_id;
 	string logical_type;
+	//! Set when the field mapping is made - see the skip_stats_columns option
+	bool skip_bounds = false;
 	vector<DuckLakeColumnStats> column_stats;
 
 	vector<unique_ptr<ParquetColumn>> child_columns;
@@ -455,13 +457,14 @@ FROM parquet_full_metadata(%s)
 			auto &column = column_entry->second.get();
 			auto &column_field = column_field_entry->second;
 			DuckLakeColumnStats stats(column_field.second);
-
-			if (stats_min_validity.RowIsValid(metadata_idx)) {
+			// this is the only place footer bounds are copied out, so a skipped column never
+			// materializes them rather than dropping them again later
+			if (!column.skip_bounds && stats_min_validity.RowIsValid(metadata_idx)) {
 				stats.has_min = true;
 				stats.min = stats_min_data[metadata_idx].GetString();
 			}
 
-			if (stats_max_validity.RowIsValid(metadata_idx)) {
+			if (!column.skip_bounds && stats_max_validity.RowIsValid(metadata_idx)) {
 				stats.has_max = true;
 				stats.max = stats_max_data[metadata_idx].GetString();
 			}
@@ -910,6 +913,7 @@ unique_ptr<DuckLakeNameMapEntry> DuckLakeFileProcessor::MapColumn(ParquetFileMet
 	// Store the mapping from column to field for later statistics processing
 	file_metadata.column_id_to_field_map.emplace(column.column_id,
 	                                             make_pair(field_id.GetFieldIndex(), field_id.Type()));
+	column.skip_bounds = skipped_fields.count(field_id.GetFieldIndex().index) > 0;
 
 	// recursively remap children (if any)
 	if (field_id.HasChildren()) {
@@ -1054,13 +1058,6 @@ void DuckLakeFileProcessor::MapColumnStats(ParquetFileMetadata &file_metadata, D
 				}
 			}
 
-			if (skipped_fields.count(field_index.index)) {
-				aggregated.ClearBounds();
-				result.column_stats.emplace(field_index, std::move(aggregated));
-				continue;
-			}
-
-			numeric_type = aggregated.type.IsNumeric();
 			Value numeric_min_cache;
 			Value numeric_max_cache;
 			bool min_cache_valid = false;
