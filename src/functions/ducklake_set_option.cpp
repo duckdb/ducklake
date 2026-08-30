@@ -7,6 +7,7 @@
 #include "storage/ducklake_catalog.hpp"
 #include "storage/ducklake_table_entry.hpp"
 #include "storage/ducklake_schema_entry.hpp"
+#include "storage/ducklake_partition_data.hpp"
 
 namespace duckdb {
 // -------------------------------------------------------------------------//
@@ -66,6 +67,79 @@ static void ValidateNoReservedInliningColumns(ClientContext &context, Catalog &c
 	} else {
 		ValidateGlobalScope(context, catalog);
 	}
+}
+
+//! Geometry and variant bounds live outside min/max, so they cannot be skipped
+static void ValidateStatsCanBeSkipped(const DuckLakeTableEntry &table, const DuckLakeFieldId &field_id) {
+	auto unsupported = FindStatsUnsupportedField(field_id);
+	if (unsupported) {
+		if (RefersToSameObject(*unsupported, field_id)) {
+			throw NotImplementedException("Statistics cannot be skipped for %s columns", field_id.Type().ToString());
+		}
+		throw NotImplementedException(
+		    "Statistics cannot be skipped for column \"%s\" - it contains a %s field (\"%s\")", field_id.Name(),
+		    unsupported->Type().ToString(), unsupported->Name());
+	}
+	auto partition_data = table.GetPartitionData();
+	if (!partition_data) {
+		return;
+	}
+	for (auto &field : partition_data->fields) {
+		if (field.field_id == field_id.GetFieldIndex()) {
+			throw InvalidInputException("Statistics cannot be skipped for partition column \"%s\"", field_id.Name());
+		}
+	}
+}
+
+//! Resolves a LIST of column names, or a comma-separated string, to the field ids the option
+//! stores - ids are used because they survive a rename
+static string ResolveSkippedStatsColumns(DuckLakeTableEntry &table, const Value &val, const string &raw_value) {
+	vector<string> column_names;
+	if (!val.IsNull() && val.type().id() == LogicalTypeId::LIST) {
+		auto &children = ListValue::GetChildren(val);
+		column_names.reserve(children.size());
+		for (auto &child : children) {
+			if (!child.IsNull()) {
+				column_names.push_back(child.DefaultCastAs(LogicalType::VARCHAR).GetValue<string>());
+			}
+		}
+	} else {
+		// a name containing a comma resolves to different columns when split, so reject it here -
+		// the list form names it unambiguously
+		auto whole = raw_value;
+		StringUtil::Trim(whole);
+		if (whole.find(',') != string::npos && table.TryGetFieldId(StringsToIdentifiers({whole}))) {
+			throw BinderException("Column \"%s\" contains a comma, so it cannot be named in a comma-separated "
+			                      "list - pass a list instead, e.g. set_option('%s', ['%s'], table_name => '%s')",
+			                      whole, DuckLakeConstants::SKIP_STATS_COLUMNS_OPTION, whole,
+			                      table.name.GetIdentifierName());
+		}
+		auto entries = StringUtil::Split(raw_value, ',');
+		column_names.reserve(entries.size());
+		for (auto &entry : entries) {
+			StringUtil::Trim(entry);
+			if (!entry.empty()) {
+				column_names.push_back(std::move(entry));
+			}
+		}
+	}
+	vector<string> field_ids;
+	field_ids.reserve(column_names.size());
+	unordered_set<idx_t> seen;
+	seen.reserve(column_names.size());
+	for (auto &column_name : column_names) {
+		auto field_id = table.TryGetFieldId(StringsToIdentifiers({column_name}));
+		if (!field_id) {
+			throw BinderException("Column \"%s\" does not exist in table \"%s\"", column_name,
+			                      table.name.GetIdentifierName());
+		}
+		ValidateStatsCanBeSkipped(table, *field_id);
+		auto field_index = field_id->GetFieldIndex().index;
+		if (seen.insert(field_index).second) {
+			field_ids.push_back(to_string(field_index));
+		}
+	}
+	return StringUtil::Join(field_ids, ",");
 }
 
 // ------------------------------------------------------------------------//
@@ -168,6 +242,11 @@ static unique_ptr<FunctionData> DuckLakeSetOptionBind(ClientContext &context, Ta
 		value = val.CastAs(context, LogicalType::BOOLEAN).GetValue<bool>() ? "true" : "false";
 	} else if (option == "sort_on_insert") {
 		value = val.CastAs(context, LogicalType::BOOLEAN).GetValue<bool>() ? "true" : "false";
+	} else if (option == DuckLakeConstants::SKIP_STATS_COLUMNS_OPTION) {
+		// the column names are resolved to field ids below, once the table scope is known
+		value = val.IsNull() || val.type().id() == LogicalTypeId::LIST
+		            ? string()
+		            : val.DefaultCastAs(LogicalType::VARCHAR).GetValue<string>();
 	} else {
 		throw NotImplementedException("Unsupported option %s", option);
 	}
@@ -187,6 +266,9 @@ static unique_ptr<FunctionData> DuckLakeSetOptionBind(ClientContext &context, Ta
 		throw InvalidInputException("The '%s' option can only be set globally, not for a specific schema or table",
 		                            option);
 	}
+	if (option == DuckLakeConstants::SKIP_STATS_COLUMNS_OPTION && table.empty()) {
+		throw InvalidInputException("The '%s' option can only be set for a specific table - pass table_name", option);
+	}
 	if (!table.empty()) {
 		// find the scope
 		auto table_catalog_entry = catalog.GetEntry<TableCatalogEntry>(
@@ -196,6 +278,9 @@ static unique_ptr<FunctionData> DuckLakeSetOptionBind(ClientContext &context, Ta
 		config_option.table_id = ducklake_table.GetTableId();
 		if (IsTransactionLocal(config_option.table_id)) {
 			throw NotImplementedException("Settings cannot be set for transaction-local tables");
+		}
+		if (option == DuckLakeConstants::SKIP_STATS_COLUMNS_OPTION) {
+			value = ResolveSkippedStatsColumns(ducklake_table, val, value);
 		}
 	} else if (!schema.empty()) {
 		// find the scope

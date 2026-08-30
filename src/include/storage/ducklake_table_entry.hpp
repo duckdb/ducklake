@@ -16,6 +16,7 @@
 #include "storage/ducklake_partition_data.hpp"
 #include "storage/ducklake_sort_data.hpp"
 #include "common/index.hpp"
+#include "duckdb/common/unordered_set.hpp"
 #include "storage/ducklake_field_data.hpp"
 #include "common/local_change.hpp"
 #include "storage/ducklake_metadata_manager.hpp"
@@ -33,6 +34,9 @@ struct ColumnChangeInfo {
 
 	void DropField(const DuckLakeFieldId &field_id);
 };
+
+//! Returns the first GEOMETRY or VARIANT field at or below this one, whose bounds cannot be skipped
+optional_ptr<const DuckLakeFieldId> FindStatsUnsupportedField(const DuckLakeFieldId &field_id);
 
 class DuckLakeTableEntry : public TableCatalogEntry {
 public:
@@ -74,6 +78,8 @@ public:
 	const DuckLakeFieldData &GetFieldData() const {
 		return *field_data;
 	}
+	//! Field indexes whose min/max bounds are not recorded, including children of a skipped field
+	unordered_set<idx_t> GetSkippedStatsFields() const;
 	const ColumnChangeInfo &GetChangedFields() const {
 		return *changed_fields;
 	}

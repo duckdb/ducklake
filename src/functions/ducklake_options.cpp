@@ -1,9 +1,12 @@
 #include "functions/ducklake_table_functions.hpp"
+#include "duckdb/common/operator/cast_operators.hpp"
 #include "duckdb/catalog/catalog.hpp"
 #include "storage/ducklake_transaction.hpp"
 #include "storage/ducklake_catalog.hpp"
 #include "storage/ducklake_metadata_manager.hpp"
 #include "duckdb/catalog/catalog_entry/table_catalog_entry.hpp"
+#include "storage/ducklake_table_entry.hpp"
+#include "storage/ducklake_schema_entry.hpp"
 
 namespace duckdb {
 
@@ -39,6 +42,7 @@ static constexpr DuckLakeOptionMetadata DUCKLAKE_OPTIONS[] = {
     {"write_deletion_vectors", "[EXPERIMENTAL - do not use outside testing] Whether to write Iceberg V3 deletion "
                                "vectors (puffin) instead of positional delete files (parquet)"},
     {"sort_on_insert", "Whether to sort data on INSERT according to SET SORTED BY (default: true)"},
+    {"skip_stats_columns", "Columns for which min/max bounds are not recorded (counts are still recorded)"},
 };
 
 struct DuckLakeOptionsData : public TableFunctionData {
@@ -84,6 +88,27 @@ static unique_ptr<FunctionData> DuckLakeOptionsBind(ClientContext &context, Tabl
 	return_types.emplace_back(LogicalType::VARCHAR);
 
 	return make_uniq<DuckLakeOptionsData>(catalog);
+}
+
+//! Renders the stored field ids back as column names, marking any that no longer resolve
+static string SkippedStatsColumnNames(const DuckLakeTableEntry &table, const string &option_value) {
+	auto &field_data = table.GetFieldData();
+	auto entries = StringUtil::Split(option_value, ',');
+	vector<string> names;
+	names.reserve(entries.size());
+	for (auto &entry : entries) {
+		StringUtil::Trim(entry);
+		if (entry.empty()) {
+			continue;
+		}
+		idx_t field_index;
+		optional_ptr<const DuckLakeFieldId> field_id;
+		if (TryCast::Operation<string_t, idx_t>(string_t(entry), field_index)) {
+			field_id = field_data.GetByFieldIndex(FieldIndex(field_index));
+		}
+		names.push_back(field_id ? field_id->Name() : entry + " (unresolved)");
+	}
+	return StringUtil::Join(names, ", ");
 }
 
 static Value GetOptionDescription(const string &option_name) {
@@ -141,6 +166,12 @@ unique_ptr<GlobalTableFunctionState> DuckLakeOptionsInit(ClientContext &context,
 		if (table_entry) {
 			auto &table_catalog_entry = table_entry->Cast<TableCatalogEntry>();
 			option_info.scope_entry = table_catalog_entry.ParentSchema().name + "." + table_entry->name;
+			// scope_id can name a view in a hand-edited catalog, which has no field data
+			if (table_entry->type == CatalogType::TABLE_ENTRY &&
+			    table_setting.tag.key == DuckLakeConstants::SKIP_STATS_COLUMNS_OPTION) {
+				option_info.value =
+				    SkippedStatsColumnNames(table_entry->Cast<DuckLakeTableEntry>(), table_setting.tag.value);
+			}
 		}
 		result->options.push_back(std::move(option_info));
 	}

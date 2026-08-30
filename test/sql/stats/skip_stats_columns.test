@@ -1,0 +1,398 @@
+# name: test/sql/stats/skip_stats_columns.test
+# description: Columns in skip_stats_columns record no bounds, but keep their counts
+# group: [stats]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/skip_stats_columns.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/skip_stats_columns', METADATA_CATALOG 'ducklake_meta', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE ducklake.t(id INTEGER, s VARCHAR, d DOUBLE)
+
+statement ok
+INSERT INTO ducklake.t VALUES (1, 'aaa', 1.5)
+
+# stored as field ids, whitespace trimmed and duplicates dropped
+statement ok
+CALL ducklake.set_option('skip_stats_columns', ' s , d , s ', table_name => 't')
+
+statement ok
+CALL ducklake.set_option('parquet_compression', 'zstd', table_name => 't')
+
+query II
+SELECT value, scope FROM ducklake_meta.ducklake_metadata WHERE key='skip_stats_columns'
+----
+2,3	table
+
+# rendered back as names - and only for this option, other table-scoped options are untouched
+query II
+SELECT option_name, value FROM ducklake.options() WHERE scope='TABLE' ORDER BY option_name
+----
+parquet_compression	zstd
+skip_stats_columns	s, d
+
+# setting it mid-life must invalidate the table bounds, which would otherwise still claim
+# ['aaa','aaa'] for rows written outside them
+statement ok
+INSERT INTO ducklake.t VALUES (2, 'zzz', 2.5), (3, NULL, 'nan')
+
+# both skipped columns lose their bounds; counts, sizes and contains_nan survive
+query IIIIIII
+SELECT column_id, min_value, max_value, value_count, null_count, column_size_bytes > 0, contains_nan
+FROM ducklake_meta.ducklake_file_column_stats WHERE data_file_id=1 ORDER BY column_id
+----
+1	2	3	2	0	true	NULL
+2	NULL	NULL	1	1	true	NULL
+3	NULL	NULL	2	0	true	NULL
+
+query II
+SELECT min_value IS NULL, max_value IS NULL FROM ducklake_meta.ducklake_table_column_stats WHERE column_id=2
+----
+true	true
+
+# rows outside the stale bounds are still found
+query IIIIII
+SELECT count(*) FILTER (s='zzz'), count(*) FILTER (s>='b' AND s<'c'), count(*) FILTER (s IS NULL),
+       min(s), max(s), count(*) FILTER (isnan(d))
+FROM ducklake.t
+----
+1	0	1	aaa	zzz	1
+
+# UPDATE and MERGE go through the insert path; compaction re-derives stats from the files it
+# rewrites, so consuming the pre-option bounded file must not carry its bounds forward
+statement ok
+UPDATE ducklake.t SET s='updated' WHERE id=2
+
+statement ok
+MERGE INTO ducklake.t USING (SELECT 4 AS id, 'merged' AS s, 4.5 AS d) m ON ducklake.t.id=m.id
+WHEN NOT MATCHED THEN INSERT VALUES (m.id, m.s, m.d)
+
+statement ok
+COPY (SELECT 5 AS id, 'copied' AS s, 5.5 AS d) TO '{DATA_PATH}/skip_stats_columns_copy.parquet'
+
+statement ok
+COPY ducklake.t FROM '{DATA_PATH}/skip_stats_columns_copy.parquet'
+
+statement ok
+CALL ducklake_merge_adjacent_files('ducklake')
+
+query I
+SELECT count(*) FROM ducklake_meta.ducklake_file_column_stats f JOIN ducklake_meta.ducklake_data_file d USING (data_file_id)
+WHERE f.column_id=2 AND d.end_snapshot IS NULL AND f.min_value IS NOT NULL
+----
+0
+
+query III
+SELECT count(*), min(s), max(s) FROM ducklake.t
+----
+5	aaa	updated
+
+# field ids survive a rename, so the option follows the column
+statement ok
+ALTER TABLE ducklake.t RENAME COLUMN s TO renamed
+
+query I
+SELECT value FROM ducklake.options() WHERE option_name='skip_stats_columns'
+----
+renamed, d
+
+# clearing records bounds again, but the table bounds stay unknown while any live file is bound-less
+statement ok
+CALL ducklake.set_option('skip_stats_columns', '', table_name => 't')
+
+statement ok
+INSERT INTO ducklake.t VALUES (6, 'bounded', 6.5)
+
+query II
+SELECT min_value IS NULL, max_value IS NULL FROM ducklake_meta.ducklake_table_column_stats WHERE column_id=2
+----
+true	true
+
+# skipping a field skips its children
+statement ok
+CREATE TABLE ducklake.nested(id INTEGER, st STRUCT(x INTEGER, y VARCHAR))
+
+statement ok
+CALL ducklake.set_option('skip_stats_columns', 'st', table_name => 'nested')
+
+statement ok
+INSERT INTO ducklake.nested VALUES (1, {'x': 1, 'y': 'p'})
+
+query III
+SELECT column_id, min_value IS NULL, max_value IS NULL
+FROM ducklake_meta.ducklake_file_column_stats f JOIN ducklake_meta.ducklake_data_file d USING (data_file_id)
+WHERE d.table_id=(SELECT table_id FROM ducklake_meta.ducklake_table WHERE table_name='nested' AND end_snapshot IS NULL)
+ORDER BY column_id
+----
+1	false	false
+3	true	true
+4	true	true
+
+query I
+SELECT count(*) FROM ducklake.nested WHERE st.y='p'
+----
+1
+
+# the option is read live at write time, so a schema change in the same transaction as a write
+# cannot resurrect the bounds from a cached table entry
+statement ok
+BEGIN
+
+statement ok
+ALTER TABLE ducklake.nested ALTER COLUMN id TYPE BIGINT
+
+statement ok
+INSERT INTO ducklake.nested VALUES (2, {'x': 2, 'y': 'q'})
+
+statement ok
+COMMIT
+
+query I
+SELECT count(*) FROM ducklake_meta.ducklake_file_column_stats f JOIN ducklake_meta.ducklake_data_file d USING (data_file_id)
+WHERE d.table_id=(SELECT table_id FROM ducklake_meta.ducklake_table WHERE table_name='nested' AND end_snapshot IS NULL)
+  AND f.column_id IN (3, 4) AND f.min_value IS NOT NULL
+----
+0
+
+# a partition column needs its bounds to prune, so the two are refused in either order
+statement ok
+CREATE TABLE ducklake.p(id INTEGER, part INTEGER)
+
+statement ok
+CALL ducklake.set_option('skip_stats_columns', 'part', table_name => 'p')
+
+statement error
+ALTER TABLE ducklake.p SET PARTITIONED BY (part)
+----
+Cannot partition by column "part"
+
+statement ok
+CALL ducklake.set_option('skip_stats_columns', '', table_name => 'p')
+
+statement ok
+ALTER TABLE ducklake.p SET PARTITIONED BY (part)
+
+statement error
+CALL ducklake.set_option('skip_stats_columns', 'part', table_name => 'p')
+----
+partition column
+
+# geometry/variant bounds live outside min/max, so skipping one would silently keep writing them
+statement ok
+CREATE TABLE ducklake.geo(id INTEGER, g GEOMETRY, st STRUCT(a INTEGER, geom GEOMETRY))
+
+statement error
+CALL ducklake.set_option('skip_stats_columns', 'g', table_name => 'geo')
+----
+Statistics cannot be skipped for GEOMETRY columns
+
+statement error
+CALL ducklake.set_option('skip_stats_columns', 'st', table_name => 'geo')
+----
+it contains a GEOMETRY field ("geom")
+
+# a field added below a skipped column inherits the skip, so the same types are refused there
+statement error
+ALTER TABLE ducklake.nested ADD COLUMN st.g GEOMETRY
+----
+Cannot add GEOMETRY field "g" to column "st"
+
+statement ok
+ALTER TABLE ducklake.nested ADD COLUMN st.z INTEGER
+
+statement ok
+ALTER TABLE ducklake.geo ADD COLUMN st.g2 GEOMETRY
+
+statement error
+CALL ducklake.set_option('skip_stats_columns', 'nonexistent', table_name => 'nested')
+----
+does not exist
+
+statement error
+CALL ducklake.set_option('skip_stats_columns', 'id')
+----
+can only be set for a specific table
+
+# a name containing a comma would split into different columns, so the list form is required
+statement ok
+CREATE TABLE ducklake.commas("a,b" INTEGER, a INTEGER, b INTEGER)
+
+statement error
+CALL ducklake.set_option('skip_stats_columns', 'a,b', table_name => 'commas')
+----
+contains a comma
+
+statement ok
+CALL ducklake.set_option('skip_stats_columns', ['a,b'], table_name => 'commas')
+
+query II
+SELECT (SELECT value FROM ducklake_meta.ducklake_metadata WHERE key='skip_stats_columns'
+        AND scope_id=(SELECT table_id FROM ducklake_meta.ducklake_table WHERE table_name='commas' AND end_snapshot IS NULL)),
+       (SELECT value FROM ducklake.options() WHERE scope_entry='main.commas')
+----
+1	a,b
+
+# add_data_files takes bounds from the parquet footer, and hive columns from the folder value -
+# the skip has to reach both paths
+statement ok
+COPY (SELECT i AS id, repeat(chr((65 + i)::INTEGER), 2000)::BLOB AS payload FROM range(3) t(i))
+TO '{DATA_PATH}/skip_stats_columns_add.parquet'
+
+statement ok
+CREATE TABLE ducklake.added(id BIGINT, payload BLOB)
+
+statement ok
+CALL ducklake.set_option('skip_stats_columns', 'payload', table_name => 'added')
+
+statement ok
+CALL ducklake_add_data_files('ducklake', 'added', '{DATA_PATH}/skip_stats_columns_add.parquet')
+
+query IIII
+SELECT f.column_id, f.min_value IS NULL, f.max_value IS NULL, f.value_count
+FROM ducklake_meta.ducklake_file_column_stats f JOIN ducklake_meta.ducklake_data_file d USING (data_file_id)
+WHERE d.table_id=(SELECT table_id FROM ducklake_meta.ducklake_table WHERE table_name='added' AND end_snapshot IS NULL)
+ORDER BY f.column_id
+----
+1	false	false	3
+2	true	true	3
+
+query II
+SELECT count(*), count(*) FILTER (payload = repeat('A', 2000)::BLOB) FROM ducklake.added
+----
+3	1
+
+statement ok
+COPY (SELECT 1 AS id, 'aaa' AS k UNION ALL SELECT 2, 'bbb')
+TO '{DATA_PATH}/skip_stats_columns_hive' (FORMAT PARQUET, PARTITION_BY (k))
+
+statement ok
+CREATE TABLE ducklake.hive(id INTEGER, k VARCHAR)
+
+statement ok
+CALL ducklake.set_option('skip_stats_columns', 'k', table_name => 'hive')
+
+statement ok
+CALL ducklake_add_data_files('ducklake', 'hive', '{DATA_PATH}/skip_stats_columns_hive/**/*.parquet', hive_partitioning => true)
+
+statement ok
+CREATE TABLE ducklake.hive_on(id INTEGER, k VARCHAR)
+
+statement ok
+CALL ducklake_add_data_files('ducklake', 'hive_on', '{DATA_PATH}/skip_stats_columns_hive/**/*.parquet', hive_partitioning => true)
+
+# the skipped one records counts but no folder value; the unskipped one still records bounds
+query IIII
+SELECT t.table_name, f.min_value IS NULL, f.value_count, f.null_count
+FROM ducklake_meta.ducklake_file_column_stats f JOIN ducklake_meta.ducklake_data_file d USING (data_file_id)
+JOIN ducklake_meta.ducklake_table t ON t.table_id=d.table_id AND t.end_snapshot IS NULL
+WHERE t.table_name IN ('hive', 'hive_on') AND f.column_id=2
+ORDER BY t.table_name, f.min_value IS NULL, d.data_file_id
+----
+hive	true	1	0
+hive	true	1	0
+hive_on	false	1	0
+hive_on	false	1	0
+
+# the hive values are still read correctly from the paths
+query II
+SELECT k, count(*) FROM ducklake.hive GROUP BY k ORDER BY k
+----
+aaa	1
+bbb	1
+
+# the inlined write path computes its own stats and recurses into nested types
+statement ok
+CREATE TABLE ducklake.inl(id INTEGER, s VARCHAR, st STRUCT(x INTEGER, y VARCHAR))
+
+statement ok
+CALL ducklake.set_option('data_inlining_row_limit', 10, table_name => 'inl')
+
+statement ok
+CALL ducklake.set_option('skip_stats_columns', 's, st', table_name => 'inl')
+
+statement ok
+INSERT INTO ducklake.inl VALUES (1, 'aaa', {'x': 1, 'y': 'p'}), (2, 'bbb', {'x': 2, 'y': 'q'})
+
+# no data file yet - without this the section below would pass via the normal write path
+query I
+SELECT count(*) FROM ducklake_meta.ducklake_data_file d
+WHERE d.table_id=(SELECT table_id FROM ducklake_meta.ducklake_table WHERE table_name='inl' AND end_snapshot IS NULL)
+----
+0
+
+query III
+SELECT column_id, min_value, max_value FROM ducklake_meta.ducklake_table_column_stats
+WHERE table_id=(SELECT table_id FROM ducklake_meta.ducklake_table WHERE table_name='inl' AND end_snapshot IS NULL)
+ORDER BY column_id
+----
+1	1	2
+2	NULL	NULL
+4	NULL	NULL
+5	NULL	NULL
+
+query II
+SELECT count(*) FILTER (s='bbb'), count(*) FILTER (st.y='p') FROM ducklake.inl
+----
+1	1
+
+# flushing to a parquet file keeps the columns bound-less
+statement ok
+CALL ducklake_flush_inlined_data('ducklake')
+
+query II
+SELECT count(*) FILTER (f.min_value IS NULL), count(*) FILTER (f.min_value IS NOT NULL)
+FROM ducklake_meta.ducklake_file_column_stats f JOIN ducklake_meta.ducklake_data_file d USING (data_file_id)
+WHERE d.table_id=(SELECT table_id FROM ducklake_meta.ducklake_table WHERE table_name='inl' AND end_snapshot IS NULL)
+----
+3	1
+
+# this value is re-read on every write to the table, so entries it cannot use are ignored
+# rather than raised
+statement ok
+UPDATE ducklake_meta.ducklake_metadata SET value='999, notanumber, , 3 ,-1'
+WHERE key='skip_stats_columns'
+  AND scope_id=(SELECT table_id FROM ducklake_meta.ducklake_table WHERE table_name='nested' AND end_snapshot IS NULL)
+
+# a field id names a different column in each table, so only a table's own row can be read - and
+# 'unset', having no row of its own, is the only place the global row below could have applied
+statement ok
+CREATE TABLE ducklake.unset(a INTEGER, b VARCHAR)
+
+statement ok
+INSERT INTO ducklake_meta.ducklake_metadata VALUES ('skip_stats_columns', '1,2', NULL, NULL)
+
+statement ok
+DETACH ducklake
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/skip_stats_columns', METADATA_CATALOG 'ducklake_meta', DATA_INLINING_ROW_LIMIT 0)
+
+# an entry resolving to no live column has no effect, and must not render like one that does
+query I
+SELECT value FROM ducklake.options() WHERE scope_entry='main.nested'
+----
+999 (unresolved), notanumber (unresolved), x, -1 (unresolved)
+
+statement ok
+INSERT INTO ducklake.nested VALUES (3, {'x': 3, 'y': 'r', 'z': 3})
+
+statement ok
+INSERT INTO ducklake.unset VALUES (6, 'unaffected')
+
+# id 3 still resolves past the garbage and id 4 no longer does; 'unset' ignored the global row
+query III
+SELECT count(*) FILTER (t.table_name='nested' AND f.column_id=3 AND f.min_value IS NULL),
+       count(*) FILTER (t.table_name='nested' AND f.column_id=4 AND f.min_value IS NOT NULL),
+       count(*) FILTER (t.table_name='unset' AND f.min_value IS NOT NULL)
+FROM ducklake_meta.ducklake_file_column_stats f JOIN ducklake_meta.ducklake_data_file d USING (data_file_id)
+JOIN ducklake_meta.ducklake_table t ON t.table_id=d.table_id AND t.end_snapshot IS NULL
+WHERE d.begin_snapshot>=(SELECT max(snapshot_id)-1 FROM ducklake_meta.ducklake_snapshot)
+----
+1	1	2

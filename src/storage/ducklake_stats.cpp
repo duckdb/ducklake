@@ -104,6 +104,15 @@ DuckLakeColumnStats DuckLakeColumnStats::FromGlobalStats(const LogicalType &type
 	return stats;
 }
 
+void DuckLakeColumnStats::ClearBounds() {
+	min.clear();
+	max.clear();
+	has_min = false;
+	has_max = false;
+	contains_nan = false;
+	has_contains_nan = false;
+}
+
 bool DuckLakeColumnStats::BoundsSurviveTypePromotion(const LogicalType &source, const LogicalType &target) {
 	// bound strings reread exactly at wider types
 	if (source.IsIntegral() && target.IsIntegral()) {

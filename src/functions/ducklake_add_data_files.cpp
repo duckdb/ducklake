@@ -156,7 +156,8 @@ public:
 	DuckLakeFileProcessor(DuckLakeTransaction &transaction, ClientContext &context,
 	                      const DuckLakeAddDataFilesData &bind_data)
 	    : transaction(transaction), context(context), table(bind_data.table), allow_missing(bind_data.allow_missing),
-	      ignore_extra_columns(bind_data.ignore_extra_columns), hive_partitioning(bind_data.hive_partitioning) {
+	      ignore_extra_columns(bind_data.ignore_extra_columns), hive_partitioning(bind_data.hive_partitioning),
+	      skipped_fields(bind_data.table.GetSkippedStatsFields()) {
 	}
 
 	vector<DuckLakeDataFile> AddFiles(const vector<string> &globs);
@@ -190,6 +191,7 @@ private:
 	map<string, string> hive_partitions;
 	HivePartitioningType hive_partitioning;
 	unordered_set<string> processed_files;
+	unordered_set<idx_t> skipped_fields;
 };
 
 void DuckLakeFileProcessor::ReadParquetFullMetadata(const string &glob, vector<DuckLakeDataFile> &written_files) {
@@ -1052,6 +1054,12 @@ void DuckLakeFileProcessor::MapColumnStats(ParquetFileMetadata &file_metadata, D
 				}
 			}
 
+			if (skipped_fields.count(field_index.index)) {
+				aggregated.ClearBounds();
+				result.column_stats.emplace(field_index, std::move(aggregated));
+				continue;
+			}
+
 			numeric_type = aggregated.type.IsNumeric();
 			Value numeric_min_cache;
 			Value numeric_max_cache;
@@ -1137,13 +1145,14 @@ void DuckLakeFileProcessor::MapColumnStats(ParquetFileMetadata &file_metadata, D
 		column_stats.has_num_values = true;
 		column_stats.num_values = file_metadata.row_count.GetIndex();
 		column_stats.has_null_count = true;
-		if (!hive_value.IsNull()) {
-			column_stats.min = column_stats.max = hive_value.ToString();
-			column_stats.has_min = column_stats.has_max = true;
-		} else {
+		if (hive_value.IsNull()) {
 			// All rows in this file have NULL for this partition column
 			column_stats.null_count = file_metadata.row_count.GetIndex();
 			column_stats.any_valid = false;
+		} else if (!skipped_fields.count(field_index.index)) {
+			// a skipped column records counts but not the folder value
+			column_stats.min = column_stats.max = hive_value.ToString();
+			column_stats.has_min = column_stats.has_max = true;
 		};
 
 		result.column_stats.emplace(field_index, std::move(column_stats));
