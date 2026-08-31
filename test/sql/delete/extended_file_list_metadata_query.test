@@ -142,7 +142,27 @@ statement ok
 CREATE TABLE temporal_events(ts TIMESTAMP)
 
 statement ok
-INSERT INTO temporal_events VALUES (TIMESTAMP '2026-01-01'), (TIMESTAMP '10000-01-01')
+INSERT INTO temporal_events VALUES (TIMESTAMP '-0001-01-01'), (TIMESTAMP '2026-01-01'), (TIMESTAMP '10000-01-01')
+
+# Both unsafe bounds must remain open for pruning; Top-N ordering keeps a NULL cast result.
+query T
+SELECT ts FROM temporal_events WHERE ts >= TIMESTAMP '2026-01-01' AND ts < TIMESTAMP '2027-01-01' ORDER BY ts DESC LIMIT 1
+----
+2026-01-01 00:00:00
+
+query I
+SELECT CASE WHEN (SELECT catalog_type FROM settings()) = 'postgres' THEN
+    (SELECT count(*) = 1 FROM (
+         SELECT lower(regexp_replace(query, '\s+', '', 'g')) AS query
+         FROM duckdb_logs_parsed('DuckLakeMetadata')
+     ) logs
+     WHERE query LIKE '%wherecolumn_id=1andtable_id=3%'
+       AND query LIKE '%coalesce((casewhenmin_value~%''''-infinity''''::timestamp)%'
+       AND query LIKE '%coalesce((casewhenmax_value~%''''infinity''''::timestamp)%'
+       AND query LIKE '%orderby(casewhencol_1_stats.max_value~%descnullslast%')
+    ELSE true END
+----
+true
 
 query I
 DELETE FROM temporal_events WHERE ts >= TIMESTAMP '2026-01-01' AND ts < TIMESTAMP '2027-01-01'
@@ -156,6 +176,6 @@ DELETE FROM temporal_events WHERE ts = TIMESTAMP '10000-01-01'
 1
 
 query I
-SELECT count(*) FROM temporal_events
+SELECT ts = TIMESTAMP '-0001-01-01' FROM temporal_events
 ----
-0
+true

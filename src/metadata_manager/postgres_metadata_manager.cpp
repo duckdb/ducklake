@@ -81,7 +81,7 @@ static bool CanCastPostgresTemporalValue(const Value &value, const LogicalType &
 	return type.id() != LogicalTypeId::DATE || string_value.size() == 10;
 }
 
-static string PostgresCastValueToTarget(const Value &value, const LogicalType &type) {
+string PostgresMetadataManager::CastValueToTarget(const Value &value, const LogicalType &type) {
 	if (value.IsNull() || value.ToString().find('\0') != string::npos || type.id() == LogicalTypeId::BLOB) {
 		return string();
 	}
@@ -138,9 +138,17 @@ static string PostgresSafeTemporalStatsCast(const string &stats, const LogicalTy
 	                          stats, GetPostgresStatsType(type));
 }
 
-static string PostgresCastStatsToTarget(const string &stats, const LogicalType &type) {
+string PostgresMetadataManager::CastStatsToTarget(const string &stats, const LogicalType &type,
+                                                  StatsCastType cast_type) {
 	if (IsPostgresTemporalStatsType(type)) {
-		return PostgresSafeTemporalStatsCast(stats, type);
+		auto cast = PostgresSafeTemporalStatsCast(stats, type);
+		if (cast_type == StatsCastType::ORDERING) {
+			return cast;
+		}
+		// Unknown bounds must not exclude a file that can satisfy the data filter.
+		return StringUtil::Format("COALESCE(%s, '%s'::%s)", cast,
+		                          cast_type == StatsCastType::MIN ? "-infinity" : "infinity",
+		                          GetPostgresStatsType(type));
 	}
 	if (CanCastPostgresStatsForValueComparison(type)) {
 		return stats + "::" + GetPostgresStatsType(type);
@@ -301,22 +309,10 @@ string PostgresMetadataManager::GenerateFileColumnStatsCTEBody(const CTERequirem
 string PostgresMetadataManager::GenerateFileListQuery(DuckLakeTableEntry &table, const FilterPushdownInfo *filter_info,
                                                       const vector<DuckLakeFileListDynamicFilter> &dynamic_filters,
                                                       FileListType file_list_type, const string &,
-                                                      const ColumnStatsFilterSQL *,
-                                                      const FileColumnStatsCTEBodyGenerator &,
-                                                      const FileListStatsCastGenerator &) {
-	ColumnStatsFilterSQL filter_sql;
-	filter_sql.cast_value = PostgresCastValueToTarget;
-	filter_sql.cast_stats = [](const string &stats, const LogicalType &type, bool is_min) {
-		auto cast = PostgresCastStatsToTarget(stats, type);
-		if (cast.empty() || !IsPostgresTemporalStatsType(type)) {
-			return cast;
-		}
-		return StringUtil::Format("COALESCE(%s, '%s'::%s)", cast, is_min ? "-infinity" : "infinity",
-		                          GetPostgresStatsType(type));
-	};
-	auto remote_query = DuckLakeMetadataManager::GenerateFileListQuery(
-	    table, filter_info, dynamic_filters, file_list_type, "{METADATA_SCHEMA_ESCAPED}", &filter_sql,
-	    GeneratePostgresNativeFileColumnStatsCTEBody, PostgresCastStatsToTarget);
+                                                      const FileColumnStatsCTEBodyGenerator &) {
+	auto remote_query = DuckLakeMetadataManager::GenerateFileListQuery(table, filter_info, dynamic_filters,
+	                                                                   file_list_type, "{METADATA_SCHEMA_ESCAPED}",
+	                                                                   GeneratePostgresNativeFileColumnStatsCTEBody);
 
 	return StringUtil::Format("SELECT * FROM postgres_query({METADATA_CATALOG_NAME_LITERAL}, %s)",
 	                          SQLString(remote_query));

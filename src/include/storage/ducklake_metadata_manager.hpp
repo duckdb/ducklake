@@ -443,13 +443,8 @@ public:
 
 protected:
 	enum class FileListType : uint8_t { SCAN, EXTENDED };
-
-	struct ColumnStatsFilterSQL {
-		std::function<string(const Value &, const LogicalType &)> cast_value;
-		std::function<string(const string &, const LogicalType &, bool)> cast_stats;
-	};
+	enum class StatsCastType : uint8_t { ORDERING, MIN, MAX };
 	using FileColumnStatsCTEBodyGenerator = std::function<string(const CTERequirement &, TableIndex)>;
-	using FileListStatsCastGenerator = std::function<string(const string &, const LogicalType &)>;
 
 	virtual string GetLatestSnapshotQuery() const;
 
@@ -458,9 +453,7 @@ protected:
 	                                     const vector<DuckLakeFileListDynamicFilter> &dynamic_filters,
 	                                     FileListType file_list_type = FileListType::SCAN,
 	                                     const string &metadata_table_prefix = "{METADATA_CATALOG}",
-	                                     const ColumnStatsFilterSQL *filter_sql = nullptr,
-	                                     const FileColumnStatsCTEBodyGenerator &generate_cte_body = {},
-	                                     const FileListStatsCastGenerator &cast_stats = {});
+	                                     const FileColumnStatsCTEBodyGenerator &generate_cte_body = {});
 
 	//! Wrap field selections with list aggregation of struct objects (DBMS-specific)
 	//! For DuckDB: LIST({'key1': val1, 'key2': val2, ...})
@@ -544,8 +537,7 @@ protected:
 	string BuildBucketPartitionPruningClause(
 	    DuckLakeTableEntry &table, const FilterPushdownInfo &filter_info,
 	    const string &partition_value_table = "{METADATA_CATALOG}.ducklake_file_partition_value");
-	virtual FilterSQLResult ConvertFilterPushdownToSQL(const FilterPushdownInfo &filter_info,
-	                                                   const ColumnStatsFilterSQL *filter_sql = nullptr);
+	virtual FilterSQLResult ConvertFilterPushdownToSQL(const FilterPushdownInfo &filter_info);
 	string GenerateCTESectionFromRequirements(const unordered_map<idx_t, CTERequirement> &requirements,
 	                                          TableIndex table_id,
 	                                          const FileColumnStatsCTEBodyGenerator &generate_body);
@@ -556,19 +548,16 @@ private:
 	virtual string GenerateFilterFromTableFilter(const ExpressionFilter &filter, const LogicalType &type,
 	                                             unordered_set<string> &referenced_stats);
 	virtual string GenerateFilterFromExpression(const Expression &expr, const LogicalType *type,
-	                                            unordered_set<string> &referenced_stats,
-	                                            const ColumnStatsFilterSQL *filter_sql = nullptr);
+	                                            unordered_set<string> &referenced_stats);
 	virtual bool ValueIsFinite(const Value &val);
 	virtual string CastValueToTarget(const Value &val, const LogicalType &type);
-	virtual string CastStatsToTarget(const string &stats, const LogicalType &type);
+	virtual string CastStatsToTarget(const string &stats, const LogicalType &type,
+	                                 StatsCastType cast_type = StatsCastType::ORDERING);
 	virtual string GenerateConstantFilter(ExpressionType comparison_type, const Value &constant,
-	                                      const LogicalType &type, unordered_set<string> &referenced_stats,
-	                                      const ColumnStatsFilterSQL *filter_sql = nullptr);
+	                                      const LogicalType &type, unordered_set<string> &referenced_stats);
 	virtual string GenerateConstantFilterDouble(ExpressionType comparison_type, const Value &constant,
-	                                            const LogicalType &type, unordered_set<string> &referenced_stats,
-	                                            const ColumnStatsFilterSQL *filter_sql = nullptr);
-	virtual string GenerateFilterPushdown(const ExpressionFilter &filter, unordered_set<string> &referenced_stats,
-	                                      const ColumnStatsFilterSQL *filter_sql = nullptr);
+	                                            const LogicalType &type, unordered_set<string> &referenced_stats);
+	virtual string GenerateFilterPushdown(const ExpressionFilter &filter, unordered_set<string> &referenced_stats);
 
 public:
 	//! Read inlined file deletions for regular table scans (no snapshot info per row)
