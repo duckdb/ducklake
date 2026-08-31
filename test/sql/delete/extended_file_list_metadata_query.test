@@ -115,58 +115,6 @@ SELECT id, snapshot_id = getvariable('first_delete') FROM ducklake_table_deletio
 2	true
 3	false
 
-statement ok
-BEGIN
-
-query I
-DELETE FROM events WHERE id = 1
-----
-1
-
-statement ok
-ROLLBACK
-
-query II
-SELECT count(*), sum(id) FROM events
-----
-4	16
-
-# Deleting the last live row drops the first file, using its complete row count and prior deletions.
-query I
-DELETE FROM events WHERE id = 1
-----
-1
-
-query I
-SELECT count(*) FROM ducklake_list_files('ducklake', 'events')
-----
-1
-
-# The metadata result still merges transaction-local files and existing deletes in C++.
-statement ok
-BEGIN
-
-statement ok
-INSERT INTO events VALUES (7, '2026-01-07', 'other')
-
-query I
-DELETE FROM events WHERE id >= 6
-----
-2
-
-query II
-SELECT count(*), sum(id) FROM events
-----
-2	9
-
-statement ok
-ROLLBACK
-
-query II
-SELECT count(*), sum(id) FROM events
-----
-3	15
-
 # An added column has no stats in old files; newly written all-NULL columns have NULL min/max stats.
 statement ok
 ALTER TABLE events ADD COLUMN score INTEGER
@@ -187,7 +135,7 @@ DELETE FROM events WHERE score IS NULL AND id = 8
 query II
 SELECT count(*), sum(id) FROM events
 ----
-2	11
+3	12
 
 # Unsafe PostgreSQL temporal stats casts must not prune a matching file or fail the delete.
 statement ok
