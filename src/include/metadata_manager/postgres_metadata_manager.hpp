@@ -42,7 +42,8 @@ protected:
 	string GenerateFileColumnStatsCTEBody(const CTERequirement &req, TableIndex table_id) override;
 	string GenerateFileListQuery(DuckLakeTableEntry &table, const FilterPushdownInfo *filter_info,
 	                             const vector<DuckLakeFileListDynamicFilter> &dynamic_filters,
-	                             const string &metadata_table_prefix, const ColumnStatsFilterSQL *filter_sql,
+	                             FileListType file_list_type, const string &metadata_table_prefix,
+	                             const ColumnStatsFilterSQL *filter_sql,
 	                             const FileColumnStatsCTEBodyGenerator &generate_cte_body,
 	                             const FileListStatsCastGenerator &cast_stats) override;
 

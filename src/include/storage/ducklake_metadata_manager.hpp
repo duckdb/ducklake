@@ -125,12 +125,6 @@ struct FilterPushdownInfo {
 	}
 };
 
-struct FilterPushdownQueryComponents {
-	string cte_section;
-	string where_clause;
-	string order_by_clause;
-};
-
 struct DuckLakeFileListDynamicFilter {
 	idx_t column_field_index;
 	ExpressionType comparison_type;
@@ -448,6 +442,8 @@ public:
 	string GetPathSeparator(const string &path);
 
 protected:
+	enum class FileListType : uint8_t { SCAN, EXTENDED };
+
 	struct ColumnStatsFilterSQL {
 		std::function<string(const Value &, const LogicalType &)> cast_value;
 		std::function<string(const string &, const LogicalType &, bool)> cast_stats;
@@ -460,6 +456,7 @@ protected:
 	virtual string GenerateFileColumnStatsCTEBody(const CTERequirement &req, TableIndex table_id);
 	virtual string GenerateFileListQuery(DuckLakeTableEntry &table, const FilterPushdownInfo *filter_info,
 	                                     const vector<DuckLakeFileListDynamicFilter> &dynamic_filters,
+	                                     FileListType file_list_type = FileListType::SCAN,
 	                                     const string &metadata_table_prefix = "{METADATA_CATALOG}",
 	                                     const ColumnStatsFilterSQL *filter_sql = nullptr,
 	                                     const FileColumnStatsCTEBodyGenerator &generate_cte_body = {},
@@ -554,8 +551,6 @@ protected:
 	                                          const FileColumnStatsCTEBodyGenerator &generate_body);
 
 private:
-	FilterPushdownQueryComponents GenerateFilterPushdownComponents(const FilterPushdownInfo &filter_info,
-	                                                               DuckLakeTableEntry &table);
 	virtual string GenerateCTESectionFromRequirements(const unordered_map<idx_t, CTERequirement> &requirements,
 	                                                  TableIndex table_id);
 	virtual string GenerateFilterFromTableFilter(const ExpressionFilter &filter, const LogicalType &type,

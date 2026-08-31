@@ -300,7 +300,8 @@ string PostgresMetadataManager::GenerateFileColumnStatsCTEBody(const CTERequirem
 
 string PostgresMetadataManager::GenerateFileListQuery(DuckLakeTableEntry &table, const FilterPushdownInfo *filter_info,
                                                       const vector<DuckLakeFileListDynamicFilter> &dynamic_filters,
-                                                      const string &, const ColumnStatsFilterSQL *,
+                                                      FileListType file_list_type, const string &,
+                                                      const ColumnStatsFilterSQL *,
                                                       const FileColumnStatsCTEBodyGenerator &,
                                                       const FileListStatsCastGenerator &) {
 	ColumnStatsFilterSQL filter_sql;
@@ -314,7 +315,7 @@ string PostgresMetadataManager::GenerateFileListQuery(DuckLakeTableEntry &table,
 		                          GetPostgresStatsType(type));
 	};
 	auto remote_query = DuckLakeMetadataManager::GenerateFileListQuery(
-	    table, filter_info, dynamic_filters, "{METADATA_SCHEMA_ESCAPED}", &filter_sql,
+	    table, filter_info, dynamic_filters, file_list_type, "{METADATA_SCHEMA_ESCAPED}", &filter_sql,
 	    GeneratePostgresNativeFileColumnStatsCTEBody, PostgresCastStatsToTarget);
 
 	return StringUtil::Format("SELECT * FROM postgres_query({METADATA_CATALOG_NAME_LITERAL}, %s)",
