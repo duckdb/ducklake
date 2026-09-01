@@ -1011,6 +1011,7 @@ TransactionChangeInformation DuckLakeTransaction::GetTransactionChanges() const 
 		}
 	}
 	changes.tables_deleted_from = tables_deleted_from;
+	changes.tables_delete_attempted = state->tables_delete_attempted;
 	for (auto &entry : local_changes.Changes()) {
 		auto table_id = entry.GetTableIndex();
 		if (IsTransactionLocal(table_id.index)) {
@@ -1878,6 +1879,10 @@ void DuckLakeTransaction::DropFile(TableIndex table_id, DataFileIndex data_file_
 	stats.data_file_ids.insert(data_file_id);
 }
 
+void DuckLakeTransaction::MarkDeleteAttempted(TableIndex table_id) {
+	state->tables_delete_attempted.insert(table_id);
+}
+
 bool DuckLakeTransaction::HasDroppedFiles() const {
 	return !state->dropped_files.empty();
 }
@@ -1888,6 +1893,10 @@ const unordered_map<string, DataFileIndex> &DuckLakeTransaction::GetDroppedFiles
 
 const set<TableIndex> &DuckLakeTransaction::GetTablesDeletedFrom() const {
 	return state->tables_deleted_from;
+}
+
+const set<TableIndex> &DuckLakeTransaction::GetTablesDeleteAttempted() const {
+	return state->tables_delete_attempted;
 }
 
 const vector<FlushedInlinedTableInfo> &DuckLakeTransaction::GetFlushedInlinedTables() const {

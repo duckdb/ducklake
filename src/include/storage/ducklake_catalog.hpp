@@ -40,12 +40,15 @@ class LogicalGet;
 struct DuckLakeTableStatsCacheEntry : public ObjectCacheEntry {
 	static constexpr idx_t ESTIMATED_BYTES_PER_COLUMN_STATS = 256;
 
-	explicit DuckLakeTableStatsCacheEntry(DuckLakeTableStats stats_p) : stats(std::move(stats_p)), has_stats(true) {
+	DuckLakeTableStatsCacheEntry(idx_t schema_version, DuckLakeTableStats stats_p)
+	    : schema_version(schema_version), stats(std::move(stats_p)), has_stats(true) {
 	}
 	//! Negative entry: table has no stats at this snapshot.
-	DuckLakeTableStatsCacheEntry() : has_stats(false) {
+	explicit DuckLakeTableStatsCacheEntry(idx_t schema_version) : schema_version(schema_version), has_stats(false) {
 	}
 
+	//! Schema version that stamped the stats types
+	idx_t schema_version;
 	DuckLakeTableStats stats;
 	bool has_stats;
 
@@ -75,10 +78,9 @@ struct DuckLakeSchemaCacheEntry : public ObjectCacheEntry {
 	optional_idx GetEstimatedCacheMemory() const override;
 };
 
-//! Query-scoped pin for DuckLake schema cache entries, which guarantee memory safety before transaction finishes.
-class DuckLakeSchemaPinState : public ClientContextState {
+//! Holds pins on DuckLake schema cache entries, keeping them alive while they are still referenced.
+class DuckLakeSchemaPinState {
 public:
-	void QueryEnd(ClientContext &context) override;
 	void Pin(shared_ptr<DuckLakeSchemaCacheEntry> entry);
 	//! Clear all pinned schema cache entries for this pin state.
 	void Clear();
@@ -314,12 +316,9 @@ private:
 	                                                         DuckLakeSnapshot snapshot);
 	shared_ptr<DuckLakeTableStats> GetTableStatsInternal(DuckLakeTransaction &transaction, DuckLakeSnapshot snapshot,
 	                                                     TableIndex table_id, bool retry_on_snapshot_mismatch);
-	//! Pin a schema cache entry for the duration of the current query to ensure safe memory access.
-	void PinSchemaForQuery(DuckLakeTransaction &transaction, shared_ptr<DuckLakeSchemaCacheEntry> entry);
 	void LoadNameMaps(DuckLakeTransaction &transaction);
 	string StatsCacheKey(idx_t snapshot_id, TableIndex table_id) const;
 	string SchemaCacheKey(idx_t schema_version) const;
-	string SchemaPinStateKey() const;
 	ObjectCache &GetObjectCacheInstance();
 
 private:

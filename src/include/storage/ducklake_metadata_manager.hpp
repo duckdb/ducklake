@@ -69,7 +69,6 @@ struct DuckLakeInlinedColNames {
 struct CTERequirement {
 	idx_t column_field_index;
 	unordered_set<string> referenced_stats;
-	idx_t reference_count = 1;
 
 	CTERequirement(idx_t col_idx, unordered_set<string> stats)
 	    : column_field_index(col_idx), referenced_stats(std::move(stats)) {
@@ -78,11 +77,10 @@ struct CTERequirement {
 
 struct FilterSQLResult {
 	string where_conditions;
-	unordered_map<idx_t, CTERequirement> required_ctes;
+	//! Ordered by column field index so the generated SQL does not depend on hash iteration order
+	map<idx_t, CTERequirement> required_ctes;
 
 	FilterSQLResult() = default;
-	FilterSQLResult(string conditions) : where_conditions(std::move(conditions)) {
-	}
 };
 
 struct ColumnFilterInfo {
@@ -127,8 +125,8 @@ struct FilterPushdownInfo {
 
 struct FilterPushdownQueryComponents {
 	string cte_section;
+	string join_clause;
 	string where_clause;
-	string order_by_clause;
 };
 
 //! The DuckLake metadata manger is the communication layer between the system and the metadata catalog
@@ -531,20 +529,24 @@ private:
 	//! any metadata backend (DuckDB / Postgres / SQLite). Bucket hashes are pre-computed in C++.
 	string BuildBucketPartitionPruningClause(DuckLakeTableEntry &table, const FilterPushdownInfo &filter_info);
 	virtual FilterSQLResult ConvertFilterPushdownToSQL(const FilterPushdownInfo &filter_info);
-	virtual string GenerateCTESectionFromRequirements(const unordered_map<idx_t, CTERequirement> &requirements,
+	virtual string GenerateCTESectionFromRequirements(const map<idx_t, CTERequirement> &requirements,
 	                                                  TableIndex table_id);
-	virtual string GenerateFilterFromTableFilter(const ExpressionFilter &filter, const LogicalType &type,
-	                                             unordered_set<string> &referenced_stats);
+	//! Join each column's stats CTE once. Leading newline per join, empty when there are none, so it
+	//! concatenates straight onto the FROM line.
+	static string GenerateStatsJoinList(const map<idx_t, CTERequirement> &requirements);
 	virtual string GenerateFilterFromExpression(const Expression &expr, const LogicalType *type,
-	                                            unordered_set<string> &referenced_stats);
+	                                            unordered_set<string> &referenced_stats, const string &stats_alias);
 	virtual bool ValueIsFinite(const Value &val);
 	virtual string CastValueToTarget(const Value &val, const LogicalType &type);
 	virtual string CastStatsToTarget(const string &stats, const LogicalType &type);
 	virtual string GenerateConstantFilter(ExpressionType comparison_type, const Value &constant,
-	                                      const LogicalType &type, unordered_set<string> &referenced_stats);
+	                                      const LogicalType &type, unordered_set<string> &referenced_stats,
+	                                      const string &stats_alias);
 	virtual string GenerateConstantFilterDouble(ExpressionType comparison_type, const Value &constant,
-	                                            const LogicalType &type, unordered_set<string> &referenced_stats);
-	virtual string GenerateFilterPushdown(const ExpressionFilter &filter, unordered_set<string> &referenced_stats);
+	                                            const LogicalType &type, unordered_set<string> &referenced_stats,
+	                                            const string &stats_alias);
+	virtual string GenerateFilterPushdown(const ExpressionFilter &filter, unordered_set<string> &referenced_stats,
+	                                      const string &stats_alias);
 
 public:
 	//! Read inlined file deletions for regular table scans (no snapshot info per row)

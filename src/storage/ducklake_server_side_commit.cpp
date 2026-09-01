@@ -161,6 +161,9 @@ DuckLakeServerSideCommitResult DuckLakeServerSideCommit::Run() {
 	for (auto &table_id : state->tables_deleted_from) {
 		transaction_changes.tables_deleted_from.insert(table_id);
 	}
+	for (auto &table_id : state->tables_delete_attempted) {
+		transaction_changes.tables_delete_attempted.insert(table_id);
+	}
 
 	idx_t committed_snapshot_id = 0;
 	idx_t committed_schema_version = static_cast<idx_t>(schema_version);
@@ -558,6 +561,10 @@ void DuckLakeServerSideCommit::ReadStagedDroppedFiles() {
 	for (auto &row : *tables) {
 		state->tables_deleted_from.insert(TableIndex(AsIdx(row, 0)));
 	}
+	auto delete_attempted = ScanStagedTable(DuckLakeStagedTableType::TABLES_DELETE_ATTEMPTED);
+	for (auto &row : *delete_attempted) {
+		state->tables_delete_attempted.insert(TableIndex(AsIdx(row, 0)));
+	}
 }
 
 void DuckLakeServerSideCommit::ReadStagedFlushedInlinedTables() {
@@ -689,7 +696,8 @@ unique_ptr<DuckLakeTableStats> DuckLakeServerSideCommit::BuildTableStats(const D
 		if (type_it == column_types.end()) {
 			continue;
 		}
-		entry->column_stats.emplace(col.column_id, DuckLakeColumnStats::FromGlobalStats(type_it->second, col));
+		entry->column_stats.emplace(col.column_id,
+		                            DuckLakeColumnStats::FromGlobalStats(type_it->second, col, gs.record_count > 0));
 	}
 	return entry;
 }
