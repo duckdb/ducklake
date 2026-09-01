@@ -1,0 +1,47 @@
+# name: test/sql/concurrent/concurrent_upsert_absent_key.test
+# description: test that concurrent delete-and-insert of a key that does not exist yet triggers a conflict
+# group: [concurrent]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/ducklake_concurrent_upsert_absent_key', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE ducklake.tbl(key INTEGER, writer INTEGER);
+
+# key 42 is absent, so every DELETE matches zero rows and writes no delete file
+concurrentloop i 0 4
+
+statement ok
+SET ducklake_max_retry_count = 100
+
+statement ok
+SET ducklake_retry_wait_ms = 100
+
+statement ok
+BEGIN
+
+statement ok
+DELETE FROM ducklake.tbl WHERE key = 42
+
+statement ok
+INSERT INTO ducklake.tbl VALUES (42, {i})
+
+statement maybe
+COMMIT
+----
+
+endloop
+
+# only one writer may win - a delete matching no rows must still conflict with a concurrent insert
+query I
+SELECT COUNT(*) FROM ducklake.tbl WHERE key = 42
+----
+1

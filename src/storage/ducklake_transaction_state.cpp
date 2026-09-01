@@ -225,6 +225,11 @@ void DuckLakeTransactionState::CheckForConflicts(const TransactionChangeInformat
 		ConflictCheck(table_id, other_changes.inserted_tables, "delete from table", "inserted into it");
 		ConflictCheck(table_id, other_changes.tables_inserted_inlined, "delete from table", "inserted into it");
 	}
+	// a delete that matched no rows must still conflict with concurrent inserts to the same table
+	for (auto &table_id : changes.tables_delete_attempted) {
+		ConflictCheck(table_id, other_changes.inserted_tables, "delete from table", "inserted into it");
+		ConflictCheck(table_id, other_changes.tables_inserted_inlined, "delete from table", "inserted into it");
+	}
 	if (!changes.tables_deleted_from.empty()) {
 		bool check_for_matches = false;
 		for (auto &table_id : changes.tables_deleted_from) {

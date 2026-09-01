@@ -329,20 +329,17 @@ string PostgresMetadataManager::GenerateFileListQuery(DuckLakeTableEntry &table,
 		} else {
 			entry->second.referenced_stats.insert("min_value");
 			entry->second.referenced_stats.insert("max_value");
-			entry->second.reference_count++;
 		}
 	}
 
 	string remote_query = GenerateCTESectionFromRequirements(filter_result.required_ctes, table_id,
 	                                                         GeneratePostgresNativeFileColumnStatsCTEBody);
 	string stats_select_list;
-	string stats_join_list;
+	string stats_join_list = GenerateStatsJoinList(filter_result.required_ctes);
 	string order_by_clause;
 	for (const auto &dynamic_filter : dynamic_filters) {
 		auto cte_name = StringUtil::Format("col_%d_stats", NumericCast<int64_t>(dynamic_filter.column_field_index));
 		stats_select_list += StringUtil::Format(", %s.min_value, %s.max_value", cte_name.c_str(), cte_name.c_str());
-		stats_join_list += StringUtil::Format("\nLEFT JOIN %s ON %s.data_file_id = data.data_file_id", cte_name.c_str(),
-		                                      cte_name.c_str());
 
 		if (order_by_clause.empty() && (dynamic_filter.column_type.id() == LogicalTypeId::VARCHAR ||
 		                                CanCastPostgresStatsForValueComparison(dynamic_filter.column_type))) {

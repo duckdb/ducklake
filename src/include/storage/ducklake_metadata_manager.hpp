@@ -69,7 +69,6 @@ struct DuckLakeInlinedColNames {
 struct CTERequirement {
 	idx_t column_field_index;
 	unordered_set<string> referenced_stats;
-	idx_t reference_count = 1;
 
 	CTERequirement(idx_t col_idx, unordered_set<string> stats)
 	    : column_field_index(col_idx), referenced_stats(std::move(stats)) {
@@ -78,11 +77,10 @@ struct CTERequirement {
 
 struct FilterSQLResult {
 	string where_conditions;
-	unordered_map<idx_t, CTERequirement> required_ctes;
+	//! Ordered by column field index so the generated SQL does not depend on hash iteration order
+	map<idx_t, CTERequirement> required_ctes;
 
 	FilterSQLResult() = default;
-	FilterSQLResult(string conditions) : where_conditions(std::move(conditions)) {
-	}
 };
 
 struct ColumnFilterInfo {
@@ -127,8 +125,8 @@ struct FilterPushdownInfo {
 
 struct FilterPushdownQueryComponents {
 	string cte_section;
+	string join_clause;
 	string where_clause;
-	string order_by_clause;
 };
 
 struct DuckLakeFileListDynamicFilter {
@@ -531,7 +529,7 @@ protected:
 		std::function<string(const Value &, const LogicalType &)> cast_value;
 		std::function<string(const string &, const LogicalType &, bool)> cast_stats;
 	};
-
+	using FileColumnStatsCTEBodyGenerator = std::function<string(const CTERequirement &, TableIndex)>;
 	string GetFileSelectList(const string &prefix);
 	string GetDeleteFileSelectList(const string &prefix);
 	//! Build an additional WHERE fragment that prunes files by bucket() partition value.
@@ -543,32 +541,31 @@ protected:
 	    const string &partition_value_table = "{METADATA_CATALOG}.ducklake_file_partition_value");
 	virtual FilterSQLResult ConvertFilterPushdownToSQL(const FilterPushdownInfo &filter_info,
 	                                                   const ColumnStatsFilterSQL *filter_sql = nullptr);
-	using FileColumnStatsCTEBodyGenerator = std::function<string(const CTERequirement &, TableIndex)>;
-	string GenerateCTESectionFromRequirements(const unordered_map<idx_t, CTERequirement> &requirements,
-	                                          TableIndex table_id,
+	string GenerateCTESectionFromRequirements(const map<idx_t, CTERequirement> &requirements, TableIndex table_id,
 	                                          const FileColumnStatsCTEBodyGenerator &generate_body);
+	//! Join each column's stats CTE once. Leading newline per join, empty when there are none.
+	static string GenerateStatsJoinList(const map<idx_t, CTERequirement> &requirements);
 
 private:
 	FilterPushdownQueryComponents GenerateFilterPushdownComponents(const FilterPushdownInfo &filter_info,
 	                                                               DuckLakeTableEntry &table);
-	virtual string GenerateCTESectionFromRequirements(const unordered_map<idx_t, CTERequirement> &requirements,
+	virtual string GenerateCTESectionFromRequirements(const map<idx_t, CTERequirement> &requirements,
 	                                                  TableIndex table_id);
-	virtual string GenerateFilterFromTableFilter(const ExpressionFilter &filter, const LogicalType &type,
-	                                             unordered_set<string> &referenced_stats);
 	virtual string GenerateFilterFromExpression(const Expression &expr, const LogicalType *type,
-	                                            unordered_set<string> &referenced_stats,
+	                                            unordered_set<string> &referenced_stats, const string &stats_alias,
 	                                            const ColumnStatsFilterSQL *filter_sql = nullptr);
 	virtual bool ValueIsFinite(const Value &val);
 	virtual string CastValueToTarget(const Value &val, const LogicalType &type);
 	virtual string CastStatsToTarget(const string &stats, const LogicalType &type);
 	virtual string GenerateConstantFilter(ExpressionType comparison_type, const Value &constant,
 	                                      const LogicalType &type, unordered_set<string> &referenced_stats,
-	                                      const ColumnStatsFilterSQL *filter_sql = nullptr);
+	                                      const string &stats_alias, const ColumnStatsFilterSQL *filter_sql = nullptr);
 	virtual string GenerateConstantFilterDouble(ExpressionType comparison_type, const Value &constant,
 	                                            const LogicalType &type, unordered_set<string> &referenced_stats,
+	                                            const string &stats_alias,
 	                                            const ColumnStatsFilterSQL *filter_sql = nullptr);
 	virtual string GenerateFilterPushdown(const ExpressionFilter &filter, unordered_set<string> &referenced_stats,
-	                                      const ColumnStatsFilterSQL *filter_sql = nullptr);
+	                                      const string &stats_alias, const ColumnStatsFilterSQL *filter_sql = nullptr);
 
 public:
 	//! Read inlined file deletions for regular table scans (no snapshot info per row)

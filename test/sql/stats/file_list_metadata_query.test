@@ -111,8 +111,8 @@ SELECT CASE WHEN (SELECT catalog_type FROM settings()) = 'postgres' THEN
            length('wherecolumn_id=1andtable_id=1')
        AND length(query) - length(replace(query, 'wherecolumn_id=2andtable_id=1', '')) =
            length('wherecolumn_id=2andtable_id=1')
-       AND length(query) - length(replace(query, 'col_1_statsasmaterialized', '')) =
-           length('col_1_statsasmaterialized'))
+       AND length(query) - length(replace(query, 'col_1_statsas(', '')) =
+           length('col_1_statsas('))
     ELSE true END
 ----
 true
@@ -181,7 +181,7 @@ SELECT CASE WHEN (SELECT catalog_type FROM settings()) = 'postgres' THEN
      ) logs
      WHERE query LIKE 'select*frompostgres_query(%'
        AND query LIKE '%wherecolumn_id=1andtable_id=3%'
-       AND query LIKE '%col_1_statsasmaterialized%'
+       AND query LIKE '%col_1_statsas(%'
        AND query LIKE '%max_value::real>%'
        AND query LIKE '%orderbycol_1_stats.max_value::realdescnullslast%')
     ELSE true END
