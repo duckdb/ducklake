@@ -1,0 +1,139 @@
+# name: test/sql/stats/prefix_range_file_pruning.test
+# description: Test file pruning using prefix range filters
+# group: [stats]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/ducklake_prefix_range_pruning', METADATA_CATALOG 'dl', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+PRAGMA threads=1
+
+statement ok
+SET dynamic_or_filter_threshold=0
+
+statement ok
+SET disabled_optimizers='join_order,build_side_probe_side,compressed_materialization'
+
+statement ok
+CREATE TABLE ducklake.numeric_probe(k BIGINT)
+
+statement ok
+INSERT INTO ducklake.numeric_probe SELECT i FROM range(0, 100) t(i)
+
+statement ok
+INSERT INTO ducklake.numeric_probe SELECT i FROM range(100, 200) t(i)
+
+statement ok
+INSERT INTO ducklake.numeric_probe SELECT i FROM range(200, 300) t(i)
+
+statement ok
+CREATE TABLE numeric_build(k BIGINT)
+
+statement ok
+INSERT INTO numeric_build VALUES (0), (299)
+
+# The build min/max spans every file, but the exact PRF has no entries in the middle file.
+query II
+EXPLAIN ANALYZE SELECT count(*)
+FROM ducklake.numeric_probe p
+JOIN numeric_build b ON p.k = b.k
+----
+analyzed_plan	<REGEX>:(?s).*IN.*PRF.*\(k\).*Total Files Read: 2.*
+
+query I
+SELECT count(*)
+FROM ducklake.numeric_probe p
+JOIN numeric_build b ON p.k = b.k
+----
+2
+
+statement ok
+CREATE TABLE ducklake.varchar_probe(k VARCHAR)
+
+statement ok
+INSERT INTO ducklake.varchar_probe SELECT printf('a%03d', i) FROM range(100) t(i)
+
+statement ok
+INSERT INTO ducklake.varchar_probe SELECT printf('b%03d', i) FROM range(100) t(i)
+
+statement ok
+INSERT INTO ducklake.varchar_probe SELECT printf('c%03d', i) FROM range(100) t(i)
+
+statement ok
+CREATE TABLE varchar_build(k VARCHAR)
+
+statement ok
+INSERT INTO varchar_build VALUES ('a000'), ('c099')
+
+query II
+EXPLAIN ANALYZE SELECT count(*)
+FROM ducklake.varchar_probe p
+JOIN varchar_build b ON p.k = b.k
+----
+analyzed_plan	<REGEX>:(?s).*IN.*PRF.*\(k\).*Total Files Read: 2.*
+
+query I
+SELECT count(*)
+FROM ducklake.varchar_probe p
+JOIN varchar_build b ON p.k = b.k
+----
+2
+
+# A missing stats row must retain the file because pruning is no longer provably safe.
+statement ok
+DELETE FROM dl.ducklake_file_column_stats
+WHERE table_id = (SELECT table_id FROM dl.ducklake_table WHERE table_name = 'numeric_probe')
+  AND column_id = (SELECT column_id FROM dl.ducklake_column
+                   WHERE table_id = (SELECT table_id FROM dl.ducklake_table WHERE table_name = 'numeric_probe')
+                     AND column_name = 'k')
+  AND data_file_id = (SELECT data_file_id FROM dl.ducklake_data_file
+                      WHERE table_id = (SELECT table_id FROM dl.ducklake_table WHERE table_name = 'numeric_probe')
+                      ORDER BY data_file_id LIMIT 1 OFFSET 1)
+
+query II
+EXPLAIN ANALYZE SELECT count(*)
+FROM ducklake.numeric_probe p
+JOIN numeric_build b ON p.k = b.k
+----
+analyzed_plan	<REGEX>:(?s).*IN.*PRF.*\(k\).*Total Files Read: 3.*
+
+query I
+SELECT count(*)
+FROM ducklake.numeric_probe p
+JOIN numeric_build b ON p.k = b.k
+----
+2
+
+# File pruning must not suppress an error raised by a narrowing cast in the original join.
+statement ok
+CREATE TABLE ducklake.cast_probe(k BIGINT)
+
+statement ok
+INSERT INTO ducklake.cast_probe SELECT i FROM range(100000, 100100) t(i)
+
+statement ok
+INSERT INTO ducklake.cast_probe VALUES (3000000000)
+
+statement ok
+CREATE TABLE cast_build(k INTEGER)
+
+statement ok
+INSERT INTO cast_build SELECT i FROM range(100000, 100010) t(i)
+
+statement error
+SELECT count(*)
+FROM ducklake.cast_probe p
+JOIN cast_build b ON p.k::INTEGER = b.k
+----
+<REGEX>:Conversion Error:.*out of range.*
+
+statement ok
+SET disabled_optimizers=''

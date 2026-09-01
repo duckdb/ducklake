@@ -25,11 +25,13 @@
 #include "storage/ducklake_delete.hpp"
 #include "duckdb/function/function_binder.hpp"
 #include "storage/ducklake_inlined_data_reader.hpp"
+#include "storage/ducklake_stats.hpp"
 #include "duckdb/planner/filter/constant_filter.hpp"
 #include "duckdb/planner/filter/dynamic_filter.hpp"
 #include "duckdb/planner/filter/expression_filter.hpp"
 #include "duckdb/planner/filter/table_filter_functions.hpp"
 #include "duckdb/planner/filter/optional_filter.hpp"
+#include "duckdb/storage/statistics/base_statistics.hpp"
 
 namespace duckdb {
 
@@ -148,6 +150,50 @@ static bool CanSkipFileByTopNDynamicFilter(const DuckLakeFileListEntry &file_ent
 		default:
 			// nothing to prune
 			continue;
+		}
+	}
+	return false;
+}
+
+static bool CanSkipFileByPrefixRangeFilter(const DuckLakeFileListEntry &file_entry,
+                                           const FilterPushdownInfo &filter_info, ClientContext &context) {
+	if (file_entry.data_type != DuckLakeDataType::DATA_FILE) {
+		return false;
+	}
+	for (auto &entry : filter_info.column_filters) {
+		auto &column_filter = entry.second;
+		if (!ExpressionFilter::ContainsInternalFunction(*column_filter.table_filter->expr,
+		                                                PrefixRangeScalarFun::NAME)) {
+			continue;
+		}
+
+		auto stats_entry = file_entry.column_min_max.find(column_filter.column_field_index);
+		if (stats_entry == file_entry.column_min_max.end()) {
+			continue;
+		}
+
+		DuckLakeColumnStats column_stats(column_filter.column_type);
+		if (!stats_entry->second.first.empty()) {
+			column_stats.min = stats_entry->second.first;
+			column_stats.has_min = true;
+		}
+		if (!stats_entry->second.second.empty()) {
+			column_stats.max = stats_entry->second.second;
+			column_stats.has_max = true;
+		}
+
+		Value casted_bound;
+		if (RequiresValueComparison(column_filter.column_type) &&
+		    ((column_stats.has_min &&
+		      !Value(column_stats.min).DefaultTryCastAs(column_filter.column_type, casted_bound, nullptr)) ||
+		     (column_stats.has_max &&
+		      !Value(column_stats.max).DefaultTryCastAs(column_filter.column_type, casted_bound, nullptr)))) {
+			continue;
+		}
+		auto stats = column_stats.ToStats();
+		if (stats && column_filter.table_filter->CheckStatistics(context, *stats) ==
+		                 FilterPropagateResult::FILTER_ALWAYS_FALSE) {
+			return true;
 		}
 	}
 	return false;
@@ -275,8 +321,12 @@ ReaderInitializeType DuckLakeMultiFileReader::InitializeReader(MultiFileReaderDa
 	auto file_idx = reader.file_list_idx.GetIndex();
 
 	auto &file_entry = file_list.GetFileEntry(file_idx);
-	if (file_list.GetFilterInfo() && CanSkipFileByTopNDynamicFilter(file_entry, *file_list.GetFilterInfo(), context)) {
-		return ReaderInitializeType::SKIP_READING_FILE;
+	if (file_list.GetFilterInfo()) {
+		auto &filter_info = *file_list.GetFilterInfo();
+		if (CanSkipFileByTopNDynamicFilter(file_entry, filter_info, context) ||
+		    CanSkipFileByPrefixRangeFilter(file_entry, filter_info, context)) {
+			return ReaderInitializeType::SKIP_READING_FILE;
+		}
 	}
 	if (!file_list.IsDeleteScan()) {
 		// regular scan - read the deletes from the delete file (if any) and apply the max row count

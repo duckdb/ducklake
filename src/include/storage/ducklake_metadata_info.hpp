@@ -403,7 +403,7 @@ struct DuckLakeFileListEntry {
 	DataFileIndex file_id;
 	//! Inlined file deletions (row positions that have been deleted and stored in the metadata database)
 	set<idx_t> inlined_file_deletions;
-	//! Column min/max values for dynamic filter pushdown
+	//! Column min/max values for runtime filter pushdown
 	unordered_map<idx_t, pair<string, string>> column_min_max;
 };
 
