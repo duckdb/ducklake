@@ -175,7 +175,7 @@ statement ok
 INSERT INTO ducklake.null_probe VALUES ('ab' || chr(0) || 'a')
 
 statement ok
-INSERT INTO ducklake.null_probe VALUES ('ab' || chr(0) || 'c')
+INSERT INTO ducklake.null_probe VALUES ('ac00')
 
 # Simulate a maximum truncated at the embedded NUL byte.
 statement ok
