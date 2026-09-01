@@ -40,12 +40,15 @@ class LogicalGet;
 struct DuckLakeTableStatsCacheEntry : public ObjectCacheEntry {
 	static constexpr idx_t ESTIMATED_BYTES_PER_COLUMN_STATS = 256;
 
-	explicit DuckLakeTableStatsCacheEntry(DuckLakeTableStats stats_p) : stats(std::move(stats_p)), has_stats(true) {
+	DuckLakeTableStatsCacheEntry(idx_t schema_version, DuckLakeTableStats stats_p)
+	    : schema_version(schema_version), stats(std::move(stats_p)), has_stats(true) {
 	}
 	//! Negative entry: table has no stats at this snapshot.
-	DuckLakeTableStatsCacheEntry() : has_stats(false) {
+	explicit DuckLakeTableStatsCacheEntry(idx_t schema_version) : schema_version(schema_version), has_stats(false) {
 	}
 
+	//! Schema version that stamped the stats types
+	idx_t schema_version;
 	DuckLakeTableStats stats;
 	bool has_stats;
 
@@ -75,10 +78,9 @@ struct DuckLakeSchemaCacheEntry : public ObjectCacheEntry {
 	optional_idx GetEstimatedCacheMemory() const override;
 };
 
-//! Query-scoped pin for DuckLake schema cache entries, which guarantee memory safety before transaction finishes.
-class DuckLakeSchemaPinState : public ClientContextState {
+//! Holds pins on DuckLake schema cache entries, keeping them alive while they are still referenced.
+class DuckLakeSchemaPinState {
 public:
-	void QueryEnd(ClientContext &context) override;
 	void Pin(shared_ptr<DuckLakeSchemaCacheEntry> entry);
 	//! Clear all pinned schema cache entries for this pin state.
 	void Clear();
@@ -231,16 +233,8 @@ public:
 	void SetDuckLakeVersion(DuckLakeVersion version) {
 		ducklake_version = version;
 	}
-	//! Whether the metadata schema has the row_group_count columns (added in 1.1-dev1)
-	bool SupportsRowGroupCount() const {
-		return ducklake_version >= DuckLakeVersion::V1_1_DEV_1;
-	}
-	//! Whether the metadata schema has view column tags (added in 1.1-dev1)
-	bool SupportsViewColumnTags() const {
-		return ducklake_version >= DuckLakeVersion::V1_1_DEV_1;
-	}
-	//! Whether the catalog may contain epoch partition transforms (added in 1.1-dev1)
-	bool SupportsEpochPartitionTransforms() const {
+	//! Whether the catalog has the v1.1 metadata features
+	bool SupportsV1_1Metadata() const {
 		return ducklake_version >= DuckLakeVersion::V1_1_DEV_1;
 	}
 
@@ -317,12 +311,9 @@ private:
 	//! Look up (or load) the ObjectCache entry for a given snapshot.
 	shared_ptr<DuckLakeSchemaCacheEntry> GetSchemaCacheEntry(DuckLakeTransaction &transaction,
 	                                                         DuckLakeSnapshot snapshot);
-	//! Pin a schema cache entry for the duration of the current query to ensure safe memory access.
-	void PinSchemaForQuery(DuckLakeTransaction &transaction, shared_ptr<DuckLakeSchemaCacheEntry> entry);
 	void LoadNameMaps(DuckLakeTransaction &transaction);
 	string StatsCacheKey(idx_t next_file_id, TableIndex table_id) const;
 	string SchemaCacheKey(idx_t schema_version) const;
-	string SchemaPinStateKey() const;
 	ObjectCache &GetObjectCacheInstance();
 
 private:

@@ -203,10 +203,14 @@ public:
 	unique_ptr<QueryResult> ExecuteRaw(string query);
 	Connection &GetConnection();
 
+	//! Keep a schema cache entry alive for as long as this transaction lives. Transaction-local catalog entries hold
+	//! bare references into the cached catalog set, and those references are read again at commit time, so the entry
+	//! must not be evicted from the ObjectCache in between.
+	void PinSchemaCacheEntry(shared_ptr<DuckLakeSchemaCacheEntry> entry);
+
 	DuckLakeSnapshot GetSnapshot();
 	DuckLakeSnapshot GetSnapshot(optional_ptr<BoundAtClause> at_clause,
 	                             SnapshotBound bound = SnapshotBound::UPPER_BOUND);
-	void PinSchemaCacheEntry(shared_ptr<DuckLakeSchemaCacheEntry> entry);
 
 	static DuckLakeTransaction &Get(ClientContext &context, Catalog &catalog);
 
@@ -259,6 +263,8 @@ public:
 	void DropScalarMacro(DuckLakeScalarMacroEntry &macro);
 	void DropTableMacro(DuckLakeTableMacroEntry &macro);
 	void DropFile(TableIndex table_id, DataFileIndex data_file_id, string path, idx_t row_count, idx_t file_size_bytes);
+	//! Record that a delete predicate was evaluated against a table, even if no rows matched
+	void MarkDeleteAttempted(TableIndex table_id);
 
 	void DeleteSnapshots(const vector<DuckLakeSnapshotInfo> &snapshots);
 	void DeleteInlinedData(const DuckLakeInlinedTableInfo &inlined_table);
@@ -289,6 +295,7 @@ public:
 	bool HasDroppedFiles() const;
 	const unordered_map<string, DataFileIndex> &GetDroppedFiles() const;
 	const set<TableIndex> &GetTablesDeletedFrom() const;
+	const set<TableIndex> &GetTablesDeleteAttempted() const;
 	const vector<FlushedInlinedTableInfo> &GetFlushedInlinedTables() const;
 	const DuckLakeNameMapSet &GetNewNameMaps() const {
 		return new_name_maps;

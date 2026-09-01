@@ -225,6 +225,11 @@ void DuckLakeTransactionState::CheckForConflicts(const TransactionChangeInformat
 		ConflictCheck(table_id, other_changes.inserted_tables, "delete from table", "inserted into it");
 		ConflictCheck(table_id, other_changes.tables_inserted_inlined, "delete from table", "inserted into it");
 	}
+	// a delete that matched no rows must still conflict with concurrent inserts to the same table
+	for (auto &table_id : changes.tables_delete_attempted) {
+		ConflictCheck(table_id, other_changes.inserted_tables, "delete from table", "inserted into it");
+		ConflictCheck(table_id, other_changes.tables_inserted_inlined, "delete from table", "inserted into it");
+	}
 	if (!changes.tables_deleted_from.empty()) {
 		bool check_for_matches = false;
 		for (auto &table_id : changes.tables_deleted_from) {
@@ -796,7 +801,7 @@ bool DuckLakeTransactionState::TryMergeInlinedStats(const vector<DuckLakeColumnS
 			                                  col_ident, col_ident, nan_expr);
 		}
 		auto sql = DuckLakeMetadataManager::ReadInlinedDataAggregatesSql(
-		    DuckLakeUtil::SQLIdentifierToString(inlined_table_name), select_list);
+		    DuckLakeUtil::SQLIdentifierToString(inlined_table_name), select_list, context.InlinedColNames());
 		auto result = context.query_metadata_with_snapshot(snapshot, sql);
 		if (result->HasError()) {
 			result->GetErrorObject().Throw("Failed to read inlined-data aggregates from DuckLake: ");
@@ -1715,7 +1720,8 @@ string DuckLakeTransactionState::CommitChanges(DuckLakeCommitState &commit_state
 
 	// in case of a retry, we generate the deletion of inlined data from the tables
 	if (!flushed_inlined_tables.empty()) {
-		batch_queries += DuckLakeMetadataManager::GenerateDeleteFlushedInlinedData(flushed_inlined_tables);
+		batch_queries += DuckLakeMetadataManager::GenerateDeleteFlushedInlinedData(flushed_inlined_tables,
+		                                                                           context.InlinedColNames());
 	}
 
 	// drop data files
@@ -1751,7 +1757,7 @@ string DuckLakeTransactionState::CommitChanges(DuckLakeCommitState &commit_state
 
 		// write new inlined deletes (for inlined data tables)
 		auto inlined_deletes = GetNewInlinedDeletes(commit_state);
-		batch_queries += DuckLakeMetadataManager::WriteNewInlinedDeletes(inlined_deletes);
+		batch_queries += DuckLakeMetadataManager::WriteNewInlinedDeletes(inlined_deletes, context.InlinedColNames());
 
 		// write new inlined file deletes (for parquet files)
 		auto inlined_file_deletes = GetNewInlinedFileDeletes(commit_state);
