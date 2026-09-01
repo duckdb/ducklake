@@ -3,6 +3,7 @@
 #include "storage/ducklake_geo_stats.hpp"
 #include "storage/ducklake_metadata_info.hpp"
 #include "storage/ducklake_variant_stats.hpp"
+#include "duckdb/common/types/blob.hpp"
 #include "duckdb/common/types/string.hpp"
 #include "duckdb/common/types/value.hpp"
 #include "duckdb/storage/statistics/base_statistics.hpp"
@@ -293,7 +294,9 @@ unique_ptr<BaseStatistics> DuckLakeColumnStats::CreateStringStats() const {
 		StringStats::MergeInConstant(stats, string_t(max));
 		StringStats::MergeInConstant(stats, string_t(min));
 		StringStats::ResetMaxStringLength(stats);
-		StringStats::SetContainsUnicode(stats);
+		if (type.id() == LogicalTypeId::VARCHAR) {
+			StringStats::SetContainsUnicode(stats);
+		}
 	} else if (has_min) {
 		stats = StringStats::CreateUnknown(type);
 		StringStats::SetMin(stats, string_t(min), StringStatsType::TRUNCATED_STATS);
@@ -315,6 +318,31 @@ unique_ptr<BaseStatistics> DuckLakeColumnStats::CreateStringStats() const {
 		stats.SetHasNoNullFast();
 	}
 	return stats.ToUnique();
+}
+
+static bool TryDecodeBlobStats(const string &input, string &result) {
+	if (input.size() % 2 != 0) {
+		return false;
+	}
+	result.resize(input.size() / 2);
+	for (idx_t input_idx = 0; input_idx < input.size(); input_idx += 2) {
+		auto high = Blob::HEX_MAP[static_cast<uint8_t>(input[input_idx])];
+		auto low = Blob::HEX_MAP[static_cast<uint8_t>(input[input_idx + 1])];
+		if (high < 0 || low < 0) {
+			return false;
+		}
+		result[input_idx / 2] = static_cast<char>((high << 4) | low);
+	}
+	return true;
+}
+
+unique_ptr<BaseStatistics> DuckLakeColumnStats::CreateBlobStats() const {
+	DuckLakeColumnStats decoded_stats(*this);
+	if ((has_min && !TryDecodeBlobStats(min, decoded_stats.min)) ||
+	    (has_max && !TryDecodeBlobStats(max, decoded_stats.max))) {
+		return nullptr;
+	}
+	return decoded_stats.CreateStringStats();
 }
 
 unique_ptr<BaseStatistics> DuckLakeColumnStats::ToStats() const {
@@ -357,6 +385,8 @@ unique_ptr<BaseStatistics> DuckLakeColumnStats::ToStats() const {
 	}
 	case LogicalTypeId::VARCHAR:
 		return CreateStringStats();
+	case LogicalTypeId::BLOB:
+		return CreateBlobStats();
 	case LogicalTypeId::GEOMETRY:
 		return CreateGeometryStats();
 	case LogicalTypeId::VARIANT:

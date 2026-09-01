@@ -87,6 +87,173 @@ JOIN varchar_build b ON p.k = b.k
 ----
 2
 
+statement ok
+CREATE TABLE ducklake.empty_varchar_probe(k VARCHAR)
+
+statement ok
+INSERT INTO ducklake.empty_varchar_probe VALUES (''), ('a099')
+
+statement ok
+INSERT INTO ducklake.empty_varchar_probe SELECT printf('b%03d', i) FROM range(100) t(i)
+
+statement ok
+INSERT INTO ducklake.empty_varchar_probe SELECT printf('c%03d', i) FROM range(100) t(i)
+
+statement ok
+CREATE TABLE empty_varchar_build(k VARCHAR)
+
+statement ok
+INSERT INTO empty_varchar_build VALUES ('b000'), ('c099')
+
+query II
+EXPLAIN ANALYZE SELECT count(*)
+FROM ducklake.empty_varchar_probe p
+JOIN empty_varchar_build b ON p.k = b.k
+----
+analyzed_plan	<REGEX>:(?s).*IN.*PRF.*\(k\).*Total Files Read: 2.*
+
+query I
+SELECT count(*)
+FROM ducklake.empty_varchar_probe p
+JOIN empty_varchar_build b ON p.k = b.k
+----
+2
+
+statement ok
+INSERT INTO empty_varchar_build VALUES ('')
+
+query II
+EXPLAIN ANALYZE SELECT count(*)
+FROM ducklake.empty_varchar_probe p
+JOIN empty_varchar_build b ON p.k = b.k
+----
+analyzed_plan	<REGEX>:(?s).*Total Files Read: 3.*
+
+query I
+SELECT count(*)
+FROM ducklake.empty_varchar_probe p
+JOIN empty_varchar_build b ON p.k = b.k
+----
+3
+
+statement ok
+CREATE TABLE ducklake.blob_probe(k BLOB)
+
+statement ok
+INSERT INTO ducklake.blob_probe SELECT printf('a%03d', i)::BLOB FROM range(100) t(i)
+
+statement ok
+INSERT INTO ducklake.blob_probe SELECT printf('b%03d', i)::BLOB FROM range(100) t(i)
+
+statement ok
+INSERT INTO ducklake.blob_probe SELECT printf('c%03d', i)::BLOB FROM range(100) t(i)
+
+statement ok
+CREATE TABLE blob_build(k BLOB)
+
+statement ok
+INSERT INTO blob_build VALUES ('a000'::BLOB), ('c099'::BLOB)
+
+query II
+EXPLAIN ANALYZE SELECT count(*)
+FROM ducklake.blob_probe p
+JOIN blob_build b ON p.k = b.k
+----
+analyzed_plan	<REGEX>:(?s).*IN.*PRF.*\(k\).*Total Files Read: 2.*
+
+query I
+SELECT count(*)
+FROM ducklake.blob_probe p
+JOIN blob_build b ON p.k = b.k
+----
+2
+
+statement ok
+CREATE TABLE ducklake.null_probe(k VARCHAR)
+
+statement ok
+INSERT INTO ducklake.null_probe VALUES ('ab' || chr(0) || 'a')
+
+statement ok
+INSERT INTO ducklake.null_probe VALUES ('ab' || chr(0) || 'c')
+
+# Simulate a maximum truncated at the embedded NUL byte.
+statement ok
+UPDATE dl.ducklake_file_column_stats
+SET min_value = 'ab', max_value = 'ab'
+WHERE table_id = (SELECT table_id FROM dl.ducklake_table WHERE table_name = 'null_probe')
+  AND column_id = (SELECT column_id FROM dl.ducklake_column
+                   WHERE table_id = (SELECT table_id FROM dl.ducklake_table WHERE table_name = 'null_probe')
+                     AND column_name = 'k')
+  AND data_file_id = (SELECT data_file_id FROM dl.ducklake_data_file
+                      WHERE table_id = (SELECT table_id FROM dl.ducklake_table WHERE table_name = 'null_probe')
+                      ORDER BY data_file_id LIMIT 1)
+
+statement ok
+CREATE TABLE null_build(k VARCHAR)
+
+statement ok
+INSERT INTO null_build VALUES ('ab' || chr(0) || 'a'), ('ab' || chr(0) || 'd')
+
+query I
+SELECT count(*)
+FROM ducklake.null_probe p
+JOIN null_build b ON p.k = b.k
+----
+1
+
+# The truncated metadata bound must not be tightened below the matching value.
+query II
+EXPLAIN ANALYZE SELECT count(*)
+FROM ducklake.null_probe p
+JOIN null_build b ON p.k = b.k
+----
+analyzed_plan	<REGEX>:(?s).*IN.*PRF.*\(k\).*Total Files Read: 1.*
+
+statement ok
+INSERT INTO ducklake.null_probe VALUES (NULL)
+
+# Min/max NULL is treated as no stats available. File should be read.
+query II
+EXPLAIN ANALYZE SELECT count(*)
+FROM ducklake.null_probe p
+JOIN null_build b ON p.k = b.k
+----
+analyzed_plan	<REGEX>:(?s).*IN.*PRF.*\(k\).*Total Files Read: 2.*
+
+query I
+SELECT count(*)
+FROM ducklake.null_probe p
+JOIN null_build b ON p.k = b.k
+----
+1
+
+# Invalid BLOB bounds must retain the file.
+statement ok
+UPDATE dl.ducklake_file_column_stats
+SET min_value = 'not-hex'
+WHERE table_id = (SELECT table_id FROM dl.ducklake_table WHERE table_name = 'blob_probe')
+  AND column_id = (SELECT column_id FROM dl.ducklake_column
+                   WHERE table_id = (SELECT table_id FROM dl.ducklake_table WHERE table_name = 'blob_probe')
+                     AND column_name = 'k')
+  AND data_file_id = (SELECT data_file_id FROM dl.ducklake_data_file
+                      WHERE table_id = (SELECT table_id FROM dl.ducklake_table WHERE table_name = 'blob_probe')
+                      ORDER BY data_file_id LIMIT 1 OFFSET 1)
+
+query II
+EXPLAIN ANALYZE SELECT count(*)
+FROM ducklake.blob_probe p
+JOIN blob_build b ON p.k = b.k
+----
+analyzed_plan	<REGEX>:(?s).*IN.*PRF.*\(k\).*Total Files Read: 3.*
+
+query I
+SELECT count(*)
+FROM ducklake.blob_probe p
+JOIN blob_build b ON p.k = b.k
+----
+2
+
 # A missing stats row must retain the file because pruning is no longer provably safe.
 statement ok
 DELETE FROM dl.ducklake_file_column_stats
@@ -117,7 +284,13 @@ statement ok
 CREATE TABLE ducklake.cast_probe(k BIGINT)
 
 statement ok
-INSERT INTO ducklake.cast_probe SELECT i FROM range(100000, 100100) t(i)
+INSERT INTO ducklake.cast_probe SELECT i FROM range(0, 100) t(i)
+
+statement ok
+INSERT INTO ducklake.cast_probe SELECT i FROM range(100, 200) t(i)
+
+statement ok
+INSERT INTO ducklake.cast_probe SELECT i FROM range(200, 300) t(i)
 
 statement ok
 INSERT INTO ducklake.cast_probe VALUES (3000000000)
@@ -126,7 +299,15 @@ statement ok
 CREATE TABLE cast_build(k INTEGER)
 
 statement ok
-INSERT INTO cast_build SELECT i FROM range(100000, 100010) t(i)
+INSERT INTO cast_build VALUES (0), (299)
+
+query II
+EXPLAIN ANALYZE SELECT count(*)
+FROM ducklake.cast_probe p
+JOIN cast_build b ON p.k::INTEGER = b.k
+WHERE p.k <= 299
+----
+analyzed_plan	<REGEX>:(?s).*IN.*PRF.*\(k\).*
 
 statement error
 SELECT count(*)
@@ -134,6 +315,3 @@ FROM ducklake.cast_probe p
 JOIN cast_build b ON p.k::INTEGER = b.k
 ----
 <REGEX>:Conversion Error:.*out of range.*
-
-statement ok
-SET disabled_optimizers=''

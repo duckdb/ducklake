@@ -119,12 +119,12 @@ static bool CanSkipFileByTopNDynamicFilter(const DuckLakeFileListEntry &file_ent
 		switch (comparison_type) {
 		case ExpressionType::COMPARE_GREATERTHAN:
 		case ExpressionType::COMPARE_GREATERTHANOREQUALTO: {
-			const auto &max_str = mm_it->second.second;
-			if (max_str.empty()) {
+			const auto &column_stats = mm_it->second;
+			if (!column_stats.has_max) {
 				continue;
 			}
 			Value file_max;
-			if (!Value(max_str).DefaultTryCastAs(col_filter.column_type, file_max, nullptr)) {
+			if (!Value(column_stats.max).DefaultTryCastAs(col_filter.column_type, file_max, nullptr)) {
 				continue;
 			}
 			if (comparison_type == ExpressionType::COMPARE_GREATERTHAN) {
@@ -134,12 +134,12 @@ static bool CanSkipFileByTopNDynamicFilter(const DuckLakeFileListEntry &file_ent
 		}
 		case ExpressionType::COMPARE_LESSTHAN:
 		case ExpressionType::COMPARE_LESSTHANOREQUALTO: {
-			const auto &min_str = mm_it->second.first;
-			if (min_str.empty()) {
+			const auto &column_stats = mm_it->second;
+			if (!column_stats.has_min) {
 				continue;
 			}
 			Value file_min;
-			if (!Value(min_str).DefaultTryCastAs(col_filter.column_type, file_min, nullptr)) {
+			if (!Value(column_stats.min).DefaultTryCastAs(col_filter.column_type, file_min, nullptr)) {
 				continue;
 			}
 			if (comparison_type == ExpressionType::COMPARE_LESSTHAN) {
@@ -173,14 +173,10 @@ static bool CanSkipFileByPrefixRangeFilter(const DuckLakeFileListEntry &file_ent
 		}
 
 		DuckLakeColumnStats column_stats(column_filter.column_type);
-		if (!stats_entry->second.first.empty()) {
-			column_stats.min = stats_entry->second.first;
-			column_stats.has_min = true;
-		}
-		if (!stats_entry->second.second.empty()) {
-			column_stats.max = stats_entry->second.second;
-			column_stats.has_max = true;
-		}
+		column_stats.min = stats_entry->second.min;
+		column_stats.max = stats_entry->second.max;
+		column_stats.has_min = stats_entry->second.has_min;
+		column_stats.has_max = stats_entry->second.has_max;
 
 		Value casted_bound;
 		if (RequiresValueComparison(column_filter.column_type) &&
