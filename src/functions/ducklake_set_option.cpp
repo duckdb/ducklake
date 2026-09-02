@@ -91,8 +91,8 @@ static void ValidateStatsCanBeSkipped(const DuckLakeTableEntry &table, const Duc
 	}
 }
 
-//! Resolves a LIST of column names, or a comma-separated string, to the field ids the option
-//! stores - ids are used because they survive a rename
+//! Resolves a column name, or a LIST of them, to the field ids the option stores - ids are used
+//! because they survive a rename. An empty value clears the option.
 static string ResolveSkippedStatsColumns(DuckLakeTableEntry &table, const Value &val, const string &raw_value) {
 	vector<string> column_names;
 	if (!val.IsNull() && val.type().id() == LogicalTypeId::LIST) {
@@ -103,25 +103,8 @@ static string ResolveSkippedStatsColumns(DuckLakeTableEntry &table, const Value 
 				column_names.push_back(child.DefaultCastAs(LogicalType::VARCHAR).GetValue<string>());
 			}
 		}
-	} else {
-		// a name containing a comma resolves to different columns when split, so reject it here -
-		// the list form names it unambiguously
-		auto whole = raw_value;
-		StringUtil::Trim(whole);
-		if (whole.find(',') != string::npos && table.TryGetFieldId(StringsToIdentifiers({whole}))) {
-			throw BinderException(
-			    "Column \"%s\" contains a comma, so it cannot be named in a comma-separated list - pass a list "
-			    "instead, e.g. set_option('skip_stats_columns', ['%s'], table_name => '%s')",
-			    whole, whole, table.name.GetIdentifierName());
-		}
-		auto entries = StringUtil::Split(raw_value, ',');
-		column_names.reserve(entries.size());
-		for (auto &entry : entries) {
-			StringUtil::Trim(entry);
-			if (!entry.empty()) {
-				column_names.push_back(std::move(entry));
-			}
-		}
+	} else if (!raw_value.empty()) {
+		column_names.push_back(raw_value);
 	}
 	vector<string> field_ids;
 	field_ids.reserve(column_names.size());
