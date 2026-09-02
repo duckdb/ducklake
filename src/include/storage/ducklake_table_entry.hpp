@@ -80,6 +80,8 @@ public:
 	}
 	//! Field indexes whose min/max bounds are not recorded, including children of a skipped field
 	unordered_set<idx_t> GetSkippedStatsFields() const;
+	//! Refuses a field added below a skipped column whose statistics cannot be skipped
+	void ValidateAddedFieldsCanSkipStats(const DuckLakeFieldId &parent_id, const DuckLakeFieldId &new_field_id) const;
 	const ColumnChangeInfo &GetChangedFields() const {
 		return *changed_fields;
 	}
