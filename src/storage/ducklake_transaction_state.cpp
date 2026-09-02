@@ -893,6 +893,8 @@ bool DuckLakeTransactionState::TryRecomputeGlobalStatsFromFiles(DuckLakeNewGloba
 	DuckLakeTableStats new_stats;
 	new_stats.next_row_id = current_stats->next_row_id; // monotonic - carried forward, never recomputed
 	idx_t parquet_gross_rows = 0;
+	idx_t parquet_file_count = 0;
+	map<FieldIndex, idx_t> files_with_column_stats;
 
 	// 1. Merge the per-file stats of the post-rewrite parquet files = (pre-commit visible files - removed) + new files.
 	auto result = context.query_metadata_with_snapshot(
@@ -910,6 +912,7 @@ bool DuckLakeTransactionState::TryRecomputeGlobalStatsFromFiles(DuckLakeNewGloba
 		if (!have_file || data_file_id != last_file_id) {
 			have_file = true;
 			last_file_id = data_file_id;
+			parquet_file_count++;
 			new_stats.record_count += static_cast<idx_t>(row.GetValue<int64_t>(1));
 			new_stats.table_size_bytes += static_cast<idx_t>(row.GetValue<int64_t>(2));
 			parquet_gross_rows += static_cast<idx_t>(row.GetValue<int64_t>(1));
@@ -922,6 +925,7 @@ bool DuckLakeTransactionState::TryRecomputeGlobalStatsFromFiles(DuckLakeNewGloba
 		if (type_it == type_by_field.end()) {
 			continue; // column no longer exists or is nested
 		}
+		files_with_column_stats[field_idx]++;
 		DuckLakeColumnStats col_stats(type_it->second);
 		if (!row.IsNull(4) && !row.IsNull(5)) {
 			auto value_count = static_cast<idx_t>(row.GetValue<int64_t>(4));
@@ -955,10 +959,14 @@ bool DuckLakeTransactionState::TryRecomputeGlobalStatsFromFiles(DuckLakeNewGloba
 		if (file.table_id != table_id) {
 			continue;
 		}
+		parquet_file_count++;
 		new_stats.record_count += file.row_count;
 		new_stats.table_size_bytes += file.file_size_bytes;
 		parquet_gross_rows += file.row_count;
 		for (auto &col_entry : file.column_stats) {
+			if (type_by_field.find(col_entry.first) != type_by_field.end()) {
+				files_with_column_stats[col_entry.first]++;
+			}
 			new_stats.MergeStats(col_entry.first, col_entry.second);
 		}
 	}
@@ -993,13 +1001,22 @@ bool DuckLakeTransactionState::TryRecomputeGlobalStatsFromFiles(DuckLakeNewGloba
 		new_stats.record_count += net_inlined;
 	}
 
-	// 4. Make sure every committed column (root or nested leaf) appears so its global row is refreshed (a column with
-	//    no live data becomes "unknown" -> it is scanned at query time, which is correct). UpdateGlobalTableStatsSql
+	// 4. A global column stat is safe only when every live parquet file contributed to it. Sparse per-file stats are
+	//    valid metadata (for example, files added with allow_missing), so reset only incomplete columns to unknown.
+	//    Also make sure every committed column (root or nested leaf) appears so its global row is refreshed. A column
+	//    with no live data becomes "unknown" -> it is scanned at query time, which is correct. UpdateGlobalTableStatsSql
 	//    only UPDATEs existing rows, so entries with no committed stats row (e.g. struct containers) are harmless
 	//    no-ops. Use the snapshot schema instead of current_stats->column_stats: the server-side stats cache is only
 	//    populated for tables with staged inserts, so a pure-rewrite commit can see an empty
 	//    current_stats.column_stats.
 	for (auto &col : columns) {
+		auto count_it = files_with_column_stats.find(col.field_index);
+		auto stats_file_count = count_it == files_with_column_stats.end() ? 0 : count_it->second;
+		if (stats_file_count != parquet_file_count) {
+			new_stats.column_stats.erase(col.field_index);
+			new_stats.column_stats.emplace(col.field_index, DuckLakeColumnStats(col.column_type));
+			continue;
+		}
 		if (new_stats.column_stats.find(col.field_index) == new_stats.column_stats.end()) {
 			new_stats.column_stats.insert(make_pair(col.field_index, DuckLakeColumnStats(col.column_type)));
 		}
