@@ -111,7 +111,9 @@ static string ResolveSkippedStatsColumns(DuckLakeTableEntry &table, const Value 
 	unordered_set<idx_t> seen;
 	seen.reserve(column_names.size());
 	for (auto &column_name : column_names) {
-		auto field_id = table.TryGetFieldId(StringsToIdentifiers({column_name}));
+		// a VARIANT column only resolves when the lookup can report where its own path begins
+		optional_idx name_offset;
+		auto field_id = table.TryGetFieldId(StringsToIdentifiers({column_name}), &name_offset);
 		if (!field_id) {
 			throw BinderException("Column \"%s\" does not exist in table \"%s\"", column_name,
 			                      table.name.GetIdentifierName());
