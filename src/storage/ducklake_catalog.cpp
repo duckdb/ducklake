@@ -953,11 +953,11 @@ static option_map_t &GetOptionScope(DuckLakeOptions &options, const DuckLakeConf
 DuckLakeConfigOptionUndo DuckLakeCatalog::SetConfigOption(const DuckLakeConfigOption &option) {
 	lock_guard<mutex> guard(config_lock);
 	auto &scope = GetOptionScope(options, option);
-	DuckLakeConfigOptionUndo undo {option, false};
+	DuckLakeConfigOptionUndo undo {option, string(), false};
 	auto entry = scope.find(option.option.key);
 	undo.was_set = entry != scope.end();
 	if (undo.was_set) {
-		undo.option.option.value = entry->second;
+		undo.previous_value = entry->second;
 	}
 	scope[option.option.key] = option.option.value;
 	return undo;
@@ -966,10 +966,15 @@ DuckLakeConfigOptionUndo DuckLakeCatalog::SetConfigOption(const DuckLakeConfigOp
 void DuckLakeCatalog::UndoConfigOption(const DuckLakeConfigOptionUndo &undo) {
 	lock_guard<mutex> guard(config_lock);
 	auto &scope = GetOptionScope(options, undo.option);
+	auto entry = scope.find(undo.option.option.key);
+	if (entry == scope.end() || entry->second != undo.option.option.value) {
+		// another transaction has set the option since, and its value is the committed one
+		return;
+	}
 	if (undo.was_set) {
-		scope[undo.option.option.key] = undo.option.option.value;
+		entry->second = undo.previous_value;
 	} else {
-		scope.erase(undo.option.option.key);
+		scope.erase(entry);
 	}
 }
 
