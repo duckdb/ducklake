@@ -32,6 +32,7 @@ class ColumnList;
 class DuckLakeFieldData;
 struct DuckLakeFileListEntry;
 struct DuckLakeConfigOption;
+struct DuckLakeConfigOptionUndo;
 struct DuckLakeSnapshotCommit;
 struct DeleteFileMap;
 class LogicalGet;
@@ -136,7 +137,9 @@ public:
 	string &Separator() {
 		return separator;
 	}
-	void SetConfigOption(const DuckLakeConfigOption &option);
+	//! Sets a config option, returning what it held before so a rollback can put it back
+	DuckLakeConfigOptionUndo SetConfigOption(const DuckLakeConfigOption &option);
+	void UndoConfigOption(const DuckLakeConfigOptionUndo &undo);
 	bool TryGetConfigOption(const string &option, string &result, SchemaIndex schema_id, TableIndex table_id) const;
 	//! Look up a config option in the table scope only, without falling back to schema or global
 	bool TryGetTableConfigOption(const string &option, string &result, TableIndex table_id) const;

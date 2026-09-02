@@ -940,22 +940,37 @@ optional_idx DuckLakeCatalog::GetCatalogVersion(ClientContext &context) {
 	return DuckLakeTransaction::Get(context, *this).GetCatalogVersion();
 }
 
-void DuckLakeCatalog::SetConfigOption(const DuckLakeConfigOption &option) {
-	lock_guard<mutex> guard(config_lock);
-	auto &key = option.option.key;
-	auto &value = option.option.value;
+static option_map_t &GetOptionScope(DuckLakeOptions &options, const DuckLakeConfigOption &option) {
 	if (option.table_id.IsValid()) {
-		// scoped to a table
-		options.table_options[option.table_id][key] = value;
-		return;
+		return options.table_options[option.table_id];
 	}
 	if (option.schema_id.IsValid()) {
-		// scoped to a schema
-		options.schema_options[option.schema_id][key] = value;
-		return;
+		return options.schema_options[option.schema_id];
 	}
-	// scoped globally
-	options.config_options[key] = value;
+	return options.config_options;
+}
+
+DuckLakeConfigOptionUndo DuckLakeCatalog::SetConfigOption(const DuckLakeConfigOption &option) {
+	lock_guard<mutex> guard(config_lock);
+	auto &scope = GetOptionScope(options, option);
+	DuckLakeConfigOptionUndo undo {option, false};
+	auto entry = scope.find(option.option.key);
+	undo.was_set = entry != scope.end();
+	if (undo.was_set) {
+		undo.option.option.value = entry->second;
+	}
+	scope[option.option.key] = option.option.value;
+	return undo;
+}
+
+void DuckLakeCatalog::UndoConfigOption(const DuckLakeConfigOptionUndo &undo) {
+	lock_guard<mutex> guard(config_lock);
+	auto &scope = GetOptionScope(options, undo.option);
+	if (undo.was_set) {
+		scope[undo.option.option.key] = undo.option.option.value;
+	} else {
+		scope.erase(undo.option.option.key);
+	}
 }
 
 template <class SCOPE_MAP, class SCOPE_ID>

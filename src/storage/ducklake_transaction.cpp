@@ -778,6 +778,7 @@ void DuckLakeTransaction::Commit() {
 	FlushNameMapCacheInvalidations();
 	connection.reset();
 	state->local_changes.Clear();
+	config_option_undo.clear();
 	SetRequiresNewInlinedTable(false);
 	ClearSchemaCachePins();
 }
@@ -790,6 +791,10 @@ void DuckLakeTransaction::Rollback() {
 	}
 	state->CleanupFiles();
 	state->local_changes.Clear();
+	for (auto it = config_option_undo.rbegin(); it != config_option_undo.rend(); ++it) {
+		ducklake_catalog.UndoConfigOption(*it);
+	}
+	config_option_undo.clear();
 	pending_name_map_cache_invalidations.clear();
 	SetRequiresNewInlinedTable(false);
 	ClearSchemaCachePins();
@@ -1559,8 +1564,9 @@ void DuckLakeTransaction::RunCommitLoop(DuckLakeSnapshot transaction_snapshot,
 void DuckLakeTransaction::SetConfigOption(const DuckLakeConfigOption &option) {
 	// write the config option to the metadata
 	metadata_manager->SetConfigOption(option);
-	// set the option in the catalog
-	ducklake_catalog.SetConfigOption(option);
+	// set the option in the catalog - the catalog copy is not transactional, so remember what it
+	// held in order to put it back if we roll back
+	config_option_undo.push_back(ducklake_catalog.SetConfigOption(option));
 }
 
 DuckLakeSnapshotCommit &DuckLakeTransaction::GetCommitInfo() {

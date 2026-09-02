@@ -380,6 +380,8 @@ private:
 	DuckLakeNameMapSet new_name_maps;
 	//! Name maps deleted by direct metadata operations, applied to the catalog cache on commit
 	vector<MappingIndex> pending_name_map_cache_invalidations;
+	//! Config options set by this transaction, in the state they were in before, for rollback
+	vector<DuckLakeConfigOptionUndo> config_option_undo;
 
 	atomic<idx_t> catalog_version;
 };
