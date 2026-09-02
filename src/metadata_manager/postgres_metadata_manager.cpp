@@ -129,6 +129,30 @@ string PostgresMetadataManager::GetColumnTypeInternal(const LogicalType &column_
 	}
 }
 
+string PostgresMetadataManager::CastColumnToTarget(const string &column, const LogicalType &type) {
+	if (type.id() == LogicalTypeId::VARCHAR) {
+		// PostgreSQL stores DuckLake VARCHAR values as BYTEA; decode the bytes before ordering them.
+		return "decode(" + column + ")";
+	}
+	return DuckLakeMetadataManager::CastColumnToTarget(column, type);
+}
+
+bool PostgresMetadataManager::InlinedDeletionTableExists(const string &table_name) {
+	auto &catalog = transaction.GetCatalog();
+	auto remote_query =
+	    StringUtil::Format("SELECT 1 FROM pg_catalog.pg_tables WHERE schemaname = %s AND tablename = %s LIMIT 1",
+	                       DuckLakeUtil::SQLLiteralToString(catalog.MetadataSchemaName().GetIdentifierName()),
+	                       DuckLakeUtil::SQLLiteralToString(table_name));
+	auto query =
+	    StringUtil::Format("SELECT 1 FROM postgres_query({METADATA_CATALOG_NAME_LITERAL}, %s, use_transaction = true)",
+	                       DuckLakeUtil::SQLLiteralToString(remote_query));
+	auto result = DuckLakeMetadataManager::Query(query);
+	if (result->HasError()) {
+		result->GetErrorObject().Throw("Failed to probe for DuckLake inlined-deletion table: ");
+	}
+	return result->Fetch() != nullptr;
+}
+
 unique_ptr<QueryResult> PostgresMetadataManager::ExecuteQuery(DuckLakeSnapshot snapshot, string &query,
                                                               string command) {
 	auto &commit_info = transaction.GetCommitInfo();

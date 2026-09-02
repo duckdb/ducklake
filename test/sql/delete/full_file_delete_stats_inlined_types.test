@@ -1,0 +1,92 @@
+# name: test/sql/delete/full_file_delete_stats_inlined_types.test
+# description: Full-file delete recomputation orders inlined values by their logical DuckLake types
+# group: [delete]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/full_file_delete_stats_inlined_types', DATA_INLINING_ROW_LIMIT 100)
+
+# PostgreSQL stores UBIGINT inlined values as VARCHAR. The aggregate must compare them numerically.
+statement ok
+CREATE TABLE ducklake.uint_t(i UBIGINT)
+
+statement ok
+INSERT INTO ducklake.uint_t SELECT range::UBIGINT FROM range(1000, 1200)
+
+statement ok
+INSERT INTO ducklake.uint_t VALUES (10), (2)
+
+statement ok
+SET VARIABLE uint_id = (SELECT table_id FROM __ducklake_metadata_ducklake.ducklake_table WHERE table_name = 'uint_t')
+
+query I
+DELETE FROM ducklake.uint_t WHERE i >= 1000
+----
+200
+
+query I
+SELECT record_count = 2 AND min_value::UBIGINT = 2 AND max_value::UBIGINT = 10
+FROM __ducklake_metadata_ducklake.ducklake_table_stats
+JOIN __ducklake_metadata_ducklake.ducklake_table_column_stats USING (table_id)
+WHERE table_id = getvariable('uint_id')
+----
+true
+
+# SQLite stores FLOAT/DOUBLE inlined values as VARCHAR. The aggregate must restore floating-point ordering.
+statement ok
+CREATE TABLE ducklake.double_t(i DOUBLE)
+
+statement ok
+INSERT INTO ducklake.double_t SELECT range::DOUBLE FROM range(1000, 1200)
+
+statement ok
+INSERT INTO ducklake.double_t VALUES (10.5), (2.5)
+
+statement ok
+SET VARIABLE double_id = (SELECT table_id FROM __ducklake_metadata_ducklake.ducklake_table WHERE table_name = 'double_t')
+
+query I
+DELETE FROM ducklake.double_t WHERE i >= 1000
+----
+200
+
+query I
+SELECT record_count = 2 AND min_value::DOUBLE = 2.5 AND max_value::DOUBLE = 10.5
+FROM __ducklake_metadata_ducklake.ducklake_table_stats
+JOIN __ducklake_metadata_ducklake.ducklake_table_column_stats USING (table_id)
+WHERE table_id = getvariable('double_id')
+----
+true
+
+# PostgreSQL stores VARCHAR inlined values as BYTEA. Decode the bytes before aggregating and serializing bounds.
+statement ok
+CREATE TABLE ducklake.varchar_t(i VARCHAR)
+
+statement ok
+INSERT INTO ducklake.varchar_t SELECT 'z' || range FROM range(200)
+
+statement ok
+INSERT INTO ducklake.varchar_t VALUES ('10'), ('2'), ('é')
+
+statement ok
+SET VARIABLE varchar_id = (SELECT table_id FROM __ducklake_metadata_ducklake.ducklake_table WHERE table_name = 'varchar_t')
+
+query I
+DELETE FROM ducklake.varchar_t WHERE i LIKE 'z%'
+----
+200
+
+query I
+SELECT record_count = 3 AND min_value = '10' AND max_value = 'é'
+FROM __ducklake_metadata_ducklake.ducklake_table_stats
+JOIN __ducklake_metadata_ducklake.ducklake_table_column_stats USING (table_id)
+WHERE table_id = getvariable('varchar_id')
+----
+true

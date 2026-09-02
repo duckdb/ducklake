@@ -98,7 +98,7 @@ unique_ptr<BaseStatistics> DuckLakeStatistics(ClientContext &context, const Func
 	}
 	auto &multi_file_data = bind_data->Cast<MultiFileBindData>();
 	auto &file_list = multi_file_data.file_list->Cast<DuckLakeMultiFileList>();
-	if (!file_list.CanUseGlobalStats()) {
+	if (!file_list.CanUseTableStatistics()) {
 		return nullptr;
 	}
 	auto &table = file_list.GetTable();
@@ -183,22 +183,11 @@ vector<PartitionStatistics> DuckLakeGetPartitionStats(ClientContext &context, Ge
 
 	auto &bind_data = input.bind_data->Cast<MultiFileBindData>();
 	auto &file_list = bind_data.file_list->Cast<DuckLakeMultiFileList>();
+	if (!file_list.CanUseTableStatistics()) {
+		return result;
+	}
 	auto &table = file_list.GetTable();
 	auto transaction = func_info.GetTransaction();
-
-	auto table_id = table.GetTableId();
-
-	// Check if this is a transaction-local table (no committed stats)
-	if (table.IsTransactionLocal()) {
-		return result;
-	}
-
-	// If there are any transaction-local changes fall back to scanning
-	// Accounting for transaction local changes gets difficult, especially when entire
-	// files are dropped.
-	if (transaction->HasAnyLocalChanges(table_id)) {
-		return result;
-	}
 
 	idx_t net_count = table.GetNetDataFileRowCount(*transaction) + table.GetNetInlinedRowCount(*transaction);
 

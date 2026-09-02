@@ -60,8 +60,12 @@ struct FlushedInlinedTableInfo {
 };
 
 struct DroppedDataFileStats {
+	//! Gross rows in dropped data files; used to maintain ducklake_table_stats.record_count.
 	idx_t row_count = 0;
+	//! Rows from dropped data files that were live at the transaction snapshot; used for recompute exactness checks.
+	idx_t live_row_count = 0;
 	idx_t file_size_bytes = 0;
+	set<DataFileIndex> data_file_ids;
 };
 
 struct LocalTableDataChanges {
@@ -269,7 +273,8 @@ public:
 	void DropView(DuckLakeViewEntry &view);
 	void DropScalarMacro(DuckLakeScalarMacroEntry &macro);
 	void DropTableMacro(DuckLakeTableMacroEntry &macro);
-	void DropFile(TableIndex table_id, DataFileIndex data_file_id, string path, idx_t row_count, idx_t file_size_bytes);
+	void DropFile(TableIndex table_id, DataFileIndex data_file_id, string path, idx_t row_count, idx_t live_row_count,
+	              idx_t file_size_bytes);
 	//! Record that a delete predicate was evaluated against a table, even if no rows matched
 	void MarkDeleteAttempted(TableIndex table_id);
 

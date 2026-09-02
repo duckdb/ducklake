@@ -37,7 +37,7 @@ struct DuckLakeSnapshotCommit;
 struct DeleteFileMap;
 class LogicalGet;
 
-//! Per-table stats cache entry, keyed by <next_file_id, table_id>.
+//! Per-table stats cache entry, keyed by <snapshot_id, table_id>.
 struct DuckLakeTableStatsCacheEntry : public ObjectCacheEntry {
 	static constexpr idx_t ESTIMATED_BYTES_PER_COLUMN_STATS = 256;
 
@@ -181,6 +181,9 @@ public:
 	shared_ptr<DuckLakeTableStats> GetTableStats(DuckLakeTransaction &transaction, TableIndex table_id);
 	shared_ptr<DuckLakeTableStats> GetTableStats(DuckLakeTransaction &transaction, DuckLakeSnapshot snapshot,
 	                                             TableIndex table_id);
+	//! Turn a mutable-stats snapshot mismatch during commit into a retryable conflict.
+	shared_ptr<DuckLakeTableStats> GetTableStatsForCommit(DuckLakeTransaction &transaction, DuckLakeSnapshot snapshot,
+	                                                      TableIndex table_id);
 
 	optional_ptr<CatalogEntry> GetEntryById(DuckLakeTransaction &transaction, DuckLakeSnapshot snapshot,
 	                                        SchemaIndex schema_id);
@@ -303,8 +306,8 @@ public:
 	//! once when the schema version is created and never updated, so the mapping is permanent.
 	void CacheSchemaVersionBeginSnapshot(TableIndex table_id, idx_t schema_version, idx_t begin_snapshot);
 
-	//! Invalidate the cached table stats entry for a given stats cache key.
-	void InvalidateTableStatsCache(idx_t next_file_id, TableIndex table_id);
+	//! Invalidate the cached table stats entry for a given snapshot.
+	void InvalidateTableStatsCache(idx_t snapshot_id, TableIndex table_id);
 	//! Invalidate the cached schema entry for a given schema_version.
 	void InvalidateSchemaCache(idx_t schema_version);
 	//! Invalidate a cached name map for a deleted mapping ID.
@@ -316,8 +319,10 @@ private:
 	//! Look up (or load) the ObjectCache entry for a given snapshot.
 	shared_ptr<DuckLakeSchemaCacheEntry> GetSchemaCacheEntry(DuckLakeTransaction &transaction,
 	                                                         DuckLakeSnapshot snapshot);
+	shared_ptr<DuckLakeTableStats> GetTableStatsInternal(DuckLakeTransaction &transaction, DuckLakeSnapshot snapshot,
+	                                                     TableIndex table_id, bool retry_on_snapshot_mismatch);
 	void LoadNameMaps(DuckLakeTransaction &transaction);
-	string StatsCacheKey(idx_t next_file_id, TableIndex table_id) const;
+	string StatsCacheKey(idx_t snapshot_id, TableIndex table_id) const;
 	string SchemaCacheKey(idx_t schema_version) const;
 	ObjectCache &GetObjectCacheInstance();
 

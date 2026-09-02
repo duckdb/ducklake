@@ -1,0 +1,88 @@
+# name: test/sql/delete/full_file_delete_stats_concurrent.test
+# description: Full-file delete stats remain correct across concurrent snapshots and commit retries
+# group: [delete]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/full_file_delete_stats_concurrent', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE ducklake.snapshot_t(i INTEGER)
+
+statement ok
+INSERT INTO ducklake.snapshot_t SELECT range FROM range(100)
+
+statement ok
+INSERT INTO ducklake.snapshot_t SELECT range FROM range(1000, 1100)
+
+statement ok con2
+BEGIN
+
+query I con2
+SELECT COUNT(*) FROM ducklake.snapshot_t
+----
+200
+
+query I con1
+DELETE FROM ducklake.snapshot_t WHERE i < 100
+----
+100
+
+query I con2
+SELECT COUNT(*) FROM ducklake.snapshot_t WHERE i = 50
+----
+1
+
+statement ok con2
+ROLLBACK
+
+statement ok
+CREATE TABLE ducklake.retry_t(i INTEGER)
+
+statement ok
+INSERT INTO ducklake.retry_t SELECT range FROM range(100)
+
+statement ok
+INSERT INTO ducklake.retry_t SELECT range FROM range(1000, 1100)
+
+statement ok
+INSERT INTO ducklake.retry_t SELECT range FROM range(5000, 5100)
+
+statement ok
+SET VARIABLE retry_id = (SELECT table_id FROM __ducklake_metadata_ducklake.ducklake_table WHERE table_name = 'retry_t')
+
+statement ok con1
+BEGIN
+
+query I con1
+DELETE FROM ducklake.retry_t WHERE i < 100
+----
+100
+
+query I con2
+DELETE FROM ducklake.retry_t WHERE i BETWEEN 1000 AND 1099
+----
+100
+
+statement ok con1
+COMMIT
+
+query III
+SELECT COUNT(*), MIN(i), MAX(i) FROM ducklake.retry_t
+----
+100	5000	5099
+
+query III
+SELECT record_count, min_value::BIGINT, max_value::BIGINT
+FROM __ducklake_metadata_ducklake.ducklake_table_stats
+JOIN __ducklake_metadata_ducklake.ducklake_table_column_stats USING (table_id)
+WHERE table_id = getvariable('retry_id')
+----
+100	5000	5099
