@@ -1004,11 +1004,11 @@ bool DuckLakeTransactionState::TryRecomputeGlobalStatsFromFiles(DuckLakeNewGloba
 	// 4. A global column stat is safe only when every live parquet file contributed to it. Sparse per-file stats are
 	//    valid metadata (for example, files added with allow_missing), so reset only incomplete columns to unknown.
 	//    Also make sure every committed column (root or nested leaf) appears so its global row is refreshed. A column
-	//    with no live data becomes "unknown" -> it is scanned at query time, which is correct. UpdateGlobalTableStatsSql
-	//    only UPDATEs existing rows, so entries with no committed stats row (e.g. struct containers) are harmless
-	//    no-ops. Use the snapshot schema instead of current_stats->column_stats: the server-side stats cache is only
-	//    populated for tables with staged inserts, so a pure-rewrite commit can see an empty
-	//    current_stats.column_stats.
+	//    with no live data becomes "unknown" -> it is scanned at query time, which is correct.
+	//    UpdateGlobalTableStatsSql only UPDATEs existing rows, so entries with no committed stats row (e.g. struct
+	//    containers) are harmless no-ops. Use the snapshot schema instead of current_stats->column_stats: the
+	//    server-side stats cache is only populated for tables with staged inserts, so a pure-rewrite commit can see an
+	//    empty current_stats.column_stats.
 	for (auto &col : columns) {
 		auto count_it = files_with_column_stats.find(col.field_index);
 		auto stats_file_count = count_it == files_with_column_stats.end() ? 0 : count_it->second;
