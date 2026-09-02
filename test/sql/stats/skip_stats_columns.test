@@ -117,6 +117,12 @@ statement ok
 INSERT INTO ducklake.t VALUES (6, 'bounded', 6.5)
 
 query II
+SELECT min_value, max_value FROM ducklake_meta.ducklake_file_column_stats
+WHERE column_id=2 AND data_file_id=(SELECT max(data_file_id) FROM ducklake_meta.ducklake_data_file)
+----
+bounded	bounded
+
+query II
 SELECT min_value IS NULL, max_value IS NULL FROM ducklake_meta.ducklake_table_column_stats WHERE column_id=2
 ----
 true	true

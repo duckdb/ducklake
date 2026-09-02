@@ -53,10 +53,14 @@ CALL ducklake.set_option('skip_stats_columns', [], table_name => 'rb')
 statement ok con1
 ROLLBACK
 
-query I con1
-SELECT value FROM ducklake.options() WHERE option_name='skip_stats_columns' AND scope_entry='main.rb'
+statement ok con1
+INSERT INTO ducklake.rb VALUES (9, 'zzz')
+
+query II con1
+SELECT min_value, max_value FROM ducklake_meta.ducklake_file_column_stats
+WHERE column_id=2 AND data_file_id=(SELECT max(data_file_id) FROM ducklake_meta.ducklake_data_file)
 ----
-2
+NULL	NULL
 
 # a rollback must not take away a value another transaction set in the meantime. Updating an
 # existing row conflicts in the metadata catalog, so the two only meet when there is no row yet
@@ -89,11 +93,6 @@ ORDER BY f.column_id
 2	true	true
 
 # the option belongs to the catalog, not the connection that set it
-query I con2
-SELECT value FROM ducklake.options() WHERE option_name='skip_stats_columns' AND scope_entry='main.rb'
-----
-2
-
 statement ok con2
 INSERT INTO ducklake.rb VALUES (2, 'bbb')
 
@@ -103,18 +102,35 @@ WHERE column_id=2 AND data_file_id=(SELECT max(data_file_id) FROM ducklake_meta.
 ----
 NULL	NULL
 
-# it is stored rather than remembered, so a fresh attach reads it back
+# a failed commit never reaches Rollback, so it has to put the option back itself
 statement ok con1
-DETACH ducklake
+CREATE TABLE ducklake.fc(id INTEGER, s VARCHAR)
+
+statement ok con1
+BEGIN
+
+statement ok con1
+CALL ducklake.set_option('skip_stats_columns', 's', table_name => 'fc')
+
+statement ok con1
+ALTER TABLE ducklake.fc RENAME COLUMN s TO x
 
 statement ok con2
-ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/skip_stats_columns_transaction', METADATA_CATALOG 'ducklake_meta', DATA_INLINING_ROW_LIMIT 0)
+ALTER TABLE ducklake.fc RENAME COLUMN s TO y
 
-statement ok con2
-INSERT INTO ducklake.rb VALUES (3, 'ccc')
-
-query II con2
-SELECT min_value, max_value FROM ducklake_meta.ducklake_file_column_stats
-WHERE column_id=2 AND data_file_id=(SELECT max(data_file_id) FROM ducklake_meta.ducklake_data_file)
+statement error con1
+COMMIT
 ----
-NULL	NULL
+another transaction has altered it
+
+statement ok con1
+INSERT INTO ducklake.fc VALUES (1, 'aaa')
+
+query III con1
+SELECT f.column_id, f.min_value, f.max_value
+FROM ducklake_meta.ducklake_file_column_stats f JOIN ducklake_meta.ducklake_data_file d USING (data_file_id)
+WHERE d.table_id=(SELECT table_id FROM ducklake_meta.ducklake_table WHERE table_name='fc' AND end_snapshot IS NULL)
+ORDER BY f.column_id
+----
+1	1	1
+2	aaa	aaa

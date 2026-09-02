@@ -120,7 +120,7 @@
       ]
     },
     {
-      "reason": "ROLLBACK after set_option does not remove the ducklake_metadata row on the quack-backed metadata catalog, so options() still reports the rolled-back setting. Same cause as the flush/expire rollback entries above: metadata SQL auto-commits independently of the outer DuckLake transaction.",
+      "reason": "ROLLBACK after set_option does not remove the ducklake_metadata row on the quack-backed metadata catalog, so options() still reports the rolled-back setting: metadata SQL auto-commits independently of the outer DuckLake transaction.",
       "paths": [
         "test/sql/stats/skip_stats_columns_transaction.test"
       ]

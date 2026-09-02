@@ -60,12 +60,12 @@ WHERE column_id IN (3, 4) AND min_value IS NOT NULL
 statement error
 ALTER TABLE ducklake.nested ADD COLUMN st.g GEOMETRY
 ----
-Cannot add GEOMETRY field "g" to column "st"
+Cannot give column "st" a GEOMETRY field ("g")
 
 statement error
 ALTER TABLE ducklake.nested ALTER COLUMN st TYPE STRUCT(x INTEGER, y VARCHAR, g GEOMETRY)
 ----
-Cannot add GEOMETRY field "g" to column "st"
+Cannot give column "st" a GEOMETRY field ("g")
 
 statement ok
 ALTER TABLE ducklake.nested ADD COLUMN st.z INTEGER
