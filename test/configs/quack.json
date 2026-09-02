@@ -120,7 +120,7 @@
       ]
     },
     {
-      "reason": "ROLLBACK after set_option does not remove the ducklake_metadata row on the quack-backed metadata catalog, so options() still reports the rolled-back setting: metadata SQL auto-commits independently of the outer DuckLake transaction.",
+      "reason": "set_option writes its ducklake_metadata row eagerly instead of staging it for commit like every other change, so a ROLLBACK leaves the row behind on quack, where each metadata statement runs on the server outside the local transaction. Rolled-back DDL is unaffected - that is only written at commit.",
       "paths": [
         "test/sql/stats/skip_stats_columns_transaction.test"
       ]
