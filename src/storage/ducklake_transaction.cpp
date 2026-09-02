@@ -723,7 +723,8 @@ DuckLakeTransaction::DuckLakeTransaction(DuckLakeCatalog &ducklake_catalog, Tran
       local_catalog_id(DuckLakeConstants::TRANSACTION_LOCAL_ID_START), catalog_version(0) {
 	metadata_manager = DuckLakeMetadataManager::Create(*this);
 	schema_pins = make_uniq<DuckLakeSchemaPinState>();
-	state = make_uniq<DuckLakeTransactionState>(db, ducklake_catalog.IsCommitInfoRequired(), new_name_maps,
+	// nothing is staged yet, so this reads the committed value
+	state = make_uniq<DuckLakeTransactionState>(db, ducklake_catalog.IsCommitInfoRequired(nullptr), new_name_maps,
 	                                            ducklake_catalog.DataPath(), ducklake_catalog.Separator());
 }
 
@@ -767,6 +768,8 @@ void DuckLakeTransaction::Start() {
 }
 
 void DuckLakeTransaction::Commit() {
+	// written before the commit below so they land in the same metadata transaction
+	WriteConfigOptions();
 	if (ChangesMade()) {
 		FlushChanges();
 	} else if (connection) {
@@ -775,6 +778,7 @@ void DuckLakeTransaction::Commit() {
 			DropEmptySupersededInlinedTablesClientSide();
 		}
 	}
+	ApplyConfigOptions();
 	FlushNameMapCacheInvalidations();
 	connection.reset();
 	state->local_changes.Clear();
@@ -1464,6 +1468,8 @@ void DuckLakeTransaction::RunCommitLoop(DuckLakeSnapshot transaction_snapshot,
 	context.prepare_retry = [&]() {
 		metadata_manager->ClearInlinedTableCaches();
 		connection->BeginTransaction();
+		// the rolled back attempt took the option rows with it
+		WriteConfigOptions();
 		snapshot.reset();
 	};
 	context.query_metadata = [&](string q) {
@@ -1560,10 +1566,43 @@ void DuckLakeTransaction::RunCommitLoop(DuckLakeSnapshot transaction_snapshot,
 }
 
 void DuckLakeTransaction::SetConfigOption(const DuckLakeConfigOption &option) {
-	// write the config option to the metadata
-	metadata_manager->SetConfigOption(option);
-	// set the option in the catalog
-	ducklake_catalog.SetConfigOption(option);
+	// staged rather than written now, so other transactions keep reading the committed value
+	for (auto &staged : staged_config_options) {
+		if (staged.option.key == option.option.key && staged.schema_id == option.schema_id &&
+		    staged.table_id == option.table_id) {
+			staged.option.value = option.option.value;
+			return;
+		}
+	}
+	staged_config_options.push_back(option);
+}
+
+bool DuckLakeTransaction::TryGetStagedConfigOption(const string &option, string &result, SchemaIndex schema_id,
+                                                   TableIndex table_id) const {
+	for (auto &staged : staged_config_options) {
+		if (staged.option.key == option && staged.schema_id == schema_id && staged.table_id == table_id) {
+			result = staged.option.value;
+			return true;
+		}
+	}
+	return false;
+}
+
+vector<DuckLakeConfigOption> DuckLakeTransaction::GetStagedConfigOptions() const {
+	return staged_config_options;
+}
+
+void DuckLakeTransaction::WriteConfigOptions() {
+	for (auto &option : staged_config_options) {
+		metadata_manager->SetConfigOption(option);
+	}
+}
+
+void DuckLakeTransaction::ApplyConfigOptions() {
+	for (auto &option : staged_config_options) {
+		ducklake_catalog.SetConfigOption(option);
+	}
+	staged_config_options.clear();
 }
 
 DuckLakeSnapshotCommit &DuckLakeTransaction::GetCommitInfo() {

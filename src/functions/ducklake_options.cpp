@@ -95,6 +95,36 @@ static Value GetOptionDescription(const string &option_name) {
 	return Value();
 }
 
+static SchemaIndex ScopeIdOf(const DuckLakeSchemaSetting &setting) {
+	return setting.schema_id;
+}
+
+static TableIndex ScopeIdOf(const DuckLakeTableSetting &setting) {
+	return setting.table_id;
+}
+
+//! Overwrites the stored value, or adds the option if that scope does not have it yet
+template <class SETTINGS, class SCOPE_ID>
+static void OverlayScopedOption(SETTINGS &settings, SCOPE_ID scope_id, const DuckLakeTag &tag) {
+	for (auto &setting : settings) {
+		if (setting.tag.key == tag.key && ScopeIdOf(setting) == scope_id) {
+			setting.tag.value = tag.value;
+			return;
+		}
+	}
+	settings.push_back({scope_id, tag});
+}
+
+static void OverlayGlobalOption(vector<DuckLakeTag> &tags, const DuckLakeTag &tag) {
+	for (auto &existing : tags) {
+		if (existing.key == tag.key) {
+			existing.value = tag.value;
+			return;
+		}
+	}
+	tags.push_back(tag);
+}
+
 unique_ptr<GlobalTableFunctionState> DuckLakeOptionsInit(ClientContext &context, TableFunctionInitInput &input) {
 	auto &bind_data = input.bind_data->Cast<DuckLakeOptionsData>();
 	auto &transaction = DuckLakeTransaction::Get(context, bind_data.catalog);
@@ -103,6 +133,18 @@ unique_ptr<GlobalTableFunctionState> DuckLakeOptionsInit(ClientContext &context,
 
 	auto result = make_uniq<DuckLakeOptionsState>();
 	auto metadata = metadata_manager.LoadDuckLake();
+
+	// options this transaction has set are not in the metadata until it commits, but it must read
+	// them back
+	for (auto &staged : transaction.GetStagedConfigOptions()) {
+		if (staged.table_id.IsValid()) {
+			OverlayScopedOption(metadata.table_settings, staged.table_id, staged.option);
+		} else if (staged.schema_id.IsValid()) {
+			OverlayScopedOption(metadata.schema_settings, staged.schema_id, staged.option);
+		} else {
+			OverlayGlobalOption(metadata.tags, staged.option);
+		}
+	}
 
 	// Global options
 	for (auto &tag : metadata.tags) {

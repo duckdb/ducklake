@@ -1,0 +1,47 @@
+# name: test/sql/settings/config_option_commit_retry.test
+# description: A config option survives a commit that has to be retried
+# group: [settings]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/config_option_commit_retry')
+
+statement ok
+SET ducklake_max_retry_count=100
+
+loop i 0 2
+
+statement ok
+CREATE TABLE ducklake.t${i}(id INTEGER)
+
+endloop
+
+# concurrent commits contend for the snapshot, so these are retried - a retry throws away the
+# metadata transaction the option row was written in, so it has to be re-issued
+concurrentloop i 0 2
+
+statement ok
+BEGIN
+
+statement ok
+CALL ducklake.set_option('parquet_compression', 'gzip', table_name => 't${i}')
+
+statement ok
+INSERT INTO ducklake.t${i} VALUES (${i})
+
+statement ok
+COMMIT
+
+endloop
+
+query I
+SELECT count(*) FROM ducklake.options() WHERE option_name='parquet_compression' AND scope='TABLE'
+----
+2

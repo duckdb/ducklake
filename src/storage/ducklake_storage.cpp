@@ -36,7 +36,7 @@ static void HandleDuckLakeOption(DuckLakeOptions &options, const string &option,
 			options.encryption = DuckLakeEncryption::UNENCRYPTED;
 		}
 	} else if (lcase == "data_inlining_row_limit") {
-		options.config_options["data_inlining_row_limit"] = value.DefaultCastAs(LogicalType::UBIGINT).ToString();
+		options.config.global["data_inlining_row_limit"] = value.DefaultCastAs(LogicalType::UBIGINT).ToString();
 	} else if (lcase == "snapshot_version") {
 		if (options.at_clause) {
 			throw InvalidInputException("Cannot specify both VERSION and TIMESTAMP");
@@ -51,7 +51,7 @@ static void HandleDuckLakeOption(DuckLakeOptions &options, const string &option,
 		auto parameter_name = lcase.substr(5);
 		options.metadata_parameters[parameter_name] = value;
 	} else if (lcase == "write_deletion_vectors") {
-		options.config_options["write_deletion_vectors"] =
+		options.config.global["write_deletion_vectors"] =
 		    BooleanValue::Get(value.DefaultCastAs(LogicalType::BOOLEAN)) ? "true" : "false";
 	} else if (lcase == "create_if_not_exists") {
 		options.create_if_not_exists = BooleanValue::Get(value.DefaultCastAs(LogicalType::BOOLEAN));

@@ -272,7 +272,8 @@ PhysicalOperator &DuckLakeCatalog::PlanUpdate(ClientContext &context, PhysicalPl
 	optional_ptr<PhysicalOperator> plan = &update_op;
 	optional_ptr<DuckLakeInlineData> inline_data;
 
-	idx_t data_inlining_row_limit = GetInliningLimit(context, table);
+	auto &transaction = DuckLakeTransaction::Get(context, *this);
+	idx_t data_inlining_row_limit = GetInliningLimit(transaction, context, table);
 	if (data_inlining_row_limit > 0) {
 		plan = planner.Make<DuckLakeInlineData>(*plan, data_inlining_row_limit);
 		inline_data = plan->Cast<DuckLakeInlineData>();

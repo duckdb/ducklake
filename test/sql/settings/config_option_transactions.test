@@ -1,0 +1,180 @@
+# name: test/sql/settings/config_option_transactions.test
+# description: Config options set in a transaction are private to it until it commits
+# group: [settings]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/config_option_transactions.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok con1
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/config_option_transactions', METADATA_CATALOG 'ducklake_meta', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok con1
+CREATE TABLE ducklake.t(id INTEGER)
+
+# a transaction reads back the option it set, before committing it
+statement ok con1
+BEGIN
+
+statement ok con1
+CALL ducklake.set_option('parquet_compression', 'gzip', table_name => 't')
+
+query I con1
+SELECT value FROM ducklake.options() WHERE option_name='parquet_compression'
+----
+gzip
+
+# another connection must not pick up a value that may never commit
+statement ok con1
+CALL ducklake.set_option('data_inlining_row_limit', 10, table_name => 't')
+
+statement ok con2
+INSERT INTO ducklake.t VALUES (2)
+
+# not inlined, so con2 wrote a data file
+query I con2
+SELECT count(*) FROM ducklake_meta.ducklake_data_file d
+JOIN ducklake_meta.ducklake_table t ON t.table_id=d.table_id AND t.end_snapshot IS NULL
+WHERE t.table_name='t'
+----
+1
+
+statement ok con1
+ROLLBACK
+
+statement ok con1
+INSERT INTO ducklake.t VALUES (1)
+
+# the last value set in a transaction is the one that reads back
+statement ok con1
+BEGIN
+
+statement ok con1
+CALL ducklake.set_option('parquet_compression', 'snappy', table_name => 't')
+
+statement ok con1
+CALL ducklake.set_option('parquet_compression', 'zstd', table_name => 't')
+
+query I con1
+SELECT value FROM ducklake.options() WHERE option_name='parquet_compression'
+----
+zstd
+
+statement ok con1
+COMMIT
+
+# the option has to take effect inside its own transaction, not just read back
+statement ok con1
+CREATE TABLE ducklake.inl(id INTEGER)
+
+statement ok con1
+BEGIN
+
+statement ok con1
+CALL ducklake.set_option('data_inlining_row_limit', 10, table_name => 'inl')
+
+statement ok con1
+INSERT INTO ducklake.inl VALUES (1)
+
+statement ok con1
+COMMIT
+
+# inlined, so no data file was written
+query I con1
+SELECT count(*) FROM ducklake_meta.ducklake_data_file d
+JOIN ducklake_meta.ducklake_table t ON t.table_id=d.table_id AND t.end_snapshot IS NULL
+WHERE t.table_name='inl'
+----
+0
+
+# and a rolled back option must not take effect
+statement ok con1
+CREATE TABLE ducklake.inl2(id INTEGER)
+
+statement ok con1
+BEGIN
+
+statement ok con1
+CALL ducklake.set_option('data_inlining_row_limit', 10, table_name => 'inl2')
+
+statement ok con1
+ROLLBACK
+
+statement ok con1
+INSERT INTO ducklake.inl2 VALUES (1)
+
+query I con1
+SELECT count(*) FROM ducklake_meta.ducklake_data_file d
+JOIN ducklake_meta.ducklake_table t ON t.table_id=d.table_id AND t.end_snapshot IS NULL
+WHERE t.table_name='inl2'
+----
+1
+
+# a committed narrow scope must not be shadowed by a staged wide one
+statement ok con1
+CREATE TABLE ducklake.scoped(id INTEGER)
+
+statement ok con1
+CALL ducklake.set_option('data_inlining_row_limit', 0, table_name => 'scoped')
+
+statement ok con1
+BEGIN
+
+statement ok con1
+CALL ducklake.set_option('data_inlining_row_limit', 10)
+
+query II con1
+SELECT scope, value FROM ducklake.options() WHERE option_name='data_inlining_row_limit'
+  AND (scope='GLOBAL' OR scope_entry='main.scoped') ORDER BY scope
+----
+GLOBAL	10
+TABLE	0
+
+statement ok con1
+INSERT INTO ducklake.scoped VALUES (1)
+
+statement ok con1
+COMMIT
+
+# the table scope won, so the row went to a file rather than being inlined
+query I con1
+SELECT count(*) FROM ducklake_meta.ducklake_data_file d
+JOIN ducklake_meta.ducklake_table t ON t.table_id=d.table_id AND t.end_snapshot IS NULL
+WHERE t.table_name='scoped'
+----
+1
+
+# within one scope the staged value wins over the committed one
+statement ok con1
+CREATE TABLE ducklake.same_scope(id INTEGER)
+
+statement ok con1
+CALL ducklake.set_option('data_inlining_row_limit', 0, table_name => 'same_scope')
+
+statement ok con1
+BEGIN
+
+statement ok con1
+CALL ducklake.set_option('data_inlining_row_limit', 10, table_name => 'same_scope')
+
+statement ok con1
+INSERT INTO ducklake.same_scope VALUES (1)
+
+statement ok con1
+COMMIT
+
+# inlined against the staged 10, not the committed 0
+query I con1
+SELECT count(*) FROM ducklake_meta.ducklake_data_file d
+JOIN ducklake_meta.ducklake_table t ON t.table_id=d.table_id AND t.end_snapshot IS NULL
+WHERE t.table_name='same_scope'
+----
+0
+
+# T4: the precedence section above left a global limit set - put it back
+statement ok con1
+CALL ducklake.set_option('data_inlining_row_limit', 0)
