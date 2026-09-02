@@ -92,10 +92,14 @@ static void ValidateStatsCanBeSkipped(const DuckLakeTableEntry &table, const Duc
 }
 
 //! Resolves a column name, or a LIST of them, to the field ids the option stores - ids are used
-//! because they survive a rename. An empty value clears the option.
-static string ResolveSkippedStatsColumns(DuckLakeTableEntry &table, const Value &val, const string &raw_value) {
+//! because they survive a rename
+static string ResolveSkippedStatsColumns(DuckLakeTableEntry &table, const Value &val) {
+	// a NULL, an empty string and an empty list all name no columns, which clears the option
+	if (val.IsNull()) {
+		return string();
+	}
 	vector<string> column_names;
-	if (!val.IsNull() && val.type().id() == LogicalTypeId::LIST) {
+	if (val.type().id() == LogicalTypeId::LIST) {
 		auto &children = ListValue::GetChildren(val);
 		column_names.reserve(children.size());
 		for (auto &child : children) {
@@ -103,15 +107,18 @@ static string ResolveSkippedStatsColumns(DuckLakeTableEntry &table, const Value 
 				column_names.push_back(child.DefaultCastAs(LogicalType::VARCHAR).GetValue<string>());
 			}
 		}
-	} else if (!raw_value.empty()) {
-		column_names.push_back(raw_value);
+	} else {
+		auto column_name = val.DefaultCastAs(LogicalType::VARCHAR).GetValue<string>();
+		if (!column_name.empty()) {
+			column_names.push_back(std::move(column_name));
+		}
 	}
 	vector<string> field_ids;
 	field_ids.reserve(column_names.size());
 	unordered_set<idx_t> seen;
 	seen.reserve(column_names.size());
 	for (auto &column_name : column_names) {
-		// a VARIANT column only resolves when the lookup can report where its own path begins
+		// unused - passing it makes GetByNames return a VARIANT root instead of throwing
 		optional_idx name_offset;
 		auto field_id = table.TryGetFieldId(StringsToIdentifiers({column_name}), &name_offset);
 		if (!field_id) {
@@ -228,10 +235,7 @@ static unique_ptr<FunctionData> DuckLakeSetOptionBind(ClientContext &context, Ta
 	} else if (option == "sort_on_insert") {
 		value = val.CastAs(context, LogicalType::BOOLEAN).GetValue<bool>() ? "true" : "false";
 	} else if (option == "skip_stats_columns") {
-		// the column names are resolved to field ids below, once the table scope is known
-		value = val.IsNull() || val.type().id() == LogicalTypeId::LIST
-		            ? string()
-		            : val.DefaultCastAs(LogicalType::VARCHAR).GetValue<string>();
+		// resolved to field ids below, once the table scope is known
 	} else {
 		throw NotImplementedException("Unsupported option %s", option);
 	}
@@ -265,7 +269,7 @@ static unique_ptr<FunctionData> DuckLakeSetOptionBind(ClientContext &context, Ta
 			throw NotImplementedException("Settings cannot be set for transaction-local tables");
 		}
 		if (option == "skip_stats_columns") {
-			value = ResolveSkippedStatsColumns(ducklake_table, val, value);
+			value = ResolveSkippedStatsColumns(ducklake_table, val);
 		}
 	} else if (!schema.empty()) {
 		// find the scope
