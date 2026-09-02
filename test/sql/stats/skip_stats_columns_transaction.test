@@ -54,13 +54,43 @@ statement ok con1
 ROLLBACK
 
 query I con1
-SELECT value FROM ducklake.options() WHERE option_name='skip_stats_columns'
+SELECT value FROM ducklake.options() WHERE option_name='skip_stats_columns' AND scope_entry='main.rb'
 ----
 2
 
+# a rollback must not take away a value another transaction set in the meantime. Updating an
+# existing row conflicts in the metadata catalog, so the two only meet when there is no row yet
+statement ok con1
+CREATE TABLE ducklake.cc(id INTEGER, s VARCHAR)
+
+statement ok con1
+BEGIN
+
+statement ok con1
+CALL ducklake.set_option('skip_stats_columns', 'id', table_name => 'cc')
+
+statement ok con2
+CALL ducklake.set_option('skip_stats_columns', 's', table_name => 'cc')
+
+statement ok con1
+ROLLBACK
+
+statement ok con1
+INSERT INTO ducklake.cc VALUES (1, 'aaa')
+
+# con2 committed 's', so its bounds are the ones that must be missing
+query III con1
+SELECT f.column_id, f.min_value IS NULL, f.max_value IS NULL
+FROM ducklake_meta.ducklake_file_column_stats f JOIN ducklake_meta.ducklake_data_file d USING (data_file_id)
+WHERE d.table_id=(SELECT table_id FROM ducklake_meta.ducklake_table WHERE table_name='cc' AND end_snapshot IS NULL)
+ORDER BY f.column_id
+----
+1	false	false
+2	true	true
+
 # the option belongs to the catalog, not the connection that set it
 query I con2
-SELECT value FROM ducklake.options() WHERE option_name='skip_stats_columns'
+SELECT value FROM ducklake.options() WHERE option_name='skip_stats_columns' AND scope_entry='main.rb'
 ----
 2
 

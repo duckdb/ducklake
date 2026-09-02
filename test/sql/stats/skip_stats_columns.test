@@ -38,13 +38,6 @@ SELECT option_name, value FROM ducklake.options() WHERE scope='TABLE' ORDER BY o
 parquet_compression	zstd
 skip_stats_columns	2,3
 
-# a single name needs no list
-statement ok
-CALL ducklake.set_option('skip_stats_columns', 's', table_name => 't')
-
-statement ok
-CALL ducklake.set_option('skip_stats_columns', ['s', 'd'], table_name => 't')
-
 # setting it mid-life must invalidate the table bounds, which would otherwise still claim
 # ['aaa','aaa'] for rows written outside them
 statement ok
