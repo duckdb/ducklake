@@ -1,0 +1,103 @@
+# name: test/sql/stats/skip_stats_columns_errors.test
+# description: What skip_stats_columns refuses to skip
+# group: [stats]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/skip_stats_columns_errors.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/skip_stats_columns_errors', METADATA_CATALOG 'ducklake_meta', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE ducklake.t(id INTEGER, s VARCHAR)
+
+statement error
+CALL ducklake.set_option('skip_stats_columns', 'nonexistent', table_name => 't')
+----
+does not exist
+
+statement error
+CALL ducklake.set_option('skip_stats_columns', 'id')
+----
+can only be set for a specific table
+
+# a partition column needs its bounds to prune, so the two are refused in either order
+statement ok
+CREATE TABLE ducklake.p(id INTEGER, part INTEGER)
+
+statement ok
+CALL ducklake.set_option('skip_stats_columns', 'part', table_name => 'p')
+
+statement error
+ALTER TABLE ducklake.p SET PARTITIONED BY (part)
+----
+Cannot partition by column "part"
+
+statement ok
+CALL ducklake.set_option('skip_stats_columns', [], table_name => 'p')
+
+statement ok
+ALTER TABLE ducklake.p SET PARTITIONED BY (part)
+
+statement error
+CALL ducklake.set_option('skip_stats_columns', 'part', table_name => 'p')
+----
+partition column
+
+# geometry/variant bounds live outside min/max, so skipping one would silently keep writing them
+statement ok
+CREATE TABLE ducklake.geo(id INTEGER, g GEOMETRY, v VARIANT, st STRUCT(a INTEGER, geom GEOMETRY))
+
+statement error
+CALL ducklake.set_option('skip_stats_columns', 'g', table_name => 'geo')
+----
+Statistics cannot be skipped for GEOMETRY columns
+
+statement error
+CALL ducklake.set_option('skip_stats_columns', 'v', table_name => 'geo')
+----
+Statistics cannot be skipped for VARIANT columns
+
+statement error
+CALL ducklake.set_option('skip_stats_columns', 'st', table_name => 'geo')
+----
+it contains a GEOMETRY field ("geom")
+
+# one bad name rejects the whole list
+statement error
+CALL ducklake.set_option('skip_stats_columns', ['id', 'g'], table_name => 'geo')
+----
+Statistics cannot be skipped for GEOMETRY columns
+
+query I
+SELECT count(*) FROM ducklake_meta.ducklake_metadata WHERE key='skip_stats_columns'
+  AND scope_id=(SELECT table_id FROM ducklake_meta.ducklake_table WHERE table_name='geo' AND end_snapshot IS NULL)
+----
+0
+
+# a name is taken whole, so a comma in it needs no escaping
+statement ok
+CREATE TABLE ducklake.commas("a,b" INTEGER, a INTEGER, b INTEGER)
+
+statement ok
+CALL ducklake.set_option('skip_stats_columns', 'a,b', table_name => 'commas')
+
+query I
+SELECT value FROM ducklake_meta.ducklake_metadata WHERE key='skip_stats_columns'
+  AND scope_id=(SELECT table_id FROM ducklake_meta.ducklake_table WHERE table_name='commas' AND end_snapshot IS NULL)
+----
+1
+
+statement ok
+CALL ducklake.set_option('skip_stats_columns', ['a', 'b'], table_name => 'commas')
+
+query I
+SELECT value FROM ducklake_meta.ducklake_metadata WHERE key='skip_stats_columns'
+  AND scope_id=(SELECT table_id FROM ducklake_meta.ducklake_table WHERE table_name='commas' AND end_snapshot IS NULL)
+----
+2,3

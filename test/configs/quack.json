@@ -120,6 +120,12 @@
       ]
     },
     {
+      "reason": "ROLLBACK after set_option does not remove the ducklake_metadata row on the quack-backed metadata catalog, so options() still reports the rolled-back setting. Same cause as the flush/expire rollback entries above: metadata SQL auto-commits independently of the outer DuckLake transaction.",
+      "paths": [
+        "test/sql/stats/skip_stats_columns_transaction.test"
+      ]
+    },
+    {
       "reason": "ROLLBACK after ducklake_expire_snapshots does not restore expired snapshot rows on the quack-backed metadata catalog. DuckLake sends metadata SQL through quack_query_by_name, which sends a PrepareRequestMessage directly and does not route through QuackTransaction's remote BEGIN/ROLLBACK path.",
       "paths": [
         "test/sql/issues/issue_852_cache_growth.test"
@@ -219,8 +225,7 @@
         "test/sql/sorted_table/merge_adjacent_sorted_transaction_renamed.test",
         "test/sql/sorted_table/schema_version_same_transaction.test",
         "test/sql/sorted_table/set_sorted_by_rollback_basic.test",
-        "test/sql/sorted_table/set_sorted_by_rollback_mixed.test",
-        "test/sql/stats/skip_stats_columns.test"
+        "test/sql/sorted_table/set_sorted_by_rollback_mixed.test"
       ]
     },
     {

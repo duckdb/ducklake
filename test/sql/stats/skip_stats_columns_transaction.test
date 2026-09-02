@@ -1,0 +1,90 @@
+# name: test/sql/stats/skip_stats_columns_transaction.test
+# description: skip_stats_columns across rollback and across connections
+# group: [stats]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/skip_stats_columns_transaction.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok con1
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/skip_stats_columns_transaction', METADATA_CATALOG 'ducklake_meta', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok con1
+CREATE TABLE ducklake.rb(id INTEGER, s VARCHAR)
+
+# a rolled back set_option leaves the bounds on
+statement ok con1
+BEGIN
+
+statement ok con1
+CALL ducklake.set_option('skip_stats_columns', 's', table_name => 'rb')
+
+statement ok con1
+ROLLBACK
+
+statement ok con1
+INSERT INTO ducklake.rb VALUES (1, 'aaa')
+
+query III con1
+SELECT column_id, min_value, max_value FROM ducklake_meta.ducklake_file_column_stats ORDER BY column_id
+----
+1	1	1
+2	aaa	aaa
+
+query I con1
+SELECT count(*) FROM ducklake.options() WHERE option_name='skip_stats_columns'
+----
+0
+
+# and a rolled back change puts back the value it replaced
+statement ok con1
+CALL ducklake.set_option('skip_stats_columns', 's', table_name => 'rb')
+
+statement ok con1
+BEGIN
+
+statement ok con1
+CALL ducklake.set_option('skip_stats_columns', [], table_name => 'rb')
+
+statement ok con1
+ROLLBACK
+
+query I con1
+SELECT value FROM ducklake.options() WHERE option_name='skip_stats_columns'
+----
+2
+
+# the option belongs to the catalog, not the connection that set it
+query I con2
+SELECT value FROM ducklake.options() WHERE option_name='skip_stats_columns'
+----
+2
+
+statement ok con2
+INSERT INTO ducklake.rb VALUES (2, 'bbb')
+
+query II con2
+SELECT min_value, max_value FROM ducklake_meta.ducklake_file_column_stats
+WHERE column_id=2 AND data_file_id=(SELECT max(data_file_id) FROM ducklake_meta.ducklake_data_file)
+----
+NULL	NULL
+
+# it is stored rather than remembered, so a fresh attach reads it back
+statement ok con1
+DETACH ducklake
+
+statement ok con2
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/skip_stats_columns_transaction', METADATA_CATALOG 'ducklake_meta', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok con2
+INSERT INTO ducklake.rb VALUES (3, 'ccc')
+
+query II con2
+SELECT min_value, max_value FROM ducklake_meta.ducklake_file_column_stats
+WHERE column_id=2 AND data_file_id=(SELECT max(data_file_id) FROM ducklake_meta.ducklake_data_file)
+----
+NULL	NULL
