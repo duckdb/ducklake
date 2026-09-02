@@ -137,38 +137,6 @@ JOIN empty_varchar_build b ON p.k = b.k
 3
 
 statement ok
-CREATE TABLE ducklake.blob_probe(k BLOB)
-
-statement ok
-INSERT INTO ducklake.blob_probe SELECT printf('a%03d', i)::BLOB FROM range(100) t(i)
-
-statement ok
-INSERT INTO ducklake.blob_probe SELECT printf('b%03d', i)::BLOB FROM range(100) t(i)
-
-statement ok
-INSERT INTO ducklake.blob_probe SELECT printf('c%03d', i)::BLOB FROM range(100) t(i)
-
-statement ok
-CREATE TABLE blob_build(k BLOB)
-
-statement ok
-INSERT INTO blob_build VALUES ('a000'::BLOB), ('c099'::BLOB)
-
-query II
-EXPLAIN ANALYZE SELECT count(*)
-FROM ducklake.blob_probe p
-JOIN blob_build b ON p.k = b.k
-----
-analyzed_plan	<REGEX>:(?s).*IN.*PRF.*\(k\).*Total Files Read: 2.*
-
-query I
-SELECT count(*)
-FROM ducklake.blob_probe p
-JOIN blob_build b ON p.k = b.k
-----
-2
-
-statement ok
 CREATE TABLE ducklake.null_probe(k VARCHAR)
 
 statement ok
@@ -227,32 +195,6 @@ FROM ducklake.null_probe p
 JOIN null_build b ON p.k = b.k
 ----
 1
-
-# Invalid BLOB bounds must retain the file.
-statement ok
-UPDATE dl.ducklake_file_column_stats
-SET min_value = 'not-hex'
-WHERE table_id = (SELECT table_id FROM dl.ducklake_table WHERE table_name = 'blob_probe')
-  AND column_id = (SELECT column_id FROM dl.ducklake_column
-                   WHERE table_id = (SELECT table_id FROM dl.ducklake_table WHERE table_name = 'blob_probe')
-                     AND column_name = 'k')
-  AND data_file_id = (SELECT data_file_id FROM dl.ducklake_data_file
-                      WHERE table_id = (SELECT table_id FROM dl.ducklake_table WHERE table_name = 'blob_probe')
-                      ORDER BY data_file_id LIMIT 1 OFFSET 1)
-
-query II
-EXPLAIN ANALYZE SELECT count(*)
-FROM ducklake.blob_probe p
-JOIN blob_build b ON p.k = b.k
-----
-analyzed_plan	<REGEX>:(?s).*IN.*PRF.*\(k\).*Total Files Read: 3.*
-
-query I
-SELECT count(*)
-FROM ducklake.blob_probe p
-JOIN blob_build b ON p.k = b.k
-----
-2
 
 # A missing stats row must retain the file because pruning is no longer provably safe.
 statement ok

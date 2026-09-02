@@ -3,7 +3,6 @@
 #include "storage/ducklake_geo_stats.hpp"
 #include "storage/ducklake_metadata_info.hpp"
 #include "storage/ducklake_variant_stats.hpp"
-#include "duckdb/common/types/blob.hpp"
 #include "duckdb/common/types/string.hpp"
 #include "duckdb/common/types/value.hpp"
 #include "duckdb/storage/statistics/base_statistics.hpp"
@@ -236,16 +235,21 @@ void DuckLakeTableStats::MergeFileStats(const DuckLakeDataFile &file) {
 }
 
 unique_ptr<BaseStatistics> DuckLakeColumnStats::CreateNumericStats() const {
+	Value min_value;
+	if (has_min && !Value(min).DefaultTryCastAs(type, min_value, nullptr)) {
+		return nullptr;
+	}
+	Value max_value;
+	if (has_max && !Value(max).DefaultTryCastAs(type, max_value, nullptr)) {
+		return nullptr;
+	}
+
 	auto stats = NumericStats::CreateEmpty(type);
 	if (has_min) {
-		// set min
-		Value min_val(min);
-		NumericStats::SetMin(stats, min_val.DefaultCastAs(type));
+		NumericStats::SetMin(stats, min_value);
 	}
 	if (has_max) {
-		// set max
-		Value max_val(max);
-		NumericStats::SetMax(stats, max_val.DefaultCastAs(type));
+		NumericStats::SetMax(stats, max_value);
 	}
 	if (!has_min && !has_max) {
 		stats = NumericStats::CreateUnknown(type);
@@ -294,9 +298,7 @@ unique_ptr<BaseStatistics> DuckLakeColumnStats::CreateStringStats() const {
 		StringStats::MergeInConstant(stats, string_t(max));
 		StringStats::MergeInConstant(stats, string_t(min));
 		StringStats::ResetMaxStringLength(stats);
-		if (type.id() == LogicalTypeId::VARCHAR) {
-			StringStats::SetContainsUnicode(stats);
-		}
+		StringStats::SetContainsUnicode(stats);
 	} else if (has_min) {
 		stats = StringStats::CreateUnknown(type);
 		StringStats::SetMin(stats, string_t(min), StringStatsType::TRUNCATED_STATS);
@@ -318,31 +320,6 @@ unique_ptr<BaseStatistics> DuckLakeColumnStats::CreateStringStats() const {
 		stats.SetHasNoNullFast();
 	}
 	return stats.ToUnique();
-}
-
-static bool TryDecodeBlobStats(const string &input, string &result) {
-	if (input.size() % 2 != 0) {
-		return false;
-	}
-	result.resize(input.size() / 2);
-	for (idx_t input_idx = 0; input_idx < input.size(); input_idx += 2) {
-		auto high = Blob::HEX_MAP[static_cast<uint8_t>(input[input_idx])];
-		auto low = Blob::HEX_MAP[static_cast<uint8_t>(input[input_idx + 1])];
-		if (high < 0 || low < 0) {
-			return false;
-		}
-		result[input_idx / 2] = static_cast<char>((high << 4) | low);
-	}
-	return true;
-}
-
-unique_ptr<BaseStatistics> DuckLakeColumnStats::CreateBlobStats() const {
-	DuckLakeColumnStats decoded_stats(*this);
-	if ((has_min && !TryDecodeBlobStats(min, decoded_stats.min)) ||
-	    (has_max && !TryDecodeBlobStats(max, decoded_stats.max))) {
-		return nullptr;
-	}
-	return decoded_stats.CreateStringStats();
 }
 
 unique_ptr<BaseStatistics> DuckLakeColumnStats::ToStats() const {
@@ -385,8 +362,6 @@ unique_ptr<BaseStatistics> DuckLakeColumnStats::ToStats() const {
 	}
 	case LogicalTypeId::VARCHAR:
 		return CreateStringStats();
-	case LogicalTypeId::BLOB:
-		return CreateBlobStats();
 	case LogicalTypeId::GEOMETRY:
 		return CreateGeometryStats();
 	case LogicalTypeId::VARIANT:
