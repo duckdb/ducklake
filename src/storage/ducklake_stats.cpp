@@ -235,21 +235,20 @@ void DuckLakeTableStats::MergeFileStats(const DuckLakeDataFile &file) {
 }
 
 unique_ptr<BaseStatistics> DuckLakeColumnStats::CreateNumericStats() const {
-	Value min_value;
-	if (has_min && !Value(min).DefaultTryCastAs(type, min_value, nullptr)) {
-		return nullptr;
-	}
-	Value max_value;
-	if (has_max && !Value(max).DefaultTryCastAs(type, max_value, nullptr)) {
-		return nullptr;
-	}
-
 	auto stats = NumericStats::CreateEmpty(type);
 	if (has_min) {
-		NumericStats::SetMin(stats, min_value);
+		auto min_value = Value(min).DefaultTryCastAs(type);
+		if (!min_value) {
+			return nullptr;
+		}
+		NumericStats::SetMin(stats, *min_value);
 	}
 	if (has_max) {
-		NumericStats::SetMax(stats, max_value);
+		auto max_value = Value(max).DefaultTryCastAs(type);
+		if (!max_value) {
+			return nullptr;
+		}
+		NumericStats::SetMax(stats, *max_value);
 	}
 	if (!has_min && !has_max) {
 		stats = NumericStats::CreateUnknown(type);

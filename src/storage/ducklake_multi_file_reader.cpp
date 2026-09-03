@@ -99,8 +99,8 @@ static bool CanSkipFileByTopNDynamicFilter(const DuckLakeFileColumnStats &column
 		constant = filter_data->constant;
 	}
 
-	Value casted_constant;
-	if (!constant.DefaultTryCastAs(column_filter.column_type, casted_constant, nullptr)) {
+	auto casted_constant = constant.DefaultTryCastAs(column_filter.column_type);
+	if (!casted_constant) {
 		return false;
 	}
 
@@ -110,28 +110,28 @@ static bool CanSkipFileByTopNDynamicFilter(const DuckLakeFileColumnStats &column
 		if (!column_stats.has_max) {
 			return false;
 		}
-		Value file_max;
-		if (!Value(column_stats.max).DefaultTryCastAs(column_filter.column_type, file_max, nullptr)) {
+		auto file_max = Value(column_stats.max).DefaultTryCastAs(column_filter.column_type);
+		if (!file_max) {
 			return false;
 		}
 		if (comparison_type == ExpressionType::COMPARE_GREATERTHAN) {
-			return !(file_max > casted_constant);
+			return !(*file_max > *casted_constant);
 		}
-		return !(file_max >= casted_constant);
+		return !(*file_max >= *casted_constant);
 	}
 	case ExpressionType::COMPARE_LESSTHAN:
 	case ExpressionType::COMPARE_LESSTHANOREQUALTO: {
 		if (!column_stats.has_min) {
 			return false;
 		}
-		Value file_min;
-		if (!Value(column_stats.min).DefaultTryCastAs(column_filter.column_type, file_min, nullptr)) {
+		auto file_min = Value(column_stats.min).DefaultTryCastAs(column_filter.column_type);
+		if (!file_min) {
 			return false;
 		}
 		if (comparison_type == ExpressionType::COMPARE_LESSTHAN) {
-			return !(file_min < casted_constant);
+			return !(*file_min < *casted_constant);
 		}
-		return !(file_min <= casted_constant);
+		return !(*file_min <= *casted_constant);
 	}
 	default:
 		return false;
