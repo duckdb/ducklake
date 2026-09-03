@@ -154,7 +154,12 @@ struct DuckLakePartitionRowGroup : public PartitionRowGroup {
 	}
 
 	bool MinMaxIsExact(const StorageIndex &storage_index) override {
-		return min_max_exact;
+		if (!min_max_exact) {
+			return false;
+		}
+		// string min/max may be stored truncated
+		auto &type = table.GetColumns().GetColumn(PhysicalIndex(storage_index.GetPrimaryIndex())).Type();
+		return type.InternalType() != PhysicalType::VARCHAR;
 	}
 
 	// DuckLakeGetPartitionStats bails out when the transaction has local changes, so
@@ -224,7 +229,7 @@ TableFunction DuckLakeFunctions::GetDuckLakeScanFunction(DatabaseInstance &insta
 	auto parquet_entry = loader.TryGetTableFunction("parquet_scan");
 	if (parquet_entry) {
 		auto &parquet_scan = parquet_entry->Cast<TableFunctionCatalogEntry>();
-		function = parquet_scan.functions.GetFunctionByOffset(0);
+		function = *parquet_scan.functions.GetFunctionByOffset(0);
 		function.get_multi_file_reader = DuckLakeMultiFileReader::CreateInstance;
 	}
 

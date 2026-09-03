@@ -976,8 +976,8 @@ unique_ptr<DuckLakeNameMapEntry> DuckLakeFileProcessor::MapHiveColumn(ParquetFil
 	}
 
 	string error;
-	Value cast_result;
-	if (!hive_value.DefaultTryCastAs(target_type, cast_result, &error)) {
+	auto cast_result = hive_value.DefaultTryCastAs(target_type, &error);
+	if (!cast_result) {
 		throw InvalidInputException("Column \"%s\" exists as a hive partition with value \"%s\", but this value cannot "
 		                            "be cast to the column type \"%s\"",
 		                            field_id.Name(), hive_value.ToString(), field_id.Type());

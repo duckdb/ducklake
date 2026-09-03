@@ -48,8 +48,9 @@ bool DuckLakeSchemaEntry::HandleCreateConflict(CatalogTransaction transaction, C
 		return false;
 	case OnCreateConflict::REPLACE_ON_CONFLICT: {
 		if (existing_entry->type != catalog_type) {
-			throw CatalogException("Existing object %s is of type %s, trying to replace with type %s", entry_name,
-			                       CatalogTypeToString(existing_entry->type), CatalogTypeToString(catalog_type));
+			throw CatalogException("Existing object %s is of type %s, trying to replace with type %s",
+			                       Identifier(entry_name), CatalogTypeToString(existing_entry->type),
+			                       CatalogTypeToString(catalog_type));
 		}
 		// try to drop the entry prior to creating
 		DropInfo info;
@@ -145,6 +146,9 @@ optional_ptr<CatalogEntry> DuckLakeSchemaEntry::CreateIndex(CatalogTransaction t
 }
 
 optional_ptr<CatalogEntry> DuckLakeSchemaEntry::CreateView(CatalogTransaction transaction, CreateViewInfo &info) {
+	if (info.security_type == ViewSecurityType::SECURE_VIEW) {
+		throw NotImplementedException("DuckLake does not support secure views");
+	}
 	// check if we have an existing entry with this name
 	if (!HandleCreateConflict(transaction, CatalogType::VIEW_ENTRY, info.GetViewName().GetIdentifierName(),
 	                          info.on_conflict)) {

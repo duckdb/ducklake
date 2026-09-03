@@ -363,7 +363,8 @@ OperatorFinalResultType DuckLakeInlineData::OperatorFinalize(Pipeline &pipeline,
 		if (column_stats.stats.null_count > 0) {
 			auto column_name = table.GetColumn(LogicalIndex(c)).GetName();
 			if (not_null_fields.count(column_name.GetIdentifierName())) {
-				throw ConstraintException("NOT NULL constraint failed: %s.%s", table.name, column_name);
+				throw ConstraintException("NOT NULL constraint failed: %s.%s", SQLIdentifier(table.name),
+				                          SQLIdentifier(column_name));
 			}
 		}
 	}

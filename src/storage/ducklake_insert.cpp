@@ -106,6 +106,9 @@ DuckLakeColumnStats DuckLakeInsert::ParseColumnStats(const LogicalType &type, co
 		} else if (stats_name == "has_nan") {
 			column_stats.has_contains_nan = true;
 			column_stats.contains_nan = StringValue::Get(stats_children[1]) == "true";
+		} else if (stats_name == "min_is_exact" || stats_name == "max_is_exact") {
+			// truncated string bounds are still valid bounds
+			continue;
 		} else if (column_stats.extra_stats && column_stats.extra_stats->ParseStats(stats_name, stats_children)) {
 			// handled by extra stats
 			continue;
@@ -200,7 +203,8 @@ void DuckLakeInsert::AddWrittenFiles(DuckLakeInsertGlobalState &global_state, Da
 			if (column_stats.null_count > 0 && column_names.size() == 1) {
 				// we wrote NULL values to a base column - verify NOT NULL constraint
 				if (global_state.not_null_fields.count(column_names[0])) {
-					throw ConstraintException("NOT NULL constraint failed: %s.%s", table.name, column_names[0]);
+					throw ConstraintException("NOT NULL constraint failed: %s.%s", SQLIdentifier(table.name),
+					                          SQLIdentifier(column_names[0]));
 				}
 			}
 
@@ -302,7 +306,7 @@ CopyFunctionCatalogEntry &DuckLakeFunctions::GetCopyFunction(ClientContext &cont
 	    OnEntryNotFound::RETURN_NULL);
 	if (!entry) {
 		throw MissingExtensionException(
-		    "Could not load the copy function for \"%s\". Try explicitly loading the \"%s\" extension", name, name);
+		    "Could not load the copy function for %s. Try explicitly loading the %s extension", name, name);
 	}
 	return *entry;
 }
