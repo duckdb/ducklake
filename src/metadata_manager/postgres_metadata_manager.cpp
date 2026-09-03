@@ -4,8 +4,171 @@
 #include "storage/ducklake_catalog.hpp"
 #include "storage/ducklake_transaction.hpp"
 #include "storage/ducklake_metadata_info.hpp"
+#include "storage/ducklake_table_entry.hpp"
 
 namespace duckdb {
+
+static bool HasFourDigitDatePrefix(const string &value) {
+	return value.size() >= 10 && StringUtil::CharacterIsDigit(value[0]) && StringUtil::CharacterIsDigit(value[1]) &&
+	       StringUtil::CharacterIsDigit(value[2]) && StringUtil::CharacterIsDigit(value[3]) && value[4] == '-' &&
+	       StringUtil::CharacterIsDigit(value[5]) && StringUtil::CharacterIsDigit(value[6]) && value[7] == '-' &&
+	       StringUtil::CharacterIsDigit(value[8]) && StringUtil::CharacterIsDigit(value[9]);
+}
+
+static string WithPostgresBinaryCollation(const string &expression) {
+	return "(" + expression + " COLLATE \"C\")";
+}
+
+static bool IsPostgresTemporalStatsType(const LogicalType &type) {
+	switch (type.id()) {
+	case LogicalTypeId::DATE:
+	case LogicalTypeId::TIMESTAMP:
+	case LogicalTypeId::TIMESTAMP_SEC:
+	case LogicalTypeId::TIMESTAMP_MS:
+	case LogicalTypeId::TIMESTAMP_TZ:
+		return true;
+	default:
+		return false;
+	}
+}
+
+static string GetPostgresStatsType(const LogicalType &type) {
+	switch (type.id()) {
+	case LogicalTypeId::BOOLEAN:
+		return "BOOLEAN";
+	case LogicalTypeId::TINYINT:
+	case LogicalTypeId::SMALLINT:
+		return "SMALLINT";
+	case LogicalTypeId::INTEGER:
+	case LogicalTypeId::UTINYINT:
+	case LogicalTypeId::USMALLINT:
+		return "INTEGER";
+	case LogicalTypeId::BIGINT:
+	case LogicalTypeId::UINTEGER:
+		return "BIGINT";
+	case LogicalTypeId::UBIGINT:
+	case LogicalTypeId::HUGEINT:
+	case LogicalTypeId::UHUGEINT:
+		return "NUMERIC";
+	case LogicalTypeId::FLOAT:
+		return "REAL";
+	case LogicalTypeId::DOUBLE:
+		return "DOUBLE PRECISION";
+	case LogicalTypeId::DATE:
+		return "DATE";
+	case LogicalTypeId::TIMESTAMP:
+	case LogicalTypeId::TIMESTAMP_SEC:
+	case LogicalTypeId::TIMESTAMP_MS:
+		return "TIMESTAMP";
+	case LogicalTypeId::TIMESTAMP_TZ:
+		return "TIMESTAMPTZ";
+	case LogicalTypeId::DECIMAL:
+		return type.ToString();
+	default:
+		return string();
+	}
+}
+
+static bool CanCastPostgresStatsForValueComparison(const LogicalType &type) {
+	return type.IsNumeric() || type.id() == LogicalTypeId::BOOLEAN || IsPostgresTemporalStatsType(type);
+}
+
+static bool CanCastPostgresTemporalValue(const Value &value, const LogicalType &type) {
+	auto string_value = value.ToString();
+	if (!HasFourDigitDatePrefix(string_value)) {
+		return false;
+	}
+	return type.id() != LogicalTypeId::DATE || string_value.size() == 10;
+}
+
+string PostgresMetadataManager::CastValueToTarget(const Value &value, const LogicalType &type) {
+	if (value.IsNull() || value.ToString().find('\0') != string::npos || type.id() == LogicalTypeId::BLOB) {
+		return string();
+	}
+	if (RequiresValueComparison(type) &&
+	    (!CanCastPostgresStatsForValueComparison(type) ||
+	     ((value.type().id() == LogicalTypeId::FLOAT || value.type().id() == LogicalTypeId::DOUBLE) &&
+	      !Value::IsFinite(value.GetValue<double>())))) {
+		return string();
+	}
+	if (!RequiresValueComparison(type) && type.id() != LogicalTypeId::VARCHAR) {
+		return string();
+	}
+	if (IsPostgresTemporalStatsType(type) && !CanCastPostgresTemporalValue(value, type)) {
+		return string();
+	}
+	if (type.IsNumeric()) {
+		return value.ToString();
+	}
+	auto literal = DuckLakeUtil::SQLLiteralToString(value.ToString());
+	if (type.id() == LogicalTypeId::VARCHAR) {
+		return WithPostgresBinaryCollation(literal);
+	}
+	if (IsPostgresTemporalStatsType(type)) {
+		return literal + "::" + GetPostgresStatsType(type);
+	}
+	if (type.id() == LogicalTypeId::BOOLEAN) {
+		return literal + "::BOOLEAN";
+	}
+	return string();
+}
+
+static string PostgresSafeTemporalStatsCast(const string &stats, const LogicalType &type) {
+	string regex;
+	if (type.id() == LogicalTypeId::DATE) {
+		regex = "'^[0-9]{4}-(0[1-9]|1[0-2])-([0][1-9]|[12][0-9]|3[01])$'";
+	} else if (type.id() == LogicalTypeId::TIMESTAMP_TZ) {
+		regex = "'^[0-9]{4}-(0[1-9]|1[0-2])-([0][1-9]|[12][0-9]|3[01]) "
+		        "([01][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9](\\.[0-9]{1,6})?"
+		        "(Z|[+-](0[0-9]|1[0-5])(:[0-5][0-9])?)$'";
+	} else {
+		regex = "'^[0-9]{4}-(0[1-9]|1[0-2])-([0][1-9]|[12][0-9]|3[01])"
+		        "( ([01][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9](\\.[0-9]{1,6})?)?$'";
+	}
+
+	auto year = StringUtil::Format("substring(%s FROM 1 FOR 4)::INTEGER", stats);
+	auto month = StringUtil::Format("substring(%s FROM 6 FOR 2)::INTEGER", stats);
+	auto day = StringUtil::Format("substring(%s FROM 9 FOR 2)::INTEGER", stats);
+	auto max_day = StringUtil::Format(
+	    "(CASE WHEN %s = 2 THEN CASE WHEN mod(%s, 4) = 0 AND (mod(%s, 100) <> 0 OR mod(%s, 400) = 0) "
+	    "THEN 29 ELSE 28 END WHEN %s IN (4, 6, 9, 11) THEN 30 ELSE 31 END)",
+	    month, year, year, year, month);
+	auto valid_date = StringUtil::Format("%s > 0 AND %s <= %s", year, day, max_day);
+	return StringUtil::Format("(CASE WHEN %s ~ %s THEN CASE WHEN %s THEN %s::%s END END)", stats, regex, valid_date,
+	                          stats, GetPostgresStatsType(type));
+}
+
+string PostgresMetadataManager::CastStatsToTarget(const string &stats, const LogicalType &type,
+                                                  StatsCastType cast_type) {
+	if (IsPostgresTemporalStatsType(type)) {
+		auto cast = PostgresSafeTemporalStatsCast(stats, type);
+		if (cast_type == StatsCastType::ORDERING) {
+			return cast;
+		}
+		// Unknown bounds must not exclude a file that can satisfy the data filter.
+		return StringUtil::Format("COALESCE(%s, '%s'::%s)", cast,
+		                          cast_type == StatsCastType::MIN ? "-infinity" : "infinity",
+		                          GetPostgresStatsType(type));
+	}
+	if (CanCastPostgresStatsForValueComparison(type)) {
+		return stats + "::" + GetPostgresStatsType(type);
+	}
+	if (type.id() == LogicalTypeId::VARCHAR) {
+		return WithPostgresBinaryCollation(stats);
+	}
+	return string();
+}
+
+static string GeneratePostgresNativeFileColumnStatsCTEBody(const CTERequirement &requirement, TableIndex table_id) {
+	string select_list = "data_file_id";
+	for (const auto &stat : requirement.referenced_stats) {
+		select_list += ", " + stat;
+	}
+	return StringUtil::Format("  SELECT %s\n"
+	                          "  FROM {METADATA_SCHEMA_ESCAPED}.ducklake_file_column_stats\n"
+	                          "  WHERE column_id = %d AND table_id = %d\n",
+	                          select_list, requirement.column_field_index, table_id.index);
+}
 
 PostgresMetadataManager::PostgresMetadataManager(DuckLakeTransaction &transaction)
     : DuckLakeMetadataManager(transaction) {
@@ -194,15 +357,22 @@ string PostgresMetadataManager::GetLatestSnapshotQuery() const {
 }
 
 string PostgresMetadataManager::GenerateFileColumnStatsCTEBody(const CTERequirement &req, TableIndex table_id) {
-	string select_list = "data_file_id";
-	for (const auto &stat : req.referenced_stats) {
-		select_list += ", " + stat;
-	}
+	auto native_query = GeneratePostgresNativeFileColumnStatsCTEBody(req, table_id);
 	return StringUtil::Format("  SELECT * FROM postgres_query({METADATA_CATALOG_NAME_LITERAL},\n"
-	                          "    'SELECT %s\n"
-	                          "     FROM {METADATA_SCHEMA_ESCAPED}.ducklake_file_column_stats\n"
-	                          "     WHERE column_id = %d AND table_id = %d')\n",
-	                          select_list, req.column_field_index, table_id.index);
+	                          "    %s)\n",
+	                          SQLString(native_query));
+}
+
+string PostgresMetadataManager::GenerateFileListQuery(DuckLakeTableEntry &table, const FilterPushdownInfo *filter_info,
+                                                      const vector<DuckLakeFileListDynamicFilter> &dynamic_filters,
+                                                      FileListType file_list_type, const string &,
+                                                      const FileColumnStatsCTEBodyGenerator &) {
+	auto remote_query = DuckLakeMetadataManager::GenerateFileListQuery(table, filter_info, dynamic_filters,
+	                                                                   file_list_type, "{METADATA_SCHEMA_ESCAPED}",
+	                                                                   GeneratePostgresNativeFileColumnStatsCTEBody);
+
+	return StringUtil::Format("SELECT * FROM postgres_query({METADATA_CATALOG_NAME_LITERAL}, %s)",
+	                          SQLString(remote_query));
 }
 
 // We need a specialized function here to do a reinterpret for postgres from BLOB to VARCHAR

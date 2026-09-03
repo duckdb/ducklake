@@ -123,10 +123,10 @@ struct FilterPushdownInfo {
 	}
 };
 
-struct FilterPushdownQueryComponents {
-	string cte_section;
-	string join_clause;
-	string where_clause;
+struct DuckLakeFileListDynamicFilter {
+	idx_t column_field_index;
+	ExpressionType comparison_type;
+	LogicalType column_type;
 };
 
 //! The DuckLake metadata manger is the communication layer between the system and the metadata catalog
@@ -440,9 +440,18 @@ public:
 	string GetPathSeparator(const string &path);
 
 protected:
+	enum class FileListType : uint8_t { SCAN, EXTENDED };
+	enum class StatsCastType : uint8_t { ORDERING, MIN, MAX };
+	using FileColumnStatsCTEBodyGenerator = std::function<string(const CTERequirement &, TableIndex)>;
+
 	virtual string GetLatestSnapshotQuery() const;
 
 	virtual string GenerateFileColumnStatsCTEBody(const CTERequirement &req, TableIndex table_id);
+	virtual string GenerateFileListQuery(DuckLakeTableEntry &table, const FilterPushdownInfo *filter_info,
+	                                     const vector<DuckLakeFileListDynamicFilter> &dynamic_filters,
+	                                     FileListType file_list_type = FileListType::SCAN,
+	                                     const string &metadata_table_prefix = "{METADATA_CATALOG}",
+	                                     const FileColumnStatsCTEBodyGenerator &generate_cte_body = {});
 
 	//! Wrap field selections with list aggregation of struct objects (DBMS-specific)
 	//! For DuckDB: LIST({'key1': val1, 'key2': val2, ...})
@@ -515,26 +524,32 @@ private:
 	DuckLakeFileData ReadDeleteFile(DuckLakeTableEntry &table, T &row, idx_t &col_idx, bool is_encrypted);
 
 	bool IsEncrypted() const;
+
+protected:
 	string GetFileSelectList(const string &prefix);
 	string GetDeleteFileSelectList(const string &prefix);
-	FilterPushdownQueryComponents GenerateFilterPushdownComponents(const FilterPushdownInfo &filter_info,
-	                                                               DuckLakeTableEntry &table);
 	//! Build an additional WHERE fragment that prunes files by bucket() partition value.
 	//! Returns "" when no foldable equality / IN-list predicate exists on a bucket-partitioned column.
 	//! The fragment uses only string equality against ducklake_file_partition_value, so it works against
 	//! any metadata backend (DuckDB / Postgres / SQLite). Bucket hashes are pre-computed in C++.
-	string BuildBucketPartitionPruningClause(DuckLakeTableEntry &table, const FilterPushdownInfo &filter_info);
+	string BuildBucketPartitionPruningClause(
+	    DuckLakeTableEntry &table, const FilterPushdownInfo &filter_info,
+	    const string &partition_value_table = "{METADATA_CATALOG}.ducklake_file_partition_value");
 	virtual FilterSQLResult ConvertFilterPushdownToSQL(const FilterPushdownInfo &filter_info);
+	string GenerateCTESectionFromRequirements(const map<idx_t, CTERequirement> &requirements, TableIndex table_id,
+	                                          const FileColumnStatsCTEBodyGenerator &generate_body);
+	//! Join each column's stats CTE once. Leading newline per join, empty when there are none.
+	static string GenerateStatsJoinList(const map<idx_t, CTERequirement> &requirements);
+
+private:
 	virtual string GenerateCTESectionFromRequirements(const map<idx_t, CTERequirement> &requirements,
 	                                                  TableIndex table_id);
-	//! Join each column's stats CTE once. Leading newline per join, empty when there are none, so it
-	//! concatenates straight onto the FROM line.
-	static string GenerateStatsJoinList(const map<idx_t, CTERequirement> &requirements);
 	virtual string GenerateFilterFromExpression(const Expression &expr, const LogicalType *type,
 	                                            unordered_set<string> &referenced_stats, const string &stats_alias);
 	virtual bool ValueIsFinite(const Value &val);
 	virtual string CastValueToTarget(const Value &val, const LogicalType &type);
-	virtual string CastStatsToTarget(const string &stats, const LogicalType &type);
+	virtual string CastStatsToTarget(const string &stats, const LogicalType &type,
+	                                 StatsCastType cast_type = StatsCastType::ORDERING);
 	virtual string GenerateConstantFilter(ExpressionType comparison_type, const Value &constant,
 	                                      const LogicalType &type, unordered_set<string> &referenced_stats,
 	                                      const string &stats_alias);
