@@ -123,12 +123,6 @@ struct FilterPushdownInfo {
 	}
 };
 
-struct FilterPushdownQueryComponents {
-	string cte_section;
-	string join_clause;
-	string where_clause;
-};
-
 struct DuckLakeFileListDynamicFilter {
 	idx_t column_field_index;
 	ExpressionType comparison_type;
@@ -446,22 +440,18 @@ public:
 	string GetPathSeparator(const string &path);
 
 protected:
-	struct ColumnStatsFilterSQL {
-		std::function<string(const Value &, const LogicalType &)> cast_value;
-		std::function<string(const string &, const LogicalType &, bool)> cast_stats;
-	};
+	enum class FileListType : uint8_t { SCAN, EXTENDED };
+	enum class StatsCastType : uint8_t { ORDERING, MIN, MAX };
 	using FileColumnStatsCTEBodyGenerator = std::function<string(const CTERequirement &, TableIndex)>;
-	using FileListStatsCastGenerator = std::function<string(const string &, const LogicalType &)>;
 
 	virtual string GetLatestSnapshotQuery() const;
 
 	virtual string GenerateFileColumnStatsCTEBody(const CTERequirement &req, TableIndex table_id);
 	virtual string GenerateFileListQuery(DuckLakeTableEntry &table, const FilterPushdownInfo *filter_info,
 	                                     const vector<DuckLakeFileListDynamicFilter> &dynamic_filters,
+	                                     FileListType file_list_type = FileListType::SCAN,
 	                                     const string &metadata_table_prefix = "{METADATA_CATALOG}",
-	                                     const ColumnStatsFilterSQL *filter_sql = nullptr,
-	                                     const FileColumnStatsCTEBodyGenerator &generate_cte_body = {},
-	                                     const FileListStatsCastGenerator &cast_stats = {});
+	                                     const FileColumnStatsCTEBodyGenerator &generate_cte_body = {});
 
 	//! Wrap field selections with list aggregation of struct objects (DBMS-specific)
 	//! For DuckDB: LIST({'key1': val1, 'key2': val2, ...})
@@ -545,33 +535,29 @@ protected:
 	string BuildBucketPartitionPruningClause(
 	    DuckLakeTableEntry &table, const FilterPushdownInfo &filter_info,
 	    const string &partition_value_table = "{METADATA_CATALOG}.ducklake_file_partition_value");
-	virtual FilterSQLResult ConvertFilterPushdownToSQL(const FilterPushdownInfo &filter_info,
-	                                                   const ColumnStatsFilterSQL *filter_sql = nullptr);
+	virtual FilterSQLResult ConvertFilterPushdownToSQL(const FilterPushdownInfo &filter_info);
 	string GenerateCTESectionFromRequirements(const map<idx_t, CTERequirement> &requirements, TableIndex table_id,
 	                                          const FileColumnStatsCTEBodyGenerator &generate_body);
 	//! Join each column's stats CTE once. Leading newline per join, empty when there are none.
 	static string GenerateStatsJoinList(const map<idx_t, CTERequirement> &requirements);
 
 private:
-	FilterPushdownQueryComponents GenerateFilterPushdownComponents(const FilterPushdownInfo &filter_info,
-	                                                               DuckLakeTableEntry &table);
 	virtual string GenerateCTESectionFromRequirements(const map<idx_t, CTERequirement> &requirements,
 	                                                  TableIndex table_id);
 	virtual string GenerateFilterFromExpression(const Expression &expr, const LogicalType *type,
-	                                            unordered_set<string> &referenced_stats, const string &stats_alias,
-	                                            const ColumnStatsFilterSQL *filter_sql = nullptr);
+	                                            unordered_set<string> &referenced_stats, const string &stats_alias);
 	virtual bool ValueIsFinite(const Value &val);
 	virtual string CastValueToTarget(const Value &val, const LogicalType &type);
-	virtual string CastStatsToTarget(const string &stats, const LogicalType &type);
+	virtual string CastStatsToTarget(const string &stats, const LogicalType &type,
+	                                 StatsCastType cast_type = StatsCastType::ORDERING);
 	virtual string GenerateConstantFilter(ExpressionType comparison_type, const Value &constant,
 	                                      const LogicalType &type, unordered_set<string> &referenced_stats,
-	                                      const string &stats_alias, const ColumnStatsFilterSQL *filter_sql = nullptr);
+	                                      const string &stats_alias);
 	virtual string GenerateConstantFilterDouble(ExpressionType comparison_type, const Value &constant,
 	                                            const LogicalType &type, unordered_set<string> &referenced_stats,
-	                                            const string &stats_alias,
-	                                            const ColumnStatsFilterSQL *filter_sql = nullptr);
+	                                            const string &stats_alias);
 	virtual string GenerateFilterPushdown(const ExpressionFilter &filter, unordered_set<string> &referenced_stats,
-	                                      const string &stats_alias, const ColumnStatsFilterSQL *filter_sql = nullptr);
+	                                      const string &stats_alias);
 
 public:
 	//! Read inlined file deletions for regular table scans (no snapshot info per row)
