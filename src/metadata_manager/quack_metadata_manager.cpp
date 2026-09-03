@@ -15,6 +15,7 @@ QuackMetadataManager::QuackMetadataManager(DuckLakeTransaction &transaction) : D
 
 unique_ptr<QueryResult> QuackMetadataManager::Query(string &query) {
 	auto &ducklake_catalog = transaction.GetCatalog();
+	lock_guard<std::recursive_mutex> guard(ducklake_catalog.GetMetadataQueryLock());
 	auto schema_identifier = DuckLakeUtil::SQLIdentifierToString(ducklake_catalog.MetadataSchemaName());
 	query = StringUtil::Replace(query, "{METADATA_CATALOG}", schema_identifier);
 	SubstituteCatalogPlaceholders(query);
@@ -65,6 +66,7 @@ string QuackMetadataManager::MetadataExistsQuery() const {
 }
 
 void QuackMetadataManager::ClearCache() {
+	lock_guard<std::recursive_mutex> guard(transaction.GetCatalog().GetMetadataQueryLock());
 	string clear = "CALL quack_clear_cache();";
 	transaction.ExecuteRaw(clear);
 }

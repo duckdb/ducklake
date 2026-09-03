@@ -72,7 +72,9 @@
         "test/sql/general/paths.test",
         "test/sql/issues/corrupted_catalog_fault_isolation.test",
         "test/sql/secrets/ducklake_secrets.test",
-        "test/sql/remove_orphans/metadata_in_data_path.test"
+        "test/sql/secrets/ducklake_secret_storages.test",
+        "test/sql/remove_orphans/metadata_in_data_path.test",
+        "test/sql/rewrite_data_files/test_rewrite_many_non_candidate_files.test"
       ]
     },
     {
@@ -99,6 +101,7 @@
       "reason": "Test only for Postgres as catalog",
       "paths": [
         "test/sql/metadata/ducklake_settings_postgres.test",
+        "test/sql/metadata/metadata_schema_scoped_attach.test",
         "test/sql/data_inlining/postgres_identifier_limit.test"
       ]
     },

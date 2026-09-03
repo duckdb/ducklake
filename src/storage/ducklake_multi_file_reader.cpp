@@ -112,10 +112,11 @@ static bool CanSkipFileByTopNDynamicFilter(const DuckLakeFileListEntry &file_ent
 
 		// from here we'll try to cast and compare with the dynamic filter values
 		// if casts fail, just skip pruning
-		Value casted_constant;
-		if (!constant.DefaultTryCastAs(col_filter.column_type, casted_constant, nullptr)) {
+		auto cast_constant_opt = constant.DefaultTryCastAs(col_filter.column_type);
+		if (!cast_constant_opt) {
 			continue;
 		}
+		auto &cast_constant = *cast_constant_opt;
 
 		switch (comparison_type) {
 		case ExpressionType::COMPARE_GREATERTHAN:
@@ -124,14 +125,14 @@ static bool CanSkipFileByTopNDynamicFilter(const DuckLakeFileListEntry &file_ent
 			if (max_str.empty()) {
 				continue;
 			}
-			Value file_max;
-			if (!Value(max_str).DefaultTryCastAs(col_filter.column_type, file_max, nullptr)) {
+			auto file_max = Value(max_str).DefaultTryCastAs(col_filter.column_type);
+			if (!file_max) {
 				continue;
 			}
 			if (comparison_type == ExpressionType::COMPARE_GREATERTHAN) {
-				return !(file_max > casted_constant);
+				return !(*file_max > cast_constant);
 			}
-			return !(file_max >= casted_constant);
+			return !(*file_max >= cast_constant);
 		}
 		case ExpressionType::COMPARE_LESSTHAN:
 		case ExpressionType::COMPARE_LESSTHANOREQUALTO: {
@@ -139,14 +140,14 @@ static bool CanSkipFileByTopNDynamicFilter(const DuckLakeFileListEntry &file_ent
 			if (min_str.empty()) {
 				continue;
 			}
-			Value file_min;
-			if (!Value(min_str).DefaultTryCastAs(col_filter.column_type, file_min, nullptr)) {
+			auto file_min = Value(min_str).DefaultTryCastAs(col_filter.column_type);
+			if (!file_min) {
 				continue;
 			}
 			if (comparison_type == ExpressionType::COMPARE_LESSTHAN) {
-				return !(file_min < casted_constant);
+				return !(*file_min < cast_constant);
 			}
-			return !(file_min <= casted_constant);
+			return !(*file_min <= cast_constant);
 		}
 		default:
 			// nothing to prune
@@ -242,6 +243,11 @@ DuckLakeMultiFileReader::InitializeGlobalState(ClientContext &context, const Mul
                                                const MultiFileReaderBindData &bind_data, const MultiFileList &file_list,
                                                const vector<MultiFileColumnDefinition> &global_columns,
                                                const vector<ColumnIndex> &global_column_ids) {
+	// Materialize the file list here, while we are still single-threaded. It is otherwise first touched from
+	// the scan tasks, where every worker piles into DuckLakeMultiFileList::GetFiles() and blocks on its lock
+	// while one of them runs the metadata query - which costs far more in scheduler churn than the scan itself.
+	file_list.Cast<DuckLakeMultiFileList>().GetFiles();
+
 	optional_idx deletion_scan_rowid_col;
 	optional_idx deletion_scan_snapshot_col;
 	auto internally_projected_rowid = false;

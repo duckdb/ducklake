@@ -107,6 +107,10 @@ struct DuckLakeCommitContext {
 	bool skip_drop_empty_inlined = false;
 	//! Whether the metadata schema has the >= 1.1-dev1 additions.
 	bool supports_v1_1_metadata = false;
+	//! Column names of the inlined data tables under this catalog version.
+	DuckLakeInlinedColNames InlinedColNames() const {
+		return DuckLakeInlinedColNames(supports_v1_1_metadata);
+	}
 };
 
 //! Holds the per-transaction mutable change state (new/dropped/renamed catalog entries, local file
@@ -213,6 +217,7 @@ public:
 	unordered_map<string, DataFileIndex> dropped_files;
 	map<TableIndex, DroppedDataFileStats> dropped_file_stats;
 	set<TableIndex> tables_deleted_from;
+	set<TableIndex> tables_delete_attempted;
 	unique_ptr<DuckLakeCatalogSet> new_schemas;
 	map<SchemaIndex, reference<DuckLakeSchemaEntry>> dropped_schemas;
 	LocalTableChanges local_changes;

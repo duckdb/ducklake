@@ -11,6 +11,55 @@ PostgresMetadataManager::PostgresMetadataManager(DuckLakeTransaction &transactio
     : DuckLakeMetadataManager(transaction) {
 }
 
+//! postgres_execute prepares statements; prepared statements reject batches
+static vector<string> SplitBatchStatements(const string &sql) {
+	vector<string> statements;
+	string current;
+	bool in_squote = false;
+	bool in_dquote = false;
+	for (idx_t i = 0; i < sql.size(); i++) {
+		auto c = sql[i];
+		if (in_squote) {
+			current += c;
+			if (c == '\'') {
+				if (i + 1 < sql.size() && sql[i + 1] == '\'') {
+					current += sql[++i];
+				} else {
+					in_squote = false;
+				}
+			}
+		} else if (in_dquote) {
+			current += c;
+			if (c == '"') {
+				if (i + 1 < sql.size() && sql[i + 1] == '"') {
+					current += sql[++i];
+				} else {
+					in_dquote = false;
+				}
+			}
+		} else if (c == '\'') {
+			in_squote = true;
+			current += c;
+		} else if (c == '"') {
+			in_dquote = true;
+			current += c;
+		} else if (c == ';') {
+			StringUtil::Trim(current);
+			if (!current.empty()) {
+				statements.push_back(std::move(current));
+			}
+			current = string();
+		} else {
+			current += c;
+		}
+	}
+	StringUtil::Trim(current);
+	if (!current.empty()) {
+		statements.push_back(std::move(current));
+	}
+	return statements;
+}
+
 bool PostgresMetadataManager::TypeIsNativelySupported(const LogicalType &type) {
 	switch (type.id()) {
 	// Unnamed composite types are not supported.
@@ -98,7 +147,7 @@ unique_ptr<QueryResult> PostgresMetadataManager::ExecuteQuery(DuckLakeSnapshot s
 	auto catalog_literal = DuckLakeUtil::SQLLiteralToString(ducklake_catalog.MetadataDatabaseName());
 	auto schema_identifier = DuckLakeUtil::SQLIdentifierToString(ducklake_catalog.MetadataSchemaName());
 	auto schema_identifier_escaped = StringUtil::Replace(schema_identifier, "'", "''");
-	auto schema_literal = DuckLakeUtil::SQLLiteralToString(ducklake_catalog.MetadataSchemaName());
+	auto schema_literal = DuckLakeUtil::SQLLiteralToString(ducklake_catalog.MetadataSchemaName().GetIdentifierName());
 	auto metadata_path = DuckLakeUtil::SQLLiteralToString(ducklake_catalog.MetadataPath());
 	auto data_path = DuckLakeUtil::SQLLiteralToString(ducklake_catalog.DataPath());
 
@@ -110,7 +159,20 @@ unique_ptr<QueryResult> PostgresMetadataManager::ExecuteQuery(DuckLakeSnapshot s
 	query = StringUtil::Replace(query, "{METADATA_PATH}", metadata_path);
 	query = StringUtil::Replace(query, "{DATA_PATH}", data_path);
 
-	auto result = connection.Query(StringUtil::Format("CALL %s(%s, %s)", command, catalog_literal, SQLString(query)));
+	auto statements = SplitBatchStatements(query);
+	if (statements.size() <= 1) {
+		auto result =
+		    connection.Query(StringUtil::Format("CALL %s(%s, %s)", command, catalog_literal, SQLString(query)));
+		return std::move(result);
+	}
+	unique_ptr<QueryResult> result;
+	for (auto &statement : statements) {
+		result =
+		    connection.Query(StringUtil::Format("CALL %s(%s, %s)", command, catalog_literal, SQLString(statement)));
+		if (result->HasError()) {
+			return std::move(result);
+		}
+	}
 	return std::move(result);
 }
 unique_ptr<QueryResult> PostgresMetadataManager::Execute(DuckLakeSnapshot snapshot, string &query) {
@@ -144,28 +206,28 @@ string PostgresMetadataManager::GenerateFileColumnStatsCTEBody(const CTERequirem
 }
 
 // We need a specialized function here to do a reinterpret for postgres from BLOB to VARCHAR
-shared_ptr<DuckLakeInlinedData>
-PostgresMetadataManager::TransformInlinedData(QueryResult &result, const vector<LogicalType> &expected_types) {
-	if (result.HasError()) {
-		result.GetErrorObject().Throw("Failed to read inlined data from DuckLake: ");
-	}
+shared_ptr<DuckLakeInlinedData> PostgresMetadataManager::TransformInlinedData(QueryResult &result,
+                                                                              const vector<LogicalType> &expected_types,
+                                                                              const string &inlined_table_name) {
+	CheckInlinedDataReadError(result, inlined_table_name);
 	bool needs_reinterpret = false;
 	if (!expected_types.empty()) {
-		if (result.types.size() < expected_types.size()) {
+		auto &result_types = result.GetTypes();
+		if (result_types.size() < expected_types.size()) {
 			throw InvalidInputException(
 			    "Failed to read inlined data from DuckLake: expected %llu columns but read %llu", expected_types.size(),
-			    result.types.size());
+			    result_types.size());
 		}
 		for (idx_t i = 0; i < expected_types.size(); i++) {
-			if (result.types[i] != expected_types[i]) {
-				D_ASSERT(result.types[i].id() == LogicalTypeId::BLOB &&
+			if (result_types[i] != expected_types[i]) {
+				D_ASSERT(result_types[i].id() == LogicalTypeId::BLOB &&
 				         expected_types[i].id() == LogicalTypeId::VARCHAR);
 				needs_reinterpret = true;
 			}
 		}
 	}
 	if (!needs_reinterpret) {
-		return DuckLakeMetadataManager::TransformInlinedData(result, expected_types);
+		return DuckLakeMetadataManager::TransformInlinedData(result, expected_types, inlined_table_name);
 	}
 
 	auto context = transaction.context.lock();

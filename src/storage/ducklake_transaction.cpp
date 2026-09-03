@@ -799,6 +799,8 @@ Connection &DuckLakeTransaction::GetConnection() {
 	lock_guard<mutex> lock(connection_lock);
 	if (!connection) {
 		connection = make_uniq<Connection>(db);
+		connection->context->registered_state->GetOrCreate<DuckLakeInternalConnectionState>(
+		    DuckLakeInternalConnectionState::KEY);
 		auto caller_context = context.lock();
 		if (caller_context) {
 			DuckLakeUtil::CopyExtensionSettings(*caller_context, *connection->context);
@@ -807,7 +809,7 @@ Connection &DuckLakeTransaction::GetConnection() {
 		auto &client_data = ClientData::Get(*connection->context);
 		// ensure we are only looking in the ducklake catalog schema during querying
 		CatalogSearchEntry metadata_entry(Identifier(ducklake_catalog.MetadataDatabaseName()),
-		                                  Identifier(ducklake_catalog.MetadataSchemaName()));
+		                                  ducklake_catalog.MetadataSchemaName());
 		if (metadata_entry.GetSchema().empty()) {
 			metadata_entry.SetSchema("main");
 		}
@@ -1011,6 +1013,7 @@ TransactionChangeInformation DuckLakeTransaction::GetTransactionChanges() const 
 		}
 	}
 	changes.tables_deleted_from = tables_deleted_from;
+	changes.tables_delete_attempted = state->tables_delete_attempted;
 	for (auto &entry : local_changes.Changes()) {
 		auto table_id = entry.GetTableIndex();
 		if (IsTransactionLocal(table_id.index)) {
@@ -1106,6 +1109,18 @@ DuckLakePartitionInfo DuckLakeTransaction::GetNewPartitionKey(DuckLakeCommitStat
 			break;
 		case DuckLakeTransformType::HOUR:
 			partition_field.transform = "hour";
+			break;
+		case DuckLakeTransformType::EPOCH_YEAR:
+			partition_field.transform = "epoch_year";
+			break;
+		case DuckLakeTransformType::EPOCH_MONTH:
+			partition_field.transform = "epoch_month";
+			break;
+		case DuckLakeTransformType::EPOCH_DAY:
+			partition_field.transform = "epoch_day";
+			break;
+		case DuckLakeTransformType::EPOCH_HOUR:
+			partition_field.transform = "epoch_hour";
 			break;
 		case DuckLakeTransformType::BUCKET:
 			partition_field.transform = StringUtil::Format("bucket(%d)", field.transform.bucket_count);
@@ -1540,7 +1555,7 @@ void DuckLakeTransaction::RunCommitLoop(DuckLakeSnapshot transaction_snapshot,
 		ducklake_catalog.InvalidateTableStatsCache(next_file_id, table_id);
 	};
 	context.commit_info = state->commit_info;
-	context.supports_v1_1_metadata = ducklake_catalog.SupportsRowGroupCount();
+	context.supports_v1_1_metadata = ducklake_catalog.SupportsV1_1Metadata();
 	state->Commit(transaction_snapshot, transaction_changes, retry_config, context);
 }
 
@@ -1603,11 +1618,17 @@ unique_ptr<QueryResult> DuckLakeTransaction::Query(DuckLakeSnapshot snapshot, st
 	return metadata_manager->Query(snapshot, query);
 }
 
-string DuckLakeTransaction::GetDefaultSchemaName() {
+Identifier DuckLakeTransaction::GetDefaultSchemaName() {
 	auto &metadata_context = *connection->context;
 	auto &db_manager = DatabaseManager::Get(metadata_context);
 	auto metadb = db_manager.GetDatabase(metadata_context, Identifier(ducklake_catalog.MetadataDatabaseName()));
-	return metadb->GetCatalog().GetDefaultSchema();
+	auto default_schema = metadb->GetCatalog().GetDefaultSchema();
+	if (!default_schema) {
+		throw InvalidInputException("DuckLake metadata catalog \"%s\" has no default schema, set METADATA_SCHEMA "
+		                            "explicitly in ATTACH",
+		                            ducklake_catalog.MetadataDatabaseName());
+	}
+	return *default_schema;
 }
 
 DuckLakeSnapshot DuckLakeTransaction::GetSnapshot() {
@@ -1865,6 +1886,10 @@ void DuckLakeTransaction::DropFile(TableIndex table_id, DataFileIndex data_file_
 	stats.file_size_bytes += file_size_bytes;
 }
 
+void DuckLakeTransaction::MarkDeleteAttempted(TableIndex table_id) {
+	state->tables_delete_attempted.insert(table_id);
+}
+
 bool DuckLakeTransaction::HasDroppedFiles() const {
 	return !state->dropped_files.empty();
 }
@@ -1875,6 +1900,10 @@ const unordered_map<string, DataFileIndex> &DuckLakeTransaction::GetDroppedFiles
 
 const set<TableIndex> &DuckLakeTransaction::GetTablesDeletedFrom() const {
 	return state->tables_deleted_from;
+}
+
+const set<TableIndex> &DuckLakeTransaction::GetTablesDeleteAttempted() const {
+	return state->tables_delete_attempted;
 }
 
 const vector<FlushedInlinedTableInfo> &DuckLakeTransaction::GetFlushedInlinedTables() const {

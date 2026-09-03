@@ -1,0 +1,382 @@
+# name: test/sql/partitioning/epoch_transforms.test
+# description: Test Iceberg-spec epoch partitioning transforms epoch_year/epoch_month/epoch_day/epoch_hour
+# group: [partitioning]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/ducklake_epoch_transforms', METADATA_CATALOG 'ducklake_metadata')
+
+statement ok
+USE ducklake
+
+statement ok
+CREATE TABLE partitioned_tbl(id INTEGER, ts TIMESTAMP, v VARCHAR);
+
+statement ok
+ALTER TABLE partitioned_tbl SET PARTITIONED BY (epoch_year(ts), epoch_month(ts));
+
+statement ok
+INSERT INTO partitioned_tbl SELECT i, TIMESTAMP '2020-01-01' + interval (i) hours, concat('str_', i) FROM range(10000) t(i)
+
+# epoch ordinals: 2020 = 50 years since 1970, 2020-01 = 600 months since 1970-01
+query II
+SELECT date_diff('year', DATE '1970-01-01', ts), COUNT(*) FROM partitioned_tbl GROUP BY 1 ORDER BY 1
+----
+50	8784
+51	1216
+
+query I
+SELECT transform FROM ducklake_metadata.ducklake_partition_column WHERE table_id = (SELECT table_id FROM ducklake_metadata.ducklake_table WHERE table_name = 'partitioned_tbl' AND end_snapshot IS NULL) ORDER BY partition_key_index
+----
+epoch_year
+epoch_month
+
+# stored partition values are epoch ordinals
+query III
+SELECT partition_key_index, MIN(partition_value::BIGINT), MAX(partition_value::BIGINT) FROM ducklake_metadata.ducklake_file_partition_value WHERE table_id = (SELECT table_id FROM ducklake_metadata.ducklake_table WHERE table_name = 'partitioned_tbl' AND end_snapshot IS NULL) GROUP BY 1 ORDER BY 1
+----
+0	50	51
+1	600	613
+
+query II
+SELECT DISTINCT regexp_extract(path, '.*epoch_year=(-?[0-9]+)[/\\].*', 1)::INT AS epoch_year_part, regexp_extract(path, '.*epoch_month=(-?[0-9]+)[/\\].*', 1)::INT AS epoch_month_part
+FROM glob('{DATA_PATH}/ducklake_epoch_transforms/main/partitioned_tbl/**') t(path) ORDER BY ALL
+----
+50	600
+50	601
+50	602
+50	603
+50	604
+50	605
+50	606
+50	607
+50	608
+50	609
+50	610
+50	611
+51	612
+51	613
+
+query I
+SELECT COUNT(*) FROM partitioned_tbl WHERE ts >= TIMESTAMP '2021-01-01'
+----
+1216
+
+query I
+SELECT COUNT(*) FROM partitioned_tbl WHERE ts < TIMESTAMP '2020-02-01'
+----
+744
+
+# compaction merges files within epoch partitions and rebuilds the hive paths
+statement ok
+INSERT INTO partitioned_tbl SELECT i, TIMESTAMP '2020-01-01' + interval (i) hours, concat('str_', i) FROM range(10000) t(i)
+
+statement ok
+CALL merge_adjacent_files();
+
+query II
+SELECT date_diff('year', DATE '1970-01-01', ts), COUNT(*) FROM partitioned_tbl GROUP BY 1 ORDER BY 1
+----
+50	17568
+51	2432
+
+# one active file per partition after compaction
+query I
+SELECT COUNT(*) FROM ducklake_metadata.ducklake_data_file WHERE table_id = (SELECT table_id FROM ducklake_metadata.ducklake_table WHERE table_name = 'partitioned_tbl' AND end_snapshot IS NULL) AND end_snapshot IS NULL
+----
+14
+
+query II
+SELECT DISTINCT regexp_extract(path, '.*epoch_year=(-?[0-9]+)[/\\].*', 1)::INT AS epoch_year_part, regexp_extract(path, '.*epoch_month=(-?[0-9]+)[/\\].*', 1)::INT AS epoch_month_part
+FROM ducklake_metadata.ducklake_data_file WHERE table_id = (SELECT table_id FROM ducklake_metadata.ducklake_table WHERE table_name = 'partitioned_tbl' AND end_snapshot IS NULL) AND end_snapshot IS NULL ORDER BY ALL
+----
+50	600
+50	601
+50	602
+50	603
+50	604
+50	605
+50	606
+50	607
+50	608
+50	609
+50	610
+50	611
+51	612
+51	613
+
+# epoch_day() on DATE, including pre-1970 dates (negative ordinals) and NULL
+statement ok
+CREATE TABLE days_tbl(id INTEGER, dt DATE);
+
+statement ok
+ALTER TABLE days_tbl SET PARTITIONED BY (epoch_day(dt));
+
+statement ok
+INSERT INTO days_tbl VALUES (1, DATE '1969-01-15'), (2, DATE '1969-12-31'), (3, DATE '1970-01-01'), (4, DATE '2020-01-01'), (5, NULL);
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake')
+
+query II
+SELECT id, dt FROM days_tbl ORDER BY id
+----
+1	1969-01-15
+2	1969-12-31
+3	1970-01-01
+4	2020-01-01
+5	NULL
+
+query I
+SELECT partition_value FROM ducklake_metadata.ducklake_file_partition_value WHERE table_id = (SELECT table_id FROM ducklake_metadata.ducklake_table WHERE table_name = 'days_tbl' AND end_snapshot IS NULL) ORDER BY partition_value::BIGINT
+----
+-351
+-1
+0
+18262
+NULL
+
+query I
+SELECT DISTINCT regexp_extract(path, '.*epoch_day=(-?[0-9]+)[/\\].*', 1)::INT AS epoch_day_part
+FROM glob('{DATA_PATH}/ducklake_epoch_transforms/main/days_tbl/**') t(path) WHERE NOT contains(path, '__HIVE_DEFAULT_PARTITION__') ORDER BY ALL
+----
+-351
+-1
+0
+18262
+
+query I
+SELECT COUNT(*) FROM glob('{DATA_PATH}/ducklake_epoch_transforms/main/days_tbl/**') t(path) WHERE contains(path, '__HIVE_DEFAULT_PARTITION__')
+----
+1
+
+query I
+SELECT COUNT(*) FROM days_tbl WHERE dt < DATE '1970-01-01'
+----
+2
+
+# epoch_hour() on TIMESTAMP, floored for pre-epoch values
+statement ok
+CREATE TABLE hours_tbl(id INTEGER, ts TIMESTAMP);
+
+statement ok
+ALTER TABLE hours_tbl SET PARTITIONED BY (epoch_hour(ts));
+
+statement ok
+INSERT INTO hours_tbl VALUES (1, TIMESTAMP '1969-12-31 23:30:00'), (2, TIMESTAMP '1970-01-01 00:30:00'), (3, TIMESTAMP '2017-11-16 22:31:08');
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake')
+
+query I
+SELECT partition_value FROM ducklake_metadata.ducklake_file_partition_value WHERE table_id = (SELECT table_id FROM ducklake_metadata.ducklake_table WHERE table_name = 'hours_tbl' AND end_snapshot IS NULL) ORDER BY partition_value::BIGINT
+----
+-1
+0
+419686
+
+query II
+SELECT id, ts FROM hours_tbl ORDER BY id
+----
+1	1969-12-31 23:30:00
+2	1970-01-01 00:30:00
+3	2017-11-16 22:31:08
+
+# TIMESTAMP_NS floors sub-microsecond values instead of rounding them up
+statement ok
+CREATE TABLE ns_tbl(id INTEGER, ts TIMESTAMP_NS);
+
+statement ok
+ALTER TABLE ns_tbl SET PARTITIONED BY (epoch_hour(ts));
+
+statement ok
+INSERT INTO ns_tbl VALUES (1, TIMESTAMP_NS '1969-12-31 23:59:59.999999999'), (2, TIMESTAMP_NS '1970-01-01 00:59:59.999999999'), (3, TIMESTAMP_NS '1970-01-01 00:00:00.000000001');
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake')
+
+query II
+SELECT partition_value, COUNT(*) FROM ducklake_metadata.ducklake_file_partition_value WHERE table_id = (SELECT table_id FROM ducklake_metadata.ducklake_table WHERE table_name = 'ns_tbl' AND end_snapshot IS NULL) GROUP BY 1 ORDER BY partition_value::BIGINT
+----
+-1	1
+0	1
+
+query II
+SELECT id, ts FROM ns_tbl ORDER BY id
+----
+1	1969-12-31 23:59:59.999999999
+2	1970-01-01 00:59:59.999999999
+3	1970-01-01 00:00:00.000000001
+
+# calendar and epoch transforms can be mixed
+statement ok
+CREATE TABLE mixed_tbl(id INTEGER, ts TIMESTAMP);
+
+statement ok
+ALTER TABLE mixed_tbl SET PARTITIONED BY (year(ts), epoch_month(ts));
+
+statement ok
+INSERT INTO mixed_tbl VALUES (1, TIMESTAMP '2020-01-15 10:00:00'), (2, TIMESTAMP '2021-02-15 10:00:00');
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake')
+
+query I
+SELECT transform FROM ducklake_metadata.ducklake_partition_column WHERE table_id = (SELECT table_id FROM ducklake_metadata.ducklake_table WHERE table_name = 'mixed_tbl' AND end_snapshot IS NULL) ORDER BY partition_key_index
+----
+year
+epoch_month
+
+query I
+SELECT COUNT(*) FROM glob('{DATA_PATH}/ducklake_epoch_transforms/main/mixed_tbl/**') t(path) WHERE contains(path, 'year=2020') AND contains(path, 'epoch_month=600')
+----
+1
+
+# transform key name does not conflict with a column named epoch_year
+statement ok
+CREATE TABLE conflict_tbl(ts TIMESTAMP, "epoch_year" INTEGER);
+
+statement ok
+ALTER TABLE conflict_tbl SET PARTITIONED BY (epoch_year(ts), "epoch_year");
+
+statement ok
+INSERT INTO conflict_tbl VALUES (TIMESTAMP '2020-06-01', 7);
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake')
+
+query II
+SELECT ts, "epoch_year" FROM conflict_tbl
+----
+2020-06-01 00:00:00	7
+
+query I
+SELECT COUNT(*) FROM glob('{DATA_PATH}/ducklake_epoch_transforms/main/conflict_tbl/**') t(path) WHERE contains(path, 'epoch_year=50') AND contains(path, 'epoch_year_epoch_year=7')
+----
+1
+
+statement error
+ALTER TABLE partitioned_tbl SET PARTITIONED BY (weeks(ts))
+----
+only year, month, day, hour, epoch_year, epoch_month, epoch_day, epoch_hour, and bucket are supported
+
+# partition evolution from calendar to epoch transform
+statement ok
+CREATE TABLE evo_tbl(id INTEGER, ts TIMESTAMP);
+
+statement ok
+ALTER TABLE evo_tbl SET PARTITIONED BY (year(ts));
+
+statement ok
+INSERT INTO evo_tbl VALUES (1, TIMESTAMP '2020-06-01');
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake')
+
+statement ok
+ALTER TABLE evo_tbl SET PARTITIONED BY (epoch_year(ts));
+
+statement ok
+INSERT INTO evo_tbl VALUES (2, TIMESTAMP '2021-06-01');
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake')
+
+query II
+SELECT id, ts FROM evo_tbl ORDER BY id
+----
+1	2020-06-01 00:00:00
+2	2021-06-01 00:00:00
+
+query II
+SELECT pc.transform, pi.end_snapshot IS NULL FROM ducklake_metadata.ducklake_partition_info pi JOIN ducklake_metadata.ducklake_partition_column pc USING (partition_id) WHERE pi.table_id = (SELECT table_id FROM ducklake_metadata.ducklake_table WHERE table_name = 'evo_tbl' AND end_snapshot IS NULL) ORDER BY pi.partition_id
+----
+year	false
+epoch_year	true
+
+query I
+SELECT COUNT(*) FROM glob('{DATA_PATH}/ducklake_epoch_transforms/main/evo_tbl/**') t(path) WHERE contains(path, 'year=2020')
+----
+1
+
+query I
+SELECT COUNT(*) FROM glob('{DATA_PATH}/ducklake_epoch_transforms/main/evo_tbl/**') t(path) WHERE contains(path, 'epoch_year=51')
+----
+1
+
+# epoch transform metadata survives detach and re-attach
+statement ok
+USE memory
+
+statement ok
+DETACH ducklake
+
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/ducklake_epoch_reattach.db' AS ducklake (DATA_PATH '{DATA_PATH}/ducklake_epoch_reattach', METADATA_CATALOG 'ducklake_epoch_meta')
+
+statement ok
+USE ducklake
+
+statement ok
+CREATE TABLE reattach_tbl(dt DATE, v INTEGER);
+
+statement ok
+ALTER TABLE reattach_tbl SET PARTITIONED BY (epoch_month(dt));
+
+statement ok
+INSERT INTO reattach_tbl VALUES (DATE '2024-01-15', 1), (DATE '2024-02-10', 2), (DATE '2024-04-20', 3);
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake')
+
+query II
+SELECT dt, v FROM reattach_tbl ORDER BY v
+----
+2024-01-15	1
+2024-02-10	2
+2024-04-20	3
+
+statement ok
+USE memory
+
+statement ok
+DETACH ducklake
+
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/ducklake_epoch_reattach.db' AS ducklake (DATA_PATH '{DATA_PATH}/ducklake_epoch_reattach', METADATA_CATALOG 'ducklake_epoch_meta2')
+
+statement ok
+USE ducklake
+
+query II
+SELECT dt, v FROM reattach_tbl ORDER BY v
+----
+2024-01-15	1
+2024-02-10	2
+2024-04-20	3
+
+query I
+SELECT transform FROM ducklake_epoch_meta2.ducklake_partition_column WHERE table_id = 1
+----
+epoch_month
+
+statement ok
+INSERT INTO reattach_tbl VALUES (DATE '2026-02-05', 4)
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake')
+
+query I
+SELECT partition_value FROM ducklake_epoch_meta2.ducklake_file_partition_value ORDER BY partition_value::BIGINT
+----
+648
+649
+651
+673

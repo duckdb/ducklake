@@ -1,0 +1,56 @@
+# name: test/sql/migration/inlined_column_rename_partial.test
+# description: a conflicting user column must not leave the inlined table partially renamed
+# group: [migration]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/inlined_column_rename_partial.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dlp (DATA_PATH '{DATA_PATH}/inlined_partial_files', METADATA_CATALOG 'dlpmeta', DUCKLAKE_VERSION '1.0')
+
+# legal on v1.0 where only row_id, begin_snapshot and end_snapshot were reserved
+statement ok
+CREATE TABLE dlp.t(_ducklake_begin_snapshot INTEGER, _ducklake_end_snapshot INTEGER, v INTEGER);
+
+statement ok
+INSERT INTO dlp.t VALUES (999999, 999999, 42);
+
+query III
+SELECT * FROM dlp.t
+----
+999999	999999	42
+
+statement ok
+DETACH dlp
+
+# the migration detects the conflict and renames nothing
+statement error
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dlp (DATA_PATH '{DATA_PATH}/inlined_partial_files', METADATA_CATALOG 'dlpmeta', AUTOMATIC_MIGRATION TRUE)
+----
+Failed to rename inlined-data metadata columns
+
+# retrying fails the same way and the table was not partially renamed
+statement error
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dlp (DATA_PATH '{DATA_PATH}/inlined_partial_files', METADATA_CATALOG 'dlpmeta', AUTOMATIC_MIGRATION TRUE)
+----
+Failed to rename inlined-data metadata columns
+
+# the catalog is still fully usable at v1.0
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dlp (DATA_PATH '{DATA_PATH}/inlined_partial_files', METADATA_CATALOG 'dlpmeta')
+
+query III
+SELECT * FROM dlp.t
+----
+999999	999999	42
+
+statement ok
+SELECT row_id, begin_snapshot, end_snapshot FROM dlpmeta.ducklake_inlined_data_1_1 LIMIT 0;
+
+statement ok
+DETACH dlp

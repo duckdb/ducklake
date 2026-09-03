@@ -34,7 +34,8 @@
     {
       "reason": "Test only for Postgres as catalog",
       "paths": [
-        "test/sql/metadata/ducklake_settings_postgres.test"
+        "test/sql/metadata/ducklake_settings_postgres.test",
+        "test/sql/metadata/metadata_schema_scoped_attach.test"
       ]
     },
     {
@@ -68,7 +69,8 @@
     {
       "reason": "Test issues UPDATE against the metadata catalog directly",
       "paths": [
-        "test/sql/delete/delete_legacy_missing_mapping_after_rename_add_files.test"
+        "test/sql/delete/delete_legacy_missing_mapping_after_rename_add_files.test",
+        "test/sql/rewrite_data_files/test_rewrite_many_non_candidate_files.test"
       ]
     },
     {
@@ -180,7 +182,7 @@
       ]
     },
     {
-      "reason": "FIXME: Column name \"begin_snapshot\" is reserved by DuckLake for internal use",
+      "reason": "FIXME: COPY FROM DATABASE on quack leaks metadata tables into the target, previously surfaced as a reserved column name error",
       "paths": [
         "test/sql/partitioning/partition_tpch.test_slow"
       ]
@@ -203,6 +205,7 @@
         "test/sql/partitioning/bucket_pruning.test",
         "test/sql/partitioning/merge_adjacent_null_partition.test",
         "test/sql/partitioning/partition_rename_in_transaction.test",
+        "test/sql/partitioning/data_inlining_disable_hive_partitioning.test",
         "test/sql/rewrite_data_files/test_rewrite_partitioning.test",
         "test/sql/sorted_table/merge_adjacent_sorted_basic.test",
         "test/sql/sorted_table/merge_adjacent_sorted_drop_recreate.test",

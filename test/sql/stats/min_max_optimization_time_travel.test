@@ -65,7 +65,7 @@ SELECT MIN(i), MAX(i) FROM ducklake.tt;
 ----
 -5	9999
 
-# transaction-local data forces fallback via HasTransactionLocalData()
+# transaction-local inserts force a scan: GetTableStats returns no stats while they are pending
 query II
 EXPLAIN ANALYZE SELECT MIN(i), MAX(i) FROM ducklake.tt;
 ----

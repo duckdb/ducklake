@@ -40,6 +40,7 @@ DuckLakeColumnStats::DuckLakeColumnStats(const DuckLakeColumnStats &other) {
 	has_min = other.has_min;
 	has_max = other.has_max;
 	any_valid = other.any_valid;
+	bounds_unknown = other.bounds_unknown;
 	has_contains_nan = other.has_contains_nan;
 
 	if (other.extra_stats) {
@@ -63,6 +64,7 @@ DuckLakeColumnStats &DuckLakeColumnStats::operator=(const DuckLakeColumnStats &o
 	has_max = other.has_max;
 	has_num_values = other.has_num_values;
 	any_valid = other.any_valid;
+	bounds_unknown = other.bounds_unknown;
 	has_contains_nan = other.has_contains_nan;
 
 	if (other.extra_stats) {
@@ -74,7 +76,8 @@ DuckLakeColumnStats &DuckLakeColumnStats::operator=(const DuckLakeColumnStats &o
 }
 
 DuckLakeColumnStats DuckLakeColumnStats::FromGlobalStats(const LogicalType &type,
-                                                         const DuckLakeGlobalColumnStatsInfo &col) {
+                                                         const DuckLakeGlobalColumnStatsInfo &col,
+                                                         bool table_has_rows) {
 	DuckLakeColumnStats stats(type);
 	stats.has_null_count = col.has_contains_null;
 	if (col.has_contains_null) {
@@ -93,14 +96,25 @@ DuckLakeColumnStats DuckLakeColumnStats::FromGlobalStats(const LogicalType &type
 		stats.max = col.max_val;
 	}
 	stats.any_valid = stats.has_min || stats.has_max || col.has_extra_stats;
+	// absent bounds on nonempty tables are unknown
+	stats.bounds_unknown = !stats.any_valid && table_has_rows;
 	if (col.has_extra_stats && stats.extra_stats) {
 		stats.extra_stats->Deserialize(col.extra_stats);
 	}
 	return stats;
 }
 
+bool DuckLakeColumnStats::BoundsSurviveTypePromotion(const LogicalType &source, const LogicalType &target) {
+	// bound strings reread exactly at wider types
+	if (source.IsIntegral() && target.IsIntegral()) {
+		return true;
+	}
+	return source.id() == LogicalTypeId::DECIMAL && target.id() == LogicalTypeId::DECIMAL;
+}
+
 void DuckLakeColumnStats::MergeStats(const DuckLakeColumnStats &new_stats) {
 	bool types_differ = type != new_stats.type;
+	bool bounds_survive = !types_differ || BoundsSurviveTypePromotion(type, new_stats.type);
 	if (types_differ) {
 		type = new_stats.type;
 	}
@@ -128,13 +142,18 @@ void DuckLakeColumnStats::MergeStats(const DuckLakeColumnStats &new_stats) {
 
 	if (!new_stats.AnyValid()) {
 		// all values in the source are NULL - don't update min/max
-		if (types_differ) {
+		if (!bounds_survive) {
 			has_min = false;
 			has_max = false;
+			bounds_unknown = true;
 		}
 		return;
 	}
 	if (!AnyValid()) {
+		if (bounds_unknown) {
+			// invalidated bounds
+			return;
+		}
 		// all values in the current stats are null - copy the min/max
 		min = new_stats.min;
 		has_min = new_stats.has_min;
@@ -143,10 +162,11 @@ void DuckLakeColumnStats::MergeStats(const DuckLakeColumnStats &new_stats) {
 		any_valid = true;
 		return;
 	}
-	if (types_differ) {
-		// min/max from different types cannot be compared - invalidate them
+	if (!bounds_survive) {
+		// bounds do not survive this retype
 		has_min = false;
 		has_max = false;
+		bounds_unknown = true;
 	} else {
 		if (!new_stats.has_min) {
 			has_min = false;

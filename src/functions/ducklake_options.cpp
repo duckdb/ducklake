@@ -65,7 +65,7 @@ struct DuckLakeOptionsState : public GlobalTableFunctionState {
 };
 
 static unique_ptr<FunctionData> DuckLakeOptionsBind(ClientContext &context, TableFunctionBindInput &input,
-                                                    vector<LogicalType> &return_types, vector<string> &names) {
+                                                    vector<LogicalType> &return_types, vector<Identifier> &names) {
 	auto &catalog = DuckLakeBaseMetadataFunction::GetCatalog(context, input.inputs[0]);
 
 	names.emplace_back("option_name");

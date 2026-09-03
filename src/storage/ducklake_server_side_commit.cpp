@@ -155,6 +155,9 @@ DuckLakeServerSideCommitResult DuckLakeServerSideCommit::Run() {
 	for (auto &table_id : state->tables_deleted_from) {
 		transaction_changes.tables_deleted_from.insert(table_id);
 	}
+	for (auto &table_id : state->tables_delete_attempted) {
+		transaction_changes.tables_delete_attempted.insert(table_id);
+	}
 
 	idx_t committed_snapshot_id = 0;
 	idx_t committed_schema_version = static_cast<idx_t>(schema_version);
@@ -491,6 +494,10 @@ void DuckLakeServerSideCommit::ReadStagedDroppedFiles() {
 	for (auto &row : *tables) {
 		state->tables_deleted_from.insert(TableIndex(AsIdx(row, 0)));
 	}
+	auto delete_attempted = ScanStagedTable(DuckLakeStagedTableType::TABLES_DELETE_ATTEMPTED);
+	for (auto &row : *delete_attempted) {
+		state->tables_delete_attempted.insert(TableIndex(AsIdx(row, 0)));
+	}
 }
 
 void DuckLakeServerSideCommit::ReadStagedFlushedInlinedTables() {
@@ -622,7 +629,8 @@ unique_ptr<DuckLakeTableStats> DuckLakeServerSideCommit::BuildTableStats(const D
 		if (type_it == column_types.end()) {
 			continue;
 		}
-		entry->column_stats.emplace(col.column_id, DuckLakeColumnStats::FromGlobalStats(type_it->second, col));
+		entry->column_stats.emplace(col.column_id,
+		                            DuckLakeColumnStats::FromGlobalStats(type_it->second, col, gs.record_count > 0));
 	}
 	return entry;
 }
@@ -813,11 +821,12 @@ DuckLakeCommitContext DuckLakeServerSideCommit::BuildContext(idx_t &committed_sn
 		}
 		return 0;
 	};
-	ctx.get_net_inlined_row_count = [this](TableIndex table_id) -> idx_t {
+	auto inlined_col_names = ctx.InlinedColNames();
+	ctx.get_net_inlined_row_count = [this, inlined_col_names](TableIndex table_id) -> idx_t {
 		idx_t total = 0;
 		for (auto &name : LookupInlinedTableNames(table_id)) {
-			auto sql =
-			    SubstitutePlaceholders(DuckLakeMetadataManager::GetNetInlinedRowCountSql(name), transaction_snapshot);
+			auto sql = SubstitutePlaceholders(
+			    DuckLakeMetadataManager::GetNetInlinedRowCountSql(name, inlined_col_names), transaction_snapshot);
 			auto result = RunQuery(sql, "read net inlined row count");
 			for (auto &row : *result) {
 				total += row.GetValue<idx_t>(0);
@@ -864,10 +873,10 @@ unique_ptr<MaterializedQueryResult> DuckLakeServerSideCommit::ScanStagedTable(Du
 
 	auto types = storage.GetTypes();
 	auto &columns = storage.Columns();
-	vector<string> names;
+	vector<Identifier> names;
 	vector<StorageIndex> column_ids;
 	for (idx_t i = 0; i < columns.size(); i++) {
-		names.push_back(columns[i].Name().GetIdentifierName());
+		names.push_back(columns[i].Name());
 		column_ids.emplace_back(i);
 	}
 
