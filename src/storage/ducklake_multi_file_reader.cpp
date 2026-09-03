@@ -766,16 +766,25 @@ void DuckLakeMultiFileReader::FinalizeChunk(ClientContext &context, const MultiF
 	// Gather snapshot_id for partial deletion files; remap the global_column_ids indices to output_chunk positions
 	unique_ptr<Vector> rowid_vector;
 	optional_ptr<Vector> rowid_col;
-	if (global_state.internally_projected_rowid) {
-		auto expression_idx = global_state.deletion_scan_internal_rowid_col.GetIndex();
+	optional_idx rowid_expr_idx;
+	auto rowid_out = RemapDeletionScanOutputColumn(executor, reader_data, global_state.deletion_scan_rowid_col);
+	if (rowid_out.IsValid()) {
+		rowid_col = &output_chunk.data[rowid_out.GetIndex()];
+	} else if (global_state.internally_projected_rowid) {
+		// rowid is appended internally (not part of the scan's global columns)
+		rowid_expr_idx = global_state.deletion_scan_internal_rowid_col;
+	} else if (global_state.deletion_scan_rowid_col.IsValid()) {
+		// rowid is filter-only: filter-column removal dropped it from the output, so evaluate it explicitly
+		rowid_expr_idx = global_state.deletion_scan_rowid_col;
+	}
+	if (rowid_expr_idx.IsValid()) {
+		auto expression_idx = rowid_expr_idx.GetIndex();
+		// rowid is part of the scan's global columns (or appended directly after them), so its expression must exist
 		D_ASSERT(expression_idx < reader_data.expressions.size());
 		rowid_vector = make_uniq<Vector>(LogicalType::BIGINT, input_chunk.size());
 		ExpressionExecutor rowid_executor(context, *reader_data.expressions[expression_idx]);
 		rowid_executor.ExecuteExpression(input_chunk, *rowid_vector);
 		rowid_col = rowid_vector.get();
-	} else {
-		auto rowid_out = RemapDeletionScanOutputColumn(executor, reader_data, global_state.deletion_scan_rowid_col);
-		rowid_col = rowid_out.IsValid() ? &output_chunk.data[rowid_out.GetIndex()] : nullptr;
 	}
 	if (reader.deletion_filter && rowid_col) {
 		GatherDeletionScanSnapshots(reader, reader_data, *rowid_col, snapshot_vector, output_chunk.size());
