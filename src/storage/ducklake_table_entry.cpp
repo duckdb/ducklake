@@ -1066,6 +1066,7 @@ unique_ptr<DuckLakeFieldId> DuckLakeTableEntry::TypePromotion(const DuckLakeFiel
 	}
 	new_col.column_info.type = DuckLakeTypes::ToString(target);
 	new_col.parent_idx = parent_idx;
+	new_col.promoted_from_type = DuckLakeTypes::ToString(source_type);
 	result.new_fields.push_back(std::move(new_col));
 
 	return make_uniq<DuckLakeFieldId>(std::move(column_data), source_id.Name(), target);

@@ -449,6 +449,7 @@ void HandleChangedFields(TableIndex table_id, const ColumnChangeInfo &change_inf
 		new_column.table_id = table_id;
 		new_column.column_info = new_col_info.column_info;
 		new_column.parent_idx = new_col_info.parent_idx;
+		new_column.promoted_from_type = new_col_info.promoted_from_type;
 		txn_added_fields[new_col_info.column_info.id.index] = result.new_columns.size();
 		result.new_columns.push_back(std::move(new_column));
 	}
@@ -846,6 +847,90 @@ bool DuckLakeTransactionState::TryMergeInlinedStats(const vector<DuckLakeColumnS
 	return true;
 }
 
+//! DefaultTryCastAs throws rather than returning false when the error pointer is null, and a stat we cannot
+//! interpret must not abort the ALTER.
+static bool TryCastStatsValue(const Value &input, const LogicalType &target, Value &result) {
+	string error;
+	if (!input.DefaultTryCastAs(target, result, &error)) {
+		return false;
+	}
+	return !result.IsNull();
+}
+
+//! Returns the corrected bound, or empty if the stored string reads back unchanged, cannot be cast, or would not
+//! widen. Neither reading of it is authoritative, because the type it was rendered under cannot be recovered from
+//! the catalog, so the wider candidate wins: it over-covers rather than prunes. Comparing the candidates
+//! rather than classifying the promotion avoids an allow-list tracking DuckDB's cast rules.
+static string TryRecastStatsBound(const string &stored, const LogicalType &source, const LogicalType &target,
+                                  bool is_min, bool source_is_authoritative) {
+	Value stored_value(stored);
+	Value reinterpreted;
+	Value intermediate;
+	Value via_source;
+	if (!TryCastStatsValue(stored_value, target, reinterpreted)) {
+		return string();
+	}
+	if (!TryCastStatsValue(stored_value, source, intermediate)) {
+		return string();
+	}
+	if (!TryCastStatsValue(intermediate, target, via_source)) {
+		return string();
+	}
+	// When the source type is known to be the one the value was written under, casting through it is exactly what
+	// the reader will do, so take it in both directions. Otherwise only widen: NaN compares false both ways, so a
+	// stat that reads back as NaN keeps its stored form.
+	if (!source_is_authoritative) {
+		bool via_source_is_wider = is_min ? via_source < reinterpreted : via_source > reinterpreted;
+		if (!via_source_is_wider) {
+			return string();
+		}
+	}
+	auto corrected = via_source.ToString();
+	if (corrected == reinterpreted.ToString()) {
+		return string();
+	}
+	return corrected;
+}
+
+static void RecastColumnStats(DuckLakeColumnStats &stats, const DuckLakeRetypedColumn &retype,
+                              bool source_is_authoritative) {
+	// File stats are built with the field's type as of the write (ParseColumnStats in ducklake_insert.cpp), so a
+	// file staged after the ALTER in this same transaction already carries an exact bound under the target type.
+	// Widening that through the source would loosen it, and a folded MIN/MAX would then report a value no row holds.
+	if (stats.type == retype.target_type) {
+		return;
+	}
+	// And where that write-time type is what makes the correction exact, it is also the type to cast through. It is
+	// not always the plan's source type: two ALTERs in one transaction leave the plan holding the intermediate, and
+	// casting an INTEGER file through it rounds the bound off the data it is supposed to cover.
+	auto &source_type = source_is_authoritative ? stats.type : retype.source_type;
+	if (stats.has_min) {
+		auto corrected = TryRecastStatsBound(stats.min, source_type, retype.target_type, true, source_is_authoritative);
+		if (!corrected.empty()) {
+			stats.min = corrected;
+		}
+	}
+	if (stats.has_max) {
+		auto corrected =
+		    TryRecastStatsBound(stats.max, source_type, retype.target_type, false, source_is_authoritative);
+		if (!corrected.empty()) {
+			stats.max = corrected;
+		}
+	}
+}
+
+static void RecastColumnStatsMap(map<FieldIndex, DuckLakeColumnStats> &column_stats,
+                                 const map<FieldIndex, DuckLakeRetypedColumn> &retyped_fields,
+                                 bool source_is_authoritative) {
+	for (auto &entry : column_stats) {
+		auto retyped_entry = retyped_fields.find(entry.first);
+		if (retyped_entry == retyped_fields.end()) {
+			continue;
+		}
+		RecastColumnStats(entry.second, retyped_entry->second, source_is_authoritative);
+	}
+}
+
 void DuckLakeTransactionState::RecomputeGlobalStatsAfterRewrite(string &batch_query, TableIndex table_id,
                                                                 DuckLakeSnapshot snapshot,
                                                                 const CompactionInformation &rewrite_changes,
@@ -985,6 +1070,150 @@ void DuckLakeTransactionState::RecomputeGlobalStatsAfterRewrite(string &batch_qu
 	    DuckLakeTransaction::ConvertNewGlobalStats(table_id, new_globals));
 }
 
+//! An exact source (integer, decimal, temporal) round-trips through its own text, so the two candidate readings
+//! coincide and the O(files) pass below would find nothing to write. Skipping those keeps a widening like
+//! INTEGER -> BIGINT the O(1) metadata operation it was.
+static bool SourceRenderingCanBeLossy(const LogicalType &source) {
+	auto physical = source.InternalType();
+	return physical == PhysicalType::FLOAT || physical == PhysicalType::DOUBLE;
+}
+
+static DuckLakeRetypePlan BuildRetypePlan(const NewTableInfo &new_table_info) {
+	DuckLakeRetypePlan plan;
+	if (new_table_info.retyped_tables.empty()) {
+		return plan;
+	}
+	map<TableIndex, vector<reference<const DuckLakeNewColumn>>> columns_by_table;
+	for (auto &new_col : new_table_info.new_columns) {
+		if (new_table_info.retyped_tables.count(new_col.table_id) == 0) {
+			continue;
+		}
+		columns_by_table[new_col.table_id].push_back(new_col);
+	}
+	for (auto &table_entry : columns_by_table) {
+		auto table_id = table_entry.first;
+		// ADD COLUMN and RENAME arrive on the same list; neither changes how the persisted strings read back.
+		map<FieldIndex, DuckLakeRetypedColumn> retyped_fields;
+		for (auto &new_col_ref : table_entry.second) {
+			auto &new_col = new_col_ref.get();
+			if (new_col.promoted_from_type.empty()) {
+				continue;
+			}
+			auto source_type = DuckLakeTypes::FromString(new_col.promoted_from_type);
+			auto target_type = DuckLakeTypes::FromString(new_col.column_info.type);
+			if (target_type == source_type || !SourceRenderingCanBeLossy(source_type)) {
+				continue;
+			}
+			retyped_fields.insert(make_pair(new_col.column_info.id, DuckLakeRetypedColumn {source_type, target_type}));
+		}
+		if (retyped_fields.empty()) {
+			continue;
+		}
+		plan.insert(make_pair(table_id, std::move(retyped_fields)));
+	}
+	return plan;
+}
+
+void DuckLakeTransactionState::RecastCommittedStats(string &batch_query, DuckLakeSnapshot commit_snapshot,
+                                                    const DuckLakeRetypePlan &plan,
+                                                    const set<TableIndex> &globals_written,
+                                                    const set<DataFileIndex> &files_written_this_commit,
+                                                    const DuckLakeCommitContext &context) {
+	for (auto &table_entry : plan) {
+		auto table_id = table_entry.first;
+		auto &retyped_fields = table_entry.second;
+
+		set<FieldIndex> retyped_column_ids;
+		for (auto &field_entry : retyped_fields) {
+			retyped_column_ids.insert(field_entry.first);
+		}
+		auto file_stats = context.query_metadata_with_snapshot(
+		    commit_snapshot, DuckLakeMetadataManager::ReadFileColumnStatsForTableSql(table_id, retyped_column_ids));
+		if (file_stats->HasError()) {
+			file_stats->GetErrorObject().Throw("Failed to read per-file column stats for retyping from DuckLake: ");
+		}
+		// One UPDATE per distinct corrected bound rather than per file. Files with distinct bounds, the usual case,
+		// still get one statement each.
+		map<pair<FieldIndex, pair<string, string>>, vector<DataFileIndex>> updates_by_bound;
+		for (auto &row : *file_stats) {
+			DataFileIndex data_file_id(static_cast<idx_t>(row.GetValue<int64_t>(0)));
+			if (files_written_this_commit.count(data_file_id) > 0) {
+				// The Appender fast path in write_data_files_sql inserts new file rows eagerly, so they are already
+				// visible to this read. Their stats were corrected in memory against the file's own write-time type,
+				// which is exact; re-applying the widened correction here would loosen them back.
+				continue;
+			}
+			// the column filter sits in the WHERE, so the LEFT JOIN's stats-less rows are already gone
+			if (row.IsNull(3)) {
+				throw InternalException("File column stats row without a column_id in the recast read");
+			}
+			FieldIndex column_id(static_cast<idx_t>(row.GetValue<int64_t>(3)));
+			auto retyped_entry = retyped_fields.find(column_id);
+			if (retyped_entry == retyped_fields.end()) {
+				continue;
+			}
+			auto &retype = retyped_entry->second;
+			string new_min;
+			string new_max;
+			if (!row.IsNull(6)) {
+				new_min =
+				    TryRecastStatsBound(row.GetValue<string>(6), retype.source_type, retype.target_type, true, false);
+			}
+			if (!row.IsNull(7)) {
+				new_max =
+				    TryRecastStatsBound(row.GetValue<string>(7), retype.source_type, retype.target_type, false, false);
+			}
+			if (new_min.empty() && new_max.empty()) {
+				continue;
+			}
+			updates_by_bound[make_pair(column_id, make_pair(new_min, new_max))].push_back(data_file_id);
+		}
+		for (auto &update_entry : updates_by_bound) {
+			auto &column_id = update_entry.first.first;
+			auto &new_min = update_entry.first.second.first;
+			auto &new_max = update_entry.first.second.second;
+			batch_query += DuckLakeMetadataManager::UpdateFileColumnStatsMinMaxSql(
+			    update_entry.second, column_id, new_min.empty() ? string() : DuckLakeUtil::StatsToString(new_min),
+			    new_max.empty() ? string() : DuckLakeUtil::StatsToString(new_max));
+		}
+
+		if (globals_written.count(table_id) > 0) {
+			// already corrected in memory; a correction derived from the pre-commit value would clobber the
+			// contribution of the files written by this commit
+			continue;
+		}
+		auto global_stats = context.query_metadata_with_snapshot(
+		    commit_snapshot, DuckLakeMetadataManager::ReadTableColumnStatsMinMaxSql(table_id));
+		if (global_stats->HasError()) {
+			global_stats->GetErrorObject().Throw("Failed to read global column stats for retyping from DuckLake: ");
+		}
+		for (auto &row : *global_stats) {
+			FieldIndex column_id(static_cast<idx_t>(row.GetValue<int64_t>(0)));
+			auto retyped_entry = retyped_fields.find(column_id);
+			if (retyped_entry == retyped_fields.end()) {
+				continue;
+			}
+			auto &retype = retyped_entry->second;
+			string new_min;
+			string new_max;
+			if (!row.IsNull(1)) {
+				new_min =
+				    TryRecastStatsBound(row.GetValue<string>(1), retype.source_type, retype.target_type, true, false);
+			}
+			if (!row.IsNull(2)) {
+				new_max =
+				    TryRecastStatsBound(row.GetValue<string>(2), retype.source_type, retype.target_type, false, false);
+			}
+			if (new_min.empty() && new_max.empty()) {
+				continue;
+			}
+			batch_query += DuckLakeMetadataManager::UpdateTableColumnStatsMinMaxSql(
+			    table_id, column_id, new_min.empty() ? string() : DuckLakeUtil::StatsToString(new_min),
+			    new_max.empty() ? string() : DuckLakeUtil::StatsToString(new_max));
+		}
+	}
+}
+
 static idx_t SubtractDroppedFileStat(idx_t value, idx_t decrement) {
 	if (decrement > value) {
 		throw InternalException("Dropped DuckLake file stats exceed current table stats");
@@ -1025,7 +1254,8 @@ bool DuckLakeTransactionState::ApplyDroppedFileStats(
 
 string DuckLakeTransactionState::UpdateStatsForDroppedFiles(
     optional_ptr<vector<DuckLakeGlobalStatsInfo>> stats, const DuckLakeCommitContext &context,
-    map<TableIndex, DroppedDataFileStats> &attempt_dropped_file_stats) {
+    map<TableIndex, DroppedDataFileStats> &attempt_dropped_file_stats, const DuckLakeRetypePlan &retype_plan,
+    set<TableIndex> &globals_written) {
 	if (attempt_dropped_file_stats.empty()) {
 		return string();
 	}
@@ -1068,6 +1298,11 @@ string DuckLakeTransactionState::UpdateStatsForDroppedFiles(
 			// the rows are deleted below - drop them from the update so we do not write values we then delete
 			new_globals.stats.column_stats.clear();
 		}
+		auto retype_entry = retype_plan.find(table_id);
+		if (retype_entry != retype_plan.end()) {
+			RecastColumnStatsMap(new_globals.stats.column_stats, retype_entry->second, false);
+			globals_written.insert(table_id);
+		}
 		result += DuckLakeMetadataManager::UpdateGlobalTableStatsSql(
 		    DuckLakeTransaction::ConvertNewGlobalStats(table_id, new_globals));
 		if (delete_column_stats) {
@@ -1077,9 +1312,11 @@ string DuckLakeTransactionState::UpdateStatsForDroppedFiles(
 	return result;
 }
 
-NewDataInfo DuckLakeTransactionState::GetNewDataFiles(
-    string &batch_query, DuckLakeCommitState &commit_state, optional_ptr<vector<DuckLakeGlobalStatsInfo>> stats,
-    const DuckLakeCommitContext &context, map<TableIndex, DroppedDataFileStats> &attempt_dropped_file_stats) {
+NewDataInfo DuckLakeTransactionState::GetNewDataFiles(string &batch_query, DuckLakeCommitState &commit_state,
+                                                      optional_ptr<vector<DuckLakeGlobalStatsInfo>> stats,
+                                                      const DuckLakeCommitContext &context,
+                                                      map<TableIndex, DroppedDataFileStats> &attempt_dropped_file_stats,
+                                                      const DuckLakeRetypePlan &retype_plan) {
 	NewDataInfo result;
 	// get the global table stats
 	DuckLakeNewGlobalStats new_globals;
@@ -1117,6 +1354,20 @@ NewDataInfo DuckLakeTransactionState::GetNewDataFiles(
 		}
 		bool clear_column_stats = ApplyDroppedFileStats(table_id, new_globals, attempt_dropped_file_stats);
 		auto &new_stats = new_globals.stats;
+		auto retype_entry = retype_plan.find(table_id);
+		// A column with no pre-commit bound takes its merged bound entirely from files this commit writes, and those
+		// carry their write-time type, so the correction can be exact. Once a committed bound is in the merge the
+		// provenance is only as good as the catalog's, which a promotion chain or a compaction can outdate.
+		set<FieldIndex> authoritative_fields;
+		if (retype_entry != retype_plan.end()) {
+			for (auto &field_entry : retype_entry->second) {
+				auto stats_entry = new_stats.column_stats.find(field_entry.first);
+				if (stats_entry == new_stats.column_stats.end() ||
+				    (!stats_entry->second.has_min && !stats_entry->second.has_max)) {
+					authoritative_fields.insert(field_entry.first);
+				}
+			}
+		}
 		vector<DuckLakeDeleteFile> delete_files;
 		for (auto &file : table_changes.new_data_files) {
 			// flushed files (with max_partial_file_snapshot) have embedded row_ids, we gotta use the original
@@ -1177,6 +1428,21 @@ NewDataInfo DuckLakeTransactionState::GetNewDataFiles(
 		if (clear_column_stats) {
 			// the rows are deleted below - drop them from the update so we do not write values we then delete
 			new_stats.column_stats.clear();
+		}
+		if (retype_entry != retype_plan.end()) {
+			// MergeStats invalidates min/max across a type change, so a surviving merged bound came from
+			// contributors of one type and correcting it once is equivalent to correcting each of them. Dropping it
+			// instead would be worse than leaving it stale: a NULL global is re-seeded from the next inserted file
+			// alone, excluding rows that are still there, and that prunes.
+			map<FieldIndex, DuckLakeRetypedColumn> exact_fields;
+			map<FieldIndex, DuckLakeRetypedColumn> widened_fields;
+			for (auto &field_entry : retype_entry->second) {
+				auto &target = authoritative_fields.count(field_entry.first) > 0 ? exact_fields : widened_fields;
+				target.insert(field_entry);
+			}
+			RecastColumnStatsMap(new_stats.column_stats, exact_fields, true);
+			RecastColumnStatsMap(new_stats.column_stats, widened_fields, false);
+			result.global_stats_written.insert(table_id);
 		}
 		// update the global stats for this table based on the newly written data
 		batch_query += DuckLakeMetadataManager::UpdateGlobalTableStatsSql(
@@ -1350,6 +1616,9 @@ void DuckLakeTransactionState::GetNewTableInfo(DuckLakeCommitState &commit_state
 			// drop the indicated column
 			// note that in case of nested types we might be dropping multiple columns here
 			HandleChangedFields(commit_state.GetTableId(table), table.GetChangedFields(), result, txn_added_fields);
+			if (local_change.type == LocalChangeType::CHANGE_COLUMN_TYPE) {
+				result.retyped_tables.insert(commit_state.GetTableId(table));
+			}
 			transaction_changes.altered_tables_with_schema_version_changes.insert(table_id);
 			column_schema_change = true;
 			break;
@@ -1633,6 +1902,7 @@ string DuckLakeTransactionState::CommitChanges(DuckLakeCommitState &commit_state
 	// write new tables
 	vector<DuckLakeTableInfo> new_tables_result;
 	vector<DuckLakeTableInfo> new_inlined_data_tables_result;
+	DuckLakeRetypePlan retype_plan;
 	if (!new_tables.empty()) {
 		auto result = GetNewTables(commit_state, transaction_changes);
 		vector<DuckLakePath> resolved_table_paths;
@@ -1672,6 +1942,7 @@ string DuckLakeTransactionState::CommitChanges(DuckLakeCommitState &commit_state
 		}
 		batch_queries += DuckLakeMetadataManager::WriteExpiredColumnTags(expired_column_tags);
 		batch_queries += DuckLakeMetadataManager::WriteNewColumns(result.new_columns);
+		retype_plan = BuildRetypePlan(result);
 		batch_queries += context.write_inlined_tables(commit_snapshot, result.new_inlined_data_tables);
 		batch_queries += DuckLakeMetadataManager::WriteNewSortKeys(existing_catalog.sorts, result.new_sort_keys);
 		new_tables_result = result.new_tables;
@@ -1689,9 +1960,17 @@ string DuckLakeTransactionState::CommitChanges(DuckLakeCommitState &commit_state
 		batch_queries += DuckLakeMetadataManager::WriteNewColumnMappings(result.new_column_mappings);
 	}
 
-	auto write_data_files_sql = [&](const vector<DuckLakeFileInfo> &files) {
+	auto write_data_files_sql = [&](vector<DuckLakeFileInfo> &files) {
 		if (files.empty()) {
 			return string();
+		}
+		// files staged before the retype carry old-type stats too, and they are inserted past the reach of the SQL
+		// rewrite in RecastCommittedStats
+		for (auto &file : files) {
+			auto retype_entry = retype_plan.find(file.table_id);
+			if (retype_entry != retype_plan.end()) {
+				RecastColumnStatsMap(file.column_stats, retype_entry->second, true);
+			}
 		}
 		if (context.try_append_data_files &&
 		    context.try_append_data_files(commit_snapshot, files, new_tables_result, new_schemas_result)) {
@@ -1711,11 +1990,18 @@ string DuckLakeTransactionState::CommitChanges(DuckLakeCommitState &commit_state
 
 	// write new data / data files
 	bool has_table_data_changes = local_changes.HasChanges();
+	set<TableIndex> globals_written_from_memory;
+	set<DataFileIndex> files_written_this_commit;
 	if (has_table_data_changes) {
-		auto result = GetNewDataFiles(batch_queries, commit_state, stats, context, attempt_dropped_file_stats);
+		auto result =
+		    GetNewDataFiles(batch_queries, commit_state, stats, context, attempt_dropped_file_stats, retype_plan);
 		batch_queries += write_data_files_sql(result.new_files);
 		batch_queries += context.write_inlined_data(commit_snapshot, result.new_inlined_data, new_tables_result,
 		                                            new_inlined_data_tables_result);
+		globals_written_from_memory = std::move(result.global_stats_written);
+		for (auto &file : result.new_files) {
+			files_written_this_commit.insert(file.id);
+		}
 	}
 
 	// in case of a retry, we generate the deletion of inlined data from the tables
@@ -1731,7 +2017,8 @@ string DuckLakeTransactionState::CommitChanges(DuckLakeCommitState &commit_state
 			dropped_indexes.insert(entry.second);
 		}
 		batch_queries += DuckLakeMetadataManager::DropDataFiles(dropped_indexes);
-		batch_queries += UpdateStatsForDroppedFiles(stats, context, attempt_dropped_file_stats);
+		batch_queries += UpdateStatsForDroppedFiles(stats, context, attempt_dropped_file_stats, retype_plan,
+		                                            globals_written_from_memory);
 	}
 
 	if (has_table_data_changes) {
@@ -1796,6 +2083,12 @@ string DuckLakeTransactionState::CommitChanges(DuckLakeCommitState &commit_state
 				                                 compaction_rewrite_delete_changes, table_entry.second, context);
 			}
 		}
+	}
+
+	// last, so these UPDATEs land on top of every stats write above rather than under one
+	if (!retype_plan.empty()) {
+		RecastCommittedStats(batch_queries, commit_snapshot, retype_plan, globals_written_from_memory,
+		                     files_written_this_commit, context);
 	}
 
 	// Tracking for tables that had schema changes

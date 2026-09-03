@@ -1,0 +1,134 @@
+# name: test/sql/stats/alter_type_stats_recast.test
+# description: ALTER COLUMN TYPE must reinterpret persisted min/max through the source type (issue #1307)
+# group: [stats]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/alter_type_stats', METADATA_CATALOG 'metadata', DATA_INLINING_ROW_LIMIT 0);
+
+statement ok
+CREATE TABLE ducklake.t(c FLOAT);
+
+# 0.03 and 0.1 are the extremes and both widen "the wrong way":
+#   (FLOAT 0.03)::DOUBLE = 0.029999999329447746 < 0.03  -> a min recorded as "0.03" is too high
+#   (FLOAT 0.1)::DOUBLE  = 0.10000000149011612 > 0.1    -> a max recorded as "0.1"  is too low
+statement ok
+INSERT INTO ducklake.t VALUES (0.03), (0.05), (0.07), (0.1);
+
+# sanity: the data really is in a parquet file, not inlined
+query I
+SELECT count(*) FROM metadata.ducklake_data_file;
+----
+1
+
+query II
+SELECT min_value, max_value FROM metadata.ducklake_table_column_stats;
+----
+0.03	0.1
+
+statement ok
+ALTER TABLE ducklake.t ALTER COLUMN c SET DATA TYPE DOUBLE;
+
+# the persisted strings are re-parsed as DOUBLE after the ALTER, so they must be rewritten to the
+# DOUBLE the stored FLOAT actually widens to
+query II
+SELECT min_value, max_value FROM metadata.ducklake_table_column_stats;
+----
+0.029999999329447746	0.10000000149011612
+
+query III
+SELECT column_id, min_value, max_value FROM metadata.ducklake_file_column_stats ORDER BY column_id;
+----
+1	0.029999999329447746	0.10000000149011612
+
+# pushdown returns 0 here whatever the persisted stats say, for a reason unrelated to #1307:
+# https://github.com/duckdb/duckdb/issues/24900, fixed in duckdb after the current pin
+statement ok
+SET disabled_optimizers='filter_pushdown';
+
+# WRONG RESULT before the fix: the row is above the recorded max 0.1, so the scan was pruned away
+query I
+SELECT count(*) FROM ducklake.t WHERE c > 0.1;
+----
+1
+
+# WRONG RESULT before the fix: the row is below the recorded min 0.03, so the scan was pruned away
+query I
+SELECT count(*) FROM ducklake.t WHERE c < 0.03;
+----
+1
+
+query I
+SELECT count(*) FROM ducklake.t;
+----
+4
+
+statement ok
+RESET disabled_optimizers;
+
+# unchanged columns keep their stats: a second column must not be touched by the ALTER
+statement ok
+CREATE TABLE ducklake.t2(a FLOAT, b FLOAT);
+
+statement ok
+INSERT INTO ducklake.t2 VALUES (0.03, 0.03), (0.1, 0.1);
+
+statement ok
+ALTER TABLE ducklake.t2 ALTER COLUMN a SET DATA TYPE DOUBLE;
+
+query III
+SELECT column_id, min_value, max_value FROM metadata.ducklake_table_column_stats WHERE table_id = 2 ORDER BY column_id;
+----
+1	0.029999999329447746	0.10000000149011612
+2	0.03	0.1
+
+# widenings that round-trip through the string exactly must not rewrite anything
+statement ok
+CREATE TABLE ducklake.t3(c INTEGER);
+
+statement ok
+INSERT INTO ducklake.t3 VALUES (1), (2), (3);
+
+statement ok
+ALTER TABLE ducklake.t3 ALTER COLUMN c SET DATA TYPE BIGINT;
+
+query III
+SELECT column_id, min_value, max_value FROM metadata.ducklake_table_column_stats WHERE table_id = 3 ORDER BY column_id;
+----
+1	1	3
+
+# nested leaves under the altered column are rewritten too
+statement ok
+CREATE TABLE ducklake.t4(s STRUCT(f FLOAT));
+
+statement ok
+INSERT INTO ducklake.t4 VALUES ({'f': 0.03}), ({'f': 0.1});
+
+statement ok
+ALTER TABLE ducklake.t4 ALTER COLUMN s SET DATA TYPE STRUCT(f DOUBLE);
+
+query III
+SELECT column_id, min_value, max_value FROM metadata.ducklake_table_column_stats WHERE table_id = 4 ORDER BY column_id;
+----
+2	0.029999999329447746	0.10000000149011612
+
+query III
+SELECT column_id, min_value, max_value FROM metadata.ducklake_file_column_stats WHERE table_id = 4 ORDER BY column_id;
+----
+2	0.029999999329447746	0.10000000149011612
+
+# stats written after the ALTER stay consistent with the rewritten ones
+statement ok
+INSERT INTO ducklake.t VALUES (0.2);
+
+query II
+SELECT min_value, max_value FROM metadata.ducklake_table_column_stats WHERE table_id = 1;
+----
+0.029999999329447746	0.2

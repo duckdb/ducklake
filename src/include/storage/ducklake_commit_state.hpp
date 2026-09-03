@@ -29,6 +29,8 @@ struct NewTableInfo {
 	vector<DuckLakeNewColumn> new_columns;
 	vector<DuckLakeTableInfo> new_inlined_data_tables;
 	vector<DuckLakeSortInfo> new_sort_keys;
+	//! Tables whose commit includes an ALTER ... TYPE.
+	set<TableIndex> retyped_tables;
 };
 
 struct NewMacroInfo {
@@ -42,7 +44,18 @@ struct NewNameMapInfo {
 struct NewDataInfo {
 	vector<DuckLakeFileInfo> new_files;
 	vector<DuckLakeInlinedDataInfo> new_inlined_data;
+	//! Tables whose global stats this commit rewrites from memory; RecastCommittedStats must not correct them again.
+	set<TableIndex> global_stats_written;
 };
+
+struct DuckLakeRetypedColumn {
+	//! The committed type before this ALTER. Only a guess at what the stats strings were rendered under, see
+	//! TryRecastStatsBound.
+	LogicalType source_type;
+	LogicalType target_type;
+};
+
+using DuckLakeRetypePlan = map<TableIndex, map<FieldIndex, DuckLakeRetypedColumn>>;
 
 struct CompactionInformation {
 	vector<DuckLakeCompactedFileInfo> compacted_files;

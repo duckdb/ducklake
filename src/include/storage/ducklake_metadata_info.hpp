@@ -361,6 +361,9 @@ struct DuckLakeNewColumn {
 	TableIndex table_id;
 	DuckLakeColumnInfo column_info;
 	optional_idx parent_idx;
+	//! Set only when an ALTER ... TYPE drops and re-creates this field; empty for ADD COLUMN and RENAME. Not
+	//! persisted - a table created and altered in the same transaction has no committed old type to look up.
+	string promoted_from_type;
 };
 
 struct DuckLakeCatalogInfo {
