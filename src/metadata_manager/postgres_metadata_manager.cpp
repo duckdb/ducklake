@@ -294,94 +294,23 @@ string PostgresMetadataManager::GenerateFileColumnStatsCTEBody(const CTERequirem
 }
 
 string PostgresMetadataManager::GenerateFileListQuery(DuckLakeTableEntry &table, const FilterPushdownInfo *filter_info,
-                                                      const vector<DuckLakeFileListDynamicFilter> &dynamic_filters) {
-	auto table_id = table.GetTableId();
-	FilterSQLResult filter_result;
-	if (filter_info && !filter_info->column_filters.empty()) {
-		ColumnStatsFilterSQL filter_sql;
-		filter_sql.cast_value = PostgresCastValueToTarget;
-		filter_sql.cast_stats = [](const string &stats, const LogicalType &type, bool is_min) {
-			auto cast = PostgresCastStatsToTarget(stats, type);
-			if (cast.empty() || !IsPostgresTemporalStatsType(type)) {
-				return cast;
-			}
-			return StringUtil::Format("COALESCE(%s, '%s'::%s)", cast, is_min ? "-infinity" : "infinity",
-			                          GetPostgresStatsType(type));
-		};
-		filter_result = ConvertFilterPushdownToSQL(*filter_info, &filter_sql);
-
-		auto bucket_clause = BuildBucketPartitionPruningClause(
-		    table, *filter_info, "{METADATA_SCHEMA_ESCAPED}.ducklake_file_partition_value");
-		if (!bucket_clause.empty()) {
-			if (!filter_result.where_conditions.empty()) {
-				filter_result.where_conditions += " AND ";
-			}
-			filter_result.where_conditions += bucket_clause;
+                                                      const vector<DuckLakeFileListDynamicFilter> &dynamic_filters,
+                                                      const string &, const ColumnStatsFilterSQL *,
+                                                      const FileColumnStatsCTEBodyGenerator &,
+                                                      const FileListStatsCastGenerator &) {
+	ColumnStatsFilterSQL filter_sql;
+	filter_sql.cast_value = PostgresCastValueToTarget;
+	filter_sql.cast_stats = [](const string &stats, const LogicalType &type, bool is_min) {
+		auto cast = PostgresCastStatsToTarget(stats, type);
+		if (cast.empty() || !IsPostgresTemporalStatsType(type)) {
+			return cast;
 		}
-	}
-
-	for (const auto &dynamic_filter : dynamic_filters) {
-		auto entry = filter_result.required_ctes.find(dynamic_filter.column_field_index);
-		if (entry == filter_result.required_ctes.end()) {
-			filter_result.required_ctes.emplace(
-			    dynamic_filter.column_field_index,
-			    CTERequirement(dynamic_filter.column_field_index, {"min_value", "max_value"}));
-		} else {
-			entry->second.referenced_stats.insert("min_value");
-			entry->second.referenced_stats.insert("max_value");
-		}
-	}
-
-	string remote_query = GenerateCTESectionFromRequirements(filter_result.required_ctes, table_id,
-	                                                         GeneratePostgresNativeFileColumnStatsCTEBody);
-	string stats_select_list;
-	string stats_join_list = GenerateStatsJoinList(filter_result.required_ctes);
-	string order_by_clause;
-	for (const auto &dynamic_filter : dynamic_filters) {
-		auto cte_name = StringUtil::Format("col_%d_stats", NumericCast<int64_t>(dynamic_filter.column_field_index));
-		stats_select_list += StringUtil::Format(", %s.min_value, %s.max_value", cte_name.c_str(), cte_name.c_str());
-
-		if (order_by_clause.empty() && (dynamic_filter.column_type.id() == LogicalTypeId::VARCHAR ||
-		                                CanCastPostgresStatsForValueComparison(dynamic_filter.column_type))) {
-			const bool seeking_high_values =
-			    dynamic_filter.comparison_type == ExpressionType::COMPARE_GREATERTHAN ||
-			    dynamic_filter.comparison_type == ExpressionType::COMPARE_GREATERTHANOREQUALTO;
-			const bool seeking_low_values = dynamic_filter.comparison_type == ExpressionType::COMPARE_LESSTHAN ||
-			                                dynamic_filter.comparison_type == ExpressionType::COMPARE_LESSTHANOREQUALTO;
-			if (seeking_high_values) {
-				auto stats_expression = PostgresCastStatsToTarget(cte_name + ".max_value", dynamic_filter.column_type);
-				if (!stats_expression.empty()) {
-					order_by_clause = StringUtil::Format("\nORDER BY %s DESC NULLS LAST", stats_expression);
-				}
-			} else if (seeking_low_values) {
-				auto stats_expression = PostgresCastStatsToTarget(cte_name + ".min_value", dynamic_filter.column_type);
-				if (!stats_expression.empty()) {
-					order_by_clause = StringUtil::Format("\nORDER BY %s ASC NULLS LAST", stats_expression);
-				}
-			}
-		}
-	}
-
-	string select_list = "data.data_file_id, " + GetFileSelectList("data") +
-	                     ", data.row_id_start, data.begin_snapshot, data.partial_max, data.mapping_id, " +
-	                     GetDeleteFileSelectList("del") + stats_select_list;
-	remote_query += StringUtil::Format(R"(
-SELECT %s
-FROM {METADATA_SCHEMA_ESCAPED}.ducklake_data_file data
-%s
-LEFT JOIN (
-    SELECT *
-    FROM {METADATA_SCHEMA_ESCAPED}.ducklake_delete_file
-    WHERE table_id=%d AND {SNAPSHOT_ID} >= begin_snapshot
-          AND ({SNAPSHOT_ID} < end_snapshot OR end_snapshot IS NULL)
-    ) del ON del.data_file_id = data.data_file_id
-WHERE data.table_id=%d AND {SNAPSHOT_ID} >= data.begin_snapshot AND ({SNAPSHOT_ID} < data.end_snapshot OR data.end_snapshot IS NULL)
-		)",
-	                                   select_list, stats_join_list, table_id.index, table_id.index);
-	if (!filter_result.where_conditions.empty()) {
-		remote_query += "\nAND " + filter_result.where_conditions;
-	}
-	remote_query += order_by_clause;
+		return StringUtil::Format("COALESCE(%s, '%s'::%s)", cast, is_min ? "-infinity" : "infinity",
+		                          GetPostgresStatsType(type));
+	};
+	auto remote_query = DuckLakeMetadataManager::GenerateFileListQuery(
+	    table, filter_info, dynamic_filters, "{METADATA_SCHEMA_ESCAPED}", &filter_sql,
+	    GeneratePostgresNativeFileColumnStatsCTEBody, PostgresCastStatsToTarget);
 
 	return StringUtil::Format("SELECT * FROM postgres_query({METADATA_CATALOG_NAME_LITERAL}, %s)",
 	                          SQLString(remote_query));

@@ -446,11 +446,22 @@ public:
 	string GetPathSeparator(const string &path);
 
 protected:
+	struct ColumnStatsFilterSQL {
+		std::function<string(const Value &, const LogicalType &)> cast_value;
+		std::function<string(const string &, const LogicalType &, bool)> cast_stats;
+	};
+	using FileColumnStatsCTEBodyGenerator = std::function<string(const CTERequirement &, TableIndex)>;
+	using FileListStatsCastGenerator = std::function<string(const string &, const LogicalType &)>;
+
 	virtual string GetLatestSnapshotQuery() const;
 
 	virtual string GenerateFileColumnStatsCTEBody(const CTERequirement &req, TableIndex table_id);
 	virtual string GenerateFileListQuery(DuckLakeTableEntry &table, const FilterPushdownInfo *filter_info,
-	                                     const vector<DuckLakeFileListDynamicFilter> &dynamic_filters);
+	                                     const vector<DuckLakeFileListDynamicFilter> &dynamic_filters,
+	                                     const string &metadata_table_prefix = "{METADATA_CATALOG}",
+	                                     const ColumnStatsFilterSQL *filter_sql = nullptr,
+	                                     const FileColumnStatsCTEBodyGenerator &generate_cte_body = {},
+	                                     const FileListStatsCastGenerator &cast_stats = {});
 
 	//! Wrap field selections with list aggregation of struct objects (DBMS-specific)
 	//! For DuckDB: LIST({'key1': val1, 'key2': val2, ...})
@@ -525,11 +536,6 @@ private:
 	bool IsEncrypted() const;
 
 protected:
-	struct ColumnStatsFilterSQL {
-		std::function<string(const Value &, const LogicalType &)> cast_value;
-		std::function<string(const string &, const LogicalType &, bool)> cast_stats;
-	};
-	using FileColumnStatsCTEBodyGenerator = std::function<string(const CTERequirement &, TableIndex)>;
 	string GetFileSelectList(const string &prefix);
 	string GetDeleteFileSelectList(const string &prefix);
 	//! Build an additional WHERE fragment that prunes files by bucket() partition value.
