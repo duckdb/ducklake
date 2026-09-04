@@ -1,0 +1,74 @@
+# name: test/sql/stats/nested_filter_pushdown.test
+# description: Test filter pushdown on nested struct fields
+# group: [stats]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/ducklake_nested_pushdown', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE ducklake.t(id INTEGER, st STRUCT(a INTEGER, b INTEGER));
+
+statement ok
+INSERT INTO ducklake.t SELECT i, {'a': i, 'b': i * 2} FROM range(1, 101) t(i);
+
+statement ok
+INSERT INTO ducklake.t SELECT i, {'a': i, 'b': i * 2} FROM range(101, 201) t(i);
+
+statement ok
+INSERT INTO ducklake.t SELECT i, {'a': i, 'b': i * 2} FROM range(201, 301) t(i);
+
+# stats are stored per nested field, so a filter on one prunes on that field
+query I
+SELECT COUNT(*) FROM ducklake.t WHERE st.a = 50;
+----
+1
+
+query II
+EXPLAIN ANALYZE SELECT COUNT(*) FROM ducklake.t WHERE st.a = 50;
+----
+analyzed_plan	<REGEX>:.*Total Files Read: 1.*
+
+# each field of the same struct is filtered separately
+query II
+EXPLAIN ANALYZE SELECT COUNT(*) FROM ducklake.t WHERE st.a = 50 AND st.b = 100;
+----
+analyzed_plan	<REGEX>:.*Total Files Read: 1.*
+
+# a nested field combined with a top-level column across a disjunction
+query I
+SELECT COUNT(*) FROM ducklake.t WHERE st.a = 50 OR id = 250;
+----
+2
+
+query II
+EXPLAIN ANALYZE SELECT COUNT(*) FROM ducklake.t WHERE st.a = 50 OR id = 250;
+----
+analyzed_plan	<REGEX>:.*Total Files Read: 2.*
+
+# struct keys are matched case-insensitively, so the field resolves regardless of how it is written
+query II
+EXPLAIN ANALYZE SELECT COUNT(*) FROM ducklake.t WHERE st.A = 50;
+----
+analyzed_plan	<REGEX>:.*Total Files Read: 1.*
+
+# a struct added after the files were written has no stats, so nothing may be pruned
+statement ok
+ALTER TABLE ducklake.t ADD COLUMN st.c INTEGER;
+
+query I
+SELECT COUNT(*) FROM ducklake.t WHERE st.c IS NULL;
+----
+300
+
+query II
+EXPLAIN ANALYZE SELECT COUNT(*) FROM ducklake.t WHERE st.c = 5;
+----
+analyzed_plan	<REGEX>:.*Total Files Read: 3.*

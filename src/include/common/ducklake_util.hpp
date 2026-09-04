@@ -22,6 +22,8 @@ class ColumnList;
 class DuckLakeCatalog;
 class DuckLakeMetadataManager;
 class FileSystem;
+class Expression;
+class LogicalType;
 class TableFilter;
 struct DynamicFilterData;
 
@@ -45,6 +47,19 @@ public:
 	static string JoinPath(FileSystem &fs, const string &a, const string &b);
 
 	static shared_ptr<DynamicFilterData> GetOptionalDynamicFilterData(const TableFilter &filter);
+
+	//! Combine two filter expressions - both must hold, so AND their conjuncts and drop duplicates
+	static unique_ptr<Expression> MergeFilterExpressions(unique_ptr<Expression> left, unique_ptr<Expression> right);
+	//! Whether an expression reads a struct field by a constant name or position
+	static bool IsStructExtract(const Expression &expr);
+	//! A leaf filter is evaluated against a single column's stats, so it may only read one column. Returns
+	//! that sub-expression, or nullptr when the filter reads none or several.
+	static optional_ptr<const Expression> GetFilterSubject(const Expression &expr);
+	//! Peel the struct fields a subject reads through, outermost first, and return the reference underneath
+	static const Expression &GetFilterSubjectPath(const Expression &subject, vector<string> &path);
+	//! Rewrite the subject to the column placeholder an ExpressionFilter is evaluated against
+	static unique_ptr<Expression> ReplaceFilterSubject(const Expression &expr, const Expression &subject,
+	                                                   const LogicalType &type);
 
 	//! Create the data path directory if it does not yet exist
 	static void EnsureDirectoryExists(FileSystem &fs, const string &data_path);
