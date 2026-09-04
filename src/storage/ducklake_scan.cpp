@@ -154,12 +154,7 @@ struct DuckLakePartitionRowGroup : public PartitionRowGroup {
 	}
 
 	bool MinMaxIsExact(const StorageIndex &storage_index) override {
-		if (!min_max_exact) {
-			return false;
-		}
-		// string min/max may be stored truncated
-		auto &type = table.GetColumns().GetColumn(PhysicalIndex(storage_index.GetPrimaryIndex())).Type();
-		return type.InternalType() != PhysicalType::VARCHAR;
+		return min_max_exact;
 	}
 
 	// DuckLakeGetPartitionStats bails out when the transaction has local changes, so

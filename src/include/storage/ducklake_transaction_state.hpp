@@ -30,6 +30,10 @@ struct DuckLakeCommitContext {
 	std::function<DuckLakeSnapshot()> get_snapshot;
 	//! Executes the batched snapshot/changes SQL against the metadata DB.
 	std::function<unique_ptr<QueryResult>(DuckLakeSnapshot, string &)> execute_commit_batch;
+	//! Classifies metadata-catalog errors that are safe to retry.
+	std::function<bool(const string &)> is_retryable_metadata_error = [](const string &) {
+		return false;
+	};
 	//! Optional hooks below default to a no-op/constant; callers override only the ones they need.
 	//! Clears the metadata manager cache if a clear was pending.
 	std::function<void()> flush_cache_if_pending = []() {
@@ -101,6 +105,9 @@ struct DuckLakeCommitContext {
 	//! Invalidates the cached stats entry for a table after a stats-affecting file drop.
 	std::function<void(idx_t, TableIndex)> invalidate_table_stats_cache = [](idx_t, TableIndex) {
 	};
+	//! Reports a failure after the metadata commit is already durable.
+	std::function<void(const string &)> report_post_commit_error = [](const string &) {
+	};
 	//! Author / message / extra info for the snapshot row.
 	DuckLakeSnapshotCommit commit_info;
 	//! When true, Commit() skips the post-commit DropEmptySupersededInlinedTables cleanup.
@@ -127,7 +134,8 @@ public:
 
 	SnapshotAndStats CheckForConflicts(DuckLakeSnapshot transaction_snapshot,
 	                                   const TransactionChangeInformation &changes,
-	                                   const std::function<unique_ptr<QueryResult>(string)> &executor);
+	                                   const std::function<unique_ptr<QueryResult>(string)> &executor,
+	                                   bool supports_v1_1_metadata);
 	void CheckForConflicts(const TransactionChangeInformation &changes, const SnapshotChangeInformation &other_changes,
 	                       DuckLakeSnapshot transaction_snapshot,
 	                       const std::function<unique_ptr<QueryResult>(string)> &executor) const;

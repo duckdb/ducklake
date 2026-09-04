@@ -1,0 +1,38 @@
+# name: test/sql/stats/min_max_string_truncated.test
+# description: MIN/MAX over strings must not constant-fold truncated stats into values that do not exist
+# group: [stats]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/min_max_string_truncated.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/min_max_string_truncated_files', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE ducklake.test(s VARCHAR);
+
+# the parquet writer truncates stats for strings over 256 bytes - the stored max ('C') does not exist in the data
+statement ok
+INSERT INTO ducklake.test VALUES ('B' || repeat('🦆', 300)), ('A');
+
+query II
+SELECT min(s) = 'A', max(s) = 'B' || repeat('🦆', 300) FROM ducklake.test
+----
+true	true
+
+# same result when the stats are served from the metadata catalog after a reconnect
+statement ok
+DETACH ducklake
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/min_max_string_truncated_files')
+
+query II
+SELECT min(s) = 'A', max(s) = 'B' || repeat('🦆', 300) FROM ducklake.test
+----
+true	true

@@ -221,6 +221,8 @@ DuckLakeColumnStats TemplatedUpdateStats(Vector &input_vec, const LogicalType &t
 		result.has_max = true;
 		result.min = OP::GetFinalStats(data[min_idx.GetIndex()]);
 		result.max = OP::GetFinalStats(data[max_idx.GetIndex()]);
+		result.min_is_exact = true;
+		result.max_is_exact = true;
 	}
 	return result;
 }

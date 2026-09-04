@@ -25,11 +25,13 @@
 #include "storage/ducklake_delete.hpp"
 #include "duckdb/function/function_binder.hpp"
 #include "storage/ducklake_inlined_data_reader.hpp"
+#include "storage/ducklake_stats.hpp"
 #include "duckdb/planner/filter/constant_filter.hpp"
 #include "duckdb/planner/filter/dynamic_filter.hpp"
 #include "duckdb/planner/filter/expression_filter.hpp"
 #include "duckdb/planner/filter/table_filter_functions.hpp"
 #include "duckdb/planner/filter/optional_filter.hpp"
+#include "duckdb/storage/statistics/base_statistics.hpp"
 #include "duckdb/planner/table_filter_state.hpp"
 #include "duckdb/storage/table/column_segment.hpp"
 #include "duckdb/planner/table_filter_set.hpp"
@@ -83,75 +85,94 @@ static void NormalizeListChildNames(vector<MultiFileColumnDefinition> &columns, 
 	}
 }
 
-static bool CanSkipFileByTopNDynamicFilter(const DuckLakeFileListEntry &file_entry,
-                                           const FilterPushdownInfo &filter_info, ClientContext &context) {
+static bool CanSkipFileByTopNDynamicFilter(const DuckLakeFileColumnStats &column_stats,
+                                           const ColumnFilterInfo &column_filter) {
+	auto filter_data = DuckLakeUtil::GetOptionalDynamicFilterData(*column_filter.table_filter);
+	if (!filter_data) {
+		return false;
+	}
+	ExpressionType comparison_type;
+	Value constant;
+	{
+		lock_guard<mutex> l(filter_data->lock);
+		if (!filter_data->initialized) {
+			return false;
+		}
+		comparison_type = filter_data->comparison_type;
+		constant = filter_data->constant;
+	}
+
+	auto casted_constant = constant.DefaultTryCastAs(column_filter.column_type);
+	if (!casted_constant) {
+		return false;
+	}
+
+	switch (comparison_type) {
+	case ExpressionType::COMPARE_GREATERTHAN:
+	case ExpressionType::COMPARE_GREATERTHANOREQUALTO: {
+		if (!column_stats.has_max) {
+			return false;
+		}
+		auto file_max = Value(column_stats.max).DefaultTryCastAs(column_filter.column_type);
+		if (!file_max) {
+			return false;
+		}
+		if (comparison_type == ExpressionType::COMPARE_GREATERTHAN) {
+			return !(*file_max > *casted_constant);
+		}
+		return !(*file_max >= *casted_constant);
+	}
+	case ExpressionType::COMPARE_LESSTHAN:
+	case ExpressionType::COMPARE_LESSTHANOREQUALTO: {
+		if (!column_stats.has_min) {
+			return false;
+		}
+		auto file_min = Value(column_stats.min).DefaultTryCastAs(column_filter.column_type);
+		if (!file_min) {
+			return false;
+		}
+		if (comparison_type == ExpressionType::COMPARE_LESSTHAN) {
+			return !(*file_min < *casted_constant);
+		}
+		return !(*file_min <= *casted_constant);
+	}
+	default:
+		return false;
+	}
+}
+
+static bool CanSkipFileByPrefixRangeFilter(const DuckLakeFileColumnStats &file_stats,
+                                           const ColumnFilterInfo &column_filter, ClientContext &context) {
+	if (!ExpressionFilter::ContainsInternalFunction(*column_filter.table_filter->expr, PrefixRangeScalarFun::NAME)) {
+		return false;
+	}
+
+	DuckLakeColumnStats column_stats(column_filter.column_type);
+	column_stats.min = file_stats.min;
+	column_stats.max = file_stats.max;
+	column_stats.has_min = file_stats.has_min;
+	column_stats.has_max = file_stats.has_max;
+
+	auto stats = column_stats.ToStats();
+	return stats &&
+	       column_filter.table_filter->CheckStatistics(context, *stats) == FilterPropagateResult::FILTER_ALWAYS_FALSE;
+}
+
+static bool CanSkipFileByRuntimeFilter(const DuckLakeFileListEntry &file_entry, const FilterPushdownInfo &filter_info,
+                                       ClientContext &context) {
 	if (file_entry.data_type != DuckLakeDataType::DATA_FILE) {
 		return false;
 	}
-	for (auto &it : filter_info.column_filters) {
-		auto &col_filter = it.second;
-		auto filter_data = DuckLakeUtil::GetOptionalDynamicFilterData(*col_filter.table_filter);
-		if (!filter_data) {
+	for (auto &entry : filter_info.column_filters) {
+		const auto &column_filter = entry.second;
+		auto stats_entry = file_entry.column_min_max.find(column_filter.column_field_index);
+		if (stats_entry == file_entry.column_min_max.end()) {
 			continue;
 		}
-		ExpressionType comparison_type;
-		Value constant;
-		{
-			lock_guard<mutex> l(filter_data->lock);
-			if (!filter_data->initialized) {
-				return false;
-			}
-			comparison_type = filter_data->comparison_type;
-			constant = filter_data->constant;
-		}
-
-		auto mm_it = file_entry.column_min_max.find(col_filter.column_field_index);
-		if (mm_it == file_entry.column_min_max.end()) {
-			continue;
-		}
-
-		// from here we'll try to cast and compare with the dynamic filter values
-		// if casts fail, just skip pruning
-		auto cast_constant_opt = constant.DefaultTryCastAs(col_filter.column_type);
-		if (!cast_constant_opt) {
-			continue;
-		}
-		auto &cast_constant = *cast_constant_opt;
-
-		switch (comparison_type) {
-		case ExpressionType::COMPARE_GREATERTHAN:
-		case ExpressionType::COMPARE_GREATERTHANOREQUALTO: {
-			const auto &max_str = mm_it->second.second;
-			if (max_str.empty()) {
-				continue;
-			}
-			auto file_max = Value(max_str).DefaultTryCastAs(col_filter.column_type);
-			if (!file_max) {
-				continue;
-			}
-			if (comparison_type == ExpressionType::COMPARE_GREATERTHAN) {
-				return !(*file_max > cast_constant);
-			}
-			return !(*file_max >= cast_constant);
-		}
-		case ExpressionType::COMPARE_LESSTHAN:
-		case ExpressionType::COMPARE_LESSTHANOREQUALTO: {
-			const auto &min_str = mm_it->second.first;
-			if (min_str.empty()) {
-				continue;
-			}
-			auto file_min = Value(min_str).DefaultTryCastAs(col_filter.column_type);
-			if (!file_min) {
-				continue;
-			}
-			if (comparison_type == ExpressionType::COMPARE_LESSTHAN) {
-				return !(*file_min < cast_constant);
-			}
-			return !(*file_min <= cast_constant);
-		}
-		default:
-			// nothing to prune
-			continue;
+		const auto &column_stats = stats_entry->second;
+		if (CanSkipFileByTopNDynamicFilter(column_stats, column_filter) ||
+		    CanSkipFileByPrefixRangeFilter(column_stats, column_filter, context)) {
+			return true;
 		}
 	}
 	return false;
@@ -279,8 +300,11 @@ ReaderInitializeType DuckLakeMultiFileReader::InitializeReader(MultiFileReaderDa
 	auto file_idx = reader.file_list_idx.GetIndex();
 
 	auto &file_entry = file_list.GetFileEntry(file_idx);
-	if (file_list.GetFilterInfo() && CanSkipFileByTopNDynamicFilter(file_entry, *file_list.GetFilterInfo(), context)) {
-		return ReaderInitializeType::SKIP_READING_FILE;
+	if (file_list.GetFilterInfo()) {
+		auto &filter_info = *file_list.GetFilterInfo();
+		if (CanSkipFileByRuntimeFilter(file_entry, filter_info, context)) {
+			return ReaderInitializeType::SKIP_READING_FILE;
+		}
 	}
 	if (!file_list.IsDeleteScan()) {
 		// regular scan - read the deletes from the delete file (if any) and apply the max row count
