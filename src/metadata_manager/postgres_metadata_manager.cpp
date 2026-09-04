@@ -105,6 +105,7 @@ string PostgresMetadataManager::GetColumnTypeInternal(const LogicalType &column_
 		return "SMALLINT";
 	case LogicalTypeId::UTINYINT:
 	case LogicalTypeId::USMALLINT:
+	case LogicalTypeId::SQLNULL:
 		return "INTEGER";
 	case LogicalTypeId::UINTEGER:
 		return "BIGINT";

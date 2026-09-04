@@ -1,0 +1,166 @@
+# name: test/sql/alter/promote_null_type.test
+# description: promote NULL-typed columns to real types
+# group: [alter]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/ducklake_promote_null.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/ducklake_promote_null', METADATA_CATALOG 'ducklake_meta')
+
+statement ok
+USE ducklake
+
+foreach inline_limit 0 10
+
+statement ok
+CALL ducklake.set_option('data_inlining_row_limit', '{inline_limit}');
+
+statement ok
+CREATE OR REPLACE TABLE t(id INTEGER, n "NULL", v "NULL", l "NULL"[], s STRUCT(x "NULL"), m MAP(VARCHAR, "NULL"));
+
+statement ok
+INSERT INTO t VALUES (1, NULL, NULL, [NULL], {'x': NULL}, MAP {'k': NULL}), (2, NULL, NULL, NULL, NULL, NULL);
+
+statement ok
+ALTER TABLE t ALTER n TYPE INTEGER
+
+statement ok
+ALTER TABLE t ALTER v TYPE VARCHAR
+
+statement ok
+ALTER TABLE t ALTER l TYPE INTEGER[]
+
+statement ok
+ALTER TABLE t ALTER s TYPE STRUCT(x VARCHAR)
+
+statement ok
+ALTER TABLE t ALTER m TYPE MAP(VARCHAR, DATE)
+
+query II
+SELECT column_name, column_type FROM (DESCRIBE t)
+----
+id	INTEGER
+n	INTEGER
+v	VARCHAR
+l	INTEGER[]
+s	STRUCT(x VARCHAR)
+m	MAP(VARCHAR, DATE)
+
+# the field ids survive the promotion
+query IIII
+SELECT column_id, column_name, column_type, parent_column FROM ducklake_meta.ducklake_column WHERE end_snapshot IS NULL AND table_id = (SELECT table_id FROM ducklake_meta.ducklake_table WHERE table_name = 't' AND end_snapshot IS NULL) ORDER BY column_id
+----
+1	id	int32	NULL
+2	n	int32	NULL
+3	v	varchar	NULL
+4	l	list	NULL
+5	element	int32	4
+6	s	struct	NULL
+7	x	varchar	6
+8	m	map	NULL
+9	key	varchar	8
+10	value	date	8
+
+statement ok
+INSERT INTO t VALUES (3, 30, 'thirty', [3, 33], {'x': 'three'}, MAP {'k': DATE '2000-03-03'}), (4, 40, 'forty', [], {'x': NULL}, MAP {})
+
+query IIIIII
+SELECT id, n, v, l, s, m FROM t ORDER BY id
+----
+1	NULL	NULL	[NULL]	{'x': NULL}	{k=NULL}
+2	NULL	NULL	NULL	NULL	NULL
+3	30	thirty	[3, 33]	{'x': three}	{k=2000-03-03}
+4	40	forty	[]	{'x': NULL}	{}
+
+query IIII
+SELECT COUNT(*), COUNT(n), COUNT(*) FILTER (WHERE n IS NULL), COUNT(*) FILTER (WHERE n > 35) FROM t
+----
+4	2	2	1
+
+query I
+SELECT id FROM t WHERE s.x = 'three'
+----
+3
+
+statement ok
+UPDATE t SET n = 10 WHERE id = 1
+
+# bounds stay unknown after promotion, filters stay exact
+query II
+SELECT min_value, max_value FROM ducklake_meta.ducklake_table_column_stats WHERE table_id = (SELECT table_id FROM ducklake_meta.ducklake_table WHERE table_name = 't' AND end_snapshot IS NULL) AND column_id = 2
+----
+NULL	NULL
+
+query I
+SELECT id FROM t WHERE n < 20
+----
+1
+
+query I
+SELECT id FROM t WHERE n > 35
+----
+4
+
+statement ok
+DELETE FROM t WHERE id = 2
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake')
+
+query IIII
+SELECT id, n, v, l FROM t ORDER BY id
+----
+1	10	NULL	[NULL]
+3	30	thirty	[3, 33]
+4	40	forty	[]
+
+# a NULL column cannot become a nested type
+statement ok
+CREATE OR REPLACE TABLE nested_target(id INTEGER, n "NULL", s STRUCT(x "NULL"))
+
+statement ok
+INSERT INTO nested_target VALUES (1, NULL, {'x': NULL})
+
+statement error
+ALTER TABLE nested_target ALTER n TYPE STRUCT(x INTEGER)
+----
+promoting a NULL column to a nested type is not supported
+
+statement error
+ALTER TABLE nested_target ALTER n TYPE MAP(VARCHAR, INTEGER)
+----
+promoting a NULL column to a nested type is not supported
+
+statement error
+ALTER TABLE nested_target ALTER s TYPE STRUCT(x INTEGER[])
+----
+promoting a NULL column to a nested type is not supported
+
+statement error
+ALTER TABLE nested_target ALTER id TYPE "NULL"
+----
+only widening type promotions are allowed
+
+endloop
+
+statement ok
+USE memory
+
+statement ok
+DETACH ducklake
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/ducklake_promote_null', METADATA_CATALOG 'ducklake_meta')
+
+query IIIIII
+SELECT id, n, v, l, s, m FROM ducklake.t ORDER BY id
+----
+1	10	NULL	[NULL]	{'x': NULL}	{k=NULL}
+3	30	thirty	[3, 33]	{'x': three}	{k=2000-03-03}
+4	40	forty	[]	{'x': NULL}	{}

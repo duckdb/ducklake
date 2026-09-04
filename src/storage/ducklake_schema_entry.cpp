@@ -9,6 +9,8 @@
 #include "duckdb/parser/parsed_data/drop_info.hpp"
 #include "duckdb/planner/parsed_data/bound_create_table_info.hpp"
 #include "storage/ducklake_catalog.hpp"
+#include "common/ducklake_types.hpp"
+#include "duckdb/parser/expression/constant_expression.hpp"
 #include "storage/ducklake_table_entry.hpp"
 #include "storage/ducklake_transaction.hpp"
 #include "storage/ducklake_view_entry.hpp"
@@ -120,6 +122,17 @@ optional_ptr<CatalogEntry> DuckLakeSchemaEntry::CreateFunction(CatalogTransactio
                                                                CreateFunctionInfo &info) {
 	unique_ptr<CatalogEntry> macro_entry;
 	auto &create_macro_info = info.Cast<CreateMacroInfo>();
+	auto version = ParentCatalog().Cast<DuckLakeCatalog>().GetDuckLakeVersion();
+	for (auto &macro : create_macro_info.macros) {
+		for (auto &type : macro->types) {
+			DuckLakeTypes::CheckSupportedType(type, version);
+		}
+		for (auto &entry : macro->default_parameters) {
+			if (entry.second->GetExpressionType() == ExpressionType::VALUE_CONSTANT) {
+				DuckLakeTypes::CheckSupportedType(entry.second->Cast<ConstantExpression>().GetValue().type(), version);
+			}
+		}
+	}
 	switch (info.type) {
 	case CatalogType::MACRO_ENTRY:
 		macro_entry = make_uniq<ScalarMacroCatalogEntry>(ParentCatalog(), *this, create_macro_info);

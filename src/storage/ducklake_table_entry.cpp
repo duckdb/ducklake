@@ -95,9 +95,7 @@ void VerifyNoNullValues(ClientContext &context, DuckLakeTransaction &transaction
 constexpr column_t DuckLakeMultiFileReader::COLUMN_IDENTIFIER_SNAPSHOT_ID;
 
 void DuckLakeTableEntry::CheckSupportedTypes() {
-	for (auto &col : columns.Logical()) {
-		DuckLakeTypes::CheckSupportedType(col.Type());
-	}
+	DuckLakeTypes::CheckSupportedTypes(columns, ParentCatalog().Cast<DuckLakeCatalog>().GetDuckLakeVersion());
 }
 
 DuckLakeTableEntry::DuckLakeTableEntry(Catalog &catalog, SchemaCatalogEntry &schema, CreateTableInfo &info,
@@ -597,11 +595,11 @@ DuckLakePartitionField GetPartitionField(DuckLakeTableEntry &table, ParsedExpres
 			                              "epoch_year, epoch_month, epoch_day, epoch_hour, and bucket are supported",
 			                              name);
 		}
+		auto &ducklake_catalog = table.ParentCatalog().Cast<DuckLakeCatalog>();
 		if (DuckLakePartitionUtils::IsEpochTransform(field.transform.type) &&
-		    !table.ParentCatalog().Cast<DuckLakeCatalog>().SupportsV1_1Metadata()) {
-			throw InvalidInputException("DuckLake 1.0 does not support the %s partition transform - attach with "
-			                            "AUTOMATIC_MIGRATION set to TRUE to migrate the catalog to a newer version",
-			                            name);
+		    !ducklake_catalog.SupportsV1_1Metadata()) {
+			ThrowUnsupportedByVersion(ducklake_catalog.GetDuckLakeVersion(),
+			                          StringUtil::Format("the %s partition transform", name));
 		}
 
 		if (args.size() != 1 || args[0].GetExpressionMutable()->GetExpressionType() != ExpressionType::COLUMN_REF) {
@@ -621,6 +619,9 @@ DuckLakePartitionField GetPartitionField(DuckLakeTableEntry &table, ParsedExpres
 		throw CatalogException("Unexpected partition key - column \"%s\" does not exist", column_name);
 	}
 	auto &col = table.GetColumn(Identifier(column_name));
+	if (col.Type().id() == LogicalTypeId::SQLNULL) {
+		throw InvalidInputException("Column \"%s\" has type NULL and cannot be used as a partition key", column_name);
+	}
 	PhysicalIndex column_index(col.StorageOid());
 	auto &field_id = table.GetFieldData().GetByRootIndex(column_index);
 	field.field_id = field_id.GetFieldIndex();
@@ -1045,6 +1046,11 @@ unique_ptr<DuckLakeFieldId> DuckLakeTableEntry::TypePromotion(const DuckLakeFiel
 	if (!TypePromotionIsAllowed(source_type, target)) {
 		throw CatalogException(
 		    "Cannot change type of column %s from %s to %s - only widening type promotions are allowed",
+		    source_id.Name(), source_type, target);
+	}
+	if (target.IsNested()) {
+		throw CatalogException(
+		    "Cannot change type of column %s from %s to %s - promoting a NULL column to a nested type is not supported",
 		    source_id.Name(), source_type, target);
 	}
 	// field id is unchanged - but the column is changed

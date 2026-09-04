@@ -376,6 +376,13 @@ unique_ptr<BaseStatistics> DuckLakeColumnStats::ToStats() const {
 		return CreateGeometryStats();
 	case LogicalTypeId::VARIANT:
 		return CreateVariantStats();
+	case LogicalTypeId::SQLNULL: {
+		auto stats = BaseStatistics::CreateEmpty(type);
+		if (!has_null_count || null_count > 0) {
+			stats.SetHasNullFast();
+		}
+		return stats.ToUnique();
+	}
 	default:
 		return nullptr;
 	}

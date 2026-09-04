@@ -42,6 +42,8 @@ string SQLiteMetadataManager::GetColumnTypeInternal(const LogicalType &column_ty
 	case LogicalTypeId::DOUBLE:
 	case LogicalTypeId::VARIANT:
 		return "VARCHAR";
+	case LogicalTypeId::SQLNULL:
+		return "INTEGER";
 	default:
 		return column_type.ToString();
 	}

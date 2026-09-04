@@ -23,7 +23,20 @@
         "test/sql/migration/v10_row_group_count.test",
         "test/sql/migration/v11_stats_exactness.test",
         "test/sql/partitioning/epoch_version_gate.test",
-        "test/sql/stats/stats_exactness_inlined.test"
+        "test/sql/stats/stats_exactness_inlined.test",
+        "test/sql/types/null_type_version_gate.test",
+        "test/sql/macros/null_default_version_gate.test"
+      ]
+    },
+    {
+      "reason": "The NULL column type was added in 1.1-dev1 and is not available when ducklake_default_version is pinned to 1.0",
+      "paths": [
+        "test/sql/types/null_type.test",
+        "test/sql/alter/promote_null_type.test",
+        "test/sql/partitioning/partition_null_type.test",
+        "test/sql/data_inlining/data_inlining_null_type.test",
+        "test/sql/add_files/add_files_null_type.test",
+        "test/sql/macros/test_null_default.test"
       ]
     },
     {

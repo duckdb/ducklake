@@ -54,4 +54,10 @@ string DuckLakeVersionToString(DuckLakeVersion version) {
 	}
 }
 
+void ThrowUnsupportedByVersion(DuckLakeVersion version, const string &feature) {
+	throw InvalidInputException("DuckLake %s does not support %s - attach with AUTOMATIC_MIGRATION set to TRUE to "
+	                            "migrate the catalog to a newer version",
+	                            DuckLakeVersionToString(version), feature);
+}
+
 } // namespace duckdb

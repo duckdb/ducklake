@@ -1,0 +1,77 @@
+# name: test/sql/types/null_type_version_gate.test
+# description: NULL-typed columns are rejected on DuckLake 1.0 catalogs
+# group: [types]
+
+require ducklake
+
+require parquet
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/ducklake_null_gate.db' AS ducklake (DATA_PATH '{DATA_PATH}/ducklake_null_gate', METADATA_CATALOG 'ducklake_null_gate_meta', DUCKLAKE_VERSION '1.0')
+
+statement ok
+USE ducklake
+
+statement ok
+CREATE TABLE t(id INTEGER);
+
+# 1.0 readers do not know the type
+statement error
+CREATE TABLE t2(id INTEGER, n "NULL");
+----
+DuckLake 1.0 does not support the NULL type
+
+statement error
+CREATE TABLE t2 AS SELECT 1 AS id, NULL AS n;
+----
+DuckLake 1.0 does not support the NULL type
+
+statement error
+CREATE TABLE t2(l "NULL"[]);
+----
+DuckLake 1.0 does not support the NULL type
+
+statement error
+ALTER TABLE t ADD COLUMN n "NULL";
+----
+DuckLake 1.0 does not support the NULL type
+
+query I
+SELECT COUNT(*) FROM ducklake_null_gate_meta.ducklake_column WHERE column_type = 'null'
+----
+0
+
+statement ok
+USE memory
+
+statement ok
+DETACH ducklake
+
+# migrating the catalog unlocks the type
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/ducklake_null_gate.db' AS ducklake (DATA_PATH '{DATA_PATH}/ducklake_null_gate', METADATA_CATALOG 'ducklake_null_gate_meta', AUTOMATIC_MIGRATION TRUE)
+
+statement ok
+USE ducklake
+
+statement ok
+ALTER TABLE t ADD COLUMN n "NULL";
+
+statement ok
+CREATE TABLE t2 AS SELECT 1 AS id, NULL AS n;
+
+statement ok
+INSERT INTO t VALUES (1, NULL), (2, NULL);
+
+query II
+SELECT id, n FROM t ORDER BY id
+----
+1	NULL
+2	NULL
+
+query I
+SELECT COUNT(*) FROM ducklake_null_gate_meta.ducklake_column WHERE column_type = 'null' AND end_snapshot IS NULL
+----
+2

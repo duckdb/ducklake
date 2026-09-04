@@ -623,6 +623,8 @@ LogicalType DuckLakeParquetTypeChecker::DeriveLogicalType(const ParquetColumn &s
 			return LogicalType::TIMESTAMP_TZ;
 		} else if (StringUtil::StartsWith(s_ele.logical_type, "UUIDType()")) {
 			return LogicalType::UUID;
+		} else if (StringUtil::StartsWith(s_ele.logical_type, "NullType()")) {
+			return LogicalType::SQLNULL;
 		} else if (StringUtil::StartsWith(s_ele.logical_type, "Geometry")) {
 			return LogicalType::GEOMETRY();
 		}

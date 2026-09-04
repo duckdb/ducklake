@@ -871,9 +871,7 @@ PhysicalOperator &DuckLakeCatalog::PlanCreateTableAs(ClientContext &context, Phy
 		root = planner.Make<DuckLakeInlineData>(root.get(), data_inlining_row_limit);
 		inline_data = root.get().Cast<DuckLakeInlineData>();
 	}
-	for (auto &col : op.info->Base().columns.Logical()) {
-		DuckLakeTypes::CheckSupportedType(col.Type());
-	}
+	DuckLakeTypes::CheckSupportedTypes(op.info->Base().columns, GetDuckLakeVersion());
 	auto table_uuid = duck_transaction.GenerateUUID();
 	auto table_data_path = duck_schema.DataPath() + DuckLakeCatalog::GeneratePathFromName(
 	                                                    table_uuid, create_info.GetTableName().GetIdentifierName());
