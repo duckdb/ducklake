@@ -20,6 +20,7 @@
 #include "duckdb/planner/operator/logical_empty_result.hpp"
 #include "duckdb/common/types/uuid.hpp"
 #include "storage/ducklake_delete.hpp"
+#include "duckdb/execution/operator/persistent/physical_merge_into.hpp"
 #include "storage/ducklake_table_entry.hpp"
 #include "storage/ducklake_schema_entry.hpp"
 #include "common/ducklake_data_file.hpp"
@@ -655,6 +656,12 @@ InsertionOrderPreservingMap<string> DuckLakeDelete::ParamsToString() const {
 }
 
 optional_ptr<PhysicalTableScan> FindDeleteSource(PhysicalOperator &plan) {
+	if (plan.type == PhysicalOperatorType::MERGE_ACTION_SOURCE) {
+		// the rows of a merge action are pushed into the source by the merge into - look for the scan in the plan
+		// that the merge into reads from
+		auto &merge_input = plan.Cast<PhysicalMergeActionSource>().merge_input;
+		return merge_input ? FindDeleteSource(*merge_input) : nullptr;
+	}
 	if (plan.type == PhysicalOperatorType::TABLE_SCAN) {
 		// does this emit the virtual columns?
 		auto &scan = plan.Cast<PhysicalTableScan>();
