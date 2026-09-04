@@ -160,7 +160,8 @@
         "test/sql/cte/materialized/materialized_cte_order_preservation.test",
         "test/sql/cte/materialized/materialized_cte_parallel_buffered.test",
         "test/optimizer/partial_aggregate_pushdown.test",
-        "test/sql/optimizer/pushdown_extract_reapplied.test"
+        "test/sql/optimizer/pushdown_extract_reapplied.test",
+        "test/sql/optimizer/topn_window_elimination_multiplicity.test"
       ]
     },
     {
@@ -934,6 +935,13 @@
       "reason": "DuckLake MERGE INTO plans use an extension sink instead of the native Insert operator.",
       "paths": [
         "test/sql/merge/merge_into_explain_analyze.test"
+      ]
+    },
+    {
+      "reason": "Nested schemas handling",
+      "paths": [
+        "test/sql/attach/attach_enums.test",
+        "test/sql/attach/deeply_nested_entries.test"
       ]
     }
   ]
