@@ -128,29 +128,38 @@ public:
 	bool IsInitialized() const {
 		return initialized;
 	}
-	idx_t DataInliningRowLimit(SchemaIndex schema_index, TableIndex table_index) const;
-	idx_t DataInliningRowLimit(ClientContext &context, SchemaIndex schema_index, TableIndex table_index) const;
+	idx_t DataInliningRowLimit(optional_ptr<DuckLakeTransaction> transaction, SchemaIndex schema_index,
+	                           TableIndex table_index) const;
+	idx_t DataInliningRowLimit(optional_ptr<DuckLakeTransaction> transaction, ClientContext &context,
+	                           SchemaIndex schema_index, TableIndex table_index) const;
 	//! Returns the inlining limit (0 if the table is not eligible)
-	idx_t GetInliningLimit(ClientContext &context, DuckLakeTableEntry &table);
-	idx_t GetTargetFileSize(ClientContext &context, SchemaIndex schema_id, TableIndex table_id) const;
-	idx_t GetTargetFileSize(ClientContext &context, DuckLakeTableEntry &table) const;
+	idx_t GetInliningLimit(DuckLakeTransaction &transaction, ClientContext &context, DuckLakeTableEntry &table) const;
+	idx_t GetTargetFileSize(optional_ptr<DuckLakeTransaction> transaction, ClientContext &context,
+	                        SchemaIndex schema_id, TableIndex table_id) const;
+	idx_t GetTargetFileSize(optional_ptr<DuckLakeTransaction> transaction, ClientContext &context,
+	                        DuckLakeTableEntry &table) const;
 	string &Separator() {
 		return separator;
 	}
+	//! Applies a committed config option to the in-memory copy
 	void SetConfigOption(const DuckLakeConfigOption &option);
-	bool TryGetConfigOption(const string &option, string &result, SchemaIndex schema_id, TableIndex table_id) const;
+	//! Options a transaction has set are visible only to it, so nullptr reads committed values only
+	bool TryGetConfigOption(optional_ptr<DuckLakeTransaction> transaction, const string &option, string &result,
+	                        SchemaIndex schema_id, TableIndex table_id) const;
 	//! Check if a config option has a table-level or schema-level override (excluding global scope)
-	bool TryGetScopedConfigOption(const string &option, string &result, SchemaIndex schema_id,
-	                              TableIndex table_id) const;
+	bool TryGetScopedConfigOption(optional_ptr<DuckLakeTransaction> transaction, const string &option, string &result,
+	                              SchemaIndex schema_id, TableIndex table_id) const;
 	template <class T>
-	T GetConfigOption(const string &option, SchemaIndex schema_id, TableIndex table_id, T default_value) const {
+	T GetConfigOption(optional_ptr<DuckLakeTransaction> transaction, const string &option, SchemaIndex schema_id,
+	                  TableIndex table_id, T default_value) const {
 		string value_str;
-		if (TryGetConfigOption(option, value_str, schema_id, table_id)) {
+		if (TryGetConfigOption(transaction, option, value_str, schema_id, table_id)) {
 			return Value(value_str).GetValue<T>();
 		}
 		return default_value;
 	}
-	bool TryGetConfigOption(const string &option, string &result, DuckLakeTableEntry &table) const;
+	bool TryGetConfigOption(optional_ptr<DuckLakeTransaction> transaction, const string &option, string &result,
+	                        DuckLakeTableEntry &table) const;
 
 	optional_ptr<BoundAtClause> CatalogSnapshot() const;
 
@@ -205,21 +214,24 @@ public:
 		return Encryption() == DuckLakeEncryption::ENCRYPTED;
 	}
 
-	bool IsCommitInfoRequired() const {
-		auto require = GetConfigOption<string>("require_commit_message", {}, {}, "false");
+	bool IsCommitInfoRequired(optional_ptr<DuckLakeTransaction> transaction) const {
+		auto require = GetConfigOption<string>(transaction, "require_commit_message", {}, {}, "false");
 		return require == "true";
 	}
 
-	void EnsureCommitInfoProvided(const DuckLakeSnapshotCommit &commit_info) const;
+	void EnsureCommitInfoProvided(optional_ptr<DuckLakeTransaction> transaction,
+	                              const DuckLakeSnapshotCommit &commit_info) const;
 
-	bool UseHiveFilePattern(bool default_value, SchemaIndex schema_id, TableIndex table_id) const {
-		auto hive_file_pattern =
-		    GetConfigOption<string>("hive_file_pattern", schema_id, table_id, default_value ? "true" : "false");
+	bool UseHiveFilePattern(optional_ptr<DuckLakeTransaction> transaction, bool default_value, SchemaIndex schema_id,
+	                        TableIndex table_id) const {
+		auto hive_file_pattern = GetConfigOption<string>(transaction, "hive_file_pattern", schema_id, table_id,
+		                                                 default_value ? "true" : "false");
 		return hive_file_pattern == "true";
 	}
 
-	bool WriteDeletionVectors(SchemaIndex schema_id, TableIndex table_id) const {
-		auto write_dv = GetConfigOption<string>("write_deletion_vectors", schema_id, table_id, "false");
+	bool WriteDeletionVectors(optional_ptr<DuckLakeTransaction> transaction, SchemaIndex schema_id,
+	                          TableIndex table_id) const {
+		auto write_dv = GetConfigOption<string>(transaction, "write_deletion_vectors", schema_id, table_id, "false");
 		return write_dv == "true";
 	}
 
@@ -317,6 +329,8 @@ private:
 	shared_ptr<DuckLakeSchemaCacheEntry> GetSchemaCacheEntry(DuckLakeTransaction &transaction,
 	                                                         DuckLakeSnapshot snapshot);
 	void LoadNameMaps(DuckLakeTransaction &transaction);
+	bool TryGetConfigOptionInScope(optional_ptr<DuckLakeTransaction> transaction, const string &option, string &result,
+	                               SchemaIndex schema_id, TableIndex table_id) const;
 	string StatsCacheKey(idx_t next_file_id, TableIndex table_id) const;
 	string SchemaCacheKey(idx_t schema_version) const;
 	ObjectCache &GetObjectCacheInstance();

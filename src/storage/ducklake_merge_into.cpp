@@ -1,4 +1,5 @@
 #include "storage/ducklake_catalog.hpp"
+#include "storage/ducklake_transaction.hpp"
 #include "duckdb/execution/physical_plan_generator.hpp"
 #include "duckdb/execution/operator/persistent/physical_merge_into.hpp"
 #include "duckdb/planner/operator/logical_merge_into.hpp"
@@ -476,6 +477,7 @@ static unique_ptr<MergeIntoOperator> DuckLakePlanMergeIntoAction(DuckLakeCatalog
                                                                  BoundMergeIntoAction &action,
                                                                  PhysicalOperator &child_plan) {
 	auto result = make_uniq<MergeIntoOperator>();
+	auto &transaction = DuckLakeTransaction::Get(context, catalog);
 
 	result->action_type = action.action_type;
 	result->condition = std::move(action.condition);
@@ -507,7 +509,7 @@ static unique_ptr<MergeIntoOperator> DuckLakePlanMergeIntoAction(DuckLakeCatalog
 
 		// maybe wrap with InlineData if we hit the row limit
 		optional_ptr<DuckLakeInlineData> inline_data_op;
-		idx_t data_inlining_row_limit = catalog.GetInliningLimit(context, ducklake_table);
+		idx_t data_inlining_row_limit = catalog.GetInliningLimit(transaction, context, ducklake_table);
 		if (data_inlining_row_limit > 0) {
 			auto &inline_op =
 			    planner.Make<DuckLakeInlineData>(update_op, data_inlining_row_limit).Cast<DuckLakeInlineData>();
@@ -581,7 +583,7 @@ static unique_ptr<MergeIntoOperator> DuckLakePlanMergeIntoAction(DuckLakeCatalog
 
 		// maybe wrap with InlineData if we hit the row limit
 		optional_ptr<DuckLakeInlineData> inline_data_op;
-		idx_t data_inlining_row_limit = catalog.GetInliningLimit(context, ducklake_table);
+		idx_t data_inlining_row_limit = catalog.GetInliningLimit(transaction, context, ducklake_table);
 		if (data_inlining_row_limit > 0) {
 			// slice to just the physical columns, because the inlined data does not have the partition columns
 			auto &expected_types = physical_copy.Cast<PhysicalCopyToFile>().expected_types;

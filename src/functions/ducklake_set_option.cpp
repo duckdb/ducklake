@@ -25,11 +25,12 @@ static void ValidateTableScope(ClientContext &context, Catalog &catalog, const s
 
 static void ValidateTablesInSchema(ClientContext &context, DuckLakeCatalog &duck_catalog,
                                    DuckLakeSchemaEntry &schema_entry, SchemaIndex override_scope_id) {
+	auto &transaction = DuckLakeTransaction::Get(context, duck_catalog);
 	schema_entry.Scan(context, CatalogType::TABLE_ENTRY, [&](CatalogEntry &entry) {
 		auto &ducklake_table = entry.Cast<DuckLakeTableEntry>();
 		string override_val;
-		if (duck_catalog.TryGetScopedConfigOption("data_inlining_row_limit", override_val, override_scope_id,
-		                                          ducklake_table.GetTableId()) &&
+		if (duck_catalog.TryGetScopedConfigOption(transaction, "data_inlining_row_limit", override_val,
+		                                          override_scope_id, ducklake_table.GetTableId()) &&
 		    std::stoull(override_val) == 0) {
 			return;
 		}

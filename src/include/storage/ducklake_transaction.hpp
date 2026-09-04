@@ -285,7 +285,11 @@ public:
 	static bool IsTransactionLocal(idx_t id) {
 		return id >= DuckLakeConstants::TRANSACTION_LOCAL_ID_START;
 	}
+	//! Stages a config option - other transactions see it when this one commits
 	void SetConfigOption(const DuckLakeConfigOption &option);
+	bool TryGetStagedConfigOption(const string &option, string &result, SchemaIndex schema_id,
+	                              TableIndex table_id) const;
+	vector<DuckLakeConfigOption> GetStagedConfigOptions() const;
 
 	void SetCommitMessage(const DuckLakeSnapshotCommit &option);
 
@@ -350,6 +354,8 @@ public:
 private:
 	void FlushChanges();
 	void FlushNameMapCacheInvalidations();
+	void WriteConfigOptions();
+	void ApplyConfigOptions();
 	static DuckLakePartitionInfo GetNewPartitionKey(DuckLakeCommitState &commit_state, DuckLakeTableEntry &table);
 	static DuckLakeSortInfo GetNewSortKey(DuckLakeCommitState &commit_state, DuckLakeTableEntry &table);
 	static DuckLakeTableInfo GetNewTable(DuckLakeCommitState &commit_state, DuckLakeTableEntry &table);
@@ -390,6 +396,9 @@ private:
 	DuckLakeNameMapSet new_name_maps;
 	//! Name maps deleted by direct metadata operations, applied to the catalog cache on commit
 	vector<MappingIndex> pending_name_map_cache_invalidations;
+	//! Config options set by this transaction, written to the metadata catalog on commit. Unlocked
+	//! because only ducklake_set_option writes them, one statement at a time.
+	vector<DuckLakeConfigOption> staged_config_options;
 
 	atomic<idx_t> catalog_version;
 };
