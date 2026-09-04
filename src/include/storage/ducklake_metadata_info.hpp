@@ -391,6 +391,13 @@ enum class DuckLakeDataType {
 	TRANSACTION_LOCAL_INLINED_DATA,
 };
 
+struct DuckLakeFileColumnStats {
+	string min;
+	string max;
+	bool has_min = false;
+	bool has_max = false;
+};
+
 struct DuckLakeFileListEntry {
 	optional_idx data_file_id;
 	DuckLakeFileData file;
@@ -408,8 +415,8 @@ struct DuckLakeFileListEntry {
 	DataFileIndex file_id;
 	//! Inlined file deletions (row positions that have been deleted and stored in the metadata database)
 	set<idx_t> inlined_file_deletions;
-	//! Column min/max values for dynamic filter pushdown
-	unordered_map<idx_t, pair<string, string>> column_min_max;
+	//! Column min/max values for runtime filter pushdown
+	unordered_map<idx_t, DuckLakeFileColumnStats> column_min_max;
 };
 
 struct DuckLakeDeleteScanEntry {
