@@ -1933,8 +1933,10 @@ void DuckLakeTransactionState::Commit(DuckLakeSnapshot transaction_snapshot,
 	SnapshotAndStats commit_stats_snapshot;
 	auto &commit_snapshot = commit_stats_snapshot.snapshot;
 	optional_ptr<vector<DuckLakeGlobalStatsInfo>> stats;
+	bool flushed_inlined = false;
 	for (idx_t i = 0; i < retry_config.max_retry_count + 1; i++) {
 		bool can_retry;
+		bool retryable_metadata_error = false;
 		auto attempt_changes = transaction_changes;
 		auto attempt_dropped_file_stats = dropped_file_stats;
 		try {
@@ -1962,34 +1964,25 @@ void DuckLakeTransactionState::Commit(DuckLakeSnapshot transaction_snapshot,
 			batch_queries += WriteSnapshotChanges(commit_state, attempt_changes, context.commit_info);
 			auto res = context.execute_commit_batch(commit_snapshot, batch_queries);
 			if (res->HasError()) {
-				res->GetErrorObject().Throw("Failed to flush changes into DuckLake: ");
+				auto &commit_error = res->GetErrorObject();
+				retryable_metadata_error = context.is_retryable_metadata_error(commit_error.RawMessage());
+				commit_error.Throw("Failed to flush changes into DuckLake: ");
 			}
-			bool flushed_inlined = !flushed_inlined_tables.empty();
+			flushed_inlined = !flushed_inlined_tables.empty();
 			context.flush_cache_if_pending();
 			context.commit_connection();
-			for (auto &entry : dropped_file_stats) {
-				context.invalidate_table_stats_cache(commit_snapshot.next_file_id, entry.first);
-			}
-			if (flushed_inlined && !context.skip_drop_empty_inlined) {
-				DropEmptySupersededInlinedTables(context);
-			}
-			context.set_catalog_version(commit_snapshot.schema_version);
-			if (SchemaChangesMade()) {
-				// No-op if the previous schema version doesn't exist in cache.
-				context.invalidate_schema_cache(commit_snapshot.schema_version - 1);
-			}
-
-			// finished writing
 			break;
 		} catch (std::exception &ex) {
 			ErrorData error(ex);
 			// rollback if there is an active transaction
 			context.try_rollback();
-			bool retry_on_error = DuckLakeTransaction::RetryOnError(error.Message());
+			retryable_metadata_error = retryable_metadata_error || context.is_retryable_metadata_error(error.Message());
+			bool retry_on_error =
+			    retryable_metadata_error || (can_retry && DuckLakeTransaction::RetryOnError(error.Message()));
 			// We perform one initial attempt plus up to max_retry_count retries. Since i is the
 			// zero-based attempt index, we are done retrying once i reaches max_retry_count.
 			bool finished_retrying = i >= retry_config.max_retry_count;
-			if (!can_retry || !retry_on_error || finished_retrying) {
+			if (!retry_on_error || finished_retrying) {
 				// we abort after the max retry count
 				CleanupFiles();
 				// Add additional information on the number of retries and suggest to increase it
@@ -2020,6 +2013,21 @@ void DuckLakeTransactionState::Commit(DuckLakeSnapshot transaction_snapshot,
 	}
 	// If we got here, this snapshot was successful
 	context.set_committed_snapshot_id(commit_snapshot.snapshot_id);
+	for (auto &entry : dropped_file_stats) {
+		context.invalidate_table_stats_cache(commit_snapshot.next_file_id, entry.first);
+	}
+	if (flushed_inlined && !context.skip_drop_empty_inlined) {
+		try {
+			DropEmptySupersededInlinedTables(context);
+		} catch (std::exception &ex) {
+			context.report_post_commit_error(ErrorData(ex).Message());
+		}
+	}
+	context.set_catalog_version(commit_snapshot.schema_version);
+	if (SchemaChangesMade()) {
+		// No-op if the previous schema version doesn't exist in cache.
+		context.invalidate_schema_cache(commit_snapshot.schema_version - 1);
+	}
 }
 
 } // namespace duckdb
