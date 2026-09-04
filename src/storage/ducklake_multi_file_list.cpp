@@ -324,7 +324,6 @@ unique_ptr<DuckLakeFilterNode> DuckLakeMultiFileList::BuildFilterTree(ClientCont
 			if (node->type == DuckLakeFilterNodeType::MATCH_NONE) {
 				// a branch that matches nothing drops out of a disjunction and decides a conjunction
 				if (is_or) {
-					state.removed_branch = true;
 					continue;
 				}
 				return node;
@@ -415,8 +414,8 @@ unique_ptr<MultiFileList> DuckLakeMultiFileList::ComplexFilterPushdown(ClientCon
 		}
 		unordered_set<idx_t> columns;
 		GetFilterTreeColumns(*root, columns);
-		if (columns.size() < 2 && !state.removed_branch) {
-			// a disjunction over a single column is already covered by the per-column filters
+		if (columns.size() < 2 && CombineFilterNode(context, info, *filter)) {
+			// the combiner reduced the whole disjunction to its one column, so it is already pushed down
 			continue;
 		}
 		DuckLakeFilterTree tree;

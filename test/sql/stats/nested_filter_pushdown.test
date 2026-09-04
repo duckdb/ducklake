@@ -53,6 +53,12 @@ EXPLAIN ANALYZE SELECT COUNT(*) FROM ducklake.t WHERE st.a = 50 OR id = 250;
 ----
 analyzed_plan	<REGEX>:.*Total Files Read: 2.*
 
+# struct keys are matched case-insensitively, so the field resolves regardless of how it is written
+query II
+EXPLAIN ANALYZE SELECT COUNT(*) FROM ducklake.t WHERE st.A = 50;
+----
+analyzed_plan	<REGEX>:.*Total Files Read: 1.*
+
 # a struct added after the files were written has no stats, so nothing may be pruned
 statement ok
 ALTER TABLE ducklake.t ADD COLUMN st.c INTEGER;

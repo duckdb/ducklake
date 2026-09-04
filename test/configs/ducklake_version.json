@@ -17,10 +17,13 @@
     {
       "reason": "This test exercises the ducklake_version feature directly and assumes no global default is set",
       "paths": [
+        "test/sql/add_files/add_files_stats_exactness.test",
         "test/sql/attach/attach_ducklake_version.test",
         "test/sql/metadata/row_group_count.test",
         "test/sql/migration/v10_row_group_count.test",
-        "test/sql/partitioning/epoch_version_gate.test"
+        "test/sql/migration/v11_stats_exactness.test",
+        "test/sql/partitioning/epoch_version_gate.test",
+        "test/sql/stats/stats_exactness_inlined.test"
       ]
     },
     {

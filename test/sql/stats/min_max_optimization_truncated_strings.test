@@ -1,0 +1,70 @@
+# name: test/sql/stats/min_max_optimization_truncated_strings.test
+# description: String MIN/MAX must not be answered from truncated metadata bounds
+# group: [stats]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+SET profiling_renderer_settings = MAP {'operator_casing': 'upper'};
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/min_max_truncated_strings')
+
+# parquet truncates string min/max stats beyond 256 bytes
+statement ok
+CREATE TABLE ducklake.long_strings(i INTEGER, v VARCHAR);
+
+statement ok
+INSERT INTO ducklake.long_strings SELECT i, repeat('a', 300) || 'z' FROM range(20) t(i);
+
+query II
+SELECT length(MIN(v)), length(MAX(v)) FROM ducklake.long_strings;
+----
+301	301
+
+query I
+SELECT MIN(v) = repeat('a', 300) || 'z' FROM ducklake.long_strings;
+----
+true
+
+# the stored bounds are truncated but remain valid bounds
+query II
+SELECT length(min_value), length(max_value) FROM __ducklake_metadata_ducklake.ducklake_table_column_stats WHERE column_id = 2;
+----
+256	256
+
+# string MIN/MAX falls back to a scan, numeric MIN/MAX is still folded
+query II
+EXPLAIN ANALYZE SELECT MIN(v), MAX(v) FROM ducklake.long_strings;
+----
+analyzed_plan	<REGEX>:.*TABLE_SCAN.*
+
+query II
+EXPLAIN ANALYZE SELECT MIN(i), MAX(i) FROM ducklake.long_strings;
+----
+analyzed_plan	<!REGEX>:.*TABLE_SCAN.*
+
+# subsequent inserts keep widening the bounds correctly
+statement ok
+INSERT INTO ducklake.long_strings VALUES (100, 'b');
+
+query II
+SELECT length(MIN(v)), MAX(v) FROM ducklake.long_strings;
+----
+301	b
+
+query I
+SELECT COUNT(*) FROM ducklake.long_strings WHERE v = repeat('a', 300) || 'z';
+----
+20
+
+query I
+SELECT COUNT(*) FROM ducklake.long_strings WHERE v > repeat('a', 300);
+----
+21

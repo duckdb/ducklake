@@ -15,6 +15,7 @@
 #include "duckdb/planner/operator/logical_filter.hpp"
 #include "duckdb/planner/filter/expression_filter.hpp"
 #include "duckdb/planner/filter/table_filter_functions.hpp"
+#include "duckdb/function/scalar/struct_utils.hpp"
 #include "duckdb/function/scalar/variant_utils.hpp"
 #include "duckdb/main/client_context.hpp"
 #include "storage/ducklake_catalog.hpp"
@@ -291,7 +292,7 @@ string ToByteaHexLiteral(const string &raw_bytes) {
 string DuckLakeUtil::ValueToSQL(DuckLakeMetadataManager &metadata_manager, ClientContext &context, const Value &val) {
 	// FIXME: this should be upstreamed
 	if (val.IsNull()) {
-		return val.ToSQLString();
+		return val.ToString();
 	}
 	if (val.type().HasAlias()) {
 		// extension type: cast to string
@@ -400,25 +401,12 @@ bool DuckLakeUtil::IsStructExtract(const Expression &expr) {
 		return false;
 	}
 	auto &func = expr.Cast<BoundFunctionExpression>();
-	auto &name = func.Function().GetName();
-	if ((name != "struct_extract" && name != "struct_extract_at") || func.GetChildren().size() != 2 ||
-	    func.GetChildren()[1]->GetExpressionClass() != ExpressionClass::BOUND_CONSTANT) {
+	// stats are stored against a named field, so an unnamed struct (TUPLE) has nothing to resolve against
+	if (func.GetChildren().empty() || func.GetChildren()[0]->GetReturnType().id() != LogicalTypeId::STRUCT) {
 		return false;
 	}
-	auto &key = func.GetChildren()[1]->Cast<BoundConstantExpression>().GetValue();
-	if (key.IsNull()) {
-		return false;
-	}
-	if (name == "struct_extract") {
-		return key.type().id() == LogicalTypeId::VARCHAR;
-	}
-	// struct_extract_at takes a one-based position, which only resolves against a struct of known width
-	auto &input_type = func.GetChildren()[0]->GetReturnType();
-	if (!key.type().IsIntegral() || input_type.id() != LogicalTypeId::STRUCT) {
-		return false;
-	}
-	auto position = key.GetValue<int64_t>();
-	return position >= 1 && static_cast<idx_t>(position) <= StructType::GetChildCount(input_type);
+	idx_t position;
+	return TryGetStructExtractChildIndex(func, position);
 }
 
 //! Walk to the sub-expressions a filter reads a column through, without descending into them
@@ -450,14 +438,11 @@ const Expression &DuckLakeUtil::GetFilterSubjectPath(const Expression &subject, 
 	reference<const Expression> current = subject;
 	while (IsStructExtract(current.get())) {
 		auto &func = current.get().Cast<BoundFunctionExpression>();
-		auto &key = func.GetChildren()[1]->Cast<BoundConstantExpression>().GetValue();
 		auto &input_type = func.GetChildren()[0]->GetReturnType();
-		if (key.type().id() == LogicalTypeId::VARCHAR) {
-			path.push_back(StringValue::Get(key));
-		} else {
-			auto position = static_cast<idx_t>(key.GetValue<int64_t>() - 1);
-			path.push_back(StructType::GetChildName(input_type, position).GetIdentifierName());
-		}
+		// the key is matched case-insensitively at bind time, so take the name from the struct type
+		idx_t position;
+		TryGetStructExtractChildIndex(func, position);
+		path.push_back(StructType::GetChildName(input_type, position).GetIdentifierName());
 		current = *func.GetChildren()[0];
 	}
 	return current.get();

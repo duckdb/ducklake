@@ -25,6 +25,7 @@
 
 #include <chrono>
 #include <functional>
+#include <mutex>
 
 namespace duckdb {
 struct DuckLakeGlobalStatsInfo;
@@ -267,6 +268,10 @@ public:
 		return Value();
 	}
 
+	std::recursive_mutex &GetMetadataQueryLock() {
+		return metadata_query_lock;
+	}
+
 	shared_ptr<const DuckLakeNameMap> TryGetMappingById(DuckLakeTransaction &transaction, MappingIndex mapping_id);
 	MappingIndex TryGetCompatibleNameMap(DuckLakeTransaction &transaction, const DuckLakeNameMap &name_map);
 	idx_t GetBeginSnapshotForTable(TableIndex table_id, DuckLakeTransaction &transaction);
@@ -354,6 +359,8 @@ private:
 	//! The id of the last committed snapshot, set at FlushChanges on a successful commit
 	mutable mutex commit_lock;
 	optional_idx last_committed_snapshot;
+	//! Serializes metadata statements on the shared metadata connection
+	std::recursive_mutex metadata_query_lock;
 	//! Optional callback for instrumenting metadata queries
 	QueryCallback query_callback;
 };

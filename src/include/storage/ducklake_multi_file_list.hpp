@@ -78,7 +78,7 @@ private:
 	//! Reduce an expression to per-column filters using the FilterCombiner
 	unique_ptr<DuckLakeFilterNode> CombineFilterNode(ClientContext &context, MultiFilePushdownInfo &info,
 	                                                 const Expression &expr) const;
-	//! Budgets for building one filter tree, and what the walk found that per-column filters cannot express
+	//! Budgets for building one filter tree
 	struct FilterTreeState {
 		//! Bounds how much of the expression we walk - every step runs a FilterCombiner over it
 		static constexpr idx_t MAX_VISITED_NODES = 64;
@@ -91,8 +91,6 @@ private:
 		idx_t leaves = 0;
 		//! Set when a budget runs out - the tree is then dropped rather than kept half-built
 		bool exhausted = false;
-		//! Set when a branch matching nothing was dropped from a disjunction, which only a tree expresses
-		bool removed_branch = false;
 
 		bool VisitNode();
 		bool AddLeaves(const DuckLakeFilterNode &node);
