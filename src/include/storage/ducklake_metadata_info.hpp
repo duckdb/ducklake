@@ -572,6 +572,14 @@ struct DuckLakeConfigOption {
 	TableIndex table_id;
 };
 
+//! What a config option held before a transaction set it, so a rollback can put it back
+struct DuckLakeConfigOptionUndo {
+	//! the option as written, whose value the undo compares against
+	DuckLakeConfigOption option;
+	string previous_value;
+	bool was_set = false;
+};
+
 struct DuckLakeNameMapColumnInfo {
 	idx_t column_id;
 	string source_name;

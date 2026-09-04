@@ -122,6 +122,7 @@ DuckLakeColumnStats DuckLakeInsert::ParseColumnStats(const LogicalType &type, co
 
 void DuckLakeInsert::AddWrittenFiles(DuckLakeInsertGlobalState &global_state, DataChunk &chunk,
                                      const string &encryption_key, optional_idx partition_id, bool set_snapshot_id) {
+	auto skipped_fields = global_state.table.GetSkippedStatsFields();
 	for (idx_t r = 0; r < chunk.size(); r++) {
 		DuckLakeDataFile data_file;
 		data_file.file_name = chunk.GetValue(0, r).GetValue<string>();
@@ -209,6 +210,9 @@ void DuckLakeInsert::AddWrittenFiles(DuckLakeInsertGlobalState &global_state, Da
 				}
 			}
 
+			if (skipped_fields.count(field_id.GetFieldIndex().index)) {
+				column_stats.ClearBounds();
+			}
 			data_file.column_stats.insert(make_pair(field_id.GetFieldIndex(), std::move(column_stats)));
 		}
 		// finalize variant stats

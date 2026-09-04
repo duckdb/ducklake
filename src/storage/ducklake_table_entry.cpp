@@ -1,3 +1,4 @@
+#include "duckdb/common/operator/cast_operators.hpp"
 #include "common/ducklake_types.hpp"
 #include "duckdb/catalog/catalog.hpp"
 #include "duckdb/catalog/catalog_entry/schema_catalog_entry.hpp"
@@ -659,6 +660,17 @@ unique_ptr<CatalogEntry> DuckLakeTableEntry::AlterTable(DuckLakeTransaction &tra
 	if (PartitionFieldsMatch(GetPartitionData(), *partition_data)) {
 		return nullptr;
 	}
+	// partitioning relies on the column's bounds to prune files
+	auto skipped_fields = GetSkippedStatsFields();
+	for (auto &field : partition_data->fields) {
+		if (skipped_fields.count(field.field_id.index)) {
+			auto field_id = field_data->GetByFieldIndex(field.field_id);
+			throw InvalidInputException("Cannot partition by column \"%s\" - it is listed in the "
+			                            "'skip_stats_columns' option of table \"%s\"",
+			                            field_id ? field_id->Name() : to_string(field.field_id.index),
+			                            name.GetIdentifierName());
+		}
+	}
 
 	auto new_entry = make_uniq<DuckLakeTableEntry>(*this, table_info, std::move(partition_data));
 	return std::move(new_entry);
@@ -1087,6 +1099,7 @@ unique_ptr<CatalogEntry> DuckLakeTableEntry::AlterTable(DuckLakeTransaction &tra
 		RequireNextColumnId(transaction);
 	}
 	auto new_field_id = TypePromotion(field_id, info.target_type, *change_info, optional_idx());
+	ValidateAddedFieldsCanSkipStats(field_id, *new_field_id);
 
 	// generate a new column list with the modified type
 	ColumnList new_columns;
@@ -1174,6 +1187,8 @@ unique_ptr<CatalogEntry> DuckLakeTableEntry::AlterTable(DuckLakeTransaction &tra
 	auto next_field_id = next_column_id.GetIndex();
 	auto child_field_id = DuckLakeFieldId::FieldIdFromColumn(info.new_field, next_field_id);
 	next_column_id = next_field_id;
+
+	ValidateAddedFieldsCanSkipStats(parent_id, *child_field_id);
 
 	// generate the new to-be-inserted columns
 	AddNewColumns(*child_field_id, change_info->new_fields, parent_id.GetFieldIndex());
@@ -1422,6 +1437,65 @@ unique_ptr<CatalogEntry> DuckLakeTableEntry::Alter(DuckLakeTransaction &transact
 	auto new_entry =
 	    make_uniq<DuckLakeTableEntry>(*this, table_info, LocalChange::SetColumnComment(field_id.GetFieldIndex()));
 	return std::move(new_entry);
+}
+
+optional_ptr<const DuckLakeFieldId> FindStatsUnsupportedField(const DuckLakeFieldId &field_id) {
+	auto type_id = field_id.Type().id();
+	if (type_id == LogicalTypeId::GEOMETRY || type_id == LogicalTypeId::VARIANT) {
+		return field_id;
+	}
+	for (auto &child : field_id.Children()) {
+		auto result = FindStatsUnsupportedField(*child);
+		if (result) {
+			return result;
+		}
+	}
+	return nullptr;
+}
+
+static void AddFieldAndChildren(const DuckLakeFieldId &field_id, unordered_set<idx_t> &result) {
+	result.insert(field_id.GetFieldIndex().index);
+	for (auto &child : field_id.Children()) {
+		AddFieldAndChildren(*child, result);
+	}
+}
+
+void DuckLakeTableEntry::ValidateAddedFieldsCanSkipStats(const DuckLakeFieldId &parent_id,
+                                                         const DuckLakeFieldId &new_field_id) const {
+	auto unsupported = FindStatsUnsupportedField(new_field_id);
+	if (!unsupported || !GetSkippedStatsFields().count(parent_id.GetFieldIndex().index)) {
+		return;
+	}
+	// a field below a skipped column inherits the skip, which set_option refuses for these types
+	throw NotImplementedException("Cannot give column \"%s\" a %s field (\"%s\") - it is listed in the "
+	                              "'skip_stats_columns' option, and statistics cannot be skipped for that type",
+	                              parent_id.Name(), unsupported->Type().ToString(), unsupported->Name());
+}
+
+unordered_set<idx_t> DuckLakeTableEntry::GetSkippedStatsFields() const {
+	unordered_set<idx_t> result;
+	auto &catalog = ParentCatalog().Cast<DuckLakeCatalog>();
+	string option_value;
+	// a field id names a different column in each table, so only this table's own row can apply
+	if (!catalog.TryGetTableConfigOption("skip_stats_columns", option_value, GetTableId())) {
+		return result;
+	}
+	// re-read on every write to this table - unusable entries are ignored, never raised
+	auto entries = StringUtil::Split(option_value, ',');
+	result.reserve(entries.size());
+	for (auto &entry : entries) {
+		idx_t field_index;
+		if (!TryCast::Operation<string_t, idx_t>(string_t(entry), field_index)) {
+			continue;
+		}
+		auto field_id = field_data->GetByFieldIndex(FieldIndex(field_index));
+		if (!field_id) {
+			continue;
+		}
+		// skipping a field skips everything underneath it
+		AddFieldAndChildren(*field_id, result);
+	}
+	return result;
 }
 
 DuckLakeColumnInfo DuckLakeTableEntry::GetColumnInfo(FieldIndex field_index) const {

@@ -263,7 +263,7 @@ DuckLakeColumnStats GetVectorStats(Vector &input_vec, idx_t row_count) {
 }
 
 void UpdateStats(vector<DuckLakeBaseColumnStats> &stats, idx_t c, Vector &data, idx_t row_count,
-                 const DuckLakeFieldId &field_id) {
+                 const DuckLakeFieldId &field_id, const unordered_set<idx_t> &skipped_fields) {
 	if (c >= stats.size()) {
 		if (c != stats.size()) {
 			throw InternalException("Column stats not accessed in order?");
@@ -279,21 +279,22 @@ void UpdateStats(vector<DuckLakeBaseColumnStats> &stats, idx_t c, Vector &data, 
 			auto &children = StructVector::GetEntries(data);
 			for (idx_t child_idx = 0; child_idx < children.size(); child_idx++) {
 				UpdateStats(column_stats.children, child_idx, children[child_idx], row_count,
-				            field_id.GetChildByIndex(child_idx));
+				            field_id.GetChildByIndex(child_idx), skipped_fields);
 			}
 			break;
 		}
 		case LogicalTypeId::LIST: {
 			auto &child = ListVector::GetChildMutable(data);
-			UpdateStats(column_stats.children, 0, child, ListVector::GetListSize(data), field_id.GetChildByIndex(0));
+			UpdateStats(column_stats.children, 0, child, ListVector::GetListSize(data), field_id.GetChildByIndex(0),
+			            skipped_fields);
 			break;
 		}
 		case LogicalTypeId::MAP: {
 			auto &keys = MapVector::GetKeys(data);
 			auto &values = MapVector::GetValues(data);
 			auto map_size = ListVector::GetListSize(data);
-			UpdateStats(column_stats.children, 0, keys, map_size, field_id.GetChildByIndex(0));
-			UpdateStats(column_stats.children, 1, values, map_size, field_id.GetChildByIndex(1));
+			UpdateStats(column_stats.children, 0, keys, map_size, field_id.GetChildByIndex(0), skipped_fields);
+			UpdateStats(column_stats.children, 1, values, map_size, field_id.GetChildByIndex(1), skipped_fields);
 			break;
 		}
 		default:
@@ -302,6 +303,9 @@ void UpdateStats(vector<DuckLakeBaseColumnStats> &stats, idx_t c, Vector &data, 
 		return;
 	}
 	auto new_stats = GetVectorStats(data, row_count);
+	if (skipped_fields.count(field_id.GetFieldIndex().index)) {
+		new_stats.ClearBounds();
+	}
 	if (column_stats.has_stats) {
 		column_stats.stats.MergeStats(new_stats);
 	} else {
@@ -351,9 +355,11 @@ OperatorFinalResultType DuckLakeInlineData::OperatorFinalize(Pipeline &pipeline,
 	// compute the column stats for the data
 	vector<DuckLakeBaseColumnStats> new_stats;
 	auto &field_data = table.GetFieldData();
+	auto skipped_fields = table.GetSkippedStatsFields();
 	for (auto &chunk : inlined_data.Chunks()) {
 		for (idx_t c = 0; c < physical_col_count; c++) {
-			UpdateStats(new_stats, c, chunk.data[c], chunk.size(), field_data.GetByRootIndex(PhysicalIndex(c)));
+			UpdateStats(new_stats, c, chunk.data[c], chunk.size(), field_data.GetByRootIndex(PhysicalIndex(c)),
+			            skipped_fields);
 		}
 	}
 	// set the final stats and verify NOT NULL constraints

@@ -768,23 +768,38 @@ const case_insensitive_map_t<unique_ptr<DuckLakeCatalogSet>> &DuckLakeTransactio
 void DuckLakeTransaction::Start() {
 }
 
+void DuckLakeTransaction::UndoConfigOptions() {
+	for (auto it = config_option_undo.rbegin(); it != config_option_undo.rend(); ++it) {
+		ducklake_catalog.UndoConfigOption(*it);
+	}
+	config_option_undo.clear();
+}
+
 void DuckLakeTransaction::Commit() {
-	if (ChangesMade()) {
-		FlushChanges();
-	} else if (connection) {
-		connection->Commit();
-		if (!state->flushed_inlined_tables.empty()) {
-			DropEmptySupersededInlinedTablesClientSide();
+	try {
+		if (ChangesMade()) {
+			FlushChanges();
+		} else if (connection) {
+			connection->Commit();
+			if (!state->flushed_inlined_tables.empty()) {
+				DropEmptySupersededInlinedTablesClientSide();
+			}
 		}
+	} catch (...) {
+		// a failed commit never reaches Rollback - the transaction manager only reports the error
+		UndoConfigOptions();
+		throw;
 	}
 	FlushNameMapCacheInvalidations();
 	connection.reset();
 	state->local_changes.Clear();
+	config_option_undo.clear();
 	SetRequiresNewInlinedTable(false);
 	ClearSchemaCachePins();
 }
 
 void DuckLakeTransaction::Rollback() {
+	UndoConfigOptions();
 	if (connection) {
 		// rollback any changes made to the metadata catalog
 		connection->Rollback();
@@ -1574,8 +1589,8 @@ void DuckLakeTransaction::RunCommitLoop(DuckLakeSnapshot transaction_snapshot,
 void DuckLakeTransaction::SetConfigOption(const DuckLakeConfigOption &option) {
 	// write the config option to the metadata
 	metadata_manager->SetConfigOption(option);
-	// set the option in the catalog
-	ducklake_catalog.SetConfigOption(option);
+	// the catalog copy is not transactional - remember the previous value so a rollback can restore it
+	config_option_undo.push_back(ducklake_catalog.SetConfigOption(option));
 }
 
 DuckLakeSnapshotCommit &DuckLakeTransaction::GetCommitInfo() {

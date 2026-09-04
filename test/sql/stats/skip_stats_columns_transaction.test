@@ -1,0 +1,136 @@
+# name: test/sql/stats/skip_stats_columns_transaction.test
+# description: skip_stats_columns across rollback and across connections
+# group: [stats]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/skip_stats_columns_transaction.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok con1
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/skip_stats_columns_transaction', METADATA_CATALOG 'ducklake_meta', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok con1
+CREATE TABLE ducklake.rb(id INTEGER, s VARCHAR)
+
+# a rolled back set_option leaves the bounds on
+statement ok con1
+BEGIN
+
+statement ok con1
+CALL ducklake.set_option('skip_stats_columns', 's', table_name => 'rb')
+
+statement ok con1
+ROLLBACK
+
+statement ok con1
+INSERT INTO ducklake.rb VALUES (1, 'aaa')
+
+query III con1
+SELECT column_id, min_value, max_value FROM ducklake_meta.ducklake_file_column_stats ORDER BY column_id
+----
+1	1	1
+2	aaa	aaa
+
+query I con1
+SELECT count(*) FROM ducklake.options() WHERE option_name='skip_stats_columns'
+----
+0
+
+# and a rolled back change puts back the value it replaced
+statement ok con1
+CALL ducklake.set_option('skip_stats_columns', 's', table_name => 'rb')
+
+statement ok con1
+BEGIN
+
+statement ok con1
+CALL ducklake.set_option('skip_stats_columns', [], table_name => 'rb')
+
+statement ok con1
+ROLLBACK
+
+statement ok con1
+INSERT INTO ducklake.rb VALUES (9, 'zzz')
+
+query II con1
+SELECT min_value, max_value FROM ducklake_meta.ducklake_file_column_stats
+WHERE column_id=2 AND data_file_id=(SELECT max(data_file_id) FROM ducklake_meta.ducklake_data_file)
+----
+NULL	NULL
+
+# a rollback must not take away a value another transaction set in the meantime. Updating an
+# existing row conflicts in the metadata catalog, so the two only meet when there is no row yet
+statement ok con1
+CREATE TABLE ducklake.cc(id INTEGER, s VARCHAR)
+
+statement ok con1
+BEGIN
+
+statement ok con1
+CALL ducklake.set_option('skip_stats_columns', 'id', table_name => 'cc')
+
+statement ok con2
+CALL ducklake.set_option('skip_stats_columns', 's', table_name => 'cc')
+
+statement ok con1
+ROLLBACK
+
+statement ok con1
+INSERT INTO ducklake.cc VALUES (1, 'aaa')
+
+# con2 committed 's', so its bounds are the ones that must be missing
+query III con1
+SELECT f.column_id, f.min_value IS NULL, f.max_value IS NULL
+FROM ducklake_meta.ducklake_file_column_stats f JOIN ducklake_meta.ducklake_data_file d USING (data_file_id)
+WHERE d.table_id=(SELECT table_id FROM ducklake_meta.ducklake_table WHERE table_name='cc' AND end_snapshot IS NULL)
+ORDER BY f.column_id
+----
+1	false	false
+2	true	true
+
+# the option belongs to the catalog, not the connection that set it
+statement ok con2
+INSERT INTO ducklake.rb VALUES (2, 'bbb')
+
+query II con2
+SELECT min_value, max_value FROM ducklake_meta.ducklake_file_column_stats
+WHERE column_id=2 AND data_file_id=(SELECT max(data_file_id) FROM ducklake_meta.ducklake_data_file)
+----
+NULL	NULL
+
+# a failed commit never reaches Rollback, so it has to put the option back itself
+statement ok con1
+CREATE TABLE ducklake.fc(id INTEGER, s VARCHAR)
+
+statement ok con1
+BEGIN
+
+statement ok con1
+CALL ducklake.set_option('skip_stats_columns', 's', table_name => 'fc')
+
+statement ok con1
+ALTER TABLE ducklake.fc RENAME COLUMN s TO x
+
+statement ok con2
+ALTER TABLE ducklake.fc RENAME COLUMN s TO y
+
+statement error con1
+COMMIT
+----
+another transaction has altered it
+
+statement ok con1
+INSERT INTO ducklake.fc VALUES (1, 'aaa')
+
+query III con1
+SELECT f.column_id, f.min_value, f.max_value
+FROM ducklake_meta.ducklake_file_column_stats f JOIN ducklake_meta.ducklake_data_file d USING (data_file_id)
+WHERE d.table_id=(SELECT table_id FROM ducklake_meta.ducklake_table WHERE table_name='fc' AND end_snapshot IS NULL)
+ORDER BY f.column_id
+----
+1	1	1
+2	aaa	aaa

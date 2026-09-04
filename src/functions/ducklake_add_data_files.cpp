@@ -106,6 +106,8 @@ struct ParquetColumn {
 	optional_idx precision;
 	optional_idx field_id;
 	string logical_type;
+	//! Set when the field mapping is made - see the skip_stats_columns option
+	bool skip_bounds = false;
 	vector<DuckLakeColumnStats> column_stats;
 
 	vector<unique_ptr<ParquetColumn>> child_columns;
@@ -156,7 +158,8 @@ public:
 	DuckLakeFileProcessor(DuckLakeTransaction &transaction, ClientContext &context,
 	                      const DuckLakeAddDataFilesData &bind_data)
 	    : transaction(transaction), context(context), table(bind_data.table), allow_missing(bind_data.allow_missing),
-	      ignore_extra_columns(bind_data.ignore_extra_columns), hive_partitioning(bind_data.hive_partitioning) {
+	      ignore_extra_columns(bind_data.ignore_extra_columns), hive_partitioning(bind_data.hive_partitioning),
+	      skipped_fields(bind_data.table.GetSkippedStatsFields()) {
 	}
 
 	vector<DuckLakeDataFile> AddFiles(const vector<string> &globs);
@@ -190,6 +193,7 @@ private:
 	map<string, string> hive_partitions;
 	HivePartitioningType hive_partitioning;
 	unordered_set<string> processed_files;
+	unordered_set<idx_t> skipped_fields;
 };
 
 void DuckLakeFileProcessor::ReadParquetFullMetadata(const string &glob, vector<DuckLakeDataFile> &written_files) {
@@ -461,15 +465,16 @@ FROM parquet_full_metadata(%s)
 			auto &column = column_entry->second.get();
 			auto &column_field = column_field_entry->second;
 			DuckLakeColumnStats stats(column_field.second);
-
-			if (stats_min_validity.RowIsValid(metadata_idx)) {
+			// min/max are copied out of the footer here, once per row group, so a skipped column
+			// never materializes them - the geo bbox below is untouched, as ClearBounds was too
+			if (!column.skip_bounds && stats_min_validity.RowIsValid(metadata_idx)) {
 				stats.has_min = true;
 				stats.min = stats_min_data[metadata_idx].GetString();
 				// files without the footer flag conservatively count as truncated
 				stats.min_is_exact = min_is_exact_validity.RowIsValid(metadata_idx) && min_is_exact_data[metadata_idx];
 			}
 
-			if (stats_max_validity.RowIsValid(metadata_idx)) {
+			if (!column.skip_bounds && stats_max_validity.RowIsValid(metadata_idx)) {
 				stats.has_max = true;
 				stats.max = stats_max_data[metadata_idx].GetString();
 				stats.max_is_exact = max_is_exact_validity.RowIsValid(metadata_idx) && max_is_exact_data[metadata_idx];
@@ -919,6 +924,7 @@ unique_ptr<DuckLakeNameMapEntry> DuckLakeFileProcessor::MapColumn(ParquetFileMet
 	// Store the mapping from column to field for later statistics processing
 	file_metadata.column_id_to_field_map.emplace(column.column_id,
 	                                             make_pair(field_id.GetFieldIndex(), field_id.Type()));
+	column.skip_bounds = skipped_fields.count(field_id.GetFieldIndex().index) > 0;
 
 	// recursively remap children (if any)
 	if (field_id.HasChildren()) {
@@ -1063,7 +1069,6 @@ void DuckLakeFileProcessor::MapColumnStats(ParquetFileMetadata &file_metadata, D
 				}
 			}
 
-			numeric_type = aggregated.type.IsNumeric();
 			Value numeric_min_cache;
 			Value numeric_max_cache;
 			bool min_cache_valid = false;
@@ -1160,14 +1165,15 @@ void DuckLakeFileProcessor::MapColumnStats(ParquetFileMetadata &file_metadata, D
 		column_stats.has_num_values = true;
 		column_stats.num_values = file_metadata.row_count.GetIndex();
 		column_stats.has_null_count = true;
-		if (!hive_value.IsNull()) {
-			column_stats.min = column_stats.max = hive_value.ToString();
-			column_stats.has_min = column_stats.has_max = true;
-			column_stats.min_is_exact = column_stats.max_is_exact = true;
-		} else {
+		if (hive_value.IsNull()) {
 			// All rows in this file have NULL for this partition column
 			column_stats.null_count = file_metadata.row_count.GetIndex();
 			column_stats.any_valid = false;
+		} else if (!skipped_fields.count(field_index.index)) {
+			// a skipped column records counts but not the folder value
+			column_stats.min = column_stats.max = hive_value.ToString();
+			column_stats.has_min = column_stats.has_max = true;
+			column_stats.min_is_exact = column_stats.max_is_exact = true;
 		};
 
 		result.column_stats.emplace(field_index, std::move(column_stats));

@@ -940,51 +940,73 @@ optional_idx DuckLakeCatalog::GetCatalogVersion(ClientContext &context) {
 	return DuckLakeTransaction::Get(context, *this).GetCatalogVersion();
 }
 
-void DuckLakeCatalog::SetConfigOption(const DuckLakeConfigOption &option) {
-	lock_guard<mutex> guard(config_lock);
-	auto &key = option.option.key;
-	auto &value = option.option.value;
+static option_map_t &GetOptionScope(DuckLakeOptions &options, const DuckLakeConfigOption &option) {
 	if (option.table_id.IsValid()) {
-		// scoped to a table
-		options.table_options[option.table_id][key] = value;
-		return;
+		return options.table_options[option.table_id];
 	}
 	if (option.schema_id.IsValid()) {
-		// scoped to a schema
-		options.schema_options[option.schema_id][key] = value;
+		return options.schema_options[option.schema_id];
+	}
+	return options.config_options;
+}
+
+DuckLakeConfigOptionUndo DuckLakeCatalog::SetConfigOption(const DuckLakeConfigOption &option) {
+	lock_guard<mutex> guard(config_lock);
+	auto &scope = GetOptionScope(options, option);
+	DuckLakeConfigOptionUndo undo;
+	undo.option = option;
+	auto entry = scope.find(option.option.key);
+	undo.was_set = entry != scope.end();
+	if (undo.was_set) {
+		undo.previous_value = entry->second;
+	}
+	scope[option.option.key] = option.option.value;
+	return undo;
+}
+
+void DuckLakeCatalog::UndoConfigOption(const DuckLakeConfigOptionUndo &undo) {
+	lock_guard<mutex> guard(config_lock);
+	auto &scope = GetOptionScope(options, undo.option);
+	auto entry = scope.find(undo.option.option.key);
+	if (entry == scope.end() || entry->second != undo.option.option.value) {
+		// another transaction has set the option since - leave its value in place
 		return;
 	}
-	// scoped globally
-	options.config_options[key] = value;
+	if (undo.was_set) {
+		entry->second = undo.previous_value;
+	} else {
+		scope.erase(entry);
+	}
+}
+
+template <class SCOPE_MAP, class SCOPE_ID>
+static bool TryGetOptionInScope(const SCOPE_MAP &scope_map, SCOPE_ID scope_id, const string &option, string &result) {
+	if (!scope_id.IsValid()) {
+		return false;
+	}
+	auto scope_entry = scope_map.find(scope_id);
+	if (scope_entry == scope_map.end()) {
+		return false;
+	}
+	auto option_entry = scope_entry->second.find(option);
+	if (option_entry == scope_entry->second.end()) {
+		return false;
+	}
+	result = option_entry->second;
+	return true;
+}
+
+bool DuckLakeCatalog::TryGetTableConfigOption(const string &option, string &result, TableIndex table_id) const {
+	lock_guard<mutex> guard(config_lock);
+	return TryGetOptionInScope(options.table_options, table_id, option, result);
 }
 
 bool DuckLakeCatalog::TryGetScopedConfigOption(const string &option, string &result, SchemaIndex schema_id,
                                                TableIndex table_id) const {
 	lock_guard<mutex> guard(config_lock);
-	// search options in-order
-	// table scope
-	if (table_id.IsValid()) {
-		auto table_entry = options.table_options.find(table_id);
-		if (table_entry != options.table_options.end()) {
-			auto table_options_entry = table_entry->second.find(option);
-			if (table_options_entry != table_entry->second.end()) {
-				result = table_options_entry->second;
-				return true;
-			}
-		}
-	}
-	// schema scope
-	if (schema_id.IsValid()) {
-		auto schema_entry = options.schema_options.find(schema_id);
-		if (schema_entry != options.schema_options.end()) {
-			auto schema_options_entry = schema_entry->second.find(option);
-			if (schema_options_entry != schema_entry->second.end()) {
-				result = schema_options_entry->second;
-				return true;
-			}
-		}
-	}
-	return false;
+	// search options in-order: table scope, then schema scope
+	return TryGetOptionInScope(options.table_options, table_id, option, result) ||
+	       TryGetOptionInScope(options.schema_options, schema_id, option, result);
 }
 
 bool DuckLakeCatalog::TryGetConfigOption(const string &option, string &result, SchemaIndex schema_id,
