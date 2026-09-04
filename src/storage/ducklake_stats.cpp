@@ -42,6 +42,8 @@ DuckLakeColumnStats::DuckLakeColumnStats(const DuckLakeColumnStats &other) {
 	any_valid = other.any_valid;
 	bounds_unknown = other.bounds_unknown;
 	has_contains_nan = other.has_contains_nan;
+	min_is_exact = other.min_is_exact;
+	max_is_exact = other.max_is_exact;
 
 	if (other.extra_stats) {
 		extra_stats = other.extra_stats->Copy();
@@ -66,6 +68,8 @@ DuckLakeColumnStats &DuckLakeColumnStats::operator=(const DuckLakeColumnStats &o
 	any_valid = other.any_valid;
 	bounds_unknown = other.bounds_unknown;
 	has_contains_nan = other.has_contains_nan;
+	min_is_exact = other.min_is_exact;
+	max_is_exact = other.max_is_exact;
 
 	if (other.extra_stats) {
 		extra_stats = other.extra_stats->Copy();
@@ -95,6 +99,8 @@ DuckLakeColumnStats DuckLakeColumnStats::FromGlobalStats(const LogicalType &type
 	if (col.has_max) {
 		stats.max = col.max_val;
 	}
+	stats.min_is_exact = col.min_is_exact;
+	stats.max_is_exact = col.max_is_exact;
 	stats.any_valid = stats.has_min || stats.has_max || col.has_extra_stats;
 	// absent bounds on nonempty tables are unknown
 	stats.bounds_unknown = !stats.any_valid && table_has_rows;
@@ -109,6 +115,8 @@ void DuckLakeColumnStats::ClearBounds() {
 	max.clear();
 	has_min = false;
 	has_max = false;
+	min_is_exact = false;
+	max_is_exact = false;
 	contains_nan = false;
 	has_contains_nan = false;
 }
@@ -166,8 +174,10 @@ void DuckLakeColumnStats::MergeStats(const DuckLakeColumnStats &new_stats) {
 		// all values in the current stats are null - copy the min/max
 		min = new_stats.min;
 		has_min = new_stats.has_min;
+		min_is_exact = new_stats.min_is_exact;
 		max = new_stats.max;
 		has_max = new_stats.has_max;
+		max_is_exact = new_stats.max_is_exact;
 		any_valid = true;
 		return;
 	}
@@ -180,34 +190,46 @@ void DuckLakeColumnStats::MergeStats(const DuckLakeColumnStats &new_stats) {
 		if (!new_stats.has_min) {
 			has_min = false;
 		} else if (has_min) {
-			// both stats have a min - select the smallest
+			// both stats have a min - select the smallest, on a tie the min is exact only if both are exact
 			if (RequiresValueComparison(type)) {
 				// for numerics/temporals we need to parse the stats
 				auto current_min = Value(min).DefaultCastAs(type);
 				auto new_min = Value(new_stats.min).DefaultCastAs(type);
 				if (new_min < current_min) {
 					min = new_stats.min;
+					min_is_exact = new_stats.min_is_exact;
+				} else if (new_min == current_min) {
+					min_is_exact = min_is_exact && new_stats.min_is_exact;
 				}
 			} else if (new_stats.min < min) {
 				// for other types we can compare the strings directly
 				min = new_stats.min;
+				min_is_exact = new_stats.min_is_exact;
+			} else if (new_stats.min == min) {
+				min_is_exact = min_is_exact && new_stats.min_is_exact;
 			}
 		}
 
 		if (!new_stats.has_max) {
 			has_max = false;
 		} else if (has_max) {
-			// both stats have a max - select the largest
+			// both stats have a max - select the largest, on a tie the max is exact only if both are exact
 			if (RequiresValueComparison(type)) {
 				// for numerics/temporals we need to parse the stats
 				auto current_max = Value(max).DefaultCastAs(type);
 				auto new_max = Value(new_stats.max).DefaultCastAs(type);
 				if (new_max > current_max) {
 					max = new_stats.max;
+					max_is_exact = new_stats.max_is_exact;
+				} else if (new_max == current_max) {
+					max_is_exact = max_is_exact && new_stats.max_is_exact;
 				}
 			} else if (new_stats.max > max) {
 				// for other types we can compare the strings directly
 				max = new_stats.max;
+				max_is_exact = new_stats.max_is_exact;
+			} else if (new_stats.max == max) {
+				max_is_exact = max_is_exact && new_stats.max_is_exact;
 			}
 		}
 	}
@@ -246,14 +268,18 @@ void DuckLakeTableStats::MergeFileStats(const DuckLakeDataFile &file) {
 unique_ptr<BaseStatistics> DuckLakeColumnStats::CreateNumericStats() const {
 	auto stats = NumericStats::CreateEmpty(type);
 	if (has_min) {
-		// set min
-		Value min_val(min);
-		NumericStats::SetMin(stats, min_val.DefaultCastAs(type));
+		auto min_value = Value(min).DefaultTryCastAs(type);
+		if (!min_value) {
+			return nullptr;
+		}
+		NumericStats::SetMin(stats, *min_value);
 	}
 	if (has_max) {
-		// set max
-		Value max_val(max);
-		NumericStats::SetMax(stats, max_val.DefaultCastAs(type));
+		auto max_value = Value(max).DefaultTryCastAs(type);
+		if (!max_value) {
+			return nullptr;
+		}
+		NumericStats::SetMax(stats, *max_value);
 	}
 	if (!has_min && !has_max) {
 		stats = NumericStats::CreateUnknown(type);
@@ -297,31 +323,22 @@ unique_ptr<BaseStatistics> DuckLakeColumnStats::CreateGeometryStats() const {
 }
 
 unique_ptr<BaseStatistics> DuckLakeColumnStats::CreateStringStats() const {
-	auto stats = StringStats::CreateEmpty(type);
-	if (has_min && has_max) {
-		StringStats::MergeInConstant(stats, string_t(max));
-		StringStats::MergeInConstant(stats, string_t(min));
-		StringStats::ResetMaxStringLength(stats);
-		StringStats::SetContainsUnicode(stats);
-	} else if (has_min) {
-		stats = StringStats::CreateUnknown(type);
-		StringStats::SetMin(stats, string_t(min), StringStatsType::TRUNCATED_STATS);
-	} else if (has_max) {
-		stats = StringStats::CreateUnknown(type);
-		StringStats::SetMax(stats, string_t(max), StringStatsType::TRUNCATED_STATS);
-	} else {
-		// No min/max stats available - use unknown stats to avoid
-		// false claims about max_string_length (CreateEmpty sets it to 0)
-		stats = StringStats::CreateUnknown(type);
+	auto stats = StringStats::CreateUnknown(type);
+	if (has_min) {
+		StringStats::SetMin(stats, string_t(min),
+		                    EffectiveMinIsExact() ? StringStatsType::EXACT_STATS : StringStatsType::TRUNCATED_STATS);
+	}
+	if (has_max) {
+		StringStats::SetMax(stats, string_t(max),
+		                    EffectiveMaxIsExact() ? StringStatsType::EXACT_STATS : StringStatsType::TRUNCATED_STATS);
 	}
 
-	// set null count
-	if (!has_null_count || null_count > 0) {
-		stats.SetHasNullFast();
+	if (has_null_count && null_count == 0) {
+		stats.Set(StatsInfo::CANNOT_HAVE_NULL_VALUES);
 	}
-	if (!has_null_count || !has_num_values || null_count != num_values) {
-		//! Not *all* values are NULL, set HasNoNull
-		stats.SetHasNoNullFast();
+	if (has_null_count && has_num_values && null_count == num_values) {
+		//! All values are NULL
+		stats.Set(StatsInfo::CANNOT_HAVE_VALID_VALUES);
 	}
 	return stats.ToUnique();
 }

@@ -15,6 +15,7 @@
 #include "common/ducklake_snapshot.hpp"
 #include "duckdb/common/case_insensitive_map.hpp"
 #include "duckdb/common/types/value_map.hpp"
+#include "duckdb/main/client_context_state.hpp"
 #include "duckdb/main/connection.hpp"
 #include "duckdb/transaction/transaction.hpp"
 #include "storage/ducklake_catalog_set.hpp"
@@ -46,6 +47,12 @@ class DuckLakeSchemaPinState;
 class DuckLakeFieldId;
 class LocalTableChangeIterationHelper;
 class DuckLakeTransactionState;
+
+//! Marks connections DuckLake opens internally
+class DuckLakeInternalConnectionState : public ClientContextState {
+public:
+	static constexpr const char *KEY = "ducklake_internal_connection";
+};
 
 struct FlushedInlinedTableInfo {
 	DuckLakeInlinedTableInfo inlined_table;
@@ -263,6 +270,8 @@ public:
 	void DropScalarMacro(DuckLakeScalarMacroEntry &macro);
 	void DropTableMacro(DuckLakeTableMacroEntry &macro);
 	void DropFile(TableIndex table_id, DataFileIndex data_file_id, string path, idx_t row_count, idx_t file_size_bytes);
+	//! Record that a delete predicate was evaluated against a table, even if no rows matched
+	void MarkDeleteAttempted(TableIndex table_id);
 
 	void DeleteSnapshots(const vector<DuckLakeSnapshotInfo> &snapshots);
 	void DeleteInlinedData(const DuckLakeInlinedTableInfo &inlined_table);
@@ -293,6 +302,7 @@ public:
 	bool HasDroppedFiles() const;
 	const unordered_map<string, DataFileIndex> &GetDroppedFiles() const;
 	const set<TableIndex> &GetTablesDeletedFrom() const;
+	const set<TableIndex> &GetTablesDeleteAttempted() const;
 	const vector<FlushedInlinedTableInfo> &GetFlushedInlinedTables() const;
 	const DuckLakeNameMapSet &GetNewNameMaps() const {
 		return new_name_maps;

@@ -598,11 +598,12 @@ void DuckLakeDelete::FlushDelete(DuckLakeTransaction &transaction, ClientContext
 SinkFinalizeType DuckLakeDelete::Finalize(Pipeline &pipeline, Event &event, ClientContext &context,
                                           OperatorSinkFinalizeInput &input) const {
 	auto &global_state = input.global_state.Cast<DuckLakeDeleteGlobalState>();
+	auto &transaction = DuckLakeTransaction::Get(context, table.catalog);
+	transaction.MarkDeleteAttempted(table.GetTableId());
 	if (global_state.deleted_rows.empty()) {
 		return SinkFinalizeType::READY;
 	}
 
-	auto &transaction = DuckLakeTransaction::Get(context, table.catalog);
 	// write out the delete rows
 	for (auto &entry : global_state.deleted_rows) {
 		auto filename_entry = global_state.filenames.find(entry.first);

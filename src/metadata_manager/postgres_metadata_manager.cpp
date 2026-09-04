@@ -11,6 +11,55 @@ PostgresMetadataManager::PostgresMetadataManager(DuckLakeTransaction &transactio
     : DuckLakeMetadataManager(transaction) {
 }
 
+//! postgres_execute prepares statements; prepared statements reject batches
+static vector<string> SplitBatchStatements(const string &sql) {
+	vector<string> statements;
+	string current;
+	bool in_squote = false;
+	bool in_dquote = false;
+	for (idx_t i = 0; i < sql.size(); i++) {
+		auto c = sql[i];
+		if (in_squote) {
+			current += c;
+			if (c == '\'') {
+				if (i + 1 < sql.size() && sql[i + 1] == '\'') {
+					current += sql[++i];
+				} else {
+					in_squote = false;
+				}
+			}
+		} else if (in_dquote) {
+			current += c;
+			if (c == '"') {
+				if (i + 1 < sql.size() && sql[i + 1] == '"') {
+					current += sql[++i];
+				} else {
+					in_dquote = false;
+				}
+			}
+		} else if (c == '\'') {
+			in_squote = true;
+			current += c;
+		} else if (c == '"') {
+			in_dquote = true;
+			current += c;
+		} else if (c == ';') {
+			StringUtil::Trim(current);
+			if (!current.empty()) {
+				statements.push_back(std::move(current));
+			}
+			current = string();
+		} else {
+			current += c;
+		}
+	}
+	StringUtil::Trim(current);
+	if (!current.empty()) {
+		statements.push_back(std::move(current));
+	}
+	return statements;
+}
+
 bool PostgresMetadataManager::TypeIsNativelySupported(const LogicalType &type) {
 	switch (type.id()) {
 	// Unnamed composite types are not supported.
@@ -110,7 +159,20 @@ unique_ptr<QueryResult> PostgresMetadataManager::ExecuteQuery(DuckLakeSnapshot s
 	query = StringUtil::Replace(query, "{METADATA_PATH}", metadata_path);
 	query = StringUtil::Replace(query, "{DATA_PATH}", data_path);
 
-	auto result = connection.Query(StringUtil::Format("CALL %s(%s, %s)", command, catalog_literal, SQLString(query)));
+	auto statements = SplitBatchStatements(query);
+	if (statements.size() <= 1) {
+		auto result =
+		    connection.Query(StringUtil::Format("CALL %s(%s, %s)", command, catalog_literal, SQLString(query)));
+		return std::move(result);
+	}
+	unique_ptr<QueryResult> result;
+	for (auto &statement : statements) {
+		result =
+		    connection.Query(StringUtil::Format("CALL %s(%s, %s)", command, catalog_literal, SQLString(statement)));
+		if (result->HasError()) {
+			return std::move(result);
+		}
+	}
 	return std::move(result);
 }
 unique_ptr<QueryResult> PostgresMetadataManager::Execute(DuckLakeSnapshot snapshot, string &query) {

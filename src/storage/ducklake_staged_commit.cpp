@@ -19,7 +19,7 @@ static const char *const STAGED_STAT_COLUMNS =
     "column_size_bytes BIGINT, has_num_values BOOLEAN, num_values BIGINT, "
     "has_null_count BOOLEAN, null_count BIGINT, has_min BOOLEAN, min_value VARCHAR, "
     "has_max BOOLEAN, max_value VARCHAR, has_contains_nan BOOLEAN, contains_nan BOOLEAN, "
-    "any_valid BOOLEAN, extra_stats VARCHAR";
+    "any_valid BOOLEAN, extra_stats VARCHAR, min_is_exact BOOLEAN, max_is_exact BOOLEAN";
 
 const char *DuckLakeStagedTable::BaseName(DuckLakeStagedTableType type) {
 	switch (type) {
@@ -47,6 +47,8 @@ const char *DuckLakeStagedTable::BaseName(DuckLakeStagedTableType type) {
 		return "ducklake_staged_dropped_file";
 	case DuckLakeStagedTableType::TABLES_DELETED_FROM:
 		return "ducklake_staged_tables_deleted_from";
+	case DuckLakeStagedTableType::TABLES_DELETE_ATTEMPTED:
+		return "ducklake_staged_tables_delete_attempted";
 	case DuckLakeStagedTableType::FLUSHED_INLINED:
 		return "ducklake_staged_flushed_inlined";
 	case DuckLakeStagedTableType::COMPACTION:
@@ -101,6 +103,8 @@ string DuckLakeStagedTable::Columns(DuckLakeStagedTableType type) {
 		return "path VARCHAR, data_file_id BIGINT";
 	case DuckLakeStagedTableType::TABLES_DELETED_FROM:
 		return "table_id BIGINT";
+	case DuckLakeStagedTableType::TABLES_DELETE_ATTEMPTED:
+		return "table_id BIGINT";
 	case DuckLakeStagedTableType::FLUSHED_INLINED:
 		return "inlined_table_name VARCHAR, schema_version BIGINT, flush_snapshot_id BIGINT";
 	case DuckLakeStagedTableType::COMPACTION:
@@ -151,6 +155,7 @@ const vector<DuckLakeStagedTableType> &DuckLakeStagedTable::AllTypes() {
 	                                                      DuckLakeStagedTableType::INLINED_FILE_DELETE,
 	                                                      DuckLakeStagedTableType::DROPPED_FILE,
 	                                                      DuckLakeStagedTableType::TABLES_DELETED_FROM,
+	                                                      DuckLakeStagedTableType::TABLES_DELETE_ATTEMPTED,
 	                                                      DuckLakeStagedTableType::FLUSHED_INLINED,
 	                                                      DuckLakeStagedTableType::COMPACTION,
 	                                                      DuckLakeStagedTableType::COMPACTION_SOURCE,
@@ -251,12 +256,12 @@ string DuckLakeStagedCommit::EmitColumnStatsValues(const DuckLakeColumnStats &s)
 			extra_stats = serialized;
 		}
 	}
-	return StringUtil::Format("%llu, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s", s.column_size_bytes,
-	                          DuckLakeUtil::BoolLiteral(s.has_num_values), num_values,
-	                          DuckLakeUtil::BoolLiteral(s.has_null_count), null_count,
-	                          DuckLakeUtil::BoolLiteral(has_min_emit), min_val, DuckLakeUtil::BoolLiteral(has_max_emit),
-	                          max_val, DuckLakeUtil::BoolLiteral(s.has_contains_nan), contains_nan,
-	                          DuckLakeUtil::BoolLiteral(s.any_valid), extra_stats);
+	return StringUtil::Format(
+	    "%llu, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s", s.column_size_bytes,
+	    DuckLakeUtil::BoolLiteral(s.has_num_values), num_values, DuckLakeUtil::BoolLiteral(s.has_null_count),
+	    null_count, DuckLakeUtil::BoolLiteral(has_min_emit), min_val, DuckLakeUtil::BoolLiteral(has_max_emit), max_val,
+	    DuckLakeUtil::BoolLiteral(s.has_contains_nan), contains_nan, DuckLakeUtil::BoolLiteral(s.any_valid),
+	    extra_stats, DuckLakeUtil::BoolLiteral(s.min_is_exact), DuckLakeUtil::BoolLiteral(s.max_is_exact));
 }
 
 void DuckLakeStagedCommit::EmitInlinedColumnStatsRow(string &sql, TableIndex table_id, FieldIndex column_id,
@@ -492,6 +497,11 @@ string DuckLakeStagedCommit::EmitDroppedFiles(DuckLakeTransaction &transaction) 
 	for (auto &table_id : transaction.GetTablesDeletedFrom()) {
 		sql += StringUtil::Format("INSERT INTO %s VALUES (%llu);",
 		                          DuckLakeStagedTable::BaseName(DuckLakeStagedTableType::TABLES_DELETED_FROM),
+		                          table_id.index);
+	}
+	for (auto &table_id : transaction.GetTablesDeleteAttempted()) {
+		sql += StringUtil::Format("INSERT INTO %s VALUES (%llu);",
+		                          DuckLakeStagedTable::BaseName(DuckLakeStagedTableType::TABLES_DELETE_ATTEMPTED),
 		                          table_id.index);
 	}
 	return sql;
