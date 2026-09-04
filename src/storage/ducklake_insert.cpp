@@ -723,7 +723,14 @@ PhysicalOperator &DuckLakeInsert::PlanCopyForInsert(ClientContext &context, Phys
 	physical_copy.partition_columns = std::move(copy_options.partition_columns);
 	physical_copy.names = copy_options.names;
 	physical_copy.expected_types = std::move(copy_options.expected_types);
-	physical_copy.parallel = true;
+	// a fully parallel copy interleaves row groups and loses the input order
+	const bool preserve_insertion_order = plan ? PhysicalPlanGenerator::PreserveInsertionOrder(context, *plan) : false;
+	// no batch index: PhysicalBatchCopyToFile does not support the options set above
+	auto execution_mode = CopyFunctionExecutionMode::PARALLEL_COPY_TO_FILE;
+	if (physical_copy.function.execution_mode) {
+		execution_mode = physical_copy.function.execution_mode(preserve_insertion_order, false);
+	}
+	physical_copy.parallel = execution_mode == CopyFunctionExecutionMode::PARALLEL_COPY_TO_FILE;
 	physical_copy.hive_file_pattern =
 	    copy_input.catalog.UseHiveFilePattern(!is_encrypted, copy_input.schema_id, copy_input.table_id);
 	if (plan) {
