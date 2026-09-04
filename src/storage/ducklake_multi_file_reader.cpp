@@ -32,6 +32,9 @@
 #include "duckdb/planner/filter/table_filter_functions.hpp"
 #include "duckdb/planner/filter/optional_filter.hpp"
 #include "duckdb/storage/statistics/base_statistics.hpp"
+#include "duckdb/planner/table_filter_state.hpp"
+#include "duckdb/storage/table/column_segment.hpp"
+#include "duckdb/planner/table_filter_set.hpp"
 
 namespace duckdb {
 
@@ -352,10 +355,15 @@ ReaderInitializeType DuckLakeMultiFileReader::InitializeReader(MultiFileReaderDa
 	}
 
 	auto &global_state = gstate.multi_file_reader_state->Cast<DuckLakeMultiFileReaderGlobalState>();
+	auto deferred_filters = GetFiltersToUse(file_list, table_filters, global_column_ids);
+	optional_ptr<TableFilterSet> filters_to_use = table_filters;
+	if (deferred_filters) {
+		filters_to_use = deferred_filters.get();
+	}
 	FinalizeBind(reader_data, bind_data.file_options, bind_data.reader_bind, global_columns, global_column_ids, context,
 	             global_state);
 	auto result =
-	    CreateMappingWithGlobalState(context, reader_data, global_columns, global_column_ids, table_filters,
+	    CreateMappingWithGlobalState(context, reader_data, global_columns, global_column_ids, filters_to_use,
 	                                 gstate.file_list, bind_data.reader_bind, bind_data.virtual_columns, global_state);
 
 	// Handle snapshot filters for files with multiple snapshots (partial_max set)
@@ -409,6 +417,35 @@ ReaderInitializeType DuckLakeMultiFileReader::InitializeReader(MultiFileReaderDa
 		}
 	}
 	return result;
+}
+
+unique_ptr<TableFilterSet> DuckLakeMultiFileReader::GetFiltersToUse(const DuckLakeMultiFileList &file_list,
+                                                                    optional_ptr<TableFilterSet> table_filters,
+                                                                    const vector<ColumnIndex> &global_column_ids) {
+	// Deletion-scan snapshot ids are gathered after the scan (see FinalizeChunk), so defer their filter until then
+	if (file_list.IsDeleteScan() && table_filters && table_filters->HasFilters()) {
+		for (idx_t i = 0; i < global_column_ids.size(); i++) {
+			if (global_column_ids[i].GetPrimaryIndex() != COLUMN_IDENTIFIER_SNAPSHOT_ID) {
+				continue;
+			}
+			auto filter_index = ProjectionIndex(i);
+			if (!table_filters->HasFilter(filter_index)) {
+				break;
+			}
+			auto &filter = table_filters->GetFilterByColumnIndex(filter_index);
+			{
+				// InitializeReader is invoked concurrently for different files - make the lazy initialization safe
+				lock_guard<mutex> guard(deletion_scan_snapshot_filter_lock);
+				if (!deletion_scan_snapshot_filter) {
+					deletion_scan_snapshot_filter = filter.Cast<ExpressionFilter>().Copy();
+				}
+			}
+			auto deferred_filters = table_filters->Copy();
+			deferred_filters->RemoveFilterByColumnIndex(filter_index);
+			return deferred_filters;
+		}
+	}
+	return nullptr;
 }
 
 shared_ptr<BaseFileReader> DuckLakeMultiFileReader::TryCreateInlinedDataReader(const OpenFileInfo &file) {
@@ -738,27 +775,62 @@ void DuckLakeMultiFileReader::FinalizeChunk(ClientContext &context, const MultiF
 	MultiFileReader::FinalizeChunk(context, bind_data, reader, reader_data, input_chunk, output_chunk, executor,
 	                               global_state);
 
-	if (read_info.scan_type != DuckLakeScanType::SCAN_DELETIONS || !reader.deletion_filter) {
+	if (read_info.scan_type != DuckLakeScanType::SCAN_DELETIONS) {
 		return;
+	}
+	auto snapshot_out = RemapDeletionScanOutputColumn(executor, reader_data, global_state.deletion_scan_snapshot_col);
+	const bool snapshot_unprojected = !snapshot_out.IsValid();
+	if (snapshot_unprojected && !deletion_scan_snapshot_filter) {
+		// no snapshot column is projected and there is no deferred filter to apply
+		return;
+	}
+	Vector temp_snapshot_vector(LogicalType::BIGINT, output_chunk.size());
+	auto &snapshot_vector = snapshot_unprojected ? temp_snapshot_vector : output_chunk.data[snapshot_out.GetIndex()];
+	if (snapshot_unprojected && global_state.deletion_scan_snapshot_col.IsValid() &&
+	    global_state.deletion_scan_snapshot_col.GetIndex() < reader_data.expressions.size()) {
+		// snapshot_id is filtered but not projected - pre-fill the temporary vector via the snapshot expression
+		auto expr_idx = global_state.deletion_scan_snapshot_col.GetIndex();
+		ExpressionExecutor snapshot_executor(context, *reader_data.expressions[expr_idx]);
+		snapshot_executor.ExecuteExpression(input_chunk, temp_snapshot_vector);
 	}
 	// Gather snapshot_id for partial deletion files; remap the global_column_ids indices to output_chunk positions
-	auto snapshot_out = RemapDeletionScanOutputColumn(executor, reader_data, global_state.deletion_scan_snapshot_col);
-	if (!snapshot_out.IsValid()) {
-		return;
+	unique_ptr<Vector> rowid_vector;
+	optional_ptr<Vector> rowid_col;
+	optional_idx rowid_expr_idx;
+	auto rowid_out = RemapDeletionScanOutputColumn(executor, reader_data, global_state.deletion_scan_rowid_col);
+	if (rowid_out.IsValid()) {
+		rowid_col = &output_chunk.data[rowid_out.GetIndex()];
+	} else if (global_state.internally_projected_rowid) {
+		// rowid is appended internally (not part of the scan's global columns)
+		rowid_expr_idx = global_state.deletion_scan_internal_rowid_col;
+	} else if (global_state.deletion_scan_rowid_col.IsValid()) {
+		// rowid is filter-only: filter-column removal dropped it from the output, so evaluate it explicitly
+		rowid_expr_idx = global_state.deletion_scan_rowid_col;
 	}
-	auto &snapshot_vector = output_chunk.data[snapshot_out.GetIndex()];
-	if (global_state.internally_projected_rowid) {
-		auto expression_idx = global_state.deletion_scan_internal_rowid_col.GetIndex();
+	if (rowid_expr_idx.IsValid()) {
+		auto expression_idx = rowid_expr_idx.GetIndex();
+		// rowid is part of the scan's global columns (or appended directly after them), so its expression must exist
 		D_ASSERT(expression_idx < reader_data.expressions.size());
-		Vector rowid_vector(LogicalType::BIGINT, input_chunk.size());
+		rowid_vector = make_uniq<Vector>(LogicalType::BIGINT, input_chunk.size());
 		ExpressionExecutor rowid_executor(context, *reader_data.expressions[expression_idx]);
-		rowid_executor.ExecuteExpression(input_chunk, rowid_vector);
-		GatherDeletionScanSnapshots(reader, reader_data, rowid_vector, snapshot_vector, output_chunk.size());
-	} else {
-		auto rowid_out = RemapDeletionScanOutputColumn(executor, reader_data, global_state.deletion_scan_rowid_col);
-		if (rowid_out.IsValid()) {
-			GatherDeletionScanSnapshots(reader, reader_data, output_chunk.data[rowid_out.GetIndex()], snapshot_vector,
-			                            output_chunk.size());
+		rowid_executor.ExecuteExpression(input_chunk, *rowid_vector);
+		rowid_col = rowid_vector.get();
+	}
+	if (reader.deletion_filter && rowid_col) {
+		GatherDeletionScanSnapshots(reader, reader_data, *rowid_col, snapshot_vector, output_chunk.size());
+	}
+	// apply the deferred snapshot_id filter now that the snapshot ids are gathered
+	if (deletion_scan_snapshot_filter) {
+		auto &filter = *deletion_scan_snapshot_filter;
+		UnifiedVectorFormat vdata;
+		snapshot_vector.ToUnifiedFormat(vdata);
+		auto filter_state = TableFilterState::Initialize(context, filter);
+		SelectionVector sel;
+		idx_t approved_count = output_chunk.size();
+		approved_count = ColumnSegment::FilterSelection(sel, snapshot_vector, vdata, filter, *filter_state,
+		                                                output_chunk.size(), approved_count);
+		if (approved_count != output_chunk.size()) {
+			output_chunk.Slice(sel, approved_count);
 		}
 	}
 }
