@@ -1,0 +1,104 @@
+# name: test/sql/create_table_inline_partition_sort/create_table_inline_errors.test
+# description: validation errors for inline PARTITIONED BY / SORTED BY on CREATE TABLE / CTAS
+# group: [create_table_inline_partition_sort]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/inline_errors', METADATA_CATALOG 'ducklake_metadata', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+USE ducklake
+
+# PARTITIONED BY references nonexistent column
+statement error
+CREATE TABLE bad_part (a INTEGER) PARTITIONED BY (nonexistent)
+----
+column "nonexistent" does not exist
+
+# SORTED BY references nonexistent column
+statement error
+CREATE TABLE bad_sort (a INTEGER) SORTED BY (nonexistent)
+----
+<REGEX>:.*nonexistent.*
+
+# WITH (...) clause is rejected by SupportsCreateTable override (DuckLake has no WITH semantics)
+statement error
+CREATE TABLE bad_with (a INTEGER) WITH (some_option='x')
+----
+WITH clause is not supported for tables in a ducklake catalog
+
+# unsupported transform function
+statement error
+CREATE TABLE bad_transform (a INTEGER) PARTITIONED BY (foo(a))
+----
+<REGEX>:.*Unsupported partition function.*
+
+# malformed bucket() expression - missing args
+statement error
+CREATE TABLE bad_bucket (a INTEGER) PARTITIONED BY (bucket(a))
+----
+Expected bucket(bucket_count, column)
+
+# duplicate partition key (same column with same transform) is rejected
+statement error
+CREATE TABLE bad_dup (a INTEGER) PARTITIONED BY (a, a)
+----
+Duplicate partition key
+
+# CTAS variants: SORTED BY references nonexistent column
+statement error
+CREATE TABLE bad_ctas SORTED BY (nonexistent) AS SELECT 1 AS a
+----
+<REGEX>:.*nonexistent.*
+
+# CTAS variants: PARTITIONED BY references nonexistent column
+statement error
+CREATE TABLE bad_ctas_part PARTITIONED BY (nonexistent) AS SELECT 1 AS a
+----
+<REGEX>:.*nonexistent.*
+
+# verify the failing CREATEs left no metadata behind
+query I
+SELECT count(*) FROM ducklake_metadata.ducklake_partition_info
+----
+0
+
+query I
+SELECT count(*) FROM ducklake_metadata.ducklake_sort_info
+----
+0
+
+# A successful CREATE after failures still works (no transaction state corruption)
+statement ok
+CREATE TABLE ok_after_errors (a INTEGER) PARTITIONED BY (a)
+
+# resolve the table_id in a separate statement - some metadata catalogs (e.g. Quack
+# ones) cannot scan two of their tables in a single query
+statement ok
+SET VARIABLE ok_after_errors_id = (SELECT table_id FROM ducklake_metadata.ducklake_table WHERE table_name = 'ok_after_errors')
+
+query I
+SELECT count(*) FROM ducklake_metadata.ducklake_partition_info WHERE table_id = getvariable('ok_after_errors_id')
+----
+1
+
+# Same column with DIFFERENT transforms is allowed (e.g. year + month of the same timestamp).
+# This must NOT be flagged as a duplicate partition key.
+statement ok
+CREATE TABLE ok_diff_transforms (ts TIMESTAMP) PARTITIONED BY (year(ts), month(ts))
+
+statement ok
+SET VARIABLE ok_diff_transforms_id = (SELECT table_id FROM ducklake_metadata.ducklake_table WHERE table_name = 'ok_diff_transforms')
+
+query II
+SELECT partition_key_index, transform FROM ducklake_metadata.ducklake_partition_column WHERE table_id = getvariable('ok_diff_transforms_id') ORDER BY partition_key_index
+----
+0	year
+1	month

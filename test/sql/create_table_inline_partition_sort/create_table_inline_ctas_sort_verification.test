@@ -1,0 +1,88 @@
+# name: test/sql/create_table_inline_partition_sort/create_table_inline_ctas_sort_verification.test
+# description: Verify SORTED BY actually sorts data during CTAS by inspecting parquet rowgroup statistics.
+# group: [create_table_inline_partition_sort]
+
+#              Uses 3000+ rows across multiple 2048-row rowgroups; sort column is the INVERSE of the SELECT's
+#              natural order so any "sort skipped" regression would leave rowgroups in descending order.
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/inline_ctas_sort_verify', METADATA_CATALOG 'ducklake_metadata', DATA_INLINING_ROW_LIMIT 0)
+
+# 2048 is the minimum parquet rowgroup size in DuckDB; pick it so 3000 rows produce >=2 rowgroups.
+statement ok
+CALL ducklake.set_option('parquet_row_group_size', 2048)
+
+# Single-threaded + preserved insertion order keeps rowgroup boundaries deterministic, so we can assert
+# specific stats_min values per rowgroup rather than an order-tolerant "monotonic" check.
+statement ok
+SET threads=1
+
+statement ok
+SET preserve_insertion_order=true
+
+statement ok
+USE ducklake
+
+# CTAS feeding from range(3000): natural SELECT order is `a` ascending. Sort key `b` is `2999 - a` so its
+# natural in-stream order is strictly descending. If SORTED BY (b) is honored at CTAS time, the data is
+# resorted to b ascending and the per-rowgroup stats_min/max for `b` will be disjoint and increasing.
+statement ok
+CREATE TABLE sort_verify SORTED BY (b) AS
+SELECT range AS a, (2999 - range) AS b FROM range(3000)
+
+# logical correctness: data round-trips
+query I
+SELECT count(*) FROM sort_verify
+----
+3000
+
+# Confirm we got at least 2 rowgroups (otherwise the per-rowgroup-stats check is meaningless).
+query I
+SELECT count(DISTINCT row_group_id) >= 2
+FROM parquet_metadata('{DATA_PATH}/inline_ctas_sort_verify/main/sort_verify/*.parquet')
+WHERE path_in_schema = 'b'
+----
+true
+
+# ----------------------------------------------------------------------------------------------------------------------
+# Hardcoded per-rowgroup min/max sanity check on `sort_verify`.
+# Layout: 3000 rows, parquet_row_group_size=2048, single thread, preserve_insertion_order=true. After SORT BY b ASC:
+# ----------------------------------------------------------------------------------------------------------------------
+
+# column `b`
+query III
+SELECT row_group_id, stats_min::INTEGER AS rg_min, stats_max::INTEGER AS rg_max
+FROM parquet_metadata('{DATA_PATH}/inline_ctas_sort_verify/main/sort_verify/*.parquet')
+WHERE path_in_schema = 'b'
+ORDER BY row_group_id
+----
+0	0	2047
+1	2048	2999
+
+# column `a`
+query III
+SELECT row_group_id, stats_min::INTEGER AS rg_min, stats_max::INTEGER AS rg_max
+FROM parquet_metadata('{DATA_PATH}/inline_ctas_sort_verify/main/sort_verify/*.parquet')
+WHERE path_in_schema = 'a'
+ORDER BY row_group_id
+----
+0	952	2999
+1	0	951
+
+# row counts per rowgroup confirm the 2048 + 952 split
+query II
+SELECT row_group_id, row_group_num_rows
+FROM parquet_metadata('{DATA_PATH}/inline_ctas_sort_verify/main/sort_verify/*.parquet')
+WHERE path_in_schema = 'b'
+ORDER BY row_group_id
+----
+0	2048
+1	952
