@@ -12,6 +12,8 @@
 #include "duckdb/function/scalar_function.hpp"
 #include "duckdb/storage/storage_extension.hpp"
 #include "storage/ducklake_log_type.hpp"
+#include "storage/ducklake_reference_encryption_provider.hpp"
+#include <cstdlib>
 
 namespace duckdb {
 
@@ -124,6 +126,20 @@ static void LoadInternal(ExtensionLoader &loader) {
 	// Register murmur3_32 scalar function for Iceberg-compatible bucket partitioning
 	auto murmur3_func = DuckLakeMurmur3Function();
 	loader.RegisterFunction(murmur3_func);
+
+	auto rewrap_keys = DuckLakeRewrapKeysFunction();
+	loader.RegisterFunction(rewrap_keys);
+	auto self_test = DuckLakeSelfTestFunction();
+	loader.RegisterFunction(self_test);
+
+	// Test fixture only, and opt-in: a build that does not set the variable registers no factory, so an
+	// ATTACH with encryption_socket is refused rather than served by a provider with a public key.
+	auto *reference_provider = std::getenv("DUCKLAKE_TEST_REFERENCE_ENCRYPTION_PROVIDER");
+	if (reference_provider && string(reference_provider) == "1") {
+		RegisterDuckLakeReferenceEncryptionProviderForTests();
+		auto set_active_version = DuckLakeReferenceProviderSetActiveVersionFunction();
+		loader.RegisterFunction(set_active_version);
+	}
 }
 
 void DucklakeExtension::Load(ExtensionLoader &loader) {

@@ -59,6 +59,15 @@ static void HandleDuckLakeOption(DuckLakeOptions &options, const string &option,
 		options.automatic_migration = BooleanValue::Get(value.DefaultCastAs(LogicalType::BOOLEAN));
 	} else if (lcase == "busy_timeout") {
 		options.busy_timeout = UBigIntValue::Get(value.DefaultCastAs(LogicalType::UBIGINT));
+	} else if (lcase == "encryption_socket") {
+		options.encryption_socket = value.ToString();
+		options.encryption_socket_supplied = true;
+	} else if (lcase == "encryption_lake_id") {
+		options.encryption_lake_id = value.ToString();
+		options.encryption_lake_id_supplied = true;
+	} else if (lcase == "encryption_cache_ttl_seconds") {
+		options.encryption_cache_ttl_seconds = value.DefaultCastAs(LogicalType::BIGINT).GetValue<int64_t>();
+		options.encryption_cache_ttl_seconds_supplied = true;
 	} else if (lcase == "ducklake_version") {
 		auto version = DuckLakeVersionFromString(value.ToString());
 		if (version < DuckLakeVersion::V1_0) {

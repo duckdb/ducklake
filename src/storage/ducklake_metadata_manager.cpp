@@ -1281,7 +1281,7 @@ string DuckLakeMetadataManager::GetDeleteFileSelectList(const string &prefix) {
 
 template <class T>
 DuckLakeFileData DuckLakeMetadataManager::ReadDataFile(DuckLakeTableEntry &table, T &row, idx_t &col_idx,
-                                                       bool is_encrypted) {
+                                                       bool is_encrypted, bool is_delete_file) {
 	DuckLakeFileData data;
 	if (row.IsNull(col_idx)) {
 		// file is not there
@@ -1302,11 +1302,11 @@ DuckLakeFileData DuckLakeMetadataManager::ReadDataFile(DuckLakeTableEntry &table
 	}
 	col_idx++;
 	if (is_encrypted) {
-		if (row.IsNull(col_idx)) {
-			throw InvalidInputException("Database is encrypted, but file %s does not have an encryption key",
-			                            data.path);
-		}
-		data.encryption_key = Blob::FromBase64(row.template GetValue<string>(col_idx++));
+		// The identity a wrapped key is bound to is built from the stored path, not the resolved one.
+		auto stored_key = row.IsNull(col_idx) ? Value() : Value(row.template GetValue<string>(col_idx));
+		col_idx++;
+		data.encryption_key = transaction.GetCatalog().ResolveStoredEncryptionKey(
+		    table.GetTableId(), path.path, data.path, is_delete_file, stored_key);
 	}
 	return data;
 }
@@ -1314,7 +1314,7 @@ DuckLakeFileData DuckLakeMetadataManager::ReadDataFile(DuckLakeTableEntry &table
 template <class T>
 DuckLakeFileData DuckLakeMetadataManager::ReadDeleteFile(DuckLakeTableEntry &table, T &row, idx_t &col_idx,
                                                          bool is_encrypted) {
-	auto data = ReadDataFile(table, row, col_idx, is_encrypted);
+	auto data = ReadDataFile(table, row, col_idx, is_encrypted, true);
 	if (!row.IsNull(col_idx)) {
 		data.format = DeleteFileFormatFromString(row.template GetValue<string>(col_idx));
 	}
@@ -4056,8 +4056,8 @@ string DuckLakeMetadataManager::WriteNewDataFilesWithAppender(DuckLakeSnapshot &
 			data_file_appender.Append(Value());
 		}
 		if (!file.encryption_key.empty()) {
-			data_file_appender.Append<string_t>(
-			    string_t(Blob::ToBase64(string_t(file.encryption_key)))); // encryption_key
+			// Already in its stored form: PrepareFileKeysForCommit ran before any writer.
+			data_file_appender.Append<string_t>(string_t(file.encryption_key)); // encryption_key
 		} else {
 			data_file_appender.Append(Value());
 		}
@@ -4294,7 +4294,7 @@ string DuckLakeMetadataManager::WriteNewDataFilesSqlBatch(const vector<DuckLakeF
 		    file.begin_snapshot.IsValid() ? to_string(file.begin_snapshot.GetIndex()) : "{SNAPSHOT_ID}";
 		auto data_file_index = file.id.index;
 		auto table_id = file.table_id.index;
-		auto encryption_key = DuckLakeUtil::EncryptionKeyLiteral(file.encryption_key);
+		auto encryption_key = DuckLakeUtil::StoredEncryptionKeyLiteral(file.encryption_key);
 		string partial_max = DuckLakeUtil::OptionalIdxOrNull(file.max_partial_file_snapshot);
 		string footer_size = DuckLakeUtil::OptionalIdxOrNull(file.footer_size);
 		string mapping = DuckLakeUtil::MappingIdOrNull(file.mapping_id);
@@ -4440,7 +4440,7 @@ string DuckLakeMetadataManager::WriteNewDeleteFiles(const vector<DuckLakeDeleteF
 		auto delete_file_index = file.id.index;
 		auto table_id = file.table_id.index;
 		auto data_file_index = file.data_file_id.index;
-		auto encryption_key = DuckLakeUtil::EncryptionKeyLiteral(file.encryption_key);
+		auto encryption_key = DuckLakeUtil::StoredEncryptionKeyLiteral(file.encryption_key);
 		// Use explicit begin_snapshot if set (for flush operations), otherwise use commit snapshot
 		string begin_snapshot_str =
 		    file.begin_snapshot.IsValid() ? std::to_string(file.begin_snapshot.GetIndex()) : "{SNAPSHOT_ID}";

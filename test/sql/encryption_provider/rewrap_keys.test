@@ -1,0 +1,77 @@
+# name: test/sql/encryption_provider/rewrap_keys.test
+# description: ducklake_rewrap_keys() sweeps every stored key onto the provider's active key version
+# group: [encryption_provider]
+
+require ducklake
+
+require parquet
+
+require-env DUCKLAKE_TEST_REFERENCE_ENCRYPTION_PROVIDER 1
+
+# The reference provider takes its crypto from the database. Without an OpenSSL-backed
+# implementation loaded, only the mbedtls one can generate the GCM nonces it needs.
+statement ok
+SET force_mbedtls_unsafe = true;
+
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/ducklake_ref_provider_rewrap.db' AS lake (
+    DATA_PATH '{TEST_DIR}/ducklake_ref_provider_rewrap_files',
+    ENCRYPTED,
+    ENCRYPTION_SOCKET 'reference-test-socket',
+    ENCRYPTION_LAKE_ID 'rewrap_lake'
+)
+
+statement ok
+CREATE TABLE lake.t AS SELECT i id, 'row_' || i val FROM range(100) t(i);
+
+statement ok
+DELETE FROM lake.t WHERE id % 3 = 0;
+
+query II
+SELECT COUNT(*), SUM(id) FROM lake.t
+----
+66	3267
+
+# every data/delete file was wrapped under the reference provider's default
+# active version (1). Rotate the KEK: bump the active version.
+query I
+SELECT ducklake_reference_provider_set_active_version('rewrap_lake', 2)
+----
+2
+
+# sweep: every previously-wrapped key (both the data file and the delete
+# file backing this table) must move onto version 2 - none are left behind
+query I
+SELECT COUNT(*) > 0 AND COUNT(*) FILTER (WHERE NOT rewrapped) = 0 FROM ducklake_rewrap_keys('lake')
+----
+true
+
+# data written under the OLD key version still reads correctly after rewrap -
+# the sweep must never lose access to what it just rotated
+query II
+SELECT COUNT(*), SUM(id) FROM lake.t
+----
+66	3267
+
+# running the sweep again against the SAME active version is a no-op: nothing
+# left to rewrap
+query I
+SELECT COUNT(*) FROM ducklake_rewrap_keys('lake') WHERE rewrapped
+----
+0
+
+statement ok
+DETACH lake
+
+# reattaching from scratch still decrypts everything correctly under the
+# rotated (version 2) key
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/ducklake_ref_provider_rewrap.db' AS lake (
+    ENCRYPTION_SOCKET 'reference-test-socket',
+    ENCRYPTION_LAKE_ID 'rewrap_lake'
+)
+
+query II
+SELECT COUNT(*), SUM(id) FROM lake.t
+----
+66	3267
