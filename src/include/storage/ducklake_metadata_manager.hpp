@@ -259,7 +259,7 @@ public:
 	GetTableDeletions(DuckLakeTableEntry &table, DuckLakeSnapshot start_snapshot, DuckLakeSnapshot snapshot);
 	virtual vector<DuckLakeFileListExtendedEntry>
 	GetExtendedFilesForTable(DuckLakeTableEntry &table, DuckLakeSnapshot snapshot,
-	                         const FilterPushdownInfo *filter_info = nullptr);
+	                         const FilterPushdownInfo *filter_info = nullptr, bool include_partition_values = false);
 	virtual vector<DuckLakeCompactionFileEntry> GetFilesForCompaction(DuckLakeTableEntry &table, CompactionType type,
 	                                                                  double deletion_threshold,
 	                                                                  DuckLakeSnapshot snapshot,

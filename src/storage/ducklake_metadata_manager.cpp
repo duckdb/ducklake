@@ -2344,7 +2344,8 @@ FROM main_results
 
 vector<DuckLakeFileListExtendedEntry>
 DuckLakeMetadataManager::GetExtendedFilesForTable(DuckLakeTableEntry &table, DuckLakeSnapshot snapshot,
-                                                  const FilterPushdownInfo *filter_info) {
+                                                  const FilterPushdownInfo *filter_info,
+                                                  bool include_partition_values) {
 	auto table_id = table.GetTableId();
 	string select_list = GetFileSelectList("data") + ", data.row_id_start, data.mapping_id, " +
 	                     GetDeleteFileSelectList("del") + ", del.begin_snapshot";
@@ -2372,19 +2373,39 @@ DuckLakeMetadataManager::GetExtendedFilesForTable(DuckLakeTableEntry &table, Duc
 		}
 	}
 
+	string partition_select;
+	string partition_join;
+	if (include_partition_values) {
+		partition_select =
+		    ", data.partition_id, partition_values.partition_key_indexes, partition_values.partition_value_list";
+		partition_join = StringUtil::Format(R"(
+LEFT JOIN (
+	SELECT data_file_id,
+	       ARRAY_AGG(partition_key_index ORDER BY partition_key_index) partition_key_indexes,
+	       ARRAY_AGG(partition_value ORDER BY partition_key_index) partition_value_list
+	FROM {METADATA_CATALOG}.ducklake_file_partition_value
+	WHERE table_id=%d
+	GROUP BY data_file_id
+	) partition_values ON partition_values.data_file_id = data.data_file_id
+)",
+		                                    table_id.index);
+	}
+
 	// Add base query
-	query += StringUtil::Format(R"(
-SELECT data.data_file_id, del.delete_file_id, data.record_count, %s
+	query +=
+	    StringUtil::Format(R"(
+SELECT data.data_file_id, del.delete_file_id, data.record_count%s, %s
 FROM {METADATA_CATALOG}.ducklake_data_file data%s
 LEFT JOIN (
 	SELECT *
     FROM {METADATA_CATALOG}.ducklake_delete_file
     WHERE table_id=%d  AND {SNAPSHOT_ID} >= begin_snapshot
           AND ({SNAPSHOT_ID} < end_snapshot OR end_snapshot IS NULL)
-    ) del ON del.data_file_id = data.data_file_id
+	) del ON del.data_file_id = data.data_file_id
+%s
 WHERE data.table_id=%d AND {SNAPSHOT_ID} >= data.begin_snapshot AND ({SNAPSHOT_ID} < data.end_snapshot OR data.end_snapshot IS NULL)
 		)",
-	                            select_list, join_clause, table_id.index, table_id.index);
+	                       partition_select, select_list, join_clause, table_id.index, partition_join, table_id.index);
 
 	// Add WHERE clause from filters if it was generated
 	if (!where_clause.empty()) {
@@ -2404,6 +2425,26 @@ WHERE data.table_id=%d AND {SNAPSHOT_ID} >= data.begin_snapshot AND ({SNAPSHOT_I
 		}
 		file_entry.row_count = row.GetValue<idx_t>(2);
 		idx_t col_idx = 3;
+		if (include_partition_values) {
+			if (!row.IsNull(col_idx)) {
+				file_entry.partition_id = row.GetValue<idx_t>(col_idx);
+			}
+			col_idx++;
+			if (!row.IsNull(col_idx) && !row.IsNull(col_idx + 1)) {
+				auto partition_key_indexes = row.GetValue<Value>(col_idx);
+				auto partition_values = row.GetValue<Value>(col_idx + 1);
+				auto &partition_key_children = ListValue::GetChildren(partition_key_indexes);
+				auto &partition_value_children = ListValue::GetChildren(partition_values);
+				D_ASSERT(partition_key_children.size() == partition_value_children.size());
+				for (idx_t i = 0; i < partition_key_children.size(); i++) {
+					DuckLakeFilePartitionInfo partition_value;
+					partition_value.partition_column_idx = partition_key_children[i].GetValue<idx_t>();
+					partition_value.partition_value = partition_value_children[i];
+					file_entry.partition_values.push_back(std::move(partition_value));
+				}
+			}
+			col_idx += 2;
+		}
 		file_entry.file = ReadDataFile(table, row, col_idx, IsEncrypted());
 		if (!row.IsNull(col_idx)) {
 			file_entry.row_id_start = row.GetValue<idx_t>(col_idx);
