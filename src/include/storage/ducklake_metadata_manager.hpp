@@ -189,6 +189,8 @@ public:
 
 	virtual string GetColumnTypeInternal(const LogicalType &column_type);
 	virtual string CastColumnToTarget(const string &column, const LogicalType &type);
+	//! Returns the column unchanged when no cast is needed, so callers can apply it unconditionally
+	virtual string CastInlinedColumnToTarget(const string &column, const LogicalType &type);
 
 	DuckLakeMetadataManager &Get(DuckLakeTransaction &transaction);
 

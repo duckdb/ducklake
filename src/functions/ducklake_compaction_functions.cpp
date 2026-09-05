@@ -29,6 +29,9 @@
 #include "duckdb/parser/expression/columnref_expression.hpp"
 #include "duckdb/planner/expression/bound_constant_expression.hpp"
 #include "duckdb/parser/parsed_expression_iterator.hpp"
+#include "duckdb/planner/expression/bound_cast_expression.hpp"
+#include "duckdb/planner/expression/bound_columnref_expression.hpp"
+#include "duckdb/planner/expression_iterator.hpp"
 
 namespace duckdb {
 
@@ -415,6 +418,34 @@ void DuckLakeCompactor::GenerateCompactions(DuckLakeTableEntry &table,
 	}
 }
 
+namespace {
+
+// The resolver checks a reference against the child operator's types, so the cast has to sit above
+// the reference rather than replace its type.
+void RetypeSortColumnRefs(ClientContext &context, unique_ptr<Expression> &expr, const vector<ColumnBinding> &bindings,
+                          const vector<LogicalType> &plan_types) {
+	if (expr->GetExpressionType() == ExpressionType::BOUND_COLUMN_REF) {
+		auto &colref = expr->Cast<BoundColumnRefExpression>();
+		for (idx_t i = 0; i < bindings.size() && i < plan_types.size(); i++) {
+			if (!(colref.Binding() == bindings[i])) {
+				continue;
+			}
+			if (colref.GetReturnType() == plan_types[i]) {
+				return;
+			}
+			auto target_type = colref.GetReturnType();
+			colref.SetReturnType(plan_types[i]);
+			expr = BoundCastExpression::AddCastToType(context, std::move(expr), target_type);
+			return;
+		}
+		return;
+	}
+	ExpressionIterator::EnumerateChildren(
+	    *expr, [&](unique_ptr<Expression> &child) { RetypeSortColumnRefs(context, child, bindings, plan_types); });
+}
+
+} // namespace
+
 unique_ptr<LogicalOperator> DuckLakeCompactor::InsertSort(Binder &binder, unique_ptr<LogicalOperator> &plan,
                                                           DuckLakeTableEntry &table,
                                                           optional_ptr<DuckLakeSort> sort_data, bool add_tiebreakers) {
@@ -438,6 +469,12 @@ unique_ptr<LogicalOperator> DuckLakeCompactor::InsertSort(Binder &binder, unique
 
 	// Bind the ORDER BY expressions
 	auto orders = DuckLakeCompactor::BindSortOrders(binder, table, table_index, pre_bound_orders);
+
+	// The inlined table can still hold the column under its pre-ALTER type. The file is written with
+	// the current type, and the sort has to match the file.
+	for (auto &order : orders) {
+		RetypeSortColumnRefs(binder.context, order.expression, bindings, plan->types);
+	}
 
 	// Append (row_id, snapshot_id) as deterministic tiebreakers when requested so the file order
 	// exactly matches the deletes-position query's ORDER BY, including ties in the user sort key.
