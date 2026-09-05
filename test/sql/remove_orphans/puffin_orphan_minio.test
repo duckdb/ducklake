@@ -1,0 +1,77 @@
+# name: test/sql/remove_orphans/puffin_orphan_minio.test
+# description: ducklake_delete_orphaned_files (cleanup_all) finds and removes an orphaned puffin deletion vector on an S3-backed data path
+# group: [remove_orphans]
+
+require ducklake
+
+require parquet
+
+require httpfs
+
+require-env S3_TEST_SERVER_AVAILABLE 1
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH s3://mybucket
+
+statement ok
+CREATE OR REPLACE SECRET __default_s3 (
+    TYPE S3,
+    KEY_ID 'admin',
+    SECRET 'password',
+    ENDPOINT '127.0.0.1:9000',
+    URL_STYLE 'path',
+    USE_SSL false,
+    REGION 'us-east-1'
+)
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (
+    DATA_PATH '{DATA_PATH}/ducklake_puffin_orphan_minio',
+    DATA_INLINING_ROW_LIMIT 0,
+    WRITE_DELETION_VECTORS true
+)
+
+statement ok
+CREATE TABLE ducklake.test AS SELECT i FROM range(100) t(i)
+
+statement ok
+DELETE FROM ducklake.test WHERE i < 10
+
+statement ok
+SET VARIABLE live_puffin = (
+    SELECT delete_file
+    FROM ducklake_list_files('ducklake', 'test')
+    WHERE delete_file IS NOT NULL
+    LIMIT 1
+)
+
+# Copy a live deletion vector byte-for-byte to a path that is not referenced by metadata.
+statement ok
+COPY (
+    SELECT content FROM read_blob(getvariable('live_puffin'))
+) TO '{DATA_PATH}/ducklake_puffin_orphan_minio/main/test/orphan-delete.puffin' (FORMAT BLOB)
+
+# The byte-for-byte copied puffin file should be discovered as an orphan via the
+# glob-based cleanup_all enumeration path (no per-object mtime required).
+query I
+SELECT count(*)
+FROM ducklake_delete_orphaned_files('ducklake', cleanup_all => true, dry_run => true)
+----
+1
+
+statement ok
+CALL ducklake_delete_orphaned_files('ducklake', cleanup_all => true)
+
+query I
+SELECT count(*)
+FROM glob('{DATA_PATH}/ducklake_puffin_orphan_minio/main/test/*-delete.puffin')
+WHERE ends_with(file, '/orphan-delete.puffin')
+----
+0
+
+# The referenced deletion vector remains live and table semantics are unchanged.
+query I
+SELECT count(*) FROM ducklake.test
+----
+90
