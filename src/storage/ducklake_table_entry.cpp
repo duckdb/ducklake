@@ -1324,12 +1324,34 @@ unique_ptr<CatalogEntry> DuckLakeTableEntry::AlterTable(DuckLakeTransaction &tra
 	return std::move(new_entry);
 }
 
+static bool SortFieldsMatch(optional_ptr<DuckLakeSort> current_sort, const DuckLakeSort &requested_sort) {
+	if (!current_sort) {
+		return requested_sort.fields.empty();
+	}
+	if (current_sort->fields.size() != requested_sort.fields.size()) {
+		return false;
+	}
+	for (idx_t i = 0; i < current_sort->fields.size(); i++) {
+		auto &current = current_sort->fields[i];
+		auto &requested = requested_sort.fields[i];
+		if (current.sort_key_index != requested.sort_key_index || current.expression != requested.expression ||
+		    current.dialect != requested.dialect || current.sort_direction != requested.sort_direction ||
+		    current.null_order != requested.null_order) {
+			return false;
+		}
+	}
+	return true;
+}
+
 unique_ptr<CatalogEntry> DuckLakeTableEntry::AlterTable(DuckLakeTransaction &transaction, SetSortedByInfo &info) {
 	auto create_info = GetInfo();
 	auto &table_info = create_info->Cast<CreateTableInfo>();
 
 	if (info.orders.empty()) {
 		// RESET SORTED BY - clear sort data
+		if (!GetSortData()) {
+			return nullptr;
+		}
 		auto new_entry = make_uniq<DuckLakeTableEntry>(*this, table_info, unique_ptr<DuckLakeSort>());
 		return std::move(new_entry);
 	}
@@ -1348,8 +1370,15 @@ unique_ptr<CatalogEntry> DuckLakeTableEntry::AlterTable(DuckLakeTransaction &tra
 		sort_field.dialect = "duckdb";
 		sort_field.sort_direction =
 		    order_node.type == OrderType::DESCENDING ? OrderType::DESCENDING : OrderType::ASCENDING;
-		sort_field.null_order = order_node.null_order;
+		// Normalize the null order the same way the metadata writer and the ORDER BY builder
+		// do, so a sort read back from the catalog compares equal to the same clause re-issued.
+		sort_field.null_order = order_node.null_order == OrderByNullType::NULLS_FIRST ? OrderByNullType::NULLS_FIRST
+		                                                                              : OrderByNullType::NULLS_LAST;
 		sort_data->fields.push_back(sort_field);
+	}
+
+	if (SortFieldsMatch(GetSortData(), *sort_data)) {
+		return nullptr;
 	}
 
 	auto new_entry = make_uniq<DuckLakeTableEntry>(*this, table_info, std::move(sort_data));
