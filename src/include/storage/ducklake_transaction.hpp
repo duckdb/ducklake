@@ -195,6 +195,8 @@ public:
 
 	//! Returns true if `message` indicates a retryable conflict (PK/unique/conflict/concurrent).
 	static bool RetryOnError(const string &message);
+	//! As above, but also treats ExceptionType::TRANSACTION as a conflict.
+	static bool RetryOnError(const string &message, ExceptionType type);
 
 	DuckLakeCatalog &GetCatalog() {
 		return ducklake_catalog;
