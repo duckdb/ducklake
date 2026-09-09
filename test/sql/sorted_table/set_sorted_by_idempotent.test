@@ -1,0 +1,98 @@
+# name: test/sql/sorted_table/set_sorted_by_idempotent.test
+# description: Re-issuing an identical SET SORTED BY / RESET SORTED BY is a no-op
+# group: [sorted_table]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{TEST_DIR}/set_sorted_by_idempotent/')
+
+statement ok
+CREATE TABLE ducklake.test(a INTEGER, b VARCHAR);
+
+# snapshot count, sort_info rows and sort_expression rows, which together show
+# whether an ALTER actually wrote anything
+statement ok
+CREATE MACRO sort_metadata() AS TABLE
+SELECT (SELECT max(snapshot_id) FROM __ducklake_metadata_ducklake.ducklake_snapshot) AS snapshots,
+       (SELECT count(*) FROM __ducklake_metadata_ducklake.ducklake_sort_info) AS infos,
+       (SELECT count(*) FROM __ducklake_metadata_ducklake.ducklake_sort_expression) AS exprs;
+
+query III
+FROM sort_metadata()
+----
+1	0	0
+
+statement ok
+ALTER TABLE ducklake.test SET SORTED BY (a ASC, b DESC);
+
+query III
+FROM sort_metadata()
+----
+2	1	2
+
+# Same sort order again: nothing written, no new snapshot
+statement ok
+ALTER TABLE ducklake.test SET SORTED BY (a ASC, b DESC);
+
+statement ok
+ALTER TABLE ducklake.test SET SORTED BY (a ASC, b DESC);
+
+query III
+FROM sort_metadata()
+----
+2	1	2
+
+# Spelling out the null order that ASC/DESC already imply is still the same sort
+statement ok
+ALTER TABLE ducklake.test SET SORTED BY (a ASC NULLS LAST, b DESC NULLS LAST);
+
+query III
+FROM sort_metadata()
+----
+2	1	2
+
+# A different null order is a different sort
+statement ok
+ALTER TABLE ducklake.test SET SORTED BY (a ASC NULLS FIRST, b DESC);
+
+query III
+FROM sort_metadata()
+----
+3	2	4
+
+# So is the same set of keys in a different order
+statement ok
+ALTER TABLE ducklake.test SET SORTED BY (b DESC, a ASC);
+
+query III
+FROM sort_metadata()
+----
+4	3	6
+
+statement ok
+ALTER TABLE ducklake.test RESET SORTED BY;
+
+query III
+FROM sort_metadata()
+----
+5	3	6
+
+# Clearing a sort order that is already clear writes nothing
+statement ok
+ALTER TABLE ducklake.test RESET SORTED BY;
+
+query III
+FROM sort_metadata()
+----
+5	3	6
+
+# The surviving sort order is the last one that was actually set, then cleared
+query I
+SELECT count(*) FROM __ducklake_metadata_ducklake.ducklake_sort_info WHERE table_id = 1 AND end_snapshot IS NULL
+----
+0
