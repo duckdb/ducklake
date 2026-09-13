@@ -2032,6 +2032,10 @@ void DuckLakeTransactionState::Commit(DuckLakeSnapshot transaction_snapshot,
 	for (auto &entry : dropped_file_stats) {
 		context.invalidate_table_stats_cache(commit_snapshot.next_file_id, entry.first);
 	}
+	// inlined inserts don't bump next_file_id or dropped_file_stats, so the cache above misses them
+	for (auto &table_id : transaction_changes.tables_inserted_inlined) {
+		context.invalidate_table_stats_cache(commit_snapshot.next_file_id, table_id);
+	}
 	if (flushed_inlined && !context.skip_drop_empty_inlined) {
 		try {
 			DropEmptySupersededInlinedTables(context);

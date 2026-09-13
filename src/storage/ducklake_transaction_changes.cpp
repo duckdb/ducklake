@@ -225,12 +225,14 @@ bool RequiresCommitLock(const TransactionChangeInformation &changes) {
 	// before either commits therefore both find an empty change set and both
 	// commit, rewriting the same files twice and duplicating rows. Serializing
 	// them puts the loser's check after the winner's commit, where it fires.
+	//
+	// tables_delete_attempted (zero-row DELETE / MERGE NOT MATCHED) has the same gap.
 	return !changes.created_tables.empty() || !changes.dropped_tables.empty() || !changes.created_schemas.empty() ||
 	       !changes.dropped_schemas.empty() || !changes.dropped_views.empty() ||
 	       !changes.created_scalar_macros.empty() || !changes.created_table_macros.empty() ||
 	       !changes.dropped_scalar_macros.empty() || !changes.dropped_table_macros.empty() ||
 	       !changes.altered_tables_with_schema_version_changes.empty() || !changes.tables_merge_adjacent.empty() ||
-	       !changes.tables_rewrite_delete.empty();
+	       !changes.tables_rewrite_delete.empty() || !changes.tables_delete_attempted.empty();
 }
 
 } // namespace duckdb

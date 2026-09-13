@@ -1,4 +1,5 @@
 #include "storage/ducklake_catalog.hpp"
+#include "storage/ducklake_transaction.hpp"
 #include "duckdb/execution/physical_plan_generator.hpp"
 #include "duckdb/execution/operator/persistent/physical_merge_into.hpp"
 #include "duckdb/planner/operator/logical_merge_into.hpp"
@@ -265,6 +266,11 @@ static SinkFinalizeType FinalizeCopyToInsert(Pipeline &pipeline, Event &event, C
 	auto insert_global = insert_op.GetGlobalSinkState(context);
 	auto insert_local = insert_op.GetLocalSinkState(exec_context);
 	OperatorSinkInput sink_input {*insert_global, *insert_local, interrupt_state};
+
+	// NOT MATCHED is a phantom read (insert contingent on absence), same as a zero-row DELETE
+	auto &insert_gstate = insert_global->Cast<DuckLakeInsertGlobalState>();
+	auto &merge_transaction = DuckLakeTransaction::Get(context, insert_gstate.table.catalog);
+	merge_transaction.MarkDeleteAttempted(insert_gstate.table.GetTableId());
 	SourceResultType source_res = SourceResultType::HAVE_MORE_OUTPUT;
 	while (source_res == SourceResultType::HAVE_MORE_OUTPUT) {
 		chunk.Reset();
