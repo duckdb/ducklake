@@ -1,0 +1,46 @@
+# name: test/sql/general/scan_profiling_empty_build_side.test
+# description: Profiler finalize of a DuckLake scan whose pipeline is cut short by an empty join build side
+# group: [general]
+
+# Regression test for internal error observed previously.
+
+require ducklake
+
+require parquet
+
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/scan_profiling.ducklake' AS ducklake (DATA_PATH '{TEST_DIR}/scan_profiling_files');
+
+statement ok
+CREATE TABLE ducklake.t (i INTEGER, j INTEGER);
+
+# one parquet file per insert
+loop i 0 128
+
+statement ok
+INSERT INTO ducklake.t SELECT range, {i} FROM range(2048);
+
+endloop
+
+statement ok
+CREATE TABLE empty_ids (i INTEGER);
+
+statement ok
+PRAGMA enable_profiling='no_output';
+
+statement ok
+SET threads=32;
+
+query I
+SELECT count(*) FROM ducklake.t
+----
+262144
+
+loop i 0 50
+
+query I
+SELECT count(*) FROM ducklake.t WHERE i IN (SELECT i FROM empty_ids)
+----
+0
+
+endloop
