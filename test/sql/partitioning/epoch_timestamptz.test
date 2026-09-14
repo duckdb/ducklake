@@ -1,0 +1,120 @@
+# name: test/sql/partitioning/epoch_timestamptz.test
+# description: Epoch partitioning transforms on TIMESTAMPTZ are session-timezone independent
+# group: [partitioning]
+
+require ducklake
+
+require parquet
+
+require icu
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/ducklake_epoch_tstz', METADATA_CATALOG 'ducklake_metadata')
+
+statement ok
+USE ducklake
+
+statement ok
+CREATE TABLE tz_tbl(id INTEGER, ts TIMESTAMPTZ);
+
+statement ok
+ALTER TABLE tz_tbl SET PARTITIONED BY (epoch_year(ts));
+
+# 2020-01-01 00:00:00+02 is 2019-12-31 22:00:00 UTC, i.e. year ordinal 49
+# large insert writes parquet directly (transform evaluated in the write plan)
+statement ok
+SET TimeZone = 'UTC';
+
+statement ok
+INSERT INTO tz_tbl SELECT i, TIMESTAMPTZ '2020-01-01 00:00:00+02' FROM range(12) t(i);
+
+# small insert is inlined and flushed below (transform evaluated as SQL over the metadata catalog)
+statement ok
+SET TimeZone = 'America/Los_Angeles';
+
+statement ok
+INSERT INTO tz_tbl VALUES (100, TIMESTAMPTZ '2020-01-01 00:00:00+02');
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake')
+
+query I
+SELECT DISTINCT partition_value FROM ducklake_metadata.ducklake_file_partition_value WHERE table_id = (SELECT table_id FROM ducklake_metadata.ducklake_table WHERE table_name = 'tz_tbl' AND end_snapshot IS NULL)
+----
+49
+
+query I
+SELECT COUNT(DISTINCT regexp_extract(path, '.*epoch_year=(-?[0-9]+)[/\\].*', 1)) FROM glob('{DATA_PATH}/ducklake_epoch_tstz/main/tz_tbl/**') t(path)
+----
+1
+
+query I
+SELECT COUNT(*) FROM tz_tbl
+----
+13
+
+# hour granularity is the sharp check for UTC correctness
+statement ok
+CREATE TABLE tz_hours_tbl(id INTEGER, ts TIMESTAMPTZ);
+
+statement ok
+ALTER TABLE tz_hours_tbl SET PARTITIONED BY (epoch_hour(ts));
+
+# 2019-12-31 22:00:00 UTC = hour ordinal 438286, regardless of session TimeZone
+statement ok
+INSERT INTO tz_hours_tbl SELECT i, TIMESTAMPTZ '2020-01-01 00:00:00+02' FROM range(12) t(i);
+
+statement ok
+SET TimeZone = 'UTC';
+
+statement ok
+INSERT INTO tz_hours_tbl VALUES (100, TIMESTAMPTZ '2019-12-31 22:00:00+00');
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake')
+
+query I
+SELECT DISTINCT partition_value FROM ducklake_metadata.ducklake_file_partition_value WHERE table_id = (SELECT table_id FROM ducklake_metadata.ducklake_table WHERE table_name = 'tz_hours_tbl' AND end_snapshot IS NULL)
+----
+438286
+
+query I
+SELECT COUNT(*) FROM tz_hours_tbl
+----
+13
+
+# TIMESTAMPTZ_NS is also computed on the UTC instant
+statement ok
+CREATE TABLE tzns_tbl(id INTEGER, ts TIMESTAMPTZ_NS);
+
+statement ok
+ALTER TABLE tzns_tbl SET PARTITIONED BY (epoch_year(ts));
+
+statement ok
+SET TimeZone = 'America/Los_Angeles';
+
+statement ok
+INSERT INTO tzns_tbl SELECT i, TIMESTAMPTZ_NS '2020-01-01 00:00:00+02' FROM range(12) t(i);
+
+statement ok
+SET TimeZone = 'UTC';
+
+statement ok
+INSERT INTO tzns_tbl VALUES (100, TIMESTAMPTZ_NS '2020-01-01 00:00:00+02');
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake')
+
+query I
+SELECT DISTINCT partition_value FROM ducklake_metadata.ducklake_file_partition_value WHERE table_id = (SELECT table_id FROM ducklake_metadata.ducklake_table WHERE table_name = 'tzns_tbl' AND end_snapshot IS NULL)
+----
+49
+
+query I
+SELECT COUNT(*) FROM tzns_tbl
+----
+13

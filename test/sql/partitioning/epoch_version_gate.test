@@ -1,0 +1,60 @@
+# name: test/sql/partitioning/epoch_version_gate.test
+# description: Epoch partition transforms are rejected on DuckLake 1.0 catalogs
+# group: [partitioning]
+
+require ducklake
+
+require parquet
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/ducklake_epoch_gate.db' AS ducklake (DATA_PATH '{DATA_PATH}/ducklake_epoch_gate', DUCKLAKE_VERSION '1.0')
+
+statement ok
+USE ducklake
+
+statement ok
+CREATE TABLE t(id INTEGER, dt DATE);
+
+# calendar transforms still work on 1.0 catalogs
+statement ok
+ALTER TABLE t SET PARTITIONED BY (year(dt));
+
+# epoch transforms would brick the catalog for 1.0 readers
+statement error
+ALTER TABLE t SET PARTITIONED BY (epoch_day(dt));
+----
+DuckLake 1.0 does not support the epoch_day partition transform
+
+statement ok
+USE memory
+
+statement ok
+DETACH ducklake
+
+# migrating the catalog unlocks epoch transforms
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/ducklake_epoch_gate.db' AS ducklake (DATA_PATH '{DATA_PATH}/ducklake_epoch_gate', METADATA_CATALOG 'ducklake_gate_meta', AUTOMATIC_MIGRATION TRUE)
+
+statement ok
+USE ducklake
+
+statement ok
+ALTER TABLE t SET PARTITIONED BY (epoch_day(dt));
+
+statement ok
+INSERT INTO t VALUES (1, DATE '2024-02-10');
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake')
+
+query I
+SELECT transform FROM ducklake_gate_meta.ducklake_partition_column WHERE partition_id = (SELECT partition_id FROM ducklake_gate_meta.ducklake_partition_info WHERE end_snapshot IS NULL)
+----
+epoch_day
+
+query II
+SELECT id, dt FROM t
+----
+1	2024-02-10

@@ -1,0 +1,98 @@
+# name: test/sql/add_files/add_file_epoch_partitioned.test
+# description: Test ducklake_add_data_files with epoch partitioning transforms
+# group: [add_files]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/add_file_epoch', METADATA_CATALOG 'metadata')
+
+statement ok
+USE ducklake
+
+statement ok
+CREATE TABLE epoch_add_t (id INT, v VARCHAR, dt DATE);
+
+statement ok
+ALTER TABLE epoch_add_t SET PARTITIONED BY (epoch_month(dt), epoch_day(dt));
+
+statement ok
+INSERT INTO epoch_add_t VALUES
+    (1, 'a', '2024-01-15'),
+    (2, 'b', '2024-02-10'),
+    (3, 'c', '2024-04-20');
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake')
+
+# 2024-02-10 = month ordinal 649, day ordinal 19763
+statement ok
+COPY (SELECT 10 AS id, 'x' AS v, DATE '2024-02-10' AS dt) TO '{DATA_PATH}/add_file_epoch/main/epoch_add_t/epoch_month=649/epoch_day=19763/full_match.parquet' (FORMAT parquet);
+
+statement ok
+CALL ducklake_add_data_files('ducklake', 'epoch_add_t', '{DATA_PATH}/add_file_epoch/main/epoch_add_t/epoch_month=649/epoch_day=19763/full_match.parquet')
+
+statement ok
+SET VARIABLE full_match_data_file_id = (
+	SELECT data_file_id
+	FROM metadata.ducklake_data_file
+	WHERE path LIKE '%full_match.parquet'
+)
+
+query IT
+SELECT partition_key_index, partition_value
+FROM metadata.ducklake_file_partition_value
+WHERE data_file_id = getvariable('full_match_data_file_id')
+ORDER BY partition_key_index
+----
+0	649
+1	19763
+
+query III
+FROM epoch_add_t WHERE id = 10;
+----
+10	x	2024-02-10
+
+query I
+SELECT COUNT(*) FROM epoch_add_t WHERE dt = DATE '2024-02-10'
+----
+2
+
+# added file participates in stats-based filtering on the source column
+query I
+SELECT COUNT(*) FROM epoch_add_t WHERE dt >= DATE '2024-02-01'
+----
+3
+
+# partition keys in a different directory order are accepted
+statement ok
+COPY (SELECT 1 AS x, 19763 AS epoch_day, 649 AS epoch_month) TO '{DATA_PATH}/add_file_epoch/reorder' (FORMAT parquet, PARTITION_BY (epoch_day, epoch_month));
+
+statement ok
+COPY (SELECT 11 AS id, 'y' AS v, DATE '2024-02-10' AS dt) TO '{DATA_PATH}/add_file_epoch/reorder/epoch_day=19763/epoch_month=649/reorder.parquet' (FORMAT parquet);
+
+statement ok
+CALL ducklake_add_data_files('ducklake', 'epoch_add_t', '{DATA_PATH}/add_file_epoch/reorder/epoch_day=19763/epoch_month=649/reorder.parquet')
+
+query I
+SELECT COUNT(*) FROM epoch_add_t WHERE dt = DATE '2024-02-10'
+----
+3
+
+# a file missing one of the partition keys is rejected
+statement ok
+COPY (SELECT 1 AS x, 649 AS epoch_month) TO '{DATA_PATH}/add_file_epoch/subset' (FORMAT parquet, PARTITION_BY (epoch_month));
+
+statement ok
+COPY (SELECT 12 AS id, 'z' AS v, DATE '2024-02-15' AS dt) TO '{DATA_PATH}/add_file_epoch/subset/epoch_month=649/subset.parquet' (FORMAT parquet);
+
+statement error
+CALL ducklake_add_data_files('ducklake', 'epoch_add_t', '{DATA_PATH}/add_file_epoch/subset/epoch_month=649/subset.parquet')
+----
+contains an invalid partition value for the table configuration

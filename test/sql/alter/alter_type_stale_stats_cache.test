@@ -1,0 +1,130 @@
+# name: test/sql/alter/alter_type_stale_stats_cache.test
+# description: cached table stats must not keep the pre-ALTER column type
+# group: [alter]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/alter_type_stale_stats_cache')
+
+statement ok
+CREATE TABLE ducklake.t(c INTEGER);
+
+statement ok
+INSERT INTO ducklake.t SELECT range FROM range(100);
+
+# warm the stats cache before the retype
+query I
+SELECT count(*) FROM ducklake.t WHERE c >= 10;
+----
+90
+
+statement ok
+ALTER TABLE ducklake.t ALTER COLUMN c TYPE BIGINT;
+
+query I
+SELECT count(*) FROM ducklake.t WHERE c >= 10;
+----
+90
+
+# the retype must refresh the cached stats
+query I
+SELECT stats(c) FROM ducklake.t LIMIT 1;
+----
+{'has_no_null': true, 'has_null': false, 'max': 99, 'min': 0}
+
+statement ok
+CREATE TABLE ducklake.t2(c INTEGER);
+
+statement ok
+INSERT INTO ducklake.t2 SELECT range FROM range(100);
+
+query I
+SELECT count(*) FROM ducklake.t2 WHERE c >= 10;
+----
+90
+
+statement ok
+BEGIN
+
+statement ok
+ALTER TABLE ducklake.t2 ALTER COLUMN c TYPE BIGINT;
+
+query I
+SELECT count(*) FROM ducklake.t2 WHERE c >= 10;
+----
+90
+
+statement ok
+COMMIT
+
+query I
+SELECT count(*) FROM ducklake.t2 WHERE c >= 10;
+----
+90
+
+query I
+SELECT stats(c) FROM ducklake.t2 LIMIT 1;
+----
+{'has_no_null': true, 'has_null': false, 'max': 99, 'min': 0}
+
+statement ok
+CREATE TABLE ducklake.t3(c DECIMAL(9,2));
+
+statement ok
+INSERT INTO ducklake.t3 SELECT range FROM range(100);
+
+query I
+SELECT count(*) FROM ducklake.t3 WHERE c >= 10;
+----
+90
+
+statement ok
+ALTER TABLE ducklake.t3 ALTER COLUMN c TYPE DECIMAL(18,2);
+
+query I
+SELECT count(*) FROM ducklake.t3 WHERE c >= 10;
+----
+90
+
+# rollback keeps the cached stats valid
+statement ok
+CREATE TABLE ducklake.t4(c INTEGER);
+
+statement ok
+INSERT INTO ducklake.t4 SELECT range FROM range(100);
+
+query I
+SELECT count(*) FROM ducklake.t4 WHERE c >= 10;
+----
+90
+
+statement ok
+BEGIN
+
+statement ok
+ALTER TABLE ducklake.t4 ALTER COLUMN c TYPE BIGINT;
+
+query I
+SELECT count(*) FROM ducklake.t4 WHERE c >= 10;
+----
+90
+
+statement ok
+ROLLBACK
+
+query I
+SELECT count(*) FROM ducklake.t4 WHERE c >= 10;
+----
+90
+
+query I
+SELECT stats(c) FROM ducklake.t4 LIMIT 1;
+----
+{'has_no_null': true, 'has_null': false, 'max': 99, 'min': 0}

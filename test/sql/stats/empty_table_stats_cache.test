@@ -1,0 +1,88 @@
+# name: test/sql/stats/empty_table_stats_cache.test
+# description: stats for a table that has none (empty) are cached, and the cache is not stale
+# group: [stats]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+
+test-env DATA_PATH __TEST_DIR__
+
+statement ok
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/ducklake_empty_stats_files')
+
+# negative results are cached; verify they're invalidated after rows are added
+
+statement ok
+CREATE TABLE ducklake.t(a INTEGER, b INTEGER, c INTEGER);
+
+# query twice: first populates cache, second hits it
+query I
+SELECT COUNT(*) FROM ducklake.t
+----
+0
+
+query I
+SELECT COUNT(*) FROM ducklake.t
+----
+0
+
+query III
+SELECT * FROM ducklake.t
+----
+
+# verify cache is invalidated after insert
+statement ok
+INSERT INTO ducklake.t SELECT i, i * 2, i * 3 FROM range(1000) s(i);
+
+query I
+SELECT COUNT(*) FROM ducklake.t
+----
+1000
+
+query III
+SELECT * FROM ducklake.t WHERE a = 500
+----
+500	1000	1500
+
+# verify stats are accurate after insert
+query II
+SELECT MIN(a), MAX(a) FROM ducklake.t
+----
+0	999
+
+# verify filter pushdown with valid stats
+query I
+SELECT COUNT(*) FROM ducklake.t WHERE a > 100000
+----
+0
+
+# emptying must not resurrect old cached stats
+statement ok
+DELETE FROM ducklake.t
+
+query I
+SELECT COUNT(*) FROM ducklake.t
+----
+0
+
+query II
+SELECT MIN(a), MAX(a) FROM ducklake.t
+----
+NULL	NULL
+
+# refilling must be seen too
+statement ok
+INSERT INTO ducklake.t VALUES (7, 8, 9);
+
+query III
+SELECT * FROM ducklake.t
+----
+7	8	9
+
+query II
+SELECT MIN(a), MAX(a) FROM ducklake.t
+----
+7	7

@@ -1,4 +1,5 @@
 #include "ducklake_extension.hpp"
+#include "duckdb/main/config.hpp"
 #include "duckdb.hpp"
 #include "duckdb/common/exception.hpp"
 #include "duckdb/common/string_util.hpp"

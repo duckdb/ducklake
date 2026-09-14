@@ -1,0 +1,53 @@
+# name: test/sql/migration/inlined_column_rename_dev_conflict.test
+# description: dev migration must not partially rename the inlined table on a column conflict
+# group: [migration]
+
+require ducklake
+
+require parquet
+
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/dev1_conflict.db' AS dl (DATA_PATH '{TEST_DIR}/dev1_conflict_files', DUCKLAKE_VERSION '1.0')
+
+statement ok
+CREATE TABLE dl.t(_ducklake_begin_snapshot INTEGER, _ducklake_end_snapshot INTEGER, v INTEGER);
+
+statement ok
+INSERT INTO dl.t VALUES (999999, 999999, 42);
+
+statement ok
+DETACH dl
+
+# simulate a dev1 catalog created before the rename with legacy columns
+statement ok
+ATTACH '{TEST_DIR}/dev1_conflict.db' AS meta;
+
+statement ok
+UPDATE meta.ducklake_metadata SET value = '1.1-dev1' WHERE key = 'version';
+
+statement ok
+DETACH meta
+
+# the dev migration must fail loudly instead of partially renaming the inlined table
+statement error
+ATTACH 'ducklake:{TEST_DIR}/dev1_conflict.db' AS dl (DATA_PATH '{TEST_DIR}/dev1_conflict_files', AUTOMATIC_MIGRATION TRUE)
+----
+Failed to rename inlined-data metadata columns
+
+# retrying fails the same way
+statement error
+ATTACH 'ducklake:{TEST_DIR}/dev1_conflict.db' AS dl (DATA_PATH '{TEST_DIR}/dev1_conflict_files', AUTOMATIC_MIGRATION TRUE)
+----
+Failed to rename inlined-data metadata columns
+
+# no column was renamed
+statement ok
+ATTACH '{TEST_DIR}/dev1_conflict.db' AS meta;
+
+query I
+SELECT COUNT(*) FROM duckdb_columns() WHERE database_name = 'meta' AND table_name = 'ducklake_inlined_data_1_1' AND column_name IN ('row_id', 'begin_snapshot', 'end_snapshot')
+----
+3
+
+statement ok
+DETACH meta

@@ -74,7 +74,7 @@ jobs:
 
     - name: Test Quack
       run: |
-        python3 scripts/run_quack_tests.py
+        python3 scripts/run_quack_tests.py --timeout 300
 
     - name: Test SQLite
       env:

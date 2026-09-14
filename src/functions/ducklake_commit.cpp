@@ -12,7 +12,7 @@ struct DuckLakeCommitBindData : public TableFunctionData {
 };
 
 static unique_ptr<FunctionData> DuckLakeCommitBind(ClientContext &, TableFunctionBindInput &input,
-                                                   vector<LogicalType> &return_types, vector<string> &names) {
+                                                   vector<LogicalType> &return_types, vector<Identifier> &names) {
 	for (idx_t i = 0; i < 2; i++) {
 		if (input.inputs[i].IsNull()) {
 			throw BinderException("ducklake_commit arguments cannot be NULL");

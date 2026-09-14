@@ -27,7 +27,7 @@ public:
 	                   shared_ptr<TableFunctionInfo> function_info = nullptr);
 
 	const vector<LogicalType> &GetTypes() const;
-	const vector<string> &GetNames() const;
+	const vector<Identifier> &GetNames() const;
 
 	//! Find a column by name, returns invalid index if not found
 	optional_idx FindColumn(const string &name) const;
@@ -49,7 +49,7 @@ private:
 	TableFunction parquet_scan;
 	unique_ptr<FunctionData> bind_data;
 	vector<LogicalType> return_types;
-	vector<string> return_names;
+	vector<Identifier> return_names;
 
 	unique_ptr<TableFilterSet> filters;
 	vector<column_t> column_ids;

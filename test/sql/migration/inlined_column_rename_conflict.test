@@ -1,0 +1,40 @@
+# name: test/sql/migration/inlined_column_rename_conflict.test
+# description: a v1.0 user column colliding with the new inlined metadata names aborts the migration cleanly
+# group: [migration]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/inlined_column_rename_conflict.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dlc (DATA_PATH '{DATA_PATH}/inlined_conflict_files', METADATA_CATALOG 'dlcmeta', DUCKLAKE_VERSION '1.0')
+
+statement ok
+CREATE TABLE dlc.c(_ducklake_row_id INTEGER);
+
+statement ok
+INSERT INTO dlc.c VALUES (1);
+
+statement ok
+DETACH dlc
+
+statement error
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dlc (DATA_PATH '{DATA_PATH}/inlined_conflict_files', METADATA_CATALOG 'dlcmeta', AUTOMATIC_MIGRATION TRUE)
+----
+table "c" has a column "_ducklake_row_id" colliding with the renamed metadata column. Rename the column and call ducklake_flush_inlined_data() before migrating
+
+# the catalog is still at v1.0 and fully usable
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dlc (DATA_PATH '{DATA_PATH}/inlined_conflict_files', METADATA_CATALOG 'dlcmeta')
+
+query I
+SELECT * FROM dlc.c
+----
+1
+
+statement ok
+DETACH dlc

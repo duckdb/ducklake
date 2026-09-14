@@ -1,4 +1,5 @@
 #include "duckdb/main/extension_entries.hpp"
+#include "duckdb/common/file_system.hpp"
 #include "duckdb/main/attached_database.hpp"
 #include "duckdb/main/database.hpp"
 #include "duckdb/main/extension_helper.hpp"

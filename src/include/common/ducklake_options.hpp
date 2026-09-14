@@ -24,7 +24,7 @@ using option_map_t = unordered_map<string, string>;
 struct DuckLakeOptions {
 	string metadata_database;
 	string metadata_path;
-	string metadata_schema;
+	Identifier metadata_schema;
 	string data_path;
 	bool override_data_path = false;
 	AccessMode access_mode = AccessMode::AUTOMATIC;

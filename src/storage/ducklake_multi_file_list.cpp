@@ -56,14 +56,20 @@ void DuckLakeMultiFileList::AddFilterToPushdownInfo(FilterPushdownInfo &pushdown
 }
 
 unique_ptr<MultiFileList>
-DuckLakeMultiFileList::DynamicFilterPushdown(ClientContext &context, const MultiFileOptions &options,
-                                             const vector<Identifier> &names, const vector<LogicalType> &types,
-                                             const vector<column_t> &column_ids, TableFilterSet &filters) const {
+DuckLakeMultiFileList::DynamicFilterPushdown(MultiFileDynamicPushdownInfo &dynamic_pushdown_info) const {
+	auto &options = dynamic_pushdown_info.options;
+	auto &names = dynamic_pushdown_info.column_names;
+	auto &types = dynamic_pushdown_info.column_types;
+	auto &column_ids = dynamic_pushdown_info.column_ids;
+	auto &context = dynamic_pushdown_info.context;
+	auto &filters = dynamic_pushdown_info.filters;
+
 	if (read_info.scan_type != DuckLakeScanType::SCAN_TABLE || !filters.HasFilters()) {
 		// filter pushdown is only supported when scanning full tables
 		return nullptr;
 	}
 
+	// DuckDB passes the final filter set, including both static and Top-N dynamic filters.
 	auto pushdown_info = make_uniq<FilterPushdownInfo>();
 
 	for (auto &entry : filters) {
@@ -418,6 +424,10 @@ void DuckLakeMultiFileList::GetTableDeletions() const {
 		file_entry.data_type = DuckLakeDataType::INLINED_DATA;
 		files.push_back(std::move(file_entry));
 	}
+}
+
+bool DuckLakeMultiFileList::CanUseGlobalStats() const {
+	return read_info.CanUseGlobalStats();
 }
 
 bool DuckLakeMultiFileList::IsDeleteScan() const {

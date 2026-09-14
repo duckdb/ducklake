@@ -30,6 +30,10 @@ struct DuckLakeCommitContext {
 	std::function<DuckLakeSnapshot()> get_snapshot;
 	//! Executes the batched snapshot/changes SQL against the metadata DB.
 	std::function<unique_ptr<QueryResult>(DuckLakeSnapshot, string &)> execute_commit_batch;
+	//! Classifies metadata-catalog errors that are safe to retry.
+	std::function<bool(const string &)> is_retryable_metadata_error = [](const string &) {
+		return false;
+	};
 	//! Optional hooks below default to a no-op/constant; callers override only the ones they need.
 	//! Clears the metadata manager cache if a clear was pending.
 	std::function<void()> flush_cache_if_pending = []() {
@@ -101,12 +105,19 @@ struct DuckLakeCommitContext {
 	//! Invalidates the cached stats entry for a table after a stats-affecting file drop.
 	std::function<void(idx_t, TableIndex)> invalidate_table_stats_cache = [](idx_t, TableIndex) {
 	};
+	//! Reports a failure after the metadata commit is already durable.
+	std::function<void(const string &)> report_post_commit_error = [](const string &) {
+	};
 	//! Author / message / extra info for the snapshot row.
 	DuckLakeSnapshotCommit commit_info;
 	//! When true, Commit() skips the post-commit DropEmptySupersededInlinedTables cleanup.
 	bool skip_drop_empty_inlined = false;
-	//! Whether the metadata schema has the row_group_count columns (DuckLake >= 1.1).
-	bool write_row_group_count = false;
+	//! Whether the metadata schema has the >= 1.1-dev1 additions.
+	bool supports_v1_1_metadata = false;
+	//! Column names of the inlined data tables under this catalog version.
+	DuckLakeInlinedColNames InlinedColNames() const {
+		return DuckLakeInlinedColNames(supports_v1_1_metadata);
+	}
 };
 
 //! Holds the per-transaction mutable change state (new/dropped/renamed catalog entries, local file
@@ -123,7 +134,8 @@ public:
 
 	SnapshotAndStats CheckForConflicts(DuckLakeSnapshot transaction_snapshot,
 	                                   const TransactionChangeInformation &changes,
-	                                   const std::function<unique_ptr<QueryResult>(string)> &executor);
+	                                   const std::function<unique_ptr<QueryResult>(string)> &executor,
+	                                   bool supports_v1_1_metadata);
 	void CheckForConflicts(const TransactionChangeInformation &changes, const SnapshotChangeInformation &other_changes,
 	                       DuckLakeSnapshot transaction_snapshot,
 	                       const std::function<unique_ptr<QueryResult>(string)> &executor) const;
@@ -213,6 +225,7 @@ public:
 	unordered_map<string, DataFileIndex> dropped_files;
 	map<TableIndex, DroppedDataFileStats> dropped_file_stats;
 	set<TableIndex> tables_deleted_from;
+	set<TableIndex> tables_delete_attempted;
 	unique_ptr<DuckLakeCatalogSet> new_schemas;
 	map<SchemaIndex, reference<DuckLakeSchemaEntry>> dropped_schemas;
 	LocalTableChanges local_changes;

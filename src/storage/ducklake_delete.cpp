@@ -1,6 +1,9 @@
 #include "storage/ducklake_catalog.hpp"
 #include "storage/ducklake_puffin.hpp"
 #include "duckdb/common/map.hpp"
+#include "duckdb/execution/physical_plan_generator.hpp"
+#include "duckdb/common/file_system.hpp"
+#include "duckdb/common/file_open_flags.hpp"
 #include "duckdb/planner/operator/logical_delete.hpp"
 #include "duckdb/planner/operator/logical_get.hpp"
 #include "duckdb/common/multi_file/multi_file_function.hpp"
@@ -595,11 +598,12 @@ void DuckLakeDelete::FlushDelete(DuckLakeTransaction &transaction, ClientContext
 SinkFinalizeType DuckLakeDelete::Finalize(Pipeline &pipeline, Event &event, ClientContext &context,
                                           OperatorSinkFinalizeInput &input) const {
 	auto &global_state = input.global_state.Cast<DuckLakeDeleteGlobalState>();
+	auto &transaction = DuckLakeTransaction::Get(context, table.catalog);
+	transaction.MarkDeleteAttempted(table.GetTableId());
 	if (global_state.deleted_rows.empty()) {
 		return SinkFinalizeType::READY;
 	}
 
-	auto &transaction = DuckLakeTransaction::Get(context, table.catalog);
 	// write out the delete rows
 	for (auto &entry : global_state.deleted_rows) {
 		auto filename_entry = global_state.filenames.find(entry.first);

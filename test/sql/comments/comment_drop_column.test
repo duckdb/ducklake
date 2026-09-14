@@ -1,0 +1,124 @@
+# name: test/sql/comments/comment_drop_column.test
+# description: dropping a column closes its active column tags
+# group: [comments]
+
+require ducklake
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (
+    DATA_PATH '{DATA_PATH}/ducklake_comment_drop_column',
+    METADATA_CATALOG 'metadata'
+)
+
+# A tag committed before the column is dropped must be closed with the column.
+statement ok
+CREATE TABLE ducklake.test(a INTEGER, b INTEGER)
+
+statement ok
+COMMENT ON COLUMN ducklake.test.b IS 'drop me'
+
+statement ok
+ALTER TABLE ducklake.test DROP COLUMN b
+
+query I
+SELECT count(*)
+FROM metadata.ducklake_column_tag
+WHERE end_snapshot IS NULL
+----
+0
+
+# Adding, commenting on, and dropping a column in one transaction must not
+# commit a tag for a column that never becomes visible.
+statement ok
+CREATE TABLE ducklake.same_transaction(a INTEGER)
+
+statement ok
+BEGIN
+
+statement ok
+ALTER TABLE ducklake.same_transaction ADD COLUMN b INTEGER
+
+statement ok
+COMMENT ON COLUMN ducklake.same_transaction.b IS 'never committed'
+
+statement ok
+ALTER TABLE ducklake.same_transaction DROP COLUMN b
+
+statement ok
+COMMIT
+
+query I
+SELECT count(*)
+FROM metadata.ducklake_column_tag
+WHERE end_snapshot IS NULL
+----
+0
+
+# Commenting on an existing column and dropping it in one transaction must not
+# leave an active tag behind either.
+statement ok
+CREATE TABLE ducklake.comment_then_drop(a INTEGER, b INTEGER)
+
+statement ok
+BEGIN
+
+statement ok
+COMMENT ON COLUMN ducklake.comment_then_drop.b IS 'gone'
+
+statement ok
+ALTER TABLE ducklake.comment_then_drop DROP COLUMN b
+
+statement ok
+COMMIT
+
+query I
+SELECT count(*)
+FROM metadata.ducklake_column_tag
+WHERE end_snapshot IS NULL AND value = 'gone'
+----
+0
+
+# Renaming re-adds the field under the same field id, so a committed comment
+# must survive a rename.
+statement ok
+CREATE TABLE ducklake.renamed(a INTEGER, c INTEGER)
+
+statement ok
+COMMENT ON COLUMN ducklake.renamed.c IS 'keep me'
+
+statement ok
+ALTER TABLE ducklake.renamed RENAME COLUMN c TO d
+
+query I
+SELECT count(*)
+FROM metadata.ducklake_column_tag
+WHERE end_snapshot IS NULL AND value = 'keep me'
+----
+1
+
+# A comment set and renamed in one transaction must survive as well.
+statement ok
+CREATE TABLE ducklake.comment_then_rename(a INTEGER, c INTEGER)
+
+statement ok
+BEGIN
+
+statement ok
+COMMENT ON COLUMN ducklake.comment_then_rename.c IS 'survives rename'
+
+statement ok
+ALTER TABLE ducklake.comment_then_rename RENAME COLUMN c TO d
+
+statement ok
+COMMIT
+
+query I
+SELECT count(*)
+FROM metadata.ducklake_column_tag
+WHERE end_snapshot IS NULL AND value = 'survives rename'
+----
+1

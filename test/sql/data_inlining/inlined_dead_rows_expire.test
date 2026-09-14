@@ -1,0 +1,90 @@
+# name: test/sql/data_inlining/inlined_dead_rows_expire.test
+# description: verify that inlined rows no surviving snapshot can read are reclaimed by expire_snapshots
+# group: [data_inlining]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/inlined_dead_rows_expire_files', METADATA_CATALOG 'ducklake_meta', DATA_INLINING_ROW_LIMIT 100)
+
+statement ok
+CREATE TABLE ducklake.t1(i INTEGER)
+
+statement ok
+INSERT INTO ducklake.t1 VALUES (1), (2), (3)
+
+statement ok
+DELETE FROM ducklake.t1 WHERE i=2
+
+# an older snapshot can still read the deleted row
+query I
+SELECT COUNT(*) FROM ducklake_meta.ducklake_inlined_data_1_1
+----
+3
+
+statement ok
+CALL ducklake_expire_snapshots('ducklake', older_than => now())
+
+statement ok
+CALL ducklake_cleanup_old_files('ducklake', cleanup_all => true)
+
+# no snapshot can see it anymore
+query I
+SELECT COUNT(*) FROM ducklake_meta.ducklake_inlined_data_1_1
+----
+2
+
+query I
+SELECT * FROM ducklake.t1 ORDER BY i
+----
+1
+3
+
+# repeated insert/delete cycles do not accumulate
+statement ok
+INSERT INTO ducklake.t1 VALUES (4)
+
+statement ok
+DELETE FROM ducklake.t1 WHERE i=4
+
+statement ok
+INSERT INTO ducklake.t1 VALUES (5)
+
+statement ok
+DELETE FROM ducklake.t1 WHERE i=5
+
+statement ok
+CALL ducklake_expire_snapshots('ducklake', older_than => now())
+
+query I
+SELECT COUNT(*) FROM ducklake_meta.ducklake_inlined_data_1_1
+----
+2
+
+query I
+SELECT * FROM ducklake.t1 ORDER BY i
+----
+1
+3
+
+# the live inlined table is kept, the next insert reuses it
+query I
+SELECT COUNT(*) FROM ducklake_meta.ducklake_inlined_data_tables WHERE table_name='ducklake_inlined_data_1_1'
+----
+1
+
+statement ok
+INSERT INTO ducklake.t1 VALUES (6)
+
+query I
+SELECT * FROM ducklake.t1 ORDER BY i
+----
+1
+3
+6

@@ -32,6 +32,7 @@ jobs:
       duckdb_version: ${{ needs.get-duckdb-version.outputs.duckdb_version }}
       ci_tools_version: v1.5-variegata
       extension_name: ducklake
+      opt_in_archs: 'linux_arm64_musl;linux_amd64_musl'
 
   # Regression test, see https://github.com/duckdb/ducklake/pull/1256 for more details.
   gcc12-compatibility-build:

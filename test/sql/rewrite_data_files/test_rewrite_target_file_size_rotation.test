@@ -1,0 +1,107 @@
+# name: test/sql/rewrite_data_files/test_rewrite_target_file_size_rotation.test
+# description: rewrite rotates an oversized file into target-sized files, preserving row-ids (issue #563)
+# group: [rewrite_data_files]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/rewrite_rotation', METADATA_CATALOG 'ducklake_metadata', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+USE dl
+
+statement ok
+SET threads TO 1
+
+statement ok
+CALL dl.set_option('parquet_compression', 'uncompressed')
+
+statement ok
+CALL dl.set_option('target_file_size', '512MB')
+
+statement ok
+CREATE TABLE t(id BIGINT, payload VARCHAR);
+
+statement ok
+INSERT INTO t SELECT i, repeat(md5(i::VARCHAR), 4) FROM range(20000) t(i)
+
+statement ok
+DELETE FROM t WHERE id % 10 = 0
+
+# rewrite with a small target + fine row groups so the output rotates
+statement ok
+CALL dl.set_option('parquet_row_group_size', '2000')
+
+statement ok
+CALL dl.set_option('target_file_size', '64KB')
+
+# one oversized source file rotates into exactly 5 target-sized files
+query II
+SELECT SUM(files_processed), SUM(files_created) FROM ducklake_rewrite_data_files('dl', 't', delete_threshold => 0)
+----
+1	5
+
+# data + row-ids preserved
+query II
+SELECT SUM(id), SUM(rowid) FROM t
+----
+180000000	180000000
+
+# every rewritten file respects the target (a single un-rotated file would be ~2.6MB)
+query I
+SELECT MAX(file_size_bytes) < 1000000 FROM ducklake_metadata.ducklake_data_file WHERE end_snapshot IS NULL
+----
+true
+
+# test with a partition
+
+statement ok
+CALL dl.set_option('target_file_size', '512MB')
+
+statement ok
+CREATE TABLE p(pk INTEGER, id BIGINT, payload VARCHAR);
+
+statement ok
+ALTER TABLE p SET PARTITIONED BY (pk)
+
+statement ok
+INSERT INTO p SELECT i % 3, i, repeat(md5(i::VARCHAR), 4) FROM range(30000) t(i)
+
+statement ok
+DELETE FROM p WHERE id % 10 = 0
+
+statement ok
+CALL dl.set_option('parquet_row_group_size', '2000')
+
+statement ok
+CALL dl.set_option('target_file_size', '64KB')
+
+# each of the 3 single-file partitions rotates into 3 files -> 9 created
+query II
+SELECT SUM(files_processed), SUM(files_created) FROM ducklake_rewrite_data_files('dl', 'p', delete_threshold => 0)
+----
+3	9
+
+# exactly 3 files per partition, no partition mixing
+query II
+SELECT pv.partition_value, COUNT(*)
+FROM ducklake_metadata.ducklake_data_file df
+JOIN ducklake_metadata.ducklake_file_partition_value pv ON df.data_file_id = pv.data_file_id
+WHERE df.end_snapshot IS NULL
+GROUP BY pv.partition_value ORDER BY pv.partition_value
+----
+0	3
+1	3
+2	3
+
+# data + row-ids preserved
+query II
+SELECT SUM(id), SUM(rowid) FROM p
+----
+405000000	404991000

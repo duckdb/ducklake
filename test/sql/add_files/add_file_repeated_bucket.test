@@ -20,28 +20,28 @@ statement ok
 USE ducklake;
 
 statement ok
-CREATE TABLE double_bucket_t (id INT, c INT);
+CREATE TABLE repeated_bucket_t (id INT, c INT);
 
 statement ok
-ALTER TABLE double_bucket_t SET PARTITIONED BY (bucket(4, c), bucket(8, c));
+ALTER TABLE repeated_bucket_t SET PARTITIONED BY (id, bucket(4, c), bucket(8, c), bucket(16, c));
 
 statement ok
-COPY (SELECT 10 AS id, 42 AS c, 1 AS bucket, 5 AS bucket_c)
+COPY (SELECT 10 AS id, 42 AS c, 1 AS bucket, 5 AS bucket_c, 13 AS bucket_c_2)
 TO '{DATA_PATH}/repeated_bucket_staged'
-(FORMAT parquet, PARTITION_BY (bucket, bucket_c));
+(FORMAT parquet, PARTITION_BY (id, bucket, bucket_c, bucket_c_2));
 
 statement ok
 CALL ducklake_add_data_files(
 	'ducklake',
-	'double_bucket_t',
-	'{DATA_PATH}/repeated_bucket_staged/bucket=1/bucket_c=5/*.parquet'
+	'repeated_bucket_t',
+	'{DATA_PATH}/repeated_bucket_staged/id=10/bucket=1/bucket_c=5/bucket_c_2=13/*.parquet'
 )
 
 statement ok
 SET VARIABLE bucket_file_id = (
 	SELECT data_file_id
 	FROM metadata.ducklake_data_file
-	WHERE path LIKE '%bucket_c=5%'
+	WHERE path LIKE '%bucket_c_2=13%'
 )
 
 query IT
@@ -50,5 +50,7 @@ FROM metadata.ducklake_file_partition_value
 WHERE data_file_id = getvariable('bucket_file_id')
 ORDER BY partition_key_index
 ----
-0	1
-1	5
+0	10
+1	1
+2	5
+3	13

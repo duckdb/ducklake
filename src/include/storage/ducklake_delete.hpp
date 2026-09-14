@@ -9,6 +9,8 @@
 #pragma once
 
 #include "storage/ducklake_insert.hpp"
+#include "duckdb/execution/physical_plan_generator.hpp"
+#include "duckdb/common/file_system.hpp"
 #include "storage/ducklake_delete_filter.hpp"
 #include "storage/ducklake_metadata_info.hpp"
 #include "common/ducklake_data_file.hpp"

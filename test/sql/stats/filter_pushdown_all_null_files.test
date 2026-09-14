@@ -1,0 +1,49 @@
+# name: test/sql/stats/filter_pushdown_all_null_files.test
+# description: Test that files holding only NULLs are kept for filters a NULL row satisfies
+# group: [stats]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/ducklake_all_null_files', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE ducklake.t(a INTEGER);
+
+statement ok
+INSERT INTO ducklake.t SELECT i FROM range(1, 101) t(i);
+
+statement ok
+INSERT INTO ducklake.t SELECT i FROM range(101, 201) t(i);
+
+# a file with no values at all - min/max are absent and value_count is 0
+statement ok
+INSERT INTO ducklake.t VALUES (NULL);
+
+# the value predicate alone cannot be satisfied by a NULL, so the all-NULL file is pruned
+query II
+EXPLAIN ANALYZE SELECT COUNT(*) FROM ducklake.t WHERE a = 50;
+----
+analyzed_plan	<REGEX>:.*Total Files Read: 1.*
+
+# once a branch matches NULLs the file has to be read, even though it has no min/max
+query I
+SELECT COUNT(*) FROM ducklake.t WHERE a >= 30 OR a IS NULL;
+----
+172
+
+query I
+SELECT COUNT(*) FROM ducklake.t WHERE a = 50 OR a IS NULL;
+----
+2
+
+query I
+SELECT COUNT(*) FROM ducklake.t WHERE a IS NULL;
+----
+1

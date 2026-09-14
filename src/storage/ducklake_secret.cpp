@@ -52,15 +52,7 @@ CreateSecretFunction DuckLakeSecret::GetFunction() {
 unique_ptr<SecretEntry> DuckLakeSecret::GetSecret(ClientContext &context, const string &secret_name) {
 	auto &secret_manager = SecretManager::Get(context);
 	auto transaction = CatalogTransaction::GetSystemCatalogTransaction(context);
-	// FIXME: this should be adjusted once the `GetSecretByName` API supports this use case
-	auto secret_entry = secret_manager.GetSecretByName(transaction, secret_name, "memory");
-	if (secret_entry) {
-		return secret_entry;
-	}
-	secret_entry = secret_manager.GetSecretByName(transaction, secret_name, "local_file");
-	if (secret_entry) {
-		return secret_entry;
-	}
-	return nullptr;
+	// omitting the storage searches all registered secret storages, including extension-registered ones
+	return secret_manager.GetSecretByName(transaction, secret_name);
 }
 } // namespace duckdb

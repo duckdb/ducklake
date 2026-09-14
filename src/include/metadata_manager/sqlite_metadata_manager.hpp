@@ -25,6 +25,7 @@ public:
 	bool SupportsAppender() const override {
 		return false;
 	}
+	bool IsRetryableCommitError(const string &message) const override;
 
 	string GetColumnTypeInternal(const LogicalType &type) override;
 };

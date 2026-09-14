@@ -192,3 +192,25 @@ FROM multi_partition_t WHERE day(dt) = 20 order by id;
 ----
 3	c	2024-04-20
 12	z	2024-04-20
+
+# Bucket transform partition values must be valid bucket ids for the configured bucket count.
+statement ok
+CREATE TABLE bucket_partition_t(user_id VARCHAR, value INTEGER);
+
+statement ok
+ALTER TABLE bucket_partition_t SET PARTITIONED BY (bucket(4, user_id));
+
+statement ok
+COPY (
+  SELECT 'alice'::VARCHAR AS user_id, 42::INT AS value, 999::INT AS bucket
+) TO '{DATA_PATH}/add_file_partitioned/invalid_bucket' (FORMAT parquet, PARTITION_BY(bucket));
+
+statement error
+CALL ducklake_add_data_files(
+  'ducklake',
+  'bucket_partition_t',
+  '{DATA_PATH}/add_file_partitioned/invalid_bucket/bucket=999/*.parquet',
+  hive_partitioning => true
+)
+----
+contains an invalid partition value for the table configuration

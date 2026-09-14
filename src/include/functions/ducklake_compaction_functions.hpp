@@ -9,6 +9,8 @@
 #pragma once
 
 #include "functions/ducklake_table_functions.hpp"
+#include "duckdb/execution/physical_plan_generator.hpp"
+#include "duckdb/planner/logical_operator.hpp"
 #include "storage/ducklake_transaction.hpp"
 #include "storage/ducklake_catalog.hpp"
 #include "storage/ducklake_schema_entry.hpp"
@@ -93,10 +95,16 @@ public:
 	                                              DuckLakeTableEntry &table, optional_ptr<DuckLakeSort> sort_data,
 	                                              bool add_tiebreakers = false);
 	static vector<OrderByNode> ParseSortOrders(const DuckLakeSort &sort_data);
-	static vector<BoundOrderByNode> BindSortOrders(Binder &binder, DuckLakeTableEntry &table, TableIndex table_index,
+	//! Bind ORDER BY expressions against a column list + table name (works before a table entry exists).
+	static vector<BoundOrderByNode> BindSortOrders(Binder &binder, const ColumnList &columns,
+	                                               const Identifier &table_name, TableIndex table_index,
 	                                               vector<OrderByNode> &pre_bound_orders);
 
 private:
+	optional_ptr<DuckLakeTableEntry> ResolvePartitionSpecTable(DuckLakeTableEntry &table,
+	                                                           const DuckLakeCompactionFileEntry &source_file,
+	                                                           idx_t partition_id);
+
 	ClientContext &context;
 	DuckLakeCatalog &catalog;
 	DuckLakeTransaction &transaction;

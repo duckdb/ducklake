@@ -38,10 +38,17 @@ struct LocalChange {
 	LocalChangeType type;
 	//! For operations that alter individual columns
 	FieldIndex field_index;
+	//! For SET_COLUMN_COMMENT on views
+	string view_column_comment_name;
 
 	static LocalChange SetColumnComment(FieldIndex field_idx) {
 		LocalChange result(LocalChangeType::SET_COLUMN_COMMENT);
 		result.field_index = field_idx;
+		return result;
+	}
+	static LocalChange SetViewColumnComment(const string &column_name) {
+		LocalChange result(LocalChangeType::SET_COLUMN_COMMENT);
+		result.view_column_comment_name = column_name;
 		return result;
 	}
 	static LocalChange SetNull(FieldIndex field_idx) {

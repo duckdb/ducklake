@@ -1,0 +1,81 @@
+# name: test/sql/macros/test_null_default.test
+# description: macros whose parameter defaults are NULL
+# group: [macros]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/ducklake_macro_null_default.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/macro_null_default', METADATA_CATALOG 'ducklake_meta')
+
+statement ok
+USE ducklake
+
+statement ok
+CREATE MACRO with_default(a, b := NULL) AS COALESCE(b, a)
+
+statement ok
+CREATE MACRO rows_for(v := NULL) AS TABLE SELECT v AS v, v IS NULL AS missing
+
+query IIIIIII
+FROM ducklake_meta.ducklake_macro_parameters ORDER BY macro_id, column_id
+----
+1	0	0	a	unknown	NULL	unknown
+1	0	1	b	unknown	NULL	null
+2	0	0	v	unknown	NULL	null
+
+query II
+SELECT with_default(1), with_default(1, 2)
+----
+1	2
+
+query II
+FROM rows_for()
+----
+NULL	true
+
+query II
+FROM rows_for(3)
+----
+3	false
+
+# the definitions survive a fresh attach
+statement ok
+USE memory
+
+statement ok
+DETACH ducklake
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/macro_null_default', METADATA_CATALOG 'ducklake_meta')
+
+query II
+SELECT ducklake.with_default(1), ducklake.with_default(1, 2)
+----
+1	2
+
+query II
+FROM ducklake.rows_for()
+----
+NULL	true
+
+statement ok
+CREATE OR REPLACE MACRO ducklake.with_default(a, b := 5, c := NULL) AS COALESCE(c, a + b)
+
+query III
+SELECT ducklake.with_default(1), ducklake.with_default(1, 2), ducklake.with_default(1, 2, 10)
+----
+6	3	10
+
+statement ok
+DROP MACRO ducklake.with_default
+
+statement error
+SELECT ducklake.with_default(1)
+----
+does not exist

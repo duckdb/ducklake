@@ -1,0 +1,66 @@
+# name: test/sql/data_inlining/empty_inlined_tables_alter_cleanup.test
+# description: superseded empty inlined tables from ADD COLUMN must be reclaimed by maintenance routines
+# group: [data_inlining]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/empty_inlined_alter_files', METADATA_CATALOG 'ducklake_meta', DATA_INLINING_ROW_LIMIT 10)
+
+statement ok
+CREATE TABLE ducklake.a(c0 INTEGER)
+
+statement ok
+ALTER TABLE ducklake.a ADD COLUMN c1 INTEGER
+
+statement ok
+ALTER TABLE ducklake.a ADD COLUMN c2 INTEGER
+
+statement ok
+ALTER TABLE ducklake.a ADD COLUMN c3 INTEGER
+
+statement ok
+ALTER TABLE ducklake.a ADD COLUMN c4 INTEGER
+
+statement ok
+ALTER TABLE ducklake.a ADD COLUMN c5 INTEGER
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake')
+
+statement ok
+CHECKPOINT ducklake
+
+statement ok
+CALL ducklake_expire_snapshots('ducklake', older_than => now())
+
+statement ok
+CALL ducklake_cleanup_old_files('ducklake', cleanup_all => true)
+
+query I
+SELECT COUNT(*) FROM ducklake_meta.ducklake_snapshot
+----
+1
+
+# only the inlined table for the current schema version may remain.
+# The registry row and its physical table are dropped together in one batch, so the
+# registry count is the backend-portable source of truth (duckdb_tables() cannot see
+# a remote quack-backed metadata catalog).
+query I
+SELECT COUNT(*) FROM ducklake_meta.ducklake_inlined_data_tables
+----
+1
+
+statement ok
+INSERT INTO ducklake.a VALUES (1, 2, 3, 4, 5, 6)
+
+query IIIIII
+SELECT c0, c1, c2, c3, c4, c5 FROM ducklake.a
+----
+1	2	3	4	5	6

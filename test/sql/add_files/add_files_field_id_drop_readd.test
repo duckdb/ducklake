@@ -1,0 +1,84 @@
+# name: test/sql/add_files/add_files_field_id_drop_readd.test
+# description: ducklake_add_data_files should reject stale Parquet field IDs after nested drop/re-add
+# group: [add_files]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (
+	DATA_PATH '{DATA_PATH}/ducklake_add_files_field_id_drop_readd',
+	METADATA_CATALOG 'metadata',
+	DATA_INLINING_ROW_LIMIT 10
+)
+
+statement ok
+CREATE TABLE ducklake.test(s STRUCT(i INT, j INT));
+
+statement ok
+INSERT INTO ducklake.test VALUES ({'i': 1, 'j': 10});
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake');
+
+statement ok
+SET VARIABLE old_files = (SELECT LIST(data_file) FROM ducklake_list_files('ducklake', 'test'));
+
+# Byte-copy the DuckLake-written Parquet file so the old field IDs are preserved.
+statement ok
+COPY (
+	SELECT content
+	FROM read_blob(getvariable('old_files')[1])
+) TO '{DATA_PATH}/ducklake_add_files_old_field_ids.parquet' (FORMAT BLOB);
+
+query TI
+SELECT name, field_id
+FROM parquet_schema('{DATA_PATH}/ducklake_add_files_old_field_ids.parquet')
+WHERE name IN ('s', 'i', 'j')
+ORDER BY name
+----
+i	2
+j	3
+s	1
+
+statement ok
+ALTER TABLE ducklake.test DROP COLUMN s.j;
+
+statement ok
+ALTER TABLE ducklake.test ADD COLUMN s.j INT;
+
+statement ok
+INSERT INTO ducklake.test VALUES ({'i': 2, 'j': 20});
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake');
+
+query I rowsort
+SELECT s FROM ducklake.test
+----
+{'i': 1, 'j': NULL}
+{'i': 2, 'j': 20}
+
+query TIT
+SELECT column_name, column_id, CASE WHEN end_snapshot IS NULL THEN 'live' ELSE 'dropped' END
+FROM metadata.ducklake_column
+WHERE column_name = 'j'
+ORDER BY column_id
+----
+j	3	dropped
+j	4	live
+
+statement error
+CALL ducklake_add_data_files(
+	'ducklake',
+	'test',
+	'{DATA_PATH}/ducklake_add_files_old_field_ids.parquet',
+	ignore_extra_columns => true
+);
+----
+field ID

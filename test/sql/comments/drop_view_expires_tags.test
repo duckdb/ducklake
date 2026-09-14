@@ -1,5 +1,5 @@
 # name: test/sql/comments/drop_view_expires_tags.test
-# description: Verify DROP VIEW expires associated tags in ducklake_tag
+# description: Verify DROP VIEW expires ducklake_tag (view comment).
 # group: [comments]
 
 require ducklake
@@ -12,12 +12,12 @@ statement ok
 ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{TEST_DIR}/drop_view_expires_tags/')
 
 statement ok
-CREATE VIEW ducklake.v AS SELECT 1
+CREATE VIEW ducklake.v AS SELECT 1 AS c
 
 statement ok
 COMMENT ON VIEW ducklake.v IS 'my view comment'
 
-# verify the tag is active
+# verify view tag row is active
 query II
 SELECT key, value FROM __ducklake_metadata_ducklake.ducklake_tag WHERE end_snapshot IS NULL;
 ----
@@ -26,7 +26,7 @@ comment	my view comment
 statement ok
 DROP VIEW ducklake.v
 
-# after DROP VIEW, the tag should be expired
+# after DROP VIEW, no active rows in ducklake_tag (DropViews expires ducklake_tag)
 query I
 SELECT count(*) FROM __ducklake_metadata_ducklake.ducklake_tag WHERE end_snapshot IS NULL;
 ----

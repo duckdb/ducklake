@@ -17,9 +17,63 @@
     {
       "reason": "This test exercises the ducklake_version feature directly and assumes no global default is set",
       "paths": [
+        "test/sql/add_files/add_files_stats_exactness.test",
         "test/sql/attach/attach_ducklake_version.test",
         "test/sql/metadata/row_group_count.test",
-        "test/sql/migration/v10_row_group_count.test"
+        "test/sql/migration/v10_row_group_count.test",
+        "test/sql/migration/v11_stats_exactness.test",
+        "test/sql/partitioning/epoch_version_gate.test",
+        "test/sql/stats/stats_exactness_inlined.test",
+        "test/sql/types/null_type_version_gate.test",
+        "test/sql/macros/null_default_version_gate.test"
+      ]
+    },
+    {
+      "reason": "The NULL column type was added in 1.1-dev1 and is not available when ducklake_default_version is pinned to 1.0",
+      "paths": [
+        "test/sql/types/null_type.test",
+        "test/sql/alter/promote_null_type.test",
+        "test/sql/partitioning/partition_null_type.test",
+        "test/sql/data_inlining/data_inlining_null_type.test",
+        "test/sql/add_files/add_files_null_type.test",
+        "test/sql/macros/test_null_default.test"
+      ]
+    },
+    {
+      "reason": "View column comments (ducklake_view_column_tag) were added in 1.1-dev1 and are not available when ducklake_default_version is pinned to 1.0",
+      "paths": [
+        "test/sql/comments/comment_on_view_column.test",
+        "test/sql/comments/comment_on_view_column_conflict.test",
+        "test/sql/comments/comment_on_view_column_invalid.test",
+        "test/sql/comments/comment_on_view_column_update.test",
+        "test/sql/comments/drop_view_expires_view_column_tags.test"
+      ]
+    },
+    {
+      "reason": "The _ducklake_ reserved prefix and the inlined column rename migration were added in 1.1-dev1 and are not exercised when ducklake_default_version is pinned to 1.0",
+      "paths": [
+        "test/sql/data_inlining/inlining_reserved_column_names.test",
+        "test/sql/alter/issue_944.test",
+        "test/sql/migration/inlined_column_rename.test",
+        "test/sql/migration/inlined_column_rename_conflict.test",
+        "test/sql/migration/inlined_column_rename_partial.test",
+        "test/sql/migration/inlined_column_rename_dev_conflict.test",
+        "test/sql/migration/inlined_column_rename_missing_table.test",
+        "test/sql/migration/inlined_column_rename_remigrate.test",
+        "test/sql/migration/inlined_column_rename_hint.test",
+        "test/sql/migration/inlined_column_rename_reverse_hint.test",
+        "test/sql/migration/inlined_column_rename_stats_hint.test",
+        "test/sql/migration/inlined_column_rename_dev_missing_table.test"
+      ]
+    },
+    {
+      "reason": "Epoch partition transforms were added in 1.1-dev1 and are not available when ducklake_default_version is pinned to 1.0",
+      "paths": [
+        "test/sql/add_files/add_file_epoch_partitioned.test",
+        "test/sql/data_inlining/data_inlining_epoch_partitions.test",
+        "test/sql/partitioning/epoch_timestamptz.test",
+        "test/sql/partitioning/epoch_transforms.test",
+        "test/sql/partitioning/update_partition_epoch.test"
       ]
     }
   ]

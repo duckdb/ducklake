@@ -1,4 +1,6 @@
 #include "functions/ducklake_table_functions.hpp"
+#include "duckdb/catalog/catalog.hpp"
+#include "duckdb/common/file_system.hpp"
 
 #include "duckdb/common/operator/subtract.hpp"
 #include "duckdb/common/string.hpp"
@@ -50,7 +52,7 @@ struct CleanupBindData : public TableFunctionData {
 };
 
 static unique_ptr<FunctionData> CleanupBind(ClientContext &context, TableFunctionBindInput &input,
-                                            vector<LogicalType> &return_types, vector<string> &names,
+                                            vector<LogicalType> &return_types, vector<Identifier> &names,
                                             CleanupType type) {
 	auto &catalog = DuckLakeBaseMetadataFunction::GetCatalog(context, input.inputs[0]);
 	auto result = make_uniq<CleanupBindData>(catalog, type);
@@ -104,13 +106,14 @@ static unique_ptr<FunctionData> CleanupBind(ClientContext &context, TableFunctio
 	return std::move(result);
 }
 static unique_ptr<FunctionData> DuckLakeCleanupOldFilesBind(ClientContext &context, TableFunctionBindInput &input,
-                                                            vector<LogicalType> &return_types, vector<string> &names) {
+                                                            vector<LogicalType> &return_types,
+                                                            vector<Identifier> &names) {
 	return CleanupBind(context, input, return_types, names, CleanupType::OLD_FILES);
 }
 
 static unique_ptr<FunctionData> DuckLakeCleanupOrphanedFilesBind(ClientContext &context, TableFunctionBindInput &input,
                                                                  vector<LogicalType> &return_types,
-                                                                 vector<string> &names) {
+                                                                 vector<Identifier> &names) {
 	return CleanupBind(context, input, return_types, names, CleanupType::ORPHANED_FILES);
 }
 

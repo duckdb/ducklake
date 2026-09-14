@@ -1,0 +1,88 @@
+# name: test/sql/partitioning/data_inlining_disable_hive_partitioning.test
+# description: Test option to disable subfolder creation for partitioning w/inlining
+# group: [partitioning]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+
+test-env DATA_PATH __TEST_DIR__
+
+
+statement ok
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/ducklake_partition_use_hive', METADATA_CATALOG 'ducklake_metadata', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+USE ducklake
+
+statement ok
+CREATE TABLE inlined_hiveless_partitioned_tbl(part_key INTEGER, values VARCHAR);
+
+# disable hive style partitioning
+statement ok
+CALL ducklake.set_option('hive_file_pattern', False, table_name => 'inlined_hiveless_partitioned_tbl')
+
+# enable inlining
+statement ok
+CALL ducklake.set_option('data_inlining_row_limit', 10, table_name => 'inlined_hiveless_partitioned_tbl')
+
+# add partition key
+statement ok
+ALTER TABLE inlined_hiveless_partitioned_tbl SET PARTITIONED BY (part_key);
+
+# insert data with two partitions
+statement ok
+INSERT INTO inlined_hiveless_partitioned_tbl SELECT i%2, concat('thisisastring_', i) FROM range(5) t(i)
+
+# should be no files output
+query II
+SELECT fpv.partition_value, COUNT(distinct df.path)
+FROM ducklake_metadata.ducklake_data_file df
+JOIN ducklake_metadata.ducklake_table t
+ON t.table_id = df.table_id
+JOIN ducklake_metadata.ducklake_file_partition_value fpv
+ON fpv.table_id = t.table_id AND fpv.data_file_id = df.data_file_id
+WHERE
+t.table_name = 'inlined_hiveless_partitioned_tbl'
+GROUP BY ALL
+ORDER BY ALL
+----
+
+# flush inlined data
+statement ok
+from ducklake_flush_inlined_data('ducklake')
+
+# should not follow hive style
+statement error
+FROM '${DATA_PATH}/ducklake_partition_use_hive/main/inlined_hiveless_partitioned_tbl/part_key=0/*.parquet'
+----
+No files found that match the pattern
+
+# should be two flat files output
+query II
+SELECT fpv.partition_value, COUNT(distinct df.path)
+FROM ducklake_metadata.ducklake_data_file df
+JOIN ducklake_metadata.ducklake_table t
+ON t.table_id = df.table_id
+JOIN ducklake_metadata.ducklake_file_partition_value fpv
+ON fpv.table_id = t.table_id AND fpv.data_file_id = df.data_file_id
+WHERE
+t.table_name = 'inlined_hiveless_partitioned_tbl'
+GROUP BY ALL
+ORDER BY ALL
+----
+0	1
+1	1
+
+# data reads back
+query II
+FROM inlined_hiveless_partitioned_tbl
+ORDER BY part_key, values
+----
+0	thisisastring_0
+0	thisisastring_2
+0	thisisastring_4
+1	thisisastring_1
+1	thisisastring_3

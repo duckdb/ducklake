@@ -12,7 +12,7 @@ struct DefaultType {
 	LogicalTypeId id;
 };
 
-using ducklake_type_array = std::array<DefaultType, 33>;
+using ducklake_type_array = std::array<DefaultType, 34>;
 
 static constexpr const ducklake_type_array DUCKLAKE_TYPES {{{"boolean", LogicalTypeId::BOOLEAN},
                                                             {"int8", LogicalTypeId::TINYINT},
@@ -46,6 +46,7 @@ static constexpr const ducklake_type_array DUCKLAKE_TYPES {{{"boolean", LogicalT
                                                             {"struct", LogicalTypeId::STRUCT},
                                                             {"map", LogicalTypeId::MAP},
                                                             {"list", LogicalTypeId::LIST},
+                                                            {"null", LogicalTypeId::SQLNULL},
                                                             {"unknown", LogicalTypeId::UNKNOWN}}};
 
 static LogicalType ParseBaseType(const string &str) {
@@ -126,6 +127,9 @@ string DuckLakeTypes::ToString(const LogicalType &type) {
 	}
 	switch (type.id()) {
 	case LogicalTypeId::STRUCT:
+		if (StructType::GetChildCount(type) == 0) {
+			throw InvalidInputException("Failed to convert DuckDB type to DuckLake - unsupported type %s", type);
+		}
 		return "struct";
 	case LogicalTypeId::VARIANT:
 		return "variant";
@@ -147,11 +151,20 @@ string DuckLakeTypes::ToString(const LogicalType &type) {
 	}
 }
 
-void DuckLakeTypes::CheckSupportedType(const LogicalType &type) {
-	TypeVisitor::VisitReplace(type, [](const LogicalType &type) {
+void DuckLakeTypes::CheckSupportedType(const LogicalType &type, DuckLakeVersion version) {
+	TypeVisitor::VisitReplace(type, [version](const LogicalType &type) {
+		if (type.id() == LogicalTypeId::SQLNULL && version < DuckLakeVersion::V1_1_DEV_1) {
+			ThrowUnsupportedByVersion(version, "the NULL type");
+		}
 		DuckLakeTypes::ToString(type);
 		return type;
 	});
+}
+
+void DuckLakeTypes::CheckSupportedTypes(const ColumnList &columns, DuckLakeVersion version) {
+	for (auto &col : columns.Logical()) {
+		CheckSupportedType(col.Type(), version);
+	}
 }
 
 } // namespace duckdb

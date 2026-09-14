@@ -1,0 +1,120 @@
+# name: test/sql/compaction/merge_adjacent_newer_than.test
+# description: test ducklake merge adjacent files newer_than option
+# group: [compaction]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/merge_adjacent_newer_than/', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+USE ducklake;
+
+statement ok
+CREATE TABLE example (key integer, data varchar);
+
+# Batch 1: two small files
+statement ok
+INSERT INTO example SELECT i, 'batch_1' FROM range(10) t(i);
+
+statement ok
+INSERT INTO example SELECT i + 10, 'batch_1' FROM range(10) t(i);
+
+# Create a snapshot that acts as the boundary between the two batches
+statement ok
+CREATE TABLE boundary_marker (i INTEGER);
+
+# Remember the time of the boundary snapshot - only files written from this point on qualify
+statement ok
+SET VARIABLE batch_boundary = (SELECT snapshot_time FROM ducklake_snapshots('ducklake') ORDER BY snapshot_id DESC LIMIT 1);
+
+# Batch 2: two small files written after the boundary
+statement ok
+INSERT INTO example SELECT i + 100, 'batch_2' FROM range(10) t(i);
+
+statement ok
+INSERT INTO example SELECT i + 200, 'batch_2' FROM range(10) t(i);
+
+# We have 4 files
+query I
+SELECT count(*) FROM __ducklake_metadata_ducklake.ducklake_data_file WHERE end_snapshot IS NULL
+----
+4
+
+# Only files written from the boundary on are considered - the two batch-2 files are merged
+query IIII
+SELECT schema_name, table_name, files_processed, files_created FROM ducklake_merge_adjacent_files('ducklake', 'example', newer_than => getvariable('batch_boundary'))
+----
+main	example	2	1
+
+# The merged file only contains the batch-2 rows - the batch-1 files are untouched
+query I
+SELECT record_count FROM __ducklake_metadata_ducklake.ducklake_data_file WHERE end_snapshot IS NULL ORDER BY record_count
+----
+10
+10
+20
+
+# All data is still there
+query I
+SELECT count(*) FROM example
+----
+40
+
+# A boundary in the future excludes all files - nothing to compact
+query IIII
+SELECT schema_name, table_name, files_processed, files_created FROM ducklake_merge_adjacent_files('ducklake', 'example', newer_than => now()::TIMESTAMP + INTERVAL 1 DAY)
+----
+
+query I
+SELECT count(*) FROM __ducklake_metadata_ducklake.ducklake_data_file WHERE end_snapshot IS NULL
+----
+3
+
+# A boundary in the distant past includes all files - the remaining batch-1 files are merged
+query IIII
+SELECT schema_name, table_name, files_processed, files_created FROM ducklake_merge_adjacent_files('ducklake', 'example', newer_than => now()::TIMESTAMP - INTERVAL 1 DAY)
+----
+main	example	3	1
+
+query I
+SELECT count(*) FROM __ducklake_metadata_ducklake.ducklake_data_file WHERE end_snapshot IS NULL
+----
+1
+
+# The catalog-wide invocation also accepts newer_than
+statement ok
+INSERT INTO example SELECT i + 300, 'batch_3' FROM range(10) t(i);
+
+statement ok
+INSERT INTO example SELECT i + 400, 'batch_3' FROM range(10) t(i);
+
+query IIII
+SELECT schema_name, table_name, files_processed, files_created FROM ducklake_merge_adjacent_files('ducklake', newer_than => now()::TIMESTAMP - INTERVAL 1 DAY)
+----
+main	example	3	1
+
+query I
+SELECT count(*) FROM example
+----
+60
+
+# Test error handling: newer_than cannot be NULL
+statement error
+CALL ducklake_merge_adjacent_files('ducklake', 'example', newer_than => NULL);
+----
+newer_than option must be a non-null timestamp
+
+# Verify data is still correct after all operations
+query II
+SELECT data, count(*) FROM example GROUP BY data ORDER BY data
+----
+batch_1	20
+batch_2	20
+batch_3	20

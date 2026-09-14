@@ -35,6 +35,8 @@ struct TransactionChangeInformation {
 	set<MacroIndex> dropped_table_macros;
 	set<TableIndex> tables_inserted_into;
 	set<TableIndex> tables_deleted_from;
+	//! Tables a delete predicate was evaluated against, regardless of whether any rows matched
+	set<TableIndex> tables_delete_attempted;
 	set<TableIndex> tables_inserted_inlined;
 	set<TableIndex> tables_deleted_inlined;
 	set<TableIndex> tables_flushed_inlined;

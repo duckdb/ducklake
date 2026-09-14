@@ -36,3 +36,13 @@ statement error
 SELECT COUNT(*) FROM ducklake_expire_snapshots('ducklake', dry_run => true, versions => [1, 2], older_than => NOW())
 ----
 cannot specify both 'versions' and 'older_than'
+
+statement error
+SELECT COUNT(*) FROM ducklake_expire_snapshots('ducklake', dry_run => NULL, versions => [1, 2])
+----
+dry_run option must be a non-null boolean
+
+statement error
+SELECT COUNT(*) FROM ducklake_expire_snapshots('ducklake', older_than => NULL, dry_run => true)
+----
+older_than option must be a non-null timestamp
