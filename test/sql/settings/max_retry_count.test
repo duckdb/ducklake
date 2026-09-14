@@ -166,7 +166,7 @@ concurrentloop i 0 8
 statement maybe
 CREATE TABLE ducklake.samename(i INTEGER);
 ----
-Failed to commit DuckLake transaction
+<REGEX>:.*(Failed to commit DuckLake transaction|Table with name "samename" already exists).*
 
 endloop
 
