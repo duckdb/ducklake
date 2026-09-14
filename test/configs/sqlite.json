@@ -38,24 +38,11 @@
       ]
     },
     {
-      "reason": "Failed to execute query COMMIT: database is locked",
+      "reason": "High retry counts can stall under SQLite metadata contention",
       "paths": [
-        "test/sql/compaction/compaction_delete_conflict.test",
-        "test/sql/concurrent/concurrent_insert_conflict.test",
-        "test/sql/concurrent/concurrent_insert_data_inlining.test",
-        "test/sql/rewrite_data_files/test_rewrite_concurrency.test",
-        "test/sql/rewrite_data_files/test_rewrite_transaction_conflict.test",
-        "test/sql/settings/max_retry_count.test",
-        "test/sql/snapshot_info/ducklake_current_commit.test",
-        "test/sql/snapshot_info/ducklake_last_commit.test",
-        "test/sql/stats/global_stats_transactions.test",
-        "test/sql/transaction/concurrent_table_creation.test",
-        "test/sql/transaction/transaction_conflict_cleanup.test",
-        "test/sql/transaction/transaction_conflicts.test",
-        "test/sql/transaction/transaction_conflicts_delete.test",
-        "test/sql/transaction/transaction_conflicts_view.test",
-        "test/sql/concurrent/file_level_conflict.test",
-        "test/sql/transaction/transaction_conflict_inlining.test"
+        "test/sql/issues/issue_1248_concurrent_commit_schema_id.test",
+        "test/sql/retry/commit_failure.test",
+        "test/sql/settings/max_retry_count.test"
       ]
     },
     {

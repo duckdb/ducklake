@@ -950,7 +950,12 @@ bool GetFilePartitionValue(DuckLakeTableEntry &table, const DuckLakeFileListExte
 		partition_value = Value(partition_type);
 		return true;
 	}
-	return matching_partition->partition_value.DefaultTryCastAs(partition_type, partition_value, nullptr, true);
+	auto cast_value = matching_partition->partition_value.DefaultTryCastAs(partition_type, nullptr, true);
+	if (!cast_value) {
+		return false;
+	}
+	partition_value = std::move(*cast_value);
+	return true;
 }
 
 enum class MetadataDeleteFileMatch { MATCH, NO_MATCH, UNKNOWN };

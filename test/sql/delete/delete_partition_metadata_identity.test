@@ -49,6 +49,17 @@ SELECT COUNT(*) FROM md.ducklake_delete_file WHERE table_id = getvariable('eq_id
 ----
 0
 
+# Partition metadata follows the shared extended-query path, including PostgreSQL pushdown.
+query I
+SELECT CASE WHEN (SELECT catalog_type FROM ducklake.settings()) = 'postgres' THEN
+    (SELECT COUNT(*) > 0 FROM duckdb_logs_parsed('DuckLakeMetadata')
+     WHERE lower(regexp_replace(query, '\s+', '', 'g')) LIKE 'select*frompostgres_query(%'
+       AND lower(regexp_replace(query, '\s+', '', 'g')) LIKE '%array_agg(partition_key_index%'
+       AND lower(regexp_replace(query, '\s+', '', 'g')) LIKE '%from"public".ducklake_file_partition_value%')
+    ELSE true END
+----
+true
+
 # Extended file metadata already includes active delete files; no second file-id query is needed.
 query I
 SELECT COUNT(*) FROM duckdb_logs_parsed('DuckLakeMetadata')

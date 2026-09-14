@@ -1,0 +1,43 @@
+# name: test/sql/stats/stats_exactness_inlined.test
+# description: inlined data produces exact min/max stats, flushing keeps exactness via RETURN_STATS
+# group: [stats]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/stats_exactness_inlined.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/stats_exactness_inlined_files', METADATA_CATALOG 'dl', DATA_INLINING_ROW_LIMIT 10)
+
+statement ok
+CREATE TABLE ducklake.test(i INTEGER, s VARCHAR);
+
+statement ok
+INSERT INTO ducklake.test VALUES (1, 'hello'), (2, 'world');
+
+# inlined values are stored verbatim - their stats are exact
+query IIII
+SELECT min_value, max_value, min_is_exact::BOOLEAN, max_is_exact::BOOLEAN FROM dl.ducklake_table_column_stats ORDER BY column_id
+----
+1	2	true	true
+hello	world	true	true
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake')
+
+# the flushed parquet file carries exactness through COPY RETURN_STATS
+query IIII
+SELECT min_value, max_value, min_is_exact::BOOLEAN, max_is_exact::BOOLEAN FROM dl.ducklake_file_column_stats ORDER BY column_id
+----
+1	2	true	true
+hello	world	true	true
+
+query IIII
+SELECT min_value, max_value, min_is_exact::BOOLEAN, max_is_exact::BOOLEAN FROM dl.ducklake_table_column_stats ORDER BY column_id
+----
+1	2	true	true
+hello	world	true	true
