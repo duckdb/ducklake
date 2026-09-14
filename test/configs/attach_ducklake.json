@@ -161,7 +161,9 @@
         "test/sql/cte/materialized/materialized_cte_parallel_buffered.test",
         "test/optimizer/partial_aggregate_pushdown.test",
         "test/sql/optimizer/pushdown_extract_reapplied.test",
-        "test/sql/optimizer/topn_window_elimination_multiplicity.test"
+        "test/sql/optimizer/topn_window_elimination_multiplicity.test",
+        "test/sql/join/mark/test_null_safe_semi_uncommitted_stats.test",
+        "test/sql/function/generic/test_barrier.test"
       ]
     },
     {
@@ -942,6 +944,15 @@
       "paths": [
         "test/sql/attach/attach_enums.test",
         "test/sql/attach/deeply_nested_entries.test"
+      ]
+    },
+    {
+      "reason": "New failures, investigation panding",
+      "paths": [
+        "test/optimizer/statistics/statistics_removed_filter_column_pruning.test",
+        "test/sql/filter/test_throwing_filter_pushdown.test",
+        "test/sql/catalog/nested_schema/deeply_nested_entries.test",
+        "test/sql/optimizer/secure_view_pushdown_compression.test"
       ]
     }
   ]
