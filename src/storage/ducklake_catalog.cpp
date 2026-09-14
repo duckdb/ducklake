@@ -14,6 +14,7 @@
 #include "duckdb/parser/parsed_data/create_table_info.hpp"
 #include "duckdb/parser/parsed_data/create_view_info.hpp"
 #include "duckdb/parser/parsed_data/drop_info.hpp"
+#include "duckdb/planner/parsed_data/bound_create_table_info.hpp"
 #include "duckdb/storage/database_size.hpp"
 #include "storage/ducklake_initializer.hpp"
 #include "storage/ducklake_schema_entry.hpp"
@@ -285,6 +286,16 @@ optional_ptr<CatalogEntry> DuckLakeCatalog::CreateSchema(CatalogTransaction tran
 	return result;
 }
 
+ErrorData DuckLakeCatalog::SupportsCreateTable(BoundCreateTableInfo &info) {
+	auto &base = info.Base().Cast<CreateTableInfo>();
+	if (!base.options.empty()) {
+		return ErrorData(
+		    ExceptionType::CATALOG,
+		    StringUtil::Format("WITH clause is not supported for tables in a %s catalog", GetCatalogType()));
+	}
+	return ErrorData();
+}
+
 void DuckLakeCatalog::DropSchema(ClientContext &context, DropInfo &info) {
 	auto schema = GetSchema(GetCatalogTransaction(context), info.GetQualifiedName().Name(), info.if_not_found);
 	if (!schema) {
@@ -477,7 +488,8 @@ unique_ptr<CreateMacroInfo> CreateMacroInfoFromDucklake(ClientContext &context, 
 			macro_function->parameters.push_back(make_uniq<ColumnRefExpression>(Identifier(param.parameter_name)));
 			auto expr_type = DuckLakeTypes::FromString(param.default_value_type);
 			if (expr_type.id() != LogicalTypeId::UNKNOWN) {
-				auto casted_value = param.default_value.CastAs(context, expr_type);
+				auto casted_value =
+				    expr_type.id() == LogicalTypeId::SQLNULL ? Value() : param.default_value.CastAs(context, expr_type);
 				auto casted_expr = make_uniq<ConstantExpression>(std::move(casted_value));
 				macro_function->default_parameters.insert(Identifier(param.parameter_name), std::move(casted_expr));
 			}
@@ -1043,16 +1055,25 @@ idx_t DuckLakeCatalog::GetTargetFileSize(ClientContext &context, DuckLakeTableEn
 
 idx_t DuckLakeCatalog::GetInliningLimit(ClientContext &context, DuckLakeTableEntry &table) {
 	auto &schema = table.ParentSchema().Cast<DuckLakeSchemaEntry>();
-	idx_t limit = DataInliningRowLimit(context, schema.GetSchemaId(), table.GetTableId());
+	return GetInliningLimit(context, schema.GetSchemaId(), table.GetTableId(), table.GetColumns());
+}
+
+idx_t DuckLakeCatalog::GetInliningLimit(ClientContext &context, SchemaIndex schema_id, TableIndex table_id,
+                                        const ColumnList &columns) {
+	idx_t limit = DataInliningRowLimit(context, schema_id, table_id);
 	if (limit == 0) {
 		return 0;
 	}
 	auto &transaction = DuckLakeTransaction::Get(context, *this);
 	auto &metadata_manager = transaction.GetMetadataManager();
-	if (!metadata_manager.CanInlineColumns(table.GetColumns())) {
+	if (!metadata_manager.CanInlineColumns(columns)) {
 		return 0;
 	}
 	return limit;
+}
+
+bool DuckLakeCatalog::SortOnInsert(SchemaIndex schema_id, TableIndex table_id) const {
+	return GetConfigOption<string>("sort_on_insert", schema_id, table_id, "true") == "true";
 }
 
 unique_ptr<LogicalOperator> DuckLakeCatalog::BindAlterAddIndex(Binder &binder, TableCatalogEntry &table_entry,

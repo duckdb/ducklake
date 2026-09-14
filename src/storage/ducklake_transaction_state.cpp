@@ -1403,6 +1403,18 @@ void DuckLakeTransactionState::GetNewTableInfo(DuckLakeCommitState &commit_state
 			inlined_entry.uuid = latest_table.GetTableUUID();
 			inlined_entry.columns = latest_table.GetTableColumns();
 			result.new_inlined_data_tables.push_back(std::move(inlined_entry));
+
+			// CREATE TABLE ... PARTITIONED BY / SORTED BY
+			if (local_change.type == LocalChangeType::CREATED) {
+				if (table.GetPartitionData()) {
+					auto partition_key = DuckLakeTransaction::GetNewPartitionKey(commit_state, table);
+					result.new_partition_keys.push_back(std::move(partition_key));
+				}
+				if (table.GetSortData()) {
+					auto sort_key = DuckLakeTransaction::GetNewSortKey(commit_state, table);
+					result.new_sort_keys.push_back(std::move(sort_key));
+				}
+			}
 			break;
 		}
 		default:
@@ -1978,7 +1990,7 @@ void DuckLakeTransactionState::Commit(DuckLakeSnapshot transaction_snapshot,
 			context.try_rollback();
 			retryable_metadata_error = retryable_metadata_error || context.is_retryable_metadata_error(error.Message());
 			bool retry_on_error =
-			    retryable_metadata_error || (can_retry && DuckLakeTransaction::RetryOnError(error.Message()));
+			    can_retry && (retryable_metadata_error || DuckLakeTransaction::RetryOnError(error.Message()));
 			// We perform one initial attempt plus up to max_retry_count retries. Since i is the
 			// zero-based attempt index, we are done retrying once i reaches max_retry_count.
 			bool finished_retrying = i >= retry_config.max_retry_count;

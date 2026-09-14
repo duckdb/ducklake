@@ -17,6 +17,9 @@ test-env DATA_PATH {TEST_DIR}
 statement ok
 ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/ducklake_concurrent_insert_table_creation')
 
+statement ok
+SET ducklake_max_retry_count = 100;
+
 concurrentloop threadid 0 3
 
 loop i 0 10

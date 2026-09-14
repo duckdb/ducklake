@@ -1,0 +1,80 @@
+# name: test/sql/add_files/add_files_null_type.test
+# description: add parquet files with NULL-typed columns
+# group: [add_files]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/ducklake_add_files_null', METADATA_CATALOG 'ducklake_meta')
+
+statement ok
+COPY (SELECT range AS id, NULL AS n, [NULL] AS l, {'x': NULL} AS s FROM range(5)) TO '{DATA_PATH}/null_cols.parquet';
+
+query II
+SELECT name, logical_type FROM parquet_schema('{DATA_PATH}/null_cols.parquet') WHERE name IN ('n', 'x', 'element')
+----
+n	NullType()
+element	NullType()
+x	NullType()
+
+statement ok
+CREATE TABLE ducklake.test(id BIGINT, n "NULL", l "NULL"[], s STRUCT(x "NULL"));
+
+statement ok
+CALL ducklake_add_data_files('ducklake', 'test', '{DATA_PATH}/null_cols.parquet')
+
+query IIII
+SELECT id, n, l, s FROM ducklake.test ORDER BY id
+----
+0	NULL	[NULL]	{'x': NULL}
+1	NULL	[NULL]	{'x': NULL}
+2	NULL	[NULL]	{'x': NULL}
+3	NULL	[NULL]	{'x': NULL}
+4	NULL	[NULL]	{'x': NULL}
+
+query III
+SELECT typeof(n), typeof(l), typeof(s) FROM ducklake.test LIMIT 1
+----
+"NULL"	"NULL"[]	STRUCT(x "NULL")
+
+query IIII
+SELECT value_count, null_count, min_value, max_value
+FROM ducklake_meta.ducklake_file_column_stats
+WHERE column_id = (SELECT column_id FROM ducklake_meta.ducklake_column WHERE column_name = 'n' AND end_snapshot IS NULL)
+----
+0	5	NULL	NULL
+
+# the types must match exactly in both directions
+statement ok
+CREATE TABLE ducklake.typed(id BIGINT, n INTEGER, l "NULL"[], s STRUCT(x "NULL"));
+
+statement error
+CALL ducklake_add_data_files('ducklake', 'typed', '{DATA_PATH}/null_cols.parquet')
+----
+found type "NULL"
+
+statement ok
+COPY (SELECT range AS id, range::INTEGER AS n, [NULL] AS l, {'x': NULL} AS s FROM range(3)) TO '{DATA_PATH}/typed_cols.parquet';
+
+statement error
+CALL ducklake_add_data_files('ducklake', 'test', '{DATA_PATH}/typed_cols.parquet')
+----
+Expected "NULL", found type INTEGER
+
+# the added file keeps serving after the column is promoted
+statement ok
+ALTER TABLE ducklake.test ALTER n TYPE INTEGER
+
+statement ok
+INSERT INTO ducklake.test VALUES (100, 100, [NULL], {'x': NULL})
+
+query IIII
+SELECT COUNT(*), COUNT(n), MAX(n), COUNT(*) FILTER (WHERE n IS NULL) FROM ducklake.test
+----
+6	1	100	5
