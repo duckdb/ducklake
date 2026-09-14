@@ -232,8 +232,8 @@ unique_ptr<DuckLakeFieldId> DuckLakeFieldId::RemoveField(const vector<Identifier
 		auto &child = *children[child_idx];
 		if (child.Name() == column_path[depth]) {
 			if (column_path.size() == 2 && (type.id() == LogicalTypeId::MAP || type.id() == LogicalTypeId::LIST)) {
-				throw CatalogException("Cannot drop field '%s' from column '%s' - it's not a struct", child.Name(),
-				                       name);
+				throw CatalogException("Cannot drop field %s from column %s - it's not a struct",
+				                       Identifier(child.Name()), Identifier(name));
 			}
 			// found it!
 			found = true;

@@ -47,6 +47,7 @@ static void DuckLakeGetMetrics(TableFunctionGetMetricsInput &input) {
 	idx_t data_files_read = 0;
 	idx_t data_files_skipped = 0;
 	idx_t inlined_tables_read = 0;
+	lock_guard<mutex> guard(gstate.lock); // guards gstate.readers
 	for (idx_t i = 0; i < files_loaded && i < files.size() && i < gstate.readers.size(); i++) {
 		bool is_skipped = gstate.readers[i]->file_state == MultiFileFileState::SKIPPED;
 		switch (files[i].data_type) {
@@ -213,7 +214,7 @@ TableFunction DuckLakeFunctions::GetDuckLakeScanFunction(DatabaseInstance &insta
 	auto parquet_entry = loader.TryGetTableFunction("parquet_scan");
 	if (parquet_entry) {
 		auto &parquet_scan = parquet_entry->Cast<TableFunctionCatalogEntry>();
-		function = parquet_scan.functions.GetFunctionByOffset(0);
+		function = *parquet_scan.functions.GetFunctionByOffset(0);
 		function.get_multi_file_reader = DuckLakeMultiFileReader::CreateInstance;
 	}
 

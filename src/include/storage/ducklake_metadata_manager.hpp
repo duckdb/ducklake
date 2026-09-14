@@ -123,10 +123,10 @@ struct FilterPushdownInfo {
 	}
 };
 
-struct FilterPushdownQueryComponents {
-	string cte_section;
-	string join_clause;
-	string where_clause;
+struct DuckLakeFileListDynamicFilter {
+	idx_t column_field_index;
+	ExpressionType comparison_type;
+	LogicalType column_type;
 };
 
 //! The DuckLake metadata manger is the communication layer between the system and the metadata catalog
@@ -156,6 +156,9 @@ public:
 	bool ExecuteRetrialsServerSide() const;
 	//! Whether the client can skip the snapshot fetch and let the server read it.
 	virtual bool CanSkipSnapshotFetch(const TransactionChangeInformation &changes) const;
+	virtual bool IsRetryableCommitError(const string &) const {
+		return false;
+	}
 
 	//! Run the commit retry loop with the metadata server handling retries.
 	virtual void FlushChangesServerSide(DuckLakeTransaction &transaction, DuckLakeSnapshot transaction_snapshot,
@@ -201,6 +204,8 @@ public:
 	virtual string GetCreateTableStatements();
 	virtual string GetDataFileTableStatement();
 	virtual string GetDeleteFileTableStatement();
+	virtual string GetFileColumnStatsTableStatement();
+	virtual string GetTableColumnStatsTableStatement();
 	//! Get the version string written to ducklake_metadata
 	virtual string GetVersionString();
 	virtual DuckLakeMetadata LoadDuckLake();
@@ -229,10 +234,12 @@ public:
 	//! Both used by the regular metadata-manager methods and by server-side commit, which runs the
 	//! SQL on a fresh Connection without going through the metadata-manager wrapper.
 	static string LatestSnapshotQuery();
-	static string GlobalTableStatsQuery();
+	static string GlobalTableStatsQuery(bool include_exactness);
 	//! Pure parsers for the results of the above queries.
 	static unique_ptr<DuckLakeSnapshot> ParseSnapshot(QueryResult &result);
 	static vector<DuckLakeGlobalStatsInfo> ParseGlobalTableStats(QueryResult &result);
+	//! Whether the result contains a column with the given name
+	static bool ResultHasColumn(QueryResult &result, const string &name);
 
 	//! Get the catalog information for a specific snapshot
 	virtual DuckLakeCatalogInfo GetCatalogForSnapshot(DuckLakeSnapshot snapshot);
@@ -309,7 +316,7 @@ public:
 	//! {METADATA_CATALOG} / {SNAPSHOT_ID} placeholders. Caller supplies resolved paths (one per file,
 	//! same order) since path policy differs across callers (schema-relative vs. always-absolute).
 	static string WriteNewDataFilesSqlBatch(const vector<DuckLakeFileInfo> &new_files,
-	                                        const vector<DuckLakePath> &resolved_paths, bool write_row_group_count);
+	                                        const vector<DuckLakePath> &resolved_paths, bool supports_v1_1_metadata);
 	//! Opt-in fast-path: if this backend supports the DuckDB Appender API, write the files directly
 	bool TryAppendDataFiles(DuckLakeSnapshot &commit_snapshot, const vector<DuckLakeFileInfo> &new_files,
 	                        const vector<DuckLakeTableInfo> &new_tables,
@@ -374,11 +381,12 @@ public:
 	static string InsertSnapshotSql();
 	static string WriteSnapshotChangesSql(const SnapshotChangeInfo &change_info,
 	                                      const DuckLakeSnapshotCommit &commit_info);
-	static string UpdateGlobalTableStatsSql(const DuckLakeGlobalStatsInfo &stats);
+	static string UpdateGlobalTableStatsSql(const DuckLakeGlobalStatsInfo &stats, bool write_stats_exactness);
 	static SnapshotChangeInfo
 	GetSnapshotAndStatsAndChanges(SnapshotAndStats &current_snapshot,
-	                              const std::function<unique_ptr<QueryResult>(string)> &executor);
-	static string GetSnapshotAndStatsAndChangesQuery();
+	                              const std::function<unique_ptr<QueryResult>(string)> &executor,
+	                              bool include_exactness);
+	static string GetSnapshotAndStatsAndChangesQuery(bool include_exactness);
 	static SnapshotChangeInfo ParseSnapshotAndStatsAndChanges(QueryResult &result, SnapshotAndStats &current_snapshot);
 	virtual unique_ptr<DuckLakeSnapshot> GetSnapshot();
 	virtual unique_ptr<DuckLakeSnapshot> GetSnapshot(BoundAtClause &at_clause, SnapshotBound bound);
@@ -401,7 +409,7 @@ public:
 	//! Caller substitutes `{METADATA_CATALOG}` / `{SNAPSHOT_ID}` and executes via the commit context's executor.
 	static string ReadInlinedDataAggregatesSql(const string &inlined_table_name, const string &select_list,
 	                                           const DuckLakeInlinedColNames &col_names);
-	static string ReadFileColumnStatsForTableSql(TableIndex table_id);
+	static string ReadFileColumnStatsForTableSql(TableIndex table_id, bool include_exactness);
 	//! Throws on a failed inlined data read, hinting at the migration for legacy named catalogs
 	void CheckInlinedDataReadError(QueryResult &result, const string &inlined_table_name);
 	virtual shared_ptr<DuckLakeInlinedData> TransformInlinedData(QueryResult &result,
@@ -444,9 +452,19 @@ public:
 	string GetPathSeparator(const string &path);
 
 protected:
+	enum class FileListType : uint8_t { SCAN, EXTENDED };
+	enum class StatsCastType : uint8_t { ORDERING, MIN, MAX };
+	using FileColumnStatsCTEBodyGenerator = std::function<string(const CTERequirement &, TableIndex)>;
+
 	virtual string GetLatestSnapshotQuery() const;
 
 	virtual string GenerateFileColumnStatsCTEBody(const CTERequirement &req, TableIndex table_id);
+	virtual string GenerateFileListQuery(DuckLakeTableEntry &table, const FilterPushdownInfo *filter_info,
+	                                     const vector<DuckLakeFileListDynamicFilter> &dynamic_filters,
+	                                     const vector<idx_t> &runtime_filter_stats_columns,
+	                                     FileListType file_list_type = FileListType::SCAN,
+	                                     const string &metadata_table_prefix = "{METADATA_CATALOG}",
+	                                     const FileColumnStatsCTEBodyGenerator &generate_cte_body = {});
 
 	//! Wrap field selections with list aggregation of struct objects (DBMS-specific)
 	//! For DuckDB: LIST({'key1': val1, 'key2': val2, ...})
@@ -519,26 +537,32 @@ private:
 	DuckLakeFileData ReadDeleteFile(DuckLakeTableEntry &table, T &row, idx_t &col_idx, bool is_encrypted);
 
 	bool IsEncrypted() const;
+
+protected:
 	string GetFileSelectList(const string &prefix);
 	string GetDeleteFileSelectList(const string &prefix);
-	FilterPushdownQueryComponents GenerateFilterPushdownComponents(const FilterPushdownInfo &filter_info,
-	                                                               DuckLakeTableEntry &table);
 	//! Build an additional WHERE fragment that prunes files by bucket() partition value.
 	//! Returns "" when no foldable equality / IN-list predicate exists on a bucket-partitioned column.
 	//! The fragment uses only string equality against ducklake_file_partition_value, so it works against
 	//! any metadata backend (DuckDB / Postgres / SQLite). Bucket hashes are pre-computed in C++.
-	string BuildBucketPartitionPruningClause(DuckLakeTableEntry &table, const FilterPushdownInfo &filter_info);
+	string BuildBucketPartitionPruningClause(
+	    DuckLakeTableEntry &table, const FilterPushdownInfo &filter_info,
+	    const string &partition_value_table = "{METADATA_CATALOG}.ducklake_file_partition_value");
 	virtual FilterSQLResult ConvertFilterPushdownToSQL(const FilterPushdownInfo &filter_info);
+	string GenerateCTESectionFromRequirements(const map<idx_t, CTERequirement> &requirements, TableIndex table_id,
+	                                          const FileColumnStatsCTEBodyGenerator &generate_body);
+	//! Join each column's stats CTE once. Leading newline per join, empty when there are none.
+	static string GenerateStatsJoinList(const map<idx_t, CTERequirement> &requirements);
+
+private:
 	virtual string GenerateCTESectionFromRequirements(const map<idx_t, CTERequirement> &requirements,
 	                                                  TableIndex table_id);
-	//! Join each column's stats CTE once. Leading newline per join, empty when there are none, so it
-	//! concatenates straight onto the FROM line.
-	static string GenerateStatsJoinList(const map<idx_t, CTERequirement> &requirements);
 	virtual string GenerateFilterFromExpression(const Expression &expr, const LogicalType *type,
 	                                            unordered_set<string> &referenced_stats, const string &stats_alias);
 	virtual bool ValueIsFinite(const Value &val);
 	virtual string CastValueToTarget(const Value &val, const LogicalType &type);
-	virtual string CastStatsToTarget(const string &stats, const LogicalType &type);
+	virtual string CastStatsToTarget(const string &stats, const LogicalType &type,
+	                                 StatsCastType cast_type = StatsCastType::ORDERING);
 	virtual string GenerateConstantFilter(ExpressionType comparison_type, const Value &constant,
 	                                      const LogicalType &type, unordered_set<string> &referenced_stats,
 	                                      const string &stats_alias);

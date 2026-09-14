@@ -79,8 +79,7 @@ unique_ptr<CatalogEntry> DuckLakeViewEntry::Alter(DuckLakeTransaction &transacti
 		if (!aliases.empty()) {
 			auto alias_entry = std::find_if(aliases.begin(), aliases.end(), match_name);
 			if (alias_entry == aliases.end()) {
-				throw BinderException("View \"%s\" does not have a column with name \"%s\"", name,
-				                      resolved_column_name);
+				throw BinderException("View %s does not have a column with name %s", name, resolved_column_name);
 			}
 			auto alias_index = NumericCast<idx_t>(std::distance(aliases.begin(), alias_entry));
 			D_ASSERT(alias_index < names.size());
@@ -88,8 +87,7 @@ unique_ptr<CatalogEntry> DuckLakeViewEntry::Alter(DuckLakeTransaction &transacti
 		} else {
 			auto entry = std::find_if(names.begin(), names.end(), match_name);
 			if (entry == names.end()) {
-				throw BinderException("View \"%s\" does not have a column with name \"%s\"", name,
-				                      resolved_column_name);
+				throw BinderException("View %s does not have a column with name %s", name, resolved_column_name);
 			}
 			resolved_column_name = *entry;
 		}
