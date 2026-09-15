@@ -39,6 +39,18 @@ struct DuckLakeOptions {
 	map<TableIndex, option_map_t> table_options;
 	idx_t busy_timeout = 5000;
 	DuckLakeVersion ducklake_version = DuckLakeVersion::UNSET;
+
+	//! Encryption envelope: address of the key service. Unset means no envelope.
+	string encryption_socket;
+	//! Scopes every key in this lake; required whenever encryption_socket is set.
+	string encryption_lake_id;
+	//! Distinguishes an option supplied as empty from an option not supplied.
+	bool encryption_socket_supplied = false;
+	bool encryption_lake_id_supplied = false;
+	//! How long an unwrapped key may stay cached; the default lives in
+	//! DuckLakeEncryptionProvider, hence the flag rather than a pre-set value.
+	int64_t encryption_cache_ttl_seconds = 0;
+	bool encryption_cache_ttl_seconds_supplied = false;
 };
 
 } // namespace duckdb

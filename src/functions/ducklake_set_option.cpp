@@ -135,6 +135,11 @@ static unique_ptr<FunctionData> DuckLakeSetOptionBind(ClientContext &context, Ta
 		auto data_inlining_row_limit = val.DefaultCastAs(LogicalType::UBIGINT).GetValue<idx_t>();
 		value = to_string(data_inlining_row_limit);
 		if (data_inlining_row_limit > 0) {
+			if (catalog.Cast<DuckLakeCatalog>().EncryptionProvider()) {
+				throw InvalidInputException("data_inlining_row_limit must stay 0 on a DuckLake attached with "
+				                            "encryption_socket - inlined rows are stored in the metadata catalog, "
+				                            "which no per-file key covers");
+			}
 			ValidateNoReservedInliningColumns(context, catalog, input);
 		}
 	} else if (option == "require_commit_message") {
