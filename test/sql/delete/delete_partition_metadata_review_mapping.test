@@ -1,0 +1,141 @@
+# name: test/sql/delete/delete_partition_metadata_review_mapping.test
+# description: Metadata delete respects field mappings, exact partition values, and time zones
+# group: [delete]
+
+require ducklake
+
+require parquet
+
+require icu
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/metadata_review_mapping', DATA_INLINING_ROW_LIMIT 0)
+
+# An unused unsafe key does not prevent proving a predicate over an exact identity key.
+statement ok
+CREATE TABLE ducklake.mixed_t(id INTEGER, p INTEGER, zero DOUBLE)
+
+statement ok
+ALTER TABLE ducklake.mixed_t SET PARTITIONED BY (p, zero)
+
+statement ok
+INSERT INTO ducklake.mixed_t VALUES (1, 1, '-0.0'::DOUBLE), (2, 1, '0.0'::DOUBLE), (3, 2, '-0.0'::DOUBLE), (4, 2, '0.0'::DOUBLE)
+
+query II
+EXPLAIN DELETE FROM ducklake.mixed_t WHERE p = 1
+----
+physical_plan	<REGEX>:.*Ducklake Metadata Delete.*
+
+query I
+DELETE FROM ducklake.mixed_t WHERE p = 1
+----
+2
+
+query II rowsort
+SELECT id, signbit(zero) FROM ducklake.mixed_t
+----
+3	true
+4	false
+
+# Physical column positions diverge from field IDs after dropping a leading column.
+statement ok
+CREATE TABLE ducklake.mapping_t(id INTEGER, discarded INTEGER, a INTEGER, b INTEGER, date DATE, value INTEGER)
+
+statement ok
+ALTER TABLE ducklake.mapping_t SET PARTITIONED BY (a, b, year(date), month(date))
+
+statement ok
+INSERT INTO ducklake.mapping_t VALUES (1, 0, 1, 1, '2026-12-01', 10), (2, 0, 1, 2, '2026-12-15', 20), (3, 0, 2, 1, '2027-01-01', 30), (4, 0, 2, 2, NULL, 40)
+
+statement ok
+ALTER TABLE ducklake.mapping_t DROP COLUMN discarded
+
+statement ok
+ALTER TABLE ducklake.mapping_t ALTER COLUMN a TYPE BIGINT
+
+statement ok
+ALTER TABLE ducklake.mapping_t ALTER COLUMN date TYPE TIMESTAMP
+
+statement ok
+ALTER TABLE ducklake.mapping_t RENAME COLUMN a TO renamed
+
+statement ok
+ALTER TABLE ducklake.mapping_t ADD COLUMN added INTEGER DEFAULT 7
+
+query II
+EXPLAIN DELETE FROM ducklake.mapping_t WHERE renamed = b OR (renamed = 1 AND year(date) IS NOT DISTINCT FROM 2026 AND month(date) IS NOT DISTINCT FROM 12)
+----
+physical_plan	<REGEX>:.*Ducklake Metadata Delete.*
+
+query I
+DELETE FROM ducklake.mapping_t WHERE renamed = b OR (renamed = 1 AND year(date) IS NOT DISTINCT FROM 2026 AND month(date) IS NOT DISTINCT FROM 12)
+----
+3
+
+query III
+SELECT id, value, added FROM ducklake.mapping_t
+----
+3	30	7
+
+# Exact decimal and byte representations survive the metadata string round trip.
+statement ok
+CREATE TABLE ducklake.exact_t(id INTEGER, number DECIMAL(38,18), bytes BLOB, identifier UUID, text VARCHAR)
+
+statement ok
+ALTER TABLE ducklake.exact_t SET PARTITIONED BY (number, bytes, identifier, text)
+
+statement ok
+INSERT INTO ducklake.exact_t VALUES (1, 12345678901234567890.123456789012345678, from_hex('00FF'), 'ffffffff-ffff-ffff-ffff-ffffffffffff', 'O''Brien'), (2, 12345678901234567890.123456789012345679, from_hex('00FE'), 'ffffffff-ffff-ffff-ffff-fffffffffffe', '雪')
+
+query II
+EXPLAIN DELETE FROM ducklake.exact_t WHERE number = 12345678901234567890.123456789012345678 AND hex(bytes) = '00FF' AND identifier = 'ffffffff-ffff-ffff-ffff-ffffffffffff' AND text = 'O''Brien'
+----
+physical_plan	<REGEX>:.*Ducklake Metadata Delete.*
+
+query I
+DELETE FROM ducklake.exact_t WHERE number = 12345678901234567890.123456789012345678 AND hex(bytes) = '00FF' AND identifier = 'ffffffff-ffff-ffff-ffff-ffffffffffff' AND text = 'O''Brien'
+----
+1
+
+query I
+SELECT id FROM ducklake.exact_t
+----
+2
+
+# Calendar partitions written in UTC cannot prove the same expression in another time zone.
+statement ok
+SET TimeZone = 'UTC'
+
+statement ok
+CREATE TABLE ducklake.timezone_t(id INTEGER, ts TIMESTAMPTZ)
+
+statement ok
+ALTER TABLE ducklake.timezone_t SET PARTITIONED BY (year(ts), month(ts))
+
+statement ok
+INSERT INTO ducklake.timezone_t VALUES (1, TIMESTAMPTZ '2026-01-01 00:30:00+00'), (2, TIMESTAMPTZ '2025-12-31 23:30:00+00'), (3, TIMESTAMPTZ '2026-01-02 12:00:00+00')
+
+statement ok
+SET TimeZone = 'America/New_York'
+
+query II
+EXPLAIN DELETE FROM ducklake.timezone_t WHERE year(ts) IS NOT DISTINCT FROM 2025
+----
+physical_plan	<!REGEX>:.*Ducklake Metadata Delete.*
+
+query I
+DELETE FROM ducklake.timezone_t WHERE year(ts) IS NOT DISTINCT FROM 2025
+----
+2
+
+query I
+SELECT id FROM ducklake.timezone_t
+----
+3
+
+statement ok
+SET TimeZone = 'UTC'

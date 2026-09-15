@@ -1,0 +1,132 @@
+# name: test/sql/delete/delete_partition_metadata_representation.test
+# description: Equal partition keys can have observably different scalar representations
+# group: [delete]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/delete_partition_metadata_representation', DATA_INLINING_ROW_LIMIT 0)
+
+# Signed zeros compare equal and share a partition file, but signbit distinguishes them.
+foreach type FLOAT DOUBLE
+
+statement ok
+CREATE TABLE ducklake.zero_${type}(id INTEGER, p ${type})
+
+statement ok
+ALTER TABLE ducklake.zero_${type} SET PARTITIONED BY (p)
+
+statement ok
+INSERT INTO ducklake.zero_${type} VALUES (1, '-0.0'::${type}), (2, '0.0'::${type}), (3, 1)
+
+query I
+SELECT id FROM ducklake.zero_${type} WHERE signbit(p)
+----
+1
+
+query II
+EXPLAIN DELETE FROM ducklake.zero_${type} WHERE signbit(p)
+----
+physical_plan	<!REGEX>:.*Ducklake Metadata Delete.*
+
+query I
+DELETE FROM ducklake.zero_${type} WHERE signbit(p)
+----
+1
+
+query I rowsort
+SELECT id FROM ducklake.zero_${type}
+----
+2
+3
+
+# NaN signs also compare equal; choosing one representative can leave a matching row behind.
+statement ok
+CREATE TABLE ducklake.nan_${type}(id INTEGER, p ${type})
+
+statement ok
+ALTER TABLE ducklake.nan_${type} SET PARTITIONED BY (p)
+
+statement ok
+INSERT INTO ducklake.nan_${type} VALUES (1, 'nan'::${type}), (2, '-nan'::${type}), (3, 1)
+
+query I
+SELECT id FROM ducklake.nan_${type} WHERE signbit(p)
+----
+2
+
+query II
+EXPLAIN DELETE FROM ducklake.nan_${type} WHERE signbit(p)
+----
+physical_plan	<!REGEX>:.*Ducklake Metadata Delete.*
+
+query I
+DELETE FROM ducklake.nan_${type} WHERE signbit(p)
+----
+1
+
+query I rowsort
+SELECT id FROM ducklake.nan_${type}
+----
+1
+3
+
+endloop
+
+# An interval month compares equal to thirty days while their month() results differ.
+statement ok
+CREATE TABLE ducklake.interval_t(id INTEGER, p INTERVAL)
+
+statement ok
+ALTER TABLE ducklake.interval_t SET PARTITIONED BY (p)
+
+statement ok
+INSERT INTO ducklake.interval_t VALUES (1, INTERVAL '1 month'), (2, INTERVAL '30 days'), (3, INTERVAL '2 months')
+
+query II
+EXPLAIN DELETE FROM ducklake.interval_t WHERE month(p) = 1
+----
+physical_plan	<!REGEX>:.*Ducklake Metadata Delete.*
+
+query I
+DELETE FROM ducklake.interval_t WHERE month(p) = 1
+----
+1
+
+query I rowsort
+SELECT id FROM ducklake.interval_t
+----
+2
+3
+
+# Unsafe equality semantics also apply recursively inside nested partition keys.
+statement ok
+CREATE TABLE ducklake.nested_t(id INTEGER, p DOUBLE[])
+
+statement ok
+ALTER TABLE ducklake.nested_t SET PARTITIONED BY (p)
+
+statement ok
+INSERT INTO ducklake.nested_t VALUES (1, ['-0.0'::DOUBLE]), (2, ['0.0'::DOUBLE]), (3, [1.0])
+
+query II
+EXPLAIN DELETE FROM ducklake.nested_t WHERE signbit(p[1])
+----
+physical_plan	<!REGEX>:.*Ducklake Metadata Delete.*
+
+query I
+DELETE FROM ducklake.nested_t WHERE signbit(p[1])
+----
+1
+
+query I rowsort
+SELECT id FROM ducklake.nested_t
+----
+2
+3
