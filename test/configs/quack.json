@@ -120,6 +120,12 @@
       ]
     },
     {
+      "reason": "set_option writes its ducklake_metadata row eagerly instead of staging it for commit like every other change, so a ROLLBACK leaves the row behind on quack, where each metadata statement runs on the server outside the local transaction. Rolled-back DDL is unaffected - that is only written at commit.",
+      "paths": [
+        "test/sql/stats/skip_stats_columns_transaction.test"
+      ]
+    },
+    {
       "reason": "ROLLBACK after ducklake_expire_snapshots does not restore expired snapshot rows on the quack-backed metadata catalog. DuckLake sends metadata SQL through quack_query_by_name, which sends a PrepareRequestMessage directly and does not route through QuackTransaction's remote BEGIN/ROLLBACK path.",
       "paths": [
         "test/sql/issues/issue_852_cache_growth.test"
