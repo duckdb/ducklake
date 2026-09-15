@@ -290,6 +290,7 @@ public:
 		}
 
 		auto &transaction = DuckLakeTransaction::Get(context.client, table.catalog);
+		transaction.MarkDeleteAttempted(table.GetTableId());
 		idx_t count = 0;
 		for (auto &file : files) {
 			if (file.data_type != DuckLakeDataType::DATA_FILE) {
@@ -750,73 +751,68 @@ optional_ptr<PhysicalTableScan> FindDeleteSource(PhysicalOperator &plan) {
 	return nullptr;
 }
 
-bool GetIdentityPartitionKeyIndex(DuckLakeTableEntry &table, idx_t field_index, optional_idx &partition_key_index) {
-	auto partition_data = table.GetPartitionData();
-	if (!partition_data) {
-		return false;
-	}
-	for (auto &field : partition_data->fields) {
-		if (field.field_id.index == field_index && field.transform.type == DuckLakeTransformType::IDENTITY) {
-			partition_key_index = field.partition_key_index;
-			return true;
-		}
-	}
-	return false;
-}
-
 bool IsRootOptionalTableFilter(const TableFilter &filter) {
 	if (filter.filter_type == TableFilterType::LEGACY_OPTIONAL_FILTER) {
 		return true;
 	}
-	if (filter.filter_type != TableFilterType::EXPRESSION_FILTER) {
-		return false;
-	}
-	return ExpressionFilter::IsRootOptionalFilter(filter);
+	return filter.filter_type == TableFilterType::EXPRESSION_FILTER && ExpressionFilter::IsRootOptionalFilter(filter);
 }
 
-bool GetScanPartitionKeyIndex(DuckLakeTableEntry &table, PhysicalTableScan &scan, idx_t column_index,
-                              optional_idx &partition_key_index) {
+unique_ptr<Expression> MetadataFieldReference(DuckLakeTableEntry &table, PhysicalTableScan &scan, idx_t column_index) {
 	if (column_index >= scan.column_ids.size()) {
-		return false;
+		return nullptr;
 	}
 	auto &column_id = scan.column_ids[column_index];
-	if (column_id.IsVirtualColumn()) {
-		return false;
+	if (column_id.IsVirtualColumn() || column_id.HasChildren()) {
+		return nullptr;
 	}
-	auto &field_id = table.GetFieldId(PhysicalIndex(column_id.GetPrimaryIndex()));
-	return GetIdentityPartitionKeyIndex(table, field_id.GetFieldIndex().index, partition_key_index);
+	auto &field = table.GetFieldId(PhysicalIndex(column_id.GetPrimaryIndex()));
+	return make_uniq<BoundReferenceExpression>(field.Type(), field.GetFieldIndex().index);
 }
 
-bool AddPartitionKey(optional_idx &partition_key_index, idx_t new_partition_key_index) {
-	if (partition_key_index.IsValid()) {
-		return partition_key_index.GetIndex() == new_partition_key_index;
-	}
-	partition_key_index = new_partition_key_index;
-	return true;
-}
-
-bool CollectPartitionKeys(DuckLakeTableEntry &table, PhysicalTableScan &scan, const Expression &expr,
-                          optional_idx &partition_key_index, bool &has_filter) {
-	if (expr.GetExpressionClass() == ExpressionClass::BOUND_REF) {
-		optional_idx expression_partition_key;
-		if (!GetScanPartitionKeyIndex(table, scan, expr.Cast<BoundReferenceExpression>().Index(),
-		                              expression_partition_key) ||
-		    !AddPartitionKey(partition_key_index, expression_partition_key.GetIndex())) {
+bool NormalizeMetadataReferences(DuckLakeTableEntry &table, PhysicalTableScan &scan, unique_ptr<Expression> &expr) {
+	if (expr->GetExpressionClass() == ExpressionClass::BOUND_REF) {
+		auto index = expr->Cast<BoundReferenceExpression>().Index();
+		if (!scan.projection_ids.empty()) {
+			if (index >= scan.projection_ids.size()) {
+				return false;
+			}
+			index = scan.projection_ids[index];
+		}
+		auto reference = MetadataFieldReference(table, scan, index);
+		if (!reference) {
 			return false;
 		}
-		has_filter = true;
+		expr = std::move(reference);
 		return true;
 	}
-	if (expr.GetExpressionClass() == ExpressionClass::BOUND_COLUMN_REF) {
+	if (expr->GetExpressionClass() == ExpressionClass::BOUND_COLUMN_REF) {
 		return false;
 	}
 	bool success = true;
-	ExpressionIterator::EnumerateChildren(expr, [&](const Expression &child) {
-		if (success && !CollectPartitionKeys(table, scan, child, partition_key_index, has_filter)) {
+	ExpressionIterator::EnumerateChildren(*expr, [&](unique_ptr<Expression> &child) {
+		if (success && !NormalizeMetadataReferences(table, scan, child)) {
 			success = false;
 		}
 	});
 	return success;
+}
+
+bool AddMetadataTableFilter(const TableFilter &filter, unique_ptr<Expression> reference,
+                            vector<unique_ptr<Expression>> &filters) {
+	if (IsRootOptionalTableFilter(filter)) {
+		return true;
+	}
+	if (!reference) {
+		return false;
+	}
+	// ToExpression substitutes a single column; multi-column filters need their own reference mapping.
+	if (filter.filter_type == TableFilterType::EXPRESSION_FILTER &&
+	    !filter.Cast<ExpressionFilter>().column_indexes.empty()) {
+		return false;
+	}
+	filters.push_back(filter.ToExpression(*reference));
+	return true;
 }
 
 bool IsPassThroughProjection(PhysicalProjection &projection) {
@@ -859,47 +855,102 @@ optional_ptr<PhysicalTableScan> FindMetadataDeleteSource(PhysicalOperator &plan,
 	return nullptr;
 }
 
-bool ValidateMetadataDeleteFilters(DuckLakeTableEntry &table, PhysicalTableScan &scan, DuckLakeMultiFileList &file_list,
-                                   const vector<const Expression *> &filter_expressions,
-                                   optional_idx &partition_key_index) {
+bool CollectMetadataDeleteFilters(DuckLakeTableEntry &table, PhysicalTableScan &scan, DuckLakeMultiFileList &file_list,
+                                  const vector<const Expression *> &filter_expressions,
+                                  vector<unique_ptr<Expression>> &filters) {
 	if (scan.dynamic_filters && scan.dynamic_filters->HasFilters()) {
 		return false;
 	}
-	bool has_filter = false;
-	for (auto filter_expr : filter_expressions) {
-		if (!filter_expr || !CollectPartitionKeys(table, scan, *filter_expr, partition_key_index, has_filter)) {
+	for (auto filter : filter_expressions) {
+		auto expression = filter->Copy();
+		if (!NormalizeMetadataReferences(table, scan, expression)) {
 			return false;
 		}
+		filters.push_back(std::move(expression));
 	}
 	auto filter_info = file_list.GetFilterInfo();
 	if (filter_info) {
 		for (auto &entry : filter_info->column_filters) {
-			optional_idx filter_partition_key;
-			if (!entry.second.table_filter || !GetIdentityPartitionKeyIndex(table, entry.first, filter_partition_key) ||
-			    !AddPartitionKey(partition_key_index, filter_partition_key.GetIndex())) {
+			auto field = table.GetFieldId(FieldIndex(entry.first));
+			if (!field || !entry.second.table_filter ||
+			    !AddMetadataTableFilter(*entry.second.table_filter,
+			                            make_uniq<BoundReferenceExpression>(field->Type(), entry.first), filters)) {
 				return false;
-			}
-			if (!IsRootOptionalTableFilter(*entry.second.table_filter)) {
-				has_filter = true;
 			}
 		}
 	}
 	if (scan.table_filters) {
 		for (auto &entry : *scan.table_filters) {
-			if (!entry.iterator->second) {
-				continue;
-			}
-			optional_idx filter_partition_key;
-			if (!GetScanPartitionKeyIndex(table, scan, entry.GetIndex().GetIndex(), filter_partition_key) ||
-			    !AddPartitionKey(partition_key_index, filter_partition_key.GetIndex())) {
+			if (entry.iterator->second &&
+			    !AddMetadataTableFilter(entry.Filter(),
+			                            MetadataFieldReference(table, scan, entry.GetIndex().GetIndex()), filters)) {
 				return false;
-			}
-			if (!IsRootOptionalTableFilter(entry.Filter())) {
-				has_filter = true;
 			}
 		}
 	}
-	return has_filter && partition_key_index.IsValid();
+	return !filters.empty();
+}
+
+struct MetadataPartitionExpression {
+	idx_t key_index;
+	unique_ptr<Expression> expression;
+};
+
+bool MetadataIdentityHasExactValues(const LogicalType &type) {
+	switch (type.id()) {
+	case LogicalTypeId::BOOLEAN:
+	case LogicalTypeId::TINYINT:
+	case LogicalTypeId::SMALLINT:
+	case LogicalTypeId::INTEGER:
+	case LogicalTypeId::BIGINT:
+	case LogicalTypeId::HUGEINT:
+	case LogicalTypeId::UTINYINT:
+	case LogicalTypeId::USMALLINT:
+	case LogicalTypeId::UINTEGER:
+	case LogicalTypeId::UBIGINT:
+	case LogicalTypeId::UHUGEINT:
+	case LogicalTypeId::DECIMAL:
+	case LogicalTypeId::DATE:
+	case LogicalTypeId::TIME:
+	case LogicalTypeId::TIMESTAMP_SEC:
+	case LogicalTypeId::TIMESTAMP_MS:
+	case LogicalTypeId::TIMESTAMP:
+	case LogicalTypeId::TIMESTAMP_NS:
+	case LogicalTypeId::UUID:
+	case LogicalTypeId::BLOB:
+		return true;
+	case LogicalTypeId::VARCHAR:
+		return StringType::GetCollation(type).empty();
+	default:
+		// Partition equality can group observably different values (signed zeros, intervals, nested values).
+		return false;
+	}
+}
+
+vector<MetadataPartitionExpression> GetMetadataPartitionExpressions(ClientContext &context, DuckLakeTableEntry &table) {
+	vector<MetadataPartitionExpression> result;
+	for (auto &field : table.GetPartitionData()->fields) {
+		auto field_id = table.GetFieldId(field.field_id);
+		if (!field_id) {
+			continue;
+		}
+		if (field.transform.type == DuckLakeTransformType::IDENTITY) {
+			if (!MetadataIdentityHasExactValues(field_id->Type())) {
+				continue;
+			}
+		} else {
+			// Calendar transforms over time zones depend on session settings at write time.
+			if ((field.transform.type != DuckLakeTransformType::YEAR &&
+			     field.transform.type != DuckLakeTransformType::MONTH) ||
+			    (field_id->Type().id() != LogicalTypeId::DATE && field_id->Type().id() != LogicalTypeId::TIMESTAMP)) {
+				continue;
+			}
+		}
+		auto reference = make_uniq<BoundReferenceExpression>(field_id->Type(), field.field_id.index);
+		auto expression = DuckLakePartitionUtils::ApplyPartitionTransform(context, std::move(reference), field);
+		result.push_back({field.partition_key_index, std::move(expression)});
+	}
+	return result;
 }
 
 bool GetPartitionKeyType(DuckLakeTableEntry &table, idx_t partition_key_index, LogicalType &partition_type) {
@@ -908,8 +959,7 @@ bool GetPartitionKeyType(DuckLakeTableEntry &table, idx_t partition_key_index, L
 		return false;
 	}
 	for (auto &field : partition_data->fields) {
-		if (field.partition_key_index != partition_key_index ||
-		    field.transform.type != DuckLakeTransformType::IDENTITY) {
+		if (field.partition_key_index != partition_key_index) {
 			continue;
 		}
 		auto field_id = table.GetFieldId(field.field_id);
@@ -960,84 +1010,50 @@ bool GetFilePartitionValue(DuckLakeTableEntry &table, const DuckLakeFileListExte
 
 enum class MetadataDeleteFileMatch { MATCH, NO_MATCH, UNKNOWN };
 
-bool ReplacePartitionReferences(DuckLakeTableEntry &table, PhysicalTableScan &scan, idx_t partition_key_index,
-                                const Value &partition_value, unique_ptr<Expression> &expr) {
-	if (expr->GetExpressionClass() == ExpressionClass::BOUND_REF) {
-		optional_idx expression_partition_key;
-		if (!GetScanPartitionKeyIndex(table, scan, expr->Cast<BoundReferenceExpression>().Index(),
-		                              expression_partition_key) ||
-		    expression_partition_key.GetIndex() != partition_key_index) {
+bool ReplaceMetadataPartitionExpressions(DuckLakeTableEntry &table,
+                                         const vector<MetadataPartitionExpression> &partitions,
+                                         optional_ptr<const DuckLakeFileListExtendedEntry> file,
+                                         unique_ptr<Expression> &expr, bool &has_partition) {
+	for (auto &partition : partitions) {
+		if (!expr->Equals(*partition.expression)) {
+			continue;
+		}
+		Value value(partition.expression->GetReturnType());
+		if (file && !GetFilePartitionValue(table, *file, partition.key_index, value)) {
 			return false;
 		}
-		expr = make_uniq<BoundConstantExpression>(partition_value);
+		expr = make_uniq<BoundConstantExpression>(std::move(value));
+		has_partition = true;
 		return true;
+	}
+	if (expr->GetExpressionClass() == ExpressionClass::BOUND_REF ||
+	    expr->GetExpressionClass() == ExpressionClass::BOUND_COLUMN_REF || expr->IsVolatile()) {
+		return false;
 	}
 	bool success = true;
 	ExpressionIterator::EnumerateChildren(*expr, [&](unique_ptr<Expression> &child) {
-		if (success && !ReplacePartitionReferences(table, scan, partition_key_index, partition_value, child)) {
+		if (success && !ReplaceMetadataPartitionExpressions(table, partitions, file, child, has_partition)) {
 			success = false;
 		}
 	});
 	return success;
 }
 
-MetadataDeleteFileMatch EvaluatePartitionExpression(ClientContext &context, DuckLakeTableEntry &table,
-                                                    PhysicalTableScan &scan, idx_t partition_key_index,
-                                                    const Value &partition_value, const Expression &expr) {
-	auto expr_copy = expr.Copy();
-	if (!ReplacePartitionReferences(table, scan, partition_key_index, partition_value, expr_copy)) {
-		return MetadataDeleteFileMatch::UNKNOWN;
-	}
-	Value result;
-	if (!expr_copy->IsScalar() || !expr_copy->IsFoldable() ||
-	    !ExpressionExecutor::TryEvaluateScalar(context, *expr_copy, result) ||
-	    result.type().id() != LogicalTypeId::BOOLEAN) {
-		return MetadataDeleteFileMatch::UNKNOWN;
-	}
-	return !result.IsNull() && result.GetValue<bool>() ? MetadataDeleteFileMatch::MATCH
-	                                                   : MetadataDeleteFileMatch::NO_MATCH;
-}
-
-bool EvaluateTableFilter(ClientContext &context, const TableFilter &filter, const Value &partition_value) {
-	auto expression_filter = ExpressionFilter::FromTableFilter(filter, partition_value.type());
-	return expression_filter->EvaluateWithConstant(context, partition_value);
-}
-
 MetadataDeleteFileMatch GetMetadataDeleteFileMatch(ClientContext &context, DuckLakeTableEntry &table,
-                                                   PhysicalTableScan &scan, DuckLakeMultiFileList &file_list,
-                                                   const vector<const Expression *> &filter_expressions,
-                                                   idx_t partition_key_index,
+                                                   const vector<MetadataPartitionExpression> &partitions,
+                                                   const vector<unique_ptr<Expression>> &filters,
                                                    const DuckLakeFileListExtendedEntry &file) {
-	Value partition_value;
-	if (!GetFilePartitionValue(table, file, partition_key_index, partition_value)) {
-		return MetadataDeleteFileMatch::UNKNOWN;
-	}
-	for (auto filter_expr : filter_expressions) {
-		auto match =
-		    EvaluatePartitionExpression(context, table, scan, partition_key_index, partition_value, *filter_expr);
-		if (match != MetadataDeleteFileMatch::MATCH) {
-			return match;
+	for (auto &filter : filters) {
+		auto expression = filter->Copy();
+		bool has_partition = false;
+		Value result;
+		if (!ReplaceMetadataPartitionExpressions(table, partitions, &file, expression, has_partition) ||
+		    !ExpressionExecutor::TryEvaluateScalar(context, *expression, result) ||
+		    result.type().id() != LogicalTypeId::BOOLEAN) {
+			return MetadataDeleteFileMatch::UNKNOWN;
 		}
-	}
-	auto filter_info = file_list.GetFilterInfo();
-	if (filter_info) {
-		for (auto &entry : filter_info->column_filters) {
-			if (IsRootOptionalTableFilter(*entry.second.table_filter)) {
-				continue;
-			}
-			if (!entry.second.table_filter->EvaluateWithConstant(context, partition_value)) {
-				return MetadataDeleteFileMatch::NO_MATCH;
-			}
-		}
-	}
-	if (scan.table_filters) {
-		for (auto &entry : *scan.table_filters) {
-			if (!entry.iterator->second || IsRootOptionalTableFilter(entry.Filter())) {
-				continue;
-			}
-			if (!EvaluateTableFilter(context, entry.Filter(), partition_value)) {
-				return MetadataDeleteFileMatch::NO_MATCH;
-			}
+		if (result.IsNull() || !result.GetValue<bool>()) {
+			return MetadataDeleteFileMatch::NO_MATCH;
 		}
 	}
 	return MetadataDeleteFileMatch::MATCH;
@@ -1053,8 +1069,20 @@ bool CanUseMetadataDelete(ClientContext &context, DuckLakeTableEntry &table, Phy
 
 	auto &bind_data = scan->bind_data->Cast<MultiFileBindData>();
 	auto &file_list = bind_data.file_list->Cast<DuckLakeMultiFileList>();
-	optional_idx partition_key_index;
-	if (!ValidateMetadataDeleteFilters(table, *scan, file_list, filter_expressions, partition_key_index)) {
+	vector<unique_ptr<Expression>> filters;
+	if (!CollectMetadataDeleteFilters(table, *scan, file_list, filter_expressions, filters)) {
+		return false;
+	}
+	auto partitions = GetMetadataPartitionExpressions(context, table);
+	bool has_partition = false;
+	for (auto &filter : filters) {
+		auto expression = filter->Copy();
+		if (!ReplaceMetadataPartitionExpressions(table, partitions, nullptr, expression, has_partition) ||
+		    !expression->IsScalar() || !expression->IsFoldable()) {
+			return false;
+		}
+	}
+	if (!has_partition) {
 		return false;
 	}
 	auto &transaction = DuckLakeTransaction::Get(context, table.catalog);
@@ -1089,8 +1117,7 @@ bool CanUseMetadataDelete(ClientContext &context, DuckLakeTableEntry &table, Phy
 		if (file.delete_file_id.IsValid() || !file.delete_file.path.empty()) {
 			return false;
 		}
-		auto file_match = GetMetadataDeleteFileMatch(context, table, *scan, file_list, filter_expressions,
-		                                             partition_key_index.GetIndex(), file);
+		auto file_match = GetMetadataDeleteFileMatch(context, table, partitions, filters, file);
 		if (file_match == MetadataDeleteFileMatch::UNKNOWN) {
 			return false;
 		}

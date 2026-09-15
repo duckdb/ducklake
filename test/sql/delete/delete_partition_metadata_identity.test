@@ -194,7 +194,7 @@ SELECT p, COUNT(*) FROM ducklake.volatile_t GROUP BY p
 ----
 y	1
 
-# column = column is not a partition-value proof. It must fall back to row-level delete.
+# Column equality must evaluate both partition values and keep non-matching files.
 statement ok
 CREATE TABLE ducklake.col_eq_t(a INTEGER, b INTEGER, v INTEGER)
 
@@ -239,7 +239,7 @@ SELECT COUNT(*), MIN(v), MAX(v) FROM ducklake.multi_key_single_predicate_t
 ----
 2	30	40
 
-# Cross-key predicate algebra is a later slice. It must fall back to row-level delete.
+# Cross-key AND evaluates both partition values before dropping a file.
 statement ok
 CREATE TABLE ducklake.multi_key_and_t(a INTEGER, b INTEGER, v INTEGER)
 
@@ -252,7 +252,7 @@ INSERT INTO ducklake.multi_key_and_t VALUES (1, 1, 10), (1, 2, 20), (2, 1, 30), 
 query II
 EXPLAIN DELETE FROM ducklake.multi_key_and_t WHERE a = 1 AND b = 1
 ----
-physical_plan	<REGEX>:.*Ducklake Delete.*
+physical_plan	<REGEX>:.*Ducklake Metadata Delete.*
 
 query I
 DELETE FROM ducklake.multi_key_and_t WHERE a = 1 AND b = 1
@@ -264,7 +264,7 @@ SELECT COUNT(*), MIN(v), MAX(v) FROM ducklake.multi_key_and_t
 ----
 3	20	40
 
-# Cross-key OR is also outside this slice. It must fall back instead of dropping the union of files.
+# Cross-key OR must preserve files where neither predicate is true.
 statement ok
 CREATE TABLE ducklake.multi_key_or_t(a INTEGER, b INTEGER, v INTEGER)
 
@@ -277,7 +277,7 @@ INSERT INTO ducklake.multi_key_or_t VALUES (1, 1, 10), (1, 2, 20), (2, 1, 30), (
 query II
 EXPLAIN DELETE FROM ducklake.multi_key_or_t WHERE a = 1 OR b = 1
 ----
-physical_plan	<REGEX>:.*Ducklake Delete.*
+physical_plan	<REGEX>:.*Ducklake Metadata Delete.*
 
 query I
 DELETE FROM ducklake.multi_key_or_t WHERE a = 1 OR b = 1
