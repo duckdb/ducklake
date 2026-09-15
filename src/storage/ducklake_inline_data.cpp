@@ -297,7 +297,7 @@ void UpdateStats(vector<DuckLakeBaseColumnStats> &stats, idx_t c, Vector &data, 
 			break;
 		}
 		default:
-			throw InternalException("FIXME: unsupported nested type");
+			throw NotImplementedException("FIXME: unsupported nested type");
 		}
 		return;
 	}
