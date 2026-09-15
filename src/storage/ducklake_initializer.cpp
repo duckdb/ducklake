@@ -40,7 +40,11 @@ string DuckLakeInitializer::GetAttachOptions() {
 			throw InternalException("Unsupported access mode in DuckLake attach");
 		}
 	}
+	bool has_isolation_level_override = false;
 	for (auto &option : options.metadata_parameters) {
+		if (StringUtil::CIEquals(option.first, "isolation_level")) {
+			has_isolation_level_override = true;
+		}
 		attach_options.push_back(option.first + " " + option.second.ToSQLString());
 	}
 	const string metadata_type = catalog.MetadataType();
@@ -48,15 +52,18 @@ string DuckLakeInitializer::GetAttachOptions() {
 		// this is duckdb, we always do latest storage
 		attach_options.push_back(StringUtil::Format("STORAGE_VERSION '%s'", "latest"));
 	}
+	bool is_postgres = metadata_type == "postgres" || metadata_type == "postgres_scanner";
 	// scope the underlying Postgres attach to the metadata schema - otherwise the postgres extension reflects
 	// every schema in the database on attach, which is very slow on large or multi-tenant catalogs.
 	// only done when the user explicitly set METADATA_SCHEMA - the default schema is not known until after attach.
 	// an explicit META_SCHEMA (or metadata_parameters 'schema') takes precedence over this.
-	bool is_postgres = metadata_type == "postgres" || metadata_type == "postgres_scanner";
 	bool user_set_schema = options.metadata_parameters.find("schema") != options.metadata_parameters.end();
 	if (is_postgres && !user_set_schema && !options.metadata_schema.empty()) {
 		attach_options.push_back("SCHEMA " +
 		                         DuckLakeUtil::SQLLiteralToString(options.metadata_schema.GetIdentifierName()));
+	}
+	if (is_postgres && !has_isolation_level_override) {
+		attach_options.push_back("isolation_level 'read committed'");
 	}
 	if (options.hide_metadata_catalog) {
 		attach_options.push_back("HIDDEN true");

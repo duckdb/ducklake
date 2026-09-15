@@ -1451,6 +1451,9 @@ void DuckLakeTransaction::RunCommitLoop(DuckLakeSnapshot transaction_snapshot,
 		}
 		return result;
 	};
+	context.snapshot_and_stats_query = [&]() {
+		return metadata_manager->GetSnapshotAndStatsAndChangesQuery(ducklake_catalog.SupportsV1_1Metadata());
+	};
 	context.get_snapshot = [&]() {
 		return GetSnapshot();
 	};

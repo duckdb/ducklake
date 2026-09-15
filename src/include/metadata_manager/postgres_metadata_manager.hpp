@@ -39,6 +39,7 @@ public:
 
 protected:
 	string GetLatestSnapshotQuery() const override;
+	string GetSnapshotAndStatsAndChangesQuery(bool include_exactness) override;
 	string GenerateFileColumnStatsCTEBody(const CTERequirement &req, TableIndex table_id) override;
 	string GenerateFileListQuery(DuckLakeTableEntry &table, const FilterPushdownInfo *filter_info,
 	                             const vector<DuckLakeFileListDynamicFilter> &dynamic_filters,
