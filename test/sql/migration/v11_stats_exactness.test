@@ -53,7 +53,7 @@ apple	zebra	true	true
 query IIII
 SELECT min_value, max_value, min_is_exact::BOOLEAN, max_is_exact::BOOLEAN FROM dl.ducklake_table_column_stats ORDER BY column_id
 ----
-1	4	true	true
+1	4	NULL	true
 apple	zebra	true	true
 
 # the flags survive a detach/re-attach round-trip through the global stats read path

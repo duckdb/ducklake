@@ -76,6 +76,8 @@ struct DuckLakeCommitContext {
 	    };
 	//! Returns the current global table stats for a single table id (first-attempt path).
 	std::function<shared_ptr<DuckLakeTableStats>(TableIndex)> get_table_stats;
+	std::function<string(const DuckLakeGlobalStatsInfo &, DuckLakeMetadataManager::GlobalStatsWrite)>
+	    update_global_table_stats_sql;
 	//! Top-level columns of a table at the commit snapshot — needed by stats-refresh to iterate
 	//! columns and look up types when merging per-file stats.
 	std::function<vector<DuckLakeColumnSchemaEntry>(TableIndex)> get_table_column_schema = [](TableIndex) {
@@ -118,6 +120,9 @@ struct DuckLakeCommitContext {
 	DuckLakeInlinedColNames InlinedColNames() const {
 		return DuckLakeInlinedColNames(supports_v1_1_metadata);
 	}
+
+	//! Throws if a closure was left unassigned. TWO construction sites must assign each one.
+	void ValidateRequiredClosures() const;
 };
 
 //! Holds the per-transaction mutable change state (new/dropped/renamed catalog entries, local file
