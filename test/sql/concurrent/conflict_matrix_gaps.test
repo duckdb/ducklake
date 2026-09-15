@@ -1,0 +1,155 @@
+# name: test/sql/concurrent/conflict_matrix_gaps.test
+# description: compaction x ALTER TABLE and ALTER VIEW x DROP VIEW conflict in both commit orderings
+# group: [concurrent]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/conflict_matrix_files', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+SET immediate_transaction_mode=true
+
+statement ok
+CREATE TABLE ducklake.t(i INTEGER)
+
+statement ok
+INSERT INTO ducklake.t VALUES (1)
+
+statement ok
+INSERT INTO ducklake.t VALUES (2)
+
+# Scenario 2.1: compact commits first, then ALTER TABLE on the same table -> conflict
+statement ok con1
+BEGIN
+
+statement ok con2
+BEGIN
+
+query III con1
+SELECT table_name, files_processed, files_created FROM ducklake_merge_adjacent_files('ducklake')
+----
+t	2	1
+
+statement ok con2
+ALTER TABLE ducklake.t ADD COLUMN j INTEGER
+
+statement ok con1
+COMMIT
+
+statement error con2
+COMMIT
+----
+Transaction conflict
+
+# Scenario 2.2: ALTER TABLE commits first, then compact the same table -> conflict
+statement ok
+INSERT INTO ducklake.t VALUES (3)
+
+statement ok
+INSERT INTO ducklake.t VALUES (4)
+
+statement ok con1
+BEGIN
+
+statement ok con2
+BEGIN
+
+statement ok con1
+ALTER TABLE ducklake.t ADD COLUMN k INTEGER
+
+query III con2
+SELECT table_name, files_processed, files_created FROM ducklake_merge_adjacent_files('ducklake')
+----
+t	3	1
+
+statement ok con1
+COMMIT
+
+statement error con2
+COMMIT
+----
+Transaction conflict
+
+# Views: set up a view to alter/drop
+statement ok
+CREATE VIEW ducklake.v AS SELECT i FROM ducklake.t
+
+# Scenario 2.3: DROP VIEW commits first, then ALTER VIEW (COMMENT) the same view -> conflict
+statement ok con1
+BEGIN
+
+statement ok con2
+BEGIN
+
+statement ok con1
+DROP VIEW ducklake.v
+
+statement ok con2
+COMMENT ON VIEW ducklake.v IS 'altered'
+
+statement ok con1
+COMMIT
+
+statement error con2
+COMMIT
+----
+Transaction conflict
+
+# Recreate the view for the reverse ordering
+statement ok
+CREATE VIEW ducklake.v AS SELECT i FROM ducklake.t
+
+# Scenario 2.4: ALTER VIEW (COMMENT) commits first, then DROP VIEW the same view -> conflict
+statement ok con1
+BEGIN
+
+statement ok con2
+BEGIN
+
+statement ok con1
+COMMENT ON VIEW ducklake.v IS 'altered first'
+
+statement ok con2
+DROP VIEW ducklake.v
+
+statement ok con1
+COMMIT
+
+statement error con2
+COMMIT
+----
+Transaction conflict
+
+# Scenario 2.5 (guard): compact commits first, then INSERT into the same table -> BOTH succeed (no over-firing)
+statement ok
+INSERT INTO ducklake.t (i) VALUES (5)
+
+statement ok
+INSERT INTO ducklake.t (i) VALUES (6)
+
+statement ok con1
+BEGIN
+
+statement ok con2
+BEGIN
+
+query III con1
+SELECT table_name, files_processed, files_created FROM ducklake_merge_adjacent_files('ducklake')
+----
+t	5	1
+
+statement ok con2
+INSERT INTO ducklake.t (i) VALUES (7)
+
+statement ok con1
+COMMIT
+
+statement ok con2
+COMMIT
