@@ -18,6 +18,8 @@
 
 namespace duckdb {
 
+struct DuckLakeCommitContext;
+
 struct NewTableInfo {
 	vector<DuckLakeTableInfo> new_tables;
 	vector<DuckLakeViewInfo> new_views;
@@ -50,10 +52,16 @@ struct CompactionInformation {
 };
 
 struct DuckLakeCommitState {
-	explicit DuckLakeCommitState(DuckLakeSnapshot &snapshot) : commit_snapshot(snapshot) {
+	DuckLakeCommitState(DuckLakeSnapshot &snapshot, const DuckLakeCommitContext &context)
+	    : commit_snapshot(snapshot), context(context) {
 	}
 
 	DuckLakeSnapshot &commit_snapshot;
+	const DuckLakeCommitContext &context;
+
+	idx_t AllocateCatalogId() const;
+	idx_t AllocateFileId() const;
+
 	map<SchemaIndex, SchemaIndex> committed_schemas;
 	map<TableIndex, TableIndex> committed_tables;
 	map<idx_t, idx_t> committed_partition_ids;

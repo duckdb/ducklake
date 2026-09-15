@@ -210,6 +210,16 @@ public:
 	virtual string GetVersionString();
 	virtual DuckLakeMetadata LoadDuckLake();
 
+	virtual idx_t AllocateNextSnapshotId(idx_t current_snapshot_id);
+	virtual idx_t AllocateNextCatalogId(idx_t current_next_catalog_id);
+	virtual idx_t AllocateNextFileId(idx_t current_next_file_id);
+	virtual idx_t AllocateNextSchemaVersion(idx_t current_schema_version);
+	virtual idx_t PeekSchemaVersion(idx_t current_schema_version);
+	virtual void EnsureIdSequences() {
+	}
+	virtual void AcquireCommitLock(const TransactionChangeInformation &changes) {
+	}
+
 	virtual unique_ptr<QueryResult> Execute(DuckLakeSnapshot snapshot, string &query);
 	virtual unique_ptr<QueryResult> Execute(string &query);
 
@@ -381,8 +391,9 @@ public:
 	static SnapshotChangeInfo
 	GetSnapshotAndStatsAndChanges(SnapshotAndStats &current_snapshot,
 	                              const std::function<unique_ptr<QueryResult>(string)> &executor,
-	                              bool include_exactness);
-	static string GetSnapshotAndStatsAndChangesQuery(bool include_exactness);
+	                              const std::function<string()> &query_builder);
+	static string BaseSnapshotAndStatsAndChangesQuery(bool include_exactness);
+	virtual string GetSnapshotAndStatsAndChangesQuery(bool include_exactness);
 	static SnapshotChangeInfo ParseSnapshotAndStatsAndChanges(QueryResult &result, SnapshotAndStats &current_snapshot);
 	virtual unique_ptr<DuckLakeSnapshot> GetSnapshot();
 	virtual unique_ptr<DuckLakeSnapshot> GetSnapshot(BoundAtClause &at_clause, SnapshotBound bound);

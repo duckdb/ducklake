@@ -3175,7 +3175,7 @@ string DuckLakeMetadataManager::WriteNewInlinedData(DuckLakeSnapshot &commit_sna
 			// write the new inlined table
 			string inlined_tables;
 			string inlined_table_queries;
-			commit_snapshot.schema_version++;
+			commit_snapshot.schema_version = AllocateNextSchemaVersion(commit_snapshot.schema_version);
 			inlined_table_name =
 			    GetInlinedTableQueries(commit_snapshot, table_info, inlined_tables, inlined_table_queries);
 			batch_query += "INSERT INTO {METADATA_CATALOG}.ducklake_inlined_data_tables VALUES " + inlined_tables + ";";
@@ -4496,6 +4496,26 @@ string DuckLakeMetadataManager::InsertSnapshotSql() {
 	return R"(INSERT INTO {METADATA_CATALOG}.ducklake_snapshot VALUES ({SNAPSHOT_ID}, NOW(), {SCHEMA_VERSION}, {NEXT_CATALOG_ID}, {NEXT_FILE_ID});)";
 }
 
+idx_t DuckLakeMetadataManager::AllocateNextSnapshotId(idx_t current_snapshot_id) {
+	return current_snapshot_id + 1;
+}
+
+idx_t DuckLakeMetadataManager::AllocateNextCatalogId(idx_t current_next_catalog_id) {
+	return current_next_catalog_id;
+}
+
+idx_t DuckLakeMetadataManager::AllocateNextFileId(idx_t current_next_file_id) {
+	return current_next_file_id;
+}
+
+idx_t DuckLakeMetadataManager::AllocateNextSchemaVersion(idx_t current_schema_version) {
+	return current_schema_version + 1;
+}
+
+idx_t DuckLakeMetadataManager::PeekSchemaVersion(idx_t current_schema_version) {
+	return current_schema_version;
+}
+
 static string SQLStringOrNull(const string &str) {
 	if (str.empty()) {
 		return "NULL";
@@ -4512,6 +4532,10 @@ string DuckLakeMetadataManager::WriteSnapshotChangesSql(const SnapshotChangeInfo
 }
 
 string DuckLakeMetadataManager::GetSnapshotAndStatsAndChangesQuery(bool include_exactness) {
+	return BaseSnapshotAndStatsAndChangesQuery(include_exactness);
+}
+
+string DuckLakeMetadataManager::BaseSnapshotAndStatsAndChangesQuery(bool include_exactness) {
 	// both UNION arms must stay column-aligned - extend them together
 	string snapshot_arm_padding;
 	string stats_arm_columns;
@@ -4579,6 +4603,10 @@ SnapshotChangeInfo DuckLakeMetadataManager::ParseSnapshotAndStatsAndChanges(Quer
 	bool first_row = true;
 	for (auto &row : result) {
 		if (first_row) {
+			if (row.IsNull(0)) {
+				throw TransactionException("Transaction conflict - attempting to read the current snapshot"
+				                           " - but another transaction has concurrently modified it");
+			}
 			current_snapshot.snapshot.snapshot_id = row.GetValue<idx_t>(0);
 			current_snapshot.snapshot.schema_version = row.GetValue<idx_t>(1);
 			current_snapshot.snapshot.next_catalog_id = row.GetValue<idx_t>(2);
@@ -4595,8 +4623,8 @@ SnapshotChangeInfo DuckLakeMetadataManager::ParseSnapshotAndStatsAndChanges(Quer
 SnapshotChangeInfo
 DuckLakeMetadataManager::GetSnapshotAndStatsAndChanges(SnapshotAndStats &current_snapshot,
                                                        const std::function<unique_ptr<QueryResult>(string)> &executor,
-                                                       bool include_exactness) {
-	auto result = executor(GetSnapshotAndStatsAndChangesQuery(include_exactness));
+                                                       const std::function<string()> &query_builder) {
+	auto result = executor(query_builder());
 	return ParseSnapshotAndStatsAndChanges(*result, current_snapshot);
 }
 
