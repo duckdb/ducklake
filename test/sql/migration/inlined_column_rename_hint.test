@@ -35,6 +35,18 @@ statement ok
 CREATE TABLE meta.ducklake_view_column_tag(view_id BIGINT, column_name VARCHAR, begin_snapshot BIGINT, end_snapshot BIGINT, key VARCHAR, value VARCHAR);
 
 statement ok
+ALTER TABLE meta.ducklake_file_column_stats ADD COLUMN min_is_exact BOOLEAN DEFAULT NULL;
+
+statement ok
+ALTER TABLE meta.ducklake_file_column_stats ADD COLUMN max_is_exact BOOLEAN DEFAULT NULL;
+
+statement ok
+ALTER TABLE meta.ducklake_table_column_stats ADD COLUMN min_is_exact BOOLEAN DEFAULT NULL;
+
+statement ok
+ALTER TABLE meta.ducklake_table_column_stats ADD COLUMN max_is_exact BOOLEAN DEFAULT NULL;
+
+statement ok
 DETACH meta
 
 statement ok

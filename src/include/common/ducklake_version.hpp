@@ -28,5 +28,6 @@ static constexpr DuckLakeVersion DUCKLAKE_LATEST_VERSION = DuckLakeVersion::V1_1
 
 DuckLakeVersion DuckLakeVersionFromString(const string &version_str);
 string DuckLakeVersionToString(DuckLakeVersion version);
+[[noreturn]] void ThrowUnsupportedByVersion(DuckLakeVersion version, const string &feature);
 
 } // namespace duckdb

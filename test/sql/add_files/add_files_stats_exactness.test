@@ -1,0 +1,62 @@
+# name: test/sql/add_files/add_files_stats_exactness.test
+# description: ducklake_add_data_files records whether parquet footer min/max stats are exact
+# group: [add_files]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/add_files_stats_exactness.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/add_files_stats_exactness/', METADATA_CATALOG 'metadata');
+
+statement ok
+CREATE TABLE ducklake.test(s VARCHAR);
+
+# short strings,  the parquet writer emits exact footer stats
+statement ok
+COPY (SELECT 'hello' s UNION ALL SELECT 'world' s) TO '{DATA_PATH}/afse_exact.parquet';
+
+statement ok
+CALL ducklake_add_data_files('ducklake', 'test', '{DATA_PATH}/afse_exact.parquet')
+
+query IIII
+SELECT min_value, max_value, min_is_exact::BOOLEAN, max_is_exact::BOOLEAN FROM metadata.ducklake_file_column_stats
+----
+hello	world	true	true
+
+# strings above 256 bytes, the parquet writer truncates the footer stats
+statement ok
+COPY (SELECT 'B' || repeat('x', 300) s) TO '{DATA_PATH}/afse_truncated.parquet';
+
+statement ok
+CALL ducklake_add_data_files('ducklake', 'test', '{DATA_PATH}/afse_truncated.parquet')
+
+query II
+SELECT min_is_exact::BOOLEAN, max_is_exact::BOOLEAN FROM metadata.ducklake_file_column_stats ORDER BY data_file_id
+----
+true	true
+false	false
+
+# global merge keeps exactness per bound: the truncated file wins the min, the exact file keeps the max
+query II
+SELECT min_is_exact::BOOLEAN, max_is_exact::BOOLEAN FROM metadata.ducklake_table_column_stats
+----
+false	true
+
+# multiple row groups fold flags per row group
+statement ok
+COPY (SELECT concat('val', range % 10) s FROM range(5000)) TO '{DATA_PATH}/afse_groups.parquet' (ROW_GROUP_SIZE 2048);
+
+statement ok
+CALL ducklake_add_data_files('ducklake', 'test', '{DATA_PATH}/afse_groups.parquet')
+
+query IIII
+SELECT length(min_value), length(max_value), min_is_exact::BOOLEAN, max_is_exact::BOOLEAN FROM metadata.ducklake_file_column_stats ORDER BY data_file_id
+----
+5	5	true	true
+256	256	false	false
+4	4	true	true

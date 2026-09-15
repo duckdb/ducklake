@@ -1,0 +1,150 @@
+# name: test/sql/stats/complex_filter_pushdown.test
+# description: Test filter pushdown of conditions spanning multiple columns
+# group: [stats]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/ducklake_complex_pushdown', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE ducklake.t(id INTEGER, category INTEGER);
+
+# one file per category - id 1..100 / 101..200 / 201..300
+statement ok
+INSERT INTO ducklake.t SELECT i, 1 FROM range(1, 101) t(i);
+
+statement ok
+INSERT INTO ducklake.t SELECT i, 2 FROM range(101, 201) t(i);
+
+statement ok
+INSERT INTO ducklake.t SELECT i, 3 FROM range(201, 301) t(i);
+
+# neither column is constrained in both branches, so only the disjunction prunes
+query I
+SELECT COUNT(*) FROM ducklake.t WHERE id = 50 OR category = 3;
+----
+101
+
+query II
+EXPLAIN ANALYZE SELECT COUNT(*) FROM ducklake.t WHERE id = 50 OR category = 3;
+----
+analyzed_plan	<REGEX>:.*Total Files Read: 2.*
+
+# each branch is satisfiable per column, but no file satisfies either branch as a whole
+query I
+SELECT COUNT(*) FROM ducklake.t WHERE (id <= 100 AND category = 3) OR (id >= 201 AND category = 1);
+----
+0
+
+query II
+EXPLAIN ANALYZE SELECT COUNT(*) FROM ducklake.t WHERE (id <= 100 AND category = 3) OR (id >= 201 AND category = 1);
+----
+analyzed_plan	<REGEX>:.*Total Files Read: 0.*
+
+# an unsatisfiable branch drops out of the disjunction
+query I
+SELECT COUNT(*) FROM ducklake.t WHERE id = 50 OR (category = 2 AND category = 3);
+----
+1
+
+query II
+EXPLAIN ANALYZE SELECT COUNT(*) FROM ducklake.t WHERE id = 50 OR (category = 2 AND category = 3);
+----
+analyzed_plan	<REGEX>:.*Total Files Read: 1.*
+
+# nested disjunctions
+query I
+SELECT COUNT(*) FROM ducklake.t WHERE (id < 50 OR category = 3) AND (id > 20 OR category = 2);
+----
+129
+
+query II
+EXPLAIN ANALYZE SELECT COUNT(*) FROM ducklake.t WHERE (id < 50 OR category = 3) AND (id > 20 OR category = 2);
+----
+analyzed_plan	<REGEX>:.*Total Files Read: 2.*
+
+# a null check is not expressible as a per-column filter, but still prunes inside a disjunction
+statement ok
+CREATE TABLE ducklake.n(id INTEGER, v INTEGER);
+
+statement ok
+INSERT INTO ducklake.n SELECT i, i FROM range(1, 101) t(i);
+
+statement ok
+INSERT INTO ducklake.n SELECT i, NULL FROM range(101, 201) t(i);
+
+statement ok
+INSERT INTO ducklake.n SELECT i, i FROM range(201, 301) t(i);
+
+query I
+SELECT COUNT(*) FROM ducklake.n WHERE v IS NULL OR id = 250;
+----
+101
+
+query II
+EXPLAIN ANALYZE SELECT COUNT(*) FROM ducklake.n WHERE v IS NULL OR id = 250;
+----
+analyzed_plan	<REGEX>:.*Total Files Read: 2.*
+
+# the same column on both sides, where only one side is a per-column filter
+query I
+SELECT COUNT(*) FROM ducklake.n WHERE v IS NULL OR v > 250;
+----
+150
+
+query II
+EXPLAIN ANALYZE SELECT COUNT(*) FROM ducklake.n WHERE v IS NULL OR v > 250;
+----
+analyzed_plan	<REGEX>:.*Total Files Read: 2.*
+
+# a branch we cannot express prunes nothing
+query I
+SELECT COUNT(*) FROM ducklake.t WHERE id = 50 OR category::VARCHAR LIKE '%9%';
+----
+1
+
+query II
+EXPLAIN ANALYZE SELECT COUNT(*) FROM ducklake.t WHERE id = 50 OR category::VARCHAR LIKE '%9%';
+----
+analyzed_plan	<REGEX>:.*Total Files Read: 3.*
+
+# the pushed-down disjunction survives a join adding a dynamic filter
+statement ok
+CREATE TABLE probe(k INTEGER);
+
+statement ok
+INSERT INTO probe VALUES (50), (250);
+
+query I
+SELECT COUNT(*) FROM ducklake.t JOIN probe ON ducklake.t.id = probe.k WHERE ducklake.t.id = 50 OR ducklake.t.category = 3;
+----
+2
+
+query II
+EXPLAIN ANALYZE SELECT COUNT(*) FROM ducklake.t JOIN probe ON ducklake.t.id = probe.k WHERE ducklake.t.id = 50 OR ducklake.t.category = 3;
+----
+analyzed_plan	<REGEX>:.*Total Files Read: 2.*
+
+# 64 leaves is the budget - every branch is unsatisfiable, so the tree prunes everything
+query II
+EXPLAIN ANALYZE SELECT COUNT(*) FROM ducklake.t WHERE (id <= 1 AND category = 3) OR (id <= 2 AND category = 3) OR (id <= 3 AND category = 3) OR (id <= 4 AND category = 3) OR (id <= 5 AND category = 3) OR (id <= 6 AND category = 3) OR (id <= 7 AND category = 3) OR (id <= 8 AND category = 3) OR (id <= 9 AND category = 3) OR (id <= 10 AND category = 3) OR (id <= 11 AND category = 3) OR (id <= 12 AND category = 3) OR (id <= 13 AND category = 3) OR (id <= 14 AND category = 3) OR (id <= 15 AND category = 3) OR (id <= 16 AND category = 3) OR (id >= 201 AND category = 1) OR (id >= 202 AND category = 1) OR (id >= 203 AND category = 1) OR (id >= 204 AND category = 1) OR (id >= 205 AND category = 1) OR (id >= 206 AND category = 1) OR (id >= 207 AND category = 1) OR (id >= 208 AND category = 1) OR (id >= 209 AND category = 1) OR (id >= 210 AND category = 1) OR (id >= 211 AND category = 1) OR (id >= 212 AND category = 1) OR (id >= 213 AND category = 1) OR (id >= 214 AND category = 1) OR (id >= 215 AND category = 1) OR (id >= 216 AND category = 1);
+----
+analyzed_plan	<REGEX>:.*Total Files Read: 0.*
+
+# one leaf more and the tree is dropped, leaving the per-column filters to prune
+query I
+SELECT COUNT(*) FROM ducklake.t WHERE (id <= 1 AND category = 3) OR (id <= 2 AND category = 3) OR (id <= 3 AND category = 3) OR (id <= 4 AND category = 3) OR (id <= 5 AND category = 3) OR (id <= 6 AND category = 3) OR (id <= 7 AND category = 3) OR (id <= 8 AND category = 3) OR (id <= 9 AND category = 3) OR (id <= 10 AND category = 3) OR (id <= 11 AND category = 3) OR (id <= 12 AND category = 3) OR (id <= 13 AND category = 3) OR (id <= 14 AND category = 3) OR (id <= 15 AND category = 3) OR (id <= 16 AND category = 3) OR (id <= 17 AND category = 3) OR (id >= 201 AND category = 1) OR (id >= 202 AND category = 1) OR (id >= 203 AND category = 1) OR (id >= 204 AND category = 1) OR (id >= 205 AND category = 1) OR (id >= 206 AND category = 1) OR (id >= 207 AND category = 1) OR (id >= 208 AND category = 1) OR (id >= 209 AND category = 1) OR (id >= 210 AND category = 1) OR (id >= 211 AND category = 1) OR (id >= 212 AND category = 1) OR (id >= 213 AND category = 1) OR (id >= 214 AND category = 1) OR (id >= 215 AND category = 1) OR (id >= 216 AND category = 1);
+----
+0
+
+query II
+EXPLAIN ANALYZE SELECT COUNT(*) FROM ducklake.t WHERE (id <= 1 AND category = 3) OR (id <= 2 AND category = 3) OR (id <= 3 AND category = 3) OR (id <= 4 AND category = 3) OR (id <= 5 AND category = 3) OR (id <= 6 AND category = 3) OR (id <= 7 AND category = 3) OR (id <= 8 AND category = 3) OR (id <= 9 AND category = 3) OR (id <= 10 AND category = 3) OR (id <= 11 AND category = 3) OR (id <= 12 AND category = 3) OR (id <= 13 AND category = 3) OR (id <= 14 AND category = 3) OR (id <= 15 AND category = 3) OR (id <= 16 AND category = 3) OR (id <= 17 AND category = 3) OR (id >= 201 AND category = 1) OR (id >= 202 AND category = 1) OR (id >= 203 AND category = 1) OR (id >= 204 AND category = 1) OR (id >= 205 AND category = 1) OR (id >= 206 AND category = 1) OR (id >= 207 AND category = 1) OR (id >= 208 AND category = 1) OR (id >= 209 AND category = 1) OR (id >= 210 AND category = 1) OR (id >= 211 AND category = 1) OR (id >= 212 AND category = 1) OR (id >= 213 AND category = 1) OR (id >= 214 AND category = 1) OR (id >= 215 AND category = 1) OR (id >= 216 AND category = 1);
+----
+analyzed_plan	<REGEX>:.*Total Files Read: 2.*

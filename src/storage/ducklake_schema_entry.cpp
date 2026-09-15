@@ -9,6 +9,8 @@
 #include "duckdb/parser/parsed_data/drop_info.hpp"
 #include "duckdb/planner/parsed_data/bound_create_table_info.hpp"
 #include "storage/ducklake_catalog.hpp"
+#include "common/ducklake_types.hpp"
+#include "duckdb/parser/expression/constant_expression.hpp"
 #include "storage/ducklake_table_entry.hpp"
 #include "storage/ducklake_transaction.hpp"
 #include "storage/ducklake_view_entry.hpp"
@@ -65,9 +67,10 @@ bool DuckLakeSchemaEntry::HandleCreateConflict(CatalogTransaction transaction, C
 	return true;
 }
 
-optional_ptr<CatalogEntry> DuckLakeSchemaEntry::CreateTableExtended(CatalogTransaction transaction,
-                                                                    BoundCreateTableInfo &info, string table_uuid,
-                                                                    string table_data_path) {
+optional_ptr<CatalogEntry>
+DuckLakeSchemaEntry::CreateTableExtended(CatalogTransaction transaction, BoundCreateTableInfo &info, string table_uuid,
+                                         string table_data_path, unique_ptr<DuckLakePartition> prebuilt_partition_data,
+                                         unique_ptr<DuckLakeSort> prebuilt_sort_data) {
 	auto &duck_transaction = transaction.transaction->Cast<DuckLakeTransaction>();
 	auto &base_info = info.Base();
 	// check if we have an existing entry with this name
@@ -86,19 +89,35 @@ optional_ptr<CatalogEntry> DuckLakeSchemaEntry::CreateTableExtended(CatalogTrans
 	auto table_entry = make_uniq<DuckLakeTableEntry>(ParentCatalog(), *this, base_info, table_id, std::move(table_uuid),
 	                                                 std::move(table_data_path), std::move(field_data), column_id,
 	                                                 std::move(inlined_tables), LocalChangeType::CREATED);
+	// CTAS passes prebuilt specs (ids must match the on-disk files); plain CREATE rebuilds from the inline clauses.
+	if (prebuilt_partition_data) {
+		table_entry->SetPartitionData(std::move(prebuilt_partition_data));
+	} else if (!base_info.partition_keys.empty()) {
+		table_entry->SetPartitionData(DuckLakeTableEntry::BuildPartitionData(
+		    duck_transaction, table_entry->GetColumns(), table_entry->GetFieldData(), base_info.partition_keys));
+	}
+	if (prebuilt_sort_data) {
+		table_entry->SetSortData(std::move(prebuilt_sort_data));
+	} else if (!base_info.sort_keys.empty()) {
+		table_entry->SetSortData(
+		    DuckLakeTableEntry::BuildSortData(duck_transaction, table_entry->GetColumns(), base_info.sort_keys));
+	}
 	auto result = table_entry.get();
 	duck_transaction.CreateEntry(std::move(table_entry));
 	return result;
 }
 
+string DuckLakeSchemaEntry::GenerateTableDataPath(const string &table_uuid, const string &table_name) const {
+	auto &duck_catalog = catalog.Cast<DuckLakeCatalog>();
+	return DataPath() + duck_catalog.GeneratePathFromName(table_uuid, table_name);
+}
+
 optional_ptr<CatalogEntry> DuckLakeSchemaEntry::CreateTable(CatalogTransaction transaction,
                                                             BoundCreateTableInfo &info) {
 	auto &duck_transaction = transaction.transaction->Cast<DuckLakeTransaction>();
-	auto &duck_catalog = catalog.Cast<DuckLakeCatalog>();
 	auto &base_info = info.Base();
 	auto table_uuid = duck_transaction.GenerateUUID();
-	auto table_data_path =
-	    DataPath() + duck_catalog.GeneratePathFromName(table_uuid, base_info.GetTableName().GetIdentifierName());
+	auto table_data_path = GenerateTableDataPath(table_uuid, base_info.GetTableName().GetIdentifierName());
 	return CreateTableExtended(transaction, info, std::move(table_uuid), std::move(table_data_path));
 }
 
@@ -120,6 +139,18 @@ optional_ptr<CatalogEntry> DuckLakeSchemaEntry::CreateFunction(CatalogTransactio
                                                                CreateFunctionInfo &info) {
 	unique_ptr<CatalogEntry> macro_entry;
 	auto &create_macro_info = info.Cast<CreateMacroInfo>();
+	auto version = ParentCatalog().Cast<DuckLakeCatalog>().GetDuckLakeVersion();
+	for (auto &macro : create_macro_info.macros) {
+		for (auto &type : macro->types) {
+			DuckLakeTypes::CheckSupportedType(type, version);
+		}
+		for (auto &entry : macro->default_parameters) {
+			Value default_value;
+			if (DuckLakeUtil::TryGetLiteralValue(*entry.second, default_value)) {
+				DuckLakeTypes::CheckSupportedType(default_value.type(), version);
+			}
+		}
+	}
 	switch (info.type) {
 	case CatalogType::MACRO_ENTRY:
 		macro_entry = make_uniq<ScalarMacroCatalogEntry>(ParentCatalog(), *this, create_macro_info);

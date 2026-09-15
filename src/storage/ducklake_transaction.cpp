@@ -391,6 +391,8 @@ void LocalTableChanges::AddColumnToLocalInlinedData(ClientContext &context, Tabl
 			new_col_stats.min = default_str;
 			new_col_stats.has_max = true;
 			new_col_stats.max = std::move(default_str);
+			new_col_stats.min_is_exact = true;
+			new_col_stats.max_is_exact = true;
 		} else {
 			new_col_stats.any_valid = false;
 		}
@@ -827,6 +829,9 @@ Connection &DuckLakeTransaction::GetConnection() {
 		auto &metadata_type = ducklake_catalog.MetadataType();
 		if (metadata_type == "postgres" || metadata_type == "postgres_scanner") {
 			connection->Query("SET pg_experimental_filter_pushdown=false");
+		} else if (metadata_type == "sqlite" || metadata_type == "sqlite_scanner") {
+			// FIXME: sqlite_scanner's per-scan read connections deadlock against concurrent writers
+			connection->Query("SET sqlite_disable_multithreaded_scans=true");
 		}
 		connection->BeginTransaction();
 		connection->Query("SET current_transaction_invalidation_policy='SYNTACTIC_ERRORS_DO_NOT_INVALIDATE'");
@@ -1263,6 +1268,8 @@ DuckLakeGlobalStatsInfo DuckLakeTransaction::ConvertNewGlobalStats(TableIndex ta
 		if (column_stats.has_max) {
 			col_stats.max_val = column_stats.max;
 		}
+		col_stats.min_is_exact = column_stats.EffectiveMinIsExact();
+		col_stats.max_is_exact = column_stats.EffectiveMaxIsExact();
 		if (column_stats.extra_stats) {
 			col_stats.has_extra_stats = column_stats.extra_stats->TrySerialize(col_stats.extra_stats);
 		} else {
@@ -1282,6 +1289,8 @@ DuckLakeColumnStatsInfo DuckLakeColumnStatsInfo::FromColumnStats(FieldIndex fiel
 	column_stats.column_id = field_id;
 	column_stats.min_val = stats.has_min ? DuckLakeUtil::StatsToString(stats.min) : "NULL";
 	column_stats.max_val = stats.has_max ? DuckLakeUtil::StatsToString(stats.max) : "NULL";
+	column_stats.min_is_exact = stats.has_min ? (stats.EffectiveMinIsExact() ? "true" : "false") : "NULL";
+	column_stats.max_is_exact = stats.has_max ? (stats.EffectiveMaxIsExact() ? "true" : "false") : "NULL";
 	column_stats.column_size_bytes = to_string(stats.column_size_bytes);
 	if (stats.has_null_count && stats.has_num_values) {
 		// value_count should be the count of non-null values: num_values - null_count
@@ -1452,6 +1461,9 @@ void DuckLakeTransaction::RunCommitLoop(DuckLakeSnapshot transaction_snapshot,
 	context.execute_commit_batch = [&](DuckLakeSnapshot snapshot, string &query) {
 		return metadata_manager->Execute(snapshot, query);
 	};
+	context.is_retryable_metadata_error = [&](const string &message) {
+		return metadata_manager->IsRetryableCommitError(message);
+	};
 	context.flush_cache_if_pending = [&]() {
 		if (metadata_manager->TakePendingCacheClear()) {
 			metadata_manager->ClearCache();
@@ -1559,6 +1571,9 @@ void DuckLakeTransaction::RunCommitLoop(DuckLakeSnapshot transaction_snapshot,
 	};
 	context.invalidate_table_stats_cache = [&](idx_t next_file_id, TableIndex table_id) {
 		ducklake_catalog.InvalidateTableStatsCache(next_file_id, table_id);
+	};
+	context.report_post_commit_error = [&](const string &message) {
+		DUCKDB_LOG_WARNING(db, StringUtil::Format("DuckLake post-commit cleanup failed: %s", message));
 	};
 	context.commit_info = state->commit_info;
 	context.supports_v1_1_metadata = ducklake_catalog.SupportsV1_1Metadata();

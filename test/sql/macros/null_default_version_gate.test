@@ -1,0 +1,66 @@
+# name: test/sql/macros/null_default_version_gate.test
+# description: NULL macro defaults are rejected on DuckLake 1.0 catalogs
+# group: [macros]
+
+require ducklake
+
+require parquet
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/ducklake_macro_null_gate.db' AS ducklake (DATA_PATH '{DATA_PATH}/ducklake_macro_null_gate', METADATA_CATALOG 'ducklake_macro_gate_meta', DUCKLAKE_VERSION '1.0')
+
+statement ok
+USE ducklake
+
+# the default's NULL type would be written as a column type 1.0 readers do not know
+statement error
+CREATE MACRO with_default(a, b := NULL) AS COALESCE(b, a)
+----
+DuckLake 1.0 does not support the NULL type
+
+statement error
+CREATE MACRO rows_for(v := NULL) AS TABLE SELECT v AS v
+----
+DuckLake 1.0 does not support the NULL type
+
+# regular defaults keep working
+statement ok
+CREATE MACRO with_default(a, b := 5) AS a + b
+
+query I
+SELECT with_default(1)
+----
+6
+
+query I
+SELECT COUNT(*) FROM ducklake_macro_gate_meta.ducklake_macro_parameters WHERE default_value_type = 'null'
+----
+0
+
+statement ok
+USE memory
+
+statement ok
+DETACH ducklake
+
+# migrating the catalog unlocks NULL defaults
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/ducklake_macro_null_gate.db' AS ducklake (DATA_PATH '{DATA_PATH}/ducklake_macro_null_gate', METADATA_CATALOG 'ducklake_macro_gate_meta', AUTOMATIC_MIGRATION TRUE)
+
+statement ok
+USE ducklake
+
+statement ok
+CREATE MACRO rows_for(v := NULL) AS TABLE SELECT v AS v
+
+query I
+FROM rows_for()
+----
+NULL
+
+query I
+SELECT COUNT(*) FROM ducklake_macro_gate_meta.ducklake_macro_parameters WHERE default_value_type = 'null'
+----
+1

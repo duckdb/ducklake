@@ -1,0 +1,56 @@
+# name: test/sql/data_inlining/type_inlining.test
+# description: Test inlined data of structs and json
+# group: [data_inlining]
+
+require ducklake
+
+require json
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/pg_lake');
+
+# issue 9734
+
+statement ok
+CALL ducklake.set_option('data_inlining_row_limit', 5000);
+
+statement ok
+CREATE TABLE table_9734(id BIGINT, s STRUCT(a INTEGER, ts TIMESTAMP));
+
+statement ok
+INSERT INTO table_9734 VALUES (1, {'a': 1, 'ts': TIMESTAMP '2026-01-01 12:00:00'});
+
+query II
+SELECT * FROM table_9734;
+----
+1	{'a': 1, 'ts': '2026-01-01 12:00:00'}
+
+# issue 1155
+
+statement ok
+CREATE TABLE table_1155 (id VARCHAR, attrs STRUCT(name VARCHAR, ts TIMESTAMPTZ));
+
+statement ok
+INSERT INTO table_1155 VALUES ('row1', {'name': 'foo', 'ts': TIMESTAMPTZ '2026-05-13 04:56:37+00'});
+
+query II
+SELECT * FROM table_1155;
+----
+row1	{'name': foo, 'ts': '2026-05-13 04:56:37+00'}
+
+# issue 1175
+
+statement ok
+CREATE TABLE events (id INTEGER, description JSON);
+
+statement ok
+INSERT INTO events VALUES (1, '{"title": "some title", "description": "desc"}');
+
+query II
+SELECT * FROM events;
+----
+1	{"title": "some title", "description": "desc"}
