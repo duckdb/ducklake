@@ -1,0 +1,114 @@
+# name: test/sql/issues/issue_add_column_cast_default.test
+# description: ADD COLUMN with a typed-literal/cast constant default must be accepted
+# group: [issues]
+
+require ducklake
+
+require parquet
+
+# a fixed metadata path (not {UUID}) so the DETACH / re-ATTACH below reloads the same catalog
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/addcoldefault.db' AS dl (DATA_PATH '{TEST_DIR}/addcoldefault_data')
+
+statement ok
+CREATE TABLE dl.t (id INTEGER)
+
+statement ok
+INSERT INTO dl.t VALUES (1), (2)
+
+# the two rows are still inlined here (no flush before ALTER): this exercises the
+# back-fill of transaction-local inlined data as well as of flushed files below
+
+# a bare literal default was already accepted; the control for the typed/cast forms below
+statement ok
+ALTER TABLE dl.t ADD COLUMN b INTEGER DEFAULT 7
+
+# typed literal default (a cast over a constant)
+statement ok
+ALTER TABLE dl.t ADD COLUMN d DATE DEFAULT DATE '2020-01-01'
+
+# typed TIMESTAMP literal default
+statement ok
+ALTER TABLE dl.t ADD COLUMN ts TIMESTAMP DEFAULT TIMESTAMP '2020-01-01 00:00:00'
+
+# cast-decorated integer constant default
+statement ok
+ALTER TABLE dl.t ADD COLUMN n INTEGER DEFAULT '5'::INTEGER
+
+# cast-decorated varchar constant default
+statement ok
+ALTER TABLE dl.t ADD COLUMN s VARCHAR DEFAULT 'abc'::VARCHAR
+
+# back-fill of pre-existing (inlined) rows uses the folded default
+query IIIIII
+SELECT id, b, d, ts, n, s FROM dl.t ORDER BY id
+----
+1	7	2020-01-01	2020-01-01 00:00:00	5	abc
+2	7	2020-01-01	2020-01-01 00:00:00	5	abc
+
+# a new insert that omits the added columns must pick up the folded defaults
+statement ok
+INSERT INTO dl.t (id) VALUES (3)
+
+# flush so the back-fill also runs against a written parquet file, not just inlined data
+statement ok
+CALL ducklake_flush_inlined_data('dl')
+
+query IIIIII
+SELECT id, b, d, ts, n, s FROM dl.t ORDER BY id
+----
+1	7	2020-01-01	2020-01-01 00:00:00	5	abc
+2	7	2020-01-01	2020-01-01 00:00:00	5	abc
+3	7	2020-01-01	2020-01-01 00:00:00	5	abc
+
+# the folded defaults must survive a catalog reload: a cast default persists as an
+# "expression" default with a NULL initial_default, so the reader has to evaluate the
+# (constant) default expression to back-fill old files. Reattach forces that path.
+statement ok
+DETACH dl
+
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/addcoldefault.db' AS dl (DATA_PATH '{TEST_DIR}/addcoldefault_data')
+
+query IIIIII
+SELECT id, b, d, ts, n, s FROM dl.t ORDER BY id
+----
+1	7	2020-01-01	2020-01-01 00:00:00	5	abc
+2	7	2020-01-01	2020-01-01 00:00:00	5	abc
+3	7	2020-01-01	2020-01-01 00:00:00	5	abc
+
+# ...and new inserts after the reload still pick up the defaults
+statement ok
+INSERT INTO dl.t (id) VALUES (4)
+
+query IIIIII
+SELECT id, b, d, ts, n, s FROM dl.t WHERE id = 4
+----
+4	7	2020-01-01	2020-01-01 00:00:00	5	abc
+
+# these spellings are constant folds too, and are accepted with the same values stock
+# DuckDB produces for them. See test/sql/default/add_column_default_folding.test for the
+# full family; the guard now only closes on defaults that have no single foldable value.
+
+statement ok
+ALTER TABLE dl.t ADD COLUMN e INTEGER DEFAULT TRY_CAST('5' AS INTEGER)
+
+statement ok
+ALTER TABLE dl.t ADD COLUMN f INTEGER DEFAULT '3.9'::DOUBLE
+
+statement ok
+ALTER TABLE dl.t ADD COLUMN h INTEGER DEFAULT '5'::BIGINT
+
+statement ok
+ALTER TABLE dl.t ADD COLUMN g INTEGER DEFAULT '3.9'::DOUBLE::INTEGER
+
+query IIII
+SELECT e, f, h, g FROM dl.t WHERE id = 1
+----
+5	4	5	4
+
+# a VOLATILE default still has no single value to back-fill with
+statement error
+ALTER TABLE dl.t ADD COLUMN r DOUBLE DEFAULT random()
+----
+non-literal default value
