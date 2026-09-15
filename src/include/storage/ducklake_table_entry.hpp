@@ -42,6 +42,8 @@ public:
 	                   LocalChange local_change);
 
 public:
+	const ColumnList &GetColumns() const override;
+
 	TableIndex GetTableId() const {
 		return table_id;
 	}
@@ -188,6 +190,9 @@ public:
 	DuckLakeTableEntry(DuckLakeTableEntry &parent, CreateTableInfo &info, unique_ptr<DuckLakePartition> partition_data);
 	// ! Create a DuckLakeTableEntry from a SET SORT KEY
 	DuckLakeTableEntry(DuckLakeTableEntry &parent, CreateTableInfo &info, unique_ptr<DuckLakeSort> sort_data);
+
+protected:
+	ColumnList columns;
 
 private:
 	TableIndex table_id;
