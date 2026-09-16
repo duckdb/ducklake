@@ -1,0 +1,65 @@
+# name: test/sql/stats/skip_stats_columns_malformed.test
+# description: A hand-edited skip_stats_columns value is used for what it can be
+# group: [stats]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/skip_stats_columns_malformed.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/skip_stats_columns_malformed', METADATA_CATALOG 'ducklake_meta', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE ducklake.nested(id INTEGER, st STRUCT(x INTEGER, y VARCHAR))
+
+statement ok
+CALL ducklake.set_option('skip_stats_columns', 'st', table_name => 'nested')
+
+# this value is re-read on every write to the table, so entries it cannot use are ignored
+# rather than raised
+statement ok
+UPDATE ducklake_meta.ducklake_metadata SET value='999, notanumber, , 3 ,-1'
+WHERE key='skip_stats_columns'
+
+# a field id names a different column in each table, so only a table's own row can be read - and
+# 'unset', having no row of its own, is the only place the global row below could have applied
+statement ok
+CREATE TABLE ducklake.unset(a INTEGER, b VARCHAR)
+
+statement ok
+INSERT INTO ducklake_meta.ducklake_metadata VALUES ('skip_stats_columns', '1,2', NULL, NULL)
+
+statement ok
+DETACH ducklake
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/skip_stats_columns_malformed', METADATA_CATALOG 'ducklake_meta', DATA_INLINING_ROW_LIMIT 0)
+
+# options() reports the stored value untouched, malformed or not
+query I
+SELECT value FROM ducklake.options() WHERE scope_entry='main.nested'
+----
+999, notanumber, , 3 ,-1
+
+statement ok
+INSERT INTO ducklake.nested VALUES (1, {'x': 1, 'y': 'p'})
+
+statement ok
+INSERT INTO ducklake.unset VALUES (6, 'unaffected')
+
+# id 3 still resolves past the garbage and id 4 does not; 'unset' ignored the global row
+query III
+SELECT t.table_name, f.column_id, f.min_value IS NULL
+FROM ducklake_meta.ducklake_file_column_stats f JOIN ducklake_meta.ducklake_data_file d USING (data_file_id)
+JOIN ducklake_meta.ducklake_table t ON t.table_id=d.table_id AND t.end_snapshot IS NULL
+ORDER BY t.table_name, f.column_id
+----
+nested	1	false
+nested	3	true
+nested	4	false
+unset	1	false
+unset	2	false

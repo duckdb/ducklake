@@ -969,6 +969,11 @@ bool DuckLakeCatalog::TryGetConfigOptionInScope(optional_ptr<DuckLakeTransaction
 	return options.config.TryGet(option, result, schema_id, table_id);
 }
 
+bool DuckLakeCatalog::TryGetTableConfigOption(optional_ptr<DuckLakeTransaction> transaction, const string &option,
+                                              string &result, TableIndex table_id) const {
+	return TryGetConfigOptionInScope(transaction, option, result, SchemaIndex(), table_id);
+}
+
 bool DuckLakeCatalog::TryGetScopedConfigOption(optional_ptr<DuckLakeTransaction> transaction, const string &option,
                                                string &result, SchemaIndex schema_id, TableIndex table_id) const {
 	// the narrowest scope that has the option wins

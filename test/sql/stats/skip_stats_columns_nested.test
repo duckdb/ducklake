@@ -1,0 +1,96 @@
+# name: test/sql/stats/skip_stats_columns_nested.test
+# description: Skipping a column in skip_stats_columns skips its subtree
+# group: [stats]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/skip_stats_columns_nested.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/skip_stats_columns_nested', METADATA_CATALOG 'ducklake_meta', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE ducklake.nested(id INTEGER, st STRUCT(x INTEGER, y VARCHAR))
+
+statement ok
+CALL ducklake.set_option('skip_stats_columns', 'st', table_name => 'nested')
+
+statement ok
+INSERT INTO ducklake.nested VALUES (1, {'x': 1, 'y': 'p'})
+
+query III
+SELECT column_id, min_value IS NULL, max_value IS NULL
+FROM ducklake_meta.ducklake_file_column_stats ORDER BY column_id
+----
+1	false	false
+3	true	true
+4	true	true
+
+query I
+SELECT count(*) FROM ducklake.nested WHERE st.y='p'
+----
+1
+
+# the option is read live at write time, so a schema change in the same transaction as a write
+# cannot resurrect the bounds from a cached table entry
+statement ok
+BEGIN
+
+statement ok
+ALTER TABLE ducklake.nested ALTER COLUMN id TYPE BIGINT
+
+statement ok
+INSERT INTO ducklake.nested VALUES (2, {'x': 2, 'y': 'q'})
+
+statement ok
+COMMIT
+
+query I
+SELECT count(*) FROM ducklake_meta.ducklake_file_column_stats
+WHERE column_id IN (3, 4) AND min_value IS NOT NULL
+----
+0
+
+# a field added below a skipped column inherits the skip, so the types set_option refuses are
+# refused here too - whether added directly or by widening the struct
+statement error
+ALTER TABLE ducklake.nested ADD COLUMN st.g GEOMETRY
+----
+Cannot give column "st" a GEOMETRY field ("g")
+
+statement error
+ALTER TABLE ducklake.nested ALTER COLUMN st TYPE STRUCT(x INTEGER, y VARCHAR, g GEOMETRY)
+----
+Cannot give column "st" a GEOMETRY field ("g")
+
+statement ok
+ALTER TABLE ducklake.nested ADD COLUMN st.z INTEGER
+
+statement ok
+INSERT INTO ducklake.nested VALUES (3, {'x': 3, 'y': 'r', 'z': 3})
+
+query II
+SELECT c.column_name, f.min_value IS NULL
+FROM ducklake_meta.ducklake_file_column_stats f
+JOIN ducklake_meta.ducklake_column c ON c.column_id=f.column_id AND c.end_snapshot IS NULL
+WHERE f.data_file_id=(SELECT max(data_file_id) FROM ducklake_meta.ducklake_data_file)
+ORDER BY c.column_name
+----
+id	false
+x	true
+y	true
+z	true
+
+# an unskipped column takes them either way
+statement ok
+CREATE TABLE ducklake.unskipped(id INTEGER, st STRUCT(x INTEGER))
+
+statement ok
+ALTER TABLE ducklake.unskipped ALTER COLUMN st TYPE STRUCT(x INTEGER, g GEOMETRY)
+
+statement ok
+ALTER TABLE ducklake.unskipped ADD COLUMN st.v VARIANT

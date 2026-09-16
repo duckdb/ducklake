@@ -1,0 +1,76 @@
+# name: test/sql/stats/skip_stats_columns_rewrite.test
+# description: rewrite_data_files does not reseed the table bounds of a skipped column
+# group: [stats]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/skip_stats_columns_rewrite.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/skip_stats_columns_rewrite', METADATA_CATALOG 'ducklake_meta', DATA_INLINING_ROW_LIMIT 100)
+
+statement ok
+CREATE TABLE ducklake.skipped(s VARCHAR)
+
+statement ok
+CALL ducklake.set_option('skip_stats_columns', ['s'], table_name => 'skipped')
+
+# the only data file ends up fully deleted, so the rewrite drops it and the inlined rows are the
+# sole remaining source of bounds
+statement ok
+INSERT INTO ducklake.skipped VALUES ('old')
+
+statement ok
+DELETE FROM ducklake.skipped
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake')
+
+statement ok
+INSERT INTO ducklake.skipped VALUES ('new')
+
+statement ok
+CALL ducklake_rewrite_data_files('ducklake', 'skipped', delete_threshold => 0)
+
+query II
+SELECT min_value, max_value FROM ducklake_meta.ducklake_table_column_stats t
+JOIN ducklake_meta.ducklake_table tbl ON tbl.table_id=t.table_id AND tbl.end_snapshot IS NULL
+WHERE tbl.table_name='skipped'
+----
+NULL	NULL
+
+query III
+SELECT min(s), max(s), count(*) FROM ducklake.skipped
+----
+new	new	1
+
+# a table without the option still recovers exact bounds from the rewrite, even though its column
+# had no bounds beforehand
+statement ok
+CREATE TABLE ducklake.kept(s VARCHAR)
+
+statement ok
+INSERT INTO ducklake.kept VALUES (NULL)
+
+statement ok
+DELETE FROM ducklake.kept
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake')
+
+statement ok
+INSERT INTO ducklake.kept VALUES ('new')
+
+statement ok
+CALL ducklake_rewrite_data_files('ducklake', 'kept', delete_threshold => 0)
+
+query II
+SELECT min_value, max_value FROM ducklake_meta.ducklake_table_column_stats t
+JOIN ducklake_meta.ducklake_table tbl ON tbl.table_id=t.table_id AND tbl.end_snapshot IS NULL
+WHERE tbl.table_name='kept'
+----
+new	new

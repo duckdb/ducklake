@@ -1,0 +1,128 @@
+# name: test/sql/stats/skip_stats_columns.test
+# description: Columns in skip_stats_columns record no bounds, but keep their counts
+# group: [stats]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/skip_stats_columns.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/skip_stats_columns', METADATA_CATALOG 'ducklake_meta', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE ducklake.t(id INTEGER, s VARCHAR, d DOUBLE)
+
+statement ok
+INSERT INTO ducklake.t VALUES (1, 'aaa', 1.5)
+
+# stored as field ids, duplicates dropped
+statement ok
+CALL ducklake.set_option('skip_stats_columns', ['s', 'd', 's'], table_name => 't')
+
+statement ok
+CALL ducklake.set_option('parquet_compression', 'zstd', table_name => 't')
+
+query II
+SELECT value, scope FROM ducklake_meta.ducklake_metadata WHERE key='skip_stats_columns'
+----
+2,3	table
+
+# the stored value is surfaced as-is, like every other option
+query II
+SELECT option_name, value FROM ducklake.options() WHERE scope='TABLE' ORDER BY option_name
+----
+parquet_compression	zstd
+skip_stats_columns	2,3
+
+# setting it mid-life must invalidate the table bounds, which would otherwise still claim
+# ['aaa','aaa'] for rows written outside them
+statement ok
+INSERT INTO ducklake.t VALUES (2, 'zzz', 2.5), (3, NULL, 'nan')
+
+# both skipped columns lose their bounds; counts, sizes and contains_nan survive
+query IIIIIII
+SELECT column_id, min_value, max_value, value_count, null_count, column_size_bytes > 0, contains_nan
+FROM ducklake_meta.ducklake_file_column_stats WHERE data_file_id=1 ORDER BY column_id
+----
+1	2	3	2	0	true	NULL
+2	NULL	NULL	1	1	true	NULL
+3	NULL	NULL	2	0	true	NULL
+
+query II
+SELECT min_value IS NULL, max_value IS NULL FROM ducklake_meta.ducklake_table_column_stats WHERE column_id=2
+----
+true	true
+
+# rows outside the stale bounds are still found
+query IIIIII
+SELECT count(*) FILTER (s='zzz'), count(*) FILTER (s>='b' AND s<'c'), count(*) FILTER (s IS NULL),
+       min(s), max(s), count(*) FILTER (isnan(d))
+FROM ducklake.t
+----
+1	0	1	aaa	zzz	1
+
+# UPDATE and MERGE go through the insert path; compaction re-derives stats from the files it
+# rewrites, so consuming the pre-option bounded file must not carry its bounds forward
+statement ok
+UPDATE ducklake.t SET s='updated' WHERE id=2
+
+statement ok
+MERGE INTO ducklake.t USING (SELECT 4 AS id, 'merged' AS s, 4.5 AS d) m ON ducklake.t.id=m.id
+WHEN NOT MATCHED THEN INSERT VALUES (m.id, m.s, m.d)
+
+statement ok
+COPY (SELECT 5 AS id, 'copied' AS s, 5.5 AS d) TO '{DATA_PATH}/skip_stats_columns_copy.parquet'
+
+statement ok
+COPY ducklake.t FROM '{DATA_PATH}/skip_stats_columns_copy.parquet'
+
+statement ok
+CALL ducklake_merge_adjacent_files('ducklake')
+
+query I
+SELECT count(*) FROM ducklake_meta.ducklake_file_column_stats f JOIN ducklake_meta.ducklake_data_file d USING (data_file_id)
+WHERE f.column_id=2 AND d.end_snapshot IS NULL AND f.min_value IS NOT NULL
+----
+0
+
+query III
+SELECT count(*), min(s), max(s) FROM ducklake.t
+----
+5	aaa	updated
+
+# ids are stored rather than names, so a rename must not silently re-enable the bounds
+statement ok
+ALTER TABLE ducklake.t RENAME COLUMN s TO renamed
+
+statement ok
+INSERT INTO ducklake.t VALUES (7, 'after rename', 7.5)
+
+query II
+SELECT f.min_value IS NULL, f.max_value IS NULL
+FROM ducklake_meta.ducklake_file_column_stats f JOIN ducklake_meta.ducklake_data_file d USING (data_file_id)
+WHERE f.column_id=2 AND d.end_snapshot IS NULL
+  AND d.data_file_id=(SELECT max(data_file_id) FROM ducklake_meta.ducklake_data_file)
+----
+true	true
+
+# clearing records bounds again, but the table bounds stay unknown while any live file is bound-less
+statement ok
+CALL ducklake.set_option('skip_stats_columns', [], table_name => 't')
+
+statement ok
+INSERT INTO ducklake.t VALUES (6, 'bounded', 6.5)
+
+query II
+SELECT min_value, max_value FROM ducklake_meta.ducklake_file_column_stats
+WHERE column_id=2 AND data_file_id=(SELECT max(data_file_id) FROM ducklake_meta.ducklake_data_file)
+----
+bounded	bounded
+
+query II
+SELECT min_value IS NULL, max_value IS NULL FROM ducklake_meta.ducklake_table_column_stats WHERE column_id=2
+----
+true	true

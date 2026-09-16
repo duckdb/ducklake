@@ -95,8 +95,8 @@ public:
 	                                           DuckLakeCopyInput &copy_input, optional_ptr<PhysicalOperator> plan);
 	static PhysicalOperator &PlanInsert(ClientContext &context, PhysicalPlanGenerator &planner,
 	                                    DuckLakeTableEntry &table, string encryption_key);
-	static void AddWrittenFiles(DuckLakeInsertGlobalState &gstate, DataChunk &chunk, const string &encryption_key,
-	                            optional_idx partition_id, bool set_snapshot_id = false);
+	static void AddWrittenFiles(DuckLakeTransaction &transaction, DuckLakeInsertGlobalState &gstate, DataChunk &chunk,
+	                            const string &encryption_key, optional_idx partition_id, bool set_snapshot_id = false);
 
 	static const DuckLakeFieldId &GetTopLevelColumn(DuckLakeCopyInput &copy_input, FieldIndex field_id,
 	                                                optional_idx &index);

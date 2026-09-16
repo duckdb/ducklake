@@ -153,6 +153,9 @@ public:
 	//! Options a transaction has set are visible only to it, so nullptr reads committed values only
 	bool TryGetConfigOption(optional_ptr<DuckLakeTransaction> transaction, const string &option, string &result,
 	                        SchemaIndex schema_id, TableIndex table_id) const;
+	//! Look up a config option in the table scope only, without falling back to schema or global
+	bool TryGetTableConfigOption(optional_ptr<DuckLakeTransaction> transaction, const string &option, string &result,
+	                             TableIndex table_id) const;
 	//! Check if a config option has a table-level or schema-level override (excluding global scope)
 	bool TryGetScopedConfigOption(optional_ptr<DuckLakeTransaction> transaction, const string &option, string &result,
 	                              SchemaIndex schema_id, TableIndex table_id) const;
