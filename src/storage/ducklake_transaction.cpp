@@ -1608,9 +1608,7 @@ vector<DuckLakeConfigOption> DuckLakeTransaction::GetStagedConfigOptions() const
 }
 
 void DuckLakeTransaction::WriteConfigOptions() {
-	for (auto &option : staged_config_options) {
-		metadata_manager->SetConfigOption(option);
-	}
+	metadata_manager->SetConfigOptions(staged_config_options);
 }
 
 void DuckLakeTransaction::ApplyConfigOptions() {

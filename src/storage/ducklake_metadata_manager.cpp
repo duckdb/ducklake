@@ -5963,49 +5963,38 @@ WHERE {SNAPSHOT_ID} >= begin_snapshot AND ({SNAPSHOT_ID} < end_snapshot OR end_s
 	return table_sizes;
 }
 
-void DuckLakeMetadataManager::SetConfigOption(const DuckLakeConfigOption &option) {
-	// check if the option already exists
-	auto &option_key = option.option.key;
-	auto &option_value = option.option.value;
-	string scope;
-	string scope_id;
-	string scope_filter;
-	if (option.table_id.IsValid()) {
-		scope = "'table'";
-		scope_id = to_string(option.table_id.index);
-		scope_filter = StringUtil::Format("scope = 'table' AND scope_id = %d", option.table_id.index);
-	} else if (option.schema_id.IsValid()) {
-		scope = "'schema'";
-		scope_id = to_string(option.schema_id.index);
-		scope_filter = StringUtil::Format("scope = 'schema' AND scope_id = %d", option.schema_id.index);
-	} else {
-		scope = "NULL";
-		scope_id = "NULL";
-		scope_filter = "scope IS NULL";
+void DuckLakeMetadataManager::SetConfigOptions(const vector<DuckLakeConfigOption> &options) {
+	if (options.empty()) {
+		return;
 	}
-	auto result = Query(StringUtil::Format(R"(
-SELECT COUNT(*)
-FROM {METADATA_CATALOG}.ducklake_metadata
-WHERE key = %s AND %s
-)",
-	                                       SQLString(option_key), scope_filter));
-
-	auto count = result->Fetch()->GetValue(0, 0).GetValue<idx_t>();
-	if (count == 0) {
-		// option does not yet exist - insert the value
-		result = Execute(StringUtil::Format(R"(
-INSERT INTO {METADATA_CATALOG}.ducklake_metadata VALUES (%s, %s, %s, %s)
-)",
-		                                    SQLString(option_key), SQLString(option_value), scope, scope_id));
-	} else {
-		// option already exists - update it
-		result = Execute(StringUtil::Format(R"(
-UPDATE {METADATA_CATALOG}.ducklake_metadata SET value=%s WHERE key=%s AND %s
-)",
-		                                    SQLString(option_value), SQLString(option_key), scope_filter));
+	string batch;
+	for (auto &option : options) {
+		string scope;
+		string scope_id;
+		string scope_filter;
+		if (option.table_id.IsValid()) {
+			scope = "'table'";
+			scope_id = to_string(option.table_id.index);
+			scope_filter = StringUtil::Format("scope = 'table' AND scope_id = %d", option.table_id.index);
+		} else if (option.schema_id.IsValid()) {
+			scope = "'schema'";
+			scope_id = to_string(option.schema_id.index);
+			scope_filter = StringUtil::Format("scope = 'schema' AND scope_id = %d", option.schema_id.index);
+		} else {
+			scope = "NULL";
+			scope_id = "NULL";
+			scope_filter = "scope IS NULL";
+		}
+		// deleting first means one statement covers both a new option and a replaced one, with no read-back to
+		// decide between them. Re-running it is harmless, which is what a retried commit attempt does.
+		batch += StringUtil::Format("DELETE FROM {METADATA_CATALOG}.ducklake_metadata WHERE key = %s AND %s;",
+		                            SQLString(option.option.key), scope_filter);
+		batch += StringUtil::Format("INSERT INTO {METADATA_CATALOG}.ducklake_metadata VALUES (%s, %s, %s, %s);",
+		                            SQLString(option.option.key), SQLString(option.option.value), scope, scope_id);
 	}
+	auto result = Execute(batch);
 	if (result->HasError()) {
-		result->GetErrorObject().Throw("Failed to insert config option in DuckLake: ");
+		result->GetErrorObject().Throw("Failed to write config options in DuckLake: ");
 	}
 }
 
