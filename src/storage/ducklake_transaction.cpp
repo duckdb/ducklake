@@ -796,6 +796,7 @@ void DuckLakeTransaction::Rollback() {
 	}
 	state->CleanupFiles();
 	state->local_changes.Clear();
+	staged_config_options.clear();
 	pending_name_map_cache_invalidations.clear();
 	SetRequiresNewInlinedTable(false);
 	ClearSchemaCachePins();
