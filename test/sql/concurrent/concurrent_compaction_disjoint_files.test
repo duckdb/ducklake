@@ -1,0 +1,118 @@
+# name: test/sql/concurrent/concurrent_compaction_disjoint_files.test
+# description: two concurrent compactions of the same table over disjoint file sets must both commit
+# group: [concurrent]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/concurrent_compaction_disjoint', METADATA_CATALOG 'ducklake_meta')
+
+statement ok
+SET immediate_transaction_mode=true
+
+statement ok
+CREATE TABLE ducklake.t(i INTEGER, s VARCHAR)
+
+# Two clearly "small" files and two clearly "large" files. Writing them ourselves and registering
+# them with ducklake_add_data_files keeps the sizes deterministic, so the size bands below cannot
+# straddle a file regardless of how parquet encodes the data.
+statement ok
+COPY (SELECT i::INTEGER AS i, 'x' AS s FROM range(5) t(i)) TO '{DATA_PATH}/small1.parquet'
+
+statement ok
+COPY (SELECT i::INTEGER AS i, 'y' AS s FROM range(5) t(i)) TO '{DATA_PATH}/small2.parquet'
+
+statement ok
+COPY (SELECT i::INTEGER AS i, repeat('a', 200) AS s FROM range(20000) t(i)) TO '{DATA_PATH}/big1.parquet'
+
+statement ok
+COPY (SELECT i::INTEGER AS i, repeat('b', 200) AS s FROM range(20000) t(i)) TO '{DATA_PATH}/big2.parquet'
+
+statement ok
+CALL ducklake_add_data_files('ducklake', 't', '{DATA_PATH}/small1.parquet')
+
+statement ok
+CALL ducklake_add_data_files('ducklake', 't', '{DATA_PATH}/small2.parquet')
+
+statement ok
+CALL ducklake_add_data_files('ducklake', 't', '{DATA_PATH}/big1.parquet')
+
+statement ok
+CALL ducklake_add_data_files('ducklake', 't', '{DATA_PATH}/big2.parquet')
+
+query I
+SELECT count(*) FROM ducklake.t
+----
+40010
+
+# two files well under the 10000 byte split, two well over it
+query II
+SELECT count(*) FILTER (WHERE file_size_bytes < 10000), count(*) FILTER (WHERE file_size_bytes >= 10000) FROM ducklake_meta.ducklake_data_file WHERE end_snapshot IS NULL
+----
+2	2
+
+# con1 compacts only the small files, con2 only the large ones - disjoint by construction
+statement ok con1
+BEGIN
+
+statement ok con2
+BEGIN
+
+statement ok con1
+CALL ducklake_merge_adjacent_files('ducklake', 't', max_file_size => 10000)
+
+statement ok con2
+CALL ducklake_merge_adjacent_files('ducklake', 't', min_file_size => 10000, max_file_size => 100000000)
+
+statement ok con1
+COMMIT
+
+# Before the file-level escalation this failed with
+#   "Transaction conflict - attempting to compact table with index N - but another transaction has compacted it"
+# even though the two transactions retire completely different files.
+statement ok con2
+COMMIT
+
+# 4 files -> 2: each band merged its own pair, and no rows were lost
+query I
+SELECT count(*) FROM ducklake_meta.ducklake_data_file WHERE end_snapshot IS NULL
+----
+2
+
+query I
+SELECT count(*) FROM ducklake.t
+----
+40010
+
+# Overlapping compactions must still conflict: both connections target the same (small) band.
+statement ok
+CALL ducklake_add_data_files('ducklake', 't', '{DATA_PATH}/small1.parquet')
+
+statement ok
+CALL ducklake_add_data_files('ducklake', 't', '{DATA_PATH}/small2.parquet')
+
+statement ok con3
+BEGIN
+
+statement ok con4
+BEGIN
+
+statement ok con3
+CALL ducklake_merge_adjacent_files('ducklake', 't', max_file_size => 10000)
+
+statement ok con4
+CALL ducklake_merge_adjacent_files('ducklake', 't', max_file_size => 10000)
+
+statement ok con3
+COMMIT
+
+statement error con4
+COMMIT
+----
+Transaction conflict

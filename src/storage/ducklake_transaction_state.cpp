@@ -268,17 +268,36 @@ void DuckLakeTransactionState::CheckForConflicts(const TransactionChangeInformat
 		ConflictCheck(table_id, other_changes.tables_deleted_inlined, "flush inline data", "deleted from it");
 		ConflictCheck(table_id, other_changes.tables_flushed_inlined, "flush inline data", "flushed it");
 	}
+	bool compaction_overlap = false;
+	auto compaction_overlaps = [&](TableIndex table_id) {
+		return other_changes.tables_merge_adjacent.find(table_id) != other_changes.tables_merge_adjacent.end() ||
+		       other_changes.tables_rewrite_delete.find(table_id) != other_changes.tables_rewrite_delete.end();
+	};
 	for (auto &table_id : changes.tables_merge_adjacent) {
 		ConflictCheck(table_id, other_changes.dropped_tables, "compact table", "dropped it");
 		ConflictCheck(table_id, other_changes.tables_deleted_from, "compact table", "deleted from it");
-		ConflictCheck(table_id, other_changes.tables_merge_adjacent, "compact table", "compacted it");
-		ConflictCheck(table_id, other_changes.tables_rewrite_delete, "compact table", "compacted it");
+		compaction_overlap |= compaction_overlaps(table_id);
 	}
 	for (auto &table_id : changes.tables_rewrite_delete) {
 		ConflictCheck(table_id, other_changes.dropped_tables, "compact table", "dropped it");
 		ConflictCheck(table_id, other_changes.tables_deleted_from, "compact table", "deleted from it");
-		ConflictCheck(table_id, other_changes.tables_merge_adjacent, "compact table", "compacted it");
-		ConflictCheck(table_id, other_changes.tables_rewrite_delete, "compact table", "compacted it");
+		compaction_overlap |= compaction_overlaps(table_id);
+	}
+	if (compaction_overlap) {
+		// Another transaction compacted a table that we are also compacting. That only conflicts if it
+		// retired one of the files we are retiring - two compactions over disjoint file sets (e.g. split by
+		// file size or by partition) are independent. Escalate to file granularity, mirroring the check
+		// already performed for deletes above.
+		const auto compacted_files = GetFilesDeletedOrDroppedAfterSnapshot(executor);
+		for (auto &entry : local_changes.Changes()) {
+			auto &table_changes = entry.GetTableChanges();
+			for (auto &compaction : table_changes.compactions) {
+				for (auto &source_file : compaction.source_files) {
+					ConflictCheck(source_file.file.id, compacted_files.deleted_from_files, "compact file",
+					              "compacted or deleted it");
+				}
+			}
+		}
 	}
 	for (auto &table_id : changes.altered_tables) {
 		ConflictCheck(table_id, other_changes.dropped_tables, "alter table", "dropped it");
