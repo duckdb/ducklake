@@ -941,9 +941,17 @@ vector<MetadataPartitionExpression> GetMetadataPartitionExpressions(ClientContex
 		if (!field_id) {
 			continue;
 		}
-		if (field.transform.type != DuckLakeTransformType::IDENTITY ||
-		    !MetadataIdentityHasExactValues(field_id->Type())) {
-			continue;
+		if (field.transform.type == DuckLakeTransformType::IDENTITY) {
+			if (!MetadataIdentityHasExactValues(field_id->Type())) {
+				continue;
+			}
+		} else {
+			// Calendar transforms over time zones depend on session settings at write time.
+			if ((field.transform.type != DuckLakeTransformType::YEAR &&
+			     field.transform.type != DuckLakeTransformType::MONTH) ||
+			    (field_id->Type().id() != LogicalTypeId::DATE && field_id->Type().id() != LogicalTypeId::TIMESTAMP)) {
+				continue;
+			}
 		}
 		auto reference = make_uniq<BoundReferenceExpression>(field_id->Type(), field.field_id.index);
 		auto expression = DuckLakePartitionUtils::ApplyPartitionTransform(context, std::move(reference), field);
