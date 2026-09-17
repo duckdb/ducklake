@@ -142,6 +142,9 @@ public:
 
 	static SnapshotDeletedFromFiles
 	GetFilesDeletedOrDroppedAfterSnapshot(const std::function<unique_ptr<QueryResult>(string)> &executor);
+	//! Returns the subset of file_ids that no longer exists in ducklake_data_file (e.g. retired by a merge)
+	static set<DataFileIndex> GetMissingDataFiles(const std::function<unique_ptr<QueryResult>(string)> &executor,
+	                                              const set<DataFileIndex> &file_ids);
 
 	string WriteSnapshotChanges(DuckLakeCommitState &commit_state, TransactionChangeInformation &changes,
 	                            const DuckLakeSnapshotCommit &commit_info) const;

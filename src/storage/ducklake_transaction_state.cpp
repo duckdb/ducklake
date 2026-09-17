@@ -288,15 +288,24 @@ void DuckLakeTransactionState::CheckForConflicts(const TransactionChangeInformat
 		// retired one of the files we are retiring - two compactions over disjoint file sets (e.g. split by
 		// file size or by partition) are independent. Escalate to file granularity, mirroring the check
 		// already performed for deletes above.
-		const auto compacted_files = GetFilesDeletedOrDroppedAfterSnapshot(executor);
+		//
+		// A rewrite of deletes sets end_snapshot on its source files, which GetFilesDeletedOrDroppedAfterSnapshot
+		// reports. Merging adjacent files instead removes the source rows from ducklake_data_file entirely
+		// (see WriteMergeAdjacent), so we additionally verify that every file we are retiring still exists.
+		set<DataFileIndex> source_files;
 		for (auto &entry : local_changes.Changes()) {
 			auto &table_changes = entry.GetTableChanges();
 			for (auto &compaction : table_changes.compactions) {
 				for (auto &source_file : compaction.source_files) {
-					ConflictCheck(source_file.file.id, compacted_files.deleted_from_files, "compact file",
-					              "compacted or deleted it");
+					source_files.insert(source_file.file.id);
 				}
 			}
+		}
+		auto retired_files = GetFilesDeletedOrDroppedAfterSnapshot(executor).deleted_from_files;
+		auto missing_files = GetMissingDataFiles(executor, source_files);
+		retired_files.insert(missing_files.begin(), missing_files.end());
+		for (auto &source_file : source_files) {
+			ConflictCheck(source_file, retired_files, "compact file", "compacted or deleted it");
 		}
 	}
 	for (auto &table_id : changes.altered_tables) {
@@ -1882,6 +1891,38 @@ SnapshotDeletedFromFiles DuckLakeTransactionState::GetFilesDeletedOrDroppedAfter
 		change_info.deleted_from_files.insert(DataFileIndex(row.GetValue<idx_t>(0)));
 	}
 	return change_info;
+}
+
+set<DataFileIndex>
+DuckLakeTransactionState::GetMissingDataFiles(const std::function<unique_ptr<QueryResult>(string)> &executor,
+                                              const set<DataFileIndex> &file_ids) {
+	// return the subset of file_ids that no longer exists in ducklake_data_file
+	set<DataFileIndex> missing_files = file_ids;
+	if (file_ids.empty()) {
+		return missing_files;
+	}
+	string file_id_list;
+	for (auto &file_id : file_ids) {
+		if (!file_id_list.empty()) {
+			file_id_list += ", ";
+		}
+		file_id_list += to_string(file_id.index);
+	}
+	string sql = StringUtil::Format(R"(
+	SELECT data_file_id
+	FROM {METADATA_CATALOG}.ducklake_data_file
+	WHERE data_file_id IN (%s)
+	)",
+	                                file_id_list);
+	auto result = executor(sql);
+	if (result->HasError()) {
+		result->GetErrorObject().Throw(
+		    "Failed to commit DuckLake transaction - failed to get compacted files for conflict resolution:");
+	}
+	for (auto &row : *result) {
+		missing_files.erase(DataFileIndex(row.GetValue<idx_t>(0)));
+	}
+	return missing_files;
 }
 
 void DuckLakeTransactionState::DropEmptySupersededInlinedTables(const DuckLakeCommitContext &context) {

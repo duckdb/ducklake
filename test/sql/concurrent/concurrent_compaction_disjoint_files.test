@@ -116,3 +116,15 @@ statement error con4
 COMMIT
 ----
 Transaction conflict
+
+# the rejected compaction must not have produced a duplicate of the merged rows:
+# 2 files remain (the large merge and con3's small merge) holding 40010 + 10 re-added rows
+query I
+SELECT count(*) FROM ducklake_meta.ducklake_data_file WHERE end_snapshot IS NULL
+----
+2
+
+query I
+SELECT count(*) FROM ducklake.t
+----
+40020
