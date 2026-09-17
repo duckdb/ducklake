@@ -349,7 +349,7 @@ public:
 	                                                          bool include_local_changes = true);
 	virtual vector<DuckLakeFileListExtendedEntry>
 	GetExtendedFilesForTable(DuckLakeTableEntry &table, DuckLakeSnapshot snapshot,
-	                         const FilterPushdownInfo *filter_info = nullptr);
+	                         const FilterPushdownInfo *filter_info = nullptr, bool include_partition_values = false);
 	virtual vector<DuckLakeCompactionFileEntry> GetFilesForCompaction(DuckLakeTableEntry &table, CompactionType type,
 	                                                                  double deletion_threshold,
 	                                                                  DuckLakeSnapshot snapshot,
@@ -588,7 +588,7 @@ public:
 	string GetPathSeparator(const string &path);
 
 protected:
-	enum class FileListType : uint8_t { SCAN, EXTENDED };
+	enum class FileListType : uint8_t { SCAN, EXTENDED, EXTENDED_WITH_PARTITIONS };
 	enum class StatsCastType : uint8_t { ORDERING, MIN, MAX };
 
 	virtual string GetLatestSnapshotQuery() const;
