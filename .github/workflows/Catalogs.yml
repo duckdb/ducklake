@@ -70,6 +70,10 @@ jobs:
       env:
         GEN: ninja
       run: |
+        # enables allow_unsigned_extensions by default for ADBC test below
+        pushd duckdb
+        patch -p1 < ../test/adbc/allow_unsigned_extensions.patch
+        popd
         make release
 
     - name: Test Quack
@@ -90,3 +94,21 @@ jobs:
       run: |
         createdb ducklakedb
         build/release/test/unittest --test-config test/configs/postgres.json --test-dir ./ "test/sql/*"
+
+    # see https://github.com/duckdb/duckdb-postgres/issues/577
+    - name: Test Postgres ADBC
+      env:
+        PGSERVICE: postgres
+      run: |
+        createdb adbc
+        mkdir adbc_build
+        cd adbc_build
+        cmake ../test/adbc/
+        make
+        ./repro \
+          adbc \
+          5432 \
+          ${{ github.workspace }}/adbc_data \
+          ${{ github.workspace }}/build/release/extension/ducklake/ducklake.duckdb_extension \
+          ${{ github.workspace }}/build/release/extension/postgres_scanner/postgres_scanner.duckdb_extension \
+          90
