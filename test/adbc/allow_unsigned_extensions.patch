@@ -1,0 +1,13 @@
+diff --git a/src/include/duckdb/main/settings.hpp b/src/include/duckdb/main/settings.hpp
+index 02b1ffd575..85746af774 100644
+--- a/src/include/duckdb/main/settings.hpp
++++ b/src/include/duckdb/main/settings.hpp
+@@ -272,7 +272,7 @@ struct AllowUnsignedExtensionsSetting {
+ 	static constexpr const char *InputType = "BOOLEAN";
+ 	static constexpr bool IsDebug = false;
+ 	static constexpr bool IsDeprecated = false;
+-	static constexpr const char *DefaultValue = "false";
++	static constexpr const char *DefaultValue = "true";
+ 	static constexpr SettingScopeTarget Scope = SettingScopeTarget::GLOBAL_ONLY;
+ 	static constexpr idx_t SettingIndex = NEXT_SETTING_INDEX();
+ 	static void OnSet(SettingCallbackInfo &info, Value &input);
