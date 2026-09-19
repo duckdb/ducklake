@@ -11,6 +11,7 @@
 #include "duckdb/common/multi_file/multi_file_reader.hpp"
 #include "storage/ducklake_scan.hpp"
 #include "storage/ducklake_inlined_data.hpp"
+#include "duckdb/common/mutex.hpp"
 
 namespace duckdb {
 class DuckLakeMultiFileList;
@@ -114,6 +115,10 @@ public:
 
 private:
 	shared_ptr<BaseFileReader> TryCreateInlinedDataReader(const OpenFileInfo &file);
+	//! Defer the deletion-scan snapshot_id filter until after gather (see FinalizeChunk); nullptr if nothing deferred
+	unique_ptr<TableFilterSet> GetFiltersToUse(const DuckLakeMultiFileList &file_list,
+	                                           optional_ptr<TableFilterSet> table_filters,
+	                                           const vector<ColumnIndex> &global_column_ids);
 	//! Gather per-row snapshot_id values using the rowid values produced by the scan
 	void GatherDeletionScanSnapshots(BaseFileReader &reader, const MultiFileReaderData &reader_data,
 	                                 const Vector &rowid_vector, Vector &snapshot_vector, idx_t count) const;
@@ -123,6 +128,10 @@ private:
 	unique_ptr<MultiFileColumnDefinition> snapshot_id_column;
 	//! Inlined transaction-local data
 	shared_ptr<DuckLakeInlinedData> transaction_local_data;
+	//! Filter on the deletion-scan snapshot_id column, deferred until the snapshot ids are gathered
+	unique_ptr<TableFilter> deletion_scan_snapshot_filter;
+	//! Guards the lazy initialization of deletion_scan_snapshot_filter (InitializeReader runs concurrently per file)
+	mutex deletion_scan_snapshot_filter_lock;
 };
 
 } // namespace duckdb
