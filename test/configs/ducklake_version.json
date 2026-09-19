@@ -19,6 +19,7 @@
       "paths": [
         "test/sql/add_files/add_files_stats_exactness.test",
         "test/sql/attach/attach_ducklake_version.test",
+        "test/sql/delete/full_file_delete_stats_exactness.test",
         "test/sql/metadata/row_group_count.test",
         "test/sql/migration/v10_row_group_count.test",
         "test/sql/migration/v11_stats_exactness.test",
