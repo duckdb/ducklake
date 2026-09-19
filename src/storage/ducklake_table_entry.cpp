@@ -740,9 +740,9 @@ unique_ptr<CatalogEntry> DuckLakeTableEntry::AlterTable(ClientContext &context, 
 		throw CatalogException("Cannot SET NOT NULL on table %s - no column stats are available", name);
 	}
 
-	// The table could have null values deleted, so we should check real rows.
+	// Unknown stats or previously deleted NULLs require checking the live rows.
 	auto &col_stats = column_stats->second;
-	if (col_stats.has_null_count && col_stats.null_count > 0) {
+	if (!col_stats.has_null_count || col_stats.null_count > 0) {
 		VerifyNoNullValues(context, transaction, *this, col);
 	}
 
