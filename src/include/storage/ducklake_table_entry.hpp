@@ -81,9 +81,10 @@ public:
 		return *field_data;
 	}
 	//! Field indexes whose min/max bounds are not recorded, including children of a skipped field
-	unordered_set<idx_t> GetSkippedStatsFields() const;
+	unordered_set<idx_t> GetSkippedStatsFields(optional_ptr<DuckLakeTransaction> transaction) const;
 	//! Refuses a field added below a skipped column whose statistics cannot be skipped
-	void ValidateAddedFieldsCanSkipStats(const DuckLakeFieldId &parent_id, const DuckLakeFieldId &new_field_id) const;
+	void ValidateAddedFieldsCanSkipStats(DuckLakeTransaction &transaction, const DuckLakeFieldId &parent_id,
+	                                     const DuckLakeFieldId &new_field_id) const;
 	const ColumnChangeInfo &GetChangedFields() const {
 		return *changed_fields;
 	}

@@ -107,7 +107,8 @@ unique_ptr<GlobalSinkState> DuckLakeFlushData::GetGlobalSinkState(ClientContext 
 
 SinkResultType DuckLakeFlushData::Sink(ExecutionContext &context, DataChunk &chunk, OperatorSinkInput &input) const {
 	auto &global_state = input.global_state.Cast<DuckLakeInsertGlobalState>();
-	DuckLakeInsert::AddWrittenFiles(global_state, chunk, encryption_key, partition_id, true);
+	auto &transaction = DuckLakeTransaction::Get(context.client, global_state.table.catalog);
+	DuckLakeInsert::AddWrittenFiles(transaction, global_state, chunk, encryption_key, partition_id, true);
 	return SinkResultType::NEED_MORE_INPUT;
 }
 
@@ -186,7 +187,8 @@ SinkFinalizeType DuckLakeFlushData::Finalize(Pipeline &pipeline, Event &event, C
 
 			auto &catalog = table.catalog.Cast<DuckLakeCatalog>();
 			auto &schema = table.ParentSchema().Cast<DuckLakeSchemaEntry>();
-			bool use_deletion_vectors = catalog.WriteDeletionVectors(schema.GetSchemaId(), table.GetTableId());
+			bool use_deletion_vectors =
+			    catalog.WriteDeletionVectors(transaction, schema.GetSchemaId(), table.GetTableId());
 			for (auto &file_entry : deletes_per_file) {
 				// write single file, begin_snapshot is the minimum snapshot
 				WriteDeleteFileWithSnapshotsInput file_input {context,
@@ -405,7 +407,7 @@ unique_ptr<LogicalOperator> DuckLakeDataFlusher::GenerateFlushCommand() {
 	copy->expected_types = std::move(copy_options.expected_types);
 
 	copy->hive_file_pattern =
-	    copy_input.catalog.UseHiveFilePattern(!is_encrypted, copy_input.schema_id, copy_input.table_id);
+	    copy_input.catalog.UseHiveFilePattern(transaction, !is_encrypted, copy_input.schema_id, copy_input.table_id);
 
 	copy->children.push_back(std::move(root));
 
@@ -534,7 +536,7 @@ LEFT JOIN (
 	}
 
 	auto &schema = table.ParentSchema().Cast<DuckLakeSchemaEntry>();
-	bool use_deletion_vectors = catalog.WriteDeletionVectors(schema.GetSchemaId(), table.GetTableId());
+	bool use_deletion_vectors = catalog.WriteDeletionVectors(transaction, schema.GetSchemaId(), table.GetTableId());
 	for (auto &entry : files_to_flush) {
 		auto file_id = entry.first;
 		auto &file_info = entry.second;
@@ -665,8 +667,8 @@ static unique_ptr<LogicalOperator> FlushInlinedDataBind(ClientContext &context, 
 	for (auto &schema_table : schema_table_map) {
 		for (auto &table_ref : schema_table.second) {
 			SchemaIndex schema_index {schema_table.first};
-			if (ducklake_catalog.GetConfigOption<string>("auto_compact", schema_index, table_ref.get().GetTableId(),
-			                                             "true") != "true") {
+			if (ducklake_catalog.GetConfigOption<string>(transaction, "auto_compact", schema_index,
+			                                             table_ref.get().GetTableId(), "true") != "true") {
 				continue;
 			}
 			auto &table = table_ref.get();

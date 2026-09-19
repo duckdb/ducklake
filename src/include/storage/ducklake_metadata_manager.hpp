@@ -480,7 +480,8 @@ public:
 	//! is safe; invalidates the schema ObjectCache so in-session reads reload.
 	virtual void DropEmptySupersededInlinedTables();
 	virtual vector<DuckLakeTableSizeInfo> GetTableSizes(DuckLakeSnapshot snapshot);
-	virtual void SetConfigOption(const DuckLakeConfigOption &option);
+	//! Writes the given config options as a single statement
+	virtual void SetConfigOptions(const vector<DuckLakeConfigOption> &options);
 	virtual string GetPathForSchema(SchemaIndex schema_id, vector<DuckLakeSchemaInfo> &new_schemas_result);
 	virtual string GetPathForTable(TableIndex table_id, const vector<DuckLakeTableInfo> &new_tables,
 	                               const vector<DuckLakeSchemaInfo> &new_schemas_result);

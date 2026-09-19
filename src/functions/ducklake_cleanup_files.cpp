@@ -58,7 +58,9 @@ static unique_ptr<FunctionData> CleanupBind(ClientContext &context, TableFunctio
 	auto result = make_uniq<CleanupBindData>(catalog, type);
 
 	auto &ducklake_catalog = reinterpret_cast<DuckLakeCatalog &>(catalog);
-	const auto older_than_default = ducklake_catalog.GetConfigOption<string>("delete_older_than", {}, {}, "2 days");
+	auto &transaction = DuckLakeTransaction::Get(context, catalog);
+	const auto older_than_default =
+	    ducklake_catalog.GetConfigOption<string>(transaction, "delete_older_than", {}, {}, "2 days");
 
 	timestamp_tz_t from_timestamp;
 	bool has_timestamp = false;
@@ -96,7 +98,6 @@ static unique_ptr<FunctionData> CleanupBind(ClientContext &context, TableFunctio
 		result->timestamp_filter = DuckLakeTableFunctionUtil::FormatTimestampISO8601(target_timestamp);
 	}
 
-	auto &transaction = DuckLakeTransaction::Get(context, catalog);
 	auto &metadata_manager = transaction.GetMetadataManager();
 	result->files = metadata_manager.GetFilesForCleanup(result->GetFilter(), type, ducklake_catalog.Separator());
 

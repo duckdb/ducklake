@@ -355,7 +355,7 @@ OperatorFinalResultType DuckLakeInlineData::OperatorFinalize(Pipeline &pipeline,
 	// compute the column stats for the data
 	vector<DuckLakeBaseColumnStats> new_stats;
 	auto &field_data = table.GetFieldData();
-	auto skipped_fields = table.GetSkippedStatsFields();
+	auto skipped_fields = table.GetSkippedStatsFields(DuckLakeTransaction::Get(context, table.catalog));
 	for (auto &chunk : inlined_data.Chunks()) {
 		for (idx_t c = 0; c < physical_col_count; c++) {
 			UpdateStats(new_stats, c, chunk.data[c], chunk.size(), field_data.GetByRootIndex(PhysicalIndex(c)),
