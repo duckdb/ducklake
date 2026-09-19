@@ -26,6 +26,10 @@ public:
 		return false;
 	}
 	bool IsRetryableCommitError(const string &message) const override;
+	//! sqlite_scanner rejects ON CONFLICT, so this backend keeps the pre-upsert path and its lost update.
+	bool SupportsUpsert() const override {
+		return false;
+	}
 
 	string GetColumnTypeInternal(const LogicalType &type) override;
 };
