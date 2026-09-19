@@ -80,9 +80,9 @@ SELECT COUNT(*), MIN(i), MAX(i) FROM ducklake.retry_t
 100	5000	5099
 
 query III
-SELECT record_count, min_value IS NULL, max_value IS NULL
+SELECT record_count, min_value::BIGINT, max_value::BIGINT
 FROM __ducklake_metadata_ducklake.ducklake_table_stats
 JOIN __ducklake_metadata_ducklake.ducklake_table_column_stats USING (table_id)
 WHERE table_id = getvariable('retry_id')
 ----
-100	true	true
+100	5000	5099

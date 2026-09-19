@@ -1005,12 +1005,25 @@ void DuckLakeTransactionState::RefreshGlobalStatsAfterFileSetChange(
     string &batch_query, TableIndex table_id, DuckLakeSnapshot snapshot, const set<DataFileIndex> &removed_file_ids,
     const vector<DuckLakeFileInfo> &added_files, const NewDataInfo &new_data, idx_t expected_data_file_rows,
     DuckLakeStats *attempt_stats, const DuckLakeCommitContext &context, bool recompute_column_stats,
-    bool has_dropped_files, bool force_unknown_column_stats, idx_t deleted_inlined_rows) {
+    bool force_unknown_column_stats, idx_t deleted_inlined_rows) {
 	shared_ptr<DuckLakeTableStats> current_stats_pin;
 	auto current_stats = GetAttemptTableStats(table_id, attempt_stats, context, current_stats_pin);
 	if (!current_stats) {
 		throw InternalException("Missing DuckLake table stats for table with changed data files");
 	}
+	auto columns =
+	    recompute_column_stats ? context.get_table_column_schema(table_id) : vector<DuckLakeColumnSchemaEntry>();
+	bool missing_column_schema = recompute_column_stats && columns.empty();
+	recompute_column_stats = recompute_column_stats && !columns.empty();
+
+	// Build a field_index -> column_type map for the per-file stats merge below. `columns` is the full flattened
+	// schema (roots + nested leaves), so per-file stats keyed by a nested-leaf FieldIndex resolve here too - without
+	// the leaves, an un-rewritten file's nested-leaf stats would be dropped and the global min/max corrupted.
+	map<FieldIndex, LogicalType> type_by_field;
+	for (auto &col : columns) {
+		type_by_field.insert(make_pair(col.field_index, col.column_type));
+	}
+
 	DuckLakeTableStats new_stats;
 	auto next_row_id = new_data.next_row_ids.find(table_id);
 	new_stats.next_row_id =
@@ -1043,24 +1056,6 @@ void DuckLakeTransactionState::RefreshGlobalStatsAfterFileSetChange(
 		new_stats.table_size_bytes = row.GetValue<idx_t>(2);
 		parquet_file_count = row.GetValue<idx_t>(3);
 	}
-	auto net_inlined = context.get_net_inlined_row_count(table_id);
-	// A full replacement can seed bounds from its new rows without reading old file-column statistics.
-	bool replacing_empty_table = has_dropped_files && parquet_file_count == 0 && net_inlined == 0;
-	recompute_column_stats = recompute_column_stats || replacing_empty_table;
-	force_unknown_column_stats = force_unknown_column_stats || (has_dropped_files && !replacing_empty_table);
-	auto columns =
-	    recompute_column_stats ? context.get_table_column_schema(table_id) : vector<DuckLakeColumnSchemaEntry>();
-	bool missing_column_schema = recompute_column_stats && columns.empty();
-	recompute_column_stats = recompute_column_stats && !columns.empty();
-
-	// Build a field_index -> column_type map for the per-file stats merge below. `columns` is the full flattened
-	// schema (roots + nested leaves), so per-file stats keyed by a nested-leaf FieldIndex resolve here too - without
-	// the leaves, an un-rewritten file's nested-leaf stats would be dropped and the global min/max corrupted.
-	map<FieldIndex, LogicalType> type_by_field;
-	for (auto &col : columns) {
-		type_by_field.insert(make_pair(col.field_index, col.column_type));
-	}
-
 	// Adjacent merges preserve logical data; they never read or rewrite per-column stats here.
 	if (recompute_column_stats && parquet_file_count > 0) {
 		auto excluded_file_ids = removed_file_ids;
@@ -1135,6 +1130,7 @@ void DuckLakeTransactionState::RefreshGlobalStatsAfterFileSetChange(
 		}
 	}
 
+	auto net_inlined = context.get_net_inlined_row_count(table_id);
 	auto inlined_tables = context.get_inlined_tables(table_id);
 	auto col_names = context.InlinedColNames();
 	for (auto &flushed : flushed_inlined_tables) {
@@ -1202,7 +1198,7 @@ void DuckLakeTransactionState::RefreshGlobalStatsAfterFileSetChange(
 
 	// Inexact column bounds must not prevent refreshing the authoritative table totals.
 	expected_data_file_rows = SaturatingSubtract(expected_data_file_rows, visible_added_rows);
-	if (force_unknown_column_stats || (!replacing_empty_table && parquet_gross_rows != expected_data_file_rows)) {
+	if (force_unknown_column_stats || parquet_gross_rows != expected_data_file_rows) {
 		write_unknown_column_stats();
 		return;
 	}
@@ -2020,7 +2016,6 @@ string DuckLakeTransactionState::CommitChanges(DuckLakeCommitState &commit_state
 
 	struct FileSetStatsRefresh {
 		bool recompute_column_stats = false;
-		bool has_dropped_files = false;
 		idx_t removed_live_rows = 0;
 		idx_t added_rows = 0;
 		set<DataFileIndex> removed_file_ids;
@@ -2029,7 +2024,8 @@ string DuckLakeTransactionState::CommitChanges(DuckLakeCommitState &commit_state
 	map<TableIndex, FileSetStatsRefresh> stats_refreshes;
 	for (auto &entry : attempt_dropped_file_stats) {
 		auto &refresh = stats_refreshes[entry.first];
-		refresh.has_dropped_files = true;
+		refresh.recompute_column_stats = true;
+		refresh.removed_live_rows += entry.second.live_row_count;
 		refresh.removed_file_ids.insert(entry.second.data_file_ids.begin(), entry.second.data_file_ids.end());
 	}
 	auto add_compaction_refresh = [&](const CompactionInformation &changes, bool recompute_columns) {
@@ -2074,8 +2070,7 @@ string DuckLakeTransactionState::CommitChanges(DuckLakeCommitState &commit_state
 			RefreshGlobalStatsAfterFileSetChange(batch_queries, table_id, read_snapshot, refresh.removed_file_ids,
 			                                     refresh.added_files, table_data_result, expected_data_file_rows,
 			                                     refresh_stats.get(), context, refresh.recompute_column_stats,
-			                                     refresh.has_dropped_files, force_unknown_columns,
-			                                     deleted_inlined_rows[table_id]);
+			                                     force_unknown_columns, deleted_inlined_rows[table_id]);
 		}
 	}
 

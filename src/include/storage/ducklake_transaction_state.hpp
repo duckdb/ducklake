@@ -178,8 +178,7 @@ public:
 	                                          const vector<DuckLakeFileInfo> &added_files, const NewDataInfo &new_data,
 	                                          idx_t expected_data_file_rows, DuckLakeStats *attempt_stats,
 	                                          const DuckLakeCommitContext &context, bool recompute_column_stats,
-	                                          bool has_dropped_files, bool force_unknown_column_stats,
-	                                          idx_t deleted_inlined_rows);
+	                                          bool force_unknown_column_stats, idx_t deleted_inlined_rows);
 	//! Merge committed inlined data's per-column min/max into `target` via typed SQL aggregates. Returns false if the
 	//! inlined data cannot be accounted for exactly (e.g. a non-scalar column), in which case the caller must not
 	//! claim the recomputed stats are exact.
