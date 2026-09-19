@@ -1,0 +1,222 @@
+# name: test/sql/rewrite_data_files/rewrite_table_stats_fallback.test
+# description: Partial rewrites update table totals even when remaining deletes prevent exact column statistics
+# group: [rewrite_data_files]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+SET threads=1
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/rewrite_table_stats_fallback', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE ducklake.t(i BIGINT, payload VARCHAR)
+
+statement ok
+INSERT INTO ducklake.t SELECT i, repeat('x', 512) FROM range(2000) r(i)
+
+statement ok
+INSERT INTO ducklake.t SELECT i, repeat('x', 512) FROM range(2000, 4000) r(i)
+
+statement ok
+DELETE FROM ducklake.t WHERE i%10=0
+
+statement ok
+SET VARIABLE table_id = (SELECT table_id FROM __ducklake_metadata_ducklake.ducklake_table WHERE table_name='t')
+
+statement ok
+CALL ducklake.set_option('target_file_size', '1B')
+
+# One old file keeps its delete file, so column bounds cannot be made exact yet.
+statement ok
+CALL ducklake_rewrite_data_files('ducklake', 't', delete_threshold=>0, max_compacted_files=>1)
+
+statement ok
+SET VARIABLE active_rows = (SELECT sum(record_count) FROM __ducklake_metadata_ducklake.ducklake_data_file WHERE table_id=getvariable('table_id') AND end_snapshot IS NULL)
+
+statement ok
+SET VARIABLE active_bytes = (SELECT sum(file_size_bytes) FROM __ducklake_metadata_ducklake.ducklake_data_file WHERE table_id=getvariable('table_id') AND end_snapshot IS NULL)
+
+query IIII
+SELECT record_count, next_row_id, record_count=getvariable('active_rows'), file_size_bytes=getvariable('active_bytes') FROM __ducklake_metadata_ducklake.ducklake_table_stats WHERE table_id=getvariable('table_id')
+----
+3800	4000	true	true
+
+query I
+SELECT count(*) FROM __ducklake_metadata_ducklake.ducklake_table_column_stats WHERE table_id=getvariable('table_id') AND (min_value IS NOT NULL OR max_value IS NOT NULL)
+----
+0
+
+query III
+SELECT count(*), min(i), max(i) FROM ducklake.t
+----
+3600	1	3999
+
+# Compaction and DML cannot share a commit; rejection leaves the previous rows and stats intact.
+statement ok
+BEGIN
+
+statement ok
+CALL ducklake_rewrite_data_files('ducklake', 't', delete_threshold=>0)
+
+statement ok
+INSERT INTO ducklake.t VALUES (9999, 'rollback')
+
+statement error
+COMMIT
+----
+Transactions can either make changes OR perform compaction - not both
+
+query III
+SELECT record_count, next_row_id, file_size_bytes=getvariable('active_bytes') FROM __ducklake_metadata_ducklake.ducklake_table_stats WHERE table_id=getvariable('table_id')
+----
+3800	4000	true
+
+query III
+SELECT count(*), min(i), max(i) FROM ducklake.t
+----
+3600	1	3999
+
+statement ok
+INSERT INTO ducklake.t SELECT i, 'new' FROM range(5000, 5010) r(i)
+
+# A later complete rewrite can recover exact column bounds without losing the new file or row IDs.
+statement ok
+CALL ducklake_rewrite_data_files('ducklake', 't', delete_threshold=>0)
+
+statement ok
+SET VARIABLE active_bytes = (SELECT sum(file_size_bytes) FROM __ducklake_metadata_ducklake.ducklake_data_file WHERE table_id=getvariable('table_id') AND end_snapshot IS NULL)
+
+query III
+SELECT record_count, next_row_id, file_size_bytes=getvariable('active_bytes') FROM __ducklake_metadata_ducklake.ducklake_table_stats WHERE table_id=getvariable('table_id')
+----
+3610	4010	true
+
+query TT
+SELECT min_value, max_value FROM __ducklake_metadata_ducklake.ducklake_table_column_stats WHERE table_id=getvariable('table_id') AND column_id=1
+----
+1	5009
+
+# Unsupported inlined column types still contribute rows even though their column bounds stay unknown.
+statement ok
+CALL ducklake.set_option('target_file_size', '512MB')
+
+statement ok
+CREATE TABLE ducklake.nested(i INTEGER, s STRUCT(v INTEGER))
+
+statement ok
+INSERT INTO ducklake.nested SELECT i, {'v': i} FROM range(100) r(i)
+
+statement ok
+CALL ducklake.set_option('data_inlining_row_limit', 10)
+
+statement ok
+INSERT INTO ducklake.nested VALUES (1000, {'v': 1000})
+
+statement ok
+DELETE FROM ducklake.nested WHERE i < 50
+
+statement ok
+CALL ducklake_rewrite_data_files('ducklake', 'nested', delete_threshold=>0)
+
+statement ok
+SET VARIABLE nested_id = (SELECT table_id FROM __ducklake_metadata_ducklake.ducklake_table WHERE table_name='nested')
+
+statement ok
+SET VARIABLE active_bytes = (SELECT sum(file_size_bytes) FROM __ducklake_metadata_ducklake.ducklake_data_file WHERE table_id=getvariable('nested_id') AND end_snapshot IS NULL)
+
+query III
+SELECT record_count, next_row_id, file_size_bytes=getvariable('active_bytes') FROM __ducklake_metadata_ducklake.ducklake_table_stats WHERE table_id=getvariable('nested_id')
+----
+51	101	true
+
+query III
+SELECT count(*), min(s.v), max(s.v) FROM ducklake.nested
+----
+51	50	1000
+
+# Full-file drop plus inlined updates/deletes/inserts is a supported mixed transaction.
+statement ok
+CALL ducklake.set_option('data_inlining_row_limit', 0)
+
+statement ok
+CREATE TABLE ducklake.mixed(i INTEGER)
+
+statement ok
+INSERT INTO ducklake.mixed SELECT i FROM range(100) r(i)
+
+statement ok
+INSERT INTO ducklake.mixed SELECT i FROM range(100, 200) r(i)
+
+statement ok
+CALL ducklake.set_option('data_inlining_row_limit', 10)
+
+statement ok
+INSERT INTO ducklake.mixed VALUES (1000), (1001)
+
+statement ok
+BEGIN
+
+statement ok
+DELETE FROM ducklake.mixed WHERE i < 100
+
+statement ok
+UPDATE ducklake.mixed SET i=1002 WHERE i=1000
+
+statement ok
+DELETE FROM ducklake.mixed WHERE i=1001
+
+statement ok
+INSERT INTO ducklake.mixed VALUES (2000)
+
+statement ok
+COMMIT
+
+statement ok
+SET VARIABLE mixed_id = (SELECT table_id FROM __ducklake_metadata_ducklake.ducklake_table WHERE table_name='mixed')
+
+query II
+SELECT record_count, next_row_id FROM __ducklake_metadata_ducklake.ducklake_table_stats WHERE table_id=getvariable('mixed_id')
+----
+102	203
+
+query III
+SELECT count(*), min(i), max(i) FROM ducklake.mixed
+----
+102	100	2000
+
+# A drop and flush must count the flushed physical rows once, retaining their embedded row IDs.
+statement ok
+BEGIN
+
+statement ok
+DELETE FROM ducklake.mixed WHERE i < 200
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake', table_name=>'mixed')
+
+statement ok
+COMMIT
+
+statement ok
+SET VARIABLE active_rows = (SELECT sum(record_count) FROM __ducklake_metadata_ducklake.ducklake_data_file WHERE table_id=getvariable('mixed_id') AND end_snapshot IS NULL)
+
+statement ok
+SET VARIABLE active_bytes = (SELECT sum(file_size_bytes) FROM __ducklake_metadata_ducklake.ducklake_data_file WHERE table_id=getvariable('mixed_id') AND end_snapshot IS NULL)
+
+query III
+SELECT record_count=getvariable('active_rows'), next_row_id, file_size_bytes=getvariable('active_bytes') FROM __ducklake_metadata_ducklake.ducklake_table_stats WHERE table_id=getvariable('mixed_id')
+----
+true	203	true
+
+query III
+SELECT count(*), min(i), max(i) FROM ducklake.mixed
+----
+2	1002	2000
