@@ -39,6 +39,13 @@ struct TableFileIdKey {
 	}
 };
 
+static idx_t SubtractServerSideCount(idx_t value, idx_t decrement) {
+	if (decrement > value) {
+		throw InternalException("DuckLake delete counts exceed data file row count");
+	}
+	return value - decrement;
+}
+
 struct EntryShell {
 	idx_t entry_id;
 	optional_idx parent_entry_id;
@@ -220,6 +227,9 @@ void DuckLakeServerSideCommit::ReadStagedDroppedFileEntries() {
 		return;
 	}
 	vector<idx_t> dropped_file_ids;
+	map<idx_t, idx_t> live_rows_by_file_id;
+	map<idx_t, TableIndex> table_by_file_id;
+	map<TableIndex, vector<idx_t>> files_by_table;
 	auto dropped_files = ScanStagedTable(DuckLakeStagedTableType::DROPPED_FILE);
 	for (auto &row : *dropped_files) {
 		auto file_id = AsIdx(row, 1);
@@ -232,10 +242,67 @@ void DuckLakeServerSideCommit::ReadStagedDroppedFileEntries() {
 		                                                 schema_id, JoinIds(dropped_file_ids)),
 		                              "read dropped file stats");
 		for (auto &row : *dropped_stats) {
+			auto file_id = AsIdx(row, 1);
+			auto table_id = TableIndex(AsIdx(row, 0));
+			auto live_row_count = AsIdx(row, 2);
+			live_rows_by_file_id.emplace(file_id, live_row_count);
+			table_by_file_id.emplace(file_id, table_id);
+			files_by_table[table_id].push_back(file_id);
+
 			auto &stats = staged_dropped_file_stats[TableIndex(AsIdx(row, 0))];
-			stats.data_file_ids.insert(DataFileIndex(AsIdx(row, 1)));
+			stats.data_file_ids.insert(DataFileIndex(file_id));
 			stats.row_count += AsIdx(row, 2);
 			stats.file_size_bytes += AsIdx(row, 3);
+		}
+
+		auto active_delete_stats =
+		    RunQuery(SubstitutePlaceholders(StringUtil::Format(R"(
+SELECT data_file_id, SUM(delete_count)
+FROM %s.ducklake_delete_file
+WHERE data_file_id IN (%s)
+  AND {SNAPSHOT_ID} >= begin_snapshot
+  AND ({SNAPSHOT_ID} < end_snapshot OR end_snapshot IS NULL)
+GROUP BY data_file_id)",
+		                                                       schema_id, JoinIds(dropped_file_ids)),
+		                                    transaction_snapshot),
+		             "read dropped file delete counts");
+		for (auto &row : *active_delete_stats) {
+			auto file_id = AsIdx(row, 0);
+			auto entry = live_rows_by_file_id.find(file_id);
+			if (entry != live_rows_by_file_id.end()) {
+				entry->second = SubtractServerSideCount(entry->second, AsIdx(row, 1));
+			}
+		}
+
+		for (auto &entry : files_by_table) {
+			auto inlined_deletion_table = ExistingInlinedDeletionTableName(entry.first);
+			if (inlined_deletion_table.empty()) {
+				continue;
+			}
+			auto inlined_delete_stats = RunQuery(
+			    SubstitutePlaceholders(StringUtil::Format(R"(
+SELECT file_id, COUNT(*)
+FROM %s.%s
+WHERE file_id IN (%s)
+  AND begin_snapshot <= {SNAPSHOT_ID}
+GROUP BY file_id)",
+			                                              schema_id, inlined_deletion_table, JoinIds(entry.second)),
+			                           transaction_snapshot),
+			    "read dropped file inlined delete counts");
+			for (auto &row : *inlined_delete_stats) {
+				auto file_id = AsIdx(row, 0);
+				auto live_entry = live_rows_by_file_id.find(file_id);
+				if (live_entry != live_rows_by_file_id.end()) {
+					live_entry->second = SubtractServerSideCount(live_entry->second, AsIdx(row, 1));
+				}
+			}
+		}
+
+		for (auto &entry : live_rows_by_file_id) {
+			auto table_entry = table_by_file_id.find(entry.first);
+			if (table_entry != table_by_file_id.end()) {
+				staged_dropped_file_stats[table_entry->second].live_row_count += entry.second;
+			}
 		}
 	}
 	staged_dropped_files_read = true;

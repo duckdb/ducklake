@@ -1904,7 +1904,7 @@ void DuckLakeTransaction::DropTableMacro(DuckLakeTableMacroEntry &macro) {
 }
 
 void DuckLakeTransaction::DropFile(TableIndex table_id, DataFileIndex data_file_id, string path, idx_t row_count,
-                                   idx_t file_size_bytes) {
+                                   idx_t live_row_count, idx_t file_size_bytes) {
 	state->tables_deleted_from.insert(table_id);
 	auto inserted = state->dropped_files.emplace(std::move(path), data_file_id);
 	if (!inserted.second) {
@@ -1912,6 +1912,7 @@ void DuckLakeTransaction::DropFile(TableIndex table_id, DataFileIndex data_file_
 	}
 	auto &stats = state->dropped_file_stats[table_id];
 	stats.row_count += row_count;
+	stats.live_row_count += live_row_count;
 	stats.file_size_bytes += file_size_bytes;
 	stats.data_file_ids.insert(data_file_id);
 }
