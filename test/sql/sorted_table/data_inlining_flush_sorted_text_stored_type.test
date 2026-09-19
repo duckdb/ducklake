@@ -1,0 +1,343 @@
+# name: test/sql/sorted_table/data_inlining_flush_sorted_text_stored_type.test
+# description: Flushing a sorted table must derive delete positions from the column's type order, not the metadata catalog's text order
+# group: [sorted_table]
+
+#
+# Each type below names the catalog that stores it as text. The default config is a DuckDB
+# catalog, which stores every column in its own type, so that run is the control; the mismatch
+# needs --test-config postgres.json or sqlite.json.
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/flush_sorted_text_stored_type', DATA_INLINING_ROW_LIMIT 1000)
+
+statement ok
+USE ducklake
+
+# a Postgres catalog stores HUGEINT as VARCHAR, where '10' sorts before '9'
+statement ok
+CREATE TABLE t (id INTEGER, k HUGEINT)
+
+statement ok
+ALTER TABLE t SET SORTED BY (k ASC NULLS LAST)
+
+statement ok
+INSERT INTO t VALUES (1, 9), (2, 10)
+
+statement ok
+DELETE FROM t WHERE id = 1
+
+query II
+SELECT id, k FROM t ORDER BY id
+----
+2	10
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake', table_name := 't', schema_name := 'main')
+
+query II
+SELECT id, k FROM t ORDER BY id
+----
+2	10
+
+# a SQLite catalog stores DOUBLE as VARCHAR, where '10.0' sorts before '9.0'
+statement ok
+CREATE TABLE d (id INTEGER, k DOUBLE)
+
+statement ok
+ALTER TABLE d SET SORTED BY (k ASC NULLS LAST)
+
+statement ok
+INSERT INTO d VALUES (1, 9.0), (2, 10.0)
+
+statement ok
+DELETE FROM d WHERE id = 1
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake', table_name := 'd', schema_name := 'main')
+
+query II
+SELECT id, k FROM d ORDER BY id
+----
+2	10.0
+
+# the cast has to reach a column ref nested inside the expression
+statement ok
+CREATE TABLE e (id INTEGER, k HUGEINT)
+
+statement ok
+ALTER TABLE e SET SORTED BY ((k + 0) ASC NULLS LAST)
+
+statement ok
+INSERT INTO e VALUES (1, 9), (2, 10)
+
+statement ok
+DELETE FROM e WHERE id = 1
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake', table_name := 'e', schema_name := 'main')
+
+query II
+SELECT id, k FROM e ORDER BY id
+----
+2	10
+
+# the inlined table still carries the pre-rename name, so rename and cast happen in one rewrite
+statement ok
+CREATE TABLE r (id INTEGER, k HUGEINT)
+
+statement ok
+ALTER TABLE r SET SORTED BY (k ASC NULLS LAST)
+
+statement ok
+INSERT INTO r VALUES (1, 9), (2, 10)
+
+statement ok
+DELETE FROM r WHERE id = 1
+
+statement ok
+ALTER TABLE r RENAME COLUMN k TO k2
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake', table_name := 'r', schema_name := 'main')
+
+query II
+SELECT id, k2 FROM r ORDER BY id
+----
+2	10
+
+# VARCHAR is not cast: it arrives as BLOB and already orders bytewise, matching the file
+statement ok
+CREATE TABLE v (id INTEGER, k VARCHAR)
+
+statement ok
+ALTER TABLE v SET SORTED BY (k ASC NULLS LAST)
+
+statement ok
+INSERT INTO v VALUES (1, 'Zebra'), (2, 'apple')
+
+statement ok
+DELETE FROM v WHERE id = 1
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake', table_name := 'v', schema_name := 'main')
+
+query II
+SELECT id, k FROM v ORDER BY id
+----
+2	apple
+
+# casting a blob back escapes its bytes: 'ééé' (0xC3) sorts after 'zzz' (0x7A) but renders
+# as '\xC3\xA9..', and 0x5C sorts first. ASCII cannot show this, so the case above cannot either
+statement ok
+CREATE TABLE w (id INTEGER, k VARCHAR)
+
+statement ok
+ALTER TABLE w SET SORTED BY (k ASC NULLS LAST)
+
+statement ok
+INSERT INTO w VALUES (1, 'zzz'), (2, 'ééé')
+
+statement ok
+DELETE FROM w WHERE id = 1
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake', table_name := 'w', schema_name := 'main')
+
+query II
+SELECT id, k FROM w ORDER BY id
+----
+2	ééé
+
+# INTERVAL is neither numeric nor temporal by IsTemporal, so a stats-derived rule misses it:
+# '2 days' sorts after '10 days' as text
+statement ok
+CREATE TABLE i (id INTEGER, k INTERVAL)
+
+statement ok
+ALTER TABLE i SET SORTED BY (k ASC NULLS LAST)
+
+statement ok
+INSERT INTO i VALUES (1, INTERVAL '2 days'), (2, INTERVAL '10 days')
+
+statement ok
+DELETE FROM i WHERE id = 1
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake', table_name := 'i', schema_name := 'main')
+
+query I
+SELECT id FROM i ORDER BY id
+----
+2
+
+# nested types render element-wise as text, so '[10]' sorts before '[2]'
+statement ok
+CREATE TABLE l (id INTEGER, k INTEGER[])
+
+statement ok
+ALTER TABLE l SET SORTED BY (k ASC NULLS LAST)
+
+statement ok
+INSERT INTO l VALUES (1, [2]), (2, [10])
+
+statement ok
+DELETE FROM l WHERE id = 1
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake', table_name := 'l', schema_name := 'main')
+
+query I
+SELECT id FROM l ORDER BY id
+----
+2
+
+statement ok
+CREATE TABLE s (id INTEGER, k STRUCT(a INTEGER))
+
+statement ok
+ALTER TABLE s SET SORTED BY (k ASC NULLS LAST)
+
+statement ok
+INSERT INTO s VALUES (1, {'a': 2}), (2, {'a': 10})
+
+statement ok
+DELETE FROM s WHERE id = 1
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake', table_name := 's', schema_name := 'main')
+
+query I
+SELECT id FROM s ORDER BY id
+----
+2
+
+statement ok
+CREATE TABLE m (id INTEGER, k MAP(VARCHAR, INTEGER))
+
+statement ok
+ALTER TABLE m SET SORTED BY (k ASC NULLS LAST)
+
+statement ok
+INSERT INTO m VALUES (1, MAP{'x': 2}), (2, MAP{'x': 10})
+
+statement ok
+DELETE FROM m WHERE id = 1
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake', table_name := 'm', schema_name := 'main')
+
+query I
+SELECT id FROM m ORDER BY id
+----
+2
+
+# BLOB is not exempt just because it shares VARCHAR's storage type on some backends
+statement ok
+CREATE TABLE b (id INTEGER, k BLOB)
+
+statement ok
+ALTER TABLE b SET SORTED BY (k ASC NULLS LAST)
+
+statement ok
+INSERT INTO b VALUES (1, '\xC3'::BLOB), (2, 'z'::BLOB)
+
+statement ok
+DELETE FROM b WHERE id = 1
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake', table_name := 'b', schema_name := 'main')
+
+query I
+SELECT id FROM b ORDER BY id
+----
+2
+
+# The position query numbers rows within one partition, so each file needs its own partition's
+# order, not a global one. The key is mixed: v is the exempt type and k is cast, in one ORDER BY.
+# Where VARCHAR round-trips as BLOB the non-ASCII v values also catch a wrong cast of v; where it
+# is stored natively that cast is a no-op and only the standalone case above can see it.
+statement ok
+CREATE TABLE pm (id INTEGER, p INTEGER, v VARCHAR, k HUGEINT)
+
+statement ok
+ALTER TABLE pm SET PARTITIONED BY (p)
+
+statement ok
+ALTER TABLE pm SET SORTED BY (v ASC NULLS LAST, k ASC NULLS LAST)
+
+statement ok
+INSERT INTO pm VALUES
+    (1, 0, 'zzz', 9), (2, 0, 'zzz', 10), (3, 0, 'ééé', 9), (4, 0, 'ééé', 10),
+    (5, 1, 'zzz', 9), (6, 1, 'zzz', 10), (7, 1, 'ééé', 9), (8, 1, 'ééé', 10)
+
+# deleting one row per partition keeps its position distinguishable: 0 when correct, 1 with no
+# cast on k, 2 with a wrong cast on v, 3 with both
+statement ok
+DELETE FROM pm WHERE v = 'zzz' AND k = 9
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake', table_name := 'pm', schema_name := 'main')
+
+query IIII
+SELECT id, p, v, k FROM pm ORDER BY id
+----
+2	0	zzz	10
+3	0	ééé	9
+4	0	ééé	10
+6	1	zzz	10
+7	1	ééé	9
+8	1	ééé	10
+
+# the direction and null-placement suffixes have to survive the rewrite
+statement ok
+CREATE TABLE dn (id INTEGER, k HUGEINT)
+
+statement ok
+ALTER TABLE dn SET SORTED BY (k DESC NULLS FIRST)
+
+statement ok
+INSERT INTO dn VALUES (1, 9), (2, 10), (3, NULL)
+
+statement ok
+DELETE FROM dn WHERE id = 1
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake', table_name := 'dn', schema_name := 'main')
+
+query II
+SELECT id, k FROM dn ORDER BY id
+----
+2	10
+3	NULL
+
+# the cast uses the column's current type, not the one the inlined text was written under
+statement ok
+CREATE TABLE atype (id INTEGER, k HUGEINT)
+
+statement ok
+ALTER TABLE atype SET SORTED BY (k ASC NULLS LAST)
+
+statement ok
+INSERT INTO atype VALUES (1, 9), (2, 10)
+
+statement ok
+DELETE FROM atype WHERE id = 1
+
+statement ok
+ALTER TABLE atype ALTER COLUMN k TYPE DOUBLE
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake', table_name := 'atype', schema_name := 'main')
+
+query II
+SELECT id, k FROM atype ORDER BY id
+----
+2	10.0
