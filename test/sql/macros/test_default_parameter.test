@@ -33,8 +33,8 @@ FROM __ducklake_metadata_ducklake.ducklake_macro_impl;
 query IIIIIII
 FROM __ducklake_metadata_ducklake.ducklake_macro_parameters;
 ----
-1	0	0	a	unknown	NULL	unknown
-1	0	1	b	unknown	5	int32
+1	0	0	a	UNKNOWN	NULL	unknown
+1	0	1	b	UNKNOWN	5	expression
 
 query I
 select add_default(1)

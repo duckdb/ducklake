@@ -45,9 +45,9 @@ FROM __ducklake_metadata_ducklake.ducklake_macro_impl;
 query IIIIIII
 FROM __ducklake_metadata_ducklake.ducklake_macro_parameters;
 ----
-2	0	0	a	unknown	NULL	unknown
-2	0	1	_name	unknown	NULL	unknown
-3	0	0	a	unknown	NULL	unknown
+2	0	0	a	UNKNOWN	NULL	unknown
+2	0	1	_name	UNKNOWN	NULL	unknown
+3	0	0	a	UNKNOWN	NULL	unknown
 
 query II
 FROM xt(5,'tom');

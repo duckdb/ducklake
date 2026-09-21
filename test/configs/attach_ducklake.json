@@ -177,12 +177,6 @@
       ]
     },
     {
-      "reason": "EXPORT/IMPORT DATABASE of a macro with a typed NULL default loses the NULL's type under DuckLake.",
-      "paths": [
-        "test/sql/export/export_typed_null.test"
-      ]
-    },
-    {
       "reason": "Uses VACUUM for stats setup; DuckLake does not implement VACUUM, so the subsequent join-filter plan check cannot run.",
       "paths": [
         "test/optimizer/joins/join_filter_build_side.test"
@@ -584,12 +578,6 @@
       "reason": "FIXME: Macros are currently not taken in for recursion",
       "paths": [
         "test/sql/catalog/function/test_recursive_macro.test"
-      ]
-    },
-    {
-      "reason": " Failed to parse DuckLake type - unsupported nested type",
-      "paths": [
-        "test/sql/catalog/function/test_macro_issue_13104.test"
       ]
     },
     {

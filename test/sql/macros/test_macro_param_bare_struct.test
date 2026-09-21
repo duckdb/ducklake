@@ -1,0 +1,30 @@
+# name: test/sql/macros/test_macro_param_bare_struct.test
+# description: a macro parameter type that carries no field information is rejected
+# group: [macros]
+
+require ducklake
+
+require parquet
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/macro_bare_struct.db' AS ducklake (DATA_PATH '{DATA_PATH}/macro_bare_struct', METADATA_CATALOG 'ducklake_meta')
+
+statement ok
+USE ducklake
+
+# DuckDB accepts a bare STRUCT, but it cannot be stored - there are no field names or types to write
+statement error
+CREATE MACRO m(s STRUCT) AS (1)
+----
+unsupported type STRUCT
+
+# a STRUCT with fields is fine
+statement ok
+CREATE MACRO m(s STRUCT(i INTEGER)) AS (s.i)
+
+query I
+SELECT m({'i': 7})
+----
+7

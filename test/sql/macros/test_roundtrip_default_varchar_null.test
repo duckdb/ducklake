@@ -1,0 +1,43 @@
+# name: test/sql/macros/test_roundtrip_default_varchar_null.test
+# description: macro default NULL::VARCHAR must round-trip as SQL NULL, not the string 'NULL'
+# group: [macros]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/macro_default_null_varchar.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/macro_default_null_varchar', METADATA_CATALOG 'ducklake_meta')
+
+statement ok
+USE ducklake
+
+statement ok
+CREATE MACRO m(s VARCHAR := NULL::VARCHAR) AS (s IS NULL)
+
+query I
+SELECT m()
+----
+true
+
+# the default must survive a fresh attach
+statement ok
+USE memory
+
+statement ok
+DETACH ducklake
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/macro_default_null_varchar', METADATA_CATALOG 'ducklake_meta')
+
+statement ok
+USE ducklake
+
+query I
+SELECT m()
+----
+true

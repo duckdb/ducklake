@@ -1,0 +1,48 @@
+# name: test/sql/macros/test_roundtrip_param_struct.test
+# description: a STRUCT-typed macro parameter must round-trip, even without a default
+# group: [macros]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/macro_nested_param_struct.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/macro_nested_param_struct', METADATA_CATALOG 'ducklake_meta')
+
+statement ok
+USE ducklake
+
+statement ok
+CREATE MACRO m(st STRUCT(i INTEGER)) AS (st.i)
+
+# the parameter type is stored as dialect SQL, so the field names and types survive
+query IIII
+SELECT parameter_name, parameter_type, default_value, default_value_type FROM ducklake_meta.ducklake_macro_parameters
+----
+st	STRUCT(i INTEGER)	NULL	unknown
+
+query I
+SELECT m({'i': 7})
+----
+7
+
+statement ok
+USE memory
+
+statement ok
+DETACH ducklake
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/macro_nested_param_struct', METADATA_CATALOG 'ducklake_meta')
+
+statement ok
+USE ducklake
+
+query I
+SELECT m({'i': 7})
+----
+7

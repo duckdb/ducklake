@@ -1,0 +1,48 @@
+# name: test/sql/macros/test_roundtrip_param_decimal.test
+# description: a DECIMAL macro parameter keeps its width and scale - the parameterized type that DuckLake does round-trip
+# group: [macros]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/macro_nested_param_decimal.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/macro_nested_param_decimal', METADATA_CATALOG 'ducklake_meta')
+
+statement ok
+USE ducklake
+
+statement ok
+CREATE MACRO m(d DECIMAL(10,2)) AS (d * 2)
+
+# every parameter type is stored as dialect SQL, including the width and scale
+query IIII
+SELECT parameter_name, parameter_type, default_value, default_value_type FROM ducklake_meta.ducklake_macro_parameters
+----
+d	DECIMAL(10,2)	NULL	unknown
+
+query I
+SELECT m(1.50)
+----
+3.00
+
+statement ok
+USE memory
+
+statement ok
+DETACH ducklake
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/macro_nested_param_decimal', METADATA_CATALOG 'ducklake_meta')
+
+statement ok
+USE ducklake
+
+query I
+SELECT m(1.50)
+----
+3.00
