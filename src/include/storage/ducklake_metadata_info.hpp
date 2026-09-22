@@ -451,6 +451,8 @@ struct DuckLakeFileListExtendedEntry {
 	DuckLakeDataType data_type = DuckLakeDataType::DATA_FILE;
 	optional_idx partition_id;
 	vector<DuckLakeFilePartitionInfo> partition_values;
+	//! Max snapshot id present in the file; rows above the read snapshot are not visible
+	optional_idx max_partial_file_snapshot;
 };
 
 struct DuckLakeCompactionBaseFileData {

@@ -1112,6 +1112,11 @@ bool CanUseMetadataDelete(ClientContext &context, DuckLakeTableEntry &table, Phy
 			}
 			return false;
 		}
+		// Partial files only expose rows at or below the read snapshot, so row_count overstates the delete.
+		if (file.max_partial_file_snapshot.IsValid() &&
+		    file.max_partial_file_snapshot.GetIndex() > transaction.GetSnapshot().snapshot_id) {
+			return false;
+		}
 		// Existing row-level deletes make the raw file row count different from the visible DELETE count.
 		if (file.delete_file_id.IsValid() || !file.delete_file.path.empty()) {
 			return false;

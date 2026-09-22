@@ -2103,7 +2103,8 @@ string DuckLakeMetadataManager::GenerateFileListQuery(DuckLakeTableEntry &table,
 	string partition_join;
 	if (file_list_type == FileListType::EXTENDED_WITH_PARTITIONS) {
 		partition_select =
-		    ", data.partition_id, partition_values.partition_key_indexes, partition_values.partition_value_list";
+		    ", data.partition_id, partition_values.partition_key_indexes, partition_values.partition_value_list, "
+		    "data.partial_max";
 		partition_join = StringUtil::Format(R"(
 LEFT JOIN (
     SELECT data_file_id,
@@ -2526,6 +2527,10 @@ DuckLakeMetadataManager::GetExtendedFilesForTable(DuckLakeTableEntry &table, Duc
 				}
 			}
 			col_idx += 2;
+			if (!row.IsNull(col_idx)) {
+				file_entry.max_partial_file_snapshot = row.GetValue<idx_t>(col_idx);
+			}
+			col_idx++;
 		}
 		file_entry.file = ReadDataFile(table, row, col_idx, IsEncrypted());
 		if (!row.IsNull(col_idx)) {
