@@ -796,6 +796,39 @@ idx_t DuckLakeMetadataManager::GetNetDataFileRowCount(TableIndex table_id, DuckL
 	return 0;
 }
 
+optional_idx DuckLakeMetadataManager::GetNetDataFileRowCountForStats(TableIndex table_id, DuckLakeSnapshot snapshot) {
+	// Check visibility in the same metadata query as the count, including on unpinned catalogs.
+	auto count_query = GetNetDataFileRowCountSql(table_id, GetInlinedDeletionTableName(table_id, snapshot));
+	auto query = StringUtil::Format(R"(
+SELECT net_count, EXISTS (
+    SELECT 1 FROM {METADATA_CATALOG}.ducklake_data_file
+    WHERE table_id = %llu
+      AND begin_snapshot <= {SNAPSHOT_ID}
+      AND (end_snapshot IS NULL OR end_snapshot > {SNAPSHOT_ID})
+      AND partial_max > {SNAPSHOT_ID}) OR EXISTS (
+    SELECT 1 FROM {METADATA_CATALOG}.ducklake_delete_file del
+    JOIN {METADATA_CATALOG}.ducklake_data_file data ON del.data_file_id = data.data_file_id
+    WHERE del.table_id = %llu
+      AND del.begin_snapshot <= {SNAPSHOT_ID}
+      AND (del.end_snapshot IS NULL OR del.end_snapshot > {SNAPSHOT_ID})
+      AND data.begin_snapshot <= {SNAPSHOT_ID}
+      AND (data.end_snapshot IS NULL OR data.end_snapshot > {SNAPSHOT_ID})
+      AND del.partial_max > {SNAPSHOT_ID})
+FROM (%s) AS counts(net_count))",
+	                                table_id.index, table_id.index, count_query);
+	auto result = Query(snapshot, query);
+	if (result->HasError()) {
+		result->GetErrorObject().Throw("Failed to get exact data file row count from DuckLake: ");
+	}
+	for (auto &row : *result) {
+		if (row.GetValue<bool>(1)) {
+			return optional_idx();
+		}
+		return optional_idx(row.GetValue<idx_t>(0));
+	}
+	return optional_idx();
+}
+
 string DuckLakeMetadataManager::GetNetInlinedRowCountSql(const string &inlined_table_name,
                                                          const DuckLakeInlinedColNames &col_names) {
 	return StringUtil::Format(R"(

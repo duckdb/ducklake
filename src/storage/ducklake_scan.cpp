@@ -8,6 +8,7 @@
 #include "storage/ducklake_table_entry.hpp"
 #include "storage/ducklake_stats.hpp"
 #include "storage/ducklake_transaction.hpp"
+#include "storage/ducklake_metadata_manager.hpp"
 
 #include "duckdb/catalog/catalog_entry/table_function_catalog_entry.hpp"
 #include "duckdb/common/multi_file/multi_file_data.hpp"
@@ -196,7 +197,12 @@ vector<PartitionStatistics> DuckLakeGetPartitionStats(ClientContext &context, Ge
 		return result;
 	}
 
-	idx_t net_count = table.GetNetDataFileRowCount(*transaction) + table.GetNetInlinedRowCount(*transaction);
+	auto file_count = transaction->GetMetadataManager().GetNetDataFileRowCountForStats(table.GetTableId(),
+	                                                                                   transaction->GetSnapshot());
+	if (!file_count.IsValid()) {
+		return result;
+	}
+	idx_t net_count = file_count.GetIndex() + table.GetNetInlinedRowCount(*transaction);
 
 	// MIN/MAX can be answered from the catalog column stats, but only when those stats are exact.
 	// Global column stats only ever widen on insert (via MergeStats) and are never tightened by deletes
