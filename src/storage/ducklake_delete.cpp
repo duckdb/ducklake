@@ -1068,6 +1068,9 @@ bool CanUseMetadataDelete(ClientContext &context, DuckLakeTableEntry &table, Phy
 
 	auto &bind_data = scan->bind_data->Cast<MultiFileBindData>();
 	auto &file_list = bind_data.file_list->Cast<DuckLakeMultiFileList>();
+	if (&file_list.GetTable().catalog != &table.catalog || file_list.GetTable().GetTableId() != table.GetTableId()) {
+		return false;
+	}
 	vector<unique_ptr<Expression>> filters;
 	if (!CollectMetadataDeleteFilters(table, *scan, file_list, filter_expressions, filters)) {
 		return false;
@@ -1141,10 +1144,10 @@ bool CanUseMetadataDelete(ClientContext &context, DuckLakeTableEntry &table, Phy
 
 PhysicalOperator &DuckLakeDelete::PlanDelete(ClientContext &context, PhysicalPlanGenerator &planner,
                                              DuckLakeTableEntry &table, PhysicalOperator &child_plan,
-                                             vector<idx_t> row_id_indexes, string encryption_key,
-                                             bool allow_duplicates) {
+                                             vector<idx_t> row_id_indexes, string encryption_key, bool allow_duplicates,
+                                             bool allow_metadata_delete) {
 	unique_ptr<vector<DuckLakeFileListExtendedEntry>> extended_files;
-	if (allow_duplicates && CanUseMetadataDelete(context, table, child_plan, extended_files)) {
+	if (allow_metadata_delete && CanUseMetadataDelete(context, table, child_plan, extended_files)) {
 		return planner.Make<DuckLakeMetadataDelete>(table, std::move(*extended_files));
 	}
 
@@ -1176,7 +1179,7 @@ PhysicalOperator &DuckLakeCatalog::PlanDelete(ClientContext &context, PhysicalPl
 		row_id_indexes.push_back(bound_ref.Index());
 	}
 	return DuckLakeDelete::PlanDelete(context, planner, op.table.Cast<DuckLakeTableEntry>(), child_plan,
-	                                  std::move(row_id_indexes), std::move(encryption_key));
+	                                  std::move(row_id_indexes), std::move(encryption_key), true, true);
 }
 
 } // namespace duckdb
