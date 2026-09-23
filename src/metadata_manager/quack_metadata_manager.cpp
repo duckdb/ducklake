@@ -98,6 +98,11 @@ bool QuackMetadataManager::CanSkipSnapshotFetch(const TransactionChangeInformati
 		// the server-side commit cannot create the inlined-data table, take the client-side path instead
 		return false;
 	}
+	if (transaction.GetCatalog().EncryptionProvider()) {
+		// the server assigns the stored path, and a wrapped key is bound to it, so the wrap has to happen
+		// on the client-side path
+		return false;
+	}
 	return ExecuteRetrialsServerSide() && IsDataOnlyCommit(changes);
 }
 
@@ -105,7 +110,8 @@ void QuackMetadataManager::FlushChangesServerSide(DuckLakeTransaction &flush_tra
                                                   DuckLakeSnapshot transaction_snapshot,
                                                   const TransactionChangeInformation &transaction_changes,
                                                   const DuckLakeRetryConfig &retry_config) {
-	if (!IsDataOnlyCommit(transaction_changes) || flush_transaction.GetRequiresNewInlinedTable()) {
+	if (!IsDataOnlyCommit(transaction_changes) || flush_transaction.GetRequiresNewInlinedTable() ||
+	    flush_transaction.GetCatalog().EncryptionProvider()) {
 		flush_transaction.RunCommitLoop(transaction_snapshot, transaction_changes, retry_config);
 		return;
 	}
