@@ -1293,13 +1293,15 @@ vector<DuckLakeGlobalStatsInfo> DuckLakeMetadataManager::ParseGlobalTableStats(Q
 }
 
 vector<DuckLakeGlobalStatsInfo> DuckLakeMetadataManager::GetGlobalTableStats(DuckLakeSnapshot snapshot,
-                                                                             TableIndex table_id) {
+                                                                             TableIndex table_id,
+                                                                             idx_t &latest_snapshot_id) {
 	string select_list =
 	    "table_id, column_id, record_count, next_row_id, file_size_bytes, contains_null, contains_nan, min_value, "
 	    "max_value, extra_stats";
 	if (transaction.GetCatalog().SupportsV1_1Metadata()) {
 		select_list += ", min_is_exact, max_is_exact";
 	}
+	select_list += ", (SELECT MAX(snapshot_id) FROM {METADATA_CATALOG}.ducklake_snapshot) AS latest_snapshot_id";
 	string query = StringUtil::Format("\nSELECT " + select_list + R"(
 FROM {METADATA_CATALOG}.ducklake_table_stats
 LEFT JOIN {METADATA_CATALOG}.ducklake_table_column_stats USING (table_id)
@@ -1311,7 +1313,16 @@ ORDER BY table_id;
 	                                  table_id.index);
 
 	auto result = Query(snapshot, query);
-	return TransformGlobalStats(*result);
+	if (result->HasError()) {
+		result->GetErrorObject().Throw("Failed to get global stats information from DuckLake: ");
+	}
+	vector<DuckLakeGlobalStatsInfo> global_stats;
+	bool has_exactness = ResultHasColumn(*result, "min_is_exact");
+	for (auto &row : *result) {
+		latest_snapshot_id = row.GetValue<idx_t>(has_exactness ? 12 : 10);
+		TransformGlobalStatsRow(row, global_stats, 0, has_exactness);
+	}
+	return global_stats;
 }
 
 string DuckLakeMetadataManager::GetFileSelectList(const string &prefix) {
@@ -5963,7 +5974,7 @@ WHERE NOT EXISTS (
 
 	for (auto &snapshot : snapshots) {
 		for (auto &table_id : stats_table_ids) {
-			catalog.InvalidateTableStatsCache(snapshot.next_file_id, table_id);
+			catalog.InvalidateTableStatsCache(snapshot.id, table_id);
 		}
 	}
 	ClearCache();

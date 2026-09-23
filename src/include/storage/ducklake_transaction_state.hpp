@@ -26,8 +26,11 @@ struct DuckLakeColumnSchemaEntry {
 struct DuckLakeCommitContext {
 	//! Runs a metadata-DB query during conflict resolution.
 	std::function<unique_ptr<QueryResult>(string)> conflict_query_executor;
-	//! Returns the latest snapshot for the first commit attempt.
+	//! Returns the base snapshot for the first commit attempt.
 	std::function<DuckLakeSnapshot()> get_snapshot;
+	//! Publishes the base snapshot selected for the current commit attempt.
+	std::function<void(DuckLakeSnapshot)> set_attempt_snapshot = [](DuckLakeSnapshot) {
+	};
 	//! Executes the batched snapshot/changes SQL against the metadata DB.
 	std::function<unique_ptr<QueryResult>(DuckLakeSnapshot, string &)> execute_commit_batch;
 	//! Classifies metadata-catalog errors that are safe to retry.
@@ -102,9 +105,6 @@ struct DuckLakeCommitContext {
 	std::function<void(idx_t)> set_catalog_version;
 	//! Records the committed snapshot id on the catalog.
 	std::function<void(idx_t)> set_committed_snapshot_id;
-	//! Invalidates the cached stats entry for a table after a stats-affecting file drop.
-	std::function<void(idx_t, TableIndex)> invalidate_table_stats_cache = [](idx_t, TableIndex) {
-	};
 	//! Reports a failure after the metadata commit is already durable.
 	std::function<void(const string &)> report_post_commit_error = [](const string &) {
 	};
