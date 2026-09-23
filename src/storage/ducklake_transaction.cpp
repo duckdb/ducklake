@@ -1418,11 +1418,6 @@ void DuckLakeTransaction::FlushChanges() {
 }
 
 void DuckLakeTransaction::ApplyServerSideCommit(idx_t schema_version) {
-	if (snapshot) {
-		for (auto &entry : state->dropped_file_stats) {
-			ducklake_catalog.InvalidateTableStatsCache(snapshot->next_file_id, entry.first);
-		}
-	}
 	catalog_version = schema_version;
 	if (connection) {
 		connection->Commit();
@@ -1445,6 +1440,7 @@ void DuckLakeTransaction::RunCommitLoop(DuckLakeSnapshot transaction_snapshot,
                                         const DuckLakeRetryConfig &retry_config) {
 	vector<unique_ptr<SQLStatement>> inlined_inserts;
 	DuckLakeCommitContext context;
+	auto attempt_snapshot = transaction_snapshot;
 	context.conflict_query_executor = [&](string q) -> unique_ptr<QueryResult> {
 		auto result = metadata_manager->Query(transaction_snapshot, q);
 		if (result->HasError()) {
@@ -1454,7 +1450,10 @@ void DuckLakeTransaction::RunCommitLoop(DuckLakeSnapshot transaction_snapshot,
 		return result;
 	};
 	context.get_snapshot = [&]() {
-		return GetSnapshot();
+		return attempt_snapshot;
+	};
+	context.set_attempt_snapshot = [&](DuckLakeSnapshot snapshot) {
+		attempt_snapshot = snapshot;
 	};
 	context.execute_commit_batch = [&](DuckLakeSnapshot snapshot, string &query) {
 		auto result = metadata_manager->Execute(snapshot, query);
@@ -1516,7 +1515,7 @@ void DuckLakeTransaction::RunCommitLoop(DuckLakeSnapshot transaction_snapshot,
 		                                             inlined_inserts);
 	};
 	context.get_table_stats = [&](TableIndex table_id) {
-		return ducklake_catalog.GetTableStats(*this, table_id);
+		return ducklake_catalog.GetTableStatsForCommit(*this, attempt_snapshot, table_id);
 	};
 	context.get_table_column_schema = [&](TableIndex table_id) {
 		// The full flattened schema at the commit snapshot: top-level roots (is_root=true) plus every nested
@@ -1525,7 +1524,7 @@ void DuckLakeTransaction::RunCommitLoop(DuckLakeSnapshot transaction_snapshot,
 		// by leaf FieldIndex, which the rewrite recompute must merge. Each node uses its authoritative stored
 		// FieldIndex (ALTER ADD FIELD makes nested leaf ids non-contiguous, so they cannot be re-derived).
 		vector<DuckLakeColumnSchemaEntry> schema;
-		auto entry = ducklake_catalog.GetEntryById(*this, transaction_snapshot, table_id);
+		auto entry = ducklake_catalog.GetEntryById(*this, attempt_snapshot, table_id);
 		if (!entry) {
 			return schema;
 		}
@@ -1542,7 +1541,7 @@ void DuckLakeTransaction::RunCommitLoop(DuckLakeSnapshot transaction_snapshot,
 	};
 	context.get_inlined_table_names = [&](TableIndex table_id) {
 		vector<string> names;
-		auto entry = ducklake_catalog.GetEntryById(*this, transaction_snapshot, table_id);
+		auto entry = ducklake_catalog.GetEntryById(*this, attempt_snapshot, table_id);
 		if (!entry) {
 			return names;
 		}
@@ -1552,21 +1551,25 @@ void DuckLakeTransaction::RunCommitLoop(DuckLakeSnapshot transaction_snapshot,
 		return names;
 	};
 	context.get_net_data_file_row_count = [&](TableIndex table_id) -> idx_t {
-		auto entry = ducklake_catalog.GetEntryById(*this, transaction_snapshot, table_id);
+		auto entry = ducklake_catalog.GetEntryById(*this, attempt_snapshot, table_id);
 		if (!entry) {
 			return 0;
 		}
-		return entry->Cast<DuckLakeTableEntry>().GetNetDataFileRowCount(*this);
+		return metadata_manager->GetNetDataFileRowCount(table_id, attempt_snapshot);
 	};
 	context.get_net_inlined_row_count = [&](TableIndex table_id) -> idx_t {
-		auto entry = ducklake_catalog.GetEntryById(*this, transaction_snapshot, table_id);
+		auto entry = ducklake_catalog.GetEntryById(*this, attempt_snapshot, table_id);
 		if (!entry) {
 			return 0;
 		}
-		return entry->Cast<DuckLakeTableEntry>().GetNetInlinedRowCount(*this);
+		idx_t total = 0;
+		for (auto &inlined_table : entry->Cast<DuckLakeTableEntry>().GetInlinedDataTables()) {
+			total += metadata_manager->GetNetInlinedRowCount(inlined_table.table_name, attempt_snapshot);
+		}
+		return total;
 	};
 	context.build_stats_map = [&](vector<DuckLakeGlobalStatsInfo> &stats) {
-		auto &schema = ducklake_catalog.GetSchemaForSnapshot(*this, GetSnapshot());
+		auto &schema = ducklake_catalog.GetSchemaForSnapshot(*this, attempt_snapshot);
 		return DuckLakeCatalog::ConstructStatsMap(stats, schema);
 	};
 	context.invalidate_schema_cache = [&](idx_t schema_version) {
@@ -1582,9 +1585,6 @@ void DuckLakeTransaction::RunCommitLoop(DuckLakeSnapshot transaction_snapshot,
 		for (auto &option : options) {
 			ducklake_catalog.SetConfigOption(option);
 		}
-	};
-	context.invalidate_table_stats_cache = [&](idx_t next_file_id, TableIndex table_id) {
-		ducklake_catalog.InvalidateTableStatsCache(next_file_id, table_id);
 	};
 	context.report_post_commit_error = [&](const string &message) {
 		DUCKDB_LOG_WARNING(db, StringUtil::Format("DuckLake post-commit cleanup failed: %s", message));
