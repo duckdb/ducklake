@@ -790,6 +790,9 @@ SELECT
 idx_t DuckLakeMetadataManager::GetNetDataFileRowCount(TableIndex table_id, DuckLakeSnapshot snapshot) {
 	auto query = GetNetDataFileRowCountSql(table_id, GetInlinedDeletionTableName(table_id, snapshot));
 	auto result = Query(snapshot, query);
+	if (result->HasError()) {
+		result->GetErrorObject().Throw("Failed to get net data file row count from DuckLake: ");
+	}
 	for (auto &row : *result) {
 		return row.GetValue<idx_t>(0);
 	}
@@ -830,11 +833,21 @@ ORDER BY column_order)",
 	                          table_id.index);
 }
 
-string DuckLakeMetadataManager::GetInlinedTableNamesSql(TableIndex table_id) {
+string DuckLakeMetadataManager::GetInlinedTableInfosSql(TableIndex table_id) {
 	return StringUtil::Format(R"(
-SELECT DISTINCT table_name
+SELECT DISTINCT table_name, schema_version
 FROM {METADATA_CATALOG}.ducklake_inlined_data_tables
 WHERE table_id = %d)",
+	                          table_id.index);
+}
+
+string DuckLakeMetadataManager::GetCurrentTableSchemaVersionSql(TableIndex table_id) {
+	return StringUtil::Format(R"(
+SELECT schema_version
+FROM {METADATA_CATALOG}.ducklake_schema_versions
+WHERE table_id = %d AND begin_snapshot <= {SNAPSHOT_ID}
+ORDER BY begin_snapshot DESC
+LIMIT 1)",
 	                          table_id.index);
 }
 
@@ -3819,7 +3832,13 @@ WHERE {SNAPSHOT_ID} >= %s AND ({SNAPSHOT_ID} < %s OR %s IS NULL);
 	                          col_names.end_snapshot);
 }
 
-string DuckLakeMetadataManager::ReadFileColumnStatsForTableSql(TableIndex table_id, bool include_exactness) {
+string DuckLakeMetadataManager::ReadFileColumnStatsForTableSql(TableIndex table_id, bool include_exactness,
+                                                               const set<DataFileIndex> &file_ids) {
+	D_ASSERT(!file_ids.empty());
+	vector<string> file_id_values;
+	for (auto &file_id : file_ids) {
+		file_id_values.push_back(to_string(file_id.index));
+	}
 	string select_list = "data.data_file_id, data.record_count, data.file_size_bytes,\n"
 	                     "       stats.column_id, stats.value_count, stats.null_count, stats.min_value, "
 	                     "stats.max_value,\n"
@@ -3829,13 +3848,15 @@ string DuckLakeMetadataManager::ReadFileColumnStatsForTableSql(TableIndex table_
 	}
 	return StringUtil::Format("\nSELECT " + select_list + R"(
 FROM {METADATA_CATALOG}.ducklake_data_file data
-LEFT JOIN {METADATA_CATALOG}.ducklake_file_column_stats stats ON stats.data_file_id = data.data_file_id
+LEFT JOIN {METADATA_CATALOG}.ducklake_file_column_stats stats
+  ON stats.data_file_id = data.data_file_id AND stats.table_id = data.table_id
 WHERE data.table_id = %d
+  AND data.data_file_id IN (%s)
   AND {SNAPSHOT_ID} >= data.begin_snapshot
   AND ({SNAPSHOT_ID} < data.end_snapshot OR data.end_snapshot IS NULL)
 ORDER BY data.data_file_id;
 )",
-	                          table_id.index);
+	                          table_id.index, StringUtil::Join(file_id_values, ","));
 }
 
 string DuckLakeMetadataManager::GetPathForSchema(SchemaIndex schema_id,

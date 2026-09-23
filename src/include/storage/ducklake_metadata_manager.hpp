@@ -326,7 +326,8 @@ public:
 	static string GetNetDataFileRowCountSql(TableIndex table_id, const string &inlined_deletion_table);
 	static string GetNetInlinedRowCountSql(const string &inlined_table_name, const DuckLakeInlinedColNames &col_names);
 	static string GetTableColumnSchemaSql(TableIndex table_id);
-	static string GetInlinedTableNamesSql(TableIndex table_id);
+	static string GetInlinedTableInfosSql(TableIndex table_id);
+	static string GetCurrentTableSchemaVersionSql(TableIndex table_id);
 	virtual vector<DuckLakeFileForCleanup> GetOldFilesForCleanup(const string &filter);
 	virtual vector<DuckLakeFileForCleanup> GetOrphanFilesForCleanup(const string &filter, const string &separator);
 	virtual vector<DuckLakeFileForCleanup> GetFilesForCleanup(const string &filter, CleanupType type,
@@ -456,11 +457,12 @@ public:
 	virtual unique_ptr<QueryResult> ReadAllInlinedDataForFlush(DuckLakeSnapshot snapshot,
 	                                                           const string &inlined_table_name,
 	                                                           const vector<string> &columns_to_read);
-	//! SQL builders for the stats-refresh queries used by DuckLakeTransactionState::RecomputeGlobalStatsAfterRewrite.
+	//! SQL builders for the file-set stats refresh in DuckLakeTransactionState.
 	//! Caller substitutes `{METADATA_CATALOG}` / `{SNAPSHOT_ID}` and executes via the commit context's executor.
 	static string ReadInlinedDataAggregatesSql(const string &inlined_table_name, const string &select_list,
 	                                           const DuckLakeInlinedColNames &col_names);
-	static string ReadFileColumnStatsForTableSql(TableIndex table_id, bool include_exactness);
+	static string ReadFileColumnStatsForTableSql(TableIndex table_id, bool include_exactness,
+	                                             const set<DataFileIndex> &file_ids);
 	//! Throws on a failed inlined data read, hinting at the migration for legacy named catalogs
 	void CheckInlinedDataReadError(QueryResult &result, const string &inlined_table_name);
 	shared_ptr<DuckLakeInlinedData> TransformInlinedData(QueryResult &result, const vector<LogicalType> &expected_types,
