@@ -8,7 +8,8 @@ require parquet
 
 require quack
 
-require-env DUCKLAKE_CONNECTION
+# Pinned metadata backends still lose this delete after expiry (duckdb/ducklake#1472).
+require-env DUCKLAKE_CONNECTION quack:localhost:19999
 
 test-env DATA_PATH {TEST_DIR}
 
