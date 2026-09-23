@@ -1,4 +1,4 @@
-# name: test/sql/delete/delete_partition_metadata_review_transactions.test
+# name: test/sql/delete/delete_partition_metadata_transactions.test
 # description: Metadata deletes preserve transaction-local files, prepared execution, and write conflicts
 # group: [delete]
 
@@ -11,7 +11,7 @@ test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
 test-env DATA_PATH {TEST_DIR}
 
 statement ok
-ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/metadata_review_transactions', METADATA_CATALOG 'md', DATA_INLINING_ROW_LIMIT 0)
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/metadata_transactions', METADATA_CATALOG 'md', DATA_INLINING_ROW_LIMIT 0)
 
 statement ok
 CREATE TABLE ducklake.local_t(id INTEGER, p INTEGER)

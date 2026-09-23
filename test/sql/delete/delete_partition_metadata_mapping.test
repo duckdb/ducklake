@@ -1,4 +1,4 @@
-# name: test/sql/delete/delete_partition_metadata_review_mapping.test
+# name: test/sql/delete/delete_partition_metadata_mapping.test
 # description: Metadata delete respects field mappings, exact partition values
 # group: [delete]
 
@@ -11,7 +11,7 @@ test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
 test-env DATA_PATH {TEST_DIR}
 
 statement ok
-ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/metadata_review_mapping', DATA_INLINING_ROW_LIMIT 0)
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/metadata_mapping', DATA_INLINING_ROW_LIMIT 0)
 
 # An unused unsafe key does not prevent proving a predicate over an exact identity key.
 statement ok
