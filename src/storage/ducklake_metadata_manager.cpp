@@ -1318,12 +1318,16 @@ static string TableStatsQuery(const string &select_list, bool include_column_sta
 	return query + ";\n";
 }
 
-string DuckLakeMetadataManager::GlobalTableStatsQuery(bool include_exactness, optional_idx table_id) {
+string DuckLakeMetadataManager::GlobalTableStatsQuery(bool include_exactness, optional_idx table_id,
+                                                        bool include_snapshot_id) {
 	string select_list =
 	    "table_id, column_id, record_count, next_row_id, file_size_bytes, contains_null, contains_nan, min_value, "
 	    "max_value, extra_stats";
 	if (include_exactness) {
 		select_list += ", min_is_exact, max_is_exact";
+	}
+	if (include_snapshot_id) {
+		select_list += ", (SELECT MAX(snapshot_id) FROM {METADATA_CATALOG}.ducklake_snapshot) AS latest_snapshot_id";
 	}
 	return TableStatsQuery(select_list, true, table_id);
 }
@@ -1333,10 +1337,21 @@ vector<DuckLakeGlobalStatsInfo> DuckLakeMetadataManager::ParseGlobalTableStats(Q
 }
 
 vector<DuckLakeGlobalStatsInfo> DuckLakeMetadataManager::GetGlobalTableStats(DuckLakeSnapshot snapshot,
-                                                                             TableIndex table_id) {
-	auto result =
-	    Query(snapshot, GlobalTableStatsQuery(transaction.GetCatalog().SupportsV1_1Metadata(), table_id.index));
-	return TransformGlobalStats(*result);
+                                                                             TableIndex table_id,
+                                                                             idx_t &latest_snapshot_id) {
+	auto query = GlobalTableStatsQuery(transaction.GetCatalog().SupportsV1_1Metadata(), table_id.index, true);
+
+	auto result = Query(snapshot, query);
+	if (result->HasError()) {
+		result->GetErrorObject().Throw("Failed to get global stats information from DuckLake: ");
+	}
+	vector<DuckLakeGlobalStatsInfo> global_stats;
+	bool has_exactness = ResultHasColumn(*result, "min_is_exact");
+	for (auto &row : *result) {
+		latest_snapshot_id = row.GetValue<idx_t>(has_exactness ? 12 : 10);
+		TransformGlobalStatsRow(row, global_stats, 0, has_exactness);
+	}
+	return global_stats;
 }
 
 map<TableIndex, idx_t> DuckLakeMetadataManager::GetTableRecordCounts(DuckLakeSnapshot snapshot) {
@@ -6039,7 +6054,7 @@ WHERE NOT EXISTS (
 
 	for (auto &snapshot : snapshots) {
 		for (auto &table_id : stats_table_ids) {
-			catalog.InvalidateTableStatsCache(snapshot.next_file_id, table_id);
+			catalog.InvalidateTableStatsCache(snapshot.id, table_id);
 		}
 	}
 	ClearCache();
