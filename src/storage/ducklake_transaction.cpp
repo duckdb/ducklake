@@ -1539,16 +1539,16 @@ void DuckLakeTransaction::RunCommitLoop(DuckLakeSnapshot transaction_snapshot,
 		}
 		return schema;
 	};
-	context.get_inlined_table_names = [&](TableIndex table_id) {
-		vector<string> names;
+	context.get_inlined_tables = [&](TableIndex table_id) {
 		auto entry = ducklake_catalog.GetEntryById(*this, attempt_snapshot, table_id);
 		if (!entry) {
-			return names;
+			return vector<DuckLakeInlinedTableInfo> {};
 		}
-		for (auto &t : entry->Cast<DuckLakeTableEntry>().GetInlinedDataTables(*this)) {
-			names.push_back(t.table_name);
-		}
-		return names;
+		// Commit accounting subtracts flushed rows after reading the committed inlined tables.
+		return entry->Cast<DuckLakeTableEntry>().GetInlinedDataTables();
+	};
+	context.project_inlined_column = [&](const string &column, const LogicalType &type) {
+		return metadata_manager->CastColumnToTarget(column, type);
 	};
 	context.get_net_data_file_row_count = [&](TableIndex table_id) -> idx_t {
 		auto entry = ducklake_catalog.GetEntryById(*this, attempt_snapshot, table_id);
@@ -1945,6 +1945,7 @@ void DuckLakeTransaction::DropFile(TableIndex table_id, DataFileIndex data_file_
 	auto &stats = state->dropped_file_stats[table_id];
 	stats.row_count += row_count;
 	stats.file_size_bytes += file_size_bytes;
+	stats.data_file_ids.insert(data_file_id);
 }
 
 void DuckLakeTransaction::MarkDeleteAttempted(TableIndex table_id) {
