@@ -159,7 +159,7 @@ public:
 	                      const DuckLakeAddDataFilesData &bind_data)
 	    : transaction(transaction), context(context), table(bind_data.table), allow_missing(bind_data.allow_missing),
 	      ignore_extra_columns(bind_data.ignore_extra_columns), hive_partitioning(bind_data.hive_partitioning),
-	      skipped_fields(bind_data.table.GetSkippedStatsFields()) {
+	      skipped_fields(bind_data.table.GetSkippedStatsFields(transaction)) {
 	}
 
 	vector<DuckLakeDataFile> AddFiles(const vector<string> &globs);
