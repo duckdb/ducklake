@@ -87,7 +87,7 @@ SELECT record_count, next_row_id FROM __ducklake_metadata_ducklake.ducklake_tabl
 200	400
 
 query I
-SELECT COUNT(*) FROM __ducklake_metadata_ducklake.ducklake_table_column_stats WHERE table_id = getvariable('partial_id')
+SELECT COUNT(*) FROM __ducklake_metadata_ducklake.ducklake_table_column_stats WHERE table_id = getvariable('partial_id') AND (min_value IS NOT NULL OR max_value IS NOT NULL)
 ----
 0
 

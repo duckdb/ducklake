@@ -150,7 +150,6 @@ DuckLakeServerSideCommitResult DuckLakeServerSideCommit::Run() {
 	ReadStagedFlushedInlinedTables();
 	ReadStagedCompactions();
 	ReadStagedNameMaps();
-	ReadExistingTableStats();
 
 	// Derive transaction_changes from local_changes the same way DuckLakeTransaction does.
 	for (auto &entry : state->local_changes.Changes()) {
@@ -213,6 +212,7 @@ void DuckLakeServerSideCommit::ReadCommitHeader() {
 	} else {
 		transaction_snapshot.schema_version = static_cast<idx_t>(schema_version);
 	}
+	attempt_snapshot = transaction_snapshot;
 }
 
 void DuckLakeServerSideCommit::ReadStagedDroppedFileEntries() {
@@ -227,15 +227,15 @@ void DuckLakeServerSideCommit::ReadStagedDroppedFileEntries() {
 		dropped_file_ids.push_back(file_id);
 	}
 	if (!dropped_file_ids.empty()) {
-		auto dropped_stats = RunQuery(
-		    StringUtil::Format(
-		        "SELECT table_id, record_count, file_size_bytes FROM %s.ducklake_data_file WHERE data_file_id IN (%s)",
-		        schema_id, JoinIds(dropped_file_ids)),
-		    "read dropped file stats");
+		auto dropped_stats = RunQuery(StringUtil::Format("SELECT table_id, data_file_id, record_count, file_size_bytes "
+		                                                 "FROM %s.ducklake_data_file WHERE data_file_id IN (%s)",
+		                                                 schema_id, JoinIds(dropped_file_ids)),
+		                              "read dropped file stats");
 		for (auto &row : *dropped_stats) {
 			auto &stats = staged_dropped_file_stats[TableIndex(AsIdx(row, 0))];
-			stats.row_count += AsIdx(row, 1);
-			stats.file_size_bytes += AsIdx(row, 2);
+			stats.data_file_ids.insert(DataFileIndex(AsIdx(row, 1)));
+			stats.row_count += AsIdx(row, 2);
+			stats.file_size_bytes += AsIdx(row, 3);
 		}
 	}
 	staged_dropped_files_read = true;
@@ -646,6 +646,7 @@ unique_ptr<DuckLakeTableStats> DuckLakeServerSideCommit::BuildTableStats(const D
 }
 
 void DuckLakeServerSideCommit::ReadExistingTableStats() {
+	existing_table_stats.clear();
 	string sql = StringUtil::Replace(DuckLakeMetadataManager::GlobalTableStatsQuery(supports_v1_1_metadata),
 	                                 "{METADATA_CATALOG}", schema_id);
 	auto result = RunQuery(sql, "read existing table stats");
@@ -684,14 +685,28 @@ unique_ptr<DuckLakeStats> DuckLakeServerSideCommit::BuildStatsMap(vector<DuckLak
 	return result;
 }
 
-vector<string> DuckLakeServerSideCommit::LookupInlinedTableNames(TableIndex table_id) {
-	vector<string> names;
-	auto sql = SubstitutePlaceholders(DuckLakeMetadataManager::GetInlinedTableNamesSql(table_id), transaction_snapshot);
-	auto result = RunQuery(sql, "lookup inlined table names");
+vector<DuckLakeInlinedTableInfo> DuckLakeServerSideCommit::LookupInlinedTables(TableIndex table_id) {
+	vector<DuckLakeInlinedTableInfo> tables;
+	auto sql = SubstitutePlaceholders(DuckLakeMetadataManager::GetInlinedTableInfosSql(table_id), attempt_snapshot);
+	auto result = RunQuery(sql, "lookup inlined tables");
 	for (auto &row : *result) {
-		names.push_back(row.GetValue<string>(0));
+		DuckLakeInlinedTableInfo table;
+		table.table_name = row.GetValue<string>(0);
+		table.schema_version = row.GetValue<idx_t>(1);
+		tables.push_back(std::move(table));
 	}
-	return names;
+	return tables;
+}
+
+string DuckLakeServerSideCommit::ExistingInlinedDeletionTableName(TableIndex table_id) {
+	auto table_name = DuckLakeMetadataManager::InlinedFileDeletionTableName(table_id);
+	auto probe_sql = SubstitutePlaceholders(
+	    StringUtil::Format("SELECT 1 FROM duckdb_tables() WHERE database_name = current_database() AND "
+	                       "schema_name = {METADATA_SCHEMA_NAME_LITERAL} AND table_name = %s",
+	                       DuckLakeUtil::SQLLiteralToString(table_name)),
+	    attempt_snapshot);
+	auto probe = RunQuery(probe_sql, "probe for inlined-deletion table");
+	return probe->RowCount() == 0 ? string() : table_name;
 }
 
 const string &DuckLakeServerSideCommit::ResolveInlinedTableName(TableIndex table_id) {
@@ -752,7 +767,15 @@ DuckLakeCommitContext DuckLakeServerSideCommit::BuildContext(idx_t &committed_sn
 		return unique_ptr_cast<MaterializedQueryResult, QueryResult>(fresh_conn.Query(sql));
 	};
 	ctx.get_snapshot = [this]() {
-		return transaction_snapshot;
+		return attempt_snapshot;
+	};
+	ctx.set_attempt_snapshot = [this](DuckLakeSnapshot snapshot) {
+		attempt_snapshot = snapshot;
+		auto latest_snapshot = ReadLatestSnapshot();
+		if (latest_snapshot.snapshot_id != attempt_snapshot.snapshot_id) {
+			throw TransactionException("Transaction conflict - concurrent DuckLake commit changed table statistics");
+		}
+		ReadExistingTableStats();
 	};
 	ctx.execute_commit_batch = [this](DuckLakeSnapshot snapshot, string &query) -> unique_ptr<QueryResult> {
 		query = SubstitutePlaceholders(query, snapshot);
@@ -796,8 +819,7 @@ DuckLakeCommitContext DuckLakeServerSideCommit::BuildContext(idx_t &committed_sn
 	};
 	ctx.get_table_column_schema = [this](TableIndex table_id) {
 		vector<DuckLakeColumnSchemaEntry> schema;
-		auto sql =
-		    SubstitutePlaceholders(DuckLakeMetadataManager::GetTableColumnSchemaSql(table_id), transaction_snapshot);
+		auto sql = SubstitutePlaceholders(DuckLakeMetadataManager::GetTableColumnSchemaSql(table_id), attempt_snapshot);
 		auto result = RunQuery(sql, "read table column schema");
 		for (auto &row : *result) {
 			// parent_column IS NULL => top-level root; otherwise a nested leaf carrying its own leaf type.
@@ -807,25 +829,13 @@ DuckLakeCommitContext DuckLakeServerSideCommit::BuildContext(idx_t &committed_sn
 		}
 		return schema;
 	};
-	ctx.get_inlined_table_names = [this](TableIndex table_id) {
-		return LookupInlinedTableNames(table_id);
+	ctx.get_inlined_tables = [this](TableIndex table_id) {
+		return LookupInlinedTables(table_id);
 	};
 	ctx.get_net_data_file_row_count = [this](TableIndex table_id) -> idx_t {
-		// The inlined-file-deletion table is deterministically named but created lazily.
-		// Probe its existence via the catalog (an erroring probe would abort the transaction);
-		// if absent, the SQL omits the inlined-deletion subterm.
-		auto inlined_deletion_table = DuckLakeMetadataManager::InlinedFileDeletionTableName(table_id);
-		auto probe_sql = SubstitutePlaceholders(
-		    StringUtil::Format("SELECT 1 FROM duckdb_tables() WHERE database_name = current_database() AND "
-		                       "schema_name = {METADATA_SCHEMA_NAME_LITERAL} AND table_name = %s",
-		                       DuckLakeUtil::SQLLiteralToString(inlined_deletion_table)),
-		    transaction_snapshot);
-		auto probe = fresh_conn.Query(probe_sql);
-		if (!probe || probe->HasError() || probe->RowCount() == 0) {
-			inlined_deletion_table.clear();
-		}
+		auto inlined_deletion_table = ExistingInlinedDeletionTableName(table_id);
 		auto sql = SubstitutePlaceholders(
-		    DuckLakeMetadataManager::GetNetDataFileRowCountSql(table_id, inlined_deletion_table), transaction_snapshot);
+		    DuckLakeMetadataManager::GetNetDataFileRowCountSql(table_id, inlined_deletion_table), attempt_snapshot);
 		auto result = RunQuery(sql, "read net data file row count");
 		for (auto &row : *result) {
 			return row.GetValue<idx_t>(0);
@@ -835,9 +845,10 @@ DuckLakeCommitContext DuckLakeServerSideCommit::BuildContext(idx_t &committed_sn
 	auto inlined_col_names = ctx.InlinedColNames();
 	ctx.get_net_inlined_row_count = [this, inlined_col_names](TableIndex table_id) -> idx_t {
 		idx_t total = 0;
-		for (auto &name : LookupInlinedTableNames(table_id)) {
+		for (auto &table : LookupInlinedTables(table_id)) {
 			auto sql = SubstitutePlaceholders(
-			    DuckLakeMetadataManager::GetNetInlinedRowCountSql(name, inlined_col_names), transaction_snapshot);
+			    DuckLakeMetadataManager::GetNetInlinedRowCountSql(table.table_name, inlined_col_names),
+			    attempt_snapshot);
 			auto result = RunQuery(sql, "read net inlined row count");
 			for (auto &row : *result) {
 				total += row.GetValue<idx_t>(0);
