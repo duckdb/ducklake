@@ -478,7 +478,7 @@ static LogicalType ParseMacroParameterType(ClientContext &context, const string 
 	return result;
 }
 
-static unique_ptr<ParsedExpression> ParseMacroParameterDefault(ClientContext &context,
+static unique_ptr<ParsedExpression> ParseMacroParameterDefault(ClientContext &context, const string &macro_name,
                                                                const DuckLakeMacroParameters &param) {
 	if (param.default_value_type == "expression") {
 		auto expr_list = Parser::ParseExpressionList(param.default_value.GetValue<string>());
@@ -490,6 +490,14 @@ static unique_ptr<ParsedExpression> ParseMacroParameterDefault(ClientContext &co
 	auto expr_type = DuckLakeTypes::FromString(param.default_value_type);
 	if (expr_type.id() == LogicalTypeId::UNKNOWN) {
 		return nullptr;
+	}
+	if (IsUnresolvedNestedType(expr_type)) {
+		throw InvalidInputException(
+		    "Macro \"%s\" has parameter \"%s\" with a default stored as type \"%s\", which carries no field "
+		    "information - this macro was written by a DuckLake version that could not store nested defaults. Set "
+		    "ducklake_macro_parameters.default_value in the metadata catalog to the SQL expression of the default "
+		    "(for example ['x', 'y']) and default_value_type to 'expression' to repair it",
+		    macro_name, param.parameter_name, param.default_value_type);
 	}
 	// older catalogs store the default as a literal alongside its DuckLake type
 	auto casted_value =
@@ -535,7 +543,7 @@ unique_ptr<CreateMacroInfo> CreateMacroInfoFromDucklake(ClientContext &context, 
 		for (auto &param : impl.parameters) {
 			macro_function->parameters.push_back(make_uniq<ColumnRefExpression>(Identifier(param.parameter_name)));
 			macro_function->types.push_back(ParseMacroParameterType(context, macro.macro_name, param));
-			auto default_expr = ParseMacroParameterDefault(context, param);
+			auto default_expr = ParseMacroParameterDefault(context, macro.macro_name, param);
 			if (default_expr) {
 				macro_function->default_parameters.insert(Identifier(param.parameter_name), std::move(default_expr));
 			}
