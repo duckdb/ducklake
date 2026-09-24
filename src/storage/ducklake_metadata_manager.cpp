@@ -3098,6 +3098,7 @@ string DuckLakeMetadataManager::GetInlinedTableQueries(DuckLakeSnapshot commit_s
 		inlined_table_queries += "\n";
 	}
 	inlined_table_queries += GetInlinedTableQuery(table, inlined_table_name);
+	insert_inlined_table_name_cache[table.id.index] = inlined_table_name;
 	return inlined_table_name;
 }
 
@@ -3328,19 +3329,18 @@ string DuckLakeMetadataManager::WriteNewInlinedData(DuckLakeSnapshot &commit_sna
 
 	for (auto &entry : new_data) {
 		string inlined_table_name;
+		optional_ptr<const DuckLakeTableInfo> new_inlined_table;
 		for (auto &inlined_table : new_inlined_data_tables_result) {
 			if (inlined_table.id == entry.table_id) {
-				inlined_table_name = InlinedTableNameFor(inlined_table.id.index, commit_snapshot.schema_version);
+				new_inlined_table = &inlined_table;
+				break;
 			}
 		}
-		if (inlined_table_name.empty()) {
-			// get the latest table to insert into
-			auto it = insert_inlined_table_name_cache.find(entry.table_id.index);
-			if (it != insert_inlined_table_name_cache.end()) {
-				inlined_table_name = it->second;
-			}
+		auto it = insert_inlined_table_name_cache.find(entry.table_id.index);
+		if (it != insert_inlined_table_name_cache.end()) {
+			inlined_table_name = it->second;
 		}
-		if (inlined_table_name.empty()) {
+		if (inlined_table_name.empty() && !new_inlined_table) {
 			auto query = LatestInlinedTableQuery(entry.table_id.index) + ";";
 			auto result = Query(commit_snapshot, query);
 			for (auto &row : *result) {
@@ -3349,33 +3349,38 @@ string DuckLakeMetadataManager::WriteNewInlinedData(DuckLakeSnapshot &commit_sna
 			}
 		}
 
-		DuckLakeTableInfo table_info;
 		if (inlined_table_name.empty()) {
 			// no inlined table yet - create a new one
-			// first fetch the table info
-			auto current_snapshot = transaction.GetSnapshot();
-			auto table_entry = transaction.GetCatalog().GetEntryById(transaction, current_snapshot, entry.table_id);
-			if (table_entry) {
-				auto &table = table_entry->Cast<DuckLakeTableEntry>();
-				table_info = table.GetTableInfo();
-				table_info.columns = table.GetTableColumns();
+			DuckLakeTableInfo table_info;
+			if (new_inlined_table) {
+				table_info = *new_inlined_table;
 			} else {
-				// We try from our added tables
-				bool found = false;
-				for (auto &new_table : new_tables) {
-					if (new_table.id == entry.table_id) {
-						table_info = new_table;
-						found = true;
+				auto current_snapshot = transaction.GetSnapshot();
+				auto table_entry = transaction.GetCatalog().GetEntryById(transaction, current_snapshot, entry.table_id);
+				if (table_entry) {
+					auto &table = table_entry->Cast<DuckLakeTableEntry>();
+					table_info = table.GetTableInfo();
+					table_info.columns = table.GetTableColumns();
+				} else {
+					// We try from our added tables
+					bool found = false;
+					for (auto &new_table : new_tables) {
+						if (new_table.id == entry.table_id) {
+							table_info = new_table;
+							found = true;
+						}
 					}
-				}
-				if (!found) {
-					throw InternalException("Writing inlined data for a table that cannot be found in the catalog");
+					if (!found) {
+						throw InternalException("Writing inlined data for a table that cannot be found in the catalog");
+					}
 				}
 			}
 			// write the new inlined table
 			string inlined_tables;
 			string inlined_table_queries;
-			commit_snapshot.schema_version++;
+			if (!new_inlined_table) {
+				commit_snapshot.schema_version++;
+			}
 			inlined_table_name =
 			    GetInlinedTableQueries(commit_snapshot, table_info, inlined_tables, inlined_table_queries);
 			batch_query += "INSERT INTO {METADATA_CATALOG}.ducklake_inlined_data_tables VALUES " + inlined_tables + ";";

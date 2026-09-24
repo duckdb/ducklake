@@ -1,0 +1,75 @@
+# name: test/sql/data_inlining/set_inlining_limit_before_commit.test
+# description: Disabling inlining before commit preserves pending inlined rows
+# group: [data_inlining]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/set_inlining_limit_before_commit', METADATA_CATALOG 'ducklake_meta')
+
+statement ok
+SET ducklake_default_data_inlining_row_limit = 10;
+
+statement ok
+BEGIN;
+
+statement ok
+CREATE TABLE ducklake.t(i INTEGER);
+
+statement ok
+CREATE TABLE ducklake.empty_table(i INTEGER);
+
+statement ok
+INSERT INTO ducklake.t VALUES (42);
+
+statement ok
+SET ducklake_default_data_inlining_row_limit = 0;
+
+statement ok
+COMMIT;
+
+query I
+SELECT * FROM ducklake.t
+----
+42
+
+query I
+SELECT COUNT(*) FROM ducklake_meta.ducklake_inlined_data_tables
+----
+1
+
+# Altered tables need backing storage with the latest columns.
+statement ok
+SET ducklake_default_data_inlining_row_limit = 10;
+
+statement ok
+BEGIN;
+
+statement ok
+ALTER TABLE ducklake.t ADD COLUMN j VARCHAR DEFAULT 'old';
+
+statement ok
+INSERT INTO ducklake.t VALUES (43, 'new');
+
+statement ok
+SET ducklake_default_data_inlining_row_limit = 0;
+
+statement ok
+COMMIT;
+
+query II rowsort
+SELECT * FROM ducklake.t
+----
+42	old
+43	new
+
+query I
+SELECT COUNT(*) FROM ducklake_meta.ducklake_inlined_data_tables
+----
+2
