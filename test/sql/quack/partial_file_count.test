@@ -13,6 +13,15 @@ require quack
 test-env DATA_PATH {TEST_DIR}
 
 statement ok
+SET profiling_renderer_settings = MAP {'operator_casing': 'upper'}
+
+statement ok con1
+SET profiling_renderer_settings = MAP {'operator_casing': 'upper'}
+
+statement ok con2
+SET profiling_renderer_settings = MAP {'operator_casing': 'upper'}
+
+statement ok
 ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS x (DATA_PATH '{DATA_PATH}/quack_partial_file_count', DATA_INLINING_ROW_LIMIT 2)
 
 statement ok
@@ -38,6 +47,16 @@ SELECT id FROM x.data_t
 statement ok
 INSERT INTO x.data_t VALUES (2,1)
 
+# This snapshot equals the merged file's partial_max.
+statement ok con2
+BEGIN
+
+query I con2
+SELECT id FROM x.data_t ORDER BY id
+----
+1
+2
+
 statement ok
 CALL ducklake_merge_adjacent_files('x')
 
@@ -45,6 +64,25 @@ query I con1
 SELECT count(*) FROM x.data_t
 ----
 1
+
+query II con1
+EXPLAIN ANALYZE SELECT count(*) FROM x.data_t
+----
+analyzed_plan	<REGEX>:.*TABLE_SCAN.*
+
+query I con2
+SELECT count(*) FROM x.data_t
+----
+2
+
+# Fully visible merged files still allow metadata-only counts.
+query II con2
+EXPLAIN ANALYZE SELECT count(*) FROM x.data_t
+----
+analyzed_plan	<!REGEX>:.*TABLE_SCAN.*
+
+statement ok con2
+ROLLBACK
 
 statement ok con1
 ROLLBACK
@@ -82,5 +120,34 @@ SELECT count(*) FROM x.del_t
 ----
 3
 
+query II con1
+EXPLAIN ANALYZE SELECT count(*) FROM x.del_t
+----
+analyzed_plan	<REGEX>:.*TABLE_SCAN.*
+
 statement ok con1
 ROLLBACK
+
+query I
+SELECT count(*) FROM x.del_t
+----
+2
+
+query II
+EXPLAIN ANALYZE SELECT count(*) FROM x.del_t
+----
+analyzed_plan	<!REGEX>:.*TABLE_SCAN.*
+
+# Deletes belonging to files that are no longer visible do not affect the count.
+statement ok
+TRUNCATE x.del_t
+
+query I
+SELECT count(*) FROM x.del_t
+----
+0
+
+query II
+EXPLAIN ANALYZE SELECT count(*) FROM x.del_t
+----
+analyzed_plan	<!REGEX>:.*TABLE_SCAN.*

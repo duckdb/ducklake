@@ -197,8 +197,8 @@ vector<PartitionStatistics> DuckLakeGetPartitionStats(ClientContext &context, Ge
 		return result;
 	}
 
-	auto file_count = transaction->GetMetadataManager().GetNetDataFileRowCountForStats(table.GetTableId(),
-	                                                                                   transaction->GetSnapshot());
+	auto file_count =
+	    transaction->GetMetadataManager().GetNetDataFileRowCountForStats(table_id, transaction->GetSnapshot());
 	if (!file_count.IsValid()) {
 		return result;
 	}

@@ -323,7 +323,9 @@ public:
 	optional_idx GetNetDataFileRowCountForStats(TableIndex table_id, DuckLakeSnapshot snapshot);
 	virtual idx_t GetNetInlinedRowCount(const string &inlined_table_name, DuckLakeSnapshot snapshot);
 	//! SQL builders for stats-refresh metadata lookups; caller substitutes placeholders + executes.
-	static string GetNetDataFileRowCountSql(TableIndex table_id, const string &inlined_deletion_table);
+	//! With require_exact, the count is NULL if any visible file is only partially visible to the snapshot.
+	static string GetNetDataFileRowCountSql(TableIndex table_id, const string &inlined_deletion_table,
+	                                        bool require_exact = false);
 	static string GetNetInlinedRowCountSql(const string &inlined_table_name, const DuckLakeInlinedColNames &col_names);
 	static string GetTableColumnSchemaSql(TableIndex table_id);
 	static string GetInlinedTableNamesSql(TableIndex table_id);
