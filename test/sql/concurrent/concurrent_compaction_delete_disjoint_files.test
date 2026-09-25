@@ -1,0 +1,248 @@
+# name: test/sql/concurrent/concurrent_compaction_delete_disjoint_files.test
+# description: compaction only conflicts with a concurrent delete that touches one of the compacted files
+# group: [concurrent]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/concurrent_compaction_delete', METADATA_CATALOG 'ducklake_meta', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+SET immediate_transaction_mode=true
+
+statement ok
+CREATE TABLE ducklake.t(i INTEGER, s VARCHAR)
+
+# two small files and two large files, registered directly so the sizes are deterministic
+statement ok
+COPY (SELECT i::INTEGER AS i, 'x' AS s FROM range(5) t(i)) TO '{DATA_PATH}/cd_small1.parquet'
+
+statement ok
+COPY (SELECT i::INTEGER AS i, 'y' AS s FROM range(5) t(i)) TO '{DATA_PATH}/cd_small2.parquet'
+
+statement ok
+COPY (SELECT i::INTEGER AS i, 'a' AS s FROM range(20000) t(i)) TO '{DATA_PATH}/cd_big1.parquet'
+
+statement ok
+COPY (SELECT i::INTEGER AS i, 'b' AS s FROM range(20000) t(i)) TO '{DATA_PATH}/cd_big2.parquet'
+
+statement ok
+CALL ducklake_add_data_files('ducklake', 't', '{DATA_PATH}/cd_small1.parquet')
+
+statement ok
+CALL ducklake_add_data_files('ducklake', 't', '{DATA_PATH}/cd_small2.parquet')
+
+statement ok
+CALL ducklake_add_data_files('ducklake', 't', '{DATA_PATH}/cd_big1.parquet')
+
+statement ok
+CALL ducklake_add_data_files('ducklake', 't', '{DATA_PATH}/cd_big2.parquet')
+
+query II
+SELECT count(*) FILTER (WHERE file_size_bytes < 10000), count(*) FILTER (WHERE file_size_bytes >= 10000) FROM ducklake_meta.ducklake_data_file WHERE end_snapshot IS NULL
+----
+2	2
+
+# merge of the small files commits before a delete from big1: no conflict
+statement ok con1
+BEGIN
+
+statement ok con2
+BEGIN
+
+statement ok con1
+CALL ducklake_merge_adjacent_files('ducklake', 't', max_file_size => 10000)
+
+statement ok con2
+DELETE FROM ducklake.t WHERE s = 'a' AND i < 100
+
+statement ok con1
+COMMIT
+
+statement ok con2
+COMMIT
+
+query I
+SELECT count(*) FROM ducklake_meta.ducklake_data_file WHERE end_snapshot IS NULL
+----
+3
+
+query I
+SELECT count(*) FROM ducklake.t
+----
+39910
+
+# delete from big2 commits before a merge of the small files: no conflict
+statement ok
+CALL ducklake_add_data_files('ducklake', 't', '{DATA_PATH}/cd_small1.parquet')
+
+statement ok
+CALL ducklake_add_data_files('ducklake', 't', '{DATA_PATH}/cd_small2.parquet')
+
+statement ok con1
+BEGIN
+
+statement ok con2
+BEGIN
+
+statement ok con1
+DELETE FROM ducklake.t WHERE s = 'b' AND i < 100
+
+statement ok con2
+CALL ducklake_merge_adjacent_files('ducklake', 't', max_file_size => 10000)
+
+statement ok con1
+COMMIT
+
+statement ok con2
+COMMIT
+
+query I
+SELECT count(*) FROM ducklake_meta.ducklake_data_file WHERE end_snapshot IS NULL
+----
+3
+
+query I
+SELECT count(*) FROM ducklake.t
+----
+39820
+
+# delete from the small file commits before a rewrite of big1: no conflict
+statement ok
+DELETE FROM ducklake.t WHERE s = 'a' AND i < 18000
+
+statement ok con1
+BEGIN
+
+statement ok con2
+BEGIN
+
+statement ok con1
+CALL ducklake_rewrite_data_files('ducklake', 't', delete_threshold => 0.5)
+
+statement ok con2
+DELETE FROM ducklake.t WHERE s = 'x' AND i < 2
+
+statement ok con2
+COMMIT
+
+statement ok con1
+COMMIT
+
+query I
+SELECT count(*) FROM ducklake.t
+----
+21916
+
+query I
+SELECT count(*) FROM ducklake.t WHERE s = 'a'
+----
+2000
+
+# a delete that hits a file being merged must still conflict, whichever side commits first
+statement ok
+CALL ducklake_add_data_files('ducklake', 't', '{DATA_PATH}/cd_small1.parquet')
+
+statement ok
+CALL ducklake_add_data_files('ducklake', 't', '{DATA_PATH}/cd_small2.parquet')
+
+statement ok con1
+BEGIN
+
+statement ok con2
+BEGIN
+
+statement ok con1
+CALL ducklake_merge_adjacent_files('ducklake', 't', max_file_size => 10000)
+
+statement ok con2
+DELETE FROM ducklake.t WHERE s = 'y' AND i = 4
+
+statement ok con1
+COMMIT
+
+statement error con2
+COMMIT
+----
+Transaction conflict
+
+query I
+SELECT count(*) FROM ducklake.t WHERE s = 'y'
+----
+15
+
+statement ok
+CALL ducklake_add_data_files('ducklake', 't', '{DATA_PATH}/cd_small1.parquet')
+
+statement ok
+CALL ducklake_add_data_files('ducklake', 't', '{DATA_PATH}/cd_small2.parquet')
+
+statement ok con1
+BEGIN
+
+statement ok con2
+BEGIN
+
+statement ok con1
+DELETE FROM ducklake.t WHERE s = 'y' AND i = 4
+
+statement ok con2
+CALL ducklake_merge_adjacent_files('ducklake', 't', max_file_size => 10000)
+
+statement ok con1
+COMMIT
+
+statement error con2
+COMMIT
+----
+Transaction conflict
+
+# the committed delete was not lost to the rejected merge
+query I
+SELECT count(*) FROM ducklake.t WHERE s = 'y' AND i = 4
+----
+0
+
+query I
+SELECT count(*) FROM ducklake.t
+----
+21932
+
+# rewrite of big2 commits before a delete from the rewritten big1: no conflict
+statement ok
+DELETE FROM ducklake.t WHERE s = 'b' AND i < 18000
+
+statement ok con1
+BEGIN
+
+statement ok con2
+BEGIN
+
+statement ok con1
+CALL ducklake_rewrite_data_files('ducklake', 't', delete_threshold => 0.5)
+
+statement ok con2
+DELETE FROM ducklake.t WHERE s = 'a' AND i = 19999
+
+statement ok con1
+COMMIT
+
+statement ok con2
+COMMIT
+
+query I
+SELECT count(*) FROM ducklake.t
+----
+4031
+
+query II
+SELECT s, count(*) FROM ducklake.t WHERE s IN ('a', 'b') GROUP BY s ORDER BY s
+----
+a	1999
+b	2000

@@ -220,8 +220,6 @@ void DuckLakeTransactionState::CheckForConflicts(const TransactionChangeInformat
 	for (auto &table_id : changes.tables_deleted_from) {
 		ConflictCheck(table_id, other_changes.dropped_tables, "delete from table", "dropped it");
 		ConflictCheck(table_id, other_changes.altered_tables, "delete from table", "altered it");
-		ConflictCheck(table_id, other_changes.tables_merge_adjacent, "delete from table", "compacted it");
-		ConflictCheck(table_id, other_changes.tables_rewrite_delete, "delete from table", "compacted it");
 		ConflictCheck(table_id, other_changes.inserted_tables, "delete from table", "inserted into it");
 		ConflictCheck(table_id, other_changes.tables_inserted_inlined, "delete from table", "inserted into it");
 	}
@@ -232,26 +230,39 @@ void DuckLakeTransactionState::CheckForConflicts(const TransactionChangeInformat
 	}
 	if (!changes.tables_deleted_from.empty()) {
 		bool check_for_matches = false;
+		bool other_compacted = false;
 		for (auto &table_id : changes.tables_deleted_from) {
 			if (other_changes.tables_deleted_from.find(table_id) != other_changes.tables_deleted_from.end()) {
 				check_for_matches = true;
-				break;
+			}
+			if (other_changes.tables_merge_adjacent.find(table_id) != other_changes.tables_merge_adjacent.end() ||
+			    other_changes.tables_rewrite_delete.find(table_id) != other_changes.tables_rewrite_delete.end()) {
+				check_for_matches = true;
+				other_compacted = true;
 			}
 		}
 		if (check_for_matches) {
-			// If we have deletes on the tables, check for files being deleted
-			const auto deleted_files = GetFilesDeletedOrDroppedAfterSnapshot(executor);
+			// If we have deletes on the tables, check for files being deleted or compacted away
+			set<DataFileIndex> target_files;
 			for (auto &entry : local_changes.Changes()) {
 				auto &table_changes = entry.GetTableChanges();
 				for (auto &file_entry : table_changes.new_delete_files) {
 					for (auto &file : file_entry.second) {
-						ConflictCheck(file.data_file_id, deleted_files.deleted_from_files, "delete from file",
-						              "deleted from it");
+						target_files.insert(file.data_file_id);
 					}
 				}
 			}
 			for (auto &file : dropped_files) {
-				ConflictCheck(file.second, deleted_files.deleted_from_files, "delete from file", "deleted from it");
+				target_files.insert(file.second);
+			}
+			auto deleted_files = GetFilesDeletedOrDroppedAfterSnapshot(executor).deleted_from_files;
+			if (other_compacted) {
+				// merge_adjacent removes source files from ducklake_data_file instead of setting end_snapshot
+				auto missing_files = GetMissingDataFiles(executor, target_files);
+				deleted_files.insert(missing_files.begin(), missing_files.end());
+			}
+			for (auto &file : target_files) {
+				ConflictCheck(file, deleted_files, "delete from file", "compacted or deleted from it");
 			}
 		}
 	}
@@ -271,20 +282,19 @@ void DuckLakeTransactionState::CheckForConflicts(const TransactionChangeInformat
 	bool compaction_overlap = false;
 	auto compaction_overlaps = [&](TableIndex table_id) {
 		return other_changes.tables_merge_adjacent.find(table_id) != other_changes.tables_merge_adjacent.end() ||
-		       other_changes.tables_rewrite_delete.find(table_id) != other_changes.tables_rewrite_delete.end();
+		       other_changes.tables_rewrite_delete.find(table_id) != other_changes.tables_rewrite_delete.end() ||
+		       other_changes.tables_deleted_from.find(table_id) != other_changes.tables_deleted_from.end();
 	};
 	for (auto &table_id : changes.tables_merge_adjacent) {
 		ConflictCheck(table_id, other_changes.dropped_tables, "compact table", "dropped it");
-		ConflictCheck(table_id, other_changes.tables_deleted_from, "compact table", "deleted from it");
 		compaction_overlap |= compaction_overlaps(table_id);
 	}
 	for (auto &table_id : changes.tables_rewrite_delete) {
 		ConflictCheck(table_id, other_changes.dropped_tables, "compact table", "dropped it");
-		ConflictCheck(table_id, other_changes.tables_deleted_from, "compact table", "deleted from it");
 		compaction_overlap |= compaction_overlaps(table_id);
 	}
 	if (compaction_overlap) {
-		// only conflict if the other compaction retired one of the files we are retiring
+		// only conflict if the other transaction compacted or deleted from one of the files we are retiring
 		set<DataFileIndex> source_files;
 		for (auto &entry : local_changes.Changes()) {
 			auto &table_changes = entry.GetTableChanges();
