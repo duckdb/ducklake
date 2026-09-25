@@ -1035,7 +1035,8 @@ void DuckLakeTransactionState::RecomputeGlobalStatsAfterRewrite(string &batch_qu
 
 static idx_t SubtractDroppedFileStat(idx_t value, idx_t decrement) {
 	if (decrement > value) {
-		throw InternalException("Dropped DuckLake file stats exceed current table stats");
+		throw TransactionException("Transaction conflict - attempting to drop file stats"
+		                           " - but another transaction has already dropped this data");
 	}
 	return value - decrement;
 }
@@ -1964,13 +1965,15 @@ WHERE idt.schema_version < (
 	}
 }
 
-SnapshotAndStats DuckLakeTransactionState::CheckForConflicts(
-    DuckLakeSnapshot transaction_snapshot, const TransactionChangeInformation &changes,
-    const std::function<unique_ptr<QueryResult>(string)> &executor, bool supports_v1_1_metadata) {
+SnapshotAndStats
+DuckLakeTransactionState::CheckForConflicts(DuckLakeSnapshot transaction_snapshot,
+                                            const TransactionChangeInformation &changes,
+                                            const std::function<unique_ptr<QueryResult>(string)> &executor,
+                                            const std::function<string()> &snapshot_and_stats_query) {
 	SnapshotAndStats snapshot_and_stats;
 	// get all changes made to the system after the current snapshot was started
 	auto changes_made =
-	    DuckLakeMetadataManager::GetSnapshotAndStatsAndChanges(snapshot_and_stats, executor, supports_v1_1_metadata);
+	    DuckLakeMetadataManager::GetSnapshotAndStatsAndChanges(snapshot_and_stats, executor, snapshot_and_stats_query);
 	// parse changes made by other transactions
 	auto other_changes = SnapshotChangeInformation::ParseChangesMade(changes_made.changes_made);
 
@@ -1999,7 +2002,7 @@ void DuckLakeTransactionState::Commit(DuckLakeSnapshot transaction_snapshot,
 				// retry - but first check for conflicts
 				commit_stats_snapshot =
 				    CheckForConflicts(transaction_snapshot, attempt_changes, context.conflict_query_executor,
-				                      context.supports_v1_1_metadata);
+				                      context.snapshot_and_stats_query);
 				stats = &commit_stats_snapshot.stats;
 			} else {
 				commit_stats_snapshot.snapshot = context.get_snapshot();
