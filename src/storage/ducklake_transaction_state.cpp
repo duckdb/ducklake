@@ -284,14 +284,7 @@ void DuckLakeTransactionState::CheckForConflicts(const TransactionChangeInformat
 		compaction_overlap |= compaction_overlaps(table_id);
 	}
 	if (compaction_overlap) {
-		// Another transaction compacted a table that we are also compacting. That only conflicts if it
-		// retired one of the files we are retiring - two compactions over disjoint file sets (e.g. split by
-		// file size or by partition) are independent. Escalate to file granularity, mirroring the check
-		// already performed for deletes above.
-		//
-		// A rewrite of deletes sets end_snapshot on its source files, which GetFilesDeletedOrDroppedAfterSnapshot
-		// reports. Merging adjacent files instead removes the source rows from ducklake_data_file entirely
-		// (see WriteMergeAdjacent), so we additionally verify that every file we are retiring still exists.
+		// only conflict if the other compaction retired one of the files we are retiring
 		set<DataFileIndex> source_files;
 		for (auto &entry : local_changes.Changes()) {
 			auto &table_changes = entry.GetTableChanges();
@@ -302,6 +295,7 @@ void DuckLakeTransactionState::CheckForConflicts(const TransactionChangeInformat
 			}
 		}
 		auto retired_files = GetFilesDeletedOrDroppedAfterSnapshot(executor).deleted_from_files;
+		// merge_adjacent removes source files from ducklake_data_file instead of setting end_snapshot
 		auto missing_files = GetMissingDataFiles(executor, source_files);
 		retired_files.insert(missing_files.begin(), missing_files.end());
 		for (auto &source_file : source_files) {

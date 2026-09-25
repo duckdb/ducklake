@@ -1,0 +1,161 @@
+# name: test/sql/concurrent/concurrent_rewrite_disjoint_files.test
+# description: concurrent ducklake_rewrite_data_files only conflicts with compactions that retire the same files
+# group: [concurrent]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/concurrent_rewrite_disjoint', METADATA_CATALOG 'ducklake_meta', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+SET immediate_transaction_mode=true
+
+statement ok
+CREATE TABLE ducklake.t(i INTEGER, s VARCHAR)
+
+# two small files and two large files, registered directly so the sizes are deterministic
+statement ok
+COPY (SELECT i::INTEGER AS i, 'x' AS s FROM range(5) t(i)) TO '{DATA_PATH}/rw_small1.parquet'
+
+statement ok
+COPY (SELECT i::INTEGER AS i, 'y' AS s FROM range(5) t(i)) TO '{DATA_PATH}/rw_small2.parquet'
+
+statement ok
+COPY (SELECT i::INTEGER AS i, 'a' AS s FROM range(20000) t(i)) TO '{DATA_PATH}/rw_big1.parquet'
+
+statement ok
+COPY (SELECT i::INTEGER AS i, 'b' AS s FROM range(20000) t(i)) TO '{DATA_PATH}/rw_big2.parquet'
+
+statement ok
+CALL ducklake_add_data_files('ducklake', 't', '{DATA_PATH}/rw_small1.parquet')
+
+statement ok
+CALL ducklake_add_data_files('ducklake', 't', '{DATA_PATH}/rw_small2.parquet')
+
+statement ok
+CALL ducklake_add_data_files('ducklake', 't', '{DATA_PATH}/rw_big1.parquet')
+
+statement ok
+CALL ducklake_add_data_files('ducklake', 't', '{DATA_PATH}/rw_big2.parquet')
+
+query II
+SELECT count(*) FILTER (WHERE file_size_bytes < 10000), count(*) FILTER (WHERE file_size_bytes >= 10000) FROM ducklake_meta.ducklake_data_file WHERE end_snapshot IS NULL
+----
+2	2
+
+# delete 90% of big1 so that only big1 crosses the rewrite threshold
+statement ok
+DELETE FROM ducklake.t WHERE s = 'a' AND i < 18000
+
+query I
+SELECT count(*) FROM ducklake.t
+----
+22010
+
+# con1 rewrites big1, con2 merges the two small files - disjoint file sets
+statement ok con1
+BEGIN
+
+statement ok con2
+BEGIN
+
+statement ok con1
+CALL ducklake_rewrite_data_files('ducklake', 't', delete_threshold => 0.5)
+
+statement ok con2
+CALL ducklake_merge_adjacent_files('ducklake', 't', max_file_size => 10000)
+
+statement ok con1
+COMMIT
+
+statement ok con2
+COMMIT
+
+# rewritten big1, merged small file and untouched big2
+query I
+SELECT count(*) FROM ducklake_meta.ducklake_data_file WHERE end_snapshot IS NULL
+----
+3
+
+query I
+SELECT count(*) FROM ducklake_meta.ducklake_delete_file WHERE end_snapshot IS NULL
+----
+0
+
+query I
+SELECT count(*) FROM ducklake.t
+----
+22010
+
+# overlapping rewrites must still conflict
+statement ok
+DELETE FROM ducklake.t WHERE s = 'b' AND i < 18000
+
+statement ok con3
+BEGIN
+
+statement ok con4
+BEGIN
+
+statement ok con3
+CALL ducklake_rewrite_data_files('ducklake', 't', delete_threshold => 0.5)
+
+statement ok con4
+CALL ducklake_rewrite_data_files('ducklake', 't', delete_threshold => 0.5)
+
+statement ok con3
+COMMIT
+
+statement error con4
+COMMIT
+----
+Transaction conflict
+
+query I
+SELECT count(*) FROM ducklake_meta.ducklake_data_file WHERE end_snapshot IS NULL
+----
+3
+
+query I
+SELECT count(*) FROM ducklake.t
+----
+4010
+
+# merge_adjacent skips files with deletes, so a concurrent rewrite and merge never retire the same file
+statement ok
+DELETE FROM ducklake.t WHERE s IN ('x', 'y') AND i < 4
+
+statement ok con5
+BEGIN
+
+statement ok con6
+BEGIN
+
+statement ok con5
+CALL ducklake_rewrite_data_files('ducklake', 't', delete_threshold => 0.5)
+
+statement ok con6
+CALL ducklake_merge_adjacent_files('ducklake', 't')
+
+statement ok con5
+COMMIT
+
+statement ok con6
+COMMIT
+
+# rewritten small file plus the merge of the two large files
+query I
+SELECT count(*) FROM ducklake_meta.ducklake_data_file WHERE end_snapshot IS NULL
+----
+2
+
+query I
+SELECT count(*) FROM ducklake.t
+----
+4002

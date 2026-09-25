@@ -19,9 +19,7 @@ SET immediate_transaction_mode=true
 statement ok
 CREATE TABLE ducklake.t(i INTEGER, s VARCHAR)
 
-# Two clearly "small" files and two clearly "large" files. Writing them ourselves and registering
-# them with ducklake_add_data_files keeps the sizes deterministic, so the size bands below cannot
-# straddle a file regardless of how parquet encodes the data.
+# two small files and two large files, registered directly so the sizes are deterministic
 statement ok
 COPY (SELECT i::INTEGER AS i, 'x' AS s FROM range(5) t(i)) TO '{DATA_PATH}/small1.parquet'
 
@@ -73,9 +71,7 @@ CALL ducklake_merge_adjacent_files('ducklake', 't', min_file_size => 10000, max_
 statement ok con1
 COMMIT
 
-# Before the file-level escalation this failed with
-#   "Transaction conflict - attempting to compact table with index N - but another transaction has compacted it"
-# even though the two transactions retire completely different files.
+# used to fail with a table-level "compacted it" conflict despite disjoint files
 statement ok con2
 COMMIT
 
@@ -117,8 +113,7 @@ COMMIT
 ----
 Transaction conflict
 
-# the rejected compaction must not have produced a duplicate of the merged rows:
-# 2 files remain (the large merge and con3's small merge) holding 40010 + 10 re-added rows
+# no duplicated rows: the large merge and con3's small merge hold 40010 + 10 re-added rows
 query I
 SELECT count(*) FROM ducklake_meta.ducklake_data_file WHERE end_snapshot IS NULL
 ----
