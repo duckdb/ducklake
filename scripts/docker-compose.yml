@@ -1,44 +1,38 @@
-version: "3.8"
-
 services:
-  minio:
-    image: quay.io/minio/minio
-    container_name: minio
+  seaweedfs:
+    image: chrislusf/seaweedfs:4.47
+    container_name: seaweedfs
     environment:
-      - MINIO_ROOT_USER=admin
-      - MINIO_ROOT_PASSWORD=password
+      - AWS_ACCESS_KEY_ID=admin
+      - AWS_SECRET_ACCESS_KEY=password
       - TZ=UTC   # Force UTC timezone
     networks:
       - s3_net
-    volumes:
-      - ./data:/data
     ports:
       - "9000:9000"  # S3 API
-      - "9001:9001"  # Web console
-    command: ["server", "/data", "--console-address", ":9001"]
+    command: ["server", "-dir=/data", "-ip=seaweedfs", "-s3", "-s3.port=9000"]
 
-  mc:
+  s3-init:
     depends_on:
-      - minio
-    image: quay.io/minio/mc
-    container_name: mc
+      - seaweedfs
+    image: amazon/aws-cli:2.36.44
     networks:
       - s3_net
-    entrypoint: |
-      /bin/sh -c "
-      until /usr/bin/mc alias set local http://minio:9000 admin password; do
-        echo 'Waiting for MinIO...';
-        sleep 2;
-      done;
-
-      # Ensure bucket exists
-      if ! /usr/bin/mc ls local/mybucket > /dev/null 2>&1; then
-        /usr/bin/mc mb local/mybucket;
-      fi
-
-      echo 'MinIO bucket initialized.';
-      tail -f /dev/null
-      "
+    environment:
+      - AWS_ACCESS_KEY_ID=admin
+      - AWS_SECRET_ACCESS_KEY=password
+      - AWS_REGION=us-east-1
+      - AWS_ENDPOINT_URL=http://seaweedfs:9000
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        for i in $(seq 60); do
+          aws s3 ls s3://mybucket > /dev/null 2>&1 || aws s3 mb s3://mybucket
+          aws s3 cp /etc/hostname s3://mybucket/.ready && aws s3 rm s3://mybucket/.ready && exit 0
+          echo 'Waiting for SeaweedFS...'
+          sleep 2
+        done
+        exit 1
 
 networks:
   s3_net:

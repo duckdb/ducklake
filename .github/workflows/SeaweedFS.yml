@@ -1,0 +1,77 @@
+name: SeaweedFS Tests
+on: [push, pull_request,repository_dispatch]
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ github.head_ref || '' }}-${{ github.base_ref || '' }}-${{ github.ref != 'refs/heads/main' || github.sha }}
+  cancel-in-progress: true
+defaults:
+  run:
+    shell: bash
+
+env:
+  BASE_BRANCH: ${{ github.base_ref || (endsWith(github.ref, '_feature') && 'feature' || 'main') }}
+
+jobs:
+  rest:
+    name: Tests using SeaweedFS
+    runs-on: ubuntu-latest
+    env:
+      VCPKG_TARGET_TRIPLET: 'x64-linux-release'
+      GEN: ninja
+      VCPKG_FEATURE_FLAGS: "-binarycaching"
+      VCPKG_TOOLCHAIN_PATH: ${{ github.workspace }}/vcpkg/scripts/buildsystems/vcpkg.cmake
+      PIP_BREAK_SYSTEM_PACKAGES: 1
+      BUILD_EXTENSION_TEST_DEPS: full
+      S3_TEST_SERVER_AVAILABLE: 1
+      DUCKLAKE_CI: 1
+
+    steps:
+      - name: Install required ubuntu packages
+        run: |
+          sudo apt-get update -y -qq
+          sudo apt-get install -y -qq software-properties-common
+          sudo add-apt-repository ppa:git-core/ppa
+          sudo apt-get update -y -qq
+          sudo apt-get install -y -qq build-essential cmake ninja-build ccache python3 mold
+
+      - name: Install CMake 3.x
+        run: |
+          sudo apt-get remove -y cmake cmake-data
+          sudo apt-get install --allow-downgrades -y -qq 'cmake=3.*' 'cmake-data=3.*'
+
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          submodules: 'true'
+
+      - name: Checkout DuckDB to version
+        run: |
+          cd duckdb
+          git checkout $(cat ../.github/duckdb-version)
+
+      - name: Check installed versions
+        run: |
+          ninja --version
+          cmake --version
+
+      - name: Setup vcpkg
+        uses: lukka/run-vcpkg@v11.1
+        with:
+          vcpkgGitCommitId: cd61e1e26a038e82d6550a3ebbe0fbbfe7da78e3 # Release 2026.06.24
+
+      - name: Setup Ccache
+        uses: hendrikmuhs/ccache-action@main
+        continue-on-error: true
+
+      - name: Build extension
+        env:
+          GEN: ninja
+        run: |
+          make release
+
+      - name: Test SeaweedFS
+        env:
+          DUCKDB_TPCH_ANSWERS_DIR: ${{ github.workspace }}/duckdb/extension/tpch/dbgen/answers
+        run: |
+          ./scripts/start-docker.sh
+          build/release/test/unittest --test-config test/configs/seaweedfs.json "test/sql/*"
+
