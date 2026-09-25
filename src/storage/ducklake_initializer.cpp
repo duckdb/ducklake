@@ -189,8 +189,14 @@ void DuckLakeInitializer::LoadExistingDuckLake(DuckLakeTransaction &transaction)
 		}
 		if (tag.key == "data_path") {
 			if (options.data_path.empty()) {
-				options.data_path = metadata_manager.LoadPath(tag.value);
+				// Proper path extensions may not be loaded
+				options.data_path = tag.value;
+				// Autoloads relevant extensions if the data path uses a known pattern (e.g. starts with "s3://")
 				InitializeDataPath();
+				// LoadPath may modify the path (e.g. by adding/modifying a separator)
+				// On Windows, if the proper extension is not loaded, the path may be set to the wrong separator
+				// InitializeDataPath needs to be called before LoadPath to set the correct separator
+				options.data_path = metadata_manager.LoadPath(tag.value);
 			} else {
 				// verify that they match if override_data_path is not set to true
 				if (metadata_manager.StorePath(options.data_path) != tag.value && !options.override_data_path) {
