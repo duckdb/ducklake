@@ -86,13 +86,13 @@ SELECT record_count, next_row_id FROM __ducklake_metadata_ducklake.ducklake_tabl
 ----
 200	400
 
-query I
-SELECT COUNT(*) FROM __ducklake_metadata_ducklake.ducklake_table_column_stats WHERE table_id = getvariable('partial_id')
+query TT
+SELECT min_value, max_value FROM __ducklake_metadata_ducklake.ducklake_table_column_stats WHERE table_id = getvariable('partial_id')
 ----
-0
+1000	1199
 
-# Re-insert after the drop in the same connection: the stats cache was invalidated, so the insert
-# starts from the decremented base (record_count 0), not the stale pre-delete value.
+# Re-insert after the drop in the same connection: the new snapshot has its own stats cache entry,
+# so the insert starts from the decremented base (record_count 0), not the stale pre-delete value.
 statement ok
 INSERT INTO ducklake.t SELECT range::INT id FROM range(100, 110)
 
@@ -171,3 +171,82 @@ query III
 SELECT record_count, next_row_id, file_size_bytes FROM __ducklake_metadata_ducklake.ducklake_table_stats WHERE table_id = getvariable('rewrite_id')
 ----
 0	200	0
+
+# Full-file drop with committed inlined data across schema versions must fall back instead of
+# querying current-schema columns from older inlined physical tables.
+statement ok
+CALL ducklake.set_option('data_inlining_row_limit', 100)
+
+statement ok
+CREATE TABLE ducklake.inlined_schema_evolution(i INTEGER)
+
+statement ok
+INSERT INTO ducklake.inlined_schema_evolution SELECT range::INT FROM range(200)
+
+statement ok
+INSERT INTO ducklake.inlined_schema_evolution VALUES (1000)
+
+statement ok
+ALTER TABLE ducklake.inlined_schema_evolution ADD COLUMN j INTEGER DEFAULT 0
+
+statement ok
+INSERT INTO ducklake.inlined_schema_evolution VALUES (1001, 10)
+
+query I
+DELETE FROM ducklake.inlined_schema_evolution WHERE i < 200
+----
+200
+
+query III
+SELECT COUNT(*), MIN(i), MAX(i) FROM ducklake.inlined_schema_evolution
+----
+2	1000	1001
+
+# A missing per-file stats row makes that column's recomputed global stats unknown. Counting only total rows is not
+# enough: allow_missing produces sparse file-column stats, and merging the remaining rows would narrow the column
+# to values from only the files that happened to report stats.
+statement ok
+CALL ducklake.set_option('data_inlining_row_limit', 0)
+
+statement ok
+COPY (SELECT 0::INTEGER AS a) TO '{DATA_PATH}/full_file_delete_missing_stats.parquet' (FORMAT PARQUET)
+
+statement ok
+CREATE TABLE ducklake.missing_stats(a INTEGER, b INTEGER)
+
+statement ok
+INSERT INTO ducklake.missing_stats VALUES (1, 100)
+
+statement ok
+CALL ducklake_add_data_files('ducklake', 'missing_stats', '{DATA_PATH}/full_file_delete_missing_stats.parquet', allow_missing => true)
+
+# Leave only the sparse file so the first recompute makes b unknown.
+query I
+DELETE FROM ducklake.missing_stats WHERE a = 1
+----
+1
+
+statement ok
+INSERT INTO ducklake.missing_stats VALUES (2, 200)
+
+statement ok
+INSERT INTO ducklake.missing_stats VALUES (3, 3)
+
+# Dropping an unrelated file must not let the known file's b=200 stats hide the sparse file's NULL.
+query I
+DELETE FROM ducklake.missing_stats WHERE a = 3
+----
+1
+
+query II
+SELECT COUNT(*) FILTER (b IS NULL), COUNT(*) FILTER (b = 200) FROM ducklake.missing_stats
+----
+1	1
+
+query III
+SELECT contains_null IS NULL, min_value IS NULL, max_value IS NULL
+FROM __ducklake_metadata_ducklake.ducklake_table_column_stats s
+JOIN __ducklake_metadata_ducklake.ducklake_table t USING (table_id)
+WHERE t.table_name = 'missing_stats' AND t.end_snapshot IS NULL AND s.column_id = 2
+----
+true	true	true

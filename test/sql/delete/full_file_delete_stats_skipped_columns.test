@@ -1,0 +1,102 @@
+# name: test/sql/delete/full_file_delete_stats_skipped_columns.test
+# description: Full-file delete recomputation preserves skipped bounds with remaining inlined rows
+# group: [delete]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/full_file_delete_stats_skipped_columns', METADATA_CATALOG 'md', DATA_INLINING_ROW_LIMIT 10)
+
+statement ok
+CREATE TABLE ducklake.t(id INTEGER, s VARCHAR)
+
+statement ok
+INSERT INTO ducklake.t VALUES (2, 'c')
+
+statement ok
+CALL ducklake.set_option('skip_stats_columns', ['s'], table_name => 't')
+
+statement ok
+CALL ducklake.set_option('data_inlining_row_limit', 0, table_name => 't')
+
+statement ok
+INSERT INTO ducklake.t VALUES (0, 'a')
+
+statement ok
+INSERT INTO ducklake.t VALUES (1, 'b')
+
+query I
+SELECT count(*) FROM md.ducklake_data_file WHERE end_snapshot IS NULL
+----
+2
+
+# The remaining file and inlined rows must not acquire bounds from just the inlined rows.
+query I
+DELETE FROM ducklake.t WHERE id = 0
+----
+1
+
+query ITT
+SELECT column_id, min_value, max_value FROM md.ducklake_table_column_stats ORDER BY column_id
+----
+1	1	2
+2	NULL	NULL
+
+query ITT
+SELECT count(*), min(s), max(s) FROM ducklake.t
+----
+2	b	c
+
+# Recompute also handles a dropped file and a newly written file in the same commit.
+statement ok
+BEGIN
+
+query I
+DELETE FROM ducklake.t WHERE id = 1
+----
+1
+
+statement ok
+INSERT INTO ducklake.t VALUES (3, 'd')
+
+statement ok
+COMMIT
+
+query ITT
+SELECT column_id, min_value, max_value FROM md.ducklake_table_column_stats ORDER BY column_id
+----
+1	2	3
+2	NULL	NULL
+
+query ITT
+SELECT count(*), min(s), max(s) FROM ducklake.t
+----
+2	c	d
+
+# Skipped bounds stay absent when the final parquet file is dropped.
+query I
+DELETE FROM ducklake.t WHERE id = 3
+----
+1
+
+query I
+SELECT count(*) FROM md.ducklake_data_file WHERE end_snapshot IS NULL
+----
+0
+
+query ITT
+SELECT column_id, min_value, max_value FROM md.ducklake_table_column_stats ORDER BY column_id
+----
+1	2	2
+2	NULL	NULL
+
+query ITT
+SELECT count(*), min(s), max(s) FROM ducklake.t
+----
+1	c	c
