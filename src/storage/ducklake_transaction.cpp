@@ -1511,12 +1511,10 @@ void DuckLakeTransaction::RunCommitLoop(DuckLakeSnapshot transaction_snapshot,
 		return schema;
 	};
 	context.get_inlined_table_names = [&](TableIndex table_id) {
+		// Live rather than via the entry like the sibling lambdas: a concurrent flush drops a superseded
+		// inlined table without bumping schema_version, so the entry can still name it.
 		vector<string> names;
-		auto entry = ducklake_catalog.GetEntryById(*this, transaction_snapshot, table_id);
-		if (!entry) {
-			return names;
-		}
-		for (auto &t : entry->Cast<DuckLakeTableEntry>().GetInlinedDataTables()) {
+		for (auto &t : GetMetadataManager().GetInlinedDataTablesForTable(table_id)) {
 			names.push_back(t.table_name);
 		}
 		return names;
