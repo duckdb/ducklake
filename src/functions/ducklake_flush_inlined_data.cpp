@@ -450,7 +450,7 @@ static void FlushInlinedFileDeletions(ClientContext &context, DuckLakeCatalog &c
 		return;
 	}
 
-	// Query the inlined deletions with file paths and existing delete file info
+	// Query the inlined deletions with the delete file active when their data file was last visible
 	auto deletions_result = metadata_manager.Query(snapshot, StringUtil::Format(R"(
 SELECT del.file_id, data.path, data.path_is_relative, del.row_id, del.begin_snapshot,
        existing_del.delete_file_id, existing_del.path as del_path, existing_del.path_is_relative as del_path_is_relative,
@@ -458,11 +458,11 @@ SELECT del.file_id, data.path, data.path_is_relative, del.row_id, del.begin_snap
        existing_del.format as del_format
 FROM {METADATA_CATALOG}.%s del
 JOIN {METADATA_CATALOG}.ducklake_data_file data ON del.file_id = data.data_file_id
-LEFT JOIN (
-    SELECT * FROM {METADATA_CATALOG}.ducklake_delete_file
-    WHERE table_id = %d AND {SNAPSHOT_ID} >= begin_snapshot
-          AND ({SNAPSHOT_ID} < end_snapshot OR end_snapshot IS NULL)
-) existing_del ON del.file_id = existing_del.data_file_id
+LEFT JOIN {METADATA_CATALOG}.ducklake_delete_file existing_del
+    ON del.file_id = existing_del.data_file_id AND existing_del.table_id = %d
+       AND {SNAPSHOT_ID} >= existing_del.begin_snapshot
+       AND (existing_del.end_snapshot IS NULL
+            OR existing_del.end_snapshot >= COALESCE(data.end_snapshot, {SNAPSHOT_ID} + 1))
 	)",
 	                                                                            inlined_table_name, table_id.index));
 	if (deletions_result->HasError()) {
