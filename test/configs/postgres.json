@@ -84,6 +84,12 @@
       "paths": [
         "test/sql/data_inlining/partition_inlining.test"
       ]
+    },
+    {
+      "reason": "Metadata reads run under REPEATABLE READ, so an open transaction never observes a later merge or flush; the partial-file count guard is unreachable and count(*) legitimately folds from metadata",
+      "paths": [
+        "test/sql/quack/partial_file_count.test"
+      ]
     }
   ]
 }
