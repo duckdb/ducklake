@@ -155,6 +155,7 @@ public:
 	}
 	//! Sets a config option, returning what it held before so a rollback can put it back
 	DuckLakeConfigOptionUndo SetConfigOption(const DuckLakeConfigOption &option);
+	DuckLakeConfigOptionUndo ResetConfigOption(const DuckLakeConfigOption &option);
 	void UndoConfigOption(const DuckLakeConfigOptionUndo &undo);
 	//! Pending table options take precedence
 	bool TryGetConfigOption(const string &option, string &result, SchemaIndex schema_id, TableIndex table_id,

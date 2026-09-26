@@ -1,0 +1,89 @@
+# name: test/sql/settings/alter_table_reset_concurrent.test
+# description: Resetting absent options preserves changes from newer transactions
+# group: [settings]
+
+require ducklake
+
+require parquet
+
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/reset_concurrent.db' AS ducklake (DATA_PATH '{TEST_DIR}/reset_concurrent_files')
+
+statement ok
+CALL ducklake.set_option('data_inlining_row_limit', 0)
+
+statement ok
+CALL ducklake.set_option('parquet_compression', 'uncompressed')
+
+foreach completion COMMIT ROLLBACK
+
+statement ok
+CREATE TABLE ducklake.t_{completion}(i INTEGER)
+
+statement ok older
+BEGIN
+
+query I older
+SELECT count(*) FROM ducklake.t_{completion}
+----
+0
+
+statement ok newer
+ALTER TABLE ducklake.t_{completion} SET (parquet_compression = 'gzip')
+
+statement ok older
+ALTER TABLE ducklake.t_{completion} RESET (parquet_compression)
+
+statement ok older
+{completion}
+
+query I newer
+SELECT value FROM ducklake.options() WHERE option_name = 'parquet_compression' AND scope_entry = 'main.t_{completion}'
+----
+gzip
+
+statement ok newer
+INSERT INTO ducklake.t_{completion} VALUES (1)
+
+query I newer
+SELECT DISTINCT compression FROM parquet_metadata('{TEST_DIR}/reset_concurrent_files/main/t_{completion}/**')
+----
+GZIP
+
+endloop
+
+statement ok
+CREATE TABLE ducklake.t_concurrent_reset(i INTEGER)
+
+statement ok older
+BEGIN
+
+query I older
+SELECT count(*) FROM ducklake.t_concurrent_reset
+----
+0
+
+statement ok newer
+ALTER TABLE ducklake.t_concurrent_reset SET (parquet_compression = 'gzip')
+
+statement ok older
+ALTER TABLE ducklake.t_concurrent_reset RESET (parquet_compression)
+
+statement ok newer
+ALTER TABLE ducklake.t_concurrent_reset RESET (parquet_compression)
+
+statement ok older
+ROLLBACK
+
+query I newer
+SELECT count(*) FROM ducklake.options() WHERE option_name = 'parquet_compression' AND scope_entry = 'main.t_concurrent_reset'
+----
+0
+
+statement ok newer
+INSERT INTO ducklake.t_concurrent_reset VALUES (1)
+
+query I newer
+SELECT DISTINCT compression FROM parquet_metadata('{TEST_DIR}/reset_concurrent_files/main/t_concurrent_reset/**')
+----
+UNCOMPRESSED

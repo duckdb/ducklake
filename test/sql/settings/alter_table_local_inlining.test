@@ -1,0 +1,116 @@
+# name: test/sql/settings/alter_table_local_inlining.test
+# description: Pending table options preserve buffered inlined rows at commit
+# group: [settings]
+
+require ducklake
+
+require parquet
+
+foreach version 1.0 1.1-dev1
+
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/local_inlining_{version}.db' AS ducklake (DATA_PATH '{TEST_DIR}/local_inlining_{version}_files', DUCKLAKE_VERSION '{version}')
+
+statement ok
+CALL ducklake.set_option('data_inlining_row_limit', 0)
+
+statement ok
+CREATE SCHEMA ducklake.enabled
+
+statement ok
+CALL ducklake.set_option('data_inlining_row_limit', 10, schema => 'enabled')
+
+statement ok
+BEGIN
+
+statement ok
+CREATE TABLE ducklake.t_set(i INTEGER)
+
+statement ok
+ALTER TABLE ducklake.t_set SET (data_inlining_row_limit = 10)
+
+statement ok
+INSERT INTO ducklake.t_set VALUES (1)
+
+statement ok
+ALTER TABLE ducklake.t_set ADD COLUMN j INTEGER DEFAULT 7
+
+statement ok
+ALTER TABLE ducklake.t_set RENAME COLUMN i TO id
+
+statement ok
+CREATE TABLE ducklake.t_ctas WITH (data_inlining_row_limit = 10) AS SELECT 2 AS i
+
+statement ok
+CREATE TABLE ducklake.t_reset(i INTEGER) WITH (data_inlining_row_limit = 10)
+
+statement ok
+INSERT INTO ducklake.t_reset VALUES (3)
+
+statement ok
+ALTER TABLE ducklake.t_reset RESET (data_inlining_row_limit)
+
+statement ok
+CREATE TABLE ducklake.t_disabled(i INTEGER) WITH (data_inlining_row_limit = 10)
+
+statement ok
+INSERT INTO ducklake.t_disabled VALUES (4)
+
+statement ok
+ALTER TABLE ducklake.t_disabled SET (data_inlining_row_limit = 0)
+
+statement ok
+CREATE TABLE ducklake.enabled.t(i INTEGER)
+
+statement ok
+INSERT INTO ducklake.enabled.t VALUES (5)
+
+statement ok
+COMMIT
+
+query II
+SELECT id, j FROM ducklake.t_set
+----
+1	7
+
+query I rowsort
+FROM ducklake.t_ctas UNION ALL FROM ducklake.t_reset UNION ALL FROM ducklake.t_disabled UNION ALL FROM ducklake.enabled.t
+----
+2
+3
+4
+5
+
+query I
+SELECT count(*) FROM __ducklake_metadata_ducklake.ducklake_data_file
+----
+0
+
+query I
+SELECT count(*) FROM __ducklake_metadata_ducklake.ducklake_inlined_data_tables
+----
+5
+
+statement ok
+DETACH ducklake
+
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/local_inlining_{version}.db' AS ducklake (DATA_PATH '{TEST_DIR}/local_inlining_{version}_files', DUCKLAKE_VERSION '{version}')
+
+query II
+SELECT id, j FROM ducklake.t_set
+----
+1	7
+
+query I rowsort
+FROM ducklake.t_ctas UNION ALL FROM ducklake.t_reset UNION ALL FROM ducklake.t_disabled UNION ALL FROM ducklake.enabled.t
+----
+2
+3
+4
+5
+
+statement ok
+DETACH ducklake
+
+endloop

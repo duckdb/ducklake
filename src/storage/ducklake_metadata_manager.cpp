@@ -3098,6 +3098,7 @@ string DuckLakeMetadataManager::GetInlinedTableQueries(DuckLakeSnapshot commit_s
 		inlined_table_queries += "\n";
 	}
 	inlined_table_queries += GetInlinedTableQuery(table, inlined_table_name);
+	insert_inlined_table_name_cache[table.id.index] = inlined_table_name;
 	return inlined_table_name;
 }
 
@@ -3328,19 +3329,18 @@ string DuckLakeMetadataManager::WriteNewInlinedData(DuckLakeSnapshot &commit_sna
 
 	for (auto &entry : new_data) {
 		string inlined_table_name;
+		optional_ptr<const DuckLakeTableInfo> new_inlined_table;
 		for (auto &inlined_table : new_inlined_data_tables_result) {
 			if (inlined_table.id == entry.table_id) {
-				inlined_table_name = InlinedTableNameFor(inlined_table.id.index, commit_snapshot.schema_version);
+				new_inlined_table = &inlined_table;
+				break;
 			}
 		}
-		if (inlined_table_name.empty()) {
-			// get the latest table to insert into
-			auto it = insert_inlined_table_name_cache.find(entry.table_id.index);
-			if (it != insert_inlined_table_name_cache.end()) {
-				inlined_table_name = it->second;
-			}
+		auto it = insert_inlined_table_name_cache.find(entry.table_id.index);
+		if (it != insert_inlined_table_name_cache.end()) {
+			inlined_table_name = it->second;
 		}
-		if (inlined_table_name.empty()) {
+		if (inlined_table_name.empty() && !new_inlined_table) {
 			auto query = LatestInlinedTableQuery(entry.table_id.index) + ";";
 			auto result = Query(commit_snapshot, query);
 			for (auto &row : *result) {
@@ -3355,7 +3355,9 @@ string DuckLakeMetadataManager::WriteNewInlinedData(DuckLakeSnapshot &commit_sna
 			// first fetch the table info
 			auto current_snapshot = transaction.GetSnapshot();
 			auto table_entry = transaction.GetCatalog().GetEntryById(transaction, current_snapshot, entry.table_id);
-			if (table_entry) {
+			if (new_inlined_table) {
+				table_info = *new_inlined_table;
+			} else if (table_entry) {
 				auto &table = table_entry->Cast<DuckLakeTableEntry>();
 				table_info = table.GetTableInfo();
 				table_info.columns = table.GetTableColumns();
@@ -6127,13 +6129,8 @@ WHERE {SNAPSHOT_ID} >= begin_snapshot AND ({SNAPSHOT_ID} < end_snapshot OR end_s
 	return table_sizes;
 }
 
-void DuckLakeMetadataManager::SetConfigOption(const DuckLakeConfigOption &option) {
-	// check if the option already exists
-	auto &option_key = option.option.key;
-	auto &option_value = option.option.value;
-	string scope;
-	string scope_id;
-	string scope_filter;
+static void ConfigOptionScope(const DuckLakeConfigOption &option, string &scope, string &scope_id,
+                              string &scope_filter) {
 	if (option.table_id.IsValid()) {
 		scope = "'table'";
 		scope_id = to_string(option.table_id.index);
@@ -6147,6 +6144,31 @@ void DuckLakeMetadataManager::SetConfigOption(const DuckLakeConfigOption &option
 		scope_id = "NULL";
 		scope_filter = "scope IS NULL";
 	}
+}
+
+bool DuckLakeMetadataManager::ResetConfigOption(const DuckLakeConfigOption &option) {
+	string scope;
+	string scope_id;
+	string scope_filter;
+	ConfigOptionScope(option, scope, scope_id, scope_filter);
+	auto result = Query(StringUtil::Format(R"(
+DELETE FROM {METADATA_CATALOG}.ducklake_metadata WHERE key = %s AND %s
+)",
+	                                       SQLString(option.option.key), scope_filter));
+	if (result->HasError()) {
+		result->GetErrorObject().Throw("Failed to reset config option in DuckLake: ");
+	}
+	return result->Fetch()->GetValue(0, 0).GetValue<idx_t>() > 0;
+}
+
+void DuckLakeMetadataManager::SetConfigOption(const DuckLakeConfigOption &option) {
+	// check if the option already exists
+	auto &option_key = option.option.key;
+	auto &option_value = option.option.value;
+	string scope;
+	string scope_id;
+	string scope_filter;
+	ConfigOptionScope(option, scope, scope_id, scope_filter);
 	auto result = Query(StringUtil::Format(R"(
 SELECT COUNT(*)
 FROM {METADATA_CATALOG}.ducklake_metadata

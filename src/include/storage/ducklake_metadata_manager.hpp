@@ -485,6 +485,7 @@ public:
 	virtual void DropEmptySupersededInlinedTables();
 	virtual vector<DuckLakeTableSizeInfo> GetTableSizes(DuckLakeSnapshot snapshot);
 	virtual void SetConfigOption(const DuckLakeConfigOption &option);
+	virtual bool ResetConfigOption(const DuckLakeConfigOption &option);
 	virtual string GetPathForSchema(SchemaIndex schema_id, vector<DuckLakeSchemaInfo> &new_schemas_result);
 	virtual string GetPathForTable(TableIndex table_id, const vector<DuckLakeTableInfo> &new_tables,
 	                               const vector<DuckLakeSchemaInfo> &new_schemas_result);

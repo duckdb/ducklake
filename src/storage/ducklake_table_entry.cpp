@@ -1455,18 +1455,52 @@ DuckLakeTableEntry::ParseTableOptions(ClientContext &context, DuckLakeCatalog &c
 
 unique_ptr<CatalogEntry> DuckLakeTableEntry::AlterTable(ClientContext &context, DuckLakeTransaction &transaction,
                                                         SetTableOptionsInfo &info) {
-	if (duckdb::IsTransactionLocal(GetTableId())) {
-		throw NotImplementedException("Settings cannot be set for transaction-local tables");
-	}
 	auto &ducklake_catalog = ParentCatalog().Cast<DuckLakeCatalog>();
 	auto options = ParseTableOptions(context, ducklake_catalog, info.table_options, GetColumns(), GetFieldData(),
 	                                 GetPartitionData().get(), name.GetIdentifierName());
+	if (duckdb::IsTransactionLocal(GetTableId())) {
+		for (auto &entry : options) {
+			table_options[entry.first] = entry.second;
+		}
+		return nullptr;
+	}
 	for (auto &entry : options) {
 		DuckLakeConfigOption config_option;
 		config_option.option.key = entry.first;
 		config_option.option.value = entry.second;
 		config_option.table_id = GetTableId();
 		transaction.SetConfigOption(config_option);
+	}
+	return nullptr;
+}
+
+unique_ptr<CatalogEntry> DuckLakeTableEntry::AlterTable(ClientContext &context, DuckLakeTransaction &transaction,
+                                                        ResetTableOptionsInfo &info) {
+	auto &ducklake_catalog = ParentCatalog().Cast<DuckLakeCatalog>();
+	auto schema_id = ParentSchema().Cast<DuckLakeSchemaEntry>().GetSchemaId();
+	vector<string> options;
+	for (auto &entry : info.table_options) {
+		auto option = StringUtil::Lower(entry.GetIdentifierName());
+		DuckLakeUtil::ValidateConfigOptionName(option);
+		DuckLakeUtil::ValidateConfigOptionScope(option, false, true);
+		if (option == "data_inlining_row_limit" &&
+		    ducklake_catalog.DataInliningRowLimit(context, schema_id, TableIndex()) > 0) {
+			DuckLakeUtil::ValidateCanEnableInlining(GetColumns(), ducklake_catalog.SupportsV1_1Metadata(),
+			                                        name.GetIdentifierName());
+		}
+		options.push_back(std::move(option));
+	}
+	if (duckdb::IsTransactionLocal(GetTableId())) {
+		for (auto &option : options) {
+			table_options.erase(option);
+		}
+		return nullptr;
+	}
+	for (auto &option : options) {
+		DuckLakeConfigOption config_option;
+		config_option.option.key = option;
+		config_option.table_id = GetTableId();
+		transaction.ResetConfigOption(config_option);
 	}
 	return nullptr;
 }
@@ -1482,7 +1516,8 @@ unique_ptr<CatalogEntry> DuckLakeTableEntry::Alter(ClientContext &context, DuckL
 		    info.alter_table_type != AlterTableType::SET_NOT_NULL &&
 		    info.alter_table_type != AlterTableType::DROP_NOT_NULL &&
 		    info.alter_table_type != AlterTableType::SET_DEFAULT &&
-		    info.alter_table_type != AlterTableType::SET_TABLE_OPTIONS) {
+		    info.alter_table_type != AlterTableType::SET_TABLE_OPTIONS &&
+		    info.alter_table_type != AlterTableType::RESET_TABLE_OPTIONS) {
 			throw NotImplementedException("ALTER on a table with transaction-local inlined data is not supported %s",
 			                              EnumUtil::ToString(info.alter_table_type));
 		}
@@ -1516,6 +1551,8 @@ unique_ptr<CatalogEntry> DuckLakeTableEntry::Alter(ClientContext &context, DuckL
 		return AlterTable(transaction, info.Cast<SetSortedByInfo>());
 	case AlterTableType::SET_TABLE_OPTIONS:
 		return AlterTable(context, transaction, info.Cast<SetTableOptionsInfo>());
+	case AlterTableType::RESET_TABLE_OPTIONS:
+		return AlterTable(context, transaction, info.Cast<ResetTableOptionsInfo>());
 	default:
 		throw BinderException("Unsupported ALTER TABLE type in DuckLake");
 	}

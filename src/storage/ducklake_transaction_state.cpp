@@ -1455,7 +1455,7 @@ void DuckLakeTransactionState::GetNewTableInfo(DuckLakeCommitState &commit_state
 					auto sort_key = DuckLakeTransaction::GetNewSortKey(commit_state, table);
 					result.new_sort_keys.push_back(std::move(sort_key));
 				}
-				for (auto &option : table.GetTableOptions()) {
+				for (auto &option : latest_table.GetTableOptions()) {
 					DuckLakeConfigOption config_option;
 					config_option.option.key = option.first;
 					config_option.option.value = option.second;

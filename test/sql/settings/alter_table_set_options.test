@@ -259,20 +259,32 @@ SELECT value FROM ducklake.options() WHERE option_name = 'skip_stats_columns' AN
 ----
 (empty)
 
-# Tables created in the current transaction cannot change settings
+# Tables created in the current transaction keep the settings pending until commit
 statement ok
 BEGIN
 
 statement ok
 CREATE TABLE ducklake.t_local(i INTEGER)
 
-statement error
-ALTER TABLE ducklake.t_local SET (parquet_compression = 'zstd')
-----
-transaction-local
+statement ok
+ALTER TABLE ducklake.t_local SET (parquet_compression = 'zstd', data_inlining_row_limit = 0)
 
 statement ok
-ROLLBACK
+INSERT INTO ducklake.t_local VALUES (1)
+
+statement ok
+COMMIT
+
+query II
+SELECT option_name, value FROM ducklake.options() WHERE scope_entry = 'main.t_local' ORDER BY ALL
+----
+data_inlining_row_limit	0
+parquet_compression	zstd
+
+query I
+SELECT DISTINCT compression FROM parquet_metadata('{TEST_DIR}/ducklake_alter_set_options_files/main/t_local/**') ORDER BY ALL
+----
+ZSTD
 
 statement error
 ALTER TABLE ducklake.t2 SET (parquet_row_group_size = 0)

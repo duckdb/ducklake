@@ -1615,6 +1615,12 @@ void DuckLakeTransaction::SetConfigOption(const DuckLakeConfigOption &option) {
 	config_option_undo.push_back(ducklake_catalog.SetConfigOption(option));
 }
 
+void DuckLakeTransaction::ResetConfigOption(const DuckLakeConfigOption &option) {
+	if (metadata_manager->ResetConfigOption(option)) {
+		config_option_undo.push_back(ducklake_catalog.ResetConfigOption(option));
+	}
+}
+
 DuckLakeSnapshotCommit &DuckLakeTransaction::GetCommitInfo() {
 	return state->commit_info;
 }

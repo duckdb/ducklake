@@ -26,6 +26,7 @@ struct AlterTableInfo;
 struct DuckLakeColumnInfo;
 struct SetPartitionedByInfo;
 struct SetTableOptionsInfo;
+struct ResetTableOptionsInfo;
 struct SetCommentInfo;
 class DuckLakeTransaction;
 class DuckLakeCatalog;
@@ -197,6 +198,8 @@ private:
 	unique_ptr<CatalogEntry> AlterTable(DuckLakeTransaction &transaction, SetSortedByInfo &info);
 	unique_ptr<CatalogEntry> AlterTable(ClientContext &context, DuckLakeTransaction &transaction,
 	                                    SetTableOptionsInfo &info);
+	unique_ptr<CatalogEntry> AlterTable(ClientContext &context, DuckLakeTransaction &transaction,
+	                                    ResetTableOptionsInfo &info);
 
 	unique_ptr<DuckLakeFieldId> GetNestedEvolution(const DuckLakeFieldId &source_id, const LogicalType &target,
 	                                               ColumnChangeInfo &result, optional_idx parent_idx);

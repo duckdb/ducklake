@@ -105,6 +105,7 @@ public:
 
 	static string ParseConfigOptionValue(ClientContext &context, const string &option, const Value &val);
 	static void ValidateConfigOptionScope(const string &option, bool has_schema, bool has_table);
+	static void ValidateConfigOptionName(const string &option);
 
 	//! Storage type of an inlined column, VARIANT becomes a Parquet Variant BLOB where VARIANT is not native
 	static LogicalType GetInlinedStorageType(DuckLakeMetadataManager &metadata_manager, const LogicalType &type);
