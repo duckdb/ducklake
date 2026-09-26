@@ -221,8 +221,6 @@ void DuckLakeTransactionState::CheckForConflicts(const TransactionChangeInformat
 	for (auto &table_id : changes.tables_deleted_from) {
 		ConflictCheck(table_id, other_changes.dropped_tables, "delete from table", "dropped it");
 		ConflictCheck(table_id, other_changes.altered_tables, "delete from table", "altered it");
-		ConflictCheck(table_id, other_changes.tables_merge_adjacent, "delete from table", "compacted it");
-		ConflictCheck(table_id, other_changes.tables_rewrite_delete, "delete from table", "compacted it");
 		ConflictCheck(table_id, other_changes.inserted_tables, "delete from table", "inserted into it");
 		ConflictCheck(table_id, other_changes.tables_inserted_inlined, "delete from table", "inserted into it");
 	}
@@ -233,26 +231,39 @@ void DuckLakeTransactionState::CheckForConflicts(const TransactionChangeInformat
 	}
 	if (!changes.tables_deleted_from.empty()) {
 		bool check_for_matches = false;
+		bool other_compacted = false;
 		for (auto &table_id : changes.tables_deleted_from) {
 			if (other_changes.tables_deleted_from.find(table_id) != other_changes.tables_deleted_from.end()) {
 				check_for_matches = true;
-				break;
+			}
+			if (other_changes.tables_merge_adjacent.find(table_id) != other_changes.tables_merge_adjacent.end() ||
+			    other_changes.tables_rewrite_delete.find(table_id) != other_changes.tables_rewrite_delete.end()) {
+				check_for_matches = true;
+				other_compacted = true;
 			}
 		}
 		if (check_for_matches) {
-			// If we have deletes on the tables, check for files being deleted
-			const auto deleted_files = GetFilesDeletedOrDroppedAfterSnapshot(executor);
+			// If we have deletes on the tables, check for files being deleted or compacted away
+			set<DataFileIndex> target_files;
 			for (auto &entry : local_changes.Changes()) {
 				auto &table_changes = entry.GetTableChanges();
 				for (auto &file_entry : table_changes.new_delete_files) {
 					for (auto &file : file_entry.second) {
-						ConflictCheck(file.data_file_id, deleted_files.deleted_from_files, "delete from file",
-						              "deleted from it");
+						target_files.insert(file.data_file_id);
 					}
 				}
 			}
 			for (auto &file : dropped_files) {
-				ConflictCheck(file.second, deleted_files.deleted_from_files, "delete from file", "deleted from it");
+				target_files.insert(file.second);
+			}
+			auto deleted_files = GetFilesDeletedOrDroppedAfterSnapshot(executor).deleted_from_files;
+			if (other_compacted) {
+				// merge_adjacent removes source files from ducklake_data_file instead of setting end_snapshot
+				auto missing_files = GetMissingDataFiles(executor, target_files);
+				deleted_files.insert(missing_files.begin(), missing_files.end());
+			}
+			for (auto &file : target_files) {
+				ConflictCheck(file, deleted_files, "delete from file", "compacted or deleted from it");
 			}
 		}
 	}
@@ -269,17 +280,38 @@ void DuckLakeTransactionState::CheckForConflicts(const TransactionChangeInformat
 		ConflictCheck(table_id, other_changes.tables_deleted_inlined, "flush inline data", "deleted from it");
 		ConflictCheck(table_id, other_changes.tables_flushed_inlined, "flush inline data", "flushed it");
 	}
+	bool compaction_overlap = false;
+	auto compaction_overlaps = [&](TableIndex table_id) {
+		return other_changes.tables_merge_adjacent.find(table_id) != other_changes.tables_merge_adjacent.end() ||
+		       other_changes.tables_rewrite_delete.find(table_id) != other_changes.tables_rewrite_delete.end() ||
+		       other_changes.tables_deleted_from.find(table_id) != other_changes.tables_deleted_from.end();
+	};
 	for (auto &table_id : changes.tables_merge_adjacent) {
 		ConflictCheck(table_id, other_changes.dropped_tables, "compact table", "dropped it");
-		ConflictCheck(table_id, other_changes.tables_deleted_from, "compact table", "deleted from it");
-		ConflictCheck(table_id, other_changes.tables_merge_adjacent, "compact table", "compacted it");
-		ConflictCheck(table_id, other_changes.tables_rewrite_delete, "compact table", "compacted it");
+		compaction_overlap |= compaction_overlaps(table_id);
 	}
 	for (auto &table_id : changes.tables_rewrite_delete) {
 		ConflictCheck(table_id, other_changes.dropped_tables, "compact table", "dropped it");
-		ConflictCheck(table_id, other_changes.tables_deleted_from, "compact table", "deleted from it");
-		ConflictCheck(table_id, other_changes.tables_merge_adjacent, "compact table", "compacted it");
-		ConflictCheck(table_id, other_changes.tables_rewrite_delete, "compact table", "compacted it");
+		compaction_overlap |= compaction_overlaps(table_id);
+	}
+	if (compaction_overlap) {
+		// only conflict if the other transaction compacted or deleted from one of the files we are retiring
+		set<DataFileIndex> source_files;
+		for (auto &entry : local_changes.Changes()) {
+			auto &table_changes = entry.GetTableChanges();
+			for (auto &compaction : table_changes.compactions) {
+				for (auto &source_file : compaction.source_files) {
+					source_files.insert(source_file.file.id);
+				}
+			}
+		}
+		auto retired_files = GetFilesDeletedOrDroppedAfterSnapshot(executor).deleted_from_files;
+		// merge_adjacent removes source files from ducklake_data_file instead of setting end_snapshot
+		auto missing_files = GetMissingDataFiles(executor, source_files);
+		retired_files.insert(missing_files.begin(), missing_files.end());
+		for (auto &source_file : source_files) {
+			ConflictCheck(source_file, retired_files, "compact file", "compacted or deleted it");
+		}
 	}
 	for (auto &table_id : changes.altered_tables) {
 		ConflictCheck(table_id, other_changes.dropped_tables, "alter table", "dropped it");
@@ -1890,10 +1922,12 @@ string DuckLakeTransactionState::CommitChanges(DuckLakeCommitState &commit_state
 SnapshotDeletedFromFiles DuckLakeTransactionState::GetFilesDeletedOrDroppedAfterSnapshot(
     const std::function<unique_ptr<QueryResult>(string)> &executor) {
 	// get all changes made to the system after the snapshot was started
+	// a delete file that replaces an existing one keeps its begin_snapshot, so also match on newly allocated ids
 	string sql = R"(
 	SELECT data_file_id
 	FROM {METADATA_CATALOG}.ducklake_delete_file
 	WHERE begin_snapshot > {SNAPSHOT_ID}
+	   OR delete_file_id >= (SELECT next_file_id FROM {METADATA_CATALOG}.ducklake_snapshot WHERE snapshot_id = {SNAPSHOT_ID})
 	UNION ALL
 	SELECT data_file_id
 	FROM {METADATA_CATALOG}.ducklake_data_file
@@ -1910,6 +1944,38 @@ SnapshotDeletedFromFiles DuckLakeTransactionState::GetFilesDeletedOrDroppedAfter
 		change_info.deleted_from_files.insert(DataFileIndex(row.GetValue<idx_t>(0)));
 	}
 	return change_info;
+}
+
+set<DataFileIndex>
+DuckLakeTransactionState::GetMissingDataFiles(const std::function<unique_ptr<QueryResult>(string)> &executor,
+                                              const set<DataFileIndex> &file_ids) {
+	// return the subset of file_ids that no longer exists in ducklake_data_file
+	set<DataFileIndex> missing_files = file_ids;
+	if (file_ids.empty()) {
+		return missing_files;
+	}
+	string file_id_list;
+	for (auto &file_id : file_ids) {
+		if (!file_id_list.empty()) {
+			file_id_list += ", ";
+		}
+		file_id_list += to_string(file_id.index);
+	}
+	string sql = StringUtil::Format(R"(
+	SELECT data_file_id
+	FROM {METADATA_CATALOG}.ducklake_data_file
+	WHERE data_file_id IN (%s)
+	)",
+	                                file_id_list);
+	auto result = executor(sql);
+	if (result->HasError()) {
+		result->GetErrorObject().Throw(
+		    "Failed to commit DuckLake transaction - failed to get compacted files for conflict resolution:");
+	}
+	for (auto &row : *result) {
+		missing_files.erase(DataFileIndex(row.GetValue<idx_t>(0)));
+	}
+	return missing_files;
 }
 
 void DuckLakeTransactionState::DropEmptySupersededInlinedTables(const DuckLakeCommitContext &context) {
