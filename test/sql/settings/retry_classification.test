@@ -1,0 +1,96 @@
+# name: test/sql/settings/retry_classification.test
+# description: RetryOnError classification is a superset of prior behavior + adds transient categories + type-guards DuckLake conflicts
+# group: [settings]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/retry_classification_files')
+
+# 2.1 Superset regression: every message retriable before this change is still retriable.
+query I
+SELECT ducklake_would_retry('violates primary key constraint')
+----
+true
+
+query I
+SELECT ducklake_would_retry('duplicate key value violates unique constraint')
+----
+true
+
+query I
+SELECT ducklake_would_retry('Transaction conflict - attempting to insert')
+----
+true
+
+query I
+SELECT ducklake_would_retry('concurrent update detected')
+----
+true
+
+# 2.2 New transient categories (none contains a prior broad substring, so today they fail permanently).
+query I
+SELECT ducklake_would_retry('ERROR: could not serialize access')
+----
+true
+
+query I
+SELECT ducklake_would_retry('deadlock detected')
+----
+true
+
+query I
+SELECT ducklake_would_retry('server closed the connection unexpectedly')
+----
+true
+
+query I
+SELECT ducklake_would_retry('could not connect to server: connection to server at localhost failed')
+----
+true
+
+query I
+SELECT ducklake_would_retry('connection reset by peer')
+----
+true
+
+# 2.3 Type-guard: a TransactionException (ExceptionType::TRANSACTION -> text "TransactionContext")
+# is a conflict by TYPE, independent of wording.
+query I
+SELECT ducklake_would_retry('some message with no retriable words', 'TransactionContext')
+----
+true
+
+# The same non-retriable message WITHOUT the transaction type is classified by string only -> not retriable.
+# This proves the type branch is additive, not a gate that swallows the string path.
+query I
+SELECT ducklake_would_retry('some message with no retriable words', 'Invalid')
+----
+false
+
+query I
+SELECT ducklake_would_retry('some message with no retriable words')
+----
+false
+
+# 2.4 Negative: unrelated fatal errors with none of the retriable signals -> not retriable.
+query I
+SELECT ducklake_would_retry('Parser Error: syntax error at or near "slect"')
+----
+false
+
+query I
+SELECT ducklake_would_retry('Permission denied for relation foo')
+----
+false
+
+query I
+SELECT ducklake_would_retry('Out of Memory Error: could not allocate block')
+----
+false
