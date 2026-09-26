@@ -1,0 +1,204 @@
+# name: test/sql/delete/delete_partition_metadata_calendar.test
+# description: Metadata deletes for combined identity and calendar partition keys
+# group: [delete]
+
+require ducklake
+
+require parquet
+
+require icu
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/delete_partition_metadata_calendar', METADATA_CATALOG 'md', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE ducklake.calendar_t(id INTEGER, source VARCHAR, date DATE, value INTEGER)
+
+statement ok
+ALTER TABLE ducklake.calendar_t SET PARTITIONED BY (source, year(date), month(date))
+
+statement ok
+INSERT INTO ducklake.calendar_t VALUES (1, 'audio', '2026-12-01', 10), (2, 'audio', '2026-12-31', 20), (3, 'streaming', '2026-12-15', 30), (4, 'audio', '2027-01-01', 40), (5, 'display', '2026-12-15', 50), (6, 'audio', NULL, 60), (7, 'audio', '2025-12-01', 70)
+
+# Null-safe equality retains the exact partition transform through optimizer rewrites.
+query II
+EXPLAIN DELETE FROM ducklake.calendar_t WHERE source IN ('audio', 'streaming') AND year(date) IS NOT DISTINCT FROM 2026 AND month(date) IS NOT DISTINCT FROM 12
+----
+physical_plan	<REGEX>:.*Ducklake Metadata Delete.*
+
+statement ok
+BEGIN
+
+query I
+DELETE FROM ducklake.calendar_t WHERE source IN ('audio', 'streaming') AND year(date) IS NOT DISTINCT FROM 2026 AND month(date) IS NOT DISTINCT FROM 12
+----
+3
+
+query I rowsort
+SELECT id FROM ducklake.calendar_t
+----
+4
+5
+6
+7
+
+statement ok
+ROLLBACK
+
+query I
+SELECT COUNT(*) FROM ducklake.calendar_t
+----
+7
+
+query II
+EXPLAIN DELETE FROM ducklake.calendar_t WHERE source = 'audio' AND year(date) IS NULL AND month(date) IS NULL
+----
+physical_plan	<REGEX>:.*Ducklake Metadata Delete.*
+
+query I
+DELETE FROM ducklake.calendar_t WHERE source = 'audio' AND year(date) IS NULL AND month(date) IS NULL
+----
+1
+
+query I
+DELETE FROM ducklake.calendar_t WHERE source IN ('audio', 'streaming') AND year(date) IS NOT DISTINCT FROM 2026 AND month(date) IS NOT DISTINCT FROM 12
+----
+3
+
+query III
+SELECT COUNT(*), MIN(value), MAX(value) FROM ducklake.calendar_t
+----
+3	40	70
+
+query I
+SELECT COUNT(*) FROM md.ducklake_delete_file WHERE table_id = (SELECT table_id FROM md.ducklake_table WHERE table_name = 'calendar_t') AND end_snapshot IS NULL
+----
+0
+
+# A whole-partition delete followed by external-file registration remains atomic.
+statement ok
+COPY (SELECT 8 AS id, 'audio' AS source, DATE '2027-01-15' AS date, 80 AS value, 2027 AS year, 1 AS month) TO '{TEST_DIR}/calendar_replacement' (FORMAT PARQUET, PARTITION_BY (source, year, month))
+
+statement ok
+BEGIN
+
+query I
+DELETE FROM ducklake.calendar_t WHERE source = 'audio' AND year(date) IS NOT DISTINCT FROM 2027 AND month(date) IS NOT DISTINCT FROM 1
+----
+1
+
+statement ok
+CALL ducklake_add_data_files('ducklake', 'calendar_t', '{TEST_DIR}/calendar_replacement/**/*.parquet', hive_partitioning => true)
+
+statement ok
+ROLLBACK
+
+query I rowsort
+SELECT id FROM ducklake.calendar_t
+----
+4
+5
+7
+
+# Filtering the untransformed date inside a month cannot prove a whole-file match.
+statement ok
+CREATE TABLE ducklake.partial_t(id INTEGER, source VARCHAR, date DATE)
+
+statement ok
+ALTER TABLE ducklake.partial_t SET PARTITIONED BY (source, year(date), month(date))
+
+statement ok
+INSERT INTO ducklake.partial_t VALUES (1, 'audio', '2026-05-01'), (2, 'audio', '2026-05-31')
+
+query II
+EXPLAIN DELETE FROM ducklake.partial_t WHERE source = 'audio' AND date < DATE '2026-05-15'
+----
+physical_plan	<!REGEX>:.*Ducklake Metadata Delete.*
+
+query I
+DELETE FROM ducklake.partial_t WHERE source = 'audio' AND date < DATE '2026-05-15'
+----
+1
+
+query I
+SELECT id FROM ducklake.partial_t
+----
+2
+
+# Physical column positions diverge from field IDs after dropping a leading column.
+statement ok
+CREATE TABLE ducklake.calendar_mapping_t(id INTEGER, discarded INTEGER, a INTEGER, b INTEGER, date DATE, value INTEGER)
+
+statement ok
+ALTER TABLE ducklake.calendar_mapping_t SET PARTITIONED BY (a, b, year(date), month(date))
+
+statement ok
+INSERT INTO ducklake.calendar_mapping_t VALUES (1, 0, 1, 1, '2026-12-01', 10), (2, 0, 1, 2, '2026-12-15', 20), (3, 0, 2, 1, '2027-01-01', 30), (4, 0, 2, 2, NULL, 40)
+
+statement ok
+ALTER TABLE ducklake.calendar_mapping_t DROP COLUMN discarded
+
+statement ok
+ALTER TABLE ducklake.calendar_mapping_t ALTER COLUMN a TYPE BIGINT
+
+statement ok
+ALTER TABLE ducklake.calendar_mapping_t ALTER COLUMN date TYPE TIMESTAMP
+
+statement ok
+ALTER TABLE ducklake.calendar_mapping_t RENAME COLUMN a TO renamed
+
+statement ok
+ALTER TABLE ducklake.calendar_mapping_t ADD COLUMN added INTEGER DEFAULT 7
+
+query II
+EXPLAIN DELETE FROM ducklake.calendar_mapping_t WHERE renamed = b OR (renamed = 1 AND year(date) IS NOT DISTINCT FROM 2026 AND month(date) IS NOT DISTINCT FROM 12)
+----
+physical_plan	<REGEX>:.*Ducklake Metadata Delete.*
+
+query I
+DELETE FROM ducklake.calendar_mapping_t WHERE renamed = b OR (renamed = 1 AND year(date) IS NOT DISTINCT FROM 2026 AND month(date) IS NOT DISTINCT FROM 12)
+----
+3
+
+query III
+SELECT id, value, added FROM ducklake.calendar_mapping_t
+----
+3	30	7
+
+# Calendar partitions written in UTC cannot prove the same expression in another time zone.
+statement ok
+SET TimeZone = 'UTC'
+
+statement ok
+CREATE TABLE ducklake.timezone_t(id INTEGER, ts TIMESTAMPTZ)
+
+statement ok
+ALTER TABLE ducklake.timezone_t SET PARTITIONED BY (year(ts), month(ts))
+
+statement ok
+INSERT INTO ducklake.timezone_t VALUES (1, TIMESTAMPTZ '2026-01-01 00:30:00+00'), (2, TIMESTAMPTZ '2025-12-31 23:30:00+00'), (3, TIMESTAMPTZ '2026-01-02 12:00:00+00')
+
+statement ok
+SET TimeZone = 'America/New_York'
+
+query II
+EXPLAIN DELETE FROM ducklake.timezone_t WHERE year(ts) IS NOT DISTINCT FROM 2025
+----
+physical_plan	<!REGEX>:.*Ducklake Metadata Delete.*
+
+query I
+DELETE FROM ducklake.timezone_t WHERE year(ts) IS NOT DISTINCT FROM 2025
+----
+2
+
+query I
+SELECT id FROM ducklake.timezone_t
+----
+3
+
+statement ok
+SET TimeZone = 'UTC'

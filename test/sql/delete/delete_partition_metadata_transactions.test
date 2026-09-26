@@ -1,0 +1,221 @@
+# name: test/sql/delete/delete_partition_metadata_transactions.test
+# description: Metadata deletes preserve transaction-local files, prepared execution, and write conflicts
+# group: [delete]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/metadata_transactions', METADATA_CATALOG 'md', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE ducklake.local_t(id INTEGER, p INTEGER)
+
+statement ok
+ALTER TABLE ducklake.local_t SET PARTITIONED BY (p)
+
+statement ok
+INSERT INTO ducklake.local_t VALUES (1, 1), (2, 2)
+
+statement ok
+BEGIN
+
+statement ok
+INSERT INTO ducklake.local_t VALUES (3, 1), (4, 2)
+
+query II
+EXPLAIN DELETE FROM ducklake.local_t WHERE p = 1
+----
+physical_plan	<REGEX>:.*Ducklake Metadata Delete.*
+
+query I
+DELETE FROM ducklake.local_t WHERE p = 1
+----
+2
+
+query I rowsort
+SELECT id FROM ducklake.local_t
+----
+2
+4
+
+statement ok
+ROLLBACK
+
+query I rowsort
+SELECT id FROM ducklake.local_t
+----
+1
+2
+
+statement ok
+BEGIN
+
+statement ok
+INSERT INTO ducklake.local_t VALUES (3, 1), (4, 2)
+
+query I
+DELETE FROM ducklake.local_t WHERE p = 1
+----
+2
+
+statement ok
+COMMIT
+
+query I rowsort
+SELECT id FROM ducklake.local_t
+----
+2
+4
+
+# Executing a prepared delete must include files written after preparation and previous execution.
+statement ok
+PREPARE delete_local AS DELETE FROM ducklake.local_t WHERE p = 1
+
+statement ok
+BEGIN
+
+statement ok
+INSERT INTO ducklake.local_t VALUES (5, 1), (6, 2)
+
+query I
+EXECUTE delete_local
+----
+1
+
+statement ok
+INSERT INTO ducklake.local_t VALUES (7, 1), (8, 2)
+
+query I
+EXECUTE delete_local
+----
+1
+
+statement ok
+COMMIT
+
+query I rowsort
+SELECT id FROM ducklake.local_t
+----
+2
+4
+6
+8
+
+statement ok
+DEALLOCATE delete_local
+
+statement ok
+CREATE TABLE ducklake.concurrent_t(p INTEGER, value INTEGER)
+
+statement ok
+ALTER TABLE ducklake.concurrent_t SET PARTITIONED BY (p)
+
+statement ok
+INSERT INTO ducklake.concurrent_t VALUES (1, 10), (2, 20), (3, 30)
+
+# Concurrent deletes of different partition files can both commit and keep row counts correct.
+statement ok con1
+BEGIN
+
+query II con1
+EXPLAIN DELETE FROM ducklake.concurrent_t WHERE p = 1
+----
+physical_plan	<REGEX>:.*Ducklake Metadata Delete.*
+
+query I con1
+DELETE FROM ducklake.concurrent_t WHERE p = 1
+----
+1
+
+query I con2
+DELETE FROM ducklake.concurrent_t WHERE p = 2
+----
+1
+
+statement ok con1
+COMMIT
+
+query II
+SELECT p, value FROM ducklake.concurrent_t
+----
+3	30
+
+query I
+SELECT record_count FROM md.ducklake_table_stats WHERE table_id = (SELECT table_id FROM md.ducklake_table WHERE table_name = 'concurrent_t')
+----
+1
+
+# Concurrent deletes of the same file must reject one commit.
+statement ok
+INSERT INTO ducklake.concurrent_t VALUES (1, 10), (2, 20)
+
+statement ok con1
+BEGIN
+
+query I con1
+DELETE FROM ducklake.concurrent_t WHERE p = 1
+----
+1
+
+query I con2
+DELETE FROM ducklake.concurrent_t WHERE p = 1
+----
+1
+
+statement error con1
+COMMIT
+----
+Transaction conflict
+
+query II rowsort
+SELECT p, value FROM ducklake.concurrent_t
+----
+2	20
+3	30
+
+# A no-match delete must still detect a conflicting insertion when followed by replacement data.
+statement ok
+INSERT INTO ducklake.concurrent_t VALUES (11, 110)
+
+statement ok con1
+BEGIN
+
+query II con1
+EXPLAIN DELETE FROM ducklake.concurrent_t WHERE p = 9
+----
+physical_plan	<REGEX>:.*Ducklake Metadata Delete.*
+
+query I con1
+DELETE FROM ducklake.concurrent_t WHERE p = 9
+----
+0
+
+statement ok con2
+INSERT INTO ducklake.concurrent_t VALUES (9, 90)
+
+statement ok con1
+INSERT INTO ducklake.concurrent_t VALUES (9, 99)
+
+statement error con1
+COMMIT
+----
+Transaction conflict
+
+query II
+SELECT p, value FROM ducklake.concurrent_t ORDER BY p
+----
+2	20
+3	30
+9	90
+11	110
+
+query I
+SELECT count(*) FROM ducklake.concurrent_t
+----
+4

@@ -1,0 +1,57 @@
+# name: test/sql/quack/partial_file_metadata_delete.test
+# description: Metadata deletes refuse files that are only partially visible to the transaction
+# group: [quack]
+
+require ducklake
+
+require parquet
+
+require quack
+
+require-env DUCKLAKE_CONNECTION
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/quack_partial_file_metadata_delete', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE ducklake.t(id INTEGER, p INTEGER)
+
+statement ok
+ALTER TABLE ducklake.t SET PARTITIONED BY (p)
+
+statement ok
+INSERT INTO ducklake.t VALUES (1, 1)
+
+statement ok con1
+BEGIN
+
+query I con1
+SELECT id FROM ducklake.t
+----
+1
+
+# Quack metadata reads are not pinned to the transaction, so con1 now sees the merged file.
+# It begins at con1's snapshot but also holds a row committed after it.
+statement ok
+INSERT INTO ducklake.t VALUES (2, 1)
+
+statement ok
+CALL ducklake_merge_adjacent_files('ducklake')
+
+query I con1
+DELETE FROM ducklake.t WHERE p = 1
+----
+1
+
+statement error con1
+COMMIT
+----
+Transaction conflict
+
+query I
+SELECT id FROM ducklake.t ORDER BY id
+----
+1
+2
