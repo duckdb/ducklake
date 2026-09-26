@@ -1,0 +1,79 @@
+# name: test/sql/macros/macro_param_version_gate.test
+# description: parameter types and defaults that need dialect SQL are rejected on DuckLake 1.0 catalogs
+# group: [macros]
+
+require ducklake
+
+require parquet
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/macro_param_gate.db' AS ducklake (DATA_PATH '{DATA_PATH}/macro_param_gate', METADATA_CATALOG 'ducklake_param_gate_meta', DUCKLAKE_VERSION '1.0')
+
+statement ok
+USE ducklake
+
+# 1.0 stores only the base type name, so the child types would be lost
+statement error
+CREATE MACRO m(l VARCHAR[]) AS (len(l))
+----
+DuckLake 1.0 does not support nested macro parameter types
+
+statement error
+CREATE MACRO m(st STRUCT(i INTEGER)) AS (st.i)
+----
+DuckLake 1.0 does not support nested macro parameter types
+
+# 1.0 stores defaults as literals, so these cannot be represented either
+statement error
+CREATE MACRO m(l := ['x', 'y']) AS (len(l))
+----
+DuckLake 1.0 does not support non-constant macro parameter defaults
+
+statement error
+CREATE MACRO m(s VARCHAR := NULL::VARCHAR) AS (s IS NULL)
+----
+DuckLake 1.0 does not support typed NULL macro parameter defaults
+
+# plain parameters and literal defaults keep working
+statement ok
+CREATE MACRO m(a, b := 5) AS (a + b)
+
+query I
+SELECT m(1)
+----
+6
+
+query II
+SELECT parameter_type, default_value_type FROM ducklake_param_gate_meta.ducklake_macro_parameters ORDER BY column_id
+----
+unknown	unknown
+unknown	int32
+
+statement ok
+USE memory
+
+statement ok
+DETACH ducklake
+
+# migrating the catalog unlocks all of them
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/macro_param_gate.db' AS ducklake (DATA_PATH '{DATA_PATH}/macro_param_gate', METADATA_CATALOG 'ducklake_param_gate_meta', AUTOMATIC_MIGRATION TRUE)
+
+statement ok
+USE ducklake
+
+statement ok
+CREATE MACRO nested(l VARCHAR[] := ['x', 'y'], s VARCHAR := NULL::VARCHAR) AS (len(l))
+
+query I
+SELECT nested()
+----
+2
+
+query II
+SELECT parameter_type, default_value_type FROM ducklake_param_gate_meta.ducklake_macro_parameters WHERE macro_id = 2 ORDER BY column_id
+----
+VARCHAR[]	expression
+VARCHAR	expression

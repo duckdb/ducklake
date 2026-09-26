@@ -1,0 +1,55 @@
+# name: test/sql/macros/test_roundtrip_default_implicit_cast.test
+# description: a default literal of a different type than the parameter must round-trip and keep the parameter type
+# group: [macros]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/macro_default_implicit_cast.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/macro_default_implicit_cast', METADATA_CATALOG 'ducklake_meta')
+
+statement ok
+USE ducklake
+
+# the default is an INTEGER literal while the parameter is DECIMAL - DuckDB casts it when binding
+statement ok
+CREATE MACRO m(x DECIMAL(10,2) := 1) AS (x)
+
+# the default is stored as written, so it does not carry the parameter type
+query IIII
+SELECT parameter_name, parameter_type, default_value, default_value_type FROM ducklake_meta.ducklake_macro_parameters
+----
+x	DECIMAL(10,2)	1	expression
+
+query II
+SELECT typeof(m()), m()
+----
+DECIMAL(10,2)	1.00
+
+statement ok
+USE memory
+
+statement ok
+DETACH ducklake
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/macro_default_implicit_cast', METADATA_CATALOG 'ducklake_meta')
+
+statement ok
+USE ducklake
+
+# the parameter type still wins after the default is re-parsed as an INTEGER literal
+query II
+SELECT typeof(m()), m()
+----
+DECIMAL(10,2)	1.00
+
+query II
+SELECT typeof(m(3.5)), m(3.5)
+----
+DECIMAL(10,2)	3.50

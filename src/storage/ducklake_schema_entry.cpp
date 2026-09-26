@@ -149,14 +149,27 @@ optional_ptr<CatalogEntry> DuckLakeSchemaEntry::CreateFunction(CatalogTransactio
 	unique_ptr<CatalogEntry> macro_entry;
 	auto &create_macro_info = info.Cast<CreateMacroInfo>();
 	auto version = ParentCatalog().Cast<DuckLakeCatalog>().GetDuckLakeVersion();
+	bool supports_dialect_sql = version >= DuckLakeVersion::V1_1_DEV_1;
 	for (auto &macro : create_macro_info.macros) {
 		for (auto &type : macro->types) {
+			// rejects nested types that carry no child information, such as a bare STRUCT
 			DuckLakeTypes::CheckSupportedType(type, version);
+			if (!supports_dialect_sql && type.IsNested()) {
+				ThrowUnsupportedByVersion(version, "nested macro parameter types");
+			}
 		}
 		for (auto &entry : macro->default_parameters) {
 			Value default_value;
-			if (DuckLakeUtil::TryGetLiteralValue(*entry.second, default_value)) {
-				DuckLakeTypes::CheckSupportedType(default_value.type(), version);
+			if (!DuckLakeUtil::TryGetLiteralValue(*entry.second, default_value)) {
+				if (!supports_dialect_sql) {
+					ThrowUnsupportedByVersion(version, "non-constant macro parameter defaults");
+				}
+				continue;
+			}
+			DuckLakeTypes::CheckSupportedType(default_value.type(), version);
+			if (!supports_dialect_sql && default_value.IsNull() &&
+			    default_value.type().id() != LogicalTypeId::SQLNULL) {
+				ThrowUnsupportedByVersion(version, "typed NULL macro parameter defaults");
 			}
 		}
 	}

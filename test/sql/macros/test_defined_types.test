@@ -33,7 +33,7 @@ FROM __ducklake_metadata_ducklake.ducklake_macro_impl;
 query IIIIIII
 FROM __ducklake_metadata_ducklake.ducklake_macro_parameters;
 ----
-1	0	0	x	int32	NULL	unknown
+1	0	0	x	INTEGER	NULL	unknown
 
 query I
 select add_one(1)
@@ -61,9 +61,9 @@ FROM __ducklake_metadata_ducklake.ducklake_macro_impl;
 query IIIIIII
 FROM __ducklake_metadata_ducklake.ducklake_macro_parameters;
 ----
-1	0	0	x	int32	NULL	unknown
-2	0	0	x	int32	NULL	unknown
-2	0	1	y	unknown	5	int32
+1	0	0	x	INTEGER	NULL	unknown
+2	0	0	x	INTEGER	NULL	unknown
+2	0	1	y	UNKNOWN	5	expression
 
 query I
 select add_two_def(1)
@@ -93,10 +93,10 @@ FROM __ducklake_metadata_ducklake.ducklake_macro_impl;
 query IIIIIII
 FROM __ducklake_metadata_ducklake.ducklake_macro_parameters;
 ----
-1	0	0	x	int32	NULL	unknown
-2	0	0	x	int32	NULL	unknown
-2	0	1	y	unknown	5	int32
-3	0	0	x	int64	1	int32
+1	0	0	x	INTEGER	NULL	unknown
+2	0	0	x	INTEGER	NULL	unknown
+2	0	1	y	UNKNOWN	5	expression
+3	0	0	x	BIGINT	1	expression
 
 query I
 select add_two_def(1)

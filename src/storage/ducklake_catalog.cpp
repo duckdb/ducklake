@@ -438,6 +438,66 @@ static unique_ptr<DuckLakeFieldId> TransformColumnType(DuckLakeColumnInfo &col) 
 	throw InvalidInputException("Unrecognized nested type \"%s\"", col.type);
 }
 
+//! Whether this is a nested type that is missing its child type information
+static bool IsUnresolvedNestedType(const LogicalType &type) {
+	switch (type.id()) {
+	case LogicalTypeId::STRUCT:
+	case LogicalTypeId::LIST:
+	case LogicalTypeId::MAP:
+		return !type.AuxInfo();
+	default:
+		return false;
+	}
+}
+
+static LogicalType ParseMacroParameterType(ClientContext &context, const string &macro_name,
+                                           const DuckLakeMacroParameters &param) {
+	LogicalType result;
+	try {
+		// DuckLake type names take precedence - "int8" is a TINYINT here, but a BIGINT in DuckDB SQL
+		result = DuckLakeTypes::FromString(param.parameter_type);
+	} catch (InvalidInputException &) {
+		// not a DuckLake type name - fall back to the dialect SQL parser
+		result = TransformStringToLogicalType(param.parameter_type, context);
+	}
+	if (IsUnresolvedNestedType(result)) {
+		throw InvalidInputException(
+		    "Macro \"%s\" has parameter \"%s\" stored with type \"%s\", which carries no field information - this "
+		    "macro was written by a DuckLake version that could not store nested parameter types. Set "
+		    "ducklake_macro_parameters.parameter_type in the metadata catalog to the full parameter type (for example "
+		    "VARCHAR[]) to repair it",
+		    macro_name, param.parameter_name, param.parameter_type);
+	}
+	return result;
+}
+
+static unique_ptr<ParsedExpression> ParseMacroParameterDefault(ClientContext &context, const string &macro_name,
+                                                               const DuckLakeMacroParameters &param) {
+	if (param.default_value_type == "expression") {
+		auto expr_list = Parser::ParseExpressionList(param.default_value.GetValue<string>());
+		if (expr_list.size() != 1) {
+			throw InternalException("Expected a single expression");
+		}
+		return std::move(expr_list[0]);
+	}
+	auto expr_type = DuckLakeTypes::FromString(param.default_value_type);
+	if (expr_type.id() == LogicalTypeId::UNKNOWN) {
+		return nullptr;
+	}
+	if (IsUnresolvedNestedType(expr_type)) {
+		throw InvalidInputException(
+		    "Macro \"%s\" has parameter \"%s\" with a default stored as type \"%s\", which carries no field "
+		    "information - this macro was written by a DuckLake version that could not store nested defaults. Set "
+		    "ducklake_macro_parameters.default_value in the metadata catalog to the SQL expression of the default "
+		    "(for example ['x', 'y']) and default_value_type to 'expression' to repair it",
+		    macro_name, param.parameter_name, param.default_value_type);
+	}
+	// older catalogs store the default as a literal alongside its DuckLake type
+	auto casted_value =
+	    expr_type.id() == LogicalTypeId::SQLNULL ? Value() : param.default_value.CastAs(context, expr_type);
+	return ConstantExpression::FromValue(casted_value);
+}
+
 unique_ptr<CreateMacroInfo> CreateMacroInfoFromDucklake(ClientContext &context, DuckLakeMacroInfo &macro,
                                                         string schema_name) {
 	CatalogType type;
@@ -473,21 +533,13 @@ unique_ptr<CreateMacroInfo> CreateMacroInfoFromDucklake(ClientContext &context, 
 		} else {
 			throw InternalException("Unrecognized macro type %s in CreateMacroInfoFromDucklake", impl.type);
 		}
-		vector<unique_ptr<ParsedExpression>> expr_list;
 		for (auto &param : impl.parameters) {
-			expr_list = Parser::ParseExpressionList(param.default_value.ToSQLString());
-			if (expr_list.size() != 1) {
-				throw InternalException("Expected a single expression");
-			}
 			macro_function->parameters.push_back(make_uniq<ColumnRefExpression>(Identifier(param.parameter_name)));
-			auto expr_type = DuckLakeTypes::FromString(param.default_value_type);
-			if (expr_type.id() != LogicalTypeId::UNKNOWN) {
-				auto casted_value =
-				    expr_type.id() == LogicalTypeId::SQLNULL ? Value() : param.default_value.CastAs(context, expr_type);
-				auto casted_expr = ConstantExpression::FromValue(casted_value);
-				macro_function->default_parameters.insert(Identifier(param.parameter_name), std::move(casted_expr));
+			macro_function->types.push_back(ParseMacroParameterType(context, macro.macro_name, param));
+			auto default_expr = ParseMacroParameterDefault(context, macro.macro_name, param);
+			if (default_expr) {
+				macro_function->default_parameters.insert(Identifier(param.parameter_name), std::move(default_expr));
 			}
-			macro_function->types.push_back(DuckLakeTypes::FromString(param.parameter_type));
 		}
 		macro_info->macros.push_back(std::move(macro_function));
 	}
