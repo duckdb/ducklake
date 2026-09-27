@@ -91,9 +91,9 @@ private:
 	//! Replace {METADATA_CATALOG}, {SNAPSHOT_ID}, etc. in SQL.
 	string SubstitutePlaceholders(string sql, const DuckLakeSnapshot &snapshot) const;
 	//! Execute a query on the fresh connection; throw on error.
-	unique_ptr<MaterializedQueryResult> RunQuery(const string &query, const char *what);
+	unique_ptr<QueryResult> RunQuery(const string &query, const char *what);
 	//! Scan a temporary staging table via the catalog API (no SQL, no lock).
-	unique_ptr<MaterializedQueryResult> ScanStagedTable(DuckLakeStagedTableType kind);
+	unique_ptr<QueryResult> ScanStagedTable(DuckLakeStagedTableType kind);
 
 private:
 	ClientContext &context;
@@ -109,6 +109,7 @@ private:
 	TransactionChangeInformation transaction_changes;
 	map<ColumnKey, LogicalType> column_types;
 	map<TableIndex, shared_ptr<DuckLakeTableStats>> existing_table_stats;
+	bool supports_v1_1_metadata = false;
 	bool staged_dropped_files_read = false;
 	vector<pair<string, idx_t>> staged_dropped_files;
 	map<TableIndex, DroppedDataFileStats> staged_dropped_file_stats;

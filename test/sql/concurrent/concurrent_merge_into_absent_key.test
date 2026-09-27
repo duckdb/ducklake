@@ -1,0 +1,39 @@
+# name: test/sql/concurrent/concurrent_merge_into_absent_key.test
+# description: test that concurrent MERGE INTO of a key that does not exist yet triggers a conflict
+# group: [concurrent]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/ducklake_concurrent_merge_absent_key', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE ducklake.tbl(key INTEGER, writer INTEGER);
+
+# no row matches key 42, so every MERGE takes the NOT MATCHED branch
+concurrentloop i 0 4
+
+statement ok
+SET ducklake_max_retry_count = 100
+
+statement ok
+SET ducklake_retry_wait_ms = 100
+
+statement maybe
+MERGE INTO ducklake.tbl AS t USING (SELECT 42 AS key, {i} AS writer) AS s ON t.key = s.key
+WHEN MATCHED THEN UPDATE SET writer = s.writer
+WHEN NOT MATCHED THEN INSERT VALUES (s.key, s.writer)
+----
+
+endloop
+
+query I
+SELECT COUNT(*) FROM ducklake.tbl WHERE key = 42
+----
+1

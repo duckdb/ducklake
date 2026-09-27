@@ -35,15 +35,10 @@ public:
 	void ClearCache() override;
 
 	bool MetadataExists() override;
+	bool InlinedDeletionTableExists(const string &table_name) override;
 
 protected:
 	string MetadataExistsQuery() const override;
-
-private:
-	//! Serializes metadata statements on the shared metadata connection. A failing statement leaves the
-	//! server-side transaction aborted until Query() has rolled it back, so the failure and the recovery
-	//! must not be interleaved with another thread's statement.
-	mutex query_lock;
 };
 
 } // namespace duckdb

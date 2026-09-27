@@ -1,0 +1,31 @@
+# name: test/sql/data_inlining/variant_inlining_version_gate.test
+# description: VARIANT inlining respects the catalog version
+# group: [data_inlining]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/ducklake_variant_gate', METADATA_CATALOG 'ducklake_meta', DATA_INLINING_ROW_LIMIT 10, DUCKLAKE_VERSION '1.0')
+
+statement ok
+CREATE TABLE ducklake.t(id INTEGER, v VARIANT);
+
+statement ok
+INSERT INTO ducklake.t VALUES (1, 42::TINYINT);
+
+query III
+SELECT id, v, variant_typeof(v) FROM ducklake.t
+----
+1	42	INT8
+
+# Catalogs without native VARIANT support write Parquet files on version 1.0
+query I
+SELECT (SELECT COUNT(*) FROM ducklake_list_files('ducklake', 't')) = (catalog_type IN ('postgres', 'sqlite'))::INTEGER FROM ducklake_settings('ducklake')
+----
+true

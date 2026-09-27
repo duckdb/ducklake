@@ -1,0 +1,238 @@
+# name: test/sql/settings/alter_table_reset_options.test
+# description: Test ALTER TABLE RESET (option)
+# group: [settings]
+
+require ducklake
+
+require parquet
+
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/ducklake_alter_reset.db' AS ducklake (DATA_PATH '{TEST_DIR}/ducklake_alter_reset_files');
+
+statement ok
+CALL ducklake.set_option('parquet_compression', 'uncompressed')
+
+statement ok
+CREATE TABLE ducklake.t1(str VARCHAR) WITH (parquet_compression = 'zstd', parquet_version = 2, data_inlining_row_limit = 0)
+
+query II
+SELECT option_name, value FROM ducklake.options() WHERE scope_entry = 'main.t1' ORDER BY ALL
+----
+data_inlining_row_limit	0
+parquet_compression	zstd
+parquet_version	V2
+
+statement ok
+ALTER TABLE ducklake.t1 RESET (parquet_compression, parquet_version)
+
+query II
+SELECT option_name, value FROM ducklake.options() WHERE scope_entry = 'main.t1' ORDER BY ALL
+----
+data_inlining_row_limit	0
+
+query I
+SELECT count(*) FROM __ducklake_metadata_ducklake.ducklake_metadata WHERE scope = 'table'
+----
+1
+
+# The global setting applies again
+query I
+INSERT INTO ducklake.t1 VALUES ('hello')
+----
+1
+
+query I
+SELECT DISTINCT compression FROM parquet_metadata('{TEST_DIR}/ducklake_alter_reset_files/main/t1/**') ORDER BY ALL
+----
+UNCOMPRESSED
+
+# Resetting an option that is not set does nothing
+statement ok
+ALTER TABLE ducklake.t1 RESET (parquet_compression)
+
+# Quoted names and the NULL form
+statement ok
+ALTER TABLE ducklake.t1 SET (parquet_compression = 'gzip', sort_on_insert = false)
+
+statement ok
+ALTER TABLE ducklake.t1 RESET ('parquet_compression', sort_on_insert = NULL)
+
+query II
+SELECT option_name, value FROM ducklake.options() WHERE scope_entry = 'main.t1' ORDER BY ALL
+----
+data_inlining_row_limit	0
+
+# Rollback restores the setting
+statement ok
+ALTER TABLE ducklake.t1 SET (parquet_compression = 'gzip')
+
+statement ok
+BEGIN
+
+statement ok
+ALTER TABLE ducklake.t1 RESET (parquet_compression)
+
+query I
+SELECT count(*) FROM ducklake.options() WHERE option_name = 'parquet_compression' AND scope_entry = 'main.t1'
+----
+0
+
+statement ok
+ROLLBACK
+
+query I
+SELECT value FROM ducklake.options() WHERE option_name = 'parquet_compression' AND scope_entry = 'main.t1'
+----
+gzip
+
+query I
+SELECT value FROM __ducklake_metadata_ducklake.ducklake_metadata WHERE key = 'parquet_compression' AND scope = 'table'
+----
+gzip
+
+# Options persist across attachments
+statement ok
+ALTER TABLE ducklake.t1 RESET (parquet_compression)
+
+statement ok
+DETACH ducklake
+
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/ducklake_alter_reset.db' AS ducklake (DATA_PATH '{TEST_DIR}/ducklake_alter_reset_files');
+
+query II
+SELECT option_name, value FROM ducklake.options() WHERE scope_entry = 'main.t1' ORDER BY ALL
+----
+data_inlining_row_limit	0
+
+# Pending options of tables created in the transaction can be changed
+statement ok
+BEGIN
+
+statement ok
+CREATE TABLE ducklake.t2(str VARCHAR) WITH (parquet_compression = 'zstd', parquet_version = 2, data_inlining_row_limit = 0)
+
+statement ok
+ALTER TABLE ducklake.t2 RESET (parquet_version)
+
+statement ok
+ALTER TABLE ducklake.t2 SET (parquet_compression = 'gzip')
+
+query I
+INSERT INTO ducklake.t2 VALUES ('hello')
+----
+1
+
+statement ok
+COMMIT
+
+query II
+SELECT option_name, value FROM ducklake.options() WHERE scope_entry = 'main.t2' ORDER BY ALL
+----
+data_inlining_row_limit	0
+parquet_compression	gzip
+
+query I
+SELECT DISTINCT compression FROM parquet_metadata('{TEST_DIR}/ducklake_alter_reset_files/main/t2/**') ORDER BY ALL
+----
+GZIP
+
+statement ok
+BEGIN
+
+statement ok
+CREATE TABLE ducklake.t3 WITH (parquet_compression = 'zstd', data_inlining_row_limit = 0) AS SELECT 'hello' str
+
+statement ok
+ALTER TABLE ducklake.t3 RESET (parquet_compression, data_inlining_row_limit)
+
+statement ok
+COMMIT
+
+query I
+SELECT count(*) FROM ducklake.options() WHERE scope_entry = 'main.t3'
+----
+0
+
+# Resetting skip_stats_columns records bounds again
+statement ok
+CREATE TABLE ducklake.t4(id INTEGER, s VARCHAR) WITH (skip_stats_columns = ['s'], data_inlining_row_limit = 0)
+
+statement ok
+ALTER TABLE ducklake.t4 RESET (skip_stats_columns)
+
+statement ok
+INSERT INTO ducklake.t4 VALUES (1, 'aaa'), (2, 'zzz')
+
+query III
+SELECT column_id, min_value, max_value FROM __ducklake_metadata_ducklake.ducklake_file_column_stats WHERE table_id = (SELECT table_id FROM __ducklake_metadata_ducklake.ducklake_table WHERE table_name = 't4' AND end_snapshot IS NULL) ORDER BY column_id
+----
+1	1	2
+2	aaa	zzz
+
+# Errors
+statement error
+ALTER TABLE ducklake.t1 RESET (nonexistent_option)
+----
+Unsupported option nonexistent_option
+
+statement error
+ALTER TABLE ducklake.t1 RESET (expire_older_than)
+----
+can only be set globally
+
+statement error
+ALTER TABLE ducklake.t1 RESET (parquet_compression = 'zstd')
+----
+Reset option
+
+statement error
+ALTER TABLE ducklake.nonexistent RESET (parquet_compression)
+----
+nonexistent
+
+statement ok
+ALTER TABLE IF EXISTS ducklake.nonexistent RESET (parquet_compression)
+
+# A failing name leaves the other names unapplied
+statement ok
+ALTER TABLE ducklake.t1 SET (parquet_compression = 'gzip')
+
+statement error
+ALTER TABLE ducklake.t1 RESET (parquet_compression, nonexistent_option)
+----
+Unsupported option nonexistent_option
+
+query I
+SELECT value FROM ducklake.options() WHERE option_name = 'parquet_compression' AND scope_entry = 'main.t1'
+----
+gzip
+
+statement ok
+DETACH ducklake
+
+# Resetting the inlining limit checks reserved column names like enabling it does
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/ducklake_alter_reset_v10.db' AS dl10 (DATA_PATH '{TEST_DIR}/ducklake_alter_reset_v10_files', DUCKLAKE_VERSION '1.0')
+
+statement ok
+CALL dl10.set_option('data_inlining_row_limit', 10)
+
+statement ok
+CREATE TABLE dl10.t_reserved(row_id INTEGER) WITH (data_inlining_row_limit = 0)
+
+statement error
+ALTER TABLE dl10.t_reserved RESET (data_inlining_row_limit)
+----
+Cannot enable data inlining
+
+statement ok
+CALL dl10.set_option('data_inlining_row_limit', 0)
+
+statement ok
+ALTER TABLE dl10.t_reserved RESET (data_inlining_row_limit)
+
+query I
+SELECT count(*) FROM __ducklake_metadata_dl10.ducklake_metadata WHERE scope = 'table'
+----
+0

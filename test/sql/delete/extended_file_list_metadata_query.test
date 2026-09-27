@@ -1,0 +1,181 @@
+# name: test/sql/delete/extended_file_list_metadata_query.test
+# description: Route extended file-list metadata reads through PostgreSQL during deletes
+# group: [delete]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/extended_file_list_metadata_query', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+USE ducklake
+
+statement ok
+CREATE TABLE events(id INTEGER, ts TIMESTAMP, bucket_key VARCHAR)
+
+statement ok
+ALTER TABLE events SET PARTITIONED BY (bucket(4, bucket_key))
+
+statement ok
+INSERT INTO events VALUES (1, '2026-01-01', 'bucket'), (2, '2026-01-02', 'bucket'), (3, '2026-01-03', 'bucket')
+
+statement ok
+INSERT INTO events VALUES (4, '2026-01-04', 'other'), (5, '2026-01-05', 'other'), (6, '2026-01-06', 'other')
+
+statement ok
+SET VARIABLE before_delete = (SELECT max(snapshot_id) FROM snapshots())
+
+query I
+DELETE FROM events WHERE id = 2
+----
+1
+
+statement ok
+SET VARIABLE first_delete = (SELECT max(snapshot_id) FROM snapshots())
+
+statement ok
+CALL enable_logging('DuckLakeMetadata')
+
+# Reuse the existing partial delete file while pruning on timestamp stats and bucket partition values.
+query I
+DELETE FROM events WHERE ts >= TIMESTAMP '2026-01-02' AND ts < TIMESTAMP '2026-01-04' AND bucket_key = 'bucket'
+----
+1
+
+statement ok
+CREATE TEMP TABLE extended_queries AS
+SELECT lower(regexp_replace(query, '\s+', '', 'g')) AS query
+FROM duckdb_logs_parsed('DuckLakeMetadata')
+WHERE lower(regexp_replace(query, '\s+', '', 'g')) LIKE '%selectdata.data_file_id,del.delete_file_id,data.record_count,%'
+
+# Match the extended projection specifically; a pushed-down ordinary scan must not satisfy this check.
+query I
+SELECT count(*) FROM extended_queries
+----
+1
+
+query I
+SELECT CASE WHEN (SELECT catalog_type FROM settings()) = 'postgres' THEN
+    (SELECT count(*) = 1 FROM extended_queries
+     WHERE query LIKE 'select*frompostgres_query(%'
+       AND length(query) - length(replace(query, 'postgres_query', '')) = length('postgres_query')
+       AND query LIKE '%from"public".ducklake_data_file%'
+       AND query LIKE '%from"public".ducklake_delete_file%'
+       AND query LIKE '%from"public".ducklake_file_column_stats%'
+       AND query LIKE '%from"public".ducklake_file_partition_value%'
+       AND query LIKE '%wheredata.table_id=1and%>=data.begin_snapshotand(%<data.end_snapshotordata.end_snapshotisnull)%'
+       AND query LIKE '%wheretable_id=1and%>=begin_snapshotand(%<end_snapshotorend_snapshotisnull)%'
+       AND query LIKE '%wherecolumn_id=2andtable_id=1%'
+       AND query LIKE '%wheretable_id=1andpartition_key_index=0andpartition_valuein(%'
+       AND query LIKE '%del.data_file_id=data.data_file_id%'
+       AND query LIKE '%min_value~%'
+       AND query LIKE '%collate"c"%')
+    ELSE true END
+----
+true
+
+# There must be no attached metadata scan or DuckDB-only cast in the extended operation.
+query I
+SELECT CASE WHEN (SELECT catalog_type FROM settings()) = 'postgres' THEN
+    (SELECT count(*) = 0 FROM extended_queries
+     WHERE query LIKE '%"__ducklake_metadata_%ducklake_data_file%'
+        OR query LIKE '%"__ducklake_metadata_%ducklake_delete_file%'
+        OR query LIKE '%"__ducklake_metadata_%ducklake_file_column_stats%'
+        OR query LIKE '%"__ducklake_metadata_%ducklake_file_partition_value%'
+        OR query LIKE '%try_cast(%')
+    ELSE true END
+----
+true
+
+query II
+SELECT count(*), sum(id) FROM events
+----
+4	16
+
+query II
+SELECT count(*), sum(id) FROM events AT (VERSION => getvariable('before_delete'))
+----
+6	21
+
+query II
+SELECT count(*), sum(id) FROM events AT (VERSION => getvariable('first_delete'))
+----
+5	19
+
+# Rewriting a delete file must preserve the snapshot of each earlier deletion.
+query II rowsort
+SELECT id, snapshot_id = getvariable('first_delete') FROM ducklake_table_deletions('ducklake', 'main', 'events', getvariable('first_delete'), getvariable('first_delete') + 1)
+----
+2	true
+3	false
+
+# An added column has no stats in old files; newly written all-NULL columns have NULL min/max stats.
+statement ok
+ALTER TABLE events ADD COLUMN score INTEGER
+
+query I
+DELETE FROM events WHERE score IS NULL AND id = 4
+----
+1
+
+statement ok
+INSERT INTO events VALUES (8, '2026-01-08', 'other', NULL)
+
+query I
+DELETE FROM events WHERE score IS NULL AND id = 8
+----
+1
+
+query II
+SELECT count(*), sum(id) FROM events
+----
+3	12
+
+# Unsafe PostgreSQL temporal stats casts must not prune a matching file or fail the delete.
+statement ok
+CREATE TABLE temporal_events(ts TIMESTAMP)
+
+statement ok
+INSERT INTO temporal_events VALUES (TIMESTAMP '-0001-01-01'), (TIMESTAMP '2026-01-01'), (TIMESTAMP '10000-01-01')
+
+# Both unsafe bounds must remain open for pruning; Top-N ordering keeps a NULL cast result.
+query T
+SELECT ts FROM temporal_events WHERE ts >= TIMESTAMP '2026-01-01' AND ts < TIMESTAMP '2027-01-01' ORDER BY ts DESC LIMIT 1
+----
+2026-01-01 00:00:00
+
+query I
+SELECT CASE WHEN (SELECT catalog_type FROM settings()) = 'postgres' THEN
+    (SELECT count(*) = 1 FROM (
+         SELECT lower(regexp_replace(query, '\s+', '', 'g')) AS query
+         FROM duckdb_logs_parsed('DuckLakeMetadata')
+     ) logs
+     WHERE query LIKE '%wherecolumn_id=1andtable_id=3%'
+       AND query LIKE '%coalesce((casewhencol_1_stats.min_value~%''''-infinity''''::timestamp)%'
+       AND query LIKE '%coalesce((casewhencol_1_stats.max_value~%''''infinity''''::timestamp)%'
+       AND query LIKE '%orderby(casewhencol_1_stats.max_value~%descnullslast%')
+    ELSE true END
+----
+true
+
+query I
+DELETE FROM temporal_events WHERE ts >= TIMESTAMP '2026-01-01' AND ts < TIMESTAMP '2027-01-01'
+----
+1
+
+# An unsupported pruning constant is left for the final data filter.
+query I
+DELETE FROM temporal_events WHERE ts = TIMESTAMP '10000-01-01'
+----
+1
+
+query I
+SELECT ts = TIMESTAMP '-0001-01-01' FROM temporal_events
+----
+true

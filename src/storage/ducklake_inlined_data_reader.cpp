@@ -4,7 +4,6 @@
 #include "storage/ducklake_metadata_manager.hpp"
 #include "duckdb/storage/table/column_segment.hpp"
 #include "duckdb/planner/table_filter_state.hpp"
-#include "storage/ducklake_catalog.hpp"
 #include "storage/ducklake_delete_filter.hpp"
 #include "duckdb/common/vector_operations/vector_operations.hpp"
 #include "duckdb/common/sql_identifier.hpp"
@@ -37,7 +36,6 @@ bool DuckLakeInlinedDataReader::TryInitializeScan(ClientContext &context, Global
 		// scanning data from a table - read it from the metadata catalog
 		auto transaction = read_info.GetTransaction();
 		auto &metadata_manager = transaction->GetMetadataManager();
-		auto &ducklake_catalog = transaction->GetCatalog();
 		auto col_names = metadata_manager.InlinedColNames();
 		// push the projections directly into the read
 		vector<string> columns_to_read;
@@ -70,17 +68,8 @@ bool DuckLakeInlinedDataReader::TryInitializeScan(ClientContext &context, Global
 					continue;
 				}
 			}
-			string projected_column = SQLIdentifier::ToString(columns[index].name.GetIdentifierName());
-			auto &metadata_type = ducklake_catalog.MetadataType();
-			bool needs_cast = !metadata_type.empty() && metadata_type != "duckdb" && metadata_type != "quack" &&
-			                  metadata_type != "quack_scanner";
-			if (needs_cast) {
-				// If it's not a duckdb catalog, we add a cast.
-				if (columns[index].type.id() != LogicalTypeId::VARCHAR) {
-					projected_column = metadata_manager.CastColumnToTarget(projected_column, columns[index].type);
-				}
-			}
-			columns_to_read.push_back(projected_column);
+			columns_to_read.push_back(metadata_manager.CastColumnToTarget(
+			    SQLIdentifier::ToString(columns[index].name.GetIdentifierName()), col.type));
 			expected_types.push_back(col.type);
 		}
 		if (deletion_filter) {

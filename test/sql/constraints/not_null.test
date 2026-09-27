@@ -6,7 +6,7 @@ require ducklake
 
 require parquet
 
-test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/ducklake_not_null.db
 
 test-env DATA_PATH {TEST_DIR}
 
@@ -243,5 +243,37 @@ COMMIT;
 
 statement error
 INSERT INTO ducklake.not_null_after_update_transaction VALUES (NULL);
+----
+NOT NULL constraint failed
+
+# Unknown NULL statistics must not bypass validation of the live rows.
+statement ok
+CREATE TABLE ducklake.unknown_null_stats(i INTEGER, j INTEGER);
+
+statement ok
+INSERT INTO ducklake.unknown_null_stats VALUES (NULL, 1), (2, 3);
+
+statement ok
+UPDATE __ducklake_metadata_ducklake.ducklake_table_column_stats
+SET contains_null = NULL
+WHERE table_id = (SELECT table_id FROM __ducklake_metadata_ducklake.ducklake_table WHERE table_name = 'unknown_null_stats');
+
+# Reattach so validation reads the unknown statistics instead of cached values.
+statement ok
+DETACH ducklake;
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/ducklake_not_null_files');
+
+statement error
+ALTER TABLE ducklake.unknown_null_stats ALTER i SET NOT NULL;
+----
+has NULL values
+
+statement ok
+ALTER TABLE ducklake.unknown_null_stats ALTER j SET NOT NULL;
+
+statement error
+INSERT INTO ducklake.unknown_null_stats VALUES (4, NULL);
 ----
 NOT NULL constraint failed

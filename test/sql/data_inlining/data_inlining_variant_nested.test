@@ -1,0 +1,75 @@
+# name: test/sql/data_inlining/data_inlining_variant_nested.test
+# description: Inlined VARIANT fields in nested types
+# group: [data_inlining]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/ducklake_inlining_variant_nested', METADATA_CATALOG 'ducklake_meta', DATA_INLINING_ROW_LIMIT 10000)
+
+statement ok
+CREATE TABLE memory.reference(id INTEGER, s STRUCT("a'b" VARIANT, n INTEGER, "sp ace" VARIANT[][]), m MAP(VARIANT, VARIANT), v VARIANT);
+
+statement ok
+INSERT INTO memory.reference VALUES
+    (1, {'a''b': 1::TINYINT::VARIANT, 'n': 7, 'sp ace': [[NULL::VARIANT, 1.5::FLOAT::VARIANT], NULL, ['two'::VARIANT], []]},
+     map([1::TINYINT::VARIANT, '1'::VARIANT], [NULL::VARIANT, 'hi'::VARIANT]),
+     {'numbers': [1::TINYINT, 2::TINYINT], 'text': 'a' || chr(0) || 'b', 'float': 1.5::FLOAT}),
+    (2, {'a''b': NULL, 'n': NULL, 'sp ace': []}, MAP {}, NULL),
+    (3, NULL, NULL, NULL);
+
+statement ok
+CREATE TABLE ducklake.nested AS FROM memory.reference;
+
+query I
+SELECT COUNT(*) FROM ducklake_list_files('ducklake', 'nested')
+----
+0
+
+query IIIIII nosort nested_values
+SELECT id, s, m, v.float, v.numbers, v.text FROM memory.reference ORDER BY id
+----
+
+query IIIIII nosort nested_values
+SELECT id, s, m, v.float, v.numbers, v.text FROM ducklake.nested ORDER BY id
+----
+
+query IIIII
+SELECT variant_typeof(s."a'b"), variant_typeof(s."sp ace"[1][2]), variant_typeof(map_keys(m)[1]), variant_typeof(v.numbers[1]), variant_typeof(v.float) FROM ducklake.nested WHERE id = 1
+----
+INT8	FLOAT	INT8	INT8	FLOAT
+
+statement ok
+CREATE TABLE ducklake.big(id INTEGER, l VARIANT[]);
+
+statement ok
+INSERT INTO ducklake.big SELECT i, [i::VARIANT, NULL] FROM range(3000) t(i);
+
+statement ok
+INSERT INTO ducklake.big SELECT 3000, list_transform(range(4097), lambda i: CASE WHEN i % 3 = 0 THEN NULL ELSE ('s' || i)::VARIANT END);
+
+query I
+SELECT COUNT(*) FROM ducklake_list_files('ducklake', 'big')
+----
+0
+
+query III
+SELECT COUNT(*), SUM(l[1]::INTEGER), COUNT(*) FILTER (WHERE l[2] IS NULL) FROM ducklake.big WHERE id < 3000
+----
+3000	4498500	3000
+
+query IIIII
+SELECT len(l), l[1], l[2048], l[2049], l[4097] FROM ducklake.big WHERE id = 3000
+----
+4097	NULL	s2047	s2048	s4096
+
+query I
+SELECT COUNT(*) FROM ducklake.big, UNNEST(l) t(v) WHERE id = 3000 AND v IS NULL
+----
+1366

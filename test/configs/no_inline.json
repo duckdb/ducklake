@@ -32,7 +32,8 @@
         "test/sql/migration/inlined_column_rename_hint.test",
         "test/sql/migration/inlined_column_rename_reverse_hint.test",
         "test/sql/migration/inlined_column_rename_stats_hint.test",
-        "test/sql/migration/inlined_column_rename_dev_missing_table.test"
+        "test/sql/migration/inlined_column_rename_dev_missing_table.test",
+        "test/sql/migration/dev1_plain_attach_migration.test"
       ]
     }
   ]

@@ -15,7 +15,16 @@ statement ok
 ATTACH 'postgres:dbname=ducklakedb' AS pg_setup
 
 statement ok
-CALL postgres_execute('pg_setup', 'DROP SCHEMA IF EXISTS junk_1064 CASCADE; DROP SCHEMA IF EXISTS scoped_meta_1064 CASCADE; CREATE SCHEMA junk_1064; CREATE TABLE junk_1064.junk_tbl(i INTEGER);')
+CALL postgres_execute('pg_setup', 'DROP SCHEMA IF EXISTS junk_1064 CASCADE')
+
+statement ok
+CALL postgres_execute('pg_setup', 'DROP SCHEMA IF EXISTS scoped_meta_1064 CASCADE')
+
+statement ok
+CALL postgres_execute('pg_setup', 'CREATE SCHEMA junk_1064')
+
+statement ok
+CALL postgres_execute('pg_setup', 'CREATE TABLE junk_1064.junk_tbl(i INTEGER)')
 
 statement ok
 DETACH pg_setup
@@ -88,7 +97,10 @@ statement ok
 ATTACH 'postgres:dbname=ducklakedb' AS pg_cleanup
 
 statement ok
-CALL postgres_execute('pg_cleanup', 'DROP SCHEMA IF EXISTS junk_1064 CASCADE; DROP SCHEMA IF EXISTS scoped_meta_1064 CASCADE;')
+CALL postgres_execute('pg_cleanup', 'DROP SCHEMA IF EXISTS junk_1064 CASCADE')
+
+statement ok
+CALL postgres_execute('pg_cleanup', 'DROP SCHEMA IF EXISTS scoped_meta_1064 CASCADE')
 
 statement ok
 DETACH pg_cleanup

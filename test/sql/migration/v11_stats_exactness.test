@@ -1,0 +1,93 @@
+# name: test/sql/migration/v11_stats_exactness.test
+# description: stats written under v1.0 keep NULL min_is_exact/max_is_exact after migrating to v1.1
+# group: [migration]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/v11_stats_exactness.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/v11_stats_exactness_files', METADATA_CATALOG 'dl', DATA_INLINING_ROW_LIMIT 0, DUCKLAKE_VERSION '1.0')
+
+statement ok
+CREATE TABLE ducklake.test(i INTEGER, s VARCHAR);
+
+statement ok
+INSERT INTO ducklake.test VALUES (1, 'hello'), (2, 'world');
+
+statement ok
+DETACH ducklake
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/v11_stats_exactness_files', METADATA_CATALOG 'dl', DATA_INLINING_ROW_LIMIT 0, AUTOMATIC_MIGRATION TRUE)
+
+# stats rows that existed before the migration have NULL exactness flags
+query IIII
+SELECT min_value, max_value, min_is_exact::BOOLEAN, max_is_exact::BOOLEAN FROM dl.ducklake_file_column_stats ORDER BY column_id
+----
+1	2	NULL	NULL
+hello	world	NULL	NULL
+
+query IIII
+SELECT min_value, max_value, min_is_exact::BOOLEAN, max_is_exact::BOOLEAN FROM dl.ducklake_table_column_stats ORDER BY column_id
+----
+1	2	NULL	NULL
+hello	world	NULL	NULL
+
+# writes after the migration record exactness
+statement ok
+INSERT INTO ducklake.test VALUES (3, 'apple'), (4, 'zebra');
+
+query IIII
+SELECT min_value, max_value, min_is_exact::BOOLEAN, max_is_exact::BOOLEAN FROM dl.ducklake_file_column_stats ORDER BY data_file_id, column_id
+----
+1	2	NULL	NULL
+hello	world	NULL	NULL
+3	4	true	true
+apple	zebra	true	true
+
+query IIII
+SELECT min_value, max_value, min_is_exact::BOOLEAN, max_is_exact::BOOLEAN FROM dl.ducklake_table_column_stats ORDER BY column_id
+----
+1	4	true	true
+apple	zebra	true	true
+
+# the flags survive a detach/re-attach round-trip through the global stats read path
+statement ok
+DETACH ducklake
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/v11_stats_exactness_files', METADATA_CATALOG 'dl', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+INSERT INTO ducklake.test VALUES (0, 'melon'), (5, 'kiwi');
+
+query IIII
+SELECT min_value, max_value, min_is_exact::BOOLEAN, max_is_exact::BOOLEAN FROM dl.ducklake_table_column_stats ORDER BY column_id
+----
+0	5	true	true
+apple	zebra	true	true
+
+# compaction recomputes global stats from the per-file flags
+statement ok
+CALL ducklake.merge_adjacent_files();
+
+query IIII
+SELECT min_value, max_value, min_is_exact::BOOLEAN, max_is_exact::BOOLEAN
+FROM dl.ducklake_file_column_stats stats
+JOIN dl.ducklake_data_file f USING (data_file_id)
+WHERE f.end_snapshot IS NULL
+ORDER BY column_id
+----
+0	5	true	true
+apple	zebra	true	true
+
+query IIII
+SELECT min_value, max_value, min_is_exact::BOOLEAN, max_is_exact::BOOLEAN FROM dl.ducklake_table_column_stats ORDER BY column_id
+----
+0	5	true	true
+apple	zebra	true	true

@@ -1,0 +1,106 @@
+# name: test/sql/time_travel/future_timestamp.test
+# description: Reject time travel to future timestamps
+# group: [time_travel]
+
+require ducklake
+
+require parquet
+
+require icu
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/future_timestamp.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/future_timestamp')
+
+statement ok
+CREATE TABLE ducklake.test AS SELECT 42 AS i
+
+statement ok
+SET VARIABLE snapshot_time = (SELECT max(snapshot_time) FROM ducklake.snapshots())
+
+# Timestamps at and after the latest snapshot are valid up to the present.
+query I
+SELECT * FROM ducklake.test AT (TIMESTAMP => getvariable('snapshot_time'))
+----
+42
+
+query I
+SELECT * FROM ducklake.test AT (TIMESTAMP => now())
+----
+42
+
+# Resolve timezone-less values in the client time zone, including with remote metadata.
+statement ok
+SET TimeZone = 'Pacific/Kiritimati'
+
+# This is 13 hours ago in UTC+14, before the first snapshot.
+statement error
+SELECT * FROM ducklake.test AT (TIMESTAMP => (now() AT TIME ZONE 'UTC') + INTERVAL '1 hour')
+----
+No snapshot found at timestamp
+
+statement ok
+SET TimeZone = 'America/Los_Angeles'
+
+query I
+SELECT * FROM ducklake.test AT (TIMESTAMP => getvariable('snapshot_time')::TIMESTAMP)
+----
+42
+
+query I
+SELECT * FROM ducklake.test AT (TIMESTAMP => getvariable('snapshot_time')::TIMESTAMP::VARCHAR)
+----
+42
+
+statement error
+SELECT * FROM ducklake.test AT (TIMESTAMP => localtimestamp + INTERVAL '1 hour')
+----
+Cannot time travel to a future timestamp
+
+statement ok
+RESET TimeZone
+
+statement error
+SELECT * FROM ducklake.test AT (TIMESTAMP => now() + INTERVAL '1 day')
+----
+Cannot time travel to a future timestamp
+
+statement error
+SELECT * FROM ducklake.test AT (TIMESTAMP => TIMESTAMP '9999-01-01 00:00:00')
+----
+Cannot time travel to a future timestamp
+
+statement error
+SELECT * FROM ducklake.test AT (TIMESTAMP => '9999-01-01 00:00:00+02')
+----
+Cannot time travel to a future timestamp
+
+statement error
+SELECT * FROM ducklake.test AT (TIMESTAMP => TIMESTAMPTZ 'infinity')
+----
+Cannot time travel to a future timestamp
+
+# Change-feed bounds use the same timestamp validation.
+statement error
+SELECT * FROM ducklake.table_changes('test', getvariable('snapshot_time'), now() + INTERVAL '1 day')
+----
+Cannot time travel to a future timestamp
+
+statement ok
+DETACH ducklake
+
+statement error
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (SNAPSHOT_TIME '9999-01-01 00:00:00+00')
+----
+Cannot time travel to a future timestamp
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (SNAPSHOT_TIME getvariable('snapshot_time'))
+
+query I
+SELECT * FROM ducklake.test
+----
+42

@@ -21,7 +21,6 @@ bool SQLiteMetadataManager::TypeIsNativelySupported(const LogicalType &type) {
 	case LogicalTypeId::DOUBLE:
 	case LogicalTypeId::TIMESTAMP_TZ:
 	case LogicalTypeId::TIMESTAMP_TZ_NS:
-	// Variant is not natively supported
 	case LogicalTypeId::VARIANT:
 		return false;
 	default:
@@ -29,19 +28,20 @@ bool SQLiteMetadataManager::TypeIsNativelySupported(const LogicalType &type) {
 	}
 }
 
-bool SQLiteMetadataManager::SupportsInlining(const LogicalType &type) {
-	if (type.id() == LogicalTypeId::VARIANT) {
-		return false;
-	}
-	return DuckLakeMetadataManager::SupportsInlining(type);
+bool SQLiteMetadataManager::IsRetryableCommitError(const string &message) const {
+	auto lower_message = StringUtil::Lower(message);
+	StringUtil::Trim(lower_message);
+	return StringUtil::EndsWith(lower_message, "database is locked") &&
+	       !StringUtil::Contains(lower_message, "failed to execute query \"commit\": database is locked");
 }
 
 string SQLiteMetadataManager::GetColumnTypeInternal(const LogicalType &column_type) {
 	switch (column_type.id()) {
 	case LogicalTypeId::FLOAT:
 	case LogicalTypeId::DOUBLE:
-	case LogicalTypeId::VARIANT:
 		return "VARCHAR";
+	case LogicalTypeId::SQLNULL:
+		return "INTEGER";
 	default:
 		return column_type.ToString();
 	}

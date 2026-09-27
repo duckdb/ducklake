@@ -21,10 +21,10 @@ public:
 	}
 
 	bool TypeIsNativelySupported(const LogicalType &type) override;
-	bool SupportsInlining(const LogicalType &type) override;
 	bool SupportsAppender() const override {
 		return false;
 	}
+	bool IsRetryableCommitError(const string &message) const override;
 
 	string GetColumnTypeInternal(const LogicalType &type) override;
 };

@@ -186,7 +186,8 @@ SinkFinalizeType DuckLakeFlushData::Finalize(Pipeline &pipeline, Event &event, C
 
 			auto &catalog = table.catalog.Cast<DuckLakeCatalog>();
 			auto &schema = table.ParentSchema().Cast<DuckLakeSchemaEntry>();
-			bool use_deletion_vectors = catalog.WriteDeletionVectors(schema.GetSchemaId(), table.GetTableId());
+			bool use_deletion_vectors =
+			    catalog.WriteDeletionVectors(schema.GetSchemaId(), table.GetTableId(), &table.GetTableOptions());
 			for (auto &file_entry : deletes_per_file) {
 				// write single file, begin_snapshot is the minimum snapshot
 				WriteDeleteFileWithSnapshotsInput file_input {context,
@@ -404,8 +405,8 @@ unique_ptr<LogicalOperator> DuckLakeDataFlusher::GenerateFlushCommand() {
 	copy->names = copy_options.names;
 	copy->expected_types = std::move(copy_options.expected_types);
 
-	copy->hive_file_pattern =
-	    copy_input.catalog.UseHiveFilePattern(!is_encrypted, copy_input.schema_id, copy_input.table_id);
+	copy->hive_file_pattern = copy_input.catalog.UseHiveFilePattern(!is_encrypted, copy_input.schema_id,
+	                                                                copy_input.table_id, &copy_input.table_options);
 
 	copy->children.push_back(std::move(root));
 
@@ -534,7 +535,8 @@ LEFT JOIN (
 	}
 
 	auto &schema = table.ParentSchema().Cast<DuckLakeSchemaEntry>();
-	bool use_deletion_vectors = catalog.WriteDeletionVectors(schema.GetSchemaId(), table.GetTableId());
+	bool use_deletion_vectors =
+	    catalog.WriteDeletionVectors(schema.GetSchemaId(), table.GetTableId(), &table.GetTableOptions());
 	for (auto &entry : files_to_flush) {
 		auto file_id = entry.first;
 		auto &file_info = entry.second;
