@@ -1,0 +1,39 @@
+# name: test/sql/concurrent/concurrent_commit_retry_postgres.test
+# description: concurrent commits to different tables need at most one retry on a Postgres catalog
+# group: [concurrent]
+
+require ducklake
+
+require parquet
+
+require postgres_scanner
+
+require-env DUCKLAKE_CONNECTION postgres:dbname=ducklakedb
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/concurrent_commit_retry_postgres')
+
+statement ok
+CREATE TABLE ducklake.src AS SELECT range AS id FROM range(1000)
+
+# a stale first attempt can collide on the snapshot id, the locked retry must then succeed
+statement ok
+SET ducklake_max_retry_count = 1
+
+concurrentloop i 0 8
+
+loop j 0 10
+
+statement ok
+CREATE OR REPLACE TABLE ducklake.t_{i} AS SELECT * FROM ducklake.src
+
+endloop
+
+endloop
+
+query II
+SELECT COUNT(*), SUM(id) FROM (FROM ducklake.t_0 UNION ALL FROM ducklake.t_7)
+----
+2000	999000

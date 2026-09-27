@@ -1506,6 +1506,9 @@ void DuckLakeTransaction::RunCommitLoop(DuckLakeSnapshot transaction_snapshot,
 		connection->BeginTransaction();
 		snapshot.reset();
 	};
+	context.lock_for_commit = [&]() {
+		metadata_manager->LockForCommit();
+	};
 	context.query_metadata = [&](string q) {
 		return metadata_manager->Query(q);
 	};

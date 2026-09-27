@@ -47,6 +47,9 @@ struct DuckLakeCommitContext {
 	//! Resets per-attempt state before a retry.
 	std::function<void()> prepare_retry = []() {
 	};
+	//! Serializes a retry against other writers so it cannot race on the next snapshot id.
+	std::function<void()> lock_for_commit = []() {
+	};
 	//! Runs a metadata-DB query during post-commit cleanup.
 	std::function<unique_ptr<QueryResult>(string)> query_metadata;
 	//! Runs a snapshot-templated metadata-DB query (handles {SNAPSHOT_ID} substitution).

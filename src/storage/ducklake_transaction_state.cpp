@@ -2007,6 +2007,7 @@ void DuckLakeTransactionState::Commit(DuckLakeSnapshot transaction_snapshot,
 			if (i > 0) {
 				// we failed our first commit due to another transaction committing
 				// retry - but first check for conflicts
+				context.lock_for_commit();
 				commit_stats_snapshot =
 				    CheckForConflicts(transaction_snapshot, attempt_changes, context.conflict_query_executor,
 				                      context.supports_v1_1_metadata);

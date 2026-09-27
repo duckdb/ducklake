@@ -37,6 +37,8 @@ public:
 
 	void ClearCache() override;
 
+	void LockForCommit() override;
+
 protected:
 	string GetLatestSnapshotQuery() const override;
 	string GenerateFileColumnStatsCTEBody(const CTERequirement &req, TableIndex table_id) override;

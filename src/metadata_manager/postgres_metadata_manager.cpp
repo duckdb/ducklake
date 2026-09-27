@@ -302,6 +302,15 @@ void PostgresMetadataManager::ClearCache() {
 	}
 }
 
+void PostgresMetadataManager::LockForCommit() {
+	// Must run before any read: LOCK takes no snapshot, so later REPEATABLE READ reads see the latest commit
+	string query = "LOCK TABLE {METADATA_CATALOG}.ducklake_snapshot IN SHARE ROW EXCLUSIVE MODE";
+	auto result = Execute(DuckLakeSnapshot(), query);
+	if (result->HasError()) {
+		result->GetErrorObject().Throw("Failed to lock the DuckLake snapshot table: ");
+	}
+}
+
 string PostgresMetadataManager::GetLatestSnapshotQuery() const {
 	return R"(
 	SELECT * FROM postgres_query({METADATA_CATALOG_NAME_LITERAL},
