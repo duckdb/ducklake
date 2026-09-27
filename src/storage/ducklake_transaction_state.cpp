@@ -288,34 +288,45 @@ void DuckLakeTransactionState::CheckForConflicts(
 		}
 		if (check_for_matches) {
 			const auto deleted_files = GetFilesDeletedOrDroppedAfterSnapshot(executor);
+			map<TableIndex, vector<idx_t>> deleted_file_ids;
 			for (auto &entry : local_changes.Changes()) {
-				auto table_id = entry.GetTableIndex();
+				auto &table_file_ids = deleted_file_ids[entry.GetTableIndex()];
 				auto &table_changes = entry.GetTableChanges();
-				vector<idx_t> deleted_file_ids;
 				for (auto &file_entry : table_changes.new_delete_files) {
 					for (auto &file : file_entry.second) {
 						ConflictCheck(file.data_file_id, deleted_files.deleted_from_files, "delete from file",
 						              "deleted from it");
-						deleted_file_ids.push_back(file.data_file_id.index);
+						table_file_ids.push_back(file.data_file_id.index);
 					}
 				}
 				if (table_changes.new_inlined_file_deletes) {
 					for (auto &file_entry : table_changes.new_inlined_file_deletes->file_deletes) {
 						ConflictCheck(DataFileIndex(file_entry.first), deleted_files.deleted_from_files,
 						              "delete from file", "deleted from it");
-						deleted_file_ids.push_back(file_entry.first);
-					}
-				}
-				if (other_changes.tables_deleted_inlined.find(table_id) != other_changes.tables_deleted_inlined.end()) {
-					auto inlined_deleted = GetInlinedFileDeletesAfterSnapshot(executor, inlined_delete_table_exists,
-					                                                          table_id, deleted_file_ids);
-					for (auto &file_id : deleted_file_ids) {
-						ConflictCheck(DataFileIndex(file_id), inlined_deleted, "delete from file", "deleted from it");
+						table_file_ids.push_back(file_entry.first);
 					}
 				}
 			}
 			for (auto &file : dropped_files) {
 				ConflictCheck(file.second, deleted_files.deleted_from_files, "delete from file", "deleted from it");
+			}
+			// dropped files carry no table id; data file ids are global, so other tables' probes cannot match
+			for (auto &table_id : changes.tables_deleted_from) {
+				auto &table_file_ids = deleted_file_ids[table_id];
+				for (auto &file : dropped_files) {
+					table_file_ids.push_back(file.second.index);
+				}
+			}
+			for (auto &entry : deleted_file_ids) {
+				auto table_id = entry.first;
+				if (other_changes.tables_deleted_inlined.find(table_id) == other_changes.tables_deleted_inlined.end()) {
+					continue;
+				}
+				auto inlined_deleted =
+				    GetInlinedFileDeletesAfterSnapshot(executor, inlined_delete_table_exists, table_id, entry.second);
+				for (auto &file_id : entry.second) {
+					ConflictCheck(DataFileIndex(file_id), inlined_deleted, "delete from file", "deleted from it");
+				}
 			}
 		}
 	}

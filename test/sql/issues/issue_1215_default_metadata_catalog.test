@@ -118,3 +118,143 @@ statement error con2
 COMMIT
 ----
 Transaction conflict
+
+# An inlined delete must also conflict with a concurrent delete that drops the whole data file
+
+statement ok
+CREATE TABLE ducklake.test_f AS FROM range(100) t(i)
+
+statement ok con1
+BEGIN
+
+statement ok con2
+BEGIN
+
+query I con1
+DELETE FROM ducklake.test_f WHERE i = 50
+----
+1
+
+query I con2
+DELETE FROM ducklake.test_f
+----
+100
+
+statement ok con1
+COMMIT
+
+statement error con2
+COMMIT
+----
+Transaction conflict
+
+query I
+SELECT count(*) FROM ducklake.test_f
+----
+99
+
+# Same, when the drop covers one of two data files
+
+statement ok
+CREATE TABLE ducklake.test_g AS FROM range(100) t(i)
+
+statement ok
+INSERT INTO ducklake.test_g FROM range(100, 200)
+
+statement ok con1
+BEGIN
+
+statement ok con2
+BEGIN
+
+query I con1
+DELETE FROM ducklake.test_g WHERE i = 50
+----
+1
+
+query I con2
+DELETE FROM ducklake.test_g WHERE i < 100
+----
+100
+
+statement ok con1
+COMMIT
+
+statement error con2
+COMMIT
+----
+Transaction conflict
+
+query I
+SELECT count(*) FROM ducklake.test_g
+----
+199
+
+# Reverse order: the file drop commits first, the inlined delete second
+
+statement ok
+CREATE TABLE ducklake.test_h AS FROM range(100) t(i)
+
+statement ok con1
+BEGIN
+
+statement ok con2
+BEGIN
+
+query I con1
+DELETE FROM ducklake.test_h
+----
+100
+
+query I con2
+DELETE FROM ducklake.test_h WHERE i = 50
+----
+1
+
+statement ok con1
+COMMIT
+
+statement error con2
+COMMIT
+----
+Transaction conflict
+
+query I
+SELECT count(*) FROM ducklake.test_h
+----
+0
+
+# An inlined delete in one data file does not conflict with a drop of a different data file
+
+statement ok
+CREATE TABLE ducklake.test_i AS FROM range(100) t(i)
+
+statement ok
+INSERT INTO ducklake.test_i FROM range(100, 200)
+
+statement ok con1
+BEGIN
+
+statement ok con2
+BEGIN
+
+query I con1
+DELETE FROM ducklake.test_i WHERE i = 150
+----
+1
+
+query I con2
+DELETE FROM ducklake.test_i WHERE i < 100
+----
+100
+
+statement ok con1
+COMMIT
+
+statement ok con2
+COMMIT
+
+query I
+SELECT count(*) FROM ducklake.test_i
+----
+99
