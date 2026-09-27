@@ -1,0 +1,53 @@
+# name: test/sql/stats/skip_stats_columns_inlining.test
+# description: skip_stats_columns on the inlined write path and its flush
+# group: [stats]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/skip_stats_columns_inlining.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/skip_stats_columns_inlining', METADATA_CATALOG 'ducklake_meta', DATA_INLINING_ROW_LIMIT 10)
+
+# the inlined write path computes its own stats and recurses into nested types
+statement ok
+CREATE TABLE ducklake.inl(id INTEGER, s VARCHAR, st STRUCT(x INTEGER, y VARCHAR))
+
+statement ok
+CALL ducklake.set_option('skip_stats_columns', ['s', 'st'], table_name => 'inl')
+
+statement ok
+INSERT INTO ducklake.inl VALUES (1, 'aaa', {'x': 1, 'y': 'p'}), (2, 'bbb', {'x': 2, 'y': 'q'})
+
+# no data file yet - without this the section below would pass via the normal write path
+query I
+SELECT count(*) FROM ducklake_meta.ducklake_data_file
+----
+0
+
+query III
+SELECT column_id, min_value, max_value FROM ducklake_meta.ducklake_table_column_stats ORDER BY column_id
+----
+1	1	2
+2	NULL	NULL
+4	NULL	NULL
+5	NULL	NULL
+
+query II
+SELECT count(*) FILTER (s='bbb'), count(*) FILTER (st.y='p') FROM ducklake.inl
+----
+1	1
+
+# flushing to a parquet file keeps the columns bound-less
+statement ok
+CALL ducklake_flush_inlined_data('ducklake')
+
+query II
+SELECT count(*) FILTER (min_value IS NULL), count(*) FILTER (min_value IS NOT NULL)
+FROM ducklake_meta.ducklake_file_column_stats
+----
+3	1

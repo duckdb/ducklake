@@ -1,0 +1,47 @@
+name: Forward review activity to pr-tracker
+
+# Runs on the default branch WITH secrets (workflow_run always does, even when the
+# run it reacts to had none). The triggering review run gave us nothing we trust,
+# so we derive the PR number from the GitHub-supplied head SHA and send only that
+# hint; pr-tracker pulls the actual reviews from the API.
+
+on:
+  workflow_run:
+    workflows: ["Review relay"]
+    types: [completed]
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  forward:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Resolve PR number and dispatch
+        env:
+          # Look up the PR with the built-in token (it can read its own repo); the
+          # dispatch to pr-tracker uses the scoped PAT.
+          GITHUB_LOOKUP_TOKEN: ${{ github.token }}
+          DISPATCH_TOKEN: ${{ secrets.PR_DISPATCH_TOKEN }}
+          REPO: ${{ github.repository }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+          HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
+        run: |
+          set -euo pipefail
+          if ! [[ "$HEAD_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "unexpected head_sha ($HEAD_SHA); skipping"; exit 0
+          fi
+          open_prs=$(GH_TOKEN="$GITHUB_LOOKUP_TOKEN" gh api --paginate \
+            "/repos/$REPO/pulls?state=open&per_page=100" -q '.[]' | jq -s '.' || echo '[]')
+          number=$(printf '%s' "$open_prs" | jq -r --arg sha "$HEAD_SHA" --arg br "$HEAD_BRANCH" \
+            '(map(select(.head.sha==$sha)) + map(select(.head.ref==$br))) | .[0].number // empty')
+          if ! [[ "$number" =~ ^[0-9]+$ ]]; then
+            echo "no open PR matched head_sha $HEAD_SHA (branch $HEAD_BRANCH); skipping"; exit 0
+          fi
+          echo "resolved PR #$number for head_sha $HEAD_SHA; dispatching review_activity"
+          jq -n --arg repo "$REPO" --argjson number "$number" \
+            '{event_type: "pr-event", client_payload: {
+               event: "review_activity", repo: $repo, number: $number
+             }}' \
+          | GH_TOKEN="$DISPATCH_TOKEN" gh api -X POST /repos/duckdblabs/pr-tracker/dispatches --input -

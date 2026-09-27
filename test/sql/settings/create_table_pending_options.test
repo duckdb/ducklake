@@ -1,0 +1,84 @@
+# name: test/sql/settings/create_table_pending_options.test
+# description: Table options apply before the creating transaction commits
+# group: [settings]
+
+require ducklake
+
+require parquet
+
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/pending_options.db' AS ducklake (DATA_PATH '{TEST_DIR}/pending_options_files')
+
+foreach hive_pattern false true
+
+statement ok
+CALL ducklake.set_option('hive_file_pattern', NOT {hive_pattern})
+
+statement ok
+BEGIN
+
+statement ok
+CREATE TABLE ducklake.ctas_{hive_pattern} PARTITIONED BY (i) WITH (hive_file_pattern = {hive_pattern}, data_inlining_row_limit = 0) AS SELECT 1 AS i
+
+statement ok
+CREATE TABLE ducklake.plain_{hive_pattern}(i INTEGER) PARTITIONED BY (i) WITH (hive_file_pattern = {hive_pattern}, data_inlining_row_limit = 0)
+
+statement ok
+INSERT INTO ducklake.plain_{hive_pattern} VALUES (2)
+
+statement ok
+COMMIT
+
+query I
+SELECT contains(f.path, 'i=') = {hive_pattern}
+FROM __ducklake_metadata_ducklake.ducklake_data_file f
+JOIN __ducklake_metadata_ducklake.ducklake_table USING (table_id)
+WHERE table_name IN ('ctas_{hive_pattern}', 'plain_{hive_pattern}')
+----
+true
+true
+
+query I
+SELECT sum(i) FROM (FROM ducklake.ctas_{hive_pattern} UNION ALL FROM ducklake.plain_{hive_pattern})
+----
+3
+
+endloop
+
+foreach deletion_vectors false true
+
+statement ok
+CALL ducklake.set_option('write_deletion_vectors', NOT {deletion_vectors})
+
+statement ok
+BEGIN
+
+statement ok
+CREATE TABLE ducklake.deletes_{deletion_vectors}(i INTEGER) WITH (write_deletion_vectors = {deletion_vectors}, data_inlining_row_limit = 0)
+
+statement ok
+INSERT INTO ducklake.deletes_{deletion_vectors} SELECT range FROM range(5)
+
+statement ok
+DELETE FROM ducklake.deletes_{deletion_vectors} WHERE i = 1
+
+statement ok
+COMMIT
+
+query I
+SELECT ends_with(f.path, '.puffin') = {deletion_vectors}
+FROM __ducklake_metadata_ducklake.ducklake_delete_file f
+JOIN __ducklake_metadata_ducklake.ducklake_table USING (table_id)
+WHERE table_name = 'deletes_{deletion_vectors}'
+----
+true
+
+query I
+SELECT i FROM ducklake.deletes_{deletion_vectors} ORDER BY i
+----
+0
+2
+3
+4
+
+endloop

@@ -1,0 +1,64 @@
+# name: test/sql/view/view_null_column_aliases.test
+# description: test reading views that have a NULL column_aliases entry in the metadata catalog
+# group: [view]
+
+require ducklake
+
+require parquet
+
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/view_null_column_aliases.db' AS dl (DATA_PATH '{TEST_DIR}/view_null_column_aliases_files')
+
+statement ok
+CREATE TABLE dl.t AS SELECT 42 AS a
+
+statement ok
+CREATE VIEW dl.v_plain_empty_string AS SELECT * FROM dl.t
+
+statement ok
+CREATE VIEW dl.v_plain_null AS SELECT * FROM dl.t
+
+statement ok
+CREATE VIEW dl.v_alias(b) AS SELECT * FROM dl.t
+
+# DuckLake itself writes an empty list, but the spec allows NULL when no rename is set.
+# Simulate what other systems that follow the DuckLake spec would write into the
+# ducklake_view.column_aliases column.
+statement ok
+UPDATE __ducklake_metadata_dl.main.ducklake_view SET column_aliases = NULL WHERE view_name = 'v_plain_null'
+
+statement ok
+DETACH dl
+
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/view_null_column_aliases.db' AS dl (DATA_PATH '{TEST_DIR}/view_null_column_aliases_files')
+
+# Check the state of the column_aliases column.
+query TT
+SELECT view_name, column_aliases FROM __ducklake_metadata_dl.main.ducklake_view ORDER BY view_name
+----
+v_alias	"b"
+v_plain_empty_string	(empty)
+v_plain_null	NULL
+
+query I
+SELECT * FROM dl.v_plain_empty_string
+----
+42
+
+query I
+SELECT * FROM dl.v_plain_null
+----
+42
+
+query I
+SELECT * FROM dl.v_alias
+----
+42
+
+query TT
+SELECT table_name, column_name FROM information_schema.columns WHERE table_catalog='dl' AND table_name LIKE 'v_%' ORDER BY ALL
+----
+v_alias	b
+v_plain_empty_string	a
+v_plain_null	a

@@ -1,0 +1,90 @@
+# name: test/sql/data_inlining/data_inlining_variant_sql_rollback.test
+# description: SQL VARIANT encoding failures roll back metadata and allow the next commit
+# group: [data_inlining]
+
+require ducklake
+
+require parquet
+
+require json
+
+require sqlite_scanner
+
+test-env DUCKLAKE_CONNECTION sqlite:{TEST_DIR}/variant_sql_rollback.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/variant_sql_rollback', DATA_INLINING_ROW_LIMIT 100);
+
+statement ok
+CREATE TABLE ducklake.t(id INTEGER, v VARIANT, s VARCHAR, j JSON);
+
+statement ok
+INSERT INTO ducklake.t VALUES (0, 42::TINYINT, 'a' || chr(0) || '\x41', '{"a": 1}');
+
+query I nosort before_failure
+SELECT max(snapshot_id) FROM ducklake_snapshots('ducklake');
+----
+
+statement ok
+BEGIN;
+
+statement ok
+CREATE TABLE ducklake.failed(v VARIANT);
+
+statement ok
+INSERT INTO ducklake.failed VALUES (INTERVAL '1 day');
+
+statement ok
+UPDATE ducklake.t SET v = 'discarded';
+
+statement error
+COMMIT;
+----
+Can't convert VARIANT of type 'INTERVAL' to Parquet VARIANT
+
+query I nosort before_failure
+SELECT max(snapshot_id) FROM ducklake_snapshots('ducklake');
+----
+
+query I
+SELECT count(*) FROM duckdb_tables() WHERE database_name = 'ducklake' AND table_name = 'failed';
+----
+0
+
+query III
+SELECT rowid, v, variant_typeof(v) FROM ducklake.t;
+----
+0	42	INT8
+
+# Mix preserved and newly allocated row IDs in one commit after the failed INSERT.
+statement ok
+BEGIN;
+
+statement ok
+UPDATE ducklake.t SET v = 1.5::FLOAT;
+
+statement ok
+INSERT INTO ducklake.t VALUES (1, 7::SMALLINT, NULL, NULL);
+
+statement ok
+COMMIT;
+
+query IIIIII
+SELECT rowid, id, v, variant_typeof(v), hex(s), j FROM ducklake.t ORDER BY id;
+----
+0	0	1.5	FLOAT	61005C783431	{"a": 1}
+1	1	7	INT16	NULL	NULL
+
+# Rolled-back metadata table names can be reused with a different schema.
+statement ok
+CREATE TABLE ducklake.recreated(id INTEGER, v VARIANT, s VARCHAR);
+
+statement ok
+INSERT INTO ducklake.recreated VALUES (99, 3.5::FLOAT, 'new schema');
+
+query IIII
+SELECT rowid, id, v, s FROM ducklake.recreated;
+----
+0	99	3.5	new schema

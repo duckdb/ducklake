@@ -1,0 +1,108 @@
+# name: test/sql/settings/create_table_inlining_options.test
+# description: Reserved column validation uses table inlining options
+# group: [settings]
+
+require ducklake
+
+require parquet
+
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/inlining_options.db' AS ducklake (DATA_PATH '{TEST_DIR}/inlining_options_files', DUCKLAKE_VERSION '1.0')
+
+statement ok
+BEGIN
+
+statement ok
+CREATE TABLE ducklake.t(row_id INTEGER) WITH (data_inlining_row_limit = 0)
+
+statement ok
+ALTER TABLE ducklake.t ADD COLUMN begin_snapshot INTEGER
+
+statement ok
+ALTER TABLE ducklake.t RENAME COLUMN begin_snapshot TO end_snapshot
+
+statement ok
+INSERT INTO ducklake.t VALUES (1, 2)
+
+statement ok
+COMMIT
+
+query II
+SELECT row_id, end_snapshot FROM ducklake.t
+----
+1	2
+
+statement ok
+CREATE TABLE ducklake.ctas WITH (data_inlining_row_limit = 0) AS SELECT 3 AS row_id
+
+query I
+SELECT row_id FROM ducklake.ctas
+----
+3
+
+query I
+SELECT count(*) FROM __ducklake_metadata_ducklake.ducklake_data_file
+----
+2
+
+statement ok
+CALL ducklake.set_option('data_inlining_row_limit', 0)
+
+statement ok
+BEGIN
+
+statement ok
+CREATE TABLE ducklake.inlined(i INTEGER) WITH (data_inlining_row_limit = 10)
+
+statement error
+ALTER TABLE ducklake.inlined ADD COLUMN row_id INTEGER
+----
+reserved by DuckLake
+
+statement ok
+ROLLBACK
+
+statement ok
+BEGIN
+
+statement ok
+CREATE TABLE ducklake.inlined(i INTEGER) WITH (data_inlining_row_limit = 10)
+
+statement error
+ALTER TABLE ducklake.inlined RENAME COLUMN i TO row_id
+----
+reserved by DuckLake
+
+statement ok
+ROLLBACK
+
+query I
+SELECT count(*) FROM __ducklake_metadata_ducklake.ducklake_data_file
+----
+2
+
+# Schema scope changes skip tables that opted out, committed or pending
+statement ok
+BEGIN
+
+statement ok
+CREATE TABLE ducklake.opted_out(row_id INTEGER) WITH (data_inlining_row_limit = 0)
+
+statement ok
+CALL ducklake.set_option('data_inlining_row_limit', 10, schema => 'main')
+
+statement ok
+ROLLBACK
+
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/inlining_options_v11.db' AS dl11 (DATA_PATH '{TEST_DIR}/inlining_options_v11_files')
+
+statement error
+CREATE TABLE dl11.t(_ducklake_internal_row_id INTEGER) WITH (data_inlining_row_limit = 0)
+----
+reserved by DuckLake
+
+statement error
+CREATE TABLE dl11.ctas WITH (data_inlining_row_limit = 0) AS SELECT 1 AS _ducklake_internal_row_id
+----
+reserved by DuckLake

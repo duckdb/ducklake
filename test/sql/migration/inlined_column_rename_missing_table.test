@@ -1,0 +1,47 @@
+# name: test/sql/migration/inlined_column_rename_missing_table.test
+# description: an unreadable registered inlined data table must abort the migration instead of silently skipping its rename
+# group: [migration]
+
+require ducklake
+
+require parquet
+
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/missing_inlined.db' AS dl (DATA_PATH '{TEST_DIR}/missing_inlined_files', DUCKLAKE_VERSION '1.0')
+
+statement ok
+CREATE TABLE dl.t(i INTEGER);
+
+statement ok
+INSERT INTO dl.t VALUES (1);
+
+statement ok
+DETACH dl
+
+# simulate drift where the registered inlined table is gone
+statement ok
+ATTACH '{TEST_DIR}/missing_inlined.db' AS meta;
+
+statement ok
+DROP TABLE meta.ducklake_inlined_data_1_1;
+
+statement ok
+DETACH meta
+
+# the migration must fail loudly instead of skipping the rename and bumping the version
+statement error
+ATTACH 'ducklake:{TEST_DIR}/missing_inlined.db' AS dl (DATA_PATH '{TEST_DIR}/missing_inlined_files', AUTOMATIC_MIGRATION TRUE)
+----
+Failed to read inlined-data table
+
+# the catalog is still at v1.0
+statement ok
+ATTACH '{TEST_DIR}/missing_inlined.db' AS meta;
+
+query I
+SELECT value FROM meta.ducklake_metadata WHERE key = 'version'
+----
+1.0
+
+statement ok
+DETACH meta

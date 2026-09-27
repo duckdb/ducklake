@@ -1,0 +1,93 @@
+# name: test/sql/migration/inlined_column_rename.test
+# description: migrating a v1.0 catalog renames inlined data metadata columns to the _ducklake_ prefix
+# group: [migration]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/inlined_column_rename.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/inlined_rename_files', METADATA_CATALOG 'dlmeta', DUCKLAKE_VERSION '1.0')
+
+statement ok
+CREATE TABLE dl.t(i INTEGER, j INTEGER);
+
+statement ok
+INSERT INTO dl.t VALUES (1, 2), (3, 4);
+
+# v1.0 inlined tables use unprefixed metadata columns
+statement ok
+SELECT row_id, begin_snapshot, end_snapshot FROM dlmeta.ducklake_inlined_data_1_1 LIMIT 0;
+
+statement ok
+DETACH dl
+
+# reattaching without migration keeps the catalog readable at v1.0
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/inlined_rename_files', METADATA_CATALOG 'dlmeta')
+
+query II
+SELECT * FROM dl.t ORDER BY i
+----
+1	2
+3	4
+
+statement ok
+INSERT INTO dl.t VALUES (5, 6);
+
+statement ok
+DETACH dl
+
+# migrating to v1.1 renames the metadata columns
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/inlined_rename_files', METADATA_CATALOG 'dlmeta', AUTOMATIC_MIGRATION TRUE)
+
+statement error
+SELECT row_id FROM dlmeta.ducklake_inlined_data_1_1 LIMIT 0;
+----
+row_id
+
+statement ok
+SELECT _ducklake_row_id, _ducklake_begin_snapshot, _ducklake_end_snapshot FROM dlmeta.ducklake_inlined_data_1_1 LIMIT 0;
+
+# row ids are preserved across the rename
+query III
+SELECT rowid, i, j FROM dl.t ORDER BY rowid
+----
+0	1	2
+1	3	4
+2	5	6
+
+statement ok
+INSERT INTO dl.t VALUES (7, 8);
+
+statement ok
+DELETE FROM dl.t WHERE i = 3;
+
+query II
+SELECT i, j FROM dl.t ORDER BY i
+----
+1	2
+5	6
+7	8
+
+statement ok
+DETACH dl
+
+# rerunning the dev migration changes nothing
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/inlined_rename_files', METADATA_CATALOG 'dlmeta', AUTOMATIC_MIGRATION TRUE)
+
+query II
+SELECT i, j FROM dl.t ORDER BY i
+----
+1	2
+5	6
+7	8
+
+statement ok
+DETACH dl

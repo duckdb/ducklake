@@ -106,6 +106,8 @@ struct ParquetColumn {
 	optional_idx precision;
 	optional_idx field_id;
 	string logical_type;
+	//! Set when the field mapping is made - see the skip_stats_columns option
+	bool skip_bounds = false;
 	vector<DuckLakeColumnStats> column_stats;
 
 	vector<unique_ptr<ParquetColumn>> child_columns;
@@ -156,7 +158,8 @@ public:
 	DuckLakeFileProcessor(DuckLakeTransaction &transaction, ClientContext &context,
 	                      const DuckLakeAddDataFilesData &bind_data)
 	    : transaction(transaction), context(context), table(bind_data.table), allow_missing(bind_data.allow_missing),
-	      ignore_extra_columns(bind_data.ignore_extra_columns), hive_partitioning(bind_data.hive_partitioning) {
+	      ignore_extra_columns(bind_data.ignore_extra_columns), hive_partitioning(bind_data.hive_partitioning),
+	      skipped_fields(bind_data.table.GetSkippedStatsFields()) {
 	}
 
 	vector<DuckLakeDataFile> AddFiles(const vector<string> &globs);
@@ -190,6 +193,7 @@ private:
 	map<string, string> hive_partitions;
 	HivePartitioningType hive_partitioning;
 	unordered_set<string> processed_files;
+	unordered_set<idx_t> skipped_fields;
 };
 
 void DuckLakeFileProcessor::ReadParquetFullMetadata(const string &glob, vector<DuckLakeDataFile> &written_files) {
@@ -210,7 +214,9 @@ SELECT
 		stats_num_values := x.num_values,
         total_compressed_size := x.total_compressed_size,
         geo_bbox := x.geo_bbox,
-        geo_types := x.geo_types
+        geo_types := x.geo_types,
+        min_is_exact := x.min_is_exact AND (x.stats_min IS NULL OR x.stats_min = x.stats_min_value),
+        max_is_exact := x.max_is_exact AND (x.stats_max IS NULL OR x.stats_max = x.stats_max_value)
     )) AS parquet_metadata,
     list_transform(parquet_schema, lambda x: struct_pack(
         "name" := x."name",
@@ -418,6 +424,8 @@ FROM parquet_full_metadata(%s)
 		auto &total_compressed_size_vec = metadata_struct_children[5];
 		auto &geo_bbox_vec = metadata_struct_children[6];
 		auto &geo_types_vec = metadata_struct_children[7];
+		auto &min_is_exact_vec = metadata_struct_children[8];
+		auto &max_is_exact_vec = metadata_struct_children[9];
 
 		auto column_id_data = FlatVector::GetData<int64_t>(column_id_vec);
 		auto stats_min_data = FlatVector::GetData<string_t>(stats_min_vec);
@@ -425,6 +433,8 @@ FROM parquet_full_metadata(%s)
 		auto stats_null_count_data = FlatVector::GetData<int64_t>(stats_null_count_vec);
 		auto stats_num_values_data = FlatVector::GetData<int64_t>(stats_num_values_vec);
 		auto total_compressed_size_data = FlatVector::GetData<int64_t>(total_compressed_size_vec);
+		auto min_is_exact_data = FlatVector::GetData<bool>(min_is_exact_vec);
+		auto max_is_exact_data = FlatVector::GetData<bool>(max_is_exact_vec);
 
 		auto &column_id_validity = FlatVector::Validity(column_id_vec);
 		auto &stats_min_validity = FlatVector::Validity(stats_min_vec);
@@ -434,6 +444,8 @@ FROM parquet_full_metadata(%s)
 		auto &total_compressed_size_validity = FlatVector::Validity(total_compressed_size_vec);
 		auto &geo_bbox_validity = FlatVector::Validity(geo_bbox_vec);
 		auto &geo_types_validity = FlatVector::Validity(geo_types_vec);
+		auto &min_is_exact_validity = FlatVector::Validity(min_is_exact_vec);
+		auto &max_is_exact_validity = FlatVector::Validity(max_is_exact_vec);
 
 		for (idx_t metadata_idx = parquet_metadata_offset;
 		     metadata_idx < parquet_metadata_offset + parquet_metadata_length; metadata_idx++) {
@@ -453,15 +465,19 @@ FROM parquet_full_metadata(%s)
 			auto &column = column_entry->second.get();
 			auto &column_field = column_field_entry->second;
 			DuckLakeColumnStats stats(column_field.second);
-
-			if (stats_min_validity.RowIsValid(metadata_idx)) {
+			// min/max are copied out of the footer here, once per row group, so a skipped column
+			// never materializes them - the geo bbox below is untouched, as ClearBounds was too
+			if (!column.skip_bounds && stats_min_validity.RowIsValid(metadata_idx)) {
 				stats.has_min = true;
 				stats.min = stats_min_data[metadata_idx].GetString();
+				// files without the footer flag conservatively count as truncated
+				stats.min_is_exact = min_is_exact_validity.RowIsValid(metadata_idx) && min_is_exact_data[metadata_idx];
 			}
 
-			if (stats_max_validity.RowIsValid(metadata_idx)) {
+			if (!column.skip_bounds && stats_max_validity.RowIsValid(metadata_idx)) {
 				stats.has_max = true;
 				stats.max = stats_max_data[metadata_idx].GetString();
+				stats.max_is_exact = max_is_exact_validity.RowIsValid(metadata_idx) && max_is_exact_data[metadata_idx];
 			}
 
 			if (stats_null_count_validity.RowIsValid(metadata_idx)) {
@@ -612,6 +628,8 @@ LogicalType DuckLakeParquetTypeChecker::DeriveLogicalType(const ParquetColumn &s
 			return LogicalType::TIMESTAMP_TZ;
 		} else if (StringUtil::StartsWith(s_ele.logical_type, "UUIDType()")) {
 			return LogicalType::UUID;
+		} else if (StringUtil::StartsWith(s_ele.logical_type, "NullType()")) {
+			return LogicalType::SQLNULL;
 		} else if (StringUtil::StartsWith(s_ele.logical_type, "Geometry")) {
 			return LogicalType::GEOMETRY();
 		}
@@ -908,6 +926,7 @@ unique_ptr<DuckLakeNameMapEntry> DuckLakeFileProcessor::MapColumn(ParquetFileMet
 	// Store the mapping from column to field for later statistics processing
 	file_metadata.column_id_to_field_map.emplace(column.column_id,
 	                                             make_pair(field_id.GetFieldIndex(), field_id.Type()));
+	column.skip_bounds = skipped_fields.count(field_id.GetFieldIndex().index) > 0;
 
 	// recursively remap children (if any)
 	if (field_id.HasChildren()) {
@@ -976,8 +995,8 @@ unique_ptr<DuckLakeNameMapEntry> DuckLakeFileProcessor::MapHiveColumn(ParquetFil
 	}
 
 	string error;
-	Value cast_result;
-	if (!hive_value.DefaultTryCastAs(target_type, cast_result, &error)) {
+	auto cast_result = hive_value.DefaultTryCastAs(target_type, &error);
+	if (!cast_result) {
 		throw InvalidInputException("Column \"%s\" exists as a hive partition with value \"%s\", but this value cannot "
 		                            "be cast to the column type \"%s\"",
 		                            field_id.Name(), hive_value.ToString(), field_id.Type());
@@ -1052,7 +1071,6 @@ void DuckLakeFileProcessor::MapColumnStats(ParquetFileMetadata &file_metadata, D
 				}
 			}
 
-			numeric_type = aggregated.type.IsNumeric();
 			Value numeric_min_cache;
 			Value numeric_max_cache;
 			bool min_cache_valid = false;
@@ -1083,10 +1101,16 @@ void DuckLakeFileProcessor::MapColumnStats(ParquetFileMetadata &file_metadata, D
 						auto stats_min_val = Value(stats.min).DefaultCastAs(aggregated.type);
 						if (stats_min_val < numeric_min_cache) {
 							aggregated.min = stats.min;
+							aggregated.min_is_exact = stats.min_is_exact;
 							numeric_min_cache = std::move(stats_min_val);
+						} else if (stats_min_val == numeric_min_cache) {
+							aggregated.min_is_exact = aggregated.min_is_exact && stats.min_is_exact;
 						}
 					} else if (stats.min < aggregated.min) {
 						aggregated.min = stats.min;
+						aggregated.min_is_exact = stats.min_is_exact;
+					} else if (stats.min == aggregated.min) {
+						aggregated.min_is_exact = aggregated.min_is_exact && stats.min_is_exact;
 					}
 				}
 			}
@@ -1107,10 +1131,16 @@ void DuckLakeFileProcessor::MapColumnStats(ParquetFileMetadata &file_metadata, D
 						auto stats_max_val = Value(stats.max).DefaultCastAs(aggregated.type);
 						if (stats_max_val > numeric_max_cache) {
 							aggregated.max = stats.max;
+							aggregated.max_is_exact = stats.max_is_exact;
 							numeric_max_cache = std::move(stats_max_val);
+						} else if (stats_max_val == numeric_max_cache) {
+							aggregated.max_is_exact = aggregated.max_is_exact && stats.max_is_exact;
 						}
 					} else if (stats.max > aggregated.max) {
 						aggregated.max = stats.max;
+						aggregated.max_is_exact = stats.max_is_exact;
+					} else if (stats.max == aggregated.max) {
+						aggregated.max_is_exact = aggregated.max_is_exact && stats.max_is_exact;
 					}
 				}
 			}
@@ -1137,13 +1167,15 @@ void DuckLakeFileProcessor::MapColumnStats(ParquetFileMetadata &file_metadata, D
 		column_stats.has_num_values = true;
 		column_stats.num_values = file_metadata.row_count.GetIndex();
 		column_stats.has_null_count = true;
-		if (!hive_value.IsNull()) {
-			column_stats.min = column_stats.max = hive_value.ToString();
-			column_stats.has_min = column_stats.has_max = true;
-		} else {
+		if (hive_value.IsNull()) {
 			// All rows in this file have NULL for this partition column
 			column_stats.null_count = file_metadata.row_count.GetIndex();
 			column_stats.any_valid = false;
+		} else if (!skipped_fields.count(field_index.index)) {
+			// a skipped column records counts but not the folder value
+			column_stats.min = column_stats.max = hive_value.ToString();
+			column_stats.has_min = column_stats.has_max = true;
+			column_stats.min_is_exact = column_stats.max_is_exact = true;
 		};
 
 		result.column_stats.emplace(field_index, std::move(column_stats));

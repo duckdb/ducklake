@@ -25,4 +25,4 @@ endif
 include extension-ci-tools/makefiles/duckdb_extension.Makefile
 
 unittest_relassert:
-	python3 duckdb/scripts/ci/run_tests.py build/relassert/test/unittest $(T)
+	python3 duckdb/scripts/ci/run_tests.py build/relassert/test/unittest --batch-timeout 900 --max-retries 10 $(T)

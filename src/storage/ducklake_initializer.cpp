@@ -230,9 +230,15 @@ void DuckLakeInitializer::LoadExistingDuckLake(DuckLakeTransaction &transaction)
 				metadata_manager.MigrateV04();
 				catalog_version = DuckLakeVersion::V1_0;
 			}
-			if (catalog_version == DuckLakeVersion::V1_1_DEV_1 && options.automatic_migration) {
-				// dev schemas evolve in place
-				metadata_manager.MigrateV10(true);
+			if (catalog_version == DuckLakeVersion::V1_1_DEV_1) {
+				// dev schemas evolve in place, re-run the v1.1 migration so older dev catalogs get every addition
+				if (options.automatic_migration) {
+					// an explicitly requested migration fails loudly
+					metadata_manager.MigrateV10(true);
+				} else if (options.access_mode != AccessMode::READ_ONLY) {
+					// a plain attach is best-effort and never fails the attach
+					metadata_manager.MigrateV10Dev();
+				}
 			}
 			if (catalog_version >= target_version) {
 				resolved_version = catalog_version;

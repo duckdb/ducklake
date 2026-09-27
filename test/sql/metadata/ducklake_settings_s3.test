@@ -1,5 +1,5 @@
-# name: test/sql/metadata/ducklake_settings_minio.test
-# description: Test ducklake_settings function with minio data path
+# name: test/sql/metadata/ducklake_settings_s3.test
+# description: Test ducklake_settings function with an S3 data path
 # group: [metadata]
 
 require ducklake

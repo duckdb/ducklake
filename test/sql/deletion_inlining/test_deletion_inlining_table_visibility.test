@@ -1,0 +1,61 @@
+# name: test/sql/deletion_inlining/test_deletion_inlining_table_visibility.test
+# description: A transaction older than the inlined deletion table reads its own snapshot
+# group: [deletion_inlining]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/deletion_inlining_table_visibility', DATA_INLINING_ROW_LIMIT 10, METADATA_CATALOG 'ducklake_meta')
+
+# 50 rows exceed the inlining limit, so they are written to a data file.
+statement ok
+CREATE TABLE ducklake.t AS SELECT range a FROM range(50)
+
+statement ok con2
+BEGIN
+
+query II con2
+SELECT COUNT(*), SUM(a) FROM ducklake.t
+----
+50	1225
+
+# A small delete is inlined, creating the inlined deletion table after con2's snapshot.
+query I con1
+DELETE FROM ducklake.t WHERE a < 5
+----
+5
+
+query II con1
+SELECT COUNT(*), SUM(a) FROM ducklake.t
+----
+45	1215
+
+query II con2
+SELECT COUNT(*), SUM(a) FROM ducklake.t
+----
+50	1225
+
+statement ok con2
+COMMIT
+
+query II con2
+SELECT COUNT(*), SUM(a) FROM ducklake.t
+----
+45	1215
+
+# A new transaction on the same connection can use the existing deletion table.
+query I con2
+DELETE FROM ducklake.t WHERE a >= 5 AND a < 10
+----
+5
+
+query II
+SELECT COUNT(*), SUM(a) FROM ducklake.t
+----
+40	1180

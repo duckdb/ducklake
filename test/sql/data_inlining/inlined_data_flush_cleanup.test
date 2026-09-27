@@ -40,7 +40,7 @@ statement ok
 CALL ducklake_flush_inlined_data('ducklake')
 
 query I
-SELECT COUNT(*) FROM duckdb_tables() WHERE database_name='ducklake_meta' AND table_name = 'ducklake_inlined_data_1_1'
+SELECT COUNT(*) FROM duckdb_tables() WHERE database_name='ducklake_meta' AND schema_name IN ('main', 'public') AND table_name = 'ducklake_inlined_data_1_1'
 ----
 0
 

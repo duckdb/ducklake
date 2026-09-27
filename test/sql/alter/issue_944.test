@@ -1,5 +1,5 @@
 # name: test/sql/alter/issue_944.test
-# description: test ducklake cannot create, rename or rename a column to system colume name
+# description: test ducklake cannot create, add or rename a column to a system column name
 # group: [alter]
 
 require ducklake
@@ -15,19 +15,29 @@ statement ok
 ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/issue_944', METADATA_CATALOG 'xx')
 
 statement error
-CREATE TABLE ducklake.test(row_id INTEGER);
+CREATE TABLE ducklake.test(_ducklake_row_id INTEGER);
 ----
-Column name "row_id" is reserved by DuckLake for internal use
+Column name "_ducklake_row_id" is reserved by DuckLake for internal use
 
 statement ok
 CREATE TABLE ducklake.test(a INTEGER);
 
 statement error
-ALTER TABLE ducklake.test ADD COLUMN row_id INTEGER;
+ALTER TABLE ducklake.test ADD COLUMN _ducklake_col INTEGER;
 ----
-Column name "row_id" is reserved by DuckLake for internal use
+Column name "_ducklake_col" is reserved by DuckLake for internal use
 
 statement error
-ALTER TABLE ducklake.test RENAME COLUMN a TO row_id;
+ALTER TABLE ducklake.test RENAME COLUMN a TO _ducklake_col;
 ----
-Column name "row_id" is reserved by DuckLake for internal use
+Column name "_ducklake_col" is reserved by DuckLake for internal use
+
+# the names from the original issue are regular columns now
+statement ok
+CREATE TABLE ducklake.test2(row_id INTEGER);
+
+statement ok
+ALTER TABLE ducklake.test2 ADD COLUMN begin_snapshot INTEGER;
+
+statement ok
+ALTER TABLE ducklake.test2 RENAME COLUMN begin_snapshot TO end_snapshot;

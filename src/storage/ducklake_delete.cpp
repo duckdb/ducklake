@@ -20,6 +20,7 @@
 #include "duckdb/planner/operator/logical_empty_result.hpp"
 #include "duckdb/common/types/uuid.hpp"
 #include "storage/ducklake_delete.hpp"
+#include "duckdb/execution/operator/persistent/physical_merge_into.hpp"
 #include "storage/ducklake_table_entry.hpp"
 #include "storage/ducklake_schema_entry.hpp"
 #include "common/ducklake_data_file.hpp"
@@ -469,7 +470,8 @@ void DuckLakeDelete::FlushDeleteWithSnapshots(DuckLakeTransaction &transaction, 
 	                                         DeleteFileSource::REGULAR};
 	auto &catalog = table.catalog.Cast<DuckLakeCatalog>();
 	auto &schema = table.ParentSchema().Cast<DuckLakeSchemaEntry>();
-	bool use_deletion_vectors = catalog.WriteDeletionVectors(schema.GetSchemaId(), table.GetTableId());
+	bool use_deletion_vectors =
+	    catalog.WriteDeletionVectors(schema.GetSchemaId(), table.GetTableId(), &table.GetTableOptions());
 	auto written_file = DuckLakeDeleteFileWriter::Write(context, input, use_deletion_vectors);
 
 	written_file.data_file_id = delete_file.data_file_id;
@@ -531,7 +533,8 @@ void DuckLakeDelete::FlushDelete(DuckLakeTransaction &transaction, ClientContext
 	if (data_file_info.file_id.IsValid()) {
 		auto &catalog = table.catalog.Cast<DuckLakeCatalog>();
 		auto &schema = table.ParentSchema().Cast<DuckLakeSchemaEntry>();
-		auto threshold = catalog.DataInliningRowLimit(context, schema.GetSchemaId(), table.GetTableId());
+		auto threshold =
+		    catalog.DataInliningRowLimit(context, schema.GetSchemaId(), table.GetTableId(), &table.GetTableOptions());
 		if (threshold > 0 && sorted_deletes.size() <= threshold) {
 			// use inlined file deletions
 			if (catalog.CheckInlinedDeletionTableCache(table.GetTableId(), transaction.GetSnapshot()) !=
@@ -577,7 +580,8 @@ void DuckLakeDelete::FlushDelete(DuckLakeTransaction &transaction, ClientContext
 	auto &fs = FileSystem::GetFileSystem(context);
 	auto &catalog = table.catalog.Cast<DuckLakeCatalog>();
 	auto &schema = table.ParentSchema().Cast<DuckLakeSchemaEntry>();
-	bool use_deletion_vectors = catalog.WriteDeletionVectors(schema.GetSchemaId(), table.GetTableId());
+	bool use_deletion_vectors =
+	    catalog.WriteDeletionVectors(schema.GetSchemaId(), table.GetTableId(), &table.GetTableOptions());
 
 	WriteDeleteFileInput input {context,
 	                            transaction,
@@ -598,11 +602,12 @@ void DuckLakeDelete::FlushDelete(DuckLakeTransaction &transaction, ClientContext
 SinkFinalizeType DuckLakeDelete::Finalize(Pipeline &pipeline, Event &event, ClientContext &context,
                                           OperatorSinkFinalizeInput &input) const {
 	auto &global_state = input.global_state.Cast<DuckLakeDeleteGlobalState>();
+	auto &transaction = DuckLakeTransaction::Get(context, table.catalog);
+	transaction.MarkDeleteAttempted(table.GetTableId());
 	if (global_state.deleted_rows.empty()) {
 		return SinkFinalizeType::READY;
 	}
 
-	auto &transaction = DuckLakeTransaction::Get(context, table.catalog);
 	// write out the delete rows
 	for (auto &entry : global_state.deleted_rows) {
 		auto filename_entry = global_state.filenames.find(entry.first);
@@ -654,6 +659,12 @@ InsertionOrderPreservingMap<string> DuckLakeDelete::ParamsToString() const {
 }
 
 optional_ptr<PhysicalTableScan> FindDeleteSource(PhysicalOperator &plan) {
+	if (plan.type == PhysicalOperatorType::MERGE_ACTION_SOURCE) {
+		// the rows of a merge action are pushed into the source by the merge into - look for the scan in the plan
+		// that the merge into reads from
+		auto &merge_input = plan.Cast<PhysicalMergeActionSource>().merge_input;
+		return merge_input ? FindDeleteSource(*merge_input) : nullptr;
+	}
 	if (plan.type == PhysicalOperatorType::TABLE_SCAN) {
 		// does this emit the virtual columns?
 		auto &scan = plan.Cast<PhysicalTableScan>();

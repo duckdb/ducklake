@@ -1,0 +1,71 @@
+# name: test/sql/rewrite_data_files/test_rewrite_many_non_candidate_files.test
+# description: Rewrite deletes should not load or filter unrelated data files
+# group: [rewrite_data_files]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (
+    DATA_PATH '{DATA_PATH}/rewrite_many_non_candidate_files',
+    DATA_INLINING_ROW_LIMIT 0,
+    METADATA_CATALOG 'ducklake_meta'
+)
+
+statement ok
+USE ducklake
+
+# this table will have many small data files, but is unrelated to the deletes
+statement ok
+CREATE TABLE many_files AS SELECT 42 AS id
+
+statement ok
+INSERT INTO ducklake_meta.ducklake_data_file
+SELECT
+    1000000 + i AS data_file_id,
+    data.* EXCLUDE (data_file_id)
+FROM ducklake_meta.ducklake_data_file data, range(1, 500000) files(i)
+WHERE data.table_id = (
+    SELECT table_id
+    FROM ducklake_meta.ducklake_table
+    WHERE table_name = 'many_files' AND end_snapshot IS NULL
+)
+
+query I
+SELECT count(*)
+FROM ducklake_meta.ducklake_data_file data
+JOIN ducklake_meta.ducklake_table tables USING (table_id)
+WHERE tables.table_name = 'many_files' AND data.end_snapshot IS NULL
+----
+500000
+
+# create a real delete candidate in the same catalog to verify the optimized lookup still performs rewrites.
+statement ok
+CREATE TABLE rewrite_me AS SELECT i AS id FROM range(10) rows(i)
+
+statement ok
+DELETE FROM rewrite_me WHERE id = 5
+
+query III
+SELECT table_name, files_processed, files_created
+FROM ducklake_rewrite_data_files('ducklake', delete_threshold => 0)
+----
+rewrite_me	1	1
+
+query I
+SELECT count(*) FROM rewrite_me
+----
+9
+
+query I
+SELECT count(*)
+FROM ducklake_meta.ducklake_data_file data
+JOIN ducklake_meta.ducklake_table tables USING (table_id)
+WHERE tables.table_name = 'many_files' AND data.end_snapshot IS NULL
+----
+500000
