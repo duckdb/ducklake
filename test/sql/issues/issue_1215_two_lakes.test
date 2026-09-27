@@ -1,0 +1,75 @@
+# name: test/sql/issues/issue_1215_two_lakes.test
+# description: the inlined-delete table probe is scoped to its own lake's metadata catalog (issue #1215)
+# group: [issues]
+
+# lake2 keeps its metadata in schema "main" of a visible catalog and has ducklake_inlined_delete_1;
+# lake1 does not have that table. When lake1's metadata also lives in schema "main", a probe
+# filtered by schema alone would find lake2's table and fail the commit with a catalog error
+# instead of a transaction conflict.
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DUCKLAKE_CONNECTION_2 {TEST_DIR}/{UUID}_2.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS lake1 (DATA_PATH '{DATA_PATH}/issue_1215_two_lakes_1', DATA_INLINING_ROW_LIMIT 10, METADATA_CATALOG 'lake1_meta')
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION_2}' AS lake2 (DATA_PATH '{DATA_PATH}/issue_1215_two_lakes_2', DATA_INLINING_ROW_LIMIT 10, METADATA_CATALOG 'lake2_meta')
+
+statement ok
+SET immediate_transaction_mode=true
+
+statement ok
+CREATE TABLE lake2.t AS FROM range(100) t(i)
+
+statement ok
+DELETE FROM lake2.t WHERE i = 5
+
+query I
+SELECT count(*) FROM duckdb_tables() WHERE database_name = 'lake2_meta' AND schema_name = 'main' AND table_name = 'ducklake_inlined_delete_1'
+----
+1
+
+statement ok
+CREATE TABLE lake1.t AS FROM range(100) t(i)
+
+statement ok
+INSERT INTO lake1.t VALUES (1000), (1001), (1002), (1003), (1004)
+
+statement ok con1
+BEGIN
+
+statement ok con2
+BEGIN
+
+# inlined-data delete: does not create lake1's ducklake_inlined_delete_1
+query I con1
+DELETE FROM lake1.t WHERE i = 1000
+----
+1
+
+# inlined file delete on the parquet file, which probes for lake1's ducklake_inlined_delete_1
+query I con2
+DELETE FROM lake1.t WHERE i = 5
+----
+1
+
+statement ok con1
+COMMIT
+
+statement error con2
+COMMIT
+----
+Transaction conflict
+
+query I
+SELECT count(*) FROM duckdb_tables() WHERE database_name = 'lake1_meta' AND table_name = 'ducklake_inlined_delete_1'
+----
+0

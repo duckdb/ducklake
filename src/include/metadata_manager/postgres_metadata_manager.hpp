@@ -36,7 +36,6 @@ public:
 	unique_ptr<QueryResult> Query(DuckLakeSnapshot snapshot, string &query) override;
 
 	void ClearCache() override;
-	string InlinedDeleteTableExistsQuery(const string &table_name) const override;
 
 protected:
 	string GetLatestSnapshotQuery() const override;

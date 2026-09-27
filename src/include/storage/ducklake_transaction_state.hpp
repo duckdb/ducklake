@@ -27,7 +27,7 @@ struct DuckLakeCommitContext {
 	//! Runs a metadata-DB query during conflict resolution.
 	std::function<unique_ptr<QueryResult>(string)> conflict_query_executor;
 	//! Backend-specific existence check for the inlined-file-delete table.
-	std::function<string(const string &table_name)> inlined_delete_exists_query;
+	std::function<bool(const string &table_name)> inlined_delete_table_exists;
 	//! Returns the latest snapshot for the first commit attempt.
 	std::function<DuckLakeSnapshot()> get_snapshot;
 	//! Executes the batched snapshot/changes SQL against the metadata DB.
@@ -142,11 +142,11 @@ public:
 	                                   const TransactionChangeInformation &changes,
 	                                   const std::function<unique_ptr<QueryResult>(string)> &executor,
 	                                   bool supports_v1_1_metadata,
-	                                   const std::function<string(const string &)> &inlined_delete_exists_query);
+	                                   const std::function<bool(const string &)> &inlined_delete_table_exists);
 	void CheckForConflicts(const TransactionChangeInformation &changes, const SnapshotChangeInformation &other_changes,
 	                       DuckLakeSnapshot transaction_snapshot,
 	                       const std::function<unique_ptr<QueryResult>(string)> &executor,
-	                       const std::function<string(const string &)> &inlined_delete_exists_query) const;
+	                       const std::function<bool(const string &)> &inlined_delete_table_exists) const;
 
 	static SnapshotDeletedFromFiles
 	GetFilesDeletedOrDroppedAfterSnapshot(const std::function<unique_ptr<QueryResult>(string)> &executor);

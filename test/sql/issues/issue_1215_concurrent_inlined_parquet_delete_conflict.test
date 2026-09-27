@@ -61,7 +61,7 @@ COMMIT
 statement error con2
 COMMIT
 ----
-conflict
+Transaction conflict
 
 # ----------------------------------------------------------------------------------------------
 # Order B (mirror): parquet delete commits first, inlined delete commits second
@@ -95,7 +95,7 @@ COMMIT
 statement error con2
 COMMIT
 ----
-conflict
+Transaction conflict
 
 # ----------------------------------------------------------------------------------------------
 # Concurrency preserved: cross-store deletes to different files of the same table must not conflict.
@@ -183,7 +183,7 @@ COMMIT
 statement error con2
 COMMIT
 ----
-conflict
+Transaction conflict
 
 # ----------------------------------------------------------------------------------------------
 # Cross-store, different stores: an inlined-file delete concurrent with an inlined-data delete on one
@@ -225,7 +225,7 @@ COMMIT
 statement error con2
 COMMIT
 ----
-conflict
+Transaction conflict
 
 # ----------------------------------------------------------------------------------------------
 # Mirror of the case above: the inlined-file delete commits first, the inlined-data delete second.
@@ -263,7 +263,7 @@ COMMIT
 statement error con2
 COMMIT
 ----
-conflict
+Transaction conflict
 
 # ----------------------------------------------------------------------------------------------
 # Concurrency preserved: cross-store deletes to different tables must not conflict. An inlined-file
@@ -340,4 +340,4 @@ COMMIT
 statement error con2
 COMMIT
 ----
-conflict
+Transaction conflict
