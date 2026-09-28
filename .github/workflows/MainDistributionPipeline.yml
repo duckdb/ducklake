@@ -16,9 +16,9 @@ jobs:
     name: Get DuckDB version
     runs-on: ubuntu-latest
     outputs:
-      duckdb_version: ${{ steps.version.outputs.duckdb_version }}
+      duckdb_version: v1.5.6 steps.version.outputs.duckdb_version }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v1.5.6
         with:
           sparse-checkout: .github
       - id: version
@@ -27,10 +27,10 @@ jobs:
   duckdb-next-build:
     name: Build extension binaries
     needs: get-duckdb-version
-    uses: duckdb/extension-ci-tools/.github/workflows/_extension_distribution.yml@v1.5-variegata
+    uses: duckdb/extension-ci-tools/.github/workflows/_extension_distribution.yml@v1.5.6
     with:
-      duckdb_version: ${{ needs.get-duckdb-version.outputs.duckdb_version }}
-      ci_tools_version: v1.5-variegata
+      duckdb_version: v1.5.6 needs.get-duckdb-version.outputs.duckdb_version }}
+      ci_tools_version: v1.5.6
       # Temporary override; remove when extension-ci-tools updates its default.
       vcpkg_commit: cd61e1e26a038e82d6550a3ebbe0fbbfe7da78e3 # Release 2026.06.24
       extension_name: ducklake
@@ -53,7 +53,7 @@ jobs:
           sudo apt-get update -y -qq
           sudo apt-get install -y -qq build-essential gcc-12 g++-12 cmake ninja-build ccache python3 mold
 
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v1.5.6
         with:
           fetch-depth: 0
           submodules: 'true'
@@ -64,13 +64,13 @@ jobs:
           git checkout $(cat ../.github/duckdb-version)
 
       - name: Setup Ccache
-        uses: hendrikmuhs/ccache-action@main
+        uses: hendrikmuhs/ccache-action@v1.5.6
         with:
           key: gcc12-compatibility-build
           save: ${{ github.ref == 'refs/heads/main' || github.repository != 'duckdb/ducklake' }}
 
       - name: Setup vcpkg
-        uses: lukka/run-vcpkg@v11.1
+        uses: lukka/run-vcpkg@v1.5.6
         with:
           vcpkgGitCommitId: a42af01b72c28a8e1d7b48107b33e4f286a55ef6
 
@@ -82,12 +82,12 @@ jobs:
     name: Deploy extension binaries
     needs: [get-duckdb-version, duckdb-next-build, gcc12-compatibility-build]
     if: github.ref != 'refs/heads/main'
-    uses: duckdb/extension-ci-tools/.github/workflows/_extension_deploy.yml@main
+    uses: duckdb/extension-ci-tools/.github/workflows/_extension_deploy.yml@v1.5.6
     secrets: inherit
     with:
       extension_name: ducklake
-      duckdb_version: ${{ needs.get-duckdb-version.outputs.duckdb_version }}
-      ci_tools_version: main
+      duckdb_version: v1.5.6 needs.get-duckdb-version.outputs.duckdb_version }}
+      ci_tools_version: v1.5.6
       deploy_latest: ${{ startsWith(github.ref, 'refs/heads/v') }}
       deploy_versioned: ${{ startsWith(github.ref, 'refs/heads/v') }}
 
@@ -105,7 +105,7 @@ jobs:
       ASAN_OPTIONS: "detect_leaks=1:halt_on_error=1:abort_on_error=0"
       UBSAN_OPTIONS: "halt_on_error=1:print_stacktrace=1"
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v1.5.6
         with:
           fetch-depth: 0
           submodules: 'true'
@@ -122,12 +122,12 @@ jobs:
             sudo ln -sf "${asan_static_target}" "${asan_static_dir}/libclang_rt.asan_static.a"
           fi
       - name: Setup Ccache
-        uses: hendrikmuhs/ccache-action@main
+        uses: hendrikmuhs/ccache-action@v1.5.6
         with:
           max-size: 5GB
           evict-old-files: job
       - name: Build (relassert → ASan + UBSan + LSan)
-        uses: duckdb/duckdb-ci/build-duckdb@main
+        uses: duckdb/duckdb-ci/build-duckdb@v1.5.6
         with:
           build-type: relassert
           build: python3 duckdb/scripts/ci/retry.py -- make relassert
