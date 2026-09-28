@@ -1,5 +1,5 @@
 # name: test/sql/concurrent/concurrent_delete_replaced_delete_file.test
-# description: concurrent deletes that replace existing delete files conflict only when they hit the same data file
+# description: concurrent replacements conflict on the same data file
 # group: [concurrent]
 
 require ducklake
@@ -25,7 +25,7 @@ INSERT INTO ducklake.t FROM range(100)
 statement ok
 DELETE FROM ducklake.t WHERE i < 10
 
-# both deletes replace the existing delete file, and the replacement keeps its begin_snapshot
+# Both deletes replace the same delete file
 statement ok con1
 BEGIN
 
@@ -61,7 +61,7 @@ SELECT i FROM ducklake.t WHERE i IN (50, 60)
 ----
 60
 
-# deletes that replace the delete files of two different data files must both commit
+# Deletes on separate data files can both commit
 statement ok
 INSERT INTO ducklake.t FROM range(100, 200)
 

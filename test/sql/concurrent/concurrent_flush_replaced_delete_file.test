@@ -1,0 +1,115 @@
+# name: test/sql/concurrent/concurrent_flush_replaced_delete_file.test
+# description: flushing inlined deletes conflicts with delete file replacement
+# group: [concurrent]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/concurrent_flush_replaced_delete_file', METADATA_CATALOG 'ducklake_meta', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+SET immediate_transaction_mode=true
+
+statement ok
+CREATE TABLE ducklake.t(i INTEGER)
+
+statement ok
+INSERT INTO ducklake.t FROM range(100)
+
+statement ok
+DELETE FROM ducklake.t WHERE i < 10
+
+statement ok
+CALL ducklake.set_option('data_inlining_row_limit', 1)
+
+statement ok
+DELETE FROM ducklake.t WHERE i = 20
+
+# Flush commits first
+statement ok con1
+BEGIN
+
+statement ok con2
+BEGIN
+
+statement ok con1
+CALL ducklake_flush_inlined_data('ducklake')
+
+statement ok con2
+DELETE FROM ducklake.t WHERE i IN (50, 51)
+
+statement ok con1
+COMMIT
+
+statement error con2
+COMMIT
+----
+Transaction conflict
+
+query I
+SELECT count(*) FROM ducklake_meta.ducklake_delete_file WHERE end_snapshot IS NULL
+----
+1
+
+query I
+SELECT count(*) FROM ducklake.t
+----
+89
+
+query I
+SELECT count(*) FROM ducklake.t WHERE i IN (20, 50, 51)
+----
+2
+
+# Delete commits first
+statement ok
+DELETE FROM ducklake.t WHERE i = 21
+
+statement ok con3
+BEGIN
+
+statement ok con4
+BEGIN
+
+statement ok con3
+DELETE FROM ducklake.t WHERE i IN (52, 53)
+
+statement ok con4
+CALL ducklake_flush_inlined_data('ducklake')
+
+statement ok con3
+COMMIT
+
+statement error con4
+COMMIT
+----
+Transaction conflict
+
+query I
+SELECT count(*) FROM ducklake_meta.ducklake_delete_file WHERE end_snapshot IS NULL
+----
+1
+
+query I
+SELECT count(*) FROM ducklake.t
+----
+86
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake')
+
+query I
+SELECT count(*) FROM ducklake.t
+----
+86
+
+query I
+SELECT count(*) FROM ducklake_meta.ducklake_delete_file WHERE end_snapshot IS NULL
+----
+1
