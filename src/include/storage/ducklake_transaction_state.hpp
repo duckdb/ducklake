@@ -102,6 +102,10 @@ struct DuckLakeCommitContext {
 	std::function<void(idx_t)> set_catalog_version;
 	//! Records the committed snapshot id on the catalog.
 	std::function<void(idx_t)> set_committed_snapshot_id;
+	//! Publishes the options of newly created tables onto the catalog.
+	std::function<void(const vector<DuckLakeConfigOption> &)> set_table_options =
+	    [](const vector<DuckLakeConfigOption> &) {
+	    };
 	//! Invalidates the cached stats entry for a table after a stats-affecting file drop.
 	std::function<void(idx_t, TableIndex)> invalidate_table_stats_cache = [](idx_t, TableIndex) {
 	};
@@ -230,6 +234,7 @@ public:
 	map<SchemaIndex, reference<DuckLakeSchemaEntry>> dropped_schemas;
 	LocalTableChanges local_changes;
 	vector<FlushedInlinedTableInfo> flushed_inlined_tables;
+	vector<DuckLakeConfigOption> committed_table_options;
 };
 
 } // namespace duckdb

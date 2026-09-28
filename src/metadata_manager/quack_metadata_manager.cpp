@@ -2,7 +2,6 @@
 #include "common/ducklake_util.hpp"
 #include "duckdb/catalog/catalog.hpp"
 #include "duckdb/main/connection.hpp"
-#include "duckdb/main/materialized_query_result.hpp"
 #include "storage/ducklake_catalog.hpp"
 #include "storage/ducklake_staged_commit.hpp"
 #include "storage/ducklake_transaction.hpp"
@@ -63,6 +62,17 @@ unique_ptr<QueryResult> QuackMetadataManager::Execute(DuckLakeSnapshot snapshot,
 string QuackMetadataManager::MetadataExistsQuery() const {
 	return "SELECT COUNT(*) FROM information_schema.tables "
 	       "WHERE table_name = 'ducklake_metadata' AND table_schema = {METADATA_SCHEMA_NAME_LITERAL}";
+}
+
+bool QuackMetadataManager::InlinedDeletionTableExists(const string &table_name) {
+	auto query = StringUtil::Format("SELECT 1 FROM duckdb_tables() WHERE database_name = current_database() "
+	                                "AND schema_name = {METADATA_SCHEMA_NAME_LITERAL} AND table_name = %s",
+	                                DuckLakeUtil::SQLLiteralToString(table_name));
+	auto result = Query(query);
+	if (result->HasError()) {
+		result->GetErrorObject().Throw("Failed to probe for DuckLake inlined-deletion table: ");
+	}
+	return result->Fetch() != nullptr;
 }
 
 void QuackMetadataManager::ClearCache() {

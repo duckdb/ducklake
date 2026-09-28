@@ -318,9 +318,6 @@ string DuckLakeStagedCommit::EmitDataFiles(const LocalTableChanges &local_change
 string DuckLakeStagedCommit::EmitInlinedData(const LocalTableChanges &local_changes,
                                              DuckLakeTransaction &transaction) const {
 	string sql;
-	auto context_ref = transaction.context.lock();
-	auto &context = *context_ref;
-	auto &metadata_manager = transaction.GetMetadataManager();
 
 	for (auto &entry : local_changes.Changes()) {
 		auto table_id = entry.GetTableIndex();
@@ -333,24 +330,19 @@ string DuckLakeStagedCommit::EmitInlinedData(const LocalTableChanges &local_chan
 		sql += StringUtil::Format("INSERT INTO %s VALUES (%llu, %s);",
 		                          DuckLakeStagedTable::BaseName(DuckLakeStagedTableType::INLINED_DATA), table_id.index,
 		                          DuckLakeUtil::BoolLiteral(has_preserved));
-		idx_t row_order = 0;
-		idx_t global_row_idx = 0;
-		for (auto &chunk : inlined.data->Chunks()) {
-			for (idx_t r = 0; r < chunk.size(); r++) {
-				string tuple = "(" + DuckLakeUtil::ChunkRowToSQL(metadata_manager, context, chunk, r) + ")";
-				string preserved_row_id = "NULL";
-				if (has_preserved) {
-					auto rid = inlined.row_ids[global_row_idx];
-					if (!DuckLakeConstants::IsTransactionLocalRowId(rid)) {
-						preserved_row_id = std::to_string(rid);
-					}
+		auto rows = DuckLakeUtil::InlinedDataToSQL(transaction, *inlined.data);
+		for (idx_t row_order = 0; row_order < rows.size(); row_order++) {
+			string tuple = "(" + rows[row_order] + ")";
+			string preserved_row_id = "NULL";
+			if (has_preserved) {
+				auto rid = inlined.row_ids[row_order];
+				if (!DuckLakeConstants::IsTransactionLocalRowId(rid)) {
+					preserved_row_id = std::to_string(rid);
 				}
-				sql += StringUtil::Format("INSERT INTO %s VALUES (%llu, %llu, %s, %s);",
-				                          DuckLakeStagedTable::BaseName(DuckLakeStagedTableType::INLINED_ROW),
-				                          table_id.index, row_order, preserved_row_id, SQLString(tuple));
-				row_order++;
-				global_row_idx++;
 			}
+			sql += StringUtil::Format("INSERT INTO %s VALUES (%llu, %llu, %s, %s);",
+			                          DuckLakeStagedTable::BaseName(DuckLakeStagedTableType::INLINED_ROW),
+			                          table_id.index, row_order, preserved_row_id, SQLString(tuple));
 		}
 		for (auto &stat : inlined.column_stats) {
 			EmitInlinedColumnStatsRow(sql, table_id, stat.first, stat.second);

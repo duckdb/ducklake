@@ -1,4 +1,6 @@
 #include "common/ducklake_util.hpp"
+#include "duckdb/common/types/column/column_data_collection.hpp"
+#include "storage/ducklake_transaction.hpp"
 #include "duckdb/parser/expression/cast_expression.hpp"
 #include "duckdb/parser/expression/constant_expression.hpp"
 #include "duckdb/parser/column_list.hpp"
@@ -18,10 +20,13 @@
 #include "duckdb/planner/filter/expression_filter.hpp"
 #include "duckdb/planner/filter/table_filter_functions.hpp"
 #include "duckdb/function/scalar/struct_utils.hpp"
-#include "duckdb/function/scalar/variant_utils.hpp"
 #include "duckdb/main/client_context.hpp"
+#include "duckdb/common/type_visitor.hpp"
 #include "storage/ducklake_catalog.hpp"
 #include "duckdb/main/database.hpp"
+#include "duckdb/main/config.hpp"
+#include "duckdb/common/types/interval.hpp"
+#include "duckdb/common/unordered_map.hpp"
 
 #include <cmath>
 
@@ -177,16 +182,11 @@ string ToSQLString(DuckLakeMetadataManager &metadata_manager, const Value &value
 	case LogicalTypeId::ENUM:
 		return EscapeVarcharForSQL(value.ToString());
 	case LogicalTypeId::VARIANT: {
-		Vector tmp(value, count_t(1));
-		RecursiveUnifiedVectorFormat format;
-		Vector::RecursiveToUnifiedFormat(tmp, format);
-		UnifiedVariantVectorData vector_data(format);
-		auto val = VariantUtils::ConvertVariantToValue(vector_data, 0, 0);
 		if (!use_native_type) {
-			throw NotImplementedException("Variant types cannot be inlined in this catalog type yet");
+			throw InternalException("VARIANT values must be encoded as Parquet Variant blobs before being "
+			                        "inlined in this catalog type");
 		}
-		// variant can just be stored as a variant
-		return ToSQLString(metadata_manager, val);
+		return value.ToSQLString();
 	}
 	case LogicalTypeId::STRUCT: {
 		if (!metadata_manager.TypeIsNativelySupported(value.type())) {
@@ -499,9 +499,10 @@ static void ThrowReservedInlinedColumn(const string &name, bool prefixed_inlined
 }
 
 void DuckLakeUtil::ValidateInlinedSystemColumn(DuckLakeCatalog &catalog, ClientContext &context, SchemaIndex schema_id,
-                                               TableIndex table_id, const string &name) {
+                                               TableIndex table_id, const string &name,
+                                               optional_ptr<const map<string, string>> table_options) {
 	bool prefixed_inlined_columns = catalog.SupportsV1_1Metadata();
-	if (!prefixed_inlined_columns && catalog.DataInliningRowLimit(context, schema_id, table_id) == 0) {
+	if (!prefixed_inlined_columns && catalog.DataInliningRowLimit(context, schema_id, table_id, table_options) == 0) {
 		return;
 	}
 	if (IsInlinedSystemColumn(name, prefixed_inlined_columns)) {
@@ -510,9 +511,11 @@ void DuckLakeUtil::ValidateInlinedSystemColumn(DuckLakeCatalog &catalog, ClientC
 }
 
 void DuckLakeUtil::ValidateNoInlinedSystemColumns(DuckLakeCatalog &catalog, ClientContext &context,
-                                                  SchemaIndex schema_id, const ColumnList &columns) {
+                                                  SchemaIndex schema_id, const ColumnList &columns,
+                                                  optional_ptr<const map<string, string>> table_options) {
 	bool prefixed_inlined_columns = catalog.SupportsV1_1Metadata();
-	if (!prefixed_inlined_columns && catalog.DataInliningRowLimit(context, schema_id, TableIndex()) == 0) {
+	if (!prefixed_inlined_columns &&
+	    catalog.DataInliningRowLimit(context, schema_id, TableIndex(), table_options) == 0) {
 		return;
 	}
 	for (auto &col : columns.Logical()) {
@@ -615,16 +618,84 @@ string DuckLakeUtil::PartitionValueLiteral(const Value &v) {
 	return v.IsNull() ? string("NULL") : SQLLiteralToString(v.ToString());
 }
 
-string DuckLakeUtil::ChunkRowToSQL(DuckLakeMetadataManager &metadata_manager, ClientContext &context, DataChunk &chunk,
-                                   idx_t row) {
+static string ChunkRowToSQL(DuckLakeMetadataManager &metadata_manager, ClientContext &context, DataChunk &chunk,
+                            idx_t row) {
 	string result;
 	for (idx_t c = 0; c < chunk.ColumnCount(); c++) {
 		if (c > 0) {
 			result += ", ";
 		}
-		result += ValueToSQL(metadata_manager, context, chunk.GetValue(c, row));
+		result += DuckLakeUtil::ValueToSQL(metadata_manager, context, chunk.GetValue(c, row));
 	}
 	return result;
+}
+
+LogicalType DuckLakeUtil::GetInlinedStorageType(DuckLakeMetadataManager &metadata_manager, const LogicalType &type) {
+	if (metadata_manager.TypeIsNativelySupported(LogicalType::VARIANT())) {
+		return type;
+	}
+	return TypeVisitor::VisitReplace(type, [](const LogicalType &child) {
+		return child.id() == LogicalTypeId::VARIANT ? LogicalType::BLOB : child;
+	});
+}
+
+string DuckLakeUtil::InlinedVariantExpression(const string &expression, const LogicalType &type, bool encode,
+                                              idx_t depth) {
+	if (!TypeVisitor::Contains(type, [](const LogicalType &child) { return child.id() == LogicalTypeId::VARIANT; })) {
+		return expression;
+	}
+	switch (type.id()) {
+	case LogicalTypeId::VARIANT: {
+		if (!encode) {
+			return "variant_bytes_to_variant(" + expression + ")";
+		}
+		auto parquet = "(CAST(variant_to_parquet_variant(" + expression + ") AS STRUCT(metadata BLOB, value BLOB)))";
+		return "CASE WHEN " + expression + " IS NULL THEN NULL ELSE " + parquet + ".metadata || " + parquet +
+		       ".value END";
+	}
+	case LogicalTypeId::LIST: {
+		auto element = "__ducklake_element_" + to_string(depth);
+		return "list_transform(" + expression + ", lambda " + element + ": " +
+		       InlinedVariantExpression(element, ListType::GetChildType(type), encode, depth + 1) + ")";
+	}
+	case LogicalTypeId::STRUCT: {
+		vector<string> fields;
+		auto &children = StructType::GetChildTypes(type);
+		for (idx_t i = 0; i < children.size(); i++) {
+			auto &child = children[i];
+			auto name =
+			    StructType::IsUnnamed(type) ? to_string(i + 1) : SQLLiteralToString(child.first.GetIdentifierName());
+			auto field = InlinedVariantExpression("struct_extract(" + expression + ", " + name + ")", child.second,
+			                                      encode, depth);
+			fields.push_back(StructType::IsUnnamed(type) ? field : name + ": " + field);
+		}
+		auto contents = StringUtil::Join(fields, ", ");
+		auto result = StructType::IsUnnamed(type) ? "row(" + contents + ")" : "{" + contents + "}";
+		return "CASE WHEN " + expression + " IS NULL THEN NULL ELSE " + result + " END";
+	}
+	case LogicalTypeId::MAP: {
+		auto keys = InlinedVariantExpression("map_keys(" + expression + ")", LogicalType::LIST(MapType::KeyType(type)),
+		                                     encode, depth);
+		auto values = InlinedVariantExpression("map_values(" + expression + ")",
+		                                       LogicalType::LIST(MapType::ValueType(type)), encode, depth);
+		return "CASE WHEN " + expression + " IS NULL THEN NULL ELSE map(" + keys + ", " + values + ") END";
+	}
+	default:
+		throw NotImplementedException("Cannot inline VARIANT inside %s", type);
+	}
+}
+
+vector<string> DuckLakeUtil::InlinedDataToSQL(DuckLakeTransaction &transaction, ColumnDataCollection &data) {
+	auto &metadata_manager = transaction.GetMetadataManager();
+	auto context = transaction.context.lock();
+	vector<string> rows;
+	rows.reserve(data.Count());
+	for (auto &chunk : data.Chunks()) {
+		for (idx_t r = 0; r < chunk.size(); r++) {
+			rows.push_back(ChunkRowToSQL(metadata_manager, *context, chunk, r));
+		}
+	}
+	return rows;
 }
 
 void DuckLakeUtil::CopyExtensionSettings(ClientContext &from, ClientContext &to) {
@@ -643,6 +714,141 @@ void DuckLakeUtil::CopyExtensionSettings(ClientContext &from, ClientContext &to)
 			continue;
 		}
 		to.config.user_settings.SetUserSetting(setting_index, value);
+	}
+}
+
+using config_option_parser_t = string (*)(ClientContext &context, const string &option, const Value &val);
+
+static string ParseParquetCompression(ClientContext &, const string &, const Value &val) {
+	auto codec = val.DefaultCastAs(LogicalType::VARCHAR).GetValue<string>();
+	vector<string> supported_algorithms {"uncompressed", "snappy", "gzip", "zstd", "brotli", "lz4", "lz4_raw"};
+	bool found = false;
+	for (auto &algorithm : supported_algorithms) {
+		if (StringUtil::CIEquals(algorithm, codec)) {
+			found = true;
+			break;
+		}
+	}
+	if (!found) {
+		auto supported = StringUtil::Join(supported_algorithms, ", ");
+		throw NotImplementedException("Unsupported codec \"%s\" for parquet, supported options are %s", codec,
+		                              supported);
+	}
+	return StringUtil::Lower(codec);
+}
+
+static string ParseParquetVersion(ClientContext &, const string &, const Value &val) {
+	auto version = val.DefaultCastAs(LogicalType::UBIGINT).GetValue<idx_t>();
+	if (version != 1 && version != 2) {
+		throw NotImplementedException("Only Parquet version 1 and 2 are supported");
+	}
+	return "V" + to_string(version);
+}
+
+static string ParseUnsignedInteger(ClientContext &, const string &, const Value &val) {
+	return to_string(val.DefaultCastAs(LogicalType::UBIGINT).GetValue<idx_t>());
+}
+
+static string ParseRowGroupSize(ClientContext &, const string &, const Value &val) {
+	auto row_group_size = val.DefaultCastAs(LogicalType::UBIGINT).GetValue<idx_t>();
+	if (row_group_size == 0) {
+		throw NotImplementedException("Row group size cannot be 0");
+	}
+	return to_string(row_group_size);
+}
+
+static string ParseRowGroupSizeBytes(ClientContext &, const string &, const Value &val) {
+	auto row_group_size_bytes = DBConfig::ParseMemoryLimit(val.ToString());
+	if (row_group_size_bytes == 0) {
+		throw NotImplementedException("Row group size bytes cannot be 0");
+	}
+	return to_string(row_group_size_bytes);
+}
+
+static string ParseMemorySize(ClientContext &, const string &, const Value &val) {
+	return to_string(DBConfig::ParseMemoryLimit(val.ToString()));
+}
+
+static string ParseBooleanLiteral(ClientContext &, const string &, const Value &val) {
+	return DuckLakeUtil::BoolLiteral(val.GetValue<bool>());
+}
+
+static string ParseDeleteThreshold(ClientContext &, const string &, const Value &val) {
+	double threshold = val.GetValue<double>();
+	if (threshold < 0 || threshold > 1) {
+		throw BinderException("The rewrite_delete_threshold must be between 0 and 1");
+	}
+	return to_string(threshold);
+}
+
+static string ParseInterval(ClientContext &, const string &option, const Value &val) {
+	auto interval_value = val.ToString();
+	if (!interval_value.empty()) {
+		interval_t result;
+		if (!Interval::FromString(interval_value, result)) {
+			throw BinderException("%s is not a valid interval value.", option);
+		}
+	}
+	return interval_value;
+}
+
+static string ParseBoolean(ClientContext &context, const string &, const Value &val) {
+	return DuckLakeUtil::BoolLiteral(val.CastAs(context, LogicalType::BOOLEAN).GetValue<bool>());
+}
+
+static string ParseAutoCompact(ClientContext &context, const string &option, const Value &val) {
+	if (val.IsNull()) {
+		throw BinderException("The %s option can't be null.", option.c_str());
+	}
+	return ParseBoolean(context, option, val);
+}
+
+//! resolved against the table by the caller
+static string ParseSkippedStatsColumns(ClientContext &, const string &, const Value &) {
+	return string();
+}
+
+static const unordered_map<string, config_option_parser_t> &ConfigOptionParsers() {
+	static const unordered_map<string, config_option_parser_t> parsers {
+	    {"parquet_compression", ParseParquetCompression},
+	    {"parquet_version", ParseParquetVersion},
+	    {"parquet_compression_level", ParseUnsignedInteger},
+	    {"data_inlining_row_limit", ParseUnsignedInteger},
+	    {"parquet_row_group_size", ParseRowGroupSize},
+	    {"parquet_row_group_size_bytes", ParseRowGroupSizeBytes},
+	    {"target_file_size", ParseMemorySize},
+	    {"require_commit_message", ParseBooleanLiteral},
+	    {"hive_file_pattern", ParseBooleanLiteral},
+	    {"rewrite_delete_threshold", ParseDeleteThreshold},
+	    {"delete_older_than", ParseInterval},
+	    {"expire_older_than", ParseInterval},
+	    {"auto_compact", ParseAutoCompact},
+	    {"per_thread_output", ParseBoolean},
+	    {"write_deletion_vectors", ParseBoolean},
+	    {"sort_on_insert", ParseBoolean},
+	    {"skip_stats_columns", ParseSkippedStatsColumns},
+	};
+	return parsers;
+}
+
+void DuckLakeUtil::ValidateConfigOptionName(const string &option) {
+	if (!ConfigOptionParsers().count(option)) {
+		throw NotImplementedException("Unsupported option %s", option);
+	}
+}
+
+string DuckLakeUtil::ParseConfigOptionValue(ClientContext &context, const string &option, const Value &val) {
+	ValidateConfigOptionName(option);
+	return ConfigOptionParsers().at(option)(context, option, val);
+}
+
+void DuckLakeUtil::ValidateConfigOptionScope(const string &option, bool has_schema, bool has_table) {
+	if ((has_schema || has_table) && (option == "expire_older_than" || option == "delete_older_than")) {
+		throw InvalidInputException("The '%s' option can only be set globally, not for a specific schema or table",
+		                            option);
+	}
+	if (option == "skip_stats_columns" && !has_table) {
+		throw InvalidInputException("The '%s' option can only be set for a specific table - pass table_name", option);
 	}
 }
 

@@ -1,0 +1,37 @@
+# name: test/sql/data_inlining/data_inlining_json_bytea.test
+# description: inlined JSON and strings with quotes and escapes round-trip on every metadata backend
+# group: [data_inlining]
+
+require ducklake
+
+require parquet
+
+require json
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/ducklake_inlining_json_bytea', METADATA_CATALOG 'ducklake_meta', DATA_INLINING_ROW_LIMIT 10)
+
+statement ok
+CREATE TABLE ducklake.j(id INTEGER, j JSON, s VARCHAR, b BLOB);
+
+statement ok
+INSERT INTO ducklake.j VALUES
+  (1, '{"k": "back\\slash é \u00e9"}', 'it''s "quoted" {braces}', 'it''s'::BLOB),
+  (2, '{"a": 1}', 'plain', 'plain'::BLOB),
+  (3, NULL, NULL, NULL);
+
+query I
+SELECT COUNT(*) FROM ducklake_list_files('ducklake', 'j')
+----
+0
+
+query IIII
+SELECT id, j, s, b FROM ducklake.j ORDER BY id
+----
+1	{"k": "back\\slash é \u00e9"}	it's "quoted" {braces}	it\x27s
+2	{"a": 1}	plain	plain
+3	NULL	NULL	NULL

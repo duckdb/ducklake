@@ -1,0 +1,107 @@
+# name: test/sql/migration/dev1_plain_attach_migration.test
+# description: a plain attach of a catalog created by an older 1.1-dev1 build re-runs the whole v1.1 migration in place
+# group: [migration]
+
+require ducklake
+
+require parquet
+
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/dev1_plain.db' AS dl (DATA_PATH '{TEST_DIR}/dev1_plain_files', DUCKLAKE_VERSION '1.0')
+
+statement ok
+CREATE TABLE dl.t(i INTEGER, j INTEGER);
+
+statement ok
+INSERT INTO dl.t VALUES (1, 2), (3, 4);
+
+statement ok
+CREATE VIEW dl.v AS SELECT i AS a FROM dl.t;
+
+statement ok
+DETACH dl
+
+# simulate a catalog written by an early dev build: it calls itself 1.1-dev1 but has none of the later additions
+statement ok
+ATTACH '{TEST_DIR}/dev1_plain.db' AS meta;
+
+statement ok
+UPDATE meta.ducklake_metadata SET value = '1.1-dev1' WHERE key = 'version';
+
+query I
+SELECT COUNT(*) FROM duckdb_columns() WHERE database_name = 'meta' AND table_name = 'ducklake_data_file' AND column_name = 'row_group_count'
+----
+0
+
+statement ok
+DETACH meta
+
+# a plain attach picks up every schema addition and renames the inlined metadata columns
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/dev1_plain.db' AS dl (DATA_PATH '{TEST_DIR}/dev1_plain_files')
+
+query II
+SELECT * FROM dl.t ORDER BY i
+----
+1	2
+3	4
+
+statement ok
+INSERT INTO dl.t VALUES (5, 6)
+
+# the view column tag table exists
+statement ok
+COMMENT ON COLUMN dl.v.a IS 'healed'
+
+query I
+SELECT comment FROM duckdb_columns() WHERE database_name = 'dl' AND table_name = 'v' AND column_name = 'a'
+----
+healed
+
+statement ok
+DETACH dl
+
+statement ok
+ATTACH '{TEST_DIR}/dev1_plain.db' AS meta;
+
+query I
+SELECT COUNT(*) FROM duckdb_columns() WHERE database_name = 'meta' AND table_name IN ('ducklake_data_file', 'ducklake_delete_file') AND column_name = 'row_group_count'
+----
+2
+
+query I
+SELECT COUNT(*) FROM duckdb_columns() WHERE database_name = 'meta' AND table_name IN ('ducklake_file_column_stats', 'ducklake_table_column_stats') AND column_name IN ('min_is_exact', 'max_is_exact')
+----
+4
+
+query I
+SELECT COUNT(*) FROM duckdb_tables() WHERE database_name = 'meta' AND table_name = 'ducklake_view_column_tag'
+----
+1
+
+query I
+SELECT COUNT(*) FROM duckdb_columns() WHERE database_name = 'meta' AND table_name = 'ducklake_inlined_data_1_1' AND column_name IN ('_ducklake_row_id', '_ducklake_begin_snapshot', '_ducklake_end_snapshot')
+----
+3
+
+query I
+SELECT value FROM meta.ducklake_metadata WHERE key = 'version'
+----
+1.1-dev1
+
+statement ok
+DETACH meta
+
+# a second plain attach finds nothing to do and reads the data
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/dev1_plain.db' AS dl (DATA_PATH '{TEST_DIR}/dev1_plain_files')
+
+query II
+SELECT * FROM dl.t ORDER BY i
+----
+1	2
+3	4
+5	6
+
+statement ok
+DETACH dl

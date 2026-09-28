@@ -1462,6 +1462,13 @@ void DuckLakeTransactionState::GetNewTableInfo(DuckLakeCommitState &commit_state
 					auto sort_key = DuckLakeTransaction::GetNewSortKey(commit_state, table);
 					result.new_sort_keys.push_back(std::move(sort_key));
 				}
+				for (auto &option : latest_table.GetTableOptions()) {
+					DuckLakeConfigOption config_option;
+					config_option.option.key = option.first;
+					config_option.option.value = option.second;
+					config_option.table_id = new_table_id;
+					result.new_table_options.push_back(std::move(config_option));
+				}
 			}
 			break;
 		}
@@ -1649,6 +1656,7 @@ string DuckLakeTransactionState::CommitChanges(DuckLakeCommitState &commit_state
                                                optional_ptr<vector<DuckLakeGlobalStatsInfo>> stats,
                                                const DuckLakeCommitContext &context,
                                                map<TableIndex, DroppedDataFileStats> &attempt_dropped_file_stats) {
+	committed_table_options.clear();
 	auto &commit_snapshot = commit_state.commit_snapshot;
 
 	EnsureCommitInfoProvided(commit_info);
@@ -1709,6 +1717,8 @@ string DuckLakeTransactionState::CommitChanges(DuckLakeCommitState &commit_state
 			    table.schema_id, table.path, new_schemas_result, context.query_metadata, data_path, separator));
 		}
 		batch_queries += DuckLakeMetadataManager::WriteNewTables(result.new_tables, resolved_table_paths);
+		batch_queries += DuckLakeMetadataManager::WriteNewTableOptions(result.new_table_options);
+		committed_table_options = result.new_table_options;
 		auto existing_catalog =
 		    DuckLakeMetadataManager::BuildCatalogForSnapshot(commit_snapshot, context.query_metadata_with_snapshot,
 		                                                     data_path, separator, context.supports_v1_1_metadata);
@@ -2073,6 +2083,7 @@ void DuckLakeTransactionState::Commit(DuckLakeSnapshot transaction_snapshot,
 	}
 	// If we got here, this snapshot was successful
 	context.set_committed_snapshot_id(commit_snapshot.snapshot_id);
+	context.set_table_options(committed_table_options);
 	for (auto &entry : dropped_file_stats) {
 		context.invalidate_table_stats_cache(commit_snapshot.next_file_id, entry.first);
 	}

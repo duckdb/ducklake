@@ -70,7 +70,8 @@ bool DuckLakeSchemaEntry::HandleCreateConflict(CatalogTransaction transaction, C
 optional_ptr<CatalogEntry>
 DuckLakeSchemaEntry::CreateTableExtended(CatalogTransaction transaction, BoundCreateTableInfo &info, string table_uuid,
                                          string table_data_path, unique_ptr<DuckLakePartition> prebuilt_partition_data,
-                                         unique_ptr<DuckLakeSort> prebuilt_sort_data) {
+                                         unique_ptr<DuckLakeSort> prebuilt_sort_data,
+                                         map<string, string> prebuilt_table_options) {
 	auto &duck_transaction = transaction.transaction->Cast<DuckLakeTransaction>();
 	auto &base_info = info.Base();
 	// check if we have an existing entry with this name
@@ -78,8 +79,6 @@ DuckLakeSchemaEntry::CreateTableExtended(CatalogTransaction transaction, BoundCr
 	                          base_info.on_conflict)) {
 		return nullptr;
 	}
-	DuckLakeUtil::ValidateNoInlinedSystemColumns(catalog.Cast<DuckLakeCatalog>(), transaction.GetContext(), schema_id,
-	                                             base_info.columns);
 	//! get a local table-id
 	auto table_id = TableIndex(duck_transaction.GetLocalCatalogId());
 	// generate field ids based on the column ids
@@ -102,6 +101,16 @@ DuckLakeSchemaEntry::CreateTableExtended(CatalogTransaction transaction, BoundCr
 		table_entry->SetSortData(
 		    DuckLakeTableEntry::BuildSortData(duck_transaction, table_entry->GetColumns(), base_info.sort_keys));
 	}
+	if (!prebuilt_table_options.empty()) {
+		table_entry->SetTableOptions(std::move(prebuilt_table_options));
+	} else if (!base_info.options.empty()) {
+		table_entry->SetTableOptions(DuckLakeTableEntry::ParseTableOptions(
+		    transaction.GetContext(), catalog.Cast<DuckLakeCatalog>(), base_info.options, table_entry->GetColumns(),
+		    table_entry->GetFieldData(), table_entry->GetPartitionData().get(),
+		    base_info.GetTableName().GetIdentifierName()));
+	}
+	DuckLakeUtil::ValidateNoInlinedSystemColumns(catalog.Cast<DuckLakeCatalog>(), transaction.GetContext(), schema_id,
+	                                             table_entry->GetColumns(), &table_entry->GetTableOptions());
 	auto result = table_entry.get();
 	duck_transaction.CreateEntry(std::move(table_entry));
 	return result;

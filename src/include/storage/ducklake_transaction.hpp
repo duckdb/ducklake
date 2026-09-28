@@ -286,6 +286,7 @@ public:
 		return id >= DuckLakeConstants::TRANSACTION_LOCAL_ID_START;
 	}
 	void SetConfigOption(const DuckLakeConfigOption &option);
+	void ResetConfigOption(const DuckLakeConfigOption &option);
 
 	void SetCommitMessage(const DuckLakeSnapshotCommit &option);
 

@@ -71,6 +71,11 @@ struct DuckLakeSchemaCacheEntry : public ObjectCacheEntry {
 	    : catalog_set(std::move(*catalog_set_p)) {
 	}
 
+	// contents of the shared_ptr target are moved out
+	explicit DuckLakeSchemaCacheEntry(shared_ptr<DuckLakeCatalogSet> catalog_set_p)
+	    : catalog_set(std::move(*catalog_set_p)) {
+	}
+
 	DuckLakeCatalogSet catalog_set;
 
 	static string ObjectType() {
@@ -132,32 +137,39 @@ public:
 		return initialized;
 	}
 	idx_t DataInliningRowLimit(SchemaIndex schema_index, TableIndex table_index) const;
-	idx_t DataInliningRowLimit(ClientContext &context, SchemaIndex schema_index, TableIndex table_index) const;
+	idx_t DataInliningRowLimit(ClientContext &context, SchemaIndex schema_index, TableIndex table_index,
+	                           optional_ptr<const map<string, string>> table_options = nullptr) const;
 	//! Returns the inlining limit (0 if the table is not eligible)
 	idx_t GetInliningLimit(ClientContext &context, DuckLakeTableEntry &table);
 	//! Inlining limit for a table that does not exist yet (CTAS), given its scope and columns
 	idx_t GetInliningLimit(ClientContext &context, SchemaIndex schema_id, TableIndex table_id,
-	                       const ColumnList &columns);
+	                       const ColumnList &columns, optional_ptr<const map<string, string>> table_options = nullptr);
 	//! Whether inserts in this scope sort their data according to SORTED BY (the sort_on_insert option)
-	bool SortOnInsert(SchemaIndex schema_id, TableIndex table_id) const;
-	idx_t GetTargetFileSize(ClientContext &context, SchemaIndex schema_id, TableIndex table_id) const;
+	bool SortOnInsert(SchemaIndex schema_id, TableIndex table_id,
+	                  optional_ptr<const map<string, string>> table_options = nullptr) const;
+	idx_t GetTargetFileSize(ClientContext &context, SchemaIndex schema_id, TableIndex table_id,
+	                        optional_ptr<const map<string, string>> table_options = nullptr) const;
 	idx_t GetTargetFileSize(ClientContext &context, DuckLakeTableEntry &table) const;
 	string &Separator() {
 		return separator;
 	}
 	//! Sets a config option, returning what it held before so a rollback can put it back
 	DuckLakeConfigOptionUndo SetConfigOption(const DuckLakeConfigOption &option);
+	DuckLakeConfigOptionUndo ResetConfigOption(const DuckLakeConfigOption &option);
 	void UndoConfigOption(const DuckLakeConfigOptionUndo &undo);
-	bool TryGetConfigOption(const string &option, string &result, SchemaIndex schema_id, TableIndex table_id) const;
+	//! Pending table options take precedence
+	bool TryGetConfigOption(const string &option, string &result, SchemaIndex schema_id, TableIndex table_id,
+	                        optional_ptr<const map<string, string>> table_options = nullptr) const;
 	//! Look up a config option in the table scope only, without falling back to schema or global
 	bool TryGetTableConfigOption(const string &option, string &result, TableIndex table_id) const;
 	//! Check if a config option has a table-level or schema-level override (excluding global scope)
-	bool TryGetScopedConfigOption(const string &option, string &result, SchemaIndex schema_id,
-	                              TableIndex table_id) const;
+	bool TryGetScopedConfigOption(const string &option, string &result, SchemaIndex schema_id, TableIndex table_id,
+	                              optional_ptr<const map<string, string>> table_options = nullptr) const;
 	template <class T>
-	T GetConfigOption(const string &option, SchemaIndex schema_id, TableIndex table_id, T default_value) const {
+	T GetConfigOption(const string &option, SchemaIndex schema_id, TableIndex table_id, T default_value,
+	                  optional_ptr<const map<string, string>> table_options = nullptr) const {
 		string value_str;
-		if (TryGetConfigOption(option, value_str, schema_id, table_id)) {
+		if (TryGetConfigOption(option, value_str, schema_id, table_id, table_options)) {
 			return Value(value_str).GetValue<T>();
 		}
 		return default_value;
@@ -226,14 +238,16 @@ public:
 
 	void EnsureCommitInfoProvided(const DuckLakeSnapshotCommit &commit_info) const;
 
-	bool UseHiveFilePattern(bool default_value, SchemaIndex schema_id, TableIndex table_id) const {
-		auto hive_file_pattern =
-		    GetConfigOption<string>("hive_file_pattern", schema_id, table_id, default_value ? "true" : "false");
+	bool UseHiveFilePattern(bool default_value, SchemaIndex schema_id, TableIndex table_id,
+	                        optional_ptr<const map<string, string>> table_options = nullptr) const {
+		auto hive_file_pattern = GetConfigOption<string>("hive_file_pattern", schema_id, table_id,
+		                                                 default_value ? "true" : "false", table_options);
 		return hive_file_pattern == "true";
 	}
 
-	bool WriteDeletionVectors(SchemaIndex schema_id, TableIndex table_id) const {
-		auto write_dv = GetConfigOption<string>("write_deletion_vectors", schema_id, table_id, "false");
+	bool WriteDeletionVectors(SchemaIndex schema_id, TableIndex table_id,
+	                          optional_ptr<const map<string, string>> table_options = nullptr) const {
+		auto write_dv = GetConfigOption<string>("write_deletion_vectors", schema_id, table_id, "false", table_options);
 		return write_dv == "true";
 	}
 

@@ -57,7 +57,8 @@
       "paths": [
         "test/sql/metadata/ducklake_settings_sqlite.test",
         "test/sql/issues/issue_1309.test",
-        "test/sql/issues/issue_sqlite_snapshot_time.test"
+        "test/sql/issues/issue_sqlite_snapshot_time.test",
+        "test/sql/data_inlining/data_inlining_variant_sql_rollback.test"
       ]
     },
     {

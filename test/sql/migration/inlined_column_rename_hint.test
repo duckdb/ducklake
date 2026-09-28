@@ -1,5 +1,5 @@
 # name: test/sql/migration/inlined_column_rename_hint.test
-# description: reading legacy named inlined tables on a dev1 catalog hints at the automatic migration
+# description: a plain attach heals legacy named inlined tables on a dev1 catalog, a read-only attach hints at the migration
 # group: [migration]
 
 require ducklake
@@ -49,10 +49,10 @@ ALTER TABLE meta.ducklake_table_column_stats ADD COLUMN max_is_exact BOOLEAN DEF
 statement ok
 DETACH meta
 
+# a read-only attach cannot migrate in place - reading the inlined data fails with a hint at the migration
 statement ok
-ATTACH 'ducklake:{TEST_DIR}/dev1_hint.db' AS dl (DATA_PATH '{TEST_DIR}/dev1_hint_files')
+ATTACH 'ducklake:{TEST_DIR}/dev1_hint.db' AS dl (DATA_PATH '{TEST_DIR}/dev1_hint_files', READ_ONLY)
 
-# reading the inlined data fails with a hint at the migration
 statement error
 SELECT * FROM dl.t
 ----
@@ -61,7 +61,35 @@ AUTOMATIC_MIGRATION
 statement ok
 DETACH dl
 
-# following the hint fixes the catalog
+# a plain attach re-runs the dev migration in place and heals the catalog
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/dev1_hint.db' AS dl (DATA_PATH '{TEST_DIR}/dev1_hint_files')
+
+query II
+SELECT * FROM dl.t ORDER BY i
+----
+1	2
+3	4
+
+statement ok
+INSERT INTO dl.t VALUES (5, 6)
+
+statement ok
+DETACH dl
+
+# the metadata columns were renamed
+statement ok
+ATTACH '{TEST_DIR}/dev1_hint.db' AS meta;
+
+query I
+SELECT COUNT(*) FROM duckdb_columns() WHERE database_name = 'meta' AND table_name = 'ducklake_inlined_data_1_1' AND column_name IN ('_ducklake_row_id', '_ducklake_begin_snapshot', '_ducklake_end_snapshot')
+----
+3
+
+statement ok
+DETACH meta
+
+# the explicit migration is a no-op afterwards
 statement ok
 ATTACH 'ducklake:{TEST_DIR}/dev1_hint.db' AS dl (DATA_PATH '{TEST_DIR}/dev1_hint_files', AUTOMATIC_MIGRATION TRUE)
 
@@ -70,6 +98,7 @@ SELECT * FROM dl.t ORDER BY i
 ----
 1	2
 3	4
+5	6
 
 statement ok
 DETACH dl

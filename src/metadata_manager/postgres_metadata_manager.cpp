@@ -204,13 +204,6 @@ bool PostgresMetadataManager::TypeIsNativelySupported(const LogicalType &type) {
 	}
 }
 
-bool PostgresMetadataManager::SupportsInlining(const LogicalType &type) {
-	if (type.id() == LogicalTypeId::VARIANT) {
-		return false;
-	}
-	return DuckLakeMetadataManager::SupportsInlining(type);
-}
-
 string PostgresMetadataManager::GetColumnTypeInternal(const LogicalType &column_type) {
 	switch (column_type.id()) {
 	case LogicalTypeId::DOUBLE:
@@ -242,6 +235,22 @@ string PostgresMetadataManager::GetColumnTypeInternal(const LogicalType &column_
 	default:
 		return column_type.ToString();
 	}
+}
+
+bool PostgresMetadataManager::InlinedDeletionTableExists(const string &table_name) {
+	auto &catalog = transaction.GetCatalog();
+	auto remote_query =
+	    StringUtil::Format("SELECT 1 FROM pg_catalog.pg_tables WHERE schemaname = %s AND tablename = %s LIMIT 1",
+	                       DuckLakeUtil::SQLLiteralToString(catalog.MetadataSchemaName().GetIdentifierName()),
+	                       DuckLakeUtil::SQLLiteralToString(table_name));
+	auto query =
+	    StringUtil::Format("SELECT 1 FROM postgres_query({METADATA_CATALOG_NAME_LITERAL}, %s, use_transaction = true)",
+	                       DuckLakeUtil::SQLLiteralToString(remote_query));
+	auto result = DuckLakeMetadataManager::Query(query);
+	if (result->HasError()) {
+		result->GetErrorObject().Throw("Failed to probe for DuckLake inlined-deletion table: ");
+	}
+	return result->Fetch() != nullptr;
 }
 
 unique_ptr<QueryResult> PostgresMetadataManager::ExecuteQuery(DuckLakeSnapshot snapshot, string &query,
@@ -286,6 +295,13 @@ unique_ptr<QueryResult> PostgresMetadataManager::Query(DuckLakeSnapshot snapshot
 	return DuckLakeMetadataManager::Query(snapshot, query);
 }
 
+void PostgresMetadataManager::ClearCache() {
+	auto result = transaction.ExecuteRaw("CALL pg_clear_cache();");
+	if (result->HasError()) {
+		result->GetErrorObject().Throw("Failed to clear the PostgreSQL metadata cache: ");
+	}
+}
+
 string PostgresMetadataManager::GetLatestSnapshotQuery() const {
 	return R"(
 	SELECT * FROM postgres_query({METADATA_CATALOG_NAME_LITERAL},
@@ -314,55 +330,6 @@ string PostgresMetadataManager::GenerateFileListQuery(DuckLakeTableEntry &table,
 
 	return StringUtil::Format("SELECT * FROM postgres_query({METADATA_CATALOG_NAME_LITERAL}, %s)",
 	                          SQLString(remote_query));
-}
-
-// We need a specialized function here to do a reinterpret for postgres from BLOB to VARCHAR
-shared_ptr<DuckLakeInlinedData> PostgresMetadataManager::TransformInlinedData(QueryResult &result,
-                                                                              const vector<LogicalType> &expected_types,
-                                                                              const string &inlined_table_name) {
-	CheckInlinedDataReadError(result, inlined_table_name);
-	bool needs_reinterpret = false;
-	if (!expected_types.empty()) {
-		auto &result_types = result.GetTypes();
-		if (result_types.size() < expected_types.size()) {
-			throw InvalidInputException(
-			    "Failed to read inlined data from DuckLake: expected %llu columns but read %llu", expected_types.size(),
-			    result_types.size());
-		}
-		for (idx_t i = 0; i < expected_types.size(); i++) {
-			if (result_types[i] != expected_types[i]) {
-				D_ASSERT(result_types[i].id() == LogicalTypeId::BLOB &&
-				         expected_types[i].id() == LogicalTypeId::VARCHAR);
-				needs_reinterpret = true;
-			}
-		}
-	}
-	if (!needs_reinterpret) {
-		return DuckLakeMetadataManager::TransformInlinedData(result, expected_types, inlined_table_name);
-	}
-
-	auto context = transaction.context.lock();
-	auto data = make_uniq<ColumnDataCollection>(*context, expected_types);
-	DataChunk reinterpret_chunk;
-	reinterpret_chunk.Initialize(*context, expected_types);
-	while (true) {
-		auto chunk = result.Fetch();
-		if (!chunk) {
-			break;
-		}
-		for (idx_t i = 0; i < expected_types.size(); i++) {
-			reinterpret_chunk.data[i].Reinterpret(chunk->data[i]);
-		}
-		// Use SetChildCardinality (not SetCardinality): on current duckdb SetCardinality only updates the
-		// chunk count, while ColumnDataCollection::Append reads each vector via ToUnifiedFormat(), which
-		// relies on the vector's own size. SetChildCardinality also FlatVector::SetSize()s every vector, so
-		// the reinterpreted (BLOB->VARCHAR) vectors are sized to the row count and the rows are appended.
-		reinterpret_chunk.SetChildCardinality(chunk->size());
-		data->Append(reinterpret_chunk);
-	}
-	auto inlined_data = make_shared_ptr<DuckLakeInlinedData>();
-	inlined_data->data = std::move(data);
-	return inlined_data;
 }
 
 } // namespace duckdb

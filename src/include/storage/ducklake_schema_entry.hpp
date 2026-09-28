@@ -41,7 +41,8 @@ public:
 	optional_ptr<CatalogEntry> CreateTableExtended(CatalogTransaction transaction, BoundCreateTableInfo &info,
 	                                               string table_uuid, string table_data_path,
 	                                               unique_ptr<DuckLakePartition> prebuilt_partition_data = nullptr,
-	                                               unique_ptr<DuckLakeSort> prebuilt_sort_data = nullptr);
+	                                               unique_ptr<DuckLakeSort> prebuilt_sort_data = nullptr,
+	                                               map<string, string> prebuilt_table_options = {});
 	//! Data path for a new table in this schema, derived from the schema path, table name and uuid
 	string GenerateTableDataPath(const string &table_uuid, const string &table_name) const;
 	unique_ptr<CreateInfo> GetInfo() const override;

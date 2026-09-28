@@ -1,5 +1,5 @@
 # name: test/sql/migration/inlined_column_rename_stats_hint.test
-# description: the rewrite stats refresh on a legacy named dev1 catalog hints at the automatic migration
+# description: the rewrite stats refresh works on a legacy named dev1 catalog healed by a plain attach
 # group: [migration]
 
 require ducklake
@@ -58,21 +58,9 @@ ALTER TABLE meta.ducklake_table_column_stats ADD COLUMN max_is_exact BOOLEAN DEF
 statement ok
 DETACH meta
 
+# a plain attach re-runs the dev migration in place - the rewrite commit refreshes stats from the inlined data
 statement ok
 ATTACH 'ducklake:{TEST_DIR}/dev1_stats_hint.db' AS dl (DATA_PATH '{TEST_DIR}/dev1_stats_hint_files')
-
-# the rewrite commit refreshes stats from the inlined data and hints at the migration
-statement error
-CALL ducklake_rewrite_data_files('dl', 't', delete_threshold => 0);
-----
-AUTOMATIC_MIGRATION
-
-statement ok
-DETACH dl
-
-# following the hint fixes the catalog
-statement ok
-ATTACH 'ducklake:{TEST_DIR}/dev1_stats_hint.db' AS dl (DATA_PATH '{TEST_DIR}/dev1_stats_hint_files', AUTOMATIC_MIGRATION TRUE)
 
 statement ok
 CALL ducklake_rewrite_data_files('dl', 't', delete_threshold => 0);

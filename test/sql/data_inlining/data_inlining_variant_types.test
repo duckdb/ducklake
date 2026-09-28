@@ -1,0 +1,72 @@
+# name: test/sql/data_inlining/data_inlining_variant_types.test
+# description: Inlined VARIANT values retain their values and types
+# group: [data_inlining]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/ducklake_inlining_variant_types', METADATA_CATALOG 'ducklake_meta', DATA_INLINING_ROW_LIMIT 10)
+
+statement ok
+CREATE TABLE memory.reference(id INTEGER, v VARIANT, b BLOB, s VARCHAR);
+
+statement ok
+INSERT INTO memory.reference VALUES
+    (1, 127::TINYINT, '\x00\xff', 'a' || chr(0) || 'b'),
+    (2, -32767::SMALLINT, NULL, NULL),
+    (3, 1.5::FLOAT, '', ''),
+    (4, 'it''s ' || chr(0) || '🦆', NULL, NULL),
+    (5, '\x00\x01\xff'::BLOB, NULL, NULL),
+    (6, NULL, NULL, NULL);
+
+statement ok
+CREATE TABLE ducklake.t(id INTEGER, v VARIANT, b BLOB, s VARCHAR);
+
+statement ok
+INSERT INTO ducklake.t SELECT * FROM memory.reference;
+
+query I
+SELECT COUNT(*) FROM ducklake_list_files('ducklake', 't')
+----
+0
+
+query IIIII nosort reference_types
+SELECT id, v, variant_typeof(v), hex(b), s FROM memory.reference ORDER BY id
+----
+
+query IIIII nosort reference_types
+SELECT id, v, variant_typeof(v), hex(b), s FROM ducklake.t ORDER BY id
+----
+
+statement ok
+UPDATE ducklake.t SET v = 'updated' WHERE id = 1
+
+query IIII
+SELECT change_type, id, v, variant_typeof(v) FROM ducklake.table_changes('t', 3, 3) ORDER BY ALL
+----
+update_postimage	1	updated	VARCHAR
+update_preimage	1	127	INT8
+
+query IIIII nosort final_state
+SELECT id, v, variant_typeof(v), hex(b), s FROM ducklake.t ORDER BY id
+----
+
+query II
+SELECT table_name, rows_flushed FROM ducklake_flush_inlined_data('ducklake')
+----
+t	7
+
+query IIIII nosort final_state
+SELECT id, v, variant_typeof(v), hex(b), s FROM ducklake.t ORDER BY id
+----
+
+query II
+SELECT variant_typeof('\x00\xff'::BLOB::VARIANT), hex('\x00\xff'::BLOB::VARIANT::BLOB)
+----
+BLOB	00FF

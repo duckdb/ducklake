@@ -578,6 +578,7 @@ struct DuckLakeConfigOptionUndo {
 	DuckLakeConfigOption option;
 	string previous_value;
 	bool was_set = false;
+	bool reset = false;
 };
 
 struct DuckLakeNameMapColumnInfo {
