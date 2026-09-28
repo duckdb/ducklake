@@ -45,11 +45,23 @@ SELECT m(1)
 ----
 6
 
-query II
-SELECT parameter_type, default_value_type FROM ducklake_param_gate_meta.ducklake_macro_parameters ORDER BY column_id
+query IIII
+SELECT parameter_name, parameter_type, default_value, default_value_type FROM ducklake_param_gate_meta.ducklake_macro_parameters ORDER BY column_id
 ----
-unknown	unknown
-unknown	int32
+a	unknown	NULL	unknown
+b	unknown	5	int32
+
+# typed parameters are stored as DuckLake type names
+statement ok
+CREATE MACRO typed(i INTEGER, d DECIMAL(10,2), b BIGINT := 1, x DECIMAL(10,2) := 1) AS (i + d + b + x)
+
+query IIII
+SELECT parameter_name, parameter_type, default_value, default_value_type FROM ducklake_param_gate_meta.ducklake_macro_parameters WHERE macro_id = 2 ORDER BY column_id
+----
+i	int32	NULL	unknown
+d	decimal(10,2)	NULL	unknown
+b	int64	1	int32
+x	decimal(10,2)	1	int32
 
 statement ok
 USE memory
@@ -64,6 +76,12 @@ ATTACH 'ducklake:{TEST_DIR}/macro_param_gate.db' AS ducklake (DATA_PATH '{DATA_P
 statement ok
 USE ducklake
 
+# macros written by 1.0 still load after migration
+query I
+SELECT typed(1, 1.5)
+----
+4.50
+
 statement ok
 CREATE MACRO nested(l VARCHAR[] := ['x', 'y'], s VARCHAR := NULL::VARCHAR) AS (len(l))
 
@@ -72,8 +90,8 @@ SELECT nested()
 ----
 2
 
-query II
-SELECT parameter_type, default_value_type FROM ducklake_param_gate_meta.ducklake_macro_parameters WHERE macro_id = 2 ORDER BY column_id
+query IIII
+SELECT parameter_name, parameter_type, default_value, default_value_type FROM ducklake_param_gate_meta.ducklake_macro_parameters WHERE macro_id = 3 ORDER BY column_id
 ----
-VARCHAR[]	expression
-VARCHAR	expression
+l	VARCHAR[]	list_value('x', 'y')	expression
+s	VARCHAR	CAST(NULL AS VARCHAR)	expression
