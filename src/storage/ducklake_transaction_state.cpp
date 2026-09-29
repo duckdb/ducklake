@@ -1464,9 +1464,12 @@ string DuckLakeTransactionState::CommitChanges(DuckLakeCommitState &commit_state
 		batch_queries += DuckLakeMetadataManager::WriteNewColumnMappings(result.new_column_mappings);
 	}
 
-	auto write_data_files_sql = [&](const vector<DuckLakeFileInfo> &files) {
+	auto write_data_files_sql = [&](vector<DuckLakeFileInfo> &files) {
 		if (files.empty()) {
 			return string();
+		}
+		for (auto &file : files) {
+			context.collect_logical_index_values(file);
 		}
 		if (context.try_append_data_files &&
 		    context.try_append_data_files(commit_snapshot, files, new_tables_result, new_schemas_result)) {

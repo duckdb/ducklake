@@ -100,6 +100,21 @@ public:
 	DuckLakeSetOptionFunction();
 };
 
+class DuckLakeCreateLogicalIndexFunction : public TableFunction {
+public:
+	DuckLakeCreateLogicalIndexFunction();
+};
+
+class DuckLakeInvalidateLogicalIndexFunction : public TableFunction {
+public:
+	DuckLakeInvalidateLogicalIndexFunction();
+};
+
+class DuckLakeDropLogicalIndexesFunction : public TableFunction {
+public:
+	DuckLakeDropLogicalIndexesFunction();
+};
+
 class DuckLakeSetCommitMessage : public TableFunction {
 public:
 	DuckLakeSetCommitMessage();

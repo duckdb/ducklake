@@ -201,6 +201,13 @@ public:
 		return require == "true";
 	}
 
+	bool HasLogicalIndexes() const {
+		return has_logical_indexes.load();
+	}
+	void SetHasLogicalIndexes() {
+		has_logical_indexes.store(true);
+	}
+
 	void EnsureCommitInfoProvided(const DuckLakeSnapshotCommit &commit_info) const;
 
 	bool UseHiveFilePattern(bool default_value, SchemaIndex schema_id, TableIndex table_id) const {
@@ -313,6 +320,8 @@ private:
 	bool initialized = false;
 	//! Whether or not the metadata server can execute the commit retry loop server-side.
 	bool retrials_server_side = false;
+	//! Avoid adding metadata work to ordinary commits when the catalog has no Streambed logical indexes.
+	atomic<bool> has_logical_indexes {false};
 	//! Cache for inlined deletion table existence checks
 	mutex inlined_deletion_cache_lock;
 	//! Table IDs where the inlined deletion table is known to exist (permanent - never invalidated)

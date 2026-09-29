@@ -27,6 +27,7 @@
 #include <functional>
 
 namespace duckdb {
+class ClientContext;
 class ColumnList;
 class DuckLakeCatalogSet;
 class DuckLakeSchemaEntry;
@@ -199,6 +200,14 @@ public:
 	virtual vector<DuckLakeGlobalStatsInfo> GetGlobalTableStats(DuckLakeSnapshot snapshot, TableIndex table_id);
 	virtual vector<DuckLakeFileListEntry> GetFilesForTable(DuckLakeTableEntry &table, DuckLakeSnapshot snapshot,
 	                                                       const FilterPushdownInfo *filter_info = nullptr);
+
+	//! Streambed V1 logical equality indexes (DuckDB metadata catalogs only).
+	virtual idx_t CreateBigIntLogicalIndex(ClientContext &context, DuckLakeTableEntry &table,
+	                                       const string &column_name);
+	virtual void InvalidateLogicalIndex(DuckLakeTableEntry &table, const string &column_name);
+	virtual void DropLogicalIndexes(DuckLakeTableEntry &table);
+	virtual void CollectBigIntLogicalIndexValues(ClientContext &context, DuckLakeFileInfo &file);
+	virtual void EnsureLogicalIndexTables();
 	virtual vector<DuckLakeFileListEntry> GetTableInsertions(DuckLakeTableEntry &table, DuckLakeSnapshot start_snapshot,
 	                                                         DuckLakeSnapshot snapshot);
 	virtual vector<DuckLakeDeleteScanEntry>

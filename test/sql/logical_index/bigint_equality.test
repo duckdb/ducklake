@@ -1,0 +1,188 @@
+# name: test/sql/logical_index/bigint_equality.test
+# description: Exact BIGINT logical equality index backfill, maintenance, and file pruning
+# group: [logical_index]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+
+test-env DATA_PATH __TEST_DIR__/{UUID}-data
+
+statement ok
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE ducklake.events(user_id BIGINT, payload VARCHAR)
+
+statement ok
+INSERT INTO ducklake.events VALUES (-9223372036854775808, 'min'), (9223372036854775807, 'max')
+
+statement ok
+INSERT INTO ducklake.events VALUES (20, 'c'), (200, 'd')
+
+# Definition, backfill mappings, and READY publication share the caller transaction.
+statement ok
+BEGIN
+
+query I
+CALL ducklake_create_logical_index('ducklake', 'main', 'events', 'user_id')
+----
+1
+
+statement ok
+ROLLBACK
+
+# Rollback leaves no usable partial index; both overlapping files remain candidates.
+query TT
+EXPLAIN ANALYZE SELECT * FROM ducklake.events WHERE user_id = 50
+----
+analyzed_plan	<REGEX>:.*Total Files Read: 2 .*
+
+statement ok
+PREPARE create_index AS SELECT * FROM ducklake_create_logical_index('ducklake', 'main', 'events', 'user_id')
+
+# Binding or preparing a maintenance function must not mutate metadata.
+query TT
+EXPLAIN ANALYZE SELECT * FROM ducklake.events WHERE user_id = 50
+----
+analyzed_plan	<REGEX>:.*Total Files Read: 2 .*
+
+query I
+EXECUTE create_index
+----
+1
+
+statement ok
+DEALLOCATE create_index
+
+# Incremental maintenance must index files committed after the backfill.
+statement ok
+INSERT INTO ducklake.events VALUES (42, 'target'), (300, 'e')
+
+query IT rowsort
+SELECT user_id, payload FROM ducklake.events WHERE user_id = 42
+----
+42	target
+
+# All three files have min/max ranges containing 42. The exact index selects only the third file.
+query TT
+EXPLAIN ANALYZE SELECT * FROM ducklake.events WHERE user_id = 42
+----
+analyzed_plan	<REGEX>:.*Total Files Read: 1 .*
+
+# Commuted equality is normalized to the same pushed-down table filter.
+query TT
+EXPLAIN ANALYZE SELECT * FROM ducklake.events WHERE 42 = user_id
+----
+analyzed_plan	<REGEX>:.*Total Files Read: 1 .*
+
+# UPDATE publishes mappings for replacement files; stale mappings on deleted rows stay safe.
+statement ok
+UPDATE ducklake.events SET user_id = 43 WHERE user_id = 42
+
+query I
+SELECT count(*) FROM ducklake.events WHERE user_id = 42
+----
+0
+
+query IT
+SELECT user_id, payload FROM ducklake.events WHERE user_id = 43
+----
+43	target
+
+query TT
+EXPLAIN ANALYZE SELECT * FROM ducklake.events WHERE user_id = 43
+----
+analyzed_plan	<REGEX>:.*Total Files Read: 1 .*
+
+# Historical scans ignore the current-snapshot index and retain their original result.
+query I
+SELECT count(*) FROM ducklake.events AT (VERSION => 4) WHERE user_id = 42
+----
+1
+
+# An absent value inside every file's min/max range opens no Parquet files.
+query TT
+EXPLAIN ANALYZE SELECT * FROM ducklake.events WHERE user_id = 50
+----
+analyzed_plan	<REGEX>:.*Total Files Read: 0 .*
+
+# Repeated declarations are idempotent.
+query I
+CALL ducklake_create_logical_index('ducklake', 'main', 'events', 'user_id')
+----
+1
+
+# Exact signed BIGINT boundaries remain queryable through the raw-value mapping.
+query I
+SELECT count(*) FROM ducklake.events WHERE user_id IN (-9223372036854775808, 9223372036854775807)
+----
+2
+
+# An out-of-range constant must not be narrowed into a false index match.
+query I
+SELECT count(*) FROM ducklake.events WHERE user_id = 9223372036854775808
+----
+0
+
+# Unsupported ranges continue through normal DuckLake pruning.
+query I
+SELECT count(*) FROM ducklake.events WHERE user_id BETWEEN 250 AND 400
+----
+1
+
+# Definition and mapping cleanup participates in the caller transaction.
+statement ok
+BEGIN
+
+query T
+CALL ducklake_drop_logical_indexes('ducklake', 'main', 'events')
+----
+true
+
+statement ok
+ROLLBACK
+
+query TT
+EXPLAIN ANALYZE SELECT * FROM ducklake.events WHERE user_id = 43
+----
+analyzed_plan	<REGEX>:.*Total Files Read: 1 .*
+
+# Schema evolution invalidates the index before changing the indexed column.
+statement ok
+PREPARE invalidate_index AS SELECT * FROM ducklake_invalidate_logical_index('ducklake', 'main', 'events', 'user_id')
+
+# PREPARE alone leaves the READY index active.
+query TT
+EXPLAIN ANALYZE SELECT * FROM ducklake.events WHERE user_id = 43
+----
+analyzed_plan	<REGEX>:.*Total Files Read: 1 .*
+
+query T
+EXECUTE invalidate_index
+----
+true
+
+statement ok
+DEALLOCATE invalidate_index
+
+statement ok
+ALTER TABLE ducklake.events ALTER COLUMN user_id TYPE HUGEINT
+
+query I
+SELECT count(*) FROM ducklake.events WHERE user_id = 43
+----
+1
+
+# INVALID definitions are ignored, so ordinary zone-map pruning reads all four overlapping files.
+query TT
+EXPLAIN ANALYZE SELECT * FROM ducklake.events WHERE user_id = 43
+----
+analyzed_plan	<REGEX>:.*Total Files Read: 4 .*
+
+query T
+CALL ducklake_drop_logical_indexes('ducklake', 'main', 'events')
+----
+true

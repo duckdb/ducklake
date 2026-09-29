@@ -1400,6 +1400,15 @@ void DuckLakeTransaction::RunCommitLoop(DuckLakeSnapshot transaction_snapshot,
 	                                    vector<DuckLakeSchemaInfo> &new_schemas) {
 		return metadata_manager->TryAppendDataFiles(snapshot, files, new_tables, new_schemas);
 	};
+	if (ducklake_catalog.HasLogicalIndexes()) {
+		context.collect_logical_index_values = [&](DuckLakeFileInfo &file) {
+			auto context_ref = this->context.lock();
+			if (!context_ref) {
+				throw InternalException("Client context disappeared while collecting logical index values");
+			}
+			metadata_manager->CollectBigIntLogicalIndexValues(*context_ref, file);
+		};
+	}
 	context.write_inlined_tables = [&](DuckLakeSnapshot snapshot, const vector<DuckLakeTableInfo> &tables) {
 		return metadata_manager->WriteNewInlinedTables(snapshot, tables);
 	};

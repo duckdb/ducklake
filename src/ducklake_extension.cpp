@@ -79,6 +79,13 @@ static void LoadInternal(ExtensionLoader &loader) {
 	DuckLakeSetOptionFunction set_options;
 	loader.RegisterFunction(set_options);
 
+	DuckLakeCreateLogicalIndexFunction create_logical_index;
+	loader.RegisterFunction(create_logical_index);
+	DuckLakeInvalidateLogicalIndexFunction invalidate_logical_index;
+	loader.RegisterFunction(invalidate_logical_index);
+	DuckLakeDropLogicalIndexesFunction drop_logical_indexes;
+	loader.RegisterFunction(drop_logical_indexes);
+
 	DuckLakeOptionsFunction options;
 	loader.RegisterFunction(options);
 

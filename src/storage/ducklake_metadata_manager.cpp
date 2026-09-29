@@ -28,6 +28,7 @@
 #include "storage/ducklake_partition_data.hpp"
 #include "duckdb/parser/parser.hpp"
 #include "duckdb/parser/expression/cast_expression.hpp"
+#include "common/parquet_file_scanner.hpp"
 
 namespace duckdb {
 
@@ -219,6 +220,9 @@ CREATE TABLE {METADATA_CATALOG}.ducklake_macro_impl(macro_id BIGINT, impl_id BIG
 CREATE TABLE {METADATA_CATALOG}.ducklake_macro_parameters(macro_id BIGINT, impl_id BIGINT,column_id BIGINT, parameter_name VARCHAR, parameter_type VARCHAR, default_value VARCHAR, default_value_type VARCHAR);
 CREATE TABLE {METADATA_CATALOG}.ducklake_sort_info(sort_id BIGINT, table_id BIGINT, begin_snapshot BIGINT, end_snapshot BIGINT);
 CREATE TABLE {METADATA_CATALOG}.ducklake_sort_expression(sort_id BIGINT, table_id BIGINT, sort_key_index BIGINT, expression VARCHAR, dialect VARCHAR, sort_direction VARCHAR, null_order VARCHAR);
+CREATE TABLE {METADATA_CATALOG}.streambed_equality_index_definition(index_id BIGINT PRIMARY KEY, table_id BIGINT NOT NULL, column_id BIGINT NOT NULL, state VARCHAR NOT NULL, UNIQUE(table_id, column_id));
+CREATE TABLE {METADATA_CATALOG}.streambed_equality_index_bigint(index_id BIGINT NOT NULL, value BIGINT NOT NULL, data_file_id BIGINT NOT NULL, PRIMARY KEY(index_id, value, data_file_id));
+CREATE INDEX streambed_equality_index_bigint_lookup ON {METADATA_CATALOG}.streambed_equality_index_bigint(index_id, value);
 INSERT INTO {METADATA_CATALOG}.ducklake_snapshot VALUES (0, NOW(), 0, 1, 0);
 INSERT INTO {METADATA_CATALOG}.ducklake_snapshot_changes VALUES (0, 'created_schema:"main"',  NULL, NULL, NULL);
 INSERT INTO {METADATA_CATALOG}.ducklake_metadata (key, value) VALUES ('version', '1.0'), ('created_by', 'DuckDB %s'), ('data_path', %s), ('encrypted', '%s');
@@ -370,6 +374,12 @@ SELECT key, value FROM {METADATA_CATALOG}.ducklake_metadata
 		DuckLakeTag tag;
 		tag.key = row.GetValue<string>(0);
 		tag.value = row.GetValue<string>(1);
+		if (tag.key == "streambed_logical_indexes") {
+			if (tag.value == "true") {
+				transaction.GetCatalog().SetHasLogicalIndexes();
+			}
+			continue;
+		}
 		if (result->ColumnCount() == 2 || row.IsNull(2)) {
 			// scope is NULL: global tag
 			// global tag
@@ -394,6 +404,27 @@ SELECT key, value FROM {METADATA_CATALOG}.ducklake_metadata
 			continue;
 		}
 		throw InvalidInputException("Unsupported setting scope %s - only schema/table are supported", scope);
+	}
+
+	// Compatibility for catalogs created by an earlier Streambed prototype before the durable marker was added.
+	// A missing optional definition table is safe; every other failure must abort attach rather than risk publishing
+	// an unmapped file for a READY index.
+	if (!transaction.GetCatalog().HasLogicalIndexes()) {
+		string logical_index_query = R"(
+SELECT 1 FROM {METADATA_CATALOG}.streambed_equality_index_definition WHERE state = 'READY' LIMIT 1
+)";
+		auto logical_indexes = Query(logical_index_query);
+		if (logical_indexes->HasError()) {
+			if (logical_indexes->GetErrorObject().Type() != ExceptionType::CATALOG) {
+				logical_indexes->GetErrorObject().Throw("Failed to load logical equality index metadata: ");
+			}
+		} else {
+			for (auto &row : *logical_indexes) {
+				(void)row;
+				transaction.GetCatalog().SetHasLogicalIndexes();
+				break;
+			}
+		}
 	}
 	return metadata;
 }
@@ -1584,6 +1615,246 @@ string DuckLakeMetadataManager::BuildBucketPartitionPruningClause(DuckLakeTableE
 	return result;
 }
 
+void DuckLakeMetadataManager::EnsureLogicalIndexTables() {
+	if (!SupportsAppender()) {
+		throw NotImplementedException("Logical equality indexes require a DuckDB-backed DuckLake metadata catalog");
+	}
+	string query = R"(
+CREATE TABLE IF NOT EXISTS {METADATA_CATALOG}.streambed_equality_index_definition(
+    index_id BIGINT PRIMARY KEY,
+    table_id BIGINT NOT NULL,
+    column_id BIGINT NOT NULL,
+    state VARCHAR NOT NULL,
+    UNIQUE(table_id, column_id));
+CREATE TABLE IF NOT EXISTS {METADATA_CATALOG}.streambed_equality_index_bigint(
+    index_id BIGINT NOT NULL,
+    value BIGINT NOT NULL,
+    data_file_id BIGINT NOT NULL,
+    PRIMARY KEY(index_id, value, data_file_id));
+CREATE INDEX IF NOT EXISTS streambed_equality_index_bigint_lookup
+    ON {METADATA_CATALOG}.streambed_equality_index_bigint(index_id, value);
+)";
+	auto result = Query(query);
+	if (result->HasError()) {
+		result->GetErrorObject().Throw("Failed to initialize logical equality index metadata: ");
+	}
+}
+
+static vector<int64_t> ScanDistinctBigIntValues(ClientContext &context, const DuckLakeFileData &file,
+                                                const string &column_name) {
+	ParquetFileScanner scanner(context, file);
+	auto column_idx = scanner.FindColumn(column_name);
+	if (!column_idx.IsValid()) {
+		throw InvalidInputException("Indexed column %s is missing from data file %s", column_name, file.path);
+	}
+	if (scanner.GetTypes()[column_idx.GetIndex()] != LogicalType::BIGINT) {
+		throw InvalidInputException("Logical equality index column %s must be BIGINT", column_name);
+	}
+	scanner.SetColumnIds({NumericCast<column_t>(column_idx.GetIndex())});
+	unordered_set<int64_t> distinct;
+	DataChunk chunk;
+	chunk.Initialize(Allocator::Get(context), {LogicalType::BIGINT});
+	while (scanner.Scan(chunk)) {
+		for (idx_t row = 0; row < chunk.size(); row++) {
+			auto value = chunk.GetValue(0, row);
+			if (!value.IsNull()) {
+				distinct.insert(value.GetValue<int64_t>());
+			}
+		}
+	}
+	vector<int64_t> result(distinct.begin(), distinct.end());
+	std::sort(result.begin(), result.end());
+	return result;
+}
+
+void DuckLakeMetadataManager::CollectBigIntLogicalIndexValues(ClientContext &context, DuckLakeFileInfo &file) {
+	string query = StringUtil::Format(R"(
+SELECT definition.index_id, definition.column_id, column_info.column_name
+FROM {METADATA_CATALOG}.streambed_equality_index_definition definition
+JOIN {METADATA_CATALOG}.ducklake_column column_info
+  ON column_info.table_id = definition.table_id
+ AND column_info.column_id = definition.column_id
+ AND column_info.end_snapshot IS NULL
+WHERE definition.table_id = %llu AND definition.state = 'READY'
+ORDER BY definition.index_id)", file.table_id.index);
+	auto definitions = Query(query);
+	if (definitions->HasError()) {
+		// This callback is installed only when the durable catalog marker says logical indexes exist. Any lookup failure
+		// must abort publication; otherwise a READY index could omit a newly committed file and cause false negatives.
+		definitions->GetErrorObject().Throw("Failed to load logical equality index definitions: ");
+	}
+	DuckLakeFileData file_data;
+	file_data.path = file.file_name;
+	file_data.encryption_key = file.encryption_key;
+	file_data.file_size_bytes = file.file_size_bytes;
+	file_data.footer_size = file.footer_size;
+	for (auto &row : *definitions) {
+		DuckLakeBigIntIndexValues values;
+		values.index_id = row.GetValue<idx_t>(0);
+		values.column_id = FieldIndex(row.GetValue<idx_t>(1));
+		values.values = ScanDistinctBigIntValues(context, file_data, row.GetValue<string>(2));
+		file.bigint_index_values.push_back(std::move(values));
+	}
+}
+
+idx_t DuckLakeMetadataManager::CreateBigIntLogicalIndex(ClientContext &context, DuckLakeTableEntry &table,
+                                                        const string &column_name) {
+	EnsureLogicalIndexTables();
+	auto &field = table.GetFieldId(vector<string> {column_name});
+	if (field.HasChildren() || field.Type() != LogicalType::BIGINT) {
+		throw InvalidInputException("Logical equality index column %s.%s must be a top-level BIGINT", table.name,
+		                            column_name);
+	}
+	if (table.GetNetInlinedRowCount(transaction) != 0) {
+		throw InvalidInputException("Flush inlined data for %s.%s before creating a logical equality index", table.schema.name,
+		                            table.name);
+	}
+	string marker_query = R"(
+INSERT INTO {METADATA_CATALOG}.ducklake_metadata(key, value)
+SELECT 'streambed_logical_indexes', 'true'
+WHERE NOT EXISTS (
+    SELECT 1 FROM {METADATA_CATALOG}.ducklake_metadata WHERE key = 'streambed_logical_indexes'
+)
+)";
+	auto marker = Query(marker_query);
+	if (marker->HasError()) {
+		marker->GetErrorObject().Throw("Failed to persist logical equality index capability: ");
+	}
+	auto table_id = table.GetTableId();
+	auto column_id = field.GetFieldIndex();
+	string existing_query = StringUtil::Format(R"(
+SELECT index_id, state
+FROM {METADATA_CATALOG}.streambed_equality_index_definition
+WHERE table_id = %llu AND column_id = %llu)", table_id.index, column_id.index);
+	auto existing = Query(existing_query);
+	if (existing->HasError()) {
+		existing->GetErrorObject().Throw("Failed to inspect logical equality index metadata: ");
+	}
+	idx_t index_id;
+	bool found = false;
+	for (auto &row : *existing) {
+		index_id = row.GetValue<idx_t>(0);
+		if (row.GetValue<string>(1) == "READY") {
+			transaction.GetCatalog().SetHasLogicalIndexes();
+			return index_id;
+		}
+		found = true;
+	}
+	if (!found) {
+		string next_query = "SELECT COALESCE(MAX(index_id), 0) + 1 FROM {METADATA_CATALOG}.streambed_equality_index_definition";
+		auto next = Query(next_query);
+		for (auto &row : *next) {
+			index_id = row.GetValue<idx_t>(0);
+		}
+		string insert = StringUtil::Format(
+		    "INSERT INTO {METADATA_CATALOG}.streambed_equality_index_definition VALUES (%llu, %llu, %llu, 'BUILDING')",
+		    index_id, table_id.index, column_id.index);
+		auto inserted = Query(insert);
+		if (inserted->HasError()) {
+			inserted->GetErrorObject().Throw("Failed to create logical equality index definition: ");
+		}
+	} else {
+		string clear = StringUtil::Format(
+		    "DELETE FROM {METADATA_CATALOG}.streambed_equality_index_bigint WHERE index_id = %llu", index_id);
+		auto cleared = Query(clear);
+		if (cleared->HasError()) {
+			cleared->GetErrorObject().Throw("Failed to reset logical equality index: ");
+		}
+	}
+	transaction.GetCatalog().SetHasLogicalIndexes();
+
+	auto snapshot = transaction.GetSnapshot();
+	auto files = GetExtendedFilesForTable(table, snapshot);
+	auto &catalog = transaction.GetCatalog();
+	auto &connection = transaction.GetConnection();
+	auto schema_name = catalog.MetadataSchemaName().empty() ? "main" : catalog.MetadataSchemaName();
+	Appender appender(connection, catalog.MetadataDatabaseName(), schema_name, "streambed_equality_index_bigint");
+	for (auto &entry : files) {
+		if (entry.data_type != DuckLakeDataType::DATA_FILE) {
+			continue; // Historical, fully-flushed inlined tables contain no current rows.
+		}
+		if (!entry.file_id.IsValid()) {
+			throw InternalException("Committed DuckLake data file is missing its data_file_id");
+		}
+		auto values = ScanDistinctBigIntValues(context, entry.file, column_name);
+		for (auto value : values) {
+			appender.AppendRow(static_cast<int64_t>(index_id), value, static_cast<int64_t>(entry.file_id.index));
+		}
+	}
+	appender.Close();
+	string ready = StringUtil::Format(
+	    "UPDATE {METADATA_CATALOG}.streambed_equality_index_definition SET state = 'READY' WHERE index_id = %llu",
+	    index_id);
+	auto updated = Query(ready);
+	if (updated->HasError()) {
+		updated->GetErrorObject().Throw("Failed to publish logical equality index: ");
+	}
+	return index_id;
+}
+
+void DuckLakeMetadataManager::InvalidateLogicalIndex(DuckLakeTableEntry &table, const string &column_name) {
+	auto field = table.TryGetFieldId(vector<string> {column_name});
+	if (!field) {
+		return;
+	}
+	string query = StringUtil::Format(
+	    "UPDATE {METADATA_CATALOG}.streambed_equality_index_definition SET state = 'INVALID' "
+	    "WHERE table_id = %llu AND column_id = %llu",
+	    table.GetTableId().index, field->GetFieldIndex().index);
+	auto result = Query(query);
+	if (result->HasError()) {
+		if (result->GetErrorObject().Type() == ExceptionType::CATALOG) {
+			return;
+		}
+		result->GetErrorObject().Throw("Failed to invalidate logical equality index: ");
+	}
+}
+
+void DuckLakeMetadataManager::DropLogicalIndexes(DuckLakeTableEntry &table) {
+	string query = StringUtil::Format(R"(
+DELETE FROM {METADATA_CATALOG}.streambed_equality_index_bigint
+WHERE index_id IN (
+  SELECT index_id FROM {METADATA_CATALOG}.streambed_equality_index_definition WHERE table_id = %llu
+);
+DELETE FROM {METADATA_CATALOG}.streambed_equality_index_definition WHERE table_id = %llu;
+)", table.GetTableId().index, table.GetTableId().index);
+	auto result = Query(query);
+	if (result->HasError()) {
+		if (result->GetErrorObject().Type() == ExceptionType::CATALOG) {
+			return;
+		}
+		result->GetErrorObject().Throw("Failed to drop logical equality indexes: ");
+	}
+}
+
+static bool TryGetBigIntEquality(const TableFilter &filter, int64_t &result) {
+	switch (filter.filter_type) {
+	case TableFilterType::CONSTANT_COMPARISON: {
+		auto &constant = filter.Cast<ConstantFilter>();
+		if (constant.comparison_type != ExpressionType::COMPARE_EQUAL || constant.constant.IsNull()) {
+			return false;
+		}
+		Value casted;
+		if (!constant.constant.DefaultTryCastAs(LogicalType::BIGINT, casted, nullptr)) {
+			return false;
+		}
+		result = casted.GetValue<int64_t>();
+		return true;
+	}
+	case TableFilterType::OPTIONAL_FILTER:
+		return TryGetBigIntEquality(*filter.Cast<OptionalFilter>().child_filter, result);
+	case TableFilterType::CONJUNCTION_AND:
+		for (auto &child : filter.Cast<ConjunctionAndFilter>().child_filters) {
+			if (TryGetBigIntEquality(*child, result)) {
+				return true;
+			}
+		}
+		return false;
+	default:
+		return false;
+	}
+}
+
 vector<DuckLakeFileListEntry> DuckLakeMetadataManager::GetFilesForTable(DuckLakeTableEntry &table,
                                                                         DuckLakeSnapshot snapshot,
                                                                         const FilterPushdownInfo *filter_info) {
@@ -1662,6 +1933,37 @@ vector<DuckLakeFileListEntry> DuckLakeMetadataManager::GetFilesForTable(DuckLake
 					where_clause += " AND ";
 				}
 				where_clause += bucket_clause;
+			}
+		}
+
+		// V1 indexes current-snapshot BIGINT equality only. Historical scans retain normal pruning.
+		if (snapshot.snapshot_id == transaction.GetSnapshot().snapshot_id) {
+			string definition_query = StringUtil::Format(R"(
+SELECT index_id, column_id
+FROM {METADATA_CATALOG}.streambed_equality_index_definition
+WHERE table_id = %llu AND state = 'READY')", table_id.index);
+			auto definitions = Query(definition_query);
+			if (!definitions->HasError()) {
+				for (auto &row : *definitions) {
+					auto index_id = row.GetValue<idx_t>(0);
+					auto column_id = row.GetValue<idx_t>(1);
+					auto filter_entry = filter_info->column_filters.find(column_id);
+					if (filter_entry == filter_info->column_filters.end() ||
+					    filter_entry->second.column_type != LogicalType::BIGINT) {
+						continue;
+					}
+					int64_t value;
+					if (!TryGetBigIntEquality(*filter_entry->second.table_filter, value)) {
+						continue;
+					}
+					if (!where_clause.empty()) {
+						where_clause += " AND ";
+					}
+					where_clause += StringUtil::Format(
+					    "data.data_file_id IN (SELECT data_file_id FROM "
+					    "{METADATA_CATALOG}.streambed_equality_index_bigint WHERE index_id = %llu AND value = %lld)",
+					    index_id, value);
+				}
 			}
 		}
 	}
@@ -3494,6 +3796,14 @@ string DuckLakeMetadataManager::WriteNewDataFilesWithAppender(DuckLakeSnapshot &
 	Appender column_stats_appender(connection, db_name, schema_name, "ducklake_file_column_stats");
 	Appender partition_value_appender(connection, db_name, schema_name, "ducklake_file_partition_value");
 	Appender variant_stats_appender(connection, db_name, schema_name, "ducklake_file_variant_stats");
+	unique_ptr<Appender> logical_index_appender;
+	for (auto &file : new_files) {
+		if (!file.bigint_index_values.empty()) {
+			logical_index_appender = make_uniq<Appender>(connection, db_name, schema_name,
+			                                                 "streambed_equality_index_bigint");
+			break;
+		}
+	}
 
 	for (auto &file : new_files) {
 		auto data_file_index = static_cast<int64_t>(file.id.index);
@@ -3668,6 +3978,15 @@ string DuckLakeMetadataManager::WriteNewDataFilesWithAppender(DuckLakeSnapshot &
 			}
 		}
 
+		if (logical_index_appender) {
+			for (auto &index_values : file.bigint_index_values) {
+				for (auto value : index_values.values) {
+					logical_index_appender->AppendRow(static_cast<int64_t>(index_values.index_id), value,
+					                                  data_file_index);
+				}
+			}
+		}
+
 		// Partition values
 		if (file.partition_id.IsValid() == file.partition_values.empty()) {
 			throw InternalException("File should either not be partitioned, or have partition values");
@@ -3693,6 +4012,9 @@ string DuckLakeMetadataManager::WriteNewDataFilesWithAppender(DuckLakeSnapshot &
 	column_stats_appender.Close();
 	partition_value_appender.Close();
 	variant_stats_appender.Close();
+	if (logical_index_appender) {
+		logical_index_appender->Close();
+	}
 
 	return "";
 }
@@ -3737,6 +4059,7 @@ string DuckLakeMetadataManager::WriteNewDataFilesSqlBatch(const vector<DuckLakeF
 	string column_stats_insert_query;
 	string variant_stats_insert_query;
 	string partition_insert_query;
+	string logical_index_insert_query;
 
 	for (idx_t i = 0; i < new_files.size(); i++) {
 		auto &file = new_files[i];
@@ -3780,6 +4103,15 @@ string DuckLakeMetadataManager::WriteNewDataFilesSqlBatch(const vector<DuckLakeF
 				    field_stats.max_val, field_stats.contains_nan, field_stats.extra_stats);
 			}
 		}
+		for (auto &index_values : file.bigint_index_values) {
+			for (auto value : index_values.values) {
+				if (!logical_index_insert_query.empty()) {
+					logical_index_insert_query += ",";
+				}
+				logical_index_insert_query += StringUtil::Format("(%llu, %lld, %llu)", index_values.index_id,
+				                                                value, data_file_index);
+			}
+		}
 		if (file.partition_id.IsValid() == file.partition_values.empty()) {
 			throw InternalException("File should either not be partitioned, or have partition values");
 		}
@@ -3817,6 +4149,11 @@ string DuckLakeMetadataManager::WriteNewDataFilesSqlBatch(const vector<DuckLakeF
 	if (!variant_stats_insert_query.empty()) {
 		batch_query += StringUtil::Format("INSERT INTO {METADATA_CATALOG}.ducklake_file_variant_stats VALUES %s;",
 		                                  variant_stats_insert_query);
+	}
+	if (!logical_index_insert_query.empty()) {
+		batch_query += StringUtil::Format(
+		    "INSERT INTO {METADATA_CATALOG}.streambed_equality_index_bigint VALUES %s;",
+		    logical_index_insert_query);
 	}
 	return batch_query;
 }
