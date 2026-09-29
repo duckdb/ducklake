@@ -33,9 +33,11 @@ string DuckLakeMetadataManagerV1_1<Base>::GetFileColumnStatsTableStatement() {
 
 template <typename Base>
 string DuckLakeMetadataManagerV1_1<Base>::GetTableColumnStatsTableStatement() {
+	// PRIMARY KEY arbitrates the ON CONFLICT in UpdateGlobalTableStatsSql. Inline because DuckDB and
+	// SQLite reject each other's CREATE INDEX schema-qualification.
 	return "CREATE TABLE {METADATA_CATALOG}.ducklake_table_column_stats(table_id BIGINT, column_id BIGINT, "
 	       "contains_null BOOLEAN, contains_nan BOOLEAN, min_value VARCHAR, max_value VARCHAR, extra_stats VARCHAR, "
-	       "min_is_exact BOOLEAN, max_is_exact BOOLEAN);";
+	       "min_is_exact BOOLEAN, max_is_exact BOOLEAN, PRIMARY KEY(table_id, column_id));";
 }
 
 template <typename Base>

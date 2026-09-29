@@ -289,6 +289,9 @@ struct DuckLakeGlobalColumnStatsInfo {
 
 	bool min_is_exact = false;
 	bool max_is_exact = false;
+
+	LogicalType type;
+	bool has_type = false;
 };
 
 struct DuckLakeGlobalStatsInfo {

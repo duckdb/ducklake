@@ -790,6 +790,13 @@ DuckLakeCommitContext DuckLakeServerSideCommit::BuildContext(idx_t &committed_sn
 		auto it = existing_table_stats.find(table_id);
 		return it == existing_table_stats.end() ? nullptr : it->second;
 	};
+	ctx.update_global_table_stats_sql = [this](const DuckLakeGlobalStatsInfo &stats,
+	                                           DuckLakeMetadataManager::GlobalStatsWrite write_mode) {
+		DuckLakeMetadataManager::StatsMergeDialect dialect;
+		dialect.supports_upsert = supports_v1_1_metadata;
+		dialect.write_stats_exactness = supports_v1_1_metadata;
+		return DuckLakeMetadataManager::UpdateGlobalTableStatsSql(stats, write_mode, dialect);
+	};
 	ctx.build_stats_map = [this](vector<DuckLakeGlobalStatsInfo> &stats) {
 		return BuildStatsMap(stats);
 	};

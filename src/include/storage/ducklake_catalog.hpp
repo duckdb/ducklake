@@ -266,6 +266,10 @@ public:
 	bool SupportsV1_1Metadata() const {
 		return ducklake_version >= DuckLakeVersion::V1_1_DEV_1;
 	}
+	//! Whether ducklake_table_column_stats has the (table_id, column_id) key the upsert needs (1.1-dev1).
+	bool SupportsStatsUpsert() const {
+		return SupportsV1_1Metadata();
+	}
 
 	void OnDetach(ClientContext &context) override;
 
