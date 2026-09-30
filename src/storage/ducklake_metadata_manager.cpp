@@ -3768,8 +3768,22 @@ shared_ptr<DuckLakeInlinedData> DuckLakeMetadataManager::TransformInlinedData(Qu
 		}
 	}
 	auto data = make_uniq<ColumnDataCollection>(*context, expected_types);
-	while (auto chunk = result.Fetch()) {
-		data->Append(*chunk);
+	// Streaming chunks can diverge from result.GetTypes() under concurrent catalog
+	// mutation. Catch here so a malformed chunk doesn't raise InternalException,
+	// which would invalidate the entire DuckDB database.
+	try {
+		while (auto chunk = result.Fetch()) {
+			if (chunk->ColumnCount() != expected_types.size()) {
+				throw InvalidInputException(
+				    "Failed to read inlined data from DuckLake table \"%s\": chunk yielded "
+				    "%llu columns but %llu were declared",
+				    inlined_table_name, chunk->ColumnCount(), expected_types.size());
+			}
+			data->Append(*chunk);
+		}
+	} catch (const InternalException &ex) {
+		throw InvalidInputException("Failed to read inlined data from DuckLake table \"%s\": %s",
+		                            inlined_table_name, ex.what());
 	}
 	auto inlined_data = make_shared_ptr<DuckLakeInlinedData>();
 	inlined_data->data = std::move(data);
