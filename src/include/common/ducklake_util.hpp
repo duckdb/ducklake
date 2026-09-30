@@ -12,13 +12,19 @@
 
 #include "common/index.hpp"
 #include "duckdb/common/common.hpp"
+#include "duckdb/common/enums/catalog_type.hpp"
 #include "duckdb/common/file_system.hpp"
 #include "duckdb/common/map.hpp"
 #include "duckdb/common/optional_idx.hpp"
+#include "duckdb/common/optional_ptr.hpp"
 #include "duckdb/common/unordered_set.hpp"
 #include "duckdb/common/types/value.hpp"
+#include "duckdb/parser/qualified_name.hpp"
 
 namespace duckdb {
+class BoundAtClause;
+class Catalog;
+class SchemaCatalogEntry;
 class ClientContext;
 class ColumnDataCollection;
 class DataChunk;
@@ -33,8 +39,10 @@ class TableFilter;
 struct DynamicFilterData;
 
 struct ParsedCatalogEntry {
-	string schema;
+	vector<string> schema_path;
 	string name;
+
+	string SchemaKey() const;
 };
 
 class DuckLakeUtil {
@@ -51,6 +59,11 @@ public:
 	static string ValueToSQL(DuckLakeMetadataManager &metadata_manager, ClientContext &context, const Value &val);
 
 	static ParsedCatalogEntry ParseCatalogEntry(const string &input);
+	static QualifiedName QualifiedEntryName(ClientContext &context, Catalog &catalog, const string &schema_arg,
+	                                        const string &entry_name, CatalogType entry_type = CatalogType::TABLE_ENTRY,
+	                                        optional_ptr<BoundAtClause> at_clause = nullptr);
+	static SchemaCatalogEntry &GetSchema(ClientContext &context, Catalog &catalog, const string &schema_arg);
+	static string SchemaPathToDisplay(const vector<Identifier> &schema_path);
 	static string JoinPath(FileSystem &fs, const string &a, const string &b);
 
 	static shared_ptr<DynamicFilterData> GetOptionalDynamicFilterData(const TableFilter &filter);

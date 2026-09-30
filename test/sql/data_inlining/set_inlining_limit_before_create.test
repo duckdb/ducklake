@@ -1,20 +1,20 @@
 # name: test/sql/data_inlining/set_inlining_limit_before_create.test
-# description: Test that SET ducklake_default_data_inlining_row_limit = 0 before CREATE TABLE does not create empty inlined backing tables (issue #1184)
+# description: Test that table creation respects the default data inlining limit
 # group: [data_inlining]
 
 require ducklake
 
 require parquet
 
-test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
 
-test-env DATA_PATH __TEST_DIR__
+test-env DATA_PATH {TEST_DIR}
 
 statement ok
 SET ducklake_default_data_inlining_row_limit = 0;
 
 statement ok
-ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/set_inlining_limit_before_create', METADATA_CATALOG 'ducklake_meta')
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/set_inlining_limit_before_create', METADATA_CATALOG 'ducklake_meta')
 
 statement ok
 USE ducklake
@@ -28,6 +28,27 @@ SELECT COUNT(*) FROM ducklake_meta.ducklake_inlined_data_tables
 0
 
 statement ok
+INSERT INTO t1 VALUES (1, 'a');
+
+statement ok
+CREATE TABLE t_ctas AS SELECT 2 AS pk;
+
+query I
+SELECT COUNT(*) FROM ducklake_meta.ducklake_inlined_data_tables
+----
+0
+
+query II
+SELECT pk, filename LIKE 'ducklake_inlined%' FROM t1
+----
+1	false
+
+query II
+SELECT pk, filename LIKE 'ducklake_inlined%' FROM t_ctas
+----
+2	false
+
+statement ok
 SET ducklake_default_data_inlining_row_limit = 10;
 
 statement ok
@@ -37,3 +58,44 @@ query I
 SELECT COUNT(*) FROM ducklake_meta.ducklake_inlined_data_tables
 ----
 1
+
+# Enabling inlining lazily creates backing storage for the existing table.
+statement ok
+INSERT INTO t1 VALUES (3, 'b');
+
+query II rowsort
+SELECT pk, filename LIKE 'ducklake_inlined%' FROM t1
+----
+1	false
+3	true
+
+query I
+SELECT COUNT(*) FROM ducklake_meta.ducklake_inlined_data_tables
+----
+2
+
+# An explicit catalog option takes precedence over the default setting.
+statement ok
+CALL ducklake.set_option('data_inlining_row_limit', 0);
+
+statement ok
+CREATE TABLE t3(pk INTEGER);
+
+query I
+SELECT COUNT(*) FROM ducklake_meta.ducklake_inlined_data_tables
+----
+2
+
+statement ok
+SET ducklake_default_data_inlining_row_limit = 0;
+
+statement ok
+CALL ducklake.set_option('data_inlining_row_limit', 10);
+
+statement ok
+CREATE TABLE t4(pk INTEGER);
+
+query I
+SELECT COUNT(*) FROM ducklake_meta.ducklake_inlined_data_tables
+----
+3

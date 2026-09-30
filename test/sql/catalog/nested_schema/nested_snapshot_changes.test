@@ -1,0 +1,79 @@
+# name: test/sql/catalog/nested_schema/nested_snapshot_changes.test
+# description: Snapshot change tokens carry the full schema path for nested schemas
+# group: [nested_schema]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DUCKLAKE_VERSION '1.1-dev1', DATA_PATH '{DATA_PATH}/nested_changes_files', METADATA_CATALOG 'ducklake_meta')
+
+statement ok
+CREATE SCHEMA ducklake.s1;
+
+statement ok
+CREATE SCHEMA ducklake.s1.child;
+
+statement ok
+CREATE TABLE ducklake.s1.child.t(i INTEGER);
+
+statement ok
+CREATE VIEW ducklake.s1.child.v AS SELECT 42 AS x;
+
+statement ok
+CREATE MACRO ducklake.s1.child.twice(a) AS a * 2;
+
+statement ok
+CREATE MACRO ducklake.s1.child.tbl() AS TABLE SELECT 1 AS x;
+
+statement ok
+CREATE SCHEMA ducklake."a.b";
+
+statement ok
+CREATE TABLE ducklake."a.b".t(i INTEGER);
+
+query I
+SELECT changes_made FROM ducklake_meta.ducklake_snapshot_changes WHERE snapshot_id BETWEEN 1 AND 8 ORDER BY snapshot_id
+----
+created_schema:"s1"
+created_schema:"s1"."child"
+created_table:"s1"."child"."t"
+created_view:"s1"."child"."v"
+created_scalar_macro:"s1"."child"."twice"
+created_table_macro:"s1"."child"."tbl"
+created_schema:"a.b"
+created_table:"a.b"."t"
+
+query II
+SELECT snapshot_id, changes FROM ducklake_snapshots('ducklake') WHERE snapshot_id BETWEEN 0 AND 6 ORDER BY snapshot_id
+----
+0	{schemas_created=[main]}
+1	{schemas_created=[s1]}
+2	{schemas_created=[s1.child]}
+3	{tables_created=[s1.child.t]}
+4	{views_created=[s1.child.v]}
+5	{scalar_macros_created=[s1.child.twice]}
+6	{table_macros_created=[s1.child.tbl]}
+
+query I
+SELECT map_extract(changes, 'schemas_created')[1][1] FROM ducklake_snapshots('ducklake') WHERE snapshot_id = 7
+----
+"a.b"
+
+query I
+SELECT map_extract(changes, 'tables_created')[1][1] FROM ducklake_snapshots('ducklake') WHERE snapshot_id = 8
+----
+"a.b".t
+
+statement ok
+DROP SCHEMA ducklake.s1 CASCADE;
+
+query I
+SELECT map_extract(changes, 'schemas_dropped')[1] FROM ducklake_snapshots('ducklake') WHERE snapshot_id = 9
+----
+[1, 2]

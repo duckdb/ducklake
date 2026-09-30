@@ -1,0 +1,70 @@
+# name: test/sql/migration/schema_parent_column.test
+# description: Schema parents migrate from 1.0 and earlier 1.1-dev1 catalogs without losing schemas
+# group: [migration]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{BASE_TEST_NAME}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/schema_parent_migration', METADATA_CATALOG 'meta', DUCKLAKE_VERSION '1.0')
+
+statement ok
+CREATE SCHEMA ducklake.old_schema;
+
+statement error
+SELECT parent_schema_id FROM meta.ducklake_schema;
+----
+parent_schema_id
+
+statement ok
+DETACH ducklake;
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/schema_parent_migration', METADATA_CATALOG 'meta', DUCKLAKE_VERSION '1.1-dev1', AUTOMATIC_MIGRATION TRUE)
+
+statement ok
+CREATE SCHEMA ducklake.new_schema;
+
+query II
+SELECT schema_name, parent_schema_id FROM meta.ducklake_schema ORDER BY schema_name;
+----
+main	NULL
+new_schema	NULL
+old_schema	NULL
+
+# simulate an older dev1 catalog, a plain attach re-runs the dev migration
+statement ok
+ALTER TABLE meta.ducklake_schema DROP COLUMN parent_schema_id;
+
+statement ok
+DETACH ducklake;
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/schema_parent_migration', METADATA_CATALOG 'meta', DUCKLAKE_VERSION '1.1-dev1')
+
+query II
+SELECT schema_name, parent_schema_id FROM meta.ducklake_schema ORDER BY schema_name;
+----
+main	NULL
+new_schema	NULL
+old_schema	NULL
+
+# a second migration finds nothing to do
+statement ok
+DETACH ducklake;
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/schema_parent_migration', METADATA_CATALOG 'meta', DUCKLAKE_VERSION '1.1-dev1', AUTOMATIC_MIGRATION TRUE)
+
+statement ok
+CREATE SCHEMA ducklake.after_migration;
+
+query I
+SELECT count(*) FROM meta.ducklake_schema WHERE parent_schema_id IS NULL;
+----
+4

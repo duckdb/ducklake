@@ -1,5 +1,5 @@
 # name: test/sql/migration/inlined_column_rename_conflict.test
-# description: a v1.0 user column colliding with the new inlined metadata names aborts the migration cleanly
+# description: v1.0 user columns colliding with the new inlined metadata names abort the migration cleanly
 # group: [migration]
 
 require ducklake
@@ -14,10 +14,10 @@ statement ok
 ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dlc (DATA_PATH '{DATA_PATH}/inlined_conflict_files', METADATA_CATALOG 'dlcmeta', DUCKLAKE_VERSION '1.0')
 
 statement ok
-CREATE TABLE dlc.c(_ducklake_row_id INTEGER);
+CREATE TABLE dlc.c(_ducklake_row_id INTEGER, _ducklake_begin_snapshot INTEGER, _ducklake_end_snapshot INTEGER);
 
 statement ok
-INSERT INTO dlc.c VALUES (1);
+INSERT INTO dlc.c VALUES (1, 2, 3);
 
 statement ok
 DETACH dlc
@@ -31,10 +31,10 @@ table "c" has a column "_ducklake_row_id" colliding with the renamed metadata co
 statement ok
 ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dlc (DATA_PATH '{DATA_PATH}/inlined_conflict_files', METADATA_CATALOG 'dlcmeta')
 
-query I
+query III
 SELECT * FROM dlc.c
 ----
-1
+1	2	3
 
 statement ok
 DETACH dlc

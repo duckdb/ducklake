@@ -1,0 +1,268 @@
+# name: test/sql/catalog/nested_schema/core.test
+# description: Nested schema identity, DDL, transactions, persistence and time travel
+# group: [nested_schema]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{BASE_TEST_NAME}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/nested_core', METADATA_CATALOG 'meta', DUCKLAKE_VERSION '1.1-dev1')
+
+statement ok
+BEGIN;
+
+statement ok
+CREATE SCHEMA dl.a;
+
+statement ok
+CREATE SCHEMA dl.a.child;
+
+statement ok
+CREATE SCHEMA dl.a.child.deep;
+
+statement ok
+CREATE SCHEMA dl.b;
+
+statement ok
+CREATE SCHEMA dl.b.child;
+
+statement ok
+CREATE SCHEMA dl."a.child";
+
+statement ok
+CREATE TABLE dl.a.child.t AS SELECT 1 AS i;
+
+statement ok
+CREATE TABLE dl.b.child.t AS SELECT 2 AS i;
+
+statement ok
+CREATE TABLE dl."a.child".t AS SELECT 3 AS i;
+
+statement ok
+CREATE TABLE dl.a.child.deep.t AS SELECT 4 AS i;
+
+query I
+SELECT * FROM dl.a.child.t UNION ALL SELECT * FROM dl.b.child.t UNION ALL SELECT * FROM dl."a.child".t UNION ALL SELECT * FROM dl.a.child.deep.t ORDER BY i;
+----
+1
+2
+3
+4
+
+statement ok
+COMMIT;
+
+query II
+SELECT c.schema_name AS child_name, p.schema_name AS parent_name FROM meta.ducklake_schema c JOIN meta.ducklake_schema p ON c.parent_schema_id = p.schema_id ORDER BY ALL;
+----
+child	a
+child	b
+deep	child
+
+statement ok
+CREATE SCHEMA IF NOT EXISTS dl.a.child;
+
+statement error
+CREATE SCHEMA dl.a.child;
+----
+already exists
+
+statement error
+CREATE SCHEMA dl.missing.child;
+----
+Schema with name missing does not exist
+
+query I
+SELECT count(*) FROM dl.a.child.t;
+----
+1
+
+statement error
+CREATE SCHEMA dl.a.missing.child;
+----
+Schema with name "missing" does not exist
+
+statement ok
+BEGIN;
+
+statement ok
+CREATE SCHEMA dl.a.child.deep.empty;
+
+statement ok
+CREATE OR REPLACE SCHEMA dl.a.child.deep.empty;
+
+query I
+SELECT count(*) FROM duckdb_schemas() WHERE database_name = 'dl' AND schema_name = 'empty';
+----
+1
+
+statement ok
+ROLLBACK;
+
+# FIXME: DuckDB fails to bind catalog-qualified nested schema references in views
+mode skip
+
+statement ok
+CREATE VIEW dl.a.child.v AS SELECT * FROM dl.a.child.t;
+
+mode unskip
+
+statement ok
+CREATE MACRO dl.a.child.m(x) AS x + 10;
+
+statement ok
+CREATE MACRO dl.b.child.m(x) AS x + 20;
+
+# FIXME: DuckDB fails to bind catalog-qualified nested schema references in views
+mode skip
+
+query II
+SELECT dl.a.child.m(i), dl.b.child.m(i) FROM dl.a.child.v;
+----
+11	21
+
+mode unskip
+
+statement ok
+ALTER TABLE dl.a.child.t ADD COLUMN j INTEGER DEFAULT 7;
+
+statement ok
+UPDATE dl.a.child.t SET i = 5;
+
+query II
+SELECT * FROM dl.a.child.t;
+----
+5	7
+
+statement error
+DROP SCHEMA dl.a;
+----
+depend
+
+statement ok
+BEGIN;
+
+statement ok
+DROP SCHEMA dl.a.child CASCADE;
+
+statement ok
+CREATE SCHEMA dl.a.child;
+
+statement ok
+CREATE TABLE dl.a.child.t AS SELECT 99 AS i;
+
+query I
+SELECT * FROM dl.a.child.t;
+----
+99
+
+statement ok
+ROLLBACK;
+
+query I
+SELECT * FROM dl.a.child.deep.t;
+----
+4
+
+statement ok
+DETACH dl;
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/nested_core', METADATA_CATALOG 'meta', DUCKLAKE_VERSION '1.1-dev1')
+
+query II
+SELECT * FROM dl.a.child.t;
+----
+5	7
+
+query I
+SELECT * FROM dl.a.child.deep.t;
+----
+4
+
+query I
+SELECT count(*) FROM duckdb_schemas() WHERE database_name = 'dl' AND parent_schema IS NOT NULL;
+----
+3
+
+# Cascade sees renamed, replaced and newly created entries in the transaction.
+statement ok
+BEGIN;
+
+statement ok
+ALTER TABLE dl.a.child.t RENAME TO old_t;
+
+statement ok
+CREATE TABLE dl.a.child.t AS SELECT 99 AS i;
+
+# FIXME: DuckDB fails to bind catalog-qualified nested schema references in views
+mode skip
+
+statement ok
+CREATE OR REPLACE VIEW dl.a.child.v AS SELECT * FROM dl.a.child.t;
+
+mode unskip
+
+statement ok
+CREATE OR REPLACE MACRO dl.a.child.m(x) AS x + 100;
+
+statement ok
+DROP SCHEMA dl.a CASCADE;
+
+query I
+SELECT count(*) FROM duckdb_schemas() WHERE database_name = 'dl' AND schema_name = 'a';
+----
+0
+
+statement ok
+ROLLBACK;
+
+# FIXME: DuckDB fails to bind catalog-qualified nested schema references in views
+mode skip
+
+query II
+SELECT * FROM dl.a.child.v;
+----
+5	7
+
+mode unskip
+
+query I
+SELECT dl.a.child.m(1);
+----
+11
+
+statement ok
+DROP SCHEMA dl.a CASCADE;
+
+statement error
+SELECT * FROM dl.a.child.t;
+----
+does not exist
+
+query I
+SELECT * FROM dl.a.child.deep.t AT (VERSION => 1);
+----
+4
+
+query I
+SELECT * FROM dl.b.child.t UNION ALL SELECT * FROM dl."a.child".t ORDER BY i;
+----
+2
+3
+
+statement ok
+DETACH dl;
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/nested_core', METADATA_CATALOG 'meta', DUCKLAKE_VERSION '1.1-dev1')
+
+query I
+SELECT count(*) FROM duckdb_schemas() WHERE database_name = 'dl' AND parent_schema IS NOT NULL;
+----
+1

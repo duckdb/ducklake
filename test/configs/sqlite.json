@@ -117,6 +117,12 @@
       "paths": [
         "test/sql/deletion_inlining/test_deletion_inlining_concurrent_retry.test"
       ]
+    },
+    {
+      "reason": "The concurrent INSERT commit fails with \"database is locked\" while the reader transaction is open, which skip_error_messages turns into a silent skip; the partial-file scenario needs a catalog that does not pin reads (quack)",
+      "paths": [
+        "test/sql/quack/partial_file_count.test"
+      ]
     }
   ]
 }

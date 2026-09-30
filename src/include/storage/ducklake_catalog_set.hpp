@@ -29,12 +29,14 @@ public:
 	explicit DuckLakeCatalogSet(ducklake_entries_map_t catalog_entries_p);
 
 	void CreateEntry(unique_ptr<CatalogEntry> entry);
+	void CreateEntry(const string &key, unique_ptr<CatalogEntry> entry);
 	optional_ptr<CatalogEntry> GetEntry(const string &name);
 	unique_ptr<CatalogEntry> DropEntry(const string &name);
 	optional_ptr<CatalogEntry> GetEntryById(SchemaIndex index);
 	optional_ptr<CatalogEntry> GetEntryById(TableIndex index);
 	void AddEntry(DuckLakeSchemaEntry &schema, TableIndex id, unique_ptr<CatalogEntry> entry);
 	void AddEntry(DuckLakeSchemaEntry &schema, MacroIndex id, unique_ptr<CatalogEntry> entry);
+	void MoveEntriesTo(vector<unique_ptr<CatalogEntry>> &result);
 	template <class T>
 	optional_ptr<T> GetEntry(const string &name) {
 		auto entry = GetEntry(name);
@@ -53,6 +55,9 @@ public:
 	idx_t TotalEntryCount() const {
 		return catalog_entries.size() + table_entry_map.size() + macro_entry_map.size();
 	}
+
+private:
+	void RegisterSchema(DuckLakeSchemaEntry &schema);
 
 private:
 	ducklake_entries_map_t catalog_entries;

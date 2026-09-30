@@ -47,6 +47,9 @@ statement ok
 ALTER TABLE meta.ducklake_table_column_stats ADD COLUMN max_is_exact BOOLEAN DEFAULT NULL;
 
 statement ok
+ALTER TABLE meta.ducklake_schema ADD COLUMN parent_schema_id BIGINT;
+
+statement ok
 DETACH meta
 
 # a read-only attach cannot migrate in place - reading the inlined data fails with a hint at the migration

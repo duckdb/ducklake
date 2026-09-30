@@ -12,7 +12,8 @@ namespace duckdb {
 static void ValidateTableScope(ClientContext &context, Catalog &catalog, const string &schema_name,
                                const string &table_name) {
 	auto table_catalog_entry = catalog.GetEntry<TableCatalogEntry>(
-	    context, Identifier(schema_name), Identifier(table_name), OnEntryNotFound::THROW_EXCEPTION);
+	    context, DuckLakeUtil::QualifiedEntryName(context, catalog, schema_name, table_name),
+	    OnEntryNotFound::THROW_EXCEPTION);
 	auto &ducklake_table = table_catalog_entry->Cast<DuckLakeTableEntry>();
 	DuckLakeUtil::ValidateCanEnableInlining(ducklake_table.GetColumns(),
 	                                        catalog.Cast<DuckLakeCatalog>().SupportsV1_1Metadata(),
@@ -36,8 +37,8 @@ static void ValidateTablesInSchema(ClientContext &context, DuckLakeCatalog &duck
 
 static void ValidateSchemaScope(ClientContext &context, Catalog &catalog, const string &schema_name) {
 	auto &duck_catalog = catalog.Cast<DuckLakeCatalog>();
-	auto schema_catalog_entry = catalog.GetSchema(context, Identifier(schema_name), OnEntryNotFound::THROW_EXCEPTION);
-	ValidateTablesInSchema(context, duck_catalog, schema_catalog_entry->Cast<DuckLakeSchemaEntry>(), SchemaIndex());
+	auto &schema_catalog_entry = DuckLakeUtil::GetSchema(context, catalog, schema_name);
+	ValidateTablesInSchema(context, duck_catalog, schema_catalog_entry.Cast<DuckLakeSchemaEntry>(), SchemaIndex());
 }
 
 static void ValidateGlobalScope(ClientContext &context, Catalog &catalog) {
@@ -101,7 +102,7 @@ static unique_ptr<FunctionData> DuckLakeSetOptionBind(ClientContext &context, Ta
 	DuckLakeUtil::ValidateConfigOptionScope(option, !schema.empty(), !table.empty());
 	if (!table.empty()) {
 		auto table_catalog_entry = catalog.GetEntry<TableCatalogEntry>(
-		    context, QualifiedName(catalog.GetName(), Identifier(schema), Identifier(table)),
+		    context, DuckLakeUtil::QualifiedEntryName(context, catalog, schema, table),
 		    OnEntryNotFound::THROW_EXCEPTION);
 		auto &ducklake_table = table_catalog_entry->Cast<DuckLakeTableEntry>();
 		config_option.table_id = ducklake_table.GetTableId();
@@ -112,8 +113,8 @@ static unique_ptr<FunctionData> DuckLakeSetOptionBind(ClientContext &context, Ta
 			value = DuckLakeTableEntry::ResolveSkippedStatsColumns(ducklake_table, val);
 		}
 	} else if (!schema.empty()) {
-		auto schema_catalog_entry = catalog.GetSchema(context, Identifier(schema), OnEntryNotFound::THROW_EXCEPTION);
-		auto &ducklake_schema = schema_catalog_entry->Cast<DuckLakeSchemaEntry>();
+		auto &schema_catalog_entry = DuckLakeUtil::GetSchema(context, catalog, schema);
+		auto &ducklake_schema = schema_catalog_entry.Cast<DuckLakeSchemaEntry>();
 		config_option.schema_id = ducklake_schema.GetSchemaId();
 		if (config_option.schema_id.IsTransactionLocal()) {
 			throw NotImplementedException("Settings cannot be set for transaction-local schemas");

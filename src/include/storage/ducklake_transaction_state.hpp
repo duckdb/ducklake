@@ -215,11 +215,11 @@ public:
 	string separator;
 	DuckLakeSnapshotCommit commit_info;
 
-	case_insensitive_map_t<unique_ptr<DuckLakeCatalogSet>> new_tables;
+	map<SchemaIndex, unique_ptr<DuckLakeCatalogSet>> new_tables;
 	set<TableIndex> dropped_tables;
 
-	case_insensitive_map_t<unique_ptr<DuckLakeCatalogSet>> new_scalar_macros;
-	case_insensitive_map_t<unique_ptr<DuckLakeCatalogSet>> new_table_macros;
+	map<SchemaIndex, unique_ptr<DuckLakeCatalogSet>> new_scalar_macros;
+	map<SchemaIndex, unique_ptr<DuckLakeCatalogSet>> new_table_macros;
 	set<MacroIndex> dropped_scalar_macros;
 	set<MacroIndex> dropped_table_macros;
 

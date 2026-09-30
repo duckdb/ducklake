@@ -47,7 +47,7 @@ static unique_ptr<FunctionData> DuckLakeAddDataFilesBind(ClientContext &context,
 	const auto table_name = StringValue::Get(input.inputs[1]);
 
 	auto entry = catalog.GetEntry<TableCatalogEntry>(
-	    context, QualifiedName(catalog.GetName(), Identifier(schema_name), Identifier(table_name)),
+	    context, DuckLakeUtil::QualifiedEntryName(context, catalog, schema_name, table_name),
 	    OnEntryNotFound::THROW_EXCEPTION);
 	auto &table = entry->Cast<DuckLakeTableEntry>();
 

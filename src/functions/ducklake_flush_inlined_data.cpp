@@ -1,3 +1,4 @@
+#include "common/ducklake_util.hpp"
 #include "functions/ducklake_table_functions.hpp"
 #include "duckdb/catalog/catalog.hpp"
 #include "duckdb/catalog/catalog_entry/schema_catalog_entry.hpp"
@@ -91,7 +92,7 @@ SourceResultType DuckLakeFlushData::GetDataInternal(ExecutionContext &context, D
 	source_state.returned_result = true;
 
 	auto &gstate = this->sink_state->Cast<DuckLakeInsertGlobalState>();
-	chunk.data[0].Append(Value(table.schema.name.GetIdentifierName()));
+	chunk.data[0].Append(Value(DuckLakeUtil::SchemaPathToDisplay(table.schema.GetSchemaPath())));
 	chunk.data[1].Append(Value(table.name.GetIdentifierName()));
 	chunk.data[2].Append(Value::BIGINT(static_cast<int64_t>(gstate.rows_flushed)));
 	chunk.SetChildCardinality(1);
@@ -364,8 +365,9 @@ unique_ptr<LogicalOperator> DuckLakeDataFlusher::GenerateFlushCommand() {
 	// and instead pull the latest sort setting
 	// First, see if there are transaction local changes to the table
 	// Then fall back to latest snapshot if no local changes
-	auto latest_entry = transaction.GetTransactionLocalEntry(
-	    CatalogType::TABLE_ENTRY, table.schema.name.GetIdentifierName(), table.name.GetIdentifierName());
+	auto latest_entry = transaction.GetTransactionLocalEntry(CatalogType::TABLE_ENTRY,
+	                                                         table.schema.Cast<DuckLakeSchemaEntry>().GetSchemaId(),
+	                                                         table.name.GetIdentifierName());
 	if (!latest_entry) {
 		auto latest_snapshot = transaction.GetSnapshot();
 		latest_entry = catalog.GetEntryById(transaction, latest_snapshot, table_id);
@@ -641,7 +643,7 @@ static unique_ptr<LogicalOperator> FlushInlinedDataBind(ClientContext &context, 
 			schemas = ducklake_catalog.GetSchemas(context);
 		} else {
 			// specific schema - fetch it
-			schemas.push_back(ducklake_catalog.GetSchema(context, Identifier(schema)));
+			schemas.push_back(DuckLakeUtil::GetSchema(context, ducklake_catalog, schema));
 		}
 
 		// - scan all tables from the relevant schemas
@@ -656,7 +658,7 @@ static unique_ptr<LogicalOperator> FlushInlinedDataBind(ClientContext &context, 
 	} else {
 		// specific table - fetch the table
 		auto table_catalog_entry = ducklake_catalog.GetEntry<TableCatalogEntry>(
-		    context, QualifiedName(ducklake_catalog.GetName(), Identifier(schema), Identifier(table)),
+		    context, DuckLakeUtil::QualifiedEntryName(context, ducklake_catalog, schema, table),
 		    OnEntryNotFound::THROW_EXCEPTION);
 		auto &dl_schema = table_catalog_entry->schema.Cast<DuckLakeSchemaEntry>();
 		schema_table_map[dl_schema.Cast<DuckLakeSchemaEntry>().GetSchemaId().index].push_back(

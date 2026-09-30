@@ -1,0 +1,65 @@
+# name: test/sql/compaction/merge_adjacent_cross_schema_rewrite.test
+# description: rewriting a file merged across schema versions keeps its newer columns and the time travel of other tables
+# group: [compaction]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/merge_adjacent_cross_schema_rewrite.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/merge_adjacent_cross_schema_rewrite', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE ducklake.u(i INTEGER);
+
+statement ok
+INSERT INTO ducklake.u VALUES (42);
+
+statement ok
+CREATE TABLE ducklake.t(a INTEGER);
+
+statement ok
+INSERT INTO ducklake.t VALUES (1), (3);
+
+statement ok
+ALTER TABLE ducklake.t ADD COLUMN c VARCHAR;
+
+statement ok
+INSERT INTO ducklake.t VALUES (2, 'two');
+
+statement ok
+DROP TABLE ducklake.u;
+
+statement ok
+INSERT INTO ducklake.t VALUES (4, 'four');
+
+statement ok
+CALL ducklake_merge_adjacent_files('ducklake');
+
+statement ok
+DETACH ducklake
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake
+
+statement ok
+DELETE FROM ducklake.t WHERE a = 3;
+
+statement ok
+CALL ducklake_rewrite_data_files('ducklake', delete_threshold => 0);
+
+query II
+SELECT * FROM ducklake.t ORDER BY a
+----
+1	NULL
+2	two
+4	four
+
+query I
+SELECT * FROM ducklake.u AT (VERSION => 6)
+----
+42

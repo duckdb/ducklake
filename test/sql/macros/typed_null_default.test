@@ -1,0 +1,118 @@
+# name: test/sql/macros/typed_null_default.test
+# description: macros whose parameter defaults are typed NULLs
+# group: [macros]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/ducklake_macro_typed_null_default.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/macro_typed_null_default', METADATA_CATALOG 'ducklake_meta')
+
+statement ok
+USE ducklake
+
+statement ok
+CREATE MACRO date_default(x := NULL::DATE) AS x + INTERVAL 1 DAY
+
+statement ok
+CREATE MACRO varchar_default(x := NULL::VARCHAR) AS x IS NULL
+
+statement ok
+CREATE MACRO string_default(x := 'NULL') AS x IS NULL
+
+statement ok
+CREATE MACRO list_default(x := NULL::INTEGER[]) AS x IS NULL
+
+statement ok
+CREATE MACRO list_type(l := NULL::VARCHAR[]) AS typeof(l)
+
+statement ok
+CREATE MACRO list_unnest(l := NULL::VARCHAR[]) AS TABLE SELECT unnest(l) AS v
+
+statement ok
+CREATE MACRO list_value_of(l := NULL::VARCHAR[]) AS l
+
+query II
+SELECT default_value, default_value_type FROM ducklake_meta.ducklake_macro_parameters ORDER BY macro_id
+----
+CAST(NULL AS DATE)	expression
+CAST(NULL AS VARCHAR)	expression
+'NULL'	expression
+CAST(NULL AS INTEGER[])	expression
+CAST(NULL AS VARCHAR[])	expression
+CAST(NULL AS VARCHAR[])	expression
+CAST(NULL AS VARCHAR[])	expression
+
+statement ok
+USE memory
+
+statement ok
+DETACH ducklake
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/macro_typed_null_default', METADATA_CATALOG 'ducklake_meta')
+
+statement ok
+USE ducklake
+
+query IIII
+SELECT date_default() IS NULL, varchar_default(), string_default(), list_default()
+----
+true	true	false	true
+
+# the default keeps its list type rather than becoming an untyped NULL
+query I
+SELECT list_type()
+----
+VARCHAR[]
+
+query I
+SELECT count(*) FROM list_unnest()
+----
+0
+
+statement ok
+CREATE TABLE list_table AS SELECT list_value_of() AS c
+
+query I
+SELECT data_type FROM information_schema.columns WHERE table_name = 'list_table'
+----
+VARCHAR[]
+
+statement ok
+INSERT INTO list_table VALUES (['a'])
+
+query I
+SELECT c FROM list_table ORDER BY c NULLS FIRST
+----
+NULL
+[a]
+
+# older versions stored typed NULL defaults as the text NULL, and nested ones without their child types
+statement ok
+UPDATE ducklake_meta.ducklake_macro_parameters SET default_value = 'NULL', default_value_type = 'date' WHERE macro_id = (SELECT macro_id FROM ducklake_meta.ducklake_macro WHERE macro_name = 'date_default')
+
+statement ok
+UPDATE ducklake_meta.ducklake_macro_parameters SET default_value = 'NULL', default_value_type = 'list' WHERE macro_id = (SELECT macro_id FROM ducklake_meta.ducklake_macro WHERE macro_name = 'list_default')
+
+statement ok
+UPDATE ducklake_meta.ducklake_macro_parameters SET default_value = 'NULL', default_value_type = 'varchar' WHERE macro_id = (SELECT macro_id FROM ducklake_meta.ducklake_macro WHERE macro_name = 'string_default')
+
+statement ok
+USE memory
+
+statement ok
+DETACH ducklake
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/macro_typed_null_default', METADATA_CATALOG 'ducklake_meta')
+
+query III
+SELECT ducklake.date_default() IS NULL, ducklake.string_default(), ducklake.list_default()
+----
+true	false	true

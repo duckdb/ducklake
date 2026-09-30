@@ -78,6 +78,10 @@ static string ToStringBaseType(const LogicalType &type) {
 	throw InvalidInputException("Failed to convert DuckDB type to DuckLake - unsupported type %s", type);
 }
 
+bool DuckLakeTypes::IsStringType(const LogicalType &type) {
+	return type.id() == LogicalTypeId::VARCHAR || type.id() == LogicalTypeId::BLOB;
+}
+
 bool DuckLakeTypes::RequiresCast(const LogicalType &type) {
 	// There are no types that requires casts as of DuckDB v1.5
 	return false;

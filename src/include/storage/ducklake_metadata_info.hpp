@@ -70,6 +70,7 @@ struct DuckLakeMetadata {
 
 struct DuckLakeSchemaInfo {
 	SchemaIndex id;
+	SchemaIndex parent_id;
 	string uuid;
 	string name;
 	string path;

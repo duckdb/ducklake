@@ -1,0 +1,95 @@
+# name: test/sql/catalog/nested_schema/schema_path_v10_compat.test
+# description: On 1.0 lakes a schema argument stays a single literal identifier
+# group: [nested_schema]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/schema_path_v10_files', METADATA_CATALOG 'ducklake_meta', DATA_INLINING_ROW_LIMIT 10, DUCKLAKE_VERSION '1.0')
+
+statement ok
+CREATE SCHEMA ducklake."p.q";
+
+statement ok
+CREATE TABLE ducklake."p.q".t(i INTEGER);
+
+statement ok
+INSERT INTO ducklake."p.q".t VALUES (1), (2);
+
+query I
+SELECT count(*) FROM ducklake_table_insertions('ducklake', 'p.q', 't', 2, 3)
+----
+2
+
+# Built-in macros must also pass a literal schema name on 1.0 lakes.
+query I
+SELECT count(*) FROM ducklake."p.q".table_insertions('t', 2, 3)
+----
+2
+
+query III
+CALL ducklake_flush_inlined_data('ducklake', schema_name => 'p.q')
+----
+"p.q"	t	2
+
+query I
+SELECT count(*) FROM ducklake_list_files('ducklake', 't', schema => 'p.q')
+----
+1
+
+statement ok
+CALL ducklake_set_option('ducklake', 'parquet_compression', 'zstd', schema => 'p.q');
+
+query II
+SELECT scope, scope_entry FROM ducklake.options() WHERE option_name = 'parquet_compression'
+----
+SCHEMA	"p.q"
+
+# the quoted spelling is a literal name here, as it was before nested schemas
+statement error
+SELECT count(*) FROM ducklake_list_files('ducklake', 't', schema => '"p.q"')
+----
+does not exist
+
+# a trailing dot is part of the name, not an empty path component
+statement error
+CALL ducklake_set_option('ducklake', 'parquet_compression', 'zstd', schema => 'p.q.')
+----
+Schema with name p.q. does not exist
+
+# a name containing a quote character is not parsed either
+statement ok
+CREATE SCHEMA ducklake."q""s";
+
+statement ok
+CREATE TABLE ducklake."q""s".t(i INTEGER);
+
+statement ok
+INSERT INTO ducklake."q""s".t VALUES (5);
+
+query III
+CALL ducklake_flush_inlined_data('ducklake', schema_name => 'q"s')
+----
+"q""s"	t	1
+
+# Snapshot display uses SQL identifier quoting for literal names.
+statement ok
+CREATE SCHEMA ducklake."My Schema";
+
+statement ok
+CREATE SCHEMA ducklake."select";
+
+query I
+SELECT s FROM (SELECT unnest(map_extract(changes, 'schemas_created')[1]) AS s FROM ducklake_snapshots('ducklake')) WHERE s IS NOT NULL ORDER BY s
+----
+"My Schema"
+"p.q"
+"q""s"
+"select"
+main

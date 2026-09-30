@@ -255,6 +255,7 @@ public:
 	virtual void InitializeDuckLake(bool has_explicit_schema, DuckLakeEncryption encryption);
 	//! Get the CREATE TABLE statements for all metadata tables
 	virtual string GetCreateTableStatements();
+	virtual string GetSchemaTableStatement();
 	virtual string GetDataFileTableStatement();
 	virtual string GetDeleteFileTableStatement();
 	virtual string GetFileColumnStatsTableStatement();
@@ -289,7 +290,8 @@ public:
 	static string LatestSnapshotQuery();
 	static string GlobalTableStatsQuery(bool include_exactness);
 	//! Pure parsers for the results of the above queries.
-	static unique_ptr<DuckLakeSnapshot> ParseSnapshot(QueryResult &result);
+	static unique_ptr<DuckLakeSnapshot> ParseSnapshot(QueryResult &result,
+	                                                  optional_ptr<string> catalog_version = nullptr);
 	static vector<DuckLakeGlobalStatsInfo> ParseGlobalTableStats(QueryResult &result);
 	//! Whether the result contains a column with the given name
 	static bool ResultHasColumn(QueryResult &result, const string &name);
@@ -302,7 +304,7 @@ public:
 	static DuckLakeCatalogInfo
 	BuildCatalogForSnapshot(DuckLakeSnapshot snapshot,
 	                        const std::function<unique_ptr<QueryResult>(DuckLakeSnapshot, string)> &query_executor,
-	                        const string &base_data_path, const string &separator, bool load_view_column_tags = false);
+	                        const string &base_data_path, const string &separator, bool supports_v1_1_metadata = false);
 	virtual vector<DuckLakeGlobalStatsInfo> GetGlobalTableStats(DuckLakeSnapshot snapshot, TableIndex table_id);
 	virtual vector<DuckLakeFileListEntry> GetFilesForTable(DuckLakeTableEntry &table, DuckLakeSnapshot snapshot,
 	                                                       const FilterPushdownInfo *filter_info = nullptr);
@@ -320,9 +322,12 @@ public:
 	virtual idx_t GetBeginSnapshotForTable(TableIndex table_id);
 	virtual idx_t GetBeginSnapshotForSchemaVersion(TableIndex table_id, idx_t schema_version);
 	virtual idx_t GetNetDataFileRowCount(TableIndex table_id, DuckLakeSnapshot snapshot);
+	optional_idx GetNetDataFileRowCountForStats(TableIndex table_id, DuckLakeSnapshot snapshot);
 	virtual idx_t GetNetInlinedRowCount(const string &inlined_table_name, DuckLakeSnapshot snapshot);
 	//! SQL builders for stats-refresh metadata lookups; caller substitutes placeholders + executes.
-	static string GetNetDataFileRowCountSql(TableIndex table_id, const string &inlined_deletion_table);
+	//! With require_exact, the count is NULL if any visible file is only partially visible to the snapshot.
+	static string GetNetDataFileRowCountSql(TableIndex table_id, const string &inlined_deletion_table,
+	                                        bool require_exact = false);
 	static string GetNetInlinedRowCountSql(const string &inlined_table_name, const DuckLakeInlinedColNames &col_names);
 	static string GetTableColumnSchemaSql(TableIndex table_id);
 	static string GetInlinedTableNamesSql(TableIndex table_id);
@@ -340,7 +345,7 @@ public:
 	//! Emits the INSERT for new schemas. Caller supplies resolved paths (one per schema, same order)
 	//! since path resolution depends on the catalog's data_path / separator (instance state).
 	static string WriteNewSchemas(const vector<DuckLakeSchemaInfo> &new_schemas,
-	                              const vector<DuckLakePath> &resolved_paths);
+	                              const vector<DuckLakePath> &resolved_paths, bool supports_v1_1_metadata);
 	//! Emits the INSERT for new tables and their columns. Caller supplies resolved paths (one per
 	//! table, same order). commit_snapshot is currently unused by the body — kept off the signature.
 	static string WriteNewTables(const vector<DuckLakeTableInfo> &new_tables,
@@ -498,7 +503,7 @@ public:
 	//! Best-effort in place re-run of the v1.1-dev1 migration on a plain attach, failures are logged not thrown
 	virtual void MigrateV10Dev();
 	//! Renames inlined metadata columns to the prefixed variants, skipping already renamed tables
-	virtual void MigrateInlinedColumnNames();
+	virtual void MigrateInlinedColumnNames(bool probe_renamed);
 	virtual void ExecuteMigration(string migrate_query, bool allow_failures, const string &from_version,
 	                              const string &to_version);
 

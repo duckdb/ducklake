@@ -8,6 +8,7 @@
 #include "storage/ducklake_table_entry.hpp"
 #include "storage/ducklake_stats.hpp"
 #include "storage/ducklake_transaction.hpp"
+#include "storage/ducklake_metadata_manager.hpp"
 
 #include "duckdb/catalog/catalog_entry/table_function_catalog_entry.hpp"
 #include "duckdb/common/multi_file/multi_file_data.hpp"
@@ -20,6 +21,7 @@
 #include "duckdb/main/query_profiler.hpp"
 #include "duckdb/main/secret/secret_manager.hpp"
 #include "duckdb/parser/expression/function_expression.hpp"
+#include "duckdb/parser/qualified_name.hpp"
 
 namespace duckdb {
 
@@ -196,7 +198,12 @@ vector<PartitionStatistics> DuckLakeGetPartitionStats(ClientContext &context, Ge
 		return result;
 	}
 
-	idx_t net_count = table.GetNetDataFileRowCount(*transaction) + table.GetNetInlinedRowCount(*transaction);
+	auto file_count =
+	    transaction->GetMetadataManager().GetNetDataFileRowCountForStats(table_id, transaction->GetSnapshot());
+	if (!file_count.IsValid()) {
+		return result;
+	}
+	idx_t net_count = file_count.GetIndex() + table.GetNetInlinedRowCount(*transaction);
 
 	// MIN/MAX can be answered from the catalog column stats, but only when those stats are exact.
 	// Global column stats only ever widen on insert (via MergeStats) and are never tightened by deletes
@@ -296,6 +303,8 @@ void DuckLakeScanSerialize(Serializer &serializer, const optional_ptr<FunctionDa
 		serializer.WriteObject(106, "start_snapshot",
 		                       [&](Serializer &obj) { func_info.start_snapshot->Serialize(obj); });
 	}
+	serializer.WriteProperty(107, "qualified_name",
+	                         func_info.table.ParentSchema().GetQualifiedName(Identifier(func_info.table_name)));
 }
 
 unique_ptr<FunctionData> DuckLakeScanDeserialize(Deserializer &deserializer, TableFunction &function) {
@@ -314,6 +323,11 @@ unique_ptr<FunctionData> DuckLakeScanDeserialize(Deserializer &deserializer, Tab
 		deserializer.ReadObject(106, "start_snapshot",
 		                        [&](Deserializer &obj) { *start_snapshot = DuckLakeSnapshot::Deserialize(obj); });
 	}
+	auto qualified_name =
+	    deserializer.ReadPropertyWithExplicitDefault<QualifiedName>(107, "qualified_name", QualifiedName());
+	if (qualified_name.Path().empty()) {
+		qualified_name = QualifiedName(Identifier(catalog_name), Identifier(schema_name), Identifier(table_name));
+	}
 
 	// If ducklake_scan was registered before parquet was loaded, we set it now
 	if (!function.bind) {
@@ -327,9 +341,7 @@ unique_ptr<FunctionData> DuckLakeScanDeserialize(Deserializer &deserializer, Tab
 	auto &catalog = Catalog::GetCatalog(context, Identifier(catalog_name));
 	auto &transaction = DuckLakeTransaction::Get(context, catalog);
 
-	auto &table_entry = Catalog::GetEntry<TableCatalogEntry>(context, Identifier(catalog_name), Identifier(schema_name),
-	                                                         Identifier(table_name))
-	                        .Cast<DuckLakeTableEntry>();
+	auto &table_entry = Catalog::GetEntry<TableCatalogEntry>(context, qualified_name).Cast<DuckLakeTableEntry>();
 
 	function.function_info = DuckLakeFunctionInfo::Create(table_entry, transaction, snapshot);
 	auto &func_info = function.function_info->Cast<DuckLakeFunctionInfo>();

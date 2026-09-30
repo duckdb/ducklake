@@ -136,7 +136,6 @@ public:
 	bool IsInitialized() const {
 		return initialized;
 	}
-	idx_t DataInliningRowLimit(SchemaIndex schema_index, TableIndex table_index) const;
 	idx_t DataInliningRowLimit(ClientContext &context, SchemaIndex schema_index, TableIndex table_index,
 	                           optional_ptr<const map<string, string>> table_options = nullptr) const;
 	//! Returns the inlining limit (0 if the table is not eligible)

@@ -387,11 +387,11 @@ TableFunction DuckLakeTableEntry::GetScanFunction(ClientContext &context, unique
 	function.function_info = std::move(function_info);
 	auto &dropped_tables = transaction.GetDroppedTables();
 	auto &renamed_tables = transaction.GetRenamedTables();
-	if (dropped_tables.find(table_id) != dropped_tables.end()) {
+	if (!lookup_info.GetAtClause() && dropped_tables.find(table_id) != dropped_tables.end()) {
 		// Table has been dropped, so it doesn't exist anymore
 		throw BinderException("Table with name %s does not exist", name);
 	}
-	if (renamed_tables.find(table_id) != renamed_tables.end()) {
+	if (!lookup_info.GetAtClause() && renamed_tables.find(table_id) != renamed_tables.end()) {
 		// Table has been renamed, are we then querying the correct name?
 		bool found = false;
 		for (auto &catalog_set : transaction.GetNewTables()) {

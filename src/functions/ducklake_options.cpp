@@ -1,3 +1,5 @@
+#include "common/ducklake_util.hpp"
+#include "duckdb/parser/qualified_name.hpp"
 #include "functions/ducklake_table_functions.hpp"
 #include "duckdb/catalog/catalog.hpp"
 #include "storage/ducklake_transaction.hpp"
@@ -126,7 +128,8 @@ unique_ptr<GlobalTableFunctionState> DuckLakeOptionsInit(ClientContext &context,
 		option_info.scope = "SCHEMA";
 		auto schema_entry = ducklake_catalog.GetEntryById(transaction, snapshot, schema_setting.schema_id);
 		if (schema_entry) {
-			option_info.scope_entry = schema_entry->name.GetIdentifierName();
+			option_info.scope_entry =
+			    DuckLakeUtil::SchemaPathToDisplay(schema_entry->Cast<SchemaCatalogEntry>().GetSchemaPath());
 		}
 		result->options.push_back(std::move(option_info));
 	}
@@ -141,7 +144,8 @@ unique_ptr<GlobalTableFunctionState> DuckLakeOptionsInit(ClientContext &context,
 		auto table_entry = ducklake_catalog.GetEntryById(transaction, snapshot, table_setting.table_id);
 		if (table_entry) {
 			auto &table_catalog_entry = table_entry->Cast<TableCatalogEntry>();
-			option_info.scope_entry = table_catalog_entry.ParentSchema().name + "." + table_entry->name;
+			option_info.scope_entry =
+			    QualifiedName(table_catalog_entry.ParentSchema().GetSchemaPath(), table_entry->name).ToString();
 		}
 		result->options.push_back(std::move(option_info));
 	}

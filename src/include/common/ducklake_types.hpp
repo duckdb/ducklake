@@ -22,6 +22,8 @@ public:
 	static void CheckSupportedType(const LogicalType &type, DuckLakeVersion version);
 	static void CheckSupportedTypes(const ColumnList &columns, DuckLakeVersion version);
 
+	//! VARCHAR and BLOB, whose values can be the text NULL
+	static bool IsStringType(const LogicalType &type);
 	static bool RequiresCast(const LogicalType &type);
 	static bool RequiresCast(const vector<LogicalType> &types);
 	//! If this type requires a cast, return the type to cast to

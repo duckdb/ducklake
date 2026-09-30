@@ -115,4 +115,4 @@ does not exist
 statement error
 CALL ducklake_flush_inlined_data('ducklake', schema_name => 'non_existent_schema')
 ----
-not found
+does not exist

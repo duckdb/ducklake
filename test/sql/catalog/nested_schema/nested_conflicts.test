@@ -1,0 +1,236 @@
+# name: test/sql/catalog/nested_schema/nested_conflicts.test
+# description: Transaction conflict detection with nested schemas
+# group: [nested_schema]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DUCKLAKE_VERSION '1.1-dev1', DATA_PATH '{DATA_PATH}/nested_conflict_files')
+
+statement ok
+SET immediate_transaction_mode=true
+
+statement ok
+CREATE SCHEMA ducklake.a;
+
+statement ok
+CREATE SCHEMA ducklake.b;
+
+statement ok
+CREATE SCHEMA ducklake.a.x;
+
+statement ok
+CREATE SCHEMA ducklake.b.x;
+
+# the same leaf name under different parents: no conflict
+statement ok con1
+BEGIN
+
+statement ok con2
+BEGIN
+
+statement ok con1
+CREATE SCHEMA ducklake.a.y;
+
+statement ok con2
+CREATE SCHEMA ducklake.b.y;
+
+statement ok con1
+COMMIT
+
+statement ok con2
+COMMIT
+
+statement ok con1
+BEGIN
+
+statement ok con2
+BEGIN
+
+statement ok con1
+CREATE TABLE ducklake.a.x.t(i INTEGER);
+
+statement ok con2
+CREATE TABLE ducklake.b.x.t(i INTEGER);
+
+statement ok con1
+COMMIT
+
+statement ok con2
+COMMIT
+
+query I
+SELECT count(*) FROM duckdb_tables() WHERE database_name = 'ducklake' AND table_name = 't'
+----
+2
+
+# the same nested schema twice: conflict
+statement ok con1
+BEGIN
+
+statement ok con2
+BEGIN
+
+statement ok con1
+CREATE SCHEMA ducklake.a.z;
+
+statement ok con2
+CREATE SCHEMA ducklake.a.z;
+
+statement ok con1
+COMMIT
+
+statement error con2
+COMMIT
+----
+Transaction conflict
+
+# creating a table in a nested schema that another transaction drops: conflict
+statement ok con1
+BEGIN
+
+statement ok con2
+BEGIN
+
+statement ok con1
+DROP SCHEMA ducklake.b CASCADE;
+
+statement ok con2
+CREATE TABLE ducklake.b.x.t2(i INTEGER);
+
+statement ok con1
+COMMIT
+
+statement error con2
+COMMIT
+----
+Transaction conflict
+
+# creating a nested schema under a parent another transaction drops: conflict
+statement ok con1
+BEGIN
+
+statement ok con2
+BEGIN
+
+statement ok con1
+DROP SCHEMA ducklake.a CASCADE;
+
+statement ok con2
+CREATE SCHEMA ducklake.a.w;
+
+statement ok con1
+COMMIT
+
+statement error con2
+COMMIT
+----
+Transaction conflict
+
+statement ok
+CREATE SCHEMA ducklake.a;
+
+statement ok
+CREATE SCHEMA ducklake.a.x;
+
+# dropping a schema after another transaction created a schema inside it: conflict
+statement ok con1
+BEGIN
+
+statement ok con2
+BEGIN
+
+statement ok con1
+CREATE SCHEMA ducklake.a.w;
+
+statement ok con2
+DROP SCHEMA ducklake.a CASCADE;
+
+statement ok con1
+COMMIT
+
+statement error con2
+COMMIT
+----
+Transaction conflict
+
+# dropping a schema after another transaction created a table in a nested child: conflict
+# the error must name the dropped ancestor "a"
+statement ok con1
+BEGIN
+
+statement ok con2
+BEGIN
+
+statement ok con1
+CREATE TABLE ducklake.a.x.t3(i INTEGER);
+
+statement ok con2
+DROP SCHEMA ducklake.a CASCADE;
+
+statement ok con1
+COMMIT
+
+statement error con2
+COMMIT
+----
+attempting to drop schema with name "a" - but another transaction has created an entry in this schema
+
+query II
+SELECT schema_name, parent_schema FROM duckdb_schemas() WHERE database_name = 'ducklake' ORDER BY schema_name, parent_schema
+----
+a	NULL
+main	NULL
+w	a
+x	a
+
+statement ok
+CREATE SCHEMA ducklake.a.x.n;
+
+# dropping a schema after another transaction created a table two levels below it: conflict
+statement ok con1
+BEGIN
+
+statement ok con2
+BEGIN
+
+statement ok con1
+CREATE TABLE ducklake.a.x.n.t(i INTEGER);
+
+statement ok con2
+DROP SCHEMA ducklake.a CASCADE;
+
+statement ok con1
+COMMIT
+
+statement error con2
+COMMIT
+----
+attempting to drop schema with name "a" - but another transaction has created an entry in this schema
+
+# dropping a schema after another transaction created a macro in a nested child: conflict
+statement ok con1
+BEGIN
+
+statement ok con2
+BEGIN
+
+statement ok con1
+CREATE MACRO ducklake.a.x.m(i) AS i + 1;
+
+statement ok con2
+DROP SCHEMA ducklake.a CASCADE;
+
+statement ok con1
+COMMIT
+
+statement error con2
+COMMIT
+----
+attempting to drop schema with name "a" - but another transaction has created an entry in this schema
