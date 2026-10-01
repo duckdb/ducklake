@@ -287,6 +287,7 @@ void DuckLakeScanSerialize(Serializer &serializer, const optional_ptr<FunctionDa
 		serializer.WriteObject(106, "start_snapshot",
 		                       [&](Serializer &obj) { func_info.start_snapshot->Serialize(obj); });
 	}
+	serializer.WriteProperty(108, "table_id", func_info.table_id.index);
 }
 
 unique_ptr<FunctionData> DuckLakeScanDeserialize(Deserializer &deserializer, TableFunction &function) {
@@ -305,6 +306,7 @@ unique_ptr<FunctionData> DuckLakeScanDeserialize(Deserializer &deserializer, Tab
 			start_snapshot = make_uniq<DuckLakeSnapshot>(DuckLakeSnapshot::Deserialize(obj));
 		});
 	}
+	auto table_id = deserializer.ReadPropertyWithExplicitDefault<idx_t>(108, "table_id", DConstants::INVALID_INDEX);
 
 	// If ducklake_scan was registered before parquet was loaded, we set it now
 	if (!function.bind) {
@@ -318,8 +320,19 @@ unique_ptr<FunctionData> DuckLakeScanDeserialize(Deserializer &deserializer, Tab
 	auto &catalog = Catalog::GetCatalog(context, catalog_name);
 	auto &transaction = DuckLakeTransaction::Get(context, catalog);
 
+	// Resolve the table as of the serialized snapshot when we can: a lookup by name resolves at the
+	// transaction's own time, and after a CREATE OR REPLACE the name belongs to a younger table whose
+	// files the old snapshot does not see — a deserialized scan (e.g. a NOT MATERIALIZED CTE
+	// referenced twice) then silently returned nothing (issue #1485).
+	optional_ptr<CatalogEntry> entry_by_id;
+	if (table_id != DConstants::INVALID_INDEX) {
+		entry_by_id = catalog.Cast<DuckLakeCatalog>().GetEntryById(transaction, snapshot, TableIndex(table_id));
+	}
 	auto &table_entry =
-	    Catalog::GetEntry<TableCatalogEntry>(context, catalog_name, schema_name, table_name).Cast<DuckLakeTableEntry>();
+	    entry_by_id
+	        ? entry_by_id->Cast<DuckLakeTableEntry>()
+	        : Catalog::GetEntry<TableCatalogEntry>(context, catalog_name, schema_name, table_name)
+	              .Cast<DuckLakeTableEntry>();
 
 	auto function_info = DuckLakeFunctionInfo::Create(table_entry, transaction, snapshot);
 	function_info->scan_type = scan_type;
