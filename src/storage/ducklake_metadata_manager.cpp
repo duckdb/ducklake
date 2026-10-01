@@ -1332,10 +1332,8 @@ vector<DuckLakeGlobalStatsInfo> DuckLakeMetadataManager::ParseGlobalTableStats(Q
 	return TransformGlobalStats(result);
 }
 
-vector<DuckLakeGlobalStatsInfo> DuckLakeMetadataManager::GetGlobalTableStats(DuckLakeSnapshot snapshot,
-                                                                             TableIndex table_id) {
-	auto result =
-	    Query(snapshot, GlobalTableStatsQuery(transaction.GetCatalog().SupportsV1_1Metadata(), table_id.index));
+vector<DuckLakeGlobalStatsInfo> DuckLakeMetadataManager::GetGlobalTableStats(DuckLakeSnapshot snapshot) {
+	auto result = Query(snapshot, GlobalTableStatsQuery(transaction.GetCatalog().SupportsV1_1Metadata()));
 	return TransformGlobalStats(*result);
 }
 
@@ -5720,8 +5718,9 @@ void DuckLakeMetadataManager::DeleteSnapshots(const vector<DuckLakeSnapshotInfo>
 		snapshot_ids += to_string(snapshot.id);
 	}
 
+	// every table, not only those with a stats row: a table without one holds a negative cache entry
 	vector<TableIndex> stats_table_ids;
-	result = Query("SELECT DISTINCT table_id FROM {METADATA_CATALOG}.ducklake_table_stats;");
+	result = Query("SELECT DISTINCT table_id FROM {METADATA_CATALOG}.ducklake_table;");
 	if (result->HasError()) {
 		result->GetErrorObject().Throw("Failed to list table stats for cache invalidation in DuckLake: ");
 	}
