@@ -101,7 +101,7 @@ unique_ptr<BaseStatistics> DuckLakeStatistics(ClientContext &context, const Func
 	}
 	auto &multi_file_data = bind_data->Cast<MultiFileBindData>();
 	auto &file_list = multi_file_data.file_list->Cast<DuckLakeMultiFileList>();
-	if (!file_list.CanUseTableStatistics()) {
+	if (!file_list.CanUseColumnStatistics()) {
 		return nullptr;
 	}
 	auto &table = file_list.GetTable();
@@ -174,10 +174,6 @@ vector<PartitionStatistics> DuckLakeGetPartitionStats(ClientContext &context, Ge
 		return result;
 	}
 	auto &func_info = input.table_function.function_info->Cast<DuckLakeFunctionInfo>();
-
-	if (!func_info.CanUseGlobalStats()) {
-		return result;
-	}
 
 	auto &bind_data = input.bind_data->Cast<MultiFileBindData>();
 	auto &file_list = bind_data.file_list->Cast<DuckLakeMultiFileList>();

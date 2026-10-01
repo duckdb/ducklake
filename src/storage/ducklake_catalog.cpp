@@ -1046,7 +1046,7 @@ shared_ptr<DuckLakeTableStats> DuckLakeCatalog::GetTableStatsInternal(DuckLakeTr
 	return shared_ptr<DuckLakeTableStats>(std::move(entry), &raw->stats);
 }
 
-idx_t DuckLakeCatalog::GetTableRecordCount(DuckLakeTransaction &transaction, TableIndex table_id) {
+optional_idx DuckLakeCatalog::GetTableRecordCount(DuckLakeTransaction &transaction, TableIndex table_id) {
 	auto snapshot = transaction.GetSnapshot();
 	auto &cache = GetObjectCacheInstance();
 	auto key = RecordCountCacheKey(snapshot.snapshot_id);
@@ -1057,7 +1057,7 @@ idx_t DuckLakeCatalog::GetTableRecordCount(DuckLakeTransaction &transaction, Tab
 		cache.Put(std::move(key), cached);
 	}
 	auto entry = cached->record_counts.find(table_id);
-	return entry == cached->record_counts.end() ? 0 : entry->second;
+	return entry == cached->record_counts.end() ? optional_idx() : optional_idx(entry->second);
 }
 
 optional_ptr<SchemaCatalogEntry> DuckLakeCatalog::LookupSchema(CatalogTransaction transaction,

@@ -242,8 +242,8 @@ public:
 	shared_ptr<DuckLakeTableStats> GetTableStats(DuckLakeTransaction &transaction, TableIndex table_id);
 	shared_ptr<DuckLakeTableStats> GetTableStats(DuckLakeTransaction &transaction, DuckLakeSnapshot snapshot,
 	                                             TableIndex table_id);
-	//! Returns zero when the table has no stats
-	idx_t GetTableRecordCount(DuckLakeTransaction &transaction, TableIndex table_id);
+	//! Returns an estimate, or an invalid index when the table has no stats.
+	optional_idx GetTableRecordCount(DuckLakeTransaction &transaction, TableIndex table_id);
 	//! Turn a mutable-stats snapshot mismatch during commit into a retryable conflict.
 	shared_ptr<DuckLakeTableStats> GetTableStatsForCommit(DuckLakeTransaction &transaction, DuckLakeSnapshot snapshot,
 	                                                      TableIndex table_id);

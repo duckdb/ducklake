@@ -3,7 +3,6 @@
 #include "storage/ducklake_multi_file_list.hpp"
 #include "storage/ducklake_multi_file_reader.hpp"
 #include "storage/ducklake_metadata_manager.hpp"
-#include "storage/ducklake_catalog.hpp"
 
 #include "duckdb/common/local_file_system.hpp"
 #include "duckdb/function/table_function.hpp"
@@ -450,14 +449,12 @@ idx_t DuckLakeMultiFileList::GetTotalFileCount() const {
 }
 
 unique_ptr<NodeStatistics> DuckLakeMultiFileList::GetCardinality(ClientContext &context) const {
-	if (!CanUseTableStatistics()) {
+	// Mutable totals remain useful estimates even when their snapshot is too new for column bounds.
+	auto record_count = read_info.table.GetCardinalityEstimate(context);
+	if (!record_count.IsValid()) {
 		return nullptr;
 	}
-	auto stats = read_info.table.GetTableStats(context);
-	if (!stats) {
-		return nullptr;
-	}
-	return make_uniq<NodeStatistics>(stats->record_count);
+	return make_uniq<NodeStatistics>(record_count.GetIndex());
 }
 
 DuckLakeTableEntry &DuckLakeMultiFileList::GetTable() {
@@ -465,21 +462,11 @@ DuckLakeTableEntry &DuckLakeMultiFileList::GetTable() {
 }
 
 bool DuckLakeMultiFileList::CanUseTableStatistics() const {
-	if (read_info.scan_type != DuckLakeScanType::SCAN_TABLE) {
-		return false;
-	}
-	if (read_info.table.IsTransactionLocal()) {
-		return false;
-	}
-	if (HasTransactionLocalData()) {
-		return false;
-	}
-	auto transaction = read_info.GetTransaction();
-	auto current_snapshot = transaction->GetSnapshot();
-	if (read_info.snapshot.snapshot_id != current_snapshot.snapshot_id || transaction->GetCatalog().CatalogSnapshot()) {
-		return false;
-	}
-	return !transaction->HasAnyLocalChanges(read_info.table_id);
+	return CanUseColumnStatistics() && !read_info.GetTransaction()->HasAnyLocalChanges(read_info.table_id);
+}
+
+bool DuckLakeMultiFileList::CanUseColumnStatistics() const {
+	return read_info.CanUseGlobalStats() && !read_info.table.IsTransactionLocal() && !HasTransactionLocalData();
 }
 
 OpenFileInfo DuckLakeMultiFileList::GetFile(idx_t i) const {
@@ -755,10 +742,6 @@ void DuckLakeMultiFileList::GetTableDeletions() const {
 		file_entry.data_type = DuckLakeDataType::INLINED_DATA;
 		files.push_back(std::move(file_entry));
 	}
-}
-
-bool DuckLakeMultiFileList::CanUseGlobalStats() const {
-	return read_info.CanUseGlobalStats();
 }
 
 bool DuckLakeMultiFileList::IsDeleteScan() const {
