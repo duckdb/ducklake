@@ -36,15 +36,16 @@ struct DuckLakeTableStatsCacheEntry : public ObjectCacheEntry {
 	static constexpr idx_t ESTIMATED_BYTES_PER_COLUMN_STATS = 256;
 
 	DuckLakeTableStatsCacheEntry(idx_t schema_version, DuckLakeTableStats stats_p)
-	    : schema_version(schema_version), stats(std::move(stats_p)) {
+	    : schema_version(schema_version), stats(std::move(stats_p)), has_stats(true) {
 	}
 	//! Negative entry: table has no stats at this snapshot.
-	explicit DuckLakeTableStatsCacheEntry(idx_t schema_version) : schema_version(schema_version) {
+	explicit DuckLakeTableStatsCacheEntry(idx_t schema_version) : schema_version(schema_version), has_stats(false) {
 	}
 
 	//! Schema version that stamped the stats types
 	idx_t schema_version;
 	DuckLakeTableStats stats;
+	bool has_stats;
 
 	static string ObjectType() {
 		return "ducklake_table_stats";

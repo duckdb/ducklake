@@ -981,20 +981,8 @@ vector<DuckLakeGlobalStatsInfo> DuckLakeMetadataManager::ParseGlobalTableStats(Q
 	return TransformGlobalStats(result);
 }
 
-vector<DuckLakeGlobalStatsInfo> DuckLakeMetadataManager::GetGlobalTableStats(DuckLakeSnapshot snapshot,
-                                                                             TableIndex table_id) {
-	string query = StringUtil::Format(R"(
-SELECT table_id, column_id, record_count, next_row_id, file_size_bytes, contains_null, contains_nan, min_value, max_value, extra_stats
-FROM {METADATA_CATALOG}.ducklake_table_stats
-LEFT JOIN {METADATA_CATALOG}.ducklake_table_column_stats USING (table_id)
-WHERE table_id = %llu
-  AND record_count IS NOT NULL
-  AND file_size_bytes IS NOT NULL
-ORDER BY table_id;
-)",
-	                                  table_id.index);
-
-	auto result = transaction.Query(snapshot, query);
+vector<DuckLakeGlobalStatsInfo> DuckLakeMetadataManager::GetGlobalTableStats(DuckLakeSnapshot snapshot) {
+	auto result = transaction.Query(snapshot, GlobalTableStatsQuery());
 	return TransformGlobalStats(*result);
 }
 
@@ -4811,8 +4799,9 @@ void DuckLakeMetadataManager::DeleteSnapshots(const vector<DuckLakeSnapshotInfo>
 		snapshot_ids += to_string(snapshot.id);
 	}
 
+	// every table, not only those with a stats row: a table without one holds a negative cache entry
 	vector<TableIndex> stats_table_ids;
-	result = transaction.Query("SELECT DISTINCT table_id FROM {METADATA_CATALOG}.ducklake_table_stats;");
+	result = transaction.Query("SELECT DISTINCT table_id FROM {METADATA_CATALOG}.ducklake_table;");
 	if (result->HasError()) {
 		result->GetErrorObject().Throw("Failed to list table stats for cache invalidation in DuckLake: ");
 	}
