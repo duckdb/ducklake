@@ -450,13 +450,11 @@ idx_t DuckLakeMultiFileList::GetTotalFileCount() const {
 }
 
 unique_ptr<NodeStatistics> DuckLakeMultiFileList::GetCardinality(ClientContext &context) const {
-	if (!CanUseTableStatistics()) {
-		return nullptr;
-	}
 	auto stats = read_info.table.GetTableStats(context);
 	if (!stats) {
 		return nullptr;
 	}
+	// This is only a planning estimate, not an exact row-count or column-statistics bound.
 	return make_uniq<NodeStatistics>(stats->record_count);
 }
 
