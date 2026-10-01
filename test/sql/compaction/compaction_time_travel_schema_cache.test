@@ -1,6 +1,5 @@
 # name: test/sql/compaction/compaction_time_travel_schema_cache.test
-# description: issue #1505 — time travel to a snapshot before ADD COLUMN must keep that snapshot's
-#              columns after merge_adjacent_files runs on another table
+# description: issue #1505 — time travel to a snapshot before ADD COLUMN must keep that snapshot's columns after merge_adjacent_files runs on another table
 # group: [compaction]
 
 require ducklake
