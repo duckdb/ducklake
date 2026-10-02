@@ -1,0 +1,65 @@
+# name: test/sql/issues/issue_inlined_membership_rewrite_stats.test
+# description: a rewrite commit on an instance left stale by a concurrent flush must not aggregate over the dropped inlined table
+# group: [issues]
+
+require ducklake
+
+require parquet
+
+# Two DuckLake catalogs over one shared metadata store (METADATA_CATALOG 'm'), the same
+# instance_id split as issue_inlined_table_membership_staleness_cross_instance.test. Here the
+# stale instance commits a REWRITE_DELETES compaction rather than reading: the commit folds
+# committed inlined rows into exact global stats, and the inlined table names it aggregates over
+# come from the commit context. Resolving those from the table entry's cached membership names a
+# table the concurrent flush already dropped, and the failed aggregate throws instead of keeping
+# the scan fallback, so the whole rewrite commit is lost.
+
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/membership_rewrite.db' AS dl_w (DATA_PATH '{TEST_DIR}/membership_rewrite_data', DATA_INLINING_ROW_LIMIT 100, METADATA_CATALOG 'm')
+
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/membership_rewrite.db' AS dl_r (DATA_PATH '{TEST_DIR}/membership_rewrite_data', DATA_INLINING_ROW_LIMIT 100, METADATA_CATALOG 'm')
+
+statement ok
+CREATE TABLE dl_w.t (id INTEGER, v INTEGER)
+
+statement ok
+INSERT INTO dl_w.t SELECT i, i * 10 FROM range(1, 20) tt(i)
+
+# bumps schema_version, so the next insert opens a second generation and supersedes the first
+statement ok
+ALTER TABLE dl_w.t ADD COLUMN w INTEGER DEFAULT 0
+
+statement ok
+INSERT INTO dl_w.t VALUES (100, 1000, 10000)
+
+# populates dl_r's cached membership with both generations
+query I
+SELECT count(*) FROM dl_r.t
+----
+20
+
+statement ok
+CALL ducklake_flush_inlined_data('dl_w')
+
+# the superseded generation is gone from the registry, but dl_r's entry still names it
+query I
+SELECT table_name FROM m.ducklake_inlined_data_tables ORDER BY 1
+----
+ducklake_inlined_data_1_2
+
+# committed inlined rows so the recompute reaches the inlined merge at all, and deletes on the
+# flushed parquet so the compaction has something to rewrite
+statement ok
+INSERT INTO dl_r.t VALUES (200, 2000, 20000)
+
+statement ok
+DELETE FROM dl_r.t WHERE id IN (1, 2, 3)
+
+statement ok
+CALL ducklake_rewrite_data_files('dl_r', 't', delete_threshold => 0)
+
+query I
+SELECT count(*) FROM dl_r.t
+----
+18

@@ -1,0 +1,50 @@
+# name: test/sql/issues/issue_inlined_table_membership_staleness.test
+# description: a flush that drops a superseded inlined table must not leave a concurrent reader with a stale inlined-table name cached under schema_version
+# group: [issues]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok con_w
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/membership', DATA_INLINING_ROW_LIMIT 100)
+
+statement ok con_w
+CREATE TABLE dl.t (id INTEGER, v INTEGER)
+
+# first inline generation lands in ducklake_inlined_data_<id>_1
+statement ok con_w
+INSERT INTO dl.t VALUES (1, 10)
+
+# the ALTER bumps schema_version, so the next inline write starts a second
+# generation (ducklake_inlined_data_<id>_2); the first generation is now superseded
+statement ok con_w
+ALTER TABLE dl.t ADD COLUMN w INTEGER DEFAULT 0
+
+statement ok con_w
+INSERT INTO dl.t VALUES (2, 20, 200)
+
+# the reader resolves the table at the current schema_version and caches its inlined
+# membership {gen_1, gen_2} in the schema_version-keyed catalog cache entry
+query I con_r
+SELECT sum(v) FROM dl.t
+----
+30
+
+# the flush materializes both generations to parquet and drops the emptied,
+# superseded gen_1 table on an ordinary commit that does not bump schema_version
+statement ok con_w
+CALL ducklake_flush_inlined_data('dl')
+
+# the reader's next read re-resolves the same schema_version; it must not hand the
+# inlined reader the name of the dropped gen_1 table
+# (pre-fix, without the flush's schema-cache invalidation: Catalog Error:
+#  ... ducklake_inlined_data_<id>_1 does not exist)
+query I con_r
+SELECT sum(v) FROM dl.t
+----
+30

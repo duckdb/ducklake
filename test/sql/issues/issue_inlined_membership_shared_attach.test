@@ -1,0 +1,55 @@
+# name: test/sql/issues/issue_inlined_membership_shared_attach.test
+# description: two connections on one attach - a reader in an open transaction must not keep serving an inlined table that a concurrent flush dropped
+# group: [issues]
+
+require ducklake
+
+require parquet
+
+require sqlite_scanner
+
+# One ATTACH shared by both connections, unlike issue_inlined_membership_open_transaction.test.
+# That matters: a single attach means a single instance_id, so invalidate_schema_cache after the
+# drop does reach this reader. Caching membership on snapshot_id alone put it back out of reach,
+# because the reader's open transaction holds one snapshot_id across both of its reads.
+# SQLite plus WAL for the same reasons as the two-attach test.
+statement ok con_w
+ATTACH 'ducklake:sqlite:{TEST_DIR}/membership_shared.sqlite' AS dl (DATA_PATH '{TEST_DIR}/membership_shared_data', DATA_INLINING_ROW_LIMIT 100, METADATA_CATALOG 'm', METADATA_PARAMETERS MAP {'journal_mode': 'WAL'})
+
+statement ok con_w
+CREATE TABLE dl.t (id INTEGER, v INTEGER)
+
+statement ok con_w
+INSERT INTO dl.t VALUES (1, 10)
+
+# the ALTER bumps schema_version, so the next inline write starts a second generation
+# and the first generation becomes superseded
+statement ok con_w
+ALTER TABLE dl.t ADD COLUMN w INTEGER DEFAULT 0
+
+statement ok con_w
+INSERT INTO dl.t VALUES (2, 20, 200)
+
+statement ok con_r
+BEGIN
+
+query I con_r
+SELECT sum(v) FROM dl.t
+----
+30
+
+statement ok con_w
+CALL ducklake_flush_inlined_data('dl')
+
+query I con_r
+SELECT sum(v) FROM dl.t
+----
+30
+
+statement ok con_r
+COMMIT
+
+query I con_r
+SELECT sum(v) FROM dl.t
+----
+30
