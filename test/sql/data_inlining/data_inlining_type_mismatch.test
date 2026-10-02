@@ -30,3 +30,37 @@ query I
 SELECT i FROM ducklake.t;
 ----
 42
+
+# multi-chunk inlined reads (with rowid and a transaction-local delete filter) pass the per-chunk column check
+statement ok
+CREATE TABLE ducklake.big(i INTEGER, s VARCHAR);
+
+statement ok
+CALL ducklake.set_option('data_inlining_row_limit', 5000, table_name => 'big');
+
+statement ok
+INSERT INTO ducklake.big SELECT r, r::VARCHAR FROM range(5000) t(r);
+
+query I
+SELECT COUNT(*) FROM ducklake_list_files('ducklake', 'big');
+----
+0
+
+query IIII
+SELECT COUNT(*), SUM(i), COUNT(s), MAX(rowid) FROM ducklake.big;
+----
+5000	12497500	5000	4999
+
+statement ok
+BEGIN
+
+statement ok
+DELETE FROM ducklake.big WHERE i % 1000 = 0;
+
+query II
+SELECT COUNT(*), SUM(i) FROM ducklake.big;
+----
+4995	12487500
+
+statement ok
+ROLLBACK
