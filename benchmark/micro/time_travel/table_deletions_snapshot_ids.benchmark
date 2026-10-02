@@ -1,0 +1,37 @@
+# name: benchmark/micro/time_travel/table_deletions_snapshot_ids.benchmark
+# description: ducklake_table_deletions over a 10M-row file with 5M deletes in a delete file and 5 inlined deletes
+# group: [time_travel]
+
+name Table Deletions Snapshot Ids
+group micro
+subgroup time_travel
+
+require ducklake
+
+require parquet
+
+cache_file table_deletions_snapshot_ids_ready.marker
+
+# The big delete is written to a delete file and the small one is inlined in the metadata
+load
+ATTACH 'ducklake:${BENCHMARK_DIR}/table_deletions_snapshot_ids.db' AS lake
+(DATA_PATH '${BENCHMARK_DIR}/table_deletions_snapshot_ids_files', DATA_INLINING_ROW_LIMIT 10);
+CREATE TABLE lake.t AS SELECT i FROM range(10000000) t(i);
+DELETE FROM lake.t WHERE i % 2 = 0;
+DELETE FROM lake.t WHERE i IN (1, 3, 5, 7, 9);
+SELECT CASE WHEN (SELECT NOT map_contains(changes, 'inlined_delete') FROM lake.snapshots() WHERE snapshot_id = 3)
+THEN error('table_deletions_snapshot_ids: expected the small delete to be inlined in snapshot 3') END;
+DETACH lake;
+COPY (SELECT 1) TO '${BENCHMARK_DIR}/table_deletions_snapshot_ids_ready.marker' (FORMAT CSV);
+ATTACH 'ducklake:${BENCHMARK_DIR}/table_deletions_snapshot_ids.db' AS lake (READ_ONLY);
+
+reload
+ATTACH 'ducklake:${BENCHMARK_DIR}/table_deletions_snapshot_ids.db' AS lake (READ_ONLY);
+
+# The inlined deletes give the file a per-row snapshot map, which is looked up for all 5M deleted rows
+run
+SELECT snapshot_id, count(*), sum(rowid) FROM ducklake_table_deletions('lake', 'main', 't', 2, 3) GROUP BY ALL ORDER BY ALL;
+
+result III
+2	5000000	24999995000000
+3	5	25
