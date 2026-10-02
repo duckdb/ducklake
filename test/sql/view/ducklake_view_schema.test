@@ -55,7 +55,7 @@ DROP SCHEMA ducklake.s2 CASCADE
 statement error
 CREATE VIEW ducklake.s2.v1 AS SELECT 42
 ----
-not found
+does not exist
 
 foreach commit_query ROLLBACK COMMIT
 

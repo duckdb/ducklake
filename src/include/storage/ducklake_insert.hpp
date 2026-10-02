@@ -53,7 +53,7 @@ public:
 	DuckLakeInsert(PhysicalPlan &physical_plan, const vector<LogicalType> &types, SchemaCatalogEntry &schema,
 	               unique_ptr<BoundCreateTableInfo> info, string table_uuid, string table_data_path,
 	               unique_ptr<DuckLakePartition> ctas_partition_data, unique_ptr<DuckLakeSort> ctas_sort_data,
-	               string encryption_key);
+	               map<string, string> ctas_table_options, string encryption_key);
 
 	//! The table to insert into (only set for INSERT INTO; nullptr for CTAS until GetGlobalSinkState resolves)
 	optional_ptr<DuckLakeTableEntry> table;
@@ -69,6 +69,8 @@ public:
 	unique_ptr<DuckLakePartition> ctas_partition_data;
 	//! Pre-built sort spec for CTAS (same lifecycle as ctas_partition_data).
 	unique_ptr<DuckLakeSort> ctas_sort_data;
+	//! Options from CREATE TABLE AS ... WITH
+	map<string, string> ctas_table_options;
 	//! The partition id we are writing into (if any)
 	optional_idx partition_id;
 	//! The encryption key used for writing the Parquet files
@@ -160,6 +162,7 @@ struct DuckLakeCopyInput {
 	DuckLakeCatalog &catalog;
 	optional_ptr<DuckLakePartition> partition_data;
 	optional_ptr<DuckLakeFieldData> field_data;
+	map<string, string> table_options;
 	const ColumnList &columns;
 	const string data_path;
 	string encryption_key;

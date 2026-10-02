@@ -69,7 +69,7 @@ DROP SCHEMA ducklake.s2 CASCADE
 statement error
 CREATE TABLE ducklake.s1.tbl2(i INT)
 ----
-not found
+does not exist
 
 foreach commit_query ROLLBACK COMMIT
 

@@ -1,3 +1,5 @@
+#include "duckdb/catalog/catalog_entry_retriever.hpp"
+#include "common/ducklake_util.hpp"
 #include "functions/ducklake_table_functions.hpp"
 #include "duckdb/planner/logical_operator.hpp"
 #include "duckdb/common/file_system.hpp"
@@ -118,7 +120,7 @@ SourceResultType DuckLakeCompaction::GetDataInternal(ExecutionContext &context, 
 	auto &gstate = this->sink_state->Cast<DuckLakeInsertGlobalState>();
 	auto files_created = gstate.written_files.size();
 
-	chunk.data[0].Append(Value(table.schema.name.GetIdentifierName()));
+	chunk.data[0].Append(Value(DuckLakeUtil::SchemaPathToDisplay(table.schema.GetSchemaPath())));
 	chunk.data[1].Append(Value(table.name.GetIdentifierName()));
 	chunk.data[2].Append(Value::BIGINT(static_cast<int64_t>(source_files.size())));
 	chunk.data[3].Append(Value::BIGINT(static_cast<int64_t>(files_created)));
@@ -309,6 +311,10 @@ void DuckLakeCompactor::GenerateCompactions(DuckLakeTableEntry &table,
 		}
 		if (schema_version == latest_schema_version) {
 			return true;
+		}
+		if (!catalog.SupportsV1_1Metadata()) {
+			// DuckLake 1.0 compaction derives the schema of a file from its begin snapshot
+			return false;
 		}
 		auto cached = merges_into_latest_schema.find(schema_version);
 		if (cached != merges_into_latest_schema.end()) {
@@ -524,11 +530,13 @@ DuckLakeCompactor::ResolvePartitionSpecTable(DuckLakeTableEntry &table, const Du
 unique_ptr<LogicalOperator>
 DuckLakeCompactor::GenerateCompactionCommand(vector<DuckLakeCompactionFileEntry> source_files,
                                              bool bind_to_latest_schema) {
-	// Cross-schema groups bind to the latest snapshot so the merged file is written under the current schema (the
-	// reader projects each source via its own mapping_id); same-schema groups bind to the source schema_version.
-	DuckLakeSnapshot snapshot = bind_to_latest_schema ? transaction.GetSnapshot()
-	                                                  : DuckLakeSnapshot(source_files[0].file.begin_snapshot,
-	                                                                     source_files[0].schema_version, 0, 0);
+	// cross-schema groups bind to the latest snapshot and others to the start of their schema version
+	auto schema_version = source_files[0].schema_version;
+	DuckLakeSnapshot snapshot =
+	    bind_to_latest_schema
+	        ? transaction.GetSnapshot()
+	        : DuckLakeSnapshot(catalog.GetBeginSnapshotForSchemaVersion(table_id, schema_version, transaction),
+	                           schema_version, 0, 0);
 
 	auto entry = catalog.GetEntryById(transaction, snapshot, table_id);
 	if (!entry) {
@@ -685,8 +693,9 @@ DuckLakeCompactor::GenerateCompactionCommand(vector<DuckLakeCompactionFileEntry>
 	// and instead pull the latest sort setting
 	// First, see if there are transaction local changes to the table
 	// Then fall back to latest snapshot if no local changes
-	auto latest_entry = transaction.GetTransactionLocalEntry(
-	    CatalogType::TABLE_ENTRY, table.schema.name.GetIdentifierName(), table.name.GetIdentifierName());
+	auto latest_entry = transaction.GetTransactionLocalEntry(CatalogType::TABLE_ENTRY,
+	                                                         table.schema.Cast<DuckLakeSchemaEntry>().GetSchemaId(),
+	                                                         table.name.GetIdentifierName());
 	if (!latest_entry) {
 		auto latest_snapshot = transaction.GetSnapshot();
 		latest_entry = catalog.GetEntryById(transaction, latest_snapshot, table_id);
@@ -910,16 +919,17 @@ unique_ptr<LogicalOperator> BindCompaction(ClientContext &context, TableFunction
 	if (schema_entry != input.named_parameters.end()) {
 		schema = StringValue::Get(schema_entry->second);
 	}
-	EntryLookupInfo table_lookup(CatalogType::TABLE_ENTRY, Identifier(table), nullptr, QueryErrorContext());
-	auto table_entry = catalog.GetEntry(context, Identifier(schema), table_lookup, OnEntryNotFound::THROW_EXCEPTION);
+	EntryLookupInfo table_lookup(CatalogType::TABLE_ENTRY,
+	                             DuckLakeUtil::QualifiedEntryName(context, catalog, schema, table), nullptr,
+	                             QueryErrorContext());
+	CatalogEntryRetriever retriever(context);
+	auto table_entry = catalog.LookupEntry(retriever, table_lookup, OnEntryNotFound::THROW_EXCEPTION).entry;
 	auto &ducklake_table = table_entry->Cast<DuckLakeTableEntry>();
 	optional_ptr<DuckLakeSchemaEntry> dl_schema;
 	bool auto_compact;
 	if (!schema.empty()) {
-		auto schema_catalog =
-		    catalog.GetSchema(context, catalog.GetName(), Identifier(schema), OnEntryNotFound::THROW_EXCEPTION);
-		dl_schema = &schema_catalog->Cast<DuckLakeSchemaEntry>();
-		auto_compact = ducklake_catalog.GetConfigOption<string>("auto_compact", dl_schema.get()->GetSchemaId(),
+		dl_schema = &ducklake_table.ParentSchema().Cast<DuckLakeSchemaEntry>();
+		auto_compact = ducklake_catalog.GetConfigOption<string>("auto_compact", dl_schema->GetSchemaId(),
 		                                                        ducklake_table.GetTableId(), "true") == "true";
 
 	} else {

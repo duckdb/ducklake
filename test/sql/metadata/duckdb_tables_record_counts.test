@@ -1,0 +1,112 @@
+# name: test/sql/metadata/duckdb_tables_record_counts.test
+# description: duckdb_tables and SHOW ALL TABLES read the record counts of all tables in one metadata query
+# group: [metadata]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/duckdb_tables_record_counts.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/duckdb_tables_record_counts')
+
+statement ok
+CREATE TABLE ducklake.empty_tbl(i INTEGER)
+
+statement ok
+CREATE TABLE ducklake.small_tbl AS SELECT i FROM range(3) t(i)
+
+statement ok
+CREATE TABLE ducklake.large_tbl AS SELECT i FROM range(10000) t(i)
+
+statement ok
+CALL enable_logging('DuckLakeMetadata')
+
+query II
+SELECT table_name, estimated_size FROM duckdb_tables() WHERE database_name = 'ducklake' ORDER BY table_name
+----
+empty_tbl	0
+large_tbl	10000
+small_tbl	3
+
+query I
+SELECT count(*) FROM (SHOW ALL TABLES) WHERE database = 'ducklake'
+----
+3
+
+# Cached counts avoid repeated queries
+query I
+SELECT count(*) FROM duckdb_logs_parsed('DuckLakeMetadata') WHERE query LIKE '%ducklake_table_stats%'
+----
+1
+
+statement ok
+INSERT INTO ducklake.empty_tbl VALUES (1), (2)
+
+query II
+SELECT table_name, estimated_size FROM duckdb_tables() WHERE database_name = 'ducklake' ORDER BY table_name
+----
+empty_tbl	2
+large_tbl	10000
+small_tbl	3
+
+# Truncation does not allocate new file IDs
+statement ok
+TRUNCATE ducklake.large_tbl
+
+query II
+SELECT table_name, estimated_size FROM duckdb_tables() WHERE database_name = 'ducklake' ORDER BY table_name
+----
+empty_tbl	2
+large_tbl	0
+small_tbl	3
+
+statement ok
+BEGIN
+
+statement ok
+INSERT INTO ducklake.empty_tbl VALUES (3)
+
+statement ok
+CREATE TABLE ducklake.local_tbl AS SELECT 1 AS i
+
+query II
+SELECT table_name, estimated_size FROM duckdb_tables() WHERE database_name = 'ducklake' ORDER BY table_name
+----
+empty_tbl	0
+large_tbl	0
+local_tbl	0
+small_tbl	3
+
+statement ok
+ROLLBACK
+
+query II
+SELECT table_name, estimated_size FROM duckdb_tables() WHERE database_name = 'ducklake' ORDER BY table_name
+----
+empty_tbl	2
+large_tbl	0
+small_tbl	3
+
+statement ok
+INSERT INTO ducklake.large_tbl SELECT i FROM range(10000) t(i)
+
+query I
+SELECT estimated_size FROM duckdb_tables() WHERE database_name = 'ducklake' AND table_name = 'large_tbl'
+----
+10000
+
+# Counts reflect changes made through another catalog
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS writer (METADATA_CATALOG '__ducklake_metadata_ducklake')
+
+statement ok
+TRUNCATE writer.large_tbl
+
+query I
+SELECT estimated_size FROM duckdb_tables() WHERE database_name = 'ducklake' AND table_name = 'large_tbl'
+----
+0

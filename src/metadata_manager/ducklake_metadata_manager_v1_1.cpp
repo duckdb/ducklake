@@ -7,6 +7,13 @@
 namespace duckdb {
 
 template <typename Base>
+string DuckLakeMetadataManagerV1_1<Base>::GetSchemaTableStatement() {
+	return "CREATE TABLE {METADATA_CATALOG}.ducklake_schema(schema_id BIGINT PRIMARY KEY, schema_uuid UUID, "
+	       "begin_snapshot BIGINT, end_snapshot BIGINT, schema_name VARCHAR, path VARCHAR, path_is_relative BOOLEAN, "
+	       "parent_schema_id BIGINT);";
+}
+
+template <typename Base>
 string DuckLakeMetadataManagerV1_1<Base>::GetDataFileTableStatement() {
 	return "CREATE TABLE {METADATA_CATALOG}.ducklake_data_file(data_file_id BIGINT PRIMARY KEY, table_id BIGINT, "
 	       "begin_snapshot BIGINT, end_snapshot BIGINT, file_order BIGINT, path VARCHAR, path_is_relative BOOLEAN, "

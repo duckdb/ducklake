@@ -30,4 +30,4 @@ DROP SCHEMA ducklake.myschema CASCADE;
 statement error
 CREATE TABLE ducklake.myschema.tbl(i INT);
 ----
-not found
+does not exist

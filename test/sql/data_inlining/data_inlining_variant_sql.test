@@ -1,0 +1,91 @@
+# name: test/sql/data_inlining/data_inlining_variant_sql.test
+# description: SQL inlining preserves nested VARIANT values and row IDs across updates and reattaching
+# group: [data_inlining]
+
+require ducklake
+
+require parquet
+
+statement ok
+SET GLOBAL preserve_insertion_order = false;
+
+statement ok
+SET threads = 8;
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/variant_sql.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/variant_sql', DATA_INLINING_ROW_LIMIT 100000)
+
+statement ok
+CREATE TABLE ducklake.t(id INTEGER, s STRUCT(v VARIANT), m MAP(INTEGER, VARIANT[]));
+
+statement ok
+INSERT INTO ducklake.t
+SELECT i, CASE WHEN i % 2 = 0 THEN NULL ELSE {'v': (i % 100)::TINYINT::VARIANT} END,
+       CASE WHEN i % 3 = 0 THEN NULL ELSE map([i::INTEGER], [[1.5::FLOAT::VARIANT, NULL]]) END
+FROM range(8192) t(i) ORDER BY i;
+
+query III
+SELECT count(*), count(*) FILTER (WHERE s IS NULL), count(*) FILTER (WHERE m IS NULL) FROM ducklake.t;
+----
+8192	4096	2731
+
+query I
+SELECT count(*) FROM ducklake_list_files('ducklake', 't');
+----
+0
+
+query I
+SELECT count(*) FROM ducklake.t WHERE rowid != id;
+----
+0
+
+query II
+SELECT variant_typeof(s.v), variant_typeof(map_values(m)[1][1]) FROM ducklake.t WHERE id = 1;
+----
+INT8	FLOAT
+
+# Row IDs stay attached to their values regardless of the session settings.
+statement ok
+SET default_order = 'DESC';
+
+statement ok
+UPDATE ducklake.t SET s = {'v': ('updated-' || id)::VARIANT} WHERE id % 2 = 1;
+
+statement ok
+RESET default_order;
+
+query II
+SELECT count(*), count(*) FILTER (WHERE s.v::VARCHAR != 'updated-' || id) FROM ducklake.t WHERE id % 2 = 1;
+----
+4096	0
+
+statement ok
+DELETE FROM ducklake.t WHERE id = 2048;
+
+query I
+SELECT count(*) FROM ducklake.t WHERE rowid != id;
+----
+0
+
+query I
+SELECT current_setting('preserve_insertion_order');
+----
+false
+
+query IIII rowsort before_reattach
+SELECT rowid, id, s, m FROM ducklake.t;
+----
+
+statement ok
+DETACH ducklake;
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/variant_sql', DATA_INLINING_ROW_LIMIT 100000)
+
+query IIII rowsort before_reattach
+SELECT rowid, id, s, m FROM ducklake.t;
+----

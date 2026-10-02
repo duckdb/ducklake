@@ -3,6 +3,7 @@
 #include "common/ducklake_util.hpp"
 #include "storage/ducklake_transaction_changes.hpp"
 #include "duckdb/common/sql_identifier.hpp"
+#include "duckdb/parser/qualified_name.hpp"
 
 namespace duckdb {
 
@@ -17,8 +18,8 @@ Value IDListToValue(const set<T> &id_list) {
 
 Value NameListToValue(const case_insensitive_set_t &list_val) {
 	vector<Value> list_values;
-	for (auto &entry_name : list_val) {
-		list_values.emplace_back(entry_name);
+	for (auto &schema_key : list_val) {
+		list_values.emplace_back(QualifiedName::Parse(schema_key).ToString());
 	}
 	return Value::LIST(LogicalType::VARCHAR, std::move(list_values));
 }
@@ -26,7 +27,7 @@ Value NameListToValue(const case_insensitive_set_t &list_val) {
 Value CatalogListToValue(const case_insensitive_map_t<case_insensitive_set_t> &list_val) {
 	vector<Value> list_values;
 	for (auto &entry : list_val) {
-		auto schema = SQLIdentifier::ToString(entry.first);
+		auto schema = QualifiedName::Parse(entry.first).ToString();
 		for (auto &entry_name : entry.second) {
 			auto table = SQLIdentifier::ToString(entry_name);
 			list_values.emplace_back(schema + "." + table);

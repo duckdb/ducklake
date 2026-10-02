@@ -6,6 +6,8 @@ require ducklake
 
 require parquet
 
+require notmusl
+
 # con1 creates a view and holds its transaction open while con2 churns the schema under a low memory
 # limit. The view must still land in its own schema when con1 finally commits.
 

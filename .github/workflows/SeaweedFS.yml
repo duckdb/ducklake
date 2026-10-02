@@ -1,4 +1,4 @@
-name: MinIo Tests
+name: SeaweedFS Tests
 on: [push, pull_request,repository_dispatch]
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}-${{ github.head_ref || '' }}-${{ github.base_ref || '' }}-${{ github.ref != 'refs/heads/main' || github.sha }}
@@ -12,7 +12,7 @@ env:
 
 jobs:
   rest:
-    name: Tests using MinIo (AWS)
+    name: Tests using SeaweedFS
     runs-on: ubuntu-latest
     env:
       VCPKG_TARGET_TRIPLET: 'x64-linux-release'
@@ -32,8 +32,6 @@ jobs:
           sudo add-apt-repository ppa:git-core/ppa
           sudo apt-get update -y -qq
           sudo apt-get install -y -qq build-essential cmake ninja-build ccache python3 mold
-          sudo curl -L "https://github.com/docker/compose/releases/download/1.29.2/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose
-          sudo chmod +x /usr/local/bin/docker-compose
 
       - name: Install CMake 3.x
         run: |
@@ -70,10 +68,10 @@ jobs:
         run: |
           make release
 
-      - name: Test MinIO - AWS
+      - name: Test SeaweedFS
         env:
           DUCKDB_TPCH_ANSWERS_DIR: ${{ github.workspace }}/duckdb/extension/tpch/dbgen/answers
         run: |
           ./scripts/start-docker.sh
-          build/release/test/unittest --test-config test/configs/minio.json "test/sql/*"
+          build/release/test/unittest --test-config test/configs/seaweedfs.json "test/sql/*"
 

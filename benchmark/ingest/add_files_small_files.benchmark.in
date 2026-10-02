@@ -1,59 +1,62 @@
 # name: ${FILE_PATH}
 # description: Benchmark adding many small parquet files using ducklake_add_data_files
-# group: [add_files_small]
+# group: [ingest]
 
-argument file_count 10000
+argument file_count 1000
+
+argument lake add_files_small_${file_count}
+
+argument work add_files_small_${file_count}_work
 
 name DuckLake Add Small Files
-group ducklake_add_files
-subgroup small_files
+group micro
+subgroup ingest
 
 require ducklake
+
 require parquet
 
-cache_file ducklake_add_files_small_files_ready_${file_count}_${column_count}.marker
+cache_file ${lake}_ready.marker
 
+# One single-row hive partition per source file; the sources live outside the lake DATA_PATH
 load
-CREATE TABLE src AS
-SELECT
-  i::INTEGER AS col_long_name_001,
-  (i + 1)::INTEGER AS col_long_name_002,
-  (i + 2)::INTEGER AS col_long_name_003,
-  (i + 3)::INTEGER AS col_long_name_004,
-  (i + 4)::INTEGER AS col_long_name_005,
-  (i + 5)::INTEGER AS col_long_name_006,
-  (i + 6)::INTEGER AS col_long_name_007,
-  (i + 7)::INTEGER AS col_long_name_008,
-  (i + 8)::INTEGER AS col_long_name_009,
-  (i + 9)::INTEGER AS col_long_name_010,
-  (i + 10)::INTEGER AS col_long_name_011,
-  (i + 11)::INTEGER AS col_long_name_012,
-  (i + 12)::INTEGER AS col_long_name_013,
-  (i + 13)::INTEGER AS col_long_name_014,
-  (i + 14)::INTEGER AS col_long_name_015,
-  (i + 15)::INTEGER AS col_long_name_016,
-  (i + 16)::INTEGER AS col_long_name_017,
-  (i + 17)::INTEGER AS col_long_name_018,
-  (i + 18)::INTEGER AS col_long_name_019,
-  (i + 19)::INTEGER AS col_long_name_020,
+CREATE TABLE src AS SELECT
+i::INTEGER AS col_long_name_001, (i + 1)::INTEGER AS col_long_name_002, (i + 2)::INTEGER AS col_long_name_003,
+(i + 3)::INTEGER AS col_long_name_004, (i + 4)::INTEGER AS col_long_name_005, (i + 5)::INTEGER AS col_long_name_006,
+(i + 6)::INTEGER AS col_long_name_007, (i + 7)::INTEGER AS col_long_name_008, (i + 8)::INTEGER AS col_long_name_009,
+(i + 9)::INTEGER AS col_long_name_010, (i + 10)::INTEGER AS col_long_name_011, (i + 11)::INTEGER AS col_long_name_012,
+(i + 12)::INTEGER AS col_long_name_013, (i + 13)::INTEGER AS col_long_name_014, (i + 14)::INTEGER AS col_long_name_015,
+(i + 15)::INTEGER AS col_long_name_016, (i + 16)::INTEGER AS col_long_name_017, (i + 17)::INTEGER AS col_long_name_018,
+(i + 18)::INTEGER AS col_long_name_019, (i + 19)::INTEGER AS col_long_name_020
 FROM range(${file_count}) t(i);
-COPY src TO '${BENCHMARK_DIR}/ducklake_add_files_small_files_source_parquet'
-  (FORMAT PARQUET, PARTITION_BY (col_long_name_001), WRITE_PARTITION_COLUMNS true, OVERWRITE);
-COPY (SELECT 1) TO '${BENCHMARK_DIR}/ducklake_add_files_small_files_ready_${file_count}.marker' (FORMAT CSV, HEADER);
-ATTACH 'ducklake:${BENCHMARK_DIR}/ducklake_add_files_small_files.db' AS ducklake
-  (DATA_PATH '${BENCHMARK_DIR}/ducklake_add_files_small_files_data_files', METADATA_CATALOG 'metadata');
-USE ducklake;
+COPY src TO '${BENCHMARK_DIR}/${lake}_source'
+(FORMAT PARQUET, PARTITION_BY (col_long_name_001), WRITE_PARTITION_COLUMNS true, OVERWRITE);
+DROP TABLE src;
+ATTACH 'ducklake:${BENCHMARK_DIR}/${lake}_pristine.db' AS lake (DATA_PATH '${BENCHMARK_DIR}/${lake}_files');
+CREATE OR REPLACE TABLE lake.big_files AS
+SELECT * FROM read_parquet('${BENCHMARK_DIR}/${lake}_source/**/*.parquet') LIMIT 0;
+DETACH lake;
+COPY (SELECT count(*) FROM glob('${BENCHMARK_DIR}/${lake}_files/**'))
+TO '${BENCHMARK_DIR}/${lake}_filecount.csv' (FORMAT CSV, HEADER false);
+COPY (SELECT 1) TO '${BENCHMARK_DIR}/${lake}_ready.marker' (FORMAT CSV);
+DETACH DATABASE IF EXISTS lake;
+COPY (SELECT content FROM read_blob('${BENCHMARK_DIR}/${lake}_pristine.db'))
+TO '${BENCHMARK_DIR}/${work}.db' (FORMAT blob);
+ATTACH 'ducklake:${BENCHMARK_DIR}/${work}.db' AS lake;
+CALL ducklake_delete_orphaned_files('lake', cleanup_all => true);
+SELECT CASE WHEN (SELECT count(*) FROM glob('${BENCHMARK_DIR}/${lake}_files/**'))
+<> (SELECT column0 FROM read_csv('${BENCHMARK_DIR}/${lake}_filecount.csv', header = false))
+THEN error('the fixture files were not restored') END;
 
-reload
-ATTACH 'ducklake:${BENCHMARK_DIR}/ducklake_add_files_small_files.db' AS ducklake
-  (METADATA_CATALOG 'metadata');
-USE ducklake;
+include benchmark/micro/fixtures/rblob_reload.benchmark.in
 
 run
-CREATE TABLE ducklake.big_files AS
-SELECT * FROM read_parquet('${BENCHMARK_DIR}/ducklake_add_files_small_files_source_parquet/**/*.parquet')
-LIMIT 0;
-CALL ducklake_add_data_files('ducklake', 'big_files', '${BENCHMARK_DIR}/ducklake_add_files_small_files_source_parquet/**/*.parquet');
+CALL ducklake_add_data_files('lake', 'big_files', '${BENCHMARK_DIR}/${lake}_source/**/*.parquet');
 
-cleanup
-DROP TABLE IF EXISTS ducklake.big_files;
+include benchmark/micro/fixtures/rblob_cleanup.benchmark.in
+
+# A reset that misses re-registers the same files and doubles the row count
+result_query II
+SELECT count(*), sum(col_long_name_001) = ${file_count} * (${file_count} - 1) // 2 FROM lake.big_files
+----
+${file_count}	true

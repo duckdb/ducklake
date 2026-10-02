@@ -1,0 +1,41 @@
+# name: test/sql/metadata/duckdb_tables_record_counts_concurrent.test
+# description: Readers retain their record counts across a concurrent truncation
+# group: [metadata]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/duckdb_tables_record_counts_concurrent.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/duckdb_tables_record_counts_concurrent')
+
+statement ok
+CREATE TABLE ducklake.tbl AS SELECT i FROM range(10000) t(i)
+
+statement ok reader
+BEGIN
+
+query I reader
+SELECT count(*) FROM ducklake.tbl
+----
+10000
+
+statement ok
+TRUNCATE ducklake.tbl
+
+query I reader
+SELECT estimated_size FROM duckdb_tables() WHERE database_name = 'ducklake' AND table_name = 'tbl'
+----
+10000
+
+statement ok reader
+COMMIT
+
+query I
+SELECT estimated_size FROM duckdb_tables() WHERE database_name = 'ducklake' AND table_name = 'tbl'
+----
+0

@@ -22,6 +22,11 @@ CREATE TABLE variant_tbl(v VARIANT);
 statement ok
 INSERT INTO variant_tbl VALUES (42), ('hello world'), (DATE '2000-01-01'), ({'a': 42, 'b': NULL, 'c': 84}), (NULL), ([1, 2, 3, NULL, 5]);
 
+query I
+SELECT COUNT(*) FROM ducklake_list_files('ducklake', 'variant_tbl')
+----
+0
+
 query II
 SELECT v, variant_typeof(v) FROM variant_tbl
 ----

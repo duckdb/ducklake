@@ -1,0 +1,206 @@
+# name: test/sql/catalog/nested_schema/load_schema_tree.test
+# description: Load, resolve, enumerate and drop an existing schema hierarchy
+# group: [nested_schema]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{BASE_TEST_NAME}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DUCKLAKE_VERSION '1.1-dev1', DATA_PATH '{DATA_PATH}/load_tree', METADATA_CATALOG 'meta')
+
+statement ok
+CREATE SCHEMA dl.a;
+
+statement ok
+CREATE SCHEMA dl.b;
+
+statement ok
+CREATE SCHEMA dl.left_child;
+
+statement ok
+CREATE SCHEMA dl.right_child;
+
+statement ok
+CREATE SCHEMA dl.deep;
+
+statement ok
+CREATE TABLE dl.left_child.t AS SELECT 1 AS i;
+
+statement ok
+CREATE TABLE dl.right_child.t AS SELECT 2 AS i;
+
+statement ok
+CREATE TABLE dl.deep.t AS SELECT 3 AS i;
+
+statement ok
+CREATE MACRO dl.left_child.m() AS 7;
+
+# Model metadata written by a nested-schema writer.
+statement ok
+UPDATE meta.ducklake_schema SET parent_schema_id = (SELECT schema_id FROM meta.ducklake_schema WHERE schema_name = 'left_child') WHERE schema_name = 'deep';
+
+statement ok
+UPDATE meta.ducklake_schema SET parent_schema_id = (SELECT schema_id FROM meta.ducklake_schema WHERE schema_name = 'a'), schema_name = 'child' WHERE schema_name = 'left_child';
+
+statement ok
+UPDATE meta.ducklake_schema SET parent_schema_id = (SELECT schema_id FROM meta.ducklake_schema WHERE schema_name = 'b'), schema_name = 'child.with"quote' WHERE schema_name = 'right_child';
+
+statement ok
+DETACH dl;
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DUCKLAKE_VERSION '1.1-dev1', DATA_PATH '{DATA_PATH}/load_tree', METADATA_CATALOG 'meta')
+
+query I
+SELECT * FROM dl.a.child.t UNION ALL SELECT * FROM dl.b."child.with""quote".t UNION ALL SELECT * FROM dl.a.child.deep.t ORDER BY i;
+----
+1
+2
+3
+
+query I
+SELECT dl.a.child.m();
+----
+7
+
+query II
+SELECT schema_name, parent_schema FROM duckdb_schemas() WHERE database_name = 'dl' ORDER BY ALL;
+----
+a	NULL
+b	NULL
+child	a
+child.with"quote	b
+deep	child
+main	NULL
+
+statement ok
+BEGIN;
+
+statement ok
+CREATE TABLE dl.a.child.local_t AS SELECT 10 AS i;
+
+statement ok
+CREATE TABLE dl.b."child.with""quote".local_t AS SELECT 20 AS i;
+
+query I
+SELECT * FROM dl.a.child.local_t UNION ALL SELECT * FROM dl.b."child.with""quote".local_t ORDER BY i;
+----
+10
+20
+
+statement ok
+ROLLBACK;
+
+statement ok
+CREATE SCHEMA dl.a.another;
+
+statement ok
+USE dl;
+
+statement ok
+EXPORT DATABASE '{TEST_DIR}/schema_tree_export' (FORMAT PARQUET);
+
+statement ok
+ATTACH ':memory:' AS restored;
+
+statement ok
+USE restored;
+
+statement ok
+IMPORT DATABASE '{TEST_DIR}/schema_tree_export';
+
+query I
+SELECT * FROM restored.a.child.deep.t;
+----
+3
+
+statement ok
+USE memory;
+
+# Case-insensitive lookups use the same path components at every depth.
+query I
+SELECT * FROM DL.A.CHILD.T;
+----
+1
+
+statement error
+DROP SCHEMA dl.missing_root;
+----
+Schema with name missing_root does not exist
+
+statement error
+DROP SCHEMA dl.a.missing_parent.leaf;
+----
+Schema with name missing_parent does not exist
+
+statement error
+DROP SCHEMA dl.a.child.missing_leaf;
+----
+Schema with name missing_leaf does not exist
+
+statement ok
+DROP SCHEMA IF EXISTS dl.a.missing_parent.leaf;
+
+# Historical lookup ignores renames and schema drops in this transaction.
+statement ok
+BEGIN;
+
+statement ok
+ALTER TABLE dl.a.child.deep.t RENAME TO renamed_t;
+
+query I
+SELECT * FROM dl.a.child.deep.t AT (VERSION => 9);
+----
+3
+
+statement ok
+DROP SCHEMA dl.a.child.deep CASCADE;
+
+query I
+SELECT * FROM dl.a.child.deep.t AT (VERSION => 9);
+----
+3
+
+statement error
+SELECT * FROM dl.a.child.deep.t;
+----
+does not exist
+
+statement ok
+ROLLBACK;
+
+statement error
+DROP SCHEMA dl.a;
+----
+depend
+
+statement ok
+DROP SCHEMA dl.a CASCADE;
+
+query I
+SELECT * FROM dl.b."child.with""quote".t;
+----
+2
+
+query I
+SELECT * FROM dl.a.child.deep.t AT (VERSION => 9);
+----
+3
+
+statement ok
+DETACH dl;
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DUCKLAKE_VERSION '1.1-dev1', DATA_PATH '{DATA_PATH}/load_tree', METADATA_CATALOG 'meta')
+
+query II
+SELECT schema_name, parent_schema FROM duckdb_schemas() WHERE database_name = 'dl' ORDER BY ALL;
+----
+b	NULL
+child.with"quote	b
+main	NULL

@@ -1,0 +1,30 @@
+# name: benchmark/micro/write/ctas_lineitem.benchmark
+# description: CREATE TABLE AS of TPC-H lineitem SF0.5 (3M rows) into an empty DuckLake, including the commit
+# group: [write]
+
+name CTAS Lineitem
+group micro
+subgroup write
+
+require ducklake
+
+require parquet
+
+require tpch
+
+argument lake ctas
+
+argument work ctas_work
+
+include benchmark/micro/fixtures/tpch05.benchmark.in
+
+include benchmark/micro/fixtures/rblob_cleanup.benchmark.in
+
+run
+CREATE TABLE lake.lineitem AS FROM src.lineitem;
+
+# A missed reset makes the CTAS fail because lake.lineitem already exists
+result_query II
+SELECT Count = (SELECT count(*) FROM src.lineitem), (SELECT count(*) FROM lake.lineitem) = Count FROM __answer
+----
+true	true

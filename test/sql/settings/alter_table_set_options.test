@@ -1,0 +1,363 @@
+# name: test/sql/settings/alter_table_set_options.test
+# description: Test ALTER TABLE SET (option = value)
+# group: [settings]
+
+require ducklake
+
+require parquet
+
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/ducklake_alter_set_options.db' AS ducklake (DATA_PATH '{TEST_DIR}/ducklake_alter_set_options_files');
+
+statement ok
+CREATE TABLE ducklake.t1(str VARCHAR)
+
+statement ok
+CREATE TABLE ducklake.t2(str VARCHAR)
+
+statement ok
+CREATE SCHEMA ducklake.s1
+
+statement ok
+CREATE TABLE ducklake.s1.t1(str VARCHAR)
+
+statement ok
+CALL ducklake.set_option('parquet_compression', 'uncompressed')
+
+statement ok
+ALTER TABLE ducklake.t1 SET (parquet_compression = 'zstd')
+
+statement ok
+ALTER TABLE ducklake.s1.t1 SET (PARQUET_COMPRESSION = 'gzip', parquet_version = 2)
+
+query IIII
+SELECT option_name, value, scope, scope_entry FROM ducklake.options() WHERE scope = 'TABLE' ORDER BY ALL
+----
+parquet_compression	gzip	TABLE	s1.t1
+parquet_compression	zstd	TABLE	main.t1
+parquet_version	V2	TABLE	s1.t1
+
+loop i 0 2
+
+query I
+INSERT INTO ducklake.t1 SELECT 'hello world' || i str FROM range(1000) t(i)
+----
+1000
+
+query I
+SELECT DISTINCT compression FROM parquet_metadata('{TEST_DIR}/ducklake_alter_set_options_files/main/t1/**') ORDER BY ALL
+----
+ZSTD
+
+query I
+INSERT INTO ducklake.t2 SELECT 'hello world' || i str FROM range(1000) t(i)
+----
+1000
+
+query I
+SELECT DISTINCT compression FROM parquet_metadata('{TEST_DIR}/ducklake_alter_set_options_files/main/t2/**') ORDER BY ALL
+----
+UNCOMPRESSED
+
+query I
+INSERT INTO ducklake.s1.t1 SELECT 'hello world' || i str FROM range(1000) t(i)
+----
+1000
+
+query I
+SELECT DISTINCT compression FROM parquet_metadata('{TEST_DIR}/ducklake_alter_set_options_files/s1/t1/**') ORDER BY ALL
+----
+GZIP
+
+# Options persist across attachments
+statement ok
+DETACH ducklake
+
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/ducklake_alter_set_options.db' AS ducklake (DATA_PATH '{TEST_DIR}/ducklake_alter_set_options_files');
+
+endloop
+
+# Both interfaces update the same setting
+statement ok
+CALL ducklake.set_option('parquet_compression', 'lz4', table_name => 't2')
+
+statement ok
+ALTER TABLE ducklake.t2 SET (parquet_compression = 'snappy')
+
+query I
+SELECT value FROM ducklake.options() WHERE option_name = 'parquet_compression' AND scope_entry = 'main.t2'
+----
+snappy
+
+statement ok
+CALL ducklake.set_option('parquet_compression', 'lz4', table_name => 't2')
+
+query I
+SELECT value FROM ducklake.options() WHERE option_name = 'parquet_compression' AND scope_entry = 'main.t2'
+----
+lz4
+
+statement ok
+ALTER TABLE ducklake.t2 SET ('parquet_compression' = 'brotli')
+
+query I
+SELECT value FROM ducklake.options() WHERE option_name = 'parquet_compression' AND scope_entry = 'main.t2'
+----
+brotli
+
+statement ok
+SET VARIABLE codec = 'gzip'
+
+statement ok
+ALTER TABLE ducklake.t2 SET (parquet_compression = getvariable('codec'), parquet_row_group_size = 100000)
+
+query II
+SELECT option_name, value FROM ducklake.options() WHERE scope_entry = 'main.t2' ORDER BY ALL
+----
+parquet_compression	gzip
+parquet_row_group_size	100000
+
+# Inserts use settings changed in the same transaction
+statement ok
+BEGIN
+
+statement ok
+ALTER TABLE ducklake.t2 SET (parquet_compression = 'zstd')
+
+query I
+INSERT INTO ducklake.t2 SELECT 'hello world' || i str FROM range(1000) t(i)
+----
+1000
+
+statement ok
+COMMIT
+
+query I
+SELECT DISTINCT compression FROM parquet_metadata('{TEST_DIR}/ducklake_alter_set_options_files/main/t2/**') ORDER BY ALL
+----
+UNCOMPRESSED
+ZSTD
+
+statement error
+ALTER TABLE ducklake.t2 SET (nonexistent_option = 42)
+----
+Unsupported option nonexistent_option
+
+statement error
+ALTER TABLE ducklake.t2 SET (parquet_compression = 'nope')
+----
+Unsupported codec
+
+statement error
+ALTER TABLE ducklake.t2 SET (expire_older_than = '1 day')
+----
+can only be set globally
+
+statement error
+ALTER TABLE ducklake.t2 SET (delete_older_than = '1 day')
+----
+can only be set globally
+
+statement error
+ALTER TABLE ducklake.t2 SET (parquet_compression = NULL)
+----
+requires a value
+
+statement error
+ALTER TABLE ducklake.t2 SET (parquet_compression)
+----
+requires a value
+
+statement error
+ALTER TABLE ducklake.t2 SET (parquet_compression = str)
+----
+cannot contain column names
+
+statement error
+ALTER TABLE ducklake.t2 SET (parquet_compression = (SELECT 'zstd'))
+----
+cannot contain subqueries
+
+statement error
+ALTER TABLE ducklake.nonexistent_table SET (parquet_compression = 'zstd')
+----
+nonexistent_table
+
+statement ok
+ALTER TABLE IF EXISTS ducklake.nonexistent_table SET (parquet_compression = 'zstd')
+
+# Validate all options before applying any
+statement error
+ALTER TABLE ducklake.t2 SET (parquet_compression = 'lz4', parquet_version = 7)
+----
+Only Parquet version 1 and 2 are supported
+
+query II
+SELECT option_name, value FROM ducklake.options() WHERE scope_entry = 'main.t2' ORDER BY ALL
+----
+parquet_compression	zstd
+parquet_row_group_size	100000
+
+# Existing tables can change settings after other ALTER statements
+statement ok
+CREATE TABLE ducklake.t_altered(i INTEGER)
+
+statement ok
+BEGIN
+
+statement ok
+ALTER TABLE ducklake.t_altered ADD COLUMN j INTEGER
+
+statement ok
+ALTER TABLE ducklake.t_altered SET (parquet_compression = 'gzip')
+
+statement ok
+ALTER TABLE ducklake.t_altered RENAME TO t_renamed
+
+statement ok
+ALTER TABLE ducklake.t_renamed SET (parquet_compression = 'zstd')
+
+statement ok
+COMMIT
+
+query I
+SELECT value FROM ducklake.options() WHERE option_name = 'parquet_compression' AND scope_entry = 'main.t_renamed'
+----
+zstd
+
+# skip_stats_columns resolves names against the table
+statement ok
+CREATE TABLE ducklake.t_skip(id INTEGER, s VARCHAR, d DOUBLE)
+
+statement ok
+ALTER TABLE ducklake.t_skip SET (skip_stats_columns = ['s', 'd', 's'])
+
+query I
+SELECT value FROM ducklake.options() WHERE option_name = 'skip_stats_columns' AND scope_entry = 'main.t_skip'
+----
+2,3
+
+statement ok
+ALTER TABLE ducklake.t_skip SET (skip_stats_columns = 'd')
+
+query I
+SELECT value FROM ducklake.options() WHERE option_name = 'skip_stats_columns' AND scope_entry = 'main.t_skip'
+----
+3
+
+statement error
+ALTER TABLE ducklake.t_skip SET (skip_stats_columns = 'nonexistent')
+----
+does not exist
+
+statement ok
+ALTER TABLE ducklake.t_skip SET (skip_stats_columns = [])
+
+query I
+SELECT value FROM ducklake.options() WHERE option_name = 'skip_stats_columns' AND scope_entry = 'main.t_skip'
+----
+(empty)
+
+# Tables created in the current transaction keep the settings pending until commit
+statement ok
+BEGIN
+
+statement ok
+CREATE TABLE ducklake.t_local(i INTEGER)
+
+statement ok
+ALTER TABLE ducklake.t_local SET (parquet_compression = 'zstd', data_inlining_row_limit = 0)
+
+statement ok
+INSERT INTO ducklake.t_local VALUES (1)
+
+statement ok
+COMMIT
+
+query II
+SELECT option_name, value FROM ducklake.options() WHERE scope_entry = 'main.t_local' ORDER BY ALL
+----
+data_inlining_row_limit	0
+parquet_compression	zstd
+
+query I
+SELECT DISTINCT compression FROM parquet_metadata('{TEST_DIR}/ducklake_alter_set_options_files/main/t_local/**') ORDER BY ALL
+----
+ZSTD
+
+statement error
+ALTER TABLE ducklake.t2 SET (parquet_row_group_size = 0)
+----
+Row group size cannot be 0
+
+statement error
+ALTER TABLE ducklake.t2 SET (rewrite_delete_threshold = 2)
+----
+must be between 0 and 1
+
+statement ok
+ALTER TABLE ducklake.t2 SET (data_inlining_row_limit = 0, target_file_size = '1MB', sort_on_insert = false)
+
+query II
+SELECT option_name, value FROM ducklake.options() WHERE scope_entry = 'main.t2' AND option_name IN ('data_inlining_row_limit', 'target_file_size', 'sort_on_insert') ORDER BY ALL
+----
+data_inlining_row_limit	0
+sort_on_insert	false
+target_file_size	1000000
+
+statement ok
+DETACH ducklake
+
+# Inlining rejects reserved column names
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/ducklake_alter_set_options_v10.db' AS dl10 (DATA_PATH '{TEST_DIR}/ducklake_alter_set_options_v10_files', DUCKLAKE_VERSION '1.0')
+
+statement ok
+CALL dl10.set_option('data_inlining_row_limit', 0)
+
+statement ok
+CREATE TABLE dl10.t_reserved(row_id INTEGER)
+
+statement ok
+CREATE TABLE dl10.t_plain(i INTEGER)
+
+statement error
+ALTER TABLE dl10.t_reserved SET (data_inlining_row_limit = 10)
+----
+Cannot enable data inlining
+
+statement ok
+ALTER TABLE dl10.t_plain SET (data_inlining_row_limit = 10)
+
+statement ok
+INSERT INTO dl10.t_plain VALUES (1), (2)
+
+query I
+SELECT count(*) FROM __ducklake_metadata_dl10.ducklake_data_file
+----
+0
+
+# Settings can change while the transaction has pending inlined data
+statement ok
+BEGIN
+
+statement ok
+INSERT INTO dl10.t_plain VALUES (3)
+
+statement ok
+ALTER TABLE dl10.t_plain SET (data_inlining_row_limit = 0)
+
+statement ok
+INSERT INTO dl10.t_plain VALUES (4)
+
+statement ok
+COMMIT
+
+query I
+SELECT * FROM dl10.t_plain ORDER BY i
+----
+1
+2
+3
+4

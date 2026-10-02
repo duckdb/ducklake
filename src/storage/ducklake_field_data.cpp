@@ -1,4 +1,5 @@
 #include "storage/ducklake_field_data.hpp"
+#include "common/ducklake_util.hpp"
 
 #include "duckdb/common/exception/catalog_exception.hpp"
 #include "duckdb/parser/column_list.hpp"
@@ -43,7 +44,7 @@ DuckLakeFieldId::DuckLakeFieldId(DuckLakeColumnData column_data_p, string name_p
 static unique_ptr<ParsedExpression> ExtractDefaultExpression(optional_ptr<const ParsedExpression> default_expr,
                                                              const LogicalType &type) {
 	if (!default_expr) {
-		return make_uniq<ConstantExpression>(Value(type));
+		return ConstantExpression::FromValue(Value(type));
 	}
 	if (default_expr->HasSubquery()) {
 		throw NotImplementedException("Expressions with subqueries are not yet supported as default expressions");
@@ -59,15 +60,15 @@ static Value ExtractInitialValue(optional_ptr<const ParsedExpression> initial_ex
 	if (!initial_expr) {
 		return Value(type);
 	}
-	if (initial_expr->GetExpressionType() != ExpressionType::VALUE_CONSTANT) {
+	Value literal_value;
+	if (!DuckLakeUtil::TryGetLiteralValue(*initial_expr, literal_value)) {
 		if (!add_column) {
 			return Value(type);
 		}
 		throw NotImplementedException("We cannot add a column with a non-literal default value. Add the column and "
 		                              "then explicitly set the default for new values using \"ALTER ... SET DEFAULT\"");
 	}
-	auto &const_default = initial_expr->Cast<ConstantExpression>();
-	return const_default.GetValue().DefaultCastAs(type);
+	return literal_value.DefaultCastAs(type);
 }
 
 unique_ptr<DuckLakeFieldId> DuckLakeFieldId::FieldIdFromType(const string &name, const LogicalType &type,

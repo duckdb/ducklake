@@ -38,6 +38,7 @@ struct DuckLakeRetryConfig;
 struct TransactionChangeInformation;
 class BoundAtClause;
 class QueryResult;
+class SQLStatement;
 class FileSystem;
 
 struct SnapshotAndStats;
@@ -94,7 +95,7 @@ struct ColumnFilterInfo {
 
 	ColumnFilterInfo(const ColumnFilterInfo &other)
 	    : column_field_index(other.column_field_index), column_type(other.column_type),
-	      table_filter(other.table_filter->Copy()) {
+	      table_filter(other.table_filter ? other.table_filter->Copy() : nullptr) {
 	}
 
 	ColumnFilterInfo(ColumnFilterInfo &&other) = default;
@@ -109,15 +110,67 @@ struct ColumnFilterInfo {
 	}
 };
 
+enum class DuckLakeFilterNodeType : uint8_t { COLUMN_FILTER, CONJUNCTION_AND, CONJUNCTION_OR, MATCH_NONE };
+
+//! A node in a filter tree - leaves filter a single column, inner nodes combine them across columns
+struct DuckLakeFilterNode {
+	DuckLakeFilterNodeType type;
+	//! Set for COLUMN_FILTER nodes
+	unique_ptr<ColumnFilterInfo> column_filter;
+	//! Set for conjunction nodes
+	vector<unique_ptr<DuckLakeFilterNode>> children;
+
+	explicit DuckLakeFilterNode(DuckLakeFilterNodeType type_p) : type(type_p) {
+	}
+	explicit DuckLakeFilterNode(ColumnFilterInfo filter)
+	    : type(DuckLakeFilterNodeType::COLUMN_FILTER), column_filter(make_uniq<ColumnFilterInfo>(std::move(filter))) {
+	}
+
+	unique_ptr<DuckLakeFilterNode> Copy() const {
+		if (type == DuckLakeFilterNodeType::COLUMN_FILTER) {
+			return make_uniq<DuckLakeFilterNode>(*column_filter);
+		}
+		auto result = make_uniq<DuckLakeFilterNode>(type);
+		for (const auto &child : children) {
+			result->children.push_back(child->Copy());
+		}
+		return result;
+	}
+};
+
+//! A filter tree together with the expression it was derived from
+struct DuckLakeFilterTree {
+	unique_ptr<DuckLakeFilterNode> root;
+	//! Used to recognize the same filter being pushed down again
+	unique_ptr<Expression> source;
+
+	DuckLakeFilterTree Copy() const {
+		DuckLakeFilterTree result;
+		result.root = root->Copy();
+		result.source = source->Copy();
+		return result;
+	}
+};
+
 struct FilterPushdownInfo {
 	unordered_map<idx_t, ColumnFilterInfo> column_filters;
+	//! Filter trees, which must hold alongside the single-column filters above. Usually cross-column -
+	//! a single-column tree is only kept when it expresses something the per-column filters cannot.
+	vector<DuckLakeFilterTree> filter_trees;
 
 	FilterPushdownInfo() = default;
+
+	bool Empty() const {
+		return column_filters.empty() && filter_trees.empty();
+	}
 
 	unique_ptr<FilterPushdownInfo> Copy() const {
 		auto result = make_uniq<FilterPushdownInfo>();
 		for (const auto &entry : column_filters) {
 			result->column_filters.emplace(entry.first, entry.second);
+		}
+		for (const auto &tree : filter_trees) {
+			result->filter_trees.push_back(tree.Copy());
 		}
 		return result;
 	}
@@ -188,7 +241,7 @@ public:
 	bool CanInlineColumns(const vector<DuckLakeColumnInfo> &columns);
 
 	virtual string GetColumnTypeInternal(const LogicalType &column_type);
-	virtual string CastColumnToTarget(const string &column, const LogicalType &type);
+	string CastColumnToTarget(const string &column, const LogicalType &type);
 
 	DuckLakeMetadataManager &Get(DuckLakeTransaction &transaction);
 
@@ -202,6 +255,7 @@ public:
 	virtual void InitializeDuckLake(bool has_explicit_schema, DuckLakeEncryption encryption);
 	//! Get the CREATE TABLE statements for all metadata tables
 	virtual string GetCreateTableStatements();
+	virtual string GetSchemaTableStatement();
 	virtual string GetDataFileTableStatement();
 	virtual string GetDeleteFileTableStatement();
 	virtual string GetFileColumnStatsTableStatement();
@@ -234,9 +288,10 @@ public:
 	//! Both used by the regular metadata-manager methods and by server-side commit, which runs the
 	//! SQL on a fresh Connection without going through the metadata-manager wrapper.
 	static string LatestSnapshotQuery();
-	static string GlobalTableStatsQuery(bool include_exactness);
+	static string GlobalTableStatsQuery(bool include_exactness, optional_idx table_id = optional_idx());
 	//! Pure parsers for the results of the above queries.
-	static unique_ptr<DuckLakeSnapshot> ParseSnapshot(QueryResult &result);
+	static unique_ptr<DuckLakeSnapshot> ParseSnapshot(QueryResult &result,
+	                                                  optional_ptr<string> catalog_version = nullptr);
 	static vector<DuckLakeGlobalStatsInfo> ParseGlobalTableStats(QueryResult &result);
 	//! Whether the result contains a column with the given name
 	static bool ResultHasColumn(QueryResult &result, const string &name);
@@ -249,8 +304,10 @@ public:
 	static DuckLakeCatalogInfo
 	BuildCatalogForSnapshot(DuckLakeSnapshot snapshot,
 	                        const std::function<unique_ptr<QueryResult>(DuckLakeSnapshot, string)> &query_executor,
-	                        const string &base_data_path, const string &separator, bool load_view_column_tags = false);
+	                        const string &base_data_path, const string &separator, bool supports_v1_1_metadata = false);
 	virtual vector<DuckLakeGlobalStatsInfo> GetGlobalTableStats(DuckLakeSnapshot snapshot, TableIndex table_id);
+	//! Get the record count of every table that has global stats
+	virtual map<TableIndex, idx_t> GetTableRecordCounts(DuckLakeSnapshot snapshot);
 	virtual vector<DuckLakeFileListEntry> GetFilesForTable(DuckLakeTableEntry &table, DuckLakeSnapshot snapshot,
 	                                                       const FilterPushdownInfo *filter_info = nullptr);
 	virtual vector<DuckLakeFileListEntry> GetTableInsertions(DuckLakeTableEntry &table, DuckLakeSnapshot start_snapshot,
@@ -267,9 +324,12 @@ public:
 	virtual idx_t GetBeginSnapshotForTable(TableIndex table_id);
 	virtual idx_t GetBeginSnapshotForSchemaVersion(TableIndex table_id, idx_t schema_version);
 	virtual idx_t GetNetDataFileRowCount(TableIndex table_id, DuckLakeSnapshot snapshot);
+	optional_idx GetNetDataFileRowCountForStats(TableIndex table_id, DuckLakeSnapshot snapshot);
 	virtual idx_t GetNetInlinedRowCount(const string &inlined_table_name, DuckLakeSnapshot snapshot);
 	//! SQL builders for stats-refresh metadata lookups; caller substitutes placeholders + executes.
-	static string GetNetDataFileRowCountSql(TableIndex table_id, const string &inlined_deletion_table);
+	//! With require_exact, the count is NULL if any visible file is only partially visible to the snapshot.
+	static string GetNetDataFileRowCountSql(TableIndex table_id, const string &inlined_deletion_table,
+	                                        bool require_exact = false);
 	static string GetNetInlinedRowCountSql(const string &inlined_table_name, const DuckLakeInlinedColNames &col_names);
 	static string GetTableColumnSchemaSql(TableIndex table_id);
 	static string GetInlinedTableNamesSql(TableIndex table_id);
@@ -287,7 +347,7 @@ public:
 	//! Emits the INSERT for new schemas. Caller supplies resolved paths (one per schema, same order)
 	//! since path resolution depends on the catalog's data_path / separator (instance state).
 	static string WriteNewSchemas(const vector<DuckLakeSchemaInfo> &new_schemas,
-	                              const vector<DuckLakePath> &resolved_paths);
+	                              const vector<DuckLakePath> &resolved_paths, bool supports_v1_1_metadata);
 	//! Emits the INSERT for new tables and their columns. Caller supplies resolved paths (one per
 	//! table, same order). commit_snapshot is currently unused by the body — kept off the signature.
 	static string WriteNewTables(const vector<DuckLakeTableInfo> &new_tables,
@@ -305,6 +365,7 @@ public:
 	static string WriteExpiredColumnTags(const vector<DuckLakeDroppedColumn> &dropped_columns);
 	static string WriteNewColumns(const vector<DuckLakeNewColumn> &new_columns);
 	static string WriteNewTags(const vector<DuckLakeTagInfo> &new_tags);
+	static string WriteNewTableOptions(const vector<DuckLakeConfigOption> &new_options);
 	static string WriteNewColumnTags(const vector<DuckLakeColumnTagInfo> &new_tags);
 	static string WriteNewViewColumnTags(const vector<DuckLakeViewColumnTagInfo> &new_tags);
 	virtual string WriteNewDataFiles(DuckLakeSnapshot &commit_snapshot, const vector<DuckLakeFileInfo> &new_files,
@@ -322,7 +383,8 @@ public:
 	virtual string WriteNewInlinedData(DuckLakeSnapshot &commit_snapshot,
 	                                   const vector<DuckLakeInlinedDataInfo> &new_data,
 	                                   const vector<DuckLakeTableInfo> &new_tables,
-	                                   const vector<DuckLakeTableInfo> &new_inlined_data_tables_result);
+	                                   const vector<DuckLakeTableInfo> &new_inlined_data_tables_result,
+	                                   vector<unique_ptr<SQLStatement>> &inlined_inserts);
 	static string WriteNewInlinedDeletes(const vector<DuckLakeDeletedInlinedDataInfo> &new_deletes,
 	                                     const DuckLakeInlinedColNames &col_names);
 	//! Creates the INSERT INTO {METADATA_CATALOG}.<inlined_table_name> VALUES (...) batch.
@@ -343,6 +405,8 @@ public:
 	//! Get the name of the inlined deletion table for a given table ID
 	virtual string GetInlinedDeletionTableName(TableIndex table_id, DuckLakeSnapshot snapshot,
 	                                           bool create_if_not_exists = false);
+	//! Probe for the physical inlined-deletion table without aborting the active metadata transaction.
+	virtual bool InlinedDeletionTableExists(const string &table_name);
 	virtual string WriteNewInlinedTables(DuckLakeSnapshot commit_snapshot, const vector<DuckLakeTableInfo> &tables);
 	virtual string GetInlinedTableQueries(DuckLakeSnapshot commit_snapshot, const DuckLakeTableInfo &table,
 	                                      string &inlined_tables, string &inlined_table_queries);
@@ -408,9 +472,8 @@ public:
 	static string ReadFileColumnStatsForTableSql(TableIndex table_id, bool include_exactness);
 	//! Throws on a failed inlined data read, hinting at the migration for legacy named catalogs
 	void CheckInlinedDataReadError(QueryResult &result, const string &inlined_table_name);
-	virtual shared_ptr<DuckLakeInlinedData> TransformInlinedData(QueryResult &result,
-	                                                             const vector<LogicalType> &expected_types,
-	                                                             const string &inlined_table_name);
+	shared_ptr<DuckLakeInlinedData> TransformInlinedData(QueryResult &result, const vector<LogicalType> &expected_types,
+	                                                     const string &inlined_table_name);
 
 	virtual void DeleteInlinedData(const DuckLakeInlinedTableInfo &inlined_table);
 	//! We delete at the flush
@@ -429,6 +492,7 @@ public:
 	virtual void DropEmptySupersededInlinedTables();
 	virtual vector<DuckLakeTableSizeInfo> GetTableSizes(DuckLakeSnapshot snapshot);
 	virtual void SetConfigOption(const DuckLakeConfigOption &option);
+	virtual bool ResetConfigOption(const DuckLakeConfigOption &option);
 	virtual string GetPathForSchema(SchemaIndex schema_id, vector<DuckLakeSchemaInfo> &new_schemas_result);
 	virtual string GetPathForTable(TableIndex table_id, const vector<DuckLakeTableInfo> &new_tables,
 	                               const vector<DuckLakeSchemaInfo> &new_schemas_result);
@@ -438,8 +502,10 @@ public:
 	virtual void MigrateV03(bool allow_failures = false);
 	virtual void MigrateV04();
 	virtual void MigrateV10(bool allow_failures = false);
+	//! Best-effort in place re-run of the v1.1-dev1 migration on a plain attach, failures are logged not thrown
+	virtual void MigrateV10Dev();
 	//! Renames inlined metadata columns to the prefixed variants, skipping already renamed tables
-	virtual void MigrateInlinedColumnNames();
+	virtual void MigrateInlinedColumnNames(bool probe_renamed);
 	virtual void ExecuteMigration(string migrate_query, bool allow_failures, const string &from_version,
 	                              const string &to_version);
 
@@ -544,6 +610,12 @@ protected:
 	string BuildBucketPartitionPruningClause(
 	    DuckLakeTableEntry &table, const FilterPushdownInfo &filter_info,
 	    const string &partition_value_table = "{METADATA_CATALOG}.ducklake_file_partition_value");
+	//! Emit the condition for a single-column filter, registering the stats its CTE must project
+	string GenerateColumnFilterCondition(const ColumnFilterInfo &column_filter, FilterSQLResult &result);
+	//! Emit the condition for a filter tree, combining the per-column conditions of its leaves.
+	//! A node under a parent of the same conjunction type is spliced in without parens of its own.
+	string GenerateFilterTreeCondition(const DuckLakeFilterNode &node, FilterSQLResult &result,
+	                                   bool splice_into_parent = false);
 	virtual FilterSQLResult ConvertFilterPushdownToSQL(const FilterPushdownInfo &filter_info);
 	string GenerateCTESectionFromRequirements(const map<idx_t, CTERequirement> &requirements, TableIndex table_id,
 	                                          const FileColumnStatsCTEBodyGenerator &generate_body);

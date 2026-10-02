@@ -1,0 +1,28 @@
+# name: test/sql/catalog/nested_schema/nested_schema_version_gate.test
+# description: Nested schemas require DuckLake 1.1 metadata
+# group: [nested_schema]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/nested_gate_files', DUCKLAKE_VERSION '1.0')
+
+statement ok
+CREATE SCHEMA ducklake.s1;
+
+statement error
+CREATE SCHEMA ducklake.s1.child;
+----
+DuckLake 1.0 does not support nested schemas
+
+query I
+SELECT schema_name FROM duckdb_schemas() WHERE database_name = 'ducklake' ORDER BY ALL
+----
+main
+s1

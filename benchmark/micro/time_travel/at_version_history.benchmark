@@ -1,0 +1,48 @@
+# name: benchmark/micro/time_travel/at_version_history.benchmark
+# description: Eleven AT (VERSION/TIMESTAMP) scans and one current scan, mostly selective, over 300 commits, cold
+# group: [time_travel]
+
+name At Version History
+group micro
+subgroup time_travel
+
+require ducklake
+
+include benchmark/micro/fixtures/history300.benchmark.in
+
+run
+SELECT q, c, s::DECIMAL(18, 1) AS s FROM (
+SELECT 'v010' q, count(*) c, sum(x) s FROM lake.events AT (VERSION => 10) WHERE id BETWEEN 123000 AND 123999
+UNION ALL SELECT 'v040', count(*), sum(x) FROM lake.events AT (VERSION => 40) WHERE id = 456789
+UNION ALL SELECT 'v075', count(*), sum(x) FROM lake.events AT (VERSION => 75) WHERE id BETWEEN 1030000 AND 1030999
+UNION ALL SELECT 'v110', count(*), sum(x) FROM lake.events AT (VERSION => 110) WHERE id = 777777
+UNION ALL SELECT 'v150', count(*), sum(x) FROM lake.events AT (VERSION => 150)
+UNION ALL SELECT 'v190', count(*), sum(x) FROM lake.events AT (VERSION => 190) WHERE id BETWEEN 1150000 AND 1150999
+UNION ALL SELECT 'v225', count(*), sum(x) FROM lake.events AT (VERSION => 225) WHERE id = 42042
+UNION ALL SELECT 'v260', count(*), sum(x) FROM lake.events AT (VERSION => 260) WHERE id BETWEEN 500000 AND 501999
+UNION ALL SELECT 'v290', count(*), sum(x) FROM lake.events AT (VERSION => 290) WHERE id = 1270500
+UNION ALL SELECT 'ts_a', count(*), sum(x) FROM lake.events AT (TIMESTAMP => getvariable('ts_a'))
+WHERE id BETWEEN 200000 AND 200999
+UNION ALL SELECT 'ts_b', count(*), sum(x) FROM lake.events AT (TIMESTAMP => getvariable('ts_b'))
+WHERE id IN (998197, 1198000)
+UNION ALL SELECT 'cur', count(*), sum(x) FROM lake.events
+) ORDER BY q;
+
+# Re-attaching gives every run cold schema, stats and snapshot caches; ts_a and ts_b survive the re-attach
+cleanup
+DETACH lake;
+ATTACH 'ducklake:${BENCHMARK_DIR}/history300.db' AS lake (READ_ONLY);
+
+result III
+cur	1000000	281792425975.0
+ts_a	968	97048998.0
+ts_b	1	499099.5
+v010	997	61565244.0
+v040	1	228394.5
+v075	1000	515249764.0
+v110	1	388888.5
+v150	1001000	264310248875.0
+v190	1000	575249762.0
+v225	1	21021.0
+v260	1832	458946782.0
+v290	1	635250.0

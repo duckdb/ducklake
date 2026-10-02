@@ -36,7 +36,8 @@
         "test/sql/partitioning/partition_null_type.test",
         "test/sql/data_inlining/data_inlining_null_type.test",
         "test/sql/add_files/add_files_null_type.test",
-        "test/sql/macros/test_null_default.test"
+        "test/sql/macros/test_null_default.test",
+        "test/sql/macros/typed_null_default.test"
       ]
     },
     {
@@ -63,7 +64,18 @@
         "test/sql/migration/inlined_column_rename_hint.test",
         "test/sql/migration/inlined_column_rename_reverse_hint.test",
         "test/sql/migration/inlined_column_rename_stats_hint.test",
-        "test/sql/migration/inlined_column_rename_dev_missing_table.test"
+        "test/sql/migration/inlined_column_rename_dev_missing_table.test",
+        "test/sql/migration/dev1_plain_attach_migration.test",
+        "test/sql/migration/stale_version_after_migration.test",
+        "test/sql/settings/create_table_inlining_options.test"
+      ]
+    },
+    {
+      "reason": "Merging files across schema versions requires 1.1-dev1 and is disabled when ducklake_default_version is pinned to 1.0",
+      "paths": [
+        "test/sql/compaction/compaction_alter_table.test",
+        "test/sql/compaction/compaction_schema_version_per_table.test",
+        "test/sql/compaction/merge_adjacent_cross_schema.test"
       ]
     },
     {

@@ -1,0 +1,43 @@
+# name: benchmark/micro/fixtures/tpch05.benchmark.in
+# description: TPC-H SF0.5 source database, an empty ctas lake and a dml lake with lineitem in 8MB files
+# group: [fixtures]
+
+cache_file tpch05_ready.marker
+
+# The consumer picks the restored lake (ctas or dml) and its work copy with the lake and work arguments
+# The drops, IF NOT EXISTS and the orphan sweeps let a load that died before writing the marker run again
+load
+ATTACH '${BENCHMARK_DIR}/tpch05_src.duckdb' AS src;
+DROP TABLE IF EXISTS src.lineitem; DROP TABLE IF EXISTS src.orders; DROP TABLE IF EXISTS src.partsupp;
+DROP TABLE IF EXISTS src.part; DROP TABLE IF EXISTS src.customer; DROP TABLE IF EXISTS src.supplier;
+DROP TABLE IF EXISTS src.nation; DROP TABLE IF EXISTS src.region;
+CALL dbgen(sf=0.5, catalog='src');
+ATTACH 'ducklake:${BENCHMARK_DIR}/ctas_pristine.db' AS lake (DATA_PATH '${BENCHMARK_DIR}/ctas_files');
+CALL ducklake_delete_orphaned_files('lake', cleanup_all => true);
+DETACH lake;
+ATTACH 'ducklake:${BENCHMARK_DIR}/dml_pristine.db' AS lake (DATA_PATH '${BENCHMARK_DIR}/dml_files');
+CALL lake.set_option('target_file_size', '8MB');
+CREATE TABLE IF NOT EXISTS lake.lineitem AS FROM src.lineitem;
+CALL ducklake_delete_orphaned_files('lake', cleanup_all => true);
+DETACH lake;
+DETACH src;
+COPY (SELECT count(*) FROM glob('${BENCHMARK_DIR}/ctas_files/**'))
+TO '${BENCHMARK_DIR}/ctas_filecount.csv' (FORMAT CSV, HEADER false);
+COPY (SELECT count(*) FROM glob('${BENCHMARK_DIR}/dml_files/**'))
+TO '${BENCHMARK_DIR}/dml_filecount.csv' (FORMAT CSV, HEADER false);
+COPY (SELECT 1) TO '${BENCHMARK_DIR}/tpch05_ready.marker' (FORMAT CSV);
+DETACH DATABASE IF EXISTS lake;
+COPY (SELECT content FROM read_blob('${BENCHMARK_DIR}/${lake}_pristine.db')) TO '${BENCHMARK_DIR}/${work}.db' (FORMAT blob);
+ATTACH 'ducklake:${BENCHMARK_DIR}/${work}.db' AS lake;
+CALL ducklake_delete_orphaned_files('lake', cleanup_all => true);
+SELECT CASE WHEN (SELECT count(*) FROM glob('${BENCHMARK_DIR}/${lake}_files/**')) <> (SELECT column0 FROM read_csv('${BENCHMARK_DIR}/${lake}_filecount.csv', header = false)) THEN error('the fixture files were not restored') END;
+ATTACH IF NOT EXISTS '${BENCHMARK_DIR}/tpch05_src.duckdb' AS src (READ_ONLY);
+
+# The rblob_reload restore block plus the read-only source database, which the rblob cleanup leaves attached
+reload
+DETACH DATABASE IF EXISTS lake;
+COPY (SELECT content FROM read_blob('${BENCHMARK_DIR}/${lake}_pristine.db')) TO '${BENCHMARK_DIR}/${work}.db' (FORMAT blob);
+ATTACH 'ducklake:${BENCHMARK_DIR}/${work}.db' AS lake;
+CALL ducklake_delete_orphaned_files('lake', cleanup_all => true);
+SELECT CASE WHEN (SELECT count(*) FROM glob('${BENCHMARK_DIR}/${lake}_files/**')) <> (SELECT column0 FROM read_csv('${BENCHMARK_DIR}/${lake}_filecount.csv', header = false)) THEN error('the fixture files were not restored') END;
+ATTACH IF NOT EXISTS '${BENCHMARK_DIR}/tpch05_src.duckdb' AS src (READ_ONLY);

@@ -1,0 +1,34 @@
+# name: test/sql/compaction/merge_adjacent_cross_schema_v10.test
+# description: a 1.0 catalog does not merge files across schema versions
+# group: [compaction]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/merge_adjacent_cross_schema_v10.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/merge_adjacent_cross_schema_v10', DATA_INLINING_ROW_LIMIT 0, DUCKLAKE_VERSION '1.0')
+
+statement ok
+CREATE TABLE ducklake.t(a INTEGER);
+
+statement ok
+INSERT INTO ducklake.t VALUES (1);
+
+statement ok
+ALTER TABLE ducklake.t ADD COLUMN c VARCHAR;
+
+statement ok
+INSERT INTO ducklake.t VALUES (2, 'two');
+
+statement ok
+CALL ducklake_merge_adjacent_files('ducklake');
+
+query I
+SELECT count(*) FROM ducklake_list_files('ducklake', 't');
+----
+2

@@ -1,0 +1,28 @@
+# name: benchmark/micro/compaction/rewrite_data_files_deletes.benchmark
+# description: Rewrite 500 small files with 60% deleted rows into one with ducklake_rewrite_data_files, with the commit
+# group: [compaction]
+
+name Rewrite Data Files Deletes
+group micro
+subgroup compaction
+
+require ducklake
+
+require parquet
+
+argument work rewrite_work
+
+include benchmark/micro/fixtures/compaction.benchmark.in
+
+include benchmark/micro/fixtures/rblob_cleanup.benchmark.in
+
+# The default rewrite_delete_threshold of 0.95 would skip every file
+run
+SELECT sum(files_processed) AS processed, sum(files_created) AS created
+FROM ducklake_rewrite_data_files('lake', 'rw', delete_threshold => 0.5);
+
+# A missed reset leaves no file with deletes to rewrite
+result_query II
+SELECT processed, created FROM __answer
+----
+500	1

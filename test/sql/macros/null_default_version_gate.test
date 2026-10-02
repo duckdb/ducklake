@@ -25,6 +25,11 @@ CREATE MACRO rows_for(v := NULL) AS TABLE SELECT v AS v
 ----
 DuckLake 1.0 does not support the NULL type
 
+statement error
+CREATE MACRO typed_default(a, b := NULL::INTEGER) AS COALESCE(b, a)
+----
+DuckLake 1.0 does not support the NULL type
+
 # regular defaults keep working
 statement ok
 CREATE MACRO with_default(a, b := 5) AS a + b

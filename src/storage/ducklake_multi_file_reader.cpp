@@ -211,9 +211,9 @@ MultiFileColumnDefinition CreateColumnFromFieldId(const DuckLakeFieldId &field_i
 	MultiFileColumnDefinition column(field_id.Name(), field_id.Type());
 	auto &column_data = field_id.GetColumnData();
 	if (column_data.initial_default.IsNull()) {
-		column.default_expression = make_uniq<ConstantExpression>(Value(field_id.Type()));
+		column.default_expression = ConstantExpression::FromValue(Value(field_id.Type()));
 	} else {
-		column.default_expression = make_uniq<ConstantExpression>(column_data.initial_default);
+		column.default_expression = ConstantExpression::FromValue(column_data.initial_default);
 	}
 	column.identifier = Value::INTEGER(NumericCast<int32_t>(field_id.GetFieldIndex().index));
 	for (auto &child : field_id.Children()) {
@@ -523,7 +523,7 @@ vector<MultiFileColumnDefinition> MapColumns(ClientContext &context, MultiFileRe
 			// Use GetValue to handle NULL values (__HIVE_DEFAULT_PARTITION__) and type casting
 			Value partition_val =
 			    HivePartitioning::GetValue(context, column_map->source_name, entry->second, result_col.type);
-			result_col.default_expression = make_uniq<ConstantExpression>(std::move(partition_val));
+			result_col.default_expression = ConstantExpression::FromValue(partition_val);
 			continue;
 		}
 

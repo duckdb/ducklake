@@ -70,6 +70,7 @@ struct DuckLakeMetadata {
 
 struct DuckLakeSchemaInfo {
 	SchemaIndex id;
+	SchemaIndex parent_id;
 	string uuid;
 	string name;
 	string path;
@@ -570,6 +571,15 @@ struct DuckLakeConfigOption {
 	SchemaIndex schema_id;
 	//! table_id, if scoped to a table
 	TableIndex table_id;
+};
+
+//! What a config option held before a transaction set it, so a rollback can put it back
+struct DuckLakeConfigOptionUndo {
+	//! the option as written, whose value the undo compares against
+	DuckLakeConfigOption option;
+	string previous_value;
+	bool was_set = false;
+	bool reset = false;
 };
 
 struct DuckLakeNameMapColumnInfo {

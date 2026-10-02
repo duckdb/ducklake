@@ -140,30 +140,29 @@ SnapshotChangeInformation SnapshotChangeInformation::ParseChangesMade(const stri
 		switch (entry.change_type) {
 		case ChangeType::CREATED_TABLE: {
 			auto catalog_value = DuckLakeUtil::ParseCatalogEntry(entry.change_value);
-			result.created_tables[catalog_value.schema].insert(make_pair(std::move(catalog_value.name), "table"));
+			result.created_tables[catalog_value.SchemaKey()].insert(make_pair(std::move(catalog_value.name), "table"));
 			break;
 		}
 		case ChangeType::CREATED_SCALAR_MACRO: {
 			auto catalog_value = DuckLakeUtil::ParseCatalogEntry(entry.change_value);
-			result.created_scalar_macros[catalog_value.schema].insert(
+			result.created_scalar_macros[catalog_value.SchemaKey()].insert(
 			    make_pair(std::move(catalog_value.name), "scalar_macro"));
 			break;
 		}
 		case ChangeType::CREATED_TABLE_MACRO: {
 			auto catalog_value = DuckLakeUtil::ParseCatalogEntry(entry.change_value);
-			result.created_table_macros[catalog_value.schema].insert(
+			result.created_table_macros[catalog_value.SchemaKey()].insert(
 			    make_pair(std::move(catalog_value.name), "table_macro"));
 			break;
 		}
 		case ChangeType::CREATED_VIEW: {
 			auto catalog_value = DuckLakeUtil::ParseCatalogEntry(entry.change_value);
-			result.created_tables[catalog_value.schema].insert(make_pair(std::move(catalog_value.name), "view"));
+			result.created_tables[catalog_value.SchemaKey()].insert(make_pair(std::move(catalog_value.name), "view"));
 			break;
 		}
 		case ChangeType::CREATED_SCHEMA: {
-			idx_t pos = 0;
-			auto schema_name = DuckLakeUtil::ParseQuotedValue(entry.change_value, pos);
-			result.created_schemas.insert(std::move(schema_name));
+			auto schema_path = DuckLakeUtil::ParseQuotedList(entry.change_value, '.');
+			result.created_schemas.insert(DuckLakeUtil::ToQuotedList(schema_path, '.'));
 			break;
 		}
 		case ChangeType::DROPPED_SCHEMA:

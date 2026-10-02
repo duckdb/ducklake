@@ -1,0 +1,31 @@
+# name: benchmark/micro/fixtures/commit.benchmark.in
+# description: Lake with 500 empty background tables and 10 empty insert targets, with data inlining enabled
+# group: [fixtures]
+
+argument lake commit
+
+cache_file commit_ready.marker
+
+# Inlining is set before the tables are created, so every table gets its inlined data table up front
+# IF NOT EXISTS lets a load that died before writing the marker run again
+load
+EXPORT DATABASE '${BENCHMARK_DIR}/commit_gen';
+COPY (SELECT 'CREATE TABLE IF NOT EXISTS lake.main.bg_' || i || ' (id INTEGER, v VARCHAR);' FROM range(500) t(i)
+UNION ALL SELECT 'CREATE TABLE IF NOT EXISTS lake.main.ins_' || i || ' (id BIGINT, v VARCHAR);' FROM range(10) t(i))
+TO '${BENCHMARK_DIR}/commit_gen/schema.sql' (HEADER false, QUOTE '');
+ATTACH 'ducklake:${BENCHMARK_DIR}/commit_pristine.db' AS lake (DATA_PATH '${BENCHMARK_DIR}/commit_files');
+CALL lake.set_option('data_inlining_row_limit', 10);
+BEGIN;
+IMPORT DATABASE '${BENCHMARK_DIR}/commit_gen';
+COMMIT;
+DETACH lake;
+COPY (SELECT count(*) FROM glob('${BENCHMARK_DIR}/commit_files/**'))
+TO '${BENCHMARK_DIR}/commit_filecount.csv' (FORMAT CSV, HEADER false);
+COPY (SELECT 1) TO '${BENCHMARK_DIR}/commit_ready.marker' (FORMAT CSV);
+DETACH DATABASE IF EXISTS lake;
+COPY (SELECT content FROM read_blob('${BENCHMARK_DIR}/${lake}_pristine.db')) TO '${BENCHMARK_DIR}/${work}.db' (FORMAT blob);
+ATTACH 'ducklake:${BENCHMARK_DIR}/${work}.db' AS lake;
+CALL ducklake_delete_orphaned_files('lake', cleanup_all => true);
+SELECT CASE WHEN (SELECT count(*) FROM glob('${BENCHMARK_DIR}/${lake}_files/**')) <> (SELECT column0 FROM read_csv('${BENCHMARK_DIR}/${lake}_filecount.csv', header = false)) THEN error('the fixture files were not restored') END;
+
+include benchmark/micro/fixtures/rblob_reload.benchmark.in

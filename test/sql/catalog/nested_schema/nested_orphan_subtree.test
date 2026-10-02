@@ -1,0 +1,99 @@
+# name: test/sql/catalog/nested_schema/nested_orphan_subtree.test
+# description: Orphaned or cyclic schema rows do not make the entire lake unloadable
+# group: [nested_schema]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{BASE_TEST_NAME}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DUCKLAKE_VERSION '1.1-dev1', DATA_PATH '{DATA_PATH}/nested_orphan_files', METADATA_CATALOG 'dl_meta', DATA_INLINING_ROW_LIMIT 10)
+
+statement ok
+CREATE SCHEMA dl.a;
+
+statement ok
+CREATE SCHEMA dl.b;
+
+statement ok
+CREATE TABLE dl.b.t AS SELECT 1 AS i;
+
+statement ok
+CREATE TABLE dl.main.keep AS SELECT 42 AS k;
+
+# a writer that does not know about parent_schema_id can leave a child behind
+statement ok
+UPDATE dl_meta.ducklake_schema SET parent_schema_id = 4242 WHERE schema_name = 'b' AND end_snapshot IS NULL;
+
+statement ok
+DETACH dl;
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DUCKLAKE_VERSION '1.1-dev1', DATA_PATH '{DATA_PATH}/nested_orphan_files', METADATA_CATALOG 'dl_meta', DATA_INLINING_ROW_LIMIT 10)
+
+query I
+SELECT k FROM dl.main.keep
+----
+42
+
+query I
+SELECT count(*) FROM duckdb_schemas() WHERE database_name = 'dl' AND schema_name = 'b'
+----
+0
+
+statement error
+SELECT * FROM dl.a.b.t
+----
+does not exist
+
+# the subtree comes back once its parent is visible again
+statement ok
+UPDATE dl_meta.ducklake_schema SET parent_schema_id = (SELECT schema_id FROM dl_meta.ducklake_schema WHERE schema_name = 'a' AND end_snapshot IS NULL) WHERE schema_name = 'b' AND end_snapshot IS NULL;
+
+statement ok
+DETACH dl;
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DUCKLAKE_VERSION '1.1-dev1', DATA_PATH '{DATA_PATH}/nested_orphan_files', METADATA_CATALOG 'dl_meta', DATA_INLINING_ROW_LIMIT 10)
+
+query I
+SELECT i FROM dl.a.b.t
+----
+1
+
+# a cyclic parent chain is reported instead of silently dropping schemas
+statement ok
+UPDATE dl_meta.ducklake_schema SET parent_schema_id = (SELECT schema_id FROM dl_meta.ducklake_schema WHERE schema_name = 'b' AND end_snapshot IS NULL) WHERE schema_name = 'a' AND end_snapshot IS NULL;
+
+statement ok
+DETACH dl;
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DUCKLAKE_VERSION '1.1-dev1', DATA_PATH '{DATA_PATH}/nested_orphan_files', METADATA_CATALOG 'dl_meta', DATA_INLINING_ROW_LIMIT 10)
+
+statement error
+SELECT k FROM dl.main.keep
+----
+cyclic parent schema chain
+
+# a schema that is its own parent is rejected as well
+statement ok
+UPDATE dl_meta.ducklake_schema SET parent_schema_id = NULL WHERE schema_name = 'a' AND end_snapshot IS NULL;
+
+statement ok
+UPDATE dl_meta.ducklake_schema SET parent_schema_id = schema_id WHERE schema_name = 'b' AND end_snapshot IS NULL;
+
+statement ok
+DETACH dl;
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DUCKLAKE_VERSION '1.1-dev1', DATA_PATH '{DATA_PATH}/nested_orphan_files', METADATA_CATALOG 'dl_meta', DATA_INLINING_ROW_LIMIT 10)
+
+statement error
+SELECT k FROM dl.main.keep
+----
+cyclic parent schema chain
