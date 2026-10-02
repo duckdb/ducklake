@@ -109,7 +109,7 @@ static bool IsDataOnlyCommit(const TransactionChangeInformation &c) {
 	       c.created_scalar_macros.empty() && c.created_table_macros.empty() && c.altered_tables.empty() &&
 	       c.altered_tables_with_schema_version_changes.empty() && c.altered_views.empty() &&
 	       c.dropped_tables.empty() && c.dropped_views.empty() && c.dropped_scalar_macros.empty() &&
-	       c.dropped_table_macros.empty();
+	       c.dropped_table_macros.empty() && c.set_options.empty();
 }
 
 //! Whether the commit has to take the client-side path

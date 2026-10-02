@@ -22,11 +22,13 @@ static void ValidateTableScope(ClientContext &context, Catalog &catalog, const s
 
 static void ValidateTablesInSchema(ClientContext &context, DuckLakeCatalog &duck_catalog,
                                    DuckLakeSchemaEntry &schema_entry, SchemaIndex override_scope_id) {
+	auto &transaction = DuckLakeTransaction::Get(context, duck_catalog);
 	schema_entry.Scan(context, CatalogType::TABLE_ENTRY, [&](CatalogEntry &entry) {
 		auto &ducklake_table = entry.Cast<DuckLakeTableEntry>();
 		string override_val;
-		if (duck_catalog.TryGetScopedConfigOption("data_inlining_row_limit", override_val, override_scope_id,
-		                                          ducklake_table.GetTableId(), &ducklake_table.GetTableOptions()) &&
+		if (duck_catalog.TryGetScopedConfigOption(transaction, "data_inlining_row_limit", override_val,
+		                                          override_scope_id, ducklake_table.GetTableId(),
+		                                          &ducklake_table.GetTableOptions()) &&
 		    std::stoull(override_val) == 0) {
 			return;
 		}
@@ -77,6 +79,9 @@ struct DuckLakeSetOptionData : public TableFunctionData {
 static unique_ptr<FunctionData> DuckLakeSetOptionBind(ClientContext &context, TableFunctionBindInput &input,
                                                       vector<LogicalType> &return_types, vector<Identifier> &names) {
 	auto &catalog = DuckLakeBaseMetadataFunction::GetCatalog(context, input);
+	if (catalog.Cast<DuckLakeCatalog>().CatalogSnapshot()) {
+		throw InvalidInputException("Cannot set an option on a DuckLake attached at a snapshot");
+	}
 	DuckLakeConfigOption config_option;
 	auto &option = config_option.option.key;
 	auto &value = config_option.option.value;

@@ -1,0 +1,107 @@
+# name: test/sql/settings/config_option_conflicts.test
+# description: Concurrent sets of one option conflict, as do skip_stats_columns and SET PARTITIONED BY on one column
+# group: [settings]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/config_option_conflicts.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok con1
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/config_option_conflicts', METADATA_CATALOG 'ducklake_meta', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok con1
+CREATE TABLE ducklake.t1(i INTEGER, j INTEGER)
+
+statement ok con1
+CREATE TABLE ducklake.t2(i INTEGER, j INTEGER)
+
+statement ok con1
+CREATE TABLE ducklake.t4(i INTEGER, j INTEGER)
+
+statement ok con1
+CREATE TABLE ducklake.t5(i INTEGER, j INTEGER)
+
+# the second of two concurrent sets of an option
+statement ok con1
+BEGIN
+
+statement ok con1
+CALL ducklake.set_option('parquet_compression', 'gzip', table_name => 't1')
+
+statement ok con2
+CALL ducklake.set_option('parquet_compression', 'zstd', table_name => 't1')
+
+statement error con1
+COMMIT
+----
+another transaction has set it
+
+# the option commits after the table is partitioned on the column it skips
+statement ok con1
+BEGIN
+
+statement ok con1
+CALL ducklake.set_option('skip_stats_columns', 'i', table_name => 't1')
+
+statement ok con2
+ALTER TABLE ducklake.t1 SET PARTITIONED BY (i)
+
+statement error con1
+COMMIT
+----
+Transaction conflict
+
+# the partitioning commits after the option
+statement ok con2
+BEGIN
+
+statement ok con2
+ALTER TABLE ducklake.t2 SET PARTITIONED BY (i)
+
+statement ok con1
+CALL ducklake.set_option('skip_stats_columns', 'i', table_name => 't2')
+
+statement error con2
+COMMIT
+----
+Transaction conflict
+
+# partitioning on a column the option does not skip commits
+statement ok con1
+BEGIN
+
+statement ok con1
+CALL ducklake.set_option('skip_stats_columns', 'j', table_name => 't4')
+
+statement ok con2
+ALTER TABLE ducklake.t4 SET PARTITIONED BY (i)
+
+statement ok con1
+COMMIT
+
+# as does writing to the table while the option changes
+statement ok con1
+BEGIN
+
+statement ok con1
+INSERT INTO ducklake.t5 VALUES (1, 1)
+
+statement ok con2
+CALL ducklake.set_option('skip_stats_columns', 'i', table_name => 't5')
+
+statement ok con1
+COMMIT
+
+# only the first commit of each conflicting pair took effect
+query II con1
+SELECT t.table_name, m.value FROM ducklake_meta.ducklake_metadata m
+JOIN ducklake_meta.ducklake_table t ON t.table_id = m.scope_id AND t.end_snapshot IS NULL
+WHERE m.key = 'skip_stats_columns' AND m.end_snapshot IS NULL ORDER BY t.table_name
+----
+t2	1
+t4	2
+t5	1

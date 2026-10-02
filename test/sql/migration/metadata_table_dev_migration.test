@@ -1,0 +1,77 @@
+# name: test/sql/migration/metadata_table_dev_migration.test
+# description: A v1.1-dev1 catalog from before config options were versioned migrates on attach, or asks for it
+# group: [migration]
+
+require ducklake
+
+require parquet
+
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/metadata_table_dev.db' AS dl (DATA_PATH '{TEST_DIR}/metadata_table_dev_files', DUCKLAKE_VERSION '1.0')
+
+statement ok
+CREATE TABLE dl.t(i INTEGER)
+
+statement ok
+CALL dl.set_option('parquet_compression', 'gzip')
+
+statement ok
+DETACH dl
+
+statement ok
+ATTACH '{TEST_DIR}/metadata_table_dev.db' AS meta
+
+statement ok
+UPDATE meta.ducklake_metadata SET value = '1.1-dev1' WHERE key = 'version'
+
+statement ok
+DETACH meta
+
+# a read only attach cannot migrate it
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/metadata_table_dev.db' AS dl (DATA_PATH '{TEST_DIR}/metadata_table_dev_files', READ_ONLY)
+
+statement error
+SELECT * FROM dl.t
+----
+AUTOMATIC_MIGRATION
+
+statement ok
+DETACH dl
+
+# a plain attach migrates it in place
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/metadata_table_dev.db' AS dl (DATA_PATH '{TEST_DIR}/metadata_table_dev_files')
+
+query I
+SELECT value FROM dl.options() WHERE option_name = 'parquet_compression'
+----
+gzip
+
+query II
+SELECT scope, end_snapshot FROM __ducklake_metadata_dl.ducklake_metadata WHERE key = 'parquet_compression'
+----
+global	NULL
+
+# the migrated options are versioned from here on
+statement ok
+CALL dl.set_option('parquet_compression', 'zstd')
+
+query II
+SELECT value, end_snapshot IS NULL FROM __ducklake_metadata_dl.ducklake_metadata WHERE key = 'parquet_compression' ORDER BY begin_snapshot
+----
+gzip	false
+zstd	true
+
+query I
+SELECT value FROM dl.options() WHERE option_name = 'parquet_compression'
+----
+zstd
+
+statement ok
+CALL ducklake_expire_snapshots('dl', older_than => now())
+
+query I
+SELECT value FROM __ducklake_metadata_dl.ducklake_metadata WHERE key = 'parquet_compression'
+----
+zstd

@@ -1,0 +1,52 @@
+# name: test/sql/settings/config_option_cross_instance.test
+# description: A config option committed through one attach of a catalog is read through another without re-attaching
+# group: [settings]
+
+require ducklake
+
+require parquet
+
+require sqlite_scanner
+
+statement ok
+ATTACH 'ducklake:sqlite:{TEST_DIR}/config_option_cross_instance.sqlite' AS dl1 (DATA_PATH '{TEST_DIR}/config_option_cross_instance', METADATA_CATALOG 'meta1')
+
+statement ok
+ATTACH 'ducklake:sqlite:{TEST_DIR}/config_option_cross_instance.sqlite' AS dl2 (METADATA_CATALOG 'meta2', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE dl1.t(id INTEGER)
+
+query I
+SELECT count(*) FROM dl2.options() WHERE option_name = 'parquet_compression'
+----
+0
+
+statement ok
+CALL dl1.set_option('parquet_compression', 'gzip', table_name => 't')
+
+query I
+SELECT value FROM dl2.options() WHERE option_name = 'parquet_compression'
+----
+gzip
+
+# and dl2 writes with it
+statement ok
+INSERT INTO dl2.t VALUES (1)
+
+query I
+SELECT DISTINCT compression FROM parquet_metadata('{TEST_DIR}/config_option_cross_instance/**/*.parquet')
+----
+GZIP
+
+# a reset only closes the option's row, and dl2 must still notice the options changed
+statement ok
+ALTER TABLE dl1.t RESET (parquet_compression)
+
+statement ok
+INSERT INTO dl2.t VALUES (2)
+
+query I
+SELECT count(DISTINCT file_name) FROM parquet_metadata('{TEST_DIR}/config_option_cross_instance/**/*.parquet') WHERE compression = 'GZIP'
+----
+1

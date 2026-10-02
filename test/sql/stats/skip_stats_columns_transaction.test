@@ -102,7 +102,7 @@ WHERE column_id=2 AND data_file_id=(SELECT max(data_file_id) FROM ducklake_meta.
 ----
 NULL	NULL
 
-# a failed commit never reaches Rollback, so it has to put the option back itself
+# a failed commit leaves the option unpublished, like a rollback
 statement ok con1
 CREATE TABLE ducklake.fc(id INTEGER, s VARCHAR)
 
@@ -134,3 +134,28 @@ ORDER BY f.column_id
 ----
 1	1	1
 2	aaa	aaa
+
+# a transaction's own option applies to its own writes, before it commits
+statement ok con1
+CREATE TABLE ducklake.own(id INTEGER, s VARCHAR)
+
+statement ok con1
+BEGIN
+
+statement ok con1
+CALL ducklake.set_option('skip_stats_columns', ['s'], table_name => 'own')
+
+statement ok con1
+INSERT INTO ducklake.own VALUES (1, 'aaa')
+
+statement ok con1
+COMMIT
+
+query III con1
+SELECT f.column_id, f.min_value, f.max_value
+FROM ducklake_meta.ducklake_file_column_stats f JOIN ducklake_meta.ducklake_data_file d USING (data_file_id)
+WHERE d.table_id=(SELECT table_id FROM ducklake_meta.ducklake_table WHERE table_name='own' AND end_snapshot IS NULL)
+ORDER BY f.column_id
+----
+1	1	1
+2	NULL	NULL

@@ -19,6 +19,7 @@ public:
 	}
 
 	string GetSchemaTableStatement() override;
+	string GetMetadataTableStatement() override;
 	string GetDataFileTableStatement() override;
 	string GetDeleteFileTableStatement() override;
 	string GetFileColumnStatsTableStatement() override;

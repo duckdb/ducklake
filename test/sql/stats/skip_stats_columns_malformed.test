@@ -31,7 +31,7 @@ statement ok
 CREATE TABLE ducklake.unset(a INTEGER, b VARCHAR)
 
 statement ok
-INSERT INTO ducklake_meta.ducklake_metadata VALUES ('skip_stats_columns', '1,2', NULL, NULL)
+INSERT INTO ducklake_meta.ducklake_metadata VALUES ('skip_stats_columns', '1,2', 'global', 0, 0, NULL)
 
 statement ok
 DETACH ducklake

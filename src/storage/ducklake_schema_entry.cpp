@@ -154,8 +154,9 @@ DuckLakeSchemaEntry::CreateTableExtended(CatalogTransaction transaction, BoundCr
 		    table_entry->GetFieldData(), table_entry->GetPartitionData().get(),
 		    base_info.GetTableName().GetIdentifierName()));
 	}
-	DuckLakeUtil::ValidateNoInlinedSystemColumns(catalog.Cast<DuckLakeCatalog>(), transaction.GetContext(), schema_id,
-	                                             table_entry->GetColumns(), &table_entry->GetTableOptions());
+	DuckLakeUtil::ValidateNoInlinedSystemColumns(catalog.Cast<DuckLakeCatalog>(), duck_transaction,
+	                                             transaction.GetContext(), schema_id, table_entry->GetColumns(),
+	                                             &table_entry->GetTableOptions());
 	auto result = table_entry.get();
 	duck_transaction.CreateEntry(std::move(table_entry));
 	return result;

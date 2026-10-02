@@ -471,7 +471,7 @@ void DuckLakeDelete::FlushDeleteWithSnapshots(DuckLakeTransaction &transaction, 
 	auto &catalog = table.catalog.Cast<DuckLakeCatalog>();
 	auto &schema = table.ParentSchema().Cast<DuckLakeSchemaEntry>();
 	bool use_deletion_vectors =
-	    catalog.WriteDeletionVectors(schema.GetSchemaId(), table.GetTableId(), &table.GetTableOptions());
+	    catalog.WriteDeletionVectors(transaction, schema.GetSchemaId(), table.GetTableId(), &table.GetTableOptions());
 	auto written_file = DuckLakeDeleteFileWriter::Write(context, input, use_deletion_vectors);
 
 	written_file.data_file_id = delete_file.data_file_id;
@@ -533,8 +533,8 @@ void DuckLakeDelete::FlushDelete(DuckLakeTransaction &transaction, ClientContext
 	if (data_file_info.file_id.IsValid()) {
 		auto &catalog = table.catalog.Cast<DuckLakeCatalog>();
 		auto &schema = table.ParentSchema().Cast<DuckLakeSchemaEntry>();
-		auto threshold =
-		    catalog.DataInliningRowLimit(context, schema.GetSchemaId(), table.GetTableId(), &table.GetTableOptions());
+		auto threshold = catalog.DataInliningRowLimit(transaction, context, schema.GetSchemaId(), table.GetTableId(),
+		                                              &table.GetTableOptions());
 		if (threshold > 0 && sorted_deletes.size() <= threshold) {
 			// use inlined file deletions
 			if (catalog.CheckInlinedDeletionTableCache(table.GetTableId(), transaction.GetSnapshot()) !=
@@ -581,7 +581,7 @@ void DuckLakeDelete::FlushDelete(DuckLakeTransaction &transaction, ClientContext
 	auto &catalog = table.catalog.Cast<DuckLakeCatalog>();
 	auto &schema = table.ParentSchema().Cast<DuckLakeSchemaEntry>();
 	bool use_deletion_vectors =
-	    catalog.WriteDeletionVectors(schema.GetSchemaId(), table.GetTableId(), &table.GetTableOptions());
+	    catalog.WriteDeletionVectors(transaction, schema.GetSchemaId(), table.GetTableId(), &table.GetTableOptions());
 
 	WriteDeleteFileInput input {context,
 	                            transaction,

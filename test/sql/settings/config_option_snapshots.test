@@ -1,0 +1,135 @@
+# name: test/sql/settings/config_option_snapshots.test
+# description: Setting a config option commits a snapshot, which records the option it set
+# group: [settings]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/config_option_snapshots.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/config_option_snapshots', METADATA_CATALOG 'ducklake_meta', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE ducklake.t(id INTEGER)
+
+statement ok
+SET VARIABLE before_option = (SELECT max(snapshot_id) FROM ducklake.snapshots())
+
+statement ok
+CALL ducklake.set_option('parquet_compression', 'gzip')
+
+query II
+SELECT snapshot_id - getvariable('before_option'), changes FROM ducklake.snapshots() WHERE snapshot_id > getvariable('before_option')
+----
+1	{options_set=[global.0.parquet_compression]}
+
+# an option set together with other changes lands in the same snapshot
+statement ok
+BEGIN
+
+statement ok
+CALL ducklake.set_option('parquet_compression', 'zstd', table_name => 't')
+
+statement ok
+INSERT INTO ducklake.t VALUES (1)
+
+statement ok
+COMMIT
+
+query I
+SELECT changes['options_set'] FROM ducklake.snapshots() ORDER BY snapshot_id DESC LIMIT 1
+----
+[table.1.parquet_compression]
+
+# changing options needs no commit message, so a catalog that requires one can turn that off
+statement ok
+CALL ducklake.set_option('require_commit_message', true)
+
+statement ok
+CALL ducklake.set_option('parquet_compression', 'snappy')
+
+statement ok
+CALL ducklake.set_option('require_commit_message', false)
+
+query I
+SELECT value FROM ducklake.options() WHERE option_name = 'require_commit_message'
+----
+false
+
+# a refused commit keeps none of its options
+statement ok
+CALL ducklake.set_option('require_commit_message', true)
+
+statement ok
+BEGIN
+
+statement ok
+CALL ducklake.set_option('parquet_compression', 'snappy', table_name => 't')
+
+statement ok
+INSERT INTO ducklake.t VALUES (2)
+
+statement error
+COMMIT
+----
+Commit Information for the snapshot is required
+
+query I
+SELECT value FROM ducklake.options() WHERE option_name = 'parquet_compression' AND scope_entry = 'main.t'
+----
+zstd
+
+statement ok
+CALL ducklake.set_option('require_commit_message', false)
+
+# other changes are held to the requirement as it stood when their transaction started
+statement ok
+CALL ducklake.set_option('require_commit_message', true)
+
+statement ok
+BEGIN
+
+statement ok
+CALL ducklake.set_option('require_commit_message', false)
+
+statement ok
+INSERT INTO ducklake.t VALUES (3)
+
+statement error
+COMMIT
+----
+Commit Information for the snapshot is required
+
+statement ok
+CALL ducklake.set_option('require_commit_message', false)
+
+# and turning it on applies from the next commit
+statement ok
+BEGIN
+
+statement ok
+CALL ducklake.set_option('require_commit_message', true)
+
+statement ok
+INSERT INTO ducklake.t VALUES (4)
+
+statement ok
+COMMIT
+
+statement ok
+CALL ducklake.set_option('require_commit_message', false)
+
+statement ok
+DETACH ducklake
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/config_option_snapshots', METADATA_CATALOG 'ducklake_meta', SNAPSHOT_VERSION 1, READ_ONLY)
+
+statement error
+CALL ducklake.set_option('parquet_compression', 'gzip')
+----
+attached at a snapshot

@@ -95,7 +95,7 @@ SELECT data_file_id, table_id FROM __ducklake_metadata_ducklake.ducklake_data_fi
 query IIII
 SELECT delete_file_id, table_id, begin_snapshot, end_snapshot FROM __ducklake_metadata_ducklake.ducklake_delete_file
 ----
-5	3	11	13
+5	3	11	14
 
 query I
 SELECT COUNT(*)

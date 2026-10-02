@@ -97,7 +97,7 @@ statement ok
 CALL ducklake.set_option('skip_stats_columns', ['a', 'b'], table_name => 'commas')
 
 query I
-SELECT value FROM ducklake_meta.ducklake_metadata WHERE key='skip_stats_columns'
+SELECT value FROM ducklake_meta.ducklake_metadata WHERE key='skip_stats_columns' AND end_snapshot IS NULL
   AND scope_id=(SELECT table_id FROM ducklake_meta.ducklake_table WHERE table_name='commas' AND end_snapshot IS NULL)
 ----
 2,3

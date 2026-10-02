@@ -217,14 +217,19 @@ void DuckLakeMetadataManager::InitializeDuckLake(bool has_explicit_schema, DuckL
 	string data_path = StorePath(base_data_path);
 	string encryption_str = encryption == DuckLakeEncryption::ENCRYPTED ? "true" : "false";
 	string initial_schema_uuid = transaction.GenerateUUID();
-	initialize_query += StringUtil::Format(R"(
+	// from v1.1 the global scope is named rather than NULL, and rows are valid from a snapshot
+	auto v1_1 = ducklake_catalog.SupportsV1_1Metadata();
+	string metadata_columns = v1_1 ? "key, value, scope, scope_id, begin_snapshot" : "key, value, scope, scope_id";
+	string global_scope = v1_1 ? "'global', 0, 0" : "NULL, NULL";
+	initialize_query +=
+	    StringUtil::Format(R"(
 INSERT INTO {METADATA_CATALOG}.ducklake_snapshot VALUES (0, NOW(), 0, 1, 0);
 INSERT INTO {METADATA_CATALOG}.ducklake_snapshot_changes VALUES (0, 'created_schema:"main"',  NULL, NULL, NULL);
-INSERT INTO {METADATA_CATALOG}.ducklake_metadata (key, value) VALUES ('version', '%s'), ('created_by', 'DuckDB %s'), ('data_path', %s), ('encrypted', '%s');
+INSERT INTO {METADATA_CATALOG}.ducklake_metadata (%s) VALUES ('version', '%s', %s), ('created_by', 'DuckDB %s', %s), ('data_path', %s, %s), ('encrypted', '%s', %s);
 INSERT INTO {METADATA_CATALOG}.ducklake_schema (schema_id, schema_uuid, begin_snapshot, end_snapshot, schema_name, path, path_is_relative) VALUES (0, '%s'::UUID, 0, NULL, 'main', 'main/', true);
 	)",
-	                                       GetVersionString(), DuckDB::SourceID(), SQLString(data_path), encryption_str,
-	                                       initial_schema_uuid);
+	                       metadata_columns, GetVersionString(), global_scope, DuckDB::SourceID(), global_scope,
+	                       SQLString(data_path), global_scope, encryption_str, global_scope, initial_schema_uuid);
 	auto result = Execute(initialize_query);
 	if (result->HasError()) {
 		result->GetErrorObject().Throw("Failed to initialize DuckLake: ");
@@ -234,6 +239,11 @@ INSERT INTO {METADATA_CATALOG}.ducklake_schema (schema_id, schema_uuid, begin_sn
 string DuckLakeMetadataManager::GetSchemaTableStatement() {
 	return "CREATE TABLE {METADATA_CATALOG}.ducklake_schema(schema_id BIGINT PRIMARY KEY, schema_uuid UUID, "
 	       "begin_snapshot BIGINT, end_snapshot BIGINT, schema_name VARCHAR, path VARCHAR, path_is_relative BOOLEAN);";
+}
+
+string DuckLakeMetadataManager::GetMetadataTableStatement() {
+	return "CREATE TABLE {METADATA_CATALOG}.ducklake_metadata(key VARCHAR NOT NULL, value VARCHAR NOT NULL, scope "
+	       "VARCHAR, scope_id BIGINT);";
 }
 
 string DuckLakeMetadataManager::GetDataFileTableStatement() {
@@ -263,8 +273,7 @@ string DuckLakeMetadataManager::GetTableColumnStatsTableStatement() {
 
 string DuckLakeMetadataManager::GetCreateTableStatements() {
 	vector<string> statements;
-	statements.push_back("CREATE TABLE {METADATA_CATALOG}.ducklake_metadata(key VARCHAR NOT NULL, value VARCHAR NOT "
-	                     "NULL, scope VARCHAR, scope_id BIGINT);");
+	statements.push_back(GetMetadataTableStatement());
 	statements.push_back(
 	    "CREATE TABLE {METADATA_CATALOG}.ducklake_snapshot(snapshot_id BIGINT PRIMARY KEY, snapshot_time TIMESTAMPTZ, "
 	    "schema_version BIGINT, next_catalog_id BIGINT, next_file_id BIGINT);");
@@ -472,6 +481,7 @@ void DuckLakeMetadataManager::MigrateV10(bool allow_failures) {
 	// rename first so a conflict aborts while the catalog is still at v1.0
 	MigrateInlinedColumnNames(allow_failures);
 	MigrateInlinedDataTypes();
+	MigrateMetadataTable();
 	ExecuteMigration(V1_1_DEV1_MIGRATION_QUERY, allow_failures, "1.0", "1.1-dev1");
 }
 
@@ -494,6 +504,63 @@ void DuckLakeMetadataManager::MigrateV10Dev() {
 		                                          "attach, reattach with AUTOMATIC_MIGRATION TRUE: %s",
 		                                          error.RawMessage()));
 	}
+	try {
+		MigrateMetadataTable();
+	} catch (std::exception &ex) {
+		ErrorData error(ex);
+		DUCKDB_LOG_WARNING(db, StringUtil::Format("DuckLake could not migrate ducklake_metadata on attach, reattach "
+		                                          "with AUTOMATIC_MIGRATION TRUE: %s",
+		                                          error.RawMessage()));
+	}
+}
+
+bool DuckLakeMetadataManager::HasVersionedOptions() {
+	auto result = Query("SELECT * FROM {METADATA_CATALOG}.ducklake_metadata LIMIT 0");
+	if (result->HasError()) {
+		result->GetErrorObject().Throw("Failed to read the layout of ducklake_metadata: ");
+	}
+	// begin_snapshot and end_snapshot follow key, value, scope and scope_id
+	return result->ColumnCount() > 5;
+}
+
+void DuckLakeMetadataManager::MigrateMetadataTable() {
+	if (HasVersionedOptions()) {
+		// already migrated - a dev catalog runs this on every attach
+		return;
+	}
+	// which of two values was meant is for the user to decide
+	auto conflicts = Query(R"(
+SELECT key, COALESCE(scope, 'global'), COALESCE(scope_id, 0)
+FROM {METADATA_CATALOG}.ducklake_metadata
+GROUP BY ALL
+HAVING COUNT(DISTINCT value) > 1)");
+	if (conflicts->HasError()) {
+		conflicts->GetErrorObject().Throw("Failed to check ducklake_metadata for conflicting options: ");
+	}
+	for (auto &row : *conflicts) {
+		throw InvalidInputException("Cannot migrate ducklake_metadata: option \"%s\" has more than one value in %s "
+		                            "scope %d - delete all but one of its rows and attach again",
+		                            row.GetValue<string>(0), row.GetValue<string>(1), row.GetValue<int64_t>(2));
+	}
+	// rebuilt rather than altered: DuckDB cannot index a table this transaction has already updated, and
+	// duplicate rows would fail the constraint
+	auto migrate_query = ScopedMetadataTableStatement("ducklake_metadata_v1_1") + R"(
+INSERT INTO {METADATA_CATALOG}.ducklake_metadata_v1_1
+SELECT DISTINCT key, value, COALESCE(scope, 'global'), COALESCE(scope_id, 0), 0, NULL
+FROM {METADATA_CATALOG}.ducklake_metadata;
+DROP TABLE {METADATA_CATALOG}.ducklake_metadata;
+ALTER TABLE {METADATA_CATALOG}.ducklake_metadata_v1_1 RENAME TO ducklake_metadata;
+)";
+	auto result = Execute(migrate_query);
+	if (result->HasError()) {
+		result->GetErrorObject().Throw("Failed to migrate ducklake_metadata to v1.1-dev1: ");
+	}
+}
+
+string DuckLakeMetadataManager::ScopedMetadataTableStatement(const string &table_name) {
+	return "CREATE TABLE {METADATA_CATALOG}." + table_name +
+	       "(key VARCHAR NOT NULL, value VARCHAR NOT NULL, scope VARCHAR NOT NULL, scope_id BIGINT NOT NULL, "
+	       "begin_snapshot BIGINT NOT NULL, end_snapshot BIGINT, UNIQUE(key, scope, scope_id, begin_snapshot));";
 }
 
 void DuckLakeMetadataManager::MigrateInlinedColumnNames(bool probe_renamed) {
@@ -584,10 +651,14 @@ LEFT JOIN {METADATA_CATALOG}.ducklake_table tbl ON idt.table_id = tbl.table_id A
 	}
 }
 
-DuckLakeMetadata DuckLakeMetadataManager::LoadDuckLake() {
-	auto result = Query(R"(
-SELECT key, value, scope, scope_id FROM {METADATA_CATALOG}.ducklake_metadata
-)");
+DuckLakeMetadata DuckLakeMetadataManager::LoadDuckLake(optional_idx options_version) {
+	// SELECT * reads every layout without knowing the version, which is itself one of these rows
+	string query = "SELECT * FROM {METADATA_CATALOG}.ducklake_metadata";
+	if (options_version.IsValid()) {
+		query += StringUtil::Format(" WHERE begin_snapshot <= %d AND (end_snapshot IS NULL OR end_snapshot > %d)",
+		                            options_version.GetIndex(), options_version.GetIndex());
+	}
+	auto result = Query(query);
 	if (result->HasError()) {
 		// preserve the original error in case the fallback also fails
 		auto original_error = result->GetErrorObject().RawMessage();
@@ -602,12 +673,15 @@ SELECT key, value FROM {METADATA_CATALOG}.ducklake_metadata
 	}
 	DuckLakeMetadata metadata;
 	for (auto &row : *result) {
+		if (result->ColumnCount() > 5 && !row.IsNull(5) && !options_version.IsValid()) {
+			// replaced by a later row
+			continue;
+		}
 		DuckLakeTag tag;
 		tag.key = row.GetValue<string>(0);
 		tag.value = row.GetValue<string>(1);
-		if (result->ColumnCount() == 2 || row.IsNull(2)) {
-			// scope is NULL: global tag
-			// global tag
+		// global tag - before v1.1 its scope is NULL
+		if (result->ColumnCount() == 2 || row.IsNull(2) || row.GetValue<string>(2) == "global") {
 			metadata.tags.push_back(std::move(tag));
 			continue;
 		}
@@ -3181,7 +3255,8 @@ string DuckLakeMetadataManager::WriteNewInlinedTables(DuckLakeSnapshot commit_sn
 	string inlined_tables;
 	string inlined_table_queries;
 	for (auto &table : new_tables) {
-		if (catalog.DataInliningRowLimit(context, table.schema_id, table.id) == 0 || IsTransactionLocal(table.id)) {
+		if (catalog.DataInliningRowLimit(transaction, context, table.schema_id, table.id) == 0 ||
+		    IsTransactionLocal(table.id)) {
 			// not inlining for this table or inlining is for a table on this transaction, hence handled there - skip it
 			continue;
 		}
@@ -4903,7 +4978,8 @@ DuckLakeMetadataManager::GetSnapshotAndStatsAndChanges(SnapshotAndStats &current
 }
 
 unique_ptr<DuckLakeSnapshot> DuckLakeMetadataManager::ParseSnapshot(QueryResult &result,
-                                                                    optional_ptr<string> catalog_version) {
+                                                                    optional_ptr<string> catalog_version,
+                                                                    optional_ptr<optional_idx> options_version) {
 	unique_ptr<DuckLakeSnapshot> snapshot;
 	for (auto &row : result) {
 		if (snapshot) {
@@ -4917,6 +4993,9 @@ unique_ptr<DuckLakeSnapshot> DuckLakeMetadataManager::ParseSnapshot(QueryResult 
 		if (catalog_version && result.ColumnCount() > 4 && !row.IsNull(4)) {
 			*catalog_version = row.GetValue<string>(4);
 		}
+		if (options_version && result.ColumnCount() > 5 && !row.IsNull(5)) {
+			*options_version = row.GetValue<idx_t>(5);
+		}
 	}
 	return snapshot;
 }
@@ -4929,6 +5008,14 @@ WHERE snapshot_id = (SELECT MAX(snapshot_id) FROM {METADATA_CATALOG}.ducklake_sn
 }
 
 string DuckLakeMetadataManager::GetLatestSnapshotQuery() const {
+	if (transaction.GetCatalog().SupportsV1_1Metadata()) {
+		// the options version is read in the same statement as the snapshot - a reset only closes a row
+		return R"(SELECT snapshot_id, schema_version, next_catalog_id, next_file_id,
+(SELECT MAX(value) FROM {METADATA_CATALOG}.ducklake_metadata WHERE key = 'version'),
+(SELECT GREATEST(MAX(begin_snapshot), MAX(end_snapshot)) FROM {METADATA_CATALOG}.ducklake_metadata)
+FROM {METADATA_CATALOG}.ducklake_snapshot
+WHERE snapshot_id = (SELECT MAX(snapshot_id) FROM {METADATA_CATALOG}.ducklake_snapshot);)";
+	}
 	return LatestSnapshotQuery();
 }
 
@@ -4938,7 +5025,7 @@ unique_ptr<DuckLakeSnapshot> DuckLakeMetadataManager::GetSnapshot() {
 		result->GetErrorObject().Throw("Failed to query most recent snapshot for DuckLake: ");
 	}
 	string catalog_version;
-	auto snapshot = ParseSnapshot(*result, &catalog_version);
+	auto snapshot = ParseSnapshot(*result, &catalog_version, &options_version);
 	if (!snapshot) {
 		throw InvalidInputException("No snapshot found in DuckLake");
 	}
@@ -5215,7 +5302,8 @@ WHERE table_id IN (%s) AND end_snapshot IS NULL
 	return batch_query;
 }
 
-string DuckLakeMetadataManager::WriteNewTableOptions(const vector<DuckLakeConfigOption> &new_options) {
+string DuckLakeMetadataManager::WriteNewTableOptions(const vector<DuckLakeConfigOption> &new_options,
+                                                     bool supports_v1_1_metadata) {
 	if (new_options.empty()) {
 		return {};
 	}
@@ -5224,8 +5312,9 @@ string DuckLakeMetadataManager::WriteNewTableOptions(const vector<DuckLakeConfig
 		if (!values.empty()) {
 			values += ", ";
 		}
-		values += StringUtil::Format("(%s, %s, 'table', %d)", SQLString(option.option.key),
-		                             SQLString(option.option.value), option.table_id.index);
+		values +=
+		    StringUtil::Format("(%s, %s, 'table', %d%s)", SQLString(option.option.key), SQLString(option.option.value),
+		                       option.table_id.index, supports_v1_1_metadata ? ", {SNAPSHOT_ID}, NULL" : "");
 	}
 	return "INSERT INTO {METADATA_CATALOG}.ducklake_metadata VALUES " + values + ";";
 }
@@ -5749,6 +5838,18 @@ WHERE snapshot_id IN (%s);
 	if (result->HasError()) {
 		result->GetErrorObject().Throw("Failed to delete snapshots in DuckLake: ");
 	}
+	if (transaction.GetCatalog().SupportsV1_1Metadata()) {
+		result = Execute(R"(
+DELETE FROM {METADATA_CATALOG}.ducklake_metadata
+WHERE end_snapshot IS NOT NULL AND NOT EXISTS (
+    SELECT snapshot_id
+    FROM {METADATA_CATALOG}.ducklake_snapshot
+    WHERE snapshot_id >= begin_snapshot AND snapshot_id < end_snapshot
+);)");
+		if (result->HasError()) {
+			result->GetErrorObject().Throw("Failed to delete expired config options in DuckLake: ");
+		}
+	}
 	// get a list of tables that are no longer required after these deletions
 	result = Query(R"(
 SELECT table_id
@@ -6188,70 +6289,64 @@ WHERE {SNAPSHOT_ID} >= begin_snapshot AND ({SNAPSHOT_ID} < end_snapshot OR end_s
 	return table_sizes;
 }
 
-static void ConfigOptionScope(const DuckLakeConfigOption &option, string &scope, string &scope_id,
-                              string &scope_filter) {
-	if (option.table_id.IsValid()) {
-		scope = "'table'";
-		scope_id = to_string(option.table_id.index);
-		scope_filter = StringUtil::Format("scope = 'table' AND scope_id = %d", option.table_id.index);
-	} else if (option.schema_id.IsValid()) {
-		scope = "'schema'";
-		scope_id = to_string(option.schema_id.index);
-		scope_filter = StringUtil::Format("scope = 'schema' AND scope_id = %d", option.schema_id.index);
-	} else {
-		scope = "NULL";
-		scope_id = "NULL";
-		scope_filter = "scope IS NULL";
+void DuckLakeMetadataManager::SetConfigOptions(const vector<DuckLakeConfigOption> &options) {
+	if (options.empty()) {
+		return;
+	}
+	auto batch = SetConfigOptionsSql(options);
+	auto result = Execute(batch);
+	if (result->HasError()) {
+		result->GetErrorObject().Throw("Failed to write config options in DuckLake: ");
 	}
 }
 
-bool DuckLakeMetadataManager::ResetConfigOption(const DuckLakeConfigOption &option) {
-	string scope;
-	string scope_id;
-	string scope_filter;
-	ConfigOptionScope(option, scope, scope_id, scope_filter);
-	auto result = Query(StringUtil::Format(R"(
-DELETE FROM {METADATA_CATALOG}.ducklake_metadata WHERE key = %s AND %s
-)",
-	                                       SQLString(option.option.key), scope_filter));
-	if (result->HasError()) {
-		result->GetErrorObject().Throw("Failed to reset config option in DuckLake: ");
+string DuckLakeMetadataManager::SetConfigOptionsSql(const vector<DuckLakeConfigOption> &options) {
+	string batch;
+	for (auto &option : options) {
+		string scope;
+		string scope_id;
+		string scope_filter;
+		if (option.table_id.IsValid()) {
+			scope = "'table'";
+			scope_id = to_string(option.table_id.index);
+			scope_filter = StringUtil::Format("scope = 'table' AND scope_id = %d", option.table_id.index);
+		} else if (option.schema_id.IsValid()) {
+			scope = "'schema'";
+			scope_id = to_string(option.schema_id.index);
+			scope_filter = StringUtil::Format("scope = 'schema' AND scope_id = %d", option.schema_id.index);
+		} else if (transaction.GetCatalog().SupportsV1_1Metadata()) {
+			scope = "'global'";
+			scope_id = "0";
+			scope_filter = "scope = 'global'";
+		} else {
+			scope = "NULL";
+			scope_id = "NULL";
+			scope_filter = "scope IS NULL";
+		}
+		if (transaction.GetCatalog().SupportsV1_1Metadata()) {
+			// the replaced row stays readable at the snapshots before this one
+			batch += StringUtil::Format("UPDATE {METADATA_CATALOG}.ducklake_metadata SET end_snapshot = {SNAPSHOT_ID} "
+			                            "WHERE key = %s AND %s AND end_snapshot IS NULL;",
+			                            SQLString(option.option.key), scope_filter);
+			if (!option.reset) {
+				batch +=
+				    StringUtil::Format("INSERT INTO {METADATA_CATALOG}.ducklake_metadata VALUES (%s, %s, %s, "
+				                       "%s, {SNAPSHOT_ID}, NULL);",
+				                       SQLString(option.option.key), SQLString(option.option.value), scope, scope_id);
+			}
+			continue;
+		}
+		// deleting first means one statement covers both a new option and a replaced one, with no read-back to
+		// decide between them. Re-running it is harmless, which is what a retried commit attempt does.
+		batch += StringUtil::Format("DELETE FROM {METADATA_CATALOG}.ducklake_metadata WHERE key = %s AND %s;",
+		                            SQLString(option.option.key), scope_filter);
+		if (option.reset) {
+			continue;
+		}
+		batch += StringUtil::Format("INSERT INTO {METADATA_CATALOG}.ducklake_metadata VALUES (%s, %s, %s, %s);",
+		                            SQLString(option.option.key), SQLString(option.option.value), scope, scope_id);
 	}
-	return result->Fetch()->GetValue(0, 0).GetValue<idx_t>() > 0;
-}
-
-void DuckLakeMetadataManager::SetConfigOption(const DuckLakeConfigOption &option) {
-	// check if the option already exists
-	auto &option_key = option.option.key;
-	auto &option_value = option.option.value;
-	string scope;
-	string scope_id;
-	string scope_filter;
-	ConfigOptionScope(option, scope, scope_id, scope_filter);
-	auto result = Query(StringUtil::Format(R"(
-SELECT COUNT(*)
-FROM {METADATA_CATALOG}.ducklake_metadata
-WHERE key = %s AND %s
-)",
-	                                       SQLString(option_key), scope_filter));
-
-	auto count = result->Fetch()->GetValue(0, 0).GetValue<idx_t>();
-	if (count == 0) {
-		// option does not yet exist - insert the value
-		result = Execute(StringUtil::Format(R"(
-INSERT INTO {METADATA_CATALOG}.ducklake_metadata VALUES (%s, %s, %s, %s)
-)",
-		                                    SQLString(option_key), SQLString(option_value), scope, scope_id));
-	} else {
-		// option already exists - update it
-		result = Execute(StringUtil::Format(R"(
-UPDATE {METADATA_CATALOG}.ducklake_metadata SET value=%s WHERE key=%s AND %s
-)",
-		                                    SQLString(option_value), SQLString(option_key), scope_filter));
-	}
-	if (result->HasError()) {
-		result->GetErrorObject().Throw("Failed to insert config option in DuckLake: ");
-	}
+	return batch;
 }
 
 bool DuckLakeMetadataManager::IsEncrypted() const {

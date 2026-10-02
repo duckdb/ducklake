@@ -744,13 +744,6 @@ const map<SchemaIndex, unique_ptr<DuckLakeCatalogSet>> &DuckLakeTransaction::Get
 void DuckLakeTransaction::Start() {
 }
 
-void DuckLakeTransaction::UndoConfigOptions() {
-	for (auto it = config_option_undo.rbegin(); it != config_option_undo.rend(); ++it) {
-		ducklake_catalog.UndoConfigOption(*it);
-	}
-	config_option_undo.clear();
-}
-
 void DuckLakeTransaction::Commit() {
 	if (!expired_snapshots.empty()) {
 		try {
@@ -761,30 +754,25 @@ void DuckLakeTransaction::Commit() {
 			throw;
 		}
 	}
-	try {
-		if (ChangesMade()) {
-			FlushChanges();
-		} else if (connection) {
-			connection->Commit();
-			if (!state->flushed_inlined_tables.empty()) {
-				DropEmptySupersededInlinedTablesClientSide();
-			}
+	// written before the commit below so they land in the same metadata transaction
+	WriteConfigOptions();
+	if (ChangesMade()) {
+		FlushChanges();
+	} else if (connection) {
+		connection->Commit();
+		if (!state->flushed_inlined_tables.empty()) {
+			DropEmptySupersededInlinedTablesClientSide();
 		}
-	} catch (...) {
-		// a failed commit never reaches Rollback - the transaction manager only reports the error
-		UndoConfigOptions();
-		throw;
 	}
+	ApplyConfigOptions();
 	FlushNameMapCacheInvalidations();
 	connection.reset();
 	state->local_changes.Clear();
-	config_option_undo.clear();
 	SetRequiresNewInlinedTable(false);
 	ClearSchemaCachePins();
 }
 
 void DuckLakeTransaction::Rollback() {
-	UndoConfigOptions();
 	if (connection) {
 		// rollback any changes made to the metadata catalog
 		connection->Rollback();
@@ -792,6 +780,7 @@ void DuckLakeTransaction::Rollback() {
 	}
 	state->CleanupFiles();
 	state->local_changes.Clear();
+	staged_config_options.clear();
 	pending_name_map_cache_invalidations.clear();
 	SetRequiresNewInlinedTable(false);
 	ClearSchemaCachePins();
@@ -849,6 +838,11 @@ map<SchemaIndex, unique_ptr<DuckLakeCatalogSet>> &DuckLakeTransaction::GetNewMac
 }
 
 bool DuckLakeTransaction::ChangesMade() const {
+	// from v1.1 an option change commits a snapshot of its own
+	return ChangesMadeBesidesOptions() || (!staged_config_options.empty() && ducklake_catalog.SupportsV1_1Metadata());
+}
+
+bool DuckLakeTransaction::ChangesMadeBesidesOptions() const {
 	return state->SchemaChangesMade() || state->local_changes.HasChanges() || !state->dropped_files.empty() ||
 	       !new_name_maps.name_maps.empty();
 }
@@ -954,6 +948,23 @@ void GetTransactionViewChanges(reference<CatalogEntry> view_entry, TransactionCh
 	}
 }
 
+static DuckLakeSetOption ToSetOption(const DuckLakeConfigOption &option) {
+	DuckLakeSetOption result;
+	if (option.table_id.IsValid()) {
+		result.scope = "table";
+		result.scope_id = option.table_id.index;
+	} else if (option.schema_id.IsValid()) {
+		result.scope = "schema";
+		result.scope_id = option.schema_id.index;
+	} else {
+		result.scope = "global";
+		result.scope_id = 0;
+	}
+	result.key = option.option.key;
+	result.value = option.option.value;
+	return result;
+}
+
 TransactionChangeInformation DuckLakeTransaction::GetTransactionChanges() const {
 	auto &dropped_tables = state->dropped_tables;
 	auto &dropped_views = state->dropped_views;
@@ -1020,6 +1031,11 @@ TransactionChangeInformation DuckLakeTransaction::GetTransactionChanges() const 
 	}
 	changes.tables_deleted_from = tables_deleted_from;
 	changes.tables_delete_attempted = state->tables_delete_attempted;
+	if (ducklake_catalog.SupportsV1_1Metadata()) {
+		for (auto &option : staged_config_options) {
+			changes.set_options.insert(ToSetOption(option));
+		}
+	}
 	for (auto &entry : local_changes.Changes()) {
 		auto table_id = entry.GetTableIndex();
 		if (IsTransactionLocal(table_id.index)) {
@@ -1490,8 +1506,17 @@ void DuckLakeTransaction::RunCommitLoop(DuckLakeSnapshot transaction_snapshot,
 		inlined_inserts.clear();
 		metadata_manager->ClearInlinedTableCaches();
 		connection->BeginTransaction();
+		// the rolled back attempt took the option rows with it
+		WriteConfigOptions();
 		snapshot.reset();
 	};
+	if (ducklake_catalog.SupportsV1_1Metadata()) {
+		context.config_options_sql = metadata_manager->SetConfigOptionsSql(staged_config_options);
+		if (!ChangesMadeBesidesOptions()) {
+			// option changes commit a snapshot of their own from v1.1, but never needed a commit message
+			state->require_commit_message = false;
+		}
+	}
 	context.query_metadata = [&](string q) {
 		return metadata_manager->Query(q);
 	};
@@ -1595,16 +1620,67 @@ void DuckLakeTransaction::RunCommitLoop(DuckLakeSnapshot transaction_snapshot,
 }
 
 void DuckLakeTransaction::SetConfigOption(const DuckLakeConfigOption &option) {
-	// write the config option to the metadata
-	metadata_manager->SetConfigOption(option);
-	// the catalog copy is not transactional - remember the previous value so a rollback can restore it
-	config_option_undo.push_back(ducklake_catalog.SetConfigOption(option));
+	// staged rather than written now, so other transactions keep reading the committed value
+	for (auto &staged : staged_config_options) {
+		if (staged.option.key == option.option.key && staged.schema_id == option.schema_id &&
+		    staged.table_id == option.table_id) {
+			staged = option;
+			return;
+		}
+	}
+	staged_config_options.push_back(option);
 }
 
 void DuckLakeTransaction::ResetConfigOption(const DuckLakeConfigOption &option) {
-	if (metadata_manager->ResetConfigOption(option)) {
-		config_option_undo.push_back(ducklake_catalog.ResetConfigOption(option));
+	// drop what this transaction staged, then remove the committed value only if there is one
+	staged_config_options.erase(std::remove_if(staged_config_options.begin(), staged_config_options.end(),
+	                                           [&](const DuckLakeConfigOption &staged) {
+		                                           return staged.option.key == option.option.key &&
+		                                                  staged.schema_id == option.schema_id &&
+		                                                  staged.table_id == option.table_id;
+	                                           }),
+	                            staged_config_options.end());
+	string value;
+	if (!ducklake_catalog.TryGetConfigOptionInScope(*this, option.option.key, value, option.schema_id,
+	                                                option.table_id)) {
+		return;
 	}
+	auto reset = option;
+	reset.reset = true;
+	staged_config_options.push_back(std::move(reset));
+}
+
+optional_ptr<const DuckLakeConfigOption>
+DuckLakeTransaction::GetStagedConfigOption(const string &option, SchemaIndex schema_id, TableIndex table_id) const {
+	for (auto &staged : staged_config_options) {
+		if (staged.option.key == option && staged.schema_id == schema_id && staged.table_id == table_id) {
+			return &staged;
+		}
+	}
+	return nullptr;
+}
+
+vector<DuckLakeConfigOption> DuckLakeTransaction::GetStagedConfigOptions() const {
+	return staged_config_options;
+}
+
+void DuckLakeTransaction::WriteConfigOptions() {
+	// from v1.1 they are written with the snapshot they commit in
+	if (staged_config_options.empty() || ducklake_catalog.SupportsV1_1Metadata()) {
+		return;
+	}
+	if (ChangesMade()) {
+		// a backend that commits each statement would keep the options written below
+		state->EnsureCommitInfoProvided(GetCommitInfo());
+	}
+	metadata_manager->SetConfigOptions(staged_config_options);
+}
+
+void DuckLakeTransaction::ApplyConfigOptions() {
+	for (auto &option : staged_config_options) {
+		ducklake_catalog.SetConfigOption(option);
+	}
+	staged_config_options.clear();
 }
 
 DuckLakeSnapshotCommit &DuckLakeTransaction::GetCommitInfo() {
@@ -1693,12 +1769,38 @@ DuckLakeSnapshot DuckLakeTransaction::GetSnapshot() {
 		// the catalog was opened at a specific snapshot - load that snapshot
 		return GetSnapshot(catalog_snapshot);
 	}
+	if (ducklake_catalog.HasUnmigratedOptions()) {
+		throw InvalidInputException("DuckLake cannot read the config options of this catalog, which predate a newer "
+		                            "development version - reattach with AUTOMATIC_MIGRATION TRUE to migrate them");
+	}
 	lock_guard<mutex> guard(snapshot_lock);
 	if (!snapshot) {
 		// no snapshot loaded yet for this transaction - load it
 		snapshot = metadata_manager->GetSnapshot();
+		options_version = metadata_manager->GetOptionsVersion();
 	}
 	return *snapshot;
+}
+
+optional_idx DuckLakeTransaction::GetOptionsVersion() {
+	GetSnapshot();
+	lock_guard<mutex> guard(snapshot_lock);
+	return options_version;
+}
+
+optional_ptr<const DuckLakeConfigOptions> DuckLakeTransaction::GetCommittedOptions() {
+	if (!ducklake_catalog.SupportsV1_1Metadata()) {
+		return nullptr;
+	}
+	lock_guard<mutex> guard(committed_options_lock);
+	if (!committed_options) {
+		auto version = GetOptionsVersion();
+		if (!version.IsValid()) {
+			return nullptr;
+		}
+		committed_options = ducklake_catalog.GetCommittedOptions(*this, version.GetIndex());
+	}
+	return committed_options.get();
 }
 
 DuckLakeSnapshot DuckLakeTransaction::GetSnapshot(optional_ptr<BoundAtClause> at_clause, SnapshotBound bound) {

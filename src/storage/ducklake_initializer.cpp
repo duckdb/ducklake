@@ -277,17 +277,21 @@ void DuckLakeInitializer::LoadExistingDuckLake(DuckLakeTransaction &transaction)
 				throw NotImplementedException("Encrypted should be either true or false");
 			}
 		}
-		options.config_options[tag.key] = tag.value;
+		options.config.global[tag.key] = tag.value;
 	}
 	for (auto &entry : metadata.schema_settings) {
-		options.schema_options[entry.schema_id][entry.tag.key] = entry.tag.value;
+		options.config.schema[entry.schema_id][entry.tag.key] = entry.tag.value;
 	}
 	for (auto &entry : metadata.table_settings) {
-		options.table_options[entry.table_id][entry.tag.key] = entry.tag.value;
+		options.config.table[entry.table_id][entry.tag.key] = entry.tag.value;
 	}
 	// set correct version metadata manager
 	if (resolved_version != DuckLakeVersion::UNSET) {
 		SetVersionedMetadataManager(transaction, resolved_version);
+	}
+	if (catalog.SupportsV1_1Metadata() && !transaction.GetMetadataManager().HasVersionedOptions()) {
+		// a dev catalog attached without migrating it, e.g. read only
+		catalog.SetUnmigratedOptions();
 	}
 }
 

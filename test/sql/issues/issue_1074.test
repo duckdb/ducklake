@@ -37,16 +37,16 @@ SELECT count(*) FROM dl.t AT (VERSION => 1);
 100
 
 query I
-SELECT count(*) FROM dl.t AT (VERSION => 2);
+SELECT count(*) FROM dl.t AT (VERSION => 3);
 ----
 99
 
 query I
-SELECT count(*) FROM dl.t AT (VERSION => 3);
+SELECT count(*) FROM dl.t AT (VERSION => 5);
 ----
 98
 
 query I
-SELECT count(*) FROM dl.t AT (VERSION => 4);
+SELECT count(*) FROM dl.t AT (VERSION => 6);
 ----
 97

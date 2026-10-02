@@ -137,7 +137,8 @@ unique_ptr<GlobalSinkState> DuckLakeCompaction::GetGlobalSinkState(ClientContext
 
 SinkResultType DuckLakeCompaction::Sink(ExecutionContext &context, DataChunk &chunk, OperatorSinkInput &input) const {
 	auto &global_state = input.global_state.Cast<DuckLakeInsertGlobalState>();
-	DuckLakeInsert::AddWrittenFiles(global_state, chunk, encryption_key, partition_id);
+	auto &transaction = DuckLakeTransaction::Get(context.client, global_state.table.catalog);
+	DuckLakeInsert::AddWrittenFiles(transaction, global_state, chunk, encryption_key, partition_id);
 	return SinkResultType::NEED_MORE_INPUT;
 }
 
@@ -287,7 +288,7 @@ void DuckLakeCompactor::GenerateCompactions(DuckLakeTableEntry &table,
 	auto &metadata_manager = transaction.GetMetadataManager();
 	auto snapshot = transaction.GetSnapshot();
 
-	idx_t target_file_size = catalog.GetTargetFileSize(context, table);
+	idx_t target_file_size = catalog.GetTargetFileSize(transaction, context, table);
 
 	DuckLakeFileSizeOptions filter_options;
 	filter_options.min_file_size = options.min_file_size;
@@ -817,15 +818,16 @@ static void GenerateCompaction(ClientContext &context, DuckLakeTransaction &tran
 	}
 }
 
-double GetDeleteThreshold(optional_ptr<DuckLakeSchemaEntry> schema_entry, const DuckLakeTableEntry &table_entry,
-                          const DuckLakeCatalog &ducklake_catalog, const TableFunctionBindInput &input) {
+double GetDeleteThreshold(DuckLakeTransaction &transaction, optional_ptr<DuckLakeSchemaEntry> schema_entry,
+                          const DuckLakeTableEntry &table_entry, const DuckLakeCatalog &ducklake_catalog,
+                          const TableFunctionBindInput &input) {
 	SchemaIndex schema_index;
 	if (schema_entry) {
 		schema_index = schema_entry->GetSchemaId();
 	}
 	// By default, our delete threshold is 0.95 unless it was set in the global rewrite_delete_threshold
-	double delete_threshold = ducklake_catalog.GetConfigOption<double>("rewrite_delete_threshold", schema_index,
-	                                                                   table_entry.GetTableId(), 0.95);
+	double delete_threshold = ducklake_catalog.GetConfigOption<double>(transaction, "rewrite_delete_threshold",
+	                                                                   schema_index, table_entry.GetTableId(), 0.95);
 	auto delete_threshold_entry = input.named_parameters.find("delete_threshold");
 	if (delete_threshold_entry != input.named_parameters.end()) {
 		// If the user manually sets the parameter, this has priority
@@ -899,9 +901,11 @@ unique_ptr<LogicalOperator> BindCompaction(ClientContext &context, TableFunction
 				if (entry.type == CatalogType::TABLE_ENTRY) {
 					auto &dl_cur_schema = cur_schema.get().Cast<DuckLakeSchemaEntry>();
 					auto &cur_table = entry.Cast<DuckLakeTableEntry>();
-					if (ducklake_catalog.GetConfigOption<string>("auto_compact", dl_cur_schema.GetSchemaId(),
-					                                             cur_table.GetTableId(), "true") == "true") {
-						auto delete_threshold = GetDeleteThreshold(&dl_cur_schema, cur_table, ducklake_catalog, input);
+					if (ducklake_catalog.GetConfigOption<string>(transaction, "auto_compact",
+					                                             dl_cur_schema.GetSchemaId(), cur_table.GetTableId(),
+					                                             "true") == "true") {
+						auto delete_threshold =
+						    GetDeleteThreshold(transaction, &dl_cur_schema, cur_table, ducklake_catalog, input);
 						GenerateCompaction(context, transaction, ducklake_catalog, input, cur_table, type,
 						                   delete_threshold, max_files, min_file_size, max_file_size, newer_than,
 						                   compactions);
@@ -929,16 +933,16 @@ unique_ptr<LogicalOperator> BindCompaction(ClientContext &context, TableFunction
 	bool auto_compact;
 	if (!schema.empty()) {
 		dl_schema = &ducklake_table.ParentSchema().Cast<DuckLakeSchemaEntry>();
-		auto_compact = ducklake_catalog.GetConfigOption<string>("auto_compact", dl_schema->GetSchemaId(),
+		auto_compact = ducklake_catalog.GetConfigOption<string>(transaction, "auto_compact", dl_schema->GetSchemaId(),
 		                                                        ducklake_table.GetTableId(), "true") == "true";
 
 	} else {
-		auto_compact =
-		    ducklake_catalog.GetConfigOption<string>("auto_compact", {}, ducklake_table.GetTableId(), "true") == "true";
+		auto_compact = ducklake_catalog.GetConfigOption<string>(transaction, "auto_compact", {},
+		                                                        ducklake_table.GetTableId(), "true") == "true";
 	}
 
 	if (auto_compact) {
-		auto delete_threshold = GetDeleteThreshold(dl_schema, ducklake_table, ducklake_catalog, input);
+		auto delete_threshold = GetDeleteThreshold(transaction, dl_schema, ducklake_table, ducklake_catalog, input);
 		GenerateCompaction(context, transaction, ducklake_catalog, input, ducklake_table, type, delete_threshold,
 		                   max_files, min_file_size, max_file_size, newer_than, compactions);
 	}

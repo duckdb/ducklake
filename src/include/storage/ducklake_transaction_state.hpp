@@ -114,6 +114,8 @@ struct DuckLakeCommitContext {
 	};
 	//! Author / message / extra info for the snapshot row.
 	DuckLakeSnapshotCommit commit_info;
+	//! Writes the config options this commit sets - the same for every attempt.
+	string config_options_sql;
 	//! When true, Commit() skips the post-commit DropEmptySupersededInlinedTables cleanup.
 	bool skip_drop_empty_inlined = false;
 	//! Whether the metadata schema has the >= 1.1-dev1 additions.
@@ -207,6 +209,8 @@ public:
 
 	bool SchemaChangesMade() const;
 	bool InlinedTableFlushed(const string &table_name) const;
+	//! The fields this transaction partitions the table by, if it altered it
+	set<idx_t> GetLocalPartitionFields(TableIndex table_id) const;
 
 public:
 	DatabaseInstance &db;
