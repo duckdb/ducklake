@@ -1,0 +1,33 @@
+# name: benchmark/micro/write/delete_lineitem.benchmark
+# description: Row-level DELETE of 50% of TPC-H lineitem SF0.5 across all data files, excluding the commit
+# group: [write]
+
+name Delete Lineitem
+group micro
+subgroup write
+
+require ducklake
+
+require parquet
+
+require tpch
+
+argument lake dml
+
+argument work delete_work
+
+include benchmark/micro/fixtures/tpch05.benchmark.in
+
+run
+BEGIN;
+DELETE FROM lake.lineitem WHERE l_orderkey % 2 = 0;
+
+cleanup
+ROLLBACK;
+
+# A committed delete leaves nothing to delete in the next run
+result_query II
+SELECT Count = (SELECT count(*) FROM src.lineitem WHERE l_orderkey % 2 = 0),
+(SELECT count(*) FROM lake.lineitem) = (SELECT count(*) FROM src.lineitem WHERE l_orderkey % 2 = 1) FROM __answer
+----
+true	true

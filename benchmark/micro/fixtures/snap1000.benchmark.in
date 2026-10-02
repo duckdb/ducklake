@@ -1,0 +1,34 @@
+# name: benchmark/micro/fixtures/snap1000.benchmark.in
+# description: Lake with 1006 snapshots: 1000 commits into t and m, then a delete and rewrite of t and a merge of m
+# group: [fixtures]
+
+argument lake snap1000
+
+cache_file snap1000_ready.marker
+
+# Every generated schema.sql line ends with COMMIT; BEGIN;, so each of the 1000 lines becomes one snapshot
+load
+EXPORT DATABASE '${BENCHMARK_DIR}/snap1000_gen';
+COPY (SELECT 'INSERT INTO lake.t SELECT i, ''v'' || i, i * 0.5 FROM range(' || k * 100 || ', ' || (k + 1) * 100
+|| ') r(i); INSERT INTO lake.m SELECT i, ''v'' || i, i * 0.5 FROM range(' || k * 1000 || ', ' || (k + 1) * 1000
+|| ') r(i); COMMIT; BEGIN;' FROM range(1000) t(k))
+TO '${BENCHMARK_DIR}/snap1000_gen/schema.sql' (HEADER false, QUOTE '');
+ATTACH 'ducklake:${BENCHMARK_DIR}/snap1000_pristine.db' AS lake (DATA_PATH '${BENCHMARK_DIR}/snap1000_files');
+CALL lake.set_option('data_inlining_row_limit', 0);
+CREATE TABLE lake.t (id BIGINT, v VARCHAR, x DOUBLE);
+CREATE TABLE lake.m (id BIGINT, v VARCHAR, x DOUBLE);
+IMPORT DATABASE '${BENCHMARK_DIR}/snap1000_gen';
+DELETE FROM lake.t WHERE id % 100 < 96;
+CALL ducklake_rewrite_data_files('lake', 't', delete_threshold => 0.5);
+CALL ducklake_merge_adjacent_files('lake', 'm');
+DETACH lake;
+COPY (SELECT count(*) FROM glob('${BENCHMARK_DIR}/snap1000_files/**'))
+TO '${BENCHMARK_DIR}/snap1000_filecount.csv' (FORMAT CSV, HEADER false);
+COPY (SELECT 1) TO '${BENCHMARK_DIR}/snap1000_ready.marker' (FORMAT CSV);
+DETACH DATABASE IF EXISTS lake;
+COPY (SELECT content FROM read_blob('${BENCHMARK_DIR}/${lake}_pristine.db')) TO '${BENCHMARK_DIR}/${work}.db' (FORMAT blob);
+ATTACH 'ducklake:${BENCHMARK_DIR}/${work}.db' AS lake;
+CALL ducklake_delete_orphaned_files('lake', cleanup_all => true);
+SELECT CASE WHEN (SELECT count(*) FROM glob('${BENCHMARK_DIR}/${lake}_files/**')) <> (SELECT column0 FROM read_csv('${BENCHMARK_DIR}/${lake}_filecount.csv', header = false)) THEN error('the fixture files were not restored') END;
+
+include benchmark/micro/fixtures/rblob_reload.benchmark.in

@@ -8,6 +8,8 @@ require parquet
 
 require notwindows
 
+require notmusl
+
 statement ok
 ATTACH 'ducklake:{TEST_DIR}/concurrent_view_bind.db' AS ducklake (DATA_PATH '{TEST_DIR}/concurrent_view_bind')
 

@@ -2,7 +2,6 @@
 #include "common/ducklake_util.hpp"
 #include "duckdb/catalog/catalog.hpp"
 #include "duckdb/main/connection.hpp"
-#include "duckdb/main/materialized_query_result.hpp"
 #include "storage/ducklake_catalog.hpp"
 #include "storage/ducklake_staged_commit.hpp"
 #include "storage/ducklake_transaction.hpp"
@@ -14,8 +13,8 @@ QuackMetadataManager::QuackMetadataManager(DuckLakeTransaction &transaction) : D
 }
 
 unique_ptr<QueryResult> QuackMetadataManager::Query(string &query) {
-	lock_guard<mutex> guard(query_lock);
 	auto &ducklake_catalog = transaction.GetCatalog();
+	lock_guard<std::recursive_mutex> guard(ducklake_catalog.GetMetadataQueryLock());
 	auto schema_identifier = DuckLakeUtil::SQLIdentifierToString(ducklake_catalog.MetadataSchemaName());
 	query = StringUtil::Replace(query, "{METADATA_CATALOG}", schema_identifier);
 	SubstituteCatalogPlaceholders(query);
@@ -65,8 +64,19 @@ string QuackMetadataManager::MetadataExistsQuery() const {
 	       "WHERE table_name = 'ducklake_metadata' AND table_schema = {METADATA_SCHEMA_NAME_LITERAL}";
 }
 
+bool QuackMetadataManager::InlinedDeletionTableExists(const string &table_name) {
+	auto query = StringUtil::Format("SELECT 1 FROM duckdb_tables() WHERE database_name = current_database() "
+	                                "AND schema_name = {METADATA_SCHEMA_NAME_LITERAL} AND table_name = %s",
+	                                DuckLakeUtil::SQLLiteralToString(table_name));
+	auto result = Query(query);
+	if (result->HasError()) {
+		result->GetErrorObject().Throw("Failed to probe for DuckLake inlined-deletion table: ");
+	}
+	return result->Fetch() != nullptr;
+}
+
 void QuackMetadataManager::ClearCache() {
-	lock_guard<mutex> guard(query_lock);
+	lock_guard<std::recursive_mutex> guard(transaction.GetCatalog().GetMetadataQueryLock());
 	string clear = "CALL quack_clear_cache();";
 	transaction.ExecuteRaw(clear);
 }

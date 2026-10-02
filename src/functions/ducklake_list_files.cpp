@@ -1,3 +1,4 @@
+#include "duckdb/catalog/catalog_entry_retriever.hpp"
 #include "functions/ducklake_table_functions.hpp"
 #include "storage/ducklake_table_entry.hpp"
 #include "storage/ducklake_transaction.hpp"
@@ -80,9 +81,12 @@ static unique_ptr<FunctionData> DuckLakeListFilesBind(ClientContext &context, Ta
 		at_clause = make_uniq<BoundAtClause>("timestamp", time_entry->second);
 	}
 	auto table_name = StringValue::Get(input.inputs[1]);
-	EntryLookupInfo table_lookup(CatalogType::TABLE_ENTRY, Identifier(table_name), at_clause.get(),
-	                             QueryErrorContext());
-	auto table_entry = catalog.GetEntry(context, Identifier(schema), table_lookup, OnEntryNotFound::THROW_EXCEPTION);
+	EntryLookupInfo table_lookup(CatalogType::TABLE_ENTRY,
+	                             DuckLakeUtil::QualifiedEntryName(context, catalog, schema, table_name,
+	                                                              CatalogType::TABLE_ENTRY, at_clause.get()),
+	                             at_clause.get(), QueryErrorContext());
+	CatalogEntryRetriever retriever(context);
+	auto table_entry = catalog.LookupEntry(retriever, table_lookup, OnEntryNotFound::THROW_EXCEPTION).entry;
 	auto &ducklake_table = table_entry->Cast<DuckLakeTableEntry>();
 	auto snapshot = transaction.GetSnapshot(at_clause.get());
 

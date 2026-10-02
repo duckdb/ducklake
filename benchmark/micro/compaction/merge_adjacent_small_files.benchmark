@@ -1,0 +1,27 @@
+# name: benchmark/micro/compaction/merge_adjacent_small_files.benchmark
+# description: Merge 1000 small DuckLake-written files into one with ducklake_merge_adjacent_files, including the commit
+# group: [compaction]
+
+name Merge Adjacent Small Files
+group micro
+subgroup compaction
+
+require ducklake
+
+require parquet
+
+argument work merge_small_work
+
+include benchmark/micro/fixtures/compaction.benchmark.in
+
+include benchmark/micro/fixtures/rblob_cleanup.benchmark.in
+
+run
+SELECT sum(files_processed) AS processed, sum(files_created) AS created
+FROM ducklake_merge_adjacent_files('lake', 'frag');
+
+# A missed reset leaves nothing to merge
+result_query II
+SELECT processed, created FROM __answer
+----
+1000	1

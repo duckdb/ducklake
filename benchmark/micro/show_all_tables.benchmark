@@ -1,0 +1,38 @@
+# name: benchmark/micro/show_all_tables.benchmark
+# description: Run SHOW ALL TABLES on a freshly attached catalog with many tables
+# group: [micro]
+
+argument tables 2000
+
+name Show All Tables
+group micro
+
+require ducklake
+
+cache_file ducklake_show_all_tables_${tables}.db
+
+load
+EXPORT DATABASE '${BENCHMARK_DIR}/ducklake_show_all_tables_${tables}_ddl';
+COPY (SELECT 'CREATE TABLE ducklake.tbl_' || i || ' (id INTEGER, random_data VARCHAR);' FROM range(${tables}) t(i)) TO '${BENCHMARK_DIR}/ducklake_show_all_tables_${tables}_ddl/schema.sql' (HEADER false, QUOTE '');
+ATTACH 'ducklake:${BENCHMARK_DIR}/ducklake_show_all_tables_${tables}.db' AS ducklake (DATA_PATH '${BENCHMARK_DIR}/ducklake_show_all_tables_${tables}_files');
+BEGIN;
+IMPORT DATABASE '${BENCHMARK_DIR}/ducklake_show_all_tables_${tables}_ddl';
+COMMIT;
+DETACH ducklake;
+ATTACH 'ducklake:${BENCHMARK_DIR}/ducklake_show_all_tables_${tables}.db' AS ducklake;
+
+reload
+ATTACH 'ducklake:${BENCHMARK_DIR}/ducklake_show_all_tables_${tables}.db' AS ducklake;
+
+run
+SHOW ALL TABLES;
+
+# Reattaching clears the catalog cache
+cleanup
+DETACH ducklake;
+ATTACH 'ducklake:${BENCHMARK_DIR}/ducklake_show_all_tables_${tables}.db' AS ducklake;
+
+result_query I
+SELECT count(*) FROM __answer WHERE database = 'ducklake'
+----
+${tables}

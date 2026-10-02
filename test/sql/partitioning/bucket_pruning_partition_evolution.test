@@ -1,0 +1,100 @@
+# name: test/sql/partitioning/bucket_pruning_partition_evolution.test
+# description: Bucket pruning must not drop files written with a different partition spec
+# group: [partitioning]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/ducklake_bucket_prune_evolution', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+USE ducklake
+
+# unpartitioned file, bucket spec set inside a transaction
+statement ok
+CREATE TABLE t (id INTEGER, payload VARCHAR);
+
+statement ok
+INSERT INTO t VALUES (42, 'forty_two');
+
+statement ok
+BEGIN
+
+statement ok
+ALTER TABLE t SET PARTITIONED BY (bucket(4, id));
+
+query II
+SELECT id, payload FROM t WHERE id = 42
+----
+42	forty_two
+
+statement ok
+INSERT INTO t VALUES (43, 'forty_three');
+
+query II
+SELECT id, payload FROM t WHERE id IN (42, 43) ORDER BY id
+----
+42	forty_two
+43	forty_three
+
+statement ok
+ROLLBACK
+
+# unpartitioned file, bucket spec committed
+statement ok
+ALTER TABLE t SET PARTITIONED BY (bucket(4, id));
+
+query II
+SELECT id, payload FROM t WHERE id = 42
+----
+42	forty_two
+
+# files from both specs are returned
+statement ok
+INSERT INTO t VALUES (43, 'forty_three');
+
+query II
+SELECT id, payload FROM t WHERE id IN (42, 43) ORDER BY id
+----
+42	forty_two
+43	forty_three
+
+# bucket count changed: old bucket values are not comparable with the new spec
+statement ok
+CREATE TABLE u (id INTEGER);
+
+statement ok
+ALTER TABLE u SET PARTITIONED BY (bucket(8, id));
+
+statement ok
+INSERT INTO u SELECT i::INTEGER FROM range(20) r(i);
+
+statement ok
+ALTER TABLE u SET PARTITIONED BY (bucket(3, id));
+
+statement ok
+INSERT INTO u SELECT i::INTEGER FROM range(20) r(i);
+
+query I
+SELECT id FROM u WHERE id = 0
+----
+0
+0
+
+query I
+SELECT id FROM u WHERE id = 7
+----
+7
+7
+
+query I
+SELECT id FROM u WHERE id = 19
+----
+19
+19

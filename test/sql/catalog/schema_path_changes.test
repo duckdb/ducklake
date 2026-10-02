@@ -1,0 +1,51 @@
+# name: test/sql/catalog/schema_path_changes.test
+# description: Snapshot history decodes schema paths without confusing literal dots or quotes
+# group: [catalog]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{BASE_TEST_NAME}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/schema_path_changes', METADATA_CATALOG 'meta')
+
+statement ok
+CREATE SCHEMA dl."a.b";
+
+statement ok
+CREATE TABLE dl."a.b"."t.q"(i INTEGER);
+
+query I
+SELECT changes_made FROM meta.ducklake_snapshot_changes WHERE snapshot_id IN (1, 2) ORDER BY snapshot_id;
+----
+created_schema:"a.b"
+created_table:"a.b"."t.q"
+
+query I
+SELECT map_extract(changes, 'tables_created')[1][1] FROM ducklake_snapshots('dl') WHERE snapshot_id = 2;
+----
+"a.b"."t.q"
+
+# Read a nested writer's history without requiring nested DDL in this reader.
+statement ok
+UPDATE meta.ducklake_snapshot_changes SET changes_made = 'created_schema:"a"."b",created_schema:"a.b",created_schema:"a"."b""c",created_schema:"select",created_schema:"two words",created_schema:"42",created_schema:"a"."select",created_table:"a"."b"."t",created_view:"a"."b"."v",created_scalar_macro:"a"."b"."m",created_table_macro:"a"."b"."tm"' WHERE snapshot_id = 0;
+
+query I rowsort
+SELECT unnest(map_extract(changes, 'schemas_created')[1]) FROM ducklake_snapshots('dl') WHERE snapshot_id = 0;
+----
+"42"
+"a.b"
+"select"
+"two words"
+a."b""c"
+a."select"
+a.b
+
+query IIII
+SELECT map_extract(changes, 'tables_created')[1][1], map_extract(changes, 'views_created')[1][1], map_extract(changes, 'scalar_macros_created')[1][1], map_extract(changes, 'table_macros_created')[1][1] FROM ducklake_snapshots('dl') WHERE snapshot_id = 0;
+----
+a.b.t	a.b.v	a.b.m	a.b.tm

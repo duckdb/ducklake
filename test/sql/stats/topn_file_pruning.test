@@ -84,6 +84,7 @@ query I
 SELECT COUNT(*) = 1
 FROM duckdb_logs_parsed('DuckLakeMetadata')
 WHERE query LIKE '%LEFT JOIN col_1_stats%'
+  AND query LIKE '%ORDER BY%'
   AND query LIKE '%2026-01-02 00:00:00%'
   AND length(query) - length(replace(query, '2026-01-02 00:00:00', '')) =
       length('2026-01-02 00:00:00');
@@ -101,13 +102,13 @@ SELECT CASE WHEN (SELECT catalog_type FROM settings()) = 'postgres' THEN
      WHERE query LIKE '%postgres_query%'
        AND query LIKE '%ducklake_file_column_stats%'
        AND query LIKE '%WHERE column_id = 1 AND table_id = 1%'
-       AND query LIKE '%col_1_stats AS MATERIALIZED%'
+       AND query LIKE '%col_1_stats AS (%'
        AND query LIKE '%LEFT JOIN col_1_stats%'
        AND query LIKE '%min_value%'
        AND query LIKE '%max_value%'
        AND query LIKE '%value_count%'
-       AND length(query) - length(replace(query, 'col_1_stats AS MATERIALIZED', '')) =
-           length('col_1_stats AS MATERIALIZED'))
+       AND length(query) - length(replace(query, 'col_1_stats AS (', '')) =
+           length('col_1_stats AS ('))
     ELSE true END;
 ----
 true

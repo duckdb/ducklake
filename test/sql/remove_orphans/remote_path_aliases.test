@@ -1,0 +1,73 @@
+# name: test/sql/remove_orphans/remote_path_aliases.test
+# description: ducklake_delete_orphaned_files keeps live files registered with a scheme alias or a query string
+# group: [remove_orphans]
+
+require ducklake
+
+require parquet
+
+require httpfs
+
+require-env S3_TEST_SERVER_AVAILABLE 1
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH s3://mybucket
+
+statement ok
+DROP SECRET IF EXISTS __default_s3;
+
+statement ok
+SET s3_region='us-east-1';
+
+statement ok
+SET s3_access_key_id='admin';
+
+statement ok
+SET s3_secret_access_key='password';
+
+statement ok
+SET s3_endpoint='127.0.0.1:9000';
+
+statement ok
+SET s3_url_style='path';
+
+statement ok
+SET s3_use_ssl=false;
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/remote_path_aliases/')
+
+# clear objects left under the prefix by an interrupted run
+statement ok
+CALL ducklake_delete_orphaned_files('ducklake', cleanup_all => true);
+
+statement ok
+CREATE TABLE ducklake.t(i INTEGER);
+
+statement ok
+COPY (SELECT 1 AS i) TO '{DATA_PATH}/remote_path_aliases/manual/a.parquet';
+
+statement ok
+COPY (SELECT 2 AS i) TO '{DATA_PATH}/remote_path_aliases/manual/b.parquet';
+
+# registered with a scheme alias
+statement ok
+CALL ducklake_add_data_files('ducklake', 't', 'S3A://mybucket/remote_path_aliases/manual/a.parquet');
+
+# registered with a query string
+statement ok
+CALL ducklake_add_data_files('ducklake', 't', 's3://mybucket/remote_path_aliases/manual/b.parquet?s3_region=us-east-1');
+
+statement ok
+COPY (SELECT 3 AS i) TO '{DATA_PATH}/remote_path_aliases/manual/orphan.parquet';
+
+query I
+SELECT count(*) FROM ducklake_delete_orphaned_files('ducklake', cleanup_all => true);
+----
+1
+
+query I
+SELECT count(*) FROM glob('{DATA_PATH}/remote_path_aliases/manual/*.parquet')
+----
+2

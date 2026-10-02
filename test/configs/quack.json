@@ -28,7 +28,8 @@
     {
       "reason": "Test only for SQLite as catalog",
       "paths": [
-        "test/sql/metadata/ducklake_settings_sqlite.test"
+        "test/sql/metadata/ducklake_settings_sqlite.test",
+        "test/sql/data_inlining/data_inlining_variant_sql_rollback.test"
       ]
     },
     {
@@ -86,9 +87,14 @@
       ]
     },
     {
-      "reason": "MinIo",
+      "reason": "Uses the S3 test server",
       "paths": [
-        "test/sql/delete/delete_metadata.test",
+        "test/sql/delete/delete_metadata.test"
+      ]
+    },
+    {
+      "reason": "mode skip in the test itself",
+      "paths": [
         "test/sql/general/prepared_statement.test"
       ]
     },
@@ -104,7 +110,7 @@
         "test/sql/autoloading/autoload_data_path.test",
         "test/sql/data_inlining/postgres_identifier_limit.test",
         "test/sql/issues/issue_sqlite_snapshot_time.test",
-        "test/sql/metadata/ducklake_settings_minio.test"
+        "test/sql/metadata/ducklake_settings_s3.test"
       ]
     },
     {
@@ -120,9 +126,21 @@
       ]
     },
     {
+      "reason": "set_option writes its ducklake_metadata row eagerly instead of staging it for commit like every other change, so a ROLLBACK leaves the row behind on quack, where each metadata statement runs on the server outside the local transaction. Rolled-back DDL is unaffected - that is only written at commit.",
+      "paths": [
+        "test/sql/stats/skip_stats_columns_transaction.test"
+      ]
+    },
+    {
       "reason": "ROLLBACK after ducklake_expire_snapshots does not restore expired snapshot rows on the quack-backed metadata catalog. DuckLake sends metadata SQL through quack_query_by_name, which sends a PrepareRequestMessage directly and does not route through QuackTransaction's remote BEGIN/ROLLBACK path.",
       "paths": [
         "test/sql/issues/issue_852_cache_growth.test"
+      ]
+    },
+    {
+      "reason": "FIXME: Each metadata query runs in its own server-side transaction on quack, so a reader that began before a concurrent TRUNCATE reads the post-truncate record counts from ducklake_table_stats.",
+      "paths": [
+        "test/sql/metadata/duckdb_tables_record_counts_concurrent.test"
       ]
     },
     {

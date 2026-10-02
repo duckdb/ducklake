@@ -1,0 +1,89 @@
+name: Regression
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ github.head_ref || '' }}-${{ github.base_ref || '' }}-${{ github.ref != 'refs/heads/main' || github.sha }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  regression:
+    name: Regression benchmarks
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    env:
+      VCPKG_TARGET_TRIPLET: x64-linux
+      GEN: ninja
+      BUILD_BENCHMARK: 1
+      VCPKG_TOOLCHAIN_PATH: ${{ github.workspace }}/vcpkg/scripts/buildsystems/vcpkg.cmake
+      CCACHE_BASEDIR: ${{ github.workspace }}
+      CCACHE_NOHASHDIR: true
+    steps:
+      - name: Install required ubuntu packages
+        run: |
+          sudo apt-get update -y -qq
+          sudo apt-get install -y -qq build-essential cmake ninja-build ccache python3 mold
+
+      - name: Checkout PR
+        uses: actions/checkout@v4
+        with:
+          path: pr
+          fetch-depth: 0
+          submodules: 'true'
+          persist-credentials: false
+
+      - name: Checkout base
+        uses: actions/checkout@v4
+        with:
+          path: base
+          ref: ${{ github.event.pull_request.base.sha || github.event.before || 'main' }}
+          fetch-depth: 0
+          submodules: 'true'
+          persist-credentials: false
+
+      - name: Checkout DuckDB to version
+        run: |
+          for checkout in pr base; do
+            git -C "$checkout/duckdb" checkout "$(cat "$checkout/.github/duckdb-version")"
+          done
+
+      - name: Setup Ccache
+        uses: hendrikmuhs/ccache-action@main
+        with:
+          key: ${{ github.job }}
+          save: ${{ github.ref == 'refs/heads/main' || github.repository != 'duckdb/ducklake' }}
+
+      - name: Setup vcpkg
+        uses: lukka/run-vcpkg@v11.1
+        with:
+          vcpkgGitCommitId: a42af01b72c28a8e1d7b48107b33e4f286a55ef6
+          vcpkgDirectory: ${{ github.workspace }}/vcpkg
+
+      - name: Build base
+        working-directory: base
+        run: make release
+
+      - name: Build PR
+        working-directory: pr
+        run: make release
+
+      - name: Run regression benchmarks
+        working-directory: pr
+        run: |
+          python3 .github/regression/run.py \
+            --old ../base/build/release/benchmark/benchmark_runner \
+            --new build/release/benchmark/benchmark_runner \
+            --benchmarks .github/regression/micro.csv \
+            --early-stop \
+            --threads 2

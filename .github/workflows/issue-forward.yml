@@ -1,8 +1,5 @@
 name: Forward issue events to community-issue-tracker
 
-# It fires a repository_dispatch at
-# duckdblabs/community-issue-tracker for each event below
-
 on:
   issues:
     types: [opened, reopened, closed]
@@ -14,8 +11,7 @@ permissions:
 
 jobs:
   forward:
-    # issue_comment fires for PRs too (a PR is an issue) — skip those; we only
-    # track issues. 'issues' events are issue-only, so they always pass.
+    # issue_comment fires for PRs too so we skip those.
     if: ${{ github.event_name == 'issues' || github.event.issue.pull_request == null }}
     runs-on: ubuntu-latest
     steps:

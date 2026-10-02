@@ -1,0 +1,32 @@
+# name: test/sql/data_inlining/data_inlining_type_mismatch.test
+# description: An unexpected inlined storage type raises a recoverable input error
+# group: [data_inlining]
+
+require ducklake
+
+require parquet
+
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/inlined_type_mismatch.db' AS ducklake (DATA_PATH '{TEST_DIR}/inlined_type_mismatch', METADATA_CATALOG 'ducklake_meta', DATA_INLINING_ROW_LIMIT 10);
+
+statement ok
+CREATE TABLE ducklake.t(i INTEGER);
+
+statement ok
+INSERT INTO ducklake.t VALUES (42);
+
+statement ok
+ALTER TABLE ducklake_meta.ducklake_inlined_data_1_1 ALTER i TYPE VARCHAR;
+
+statement error
+SELECT i FROM ducklake.t;
+----
+expected INTEGER for column 1 but read VARCHAR
+
+statement ok
+ALTER TABLE ducklake_meta.ducklake_inlined_data_1_1 ALTER i TYPE INTEGER;
+
+query I
+SELECT i FROM ducklake.t;
+----
+42

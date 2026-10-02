@@ -1,0 +1,35 @@
+# name: benchmark/micro/time_travel/table_changes_incremental_poll.benchmark
+# description: Five narrow table_changes windows over a 300-commit history, warm catalog like a polling CDC consumer
+# group: [time_travel]
+
+name Table Changes Incremental Poll
+group micro
+subgroup time_travel
+
+require ducklake
+
+include benchmark/micro/fixtures/history300.benchmark.in
+
+# No cleanup: the run is read-only and the catalog stays attached and warm between polls
+run
+SELECT w, change_type, count(*) AS cnt, sum(x)::DECIMAL(18, 1) AS sum_x FROM (
+SELECT 'w301' AS w, change_type, x FROM lake.table_changes('events', 301, 301)
+UNION ALL SELECT 'w300', change_type, x FROM lake.table_changes('events', 300, 300)
+UNION ALL SELECT 'w299', change_type, x FROM lake.table_changes('events', 299, 299)
+UNION ALL SELECT 'w293_302', change_type, x FROM lake.table_changes('events', 293, 302)
+UNION ALL SELECT 'mid', change_type, x FROM lake.table_changes('events', 150, 160)
+) GROUP BY ALL ORDER BY ALL;
+
+result IIII
+mid	delete	4000	999305000.0
+mid	insert	4000	2303999000.0
+mid	update_postimage	1052	277531793.0
+mid	update_preimage	1052	277530741.0
+w293_302	delete	3000	749692500.0
+w293_302	insert	3000	1941749250.0
+w293_302	update_postimage	1648	459224081.5
+w293_302	update_preimage	1648	459222433.5
+w299	update_postimage	550	153506950.0
+w299	update_preimage	550	153506400.0
+w300	insert	1000	648749750.0
+w301	delete	1000	249899000.0

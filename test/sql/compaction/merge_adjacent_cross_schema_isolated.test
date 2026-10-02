@@ -1,0 +1,45 @@
+# name: test/sql/compaction/merge_adjacent_cross_schema_isolated.test
+# description: a file merged across schema versions is grouped by the schema of its newest row
+# group: [compaction]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/merge_adjacent_cross_schema_isolated', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE ducklake.t(a INTEGER, b INTEGER);
+
+statement ok
+INSERT INTO ducklake.t SELECT i, i FROM range(20000) t(i);
+
+statement ok
+INSERT INTO ducklake.t VALUES (-1, -1);
+
+statement ok
+ALTER TABLE ducklake.t ADD COLUMN c VARCHAR;
+
+statement ok
+INSERT INTO ducklake.t VALUES (-2, -2, 'two');
+
+# only merge the two small files
+statement ok
+CALL ducklake_merge_adjacent_files('ducklake', max_file_size => 10000);
+
+statement ok
+ALTER TABLE ducklake.t DROP COLUMN b;
+
+statement ok
+CALL ducklake_merge_adjacent_files('ducklake');
+
+query II
+SELECT * FROM ducklake.t WHERE a < 0 ORDER BY a
+----
+-2	two
+-1	NULL

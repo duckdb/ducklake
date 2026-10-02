@@ -1,0 +1,116 @@
+# name: test/sql/transaction/schema_path_conflicts.test
+# description: Schema drops conflict with concurrent macros and respect quoted path boundaries
+# group: [transaction]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{BASE_TEST_NAME}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/schema_path_conflicts')
+
+statement ok
+SET immediate_transaction_mode = true;
+
+statement ok
+CREATE SCHEMA dl.a;
+
+statement ok
+CREATE SCHEMA dl."a.b";
+
+statement ok con1
+BEGIN;
+
+statement ok con2
+BEGIN;
+
+statement ok con1
+CREATE MACRO dl."a.b".m() AS 1;
+
+statement ok con2
+DROP SCHEMA dl.a;
+
+statement ok con1
+COMMIT;
+
+statement ok con2
+COMMIT;
+
+statement ok con1
+BEGIN;
+
+statement ok con2
+BEGIN;
+
+statement ok con1
+CREATE MACRO dl."a.b".new_scalar() AS 1;
+
+statement ok con2
+DROP SCHEMA dl."a.b" CASCADE;
+
+statement ok con1
+COMMIT;
+
+statement error con2
+COMMIT;
+----
+Transaction conflict
+
+
+statement ok con1
+BEGIN;
+
+statement ok con2
+BEGIN;
+
+statement ok con1
+CREATE MACRO dl."a.b".new_table() AS TABLE SELECT 1;
+
+statement ok con2
+DROP SCHEMA dl."a.b" CASCADE;
+
+statement ok con1
+COMMIT;
+
+statement error con2
+COMMIT;
+----
+Transaction conflict
+
+
+query I
+SELECT dl."a.b".m();
+----
+1
+
+statement ok
+CREATE SCHEMA dl."q"".s";
+
+statement ok con1
+BEGIN;
+
+statement ok con2
+BEGIN;
+
+statement ok con1
+CREATE MACRO dl."q"".s".m() AS 1;
+
+statement ok con2
+DROP SCHEMA dl."Q"".S";
+
+statement ok con1
+COMMIT;
+
+statement error con2
+COMMIT;
+----
+Transaction conflict
+
+query I
+SELECT dl."q"".s".m();
+----
+1

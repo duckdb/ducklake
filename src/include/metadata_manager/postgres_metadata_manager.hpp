@@ -21,7 +21,6 @@ public:
 	}
 
 	bool TypeIsNativelySupported(const LogicalType &type) override;
-	bool SupportsInlining(const LogicalType &type) override;
 	bool SupportsAppender() const override {
 		return false;
 	}
@@ -30,16 +29,24 @@ public:
 	}
 
 	string GetColumnTypeInternal(const LogicalType &type) override;
-	shared_ptr<DuckLakeInlinedData> TransformInlinedData(QueryResult &result, const vector<LogicalType> &expected_types,
-	                                                     const string &inlined_table_name) override;
+	bool InlinedDeletionTableExists(const string &table_name) override;
 
 	unique_ptr<QueryResult> Execute(DuckLakeSnapshot snapshot, string &query) override;
 
 	unique_ptr<QueryResult> Query(DuckLakeSnapshot snapshot, string &query) override;
 
+	void ClearCache() override;
+
 protected:
 	string GetLatestSnapshotQuery() const override;
 	string GenerateFileColumnStatsCTEBody(const CTERequirement &req, TableIndex table_id) override;
+	string GenerateFileListQuery(DuckLakeTableEntry &table, const FilterPushdownInfo *filter_info,
+	                             const vector<DuckLakeFileListDynamicFilter> &dynamic_filters,
+	                             const vector<idx_t> &runtime_filter_stats_columns, FileListType file_list_type,
+	                             const string &metadata_table_prefix,
+	                             const FileColumnStatsCTEBodyGenerator &generate_cte_body) override;
+	string CastValueToTarget(const Value &value, const LogicalType &type) override;
+	string CastStatsToTarget(const string &stats, const LogicalType &type, StatsCastType cast_type) override;
 
 private:
 	unique_ptr<QueryResult> ExecuteQuery(DuckLakeSnapshot snapshot, string &query, string command);

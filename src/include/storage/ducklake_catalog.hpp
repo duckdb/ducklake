@@ -25,6 +25,7 @@
 
 #include <chrono>
 #include <functional>
+#include <mutex>
 
 namespace duckdb {
 struct DuckLakeGlobalStatsInfo;
@@ -32,8 +33,11 @@ class ColumnList;
 class DuckLakeFieldData;
 struct DuckLakeFileListEntry;
 struct DuckLakeConfigOption;
+struct DuckLakeConfigOptionUndo;
 struct DuckLakeSnapshotCommit;
 struct DeleteFileMap;
+struct BoundCreateTableInfo;
+class ColumnList;
 class LogicalGet;
 
 //! Per-table stats cache entry, keyed by <next_file_id, table_id>.
@@ -61,9 +65,33 @@ struct DuckLakeTableStatsCacheEntry : public ObjectCacheEntry {
 	optional_idx GetEstimatedCacheMemory() const override;
 };
 
+//! Cached record counts for a snapshot
+struct DuckLakeTableRecordCountCacheEntry : public ObjectCacheEntry {
+	static constexpr idx_t ESTIMATED_BYTES_PER_TABLE = 64;
+
+	explicit DuckLakeTableRecordCountCacheEntry(map<TableIndex, idx_t> record_counts_p)
+	    : record_counts(std::move(record_counts_p)) {
+	}
+
+	map<TableIndex, idx_t> record_counts;
+
+	static string ObjectType() {
+		return "ducklake_table_record_counts";
+	}
+	string GetObjectType() override {
+		return ObjectType();
+	}
+	optional_idx GetEstimatedCacheMemory() const override;
+};
+
 //! Cache entry for a DuckLake schema version
 struct DuckLakeSchemaCacheEntry : public ObjectCacheEntry {
 	explicit DuckLakeSchemaCacheEntry(unique_ptr<DuckLakeCatalogSet> catalog_set_p)
+	    : catalog_set(std::move(*catalog_set_p)) {
+	}
+
+	// contents of the shared_ptr target are moved out
+	explicit DuckLakeSchemaCacheEntry(shared_ptr<DuckLakeCatalogSet> catalog_set_p)
 	    : catalog_set(std::move(*catalog_set_p)) {
 	}
 
@@ -127,24 +155,39 @@ public:
 	bool IsInitialized() const {
 		return initialized;
 	}
-	idx_t DataInliningRowLimit(SchemaIndex schema_index, TableIndex table_index) const;
-	idx_t DataInliningRowLimit(ClientContext &context, SchemaIndex schema_index, TableIndex table_index) const;
+	idx_t DataInliningRowLimit(ClientContext &context, SchemaIndex schema_index, TableIndex table_index,
+	                           optional_ptr<const map<string, string>> table_options = nullptr) const;
 	//! Returns the inlining limit (0 if the table is not eligible)
 	idx_t GetInliningLimit(ClientContext &context, DuckLakeTableEntry &table);
-	idx_t GetTargetFileSize(ClientContext &context, SchemaIndex schema_id, TableIndex table_id) const;
+	//! Inlining limit for a table that does not exist yet (CTAS), given its scope and columns
+	idx_t GetInliningLimit(ClientContext &context, SchemaIndex schema_id, TableIndex table_id,
+	                       const ColumnList &columns, optional_ptr<const map<string, string>> table_options = nullptr);
+	//! Whether inserts in this scope sort their data according to SORTED BY (the sort_on_insert option)
+	bool SortOnInsert(SchemaIndex schema_id, TableIndex table_id,
+	                  optional_ptr<const map<string, string>> table_options = nullptr) const;
+	idx_t GetTargetFileSize(ClientContext &context, SchemaIndex schema_id, TableIndex table_id,
+	                        optional_ptr<const map<string, string>> table_options = nullptr) const;
 	idx_t GetTargetFileSize(ClientContext &context, DuckLakeTableEntry &table) const;
 	string &Separator() {
 		return separator;
 	}
-	void SetConfigOption(const DuckLakeConfigOption &option);
-	bool TryGetConfigOption(const string &option, string &result, SchemaIndex schema_id, TableIndex table_id) const;
+	//! Sets a config option, returning what it held before so a rollback can put it back
+	DuckLakeConfigOptionUndo SetConfigOption(const DuckLakeConfigOption &option);
+	DuckLakeConfigOptionUndo ResetConfigOption(const DuckLakeConfigOption &option);
+	void UndoConfigOption(const DuckLakeConfigOptionUndo &undo);
+	//! Pending table options take precedence
+	bool TryGetConfigOption(const string &option, string &result, SchemaIndex schema_id, TableIndex table_id,
+	                        optional_ptr<const map<string, string>> table_options = nullptr) const;
+	//! Look up a config option in the table scope only, without falling back to schema or global
+	bool TryGetTableConfigOption(const string &option, string &result, TableIndex table_id) const;
 	//! Check if a config option has a table-level or schema-level override (excluding global scope)
-	bool TryGetScopedConfigOption(const string &option, string &result, SchemaIndex schema_id,
-	                              TableIndex table_id) const;
+	bool TryGetScopedConfigOption(const string &option, string &result, SchemaIndex schema_id, TableIndex table_id,
+	                              optional_ptr<const map<string, string>> table_options = nullptr) const;
 	template <class T>
-	T GetConfigOption(const string &option, SchemaIndex schema_id, TableIndex table_id, T default_value) const {
+	T GetConfigOption(const string &option, SchemaIndex schema_id, TableIndex table_id, T default_value,
+	                  optional_ptr<const map<string, string>> table_options = nullptr) const {
 		string value_str;
-		if (TryGetConfigOption(option, value_str, schema_id, table_id)) {
+		if (TryGetConfigOption(option, value_str, schema_id, table_id, table_options)) {
 			return Value(value_str).GetValue<T>();
 		}
 		return default_value;
@@ -154,6 +197,8 @@ public:
 	optional_ptr<BoundAtClause> CatalogSnapshot() const;
 
 	optional_ptr<CatalogEntry> CreateSchema(CatalogTransaction transaction, CreateSchemaInfo &info) override;
+
+	ErrorData SupportsCreateTable(BoundCreateTableInfo &info) override;
 
 	void ScanSchemas(ClientContext &context, std::function<void(SchemaCatalogEntry &)> callback) override;
 
@@ -180,6 +225,8 @@ public:
 	shared_ptr<DuckLakeTableStats> GetTableStats(DuckLakeTransaction &transaction, TableIndex table_id);
 	shared_ptr<DuckLakeTableStats> GetTableStats(DuckLakeTransaction &transaction, DuckLakeSnapshot snapshot,
 	                                             TableIndex table_id);
+	//! Returns zero when the table has no stats
+	idx_t GetTableRecordCount(DuckLakeTransaction &transaction, TableIndex table_id);
 
 	optional_ptr<CatalogEntry> GetEntryById(DuckLakeTransaction &transaction, DuckLakeSnapshot snapshot,
 	                                        SchemaIndex schema_id);
@@ -211,14 +258,16 @@ public:
 
 	void EnsureCommitInfoProvided(const DuckLakeSnapshotCommit &commit_info) const;
 
-	bool UseHiveFilePattern(bool default_value, SchemaIndex schema_id, TableIndex table_id) const {
-		auto hive_file_pattern =
-		    GetConfigOption<string>("hive_file_pattern", schema_id, table_id, default_value ? "true" : "false");
+	bool UseHiveFilePattern(bool default_value, SchemaIndex schema_id, TableIndex table_id,
+	                        optional_ptr<const map<string, string>> table_options = nullptr) const {
+		auto hive_file_pattern = GetConfigOption<string>("hive_file_pattern", schema_id, table_id,
+		                                                 default_value ? "true" : "false", table_options);
 		return hive_file_pattern == "true";
 	}
 
-	bool WriteDeletionVectors(SchemaIndex schema_id, TableIndex table_id) const {
-		auto write_dv = GetConfigOption<string>("write_deletion_vectors", schema_id, table_id, "false");
+	bool WriteDeletionVectors(SchemaIndex schema_id, TableIndex table_id,
+	                          optional_ptr<const map<string, string>> table_options = nullptr) const {
+		auto write_dv = GetConfigOption<string>("write_deletion_vectors", schema_id, table_id, "false", table_options);
 		return write_dv == "true";
 	}
 
@@ -267,6 +316,10 @@ public:
 		return Value();
 	}
 
+	std::recursive_mutex &GetMetadataQueryLock() {
+		return metadata_query_lock;
+	}
+
 	shared_ptr<const DuckLakeNameMap> TryGetMappingById(DuckLakeTransaction &transaction, MappingIndex mapping_id);
 	MappingIndex TryGetCompatibleNameMap(DuckLakeTransaction &transaction, const DuckLakeNameMap &name_map);
 	idx_t GetBeginSnapshotForTable(TableIndex table_id, DuckLakeTransaction &transaction);
@@ -313,6 +366,7 @@ private:
 	                                                         DuckLakeSnapshot snapshot);
 	void LoadNameMaps(DuckLakeTransaction &transaction);
 	string StatsCacheKey(idx_t next_file_id, TableIndex table_id) const;
+	string RecordCountCacheKey(idx_t snapshot_id) const;
 	string SchemaCacheKey(idx_t schema_version) const;
 	ObjectCache &GetObjectCacheInstance();
 
@@ -354,6 +408,8 @@ private:
 	//! The id of the last committed snapshot, set at FlushChanges on a successful commit
 	mutable mutex commit_lock;
 	optional_idx last_committed_snapshot;
+	//! Serializes metadata statements on the shared metadata connection
+	std::recursive_mutex metadata_query_lock;
 	//! Optional callback for instrumenting metadata queries
 	QueryCallback query_callback;
 };

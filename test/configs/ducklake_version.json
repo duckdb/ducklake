@@ -17,10 +17,27 @@
     {
       "reason": "This test exercises the ducklake_version feature directly and assumes no global default is set",
       "paths": [
+        "test/sql/add_files/add_files_stats_exactness.test",
         "test/sql/attach/attach_ducklake_version.test",
         "test/sql/metadata/row_group_count.test",
         "test/sql/migration/v10_row_group_count.test",
-        "test/sql/partitioning/epoch_version_gate.test"
+        "test/sql/migration/v11_stats_exactness.test",
+        "test/sql/partitioning/epoch_version_gate.test",
+        "test/sql/stats/stats_exactness_inlined.test",
+        "test/sql/types/null_type_version_gate.test",
+        "test/sql/macros/null_default_version_gate.test"
+      ]
+    },
+    {
+      "reason": "The NULL column type was added in 1.1-dev1 and is not available when ducklake_default_version is pinned to 1.0",
+      "paths": [
+        "test/sql/types/null_type.test",
+        "test/sql/alter/promote_null_type.test",
+        "test/sql/partitioning/partition_null_type.test",
+        "test/sql/data_inlining/data_inlining_null_type.test",
+        "test/sql/add_files/add_files_null_type.test",
+        "test/sql/macros/test_null_default.test",
+        "test/sql/macros/typed_null_default.test"
       ]
     },
     {
@@ -47,7 +64,18 @@
         "test/sql/migration/inlined_column_rename_hint.test",
         "test/sql/migration/inlined_column_rename_reverse_hint.test",
         "test/sql/migration/inlined_column_rename_stats_hint.test",
-        "test/sql/migration/inlined_column_rename_dev_missing_table.test"
+        "test/sql/migration/inlined_column_rename_dev_missing_table.test",
+        "test/sql/migration/dev1_plain_attach_migration.test",
+        "test/sql/migration/stale_version_after_migration.test",
+        "test/sql/settings/create_table_inlining_options.test"
+      ]
+    },
+    {
+      "reason": "Merging files across schema versions requires 1.1-dev1 and is disabled when ducklake_default_version is pinned to 1.0",
+      "paths": [
+        "test/sql/compaction/compaction_alter_table.test",
+        "test/sql/compaction/compaction_schema_version_per_table.test",
+        "test/sql/compaction/merge_adjacent_cross_schema.test"
       ]
     },
     {

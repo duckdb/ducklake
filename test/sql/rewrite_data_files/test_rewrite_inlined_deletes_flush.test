@@ -1,0 +1,80 @@
+# name: test/sql/rewrite_data_files/test_rewrite_inlined_deletes_flush.test
+# description: flushing inlined deletes of a rewritten data file keeps a single delete file per snapshot
+# group: [rewrite_data_files]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/rewrite_inlined_deletes_flush', DATA_INLINING_ROW_LIMIT 0, METADATA_CATALOG 'ducklake_meta')
+
+statement ok
+USE ducklake
+
+statement ok
+CREATE TABLE t AS SELECT range AS id FROM range(50)
+
+# a delete file for the data file
+statement ok
+DELETE FROM t WHERE id >= 40
+
+statement ok
+CALL ducklake.set_option('data_inlining_row_limit', 100)
+
+# followed by inlined deletes against the same data file
+statement ok
+DELETE FROM t WHERE id < 15
+
+statement ok
+SET VARIABLE middle = (SELECT max(snapshot_id) FROM ducklake_snapshots('ducklake'))
+
+query I
+SELECT count(*) FROM t AT (VERSION => getvariable('middle'))
+----
+25
+
+statement ok
+CALL ducklake_rewrite_data_files('ducklake', 't', delete_threshold => 0)
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake')
+
+query I
+SELECT count(*) FROM t
+----
+25
+
+query I
+SELECT count(*) FROM t AT (VERSION => getvariable('middle') - 1)
+----
+40
+
+query I
+SELECT count(*) FROM t AT (VERSION => getvariable('middle'))
+----
+25
+
+query II
+SELECT min(id), max(id) FROM t AT (VERSION => getvariable('middle'))
+----
+15	39
+
+# the retired data file has one delete file at the middle snapshot
+query I
+SELECT count(*) FROM ducklake_meta.ducklake_delete_file del
+JOIN ducklake_meta.ducklake_data_file data USING (data_file_id)
+WHERE data.end_snapshot IS NOT NULL
+  AND del.begin_snapshot <= getvariable('middle')
+  AND (del.end_snapshot IS NULL OR del.end_snapshot > getvariable('middle'))
+----
+1
+
+query I
+SELECT count(*) FROM ducklake_meta.ducklake_inlined_delete_1
+----
+0

@@ -1,0 +1,83 @@
+# name: test/sql/catalog/schema_transaction_identity.test
+# description: Recreated schemas keep transaction-local entries separate from historical schemas
+# group: [catalog]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{BASE_TEST_NAME}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/schema_identity')
+
+statement ok
+CREATE SCHEMA dl.s;
+
+statement ok
+CREATE TABLE dl.s.t AS SELECT 1 AS i;
+
+statement ok
+DROP SCHEMA dl.s CASCADE;
+
+statement ok
+CREATE SCHEMA dl.s;
+
+statement ok
+BEGIN;
+
+statement ok
+CREATE TABLE dl.s.t AS SELECT 99 AS i;
+
+query I
+SELECT * FROM dl.s.t;
+----
+99
+
+query I
+SELECT * FROM dl.s.t AT (VERSION => 2);
+----
+1
+
+statement ok
+CREATE VIEW dl.s.v AS SELECT 42 AS i;
+
+statement ok
+CREATE MACRO dl.s.m() AS 7;
+
+statement ok
+CREATE MACRO dl.s.tm() AS TABLE SELECT 8 AS i;
+
+query III
+SELECT i, dl.s.m(), (SELECT i FROM dl.s.tm()) FROM dl.s.v;
+----
+42	7	8
+
+statement ok
+DROP SCHEMA dl.s CASCADE;
+
+statement ok
+CREATE SCHEMA dl.s;
+
+statement ok
+CREATE TABLE dl.s.t AS SELECT 100 AS i;
+
+query I
+SELECT * FROM dl.s.t;
+----
+100
+
+statement ok
+ROLLBACK;
+
+query I
+SELECT count(*) FROM duckdb_tables() WHERE database_name = 'dl' AND schema_name = 's';
+----
+0
+
+query I
+SELECT * FROM dl.s.t AT (VERSION => 2);
+----
+1

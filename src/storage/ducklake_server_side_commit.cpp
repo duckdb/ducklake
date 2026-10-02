@@ -7,7 +7,6 @@
 #include "duckdb/common/string_util.hpp"
 #include "duckdb/main/client_context.hpp"
 #include "duckdb/main/database.hpp"
-#include "duckdb/main/materialized_query_result.hpp"
 #include "duckdb/catalog/catalog.hpp"
 #include "duckdb/catalog/catalog_entry/duck_table_entry.hpp"
 #include "duckdb/common/types/column/column_data_collection.hpp"
@@ -68,7 +67,7 @@ unique_ptr<DuckLakeNameMapEntry> BuildNameMapEntry(idx_t id, const std::map<idx_
 }
 
 template <class ROW>
-DuckLakeColumnStats ReadColumnStatsRow(ROW &row, idx_t base, const LogicalType &type) {
+DuckLakeColumnStats ReadColumnStatsRow(ROW &row, idx_t base, const LogicalType &type, bool has_exactness) {
 	DuckLakeColumnStats s(type);
 	if (!row.IsNull(base + 0)) {
 		s.column_size_bytes = AsIdx(row, base + 0);
@@ -98,6 +97,10 @@ DuckLakeColumnStats ReadColumnStatsRow(ROW &row, idx_t base, const LogicalType &
 	}
 	if (!row.IsNull(base + 12) && s.extra_stats) {
 		s.extra_stats->Deserialize(row.template GetValue<string>(base + 12));
+	}
+	if (has_exactness) {
+		s.min_is_exact = OptBoolFalse(row, base + 13);
+		s.max_is_exact = OptBoolFalse(row, base + 14);
 	}
 	return s;
 }
@@ -134,6 +137,7 @@ void DuckLakeServerSideCommit::SetRetryConfigOverride(const DuckLakeRetryConfig 
 }
 
 DuckLakeServerSideCommitResult DuckLakeServerSideCommit::Run() {
+	supports_v1_1_metadata = ReadSupportsV1_1Metadata();
 	ReadCommitHeader();
 	ReadColumnTypes();
 	ReadStagedDeleteFiles();
@@ -154,6 +158,9 @@ DuckLakeServerSideCommitResult DuckLakeServerSideCommit::Run() {
 	// Mirror whole-file drops into the conflict-detection set.
 	for (auto &table_id : state->tables_deleted_from) {
 		transaction_changes.tables_deleted_from.insert(table_id);
+	}
+	for (auto &table_id : state->tables_delete_attempted) {
+		transaction_changes.tables_delete_attempted.insert(table_id);
 	}
 
 	idx_t committed_snapshot_id = 0;
@@ -274,6 +281,8 @@ void DuckLakeServerSideCommit::ReadStagedDataFiles() {
 	map<DataFileIndex, map<FieldIndex, DuckLakeColumnStats>> per_file_stats;
 	{
 		auto stats_result = ScanStagedTable(DuckLakeStagedTableType::DATA_FILE_COLUMN_STATS);
+		// staged tables from older clients lack the min_is_exact/max_is_exact columns
+		bool has_exactness = DuckLakeMetadataManager::ResultHasColumn(*stats_result, "min_is_exact");
 		for (auto &row : *stats_result) {
 			DataFileIndex local_file_id(AsIdx(row, 0));
 			ColumnKey key {TableIndex(AsIdx(row, 1)), FieldIndex(AsIdx(row, 2))};
@@ -281,7 +290,8 @@ void DuckLakeServerSideCommit::ReadStagedDataFiles() {
 			if (type_it == column_types.end()) {
 				continue;
 			}
-			per_file_stats[local_file_id].emplace(key.column_id, ReadColumnStatsRow(row, 3, type_it->second));
+			per_file_stats[local_file_id].emplace(key.column_id,
+			                                      ReadColumnStatsRow(row, 3, type_it->second, has_exactness));
 		}
 	}
 
@@ -379,6 +389,8 @@ void DuckLakeServerSideCommit::ReadStagedInlinedData() {
 	}
 
 	auto stats_result = ScanStagedTable(DuckLakeStagedTableType::INLINED_COLUMN_STATS);
+	// staged tables from older clients lack the min_is_exact/max_is_exact columns
+	bool has_exactness = DuckLakeMetadataManager::ResultHasColumn(*stats_result, "min_is_exact");
 	map<TableIndex, map<FieldIndex, DuckLakeColumnStats>> stats_per_table;
 	for (auto &row : *stats_result) {
 		TableIndex table_id(AsIdx(row, 0));
@@ -387,7 +399,7 @@ void DuckLakeServerSideCommit::ReadStagedInlinedData() {
 		if (type_it == column_types.end()) {
 			continue;
 		}
-		stats_per_table[table_id].emplace(column_id, ReadColumnStatsRow(row, 2, type_it->second));
+		stats_per_table[table_id].emplace(column_id, ReadColumnStatsRow(row, 2, type_it->second, has_exactness));
 	}
 
 	// Build a DuckLakeInlinedData per table, data is null because tuples are spliced as SQL text.
@@ -490,6 +502,10 @@ void DuckLakeServerSideCommit::ReadStagedDroppedFiles() {
 	auto tables = ScanStagedTable(DuckLakeStagedTableType::TABLES_DELETED_FROM);
 	for (auto &row : *tables) {
 		state->tables_deleted_from.insert(TableIndex(AsIdx(row, 0)));
+	}
+	auto delete_attempted = ScanStagedTable(DuckLakeStagedTableType::TABLES_DELETE_ATTEMPTED);
+	for (auto &row : *delete_attempted) {
+		state->tables_delete_attempted.insert(TableIndex(AsIdx(row, 0)));
 	}
 }
 
@@ -629,7 +645,8 @@ unique_ptr<DuckLakeTableStats> DuckLakeServerSideCommit::BuildTableStats(const D
 }
 
 void DuckLakeServerSideCommit::ReadExistingTableStats() {
-	string sql = StringUtil::Replace(DuckLakeMetadataManager::GlobalTableStatsQuery(), "{METADATA_CATALOG}", schema_id);
+	string sql = StringUtil::Replace(DuckLakeMetadataManager::GlobalTableStatsQuery(supports_v1_1_metadata),
+	                                 "{METADATA_CATALOG}", schema_id);
 	auto result = RunQuery(sql, "read existing table stats");
 	auto global_stats = DuckLakeMetadataManager::ParseGlobalTableStats(*result);
 
@@ -728,17 +745,17 @@ DuckLakeCommitContext DuckLakeServerSideCommit::BuildContext(idx_t &committed_sn
 	DuckLakeCommitContext ctx;
 	ctx.commit_info = state->commit_info;
 	ctx.skip_drop_empty_inlined = true;
-	ctx.supports_v1_1_metadata = ReadSupportsV1_1Metadata();
+	ctx.supports_v1_1_metadata = supports_v1_1_metadata;
 	ctx.conflict_query_executor = [this](string q) -> unique_ptr<QueryResult> {
 		auto sql = SubstitutePlaceholders(std::move(q), transaction_snapshot);
-		return unique_ptr_cast<MaterializedQueryResult, QueryResult>(fresh_conn.Query(sql));
+		return fresh_conn.Query(sql);
 	};
 	ctx.get_snapshot = [this]() {
 		return transaction_snapshot;
 	};
 	ctx.execute_commit_batch = [this](DuckLakeSnapshot snapshot, string &query) -> unique_ptr<QueryResult> {
 		query = SubstitutePlaceholders(query, snapshot);
-		return unique_ptr_cast<MaterializedQueryResult, QueryResult>(fresh_conn.Query(query));
+		return fresh_conn.Query(query);
 	};
 	ctx.commit_connection = [this]() {
 		fresh_conn.Commit();
@@ -755,11 +772,11 @@ DuckLakeCommitContext DuckLakeServerSideCommit::BuildContext(idx_t &committed_sn
 		// Snapshot-scoped placeholders are absent on this path; empty snapshot is a no-op.
 		DuckLakeSnapshot empty {};
 		auto sql = SubstitutePlaceholders(std::move(q), empty);
-		return unique_ptr_cast<MaterializedQueryResult, QueryResult>(fresh_conn.Query(sql));
+		return fresh_conn.Query(sql);
 	};
 	ctx.query_metadata_with_snapshot = [this](DuckLakeSnapshot snapshot, string q) -> unique_ptr<QueryResult> {
 		auto sql = SubstitutePlaceholders(std::move(q), snapshot);
-		return unique_ptr_cast<MaterializedQueryResult, QueryResult>(fresh_conn.Query(sql));
+		return fresh_conn.Query(sql);
 	};
 	ctx.write_inlined_data = [this](DuckLakeSnapshot &, const vector<DuckLakeInlinedDataInfo> &new_data,
 	                                const vector<DuckLakeTableInfo> &, const vector<DuckLakeTableInfo> &) -> string {
@@ -849,7 +866,7 @@ string DuckLakeServerSideCommit::SubstitutePlaceholders(string sql, const DuckLa
 	return sql;
 }
 
-unique_ptr<MaterializedQueryResult> DuckLakeServerSideCommit::RunQuery(const string &query, const char *what) {
+unique_ptr<QueryResult> DuckLakeServerSideCommit::RunQuery(const string &query, const char *what) {
 	auto result = fresh_conn.Query(query);
 	if (result->HasError()) {
 		result->GetErrorObject().Throw(StringUtil::Format("Server-side ducklake_commit (%s) failed: ", what));
@@ -857,7 +874,7 @@ unique_ptr<MaterializedQueryResult> DuckLakeServerSideCommit::RunQuery(const str
 	return result;
 }
 
-unique_ptr<MaterializedQueryResult> DuckLakeServerSideCommit::ScanStagedTable(DuckLakeStagedTableType kind) {
+unique_ptr<QueryResult> DuckLakeServerSideCommit::ScanStagedTable(DuckLakeStagedTableType kind) {
 	string table_name = DuckLakeStagedTable::BaseName(kind);
 	auto &temp_catalog = Catalog::GetCatalog(context, TEMP_CATALOG);
 	auto &table_entry = temp_catalog.GetEntry<TableCatalogEntry>(context, DEFAULT_SCHEMA, Identifier(table_name))
@@ -890,8 +907,8 @@ unique_ptr<MaterializedQueryResult> DuckLakeServerSideCommit::ScanStagedTable(Du
 	}
 	StatementProperties properties;
 	properties.return_type = StatementReturnType::QUERY_RESULT;
-	return make_uniq<MaterializedQueryResult>(StatementType::SELECT_STATEMENT, properties, std::move(names),
-	                                          std::move(collection), context.GetClientProperties());
+	return make_uniq<QueryResult>(StatementType::SELECT_STATEMENT, properties, std::move(names), std::move(collection),
+	                              context.GetClientProperties());
 }
 
 } // namespace duckdb

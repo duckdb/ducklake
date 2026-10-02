@@ -11,6 +11,13 @@
 #include "duckdb/main/query_profiler.hpp"
 #include "duckdb/main/secret/secret_manager.hpp"
 #include "duckdb/optimizer/filter_combiner.hpp"
+#include "duckdb/planner/expression/bound_columnref_expression.hpp"
+#include "duckdb/planner/expression/bound_conjunction_expression.hpp"
+#include "duckdb/planner/expression/bound_constant_expression.hpp"
+#include "duckdb/planner/expression/bound_function_expression.hpp"
+#include "duckdb/planner/expression/bound_reference_expression.hpp"
+#include "duckdb/planner/expression_iterator.hpp"
+#include "duckdb/planner/operator/logical_filter.hpp"
 #include "duckdb/planner/table_filter.hpp"
 #include "storage/ducklake_table_entry.hpp"
 
@@ -40,19 +47,138 @@ DuckLakeMultiFileList::DuckLakeMultiFileList(DuckLakeFunctionInfo &read_info,
 	inlined_data_tables.push_back(inlined_table);
 }
 
-void DuckLakeMultiFileList::AddFilterToPushdownInfo(FilterPushdownInfo &pushdown_info, column_t column_id,
-                                                    unique_ptr<TableFilter> filter) const {
+optional_ptr<const DuckLakeFieldId> DuckLakeMultiFileList::ResolveFilterField(const Expression &subject,
+                                                                              column_t column_id) const {
 	if (IsVirtualColumn(column_id)) {
-		return;
+		return nullptr;
+	}
+	vector<string> path;
+	auto &root = DuckLakeUtil::GetFilterSubjectPath(subject, path);
+	if (root.GetExpressionClass() != ExpressionClass::BOUND_COLUMN_REF &&
+	    root.GetExpressionClass() != ExpressionClass::BOUND_REF) {
+		return nullptr;
+	}
+	// the path was collected from the outside in, so walk it backwards from the containing column
+	optional_ptr<const DuckLakeFieldId> field_id = read_info.table.GetFieldId(PhysicalIndex(column_id));
+	for (auto it = path.rbegin(); it != path.rend(); it++) {
+		field_id = field_id->GetChildByName(*it);
+		if (!field_id) {
+			return nullptr;
+		}
+	}
+	return field_id;
+}
+
+unique_ptr<DuckLakeFilterNode> DuckLakeMultiFileList::GetColumnFilterNode(column_t column_id, const Expression &expr,
+                                                                          const LogicalType &column_type) const {
+	auto subject = DuckLakeUtil::GetFilterSubject(expr);
+	if (subject) {
+		if (!DuckLakeUtil::IsStructExtract(*subject)) {
+			return make_uniq<DuckLakeFilterNode>(
+			    ColumnFilterInfo(read_info.table.GetFieldId(PhysicalIndex(column_id)).GetFieldIndex().index,
+			                     column_type, make_uniq<ExpressionFilter>(expr.Copy())));
+		}
+		// stats for a nested field are stored against that field, not against the column that contains it
+		auto field_id = ResolveFilterField(*subject, column_id);
+		if (!field_id) {
+			return nullptr;
+		}
+		auto rewritten = DuckLakeUtil::ReplaceFilterSubject(expr, *subject, field_id->Type());
+		return make_uniq<DuckLakeFilterNode>(ColumnFilterInfo(field_id->GetFieldIndex().index, field_id->Type(),
+		                                                      make_uniq<ExpressionFilter>(std::move(rewritten))));
+	}
+	// a conjunction may constrain several nested fields of the same column, each with their own stats
+	if (expr.GetExpressionType() != ExpressionType::CONJUNCTION_AND) {
+		return nullptr;
+	}
+	auto result = make_uniq<DuckLakeFilterNode>(DuckLakeFilterNodeType::CONJUNCTION_AND);
+	for (auto &child : expr.Cast<BoundConjunctionExpression>().GetChildren()) {
+		auto node = GetColumnFilterNode(column_id, *child, column_type);
+		if (node) {
+			result->children.push_back(std::move(node));
+		}
+	}
+	if (result->children.empty()) {
+		return nullptr;
+	}
+	return std::move(result);
+}
+
+unique_ptr<DuckLakeFilterNode> DuckLakeMultiFileList::GetFilterNode(column_t column_id,
+                                                                    unique_ptr<TableFilter> filter) const {
+	if (IsVirtualColumn(column_id)) {
+		return nullptr;
 	}
 	auto column_index = PhysicalIndex(column_id);
-	auto &root_id = read_info.table.GetFieldId(column_index);
-	auto field_index = root_id.GetFieldIndex().index;
 	// Get the column type from the table schema, not from the scan types array
 	const auto &column_type = read_info.column_types[column_index.index];
 	auto expr_filter = ExpressionFilter::FromTableFilter(*filter, column_type);
-	ColumnFilterInfo filter_info_entry(field_index, column_type, std::move(expr_filter));
-	pushdown_info.column_filters.emplace(field_index, std::move(filter_info_entry));
+	if (!expr_filter->expr) {
+		return nullptr;
+	}
+	return GetColumnFilterNode(column_id, *expr_filter->expr, column_type);
+}
+
+unique_ptr<DuckLakeFilterNode> DuckLakeMultiFileList::GetExpressionFilterNode(MultiFilePushdownInfo &info,
+                                                                              const Expression &expr) const {
+	auto subject = DuckLakeUtil::GetFilterSubject(expr);
+	if (!subject) {
+		return nullptr;
+	}
+	// the reference underneath identifies the column, in the same projection space the filter set uses
+	vector<string> path;
+	auto &root = DuckLakeUtil::GetFilterSubjectPath(*subject, path);
+	if (root.GetExpressionClass() != ExpressionClass::BOUND_COLUMN_REF) {
+		return nullptr;
+	}
+	auto &binding = root.Cast<BoundColumnRefExpression>().Binding();
+	if (binding.table_index != info.table_index) {
+		// a reference to a different table tells us nothing about this one
+		return nullptr;
+	}
+	auto projection_index = binding.column_index;
+	if (projection_index >= info.column_ids.size()) {
+		return nullptr;
+	}
+	auto column_id = info.column_ids[projection_index];
+	auto field_id = ResolveFilterField(*subject, column_id);
+	if (!field_id) {
+		return nullptr;
+	}
+	auto rewritten = DuckLakeUtil::ReplaceFilterSubject(expr, *subject, field_id->Type());
+	return make_uniq<DuckLakeFilterNode>(ColumnFilterInfo(field_id->GetFieldIndex().index, field_id->Type(),
+	                                                      make_uniq<ExpressionFilter>(std::move(rewritten))));
+}
+
+void DuckLakeMultiFileList::AddFilterToPushdownInfo(FilterPushdownInfo &pushdown_info, column_t column_id,
+                                                    unique_ptr<TableFilter> filter) const {
+	auto node = GetFilterNode(column_id, std::move(filter));
+	if (node) {
+		AddFilterNodeToPushdownInfo(pushdown_info, *node);
+	}
+}
+
+void DuckLakeMultiFileList::AddFilterNodeToPushdownInfo(FilterPushdownInfo &pushdown_info,
+                                                        DuckLakeFilterNode &node) const {
+	if (node.type == DuckLakeFilterNodeType::CONJUNCTION_AND) {
+		// every conjunct has to hold, so each can be filtered on separately
+		for (auto &child : node.children) {
+			AddFilterNodeToPushdownInfo(pushdown_info, *child);
+		}
+		return;
+	}
+	if (node.type != DuckLakeFilterNodeType::COLUMN_FILTER) {
+		return;
+	}
+	auto &column_filter = *node.column_filter;
+	auto entry = pushdown_info.column_filters.find(column_filter.column_field_index);
+	if (entry == pushdown_info.column_filters.end()) {
+		pushdown_info.column_filters.emplace(column_filter.column_field_index, std::move(column_filter));
+		return;
+	}
+	auto &existing_filter = entry->second.table_filter;
+	existing_filter = make_uniq<ExpressionFilter>(DuckLakeUtil::MergeFilterExpressions(
+	    std::move(existing_filter->expr), std::move(column_filter.table_filter->expr)));
 }
 
 unique_ptr<MultiFileList>
@@ -69,8 +195,14 @@ DuckLakeMultiFileList::DynamicFilterPushdown(MultiFileDynamicPushdownInfo &dynam
 		return nullptr;
 	}
 
-	// DuckDB passes the final filter set, including both static and Top-N dynamic filters.
+	// the filter set carries the static filters over, so the per-column filters are rebuilt from it - but a
+	// TableFilterSet cannot round-trip a tree, so those have to be carried over by hand
 	auto pushdown_info = make_uniq<FilterPushdownInfo>();
+	if (filter_info) {
+		for (const auto &tree : filter_info->filter_trees) {
+			pushdown_info->filter_trees.push_back(tree.Copy());
+		}
+	}
 
 	for (auto &entry : filters) {
 		auto column_id = column_ids[entry.GetIndex().GetIndex()];
@@ -80,13 +212,161 @@ DuckLakeMultiFileList::DynamicFilterPushdown(MultiFileDynamicPushdownInfo &dynam
 		        .Copy());
 	}
 
-	if (pushdown_info->column_filters.empty()) {
+	if (pushdown_info->Empty()) {
 		// no pushdown possible
 		return nullptr;
 	}
 
 	return make_uniq<DuckLakeMultiFileList>(read_info, transaction_local_files, transaction_local_data,
 	                                        std::move(pushdown_info));
+}
+
+//! What a node costs in the generated query - one stats condition per leaf
+static idx_t CountFilterTreeLeaves(const DuckLakeFilterNode &node) {
+	if (node.type == DuckLakeFilterNodeType::COLUMN_FILTER) {
+		return 1;
+	}
+	idx_t result = 0;
+	for (const auto &child : node.children) {
+		result += CountFilterTreeLeaves(*child);
+	}
+	return result;
+}
+
+bool DuckLakeMultiFileList::FilterTreeState::VisitNode() {
+	if (exhausted) {
+		return false;
+	}
+	if (++visited_nodes > MAX_VISITED_NODES) {
+		exhausted = true;
+		return false;
+	}
+	return true;
+}
+
+bool DuckLakeMultiFileList::FilterTreeState::AddLeaves(const DuckLakeFilterNode &node) {
+	if (exhausted) {
+		return false;
+	}
+	leaves += CountFilterTreeLeaves(node);
+	if (leaves > MAX_LEAVES) {
+		exhausted = true;
+		return false;
+	}
+	return true;
+}
+
+//! Reduce an expression to per-column filters using the combiner, which also propagates equalities
+unique_ptr<DuckLakeFilterNode> DuckLakeMultiFileList::CombineFilterNode(ClientContext &context,
+                                                                        MultiFilePushdownInfo &info,
+                                                                        const Expression &expr) const {
+	// the optimizer splits the conjuncts it hands us, but an OR branch reached by recursion arrives whole
+	vector<unique_ptr<Expression>> conjuncts;
+	conjuncts.push_back(expr.Copy());
+	LogicalFilter::SplitPredicates(conjuncts);
+
+	FilterCombiner combiner(context);
+	for (auto &conjunct : conjuncts) {
+		if (combiner.AddFilter(std::move(conjunct)) == FilterResult::UNSATISFIABLE) {
+			return make_uniq<DuckLakeFilterNode>(DuckLakeFilterNodeType::MATCH_NONE);
+		}
+	}
+	vector<FilterPushdownResult> pushdown_results;
+	auto table_filter_set = combiner.GenerateTableScanFilters(info.column_indexes, pushdown_results);
+	if (combiner.HasFilters() || !table_filter_set.HasFilters()) {
+		return nullptr;
+	}
+	auto result = make_uniq<DuckLakeFilterNode>(DuckLakeFilterNodeType::CONJUNCTION_AND);
+	for (auto &entry : table_filter_set) {
+		auto node = GetFilterNode(info.column_ids[entry.GetIndex().GetIndex()], entry.TakeFilter());
+		if (node) {
+			result->children.push_back(std::move(node));
+		}
+	}
+	if (result->children.empty()) {
+		return nullptr;
+	}
+	return std::move(result);
+}
+
+unique_ptr<DuckLakeFilterNode> DuckLakeMultiFileList::BuildFilterTree(ClientContext &context,
+                                                                      MultiFilePushdownInfo &info,
+                                                                      const Expression &expr,
+                                                                      FilterTreeState &state) const {
+	if (!state.VisitNode()) {
+		return nullptr;
+	}
+
+	const bool is_or = expr.GetExpressionType() == ExpressionType::CONJUNCTION_OR;
+	if (!is_or) {
+		// the combiner sees all conjuncts at once, so let it try before splitting them up
+		auto node = CombineFilterNode(context, info, expr);
+		if (node) {
+			return state.AddLeaves(*node) ? std::move(node) : nullptr;
+		}
+	}
+
+	if (expr.GetExpressionClass() == ExpressionClass::BOUND_CONJUNCTION) {
+		auto &conjunction = expr.Cast<BoundConjunctionExpression>();
+		auto result = make_uniq<DuckLakeFilterNode>(is_or ? DuckLakeFilterNodeType::CONJUNCTION_OR
+		                                                  : DuckLakeFilterNodeType::CONJUNCTION_AND);
+		bool complete = true;
+		for (auto &child : conjunction.GetChildren()) {
+			auto node = BuildFilterTree(context, info, *child, state);
+			if (!node) {
+				// a branch we cannot express prunes nothing, so the whole disjunction prunes nothing
+				if (is_or) {
+					complete = false;
+					break;
+				}
+				continue;
+			}
+			if (node->type == DuckLakeFilterNodeType::MATCH_NONE) {
+				// a branch that matches nothing drops out of a disjunction and decides a conjunction
+				if (is_or) {
+					continue;
+				}
+				return node;
+			}
+			result->children.push_back(std::move(node));
+		}
+		if (complete && result->children.empty() && is_or) {
+			// every branch matched nothing
+			return make_uniq<DuckLakeFilterNode>(DuckLakeFilterNodeType::MATCH_NONE);
+		}
+		if (complete && !result->children.empty()) {
+			return std::move(result);
+		}
+	}
+
+	if (state.exhausted) {
+		// no point trying the fallbacks, they can only add leaves we have no budget for
+		return nullptr;
+	}
+	if (is_or) {
+		// the branches did not work out - the combiner may still express the disjunction on a single column
+		auto node = CombineFilterNode(context, info, expr);
+		if (node) {
+			return state.AddLeaves(*node) ? std::move(node) : nullptr;
+		}
+	}
+	// the combiner only expresses a subset of what we can evaluate against column stats
+	auto node = GetExpressionFilterNode(info, expr);
+	if (!node) {
+		return nullptr;
+	}
+	return state.AddLeaves(*node) ? std::move(node) : nullptr;
+}
+
+//! Collect the columns a filter tree references
+static void GetFilterTreeColumns(const DuckLakeFilterNode &node, unordered_set<idx_t> &columns) {
+	if (node.type == DuckLakeFilterNodeType::COLUMN_FILTER) {
+		columns.insert(node.column_filter->column_field_index);
+		return;
+	}
+	for (const auto &child : node.children) {
+		GetFilterTreeColumns(*child, columns);
+	}
 }
 
 unique_ptr<MultiFileList> DuckLakeMultiFileList::ComplexFilterPushdown(ClientContext &context,
@@ -104,10 +384,6 @@ unique_ptr<MultiFileList> DuckLakeMultiFileList::ComplexFilterPushdown(ClientCon
 	vector<FilterPushdownResult> pushdown_results;
 	auto table_filter_set = combiner.GenerateTableScanFilters(info.column_indexes, pushdown_results);
 
-	if (!table_filter_set.HasFilters()) {
-		return nullptr;
-	}
-
 	auto pushdown_info = filter_info ? filter_info->Copy() : make_uniq<FilterPushdownInfo>();
 
 	for (auto &entry : table_filter_set) {
@@ -115,7 +391,40 @@ unique_ptr<MultiFileList> DuckLakeMultiFileList::ComplexFilterPushdown(ClientCon
 		AddFilterToPushdownInfo(*pushdown_info, column_id, entry.TakeFilter());
 	}
 
-	if (pushdown_info->column_filters.empty()) {
+	// a disjunction cannot be reduced to per-column filters without losing the correlation between them
+	for (auto &filter : filters) {
+		if (filter->GetExpressionType() != ExpressionType::CONJUNCTION_OR) {
+			continue;
+		}
+		bool already_pushed = false;
+		for (auto &tree : pushdown_info->filter_trees) {
+			if (tree.source->Equals(*filter)) {
+				already_pushed = true;
+				break;
+			}
+		}
+		if (already_pushed) {
+			continue;
+		}
+		FilterTreeState state;
+		auto root = BuildFilterTree(context, info, *filter, state);
+		if (!root || state.exhausted) {
+			// too big to express as a tree - the per-column filters still apply
+			continue;
+		}
+		unordered_set<idx_t> columns;
+		GetFilterTreeColumns(*root, columns);
+		if (columns.size() < 2 && CombineFilterNode(context, info, *filter)) {
+			// the combiner reduced the whole disjunction to its one column, so it is already pushed down
+			continue;
+		}
+		DuckLakeFilterTree tree;
+		tree.root = std::move(root);
+		tree.source = filter->Copy();
+		pushdown_info->filter_trees.push_back(std::move(tree));
+	}
+
+	if (pushdown_info->Empty()) {
 		return nullptr;
 	}
 

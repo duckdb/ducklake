@@ -15,6 +15,7 @@
 #include "common/ducklake_snapshot.hpp"
 #include "duckdb/common/case_insensitive_map.hpp"
 #include "duckdb/common/types/value_map.hpp"
+#include "duckdb/main/client_context_state.hpp"
 #include "duckdb/main/connection.hpp"
 #include "duckdb/transaction/transaction.hpp"
 #include "storage/ducklake_catalog_set.hpp"
@@ -46,6 +47,12 @@ class DuckLakeSchemaPinState;
 class DuckLakeFieldId;
 class LocalTableChangeIterationHelper;
 class DuckLakeTransactionState;
+
+//! Marks connections DuckLake opens internally
+class DuckLakeInternalConnectionState : public ClientContextState {
+public:
+	static constexpr const char *KEY = "ducklake_internal_connection";
+};
 
 struct FlushedInlinedTableInfo {
 	DuckLakeInlinedTableInfo inlined_table;
@@ -225,8 +232,11 @@ public:
 
 	DuckLakeCatalogSet &GetOrCreateTransactionLocalEntries(CatalogEntry &entry);
 	optional_ptr<DuckLakeCatalogSet> GetTransactionLocalSchemas();
-	optional_ptr<DuckLakeCatalogSet> GetTransactionLocalEntries(CatalogType type, const string &schema_name);
-	optional_ptr<CatalogEntry> GetTransactionLocalEntry(CatalogType catalog_type, const string &schema_name,
+	optional_ptr<CatalogEntry> GetTransactionLocalSchema(optional_ptr<const DuckLakeSchemaEntry> parent,
+	                                                     const string &name);
+	vector<reference<DuckLakeSchemaEntry>> GetTransactionLocalChildSchemas(const DuckLakeSchemaEntry &parent);
+	optional_ptr<DuckLakeCatalogSet> GetTransactionLocalEntries(CatalogType type, SchemaIndex schema_id);
+	optional_ptr<CatalogEntry> GetTransactionLocalEntry(CatalogType catalog_type, SchemaIndex schema_id,
 	                                                    const string &entry_name);
 	vector<DuckLakeDataFile> GetTransactionLocalFiles(TableIndex table_id) const;
 	shared_ptr<DuckLakeInlinedData> GetTransactionLocalInlinedData(TableIndex table_id) const;
@@ -263,6 +273,8 @@ public:
 	void DropScalarMacro(DuckLakeScalarMacroEntry &macro);
 	void DropTableMacro(DuckLakeTableMacroEntry &macro);
 	void DropFile(TableIndex table_id, DataFileIndex data_file_id, string path, idx_t row_count, idx_t file_size_bytes);
+	//! Record that a delete predicate was evaluated against a table, even if no rows matched
+	void MarkDeleteAttempted(TableIndex table_id);
 
 	void DeleteSnapshots(const vector<DuckLakeSnapshotInfo> &snapshots);
 	void DeleteInlinedData(const DuckLakeInlinedTableInfo &inlined_table);
@@ -277,6 +289,7 @@ public:
 		return id >= DuckLakeConstants::TRANSACTION_LOCAL_ID_START;
 	}
 	void SetConfigOption(const DuckLakeConfigOption &option);
+	void ResetConfigOption(const DuckLakeConfigOption &option);
 
 	void SetCommitMessage(const DuckLakeSnapshotCommit &option);
 
@@ -293,6 +306,7 @@ public:
 	bool HasDroppedFiles() const;
 	const unordered_map<string, DataFileIndex> &GetDroppedFiles() const;
 	const set<TableIndex> &GetTablesDeletedFrom() const;
+	const set<TableIndex> &GetTablesDeleteAttempted() const;
 	const vector<FlushedInlinedTableInfo> &GetFlushedInlinedTables() const;
 	const DuckLakeNameMapSet &GetNewNameMaps() const {
 		return new_name_maps;
@@ -310,7 +324,7 @@ public:
 	const set<MacroIndex> &GetDroppedScalarMacros();
 	const set<MacroIndex> &GetDroppedTableMacros();
 	const set<TableIndex> &GetRenamedTables();
-	const case_insensitive_map_t<unique_ptr<DuckLakeCatalogSet>> &GetNewTables();
+	const map<SchemaIndex, unique_ptr<DuckLakeCatalogSet>> &GetNewTables() const;
 	//! Returns the current version of the catalog:
 	//! If there are no uncommitted changes, this is the schema version of the snapshot.
 	//! Otherwise, it is an id that is incremented whenever the schema changes (not stored between restarts)
@@ -340,6 +354,8 @@ public:
 private:
 	void FlushChanges();
 	void FlushNameMapCacheInvalidations();
+	//! Puts back the config options this transaction replaced in the catalog
+	void UndoConfigOptions();
 	static DuckLakePartitionInfo GetNewPartitionKey(DuckLakeCommitState &commit_state, DuckLakeTableEntry &table);
 	static DuckLakeSortInfo GetNewSortKey(DuckLakeCommitState &commit_state, DuckLakeTableEntry &table);
 	static DuckLakeTableInfo GetNewTable(DuckLakeCommitState &commit_state, DuckLakeTableEntry &table);
@@ -351,7 +367,7 @@ private:
 
 	void AlterEntryInternal(DuckLakeTableEntry &old_entry, unique_ptr<CatalogEntry> new_entry);
 	void AlterEntryInternal(DuckLakeViewEntry &old_entry, unique_ptr<CatalogEntry> new_entry);
-	case_insensitive_map_t<unique_ptr<DuckLakeCatalogSet>> &GetNewMacroMap(CatalogType type);
+	map<SchemaIndex, unique_ptr<DuckLakeCatalogSet>> &GetNewMacroMap(CatalogType type) const;
 
 	// Invoked at transaction completion, invalidates all schema cache entries referenced by this transaction.
 	void ClearSchemaCachePins();
@@ -380,6 +396,8 @@ private:
 	DuckLakeNameMapSet new_name_maps;
 	//! Name maps deleted by direct metadata operations, applied to the catalog cache on commit
 	vector<MappingIndex> pending_name_map_cache_invalidations;
+	//! Previous values of config options set by this transaction, for rollback
+	vector<DuckLakeConfigOptionUndo> config_option_undo;
 
 	atomic<idx_t> catalog_version;
 };

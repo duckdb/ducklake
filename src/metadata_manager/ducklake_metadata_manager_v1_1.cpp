@@ -7,6 +7,13 @@
 namespace duckdb {
 
 template <typename Base>
+string DuckLakeMetadataManagerV1_1<Base>::GetSchemaTableStatement() {
+	return "CREATE TABLE {METADATA_CATALOG}.ducklake_schema(schema_id BIGINT PRIMARY KEY, schema_uuid UUID, "
+	       "begin_snapshot BIGINT, end_snapshot BIGINT, schema_name VARCHAR, path VARCHAR, path_is_relative BOOLEAN, "
+	       "parent_schema_id BIGINT);";
+}
+
+template <typename Base>
 string DuckLakeMetadataManagerV1_1<Base>::GetDataFileTableStatement() {
 	return "CREATE TABLE {METADATA_CATALOG}.ducklake_data_file(data_file_id BIGINT PRIMARY KEY, table_id BIGINT, "
 	       "begin_snapshot BIGINT, end_snapshot BIGINT, file_order BIGINT, path VARCHAR, path_is_relative BOOLEAN, "
@@ -21,6 +28,21 @@ string DuckLakeMetadataManagerV1_1<Base>::GetDeleteFileTableStatement() {
 	       "begin_snapshot BIGINT, end_snapshot BIGINT, data_file_id BIGINT, path VARCHAR, path_is_relative BOOLEAN, "
 	       "format VARCHAR, delete_count BIGINT, file_size_bytes BIGINT, footer_size BIGINT, encryption_key VARCHAR, "
 	       "partial_max BIGINT, row_group_count BIGINT);";
+}
+
+template <typename Base>
+string DuckLakeMetadataManagerV1_1<Base>::GetFileColumnStatsTableStatement() {
+	return "CREATE TABLE {METADATA_CATALOG}.ducklake_file_column_stats(data_file_id BIGINT, table_id BIGINT, "
+	       "column_id BIGINT, column_size_bytes BIGINT, value_count BIGINT, null_count BIGINT, min_value VARCHAR, "
+	       "max_value VARCHAR, contains_nan BOOLEAN, extra_stats VARCHAR, min_is_exact BOOLEAN, max_is_exact "
+	       "BOOLEAN);";
+}
+
+template <typename Base>
+string DuckLakeMetadataManagerV1_1<Base>::GetTableColumnStatsTableStatement() {
+	return "CREATE TABLE {METADATA_CATALOG}.ducklake_table_column_stats(table_id BIGINT, column_id BIGINT, "
+	       "contains_null BOOLEAN, contains_nan BOOLEAN, min_value VARCHAR, max_value VARCHAR, extra_stats VARCHAR, "
+	       "min_is_exact BOOLEAN, max_is_exact BOOLEAN);";
 }
 
 template <typename Base>

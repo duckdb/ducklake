@@ -1,0 +1,34 @@
+# name: benchmark/micro/fixtures/history300.benchmark.in
+# description: A 1M-row table with 300 generated insert, delete, update and add-column commits, attached read-only
+# group: [fixtures]
+
+cache_file history300_ready.marker
+
+# Line k of the generated schema.sql commits snapshot k + 3; snapshots 100 and 200 resolve ts_a and ts_b
+load
+EXPORT DATABASE '${BENCHMARK_DIR}/history300_gen';
+COPY (SELECT CASE
+WHEN k % 50 = 49 THEN 'ALTER TABLE lake.events ADD COLUMN c' || k || ' INTEGER DEFAULT ' || k || ';'
+WHEN k % 3 = 0 THEN 'INSERT INTO lake.events (id, g, v, x) SELECT i, i % 100, ''v'' || i, i * 0.5 FROM range('
+|| (1000000 + k * 1000) || ', ' || (1000000 + (k + 1) * 1000) || ') t(i);'
+WHEN k % 3 = 1 THEN 'DELETE FROM lake.events WHERE id < 1000000 AND id % 1000 = ' || k || ';'
+ELSE 'UPDATE lake.events SET x = x + 1 WHERE id % 2000 = ' || k || ';'
+END || ' COMMIT; BEGIN;' FROM range(300) t(k))
+TO '${BENCHMARK_DIR}/history300_gen/schema.sql' (HEADER false, QUOTE '');
+ATTACH 'ducklake:${BENCHMARK_DIR}/history300.db' AS lake
+(DATA_PATH '${BENCHMARK_DIR}/history300_files', DATA_INLINING_ROW_LIMIT 0);
+CREATE TABLE lake.events (id BIGINT, g INTEGER, v VARCHAR, x DOUBLE);
+INSERT INTO lake.events SELECT i, i % 100, 'v' || i, i * 0.5 FROM range(1000000) t(i);
+IMPORT DATABASE '${BENCHMARK_DIR}/history300_gen';
+SELECT CASE WHEN (SELECT count(*) <> 303 OR max(schema_version) <> 7 FROM lake.snapshots())
+THEN error('history300: expected 303 snapshots and 7 schema versions') END;
+DETACH lake;
+COPY (SELECT 1) TO '${BENCHMARK_DIR}/history300_ready.marker' (FORMAT CSV);
+ATTACH 'ducklake:${BENCHMARK_DIR}/history300.db' AS lake (READ_ONLY);
+SET VARIABLE ts_a = (SELECT snapshot_time FROM lake.snapshots() WHERE snapshot_id = 100);
+SET VARIABLE ts_b = (SELECT snapshot_time FROM lake.snapshots() WHERE snapshot_id = 200);
+
+reload
+ATTACH 'ducklake:${BENCHMARK_DIR}/history300.db' AS lake (READ_ONLY);
+SET VARIABLE ts_a = (SELECT snapshot_time FROM lake.snapshots() WHERE snapshot_id = 100);
+SET VARIABLE ts_b = (SELECT snapshot_time FROM lake.snapshots() WHERE snapshot_id = 200);

@@ -1,0 +1,202 @@
+# name: test/sql/types/null_type.test
+# description: NULL-typed columns
+# group: [types]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/ducklake_null_type.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/ducklake_null_type', METADATA_CATALOG 'ducklake_meta')
+
+statement ok
+USE ducklake
+
+foreach inline_limit 0 10
+
+statement ok
+CALL ducklake.set_option('data_inlining_row_limit', '{inline_limit}');
+
+statement ok
+CREATE OR REPLACE TABLE null_tbl(id INTEGER, n "NULL");
+
+query II
+SELECT column_name, column_type FROM (DESCRIBE null_tbl)
+----
+id	INTEGER
+n	"NULL"
+
+query I
+SELECT column_type FROM ducklake_meta.ducklake_column WHERE column_name = 'n' AND end_snapshot IS NULL
+----
+null
+
+statement ok
+INSERT INTO null_tbl VALUES (1, NULL), (2, NULL), (3, NULL);
+
+query II
+SELECT id, n FROM null_tbl ORDER BY id
+----
+1	NULL
+2	NULL
+3	NULL
+
+query I
+SELECT typeof(n) FROM null_tbl LIMIT 1
+----
+"NULL"
+
+query III
+SELECT COUNT(*), COUNT(n), COUNT(*) FILTER (WHERE n IS NULL) FROM null_tbl
+----
+3	0	3
+
+# statistics fold IS NULL on NULL typed columns
+statement ok
+PRAGMA explain_output = OPTIMIZED_ONLY
+
+query II
+EXPLAIN SELECT n IS NULL FROM null_tbl
+----
+logical_opt	<!REGEX>:.*IS NULL.*
+
+query II
+EXPLAIN SELECT n IS NOT NULL FROM null_tbl
+----
+logical_opt	<!REGEX>:.*IS NOT NULL.*
+
+statement ok
+PRAGMA explain_output = PHYSICAL_ONLY
+
+query I
+SELECT COUNT(*) FROM null_tbl WHERE n = 1
+----
+0
+
+statement ok
+CREATE OR REPLACE TABLE ctas_tbl AS SELECT id, NULL AS n FROM null_tbl;
+
+query II
+SELECT column_name, column_type FROM (DESCRIBE ctas_tbl)
+----
+id	INTEGER
+n	"NULL"
+
+statement ok
+CREATE OR REPLACE TABLE nested_tbl AS SELECT 1 AS id, [NULL] AS l, {'x': NULL} AS s, MAP {'k': NULL} AS m;
+
+statement ok
+INSERT INTO nested_tbl VALUES (2, [NULL, NULL], {'x': NULL}, MAP {'a': NULL, 'b': NULL}), (3, NULL, NULL, NULL);
+
+query II
+SELECT column_name, column_type FROM (DESCRIBE nested_tbl)
+----
+id	INTEGER
+l	"NULL"[]
+s	STRUCT(x "NULL")
+m	MAP(VARCHAR, "NULL")
+
+query IIII
+SELECT id, l, s, m FROM nested_tbl ORDER BY id
+----
+1	[NULL]	{'x': NULL}	{k=NULL}
+2	[NULL, NULL]	{'x': NULL}	{a=NULL, b=NULL}
+3	NULL	NULL	NULL
+
+statement ok
+UPDATE null_tbl SET id = id + 10 WHERE id = 1
+
+statement error
+UPDATE null_tbl SET n = 1
+----
+"NULL"
+
+statement ok
+DELETE FROM null_tbl WHERE id = 2
+
+query II
+SELECT id, n FROM null_tbl ORDER BY id
+----
+3	NULL
+11	NULL
+
+statement ok
+INSERT INTO null_tbl SELECT range, NULL FROM range(100, 120)
+
+statement ok
+SET VARIABLE snap = (SELECT MAX(snapshot_id) FROM ducklake_snapshots('ducklake'))
+
+query III
+SELECT COUNT(*), COUNT(n), COUNT(*) FILTER (WHERE n IS NULL) FROM null_tbl AT (VERSION => getvariable('snap') - 1)
+----
+2	0	2
+
+query III
+SELECT id, n, change_type FROM ducklake_table_changes('ducklake', 'main', 'null_tbl', getvariable('snap'), getvariable('snap')) ORDER BY id LIMIT 2
+----
+100	NULL	insert
+101	NULL	insert
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake')
+
+statement ok
+SELECT * FROM ducklake_merge_adjacent_files('ducklake')
+
+query III
+SELECT COUNT(*), COUNT(n), COUNT(*) FILTER (WHERE n IS NULL) FROM null_tbl
+----
+22	0	22
+
+query III
+SELECT COUNT(*), COUNT(n), COUNT(*) FILTER (WHERE n IS NULL) FROM null_tbl AT (VERSION => getvariable('snap') - 1)
+----
+2	0	2
+
+# file stats carry no bounds and count every row as a NULL
+query II
+SELECT COUNT(*) FILTER (WHERE min_value IS NOT NULL OR max_value IS NOT NULL), BOOL_AND(value_count = 0 AND null_count = record_count)
+FROM ducklake_meta.ducklake_file_column_stats s
+JOIN ducklake_meta.ducklake_data_file f USING (data_file_id)
+WHERE s.table_id = (SELECT table_id FROM ducklake_meta.ducklake_table WHERE table_name = 'null_tbl' AND end_snapshot IS NULL)
+  AND column_id = (SELECT column_id FROM ducklake_meta.ducklake_column WHERE column_name = 'n' AND end_snapshot IS NULL AND table_id = (SELECT table_id FROM ducklake_meta.ducklake_table WHERE table_name = 'null_tbl' AND end_snapshot IS NULL))
+----
+0	true
+
+query III
+SELECT contains_null::INTEGER, min_value, max_value
+FROM ducklake_meta.ducklake_table_column_stats
+WHERE table_id = (SELECT table_id FROM ducklake_meta.ducklake_table WHERE table_name = 'null_tbl' AND end_snapshot IS NULL)
+  AND column_id = (SELECT column_id FROM ducklake_meta.ducklake_column WHERE column_name = 'n' AND end_snapshot IS NULL AND table_id = (SELECT table_id FROM ducklake_meta.ducklake_table WHERE table_name = 'null_tbl' AND end_snapshot IS NULL))
+----
+1	NULL	NULL
+
+statement ok
+DROP TABLE ctas_tbl
+
+endloop
+
+statement ok
+USE memory
+
+statement ok
+DETACH ducklake
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/ducklake_null_type', METADATA_CATALOG 'ducklake_meta')
+
+query III
+SELECT COUNT(*), COUNT(n), COUNT(*) FILTER (WHERE n IS NULL) FROM ducklake.null_tbl
+----
+22	0	22
+
+query IIII
+SELECT id, l, s, m FROM ducklake.nested_tbl ORDER BY id
+----
+1	[NULL]	{'x': NULL}	{k=NULL}
+2	[NULL, NULL]	{'x': NULL}	{a=NULL, b=NULL}
+3	NULL	NULL	NULL

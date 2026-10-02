@@ -1,0 +1,21 @@
+# name: benchmark/micro/read/file_pruning_many_files.benchmark
+# description: Run 40 selective queries that each prune all but 0-3 of ~4096 files through the metadata stats
+# group: [read]
+
+name File Pruning Many Files
+group micro
+subgroup read
+
+require ducklake
+
+require parquet
+
+include benchmark/micro/fixtures/many_files.benchmark.in
+
+# Point lookups, short ts ranges, IN lists, two-column ranges, prefix LIKEs and filters that prune every file
+run benchmark/micro/queries/file_pruning.sql
+
+result_query II
+SELECT * FROM __answer
+----
+1234567	617283.5

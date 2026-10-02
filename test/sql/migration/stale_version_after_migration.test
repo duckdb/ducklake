@@ -1,0 +1,50 @@
+# name: test/sql/migration/stale_version_after_migration.test
+# description: a connection attached before another connection migrated the catalog must reattach
+# group: [migration]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/stale_version_after_migration.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS stale (DATA_PATH '{DATA_PATH}/stale_version_after_migration', METADATA_CATALOG 'meta', DUCKLAKE_VERSION '1.0')
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS migrated (METADATA_CATALOG 'meta', AUTOMATIC_MIGRATION TRUE)
+
+# the 1.0 inlined metadata column names are regular column names after the migration
+statement ok
+CREATE TABLE migrated.scd(k INTEGER, row_id BIGINT, begin_snapshot BIGINT, end_snapshot BIGINT);
+
+statement ok
+INSERT INTO migrated.scd VALUES (1, 7, 0, 1), (2, 8, 100, 200), (3, 9, NULL, NULL), (4, 10, 1, NULL);
+
+statement error
+SELECT * FROM stale.scd
+----
+The catalog was migrated by another connection from version 1.0 to
+
+statement error
+CALL ducklake_expire_snapshots('stale', older_than => now())
+----
+The catalog was migrated by another connection from version 1.0 to
+
+query I
+SELECT count(*) FROM migrated.scd
+----
+4
+
+statement ok
+DETACH stale
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS stale (METADATA_CATALOG 'meta')
+
+query I
+SELECT count(*) FROM stale.scd
+----
+4

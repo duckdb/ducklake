@@ -1,0 +1,52 @@
+# name: benchmark/micro/read/warm_small_queries.benchmark
+# description: Run 61 small autocommit queries against a warm, read-only DuckLake catalog
+# group: [read]
+
+name Warm Small Queries
+group micro
+subgroup read
+
+require ducklake
+
+cache_file warm_ready.marker
+
+# 200 small tables, a 1M-row table, an empty wide table, a partitioned 3-schema-version table, an inlined table
+load
+EXPORT DATABASE '${BENCHMARK_DIR}/warm_gen';
+COPY (SELECT stmt FROM (
+SELECT 0 AS o, 'CREATE TABLE lake.tbl_' || i ||
+' AS SELECT range AS c0, range * 2 AS c1, ''x'' || range AS c2 FROM range(1000);' AS stmt FROM range(200) t(i)
+UNION ALL
+SELECT 1, 'CREATE TABLE lake.empty_wide (' ||
+string_agg('c' || j || ' ' || ['INTEGER', 'VARCHAR', 'DOUBLE', 'BIGINT'][j % 4 + 1], ', ' ORDER BY j) || ');'
+FROM range(30) t(j)) ORDER BY o)
+TO '${BENCHMARK_DIR}/warm_gen/schema.sql' (HEADER false, QUOTE '');
+ATTACH 'ducklake:${BENCHMARK_DIR}/warm.db' AS lake (DATA_PATH '${BENCHMARK_DIR}/warm_files');
+BEGIN;
+IMPORT DATABASE '${BENCHMARK_DIR}/warm_gen';
+COMMIT;
+CREATE TABLE lake.kv AS SELECT i AS id, 'value_' || i AS v, i * 2 AS w FROM range(1000000) t(i);
+CREATE TABLE lake.evolved (part INTEGER, id BIGINT, val DOUBLE);
+ALTER TABLE lake.evolved SET PARTITIONED BY (part);
+INSERT INTO lake.evolved SELECT i % 20, i, i * 0.5 FROM range(200000) t(i);
+ALTER TABLE lake.evolved ADD COLUMN note VARCHAR;
+INSERT INTO lake.evolved SELECT i % 20, i, i * 0.5, 'n' || i FROM range(200000, 400000) t(i);
+CREATE TABLE lake.small_inl AS SELECT i AS id, 'v' || i AS v FROM range(5) t(i);
+SELECT CASE WHEN (SELECT count(*) FROM ducklake_list_files('lake', 'small_inl')) <> 0
+OR (SELECT count(*) FROM lake.small_inl) <> 5
+OR (SELECT count(*) FROM ducklake_list_files('lake', 'evolved')) < 40
+THEN error('small_inl must be inlined and evolved must have a file per partition') END;
+DETACH lake;
+COPY (SELECT 1) TO '${BENCHMARK_DIR}/warm_ready.marker' (FORMAT CSV);
+ATTACH 'ducklake:${BENCHMARK_DIR}/warm.db' AS lake (READ_ONLY);
+
+reload
+ATTACH 'ducklake:${BENCHMARK_DIR}/warm.db' AS lake (READ_ONLY);
+
+# No cleanup: the run is read-only, and the discarded warmup run fills the caches on purpose
+run benchmark/micro/queries/warm_small_queries.sql
+
+result_query I
+SELECT * FROM __answer
+----
+value_37

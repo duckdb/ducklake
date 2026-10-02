@@ -1,0 +1,57 @@
+# name: test/sql/macros/typed_null_default.test
+# description: macros whose parameter defaults are typed NULLs
+# group: [macros]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/ducklake_macro_typed_null_default.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/macro_typed_null_default', METADATA_CATALOG 'ducklake_meta')
+
+statement ok
+USE ducklake
+
+statement ok
+CREATE MACRO date_default(x := NULL::DATE) AS x + INTERVAL 1 DAY
+
+statement ok
+CREATE MACRO varchar_default(x := NULL::VARCHAR) AS x IS NULL
+
+statement ok
+CREATE MACRO string_default(x := 'NULL') AS x IS NULL
+
+statement ok
+CREATE MACRO list_default(x := NULL::INTEGER[]) AS x IS NULL
+
+query II
+SELECT default_value, default_value_type FROM ducklake_meta.ducklake_macro_parameters ORDER BY macro_id
+----
+NULL	date
+NULL	null
+NULL	varchar
+NULL	null
+
+# DuckLake 1.0 stored nested typed NULL defaults with their type name
+query I
+UPDATE ducklake_meta.ducklake_macro_parameters SET default_value_type = 'list' WHERE macro_id = (SELECT macro_id FROM ducklake_meta.ducklake_macro WHERE macro_name = 'list_default')
+----
+1
+
+statement ok
+USE memory
+
+statement ok
+DETACH ducklake
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/macro_typed_null_default', METADATA_CATALOG 'ducklake_meta')
+
+query IIII
+SELECT ducklake.date_default() IS NULL, ducklake.varchar_default(), ducklake.string_default(), ducklake.list_default()
+----
+true	true	false	true

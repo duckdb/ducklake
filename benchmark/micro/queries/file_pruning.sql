@@ -1,0 +1,43 @@
+SELECT id, val FROM lake.events WHERE id = 1234567;
+SELECT * FROM lake.events WHERE id = 0;
+SELECT * FROM lake.events WHERE id = 8388607;
+SELECT s FROM lake.events WHERE id = 4194304;
+SELECT ts FROM lake.events WHERE id = 2047;
+SELECT ts FROM lake.events WHERE id = 2048;
+SELECT val FROM lake.events WHERE id = 7777777;
+SELECT grp, s FROM lake.events WHERE id = 3333333;
+SELECT count(*) FROM lake.events WHERE id = 6000001;
+SELECT * FROM lake.events WHERE id = 123;
+SELECT * FROM lake.events WHERE id = 99999;
+SELECT id, val FROM lake.events WHERE id = 5242880;
+SELECT max(val) FROM lake.events WHERE id = 8000123;
+SELECT * FROM lake.events WHERE id = 1048575 AND grp = 75;
+SELECT id FROM lake.events WHERE val = 1000000.5;
+SELECT id FROM lake.events WHERE val = 3500000.0;
+SELECT id, s FROM lake.events WHERE ts = TIMESTAMP '2024-02-15 08:30:00';
+SELECT id FROM lake.events WHERE ts = TIMESTAMP '2024-03-31 23:59:59';
+SELECT id FROM lake.events WHERE s = 'v5555555';
+SELECT id FROM lake.events WHERE s = 'v0000042';
+SELECT count(*), sum(val) FROM lake.events
+WHERE ts BETWEEN TIMESTAMP '2024-02-01' AND TIMESTAMP '2024-02-01 00:30:00';
+SELECT count(*) FROM lake.events
+WHERE ts >= TIMESTAMP '2024-01-15 12:00:00' AND ts < TIMESTAMP '2024-01-15 13:00:00';
+SELECT min(id), max(id) FROM lake.events
+WHERE ts BETWEEN TIMESTAMP '2024-03-10 06:00:00' AND TIMESTAMP '2024-03-10 06:20:00';
+SELECT avg(val) FROM lake.events WHERE ts > TIMESTAMP '2024-04-07 01:30:00';
+SELECT count(*) FROM lake.events WHERE ts < TIMESTAMP '2024-01-01 00:45:00';
+SELECT * FROM lake.events WHERE id IN (17, 5000000, 8000000);
+SELECT count(*) FROM lake.events WHERE id IN (100, 200, 300);
+SELECT sum(val) FROM lake.events WHERE id IN (2000000, 2000001, 6000000);
+SELECT s FROM lake.events WHERE id IN (1, 4194303, 8388606);
+SELECT count(*) FROM lake.events WHERE s IN ('v0001000', 'v7000000');
+SELECT count(*) FROM lake.events WHERE id BETWEEN 1000000 AND 1004000 AND ts > TIMESTAMP '2024-01-12';
+SELECT count(*) FROM lake.events WHERE id > 3000000 AND ts < TIMESTAMP '2024-02-04 17:30:00';
+SELECT sum(val) FROM lake.events WHERE val BETWEEN 2500000 AND 2500500 AND id >= 5000000;
+SELECT count(*) FROM lake.events WHERE ts < TIMESTAMP '2024-03-01' AND s >= 'v5183000';
+SELECT count(*) FROM lake.events WHERE id BETWEEN 6000000 AND 7000000 AND val < 3000100;
+SELECT count(*) FROM lake.events WHERE s LIKE 'v1234567%';
+SELECT count(*) FROM lake.events WHERE s LIKE 'v808080%';
+SELECT min(id) FROM lake.events WHERE s LIKE 'v002000%';
+SELECT count(*) FROM lake.events WHERE val BETWEEN 1023.6 AND 1023.9;
+SELECT count(*) FROM lake.events WHERE ts = TIMESTAMP '2024-02-17 10:20:47.5';
