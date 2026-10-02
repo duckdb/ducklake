@@ -4257,21 +4257,55 @@ string DuckLakeMetadataManager::WriteNewDataFilesWithAppender(DuckLakeSnapshot &
                                                               const vector<DuckLakeTableInfo> &new_tables,
                                                               vector<DuckLakeSchemaInfo> &new_schemas_result) {
 	auto &catalog = transaction.GetCatalog();
-	auto &connection = transaction.GetConnection();
-	const auto &db_name = catalog.MetadataDatabaseName();
 	auto schema_name = catalog.MetadataSchemaName();
 	if (schema_name.empty()) {
 		schema_name = "main";
 	}
+	AppendDataFiles(Identifier(catalog.MetadataDatabaseName()), schema_name, string(), commit_snapshot, new_files,
+	                new_tables, new_schemas_result);
+	return "";
+}
 
-	// Create appenders for each table
-	Appender data_file_appender(connection, Identifier(db_name), schema_name, Identifier("ducklake_data_file"));
-	Appender column_stats_appender(connection, Identifier(db_name), schema_name,
-	                               Identifier("ducklake_file_column_stats"));
-	Appender partition_value_appender(connection, Identifier(db_name), schema_name,
-	                                  Identifier("ducklake_file_partition_value"));
-	Appender variant_stats_appender(connection, Identifier(db_name), schema_name,
-	                                Identifier("ducklake_file_variant_stats"));
+static constexpr const char *DATA_FILE_TABLES[] = {"ducklake_data_file", "ducklake_file_column_stats",
+                                                   "ducklake_file_partition_value", "ducklake_file_variant_stats"};
+static constexpr const char *STAGED_PREFIX = "__ducklake_staged_";
+
+string DuckLakeMetadataManager::StageDataFiles(DuckLakeSnapshot &commit_snapshot,
+                                               const vector<DuckLakeFileInfo> &new_files,
+                                               const vector<DuckLakeTableInfo> &new_tables,
+                                               vector<DuckLakeSchemaInfo> &new_schemas_result) {
+	// the TEMP tables copy the catalog tables' columns, so INSERT ... SELECT * lines up for v1.0 and v1.1 alike
+	string create_sql;
+	string copy_sql;
+	for (auto table : DATA_FILE_TABLES) {
+		auto staged = StringUtil::Format("temp.main.%s%s", STAGED_PREFIX, table);
+		create_sql += StringUtil::Format("CREATE OR REPLACE TEMP TABLE %s%s AS SELECT * FROM {METADATA_CATALOG}.%s "
+		                                 "LIMIT 0;",
+		                                 STAGED_PREFIX, table, table);
+		copy_sql += StringUtil::Format("INSERT INTO {METADATA_CATALOG}.%s SELECT * FROM %s;DROP TABLE %s;", table,
+		                               staged, staged);
+	}
+	auto result = Query(create_sql);
+	if (result->HasError()) {
+		result->GetErrorObject().Throw("Failed to stage DuckLake data file metadata: ");
+	}
+	AppendDataFiles(Identifier("temp"), Identifier("main"), STAGED_PREFIX, commit_snapshot, new_files, new_tables,
+	                new_schemas_result);
+	return copy_sql;
+}
+
+void DuckLakeMetadataManager::AppendDataFiles(const Identifier &db_name, const Identifier &schema_name,
+                                              const string &table_prefix, DuckLakeSnapshot &commit_snapshot,
+                                              const vector<DuckLakeFileInfo> &new_files,
+                                              const vector<DuckLakeTableInfo> &new_tables,
+                                              vector<DuckLakeSchemaInfo> &new_schemas_result) {
+	auto &catalog = transaction.GetCatalog();
+	auto &connection = transaction.GetConnection();
+	Appender data_file_appender(connection, db_name, schema_name, Identifier(table_prefix + DATA_FILE_TABLES[0]));
+	Appender column_stats_appender(connection, db_name, schema_name, Identifier(table_prefix + DATA_FILE_TABLES[1]));
+	Appender partition_value_appender(connection, db_name, schema_name,
+	                                  Identifier(table_prefix + DATA_FILE_TABLES[2]));
+	Appender variant_stats_appender(connection, db_name, schema_name, Identifier(table_prefix + DATA_FILE_TABLES[3]));
 
 	bool supports_v1_1_metadata = catalog.SupportsV1_1Metadata();
 	for (auto &file : new_files) {
@@ -4493,19 +4527,24 @@ string DuckLakeMetadataManager::WriteNewDataFilesWithAppender(DuckLakeSnapshot &
 	column_stats_appender.Close();
 	partition_value_appender.Close();
 	variant_stats_appender.Close();
-
-	return "";
 }
 
 bool DuckLakeMetadataManager::TryAppendDataFiles(DuckLakeSnapshot &commit_snapshot,
                                                  const vector<DuckLakeFileInfo> &new_files,
                                                  const vector<DuckLakeTableInfo> &new_tables,
-                                                 vector<DuckLakeSchemaInfo> &new_schemas_result) {
-	if (!SupportsAppender() || new_files.empty()) {
+                                                 vector<DuckLakeSchemaInfo> &new_schemas_result, string &staged_sql) {
+	if (new_files.empty()) {
 		return false;
 	}
-	WriteNewDataFilesWithAppender(commit_snapshot, new_files, new_tables, new_schemas_result);
-	return true;
+	if (SupportsAppender()) {
+		WriteNewDataFilesWithAppender(commit_snapshot, new_files, new_tables, new_schemas_result);
+		return true;
+	}
+	if (StagesDataFiles()) {
+		staged_sql = StageDataFiles(commit_snapshot, new_files, new_tables, new_schemas_result);
+		return true;
+	}
+	return false;
 }
 
 string DuckLakeMetadataManager::WriteNewDataFiles(DuckLakeSnapshot &commit_snapshot,

@@ -1515,8 +1515,8 @@ void DuckLakeTransaction::RunCommitLoop(DuckLakeSnapshot transaction_snapshot,
 	};
 	context.try_append_data_files = [&](DuckLakeSnapshot &snapshot, const vector<DuckLakeFileInfo> &files,
 	                                    const vector<DuckLakeTableInfo> &new_tables,
-	                                    vector<DuckLakeSchemaInfo> &new_schemas) {
-		return metadata_manager->TryAppendDataFiles(snapshot, files, new_tables, new_schemas);
+	                                    vector<DuckLakeSchemaInfo> &new_schemas, string &staged_sql) {
+		return metadata_manager->TryAppendDataFiles(snapshot, files, new_tables, new_schemas, staged_sql);
 	};
 	context.write_inlined_tables = [&](DuckLakeSnapshot snapshot, const vector<DuckLakeTableInfo> &tables) {
 		return metadata_manager->WriteNewInlinedTables(snapshot, tables);

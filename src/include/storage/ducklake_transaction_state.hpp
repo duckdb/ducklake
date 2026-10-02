@@ -51,11 +51,11 @@ struct DuckLakeCommitContext {
 	std::function<unique_ptr<QueryResult>(string)> query_metadata;
 	//! Runs a snapshot-templated metadata-DB query (handles {SNAPSHOT_ID} substitution).
 	std::function<unique_ptr<QueryResult>(DuckLakeSnapshot, string)> query_metadata_with_snapshot;
-	//! Optional Appender fast-path.
+	//! Optional Appender fast-path; a staged write returns, in its string argument, the SQL that copies it.
 	std::function<bool(DuckLakeSnapshot &, const vector<DuckLakeFileInfo> &, const vector<DuckLakeTableInfo> &,
-	                   vector<DuckLakeSchemaInfo> &)>
+	                   vector<DuckLakeSchemaInfo> &, string &)>
 	    try_append_data_files = [](DuckLakeSnapshot &, const vector<DuckLakeFileInfo> &,
-	                               const vector<DuckLakeTableInfo> &, vector<DuckLakeSchemaInfo> &) {
+	                               const vector<DuckLakeTableInfo> &, vector<DuckLakeSchemaInfo> &, string &) {
 		    return false;
 	    };
 	//! Emits the SQL that registers new inlined data tables (CREATE TABLE + ducklake_inlined_data_tables INSERT).

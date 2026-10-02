@@ -1,0 +1,84 @@
+# name: test/sql/metadata/sqlite_large_commit.test
+# description: A commit of thousands of files to a SQLite catalog writes every metadata row, in the same storage types, and nothing when it fails
+# group: [metadata]
+
+require ducklake
+
+require parquet
+
+require sqlite_scanner
+
+statement ok
+ATTACH 'ducklake:sqlite:{TEST_DIR}/sqlite_large_commit.db' AS lake (DATA_PATH '{TEST_DIR}/sqlite_large_commit_files')
+
+statement ok
+CREATE TABLE lake.t (p BIGINT, a BIGINT, c VARCHAR);
+
+statement ok
+ALTER TABLE lake.t SET PARTITIONED BY (p);
+
+statement ok
+CALL enable_logging('QueryLog', storage = 'memory');
+
+# 3,000 partitions write 3,000 files in one commit; as literal SQL its metadata is several hundred KB
+statement ok
+INSERT INTO lake.t SELECT i % 3000, i, repeat('x', 40) || i FROM range(6000) r(i);
+
+# the file metadata is copied from the staged TEMP table, not parsed from a VALUES list
+query II
+SELECT count(*) FILTER (message ILIKE '%INSERT INTO %ducklake_data_file SELECT * FROM temp.%'),
+       count(*) FILTER (message ILIKE '%INSERT INTO %ducklake_data_file VALUES%')
+FROM duckdb_logs WHERE type = 'QueryLog'
+----
+1	0
+
+statement ok
+CALL disable_logging();
+
+query IIII
+SELECT
+  (SELECT count(*) FROM __ducklake_metadata_lake.ducklake_data_file),
+  (SELECT count(*) FROM __ducklake_metadata_lake.ducklake_file_column_stats),
+  (SELECT count(*) FROM __ducklake_metadata_lake.ducklake_file_partition_value),
+  (SELECT count(*) FROM lake.t)
+----
+3000	9000	3000	6000
+
+query IIIIII
+FROM sqlite_query('__ducklake_metadata_lake', 'SELECT DISTINCT typeof(data_file_id), typeof(path), typeof(path_is_relative), typeof(record_count), typeof(end_snapshot), typeof(row_id_start) FROM ducklake_data_file')
+----
+integer	text	integer	integer	null	integer
+
+query IIII
+FROM sqlite_query('__ducklake_metadata_lake', 'SELECT DISTINCT typeof(column_id), typeof(value_count), typeof(min_value), typeof(contains_nan) FROM ducklake_file_column_stats')
+----
+integer	integer	text	null
+
+query II
+FROM sqlite_query('__ducklake_metadata_lake', 'SELECT DISTINCT typeof(partition_key_index), typeof(partition_value) FROM ducklake_file_partition_value')
+----
+integer	text
+
+query II
+SELECT min(a), max(a) FROM lake.t WHERE p = 2999
+----
+2999	5999
+
+# take the next snapshot's id in ducklake_snapshot_changes, so the commit fails at its last statement
+statement ok
+INSERT INTO __ducklake_metadata_lake.ducklake_snapshot_changes (snapshot_id)
+SELECT max(snapshot_id) + 1 FROM __ducklake_metadata_lake.ducklake_snapshot
+
+statement error
+INSERT INTO lake.t SELECT i % 3000, i, 'y' FROM range(3000) r(i);
+----
+<REGEX>:.*(PRIMARY KEY|UNIQUE|constraint).*
+
+query IIII
+SELECT
+  (SELECT count(*) FROM __ducklake_metadata_lake.ducklake_data_file),
+  (SELECT count(*) FROM __ducklake_metadata_lake.ducklake_file_column_stats),
+  (SELECT count(*) FROM __ducklake_metadata_lake.ducklake_file_partition_value),
+  (SELECT count(*) FROM lake.t)
+----
+3000	9000	3000	6000

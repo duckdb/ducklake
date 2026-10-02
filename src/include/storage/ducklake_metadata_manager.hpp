@@ -201,6 +201,11 @@ public:
 	virtual bool SupportsAppender() const {
 		return true;
 	}
+	//! Stage new data-file metadata in DuckDB TEMP tables through the Appender and copy it with one
+	//! INSERT ... SELECT per table, instead of a literal VALUES list the DuckDB parser must read
+	virtual bool StagesDataFiles() const {
+		return false;
+	}
 
 	//! Probe the metadata server for optional capabilities, for now we only check for server-side retries
 	virtual void ProbeServerCapabilities() {
@@ -378,8 +383,8 @@ public:
 	                                        const vector<DuckLakePath> &resolved_paths, bool supports_v1_1_metadata);
 	//! Opt-in fast-path: if this backend supports the DuckDB Appender API, write the files directly
 	bool TryAppendDataFiles(DuckLakeSnapshot &commit_snapshot, const vector<DuckLakeFileInfo> &new_files,
-	                        const vector<DuckLakeTableInfo> &new_tables,
-	                        vector<DuckLakeSchemaInfo> &new_schemas_result);
+	                        const vector<DuckLakeTableInfo> &new_tables, vector<DuckLakeSchemaInfo> &new_schemas_result,
+	                        string &staged_sql);
 	virtual string WriteNewInlinedData(DuckLakeSnapshot &commit_snapshot,
 	                                   const vector<DuckLakeInlinedDataInfo> &new_data,
 	                                   const vector<DuckLakeTableInfo> &new_tables,
@@ -569,6 +574,12 @@ protected:
 	string WriteNewDataFilesWithAppender(DuckLakeSnapshot &commit_snapshot, const vector<DuckLakeFileInfo> &new_files,
 	                                     const vector<DuckLakeTableInfo> &new_tables,
 	                                     vector<DuckLakeSchemaInfo> &new_schemas_result);
+	//! Stage new data files in TEMP tables; returns the SQL that copies them into the metadata catalog
+	string StageDataFiles(DuckLakeSnapshot &commit_snapshot, const vector<DuckLakeFileInfo> &new_files,
+	                      const vector<DuckLakeTableInfo> &new_tables, vector<DuckLakeSchemaInfo> &new_schemas_result);
+	void AppendDataFiles(const Identifier &db_name, const Identifier &schema_name, const string &table_prefix,
+	                     DuckLakeSnapshot &commit_snapshot, const vector<DuckLakeFileInfo> &new_files,
+	                     const vector<DuckLakeTableInfo> &new_tables, vector<DuckLakeSchemaInfo> &new_schemas_result);
 	DuckLakePath GetRelativePath(const string &path, const string &data_path);
 	string FromRelativePath(const DuckLakePath &path, const string &base_path);
 	string FromRelativePath(const DuckLakePath &path);

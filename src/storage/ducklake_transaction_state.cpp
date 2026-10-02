@@ -1835,10 +1835,11 @@ string DuckLakeTransactionState::CommitChanges(DuckLakeCommitState &commit_state
 		if (files.empty()) {
 			return string();
 		}
+		string staged_sql;
 		if (context.try_append_data_files &&
-		    context.try_append_data_files(commit_snapshot, files, new_tables_result, new_schemas_result)) {
-			// fast-path: files were written directly via Appender, skip SQL emission
-			return string();
+		    context.try_append_data_files(commit_snapshot, files, new_tables_result, new_schemas_result, staged_sql)) {
+			// fast-path: files were appended directly, or staged and copied by staged_sql
+			return staged_sql;
 		}
 		vector<DuckLakePath> resolved_paths;
 		resolved_paths.reserve(files.size());
