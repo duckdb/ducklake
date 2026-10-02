@@ -1,0 +1,42 @@
+# name: test/sql/issues/issue_1266.test
+# description: Flushing inlined deletes for a partitioned table must preserve visible rows
+# group: [issues]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/issue_1266', DATA_INLINING_ROW_LIMIT 1000000);
+
+statement ok
+USE ducklake;
+
+statement ok
+CREATE TABLE t(part INT, i INT);
+
+statement ok
+ALTER TABLE t SET PARTITIONED BY (part);
+
+statement ok
+INSERT INTO t SELECT i % 4, i FROM range(0, 400) tbl(i);
+
+statement ok
+DELETE FROM t WHERE i % 5 = 0;
+
+query II
+SELECT count(), sum(i) FROM t;
+----
+320	64000
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake');
+
+query II
+SELECT count(), sum(i) FROM t;
+----
+320	64000
