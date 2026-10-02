@@ -451,9 +451,14 @@ unique_ptr<LogicalOperator> DuckLakeCompactor::InsertSort(Binder &binder, unique
 
 unique_ptr<LogicalOperator>
 DuckLakeCompactor::GenerateCompactionCommand(vector<DuckLakeCompactionFileEntry> source_files) {
-	// get the table entry at the specified snapshot
-	auto snapshot_id = source_files[0].file.begin_snapshot;
-	DuckLakeSnapshot snapshot(snapshot_id, source_files[0].schema_version, 0, 0);
+	// get the table entry at the start of the group's schema version, as main does (262b8193): the
+	// schema cache is keyed by schema version alone, so the snapshot id handed to it must belong to
+	// that schema version. Pairing a file's begin snapshot with the table's own (older) schema
+	// version cached a younger catalog under the older version's key, and a later time-travel read
+	// of any table served columns that did not exist at that version (issue #1505).
+	auto schema_version = source_files[0].schema_version;
+	DuckLakeSnapshot snapshot(catalog.GetBeginSnapshotForSchemaVersion(table_id, schema_version, transaction),
+	                          schema_version, 0, 0);
 
 	auto entry = catalog.GetEntryById(transaction, snapshot, table_id);
 	if (!entry) {

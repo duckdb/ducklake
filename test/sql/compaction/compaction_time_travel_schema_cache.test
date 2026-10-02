@@ -1,0 +1,56 @@
+# name: test/sql/compaction/compaction_time_travel_schema_cache.test
+# description: issue #1505 — time travel to a snapshot before ADD COLUMN must keep that snapshot's columns after merge_adjacent_files runs on another table
+# group: [compaction]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+
+test-env DATA_PATH __TEST_DIR__
+
+statement ok
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/ducklake_tt_schema_cache', DATA_INLINING_ROW_LIMIT 0)
+
+# snapshot 1
+statement ok
+CREATE TABLE ducklake.a AS SELECT i AS id FROM range(100) t(i);
+
+# snapshot 2 — the snapshot the time travel below reads
+statement ok
+CREATE TABLE ducklake.b AS SELECT i AS id, 0 AS v FROM range(100) t(i);
+
+# snapshot 3 — a gains a column after snapshot 2
+statement ok
+ALTER TABLE ducklake.a ADD COLUMN extra VARCHAR;
+
+# snapshots 4 and 5 — two delete-free adjacent files for b, written under snapshots whose
+# catalog-wide schema version is newer than b's own
+statement ok
+UPDATE ducklake.b SET v = 1 WHERE id % 10 = 0;
+
+statement ok
+UPDATE ducklake.b SET v = 2 WHERE id % 10 = 1;
+
+# the compaction loads b's table entry; the catalog it caches must belong to the schema version it
+# is keyed under, or the time travel below reads a younger schema
+statement ok
+CALL ducklake_merge_adjacent_files('ducklake', 'b');
+
+query I
+SELECT column_name FROM (DESCRIBE SELECT * FROM ducklake.a AT (VERSION => 2))
+----
+id
+
+query I
+SELECT count(*) FROM ducklake.a AT (VERSION => 2)
+----
+100
+
+# the ALTERed column is there at the current version
+query I
+SELECT column_name FROM (DESCRIBE SELECT * FROM ducklake.a)
+----
+id
+extra
