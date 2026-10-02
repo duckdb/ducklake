@@ -806,6 +806,9 @@ SELECT
 idx_t DuckLakeMetadataManager::GetNetDataFileRowCount(TableIndex table_id, DuckLakeSnapshot snapshot) {
 	auto query = GetNetDataFileRowCountSql(table_id, GetInlinedDeletionTableName(table_id, snapshot));
 	auto result = Query(snapshot, query);
+	if (result->HasError()) {
+		result->GetErrorObject().Throw("Failed to get net data file row count from DuckLake: ");
+	}
 	for (auto &row : *result) {
 		return row.GetValue<idx_t>(0);
 	}
@@ -861,11 +864,21 @@ ORDER BY column_order)",
 	                          table_id.index);
 }
 
-string DuckLakeMetadataManager::GetInlinedTableNamesSql(TableIndex table_id) {
+string DuckLakeMetadataManager::GetInlinedTableInfosSql(TableIndex table_id) {
 	return StringUtil::Format(R"(
-SELECT DISTINCT table_name
+SELECT DISTINCT table_name, schema_version
 FROM {METADATA_CATALOG}.ducklake_inlined_data_tables
 WHERE table_id = %d)",
+	                          table_id.index);
+}
+
+string DuckLakeMetadataManager::GetCurrentTableSchemaVersionSql(TableIndex table_id) {
+	return StringUtil::Format(R"(
+SELECT schema_version
+FROM {METADATA_CATALOG}.ducklake_schema_versions
+WHERE table_id = %d AND begin_snapshot <= {SNAPSHOT_ID}
+ORDER BY begin_snapshot DESC
+LIMIT 1)",
 	                          table_id.index);
 }
 
@@ -1318,12 +1331,16 @@ static string TableStatsQuery(const string &select_list, bool include_column_sta
 	return query + ";\n";
 }
 
-string DuckLakeMetadataManager::GlobalTableStatsQuery(bool include_exactness, optional_idx table_id) {
+string DuckLakeMetadataManager::GlobalTableStatsQuery(bool include_exactness, optional_idx table_id,
+                                                      bool include_snapshot_id) {
 	string select_list =
 	    "table_id, column_id, record_count, next_row_id, file_size_bytes, contains_null, contains_nan, min_value, "
 	    "max_value, extra_stats";
 	if (include_exactness) {
 		select_list += ", min_is_exact, max_is_exact";
+	}
+	if (include_snapshot_id) {
+		select_list += ", (SELECT MAX(snapshot_id) FROM {METADATA_CATALOG}.ducklake_snapshot) AS latest_snapshot_id";
 	}
 	return TableStatsQuery(select_list, true, table_id);
 }
@@ -1333,10 +1350,21 @@ vector<DuckLakeGlobalStatsInfo> DuckLakeMetadataManager::ParseGlobalTableStats(Q
 }
 
 vector<DuckLakeGlobalStatsInfo> DuckLakeMetadataManager::GetGlobalTableStats(DuckLakeSnapshot snapshot,
-                                                                             TableIndex table_id) {
-	auto result =
-	    Query(snapshot, GlobalTableStatsQuery(transaction.GetCatalog().SupportsV1_1Metadata(), table_id.index));
-	return TransformGlobalStats(*result);
+                                                                             TableIndex table_id,
+                                                                             idx_t &latest_snapshot_id) {
+	auto query = GlobalTableStatsQuery(transaction.GetCatalog().SupportsV1_1Metadata(), table_id.index, true);
+
+	auto result = Query(snapshot, query);
+	if (result->HasError()) {
+		result->GetErrorObject().Throw("Failed to get global stats information from DuckLake: ");
+	}
+	vector<DuckLakeGlobalStatsInfo> global_stats;
+	bool has_exactness = ResultHasColumn(*result, "min_is_exact");
+	for (auto &row : *result) {
+		latest_snapshot_id = row.GetValue<idx_t>(has_exactness ? 12 : 10);
+		TransformGlobalStatsRow(row, global_stats, 0, has_exactness);
+	}
+	return global_stats;
 }
 
 map<TableIndex, idx_t> DuckLakeMetadataManager::GetTableRecordCounts(DuckLakeSnapshot snapshot) {
@@ -3868,7 +3896,13 @@ WHERE {SNAPSHOT_ID} >= %s AND ({SNAPSHOT_ID} < %s OR %s IS NULL);
 	                          col_names.end_snapshot);
 }
 
-string DuckLakeMetadataManager::ReadFileColumnStatsForTableSql(TableIndex table_id, bool include_exactness) {
+string DuckLakeMetadataManager::ReadFileColumnStatsForTableSql(TableIndex table_id, bool include_exactness,
+                                                               const set<DataFileIndex> &file_ids) {
+	D_ASSERT(!file_ids.empty());
+	vector<string> file_id_values;
+	for (auto &file_id : file_ids) {
+		file_id_values.push_back(to_string(file_id.index));
+	}
 	string select_list = "data.data_file_id, data.record_count, data.file_size_bytes,\n"
 	                     "       stats.column_id, stats.value_count, stats.null_count, stats.min_value, "
 	                     "stats.max_value,\n"
@@ -3878,13 +3912,15 @@ string DuckLakeMetadataManager::ReadFileColumnStatsForTableSql(TableIndex table_
 	}
 	return StringUtil::Format("\nSELECT " + select_list + R"(
 FROM {METADATA_CATALOG}.ducklake_data_file data
-LEFT JOIN {METADATA_CATALOG}.ducklake_file_column_stats stats ON stats.data_file_id = data.data_file_id
+LEFT JOIN {METADATA_CATALOG}.ducklake_file_column_stats stats
+  ON stats.data_file_id = data.data_file_id AND stats.table_id = data.table_id
 WHERE data.table_id = %d
+  AND data.data_file_id IN (%s)
   AND {SNAPSHOT_ID} >= data.begin_snapshot
   AND ({SNAPSHOT_ID} < data.end_snapshot OR data.end_snapshot IS NULL)
 ORDER BY data.data_file_id;
 )",
-	                          table_id.index);
+	                          table_id.index, StringUtil::Join(file_id_values, ","));
 }
 
 string DuckLakeMetadataManager::GetPathForSchema(SchemaIndex schema_id,
@@ -6039,7 +6075,7 @@ WHERE NOT EXISTS (
 
 	for (auto &snapshot : snapshots) {
 		for (auto &table_id : stats_table_ids) {
-			catalog.InvalidateTableStatsCache(snapshot.next_file_id, table_id);
+			catalog.InvalidateTableStatsCache(snapshot.id, table_id);
 		}
 	}
 	ClearCache();

@@ -3,6 +3,7 @@
 #include "storage/ducklake_multi_file_list.hpp"
 #include "storage/ducklake_multi_file_reader.hpp"
 #include "storage/ducklake_metadata_manager.hpp"
+#include "storage/ducklake_catalog.hpp"
 
 #include "duckdb/common/local_file_system.hpp"
 #include "duckdb/function/table_function.hpp"
@@ -453,11 +454,30 @@ unique_ptr<NodeStatistics> DuckLakeMultiFileList::GetCardinality(ClientContext &
 	if (!stats) {
 		return nullptr;
 	}
+	// This is only a planning estimate, not an exact row-count or column-statistics bound.
 	return make_uniq<NodeStatistics>(stats->record_count);
 }
 
 DuckLakeTableEntry &DuckLakeMultiFileList::GetTable() {
 	return read_info.table;
+}
+
+bool DuckLakeMultiFileList::CanUseTableStatistics() const {
+	if (read_info.scan_type != DuckLakeScanType::SCAN_TABLE) {
+		return false;
+	}
+	if (read_info.table.IsTransactionLocal()) {
+		return false;
+	}
+	if (HasTransactionLocalData()) {
+		return false;
+	}
+	auto transaction = read_info.GetTransaction();
+	auto current_snapshot = transaction->GetSnapshot();
+	if (read_info.snapshot.snapshot_id != current_snapshot.snapshot_id || transaction->GetCatalog().CatalogSnapshot()) {
+		return false;
+	}
+	return !transaction->HasAnyLocalChanges(read_info.table_id);
 }
 
 OpenFileInfo DuckLakeMultiFileList::GetFile(idx_t i) const {

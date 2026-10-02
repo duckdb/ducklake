@@ -1,0 +1,264 @@
+# name: test/sql/compaction/file_set_table_stats.test
+# description: Adjacent merges refresh table bytes for larger and smaller outputs without changing column bounds
+# group: [compaction]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/file_set_table_stats.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+SET threads=1
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/file_set_table_stats', DATA_INLINING_ROW_LIMIT 0)
+
+foreach compression zstd uncompressed
+
+statement ok
+CALL ducklake.set_option('parquet_compression', '{compression}')
+
+statement ok
+CREATE TABLE ducklake.merge_{compression}(i BIGINT, payload VARCHAR)
+
+statement ok
+INSERT INTO ducklake.merge_{compression} SELECT i, md5(i::VARCHAR) || repeat('x', 512) FROM range(2000) r(i)
+
+statement ok
+INSERT INTO ducklake.merge_{compression} SELECT i, md5(i::VARCHAR) || repeat('x', 512) FROM range(2000, 4000) r(i)
+
+statement ok
+SET VARIABLE table_id = (SELECT table_id FROM __ducklake_metadata_ducklake.ducklake_table WHERE table_name='merge_{compression}')
+
+statement ok
+SET VARIABLE old_bytes = (SELECT file_size_bytes FROM __ducklake_metadata_ducklake.ducklake_table_stats WHERE table_id=getvariable('table_id'))
+
+# Changing the codec makes both signs of the byte delta deterministic.
+statement ok
+CALL ducklake.set_option('parquet_compression', CASE WHEN '{compression}'='zstd' THEN 'uncompressed' ELSE 'zstd' END)
+
+statement ok
+CALL ducklake_merge_adjacent_files('ducklake', 'merge_{compression}')
+
+query I
+SELECT count(*) FROM __ducklake_metadata_ducklake.ducklake_data_file WHERE table_id=getvariable('table_id') AND end_snapshot IS NULL
+----
+1
+
+statement ok
+SET VARIABLE active_bytes = (SELECT sum(file_size_bytes) FROM __ducklake_metadata_ducklake.ducklake_data_file WHERE table_id=getvariable('table_id') AND end_snapshot IS NULL)
+
+query IIII
+SELECT record_count, next_row_id, file_size_bytes=getvariable('active_bytes'), CASE WHEN '{compression}'='zstd' THEN file_size_bytes>getvariable('old_bytes') ELSE file_size_bytes<getvariable('old_bytes') END FROM __ducklake_metadata_ducklake.ducklake_table_stats WHERE table_id=getvariable('table_id')
+----
+4000	4000	true	true
+
+query III
+SELECT count(*), sum(i), sum(length(payload)) FROM ducklake.merge_{compression}
+----
+4000	7998000	2176000
+
+query TT
+SELECT min_value, max_value FROM __ducklake_metadata_ducklake.ducklake_table_column_stats WHERE table_id=getvariable('table_id') AND column_id=1
+----
+0	3999
+
+# Dropping a merged file while another file remains must not subtract its new size from the old total.
+statement ok
+INSERT INTO ducklake.merge_{compression} VALUES (4000, 'new'), (4001, 'new'), (4002, 'new')
+
+query I
+DELETE FROM ducklake.merge_{compression} WHERE i < 4000
+----
+4000
+
+statement ok
+SET VARIABLE active_bytes = (SELECT sum(file_size_bytes) FROM __ducklake_metadata_ducklake.ducklake_data_file WHERE table_id=getvariable('table_id') AND end_snapshot IS NULL)
+
+query III
+SELECT record_count, next_row_id, file_size_bytes=getvariable('active_bytes') FROM __ducklake_metadata_ducklake.ducklake_table_stats WHERE table_id=getvariable('table_id')
+----
+3	4003	true
+
+query I
+DELETE FROM ducklake.merge_{compression}
+----
+3
+
+query III
+SELECT record_count, next_row_id, file_size_bytes FROM __ducklake_metadata_ducklake.ducklake_table_stats WHERE table_id=getvariable('table_id')
+----
+0	4003	0
+
+endloop
+
+# A legacy understated byte total must not prevent the next drop from repairing it.
+statement ok
+CREATE TABLE ducklake.stale_bytes AS SELECT range i FROM range(100)
+
+statement ok
+INSERT INTO ducklake.stale_bytes SELECT range i FROM range(100, 200)
+
+statement ok
+SET VARIABLE stale_id = (SELECT table_id FROM __ducklake_metadata_ducklake.ducklake_table WHERE table_name='stale_bytes')
+
+statement ok
+UPDATE __ducklake_metadata_ducklake.ducklake_table_stats SET file_size_bytes=1 WHERE table_id=getvariable('stale_id')
+
+statement ok
+DETACH ducklake
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/file_set_table_stats', DATA_INLINING_ROW_LIMIT 0)
+
+query I
+DELETE FROM ducklake.stale_bytes WHERE i < 100
+----
+100
+
+statement ok
+SET VARIABLE active_bytes = (SELECT sum(file_size_bytes) FROM __ducklake_metadata_ducklake.ducklake_data_file WHERE table_id=getvariable('stale_id') AND end_snapshot IS NULL)
+
+query III
+SELECT record_count, next_row_id, file_size_bytes=getvariable('active_bytes') FROM __ducklake_metadata_ducklake.ducklake_table_stats WHERE table_id=getvariable('stale_id')
+----
+100	200	true
+
+# An authoritative empty-file-set refresh reads totals but never joins the old file-column stats.
+statement ok
+SET VARIABLE remote_commit = (SELECT catalog_type='quack' FROM ducklake_settings('ducklake'))
+
+statement ok
+CALL enable_logging('DuckLakeMetadata')
+
+statement ok
+CALL truncate_duckdb_logs()
+
+statement ok
+DELETE FROM ducklake.stale_bytes
+
+# Quack executes the metadata queries server-side, outside these client logs.
+query I
+SELECT getvariable('remote_commit') OR count(*) > 0 FROM duckdb_logs_parsed('DuckLakeMetadata') WHERE lower(regexp_replace(query, '\s+', '', 'g')) LIKE '%selectdata_file_id,record_count,file_size_bytesfrom%ducklake_data_file%'
+----
+true
+
+query I
+SELECT getvariable('remote_commit') OR count(*) = 0 FROM duckdb_logs_parsed('DuckLakeMetadata') WHERE lower(regexp_replace(query, '\s+', '', 'g')) LIKE '%stats.data_file_id=data.data_file_id%'
+----
+true
+
+statement ok
+CALL disable_logging()
+
+# Tightening the gross count after an inlined deletion must not make the old extremum look exact.
+statement ok
+CREATE TABLE ducklake.inline_deleted(i INTEGER)
+
+statement ok
+INSERT INTO ducklake.inline_deleted VALUES (1), (2)
+
+statement ok
+INSERT INTO ducklake.inline_deleted VALUES (3), (4)
+
+statement ok
+CALL ducklake.set_option('data_inlining_row_limit', 10)
+
+statement ok
+INSERT INTO ducklake.inline_deleted VALUES (1000)
+
+statement ok
+DELETE FROM ducklake.inline_deleted WHERE i=1000
+
+statement ok
+CALL ducklake_merge_adjacent_files('ducklake', 'inline_deleted')
+
+query III
+SELECT count(*), min(i), max(i) FROM ducklake.inline_deleted
+----
+4	1	4
+
+# Same-commit inlined updates/deletes and an insert are counted once; preserved row IDs do not advance.
+statement ok
+INSERT INTO ducklake.inline_deleted VALUES (10), (20), (30)
+
+statement ok
+CALL ducklake.set_option('data_inlining_row_limit', 0)
+
+statement ok
+INSERT INTO ducklake.inline_deleted VALUES (5), (6)
+
+statement ok
+CALL ducklake.set_option('data_inlining_row_limit', 10)
+
+statement ok
+BEGIN
+
+statement ok
+UPDATE ducklake.inline_deleted SET i=21 WHERE i=20
+
+statement ok
+DELETE FROM ducklake.inline_deleted WHERE i=30
+
+statement ok
+INSERT INTO ducklake.inline_deleted VALUES (40)
+
+statement ok
+COMMIT
+
+statement ok
+CALL ducklake_merge_adjacent_files('ducklake', 'inline_deleted')
+
+statement ok
+SET VARIABLE inline_id = (SELECT table_id FROM __ducklake_metadata_ducklake.ducklake_table WHERE table_name='inline_deleted')
+
+query II
+SELECT record_count, next_row_id FROM __ducklake_metadata_ducklake.ducklake_table_stats WHERE table_id=getvariable('inline_id')
+----
+9	11
+
+query III
+SELECT count(*), min(i), max(i) FROM ducklake.inline_deleted
+----
+9	1	40
+
+# Flushed inlined rows contribute physical file rows without advancing next_row_id.
+statement ok
+CALL ducklake.set_option('data_inlining_row_limit', 0)
+
+statement ok
+INSERT INTO ducklake.inline_deleted VALUES (7), (8)
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake', table_name=>'inline_deleted')
+
+statement ok
+CALL ducklake_merge_adjacent_files('ducklake', 'inline_deleted')
+
+statement ok
+SET VARIABLE active_rows = (SELECT sum(record_count) FROM __ducklake_metadata_ducklake.ducklake_data_file WHERE table_id=getvariable('inline_id') AND end_snapshot IS NULL)
+
+statement ok
+SET VARIABLE active_bytes = (SELECT sum(file_size_bytes) FROM __ducklake_metadata_ducklake.ducklake_data_file WHERE table_id=getvariable('inline_id') AND end_snapshot IS NULL)
+
+query III
+SELECT record_count=getvariable('active_rows'), next_row_id, file_size_bytes=getvariable('active_bytes') FROM __ducklake_metadata_ducklake.ducklake_table_stats WHERE table_id=getvariable('inline_id')
+----
+true	13	true
+
+query III
+SELECT count(*), min(i), max(i) FROM ducklake.inline_deleted
+----
+11	1	40
+
+# Bulk invalidation keeps the column rows so a complete rewrite can recover exact bounds later.
+statement ok
+CALL ducklake_rewrite_data_files('ducklake', 'inline_deleted', delete_threshold=>0)
+
+query TT
+SELECT min_value, max_value FROM __ducklake_metadata_ducklake.ducklake_table_column_stats WHERE table_id=getvariable('inline_id') AND column_id=1
+----
+1	40
