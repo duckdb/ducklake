@@ -1,0 +1,62 @@
+# name: test/sql/quack/partial_file_metadata_delete_expired.test
+# description: A metadata delete must not remove unseen rows when the conflicting snapshots were expired
+# group: [quack]
+
+require ducklake
+
+require parquet
+
+require quack
+
+# Pinned metadata backends still lose this delete after expiry (duckdb/ducklake#1472).
+require-env DUCKLAKE_CONNECTION quack:localhost:19999
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/quack_partial_file_metadata_delete_expired', DATA_INLINING_ROW_LIMIT 0)
+
+# CREATE TABLE -> 1, ALTER -> 2, INSERT -> 3
+statement ok
+CREATE TABLE ducklake.t(id INTEGER, p INTEGER)
+
+statement ok
+ALTER TABLE ducklake.t SET PARTITIONED BY (p)
+
+statement ok
+INSERT INTO ducklake.t VALUES (1, 1)
+
+statement ok con1
+BEGIN
+
+query I con1
+SELECT id FROM ducklake.t
+----
+1
+
+# INSERT -> 4, merge -> 5, CREATE TABLE -> 6
+statement ok
+INSERT INTO ducklake.t VALUES (2, 1)
+
+statement ok
+CALL ducklake_merge_adjacent_files('ducklake')
+
+statement ok
+CREATE TABLE ducklake.unrelated(i INTEGER)
+
+# Expiring 4 and 5 removes the conflict history, so con1's commit succeeds.
+statement ok
+CALL ducklake_expire_snapshots('ducklake', versions := [4, 5])
+
+query I con1
+DELETE FROM ducklake.t WHERE p = 1
+----
+1
+
+statement ok con1
+COMMIT
+
+query I
+SELECT id FROM ducklake.t ORDER BY id
+----
+2
