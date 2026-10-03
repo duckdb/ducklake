@@ -56,7 +56,7 @@ concurrentloop i 0 2
 statement maybe
 CALL ducklake_rewrite_data_files('ducklake', 'test', delete_threshold => 0);
 ----
-attempting to compact table with index "1" - but another transaction has compacted it
+attempting to compact file with index "0" - but another transaction has compacted or deleted it
 
 endloop
 

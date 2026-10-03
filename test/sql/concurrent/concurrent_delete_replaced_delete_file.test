@@ -1,0 +1,107 @@
+# name: test/sql/concurrent/concurrent_delete_replaced_delete_file.test
+# description: concurrent deletes that replace existing delete files conflict only when they hit the same data file
+# group: [concurrent]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/concurrent_delete_replaced', METADATA_CATALOG 'ducklake_meta', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+SET immediate_transaction_mode=true
+
+statement ok
+CREATE TABLE ducklake.t(i INTEGER)
+
+statement ok
+INSERT INTO ducklake.t FROM range(100)
+
+statement ok
+DELETE FROM ducklake.t WHERE i < 10
+
+# both deletes replace the existing delete file, and the replacement keeps its begin_snapshot
+statement ok con1
+BEGIN
+
+statement ok con2
+BEGIN
+
+statement ok con1
+DELETE FROM ducklake.t WHERE i = 50
+
+statement ok con2
+DELETE FROM ducklake.t WHERE i = 60
+
+statement ok con1
+COMMIT
+
+statement error con2
+COMMIT
+----
+Transaction conflict
+
+query I
+SELECT count(*) FROM ducklake.t
+----
+89
+
+query I
+SELECT count(*) FROM ducklake_meta.ducklake_delete_file WHERE end_snapshot IS NULL
+----
+1
+
+query I
+SELECT i FROM ducklake.t WHERE i IN (50, 60)
+----
+60
+
+# deletes that replace the delete files of two different data files must both commit
+statement ok
+INSERT INTO ducklake.t FROM range(100, 200)
+
+statement ok
+DELETE FROM ducklake.t WHERE i >= 100 AND i < 110
+
+query I
+SELECT count(*) FROM ducklake_meta.ducklake_delete_file WHERE end_snapshot IS NULL
+----
+2
+
+statement ok con3
+BEGIN
+
+statement ok con4
+BEGIN
+
+statement ok con3
+DELETE FROM ducklake.t WHERE i = 70
+
+statement ok con4
+DELETE FROM ducklake.t WHERE i = 170
+
+statement ok con3
+COMMIT
+
+statement ok con4
+COMMIT
+
+query I
+SELECT count(*) FROM ducklake.t
+----
+177
+
+query I
+SELECT count(*) FROM ducklake_meta.ducklake_delete_file WHERE end_snapshot IS NULL
+----
+2
+
+query I
+SELECT count(*) FROM ducklake.t WHERE i IN (60, 70, 170)
+----
+1
