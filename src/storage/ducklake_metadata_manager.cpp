@@ -4044,6 +4044,26 @@ DuckLakePath DuckLakeMetadataManager::GetRelativePath(SchemaIndex schema_id, con
 	return GetRelativePath(path, GetPath(schema_id, new_schemas_result));
 }
 
+vector<DuckLakePath>
+DuckLakeMetadataManager::GetRelativePaths(const vector<DuckLakeFileInfo> &files, const vector<DuckLakeTableInfo> &new_tables,
+                                          const vector<DuckLakeSchemaInfo> &new_schemas_result,
+                                          const std::function<unique_ptr<QueryResult>(string)> &query_executor,
+                                          const string &base_data_path, const string &separator) {
+	unordered_map<idx_t, string> table_paths;
+	vector<DuckLakePath> result;
+	result.reserve(files.size());
+	for (auto &file : files) {
+		auto entry = table_paths.find(file.table_id.index);
+		if (entry == table_paths.end()) {
+			auto table_path = GetPathForTable(file.table_id, new_tables, new_schemas_result, query_executor,
+			                                  base_data_path, separator);
+			entry = table_paths.emplace(file.table_id.index, std::move(table_path)).first;
+		}
+		result.push_back(GetRelativePath(file.file_name, entry->second, separator));
+	}
+	return result;
+}
+
 DuckLakePath DuckLakeMetadataManager::GetRelativePath(TableIndex table_id, const string &path,
                                                       const vector<DuckLakeTableInfo> &new_tables,
                                                       vector<DuckLakeSchemaInfo> &new_schemas_result) {
