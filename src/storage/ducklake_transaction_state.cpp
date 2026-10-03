@@ -1840,13 +1840,8 @@ string DuckLakeTransactionState::CommitChanges(DuckLakeCommitState &commit_state
 			// fast-path: files were written directly via Appender, skip SQL emission
 			return string();
 		}
-		vector<DuckLakePath> resolved_paths;
-		resolved_paths.reserve(files.size());
-		for (auto &file : files) {
-			resolved_paths.push_back(DuckLakeMetadataManager::GetRelativePath(
-			    file.table_id, file.file_name, new_tables_result, new_schemas_result, context.query_metadata, data_path,
-			    separator));
-		}
+		auto resolved_paths = DuckLakeMetadataManager::GetRelativePaths(
+		    files, new_tables_result, new_schemas_result, context.query_metadata, data_path, separator);
 		return DuckLakeMetadataManager::WriteNewDataFilesSqlBatch(files, resolved_paths,
 		                                                          context.supports_v1_1_metadata);
 	};

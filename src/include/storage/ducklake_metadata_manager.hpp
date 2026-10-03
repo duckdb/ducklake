@@ -559,6 +559,12 @@ public:
 	                                    const vector<DuckLakeSchemaInfo> &new_schemas_result,
 	                                    const std::function<unique_ptr<QueryResult>(string)> &query_executor,
 	                                    const string &base_data_path, const string &separator);
+	//! Relative paths for new data files, looking up each table's path once rather than once per file
+	static vector<DuckLakePath> GetRelativePaths(const vector<DuckLakeFileInfo> &files,
+	                                             const vector<DuckLakeTableInfo> &new_tables,
+	                                             const vector<DuckLakeSchemaInfo> &new_schemas_result,
+	                                             const std::function<unique_ptr<QueryResult>(string)> &query_executor,
+	                                             const string &base_data_path, const string &separator);
 
 protected:
 	string GetInlinedTableQuery(const DuckLakeTableInfo &table, const string &table_name);

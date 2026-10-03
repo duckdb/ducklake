@@ -1,0 +1,66 @@
+# name: test/sql/metadata/sqlite_path_lookup_once.test
+# description: A commit that adds many data files to a SQLite catalog looks up each table's path once, not once per file
+# group: [metadata]
+
+require ducklake
+
+require parquet
+
+require sqlite_scanner
+
+statement ok
+ATTACH 'ducklake:sqlite:{TEST_DIR}/sqlite_path_lookup_once.db' AS lake (DATA_PATH '{TEST_DIR}/sqlite_path_lookup_once_files', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE lake.t (p BIGINT, a BIGINT);
+
+statement ok
+ALTER TABLE lake.t SET PARTITIONED BY (p);
+
+statement ok
+CREATE TABLE lake.u (p BIGINT, a BIGINT);
+
+statement ok
+ALTER TABLE lake.u SET PARTITIONED BY (p);
+
+statement ok
+CALL enable_logging('QueryLog', storage = 'memory');
+
+# 50 files into one table
+statement ok
+INSERT INTO lake.t SELECT i % 50, i FROM range(100) r(i);
+
+query I
+SELECT count(*) FROM duckdb_logs WHERE type = 'QueryLog' AND message ILIKE '%t.path AS t_path%'
+----
+1
+
+# 10 files into each of two tables, in one commit: one lookup per table, plus one this commit makes elsewhere
+statement ok
+BEGIN
+
+statement ok
+INSERT INTO lake.t SELECT 100 + i % 10, i FROM range(20) r(i);
+
+statement ok
+INSERT INTO lake.u SELECT i % 10, i FROM range(20) r(i);
+
+statement ok
+COMMIT
+
+query I
+SELECT count(*) FROM duckdb_logs WHERE type = 'QueryLog' AND message ILIKE '%t.path AS t_path%'
+----
+4
+
+statement ok
+CALL disable_logging();
+
+query IIII
+SELECT
+  (SELECT count(*) FROM ducklake_list_files('lake', 't')),
+  (SELECT count(*) FROM ducklake_list_files('lake', 'u')),
+  (SELECT sum(a) FROM lake.t),
+  (SELECT sum(a) FROM lake.u)
+----
+60	10	5140	190
