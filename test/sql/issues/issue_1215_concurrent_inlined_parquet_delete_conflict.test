@@ -1,0 +1,283 @@
+# name: test/sql/issues/issue_1215_concurrent_inlined_parquet_delete_conflict.test
+# description: concurrent inlined + parquet deletes of the same row must conflict
+# group: [issues]
+
+# an inlined delete and a parquet delete of the same data file must conflict in either commit order
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+# deletes of up to 10 rows are inlined, larger deletes write a parquet delete file
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/issue_1215_concurrent_inlined_parquet_delete_conflict', DATA_INLINING_ROW_LIMIT 10, METADATA_CATALOG 'ducklake_meta')
+
+statement ok
+SET immediate_transaction_mode=true
+
+# Order A: inlined delete commits first, parquet delete second
+
+statement ok
+CREATE TABLE ducklake.test_a AS FROM range(100) t(i)
+
+statement ok con1
+BEGIN
+
+statement ok con2
+BEGIN
+
+# inlined delete
+query I con1
+DELETE FROM ducklake.test_a WHERE i = 50
+----
+1
+
+# parquet delete
+query I con2
+DELETE FROM ducklake.test_a WHERE i >= 50 AND i < 80
+----
+30
+
+statement ok con1
+COMMIT
+
+statement error con2
+COMMIT
+----
+Transaction conflict
+
+# Order B: parquet delete commits first, inlined delete second
+
+statement ok
+CREATE TABLE ducklake.test_b AS FROM range(100) t(i)
+
+statement ok con1
+BEGIN
+
+statement ok con2
+BEGIN
+
+# parquet delete
+query I con1
+DELETE FROM ducklake.test_b WHERE i >= 50 AND i < 80
+----
+30
+
+# inlined delete
+query I con2
+DELETE FROM ducklake.test_b WHERE i = 50
+----
+1
+
+statement ok con1
+COMMIT
+
+statement error con2
+COMMIT
+----
+Transaction conflict
+
+# cross-store deletes in different data files of one table do not conflict
+
+statement ok
+CREATE TABLE ducklake.test_c AS FROM range(100) t(i)
+
+statement ok
+INSERT INTO ducklake.test_c FROM range(100, 200)
+
+statement ok con1
+BEGIN
+
+statement ok con2
+BEGIN
+
+# parquet delete in the second file
+query I con1
+DELETE FROM ducklake.test_c WHERE i >= 150 AND i < 180
+----
+30
+
+# inlined delete in the first file
+query I con2
+DELETE FROM ducklake.test_c WHERE i = 5
+----
+1
+
+statement ok con1
+COMMIT
+
+statement ok con2
+COMMIT
+
+query I
+SELECT count(*) FROM ducklake.test_c
+----
+169
+
+query I
+SELECT count(*) FROM ducklake.test_c WHERE i = 5 OR (i >= 150 AND i < 180)
+----
+0
+
+# conflicts are per data file, so disjoint rows of the same file still conflict
+
+statement ok
+CREATE TABLE ducklake.test_d AS FROM range(100) t(i)
+
+statement ok con1
+BEGIN
+
+statement ok con2
+BEGIN
+
+query I con1
+DELETE FROM ducklake.test_d WHERE i = 5
+----
+1
+
+query I con2
+DELETE FROM ducklake.test_d WHERE i >= 50 AND i < 80
+----
+30
+
+statement ok con1
+COMMIT
+
+statement error con2
+COMMIT
+----
+Transaction conflict
+
+# an inlined-data delete creates no inlined-delete table, so the probe must treat it as absent
+
+statement ok
+CREATE TABLE ducklake.test_e AS FROM range(100) t(i)
+
+statement ok
+INSERT INTO ducklake.test_e VALUES (1000), (1001), (1002), (1003), (1004)
+
+statement ok con1
+BEGIN
+
+statement ok con2
+BEGIN
+
+# inlined-data delete
+query I con1
+DELETE FROM ducklake.test_e WHERE i = 1000
+----
+1
+
+# inlined file delete
+query I con2
+DELETE FROM ducklake.test_e WHERE i = 5
+----
+1
+
+statement ok con1
+COMMIT
+
+statement error con2
+COMMIT
+----
+Transaction conflict
+
+# same, with the inlined file delete committing first
+
+statement ok
+CREATE TABLE ducklake.test_f AS FROM range(100) t(i)
+
+statement ok
+INSERT INTO ducklake.test_f VALUES (1000), (1001), (1002), (1003), (1004)
+
+statement ok con1
+BEGIN
+
+statement ok con2
+BEGIN
+
+# inlined file delete
+query I con1
+DELETE FROM ducklake.test_f WHERE i = 5
+----
+1
+
+# inlined-data delete
+query I con2
+DELETE FROM ducklake.test_f WHERE i = 1000
+----
+1
+
+statement ok con1
+COMMIT
+
+statement error con2
+COMMIT
+----
+Transaction conflict
+
+# cross-store deletes on different tables do not conflict
+
+statement ok
+CREATE TABLE ducklake.test_g_a AS FROM range(100) t(i)
+
+statement ok
+CREATE TABLE ducklake.test_g_b AS FROM range(5) t(i)
+
+statement ok con1
+BEGIN
+
+statement ok con2
+BEGIN
+
+query I con1
+DELETE FROM ducklake.test_g_a WHERE i = 5
+----
+1
+
+query I con2
+DELETE FROM ducklake.test_g_b WHERE i = 2
+----
+1
+
+statement ok con1
+COMMIT
+
+statement ok con2
+COMMIT
+
+# one transaction deleting from both stores still gets a conflict, not a probe error
+
+statement ok
+CREATE TABLE ducklake.test_h AS FROM range(100) t(i)
+
+statement ok
+INSERT INTO ducklake.test_h VALUES (1000), (1001), (1002), (1003), (1004)
+
+statement ok con1
+BEGIN
+
+statement ok con2
+BEGIN
+
+query I con1
+DELETE FROM ducklake.test_h WHERE i = 1001
+----
+1
+
+query I con2
+DELETE FROM ducklake.test_h WHERE i = 5 OR i = 1000
+----
+2
+
+statement ok con1
+COMMIT
+
+statement error con2
+COMMIT
+----
+Transaction conflict

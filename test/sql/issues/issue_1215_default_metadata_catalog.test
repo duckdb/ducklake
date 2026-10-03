@@ -1,0 +1,260 @@
+# name: test/sql/issues/issue_1215_default_metadata_catalog.test
+# description: concurrent inlined + parquet deletes of the same row conflict without METADATA_CATALOG (issue #1215)
+# group: [issues]
+
+# Without METADATA_CATALOG the metadata database is attached hidden, and information_schema skips
+# hidden databases. The probe for the inlined-delete table must still see it.
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/issue_1215_default_metadata_catalog', DATA_INLINING_ROW_LIMIT 10)
+
+statement ok
+SET immediate_transaction_mode=true
+
+# Order A: inlined delete commits first, parquet delete commits second
+
+statement ok
+CREATE TABLE ducklake.test_a AS FROM range(100) t(i)
+
+statement ok con1
+BEGIN
+
+statement ok con2
+BEGIN
+
+query I con1
+DELETE FROM ducklake.test_a WHERE i = 50
+----
+1
+
+query I con2
+DELETE FROM ducklake.test_a WHERE i >= 50 AND i < 80
+----
+30
+
+statement ok con1
+COMMIT
+
+statement error con2
+COMMIT
+----
+Transaction conflict
+
+query I
+SELECT count(*) FROM ducklake.test_a
+----
+99
+
+# Order B: parquet delete commits first, inlined delete commits second
+
+statement ok
+CREATE TABLE ducklake.test_b AS FROM range(100) t(i)
+
+statement ok con1
+BEGIN
+
+statement ok con2
+BEGIN
+
+query I con1
+DELETE FROM ducklake.test_b WHERE i >= 50 AND i < 80
+----
+30
+
+query I con2
+DELETE FROM ducklake.test_b WHERE i = 50
+----
+1
+
+statement ok con1
+COMMIT
+
+statement error con2
+COMMIT
+----
+Transaction conflict
+
+query I
+SELECT count(*) FROM ducklake.test_b
+----
+70
+
+# An inlined-data delete creates no inlined-delete table; the probe must report it absent, not error
+
+statement ok
+CREATE TABLE ducklake.test_e AS FROM range(100) t(i)
+
+statement ok
+INSERT INTO ducklake.test_e VALUES (1000), (1001), (1002), (1003), (1004)
+
+statement ok con1
+BEGIN
+
+statement ok con2
+BEGIN
+
+query I con1
+DELETE FROM ducklake.test_e WHERE i = 1000
+----
+1
+
+query I con2
+DELETE FROM ducklake.test_e WHERE i = 5
+----
+1
+
+statement ok con1
+COMMIT
+
+statement error con2
+COMMIT
+----
+Transaction conflict
+
+# An inlined delete must also conflict with a concurrent delete that drops the whole data file
+
+statement ok
+CREATE TABLE ducklake.test_f AS FROM range(100) t(i)
+
+statement ok con1
+BEGIN
+
+statement ok con2
+BEGIN
+
+query I con1
+DELETE FROM ducklake.test_f WHERE i = 50
+----
+1
+
+query I con2
+DELETE FROM ducklake.test_f
+----
+100
+
+statement ok con1
+COMMIT
+
+statement error con2
+COMMIT
+----
+Transaction conflict
+
+query I
+SELECT count(*) FROM ducklake.test_f
+----
+99
+
+# Same, when the drop covers one of two data files
+
+statement ok
+CREATE TABLE ducklake.test_g AS FROM range(100) t(i)
+
+statement ok
+INSERT INTO ducklake.test_g FROM range(100, 200)
+
+statement ok con1
+BEGIN
+
+statement ok con2
+BEGIN
+
+query I con1
+DELETE FROM ducklake.test_g WHERE i = 50
+----
+1
+
+query I con2
+DELETE FROM ducklake.test_g WHERE i < 100
+----
+100
+
+statement ok con1
+COMMIT
+
+statement error con2
+COMMIT
+----
+Transaction conflict
+
+query I
+SELECT count(*) FROM ducklake.test_g
+----
+199
+
+# Reverse order: the file drop commits first, the inlined delete second
+
+statement ok
+CREATE TABLE ducklake.test_h AS FROM range(100) t(i)
+
+statement ok con1
+BEGIN
+
+statement ok con2
+BEGIN
+
+query I con1
+DELETE FROM ducklake.test_h
+----
+100
+
+query I con2
+DELETE FROM ducklake.test_h WHERE i = 50
+----
+1
+
+statement ok con1
+COMMIT
+
+statement error con2
+COMMIT
+----
+Transaction conflict
+
+query I
+SELECT count(*) FROM ducklake.test_h
+----
+0
+
+# An inlined delete in one data file does not conflict with a drop of a different data file
+
+statement ok
+CREATE TABLE ducklake.test_i AS FROM range(100) t(i)
+
+statement ok
+INSERT INTO ducklake.test_i FROM range(100, 200)
+
+statement ok con1
+BEGIN
+
+statement ok con2
+BEGIN
+
+query I con1
+DELETE FROM ducklake.test_i WHERE i = 150
+----
+1
+
+query I con2
+DELETE FROM ducklake.test_i WHERE i < 100
+----
+100
+
+statement ok con1
+COMMIT
+
+statement ok con2
+COMMIT
+
+query I
+SELECT count(*) FROM ducklake.test_i
+----
+99
