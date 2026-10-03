@@ -36,7 +36,8 @@ add_library(
   ducklake_transaction.cpp
   ducklake_transaction_state.cpp
   ducklake_view_entry.cpp
-  ducklake_transaction_changes.cpp)
+  ducklake_transaction_changes.cpp
+  ducklake_encryption_provider.cpp)
 set(ALL_OBJECT_FILES
     ${ALL_OBJECT_FILES} $<TARGET_OBJECTS:ducklake_storage>
     PARENT_SCOPE)
