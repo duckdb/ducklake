@@ -363,9 +363,9 @@ TableFunction DuckLakeTableEntry::GetScanFunction(ClientContext &context, unique
 	throw InternalException("DuckLakeTableEntry::GetScanFunction called without entry lookup info");
 }
 
-unique_ptr<FunctionData> DuckLakeFunctions::BindDuckLakeScan(ClientContext &context, TableFunction &function) {
+unique_ptr<FunctionData> DuckLakeFunctions::BindDuckLakeScan(ClientContext &context, BoundTableFunction &function) {
 	vector<Value> inputs {Value("")};
-	named_parameter_map_t param_map;
+	named_argument_map_t param_map;
 	vector<LogicalType> return_types;
 	vector<Identifier> input_table_names;
 	TableFunctionRef empty_ref;
@@ -375,6 +375,13 @@ unique_ptr<FunctionData> DuckLakeFunctions::BindDuckLakeScan(ClientContext &cont
 
 	vector<Identifier> bind_names;
 	return function.bind(context, bind_input, return_types, bind_names);
+}
+
+//! The same for a function that is not bound yet: the bind sees it as a bound call would, and nothing is read back
+//! off it afterwards
+unique_ptr<FunctionData> DuckLakeFunctions::BindDuckLakeScan(ClientContext &context, const TableFunction &function) {
+	BoundTableFunction bound_function(function);
+	return BindDuckLakeScan(context, bound_function);
 }
 
 TableFunction DuckLakeTableEntry::GetScanFunction(ClientContext &context, unique_ptr<FunctionData> &bind_data,

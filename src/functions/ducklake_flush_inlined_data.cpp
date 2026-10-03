@@ -336,8 +336,8 @@ unique_ptr<LogicalOperator> DuckLakeDataFlusher::GenerateFlushCommand() {
 
 	auto virtual_columns = table.GetVirtualColumns();
 	auto ducklake_scan =
-	    make_uniq<LogicalGet>(table_idx, std::move(scan_function), std::move(bind_data), copy_options.expected_types,
-	                          copy_options.names, std::move(virtual_columns));
+	    make_uniq<LogicalGet>(table_idx, BoundTableFunction(std::move(scan_function)), std::move(bind_data),
+	                          copy_options.expected_types, copy_options.names, std::move(virtual_columns));
 	auto &column_ids = ducklake_scan->GetMutableColumnIds();
 	for (idx_t i = 0; i < columns.PhysicalColumnCount(); i++) {
 		column_ids.emplace_back(i);
@@ -788,9 +788,11 @@ static unique_ptr<LogicalOperator> FlushInlinedDataBind(ClientContext &context, 
 }
 
 DuckLakeFlushInlinedDataFunction::DuckLakeFlushInlinedDataFunction()
-    : TableFunction("ducklake_flush_inlined_data", {LogicalType::VARCHAR}, nullptr, nullptr, nullptr) {
-	named_parameters["schema_name"] = LogicalType::VARCHAR;
-	named_parameters["table_name"] = LogicalType::VARCHAR;
+    : TableFunction("ducklake_flush_inlined_data",
+                    FunctionSignature().AddPositionalOnly("catalog", LogicalType::VARCHAR), nullptr, nullptr, nullptr) {
+	GetSignature().WithTypedKwargs("options", [&](TypedKwargs &options) {
+		options.Add("schema_name", LogicalType::VARCHAR).Add("table_name", LogicalType::VARCHAR);
+	});
 	bind_operator = FlushInlinedDataBind;
 }
 

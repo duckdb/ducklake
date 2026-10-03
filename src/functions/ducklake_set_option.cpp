@@ -146,10 +146,15 @@ void DuckLakeSetOptionExecute(ClientContext &context, TableFunctionInput &data_p
 }
 
 DuckLakeSetOptionFunction::DuckLakeSetOptionFunction()
-    : TableFunction("ducklake_set_option", {LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::ANY},
+    : TableFunction("ducklake_set_option",
+                    FunctionSignature()
+                        .AddPositionalOnly("catalog", LogicalType::VARCHAR)
+                        .AddPositionalOnly("option", LogicalType::VARCHAR)
+                        .AddPositionalOnly("value", LogicalType::ANY),
                     DuckLakeSetOptionExecute, DuckLakeSetOptionBind, DuckLakeSetOptionInit) {
-	named_parameters["table_name"] = LogicalType::VARCHAR;
-	named_parameters["schema"] = LogicalType::VARCHAR;
+	GetSignature().WithTypedKwargs("options", [&](TypedKwargs &options) {
+		options.Add("table_name", LogicalType::VARCHAR).Add("schema", LogicalType::VARCHAR);
+	});
 }
 
 } // namespace duckdb

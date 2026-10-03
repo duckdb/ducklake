@@ -191,7 +191,7 @@ unique_ptr<MultiFileReader> DuckLakeMultiFileReader::Copy() const {
 	return std::move(result);
 }
 
-unique_ptr<MultiFileReader> DuckLakeMultiFileReader::CreateInstance(const TableFunction &table_function) {
+unique_ptr<MultiFileReader> DuckLakeMultiFileReader::CreateInstance(const BoundTableFunction &table_function) {
 	auto &function_info = table_function.function_info->Cast<DuckLakeFunctionInfo>();
 	auto result = make_uniq<DuckLakeMultiFileReader>(function_info);
 	return std::move(result);

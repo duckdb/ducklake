@@ -21,7 +21,7 @@ ParquetFileScanner::ParquetFileScanner(ClientContext &context, const DuckLakeFil
 	// Prepare the inputs for the bind
 	vector<Value> children;
 	children.push_back(Value(file.path));
-	named_parameter_map_t named_params;
+	named_argument_map_t named_params;
 	vector<LogicalType> input_types;
 	vector<Identifier> input_names;
 
@@ -45,8 +45,10 @@ ParquetFileScanner::ParquetFileScanner(ClientContext &context, const DuckLakeFil
 		}
 	}
 
+	// the bind sees the function as a bound call would
+	BoundTableFunction bound_table_function(dummy_table_function);
 	TableFunctionBindInput bind_input(children, named_params, input_types, input_names, nullptr, nullptr,
-	                                  dummy_table_function, empty);
+	                                  bound_table_function, empty);
 
 	bind_data = parquet_scan.bind(context, bind_input, return_types, return_names);
 }

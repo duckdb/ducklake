@@ -289,7 +289,7 @@ bool DuckLakeFunctionInfo::CanUseGlobalStats() {
 }
 
 void DuckLakeScanSerialize(Serializer &serializer, const optional_ptr<FunctionData> bind_data,
-                           const TableFunction &function) {
+                           const BoundTableFunction &function) {
 	auto &func_info = function.function_info->Cast<DuckLakeFunctionInfo>();
 	auto &catalog = func_info.table.ParentCatalog();
 	serializer.WriteProperty(100, "catalog_name", catalog.GetName());
@@ -307,7 +307,7 @@ void DuckLakeScanSerialize(Serializer &serializer, const optional_ptr<FunctionDa
 	                         func_info.table.ParentSchema().GetQualifiedName(Identifier(func_info.table_name)));
 }
 
-unique_ptr<FunctionData> DuckLakeScanDeserialize(Deserializer &deserializer, TableFunction &function) {
+unique_ptr<FunctionData> DuckLakeScanDeserialize(Deserializer &deserializer, BoundTableFunction &function) {
 	auto &context = deserializer.Get<ClientContext &>();
 	auto catalog_name = deserializer.ReadProperty<string>(100, "catalog_name");
 	auto schema_name = deserializer.ReadProperty<string>(101, "schema_name");
@@ -331,7 +331,7 @@ unique_ptr<FunctionData> DuckLakeScanDeserialize(Deserializer &deserializer, Tab
 
 	// If ducklake_scan was registered before parquet was loaded, we set it now
 	if (!function.bind) {
-		function = DuckLakeFunctions::GetDuckLakeScanFunction(*context.db);
+		function = BoundTableFunction(DuckLakeFunctions::GetDuckLakeScanFunction(*context.db));
 		if (!function.bind) {
 			throw InvalidInputException("ducklake_scan requires the parquet extension to be loaded");
 		}

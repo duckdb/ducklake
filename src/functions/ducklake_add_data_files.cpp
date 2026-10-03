@@ -1418,12 +1418,18 @@ TableFunctionSet DuckLakeAddDataFilesFunction::GetFunctions() {
 	TableFunctionSet set("ducklake_add_data_files");
 	vector<LogicalType> at_types {LogicalType::VARCHAR, LogicalType::LIST(LogicalType::VARCHAR)};
 	for (auto &type : at_types) {
-		TableFunction function("ducklake_add_data_files", {LogicalType::VARCHAR, LogicalType::VARCHAR, type},
+		TableFunction function("ducklake_add_data_files",
+		                       FunctionSignature()
+		                           .AddPositionalOnly("catalog", LogicalType::VARCHAR)
+		                           .AddPositionalOnly("table_name", LogicalType::VARCHAR)
+		                           .AddPositionalOnly(type.id() == LogicalTypeId::LIST ? "paths" : "path", type),
 		                       DuckLakeAddDataFilesExecute, DuckLakeAddDataFilesBind, DuckLakeAddDataFilesInit);
-		function.named_parameters["allow_missing"] = LogicalType::BOOLEAN;
-		function.named_parameters["ignore_extra_columns"] = LogicalType::BOOLEAN;
-		function.named_parameters["hive_partitioning"] = LogicalType::BOOLEAN;
-		function.named_parameters["schema"] = LogicalType::VARCHAR;
+		function.GetSignature().WithTypedKwargs("options", [&](TypedKwargs &options) {
+			options.Add("allow_missing", LogicalType::BOOLEAN)
+			    .Add("ignore_extra_columns", LogicalType::BOOLEAN)
+			    .Add("hive_partitioning", LogicalType::BOOLEAN)
+			    .Add("schema", LogicalType::VARCHAR);
+		});
 		set.AddFunction(function);
 	}
 	return set;

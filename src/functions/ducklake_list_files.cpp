@@ -111,10 +111,13 @@ static unique_ptr<FunctionData> DuckLakeListFilesBind(ClientContext &context, Ta
 
 DuckLakeListFilesFunction::DuckLakeListFilesFunction()
     : DuckLakeBaseMetadataFunction("ducklake_list_files", DuckLakeListFilesBind) {
-	arguments.push_back(LogicalType::VARCHAR);
-	named_parameters["schema"] = LogicalType::VARCHAR;
-	named_parameters["snapshot_version"] = LogicalType::BIGINT;
-	named_parameters["snapshot_time"] = LogicalType::TIMESTAMP_TZ;
+	GetSignature()
+	    .AddPositionalOnly("table_name", LogicalType::VARCHAR)
+	    .WithTypedKwargs("options", [&](TypedKwargs &options) {
+		    options.Add("schema", LogicalType::VARCHAR)
+		        .Add("snapshot_version", LogicalType::BIGINT)
+		        .Add("snapshot_time", LogicalType::TIMESTAMP_TZ);
+	    });
 }
 
 } // namespace duckdb

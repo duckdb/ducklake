@@ -62,7 +62,7 @@ static unique_ptr<FunctionData> DuckLakeTableChangesBind(ClientContext &context,
 	auto &transaction = DuckLakeTransaction::Get(context, catalog);
 
 	unique_ptr<FunctionData> bind_data;
-	input.table_function = table.GetScanFunction(context, bind_data, lookup);
+	input.table_function = BoundTableFunction(table.GetScanFunction(context, bind_data, lookup));
 
 	auto &function_info = input.table_function.function_info->Cast<DuckLakeFunctionInfo>();
 	names = StringsToIdentifiers(function_info.column_names);
@@ -97,7 +97,12 @@ TableFunctionSet DuckLakeTableInsertionsFunction::GetFunctions() {
 	TableFunctionSet set("ducklake_table_insertions");
 	vector<LogicalType> at_types {LogicalType::BIGINT, LogicalType::TIMESTAMP_TZ};
 	for (auto &type : at_types) {
-		set.AddFunction(TableFunction({LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::VARCHAR, type, type},
+		set.AddFunction(TableFunction(FunctionSignature()
+		                                  .AddPositionalOnly("catalog", LogicalType::VARCHAR)
+		                                  .AddPositionalOnly("schema_name", LogicalType::VARCHAR)
+		                                  .AddPositionalOnly("table_name", LogicalType::VARCHAR)
+		                                  .AddPositionalOnly("start_snapshot", type)
+		                                  .AddPositionalOnly("end_snapshot", type),
 		                              DuckLakeChangesExecute, DuckLakeTableInsertionsBind, DuckLakeChangesInit));
 	}
 	return set;
@@ -107,7 +112,12 @@ TableFunctionSet DuckLakeTableDeletionsFunction::GetFunctions() {
 	TableFunctionSet set("ducklake_table_deletions");
 	vector<LogicalType> at_types {LogicalType::BIGINT, LogicalType::TIMESTAMP_TZ};
 	for (auto &type : at_types) {
-		set.AddFunction(TableFunction({LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::VARCHAR, type, type},
+		set.AddFunction(TableFunction(FunctionSignature()
+		                                  .AddPositionalOnly("catalog", LogicalType::VARCHAR)
+		                                  .AddPositionalOnly("schema_name", LogicalType::VARCHAR)
+		                                  .AddPositionalOnly("table_name", LogicalType::VARCHAR)
+		                                  .AddPositionalOnly("start_snapshot", type)
+		                                  .AddPositionalOnly("end_snapshot", type),
 		                              DuckLakeChangesExecute, DuckLakeTableDeletionsBind, DuckLakeChangesInit));
 	}
 	return set;

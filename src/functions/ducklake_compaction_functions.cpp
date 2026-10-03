@@ -664,8 +664,8 @@ DuckLakeCompactor::GenerateCompactionCommand(vector<DuckLakeCompactionFileEntry>
 
 	auto virtual_columns = table.GetVirtualColumns();
 	auto ducklake_scan =
-	    make_uniq<LogicalGet>(table_idx, std::move(scan_function), std::move(bind_data), copy_options.expected_types,
-	                          copy_options.names, std::move(virtual_columns));
+	    make_uniq<LogicalGet>(table_idx, BoundTableFunction(std::move(scan_function)), std::move(bind_data),
+	                          copy_options.expected_types, copy_options.names, std::move(virtual_columns));
 
 	auto &column_ids = ducklake_scan->GetMutableColumnIds();
 	for (idx_t i = 0; i < columns.PhysicalColumnCount(); i++) {
@@ -850,10 +850,11 @@ unique_ptr<LogicalOperator> BindCompaction(ClientContext &context, TableFunction
 		if (max_files_entry->second.IsNull()) {
 			throw BinderException("The max_compacted_files option must be a non-null integer.");
 		}
-		max_files = UBigIntValue::Get(max_files_entry->second);
-		if (max_files == 0) {
+		auto max_files_value = BigIntValue::Get(max_files_entry->second);
+		if (max_files_value <= 0) {
 			throw BinderException("The max_compacted_files option must be greater than zero.");
 		}
+		max_files = NumericCast<uint64_t>(max_files_value);
 	}
 
 	optional_idx min_file_size;
@@ -862,7 +863,11 @@ unique_ptr<LogicalOperator> BindCompaction(ClientContext &context, TableFunction
 		if (min_file_size_entry->second.IsNull()) {
 			throw BinderException("The min_file_size option must be a non-null integer.");
 		}
-		min_file_size = UBigIntValue::Get(min_file_size_entry->second);
+		auto min_file_size_value = BigIntValue::Get(min_file_size_entry->second);
+		if (min_file_size_value < 0) {
+			throw BinderException("The min_file_size option must not be negative.");
+		}
+		min_file_size = NumericCast<uint64_t>(min_file_size_value);
 	}
 
 	optional_idx max_file_size;
@@ -871,10 +876,11 @@ unique_ptr<LogicalOperator> BindCompaction(ClientContext &context, TableFunction
 		if (max_file_size_entry->second.IsNull()) {
 			throw BinderException("The max_file_size option must be a non-null integer.");
 		}
-		max_file_size = UBigIntValue::Get(max_file_size_entry->second);
-		if (max_file_size.GetIndex() == 0) {
+		auto max_file_size_value = BigIntValue::Get(max_file_size_entry->second);
+		if (max_file_size_value <= 0) {
 			throw BinderException("The max_file_size option must be greater than zero.");
 		}
+		max_file_size = NumericCast<uint64_t>(max_file_size_value);
 	}
 
 	// Validate that min_file_size < max_file_size if both are set
@@ -957,16 +963,26 @@ static unique_ptr<LogicalOperator> MergeAdjacentFilesBind(ClientContext &context
 
 TableFunctionSet DuckLakeMergeAdjacentFilesFunction::GetFunctions() {
 	TableFunctionSet set("ducklake_merge_adjacent_files");
-	const vector<vector<LogicalType>> at_types {{LogicalType::VARCHAR, LogicalType::VARCHAR}, {LogicalType::VARCHAR}};
-	for (auto &type : at_types) {
-		TableFunction function("ducklake_merge_adjacent_files", type, nullptr, nullptr, nullptr);
+	for (bool with_table : {true, false}) {
+		auto signature = FunctionSignature().AddPositionalOnly("catalog", LogicalType::VARCHAR);
+		if (with_table) {
+			signature.AddPositionalOnly("table_name", LogicalType::VARCHAR);
+		}
+		TableFunction function("ducklake_merge_adjacent_files", std::move(signature), nullptr, nullptr, nullptr);
 		function.bind_operator = MergeAdjacentFilesBind;
-		function.named_parameters["min_file_size"] = LogicalType::UBIGINT;
-		function.named_parameters["max_file_size"] = LogicalType::UBIGINT;
-		function.named_parameters["max_compacted_files"] = LogicalType::UBIGINT;
-		function.named_parameters["newer_than"] = LogicalType::TIMESTAMP_TZ;
-		if (type.size() == 2) {
-			function.named_parameters["schema"] = LogicalType::VARCHAR;
+		function
+		    .GetSignature()
+		    // BIGINT rather than UBIGINT: a caller writes a plain integer literal, which has no implicit cast to
+		    // an unsigned parameter. The range is checked where the option is read instead.
+		    .WithTypedKwargs("options", [&](TypedKwargs &options) {
+			    options.Add("min_file_size", LogicalType::BIGINT)
+			        .Add("max_file_size", LogicalType::BIGINT)
+			        .Add("max_compacted_files", LogicalType::BIGINT)
+			        .Add("newer_than", LogicalType::TIMESTAMP_TZ);
+		    });
+		if (with_table) {
+			function.GetSignature().ExtendTypedKwargs(
+			    [&](TypedKwargs &options) { options.Add("schema", LogicalType::VARCHAR); });
 		}
 		set.AddFunction(function);
 	}
@@ -984,14 +1000,19 @@ static unique_ptr<LogicalOperator> RewriteFilesBind(ClientContext &context, Tabl
 
 TableFunctionSet DuckLakeRewriteDataFilesFunction::GetFunctions() {
 	TableFunctionSet set("ducklake_rewrite_data_files");
-	vector<vector<LogicalType>> at_types {{LogicalType::VARCHAR, LogicalType::VARCHAR}, {LogicalType::VARCHAR}};
-	for (auto &type : at_types) {
-		TableFunction function("ducklake_rewrite_data_files", type, nullptr, nullptr, nullptr);
+	for (bool with_table : {true, false}) {
+		auto signature = FunctionSignature().AddPositionalOnly("catalog", LogicalType::VARCHAR);
+		if (with_table) {
+			signature.AddPositionalOnly("table_name", LogicalType::VARCHAR);
+		}
+		TableFunction function("ducklake_rewrite_data_files", std::move(signature), nullptr, nullptr, nullptr);
 		function.bind_operator = RewriteFilesBind;
-		function.named_parameters["delete_threshold"] = LogicalType::DOUBLE;
-		function.named_parameters["max_compacted_files"] = LogicalType::UBIGINT;
-		if (type.size() == 2) {
-			function.named_parameters["schema"] = LogicalType::VARCHAR;
+		function.GetSignature().WithTypedKwargs("options", [&](TypedKwargs &options) {
+			options.Add("delete_threshold", LogicalType::DOUBLE).Add("max_compacted_files", LogicalType::BIGINT);
+		});
+		if (with_table) {
+			function.GetSignature().ExtendTypedKwargs(
+			    [&](TypedKwargs &options) { options.Add("schema", LogicalType::VARCHAR); });
 		}
 		set.AddFunction(function);
 	}

@@ -47,6 +47,9 @@ static unique_ptr<FunctionData> DuckLakeExpireSnapshotsBind(ClientContext &conte
 				if (snapshot_id.IsNull()) {
 					continue;
 				}
+				if (BigIntValue::Get(snapshot_id) < 0) {
+					throw BinderException("The versions option must only contain non-negative snapshot ids.");
+				}
 				if (!snapshot_list.empty()) {
 					snapshot_list += ", ";
 				}
@@ -149,11 +152,16 @@ void DuckLakeExpireSnapshotsExecute(ClientContext &context, TableFunctionInput &
 }
 
 DuckLakeExpireSnapshotsFunction::DuckLakeExpireSnapshotsFunction()
-    : TableFunction("ducklake_expire_snapshots", {LogicalType::VARCHAR}, DuckLakeExpireSnapshotsExecute,
-                    DuckLakeExpireSnapshotsBind, DuckLakeExpireSnapshotsInit) {
-	named_parameters["older_than"] = LogicalType::TIMESTAMP_TZ;
-	named_parameters["versions"] = LogicalType::LIST(LogicalType::UBIGINT);
-	named_parameters["dry_run"] = LogicalType::BOOLEAN;
+    : TableFunction("ducklake_expire_snapshots", FunctionSignature().AddPositionalOnly("catalog", LogicalType::VARCHAR),
+                    DuckLakeExpireSnapshotsExecute, DuckLakeExpireSnapshotsBind, DuckLakeExpireSnapshotsInit) {
+	GetSignature().WithTypedKwargs("options", [&](TypedKwargs &options) {
+		options
+		    .Add("older_than", LogicalType::TIMESTAMP_TZ)
+		    // BIGINT rather than UBIGINT: a caller writes "versions => [2]", which is a list of signed literals, and
+		    // an unsigned parameter has no implicit cast from one. The range is checked below instead.
+		    .Add("versions", LogicalType::LIST(LogicalType::BIGINT))
+		    .Add("dry_run", LogicalType::BOOLEAN);
+	});
 }
 
 } // namespace duckdb

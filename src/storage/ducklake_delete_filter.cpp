@@ -26,7 +26,7 @@ struct DeleteFileFunctionInfo : public TableFunctionInfo {
 //! Custom MultiFileReader that creates a SimpleMultiFileList with extended info.
 //! This avoids HEAD requests by providing file metadata (size, etag, last_modified) upfront
 struct DeleteFileMultiFileReader : public MultiFileReader {
-	static unique_ptr<MultiFileReader> CreateInstance(const TableFunction &table_function) {
+	static unique_ptr<MultiFileReader> CreateInstance(const BoundTableFunction &table_function) {
 		auto &info = table_function.function_info->Cast<DeleteFileFunctionInfo>();
 		return make_uniq<DeleteFileMultiFileReader>(info.file_data);
 	}

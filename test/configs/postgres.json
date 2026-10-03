@@ -90,6 +90,22 @@
       "paths": [
         "test/sql/quack/partial_file_count.test"
       ]
+    },
+    {
+      "reason": "FIXME: duckdb-postgres f9db66e re-looks up attached tables while planning (PostgresGetBindInfo); a concurrent pg_clear_cache from another DuckLake commit empties the catalog set between load and lookup, so the lookup fails",
+      "paths": [
+        "test/sql/catalog/schema_cache_concurrent_prepare.test",
+        "test/sql/concurrent/concurrent_table_creation.test_slow",
+        "test/sql/deletion_inlining/test_deletion_inlining_concurrent_retry.test",
+        "test/sql/issues/issue_1248_concurrent_commit_schema_id.test",
+        "test/sql/settings/max_retry_count.test"
+      ]
+    },
+    {
+      "reason": "FIXME: duckdb 3363c469 TableFunctionMultiFileWrapper::InitializeGlobalState counts files on bind_data.file_list instead of the pushed-down global file list, so DuckLake issues the file-list metadata query twice",
+      "paths": [
+        "test/sql/stats/file_list_metadata_query.test"
+      ]
     }
   ]
 }
