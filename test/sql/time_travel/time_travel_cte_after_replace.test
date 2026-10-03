@@ -1,0 +1,46 @@
+# name: test/sql/time_travel/time_travel_cte_after_replace.test
+# description: issue #1485 — time travel to a version before CREATE OR REPLACE keeps its rows when a NOT MATERIALIZED CTE references it twice
+# group: [time_travel]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+
+test-env DATA_PATH __TEST_DIR__
+
+statement ok
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '${DATA_PATH}/ducklake_tt_cte_replace')
+
+# snapshot 1 — 100 rows
+statement ok
+CREATE TABLE dl.t AS SELECT i AS id FROM range(100) r(i);
+
+# snapshot 2 — 150 rows
+statement ok
+INSERT INTO dl.t SELECT i FROM range(100, 150) r(i);
+
+# snapshot 3 — the table gets a new identity; version 1's files hang off the old one
+statement ok
+CREATE OR REPLACE TABLE dl.t AS SELECT * FROM dl.t;
+
+# a NOT MATERIALIZED CTE referenced twice is inlined by copying the scan; the copy must keep
+# resolving the table as of version 1
+query I
+WITH p AS NOT MATERIALIZED (SELECT * FROM dl.t AT (VERSION => 1))
+SELECT count(*) FROM (SELECT * FROM p a JOIN p b USING (id))
+----
+100
+
+query I
+WITH p AS NOT MATERIALIZED (SELECT * FROM dl.t AT (VERSION => 1))
+SELECT count(*) FROM p
+----
+100
+
+# the current version is untouched
+query I
+SELECT count(*) FROM dl.t
+----
+150
