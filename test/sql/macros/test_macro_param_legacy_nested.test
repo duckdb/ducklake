@@ -1,0 +1,51 @@
+# name: test/sql/macros/test_macro_param_legacy_nested.test
+# description: nested parameter types written by older DuckLake versions are rejected with a clear error
+# group: [macros]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/macro_legacy_nested.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/macro_legacy_nested', METADATA_CATALOG 'ducklake_meta')
+
+statement ok
+USE ducklake
+
+statement ok
+CREATE MACRO m(l VARCHAR[]) AS (len(l))
+
+# rewrite the row the way older versions stored it - the child type is gone
+statement ok
+UPDATE ducklake_meta.ducklake_macro_parameters SET parameter_type = 'list'
+
+statement ok
+USE memory
+
+statement ok
+DETACH ducklake
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/macro_legacy_nested', METADATA_CATALOG 'ducklake_meta')
+
+# the catalog refuses to load rather than building a type with no children
+statement error
+USE ducklake
+----
+carries no field information
+
+# the metadata catalog is still reachable, so the row can be repaired in place
+statement ok
+UPDATE ducklake_meta.ducklake_macro_parameters SET parameter_type = 'VARCHAR[]'
+
+statement ok
+USE ducklake
+
+query I
+SELECT m(['x', 'y'])
+----
+2

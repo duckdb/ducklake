@@ -25,9 +25,9 @@ CREATE MACRO rows_for(v := NULL) AS TABLE SELECT v AS v, v IS NULL AS missing
 query IIIIIII
 FROM ducklake_meta.ducklake_macro_parameters ORDER BY macro_id, column_id
 ----
-1	0	0	a	unknown	NULL	unknown
-1	0	1	b	unknown	NULL	null
-2	0	0	v	unknown	NULL	null
+1	0	0	a	UNKNOWN	NULL	unknown
+1	0	1	b	UNKNOWN	NULL	expression
+2	0	0	v	UNKNOWN	NULL	expression
 
 query II
 SELECT with_default(1), with_default(1, 2)

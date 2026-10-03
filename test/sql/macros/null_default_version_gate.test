@@ -28,7 +28,7 @@ DuckLake 1.0 does not support the NULL type
 statement error
 CREATE MACRO typed_default(a, b := NULL::INTEGER) AS COALESCE(b, a)
 ----
-DuckLake 1.0 does not support the NULL type
+DuckLake 1.0 does not support typed NULL macro parameter defaults
 
 # regular defaults keep working
 statement ok
@@ -40,7 +40,7 @@ SELECT with_default(1)
 6
 
 query I
-SELECT COUNT(*) FROM ducklake_macro_gate_meta.ducklake_macro_parameters WHERE default_value_type = 'null'
+SELECT COUNT(*) FROM ducklake_macro_gate_meta.ducklake_macro_parameters WHERE default_value_type = 'expression'
 ----
 0
 
@@ -66,6 +66,6 @@ FROM rows_for()
 NULL
 
 query I
-SELECT COUNT(*) FROM ducklake_macro_gate_meta.ducklake_macro_parameters WHERE default_value_type = 'null'
+SELECT COUNT(*) FROM ducklake_macro_gate_meta.ducklake_macro_parameters WHERE default_value_type = 'expression'
 ----
 1

@@ -40,24 +40,24 @@ FROM __ducklake_metadata_ducklake.ducklake_macro_impl;
 1	5	duckdb	((((a + b) + c) + d) + e)	scalar
 
 
-query IIIIIII
-FROM __ducklake_metadata_ducklake.ducklake_macro_parameters;
+query IIIII
+SELECT macro_id, impl_id, column_id, parameter_name, default_value FROM __ducklake_metadata_ducklake.ducklake_macro_parameters;
 ----
-1	1	0	a	unknown	NULL	unknown
-1	2	0	a	unknown	NULL	unknown
-1	2	1	b	unknown	NULL	unknown
-1	3	0	a	unknown	NULL	unknown
-1	3	1	b	unknown	NULL	unknown
-1	3	2	c	unknown	NULL	unknown
-1	4	0	a	unknown	NULL	unknown
-1	4	1	b	unknown	NULL	unknown
-1	4	2	c	unknown	NULL	unknown
-1	4	3	d	unknown	NULL	unknown
-1	5	0	a	unknown	NULL	unknown
-1	5	1	b	unknown	NULL	unknown
-1	5	2	c	unknown	NULL	unknown
-1	5	3	d	unknown	NULL	unknown
-1	5	4	e	unknown	NULL	unknown
+1	1	0	a	NULL
+1	2	0	a	NULL
+1	2	1	b	NULL
+1	3	0	a	NULL
+1	3	1	b	NULL
+1	3	2	c	NULL
+1	4	0	a	NULL
+1	4	1	b	NULL
+1	4	2	c	NULL
+1	4	3	d	NULL
+1	5	0	a	NULL
+1	5	1	b	NULL
+1	5	2	c	NULL
+1	5	3	d	NULL
+1	5	4	e	NULL
 
 query I
 SELECT multi_add();

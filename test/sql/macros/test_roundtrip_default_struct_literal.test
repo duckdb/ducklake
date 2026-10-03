@@ -1,0 +1,43 @@
+# name: test/sql/macros/test_roundtrip_default_struct_literal.test
+# description: macro default with a struct literal must round-trip
+# group: [macros]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/macro_default_struct_literal.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/macro_default_struct_literal', METADATA_CATALOG 'ducklake_meta')
+
+statement ok
+USE ducklake
+
+statement ok
+CREATE MACRO m(st STRUCT(i INTEGER) := {'i': 1}) AS (st.i)
+
+query I
+SELECT m()
+----
+1
+
+# the default must survive a fresh attach
+statement ok
+USE memory
+
+statement ok
+DETACH ducklake
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/macro_default_struct_literal', METADATA_CATALOG 'ducklake_meta')
+
+statement ok
+USE ducklake
+
+query I
+SELECT m()
+----
+1

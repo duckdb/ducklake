@@ -1,0 +1,48 @@
+# name: test/sql/macros/test_roundtrip_param_map.test
+# description: a MAP-typed macro parameter must round-trip, even without a default
+# group: [macros]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/macro_nested_param_map.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/macro_nested_param_map', METADATA_CATALOG 'ducklake_meta')
+
+statement ok
+USE ducklake
+
+statement ok
+CREATE MACRO m(mp MAP(VARCHAR, INTEGER)) AS (mp['a'])
+
+# the parameter type is stored as dialect SQL, so the key and value types survive
+query IIII
+SELECT parameter_name, parameter_type, default_value, default_value_type FROM ducklake_meta.ducklake_macro_parameters
+----
+mp	MAP(VARCHAR, INTEGER)	NULL	unknown
+
+query I
+SELECT m(MAP(['a'], [7]))
+----
+7
+
+statement ok
+USE memory
+
+statement ok
+DETACH ducklake
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/macro_nested_param_map', METADATA_CATALOG 'ducklake_meta')
+
+statement ok
+USE ducklake
+
+query I
+SELECT m(MAP(['a'], [7]))
+----
+7

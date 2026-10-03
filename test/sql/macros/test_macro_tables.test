@@ -37,11 +37,11 @@ FROM __ducklake_metadata_ducklake.ducklake_macro_impl;
 2	0	duckdb	SELECT * FROM test_tbl WHERE ((id >= a) OR ("name" = _name))	table
 
 
-query IIIIIII
-FROM __ducklake_metadata_ducklake.ducklake_macro_parameters;
+query IIIII
+SELECT macro_id, impl_id, column_id, parameter_name, default_value FROM __ducklake_metadata_ducklake.ducklake_macro_parameters;
 ----
-2	0	0	a	unknown	NULL	unknown
-2	0	1	_name	unknown	NULL	unknown
+2	0	0	a	NULL
+2	0	1	_name	NULL
 
 query II
 FROM xt(5,'tom');
