@@ -36,6 +36,7 @@ class DuckLakeTableEntry;
 class DuckLakeTransaction;
 struct DuckLakeRetryConfig;
 struct TransactionChangeInformation;
+class BaseAppender;
 class BoundAtClause;
 class QueryResult;
 class SQLStatement;
@@ -200,6 +201,10 @@ public:
 	//! Returns true for DuckDB metadata, false for external databases (Postgres, SQLite)
 	virtual bool SupportsAppender() const {
 		return true;
+	}
+	//! Append new data-file metadata in memory and insert it into the catalog tables with one query per table
+	virtual bool AppendsThroughQuery() const {
+		return false;
 	}
 
 	//! Probe the metadata server for optional capabilities, for now we only check for server-side retries
@@ -569,6 +574,13 @@ protected:
 	string WriteNewDataFilesWithAppender(DuckLakeSnapshot &commit_snapshot, const vector<DuckLakeFileInfo> &new_files,
 	                                     const vector<DuckLakeTableInfo> &new_tables,
 	                                     vector<DuckLakeSchemaInfo> &new_schemas_result);
+	void WriteNewDataFilesWithQueryAppender(DuckLakeSnapshot &commit_snapshot, const vector<DuckLakeFileInfo> &new_files,
+	                                        const vector<DuckLakeTableInfo> &new_tables,
+	                                        vector<DuckLakeSchemaInfo> &new_schemas_result);
+	void AppendDataFiles(BaseAppender &data_file_appender, BaseAppender &column_stats_appender,
+	                     BaseAppender &partition_value_appender, BaseAppender &variant_stats_appender,
+	                     DuckLakeSnapshot &commit_snapshot, const vector<DuckLakeFileInfo> &new_files,
+	                     const vector<DuckLakeTableInfo> &new_tables, vector<DuckLakeSchemaInfo> &new_schemas_result);
 	DuckLakePath GetRelativePath(const string &path, const string &data_path);
 	string FromRelativePath(const DuckLakePath &path, const string &base_path);
 	string FromRelativePath(const DuckLakePath &path);

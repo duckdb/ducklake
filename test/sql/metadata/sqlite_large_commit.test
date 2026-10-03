@@ -1,0 +1,102 @@
+# name: test/sql/metadata/sqlite_large_commit.test
+# description: A commit of thousands of files to a SQLite catalog inserts its file lists as values, stores the same types, and writes nothing when it fails
+# group: [metadata]
+
+require ducklake
+
+require parquet
+
+require sqlite_scanner
+
+statement ok
+ATTACH 'ducklake:sqlite:{TEST_DIR}/sqlite_large_commit.db' AS lake (DATA_PATH '{TEST_DIR}/sqlite_large_commit_files', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE lake.t (p BIGINT, a BIGINT, b DOUBLE, c VARCHAR, d TIMESTAMP, n INTEGER);
+
+statement ok
+ALTER TABLE lake.t SET PARTITIONED BY (p);
+
+statement ok
+CALL enable_logging('QueryLog', storage = 'memory');
+
+# 3,000 partitions write 3,000 files in one commit
+statement ok
+INSERT INTO lake.t SELECT i % 3000, i, i / 7.0, 'row-' || i, TIMESTAMP '2026-01-01' + to_seconds(i), CASE WHEN i % 2 = 0 THEN i END
+FROM range(6000) r(i);
+
+# the file lists are inserted from the appended values, not parsed by DuckDB as a VALUES list
+query II
+SELECT count(*) FILTER (message ILIKE '%."main".ducklake_data_file SELECT * FROM appended_data'),
+       count(*) FILTER (message ILIKE '%ducklake_data_file VALUES%')
+FROM duckdb_logs WHERE type = 'QueryLog'
+----
+1	0
+
+statement ok
+CALL disable_logging();
+
+query IIII
+SELECT
+  (SELECT count(*) FROM __ducklake_metadata_lake.ducklake_data_file),
+  (SELECT count(*) FROM __ducklake_metadata_lake.ducklake_file_column_stats),
+  (SELECT count(*) FROM __ducklake_metadata_lake.ducklake_file_partition_value),
+  (SELECT count(*) FROM lake.t)
+----
+3000	18000	3000	6000
+
+query II
+SELECT min(a), max(a) FROM lake.t WHERE p = 2999
+----
+2999	5999
+
+statement ok
+CREATE TABLE lake.v AS SELECT COLUMNS(*)::VARIANT FROM (VALUES (10::VARIANT), (20::VARIANT), (30::VARIANT)) t(col);
+
+# every column of the four file tables stores the SQLite types the DuckDB-parsed INSERT stored
+# ducklake_data_file
+query IIIIIIIIIIIIIIIII rowsort
+FROM sqlite_query('__ducklake_metadata_lake', 'SELECT DISTINCT typeof(data_file_id), typeof(table_id), typeof(begin_snapshot), typeof(end_snapshot), typeof(file_order), typeof(path), typeof(path_is_relative), typeof(file_format), typeof(record_count), typeof(file_size_bytes), typeof(footer_size), typeof(row_id_start), typeof(partition_id), typeof(encryption_key), typeof(mapping_id), typeof(partial_max), typeof(row_group_count) FROM ducklake_data_file')
+----
+integer	integer	integer	null	null	text	integer	text	integer	integer	integer	integer	integer	null	null	null	integer
+integer	integer	integer	null	null	text	integer	text	integer	integer	integer	integer	null	null	null	null	integer
+
+# ducklake_file_column_stats
+query IIIIIIIIIIII rowsort
+FROM sqlite_query('__ducklake_metadata_lake', 'SELECT DISTINCT typeof(data_file_id), typeof(table_id), typeof(column_id), typeof(column_size_bytes), typeof(value_count), typeof(null_count), typeof(min_value), typeof(max_value), typeof(contains_nan), typeof(extra_stats), typeof(min_is_exact), typeof(max_is_exact) FROM ducklake_file_column_stats')
+----
+integer	integer	integer	integer	integer	integer	null	null	null	null	null	null
+integer	integer	integer	integer	integer	integer	null	null	null	text	null	null
+integer	integer	integer	integer	integer	integer	text	text	integer	null	integer	integer
+integer	integer	integer	integer	integer	integer	text	text	null	null	integer	integer
+
+# ducklake_file_partition_value
+query IIII rowsort
+FROM sqlite_query('__ducklake_metadata_lake', 'SELECT DISTINCT typeof(data_file_id), typeof(table_id), typeof(partition_key_index), typeof(partition_value) FROM ducklake_file_partition_value')
+----
+integer	integer	integer	text
+
+# ducklake_file_variant_stats
+query IIIIIIIIIIII rowsort
+FROM sqlite_query('__ducklake_metadata_lake', 'SELECT DISTINCT typeof(data_file_id), typeof(table_id), typeof(column_id), typeof(variant_path), typeof(shredded_type), typeof(column_size_bytes), typeof(value_count), typeof(null_count), typeof(min_value), typeof(max_value), typeof(contains_nan), typeof(extra_stats) FROM ducklake_file_variant_stats')
+----
+integer	integer	integer	text	text	integer	integer	integer	text	text	null	null
+
+# take the next snapshot's id in ducklake_snapshot_changes, so the commit fails at its last statement
+statement ok
+INSERT INTO __ducklake_metadata_lake.ducklake_snapshot_changes (snapshot_id)
+SELECT max(snapshot_id) + 1 FROM __ducklake_metadata_lake.ducklake_snapshot
+
+statement error
+INSERT INTO lake.t SELECT i % 3000, i, 0, 'y', TIMESTAMP '2026-01-01', NULL FROM range(3000) r(i);
+----
+<REGEX>:.*(PRIMARY KEY|UNIQUE|constraint).*
+
+query IIII
+SELECT
+  (SELECT count(*) FROM __ducklake_metadata_lake.ducklake_data_file),
+  (SELECT count(*) FROM __ducklake_metadata_lake.ducklake_file_column_stats),
+  (SELECT count(*) FROM __ducklake_metadata_lake.ducklake_file_partition_value),
+  (SELECT count(*) FROM lake.t)
+----
+3001	18001	3000	6000

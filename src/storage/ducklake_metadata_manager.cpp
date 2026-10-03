@@ -4272,6 +4272,51 @@ string DuckLakeMetadataManager::WriteNewDataFilesWithAppender(DuckLakeSnapshot &
 	                                  Identifier("ducklake_file_partition_value"));
 	Appender variant_stats_appender(connection, Identifier(db_name), schema_name,
 	                                Identifier("ducklake_file_variant_stats"));
+	AppendDataFiles(data_file_appender, column_stats_appender, partition_value_appender, variant_stats_appender,
+	                commit_snapshot, new_files, new_tables, new_schemas_result);
+	return "";
+}
+
+void DuckLakeMetadataManager::WriteNewDataFilesWithQueryAppender(DuckLakeSnapshot &commit_snapshot,
+                                                                 const vector<DuckLakeFileInfo> &new_files,
+                                                                 const vector<DuckLakeTableInfo> &new_tables,
+                                                                 vector<DuckLakeSchemaInfo> &new_schemas_result) {
+	// the rows stay values: each query inserts its in-memory chunk through the catalog's own insert, on the
+	// commit's connection and transaction, with no SQL text per row and no table created
+	auto &catalog = transaction.GetCatalog();
+	auto &connection = transaction.GetConnection();
+	auto schema_name = catalog.MetadataSchemaName();
+	if (schema_name.empty()) {
+		schema_name = "main";
+	}
+	auto make_appender = [&](const char *table) {
+		auto info = connection.TableInfo(Identifier(catalog.MetadataDatabaseName()), schema_name, Identifier(table));
+		if (!info) {
+			throw InternalException("DuckLake metadata table %s not found", table);
+		}
+		vector<LogicalType> types;
+		for (auto &column : info->columns) {
+			types.push_back(column.Type());
+		}
+		auto query = StringUtil::Format("INSERT INTO {METADATA_CATALOG}.%s SELECT * FROM appended_data", table);
+		SubstituteCatalogPlaceholders(query);
+		return make_uniq<QueryAppender>(connection, std::move(query), std::move(types));
+	};
+	auto data_file_appender = make_appender("ducklake_data_file");
+	auto column_stats_appender = make_appender("ducklake_file_column_stats");
+	auto partition_value_appender = make_appender("ducklake_file_partition_value");
+	auto variant_stats_appender = make_appender("ducklake_file_variant_stats");
+	AppendDataFiles(*data_file_appender, *column_stats_appender, *partition_value_appender, *variant_stats_appender,
+	                commit_snapshot, new_files, new_tables, new_schemas_result);
+}
+
+void DuckLakeMetadataManager::AppendDataFiles(BaseAppender &data_file_appender, BaseAppender &column_stats_appender,
+                                              BaseAppender &partition_value_appender,
+                                              BaseAppender &variant_stats_appender, DuckLakeSnapshot &commit_snapshot,
+                                              const vector<DuckLakeFileInfo> &new_files,
+                                              const vector<DuckLakeTableInfo> &new_tables,
+                                              vector<DuckLakeSchemaInfo> &new_schemas_result) {
+	auto &catalog = transaction.GetCatalog();
 
 	bool supports_v1_1_metadata = catalog.SupportsV1_1Metadata();
 	for (auto &file : new_files) {
@@ -4493,19 +4538,24 @@ string DuckLakeMetadataManager::WriteNewDataFilesWithAppender(DuckLakeSnapshot &
 	column_stats_appender.Close();
 	partition_value_appender.Close();
 	variant_stats_appender.Close();
-
-	return "";
 }
 
 bool DuckLakeMetadataManager::TryAppendDataFiles(DuckLakeSnapshot &commit_snapshot,
                                                  const vector<DuckLakeFileInfo> &new_files,
                                                  const vector<DuckLakeTableInfo> &new_tables,
                                                  vector<DuckLakeSchemaInfo> &new_schemas_result) {
-	if (!SupportsAppender() || new_files.empty()) {
+	if (new_files.empty()) {
 		return false;
 	}
-	WriteNewDataFilesWithAppender(commit_snapshot, new_files, new_tables, new_schemas_result);
-	return true;
+	if (SupportsAppender()) {
+		WriteNewDataFilesWithAppender(commit_snapshot, new_files, new_tables, new_schemas_result);
+		return true;
+	}
+	if (AppendsThroughQuery()) {
+		WriteNewDataFilesWithQueryAppender(commit_snapshot, new_files, new_tables, new_schemas_result);
+		return true;
+	}
+	return false;
 }
 
 string DuckLakeMetadataManager::WriteNewDataFiles(DuckLakeSnapshot &commit_snapshot,
