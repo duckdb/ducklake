@@ -1,0 +1,112 @@
+# name: test/sql/stats/table_stats_bulk_load.test
+# description: issue #1398 - after a commit moves next_file_id, the stats of every table load in one metadata query, not one per table
+# group: [stats]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+
+test-env DATA_PATH __TEST_DIR__
+
+statement ok
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/table_stats_bulk_load', DATA_INLINING_ROW_LIMIT 0)
+
+# eight tables: four with rows, four empty (no stats row)
+statement ok
+CREATE TABLE ducklake.t1 AS SELECT i AS id FROM range(10) t(i);
+
+statement ok
+CREATE TABLE ducklake.t2 AS SELECT i AS id FROM range(20) t(i);
+
+statement ok
+CREATE TABLE ducklake.t3 AS SELECT i AS id FROM range(30) t(i);
+
+statement ok
+CREATE TABLE ducklake.t4 AS SELECT i AS id FROM range(40) t(i);
+
+statement ok
+CREATE TABLE ducklake.e1 (id INTEGER);
+
+statement ok
+CREATE TABLE ducklake.e2 (id INTEGER);
+
+statement ok
+CREATE TABLE ducklake.e3 (id INTEGER);
+
+statement ok
+CREATE TABLE ducklake.e4 (id INTEGER);
+
+# a commit that adds a file moves next_file_id, which is part of every table's stats cache key
+statement ok
+INSERT INTO ducklake.t1 VALUES (100);
+
+# count the stats reads only: a commit's own stats writes also name ducklake_table_column_stats
+statement ok
+CALL enable_logging('DuckLakeMetadata')
+
+# planning a scan reads each scanned table's stats: eight tables, one metadata query
+query I
+SELECT count(*) FROM (SELECT id FROM ducklake.t1 UNION ALL SELECT id FROM ducklake.t2 UNION ALL SELECT id FROM ducklake.t3 UNION ALL SELECT id FROM ducklake.t4 UNION ALL SELECT id FROM ducklake.e1 UNION ALL SELECT id FROM ducklake.e2 UNION ALL SELECT id FROM ducklake.e3 UNION ALL SELECT id FROM ducklake.e4)
+----
+101
+
+query I
+SELECT count(*) FROM duckdb_logs_parsed('DuckLakeMetadata') WHERE query LIKE '%SELECT table_id, column_id, record_count%'
+----
+1
+
+# a second scan is served from the cache - empty tables included, through their negative entries
+query I
+SELECT count(*) FROM (SELECT id FROM ducklake.t1 UNION ALL SELECT id FROM ducklake.t2 UNION ALL SELECT id FROM ducklake.t3 UNION ALL SELECT id FROM ducklake.t4 UNION ALL SELECT id FROM ducklake.e1 UNION ALL SELECT id FROM ducklake.e2 UNION ALL SELECT id FROM ducklake.e3 UNION ALL SELECT id FROM ducklake.e4)
+----
+101
+
+query I
+SELECT count(*) FROM duckdb_logs_parsed('DuckLakeMetadata') WHERE query LIKE '%SELECT table_id, column_id, record_count%'
+----
+1
+
+# duckdb_tables() reads every table's cardinality from the same cache
+query II
+SELECT table_name, estimated_size FROM duckdb_tables() WHERE database_name = 'ducklake' ORDER BY table_name
+----
+e1	0
+e2	0
+e3	0
+e4	0
+t1	11
+t2	20
+t3	30
+t4	40
+
+query I
+SELECT count(*) FROM duckdb_logs_parsed('DuckLakeMetadata') WHERE query LIKE '%SELECT table_id, column_id, record_count%'
+----
+1
+
+# the next commit that adds a file misses every table again, and again costs one query
+statement ok
+INSERT INTO ducklake.t2 VALUES (100);
+
+query I
+SELECT count(*) FROM (SELECT id FROM ducklake.t1 UNION ALL SELECT id FROM ducklake.t2 UNION ALL SELECT id FROM ducklake.t3 UNION ALL SELECT id FROM ducklake.t4 UNION ALL SELECT id FROM ducklake.e1 UNION ALL SELECT id FROM ducklake.e2 UNION ALL SELECT id FROM ducklake.e3 UNION ALL SELECT id FROM ducklake.e4)
+----
+102
+
+query I
+SELECT count(*) FROM duckdb_logs_parsed('DuckLakeMetadata') WHERE query LIKE '%SELECT table_id, column_id, record_count%'
+----
+2
+
+# every table keeps its own stats after the bulk load
+query II
+SELECT min(id), max(id) FROM ducklake.t3
+----
+0	29
+
+query I
+SELECT count(*) FROM ducklake.e2
+----
+0
