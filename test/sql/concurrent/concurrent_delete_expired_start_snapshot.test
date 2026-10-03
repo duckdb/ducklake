@@ -1,0 +1,59 @@
+# name: test/sql/concurrent/concurrent_delete_expired_start_snapshot.test
+# description: replacement conflicts survive expiration of the starting snapshot
+# group: [concurrent]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/concurrent_delete_expired_start_snapshot', METADATA_CATALOG 'ducklake_meta', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+SET immediate_transaction_mode=true
+
+statement ok
+CREATE TABLE ducklake.t(i INTEGER)
+
+statement ok
+INSERT INTO ducklake.t FROM range(100)
+
+statement ok
+DELETE FROM ducklake.t WHERE i < 10
+
+statement ok con1
+BEGIN
+
+statement ok con1
+DELETE FROM ducklake.t WHERE i = 50
+
+# Expire con1's snapshot after the competing delete commits
+statement ok
+DELETE FROM ducklake.t WHERE i = 60
+
+statement ok
+CALL ducklake_expire_snapshots('ducklake', older_than => now(), dry_run => false)
+
+query I
+SELECT count(*) FROM ducklake_meta.ducklake_snapshot
+----
+1
+
+statement error con1
+COMMIT
+----
+Transaction conflict
+
+query I
+SELECT count(*) FROM ducklake_meta.ducklake_delete_file WHERE end_snapshot IS NULL
+----
+1
+
+query I
+SELECT count(*) FROM ducklake.t
+----
+89
