@@ -686,7 +686,8 @@ void DuckLakeMultiFileReader::GatherDeletionScanSnapshots(BaseFileReader &reader
                                                           const Vector &rowid_vector, Vector &snapshot_vector,
                                                           idx_t count) const {
 	auto &delete_filter = static_cast<DuckLakeDeleteFilter &>(*reader.deletion_filter);
-	if (delete_filter.delete_data->scan_snapshot_map.empty()) {
+	auto &delete_data = *delete_filter.delete_data;
+	if (delete_data.scan_snapshot_map.empty()) {
 		// We don't have anything to gather
 		return;
 	}
@@ -698,31 +699,30 @@ void DuckLakeMultiFileReader::GatherDeletionScanSnapshots(BaseFileReader &reader
 	rowid_vector.ToUnifiedFormat(row_id_data);
 	auto row_id_ptr = UnifiedVectorFormat::GetData<int64_t>(row_id_data);
 
+	// without embedded row_ids the map is keyed by file position
+	idx_t row_id_start = 0;
+	if (!delete_data.uses_row_id && reader_data.file_to_be_opened.extended_info) {
+		auto &options = reader_data.file_to_be_opened.extended_info->options;
+		auto entry = options.find("row_id_start");
+		if (entry != options.end()) {
+			row_id_start = entry->second.GetValue<idx_t>();
+		}
+	}
+
 	// Look up the snapshot_id for each row
 	for (idx_t i = 0; i < count; i++) {
 		auto row_id_idx = row_id_data.sel->get_index(i);
 		auto row_id = row_id_ptr[row_id_idx];
 
 		idx_t lookup_key;
-		if (delete_filter.delete_data->uses_row_id) {
+		if (delete_data.uses_row_id) {
 			// File has embedded row_ids - use global row_id directly
 			lookup_key = static_cast<idx_t>(row_id);
 		} else {
-			optional_idx row_id_start;
-			if (reader_data.file_to_be_opened.extended_info) {
-				auto entry = reader_data.file_to_be_opened.extended_info->options.find("row_id_start");
-				if (entry != reader_data.file_to_be_opened.extended_info->options.end()) {
-					row_id_start = entry->second.GetValue<idx_t>();
-				}
-			}
-			if (row_id_start.IsValid()) {
-				lookup_key = NumericCast<idx_t>(row_id) - row_id_start.GetIndex();
-			} else {
-				lookup_key = NumericCast<idx_t>(row_id);
-			}
+			lookup_key = NumericCast<idx_t>(row_id) - row_id_start;
 		}
 
-		auto snapshot = delete_filter.delete_data->GetSnapshotForRow(lookup_key);
+		auto snapshot = delete_data.GetSnapshotForRow(lookup_key);
 		if (snapshot.IsValid()) {
 			snapshot_data[i] = snapshot.GetIndex();
 		}

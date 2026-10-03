@@ -6,6 +6,7 @@ benchmark/micro/maintenance/expire_snapshots.benchmark
 benchmark/micro/maintenance/flush_inlined_data.benchmark
 benchmark/micro/time_travel/at_version_history.benchmark
 benchmark/micro/time_travel/table_changes_incremental_poll.benchmark
+benchmark/micro/time_travel/table_deletions_snapshot_ids.benchmark
 benchmark/micro/read/warm_small_queries.benchmark
 benchmark/micro/read/file_pruning_many_files.benchmark
 benchmark/micro/write/insert_commits_inlined.benchmark
