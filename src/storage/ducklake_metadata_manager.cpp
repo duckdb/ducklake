@@ -39,6 +39,9 @@
 #include "duckdb/planner/expression/bound_constant_expression.hpp"
 #include "duckdb/planner/expression/bound_function_expression.hpp"
 #include "duckdb/planner/expression/bound_operator_expression.hpp"
+#include "duckdb/storage/statistics/base_statistics.hpp"
+
+#include <limits>
 
 namespace duckdb {
 
@@ -1439,6 +1442,15 @@ static bool IsSimpleFilterSubject(const Expression &expr) {
 	       expr.GetExpressionClass() == ExpressionClass::BOUND_COLUMN_REF;
 }
 
+static bool FilterMayMatchNaN(const ExpressionFilter &filter, const LogicalType &type) {
+	auto nan = type.id() == LogicalTypeId::FLOAT ? Value::FLOAT(std::numeric_limits<float>::quiet_NaN())
+	                                             : Value::DOUBLE(std::numeric_limits<double>::quiet_NaN());
+	auto nan_stats = BaseStatistics::FromConstant(nan);
+	auto result = filter.CheckStatistics(nan_stats);
+	return result != FilterPropagateResult::FILTER_ALWAYS_FALSE &&
+	       result != FilterPropagateResult::FILTER_FALSE_OR_NULL;
+}
+
 bool DuckLakeMetadataManager::ValueIsFinite(const Value &val) {
 	if (val.type().id() != LogicalTypeId::FLOAT && val.type().id() != LogicalTypeId::DOUBLE) {
 		return true;
@@ -1516,64 +1528,10 @@ string DuckLakeMetadataManager::GenerateConstantFilterDouble(ExpressionType comp
                                                              const LogicalType &type,
                                                              unordered_set<string> &referenced_stats,
                                                              const string &stats_alias) {
-	double constant_val = constant.GetValue<double>();
-	bool constant_is_nan = Value::IsNan(constant_val);
-	switch (comparison_type) {
-	case ExpressionType::COMPARE_EQUAL:
-		// x = constant
-		if (constant_is_nan) {
-			// x = NAN - check for `contains_nan`
-			referenced_stats.insert("contains_nan");
-			return StatsColumn(stats_alias, "contains_nan");
-		}
-		// else check as if this is a numeric
-		return GenerateConstantFilter(comparison_type, constant, type, referenced_stats, stats_alias);
-	case ExpressionType::COMPARE_GREATERTHANOREQUALTO:
-	case ExpressionType::COMPARE_GREATERTHAN: {
-		if (constant_is_nan) {
-			// skip these filters if the constant is nan
-			// note that > and >= we can actually handle since nan is the biggest value
-			// (>= is equal to =, > is always false)
-			return string();
-		}
-		// generate the numeric filter
-		string filter = GenerateConstantFilter(comparison_type, constant, type, referenced_stats, stats_alias);
-		if (filter.empty()) {
-			return string();
-		}
-		// since NaN is bigger than anything - we also need to check for contains_nan
-		referenced_stats.insert("contains_nan");
-		return filter + " OR " + StatsColumn(stats_alias, "contains_nan");
+	if (Value::IsNan(constant.GetValue<double>())) {
+		return comparison_type == ExpressionType::COMPARE_EQUAL ? "false" : string();
 	}
-	case ExpressionType::COMPARE_LESSTHANOREQUALTO:
-	case ExpressionType::COMPARE_LESSTHAN:
-		if (constant_is_nan) {
-			// skip these filters if the constant is nan
-			return string();
-		}
-		// these are equivalent to the numeric filter
-		return GenerateConstantFilter(comparison_type, constant, type, referenced_stats, stats_alias);
-	case ExpressionType::COMPARE_NOTEQUAL: {
-		// x <> constant
-		if (constant_is_nan) {
-			// x <> NaN is true for every non-NaN value and false only for NaN.
-			// proving a file can be pruned would require knowing all its values are NaN, which min/max
-			// cannot express - so never prune.
-			return string();
-		}
-		// generate the numeric filter
-		string filter = GenerateConstantFilter(comparison_type, constant, type, referenced_stats, stats_alias);
-		if (filter.empty()) {
-			return string();
-		}
-		// NaN <> constant is always true, so we must also keep files that contain NaN
-		referenced_stats.insert("contains_nan");
-		return filter + " OR " + StatsColumn(stats_alias, "contains_nan");
-	}
-	default:
-		// unsupported
-		return string();
-	}
+	return GenerateConstantFilter(comparison_type, constant, type, referenced_stats, stats_alias);
 }
 
 string DuckLakeMetadataManager::GenerateFilterFromExpression(const Expression &expr, const LogicalType *type,
@@ -1738,7 +1696,7 @@ string DuckLakeMetadataManager::GenerateColumnFilterCondition(const ColumnFilter
 	auto cte_name = StatsCteName(column_filter.column_field_index);
 
 	unordered_set<string> referenced_stats;
-	auto filter_condition = GenerateFilterPushdown(*column_filter.table_filter, referenced_stats, cte_name);
+	const auto filter_condition = GenerateFilterPushdown(*column_filter.table_filter, referenced_stats, cte_name);
 
 	if (filter_condition.empty()) {
 		return string();
@@ -1749,11 +1707,22 @@ string DuckLakeMetadataManager::GenerateColumnFilterCondition(const ColumnFilter
 		null_checks += StatsColumn(cte_name, stat) + " IS NULL OR ";
 	}
 
+	string nan_condition;
+	const auto &type = column_filter.column_type;
+	if (type.id() == LogicalTypeId::FLOAT || type.id() == LogicalTypeId::DOUBLE) {
+		if (FilterMayMatchNaN(*column_filter.table_filter, type)) {
+			auto contains_nan = StatsColumn(cte_name, "contains_nan");
+			referenced_stats.insert("contains_nan");
+			nan_condition = " OR (" + contains_nan + " IS NULL OR " + contains_nan + ")";
+		}
+	}
+
 	// a filter that a NULL row can satisfy must not prune files that only hold NULLs, even though their
 	// min/max are absent - only a purely value-based filter may use the guard
 	const bool matches_null_rows = referenced_stats.count("null_count") > 0;
 	const bool needs_value_count_guard =
-	    !matches_null_rows && (referenced_stats.count("min_value") > 0 || referenced_stats.count("max_value") > 0);
+	    !matches_null_rows && (referenced_stats.count("min_value") > 0 || referenced_stats.count("max_value") > 0 ||
+	                           referenced_stats.count("contains_nan") > 0);
 	if (needs_value_count_guard) {
 		referenced_stats.insert("value_count");
 	}
@@ -1763,12 +1732,12 @@ string DuckLakeMetadataManager::GenerateColumnFilterCondition(const ColumnFilter
 	// NULL and must NOT be pruned, we cannot determine filter satisfaction without stats.
 	if (needs_value_count_guard) {
 		auto value_count = StatsColumn(cte_name, "value_count");
-		condition =
-		    StringUtil::Format("(%s.data_file_id IS NULL OR ((%s IS NULL OR %s > 0) AND (%s(%s))))", cte_name.c_str(),
-		                       value_count.c_str(), value_count.c_str(), null_checks.c_str(), filter_condition.c_str());
+		condition = StringUtil::Format("(%s.data_file_id IS NULL OR ((%s IS NULL OR %s > 0) AND (%s(%s)%s)))",
+		                               cte_name.c_str(), value_count.c_str(), value_count.c_str(), null_checks.c_str(),
+		                               filter_condition.c_str(), nan_condition.c_str());
 	} else {
-		condition = StringUtil::Format("(%s.data_file_id IS NULL OR (%s(%s)))", cte_name.c_str(), null_checks.c_str(),
-		                               filter_condition.c_str());
+		condition = StringUtil::Format("(%s.data_file_id IS NULL OR (%s(%s)%s))", cte_name.c_str(), null_checks.c_str(),
+		                               filter_condition.c_str(), nan_condition.c_str());
 	}
 
 	AddCTERequirement(result.required_ctes, column_filter.column_field_index, referenced_stats);
