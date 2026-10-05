@@ -393,7 +393,8 @@ string PostgresMetadataManager::GetLatestSnapshotQuery() const {
 	SELECT * FROM postgres_query({METADATA_CATALOG_NAME_LITERAL},
 		'SELECT snapshot_id, schema_version, next_catalog_id, next_file_id,
 		 (SELECT MAX(value) FROM {METADATA_SCHEMA_ESCAPED}.ducklake_metadata WHERE key = ''version''),
-		 (SELECT GREATEST(MAX(begin_snapshot), MAX(end_snapshot)) FROM {METADATA_SCHEMA_ESCAPED}.ducklake_metadata)
+		 (SELECT GREATEST(MAX(begin_snapshot), MAX(end_snapshot)) FROM {METADATA_SCHEMA_ESCAPED}.ducklake_metadata),
+		 (SELECT COUNT(*) FROM {METADATA_SCHEMA_ESCAPED}.ducklake_metadata)
 		 FROM {METADATA_SCHEMA_ESCAPED}.ducklake_snapshot WHERE snapshot_id = (
 		     SELECT MAX(snapshot_id) FROM {METADATA_SCHEMA_ESCAPED}.ducklake_snapshot
 		 );')

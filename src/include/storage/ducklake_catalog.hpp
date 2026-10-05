@@ -194,8 +194,8 @@ public:
 	//! Applies a committed config option to the in-memory copy
 	void SetConfigOption(const DuckLakeConfigOption &option);
 	//! The options committed as of options_version, over the ones given at ATTACH
-	shared_ptr<const DuckLakeConfigOptions> GetCommittedOptions(DuckLakeTransaction &transaction,
-	                                                            idx_t options_version);
+	shared_ptr<const DuckLakeConfigOptions> GetCommittedOptions(DuckLakeTransaction &transaction, idx_t options_version,
+	                                                            idx_t options_rows);
 	//! Options a transaction has set are visible only to it, so nullptr reads committed values only. Pending
 	//! table options take precedence.
 	bool TryGetConfigOption(optional_ptr<DuckLakeTransaction> transaction, const string &option, string &result,
@@ -424,9 +424,10 @@ private:
 	DuckLakeOptions options;
 	//! The config options given at ATTACH, before the committed ones were loaded over them
 	DuckLakeConfigOptions attach_options;
-	//! The newest committed options a transaction has read, and the snapshot they last changed at
+	//! The newest committed options a transaction has read, the snapshot they last changed at and the option rows
 	mutex committed_options_lock;
 	optional_idx committed_options_version;
+	idx_t committed_options_rows = 0;
 	shared_ptr<const DuckLakeConfigOptions> committed_options;
 	//! The path separator
 	string separator = "/";

@@ -1162,10 +1162,12 @@ void DuckLakeCatalog::SetConfigOption(const DuckLakeConfigOption &option) {
 	}
 }
 
-shared_ptr<const DuckLakeConfigOptions> DuckLakeCatalog::GetCommittedOptions(DuckLakeTransaction &transaction,
-                                                                             idx_t options_version) {
+shared_ptr<const DuckLakeConfigOptions>
+DuckLakeCatalog::GetCommittedOptions(DuckLakeTransaction &transaction, idx_t options_version, idx_t options_rows) {
 	lock_guard<mutex> guard(committed_options_lock);
-	if (committed_options && committed_options_version.GetIndex() == options_version) {
+	// expiring snapshots can take the version back, but only by deleting rows
+	if (committed_options && committed_options_version.GetIndex() == options_version &&
+	    committed_options_rows == options_rows) {
 		return committed_options;
 	}
 	auto metadata = transaction.GetMetadataManager().LoadDuckLake(options_version);
@@ -1180,9 +1182,10 @@ shared_ptr<const DuckLakeConfigOptions> DuckLakeCatalog::GetCommittedOptions(Duc
 		loaded->table[entry.table_id][entry.tag.key] = entry.tag.value;
 	}
 	// a transaction on an older snapshot keeps its own copy, only the newest is cached
-	if (!committed_options || committed_options_version.GetIndex() < options_version) {
+	if (!committed_options || committed_options_version.GetIndex() <= options_version) {
 		committed_options = loaded;
 		committed_options_version = options_version;
+		committed_options_rows = options_rows;
 	}
 	return loaded;
 }

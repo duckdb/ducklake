@@ -1784,6 +1784,7 @@ DuckLakeSnapshot DuckLakeTransaction::GetSnapshot() {
 		// no snapshot loaded yet for this transaction - load it
 		snapshot = metadata_manager->GetSnapshot();
 		options_version = metadata_manager->GetOptionsVersion();
+		options_rows = metadata_manager->GetOptionsRows();
 	}
 	return *snapshot;
 }
@@ -1804,7 +1805,7 @@ optional_ptr<const DuckLakeConfigOptions> DuckLakeTransaction::GetCommittedOptio
 		if (!version.IsValid()) {
 			return nullptr;
 		}
-		committed_options = ducklake_catalog.GetCommittedOptions(*this, version.GetIndex());
+		committed_options = ducklake_catalog.GetCommittedOptions(*this, version.GetIndex(), options_rows);
 	}
 	return committed_options.get();
 }

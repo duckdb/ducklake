@@ -4979,7 +4979,8 @@ DuckLakeMetadataManager::GetSnapshotAndStatsAndChanges(SnapshotAndStats &current
 
 unique_ptr<DuckLakeSnapshot> DuckLakeMetadataManager::ParseSnapshot(QueryResult &result,
                                                                     optional_ptr<string> catalog_version,
-                                                                    optional_ptr<optional_idx> options_version) {
+                                                                    optional_ptr<optional_idx> options_version,
+                                                                    optional_ptr<idx_t> options_rows) {
 	unique_ptr<DuckLakeSnapshot> snapshot;
 	for (auto &row : result) {
 		if (snapshot) {
@@ -4996,6 +4997,9 @@ unique_ptr<DuckLakeSnapshot> DuckLakeMetadataManager::ParseSnapshot(QueryResult 
 		if (options_version && result.ColumnCount() > 5 && !row.IsNull(5)) {
 			*options_version = row.GetValue<idx_t>(5);
 		}
+		if (options_rows && result.ColumnCount() > 6) {
+			*options_rows = row.GetValue<idx_t>(6);
+		}
 	}
 	return snapshot;
 }
@@ -5009,10 +5013,12 @@ WHERE snapshot_id = (SELECT MAX(snapshot_id) FROM {METADATA_CATALOG}.ducklake_sn
 
 string DuckLakeMetadataManager::GetLatestSnapshotQuery() const {
 	if (transaction.GetCatalog().SupportsV1_1Metadata()) {
-		// the options version is read in the same statement as the snapshot - a reset only closes a row
+		// the options version is read in the same statement as the snapshot - a reset only closes a row, and expiring
+		// snapshots deletes closed rows, so the version can go back to one with more rows
 		return R"(SELECT snapshot_id, schema_version, next_catalog_id, next_file_id,
 (SELECT MAX(value) FROM {METADATA_CATALOG}.ducklake_metadata WHERE key = 'version'),
-(SELECT GREATEST(MAX(begin_snapshot), MAX(end_snapshot)) FROM {METADATA_CATALOG}.ducklake_metadata)
+(SELECT GREATEST(MAX(begin_snapshot), MAX(end_snapshot)) FROM {METADATA_CATALOG}.ducklake_metadata),
+(SELECT COUNT(*) FROM {METADATA_CATALOG}.ducklake_metadata)
 FROM {METADATA_CATALOG}.ducklake_snapshot
 WHERE snapshot_id = (SELECT MAX(snapshot_id) FROM {METADATA_CATALOG}.ducklake_snapshot);)";
 	}
@@ -5025,7 +5031,7 @@ unique_ptr<DuckLakeSnapshot> DuckLakeMetadataManager::GetSnapshot() {
 		result->GetErrorObject().Throw("Failed to query most recent snapshot for DuckLake: ");
 	}
 	string catalog_version;
-	auto snapshot = ParseSnapshot(*result, &catalog_version, &options_version);
+	auto snapshot = ParseSnapshot(*result, &catalog_version, &options_version, &options_rows);
 	if (!snapshot) {
 		throw InvalidInputException("No snapshot found in DuckLake");
 	}

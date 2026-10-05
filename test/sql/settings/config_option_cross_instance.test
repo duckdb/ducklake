@@ -51,6 +51,45 @@ SELECT count(DISTINCT file_name) FROM parquet_metadata('{TEST_DIR}/config_option
 ----
 1
 
+# expiring the snapshots of a reset must not take the options version back to one dl2 already read
+statement ok
+CREATE TABLE dl1.u(id INTEGER)
+
+statement ok
+BEGIN
+
+statement ok
+CALL dl1.set_option('parquet_compression', 'gzip', table_name => 'u')
+
+statement ok
+CALL dl1.set_option('parquet_row_group_size', 1000, table_name => 'u')
+
+statement ok
+COMMIT
+
+statement ok
+INSERT INTO dl2.u VALUES (1)
+
+statement ok
+SET VARIABLE before_reset = (SELECT max(snapshot_id) FROM dl1.snapshots())
+
+statement ok
+ALTER TABLE dl1.u RESET (parquet_compression)
+
+statement ok
+SET VARIABLE expired = (SELECT list(snapshot_id) FROM dl1.snapshots() WHERE snapshot_id BETWEEN 1 AND getvariable('before_reset'))
+
+statement ok
+CALL ducklake_expire_snapshots('dl1', versions => getvariable('expired'))
+
+statement ok
+INSERT INTO dl2.u VALUES (2)
+
+query I
+SELECT count(DISTINCT file_name) FROM parquet_metadata('{TEST_DIR}/config_option_cross_instance/**/*.parquet') WHERE compression = 'GZIP'
+----
+2
+
 # before v1.1 a reset deletes what the metadata holds, including another attach's option
 statement ok
 ATTACH 'ducklake:sqlite:{TEST_DIR}/config_option_cross_instance_v10.sqlite' AS dl3 (DATA_PATH '{TEST_DIR}/config_option_cross_instance_v10', METADATA_CATALOG 'meta3', DUCKLAKE_VERSION '1.0')

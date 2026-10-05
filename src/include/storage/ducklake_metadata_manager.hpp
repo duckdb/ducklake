@@ -301,10 +301,15 @@ public:
 	//! Pure parsers for the results of the above queries.
 	static unique_ptr<DuckLakeSnapshot> ParseSnapshot(QueryResult &result,
 	                                                  optional_ptr<string> catalog_version = nullptr,
-	                                                  optional_ptr<optional_idx> options_version = nullptr);
+	                                                  optional_ptr<optional_idx> options_version = nullptr,
+	                                                  optional_ptr<idx_t> options_rows = nullptr);
 	//! The snapshot the options last changed at, as of the latest snapshot read - from v1.1
 	optional_idx GetOptionsVersion() const {
 		return options_version;
+	}
+	//! The number of option rows, as of the latest snapshot read - from v1.1
+	idx_t GetOptionsRows() const {
+		return options_rows;
 	}
 	static vector<DuckLakeGlobalStatsInfo> ParseGlobalTableStats(QueryResult &result);
 	//! Whether the result contains a column with the given name
@@ -689,8 +694,9 @@ protected:
 	map<SchemaIndex, string> schema_paths;
 	map<TableIndex, string> table_paths;
 	bool pending_cache_clear = false;
-	//! Read with the latest snapshot, see GetOptionsVersion
+	//! Read with the latest snapshot, see GetOptionsVersion and GetOptionsRows
 	optional_idx options_version;
+	idx_t options_rows = 0;
 };
 
 } // namespace duckdb
