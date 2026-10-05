@@ -449,15 +449,24 @@ idx_t DuckLakeMultiFileList::GetTotalFileCount() const {
 }
 
 unique_ptr<NodeStatistics> DuckLakeMultiFileList::GetCardinality(ClientContext &context) const {
-	auto stats = read_info.table.GetTableStats(context);
-	if (!stats) {
+	// Mutable totals remain useful estimates even when their snapshot is too new for column bounds.
+	auto record_count = read_info.table.GetCardinalityEstimate(context);
+	if (!record_count.IsValid()) {
 		return nullptr;
 	}
-	return make_uniq<NodeStatistics>(stats->record_count);
+	return make_uniq<NodeStatistics>(record_count.GetIndex());
 }
 
 DuckLakeTableEntry &DuckLakeMultiFileList::GetTable() {
 	return read_info.table;
+}
+
+bool DuckLakeMultiFileList::CanUseTableStatistics() const {
+	return CanUseColumnStatistics() && !read_info.GetTransaction()->HasAnyLocalChanges(read_info.table_id);
+}
+
+bool DuckLakeMultiFileList::CanUseColumnStatistics() const {
+	return read_info.CanUseGlobalStats() && !read_info.table.IsTransactionLocal() && !HasTransactionLocalData();
 }
 
 OpenFileInfo DuckLakeMultiFileList::GetFile(idx_t i) const {
@@ -733,10 +742,6 @@ void DuckLakeMultiFileList::GetTableDeletions() const {
 		file_entry.data_type = DuckLakeDataType::INLINED_DATA;
 		files.push_back(std::move(file_entry));
 	}
-}
-
-bool DuckLakeMultiFileList::CanUseGlobalStats() const {
-	return read_info.CanUseGlobalStats();
 }
 
 bool DuckLakeMultiFileList::IsDeleteScan() const {

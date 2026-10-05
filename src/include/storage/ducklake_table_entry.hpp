@@ -121,6 +121,7 @@ public:
 	}
 	void SetTableOptions(map<string, string> options);
 	shared_ptr<DuckLakeTableStats> GetTableStats(ClientContext &context);
+	optional_idx GetCardinalityEstimate(ClientContext &context);
 	shared_ptr<DuckLakeTableStats> GetTableStats(DuckLakeTransaction &transaction);
 	idx_t GetNetDataFileRowCount(DuckLakeTransaction &transaction);
 	idx_t GetNetInlinedRowCount(DuckLakeTransaction &transaction);

@@ -60,3 +60,26 @@ query I
 SELECT COUNT(*) FROM ducklake.merge_test AT (VERSION => 3);
 ----
 200
+
+# A zero planning estimate for the current table cannot prove a historical scan or join empty.
+statement ok
+TRUNCATE ducklake.merge_test
+
+query IIII
+SELECT count(*), min(i), max(i), sum(i) FROM ducklake.merge_test AT (VERSION => 2) WHERE i < 10
+----
+10	0	9	45
+
+query I
+SELECT count(*) FROM ducklake.merge_test AT (VERSION => 2) CROSS JOIN range(2)
+----
+200
+
+# Current column bounds cannot prune historical rows either.
+statement ok
+INSERT INTO ducklake.merge_test VALUES (1000)
+
+query IIII
+SELECT count(*), min(i), max(i), sum(i) FROM ducklake.merge_test AT (VERSION => 2) WHERE i < 10
+----
+10	0	9	45

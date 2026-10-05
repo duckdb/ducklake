@@ -62,3 +62,38 @@ query I
 SELECT COUNT(*) FROM ducklake.t
 ----
 20
+
+statement ok
+CREATE TABLE ducklake.drop_then_insert_partial AS SELECT range::INT id FROM range(100)
+
+statement ok
+INSERT INTO ducklake.drop_then_insert_partial SELECT range::INT id FROM range(1000, 1100)
+
+statement ok
+SET VARIABLE partial_id = (SELECT table_id FROM __ducklake_metadata_ducklake.ducklake_table WHERE table_name = 'drop_then_insert_partial')
+
+# Same transaction: drop one old file, keep one old file, and add a new file. Recompute must use both the remaining
+# metadata-visible file and the in-memory new file stats.
+statement ok
+BEGIN
+
+query I
+DELETE FROM ducklake.drop_then_insert_partial WHERE id < 100
+----
+100
+
+statement ok
+INSERT INTO ducklake.drop_then_insert_partial SELECT range::INT id FROM range(200, 210)
+
+statement ok
+COMMIT
+
+query III
+SELECT COUNT(*), MIN(id), MAX(id) FROM ducklake.drop_then_insert_partial
+----
+110	200	1099
+
+query TT
+SELECT min_value, max_value FROM __ducklake_metadata_ducklake.ducklake_table_column_stats WHERE table_id = getvariable('partial_id')
+----
+200	1099

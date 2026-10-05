@@ -42,6 +42,13 @@ public:
 	unique_ptr<NodeStatistics> GetCardinality(ClientContext &context) const override;
 	DuckLakeTableEntry &GetTable();
 	unique_ptr<MultiFileList> Copy() const override;
+	//! Whether current global column bounds are safe for this scan.
+	bool CanUseColumnStatistics() const;
+	//! Whether current global statistics can answer exact aggregates for this scan.
+	bool CanUseTableStatistics() const;
+	bool HasTransactionLocalData() const {
+		return !transaction_local_files.empty() || transaction_local_data;
+	}
 	vector<DuckLakeFileListExtendedEntry> GetFilesExtended() const;
 	const vector<DuckLakeFileListEntry> &GetFiles() const;
 	const DuckLakeFileListEntry &GetFileEntry(idx_t file_idx) const;
@@ -49,7 +56,6 @@ public:
 		return filter_info.get();
 	}
 
-	bool CanUseGlobalStats() const;
 	bool IsDeleteScan() const;
 	const DuckLakeDeleteScanEntry &GetDeleteScanEntry(idx_t file_idx);
 

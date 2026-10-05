@@ -1,0 +1,51 @@
+# name: test/sql/stats/local_delete_statistics.test
+# description: Pending deletes preserve conservative bounds but invalidate exact aggregates
+# group: [stats]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS lake (DATA_PATH '{DATA_PATH}/local_delete_statistics', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE lake.t AS SELECT range i FROM range(100)
+
+statement ok
+BEGIN
+
+statement ok
+DELETE FROM lake.t WHERE i IN (0, 99)
+
+# Committed bounds still prove values outside the original range impossible.
+query II
+EXPLAIN ANALYZE SELECT * FROM lake.t WHERE i < 0
+----
+analyzed_plan	<REGEX>:.*(EMPTY_RESULT|Empty Result).*
+
+# The removed extrema and row count must not be answered from committed statistics.
+query III
+SELECT min(i), max(i), count(*) FROM lake.t
+----
+1	98	98
+
+statement ok
+INSERT INTO lake.t VALUES (-1)
+
+query I
+SELECT i FROM lake.t WHERE i < 0
+----
+-1
+
+statement ok
+ROLLBACK
+
+query III
+SELECT min(i), max(i), count(*) FROM lake.t
+----
+0	99	100
