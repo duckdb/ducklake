@@ -25,8 +25,13 @@ ALTER TABLE lake.t SET PARTITIONED BY (part);
 statement ok
 ALTER TABLE lake.t SET SORTED BY (i);
 
+# Keep fixture loading within remote catalog RPC timeouts; flush all rows together.
+loop batch 0 15
+
 statement ok
-INSERT INTO lake.t SELECT i % 4, i FROM range(150000) r(i);
+INSERT INTO lake.t SELECT i % 4, i FROM range({batch} * 10000, ({batch} + 1) * 10000) r(i);
+
+endloop
 
 statement ok
 DELETE FROM lake.t WHERE i % 5 = 0;
