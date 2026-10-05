@@ -1512,6 +1512,7 @@ void DuckLakeTransaction::RunCommitLoop(DuckLakeSnapshot transaction_snapshot,
 	};
 	if (ducklake_catalog.SupportsV1_1Metadata()) {
 		context.config_options_sql = metadata_manager->SetConfigOptionsSql(staged_config_options);
+		context.config_options = staged_config_options;
 		if (!ChangesMadeBesidesOptions()) {
 			// option changes commit a snapshot of their own from v1.1, but never needed a commit message
 			state->require_commit_message = false;

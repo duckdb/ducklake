@@ -1025,21 +1025,34 @@ bool DuckLakeTransactionState::TryMergeInlinedStats(const vector<DuckLakeColumnS
 
 //! The field ids of `table_id`'s skip_stats_columns option, read from the metadata rather than the catalog so
 //! the server-side commit resolves it too. Only roots matter here: step 3 of the recompute merges inlined stats,
-//! which TryMergeInlinedStats only produces for scalar roots.
+//! which TryMergeInlinedStats only produces for scalar roots. An option this commit sets is not written yet.
 static set<FieldIndex> ReadSkippedStatsFields(TableIndex table_id, const DuckLakeCommitContext &context) {
-	set<FieldIndex> result;
-	auto query = StringUtil::Format("SELECT value FROM {METADATA_CATALOG}.ducklake_metadata "
-	                                "WHERE key='skip_stats_columns' AND scope='table' AND scope_id=%d%s;",
-	                                table_id.index, context.supports_v1_1_metadata ? " AND end_snapshot IS NULL" : "");
-	auto stats_option = context.query_metadata(query);
-	if (stats_option->HasError()) {
-		stats_option->GetErrorObject().Throw("Failed to read the skip_stats_columns option from DuckLake: ");
-	}
-	for (auto &row : *stats_option) {
-		if (row.IsNull(0)) {
-			continue;
+	vector<string> values;
+	bool staged = false;
+	for (auto &option : context.config_options) {
+		if (option.option.key == "skip_stats_columns" && option.table_id == table_id) {
+			values.assign(1, option.reset ? string() : option.option.value);
+			staged = true;
 		}
-		for (auto &entry : StringUtil::Split(row.GetValue<string>(0), ',')) {
+	}
+	if (!staged) {
+		auto query =
+		    StringUtil::Format("SELECT value FROM {METADATA_CATALOG}.ducklake_metadata "
+		                       "WHERE key='skip_stats_columns' AND scope='table' AND scope_id=%d%s;",
+		                       table_id.index, context.supports_v1_1_metadata ? " AND end_snapshot IS NULL" : "");
+		auto stats_option = context.query_metadata(query);
+		if (stats_option->HasError()) {
+			stats_option->GetErrorObject().Throw("Failed to read the skip_stats_columns option from DuckLake: ");
+		}
+		for (auto &row : *stats_option) {
+			if (!row.IsNull(0)) {
+				values.push_back(row.GetValue<string>(0));
+			}
+		}
+	}
+	set<FieldIndex> result;
+	for (auto &value : values) {
+		for (auto &entry : StringUtil::Split(value, ',')) {
 			idx_t field_index;
 			if (TryCast::Operation<string_t, idx_t>(string_t(entry), field_index)) {
 				result.insert(FieldIndex(field_index));

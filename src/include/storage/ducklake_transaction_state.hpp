@@ -116,6 +116,8 @@ struct DuckLakeCommitContext {
 	DuckLakeSnapshotCommit commit_info;
 	//! Writes the config options this commit sets - the same for every attempt.
 	string config_options_sql;
+	//! The config options config_options_sql writes, for reads made before the batch runs
+	vector<DuckLakeConfigOption> config_options;
 	//! When true, Commit() skips the post-commit DropEmptySupersededInlinedTables cleanup.
 	bool skip_drop_empty_inlined = false;
 	//! Whether the metadata schema has the >= 1.1-dev1 additions.
