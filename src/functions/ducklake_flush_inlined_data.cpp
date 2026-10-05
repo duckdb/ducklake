@@ -1,6 +1,6 @@
 #include "common/ducklake_util.hpp"
-#include "functions/ducklake_table_functions.hpp"
 #include "common/parquet_file_scanner.hpp"
+#include "functions/ducklake_table_functions.hpp"
 #include "duckdb/catalog/catalog.hpp"
 #include "duckdb/catalog/catalog_entry/schema_catalog_entry.hpp"
 #include "duckdb/catalog/catalog_entry/table_catalog_entry.hpp"
@@ -127,10 +127,7 @@ SinkFinalizeType DuckLakeFlushData::Finalize(Pipeline &pipeline, Event &event, C
 
 	if (!global_state.written_files.empty()) {
 		DeletesPerFile deletes_per_file;
-		// Partitioned COPY does not preserve input order, including with a single
-		// thread: partition buffers can be flushed after directly appended chunks.
-		// Map each deleted row version to its actual physical position in the
-		// completed files, using the lineage columns written by SCAN_FOR_FLUSH.
+		// Partitioned COPY can reorder rows. Use the row ids and snapshots in the written files to locate deletes.
 		unordered_map<int64_t, unordered_map<int64_t, int64_t>> deleted_versions;
 		auto col_names = metadata_manager.InlinedColNames();
 		auto deleted_rows = metadata_manager.Query(
@@ -152,7 +149,7 @@ SinkFinalizeType DuckLakeFlushData::Finalize(Pipeline &pipeline, Event &event, C
 			}
 		}
 
-		for (auto &file : global_state.written_files) {
+		for (const auto &file : global_state.written_files) {
 			if (deleted_versions.empty()) {
 				break;
 			}

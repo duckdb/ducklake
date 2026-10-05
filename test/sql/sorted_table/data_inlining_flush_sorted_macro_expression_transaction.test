@@ -72,8 +72,7 @@ ABC	XYZ	AXBYCZ
 321	000	302010
 123	000	102030
 
-# The sort macro is available in this transaction. Delete positions must not
-# require rebinding that macro on the separate metadata connection.
+# Delete positions must not rebind this transaction's sort macro on the metadata connection.
 statement ok
 DELETE FROM macro_sort_test WHERE i = '321'
 
