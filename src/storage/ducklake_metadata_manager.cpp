@@ -6300,29 +6300,47 @@ void DuckLakeMetadataManager::SetConfigOptions(const vector<DuckLakeConfigOption
 	}
 }
 
+static void ConfigOptionScope(const DuckLakeConfigOption &option, bool supports_v1_1_metadata, string &scope,
+                              string &scope_id, string &scope_filter) {
+	if (option.table_id.IsValid()) {
+		scope = "'table'";
+		scope_id = to_string(option.table_id.index);
+		scope_filter = StringUtil::Format("scope = 'table' AND scope_id = %d", option.table_id.index);
+	} else if (option.schema_id.IsValid()) {
+		scope = "'schema'";
+		scope_id = to_string(option.schema_id.index);
+		scope_filter = StringUtil::Format("scope = 'schema' AND scope_id = %d", option.schema_id.index);
+	} else if (supports_v1_1_metadata) {
+		scope = "'global'";
+		scope_id = "0";
+		scope_filter = "scope = 'global'";
+	} else {
+		scope = "NULL";
+		scope_id = "NULL";
+		scope_filter = "scope IS NULL";
+	}
+}
+
+bool DuckLakeMetadataManager::DeleteConfigOption(const DuckLakeConfigOption &option) {
+	string scope;
+	string scope_id;
+	string scope_filter;
+	ConfigOptionScope(option, false, scope, scope_id, scope_filter);
+	auto result = Query(StringUtil::Format("DELETE FROM {METADATA_CATALOG}.ducklake_metadata WHERE key = %s AND %s",
+	                                       SQLString(option.option.key), scope_filter));
+	if (result->HasError()) {
+		result->GetErrorObject().Throw("Failed to reset config option in DuckLake: ");
+	}
+	return result->Fetch()->GetValue(0, 0).GetValue<idx_t>() > 0;
+}
+
 string DuckLakeMetadataManager::SetConfigOptionsSql(const vector<DuckLakeConfigOption> &options) {
 	string batch;
 	for (auto &option : options) {
 		string scope;
 		string scope_id;
 		string scope_filter;
-		if (option.table_id.IsValid()) {
-			scope = "'table'";
-			scope_id = to_string(option.table_id.index);
-			scope_filter = StringUtil::Format("scope = 'table' AND scope_id = %d", option.table_id.index);
-		} else if (option.schema_id.IsValid()) {
-			scope = "'schema'";
-			scope_id = to_string(option.schema_id.index);
-			scope_filter = StringUtil::Format("scope = 'schema' AND scope_id = %d", option.schema_id.index);
-		} else if (transaction.GetCatalog().SupportsV1_1Metadata()) {
-			scope = "'global'";
-			scope_id = "0";
-			scope_filter = "scope = 'global'";
-		} else {
-			scope = "NULL";
-			scope_id = "NULL";
-			scope_filter = "scope IS NULL";
-		}
+		ConfigOptionScope(option, transaction.GetCatalog().SupportsV1_1Metadata(), scope, scope_id, scope_filter);
 		if (transaction.GetCatalog().SupportsV1_1Metadata()) {
 			// the replaced row stays readable at the snapshots before this one
 			batch += StringUtil::Format("UPDATE {METADATA_CATALOG}.ducklake_metadata SET end_snapshot = {SNAPSHOT_ID} "

@@ -508,6 +508,8 @@ public:
 	//! Writes the given config options as a single statement
 	virtual void SetConfigOptions(const vector<DuckLakeConfigOption> &options);
 	string SetConfigOptionsSql(const vector<DuckLakeConfigOption> &options);
+	//! Deletes a config option's row before v1.1, returning whether there was one
+	virtual bool DeleteConfigOption(const DuckLakeConfigOption &option);
 	virtual string GetPathForSchema(SchemaIndex schema_id, vector<DuckLakeSchemaInfo> &new_schemas_result);
 	virtual string GetPathForTable(TableIndex table_id, const vector<DuckLakeTableInfo> &new_tables,
 	                               const vector<DuckLakeSchemaInfo> &new_schemas_result);

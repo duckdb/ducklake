@@ -1640,9 +1640,14 @@ void DuckLakeTransaction::ResetConfigOption(const DuckLakeConfigOption &option) 
 		                                                  staged.table_id == option.table_id;
 	                                           }),
 	                            staged_config_options.end());
-	string value;
-	if (!ducklake_catalog.TryGetConfigOptionInScope(*this, option.option.key, value, option.schema_id,
-	                                                option.table_id)) {
+	if (ducklake_catalog.SupportsV1_1Metadata()) {
+		string value;
+		if (!ducklake_catalog.TryGetConfigOptionInScope(*this, option.option.key, value, option.schema_id,
+		                                                option.table_id)) {
+			return;
+		}
+	} else if (!metadata_manager->DeleteConfigOption(option)) {
+		// before v1.1 the in-memory options miss other attaches' changes, so the metadata decides
 		return;
 	}
 	auto reset = option;
