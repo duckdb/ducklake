@@ -19,14 +19,16 @@ statement ok
 ATTACH 'ducklake:{TEST_DIR}/wide_commit_pristine.db' AS lake (DATA_PATH '{TEST_DIR}/wide_commit_files')
 
 statement ok
-CALL lake.set_option('data_inlining_row_limit', 0)
+BEGIN
 
-# from v1.1 setting the option is a snapshot too, which offsets the snapshot ids below
 statement ok
-SET VARIABLE option_snapshots = (SELECT max(snapshot_id) FROM lake.snapshots())
+CALL lake.set_option('data_inlining_row_limit', 0)
 
 statement ok
 CREATE TABLE lake.wide AS SELECT * FROM wide_source WHERE false
+
+statement ok
+COMMIT
 
 statement ok
 DETACH lake
@@ -60,7 +62,7 @@ SELECT (SELECT count(*) FROM lake.wide),
 WHERE database_name = 'lake' AND table_name = 'wide') = (SELECT string_agg(['BIGINT', 'DOUBLE', 'VARCHAR'][j % 3 + 1],
 ',' ORDER BY j) FROM range(120) t(j)),
 (SELECT count(*) FROM glob('{TEST_DIR}/wide_commit_files/**')),
-(SELECT max(snapshot_id) - getvariable('option_snapshots') FROM lake.snapshots()),
+(SELECT max(snapshot_id) FROM lake.snapshots()),
 (SELECT value FROM lake.options() WHERE option_name = 'data_inlining_row_limit' AND scope = 'GLOBAL')
 ----
 0	120	true	0	1	0
@@ -76,7 +78,7 @@ query IIIII
 SELECT (SELECT count(*) FROM lake.wide),
 (SELECT count(*) FROM (FROM lake.wide EXCEPT ALL FROM wide_source)),
 (SELECT count(*) FROM ducklake_list_files('lake', 'wide')),
-(SELECT count(*) - getvariable('option_snapshots') FROM lake.snapshots()), (SELECT max(snapshot_id) - getvariable('option_snapshots') FROM lake.snapshots())
+(SELECT count(*) FROM lake.snapshots()), (SELECT max(snapshot_id) FROM lake.snapshots())
 ----
 8	0	8	10	9
 

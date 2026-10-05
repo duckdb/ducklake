@@ -11,14 +11,16 @@ statement ok
 ATTACH 'ducklake:{TEST_DIR}/merge_upsert_pristine.db' AS lake (DATA_PATH '{TEST_DIR}/merge_upsert_files')
 
 statement ok
-CALL lake.set_option('data_inlining_row_limit', 0)
+BEGIN
 
-# from v1.1 setting the option is a snapshot too, which offsets the snapshot ids below
 statement ok
-SET VARIABLE option_snapshots = (SELECT max(snapshot_id) FROM lake.snapshots())
+CALL lake.set_option('data_inlining_row_limit', 0)
 
 statement ok
 CREATE TABLE lake.target AS SELECT i AS id, i * 2 AS v, 'base_' || i AS payload FROM range(10) t(i)
+
+statement ok
+COMMIT
 
 statement ok
 CREATE TABLE merge_source AS
@@ -82,12 +84,12 @@ SELECT (SELECT count(*) FROM glob('{TEST_DIR}/merge_upsert_files/**')),
 4	3	1
 
 query II
-SELECT count(*), sum(v) FROM lake.target AT (VERSION => getvariable('option_snapshots') + 1)
+SELECT count(*), sum(v) FROM lake.target AT (VERSION => 1)
 ----
 10	90
 
 query II
-SELECT count(*) - getvariable('option_snapshots'), max(snapshot_id) - getvariable('option_snapshots') FROM lake.snapshots()
+SELECT count(*), max(snapshot_id) FROM lake.snapshots()
 ----
 3	2
 
