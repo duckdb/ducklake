@@ -87,3 +87,36 @@ query I newer
 SELECT DISTINCT compression FROM parquet_metadata('{TEST_DIR}/reset_concurrent_files/main/t_concurrent_reset/**')
 ----
 UNCOMPRESSED
+
+# a reset is not seen by other transactions until it commits
+statement ok
+CREATE TABLE ducklake.t_isolated(i INTEGER)
+
+statement ok
+ALTER TABLE ducklake.t_isolated SET (parquet_compression = 'gzip')
+
+statement ok older
+BEGIN
+
+statement ok older
+ALTER TABLE ducklake.t_isolated RESET (parquet_compression)
+
+query I newer
+SELECT value FROM ducklake.options() WHERE option_name = 'parquet_compression' AND scope_entry = 'main.t_isolated'
+----
+gzip
+
+statement ok newer
+INSERT INTO ducklake.t_isolated VALUES (1)
+
+statement ok older
+COMMIT
+
+statement ok newer
+INSERT INTO ducklake.t_isolated VALUES (2)
+
+query II
+SELECT compression, count(DISTINCT file_name) FROM parquet_metadata('{TEST_DIR}/reset_concurrent_files/main/t_isolated/**') GROUP BY ALL ORDER BY ALL
+----
+GZIP	1
+UNCOMPRESSED	1
