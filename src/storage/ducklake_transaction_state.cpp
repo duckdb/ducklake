@@ -405,6 +405,13 @@ void DuckLakeTransactionState::CheckForConflicts(const TransactionChangeInformat
 			                           "transaction has set it",
 			                           option.key);
 		}
+		if (option.scope == "table") {
+			ConflictCheck(TableIndex(option.scope_id), other_changes.dropped_tables, "set an option on table",
+			              "dropped it");
+		} else if (option.scope == "schema") {
+			ConflictCheck(SchemaIndex(option.scope_id), other_changes.dropped_schemas, "set an option on schema",
+			              "dropped it");
+		}
 		TableIndex table_id(option.scope_id);
 		if (IsSkipStatsOption(option) && other_changes.altered_tables.count(table_id) &&
 		    SkipsPartitionColumn(option.value, ReadPartitionFields(table_id, executor))) {
@@ -1874,13 +1881,15 @@ string DuckLakeTransactionState::CommitChanges(DuckLakeCommitState &commit_state
 	if (!dropped_table_macros.empty()) {
 		batch_queries += DuckLakeMetadataManager::DropMacros(dropped_table_macros);
 	}
-	if (!dropped_schemas.empty()) {
-		set<SchemaIndex> dropped_schema_ids;
-		for (auto &entry : dropped_schemas) {
-			dropped_schema_ids.insert(entry.first);
-		}
+	set<SchemaIndex> dropped_schema_ids;
+	for (auto &entry : dropped_schemas) {
+		dropped_schema_ids.insert(entry.first);
+	}
+	if (!dropped_schema_ids.empty()) {
 		batch_queries += DuckLakeMetadataManager::DropSchemas(dropped_schema_ids);
 	}
+	batch_queries +=
+	    DuckLakeMetadataManager::DropConfigOptions(dropped_schema_ids, dropped_tables, context.supports_v1_1_metadata);
 	// write new schemas
 	vector<DuckLakeSchemaInfo> new_schemas_result;
 	if (new_schemas) {

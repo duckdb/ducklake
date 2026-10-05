@@ -370,6 +370,8 @@ private:
 	void FlushNameMapCacheInvalidations();
 	void WriteConfigOptions();
 	void ApplyConfigOptions();
+	//! Drops the options staged for a schema or table this transaction drops
+	void DiscardStagedConfigOptions(SchemaIndex schema_id, TableIndex table_id);
 	static DuckLakePartitionInfo GetNewPartitionKey(DuckLakeCommitState &commit_state, DuckLakeTableEntry &table);
 	static DuckLakeSortInfo GetNewSortKey(DuckLakeCommitState &commit_state, DuckLakeTableEntry &table);
 	static DuckLakeTableInfo GetNewTable(DuckLakeCommitState &commit_state, DuckLakeTableEntry &table);

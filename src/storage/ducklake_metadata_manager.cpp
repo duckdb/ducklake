@@ -5325,6 +5325,29 @@ string DuckLakeMetadataManager::WriteNewTableOptions(const vector<DuckLakeConfig
 	return "INSERT INTO {METADATA_CATALOG}.ducklake_metadata VALUES " + values + ";";
 }
 
+string DuckLakeMetadataManager::DropConfigOptions(const set<SchemaIndex> &schema_ids, const set<TableIndex> &table_ids,
+                                                  bool supports_v1_1_metadata) {
+	string batch;
+	auto drop = [&](const char *scope, const string &id_list) {
+		if (supports_v1_1_metadata) {
+			batch += StringUtil::Format("UPDATE {METADATA_CATALOG}.ducklake_metadata SET end_snapshot = {SNAPSHOT_ID} "
+			                            "WHERE end_snapshot IS NULL AND scope = '%s' AND scope_id IN (%s);",
+			                            scope, id_list);
+		} else {
+			batch += StringUtil::Format(
+			    "DELETE FROM {METADATA_CATALOG}.ducklake_metadata WHERE scope = '%s' AND scope_id IN (%s);", scope,
+			    id_list);
+		}
+	};
+	if (!schema_ids.empty()) {
+		drop("schema", GenerateIDList(schema_ids));
+	}
+	if (!table_ids.empty()) {
+		drop("table", GenerateIDList(table_ids));
+	}
+	return batch;
+}
+
 string DuckLakeMetadataManager::WriteNewTags(const vector<DuckLakeTagInfo> &new_tags) {
 	if (new_tags.empty()) {
 		return {};

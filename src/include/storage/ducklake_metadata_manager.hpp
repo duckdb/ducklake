@@ -386,6 +386,9 @@ public:
 	static string WriteNewColumns(const vector<DuckLakeNewColumn> &new_columns);
 	static string WriteNewTags(const vector<DuckLakeTagInfo> &new_tags);
 	static string WriteNewTableOptions(const vector<DuckLakeConfigOption> &new_options, bool supports_v1_1_metadata);
+	//! Removes the options of dropped schemas and tables
+	static string DropConfigOptions(const set<SchemaIndex> &schema_ids, const set<TableIndex> &table_ids,
+	                                bool supports_v1_1_metadata);
 	static string WriteNewColumnTags(const vector<DuckLakeColumnTagInfo> &new_tags);
 	static string WriteNewViewColumnTags(const vector<DuckLakeViewColumnTagInfo> &new_tags);
 	virtual string WriteNewDataFiles(DuckLakeSnapshot &commit_snapshot, const vector<DuckLakeFileInfo> &new_files,

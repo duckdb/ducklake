@@ -1682,6 +1682,17 @@ void DuckLakeTransaction::WriteConfigOptions() {
 	metadata_manager->SetConfigOptions(staged_config_options);
 }
 
+void DuckLakeTransaction::DiscardStagedConfigOptions(SchemaIndex schema_id, TableIndex table_id) {
+	staged_config_options.erase(std::remove_if(staged_config_options.begin(), staged_config_options.end(),
+	                                           [&](const DuckLakeConfigOption &staged) {
+		                                           if (table_id.IsValid()) {
+			                                           return staged.table_id == table_id;
+		                                           }
+		                                           return !staged.table_id.IsValid() && staged.schema_id == schema_id;
+	                                           }),
+	                            staged_config_options.end());
+}
+
 void DuckLakeTransaction::ApplyConfigOptions() {
 	for (auto &option : staged_config_options) {
 		ducklake_catalog.SetConfigOption(option);
@@ -1987,6 +1998,7 @@ void DuckLakeTransaction::DropSchema(DuckLakeSchemaEntry &schema) {
 		}
 	} else {
 		state->dropped_schemas.insert(make_pair(schema.GetSchemaId(), reference<DuckLakeSchemaEntry>(schema)));
+		DiscardStagedConfigOptions(schema_id, TableIndex());
 	}
 }
 
@@ -2012,6 +2024,7 @@ void DuckLakeTransaction::DropTable(DuckLakeTableEntry &table) {
 	if (!IsTransactionLocal(table_id.index)) {
 		state->renamed_tables.erase(table_id);
 		state->dropped_tables.insert(table_id);
+		DiscardStagedConfigOptions(SchemaIndex(), table_id);
 	}
 }
 

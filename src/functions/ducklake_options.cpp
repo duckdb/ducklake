@@ -176,14 +176,17 @@ unique_ptr<GlobalTableFunctionState> DuckLakeOptionsInit(ClientContext &context,
 
 	auto snapshot = transaction.GetSnapshot();
 
-	// Schema options
+	// Schema options - a schema this transaction dropped takes its options with it
 	for (auto &schema_setting : metadata.schema_settings) {
+		auto schema_entry = ducklake_catalog.GetEntryById(transaction, snapshot, schema_setting.schema_id);
+		if (schema_entry && transaction.IsDeleted(*schema_entry)) {
+			continue;
+		}
 		DuckLakeOptionInfo option_info;
 		option_info.option_name = schema_setting.tag.key;
 		option_info.value = schema_setting.tag.value;
 		option_info.description = GetOptionDescription(schema_setting.tag.key);
 		option_info.scope = "SCHEMA";
-		auto schema_entry = ducklake_catalog.GetEntryById(transaction, snapshot, schema_setting.schema_id);
 		if (schema_entry) {
 			option_info.scope_entry =
 			    DuckLakeUtil::SchemaPathToDisplay(schema_entry->Cast<SchemaCatalogEntry>().GetSchemaPath());
@@ -193,12 +196,15 @@ unique_ptr<GlobalTableFunctionState> DuckLakeOptionsInit(ClientContext &context,
 
 	// Table options
 	for (auto &table_setting : metadata.table_settings) {
+		auto table_entry = ducklake_catalog.GetEntryById(transaction, snapshot, table_setting.table_id);
+		if (table_entry && transaction.IsDeleted(*table_entry)) {
+			continue;
+		}
 		DuckLakeOptionInfo option_info;
 		option_info.option_name = table_setting.tag.key;
 		option_info.value = table_setting.tag.value;
 		option_info.description = GetOptionDescription(table_setting.tag.key);
 		option_info.scope = "TABLE";
-		auto table_entry = ducklake_catalog.GetEntryById(transaction, snapshot, table_setting.table_id);
 		if (table_entry) {
 			auto &table_catalog_entry = table_entry->Cast<TableCatalogEntry>();
 			option_info.scope_entry =

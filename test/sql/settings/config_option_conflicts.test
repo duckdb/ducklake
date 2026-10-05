@@ -105,3 +105,21 @@ WHERE m.key = 'skip_stats_columns' AND m.end_snapshot IS NULL ORDER BY t.table_n
 t2	1
 t4	2
 t5	1
+
+# an option set on a table another transaction dropped
+statement ok con1
+CREATE TABLE ducklake.t6(i INTEGER)
+
+statement ok con1
+BEGIN
+
+statement ok con1
+CALL ducklake.set_option('parquet_compression', 'gzip', table_name => 't6')
+
+statement ok con2
+DROP TABLE ducklake.t6
+
+statement error con1
+COMMIT
+----
+another transaction has dropped it
