@@ -13,6 +13,10 @@ ATTACH 'ducklake:{TEST_DIR}/partitioned_merge_pristine.db' AS lake (DATA_PATH '{
 statement ok
 CALL lake.set_option('data_inlining_row_limit', 0)
 
+# from v1.1 setting the option is a snapshot too, which offsets the snapshot ids below
+statement ok
+SET VARIABLE option_snapshots = (SELECT max(snapshot_id) FROM lake.snapshots())
+
 statement ok
 CREATE TABLE lake.events (part INTEGER, id BIGINT, v BIGINT)
 
@@ -88,7 +92,7 @@ SELECT count(*) FROM (SELECT rowid, id, v FROM lake.events EXCEPT ALL FROM preme
 0
 
 query II
-SELECT count(*), max(snapshot_id) FROM lake.snapshots()
+SELECT count(*) - getvariable('option_snapshots'), max(snapshot_id) - getvariable('option_snapshots') FROM lake.snapshots()
 ----
 7	6
 

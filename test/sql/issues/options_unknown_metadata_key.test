@@ -9,8 +9,12 @@ require parquet
 statement ok
 ATTACH 'ducklake:{TEST_DIR}/options_unknown_key.db' AS ducklake (DATA_PATH '{TEST_DIR}/options_unknown_key_files')
 
+# copied from the version row, which has the global scope in the row layout of every version
 statement ok
-INSERT INTO __ducklake_metadata_ducklake.ducklake_metadata (key, value, scope, scope_id, begin_snapshot) VALUES ('mykey', 'myvalue', 'global', 0, 0), ('another_unknown', 'v2', 'global', 0, 0)
+INSERT INTO __ducklake_metadata_ducklake.ducklake_metadata
+SELECT * REPLACE (unknown.key AS key, unknown.value AS value)
+FROM __ducklake_metadata_ducklake.ducklake_metadata, (VALUES ('mykey', 'myvalue'), ('another_unknown', 'v2')) unknown(key, value)
+WHERE ducklake_metadata.key = 'version'
 
 query IIIII
 SELECT option_name, description, value, scope, scope_entry FROM ducklake.options() WHERE option_name IN ('mykey', 'another_unknown') ORDER BY option_name

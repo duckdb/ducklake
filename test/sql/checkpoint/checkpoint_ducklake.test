@@ -91,11 +91,13 @@ SELECT data_file_id, table_id FROM __ducklake_metadata_ducklake.ducklake_data_fi
 6	2
 7	3
 
-# We do not delete the deletion file after the checkpointing anymore
+# We do not delete the deletion file after the checkpointing anymore: the rewrite ends it in the latest snapshot,
+# after the expiry has run. Which snapshot that is depends on the version, as from v1.1 setting the option is one.
 query IIII
-SELECT delete_file_id, table_id, begin_snapshot, end_snapshot FROM __ducklake_metadata_ducklake.ducklake_delete_file
+SELECT delete_file_id, table_id, begin_snapshot, end_snapshot = (SELECT max(snapshot_id) FROM ducklake.snapshots())
+FROM __ducklake_metadata_ducklake.ducklake_delete_file
 ----
-5	3	11	14
+5	3	11	true
 
 query I
 SELECT COUNT(*)

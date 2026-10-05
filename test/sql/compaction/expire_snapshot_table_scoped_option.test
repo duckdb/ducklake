@@ -39,7 +39,8 @@ can only be set globally
 statement ok
 CALL ducklake.set_option('expire_older_than', '1 millisecond')
 
+# every snapshot but the latest - from v1.1 setting the option is a snapshot too
 query I
-SELECT count(*) FROM ducklake_expire_snapshots('ducklake', dry_run => true)
+SELECT count(*) = (SELECT count(*) - 1 FROM ducklake.snapshots()) FROM ducklake_expire_snapshots('ducklake', dry_run => true)
 ----
-3
+true

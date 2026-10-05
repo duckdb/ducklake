@@ -13,6 +13,10 @@ ATTACH 'ducklake:{TEST_DIR}/flush_fixture_pristine.db' AS lake (DATA_PATH '{TEST
 statement ok
 CALL lake.set_option('data_inlining_row_limit', 100)
 
+# from v1.1 setting the option is a snapshot too, which offsets the snapshot ids below
+statement ok
+SET VARIABLE option_snapshots = (SELECT max(snapshot_id) FROM lake.snapshots())
+
 statement ok
 BEGIN
 
@@ -101,27 +105,27 @@ SELECT count(*), sum(id), sum(v) FROM lake.f
 845	360815	1082445
 
 query III
-SELECT count(*), sum(id), sum(v) FROM lake.i AT (VERSION => 1)
+SELECT count(*), sum(id), sum(v) FROM lake.i AT (VERSION => getvariable('option_snapshots') + 1)
 ----
 100	4950	14850
 
 query III
-SELECT count(*), sum(id), sum(v) FROM lake.f AT (VERSION => 3)
+SELECT count(*), sum(id), sum(v) FROM lake.f AT (VERSION => getvariable('option_snapshots') + 3)
 ----
 845	360815	1082445
 
 query III
-SELECT count(*), sum(id), sum(v) FROM lake.f AT (VERSION => 2)
+SELECT count(*), sum(id), sum(v) FROM lake.f AT (VERSION => getvariable('option_snapshots') + 2)
 ----
 850	360825	1082475
 
 query III
-SELECT count(*), sum(id), sum(v) FROM lake.f AT (VERSION => 1)
+SELECT count(*), sum(id), sum(v) FROM lake.f AT (VERSION => getvariable('option_snapshots') + 1)
 ----
 1000	499500	1498500
 
 query II
-SELECT count(*), max(snapshot_id) FROM lake.snapshots()
+SELECT count(*) - getvariable('option_snapshots'), max(snapshot_id) - getvariable('option_snapshots') FROM lake.snapshots()
 ----
 5	4
 
