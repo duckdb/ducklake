@@ -1,0 +1,50 @@
+# name: test/sql/data_inlining/flush_partitioned_sorted_parallel.test
+# description: A partitioned sorted flush must preserve inlined deletes with multiple threads
+# group: [data_inlining]
+
+require ducklake
+
+require parquet
+
+statement ok
+SET threads = 4;
+
+statement ok
+ATTACH 'ducklake::memory:' AS lake (DATA_PATH '{TEST_DIR}/parallel_flush_{UUID}', DATA_INLINING_ROW_LIMIT 1000000);
+
+statement ok
+CREATE TABLE lake.t(part INTEGER, i BIGINT);
+
+statement ok
+ALTER TABLE lake.t SET PARTITIONED BY (part);
+
+statement ok
+ALTER TABLE lake.t SET SORTED BY (i);
+
+statement ok
+INSERT INTO lake.t SELECT i % 4, i FROM range(150000) r(i);
+
+statement ok
+DELETE FROM lake.t WHERE i % 5 = 0;
+
+query III
+SELECT count(*), sum(i), count(*) FILTER (WHERE i % 5 = 0) FROM lake.t;
+----
+120000	9000000000	0
+
+statement ok
+CREATE TEMP TABLE expected AS SELECT * FROM lake.t;
+
+statement ok
+CALL ducklake_flush_inlined_data('lake');
+
+query III
+SELECT count(*), sum(i), count(*) FILTER (WHERE i % 5 = 0) FROM lake.t;
+----
+120000	9000000000	0
+
+# Compare the complete row multiset, including duplicates.
+query I
+SELECT count(*) FROM ((SELECT * FROM expected EXCEPT ALL SELECT * FROM lake.t) UNION ALL (SELECT * FROM lake.t EXCEPT ALL SELECT * FROM expected));
+----
+0

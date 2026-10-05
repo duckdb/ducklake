@@ -1,5 +1,6 @@
 #include "common/ducklake_util.hpp"
 #include "functions/ducklake_table_functions.hpp"
+#include "common/parquet_file_scanner.hpp"
 #include "duckdb/catalog/catalog.hpp"
 #include "duckdb/catalog/catalog_entry/schema_catalog_entry.hpp"
 #include "duckdb/catalog/catalog_entry/table_catalog_entry.hpp"
@@ -126,59 +127,86 @@ SinkFinalizeType DuckLakeFlushData::Finalize(Pipeline &pipeline, Event &event, C
 
 	if (!global_state.written_files.empty()) {
 		DeletesPerFile deletes_per_file;
-		auto partition_sql_exprs = table.GetPartitionSQLExpressions();
-
-		// When the table has sort metadata, the file is written in sorted order.
-		// The ORDER BY must match the actual file order so delete positions are correct.
+		// Partitioned COPY does not preserve input order, including with a single
+		// thread: partition buffers can be flushed after directly appended chunks.
+		// Map each deleted row version to its actual physical position in the
+		// completed files, using the lineage columns written by SCAN_FOR_FLUSH.
+		unordered_map<int64_t, unordered_map<int64_t, int64_t>> deleted_versions;
 		auto col_names = metadata_manager.InlinedColNames();
-		string order_by =
-		    StringUtil::Format("%s ASC NULLS LAST, %s ASC NULLS LAST", col_names.row_id, col_names.begin_snapshot);
-		if (!sort_order_sql.empty()) {
-			order_by = sort_order_sql + ", " + order_by;
+		auto deleted_rows = metadata_manager.Query(
+		    snapshot, StringUtil::Format(R"(
+			SELECT %s, %s, %s
+			FROM {METADATA_CATALOG}.%s
+			WHERE %s <= {SNAPSHOT_ID} AND %s IS NOT NULL;)",
+		                                 col_names.row_id, col_names.begin_snapshot, col_names.end_snapshot,
+		                                 SQLIdentifier(inlined_table.table_name), col_names.begin_snapshot,
+		                                 col_names.end_snapshot));
+		metadata_manager.CheckInlinedDataReadError(*deleted_rows, inlined_table.table_name);
+		for (auto &row : *deleted_rows) {
+			auto row_id = row.GetValue<int64_t>(0);
+			auto begin_snapshot = row.GetValue<int64_t>(1);
+			auto end_snapshot = row.GetValue<int64_t>(2);
+			auto inserted = deleted_versions[row_id].emplace(begin_snapshot, end_snapshot);
+			if (!inserted.second) {
+				throw InternalException("Duplicate inlined row version during flush");
+			}
 		}
 
-		// Track cumulative row offset per partition so each file knows its range
-		unordered_map<string, idx_t> partition_row_offsets;
-
 		for (auto &file : global_state.written_files) {
-			// Build partition filter (empty string for non-partitioned tables)
-			string partition_filter;
-			if (!partition_sql_exprs.empty()) {
-				vector<Value> values;
-				for (auto &pv : file.partition_values) {
-					values.push_back(pv.partition_value);
+			if (deleted_versions.empty()) {
+				break;
+			}
+			DuckLakeFileData file_data;
+			file_data.path = file.file_name;
+			file_data.file_size_bytes = file.file_size_bytes;
+			file_data.footer_size = file.footer_size;
+			file_data.encryption_key = file.encryption_key;
+			ParquetFileScanner scanner(context, file_data);
+			auto row_id_column = scanner.FindColumn("_ducklake_internal_row_id");
+			auto snapshot_column = scanner.FindColumn("_ducklake_internal_snapshot_id");
+			if (!row_id_column.IsValid() || !snapshot_column.IsValid()) {
+				throw InternalException("Flushed data file is missing row lineage columns");
+			}
+			scanner.SetColumnIds(
+			    {NumericCast<column_t>(row_id_column.GetIndex()), NumericCast<column_t>(snapshot_column.GetIndex())});
+			DataChunk scan_chunk;
+			scan_chunk.Initialize(context, {LogicalType::BIGINT, LogicalType::BIGINT});
+			idx_t file_position = 0;
+			while (scanner.Scan(scan_chunk)) {
+				auto count = scan_chunk.size();
+				UnifiedVectorFormat row_ids, snapshots;
+				scan_chunk.data[0].ToUnifiedFormat(row_ids);
+				scan_chunk.data[1].ToUnifiedFormat(snapshots);
+				auto row_id_data = UnifiedVectorFormat::GetData<int64_t>(row_ids);
+				auto snapshot_data = UnifiedVectorFormat::GetData<int64_t>(snapshots);
+				for (idx_t i = 0; i < count; i++, file_position++) {
+					auto row_idx = row_ids.sel->get_index(i);
+					auto snapshot_idx = snapshots.sel->get_index(i);
+					if (!row_ids.validity.RowIsValid(row_idx) || !snapshots.validity.RowIsValid(snapshot_idx)) {
+						throw InternalException("Flushed data file contains NULL row lineage");
+					}
+					auto row_entry = deleted_versions.find(row_id_data[row_idx]);
+					if (row_entry == deleted_versions.end()) {
+						continue;
+					}
+					auto version_entry = row_entry->second.find(snapshot_data[snapshot_idx]);
+					if (version_entry == row_entry->second.end()) {
+						continue;
+					}
+					deletes_per_file[file.file_name].insert(
+					    {static_cast<int64_t>(file_position), version_entry->second});
+					row_entry->second.erase(version_entry);
+					if (row_entry->second.empty()) {
+						deleted_versions.erase(row_entry);
+					}
 				}
-				partition_filter = DuckLakePartitionUtils::BuildPartitionFilter(partition_sql_exprs, values);
 			}
-
-			idx_t file_offset = partition_row_offsets[partition_filter];
-			partition_row_offsets[partition_filter] += file.row_count;
-
-			// Query deleted rows within this file's row range, filtered to its partition
-			string extra_filter = partition_filter.empty() ? "" : " AND " + partition_filter;
-			auto deleted_rows_result = metadata_manager.Query(
-			    snapshot,
-			    StringUtil::Format(R"(
-				WITH all_rows AS (
-					SELECT %s AS end_snapshot, ROW_NUMBER() OVER (ORDER BY %s) - 1 AS output_position
-					FROM {METADATA_CATALOG}.%s
-					WHERE {SNAPSHOT_ID} >= %s%s
-				)
-				SELECT end_snapshot, output_position
-				FROM all_rows
-				WHERE end_snapshot IS NOT NULL
-				AND output_position >= %d AND output_position < %d;)",
-			                       col_names.end_snapshot, order_by, inlined_table.table_name, col_names.begin_snapshot,
-			                       extra_filter, file_offset, file_offset + file.row_count));
-			metadata_manager.CheckInlinedDataReadError(*deleted_rows_result, inlined_table.table_name);
-
-			for (auto &row : *deleted_rows_result) {
-				auto end_snap = row.GetValue<int64_t>(0);
-				auto output_position = row.GetValue<int64_t>(1);
-				int64_t pos_in_file = output_position - static_cast<int64_t>(file_offset);
-				PositionWithSnapshot pos_with_snap {pos_in_file, end_snap};
-				deletes_per_file[file.file_name].insert(pos_with_snap);
+			if (file_position != file.row_count) {
+				throw InternalException("Flushed data file row count does not match its lineage scan");
 			}
+		}
+		if (!deleted_versions.empty()) {
+			throw InternalException("Some inlined deleted row versions were not found in flushed data files");
 		}
 
 		if (!deletes_per_file.empty()) {
