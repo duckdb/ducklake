@@ -1,0 +1,51 @@
+# name: test/sql/stats/cardinality_snapshot_mismatch.test
+# description: A newer metadata row-count estimate cannot narrow an older reader's column bounds
+# group: [stats]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS lake (DATA_PATH '{DATA_PATH}/cardinality_snapshot_mismatch', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE lake.t AS SELECT range i FROM range(100)
+
+statement ok reader
+BEGIN
+
+# Pin the reader before it has requested table statistics.
+query I reader
+SELECT * FROM ducklake_current_snapshot('lake')
+----
+1
+
+statement ok
+DELETE FROM lake.t
+
+statement ok
+INSERT INTO lake.t VALUES (1000)
+
+# Quack now serves newer totals; column bounds must still describe the reader's snapshot.
+query III reader
+SELECT count(*), min(i), max(i) FROM lake.t WHERE i < 100
+----
+100	0	99
+
+query I reader
+SELECT count(*) FROM lake.t CROSS JOIN range(2)
+----
+200
+
+statement ok reader
+ROLLBACK
+
+query III
+SELECT count(*), min(i), max(i) FROM lake.t
+----
+1	1000	1000

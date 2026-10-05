@@ -1789,14 +1789,18 @@ DuckLakeColumnInfo DuckLakeTableEntry::GetAddColumnInfo() const {
 	return ConvertColumn(new_col.Name().GetIdentifierName(), new_col.Type(), field_id);
 }
 
+optional_idx DuckLakeTableEntry::GetCardinalityEstimate(ClientContext &context) {
+	auto &transaction = DuckLakeTransaction::Get(context, ParentCatalog());
+	if (!CanUseGlobalStats(transaction)) {
+		return optional_idx();
+	}
+	return catalog.Cast<DuckLakeCatalog>().GetTableRecordCount(transaction, GetTableId());
+}
+
 TableStorageInfo DuckLakeTableEntry::GetStorageInfo(ClientContext &context) {
 	TableStorageInfo storage_info;
-	storage_info.cardinality = 0;
-	auto &transaction = DuckLakeTransaction::Get(context, ParentCatalog());
-	if (CanUseGlobalStats(transaction)) {
-		auto &dl_catalog = catalog.Cast<DuckLakeCatalog>();
-		storage_info.cardinality = dl_catalog.GetTableRecordCount(transaction, GetTableId());
-	}
+	auto record_count = GetCardinalityEstimate(context);
+	storage_info.cardinality = record_count.IsValid() ? record_count.GetIndex() : 0;
 	return storage_info;
 }
 

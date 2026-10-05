@@ -43,6 +43,7 @@ struct NewNameMapInfo {
 struct NewDataInfo {
 	vector<DuckLakeFileInfo> new_files;
 	vector<DuckLakeInlinedDataInfo> new_inlined_data;
+	map<TableIndex, idx_t> next_row_ids;
 };
 
 struct CompactionInformation {
