@@ -1,0 +1,125 @@
+# name: test/sql/time_travel/time_travel_local_changes.test
+# description: time travel inside a transaction does not see the uncommitted changes of that transaction
+# group: [time_travel]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/time_travel_local_changes', DATA_INLINING_ROW_LIMIT 10)
+
+statement ok
+CREATE TABLE dl.t AS SELECT i::INT id FROM range(100) t(i)
+
+statement ok
+SET VARIABLE v1 = (SELECT max(snapshot_id) FROM dl.snapshots())
+
+statement ok
+DELETE FROM dl.t WHERE id = 0
+
+statement ok
+SET VARIABLE v2 = (SELECT max(snapshot_id) FROM dl.snapshots())
+
+statement ok
+INSERT INTO dl.t VALUES (1000), (1001)
+
+statement ok
+SET VARIABLE v3 = (SELECT max(snapshot_id) FROM dl.snapshots())
+
+statement ok
+SET VARIABLE t3 = (SELECT snapshot_time FROM dl.snapshots() WHERE snapshot_id = getvariable('v3'))
+
+statement ok
+BEGIN
+
+statement ok
+DELETE FROM dl.t WHERE id = 1
+
+statement ok
+DELETE FROM dl.t WHERE id >= 50 AND id < 80
+
+statement ok
+DELETE FROM dl.t WHERE id = 1000
+
+statement ok
+INSERT INTO dl.t VALUES (2000)
+
+statement ok
+INSERT INTO dl.t SELECT 3000 + i FROM range(20) t(i)
+
+query II
+SELECT count(*), sum(id) FROM dl.t AT (VERSION => getvariable('v1'))
+----
+100	4950
+
+query II
+SELECT count(*), sum(id) FROM dl.t AT (VERSION => getvariable('v2'))
+----
+99	4950
+
+query II
+SELECT count(*), sum(id) FROM dl.t AT (VERSION => getvariable('v3'))
+----
+101	6951
+
+query II
+SELECT count(*), sum(id) FROM dl.t AT (TIMESTAMP => getvariable('t3'))
+----
+101	6951
+
+query I
+SELECT count(*) FROM (WITH p AS NOT MATERIALIZED (SELECT * FROM dl.t AT (VERSION => getvariable('v3'))) SELECT * FROM p a JOIN p b USING (id))
+----
+101
+
+query II
+SELECT count(*), sum(id) FROM dl.t
+----
+90	66205
+
+statement ok
+ROLLBACK
+
+statement ok
+BEGIN
+
+statement ok
+DELETE FROM dl.t WHERE id < 100
+
+query II
+SELECT count(*), sum(id) FROM dl.t AT (VERSION => getvariable('v1'))
+----
+100	4950
+
+query II
+SELECT count(*), sum(id) FROM dl.t
+----
+2	2001
+
+statement ok
+ROLLBACK
+
+statement ok
+DELETE FROM dl.t WHERE id = 2
+
+statement ok
+CALL ducklake_flush_inlined_data('dl')
+
+statement ok
+BEGIN
+
+statement ok
+DELETE FROM dl.t WHERE id >= 50 AND id < 80
+
+query II
+SELECT count(*), sum(id) FROM dl.t AT (VERSION => getvariable('v2'))
+----
+99	4950
+
+statement ok
+ROLLBACK

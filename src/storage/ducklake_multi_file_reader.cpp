@@ -199,9 +199,12 @@ unique_ptr<MultiFileReader> DuckLakeMultiFileReader::CreateInstance(const TableF
 
 shared_ptr<MultiFileList> DuckLakeMultiFileReader::CreateFileList(ClientContext &context, const vector<string> &paths,
                                                                   const FileGlobInput &options) {
-	auto &transaction = DuckLakeTransaction::Get(context, read_info.table.ParentCatalog());
-	auto transaction_local_files = transaction.GetTransactionLocalFiles(read_info.table_id);
-	transaction_local_data = transaction.GetTransactionLocalInlinedData(read_info.table_id);
+	vector<DuckLakeDataFile> transaction_local_files;
+	if (read_info.include_local_changes) {
+		auto &transaction = DuckLakeTransaction::Get(context, read_info.table.ParentCatalog());
+		transaction_local_files = transaction.GetTransactionLocalFiles(read_info.table_id);
+		transaction_local_data = transaction.GetTransactionLocalInlinedData(read_info.table_id);
+	}
 	auto result =
 	    make_shared_ptr<DuckLakeMultiFileList>(read_info, std::move(transaction_local_files), transaction_local_data);
 	return std::move(result);
@@ -307,7 +310,10 @@ ReaderInitializeType DuckLakeMultiFileReader::InitializeReader(MultiFileReaderDa
 		// regular scan - read the deletes from the delete file (if any) and apply the max row count
 		if (file_entry.data_type != DuckLakeDataType::DATA_FILE) {
 			auto transaction = read_info.GetTransaction();
-			auto inlined_deletes = transaction->GetInlinedDeletes(read_info.table.GetTableId(), file_entry.file.path);
+			auto inlined_deletes =
+			    read_info.include_local_changes
+			        ? transaction->GetInlinedDeletes(read_info.table.GetTableId(), file_entry.file.path)
+			        : nullptr;
 			if (inlined_deletes) {
 				auto delete_filter = make_uniq<DuckLakeDeleteFilter>();
 				delete_filter->Initialize(*inlined_deletes);
@@ -333,7 +339,8 @@ ReaderInitializeType DuckLakeMultiFileReader::InitializeReader(MultiFileReaderDa
 				delete_filter->SetMaxRowCount(file_entry.max_row_count.GetIndex());
 			}
 			auto txn = read_info.GetTransaction();
-			bool has_local_delete = txn && txn->HasLocalDeleteForFile(read_info.table_id, reader.GetFileName());
+			bool has_local_delete = read_info.include_local_changes && txn &&
+			                        txn->HasLocalDeleteForFile(read_info.table_id, reader.GetFileName());
 			if (!has_local_delete) {
 				// We only set snapshot filter if this file is not a current running transaction
 				// OW, we are guaranteed to be on the latest valid snapshot

@@ -55,6 +55,8 @@ struct DuckLakeFunctionInfo : public TableFunctionInfo {
 	DuckLakeScanType scan_type = DuckLakeScanType::SCAN_TABLE;
 	//! Start snapshot - only set for DuckLakeScanType::SCAN_INSERTIONS and DuckLakeScanType::SCAN_DELETIONS
 	unique_ptr<DuckLakeSnapshot> start_snapshot;
+	//! Whether the scan sees the uncommitted changes of its transaction, which an AT clause excludes
+	bool include_local_changes = true;
 
 	shared_ptr<DuckLakeTransaction> GetTransaction();
 	bool CanUseGlobalStats();

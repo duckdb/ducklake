@@ -58,6 +58,8 @@ protected:
 	OpenFileInfo GetFile(idx_t i) const override;
 
 private:
+	//! Apply the dropped files and the uncommitted deletes of the transaction to the file list
+	void ApplyLocalChanges(DuckLakeTransaction &transaction) const;
 	void GetFilesForTable() const;
 	void GetTableInsertions() const;
 	void GetTableDeletions() const;

@@ -305,6 +305,7 @@ void DuckLakeScanSerialize(Serializer &serializer, const optional_ptr<FunctionDa
 	}
 	serializer.WriteProperty(107, "qualified_name",
 	                         func_info.table.ParentSchema().GetQualifiedName(Identifier(func_info.table_name)));
+	serializer.WritePropertyWithDefault<bool>(108, "include_local_changes", func_info.include_local_changes, true);
 }
 
 unique_ptr<FunctionData> DuckLakeScanDeserialize(Deserializer &deserializer, TableFunction &function) {
@@ -328,6 +329,7 @@ unique_ptr<FunctionData> DuckLakeScanDeserialize(Deserializer &deserializer, Tab
 	if (qualified_name.Path().empty()) {
 		qualified_name = QualifiedName(Identifier(catalog_name), Identifier(schema_name), Identifier(table_name));
 	}
+	auto include_local_changes = deserializer.ReadPropertyWithExplicitDefault<bool>(108, "include_local_changes", true);
 
 	// If ducklake_scan was registered before parquet was loaded, we set it now
 	if (!function.bind) {
@@ -347,6 +349,7 @@ unique_ptr<FunctionData> DuckLakeScanDeserialize(Deserializer &deserializer, Tab
 	auto &func_info = function.function_info->Cast<DuckLakeFunctionInfo>();
 	func_info.scan_type = scan_type;
 	func_info.start_snapshot = std::move(start_snapshot);
+	func_info.include_local_changes = include_local_changes;
 
 	return DuckLakeFunctions::BindDuckLakeScan(context, function);
 }
