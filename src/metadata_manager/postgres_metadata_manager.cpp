@@ -368,6 +368,8 @@ unique_ptr<QueryResult> PostgresMetadataManager::ExecuteQuery(DuckLakeSnapshot s
 	query = StringUtil::Replace(query, "{METADATA_PATH}", metadata_path);
 	query = StringUtil::Replace(query, "{DATA_PATH}", data_path);
 
+	// casts of float bounds to text keep their exact value
+	query = "SET LOCAL extra_float_digits = 3;" + query;
 	auto result = connection.Query(
 	    StringUtil::Format("CALL %s(%s, %s, prepare=FALSE)", command, catalog_literal, SQLString(query)));
 	return std::move(result);

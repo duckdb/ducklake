@@ -38,7 +38,7 @@
       ]
     },
     {
-      "reason": "The concurrent INSERT commit fails with \"database is locked\" while the retyping transaction is open, which skip_error_messages turns into a silent skip",
+      "reason": "SQLite cannot commit a concurrent insert while the retyping transaction is open",
       "paths": [
         "test/sql/stats/float_to_double_retype_stats_concurrent.test"
       ]

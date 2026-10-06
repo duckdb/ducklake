@@ -126,3 +126,53 @@ query II
 SELECT count(*), max(v) FROM dl.i WHERE v > 0.1
 ----
 10	0.10000000149011612
+
+# queries in the retyping transaction
+statement ok
+CREATE TABLE dl.x (v FLOAT)
+
+statement ok
+INSERT INTO dl.x SELECT 0.1::FLOAT FROM range(10)
+
+statement ok
+INSERT INTO dl.x VALUES (0.05), (0.3)
+
+statement ok
+BEGIN
+
+statement ok
+ALTER TABLE dl.x ALTER COLUMN v TYPE DOUBLE
+
+query I
+SELECT count(*) FROM dl.x WHERE v > 0.1 AND v < 0.2
+----
+10
+
+statement ok
+COMMIT
+
+# files written before the column was FLOAT read as DOUBLE without FLOAT rounding
+statement ok
+CREATE TABLE dl.n (v INTEGER)
+
+statement ok
+INSERT INTO dl.n VALUES (16777219)
+
+statement ok
+ALTER TABLE dl.n ALTER COLUMN v TYPE FLOAT
+
+statement ok
+INSERT INTO dl.n VALUES (0.5)
+
+statement ok
+ALTER TABLE dl.n ALTER COLUMN v TYPE DOUBLE
+
+query I
+SELECT count(*) FROM dl.n WHERE v < 16777219.5
+----
+2
+
+query II
+SELECT min(v), max(v) FROM dl.n
+----
+0.5	16777219.0

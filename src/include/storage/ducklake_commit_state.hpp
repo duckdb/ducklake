@@ -62,6 +62,11 @@ struct DuckLakeCommitState {
 	map<TableIndex, vector<DuckLakeDeleteFile>> local_delete_files;
 	//! The columns this commit widens from FLOAT to DOUBLE
 	map<TableIndex, set<FieldIndex>> float_widened_columns;
+	//! The widened columns that had another type before FLOAT, whose files read as DOUBLE without FLOAT rounding
+	map<TableIndex, set<FieldIndex>> float_bounds_to_clear;
+
+	//! Widen the FLOAT bounds of a widened column, or clear them when they cannot be widened
+	void PrepareFloatBounds(TableIndex table_id, map<FieldIndex, DuckLakeColumnStats> &column_stats) const;
 
 	void RemapIdentifier(SchemaIndex &schema_id) const {
 		auto entry = committed_schemas.find(schema_id);

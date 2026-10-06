@@ -190,8 +190,9 @@ DuckLakeMultiFileList::DynamicFilterPushdown(MultiFileDynamicPushdownInfo &dynam
 	auto &context = dynamic_pushdown_info.context;
 	auto &filters = dynamic_pushdown_info.filters;
 
-	if (read_info.scan_type != DuckLakeScanType::SCAN_TABLE || !filters.HasFilters()) {
-		// filter pushdown is only supported when scanning full tables
+	// filter pushdown is only supported when scanning full tables, whose stats match their types until commit
+	if (read_info.scan_type != DuckLakeScanType::SCAN_TABLE || read_info.table.IsTransactionLocal() ||
+	    !filters.HasFilters()) {
 		return nullptr;
 	}
 
@@ -373,7 +374,9 @@ unique_ptr<MultiFileList> DuckLakeMultiFileList::ComplexFilterPushdown(ClientCon
                                                                        const MultiFileOptions &options,
                                                                        MultiFilePushdownInfo &info,
                                                                        vector<unique_ptr<Expression>> &filters) const {
-	if (read_info.scan_type != DuckLakeScanType::SCAN_TABLE || filters.empty()) {
+	// a table altered in this transaction can have stats written under another type until commit
+	if (read_info.scan_type != DuckLakeScanType::SCAN_TABLE || read_info.table.IsTransactionLocal() ||
+	    filters.empty()) {
 		return nullptr;
 	}
 

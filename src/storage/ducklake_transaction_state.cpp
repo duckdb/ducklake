@@ -27,6 +27,27 @@
 
 namespace duckdb {
 
+void DuckLakeCommitState::PrepareFloatBounds(TableIndex table_id,
+                                             map<FieldIndex, DuckLakeColumnStats> &column_stats) const {
+	auto entry = float_widened_columns.find(table_id);
+	if (entry == float_widened_columns.end()) {
+		return;
+	}
+	auto clear_entry = float_bounds_to_clear.find(table_id);
+	for (const auto &field_index : entry->second) {
+		auto column_entry = column_stats.find(field_index);
+		if (column_entry != column_stats.end()) {
+			auto &stats = column_entry->second;
+			if (clear_entry != float_bounds_to_clear.end() && clear_entry->second.count(field_index)) {
+				stats.ClearBounds();
+				stats.bounds_unknown = true;
+			} else {
+				stats.WidenFloatBounds();
+			}
+		}
+	}
+}
+
 DuckLakeTransactionState::DuckLakeTransactionState(DatabaseInstance &db, bool require_commit_message,
                                                    DuckLakeNameMapSet &new_name_maps, string data_path,
                                                    string separator)
@@ -629,6 +650,7 @@ DuckLakeFileInfo DuckLakeTransactionState::GetNewDataFile(const DuckLakeDataFile
                                                           DuckLakeCommitState &commit_state, TableIndex table_id,
                                                           optional_idx row_id_start) {
 	auto data_file = DuckLakeTransaction::BuildDataFileInfo(file, commit_state.commit_snapshot, table_id, row_id_start);
+	commit_state.PrepareFloatBounds(table_id, data_file.column_stats);
 	commit_state.RemapPartitionId(data_file.partition_id);
 	if (data_file.partition_id.IsValid() &&
 	    data_file.partition_id.GetIndex() >= DuckLakeConstants::TRANSACTION_LOCAL_ID_START) {
@@ -1240,30 +1262,10 @@ NewDataInfo DuckLakeTransactionState::GetNewDataFiles(
 			new_globals.stats = *current_stats;
 			new_globals.initialized = true;
 		}
-		// stats written while a column this commit widens was still FLOAT
-		auto widened_columns = commit_state.float_widened_columns.find(table_id);
-		bool widens_columns = widened_columns != commit_state.float_widened_columns.end();
-		auto widen_float_bounds = [&](map<FieldIndex, DuckLakeColumnStats> &column_stats) {
-			for (auto &field_index : widened_columns->second) {
-				auto column_entry = column_stats.find(field_index);
-				if (column_entry != column_stats.end()) {
-					column_entry->second.WidenFloatBounds();
-				}
-			}
-		};
-		if (widens_columns) {
-			widen_float_bounds(new_globals.stats.column_stats);
-		}
 		bool clear_column_stats = ApplyDroppedFileStats(table_id, new_globals, attempt_dropped_file_stats);
 		auto &new_stats = new_globals.stats;
 		vector<DuckLakeDeleteFile> delete_files;
-		for (auto &local_file : table_changes.new_data_files) {
-			unique_ptr<DuckLakeDataFile> widened_file;
-			if (widens_columns) {
-				widened_file = make_uniq<DuckLakeDataFile>(local_file);
-				widen_float_bounds(widened_file->column_stats);
-			}
-			auto &file = widened_file ? *widened_file : local_file;
+		for (auto &file : table_changes.new_data_files) {
 			// flushed files (with max_partial_file_snapshot) have embedded row_ids, we gotta use the original
 			// row_id_start
 			auto row_id_start =
@@ -1293,11 +1295,7 @@ NewDataInfo DuckLakeTransactionState::GetNewDataFiles(
 			new_inlined_data.row_id_start = new_stats.next_row_id;
 
 			// merge column stats
-			auto inlined_column_stats = inlined_data.column_stats;
-			if (widens_columns) {
-				widen_float_bounds(inlined_column_stats);
-			}
-			for (auto &entry : inlined_column_stats) {
+			for (auto &entry : inlined_data.column_stats) {
 				new_stats.MergeStats(entry.first, entry.second);
 			}
 
@@ -1327,6 +1325,7 @@ NewDataInfo DuckLakeTransactionState::GetNewDataFiles(
 			// the rows are deleted below - drop them from the update so we do not write values we then delete
 			new_stats.column_stats.clear();
 		}
+		commit_state.PrepareFloatBounds(table_id, new_stats.column_stats);
 		// update the global stats for this table based on the newly written data
 		batch_query += DuckLakeMetadataManager::UpdateGlobalTableStatsSql(
 		    DuckLakeTransaction::ConvertNewGlobalStats(table_id, new_globals), context.supports_v1_1_metadata);
@@ -1766,6 +1765,37 @@ vector<DuckLakeSchemaInfo> DuckLakeTransactionState::GetNewSchemas(DuckLakeCommi
 	return schemas;
 }
 
+static map<TableIndex, set<FieldIndex>> GetFloatBoundsToClear(const map<TableIndex, set<FieldIndex>> &columns,
+                                                              const DuckLakeCommitContext &context) {
+	map<TableIndex, set<FieldIndex>> result;
+	vector<string> column_ids;
+	for (const auto &table : columns) {
+		for (const auto &field : table.second) {
+			column_ids.push_back(StringUtil::Format("(%d, %d)", table.first.index, field.index));
+		}
+	}
+	if (column_ids.empty()) {
+		return result;
+	}
+	// files written before FLOAT read their original type as DOUBLE without FLOAT rounding
+	auto query = StringUtil::Format(R"(
+SELECT DISTINCT history.table_id, history.column_id
+FROM {METADATA_CATALOG}.ducklake_column history
+JOIN {METADATA_CATALOG}.ducklake_column current_column USING (table_id, column_id)
+WHERE current_column.end_snapshot IS NULL AND current_column.column_type = '%s'
+AND history.column_type <> current_column.column_type
+AND (history.table_id, history.column_id) IN (%s))",
+	                                DuckLakeTypes::ToString(LogicalType::FLOAT), StringUtil::Join(column_ids, ", "));
+	auto query_result = context.query_metadata(query);
+	if (query_result->HasError()) {
+		query_result->GetErrorObject().Throw("Failed to read column types before widening FLOAT bounds");
+	}
+	for (auto &row : *query_result) {
+		result[TableIndex(row.GetValue<idx_t>(0))].insert(FieldIndex(row.GetValue<idx_t>(1)));
+	}
+	return result;
+}
+
 string DuckLakeTransactionState::CommitChanges(DuckLakeCommitState &commit_state,
                                                TransactionChangeInformation &transaction_changes,
                                                optional_ptr<vector<DuckLakeGlobalStatsInfo>> stats,
@@ -1826,6 +1856,7 @@ string DuckLakeTransactionState::CommitChanges(DuckLakeCommitState &commit_state
 	vector<DuckLakeTableInfo> new_inlined_data_tables_result;
 	if (!new_tables.empty()) {
 		auto result = GetNewTables(commit_state, transaction_changes);
+		commit_state.float_bounds_to_clear = GetFloatBoundsToClear(commit_state.float_widened_columns, context);
 		vector<DuckLakePath> resolved_table_paths;
 		resolved_table_paths.reserve(result.new_tables.size());
 		for (auto &table : result.new_tables) {
@@ -1846,8 +1877,8 @@ string DuckLakeTransactionState::CommitChanges(DuckLakeCommitState &commit_state
 		if (context.supports_v1_1_metadata) {
 			batch_queries += DuckLakeMetadataManager::WriteNewViewColumnTags(result.new_view_column_tags);
 		}
-		batch_queries += DuckLakeMetadataManager::WriteFloatWidenedStats(commit_state.float_widened_columns,
-		                                                                 commit_state.commit_snapshot.next_file_id);
+		batch_queries += DuckLakeMetadataManager::WriteFloatWidenedStats(
+		    commit_state.float_widened_columns, commit_state.float_bounds_to_clear, commit_snapshot.next_file_id);
 		batch_queries += DuckLakeMetadataManager::WriteDroppedColumns(result.dropped_columns);
 		// Truly dropped columns - i.e. not re-added under the same field id in this commit, as
 		// happens for RENAME/ALTER - also expire their committed column tags (GH #1310).
