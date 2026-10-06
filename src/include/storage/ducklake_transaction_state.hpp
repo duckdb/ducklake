@@ -174,10 +174,10 @@ public:
 	string UpdateStatsForDroppedFiles(optional_ptr<vector<DuckLakeGlobalStatsInfo>> stats,
 	                                  const DuckLakeCommitContext &context,
 	                                  map<TableIndex, DroppedDataFileStats> &attempt_dropped_file_stats);
-	//! Starts the new statistics of a table from its committed ones and those of the fields this commit adds
+	//! The committed statistics of a table with those of the fields this commit adds
 	void InitializeGlobalStats(TableIndex table_id, const DuckLakeTableStats &current_stats,
 	                           DuckLakeNewGlobalStats &new_globals) const;
-	//! Writes the statistics of the rows that a table already has for the fields that are added to it
+	//! Writes the statistics of the older rows for the fields this commit adds
 	string WriteAddedFieldStats(const vector<DuckLakeAddedFields> &added_fields,
 	                            optional_ptr<vector<DuckLakeGlobalStatsInfo>> stats,
 	                            const DuckLakeCommitContext &context);
