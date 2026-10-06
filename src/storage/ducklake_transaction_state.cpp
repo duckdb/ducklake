@@ -871,6 +871,19 @@ bool DuckLakeTransactionState::TryMergeInlinedStats(const vector<DuckLakeColumnS
 		}
 	}
 	for (auto &inlined_table_name : inlined_table_names) {
+		// An inlined table written before an ADD COLUMN lacks the newer columns - we cannot aggregate those
+		// exactly, so bail (the caller keeps the existing stats).
+		auto columns_result = context.query_metadata_with_snapshot(
+		    snapshot, StringUtil::Format("SELECT * FROM {METADATA_CATALOG}.%s LIMIT 0;",
+		                                 DuckLakeUtil::SQLIdentifierToString(inlined_table_name)));
+		if (columns_result->HasError()) {
+			columns_result->GetErrorObject().Throw("Failed to read inlined-data columns from DuckLake: ");
+		}
+		for (auto &col : columns) {
+			if (!DuckLakeMetadataManager::ResultHasColumn(*columns_result, col.column_name)) {
+				return false;
+			}
+		}
 		// Build one aggregate query: COUNT(*) followed by (MIN, MAX, COUNT(col), nan-flag) per column.
 		string select_list = "COUNT(*)";
 		for (auto &col : columns) {
