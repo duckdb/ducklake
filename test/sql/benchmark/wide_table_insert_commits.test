@@ -19,10 +19,16 @@ statement ok
 ATTACH 'ducklake:{TEST_DIR}/wide_commit_pristine.db' AS lake (DATA_PATH '{TEST_DIR}/wide_commit_files')
 
 statement ok
+BEGIN
+
+statement ok
 CALL lake.set_option('data_inlining_row_limit', 0)
 
 statement ok
 CREATE TABLE lake.wide AS SELECT * FROM wide_source WHERE false
+
+statement ok
+COMMIT
 
 statement ok
 DETACH lake

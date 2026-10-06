@@ -50,6 +50,18 @@ statement ok
 ALTER TABLE meta.ducklake_schema ADD COLUMN parent_schema_id BIGINT;
 
 statement ok
+CREATE TABLE meta.ducklake_metadata_v1_1(key VARCHAR NOT NULL, value VARCHAR NOT NULL, scope VARCHAR NOT NULL, scope_id BIGINT NOT NULL, begin_snapshot BIGINT NOT NULL, end_snapshot BIGINT, UNIQUE(key, scope, scope_id, begin_snapshot));
+
+statement ok
+INSERT INTO meta.ducklake_metadata_v1_1 SELECT key, value, COALESCE(scope, 'global'), COALESCE(scope_id, 0), 0, NULL FROM meta.ducklake_metadata;
+
+statement ok
+DROP TABLE meta.ducklake_metadata;
+
+statement ok
+ALTER TABLE meta.ducklake_metadata_v1_1 RENAME TO ducklake_metadata;
+
+statement ok
 DETACH meta
 
 # a read-only attach cannot migrate in place - reading the inlined data fails with a hint at the migration

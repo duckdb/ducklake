@@ -11,10 +11,16 @@ statement ok
 ATTACH 'ducklake:{TEST_DIR}/partitioned_merge_pristine.db' AS lake (DATA_PATH '{TEST_DIR}/partitioned_merge_files')
 
 statement ok
+BEGIN
+
+statement ok
 CALL lake.set_option('data_inlining_row_limit', 0)
 
 statement ok
 CREATE TABLE lake.events (part INTEGER, id BIGINT, v BIGINT)
+
+statement ok
+COMMIT
 
 statement ok
 ALTER TABLE lake.events SET PARTITIONED BY (part)

@@ -104,11 +104,12 @@ public:
 	static string PartitionValueLiteral(const Value &v);
 
 	//! Throws if a column name is reserved for inlined data metadata on this catalog
-	static void ValidateInlinedSystemColumn(DuckLakeCatalog &catalog, ClientContext &context, SchemaIndex schema_id,
-	                                        TableIndex table_id, const string &name,
+	static void ValidateInlinedSystemColumn(DuckLakeCatalog &catalog, DuckLakeTransaction &transaction,
+	                                        ClientContext &context, SchemaIndex schema_id, TableIndex table_id,
+	                                        const string &name,
 	                                        optional_ptr<const map<string, string>> table_options = nullptr);
-	static void ValidateNoInlinedSystemColumns(DuckLakeCatalog &catalog, ClientContext &context, SchemaIndex schema_id,
-	                                           const ColumnList &columns,
+	static void ValidateNoInlinedSystemColumns(DuckLakeCatalog &catalog, DuckLakeTransaction &transaction,
+	                                           ClientContext &context, SchemaIndex schema_id, const ColumnList &columns,
 	                                           optional_ptr<const map<string, string>> table_options = nullptr);
 	//! Throws if a column conflicts with inlined data metadata columns when enabling inlining
 	static void ValidateCanEnableInlining(const ColumnList &columns, bool prefixed_inlined_columns,

@@ -11,10 +11,10 @@ statement ok
 ATTACH 'ducklake:{TEST_DIR}/flush_fixture_pristine.db' AS lake (DATA_PATH '{TEST_DIR}/flush_fixture_files')
 
 statement ok
-CALL lake.set_option('data_inlining_row_limit', 100)
+BEGIN
 
 statement ok
-BEGIN
+CALL lake.set_option('data_inlining_row_limit', 100)
 
 statement ok
 CREATE TABLE lake.i AS SELECT r AS id, r * 3 AS v FROM range(100) t(r)

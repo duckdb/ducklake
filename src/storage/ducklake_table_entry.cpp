@@ -711,7 +711,7 @@ unique_ptr<CatalogEntry> DuckLakeTableEntry::AlterTable(DuckLakeTransaction &tra
 		return nullptr;
 	}
 	// partitioning relies on the column's bounds to prune files
-	auto skipped_fields = GetSkippedStatsFields();
+	auto skipped_fields = GetSkippedStatsFields(transaction);
 	for (auto &field : partition_data->fields) {
 		if (skipped_fields.count(field.field_id.index)) {
 			auto field_id = field_data->GetByFieldIndex(field.field_id);
@@ -812,7 +812,7 @@ unique_ptr<CatalogEntry> DuckLakeTableEntry::AlterTable(DuckLakeTransaction &tra
 
 unique_ptr<CatalogEntry> DuckLakeTableEntry::AlterTable(ClientContext &context, DuckLakeTransaction &transaction,
                                                         RenameColumnInfo &info) {
-	DuckLakeUtil::ValidateInlinedSystemColumn(ParentCatalog().Cast<DuckLakeCatalog>(), context,
+	DuckLakeUtil::ValidateInlinedSystemColumn(ParentCatalog().Cast<DuckLakeCatalog>(), transaction, context,
 	                                          ParentSchema().Cast<DuckLakeSchemaEntry>().GetSchemaId(), GetTableId(),
 	                                          info.new_name.GetIdentifierName(), &table_options);
 	auto create_info = GetInfo();
@@ -852,7 +852,7 @@ void DuckLakeTableEntry::RequireNextColumnId(DuckLakeTransaction &transaction) {
 
 unique_ptr<CatalogEntry> DuckLakeTableEntry::AlterTable(ClientContext &context, DuckLakeTransaction &transaction,
                                                         AddColumnInfo &info) {
-	DuckLakeUtil::ValidateInlinedSystemColumn(ParentCatalog().Cast<DuckLakeCatalog>(), context,
+	DuckLakeUtil::ValidateInlinedSystemColumn(ParentCatalog().Cast<DuckLakeCatalog>(), transaction, context,
 	                                          ParentSchema().Cast<DuckLakeSchemaEntry>().GetSchemaId(), GetTableId(),
 	                                          info.new_column.Name().GetIdentifierName(), &table_options);
 	auto create_info = GetInfo();
@@ -1154,7 +1154,7 @@ unique_ptr<CatalogEntry> DuckLakeTableEntry::AlterTable(DuckLakeTransaction &tra
 		RequireNextColumnId(transaction);
 	}
 	auto new_field_id = TypePromotion(field_id, info.target_type, *change_info, optional_idx());
-	ValidateAddedFieldsCanSkipStats(field_id, *new_field_id);
+	ValidateAddedFieldsCanSkipStats(transaction, field_id, *new_field_id);
 
 	// generate a new column list with the modified type
 	ColumnList new_columns;
@@ -1243,7 +1243,7 @@ unique_ptr<CatalogEntry> DuckLakeTableEntry::AlterTable(DuckLakeTransaction &tra
 	auto child_field_id = DuckLakeFieldId::FieldIdFromColumn(info.new_field, next_field_id);
 	next_column_id = next_field_id;
 
-	ValidateAddedFieldsCanSkipStats(parent_id, *child_field_id);
+	ValidateAddedFieldsCanSkipStats(transaction, parent_id, *child_field_id);
 
 	// generate the new to-be-inserted columns
 	AddNewColumns(*child_field_id, change_info->new_fields, parent_id.GetFieldIndex());
@@ -1509,7 +1509,7 @@ unique_ptr<CatalogEntry> DuckLakeTableEntry::AlterTable(ClientContext &context, 
 		DuckLakeUtil::ValidateConfigOptionName(option);
 		DuckLakeUtil::ValidateConfigOptionScope(option, false, true);
 		if (option == "data_inlining_row_limit" &&
-		    ducklake_catalog.DataInliningRowLimit(context, schema_id, TableIndex()) > 0) {
+		    ducklake_catalog.DataInliningRowLimit(transaction, context, schema_id, TableIndex()) > 0) {
 			DuckLakeUtil::ValidateCanEnableInlining(GetColumns(), ducklake_catalog.SupportsV1_1Metadata(),
 			                                        name.GetIdentifierName());
 		}
@@ -1695,10 +1695,11 @@ static void AddFieldAndChildren(const DuckLakeFieldId &field_id, unordered_set<i
 	}
 }
 
-void DuckLakeTableEntry::ValidateAddedFieldsCanSkipStats(const DuckLakeFieldId &parent_id,
+void DuckLakeTableEntry::ValidateAddedFieldsCanSkipStats(DuckLakeTransaction &transaction,
+                                                         const DuckLakeFieldId &parent_id,
                                                          const DuckLakeFieldId &new_field_id) const {
 	auto unsupported = FindStatsUnsupportedField(new_field_id);
-	if (!unsupported || !GetSkippedStatsFields().count(parent_id.GetFieldIndex().index)) {
+	if (!unsupported || !GetSkippedStatsFields(transaction).count(parent_id.GetFieldIndex().index)) {
 		return;
 	}
 	// a field below a skipped column inherits the skip, which set_option refuses for these types
@@ -1707,7 +1708,7 @@ void DuckLakeTableEntry::ValidateAddedFieldsCanSkipStats(const DuckLakeFieldId &
 	                              parent_id.Name(), unsupported->Type().ToString(), unsupported->Name());
 }
 
-unordered_set<idx_t> DuckLakeTableEntry::GetSkippedStatsFields() const {
+unordered_set<idx_t> DuckLakeTableEntry::GetSkippedStatsFields(optional_ptr<DuckLakeTransaction> transaction) const {
 	unordered_set<idx_t> result;
 	auto &catalog = ParentCatalog().Cast<DuckLakeCatalog>();
 	string option_value;
@@ -1715,7 +1716,7 @@ unordered_set<idx_t> DuckLakeTableEntry::GetSkippedStatsFields() const {
 	auto pending = table_options.find("skip_stats_columns");
 	if (pending != table_options.end()) {
 		option_value = pending->second;
-	} else if (!catalog.TryGetTableConfigOption("skip_stats_columns", option_value, GetTableId())) {
+	} else if (!catalog.TryGetTableConfigOption(transaction, "skip_stats_columns", option_value, GetTableId())) {
 		return result;
 	}
 	// re-read on every write to this table - unusable entries are ignored, never raised

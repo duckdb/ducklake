@@ -93,6 +93,18 @@
         "test/sql/partitioning/epoch_transforms.test",
         "test/sql/partitioning/update_partition_epoch.test"
       ]
+    },
+    {
+      "reason": "Options are versioned with snapshots from 1.1-dev1; when ducklake_default_version is pinned to 1.0 they are not snapshot-isolated or migrated",
+      "paths": [
+        "test/sql/migration/global_scope_migration.test",
+        "test/sql/migration/metadata_table_dev_migration.test",
+        "test/sql/settings/config_option_conflicts.test",
+        "test/sql/settings/config_option_cross_instance.test",
+        "test/sql/settings/config_option_snapshot_reads.test",
+        "test/sql/settings/config_option_snapshots.test",
+        "test/sql/stats/skip_stats_columns_malformed.test"
+      ]
     }
   ]
 }

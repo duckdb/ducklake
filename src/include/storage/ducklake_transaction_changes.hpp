@@ -19,6 +19,22 @@ namespace duckdb {
 class CatalogEntry;
 class DuckLakeSchemaEntry;
 
+//! A config option a commit set, recorded in its snapshot changes as `set_option:<scope>.<scope_id>.<key>`
+struct DuckLakeSetOption {
+	//! "global", "schema" or "table"
+	string scope;
+	idx_t scope_id;
+	string key;
+	//! Only known for this transaction's own options - the change record does not carry it
+	string value;
+
+	string ToChangeValue() const;
+	static DuckLakeSetOption FromChangeValue(const string &value);
+	bool operator<(const DuckLakeSetOption &other) const {
+		return std::tie(scope, scope_id, key) < std::tie(other.scope, other.scope_id, other.key);
+	}
+};
+
 struct TransactionChangeInformation {
 	case_insensitive_map_t<reference<DuckLakeSchemaEntry>> created_schemas;
 	map<SchemaIndex, reference<DuckLakeSchemaEntry>> dropped_schemas;
@@ -43,6 +59,7 @@ struct TransactionChangeInformation {
 	set<TableIndex> tables_compacted;
 	set<TableIndex> tables_merge_adjacent;
 	set<TableIndex> tables_rewrite_delete;
+	set<DuckLakeSetOption> set_options;
 };
 
 struct SnapshotChangeInformation {
@@ -65,6 +82,7 @@ struct SnapshotChangeInformation {
 	set<TableIndex> tables_inserted_inlined;
 	set<TableIndex> tables_deleted_inlined;
 	set<TableIndex> tables_flushed_inlined;
+	set<DuckLakeSetOption> set_options;
 	static SnapshotChangeInformation ParseChangesMade(const string &changes_made);
 };
 

@@ -30,8 +30,10 @@ SELECT option_name, value FROM ducklake.options() WHERE scope_entry = 'main.t1' 
 ----
 data_inlining_row_limit	0
 
+# only open rows - end_snapshot exists from v1.1, so the union supplies it before
 query I
-SELECT count(*) FROM __ducklake_metadata_ducklake.ducklake_metadata WHERE scope = 'table'
+SELECT count(*) FROM (FROM __ducklake_metadata_ducklake.ducklake_metadata UNION ALL BY NAME SELECT NULL::BIGINT AS end_snapshot WHERE false)
+WHERE scope = 'table' AND end_snapshot IS NULL
 ----
 1
 
@@ -86,7 +88,8 @@ SELECT value FROM ducklake.options() WHERE option_name = 'parquet_compression' A
 gzip
 
 query I
-SELECT value FROM __ducklake_metadata_ducklake.ducklake_metadata WHERE key = 'parquet_compression' AND scope = 'table'
+SELECT value FROM (FROM __ducklake_metadata_ducklake.ducklake_metadata UNION ALL BY NAME SELECT NULL::BIGINT AS end_snapshot WHERE false)
+WHERE key = 'parquet_compression' AND scope = 'table' AND end_snapshot IS NULL
 ----
 gzip
 

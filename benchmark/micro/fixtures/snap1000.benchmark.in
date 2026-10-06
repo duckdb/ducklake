@@ -15,8 +15,10 @@ COPY (SELECT 'INSERT INTO lake.t SELECT i, ''v'' || i, i * 0.5 FROM range(' || k
 TO '${BENCHMARK_DIR}/${lake}_gen/schema.sql' (HEADER false, QUOTE '');
 @create ${lake}_pristine
 @attach ${lake}_pristine AS lake (DATA_PATH '${BENCHMARK_DIR}/${lake}_files')
+BEGIN;
 CALL lake.set_option('data_inlining_row_limit', 0);
 CREATE TABLE lake.t (id BIGINT, v VARCHAR, x DOUBLE);
+COMMIT;
 CREATE TABLE lake.m (id BIGINT, v VARCHAR, x DOUBLE);
 IMPORT DATABASE '${BENCHMARK_DIR}/${lake}_gen';
 DELETE FROM lake.t WHERE id % 100 < 96;

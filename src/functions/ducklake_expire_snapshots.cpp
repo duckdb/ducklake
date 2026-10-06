@@ -30,7 +30,9 @@ static unique_ptr<FunctionData> DuckLakeExpireSnapshotsBind(ClientContext &conte
 	auto &ducklake_catalog = reinterpret_cast<DuckLakeCatalog &>(catalog);
 	DuckLakeSnapshotsFunction::GetSnapshotTypes(return_types, names);
 
-	const auto older_than_default = ducklake_catalog.GetConfigOption<string>("expire_older_than", {}, {}, "");
+	auto &transaction = DuckLakeTransaction::Get(context, catalog);
+	const auto older_than_default =
+	    ducklake_catalog.GetConfigOption<string>(transaction, "expire_older_than", {}, {}, "");
 
 	for (auto &entry : input.named_parameters) {
 		if (entry.first == "dry_run") {
@@ -97,7 +99,6 @@ static unique_ptr<FunctionData> DuckLakeExpireSnapshotsBind(ClientContext &conte
 	} else {
 		filter += StringUtil::Format("snapshot_id IN (%s)", snapshot_list);
 	}
-	auto &transaction = DuckLakeTransaction::Get(context, catalog);
 	auto &metadata_manager = transaction.GetMetadataManager();
 	result->snapshots = metadata_manager.GetAllSnapshots(filter);
 

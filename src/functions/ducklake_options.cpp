@@ -98,6 +98,51 @@ static Value GetOptionDescription(const string &option_name) {
 	return Value();
 }
 
+static SchemaIndex ScopeIdOf(const DuckLakeSchemaSetting &setting) {
+	return setting.schema_id;
+}
+
+static TableIndex ScopeIdOf(const DuckLakeTableSetting &setting) {
+	return setting.table_id;
+}
+
+//! Overwrites the stored value, adds the option if that scope does not have it yet, or removes a reset one
+template <class SETTINGS, class SCOPE_ID>
+static void OverlayScopedOption(SETTINGS &settings, SCOPE_ID scope_id, const DuckLakeConfigOption &option) {
+	for (idx_t i = 0; i < settings.size(); i++) {
+		auto &setting = settings[i];
+		if (setting.tag.key != option.option.key || ScopeIdOf(setting) != scope_id) {
+			continue;
+		}
+		if (option.reset) {
+			settings.erase(settings.begin() + static_cast<int64_t>(i));
+		} else {
+			setting.tag.value = option.option.value;
+		}
+		return;
+	}
+	if (!option.reset) {
+		settings.push_back({scope_id, option.option});
+	}
+}
+
+static void OverlayGlobalOption(vector<DuckLakeTag> &tags, const DuckLakeConfigOption &option) {
+	for (idx_t i = 0; i < tags.size(); i++) {
+		if (tags[i].key != option.option.key) {
+			continue;
+		}
+		if (option.reset) {
+			tags.erase(tags.begin() + static_cast<int64_t>(i));
+		} else {
+			tags[i].value = option.option.value;
+		}
+		return;
+	}
+	if (!option.reset) {
+		tags.push_back(option.option);
+	}
+}
+
 unique_ptr<GlobalTableFunctionState> DuckLakeOptionsInit(ClientContext &context, TableFunctionInitInput &input) {
 	auto &bind_data = input.bind_data->Cast<DuckLakeOptionsData>();
 	auto &transaction = DuckLakeTransaction::Get(context, bind_data.catalog);
@@ -105,7 +150,24 @@ unique_ptr<GlobalTableFunctionState> DuckLakeOptionsInit(ClientContext &context,
 	auto &metadata_manager = transaction.GetMetadataManager();
 
 	auto result = make_uniq<DuckLakeOptionsState>();
-	auto metadata = metadata_manager.LoadDuckLake();
+	// as of the transaction's own snapshot rather than the options version, which a drop does not move
+	optional_idx options_snapshot;
+	if (ducklake_catalog.SupportsV1_1Metadata()) {
+		options_snapshot = transaction.GetSnapshot().snapshot_id;
+	}
+	auto metadata = metadata_manager.LoadDuckLake(options_snapshot);
+
+	// options this transaction has set are not in the metadata until it commits, but it must read
+	// them back
+	for (auto &staged : transaction.GetStagedConfigOptions()) {
+		if (staged.table_id.IsValid()) {
+			OverlayScopedOption(metadata.table_settings, staged.table_id, staged);
+		} else if (staged.schema_id.IsValid()) {
+			OverlayScopedOption(metadata.schema_settings, staged.schema_id, staged);
+		} else {
+			OverlayGlobalOption(metadata.tags, staged);
+		}
+	}
 
 	// Global options
 	for (auto &tag : metadata.tags) {
@@ -119,14 +181,17 @@ unique_ptr<GlobalTableFunctionState> DuckLakeOptionsInit(ClientContext &context,
 
 	auto snapshot = transaction.GetSnapshot();
 
-	// Schema options
+	// Schema options - a schema this transaction dropped takes its options with it
 	for (auto &schema_setting : metadata.schema_settings) {
+		auto schema_entry = ducklake_catalog.GetEntryById(transaction, snapshot, schema_setting.schema_id);
+		if (schema_entry && transaction.IsDeleted(*schema_entry)) {
+			continue;
+		}
 		DuckLakeOptionInfo option_info;
 		option_info.option_name = schema_setting.tag.key;
 		option_info.value = schema_setting.tag.value;
 		option_info.description = GetOptionDescription(schema_setting.tag.key);
 		option_info.scope = "SCHEMA";
-		auto schema_entry = ducklake_catalog.GetEntryById(transaction, snapshot, schema_setting.schema_id);
 		if (schema_entry) {
 			option_info.scope_entry =
 			    DuckLakeUtil::SchemaPathToDisplay(schema_entry->Cast<SchemaCatalogEntry>().GetSchemaPath());
@@ -136,12 +201,15 @@ unique_ptr<GlobalTableFunctionState> DuckLakeOptionsInit(ClientContext &context,
 
 	// Table options
 	for (auto &table_setting : metadata.table_settings) {
+		auto table_entry = ducklake_catalog.GetEntryById(transaction, snapshot, table_setting.table_id);
+		if (table_entry && transaction.IsDeleted(*table_entry)) {
+			continue;
+		}
 		DuckLakeOptionInfo option_info;
 		option_info.option_name = table_setting.tag.key;
 		option_info.value = table_setting.tag.value;
 		option_info.description = GetOptionDescription(table_setting.tag.key);
 		option_info.scope = "TABLE";
-		auto table_entry = ducklake_catalog.GetEntryById(transaction, snapshot, table_setting.table_id);
 		if (table_entry) {
 			auto &table_catalog_entry = table_entry->Cast<TableCatalogEntry>();
 			option_info.scope_entry =

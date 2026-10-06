@@ -1,0 +1,82 @@
+# name: test/sql/settings/config_option_snapshot_reads.test
+# description: A transaction reads the config options committed as of its snapshot
+# group: [settings]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/config_option_snapshot_reads.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok con1
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/config_option_snapshot_reads', METADATA_CATALOG 'ducklake_meta', DATA_INLINING_ROW_LIMIT 0)
+
+# the global scope is named, so an option has one row per scope and snapshot
+query II con1
+SELECT scope, scope_id FROM ducklake_meta.ducklake_metadata WHERE key = 'version'
+----
+global	0
+
+statement error con1
+INSERT INTO ducklake_meta.ducklake_metadata (key, value, scope, scope_id, begin_snapshot) VALUES ('version', '1.0', 'global', 0, 0)
+----
+
+statement ok con1
+CREATE TABLE ducklake.t(id INTEGER)
+
+statement ok con1
+CALL ducklake.set_option('parquet_compression', 'gzip', table_name => 't')
+
+statement ok con1
+BEGIN
+
+query I con1
+SELECT value FROM ducklake.options() WHERE option_name = 'parquet_compression'
+----
+gzip
+
+# committed after con1's snapshot, so con1 keeps reading the value it started with
+statement ok con2
+CALL ducklake.set_option('parquet_compression', 'zstd', table_name => 't')
+
+statement ok con2
+CALL ducklake.set_option('data_inlining_row_limit', 10, table_name => 't')
+
+query I con1
+SELECT value FROM ducklake.options() WHERE option_name = 'parquet_compression'
+----
+gzip
+
+statement ok con1
+INSERT INTO ducklake.t VALUES (1)
+
+statement ok con1
+COMMIT
+
+# not inlined, and written with the compression con1 read
+query I con1
+SELECT DISTINCT compression FROM parquet_metadata('{DATA_PATH}/config_option_snapshot_reads/**/*.parquet')
+----
+GZIP
+
+query I con1
+SELECT value FROM ducklake.options() WHERE option_name = 'parquet_compression'
+----
+zstd
+
+# the replaced value is kept until no snapshot can read it
+query II con1
+SELECT value, end_snapshot IS NULL FROM ducklake_meta.ducklake_metadata WHERE key = 'parquet_compression' ORDER BY begin_snapshot
+----
+gzip	false
+zstd	true
+
+statement ok con1
+CALL ducklake_expire_snapshots('ducklake', older_than => now())
+
+query I con1
+SELECT value FROM ducklake_meta.ducklake_metadata WHERE key = 'parquet_compression'
+----
+zstd

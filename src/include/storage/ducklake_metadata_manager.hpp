@@ -260,13 +260,19 @@ public:
 	//! Get the CREATE TABLE statements for all metadata tables
 	virtual string GetCreateTableStatements();
 	virtual string GetSchemaTableStatement();
+	virtual string GetSnapshotTableStatement();
+	virtual string GetMetadataTableStatement();
+	//! The v1.1 ducklake_metadata layout: the global scope is named, and each option row is valid from its
+	//! begin_snapshot until its end_snapshot
+	static string ScopedMetadataTableStatement(const string &table_name);
 	virtual string GetDataFileTableStatement();
 	virtual string GetDeleteFileTableStatement();
 	virtual string GetFileColumnStatsTableStatement();
 	virtual string GetTableColumnStatsTableStatement();
 	//! Get the version string written to ducklake_metadata
 	virtual string GetVersionString();
-	virtual DuckLakeMetadata LoadDuckLake();
+	//! The options valid at options_version, or the current ones
+	virtual DuckLakeMetadata LoadDuckLake(optional_idx options_version = optional_idx());
 
 	virtual unique_ptr<QueryResult> Execute(DuckLakeSnapshot snapshot, string &query);
 	virtual unique_ptr<QueryResult> Execute(string &query);
@@ -370,7 +376,10 @@ public:
 	static string WriteExpiredColumnTags(const vector<DuckLakeDroppedColumn> &dropped_columns);
 	static string WriteNewColumns(const vector<DuckLakeNewColumn> &new_columns);
 	static string WriteNewTags(const vector<DuckLakeTagInfo> &new_tags);
-	static string WriteNewTableOptions(const vector<DuckLakeConfigOption> &new_options);
+	static string WriteNewTableOptions(const vector<DuckLakeConfigOption> &new_options, bool supports_v1_1_metadata);
+	//! Removes the options of dropped schemas and tables
+	static string DropConfigOptions(const set<SchemaIndex> &schema_ids, const set<TableIndex> &table_ids,
+	                                bool supports_v1_1_metadata);
 	static string WriteNewColumnTags(const vector<DuckLakeColumnTagInfo> &new_tags);
 	static string WriteNewViewColumnTags(const vector<DuckLakeViewColumnTagInfo> &new_tags);
 	virtual string WriteNewDataFiles(DuckLakeSnapshot &commit_snapshot, const vector<DuckLakeFileInfo> &new_files,
@@ -443,7 +452,9 @@ public:
 	                               const vector<DuckLakePath> &resolved_paths);
 	//! SQL templates with {METADATA_CATALOG} / {SNAPSHOT_ID} placeholders, shared with the
 	//! server-side commit path.
-	static string InsertSnapshotSql();
+	static string InsertSnapshotSql(bool supports_v1_1_metadata);
+	//! The value {OPTIONS_VERSION} stands for - read from the previous snapshot when the commit does not know it
+	static string OptionsVersionSql(const DuckLakeSnapshot &snapshot);
 	static string WriteSnapshotChangesSql(const SnapshotChangeInfo &change_info,
 	                                      const DuckLakeSnapshotCommit &commit_info);
 	static string UpdateGlobalTableStatsSql(const DuckLakeGlobalStatsInfo &stats, bool write_stats_exactness);
@@ -495,8 +506,11 @@ public:
 	//! is safe; invalidates the schema ObjectCache so in-session reads reload.
 	virtual void DropEmptySupersededInlinedTables();
 	virtual vector<DuckLakeTableSizeInfo> GetTableSizes(DuckLakeSnapshot snapshot);
-	virtual void SetConfigOption(const DuckLakeConfigOption &option);
-	virtual bool ResetConfigOption(const DuckLakeConfigOption &option);
+	//! Writes the given config options as a single statement
+	virtual void SetConfigOptions(const vector<DuckLakeConfigOption> &options);
+	string SetConfigOptionsSql(const vector<DuckLakeConfigOption> &options);
+	//! Deletes a config option's row before v1.1, returning whether there was one
+	virtual bool DeleteConfigOption(const DuckLakeConfigOption &option);
 	virtual string GetPathForSchema(SchemaIndex schema_id, vector<DuckLakeSchemaInfo> &new_schemas_result);
 	virtual string GetPathForTable(TableIndex table_id, const vector<DuckLakeTableInfo> &new_tables,
 	                               const vector<DuckLakeSchemaInfo> &new_schemas_result);
@@ -513,6 +527,10 @@ public:
 	//! Rewrites inlined tables whose columns were created with the storage types of an older DuckLake version
 	virtual void MigrateInlinedDataTypes() {
 	}
+	virtual void MigrateMetadataTable();
+	bool HasVersionedOptions();
+	//! Whether ducklake_snapshot records the snapshot the options last changed at
+	bool HasSnapshotOptionsVersion();
 	virtual void ExecuteMigration(string migrate_query, bool allow_failures, const string &from_version,
 	                              const string &to_version);
 

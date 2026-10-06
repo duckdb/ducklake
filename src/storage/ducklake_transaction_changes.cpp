@@ -25,7 +25,8 @@ enum class ChangeType {
 	CREATED_SCALAR_MACRO,
 	CREATED_TABLE_MACRO,
 	DROPPED_SCALAR_MACRO,
-	DROPPED_TABLE_MACRO
+	DROPPED_TABLE_MACRO,
+	SET_OPTION
 };
 
 struct ParsedChange {
@@ -82,6 +83,8 @@ ChangeType ParseChangeType(const string &changes_made, idx_t &pos) {
 	} else if (StringUtil::CIEquals(change_type_str, "flushed_inlined") ||
 	           StringUtil::CIEquals(change_type_str, "inline_flush")) {
 		return ChangeType::FLUSHED_INLINE_DATA_FOR_TABLE;
+	} else if (StringUtil::CIEquals(change_type_str, "set_option")) {
+		return ChangeType::SET_OPTION;
 	} else {
 		throw InvalidInputException("Unsupported change type %s", change_type_str);
 	}
@@ -131,6 +134,23 @@ vector<ParsedChange> ParseChangesList(const string &changes_made) {
 }
 
 } // namespace
+
+string DuckLakeSetOption::ToChangeValue() const {
+	// option names hold no separators, set_option only takes the known ones
+	return scope + "." + to_string(scope_id) + "." + key;
+}
+
+DuckLakeSetOption DuckLakeSetOption::FromChangeValue(const string &value) {
+	auto parts = StringUtil::Split(value, '.');
+	if (parts.size() != 3) {
+		throw InvalidInputException("Malformed set_option change \"%s\"", value);
+	}
+	DuckLakeSetOption result;
+	result.scope = parts[0];
+	result.scope_id = StringUtil::ToUnsigned(parts[1]);
+	result.key = parts[2];
+	return result;
+}
 
 SnapshotChangeInformation SnapshotChangeInformation::ParseChangesMade(const string &changes_made) {
 	auto change_list = ParseChangesList(changes_made);
@@ -209,6 +229,9 @@ SnapshotChangeInformation SnapshotChangeInformation::ParseChangesMade(const stri
 			break;
 		case ChangeType::FLUSHED_INLINE_DATA_FOR_TABLE:
 			result.tables_flushed_inlined.insert(TableIndex(StringUtil::ToUnsigned(entry.change_value)));
+			break;
+		case ChangeType::SET_OPTION:
+			result.set_options.insert(DuckLakeSetOption::FromChangeValue(entry.change_value));
 			break;
 		default:
 			throw InternalException("Unsupported change type in ParseChangesMade");

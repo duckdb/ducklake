@@ -20,75 +20,82 @@ USE ducklake;
 statement ok
 CREATE TABLE t (id INTEGER, data VARCHAR);
 
-# Set small target file size to control merging behavior (VERSION 1)
+# Set small target file size to control merging behavior
 statement ok
 CALL ducklake_set_option('ducklake', 'target_file_size', '1.5KB');
 
-# Create small files A (VERSION 2)
+# from v1.1 setting an option is a snapshot too, so the versions below count from here
+statement ok
+SET VARIABLE base = (SELECT max(snapshot_id) FROM ducklake_snapshots('ducklake'))
+
+# Create small files A (VERSION base + 1)
 statement ok
 INSERT INTO t SELECT i, 'small1' FROM range(100) t(i);
 
-# Create small files B (VERSION 3)
+# Create small files B (VERSION base + 2)
 statement ok
 INSERT INTO t SELECT i + 100, 'small2' FROM range(100) t(i);
 
-# Merge A+B into a single file (VERSION 4)
+# Merge A+B into a single file (VERSION base + 3)
 query III
 SELECT table_name, files_processed, files_created FROM ducklake_merge_adjacent_files('ducklake', 't')
 ----
 t	2	1
 
-# Create small files C (VERSION 5)
+# Create small files C (VERSION base + 4)
 statement ok
 INSERT INTO t SELECT i + 200, 'small3' FROM range(100) t(i);
 
-# Create small files D (VERSION 6)
+# Create small files D (VERSION base + 5)
 statement ok
 INSERT INTO t SELECT i + 300, 'small4' FROM range(100) t(i);
 
-# Merge C+D into a single file (VERSION 7)
+# Merge C+D into a single file (VERSION base + 6)
 query III
 SELECT table_name, files_processed, files_created FROM ducklake_merge_adjacent_files('ducklake', 't')
 ----
 t	2	1
 
 # State now:
-# - Merged AB (ids 0-199) with partial_max = 3 (max snapshot in merged file)
-# - Merged CD (ids 200-399) with partial_max = 6 (max snapshot in merged file)
+# - Merged AB (ids 0-199) with partial_max = base + 2 (max snapshot in merged file)
+# - Merged CD (ids 200-399) with partial_max = base + 5 (max snapshot in merged file)
 query III
-SELECT begin_snapshot, end_snapshot, partial_max FROM __ducklake_metadata_ducklake.ducklake_data_file;
+SELECT begin_snapshot - getvariable('base'), end_snapshot, partial_max - getvariable('base') FROM __ducklake_metadata_ducklake.ducklake_data_file ORDER BY ALL;
 ----
-2	NULL	3
-5	NULL	6
+1	NULL	2
+4	NULL	5
 
 # Set large target file size to merge all files
 statement ok
 CALL ducklake_set_option('ducklake', 'target_file_size', '1MB');
 
-# Merge all files into a single file (VERSION 8)
+# Merge all files into a single file (the latest VERSION)
 query III
 SELECT table_name, files_processed, files_created FROM ducklake_merge_adjacent_files('ducklake', 't')
 ----
 t	2	1
 
+statement ok
+SET VARIABLE abcd = (SELECT max(snapshot_id) FROM ducklake_snapshots('ducklake'))
+
 # State now:
-# - Merged ABCD (ids 0-399) with partial_max = 6 (max of all source files)
+# - Merged ABCD (ids 0-399) with partial_max = base + 5 (max of all source files)
 query III
-SELECT begin_snapshot, end_snapshot, partial_max FROM __ducklake_metadata_ducklake.ducklake_data_file;
+SELECT begin_snapshot - getvariable('base'), end_snapshot, partial_max - getvariable('base') FROM __ducklake_metadata_ducklake.ducklake_data_file ORDER BY ALL;
 ----
-2	NULL	6
+1	NULL	5
 
 # Ensure the time-travel works
 query II
 SELECT * FROM (
   SELECT '01_count_after_init' as version, COUNT(*) FROM t AT (VERSION => 1)
-  UNION SELECT '02_count_after_A' as version, COUNT(*) FROM t AT (VERSION => 2)
-  UNION SELECT '03_count_after_B' as version, COUNT(*) FROM t AT (VERSION => 3)
-  UNION SELECT '04_count_after_AB' as version, COUNT(*) FROM t AT (VERSION => 4)
-  UNION SELECT '05_count_after_C' as version, COUNT(*) FROM t AT (VERSION => 5)
-  UNION SELECT '06_count_after_D' as version, COUNT(*) FROM t AT (VERSION => 6)
-  UNION SELECT '07_count_after_CD' as version, COUNT(*) FROM t AT (VERSION => 7)
-  UNION SELECT '08_count_after_ABCD' as version, COUNT(*) FROM t AT (VERSION => 8)
+  UNION SELECT '02_count_after_A' as version, COUNT(*) FROM t AT (VERSION => getvariable('base') + 1)
+  UNION SELECT '03_count_after_B' as version, COUNT(*) FROM t AT (VERSION => getvariable('base') + 2)
+  UNION SELECT '04_count_after_AB' as version, COUNT(*) FROM t AT (VERSION => getvariable('base') + 3)
+  UNION SELECT '05_count_after_C' as version, COUNT(*) FROM t AT (VERSION => getvariable('base') + 4)
+  UNION SELECT '06_count_after_D' as version, COUNT(*) FROM t AT (VERSION => getvariable('base') + 5)
+  UNION SELECT '07_count_after_CD' as version, COUNT(*) FROM t AT (VERSION => getvariable('base') + 6)
+  UNION SELECT '08_count_after_ABCD' as version, COUNT(*) FROM t AT (VERSION => getvariable('abcd'))
 ) ORDER BY version ASC;
 ----
 01_count_after_init	0

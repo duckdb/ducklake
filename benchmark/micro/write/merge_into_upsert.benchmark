@@ -24,8 +24,10 @@ FROM (SELECT range AS i FROM range(150000) UNION ALL SELECT range FROM range(100
 load
 @create ${lake}_pristine
 @attach ${lake}_pristine AS lake (DATA_PATH '${BENCHMARK_DIR}/${lake}_files')
+BEGIN;
 CALL lake.set_option('data_inlining_row_limit', 0);
 CREATE TABLE lake.target AS SELECT i AS id, i * 2 AS v, 'base_' || i AS payload FROM range(1000000) t(i);
+COMMIT;
 CALL ducklake_delete_orphaned_files('lake', cleanup_all => true);
 DETACH lake;
 COPY (SELECT count(*) FROM glob('${BENCHMARK_DIR}/${lake}_files/**'))

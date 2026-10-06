@@ -87,6 +87,10 @@ SELECT COUNT(*) from test
 statement ok
 CALL ducklake.set_option('rewrite_delete_threshold', 0.1)
 
+# from v1.1 setting an option is a snapshot too, so the later versions count from here
+statement ok
+SET VARIABLE s_option = (SELECT max(snapshot_id) FROM ducklake_snapshots('ducklake'))
+
 statement ok
 DELETE FROM test
 WHERE key > 4000;
@@ -166,9 +170,9 @@ SELECT COUNT(*) FROM GLOB('{DATA_PATH}/ducklake_rewrite_data/**/*')
 7
 
 # Let's check every snapshot has the right answer
-# Snapshots 0-8 are identical in both inline and non-inline modes.
-# In inline mode there is an extra inlined_delete snapshot (9) and flush snapshot (10) before the final rewrite (11).
-# In non-inline mode the delete goes directly to tables_deleted_from (9) and then the final rewrite (10).
+# Snapshots up to the second rewrite are identical in both inline and non-inline modes.
+# In inline mode there is an extra inlined_delete snapshot and flush snapshot before the final rewrite.
+# In non-inline mode the delete goes directly to tables_deleted_from and then the final rewrite.
 # Use dynamic checks to handle both modes.
 
 # Verify the common snapshots (0-8) are always present
@@ -188,7 +192,7 @@ SELECT count(*) FROM snapshots() WHERE changes::VARCHAR LIKE '%tables_inserted_i
 ----
 1
 
-# Time travel: versions 3-8 are the same in both modes
+# Time travel: the versions up to the second rewrite are the same in both modes
 query I
 select count(*) from test AT (VERSION => 3);
 ----
@@ -210,23 +214,23 @@ select count(*) from test AT (VERSION => 6);
 4001
 
 query I
-select count(*) from test AT (VERSION => 7);
+select count(*) from test AT (VERSION => getvariable('s_option') + 1);
 ----
 3001
 
 query I
-select count(*) from test AT (VERSION => 8);
+select count(*) from test AT (VERSION => getvariable('s_option') + 2);
 ----
 3001
 
-# Versions 9+ differ between inline and non-inline modes.
-# In both modes, after version 8 the remaining snapshots all have count=3000.
+# The later versions differ between inline and non-inline modes.
+# In both modes, after the second rewrite the remaining snapshots all have count=3000.
 # Use dynamic snapshot IDs for the remaining versions.
 statement ok
 SET VARIABLE s_last = (SELECT max(snapshot_id) FROM ducklake_snapshots('ducklake'))
 
 query I
-select count(*) from test AT (VERSION => 9);
+select count(*) from test AT (VERSION => getvariable('s_option') + 3);
 ----
 3000
 

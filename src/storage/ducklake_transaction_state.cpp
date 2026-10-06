@@ -93,6 +93,47 @@ void ConflictCheck(T index, const MAP &conflict_map, const char *action, const c
 	}
 }
 
+bool IsSkipStatsOption(const DuckLakeSetOption &option) {
+	return option.scope == "table" && option.key == "skip_stats_columns";
+}
+
+//! The fields the table is partitioned by as committed
+set<idx_t> ReadPartitionFields(TableIndex table_id, const std::function<unique_ptr<QueryResult>(string)> &executor) {
+	auto result = executor(StringUtil::Format(
+	    "SELECT c.column_id FROM {METADATA_CATALOG}.ducklake_partition_column c JOIN "
+	    "{METADATA_CATALOG}.ducklake_partition_info i ON c.partition_id = i.partition_id AND c.table_id = i.table_id "
+	    "WHERE i.table_id = %d AND i.end_snapshot IS NULL",
+	    table_id.index));
+	set<idx_t> fields;
+	for (auto &row : *result) {
+		fields.insert(row.GetValue<idx_t>(0));
+	}
+	return fields;
+}
+
+//! The table's skip_stats_columns option as committed
+string ReadSkippedStatsColumns(TableIndex table_id, const std::function<unique_ptr<QueryResult>(string)> &executor) {
+	auto result = executor(StringUtil::Format("SELECT value FROM {METADATA_CATALOG}.ducklake_metadata WHERE "
+	                                          "key = 'skip_stats_columns' AND scope = 'table' AND scope_id = %d AND "
+	                                          "end_snapshot IS NULL",
+	                                          table_id.index));
+	string value;
+	for (auto &row : *result) {
+		value = row.GetValue<string>(0);
+	}
+	return value;
+}
+
+bool SkipsPartitionColumn(const string &skipped_fields, const set<idx_t> &partition_fields) {
+	for (auto &entry : StringUtil::Split(skipped_fields, ',')) {
+		idx_t field_index;
+		if (TryCast::Operation<string_t, idx_t>(string_t(entry), field_index) && partition_fields.count(field_index)) {
+			return true;
+		}
+	}
+	return false;
+}
+
 void SchemaKeyConflictCheck(const string &schema_key, const case_insensitive_set_t &conflict_set, const char *action,
                             const char *conflict_action) {
 	if (conflict_set.find(schema_key) == conflict_set.end()) {
@@ -356,6 +397,58 @@ void DuckLakeTransactionState::CheckForConflicts(const TransactionChangeInformat
 		ConflictCheck(view_id, other_changes.dropped_views, "rename view", "dropped it");
 		ConflictCheck(view_id, other_changes.altered_views, "rename view", "altered it");
 	}
+	// set_option refuses to skip the statistics of a partition column and SET PARTITIONED BY to partition on a
+	// skipped one - each against what it read, so check again when the other changed the table since
+	for (auto &option : changes.set_options) {
+		if (other_changes.set_options.count(option)) {
+			throw TransactionException("Transaction conflict - attempting to set option \"%s\" - but another "
+			                           "transaction has set it",
+			                           option.key);
+		}
+		if (option.scope == "table") {
+			ConflictCheck(TableIndex(option.scope_id), other_changes.dropped_tables, "set an option on table",
+			              "dropped it");
+		} else if (option.scope == "schema") {
+			ConflictCheck(SchemaIndex(option.scope_id), other_changes.dropped_schemas, "set an option on schema",
+			              "dropped it");
+		}
+		TableIndex table_id(option.scope_id);
+		if (IsSkipStatsOption(option) && other_changes.altered_tables.count(table_id) &&
+		    SkipsPartitionColumn(option.value, ReadPartitionFields(table_id, executor))) {
+			throw TransactionException("Transaction conflict - attempting to skip the statistics of a partition column "
+			                           "of table with index \"%d\" - but another transaction has partitioned it",
+			                           table_id.index);
+		}
+	}
+	for (auto &option : other_changes.set_options) {
+		TableIndex table_id(option.scope_id);
+		if (IsSkipStatsOption(option) && changes.altered_tables.count(table_id) &&
+		    SkipsPartitionColumn(ReadSkippedStatsColumns(table_id, executor), GetLocalPartitionFields(table_id))) {
+			throw TransactionException("Transaction conflict - attempting to partition table with index \"%d\" by a "
+			                           "column - but another transaction has skipped its statistics",
+			                           table_id.index);
+		}
+	}
+}
+
+set<idx_t> DuckLakeTransactionState::GetLocalPartitionFields(TableIndex table_id) const {
+	set<idx_t> result;
+	for (auto &schema_entry : new_tables) {
+		for (auto &entry : schema_entry.second->GetEntries()) {
+			if (entry.second->type != CatalogType::TABLE_ENTRY) {
+				continue;
+			}
+			auto &table = entry.second->Cast<DuckLakeTableEntry>();
+			auto partition_data = table.GetPartitionData();
+			if (table.GetTableId() != table_id || !partition_data) {
+				continue;
+			}
+			for (auto &field : partition_data->fields) {
+				result.insert(field.field_id.index);
+			}
+		}
+	}
+	return result;
 }
 
 namespace {
@@ -470,6 +563,13 @@ string DuckLakeTransactionState::WriteSnapshotChanges(DuckLakeCommitState &commi
 	}
 	AddChangeInfo(commit_state, change_info, changes.tables_merge_adjacent, "merge_adjacent");
 	AddChangeInfo(commit_state, change_info, changes.tables_rewrite_delete, "rewrite_delete");
+	for (auto &option : changes.set_options) {
+		if (!change_info.changes_made.empty()) {
+			change_info.changes_made += ",";
+		}
+		change_info.changes_made += "set_option:";
+		change_info.changes_made += option.ToChangeValue();
+	}
 	return DuckLakeMetadataManager::WriteSnapshotChangesSql(change_info, commit_info);
 }
 
@@ -932,21 +1032,34 @@ bool DuckLakeTransactionState::TryMergeInlinedStats(const vector<DuckLakeColumnS
 
 //! The field ids of `table_id`'s skip_stats_columns option, read from the metadata rather than the catalog so
 //! the server-side commit resolves it too. Only roots matter here: step 3 of the recompute merges inlined stats,
-//! which TryMergeInlinedStats only produces for scalar roots.
+//! which TryMergeInlinedStats only produces for scalar roots. An option this commit sets is not written yet.
 static set<FieldIndex> ReadSkippedStatsFields(TableIndex table_id, const DuckLakeCommitContext &context) {
-	set<FieldIndex> result;
-	auto query = StringUtil::Format("SELECT value FROM {METADATA_CATALOG}.ducklake_metadata "
-	                                "WHERE key='skip_stats_columns' AND scope='table' AND scope_id=%d;",
-	                                table_id.index);
-	auto stats_option = context.query_metadata(query);
-	if (stats_option->HasError()) {
-		stats_option->GetErrorObject().Throw("Failed to read the skip_stats_columns option from DuckLake: ");
-	}
-	for (auto &row : *stats_option) {
-		if (row.IsNull(0)) {
-			continue;
+	vector<string> values;
+	bool staged = false;
+	for (auto &option : context.config_options) {
+		if (option.option.key == "skip_stats_columns" && option.table_id == table_id) {
+			values.assign(1, option.reset ? string() : option.option.value);
+			staged = true;
 		}
-		for (auto &entry : StringUtil::Split(row.GetValue<string>(0), ',')) {
+	}
+	if (!staged) {
+		auto query =
+		    StringUtil::Format("SELECT value FROM {METADATA_CATALOG}.ducklake_metadata "
+		                       "WHERE key='skip_stats_columns' AND scope='table' AND scope_id=%d%s;",
+		                       table_id.index, context.supports_v1_1_metadata ? " AND end_snapshot IS NULL" : "");
+		auto stats_option = context.query_metadata(query);
+		if (stats_option->HasError()) {
+			stats_option->GetErrorObject().Throw("Failed to read the skip_stats_columns option from DuckLake: ");
+		}
+		for (auto &row : *stats_option) {
+			if (!row.IsNull(0)) {
+				values.push_back(row.GetValue<string>(0));
+			}
+		}
+	}
+	set<FieldIndex> result;
+	for (auto &value : values) {
+		for (auto &entry : StringUtil::Split(value, ',')) {
 			idx_t field_index;
 			if (TryCast::Operation<string_t, idx_t>(string_t(entry), field_index)) {
 				result.insert(FieldIndex(field_index));
@@ -1768,13 +1881,15 @@ string DuckLakeTransactionState::CommitChanges(DuckLakeCommitState &commit_state
 	if (!dropped_table_macros.empty()) {
 		batch_queries += DuckLakeMetadataManager::DropMacros(dropped_table_macros);
 	}
-	if (!dropped_schemas.empty()) {
-		set<SchemaIndex> dropped_schema_ids;
-		for (auto &entry : dropped_schemas) {
-			dropped_schema_ids.insert(entry.first);
-		}
+	set<SchemaIndex> dropped_schema_ids;
+	for (auto &entry : dropped_schemas) {
+		dropped_schema_ids.insert(entry.first);
+	}
+	if (!dropped_schema_ids.empty()) {
 		batch_queries += DuckLakeMetadataManager::DropSchemas(dropped_schema_ids);
 	}
+	batch_queries +=
+	    DuckLakeMetadataManager::DropConfigOptions(dropped_schema_ids, dropped_tables, context.supports_v1_1_metadata);
 	// write new schemas
 	vector<DuckLakeSchemaInfo> new_schemas_result;
 	if (new_schemas) {
@@ -1800,7 +1915,8 @@ string DuckLakeTransactionState::CommitChanges(DuckLakeCommitState &commit_state
 			    table.schema_id, table.path, new_schemas_result, context.query_metadata, data_path, separator));
 		}
 		batch_queries += DuckLakeMetadataManager::WriteNewTables(result.new_tables, resolved_table_paths);
-		batch_queries += DuckLakeMetadataManager::WriteNewTableOptions(result.new_table_options);
+		batch_queries +=
+		    DuckLakeMetadataManager::WriteNewTableOptions(result.new_table_options, context.supports_v1_1_metadata);
 		committed_table_options = result.new_table_options;
 		auto existing_catalog =
 		    DuckLakeMetadataManager::BuildCatalogForSnapshot(commit_snapshot, context.query_metadata_with_snapshot,
@@ -1971,6 +2087,7 @@ string DuckLakeTransactionState::CommitChanges(DuckLakeCommitState &commit_state
 		}
 	}
 	batch_queries += DuckLakeMetadataManager::InsertNewSchema(commit_snapshot, tables_with_schema_changes);
+	batch_queries += context.config_options_sql;
 
 	return batch_queries;
 }
@@ -2110,8 +2227,12 @@ void DuckLakeTransactionState::Commit(DuckLakeSnapshot transaction_snapshot,
 			can_retry = true;
 			DuckLakeCommitState commit_state(commit_snapshot);
 			// write the new snapshot
-			string batch_queries = DuckLakeMetadataManager::InsertSnapshotSql();
+			string batch_queries = DuckLakeMetadataManager::InsertSnapshotSql(context.supports_v1_1_metadata);
 			batch_queries += CommitChanges(commit_state, attempt_changes, stats, context, attempt_dropped_file_stats);
+			if (!context.config_options.empty() || !committed_table_options.empty()) {
+				// this commit writes option rows, so the options are as of its own snapshot from now on
+				commit_snapshot.options_version = commit_snapshot.snapshot_id;
+			}
 			batch_queries += WriteSnapshotChanges(commit_state, attempt_changes, context.commit_info);
 			auto res = context.execute_commit_batch(commit_snapshot, batch_queries);
 			if (res->HasError()) {

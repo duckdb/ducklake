@@ -9,8 +9,10 @@ cache_file ${lake}_ready.marker
 load
 @create ${lake}_pristine
 @attach ${lake}_pristine AS lake (DATA_PATH '${BENCHMARK_DIR}/${lake}_files')
+BEGIN;
 CALL lake.set_option('data_inlining_row_limit', 0);
 CREATE TABLE lake.events (part INTEGER, id BIGINT, v BIGINT);
+COMMIT;
 ALTER TABLE lake.events SET PARTITIONED BY (part);
 INSERT INTO lake.events
 SELECT p, p * 6144 + r AS id, id * 3 + 7 FROM range(100) parts(p), range(2048) rows(r);

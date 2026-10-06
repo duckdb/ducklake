@@ -286,12 +286,23 @@ public:
 	bool InlinedFileDeletionsFlushed(TableIndex table_id);
 
 	bool ChangesMade() const;
+	bool ChangesMadeBesidesOptions() const;
 	idx_t GetLocalCatalogId();
 	static bool IsTransactionLocal(idx_t id) {
 		return id >= DuckLakeConstants::TRANSACTION_LOCAL_ID_START;
 	}
+	//! Stages a config option - other transactions see it when this one commits
 	void SetConfigOption(const DuckLakeConfigOption &option);
+	//! Stages removing a config option, so its scope falls back to the enclosing one
 	void ResetConfigOption(const DuckLakeConfigOption &option);
+	//! The option as this transaction staged it in exactly this scope, if it did
+	optional_ptr<const DuckLakeConfigOption> GetStagedConfigOption(const string &option, SchemaIndex schema_id,
+	                                                               TableIndex table_id) const;
+	vector<DuckLakeConfigOption> GetStagedConfigOptions() const;
+	//! The options committed as of this transaction's snapshot - nullptr before v1.1
+	optional_ptr<const DuckLakeConfigOptions> GetCommittedOptions();
+	//! The snapshot the options last changed at, as of this transaction's snapshot
+	optional_idx GetOptionsVersion();
 
 	void SetCommitMessage(const DuckLakeSnapshotCommit &option);
 
@@ -357,8 +368,10 @@ public:
 private:
 	void FlushChanges();
 	void FlushNameMapCacheInvalidations();
-	//! Puts back the config options this transaction replaced in the catalog
-	void UndoConfigOptions();
+	void WriteConfigOptions();
+	void ApplyConfigOptions();
+	//! Drops the options staged for a schema or table this transaction drops
+	void DiscardStagedConfigOptions(SchemaIndex schema_id, TableIndex table_id);
 	static DuckLakePartitionInfo GetNewPartitionKey(DuckLakeCommitState &commit_state, DuckLakeTableEntry &table);
 	static DuckLakeSortInfo GetNewSortKey(DuckLakeCommitState &commit_state, DuckLakeTableEntry &table);
 	static DuckLakeTableInfo GetNewTable(DuckLakeCommitState &commit_state, DuckLakeTableEntry &table);
@@ -388,6 +401,8 @@ private:
 	//! The snapshot of the transaction (latest snapshot in DuckLake)
 	mutex snapshot_lock;
 	unique_ptr<DuckLakeSnapshot> snapshot;
+	mutex committed_options_lock;
+	shared_ptr<const DuckLakeConfigOptions> committed_options;
 	idx_t local_catalog_id;
 	//! Set when this transaction inlines into a table that does not yet have an inlined-data table
 	atomic<bool> requires_new_inlined_table {false};
@@ -403,8 +418,9 @@ private:
 	DuckLakeNameMapSet new_name_maps;
 	//! Name maps deleted by direct metadata operations, applied to the catalog cache on commit
 	vector<MappingIndex> pending_name_map_cache_invalidations;
-	//! Previous values of config options set by this transaction, for rollback
-	vector<DuckLakeConfigOptionUndo> config_option_undo;
+	//! Config options set by this transaction, written to the metadata catalog on commit. Unlocked
+	//! because only ducklake_set_option writes them, one statement at a time.
+	vector<DuckLakeConfigOption> staged_config_options;
 
 	atomic<idx_t> catalog_version;
 };

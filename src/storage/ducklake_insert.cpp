@@ -142,9 +142,10 @@ DuckLakeColumnStats DuckLakeInsert::ParseColumnStats(const LogicalType &type, co
 	return column_stats;
 }
 
-void DuckLakeInsert::AddWrittenFiles(DuckLakeInsertGlobalState &global_state, DataChunk &chunk,
-                                     const string &encryption_key, optional_idx partition_id, bool set_snapshot_id) {
-	auto skipped_fields = global_state.table.GetSkippedStatsFields();
+void DuckLakeInsert::AddWrittenFiles(DuckLakeTransaction &transaction, DuckLakeInsertGlobalState &global_state,
+                                     DataChunk &chunk, const string &encryption_key, optional_idx partition_id,
+                                     bool set_snapshot_id) {
+	auto skipped_fields = global_state.table.GetSkippedStatsFields(transaction);
 	for (idx_t r = 0; r < chunk.size(); r++) {
 		DuckLakeDataFile data_file;
 		data_file.file_name = chunk.GetValue(0, r).GetValue<string>();
@@ -268,7 +269,8 @@ void DuckLakeInsert::AddWrittenFiles(DuckLakeInsertGlobalState &global_state, Da
 
 SinkResultType DuckLakeInsert::Sink(ExecutionContext &context, DataChunk &chunk, OperatorSinkInput &input) const {
 	auto &global_state = input.global_state.Cast<DuckLakeInsertGlobalState>();
-	AddWrittenFiles(global_state, chunk, encryption_key, partition_id);
+	auto &transaction = DuckLakeTransaction::Get(context.client, global_state.table.catalog);
+	AddWrittenFiles(transaction, global_state, chunk, encryption_key, partition_id);
 	return SinkResultType::NEED_MORE_INPUT;
 }
 
@@ -538,37 +540,39 @@ DuckLakeCopyOptions DuckLakeInsert::GetCopyOptions(ClientContext &context, DuckL
 	auto &schema_id = copy_input.schema_id;
 	auto &table_id = copy_input.table_id;
 	string parquet_compression;
-	if (catalog.TryGetConfigOption("parquet_compression", parquet_compression, schema_id, table_id,
+	auto &transaction = DuckLakeTransaction::Get(context, catalog);
+	if (catalog.TryGetConfigOption(transaction, "parquet_compression", parquet_compression, schema_id, table_id,
 	                               &copy_input.table_options)) {
 		info->options["compression"].emplace_back(parquet_compression);
 	}
 	string parquet_version;
-	if (catalog.TryGetConfigOption("parquet_version", parquet_version, schema_id, table_id,
+	if (catalog.TryGetConfigOption(transaction, "parquet_version", parquet_version, schema_id, table_id,
 	                               &copy_input.table_options)) {
 		info->options["parquet_version"].emplace_back(parquet_version);
 	}
 	string parquet_compression_level;
-	if (catalog.TryGetConfigOption("parquet_compression_level", parquet_compression_level, schema_id, table_id,
-	                               &copy_input.table_options)) {
+	if (catalog.TryGetConfigOption(transaction, "parquet_compression_level", parquet_compression_level, schema_id,
+	                               table_id, &copy_input.table_options)) {
 		info->options["compression_level"].emplace_back(parquet_compression_level);
 	}
 	string row_group_size;
-	if (catalog.TryGetConfigOption("parquet_row_group_size", row_group_size, schema_id, table_id,
+	if (catalog.TryGetConfigOption(transaction, "parquet_row_group_size", row_group_size, schema_id, table_id,
 	                               &copy_input.table_options)) {
 		info->options["row_group_size"].emplace_back(row_group_size);
 	}
 	string row_group_size_bytes;
-	if (catalog.TryGetConfigOption("parquet_row_group_size_bytes", row_group_size_bytes, schema_id, table_id,
-	                               &copy_input.table_options)) {
+	if (catalog.TryGetConfigOption(transaction, "parquet_row_group_size_bytes", row_group_size_bytes, schema_id,
+	                               table_id, &copy_input.table_options)) {
 		info->options["row_group_size_bytes"].emplace_back(row_group_size_bytes + " bytes");
 	}
 	string per_thread_output_str;
 	bool per_thread_output = false;
-	if (catalog.TryGetConfigOption("per_thread_output", per_thread_output_str, schema_id, table_id,
+	if (catalog.TryGetConfigOption(transaction, "per_thread_output", per_thread_output_str, schema_id, table_id,
 	                               &copy_input.table_options)) {
 		per_thread_output = per_thread_output_str == "true";
 	}
-	idx_t target_file_size = catalog.GetTargetFileSize(context, schema_id, table_id, &copy_input.table_options);
+	idx_t target_file_size =
+	    catalog.GetTargetFileSize(transaction, context, schema_id, table_id, &copy_input.table_options);
 
 	// Always use native parquet geometry for writing
 	info->options["geoparquet_version"].emplace_back("NONE");
@@ -754,8 +758,9 @@ PhysicalOperator &DuckLakeInsert::PlanCopyForInsert(ClientContext &context, Phys
 	physical_copy.names = copy_options.names;
 	physical_copy.expected_types = std::move(copy_options.expected_types);
 	physical_copy.parallel = true;
+	auto &transaction = DuckLakeTransaction::Get(context, copy_input.catalog);
 	physical_copy.hive_file_pattern = copy_input.catalog.UseHiveFilePattern(
-	    !is_encrypted, copy_input.schema_id, copy_input.table_id, &copy_input.table_options);
+	    transaction, !is_encrypted, copy_input.schema_id, copy_input.table_id, &copy_input.table_options);
 	if (plan) {
 		physical_copy.children.push_back(*plan);
 	}
@@ -871,11 +876,13 @@ PhysicalOperator &DuckLakeCatalog::PlanInsert(ClientContext &context, PhysicalPl
 		plan = planner.ResolveDefaultsProjection(op, *plan);
 	}
 	auto &ducklake_table = op.table.Cast<DuckLakeTableEntry>();
+	auto &transaction = DuckLakeTransaction::Get(context, *this);
 	auto &ducklake_schema = ducklake_table.ParentSchema().Cast<DuckLakeSchemaEntry>();
-	auto pipeline = PlanInsertPipeline(
-	    context, planner, *plan, ducklake_table.GetColumns(), ducklake_table.name, ducklake_table.GetSortData(),
-	    SortOnInsert(ducklake_schema.GetSchemaId(), ducklake_table.GetTableId(), &ducklake_table.GetTableOptions()),
-	    GetInliningLimit(context, ducklake_table));
+	auto pipeline = PlanInsertPipeline(context, planner, *plan, ducklake_table.GetColumns(), ducklake_table.name,
+	                                   ducklake_table.GetSortData(),
+	                                   SortOnInsert(transaction, ducklake_schema.GetSchemaId(),
+	                                                ducklake_table.GetTableId(), &ducklake_table.GetTableOptions()),
+	                                   GetInliningLimit(transaction, context, ducklake_table));
 
 	DuckLakeCopyInput copy_input(context, ducklake_table);
 	auto &physical_copy = DuckLakeInsert::PlanCopyForInsert(context, planner, copy_input, pipeline.root.get());
@@ -912,10 +919,10 @@ PhysicalOperator &DuckLakeCatalog::PlanCreateTableAs(ClientContext &context, Phy
 	                                          partition_data.get(), create_info.GetTableName().GetIdentifierName());
 
 	// No table id yet, so the WITH options stand in for the table scope
-	auto pipeline =
-	    PlanInsertPipeline(context, planner, plan, columns, create_info.GetTableName(), sort_data.get(),
-	                       SortOnInsert(duck_schema.GetSchemaId(), TableIndex(), &table_options),
-	                       GetInliningLimit(context, duck_schema.GetSchemaId(), TableIndex(), columns, &table_options));
+	auto pipeline = PlanInsertPipeline(
+	    context, planner, plan, columns, create_info.GetTableName(), sort_data.get(),
+	    SortOnInsert(duck_transaction, duck_schema.GetSchemaId(), TableIndex(), &table_options),
+	    GetInliningLimit(duck_transaction, context, duck_schema.GetSchemaId(), TableIndex(), columns, &table_options));
 
 	DuckLakeTypes::CheckSupportedTypes(columns, GetDuckLakeVersion());
 	auto table_uuid = duck_transaction.GenerateUUID();

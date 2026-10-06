@@ -11,10 +11,16 @@ statement ok
 ATTACH 'ducklake:{TEST_DIR}/merge_upsert_pristine.db' AS lake (DATA_PATH '{TEST_DIR}/merge_upsert_files')
 
 statement ok
+BEGIN
+
+statement ok
 CALL lake.set_option('data_inlining_row_limit', 0)
 
 statement ok
 CREATE TABLE lake.target AS SELECT i AS id, i * 2 AS v, 'base_' || i AS payload FROM range(10) t(i)
+
+statement ok
+COMMIT
 
 statement ok
 CREATE TABLE merge_source AS

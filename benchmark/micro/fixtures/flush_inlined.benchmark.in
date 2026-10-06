@@ -24,7 +24,9 @@ FROM range(10) t(k), (VALUES (''), (' AT (VERSION => 3)'), (' AT (VERSION => 2)'
 load
 EXPORT DATABASE '${BENCHMARK_DIR}/${lake}_gen';
 COPY (SELECT stmt FROM (
-SELECT 0 AS o, k, 'CREATE TABLE lake.i' || k
+SELECT -1 AS o, 0 AS k, 'CALL lake.set_option(''data_inlining_row_limit'', 100);' AS stmt
+UNION ALL
+SELECT 0, k, 'CREATE TABLE lake.i' || k
 || ' AS SELECT r AS id, r * 3 + ' || k || ' AS v FROM range(100) t(r);' AS stmt FROM range(40) t(k)
 UNION ALL
 SELECT 1, k, 'CREATE TABLE lake.f' || k
@@ -40,7 +42,6 @@ SELECT 5, k, 'DELETE FROM lake.f' || k || ' WHERE id < ' || (5 + k) || ';' FROM 
 ) ORDER BY o, k) TO '${BENCHMARK_DIR}/${lake}_gen/schema.sql' (HEADER false, QUOTE '');
 @create ${lake}_pristine
 @attach ${lake}_pristine AS lake (DATA_PATH '${BENCHMARK_DIR}/${lake}_files')
-CALL lake.set_option('data_inlining_row_limit', 100);
 IMPORT DATABASE '${BENCHMARK_DIR}/${lake}_gen';
 SET VARIABLE flush_delete_tables = (SELECT list('__ducklake_metadata_lake.ducklake_inlined_delete_' || table_id)
 FROM __ducklake_metadata_lake.ducklake_table WHERE table_name LIKE 'f%');

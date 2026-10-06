@@ -1,0 +1,106 @@
+# name: test/sql/settings/drop_options.test
+# description: Dropping a table or schema removes its options
+# group: [settings]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/drop_options.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/drop_options', METADATA_CATALOG 'ducklake_meta')
+
+statement ok
+CREATE TABLE ducklake.t(i INTEGER)
+
+statement ok
+ALTER TABLE ducklake.t SET (parquet_compression = 'gzip')
+
+statement ok
+DROP TABLE ducklake.t
+
+# open rows only - end_snapshot exists from v1.1, so the union supplies it before
+query I
+SELECT count(*) FROM (FROM ducklake_meta.ducklake_metadata UNION ALL BY NAME SELECT NULL::BIGINT AS end_snapshot WHERE false)
+WHERE scope = 'table' AND end_snapshot IS NULL
+----
+0
+
+query I
+SELECT count(*) FROM ducklake.options() WHERE scope = 'TABLE'
+----
+0
+
+# an option set in the transaction that drops the table is not written
+statement ok
+CREATE TABLE ducklake.u(i INTEGER)
+
+statement ok
+BEGIN
+
+statement ok
+CALL ducklake.set_option('parquet_compression', 'gzip', table_name => 'u')
+
+statement ok
+DROP TABLE ducklake.u
+
+statement ok
+COMMIT
+
+query I
+SELECT count(*) FROM (FROM ducklake_meta.ducklake_metadata UNION ALL BY NAME SELECT NULL::BIGINT AS end_snapshot WHERE false)
+WHERE scope = 'table' AND end_snapshot IS NULL
+----
+0
+
+# renaming keeps them
+statement ok
+CREATE TABLE ducklake.r(i INTEGER)
+
+statement ok
+ALTER TABLE ducklake.r SET (parquet_compression = 'gzip')
+
+statement ok
+ALTER TABLE ducklake.r RENAME TO r2
+
+query II
+SELECT scope_entry, value FROM ducklake.options() WHERE scope = 'TABLE'
+----
+main.r2	gzip
+
+# and a schema's go with it
+statement ok
+CREATE SCHEMA ducklake.s
+
+statement ok
+CALL ducklake.set_option('parquet_compression', 'gzip', schema => 's')
+
+statement ok
+DROP SCHEMA ducklake.s
+
+query I
+SELECT count(*) FROM (FROM ducklake_meta.ducklake_metadata UNION ALL BY NAME SELECT NULL::BIGINT AS end_snapshot WHERE false)
+WHERE scope = 'schema' AND end_snapshot IS NULL
+----
+0
+
+# the dropping transaction no longer lists them
+statement ok
+CREATE TABLE ducklake.v(i INTEGER) WITH (parquet_compression = 'gzip')
+
+statement ok
+BEGIN
+
+statement ok
+DROP TABLE ducklake.v
+
+query I
+SELECT count(*) FROM ducklake.options() WHERE scope = 'TABLE' AND scope_entry = 'main.v'
+----
+0
+
+statement ok
+COMMIT

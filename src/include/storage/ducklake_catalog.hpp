@@ -34,7 +34,6 @@ class ColumnList;
 class DuckLakeFieldData;
 struct DuckLakeFileListEntry;
 struct DuckLakeConfigOption;
-struct DuckLakeConfigOptionUndo;
 struct DuckLakeSnapshotCommit;
 struct DeleteFileMap;
 struct BoundCreateTableInfo;
@@ -172,44 +171,58 @@ public:
 	bool IsInitialized() const {
 		return initialized;
 	}
-	idx_t DataInliningRowLimit(ClientContext &context, SchemaIndex schema_index, TableIndex table_index,
+	idx_t DataInliningRowLimit(optional_ptr<DuckLakeTransaction> transaction, ClientContext &context,
+	                           SchemaIndex schema_index, TableIndex table_index,
 	                           optional_ptr<const map<string, string>> table_options = nullptr) const;
 	//! Returns the inlining limit (0 if the table is not eligible)
-	idx_t GetInliningLimit(ClientContext &context, DuckLakeTableEntry &table);
+	idx_t GetInliningLimit(DuckLakeTransaction &transaction, ClientContext &context, DuckLakeTableEntry &table) const;
 	//! Inlining limit for a table that does not exist yet (CTAS), given its scope and columns
-	idx_t GetInliningLimit(ClientContext &context, SchemaIndex schema_id, TableIndex table_id,
-	                       const ColumnList &columns, optional_ptr<const map<string, string>> table_options = nullptr);
+	idx_t GetInliningLimit(DuckLakeTransaction &transaction, ClientContext &context, SchemaIndex schema_id,
+	                       TableIndex table_id, const ColumnList &columns,
+	                       optional_ptr<const map<string, string>> table_options = nullptr) const;
 	//! Whether inserts in this scope sort their data according to SORTED BY (the sort_on_insert option)
-	bool SortOnInsert(SchemaIndex schema_id, TableIndex table_id,
+	bool SortOnInsert(optional_ptr<DuckLakeTransaction> transaction, SchemaIndex schema_id, TableIndex table_id,
 	                  optional_ptr<const map<string, string>> table_options = nullptr) const;
-	idx_t GetTargetFileSize(ClientContext &context, SchemaIndex schema_id, TableIndex table_id,
+	idx_t GetTargetFileSize(optional_ptr<DuckLakeTransaction> transaction, ClientContext &context,
+	                        SchemaIndex schema_id, TableIndex table_id,
 	                        optional_ptr<const map<string, string>> table_options = nullptr) const;
-	idx_t GetTargetFileSize(ClientContext &context, DuckLakeTableEntry &table) const;
+	idx_t GetTargetFileSize(optional_ptr<DuckLakeTransaction> transaction, ClientContext &context,
+	                        DuckLakeTableEntry &table) const;
 	string &Separator() {
 		return separator;
 	}
-	//! Sets a config option, returning what it held before so a rollback can put it back
-	DuckLakeConfigOptionUndo SetConfigOption(const DuckLakeConfigOption &option);
-	DuckLakeConfigOptionUndo ResetConfigOption(const DuckLakeConfigOption &option);
-	void UndoConfigOption(const DuckLakeConfigOptionUndo &undo);
-	//! Pending table options take precedence
-	bool TryGetConfigOption(const string &option, string &result, SchemaIndex schema_id, TableIndex table_id,
+	//! Applies a committed config option to the in-memory copy
+	void SetConfigOption(const DuckLakeConfigOption &option);
+	//! The options committed as of options_version, over the ones given at ATTACH
+	shared_ptr<const DuckLakeConfigOptions> GetCommittedOptions(DuckLakeTransaction &transaction,
+	                                                            idx_t options_version);
+	//! Options a transaction has set are visible only to it, so nullptr reads committed values only. Pending
+	//! table options take precedence.
+	bool TryGetConfigOption(optional_ptr<DuckLakeTransaction> transaction, const string &option, string &result,
+	                        SchemaIndex schema_id, TableIndex table_id,
 	                        optional_ptr<const map<string, string>> table_options = nullptr) const;
+	//! Look up a config option in exactly this scope, without falling back to an enclosing one
+	bool TryGetConfigOptionInScope(optional_ptr<DuckLakeTransaction> transaction, const string &option, string &result,
+	                               SchemaIndex schema_id, TableIndex table_id) const;
 	//! Look up a config option in the table scope only, without falling back to schema or global
-	bool TryGetTableConfigOption(const string &option, string &result, TableIndex table_id) const;
+	bool TryGetTableConfigOption(optional_ptr<DuckLakeTransaction> transaction, const string &option, string &result,
+	                             TableIndex table_id) const;
 	//! Check if a config option has a table-level or schema-level override (excluding global scope)
-	bool TryGetScopedConfigOption(const string &option, string &result, SchemaIndex schema_id, TableIndex table_id,
+	bool TryGetScopedConfigOption(optional_ptr<DuckLakeTransaction> transaction, const string &option, string &result,
+	                              SchemaIndex schema_id, TableIndex table_id,
 	                              optional_ptr<const map<string, string>> table_options = nullptr) const;
 	template <class T>
-	T GetConfigOption(const string &option, SchemaIndex schema_id, TableIndex table_id, T default_value,
+	T GetConfigOption(optional_ptr<DuckLakeTransaction> transaction, const string &option, SchemaIndex schema_id,
+	                  TableIndex table_id, T default_value,
 	                  optional_ptr<const map<string, string>> table_options = nullptr) const {
 		string value_str;
-		if (TryGetConfigOption(option, value_str, schema_id, table_id, table_options)) {
+		if (TryGetConfigOption(transaction, option, value_str, schema_id, table_id, table_options)) {
 			return Value(value_str).GetValue<T>();
 		}
 		return default_value;
 	}
-	bool TryGetConfigOption(const string &option, string &result, DuckLakeTableEntry &table) const;
+	bool TryGetConfigOption(optional_ptr<DuckLakeTransaction> transaction, const string &option, string &result,
+	                        DuckLakeTableEntry &table) const;
 
 	optional_ptr<BoundAtClause> CatalogSnapshot() const;
 
@@ -269,22 +282,24 @@ public:
 	}
 
 	bool IsCommitInfoRequired() const {
-		auto require = GetConfigOption<string>("require_commit_message", {}, {}, "false");
+		auto require = GetConfigOption<string>(nullptr, "require_commit_message", {}, {}, "false");
 		return require == "true";
 	}
 
 	void EnsureCommitInfoProvided(const DuckLakeSnapshotCommit &commit_info) const;
 
-	bool UseHiveFilePattern(bool default_value, SchemaIndex schema_id, TableIndex table_id,
+	bool UseHiveFilePattern(optional_ptr<DuckLakeTransaction> transaction, bool default_value, SchemaIndex schema_id,
+	                        TableIndex table_id,
 	                        optional_ptr<const map<string, string>> table_options = nullptr) const {
-		auto hive_file_pattern = GetConfigOption<string>("hive_file_pattern", schema_id, table_id,
+		auto hive_file_pattern = GetConfigOption<string>(transaction, "hive_file_pattern", schema_id, table_id,
 		                                                 default_value ? "true" : "false", table_options);
 		return hive_file_pattern == "true";
 	}
 
-	bool WriteDeletionVectors(SchemaIndex schema_id, TableIndex table_id,
+	bool WriteDeletionVectors(optional_ptr<DuckLakeTransaction> transaction, SchemaIndex schema_id, TableIndex table_id,
 	                          optional_ptr<const map<string, string>> table_options = nullptr) const {
-		auto write_dv = GetConfigOption<string>("write_deletion_vectors", schema_id, table_id, "false", table_options);
+		auto write_dv =
+		    GetConfigOption<string>(transaction, "write_deletion_vectors", schema_id, table_id, "false", table_options);
 		return write_dv == "true";
 	}
 
@@ -300,6 +315,12 @@ public:
 		ducklake_version = version;
 	}
 	//! Whether the catalog has the v1.1 metadata features
+	void SetUnmigratedOptions() {
+		unmigrated_options = true;
+	}
+	bool HasUnmigratedOptions() const {
+		return unmigrated_options;
+	}
 	bool SupportsV1_1Metadata() const {
 		return ducklake_version >= DuckLakeVersion::V1_1_DEV_1;
 	}
@@ -401,6 +422,12 @@ private:
 	mutable mutex config_lock;
 	//! The DuckLake options
 	DuckLakeOptions options;
+	//! The config options given at ATTACH, before the committed ones were loaded over them
+	DuckLakeConfigOptions attach_options;
+	//! The newest committed options a transaction has read, and the snapshot they last changed at
+	mutex committed_options_lock;
+	optional_idx committed_options_version;
+	shared_ptr<const DuckLakeConfigOptions> committed_options;
 	//! The path separator
 	string separator = "/";
 	//! A unique tracker for catalog changes in uncommitted transactions.
@@ -413,6 +440,8 @@ private:
 	string instance_id;
 	//! Whether or not the catalog is initialized
 	bool initialized = false;
+	//! A v1.1-dev1 catalog whose config options predate their versioning
+	bool unmigrated_options = false;
 	//! Whether or not the metadata server can execute the commit retry loop server-side.
 	bool retrials_server_side = false;
 	//! Cache for inlined deletion table existence checks

@@ -30,6 +30,8 @@ struct DuckLakeSnapshot {
 	idx_t schema_version;
 	idx_t next_catalog_id;
 	idx_t next_file_id;
+	//! The snapshot the config options last changed at - from v1.1, and unknown when not read
+	idx_t options_version = DConstants::INVALID_INDEX;
 
 	void Serialize(Serializer &serializer) const;
 	static DuckLakeSnapshot Deserialize(Deserializer &deserializer);

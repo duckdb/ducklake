@@ -245,13 +245,14 @@ void DuckLakeCatalog::FinalizeLoad(optional_ptr<ClientContext> context) {
 		con->BeginTransaction();
 		context = con->context.get();
 	}
-	if (options.config_options.find("write_deletion_vectors") == options.config_options.end()) {
+	if (options.config.global.find("write_deletion_vectors") == options.config.global.end()) {
 		Value setting_val;
 		if (context->TryGetCurrentSetting("ducklake_write_deletion_vectors", setting_val)) {
-			options.config_options["write_deletion_vectors"] = setting_val.GetValue<bool>() ? "true" : "false";
+			options.config.global["write_deletion_vectors"] = setting_val.GetValue<bool>() ? "true" : "false";
 		}
 	}
 	RegisterCatalog();
+	attach_options = options.config;
 	DuckLakeInitializer initializer(*context, *this, options);
 	initializer.Initialize();
 	db.tags["data_path"] = DataPath();
@@ -1151,89 +1152,65 @@ optional_idx DuckLakeCatalog::GetCatalogVersion(ClientContext &context) {
 	return DuckLakeTransaction::Get(context, *this).GetCatalogVersion();
 }
 
-static option_map_t &GetOptionScope(DuckLakeOptions &options, const DuckLakeConfigOption &option) {
-	if (option.table_id.IsValid()) {
-		return options.table_options[option.table_id];
-	}
-	if (option.schema_id.IsValid()) {
-		return options.schema_options[option.schema_id];
-	}
-	return options.config_options;
-}
-
-static DuckLakeConfigOptionUndo GetConfigOptionUndo(const option_map_t &scope, const DuckLakeConfigOption &option) {
-	DuckLakeConfigOptionUndo undo;
-	undo.option = option;
-	auto entry = scope.find(option.option.key);
-	undo.was_set = entry != scope.end();
-	if (undo.was_set) {
-		undo.previous_value = entry->second;
-	}
-	return undo;
-}
-
-DuckLakeConfigOptionUndo DuckLakeCatalog::SetConfigOption(const DuckLakeConfigOption &option) {
+void DuckLakeCatalog::SetConfigOption(const DuckLakeConfigOption &option) {
 	lock_guard<mutex> guard(config_lock);
-	auto &scope = GetOptionScope(options, option);
-	auto undo = GetConfigOptionUndo(scope, option);
-	scope[option.option.key] = option.option.value;
-	return undo;
-}
-
-DuckLakeConfigOptionUndo DuckLakeCatalog::ResetConfigOption(const DuckLakeConfigOption &option) {
-	lock_guard<mutex> guard(config_lock);
-	auto &scope = GetOptionScope(options, option);
-	auto undo = GetConfigOptionUndo(scope, option);
-	undo.reset = true;
-	scope.erase(option.option.key);
-	return undo;
-}
-
-void DuckLakeCatalog::UndoConfigOption(const DuckLakeConfigOptionUndo &undo) {
-	lock_guard<mutex> guard(config_lock);
-	auto &scope = GetOptionScope(options, undo.option);
-	auto entry = scope.find(undo.option.option.key);
-	if (undo.reset) {
-		if (entry == scope.end() && undo.was_set) {
-			scope[undo.option.option.key] = undo.previous_value;
-		}
-		return;
-	}
-	if (entry == scope.end() || entry->second != undo.option.option.value) {
-		// another transaction has set the option since - leave its value in place
-		return;
-	}
-	if (undo.was_set) {
-		entry->second = undo.previous_value;
+	auto &scope = options.config.GetScope(option.schema_id, option.table_id);
+	if (option.reset) {
+		scope.erase(option.option.key);
 	} else {
-		scope.erase(entry);
+		scope[option.option.key] = option.option.value;
 	}
 }
 
-template <class SCOPE_MAP, class SCOPE_ID>
-static bool TryGetOptionInScope(const SCOPE_MAP &scope_map, SCOPE_ID scope_id, const string &option, string &result) {
-	if (!scope_id.IsValid()) {
-		return false;
+shared_ptr<const DuckLakeConfigOptions> DuckLakeCatalog::GetCommittedOptions(DuckLakeTransaction &transaction,
+                                                                             idx_t options_version) {
+	lock_guard<mutex> guard(committed_options_lock);
+	if (committed_options && committed_options_version.GetIndex() == options_version) {
+		return committed_options;
 	}
-	auto scope_entry = scope_map.find(scope_id);
-	if (scope_entry == scope_map.end()) {
-		return false;
+	auto metadata = transaction.GetMetadataManager().LoadDuckLake(options_version);
+	auto loaded = make_shared_ptr<DuckLakeConfigOptions>(attach_options);
+	for (auto &tag : metadata.tags) {
+		loaded->global[tag.key] = tag.value;
 	}
-	auto option_entry = scope_entry->second.find(option);
-	if (option_entry == scope_entry->second.end()) {
-		return false;
+	for (auto &entry : metadata.schema_settings) {
+		loaded->schema[entry.schema_id][entry.tag.key] = entry.tag.value;
 	}
-	result = option_entry->second;
-	return true;
+	for (auto &entry : metadata.table_settings) {
+		loaded->table[entry.table_id][entry.tag.key] = entry.tag.value;
+	}
+	// a transaction on an older snapshot keeps its own copy, only the newest is cached
+	if (!committed_options || committed_options_version.GetIndex() <= options_version) {
+		committed_options = loaded;
+		committed_options_version = options_version;
+	}
+	return loaded;
 }
 
-bool DuckLakeCatalog::TryGetTableConfigOption(const string &option, string &result, TableIndex table_id) const {
+bool DuckLakeCatalog::TryGetConfigOptionInScope(optional_ptr<DuckLakeTransaction> transaction, const string &option,
+                                                string &result, SchemaIndex schema_id, TableIndex table_id) const {
+	// a value this transaction has set is not committed yet, but it is the one it must read back
+	auto staged = transaction ? transaction->GetStagedConfigOption(option, schema_id, table_id) : nullptr;
+	if (staged) {
+		result = staged->option.value;
+		return !staged->reset;
+	}
+	// otherwise it reads the options committed as of its snapshot
+	auto committed = transaction ? transaction->GetCommittedOptions() : nullptr;
+	if (committed) {
+		return committed->TryGet(option, result, schema_id, table_id);
+	}
 	lock_guard<mutex> guard(config_lock);
-	return TryGetOptionInScope(options.table_options, table_id, option, result);
+	return options.config.TryGet(option, result, schema_id, table_id);
 }
 
-bool DuckLakeCatalog::TryGetScopedConfigOption(const string &option, string &result, SchemaIndex schema_id,
-                                               TableIndex table_id,
+bool DuckLakeCatalog::TryGetTableConfigOption(optional_ptr<DuckLakeTransaction> transaction, const string &option,
+                                              string &result, TableIndex table_id) const {
+	return TryGetConfigOptionInScope(transaction, option, result, SchemaIndex(), table_id);
+}
+
+bool DuckLakeCatalog::TryGetScopedConfigOption(optional_ptr<DuckLakeTransaction> transaction, const string &option,
+                                               string &result, SchemaIndex schema_id, TableIndex table_id,
                                                optional_ptr<const map<string, string>> table_options) const {
 	if (table_options) {
 		auto entry = table_options->find(option);
@@ -1242,39 +1219,31 @@ bool DuckLakeCatalog::TryGetScopedConfigOption(const string &option, string &res
 			return true;
 		}
 	}
-	lock_guard<mutex> guard(config_lock);
-	// search options in-order: table scope, then schema scope
-	return TryGetOptionInScope(options.table_options, table_id, option, result) ||
-	       TryGetOptionInScope(options.schema_options, schema_id, option, result);
+	// the narrowest scope that has the option wins
+	return (table_id.IsValid() && TryGetConfigOptionInScope(transaction, option, result, SchemaIndex(), table_id)) ||
+	       (schema_id.IsValid() && TryGetConfigOptionInScope(transaction, option, result, schema_id, TableIndex()));
 }
 
-bool DuckLakeCatalog::TryGetConfigOption(const string &option, string &result, SchemaIndex schema_id,
-                                         TableIndex table_id,
+bool DuckLakeCatalog::TryGetConfigOption(optional_ptr<DuckLakeTransaction> transaction, const string &option,
+                                         string &result, SchemaIndex schema_id, TableIndex table_id,
                                          optional_ptr<const map<string, string>> table_options) const {
-	// search options in-order: table scope, schema scope, then global scope
-	if (TryGetScopedConfigOption(option, result, schema_id, table_id, table_options)) {
-		return true;
-	}
-	lock_guard<mutex> guard(config_lock);
-	auto entry = options.config_options.find(option);
-	if (entry == options.config_options.end()) {
-		return false;
-	}
-	result = entry->second;
-	return true;
+	return TryGetScopedConfigOption(transaction, option, result, schema_id, table_id, table_options) ||
+	       TryGetConfigOptionInScope(transaction, option, result, SchemaIndex(), TableIndex());
 }
 
-bool DuckLakeCatalog::TryGetConfigOption(const string &option, string &result, DuckLakeTableEntry &table) const {
+bool DuckLakeCatalog::TryGetConfigOption(optional_ptr<DuckLakeTransaction> transaction, const string &option,
+                                         string &result, DuckLakeTableEntry &table) const {
 	auto &schema = table.ParentSchema().Cast<DuckLakeSchemaEntry>();
-	auto schema_id = schema.GetSchemaId();
-	auto table_id = table.GetTableId();
-	return TryGetConfigOption(option, result, schema_id, table_id, &table.GetTableOptions());
+	return TryGetConfigOption(transaction, option, result, schema.GetSchemaId(), table.GetTableId(),
+	                          &table.GetTableOptions());
 }
 
-idx_t DuckLakeCatalog::DataInliningRowLimit(ClientContext &context, SchemaIndex schema_index, TableIndex table_index,
+idx_t DuckLakeCatalog::DataInliningRowLimit(optional_ptr<DuckLakeTransaction> transaction, ClientContext &context,
+                                            SchemaIndex schema_index, TableIndex table_index,
                                             optional_ptr<const map<string, string>> table_options) const {
 	string value_str;
-	if (TryGetConfigOption("data_inlining_row_limit", value_str, schema_index, table_index, table_options)) {
+	if (TryGetConfigOption(transaction, "data_inlining_row_limit", value_str, schema_index, table_index,
+	                       table_options)) {
 		return Value(value_str).GetValue<idx_t>();
 	}
 	// No explicit catalog/schema/table option set, we read the global DuckDB setting
@@ -1285,35 +1254,38 @@ idx_t DuckLakeCatalog::DataInliningRowLimit(ClientContext &context, SchemaIndex 
 	return 10;
 }
 
-idx_t DuckLakeCatalog::GetTargetFileSize(ClientContext &context, SchemaIndex schema_id, TableIndex table_id,
+idx_t DuckLakeCatalog::GetTargetFileSize(optional_ptr<DuckLakeTransaction> transaction, ClientContext &context,
+                                         SchemaIndex schema_id, TableIndex table_id,
                                          optional_ptr<const map<string, string>> table_options) const {
 	Value setting_val;
 	if (context.TryGetCurrentSetting("ducklake_target_file_size", setting_val) && !setting_val.IsNull() &&
 	    !setting_val.ToString().empty()) {
 		return DBConfig::ParseMemoryLimit(setting_val.ToString());
 	}
-	return GetConfigOption<idx_t>("target_file_size", schema_id, table_id, DEFAULT_TARGET_FILE_SIZE, table_options);
+	return GetConfigOption<idx_t>(transaction, "target_file_size", schema_id, table_id, DEFAULT_TARGET_FILE_SIZE,
+	                              table_options);
 }
 
-idx_t DuckLakeCatalog::GetTargetFileSize(ClientContext &context, DuckLakeTableEntry &table) const {
+idx_t DuckLakeCatalog::GetTargetFileSize(optional_ptr<DuckLakeTransaction> transaction, ClientContext &context,
+                                         DuckLakeTableEntry &table) const {
 	auto &schema = table.ParentSchema().Cast<DuckLakeSchemaEntry>();
-	return GetTargetFileSize(context, schema.GetSchemaId(), table.GetTableId(), &table.GetTableOptions());
+	return GetTargetFileSize(transaction, context, schema.GetSchemaId(), table.GetTableId(), &table.GetTableOptions());
 }
 
-idx_t DuckLakeCatalog::GetInliningLimit(ClientContext &context, DuckLakeTableEntry &table) {
+idx_t DuckLakeCatalog::GetInliningLimit(DuckLakeTransaction &transaction, ClientContext &context,
+                                        DuckLakeTableEntry &table) const {
 	auto &schema = table.ParentSchema().Cast<DuckLakeSchemaEntry>();
-	return GetInliningLimit(context, schema.GetSchemaId(), table.GetTableId(), table.GetColumns(),
+	return GetInliningLimit(transaction, context, schema.GetSchemaId(), table.GetTableId(), table.GetColumns(),
 	                        &table.GetTableOptions());
 }
 
-idx_t DuckLakeCatalog::GetInliningLimit(ClientContext &context, SchemaIndex schema_id, TableIndex table_id,
-                                        const ColumnList &columns,
-                                        optional_ptr<const map<string, string>> table_options) {
-	idx_t limit = DataInliningRowLimit(context, schema_id, table_id, table_options);
+idx_t DuckLakeCatalog::GetInliningLimit(DuckLakeTransaction &transaction, ClientContext &context, SchemaIndex schema_id,
+                                        TableIndex table_id, const ColumnList &columns,
+                                        optional_ptr<const map<string, string>> table_options) const {
+	idx_t limit = DataInliningRowLimit(transaction, context, schema_id, table_id, table_options);
 	if (limit == 0) {
 		return 0;
 	}
-	auto &transaction = DuckLakeTransaction::Get(context, *this);
 	auto &metadata_manager = transaction.GetMetadataManager();
 	if (!metadata_manager.CanInlineColumns(columns)) {
 		return 0;
@@ -1321,9 +1293,9 @@ idx_t DuckLakeCatalog::GetInliningLimit(ClientContext &context, SchemaIndex sche
 	return limit;
 }
 
-bool DuckLakeCatalog::SortOnInsert(SchemaIndex schema_id, TableIndex table_id,
-                                   optional_ptr<const map<string, string>> table_options) const {
-	return GetConfigOption<string>("sort_on_insert", schema_id, table_id, "true", table_options) == "true";
+bool DuckLakeCatalog::SortOnInsert(optional_ptr<DuckLakeTransaction> transaction, SchemaIndex schema_id,
+                                   TableIndex table_id, optional_ptr<const map<string, string>> table_options) const {
+	return GetConfigOption<string>(transaction, "sort_on_insert", schema_id, table_id, "true", table_options) == "true";
 }
 
 unique_ptr<LogicalOperator> DuckLakeCatalog::BindAlterAddIndex(Binder &binder, TableCatalogEntry &table_entry,

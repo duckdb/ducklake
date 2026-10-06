@@ -145,6 +145,14 @@ vector<Value> DuckLakeSnapshotsFunction::GetSnapshotValues(const DuckLakeSnapsho
 	PushIDChangeList(change_keys, change_values, other_changes.tables_flushed_inlined, "flushed_inlined");
 	PushIDChangeList(change_keys, change_values, other_changes.tables_merge_adjacent, "merge_adjacent");
 	PushIDChangeList(change_keys, change_values, other_changes.tables_rewrite_delete, "rewrite_delete");
+	if (!other_changes.set_options.empty()) {
+		vector<Value> options;
+		for (auto &option : other_changes.set_options) {
+			options.emplace_back(option.ToChangeValue());
+		}
+		change_keys.emplace_back("options_set");
+		change_values.push_back(Value::LIST(LogicalType::VARCHAR, std::move(options)));
+	}
 
 	row_values.push_back(Value::MAP(LogicalType::VARCHAR, LogicalType::LIST(LogicalType::VARCHAR),
 	                                std::move(change_keys), std::move(change_values)));
