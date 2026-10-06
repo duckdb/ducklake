@@ -221,15 +221,16 @@ void DuckLakeMetadataManager::InitializeDuckLake(bool has_explicit_schema, DuckL
 	auto v1_1 = ducklake_catalog.SupportsV1_1Metadata();
 	string metadata_columns = v1_1 ? "key, value, scope, scope_id, begin_snapshot" : "key, value, scope, scope_id";
 	string global_scope = v1_1 ? "'global', 0, 0" : "NULL, NULL";
-	initialize_query +=
-	    StringUtil::Format(R"(
-INSERT INTO {METADATA_CATALOG}.ducklake_snapshot VALUES (0, NOW(), 0, 1, 0);
+	string initial_snapshot = v1_1 ? "0, NOW(), 0, 1, 0, 0" : "0, NOW(), 0, 1, 0";
+	initialize_query += StringUtil::Format(R"(
+INSERT INTO {METADATA_CATALOG}.ducklake_snapshot VALUES (%s);
 INSERT INTO {METADATA_CATALOG}.ducklake_snapshot_changes VALUES (0, 'created_schema:"main"',  NULL, NULL, NULL);
 INSERT INTO {METADATA_CATALOG}.ducklake_metadata (%s) VALUES ('version', '%s', %s), ('created_by', 'DuckDB %s', %s), ('data_path', %s, %s), ('encrypted', '%s', %s);
 INSERT INTO {METADATA_CATALOG}.ducklake_schema (schema_id, schema_uuid, begin_snapshot, end_snapshot, schema_name, path, path_is_relative) VALUES (0, '%s'::UUID, 0, NULL, 'main', 'main/', true);
 	)",
-	                       metadata_columns, GetVersionString(), global_scope, DuckDB::SourceID(), global_scope,
-	                       SQLString(data_path), global_scope, encryption_str, global_scope, initial_schema_uuid);
+	                                       initial_snapshot, metadata_columns, GetVersionString(), global_scope,
+	                                       DuckDB::SourceID(), global_scope, SQLString(data_path), global_scope,
+	                                       encryption_str, global_scope, initial_schema_uuid);
 	auto result = Execute(initialize_query);
 	if (result->HasError()) {
 		result->GetErrorObject().Throw("Failed to initialize DuckLake: ");
@@ -271,12 +272,15 @@ string DuckLakeMetadataManager::GetTableColumnStatsTableStatement() {
 	       "contains_null BOOLEAN, contains_nan BOOLEAN, min_value VARCHAR, max_value VARCHAR, extra_stats VARCHAR);";
 }
 
+string DuckLakeMetadataManager::GetSnapshotTableStatement() {
+	return "CREATE TABLE {METADATA_CATALOG}.ducklake_snapshot(snapshot_id BIGINT PRIMARY KEY, snapshot_time "
+	       "TIMESTAMPTZ, schema_version BIGINT, next_catalog_id BIGINT, next_file_id BIGINT);";
+}
+
 string DuckLakeMetadataManager::GetCreateTableStatements() {
 	vector<string> statements;
 	statements.push_back(GetMetadataTableStatement());
-	statements.push_back(
-	    "CREATE TABLE {METADATA_CATALOG}.ducklake_snapshot(snapshot_id BIGINT PRIMARY KEY, snapshot_time TIMESTAMPTZ, "
-	    "schema_version BIGINT, next_catalog_id BIGINT, next_file_id BIGINT);");
+	statements.push_back(GetSnapshotTableStatement());
 	statements.push_back("CREATE TABLE {METADATA_CATALOG}.ducklake_snapshot_changes(snapshot_id BIGINT PRIMARY KEY, "
 	                     "changes_made VARCHAR, author VARCHAR, commit_message VARCHAR, commit_extra_info VARCHAR);");
 	statements.push_back(GetSchemaTableStatement());
@@ -474,6 +478,7 @@ CREATE TABLE {IF_NOT_EXISTS} {METADATA_CATALOG}.ducklake_view_column_tag(
 	view_id BIGINT, column_name VARCHAR, begin_snapshot BIGINT, end_snapshot BIGINT, key VARCHAR, value VARCHAR
 );
 ALTER TABLE {METADATA_CATALOG}.ducklake_schema ADD COLUMN {IF_NOT_EXISTS} parent_schema_id BIGINT;
+ALTER TABLE {METADATA_CATALOG}.ducklake_snapshot ADD COLUMN {IF_NOT_EXISTS} options_version BIGINT;
 UPDATE {METADATA_CATALOG}.ducklake_metadata SET value = '1.1-dev1' WHERE key = 'version';
 	)";
 
@@ -521,6 +526,14 @@ bool DuckLakeMetadataManager::HasVersionedOptions() {
 	}
 	// begin_snapshot and end_snapshot follow key, value, scope and scope_id
 	return result->ColumnCount() > 5;
+}
+
+bool DuckLakeMetadataManager::HasSnapshotOptionsVersion() {
+	auto result = Query("SELECT * FROM {METADATA_CATALOG}.ducklake_snapshot LIMIT 0");
+	if (result->HasError()) {
+		result->GetErrorObject().Throw("Failed to read the layout of ducklake_snapshot: ");
+	}
+	return ResultHasColumn(*result, "options_version");
 }
 
 void DuckLakeMetadataManager::MigrateMetadataTable() {
@@ -2947,6 +2960,7 @@ void DuckLakeMetadataManager::SubstituteCatalogPlaceholders(string &query) const
 
 void DuckLakeMetadataManager::SubstituteSnapshotPlaceholders(DuckLakeSnapshot snapshot, string &query) const {
 	auto &commit_info = transaction.GetCommitInfo();
+	query = StringUtil::Replace(query, "{OPTIONS_VERSION}", OptionsVersionSql(snapshot));
 	query = StringUtil::Replace(query, "{SNAPSHOT_ID}", to_string(snapshot.snapshot_id));
 	query = StringUtil::Replace(query, "{SCHEMA_VERSION}", to_string(snapshot.schema_version));
 	query = StringUtil::Replace(query, "{NEXT_CATALOG_ID}", to_string(snapshot.next_catalog_id));
@@ -4869,8 +4883,20 @@ string DuckLakeMetadataManager::WriteNewColumnMappings(const vector<DuckLakeColu
 	return batch_query;
 }
 
-string DuckLakeMetadataManager::InsertSnapshotSql() {
+string DuckLakeMetadataManager::InsertSnapshotSql(bool supports_v1_1_metadata) {
+	if (supports_v1_1_metadata) {
+		return R"(INSERT INTO {METADATA_CATALOG}.ducklake_snapshot VALUES ({SNAPSHOT_ID}, NOW(), {SCHEMA_VERSION}, {NEXT_CATALOG_ID}, {NEXT_FILE_ID}, {OPTIONS_VERSION});)";
+	}
 	return R"(INSERT INTO {METADATA_CATALOG}.ducklake_snapshot VALUES ({SNAPSHOT_ID}, NOW(), {SCHEMA_VERSION}, {NEXT_CATALOG_ID}, {NEXT_FILE_ID});)";
+}
+
+string DuckLakeMetadataManager::OptionsVersionSql(const DuckLakeSnapshot &snapshot) {
+	if (snapshot.options_version != DConstants::INVALID_INDEX) {
+		return to_string(snapshot.options_version);
+	}
+	// a server-side commit starts from a snapshot without it, and changes no options
+	return "(SELECT COALESCE(options_version, snapshot_id) FROM {METADATA_CATALOG}.ducklake_snapshot WHERE "
+	       "snapshot_id = {SNAPSHOT_ID} - 1)";
 }
 
 static string SQLStringOrNull(const string &str) {
@@ -4978,10 +5004,14 @@ DuckLakeMetadataManager::GetSnapshotAndStatsAndChanges(SnapshotAndStats &current
 }
 
 unique_ptr<DuckLakeSnapshot> DuckLakeMetadataManager::ParseSnapshot(QueryResult &result,
-                                                                    optional_ptr<string> catalog_version,
-                                                                    optional_ptr<optional_idx> options_version,
-                                                                    optional_ptr<idx_t> options_rows) {
+                                                                    optional_ptr<string> catalog_version) {
 	unique_ptr<DuckLakeSnapshot> snapshot;
+	optional_idx options_version_column;
+	for (idx_t i = 0; i < result.ColumnCount(); i++) {
+		if (result.ColumnName(i) == "options_version") {
+			options_version_column = i;
+		}
+	}
 	for (auto &row : result) {
 		if (snapshot) {
 			throw InvalidInputException("Corrupt DuckLake - multiple snapshots returned from database");
@@ -4994,11 +5024,10 @@ unique_ptr<DuckLakeSnapshot> DuckLakeMetadataManager::ParseSnapshot(QueryResult 
 		if (catalog_version && result.ColumnCount() > 4 && !row.IsNull(4)) {
 			*catalog_version = row.GetValue<string>(4);
 		}
-		if (options_version && result.ColumnCount() > 5 && !row.IsNull(5)) {
-			*options_version = row.GetValue<idx_t>(5);
-		}
-		if (options_rows && result.ColumnCount() > 6) {
-			*options_rows = row.GetValue<idx_t>(6);
+		if (options_version_column.IsValid()) {
+			// a snapshot written before the column was added reads its options as of itself
+			auto column = options_version_column.GetIndex();
+			snapshot->options_version = row.IsNull(column) ? snapshot_id : row.GetValue<idx_t>(column);
 		}
 	}
 	return snapshot;
@@ -5013,12 +5042,8 @@ WHERE snapshot_id = (SELECT MAX(snapshot_id) FROM {METADATA_CATALOG}.ducklake_sn
 
 string DuckLakeMetadataManager::GetLatestSnapshotQuery() const {
 	if (transaction.GetCatalog().SupportsV1_1Metadata()) {
-		// the options version is read in the same statement as the snapshot - a reset only closes a row, and expiring
-		// snapshots deletes closed rows, so the version can go back to one with more rows
 		return R"(SELECT snapshot_id, schema_version, next_catalog_id, next_file_id,
-(SELECT MAX(value) FROM {METADATA_CATALOG}.ducklake_metadata WHERE key = 'version'),
-(SELECT GREATEST(MAX(begin_snapshot), MAX(end_snapshot)) FROM {METADATA_CATALOG}.ducklake_metadata),
-(SELECT COUNT(*) FROM {METADATA_CATALOG}.ducklake_metadata)
+(SELECT MAX(value) FROM {METADATA_CATALOG}.ducklake_metadata WHERE key = 'version'), options_version
 FROM {METADATA_CATALOG}.ducklake_snapshot
 WHERE snapshot_id = (SELECT MAX(snapshot_id) FROM {METADATA_CATALOG}.ducklake_snapshot);)";
 	}
@@ -5031,7 +5056,7 @@ unique_ptr<DuckLakeSnapshot> DuckLakeMetadataManager::GetSnapshot() {
 		result->GetErrorObject().Throw("Failed to query most recent snapshot for DuckLake: ");
 	}
 	string catalog_version;
-	auto snapshot = ParseSnapshot(*result, &catalog_version, &options_version, &options_rows);
+	auto snapshot = ParseSnapshot(*result, &catalog_version);
 	if (!snapshot) {
 		throw InvalidInputException("No snapshot found in DuckLake");
 	}
@@ -5050,11 +5075,16 @@ unique_ptr<DuckLakeSnapshot> DuckLakeMetadataManager::GetSnapshot(BoundAtClause 
 	unique_ptr<QueryResult> result;
 	const string timestamp_order = bound == SnapshotBound::LOWER_BOUND ? "ASC" : "DESC";
 	const string timestamp_condition = bound == SnapshotBound::LOWER_BOUND ? ">" : "<";
+	// a dev catalog attached without migrating it has no options_version column yet
+	auto &catalog = transaction.GetCatalog();
+	const string options_version_select =
+	    catalog.SupportsV1_1Metadata() && !catalog.HasUnmigratedOptions() ? ", options_version" : "";
 	if (unit == "version") {
 		result = Query(StringUtil::Format(R"(
-SELECT snapshot_id, schema_version, next_catalog_id, next_file_id
+SELECT snapshot_id, schema_version, next_catalog_id, next_file_id%s
 FROM {METADATA_CATALOG}.ducklake_snapshot
 WHERE snapshot_id = %llu;)",
+		                                  options_version_select,
 		                                  val.DefaultCastAs(LogicalType::UBIGINT).GetValue<idx_t>()));
 	} else if (unit == "timestamp") {
 		auto timestamp = val.CastAs(*transaction.GetConnection().context, LogicalType::TIMESTAMP_TZ);
@@ -5064,7 +5094,7 @@ WHERE snapshot_id = %llu;)",
 		}
 		result = Query(StringUtil::Format(
 		    R"(
-SELECT snapshot_id, schema_version, next_catalog_id, next_file_id
+SELECT snapshot_id, schema_version, next_catalog_id, next_file_id%s
 FROM {METADATA_CATALOG}.ducklake_snapshot
 WHERE snapshot_id = (
 	SELECT snapshot_id
@@ -5072,7 +5102,8 @@ WHERE snapshot_id = (
 	WHERE snapshot_time::TIMESTAMPTZ %s= %s
 	ORDER BY snapshot_time::TIMESTAMPTZ %s
 	LIMIT 1);)",
-		    timestamp_condition, timestamp.DefaultCastAs(LogicalType::VARCHAR).ToSQLString(), timestamp_order));
+		    options_version_select, timestamp_condition, timestamp.DefaultCastAs(LogicalType::VARCHAR).ToSQLString(),
+		    timestamp_order));
 	} else {
 		throw InvalidInputException("Unsupported AT clause unit - %s", unit);
 	}

@@ -14,6 +14,12 @@ string DuckLakeMetadataManagerV1_1<Base>::GetSchemaTableStatement() {
 }
 
 template <typename Base>
+string DuckLakeMetadataManagerV1_1<Base>::GetSnapshotTableStatement() {
+	return "CREATE TABLE {METADATA_CATALOG}.ducklake_snapshot(snapshot_id BIGINT PRIMARY KEY, snapshot_time "
+	       "TIMESTAMPTZ, schema_version BIGINT, next_catalog_id BIGINT, next_file_id BIGINT, options_version BIGINT);";
+}
+
+template <typename Base>
 string DuckLakeMetadataManagerV1_1<Base>::GetMetadataTableStatement() {
 	return DuckLakeMetadataManager::ScopedMetadataTableStatement("ducklake_metadata");
 }

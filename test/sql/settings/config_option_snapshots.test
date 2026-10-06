@@ -123,6 +123,63 @@ COMMIT
 statement ok
 CALL ducklake.set_option('require_commit_message', false)
 
+# a data commit retried after another one changed the options records that one
+statement ok con1
+BEGIN
+
+statement ok con1
+INSERT INTO ducklake.t VALUES (42)
+
+statement ok con2
+CALL ducklake.set_option('parquet_row_group_size', 5000, table_name => 't')
+
+statement ok con1
+COMMIT
+
+query I
+SELECT (SELECT options_version FROM ducklake_meta.ducklake_snapshot ORDER BY snapshot_id DESC LIMIT 1)
+     = (SELECT max(snapshot_id) FROM ducklake_meta.ducklake_snapshot_changes WHERE changes_made LIKE '%set_option%')
+----
+true
+
+query I
+SELECT changes_made FROM ducklake_meta.ducklake_snapshot_changes ORDER BY snapshot_id DESC LIMIT 1
+----
+inserted_into_table:1
+
+# each snapshot records the last one that changed the options, also when concurrent commits are retried
+statement ok
+SET ducklake_max_retry_count = 100
+
+loop i 0 4
+
+statement ok
+CREATE TABLE ducklake.c${i}(id INTEGER)
+
+endloop
+
+# each its own table, as concurrent sets of one option conflict
+concurrentloop i 0 4
+
+statement ok
+INSERT INTO ducklake.c${i} VALUES (${i})
+
+statement ok
+CALL ducklake.set_option('parquet_row_group_size', 1000 + ${i}, table_name => 'c${i}')
+
+endloop
+
+query I
+SELECT count(*) FROM (
+	SELECT snapshot_id, options_version, changes_made,
+	       lag(options_version) OVER (ORDER BY snapshot_id) AS previous_version
+	FROM ducklake_meta.ducklake_snapshot JOIN ducklake_meta.ducklake_snapshot_changes USING (snapshot_id)
+)
+WHERE snapshot_id > 0
+  AND options_version <> CASE WHEN changes_made LIKE '%set_option%' THEN snapshot_id ELSE previous_version END
+----
+0
+
 statement ok
 DETACH ducklake
 
@@ -133,3 +190,9 @@ statement error
 CALL ducklake.set_option('parquet_compression', 'gzip')
 ----
 attached at a snapshot
+
+# and it reads the options of that snapshot, before any was set
+query I
+SELECT count(*) FROM ducklake.options() WHERE option_name IN ('parquet_compression', 'require_commit_message')
+----
+0

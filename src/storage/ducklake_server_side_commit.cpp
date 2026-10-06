@@ -855,6 +855,8 @@ DuckLakeCommitContext DuckLakeServerSideCommit::BuildContext(idx_t &committed_sn
 }
 
 string DuckLakeServerSideCommit::SubstitutePlaceholders(string sql, const DuckLakeSnapshot &snapshot) const {
+	// first, as its fallback refers to the catalog and snapshot placeholders below
+	sql = StringUtil::Replace(sql, "{OPTIONS_VERSION}", DuckLakeMetadataManager::OptionsVersionSql(snapshot));
 	sql = StringUtil::Replace(sql, "{METADATA_CATALOG}", schema_id);
 	sql = StringUtil::Replace(sql, "{METADATA_CATALOG_NAME_LITERAL}", "(SELECT current_database())");
 	sql = StringUtil::Replace(sql, "{METADATA_SCHEMA_NAME_LITERAL}",

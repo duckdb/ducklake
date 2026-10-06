@@ -289,7 +289,10 @@ void DuckLakeInitializer::LoadExistingDuckLake(DuckLakeTransaction &transaction)
 	if (resolved_version != DuckLakeVersion::UNSET) {
 		SetVersionedMetadataManager(transaction, resolved_version);
 	}
-	if (catalog.SupportsV1_1Metadata() && !transaction.GetMetadataManager().HasVersionedOptions()) {
+	// the versioned metadata manager replaced the one this function started with
+	auto &versioned_metadata_manager = transaction.GetMetadataManager();
+	if (catalog.SupportsV1_1Metadata() && (!versioned_metadata_manager.HasVersionedOptions() ||
+	                                       !versioned_metadata_manager.HasSnapshotOptionsVersion())) {
 		// a dev catalog attached without migrating it, e.g. read only
 		catalog.SetUnmigratedOptions();
 	}

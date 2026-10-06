@@ -150,7 +150,12 @@ unique_ptr<GlobalTableFunctionState> DuckLakeOptionsInit(ClientContext &context,
 	auto &metadata_manager = transaction.GetMetadataManager();
 
 	auto result = make_uniq<DuckLakeOptionsState>();
-	auto metadata = metadata_manager.LoadDuckLake(transaction.GetOptionsVersion());
+	// as of the transaction's own snapshot rather than the options version, which a drop does not move
+	optional_idx options_snapshot;
+	if (ducklake_catalog.SupportsV1_1Metadata()) {
+		options_snapshot = transaction.GetSnapshot().snapshot_id;
+	}
+	auto metadata = metadata_manager.LoadDuckLake(options_snapshot);
 
 	// options this transaction has set are not in the metadata until it commits, but it must read
 	// them back

@@ -2227,8 +2227,12 @@ void DuckLakeTransactionState::Commit(DuckLakeSnapshot transaction_snapshot,
 			can_retry = true;
 			DuckLakeCommitState commit_state(commit_snapshot);
 			// write the new snapshot
-			string batch_queries = DuckLakeMetadataManager::InsertSnapshotSql();
+			string batch_queries = DuckLakeMetadataManager::InsertSnapshotSql(context.supports_v1_1_metadata);
 			batch_queries += CommitChanges(commit_state, attempt_changes, stats, context, attempt_dropped_file_stats);
+			if (!context.config_options.empty() || !committed_table_options.empty()) {
+				// this commit writes option rows, so the options are as of its own snapshot from now on
+				commit_snapshot.options_version = commit_snapshot.snapshot_id;
+			}
 			batch_queries += WriteSnapshotChanges(commit_state, attempt_changes, context.commit_info);
 			auto res = context.execute_commit_batch(commit_snapshot, batch_queries);
 			if (res->HasError()) {

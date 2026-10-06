@@ -401,8 +401,6 @@ private:
 	//! The snapshot of the transaction (latest snapshot in DuckLake)
 	mutex snapshot_lock;
 	unique_ptr<DuckLakeSnapshot> snapshot;
-	optional_idx options_version;
-	idx_t options_rows = 0;
 	mutex committed_options_lock;
 	shared_ptr<const DuckLakeConfigOptions> committed_options;
 	idx_t local_catalog_id;

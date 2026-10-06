@@ -260,6 +260,7 @@ public:
 	//! Get the CREATE TABLE statements for all metadata tables
 	virtual string GetCreateTableStatements();
 	virtual string GetSchemaTableStatement();
+	virtual string GetSnapshotTableStatement();
 	virtual string GetMetadataTableStatement();
 	//! The v1.1 ducklake_metadata layout: the global scope is named, and each option row is valid from its
 	//! begin_snapshot until its end_snapshot
@@ -300,17 +301,7 @@ public:
 	static string GlobalTableStatsQuery(bool include_exactness, optional_idx table_id = optional_idx());
 	//! Pure parsers for the results of the above queries.
 	static unique_ptr<DuckLakeSnapshot> ParseSnapshot(QueryResult &result,
-	                                                  optional_ptr<string> catalog_version = nullptr,
-	                                                  optional_ptr<optional_idx> options_version = nullptr,
-	                                                  optional_ptr<idx_t> options_rows = nullptr);
-	//! The snapshot the options last changed at, as of the latest snapshot read - from v1.1
-	optional_idx GetOptionsVersion() const {
-		return options_version;
-	}
-	//! The number of option rows, as of the latest snapshot read - from v1.1
-	idx_t GetOptionsRows() const {
-		return options_rows;
-	}
+	                                                  optional_ptr<string> catalog_version = nullptr);
 	static vector<DuckLakeGlobalStatsInfo> ParseGlobalTableStats(QueryResult &result);
 	//! Whether the result contains a column with the given name
 	static bool ResultHasColumn(QueryResult &result, const string &name);
@@ -461,7 +452,9 @@ public:
 	                               const vector<DuckLakePath> &resolved_paths);
 	//! SQL templates with {METADATA_CATALOG} / {SNAPSHOT_ID} placeholders, shared with the
 	//! server-side commit path.
-	static string InsertSnapshotSql();
+	static string InsertSnapshotSql(bool supports_v1_1_metadata);
+	//! The value {OPTIONS_VERSION} stands for - read from the previous snapshot when the commit does not know it
+	static string OptionsVersionSql(const DuckLakeSnapshot &snapshot);
 	static string WriteSnapshotChangesSql(const SnapshotChangeInfo &change_info,
 	                                      const DuckLakeSnapshotCommit &commit_info);
 	static string UpdateGlobalTableStatsSql(const DuckLakeGlobalStatsInfo &stats, bool write_stats_exactness);
@@ -536,6 +529,8 @@ public:
 	}
 	virtual void MigrateMetadataTable();
 	bool HasVersionedOptions();
+	//! Whether ducklake_snapshot records the snapshot the options last changed at
+	bool HasSnapshotOptionsVersion();
 	virtual void ExecuteMigration(string migrate_query, bool allow_failures, const string &from_version,
 	                              const string &to_version);
 
@@ -697,9 +692,6 @@ protected:
 	map<SchemaIndex, string> schema_paths;
 	map<TableIndex, string> table_paths;
 	bool pending_cache_clear = false;
-	//! Read with the latest snapshot, see GetOptionsVersion and GetOptionsRows
-	optional_idx options_version;
-	idx_t options_rows = 0;
 };
 
 } // namespace duckdb
