@@ -1,8 +1,7 @@
 # name: benchmark/micro/fixtures/commit_cleanup.benchmark.in
-# description: Restore the commit fixture lake after each run and load its catalog again
+# description: Restore the commit fixture lake after each run and load its catalog, so the next run starts warm
 # group: [fixtures]
 
-# The restore_cleanup block plus a query that loads the catalog, so the first timed statement does not pay a cold load
 cleanup
 DETACH DATABASE IF EXISTS lake;
 @copy ${lake}_pristine TO ${work}
