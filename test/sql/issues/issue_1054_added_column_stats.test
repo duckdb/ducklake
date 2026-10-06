@@ -239,3 +239,32 @@ query I
 SELECT max(b) FROM dl.e
 ----
 10
+
+# the bounding box of a geometry field added inside a list covers the points written with it
+statement ok
+CREATE TABLE dl.lg (s STRUCT(x INTEGER)[])
+
+statement ok
+INSERT INTO dl.lg VALUES ([{'x': 1}])
+
+statement ok
+BEGIN
+
+statement ok
+ALTER TABLE dl.lg ALTER s TYPE STRUCT(x INTEGER, g GEOMETRY)[]
+
+statement ok
+INSERT INTO dl.lg VALUES ([{'x': 2, 'g': 'POINT(10 20)'::GEOMETRY}])
+
+statement ok
+COMMIT
+
+statement ok
+INSERT INTO dl.lg VALUES ([{'x': 3, 'g': 'POINT(100 200)'::GEOMETRY}])
+
+query I
+SELECT count(*) FROM issue_1054_meta.ducklake_table_column_stats s
+JOIN issue_1054_meta.ducklake_table t USING (table_id)
+WHERE t.table_name = 'lg' AND s.extra_stats LIKE '%"xmin": 10.0%'
+----
+1

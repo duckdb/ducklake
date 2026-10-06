@@ -229,9 +229,7 @@ void DuckLakeColumnStats::MergeStats(const DuckLakeColumnStats &new_stats) {
 		has_max = new_stats.has_max;
 		max_is_exact = new_stats.max_is_exact;
 		any_valid = true;
-		return;
-	}
-	if (!bounds_survive) {
+	} else if (!bounds_survive) {
 		// bounds do not survive this retype
 		has_min = false;
 		has_max = false;
