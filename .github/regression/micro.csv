@@ -4,6 +4,7 @@ benchmark/micro/compaction/merge_adjacent_partitioned.benchmark
 benchmark/micro/compaction/rewrite_data_files_deletes.benchmark
 benchmark/micro/maintenance/expire_snapshots.benchmark
 benchmark/micro/maintenance/flush_inlined_data.benchmark
+benchmark/micro/maintenance/flush_inlined_sorted_deletes.benchmark
 benchmark/micro/time_travel/at_version_history.benchmark
 benchmark/micro/time_travel/table_changes_incremental_poll.benchmark
 benchmark/micro/read/warm_small_queries.benchmark

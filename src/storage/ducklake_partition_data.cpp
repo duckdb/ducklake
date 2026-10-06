@@ -91,32 +91,6 @@ static string GetEpochTransformPart(DuckLakeTransformType transform_type) {
 	}
 }
 
-string DuckLakePartitionUtils::GetPartitionSQLExpression(const DuckLakeTransform &transform, const string &col_name,
-                                                         const LogicalType &source_type) {
-	if (transform.type == DuckLakeTransformType::IDENTITY) {
-		return col_name;
-	}
-	if (transform.type == DuckLakeTransformType::BUCKET) {
-		// Return the actual SQL expression that computes the bucket assignment
-		return "(murmur3_32(" + col_name + ") & 2147483647) % " + to_string(transform.bucket_count);
-	}
-	if (IsEpochTransform(transform.type)) {
-		// Must mirror ApplyPartitionTransform exactly
-		string col_expr = col_name;
-		auto source_id = source_type.id();
-		if (source_id == LogicalTypeId::TIMESTAMP_NS || source_id == LogicalTypeId::TIMESTAMP_TZ_NS) {
-			string nanos = "epoch_ns(" + col_name + ")";
-			col_expr = "make_timestamp((" + nanos + " - ((" + nanos + " % 1000) + 1000) % 1000) // 1000)";
-		} else if (source_id == LogicalTypeId::TIMESTAMP_TZ) {
-			col_expr = "make_timestamp(epoch_us(" + col_expr + "))";
-		}
-		return "date_diff('" + GetEpochTransformPart(transform.type) + "', DATE '1970-01-01', " + col_expr + ")";
-	}
-	case_insensitive_set_t used_names;
-	string func_name = GetPartitionKeyName(transform.type, col_name, used_names);
-	return func_name + "(" + col_name + ")";
-}
-
 LogicalType DuckLakePartitionUtils::GetPartitionKeyType(DuckLakeTransformType transform_type,
                                                         const LogicalType &source_type) {
 	switch (transform_type) {
@@ -136,23 +110,6 @@ LogicalType DuckLakePartitionUtils::GetPartitionKeyType(DuckLakeTransformType tr
 	default:
 		throw NotImplementedException("Unsupported partition transform type");
 	}
-}
-
-string DuckLakePartitionUtils::BuildPartitionFilter(const vector<string> &partition_sql_exprs,
-                                                    const vector<Value> &partition_values) {
-	string filter;
-	for (idx_t p = 0; p < partition_sql_exprs.size(); p++) {
-		if (p > 0) {
-			filter += " AND ";
-		}
-		auto &val = partition_values[p];
-		if (val.IsNull()) {
-			filter += partition_sql_exprs[p] + " IS NULL";
-		} else {
-			filter += partition_sql_exprs[p] + " = " + val.ToSQLString();
-		}
-	}
-	return filter;
 }
 
 string DuckLakePartitionUtils::BuildHivePartitionPath(DuckLakeTableEntry &table, const vector<Value> &partition_values,

@@ -1,0 +1,69 @@
+# name: benchmark/micro/maintenance/flush_inlined_sorted_deletes.benchmark
+# description: Flush 20 sorted inlined tables of 2000 rows each, a tenth of them deleted, on a freshly attached lake
+# group: [maintenance]
+
+name Flush Inlined Sorted Deletes
+group micro
+subgroup maintenance
+
+require ducklake
+
+require parquet
+
+argument lake flush_sorted_deletes
+
+argument work flush_sorted_deletes_work
+
+cache_file ${lake}_ready.marker
+
+# The deletes commit after the inserts, so every flushed file gets a delete file
+load
+EXPORT DATABASE '${BENCHMARK_DIR}/${lake}_gen';
+COPY (SELECT stmt FROM (
+SELECT 0 AS o, k, 'CREATE TABLE lake.s' || k || ' (id INTEGER, k DOUBLE, v VARCHAR); ALTER TABLE lake.s' || k
+|| ' SET SORTED BY (k ASC); INSERT INTO lake.s' || k || ' SELECT r, (r * 7919) % 2000 * 0.5, ''v'' || r'
+|| ' FROM range(2000) t(r);' AS stmt FROM range(20) t(k)
+UNION ALL
+SELECT 1, 0, 'COMMIT; BEGIN;'
+UNION ALL
+SELECT 2, k, 'DELETE FROM lake.s' || k || ' WHERE id % 10 = ' || (k % 10) || ';' FROM range(20) t(k)
+) ORDER BY o, k) TO '${BENCHMARK_DIR}/${lake}_gen/schema.sql' (HEADER false, QUOTE '');
+@create ${lake}_pristine
+@attach ${lake}_pristine AS lake (DATA_PATH '${BENCHMARK_DIR}/${lake}_files')
+CALL lake.set_option('data_inlining_row_limit', 5000);
+IMPORT DATABASE '${BENCHMARK_DIR}/${lake}_gen';
+SELECT CASE WHEN (SELECT count(*) FROM __ducklake_metadata_lake.ducklake_data_file) <> 0
+OR (SELECT count(*) FROM lake.s7) <> 1800
+THEN error('every table must be inlined with a tenth of its rows deleted') END;
+CALL ducklake_delete_orphaned_files('lake', cleanup_all => true);
+DETACH lake;
+COPY (SELECT count(*) FROM glob('${BENCHMARK_DIR}/${lake}_files/**'))
+TO '${BENCHMARK_DIR}/${lake}_filecount.csv' (FORMAT CSV, HEADER false);
+@seal ${lake}_pristine
+COPY (SELECT 1) TO '${BENCHMARK_DIR}/${lake}_ready.marker' (FORMAT CSV);
+DETACH DATABASE IF EXISTS lake;
+@copy ${lake}_pristine TO ${work}
+@attach ${work} AS lake
+CALL ducklake_delete_orphaned_files('lake', cleanup_all => true);
+SELECT CASE WHEN (SELECT count(*) FROM glob('${BENCHMARK_DIR}/${lake}_files/**'))
+<> (SELECT column0 FROM read_csv('${BENCHMARK_DIR}/${lake}_filecount.csv', header = false))
+THEN error('the fixture files were not restored') END;
+
+include benchmark/micro/fixtures/restore_reload.benchmark.in
+
+include benchmark/micro/fixtures/restore_cleanup.benchmark.in
+
+run
+SELECT count(*) FILTER (WHERE rows_flushed > 0) AS tables_flushed, sum(rows_flushed) AS rows_flushed
+FROM ducklake_flush_inlined_data('lake');
+
+# The deleted rows must stay deleted, with one data file and one delete file per table
+result_query IIIII
+SELECT tables_flushed, rows_flushed,
+(SELECT count(*) FROM lake.s7 WHERE id % 10 = 7),
+(SELECT count(*) = 1800 AND sum(id) = 1798600 FROM lake.s7),
+(SELECT count(*) = 20 AND count(delete_file_id) = 20 FROM __ducklake_metadata_lake.ducklake_data_file
+LEFT JOIN __ducklake_metadata_lake.ducklake_delete_file USING (data_file_id))
+FROM __answer
+----
+20	40000	0	true	true

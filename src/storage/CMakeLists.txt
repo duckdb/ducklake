@@ -24,7 +24,6 @@ add_library(
   ducklake_partition_data.cpp
   ducklake_puffin.cpp
   ducklake_secret.cpp
-  ducklake_sort_data.cpp
   ducklake_server_side_commit.cpp
   ducklake_staged_commit.cpp
   ducklake_stats.cpp

@@ -1,0 +1,50 @@
+# name: test/sql/sorted_table/data_inlining_flush_sorted_delete_positions_encrypted.test
+# description: Flushing inlined rows with deletes into an encrypted lake tombstones the deleted rows
+# group: [sorted_table]
+
+require ducklake
+
+require parquet
+
+require httpfs
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake
+(DATA_PATH '{DATA_PATH}/flush_sorted_delete_positions_encrypted', ENCRYPTED, DATA_INLINING_ROW_LIMIT 1000)
+
+statement ok
+CREATE TABLE ducklake.t (id INTEGER, k INTEGER)
+
+statement ok
+ALTER TABLE ducklake.t SET SORTED BY (k DESC)
+
+statement ok
+INSERT INTO ducklake.t SELECT i, i % 7 FROM range(100) r(i)
+
+statement ok
+SET VARIABLE inserted = (SELECT max(snapshot_id) FROM ducklake.snapshots())
+
+statement ok
+DELETE FROM ducklake.t WHERE id % 10 = 3
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake')
+
+query III
+SELECT count(*), sum(id), count(*) FILTER (WHERE id % 10 = 3) FROM ducklake.t
+----
+90	4470	0
+
+query II
+SELECT count(*), sum(id) FROM ducklake.t AT (VERSION => getvariable('inserted'))
+----
+100	4950
+
+statement error
+SELECT * FROM '{DATA_PATH}/flush_sorted_delete_positions_encrypted/**/*.parquet'
+----
+encrypted

@@ -1,0 +1,120 @@
+# name: test/sql/sorted_table/data_inlining_flush_sorted_delete_positions.test
+# description: Flushing a sorted table tombstones the rows that were deleted, whatever the sort key
+# group: [sorted_table]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake
+(DATA_PATH '{DATA_PATH}/flush_sorted_delete_positions', DATA_INLINING_ROW_LIMIT 1000)
+
+statement ok
+USE ducklake
+
+# some catalogs store these sort keys as text, where '10' sorts before '9'
+statement ok
+CREATE TABLE t_double (id INTEGER, k DOUBLE)
+
+statement ok
+ALTER TABLE t_double SET SORTED BY (k ASC NULLS LAST)
+
+statement ok
+CREATE TABLE t_hugeint (id INTEGER, k HUGEINT)
+
+statement ok
+ALTER TABLE t_hugeint SET SORTED BY (k ASC NULLS LAST)
+
+statement ok
+CREATE TABLE t_expression (id INTEGER, k HUGEINT)
+
+statement ok
+ALTER TABLE t_expression SET SORTED BY ((k + 0) ASC NULLS LAST)
+
+# the metadata database does not know the macros of the session
+statement ok
+CREATE MACRO negate(x) AS -x
+
+statement ok
+CREATE TABLE t_macro (id INTEGER, k INTEGER)
+
+statement ok
+ALTER TABLE t_macro SET SORTED BY (negate(k) ASC NULLS LAST)
+
+statement ok
+INSERT INTO t_double VALUES (1, 9), (2, 10), (3, 100)
+
+statement ok
+INSERT INTO t_hugeint VALUES (1, 9), (2, 10), (3, 100)
+
+statement ok
+INSERT INTO t_expression VALUES (1, 9), (2, 10), (3, 100)
+
+statement ok
+INSERT INTO t_macro VALUES (1, 9), (2, 10), (3, 100)
+
+statement ok
+SET VARIABLE inserted = (SELECT max(snapshot_id) FROM ducklake.snapshots())
+
+statement ok
+DELETE FROM t_double WHERE id = 1
+
+statement ok
+DELETE FROM t_hugeint WHERE id = 1
+
+statement ok
+DELETE FROM t_expression WHERE id = 1
+
+statement ok
+DELETE FROM t_macro WHERE id = 3
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake', table_name => 't_double')
+
+query II
+SELECT
+	(SELECT list(id ORDER BY id) FROM t_double),
+	(SELECT list(id ORDER BY id) FROM t_double AT (VERSION => getvariable('inserted')))
+----
+[2, 3]	[1, 2, 3]
+
+# the flush wrote one data file and one delete file
+query II
+SELECT count(*), count(delete_file) FROM ducklake_list_files('ducklake', 't_double')
+----
+1	1
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake', table_name => 't_hugeint')
+
+query II
+SELECT
+	(SELECT list(id ORDER BY id) FROM t_hugeint),
+	(SELECT list(id ORDER BY id) FROM t_hugeint AT (VERSION => getvariable('inserted')))
+----
+[2, 3]	[1, 2, 3]
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake', table_name => 't_expression')
+
+query II
+SELECT
+	(SELECT list(id ORDER BY id) FROM t_expression),
+	(SELECT list(id ORDER BY id) FROM t_expression AT (VERSION => getvariable('inserted')))
+----
+[2, 3]	[1, 2, 3]
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake', table_name => 't_macro')
+
+query II
+SELECT
+	(SELECT list(id ORDER BY id) FROM t_macro),
+	(SELECT list(id ORDER BY id) FROM t_macro AT (VERSION => getvariable('inserted')))
+----
+[1, 2]	[1, 2, 3]
