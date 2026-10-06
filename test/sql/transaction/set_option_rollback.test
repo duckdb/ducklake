@@ -25,6 +25,14 @@ CALL ducklake.set_option('parquet_compression', 'zstd')
 statement ok
 ALTER TABLE ducklake.t SET (parquet_row_group_size = 1000)
 
+# the transaction sees its own changes
+query III
+SELECT option_name, value, scope FROM ducklake.options()
+WHERE option_name IN ('parquet_compression', 'parquet_row_group_size') ORDER BY ALL
+----
+parquet_compression	zstd	GLOBAL
+parquet_row_group_size	1000	TABLE
+
 statement ok
 ROLLBACK
 
@@ -41,6 +49,11 @@ BEGIN
 
 statement ok
 ALTER TABLE ducklake.t RESET (parquet_compression)
+
+query I
+SELECT count(*) FROM ducklake.options() WHERE scope = 'TABLE'
+----
+0
 
 statement ok
 ROLLBACK

@@ -1607,16 +1607,55 @@ void DuckLakeTransaction::ResetConfigOption(const DuckLakeConfigOption &option) 
 	}
 }
 
+template <class SETTING, class MATCHES>
+static void ApplyDeferredConfigOption(vector<SETTING> &settings, const DuckLakeConfigOptionUndo &undo, SETTING setting,
+                                      MATCHES matches) {
+	settings.erase(std::remove_if(settings.begin(), settings.end(), matches), settings.end());
+	if (!undo.reset) {
+		settings.push_back(std::move(setting));
+	}
+}
+
+void DuckLakeTransaction::ApplyDeferredConfigOptions(DuckLakeMetadata &metadata) const {
+	if (!metadata_manager->CommitsEachStatement()) {
+		return;
+	}
+	for (auto &undo : config_option_undo) {
+		auto &option = undo.option;
+		auto &key = option.option.key;
+		if (option.table_id.IsValid()) {
+			ApplyDeferredConfigOption(metadata.table_settings, undo,
+			                          DuckLakeTableSetting {option.table_id, option.option},
+			                          [&](const DuckLakeTableSetting &setting) {
+				                          return setting.table_id == option.table_id && setting.tag.key == key;
+			                          });
+		} else if (option.schema_id.IsValid()) {
+			ApplyDeferredConfigOption(metadata.schema_settings, undo,
+			                          DuckLakeSchemaSetting {option.schema_id, option.option},
+			                          [&](const DuckLakeSchemaSetting &setting) {
+				                          return setting.schema_id == option.schema_id && setting.tag.key == key;
+			                          });
+		} else {
+			ApplyDeferredConfigOption(metadata.tags, undo, option.option,
+			                          [&](const DuckLakeTag &tag) { return tag.key == key; });
+		}
+	}
+}
+
 void DuckLakeTransaction::WriteDeferredMetadata() {
 	auto &metadata_manager = GetMetadataManager();
 	if (!metadata_manager.CommitsEachStatement()) {
 		return;
 	}
+	// the catalog copy takes the values again, so it matches the stored options when another transaction committed
+	// in between
 	for (auto &undo : config_option_undo) {
 		if (undo.reset) {
 			metadata_manager.ResetConfigOption(undo.option);
+			ducklake_catalog.ResetConfigOption(undo.option);
 		} else {
 			metadata_manager.SetConfigOption(undo.option);
+			ducklake_catalog.SetConfigOption(undo.option);
 		}
 	}
 	if (!expired_snapshots.empty()) {

@@ -292,6 +292,8 @@ public:
 	}
 	void SetConfigOption(const DuckLakeConfigOption &option);
 	void ResetConfigOption(const DuckLakeConfigOption &option);
+	//! Applies the option changes that are not stored before commit to options read from the metadata
+	void ApplyDeferredConfigOptions(DuckLakeMetadata &metadata) const;
 
 	void SetCommitMessage(const DuckLakeSnapshotCommit &option);
 

@@ -1,0 +1,44 @@
+# name: test/sql/quack/quack_set_option_concurrent.test
+# description: The option written by the last commit is the one that is used
+# group: [quack]
+
+require ducklake
+
+require parquet
+
+require-env DUCKLAKE_CONNECTION
+
+require quack
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/quack_set_option_concurrent', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE ducklake.t(i INTEGER)
+
+statement ok con1
+BEGIN
+
+statement ok con1
+ALTER TABLE ducklake.t SET (parquet_compression = 'zstd')
+
+statement ok con2
+ALTER TABLE ducklake.t SET (parquet_compression = 'gzip')
+
+statement ok con1
+COMMIT
+
+query I
+SELECT value FROM ducklake.options() WHERE option_name = 'parquet_compression'
+----
+zstd
+
+statement ok
+INSERT INTO ducklake.t VALUES (1)
+
+query I
+SELECT DISTINCT compression FROM parquet_metadata('{DATA_PATH}/quack_set_option_concurrent/main/t/**')
+----
+ZSTD

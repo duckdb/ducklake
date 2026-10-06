@@ -20,6 +20,12 @@
   ],
   "skip_tests": [
     {
+      "reason": "Two transactions that set a new option both insert its row on this catalog; the last-commit-wins case needs quack, where option changes are written at commit",
+      "paths": [
+        "test/sql/quack/quack_set_option_concurrent.test"
+      ]
+    },
+    {
       "reason": "Test is slow",
       "paths": [
         "test/sql/deletion_inlining/test_multiple_files_flush.test_slow"
