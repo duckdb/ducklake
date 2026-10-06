@@ -754,6 +754,24 @@ WHERE table_id = {TABLE_ID} AND schema_version = {SCHEMA_VERSION})";
 		}
 		return begin_snapshot;
 	}
+	// the table has no row for this schema version - an inlined-data table created without one is keyed to the
+	// lake's schema version at the time, so take the first snapshot that carries it
+	query = R"(
+SELECT MIN(snapshot_id)
+FROM {METADATA_CATALOG}.ducklake_snapshot
+WHERE schema_version = {SCHEMA_VERSION})";
+	query = StringUtil::Replace(query, "{SCHEMA_VERSION}", to_string(schema_version));
+	result = Query(query);
+	for (auto &row : *result) {
+		if (row.IsNull(0)) {
+			break;
+		}
+		auto begin_snapshot = row.GetValue<idx_t>(0);
+		if (!transaction.ChangesMade()) {
+			catalog.CacheSchemaVersionBeginSnapshot(table_id, schema_version, begin_snapshot);
+		}
+		return begin_snapshot;
+	}
 	// We need to fallback to GetBeginSnapshotForTable if this table doesnt have an alter yet
 	return GetBeginSnapshotForTable(table_id);
 }

@@ -1,0 +1,54 @@
+# name: test/sql/data_inlining/data_inlining_alter_before_first_inline.test
+# description: inlined rows written after an ALTER that happened with inlining disabled keep their added columns
+# group: [data_inlining]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/alter_before_inline.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS lake (DATA_PATH '{DATA_PATH}/alter_before_inline', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE lake.t (a VARCHAR);
+
+statement ok
+ALTER TABLE lake.t ADD COLUMN b VARCHAR;
+
+statement ok
+DETACH lake;
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS lake (DATA_PATH '{DATA_PATH}/alter_before_inline')
+
+# the first inlined insert creates an inlined-data table keyed to the lake's current schema version
+statement ok
+INSERT INTO lake.t VALUES ('x', 'B');
+
+# any later schema change
+statement ok
+CREATE VIEW lake.v AS SELECT 1 AS one;
+
+statement ok
+DETACH lake;
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS lake (DATA_PATH '{DATA_PATH}/alter_before_inline')
+
+query II
+SELECT * FROM lake.t;
+----
+x	B
+
+statement ok
+INSERT INTO lake.t VALUES ('y', 'C');
+
+query II
+SELECT * FROM lake.t ORDER BY a;
+----
+x	B
+y	C
