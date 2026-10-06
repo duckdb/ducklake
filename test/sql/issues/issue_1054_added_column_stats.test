@@ -6,7 +6,7 @@ require ducklake
 
 require parquet
 
-test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/issue_1054_added_column_stats.db
 
 test-env DATA_PATH {TEST_DIR}
 
@@ -305,3 +305,37 @@ JOIN issue_1054_meta.ducklake_table t USING (table_id)
 WHERE t.table_name = 'lg' AND s.extra_stats LIKE '%"xmin": 10.0%'
 ----
 1
+
+# a column added to a table whose record count is unknown keeps the default of the older rows
+statement ok
+CREATE TABLE dl.uc (a INTEGER)
+
+statement ok
+INSERT INTO dl.uc VALUES (1), (2)
+
+statement ok
+UPDATE issue_1054_meta.ducklake_table_stats SET record_count = NULL
+WHERE table_id IN (SELECT table_id FROM issue_1054_meta.ducklake_table WHERE table_name = 'uc')
+
+statement ok
+DETACH dl
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/issue_1054', METADATA_CATALOG 'issue_1054_meta')
+
+statement ok
+BEGIN
+
+statement ok
+ALTER TABLE dl.uc ADD COLUMN b INTEGER DEFAULT 42
+
+statement ok
+INSERT INTO dl.uc VALUES (3, 10)
+
+statement ok
+COMMIT
+
+query I
+SELECT count(*) FROM dl.uc WHERE b = 42
+----
+2

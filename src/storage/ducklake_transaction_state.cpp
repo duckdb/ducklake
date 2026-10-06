@@ -1212,6 +1212,10 @@ string DuckLakeTransactionState::WriteAddedFieldStats(const vector<DuckLakeAdded
 			// the first insert writes the statistics of every column
 			continue;
 		}
+		if (current_stats->record_count_unknown) {
+			// older rows of unknown count leave the fields without statistics
+			continue;
+		}
 		DuckLakeNewGlobalStats new_globals;
 		new_globals.stats.column_stats =
 		    entry.table.get().GetAddedFieldStats(entry.fields, current_stats->record_count);
