@@ -1,5 +1,5 @@
 # name: test/sql/stats/filter_pushdown_float_nan.test
-# description: Regression: float/double <> must not prune NaN-containing files
+# description: Floating-point file pruning with known and unknown NaN statistics
 # group: [stats]
 
 require ducklake
@@ -11,7 +11,7 @@ test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
 test-env DATA_PATH {TEST_DIR}
 
 statement ok
-ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/ducklake_float_nan_files', DATA_INLINING_ROW_LIMIT 0)
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/ducklake_float_nan_files', METADATA_CATALOG 'metadata', DATA_INLINING_ROW_LIMIT 0)
 
 statement ok
 CREATE TABLE ducklake.dbl(x DOUBLE);
@@ -25,3 +25,122 @@ query I
 SELECT COUNT(*) FROM ducklake.dbl WHERE x <> 1.0;
 ----
 1
+
+foreach type FLOAT DOUBLE
+
+# Registered files have finite bounds or only NULLs, and unknown contains_nan.
+foreach value 1 25 NULL
+
+statement ok
+COPY (SELECT {value}::{type} AS x)
+TO '{DATA_PATH}/float_nan_{type}_{value}.parquet' (FORMAT PARQUET)
+
+endloop
+
+statement ok
+CREATE TABLE ducklake.ranges_{type}(x {type})
+
+statement ok
+CALL ducklake_add_data_files('ducklake', 'ranges_{type}', [
+    '{DATA_PATH}/float_nan_{type}_1.parquet',
+    '{DATA_PATH}/float_nan_{type}_25.parquet',
+    '{DATA_PATH}/float_nan_{type}_NULL.parquet'
+])
+
+# Native files supply contains_nan = TRUE and FALSE.
+statement ok
+INSERT INTO ducklake.ranges_{type} VALUES (1), ('NaN'), (-'NaN'::{type}), (NULL)
+
+statement ok
+INSERT INTO ducklake.ranges_{type} VALUES (25)
+
+query IIII
+SELECT count(*) FILTER (WHERE contains_nan IS NULL),
+       count(*) FILTER (WHERE contains_nan),
+       count(*) FILTER (WHERE NOT contains_nan),
+       count(*) FILTER (WHERE contains_nan IS NULL AND value_count = 0)
+FROM metadata.ducklake_file_column_stats f
+JOIN metadata.ducklake_table t USING (table_id)
+WHERE t.table_name = 'ranges_{type}' AND f.column_id = 1
+----
+3	1	1	1
+
+# An upper bound excludes NaN, so only the two files containing 25 are needed.
+query I
+SELECT count(*) FROM ducklake.ranges_{type} WHERE x > 20 AND x < 30
+----
+2
+
+query II
+EXPLAIN ANALYZE SELECT count(*) FROM ducklake.ranges_{type} WHERE x > 20 AND x < 30
+----
+analyzed_plan	<REGEX>:.*Total Files Read: 2.*
+
+# A lower bound alone accepts NaN and must retain unknown-NaN files.
+query I
+SELECT count(*) FROM ducklake.ranges_{type} WHERE x > 20
+----
+4
+
+query II
+EXPLAIN ANALYZE SELECT count(*) FROM ducklake.ranges_{type} WHERE x > 20
+----
+analyzed_plan	<REGEX>:.*Total Files Read: 4.*
+
+# One NaN-accepting OR branch is enough to retain the NaN rows.
+query I
+SELECT count(*) FROM ducklake.ranges_{type} WHERE x > 20 OR x < 0
+----
+4
+
+# NaN equality contributes no ordinary values when the upper bound excludes NaN.
+query I
+SELECT count(*) FROM ducklake.ranges_{type} WHERE (x = 'NaN'::{type} OR x = 25) AND x < 30
+----
+2
+
+query II
+EXPLAIN ANALYZE SELECT count(*) FROM ducklake.ranges_{type} WHERE (x = 'NaN'::{type} OR x = 25) AND x < 30
+----
+analyzed_plan	<REGEX>:.*Total Files Read: 2.*
+
+# IN uses a separate constant-filter generation path.
+query I
+SELECT count(*) FROM ducklake.ranges_{type} WHERE x IN ('NaN'::{type}, 25)
+----
+4
+
+query I
+SELECT count(*) FROM ducklake.ranges_{type} WHERE x IN ('NaN'::{type}, 25) AND x < 30
+----
+2
+
+query II
+EXPLAIN ANALYZE SELECT count(*) FROM ducklake.ranges_{type} WHERE x IN ('NaN'::{type}, 25) AND x < 30
+----
+analyzed_plan	<REGEX>:.*Total Files Read: 2.*
+
+# Unknown contains_nan retains two finite files, but value_count = 0 excludes the all-NULL file.
+query I
+SELECT count(*) FROM ducklake.ranges_{type} WHERE x = 'NaN'::{type}
+----
+2
+
+query II
+EXPLAIN ANALYZE SELECT count(*) FROM ducklake.ranges_{type} WHERE x = 'NaN'::{type}
+----
+analyzed_plan	<REGEX>:.*Total Files Read: 3.*
+
+# A NULL-accepting branch must keep the all-NULL file.
+query I
+SELECT count(*) FROM ducklake.ranges_{type} WHERE x = 'NaN'::{type} OR x IS NULL
+----
+4
+
+# Statistics do not record NaN signs; evaluating only a positive NaN would incorrectly prune the negative NaN row.
+query I
+SELECT count(*) FROM ducklake.ranges_{type} WHERE x > 20 AND signbit(x)
+----
+1
+
+endloop
