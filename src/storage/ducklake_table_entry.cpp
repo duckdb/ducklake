@@ -1706,6 +1706,17 @@ void DuckLakeTableEntry::ValidateAddedFieldsCanSkipStats(const DuckLakeFieldId &
 	                              parent_id.Name(), unsupported->Type().ToString(), unsupported->Name());
 }
 
+vector<FieldIndex> DuckLakeTableEntry::ParseSkippedStatsFields(const string &option_value) {
+	vector<FieldIndex> result;
+	for (auto &entry : StringUtil::Split(option_value, ',')) {
+		idx_t field_index;
+		if (TryCast::Operation<string_t, idx_t>(string_t(entry), field_index)) {
+			result.push_back(FieldIndex(field_index));
+		}
+	}
+	return result;
+}
+
 unordered_set<idx_t> DuckLakeTableEntry::GetSkippedStatsFields() const {
 	unordered_set<idx_t> result;
 	auto &catalog = ParentCatalog().Cast<DuckLakeCatalog>();
@@ -1718,14 +1729,10 @@ unordered_set<idx_t> DuckLakeTableEntry::GetSkippedStatsFields() const {
 		return result;
 	}
 	// re-read on every write to this table - unusable entries are ignored, never raised
-	auto entries = StringUtil::Split(option_value, ',');
-	result.reserve(entries.size());
-	for (auto &entry : entries) {
-		idx_t field_index;
-		if (!TryCast::Operation<string_t, idx_t>(string_t(entry), field_index)) {
-			continue;
-		}
-		auto field_id = field_data->GetByFieldIndex(FieldIndex(field_index));
+	auto field_indexes = ParseSkippedStatsFields(option_value);
+	result.reserve(field_indexes.size());
+	for (auto &field_index : field_indexes) {
+		auto field_id = field_data->GetByFieldIndex(field_index);
 		if (!field_id) {
 			continue;
 		}

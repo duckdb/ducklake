@@ -907,12 +907,8 @@ bool DuckLakeTransactionState::TryMergeInlinedStats(const vector<DuckLakeColumnS
 }
 
 static void AddSkippedStatsFields(const string &option_value, set<FieldIndex> &result) {
-	for (auto &entry : StringUtil::Split(option_value, ',')) {
-		idx_t field_index;
-		if (TryCast::Operation<string_t, idx_t>(string_t(entry), field_index)) {
-			result.insert(FieldIndex(field_index));
-		}
-	}
+	auto field_indexes = DuckLakeTableEntry::ParseSkippedStatsFields(option_value);
+	result.insert(field_indexes.begin(), field_indexes.end());
 }
 
 //! The field ids of `table_id`'s skip_stats_columns option, read from the metadata rather than the catalog so

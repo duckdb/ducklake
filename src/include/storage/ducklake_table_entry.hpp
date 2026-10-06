@@ -161,6 +161,8 @@ public:
 
 	//! Validate that every sort-expression column reference exists in the column list.
 	static void ValidateSortExpressionColumns(const ColumnList &columns, const vector<OrderByNode> &orders);
+	//! The field ids of a skip_stats_columns value, without the entries that are not ids
+	static vector<FieldIndex> ParseSkippedStatsFields(const string &option_value);
 	//! Resolves skip_stats_columns names to the stored field ids
 	static string ResolveSkippedStatsColumns(DuckLakeTableEntry &table, const Value &val);
 	static string ResolveSkippedStatsColumns(const ColumnList &columns, const DuckLakeFieldData &field_data,
