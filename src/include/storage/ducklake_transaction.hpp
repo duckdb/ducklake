@@ -292,9 +292,8 @@ public:
 	}
 	void SetConfigOption(const DuckLakeConfigOption &option);
 	void ResetConfigOption(const DuckLakeConfigOption &option);
-	//! Applies the option changes that are not stored before commit to options read from the metadata
+	//! Applies the option changes that wait for the commit to options read from the metadata
 	void ApplyDeferredConfigOptions(DuckLakeMetadata &metadata) const;
-	//! Whether option changes wait for the commit, which a catalog committing each statement needs
 	bool HasDeferredConfigOptions() const;
 	string DeferredConfigOptionsSql() const;
 

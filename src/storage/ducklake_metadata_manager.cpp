@@ -6203,34 +6203,37 @@ static void ConfigOptionScope(const DuckLakeConfigOption &option, string &scope,
 	}
 }
 
+static string DeleteConfigOptionSql(const DuckLakeConfigOption &option) {
+	string scope;
+	string scope_id;
+	string scope_filter;
+	ConfigOptionScope(option, scope, scope_id, scope_filter);
+	return StringUtil::Format("DELETE FROM {METADATA_CATALOG}.ducklake_metadata WHERE key = %s AND %s;",
+	                          SQLString(option.option.key), scope_filter);
+}
+
+static string InsertConfigOptionSql(const DuckLakeConfigOption &option) {
+	string scope;
+	string scope_id;
+	string scope_filter;
+	ConfigOptionScope(option, scope, scope_id, scope_filter);
+	return StringUtil::Format("INSERT INTO {METADATA_CATALOG}.ducklake_metadata VALUES (%s, %s, %s, %s);",
+	                          SQLString(option.option.key), SQLString(option.option.value), scope, scope_id);
+}
+
 string DuckLakeMetadataManager::WriteConfigOptionChangesSql(const vector<DuckLakeConfigOptionUndo> &changes) {
 	string batch_query;
 	for (auto &change : changes) {
-		auto &option = change.option;
-		string scope;
-		string scope_id;
-		string scope_filter;
-		ConfigOptionScope(option, scope, scope_id, scope_filter);
-		batch_query += StringUtil::Format("DELETE FROM {METADATA_CATALOG}.ducklake_metadata WHERE key = %s AND %s;",
-		                                  SQLString(option.option.key), scope_filter);
+		batch_query += DeleteConfigOptionSql(change.option);
 		if (!change.reset) {
-			batch_query +=
-			    StringUtil::Format("INSERT INTO {METADATA_CATALOG}.ducklake_metadata VALUES (%s, %s, %s, %s);",
-			                       SQLString(option.option.key), SQLString(option.option.value), scope, scope_id);
+			batch_query += InsertConfigOptionSql(change.option);
 		}
 	}
 	return batch_query;
 }
 
 bool DuckLakeMetadataManager::ResetConfigOption(const DuckLakeConfigOption &option) {
-	string scope;
-	string scope_id;
-	string scope_filter;
-	ConfigOptionScope(option, scope, scope_id, scope_filter);
-	auto result = Query(StringUtil::Format(R"(
-DELETE FROM {METADATA_CATALOG}.ducklake_metadata WHERE key = %s AND %s
-)",
-	                                       SQLString(option.option.key), scope_filter));
+	auto result = Query(DeleteConfigOptionSql(option));
 	if (result->HasError()) {
 		result->GetErrorObject().Throw("Failed to reset config option in DuckLake: ");
 	}
@@ -6255,10 +6258,7 @@ WHERE key = %s AND %s
 	auto count = result->Fetch()->GetValue(0, 0).GetValue<idx_t>();
 	if (count == 0) {
 		// option does not yet exist - insert the value
-		result = Execute(StringUtil::Format(R"(
-INSERT INTO {METADATA_CATALOG}.ducklake_metadata VALUES (%s, %s, %s, %s)
-)",
-		                                    SQLString(option_key), SQLString(option_value), scope, scope_id));
+		result = Execute(InsertConfigOptionSql(option));
 	} else {
 		// option already exists - update it
 		result = Execute(StringUtil::Format(R"(
