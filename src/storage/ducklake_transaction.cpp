@@ -745,8 +745,12 @@ void DuckLakeTransaction::Start() {
 }
 
 void DuckLakeTransaction::UndoConfigOptions() {
-	for (auto it = config_option_undo.rbegin(); it != config_option_undo.rend(); ++it) {
-		ducklake_catalog.UndoConfigOption(*it);
+	if (HasDeferredConfigOptions()) {
+		ducklake_catalog.EndDeferredConfigOptions(*this, false);
+	} else {
+		for (auto it = config_option_undo.rbegin(); it != config_option_undo.rend(); ++it) {
+			ducklake_catalog.UndoConfigOption(*it);
+		}
 	}
 	config_option_undo.clear();
 }
@@ -784,13 +788,7 @@ void DuckLakeTransaction::Commit() {
 	}
 	if (HasDeferredConfigOptions()) {
 		// keep the cached options in commit order
-		for (auto &undo : config_option_undo) {
-			if (undo.reset) {
-				ducklake_catalog.ResetConfigOption(undo.option);
-			} else {
-				ducklake_catalog.SetConfigOption(undo.option);
-			}
-		}
+		ducklake_catalog.EndDeferredConfigOptions(*this, true);
 	}
 	FlushNameMapCacheInvalidations();
 	connection.reset();
@@ -1619,17 +1617,29 @@ void DuckLakeTransaction::RunCommitLoop(DuckLakeSnapshot transaction_snapshot,
 	state->Commit(transaction_snapshot, transaction_changes, retry_config, context);
 }
 
+void DuckLakeTransaction::DeferConfigOption(const DuckLakeConfigOption &option, bool reset) {
+	DuckLakeConfigOptionUndo change;
+	change.option = option;
+	change.reset = reset;
+	ducklake_catalog.AddDeferredConfigOption(*this, change);
+	config_option_undo.push_back(std::move(change));
+}
+
 void DuckLakeTransaction::SetConfigOption(const DuckLakeConfigOption &option) {
 	// a metadata catalog that commits each statement gets the option when the transaction commits
-	if (!metadata_manager->CommitsEachStatement()) {
-		metadata_manager->SetConfigOption(option);
+	if (metadata_manager->CommitsEachStatement()) {
+		DeferConfigOption(option, false);
+		return;
 	}
+	metadata_manager->SetConfigOption(option);
 	// the catalog copy is not transactional - remember the previous value so a rollback can restore it
 	config_option_undo.push_back(ducklake_catalog.SetConfigOption(option));
 }
 
 void DuckLakeTransaction::ResetConfigOption(const DuckLakeConfigOption &option) {
-	if (metadata_manager->CommitsEachStatement() || metadata_manager->ResetConfigOption(option)) {
+	if (metadata_manager->CommitsEachStatement()) {
+		DeferConfigOption(option, true);
+	} else if (metadata_manager->ResetConfigOption(option)) {
 		config_option_undo.push_back(ducklake_catalog.ResetConfigOption(option));
 	}
 }

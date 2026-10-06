@@ -20,6 +20,7 @@
 #include "duckdb/main/client_context_state.hpp"
 #include "duckdb/storage/object_cache.hpp"
 #include "storage/ducklake_catalog_set.hpp"
+#include "storage/ducklake_metadata_info.hpp"
 #include "storage/ducklake_partition_data.hpp"
 #include "storage/ducklake_stats.hpp"
 
@@ -33,8 +34,7 @@ class DuckLakeCatalog;
 class ColumnList;
 class DuckLakeFieldData;
 struct DuckLakeFileListEntry;
-struct DuckLakeConfigOption;
-struct DuckLakeConfigOptionUndo;
+class DuckLakeTransaction;
 struct DuckLakeSnapshotCommit;
 struct DeleteFileMap;
 struct BoundCreateTableInfo;
@@ -192,6 +192,10 @@ public:
 	DuckLakeConfigOptionUndo SetConfigOption(const DuckLakeConfigOption &option);
 	DuckLakeConfigOptionUndo ResetConfigOption(const DuckLakeConfigOption &option);
 	void UndoConfigOption(const DuckLakeConfigOptionUndo &undo);
+	//! Shows an option change that is written at commit until the transaction that made it ends
+	void AddDeferredConfigOption(const DuckLakeTransaction &transaction, const DuckLakeConfigOptionUndo &change);
+	//! Drops the deferred option changes of a transaction, caching them in order if it committed
+	void EndDeferredConfigOptions(const DuckLakeTransaction &transaction, bool committed);
 	//! Pending table options take precedence
 	bool TryGetConfigOption(const string &option, string &result, SchemaIndex schema_id, TableIndex table_id,
 	                        optional_ptr<const map<string, string>> table_options = nullptr) const;
@@ -390,6 +394,9 @@ private:
 	void RegisterCatalog();
 	//! Returns whether no other DuckLake uses the metadata catalog
 	bool UnregisterCatalog();
+	//! Looks up an option in exactly one scope, the newest deferred change first, with config_lock held
+	bool TryGetConfigOptionInScope(SchemaIndex schema_id, TableIndex table_id, const string &option,
+	                               string &result) const;
 
 private:
 	mutex name_maps_lock;
@@ -401,6 +408,12 @@ private:
 	mutable mutex config_lock;
 	//! The DuckLake options
 	DuckLakeOptions options;
+	struct DeferredConfigOption {
+		reference<const DuckLakeTransaction> transaction;
+		DuckLakeConfigOptionUndo change;
+	};
+	//! Option changes that open transactions write at commit, oldest first
+	vector<DeferredConfigOption> deferred_config_options;
 	//! The path separator
 	string separator = "/";
 	//! A unique tracker for catalog changes in uncommitted transactions.

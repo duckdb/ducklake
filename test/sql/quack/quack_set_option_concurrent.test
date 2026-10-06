@@ -42,3 +42,33 @@ query I
 SELECT DISTINCT compression FROM parquet_metadata('{DATA_PATH}/quack_set_option_concurrent/main/t/**')
 ----
 ZSTD
+
+# a commit leaves the change of a transaction that is still open in place
+statement ok
+CREATE TABLE ducklake.open_change(i INTEGER)
+
+statement ok con1
+BEGIN
+
+statement ok con1
+ALTER TABLE ducklake.open_change SET (parquet_compression = 'zstd')
+
+statement ok con2
+BEGIN
+
+statement ok con2
+ALTER TABLE ducklake.open_change SET (parquet_compression = 'gzip')
+
+statement ok con1
+COMMIT
+
+statement ok con2
+INSERT INTO ducklake.open_change VALUES (1)
+
+statement ok con2
+COMMIT
+
+query I
+SELECT DISTINCT compression FROM parquet_metadata('{DATA_PATH}/quack_set_option_concurrent/main/open_change/**')
+----
+GZIP
