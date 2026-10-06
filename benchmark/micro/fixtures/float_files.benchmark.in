@@ -1,0 +1,30 @@
+# name: benchmark/micro/fixtures/float_files.benchmark.in
+# description: A lake with a FLOAT column in ~1024 small files and its pristine metadata, restored before every run
+# group: [fixtures]
+
+cache_file float_files_ready.marker
+
+load
+@create float_files_pristine
+@attach float_files_pristine AS lake (DATA_PATH '${BENCHMARK_DIR}/float_files_files')
+CREATE TABLE lake.events (id BIGINT, v FLOAT);
+CALL lake.set_option('parquet_row_group_size', 2048, table_name => 'events');
+SET ducklake_target_file_size = '4KB';
+INSERT INTO lake.events SELECT i, (i * 0.1)::FLOAT FROM range(1024 * 2048) t(i);
+RESET ducklake_target_file_size;
+SELECT CASE WHEN (SELECT count(*) FROM ducklake_list_files('lake', 'events')) < 1000
+THEN error('events must consist of ~1024 small files') END;
+CALL ducklake_delete_orphaned_files('lake', cleanup_all => true);
+DETACH lake;
+COPY (SELECT count(*) FROM glob('${BENCHMARK_DIR}/float_files_files/**'))
+TO '${BENCHMARK_DIR}/float_files_filecount.csv' (FORMAT CSV, HEADER false);
+@seal float_files_pristine
+COPY (SELECT 1) TO '${BENCHMARK_DIR}/float_files_ready.marker' (FORMAT CSV);
+DETACH DATABASE IF EXISTS lake;
+@copy float_files_pristine TO ${work}
+@attach ${work} AS lake
+
+reload
+DETACH DATABASE IF EXISTS lake;
+@copy float_files_pristine TO ${work}
+@attach ${work} AS lake
