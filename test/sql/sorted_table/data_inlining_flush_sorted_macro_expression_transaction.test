@@ -85,7 +85,6 @@ FROM macro_sort_test
 ABC	XYZ	AXBYCZ
 ZYX	CBA	ZCYBXA
 
-# We can even clear the sorting before committing
 statement ok
 ALTER TABLE ducklake.macro_sort_test RESET SORTED BY
 

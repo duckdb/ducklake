@@ -149,7 +149,7 @@ static void AddFlushedFileDeletes(ClientContext &context, const DuckLakeDataFile
 	scanner.SetColumnIds({row_id_column.GetIndex(), snapshot_column.GetIndex()});
 	DataChunk chunk;
 	chunk.Initialize(context, {LogicalType::BIGINT, LogicalType::BIGINT});
-	int64_t position = 0;
+	idx_t position = 0;
 	while (scanner.Scan(chunk)) {
 		UnifiedVectorFormat row_id_data;
 		UnifiedVectorFormat snapshot_data;
@@ -161,7 +161,7 @@ static void AddFlushedFileDeletes(ClientContext &context, const DuckLakeDataFile
 			auto entry = deleted_rows.find(
 			    make_pair(row_ids[row_id_data.sel->get_index(i)], snapshot_ids[snapshot_data.sel->get_index(i)]));
 			if (entry != deleted_rows.end()) {
-				deletes.insert(PositionWithSnapshot {position, entry->second});
+				deletes.insert(PositionWithSnapshot {NumericCast<int64_t>(position), entry->second});
 			}
 		}
 	}
@@ -382,7 +382,7 @@ unique_ptr<LogicalOperator> DuckLakeDataFlusher::GenerateFlushCommand() {
 
 	auto sort_data = latest_table.GetSortData();
 	if (sort_data) {
-		root = DuckLakeCompactor::InsertSort(binder, root, latest_table, sort_data, /*add_tiebreakers=*/true);
+		root = DuckLakeCompactor::InsertSort(binder, root, latest_table, sort_data);
 	}
 
 	// generate the LogicalCopyToFile
