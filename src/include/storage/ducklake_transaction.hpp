@@ -296,6 +296,9 @@ public:
 	void ApplyDeferredConfigOptions(DuckLakeMetadata &metadata) const;
 	bool HasDeferredConfigOptions() const;
 	string DeferredConfigOptionsSql() const;
+	//! The newest change of a table option that waits for the commit
+	optional_ptr<const DuckLakeConfigOptionUndo> FindDeferredTableOption(TableIndex table_id,
+	                                                                     const string &option) const;
 
 	void SetCommitMessage(const DuckLakeSnapshotCommit &option);
 

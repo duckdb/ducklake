@@ -30,6 +30,11 @@ struct DuckLakeCommitContext {
 	std::function<string()> write_config_options = []() {
 		return string();
 	};
+	//! Finds the newest change of a table option that is written with the commit
+	std::function<optional_ptr<const DuckLakeConfigOptionUndo>(TableIndex, const string &)> find_written_table_option =
+	    [](TableIndex, const string &) {
+		    return optional_ptr<const DuckLakeConfigOptionUndo>();
+	    };
 	//! Whether the inlined file deletion table of a table exists, it is created lazily
 	std::function<bool(TableIndex)> inlined_file_deletion_table_exists;
 	//! Returns the latest snapshot for the first commit attempt.

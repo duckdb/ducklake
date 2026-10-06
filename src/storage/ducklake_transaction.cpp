@@ -1472,6 +1472,9 @@ void DuckLakeTransaction::RunCommitLoop(DuckLakeSnapshot transaction_snapshot,
 	context.write_config_options = [&]() {
 		return DeferredConfigOptionsSql();
 	};
+	context.find_written_table_option = [&](TableIndex table_id, const string &option) {
+		return FindDeferredTableOption(table_id, option);
+	};
 	context.inlined_file_deletion_table_exists = [&](TableIndex table_id) {
 		return metadata_manager->InlinedDeletionTableExists(
 		    DuckLakeMetadataManager::InlinedFileDeletionTableName(table_id));
@@ -1688,6 +1691,19 @@ string DuckLakeTransaction::DeferredConfigOptionsSql() const {
 		return string();
 	}
 	return DuckLakeMetadataManager::WriteConfigOptionChangesSql(config_option_undo);
+}
+
+optional_ptr<const DuckLakeConfigOptionUndo> DuckLakeTransaction::FindDeferredTableOption(TableIndex table_id,
+                                                                                          const string &option) const {
+	if (!HasDeferredConfigOptions()) {
+		return nullptr;
+	}
+	for (auto it = config_option_undo.rbegin(); it != config_option_undo.rend(); ++it) {
+		if (it->option.IsOption(SchemaIndex(), table_id, option)) {
+			return *it;
+		}
+	}
+	return nullptr;
 }
 
 DuckLakeSnapshotCommit &DuckLakeTransaction::GetCommitInfo() {

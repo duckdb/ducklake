@@ -906,11 +906,28 @@ bool DuckLakeTransactionState::TryMergeInlinedStats(const vector<DuckLakeColumnS
 	return true;
 }
 
+static void AddSkippedStatsFields(const string &option_value, set<FieldIndex> &result) {
+	for (auto &entry : StringUtil::Split(option_value, ',')) {
+		idx_t field_index;
+		if (TryCast::Operation<string_t, idx_t>(string_t(entry), field_index)) {
+			result.insert(FieldIndex(field_index));
+		}
+	}
+}
+
 //! The field ids of `table_id`'s skip_stats_columns option, read from the metadata rather than the catalog so
 //! the server-side commit resolves it too. Only roots matter here: step 3 of the recompute merges inlined stats,
 //! which TryMergeInlinedStats only produces for scalar roots.
 static set<FieldIndex> ReadSkippedStatsFields(TableIndex table_id, const DuckLakeCommitContext &context) {
 	set<FieldIndex> result;
+	// the metadata does not have a change that is written with this commit yet
+	auto written = context.find_written_table_option(table_id, "skip_stats_columns");
+	if (written) {
+		if (!written->reset) {
+			AddSkippedStatsFields(written->option.option.value, result);
+		}
+		return result;
+	}
 	auto query = StringUtil::Format("SELECT value FROM {METADATA_CATALOG}.ducklake_metadata "
 	                                "WHERE key='skip_stats_columns' AND scope='table' AND scope_id=%d;",
 	                                table_id.index);
@@ -919,14 +936,8 @@ static set<FieldIndex> ReadSkippedStatsFields(TableIndex table_id, const DuckLak
 		stats_option->GetErrorObject().Throw("Failed to read the skip_stats_columns option from DuckLake: ");
 	}
 	for (auto &row : *stats_option) {
-		if (row.IsNull(0)) {
-			continue;
-		}
-		for (auto &entry : StringUtil::Split(row.GetValue<string>(0), ',')) {
-			idx_t field_index;
-			if (TryCast::Operation<string_t, idx_t>(string_t(entry), field_index)) {
-				result.insert(FieldIndex(field_index));
-			}
+		if (!row.IsNull(0)) {
+			AddSkippedStatsFields(row.GetValue<string>(0), result);
 		}
 	}
 	return result;
