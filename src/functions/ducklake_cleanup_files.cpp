@@ -96,9 +96,14 @@ static unique_ptr<FunctionData> CleanupBind(ClientContext &context, TableFunctio
 		result->timestamp_filter = DuckLakeTableFunctionUtil::FormatTimestampISO8601(target_timestamp);
 	}
 
-	auto &transaction = DuckLakeTransaction::Get(context, catalog);
-	auto &metadata_manager = transaction.GetMetadataManager();
-	result->files = metadata_manager.GetFilesForCleanup(result->GetFilter(), type, ducklake_catalog.Separator());
+	// orphans belong to no table, so only the global auto_compact option can turn their cleanup off
+	bool skip_cleanup = type == CleanupType::ORPHANED_FILES &&
+	                    ducklake_catalog.GetConfigOption<string>("auto_compact", {}, {}, "true") != "true";
+	if (!skip_cleanup) {
+		auto &transaction = DuckLakeTransaction::Get(context, catalog);
+		auto &metadata_manager = transaction.GetMetadataManager();
+		result->files = metadata_manager.GetFilesForCleanup(result->GetFilter(), type, ducklake_catalog.Separator());
+	}
 
 	return_types.emplace_back(LogicalType::VARCHAR);
 	names.emplace_back("path");

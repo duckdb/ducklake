@@ -10,20 +10,13 @@ require ducklake
 
 argument work commit_inl_work
 
+argument warm_table lake.main.ins_0
+
 include benchmark/micro/fixtures/commit.benchmark.in
 
 run benchmark/micro/queries/insert_commits_inlined.sql
 
-# The restore_cleanup block plus a query that loads the catalog, so the first timed INSERT does not pay a cold load
-cleanup
-DETACH DATABASE IF EXISTS lake;
-@copy ${lake}_pristine TO ${work}
-@attach ${work} AS lake
-CALL ducklake_delete_orphaned_files('lake', cleanup_all => true);
-SELECT CASE WHEN (SELECT count(*) FROM glob('${BENCHMARK_DIR}/${lake}_files/**'))
-<> (SELECT column0 FROM read_csv('${BENCHMARK_DIR}/${lake}_filecount.csv', header = false))
-THEN error('the fixture files were not restored') END;
-SELECT count(*) FROM lake.main.ins_0;
+include benchmark/micro/fixtures/restore_cleanup_warm.benchmark.in
 
 # A missed reset doubles the rows of ins_9, and a data file means the INSERTs were not inlined
 result_query II

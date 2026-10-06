@@ -68,8 +68,12 @@ bool DuckLakeInlinedDataReader::TryInitializeScan(ClientContext &context, Global
 					continue;
 				}
 			}
-			columns_to_read.push_back(metadata_manager.CastColumnToTarget(
-			    SQLIdentifier::ToString(columns[index].name.GetIdentifierName()), col.type));
+			auto column_name = SQLIdentifier::ToString(columns[index].name.GetIdentifierName());
+			if (read_info.scan_type != DuckLakeScanType::SCAN_FOR_FLUSH) {
+				// the flush source already casts its columns
+				column_name = metadata_manager.CastColumnToTarget(column_name, col.type);
+			}
+			columns_to_read.push_back(column_name);
 			expected_types.push_back(col.type);
 		}
 		if (deletion_filter) {
@@ -110,7 +114,8 @@ bool DuckLakeInlinedDataReader::TryInitializeScan(ClientContext &context, Global
 			                                                         table_name, columns_to_read);
 			break;
 		case DuckLakeScanType::SCAN_FOR_FLUSH:
-			query_result = metadata_manager.ReadAllInlinedDataForFlush(read_info.snapshot, table_name, columns_to_read);
+			query_result = metadata_manager.ReadAllInlinedDataForFlush(read_info.snapshot, table_name, read_info.table,
+			                                                           read_info.flush_sort_order_sql, columns_to_read);
 			break;
 		default:
 			throw InternalException("Unknown DuckLake scan type");

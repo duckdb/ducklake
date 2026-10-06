@@ -1,0 +1,20 @@
+# name: benchmark/micro/read/scan_shared_deletes.benchmark
+# description: Run 20 full scans of a table whose files have both a delete file and inlined deletes
+# group: [read]
+
+name Scan Shared Deletes
+group micro
+subgroup read
+
+require ducklake
+
+require parquet
+
+include benchmark/micro/fixtures/shared_deletes.benchmark.in
+
+run benchmark/micro/queries/scan_shared_deletes.sql
+
+result_query I
+SELECT * FROM __answer
+----
+68369758080.0

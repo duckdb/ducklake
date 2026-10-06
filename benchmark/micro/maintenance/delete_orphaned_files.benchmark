@@ -1,0 +1,28 @@
+# name: benchmark/micro/maintenance/delete_orphaned_files.benchmark
+# description: Dry run of ducklake_delete_orphaned_files that lists the files of a lake and finds 100 orphans
+# group: [maintenance]
+
+name Delete Orphaned Files
+group micro
+subgroup maintenance
+
+require ducklake
+
+require parquet
+
+argument work orphan_work
+
+include benchmark/micro/fixtures/snap1000.benchmark.in
+
+run
+SELECT count(*) AS orphans FROM ducklake_delete_orphaned_files('lake', cleanup_all => true, dry_run => true);
+
+# The fixture sweeps orphans when it is restored, so they are written after the untimed first run
+cleanup
+COPY (SELECT i, 1 AS v FROM range(100) t(i)) TO '${BENCHMARK_DIR}/${lake}_files/orphans'
+(FORMAT PARQUET, PARTITION_BY (i), OVERWRITE);
+
+result_query I
+SELECT orphans FROM __answer
+----
+100

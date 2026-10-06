@@ -68,6 +68,8 @@ public:
 	optional_ptr<const DuckLakeFieldId> GetChildByName(const string &name) const;
 	unique_ptr<DuckLakeFieldId> Copy() const;
 	unique_ptr<ParsedExpression> GetDefault() const;
+	//! The value of this field in rows written before it existed
+	unique_ptr<ParsedExpression> GetInitialDefault() const;
 
 	static unique_ptr<DuckLakeFieldId> FieldIdFromColumn(const ColumnDefinition &col, idx_t &column_id,
 	                                                     bool add_column = false);

@@ -1,0 +1,129 @@
+# name: test/sql/issues/issue_1383_drop_not_null_inlined.test
+# description: Inlined rows written after ALTER COLUMN DROP NOT NULL can be flushed (#1383)
+# group: [issues]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/issue_1383', DATA_INLINING_ROW_LIMIT 100, METADATA_CATALOG 'meta')
+
+statement ok
+CREATE TABLE ducklake.t (a VARCHAR NOT NULL, v DOUBLE)
+
+statement ok
+INSERT INTO ducklake.t VALUES ('x', 1)
+
+statement ok
+ALTER TABLE ducklake.t ALTER COLUMN a DROP NOT NULL
+
+statement ok
+INSERT INTO ducklake.t (v) VALUES (2)
+
+# the rows that may be NULL go into an inlined table of the new schema version
+query I
+SELECT count(*) FROM meta.ducklake_inlined_data_tables
+----
+2
+
+query I
+SELECT rows_flushed FROM ducklake_flush_inlined_data('ducklake', table_name => 't')
+----
+2
+
+query II
+SELECT count(*), count(a) FROM ducklake.t
+----
+2	1
+
+query II
+SELECT a, v FROM ducklake.t ORDER BY v
+----
+x	1.0
+NULL	2.0
+
+# a checkpoint flushes the same rows
+statement ok
+CREATE TABLE ducklake.c (a VARCHAR NOT NULL, v DOUBLE)
+
+statement ok
+INSERT INTO ducklake.c VALUES ('x', 1)
+
+statement ok
+ALTER TABLE ducklake.c ALTER COLUMN a DROP NOT NULL
+
+statement ok
+INSERT INTO ducklake.c (v) VALUES (2)
+
+statement ok
+CHECKPOINT ducklake
+
+query II
+SELECT count(*), count(a) FROM ducklake.c
+----
+2	1
+
+# setting the constraint again keeps the rows readable
+statement ok
+CREATE TABLE ducklake.s (a VARCHAR, v DOUBLE)
+
+statement ok
+INSERT INTO ducklake.s VALUES ('x', 1)
+
+statement ok
+ALTER TABLE ducklake.s ALTER COLUMN a SET NOT NULL
+
+statement ok
+INSERT INTO ducklake.s VALUES ('y', 2)
+
+query I
+SELECT rows_flushed FROM ducklake_flush_inlined_data('ducklake', table_name => 's')
+----
+2
+
+query II
+SELECT count(*), count(a) FROM ducklake.s
+----
+2	2
+
+# a later change to the same column in the same transaction does not cancel the new inlined table
+statement ok
+CREATE TABLE ducklake.d (a VARCHAR NOT NULL, v DOUBLE)
+
+statement ok
+INSERT INTO ducklake.d VALUES ('x', 1)
+
+statement ok
+BEGIN
+
+statement ok
+ALTER TABLE ducklake.d ALTER COLUMN a DROP NOT NULL
+
+statement ok
+ALTER TABLE ducklake.d ALTER COLUMN a SET DEFAULT 'd'
+
+statement ok
+INSERT INTO ducklake.d VALUES (NULL, 2)
+
+statement ok
+COMMIT
+
+statement ok
+INSERT INTO ducklake.d (v) VALUES (3)
+
+query I
+SELECT rows_flushed FROM ducklake_flush_inlined_data('ducklake', table_name => 'd')
+----
+3
+
+query TR
+SELECT a, v FROM ducklake.d ORDER BY v
+----
+x	1.0
+NULL	2.0
+d	3.0

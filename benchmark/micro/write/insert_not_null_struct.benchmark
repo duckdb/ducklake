@@ -1,0 +1,32 @@
+# name: benchmark/micro/write/insert_not_null_struct.benchmark
+# description: INSERT of TPC-H lineitem SF0.5 (3M rows) into a table with a NOT NULL STRUCT column, including the commit
+# group: [write]
+
+name Insert Not Null Struct
+group micro
+subgroup write
+
+require ducklake
+
+require parquet
+
+require tpch
+
+argument lake ctas
+
+argument work not_null_work
+
+include benchmark/micro/fixtures/tpch05.benchmark.in
+
+include benchmark/micro/fixtures/restore_cleanup.benchmark.in
+
+run
+CREATE TABLE lake.items (k BIGINT, s STRUCT(part BIGINT, price DECIMAL(15, 2)) NOT NULL);
+INSERT INTO lake.items SELECT l_orderkey, {'part': l_partkey, 'price': l_extendedprice} FROM src.lineitem;
+
+# A missed reset makes the CREATE TABLE fail because lake.items already exists
+result_query II
+SELECT Count = (SELECT count(*) FROM src.lineitem), (SELECT count(*) FROM lake.items WHERE s IS NULL) = 0
+FROM __answer
+----
+true	true

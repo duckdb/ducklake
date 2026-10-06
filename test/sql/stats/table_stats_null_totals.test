@@ -1,0 +1,154 @@
+# name: test/sql/stats/table_stats_null_totals.test
+# description: A table stats row without totals keeps its row ids and is updated in place
+# group: [stats]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/table_stats_null_totals.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake
+(DATA_PATH '{DATA_PATH}/table_stats_null_totals', METADATA_CATALOG 'ducklake_meta', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE ducklake.t(i INTEGER)
+
+statement ok
+INSERT INTO ducklake.t VALUES (10), (11)
+
+statement ok
+INSERT INTO ducklake.t VALUES (20), (21)
+
+statement ok
+UPDATE ducklake_meta.ducklake_table_stats SET record_count = NULL
+
+statement ok
+DETACH ducklake
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake
+(DATA_PATH '{DATA_PATH}/table_stats_null_totals', METADATA_CATALOG 'ducklake_meta', DATA_INLINING_ROW_LIMIT 0)
+
+# an unknown record count gives no estimate
+query I
+SELECT estimated_size FROM duckdb_tables() WHERE database_name = 'ducklake' AND table_name = 't'
+----
+0
+
+statement ok
+INSERT INTO ducklake.t VALUES (30)
+
+query II
+SELECT count(DISTINCT rowid), count(*) FROM ducklake.t
+----
+5	5
+
+query II
+SELECT rowid, i FROM ducklake.t WHERE i = 30
+----
+4	30
+
+query III
+SELECT count(*), max(record_count), max(next_row_id) FROM ducklake_meta.ducklake_table_stats
+----
+1	NULL	5
+
+query III
+SELECT count(*), min(min_value), max(max_value) FROM ducklake_meta.ducklake_table_column_stats
+----
+1	10	30
+
+# a missing file size is taken from the live data files
+statement ok
+UPDATE ducklake_meta.ducklake_table_stats SET file_size_bytes = NULL
+
+statement ok
+DETACH ducklake
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake
+(DATA_PATH '{DATA_PATH}/table_stats_null_totals', METADATA_CATALOG 'ducklake_meta', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+INSERT INTO ducklake.t VALUES (40)
+
+query IIII
+SELECT count(*), max(record_count), max(next_row_id),
+	max(file_size_bytes) = (SELECT sum(file_size_bytes) FROM ducklake_meta.ducklake_data_file WHERE end_snapshot IS NULL)
+FROM ducklake_meta.ducklake_table_stats
+----
+1	NULL	6	true
+
+# dropping a whole data file without totals
+statement ok
+UPDATE ducklake_meta.ducklake_table_stats SET file_size_bytes = NULL
+
+statement ok
+DETACH ducklake
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake
+(DATA_PATH '{DATA_PATH}/table_stats_null_totals', METADATA_CATALOG 'ducklake_meta', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+DELETE FROM ducklake.t WHERE i = 40
+
+query I
+SELECT list(i ORDER BY i) FROM ducklake.t
+----
+[10, 11, 20, 21, 30]
+
+query IIII
+SELECT count(*), max(record_count), max(next_row_id),
+	max(file_size_bytes) = (SELECT sum(file_size_bytes) FROM ducklake_meta.ducklake_data_file WHERE end_snapshot IS NULL)
+FROM ducklake_meta.ducklake_table_stats
+----
+1	NULL	6	true
+
+# an unknown count never makes the bounds exact, even after an update kept the row ids
+statement ok
+CREATE TABLE ducklake.v(i INTEGER)
+
+statement ok
+CALL ducklake.set_option('data_inlining_row_limit', 10, table_name => 'v')
+
+statement ok
+INSERT INTO ducklake.v VALUES (10), (11)
+
+statement ok
+UPDATE ducklake.v SET i = 20 WHERE i = 10
+
+statement ok
+UPDATE ducklake_meta.ducklake_table_stats SET record_count = NULL
+
+statement ok
+DETACH ducklake
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake
+(DATA_PATH '{DATA_PATH}/table_stats_null_totals', METADATA_CATALOG 'ducklake_meta', DATA_INLINING_ROW_LIMIT 0)
+
+query II
+SELECT min(i), max(i) FROM ducklake.v
+----
+11	20
+
+statement ok
+INSERT INTO ducklake.v VALUES (15)
+
+query II
+SELECT min(i), max(i) FROM ducklake.v
+----
+11	20
+
+statement ok
+DELETE FROM ducklake.v
+
+query II
+SELECT min(i), max(i) FROM ducklake.v
+----
+NULL	NULL

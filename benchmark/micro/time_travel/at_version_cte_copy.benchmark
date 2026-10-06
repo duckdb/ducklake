@@ -1,0 +1,18 @@
+# name: benchmark/micro/time_travel/at_version_cte_copy.benchmark
+# description: Run 20 AT (VERSION) scans in a NOT MATERIALIZED CTE referenced twice, so the scan plan is copied
+# group: [time_travel]
+
+name At Version CTE Copy
+group micro
+subgroup time_travel
+
+require ducklake
+
+include benchmark/micro/fixtures/history300.benchmark.in
+
+run benchmark/micro/queries/at_version_cte_copy.sql
+
+result_query II
+SELECT * FROM __answer
+----
+1904	118068021.0

@@ -1,0 +1,22 @@
+# name: benchmark/micro/read/tz_pruning_many_files.benchmark
+# description: Run 21 selective TIMESTAMPTZ range queries and 5 top n queries that prune ~1024 files through the stats
+# group: [read]
+
+name TIMESTAMPTZ Pruning Many Files
+group micro
+subgroup read
+
+require ducklake
+
+require parquet
+
+require icu
+
+include benchmark/micro/fixtures/tz_files.benchmark.in
+
+run benchmark/micro/queries/tz_pruning.sql
+
+result_query I
+SELECT * FROM __answer
+----
+10

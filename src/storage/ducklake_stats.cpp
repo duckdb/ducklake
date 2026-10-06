@@ -30,21 +30,17 @@ DuckLakeColumnStats::DuckLakeColumnStats(LogicalType type_p) : type(std::move(ty
 
 DuckLakeColumnStats::DuckLakeColumnStats(const DuckLakeColumnStats &other) {
 	type = other.type;
-	min = other.min;
-	max = other.max;
+	CopyMinFrom(other);
+	CopyMaxFrom(other);
 	null_count = other.null_count;
 	num_values = other.num_values;
 	column_size_bytes = other.column_size_bytes;
 	contains_nan = other.contains_nan;
 	has_null_count = other.has_null_count;
 	has_num_values = other.has_num_values;
-	has_min = other.has_min;
-	has_max = other.has_max;
 	any_valid = other.any_valid;
 	bounds_unknown = other.bounds_unknown;
 	has_contains_nan = other.has_contains_nan;
-	min_is_exact = other.min_is_exact;
-	max_is_exact = other.max_is_exact;
 
 	if (other.extra_stats) {
 		extra_stats = other.extra_stats->Copy();
@@ -56,21 +52,17 @@ DuckLakeColumnStats &DuckLakeColumnStats::operator=(const DuckLakeColumnStats &o
 		return *this;
 	}
 	type = other.type;
-	min = other.min;
-	max = other.max;
+	CopyMinFrom(other);
+	CopyMaxFrom(other);
 	null_count = other.null_count;
 	num_values = other.num_values;
 	column_size_bytes = other.column_size_bytes;
 	contains_nan = other.contains_nan;
 	has_null_count = other.has_null_count;
-	has_min = other.has_min;
-	has_max = other.has_max;
 	has_num_values = other.has_num_values;
 	any_valid = other.any_valid;
 	bounds_unknown = other.bounds_unknown;
 	has_contains_nan = other.has_contains_nan;
-	min_is_exact = other.min_is_exact;
-	max_is_exact = other.max_is_exact;
 
 	if (other.extra_stats) {
 		extra_stats = other.extra_stats->Copy();
@@ -129,6 +121,18 @@ DuckLakeColumnStats DuckLakeColumnStats::FromConstant(const LogicalType &type, c
 	return stats;
 }
 
+void DuckLakeColumnStats::CopyMinFrom(const DuckLakeColumnStats &other) {
+	min = other.min;
+	has_min = other.has_min;
+	min_is_exact = other.min_is_exact;
+}
+
+void DuckLakeColumnStats::CopyMaxFrom(const DuckLakeColumnStats &other) {
+	max = other.max;
+	has_max = other.has_max;
+	max_is_exact = other.max_is_exact;
+}
+
 void DuckLakeMissingField::Collect(const DuckLakeFieldId &field_id, bool reads_null, bool repeated,
                                    vector<DuckLakeMissingField> &result) {
 	if (!field_id.HasChildren()) {
@@ -180,6 +184,8 @@ bool DuckLakeColumnStats::BoundsSurviveTypePromotion(const LogicalType &source, 
 }
 
 void DuckLakeColumnStats::MergeStats(const DuckLakeColumnStats &new_stats) {
+	// the null state has to be read before the counts of the source are added to it
+	bool adopt_bounds = !bounds_unknown && has_num_values && has_null_count && num_values == null_count;
 	bool types_differ = type != new_stats.type;
 	bool bounds_survive = !types_differ || BoundsSurviveTypePromotion(type, new_stats.type);
 	if (types_differ) {
@@ -222,12 +228,8 @@ void DuckLakeColumnStats::MergeStats(const DuckLakeColumnStats &new_stats) {
 			return;
 		}
 		// all values in the current stats are null - copy the min/max
-		min = new_stats.min;
-		has_min = new_stats.has_min;
-		min_is_exact = new_stats.min_is_exact;
-		max = new_stats.max;
-		has_max = new_stats.has_max;
-		max_is_exact = new_stats.max_is_exact;
+		CopyMinFrom(new_stats);
+		CopyMaxFrom(new_stats);
 		any_valid = true;
 	} else if (!bounds_survive) {
 		// bounds do not survive this retype
@@ -237,22 +239,24 @@ void DuckLakeColumnStats::MergeStats(const DuckLakeColumnStats &new_stats) {
 	} else {
 		if (!new_stats.has_min) {
 			has_min = false;
-		} else if (has_min) {
+		} else if (!has_min) {
+			if (adopt_bounds) {
+				CopyMinFrom(new_stats);
+			}
+		} else {
 			// both stats have a min - select the smallest, on a tie the min is exact only if both are exact
 			if (RequiresValueComparison(type)) {
 				// for numerics/temporals we need to parse the stats
 				auto current_min = Value(min).DefaultCastAs(type);
 				auto new_min = Value(new_stats.min).DefaultCastAs(type);
 				if (new_min < current_min) {
-					min = new_stats.min;
-					min_is_exact = new_stats.min_is_exact;
+					CopyMinFrom(new_stats);
 				} else if (new_min == current_min) {
 					min_is_exact = min_is_exact && new_stats.min_is_exact;
 				}
 			} else if (new_stats.min < min) {
 				// for other types we can compare the strings directly
-				min = new_stats.min;
-				min_is_exact = new_stats.min_is_exact;
+				CopyMinFrom(new_stats);
 			} else if (new_stats.min == min) {
 				min_is_exact = min_is_exact && new_stats.min_is_exact;
 			}
@@ -260,22 +264,24 @@ void DuckLakeColumnStats::MergeStats(const DuckLakeColumnStats &new_stats) {
 
 		if (!new_stats.has_max) {
 			has_max = false;
-		} else if (has_max) {
+		} else if (!has_max) {
+			if (adopt_bounds) {
+				CopyMaxFrom(new_stats);
+			}
+		} else {
 			// both stats have a max - select the largest, on a tie the max is exact only if both are exact
 			if (RequiresValueComparison(type)) {
 				// for numerics/temporals we need to parse the stats
 				auto current_max = Value(max).DefaultCastAs(type);
 				auto new_max = Value(new_stats.max).DefaultCastAs(type);
 				if (new_max > current_max) {
-					max = new_stats.max;
-					max_is_exact = new_stats.max_is_exact;
+					CopyMaxFrom(new_stats);
 				} else if (new_max == current_max) {
 					max_is_exact = max_is_exact && new_stats.max_is_exact;
 				}
 			} else if (new_stats.max > max) {
 				// for other types we can compare the strings directly
-				max = new_stats.max;
-				max_is_exact = new_stats.max_is_exact;
+				CopyMaxFrom(new_stats);
 			} else if (new_stats.max == max) {
 				max_is_exact = max_is_exact && new_stats.max_is_exact;
 			}

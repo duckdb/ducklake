@@ -54,7 +54,9 @@ vector<OrderByNode> DuckLakeCompactor::ParseSortOrders(const DuckLakeSort &sort_
 //! Binds ORDER BY expressions directly using ExpressionBinder.
 vector<BoundOrderByNode> DuckLakeCompactor::BindSortOrders(Binder &binder, const ColumnList &columns,
                                                            const Identifier &table_name, TableIndex table_index,
-                                                           vector<OrderByNode> &pre_bound_orders) {
+                                                           const vector<OrderByNode> &pre_bound_orders) {
+	DuckLakeTableEntry::ValidateSortExpressionColumns(columns, pre_bound_orders);
+
 	auto column_names = columns.GetColumnNames();
 	auto column_types = columns.GetColumnTypes();
 
@@ -67,7 +69,8 @@ vector<BoundOrderByNode> DuckLakeCompactor::BindSortOrders(Binder &binder, const
 	vector<BoundOrderByNode> orders;
 	for (auto &pre_bound_order : pre_bound_orders) {
 		ExpressionBinder expr_binder(*child_binder, binder.context);
-		auto bound_expr = expr_binder.Bind(pre_bound_order.expression);
+		auto expression = pre_bound_order.expression->Copy();
+		auto bound_expr = expr_binder.Bind(expression);
 		orders.emplace_back(pre_bound_order.type, pre_bound_order.null_order, std::move(bound_expr));
 	}
 
@@ -422,63 +425,18 @@ void DuckLakeCompactor::GenerateCompactions(DuckLakeTableEntry &table,
 
 unique_ptr<LogicalOperator> DuckLakeCompactor::InsertSort(Binder &binder, unique_ptr<LogicalOperator> &plan,
                                                           DuckLakeTableEntry &table,
-                                                          optional_ptr<DuckLakeSort> sort_data, bool add_tiebreakers) {
+                                                          optional_ptr<DuckLakeSort> sort_data) {
 	auto bindings = plan->GetColumnBindings();
-
-	// Parse the sort expressions from the sort_data
-	auto pre_bound_orders = DuckLakeCompactor::ParseSortOrders(*sort_data);
-	if (pre_bound_orders.empty()) {
+	D_ASSERT(!bindings.empty());
+	auto orders =
+	    BindSortOrders(binder, table.GetColumns(), table.name, bindings[0].table_index, ParseSortOrders(*sort_data));
+	if (orders.empty()) {
 		// Then the sorts were not in the DuckDB dialect and we return the original plan
 		return std::move(plan);
 	}
 
-	// Validate all column references in sort expressions exist in the table
-	DuckLakeTableEntry::ValidateSortExpressionColumns(table.GetColumns(), pre_bound_orders);
-
 	// Resolve types for the input plan (could be LogicalGet or LogicalProjection)
 	plan->ResolveOperatorTypes();
-
-	D_ASSERT(!bindings.empty());
-	auto table_index = bindings[0].table_index;
-
-	// Bind the ORDER BY expressions
-	auto orders =
-	    DuckLakeCompactor::BindSortOrders(binder, table.GetColumns(), table.name, table_index, pre_bound_orders);
-
-	// Append (row_id, snapshot_id) as deterministic tiebreakers when requested so the file order
-	// exactly matches the deletes-position query's ORDER BY, including ties in the user sort key.
-	// Handles ALTER TABLE ADD COLUMN in the same transaction as the flush
-	if (add_tiebreakers) {
-		LogicalOperator *get_op = plan.get();
-		while (get_op->type != LogicalOperatorType::LOGICAL_GET) {
-			if (get_op->children.size() != 1) {
-				throw InternalException("DuckLakeCompactor::InsertSort: expected single-child operator chain to "
-				                        "LogicalGet when add_tiebreakers=true");
-			}
-			get_op = get_op->children[0].get();
-		}
-		auto &logical_get = get_op->Cast<LogicalGet>();
-		auto &column_ids = logical_get.GetColumnIds();
-		idx_t row_id_pos = DConstants::INVALID_INDEX;
-		idx_t snapshot_id_pos = DConstants::INVALID_INDEX;
-		for (idx_t i = 0; i < column_ids.size(); i++) {
-			auto primary = column_ids[i].GetPrimaryIndex();
-			if (primary == COLUMN_IDENTIFIER_ROW_ID) {
-				row_id_pos = i;
-			} else if (primary == DuckLakeMultiFileReader::COLUMN_IDENTIFIER_SNAPSHOT_ID) {
-				snapshot_id_pos = i;
-			}
-		}
-		if (row_id_pos == DConstants::INVALID_INDEX || snapshot_id_pos == DConstants::INVALID_INDEX ||
-		    row_id_pos >= bindings.size() || snapshot_id_pos >= bindings.size()) {
-			throw InternalException("DuckLakeCompactor::InsertSort: row_id and snapshot_id virtual columns must be "
-			                        "present in the LogicalGet's column_ids when add_tiebreakers=true");
-		}
-		orders.emplace_back(OrderType::ASCENDING, OrderByNullType::NULLS_LAST,
-		                    make_uniq<BoundColumnRefExpression>(LogicalType::BIGINT, bindings[row_id_pos]));
-		orders.emplace_back(OrderType::ASCENDING, OrderByNullType::NULLS_LAST,
-		                    make_uniq<BoundColumnRefExpression>(LogicalType::BIGINT, bindings[snapshot_id_pos]));
-	}
 
 	// Create the LogicalOrder operator
 	auto order = make_uniq<LogicalOrder>(std::move(orders));
@@ -510,11 +468,12 @@ DuckLakeCompactor::ResolvePartitionSpecTable(DuckLakeTableEntry &table, const Du
 	if (partition_data && partition_data->partition_id == partition_id) {
 		return &table;
 	}
-	if (!source_file.partition_snapshot_id.IsValid() || !source_file.partition_schema_version.IsValid()) {
+	if (!source_file.partition_schema_version.IsValid()) {
 		return nullptr;
 	}
-	DuckLakeSnapshot partition_snapshot(source_file.partition_snapshot_id.GetIndex(),
-	                                    source_file.partition_schema_version.GetIndex(), 0, 0);
+	auto schema_version = source_file.partition_schema_version.GetIndex();
+	DuckLakeSnapshot partition_snapshot(catalog.GetBeginSnapshotForSchemaVersion(table_id, schema_version, transaction),
+	                                    schema_version, 0, 0);
 	auto partition_entry = catalog.GetEntryById(transaction, partition_snapshot, table_id);
 	if (!partition_entry) {
 		throw InternalException("DuckLakeCompactor: failed to find table entry for partition schema");

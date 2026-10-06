@@ -269,7 +269,7 @@ PhysicalOperator &DuckLakeCatalog::PlanUpdate(ClientContext &context, PhysicalPl
 	auto &update_op = DuckLakeUpdate::PlanUpdateOperator(context, planner, op, child_plan, copy_input);
 
 	// follow the insert path for inlining
-	optional_ptr<PhysicalOperator> plan = &update_op;
+	optional_ptr<PhysicalOperator> plan = DuckLakeVerifyNotNull::Plan(planner, table, update_op);
 	optional_ptr<DuckLakeInlineData> inline_data;
 
 	idx_t data_inlining_row_limit = GetInliningLimit(context, table);

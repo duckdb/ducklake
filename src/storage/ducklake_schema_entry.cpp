@@ -20,6 +20,10 @@
 #include "duckdb/catalog/catalog_entry/table_macro_catalog_entry.hpp"
 #include "storage/ducklake_macro_entry.hpp"
 #include "common/ducklake_util.hpp"
+#include "duckdb/optimizer/remote_pushdown_optimizer.hpp"
+#include "duckdb/parser/tableref/pivotref.hpp"
+#include "duckdb/parser/parsed_expression_iterator.hpp"
+#include "duckdb/parser/expression/subquery_expression.hpp"
 
 namespace duckdb {
 
@@ -240,6 +244,41 @@ optional_ptr<CatalogEntry> DuckLakeSchemaEntry::CreateIndex(CatalogTransaction t
 	throw NotImplementedException("DuckLake does not support indexes");
 }
 
+//! The references of a pivot keep their catalog qualifier after binding, every other one is stripped
+static void StripCatalogFromPivots(QueryNode &node, const Identifier &catalog_name);
+
+static void StripCatalogFromPivots(ParsedExpression &expr, const Identifier &catalog_name) {
+	RemotePushdownOptimizer::StripCatalogName(expr, catalog_name);
+	if (expr.GetExpressionClass() == ExpressionClass::SUBQUERY) {
+		StripCatalogFromPivots(*expr.Cast<SubqueryExpression>().SubqueryMutable()->node, catalog_name);
+	}
+	ParsedExpressionIterator::EnumerateChildren(
+	    expr, [&](unique_ptr<ParsedExpression> &child) { StripCatalogFromPivots(*child, catalog_name); });
+}
+
+static void StripCatalogFromPivots(QueryNode &node, const Identifier &catalog_name) {
+	auto strip_expression = [&](unique_ptr<ParsedExpression> &expr) {
+		StripCatalogFromPivots(*expr, catalog_name);
+	};
+	auto strip_ref = [&](TableRef &ref) {
+		RemotePushdownOptimizer::StripCatalogName(ref, catalog_name);
+		if (ref.type != TableReferenceType::PIVOT) {
+			return;
+		}
+		for (auto &pivot : ref.Cast<PivotRef>().pivots) {
+			for (auto &expr : pivot.pivot_expressions) {
+				StripCatalogFromPivots(*expr, catalog_name);
+			}
+			for (auto &entry : pivot.entries) {
+				if (entry.expr) {
+					StripCatalogFromPivots(*entry.expr, catalog_name);
+				}
+			}
+		}
+	};
+	ParsedExpressionIterator::EnumerateQueryNodeChildren(node, strip_expression, strip_ref);
+}
+
 optional_ptr<CatalogEntry> DuckLakeSchemaEntry::CreateView(CatalogTransaction transaction, CreateViewInfo &info) {
 	if (info.security_type == ViewSecurityType::SECURE_VIEW) {
 		throw NotImplementedException("DuckLake does not support secure views");
@@ -254,10 +293,8 @@ optional_ptr<CatalogEntry> DuckLakeSchemaEntry::CreateView(CatalogTransaction tr
 	auto view_id = TableIndex(duck_transaction.GetLocalCatalogId());
 	auto view_uuid = UUID::ToString(UUID::GenerateRandomUUID());
 
-	// replace our catalog name with a generic {DUCKLAKE_CATALOG}.
+	StripCatalogFromPivots(*info.query->node, ParentCatalog().GetName());
 	auto query_sql = info.query->ToString();
-	auto &catalog_name = ParentCatalog().GetName();
-	query_sql = DuckLakeUtil::ReplaceSkippingQuotes(query_sql, catalog_name + ".", "{DUCKLAKE_CATALOG}.");
 
 	auto view_entry = make_uniq<DuckLakeViewEntry>(ParentCatalog(), *this, info, view_id, std::move(view_uuid),
 	                                               query_sql, LocalChangeType::CREATED);
