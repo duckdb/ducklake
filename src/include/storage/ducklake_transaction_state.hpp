@@ -12,6 +12,7 @@
 #include "storage/ducklake_transaction.hpp"
 
 namespace duckdb {
+struct DuckLakeAddedFields;
 
 struct DuckLakeColumnSchemaEntry {
 	FieldIndex field_index;
@@ -173,6 +174,10 @@ public:
 	string UpdateStatsForDroppedFiles(optional_ptr<vector<DuckLakeGlobalStatsInfo>> stats,
 	                                  const DuckLakeCommitContext &context,
 	                                  map<TableIndex, DroppedDataFileStats> &attempt_dropped_file_stats);
+	//! Writes the statistics of the rows that a table already has for the fields that are added to it
+	string WriteAddedFieldStats(const vector<DuckLakeAddedFields> &added_fields,
+	                            optional_ptr<vector<DuckLakeGlobalStatsInfo>> stats,
+	                            const DuckLakeCommitContext &context);
 	CompactionInformation GetCompactionChanges(DuckLakeCommitState &commit_state, CompactionType type);
 	//! After a REWRITE_DELETES compaction, recompute EXACT global stats for `table_id` from the post-rewrite file set
 	//! (+ committed inlined data) and append the UpdateGlobalTableStats SQL to `batch_query`. No-op (leaving the
@@ -238,6 +243,8 @@ public:
 	//! The tables whose inlined file deletions were flushed, with the snapshot of the flush
 	map<TableIndex, idx_t> flushed_inlined_file_deletions;
 	vector<DuckLakeConfigOption> committed_table_options;
+	//! The statistics written for the fields that this commit adds to existing tables
+	map<TableIndex, map<FieldIndex, DuckLakeColumnStats>> added_field_stats;
 };
 
 } // namespace duckdb

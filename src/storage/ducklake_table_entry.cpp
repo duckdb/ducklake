@@ -1707,6 +1707,66 @@ void DuckLakeTableEntry::ValidateAddedFieldsCanSkipStats(const DuckLakeFieldId &
 	                              parent_id.Name(), unsupported->Type().ToString(), unsupported->Name());
 }
 
+static void CollectNewFields(const DuckLakeFieldId &field_id, const DuckLakeFieldData &previous,
+                             set<FieldIndex> &result) {
+	if (!previous.GetByFieldIndex(field_id.GetFieldIndex())) {
+		result.insert(field_id.GetFieldIndex());
+		return;
+	}
+	for (auto &child : field_id.Children()) {
+		CollectNewFields(*child, previous, result);
+	}
+}
+
+set<FieldIndex> DuckLakeTableEntry::GetNewFields(const DuckLakeTableEntry &previous) const {
+	duckdb::set<FieldIndex> result;
+	for (auto &field_id : field_data->GetFieldIds()) {
+		CollectNewFields(*field_id, previous.GetFieldData(), result);
+	}
+	return result;
+}
+
+static void CollectAddedFieldStats(const DuckLakeFieldId &field_id, bool top_level, bool repeated,
+                                   const set<FieldIndex> &added_fields, idx_t count,
+                                   map<FieldIndex, DuckLakeColumnStats> &result) {
+	if (!added_fields.count(field_id.GetFieldIndex())) {
+		// the elements of a list, array or map do not have one value per row
+		bool child_repeated = repeated || field_id.Type().id() != LogicalTypeId::STRUCT;
+		for (auto &child : field_id.Children()) {
+			CollectAddedFieldStats(*child, false, child_repeated, added_fields, count, result);
+		}
+		return;
+	}
+	auto &initial_default = field_id.GetColumnData().initial_default;
+	if (top_level && !initial_default.IsNull() && !DuckLakeColumnStats(field_id.Type()).extra_stats) {
+		// every older row reads the default of an added column
+		result.emplace(field_id.GetFieldIndex(),
+		               DuckLakeColumnStats::FromConstant(field_id.Type(), initial_default, count));
+		return;
+	}
+	// older rows read NULL, or a default whose statistics are left unknown
+	vector<DuckLakeMissingField> missing_fields;
+	DuckLakeMissingField::Collect(field_id, initial_default.IsNull(), repeated, missing_fields);
+	for (auto &missing : missing_fields) {
+		missing.AddStats(count, result);
+	}
+}
+
+map<FieldIndex, DuckLakeColumnStats> DuckLakeTableEntry::GetAddedFieldStats(const duckdb::set<FieldIndex> &added_fields,
+                                                                            idx_t count) const {
+	map<FieldIndex, DuckLakeColumnStats> result;
+	for (auto &field_id : field_data->GetFieldIds()) {
+		CollectAddedFieldStats(*field_id, true, false, added_fields, count, result);
+	}
+	auto skipped_fields = GetSkippedStatsFields();
+	for (auto &entry : result) {
+		if (skipped_fields.count(entry.first.index)) {
+			entry.second.ClearBounds();
+		}
+	}
+	return result;
+}
+
 unordered_set<idx_t> DuckLakeTableEntry::GetSkippedStatsFields() const {
 	unordered_set<idx_t> result;
 	auto &catalog = ParentCatalog().Cast<DuckLakeCatalog>();

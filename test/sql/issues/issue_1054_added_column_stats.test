@@ -1,0 +1,157 @@
+# name: test/sql/issues/issue_1054_added_column_stats.test
+# description: A column added to a table with statistics gets statistics that cover the older rows (#1054, #625)
+# group: [issues]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/issue_1054', METADATA_CATALOG 'issue_1054_meta')
+
+statement ok
+CREATE TABLE dl.tbl (a INT)
+
+statement ok
+INSERT INTO dl.tbl VALUES (1), (2), (3)
+
+statement ok
+ALTER TABLE dl.tbl ADD COLUMN b INT DEFAULT 42
+
+statement ok
+INSERT INTO dl.tbl VALUES (4, 10)
+
+statement ok
+INSERT INTO dl.tbl VALUES (5, 100)
+
+# the older rows read the default, so it lies within the bounds
+query III
+SELECT CAST(contains_null AS BOOLEAN), min_value, max_value FROM issue_1054_meta.ducklake_table_column_stats
+WHERE table_id = 1 AND column_id = 2
+----
+false	10	100
+
+query II
+SELECT count(*) FILTER (b = 42), count(*) FILTER (b > 50) FROM dl.tbl
+----
+3	1
+
+query I
+SELECT count(*) FROM dl.tbl WHERE b = 42
+----
+3
+
+# a column added without a default reads NULL in the older rows
+statement ok
+CREATE TABLE dl.t (a INTEGER)
+
+statement ok
+INSERT INTO dl.t VALUES (1)
+
+statement ok
+ALTER TABLE dl.t ADD COLUMN b INTEGER
+
+statement ok
+INSERT INTO dl.t VALUES (2, 10)
+
+query I
+SELECT CAST(s.contains_null AS BOOLEAN) FROM issue_1054_meta.ducklake_table_column_stats s
+JOIN issue_1054_meta.ducklake_table t USING (table_id)
+WHERE t.table_name = 't' AND s.column_id = 2
+----
+true
+
+query II
+SELECT (SELECT count(*) FROM dl.t WHERE b IS NULL), (SELECT count(*) FROM dl.t WHERE b = 10)
+----
+1	1
+
+# files written in the transaction before a column is added read its default
+statement ok
+CALL dl.set_option('data_inlining_row_limit', 0)
+
+statement ok
+CREATE TABLE dl.f (a INTEGER)
+
+statement ok
+BEGIN
+
+statement ok
+INSERT INTO dl.f SELECT range FROM range(3)
+
+statement ok
+ALTER TABLE dl.f ADD COLUMN b INTEGER DEFAULT 1000
+
+statement ok
+INSERT INTO dl.f VALUES (4, 10)
+
+statement ok
+COMMIT
+
+query I
+SELECT count(*) FROM dl.f WHERE b > 500
+----
+3
+
+# the same for a field added to a struct, which reads NULL where the struct is NULL
+statement ok
+CREATE TABLE dl.s (a INTEGER, s STRUCT(x INTEGER))
+
+statement ok
+BEGIN
+
+statement ok
+INSERT INTO dl.s VALUES (1, {'x': 1}), (2, NULL)
+
+statement ok
+ALTER TABLE dl.s ADD COLUMN s.y INTEGER DEFAULT 7
+
+statement ok
+INSERT INTO dl.s VALUES (3, {'x': 3, 'y': 100})
+
+statement ok
+COMMIT
+
+query III
+SELECT (SELECT count(*) FROM dl.s WHERE s.y = 7), (SELECT count(*) FROM dl.s WHERE s.y IS NULL),
+       (SELECT count(*) FROM dl.s WHERE s.y > 50)
+----
+1	1	1
+
+# a column added and renamed in one transaction starts from its default
+statement ok
+CREATE TABLE dl.r (a INTEGER)
+
+statement ok
+INSERT INTO dl.r VALUES (1)
+
+statement ok
+BEGIN
+
+statement ok
+ALTER TABLE dl.r ADD COLUMN b INTEGER DEFAULT 5
+
+statement ok
+ALTER TABLE dl.r RENAME COLUMN b TO c
+
+statement ok
+COMMIT
+
+statement ok
+INSERT INTO dl.r VALUES (2, 50)
+
+query II
+SELECT s.min_value, s.max_value FROM issue_1054_meta.ducklake_table_column_stats s
+JOIN issue_1054_meta.ducklake_table t USING (table_id)
+WHERE t.table_name = 'r' AND s.column_id = 2
+----
+5	50
+
+query I
+SELECT count(*) FROM dl.r WHERE c = 5
+----
+1

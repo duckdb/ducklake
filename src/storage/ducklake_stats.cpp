@@ -1,5 +1,6 @@
 #include "storage/ducklake_stats.hpp"
 #include "common/ducklake_data_file.hpp"
+#include "storage/ducklake_field_data.hpp"
 #include "storage/ducklake_geo_stats.hpp"
 #include "storage/ducklake_metadata_info.hpp"
 #include "storage/ducklake_variant_stats.hpp"
@@ -126,6 +127,37 @@ DuckLakeColumnStats DuckLakeColumnStats::FromConstant(const LogicalType &type, c
 		stats.min_is_exact = stats.max_is_exact = true;
 	}
 	return stats;
+}
+
+void DuckLakeMissingField::Collect(const DuckLakeFieldId &field_id, bool reads_null, bool repeated,
+                                   vector<DuckLakeMissingField> &result) {
+	if (!field_id.HasChildren()) {
+		result.push_back(DuckLakeMissingField {field_id.GetFieldIndex(), field_id.Type(), reads_null, repeated});
+		return;
+	}
+	// the fields of a missing parent read as NULL
+	for (auto &child : field_id.Children()) {
+		Collect(*child, true, repeated, result);
+	}
+}
+
+void DuckLakeMissingField::AddStats(idx_t count, map<FieldIndex, DuckLakeColumnStats> &result) const {
+	if (reads_null) {
+		auto stats = DuckLakeColumnStats::FromConstant(field_type, Value(field_type), count);
+		if (repeated) {
+			stats.has_num_values = false;
+			stats.has_null_count = false;
+		}
+		result.emplace(field_index, std::move(stats));
+		return;
+	}
+	// the statistics of a non NULL default are left unknown
+	DuckLakeColumnStats unknown_stats(field_type);
+	if (unknown_stats.extra_stats) {
+		// extra statistics cannot be unknown, so the column gets no statistics
+		return;
+	}
+	result.emplace(field_index, std::move(unknown_stats));
 }
 
 void DuckLakeColumnStats::ClearBounds() {

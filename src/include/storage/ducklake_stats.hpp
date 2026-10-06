@@ -83,6 +83,23 @@ private:
 	unique_ptr<BaseStatistics> CreateGeometryStats() const;
 };
 
+class DuckLakeFieldId;
+
+//! A leaf field that rows written without it read as NULL or as its default
+struct DuckLakeMissingField {
+	FieldIndex field_index;
+	LogicalType field_type;
+	bool reads_null;
+	//! Whether the column is inside a list or map element, so it does not have one value per row
+	bool repeated;
+
+	//! Collects the leaf fields of a missing field, whose own value reads as NULL if reads_null is set
+	static void Collect(const DuckLakeFieldId &field_id, bool reads_null, bool repeated,
+	                    vector<DuckLakeMissingField> &result);
+	//! Adds the statistics of count rows without the field, which are unknown unless it reads as NULL
+	void AddStats(idx_t count, map<FieldIndex, DuckLakeColumnStats> &result) const;
+};
+
 //! These are the global, table-wide stats
 struct DuckLakeTableStats {
 	idx_t record_count = 0;
