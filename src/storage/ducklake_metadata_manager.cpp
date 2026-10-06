@@ -5455,25 +5455,18 @@ struct ColumnStatsSQL {
 
 string DuckLakeMetadataManager::InsertTableColumnStatsSql(const DuckLakeGlobalStatsInfo &stats,
                                                           bool write_stats_exactness) {
-	if (stats.column_stats.empty()) {
-		return string();
-	}
-	string column_stats_values;
+	vector<string> column_stats_values;
 	for (auto &col_stats : stats.column_stats) {
-		if (!column_stats_values.empty()) {
-			column_stats_values += ",";
-		}
 		auto sql = ColumnStatsSQL::FromColumnStats(col_stats);
-		column_stats_values +=
+		auto values =
 		    StringUtil::Format("(%d, %d, %s, %s, %s, %s, %s", stats.table_id.index, col_stats.column_id.index,
 		                       sql.contains_null, sql.contains_nan, sql.min_val, sql.max_val, sql.extra_stats);
 		if (write_stats_exactness) {
-			column_stats_values += StringUtil::Format(", %s, %s", sql.min_is_exact, sql.max_is_exact);
+			values += StringUtil::Format(", %s, %s", sql.min_is_exact, sql.max_is_exact);
 		}
-		column_stats_values += ")";
+		column_stats_values.push_back(values + ")");
 	}
-	return StringUtil::Format("INSERT INTO {METADATA_CATALOG}.ducklake_table_column_stats VALUES %s;",
-	                          column_stats_values);
+	return InsertValuesSql("ducklake_table_column_stats", column_stats_values);
 }
 
 string DuckLakeMetadataManager::UpdateGlobalTableStatsSql(const DuckLakeGlobalStatsInfo &stats,
