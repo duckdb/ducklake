@@ -413,7 +413,7 @@ private:
 		optional_ptr<const DuckLakeTransaction> transaction;
 		DuckLakeConfigOptionUndo change;
 	};
-	//! Option changes that are written at commit, oldest first, committed ones kept while the option has pending ones
+	//! Option changes that are written at commit, oldest first
 	vector<DeferredConfigOption> deferred_config_options;
 	//! The path separator
 	string separator = "/";

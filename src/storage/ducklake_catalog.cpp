@@ -1359,15 +1359,20 @@ void DuckLakeCatalog::EndDeferredConfigOptions(const DuckLakeTransaction &transa
 		changes.push_back(std::move(deferred));
 	}
 	// the newest change shows first, so a committed one stays while its option has pending changes
+	auto option_key = [](const DeferredConfigOption &deferred) {
+		auto &option = deferred.change.option;
+		return std::make_tuple(option.schema_id, option.table_id, option.option.key);
+	};
+	set<std::tuple<SchemaIndex, TableIndex, string>> pending_options;
+	for (auto &deferred : changes) {
+		if (deferred.transaction) {
+			pending_options.insert(option_key(deferred));
+		}
+	}
 	deferred_config_options.clear();
 	for (auto &deferred : changes) {
-		auto &option = deferred.change.option;
-		auto pending = std::any_of(changes.begin(), changes.end(), [&](const DeferredConfigOption &other) {
-			return other.transaction &&
-			       other.change.option.IsOption(option.schema_id, option.table_id, option.option.key);
-		});
-		if (pending) {
-			deferred_config_options.push_back(deferred);
+		if (pending_options.count(option_key(deferred))) {
+			deferred_config_options.push_back(std::move(deferred));
 		}
 	}
 }
