@@ -60,6 +60,8 @@ struct DuckLakeCommitState {
 	map<idx_t, idx_t> committed_partition_ids;
 	map<MappingIndex, MappingIndex> committed_mapping_indexes;
 	map<TableIndex, vector<DuckLakeDeleteFile>> local_delete_files;
+	//! The columns this commit widens from FLOAT to DOUBLE
+	map<TableIndex, set<FieldIndex>> float_widened_columns;
 
 	void RemapIdentifier(SchemaIndex &schema_id) const {
 		auto entry = committed_schemas.find(schema_id);

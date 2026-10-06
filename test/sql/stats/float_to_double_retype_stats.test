@@ -1,0 +1,128 @@
+# name: test/sql/stats/float_to_double_retype_stats.test
+# description: min and max stats written for a FLOAT column keep covering its values after a retype to DOUBLE
+# group: [stats]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/float_to_double_retype_stats', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE dl.t (v FLOAT)
+
+statement ok
+INSERT INTO dl.t SELECT 0.1::FLOAT FROM range(2048)
+
+statement ok
+ALTER TABLE dl.t ALTER COLUMN v TYPE DOUBLE
+
+query II
+SELECT count(*), max(v) FROM dl.t WHERE v > 0.1
+----
+2048	0.10000000149011612
+
+query I
+SELECT max(v) FROM dl.t
+----
+0.10000000149011612
+
+statement ok
+INSERT INTO dl.t VALUES (0.05), (0.3)
+
+query I
+SELECT count(*) FROM dl.t WHERE v > 0.1 AND v < 0.2
+----
+2048
+
+query II
+SELECT min(v), max(v) FROM dl.t
+----
+0.05	0.3
+
+# insert before and after the retype in one transaction
+statement ok
+CREATE TABLE dl.u (v FLOAT)
+
+statement ok
+BEGIN
+
+statement ok
+INSERT INTO dl.u SELECT 0.1::FLOAT FROM range(10)
+
+statement ok
+ALTER TABLE dl.u ALTER COLUMN v TYPE DOUBLE
+
+statement ok
+INSERT INTO dl.u VALUES (0.05)
+
+statement ok
+COMMIT
+
+query I
+SELECT count(*) FROM dl.u WHERE v > 0.1 AND v < 0.2
+----
+10
+
+query I
+SELECT max(v) FROM dl.u
+----
+0.10000000149011612
+
+statement ok
+CREATE TABLE dl.w (v FLOAT)
+
+statement ok
+BEGIN
+
+statement ok
+INSERT INTO dl.w SELECT 0.1::FLOAT FROM range(10)
+
+statement ok
+ALTER TABLE dl.w ALTER COLUMN v TYPE DOUBLE
+
+statement ok
+COMMIT
+
+query II
+SELECT count(*), max(v) FROM dl.w WHERE v > 0.1
+----
+10	0.10000000149011612
+
+# a field of a struct
+statement ok
+CREATE TABLE dl.s (s STRUCT(a FLOAT))
+
+statement ok
+INSERT INTO dl.s SELECT {'a': 0.1::FLOAT} FROM range(10)
+
+statement ok
+ALTER TABLE dl.s ALTER COLUMN s TYPE STRUCT(a DOUBLE)
+
+query I
+SELECT count(*) FROM dl.s WHERE s.a > 0.1
+----
+10
+
+# inlined rows
+statement ok
+CREATE TABLE dl.i (v FLOAT)
+
+statement ok
+CALL dl.set_option('data_inlining_row_limit', 100, table_name => 'i')
+
+statement ok
+INSERT INTO dl.i SELECT 0.1::FLOAT FROM range(10)
+
+statement ok
+ALTER TABLE dl.i ALTER COLUMN v TYPE DOUBLE
+
+query II
+SELECT count(*), max(v) FROM dl.i WHERE v > 0.1
+----
+10	0.10000000149011612

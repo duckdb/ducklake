@@ -3247,6 +3247,28 @@ INSERT INTO {METADATA_CATALOG}.ducklake_macro_parameters values(%llu,%llu,%llu,%
 	return batch_query;
 }
 
+string DuckLakeMetadataManager::WriteFloatWidenedStats(const map<TableIndex, set<FieldIndex>> &columns,
+                                                       idx_t next_file_id) {
+	string widen_bounds = "min_value = CAST(CAST(CAST(min_value AS REAL) AS DOUBLE PRECISION) AS VARCHAR), "
+	                      "max_value = CAST(CAST(CAST(max_value AS REAL) AS DOUBLE PRECISION) AS VARCHAR)";
+	string result;
+	for (auto &table_entry : columns) {
+		for (auto &field_index : table_entry.second) {
+			auto float_column = StringUtil::Format(R"(table_id = %d AND column_id = %d AND EXISTS (
+	SELECT 1 FROM {METADATA_CATALOG}.ducklake_column
+	WHERE table_id = %d AND column_id = %d AND end_snapshot IS NULL AND column_type = '%s'))",
+			                                       table_entry.first.index, field_index.index, table_entry.first.index,
+			                                       field_index.index, DuckLakeTypes::ToString(LogicalType::FLOAT));
+			result += StringUtil::Format(
+			    "UPDATE {METADATA_CATALOG}.ducklake_file_column_stats SET %s WHERE %s AND data_file_id < %d;",
+			    widen_bounds, float_column, next_file_id);
+			result += StringUtil::Format("UPDATE {METADATA_CATALOG}.ducklake_table_column_stats SET %s WHERE %s;",
+			                             widen_bounds, float_column);
+		}
+	}
+	return result;
+}
+
 string DuckLakeMetadataManager::WriteDroppedColumns(const vector<DuckLakeDroppedColumn> &dropped_columns) {
 	if (dropped_columns.empty()) {
 		return {};

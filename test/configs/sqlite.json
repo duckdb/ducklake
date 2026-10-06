@@ -38,6 +38,12 @@
       ]
     },
     {
+      "reason": "The concurrent INSERT commit fails with \"database is locked\" while the retyping transaction is open, which skip_error_messages turns into a silent skip",
+      "paths": [
+        "test/sql/stats/float_to_double_retype_stats_concurrent.test"
+      ]
+    },
+    {
       "reason": "High retry counts can stall under SQLite metadata contention",
       "paths": [
         "test/sql/issues/issue_1248_concurrent_commit_schema_id.test",
