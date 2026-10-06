@@ -450,7 +450,7 @@ idx_t DuckLakeMultiFileList::GetTotalFileCount() const {
 
 unique_ptr<NodeStatistics> DuckLakeMultiFileList::GetCardinality(ClientContext &context) const {
 	auto stats = read_info.table.GetTableStats(context);
-	if (!stats) {
+	if (!stats || stats->record_count_unknown) {
 		return nullptr;
 	}
 	return make_uniq<NodeStatistics>(stats->record_count);

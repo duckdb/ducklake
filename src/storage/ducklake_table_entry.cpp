@@ -456,7 +456,6 @@ vector<string> DuckLakeTableEntry::GetPartitionSQLExpressions() const {
 	for (auto &field : partition_data->fields) {
 		auto &col = GetColumnByFieldId(field.field_id);
 		auto col_name = SQLIdentifier::ToString(col.GetName().GetIdentifierName());
-		col_name = "CAST(" + col_name + " AS " + col.GetType().ToString() + ")";
 		result.push_back(DuckLakePartitionUtils::GetPartitionSQLExpression(field.transform, col_name, col.GetType()));
 	}
 	return result;

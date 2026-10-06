@@ -44,6 +44,31 @@ public:
 	idx_t rows_flushed = 0;
 };
 
+//! Refuses NULL values of NOT NULL columns whose file statistics cannot show them
+class DuckLakeVerifyNotNull : public PhysicalOperator {
+public:
+	static constexpr const PhysicalOperatorType TYPE = PhysicalOperatorType::EXTENSION;
+
+public:
+	DuckLakeVerifyNotNull(PhysicalPlan &physical_plan, PhysicalOperator &child, Identifier table_name,
+	                      vector<pair<idx_t, Identifier>> columns);
+
+	Identifier table_name;
+	//! The index and name of every column to check
+	vector<pair<idx_t, Identifier>> columns;
+
+public:
+	//! Adds the check to a plan that produces the physical columns of the table, if a column needs it
+	static PhysicalOperator &Plan(PhysicalPlanGenerator &planner, DuckLakeTableEntry &table, PhysicalOperator &plan);
+
+	OperatorResultType Execute(ExecutionContext &context, DataChunk &input, DataChunk &chunk,
+	                           GlobalOperatorState &gstate, OperatorState &state) const override;
+	bool ParallelOperator() const override {
+		return true;
+	}
+	string GetName() const override;
+};
+
 class DuckLakeInsert : public PhysicalOperator {
 public:
 	//! INSERT INTO an existing table.

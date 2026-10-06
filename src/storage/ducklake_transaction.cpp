@@ -1292,6 +1292,7 @@ DuckLakeGlobalStatsInfo DuckLakeTransaction::ConvertNewGlobalStats(TableIndex ta
 		stats.column_stats.push_back(std::move(col_stats));
 	}
 	stats.record_count = new_stats.record_count;
+	stats.record_count_unknown = new_stats.record_count_unknown;
 	stats.next_row_id = new_stats.next_row_id;
 	stats.table_size_bytes = new_stats.table_size_bytes;
 	return stats;
@@ -1472,6 +1473,10 @@ void DuckLakeTransaction::RunCommitLoop(DuckLakeSnapshot transaction_snapshot,
 	};
 	context.write_config_options = [&]() {
 		return DeferredConfigOptionsSql();
+	};
+	context.inlined_file_deletion_table_exists = [&](TableIndex table_id) {
+		return metadata_manager->InlinedDeletionTableExists(
+		    DuckLakeMetadataManager::InlinedFileDeletionTableName(table_id));
 	};
 	context.get_snapshot = [&]() {
 		return GetSnapshot();

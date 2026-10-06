@@ -128,6 +128,13 @@ unique_ptr<ParsedExpression> DuckLakeFieldId::GetDefault() const {
 	return nullptr;
 }
 
+unique_ptr<ParsedExpression> DuckLakeFieldId::GetInitialDefault() const {
+	if (column_data.initial_default.IsNull()) {
+		return ConstantExpression::FromValue(Value(type));
+	}
+	return ConstantExpression::FromValue(column_data.initial_default);
+}
+
 unique_ptr<DuckLakeFieldId> DuckLakeFieldId::FieldIdFromColumn(const ColumnDefinition &col, idx_t &column_id,
                                                                bool add_column) {
 	auto default_val = col.HasDefaultValue() ? optional_ptr<const ParsedExpression>(col.DefaultValue()) : nullptr;

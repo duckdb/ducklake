@@ -94,6 +94,10 @@ static string GetEpochTransformPart(DuckLakeTransformType transform_type) {
 string DuckLakePartitionUtils::GetPartitionSQLExpression(const DuckLakeTransform &transform, const string &col_name,
                                                          const LogicalType &source_type) {
 	if (transform.type == DuckLakeTransformType::IDENTITY) {
+		if (source_type.id() == LogicalTypeId::VARCHAR) {
+			// files are partitioned on the raw bytes
+			return "(" + col_name + " COLLATE \"binary\")";
+		}
 		return col_name;
 	}
 	if (transform.type == DuckLakeTransformType::BUCKET) {

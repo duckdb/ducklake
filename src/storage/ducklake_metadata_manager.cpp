@@ -1229,9 +1229,12 @@ void TransformGlobalStatsRow(const ROW &row, vector<DuckLakeGlobalStatsInfo> &gl
 		DuckLakeGlobalStatsInfo new_entry;
 		new_entry.table_id = table_id;
 		new_entry.initialized = true;
-		new_entry.record_count = row.template GetValue<uint64_t>(2 + from_column);
+		new_entry.record_count_unknown = row.IsNull(2 + from_column);
+		new_entry.record_count = new_entry.record_count_unknown ? 0 : row.template GetValue<uint64_t>(2 + from_column);
 		new_entry.next_row_id = row.template GetValue<uint64_t>(3 + from_column);
-		new_entry.table_size_bytes = row.template GetValue<uint64_t>(4 + from_column);
+		new_entry.missing_table_size = row.IsNull(4 + from_column);
+		new_entry.table_size_bytes =
+		    new_entry.missing_table_size ? 0 : row.template GetValue<uint64_t>(4 + from_column);
 		global_stats.push_back(std::move(new_entry));
 	}
 
@@ -1322,9 +1325,8 @@ static string TableStatsQuery(const string &select_list, bool include_column_sta
 	if (include_column_stats) {
 		query += "LEFT JOIN {METADATA_CATALOG}.ducklake_table_column_stats USING (table_id)\n";
 	}
-	query += "WHERE record_count IS NOT NULL\n  AND file_size_bytes IS NOT NULL\n";
 	if (table_id.IsValid()) {
-		query += StringUtil::Format("  AND table_id = %llu\n", table_id.GetIndex());
+		query += StringUtil::Format("WHERE table_id = %llu\n", table_id.GetIndex());
 	}
 	if (include_column_stats) {
 		query += "ORDER BY table_id\n";
@@ -1346,9 +1348,47 @@ vector<DuckLakeGlobalStatsInfo> DuckLakeMetadataManager::ParseGlobalTableStats(Q
 	return TransformGlobalStats(result);
 }
 
+void DuckLakeMetadataManager::FillMissingTableSizes(vector<DuckLakeGlobalStatsInfo> &stats,
+                                                    const std::function<unique_ptr<QueryResult>(string)> &executor) {
+	string table_ids;
+	for (auto &entry : stats) {
+		if (!entry.missing_table_size) {
+			continue;
+		}
+		if (!table_ids.empty()) {
+			table_ids += ", ";
+		}
+		table_ids += to_string(entry.table_id.index);
+	}
+	if (table_ids.empty()) {
+		return;
+	}
+	auto result = executor(StringUtil::Format(R"(
+SELECT table_id, SUM(file_size_bytes)
+FROM {METADATA_CATALOG}.ducklake_data_file
+WHERE end_snapshot IS NULL AND table_id IN (%s)
+GROUP BY table_id;)",
+	                                          table_ids));
+	if (result->HasError()) {
+		result->GetErrorObject().Throw("Failed to get the table sizes from DuckLake: ");
+	}
+	map<TableIndex, idx_t> table_sizes;
+	for (auto &row : *result) {
+		table_sizes.emplace(TableIndex(row.GetValue<idx_t>(0)), row.GetValue<idx_t>(1));
+	}
+	for (auto &entry : stats) {
+		auto table_size = table_sizes.find(entry.table_id);
+		if (entry.missing_table_size && table_size != table_sizes.end()) {
+			entry.table_size_bytes = table_size->second;
+		}
+	}
+}
+
 vector<DuckLakeGlobalStatsInfo> DuckLakeMetadataManager::GetGlobalTableStats(DuckLakeSnapshot snapshot) {
 	auto result = Query(snapshot, GlobalTableStatsQuery(transaction.GetCatalog().SupportsV1_1Metadata()));
-	return TransformGlobalStats(*result);
+	auto global_stats = TransformGlobalStats(*result);
+	FillMissingTableSizes(global_stats, [&](string query) { return Query(snapshot, query); });
+	return global_stats;
 }
 
 map<TableIndex, idx_t> DuckLakeMetadataManager::GetTableRecordCounts(DuckLakeSnapshot snapshot) {
@@ -1358,6 +1398,9 @@ map<TableIndex, idx_t> DuckLakeMetadataManager::GetTableRecordCounts(DuckLakeSna
 	}
 	map<TableIndex, idx_t> record_counts;
 	for (auto &row : *result) {
+		if (row.IsNull(1)) {
+			continue;
+		}
 		record_counts.emplace(TableIndex(row.GetValue<idx_t>(0)), row.GetValue<idx_t>(1));
 	}
 	return record_counts;
@@ -1468,12 +1511,25 @@ string DuckLakeMetadataManager::CastValueToTarget(const Value &val, const Logica
 	return DuckLakeUtil::SQLLiteralToString(val.ToString());
 }
 
-string DuckLakeMetadataManager::CastStatsToTarget(const string &stats, const LogicalType &type, StatsCastType) {
+string DuckLakeMetadataManager::CastStatsToTarget(const string &stats, const LogicalType &type,
+                                                  StatsCastType cast_type) {
 	// we need to cast numerics and temporals for correct comparison
-	if (RequiresValueComparison(type)) {
-		return "TRY_CAST(" + stats + " AS " + type.ToString() + ")";
+	if (!RequiresValueComparison(type)) {
+		return stats;
 	}
-	return stats;
+	auto cast = "TRY_CAST(" + stats + " AS " + type.ToString() + ")";
+	if (cast_type == StatsCastType::ORDERING || !StatsBoundsRequireOffset(type)) {
+		return cast;
+	}
+	// Local time bounds can change order across daylight saving transitions
+	auto bound = StringUtil::Format(
+	    "CASE WHEN regexp_matches(%s, ':[0-9]{2}(\\.[0-9]+)?[+-][0-9]{2}(:[0-9]{2})*$') THEN %s END", stats, cast);
+	return BoundOrInfinity(bound, type.ToString(), cast_type);
+}
+
+string DuckLakeMetadataManager::BoundOrInfinity(const string &bound, const string &type_name, StatsCastType cast_type) {
+	return StringUtil::Format("COALESCE(%s, CAST('%s' AS %s))", bound,
+	                          cast_type == StatsCastType::MIN ? "-infinity" : "infinity", type_name);
 }
 
 string DuckLakeMetadataManager::GenerateConstantFilter(ExpressionType comparison_type, const Value &constant,
@@ -2419,7 +2475,7 @@ LEFT JOIN LATERAL (
 		encryption_key,
 		format
 	FROM {METADATA_CATALOG}.ducklake_delete_file
-	WHERE table_id = %d AND begin_snapshot < data.end_snapshot
+	WHERE table_id = %d AND begin_snapshot <= data.end_snapshot
 	ORDER BY data_file_id, begin_snapshot DESC
 ) AS previous_delete
 USING (data_file_id), (
@@ -2572,11 +2628,7 @@ vector<DuckLakeCompactionFileEntry> DuckLakeMetadataManager::GetFilesForCompacti
 	string data_select_list =
 	    "data.data_file_id, data.record_count, data.row_id_start, data.begin_snapshot, "
 	    "data.end_snapshot, data.mapping_id, sr.schema_version , data.partial_max, "
-	    "data.partition_id, "
-	    "CASE WHEN partition_spec.partition_id IS NOT NULL AND "
-	    "(partition_spec.end_snapshot IS NULL OR partition_spec.begin_snapshot < partition_spec.end_snapshot) "
-	    "THEN COALESCE(partition_spec.end_snapshot - 1, data.begin_snapshot) END AS partition_snapshot_id, "
-	    "partition_sr.schema_version AS partition_schema_version, partition_info.keys, " +
+	    "data.partition_id, partition_sr.schema_version AS partition_schema_version, partition_info.keys, " +
 	    GetFileSelectList("data");
 	string delete_select_list = "del.data_file_id AS del_data_file_id,"
 	                            "del.delete_file_id AS del_delete_file_id, "
@@ -2713,8 +2765,6 @@ ORDER BY data.begin_snapshot, data.row_id_start, data.data_file_id, del.begin_sn
 		}
 		col_idx++;
 		new_entry.file.partition_id = row.IsNull(col_idx) ? optional_idx() : row.GetValue<idx_t>(col_idx);
-		col_idx++;
-		new_entry.partition_snapshot_id = row.IsNull(col_idx) ? optional_idx() : row.GetValue<idx_t>(col_idx);
 		col_idx++;
 		new_entry.partition_schema_version = row.IsNull(col_idx) ? optional_idx() : row.GetValue<idx_t>(col_idx);
 		col_idx++;
@@ -3034,6 +3084,45 @@ string DuckLakeMetadataManager::CastColumnToTarget(const string &column, const L
 		expression = DuckLakeUtil::InlinedVariantExpression(expression, type, false);
 	}
 	return expression;
+}
+
+string DuckLakeMetadataManager::InlinedFlushSource(const string &inlined_table_name, const DuckLakeTableEntry &table) {
+	auto col_names = InlinedColNames();
+	vector<string> projection {col_names.row_id, col_names.begin_snapshot, col_names.end_snapshot};
+	bool has_casts = false;
+	for (auto &col : table.GetColumns().Physical()) {
+		auto name = SQLIdentifier::ToString(col.Name().GetIdentifierName());
+		auto typed_column = CastColumnToTarget(name, col.Type());
+		if (typed_column != name) {
+			has_casts = true;
+			typed_column += " AS " + name;
+		}
+		projection.push_back(typed_column);
+	}
+	string filter;
+	auto local_deletes = transaction.GetInlinedDeletes(table.GetTableId(), inlined_table_name);
+	if (local_deletes && !local_deletes->rows.empty()) {
+		vector<string> row_ids;
+		for (auto &row_id : local_deletes->rows) {
+			row_ids.push_back(to_string(row_id));
+		}
+		// rows deleted by this transaction are not flushed, passing the ids as one string keeps planning cheap
+		filter = StringUtil::Format(" WHERE NOT (%s IN (SELECT CAST(unnest(string_split(ids, ',')) AS BIGINT) FROM "
+		                            "(SELECT %s AS ids)) AND (%s IS NULL OR %s > {SNAPSHOT_ID}))",
+		                            col_names.row_id, SQLString(StringUtil::Join(row_ids, ",")), col_names.end_snapshot,
+		                            col_names.end_snapshot);
+	}
+	auto source = "{METADATA_CATALOG}." + inlined_table_name;
+	if (!has_casts && filter.empty()) {
+		return source;
+	}
+	return StringUtil::Format("(SELECT %s FROM %s%s)", StringUtil::Join(projection, ", "), source, filter);
+}
+
+string DuckLakeMetadataManager::InlinedFlushOrder(const string &sort_order_sql) const {
+	auto col_names = InlinedColNames();
+	auto order = StringUtil::Format("%s ASC NULLS LAST, %s ASC NULLS LAST", col_names.row_id, col_names.begin_snapshot);
+	return sort_order_sql.empty() ? order : sort_order_sql + ", " + order;
 }
 
 string DuckLakeMetadataManager::GetColumnType(const DuckLakeColumnInfo &col) {
@@ -3852,16 +3941,23 @@ WHERE inlined_data.%s >= %d AND inlined_data.%s <= {SNAPSHOT_ID};)",
 
 unique_ptr<QueryResult> DuckLakeMetadataManager::ReadAllInlinedDataForFlush(DuckLakeSnapshot snapshot,
                                                                             const string &inlined_table_name,
+                                                                            const DuckLakeTableEntry &table,
+                                                                            const string &sort_order_sql,
                                                                             const vector<string> &columns_to_read) {
 	auto projection = GetProjection(columns_to_read);
 	auto col_names = InlinedColNames();
+	auto order = InlinedFlushOrder(sort_order_sql);
+	auto source = InlinedFlushSource(inlined_table_name, table);
+	if (!sort_order_sql.empty()) {
+		// a window ORDER BY binds the source columns, never the projection aliases
+		order = "ROW_NUMBER() OVER (ORDER BY " + order + ") ASC";
+	}
 	auto result = Query(snapshot, StringUtil::Format(R"(
 SELECT %s
-FROM {METADATA_CATALOG}.%s inlined_data
+FROM %s inlined_data
 WHERE {SNAPSHOT_ID} >= %s
-ORDER BY %s, %s;)",
-	                                                 projection, inlined_table_name, col_names.begin_snapshot,
-	                                                 col_names.row_id, col_names.begin_snapshot));
+ORDER BY %s;)",
+	                                                 projection, source, col_names.begin_snapshot, order));
 	return result;
 }
 
@@ -4866,8 +4962,6 @@ SELECT
 FROM {METADATA_CATALOG}.ducklake_table_stats
 LEFT JOIN {METADATA_CATALOG}.ducklake_table_column_stats
     USING (table_id)
-WHERE record_count IS NOT NULL
-    AND file_size_bytes IS NOT NULL
 ORDER BY table_id NULLS FIRST;
 	)";
 }
@@ -4897,7 +4991,9 @@ DuckLakeMetadataManager::GetSnapshotAndStatsAndChanges(SnapshotAndStats &current
                                                        const std::function<unique_ptr<QueryResult>(string)> &executor,
                                                        bool include_exactness) {
 	auto result = executor(GetSnapshotAndStatsAndChangesQuery(include_exactness));
-	return ParseSnapshotAndStatsAndChanges(*result, current_snapshot);
+	auto change_info = ParseSnapshotAndStatsAndChanges(*result, current_snapshot);
+	FillMissingTableSizes(current_snapshot.stats, executor);
+	return change_info;
 }
 
 unique_ptr<DuckLakeSnapshot> DuckLakeMetadataManager::ParseSnapshot(QueryResult &result,
@@ -5360,6 +5456,7 @@ struct ColumnStatsSQL {
 string DuckLakeMetadataManager::UpdateGlobalTableStatsSql(const DuckLakeGlobalStatsInfo &stats,
                                                           bool write_stats_exactness) {
 	string batch_query;
+	auto record_count = stats.record_count_unknown ? string("NULL") : to_string(stats.record_count);
 
 	if (!stats.initialized) {
 		string column_stats_values;
@@ -5377,16 +5474,16 @@ string DuckLakeMetadataManager::UpdateGlobalTableStatsSql(const DuckLakeGlobalSt
 			column_stats_values += ")";
 		}
 		batch_query +=
-		    StringUtil::Format("INSERT INTO {METADATA_CATALOG}.ducklake_table_stats VALUES (%d, %d, %d, %d);",
-		                       stats.table_id.index, stats.record_count, stats.next_row_id, stats.table_size_bytes);
+		    StringUtil::Format("INSERT INTO {METADATA_CATALOG}.ducklake_table_stats VALUES (%d, %s, %d, %d);",
+		                       stats.table_id.index, record_count, stats.next_row_id, stats.table_size_bytes);
 		batch_query += StringUtil::Format("INSERT INTO {METADATA_CATALOG}.ducklake_table_column_stats VALUES %s;",
 		                                  column_stats_values);
 	} else {
 		// stats have been initialized - update them
 		batch_query += StringUtil::Format(
-		    "UPDATE {METADATA_CATALOG}.ducklake_table_stats SET record_count=%d, file_size_bytes=%d, "
+		    "UPDATE {METADATA_CATALOG}.ducklake_table_stats SET record_count=%s, file_size_bytes=%d, "
 		    "next_row_id=%d WHERE table_id=%d;",
-		    stats.record_count, stats.table_size_bytes, stats.next_row_id, stats.table_id.index);
+		    record_count, stats.table_size_bytes, stats.next_row_id, stats.table_id.index);
 		// Emit one plain UPDATE per column rather than a single
 		// `UPDATE ... FROM (VALUES ...)`. A DuckDB-backed metadata catalog
 		// corrupts string payloads when an UPDATE pulls its new values from a
@@ -6120,8 +6217,10 @@ string DuckLakeMetadataManager::GenerateDeleteFlushedInlinedData(const vector<Fl
                                                                  const DuckLakeInlinedColNames &col_names) {
 	string result;
 	for (auto &flushed : flushed_tables) {
-		result += StringUtil::Format("DELETE FROM {METADATA_CATALOG}.%s WHERE %s <= %d;\n",
+		// rows that ended after the flush were deleted by this transaction and are not flushed
+		result += StringUtil::Format("DELETE FROM {METADATA_CATALOG}.%s WHERE %s <= %d AND (%s IS NULL OR %s <= %d);\n",
 		                             SQLIdentifier(flushed.inlined_table.table_name), col_names.begin_snapshot,
+		                             flushed.flush_snapshot_id, col_names.end_snapshot, col_names.end_snapshot,
 		                             flushed.flush_snapshot_id);
 	}
 	for (auto &flushed : flushed_file_deletions) {

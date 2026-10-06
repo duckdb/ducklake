@@ -298,7 +298,15 @@ struct DuckLakeGlobalStatsInfo {
 	idx_t record_count;
 	idx_t next_row_id;
 	idx_t table_size_bytes;
+	//! The stats row has no record_count
+	bool record_count_unknown = false;
+	//! The stats row has no file_size_bytes
+	bool missing_table_size = false;
 	vector<DuckLakeGlobalColumnStatsInfo> column_stats;
+
+	bool MayHaveRows() const {
+		return record_count_unknown || record_count > 0;
+	}
 };
 
 struct SnapshotChangeInfo {
@@ -485,8 +493,7 @@ struct DuckLakeCompactionFileEntry {
 	vector<DuckLakeCompactionDeleteFileData> delete_files;
 	optional_idx max_partial_file_snapshot;
 	idx_t schema_version;
-	//! Snapshot and schema version used to resolve the file's partition spec.
-	optional_idx partition_snapshot_id;
+	//! Schema version used to resolve the file's partition spec.
 	optional_idx partition_schema_version;
 	//! Inlined file deletions stored in the metadata database rather than delete files.
 	set<idx_t> inlined_file_deletions;

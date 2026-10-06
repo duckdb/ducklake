@@ -1,0 +1,95 @@
+# name: test/sql/stats/timestamptz_retype_stats_time_zone.test
+# description: file stats written before a TIMESTAMP to TIMESTAMPTZ retype do not prune matching rows
+# group: [stats]
+
+require ducklake
+
+require parquet
+
+require icu
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/timestamptz_retype_stats_time_zone', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE dl.t (id INTEGER, v TIMESTAMP)
+
+statement ok
+INSERT INTO dl.t SELECT i, TIMESTAMP '2020-06-15 12:00:00' + INTERVAL (i) SECOND FROM range(4096) t(i)
+
+statement ok
+BEGIN
+
+statement ok
+ALTER TABLE dl.t ALTER COLUMN v TYPE TIMESTAMPTZ
+
+statement ok
+INSERT INTO dl.t SELECT 100000 + i, TIMESTAMPTZ '2019-01-01 00:00:00+00' + INTERVAL (i) SECOND FROM range(4096) t(i)
+
+statement ok
+COMMIT
+
+statement ok
+SET TimeZone = 'America/New_York'
+
+query I
+SELECT count(*) FROM dl.t WHERE v > TIMESTAMPTZ '2020-06-15 13:08:15+00'
+----
+4096
+
+statement ok
+SET TimeZone = 'Asia/Tokyo'
+
+query I
+SELECT count(*) FROM dl.t WHERE v < TIMESTAMPTZ '2020-06-15 05:00:00+00'
+----
+8192
+
+query I
+SELECT count(*) FROM dl.t WHERE v > TIMESTAMPTZ '2020-06-15 05:00:00+00'
+----
+0
+
+query II
+EXPLAIN ANALYZE SELECT count(*) FROM dl.t WHERE v > TIMESTAMPTZ '2020-01-01 00:00:00+00'
+----
+analyzed_plan	<REGEX>:.*Total Files Read: 1.*
+
+statement ok
+SET TimeZone = 'America/New_York'
+
+foreach type TIMESTAMPTZ TIMESTAMPTZ_NS
+
+statement ok
+CREATE TABLE dl.dst_{type} (v TIMESTAMP)
+
+statement ok
+INSERT INTO dl.dst_{type} SELECT TIMESTAMP '2020-03-08 02:30:00' + INTERVAL (i) SECOND FROM range(4096) t(i)
+
+statement ok
+BEGIN
+
+statement ok
+ALTER TABLE dl.dst_{type} ALTER COLUMN v TYPE {type}
+
+statement ok
+INSERT INTO dl.dst_{type} VALUES ('2020-03-08 09:00:00+00'::{type})
+
+statement ok
+COMMIT
+
+statement ok
+CREATE TABLE expected_{type} AS FROM dl.dst_{type}
+
+query I
+SELECT
+    (SELECT count(*) FROM dl.dst_{type} WHERE v < '2020-03-08 07:20:00+00'::{type}) =
+    (SELECT count(*) FROM expected_{type} WHERE v < '2020-03-08 07:20:00+00'::{type})
+----
+true
+
+endloop

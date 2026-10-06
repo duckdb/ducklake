@@ -5,6 +5,7 @@
 #include "duckdb/execution/physical_plan_generator.hpp"
 #include "duckdb/planner/logical_operator.hpp"
 #include "duckdb/common/file_system.hpp"
+#include "duckdb/common/vector_operations/vector_operations.hpp"
 #include "duckdb/main/database.hpp"
 #include "duckdb/common/encryption_state.hpp"
 #include "duckdb/common/encryption_types.hpp"
@@ -239,7 +240,6 @@ void DuckLakeInsert::AddWrittenFiles(DuckLakeInsertGlobalState &global_state, Da
 		}
 		// finalize variant stats
 		for (auto &entry : variant_stats) {
-			// FIXME: verify NOT NULL constraints for variants
 			data_file.column_stats.insert(make_pair(entry.first, entry.second.Finalize()));
 		}
 		// extract the partition info
@@ -807,15 +807,13 @@ public:
 static optional_ptr<PhysicalOperator> PlanInsertSort(ClientContext &context, PhysicalPlanGenerator &planner,
                                                      PhysicalOperator &plan, const ColumnList &columns,
                                                      const Identifier &table_name, const DuckLakeSort &sort_data) {
-	auto pre_bound_orders = DuckLakeCompactor::ParseSortOrders(sort_data);
-	if (pre_bound_orders.empty()) {
-		return nullptr;
-	}
-	DuckLakeTableEntry::ValidateSortExpressionColumns(columns, pre_bound_orders);
-
 	auto binder = Binder::CreateBinder(context);
 	TableIndex table_index(0);
-	auto orders = DuckLakeCompactor::BindSortOrders(*binder, columns, table_name, table_index, pre_bound_orders);
+	auto orders = DuckLakeCompactor::BindSortOrders(*binder, columns, table_name, table_index,
+	                                                DuckLakeCompactor::ParseSortOrders(sort_data));
+	if (orders.empty()) {
+		return nullptr;
+	}
 
 	// Convert BoundColumnRefExpression to BoundReferenceExpression for physical plan
 	DuckLakeInsertColumnBindingResolver resolver(table_index, plan.GetTypes());
@@ -868,6 +866,45 @@ static DuckLakeInsertPipeline PlanInsertPipeline(ClientContext &context, Physica
 	return result;
 }
 
+DuckLakeVerifyNotNull::DuckLakeVerifyNotNull(PhysicalPlan &physical_plan, PhysicalOperator &child,
+                                             Identifier table_name, vector<pair<idx_t, Identifier>> columns)
+    : PhysicalOperator(physical_plan, PhysicalOperatorType::EXTENSION, child.types, child.estimated_cardinality),
+      table_name(std::move(table_name)), columns(std::move(columns)) {
+	children.push_back(child);
+}
+
+PhysicalOperator &DuckLakeVerifyNotNull::Plan(PhysicalPlanGenerator &planner, DuckLakeTableEntry &table,
+                                              PhysicalOperator &plan) {
+	auto not_null_fields = table.GetNotNullFields();
+	vector<pair<idx_t, Identifier>> columns;
+	for (auto &col : table.GetColumns().Physical()) {
+		// the file statistics of a nested column are per field, so they do not show a NULL value of the column
+		if (col.Type().IsNested() && not_null_fields.count(col.Name().GetIdentifierName())) {
+			columns.emplace_back(col.Physical().index, col.Name());
+		}
+	}
+	if (columns.empty()) {
+		return plan;
+	}
+	return planner.Make<DuckLakeVerifyNotNull>(plan, table.name, std::move(columns));
+}
+
+OperatorResultType DuckLakeVerifyNotNull::Execute(ExecutionContext &context, DataChunk &input, DataChunk &chunk,
+                                                  GlobalOperatorState &gstate, OperatorState &state) const {
+	for (auto &column : columns) {
+		if (VectorOperations::HasNull(input.data[column.first])) {
+			throw ConstraintException("NOT NULL constraint failed: %s.%s", SQLIdentifier(table_name),
+			                          SQLIdentifier(column.second));
+		}
+	}
+	chunk.Reference(input);
+	return OperatorResultType::NEED_MORE_INPUT;
+}
+
+string DuckLakeVerifyNotNull::GetName() const {
+	return "DUCKLAKE_VERIFY_NOT_NULL";
+}
+
 PhysicalOperator &DuckLakeCatalog::PlanInsert(ClientContext &context, PhysicalPlanGenerator &planner, LogicalInsert &op,
                                               optional_ptr<PhysicalOperator> plan) {
 	if (op.return_chunk) {
@@ -881,8 +918,9 @@ PhysicalOperator &DuckLakeCatalog::PlanInsert(ClientContext &context, PhysicalPl
 	}
 	auto &ducklake_table = op.table.Cast<DuckLakeTableEntry>();
 	auto &ducklake_schema = ducklake_table.ParentSchema().Cast<DuckLakeSchemaEntry>();
+	auto &verified_plan = DuckLakeVerifyNotNull::Plan(planner, ducklake_table, *plan);
 	auto pipeline = PlanInsertPipeline(
-	    context, planner, *plan, ducklake_table.GetColumns(), ducklake_table.name, ducklake_table.GetSortData(),
+	    context, planner, verified_plan, ducklake_table.GetColumns(), ducklake_table.name, ducklake_table.GetSortData(),
 	    SortOnInsert(ducklake_schema.GetSchemaId(), ducklake_table.GetTableId(), &ducklake_table.GetTableOptions()),
 	    GetInliningLimit(context, ducklake_table));
 

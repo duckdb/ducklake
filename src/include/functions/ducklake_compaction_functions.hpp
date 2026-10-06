@@ -92,13 +92,12 @@ public:
 	unique_ptr<LogicalOperator> GenerateCompactionCommand(vector<DuckLakeCompactionFileEntry> source_files,
 	                                                      bool bind_to_latest_schema = false);
 	static unique_ptr<LogicalOperator> InsertSort(Binder &binder, unique_ptr<LogicalOperator> &plan,
-	                                              DuckLakeTableEntry &table, optional_ptr<DuckLakeSort> sort_data,
-	                                              bool add_tiebreakers = false);
+	                                              DuckLakeTableEntry &table, optional_ptr<DuckLakeSort> sort_data);
 	static vector<OrderByNode> ParseSortOrders(const DuckLakeSort &sort_data);
 	//! Bind ORDER BY expressions against a column list + table name (works before a table entry exists).
 	static vector<BoundOrderByNode> BindSortOrders(Binder &binder, const ColumnList &columns,
 	                                               const Identifier &table_name, TableIndex table_index,
-	                                               vector<OrderByNode> &pre_bound_orders);
+	                                               const vector<OrderByNode> &pre_bound_orders);
 
 private:
 	optional_ptr<DuckLakeTableEntry> ResolvePartitionSpecTable(DuckLakeTableEntry &table,

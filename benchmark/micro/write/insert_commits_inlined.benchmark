@@ -10,11 +10,13 @@ require ducklake
 
 argument work commit_inl_work
 
+argument warm_table lake.main.ins_0
+
 include benchmark/micro/fixtures/commit.benchmark.in
 
 run benchmark/micro/queries/insert_commits_inlined.sql
 
-include benchmark/micro/fixtures/commit_cleanup.benchmark.in
+include benchmark/micro/fixtures/restore_cleanup_warm.benchmark.in
 
 # A missed reset doubles the rows of ins_9, and a data file means the INSERTs were not inlined
 result_query II

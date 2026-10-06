@@ -55,6 +55,8 @@ struct DuckLakeFunctionInfo : public TableFunctionInfo {
 	DuckLakeScanType scan_type = DuckLakeScanType::SCAN_TABLE;
 	//! Start snapshot - only set for DuckLakeScanType::SCAN_INSERTIONS and DuckLakeScanType::SCAN_DELETIONS
 	unique_ptr<DuckLakeSnapshot> start_snapshot;
+	//! Sort order of the flushed file, only set for flush scans
+	string flush_sort_order_sql;
 
 	shared_ptr<DuckLakeTransaction> GetTransaction();
 	bool CanUseGlobalStats();

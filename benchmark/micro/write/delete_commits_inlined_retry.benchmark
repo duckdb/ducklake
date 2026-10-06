@@ -1,0 +1,62 @@
+# name: benchmark/micro/write/delete_commits_inlined_retry.benchmark
+# description: Commit 10 flushes and 10 inlined deletions that each retry after a concurrent deletion of the same table
+# group: [write]
+
+name Delete Commits Inlined Retry
+group micro
+subgroup write
+
+require ducklake
+
+require parquet
+
+argument work inlined_delete_retry_work
+
+include benchmark/micro/fixtures/inlined_file_deletes.benchmark.in
+
+include benchmark/micro/fixtures/restore_cleanup.benchmark.in
+
+# Retries do not sleep, so the timing has no random backoff
+init
+SET ducklake_retry_wait_ms = 0;
+
+# lake2 shares the metadata catalog of lake and its commit lands first, so every commit of lake retries
+run
+@attach ${work} AS lake2 (METADATA_CATALOG '__ducklake_metadata_lake')
+BEGIN; CALL ducklake_flush_inlined_data('lake', table_name => 't0'); DELETE FROM lake2.t0 WHERE id = 2048; COMMIT;
+BEGIN; CALL ducklake_flush_inlined_data('lake', table_name => 't1'); DELETE FROM lake2.t1 WHERE id = 2048; COMMIT;
+BEGIN; CALL ducklake_flush_inlined_data('lake', table_name => 't2'); DELETE FROM lake2.t2 WHERE id = 2048; COMMIT;
+BEGIN; CALL ducklake_flush_inlined_data('lake', table_name => 't3'); DELETE FROM lake2.t3 WHERE id = 2048; COMMIT;
+BEGIN; CALL ducklake_flush_inlined_data('lake', table_name => 't4'); DELETE FROM lake2.t4 WHERE id = 2048; COMMIT;
+BEGIN; CALL ducklake_flush_inlined_data('lake', table_name => 't5'); DELETE FROM lake2.t5 WHERE id = 2048; COMMIT;
+BEGIN; CALL ducklake_flush_inlined_data('lake', table_name => 't6'); DELETE FROM lake2.t6 WHERE id = 2048; COMMIT;
+BEGIN; CALL ducklake_flush_inlined_data('lake', table_name => 't7'); DELETE FROM lake2.t7 WHERE id = 2048; COMMIT;
+BEGIN; CALL ducklake_flush_inlined_data('lake', table_name => 't8'); DELETE FROM lake2.t8 WHERE id = 2048; COMMIT;
+BEGIN; CALL ducklake_flush_inlined_data('lake', table_name => 't9'); DELETE FROM lake2.t9 WHERE id = 2048; COMMIT;
+BEGIN; DELETE FROM lake.t10 WHERE id = 2048; CALL ducklake_flush_inlined_data('lake2', table_name => 't10'); COMMIT;
+BEGIN; DELETE FROM lake.t11 WHERE id = 2048; CALL ducklake_flush_inlined_data('lake2', table_name => 't11'); COMMIT;
+BEGIN; DELETE FROM lake.t12 WHERE id = 2048; CALL ducklake_flush_inlined_data('lake2', table_name => 't12'); COMMIT;
+BEGIN; DELETE FROM lake.t13 WHERE id = 2048; CALL ducklake_flush_inlined_data('lake2', table_name => 't13'); COMMIT;
+BEGIN; DELETE FROM lake.t14 WHERE id = 2048; CALL ducklake_flush_inlined_data('lake2', table_name => 't14'); COMMIT;
+BEGIN; DELETE FROM lake.t15 WHERE id = 2048; CALL ducklake_flush_inlined_data('lake2', table_name => 't15'); COMMIT;
+BEGIN; DELETE FROM lake.t16 WHERE id = 2048; CALL ducklake_flush_inlined_data('lake2', table_name => 't16'); COMMIT;
+BEGIN; DELETE FROM lake.t17 WHERE id = 2048; CALL ducklake_flush_inlined_data('lake2', table_name => 't17'); COMMIT;
+BEGIN; DELETE FROM lake.t18 WHERE id = 2048; CALL ducklake_flush_inlined_data('lake2', table_name => 't18'); COMMIT;
+BEGIN; DELETE FROM lake.t19 WHERE id = 2048; CALL ducklake_flush_inlined_data('lake2', table_name => 't19'); COMMIT;
+DETACH lake2;
+
+# A missed reset leaves nothing to flush, so the paired snapshots show that every commit retried
+result_query IIIIIII
+SET VARIABLE delete_targets = (SELECT list('lake.t' || k) FROM range(20) t(k));
+SET VARIABLE inlined_delete_tables = (SELECT list('__ducklake_metadata_lake.ducklake_inlined_delete_' || table_id)
+FROM __ducklake_metadata_lake.ducklake_table);
+SELECT (SELECT count(*) FROM lake.snapshots()), count(*), sum(id),
+(SELECT count(*) FROM query_table(getvariable('inlined_delete_tables'))),
+(SELECT count(*) FROM __ducklake_metadata_lake.ducklake_delete_file WHERE end_snapshot IS NULL),
+(SELECT count(*) FROM lake.snapshots() s JOIN lake.snapshots() p ON p.snapshot_id = s.snapshot_id - 1
+WHERE s.changes['tables_deleted_from'] = p.changes['inlined_delete']),
+(SELECT count(*) FROM lake.snapshots() s JOIN lake.snapshots() p ON p.snapshot_id = s.snapshot_id - 1
+WHERE s.changes['inlined_delete'] = p.changes['tables_deleted_from'])
+FROM query_table(getvariable('delete_targets'))
+----
+43	81880	167690240	20	20	10	10

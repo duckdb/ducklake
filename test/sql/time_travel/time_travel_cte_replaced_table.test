@@ -1,0 +1,80 @@
+# name: test/sql/time_travel/time_travel_cte_replaced_table.test
+# description: a copied time travel scan reads the table that existed at its snapshot
+# group: [time_travel]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/time_travel_cte_replaced_table')
+
+statement ok
+CREATE TABLE dl.t AS SELECT i AS id FROM range(100) r(i)
+
+statement ok
+SET VARIABLE v1 = (SELECT max(snapshot_id) FROM dl.snapshots())
+
+statement ok
+SET VARIABLE ts1 = (SELECT snapshot_time FROM dl.snapshots() WHERE snapshot_id = getvariable('v1'))
+
+statement ok
+INSERT INTO dl.t SELECT i FROM range(100, 150) r(i)
+
+statement ok
+CREATE OR REPLACE TABLE dl.t AS SELECT * FROM dl.t
+
+query I
+WITH p AS NOT MATERIALIZED (SELECT * FROM dl.t AT (VERSION => getvariable('v1')))
+SELECT count(*) FROM p a JOIN p b USING (id)
+----
+100
+
+query I
+WITH p AS NOT MATERIALIZED (SELECT * FROM dl.t AT (TIMESTAMP => getvariable('ts1')))
+SELECT count(*) FROM p a JOIN p b USING (id)
+----
+100
+
+query I
+WITH p AS NOT MATERIALIZED (SELECT * FROM dl.t)
+SELECT count(*) FROM p a JOIN p b USING (id)
+----
+150
+
+statement ok
+CREATE TABLE dl.u AS SELECT i AS id FROM range(10) r(i)
+
+statement ok
+SET VARIABLE v2 = (SELECT max(snapshot_id) FROM dl.snapshots())
+
+statement ok
+DROP TABLE dl.u
+
+query I
+WITH p AS NOT MATERIALIZED (SELECT * FROM dl.u AT (VERSION => getvariable('v2')))
+SELECT count(*) FROM p a JOIN p b USING (id)
+----
+10
+
+statement ok
+BEGIN
+
+statement ok
+ALTER TABLE dl.t ADD COLUMN v INTEGER
+
+statement ok
+INSERT INTO dl.t VALUES (1000, 7)
+
+query II
+WITH p AS NOT MATERIALIZED (SELECT * FROM dl.t)
+SELECT count(*), sum(a.v) FROM p a JOIN p b USING (id)
+----
+151	7
+
+statement ok
+ROLLBACK

@@ -1,0 +1,82 @@
+# name: test/sql/issues/issue_1090_orphan_auto_compact.test
+# description: auto_compact = false turns off the orphan cleanup of CHECKPOINT (#1090)
+# group: [issues]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/issue_1090', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE ducklake.t AS SELECT range i FROM range(10)
+
+statement ok
+CALL ducklake.set_option('delete_older_than', '1 millisecond')
+
+statement ok
+COPY (SELECT 42 AS i) TO '{DATA_PATH}/issue_1090/main/t/orphan.parquet'
+
+query I
+SELECT count(*) FROM ducklake_delete_orphaned_files('ducklake', cleanup_all => true, dry_run => true)
+----
+1
+
+statement ok
+CALL ducklake.set_option('auto_compact', false)
+
+query I
+SELECT count(*) FROM ducklake_delete_orphaned_files('ducklake', cleanup_all => true, dry_run => true)
+----
+0
+
+statement ok
+CHECKPOINT ducklake
+
+query I
+SELECT count(*) FROM glob('{DATA_PATH}/issue_1090/**') t(path) WHERE ends_with(path, 'orphan.parquet')
+----
+1
+
+# the cleanup of files scheduled for deletion is not a compaction and keeps running
+statement ok
+CREATE TABLE ducklake.dropped AS SELECT range i FROM range(10)
+
+statement ok
+DROP TABLE ducklake.dropped
+
+statement ok
+CALL ducklake_expire_snapshots('ducklake', older_than => now())
+
+query I
+SELECT count(*) FROM ducklake_cleanup_old_files('ducklake', cleanup_all => true, dry_run => true)
+----
+1
+
+# orphans belong to no table or schema, so turning auto_compact off there keeps their cleanup
+statement ok
+CALL ducklake.set_option('auto_compact', true)
+
+statement ok
+CALL ducklake.set_option('auto_compact', false, schema => 'main')
+
+statement ok
+CALL ducklake.set_option('auto_compact', false, table_name => 't')
+
+statement ok
+CHECKPOINT ducklake
+
+query I
+SELECT count(*) FROM glob('{DATA_PATH}/issue_1090/**') t(path) WHERE ends_with(path, 'orphan.parquet')
+----
+0
+
+query I
+SELECT count(*) FROM ducklake.t
+----
+10

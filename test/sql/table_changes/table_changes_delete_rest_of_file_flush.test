@@ -1,0 +1,59 @@
+# name: test/sql/table_changes/table_changes_delete_rest_of_file_flush.test
+# description: dropping a data file keeps the deletes flushed earlier in the same transaction
+# group: [table_changes]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/table_changes_delete_rest_of_file_flush', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE dl.f AS SELECT i AS id FROM range(5) t(i)
+
+statement ok
+CALL dl.set_option('data_inlining_row_limit', 1, table_name => 'f')
+
+statement ok
+DELETE FROM dl.f WHERE id = 0
+
+statement ok
+SET VARIABLE s4 = (SELECT max(snapshot_id) FROM dl.snapshots())
+
+statement ok
+BEGIN
+
+statement ok
+CALL ducklake_flush_inlined_data('dl')
+
+statement ok
+DELETE FROM dl.f WHERE id IN (1, 2)
+
+statement ok
+DELETE FROM dl.f WHERE id >= 3
+
+statement ok
+COMMIT
+
+query I
+SELECT count(*) FROM dl.f AT (VERSION => getvariable('s4'))
+----
+4
+
+query II
+SELECT rowid, change_type FROM ducklake_table_changes('dl', 'main', 'f', getvariable('s4'), getvariable('s4')) ORDER BY rowid
+----
+0	delete
+
+query II
+SELECT rowid, change_type FROM ducklake_table_changes('dl', 'main', 'f', getvariable('s4') + 1, getvariable('s4') + 1) ORDER BY rowid
+----
+1	delete
+2	delete
+3	delete
+4	delete

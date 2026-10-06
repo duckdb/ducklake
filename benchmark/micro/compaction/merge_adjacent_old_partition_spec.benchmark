@@ -1,0 +1,46 @@
+# name: benchmark/micro/compaction/merge_adjacent_old_partition_spec.benchmark
+# description: Merge 3000 files in 1000 partitions of an older partition spec into 1000 files, with commit
+# group: [compaction]
+
+name Merge Adjacent Old Partition Spec
+group micro
+subgroup compaction
+
+require ducklake
+
+require parquet
+
+argument work repartitioned_merge_work
+
+include benchmark/micro/fixtures/repartitioned_compaction.benchmark.in
+
+include benchmark/micro/fixtures/restore_cleanup.benchmark.in
+
+run
+SELECT sum(files_processed) AS processed, sum(files_created) AS created
+FROM ducklake_merge_adjacent_files('lake', 'events');
+
+# Merged files stay in the directories of the old spec and keep the row ids of the seed lake
+result_query IIIIIII
+@attach IF NOT EXISTS ${lake}_pristine AS seed (READ_ONLY)
+WITH current_rows AS (
+SELECT part, count(*) AS n, sum(id) AS ids, sum(v) AS vals, count(extra) AS extras,
+count(DISTINCT filename) AS files, bool_and(contains(filename, '/part=' || part || '/')) AS in_old_spec
+FROM lake.events GROUP BY part
+), historical_rows AS (
+SELECT part, count(*) AS n, sum(id) AS ids, sum(v) AS vals FROM lake.events AT (VERSION => 3) GROUP BY part
+)
+SELECT processed, created,
+(SELECT count(*) = 1000 AND bool_and((part BETWEEN 0 AND 999 AND n = 192 AND files = 1 AND extras = 0
+AND in_old_spec AND ids = 192::BIGINT * part * 192 + 192::BIGINT * 191 // 2 AND vals = ids * 3 + n * 7) IS TRUE)
+FROM current_rows),
+(SELECT count(*) = 1000 AND bool_and((part BETWEEN 0 AND 999 AND n = 64
+AND ids = 64::BIGINT * part * 192 + 64::BIGINT * 63 // 2 AND vals = ids * 3 + n * 7) IS TRUE)
+FROM historical_rows),
+(SELECT count(*) = 0 FROM (SELECT rowid, id, v FROM lake.events EXCEPT ALL SELECT rowid, id, v FROM seed.events)),
+(SELECT count(*) FROM ducklake_list_files('lake', 'events')),
+(SELECT max(snapshot_id) FROM lake.snapshots())
+FROM __answer;
+DETACH seed;
+----
+3000	1000	true	true	true	1000	8

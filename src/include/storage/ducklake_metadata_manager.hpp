@@ -246,6 +246,10 @@ public:
 
 	virtual string GetColumnTypeInternal(const LogicalType &column_type);
 	string CastColumnToTarget(const string &column, const LogicalType &type);
+	//! The inlined rows to flush with typed columns, without those this transaction deleted
+	string InlinedFlushSource(const string &inlined_table_name, const DuckLakeTableEntry &table);
+	//! The order of the rows in a flushed file
+	string InlinedFlushOrder(const string &sort_order_sql) const;
 
 	DuckLakeMetadataManager &Get(DuckLakeTransaction &transaction);
 
@@ -297,6 +301,9 @@ public:
 	static unique_ptr<DuckLakeSnapshot> ParseSnapshot(QueryResult &result,
 	                                                  optional_ptr<string> catalog_version = nullptr);
 	static vector<DuckLakeGlobalStatsInfo> ParseGlobalTableStats(QueryResult &result);
+	//! Take the table sizes that stats rows lack from the live data files
+	static void FillMissingTableSizes(vector<DuckLakeGlobalStatsInfo> &stats,
+	                                  const std::function<unique_ptr<QueryResult>(string)> &executor);
 	//! Whether the result contains a column with the given name
 	static bool ResultHasColumn(QueryResult &result, const string &name);
 
@@ -474,6 +481,8 @@ public:
 	                                                         const vector<string> &columns_to_read);
 	virtual unique_ptr<QueryResult> ReadAllInlinedDataForFlush(DuckLakeSnapshot snapshot,
 	                                                           const string &inlined_table_name,
+	                                                           const DuckLakeTableEntry &table,
+	                                                           const string &sort_order_sql,
 	                                                           const vector<string> &columns_to_read);
 	//! SQL builders for the stats-refresh queries used by DuckLakeTransactionState::RecomputeGlobalStatsAfterRewrite.
 	//! Caller substitutes `{METADATA_CATALOG}` / `{SNAPSHOT_ID}` and executes via the commit context's executor.
@@ -633,6 +642,8 @@ protected:
 	                                          const FileColumnStatsCTEBodyGenerator &generate_body);
 	//! Join each column's stats CTE once. Leading newline per join, empty when there are none.
 	static string GenerateStatsJoinList(const map<idx_t, CTERequirement> &requirements);
+	//! Unknown bounds must keep the file
+	static string BoundOrInfinity(const string &bound, const string &type_name, StatsCastType cast_type);
 
 private:
 	virtual string GenerateCTESectionFromRequirements(const map<idx_t, CTERequirement> &requirements,
