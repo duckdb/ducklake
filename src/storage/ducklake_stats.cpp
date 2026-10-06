@@ -222,7 +222,7 @@ void DuckLakeColumnStats::MergeStats(const DuckLakeColumnStats &new_stats) {
 		}
 		return;
 	}
-	if (!AnyValid()) {
+	if (adopt_bounds || !AnyValid()) {
 		if (bounds_unknown) {
 			// invalidated bounds
 			return;
@@ -239,11 +239,7 @@ void DuckLakeColumnStats::MergeStats(const DuckLakeColumnStats &new_stats) {
 	} else {
 		if (!new_stats.has_min) {
 			has_min = false;
-		} else if (!has_min) {
-			if (adopt_bounds) {
-				CopyMinFrom(new_stats);
-			}
-		} else {
+		} else if (has_min) {
 			// both stats have a min - select the smallest, on a tie the min is exact only if both are exact
 			if (RequiresValueComparison(type)) {
 				// for numerics/temporals we need to parse the stats
@@ -264,11 +260,7 @@ void DuckLakeColumnStats::MergeStats(const DuckLakeColumnStats &new_stats) {
 
 		if (!new_stats.has_max) {
 			has_max = false;
-		} else if (!has_max) {
-			if (adopt_bounds) {
-				CopyMaxFrom(new_stats);
-			}
-		} else {
+		} else if (has_max) {
 			// both stats have a max - select the largest, on a tie the max is exact only if both are exact
 			if (RequiresValueComparison(type)) {
 				// for numerics/temporals we need to parse the stats

@@ -97,6 +97,43 @@ SELECT count(*) FROM dl.f WHERE b > 500
 ----
 3
 
+# a column added without a default takes the bounds of a file and of the inlined rows after it
+statement ok
+CREATE TABLE dl.n (a INTEGER)
+
+statement ok
+CALL dl.set_option('data_inlining_row_limit', 5, table_name => 'n')
+
+statement ok
+INSERT INTO dl.n VALUES (1)
+
+statement ok
+BEGIN
+
+statement ok
+ALTER TABLE dl.n ADD COLUMN b INTEGER
+
+statement ok
+INSERT INTO dl.n SELECT range, range + 10 FROM range(11)
+
+statement ok
+INSERT INTO dl.n VALUES (100, 1)
+
+statement ok
+COMMIT
+
+query III
+SELECT CAST(s.contains_null AS BOOLEAN), s.min_value, s.max_value FROM issue_1054_meta.ducklake_table_column_stats s
+JOIN issue_1054_meta.ducklake_table t USING (table_id)
+WHERE t.table_name = 'n' AND s.column_id = 2
+----
+true	1	20
+
+query I
+SELECT count(*) FROM dl.n WHERE b > 5
+----
+11
+
 # the same for a field added to a struct, which reads NULL where the struct is NULL
 statement ok
 CREATE TABLE dl.s (a INTEGER, s STRUCT(x INTEGER))
