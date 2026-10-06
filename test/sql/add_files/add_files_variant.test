@@ -1,0 +1,58 @@
+# name: test/sql/add_files/add_files_variant.test
+# description: register a Parquet file that carries a VARIANT column
+# group: [add_files]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/ducklake_add_files_variant')
+
+statement ok
+CREATE TABLE tv AS SELECT 1::BIGINT AS id, {'host': 'h1', 'n': 1}::VARIANT AS attrs
+UNION ALL SELECT 2, [1, 2, 3]::VARIANT
+UNION ALL SELECT 3, NULL;
+
+statement ok
+COPY tv TO '{DATA_PATH}/add_files_variant_v.parquet' (FORMAT PARQUET);
+
+statement ok
+CREATE TABLE ducklake.tvar (id BIGINT, attrs VARIANT);
+
+statement ok
+CALL ducklake_add_data_files('ducklake', 'tvar', '{DATA_PATH}/add_files_variant_v.parquet');
+
+query II
+SELECT id, attrs::VARCHAR FROM ducklake.tvar ORDER BY id;
+----
+1	{'host': h1, 'n': 1}
+2	[1, 2, 3]
+3	NULL
+
+query I
+SELECT attrs.host::VARCHAR FROM ducklake.tvar WHERE id = 1;
+----
+h1
+
+# a struct that merely looks nested still maps to a STRUCT column
+statement ok
+CREATE TABLE ts AS SELECT 1::BIGINT AS id, {'metadata': 'm', 'value': 'v'} AS s;
+
+statement ok
+COPY ts TO '{DATA_PATH}/add_files_variant_s.parquet' (FORMAT PARQUET);
+
+statement ok
+CREATE TABLE ducklake.tstruct (id BIGINT, s STRUCT(metadata VARCHAR, value VARCHAR));
+
+statement ok
+CALL ducklake_add_data_files('ducklake', 'tstruct', '{DATA_PATH}/add_files_variant_s.parquet');
+
+query II
+SELECT id, s FROM ducklake.tstruct;
+----
+1	{'metadata': m, 'value': v}

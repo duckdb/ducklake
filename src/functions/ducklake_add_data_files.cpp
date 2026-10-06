@@ -611,6 +611,25 @@ private:
 	vector<string> failures;
 };
 
+//! A Parquet VARIANT group: binary "metadata" and "value" children, with an optional shredded "typed_value".
+//! parquet_schema does not report the VARIANT logical type, so the group is recognised by its shape.
+static bool IsVariantGroup(const ParquetColumn &s_ele) {
+	bool has_metadata = false;
+	bool has_value = false;
+	for (auto &child : s_ele.child_columns) {
+		// the binary children carry no converted type - a UTF8 child is a plain string struct field
+		bool is_binary = child->type == "BYTE_ARRAY" && child->converted_type.empty() && child->child_columns.empty();
+		if (child->name == "metadata" && is_binary) {
+			has_metadata = true;
+		} else if (child->name == "value" && is_binary) {
+			has_value = true;
+		} else if (child->name != "typed_value") {
+			return false;
+		}
+	}
+	return has_metadata && has_value;
+}
+
 LogicalType DuckLakeParquetTypeChecker::DeriveLogicalType(const ParquetColumn &s_ele) {
 	// FIXME: this is more or less copied from DeriveLogicalType in DuckDB's Parquet reader
 	//  we should just emit DuckDB's type in parquet_schema and remove this method
@@ -620,6 +639,8 @@ LogicalType DuckLakeParquetTypeChecker::DeriveLogicalType(const ParquetColumn &s
 			return LogicalTypeId::LIST;
 		} else if (s_ele.converted_type == "MAP") {
 			return LogicalTypeId::MAP;
+		} else if (IsVariantGroup(s_ele)) {
+			return LogicalType::VARIANT();
 		}
 		return LogicalTypeId::STRUCT;
 	}
