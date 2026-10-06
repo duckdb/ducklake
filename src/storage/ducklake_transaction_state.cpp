@@ -1164,6 +1164,17 @@ bool DuckLakeTransactionState::ApplyDroppedFileStats(
 	return live_rows_remain;
 }
 
+void DuckLakeTransactionState::InitializeGlobalStats(TableIndex table_id, const DuckLakeTableStats &current_stats,
+                                                     DuckLakeNewGlobalStats &new_globals) const {
+	new_globals.stats = current_stats;
+	new_globals.initialized = true;
+	auto added_stats = added_field_stats.find(table_id);
+	if (added_stats != added_field_stats.end()) {
+		// the rows written before a field was added count towards its statistics
+		new_globals.stats.column_stats.insert(added_stats->second.begin(), added_stats->second.end());
+	}
+}
+
 string DuckLakeTransactionState::UpdateStatsForDroppedFiles(
     optional_ptr<vector<DuckLakeGlobalStatsInfo>> stats, const DuckLakeCommitContext &context,
     map<TableIndex, DroppedDataFileStats> &attempt_dropped_file_stats) {
@@ -1193,8 +1204,7 @@ string DuckLakeTransactionState::UpdateStatsForDroppedFiles(
 		}
 
 		DuckLakeNewGlobalStats new_globals;
-		new_globals.stats = *current_stats;
-		new_globals.initialized = true;
+		InitializeGlobalStats(table_id, *current_stats, new_globals);
 		bool delete_column_stats = ApplyDroppedFileStats(table_id, new_globals, attempt_dropped_file_stats);
 		if (delete_column_stats) {
 			// the rows are deleted below - drop them from the update so we do not write values we then delete
@@ -1260,13 +1270,7 @@ NewDataInfo DuckLakeTransactionState::GetNewDataFiles(
 		auto current_stats = GetCommittedTableStats(table_id, dl_stats.get(), context, current_stats_pin);
 
 		if (current_stats) {
-			new_globals.stats = *current_stats;
-			new_globals.initialized = true;
-			auto added_stats = added_field_stats.find(table_id);
-			if (added_stats != added_field_stats.end()) {
-				// the rows written before a field was added count towards its statistics
-				new_globals.stats.column_stats.insert(added_stats->second.begin(), added_stats->second.end());
-			}
+			InitializeGlobalStats(table_id, *current_stats, new_globals);
 		}
 		bool clear_column_stats = ApplyDroppedFileStats(table_id, new_globals, attempt_dropped_file_stats);
 		auto &new_stats = new_globals.stats;

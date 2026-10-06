@@ -1120,8 +1120,8 @@ unique_ptr<DuckLakeFieldId> DuckLakeTableEntry::TypePromotion(const DuckLakeFiel
 	result.DropField(source_id);
 
 	// re-create with the new type
-	DuckLakeColumnData column_data;
-	column_data.id = source_id.GetFieldIndex();
+	auto column_data = source_id.GetColumnData().Copy();
+	column_data.initial_default = column_data.initial_default.DefaultCastAs(target);
 	DuckLakeNewColumn new_col;
 	if (!parent_idx.IsValid()) {
 		// root column - get the info from the table directly

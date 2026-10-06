@@ -155,3 +155,63 @@ query I
 SELECT count(*) FROM dl.r WHERE c = 5
 ----
 1
+
+# widening an added column keeps the default that the older rows read
+statement ok
+CREATE TABLE dl.w (a INTEGER)
+
+statement ok
+INSERT INTO dl.w VALUES (1)
+
+statement ok
+BEGIN
+
+statement ok
+ALTER TABLE dl.w ADD COLUMN b INTEGER DEFAULT 1000
+
+statement ok
+ALTER TABLE dl.w ALTER b TYPE BIGINT
+
+statement ok
+INSERT INTO dl.w VALUES (2, 10)
+
+query II
+SELECT a, b FROM dl.w ORDER BY a
+----
+1	1000
+2	10
+
+statement ok
+COMMIT
+
+query I
+SELECT count(*) FROM dl.w WHERE b > 500
+----
+1
+
+# a column added while every row is deleted does not keep the default of the deleted rows
+statement ok
+CREATE TABLE dl.e (a INTEGER)
+
+statement ok
+INSERT INTO dl.e VALUES (1)
+
+statement ok
+BEGIN
+
+statement ok
+DELETE FROM dl.e
+
+statement ok
+ALTER TABLE dl.e ADD COLUMN b INTEGER DEFAULT 1000
+
+statement ok
+COMMIT
+
+statement ok
+INSERT INTO dl.e VALUES (2, 10)
+
+query I
+SELECT max(b) FROM dl.e
+----
+10
