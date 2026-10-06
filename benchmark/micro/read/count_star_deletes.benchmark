@@ -1,0 +1,20 @@
+# name: benchmark/micro/read/count_star_deletes.benchmark
+# description: Run 50 count(*) queries on a table with delete files and inlined deletes, answered from the metadata
+# group: [read]
+
+name Count Star Deletes
+group micro
+subgroup read
+
+require ducklake
+
+require parquet
+
+include benchmark/micro/fixtures/count_deletes.benchmark.in
+
+run benchmark/micro/queries/count_star_deletes.sql
+
+result_query I
+SELECT * FROM __answer
+----
+521600
