@@ -409,10 +409,11 @@ private:
 	//! The DuckLake options
 	DuckLakeOptions options;
 	struct DeferredConfigOption {
-		reference<const DuckLakeTransaction> transaction;
+		//! The open transaction that made the change, empty once it committed
+		optional_ptr<const DuckLakeTransaction> transaction;
 		DuckLakeConfigOptionUndo change;
 	};
-	//! Option changes that open transactions write at commit, oldest first
+	//! Option changes that are written at commit, oldest first, committed ones kept while the option has pending ones
 	vector<DeferredConfigOption> deferred_config_options;
 	//! The path separator
 	string separator = "/";

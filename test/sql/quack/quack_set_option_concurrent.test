@@ -72,3 +72,27 @@ query I
 SELECT DISTINCT compression FROM parquet_metadata('{DATA_PATH}/quack_set_option_concurrent/main/open_change/**')
 ----
 GZIP
+
+# a committed change shows over an older change of a transaction that is still open
+statement ok
+CREATE TABLE ducklake.newer_commit(i INTEGER)
+
+statement ok con1
+BEGIN
+
+statement ok con1
+ALTER TABLE ducklake.newer_commit SET (parquet_compression = 'zstd')
+
+statement ok con2
+ALTER TABLE ducklake.newer_commit SET (parquet_compression = 'gzip')
+
+statement ok con2
+INSERT INTO ducklake.newer_commit VALUES (1)
+
+statement ok con1
+ROLLBACK
+
+query I
+SELECT DISTINCT compression FROM parquet_metadata('{DATA_PATH}/quack_set_option_concurrent/main/newer_commit/**')
+----
+GZIP

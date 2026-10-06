@@ -1342,20 +1342,34 @@ void DuckLakeCatalog::UndoConfigOption(const DuckLakeConfigOptionUndo &undo) {
 void DuckLakeCatalog::AddDeferredConfigOption(const DuckLakeTransaction &transaction,
                                               const DuckLakeConfigOptionUndo &change) {
 	lock_guard<mutex> guard(config_lock);
-	deferred_config_options.push_back(DeferredConfigOption {transaction, change});
+	deferred_config_options.push_back(DeferredConfigOption {&transaction, change});
 }
 
 void DuckLakeCatalog::EndDeferredConfigOptions(const DuckLakeTransaction &transaction, bool committed) {
 	lock_guard<mutex> guard(config_lock);
-	vector<DeferredConfigOption> open_changes;
+	vector<DeferredConfigOption> changes;
 	for (auto &deferred : deferred_config_options) {
-		if (&deferred.transaction.get() != &transaction) {
-			open_changes.push_back(std::move(deferred));
-		} else if (committed) {
+		if (deferred.transaction.get() == &transaction) {
+			if (!committed) {
+				continue;
+			}
 			ApplyConfigOptionChange(options, deferred.change);
+			deferred.transaction = nullptr;
+		}
+		changes.push_back(std::move(deferred));
+	}
+	// the newest change shows first, so a committed one stays while its option has pending changes
+	deferred_config_options.clear();
+	for (auto &deferred : changes) {
+		auto &option = deferred.change.option;
+		auto pending = std::any_of(changes.begin(), changes.end(), [&](const DeferredConfigOption &other) {
+			return other.transaction &&
+			       other.change.option.IsOption(option.schema_id, option.table_id, option.option.key);
+		});
+		if (pending) {
+			deferred_config_options.push_back(deferred);
 		}
 	}
-	deferred_config_options = std::move(open_changes);
 }
 
 template <class SCOPE_MAP, class SCOPE_ID>
