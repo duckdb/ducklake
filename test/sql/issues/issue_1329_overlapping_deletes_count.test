@@ -1,0 +1,52 @@
+# name: test/sql/issues/issue_1329_overlapping_deletes_count.test
+# description: count(*) subtracts a row deleted both in a delete file and in the inlined deletes once
+# group: [issues]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+# written by DuckDB 1.5.6, where two concurrent deletes of the same rows both commit
+unzip data/old_ducklake/overlapping_deletes.db.gz {TEST_DIR}/issue_1329.db
+
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/issue_1329.db' AS overlap (DATA_PATH 'data/old_ducklake/overlapping_deletes/', OVERRIDE_DATA_PATH TRUE, READ_ONLY)
+
+query II
+SELECT count(*), count(i) FROM overlap.t
+----
+70	70
+
+query II
+SELECT count(*), count(i) FROM overlap.n
+----
+5	5
+
+query II
+SELECT count(*), count(i) FROM overlap.s
+----
+50	50
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/issue_1329', DATA_INLINING_ROW_LIMIT 10)
+
+statement ok
+CREATE TABLE dl.t AS FROM range(100) s(i)
+
+statement ok
+DELETE FROM dl.t WHERE i = 5
+
+statement ok
+DELETE FROM dl.t WHERE i >= 50 AND i < 80
+
+statement ok
+DELETE FROM dl.t WHERE i = 90
+
+query II
+SELECT count(*), count(i) FROM dl.t
+----
+68	68

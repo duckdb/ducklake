@@ -328,7 +328,8 @@ public:
 	virtual idx_t GetBeginSnapshotForTable(TableIndex table_id);
 	virtual idx_t GetBeginSnapshotForSchemaVersion(TableIndex table_id, idx_t schema_version);
 	virtual idx_t GetNetDataFileRowCount(TableIndex table_id, DuckLakeSnapshot snapshot);
-	optional_idx GetNetDataFileRowCountForStats(TableIndex table_id, DuckLakeSnapshot snapshot);
+	optional_idx GetNetDataFileRowCountForStats(ClientContext &context, DuckLakeTableEntry &table,
+	                                            DuckLakeSnapshot snapshot);
 	virtual idx_t GetNetInlinedRowCount(const string &inlined_table_name, DuckLakeSnapshot snapshot);
 	//! SQL builders for stats-refresh metadata lookups; caller substitutes placeholders + executes.
 	//! With require_exact, the count is NULL if any visible file is only partially visible to the snapshot.
@@ -606,6 +607,9 @@ private:
 	DuckLakeFileData ReadDeleteFile(DuckLakeTableEntry &table, T &row, idx_t &col_idx, bool is_encrypted);
 
 	bool IsEncrypted() const;
+	//! The rows of the visible delete files that the inlined deletes of the same data file delete again
+	idx_t CountRowsDeletedTwice(ClientContext &context, DuckLakeTableEntry &table, DuckLakeSnapshot snapshot,
+	                            const string &inlined_deletion_table);
 
 protected:
 	string GetFileSelectList(const string &prefix);
