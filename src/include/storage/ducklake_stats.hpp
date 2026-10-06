@@ -19,6 +19,11 @@ inline bool RequiresValueComparison(const LogicalType &type) {
 	return type.IsNumeric() || type.IsTemporal() || type.id() == LogicalTypeId::BOOLEAN;
 }
 
+//! Finite bounds need an explicit UTC offset
+inline bool StatsBoundsRequireOffset(const LogicalType &type) {
+	return type.id() == LogicalTypeId::TIMESTAMP_TZ || type.id() == LogicalTypeId::TIMESTAMP_TZ_NS;
+}
+
 struct DuckLakeColumnStats;
 struct DuckLakeGlobalColumnStatsInfo;
 
@@ -72,6 +77,8 @@ public:
 	static DuckLakeColumnStats FromConstant(const LogicalType &type, const Value &value, idx_t count);
 	//! Discards the min/max bounds, leaving the counts intact
 	void ClearBounds();
+	void CopyMinFrom(const DuckLakeColumnStats &other);
+	void CopyMaxFrom(const DuckLakeColumnStats &other);
 	static bool BoundsSurviveTypePromotion(const LogicalType &source, const LogicalType &target);
 	unique_ptr<BaseStatistics> ToStats() const;
 	void MergeStats(const DuckLakeColumnStats &new_stats);
@@ -86,6 +93,7 @@ private:
 //! These are the global, table-wide stats
 struct DuckLakeTableStats {
 	idx_t record_count = 0;
+	bool record_count_unknown = false;
 	idx_t table_size_bytes = 0;
 	idx_t next_row_id = 0;
 	map<FieldIndex, DuckLakeColumnStats> column_stats;

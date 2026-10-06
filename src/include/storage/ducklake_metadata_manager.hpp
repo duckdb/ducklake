@@ -297,6 +297,9 @@ public:
 	static unique_ptr<DuckLakeSnapshot> ParseSnapshot(QueryResult &result,
 	                                                  optional_ptr<string> catalog_version = nullptr);
 	static vector<DuckLakeGlobalStatsInfo> ParseGlobalTableStats(QueryResult &result);
+	//! Take the table sizes that stats rows lack from the live data files
+	static void FillMissingTableSizes(vector<DuckLakeGlobalStatsInfo> &stats,
+	                                  const std::function<unique_ptr<QueryResult>(string)> &executor);
 	//! Whether the result contains a column with the given name
 	static bool ResultHasColumn(QueryResult &result, const string &name);
 
@@ -631,6 +634,8 @@ protected:
 	                                          const FileColumnStatsCTEBodyGenerator &generate_body);
 	//! Join each column's stats CTE once. Leading newline per join, empty when there are none.
 	static string GenerateStatsJoinList(const map<idx_t, CTERequirement> &requirements);
+	//! Unknown bounds must keep the file
+	static string BoundOrInfinity(const string &bound, const string &type_name, StatsCastType cast_type);
 
 private:
 	virtual string GenerateCTESectionFromRequirements(const map<idx_t, CTERequirement> &requirements,

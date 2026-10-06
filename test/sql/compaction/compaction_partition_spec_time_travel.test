@@ -1,0 +1,62 @@
+# name: test/sql/compaction/compaction_partition_spec_time_travel.test
+# description: compacting files of an older partition spec keeps the schema of other tables at older snapshots
+# group: [compaction]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/compaction_partition_spec_time_travel', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE dl.a (id INTEGER)
+
+statement ok
+INSERT INTO dl.a VALUES (42)
+
+statement ok
+CREATE TABLE dl.b (id INTEGER, p INTEGER, q INTEGER)
+
+statement ok
+ALTER TABLE dl.b SET PARTITIONED BY (p)
+
+statement ok
+INSERT INTO dl.b VALUES (1, 1, 1)
+
+statement ok
+INSERT INTO dl.b VALUES (2, 1, 1)
+
+statement ok
+ALTER TABLE dl.b ADD COLUMN r INTEGER
+
+statement ok
+ALTER TABLE dl.a ADD COLUMN extra VARCHAR
+
+statement ok
+ALTER TABLE dl.b SET PARTITIONED BY (q)
+
+query IIII
+CALL ducklake_merge_adjacent_files('dl', 'b')
+----
+main	b	2	1
+
+query I
+SELECT column_name FROM (DESCRIBE SELECT * FROM dl.a AT (VERSION => 7))
+----
+id
+
+query I
+SELECT * FROM dl.a AT (VERSION => 7)
+----
+42
+
+query IIII
+SELECT * FROM dl.b ORDER BY id
+----
+1	1	1	NULL
+2	1	1	NULL

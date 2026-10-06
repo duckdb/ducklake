@@ -1,0 +1,43 @@
+# name: benchmark/micro/fixtures/repartitioned_compaction.benchmark.in
+# description: Lake with three 64-row files in each of 1000 identity partitions of a spec the table no longer uses
+# group: [fixtures]
+
+argument lake repartitioned_compaction
+
+cache_file ${lake}_ready.marker
+
+# The added column gives the old spec a schema version of its own
+load
+@create ${lake}_pristine
+@attach ${lake}_pristine AS lake (DATA_PATH '${BENCHMARK_DIR}/${lake}_files')
+CALL lake.set_option('data_inlining_row_limit', 0);
+CREATE TABLE lake.events (part INTEGER, id BIGINT, v BIGINT);
+ALTER TABLE lake.events SET PARTITIONED BY (part);
+INSERT INTO lake.events
+SELECT p, p * 192 + r AS id, id * 3 + 7 FROM range(1000) parts(p), range(64) rows(r);
+INSERT INTO lake.events
+SELECT p, p * 192 + r AS id, id * 3 + 7 FROM range(1000) parts(p), range(64, 128) rows(r);
+INSERT INTO lake.events
+SELECT p, p * 192 + r AS id, id * 3 + 7 FROM range(1000) parts(p), range(128, 192) rows(r);
+ALTER TABLE lake.events ADD COLUMN extra VARCHAR;
+ALTER TABLE lake.events SET PARTITIONED BY (bucket(8, id));
+SELECT CASE WHEN (SELECT count(*) <> 3000 OR NOT bool_and(n = 64) FROM (
+SELECT part, filename, count(*) AS n FROM lake.events GROUP BY ALL))
+OR (SELECT count(DISTINCT part) <> 1000 FROM lake.events)
+OR (SELECT max(snapshot_id) <> 7 FROM lake.snapshots())
+THEN error('expected three 64-row files in each of 1000 partitions of the old spec') END;
+CALL ducklake_delete_orphaned_files('lake', cleanup_all => true);
+DETACH lake;
+COPY (SELECT count(*) FROM glob('${BENCHMARK_DIR}/${lake}_files/**'))
+TO '${BENCHMARK_DIR}/${lake}_filecount.csv' (FORMAT CSV, HEADER false);
+@seal ${lake}_pristine
+COPY (SELECT 1) TO '${BENCHMARK_DIR}/${lake}_ready.marker' (FORMAT CSV);
+DETACH DATABASE IF EXISTS lake;
+@copy ${lake}_pristine TO ${work}
+@attach ${work} AS lake
+CALL ducklake_delete_orphaned_files('lake', cleanup_all => true);
+SELECT CASE WHEN (SELECT count(*) FROM glob('${BENCHMARK_DIR}/${lake}_files/**'))
+<> (SELECT column0 FROM read_csv('${BENCHMARK_DIR}/${lake}_filecount.csv', header = false))
+THEN error('the fixture files were not restored') END;
+
+include benchmark/micro/fixtures/restore_reload.benchmark.in

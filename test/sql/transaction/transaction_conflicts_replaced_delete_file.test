@@ -1,0 +1,167 @@
+# name: test/sql/transaction/transaction_conflicts_replaced_delete_file.test
+# description: Concurrent deletes that replace the same delete file conflict
+# group: [transaction]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/replaced_delete', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+SET immediate_transaction_mode=true
+
+statement ok
+CREATE TABLE ducklake.test AS FROM range(1000) t(i)
+
+statement ok
+DELETE FROM ducklake.test WHERE i = 0
+
+# both deletes replace the delete file of the same data file
+statement ok con1
+BEGIN
+
+statement ok con2
+BEGIN
+
+statement ok con1
+DELETE FROM ducklake.test WHERE i = 1
+
+statement ok con2
+DELETE FROM ducklake.test WHERE i = 2
+
+statement ok con1
+COMMIT
+
+statement error con2
+COMMIT
+----
+conflict
+
+query I
+SELECT list(i ORDER BY i) FROM ducklake.test WHERE i < 6
+----
+[2, 3, 4, 5]
+
+query I
+SELECT count(*) FROM __ducklake_metadata_ducklake.ducklake_delete_file WHERE end_snapshot IS NULL
+----
+1
+
+# a flush of inlined deletes also replaces the delete file
+statement ok
+CALL ducklake.set_option('data_inlining_row_limit', 1)
+
+statement ok
+DELETE FROM ducklake.test WHERE i = 3
+
+statement ok con1
+BEGIN
+
+statement ok con2
+BEGIN
+
+statement ok con1
+CALL ducklake_flush_inlined_data('ducklake')
+
+statement ok con2
+DELETE FROM ducklake.test WHERE i IN (4, 5)
+
+statement ok con1
+COMMIT
+
+statement error con2
+COMMIT
+----
+conflict
+
+query I
+SELECT list(i ORDER BY i) FROM ducklake.test WHERE i < 8
+----
+[2, 4, 5, 6, 7]
+
+query I
+SELECT count(*) FROM __ducklake_metadata_ducklake.ducklake_delete_file WHERE end_snapshot IS NULL
+----
+1
+
+statement ok
+DELETE FROM ducklake.test WHERE i = 4
+
+statement ok con1
+BEGIN
+
+statement ok con2
+BEGIN
+
+statement ok con1
+DELETE FROM ducklake.test WHERE i IN (5, 6)
+
+statement ok con2
+CALL ducklake_flush_inlined_data('ducklake')
+
+statement ok con1
+COMMIT
+
+statement error con2
+COMMIT
+----
+conflict
+
+query I
+SELECT list(i ORDER BY i) FROM ducklake.test WHERE i < 8
+----
+[2, 7]
+
+query I
+SELECT count(*) FROM __ducklake_metadata_ducklake.ducklake_delete_file WHERE end_snapshot IS NULL
+----
+1
+
+# deletes that replace the delete files of different data files do not conflict
+statement ok
+CALL ducklake.set_option('data_inlining_row_limit', 0)
+
+statement ok
+INSERT INTO ducklake.test FROM range(1000, 2000)
+
+statement ok
+DELETE FROM ducklake.test WHERE i = 1000
+
+statement ok con1
+BEGIN
+
+statement ok con2
+BEGIN
+
+statement ok con1
+DELETE FROM ducklake.test WHERE i = 7
+
+statement ok con2
+DELETE FROM ducklake.test WHERE i = 1001
+
+statement ok con1
+COMMIT
+
+statement ok con2
+COMMIT
+
+query II
+SELECT count(*), count(DISTINCT i) FROM ducklake.test
+----
+1991	1991
+
+query I
+SELECT count(*) FROM ducklake.test WHERE i IN (7, 1000, 1001)
+----
+0
+
+query I
+SELECT count(*) FROM __ducklake_metadata_ducklake.ducklake_delete_file WHERE end_snapshot IS NULL
+----
+2

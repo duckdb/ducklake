@@ -146,10 +146,7 @@ string PostgresMetadataManager::CastStatsToTarget(const string &stats, const Log
 		if (cast_type == StatsCastType::ORDERING) {
 			return cast;
 		}
-		// Unknown bounds must not exclude a file that can satisfy the data filter.
-		return StringUtil::Format("COALESCE(%s, '%s'::%s)", cast,
-		                          cast_type == StatsCastType::MIN ? "-infinity" : "infinity",
-		                          GetPostgresStatsType(type));
+		return BoundOrInfinity(cast, GetPostgresStatsType(type), cast_type);
 	}
 	if (CanCastPostgresStatsForValueComparison(type)) {
 		return stats + "::" + GetPostgresStatsType(type);

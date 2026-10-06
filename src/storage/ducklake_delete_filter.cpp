@@ -318,6 +318,9 @@ void DuckLakeDeleteFilter::Initialize(const DuckLakeInlinedDataDeletes &inlined_
 		}
 		std::inplace_merge(delete_data->deleted_rows.begin(), delete_data->deleted_rows.begin() + mid_idx,
 		                   delete_data->deleted_rows.end());
+		// a row can be deleted in both stores
+		delete_data->deleted_rows.erase(std::unique(delete_data->deleted_rows.begin(), delete_data->deleted_rows.end()),
+		                                delete_data->deleted_rows.end());
 		return;
 	}
 
@@ -339,6 +342,11 @@ void DuckLakeDeleteFilter::Initialize(const DuckLakeInlinedDataDeletes &inlined_
 			lhs_row_it++;
 			lhs_snapshot_it++;
 		} else {
+			if (lhs_row_it != delete_data->deleted_rows.end() && *lhs_row_it == *rhs_row_it) {
+				// the inlined delete is visible, so it replaces the delete of the same row
+				lhs_row_it++;
+				lhs_snapshot_it++;
+			}
 			merged_rows.push_back(*rhs_row_it);
 			merged_snapshot_ids.push_back(0);
 			rhs_row_it++;

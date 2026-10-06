@@ -475,11 +475,12 @@ DuckLakeCompactor::ResolvePartitionSpecTable(DuckLakeTableEntry &table, const Du
 	if (partition_data && partition_data->partition_id == partition_id) {
 		return &table;
 	}
-	if (!source_file.partition_snapshot_id.IsValid() || !source_file.partition_schema_version.IsValid()) {
+	if (!source_file.partition_schema_version.IsValid()) {
 		return nullptr;
 	}
-	DuckLakeSnapshot partition_snapshot(source_file.partition_snapshot_id.GetIndex(),
-	                                    source_file.partition_schema_version.GetIndex(), 0, 0);
+	auto schema_version = source_file.partition_schema_version.GetIndex();
+	DuckLakeSnapshot partition_snapshot(catalog.GetBeginSnapshotForSchemaVersion(table_id, schema_version, transaction),
+	                                    schema_version, 0, 0);
 	auto partition_entry = catalog.GetEntryById(transaction, partition_snapshot, table_id);
 	if (!partition_entry) {
 		throw InternalException("DuckLakeCompactor: failed to find table entry for partition schema");

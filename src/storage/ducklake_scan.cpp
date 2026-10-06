@@ -22,6 +22,7 @@
 #include "duckdb/main/secret/secret_manager.hpp"
 #include "duckdb/parser/expression/function_expression.hpp"
 #include "duckdb/parser/qualified_name.hpp"
+#include "duckdb/planner/tableref/bound_at_clause.hpp"
 
 namespace duckdb {
 
@@ -211,7 +212,7 @@ vector<PartitionStatistics> DuckLakeGetPartitionStats(ClientContext &context, Ge
 	// record_count (total ever inserted) equals the net (delete-adjusted) row count. count(*) is unaffected
 	// either way: it does not consult MinMaxIsExact and subtracts delete counts independently.
 	auto table_stats = table.GetTableStats(*transaction);
-	bool min_max_exact = table_stats && table_stats->record_count == net_count;
+	bool min_max_exact = table_stats && !table_stats->record_count_unknown && table_stats->record_count == net_count;
 
 	// Return single partition with total count
 	PartitionStatistics stats;
@@ -341,7 +342,13 @@ unique_ptr<FunctionData> DuckLakeScanDeserialize(Deserializer &deserializer, Tab
 	auto &catalog = Catalog::GetCatalog(context, Identifier(catalog_name));
 	auto &transaction = DuckLakeTransaction::Get(context, catalog);
 
-	auto &table_entry = Catalog::GetEntry<TableCatalogEntry>(context, qualified_name).Cast<DuckLakeTableEntry>();
+	// a time travel scan finds its table at the serialized snapshot
+	unique_ptr<BoundAtClause> at_clause;
+	if (snapshot.snapshot_id != transaction.GetSnapshot().snapshot_id) {
+		at_clause = make_uniq<BoundAtClause>("version", Value::UBIGINT(snapshot.snapshot_id));
+	}
+	EntryLookupInfo table_lookup(CatalogType::TABLE_ENTRY, qualified_name, at_clause.get(), QueryErrorContext());
+	auto &table_entry = Catalog::GetEntry(context, table_lookup).Cast<DuckLakeTableEntry>();
 
 	function.function_info = DuckLakeFunctionInfo::Create(table_entry, transaction, snapshot);
 	auto &func_info = function.function_info->Cast<DuckLakeFunctionInfo>();
