@@ -26,6 +26,10 @@ struct DuckLakeColumnSchemaEntry {
 struct DuckLakeCommitContext {
 	//! Runs a metadata-DB query during conflict resolution.
 	std::function<unique_ptr<QueryResult>(string)> conflict_query_executor;
+	//! Emits the SQL of the option changes that are written with the commit
+	std::function<string()> write_config_options = []() {
+		return string();
+	};
 	//! Returns the latest snapshot for the first commit attempt.
 	std::function<DuckLakeSnapshot()> get_snapshot;
 	//! Executes the batched snapshot/changes SQL against the metadata DB.

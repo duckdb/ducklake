@@ -6203,6 +6203,25 @@ static void ConfigOptionScope(const DuckLakeConfigOption &option, string &scope,
 	}
 }
 
+string DuckLakeMetadataManager::WriteConfigOptionChangesSql(const vector<DuckLakeConfigOptionUndo> &changes) {
+	string batch_query;
+	for (auto &change : changes) {
+		auto &option = change.option;
+		string scope;
+		string scope_id;
+		string scope_filter;
+		ConfigOptionScope(option, scope, scope_id, scope_filter);
+		batch_query += StringUtil::Format("DELETE FROM {METADATA_CATALOG}.ducklake_metadata WHERE key = %s AND %s;",
+		                                  SQLString(option.option.key), scope_filter);
+		if (!change.reset) {
+			batch_query +=
+			    StringUtil::Format("INSERT INTO {METADATA_CATALOG}.ducklake_metadata VALUES (%s, %s, %s, %s);",
+			                       SQLString(option.option.key), SQLString(option.option.value), scope, scope_id);
+		}
+	}
+	return batch_query;
+}
+
 bool DuckLakeMetadataManager::ResetConfigOption(const DuckLakeConfigOption &option) {
 	string scope;
 	string scope_id;

@@ -19,7 +19,7 @@
   ],
   "skip_tests": [
     {
-      "reason": "Two transactions that set a new option both insert its row on this catalog; the last-commit-wins case needs quack, where option changes are written at commit",
+      "reason": "Requires the commit ordering of option changes on quack",
       "paths": [
         "test/sql/quack/quack_set_option_concurrent.test"
       ]

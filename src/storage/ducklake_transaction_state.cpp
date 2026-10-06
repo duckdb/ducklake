@@ -1882,6 +1882,8 @@ string DuckLakeTransactionState::CommitChanges(DuckLakeCommitState &commit_state
 		                                            new_inlined_data_tables_result);
 	}
 
+	batch_queries += context.write_config_options();
+
 	// delete the flushed inlined rows and inlined file deletions
 	batch_queries += DuckLakeMetadataManager::GenerateDeleteFlushedInlinedData(
 	    flushed_inlined_tables, flushed_inlined_file_deletions, context.InlinedColNames());

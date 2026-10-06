@@ -294,6 +294,9 @@ public:
 	void ResetConfigOption(const DuckLakeConfigOption &option);
 	//! Applies the option changes that are not stored before commit to options read from the metadata
 	void ApplyDeferredConfigOptions(DuckLakeMetadata &metadata) const;
+	//! Whether option changes wait for the commit, which a catalog committing each statement needs
+	bool HasDeferredConfigOptions() const;
+	string DeferredConfigOptionsSql() const;
 
 	void SetCommitMessage(const DuckLakeSnapshotCommit &option);
 
@@ -361,8 +364,6 @@ private:
 	void FlushNameMapCacheInvalidations();
 	//! Puts back the config options this transaction replaced in the catalog
 	void UndoConfigOptions();
-	//! Writes the metadata changes that a catalog committing each statement only gets at commit
-	void WriteDeferredMetadata();
 	static DuckLakePartitionInfo GetNewPartitionKey(DuckLakeCommitState &commit_state, DuckLakeTableEntry &table);
 	static DuckLakeSortInfo GetNewSortKey(DuckLakeCommitState &commit_state, DuckLakeTableEntry &table);
 	static DuckLakeTableInfo GetNewTable(DuckLakeCommitState &commit_state, DuckLakeTableEntry &table);

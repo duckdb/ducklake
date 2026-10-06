@@ -752,16 +752,25 @@ void DuckLakeTransaction::UndoConfigOptions() {
 }
 
 void DuckLakeTransaction::Commit() {
-	try {
-		WriteDeferredMetadata();
-	} catch (...) {
-		// the other changes of the transaction are not committed yet
-		Rollback();
-		throw;
+	if (!expired_snapshots.empty()) {
+		try {
+			GetMetadataManager().DeleteSnapshots(expired_snapshots);
+		} catch (...) {
+			// the other changes of the transaction are not committed yet
+			Rollback();
+			throw;
+		}
 	}
 	try {
 		if (ChangesMade()) {
 			FlushChanges();
+		} else if (HasDeferredConfigOptions()) {
+			auto option_changes = DeferredConfigOptionsSql();
+			auto result = metadata_manager->Execute(GetSnapshot(), option_changes);
+			if (result->HasError()) {
+				result->GetErrorObject().Throw("Failed to write config options to DuckLake: ");
+			}
+			connection->Commit();
 		} else if (connection) {
 			connection->Commit();
 			if (!state->flushed_inlined_tables.empty()) {
@@ -772,6 +781,16 @@ void DuckLakeTransaction::Commit() {
 		// a failed commit never reaches Rollback - the transaction manager only reports the error
 		UndoConfigOptions();
 		throw;
+	}
+	if (HasDeferredConfigOptions()) {
+		// keep the cached options in commit order
+		for (auto &undo : config_option_undo) {
+			if (undo.reset) {
+				ducklake_catalog.ResetConfigOption(undo.option);
+			} else {
+				ducklake_catalog.SetConfigOption(undo.option);
+			}
+		}
 	}
 	FlushNameMapCacheInvalidations();
 	connection.reset();
@@ -1451,6 +1470,9 @@ void DuckLakeTransaction::RunCommitLoop(DuckLakeSnapshot transaction_snapshot,
 		}
 		return result;
 	};
+	context.write_config_options = [&]() {
+		return DeferredConfigOptionsSql();
+	};
 	context.get_snapshot = [&]() {
 		return GetSnapshot();
 	};
@@ -1617,7 +1639,7 @@ static void ApplyDeferredConfigOption(vector<SETTING> &settings, const DuckLakeC
 }
 
 void DuckLakeTransaction::ApplyDeferredConfigOptions(DuckLakeMetadata &metadata) const {
-	if (!metadata_manager->CommitsEachStatement()) {
+	if (!HasDeferredConfigOptions()) {
 		return;
 	}
 	for (auto &undo : config_option_undo) {
@@ -1642,25 +1664,15 @@ void DuckLakeTransaction::ApplyDeferredConfigOptions(DuckLakeMetadata &metadata)
 	}
 }
 
-void DuckLakeTransaction::WriteDeferredMetadata() {
-	auto &metadata_manager = GetMetadataManager();
-	if (!metadata_manager.CommitsEachStatement()) {
-		return;
+bool DuckLakeTransaction::HasDeferredConfigOptions() const {
+	return metadata_manager->CommitsEachStatement() && !config_option_undo.empty();
+}
+
+string DuckLakeTransaction::DeferredConfigOptionsSql() const {
+	if (!HasDeferredConfigOptions()) {
+		return string();
 	}
-	// the catalog copy takes the values again, so it matches the stored options when another transaction committed
-	// in between
-	for (auto &undo : config_option_undo) {
-		if (undo.reset) {
-			metadata_manager.ResetConfigOption(undo.option);
-			ducklake_catalog.ResetConfigOption(undo.option);
-		} else {
-			metadata_manager.SetConfigOption(undo.option);
-			ducklake_catalog.SetConfigOption(undo.option);
-		}
-	}
-	if (!expired_snapshots.empty()) {
-		metadata_manager.DeleteSnapshots(expired_snapshots);
-	}
+	return DuckLakeMetadataManager::WriteConfigOptionChangesSql(config_option_undo);
 }
 
 DuckLakeSnapshotCommit &DuckLakeTransaction::GetCommitInfo() {

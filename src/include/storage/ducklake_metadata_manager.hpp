@@ -374,6 +374,8 @@ public:
 	static string WriteNewColumns(const vector<DuckLakeNewColumn> &new_columns);
 	static string WriteNewTags(const vector<DuckLakeTagInfo> &new_tags);
 	static string WriteNewTableOptions(const vector<DuckLakeConfigOption> &new_options);
+	//! Writes the option changes of a transaction, in the order they were made
+	static string WriteConfigOptionChangesSql(const vector<DuckLakeConfigOptionUndo> &changes);
 	static string WriteNewColumnTags(const vector<DuckLakeColumnTagInfo> &new_tags);
 	static string WriteNewViewColumnTags(const vector<DuckLakeViewColumnTagInfo> &new_tags);
 	virtual string WriteNewDataFiles(DuckLakeSnapshot &commit_snapshot, const vector<DuckLakeFileInfo> &new_files,

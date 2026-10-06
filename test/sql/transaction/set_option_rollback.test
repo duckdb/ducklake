@@ -63,9 +63,12 @@ SELECT option_name, value FROM ducklake.options() WHERE scope = 'TABLE'
 ----
 parquet_compression	gzip
 
-# changes that commit are stored in order
+# changes that commit with data are stored in order
 statement ok
 BEGIN
+
+statement ok
+INSERT INTO ducklake.t VALUES (0)
 
 statement ok
 CALL ducklake.set_option('parquet_compression', 'zstd')
@@ -89,3 +92,26 @@ query III
 SELECT option_name, value, scope FROM ducklake.options() WHERE option_name = 'parquet_compression' ORDER BY scope
 ----
 parquet_compression	snappy	GLOBAL
+
+# a commit that fails leaves the stored options as they were
+statement ok
+CALL ducklake.set_option('require_commit_message', true)
+
+statement ok
+BEGIN
+
+statement ok
+CALL ducklake.set_option('parquet_row_group_size', 2000)
+
+statement ok
+INSERT INTO ducklake.t VALUES (1)
+
+statement error
+COMMIT
+----
+Commit Information for the snapshot is required
+
+query I
+SELECT count(*) FROM ducklake.options() WHERE option_name = 'parquet_row_group_size'
+----
+0
