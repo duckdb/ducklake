@@ -1,0 +1,52 @@
+# name: test/sql/stats/null_table_stats_totals.test
+# description: a stats row with NULL totals must not make an insert reuse row ids
+# group: [stats]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION __TEST_DIR__/null_totals.db
+
+test-env DATA_PATH __TEST_DIR__
+
+statement ok
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS x (DATA_PATH '${DATA_PATH}/null_totals_data', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE x.t(i INT);
+
+statement ok
+INSERT INTO x.t VALUES (10), (11);
+
+statement ok
+INSERT INTO x.t VALUES (20), (21);
+
+# the totals of ducklake_table_stats are optional - blank them out
+statement ok
+UPDATE __ducklake_metadata_x.ducklake_table_stats SET record_count = NULL;
+
+statement ok
+DETACH x;
+
+statement ok
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS x (DATA_PATH '${DATA_PATH}/null_totals_data', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+INSERT INTO x.t VALUES (30);
+
+query I
+SELECT count(DISTINCT rowid) FROM x.t;
+----
+5
+
+query I
+SELECT i FROM x.t WHERE rowid = 4;
+----
+30
+
+# the table keeps a single stats row
+query III
+SELECT count(*), max(record_count), max(next_row_id) FROM __ducklake_metadata_x.ducklake_table_stats;
+----
+1	1	5

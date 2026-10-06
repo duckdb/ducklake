@@ -5378,6 +5378,9 @@ string DuckLakeMetadataManager::UpdateGlobalTableStatsSql(const DuckLakeGlobalSt
 			}
 			column_stats_values += ")";
 		}
+		// a stats row with NULL totals is not read back as initialized - replace it rather than add a second row
+		batch_query += StringUtil::Format("DELETE FROM {METADATA_CATALOG}.ducklake_table_stats WHERE table_id = %d;",
+		                                  stats.table_id.index);
 		batch_query +=
 		    StringUtil::Format("INSERT INTO {METADATA_CATALOG}.ducklake_table_stats VALUES (%d, %d, %d, %d);",
 		                       stats.table_id.index, stats.record_count, stats.next_row_id, stats.table_size_bytes);

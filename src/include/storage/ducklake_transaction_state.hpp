@@ -163,6 +163,7 @@ public:
 	                    reference<CatalogEntry> view_entry, NewTableInfo &result,
 	                    TransactionChangeInformation &transaction_changes);
 	NewMacroInfo GetNewMacros(DuckLakeCommitState &commit_state, TransactionChangeInformation &transaction_changes);
+	idx_t RecoverNextRowId(TableIndex table_id, DuckLakeSnapshot snapshot, const DuckLakeCommitContext &context);
 	NewDataInfo GetNewDataFiles(string &batch_query, DuckLakeCommitState &commit_state,
 	                            optional_ptr<vector<DuckLakeGlobalStatsInfo>> stats,
 	                            const DuckLakeCommitContext &context,

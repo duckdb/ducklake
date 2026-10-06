@@ -1202,6 +1202,35 @@ string DuckLakeTransactionState::UpdateStatsForDroppedFiles(
 	return result;
 }
 
+//! The next free row id of a table that has no usable stats row, derived from the committed data files and inlined
+//! tables. Without this, a stats row with NULL totals (which the stats query filters out) would restart row ids at 0.
+idx_t DuckLakeTransactionState::RecoverNextRowId(TableIndex table_id, DuckLakeSnapshot snapshot,
+                                                 const DuckLakeCommitContext &context) {
+	vector<string> queries;
+	queries.push_back(StringUtil::Format("SELECT COALESCE(MAX(row_id_start + record_count), 0) FROM "
+	                                     "{METADATA_CATALOG}.ducklake_data_file WHERE table_id = %d;",
+	                                     table_id.index));
+	auto row_id_column = DuckLakeUtil::SQLIdentifierToString(context.InlinedColNames().row_id);
+	for (auto &inlined_table_name : context.get_inlined_table_names(table_id)) {
+		queries.push_back(StringUtil::Format("SELECT COALESCE(MAX(%s) + 1, 0) FROM {METADATA_CATALOG}.%s;",
+		                                     row_id_column, DuckLakeUtil::SQLIdentifierToString(inlined_table_name)));
+	}
+	idx_t next_row_id = 0;
+	for (auto &query : queries) {
+		auto result = context.query_metadata_with_snapshot(snapshot, query);
+		if (result->HasError()) {
+			result->GetErrorObject().Throw("Failed to read the next row id from DuckLake: ");
+		}
+		for (auto &row : *result) {
+			if (row.IsNull(0)) {
+				continue;
+			}
+			next_row_id = MaxValue<idx_t>(next_row_id, static_cast<idx_t>(row.GetValue<int64_t>(0)));
+		}
+	}
+	return next_row_id;
+}
+
 NewDataInfo DuckLakeTransactionState::GetNewDataFiles(
     string &batch_query, DuckLakeCommitState &commit_state, optional_ptr<vector<DuckLakeGlobalStatsInfo>> stats,
     const DuckLakeCommitContext &context, map<TableIndex, DroppedDataFileStats> &attempt_dropped_file_stats) {
@@ -1239,6 +1268,8 @@ NewDataInfo DuckLakeTransactionState::GetNewDataFiles(
 		if (current_stats) {
 			new_globals.stats = *current_stats;
 			new_globals.initialized = true;
+		} else {
+			new_globals.stats.next_row_id = RecoverNextRowId(table_id, commit_state.commit_snapshot, context);
 		}
 		bool clear_column_stats = ApplyDroppedFileStats(table_id, new_globals, attempt_dropped_file_stats);
 		auto &new_stats = new_globals.stats;
