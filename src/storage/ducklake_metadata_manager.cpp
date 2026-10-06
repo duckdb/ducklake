@@ -759,9 +759,9 @@ WHERE table_id = {TABLE_ID} AND schema_version = {SCHEMA_VERSION})";
 	return GetBeginSnapshotForTable(table_id);
 }
 
-string DuckLakeMetadataManager::GetNetDataFileRowCountSql(TableIndex table_id, const string &inlined_deletion_table,
-                                                          bool require_exact) {
-	// Compute sum(record_count) - sum(delete_count) - inlined_deletions in a single query.
+//! The record count, deleted row count and inlined deletion count of the data files visible at the snapshot
+static string NetDataFileRowCountParts(TableIndex table_id, const string &inlined_deletion_table, bool require_exact,
+                                       const string &separator) {
 	// Delete files are only counted if their corresponding data file is still visible.
 	// (When a data file's end_snapshot is set — e.g. TRUNCATE — associated deletes don't count.)
 	auto count_aggregate = [&](const string &count_column, const string &partial_max_column) {
@@ -784,14 +784,12 @@ COALESCE((SELECT COUNT(*) FROM {METADATA_CATALOG}.%s del
             AND ({SNAPSHOT_ID} < data.end_snapshot OR data.end_snapshot IS NULL)), 0))",
 		                                               inlined_deletion_table);
 	}
-	string query =
-	    StringUtil::Format(R"(
-SELECT
+	auto parts = StringUtil::Format(R"(
   (SELECT %s FROM {METADATA_CATALOG}.ducklake_data_file
             WHERE table_id = {TABLE_ID}
               AND {SNAPSHOT_ID} >= begin_snapshot
               AND ({SNAPSHOT_ID} < end_snapshot OR end_snapshot IS NULL))
-  -
+  %s
   (SELECT %s FROM {METADATA_CATALOG}.ducklake_delete_file del
             JOIN {METADATA_CATALOG}.ducklake_data_file data ON del.data_file_id = data.data_file_id
             WHERE del.table_id = {TABLE_ID}
@@ -799,11 +797,18 @@ SELECT
               AND ({SNAPSHOT_ID} < del.end_snapshot OR del.end_snapshot IS NULL)
               AND {SNAPSHOT_ID} >= data.begin_snapshot
               AND ({SNAPSHOT_ID} < data.end_snapshot OR data.end_snapshot IS NULL))
-  -
+  %s
   %s)",
-	                       count_aggregate("record_count", "partial_max"),
-	                       count_aggregate("del.delete_count", "del.partial_max"), inlined_deletion_subquery);
-	return StringUtil::Replace(query, "{TABLE_ID}", to_string(table_id.index));
+	                                count_aggregate("record_count", "partial_max"), separator,
+	                                count_aggregate("del.delete_count", "del.partial_max"), separator,
+	                                inlined_deletion_subquery);
+	return StringUtil::Replace(parts, "{TABLE_ID}", to_string(table_id.index));
+}
+
+string DuckLakeMetadataManager::GetNetDataFileRowCountSql(TableIndex table_id, const string &inlined_deletion_table,
+                                                          bool require_exact) {
+	// Compute sum(record_count) - sum(delete_count) - inlined_deletions in a single query.
+	return "\nSELECT" + NetDataFileRowCountParts(table_id, inlined_deletion_table, require_exact, "-");
 }
 
 idx_t DuckLakeMetadataManager::GetNetDataFileRowCount(TableIndex table_id, DuckLakeSnapshot snapshot) {
@@ -815,9 +820,10 @@ idx_t DuckLakeMetadataManager::GetNetDataFileRowCount(TableIndex table_id, DuckL
 	return 0;
 }
 
-//! The inlined deletes of data files that also have a visible delete file
-static string InlinedDeletesWithDeleteFileSql(TableIndex table_id, const string &inlined_deletion_table) {
-	return StringUtil::Format(R"(
+idx_t DuckLakeMetadataManager::CountRowsDeletedTwice(ClientContext &context, DuckLakeTableEntry &table,
+                                                     DuckLakeSnapshot snapshot, const string &inlined_deletion_table) {
+	auto query = StringUtil::Format(R"(
+SELECT del.data_file_id, %s, inlined.row_id
 FROM {METADATA_CATALOG}.ducklake_delete_file del
 JOIN {METADATA_CATALOG}.ducklake_data_file data ON del.data_file_id = data.data_file_id
 JOIN {METADATA_CATALOG}.%s inlined ON inlined.file_id = del.data_file_id
@@ -826,15 +832,9 @@ WHERE del.table_id = %d
   AND ({SNAPSHOT_ID} < del.end_snapshot OR del.end_snapshot IS NULL)
   AND {SNAPSHOT_ID} >= data.begin_snapshot
   AND ({SNAPSHOT_ID} < data.end_snapshot OR data.end_snapshot IS NULL)
-  AND inlined.begin_snapshot <= {SNAPSHOT_ID})",
-	                          inlined_deletion_table, table_id.index);
-}
-
-idx_t DuckLakeMetadataManager::CountRowsDeletedTwice(ClientContext &context, DuckLakeTableEntry &table,
-                                                     DuckLakeSnapshot snapshot, const string &inlined_deletion_table) {
-	auto query = "SELECT del.data_file_id, " + GetDeleteFileSelectList("del") + ", inlined.row_id" +
-	             InlinedDeletesWithDeleteFileSql(table.GetTableId(), inlined_deletion_table) +
-	             "\nORDER BY del.data_file_id";
+  AND inlined.begin_snapshot <= {SNAPSHOT_ID}
+ORDER BY del.data_file_id)",
+	                                GetDeleteFileSelectList("del"), inlined_deletion_table, table.GetTableId().index);
 	auto result = Query(snapshot, query);
 	if (result->HasError()) {
 		result->GetErrorObject().Throw("Failed to get the inlined deletes of files with a delete file: ");
@@ -860,24 +860,19 @@ optional_idx DuckLakeMetadataManager::GetNetDataFileRowCountForStats(ClientConte
                                                                      DuckLakeSnapshot snapshot) {
 	auto table_id = table.GetTableId();
 	auto inlined_deletion_table = GetInlinedDeletionTableName(table_id, snapshot);
-	string inlined_deletes_with_delete_file = "0";
-	if (!inlined_deletion_table.empty()) {
-		inlined_deletes_with_delete_file =
-		    "(SELECT COUNT(*)" + InlinedDeletesWithDeleteFileSql(table_id, inlined_deletion_table) + ")";
-	}
-	auto query =
-	    StringUtil::Format("SELECT (%s), %s", GetNetDataFileRowCountSql(table_id, inlined_deletion_table, true),
-	                       inlined_deletes_with_delete_file);
+	auto query = "SELECT" + NetDataFileRowCountParts(table_id, inlined_deletion_table, true, ",");
 	auto result = Query(snapshot, query);
 	if (result->HasError()) {
 		result->GetErrorObject().Throw("Failed to get exact data file row count from DuckLake: ");
 	}
 	for (auto &row : *result) {
-		if (row.IsNull(0)) {
+		if (row.IsNull(0) || row.IsNull(1)) {
 			return optional_idx();
 		}
-		auto count = row.GetValue<int64_t>(0);
-		if (row.GetValue<idx_t>(1) > 0) {
+		auto deleted_rows = row.GetValue<int64_t>(1);
+		auto inlined_deletions = row.GetValue<int64_t>(2);
+		auto count = row.GetValue<int64_t>(0) - deleted_rows - inlined_deletions;
+		if (deleted_rows > 0 && inlined_deletions > 0) {
 			// a row deleted in both a delete file and the inlined deletes was subtracted twice
 			count += NumericCast<int64_t>(CountRowsDeletedTwice(context, table, snapshot, inlined_deletion_table));
 		}
