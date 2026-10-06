@@ -1121,7 +1121,12 @@ unique_ptr<DuckLakeFieldId> DuckLakeTableEntry::TypePromotion(const DuckLakeFiel
 
 	// re-create with the new type
 	auto column_data = source_id.GetColumnData().Copy();
-	column_data.initial_default = column_data.initial_default.DefaultCastAs(target);
+	if (column_data.initial_default.IsNull()) {
+		column_data.initial_default = Value(target);
+	} else {
+		// the catalog stores the default as text and casts it to the type of the column
+		column_data.initial_default = Value(column_data.initial_default.ToString()).DefaultCastAs(target);
+	}
 	DuckLakeNewColumn new_col;
 	if (!parent_idx.IsValid()) {
 		// root column - get the info from the table directly
