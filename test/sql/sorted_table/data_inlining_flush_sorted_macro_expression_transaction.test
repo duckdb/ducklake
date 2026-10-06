@@ -72,48 +72,36 @@ ABC	XYZ	AXBYCZ
 321	000	302010
 123	000	102030
 
-# FIXME TODO: This should get fixed to that it succeeds. See commented out tests below.
-statement error
+# Delete positions must not rebind this transaction's sort macro on the metadata connection.
+statement ok
+DELETE FROM macro_sort_test WHERE i = '321'
+
+statement ok
 CALL ducklake_flush_inlined_data('ducklake', table_name => 'macro_sort_test');
+
+query III
+SELECT i, j, zip_varchar(i, j, num_chars := 3)
+FROM macro_sort_test
+ORDER BY zip_varchar(i, j, num_chars := 3)
 ----
-Scalar Function with name zip_varchar does not exist!
+123	000	102030
+ABC	XYZ	AXBYCZ
+ZYX	CBA	ZCYBXA
 
 statement ok
-ROLLBACK
+ALTER TABLE ducklake.macro_sort_test RESET SORTED BY
 
 statement ok
-DROP MACRO IF EXISTS zip_varchar
+COMMIT
 
-# FIXME - these tests should be re-enabled.
-# statement ok
-# CALL ducklake_flush_inlined_data('ducklake', table_name => 'macro_sort_test');
+query III
+SELECT i, j, zip_varchar(i, j, num_chars := 3)
+FROM macro_sort_test
+ORDER BY zip_varchar(i, j, num_chars := 3)
+----
+123	000	102030
+ABC	XYZ	AXBYCZ
+ZYX	CBA	ZCYBXA
 
-# # Verify data is now sorted by the macro
-# query III
-# SELECT i, j, zip_varchar(i, j, num_chars := 3)
-# FROM macro_sort_test
-# ----
-# 123	000	102030
-# 321	000	302010
-# ABC	XYZ	AXBYCZ
-# ZYX	CBA	ZCYBXA
-
-# # We can even clear the sorting before committing
-# statement ok 
-# ALTER TABLE ducklake.macro_sort_test RESET SORTED BY
-
-# statement ok
-# COMMIT
-
-# # Verify data is still sorted by the macro
-# query III
-# SELECT i, j, zip_varchar(i, j, num_chars := 3)
-# FROM macro_sort_test
-# ----
-# 123	000	102030
-# 321	000	302010
-# ABC	XYZ	AXBYCZ
-# ZYX	CBA	ZCYBXA
-
-# statement ok
-# DROP MACRO zip_varchar
+statement ok
+DROP MACRO zip_varchar
