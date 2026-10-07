@@ -3698,7 +3698,7 @@ string DuckLakeMetadataManager::GetInlinedDeletionTableName(TableIndex table_id,
 	// The table name is always deterministic
 	string table_name = InlinedFileDeletionTableName(table_id);
 
-	// a reader of this transaction's changes reads the deletions it flushed from its delete files
+	// a reader of local changes reads the flushed deletions from local delete files
 	if (!create_if_not_exists && include_local_changes && transaction.InlinedFileDeletionsFlushed(table_id)) {
 		return string();
 	}
