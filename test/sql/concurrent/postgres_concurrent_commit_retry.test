@@ -1,0 +1,55 @@
+# name: test/sql/concurrent/postgres_concurrent_commit_retry.test
+# description: concurrent commits on Postgres that collide on the snapshot id succeed with a single retry
+# group: [concurrent]
+
+require ducklake
+
+require parquet
+
+require postgres_scanner
+
+require-env DUCKLAKE_CI
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'dbname=ducklakedb' AS pg (TYPE postgres)
+
+statement ok
+CALL postgres_execute('pg', 'DROP SCHEMA IF EXISTS concurrent_commit_retry CASCADE')
+
+statement ok
+ATTACH 'ducklake:postgres:dbname=ducklakedb' AS dl
+(DATA_PATH '{DATA_PATH}/concurrent_commit_retry', METADATA_SCHEMA 'concurrent_commit_retry')
+
+statement ok
+SET GLOBAL ducklake_max_retry_count = 1
+
+statement ok
+SET GLOBAL ducklake_retry_wait_ms = 1
+
+statement ok
+CREATE TABLE dl.src AS SELECT range AS id FROM range(100)
+
+concurrentloop i 0 32
+
+statement ok
+CREATE TABLE dl.t_${i} AS SELECT * FROM dl.src
+
+endloop
+
+query I
+SELECT count(*) FROM duckdb_tables() WHERE database_name = 'dl' AND table_name LIKE 't%'
+----
+32
+
+query I
+SELECT count(*) FROM dl.t_31
+----
+100
+
+statement ok
+DETACH dl
+
+statement ok
+CALL postgres_execute('pg', 'DROP SCHEMA concurrent_commit_retry CASCADE')

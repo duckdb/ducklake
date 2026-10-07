@@ -33,6 +33,7 @@ public:
 	void MigrateInlinedDataTypes() override;
 
 	unique_ptr<QueryResult> Execute(DuckLakeSnapshot snapshot, string &query) override;
+	bool BlockConcurrentCommits() override;
 
 	void ClearCache() override;
 

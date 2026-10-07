@@ -310,6 +310,12 @@ unique_ptr<QueryResult> PostgresMetadataManager::Execute(DuckLakeSnapshot snapsh
 	return std::move(result);
 }
 
+bool PostgresMetadataManager::BlockConcurrentCommits() {
+	// every commit inserts a snapshot, the lock conflicts with itself and with inserts but not with reads
+	string query = "LOCK TABLE {METADATA_CATALOG}.ducklake_snapshot IN SHARE ROW EXCLUSIVE MODE";
+	return !Execute(DuckLakeSnapshot(), query)->HasError();
+}
+
 void PostgresMetadataManager::ClearCache() {
 	auto result = transaction.ExecuteRaw("CALL pg_clear_cache();");
 	result->ThrowIfError("Failed to clear the PostgreSQL metadata cache: ");

@@ -216,6 +216,10 @@ public:
 	virtual bool IsRetryableCommitError(const string &) const {
 		return false;
 	}
+	//! Makes other commits wait for the current metadata transaction, returns false if that failed
+	virtual bool BlockConcurrentCommits() {
+		return true;
+	}
 
 	//! Run the commit retry loop with the metadata server handling retries.
 	virtual void FlushChangesServerSide(DuckLakeTransaction &transaction, DuckLakeSnapshot transaction_snapshot,

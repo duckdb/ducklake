@@ -1364,6 +1364,11 @@ void DuckLakeTransaction::RunCommitLoop(DuckLakeSnapshot transaction_snapshot,
 		metadata_manager->ClearInlinedTableCaches();
 		connection->BeginTransaction();
 		snapshot.reset();
+		// a retried commit waits for the other commits instead of conflicting with them again
+		if (!metadata_manager->BlockConcurrentCommits()) {
+			connection->Rollback();
+			connection->BeginTransaction();
+		}
 	};
 	context.query_metadata = [&](string q) {
 		return metadata_manager->Query(q);
