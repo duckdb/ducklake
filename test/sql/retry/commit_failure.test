@@ -41,7 +41,7 @@ SELECT COUNT() FROM ducklake.tbl;
 ----
 5
 
-# With low retry budget, at least one concurrent commit should hit the retry limit.
+# With a low retry budget, a concurrent commit may hit the retry limit
 statement ok
 SET ducklake_max_retry_count = 1;
 
@@ -55,6 +55,6 @@ Exceeded the maximum retry count of 1 set by the ducklake_max_retry_count settin
 endloop
 
 query I
-SELECT COUNT() >= 5 AND COUNT() < 15 FROM ducklake.tbl;
+SELECT COUNT() >= 5 AND COUNT() <= 15 FROM ducklake.tbl;
 ----
 TRUE

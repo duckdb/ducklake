@@ -1267,8 +1267,6 @@ void DuckLakeTransaction::FlushChanges() {
 		auto transaction_snapshot = GetSnapshot();
 		metadata_manager->FlushChangesServerSide(*this, transaction_snapshot, transaction_changes, retry_config);
 	} else {
-		// the commits of this process take turns instead of racing each other for the next snapshot id
-		lock_guard<mutex> commit_guard(ducklake_catalog.GetClientCommitLock());
 		auto transaction_snapshot = GetSnapshot();
 		RunCommitLoop(transaction_snapshot, transaction_changes, retry_config);
 	}
@@ -1311,6 +1309,8 @@ void DuckLakeTransaction::ReportPostCommitError(const string &message) {
 void DuckLakeTransaction::RunCommitLoop(DuckLakeSnapshot transaction_snapshot,
                                         const TransactionChangeInformation &transaction_changes,
                                         const DuckLakeRetryConfig &retry_config) {
+	// the client commits of this catalog take turns instead of racing for the next snapshot id
+	lock_guard<mutex> commit_guard(ducklake_catalog.GetClientCommitLock());
 	vector<unique_ptr<SQLStatement>> inlined_inserts;
 	DuckLakeCommitContext context;
 	context.conflict_query_executor = [&](string q) -> unique_ptr<QueryResult> {
@@ -1472,7 +1472,7 @@ void DuckLakeTransaction::RunCommitLoop(DuckLakeSnapshot transaction_snapshot,
 	};
 	context.commit_info = state->commit_info;
 	context.supports_v1_1_metadata = ducklake_catalog.SupportsV1_1Metadata();
-	// a commit of this process that landed after our snapshot would collide on the snapshot id
+	// a commit that landed while we waited would collide on the snapshot id
 	auto last_committed = ducklake_catalog.LastCommittedSnapshotId();
 	bool check_conflicts_first =
 	    last_committed.IsValid() && last_committed.GetIndex() > transaction_snapshot.snapshot_id;

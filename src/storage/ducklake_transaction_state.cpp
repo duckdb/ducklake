@@ -2140,6 +2140,11 @@ void DuckLakeTransactionState::Commit(DuckLakeSnapshot transaction_snapshot,
 		auto attempt_dropped_file_stats = dropped_file_stats;
 		try {
 			can_retry = false;
+			if (i == 0 && check_conflicts_first) {
+				// our metadata transaction still reads the state from before the commit we waited for
+				context.try_rollback();
+				context.prepare_retry();
+			}
 			if (i > 0 || check_conflicts_first) {
 				// another transaction committed, so the snapshot of this one is not the latest
 				commit_stats_snapshot = CheckForConflicts(transaction_snapshot, attempt_changes, context);
