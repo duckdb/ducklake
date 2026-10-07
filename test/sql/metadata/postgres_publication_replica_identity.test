@@ -129,7 +129,8 @@ EXECUTE format(''ALTER TABLE %s REPLICA IDENTITY DEFAULT'', tbl); END LOOP; END$
 
 statement ok
 ATTACH 'ducklake:postgres:dbname=ducklakedb' AS dl10
-(DATA_PATH '{DATA_PATH}/pub_replica_identity_v10', METADATA_SCHEMA 'pub_replica_identity_v10', AUTOMATIC_MIGRATION TRUE)
+(DATA_PATH '{DATA_PATH}/pub_replica_identity_v10', METADATA_SCHEMA 'pub_replica_identity_v10', DUCKLAKE_VERSION '1.1-dev1',
+AUTOMATIC_MIGRATION TRUE)
 
 statement ok
 COMMENT ON COLUMN dl10.v.a IS 'first'
