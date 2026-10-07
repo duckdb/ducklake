@@ -362,3 +362,103 @@ query I
 SELECT count(*) FROM dl.uc WHERE b = 42
 ----
 2
+
+# a rewrite keeps the statistics of a column that the older files do not hold
+statement ok
+CREATE TABLE dl.rw (a INTEGER)
+
+statement ok
+INSERT INTO dl.rw SELECT range FROM range(10)
+
+statement ok
+ALTER TABLE dl.rw ADD COLUMN b INTEGER DEFAULT 42
+
+statement ok
+INSERT INTO dl.rw SELECT range + 100, range + 10 FROM range(11)
+
+statement ok
+DELETE FROM dl.rw WHERE a = 100
+
+query I
+SELECT files_processed FROM ducklake_rewrite_data_files('dl', 'rw', delete_threshold => 0)
+----
+1
+
+query II
+SELECT (SELECT count(*) FROM dl.rw WHERE b = 42), (SELECT max(b) FROM dl.rw)
+----
+10	42
+
+# and of a column that the older inlined rows do not hold
+statement ok
+CREATE TABLE dl.ri (a INTEGER)
+
+statement ok
+CALL dl.set_option('data_inlining_row_limit', 5, table_name => 'ri')
+
+statement ok
+INSERT INTO dl.ri VALUES (1), (2)
+
+statement ok
+ALTER TABLE dl.ri ADD COLUMN b INTEGER DEFAULT 42
+
+statement ok
+INSERT INTO dl.ri SELECT range + 100, range + 10 FROM range(11)
+
+statement ok
+DELETE FROM dl.ri WHERE a = 100
+
+query I
+SELECT files_processed FROM ducklake_rewrite_data_files('dl', 'ri', delete_threshold => 0)
+----
+1
+
+query II
+SELECT (SELECT count(*) FROM dl.ri WHERE b = 42), (SELECT max(b) FROM dl.ri)
+----
+2	42
+
+# a column added while a rewrite of the table is in flight keeps its statistics
+statement ok
+CREATE TABLE dl.cr (a INTEGER)
+
+statement ok
+INSERT INTO dl.cr SELECT range FROM range(10)
+
+statement ok
+DELETE FROM dl.cr WHERE a = 0
+
+statement ok con1
+BEGIN
+
+query I con1
+SELECT files_processed FROM ducklake_rewrite_data_files('dl', 'cr', delete_threshold => 0)
+----
+1
+
+statement ok con2
+BEGIN
+
+statement ok con2
+ALTER TABLE dl.cr ADD COLUMN b INTEGER DEFAULT 42
+
+statement ok con2
+INSERT INTO dl.cr VALUES (100, 7)
+
+statement ok con2
+COMMIT
+
+statement ok con1
+COMMIT
+
+query III
+SELECT CAST(s.contains_null AS BOOLEAN), s.min_value, s.max_value FROM issue_1054_meta.ducklake_table_column_stats s
+JOIN issue_1054_meta.ducklake_table t USING (table_id)
+WHERE t.table_name = 'cr' AND s.column_id = 2
+----
+false	7	42
+
+query III
+SELECT (SELECT count(*) FROM dl.cr WHERE b = 42), (SELECT count(*) FROM dl.cr WHERE a = 100), (SELECT max(b) FROM dl.cr)
+----
+9	1	42

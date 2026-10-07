@@ -889,6 +889,8 @@ void DuckLakeTransactionState::RecomputeGlobalStatsAfterRewrite(string &batch_qu
 	bool has_exactness = DuckLakeMetadataManager::ResultHasColumn(*result, "min_is_exact");
 	bool have_file = false;
 	idx_t last_file_id = 0;
+	idx_t file_count = 0;
+	map<FieldIndex, idx_t> files_with_stats;
 	for (auto &row : *result) {
 		auto data_file_id = static_cast<idx_t>(row.GetValue<int64_t>(0));
 		if (removed_source_ids.find(DataFileIndex(data_file_id)) != removed_source_ids.end()) {
@@ -897,6 +899,7 @@ void DuckLakeTransactionState::RecomputeGlobalStatsAfterRewrite(string &batch_qu
 		if (!have_file || data_file_id != last_file_id) {
 			have_file = true;
 			last_file_id = data_file_id;
+			file_count++;
 			new_stats.record_count += static_cast<idx_t>(row.GetValue<int64_t>(1));
 			new_stats.table_size_bytes += static_cast<idx_t>(row.GetValue<int64_t>(2));
 			parquet_gross_rows += static_cast<idx_t>(row.GetValue<int64_t>(1));
@@ -909,6 +912,7 @@ void DuckLakeTransactionState::RecomputeGlobalStatsAfterRewrite(string &batch_qu
 		if (type_it == type_by_field.end()) {
 			continue; // column no longer exists or is nested
 		}
+		files_with_stats[field_idx]++;
 		DuckLakeColumnStats col_stats(type_it->second);
 		if (!row.IsNull(4) && !row.IsNull(5)) {
 			auto value_count = static_cast<idx_t>(row.GetValue<int64_t>(4));
@@ -948,8 +952,16 @@ void DuckLakeTransactionState::RecomputeGlobalStatsAfterRewrite(string &batch_qu
 		new_stats.record_count += file.row_count;
 		new_stats.table_size_bytes += file.file_size_bytes;
 		parquet_gross_rows += file.row_count;
+		file_count++;
 		for (auto &col_entry : file.column_stats) {
+			files_with_stats[col_entry.first]++;
 			new_stats.MergeStats(col_entry.first, col_entry.second);
+		}
+	}
+	for (auto &entry : type_by_field) {
+		auto files = files_with_stats.find(entry.first);
+		if (files != files_with_stats.end() && files->second != file_count) {
+			return; // a file written before a column was added has no stats for it
 		}
 	}
 
