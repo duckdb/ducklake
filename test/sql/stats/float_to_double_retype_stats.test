@@ -183,6 +183,32 @@ SELECT count(*) FROM dl.x WHERE v > 0.1 AND v < 0.2
 statement ok
 COMMIT
 
+# other alters in the transaction keep pruning files by their stats
+statement ok
+BEGIN
+
+statement ok
+ALTER TABLE dl.x RENAME TO x2
+
+statement ok
+CALL enable_logging('FileSystem', storage => 'memory')
+
+query I
+SELECT count(*) FROM dl.x2 WHERE v > 0.2
+----
+1
+
+statement ok
+CALL disable_logging()
+
+query I
+SELECT count(DISTINCT regexp_extract(message, '"path":"([^"]*)"', 1)) FROM duckdb_logs WHERE message LIKE '%.parquet%'
+----
+1
+
+statement ok
+ROLLBACK
+
 # files written before the column was FLOAT read as DOUBLE without FLOAT rounding
 statement ok
 CREATE TABLE dl.n (v INTEGER)

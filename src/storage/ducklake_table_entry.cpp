@@ -471,6 +471,19 @@ shared_ptr<DuckLakeTableStats> DuckLakeTableEntry::GetTableStats(ClientContext &
 	return GetTableStats(transaction);
 }
 
+bool DuckLakeTableEntry::ChangedColumnType() {
+	reference<CatalogEntry> entry = *this;
+	while (true) {
+		if (entry.get().Cast<DuckLakeTableEntry>().local_change.type == LocalChangeType::CHANGE_COLUMN_TYPE) {
+			return true;
+		}
+		if (!entry.get().HasChild()) {
+			return false;
+		}
+		entry = entry.get().Child();
+	}
+}
+
 bool DuckLakeTableEntry::CanUseGlobalStats(DuckLakeTransaction &transaction) const {
 	return !IsTransactionLocal() && !transaction.HasTransactionLocalInserts(GetTableId());
 }

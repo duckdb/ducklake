@@ -190,9 +190,7 @@ DuckLakeMultiFileList::DynamicFilterPushdown(MultiFileDynamicPushdownInfo &dynam
 	auto &context = dynamic_pushdown_info.context;
 	auto &filters = dynamic_pushdown_info.filters;
 
-	// filter pushdown is only supported when scanning full tables, whose stats match their types until commit
-	if (read_info.scan_type != DuckLakeScanType::SCAN_TABLE || read_info.table.IsTransactionLocal() ||
-	    !filters.HasFilters()) {
+	if (!SupportsFilterPushdown() || !filters.HasFilters()) {
 		return nullptr;
 	}
 
@@ -374,9 +372,7 @@ unique_ptr<MultiFileList> DuckLakeMultiFileList::ComplexFilterPushdown(ClientCon
                                                                        const MultiFileOptions &options,
                                                                        MultiFilePushdownInfo &info,
                                                                        vector<unique_ptr<Expression>> &filters) const {
-	// a table altered in this transaction can have stats written under another type until commit
-	if (read_info.scan_type != DuckLakeScanType::SCAN_TABLE || read_info.table.IsTransactionLocal() ||
-	    filters.empty()) {
+	if (!SupportsFilterPushdown() || filters.empty()) {
 		return nullptr;
 	}
 
@@ -740,6 +736,11 @@ void DuckLakeMultiFileList::GetTableDeletions() const {
 
 bool DuckLakeMultiFileList::CanUseGlobalStats() const {
 	return read_info.CanUseGlobalStats();
+}
+
+bool DuckLakeMultiFileList::SupportsFilterPushdown() const {
+	// a column retyped in this transaction keeps the stats written under its old type until commit
+	return read_info.scan_type == DuckLakeScanType::SCAN_TABLE && !read_info.table.ChangedColumnType();
 }
 
 bool DuckLakeMultiFileList::IsDeleteScan() const {

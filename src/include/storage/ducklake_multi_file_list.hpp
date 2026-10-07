@@ -50,6 +50,8 @@ public:
 	}
 
 	bool CanUseGlobalStats() const;
+	//! Whether filters can prune files by their stats
+	bool SupportsFilterPushdown() const;
 	bool IsDeleteScan() const;
 	const DuckLakeDeleteScanEntry &GetDeleteScanEntry(idx_t file_idx);
 
