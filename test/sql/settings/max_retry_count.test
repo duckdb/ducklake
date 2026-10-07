@@ -169,3 +169,21 @@ query I
 SELECT COUNT() >= 5 AND COUNT() <= 15 FROM ducklake.tbl;
 ----
 TRUE
+
+# a conflicting commit without retries left fails
+statement ok
+SET ducklake_max_retry_count = 0;
+
+statement ok con1
+BEGIN
+
+statement ok con1
+INSERT INTO ducklake.tbl VALUES(100);
+
+statement ok con2
+INSERT INTO ducklake.tbl VALUES(101);
+
+statement error con1
+COMMIT
+----
+Exceeded the maximum retry count of 0
