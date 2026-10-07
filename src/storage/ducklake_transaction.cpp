@@ -645,9 +645,9 @@ void DuckLakeTransaction::UndoConfigOptions() {
 }
 
 void DuckLakeTransaction::Commit() {
-	if (connection && !connection->context->transaction.HasActiveTransaction()) {
-		// the metadata transaction was released while data files were written
-		BeginMetadataTransaction();
+	if (connection) {
+		// begins a released metadata transaction again
+		GetConnection();
 	}
 	if (!expired_snapshots.empty()) {
 		try {
@@ -684,7 +684,7 @@ void DuckLakeTransaction::Rollback() {
 	UndoConfigOptions();
 	if (connection) {
 		// rollback any changes made to the metadata catalog
-		if (connection->context->transaction.HasActiveTransaction()) {
+		if (connection->HasActiveTransaction()) {
 			connection->Rollback();
 		}
 		connection.reset();
@@ -728,6 +728,8 @@ Connection &DuckLakeTransaction::GetConnection() {
 			connection->Query("SET sqlite_disable_multithreaded_scans=true");
 		}
 		BeginMetadataTransaction();
+	} else if (metadata_transaction_released) {
+		BeginMetadataTransaction();
 	}
 	return *connection;
 }
@@ -735,12 +737,14 @@ Connection &DuckLakeTransaction::GetConnection() {
 void DuckLakeTransaction::BeginMetadataTransaction() {
 	connection->BeginTransaction();
 	connection->Query("SET current_transaction_invalidation_policy='SYNTACTIC_ERRORS_DO_NOT_INVALIDATE'");
+	metadata_transaction_released = false;
 }
 
 void DuckLakeTransaction::ReleaseMetadataTransaction() {
 	lock_guard<mutex> lock(connection_lock);
-	if (connection && connection->context->transaction.HasActiveTransaction()) {
+	if (connection && connection->HasActiveTransaction()) {
 		connection->Commit();
+		metadata_transaction_released = true;
 	}
 }
 

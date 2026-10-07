@@ -186,8 +186,7 @@ public:
 	//! Execute SQL on the metadata connection without placeholder substitution or metadata-manager wrapping.
 	unique_ptr<QueryResult> ExecuteRaw(string query);
 	Connection &GetConnection();
-	//! Commits the metadata transaction of a transaction that only read metadata so far, so it is not held open
-	//! while data files are written. Later reads run in auto-commit until the commit begins a new one.
+	//! Ends the metadata transaction until the next metadata access, so it is not held open while files are written
 	void ReleaseMetadataTransaction();
 
 	//! Keep a schema cache entry alive for as long as this transaction lives. Transaction-local catalog entries hold
@@ -359,6 +358,7 @@ private:
 	DatabaseInstance &db;
 	unique_ptr<DuckLakeMetadataManager> metadata_manager;
 	mutex connection_lock;
+	bool metadata_transaction_released = false;
 	unique_ptr<Connection> connection;
 	//! Flushes of several tables finalize in parallel while scans check the flushed tables
 	mutex flushed_inlined_lock;

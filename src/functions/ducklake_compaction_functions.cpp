@@ -757,7 +757,10 @@ static unique_ptr<LogicalOperator> BindCompaction(ClientContext &context, TableF
 		                   merge_options, compactions);
 	}
 	if (context.transaction.IsAutoCommit() && !transaction.ChangesMade()) {
-		// the metadata is read, do not hold its transaction open while the files are rewritten
+		// the planner reads the table stats, load them before the release
+		for (auto &table_ref : tables) {
+			table_ref.get().GetTableStats(transaction);
+		}
 		transaction.ReleaseMetadataTransaction();
 	}
 	return GenerateCompactionOperator(input, bind_index, compactions);
