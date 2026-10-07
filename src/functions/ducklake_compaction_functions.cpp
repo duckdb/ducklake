@@ -756,6 +756,10 @@ static unique_ptr<LogicalOperator> BindCompaction(ClientContext &context, TableF
 		GenerateCompaction(context, transaction, ducklake_catalog, input, cur_table, type, delete_threshold, max_files,
 		                   merge_options, compactions);
 	}
+	if (context.transaction.IsAutoCommit() && !transaction.ChangesMade()) {
+		// the metadata is read, do not hold its transaction open while the files are rewritten
+		transaction.ReleaseMetadataTransaction();
+	}
 	return GenerateCompactionOperator(input, bind_index, compactions);
 }
 

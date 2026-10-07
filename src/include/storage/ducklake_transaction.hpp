@@ -186,6 +186,9 @@ public:
 	//! Execute SQL on the metadata connection without placeholder substitution or metadata-manager wrapping.
 	unique_ptr<QueryResult> ExecuteRaw(string query);
 	Connection &GetConnection();
+	//! Commits the metadata transaction of a transaction that only read metadata so far, so it is not held open
+	//! while data files are written. Later reads run in auto-commit until the commit begins a new one.
+	void ReleaseMetadataTransaction();
 
 	//! Keep a schema cache entry alive for as long as this transaction lives. Transaction-local catalog entries hold
 	//! bare references into the cached catalog set, and those references are read again at commit time, so the entry
@@ -330,6 +333,7 @@ public:
 
 private:
 	void FlushChanges();
+	void BeginMetadataTransaction();
 	void FlushNameMapCacheInvalidations();
 	//! Puts back the config options this transaction replaced in the catalog
 	void UndoConfigOptions();
