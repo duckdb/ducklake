@@ -167,8 +167,6 @@ public:
 
 	vector<DuckLakeSchemaInfo> GetNewSchemas(DuckLakeCommitState &commit_state);
 	NewTableInfo GetNewTables(DuckLakeCommitState &commit_state, TransactionChangeInformation &transaction_changes);
-	//! The widened columns of the tables this commit also writes data to, whose bounds are merged in memory
-	map<TableIndex, set<FieldIndex>> GetWidenedColumnsWithNewData(const DuckLakeCommitState &commit_state) const;
 	void GetNewTableInfo(DuckLakeCommitState &commit_state, DuckLakeCatalogSet &catalog_set,
 	                     reference<CatalogEntry> table_entry, NewTableInfo &result,
 	                     TransactionChangeInformation &transaction_changes);

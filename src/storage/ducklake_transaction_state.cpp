@@ -1673,48 +1673,45 @@ vector<DuckLakeSchemaInfo> DuckLakeTransactionState::GetNewSchemas(DuckLakeCommi
 	return schemas;
 }
 
-map<TableIndex, set<FieldIndex>>
-DuckLakeTransactionState::GetWidenedColumnsWithNewData(const DuckLakeCommitState &commit_state) const {
-	map<TableIndex, set<FieldIndex>> result;
-	for (auto &entry : local_changes.Changes()) {
-		auto &table_changes = entry.second;
-		if (table_changes.new_data_files.empty() && !table_changes.new_inlined_data &&
-		    table_changes.compactions.empty()) {
-			continue;
-		}
-		auto widened = commit_state.float_widened_columns.find(commit_state.GetTableId(entry.first));
-		if (widened != commit_state.float_widened_columns.end()) {
-			result.insert(*widened);
-		}
-	}
-	return result;
-}
+//! The widened columns whose bounds this commit rewrites, split by whether they can be widened
+struct FloatWidenedBounds {
+	map<TableIndex, set<FieldIndex>> widened;
+	map<TableIndex, set<FieldIndex>> cleared;
+};
 
-static map<TableIndex, set<FieldIndex>> GetFloatBoundsToClear(const map<TableIndex, set<FieldIndex>> &columns,
-                                                              const DuckLakeCommitContext &context) {
-	map<TableIndex, set<FieldIndex>> result;
-	vector<string> column_ids;
-	for (const auto &table : columns) {
-		for (const auto &field : table.second) {
-			column_ids.push_back(StringUtil::Format("(%d, %d)", table.first.index, field.index));
-		}
-	}
-	if (column_ids.empty()) {
+static FloatWidenedBounds GetFloatBoundsToRewrite(const map<TableIndex, set<FieldIndex>> &columns,
+                                                  const DuckLakeCommitContext &context) {
+	FloatWidenedBounds result;
+	auto column_pairs = DuckLakeMetadataManager::WriteColumnIdPairs(columns);
+	if (column_pairs.empty()) {
 		return result;
 	}
-	// files written before FLOAT read their original type as DOUBLE without FLOAT rounding
 	auto query = StringUtil::Format(R"(
-SELECT DISTINCT history.table_id, history.column_id
-FROM {METADATA_CATALOG}.ducklake_column history
-JOIN {METADATA_CATALOG}.ducklake_column current_column USING (table_id, column_id)
-WHERE current_column.end_snapshot IS NULL AND current_column.column_type = '%s'
-AND history.column_type <> current_column.column_type
-AND (history.table_id, history.column_id) IN (%s))",
-	                                DuckLakeTypes::ToString(LogicalType::FLOAT), StringUtil::Join(column_ids, ", "));
+SELECT table_id, column_id, column_type, end_snapshot
+FROM {METADATA_CATALOG}.ducklake_column WHERE (table_id, column_id) IN (%s))",
+	                                column_pairs);
 	auto query_result = context.query_metadata(query);
 	query_result->ThrowIfError("Failed to read column types before widening FLOAT bounds: ");
+	auto float_type = DuckLakeTypes::ToString(LogicalType::FLOAT);
+	map<TableIndex, set<FieldIndex>> live_float;
+	map<TableIndex, set<FieldIndex>> older_type;
 	for (auto &row : *query_result) {
-		result[TableIndex(row.GetValue<idx_t>(0))].insert(FieldIndex(row.GetValue<idx_t>(1)));
+		auto table_id = TableIndex(row.GetValue<idx_t>(0));
+		auto field_index = FieldIndex(row.GetValue<idx_t>(1));
+		if (row.GetValue<string>(2) != float_type) {
+			older_type[table_id].insert(field_index);
+		} else if (row.IsNull(3)) {
+			live_float[table_id].insert(field_index);
+		}
+	}
+	// files written before FLOAT read their original type as DOUBLE without FLOAT rounding
+	for (auto &table_entry : live_float) {
+		auto older_entry = older_type.find(table_entry.first);
+		for (auto &field_index : table_entry.second) {
+			bool has_older_type = older_entry != older_type.end() && older_entry->second.count(field_index);
+			auto &target = has_older_type ? result.cleared : result.widened;
+			target[table_entry.first].insert(field_index);
+		}
 	}
 	return result;
 }
@@ -1812,7 +1809,8 @@ string DuckLakeTransactionState::CommitChanges(DuckLakeCommitState &commit_state
 	};
 	if (!new_tables.empty()) {
 		auto result = GetNewTables(commit_state, transaction_changes);
-		commit_state.float_bounds_to_clear = GetFloatBoundsToClear(GetWidenedColumnsWithNewData(commit_state), context);
+		auto float_bounds = GetFloatBoundsToRewrite(commit_state.float_widened_columns, context);
+		commit_state.float_bounds_to_clear = float_bounds.cleared;
 		vector<DuckLakePath> resolved_table_paths;
 		resolved_table_paths.reserve(result.new_tables.size());
 		for (auto &table : result.new_tables) {
@@ -1833,7 +1831,7 @@ string DuckLakeTransactionState::CommitChanges(DuckLakeCommitState &commit_state
 		if (context.supports_v1_1_metadata) {
 			batch_queries += DuckLakeMetadataManager::WriteNewViewColumnTags(result.new_view_column_tags);
 		}
-		batch_queries += DuckLakeMetadataManager::WriteFloatWidenedStats(commit_state.float_widened_columns,
+		batch_queries += DuckLakeMetadataManager::WriteFloatWidenedStats(float_bounds.widened, float_bounds.cleared,
 		                                                                 commit_snapshot.next_file_id);
 		batch_queries += DuckLakeMetadataManager::WriteDroppedColumns(result.dropped_columns);
 		// Truly dropped columns - i.e. not re-added under the same field id in this commit, as
