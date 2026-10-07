@@ -71,9 +71,14 @@
       ]
     },
     {
+      "reason": "Test needs a DuckDB metadata catalog, the commits of other catalogs are not serialized",
+      "paths": [
+        "test/sql/concurrent/concurrent_commits_one_process.test"
+      ]
+    },
+    {
       "reason": "Test issues UPDATE against the metadata catalog directly",
       "paths": [
-        "test/sql/concurrent/concurrent_commits_one_process.test",
         "test/sql/delete/delete_legacy_missing_mapping_after_rename_add_files.test",
         "test/sql/rewrite_data_files/test_rewrite_many_non_candidate_files.test"
       ]

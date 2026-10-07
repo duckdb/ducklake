@@ -2148,7 +2148,6 @@ void DuckLakeTransactionState::Commit(DuckLakeSnapshot transaction_snapshot,
 		try {
 			can_retry = false;
 			if (i > 0) {
-				// check for conflicts before retrying
 				commit_stats_snapshot = CheckForConflicts(transaction_snapshot, attempt_changes, context);
 				stats = &commit_stats_snapshot.stats;
 			} else {
