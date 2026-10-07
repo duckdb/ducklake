@@ -1,0 +1,48 @@
+# name: benchmark/micro/write/big_lake_ddl_commits.benchmark
+# description: Ten autocommit DDL statements, each followed by a read, on a freshly attached 2110-table lake
+# group: [write]
+
+name Big Lake DDL Commits
+group micro
+subgroup write
+
+require ducklake
+
+require parquet
+
+argument work big_lake_ddl_work
+
+include benchmark/micro/fixtures/big_lake.benchmark.in
+
+include benchmark/micro/fixtures/restore_cleanup.benchmark.in
+
+# Every DDL commits a new schema version, so the read after it loads the whole catalog again
+run
+CREATE TABLE lake.main.ddl_created (a INTEGER, b VARCHAR);
+SELECT count(*) FROM lake.main.bg_1999;
+ALTER TABLE lake.main.bg_0 ADD COLUMN c10 INTEGER;
+SELECT count(*) FROM lake.main.bg_1998;
+ALTER TABLE lake.main.bg_1 RENAME COLUMN c0 TO c0_renamed;
+SELECT count(*) FROM lake.main.bg_1997;
+COMMENT ON TABLE lake.main.bg_2 IS 'commented';
+SELECT count(*) FROM lake.main.bg_1996;
+CREATE VIEW lake.main.ddl_view AS SELECT c0 FROM lake.main.bg_3;
+SELECT count(*) FROM lake.main.bg_1995;
+DROP TABLE lake.main.bg_4;
+SELECT count(*) FROM lake.main.bg_1994;
+CREATE SCHEMA lake.ddl_schema;
+SELECT count(*) FROM lake.main.bg_1993;
+ALTER TABLE lake.main.bg_5 SET PARTITIONED BY (c0);
+SELECT count(*) FROM lake.main.bg_1992;
+CREATE TABLE lake.main.ddl_ctas AS SELECT * FROM lake.main.bg_6;
+SELECT count(*) FROM lake.main.bg_1991;
+ALTER TABLE lake.main.ddl_created ADD COLUMN c INTEGER;
+SELECT count(*) FROM lake.main.ddl_view;
+
+# A missed reset makes the first CREATE TABLE fail because ddl_created already exists
+result_query III
+SELECT (SELECT count(*) FROM duckdb_tables() WHERE database_name = 'lake'),
+(SELECT count(*) FROM duckdb_views() WHERE database_name = 'lake' AND view_name = 'ddl_view'),
+(SELECT count(*) FROM duckdb_schemas() WHERE database_name = 'lake' AND schema_name = 'ddl_schema')
+----
+2111	1	1

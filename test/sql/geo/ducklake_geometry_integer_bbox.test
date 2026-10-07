@@ -1,0 +1,37 @@
+# name: test/sql/geo/ducklake_geometry_integer_bbox.test
+# description: Integer bbox bounds in geo stats JSON are read as numbers
+# group: [geo]
+
+require no_alternative_verify
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/ducklake_geometry_integer_bbox.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/ducklake_geometry_integer_bbox', METADATA_CATALOG 'ducklake_meta')
+
+statement ok
+CREATE TABLE ducklake.t1(g GEOMETRY);
+
+statement ok
+INSERT INTO ducklake.t1 VALUES ('POINT(1 2)'::GEOMETRY);
+
+statement ok
+UPDATE ducklake_meta.ducklake_table_column_stats
+SET extra_stats = '{"bbox": {"xmin": -3, "xmax": 4, "ymin": 1, "ymax": 7, "zmin": null, "zmax": null, "mmin": null, "mmax": null}, "types": ["point"]}'
+
+statement ok
+DETACH ducklake
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/ducklake_geometry_integer_bbox', METADATA_CATALOG 'ducklake_meta')
+
+query I
+SELECT stats(g) FROM ducklake.t1 LIMIT 1;
+----
+{'extent': {'x_max': 4.0, 'x_min': -3.0, 'y_max': 7.0, 'y_min': 1.0}, 'has_empty_geom': true, 'has_empty_part': true, 'has_no_null': true, 'has_non_empty_geom': true, 'has_non_empty_part': true, 'has_null': false}

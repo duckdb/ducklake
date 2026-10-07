@@ -1,4 +1,5 @@
 #include "common/ducklake_name_map.hpp"
+#include "storage/ducklake_metadata_info.hpp"
 
 namespace duckdb {
 
@@ -101,6 +102,58 @@ DuckLakeNameMap::CreatePositionalMapping(const vector<string> &source_names,
 		entry->source_name = source_names[i];
 		entry->target_field_id = target_field_ids[i];
 		result.push_back(std::move(entry));
+	}
+	return result;
+}
+
+unique_ptr<DuckLakeNameMap> DuckLakeNameMap::FromColumnMapping(DuckLakeColumnMappingInfo column_mapping) {
+	if (column_mapping.map_type != "map_by_name") {
+		throw InvalidInputException("Unsupported column mapping type \"%s\"", column_mapping.map_type);
+	}
+	auto result = make_uniq<DuckLakeNameMap>();
+	result->id = column_mapping.mapping_id;
+	result->table_id = column_mapping.table_id;
+
+	unordered_map<idx_t, reference<DuckLakeNameMapEntry>> column_id_map;
+	for (auto &col : column_mapping.map_columns) {
+		auto map_entry = make_uniq<DuckLakeNameMapEntry>();
+		map_entry->source_name = std::move(col.source_name);
+		map_entry->target_field_id = col.target_field_id;
+		map_entry->hive_partition = col.hive_partition;
+		column_id_map.emplace(col.column_id, *map_entry);
+		if (!col.parent_column.IsValid()) {
+			result->column_maps.push_back(std::move(map_entry));
+			continue;
+		}
+		auto parent_entry = column_id_map.find(col.parent_column.GetIndex());
+		if (parent_entry == column_id_map.end()) {
+			throw InvalidInputException("Parent column %d not found when converting name map with id %d",
+			                            col.parent_column.GetIndex(), column_mapping.mapping_id.index);
+		}
+		parent_entry->second.get().child_entries.push_back(std::move(map_entry));
+	}
+	return result;
+}
+
+static void FlattenNameMapEntry(const DuckLakeNameMapEntry &entry, optional_idx parent_idx,
+                                vector<DuckLakeNameMapColumnInfo> &result) {
+	auto column_id = result.size();
+	DuckLakeNameMapColumnInfo column_info;
+	column_info.column_id = column_id;
+	column_info.source_name = entry.source_name;
+	column_info.target_field_id = entry.target_field_id;
+	column_info.hive_partition = entry.hive_partition;
+	column_info.parent_column = parent_idx;
+	result.push_back(std::move(column_info));
+	for (auto &child : entry.child_entries) {
+		FlattenNameMapEntry(*child, column_id, result);
+	}
+}
+
+vector<DuckLakeNameMapColumnInfo> DuckLakeNameMap::FlattenColumns() const {
+	vector<DuckLakeNameMapColumnInfo> result;
+	for (auto &column : column_maps) {
+		FlattenNameMapEntry(*column, optional_idx(), result);
 	}
 	return result;
 }

@@ -21,10 +21,8 @@ namespace duckdb {
 //! Utility class for scanning parquet files directly
 class ParquetFileScanner {
 public:
-	ParquetFileScanner(ClientContext &context, const DuckLakeFileData &file);
-	ParquetFileScanner(ClientContext &context, const DuckLakeFileData &file,
-	                   table_function_get_multi_file_reader_t multi_file_reader_creator,
-	                   shared_ptr<TableFunctionInfo> function_info = nullptr);
+	//! use_file_metadata avoids a HEAD request
+	ParquetFileScanner(ClientContext &context, const DuckLakeFileData &file, bool use_file_metadata = false);
 
 	const vector<LogicalType> &GetTypes() const;
 	const vector<Identifier> &GetNames() const;
@@ -43,6 +41,8 @@ public:
 
 	//! Scan the next chunk. Returns false when done.
 	bool Scan(DataChunk &chunk);
+
+	static Value EncryptionConfig(const string &encryption_key);
 
 private:
 	ClientContext &context;

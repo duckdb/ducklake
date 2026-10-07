@@ -4,6 +4,7 @@
 #include "duckdb/common/array.hpp"
 #include "duckdb/common/optional_idx.hpp"
 #include "duckdb/common/type_visitor.hpp"
+#include "storage/ducklake_metadata_info.hpp"
 
 namespace duckdb {
 
@@ -86,25 +87,6 @@ bool DuckLakeTypes::IsNested(const LogicalType &type) {
 	return type.IsNested() && type.id() != LogicalTypeId::VARIANT;
 }
 
-bool DuckLakeTypes::RequiresCast(const LogicalType &type) {
-	// There are no types that requires casts as of DuckDB v1.5
-	return false;
-}
-
-bool DuckLakeTypes::RequiresCast(const vector<LogicalType> &types) {
-	for (auto &type : types) {
-		if (RequiresCast(type)) {
-			return true;
-		}
-	}
-	return false;
-}
-
-LogicalType DuckLakeTypes::GetCastedType(const LogicalType &type) {
-	// There are no types that requires casts as of DuckDB v1.5
-	return type;
-}
-
 LogicalType DuckLakeTypes::FromString(const string &type) {
 	if (StringUtil::StartsWith(type, "decimal(") && StringUtil::EndsWith(type, ")")) {
 		// decimal - parse width/scale
@@ -120,6 +102,34 @@ LogicalType DuckLakeTypes::FromString(const string &type) {
 	return ParseBaseType(type);
 }
 
+LogicalType DuckLakeTypes::FromColumnInfo(const DuckLakeColumnInfo &col) {
+	auto type = FromString(col.type);
+	switch (type.id()) {
+	case LogicalTypeId::STRUCT: {
+		child_list_t<LogicalType> child_types;
+		for (auto &child : col.children) {
+			child_types.emplace_back(child.name, FromColumnInfo(child));
+		}
+		return LogicalType::STRUCT(std::move(child_types));
+	}
+	case LogicalTypeId::LIST:
+		if (col.children.size() != 1) {
+			throw InvalidInputException("Lists must have a single child entry");
+		}
+		return LogicalType::LIST(FromColumnInfo(col.children[0]));
+	case LogicalTypeId::MAP:
+		if (col.children.size() != 2) {
+			throw InvalidInputException("Maps must have two child entries");
+		}
+		return LogicalType::MAP(FromColumnInfo(col.children[0]), FromColumnInfo(col.children[1]));
+	default:
+		if (!col.children.empty()) {
+			throw InvalidInputException("Unrecognized nested type \"%s\"", col.type);
+		}
+		return type;
+	}
+}
+
 string DuckLakeTypes::ToString(const LogicalType &type) {
 	if (type.HasAlias()) {
 		if (type.IsJSONType()) {
@@ -127,7 +137,7 @@ string DuckLakeTypes::ToString(const LogicalType &type) {
 		}
 		if (type.id() == LogicalTypeId::UNBOUND) {
 			const auto type_name = type.GetAlias();
-			if (StringUtil::Lower(type_name) == "json") {
+			if (StringUtil::CIEquals(type_name, "json")) {
 				return "json";
 			}
 		}

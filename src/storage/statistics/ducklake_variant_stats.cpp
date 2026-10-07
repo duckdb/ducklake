@@ -1,17 +1,15 @@
 #include "storage/ducklake_variant_stats.hpp"
 #include "duckdb/common/enum_util.hpp"
+#include "duckdb/common/json_document.hpp"
 #include "duckdb/common/printer.hpp"
 #include "duckdb/storage/statistics/base_statistics.hpp"
 #include "duckdb/storage/statistics/struct_stats.hpp"
 #include "duckdb/storage/statistics/variant_stats.hpp"
 #include "duckdb/storage/statistics/list_stats.hpp"
-#include "duckdb/common/type_visitor.hpp"
 #include "storage/ducklake_insert.hpp"
 #include "duckdb/parser/keyword_helper.hpp"
 #include "duckdb/common/sql_identifier.hpp"
 #include "storage/ducklake_metadata_info.hpp"
-#include "yyjson.hpp"
-#include "common/ducklake_util.hpp"
 
 namespace duckdb {
 
@@ -51,9 +49,7 @@ void DuckLakeColumnVariantStats::Merge(const DuckLakeColumnExtraStats &new_stats
 }
 
 unique_ptr<DuckLakeColumnExtraStats> DuckLakeColumnVariantStats::Copy() const {
-	auto result = make_uniq<DuckLakeColumnVariantStats>();
-	result->shredded_field_stats = shredded_field_stats;
-	return std::move(result);
+	return make_uniq<DuckLakeColumnVariantStats>(*this);
 }
 
 void DuckLakeColumnVariantStats::Serialize(DuckLakeColumnStatsInfo &column_stats) const {
@@ -68,127 +64,112 @@ void DuckLakeColumnVariantStats::Serialize(DuckLakeColumnStatsInfo &column_stats
 	TrySerialize(column_stats.extra_stats);
 }
 
-static DuckLakeVariantStats DeserializeShreddedStats(const LogicalType &shredded_type, duckdb_yyjson::yyjson_val *obj) {
+static bool TryGetCount(const JSONValue &obj, const string &key, idx_t &result) {
+	auto count_val = obj.GetMember(key);
+	if (!count_val.IsInteger()) {
+		return false;
+	}
+	result = count_val.GetUnsignedInteger();
+	return true;
+}
+
+static DuckLakeVariantStats DeserializeShreddedStats(const LogicalType &shredded_type, const JSONValue &obj) {
 	DuckLakeColumnStats column_stats(shredded_type);
 	DuckLakeVariantStats variant_stats(shredded_type, std::move(column_stats));
 
 	auto &stats = variant_stats.field_stats;
+	stats.has_null_count = TryGetCount(obj, "null_count", stats.null_count);
+	stats.has_num_values = TryGetCount(obj, "num_values", stats.num_values);
+	TryGetCount(obj, "column_size_bytes", stats.column_size_bytes);
 
-	auto *null_count_val = yyjson_obj_get(obj, "null_count");
-	if (null_count_val) {
-		stats.has_null_count = true;
-		stats.null_count = (idx_t)yyjson_get_int(null_count_val);
-	}
-
-	auto *min_val = yyjson_obj_get(obj, "min");
-	if (min_val) {
+	auto min_val = obj.GetMember("min");
+	if (min_val.IsValid()) {
 		stats.has_min = true;
-		stats.min = string(yyjson_get_str(min_val), yyjson_get_len(min_val));
+		stats.min = min_val.GetString();
 	}
 
-	auto *max_val = yyjson_obj_get(obj, "max");
-	if (max_val) {
+	auto max_val = obj.GetMember("max");
+	if (max_val.IsValid()) {
 		stats.has_max = true;
-		stats.max = string(yyjson_get_str(max_val), yyjson_get_len(max_val));
+		stats.max = max_val.GetString();
 	}
 
-	auto *num_values_val = yyjson_obj_get(obj, "num_values");
-	if (num_values_val) {
-		stats.has_num_values = true;
-		stats.num_values = (idx_t)yyjson_get_int(num_values_val);
-	}
-
-	auto *contains_nan_val = yyjson_obj_get(obj, "contains_nan");
-	if (contains_nan_val) {
+	auto contains_nan_val = obj.GetMember("contains_nan");
+	if (contains_nan_val.IsValid()) {
 		stats.has_contains_nan = true;
-		stats.contains_nan = yyjson_get_bool(contains_nan_val);
+		stats.contains_nan = contains_nan_val.GetBoolean();
 	}
 
-	auto *column_size_val = yyjson_obj_get(obj, "column_size_bytes");
-	if (column_size_val) {
-		stats.column_size_bytes = (idx_t)yyjson_get_int(column_size_val);
+	auto any_valid_val = obj.GetMember("any_valid");
+	if (any_valid_val.IsValid()) {
+		stats.any_valid = any_valid_val.GetBoolean();
 	}
 
-	auto *any_valid_val = yyjson_obj_get(obj, "any_valid");
-	if (any_valid_val) {
-		stats.any_valid = yyjson_get_bool(any_valid_val);
-	}
-
-	if (stats.extra_stats) {
-		auto *extra_stats_val = yyjson_obj_get(obj, "extra_stats");
-		if (extra_stats_val) {
-			string extra_stats_str = yyjson_get_str(extra_stats_val);
-			stats.extra_stats->Deserialize(extra_stats_str);
-		}
+	auto extra_stats_val = obj.GetMember("extra_stats");
+	if (stats.extra_stats && extra_stats_val.IsValid()) {
+		stats.extra_stats->Deserialize(extra_stats_val.GetString());
 	}
 
 	return variant_stats;
 }
 
 void DuckLakeColumnVariantStats::Deserialize(const string &stats) {
-	duckdb_yyjson::yyjson_doc *doc = duckdb_yyjson::yyjson_read(stats.c_str(), stats.size(), 0);
+	JSONParseError error;
+	auto doc = JSONDocument::TryParse(stats.c_str(), stats.size(), error);
 	if (!doc) {
 		throw InvalidInputException("Failed to parse VARIANT stats JSON \"%s\"", stats);
 	}
-	duckdb_yyjson::yyjson_val *root = yyjson_doc_get_root(doc);
-	size_t idx, max;
-	duckdb_yyjson::yyjson_val *obj;
-	yyjson_arr_foreach(root, idx, max, obj) {
-		auto *field_name_val = yyjson_obj_get(obj, "field_name");
-		if (!field_name_val) {
+	doc->GetRoot().IterateArray([&](JSONValue obj) {
+		auto field_name_val = obj.GetMember("field_name");
+		if (!field_name_val.IsValid()) {
 			throw InvalidInputException("Missing field_name in VARIANT stats JSON \"%s\"", stats);
 		}
-		string field_name = yyjson_get_str(field_name_val);
-
-		auto *shredded_type_val = yyjson_obj_get(obj, "shredded_type");
-		if (!shredded_type_val) {
+		auto shredded_type_val = obj.GetMember("shredded_type");
+		if (!shredded_type_val.IsValid()) {
 			throw InvalidInputException("Missing shredded_type in VARIANT stats JSON \"%s\"", stats);
 		}
-		auto shredded_type = DuckLakeTypes::FromString(yyjson_get_str(shredded_type_val));
-		auto variant_stats = DeserializeShreddedStats(shredded_type, obj);
-
-		shredded_field_stats.insert(make_pair(std::move(field_name), std::move(variant_stats)));
-	}
-
-	yyjson_doc_free(doc);
+		auto shredded_type = DuckLakeTypes::FromString(shredded_type_val.GetString());
+		shredded_field_stats.emplace(field_name_val.GetString(), DeserializeShreddedStats(shredded_type, obj));
+	});
 }
 
-static void SerializeShreddedStats(duckdb_yyjson::yyjson_mut_doc *doc, duckdb_yyjson::yyjson_mut_val *obj,
-                                   const string &field_name, const DuckLakeVariantStats &variant_stats) {
-	yyjson_mut_obj_add_strcpy(doc, obj, "field_name", field_name.c_str());
-
-	yyjson_mut_obj_add_strcpy(doc, obj, "shredded_type", DuckLakeTypes::ToString(variant_stats.shredded_type).c_str());
+static JSONMutableValue SerializeShreddedStats(JSONWriter &writer, const string &field_name,
+                                               const DuckLakeVariantStats &variant_stats) {
+	auto obj = writer.CreateObject();
+	obj.AddString("field_name", field_name);
+	obj.AddString("shredded_type", DuckLakeTypes::ToString(variant_stats.shredded_type));
 
 	auto &stats = variant_stats.field_stats;
 	if (stats.has_null_count) {
-		yyjson_mut_obj_add_int(doc, obj, "null_count", (int64_t)stats.null_count);
+		obj.Add("null_count", writer.CreateUnsignedInteger(stats.null_count));
 	}
 
 	if (stats.has_min) {
-		yyjson_mut_obj_add_strncpy(doc, obj, "min", stats.min.c_str(), stats.min.size());
+		obj.AddString("min", stats.min);
 	}
 
 	if (stats.has_max) {
-		yyjson_mut_obj_add_strncpy(doc, obj, "max", stats.max.c_str(), stats.max.size());
+		obj.AddString("max", stats.max);
 	}
 
 	if (stats.has_num_values) {
-		yyjson_mut_obj_add_int(doc, obj, "num_values", (int64_t)stats.num_values);
+		obj.Add("num_values", writer.CreateUnsignedInteger(stats.num_values));
 	}
 
 	if (stats.has_contains_nan) {
-		yyjson_mut_obj_add_bool(doc, obj, "contains_nan", stats.contains_nan);
+		obj.Add("contains_nan", writer.CreateBoolean(stats.contains_nan));
 	}
 
-	yyjson_mut_obj_add_int(doc, obj, "column_size_bytes", (int64_t)stats.column_size_bytes);
-	yyjson_mut_obj_add_bool(doc, obj, "any_valid", stats.any_valid);
+	obj.Add("column_size_bytes", writer.CreateUnsignedInteger(stats.column_size_bytes));
+	obj.Add("any_valid", writer.CreateBoolean(stats.any_valid));
 
 	if (stats.extra_stats) {
 		string extra_stats_str;
 		if (stats.extra_stats->TrySerialize(extra_stats_str)) {
-			yyjson_mut_obj_add_strcpy(doc, obj, "extra_stats", extra_stats_str.c_str());
+			obj.AddString("extra_stats", extra_stats_str);
 		}
 	}
+	return obj;
 }
 
 bool DuckLakeColumnVariantStats::TrySerialize(string &result) const {
@@ -197,26 +178,13 @@ bool DuckLakeColumnVariantStats::TrySerialize(string &result) const {
 		return false;
 	}
 
-	duckdb_yyjson::yyjson_mut_doc *doc = duckdb_yyjson::yyjson_mut_doc_new(nullptr);
-	duckdb_yyjson::yyjson_mut_val *root = yyjson_mut_arr(doc);
-	yyjson_mut_doc_set_root(doc, root);
-
+	JSONWriter writer;
+	auto root = writer.CreateArray();
 	for (auto &entry : shredded_field_stats) {
-		auto child_obj = yyjson_mut_obj(doc);
-		SerializeShreddedStats(doc, child_obj, entry.first, entry.second);
-		yyjson_mut_arr_append(root, child_obj);
+		root.Append(SerializeShreddedStats(writer, entry.first, entry.second));
 	}
-
-	// serialize to string
-	size_t len = 0;
-	char *json = yyjson_mut_write(doc, 0, &len);
-	if (!json) {
-		throw InternalException("Failed to serialize the VARIANT stats to JSON");
-	}
-	string out(json, len);
-	free(json);
-	yyjson_mut_doc_free(doc);
-	result = DuckLakeUtil::SQLLiteralToString(out);
+	writer.SetRoot(root);
+	result = SQLString::ToString(writer.ToString());
 	return true;
 }
 
@@ -321,22 +289,8 @@ void ToNestedVariantStats(const string &field_name, reference<NestedVariantStats
 		}
 		// quoted field - this is a field name
 		string current_field_name;
-		idx_t next_pos;
-		for (next_pos = pos + 1; next_pos < field_name.size(); next_pos++) {
-			auto c = field_name[next_pos];
-			if (c == '"') {
-				// found a quote
-				// check if this is an escaped quote
-				if (next_pos + 1 < field_name.size() && field_name[next_pos + 1] == '"') {
-					// escaped quote - add a single quote and skip
-					current_field_name += c;
-					next_pos++;
-				} else {
-					// not an escaped quote - we are done
-					break;
-				}
-			}
-			current_field_name += c;
+		if (!StringUtil::TryParseQuotedString(field_name, pos, current_field_name)) {
+			break;
 		}
 		// we have the current field name
 		// check if the field name already exists
@@ -356,17 +310,17 @@ void ToNestedVariantStats(const string &field_name, reference<NestedVariantStats
 		}
 		stats = child_stats[struct_idx];
 		// have we reached the end?
-		if (next_pos + 1 >= field_name.size()) {
+		if (pos >= field_name.size()) {
 			// we have! add the full field name and return
 			stats.get().full_field_name = field_name;
 			return;
 		} else {
 			// we have not - this is nested - continue with the next field name
-			if (field_name[next_pos + 1] != '.') {
+			if (field_name[pos] != '.') {
 				// invalid format - expected a dot here
 				break;
 			}
-			pos = next_pos + 2;
+			pos++;
 		}
 	}
 	throw InvalidInputException("Incorrectly formatted field name %s", field_name);
@@ -384,10 +338,7 @@ unique_ptr<BaseStatistics> DuckLakeColumnVariantStats::ToStats() const {
 	}
 	// get the type
 	auto shredded_type = nested_stats.ToType(shredded_field_stats);
-	auto full_shredding_type = TypeVisitor::VisitReplace(shredded_type, [](const LogicalType &type) {
-		return LogicalType::STRUCT({{"typed_value", type}, {"untyped_value_index", LogicalType::UINTEGER}});
-	});
-	auto variant_stats = VariantStats::CreateShredded(full_shredding_type);
+	auto variant_stats = VariantStats::CreateShredded(VariantStats::GetShreddingType(shredded_type));
 
 	auto &shredded_stats = VariantStats::GetShreddedStats(variant_stats);
 	nested_stats.ConvertStats(shredded_field_stats, shredded_stats);
@@ -404,10 +355,6 @@ bool DuckLakeColumnVariantStats::ParseStats(const string &stats_name, const vect
 		return true;
 	}
 	return false;
-}
-
-string QuoteVariantFieldName(const string &field_name) {
-	return SQLQuotedIdentifier::ToString(field_name);
 }
 
 vector<string> ExtractVariantFieldNames(const vector<string> &path, idx_t variant_field_start) {
@@ -466,7 +413,7 @@ LogicalType ExtractVariantType(const LogicalType &variant_type, const vector<str
 					if (!variant_field_name.empty()) {
 						variant_field_name += ".";
 					}
-					variant_field_name += QuoteVariantFieldName(field_name);
+					variant_field_name += SQLQuotedIdentifier::ToString(field_name);
 					return ExtractVariantType(typed_child.second, field_names, variant_field_name, field_idx + 1);
 				}
 			}

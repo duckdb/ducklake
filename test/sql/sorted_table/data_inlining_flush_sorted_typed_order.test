@@ -1,0 +1,229 @@
+# name: test/sql/sorted_table/data_inlining_flush_sorted_typed_order.test
+# description: Flushing inlined data writes and tombstones rows using their typed values and the table sort order
+# group: [sorted_table]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/flush_sorted_typed_order', DATA_INLINING_ROW_LIMIT 10)
+
+statement ok
+USE ducklake
+
+# Postgres and SQLite inline lists as text, and col1 is also a flush scan alias
+statement ok
+CREATE TABLE t AS FROM (VALUES (1, [10]), (2, [9]))
+
+statement ok
+ALTER TABLE t SET SORTED BY (col1)
+
+statement ok
+DELETE FROM t WHERE col0 = 2
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake', table_name => 't')
+
+query I
+SELECT col0 FROM t
+----
+1
+
+# sort expressions see the typed value
+statement ok
+CREATE TABLE e (id INTEGER, k INTEGER[])
+
+statement ok
+ALTER TABLE e SET SORTED BY ((k[1] + 0))
+
+statement ok
+INSERT INTO e VALUES (1, [9])
+
+statement ok
+CHECKPOINT
+
+query I
+SELECT id FROM e
+----
+1
+
+# Postgres inlines VARCHAR as BYTEA
+statement ok
+CREATE TABLE p (id INTEGER, v VARCHAR)
+
+statement ok
+ALTER TABLE p SET PARTITIONED BY (v)
+
+statement ok
+INSERT INTO p VALUES (1, 'é')
+
+statement ok
+DELETE FROM p WHERE id = 1
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake', table_name => 'p')
+
+query I
+SELECT id FROM p
+----
+
+# the file follows the collation of the sort expression
+statement ok
+CREATE TABLE c (id INTEGER, k VARCHAR)
+
+statement ok
+ALTER TABLE c SET SORTED BY ((k COLLATE nocase))
+
+statement ok
+INSERT INTO c VALUES (1, 'B'), (2, 'a'), (3, 'C')
+
+statement ok
+DELETE FROM c WHERE id = 1
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake', table_name => 'c')
+
+query I
+SELECT id FROM c
+----
+2
+3
+
+# the sort column changes type after the rows were inlined
+statement ok
+CREATE TABLE a (id INTEGER, k INTEGER)
+
+statement ok
+ALTER TABLE a SET SORTED BY (k)
+
+statement ok
+INSERT INTO a VALUES (1, 9)
+
+statement ok
+ALTER TABLE a ALTER k TYPE BIGINT
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake', table_name => 'a')
+
+query I
+SELECT id FROM a
+----
+1
+
+# columns are dropped and added after the rows were inlined
+statement ok
+CREATE TABLE n (a INTEGER, id INTEGER, k INTEGER)
+
+statement ok
+INSERT INTO n VALUES (0, 1, 2), (0, 2, 1)
+
+statement ok
+ALTER TABLE n DROP COLUMN a
+
+statement ok
+ALTER TABLE n ADD COLUMN c BIGINT
+
+statement ok
+ALTER TABLE n SET SORTED BY (k, c)
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake', table_name => 'n')
+
+query I
+SELECT id FROM n
+----
+2
+1
+
+# a positional sort key names a table column
+statement ok
+CREATE TABLE h (k INTEGER, id INTEGER, x INTEGER, y INTEGER)
+
+statement ok
+ALTER TABLE h SET SORTED BY ((#4 + 0))
+
+statement ok
+INSERT INTO h VALUES (9, 1, 0, 2), (10, 2, 0, 1), (100, 3, 0, 0)
+
+statement ok
+DELETE FROM h WHERE id = 1
+
+statement ok
+CHECKPOINT
+
+query I
+SELECT id FROM h
+----
+3
+2
+
+# the flush ignores a volatile sort key
+statement ok
+CREATE TABLE r (id INTEGER)
+
+statement ok
+ALTER TABLE r SET SORTED BY (random())
+
+statement ok
+INSERT INTO r SELECT i FROM range(10) t(i)
+
+statement ok
+DELETE FROM r WHERE id % 2 = 1
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake', table_name => 'r')
+
+query I
+SELECT id FROM r ORDER BY id
+----
+0
+2
+4
+6
+8
+
+# the flush ignores a descending default order
+statement ok
+SET default_order = 'DESC'
+
+statement ok
+CREATE TABLE o (id INTEGER)
+
+statement ok
+ALTER TABLE o SET SORTED BY (id)
+
+statement ok
+INSERT INTO o VALUES (0), (1)
+
+statement ok
+DELETE FROM o WHERE id = 0
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake', table_name => 'o')
+
+query I
+SELECT id FROM o
+----
+1
+
+statement ok
+CREATE TABLE q (id INTEGER)
+
+statement ok
+INSERT INTO q VALUES (0), (1)
+
+statement ok
+DELETE FROM q WHERE id = 0
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake', table_name => 'q')
+
+query I
+SELECT id FROM q
+----
+1

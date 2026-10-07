@@ -1,4 +1,5 @@
 #include "functions/ducklake_table_functions.hpp"
+#include "storage/ducklake_catalog.hpp"
 #include "storage/ducklake_transaction.hpp"
 #include "common/ducklake_util.hpp"
 #include "storage/ducklake_transaction_changes.hpp"
@@ -8,7 +9,7 @@
 namespace duckdb {
 
 template <class T>
-Value IDListToValue(const set<T> &id_list) {
+static Value IDListToValue(const set<T> &id_list) {
 	vector<Value> list_values;
 	for (auto &id_entry : id_list) {
 		list_values.emplace_back(to_string(id_entry.index));
@@ -16,7 +17,7 @@ Value IDListToValue(const set<T> &id_list) {
 	return Value::LIST(LogicalType::VARCHAR, std::move(list_values));
 }
 
-Value NameListToValue(const case_insensitive_set_t &list_val) {
+static Value NameListToValue(const case_insensitive_set_t &list_val) {
 	vector<Value> list_values;
 	for (auto &schema_key : list_val) {
 		list_values.emplace_back(QualifiedName::Parse(schema_key).ToString());
@@ -24,7 +25,24 @@ Value NameListToValue(const case_insensitive_set_t &list_val) {
 	return Value::LIST(LogicalType::VARCHAR, std::move(list_values));
 }
 
-Value CatalogListToValue(const case_insensitive_map_t<case_insensitive_set_t> &list_val) {
+using CatalogNameMap = case_insensitive_map_t<case_insensitive_set_t>;
+
+static void SplitCreatedEntries(const case_insensitive_map_t<case_insensitive_map_t<string>> &created,
+                                const string &type, CatalogNameMap &matching, optional_ptr<CatalogNameMap> other) {
+	for (auto &entry : created) {
+		for (auto &sub_entry : entry.second) {
+			if (sub_entry.second == type) {
+				matching[entry.first].insert(sub_entry.first);
+			} else if (other) {
+				(*other)[entry.first].insert(sub_entry.first);
+			} else {
+				throw InternalException("Unexpected type for macro in GetSnapshotValues");
+			}
+		}
+	}
+}
+
+static Value CatalogListToValue(const CatalogNameMap &list_val) {
 	vector<Value> list_values;
 	for (auto &entry : list_val) {
 		auto schema = QualifiedName::Parse(entry.first).ToString();
@@ -60,8 +78,8 @@ void DuckLakeSnapshotsFunction::GetSnapshotTypes(vector<LogicalType> &return_typ
 }
 
 template <class T>
-void PushIDChangeList(vector<Value> &change_keys, vector<Value> &change_values, const set<T> &id_list,
-                      const char *key) {
+static void PushIDChangeList(vector<Value> &change_keys, vector<Value> &change_values, const set<T> &id_list,
+                             const char *key) {
 	if (id_list.empty()) {
 		return;
 	}
@@ -84,37 +102,13 @@ vector<Value> DuckLakeSnapshotsFunction::GetSnapshotValues(const DuckLakeSnapsho
 	}
 	PushIDChangeList(change_keys, change_values, other_changes.dropped_schemas, "schemas_dropped");
 
-	case_insensitive_map_t<case_insensitive_set_t> created_tables;
-	case_insensitive_map_t<case_insensitive_set_t> created_views;
-	case_insensitive_map_t<case_insensitive_set_t> created_table_macros;
-	case_insensitive_map_t<case_insensitive_set_t> created_scalar_macros;
-	for (auto &entry : other_changes.created_tables) {
-		for (auto &sub_entry : entry.second) {
-			if (sub_entry.second == "table") {
-				created_tables[entry.first].insert(sub_entry.first);
-			} else {
-				created_views[entry.first].insert(sub_entry.first);
-			}
-		}
-	}
-	for (auto &entry : other_changes.created_scalar_macros) {
-		for (auto &sub_entry : entry.second) {
-			if (sub_entry.second == "scalar_macro") {
-				created_scalar_macros[entry.first].insert(sub_entry.first);
-			} else {
-				throw InternalException("Unexpected type for macro in GetSnapshotValues");
-			}
-		}
-	}
-	for (auto &entry : other_changes.created_table_macros) {
-		for (auto &sub_entry : entry.second) {
-			if (sub_entry.second == "table_macro") {
-				created_table_macros[entry.first].insert(sub_entry.first);
-			} else {
-				throw InternalException("Unexpected type for macro in GetSnapshotValues");
-			}
-		}
-	}
+	CatalogNameMap created_tables;
+	CatalogNameMap created_views;
+	CatalogNameMap created_table_macros;
+	CatalogNameMap created_scalar_macros;
+	SplitCreatedEntries(other_changes.created_tables, "table", created_tables, created_views);
+	SplitCreatedEntries(other_changes.created_scalar_macros, "scalar_macro", created_scalar_macros, nullptr);
+	SplitCreatedEntries(other_changes.created_table_macros, "table_macro", created_table_macros, nullptr);
 
 	if (!created_tables.empty()) {
 		change_keys.emplace_back("tables_created");

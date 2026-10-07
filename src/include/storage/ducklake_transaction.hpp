@@ -45,7 +45,6 @@ struct DuckLakeCommitState;
 struct DuckLakeSchemaCacheEntry;
 class DuckLakeSchemaPinState;
 class DuckLakeFieldId;
-class LocalTableChangeIterationHelper;
 class DuckLakeTransactionState;
 
 //! Marks connections DuckLake opens internally
@@ -72,6 +71,24 @@ struct LocalTableDataChanges {
 	unique_ptr<DuckLakeInlinedFileDeletes> new_inlined_file_deletes;
 	vector<DuckLakeCompactionEntry> compactions;
 	bool IsEmpty() const;
+};
+
+class LocalTableChangeIterationHelper {
+public:
+	LocalTableChangeIterationHelper(mutex &changes_lock, const map<TableIndex, LocalTableDataChanges> &changes_p)
+	    : lock(changes_lock), changes(changes_p) {
+	}
+
+	map<TableIndex, LocalTableDataChanges>::const_iterator begin() const { // NOLINT
+		return changes.begin();
+	}
+	map<TableIndex, LocalTableDataChanges>::const_iterator end() const { // NOLINT
+		return changes.end();
+	}
+
+private:
+	unique_lock<mutex> lock;
+	const map<TableIndex, LocalTableDataChanges> &changes;
 };
 
 struct DuckLakeNewGlobalStats {
@@ -119,52 +136,12 @@ public:
 	                            unordered_map<string, vector<DuckLakeDeleteFile>> &delete_file_map);
 
 private:
+	optional_ptr<LocalTableDataChanges> Find(TableIndex table_id);
+	optional_ptr<const LocalTableDataChanges> Find(TableIndex table_id) const;
+
+private:
 	mutable mutex lock;
 	map<TableIndex, LocalTableDataChanges> changes;
-};
-
-class LocalTableChangeIterationHelper {
-public:
-	LocalTableChangeIterationHelper(mutex &local_changes_lock, const map<TableIndex, LocalTableDataChanges> &changes);
-
-private:
-	unique_lock<mutex> lock;
-	const map<TableIndex, LocalTableDataChanges> &changes;
-
-private:
-	struct LocalTableChangeIteratorEntry {
-		friend class LocalTableChangeIterationHelper;
-
-	public:
-		LocalTableChangeIteratorEntry();
-		TableIndex GetTableIndex() const;
-		const LocalTableDataChanges &GetTableChanges() const;
-
-	private:
-		TableIndex table_id;
-		optional_ptr<const LocalTableDataChanges> changes;
-	};
-	class LocalTableChangeIterator {
-	public:
-		explicit LocalTableChangeIterator(map<TableIndex, LocalTableDataChanges>::const_iterator it,
-		                                  map<TableIndex, LocalTableDataChanges>::const_iterator end_it);
-		map<TableIndex, LocalTableDataChanges>::const_iterator it;
-		map<TableIndex, LocalTableDataChanges>::const_iterator end_it;
-		LocalTableChangeIteratorEntry entry;
-
-	public:
-		LocalTableChangeIterator &operator++();
-		bool operator!=(const LocalTableChangeIterator &other) const;
-		const LocalTableChangeIteratorEntry &operator*() const;
-	};
-
-public:
-	LocalTableChangeIterator begin() { // NOLINT: match stl API
-		return LocalTableChangeIterator(changes.begin(), changes.end());
-	}
-	LocalTableChangeIterator end() { // NOLINT: match stl API
-		return LocalTableChangeIterator(changes.end(), changes.end());
-	}
 };
 
 struct SnapshotAndStats {
@@ -322,12 +299,9 @@ public:
 	static string GenerateUUIDv7();
 
 	const LocalTableChanges &GetLocalChanges() const;
-	const set<TableIndex> &GetDroppedTables();
 	const set<TableIndex> &GetDroppedViews();
 	const set<MacroIndex> &GetDroppedScalarMacros();
 	const set<MacroIndex> &GetDroppedTableMacros();
-	const set<TableIndex> &GetRenamedTables();
-	const map<SchemaIndex, unique_ptr<DuckLakeCatalogSet>> &GetNewTables() const;
 	//! Returns the current version of the catalog:
 	//! If there are no uncommitted changes, this is the schema version of the snapshot.
 	//! Otherwise, it is an id that is incremented whenever the schema changes (not stored between restarts)
@@ -371,6 +345,7 @@ private:
 	void AlterEntryInternal(DuckLakeTableEntry &old_entry, unique_ptr<CatalogEntry> new_entry);
 	void AlterEntryInternal(DuckLakeViewEntry &old_entry, unique_ptr<CatalogEntry> new_entry);
 	map<SchemaIndex, unique_ptr<DuckLakeCatalogSet>> &GetNewMacroMap(CatalogType type) const;
+	optional_ptr<map<SchemaIndex, unique_ptr<DuckLakeCatalogSet>>> GetLocalEntryMap(CatalogType type) const;
 
 	// Invoked at transaction completion, invalidates all schema cache entries referenced by this transaction.
 	void ClearSchemaCachePins();

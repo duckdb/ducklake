@@ -1,0 +1,54 @@
+# name: test/sql/stats/table_stats_null_totals_retry.test
+# description: A commit that retries reads a table stats row without totals
+# group: [stats]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake
+(DATA_PATH '{DATA_PATH}/table_stats_null_totals_retry', METADATA_CATALOG 'ducklake_meta', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE ducklake.t(i INTEGER)
+
+statement ok
+INSERT INTO ducklake.t VALUES (10), (11)
+
+statement ok
+CREATE TABLE ducklake.u(i INTEGER)
+
+statement ok con1
+BEGIN
+
+statement ok con1
+INSERT INTO ducklake.t VALUES (20)
+
+# the first commit attempt of con1 collides with this one
+statement ok
+INSERT INTO ducklake.u VALUES (1)
+
+statement ok
+UPDATE ducklake_meta.ducklake_table_stats SET record_count = NULL, file_size_bytes = NULL
+WHERE table_id = 1
+
+statement ok con1
+COMMIT
+
+query II
+SELECT count(DISTINCT rowid), count(*) FROM ducklake.t
+----
+3	3
+
+query IIII
+SELECT count(*), max(record_count), max(next_row_id), max(file_size_bytes) = (
+	SELECT sum(file_size_bytes) FROM ducklake_meta.ducklake_data_file WHERE end_snapshot IS NULL AND table_id = 1)
+FROM ducklake_meta.ducklake_table_stats
+WHERE table_id = 1
+----
+1	NULL	3	true

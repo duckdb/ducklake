@@ -3,3 +3,6 @@
 # group: [ingest]
 
 template benchmark/ingest/add_files_small_files.benchmark.in
+lake_prefix=add_files_small
+title=DuckLake Add Small Files
+constraint=NULL

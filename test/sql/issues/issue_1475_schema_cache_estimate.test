@@ -1,0 +1,254 @@
+# name: test/sql/issues/issue_1475_schema_cache_estimate.test
+# description: A cached catalog accounts for the memory of its columns, defaults and nested fields (#1475)
+# group: [issues]
+
+require ducklake
+
+require parquet
+
+require json
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/issue_1475')
+
+statement ok
+CREATE TABLE ducklake.wide AS SELECT * FROM (PIVOT (SELECT i FROM range(1000) t(i)) ON i USING first(i)) WHERE false
+
+# loads the catalog into the schema cache
+query I
+SELECT count(*) FROM duckdb_columns() WHERE database_name = 'ducklake' AND table_name = 'wide'
+----
+1000
+
+query I
+SELECT memory_usage_bytes // 1000 >= 700 FROM duckdb_memory() WHERE tag = 'OBJECT_CACHE'
+----
+true
+
+statement ok
+CREATE TABLE ducklake.nested AS SELECT * FROM (PIVOT (SELECT i FROM range(1000) t(i)) ON i USING first({'a': i, 'b': 'x', 'c': [i]})) WHERE false
+
+statement ok
+DROP TABLE ducklake.wide
+
+query I
+SELECT count(*) FROM duckdb_columns() WHERE database_name = 'ducklake' AND table_name = 'nested'
+----
+1000
+
+query I
+SELECT memory_usage_bytes // 1000 >= 2200 FROM duckdb_memory() WHERE tag = 'OBJECT_CACHE'
+----
+true
+
+statement ok
+CREATE TABLE ducklake.mixed (m MAP(VARCHAR, INTEGER), d DECIMAL(18, 3), ts TIMESTAMP DEFAULT now(), s VARCHAR DEFAULT 'abc')
+
+query II
+SELECT column_name, column_default FROM duckdb_columns() WHERE database_name = 'ducklake' AND table_name = 'mixed' ORDER BY column_index
+----
+m	NULL
+d	NULL
+ts	now()
+s	'abc'
+
+# a default whose expression tree has many literal nodes is counted
+statement ok
+DROP TABLE ducklake.nested
+
+statement ok
+DROP TABLE ducklake.mixed
+
+statement ok
+SET VARIABLE cache_before = (SELECT memory_usage_bytes FROM duckdb_memory() WHERE tag = 'OBJECT_CACHE')
+
+statement ok
+CREATE TABLE ducklake.default_tree (s VARCHAR DEFAULT (
+    'c00' || 'c01' || 'c02' || 'c03' || 'c04' || 'c05' || 'c06' || 'c07' || 'c08' || 'c09' ||
+    'c10' || 'c11' || 'c12' || 'c13' || 'c14' || 'c15' || 'c16' || 'c17' || 'c18' || 'c19' ||
+    'c20' || 'c21' || 'c22' || 'c23' || 'c24' || 'c25' || 'c26' || 'c27' || 'c28' || 'c29' ||
+    'c30' || 'c31' || 'c32' || 'c33' || 'c34' || 'c35' || 'c36' || 'c37' || 'c38' || 'c39'))
+
+query I
+SELECT count(*) FROM duckdb_columns() WHERE database_name = 'ducklake' AND table_name = 'default_tree'
+----
+1
+
+query I
+SELECT memory_usage_bytes - getvariable('cache_before') >= 10000 FROM duckdb_memory() WHERE tag = 'OBJECT_CACHE'
+----
+true
+
+# two lakes whose initial defaults, left behind by a dropped default, differ in size
+statement ok
+DROP TABLE ducklake.default_tree
+
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/issue_1475_short.db' AS short_defaults (DATA_PATH '{DATA_PATH}/issue_1475_short')
+
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/issue_1475_long.db' AS long_defaults (DATA_PATH '{DATA_PATH}/issue_1475_long')
+
+statement ok
+CREATE TABLE short_defaults.t (a INTEGER)
+
+statement ok
+CREATE TABLE long_defaults.t (a INTEGER)
+
+statement ok
+SET VARIABLE cache_before_short = (SELECT memory_usage_bytes FROM duckdb_memory() WHERE tag = 'OBJECT_CACHE')
+
+loop i 0 20
+
+statement ok
+ALTER TABLE short_defaults.t ADD COLUMN s{i} VARCHAR DEFAULT 'wwwwwwwwww'
+
+statement ok
+ALTER TABLE short_defaults.t ALTER COLUMN s{i} DROP DEFAULT
+
+endloop
+
+query I
+SELECT count(*) FROM short_defaults.t
+----
+0
+
+statement ok
+SET VARIABLE cache_short = (SELECT memory_usage_bytes - getvariable('cache_before_short') FROM duckdb_memory() WHERE tag = 'OBJECT_CACHE')
+
+statement ok
+SET VARIABLE cache_before_long = (SELECT memory_usage_bytes FROM duckdb_memory() WHERE tag = 'OBJECT_CACHE')
+
+loop i 0 20
+
+statement ok
+ALTER TABLE long_defaults.t ADD COLUMN s{i} VARCHAR DEFAULT 'wwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwww'
+
+statement ok
+ALTER TABLE long_defaults.t ALTER COLUMN s{i} DROP DEFAULT
+
+endloop
+
+query I
+SELECT count(*) FROM long_defaults.t
+----
+0
+
+query I
+SELECT memory_usage_bytes - getvariable('cache_before_long') - getvariable('cache_short') >= 10000 FROM duckdb_memory() WHERE tag = 'OBJECT_CACHE'
+----
+true
+
+# two lakes that differ only in the size of a cast default
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/issue_1475_short_cast.db' AS short_cast (DATA_PATH '{DATA_PATH}/issue_1475_short_cast')
+
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/issue_1475_long_cast.db' AS long_cast (DATA_PATH '{DATA_PATH}/issue_1475_long_cast')
+
+statement ok
+SET VARIABLE cache_before_short_cast = (SELECT memory_usage_bytes FROM duckdb_memory() WHERE tag = 'OBJECT_CACHE')
+
+statement ok
+CREATE TABLE short_cast.t (a INTEGER, v VARIANT DEFAULT ('{"k":"xxxxxxxxxx"}'::JSON::VARIANT))
+
+query I
+SELECT count(*) FROM short_cast.t
+----
+0
+
+statement ok
+SET VARIABLE cache_short_cast = (SELECT memory_usage_bytes - getvariable('cache_before_short_cast') FROM duckdb_memory() WHERE tag = 'OBJECT_CACHE')
+
+statement ok
+SET VARIABLE cache_before_long_cast = (SELECT memory_usage_bytes FROM duckdb_memory() WHERE tag = 'OBJECT_CACHE')
+
+statement ok
+CREATE TABLE long_cast.t (a INTEGER, v VARIANT DEFAULT ('{"k":"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"}'::JSON::VARIANT))
+
+query I
+SELECT count(*) FROM long_cast.t
+----
+0
+
+query I
+SELECT memory_usage_bytes - getvariable('cache_before_long_cast') - getvariable('cache_short_cast') >= 1000 FROM duckdb_memory() WHERE tag = 'OBJECT_CACHE'
+----
+true
+
+# the type metadata of a variant column and the payload of a column comment
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/issue_1475_variant.db' AS variants (DATA_PATH '{DATA_PATH}/issue_1475_variant')
+
+statement ok
+CREATE TABLE variants.v AS SELECT * FROM (PIVOT (SELECT i FROM range(500) t(i)) ON i USING first('{"a":1}'::JSON::VARIANT)) WHERE false
+
+statement ok
+SET VARIABLE cache_before_variants = (SELECT memory_usage_bytes FROM duckdb_memory() WHERE tag = 'OBJECT_CACHE')
+
+query I
+SELECT count(*) FROM duckdb_columns() WHERE database_name = 'variants' AND table_name = 'v'
+----
+500
+
+query I
+SELECT (memory_usage_bytes - getvariable('cache_before_variants')) // 500 >= 1200 FROM duckdb_memory() WHERE tag = 'OBJECT_CACHE'
+----
+true
+
+statement ok
+SET VARIABLE cache_before_comment = (SELECT memory_usage_bytes FROM duckdb_memory() WHERE tag = 'OBJECT_CACHE')
+
+statement ok
+COMMENT ON COLUMN variants.v."0" IS 'cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc'
+
+query I
+SELECT count(*) FROM duckdb_columns() WHERE database_name = 'variants' AND table_name = 'v'
+----
+500
+
+query I
+SELECT memory_usage_bytes > getvariable('cache_before_comment') FROM duckdb_memory() WHERE tag = 'OBJECT_CACHE'
+----
+true
+
+# two lakes whose default expressions differ in the length of their argument names
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/issue_1475_short_names.db' AS short_names (DATA_PATH '{DATA_PATH}/issue_1475_short_names')
+
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/issue_1475_long_names.db' AS long_names (DATA_PATH '{DATA_PATH}/issue_1475_long_names')
+
+statement ok
+CREATE TABLE short_names.t (s VARCHAR DEFAULT struct_pack(x := 1)::VARCHAR)
+
+statement ok
+CREATE TABLE long_names.t (s VARCHAR DEFAULT struct_pack(xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx := 1)::VARCHAR)
+
+statement ok
+SET VARIABLE cache_before_short_names = (SELECT memory_usage_bytes FROM duckdb_memory() WHERE tag = 'OBJECT_CACHE')
+
+query I
+SELECT count(*) FROM short_names.t
+----
+0
+
+statement ok
+SET VARIABLE cache_short_names = (SELECT memory_usage_bytes - getvariable('cache_before_short_names') FROM duckdb_memory() WHERE tag = 'OBJECT_CACHE')
+
+statement ok
+SET VARIABLE cache_before_long_names = (SELECT memory_usage_bytes FROM duckdb_memory() WHERE tag = 'OBJECT_CACHE')
+
+query I
+SELECT count(*) FROM long_names.t
+----
+0
+
+query I
+SELECT memory_usage_bytes - getvariable('cache_before_long_names') > getvariable('cache_short_names') FROM duckdb_memory() WHERE tag = 'OBJECT_CACHE'
+----
+true

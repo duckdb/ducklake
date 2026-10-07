@@ -90,6 +90,12 @@
       "paths": [
         "test/sql/quack/partial_file_count.test"
       ]
+    },
+    {
+      "reason": "The commit batch of a Postgres catalog is not logged through DuckLakeMetadata, so the number of column inserts cannot be counted",
+      "paths": [
+        "test/sql/issues/issue_1146_column_insert_batches.test"
+      ]
     }
   ]
 }

@@ -17,15 +17,16 @@ struct DuckLakeColumnSchemaEntry {
 	FieldIndex field_index;
 	string column_name;
 	LogicalType column_type;
-	//! false for nested struct/list/map/array leaves. Only top-level roots are safe to feed to the inlined-data
-	//! aggregate merge (which references the column by name); nested leaves still carry their own per-file stats.
-	//! (No default initializer: this struct must stay a C++11 aggregate; both producers set it explicitly.)
+	//! False for nested struct, list, map and array leaves, only roots are merged from inlined data
+	//! It has no default initializer so the struct stays a C++11 aggregate, and every producer sets it
 	bool is_root;
 };
 
 struct DuckLakeCommitContext {
 	//! Runs a metadata-DB query during conflict resolution.
 	std::function<unique_ptr<QueryResult>(string)> conflict_query_executor;
+	//! Whether the inlined file deletion table of a table exists, it is created lazily
+	std::function<bool(TableIndex)> inlined_file_deletion_table_exists;
 	//! Returns the latest snapshot for the first commit attempt.
 	std::function<DuckLakeSnapshot()> get_snapshot;
 	//! Executes the batched snapshot/changes SQL against the metadata DB.
@@ -80,6 +81,11 @@ struct DuckLakeCommitContext {
 	//! columns and look up types when merging per-file stats.
 	std::function<vector<DuckLakeColumnSchemaEntry>(TableIndex)> get_table_column_schema = [](TableIndex) {
 		return vector<DuckLakeColumnSchemaEntry> {};
+	};
+	//! Reads an inlined data column as its type, for catalogs that store some types differently.
+	std::function<string(const string &, const LogicalType &)> cast_inlined_column = [](const string &column,
+	                                                                                    const LogicalType &) {
+		return column;
 	};
 	//! Names of the inlined-data tables associated with a table id at the commit snapshot.
 	std::function<vector<string>(TableIndex)> get_inlined_table_names = [](TableIndex) {
@@ -138,11 +144,11 @@ public:
 
 	SnapshotAndStats CheckForConflicts(DuckLakeSnapshot transaction_snapshot,
 	                                   const TransactionChangeInformation &changes,
-	                                   const std::function<unique_ptr<QueryResult>(string)> &executor,
-	                                   bool supports_v1_1_metadata);
+	                                   const DuckLakeCommitContext &context);
 	void CheckForConflicts(const TransactionChangeInformation &changes, const SnapshotChangeInformation &other_changes,
-	                       DuckLakeSnapshot transaction_snapshot,
-	                       const std::function<unique_ptr<QueryResult>(string)> &executor) const;
+	                       DuckLakeSnapshot transaction_snapshot, const DuckLakeCommitContext &context) const;
+	void CheckFileConflicts(const TransactionChangeInformation &changes, const SnapshotChangeInformation &other_changes,
+	                        const DuckLakeCommitContext &context) const;
 
 	static SnapshotDeletedFromFiles
 	GetFilesDeletedOrDroppedAfterSnapshot(const std::function<unique_ptr<QueryResult>(string)> &executor);
@@ -187,7 +193,7 @@ public:
 	//! Merge committed inlined data's per-column min/max into `target` via typed SQL aggregates. Returns false if the
 	//! inlined data cannot be accounted for exactly (e.g. a non-scalar column), in which case the caller must not
 	//! claim the recomputed stats are exact.
-	bool TryMergeInlinedStats(const vector<DuckLakeColumnSchemaEntry> &columns,
+	bool TryMergeInlinedStats(TableIndex table_id, const vector<DuckLakeColumnSchemaEntry> &columns,
 	                          const vector<string> &inlined_table_names, DuckLakeSnapshot snapshot,
 	                          DuckLakeTableStats &target, const DuckLakeCommitContext &context);
 	vector<DuckLakeDeleteFileInfo>
@@ -204,8 +210,6 @@ public:
 	void CleanupFiles();
 
 	void EnsureCommitInfoProvided(const DuckLakeSnapshotCommit &commit_info) const;
-
-	DuckLakePath GetRelativePath(const string &path) const;
 
 	bool SchemaChangesMade() const;
 	bool InlinedTableFlushed(const string &table_name) const;
@@ -240,6 +244,8 @@ public:
 	//! The tables whose inlined file deletions were flushed, with the snapshot of the flush
 	map<TableIndex, idx_t> flushed_inlined_file_deletions;
 	vector<DuckLakeConfigOption> committed_table_options;
+	//! The tables other transactions changed after the snapshot of a retried commit
+	set<TableIndex> tables_changed_by_others;
 };
 
 } // namespace duckdb

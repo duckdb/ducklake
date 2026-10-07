@@ -1,0 +1,93 @@
+# name: test/sql/issues/issue_1398_bulk_table_stats.test
+# description: Scanning the tables of a snapshot reads their stats in one metadata query (#1398)
+# group: [issues]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/issue_1398', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE ducklake.t1 AS SELECT i AS id FROM range(10) t(i)
+
+statement ok
+CREATE TABLE ducklake.t2 AS SELECT i AS id FROM range(20) t(i)
+
+statement ok
+CREATE TABLE ducklake.t3 AS SELECT i AS id FROM range(30) t(i)
+
+# tables without rows have no stats row of their own
+statement ok
+CREATE TABLE ducklake.e1 (id INTEGER)
+
+statement ok
+CREATE TABLE ducklake.e2 (id INTEGER)
+
+# the commit moves next_file_id, which is part of the stats cache key of every table
+statement ok
+INSERT INTO ducklake.t1 VALUES (100)
+
+statement ok
+CALL enable_logging('DuckLakeMetadata')
+
+query I
+SELECT count(*) FROM (
+    SELECT id FROM ducklake.t1 UNION ALL SELECT id FROM ducklake.t2 UNION ALL SELECT id FROM ducklake.t3
+    UNION ALL SELECT id FROM ducklake.e1 UNION ALL SELECT id FROM ducklake.e2)
+----
+61
+
+query I
+SELECT count(*) FROM duckdb_logs_parsed('DuckLakeMetadata') WHERE query LIKE '%ducklake_table_column_stats%'
+----
+1
+
+# the stats of every table are correct and still answer a count and a filter from the catalog
+query III
+SELECT count(*), min(id), max(id) FROM ducklake.t2
+----
+20	0	19
+
+query I
+SELECT count(*) FROM ducklake.t3 WHERE id > 1000
+----
+0
+
+query I
+SELECT count(*) FROM ducklake.e1
+----
+0
+
+statement ok
+CALL disable_logging()
+
+# an insert into one table refreshes the stats of all of them
+statement ok
+INSERT INTO ducklake.e1 VALUES (7)
+
+statement ok
+CALL truncate_duckdb_logs()
+
+statement ok
+CALL enable_logging('DuckLakeMetadata')
+
+query II
+SELECT count(*), max(id) FROM ducklake.e1
+----
+1	7
+
+query II
+SELECT count(*), max(id) FROM ducklake.t1
+----
+11	100
+
+query I
+SELECT count(*) FROM duckdb_logs_parsed('DuckLakeMetadata') WHERE query LIKE '%ducklake_table_column_stats%'
+----
+1

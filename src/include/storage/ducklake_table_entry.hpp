@@ -130,6 +130,7 @@ public:
 
 	//! Gets the top-level not-null fields
 	case_insensitive_set_t GetNotNullFields() const;
+	void ThrowNotNullViolation(const string &column_name) const;
 
 	DuckLakeTableInfo GetTableInfo() const;
 	vector<DuckLakeColumnInfo> GetTableColumns() const;

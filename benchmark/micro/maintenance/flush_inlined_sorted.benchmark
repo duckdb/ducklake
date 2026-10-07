@@ -1,0 +1,29 @@
+# name: benchmark/micro/maintenance/flush_inlined_sorted.benchmark
+# description: Flush 300k inlined rows of a SORTED BY table to Parquet with ducklake_flush_inlined_data, with commit
+# group: [maintenance]
+
+name Flush Inlined Sorted
+group micro
+subgroup maintenance
+
+require ducklake
+
+require parquet
+
+argument work flush_sorted_work
+
+include benchmark/micro/fixtures/sorted.benchmark.in
+
+include benchmark/micro/fixtures/restore_cleanup.benchmark.in
+
+run
+SELECT sum(rows_flushed) AS flushed FROM ducklake_flush_inlined_data('lake', table_name => 'inl');
+
+# The flushed rows must come out in sort key order; a missed reset leaves nothing to flush
+result_query III
+SELECT flushed, (SELECT count(*) FROM ducklake_list_files('lake', 'inl')),
+(SELECT count(*) FILTER (WHERE k < prev) FROM (
+SELECT k, lag(k) OVER (PARTITION BY filename ORDER BY file_row_number) AS prev FROM lake.inl))
+FROM __answer
+----
+300000	1	0

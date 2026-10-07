@@ -85,7 +85,7 @@ SELECT count(*) FROM dl.a.child.t;
 statement error
 CREATE SCHEMA dl.a.missing.child;
 ----
-Schema with name "missing" does not exist
+Schema with name missing does not exist
 
 statement ok
 BEGIN;

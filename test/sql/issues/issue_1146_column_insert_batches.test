@@ -1,0 +1,76 @@
+# name: test/sql/issues/issue_1146_column_insert_batches.test
+# description: The columns of a commit are written in batches instead of one VALUES list (#1146)
+# group: [issues]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/issue_1146')
+
+statement ok
+CALL enable_logging('DuckLakeMetadata')
+
+statement ok
+BEGIN
+
+loop i 0 12
+
+statement ok
+CREATE TABLE ducklake.t{i} AS SELECT * FROM (PIVOT (SELECT i FROM range(100) t(i)) ON i USING first(i)) WHERE false
+
+endloop
+
+statement ok
+COMMIT
+
+# the 1200 columns of the commit do not go out as one VALUES list
+query I
+SELECT sum(len(regexp_extract_all(query, 'INSERT INTO [^ ]*ducklake_column VALUES'))) > 1
+FROM duckdb_logs_parsed('DuckLakeMetadata')
+----
+true
+
+query I
+SELECT count(*) FROM duckdb_columns() WHERE database_name = 'ducklake'
+----
+1200
+
+query I
+SELECT count(*) FROM ducklake.t11
+----
+0
+
+statement ok
+CALL truncate_duckdb_logs()
+
+# a commit of few columns writes them in one statement each
+statement ok
+BEGIN
+
+statement ok
+CREATE TABLE ducklake.added (a INTEGER)
+
+statement ok
+ALTER TABLE ducklake.added ADD COLUMN b INTEGER
+
+statement ok
+COMMIT
+
+query I
+SELECT sum(len(regexp_extract_all(query, 'INSERT INTO [^ ]*ducklake_column VALUES')))
+FROM duckdb_logs_parsed('DuckLakeMetadata')
+----
+2
+
+query II
+SELECT count(*) FILTER (WHERE column_name = 'a'), count(*) FILTER (WHERE column_name = 'b')
+FROM duckdb_columns() WHERE database_name = 'ducklake' AND table_name = 'added'
+----
+1	1
+

@@ -1,0 +1,165 @@
+# name: test/sql/transaction/transaction_conflicts_inlined_file_deletes.test
+# description: An inlined delete and a delete file on the same data file conflict
+# group: [transaction]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/inlined_file_deletes', DATA_INLINING_ROW_LIMIT 10)
+
+statement ok
+SET immediate_transaction_mode=true
+
+statement ok
+CREATE TABLE ducklake.t AS SELECT i AS id FROM range(100) t(i)
+
+# one row is an inlined delete, thirty rows go to a delete file
+statement ok con1
+BEGIN
+
+statement ok con2
+BEGIN
+
+statement ok con1
+DELETE FROM ducklake.t WHERE id = 50
+
+statement ok con2
+DELETE FROM ducklake.t WHERE id >= 50 AND id < 80
+
+statement ok con1
+COMMIT
+
+statement error con2
+COMMIT
+----
+conflict
+
+query III
+SELECT count(*), count(DISTINCT id), count(*) FILTER (WHERE id >= 50 AND id < 80) FROM ducklake.t
+----
+99	99	29
+
+# the delete file commits first
+statement ok con1
+BEGIN
+
+statement ok con2
+BEGIN
+
+statement ok con1
+DELETE FROM ducklake.t WHERE id >= 60 AND id < 90
+
+statement ok con2
+DELETE FROM ducklake.t WHERE id = 70
+
+statement ok con1
+COMMIT
+
+statement error con2
+COMMIT
+----
+conflict
+
+query III
+SELECT count(*), count(DISTINCT id), count(*) FILTER (WHERE id >= 60 AND id < 90) FROM ducklake.t
+----
+69	69	0
+
+# a delete that drops the whole data file also conflicts with an inlined delete
+statement ok
+INSERT INTO ducklake.t SELECT i FROM range(100, 120) t(i)
+
+statement ok con1
+BEGIN
+
+statement ok con2
+BEGIN
+
+statement ok con1
+DELETE FROM ducklake.t WHERE id = 105
+
+statement ok con2
+DELETE FROM ducklake.t WHERE id >= 100
+
+statement ok con1
+COMMIT
+
+statement error con2
+COMMIT
+----
+conflict
+
+query II
+SELECT count(*), count(*) FILTER (WHERE id >= 100) FROM ducklake.t
+----
+88	19
+
+# deletes on different data files do not conflict
+statement ok con1
+BEGIN
+
+statement ok con2
+BEGIN
+
+statement ok con1
+DELETE FROM ducklake.t WHERE id = 1
+
+statement ok con2
+DELETE FROM ducklake.t WHERE id >= 100
+
+statement ok con1
+COMMIT
+
+statement ok con2
+COMMIT
+
+query II
+SELECT count(*), count(*) FILTER (WHERE id >= 100 OR id = 1) FROM ducklake.t
+----
+68	0
+
+# flushing the inlined deletes of a data file does not conflict with a later inlined delete of that file
+statement ok
+CREATE TABLE ducklake.t2 AS SELECT i AS id FROM range(100) t(i)
+
+statement ok
+DELETE FROM ducklake.t2 WHERE id = 10
+
+statement ok
+CALL enable_logging('DuckLakeMetadata')
+
+statement ok con1
+BEGIN
+
+statement ok con2
+BEGIN
+
+statement ok con1
+CALL ducklake_flush_inlined_data('ducklake', table_name => 't2')
+
+statement ok con2
+DELETE FROM ducklake.t2 WHERE id = 20
+
+statement ok con2
+COMMIT
+
+statement ok con1
+COMMIT
+
+query III
+SELECT count(*), count(*) FILTER (WHERE id = 10), count(*) FILTER (WHERE id = 20) FROM ducklake.t2
+----
+98	0	0
+
+# the retrying flush has no delete that can conflict with an inlined delete, so it looks none up
+query II
+SELECT count(*) > 0, count(*) FILTER (WHERE query ILIKE '%ducklake_inlined_delete_%begin_snapshot > %')
+FROM duckdb_logs_parsed('DuckLakeMetadata')
+----
+true	0

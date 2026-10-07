@@ -1,0 +1,77 @@
+# name: test/sql/issues/issue_1376_ordered_insert.test
+# description: A sorted table writes files whose key ranges do not overlap (#1376)
+# group: [issues]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/issue_1376', DATA_INLINING_ROW_LIMIT 0, METADATA_CATALOG 'meta')
+
+statement ok
+SET threads = 8
+
+# the sort of the table decides the order of the files, not the setting
+statement ok
+SET preserve_insertion_order = false
+
+statement ok
+CREATE TABLE ducklake.sorted (k BIGINT)
+
+statement ok
+ALTER TABLE ducklake.sorted SET SORTED BY (k ASC)
+
+statement ok
+CALL ducklake.set_option('target_file_size', '1MB', table_name => 'sorted')
+
+statement ok
+INSERT INTO ducklake.sorted SELECT (i * 7919) % 1500000 FROM range(1500000) t(i)
+
+statement ok
+CREATE TEMP TABLE ranges AS
+SELECT s.data_file_id AS f, s.min_value::BIGINT AS mn, s.max_value::BIGINT AS mx
+FROM meta.ducklake_file_column_stats s JOIN meta.ducklake_data_file d USING (data_file_id)
+WHERE d.table_id = 1
+
+query I
+SELECT count(*) > 1 FROM ranges
+----
+true
+
+query I
+SELECT count(*) FROM ranges a JOIN ranges b ON a.f < b.f AND a.mn <= b.mx AND b.mn <= a.mx
+----
+0
+
+query II
+SELECT count(*), count(DISTINCT k) FROM ducklake.sorted
+----
+1500000	1500000
+
+# a point probe reads the one file that can hold the key
+query II
+SELECT count(*), (SELECT count(*) FROM ranges WHERE 749999 BETWEEN mn AND mx) FROM ducklake.sorted WHERE k = 749999
+----
+1	1
+
+# the rows inside the files are sorted as well
+query I
+SELECT count(*) FROM (SELECT k, lag(k) OVER (PARTITION BY filename ORDER BY file_row_number) AS prev
+                      FROM read_parquet('{DATA_PATH}/issue_1376/main/sorted/*.parquet', filename := true, file_row_number := true))
+WHERE k < prev
+----
+0
+
+# a table without a sort key keeps the parallel write
+statement ok
+CREATE TABLE ducklake.unsorted AS SELECT (i * 7919) % 1500000 AS k FROM range(1500000) t(i)
+
+query I
+SELECT count(*) FROM ducklake.unsorted
+----
+1500000

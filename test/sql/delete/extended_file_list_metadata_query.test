@@ -157,8 +157,8 @@ SELECT CASE WHEN (SELECT catalog_type FROM settings()) = 'postgres' THEN
          FROM duckdb_logs_parsed('DuckLakeMetadata')
      ) logs
      WHERE query LIKE '%wherecolumn_id=1andtable_id=3%'
-       AND query LIKE '%coalesce((casewhencol_1_stats.min_value~%''''-infinity''''::timestamp)%'
-       AND query LIKE '%coalesce((casewhencol_1_stats.max_value~%''''infinity''''::timestamp)%'
+       AND query LIKE '%coalesce((casewhencol_1_stats.min_value~%cast(''''-infinity''''astimestamp))%'
+       AND query LIKE '%coalesce((casewhencol_1_stats.max_value~%cast(''''infinity''''astimestamp))%'
        AND query LIKE '%orderby(casewhencol_1_stats.max_value~%descnullslast%')
     ELSE true END
 ----

@@ -1,0 +1,97 @@
+# name: test/sql/issues/issue_1001_nested_not_null.test
+# description: NOT NULL is enforced on STRUCT, LIST, MAP and VARIANT columns (#1001)
+# group: [issues]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/issue_1001')
+
+statement ok
+CREATE TABLE dl.t (id INTEGER, s STRUCT(a INTEGER, b INTEGER) NOT NULL, l INTEGER[] NOT NULL,
+                   m MAP(VARCHAR, INTEGER) NOT NULL)
+
+statement error
+INSERT INTO dl.t VALUES (1, NULL, [1], MAP {'a': 1})
+----
+NOT NULL constraint failed: t.s
+
+statement error
+INSERT INTO dl.t VALUES (2, {'a': 1, 'b': 2}, NULL, MAP {'a': 1})
+----
+NOT NULL constraint failed: t.l
+
+statement error
+INSERT INTO dl.t VALUES (3, {'a': 1, 'b': 2}, [1], NULL)
+----
+NOT NULL constraint failed: t.m
+
+# NULL values inside the column are allowed
+statement ok
+INSERT INTO dl.t VALUES (4, {'a': NULL, 'b': NULL}, [NULL], MAP {'a': NULL})
+
+# rows written to files are checked too
+statement error
+INSERT INTO dl.t SELECT 5, CASE WHEN range = 500 THEN NULL ELSE {'a': 1, 'b': 2} END, [1], MAP {'a': 1}
+FROM range(1000)
+----
+NOT NULL constraint failed: t.s
+
+statement ok
+INSERT INTO dl.t SELECT 6, {'a': 1, 'b': 2}, [1], MAP {'a': 1} FROM range(1000)
+
+statement error
+UPDATE dl.t SET s = NULL WHERE id = 4
+----
+NOT NULL constraint failed: t.s
+
+statement error
+UPDATE dl.t SET l = NULL WHERE id = 6
+----
+NOT NULL constraint failed: t.l
+
+statement error
+MERGE INTO dl.t USING (SELECT 7 AS id) src ON dl.t.id = src.id
+WHEN NOT MATCHED THEN INSERT VALUES (7, NULL, [1], MAP {'a': 1})
+----
+NOT NULL constraint failed: t.s
+
+query II
+SELECT id, count(*) FROM dl.t GROUP BY id ORDER BY id
+----
+4	1
+6	1000
+
+statement ok
+CREATE TABLE dl.v (id INTEGER, v VARIANT NOT NULL)
+
+statement error
+INSERT INTO dl.v VALUES (1, NULL)
+----
+NOT NULL constraint failed: v.v
+
+statement ok
+INSERT INTO dl.v VALUES (2, 42::VARIANT)
+
+query I
+SELECT count(*) FROM dl.v
+----
+1
+
+# dropping the constraint allows NULL values again
+statement ok
+ALTER TABLE dl.t ALTER s DROP NOT NULL
+
+statement ok
+INSERT INTO dl.t VALUES (8, NULL, [1], MAP {'a': 1})
+
+query I
+SELECT count(*) FROM dl.t WHERE s IS NULL
+----
+1
