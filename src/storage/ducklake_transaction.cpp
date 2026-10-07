@@ -646,7 +646,6 @@ void DuckLakeTransaction::UndoConfigOptions() {
 
 void DuckLakeTransaction::Commit() {
 	if (connection) {
-		// begins a released metadata transaction again
 		GetConnection();
 	}
 	if (!expired_snapshots.empty()) {

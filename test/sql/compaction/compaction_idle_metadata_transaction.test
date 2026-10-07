@@ -61,3 +61,36 @@ query I
 SELECT count(*) FROM ducklake_list_files('lake', 't')
 ----
 1
+
+# files added with ducklake_add_data_files are read through name maps, which a fresh attach loads on first use
+statement ok
+CREATE TABLE lake.imported (i INTEGER)
+
+statement ok
+COPY (SELECT 1 AS i) TO '{DATA_PATH}/idle_i1.parquet'
+
+statement ok
+COPY (SELECT 2 AS i) TO '{DATA_PATH}/idle_i2.parquet'
+
+statement ok
+CALL ducklake_add_data_files('lake', 'imported', ['{DATA_PATH}/idle_i1.parquet', '{DATA_PATH}/idle_i2.parquet'])
+
+statement ok
+ALTER TABLE lake.imported SET SORTED BY (COALESCE(sleep_ms(1000), i))
+
+statement ok
+DETACH lake
+
+statement ok
+ATTACH 'ducklake:postgres:dbname=ducklakedb options=''-c idle_in_transaction_session_timeout=500''' AS lake
+(DATA_PATH '{DATA_PATH}/idle_compaction', METADATA_SCHEMA 'idle_compaction')
+
+query II
+SELECT files_processed, files_created FROM ducklake_merge_adjacent_files('lake', 'imported')
+----
+2	1
+
+query II
+SELECT count(*), sum(i) FROM lake.imported
+----
+2	3

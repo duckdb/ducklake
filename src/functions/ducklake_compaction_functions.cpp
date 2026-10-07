@@ -757,9 +757,16 @@ static unique_ptr<LogicalOperator> BindCompaction(ClientContext &context, TableF
 		                   merge_options, compactions);
 	}
 	if (context.transaction.IsAutoCommit() && !transaction.ChangesMade()) {
-		// the planner reads the table stats, load them before the release
+		// the planner reads the table stats and the scans read the name maps, load them before the release
 		for (auto &table_ref : tables) {
 			table_ref.get().GetTableStats(transaction);
+		}
+		for (auto &compaction : compactions) {
+			for (auto &source : compaction->Cast<DuckLakeLogicalCompaction>().source_files) {
+				if (source.file.mapping_id.IsValid()) {
+					transaction.GetMappingById(source.file.mapping_id);
+				}
+			}
 		}
 		transaction.ReleaseMetadataTransaction();
 	}
