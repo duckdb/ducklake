@@ -831,6 +831,40 @@ WHERE table_id = %d)",
 	                          table_id.index);
 }
 
+string DuckLakeMetadataManager::GetInlinedTablesBeforeSchemaChangeSql(TableIndex table_id) {
+	return StringUtil::Format(R"(
+SELECT table_name
+FROM {METADATA_CATALOG}.ducklake_inlined_data_tables
+WHERE table_id = %d AND schema_version < (
+	SELECT MAX(schema_version)
+	FROM {METADATA_CATALOG}.ducklake_schema_versions
+	WHERE table_id = %d AND begin_snapshot <= {SNAPSHOT_ID}
+))",
+	                          table_id.index, table_id.index);
+}
+
+string DuckLakeMetadataManager::GetInlinedTableColumnsSql(optional_idx table_id) {
+	string table_filter;
+	if (table_id.IsValid()) {
+		table_filter = StringUtil::Format("\n\tWHERE idt.table_id = %d", table_id.GetIndex());
+	}
+	return StringUtil::Format(R"(
+WITH inlined AS (
+	SELECT idt.table_id, idt.table_name, COALESCE(sv.begin_snapshot, (
+		SELECT MIN(t.begin_snapshot) FROM {METADATA_CATALOG}.ducklake_table t WHERE t.table_id = idt.table_id
+	)) AS snapshot_id
+	FROM {METADATA_CATALOG}.ducklake_inlined_data_tables idt
+	LEFT JOIN {METADATA_CATALOG}.ducklake_schema_versions sv
+		ON sv.table_id = idt.table_id AND sv.schema_version = idt.schema_version%s
+)
+SELECT inlined.table_name, col.column_name, col.column_type, col.column_id
+FROM inlined
+JOIN {METADATA_CATALOG}.ducklake_column col ON col.table_id = inlined.table_id AND col.parent_column IS NULL
+WHERE col.begin_snapshot <= inlined.snapshot_id AND (col.end_snapshot IS NULL OR col.end_snapshot > inlined.snapshot_id)
+)",
+	                          table_filter);
+}
+
 unordered_set<string> DuckLakeMetadataManager::GetInlinedTableNames(TableIndex table_id) {
 	auto result = Query(GetInlinedTableNamesSql(table_id));
 	result->ThrowIfError("Failed to get inlined data tables from DuckLake: ");
@@ -2680,6 +2714,16 @@ unique_ptr<QueryResult> DuckLakeMetadataManager::Execute(string &query) {
 	return Query(query);
 }
 
+unique_ptr<QueryResult> DuckLakeMetadataManager::ExecuteInTransaction(string &query) {
+	auto batch = "BEGIN TRANSACTION;\n" + query + "\nCOMMIT;";
+	auto result = Query(batch);
+	if (result->HasError()) {
+		// a failed statement keeps the transaction open until it is rolled back
+		Query("ROLLBACK;");
+	}
+	return result;
+}
+
 unique_ptr<QueryResult> DuckLakeMetadataManager::Query(DuckLakeSnapshot snapshot, string &query) {
 	SubstituteTransactionPlaceholders(snapshot, query);
 	return Query(query);
@@ -3648,8 +3692,7 @@ string DuckLakeMetadataManager::GetPath(TableIndex table_id, const vector<DuckLa
 	} else {
 		auto &data_path = catalog.DataPath();
 		path = GetPathForTable(
-		    table_id, new_tables, new_schemas_result, [&](string query) { return Query(query); }, data_path,
-		    GetPathSeparator(data_path));
+		    table_id, new_tables, [&](string query) { return Query(query); }, data_path, GetPathSeparator(data_path));
 	}
 	table_paths.emplace(table_id, path);
 	return path;
@@ -3766,29 +3809,12 @@ WHERE schema_id = %d;)",
 }
 
 string DuckLakeMetadataManager::GetPathForTable(TableIndex table_id, const vector<DuckLakeTableInfo> &new_tables,
-                                                const vector<DuckLakeSchemaInfo> &new_schemas_result,
                                                 const std::function<unique_ptr<QueryResult>(string)> &query_executor,
                                                 const string &base_data_path, const string &separator) {
 	for (const auto &new_table : new_tables) {
 		if (new_table.id == table_id) {
-			// new table - resolve its schema first
-			for (auto &schema : new_schemas_result) {
-				if (schema.id == new_table.schema_id) {
-					auto resolved_schema_path =
-					    FromRelativePath(DuckLakePath {schema.path, false}, base_data_path, separator);
-					return FromRelativePath(DuckLakePath {new_table.path, false}, resolved_schema_path, separator);
-				}
-			}
-			auto schema_query = StringUtil::Format(R"(
-SELECT s.path, s.path_is_relative
-FROM {METADATA_CATALOG}.ducklake_schema s
-WHERE schema_id = %d;)",
-			                                       new_table.schema_id.index);
-			auto result = query_executor(schema_query);
-			for (auto &row : *result) {
-				auto resolved_schema_path = FromRelativePath(ReadPath(row, 0), base_data_path, separator);
-				return FromRelativePath(DuckLakePath {new_table.path, false}, resolved_schema_path, separator);
-			}
+			// tables created or renamed in this commit carry their absolute path
+			return FromRelativePath(DuckLakePath {new_table.path, false}, base_data_path, separator);
 		}
 	}
 	auto query = StringUtil::Format(R"(
@@ -3809,26 +3835,6 @@ WHERE table_id = %d;)",
 	}
 	throw InvalidInputException("Failed to get path for table with id %d - table not found in metadata catalog",
 	                            table_id.index);
-}
-
-DuckLakePath
-DuckLakeMetadataManager::GetRelativePath(SchemaIndex schema_id, const string &path,
-                                         const vector<DuckLakeSchemaInfo> &new_schemas_result,
-                                         const std::function<unique_ptr<QueryResult>(string)> &query_executor,
-                                         const string &base_data_path, const string &separator) {
-	return GetRelativePath(
-	    path, GetPathForSchema(schema_id, new_schemas_result, query_executor, base_data_path, separator), separator);
-}
-
-DuckLakePath
-DuckLakeMetadataManager::GetRelativePath(TableIndex table_id, const string &path,
-                                         const vector<DuckLakeTableInfo> &new_tables,
-                                         const vector<DuckLakeSchemaInfo> &new_schemas_result,
-                                         const std::function<unique_ptr<QueryResult>(string)> &query_executor,
-                                         const string &base_data_path, const string &separator) {
-	return GetRelativePath(
-	    path, GetPathForTable(table_id, new_tables, new_schemas_result, query_executor, base_data_path, separator),
-	    separator);
 }
 
 static void AppendBigintOrNull(Appender &appender, optional_idx value) {
@@ -4114,6 +4120,12 @@ string DuckLakeMetadataManager::WriteNewDataFilesSqlBatch(const vector<DuckLakeF
 	       InsertValuesSql("ducklake_file_column_stats", column_stats_values) +
 	       InsertValuesSql("ducklake_file_partition_value", partition_values) +
 	       InsertValuesSql("ducklake_file_variant_stats", variant_stats_values);
+}
+
+string DuckLakeMetadataManager::GetExistingDataFilesSql(const set<DataFileIndex> &files) {
+	return StringUtil::Format(
+	    "SELECT data_file_id FROM {METADATA_CATALOG}.ducklake_data_file WHERE data_file_id IN (%s)",
+	    GenerateIDList(files));
 }
 
 string DuckLakeMetadataManager::DropDataFiles(const set<DataFileIndex> &dropped_files) {

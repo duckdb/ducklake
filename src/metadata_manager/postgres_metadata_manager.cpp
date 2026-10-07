@@ -235,21 +235,7 @@ bool PostgresMetadataManager::InlinedDeletionTableExists(const string &table_nam
 }
 
 void PostgresMetadataManager::MigrateInlinedDataTypes() {
-	// the user columns of every inlined table with their types at the schema version of that table
-	auto columns = DuckLakeMetadataManager::Query(R"(
-WITH inlined AS (
-	SELECT idt.table_id, idt.table_name, COALESCE(sv.begin_snapshot, (
-		SELECT MIN(t.begin_snapshot) FROM {METADATA_CATALOG}.ducklake_table t WHERE t.table_id = idt.table_id
-	)) AS snapshot_id
-	FROM {METADATA_CATALOG}.ducklake_inlined_data_tables idt
-	LEFT JOIN {METADATA_CATALOG}.ducklake_schema_versions sv
-		ON sv.table_id = idt.table_id AND sv.schema_version = idt.schema_version
-)
-SELECT inlined.table_name, col.column_name, col.column_type
-FROM inlined
-JOIN {METADATA_CATALOG}.ducklake_column col ON col.table_id = inlined.table_id AND col.parent_column IS NULL
-WHERE col.begin_snapshot <= inlined.snapshot_id AND (col.end_snapshot IS NULL OR col.end_snapshot > inlined.snapshot_id)
-)");
+	auto columns = DuckLakeMetadataManager::Query(GetInlinedTableColumnsSql());
 	columns->ThrowIfError("Failed to read the columns of inlined-data tables while migrating: ");
 	map<string, case_insensitive_map_t<string>> inlined_tables;
 	for (auto &row : *columns) {

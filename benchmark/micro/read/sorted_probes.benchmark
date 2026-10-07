@@ -1,0 +1,23 @@
+# name: benchmark/micro/read/sorted_probes.benchmark
+# description: Run 40 selective queries on the sort key of a 5M-row SORTED BY table whose files have disjoint key ranges
+# group: [read]
+
+name Sorted Probes
+group micro
+subgroup read
+
+require ducklake
+
+require parquet
+
+argument work sorted_probes_work
+
+include benchmark/micro/fixtures/sorted.benchmark.in
+
+# Point lookups, short ranges, IN lists and misses that prune all but at most one file per key
+run benchmark/micro/queries/sorted_probes.sql
+
+result_query II
+SELECT * FROM __answer
+----
+v909993	454996.5

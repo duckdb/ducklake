@@ -1,0 +1,55 @@
+# name: benchmark/micro/fixtures/sorted.benchmark.in
+# description: Lake with empty and populated sorted tables, a sorted table of 200 overlapping files and an inlined one
+# group: [fixtures]
+
+argument lake sorted_v1
+
+cache_file ${lake}_ready.marker
+
+# Every generated line commits 10000 random keys into frag and every 10th line also 15000 inlined rows into inl
+load
+EXPORT DATABASE '${BENCHMARK_DIR}/${lake}_gen';
+COPY (SELECT 'INSERT INTO lake.frag SELECT hash(i) % 100000000, ''v'' || i, i * 0.5 FROM range(' || (f * 10000) || ', '
+|| (f * 10000 + 10000) || ') t(i); ' || CASE WHEN f % 10 = 0 THEN 'INSERT INTO lake.inl SELECT hash(i) % 100000000, '
+|| '''v'' || i, i * 0.5 FROM range(' || (f * 1500) || ', ' || (f * 1500 + 15000) || ') t(i); ' ELSE '' END
+|| 'COMMIT; BEGIN;' FROM range(200) t(f) ORDER BY f)
+TO '${BENCHMARK_DIR}/${lake}_gen/schema.sql' (HEADER false, QUOTE '');
+@create ${lake}_pristine
+@attach ${lake}_pristine AS lake (DATA_PATH '${BENCHMARK_DIR}/${lake}_files')
+CALL lake.set_option('data_inlining_row_limit', 0);
+CREATE TABLE lake.ins (k BIGINT, v VARCHAR, x DOUBLE);
+CREATE TABLE lake.frag (k BIGINT, v VARCHAR, x DOUBLE);
+CREATE TABLE lake.inl (k BIGINT, v VARCHAR, x DOUBLE);
+CREATE TABLE lake.probe (k BIGINT, v VARCHAR, x DOUBLE);
+ALTER TABLE lake.ins SET SORTED BY (k);
+ALTER TABLE lake.frag SET SORTED BY (k);
+ALTER TABLE lake.inl SET SORTED BY (k);
+ALTER TABLE lake.probe SET SORTED BY (k);
+CALL lake.set_option('target_file_size', '4MB', table_name => 'ins');
+CALL lake.set_option('target_file_size', '4MB', table_name => 'probe');
+CALL lake.set_option('data_inlining_row_limit', 1000000, table_name => 'inl');
+INSERT INTO lake.probe SELECT (i * 7919) % 5000000, 'v' || i, i * 0.5 FROM range(5000000) t(i);
+BEGIN;
+IMPORT DATABASE '${BENCHMARK_DIR}/${lake}_gen';
+COMMIT;
+SELECT CASE WHEN (SELECT count(*) FROM ducklake_list_files('lake', 'frag')) <> 200
+OR (SELECT count(*) FROM lake.frag) <> 2000000
+OR (SELECT count(*) FROM ducklake_list_files('lake', 'inl')) <> 0
+OR (SELECT count(*) FROM lake.inl) <> 300000
+OR (SELECT count(*) FROM ducklake_list_files('lake', 'probe')) < 8
+THEN error('unexpected sorted fixture') END;
+CALL ducklake_delete_orphaned_files('lake', cleanup_all => true);
+DETACH lake;
+COPY (SELECT count(*) FROM glob('${BENCHMARK_DIR}/${lake}_files/**'))
+TO '${BENCHMARK_DIR}/${lake}_filecount.csv' (FORMAT CSV, HEADER false);
+@seal ${lake}_pristine
+COPY (SELECT 1) TO '${BENCHMARK_DIR}/${lake}_ready.marker' (FORMAT CSV);
+DETACH DATABASE IF EXISTS lake;
+@copy ${lake}_pristine TO ${work}
+@attach ${work} AS lake
+CALL ducklake_delete_orphaned_files('lake', cleanup_all => true);
+SELECT CASE WHEN (SELECT count(*) FROM glob('${BENCHMARK_DIR}/${lake}_files/**'))
+<> (SELECT column0 FROM read_csv('${BENCHMARK_DIR}/${lake}_filecount.csv', header = false))
+THEN error('the fixture files were not restored') END;
+
+include benchmark/micro/fixtures/restore_reload.benchmark.in
