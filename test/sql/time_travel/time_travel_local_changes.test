@@ -123,3 +123,48 @@ SELECT count(*), sum(id) FROM dl.t AT (VERSION => getvariable('v2'))
 
 statement ok
 ROLLBACK
+
+# a flush in the transaction does not hide the committed inlined rows and deletes from time travel
+statement ok
+CREATE TABLE dl.f (i INT)
+
+statement ok
+INSERT INTO dl.f VALUES (1), (2), (3)
+
+statement ok
+CREATE TABLE dl.g AS SELECT i FROM range(100) r(i)
+
+statement ok
+DELETE FROM dl.g WHERE i = 0
+
+statement ok
+SET VARIABLE v3 = (SELECT max(snapshot_id) FROM dl.snapshots())
+
+statement ok
+BEGIN
+
+statement ok
+CALL ducklake_flush_inlined_data('dl')
+
+query II
+SELECT count(*), sum(i) FROM dl.f AT (VERSION => getvariable('v3'))
+----
+3	6
+
+query II
+SELECT count(*), sum(i) FROM dl.g AT (VERSION => getvariable('v3'))
+----
+99	4950
+
+query I
+SELECT count(*) FROM dl.f
+----
+3
+
+query I
+SELECT count(*) FROM dl.g
+----
+99
+
+statement ok
+ROLLBACK

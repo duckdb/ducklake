@@ -94,9 +94,10 @@ public:
 	const vector<DuckLakeInlinedTableInfo> &GetInlinedDataTables() const {
 		return inlined_data_tables;
 	}
-	//! The inlined data tables to read at the snapshot, skipping the flushed and dropped ones
-	vector<DuckLakeInlinedTableInfo> GetInlinedDataTables(DuckLakeTransaction &transaction,
-	                                                      DuckLakeSnapshot snapshot) const;
+	//! The inlined data tables to read at the snapshot, skipping the dropped ones and, for a reader of local changes,
+	//! the flushed ones
+	vector<DuckLakeInlinedTableInfo> GetInlinedDataTables(DuckLakeTransaction &transaction, DuckLakeSnapshot snapshot,
+	                                                      bool include_local_changes = true) const;
 	const ColumnDefinition &GetColumnByFieldId(FieldIndex field_index) const;
 	//! Returns the root field id of a column
 	const DuckLakeFieldId &GetFieldId(PhysicalIndex column_index) const;

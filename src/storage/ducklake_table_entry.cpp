@@ -490,7 +490,8 @@ idx_t DuckLakeTableEntry::GetNetDataFileRowCount(DuckLakeTransaction &transactio
 }
 
 vector<DuckLakeInlinedTableInfo> DuckLakeTableEntry::GetInlinedDataTables(DuckLakeTransaction &transaction,
-                                                                          DuckLakeSnapshot snapshot) const {
+                                                                          DuckLakeSnapshot snapshot,
+                                                                          bool include_local_changes) const {
 	// another attach can drop superseded inlined tables without bumping the schema version
 	bool may_be_dropped = inlined_data_tables.size() > 1;
 	if (inlined_data_tables.size() == 1) {
@@ -504,7 +505,7 @@ vector<DuckLakeInlinedTableInfo> DuckLakeTableEntry::GetInlinedDataTables(DuckLa
 	}
 	vector<DuckLakeInlinedTableInfo> result;
 	for (auto &inlined_table : inlined_data_tables) {
-		if (transaction.InlinedTableFlushed(inlined_table.table_name)) {
+		if (include_local_changes && transaction.InlinedTableFlushed(inlined_table.table_name)) {
 			continue;
 		}
 		if (may_be_dropped && registered_tables.find(inlined_table.table_name) == registered_tables.end()) {
