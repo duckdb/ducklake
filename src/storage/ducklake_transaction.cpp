@@ -701,9 +701,7 @@ void DuckLakeTransaction::Commit() {
 		} else if (HasDeferredConfigOptions()) {
 			auto option_changes = DeferredConfigOptionsSql();
 			auto result = metadata_manager->Execute(GetSnapshot(), option_changes);
-			if (result->HasError()) {
-				result->GetErrorObject().Throw("Failed to write config options to DuckLake: ");
-			}
+			result->ThrowIfError("Failed to write config options to DuckLake: ");
 			connection->Commit();
 		} else if (connection) {
 			connection->Commit();
