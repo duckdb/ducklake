@@ -131,7 +131,7 @@ void DuckLakeInitializer::LoadExistingDuckLakeWithRetries(DuckLakeTransaction &t
 			}
 			if (!MigrationFailed(error)) {
 				// only the statements of a migration can fail because another attach migrates the same DuckLake
-				first_error.Throw();
+				error.Throw();
 			}
 		}
 		if (attempt >= retry_config.max_retry_count) {
