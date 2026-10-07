@@ -695,15 +695,17 @@ void DuckLakeTransaction::Commit() {
 	try {
 		if (ChangesMade()) {
 			FlushChanges();
-		} else if (HasDeferredConfigOptions()) {
-			auto option_changes = DeferredConfigOptionsSql();
-			auto result = metadata_manager->Execute(GetSnapshot(), option_changes);
-			result->ThrowIfError("Failed to write config options to DuckLake: ");
-			connection->Commit();
-		} else if (connection) {
-			connection->Commit();
-			if (!state->flushed_inlined_tables.empty()) {
-				DropEmptySupersededInlinedTablesClientSide();
+		} else {
+			if (HasDeferredConfigOptions()) {
+				auto option_changes = DeferredConfigOptionsSql();
+				auto result = metadata_manager->Execute(GetSnapshot(), option_changes);
+				result->ThrowIfError("Failed to write config options to DuckLake: ");
+			}
+			if (connection) {
+				connection->Commit();
+				if (!state->flushed_inlined_tables.empty()) {
+					DropEmptySupersededInlinedTablesClientSide();
+				}
 			}
 		}
 	} catch (...) {

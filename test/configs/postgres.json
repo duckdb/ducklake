@@ -21,7 +21,8 @@
     {
       "reason": "Test requires a Quack metadata catalog",
       "paths": [
-        "test/sql/quack/inlined_superseded_drop_failure.test"
+        "test/sql/quack/inlined_superseded_drop_failure.test",
+        "test/sql/quack/quack_option_flush_superseded.test"
       ]
     },
     {
