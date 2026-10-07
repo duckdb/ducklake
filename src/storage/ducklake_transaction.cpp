@@ -1470,8 +1470,9 @@ void DuckLakeTransaction::RunCommitLoop(DuckLakeSnapshot transaction_snapshot,
 	};
 	context.commit_info = state->commit_info;
 	context.supports_v1_1_metadata = ducklake_catalog.SupportsV1_1Metadata();
-	auto &metadata_type = ducklake_catalog.MetadataType();
-	if (metadata_type.empty() || StringUtil::CIEquals(metadata_type, "duckdb")) {
+	auto &metadata_catalog =
+	    Catalog::GetCatalog(*GetConnection().context, Identifier(ducklake_catalog.MetadataDatabaseName()));
+	if (metadata_catalog.IsDuckCatalog()) {
 		// the commits of a DuckDB metadata catalog take turns, other catalogs have writers in other processes
 		context.commit_lock = &ducklake_catalog.GetClientCommitLock();
 	}

@@ -329,7 +329,7 @@ public:
 		retrials_server_side = value;
 	}
 
-	//! Serializes the client commits of this catalog, so they do not collide on the snapshot id
+	//! Serializes the client commit attempts of this catalog
 	mutex &GetClientCommitLock() {
 		return client_commit_lock;
 	}
