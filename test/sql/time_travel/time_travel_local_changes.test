@@ -212,3 +212,49 @@ ROLLBACK
 
 statement ok
 RESET threads
+
+# a copied time travel scan at the snapshot of the transaction reads the committed table
+statement ok
+CREATE TABLE dl.r AS SELECT i AS id FROM range(3) r(i)
+
+statement ok
+CREATE TABLE dl.d AS SELECT i AS id FROM range(4) r(i)
+
+statement ok
+CREATE TABLE dl.n AS SELECT i AS id FROM range(5) r(i)
+
+statement ok
+SET VARIABLE v5 = (SELECT max(snapshot_id) FROM dl.snapshots())
+
+statement ok
+BEGIN
+
+statement ok
+CREATE OR REPLACE TABLE dl.r AS SELECT 42::BIGINT AS id
+
+statement ok
+DROP TABLE dl.d
+
+statement ok
+ALTER TABLE dl.n RENAME TO n2
+
+query I
+WITH p AS NOT MATERIALIZED (SELECT * FROM dl.r AT (VERSION => getvariable('v5')))
+SELECT count(*) FROM p a JOIN p b USING (id)
+----
+3
+
+query I
+WITH p AS NOT MATERIALIZED (SELECT * FROM dl.d AT (VERSION => getvariable('v5')))
+SELECT count(*) FROM p a JOIN p b USING (id)
+----
+4
+
+query I
+WITH p AS NOT MATERIALIZED (SELECT * FROM dl.n AT (VERSION => getvariable('v5')))
+SELECT count(*) FROM p a JOIN p b USING (id)
+----
+5
+
+statement ok
+ROLLBACK

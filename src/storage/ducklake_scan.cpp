@@ -341,7 +341,7 @@ unique_ptr<FunctionData> DuckLakeScanDeserialize(Deserializer &deserializer, Bou
 
 	// a time travel scan finds its table at the serialized snapshot
 	unique_ptr<BoundAtClause> at_clause;
-	if (snapshot.snapshot_id != transaction.GetSnapshot().snapshot_id) {
+	if (!include_local_changes) {
 		at_clause = make_uniq<BoundAtClause>("version", Value::UBIGINT(snapshot.snapshot_id));
 	}
 	EntryLookupInfo table_lookup(CatalogType::TABLE_ENTRY, qualified_name, at_clause.get(), QueryErrorContext());
