@@ -68,7 +68,7 @@ SELECT count(*) FROM __ducklake_metadata_ducklake.ducklake_data_file
 statement error
 CALL ducklake_merge_adjacent_files('ducklake', 'example', max_compacted_files=>-1);
 ----
-Type INT32 with value -1 can't be cast
+The max_compacted_files option must be greater than zero.
 
 statement error
 CALL ducklake_merge_adjacent_files('ducklake', 'example', max_compacted_files=>NULL);

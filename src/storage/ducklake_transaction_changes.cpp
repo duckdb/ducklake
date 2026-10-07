@@ -28,6 +28,29 @@ enum class ChangeType {
 	DROPPED_TABLE_MACRO
 };
 
+constexpr StringUtil::EnumStringLiteral CHANGE_TYPE_NAMES[] = {
+    {static_cast<uint32_t>(ChangeType::CREATED_TABLE), "created_table"},
+    {static_cast<uint32_t>(ChangeType::CREATED_VIEW), "created_view"},
+    {static_cast<uint32_t>(ChangeType::CREATED_SCALAR_MACRO), "created_scalar_macro"},
+    {static_cast<uint32_t>(ChangeType::CREATED_TABLE_MACRO), "created_table_macro"},
+    {static_cast<uint32_t>(ChangeType::CREATED_SCHEMA), "created_schema"},
+    {static_cast<uint32_t>(ChangeType::DROPPED_SCHEMA), "dropped_schema"},
+    {static_cast<uint32_t>(ChangeType::DROPPED_TABLE), "dropped_table"},
+    {static_cast<uint32_t>(ChangeType::DROPPED_VIEW), "dropped_view"},
+    {static_cast<uint32_t>(ChangeType::INSERTED_INTO_TABLE), "inserted_into_table"},
+    {static_cast<uint32_t>(ChangeType::DROPPED_SCALAR_MACRO), "dropped_scalar_macro"},
+    {static_cast<uint32_t>(ChangeType::DROPPED_TABLE_MACRO), "dropped_table_macro"},
+    {static_cast<uint32_t>(ChangeType::ALTERED_TABLE), "altered_table"},
+    {static_cast<uint32_t>(ChangeType::ALTERED_VIEW), "altered_view"},
+    {static_cast<uint32_t>(ChangeType::DELETED_FROM_TABLE), "deleted_from_table"},
+    {static_cast<uint32_t>(ChangeType::COMPACTED_TABLE), "compacted_table"},
+    {static_cast<uint32_t>(ChangeType::MERGE_ADJACENT), "merge_adjacent"},
+    {static_cast<uint32_t>(ChangeType::REWRITE_DELETE), "rewrite_delete"},
+    {static_cast<uint32_t>(ChangeType::INSERTED_INTO_TABLE_INLINED), "inlined_insert"},
+    {static_cast<uint32_t>(ChangeType::DELETED_FROM_TABLE_INLINED), "inlined_delete"},
+    {static_cast<uint32_t>(ChangeType::FLUSHED_INLINE_DATA_FOR_TABLE), "flushed_inlined"},
+    {static_cast<uint32_t>(ChangeType::FLUSHED_INLINE_DATA_FOR_TABLE), "inline_flush"}};
+
 struct ParsedChange {
 	ChangeType change_type;
 	string change_value;
@@ -41,48 +64,11 @@ ChangeType ParseChangeType(const string &changes_made, idx_t &pos) {
 		}
 	}
 	auto change_type_str = changes_made.substr(start_pos, pos - start_pos);
-	if (StringUtil::CIEquals(change_type_str, "created_table")) {
-		return ChangeType::CREATED_TABLE;
-	} else if (StringUtil::CIEquals(change_type_str, "created_view")) {
-		return ChangeType::CREATED_VIEW;
-	} else if (StringUtil::CIEquals(change_type_str, "created_scalar_macro")) {
-		return ChangeType::CREATED_SCALAR_MACRO;
-	} else if (StringUtil::CIEquals(change_type_str, "created_table_macro")) {
-		return ChangeType::CREATED_TABLE_MACRO;
-	} else if (StringUtil::CIEquals(change_type_str, "created_schema")) {
-		return ChangeType::CREATED_SCHEMA;
-	} else if (StringUtil::CIEquals(change_type_str, "dropped_schema")) {
-		return ChangeType::DROPPED_SCHEMA;
-	} else if (StringUtil::CIEquals(change_type_str, "dropped_table")) {
-		return ChangeType::DROPPED_TABLE;
-	} else if (StringUtil::CIEquals(change_type_str, "dropped_view")) {
-		return ChangeType::DROPPED_VIEW;
-	} else if (StringUtil::CIEquals(change_type_str, "inserted_into_table")) {
-		return ChangeType::INSERTED_INTO_TABLE;
-	} else if (StringUtil::CIEquals(change_type_str, "dropped_scalar_macro")) {
-		return ChangeType::DROPPED_SCALAR_MACRO;
-	} else if (StringUtil::CIEquals(change_type_str, "dropped_table_macro")) {
-		return ChangeType::DROPPED_TABLE_MACRO;
-	} else if (StringUtil::CIEquals(change_type_str, "altered_table")) {
-		return ChangeType::ALTERED_TABLE;
-	} else if (StringUtil::CIEquals(change_type_str, "altered_view")) {
-		return ChangeType::ALTERED_VIEW;
-	} else if (StringUtil::CIEquals(change_type_str, "deleted_from_table")) {
-		return ChangeType::DELETED_FROM_TABLE;
-	} else if (StringUtil::CIEquals(change_type_str, "compacted_table")) {
-		return ChangeType::COMPACTED_TABLE;
-	} else if (StringUtil::CIEquals(change_type_str, "merge_adjacent")) {
-		return ChangeType::MERGE_ADJACENT;
-	} else if (StringUtil::CIEquals(change_type_str, "rewrite_delete")) {
-		return ChangeType::REWRITE_DELETE;
-	} else if (StringUtil::CIEquals(change_type_str, "inlined_insert")) {
-		return ChangeType::INSERTED_INTO_TABLE_INLINED;
-	} else if (StringUtil::CIEquals(change_type_str, "inlined_delete")) {
-		return ChangeType::DELETED_FROM_TABLE_INLINED;
-	} else if (StringUtil::CIEquals(change_type_str, "flushed_inlined") ||
-	           StringUtil::CIEquals(change_type_str, "inline_flush")) {
-		return ChangeType::FLUSHED_INLINE_DATA_FOR_TABLE;
-	} else {
+	try {
+		return static_cast<ChangeType>(
+		    StringUtil::StringToEnum(CHANGE_TYPE_NAMES, sizeof(CHANGE_TYPE_NAMES) / sizeof(CHANGE_TYPE_NAMES[0]),
+		                             "ChangeType", change_type_str.c_str()));
+	} catch (NotImplementedException &) {
 		throw InvalidInputException("Unsupported change type %s", change_type_str);
 	}
 }

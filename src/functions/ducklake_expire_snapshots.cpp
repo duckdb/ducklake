@@ -1,80 +1,59 @@
-#include "duckdb/common/operator/subtract.hpp"
 #include "duckdb/catalog/catalog.hpp"
 #include "functions/ducklake_table_functions.hpp"
-#include "duckdb/main/attached_database.hpp"
-#include "duckdb/main/database_manager.hpp"
 #include "storage/ducklake_catalog.hpp"
 #include "storage/ducklake_transaction.hpp"
 
 namespace duckdb {
 
-struct ExpireSnapshotsBindData : public TableFunctionData {
-	explicit ExpireSnapshotsBindData(Catalog &catalog) : catalog(catalog) {
+struct ExpireSnapshotsBindData : public MetadataBindData {
+	explicit ExpireSnapshotsBindData(DuckLakeCatalog &catalog) : catalog(catalog) {
 	}
 
-	Catalog &catalog;
+	DuckLakeCatalog &catalog;
 	vector<DuckLakeSnapshotInfo> snapshots;
 	bool dry_run = false;
-	bool valid = true;
 };
 
 static unique_ptr<FunctionData> DuckLakeExpireSnapshotsBind(ClientContext &context, TableFunctionBindInput &input,
                                                             vector<LogicalType> &return_types,
                                                             vector<Identifier> &names) {
-	auto &catalog = DuckLakeBaseMetadataFunction::GetCatalog(context, input);
-	auto result = make_uniq<ExpireSnapshotsBindData>(catalog);
-	timestamp_tz_t from_timestamp;
-	string snapshot_list;
-	bool has_timestamp = false;
-	bool has_versions = false;
-	auto &ducklake_catalog = reinterpret_cast<DuckLakeCatalog &>(catalog);
+	auto &ducklake_catalog = DuckLakeBaseMetadataFunction::GetCatalog(context, input);
+	auto result = make_uniq<ExpireSnapshotsBindData>(ducklake_catalog);
 	DuckLakeSnapshotsFunction::GetSnapshotTypes(return_types, names);
 
 	const auto older_than_default = ducklake_catalog.GetConfigOption<string>("expire_older_than", {}, {}, "");
 
-	for (auto &entry : input.named_parameters) {
-		if (entry.first == "dry_run") {
-			if (entry.second.IsNull()) {
-				throw BinderException("The dry_run option must be a non-null boolean.");
-			}
-			result->dry_run = BooleanValue::Get(entry.second);
-		} else if (entry.first == "versions") {
-			has_versions = true;
-			if (entry.second.IsNull()) {
+	Value dry_run;
+	if (DuckLakeTableFunctionUtil::TryGetNonNullOption(input, "dry_run", "boolean", dry_run)) {
+		result->dry_run = BooleanValue::Get(dry_run);
+	}
+	vector<string> snapshot_ids;
+	auto versions_entry = input.named_parameters.find("versions");
+	bool has_versions = versions_entry != input.named_parameters.end();
+	if (has_versions && !versions_entry->second.IsNull()) {
+		for (auto &snapshot_id : ListValue::GetChildren(versions_entry->second)) {
+			if (snapshot_id.IsNull()) {
 				continue;
 			}
-			for (auto &snapshot_id : ListValue::GetChildren(entry.second)) {
-				if (snapshot_id.IsNull()) {
-					continue;
-				}
-				if (!snapshot_list.empty()) {
-					snapshot_list += ", ";
-				}
-				snapshot_list += snapshot_id.ToString();
+			if (BigIntValue::Get(snapshot_id) < 0) {
+				throw BinderException("The versions option must only contain non-negative snapshot ids.");
 			}
-		} else if (entry.first == "older_than") {
-			if (entry.second.IsNull()) {
-				throw BinderException("The older_than option must be a non-null timestamp.");
-			}
-			from_timestamp = entry.second.GetValue<timestamp_tz_t>();
-			has_timestamp = true;
-		} else {
-			throw InternalException("Unsupported named parameter for ducklake_expire_snapshots");
+			snapshot_ids.push_back(snapshot_id.ToString());
 		}
 	}
+	Value older_than;
+	bool has_timestamp = DuckLakeTableFunctionUtil::TryGetNonNullOption(input, "older_than", "timestamp", older_than);
 	if (has_versions && has_timestamp) {
 		throw InvalidInputException(
 		    "ducklake_expire_snapshots: cannot specify both 'versions' and 'older_than' parameters at the "
 		    "same time. Please use only one criterion.");
 	}
 	// An explicitly empty version set expires no snapshots.
-	if (has_versions && snapshot_list.empty()) {
-		result->valid = false;
+	if (has_versions && snapshot_ids.empty()) {
 		return std::move(result);
 	}
 	// No criteria given and no global default: silently no-op.
 	if (!has_versions && !has_timestamp && older_than_default.empty()) {
-		result->valid = false;
 		return std::move(result);
 	}
 
@@ -82,78 +61,52 @@ static unique_ptr<FunctionData> DuckLakeExpireSnapshotsBind(ClientContext &conte
 	// we can never delete the most recent snapshot
 	filter = "snapshot_id != (SELECT MAX(snapshot_id) FROM {METADATA_CATALOG}.ducklake_snapshot) AND ";
 	if (has_timestamp) {
+		auto from_timestamp = older_than.GetValue<timestamp_tz_t>();
 		auto timestamp_filter = DuckLakeTableFunctionUtil::FormatTimestampISO8601(timestamp_t(from_timestamp.value));
 		filter += StringUtil::Format("snapshot_time::TIMESTAMPTZ < '%s'", timestamp_filter);
-	} else if (!has_versions && !older_than_default.empty()) {
-		interval_t interval;
-		if (!Interval::FromString(older_than_default, interval)) {
-			throw InvalidInputException("Failed to parse interval: '%s'", older_than_default);
-		}
-		auto current_time = Timestamp::GetCurrentTimestamp();
-		auto target_timestamp =
-		    SubtractOperator::Operation<timestamp_t, interval_t, timestamp_t>(current_time, interval);
-		auto timestamp_filter = DuckLakeTableFunctionUtil::FormatTimestampISO8601(target_timestamp);
+	} else if (!has_versions) {
+		auto timestamp_filter = DuckLakeTableFunctionUtil::FormatTimestampOlderThan(older_than_default);
 		filter += StringUtil::Format("snapshot_time::TIMESTAMPTZ < '%s'", timestamp_filter);
 	} else {
-		filter += StringUtil::Format("snapshot_id IN (%s)", snapshot_list);
+		filter += StringUtil::Format("snapshot_id IN (%s)", StringUtil::Join(snapshot_ids, ", "));
 	}
-	auto &transaction = DuckLakeTransaction::Get(context, catalog);
+	auto &transaction = DuckLakeTransaction::Get(context, ducklake_catalog);
 	auto &metadata_manager = transaction.GetMetadataManager();
 	result->snapshots = metadata_manager.GetAllSnapshots(filter);
-
-	return std::move(result);
-}
-
-struct DuckLakeExpireSnapshotsData : public GlobalTableFunctionState {
-	DuckLakeExpireSnapshotsData() : offset(0), executed(false) {
+	for (auto &snapshot : result->snapshots) {
+		result->rows.push_back(DuckLakeSnapshotsFunction::GetSnapshotValues(snapshot));
 	}
-
-	idx_t offset;
-	bool executed;
-};
-
-unique_ptr<GlobalTableFunctionState> DuckLakeExpireSnapshotsInit(ClientContext &context,
-                                                                 TableFunctionInitInput &input) {
-	auto result = make_uniq<DuckLakeExpireSnapshotsData>();
 	return std::move(result);
 }
 
 void DuckLakeExpireSnapshotsExecute(ClientContext &context, TableFunctionInput &data_p, DataChunk &output) {
 	auto &data = data_p.bind_data->Cast<ExpireSnapshotsBindData>();
-	if (!data.valid) {
-		return;
-	}
-	auto &state = data_p.global_state->Cast<DuckLakeExpireSnapshotsData>();
-	if (state.offset >= data.snapshots.size()) {
+	auto &state = data_p.global_state->Cast<DuckLakeRunOnceState>();
+	if (state.offset >= data.rows.size()) {
 		return;
 	}
 	if (!state.executed && !data.dry_run) {
 		auto &transaction = DuckLakeTransaction::Get(context, data.catalog);
 		transaction.DeleteSnapshots(data.snapshots);
-		auto &ducklake_catalog = data.catalog.Cast<DuckLakeCatalog>();
 		for (auto &snapshot : data.snapshots) {
-			ducklake_catalog.InvalidateSchemaCache(snapshot.schema_version);
+			data.catalog.InvalidateSchemaCache(snapshot.schema_version);
 		}
 		state.executed = true;
 	}
-
-	idx_t count = 0;
-	while (state.offset < data.snapshots.size() && count < STANDARD_VECTOR_SIZE) {
-		auto row_values = DuckLakeSnapshotsFunction::GetSnapshotValues(data.snapshots[state.offset++]);
-		for (idx_t col_idx = 0; col_idx < row_values.size(); col_idx++) {
-			output.data[col_idx].Append(row_values[col_idx]);
-		}
-		count++;
-	}
-	output.SetChildCardinality(count);
+	DuckLakeBaseMetadataFunction::ScanRows(data.rows, state.offset, output);
 }
 
 DuckLakeExpireSnapshotsFunction::DuckLakeExpireSnapshotsFunction()
-    : TableFunction("ducklake_expire_snapshots", {LogicalType::VARCHAR}, DuckLakeExpireSnapshotsExecute,
-                    DuckLakeExpireSnapshotsBind, DuckLakeExpireSnapshotsInit) {
-	named_parameters["older_than"] = LogicalType::TIMESTAMP_TZ;
-	named_parameters["versions"] = LogicalType::LIST(LogicalType::UBIGINT);
-	named_parameters["dry_run"] = LogicalType::BOOLEAN;
+    : TableFunction("ducklake_expire_snapshots", FunctionSignature().AddPositionalOnly("catalog", LogicalType::VARCHAR),
+                    DuckLakeExpireSnapshotsExecute, DuckLakeExpireSnapshotsBind, DuckLakeRunOnceState::Init) {
+	GetSignature().WithTypedKwargs("options", [&](TypedKwargs &options) {
+		options
+		    .Add("older_than", LogicalType::TIMESTAMP_TZ)
+		    // BIGINT rather than UBIGINT: a caller writes "versions => [2]", which is a list of signed literals, and
+		    // an unsigned parameter has no implicit cast from one. The range is checked below instead.
+		    .Add("versions", LogicalType::LIST(LogicalType::BIGINT))
+		    .Add("dry_run", LogicalType::BOOLEAN);
+	});
 }
 
 } // namespace duckdb

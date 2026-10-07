@@ -58,10 +58,6 @@ struct DuckLakeDeleteFile {
 };
 
 struct DuckLakeDataFile {
-	DuckLakeDataFile() = default;
-	DuckLakeDataFile(const DuckLakeDataFile &other);
-	DuckLakeDataFile &operator=(const DuckLakeDataFile &);
-
 	string file_name;
 	idx_t row_count;
 	idx_t file_size_bytes;

@@ -242,6 +242,12 @@
         "test/sql/retry/commit_failure.test",
         "test/sql/settings/max_retry_count.test"
       ]
+    },
+    {
+      "reason": "The commit batch of a quack catalog is sent through quack_query_by_name, so the number of column inserts cannot be counted",
+      "paths": [
+        "test/sql/issues/issue_1146_column_insert_batches.test"
+      ]
     }
   ]
 }

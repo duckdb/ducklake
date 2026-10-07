@@ -1,0 +1,107 @@
+# name: test/sql/compaction/merge_adjacent_older_than.test
+# description: test ducklake merge adjacent files older_than option
+# group: [compaction]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/merge_adjacent_older_than/', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+USE ducklake;
+
+statement ok
+CREATE TABLE example (key integer, data varchar);
+
+statement ok
+INSERT INTO example SELECT i, 'batch_1' FROM range(10) t(i);
+
+statement ok
+INSERT INTO example SELECT i + 10, 'batch_1' FROM range(10) t(i);
+
+statement ok
+CREATE TABLE boundary_marker_1 (i INTEGER);
+
+statement ok
+SET VARIABLE boundary_1 = (SELECT snapshot_time FROM ducklake_snapshots('ducklake') ORDER BY snapshot_id DESC LIMIT 1);
+
+statement ok
+INSERT INTO example SELECT i + 100, 'batch_2' FROM range(10) t(i);
+
+statement ok
+INSERT INTO example SELECT i + 200, 'batch_2' FROM range(10) t(i);
+
+statement ok
+CREATE TABLE boundary_marker_2 (i INTEGER);
+
+statement ok
+SET VARIABLE boundary_2 = (SELECT snapshot_time FROM ducklake_snapshots('ducklake') ORDER BY snapshot_id DESC LIMIT 1);
+
+statement ok
+INSERT INTO example SELECT i + 300, 'batch_3' FROM range(10) t(i);
+
+statement ok
+INSERT INTO example SELECT i + 400, 'batch_3' FROM range(10) t(i);
+
+# Combined with newer_than, only the batch-2 files are merged
+query IIII
+SELECT schema_name, table_name, files_processed, files_created FROM ducklake_merge_adjacent_files('ducklake', 'example', newer_than => getvariable('boundary_1'), older_than => getvariable('boundary_2'))
+----
+main	example	2	1
+
+query II
+SELECT data, count(*) FROM example GROUP BY data, filename ORDER BY ALL
+----
+batch_1	10
+batch_1	10
+batch_2	20
+batch_3	10
+batch_3	10
+
+# Only files written before the boundary are merged
+query IIII
+SELECT schema_name, table_name, files_processed, files_created FROM ducklake_merge_adjacent_files('ducklake', 'example', older_than => getvariable('boundary_1'))
+----
+main	example	2	1
+
+query II
+SELECT data, count(*) FROM example GROUP BY data, filename ORDER BY ALL
+----
+batch_1	20
+batch_2	20
+batch_3	10
+batch_3	10
+
+# A boundary in the distant past excludes all files
+query IIII
+SELECT schema_name, table_name, files_processed, files_created FROM ducklake_merge_adjacent_files('ducklake', older_than => now()::TIMESTAMP - INTERVAL 1 DAY)
+----
+
+# A boundary in the future includes all files
+query IIII
+SELECT schema_name, table_name, files_processed, files_created FROM ducklake_merge_adjacent_files('ducklake', older_than => now()::TIMESTAMP + INTERVAL 1 DAY)
+----
+main	example	4	1
+
+query II
+SELECT data, count(*) FROM example GROUP BY data ORDER BY data
+----
+batch_1	20
+batch_2	20
+batch_3	20
+
+statement error
+CALL ducklake_merge_adjacent_files('ducklake', 'example', older_than => NULL);
+----
+older_than option must be a non-null timestamp
+
+statement error
+CALL ducklake_merge_adjacent_files('ducklake', 'example', newer_than => getvariable('boundary_2'), older_than => getvariable('boundary_1'));
+----
+newer_than option must be less than older_than

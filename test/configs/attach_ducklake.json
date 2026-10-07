@@ -201,9 +201,12 @@
       ]
     },
     {
-      "reason": "Uses VACUUM for stats setup; DuckLake does not implement VACUUM, so the subsequent join-filter plan check cannot run.",
+      "reason": "Uses VACUUM/ANALYZE for stats setup; DuckLake does not implement VACUUM, so the subsequent checks cannot run.",
       "paths": [
-        "test/optimizer/joins/join_filter_build_side.test"
+        "test/optimizer/joins/join_filter_build_side.test",
+        "test/sql/sql_export/compression_fallbacks.test",
+        "test/sql/sql_export/compression_fallbacks_plan.test",
+        "test/sql/sql_export/rewritten_functions.test"
       ]
     },
     {
@@ -271,7 +274,10 @@
         "test/sql/peg_parser/transformer/drop_statement.test",
         "test/sql/transactions/rollback_drop_table.test",
         "test/sql/function/variant/variant_extract_try_cast.test",
-        "test/sql/alter/rename_table/test_rename_table_view.test"
+        "test/sql/alter/rename_table/test_rename_table_view.test",
+        "test/sql/alter/alter_schema_set_schema_options.test",
+        "test/sql/create/create_schema_options.test",
+        "test/sql/alter/drop_col/test_drop_col_dotted_name.test"
       ]
     },
     {
@@ -358,7 +364,9 @@
         "test/issues/internal/test_5457.test",
         "test/sql/copy/csv/code_cov/csv_disk_reload.test",
         "test/sql/table_function/duckdb_eviction_queues.test",
-        "test/sql/storage/temp_directory/test_default_temp_directory.test"
+        "test/sql/storage/temp_directory/test_default_temp_directory.test",
+        "test/sql/transactions/test_commit_cleanup_oom.test",
+        "test/sql/transactions/test_commit_cleanup_oom_index_retry.test"
       ]
     },
     {
@@ -371,7 +379,8 @@
         "test/sql/storage/metadata/partial_column_metadata_reuse.test",
         "test/sql/storage/metadata/partial_column_metadata_reuse_v7.test",
         "test/sql/storage/extended_string_stats.test",
-        "test/sql/storage/total_string_length_repeated_insert.test"
+        "test/sql/storage/total_string_length_repeated_insert.test",
+        "test/sql/storage/prefetch/async_native_scan_read_ahead.test"
       ]
     },
     {
@@ -408,7 +417,8 @@
         "test/sql/storage/unzip.test",
         "test/sql/storage/icu_collation.test",
         "test/sql/attach/attach_read_only.test",
-        "test/sql/storage/checkpoint/checkpoint_with_outstanding_insertions.test"
+        "test/sql/storage/checkpoint/checkpoint_with_outstanding_insertions.test",
+        "test/sql/storage/temp_directory/test_runner_temp_directory.test"
       ]
     },
     {
@@ -830,7 +840,9 @@
         "test/sql/optimizer/substring_zonemap_pruning.test",
         "test/sql/optimizer/test_negated_filter_cardinality.test",
         "test/sql/optimizer/multiple_column_stats_pruning.test",
-        "test/sql/optimizer/struct_segment_pruning.test"
+        "test/sql/optimizer/struct_segment_pruning.test",
+        "test/optimizer/joins/always_true_scan_filter_estimate.test",
+        "test/sql/sql_export/pushed_column_paths.test"
       ]
     },
     {
@@ -895,7 +907,8 @@
         "test/sql/storage/compression/uncompressed/validity_corrupt_count_boundary.test",
         "test/sql/storage/compression/uncompressed/validity_corrupt_offset.test",
         "test/sql/storage/corrupt/row_group_count_mismatch.test",
-        "test/sql/storage/overflow_strings/null_overflow_string_memory.test"
+        "test/sql/storage/overflow_strings/null_overflow_string_memory.test",
+        "test/sql/storage/compression/constant/constant_negative_zero.test"
       ]
     },
     {
@@ -903,7 +916,9 @@
       "paths": [
         "test/sql/storage/attach/attach_invalidation_default_db.test",
         "test/sql/storage/checkpoint/initial_database_autocheckpoint_failure.test",
-        "test/sql/transactions/commit_revert_failure.test"
+        "test/sql/transactions/commit_revert_failure.test",
+        "test/sql/storage/checkpoint/test_checkpoint_abort_truncate.test",
+        "test/sql/storage/wal/wal_torn_uncommitted_row_group.test"
       ]
     },
     {
@@ -976,6 +991,12 @@
       "reason": "FIXME: hangs - the parquet multi-file scan spins in MultiFileFunction::ClaimNextJobInternal (also with read_ahead_depth=0) under concurrent ALTER/INSERT on a DuckLake table",
       "paths": [
         "test/sql/storage/alter/alter_based_on_unfinished_insert_fails.test"
+      ]
+    },
+    {
+      "reason": "Asserts insertion order of a large parallel CTAS copy via LIMIT/OFFSET without ORDER BY; DuckLake does not preserve it.",
+      "paths": [
+        "test/sql/parallelism/intraquery/test_transaction_local_parallelism.test"
       ]
     }
   ]

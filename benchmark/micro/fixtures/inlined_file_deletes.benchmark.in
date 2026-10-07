@@ -1,0 +1,50 @@
+# name: benchmark/micro/fixtures/inlined_file_deletes.benchmark.in
+# description: Lake with 20 tables of two 2048-row files, each with an inlined deletion in its first file
+# group: [fixtures]
+
+argument lake inlined_file_deletes
+
+cache_file ${lake}_ready.marker
+
+# A row limit of 10 keeps the 2048-row inserts in files and inlines the deletions
+load
+EXPORT DATABASE '${BENCHMARK_DIR}/${lake}_gen';
+COPY (SELECT stmt FROM (
+SELECT 0 AS o, k, 'CREATE TABLE lake.t' || k || ' AS SELECT i AS id FROM range(2048) t(i);' AS stmt FROM range(20) t(k)
+UNION ALL
+SELECT 1, k, 'INSERT INTO lake.t' || k || ' SELECT i FROM range(2048, 4096) t(i);' FROM range(20) t(k)
+UNION ALL
+SELECT 2, 0, 'COMMIT; BEGIN;'
+UNION ALL
+SELECT 3, k, 'DELETE FROM lake.t' || k || ' WHERE id = 0;' FROM range(20) t(k)
+) ORDER BY o, k) TO '${BENCHMARK_DIR}/${lake}_gen/schema.sql' (HEADER false, QUOTE '');
+@create ${lake}_pristine
+@attach ${lake}_pristine AS lake (DATA_PATH '${BENCHMARK_DIR}/${lake}_files')
+CALL lake.set_option('data_inlining_row_limit', 10);
+IMPORT DATABASE '${BENCHMARK_DIR}/${lake}_gen';
+SET VARIABLE delete_targets = (SELECT list('lake.t' || k) FROM range(20) t(k));
+SET VARIABLE inlined_delete_tables = (SELECT list('__ducklake_metadata_lake.ducklake_inlined_delete_' || table_id)
+FROM __ducklake_metadata_lake.ducklake_table);
+SELECT CASE WHEN (SELECT count(*) <> 40 OR min(record_count) <> 2048 OR max(record_count) <> 2048
+FROM __ducklake_metadata_lake.ducklake_data_file WHERE end_snapshot IS NULL)
+OR (SELECT count(*) <> 0 FROM __ducklake_metadata_lake.ducklake_delete_file WHERE end_snapshot IS NULL)
+OR (SELECT count(*) <> 20 OR count(DISTINCT file_id) <> 20 OR max(row_id) <> 0
+FROM query_table(getvariable('inlined_delete_tables')))
+OR (SELECT count(*) <> 20 * 4095 FROM query_table(getvariable('delete_targets')))
+OR (SELECT count(*) <> 3 FROM lake.snapshots())
+THEN error('unexpected inlined file deletes fixture') END;
+CALL ducklake_delete_orphaned_files('lake', cleanup_all => true);
+DETACH lake;
+COPY (SELECT count(*) FROM glob('${BENCHMARK_DIR}/${lake}_files/**'))
+TO '${BENCHMARK_DIR}/${lake}_filecount.csv' (FORMAT CSV, HEADER false);
+@seal ${lake}_pristine
+COPY (SELECT 1) TO '${BENCHMARK_DIR}/${lake}_ready.marker' (FORMAT CSV);
+DETACH DATABASE IF EXISTS lake;
+@copy ${lake}_pristine TO ${work}
+@attach ${work} AS lake
+CALL ducklake_delete_orphaned_files('lake', cleanup_all => true);
+SELECT CASE WHEN (SELECT count(*) FROM glob('${BENCHMARK_DIR}/${lake}_files/**'))
+<> (SELECT column0 FROM read_csv('${BENCHMARK_DIR}/${lake}_filecount.csv', header = false))
+THEN error('the fixture files were not restored') END;
+
+include benchmark/micro/fixtures/restore_reload.benchmark.in

@@ -1,4 +1,3 @@
-#include "common/ducklake_util.hpp"
 #include "duckdb/parser/qualified_name.hpp"
 #include "functions/ducklake_table_functions.hpp"
 #include "duckdb/catalog/catalog.hpp"
@@ -45,26 +44,15 @@ static constexpr DuckLakeOptionMetadata DUCKLAKE_OPTIONS[] = {
 };
 
 struct DuckLakeOptionsData : public TableFunctionData {
-	explicit DuckLakeOptionsData(Catalog &catalog) : catalog(catalog) {
+	explicit DuckLakeOptionsData(DuckLakeCatalog &catalog) : catalog(catalog) {
 	}
 
-	Catalog &catalog;
-};
-
-struct DuckLakeOptionInfo {
-	string option_name;
-	Value description;
-	string value;
-	string scope;
-	string scope_entry;
+	DuckLakeCatalog &catalog;
 };
 
 struct DuckLakeOptionsState : public GlobalTableFunctionState {
-	DuckLakeOptionsState() : offset(0) {
-	}
-
-	vector<DuckLakeOptionInfo> options;
-	idx_t offset;
+	vector<vector<Value>> rows;
+	idx_t offset = 0;
 };
 
 static unique_ptr<FunctionData> DuckLakeOptionsBind(ClientContext &context, TableFunctionBindInput &input,
@@ -98,10 +86,15 @@ static Value GetOptionDescription(const string &option_name) {
 	return Value();
 }
 
+static vector<Value> GetOptionRow(const DuckLakeTag &tag, const string &scope, const string &scope_entry) {
+	return {Value(tag.key), GetOptionDescription(tag.key), Value(tag.value), Value(scope),
+	        scope_entry.empty() ? Value() : Value(scope_entry)};
+}
+
 unique_ptr<GlobalTableFunctionState> DuckLakeOptionsInit(ClientContext &context, TableFunctionInitInput &input) {
 	auto &bind_data = input.bind_data->Cast<DuckLakeOptionsData>();
-	auto &transaction = DuckLakeTransaction::Get(context, bind_data.catalog);
-	auto &ducklake_catalog = bind_data.catalog.Cast<DuckLakeCatalog>();
+	auto &ducklake_catalog = bind_data.catalog;
+	auto &transaction = DuckLakeTransaction::Get(context, ducklake_catalog);
 	auto &metadata_manager = transaction.GetMetadataManager();
 
 	auto result = make_uniq<DuckLakeOptionsState>();
@@ -109,71 +102,42 @@ unique_ptr<GlobalTableFunctionState> DuckLakeOptionsInit(ClientContext &context,
 
 	// Global options
 	for (auto &tag : metadata.tags) {
-		DuckLakeOptionInfo option_info;
-		option_info.option_name = tag.key;
-		option_info.value = tag.value;
-		option_info.description = GetOptionDescription(tag.key);
-		option_info.scope = "GLOBAL";
-		result->options.push_back(std::move(option_info));
+		result->rows.push_back(GetOptionRow(tag, "GLOBAL", string()));
 	}
 
 	auto snapshot = transaction.GetSnapshot();
 
 	// Schema options
 	for (auto &schema_setting : metadata.schema_settings) {
-		DuckLakeOptionInfo option_info;
-		option_info.option_name = schema_setting.tag.key;
-		option_info.value = schema_setting.tag.value;
-		option_info.description = GetOptionDescription(schema_setting.tag.key);
-		option_info.scope = "SCHEMA";
+		string scope_entry;
 		auto schema_entry = ducklake_catalog.GetEntryById(transaction, snapshot, schema_setting.schema_id);
 		if (schema_entry) {
-			option_info.scope_entry =
-			    DuckLakeUtil::SchemaPathToDisplay(schema_entry->Cast<SchemaCatalogEntry>().GetSchemaPath());
+			scope_entry = schema_entry->Cast<SchemaCatalogEntry>().GetSchemaName();
 		}
-		result->options.push_back(std::move(option_info));
+		result->rows.push_back(GetOptionRow(schema_setting.tag, "SCHEMA", scope_entry));
 	}
 
 	// Table options
 	for (auto &table_setting : metadata.table_settings) {
-		DuckLakeOptionInfo option_info;
-		option_info.option_name = table_setting.tag.key;
-		option_info.value = table_setting.tag.value;
-		option_info.description = GetOptionDescription(table_setting.tag.key);
-		option_info.scope = "TABLE";
+		string scope_entry;
 		auto table_entry = ducklake_catalog.GetEntryById(transaction, snapshot, table_setting.table_id);
 		if (table_entry) {
 			auto &table_catalog_entry = table_entry->Cast<TableCatalogEntry>();
-			option_info.scope_entry =
+			scope_entry =
 			    QualifiedName(table_catalog_entry.ParentSchema().GetSchemaPath(), table_entry->name).ToString();
 		}
-		result->options.push_back(std::move(option_info));
+		result->rows.push_back(GetOptionRow(table_setting.tag, "TABLE", scope_entry));
 	}
 
-	std::sort(result->options.begin(), result->options.end(),
-	          [](const DuckLakeOptionInfo &a, const DuckLakeOptionInfo &b) { return a.option_name < b.option_name; });
+	std::sort(result->rows.begin(), result->rows.end(), [](const vector<Value> &a, const vector<Value> &b) {
+		return StringValue::Get(a[0]) < StringValue::Get(b[0]);
+	});
 	return std::move(result);
 }
 
 void DuckLakeOptionsExecute(ClientContext &context, TableFunctionInput &data_p, DataChunk &output) {
 	auto &state = data_p.global_state->Cast<DuckLakeOptionsState>();
-
-	if (state.offset >= state.options.size()) {
-		output.SetChildCardinality(0);
-		return;
-	}
-
-	idx_t count = 0;
-	while (state.offset < state.options.size() && count < STANDARD_VECTOR_SIZE) {
-		auto &option = state.options[state.offset++];
-		output.data[0].Append(Value(option.option_name));
-		output.data[1].Append(option.description);
-		output.data[2].Append(Value(option.value));
-		output.data[3].Append(Value(option.scope));
-		output.data[4].Append(option.scope_entry.empty() ? Value() : Value(option.scope_entry));
-		count++;
-	}
-	output.SetChildCardinality(count);
+	DuckLakeBaseMetadataFunction::ScanRows(state.rows, state.offset, output);
 }
 
 DuckLakeOptionsFunction::DuckLakeOptionsFunction()

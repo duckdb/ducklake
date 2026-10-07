@@ -1,0 +1,51 @@
+# name: test/sql/add_files/add_files_hive_transform_name_collision.test
+# description: hive keys of transform partitions that collide with identity partition names
+# group: [add_files]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/add_files_hive_name_collision/', METADATA_CATALOG 'metadata');
+
+statement ok
+USE dl;
+
+statement ok
+CALL dl.set_option('data_inlining_row_limit', 0);
+
+statement ok
+CREATE TABLE t (year INT, dt DATE, v INT);
+
+statement ok
+ALTER TABLE t SET PARTITIONED BY (year, year(dt));
+
+statement ok
+INSERT INTO t VALUES (1, DATE '2020-05-05', 10);
+
+query I
+SELECT regexp_extract(path, 'year=[0-9]+/[a-z_]+=[0-9]+') FROM metadata.ducklake_data_file
+----
+year=1/year_dt=2020
+
+statement ok
+COPY (SELECT DATE '2021-03-03' AS dt, 20 AS v, 5 AS year, 2021 AS year_dt) TO '{DATA_PATH}/add_files_hive_name_collision/ext/' (FORMAT parquet, PARTITION_BY (year, year_dt));
+
+statement ok
+CALL ducklake_add_data_files('dl', 't', '{DATA_PATH}/add_files_hive_name_collision/ext/year=5/year_dt=2021/*.parquet', hive_partitioning => true);
+
+query II
+SELECT partition_key_index, partition_value FROM metadata.ducklake_file_partition_value WHERE data_file_id = (SELECT max(data_file_id) FROM metadata.ducklake_data_file) ORDER BY ALL
+----
+0	5
+1	2021
+
+query III
+SELECT * FROM t WHERE year(dt) = 2021
+----
+5	2021-03-03	20

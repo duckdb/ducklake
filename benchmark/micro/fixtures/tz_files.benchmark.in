@@ -1,0 +1,25 @@
+# name: benchmark/micro/fixtures/tz_files.benchmark.in
+# description: Read-only lake with ~1024 small files with disjoint TIMESTAMPTZ ranges
+# group: [fixtures]
+
+cache_file tz_files_ready.marker
+
+load
+@create tz_files
+@attach tz_files AS lake (DATA_PATH '${BENCHMARK_DIR}/tz_files_data')
+CREATE TABLE lake.events (id BIGINT, ts TIMESTAMPTZ);
+CALL lake.set_option('parquet_row_group_size', 2048, table_name => 'events');
+SET ducklake_target_file_size = '4KB';
+INSERT INTO lake.events
+SELECT i, TIMESTAMPTZ '2024-01-01 00:00:00+00' + INTERVAL (i) SECOND FROM range(1024 * 2048) t(i);
+RESET ducklake_target_file_size;
+SELECT CASE WHEN (SELECT count(*) FROM ducklake_list_files('lake', 'events')) < 1000
+THEN error('events must consist of ~1024 small files') END;
+CALL ducklake_delete_orphaned_files('lake', cleanup_all => true);
+DETACH lake;
+@seal tz_files
+COPY (SELECT 1) TO '${BENCHMARK_DIR}/tz_files_ready.marker' (FORMAT CSV);
+@attach tz_files AS lake (READ_ONLY)
+
+reload
+@attach tz_files AS lake (READ_ONLY)

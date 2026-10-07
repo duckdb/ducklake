@@ -6,8 +6,7 @@ namespace duckdb {
 
 static unique_ptr<FunctionData> DuckLakeSettingsBind(ClientContext &context, TableFunctionBindInput &input,
                                                      vector<LogicalType> &return_types, vector<Identifier> &names) {
-	auto &catalog = DuckLakeBaseMetadataFunction::GetCatalog(context, input);
-	auto &ducklake_catalog = catalog.Cast<DuckLakeCatalog>();
+	auto &ducklake_catalog = DuckLakeBaseMetadataFunction::GetCatalog(context, input);
 
 	names.emplace_back("catalog_type");
 	return_types.emplace_back(LogicalType::VARCHAR);

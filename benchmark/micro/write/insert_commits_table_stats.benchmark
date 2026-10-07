@@ -1,0 +1,71 @@
+# name: benchmark/micro/write/insert_commits_table_stats.benchmark
+# description: Ten single-row Parquet commits into a lake of 500 tables that all have table stats
+# group: [write]
+
+name Insert Commits Table Stats
+group micro
+subgroup write
+
+require ducklake
+
+require parquet
+
+argument lake commit_stats
+
+argument work commit_stats_work
+
+argument warm_table lake.main.bg_0
+
+cache_file ${lake}_ready.marker
+
+# Every background table gets a stats row and four column stats rows
+load
+EXPORT DATABASE '${BENCHMARK_DIR}/${lake}_gen';
+COPY (SELECT 'CREATE TABLE lake.main.bg_' || i || ' AS SELECT range AS c0, range * 0.5 AS c1, ''v'' || range AS c2, '
+|| 'range % 7 AS c3 FROM range(' || i || ', ' || (i + 10) || ');' FROM range(500) t(i)
+UNION ALL SELECT 'CREATE TABLE lake.main.ins (id BIGINT, v VARCHAR);')
+TO '${BENCHMARK_DIR}/${lake}_gen/schema.sql' (HEADER false, QUOTE '');
+@create ${lake}_pristine
+@attach ${lake}_pristine AS lake (DATA_PATH '${BENCHMARK_DIR}/${lake}_files')
+CALL lake.set_option('data_inlining_row_limit', 0);
+BEGIN;
+IMPORT DATABASE '${BENCHMARK_DIR}/${lake}_gen';
+COMMIT;
+SELECT CASE WHEN (SELECT count(*) FROM ducklake_table_info('lake') WHERE file_count = 1) <> 500
+THEN error('every background table must have one data file') END;
+CALL ducklake_delete_orphaned_files('lake', cleanup_all => true);
+DETACH lake;
+COPY (SELECT count(*) FROM glob('${BENCHMARK_DIR}/${lake}_files/**'))
+TO '${BENCHMARK_DIR}/${lake}_filecount.csv' (FORMAT CSV, HEADER false);
+@seal ${lake}_pristine
+COPY (SELECT 1) TO '${BENCHMARK_DIR}/${lake}_ready.marker' (FORMAT CSV);
+DETACH DATABASE IF EXISTS lake;
+@copy ${lake}_pristine TO ${work}
+@attach ${work} AS lake
+CALL ducklake_delete_orphaned_files('lake', cleanup_all => true);
+SELECT CASE WHEN (SELECT count(*) FROM glob('${BENCHMARK_DIR}/${lake}_files/**'))
+<> (SELECT column0 FROM read_csv('${BENCHMARK_DIR}/${lake}_filecount.csv', header = false))
+THEN error('the fixture files were not restored') END;
+
+include benchmark/micro/fixtures/restore_reload.benchmark.in
+
+# Each commit writes a data file, so the next one reads the stats of all 500 tables again
+run
+INSERT INTO lake.main.ins VALUES (0, 'row_0');
+INSERT INTO lake.main.ins VALUES (1, 'row_1');
+INSERT INTO lake.main.ins VALUES (2, 'row_2');
+INSERT INTO lake.main.ins VALUES (3, 'row_3');
+INSERT INTO lake.main.ins VALUES (4, 'row_4');
+INSERT INTO lake.main.ins VALUES (5, 'row_5');
+INSERT INTO lake.main.ins VALUES (6, 'row_6');
+INSERT INTO lake.main.ins VALUES (7, 'row_7');
+INSERT INTO lake.main.ins VALUES (8, 'row_8');
+INSERT INTO lake.main.ins VALUES (9, 'row_9');
+
+include benchmark/micro/fixtures/restore_cleanup_warm.benchmark.in
+
+# A missed reset doubles the rows of ins, and every INSERT must have written its own data file
+result_query II
+SELECT (SELECT count(*) FROM lake.main.ins), (SELECT count(*) FROM ducklake_list_files('lake', 'ins'))
+----
+10	10

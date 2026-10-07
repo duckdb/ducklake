@@ -4,11 +4,11 @@
 
 argument file_count 1000
 
-argument lake add_files_small_${file_count}
+argument lake ${lake_prefix}_${file_count}
 
-argument work add_files_small_${file_count}_work
+argument work ${lake}_work
 
-name DuckLake Add Small Files
+name ${title}
 group micro
 subgroup ingest
 
@@ -34,8 +34,18 @@ COPY src TO '${BENCHMARK_DIR}/${lake}_source'
 DROP TABLE src;
 @create ${lake}_pristine
 @attach ${lake}_pristine AS lake (DATA_PATH '${BENCHMARK_DIR}/${lake}_files')
-CREATE TABLE lake.big_files AS
-SELECT * FROM read_parquet('${BENCHMARK_DIR}/${lake}_source/**/*.parquet') LIMIT 0;
+CREATE TABLE lake.big_files (
+col_long_name_001 INTEGER ${constraint}, col_long_name_002 INTEGER ${constraint},
+col_long_name_003 INTEGER ${constraint}, col_long_name_004 INTEGER ${constraint},
+col_long_name_005 INTEGER ${constraint}, col_long_name_006 INTEGER ${constraint},
+col_long_name_007 INTEGER ${constraint}, col_long_name_008 INTEGER ${constraint},
+col_long_name_009 INTEGER ${constraint}, col_long_name_010 INTEGER ${constraint},
+col_long_name_011 INTEGER ${constraint}, col_long_name_012 INTEGER ${constraint},
+col_long_name_013 INTEGER ${constraint}, col_long_name_014 INTEGER ${constraint},
+col_long_name_015 INTEGER ${constraint}, col_long_name_016 INTEGER ${constraint},
+col_long_name_017 INTEGER ${constraint}, col_long_name_018 INTEGER ${constraint},
+col_long_name_019 INTEGER ${constraint}, col_long_name_020 INTEGER ${constraint}
+);
 CALL ducklake_delete_orphaned_files('lake', cleanup_all => true);
 DETACH lake;
 COPY (SELECT count(*) FROM glob('${BENCHMARK_DIR}/${lake}_files/**'))

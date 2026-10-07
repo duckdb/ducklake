@@ -11,31 +11,39 @@
 #include "duckdb/common/common.hpp"
 #include "duckdb/common/optional_idx.hpp"
 #include "duckdb/common/types/blob.hpp"
+#include "duckdb/main/query_result.hpp"
 
 namespace duckdb {
 
-template <class ROW>
-idx_t AsIdx(ROW &row, idx_t col) {
-	return static_cast<idx_t>(row.template GetValue<int64_t>(col));
+using QueryResultRow = decltype(QueryResult::iterator::current_row);
+
+inline idx_t AsIdx(const QueryResultRow &row, idx_t col) {
+	return static_cast<idx_t>(row.GetValue<int64_t>(col));
 }
 
-template <class ROW>
-optional_idx OptIdx(ROW &row, idx_t col) {
+inline optional_idx OptIdx(const QueryResultRow &row, idx_t col) {
 	if (row.IsNull(col)) {
 		return optional_idx();
 	}
 	return optional_idx(AsIdx(row, col));
 }
 
-template <class ROW>
-bool OptBoolFalse(ROW &row, idx_t col) {
-	return !row.IsNull(col) && row.template GetValue<bool>(col);
+template <class T>
+bool TryReadValue(const QueryResultRow &row, idx_t col, T &out) {
+	if (row.IsNull(col)) {
+		return false;
+	}
+	out = row.template GetValue<T>(col);
+	return true;
 }
 
-template <class ROW>
-void ReadEncryptionKey(ROW &row, idx_t col, string &out) {
+inline bool OptBoolFalse(const QueryResultRow &row, idx_t col) {
+	return !row.IsNull(col) && row.GetValue<bool>(col);
+}
+
+inline void ReadEncryptionKey(const QueryResultRow &row, idx_t col, string &out) {
 	if (!row.IsNull(col)) {
-		out = Blob::FromBase64(string_t(row.template GetValue<string>(col)));
+		out = Blob::FromBase64(string_t(row.GetValue<string>(col)));
 	}
 }
 

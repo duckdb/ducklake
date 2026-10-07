@@ -27,15 +27,16 @@ public:
 	//! Table Functions
 	static TableFunction GetDuckLakeScanFunction(DatabaseInstance &instance);
 
-	static unique_ptr<FunctionData> BindDuckLakeScan(ClientContext &context, TableFunction &function);
+	static unique_ptr<FunctionData> BindDuckLakeScan(ClientContext &context, const TableFunction &function);
+	static unique_ptr<FunctionData> BindDuckLakeScan(ClientContext &context, BoundTableFunction &function);
 
 	static CopyFunctionCatalogEntry &GetCopyFunction(ClientContext &context, const Identifier &name);
 };
 
 //! Serialize/Deserialize callbacks for DuckLakeScan (used by table macro Copy)
 void DuckLakeScanSerialize(Serializer &serializer, const optional_ptr<FunctionData> bind_data,
-                           const TableFunction &function);
-unique_ptr<FunctionData> DuckLakeScanDeserialize(Deserializer &deserializer, TableFunction &function);
+                           const BoundTableFunction &function);
+unique_ptr<FunctionData> DuckLakeScanDeserialize(Deserializer &deserializer, BoundTableFunction &function);
 
 enum class DuckLakeScanType { SCAN_TABLE, SCAN_INSERTIONS, SCAN_DELETIONS, SCAN_FOR_FLUSH };
 
@@ -55,6 +56,8 @@ struct DuckLakeFunctionInfo : public TableFunctionInfo {
 	DuckLakeScanType scan_type = DuckLakeScanType::SCAN_TABLE;
 	//! Start snapshot - only set for DuckLakeScanType::SCAN_INSERTIONS and DuckLakeScanType::SCAN_DELETIONS
 	unique_ptr<DuckLakeSnapshot> start_snapshot;
+	//! Sort order of the flushed file, only set for flush scans
+	string flush_sort_order_sql;
 
 	shared_ptr<DuckLakeTransaction> GetTransaction();
 	bool CanUseGlobalStats();

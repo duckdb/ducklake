@@ -11,6 +11,8 @@
 #include "common/ducklake_snapshot.hpp"
 #include "common/index.hpp"
 #include "duckdb/common/common.hpp"
+#include "duckdb/common/optional_idx.hpp"
+#include "duckdb/common/optional_ptr.hpp"
 
 #include <vector>
 
@@ -22,6 +24,7 @@ class DuckLakeMetadataManager;
 class DuckLakeTransaction;
 class Value;
 enum class CompactionType;
+enum class DeleteFileSource : uint8_t;
 struct DuckLakeColumnStats;
 struct DuckLakeDataFile;
 struct DuckLakeDeleteFile;
@@ -59,10 +62,11 @@ class DuckLakeStagedTable {
 public:
 	static const char *BaseName(DuckLakeStagedTableType type);
 	static string Columns(DuckLakeStagedTableType type);
-	static vector<string> ColumnNames(DuckLakeStagedTableType type);
 	static const vector<DuckLakeStagedTableType> &AllTypes();
 	static string CreateAllSql();
 	static string TruncateAllSql();
+	static const char *DeleteFileSourceToString(DeleteFileSource source);
+	static DeleteFileSource DeleteFileSourceFromString(const string &source);
 };
 
 //! Builds the SQL batch that stages a commit into temporary tables and calls ducklake_commit.
@@ -76,21 +80,14 @@ private:
 	//! Emits INSERT for a single data file, its column stats, and partition values.
 	void EmitDataFileRow(string &sql, const DuckLakeDataFile &file, idx_t local_file_id, TableIndex table_id,
 	                     idx_t file_order, const string &compaction_id_literal) const;
-	//! Emits INSERT for a loose delete file against a pre-existing data file.
 	void EmitDeleteFileRow(string &sql, const DuckLakeDeleteFile &file, TableIndex table_id,
-	                       const string &data_file_path) const;
-	//! Emits INSERT for a delete file attached to a transaction-local data file.
-	void EmitAttachedDeleteRow(string &sql, const DuckLakeDeleteFile &del, TableIndex table_id,
-	                           idx_t local_file_id) const;
+	                       optional_ptr<const string> data_file_path, optional_idx attached_local_file_id) const;
 	//! Emits INSERT for a single inlined column stats row.
 	void EmitInlinedColumnStatsRow(string &sql, TableIndex table_id, FieldIndex column_id,
 	                               const DuckLakeColumnStats &s) const;
 	//! Builds the shared 13-value column-stats payload (column_size_bytes .. extra_stats) used by both
 	//! the data-file and inlined column-stats staging rows. Read back by ReadColumnStatsRow.
 	static string EmitColumnStatsValues(const DuckLakeColumnStats &s);
-	//! Recursively emits INSERT rows for a name map entry and its children.
-	void FlattenNameMapEntry(const DuckLakeNameMapEntry &entry, idx_t map_id, idx_t parent_id, idx_t &next_entry_id,
-	                         string &sql) const;
 
 	//! Emits the commit header row (author, message, snapshot info, paths).
 	string EmitCommitHeader(const DuckLakeSnapshotCommit &h, const DuckLakeSnapshot &snap, const string &data_path,
