@@ -67,8 +67,6 @@ void DuckLakeInitializer::Initialize() {
 	auto result = metadata_manager.AttachMetadata(attach_query);
 	result->ThrowIfError("Failed to attach DuckLake MetaData \"" + catalog.MetadataDatabaseName() + "\" at path + \"" +
 	                     catalog.MetadataPath() + "\"");
-	// explicitly load all secrets - work-around to secret initialization bug
-	transaction.Query("FROM duckdb_secrets()");
 
 	bool has_explicit_schema = !options.metadata_schema.empty();
 	if (options.metadata_schema.empty()) {
