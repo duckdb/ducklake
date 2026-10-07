@@ -10,7 +10,11 @@ require ducklake
 
 require parquet
 
-include benchmark/micro/fixtures/count_deletes.benchmark.in
+argument lake count_deletes
+
+argument inlined_parity 1
+
+include benchmark/micro/fixtures/shared_deletes.benchmark.in
 
 run benchmark/micro/queries/count_star_deletes.sql
 
