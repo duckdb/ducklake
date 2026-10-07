@@ -887,7 +887,6 @@ void DuckLakeTransactionState::RecomputeGlobalStatsAfterRewrite(string &batch_qu
 	    snapshot, DuckLakeMetadataManager::ReadFileColumnStatsForTableSql(table_id, context.supports_v1_1_metadata));
 	result->ThrowIfError("Failed to read per-file column stats for rewrite from DuckLake: ");
 	bool has_exactness = DuckLakeMetadataManager::ResultHasColumn(*result, "min_is_exact");
-	bool have_file = false;
 	idx_t last_file_id = 0;
 	idx_t file_count = 0;
 	map<FieldIndex, idx_t> files_with_stats;
@@ -896,8 +895,7 @@ void DuckLakeTransactionState::RecomputeGlobalStatsAfterRewrite(string &batch_qu
 		if (removed_source_ids.find(DataFileIndex(data_file_id)) != removed_source_ids.end()) {
 			continue; // this file is being rewritten away
 		}
-		if (!have_file || data_file_id != last_file_id) {
-			have_file = true;
+		if (file_count == 0 || data_file_id != last_file_id) {
 			last_file_id = data_file_id;
 			file_count++;
 			new_stats.record_count += static_cast<idx_t>(row.GetValue<int64_t>(1));
@@ -958,12 +956,6 @@ void DuckLakeTransactionState::RecomputeGlobalStatsAfterRewrite(string &batch_qu
 			new_stats.MergeStats(col_entry.first, col_entry.second);
 		}
 	}
-	for (auto &entry : type_by_field) {
-		auto files = files_with_stats.find(entry.first);
-		if (files != files_with_stats.end() && files->second != file_count) {
-			return; // a file written before a column was added has no stats for it
-		}
-	}
 
 	// 2. Delete-free gate: the merged parquet stats are exact only if no deletions remain on the table's data files.
 	//    That holds iff the gross row count of the post-rewrite files equals the net (delete-adjusted) data-file count.
@@ -988,6 +980,11 @@ void DuckLakeTransactionState::RecomputeGlobalStatsAfterRewrite(string &batch_qu
 			return; // cannot account for inlined data exactly - keep the existing stats and the scan fallback
 		}
 		new_stats.record_count += net_inlined;
+	}
+	for (auto &entry : new_stats.column_stats) {
+		if (files_with_stats[entry.first] != file_count) {
+			return; // a file written before a column was added has no stats for it
+		}
 	}
 
 	// 4. A column the table opted out of bounds for does not get them back here - no file records bounds for it,

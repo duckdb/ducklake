@@ -418,6 +418,47 @@ SELECT (SELECT count(*) FROM dl.ri WHERE b = 42), (SELECT max(b) FROM dl.ri)
 ----
 2	42
 
+# and of a column that only the newer inlined rows hold, when the rewrite leaves no file
+statement ok
+CREATE TABLE dl.rn (a INTEGER)
+
+statement ok
+INSERT INTO dl.rn SELECT range FROM range(10)
+
+statement ok
+ALTER TABLE dl.rn ADD COLUMN b INTEGER DEFAULT 42
+
+statement ok
+CALL dl.set_option('data_inlining_row_limit', 5, table_name => 'rn')
+
+statement ok
+INSERT INTO dl.rn VALUES (100, 1), (101, 1)
+
+statement ok
+DELETE FROM dl.rn WHERE a >= 100
+
+statement ok
+CALL ducklake_flush_inlined_data('dl', table_name => 'rn')
+
+statement ok
+INSERT INTO dl.rn VALUES (200, 7)
+
+query II
+SELECT files_processed, files_created FROM ducklake_rewrite_data_files('dl', 'rn', delete_threshold => 0)
+----
+1	0
+
+statement ok
+DETACH dl
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/issue_1054', METADATA_CATALOG 'issue_1054_meta')
+
+query II
+SELECT (SELECT count(*) FROM dl.rn WHERE b = 42), (SELECT max(b) FROM dl.rn)
+----
+10	42
+
 # a column added while a rewrite of the table is in flight keeps its statistics
 statement ok
 CREATE TABLE dl.cr (a INTEGER)
