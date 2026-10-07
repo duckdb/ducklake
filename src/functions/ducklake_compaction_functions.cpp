@@ -65,7 +65,7 @@ PhysicalOperator &DuckLakeLogicalCompaction::CreatePlan(ClientContext &context, 
 	auto &child = planner.CreatePlan(*children[0]);
 	auto &transaction = DuckLakeTransaction::Get(context, table.catalog);
 	if (context.transaction.IsAutoCommit() && !transaction.ChangesMade()) {
-		// the statement is planned, only the scans still read metadata
+		// load the name maps the scans read before releasing the metadata transaction
 		for (auto &source : source_files) {
 			if (source.file.mapping_id.IsValid()) {
 				transaction.GetMappingById(source.file.mapping_id);

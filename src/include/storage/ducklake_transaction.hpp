@@ -186,7 +186,7 @@ public:
 	//! Execute SQL on the metadata connection without placeholder substitution or metadata-manager wrapping.
 	unique_ptr<QueryResult> ExecuteRaw(string query);
 	Connection &GetConnection();
-	//! Ends the metadata transaction until the next metadata access, so it is not held open while files are written
+	//! Releases the metadata transaction until the next metadata access
 	void ReleaseMetadataTransaction();
 
 	//! Keep a schema cache entry alive for as long as this transaction lives. Transaction-local catalog entries hold

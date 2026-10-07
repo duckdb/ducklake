@@ -82,7 +82,7 @@ CROSS JOIN (SELECT max(snapshot_id) snapshot_id FROM lake.snapshots()) s
 ----
 2	1	true
 
-# files added with ducklake_add_data_files are read through name maps, which a fresh attach loads on first use
+# a fresh attach loads the name maps of added files on first use
 statement ok
 CREATE TABLE lake.imported (i INTEGER)
 
