@@ -91,11 +91,6 @@ struct DuckLakeSchemaCacheEntry : public ObjectCacheEntry {
 	    : catalog_set(std::move(*catalog_set_p)) {
 	}
 
-	// contents of the shared_ptr target are moved out
-	explicit DuckLakeSchemaCacheEntry(shared_ptr<DuckLakeCatalogSet> catalog_set_p)
-	    : catalog_set(std::move(*catalog_set_p)) {
-	}
-
 	DuckLakeCatalogSet catalog_set;
 
 	static string ObjectType() {
@@ -148,8 +143,8 @@ public:
 	~DuckLakeCatalog() override;
 
 public:
-	void Initialize(bool load_builtin) override;
-	void Initialize(optional_ptr<ClientContext> context, bool load_builtin) override;
+	void Initialize(bool load_builtin) override {
+	}
 	void FinalizeLoad(optional_ptr<ClientContext> context) override;
 	string GetCatalogType() override {
 		return "ducklake";
@@ -174,6 +169,7 @@ public:
 	}
 	idx_t DataInliningRowLimit(ClientContext &context, SchemaIndex schema_index, TableIndex table_index,
 	                           optional_ptr<const map<string, string>> table_options = nullptr) const;
+	idx_t DataInliningRowLimit(ClientContext &context, DuckLakeTableEntry &table) const;
 	//! Returns the inlining limit (0 if the table is not eligible)
 	idx_t GetInliningLimit(ClientContext &context, DuckLakeTableEntry &table);
 	//! Inlining limit for a table that does not exist yet (CTAS), given its scope and columns
@@ -182,6 +178,10 @@ public:
 	//! Whether inserts in this scope sort their data according to SORTED BY (the sort_on_insert option)
 	bool SortOnInsert(SchemaIndex schema_id, TableIndex table_id,
 	                  optional_ptr<const map<string, string>> table_options = nullptr) const;
+	bool SortOnInsert(DuckLakeTableEntry &table) const;
+	//! Pending table options are not consulted
+	bool AutoCompactEnabled(SchemaIndex schema_id = SchemaIndex(), TableIndex table_id = TableIndex()) const;
+	bool AutoCompactEnabled(DuckLakeTableEntry &table) const;
 	idx_t GetTargetFileSize(ClientContext &context, SchemaIndex schema_id, TableIndex table_id,
 	                        optional_ptr<const map<string, string>> table_options = nullptr) const;
 	idx_t GetTargetFileSize(ClientContext &context, DuckLakeTableEntry &table) const;
@@ -287,6 +287,7 @@ public:
 		auto write_dv = GetConfigOption<string>("write_deletion_vectors", schema_id, table_id, "false", table_options);
 		return write_dv == "true";
 	}
+	bool WriteDeletionVectors(DuckLakeTableEntry &table) const;
 
 	void SetEncryption(DuckLakeEncryption encryption);
 	//! Generate an encryption key for writing (or empty if encryption is disabled)
@@ -298,6 +299,9 @@ public:
 	}
 	void SetDuckLakeVersion(DuckLakeVersion version) {
 		ducklake_version = version;
+	}
+	bool SupportsNestedSchemas() const override {
+		return SupportsV1_1Metadata();
 	}
 	//! Whether the catalog has the v1.1 metadata features
 	bool SupportsV1_1Metadata() const {
@@ -341,6 +345,8 @@ public:
 	MappingIndex TryGetCompatibleNameMap(DuckLakeTransaction &transaction, const DuckLakeNameMap &name_map);
 	idx_t GetBeginSnapshotForTable(TableIndex table_id, DuckLakeTransaction &transaction);
 	idx_t GetBeginSnapshotForSchemaVersion(TableIndex table_id, idx_t schema_version, DuckLakeTransaction &transaction);
+	optional_ptr<DuckLakeTableEntry> GetTableAtSchemaVersion(DuckLakeTransaction &transaction, TableIndex table_id,
+	                                                         idx_t schema_version);
 
 	static unique_ptr<DuckLakeStats> ConstructStatsMap(vector<DuckLakeGlobalStatsInfo> &global_stats,
 	                                                   DuckLakeCatalogSet &schema);

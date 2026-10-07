@@ -1,0 +1,109 @@
+# name: test/sql/issues/issue_1411_all_null_bounds.test
+# description: A column whose first rows are all NULL still gets min/max bounds from later rows (#1411)
+# group: [issues]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/issue_1411', DATA_INLINING_ROW_LIMIT 0, METADATA_CATALOG 'meta')
+
+statement ok
+CREATE TABLE ducklake.t (c FLOAT)
+
+statement ok
+BEGIN
+
+statement ok
+INSERT INTO ducklake.t VALUES (NULL)
+
+statement ok
+INSERT INTO ducklake.t VALUES (0.2)
+
+statement ok
+COMMIT
+
+query III
+SELECT min_value, max_value, CAST(contains_null AS BOOLEAN) FROM meta.ducklake_table_column_stats
+----
+0.2	0.2	true
+
+query II
+SELECT count(*), count(c) FROM ducklake.t
+----
+2	1
+
+query I
+SELECT count(*) FROM ducklake.t WHERE c > 10
+----
+0
+
+# a float file with a NaN records no bounds although it has values
+statement ok
+CREATE TABLE ducklake.n (v DOUBLE)
+
+statement ok
+BEGIN
+
+statement ok
+INSERT INTO ducklake.n VALUES ('nan'::DOUBLE)
+
+statement ok
+INSERT INTO ducklake.n VALUES (0.2)
+
+statement ok
+COMMIT
+
+# the table keeps no bounds, the file with the NaN has values whose bounds were not recorded
+query I
+SELECT count(*) FROM meta.ducklake_table_column_stats WHERE table_id = 2 AND min_value IS NULL AND max_value IS NULL
+----
+1
+
+# a NaN compares above every number, so a pruned file would lose this row
+query I
+SELECT count(*) FROM ducklake.n WHERE v > 1e300
+----
+1
+
+query II
+SELECT count(*) FILTER (WHERE isnan(v)), count(*) FROM ducklake.n
+----
+1	2
+
+# the rows of a column whose stats are skipped are not covered by the bounds of other files
+statement ok
+CREATE TABLE ducklake.s (k INTEGER, v INTEGER)
+
+statement ok
+CALL ducklake.set_option('skip_stats_columns', 'v', table_name => 's')
+
+statement ok
+BEGIN
+
+statement ok
+INSERT INTO ducklake.s VALUES (1, 100)
+
+statement ok
+CALL ducklake.set_option('skip_stats_columns', '', table_name => 's')
+
+statement ok
+INSERT INTO ducklake.s VALUES (2, 500)
+
+statement ok
+COMMIT
+
+query II
+SELECT min_value, max_value FROM meta.ducklake_table_column_stats WHERE table_id = 3 AND column_id = 2
+----
+NULL	NULL
+
+query II
+SELECT count(*) FILTER (WHERE v = 100), count(*) FILTER (WHERE v = 500) FROM ducklake.s
+----
+1	1

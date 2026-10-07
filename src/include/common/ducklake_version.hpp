@@ -27,6 +27,7 @@ enum class DuckLakeVersion : uint8_t {
 static constexpr DuckLakeVersion DUCKLAKE_LATEST_VERSION = DuckLakeVersion::V1_1_DEV_1;
 
 DuckLakeVersion DuckLakeVersionFromString(const string &version_str);
+DuckLakeVersion ParseWritableDuckLakeVersion(const string &version_str, const string &option_name);
 string DuckLakeVersionToString(DuckLakeVersion version);
 [[noreturn]] void ThrowUnsupportedByVersion(DuckLakeVersion version, const string &feature);
 

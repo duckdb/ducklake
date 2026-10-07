@@ -5,16 +5,13 @@
 #include "duckdb/catalog/catalog_entry/schema_catalog_entry.hpp"
 #include "duckdb/parser/parsed_data/create_view_info.hpp"
 #include "duckdb/parser/parsed_data/comment_on_column_info.hpp"
-#include "duckdb/parser/parser.hpp"
 #include "duckdb/parser/parsed_data/alter_info.hpp"
 #include "duckdb/parser/parsed_data/alter_table_info.hpp"
 #include "duckdb/parser/keyword_helper.hpp"
-#include "duckdb/common/exception/binder_exception.hpp"
+#include "duckdb/parser/parser.hpp"
 #include "duckdb/common/string_util.hpp"
 #include "duckdb/common/sql_identifier.hpp"
 #include "common/ducklake_util.hpp"
-
-#include <algorithm>
 
 namespace duckdb {
 
@@ -69,30 +66,7 @@ unique_ptr<CatalogEntry> DuckLakeViewEntry::Alter(DuckLakeTransaction &transacti
 		throw InternalException("Alter view column comment: missing client context");
 	}
 	BindView(*context);
-	auto resolved_column_name = info.column_name;
-	auto view_columns = GetColumnInfo();
-	if (view_columns) {
-		auto &names = view_columns->names;
-		auto match_name = [&](const auto &column_name) {
-			return resolved_column_name == column_name;
-		};
-		if (!aliases.empty()) {
-			auto alias_entry = std::find_if(aliases.begin(), aliases.end(), match_name);
-			if (alias_entry == aliases.end()) {
-				throw BinderException("View %s does not have a column with name %s", name, resolved_column_name);
-			}
-			auto alias_index = NumericCast<idx_t>(std::distance(aliases.begin(), alias_entry));
-			D_ASSERT(alias_index < names.size());
-			resolved_column_name = names[alias_index];
-		} else {
-			auto entry = std::find_if(names.begin(), names.end(), match_name);
-			if (entry == names.end()) {
-				throw BinderException("View %s does not have a column with name %s", name, resolved_column_name);
-			}
-			resolved_column_name = *entry;
-		}
-	}
-	auto column_name = resolved_column_name.GetIdentifierName();
+	auto column_name = ResolveColumnName(info.column_name).GetIdentifierName();
 	auto create_info = GetInfo();
 	auto &view_info = create_info->Cast<CreateViewInfo>();
 	view_info.column_comments_map[Identifier(column_name)] = info.comment_value;
@@ -134,15 +108,10 @@ unique_ptr<CatalogEntry> DuckLakeViewEntry::Copy(ClientContext &context) const {
 }
 
 unique_ptr<SelectStatement> DuckLakeViewEntry::ParseSelectStatement() const {
-	Parser parser;
+	auto parser = Parser::GetBuiltinParser();
 	// switcharoo of generic {DUCKLAKE_CATALOG}. with actual catalog name
 	auto resolved_sql = DuckLakeUtil::ReplaceSkippingQuotes(query_sql, "{DUCKLAKE_CATALOG}.", catalog.GetName() + ".");
-	parser.ParseQuery(resolved_sql);
-	if (parser.statements.size() != 1 || parser.statements[0]->type != StatementType::SELECT_STATEMENT) {
-		throw InvalidInputException("Invalid input for view - view must have a single SELECT statement: \"%s\"",
-		                            query_sql);
-	}
-	return unique_ptr_cast<SQLStatement, SelectStatement>(std::move(parser.statements[0]));
+	return CreateViewInfo::ParseSelect(parser, resolved_sql);
 }
 
 const SelectStatement &DuckLakeViewEntry::GetQuery() {

@@ -30,12 +30,12 @@ POINT (1 2)
 query I
 select extra_stats from ducklake_meta.ducklake_file_column_stats;
 ----
-{"bbox": {"xmin": 1.000000, "xmax": 1.000000, "ymin": 2.000000, "ymax": 2.000000, "zmin": null, "zmax": null, "mmin": null, "mmax": null}, "types": ["point"]}
+{"bbox":{"xmin":1.0,"xmax":1.0,"ymin":2.0,"ymax":2.0,"zmin":null,"zmax":null,"mmin":null,"mmax":null},"types":["point"]}
 
 query I
 select extra_stats from ducklake_meta.ducklake_table_column_stats;
 ----
-{"bbox": {"xmin": 1.000000, "xmax": 1.000000, "ymin": 2.000000, "ymax": 2.000000, "zmin": null, "zmax": null, "mmin": null, "mmax": null}, "types": ["point"]}
+{"bbox":{"xmin":1.0,"xmax":1.0,"ymin":2.0,"ymax":2.0,"zmin":null,"zmax":null,"mmin":null,"mmax":null},"types":["point"]}
 
 statement ok
 insert into t1 VALUES ('LINESTRING Z (5 5 5, 10 10 10)'::GEOMETRY);
@@ -50,14 +50,14 @@ LINESTRING Z (5 5 5, 10 10 10)
 query I
 select extra_stats from ducklake_meta.ducklake_file_column_stats order by all;
 ----
-{"bbox": {"xmin": 1.000000, "xmax": 1.000000, "ymin": 2.000000, "ymax": 2.000000, "zmin": null, "zmax": null, "mmin": null, "mmax": null}, "types": ["point"]}
-{"bbox": {"xmin": 5.000000, "xmax": 10.000000, "ymin": 5.000000, "ymax": 10.000000, "zmin": 5.000000, "zmax": 10.000000, "mmin": null, "mmax": null}, "types": ["linestring_z"]}
+{"bbox":{"xmin":1.0,"xmax":1.0,"ymin":2.0,"ymax":2.0,"zmin":null,"zmax":null,"mmin":null,"mmax":null},"types":["point"]}
+{"bbox":{"xmin":5.0,"xmax":10.0,"ymin":5.0,"ymax":10.0,"zmin":5.0,"zmax":10.0,"mmin":null,"mmax":null},"types":["linestring_z"]}
 
 # Check table stats are a union of the two files
 query I
 select extra_stats from ducklake_meta.ducklake_table_column_stats order by all;
 ----
-{"bbox": {"xmin": 1.000000, "xmax": 10.000000, "ymin": 2.000000, "ymax": 10.000000, "zmin": 5.000000, "zmax": 10.000000, "mmin": null, "mmax": null}, "types": ["linestring_z", "point"]}
+{"bbox":{"xmin":1.0,"xmax":10.0,"ymin":2.0,"ymax":10.0,"zmin":5.0,"zmax":10.0,"mmin":null,"mmax":null},"types":["linestring_z","point"]}
 
 # Merge files into a single file and check stats remain the same
 query III
@@ -68,7 +68,7 @@ t1	2	1
 query I
 select extra_stats from ducklake_meta.ducklake_file_column_stats order by all;
 ----
-{"bbox": {"xmin": 1.000000, "xmax": 10.000000, "ymin": 2.000000, "ymax": 10.000000, "zmin": 5.000000, "zmax": 10.000000, "mmin": null, "mmax": null}, "types": ["linestring_z", "point"]}
+{"bbox":{"xmin":1.0,"xmax":10.0,"ymin":2.0,"ymax":10.0,"zmin":5.0,"zmax":10.0,"mmin":null,"mmax":null},"types":["linestring_z","point"]}
 
 # Insert a geometry with M dimension
 statement ok
@@ -90,9 +90,9 @@ LINESTRING Z (5 5 5, 10 10 10)
 query I
 select extra_stats from ducklake_meta.ducklake_file_column_stats order by all;
 ----
-{"bbox": {"xmin": -30.000000, "xmax": -30.000000, "ymin": -30.000000, "ymax": -30.000000, "zmin": -30.000000, "zmax": -30.000000, "mmin": -30.000000, "mmax": -30.000000}, "types": ["point_zm"]}
-{"bbox": {"xmin": 1.000000, "xmax": 10.000000, "ymin": 2.000000, "ymax": 10.000000, "zmin": 5.000000, "zmax": 10.000000, "mmin": null, "mmax": null}, "types": ["linestring_z", "point"]}
-{"bbox": {"xmin": 20.000000, "xmax": 20.000000, "ymin": 20.000000, "ymax": 20.000000, "zmin": null, "zmax": null, "mmin": 5.000000, "mmax": 5.000000}, "types": ["point_m"]}
+{"bbox":{"xmin":-30.0,"xmax":-30.0,"ymin":-30.0,"ymax":-30.0,"zmin":-30.0,"zmax":-30.0,"mmin":-30.0,"mmax":-30.0},"types":["point_zm"]}
+{"bbox":{"xmin":1.0,"xmax":10.0,"ymin":2.0,"ymax":10.0,"zmin":5.0,"zmax":10.0,"mmin":null,"mmax":null},"types":["linestring_z","point"]}
+{"bbox":{"xmin":20.0,"xmax":20.0,"ymin":20.0,"ymax":20.0,"zmin":null,"zmax":null,"mmin":5.0,"mmax":5.0},"types":["point_m"]}
 
 # Now merge all again
 query III
@@ -104,4 +104,4 @@ t1	3	1
 query I
 select extra_stats from ducklake_meta.ducklake_file_column_stats order by all;
 ----
-{"bbox": {"xmin": -30.000000, "xmax": 20.000000, "ymin": -30.000000, "ymax": 20.000000, "zmin": -30.000000, "zmax": 10.000000, "mmin": -30.000000, "mmax": 5.000000}, "types": ["linestring_z", "point", "point_m", "point_zm"]}
+{"bbox":{"xmin":-30.0,"xmax":20.0,"ymin":-30.0,"ymax":20.0,"zmin":-30.0,"zmax":10.0,"mmin":-30.0,"mmax":5.0},"types":["linestring_z","point","point_m","point_zm"]}

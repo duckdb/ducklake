@@ -1,0 +1,32 @@
+# name: benchmark/micro/read/big_lake_cold_inlined_reads.benchmark
+# description: Scan 100 inlined tables whose inlined data spans 50 schema versions in a freshly attached 2110-table lake
+# group: [read]
+
+name Big Lake Cold Inlined Reads
+group micro
+subgroup read
+
+require ducklake
+
+require parquet
+
+argument work big_lake_inlined_read_work
+
+init
+SET VARIABLE big_lake_inlined_tables = (SELECT list('lake.inl.t_' || i ORDER BY i) FROM range(100) t(i));
+
+include benchmark/micro/fixtures/big_lake.benchmark.in
+
+# A sum reads the inlined rows instead of answering from the table stats
+run
+SELECT count(*), sum(v) FROM query_table(getvariable('big_lake_inlined_tables'));
+
+# Re-attaching gives every run cold schema and stats caches
+cleanup
+DETACH lake;
+@attach ${work} AS lake
+
+result_query II
+SELECT * FROM __answer
+----
+800	72600

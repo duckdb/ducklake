@@ -1,57 +1,38 @@
 #include "common/ducklake_version.hpp"
-#include "duckdb.hpp"
+#include "duckdb/common/string_util.hpp"
 
 namespace duckdb {
 
+static constexpr StringUtil::EnumStringLiteral DUCKLAKE_VERSIONS[] = {
+    {static_cast<uint32_t>(DuckLakeVersion::V0_1), "0.1"},
+    {static_cast<uint32_t>(DuckLakeVersion::V0_2), "0.2"},
+    {static_cast<uint32_t>(DuckLakeVersion::V0_3_DEV1), "0.3-dev1"},
+    {static_cast<uint32_t>(DuckLakeVersion::V0_3), "0.3"},
+    {static_cast<uint32_t>(DuckLakeVersion::V0_4_DEV1), "0.4-dev1"},
+    {static_cast<uint32_t>(DuckLakeVersion::V0_4), "0.4"},
+    {static_cast<uint32_t>(DuckLakeVersion::V1_0), "1.0"},
+    {static_cast<uint32_t>(DuckLakeVersion::V1_1_DEV_1), "1.1-dev1"}};
+
 DuckLakeVersion DuckLakeVersionFromString(const string &version_str) {
-	if (version_str == "0.1") {
-		return DuckLakeVersion::V0_1;
-	}
-	if (version_str == "0.2") {
-		return DuckLakeVersion::V0_2;
-	}
-	if (version_str == "0.3-dev1") {
-		return DuckLakeVersion::V0_3_DEV1;
-	}
-	if (version_str == "0.3") {
-		return DuckLakeVersion::V0_3;
-	}
-	if (version_str == "0.4-dev1") {
-		return DuckLakeVersion::V0_4_DEV1;
-	}
-	if (version_str == "0.4") {
-		return DuckLakeVersion::V0_4;
-	}
-	if (version_str == "1.0") {
-		return DuckLakeVersion::V1_0;
-	}
-	if (version_str == "1.1-dev1") {
-		return DuckLakeVersion::V1_1_DEV_1;
+	for (auto &entry : DUCKLAKE_VERSIONS) {
+		if (version_str == entry.string) {
+			return static_cast<DuckLakeVersion>(entry.number);
+		}
 	}
 	throw InvalidInputException("Unsupported ducklake_version '%s'", version_str);
 }
 
-string DuckLakeVersionToString(DuckLakeVersion version) {
-	switch (version) {
-	case DuckLakeVersion::V0_1:
-		return "0.1";
-	case DuckLakeVersion::V0_2:
-		return "0.2";
-	case DuckLakeVersion::V0_3_DEV1:
-		return "0.3-dev1";
-	case DuckLakeVersion::V0_3:
-		return "0.3";
-	case DuckLakeVersion::V0_4_DEV1:
-		return "0.4-dev1";
-	case DuckLakeVersion::V0_4:
-		return "0.4";
-	case DuckLakeVersion::V1_0:
-		return "1.0";
-	case DuckLakeVersion::V1_1_DEV_1:
-		return "1.1-dev1";
-	default:
-		throw InternalException("DuckLakeVersionToString: unknown version");
+DuckLakeVersion ParseWritableDuckLakeVersion(const string &version_str, const string &option_name) {
+	auto version = DuckLakeVersionFromString(version_str);
+	if (version < DuckLakeVersion::V1_0) {
+		throw InvalidInputException("%s must be >= '1.0', got '%s'", option_name, version_str);
 	}
+	return version;
+}
+
+string DuckLakeVersionToString(DuckLakeVersion version) {
+	return StringUtil::EnumToString(DUCKLAKE_VERSIONS, sizeof(DUCKLAKE_VERSIONS) / sizeof(DUCKLAKE_VERSIONS[0]),
+	                                "DuckLakeVersion", static_cast<uint32_t>(version));
 }
 
 void ThrowUnsupportedByVersion(DuckLakeVersion version, const string &feature) {

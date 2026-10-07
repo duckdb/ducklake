@@ -1,0 +1,42 @@
+# name: test/sql/geo/ducklake_geometry_stats_emptied_table.test
+# description: Geo bbox stats survive emptying and refilling a table in one commit
+# group: [geo]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/ducklake_geometry_stats_emptied_table', METADATA_CATALOG 'meta')
+
+statement ok
+CREATE TABLE ducklake.t1(g GEOMETRY);
+
+statement ok
+INSERT INTO ducklake.t1 VALUES ('POINT(1 2)'::GEOMETRY);
+
+statement ok
+BEGIN
+
+statement ok
+DELETE FROM ducklake.t1
+
+statement ok
+INSERT INTO ducklake.t1 VALUES ('POINT(3 4)'::GEOMETRY);
+
+statement ok
+COMMIT
+
+query I
+SELECT extra_stats FROM meta.ducklake_table_column_stats
+----
+{"bbox":{"xmin":3.0,"xmax":3.0,"ymin":4.0,"ymax":4.0,"zmin":null,"zmax":null,"mmin":null,"mmax":null},"types":["point"]}
+
+query I
+SELECT count(*) FROM ducklake.t1 WHERE g && 'POLYGON((2 3, 5 3, 5 5, 2 5, 2 3))'::GEOMETRY
+----
+1

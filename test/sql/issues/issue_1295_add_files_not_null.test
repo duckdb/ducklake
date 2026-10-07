@@ -1,0 +1,126 @@
+# name: test/sql/issues/issue_1295_add_files_not_null.test
+# description: ducklake_add_data_files refuses a file with NULL values in a NOT NULL column (#1295)
+# group: [issues]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/issue_1295')
+
+statement ok
+COPY (SELECT * FROM (VALUES (1, 10), (2, NULL)) v(id, x)) TO '{DATA_PATH}/issue_1295_nulls.parquet' (FORMAT parquet)
+
+statement ok
+COPY (SELECT * FROM (VALUES (3, 30), (4, 40)) v(id, x)) TO '{DATA_PATH}/issue_1295_values.parquet' (FORMAT parquet)
+
+statement ok
+COPY (SELECT 5 AS id) TO '{DATA_PATH}/issue_1295_missing.parquet' (FORMAT parquet)
+
+statement ok
+CREATE TABLE ducklake.t (id INTEGER, x INTEGER NOT NULL)
+
+statement error
+CALL ducklake_add_data_files('ducklake', 't', '{DATA_PATH}/issue_1295_nulls.parquet')
+----
+NOT NULL constraint failed: t.x
+
+query I
+SELECT count(*) FROM ducklake.t
+----
+0
+
+# a file without NULL values is registered
+statement ok
+CALL ducklake_add_data_files('ducklake', 't', '{DATA_PATH}/issue_1295_values.parquet')
+
+query II
+SELECT count(*), count(x) FROM ducklake.t
+----
+2	2
+
+# a file that does not have the column at all reads NULL for it
+statement error
+CALL ducklake_add_data_files('ducklake', 't', '{DATA_PATH}/issue_1295_missing.parquet', allow_missing => true)
+----
+NOT NULL constraint failed: t.x
+
+query II
+SELECT count(*), count(x) FROM ducklake.t
+----
+2	2
+
+# the same file goes into a table that allows NULL values
+statement ok
+CREATE TABLE ducklake.n (id INTEGER, x INTEGER)
+
+statement ok
+CALL ducklake_add_data_files('ducklake', 'n', '{DATA_PATH}/issue_1295_nulls.parquet')
+
+query II
+SELECT count(*), count(x) FROM ducklake.n
+----
+2	1
+
+# an insert refuses the same rows with the same error
+statement error
+INSERT INTO ducklake.t VALUES (6, NULL)
+----
+NOT NULL constraint failed: t.x
+
+# NULL fields of a nullable struct are allowed
+statement ok
+COPY (SELECT 1 AS id, {'a': NULL::INTEGER} AS s) TO '{DATA_PATH}/issue_1295_nested.parquet' (FORMAT parquet)
+
+statement ok
+CREATE TABLE ducklake.nested (id INTEGER NOT NULL, s STRUCT(a INTEGER))
+
+statement ok
+CALL ducklake_add_data_files('ducklake', 'nested', '{DATA_PATH}/issue_1295_nested.parquet')
+
+query II
+SELECT id, s.a FROM ducklake.nested
+----
+1	NULL
+
+# a nested field whose name is that of a NOT NULL column is not that column
+statement ok
+COPY (SELECT 1 AS id, {'id': NULL::INTEGER} AS s) TO '{DATA_PATH}/issue_1295_collide.parquet' (FORMAT parquet)
+
+statement ok
+CREATE TABLE ducklake.collide (id INTEGER NOT NULL, s STRUCT(id INTEGER))
+
+statement ok
+CALL ducklake_add_data_files('ducklake', 'collide', '{DATA_PATH}/issue_1295_collide.parquet')
+
+query II
+SELECT id, s.id FROM ducklake.collide
+----
+1	NULL
+
+# a NULL in one row group of a file is found whichever row group it is in
+statement ok
+COPY (SELECT 1 AS id, NULL::INTEGER AS x UNION ALL SELECT 2, 20) TO '{DATA_PATH}/issue_1295_rg1.parquet' (FORMAT parquet, ROW_GROUP_SIZE 1)
+
+statement ok
+COPY (SELECT 1 AS id, 10 AS x UNION ALL SELECT 2, NULL::INTEGER) TO '{DATA_PATH}/issue_1295_rg2.parquet' (FORMAT parquet, ROW_GROUP_SIZE 1)
+
+statement error
+CALL ducklake_add_data_files('ducklake', 't', '{DATA_PATH}/issue_1295_rg1.parquet')
+----
+NOT NULL constraint failed: t.x
+
+statement error
+CALL ducklake_add_data_files('ducklake', 't', '{DATA_PATH}/issue_1295_rg2.parquet')
+----
+NOT NULL constraint failed: t.x
+
+query II
+SELECT count(*), count(x) FROM ducklake.t
+----
+2	2

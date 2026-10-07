@@ -1,0 +1,257 @@
+# name: test/sql/compaction/compaction_file_level_conflicts.test
+# description: compactions conflict with concurrent deletes and compactions only when they touch the same files
+# group: [compaction]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/cfc', DATA_INLINING_ROW_LIMIT 10)
+
+# every table has two small files and one big file, the merges below only take the small files
+foreach tbl a b c d e
+
+statement ok
+CREATE TABLE ducklake.{tbl}(i INTEGER, s VARCHAR)
+
+statement ok
+COPY (SELECT i::INTEGER AS i, 'x' AS s FROM range(5) t(i)) TO '{DATA_PATH}/cfc_{tbl}_small1.parquet'
+
+statement ok
+COPY (SELECT i::INTEGER AS i, 'y' AS s FROM range(5) t(i)) TO '{DATA_PATH}/cfc_{tbl}_small2.parquet'
+
+statement ok
+COPY (SELECT i::INTEGER AS i, 'b' AS s FROM range(20000) t(i)) TO '{DATA_PATH}/cfc_{tbl}_big.parquet'
+
+statement ok
+CALL ducklake_add_data_files('ducklake', '{tbl}', '{DATA_PATH}/cfc_{tbl}_small1.parquet')
+
+statement ok
+CALL ducklake_add_data_files('ducklake', '{tbl}', '{DATA_PATH}/cfc_{tbl}_small2.parquet')
+
+statement ok
+CALL ducklake_add_data_files('ducklake', '{tbl}', '{DATA_PATH}/cfc_{tbl}_big.parquet')
+
+endloop
+
+# a merge and a delete of another file both commit, the merge first
+statement ok con1
+BEGIN
+
+statement ok con2
+BEGIN
+
+query II con1
+SELECT files_processed, files_created FROM ducklake_merge_adjacent_files('ducklake', 'a', max_file_size => 10000)
+----
+2	1
+
+statement ok con2
+DELETE FROM ducklake.a WHERE s = 'b' AND i < 100
+
+statement ok con1
+COMMIT
+
+statement ok con2
+COMMIT
+
+query II
+SELECT count(*), count(*) FILTER (WHERE s = 'b') FROM ducklake.a
+----
+19910	19900
+
+# the delete first
+statement ok con1
+BEGIN
+
+statement ok con2
+BEGIN
+
+query II con1
+SELECT files_processed, files_created FROM ducklake_merge_adjacent_files('ducklake', 'b', max_file_size => 10000)
+----
+2	1
+
+statement ok con2
+DELETE FROM ducklake.b WHERE s = 'b' AND i < 100
+
+statement ok con2
+COMMIT
+
+statement ok con1
+COMMIT
+
+query II
+SELECT count(*), count(*) FILTER (WHERE s = 'b') FROM ducklake.b
+----
+19910	19900
+
+# two merges of disjoint files both commit
+statement ok
+COPY (SELECT i::INTEGER AS i, 'c' AS s FROM range(20000) t(i)) TO '{DATA_PATH}/cfc_c_big2.parquet'
+
+statement ok
+CALL ducklake_add_data_files('ducklake', 'c', '{DATA_PATH}/cfc_c_big2.parquet')
+
+statement ok con1
+BEGIN
+
+statement ok con2
+BEGIN
+
+query II con1
+SELECT files_processed, files_created FROM ducklake_merge_adjacent_files('ducklake', 'c', max_file_size => 10000)
+----
+2	1
+
+query II con2
+SELECT files_processed, files_created
+FROM ducklake_merge_adjacent_files('ducklake', 'c', min_file_size => 10000, max_file_size => 10000000)
+----
+2	1
+
+statement ok con1
+COMMIT
+
+statement ok con2
+COMMIT
+
+query III
+SELECT count(*), count(DISTINCT s), (SELECT count(*) FROM ducklake_list_files('ducklake', 'c'))
+FROM ducklake.c
+----
+40010	4	2
+
+# an inlined delete of a merged file conflicts, the merge first
+statement ok con1
+BEGIN
+
+statement ok con2
+BEGIN
+
+query II con1
+SELECT files_processed, files_created FROM ducklake_merge_adjacent_files('ducklake', 'd', max_file_size => 10000)
+----
+2	1
+
+statement ok con2
+DELETE FROM ducklake.d WHERE s = 'x' AND i = 1
+
+statement ok con1
+COMMIT
+
+statement error con2
+COMMIT
+----
+but another transaction has compacted it
+
+query I
+SELECT count(*) FROM ducklake.d
+----
+20010
+
+# the delete first
+statement ok con1
+BEGIN
+
+statement ok con2
+BEGIN
+
+query II con1
+SELECT files_processed, files_created FROM ducklake_merge_adjacent_files('ducklake', 'e', max_file_size => 10000)
+----
+2	1
+
+statement ok con2
+DELETE FROM ducklake.e WHERE s = 'x' AND i = 1
+
+statement ok con2
+COMMIT
+
+statement error con1
+COMMIT
+----
+but another transaction has deleted from it
+
+query II
+SELECT count(*), count(*) FILTER (WHERE s = 'x' AND i = 1) FROM ducklake.e
+----
+20009	0
+
+# a rewrite keeps the table stats of a delete that commits first
+statement ok
+CREATE TABLE ducklake.f(i INTEGER)
+
+statement ok
+INSERT INTO ducklake.f SELECT 100 + range FROM range(100)
+
+statement ok
+INSERT INTO ducklake.f SELECT range FROM range(100)
+
+statement ok
+DELETE FROM ducklake.f WHERE i = 105
+
+statement ok con1
+BEGIN
+
+statement ok con2
+BEGIN
+
+query I con1
+SELECT files_processed FROM ducklake_rewrite_data_files('ducklake', 'f', delete_threshold => 0)
+----
+1
+
+statement ok con2
+DELETE FROM ducklake.f WHERE i < 100
+
+statement ok con2
+COMMIT
+
+statement ok con1
+COMMIT
+
+query III
+SELECT count(*), min(i), max(i) FROM ducklake.f
+----
+99	100	199
+
+query I
+SELECT record_count FROM __ducklake_metadata_ducklake.ducklake_table_stats
+WHERE table_id = (SELECT table_id FROM __ducklake_metadata_ducklake.ducklake_table WHERE table_name = 'f')
+----
+100
+
+# and the table stats of an insert that commits first
+statement ok
+DELETE FROM ducklake.f WHERE i = 106
+
+statement ok con1
+BEGIN
+
+statement ok con2
+BEGIN
+
+query I con1
+SELECT files_processed FROM ducklake_rewrite_data_files('ducklake', 'f', delete_threshold => 0)
+----
+1
+
+statement ok con2
+INSERT INTO ducklake.f SELECT 1000000 FROM range(20)
+
+statement ok con2
+COMMIT
+
+statement ok con1
+COMMIT
+
+query II
+SELECT count(*), max(i) FROM ducklake.f WHERE i = 1000000
+----
+20	1000000

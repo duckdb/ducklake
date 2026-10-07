@@ -15,18 +15,13 @@ DuckLakeCatalogSet::DuckLakeCatalogSet(ducklake_entries_map_t catalog_entries_p)
 }
 
 void DuckLakeCatalogSet::RegisterSchema(DuckLakeSchemaEntry &schema_entry) {
-	vector<reference<DuckLakeSchemaEntry>> pending;
-	pending.emplace_back(schema_entry);
-	while (!pending.empty()) {
-		auto &current = pending.back().get();
-		pending.pop_back();
+	schema_entry.ScanSchemaTree([&](SchemaCatalogEntry &schema) {
+		auto &current = schema.Cast<DuckLakeSchemaEntry>();
+		if (auto parent = current.ParentDuckLakeSchema()) {
+			current.SetParentSchema(*parent);
+		}
 		schema_entry_map.insert(make_pair(current.GetSchemaId(), reference<DuckLakeSchemaEntry>(current)));
-		current.Scan(CatalogType::SCHEMA_ENTRY, [&](CatalogEntry &child) {
-			auto &child_schema = child.Cast<DuckLakeSchemaEntry>();
-			child_schema.SetParentSchema(current);
-			pending.emplace_back(child_schema);
-		});
-	}
+	});
 }
 
 void DuckLakeCatalogSet::MoveEntriesTo(vector<unique_ptr<CatalogEntry>> &result) {

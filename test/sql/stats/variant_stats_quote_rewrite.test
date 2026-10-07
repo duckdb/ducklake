@@ -1,0 +1,42 @@
+# name: test/sql/stats/variant_stats_quote_rewrite.test
+# description: variant extra_stats containing a quote are stored unescaped and survive a rewrite
+# group: [stats]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS db2 (DATA_PATH '{DATA_PATH}/variant_stats_quote_rewrite', METADATA_CATALOG 'dl', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+use db2;
+
+statement ok
+CREATE TABLE t (v VARIANT)
+
+statement ok
+INSERT INTO t VALUES ({'text': 'it''s fine'}::VARIANT)
+
+query II
+SELECT COUNT(*) FILTER (contains(extra_stats, 'it''s fine')), COUNT(*) FILTER (contains(extra_stats, 'it''''s')) FROM dl.ducklake_file_column_stats
+----
+1	0
+
+statement ok
+INSERT INTO t VALUES ({'text': 'a'}::VARIANT), ({'text': 'b'}::VARIANT)
+
+statement ok
+DELETE FROM t WHERE v.text::VARCHAR = 'a'
+
+statement ok
+CALL ducklake_rewrite_data_files('db2', delete_threshold => 0)
+
+query II
+SELECT (SELECT COUNT(*) FROM t WHERE v.text = 'it''s fine'), (SELECT COUNT(*) FROM t WHERE v.text::VARCHAR = 'it''s fine')
+----
+1	1

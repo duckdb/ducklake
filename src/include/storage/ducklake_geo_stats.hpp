@@ -9,6 +9,7 @@
 #pragma once
 
 #include "storage/ducklake_stats.hpp"
+#include "duckdb/common/types/geometry.hpp"
 
 namespace duckdb {
 
@@ -27,7 +28,7 @@ struct DuckLakeColumnGeoStats final : public DuckLakeColumnExtraStats {
 	unique_ptr<BaseStatistics> ToStats() const;
 
 public:
-	double xmin, xmax, ymin, ymax, zmin, zmax, mmin, mmax;
+	GeometryExtent extent = GeometryExtent::Empty();
 	set<string> geo_types;
 };
 

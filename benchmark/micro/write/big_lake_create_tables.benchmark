@@ -1,0 +1,30 @@
+# name: benchmark/micro/write/big_lake_create_tables.benchmark
+# description: Create 500 empty 20-column tables in one transaction on a freshly attached 2110-table lake, with commit
+# group: [write]
+
+name Big Lake Create Tables
+group micro
+subgroup write
+
+require ducklake
+
+require parquet
+
+argument work big_lake_create_work
+
+include benchmark/micro/fixtures/big_lake.benchmark.in
+
+include benchmark/micro/fixtures/restore_cleanup.benchmark.in
+
+# The commit writes 10000 columns and rebuilds the catalog of the snapshot
+run
+BEGIN;
+IMPORT DATABASE '${BENCHMARK_DIR}/${lake}_create500';
+COMMIT;
+
+# A missed reset makes the first CREATE TABLE fail because created_0 already exists
+result_query II
+SELECT (SELECT count(*) FROM duckdb_tables() WHERE database_name = 'lake'),
+(SELECT count(*) FROM duckdb_columns() WHERE database_name = 'lake' AND table_name LIKE 'created\_%' ESCAPE '\')
+----
+2610	10000

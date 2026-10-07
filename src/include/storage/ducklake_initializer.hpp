@@ -28,7 +28,6 @@ private:
 	void LoadExistingDuckLake(DuckLakeTransaction &transaction);
 	void InitializeDataPath();
 	string GetAttachOptions();
-	void CheckAndAutoloadedRequiredExtension(const string &pattern);
 	void SetVersionedMetadataManager(DuckLakeTransaction &transaction, DuckLakeVersion version);
 	DuckLakeVersion ResolveTargetVersion(DuckLakeVersion catalog_version, const string &catalog_version_str);
 

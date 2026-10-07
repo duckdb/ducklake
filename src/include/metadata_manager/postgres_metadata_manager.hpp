@@ -34,23 +34,16 @@ public:
 
 	unique_ptr<QueryResult> Execute(DuckLakeSnapshot snapshot, string &query) override;
 
-	unique_ptr<QueryResult> Query(DuckLakeSnapshot snapshot, string &query) override;
-
 	void ClearCache() override;
 
 protected:
 	string GetLatestSnapshotQuery() const override;
-	string GenerateFileColumnStatsCTEBody(const CTERequirement &req, TableIndex table_id) override;
 	string GenerateFileListQuery(DuckLakeTableEntry &table, const FilterPushdownInfo *filter_info,
 	                             const vector<DuckLakeFileListDynamicFilter> &dynamic_filters,
 	                             const vector<idx_t> &runtime_filter_stats_columns, FileListType file_list_type,
-	                             const string &metadata_table_prefix,
-	                             const FileColumnStatsCTEBodyGenerator &generate_cte_body) override;
+	                             const string &metadata_table_prefix) override;
 	string CastValueToTarget(const Value &value, const LogicalType &type) override;
 	string CastStatsToTarget(const string &stats, const LogicalType &type, StatsCastType cast_type) override;
-
-private:
-	unique_ptr<QueryResult> ExecuteQuery(DuckLakeSnapshot snapshot, string &query, string command);
 };
 
 } // namespace duckdb

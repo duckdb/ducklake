@@ -65,10 +65,8 @@ WHERE table_name = 'va' AND column_name = 'a1' AND schema_name = 'main' AND data
 statement ok
 CREATE VIEW ducklake.pv(a1) AS SELECT 1 AS x, 2 AS y
 
-statement error
+statement ok
 COMMENT ON COLUMN ducklake.pv.y IS 'note'
-----
-View "pv" does not have a column with name "y"
 
 statement ok
 USE memory
@@ -91,5 +89,11 @@ WHERE table_name = 'v' AND column_name = 'col_a' AND schema_name = 'main' AND da
 query I
 SELECT count(*) FROM duckdb_columns()
 WHERE table_name = 'va' AND column_name = 'a1' AND schema_name = 'main' AND database_name = 'ducklake' AND comment = 'real'
+----
+1
+
+query I
+SELECT count(*) FROM duckdb_columns()
+WHERE table_name = 'pv' AND column_name = 'y' AND schema_name = 'main' AND database_name = 'ducklake' AND comment = 'note'
 ----
 1

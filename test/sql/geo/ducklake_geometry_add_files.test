@@ -46,4 +46,4 @@ POINT (5 5)
 query I
 select extra_stats from ducklake_meta.ducklake_file_column_stats order by all;
 ----
-{"bbox": {"xmin": 5.000000, "xmax": 5.000000, "ymin": 5.000000, "ymax": 5.000000, "zmin": null, "zmax": null, "mmin": null, "mmax": null}, "types": ["point"]}
+{"bbox":{"xmin":5.0,"xmax":5.0,"ymin":5.0,"ymax":5.0,"zmin":null,"zmax":null,"mmin":null,"mmax":null},"types":["point"]}

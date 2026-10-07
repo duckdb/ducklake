@@ -1,0 +1,108 @@
+# name: test/sql/data_inlining/data_inlining_flush_transaction_delete.test
+# description: Flushing in a transaction that deleted inlined rows tombstones the right rows
+# group: [data_inlining]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/flush_transaction_delete', DATA_INLINING_ROW_LIMIT 10)
+
+statement ok
+USE ducklake
+
+# only the current version of a row updated in the transaction is skipped
+statement ok
+CREATE TABLE u (id INTEGER, k INTEGER)
+
+statement ok
+INSERT INTO u VALUES (1, 1), (2, 2), (3, 3)
+
+statement ok
+UPDATE u SET k = 20 WHERE id = 1
+
+statement ok
+DELETE FROM u WHERE id = 3
+
+statement ok
+BEGIN
+
+statement ok
+UPDATE u SET k = 30 WHERE id = 1
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake', table_name => 'u')
+
+statement ok
+COMMIT
+
+query II
+SELECT id, k FROM u ORDER BY id
+----
+1	30
+2	2
+
+query II
+SELECT id, k FROM u AT (VERSION => 2) ORDER BY id
+----
+1	1
+2	2
+3	3
+
+# the version that the transaction updated keeps its history
+query II
+SELECT id, k FROM u AT (VERSION => 4) ORDER BY id
+----
+1	20
+2	2
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake', table_name => 'u')
+
+query II
+SELECT id, k FROM u AT (VERSION => 3) ORDER BY id
+----
+1	20
+2	2
+3	3
+
+query II
+SELECT id, k FROM u ORDER BY id
+----
+1	30
+2	2
+
+# rows deleted in the transaction do not shift the positions of committed deletes
+statement ok
+CREATE TABLE s (id INTEGER, k INTEGER)
+
+statement ok
+INSERT INTO s VALUES (1, 30), (2, 20), (3, 10)
+
+statement ok
+ALTER TABLE s SET SORTED BY (k)
+
+statement ok
+DELETE FROM s WHERE id = 1
+
+statement ok
+BEGIN
+
+statement ok
+DELETE FROM s WHERE id = 2
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake', table_name => 's')
+
+statement ok
+COMMIT
+
+query I
+SELECT id FROM s
+----
+3

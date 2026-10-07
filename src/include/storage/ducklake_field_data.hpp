@@ -68,6 +68,8 @@ public:
 	optional_ptr<const DuckLakeFieldId> GetChildByName(const string &name) const;
 	unique_ptr<DuckLakeFieldId> Copy() const;
 	unique_ptr<ParsedExpression> GetDefault() const;
+	//! The value of this field in rows written before it existed
+	unique_ptr<ParsedExpression> GetInitialDefault() const;
 
 	static unique_ptr<DuckLakeFieldId> FieldIdFromColumn(const ColumnDefinition &col, idx_t &column_id,
 	                                                     bool add_column = false);
@@ -124,6 +126,8 @@ public:
 	                                               idx_t &next_column_id);
 	static shared_ptr<DuckLakeFieldData> SetDefault(const DuckLakeFieldData &field_data, FieldIndex field_index,
 	                                                const ColumnDefinition &new_col, bool add_column);
+	static shared_ptr<DuckLakeFieldData> ReplaceRootField(const DuckLakeFieldData &field_data, PhysicalIndex root_index,
+	                                                      unique_ptr<DuckLakeFieldId> new_field);
 
 private:
 	vector<unique_ptr<DuckLakeFieldId>> field_ids;

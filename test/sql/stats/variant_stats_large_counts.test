@@ -1,0 +1,38 @@
+# name: test/sql/stats/variant_stats_large_counts.test
+# description: VARIANT stats counts above INT32_MAX survive a metadata round trip
+# group: [stats]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/variant_stats_large_counts.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/variant_stats_large_counts', METADATA_CATALOG 'ducklake_meta', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE ducklake.t(v VARIANT)
+
+statement ok
+INSERT INTO ducklake.t VALUES (42::VARIANT)
+
+statement ok
+UPDATE ducklake_meta.ducklake_table_column_stats
+SET extra_stats = replace(extra_stats, '"num_values":1,', '"num_values":3000000000,')
+
+statement ok
+DETACH ducklake
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/variant_stats_large_counts', METADATA_CATALOG 'ducklake_meta', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+INSERT INTO ducklake.t VALUES (43::VARIANT)
+
+query I
+SELECT regexp_extract(extra_stats, '"num_values":([0-9]+)', 1) FROM ducklake_meta.ducklake_table_column_stats
+----
+3000000001

@@ -1,0 +1,27 @@
+# name: benchmark/micro/fixtures/shared_deletes.benchmark.in
+# description: Read-only lake with 256 files, where every even file has both a delete file and an inlined delete
+# group: [fixtures]
+
+cache_file shared_deletes_ready.marker
+
+load
+@create shared_deletes
+@attach shared_deletes AS lake (DATA_PATH '${BENCHMARK_DIR}/shared_deletes_data', DATA_INLINING_ROW_LIMIT 10)
+CREATE TABLE lake.events (id BIGINT, val DOUBLE);
+CALL lake.set_option('parquet_row_group_size', 2048, table_name => 'events');
+SET ducklake_target_file_size = '4KB';
+INSERT INTO lake.events SELECT i, i * 0.5 FROM range(256 * 2048) t(i);
+RESET ducklake_target_file_size;
+DELETE FROM lake.events WHERE (id // 2048) % 2 = 0 AND id % 2048 < 20;
+DELETE FROM lake.events WHERE (id // 2048) % 2 = 0 AND id % 2048 = 100;
+SELECT CASE WHEN (SELECT count(*) FROM ducklake_list_files('lake', 'events')) <> 256
+OR (SELECT count(*) FROM ducklake_list_files('lake', 'events') WHERE delete_file IS NOT NULL) <> 128
+THEN error('events must consist of 256 files, half of them with a delete file') END;
+CALL ducklake_delete_orphaned_files('lake', cleanup_all => true);
+DETACH lake;
+@seal shared_deletes
+COPY (SELECT 1) TO '${BENCHMARK_DIR}/shared_deletes_ready.marker' (FORMAT CSV);
+@attach shared_deletes AS lake (READ_ONLY)
+
+reload
+@attach shared_deletes AS lake (READ_ONLY)

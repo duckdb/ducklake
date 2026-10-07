@@ -34,17 +34,6 @@ public:
 	void SetRetryConfigOverride(const DuckLakeRetryConfig &retry_config);
 
 private:
-	struct ColumnKey {
-		TableIndex table_id;
-		FieldIndex column_id;
-		bool operator<(const ColumnKey &other) const {
-			if (table_id != other.table_id) {
-				return table_id < other.table_id;
-			}
-			return column_id < other.column_id;
-		}
-	};
-
 	//! Read commit metadata (author, message, snapshot ids).
 	void ReadCommitHeader();
 	//! Read staged dropped file rows once and cache them.
@@ -90,6 +79,7 @@ private:
 	vector<string> LookupInlinedTableNames(TableIndex table_id);
 	//! Replace {METADATA_CATALOG}, {SNAPSHOT_ID}, etc. in SQL.
 	string SubstitutePlaceholders(string sql, const DuckLakeSnapshot &snapshot) const;
+	bool InlinedFileDeletionTableExists(TableIndex table_id);
 	//! Execute a query on the fresh connection; throw on error.
 	unique_ptr<QueryResult> RunQuery(const string &query, const char *what);
 	//! Scan a temporary staging table via the catalog API (no SQL, no lock).
@@ -107,7 +97,7 @@ private:
 	unique_ptr<DuckLakeTransactionState> state;
 	DuckLakeSnapshot transaction_snapshot;
 	TransactionChangeInformation transaction_changes;
-	map<ColumnKey, LogicalType> column_types;
+	map<pair<TableIndex, FieldIndex>, LogicalType> column_types;
 	map<TableIndex, shared_ptr<DuckLakeTableStats>> existing_table_stats;
 	bool supports_v1_1_metadata = false;
 	bool staged_dropped_files_read = false;

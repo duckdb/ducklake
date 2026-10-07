@@ -1,0 +1,59 @@
+# name: benchmark/micro/write/delete_commits_retry.benchmark
+# description: Commit 20 deletes that retry after a concurrent flush of deletions, in a lake with 4096 delete files
+# group: [write]
+
+name Delete Commits Retry
+group micro
+subgroup write
+
+require ducklake
+
+require parquet
+
+argument work delete_retry_work
+
+include benchmark/micro/fixtures/delete_files.benchmark.in
+
+include benchmark/micro/fixtures/restore_cleanup.benchmark.in
+
+# Retries do not sleep, so the timing has no random backoff
+init
+SET ducklake_retry_wait_ms = 0;
+
+# lake2 shares the metadata catalog of lake and commits first, so each delete retries and checks the flushed files
+run
+@attach ${work} AS lake2 (METADATA_CATALOG '__ducklake_metadata_lake')
+BEGIN; DELETE FROM lake.t_0 WHERE id >= 4076; CALL ducklake_flush_inlined_data('lake2', table_name => 't_0'); COMMIT;
+BEGIN; DELETE FROM lake.t_1 WHERE id >= 4076; CALL ducklake_flush_inlined_data('lake2', table_name => 't_1'); COMMIT;
+BEGIN; DELETE FROM lake.t_2 WHERE id >= 4076; CALL ducklake_flush_inlined_data('lake2', table_name => 't_2'); COMMIT;
+BEGIN; DELETE FROM lake.t_3 WHERE id >= 4076; CALL ducklake_flush_inlined_data('lake2', table_name => 't_3'); COMMIT;
+BEGIN; DELETE FROM lake.t_4 WHERE id >= 4076; CALL ducklake_flush_inlined_data('lake2', table_name => 't_4'); COMMIT;
+BEGIN; DELETE FROM lake.t_5 WHERE id >= 4076; CALL ducklake_flush_inlined_data('lake2', table_name => 't_5'); COMMIT;
+BEGIN; DELETE FROM lake.t_6 WHERE id >= 4076; CALL ducklake_flush_inlined_data('lake2', table_name => 't_6'); COMMIT;
+BEGIN; DELETE FROM lake.t_7 WHERE id >= 4076; CALL ducklake_flush_inlined_data('lake2', table_name => 't_7'); COMMIT;
+BEGIN; DELETE FROM lake.t_8 WHERE id >= 4076; CALL ducklake_flush_inlined_data('lake2', table_name => 't_8'); COMMIT;
+BEGIN; DELETE FROM lake.t_9 WHERE id >= 4076; CALL ducklake_flush_inlined_data('lake2', table_name => 't_9'); COMMIT;
+BEGIN; DELETE FROM lake.t_10 WHERE id >= 4076; CALL ducklake_flush_inlined_data('lake2', table_name => 't_10'); COMMIT;
+BEGIN; DELETE FROM lake.t_11 WHERE id >= 4076; CALL ducklake_flush_inlined_data('lake2', table_name => 't_11'); COMMIT;
+BEGIN; DELETE FROM lake.t_12 WHERE id >= 4076; CALL ducklake_flush_inlined_data('lake2', table_name => 't_12'); COMMIT;
+BEGIN; DELETE FROM lake.t_13 WHERE id >= 4076; CALL ducklake_flush_inlined_data('lake2', table_name => 't_13'); COMMIT;
+BEGIN; DELETE FROM lake.t_14 WHERE id >= 4076; CALL ducklake_flush_inlined_data('lake2', table_name => 't_14'); COMMIT;
+BEGIN; DELETE FROM lake.t_15 WHERE id >= 4076; CALL ducklake_flush_inlined_data('lake2', table_name => 't_15'); COMMIT;
+BEGIN; DELETE FROM lake.t_16 WHERE id >= 4076; CALL ducklake_flush_inlined_data('lake2', table_name => 't_16'); COMMIT;
+BEGIN; DELETE FROM lake.t_17 WHERE id >= 4076; CALL ducklake_flush_inlined_data('lake2', table_name => 't_17'); COMMIT;
+BEGIN; DELETE FROM lake.t_18 WHERE id >= 4076; CALL ducklake_flush_inlined_data('lake2', table_name => 't_18'); COMMIT;
+BEGIN; DELETE FROM lake.t_19 WHERE id >= 4076; CALL ducklake_flush_inlined_data('lake2', table_name => 't_19'); COMMIT;
+DETACH lake2;
+
+# A missed reset leaves nothing to flush, so no delete would commit right after a delete from its table
+result_query IIIIII
+SET VARIABLE delete_targets = (SELECT list('lake.t_' || k) FROM range(20) t(k));
+SELECT (SELECT count(*) FROM lake.snapshots()), count(*), sum(id),
+(SELECT count(*) FROM __ducklake_metadata_lake.ducklake_delete_file WHERE end_snapshot IS NULL),
+(SELECT sum(delete_count) FROM __ducklake_metadata_lake.ducklake_delete_file WHERE end_snapshot IS NULL),
+(SELECT count(*) FROM __ducklake_metadata_lake.ducklake_delete_file d
+JOIN lake.snapshots() s ON s.snapshot_id = d.begin_snapshot - 1
+WHERE d.delete_count = 20 AND list_contains(s.changes['tables_deleted_from'], d.table_id::VARCHAR))
+FROM query_table(getvariable('delete_targets'))
+----
+45	81500	166097000	4136	4516	20
