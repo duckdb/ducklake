@@ -20,6 +20,12 @@
   ],
   "skip_tests": [
     {
+      "reason": "Test requires a Quack metadata catalog",
+      "paths": [
+        "test/sql/quack/inlined_superseded_drop_failure.test"
+      ]
+    },
+    {
       "reason": "Test is slow",
       "paths": [
         "test/sql/deletion_inlining/test_multiple_files_flush.test_slow"
@@ -91,7 +97,8 @@
         "test/sql/metadata/metadata_schema_scoped_attach.test",
         "test/sql/data_inlining/postgres_identifier_limit.test",
         "test/sql/benchmark/postgres_catalog.test",
-        "test/sql/issues/issue_843_postgres_legacy_inlined_types.test"
+        "test/sql/issues/issue_843_postgres_legacy_inlined_types.test",
+        "test/sql/data_inlining/inlined_superseded_drop_failure_postgres.test"
       ]
     },
     {

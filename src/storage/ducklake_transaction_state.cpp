@@ -2061,7 +2061,8 @@ WHERE idt.schema_version < (
 	for (auto &row : *targets) {
 		candidates.push_back({row.GetValue<idx_t>(0), row.GetValue<idx_t>(1), row.GetValue<string>(2)});
 	}
-	string drops_sql;
+	bool dropped = false;
+	unique_ptr<QueryResult> failed_drop;
 	for (auto &candidate : candidates) {
 		auto count_result = context.query_metadata(
 		    StringUtil::Format("SELECT COUNT(*) FROM {METADATA_CATALOG}.%s;", SQLIdentifier(candidate.table_name)));
@@ -2073,22 +2074,30 @@ WHERE idt.schema_version < (
 		if (row_count != 0) {
 			continue;
 		}
-		drops_sql += StringUtil::Format(
+		// keep the registration if the drop fails
+		auto res = context.execute_in_transaction(StringUtil::Format(
 		    "DELETE FROM {METADATA_CATALOG}.ducklake_inlined_data_tables WHERE table_id=%d AND schema_version=%d;"
 		    "DROP TABLE IF EXISTS {METADATA_CATALOG}.%s;",
-		    candidate.table_id, candidate.schema_version, SQLIdentifier(candidate.table_name));
+		    candidate.table_id, candidate.schema_version, SQLIdentifier(candidate.table_name)));
+		if (res->HasError()) {
+			if (!failed_drop) {
+				failed_drop = std::move(res);
+			}
+			continue;
+		}
+		dropped = true;
 	}
-	if (drops_sql.empty()) {
-		return;
+	if (dropped) {
+		// We also need to invalidate the existing schema versions in our catalog
+		string snapshot_versions_sql = "SELECT DISTINCT schema_version FROM {METADATA_CATALOG}.ducklake_snapshot;";
+		auto snapshot_versions = context.query_metadata(snapshot_versions_sql);
+		snapshot_versions->ThrowIfError("Failed to list schema versions for cache invalidation: ");
+		for (auto &row : *snapshot_versions) {
+			context.invalidate_schema_cache(row.GetValue<idx_t>(0));
+		}
 	}
-	auto res = context.query_metadata(drops_sql);
-	res->ThrowIfError("Failed to drop superseded inlined-data tables in DuckLake: ");
-	// We also need to invalidate the existing schema versions in our catalog
-	string snapshot_versions_sql = "SELECT DISTINCT schema_version FROM {METADATA_CATALOG}.ducklake_snapshot;";
-	auto snapshot_versions = context.query_metadata(snapshot_versions_sql);
-	snapshot_versions->ThrowIfError("Failed to list schema versions for cache invalidation: ");
-	for (auto &row : *snapshot_versions) {
-		context.invalidate_schema_cache(row.GetValue<idx_t>(0));
+	if (failed_drop) {
+		failed_drop->ThrowIfError("Failed to drop superseded inlined-data tables in DuckLake: ");
 	}
 }
 
@@ -2144,6 +2153,7 @@ void DuckLakeTransactionState::Commit(DuckLakeSnapshot transaction_snapshot,
 				commit_snapshot.schema_version++;
 			}
 			can_retry = true;
+			context.set_delete_commit_snapshot(commit_snapshot.snapshot_id);
 			DuckLakeCommitState commit_state(commit_snapshot);
 			// write the new snapshot
 			string batch_queries = DuckLakeMetadataManager::InsertSnapshotSql();

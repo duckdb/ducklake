@@ -55,6 +55,11 @@ struct DuckLakeDeleteFile {
 	//! Optional max_snapshot information for partial deletion files.
 	optional_idx max_snapshot;
 	DeleteFileSource source = DeleteFileSource::REGULAR;
+
+	//! Whether the new deletes are dated to max_snapshot, which has to be the commit snapshot
+	bool DatesNewDeletes() const {
+		return source == DeleteFileSource::REGULAR && max_snapshot.IsValid();
+	}
 };
 
 struct DuckLakeDataFile {

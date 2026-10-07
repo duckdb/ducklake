@@ -4,6 +4,7 @@
 #include "duckdb/common/file_system.hpp"
 
 #include "storage/ducklake_commit_state.hpp"
+#include "storage/ducklake_delete.hpp"
 #include "storage/ducklake_transaction_state.hpp"
 #include "common/ducklake_types.hpp"
 #include "common/ducklake_util.hpp"
@@ -591,6 +592,39 @@ void LocalTableChanges::AddDeletes(ClientContext &context, TableIndex table_id, 
 	auto &table_changes = changes[table_id];
 	auto &table_delete_map = table_changes.new_delete_files;
 	LocalTableChanges::AddDeletesToMap(context, std::move(files), table_delete_map);
+}
+
+template <class CHANGES, class FUNC>
+static void ForEachDeleteFile(CHANGES &changes, FUNC &&callback) {
+	for (auto &entry : changes) {
+		for (auto &file_entry : entry.second.new_delete_files) {
+			for (auto &file : file_entry.second) {
+				callback(file);
+			}
+		}
+		for (auto &data_file : entry.second.new_data_files) {
+			for (auto &file : data_file.delete_files) {
+				callback(file);
+			}
+		}
+	}
+}
+
+bool LocalTableChanges::HasDatedNewDeletes() const {
+	lock_guard<mutex> guard(lock);
+	bool result = false;
+	ForEachDeleteFile(changes, [&](const DuckLakeDeleteFile &file) { result = result || file.DatesNewDeletes(); });
+	return result;
+}
+
+void LocalTableChanges::SetDeleteCommitSnapshot(ClientContext &context, DuckLakeTransaction &transaction,
+                                                idx_t commit_snapshot) {
+	lock_guard<mutex> guard(lock);
+	ForEachDeleteFile(changes, [&](DuckLakeDeleteFile &file) {
+		if (file.DatesNewDeletes()) {
+			DuckLakeDeleteFileWriter::SetCommitSnapshot(context, transaction, file, commit_snapshot);
+		}
+	});
 }
 
 LocalTableChangeIterationHelper LocalTableChanges::Changes() const {
@@ -1256,10 +1290,21 @@ void DuckLakeTransaction::DropEmptySupersededInlinedTablesClientSide() {
 	context.query_metadata = [&](string q) {
 		return metadata_manager->Query(q);
 	};
+	context.execute_in_transaction = [&](string q) {
+		return metadata_manager->ExecuteInTransaction(q);
+	};
 	context.invalidate_schema_cache = [&](idx_t schema_version) {
 		ducklake_catalog.InvalidateSchemaCache(schema_version);
 	};
-	DuckLakeTransactionState::DropEmptySupersededInlinedTables(context);
+	try {
+		DuckLakeTransactionState::DropEmptySupersededInlinedTables(context);
+	} catch (std::exception &ex) {
+		ReportPostCommitError(ErrorData(ex).Message());
+	}
+}
+
+void DuckLakeTransaction::ReportPostCommitError(const string &message) {
+	DUCKDB_LOG_WARNING(db, StringUtil::Format("DuckLake post-commit cleanup failed: %s", message));
 }
 
 void DuckLakeTransaction::RunCommitLoop(DuckLakeSnapshot transaction_snapshot,
@@ -1279,6 +1324,10 @@ void DuckLakeTransaction::RunCommitLoop(DuckLakeSnapshot transaction_snapshot,
 	};
 	context.get_snapshot = [&]() {
 		return GetSnapshot();
+	};
+	context.set_delete_commit_snapshot = [&](idx_t commit_snapshot) {
+		// the client context has no active transaction during the commit
+		state->local_changes.SetDeleteCommitSnapshot(*GetConnection().context, *this, commit_snapshot);
 	};
 	context.execute_commit_batch = [&](DuckLakeSnapshot snapshot, string &query) {
 		auto result = metadata_manager->Execute(snapshot, query);
@@ -1318,6 +1367,9 @@ void DuckLakeTransaction::RunCommitLoop(DuckLakeSnapshot transaction_snapshot,
 	};
 	context.query_metadata = [&](string q) {
 		return metadata_manager->Query(q);
+	};
+	context.execute_in_transaction = [&](string q) {
+		return metadata_manager->ExecuteInTransaction(q);
 	};
 	context.query_metadata_with_snapshot = [&](DuckLakeSnapshot s, string q) {
 		return metadata_manager->Query(s, q);
@@ -1415,7 +1467,7 @@ void DuckLakeTransaction::RunCommitLoop(DuckLakeSnapshot transaction_snapshot,
 		ducklake_catalog.InvalidateTableStatsCache(next_file_id, table_id);
 	};
 	context.report_post_commit_error = [&](const string &message) {
-		DUCKDB_LOG_WARNING(db, StringUtil::Format("DuckLake post-commit cleanup failed: %s", message));
+		ReportPostCommitError(message);
 	};
 	context.commit_info = state->commit_info;
 	context.supports_v1_1_metadata = ducklake_catalog.SupportsV1_1Metadata();

@@ -1,0 +1,51 @@
+# name: benchmark/micro/write/delete_commits_rewrite.benchmark
+# description: Commit 20 deletes that each rewrite the delete file of a data file, in a lake with 4096 delete files
+# group: [write]
+
+name Delete Commits Rewrite
+group micro
+subgroup write
+
+require ducklake
+
+require parquet
+
+argument work delete_rewrite_work
+
+include benchmark/micro/fixtures/delete_files.benchmark.in
+
+include benchmark/micro/fixtures/restore_cleanup.benchmark.in
+
+# Every bg file has a delete file and deletes of more than 10 rows are not inlined
+run
+DELETE FROM lake.bg WHERE id BETWEEN 1 AND 20;
+DELETE FROM lake.bg WHERE id BETWEEN 2049 AND 2068;
+DELETE FROM lake.bg WHERE id BETWEEN 4097 AND 4116;
+DELETE FROM lake.bg WHERE id BETWEEN 6145 AND 6164;
+DELETE FROM lake.bg WHERE id BETWEEN 8193 AND 8212;
+DELETE FROM lake.bg WHERE id BETWEEN 10241 AND 10260;
+DELETE FROM lake.bg WHERE id BETWEEN 12289 AND 12308;
+DELETE FROM lake.bg WHERE id BETWEEN 14337 AND 14356;
+DELETE FROM lake.bg WHERE id BETWEEN 16385 AND 16404;
+DELETE FROM lake.bg WHERE id BETWEEN 18433 AND 18452;
+DELETE FROM lake.bg WHERE id BETWEEN 20481 AND 20500;
+DELETE FROM lake.bg WHERE id BETWEEN 22529 AND 22548;
+DELETE FROM lake.bg WHERE id BETWEEN 24577 AND 24596;
+DELETE FROM lake.bg WHERE id BETWEEN 26625 AND 26644;
+DELETE FROM lake.bg WHERE id BETWEEN 28673 AND 28692;
+DELETE FROM lake.bg WHERE id BETWEEN 30721 AND 30740;
+DELETE FROM lake.bg WHERE id BETWEEN 32769 AND 32788;
+DELETE FROM lake.bg WHERE id BETWEEN 34817 AND 34836;
+DELETE FROM lake.bg WHERE id BETWEEN 36865 AND 36884;
+DELETE FROM lake.bg WHERE id BETWEEN 38913 AND 38932;
+
+# A missed reset leaves nothing to delete, so the rewritten delete files would be missing
+result_query IIIII
+SELECT (SELECT count(*) FROM lake.snapshots()), count(*),
+(SELECT count(*) FROM __ducklake_metadata_lake.ducklake_delete_file WHERE end_snapshot IS NULL),
+(SELECT sum(delete_count) FROM __ducklake_metadata_lake.ducklake_delete_file WHERE end_snapshot IS NULL),
+(SELECT count(*) FROM __ducklake_metadata_lake.ducklake_delete_file
+WHERE end_snapshot IS NULL AND delete_count = 21 AND partial_max IS NOT NULL)
+FROM lake.bg
+----
+25	8384112	4096	4496	20

@@ -1,0 +1,60 @@
+# name: test/sql/issues/issue_1573_flushed_file_delete_snapshot.test
+# description: A delete from a data file flushed in the same transaction is dated to its commit snapshot
+# group: [issues]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/issue_1573_flushed',
+    DATA_INLINING_ROW_LIMIT 10)
+
+statement ok
+CREATE TABLE ducklake.t2 (id INTEGER)
+
+statement ok
+CREATE TABLE ducklake.t3 (id INTEGER)
+
+statement ok
+INSERT INTO ducklake.t3 SELECT range FROM range(5)
+
+statement ok
+DELETE FROM ducklake.t3 WHERE id = 0
+
+# the flush and a delete of a flushed row commit after a concurrent commit
+
+statement ok con1
+BEGIN
+
+statement ok con1
+CALL ducklake_flush_inlined_data('ducklake', table_name => 't3')
+
+statement ok con1
+DELETE FROM ducklake.t3 WHERE id = 1
+
+statement ok con2
+INSERT INTO ducklake.t2 VALUES (44)
+
+statement ok con1
+COMMIT
+
+query III
+SELECT snapshot_id, change_type, id FROM ducklake_table_changes('ducklake', 'main', 't3', 4, 6) ORDER BY ALL
+----
+4	delete	0
+6	delete	1
+
+query I
+SELECT list(id ORDER BY id) FROM ducklake.t3 AT (VERSION => 5)
+----
+[1, 2, 3, 4]
+
+query II
+SELECT delete_count, partial_max FROM __ducklake_metadata_ducklake.ducklake_delete_file WHERE table_id = 2
+----
+2	6
