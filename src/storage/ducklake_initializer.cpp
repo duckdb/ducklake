@@ -6,13 +6,13 @@
 #include "duckdb/common/types/column/column_data_collection.hpp"
 #include "duckdb/common/types/uuid.hpp"
 #include "duckdb/main/connection.hpp"
+#include "duckdb/main/extension_helper.hpp"
 #include "duckdb/storage/storage_manager.hpp"
 
 #include "storage/ducklake_initializer.hpp"
 #include "storage/ducklake_catalog.hpp"
 #include "storage/ducklake_transaction.hpp"
 #include "storage/ducklake_schema_entry.hpp"
-#include "common/ducklake_util.hpp"
 #include "common/ducklake_version.hpp"
 #include "metadata_manager/ducklake_metadata_manager_v1_1.hpp"
 #include "metadata_manager/sqlite_metadata_manager.hpp"
@@ -29,16 +29,7 @@ DuckLakeInitializer::DuckLakeInitializer(ClientContext &context, DuckLakeCatalog
 string DuckLakeInitializer::GetAttachOptions() {
 	vector<string> attach_options;
 	if (options.access_mode != AccessMode::AUTOMATIC) {
-		switch (options.access_mode) {
-		case AccessMode::READ_ONLY:
-			attach_options.push_back("READ_ONLY");
-			break;
-		case AccessMode::READ_WRITE:
-			attach_options.push_back("READ_WRITE");
-			break;
-		default:
-			throw InternalException("Unsupported access mode in DuckLake attach");
-		}
+		attach_options.push_back(EnumUtil::ToString(options.access_mode));
 	}
 	for (auto &option : options.metadata_parameters) {
 		attach_options.push_back(option.first + " " + option.second.ToSQLString());
@@ -55,8 +46,7 @@ string DuckLakeInitializer::GetAttachOptions() {
 	bool is_postgres = metadata_type == "postgres" || metadata_type == "postgres_scanner";
 	bool user_set_schema = options.metadata_parameters.find("schema") != options.metadata_parameters.end();
 	if (is_postgres && !user_set_schema && !options.metadata_schema.empty()) {
-		attach_options.push_back("SCHEMA " +
-		                         DuckLakeUtil::SQLLiteralToString(options.metadata_schema.GetIdentifierName()));
+		attach_options.push_back("SCHEMA " + SQLString::ToString(options.metadata_schema.GetIdentifierName()));
 	}
 	if (options.hide_metadata_catalog) {
 		attach_options.push_back("HIDDEN true");
@@ -65,14 +55,7 @@ string DuckLakeInitializer::GetAttachOptions() {
 	if (attach_options.empty()) {
 		return string();
 	}
-	string result;
-	for (auto &option : attach_options) {
-		if (!result.empty()) {
-			result += ", ";
-		}
-		result += option;
-	}
-	return " (" + result + ")";
+	return " (" + StringUtil::Join(attach_options, ", ") + ")";
 }
 
 void DuckLakeInitializer::Initialize() {
@@ -82,11 +65,8 @@ void DuckLakeInitializer::Initialize() {
 	const string attach_query =
 	    "ATTACH OR REPLACE {METADATA_PATH} AS {METADATA_CATALOG_NAME_IDENTIFIER}" + GetAttachOptions();
 	auto result = metadata_manager.AttachMetadata(attach_query);
-	if (result->HasError()) {
-		auto &error_obj = result->GetErrorObject();
-		error_obj.Throw("Failed to attach DuckLake MetaData \"" + catalog.MetadataDatabaseName() + "\" at path + \"" +
-		                catalog.MetadataPath() + "\"");
-	}
+	result->ThrowIfError("Failed to attach DuckLake MetaData \"" + catalog.MetadataDatabaseName() + "\" at path + \"" +
+	                     catalog.MetadataPath() + "\"");
 	// explicitly load all secrets - work-around to secret initialization bug
 	transaction.Query("FROM duckdb_secrets()");
 
@@ -141,18 +121,11 @@ void DuckLakeInitializer::InitializeDataPath() {
 	if (data_path.empty()) {
 		return;
 	}
-
-	// This functions will:
-	//	1. Check if a known extension pattern matches the start of the data_path
-	//	2. If so, either load the required extension or throw a relevant error message
-	CheckAndAutoloadedRequiredExtension(data_path);
+	ExtensionHelper::AutoLoadExtensionForPath(*context.db, data_path, "Data path");
 
 	auto &fs = FileSystem::GetFileSystem(context);
 	auto separator = fs.PathSeparator(data_path);
-	// pop trailing path separators
-	while (!data_path.empty() && (data_path.back() == '/' || data_path.back() == '\\')) {
-		data_path.pop_back();
-	}
+	StringUtil::RTrim(data_path, "/\\");
 	// ensure the paths we store always end in a path separator
 	data_path += separator;
 	catalog.Separator() = separator;

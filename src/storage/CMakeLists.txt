@@ -30,7 +30,6 @@ add_library(
   ducklake_stats.cpp
   ducklake_table_entry.cpp
   ducklake_initializer.cpp
-  ducklake_autoload_helper.cpp
   ducklake_update.cpp
   ducklake_scan.cpp
   ducklake_transaction.cpp

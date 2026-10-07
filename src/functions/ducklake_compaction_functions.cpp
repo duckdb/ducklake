@@ -1,5 +1,5 @@
 #include "duckdb/catalog/catalog_entry_retriever.hpp"
-#include "common/ducklake_util.hpp"
+#include "duckdb/common/bind_helpers.hpp"
 #include "functions/ducklake_table_functions.hpp"
 #include "duckdb/planner/logical_operator.hpp"
 #include "duckdb/common/file_system.hpp"
@@ -13,7 +13,6 @@
 #include "duckdb/planner/operator/logical_get.hpp"
 #include "duckdb/planner/operator/logical_copy_to_file.hpp"
 #include "duckdb/planner/operator/logical_extension_operator.hpp"
-#include "duckdb/planner/operator/logical_set_operation.hpp"
 #include "storage/ducklake_compaction.hpp"
 #include "duckdb/common/multi_file/multi_file_function.hpp"
 #include "storage/ducklake_multi_file_list.hpp"
@@ -45,36 +44,22 @@ vector<OrderByNode> DuckLakeCompactor::ParseSortOrders(const DuckLakeSort &sort_
 		if (field.dialect != "duckdb") {
 			continue;
 		}
-		auto parsed_expression = Parser::ParseExpressionList(field.expression);
+		auto parsed_expression = Parser::GetBuiltinParser().ParseExpressionList(field.expression);
 		pre_bound_orders.emplace_back(field.sort_direction, field.null_order, std::move(parsed_expression[0]));
 	}
 	return pre_bound_orders;
 }
 
-//! Binds ORDER BY expressions directly using ExpressionBinder.
 vector<BoundOrderByNode> DuckLakeCompactor::BindSortOrders(Binder &binder, const ColumnList &columns,
                                                            const Identifier &table_name, TableIndex table_index,
                                                            const vector<OrderByNode> &pre_bound_orders) {
 	DuckLakeTableEntry::ValidateSortExpressionColumns(columns, pre_bound_orders);
-
-	auto column_names = columns.GetColumnNames();
-	auto column_types = columns.GetColumnTypes();
-
-	// Create a child binder with the table columns in scope
-	auto child_binder = Binder::CreateBinder(binder.context, &binder);
-	child_binder->bind_context.AddGenericBinding(table_index, table_name, StringsToIdentifiers(column_names),
-	                                             column_types);
-
-	// Bind each ORDER BY expression directly
-	vector<BoundOrderByNode> orders;
-	for (auto &pre_bound_order : pre_bound_orders) {
-		ExpressionBinder expr_binder(*child_binder, binder.context);
-		auto expression = pre_bound_order.expression->Copy();
-		auto bound_expr = expr_binder.Bind(expression);
-		orders.emplace_back(pre_bound_order.type, pre_bound_order.null_order, std::move(bound_expr));
+	vector<OrderByNode> orders;
+	for (auto &order : pre_bound_orders) {
+		orders.emplace_back(order.type, order.null_order, order.expression->Copy());
 	}
-
-	return orders;
+	return BindOrderByNodes(binder, table_index, table_name, StringsToIdentifiers(columns.GetColumnNames()),
+	                        columns.GetColumnTypes(), orders);
 }
 
 //===--------------------------------------------------------------------===//
@@ -92,38 +77,17 @@ DuckLakeCompaction::DuckLakeCompaction(PhysicalPlan &physical_plan, const vector
 }
 
 //===--------------------------------------------------------------------===//
-// Source State
-//===--------------------------------------------------------------------===//
-class DuckLakeCompactionSourceState : public GlobalSourceState {
-public:
-	DuckLakeCompactionSourceState() : returned_result(false) {
-	}
-
-	bool returned_result;
-};
-
-//===--------------------------------------------------------------------===//
 // GetData
 //===--------------------------------------------------------------------===//
-unique_ptr<GlobalSourceState> DuckLakeCompaction::GetGlobalSourceState(ClientContext &context) const {
-	return make_uniq<DuckLakeCompactionSourceState>();
-}
-
 SourceResultType DuckLakeCompaction::GetDataInternal(ExecutionContext &context, DataChunk &chunk,
                                                      OperatorSourceInput &input) const {
-	auto &source_state = input.global_state.Cast<DuckLakeCompactionSourceState>();
-	if (source_state.returned_result) {
-		return SourceResultType::FINISHED;
-	}
-	source_state.returned_result = true;
-
 	if (!this->sink_state) {
 		throw InternalException("DuckLakeCompaction - missing sink state while producing result");
 	}
 	auto &gstate = this->sink_state->Cast<DuckLakeInsertGlobalState>();
 	auto files_created = gstate.written_files.size();
 
-	chunk.data[0].Append(Value(DuckLakeUtil::SchemaPathToDisplay(table.schema.GetSchemaPath())));
+	chunk.data[0].Append(Value(table.schema.GetSchemaName()));
 	chunk.data[1].Append(Value(table.name.GetIdentifierName()));
 	chunk.data[2].Append(Value::BIGINT(static_cast<int64_t>(source_files.size())));
 	chunk.data[3].Append(Value::BIGINT(static_cast<int64_t>(files_created)));
@@ -239,23 +203,9 @@ struct DuckLakeCompactionGroupHash {
 
 struct DuckLakeCompactionGroupEquality {
 	bool operator()(const DuckLakeCompactionGroup &a, const DuckLakeCompactionGroup &b) const {
-		if (a.schema_version != b.schema_version || a.partition_id != b.partition_id) {
-			return false;
-		}
-		if (a.partition_values.size() != b.partition_values.size()) {
-			return false;
-		}
-		for (idx_t i = 0; i < a.partition_values.size(); i++) {
-			const auto &av = a.partition_values[i];
-			const auto &bv = b.partition_values[i];
-			if (av.IsNull() != bv.IsNull()) {
-				return false;
-			}
-			if (!av.IsNull() && av.ToString() != bv.ToString()) {
-				return false;
-			}
-		}
-		return true;
+		return a.schema_version == b.schema_version && a.partition_id == b.partition_id &&
+		       std::equal(a.partition_values.begin(), a.partition_values.end(), b.partition_values.begin(),
+		                  b.partition_values.end(), ValueEquality());
 	}
 };
 
@@ -441,24 +391,7 @@ unique_ptr<LogicalOperator> DuckLakeCompactor::InsertSort(Binder &binder, unique
 	// Create the LogicalOrder operator
 	auto order = make_uniq<LogicalOrder>(std::move(orders));
 	order->children.push_back(std::move(plan));
-	order->ResolveOperatorTypes();
-
-	// Create a projection to pass through all columns
-	vector<unique_ptr<Expression>> cast_expressions;
-	auto &types = order->types;
-	auto order_bindings = order->GetColumnBindings();
-
-	for (idx_t col_idx = 0; col_idx < types.size(); col_idx++) {
-		auto &type = types[col_idx];
-		auto &binding = order_bindings[col_idx];
-		auto ref_expr = make_uniq<BoundColumnRefExpression>(type, binding);
-		cast_expressions.push_back(std::move(ref_expr));
-	}
-
-	auto projected = make_uniq<LogicalProjection>(binder.GenerateTableIndex(), std::move(cast_expressions));
-	projected->children.push_back(std::move(order));
-
-	return std::move(projected);
+	return LogicalProjection::CreateIdentity(binder.GenerateTableIndex(), std::move(order));
 }
 
 optional_ptr<DuckLakeTableEntry>
@@ -619,12 +552,12 @@ DuckLakeCompactor::GenerateCompactionCommand(vector<DuckLakeCompactionFileEntry>
 		copy_input.virtual_columns = InsertVirtualColumns::WRITE_SNAPSHOT_ID;
 	}
 
-	auto copy_options = DuckLakeInsert::GetCopyOptions(context, copy_input);
+	auto copy = DuckLakeInsert::GetCopyOptions(context, copy_input).copy;
 
 	auto virtual_columns = table.GetVirtualColumns();
 	auto ducklake_scan =
-	    make_uniq<LogicalGet>(table_idx, std::move(scan_function), std::move(bind_data), copy_options.expected_types,
-	                          copy_options.names, std::move(virtual_columns));
+	    make_uniq<LogicalGet>(table_idx, BoundTableFunction(std::move(scan_function)), std::move(bind_data),
+	                          copy->expected_types, copy->names, std::move(virtual_columns));
 
 	auto &column_ids = ducklake_scan->GetMutableColumnIds();
 	for (idx_t i = 0; i < columns.PhysicalColumnCount(); i++) {
@@ -669,39 +602,18 @@ DuckLakeCompactor::GenerateCompactionCommand(vector<DuckLakeCompactionFileEntry>
 		root = DuckLakeCompactor::InsertSort(binder, root, latest_table, sort_data);
 	}
 
-	// read the configured row group size before copy_options.info is moved into the LogicalCopyToFile
-	idx_t configured_row_group_size = DuckLakeInsert::GetCopyBatchSize(copy_options);
-
-	// generate the LogicalCopyToFile
-	auto copy = make_uniq<LogicalCopyToFile>(std::move(copy_options.copy_function), std::move(copy_options.bind_data),
-	                                         std::move(copy_options.info), binder.GenerateTableIndex());
-
-	auto &fs = FileSystem::GetFileSystem(context);
+	copy->table_index = binder.GenerateTableIndex();
 	if (write_row_id) {
-		copy->file_path = copy_options.file_path;
-		copy->batch_size = configured_row_group_size;
-		copy->file_size_bytes = copy_options.file_size_bytes;
-		copy->rotate = copy_options.rotate;
 		copy->preserve_order = PreserveOrderType::DONT_PRESERVE_ORDER;
 	} else {
-		copy->file_path = copy_options.filename_pattern.CreateFilename(fs, copy_options.file_path, "parquet", 0);
+		auto &fs = FileSystem::GetFileSystem(context);
+		copy->file_path = copy->filename_pattern.CreateFilename(fs, copy->file_path, "parquet", 0);
 		copy->batch_size = DEFAULT_ROW_GROUP_SIZE;
 		copy->file_size_bytes = optional_idx();
 		copy->rotate = false;
 		copy->preserve_order = PreserveOrderType::PRESERVE_ORDER;
 	}
-	copy->use_tmp_file = copy_options.use_tmp_file;
-	copy->filename_pattern = std::move(copy_options.filename_pattern);
-	copy->file_extension = std::move(copy_options.file_extension);
-	copy->overwrite_mode = copy_options.overwrite_mode;
 	copy->per_thread_output = false;
-	copy->return_type = copy_options.return_type;
-	copy->partition_output = copy_options.partition_output;
-	copy->write_partition_columns = copy_options.write_partition_columns;
-	copy->write_empty_file = false;
-	copy->partition_columns = std::move(copy_options.partition_columns);
-	copy->names = copy_options.names;
-	copy->expected_types = std::move(copy_options.expected_types);
 	copy->children.push_back(std::move(root));
 
 	optional_idx target_row_id_start;
@@ -724,29 +636,19 @@ static unique_ptr<LogicalOperator> GenerateCompactionOperator(TableFunctionBindI
                                                               vector<unique_ptr<LogicalOperator>> &compactions) {
 	if (compactions.empty()) {
 		// nothing to compact - generate an empty result
-		vector<ColumnBinding> bindings;
 		vector<LogicalType> return_types;
-		bindings.emplace_back(bind_index, ProjectionIndex(0));
-		bindings.emplace_back(bind_index, ProjectionIndex(1));
-		bindings.emplace_back(bind_index, ProjectionIndex(2));
-		bindings.emplace_back(bind_index, ProjectionIndex(3));
 		return_types.emplace_back(LogicalType::VARCHAR);
 		return_types.emplace_back(LogicalType::VARCHAR);
 		return_types.emplace_back(LogicalType::BIGINT);
 		return_types.emplace_back(LogicalType::BIGINT);
+		auto bindings = LogicalOperator::GenerateColumnBindings(bind_index, return_types.size());
 		return make_uniq<LogicalEmptyResult>(std::move(return_types), std::move(bindings));
 	}
 	if (compactions.size() == 1) {
 		compactions[0]->Cast<DuckLakeLogicalCompaction>().table_index = bind_index;
 		return std::move(compactions[0]);
 	}
-	auto union_op = input.binder->UnionOperators(std::move(compactions));
-	auto &set_op = union_op->Cast<LogicalSetOperation>();
-	set_op.table_index = bind_index;
-	// Manually set column_count - this is normally derived during optimization
-	// but we need it at bind time for column binding resolution
-	set_op.column_count = 4;
-	return union_op;
+	return input.binder->UnionOperators(std::move(compactions), 4, bind_index);
 }
 
 static void GenerateCompaction(ClientContext &context, DuckLakeTransaction &transaction,
@@ -809,10 +711,11 @@ unique_ptr<LogicalOperator> BindCompaction(ClientContext &context, TableFunction
 		if (max_files_entry->second.IsNull()) {
 			throw BinderException("The max_compacted_files option must be a non-null integer.");
 		}
-		max_files = UBigIntValue::Get(max_files_entry->second);
-		if (max_files == 0) {
+		auto max_files_value = BigIntValue::Get(max_files_entry->second);
+		if (max_files_value <= 0) {
 			throw BinderException("The max_compacted_files option must be greater than zero.");
 		}
+		max_files = NumericCast<uint64_t>(max_files_value);
 	}
 
 	optional_idx min_file_size;
@@ -821,7 +724,11 @@ unique_ptr<LogicalOperator> BindCompaction(ClientContext &context, TableFunction
 		if (min_file_size_entry->second.IsNull()) {
 			throw BinderException("The min_file_size option must be a non-null integer.");
 		}
-		min_file_size = UBigIntValue::Get(min_file_size_entry->second);
+		auto min_file_size_value = BigIntValue::Get(min_file_size_entry->second);
+		if (min_file_size_value < 0) {
+			throw BinderException("The min_file_size option must not be negative.");
+		}
+		min_file_size = NumericCast<uint64_t>(min_file_size_value);
 	}
 
 	optional_idx max_file_size;
@@ -830,10 +737,11 @@ unique_ptr<LogicalOperator> BindCompaction(ClientContext &context, TableFunction
 		if (max_file_size_entry->second.IsNull()) {
 			throw BinderException("The max_file_size option must be a non-null integer.");
 		}
-		max_file_size = UBigIntValue::Get(max_file_size_entry->second);
-		if (max_file_size.GetIndex() == 0) {
+		auto max_file_size_value = BigIntValue::Get(max_file_size_entry->second);
+		if (max_file_size_value <= 0) {
 			throw BinderException("The max_file_size option must be greater than zero.");
 		}
+		max_file_size = NumericCast<uint64_t>(max_file_size_value);
 	}
 
 	// Validate that min_file_size < max_file_size if both are set
@@ -878,8 +786,7 @@ unique_ptr<LogicalOperator> BindCompaction(ClientContext &context, TableFunction
 	if (schema_entry != input.named_parameters.end()) {
 		schema = StringValue::Get(schema_entry->second);
 	}
-	EntryLookupInfo table_lookup(CatalogType::TABLE_ENTRY,
-	                             DuckLakeUtil::QualifiedEntryName(context, catalog, schema, table), nullptr,
+	EntryLookupInfo table_lookup(CatalogType::TABLE_ENTRY, catalog.ResolveEntryName(context, schema, table), nullptr,
 	                             QueryErrorContext());
 	CatalogEntryRetriever retriever(context);
 	auto table_entry = catalog.LookupEntry(retriever, table_lookup, OnEntryNotFound::THROW_EXCEPTION).entry;
@@ -916,16 +823,26 @@ static unique_ptr<LogicalOperator> MergeAdjacentFilesBind(ClientContext &context
 
 TableFunctionSet DuckLakeMergeAdjacentFilesFunction::GetFunctions() {
 	TableFunctionSet set("ducklake_merge_adjacent_files");
-	const vector<vector<LogicalType>> at_types {{LogicalType::VARCHAR, LogicalType::VARCHAR}, {LogicalType::VARCHAR}};
-	for (auto &type : at_types) {
-		TableFunction function("ducklake_merge_adjacent_files", type, nullptr, nullptr, nullptr);
+	for (bool with_table : {true, false}) {
+		auto signature = FunctionSignature().AddPositionalOnly("catalog", LogicalType::VARCHAR);
+		if (with_table) {
+			signature.AddPositionalOnly("table_name", LogicalType::VARCHAR);
+		}
+		TableFunction function("ducklake_merge_adjacent_files", std::move(signature), nullptr, nullptr, nullptr);
 		function.bind_operator = MergeAdjacentFilesBind;
-		function.named_parameters["min_file_size"] = LogicalType::UBIGINT;
-		function.named_parameters["max_file_size"] = LogicalType::UBIGINT;
-		function.named_parameters["max_compacted_files"] = LogicalType::UBIGINT;
-		function.named_parameters["newer_than"] = LogicalType::TIMESTAMP_TZ;
-		if (type.size() == 2) {
-			function.named_parameters["schema"] = LogicalType::VARCHAR;
+		function
+		    .GetSignature()
+		    // BIGINT rather than UBIGINT: a caller writes a plain integer literal, which has no implicit cast to
+		    // an unsigned parameter. The range is checked where the option is read instead.
+		    .WithTypedKwargs("options", [&](TypedKwargs &options) {
+			    options.Add("min_file_size", LogicalType::BIGINT)
+			        .Add("max_file_size", LogicalType::BIGINT)
+			        .Add("max_compacted_files", LogicalType::BIGINT)
+			        .Add("newer_than", LogicalType::TIMESTAMP_TZ);
+		    });
+		if (with_table) {
+			function.GetSignature().ExtendTypedKwargs(
+			    [&](TypedKwargs &options) { options.Add("schema", LogicalType::VARCHAR); });
 		}
 		set.AddFunction(function);
 	}
@@ -943,14 +860,19 @@ static unique_ptr<LogicalOperator> RewriteFilesBind(ClientContext &context, Tabl
 
 TableFunctionSet DuckLakeRewriteDataFilesFunction::GetFunctions() {
 	TableFunctionSet set("ducklake_rewrite_data_files");
-	vector<vector<LogicalType>> at_types {{LogicalType::VARCHAR, LogicalType::VARCHAR}, {LogicalType::VARCHAR}};
-	for (auto &type : at_types) {
-		TableFunction function("ducklake_rewrite_data_files", type, nullptr, nullptr, nullptr);
+	for (bool with_table : {true, false}) {
+		auto signature = FunctionSignature().AddPositionalOnly("catalog", LogicalType::VARCHAR);
+		if (with_table) {
+			signature.AddPositionalOnly("table_name", LogicalType::VARCHAR);
+		}
+		TableFunction function("ducklake_rewrite_data_files", std::move(signature), nullptr, nullptr, nullptr);
 		function.bind_operator = RewriteFilesBind;
-		function.named_parameters["delete_threshold"] = LogicalType::DOUBLE;
-		function.named_parameters["max_compacted_files"] = LogicalType::UBIGINT;
-		if (type.size() == 2) {
-			function.named_parameters["schema"] = LogicalType::VARCHAR;
+		function.GetSignature().WithTypedKwargs("options", [&](TypedKwargs &options) {
+			options.Add("delete_threshold", LogicalType::DOUBLE).Add("max_compacted_files", LogicalType::BIGINT);
+		});
+		if (with_table) {
+			function.GetSignature().ExtendTypedKwargs(
+			    [&](TypedKwargs &options) { options.Add("schema", LogicalType::VARCHAR); });
 		}
 		set.AddFunction(function);
 	}

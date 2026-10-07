@@ -1,17 +1,12 @@
 #include "common/parquet_file_scanner.hpp"
 #include "duckdb/catalog/catalog_entry/table_function_catalog_entry.hpp"
+#include "duckdb/common/multi_file/multi_file_reader.hpp"
 #include "duckdb/main/database.hpp"
 #include "duckdb/parser/tableref/table_function_ref.hpp"
 
 namespace duckdb {
 
-ParquetFileScanner::ParquetFileScanner(ClientContext &context, const DuckLakeFileData &file)
-    : ParquetFileScanner(context, file, nullptr, nullptr) {
-}
-
-ParquetFileScanner::ParquetFileScanner(ClientContext &context, const DuckLakeFileData &file,
-                                       table_function_get_multi_file_reader_t multi_file_reader_creator_p,
-                                       shared_ptr<TableFunctionInfo> function_info_p)
+ParquetFileScanner::ParquetFileScanner(ClientContext &context, const DuckLakeFileData &file, bool use_file_metadata)
     : context(context) {
 	auto &instance = DatabaseInstance::GetDatabase(context);
 	ExtensionLoader loader(instance, "ducklake");
@@ -20,8 +15,20 @@ ParquetFileScanner::ParquetFileScanner(ClientContext &context, const DuckLakeFil
 
 	// Prepare the inputs for the bind
 	vector<Value> children;
-	children.push_back(Value(file.path));
-	named_parameter_map_t named_params;
+	if (use_file_metadata) {
+		child_list_t<Value> file_entry;
+		file_entry.emplace_back(MultiFileReader::FILE_PATH_FIELD, Value(file.path));
+		file_entry.emplace_back("file_size", Value::UBIGINT(file.file_size_bytes));
+		file_entry.emplace_back("etag", Value(""));
+		file_entry.emplace_back("last_modified", Value::TIMESTAMP(timestamp_t(0)));
+		if (!file.encryption_key.empty()) {
+			file_entry.emplace_back("encryption_key", Value::BLOB_RAW(file.encryption_key));
+		}
+		children.push_back(Value::STRUCT(std::move(file_entry)));
+	} else {
+		children.push_back(Value(file.path));
+	}
+	named_argument_map_t named_params;
 	vector<LogicalType> input_types;
 	vector<Identifier> input_names;
 
@@ -38,15 +45,10 @@ ParquetFileScanner::ParquetFileScanner(ClientContext &context, const DuckLakeFil
 	TableFunction dummy_table_function;
 	dummy_table_function.SetName("ParquetFileScanner");
 
-	if (multi_file_reader_creator_p) {
-		dummy_table_function.get_multi_file_reader = multi_file_reader_creator_p;
-		if (function_info_p) {
-			dummy_table_function.function_info = std::move(function_info_p);
-		}
-	}
-
+	// the bind sees the function as a bound call would
+	BoundTableFunction bound_table_function(dummy_table_function);
 	TableFunctionBindInput bind_input(children, named_params, input_types, input_names, nullptr, nullptr,
-	                                  dummy_table_function, empty);
+	                                  bound_table_function, empty);
 
 	bind_data = parquet_scan.bind(context, bind_input, return_types, return_names);
 }

@@ -14,10 +14,12 @@
 #include "duckdb/parser/column_list.hpp"
 
 namespace duckdb {
+struct DuckLakeColumnInfo;
 
 class DuckLakeTypes {
 public:
 	static LogicalType FromString(const string &str);
+	static LogicalType FromColumnInfo(const DuckLakeColumnInfo &col);
 	static string ToString(const LogicalType &str);
 	static void CheckSupportedType(const LogicalType &type, DuckLakeVersion version);
 	static void CheckSupportedTypes(const ColumnList &columns, DuckLakeVersion version);

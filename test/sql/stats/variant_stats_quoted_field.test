@@ -1,0 +1,28 @@
+# name: test/sql/stats/variant_stats_quoted_field.test
+# description: test variant stats for field names containing double quotes
+# group: [stats]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS db2 (DATA_PATH '{DATA_PATH}/ducklake_variant_stats_quoted', METADATA_CATALOG 'dl', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+use db2;
+
+statement ok
+CREATE TABLE t (v VARIANT)
+
+statement ok
+INSERT INTO t VALUES ({'a"b': {'c"': 42}}::VARIANT)
+
+query I
+SELECT stats(v) FROM t LIMIT 1
+----
+{'fully_shredded': {'a"b': {'c"': {'stats': {'has_no_null': true, 'has_null': false, 'max': 42, 'min': 42}, 'type': INTEGER}}}, 'has_no_null': true, 'has_null': true, 'shredding_state': SHREDDED}

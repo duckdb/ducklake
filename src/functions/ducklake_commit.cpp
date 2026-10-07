@@ -30,9 +30,6 @@ static unique_ptr<FunctionData> DuckLakeCommitBind(ClientContext &, TableFunctio
 			result->retry_config.retry_wait_ms = static_cast<idx_t>(entry.second.GetValue<int64_t>());
 		} else if (entry.first == "retry_backoff") {
 			result->retry_config.retry_backoff = entry.second.GetValue<double>();
-		} else {
-			throw BinderException("Unknown named parameter \"%s\" for ducklake_commit",
-			                      entry.first.GetIdentifierName());
 		}
 	}
 	names.emplace_back("committed_snapshot_id");
@@ -64,11 +61,16 @@ static void DuckLakeCommitExecute(ClientContext &context, TableFunctionInput &da
 }
 
 DuckLakeCommitFunction::DuckLakeCommitFunction()
-    : TableFunction("ducklake_commit", {LogicalType::VARCHAR, LogicalType::BIGINT}, DuckLakeCommitExecute,
-                    DuckLakeCommitBind, DuckLakeRunOnceState::Init) {
-	named_parameters["max_retry_count"] = LogicalType::BIGINT;
-	named_parameters["retry_wait_ms"] = LogicalType::BIGINT;
-	named_parameters["retry_backoff"] = LogicalType::DOUBLE;
+    : TableFunction("ducklake_commit",
+                    FunctionSignature()
+                        .AddPositionalOnly("metadata_schema", LogicalType::VARCHAR)
+                        .AddPositionalOnly("schema_version", LogicalType::BIGINT),
+                    DuckLakeCommitExecute, DuckLakeCommitBind, DuckLakeRunOnceState::Init) {
+	GetSignature().WithTypedKwargs("options", [&](TypedKwargs &options) {
+		options.Add("max_retry_count", LogicalType::BIGINT)
+		    .Add("retry_wait_ms", LogicalType::BIGINT)
+		    .Add("retry_backoff", LogicalType::DOUBLE);
+	});
 }
 
 } // namespace duckdb

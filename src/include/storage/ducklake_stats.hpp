@@ -84,6 +84,7 @@ public:
 	void MergeStats(const DuckLakeColumnStats &new_stats);
 
 private:
+	void SetValidity(BaseStatistics &stats) const;
 	unique_ptr<BaseStatistics> CreateNumericStats() const;
 	unique_ptr<BaseStatistics> CreateStringStats() const;
 	unique_ptr<BaseStatistics> CreateVariantStats() const;

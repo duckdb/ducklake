@@ -47,6 +47,7 @@ public:
 	DuckLakeBaseMetadataFunction(Identifier name, table_function_bind_t bind);
 
 	static Catalog &GetCatalog(ClientContext &context, TableFunctionBindInput &input);
+	static void ScanRows(const vector<vector<Value>> &rows, idx_t &offset, DataChunk &output);
 };
 
 class DuckLakeSnapshotsFunction : public DuckLakeBaseMetadataFunction {

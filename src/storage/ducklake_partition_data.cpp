@@ -12,43 +12,36 @@
 
 namespace duckdb {
 
+static constexpr StringUtil::EnumStringLiteral TRANSFORM_NAMES[] = {
+    {static_cast<uint32_t>(DuckLakeTransformType::IDENTITY), "identity"},
+    {static_cast<uint32_t>(DuckLakeTransformType::BUCKET), "bucket"},
+    {static_cast<uint32_t>(DuckLakeTransformType::YEAR), "year"},
+    {static_cast<uint32_t>(DuckLakeTransformType::MONTH), "month"},
+    {static_cast<uint32_t>(DuckLakeTransformType::DAY), "day"},
+    {static_cast<uint32_t>(DuckLakeTransformType::HOUR), "hour"},
+    {static_cast<uint32_t>(DuckLakeTransformType::EPOCH_YEAR), "epoch_year"},
+    {static_cast<uint32_t>(DuckLakeTransformType::EPOCH_MONTH), "epoch_month"},
+    {static_cast<uint32_t>(DuckLakeTransformType::EPOCH_DAY), "epoch_day"},
+    {static_cast<uint32_t>(DuckLakeTransformType::EPOCH_HOUR), "epoch_hour"}};
+
+string DuckLakePartitionUtils::GetTransformName(DuckLakeTransformType transform_type) {
+	return StringUtil::EnumToString(TRANSFORM_NAMES, sizeof(TRANSFORM_NAMES) / sizeof(TRANSFORM_NAMES[0]),
+	                                "DuckLakeTransformType", static_cast<uint32_t>(transform_type));
+}
+
+bool DuckLakePartitionUtils::TryGetTransformType(const string &name, DuckLakeTransformType &result) {
+	for (auto &entry : TRANSFORM_NAMES) {
+		if (name == entry.string) {
+			result = static_cast<DuckLakeTransformType>(entry.number);
+			return true;
+		}
+	}
+	return false;
+}
+
 string DuckLakePartitionUtils::GetPartitionKeyName(DuckLakeTransformType transform_type, const string &field_name,
                                                    case_insensitive_set_t &used_names) {
-	string prefix;
-	switch (transform_type) {
-	case DuckLakeTransformType::IDENTITY:
-		prefix = field_name;
-		break;
-	case DuckLakeTransformType::YEAR:
-		prefix = "year";
-		break;
-	case DuckLakeTransformType::MONTH:
-		prefix = "month";
-		break;
-	case DuckLakeTransformType::DAY:
-		prefix = "day";
-		break;
-	case DuckLakeTransformType::HOUR:
-		prefix = "hour";
-		break;
-	case DuckLakeTransformType::EPOCH_YEAR:
-		prefix = "epoch_year";
-		break;
-	case DuckLakeTransformType::EPOCH_MONTH:
-		prefix = "epoch_month";
-		break;
-	case DuckLakeTransformType::EPOCH_DAY:
-		prefix = "epoch_day";
-		break;
-	case DuckLakeTransformType::EPOCH_HOUR:
-		prefix = "epoch_hour";
-		break;
-	case DuckLakeTransformType::BUCKET:
-		prefix = "bucket";
-		break;
-	default:
-		throw NotImplementedException("Unsupported partition transform type");
-	}
+	auto prefix = transform_type == DuckLakeTransformType::IDENTITY ? field_name : GetTransformName(transform_type);
 	if (used_names.find(prefix) == used_names.end()) {
 		return prefix;
 	}
@@ -116,9 +109,7 @@ string DuckLakePartitionUtils::GetPartitionSQLExpression(const DuckLakeTransform
 		}
 		return "date_diff('" + GetEpochTransformPart(transform.type) + "', DATE '1970-01-01', " + col_expr + ")";
 	}
-	case_insensitive_set_t used_names;
-	string func_name = GetPartitionKeyName(transform.type, col_name, used_names);
-	return func_name + "(" + col_name + ")";
+	return GetTransformName(transform.type) + "(" + col_name + ")";
 }
 
 LogicalType DuckLakePartitionUtils::GetPartitionKeyType(DuckLakeTransformType transform_type,
@@ -182,17 +173,12 @@ string DuckLakePartitionUtils::BuildHivePartitionPath(DuckLakeTableEntry &table,
 		used_names.insert(partition_key_name);
 
 		auto &partition_value = partition_values[field.partition_key_index];
-		string partition_value_str;
-		if (partition_value.IsNull()) {
-			// Keep this in sync with DuckDB's HivePartitioning::IsNull parser.
-			partition_value_str = "__HIVE_DEFAULT_PARTITION__";
-		} else {
-			partition_value_str = partition_value.ToString();
-		}
 		if (!result.empty()) {
 			result += separator;
 		}
-		result += HivePartitioning::Escape(partition_key_name) + "=" + HivePartitioning::Escape(partition_value_str);
+		result += HivePartitioning::Escape(partition_key_name) + "=";
+		result += partition_value.IsNull() ? HivePartitioning::DEFAULT_PARTITION_NAME
+		                                   : HivePartitioning::Escape(partition_value.ToString());
 	}
 	if (!result.empty()) {
 		result += separator;
@@ -204,14 +190,8 @@ unique_ptr<Expression> DuckLakePartitionUtils::ApplyScalarFunction(ClientContext
                                                                    unique_ptr<Expression> column_expr) {
 	vector<unique_ptr<Expression>> children;
 	children.push_back(std::move(column_expr));
-	ErrorData error;
 	FunctionBinder binder(context);
-	auto function = binder.BindScalarFunction(Identifier::DefaultSchema(), Identifier(function_name),
-	                                          std::move(children), error, false);
-	if (!function) {
-		error.Throw();
-	}
-	return function;
+	return binder.BindScalarFunction(Identifier::DefaultSchema(), Identifier(function_name), std::move(children));
 }
 
 static unique_ptr<Expression> BindBinaryOp(ClientContext &context, const string &op, unique_ptr<Expression> left,
@@ -219,14 +199,8 @@ static unique_ptr<Expression> BindBinaryOp(ClientContext &context, const string 
 	vector<unique_ptr<Expression>> children;
 	children.push_back(std::move(left));
 	children.push_back(std::move(right));
-	ErrorData error;
 	FunctionBinder binder(context);
-	auto result =
-	    binder.BindScalarFunction(Identifier::DefaultSchema(), Identifier(op), std::move(children), error, false);
-	if (!result) {
-		error.Throw();
-	}
-	return result;
+	return binder.BindScalarFunction(Identifier::DefaultSchema(), Identifier(op), std::move(children));
 }
 
 unique_ptr<Expression> DuckLakePartitionUtils::ApplyBucketTransform(ClientContext &context,
@@ -274,14 +248,8 @@ static unique_ptr<Expression> ApplyEpochTransform(ClientContext &context, unique
 	children.push_back(make_uniq<BoundConstantExpression>(Value(GetEpochTransformPart(transform_type))));
 	children.push_back(make_uniq<BoundConstantExpression>(Value::DATE(Date::FromDate(1970, 1, 1))));
 	children.push_back(std::move(column_expr));
-	ErrorData error;
 	FunctionBinder binder(context);
-	auto function = binder.BindScalarFunction(Identifier::DefaultSchema(), Identifier("date_diff"), std::move(children),
-	                                          error, false);
-	if (!function) {
-		error.Throw();
-	}
-	return function;
+	return binder.BindScalarFunction(Identifier::DefaultSchema(), "date_diff", std::move(children));
 }
 
 unique_ptr<Expression> DuckLakePartitionUtils::ApplyPartitionTransform(ClientContext &context,
@@ -291,13 +259,10 @@ unique_ptr<Expression> DuckLakePartitionUtils::ApplyPartitionTransform(ClientCon
 	case DuckLakeTransformType::IDENTITY:
 		return column_expr;
 	case DuckLakeTransformType::YEAR:
-		return ApplyScalarFunction(context, "year", std::move(column_expr));
 	case DuckLakeTransformType::MONTH:
-		return ApplyScalarFunction(context, "month", std::move(column_expr));
 	case DuckLakeTransformType::DAY:
-		return ApplyScalarFunction(context, "day", std::move(column_expr));
 	case DuckLakeTransformType::HOUR:
-		return ApplyScalarFunction(context, "hour", std::move(column_expr));
+		return ApplyScalarFunction(context, GetTransformName(field.transform.type), std::move(column_expr));
 	case DuckLakeTransformType::EPOCH_YEAR:
 	case DuckLakeTransformType::EPOCH_MONTH:
 	case DuckLakeTransformType::EPOCH_DAY:

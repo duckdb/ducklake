@@ -52,7 +52,7 @@ public:
 	shared_ptr<DuckLakeDeleteMap> delete_map;
 
 public:
-	static unique_ptr<MultiFileReader> CreateInstance(const TableFunction &table_function);
+	static unique_ptr<MultiFileReader> CreateInstance(const BoundTableFunction &table_function);
 	//! Return a DuckLakeMultiFileList
 	shared_ptr<MultiFileList> CreateFileList(ClientContext &context, const vector<string> &paths,
 	                                         const FileGlobInput &options) override;

@@ -2,7 +2,6 @@
 
 #include "common/ducklake_row_helpers.hpp"
 #include "common/ducklake_types.hpp"
-#include "common/ducklake_util.hpp"
 #include "common/ducklake_version.hpp"
 #include "duckdb/common/string_util.hpp"
 #include "duckdb/main/client_context.hpp"
@@ -66,8 +65,8 @@ unique_ptr<DuckLakeNameMapEntry> BuildNameMapEntry(idx_t id, const std::map<idx_
 	return entry;
 }
 
-template <class ROW>
-DuckLakeColumnStats ReadColumnStatsRow(ROW &row, idx_t base, const LogicalType &type, bool has_exactness) {
+static DuckLakeColumnStats ReadColumnStatsRow(const QueryResultRow &row, idx_t base, const LogicalType &type,
+                                              bool has_exactness) {
 	DuckLakeColumnStats s(type);
 	if (!row.IsNull(base + 0)) {
 		s.column_size_bytes = AsIdx(row, base + 0);
@@ -82,21 +81,21 @@ DuckLakeColumnStats ReadColumnStatsRow(ROW &row, idx_t base, const LogicalType &
 	}
 	if (OptBoolFalse(row, base + 5) && !row.IsNull(base + 6)) {
 		s.has_min = true;
-		s.min = row.template GetValue<string>(base + 6);
+		s.min = row.GetValue<string>(base + 6);
 	}
 	if (OptBoolFalse(row, base + 7) && !row.IsNull(base + 8)) {
 		s.has_max = true;
-		s.max = row.template GetValue<string>(base + 8);
+		s.max = row.GetValue<string>(base + 8);
 	}
 	s.has_contains_nan = OptBoolFalse(row, base + 9);
 	if (s.has_contains_nan && !row.IsNull(base + 10)) {
-		s.contains_nan = row.template GetValue<bool>(base + 10);
+		s.contains_nan = row.GetValue<bool>(base + 10);
 	}
 	if (!row.IsNull(base + 11)) {
-		s.any_valid = row.template GetValue<bool>(base + 11);
+		s.any_valid = row.GetValue<bool>(base + 11);
 	}
 	if (!row.IsNull(base + 12) && s.extra_stats) {
-		s.extra_stats->Deserialize(row.template GetValue<string>(base + 12));
+		s.extra_stats->Deserialize(row.GetValue<string>(base + 12));
 	}
 	if (has_exactness) {
 		s.min_is_exact = OptBoolFalse(row, base + 13);
@@ -108,10 +107,9 @@ DuckLakeColumnStats ReadColumnStatsRow(ROW &row, idx_t base, const LogicalType &
 //! Read the 9 shared DuckLakeDeleteFile fields starting at `base` column.
 //! Layout: file_name, format, delete_count, file_size_bytes, footer_size,
 //! encryption_key, begin_snapshot, max_snapshot, source.
-template <class ROW>
-void FillDeleteFileCommon(DuckLakeDeleteFile &f, ROW &row, idx_t base) {
-	f.file_name = row.template GetValue<string>(base + 0);
-	f.format = DeleteFileFormatFromString(row.template GetValue<string>(base + 1));
+static void FillDeleteFileCommon(DuckLakeDeleteFile &f, const QueryResultRow &row, idx_t base) {
+	f.file_name = row.GetValue<string>(base + 0);
+	f.format = DeleteFileFormatFromString(row.GetValue<string>(base + 1));
 	f.delete_count = AsIdx(row, base + 2);
 	f.file_size_bytes = AsIdx(row, base + 3);
 	f.footer_size = AsIdx(row, base + 4);
@@ -122,13 +120,13 @@ void FillDeleteFileCommon(DuckLakeDeleteFile &f, ROW &row, idx_t base) {
 	if (!row.IsNull(base + 7)) {
 		f.max_snapshot = AsIdx(row, base + 7);
 	}
-	f.source = row.template GetValue<string>(base + 8) == "FLUSH" ? DeleteFileSource::FLUSH : DeleteFileSource::REGULAR;
+	f.source = row.GetValue<string>(base + 8) == "FLUSH" ? DeleteFileSource::FLUSH : DeleteFileSource::REGULAR;
 }
 
 DuckLakeServerSideCommit::DuckLakeServerSideCommit(ClientContext &context_p, string metadata_schema_name_p,
                                                    int64_t schema_version_p)
     : context(context_p), metadata_schema_name(std::move(metadata_schema_name_p)),
-      schema_id(DuckLakeUtil::SQLIdentifierToString(metadata_schema_name)), schema_version(schema_version_p),
+      schema_id(SQLQuotedIdentifier::ToString(metadata_schema_name)), schema_version(schema_version_p),
       fresh_conn(*context_p.db) {
 }
 
@@ -153,7 +151,7 @@ DuckLakeServerSideCommitResult DuckLakeServerSideCommit::Run() {
 
 	// Derive transaction_changes from local_changes the same way DuckLakeTransaction does.
 	for (auto &entry : state->local_changes.Changes()) {
-		DuckLakeTransaction::AddTableChanges(entry.GetTableIndex(), entry.GetTableChanges(), transaction_changes);
+		DuckLakeTransaction::AddTableChanges(entry.first, entry.second, transaction_changes);
 	}
 	// Mirror whole-file drops into the conflict-detection set.
 	for (auto &table_id : state->tables_deleted_from) {
@@ -179,31 +177,32 @@ DuckLakeServerSideCommitResult DuckLakeServerSideCommit::Run() {
 
 void DuckLakeServerSideCommit::ReadCommitHeader() {
 	auto result = ScanStagedTable(DuckLakeStagedTableType::COMMIT_HEADER);
-	auto chunk = result->Fetch();
-	if (!chunk || chunk->size() == 0) {
+	auto header = result->begin();
+	if (header == result->end()) {
 		throw IOException("Server-side ducklake_commit: no staged commit header");
 	}
+	auto &row = *header;
 
 	string data_path;
 	string separator;
-	if (!chunk->GetValue(4, 0).IsNull()) {
-		data_path = chunk->GetValue(4, 0).ToString();
+	if (!row.IsNull(4)) {
+		data_path = row.GetValue<string>(4);
 	}
-	if (!chunk->GetValue(5, 0).IsNull()) {
-		separator = chunk->GetValue(5, 0).ToString();
+	if (!row.IsNull(5)) {
+		separator = row.GetValue<string>(5);
 	}
 	state = make_uniq<DuckLakeTransactionState>(*context.db, /*require_commit_message=*/false, new_name_maps,
 	                                            std::move(data_path), std::move(separator));
-	state->commit_info.author = chunk->GetValue(0, 0);
-	state->commit_info.commit_message = chunk->GetValue(1, 0);
-	state->commit_info.commit_extra_info = chunk->GetValue(2, 0);
+	state->commit_info.author = row.GetBaseValue(0);
+	state->commit_info.commit_message = row.GetBaseValue(1);
+	state->commit_info.commit_extra_info = row.GetBaseValue(2);
 
-	if (chunk->GetValue(3, 0).IsNull()) {
+	if (row.IsNull(3)) {
 		transaction_snapshot = ReadLatestSnapshot();
 	} else {
-		transaction_snapshot.snapshot_id = static_cast<idx_t>(chunk->GetValue(3, 0).GetValue<int64_t>());
-		transaction_snapshot.next_catalog_id = chunk->GetValue(6, 0).GetValue<uint64_t>();
-		transaction_snapshot.next_file_id = chunk->GetValue(7, 0).GetValue<uint64_t>();
+		transaction_snapshot.snapshot_id = AsIdx(row, 3);
+		transaction_snapshot.next_catalog_id = row.GetValue<uint64_t>(6);
+		transaction_snapshot.next_file_id = row.GetValue<uint64_t>(7);
 		transaction_snapshot.schema_version = static_cast<idx_t>(schema_version);
 	}
 	if (schema_version < 0) {
@@ -257,13 +256,7 @@ void DuckLakeServerSideCommit::ReadColumnTypes() {
 	if (table_ids.empty()) {
 		return;
 	}
-	string id_list;
-	for (auto id : table_ids) {
-		if (!id_list.empty()) {
-			id_list += ",";
-		}
-		id_list += to_string(id);
-	}
+	auto id_list = JoinIds(vector<idx_t>(table_ids.begin(), table_ids.end()));
 	auto query = StringUtil::Format("SELECT col.table_id, col.column_id, col.column_type "
 	                                "FROM %s.ducklake_column col "
 	                                "WHERE col.end_snapshot IS NULL "
@@ -856,10 +849,9 @@ bool DuckLakeServerSideCommit::InlinedFileDeletionTableExists(TableIndex table_i
 	// The inlined-file-deletion table is deterministically named but created lazily.
 	// Probe its existence via the catalog (an erroring probe would abort the transaction).
 	auto probe_sql = SubstitutePlaceholders(
-	    StringUtil::Format(
-	        "SELECT 1 FROM duckdb_tables() WHERE database_name = current_database() AND "
-	        "schema_name = {METADATA_SCHEMA_NAME_LITERAL} AND table_name = %s",
-	        DuckLakeUtil::SQLLiteralToString(DuckLakeMetadataManager::InlinedFileDeletionTableName(table_id))),
+	    StringUtil::Format("SELECT 1 FROM duckdb_tables() WHERE database_name = current_database() AND "
+	                       "schema_name = {METADATA_SCHEMA_NAME_LITERAL} AND table_name = %s",
+	                       SQLString::ToString(DuckLakeMetadataManager::InlinedFileDeletionTableName(table_id))),
 	    transaction_snapshot);
 	auto probe = fresh_conn.Query(probe_sql);
 	return probe && !probe->HasError() && probe->RowCount() > 0;
@@ -868,8 +860,7 @@ bool DuckLakeServerSideCommit::InlinedFileDeletionTableExists(TableIndex table_i
 string DuckLakeServerSideCommit::SubstitutePlaceholders(string sql, const DuckLakeSnapshot &snapshot) const {
 	sql = StringUtil::Replace(sql, "{METADATA_CATALOG}", schema_id);
 	sql = StringUtil::Replace(sql, "{METADATA_CATALOG_NAME_LITERAL}", "(SELECT current_database())");
-	sql = StringUtil::Replace(sql, "{METADATA_SCHEMA_NAME_LITERAL}",
-	                          DuckLakeUtil::SQLLiteralToString(metadata_schema_name));
+	sql = StringUtil::Replace(sql, "{METADATA_SCHEMA_NAME_LITERAL}", SQLString::ToString(metadata_schema_name));
 	sql = StringUtil::Replace(sql, "{SNAPSHOT_ID}", std::to_string(snapshot.snapshot_id));
 	sql = StringUtil::Replace(sql, "{SCHEMA_VERSION}", std::to_string(snapshot.schema_version));
 	sql = StringUtil::Replace(sql, "{NEXT_CATALOG_ID}", std::to_string(snapshot.next_catalog_id));
@@ -879,9 +870,7 @@ string DuckLakeServerSideCommit::SubstitutePlaceholders(string sql, const DuckLa
 
 unique_ptr<QueryResult> DuckLakeServerSideCommit::RunQuery(const string &query, const char *what) {
 	auto result = fresh_conn.Query(query);
-	if (result->HasError()) {
-		result->GetErrorObject().Throw(StringUtil::Format("Server-side ducklake_commit (%s) failed: ", what));
-	}
+	result->ThrowIfError(StringUtil::Format("Server-side ducklake_commit (%s) failed: ", what));
 	return result;
 }
 

@@ -21,6 +21,7 @@ benchmark/micro/write/delete_commits_retry.benchmark
 benchmark/micro/write/delete_commits_inlined_retry.benchmark
 benchmark/micro/write/merge_into_upsert.benchmark
 benchmark/ingest/add_files_small_files.benchmark
+benchmark/micro/ingest/add_files_not_null.benchmark
 benchmark/tpch/q09.benchmark
 benchmark/micro/read/tz_pruning_many_files.benchmark
 benchmark/micro/time_travel/at_version_cte_copy.benchmark

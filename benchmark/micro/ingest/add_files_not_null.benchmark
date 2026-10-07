@@ -1,0 +1,8 @@
+# name: benchmark/micro/ingest/add_files_not_null.benchmark
+# description: Add many small parquet files to a table whose columns are all NOT NULL
+# group: [ingest]
+
+template benchmark/ingest/add_files_small_files.benchmark.in
+lake_prefix=add_files_not_null
+title=DuckLake Add Files Not Null
+constraint=NOT NULL

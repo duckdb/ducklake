@@ -9,11 +9,7 @@
 #include "duckdb/common/helper.hpp"
 #include "duckdb/common/limits.hpp"
 
-#include "yyjson.hpp"
-
 namespace duckdb {
-
-using namespace duckdb_yyjson; // NOLINT
 
 DuckLakeColumnExtraStats::DuckLakeColumnExtraStats(DuckLakeExtraStatsType stats_type) : stats_type(stats_type) {
 }
@@ -289,7 +285,20 @@ void DuckLakeTableStats::MergeFileStats(const DuckLakeDataFile &file) {
 	}
 }
 
+void DuckLakeColumnStats::SetValidity(BaseStatistics &stats) const {
+	stats.Set(StatsInfo::CAN_HAVE_NULL_AND_VALID_VALUES);
+	if (has_null_count && null_count == 0) {
+		stats.Set(StatsInfo::CANNOT_HAVE_NULL_VALUES);
+	}
+	if (has_null_count && has_num_values && null_count == num_values) {
+		stats.Set(StatsInfo::CANNOT_HAVE_VALID_VALUES);
+	}
+}
+
 unique_ptr<BaseStatistics> DuckLakeColumnStats::CreateNumericStats() const {
+	if (!has_min && !has_max) {
+		return NumericStats::CreateUnknown(type).ToUnique();
+	}
 	auto stats = NumericStats::CreateEmpty(type);
 	if (has_min) {
 		auto min_value = Value(min).DefaultTryCastAs(type);
@@ -305,18 +314,7 @@ unique_ptr<BaseStatistics> DuckLakeColumnStats::CreateNumericStats() const {
 		}
 		NumericStats::SetMax(stats, *max_value);
 	}
-	if (!has_min && !has_max) {
-		stats = NumericStats::CreateUnknown(type);
-	}
-
-	// set null count
-	if (!has_null_count || null_count > 0) {
-		stats.SetHasNullFast();
-	}
-	if (!has_null_count || !has_num_values || null_count != num_values) {
-		//! Not *all* values are NULL, set HasNoNull
-		stats.SetHasNoNullFast();
-	}
+	SetValidity(stats);
 	return stats.ToUnique();
 }
 
@@ -334,15 +332,7 @@ unique_ptr<BaseStatistics> DuckLakeColumnStats::CreateGeometryStats() const {
 	}
 	auto &geometry_stats = extra_stats->Cast<DuckLakeColumnGeoStats>();
 	auto stats = geometry_stats.ToStats();
-
-	// set null count
-	if (!has_null_count || null_count > 0) {
-		stats->SetHasNullFast();
-	}
-	if (!has_null_count || !has_num_values || null_count != num_values) {
-		//! Not *all* values are NULL, set HasNoNull
-		stats->SetHasNoNullFast();
-	}
+	SetValidity(*stats);
 	return stats;
 }
 
@@ -356,14 +346,7 @@ unique_ptr<BaseStatistics> DuckLakeColumnStats::CreateStringStats() const {
 		StringStats::SetMax(stats, string_t(max),
 		                    EffectiveMaxIsExact() ? StringStatsType::EXACT_STATS : StringStatsType::TRUNCATED_STATS);
 	}
-
-	if (has_null_count && null_count == 0) {
-		stats.Set(StatsInfo::CANNOT_HAVE_NULL_VALUES);
-	}
-	if (has_null_count && has_num_values && null_count == num_values) {
-		//! All values are NULL
-		stats.Set(StatsInfo::CANNOT_HAVE_VALID_VALUES);
-	}
+	SetValidity(stats);
 	return stats.ToUnique();
 }
 
@@ -397,12 +380,7 @@ unique_ptr<BaseStatistics> DuckLakeColumnStats::ToStats() const {
 			return CreateNumericStats();
 		}
 		auto stats = NumericStats::CreateEmpty(type);
-		if (!has_null_count || null_count > 0) {
-			stats.SetHasNullFast();
-		}
-		if (!has_null_count || !has_num_values || null_count != num_values) {
-			stats.SetHasNoNullFast();
-		}
+		SetValidity(stats);
 		return stats.ToUnique();
 	}
 	case LogicalTypeId::VARCHAR:
