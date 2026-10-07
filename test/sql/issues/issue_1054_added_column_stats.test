@@ -418,7 +418,7 @@ SELECT (SELECT count(*) FROM dl.ri WHERE b = 42), (SELECT max(b) FROM dl.ri)
 ----
 2	42
 
-# and of a column that only the newer inlined rows hold, when the rewrite leaves no file
+# and of a column that only the newer inlined rows hold, when the rewrite creates no file
 statement ok
 CREATE TABLE dl.rn (a INTEGER)
 
