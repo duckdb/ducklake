@@ -234,3 +234,28 @@ query II
 SELECT min(v), max(v) FROM dl.n
 ----
 0.5	16777219.0
+
+# several fields widened in one commit
+statement ok
+CREATE TABLE dl.m (s STRUCT(a FLOAT, b FLOAT, c INTEGER))
+
+statement ok
+INSERT INTO dl.m SELECT {'a': 0.1::FLOAT, 'b': -0.1::FLOAT, 'c': 1} FROM range(10)
+
+statement ok
+ALTER TABLE dl.m ALTER COLUMN s TYPE STRUCT(a DOUBLE, b DOUBLE, c INTEGER)
+
+query II
+SELECT count(*), max(s.a) FROM dl.m WHERE s.a > 0.1
+----
+10	0.10000000149011612
+
+query II
+SELECT count(*), min(s.b) FROM dl.m WHERE s.b < -0.1
+----
+10	-0.10000000149011612
+
+query I
+SELECT count(*) FROM dl.m WHERE s.c = 1
+----
+10
