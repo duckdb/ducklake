@@ -221,6 +221,50 @@ string PostgresMetadataManager::GetColumnTypeInternal(const LogicalType &column_
 	}
 }
 
+//! Sets a full replica identity on the matching metadata tables without a primary key
+static string ReplicaIdentityFullSql(const string &table_name_filter) {
+	return StringUtil::Format(R"(
+DO $$
+DECLARE
+	tbl regclass;
+BEGIN
+	FOR tbl IN SELECT c.oid FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+	WHERE n.nspname = {METADATA_SCHEMA_NAME_LITERAL} AND c.relname %s AND c.relkind = 'r' AND c.relreplident = 'd'
+	AND NOT EXISTS (SELECT 1 FROM pg_index i WHERE i.indrelid = c.oid AND i.indisprimary) LOOP
+		EXECUTE format('ALTER TABLE %%s REPLICA IDENTITY FULL', tbl);
+	END LOOP;
+END
+$$;
+)",
+	                          table_name_filter);
+}
+
+void PostgresMetadataManager::SetReplicaIdentity() {
+	// publications that publish updates and deletes need a replica identity
+	auto query = ReplicaIdentityFullSql("LIKE 'ducklake\\_%'");
+	auto result = Execute(DuckLakeSnapshot(), query);
+	result->ThrowIfError("Failed to set the replica identity of the DuckLake metadata tables: ");
+}
+
+void PostgresMetadataManager::InitializeDuckLake(bool has_explicit_schema, DuckLakeEncryption encryption) {
+	DuckLakeMetadataManager::InitializeDuckLake(has_explicit_schema, encryption);
+	SetReplicaIdentity();
+}
+
+void PostgresMetadataManager::MigrateV10(bool allow_failures) {
+	DuckLakeMetadataManager::MigrateV10(allow_failures);
+	SetReplicaIdentity();
+}
+
+string PostgresMetadataManager::ReplicaIdentitySql(const vector<string> &table_names) {
+	if (table_names.empty()) {
+		return string();
+	}
+	auto table_list = StringUtil::Join(table_names, table_names.size(), ", ",
+	                                   [](const string &name) { return SQLString::ToString(name); });
+	return ReplicaIdentityFullSql("IN (" + table_list + ")");
+}
+
 bool PostgresMetadataManager::InlinedDeletionTableExists(const string &table_name) {
 	auto &catalog = transaction.GetCatalog();
 	auto remote_query = StringUtil::Format(

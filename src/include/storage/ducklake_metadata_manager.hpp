@@ -423,6 +423,10 @@ public:
 	                                           bool create_if_not_exists = false);
 	//! Probe for the physical inlined-deletion table without aborting the active metadata transaction.
 	virtual bool InlinedDeletionTableExists(const string &table_name);
+	//! SQL that gives new metadata tables a replica identity, if the metadata database needs one
+	virtual string ReplicaIdentitySql(const vector<string> &table_names) {
+		return string();
+	}
 	virtual string WriteNewInlinedTables(DuckLakeSnapshot commit_snapshot, const vector<DuckLakeTableInfo> &tables);
 	virtual string GetInlinedTableQueries(DuckLakeSnapshot commit_snapshot, const DuckLakeTableInfo &table,
 	                                      vector<string> &inlined_tables, string &inlined_table_queries);

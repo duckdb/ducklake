@@ -1,0 +1,154 @@
+# name: test/sql/metadata/postgres_publication_replica_identity.test
+# description: metadata tables on Postgres can be updated and deleted under a publication
+# group: [metadata]
+
+require ducklake
+
+require parquet
+
+require postgres_scanner
+
+require-env DUCKLAKE_CI
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'dbname=ducklakedb' AS pg (TYPE postgres)
+
+statement ok
+CALL postgres_execute('pg', 'DROP PUBLICATION IF EXISTS pub_replica_identity')
+
+statement ok
+CALL postgres_execute('pg', 'DROP SCHEMA IF EXISTS pub_replica_identity CASCADE')
+
+statement ok
+CALL postgres_execute('pg', 'DROP SCHEMA IF EXISTS pub_replica_identity_v10 CASCADE')
+
+statement ok
+CALL postgres_execute('pg', 'CREATE SCHEMA pub_replica_identity')
+
+statement ok
+CALL postgres_execute('pg', 'CREATE SCHEMA pub_replica_identity_v10')
+
+# a publication that publishes updates and deletes of every table in the metadata schemas
+statement ok
+CALL postgres_execute('pg', 'CREATE PUBLICATION pub_replica_identity
+FOR TABLES IN SCHEMA pub_replica_identity, pub_replica_identity_v10')
+
+statement ok
+ATTACH 'ducklake:postgres:dbname=ducklakedb' AS dl
+(DATA_PATH '{DATA_PATH}/pub_replica_identity', METADATA_SCHEMA 'pub_replica_identity', DATA_INLINING_ROW_LIMIT 10)
+
+statement ok
+CREATE TABLE dl.t (x INT)
+
+statement ok
+INSERT INTO dl.t VALUES (1), (2)
+
+statement ok
+INSERT INTO dl.t VALUES (3)
+
+statement ok
+DELETE FROM dl.t WHERE x = 1
+
+statement ok
+INSERT INTO dl.t SELECT range FROM range(100, 200)
+
+statement ok
+DELETE FROM dl.t WHERE x = 100
+
+statement ok
+ALTER TABLE dl.t ADD COLUMN y INT
+
+statement ok
+INSERT INTO dl.t VALUES (4, 4)
+
+statement ok
+UPDATE dl.t SET y = 5 WHERE x = 4
+
+# inlined tables created by commits get a full replica identity too
+query II
+SELECT * FROM postgres_query('pg', 'SELECT c.relname::VARCHAR, c.relreplident::VARCHAR FROM pg_class c
+JOIN pg_namespace n ON n.oid = c.relnamespace
+WHERE n.nspname = ''pub_replica_identity'' AND c.relname LIKE ''ducklake\_inlined\_%''') ORDER BY ALL
+----
+ducklake_inlined_data_1_1	f
+ducklake_inlined_data_1_2	f
+ducklake_inlined_data_tables	f
+ducklake_inlined_delete_1	f
+
+statement ok
+FROM ducklake_flush_inlined_data('dl')
+
+statement ok
+FROM ducklake_rewrite_data_files('dl', 't', delete_threshold => 0)
+
+query III
+SELECT count(*), min(x), max(y) FROM dl.t
+----
+102	2	5
+
+statement ok
+DROP TABLE dl.t
+
+statement ok
+CALL ducklake_expire_snapshots('dl', older_than => now())
+
+statement ok
+CALL ducklake_cleanup_old_files('dl', cleanup_all => true)
+
+# every metadata table without a primary key has a full replica identity
+query I
+SELECT count(*) FROM postgres_query('pg', 'SELECT c.relname FROM pg_class c
+JOIN pg_namespace n ON n.oid = c.relnamespace
+WHERE n.nspname = ''pub_replica_identity'' AND c.relkind = ''r'' AND c.relreplident = ''d''
+AND NOT EXISTS (SELECT 1 FROM pg_index i WHERE i.indrelid = c.oid AND i.indisprimary)')
+----
+0
+
+statement ok
+DETACH dl
+
+# a v1.0 catalog migrated to v1.1 gets new metadata tables
+statement ok
+ATTACH 'ducklake:postgres:dbname=ducklakedb' AS dl10
+(DATA_PATH '{DATA_PATH}/pub_replica_identity_v10', METADATA_SCHEMA 'pub_replica_identity_v10', DUCKLAKE_VERSION '1.0')
+
+statement ok
+CREATE VIEW dl10.v AS SELECT 1 AS a
+
+statement ok
+DETACH dl10
+
+statement ok
+ATTACH 'ducklake:postgres:dbname=ducklakedb' AS dl10
+(DATA_PATH '{DATA_PATH}/pub_replica_identity_v10', METADATA_SCHEMA 'pub_replica_identity_v10', AUTOMATIC_MIGRATION TRUE)
+
+statement ok
+COMMENT ON COLUMN dl10.v.a IS 'first'
+
+statement ok
+COMMENT ON COLUMN dl10.v.a IS 'second'
+
+statement ok
+DROP VIEW dl10.v
+
+query I
+SELECT count(*) FROM postgres_query('pg', 'SELECT c.relname FROM pg_class c
+JOIN pg_namespace n ON n.oid = c.relnamespace
+WHERE n.nspname = ''pub_replica_identity_v10'' AND c.relkind = ''r'' AND c.relreplident = ''d''
+AND NOT EXISTS (SELECT 1 FROM pg_index i WHERE i.indrelid = c.oid AND i.indisprimary)')
+----
+0
+
+statement ok
+DETACH dl10
+
+statement ok
+CALL postgres_execute('pg', 'DROP PUBLICATION pub_replica_identity')
+
+statement ok
+CALL postgres_execute('pg', 'DROP SCHEMA pub_replica_identity CASCADE')
+
+statement ok
+CALL postgres_execute('pg', 'DROP SCHEMA pub_replica_identity_v10 CASCADE')

@@ -29,7 +29,10 @@ public:
 	}
 
 	string GetColumnTypeInternal(const LogicalType &type) override;
+	void InitializeDuckLake(bool has_explicit_schema, DuckLakeEncryption encryption) override;
 	bool InlinedDeletionTableExists(const string &table_name) override;
+	string ReplicaIdentitySql(const vector<string> &table_names) override;
+	void MigrateV10(bool allow_failures) override;
 	void MigrateInlinedDataTypes() override;
 
 	unique_ptr<QueryResult> Execute(DuckLakeSnapshot snapshot, string &query) override;
@@ -44,6 +47,9 @@ protected:
 	                             const string &metadata_table_prefix) override;
 	string CastValueToTarget(const Value &value, const LogicalType &type) override;
 	string CastStatsToTarget(const string &stats, const LogicalType &type, StatsCastType cast_type) override;
+
+private:
+	void SetReplicaIdentity();
 };
 
 } // namespace duckdb

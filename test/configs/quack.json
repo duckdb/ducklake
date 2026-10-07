@@ -36,6 +36,7 @@
       "reason": "Test only for Postgres as catalog",
       "paths": [
         "test/sql/metadata/ducklake_settings_postgres.test",
+        "test/sql/metadata/postgres_publication_replica_identity.test",
         "test/sql/metadata/metadata_schema_scoped_attach.test",
         "test/sql/benchmark/postgres_catalog.test",
         "test/sql/issues/issue_843_postgres_legacy_inlined_types.test"

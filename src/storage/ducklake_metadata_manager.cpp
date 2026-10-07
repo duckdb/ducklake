@@ -2930,7 +2930,7 @@ string DuckLakeMetadataManager::GetInlinedTableQuery(const DuckLakeTableInfo &ta
 	auto column_defs = GetColumnDefinitions(table.columns);
 	// We created a table here, flag we need to clear our cache at commit
 	MarkPendingCacheClear();
-	return InlinedTableDdlSql(table_name, column_defs, InlinedColNames());
+	return InlinedTableDdlSql(table_name, column_defs, InlinedColNames()) + ReplicaIdentitySql({table_name});
 }
 
 static constexpr idx_t MAX_VALUES_LIST_LENGTH = 65536;
@@ -3347,6 +3347,11 @@ string DuckLakeMetadataManager::WriteNewInlinedFileDeletesSqlBatch(
 	if (created_new_table) {
 		// We create a table here, flag we need to clear our cache at commit
 		MarkPendingCacheClear();
+		vector<string> table_names;
+		for (auto &entry : new_deletes) {
+			table_names.push_back(InlinedFileDeletionTableName(entry.table_id));
+		}
+		batch_queries += ReplicaIdentitySql(table_names);
 	}
 	return batch_queries;
 }
