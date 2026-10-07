@@ -94,8 +94,7 @@ public:
 	const vector<DuckLakeInlinedTableInfo> &GetInlinedDataTables() const {
 		return inlined_data_tables;
 	}
-	//! The inlined data tables to read at the snapshot, skipping the dropped ones and, for a reader of local changes,
-	//! the flushed ones
+	//! The inlined data tables at the snapshot, without the flushed ones when local changes are included
 	vector<DuckLakeInlinedTableInfo> GetInlinedDataTables(DuckLakeTransaction &transaction, DuckLakeSnapshot snapshot,
 	                                                      bool include_local_changes = true) const;
 	const ColumnDefinition &GetColumnByFieldId(FieldIndex field_index) const;

@@ -166,5 +166,10 @@ SELECT count(*) FROM dl.g
 ----
 99
 
+query II
+SELECT change_type, i FROM ducklake_table_changes('dl', 'main', 'g', getvariable('v3'), getvariable('v3'))
+----
+delete	0
+
 statement ok
 ROLLBACK

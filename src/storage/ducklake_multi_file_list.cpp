@@ -569,7 +569,6 @@ DuckLakeFileData GetDeleteData(const DuckLakeDataFile &file) {
 	return result;
 }
 
-//! Remove the files the transaction dropped and attach its local delete files
 template <class T>
 static void ApplyDroppedFilesAndLocalDeletes(DuckLakeTransaction &transaction, TableIndex table_id, vector<T> &files) {
 	if (transaction.HasDroppedFiles()) {
@@ -651,7 +650,6 @@ void DuckLakeMultiFileList::GetFilesForTable() const {
 	auto transaction_ref = read_info.GetTransaction();
 	auto &transaction = *transaction_ref;
 	if (!IsTransactionLocal(read_info.table_id)) {
-		// not a transaction local table - read the file list from the metadata store
 		auto &metadata_manager = transaction.GetMetadataManager();
 		files = metadata_manager.GetFilesForTable(read_info.table, read_info.snapshot, filter_info.get(),
 		                                          read_info.include_local_changes);
@@ -715,7 +713,8 @@ void DuckLakeMultiFileList::GetTableDeletions() const {
 	auto transaction_ref = read_info.GetTransaction();
 	auto &transaction = *transaction_ref;
 	auto &metadata_manager = transaction.GetMetadataManager();
-	delete_scans = metadata_manager.GetTableDeletions(read_info.table, *read_info.start_snapshot, read_info.snapshot);
+	delete_scans = metadata_manager.GetTableDeletions(read_info.table, *read_info.start_snapshot, read_info.snapshot,
+	                                                  read_info.include_local_changes);
 	for (auto &file : delete_scans) {
 		DuckLakeFileListEntry file_entry;
 		file_entry.file = file.file;
