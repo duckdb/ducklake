@@ -518,14 +518,16 @@ struct DuckLakeMergeAdjacentOptions {
 	optional_idx max_file_size;
 	//! If set, only files written at or after this timestamp are considered for compaction
 	Value newer_than;
+	//! If set, only files written before this timestamp are considered for compaction
+	Value older_than;
 };
 
-struct DuckLakeFileSizeOptions {
-	optional_idx min_file_size;
-	optional_idx max_file_size;
+struct DuckLakeFileSizeOptions : public DuckLakeMergeAdjacentOptions {
+	DuckLakeFileSizeOptions(const DuckLakeMergeAdjacentOptions &options, idx_t target_file_size)
+	    : DuckLakeMergeAdjacentOptions(options), target_file_size(target_file_size) {
+	}
+
 	idx_t target_file_size;
-	//! If set, only files written at or after this timestamp are considered for compaction
-	Value newer_than;
 };
 
 struct DuckLakeTableSizeInfo {

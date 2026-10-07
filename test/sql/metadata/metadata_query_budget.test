@@ -1,0 +1,394 @@
+# name: test/sql/metadata/metadata_query_budget.test
+# description: Metadata queries of common operations do not grow with the files or tables they touch, or the lake size
+# group: [metadata]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/metadata_query_budget.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/metadata_query_budget')
+
+statement ok
+CALL ducklake.set_option('data_inlining_row_limit', 0)
+
+# a single writer thread rotates files deterministically
+statement ok
+SET threads = 1
+
+statement ok
+CREATE TABLE ducklake.few (id BIGINT, v VARCHAR)
+
+statement ok
+CREATE TABLE ducklake.many (id BIGINT, v VARCHAR)
+
+statement ok
+CREATE TABLE ducklake.altered (id BIGINT)
+
+statement ok
+CALL ducklake.set_option('parquet_row_group_size', 2048, table_name => 'few')
+
+statement ok
+CALL ducklake.set_option('parquet_row_group_size', 2048, table_name => 'many')
+
+statement ok
+CREATE MACRO metadata_queries() AS (SELECT count(*) FROM duckdb_logs_parsed('DuckLakeMetadata'))
+
+statement ok
+CREATE MACRO warm_up() AS TABLE SELECT count(*) FROM ducklake.few UNION ALL SELECT count(*) FROM ducklake.many
+
+# inserts that write 4 and 40 files
+statement ok
+SET ducklake_target_file_size = '4KB'
+
+statement ok
+FROM warm_up()
+
+statement ok
+CALL enable_logging('DuckLakeMetadata')
+
+statement ok
+INSERT INTO ducklake.few SELECT i, 'v' || i FROM range(4 * 2048) t(i)
+
+statement ok
+SET VARIABLE few_files_insert = metadata_queries()
+
+statement ok
+CALL disable_logging()
+
+statement ok
+CALL truncate_duckdb_logs()
+
+statement ok
+FROM warm_up()
+
+statement ok
+CALL enable_logging('DuckLakeMetadata')
+
+statement ok
+INSERT INTO ducklake.many SELECT i, 'v' || i FROM range(40 * 2048) t(i)
+
+statement ok
+SET VARIABLE many_files_insert = metadata_queries()
+
+statement ok
+CALL disable_logging()
+
+statement ok
+CALL truncate_duckdb_logs()
+
+statement ok
+RESET ducklake_target_file_size
+
+query II
+SELECT (SELECT count(*) FROM ducklake_list_files('ducklake', 'few')),
+(SELECT count(*) FROM ducklake_list_files('ducklake', 'many'))
+----
+4	40
+
+# deletes that write a delete file for each of 4 and 40 files
+
+statement ok
+FROM warm_up()
+
+statement ok
+CALL enable_logging('DuckLakeMetadata')
+
+statement ok
+DELETE FROM ducklake.few WHERE id % 2048 = 0
+
+statement ok
+SET VARIABLE few_files_delete = metadata_queries()
+
+statement ok
+CALL disable_logging()
+
+statement ok
+CALL truncate_duckdb_logs()
+
+statement ok
+FROM warm_up()
+
+statement ok
+CALL enable_logging('DuckLakeMetadata')
+
+statement ok
+DELETE FROM ducklake.many WHERE id % 2048 = 0
+
+statement ok
+SET VARIABLE many_files_delete = metadata_queries()
+
+statement ok
+CALL disable_logging()
+
+statement ok
+CALL truncate_duckdb_logs()
+
+query II
+SELECT (SELECT count(*) FROM ducklake.few), (SELECT count(*) FROM ducklake.many)
+----
+8188	81880
+
+query II
+SELECT getvariable('few_files_insert') > 0 AND getvariable('few_files_insert') = getvariable('many_files_insert'),
+getvariable('few_files_delete') > 0 AND getvariable('few_files_delete') = getvariable('many_files_delete')
+----
+true	true
+
+# transactions that insert into 2 and 12 tables, and that create 2 and 12 tables with data
+loop i 0 12
+
+statement ok
+CREATE TABLE ducklake.target_{i} (a INTEGER)
+
+endloop
+
+statement ok
+FROM warm_up()
+
+statement ok
+CALL enable_logging('DuckLakeMetadata')
+
+statement ok
+BEGIN
+
+loop i 0 2
+
+statement ok
+INSERT INTO ducklake.target_{i} VALUES ({i})
+
+endloop
+
+statement ok
+COMMIT
+
+statement ok
+SET VARIABLE insert_2_tables = metadata_queries()
+
+statement ok
+CALL disable_logging()
+
+statement ok
+CALL truncate_duckdb_logs()
+
+statement ok
+FROM warm_up()
+
+statement ok
+CALL enable_logging('DuckLakeMetadata')
+
+statement ok
+BEGIN
+
+loop i 0 12
+
+statement ok
+INSERT INTO ducklake.target_{i} VALUES ({i})
+
+endloop
+
+statement ok
+COMMIT
+
+statement ok
+SET VARIABLE insert_12_tables = metadata_queries()
+
+statement ok
+CALL disable_logging()
+
+statement ok
+CALL truncate_duckdb_logs()
+
+statement ok
+FROM warm_up()
+
+statement ok
+CALL enable_logging('DuckLakeMetadata')
+
+statement ok
+BEGIN
+
+loop i 0 2
+
+statement ok
+CREATE TABLE ducklake.ctas_few_{i} AS SELECT {i} AS a
+
+endloop
+
+statement ok
+COMMIT
+
+statement ok
+SET VARIABLE ctas_2_tables = metadata_queries()
+
+statement ok
+CALL disable_logging()
+
+statement ok
+CALL truncate_duckdb_logs()
+
+statement ok
+FROM warm_up()
+
+statement ok
+CALL enable_logging('DuckLakeMetadata')
+
+statement ok
+BEGIN
+
+loop i 0 12
+
+statement ok
+CREATE TABLE ducklake.ctas_many_{i} AS SELECT {i} AS a
+
+endloop
+
+statement ok
+COMMIT
+
+statement ok
+SET VARIABLE ctas_12_tables = metadata_queries()
+
+statement ok
+CALL disable_logging()
+
+statement ok
+CALL truncate_duckdb_logs()
+
+# catalogs without the Appender look up the path of every table that a commit writes to, once
+query II
+SELECT getvariable('insert_2_tables') > 0 AND getvariable('insert_12_tables') - getvariable('insert_2_tables') <= 10
+AND getvariable('insert_12_tables') > 0,
+getvariable('ctas_2_tables') > 0 AND getvariable('ctas_2_tables') = getvariable('ctas_12_tables')
+----
+true	true
+
+# the same operations on a lake and on the lake grown by 30 tables
+loop phase 0 2
+
+statement ok
+DETACH ducklake
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake
+
+statement ok
+CALL enable_logging('DuckLakeMetadata')
+
+statement ok
+SELECT count(*) FROM ducklake.few WHERE id = 3
+
+statement ok
+SET VARIABLE cold_read_{phase} = metadata_queries()
+
+statement ok
+CALL disable_logging()
+
+statement ok
+CALL truncate_duckdb_logs()
+
+statement ok
+FROM warm_up()
+
+statement ok
+CALL enable_logging('DuckLakeMetadata')
+
+statement ok
+INSERT INTO ducklake.few VALUES ({phase}, 'insert')
+
+statement ok
+SET VARIABLE insert_{phase} = metadata_queries()
+
+statement ok
+CALL disable_logging()
+
+statement ok
+CALL truncate_duckdb_logs()
+
+statement ok
+SET VARIABLE insert_snapshot_{phase} = (SELECT id FROM ducklake.current_snapshot())
+
+statement ok
+FROM warm_up()
+
+statement ok
+CALL enable_logging('DuckLakeMetadata')
+
+statement ok
+CREATE TABLE ducklake.created_{phase} (a INTEGER, b VARCHAR)
+
+statement ok
+SET VARIABLE create_{phase} = metadata_queries()
+
+statement ok
+CALL disable_logging()
+
+statement ok
+CALL truncate_duckdb_logs()
+
+statement ok
+FROM warm_up()
+
+statement ok
+CALL enable_logging('DuckLakeMetadata')
+
+statement ok
+ALTER TABLE ducklake.altered ADD COLUMN c{phase} INTEGER
+
+statement ok
+SET VARIABLE alter_{phase} = metadata_queries()
+
+statement ok
+CALL disable_logging()
+
+statement ok
+CALL truncate_duckdb_logs()
+
+statement ok
+FROM warm_up()
+
+statement ok
+CALL enable_logging('DuckLakeMetadata')
+
+query I
+SELECT count(*) FROM ducklake_expire_snapshots('ducklake', versions => [getvariable('insert_snapshot_{phase}')])
+----
+1
+
+statement ok
+SET VARIABLE expire_{phase} = metadata_queries()
+
+statement ok
+CALL disable_logging()
+
+statement ok
+CALL truncate_duckdb_logs()
+
+# grow the lake by 30 tables with data and stats
+statement ok
+BEGIN
+
+loop i 0 30
+
+statement ok
+CREATE TABLE ducklake.background_{phase}_{i} AS SELECT {i} AS a, 'x' AS b
+
+endloop
+
+statement ok
+COMMIT
+
+endloop
+
+query IIIII
+SELECT getvariable('cold_read_0') > 0 AND getvariable('cold_read_0') = getvariable('cold_read_1'),
+getvariable('insert_0') > 0 AND getvariable('insert_0') = getvariable('insert_1'),
+getvariable('create_0') > 0 AND getvariable('create_0') = getvariable('create_1'),
+getvariable('alter_0') > 0 AND getvariable('alter_0') = getvariable('alter_1'),
+getvariable('expire_0') > 0 AND getvariable('expire_0') = getvariable('expire_1')
+----
+true	true	true	true	true

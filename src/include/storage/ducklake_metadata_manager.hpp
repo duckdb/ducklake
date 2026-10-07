@@ -344,6 +344,9 @@ public:
 	static string GetNetInlinedRowCountSql(const string &inlined_table_name, const DuckLakeInlinedColNames &col_names);
 	static string GetTableColumnSchemaSql(TableIndex table_id);
 	static string GetInlinedTableNamesSql(TableIndex table_id);
+	static string GetInlinedTablesBeforeSchemaChangeSql(TableIndex table_id);
+	//! The top-level columns of each inlined data table at the schema version of that table
+	static string GetInlinedTableColumnsSql(optional_idx table_id = optional_idx());
 	//! The inserts of the given rows, in batches
 	static string InsertValuesSql(const string &table_name, const vector<string> &values);
 	unordered_set<string> GetInlinedTableNames(TableIndex table_id);
@@ -430,6 +433,8 @@ public:
 	static string InlinedTableRegistrationTuple(idx_t table_id, const string &table_name, idx_t schema_version);
 	static string LatestInlinedTableQuery(idx_t table_id);
 	static string DropDataFiles(const set<DataFileIndex> &dropped_files);
+	//! Selects the given data files that are still in the metadata
+	static string GetExistingDataFilesSql(const set<DataFileIndex> &files);
 	//! Caller supplies one resolved path per overwritten file, in the same order.
 	static string DeleteOverwrittenDeleteFiles(const vector<DuckLakeOverwrittenDeleteFile> &overwritten_files,
 	                                           const vector<DuckLakePath> &resolved_paths);
@@ -558,15 +563,6 @@ public:
 	DuckLakePath GetRelativePath(TableIndex table_id, const string &path, const vector<DuckLakeTableInfo> &new_tables,
 	                             vector<DuckLakeSchemaInfo> &new_schemas_result);
 
-	static DuckLakePath GetRelativePath(SchemaIndex schema_id, const string &path,
-	                                    const vector<DuckLakeSchemaInfo> &new_schemas_result,
-	                                    const std::function<unique_ptr<QueryResult>(string)> &query_executor,
-	                                    const string &base_data_path, const string &separator);
-	static DuckLakePath GetRelativePath(TableIndex table_id, const string &path,
-	                                    const vector<DuckLakeTableInfo> &new_tables,
-	                                    const vector<DuckLakeSchemaInfo> &new_schemas_result,
-	                                    const std::function<unique_ptr<QueryResult>(string)> &query_executor,
-	                                    const string &base_data_path, const string &separator);
 	static string StorePath(string path, const string &separator);
 	static string LoadPath(string path, const string &separator);
 	static string FromRelativePath(const DuckLakePath &path, const string &base_path, const string &separator);
@@ -575,7 +571,6 @@ public:
 	                               const std::function<unique_ptr<QueryResult>(string)> &query_executor,
 	                               const string &base_data_path, const string &separator);
 	static string GetPathForTable(TableIndex table_id, const vector<DuckLakeTableInfo> &new_tables,
-	                              const vector<DuckLakeSchemaInfo> &new_schemas_result,
 	                              const std::function<unique_ptr<QueryResult>(string)> &query_executor,
 	                              const string &base_data_path, const string &separator);
 

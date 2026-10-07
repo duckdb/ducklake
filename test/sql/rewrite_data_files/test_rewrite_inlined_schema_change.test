@@ -1,0 +1,179 @@
+# name: test/sql/rewrite_data_files/test_rewrite_inlined_schema_change.test
+# description: rewrite_data_files folds inlined data into the table stats as the scan reads it
+# group: [rewrite_data_files]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/rewrite_alter', DATA_INLINING_ROW_LIMIT 10)
+
+statement ok
+CREATE TABLE dl.t (id INTEGER, v INTEGER)
+
+statement ok
+INSERT INTO dl.t SELECT i, i FROM range(20) r(i)
+
+statement ok
+INSERT INTO dl.t VALUES (1000, 1)
+
+statement ok
+ALTER TABLE dl.t ADD COLUMN w INTEGER
+
+statement ok
+INSERT INTO dl.t VALUES (2000, 2, 7)
+
+statement ok
+DELETE FROM dl.t WHERE id = 5
+
+query II
+SELECT files_processed, files_created FROM ducklake_rewrite_data_files('dl', 't', delete_threshold => 0)
+----
+1	1
+
+query IIII
+SELECT count(*), sum(id), sum(v), sum(w) FROM dl.t
+----
+21	3185	188	7
+
+# a renamed column is read from the older inlined table by its old name
+statement ok
+CREATE TABLE dl.r (id INTEGER, v INTEGER)
+
+statement ok
+INSERT INTO dl.r SELECT i, i FROM range(20) r(i)
+
+statement ok
+INSERT INTO dl.r VALUES (1000, 100)
+
+statement ok
+ALTER TABLE dl.r RENAME v TO x
+
+statement ok
+INSERT INTO dl.r VALUES (2000, -1)
+
+statement ok
+DELETE FROM dl.r WHERE id = 0
+
+query II
+SELECT files_processed, files_created FROM ducklake_rewrite_data_files('dl', 'r', delete_threshold => 0)
+----
+1	1
+
+query II
+SELECT min(x), max(x) FROM dl.r
+----
+-1	100
+
+query II
+EXPLAIN ANALYZE SELECT min(x), max(x) FROM dl.r
+----
+analyzed_plan	<!REGEX>:.*TABLE_SCAN.*
+
+# swap two column names, so the older inlined table has both names for other columns
+statement ok
+CREATE TABLE dl.s (a INTEGER, b INTEGER)
+
+statement ok
+INSERT INTO dl.s SELECT i, i FROM range(20) r(i)
+
+statement ok
+INSERT INTO dl.s VALUES (1000, 1)
+
+statement ok
+BEGIN
+
+statement ok
+ALTER TABLE dl.s RENAME a TO c
+
+statement ok
+ALTER TABLE dl.s RENAME b TO a
+
+statement ok
+ALTER TABLE dl.s RENAME c TO b
+
+statement ok
+COMMIT
+
+statement ok
+INSERT INTO dl.s VALUES (2, 3)
+
+statement ok
+DELETE FROM dl.s WHERE b = 5
+
+query II
+SELECT files_processed, files_created FROM ducklake_rewrite_data_files('dl', 's', delete_threshold => 0)
+----
+1	1
+
+query II
+SELECT b, a FROM dl.s WHERE b = 1000
+----
+1000	1
+
+query II
+SELECT max(b), max(a) FROM dl.s
+----
+1000	19
+
+# the bounds of an older FLOAT inlined table do not read back exactly as DOUBLE
+statement ok
+CREATE TABLE dl.f (id INTEGER, v FLOAT)
+
+statement ok
+INSERT INTO dl.f VALUES (1000, 0.1)
+
+statement ok
+ALTER TABLE dl.f ALTER v TYPE DOUBLE
+
+statement ok
+INSERT INTO dl.f SELECT i, 0 FROM range(20) r(i)
+
+statement ok
+INSERT INTO dl.f VALUES (2000, 0.05)
+
+statement ok
+DELETE FROM dl.f WHERE id = 5
+
+query II
+SELECT files_processed, files_created FROM ducklake_rewrite_data_files('dl', 'f', delete_threshold => 0)
+----
+1	1
+
+query I
+SELECT id FROM dl.f WHERE v > 0.1
+----
+1000
+
+# inlined values are read with their type on catalogs that store them differently
+statement ok
+CREATE TABLE dl.c (id INTEGER, d DOUBLE, s VARCHAR)
+
+statement ok
+INSERT INTO dl.c SELECT i, i, 'a' || i FROM range(20) r(i)
+
+statement ok
+INSERT INTO dl.c VALUES (1000, 9.5, 'zé'), (1001, 100.5, 'é')
+
+statement ok
+DELETE FROM dl.c WHERE id = 5
+
+query II
+SELECT files_processed, files_created FROM ducklake_rewrite_data_files('dl', 'c', delete_threshold => 0)
+----
+1	1
+
+query I
+SELECT id FROM dl.c WHERE s = 'é'
+----
+1001
+
+query II
+SELECT min(d), max(d) FROM dl.c
+----
+0.0	100.5

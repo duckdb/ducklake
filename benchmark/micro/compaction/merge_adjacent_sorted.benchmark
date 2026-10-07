@@ -1,0 +1,30 @@
+# name: benchmark/micro/compaction/merge_adjacent_sorted.benchmark
+# description: Merge 200 overlapping files of a SORTED BY table into sorted files with ducklake_merge_adjacent_files
+# group: [compaction]
+
+name Merge Adjacent Sorted
+group micro
+subgroup compaction
+
+require ducklake
+
+require parquet
+
+argument work merge_sorted_work
+
+include benchmark/micro/fixtures/sorted.benchmark.in
+
+include benchmark/micro/fixtures/restore_cleanup.benchmark.in
+
+run
+SELECT sum(files_processed) AS processed, sum(files_created) AS created
+FROM ducklake_merge_adjacent_files('lake', 'frag');
+
+# The merged rows must come out in sort key order; a missed reset leaves nothing to merge
+result_query III
+SELECT processed, created,
+(SELECT count(*) FILTER (WHERE k < prev) FROM (
+SELECT k, lag(k) OVER (PARTITION BY filename ORDER BY file_row_number) AS prev FROM lake.frag))
+FROM __answer
+----
+200	1	0

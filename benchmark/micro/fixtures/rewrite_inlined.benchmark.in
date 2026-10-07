@@ -1,0 +1,46 @@
+# name: benchmark/micro/fixtures/rewrite_inlined.benchmark.in
+# description: Fifty tables that each have one file with positional deletes and committed inlined rows
+# group: [fixtures]
+
+argument lake rewrite_inlined
+
+cache_file ${lake}_ready.marker
+
+# Three import transactions create the files, then the inlined rows, then the deletions
+load
+EXPORT DATABASE '${BENCHMARK_DIR}/${lake}_gen';
+COPY (SELECT stmt FROM (
+SELECT 0 AS o, k, 'CREATE TABLE lake.r' || k
+|| ' AS SELECT r AS id, r * 3 + ' || k || ' AS v FROM range(2048) t(r);' AS stmt FROM range(50) t(k)
+UNION ALL
+SELECT 1, 0, 'COMMIT; BEGIN;'
+UNION ALL
+SELECT 2, k, 'INSERT INTO lake.r' || k || ' SELECT 100060 + r, r FROM range(5) t(r);' FROM range(50) t(k)
+UNION ALL
+SELECT 3, 0, 'COMMIT; BEGIN;'
+UNION ALL
+SELECT 4, k, 'DELETE FROM lake.r' || k || ' WHERE id % 100 < 60;' FROM range(50) t(k)
+) ORDER BY o, k) TO '${BENCHMARK_DIR}/${lake}_gen/schema.sql' (HEADER false, QUOTE '');
+@create ${lake}_pristine
+@attach ${lake}_pristine AS lake (DATA_PATH '${BENCHMARK_DIR}/${lake}_files')
+CALL lake.set_option('data_inlining_row_limit', 10);
+IMPORT DATABASE '${BENCHMARK_DIR}/${lake}_gen';
+SELECT CASE WHEN (SELECT count(*) <> 50 FROM __ducklake_metadata_lake.ducklake_data_file WHERE end_snapshot IS NULL)
+OR (SELECT count(*) <> 50 FROM __ducklake_metadata_lake.ducklake_delete_file WHERE end_snapshot IS NULL)
+OR (SELECT count(*) <> 805 FROM lake.r49)
+THEN error('unexpected rewrite inlined fixture') END;
+CALL ducklake_delete_orphaned_files('lake', cleanup_all => true);
+DETACH lake;
+COPY (SELECT count(*) FROM glob('${BENCHMARK_DIR}/${lake}_files/**'))
+TO '${BENCHMARK_DIR}/${lake}_filecount.csv' (FORMAT CSV, HEADER false);
+@seal ${lake}_pristine
+COPY (SELECT 1) TO '${BENCHMARK_DIR}/${lake}_ready.marker' (FORMAT CSV);
+DETACH DATABASE IF EXISTS lake;
+@copy ${lake}_pristine TO ${work}
+@attach ${work} AS lake
+CALL ducklake_delete_orphaned_files('lake', cleanup_all => true);
+SELECT CASE WHEN (SELECT count(*) FROM glob('${BENCHMARK_DIR}/${lake}_files/**'))
+<> (SELECT column0 FROM read_csv('${BENCHMARK_DIR}/${lake}_filecount.csv', header = false))
+THEN error('the fixture files were not restored') END;
+
+include benchmark/micro/fixtures/restore_reload.benchmark.in
