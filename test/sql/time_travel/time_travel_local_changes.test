@@ -173,3 +173,42 @@ delete	0
 
 statement ok
 ROLLBACK
+
+# a filtered time travel scan of compacted files does not read the rows inserted in the transaction
+statement ok
+SET threads=1
+
+statement ok
+CREATE TABLE dl.m (id BIGINT)
+
+statement ok
+INSERT INTO dl.m SELECT i FROM range(0, 1000) r(i)
+
+statement ok
+INSERT INTO dl.m SELECT i FROM range(1000, 2000) r(i)
+
+statement ok
+SET VARIABLE v4 = (SELECT max(snapshot_id) FROM dl.snapshots())
+
+statement ok
+INSERT INTO dl.m SELECT i FROM range(2000, 3000) r(i)
+
+statement ok
+CALL ducklake_merge_adjacent_files('dl', 'm')
+
+statement ok
+BEGIN
+
+statement ok
+INSERT INTO dl.m SELECT i FROM range(1000000, 1001000) r(i)
+
+query I
+SELECT count(*) FROM dl.m AT (VERSION => getvariable('v4')) WHERE id < 900000
+----
+2000
+
+statement ok
+ROLLBACK
+
+statement ok
+RESET threads
