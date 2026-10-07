@@ -120,6 +120,13 @@ CREATE VIEW dl10.v AS SELECT 1 AS a
 statement ok
 DETACH dl10
 
+# drop the replica identities, as in a catalog created by an older DuckLake
+statement ok
+CALL postgres_execute('pg', 'DO $$DECLARE tbl regclass; BEGIN
+FOR tbl IN SELECT c.oid FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+WHERE n.nspname = ''pub_replica_identity_v10'' AND c.relkind = ''r'' LOOP
+EXECUTE format(''ALTER TABLE %s REPLICA IDENTITY DEFAULT'', tbl); END LOOP; END$$')
+
 statement ok
 ATTACH 'ducklake:postgres:dbname=ducklakedb' AS dl10
 (DATA_PATH '{DATA_PATH}/pub_replica_identity_v10', METADATA_SCHEMA 'pub_replica_identity_v10', AUTOMATIC_MIGRATION TRUE)

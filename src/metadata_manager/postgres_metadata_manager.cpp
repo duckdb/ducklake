@@ -221,22 +221,22 @@ string PostgresMetadataManager::GetColumnTypeInternal(const LogicalType &column_
 	}
 }
 
-//! Sets a full replica identity on the matching metadata tables without a primary key
-static string ReplicaIdentityFullSql(const string &table_name_filter) {
-	return StringUtil::Format(R"(
-DO $$
+string PostgresMetadataManager::ReplicaIdentityFullSql(const string &table_name_filter) const {
+	auto schema_literal = SQLString::ToString(transaction.GetCatalog().MetadataSchemaName().GetIdentifierName());
+	auto body = StringUtil::Format(R"(
 DECLARE
 	tbl regclass;
 BEGIN
 	FOR tbl IN SELECT c.oid FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
-	WHERE n.nspname = {METADATA_SCHEMA_NAME_LITERAL} AND c.relname %s AND c.relkind = 'r' AND c.relreplident = 'd'
+	WHERE n.nspname = %s AND c.relname %s AND c.relkind = 'r' AND c.relreplident = 'd'
+	AND pg_has_role(c.relowner, 'USAGE')
 	AND NOT EXISTS (SELECT 1 FROM pg_index i WHERE i.indrelid = c.oid AND i.indisprimary) LOOP
 		EXECUTE format('ALTER TABLE %%s REPLICA IDENTITY FULL', tbl);
 	END LOOP;
-END
-$$;
-)",
-	                          table_name_filter);
+END)",
+	                               schema_literal, table_name_filter);
+	// a quoted body cannot be ended by a name in it
+	return "DO " + SQLString::ToString(body) + ";\n";
 }
 
 void PostgresMetadataManager::SetReplicaIdentity() {
@@ -252,6 +252,8 @@ void PostgresMetadataManager::InitializeDuckLake(bool has_explicit_schema, DuckL
 }
 
 void PostgresMetadataManager::MigrateV10(bool allow_failures) {
+	// the migration updates existing tables and creates new ones
+	SetReplicaIdentity();
 	DuckLakeMetadataManager::MigrateV10(allow_failures);
 	SetReplicaIdentity();
 }
