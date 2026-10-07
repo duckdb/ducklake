@@ -62,6 +62,26 @@ SELECT count(*) FROM ducklake_list_files('lake', 't')
 ----
 1
 
+# a metadata function bound after the compaction
+statement ok
+CREATE TABLE lake.c (i INTEGER)
+
+statement ok
+INSERT INTO lake.c VALUES (1)
+
+statement ok
+INSERT INTO lake.c VALUES (2)
+
+statement ok
+ALTER TABLE lake.c SET SORTED BY (COALESCE(sleep_ms(1000), i))
+
+query III
+SELECT c.files_processed, c.files_created, s.snapshot_id > 0
+FROM ducklake_merge_adjacent_files('lake', 'c') c
+CROSS JOIN (SELECT max(snapshot_id) snapshot_id FROM lake.snapshots()) s
+----
+2	1	true
+
 # files added with ducklake_add_data_files are read through name maps, which a fresh attach loads on first use
 statement ok
 CREATE TABLE lake.imported (i INTEGER)

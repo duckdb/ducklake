@@ -61,6 +61,22 @@ vector<BoundOrderByNode> DuckLakeCompactor::BindSortOrders(Binder &binder, const
 	                        columns.GetColumnTypes(), orders);
 }
 
+PhysicalOperator &DuckLakeLogicalCompaction::CreatePlan(ClientContext &context, PhysicalPlanGenerator &planner) {
+	auto &child = planner.CreatePlan(*children[0]);
+	auto &transaction = DuckLakeTransaction::Get(context, table.catalog);
+	if (context.transaction.IsAutoCommit() && !transaction.ChangesMade()) {
+		// the statement is planned, only the scans still read metadata
+		for (auto &source : source_files) {
+			if (source.file.mapping_id.IsValid()) {
+				transaction.GetMappingById(source.file.mapping_id);
+			}
+		}
+		transaction.ReleaseMetadataTransaction();
+	}
+	return planner.Make<DuckLakeCompaction>(types, table, std::move(source_files), std::move(encryption_key),
+	                                        partition_id, std::move(partition_values), row_id_start, child, type);
+}
+
 //===--------------------------------------------------------------------===//
 // Compaction Operator
 //===--------------------------------------------------------------------===//
@@ -755,20 +771,6 @@ static unique_ptr<LogicalOperator> BindCompaction(ClientContext &context, TableF
 		auto delete_threshold = GetDeleteThreshold(cur_table, ducklake_catalog, input);
 		GenerateCompaction(context, transaction, ducklake_catalog, input, cur_table, type, delete_threshold, max_files,
 		                   merge_options, compactions);
-	}
-	if (context.transaction.IsAutoCommit() && !transaction.ChangesMade()) {
-		// the planner reads the table stats and the scans read the name maps, load them before the release
-		for (auto &table_ref : tables) {
-			table_ref.get().GetTableStats(transaction);
-		}
-		for (auto &compaction : compactions) {
-			for (auto &source : compaction->Cast<DuckLakeLogicalCompaction>().source_files) {
-				if (source.file.mapping_id.IsValid()) {
-					transaction.GetMappingById(source.file.mapping_id);
-				}
-			}
-		}
-		transaction.ReleaseMetadataTransaction();
 	}
 	return GenerateCompactionOperator(input, bind_index, compactions);
 }
