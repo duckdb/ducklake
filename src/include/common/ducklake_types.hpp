@@ -28,10 +28,6 @@ public:
 	static bool IsStringType(const LogicalType &type);
 	//! Nested types other than VARIANT, which DuckLake stores without child types
 	static bool IsNested(const LogicalType &type);
-	static bool RequiresCast(const LogicalType &type);
-	static bool RequiresCast(const vector<LogicalType> &types);
-	//! If this type requires a cast, return the type to cast to
-	static LogicalType GetCastedType(const LogicalType &type);
 };
 
 } // namespace duckdb

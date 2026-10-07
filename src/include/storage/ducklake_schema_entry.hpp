@@ -74,7 +74,6 @@ public:
 
 private:
 	DuckLakeCatalogSet &GetCatalogSet(CatalogType type);
-	const DuckLakeCatalogSet &GetCatalogSet(CatalogType type) const;
 	bool HandleCreateConflict(CatalogTransaction transaction, CatalogType type, const string &name,
 	                          OnCreateConflict on_conflict);
 

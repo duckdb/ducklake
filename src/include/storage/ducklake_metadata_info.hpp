@@ -213,8 +213,11 @@ struct DuckLakePartitionFieldInfo {
 	idx_t partition_key_index = 0;
 	FieldIndex field_id;
 	string transform;
+	bool operator==(const DuckLakePartitionFieldInfo &new_field) const {
+		return field_id == new_field.field_id && transform == new_field.transform;
+	}
 	bool operator!=(const DuckLakePartitionFieldInfo &new_field) const {
-		return field_id != new_field.field_id || transform != new_field.transform;
+		return !(*this == new_field);
 	}
 };
 
@@ -223,15 +226,7 @@ struct DuckLakePartitionInfo {
 	TableIndex table_id;
 	vector<DuckLakePartitionFieldInfo> fields;
 	bool operator==(const DuckLakePartitionInfo &new_partition) const {
-		if (table_id != new_partition.table_id || fields.size() != new_partition.fields.size()) {
-			return false;
-		}
-		for (idx_t i = 0; i < fields.size(); i++) {
-			if (fields[i] != new_partition.fields[i]) {
-				return false;
-			}
-		}
-		return true;
+		return table_id == new_partition.table_id && fields == new_partition.fields;
 	}
 	bool operator!=(vector<DuckLakePartitionInfo>::const_reference value) const {
 		return !(*this == value);
@@ -244,9 +239,12 @@ struct DuckLakeSortFieldInfo {
 	string dialect;
 	OrderType sort_direction;
 	OrderByNullType null_order;
+	bool operator==(const DuckLakeSortFieldInfo &new_field) const {
+		return expression == new_field.expression && dialect == new_field.dialect &&
+		       sort_direction == new_field.sort_direction && null_order == new_field.null_order;
+	}
 	bool operator!=(const DuckLakeSortFieldInfo &new_field) const {
-		return expression != new_field.expression || dialect != new_field.dialect ||
-		       sort_direction != new_field.sort_direction || null_order != new_field.null_order;
+		return !(*this == new_field);
 	}
 };
 
@@ -255,15 +253,7 @@ struct DuckLakeSortInfo {
 	TableIndex table_id;
 	vector<DuckLakeSortFieldInfo> fields;
 	bool operator==(const DuckLakeSortInfo &new_sort) const {
-		if (table_id != new_sort.table_id || fields.size() != new_sort.fields.size()) {
-			return false;
-		}
-		for (idx_t i = 0; i < fields.size(); i++) {
-			if (fields[i] != new_sort.fields[i]) {
-				return false;
-			}
-		}
-		return true;
+		return table_id == new_sort.table_id && fields == new_sort.fields;
 	}
 	bool operator!=(vector<DuckLakeSortInfo>::const_reference value) const {
 		return !(*this == value);
@@ -502,13 +492,6 @@ struct DuckLakeCompactionFileEntry {
 	double delete_ratio = 0;
 };
 
-struct DuckLakeRewriteFileEntry {
-	DuckLakeCompactionFileData file;
-	vector<DuckLakeCompactionDeleteFileData> delete_files;
-	optional_idx max_partial_file_snapshot;
-	idx_t schema_version;
-};
-
 struct DuckLakeCompactionEntry {
 	vector<DuckLakeCompactionFileEntry> source_files;
 	vector<DuckLakeDataFile> written_files;
@@ -535,14 +518,16 @@ struct DuckLakeMergeAdjacentOptions {
 	optional_idx max_file_size;
 	//! If set, only files written at or after this timestamp are considered for compaction
 	Value newer_than;
+	//! If set, only files written before this timestamp are considered for compaction
+	Value older_than;
 };
 
-struct DuckLakeFileSizeOptions {
-	optional_idx min_file_size;
-	optional_idx max_file_size;
+struct DuckLakeFileSizeOptions : public DuckLakeMergeAdjacentOptions {
+	DuckLakeFileSizeOptions(const DuckLakeMergeAdjacentOptions &options, idx_t target_file_size)
+	    : DuckLakeMergeAdjacentOptions(options), target_file_size(target_file_size) {
+	}
+
 	idx_t target_file_size;
-	//! If set, only files written at or after this timestamp are considered for compaction
-	Value newer_than;
 };
 
 struct DuckLakeTableSizeInfo {

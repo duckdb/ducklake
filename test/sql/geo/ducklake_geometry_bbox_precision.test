@@ -1,0 +1,41 @@
+# name: test/sql/geo/ducklake_geometry_bbox_precision.test
+# description: Geo bbox stats keep full double precision
+# group: [geo]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/ducklake_geometry_bbox_precision.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/ducklake_geometry_bbox_precision', METADATA_CATALOG 'meta')
+
+statement ok
+CREATE TABLE ducklake.t1(id INT, g GEOMETRY);
+
+statement ok
+INSERT INTO ducklake.t1 VALUES (0, 'POINT(0.1234567 0.1234567)'::GEOMETRY);
+
+query II
+SELECT (SELECT extra_stats FROM meta.ducklake_file_column_stats WHERE column_id = 2), (SELECT extra_stats FROM meta.ducklake_table_column_stats WHERE column_id = 2)
+----
+{"bbox":{"xmin":0.1234567,"xmax":0.1234567,"ymin":0.1234567,"ymax":0.1234567,"zmin":null,"zmax":null,"mmin":null,"mmax":null},"types":["point"]}	{"bbox":{"xmin":0.1234567,"xmax":0.1234567,"ymin":0.1234567,"ymax":0.1234567,"zmin":null,"zmax":null,"mmin":null,"mmax":null},"types":["point"]}
+
+query II
+SELECT (SELECT count(*) FROM ducklake.t1 WHERE g && 'POLYGON((0.1234560 0.1234560, 0.1234568 0.1234560, 0.1234568 0.1234568, 0.1234560 0.1234568, 0.1234560 0.1234560))'::GEOMETRY), (SELECT count(*) FROM ducklake.t1 WHERE g && 'POLYGON((0 0, 1 0, 1 1, 0 1, 0 0))'::GEOMETRY)
+----
+1	1
+
+statement ok
+DETACH ducklake
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/ducklake_geometry_bbox_precision', METADATA_CATALOG 'meta')
+
+query I
+SELECT count(*) FROM ducklake.t1 WHERE g && 'POLYGON((0.1234560 0.1234560, 0.1234568 0.1234560, 0.1234568 0.1234568, 0.1234560 0.1234568, 0.1234560 0.1234560))'::GEOMETRY
+----
+1

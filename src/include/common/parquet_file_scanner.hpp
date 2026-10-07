@@ -42,6 +42,8 @@ public:
 	//! Scan the next chunk. Returns false when done.
 	bool Scan(DataChunk &chunk);
 
+	static Value EncryptionConfig(const string &encryption_key);
+
 private:
 	ClientContext &context;
 	TableFunction parquet_scan;

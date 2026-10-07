@@ -132,8 +132,14 @@ public:
 	void TransactionLocalDelete(ClientContext &context, TableIndex table_id, const string &data_file_path,
 	                            DuckLakeDeleteFile delete_file);
 	void AddDeletes(ClientContext &context, TableIndex table_id, vector<DuckLakeDeleteFile> files);
+	bool HasDatedNewDeletes() const;
+	void SetDeleteCommitSnapshot(ClientContext &context, DuckLakeTransaction &transaction, idx_t commit_snapshot);
 	static void AddDeletesToMap(ClientContext &context, vector<DuckLakeDeleteFile> new_deletes,
 	                            unordered_map<string, vector<DuckLakeDeleteFile>> &delete_file_map);
+
+private:
+	optional_ptr<LocalTableDataChanges> Find(TableIndex table_id);
+	optional_ptr<const LocalTableDataChanges> Find(TableIndex table_id) const;
 
 private:
 	mutable mutex lock;
@@ -302,12 +308,9 @@ public:
 	static string GenerateUUIDv7();
 
 	const LocalTableChanges &GetLocalChanges() const;
-	const set<TableIndex> &GetDroppedTables();
 	const set<TableIndex> &GetDroppedViews();
 	const set<MacroIndex> &GetDroppedScalarMacros();
 	const set<MacroIndex> &GetDroppedTableMacros();
-	const set<TableIndex> &GetRenamedTables();
-	const map<SchemaIndex, unique_ptr<DuckLakeCatalogSet>> &GetNewTables() const;
 	//! Returns the current version of the catalog:
 	//! If there are no uncommitted changes, this is the schema version of the snapshot.
 	//! Otherwise, it is an id that is incremented whenever the schema changes (not stored between restarts)
@@ -324,6 +327,7 @@ public:
 	void ApplyServerSideCommit(idx_t schema_version);
 	//! Post-commit cleanup of empty inlined-data tables superseded by later schema versions.
 	void DropEmptySupersededInlinedTablesClientSide();
+	void ReportPostCommitError(const string &message);
 
 	static DuckLakeGlobalStatsInfo ConvertNewGlobalStats(TableIndex table_id,
 	                                                     const DuckLakeNewGlobalStats &new_global_stats);
@@ -352,6 +356,7 @@ private:
 	void AlterEntryInternal(DuckLakeTableEntry &old_entry, unique_ptr<CatalogEntry> new_entry);
 	void AlterEntryInternal(DuckLakeViewEntry &old_entry, unique_ptr<CatalogEntry> new_entry);
 	map<SchemaIndex, unique_ptr<DuckLakeCatalogSet>> &GetNewMacroMap(CatalogType type) const;
+	optional_ptr<map<SchemaIndex, unique_ptr<DuckLakeCatalogSet>>> GetLocalEntryMap(CatalogType type) const;
 
 	// Invoked at transaction completion, invalidates all schema cache entries referenced by this transaction.
 	void ClearSchemaCachePins();

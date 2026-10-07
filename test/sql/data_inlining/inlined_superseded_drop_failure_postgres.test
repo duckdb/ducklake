@@ -1,0 +1,82 @@
+# name: test/sql/data_inlining/inlined_superseded_drop_failure_postgres.test
+# description: a superseded inlined table that fails to drop on Postgres stays registered and is dropped later
+# group: [data_inlining]
+
+require ducklake
+
+require parquet
+
+require postgres_scanner
+
+require-env DUCKLAKE_CI
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'dbname=ducklakedb' AS pg (TYPE postgres)
+
+statement ok
+CALL postgres_execute('pg', 'DROP SCHEMA IF EXISTS sdrop CASCADE')
+
+statement ok
+ATTACH 'ducklake:postgres:dbname=ducklakedb' AS dl
+(DATA_PATH '{DATA_PATH}/sdrop', METADATA_SCHEMA 'sdrop', DATA_INLINING_ROW_LIMIT 10)
+
+statement ok
+CREATE TABLE dl.t (x INT)
+
+statement ok
+INSERT INTO dl.t VALUES (1), (2)
+
+statement ok
+ALTER TABLE dl.t ADD COLUMN y INT
+
+statement ok
+INSERT INTO dl.t VALUES (3, 3)
+
+# a view on the superseded inlined table makes its drop fail
+statement ok
+CALL postgres_execute('pg', 'CREATE VIEW sdrop.blocker AS SELECT * FROM sdrop.ducklake_inlined_data_1_1')
+
+query I
+SELECT rows_flushed FROM ducklake_flush_inlined_data('dl')
+----
+3
+
+query I
+SELECT table_name FROM __ducklake_metadata_dl.ducklake_inlined_data_tables ORDER BY ALL
+----
+ducklake_inlined_data_1_1
+ducklake_inlined_data_1_2
+
+statement ok
+CALL postgres_execute('pg', 'DROP VIEW sdrop.blocker')
+
+statement ok
+INSERT INTO dl.t VALUES (4, 4)
+
+query I
+SELECT rows_flushed FROM ducklake_flush_inlined_data('dl')
+----
+1
+
+query I
+SELECT table_name FROM __ducklake_metadata_dl.ducklake_inlined_data_tables ORDER BY ALL
+----
+ducklake_inlined_data_1_2
+
+statement ok
+CALL pg_clear_cache()
+
+statement error
+SELECT count(*) FROM pg.sdrop.ducklake_inlined_data_1_1
+----
+does not exist
+
+query II
+SELECT * FROM dl.t ORDER BY x
+----
+1	NULL
+2	NULL
+3	3
+4	4

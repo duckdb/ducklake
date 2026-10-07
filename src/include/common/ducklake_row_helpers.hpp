@@ -28,6 +28,15 @@ inline optional_idx OptIdx(const QueryResultRow &row, idx_t col) {
 	return optional_idx(AsIdx(row, col));
 }
 
+template <class T>
+bool TryReadValue(const QueryResultRow &row, idx_t col, T &out) {
+	if (row.IsNull(col)) {
+		return false;
+	}
+	out = row.template GetValue<T>(col);
+	return true;
+}
+
 inline bool OptBoolFalse(const QueryResultRow &row, idx_t col) {
 	return !row.IsNull(col) && row.GetValue<bool>(col);
 }

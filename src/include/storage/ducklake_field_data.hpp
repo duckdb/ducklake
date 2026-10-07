@@ -126,6 +126,8 @@ public:
 	                                               idx_t &next_column_id);
 	static shared_ptr<DuckLakeFieldData> SetDefault(const DuckLakeFieldData &field_data, FieldIndex field_index,
 	                                                const ColumnDefinition &new_col, bool add_column);
+	static shared_ptr<DuckLakeFieldData> ReplaceRootField(const DuckLakeFieldData &field_data, PhysicalIndex root_index,
+	                                                      unique_ptr<DuckLakeFieldId> new_field);
 
 private:
 	vector<unique_ptr<DuckLakeFieldId>> field_ids;

@@ -19,6 +19,8 @@
 #include "common/index.hpp"
 
 namespace duckdb {
+struct DuckLakeColumnMappingInfo;
+struct DuckLakeNameMapColumnInfo;
 
 struct DuckLakeNameMapEntry {
 	string source_name;
@@ -43,6 +45,10 @@ struct DuckLakeNameMap {
 	//! Create a positional name mapping from source column names to target field IDs.
 	static vector<unique_ptr<DuckLakeNameMapEntry>> CreatePositionalMapping(const vector<string> &source_names,
 	                                                                        const vector<FieldIndex> &target_field_ids);
+	//! Requires parents before children
+	static unique_ptr<DuckLakeNameMap> FromColumnMapping(DuckLakeColumnMappingInfo column_mapping);
+	//! Pre-order, so parents precede children
+	vector<DuckLakeNameMapColumnInfo> FlattenColumns() const;
 };
 
 struct NameMapHashFunction {

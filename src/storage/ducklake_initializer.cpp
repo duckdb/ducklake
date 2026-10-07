@@ -79,12 +79,7 @@ void DuckLakeInitializer::Initialize() {
 	if (options.ducklake_version == DuckLakeVersion::UNSET) {
 		Value setting_val;
 		if (context.TryGetCurrentSetting("ducklake_default_version", setting_val) && !setting_val.IsNull()) {
-			auto version = DuckLakeVersionFromString(setting_val.ToString());
-			if (version < DuckLakeVersion::V1_0) {
-				throw InvalidInputException("ducklake_default_version must be >= '1.0', got '%s'",
-				                            setting_val.ToString());
-			}
-			options.ducklake_version = version;
+			options.ducklake_version = ParseWritableDuckLakeVersion(setting_val.ToString(), "ducklake_default_version");
 		}
 	}
 

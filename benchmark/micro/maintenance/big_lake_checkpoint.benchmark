@@ -1,0 +1,35 @@
+# name: benchmark/micro/maintenance/big_lake_checkpoint.benchmark
+# description: CHECKPOINT a freshly attached 610-table lake where 100 tables have inlined rows and 10 have small files
+# group: [maintenance]
+
+name Big Lake Checkpoint
+group micro
+subgroup maintenance
+
+require ducklake
+
+require parquet
+
+argument lake big_lake_500_v1
+
+argument tables 500
+
+argument work big_lake_checkpoint_work
+
+include benchmark/micro/fixtures/big_lake.benchmark.in
+
+include benchmark/micro/fixtures/restore_cleanup.benchmark.in
+
+# Every maintenance function of CHECKPOINT visits all tables of the lake
+run
+SET VARIABLE checkpoint_from = (SELECT id FROM lake.current_snapshot());
+CHECKPOINT lake;
+
+# A missed reset leaves nothing to flush or merge, so CHECKPOINT would not commit the flush and the merge
+result_query IIII
+SELECT (SELECT id FROM lake.current_snapshot()) - getvariable('checkpoint_from'),
+(SELECT count(*) FROM ducklake_list_files('lake', 'frag_9')),
+(SELECT count(*) FROM ducklake_list_files('lake', 't_9', schema => 'inl')),
+(SELECT count(*) FROM lake.inl.t_9)
+----
+2	1	1	8

@@ -51,6 +51,8 @@ public:
 	bool CanUseGlobalStats() const;
 	bool IsDeleteScan() const;
 	const DuckLakeDeleteScanEntry &GetDeleteScanEntry(idx_t file_idx);
+	static DuckLakeFileData GetDeleteData(const DuckLakeDataFile &file);
+	static DuckLakeFileData GetDeleteData(const DuckLakeDeleteFile &delete_file);
 
 protected:
 	//! Get the i-th expanded file
@@ -60,6 +62,7 @@ private:
 	void GetFilesForTable() const;
 	void GetTableInsertions() const;
 	void GetTableDeletions() const;
+	void AddInlinedDataTables(DuckLakeTransaction &transaction) const;
 	void AddFilterToPushdownInfo(FilterPushdownInfo &pushdown_info, column_t column_id,
 	                             unique_ptr<TableFilter> filter) const;
 	//! Build the node for a table filter on one column - a leaf, or a conjunction of them when it

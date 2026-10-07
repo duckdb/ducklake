@@ -4,10 +4,8 @@
 #include "duckdb/common/file_system.hpp"
 #include "duckdb/common/json_document.hpp"
 #include "duckdb/common/numeric_utils.hpp"
+#include "duckdb/common/operator/cast_operators.hpp"
 #include "duckdb/common/to_string.hpp"
-
-#include <cerrno>
-#include <cstdlib>
 
 namespace duckdb {
 
@@ -136,9 +134,8 @@ DuckLakePuffinWriteResult DuckLakePuffinWriter::Write(FileSystem &fs, const stri
 // Reader
 //===--------------------------------------------------------------------===//
 static idx_t ParseSnapshotProperty(const string &value, const string &path) {
-	char *end = nullptr;
-	auto parsed = std::strtoull(value.c_str(), &end, 10);
-	if (value.empty() || end != value.c_str() + value.size()) {
+	idx_t parsed;
+	if (!TryCast::Operation<string_t, idx_t>(string_t(value), parsed, true)) {
 		throw InvalidInputException("Puffin file \"%s\" is corrupt - invalid %s property \"%s\"", path,
 		                            DUCKLAKE_SNAPSHOT_PROPERTY, value);
 	}

@@ -1,0 +1,81 @@
+# name: test/sql/functions/table_functions_reject_views.test
+# description: DuckLake table functions that take a table name reject views
+# group: [functions]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/table_functions_reject_views')
+
+statement ok
+CREATE TABLE dl.t (i INTEGER)
+
+statement ok
+INSERT INTO dl.t VALUES (1)
+
+statement ok
+CREATE VIEW dl.v AS SELECT * FROM dl.t
+
+statement error
+CALL ducklake_merge_adjacent_files('dl', 'v')
+----
+"v" is a View, not a table
+
+statement error
+CALL ducklake_rewrite_data_files('dl', 'v')
+----
+"v" is a View, not a table
+
+statement error
+FROM ducklake_list_files('dl', 'v')
+----
+"v" is a View, not a table
+
+statement error
+CALL ducklake_merge_adjacent_files('dl', '')
+----
+does not exist
+
+statement error
+CALL ducklake_rewrite_data_files('dl', '')
+----
+does not exist
+
+statement error
+CALL ducklake_flush_inlined_data('dl', table_name => 'v')
+----
+"v" is a View, not a table
+
+statement error
+CALL ducklake_add_data_files('dl', 'v', '{DATA_PATH}/table_functions_reject_views/missing.parquet')
+----
+"v" is a View, not a table
+
+statement error
+CALL ducklake_set_option('dl', 'parquet_compression', 'zstd', table_name => 'v')
+----
+"v" is a View, not a table
+
+# scopes that cover the view skip it
+statement ok
+CALL ducklake_set_option('dl', 'data_inlining_row_limit', 5)
+
+statement ok
+CALL ducklake_set_option('dl', 'data_inlining_row_limit', 5, schema => 'main')
+
+statement ok
+CALL ducklake_merge_adjacent_files('dl')
+
+statement ok
+CALL ducklake_flush_inlined_data('dl', schema_name => 'main')
+
+query I
+FROM dl.v
+----
+1

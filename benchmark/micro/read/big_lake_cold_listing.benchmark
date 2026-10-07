@@ -1,0 +1,35 @@
+# name: benchmark/micro/read/big_lake_cold_listing.benchmark
+# description: Attach a lake with 2110 populated tables and list their sizes and column counts, three times
+# group: [read]
+
+name Big Lake Cold Listing
+group micro
+subgroup read
+
+require ducklake
+
+require parquet
+
+argument work big_lake_listing_work
+
+include benchmark/micro/fixtures/big_lake.benchmark.in
+
+# Three cold attaches; the estimated sizes come from the table stats of every table
+run
+SELECT count(*), sum(estimated_size), sum(column_count) FROM duckdb_tables() WHERE database_name = 'lake';
+DETACH lake;
+@attach ${work} AS lake
+SELECT count(*), sum(estimated_size), sum(column_count) FROM duckdb_tables() WHERE database_name = 'lake';
+DETACH lake;
+@attach ${work} AS lake
+SELECT count(*), sum(estimated_size), sum(column_count) FROM duckdb_tables() WHERE database_name = 'lake';
+
+# Re-attaching gives every run cold schema and stats caches
+cleanup
+DETACH lake;
+@attach ${work} AS lake
+
+result_query III
+SELECT * FROM __answer
+----
+2110	34800	20220

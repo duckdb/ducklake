@@ -19,6 +19,12 @@
   ],
   "skip_tests": [
     {
+      "reason": "Test requires a Quack metadata catalog",
+      "paths": [
+        "test/sql/quack/inlined_superseded_drop_failure.test"
+      ]
+    },
+    {
       "reason": "Requires the commit ordering of option changes on quack",
       "paths": [
         "test/sql/quack/quack_set_option_concurrent.test"

@@ -9,10 +9,14 @@
 #pragma once
 
 #include "storage/ducklake_extra_stats.hpp"
+#include "duckdb/common/optional_ptr.hpp"
+
+#include <functional>
 
 namespace duckdb {
 class BaseStatistics;
 struct DuckLakeDataFile;
+struct DuckLakeGlobalStatsInfo;
 
 //! Returns true for types that require value-based (not lexicographic string) comparison for min/max stats
 inline bool RequiresValueComparison(const LogicalType &type) {
@@ -84,6 +88,7 @@ public:
 	void MergeStats(const DuckLakeColumnStats &new_stats);
 
 private:
+	void MergeBound(const DuckLakeColumnStats &new_stats, bool is_min, bool adopt_bounds);
 	void SetValidity(BaseStatistics &stats) const;
 	unique_ptr<BaseStatistics> CreateNumericStats() const;
 	unique_ptr<BaseStatistics> CreateStringStats() const;
@@ -102,6 +107,11 @@ struct DuckLakeTableStats {
 	void MergeStats(FieldIndex col_id, const DuckLakeColumnStats &file_stats);
 
 	void MergeFileStats(const DuckLakeDataFile &file);
+
+	//! Skips columns whose type lookup returns nullptr
+	static unique_ptr<DuckLakeTableStats>
+	FromGlobalStats(const DuckLakeGlobalStatsInfo &stats,
+	                const std::function<optional_ptr<const LogicalType>(FieldIndex)> &get_column_type);
 };
 
 struct DuckLakeStats {

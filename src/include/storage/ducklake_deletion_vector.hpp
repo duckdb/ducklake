@@ -10,8 +10,7 @@
 
 #include "duckdb/common/common.hpp"
 #include "duckdb/common/set.hpp"
-#include "duckdb/common/unordered_map.hpp"
-#include <roaring/roaring.hh>
+#include <roaring/roaring64map.hh>
 
 namespace duckdb {
 
@@ -28,12 +27,8 @@ public:
 	//! Serialize deleted row positions into a deletion-vector-v1 puffin blob
 	static vector<data_t> ToBlob(const set<idx_t> &positions);
 
-	//! Convert the bitmaps to a sorted set of deleted row positions
-	void ToSet(set<idx_t> &out) const;
-
 public:
-	//! Map from high 32-bit key to roaring bitmap of low 32-bit values
-	unordered_map<int32_t, roaring::Roaring> bitmaps;
+	roaring::Roaring64Map bitmap;
 };
 
 } // namespace duckdb

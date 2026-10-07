@@ -1,0 +1,34 @@
+# name: benchmark/micro/write/big_lake_insert_commits.benchmark
+# description: Commit latency of 50 single-row autocommit INSERTs into inlined tables of a 2110-table populated lake
+# group: [write]
+
+name Big Lake Insert Commits
+group micro
+subgroup write
+
+require ducklake
+
+require parquet
+
+argument work big_lake_insert_work
+
+include benchmark/micro/fixtures/big_lake.benchmark.in
+
+run benchmark/micro/queries/big_lake_insert_commits.sql
+
+# The restore_cleanup block plus a query that loads the catalog, so the first timed INSERT does not pay a cold load
+cleanup
+DETACH DATABASE IF EXISTS lake;
+@copy ${lake}_pristine TO ${work}
+@attach ${work} AS lake
+CALL ducklake_delete_orphaned_files('lake', cleanup_all => true);
+SELECT CASE WHEN (SELECT count(*) FROM glob('${BENCHMARK_DIR}/${lake}_files/**'))
+<> (SELECT column0 FROM read_csv('${BENCHMARK_DIR}/${lake}_filecount.csv', header = false))
+THEN error('the fixture files were not restored') END;
+SELECT count(*) FROM lake.inl.t_0;
+
+# A missed reset adds five more rows to t_9, and a data file means the INSERTs were not inlined
+result_query II
+SELECT (SELECT count(*) FROM lake.inl.t_9), (SELECT count(*) FROM ducklake_list_files('lake', 't_9', schema => 'inl'))
+----
+13	0

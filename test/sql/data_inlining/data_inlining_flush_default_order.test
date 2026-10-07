@@ -1,0 +1,44 @@
+# name: test/sql/data_inlining/data_inlining_flush_default_order.test
+# description: Flushing inlined rows with deletes under a descending default order keeps the right rows deleted
+# group: [data_inlining]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/flush_default_order', DATA_INLINING_ROW_LIMIT 1000)
+
+statement ok
+CREATE TABLE ducklake.t (k BIGINT, x DOUBLE)
+
+statement ok
+INSERT INTO ducklake.t SELECT r, r * 0.5 FROM range(100) t(r)
+
+statement ok
+DELETE FROM ducklake.t WHERE k % 10 = 0
+
+statement ok
+SET default_order = 'DESC'
+
+query I
+SELECT sum(rows_flushed) FROM ducklake_flush_inlined_data('ducklake')
+----
+100
+
+statement ok
+RESET default_order
+
+query III
+SELECT count(*), sum(x), count(*) FILTER (WHERE k % 10 = 0) FROM ducklake.t
+----
+90	2250.0	0
+
+query II
+SELECT count(*), sum(x) FROM ducklake.t AT (VERSION => 2)
+----
+100	2475.0

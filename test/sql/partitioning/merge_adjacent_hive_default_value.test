@@ -1,0 +1,57 @@
+# name: test/sql/partitioning/merge_adjacent_hive_default_value.test
+# description: compaction keeps a non-NULL __HIVE_DEFAULT_PARTITION__ value out of the NULL partition directory
+# group: [partitioning]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/merge_adjacent_hive_default_value', METADATA_CATALOG 'meta', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE ducklake.t (id INTEGER, tag VARCHAR)
+
+statement ok
+ALTER TABLE ducklake.t SET PARTITIONED BY (tag)
+
+statement ok
+INSERT INTO ducklake.t VALUES (1, '__HIVE_DEFAULT_PARTITION__'), (2, NULL)
+
+statement ok
+INSERT INTO ducklake.t VALUES (3, '__HIVE_DEFAULT_PARTITION__'), (4, NULL)
+
+statement ok
+CALL ducklake_merge_adjacent_files('ducklake')
+
+query I
+SELECT COUNT(*) FROM ducklake_list_files('ducklake', 't')
+----
+2
+
+query I
+SELECT COUNT(DISTINCT parse_dirpath(data_file)) FROM ducklake_list_files('ducklake', 't')
+----
+2
+
+query I
+SELECT COUNT(*) FROM ducklake_list_files('ducklake', 't') WHERE contains(data_file, 'tag=%5F_HIVE_DEFAULT_PARTITION__')
+----
+1
+
+query II
+SELECT id, tag FROM ducklake.t ORDER BY id
+----
+1	__HIVE_DEFAULT_PARTITION__
+2	NULL
+3	__HIVE_DEFAULT_PARTITION__
+4	NULL
+
+query I
+SELECT COUNT(*) FROM ducklake.t WHERE tag IS NULL
+----
+2

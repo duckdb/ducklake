@@ -1,0 +1,28 @@
+# name: benchmark/micro/write/sorted_insert.benchmark
+# description: INSERT 5M permuted keys into an empty SORTED BY table with 4MB target files, including the commit
+# group: [write]
+
+name Sorted Insert
+group micro
+subgroup write
+
+require ducklake
+
+require parquet
+
+argument work sorted_insert_work
+
+include benchmark/micro/fixtures/sorted.benchmark.in
+
+include benchmark/micro/fixtures/restore_cleanup.benchmark.in
+
+run
+INSERT INTO lake.ins SELECT (i * 7919) % 5000000, 'v' || i, i * 0.5 FROM range(5000000) t(i);
+
+# Overlapping key ranges would defeat file pruning on the sort key even if the INSERT got faster
+result_query III
+WITH ranges AS (SELECT min(k) AS lo, max(k) AS hi FROM lake.ins GROUP BY filename),
+ordered AS (SELECT lo, lag(hi) OVER (ORDER BY lo) AS prev FROM ranges)
+SELECT (SELECT count(*) FROM lake.ins), count(*) > 1, count(*) FILTER (WHERE lo <= prev) FROM ordered
+----
+5000000	true	0

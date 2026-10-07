@@ -43,4 +43,4 @@ SELECT stats(g) FROM t1;
 query I
 select extra_stats from ducklake_meta.ducklake_file_column_stats;
 ----
-{"bbox": {"xmin": 0.000000, "xmax": 1.000000, "ymin": 0.000000, "ymax": 2.000000, "zmin": null, "zmax": null, "mmin": null, "mmax": null}, "types": ["linestring", "point"]}
+{"bbox":{"xmin":0.0,"xmax":1.0,"ymin":0.0,"ymax":2.0,"zmin":null,"zmax":null,"mmin":null,"mmax":null},"types":["linestring","point"]}

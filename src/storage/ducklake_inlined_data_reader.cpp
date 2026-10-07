@@ -127,7 +127,7 @@ bool DuckLakeInlinedDataReader::TryInitializeScan(ClientContext &context, Global
 		}
 		if (deletion_filter) {
 			// map the deleted row-ids to the deleted ordinals to obtain the correct deleted rows
-			auto &filter = reinterpret_cast<DuckLakeDeleteFilter &>(*deletion_filter);
+			auto &filter = static_cast<DuckLakeDeleteFilter &>(*deletion_filter);
 			vector<idx_t> deleted_ordinals;
 			auto &deleted_row_ids = filter.delete_data->deleted_rows;
 			idx_t current_idx = 0;

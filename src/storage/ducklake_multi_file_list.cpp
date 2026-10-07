@@ -4,6 +4,7 @@
 #include "storage/ducklake_multi_file_reader.hpp"
 #include "storage/ducklake_metadata_manager.hpp"
 
+#include "duckdb/common/algorithm.hpp"
 #include "duckdb/common/local_file_system.hpp"
 #include "duckdb/function/scalar/struct_utils.hpp"
 #include "duckdb/function/table_function.hpp"
@@ -36,14 +37,18 @@ DuckLakeMultiFileList::DuckLakeMultiFileList(DuckLakeFunctionInfo &read_info,
     : read_info(read_info), files(std::move(files_to_scan)), read_file_list(true) {
 }
 
-DuckLakeMultiFileList::DuckLakeMultiFileList(DuckLakeFunctionInfo &read_info,
-                                             const DuckLakeInlinedTableInfo &inlined_table)
-    : read_info(read_info), read_file_list(true) {
+static DuckLakeFileListEntry InlinedDataEntry(const DuckLakeInlinedTableInfo &inlined_table) {
 	DuckLakeFileListEntry file_entry;
 	file_entry.file.path = inlined_table.table_name;
 	file_entry.row_id_start = 0;
 	file_entry.data_type = DuckLakeDataType::INLINED_DATA;
-	files.push_back(std::move(file_entry));
+	return file_entry;
+}
+
+DuckLakeMultiFileList::DuckLakeMultiFileList(DuckLakeFunctionInfo &read_info,
+                                             const DuckLakeInlinedTableInfo &inlined_table)
+    : read_info(read_info), read_file_list(true) {
+	files.push_back(InlinedDataEntry(inlined_table));
 	inlined_data_tables.push_back(inlined_table);
 }
 
@@ -224,16 +229,15 @@ DuckLakeMultiFileList::DynamicFilterPushdown(MultiFileDynamicPushdownInfo &dynam
 	                                        std::move(pushdown_info));
 }
 
-//! What a node costs in the generated query - one stats condition per leaf
-static idx_t CountFilterTreeLeaves(const DuckLakeFilterNode &node) {
+template <class FUNC>
+static void VisitFilterTreeLeaves(const DuckLakeFilterNode &node, FUNC &&visit) {
 	if (node.type == DuckLakeFilterNodeType::COLUMN_FILTER) {
-		return 1;
+		visit(node);
+		return;
 	}
-	idx_t result = 0;
 	for (const auto &child : node.children) {
-		result += CountFilterTreeLeaves(*child);
+		VisitFilterTreeLeaves(*child, visit);
 	}
-	return result;
 }
 
 bool DuckLakeMultiFileList::FilterTreeState::VisitNode() {
@@ -251,7 +255,7 @@ bool DuckLakeMultiFileList::FilterTreeState::AddLeaves(const DuckLakeFilterNode 
 	if (exhausted) {
 		return false;
 	}
-	leaves += CountFilterTreeLeaves(node);
+	VisitFilterTreeLeaves(node, [&](const DuckLakeFilterNode &) { leaves++; });
 	if (leaves > MAX_LEAVES) {
 		exhausted = true;
 		return false;
@@ -354,17 +358,6 @@ unique_ptr<DuckLakeFilterNode> DuckLakeMultiFileList::BuildFilterTree(ClientCont
 	return state.AddLeaves(*node) ? std::move(node) : nullptr;
 }
 
-//! Collect the columns a filter tree references
-static void GetFilterTreeColumns(const DuckLakeFilterNode &node, unordered_set<idx_t> &columns) {
-	if (node.type == DuckLakeFilterNodeType::COLUMN_FILTER) {
-		columns.insert(node.column_filter->column_field_index);
-		return;
-	}
-	for (const auto &child : node.children) {
-		GetFilterTreeColumns(*child, columns);
-	}
-}
-
 unique_ptr<MultiFileList> DuckLakeMultiFileList::ComplexFilterPushdown(ClientContext &context,
                                                                        const MultiFileOptions &options,
                                                                        MultiFilePushdownInfo &info,
@@ -409,7 +402,8 @@ unique_ptr<MultiFileList> DuckLakeMultiFileList::ComplexFilterPushdown(ClientCon
 			continue;
 		}
 		unordered_set<idx_t> columns;
-		GetFilterTreeColumns(*root, columns);
+		VisitFilterTreeLeaves(
+		    *root, [&](const DuckLakeFilterNode &leaf) { columns.insert(leaf.column_filter->column_field_index); });
 		if (columns.size() < 2 && CombineFilterNode(context, info, *filter)) {
 			// the combiner reduced the whole disjunction to its one column, so it is already pushed down
 			continue;
@@ -534,7 +528,7 @@ const DuckLakeFileListEntry &DuckLakeMultiFileList::GetFileEntry(idx_t file_idx)
 	return files[file_idx];
 }
 
-DuckLakeFileData GetFileData(const DuckLakeDataFile &file) {
+static DuckLakeFileData GetFileData(const DuckLakeDataFile &file) {
 	DuckLakeFileData result;
 	result.path = file.file_name;
 	result.encryption_key = file.encryption_key;
@@ -543,18 +537,43 @@ DuckLakeFileData GetFileData(const DuckLakeDataFile &file) {
 	return result;
 }
 
-DuckLakeFileData GetDeleteData(const DuckLakeDataFile &file) {
-	DuckLakeFileData result;
+DuckLakeFileData DuckLakeMultiFileList::GetDeleteData(const DuckLakeDataFile &file) {
 	if (file.delete_files.empty()) {
-		return result;
+		return DuckLakeFileData();
 	}
-	auto &delete_file = file.delete_files.back();
+	return GetDeleteData(file.delete_files.back());
+}
+
+DuckLakeFileData DuckLakeMultiFileList::GetDeleteData(const DuckLakeDeleteFile &delete_file) {
+	DuckLakeFileData result;
 	result.path = delete_file.file_name;
 	result.encryption_key = delete_file.encryption_key;
 	result.file_size_bytes = delete_file.file_size_bytes;
 	result.footer_size = delete_file.footer_size;
 	result.format = delete_file.format;
 	return result;
+}
+
+template <class ENTRY>
+static void ApplyLocalFileChanges(DuckLakeTransaction &transaction, TableIndex table_id, vector<ENTRY> &entries) {
+	if (transaction.HasDroppedFiles()) {
+		entries.erase(std::remove_if(entries.begin(), entries.end(),
+		                             [&](const ENTRY &entry) { return transaction.FileIsDropped(entry.file.path); }),
+		              entries.end());
+	}
+	// if the transaction has any local deletes - apply them to the file list
+	if (transaction.HasLocalDeletes(table_id)) {
+		for (auto &file_entry : entries) {
+			transaction.GetLocalDeleteForFile(table_id, file_entry.file.path, file_entry.delete_file);
+		}
+	}
+}
+
+void DuckLakeMultiFileList::AddInlinedDataTables(DuckLakeTransaction &transaction) const {
+	inlined_data_tables = read_info.table.GetInlinedDataTables(transaction, read_info.snapshot);
+	for (auto &table : inlined_data_tables) {
+		files.push_back(InlinedDataEntry(table));
+	}
 }
 
 vector<DuckLakeFileListExtendedEntry> DuckLakeMultiFileList::GetFilesExtended() const {
@@ -567,25 +586,10 @@ vector<DuckLakeFileListExtendedEntry> DuckLakeMultiFileList::GetFilesExtended() 
 		auto &metadata_manager = transaction.GetMetadataManager();
 		result = metadata_manager.GetExtendedFilesForTable(read_info.table, read_info.snapshot, filter_info.get());
 	}
-	if (transaction.HasDroppedFiles()) {
-		for (idx_t file_idx = 0; file_idx < result.size(); file_idx++) {
-			if (transaction.FileIsDropped(result[file_idx].file.path)) {
-				result.erase_at(file_idx);
-				file_idx--;
-			}
-		}
-	}
-	// if the transaction has any local deletes - apply them to the file list
-	if (transaction.HasLocalDeletes(read_info.table_id)) {
-		for (auto &file_entry : result) {
-			transaction.GetLocalDeleteForFile(read_info.table_id, file_entry.file.path, file_entry.delete_file);
-		}
-	}
+	ApplyLocalFileChanges(transaction, read_info.table_id, result);
 	idx_t transaction_row_start = DuckLakeConstants::TRANSACTION_LOCAL_ROW_ID_START;
 	for (auto &file : transaction_local_files) {
 		DuckLakeFileListExtendedEntry file_entry;
-		file_entry.file_id = DataFileIndex();
-		file_entry.delete_file_id = DataFileIndex();
 		file_entry.row_count = file.row_count;
 		file_entry.file = GetFileData(file);
 		file_entry.delete_file = GetDeleteData(file);
@@ -597,8 +601,6 @@ vector<DuckLakeFileListExtendedEntry> DuckLakeMultiFileList::GetFilesExtended() 
 	for (auto &table : inlined_data_tables) {
 		DuckLakeFileListExtendedEntry file_entry;
 		file_entry.file.path = table.table_name;
-		file_entry.file_id = DataFileIndex();
-		file_entry.delete_file_id = DataFileIndex();
 		file_entry.row_count = 0;
 		file_entry.row_id_start = 0;
 		file_entry.data_type = DuckLakeDataType::INLINED_DATA;
@@ -608,8 +610,6 @@ vector<DuckLakeFileListExtendedEntry> DuckLakeMultiFileList::GetFilesExtended() 
 		// we have transaction local inlined data - create the dummy file entry
 		DuckLakeFileListExtendedEntry file_entry;
 		file_entry.file.path = DUCKLAKE_TRANSACTION_LOCAL_INLINED_FILENAME;
-		file_entry.file_id = DataFileIndex();
-		file_entry.delete_file_id = DataFileIndex();
 		file_entry.row_count = transaction_local_data->data->Count();
 		file_entry.row_id_start = GetTransactionLocalRowIdStart(transaction_row_start);
 		file_entry.data_type = DuckLakeDataType::TRANSACTION_LOCAL_INLINED_DATA;
@@ -626,20 +626,7 @@ void DuckLakeMultiFileList::GetFilesForTable() const {
 		auto &metadata_manager = transaction.GetMetadataManager();
 		files = metadata_manager.GetFilesForTable(read_info.table, read_info.snapshot, filter_info.get());
 	}
-	if (transaction.HasDroppedFiles()) {
-		for (idx_t file_idx = 0; file_idx < files.size(); file_idx++) {
-			if (transaction.FileIsDropped(files[file_idx].file.path)) {
-				files.erase_at(file_idx);
-				file_idx--;
-			}
-		}
-	}
-	// if the transaction has any local deletes - apply them to the file list
-	if (transaction.HasLocalDeletes(read_info.table_id)) {
-		for (auto &file_entry : files) {
-			transaction.GetLocalDeleteForFile(read_info.table_id, file_entry.file.path, file_entry.delete_file);
-		}
-	}
+	ApplyLocalFileChanges(transaction, read_info.table_id, files);
 	// if the transaction has any local inlined file deletes - apply them to the file list
 	if (transaction.HasLocalInlinedFileDeletes(read_info.table_id)) {
 		for (auto &file_entry : files) {
@@ -659,14 +646,7 @@ void DuckLakeMultiFileList::GetFilesForTable() const {
 		transaction_row_start += file.row_count;
 		files.emplace_back(std::move(file_entry));
 	}
-	inlined_data_tables = read_info.table.GetInlinedDataTables(transaction, read_info.snapshot);
-	for (auto &table : inlined_data_tables) {
-		DuckLakeFileListEntry file_entry;
-		file_entry.file.path = table.table_name;
-		file_entry.row_id_start = 0;
-		file_entry.data_type = DuckLakeDataType::INLINED_DATA;
-		files.push_back(std::move(file_entry));
-	}
+	AddInlinedDataTables(transaction);
 	if (transaction_local_data) {
 		// we have transaction local inlined data - create the dummy file entry
 		DuckLakeFileListEntry file_entry;
@@ -685,15 +665,7 @@ void DuckLakeMultiFileList::GetTableInsertions() const {
 	auto &transaction = *transaction_ref;
 	auto &metadata_manager = transaction.GetMetadataManager();
 	files = metadata_manager.GetTableInsertions(read_info.table, *read_info.start_snapshot, read_info.snapshot);
-	// add inlined data tables as sources (if any)
-	inlined_data_tables = read_info.table.GetInlinedDataTables(transaction, read_info.snapshot);
-	for (auto &table : inlined_data_tables) {
-		DuckLakeFileListEntry file_entry;
-		file_entry.file.path = table.table_name;
-		file_entry.row_id_start = 0;
-		file_entry.data_type = DuckLakeDataType::INLINED_DATA;
-		files.push_back(std::move(file_entry));
-	}
+	AddInlinedDataTables(transaction);
 }
 
 void DuckLakeMultiFileList::GetTableDeletions() const {
@@ -712,15 +684,7 @@ void DuckLakeMultiFileList::GetTableDeletions() const {
 		file_entry.mapping_id = file.mapping_id;
 		files.emplace_back(std::move(file_entry));
 	}
-	// add inlined data tables as sources (if any)
-	inlined_data_tables = read_info.table.GetInlinedDataTables(transaction, read_info.snapshot);
-	for (auto &table : inlined_data_tables) {
-		DuckLakeFileListEntry file_entry;
-		file_entry.file.path = table.table_name;
-		file_entry.row_id_start = 0;
-		file_entry.data_type = DuckLakeDataType::INLINED_DATA;
-		files.push_back(std::move(file_entry));
-	}
+	AddInlinedDataTables(transaction);
 }
 
 bool DuckLakeMultiFileList::CanUseGlobalStats() const {

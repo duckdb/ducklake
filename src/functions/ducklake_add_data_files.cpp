@@ -1,6 +1,5 @@
 #include "functions/ducklake_table_functions.hpp"
 #include "duckdb/catalog/catalog.hpp"
-#include "duckdb/catalog/catalog_entry/table_catalog_entry.hpp"
 #include "storage/ducklake_transaction.hpp"
 #include "common/ducklake_util.hpp"
 #include "common/parquet_file_scanner.hpp"
@@ -22,10 +21,10 @@ namespace duckdb {
 enum class HivePartitioningType { AUTOMATIC, YES, NO };
 
 struct DuckLakeAddDataFilesData : public TableFunctionData {
-	DuckLakeAddDataFilesData(Catalog &catalog, DuckLakeTableEntry &table) : catalog(catalog), table(table) {
+	DuckLakeAddDataFilesData(DuckLakeCatalog &catalog, DuckLakeTableEntry &table) : catalog(catalog), table(table) {
 	}
 
-	Catalog &catalog;
+	DuckLakeCatalog &catalog;
 	DuckLakeTableEntry &table;
 	vector<string> globs;
 	bool allow_missing = false;
@@ -36,18 +35,12 @@ struct DuckLakeAddDataFilesData : public TableFunctionData {
 static unique_ptr<FunctionData> DuckLakeAddDataFilesBind(ClientContext &context, TableFunctionBindInput &input,
                                                          vector<LogicalType> &return_types, vector<Identifier> &names) {
 	auto &catalog = DuckLakeBaseMetadataFunction::GetCatalog(context, input);
-	string schema_name;
 	if (input.inputs[1].IsNull()) {
 		throw InvalidInputException("Table name cannot be NULL");
 	}
-	if (input.named_parameters.find("schema") != input.named_parameters.end()) {
-		schema_name = StringValue::Get(input.named_parameters["schema"]);
-	}
+	auto schema_name = DuckLakeTableFunctionUtil::GetStringOption(input, "schema");
 	const auto table_name = StringValue::Get(input.inputs[1]);
-
-	auto entry = catalog.GetEntry<TableCatalogEntry>(
-	    context, catalog.ResolveEntryName(context, schema_name, table_name), OnEntryNotFound::THROW_EXCEPTION);
-	auto &table = entry->Cast<DuckLakeTableEntry>();
+	auto &table = DuckLakeBaseMetadataFunction::GetTableEntry(context, catalog, schema_name, table_name);
 
 	auto result = make_uniq<DuckLakeAddDataFilesData>(catalog, table);
 	auto &file_list = input.inputs[2];
@@ -64,15 +57,15 @@ static unique_ptr<FunctionData> DuckLakeAddDataFilesBind(ClientContext &context,
 	} else {
 		throw InvalidInputException("File list must be a string or a list of strings");
 	}
-	for (auto &entry : input.named_parameters) {
-		if (entry.first == "allow_missing") {
-			result->allow_missing = BooleanValue::Get(entry.second);
-		} else if (entry.first == "ignore_extra_columns") {
-			result->ignore_extra_columns = BooleanValue::Get(entry.second);
-		} else if (entry.first == "hive_partitioning") {
-			result->hive_partitioning =
-			    BooleanValue::Get(entry.second) ? HivePartitioningType::YES : HivePartitioningType::NO;
-		}
+	Value option;
+	if (DuckLakeTableFunctionUtil::TryGetNonNullOption(input, "allow_missing", "boolean", option)) {
+		result->allow_missing = BooleanValue::Get(option);
+	}
+	if (DuckLakeTableFunctionUtil::TryGetNonNullOption(input, "ignore_extra_columns", "boolean", option)) {
+		result->ignore_extra_columns = BooleanValue::Get(option);
+	}
+	if (DuckLakeTableFunctionUtil::TryGetNonNullOption(input, "hive_partitioning", "boolean", option)) {
+		result->hive_partitioning = BooleanValue::Get(option) ? HivePartitioningType::YES : HivePartitioningType::NO;
 	}
 
 	names.emplace_back("filename");
@@ -196,6 +189,8 @@ private:
 	                                        const LogicalType &field_type, const Value &value) const;
 	unique_ptr<DuckLakeNameMapEntry> MapHiveColumn(ParquetFileMetadata &file_metadata, const DuckLakeFieldId &field_id,
 	                                               const Value &hive_value);
+	bool TryMapHiveColumn(ParquetFileMetadata &file_metadata, const string &name, const DuckLakeFieldId &field_id,
+	                      vector<unique_ptr<DuckLakeNameMapEntry>> &column_maps);
 	void DetermineMapping(ParquetFileMetadata &file);
 	void MapPartitionColumns(ParquetFileMetadata &file);
 
@@ -901,6 +896,18 @@ unique_ptr<DuckLakeNameMapEntry> DuckLakeFileProcessor::MapHiveColumn(ParquetFil
 	return result;
 }
 
+bool DuckLakeFileProcessor::TryMapHiveColumn(ParquetFileMetadata &file_metadata, const string &name,
+                                             const DuckLakeFieldId &field_id,
+                                             vector<unique_ptr<DuckLakeNameMapEntry>> &column_maps) {
+	auto hive_entry = hive_partitions.find(name);
+	if (hive_entry == hive_partitions.end()) {
+		return false;
+	}
+	auto hive_value = HivePartitioning::GetValue(context, name, hive_entry->second, field_id.Type());
+	column_maps.push_back(MapHiveColumn(file_metadata, field_id, hive_value));
+	return true;
+}
+
 void DuckLakeFileProcessor::MapColumnStats(ParquetFileMetadata &file_metadata, DuckLakeDataFile &result) {
 	// Process statistics for regular parquet columns
 	for (auto &entry : file_metadata.column_id_to_field_map) {
@@ -919,119 +926,9 @@ void DuckLakeFileProcessor::MapColumnStats(ParquetFileMetadata &file_metadata, D
 				CheckNotNullStats(field_index, stats);
 			}
 			auto aggregated = stats_list[0];
-			bool numeric_type = aggregated.type.IsNumeric();
-
 			for (idx_t i = 1; i < stats_list.size(); i++) {
-				auto &stats = stats_list[i];
-
-				if (aggregated.type != stats.type) {
-					aggregated.type = stats.type;
-					numeric_type = aggregated.type.IsNumeric();
-				}
-
-				if (!stats.has_null_count) {
-					aggregated.has_null_count = false;
-				} else if (aggregated.has_null_count) {
-					aggregated.null_count += stats.null_count;
-				}
-
-				if (!stats.has_num_values) {
-					aggregated.has_num_values = false;
-				} else if (aggregated.has_num_values) {
-					aggregated.num_values += stats.num_values;
-				}
-
-				aggregated.column_size_bytes += stats.column_size_bytes;
-
-				if (!stats.has_contains_nan) {
-					aggregated.has_contains_nan = false;
-				} else if (aggregated.has_contains_nan && stats.contains_nan) {
-					aggregated.contains_nan = true;
-				}
-
-				if (stats.extra_stats) {
-					if (aggregated.extra_stats) {
-						aggregated.extra_stats->Merge(*stats.extra_stats);
-					} else {
-						aggregated.extra_stats = stats.extra_stats->Copy();
-					}
-				}
+				aggregated.MergeStats(stats_list[i]);
 			}
-
-			Value numeric_min_cache;
-			Value numeric_max_cache;
-			bool min_cache_valid = false;
-			bool max_cache_valid = false;
-
-			if (numeric_type && aggregated.has_min) {
-				numeric_min_cache = Value(aggregated.min).DefaultCastAs(aggregated.type);
-				min_cache_valid = true;
-			}
-			if (numeric_type && aggregated.has_max) {
-				numeric_max_cache = Value(aggregated.max).DefaultCastAs(aggregated.type);
-				max_cache_valid = true;
-			}
-
-			if (aggregated.has_min) {
-				for (idx_t i = 1; i < stats_list.size(); i++) {
-					auto &stats = stats_list[i];
-					if (!stats.has_min) {
-						aggregated.has_min = false;
-						min_cache_valid = false;
-						break;
-					}
-					if (numeric_type) {
-						if (!min_cache_valid) {
-							numeric_min_cache = Value(aggregated.min).DefaultCastAs(aggregated.type);
-							min_cache_valid = true;
-						}
-						auto stats_min_val = Value(stats.min).DefaultCastAs(aggregated.type);
-						if (stats_min_val < numeric_min_cache) {
-							aggregated.min = stats.min;
-							aggregated.min_is_exact = stats.min_is_exact;
-							numeric_min_cache = std::move(stats_min_val);
-						} else if (stats_min_val == numeric_min_cache) {
-							aggregated.min_is_exact = aggregated.min_is_exact && stats.min_is_exact;
-						}
-					} else if (stats.min < aggregated.min) {
-						aggregated.min = stats.min;
-						aggregated.min_is_exact = stats.min_is_exact;
-					} else if (stats.min == aggregated.min) {
-						aggregated.min_is_exact = aggregated.min_is_exact && stats.min_is_exact;
-					}
-				}
-			}
-
-			if (aggregated.has_max) {
-				for (idx_t i = 1; i < stats_list.size(); i++) {
-					auto &stats = stats_list[i];
-					if (!stats.has_max) {
-						aggregated.has_max = false;
-						max_cache_valid = false;
-						break;
-					}
-					if (numeric_type) {
-						if (!max_cache_valid) {
-							numeric_max_cache = Value(aggregated.max).DefaultCastAs(aggregated.type);
-							max_cache_valid = true;
-						}
-						auto stats_max_val = Value(stats.max).DefaultCastAs(aggregated.type);
-						if (stats_max_val > numeric_max_cache) {
-							aggregated.max = stats.max;
-							aggregated.max_is_exact = stats.max_is_exact;
-							numeric_max_cache = std::move(stats_max_val);
-						} else if (stats_max_val == numeric_max_cache) {
-							aggregated.max_is_exact = aggregated.max_is_exact && stats.max_is_exact;
-						}
-					} else if (stats.max > aggregated.max) {
-						aggregated.max = stats.max;
-						aggregated.max_is_exact = stats.max_is_exact;
-					} else if (stats.max == aggregated.max) {
-						aggregated.max_is_exact = aggregated.max_is_exact && stats.max_is_exact;
-					}
-				}
-			}
-
 			if (!aggregated.has_null_count) {
 				CheckNotNullValues(file_metadata, column, field_index);
 			}
@@ -1140,25 +1037,15 @@ vector<unique_ptr<DuckLakeNameMapEntry>> DuckLakeFileProcessor::MapColumns(
 			                            prefix.empty() ? prefix : prefix + ".", col->name, file_metadata.filepath,
 			                            table.name.GetIdentifierName());
 		}
-		auto hive_entry = hive_partitions.find(col->name);
-		if (hive_entry != hive_partitions.end()) {
-			auto hive_value =
-			    HivePartitioning::GetValue(context, col->name, hive_entry->second, entry->second.get().Type());
-			column_maps.push_back(MapHiveColumn(file_metadata, entry->second.get(), hive_value));
-			field_id_map.erase(entry);
-			continue;
+		if (!TryMapHiveColumn(file_metadata, col->name, entry->second.get(), column_maps)) {
+			column_maps.push_back(MapColumn(file_metadata, *col, entry->second.get(), prefix, repeated));
 		}
-		column_maps.push_back(MapColumn(file_metadata, *col, entry->second.get(), prefix, repeated));
 		field_id_map.erase(entry);
 	}
 	for (auto &entry : field_id_map) {
 		auto &field_id = entry.second.get();
 		// column does not exist in the file - check hive partitions
-		auto hive_entry = hive_partitions.find(field_id.Name());
-		if (hive_entry != hive_partitions.end()) {
-			// the column exists in the hive partitions - check if the type matches
-			auto hive_value = HivePartitioning::GetValue(context, field_id.Name(), hive_entry->second, field_id.Type());
-			column_maps.push_back(MapHiveColumn(file_metadata, field_id, hive_value));
+		if (TryMapHiveColumn(file_metadata, field_id.Name(), field_id, column_maps)) {
 			continue;
 		}
 		// column does not exist - check if we are ignoring missing columns
@@ -1212,23 +1099,15 @@ void DuckLakeFileProcessor::MapPartitionColumns(ParquetFileMetadata &file) {
 	}
 
 	const auto &field_data = table.GetFieldData();
-	case_insensitive_set_t used_names;
-
-	for (const auto &partition_field : partition_data->fields) {
+	auto key_names = DuckLakePartitionUtils::GetPartitionKeyNames(*partition_data, field_data);
+	for (idx_t field_idx = 0; field_idx < partition_data->fields.size(); field_idx++) {
+		auto &partition_field = partition_data->fields[field_idx];
 		if (partition_field.transform.type == DuckLakeTransformType::IDENTITY) {
 			// handled by MapColumns via MapHiveColumn
 			continue;
 		}
-
 		auto field_id = field_data.GetByFieldIndex(partition_field.field_id);
-		if (!field_id) {
-			continue;
-		}
-
-		string partition_key_name =
-		    DuckLakePartitionUtils::GetPartitionKeyName(partition_field.transform.type, field_id->Name(), used_names);
-		used_names.insert(partition_key_name);
-
+		auto &partition_key_name = key_names[field_idx];
 		auto hive_entry = hive_partitions.find(partition_key_name);
 		if (hive_entry == hive_partitions.end()) {
 			// key not found in the file path

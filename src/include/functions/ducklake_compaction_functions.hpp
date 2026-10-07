@@ -65,11 +65,15 @@ public:
 		return "ducklake";
 	}
 	vector<ColumnBinding> GetColumnBindings() override {
-		return GenerateColumnBindings(table_index, 4);
+		return GenerateColumnBindings(table_index, GetResultTypes().size());
 	}
 
 	void ResolveTypes() override {
-		types = {LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::BIGINT, LogicalType::BIGINT};
+		types = GetResultTypes();
+	}
+
+	static vector<LogicalType> GetResultTypes() {
+		return {LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::BIGINT, LogicalType::BIGINT};
 	}
 };
 
@@ -92,6 +96,13 @@ public:
 	static vector<BoundOrderByNode> BindSortOrders(Binder &binder, const ColumnList &columns,
 	                                               const Identifier &table_name, TableIndex table_index,
 	                                               const vector<OrderByNode> &pre_bound_orders);
+	static DuckLakeTableEntry &GetLatestTableEntry(DuckLakeCatalog &catalog, DuckLakeTransaction &transaction,
+	                                               const DuckLakeTableEntry &table);
+	static unique_ptr<LogicalOperator>
+	PlanRewriteScan(ClientContext &context, Binder &binder, DuckLakeTableEntry &table, DuckLakeCopyInput &copy_input,
+	                bool write_row_id, bool write_snapshot_id,
+	                const std::function<unique_ptr<DuckLakeMultiFileList>(DuckLakeFunctionInfo &)> &create_file_list,
+	                unique_ptr<LogicalCopyToFile> &copy);
 
 private:
 	optional_ptr<DuckLakeTableEntry> ResolvePartitionSpecTable(DuckLakeTableEntry &table,

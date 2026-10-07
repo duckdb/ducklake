@@ -87,25 +87,6 @@ bool DuckLakeTypes::IsNested(const LogicalType &type) {
 	return type.IsNested() && type.id() != LogicalTypeId::VARIANT;
 }
 
-bool DuckLakeTypes::RequiresCast(const LogicalType &type) {
-	// There are no types that requires casts as of DuckDB v1.5
-	return false;
-}
-
-bool DuckLakeTypes::RequiresCast(const vector<LogicalType> &types) {
-	for (auto &type : types) {
-		if (RequiresCast(type)) {
-			return true;
-		}
-	}
-	return false;
-}
-
-LogicalType DuckLakeTypes::GetCastedType(const LogicalType &type) {
-	// There are no types that requires casts as of DuckDB v1.5
-	return type;
-}
-
 LogicalType DuckLakeTypes::FromString(const string &type) {
 	if (StringUtil::StartsWith(type, "decimal(") && StringUtil::EndsWith(type, ")")) {
 		// decimal - parse width/scale
@@ -156,7 +137,7 @@ string DuckLakeTypes::ToString(const LogicalType &type) {
 		}
 		if (type.id() == LogicalTypeId::UNBOUND) {
 			const auto type_name = type.GetAlias();
-			if (StringUtil::Lower(type_name) == "json") {
+			if (StringUtil::CIEquals(type_name, "json")) {
 				return "json";
 			}
 		}

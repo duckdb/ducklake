@@ -3,6 +3,7 @@
 
 #include "duckdb/common/types/value.hpp"
 #include "duckdb/common/json_document.hpp"
+#include "duckdb/common/sql_identifier.hpp"
 #include "storage/ducklake_metadata_info.hpp"
 #include "duckdb/storage/statistics/geometry_stats.hpp"
 #include "duckdb/storage/statistics/base_statistics.hpp"
@@ -23,23 +24,37 @@ void DuckLakeColumnGeoStats::Merge(const DuckLakeColumnExtraStats &new_stats) {
 	geo_types.insert(geo_stats.geo_types.begin(), geo_stats.geo_types.end());
 }
 
+struct GeoStatsBound {
+	const char *name;
+	double GeometryExtent::*field;
+	double empty_value;
+};
+
+static constexpr GeoStatsBound GEO_STATS_BOUNDS[] = {{"xmin", &GeometryExtent::x_min, GeometryExtent::EMPTY_MIN},
+                                                     {"xmax", &GeometryExtent::x_max, GeometryExtent::EMPTY_MAX},
+                                                     {"ymin", &GeometryExtent::y_min, GeometryExtent::EMPTY_MIN},
+                                                     {"ymax", &GeometryExtent::y_max, GeometryExtent::EMPTY_MAX},
+                                                     {"zmin", &GeometryExtent::z_min, GeometryExtent::EMPTY_MIN},
+                                                     {"zmax", &GeometryExtent::z_max, GeometryExtent::EMPTY_MAX},
+                                                     {"mmin", &GeometryExtent::m_min, GeometryExtent::EMPTY_MIN},
+                                                     {"mmax", &GeometryExtent::m_max, GeometryExtent::EMPTY_MAX}};
+
 bool DuckLakeColumnGeoStats::TrySerialize(string &result) const {
-	// Format as JSON
-	auto xmin_val = extent.x_min == GeometryExtent::EMPTY_MIN ? "null" : std::to_string(extent.x_min);
-	auto xmax_val = extent.x_max == GeometryExtent::EMPTY_MAX ? "null" : std::to_string(extent.x_max);
-	auto ymin_val = extent.y_min == GeometryExtent::EMPTY_MIN ? "null" : std::to_string(extent.y_min);
-	auto ymax_val = extent.y_max == GeometryExtent::EMPTY_MAX ? "null" : std::to_string(extent.y_max);
-	auto zmin_val = extent.z_min == GeometryExtent::EMPTY_MIN ? "null" : std::to_string(extent.z_min);
-	auto zmax_val = extent.z_max == GeometryExtent::EMPTY_MAX ? "null" : std::to_string(extent.z_max);
-	auto mmin_val = extent.m_min == GeometryExtent::EMPTY_MIN ? "null" : std::to_string(extent.m_min);
-	auto mmax_val = extent.m_max == GeometryExtent::EMPTY_MAX ? "null" : std::to_string(extent.m_max);
-
-	auto bbox = StringUtil::Format(
-	    R"({"xmin": %s, "xmax": %s, "ymin": %s, "ymax": %s, "zmin": %s, "zmax": %s, "mmin": %s, "mmax": %s})", xmin_val,
-	    xmax_val, ymin_val, ymax_val, zmin_val, zmax_val, mmin_val, mmax_val);
-
-	auto types = geo_types.empty() ? "" : "\"" + StringUtil::Join(geo_types, "\", \"") + "\"";
-	result = StringUtil::Format(R"('{"bbox": %s, "types": [%s]}')", bbox, types);
+	JSONWriter writer;
+	auto bbox = writer.CreateObject();
+	for (auto &bound : GEO_STATS_BOUNDS) {
+		auto value = extent.*bound.field;
+		bbox.Add(bound.name, value == bound.empty_value ? writer.CreateNull() : writer.CreateDouble(value));
+	}
+	auto types = writer.CreateArray();
+	for (auto &type : geo_types) {
+		types.AppendString(type);
+	}
+	auto root = writer.CreateObject();
+	root.Add("bbox", bbox);
+	root.Add("types", types);
+	writer.SetRoot(root);
+	result = SQLString::ToString(writer.ToString(JSONWriteFlags::ALLOW_INF_AND_NAN));
 	return true;
 }
 
@@ -49,7 +64,7 @@ void DuckLakeColumnGeoStats::Serialize(DuckLakeColumnStatsInfo &column_stats) co
 
 void DuckLakeColumnGeoStats::Deserialize(const string &stats) {
 	JSONParseError error;
-	auto doc = JSONDocument::TryParse(stats.c_str(), stats.size(), error);
+	auto doc = JSONDocument::TryParse(stats.c_str(), stats.size(), error, JSONReadFlags::ALLOW_INF_AND_NAN);
 	if (!doc) {
 		throw InvalidInputException("Failed to parse geo stats JSON");
 	}
@@ -59,13 +74,10 @@ void DuckLakeColumnGeoStats::Deserialize(const string &stats) {
 	}
 
 	auto bbox = root.GetMember("bbox");
-	const pair<const char *, double *> bounds[] = {
-	    {"xmin", &extent.x_min}, {"xmax", &extent.x_max}, {"ymin", &extent.y_min}, {"ymax", &extent.y_max},
-	    {"zmin", &extent.z_min}, {"zmax", &extent.z_max}, {"mmin", &extent.m_min}, {"mmax", &extent.m_max}};
-	for (auto &bound : bounds) {
-		auto bound_val = bbox.GetMember(bound.first);
+	for (auto &bound : GEO_STATS_BOUNDS) {
+		auto bound_val = bbox.GetMember(bound.name);
 		if (bound_val.IsNumber()) {
-			*bound.second = bound_val.GetNumber();
+			extent.*bound.field = bound_val.GetNumber();
 		}
 	}
 
@@ -77,31 +89,20 @@ void DuckLakeColumnGeoStats::Deserialize(const string &stats) {
 }
 
 bool DuckLakeColumnGeoStats::ParseStats(const string &stats_name, const vector<Value> &stats_children) {
-	if (stats_name == "bbox_xmax") {
-		extent.x_max = stats_children[1].DefaultCastAs(LogicalType::DOUBLE).GetValue<double>();
-	} else if (stats_name == "bbox_xmin") {
-		extent.x_min = stats_children[1].DefaultCastAs(LogicalType::DOUBLE).GetValue<double>();
-	} else if (stats_name == "bbox_ymax") {
-		extent.y_max = stats_children[1].DefaultCastAs(LogicalType::DOUBLE).GetValue<double>();
-	} else if (stats_name == "bbox_ymin") {
-		extent.y_min = stats_children[1].DefaultCastAs(LogicalType::DOUBLE).GetValue<double>();
-	} else if (stats_name == "bbox_zmax") {
-		extent.z_max = stats_children[1].DefaultCastAs(LogicalType::DOUBLE).GetValue<double>();
-	} else if (stats_name == "bbox_zmin") {
-		extent.z_min = stats_children[1].DefaultCastAs(LogicalType::DOUBLE).GetValue<double>();
-	} else if (stats_name == "bbox_mmax") {
-		extent.m_max = stats_children[1].DefaultCastAs(LogicalType::DOUBLE).GetValue<double>();
-	} else if (stats_name == "bbox_mmin") {
-		extent.m_min = stats_children[1].DefaultCastAs(LogicalType::DOUBLE).GetValue<double>();
-	} else if (stats_name == "geo_types") {
+	if (stats_name == "geo_types") {
 		auto list_value = stats_children[1].DefaultCastAs(LogicalType::LIST(LogicalType::VARCHAR));
 		for (const auto &child : ListValue::GetChildren(list_value)) {
 			geo_types.insert(StringValue::Get(child));
 		}
-	} else {
-		return false;
+		return true;
 	}
-	return true;
+	for (auto &bound : GEO_STATS_BOUNDS) {
+		if (stats_name == string("bbox_") + bound.name) {
+			extent.*bound.field = stats_children[1].DefaultCastAs(LogicalType::DOUBLE).GetValue<double>();
+			return true;
+		}
+	}
+	return false;
 }
 
 unique_ptr<BaseStatistics> DuckLakeColumnGeoStats::ToStats() const {

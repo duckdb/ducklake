@@ -50,22 +50,16 @@ unique_ptr<QueryResult> QuackMetadataManager::AttachMetadata(const string &attac
 	return std::move(result);
 }
 
-unique_ptr<QueryResult> QuackMetadataManager::Query(DuckLakeSnapshot snapshot, string &query) {
-	SubstituteSnapshotPlaceholders(snapshot, query);
-	return Query(query);
+unique_ptr<QueryResult> QuackMetadataManager::Execute(DuckLakeSnapshot snapshot, string &query) {
+	// the server commits each statement on its own, so the statements run in a server transaction
+	SubstituteTransactionPlaceholders(snapshot, query);
+	return ExecuteInTransaction(query);
 }
 
-unique_ptr<QueryResult> QuackMetadataManager::Execute(DuckLakeSnapshot snapshot, string &query) {
+unique_ptr<QueryResult> QuackMetadataManager::ExecuteInTransaction(string &query) {
+	// hold the lock through the rollback
 	lock_guard<std::recursive_mutex> guard(transaction.GetCatalog().GetMetadataQueryLock());
-	// the server commits each statement on its own, so the statements run in a server transaction
-	auto batch = "BEGIN TRANSACTION;\n" + query + "\nCOMMIT;";
-	auto result = Query(snapshot, batch);
-	if (result->HasError()) {
-		// a failed statement keeps the server transaction open until it is rolled back
-		string rollback = "ROLLBACK;";
-		Query(rollback);
-	}
-	return result;
+	return DuckLakeMetadataManager::ExecuteInTransaction(query);
 }
 
 string QuackMetadataManager::MetadataExistsQuery() const {
@@ -111,9 +105,10 @@ static bool IsDataOnlyCommit(const TransactionChangeInformation &c) {
 
 //! Whether the commit has to take the client-side path
 static bool RequiresClientSideCommit(DuckLakeTransaction &transaction) {
-	// the server-side commit cannot create the inlined-data table, delete flushed inlined data or write options
+	// the server-side commit cannot create inlined tables, delete flushed data, rewrite delete files or write options
 	return transaction.GetRequiresNewInlinedTable() || !transaction.GetFlushedInlinedTables().empty() ||
-	       !transaction.GetFlushedInlinedFileDeletions().empty() || transaction.HasDeferredConfigOptions();
+	       !transaction.GetFlushedInlinedFileDeletions().empty() ||
+	       transaction.GetLocalChanges().HasDatedNewDeletes() || transaction.HasDeferredConfigOptions();
 }
 
 bool QuackMetadataManager::CanSkipSnapshotFetch(const TransactionChangeInformation &changes) const {

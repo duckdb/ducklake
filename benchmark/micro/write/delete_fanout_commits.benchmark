@@ -1,0 +1,32 @@
+# name: benchmark/micro/write/delete_fanout_commits.benchmark
+# description: Three committed DELETEs that each write a delete file for all 1000 small files of a freshly attached lake
+# group: [write]
+
+name Delete Fanout Commits
+group micro
+subgroup write
+
+require ducklake
+
+require parquet
+
+argument work delete_fanout_work
+
+include benchmark/micro/fixtures/compaction.benchmark.in
+
+include benchmark/micro/fixtures/restore_cleanup.benchmark.in
+
+# Every DELETE hits every 2048-row file, so each commit replaces 1000 delete files
+run
+DELETE FROM lake.frag WHERE id % 10 = 0;
+DELETE FROM lake.frag WHERE id % 10 = 1;
+DELETE FROM lake.frag WHERE id % 10 = 2;
+
+# A missed reset leaves nothing for the last DELETE
+result_query III
+SELECT Count, (SELECT count(*) FROM lake.frag),
+(SELECT count(*) FROM __ducklake_metadata_lake.ducklake_delete_file WHERE end_snapshot IS NULL AND table_id = (
+SELECT table_id FROM __ducklake_metadata_lake.ducklake_table WHERE table_name = 'frag' AND end_snapshot IS NULL))
+FROM __answer
+----
+204800	1433600	1000

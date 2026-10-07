@@ -57,6 +57,21 @@ string DuckLakePartitionUtils::GetPartitionKeyName(DuckLakeTransformType transfo
 	return candidate;
 }
 
+vector<string> DuckLakePartitionUtils::GetPartitionKeyNames(const DuckLakePartition &partition,
+                                                            const DuckLakeFieldData &field_data) {
+	vector<string> result;
+	case_insensitive_set_t used_names;
+	for (auto &field : partition.fields) {
+		auto field_id = field_data.GetByFieldIndex(field.field_id);
+		if (!field_id) {
+			throw InternalException("DuckLake partition field id not found");
+		}
+		result.push_back(GetPartitionKeyName(field.transform.type, field_id->Name(), used_names));
+		used_names.insert(result.back());
+	}
+	return result;
+}
+
 bool DuckLakePartitionUtils::IsEpochTransform(DuckLakeTransformType transform_type) {
 	switch (transform_type) {
 	case DuckLakeTransformType::EPOCH_YEAR:
@@ -160,25 +175,19 @@ string DuckLakePartitionUtils::BuildHivePartitionPath(DuckLakeTableEntry &table,
 		throw InternalException("DuckLake partition value count does not match partition spec");
 	}
 	string result;
-	case_insensitive_set_t used_names;
-	for (auto &field : partition_data->fields) {
+	auto key_names = GetPartitionKeyNames(*partition_data, table.GetFieldData());
+	for (idx_t field_idx = 0; field_idx < partition_data->fields.size(); field_idx++) {
+		auto &field = partition_data->fields[field_idx];
 		if (field.partition_key_index >= partition_values.size()) {
 			throw InternalException("DuckLake partition key index is out of range");
 		}
-		auto field_id = table.GetFieldData().GetByFieldIndex(field.field_id);
-		if (!field_id) {
-			throw InternalException("DuckLake partition field id not found");
-		}
-		auto partition_key_name = GetPartitionKeyName(field.transform.type, field_id->Name(), used_names);
-		used_names.insert(partition_key_name);
-
 		auto &partition_value = partition_values[field.partition_key_index];
 		if (!result.empty()) {
 			result += separator;
 		}
-		result += HivePartitioning::Escape(partition_key_name) + "=";
+		result += HivePartitioning::Escape(key_names[field_idx]) + "=";
 		result += partition_value.IsNull() ? HivePartitioning::DEFAULT_PARTITION_NAME
-		                                   : HivePartitioning::Escape(partition_value.ToString());
+		                                   : HivePartitioning::EscapeValue(partition_value.ToString());
 	}
 	if (!result.empty()) {
 		result += separator;
