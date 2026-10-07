@@ -361,6 +361,9 @@ public:
 	InlinedDeletionCacheResult CheckInlinedDeletionTableCache(TableIndex table_id, DuckLakeSnapshot snapshot);
 	//! Cache the result of an inlined deletion table existence check
 	void CacheInlinedDeletionTableResult(TableIndex table_id, DuckLakeSnapshot snapshot, bool exists);
+	//! The rows of a table deleted in both a delete file and the inlined deletes, if counted at the snapshot
+	optional_idx TryGetRowsDeletedTwice(TableIndex table_id, DuckLakeSnapshot snapshot);
+	void CacheRowsDeletedTwice(TableIndex table_id, DuckLakeSnapshot snapshot, idx_t count);
 
 	//! Look up the cached begin snapshot of a (table, schema version) pair, if it has been resolved before
 	optional_idx TryGetSchemaVersionBeginSnapshot(TableIndex table_id, idx_t schema_version);
@@ -422,6 +425,9 @@ private:
 	//! Table IDs where the inlined deletion table is known to NOT exist, with the snapshot_id at which we checked
 	//! Valid as long as current snapshot.snapshot_id <= cached snapshot_id
 	unordered_map<idx_t, idx_t> inlined_deletion_not_exists;
+	mutex rows_deleted_twice_lock;
+	//! Table id -> (snapshot id, rows deleted twice) of the last count, snapshots never change what they hold
+	unordered_map<idx_t, pair<idx_t, idx_t>> rows_deleted_twice;
 	//! Cache of (table_id, schema_version) -> begin_snapshot. The backing row is written once when the schema
 	//! version is created and is never updated, so entries are permanent (only committed rows are cached)
 	mutex schema_version_snapshot_lock;

@@ -1356,6 +1356,20 @@ void DuckLakeCatalog::CacheInlinedDeletionTableResult(TableIndex table_id, DuckL
 	}
 }
 
+optional_idx DuckLakeCatalog::TryGetRowsDeletedTwice(TableIndex table_id, DuckLakeSnapshot snapshot) {
+	lock_guard<mutex> guard(rows_deleted_twice_lock);
+	auto entry = rows_deleted_twice.find(table_id.index);
+	if (entry == rows_deleted_twice.end() || entry->second.first != snapshot.snapshot_id) {
+		return optional_idx();
+	}
+	return entry->second.second;
+}
+
+void DuckLakeCatalog::CacheRowsDeletedTwice(TableIndex table_id, DuckLakeSnapshot snapshot, idx_t count) {
+	lock_guard<mutex> guard(rows_deleted_twice_lock);
+	rows_deleted_twice[table_id.index] = make_pair(snapshot.snapshot_id, count);
+}
+
 optional_idx DuckLakeCatalog::TryGetSchemaVersionBeginSnapshot(TableIndex table_id, idx_t schema_version) {
 	lock_guard<mutex> guard(schema_version_snapshot_lock);
 	auto entry = schema_version_begin_snapshots.find(make_pair(table_id.index, schema_version));

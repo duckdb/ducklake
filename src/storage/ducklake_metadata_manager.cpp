@@ -874,7 +874,13 @@ optional_idx DuckLakeMetadataManager::GetNetDataFileRowCountForStats(ClientConte
 		auto count = row.GetValue<int64_t>(0) - deleted_rows - inlined_deletions;
 		if (deleted_rows > 0 && inlined_deletions > 0) {
 			// a row deleted in both a delete file and the inlined deletes was subtracted twice
-			count += NumericCast<int64_t>(CountRowsDeletedTwice(context, table, snapshot, inlined_deletion_table));
+			auto &catalog = transaction.GetCatalog();
+			auto rows_deleted_twice = catalog.TryGetRowsDeletedTwice(table_id, snapshot);
+			if (!rows_deleted_twice.IsValid()) {
+				rows_deleted_twice = CountRowsDeletedTwice(context, table, snapshot, inlined_deletion_table);
+				catalog.CacheRowsDeletedTwice(table_id, snapshot, rows_deleted_twice.GetIndex());
+			}
+			count += NumericCast<int64_t>(rows_deleted_twice.GetIndex());
 		}
 		return optional_idx(NumericCast<idx_t>(count));
 	}

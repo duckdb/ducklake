@@ -43,6 +43,11 @@ DELETE FROM dl.t WHERE i = 5
 statement ok
 DELETE FROM dl.t WHERE i >= 50 AND i < 80
 
+query I
+SELECT count(*) FROM dl.t
+----
+69
+
 statement ok
 DELETE FROM dl.t WHERE i = 90
 
