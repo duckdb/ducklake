@@ -31,7 +31,6 @@
 #include "storage/ducklake_log_type.hpp"
 #include "duckdb/main/client_context.hpp"
 #include "duckdb/main/settings.hpp"
-#include "duckdb/main/client_config.hpp"
 
 namespace duckdb {
 
@@ -139,9 +138,7 @@ shared_ptr<DuckLakeInlinedData> LocalTableChanges::GetTransactionLocalInlinedDat
 	auto &inlined = *table_changes.new_inlined_data;
 	auto result = make_shared_ptr<DuckLakeInlinedData>();
 	result->data = make_uniq<ColumnDataCollection>(context, inlined.data->Types());
-	for (auto &chunk : inlined.data->Chunks()) {
-		result->data->Append(chunk);
-	}
+	result->data->Append(*inlined.data);
 	result->row_ids = inlined.row_ids;
 	return result;
 }
@@ -237,11 +234,7 @@ void LocalTableChanges::AppendInlinedData(ClientContext &context, TableIndex tab
 			}
 			existing_data.data = std::move(casted_data);
 		}
-		ColumnDataAppendState append_state;
-		existing_data.data->InitializeAppend(append_state);
-		for (auto &chunk : new_data->data->Chunks()) {
-			existing_data.data->Append(chunk);
-		}
+		existing_data.data->Append(*new_data->data);
 		// merge preserved row_ids from update inlining
 		existing_data.MergeRowIds(*new_data, new_data->data->Count());
 		for (auto &entry : new_data->column_stats) {
@@ -356,20 +349,14 @@ void LocalTableChanges::AddColumnToLocalInlinedData(ClientContext &context, Tabl
 	for (auto &chunk : existing.Chunks()) {
 		DataChunk new_chunk;
 		new_chunk.Initialize(context, new_types);
-
-		// Copy existing columns
-		for (idx_t col_idx = 0; col_idx < chunk.ColumnCount(); col_idx++) {
-			new_chunk.data[col_idx].Reference(chunk.data[col_idx]);
-		}
+		new_chunk.Reference(chunk);
 
 		// New column: use default value or NULL
 		auto &new_col_vector = new_chunk.data[chunk.ColumnCount()];
 		if (has_default) {
 			new_col_vector.Reference(default_value, count_t(chunk.size()));
 		} else {
-			new_col_vector.SetVectorType(VectorType::CONSTANT_VECTOR);
-			FlatVector::SetSize(new_col_vector, chunk.size());
-			ConstantVector::SetNull(new_col_vector, true);
+			ConstantVector::SetNull(new_col_vector, count_t(chunk.size()));
 		}
 
 		new_chunk.SetChildCardinality(chunk.size());
@@ -412,11 +399,13 @@ void LocalTableChanges::RemoveColumnFromLocalInlinedData(ClientContext &context,
 	auto &existing = *table_changes.new_inlined_data->data;
 
 	// New types: existing minus the removed column
+	vector<column_t> column_ids;
 	vector<LogicalType> new_types;
-	for (idx_t col_idx = 0; col_idx < existing.Types().size(); col_idx++) {
+	for (idx_t col_idx = 0; col_idx < existing.ColumnCount(); col_idx++) {
 		if (col_idx == removed_column_index.index) {
 			continue;
 		}
+		column_ids.push_back(col_idx);
 		new_types.push_back(existing.Types()[col_idx]);
 	}
 
@@ -425,21 +414,8 @@ void LocalTableChanges::RemoveColumnFromLocalInlinedData(ClientContext &context,
 	ColumnDataAppendState append_state;
 	new_data->InitializeAppend(append_state);
 
-	for (auto &chunk : existing.Chunks()) {
-		DataChunk new_chunk;
-		new_chunk.Initialize(context, new_types);
-
-		idx_t new_col_idx = 0;
-		for (idx_t col_idx = 0; col_idx < chunk.ColumnCount(); col_idx++) {
-			if (col_idx == removed_column_index.index) {
-				continue;
-			}
-			new_chunk.data[new_col_idx].Reference(chunk.data[col_idx]);
-			new_col_idx++;
-		}
-
-		new_chunk.SetChildCardinality(chunk.size());
-		new_data->Append(append_state, new_chunk);
+	for (auto &chunk : existing.Chunks(column_ids)) {
+		new_data->Append(append_state, chunk);
 	}
 
 	// Remove stats for the dropped field and all its children
@@ -659,52 +635,6 @@ void LocalTableChanges::AddDeletes(ClientContext &context, TableIndex table_id, 
 	LocalTableChanges::AddDeletesToMap(context, std::move(files), table_delete_map);
 }
 
-LocalTableChangeIterationHelper::LocalTableChangeIterationHelper(
-    mutex &local_changes_lock, const map<TableIndex, LocalTableDataChanges> &changes_p)
-    : lock(local_changes_lock), changes(changes_p) {
-}
-
-LocalTableChangeIterationHelper::LocalTableChangeIteratorEntry::LocalTableChangeIteratorEntry() {
-}
-
-TableIndex LocalTableChangeIterationHelper::LocalTableChangeIteratorEntry::GetTableIndex() const {
-	return table_id;
-}
-
-const LocalTableDataChanges &LocalTableChangeIterationHelper::LocalTableChangeIteratorEntry::GetTableChanges() const {
-	return *changes;
-}
-
-LocalTableChangeIterationHelper::LocalTableChangeIterator::LocalTableChangeIterator(
-    map<TableIndex, LocalTableDataChanges>::const_iterator it_p,
-    map<TableIndex, LocalTableDataChanges>::const_iterator end_it_p)
-    : it(std::move(it_p)), end_it(std::move(end_it_p)) {
-	if (it != end_it) {
-		entry.table_id = it->first;
-		entry.changes = it->second;
-	}
-}
-
-LocalTableChangeIterationHelper::LocalTableChangeIterator &
-LocalTableChangeIterationHelper::LocalTableChangeIterator::operator++() {
-	it++;
-	if (it != end_it) {
-		entry.table_id = it->first;
-		entry.changes = it->second;
-	}
-	return *this;
-}
-
-bool LocalTableChangeIterationHelper::LocalTableChangeIterator::operator!=(
-    const LocalTableChangeIterator &other) const {
-	return it != other.it;
-}
-
-const LocalTableChangeIterationHelper::LocalTableChangeIteratorEntry &
-LocalTableChangeIterationHelper::LocalTableChangeIterator::operator*() const {
-	return entry;
-}
-
 LocalTableChangeIterationHelper LocalTableChanges::Changes() const {
 	return LocalTableChangeIterationHelper(lock, changes);
 }
@@ -832,8 +762,7 @@ Connection &DuckLakeTransaction::GetConnection() {
 		client_data.catalog_search_path->Set(metadata_entry, CatalogSetPathType::SET_DIRECTLY);
 
 		// set max error reporting to 0 so that during error reporting we don't traverse other schemas / catalogs
-		auto &client_config = ClientConfig::GetConfig(*connection->context);
-		client_config.user_settings.SetUserSetting(CatalogErrorMaxSchemasSetting::SettingIndex, Value::UBIGINT(0));
+		Settings::Set<CatalogErrorMaxSchemasSetting>(*connection->context, SetScope::SESSION, Value::UBIGINT(0));
 		// FIXME: disable postgres_scanner experimental filter pushdown for metadata queries
 		// it does not support all filter types DuckDB may push down (e.g. EXPRESSION_FILTER)
 		auto &metadata_type = ducklake_catalog.MetadataType();
@@ -1035,13 +964,12 @@ TransactionChangeInformation DuckLakeTransaction::GetTransactionChanges() const 
 	changes.tables_deleted_from = tables_deleted_from;
 	changes.tables_delete_attempted = state->tables_delete_attempted;
 	for (auto &entry : local_changes.Changes()) {
-		auto table_id = entry.GetTableIndex();
+		auto table_id = entry.first;
 		if (IsTransactionLocal(table_id.index)) {
 			// don't report transaction-local tables yet - these will get added later on
 			continue;
 		}
-		auto &table_changes = entry.GetTableChanges();
-		AddTableChanges(table_id, table_changes, changes);
+		AddTableChanges(table_id, entry.second, changes);
 	}
 	return changes;
 }
@@ -1114,39 +1042,10 @@ DuckLakePartitionInfo DuckLakeTransaction::GetNewPartitionKey(DuckLakeCommitStat
 		DuckLakePartitionFieldInfo partition_field;
 		partition_field.partition_key_index = field.partition_key_index;
 		partition_field.field_id = field.field_id;
-		switch (field.transform.type) {
-		case DuckLakeTransformType::IDENTITY:
-			partition_field.transform = "identity";
-			break;
-		case DuckLakeTransformType::YEAR:
-			partition_field.transform = "year";
-			break;
-		case DuckLakeTransformType::MONTH:
-			partition_field.transform = "month";
-			break;
-		case DuckLakeTransformType::DAY:
-			partition_field.transform = "day";
-			break;
-		case DuckLakeTransformType::HOUR:
-			partition_field.transform = "hour";
-			break;
-		case DuckLakeTransformType::EPOCH_YEAR:
-			partition_field.transform = "epoch_year";
-			break;
-		case DuckLakeTransformType::EPOCH_MONTH:
-			partition_field.transform = "epoch_month";
-			break;
-		case DuckLakeTransformType::EPOCH_DAY:
-			partition_field.transform = "epoch_day";
-			break;
-		case DuckLakeTransformType::EPOCH_HOUR:
-			partition_field.transform = "epoch_hour";
-			break;
-		case DuckLakeTransformType::BUCKET:
+		if (field.transform.type == DuckLakeTransformType::BUCKET) {
 			partition_field.transform = StringUtil::Format("bucket(%d)", field.transform.bucket_count);
-			break;
-		default:
-			throw NotImplementedException("Unimplemented transform type for partition");
+		} else {
+			partition_field.transform = DuckLakePartitionUtils::GetTransformName(field.transform.type);
 		}
 		partition_key.fields.push_back(std::move(partition_field));
 	}
@@ -1395,16 +1294,9 @@ bool DuckLakeTransaction::RetryOnError(const string &original_message) {
 
 DuckLakeRetryConfig DuckLakeRetryConfig::FromContext(ClientContext &context) {
 	DuckLakeRetryConfig config;
-	Value setting_val;
-	if (context.TryGetCurrentSetting("ducklake_max_retry_count", setting_val)) {
-		config.max_retry_count = setting_val.GetValue<idx_t>();
-	}
-	if (context.TryGetCurrentSetting("ducklake_retry_wait_ms", setting_val)) {
-		config.retry_wait_ms = setting_val.GetValue<idx_t>();
-	}
-	if (context.TryGetCurrentSetting("ducklake_retry_backoff", setting_val)) {
-		config.retry_backoff = setting_val.GetValue<double>();
-	}
+	context.TryGetCurrentSetting("ducklake_max_retry_count", config.max_retry_count);
+	context.TryGetCurrentSetting("ducklake_retry_wait_ms", config.retry_wait_ms);
+	context.TryGetCurrentSetting("ducklake_retry_backoff", config.retry_backoff);
 	return config;
 }
 
@@ -1462,10 +1354,8 @@ void DuckLakeTransaction::RunCommitLoop(DuckLakeSnapshot transaction_snapshot,
 	DuckLakeCommitContext context;
 	context.conflict_query_executor = [&](string q) -> unique_ptr<QueryResult> {
 		auto result = metadata_manager->Query(transaction_snapshot, q);
-		if (result->HasError()) {
-			result->GetErrorObject().Throw("Failed to commit DuckLake transaction - failed to get snapshot and "
-			                               "snapshot changes for conflict resolution:");
-		}
+		result->ThrowIfError("Failed to commit DuckLake transaction - failed to get snapshot and "
+		                     "snapshot changes for conflict resolution:");
 		return result;
 	};
 	context.inlined_file_deletion_table_exists = [&](TableIndex table_id) {

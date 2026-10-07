@@ -23,9 +23,8 @@ TableCatalogEntry &GetTableEntry(ClientContext &context, Catalog &catalog, const
 		throw BinderException("Schema cannot be NULL");
 	}
 	auto schema_name = schema.GetValue<string>();
-	EntryLookupInfo qualified_lookup(
-	    lookup, DuckLakeUtil::QualifiedEntryName(context, catalog, schema_name, lookup.GetEntryName(),
-	                                             lookup.GetCatalogType(), lookup.GetAtClause()));
+	EntryLookupInfo qualified_lookup(lookup, catalog.ResolveEntryName(context, schema_name, lookup.GetEntryName(),
+	                                                                  lookup.GetCatalogType(), lookup.GetAtClause()));
 	CatalogEntryRetriever retriever(context);
 	auto entry = catalog.LookupEntry(retriever, qualified_lookup, OnEntryNotFound::THROW_EXCEPTION).entry;
 	if (entry->type != CatalogType::TABLE_ENTRY) {
@@ -62,7 +61,7 @@ static unique_ptr<FunctionData> DuckLakeTableChangesBind(ClientContext &context,
 	auto &transaction = DuckLakeTransaction::Get(context, catalog);
 
 	unique_ptr<FunctionData> bind_data;
-	input.table_function = table.GetScanFunction(context, bind_data, lookup);
+	input.table_function = BoundTableFunction(table.GetScanFunction(context, bind_data, lookup));
 
 	auto &function_info = input.table_function.function_info->Cast<DuckLakeFunctionInfo>();
 	names = StringsToIdentifiers(function_info.column_names);
@@ -85,10 +84,6 @@ static unique_ptr<FunctionData> DuckLakeTableDeletionsBind(ClientContext &contex
 	return DuckLakeTableChangesBind(context, input, return_types, names, DuckLakeScanType::SCAN_DELETIONS);
 }
 
-static unique_ptr<GlobalTableFunctionState> DuckLakeChangesInit(ClientContext &context, TableFunctionInitInput &input) {
-	throw InternalException("DuckLakeChangesInit should never be called");
-}
-
 static void DuckLakeChangesExecute(ClientContext &context, TableFunctionInput &data_p, DataChunk &output) {
 	throw InternalException("DuckLakeChangesExecute should never be called");
 }
@@ -97,8 +92,13 @@ TableFunctionSet DuckLakeTableInsertionsFunction::GetFunctions() {
 	TableFunctionSet set("ducklake_table_insertions");
 	vector<LogicalType> at_types {LogicalType::BIGINT, LogicalType::TIMESTAMP_TZ};
 	for (auto &type : at_types) {
-		set.AddFunction(TableFunction({LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::VARCHAR, type, type},
-		                              DuckLakeChangesExecute, DuckLakeTableInsertionsBind, DuckLakeChangesInit));
+		set.AddFunction(TableFunction(FunctionSignature()
+		                                  .AddPositionalOnly("catalog", LogicalType::VARCHAR)
+		                                  .AddPositionalOnly("schema_name", LogicalType::VARCHAR)
+		                                  .AddPositionalOnly("table_name", LogicalType::VARCHAR)
+		                                  .AddPositionalOnly("start_snapshot", type)
+		                                  .AddPositionalOnly("end_snapshot", type),
+		                              DuckLakeChangesExecute, DuckLakeTableInsertionsBind));
 	}
 	return set;
 }
@@ -107,8 +107,13 @@ TableFunctionSet DuckLakeTableDeletionsFunction::GetFunctions() {
 	TableFunctionSet set("ducklake_table_deletions");
 	vector<LogicalType> at_types {LogicalType::BIGINT, LogicalType::TIMESTAMP_TZ};
 	for (auto &type : at_types) {
-		set.AddFunction(TableFunction({LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::VARCHAR, type, type},
-		                              DuckLakeChangesExecute, DuckLakeTableDeletionsBind, DuckLakeChangesInit));
+		set.AddFunction(TableFunction(FunctionSignature()
+		                                  .AddPositionalOnly("catalog", LogicalType::VARCHAR)
+		                                  .AddPositionalOnly("schema_name", LogicalType::VARCHAR)
+		                                  .AddPositionalOnly("table_name", LogicalType::VARCHAR)
+		                                  .AddPositionalOnly("start_snapshot", type)
+		                                  .AddPositionalOnly("end_snapshot", type),
+		                              DuckLakeChangesExecute, DuckLakeTableDeletionsBind));
 	}
 	return set;
 }

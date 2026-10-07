@@ -352,28 +352,15 @@ SinkResultType DuckLakeDelete::Sink(ExecutionContext &context, DataChunk &chunk,
 	auto &global_state = input.global_state.Cast<DuckLakeDeleteGlobalState>();
 	auto &local_state = input.local_state.Cast<DuckLakeDeleteLocalState>();
 
-	auto &file_name_vector = chunk.data[row_id_indexes[0]];
-	auto &file_index_vector = chunk.data[row_id_indexes[1]];
-	auto &file_row_number = chunk.data[row_id_indexes[2]];
-
-	UnifiedVectorFormat row_data;
-	file_row_number.ToUnifiedFormat(row_data);
-	auto file_row_data = UnifiedVectorFormat::GetData<int64_t>(row_data);
-
-	UnifiedVectorFormat file_name_vdata;
-	file_name_vector.ToUnifiedFormat(file_name_vdata);
-
-	UnifiedVectorFormat file_index_vdata;
-	file_index_vector.ToUnifiedFormat(file_index_vdata);
-
-	auto file_index_data = UnifiedVectorFormat::GetData<uint64_t>(file_index_vdata);
+	auto file_names = chunk.data[row_id_indexes[0]].Values<string_t>();
+	auto file_indexes = chunk.data[row_id_indexes[1]].Values<uint64_t>();
+	auto file_row_numbers = chunk.data[row_id_indexes[2]].Values<int64_t>();
 	for (idx_t i = 0; i < chunk.size(); i++) {
-		auto file_idx = file_index_vdata.sel->get_index(i);
-		auto row_idx = row_data.sel->get_index(i);
-		if (!file_index_vdata.validity.RowIsValid(file_idx)) {
+		auto file_index_entry = file_indexes[i];
+		if (!file_index_entry.IsValid()) {
 			throw InternalException("File index cannot be NULL!");
 		}
-		auto file_index = file_index_data[file_idx];
+		auto file_index = file_index_entry.GetValue();
 		if (!local_state.current_file_index.IsValid() || file_index != local_state.current_file_index.GetIndex()) {
 			// file has changed - flush
 			global_state.Flush(context.client, local_state);
@@ -381,16 +368,14 @@ SinkResultType DuckLakeDelete::Sink(ExecutionContext &context, DataChunk &chunk,
 			// insert the file name for the file if it has not yet been inserted
 			auto entry = local_state.filenames.find(file_index);
 			if (entry == local_state.filenames.end()) {
-				auto file_name_idx = file_name_vdata.sel->get_index(i);
-				auto file_name_data = UnifiedVectorFormat::GetData<string_t>(file_name_vdata);
-				if (!file_name_vdata.validity.RowIsValid(file_name_idx)) {
+				auto file_name = file_names[i];
+				if (!file_name.IsValid()) {
 					throw InternalException("Filename cannot be NULL!");
 				}
-				local_state.filenames.emplace(file_index, file_name_data[file_name_idx].GetString());
+				local_state.filenames.emplace(file_index, file_name.GetValue().GetString());
 			}
 		}
-		auto row_number = file_row_data[row_idx];
-		local_state.file_row_numbers.push_back(row_number);
+		local_state.file_row_numbers.push_back(file_row_numbers.GetValueUnsafe(i));
 	}
 	return SinkResultType::NEED_MORE_INPUT;
 }

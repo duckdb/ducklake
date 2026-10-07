@@ -2,32 +2,14 @@
 
 #include "storage/ducklake_deletion_vector.hpp"
 #include "duckdb/common/file_system.hpp"
+#include "duckdb/common/json_document.hpp"
 #include "duckdb/common/numeric_utils.hpp"
 #include "duckdb/common/to_string.hpp"
-
-#include "yyjson.hpp"
 
 #include <cerrno>
 #include <cstdlib>
 
 namespace duckdb {
-
-using namespace duckdb_yyjson; // NOLINT
-
-namespace {
-
-struct YyjsonMutDocHolder {
-	explicit YyjsonMutDocHolder(yyjson_mut_doc *doc) : doc(doc) {
-	}
-	~YyjsonMutDocHolder() {
-		if (doc) {
-			yyjson_mut_doc_free(doc);
-		}
-	}
-	yyjson_mut_doc *doc;
-};
-
-} // namespace
 
 // https://iceberg.apache.org/puffin-spec/
 // File structure: Magic Blob1 ... BlobN Footer
@@ -72,46 +54,40 @@ static vector<DuckLakePuffinBlob> AppendBlobs(vector<data_t> &file_data,
 
 // BlobMetadata: type, fields, snapshot-id, sequence-number, offset, length, properties
 // snapshot-id/sequence-number must be -1 for deletion vectors
-static void AddBlobMetadata(yyjson_mut_doc *doc, yyjson_mut_val *blob_arr, const DuckLakePuffinWriter::BlobInput &input,
-                            const DuckLakePuffinBlob &info, const string &data_file_path) {
-	auto blob_obj = yyjson_mut_arr_add_obj(doc, blob_arr);
-	yyjson_mut_obj_add_str(doc, blob_obj, "type", DELETION_VECTOR_BLOB_TYPE);
-	yyjson_mut_obj_add_arr(doc, blob_obj, "fields");
-	yyjson_mut_obj_add_int(doc, blob_obj, "snapshot-id", -1);
-	yyjson_mut_obj_add_int(doc, blob_obj, "sequence-number", -1);
-	yyjson_mut_obj_add_uint(doc, blob_obj, "offset", info.offset);
-	yyjson_mut_obj_add_uint(doc, blob_obj, "length", info.length);
-	auto properties = yyjson_mut_obj_add_obj(doc, blob_obj, "properties");
-	yyjson_mut_obj_add_strcpy(doc, properties, "referenced-data-file", data_file_path.c_str());
-	yyjson_mut_obj_add_strcpy(doc, properties, "cardinality", to_string(input.positions->size()).c_str());
+static JSONMutableValue CreateBlobMetadata(JSONWriter &writer, const DuckLakePuffinWriter::BlobInput &input,
+                                           const DuckLakePuffinBlob &info, const string &data_file_path) {
+	auto blob_obj = writer.CreateObject();
+	blob_obj.AddString("type", DELETION_VECTOR_BLOB_TYPE);
+	blob_obj.Add("fields", writer.CreateArray());
+	blob_obj.Add("snapshot-id", writer.CreateSignedInteger(-1));
+	blob_obj.Add("sequence-number", writer.CreateSignedInteger(-1));
+	blob_obj.Add("offset", writer.CreateUnsignedInteger(info.offset));
+	blob_obj.Add("length", writer.CreateUnsignedInteger(info.length));
+	auto properties = writer.CreateObject();
+	properties.AddString("referenced-data-file", data_file_path);
+	properties.AddString("cardinality", to_string(input.positions->size()));
 	if (input.snapshot_id.IsValid()) {
-		yyjson_mut_obj_add_strcpy(doc, properties, DUCKLAKE_SNAPSHOT_PROPERTY,
-		                          to_string(input.snapshot_id.GetIndex()).c_str());
+		properties.AddString(DUCKLAKE_SNAPSHOT_PROPERTY, to_string(input.snapshot_id.GetIndex()));
 	}
+	blob_obj.Add("properties", properties);
+	return blob_obj;
 }
 
 // FileMetadata payload: blobs (required) and properties (optional)
 static string WriteFooterPayload(const vector<DuckLakePuffinWriter::BlobInput> &blobs,
                                  const vector<DuckLakePuffinBlob> &blob_infos, const string &data_file_path) {
-	YyjsonMutDocHolder doc_holder(yyjson_mut_doc_new(nullptr));
-	auto doc = doc_holder.doc;
-	auto root = yyjson_mut_obj(doc);
-	yyjson_mut_doc_set_root(doc, root);
-
-	auto blob_arr = yyjson_mut_obj_add_arr(doc, root, "blobs");
+	JSONWriter writer;
+	auto blob_arr = writer.CreateArray();
 	for (idx_t blob_idx = 0; blob_idx < blobs.size(); blob_idx++) {
-		AddBlobMetadata(doc, blob_arr, blobs[blob_idx], blob_infos[blob_idx], data_file_path);
+		blob_arr.Append(CreateBlobMetadata(writer, blobs[blob_idx], blob_infos[blob_idx], data_file_path));
 	}
-	auto file_properties = yyjson_mut_obj_add_obj(doc, root, "properties");
-	yyjson_mut_obj_add_str(doc, file_properties, "created-by", "ducklake");
-
-	size_t len = 0;
-	auto json = yyjson_mut_write(doc, 0, &len);
-	if (!json) {
-		throw InternalException("Failed to write puffin footer payload");
-	}
-	unique_ptr<char, void (*)(void *)> json_holder(json, std::free);
-	return string(json, len);
+	auto file_properties = writer.CreateObject();
+	file_properties.AddString("created-by", "ducklake");
+	auto root = writer.CreateObject();
+	root.Add("blobs", blob_arr);
+	root.Add("properties", file_properties);
+	writer.SetRoot(root);
+	return writer.ToString();
 }
 
 // Footer: Magic | FooterPayload | FooterPayloadSize (little-endian) | Flags (all zero) | Magic
@@ -159,22 +135,6 @@ DuckLakePuffinWriteResult DuckLakePuffinWriter::Write(FileSystem &fs, const stri
 //===--------------------------------------------------------------------===//
 // Reader
 //===--------------------------------------------------------------------===//
-namespace {
-
-struct YyjsonDocHolder {
-	explicit YyjsonDocHolder(yyjson_doc *doc) : doc(doc) {
-	}
-	~YyjsonDocHolder() {
-		if (doc) {
-			yyjson_doc_free(doc);
-		}
-	}
-
-	yyjson_doc *doc;
-};
-
-} // namespace
-
 static idx_t ParseSnapshotProperty(const string &value, const string &path) {
 	char *end = nullptr;
 	auto parsed = std::strtoull(value.c_str(), &end, 10);
@@ -217,23 +177,22 @@ static idx_t ValidateFooter(data_ptr_t data, idx_t size, const string &path) {
 
 // BlobMetadata: type, fields, snapshot-id, sequence-number, offset, length, properties
 // Returns false for blob types we do not know
-static bool TryParseBlobMetadata(yyjson_val *blob_val, idx_t blob_section_end, const string &path,
+static bool TryParseBlobMetadata(const JSONValue &blob_val, idx_t blob_section_end, const string &path,
                                  DuckLakePuffinBlob &blob) {
-	auto type_val = yyjson_obj_get(blob_val, "type");
-	if (!type_val || !yyjson_is_str(type_val)) {
+	auto type_val = blob_val.GetMember("type");
+	if (!type_val.IsString()) {
 		throw InvalidInputException("Puffin file \"%s\" is corrupt - blob without a type", path);
 	}
-	string blob_type(yyjson_get_str(type_val), yyjson_get_len(type_val));
-	if (blob_type != DELETION_VECTOR_BLOB_TYPE) {
+	if (type_val.GetString() != DELETION_VECTOR_BLOB_TYPE) {
 		return false;
 	}
-	auto offset_val = yyjson_obj_get(blob_val, "offset");
-	auto length_val = yyjson_obj_get(blob_val, "length");
-	if (!offset_val || !yyjson_is_int(offset_val) || !length_val || !yyjson_is_int(length_val)) {
+	auto offset_val = blob_val.GetMember("offset");
+	auto length_val = blob_val.GetMember("length");
+	if (!offset_val.IsInteger() || !length_val.IsInteger()) {
 		throw InvalidInputException("Puffin file \"%s\" is corrupt - blob without offset/length", path);
 	}
-	auto raw_offset = yyjson_get_sint(offset_val);
-	auto raw_length = yyjson_get_sint(length_val);
+	auto raw_offset = offset_val.GetSignedInteger();
+	auto raw_length = length_val.GetSignedInteger();
 	if (raw_offset < 0 || raw_length < 0) {
 		throw InvalidInputException("Puffin file \"%s\" is corrupt - blob offset/length out of range", path);
 	}
@@ -243,13 +202,9 @@ static bool TryParseBlobMetadata(yyjson_val *blob_val, idx_t blob_section_end, c
 	    blob.offset > blob_section_end - blob.length) {
 		throw InvalidInputException("Puffin file \"%s\" is corrupt - blob offset/length out of range", path);
 	}
-	auto properties_val = yyjson_obj_get(blob_val, "properties");
-	if (properties_val && yyjson_is_obj(properties_val)) {
-		auto snapshot_val = yyjson_obj_get(properties_val, DUCKLAKE_SNAPSHOT_PROPERTY);
-		if (snapshot_val && yyjson_is_str(snapshot_val)) {
-			string snapshot_str(yyjson_get_str(snapshot_val), yyjson_get_len(snapshot_val));
-			blob.snapshot_id = ParseSnapshotProperty(snapshot_str, path);
-		}
+	auto snapshot_val = blob_val.GetMember("properties").GetMember(DUCKLAKE_SNAPSHOT_PROPERTY);
+	if (snapshot_val.IsString()) {
+		blob.snapshot_id = ParseSnapshotProperty(snapshot_val.GetString(), path);
 	}
 	return true;
 }
@@ -257,24 +212,22 @@ static bool TryParseBlobMetadata(yyjson_val *blob_val, idx_t blob_section_end, c
 // FileMetadata payload: blobs (required) and properties (optional)
 static vector<DuckLakePuffinBlob> ParseFileMetadata(data_ptr_t payload, idx_t payload_size, idx_t blob_section_end,
                                                     const string &path) {
-	YyjsonDocHolder doc_holder(yyjson_read(const_char_ptr_cast(payload), payload_size, 0));
-	if (!doc_holder.doc) {
+	JSONParseError error;
+	auto doc = JSONDocument::TryParse(const_char_ptr_cast(payload), payload_size, error);
+	if (!doc) {
 		throw InvalidInputException("Puffin file \"%s\" is corrupt - failed to parse footer payload", path);
 	}
-	auto root = yyjson_doc_get_root(doc_holder.doc);
-	auto blobs_val = yyjson_obj_get(root, "blobs");
-	if (!blobs_val || !yyjson_is_arr(blobs_val)) {
+	auto blobs_val = doc->GetRoot().GetMember("blobs");
+	if (!blobs_val.IsArray()) {
 		throw InvalidInputException("Puffin file \"%s\" is corrupt - footer has no \"blobs\" list", path);
 	}
 	vector<DuckLakePuffinBlob> result;
-	size_t arr_idx, arr_max;
-	yyjson_val *blob_val;
-	yyjson_arr_foreach(blobs_val, arr_idx, arr_max, blob_val) {
+	blobs_val.IterateArray([&](JSONValue blob_val) {
 		DuckLakePuffinBlob blob;
 		if (TryParseBlobMetadata(blob_val, blob_section_end, path, blob)) {
 			result.push_back(blob);
 		}
-	}
+	});
 	return result;
 }
 

@@ -27,15 +27,16 @@ public:
 	//! Table Functions
 	static TableFunction GetDuckLakeScanFunction(DatabaseInstance &instance);
 
-	static unique_ptr<FunctionData> BindDuckLakeScan(ClientContext &context, TableFunction &function);
+	static unique_ptr<FunctionData> BindDuckLakeScan(ClientContext &context, const TableFunction &function);
+	static unique_ptr<FunctionData> BindDuckLakeScan(ClientContext &context, BoundTableFunction &function);
 
 	static CopyFunctionCatalogEntry &GetCopyFunction(ClientContext &context, const Identifier &name);
 };
 
 //! Serialize/Deserialize callbacks for DuckLakeScan (used by table macro Copy)
 void DuckLakeScanSerialize(Serializer &serializer, const optional_ptr<FunctionData> bind_data,
-                           const TableFunction &function);
-unique_ptr<FunctionData> DuckLakeScanDeserialize(Deserializer &deserializer, TableFunction &function);
+                           const BoundTableFunction &function);
+unique_ptr<FunctionData> DuckLakeScanDeserialize(Deserializer &deserializer, BoundTableFunction &function);
 
 enum class DuckLakeScanType { SCAN_TABLE, SCAN_INSERTIONS, SCAN_DELETIONS, SCAN_FOR_FLUSH };
 

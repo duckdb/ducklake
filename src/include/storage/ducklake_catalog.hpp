@@ -91,11 +91,6 @@ struct DuckLakeSchemaCacheEntry : public ObjectCacheEntry {
 	    : catalog_set(std::move(*catalog_set_p)) {
 	}
 
-	// contents of the shared_ptr target are moved out
-	explicit DuckLakeSchemaCacheEntry(shared_ptr<DuckLakeCatalogSet> catalog_set_p)
-	    : catalog_set(std::move(*catalog_set_p)) {
-	}
-
 	DuckLakeCatalogSet catalog_set;
 
 	static string ObjectType() {
@@ -148,8 +143,8 @@ public:
 	~DuckLakeCatalog() override;
 
 public:
-	void Initialize(bool load_builtin) override;
-	void Initialize(optional_ptr<ClientContext> context, bool load_builtin) override;
+	void Initialize(bool load_builtin) override {
+	}
 	void FinalizeLoad(optional_ptr<ClientContext> context) override;
 	string GetCatalogType() override {
 		return "ducklake";
@@ -298,6 +293,9 @@ public:
 	}
 	void SetDuckLakeVersion(DuckLakeVersion version) {
 		ducklake_version = version;
+	}
+	bool SupportsNestedSchemas() const override {
+		return SupportsV1_1Metadata();
 	}
 	//! Whether the catalog has the v1.1 metadata features
 	bool SupportsV1_1Metadata() const {

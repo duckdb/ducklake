@@ -15,6 +15,7 @@
 #include "duckdb/common/optional_idx.hpp"
 #include "duckdb/common/reference_map.hpp"
 #include "duckdb/common/types/value.hpp"
+#include "common/ducklake_row_helpers.hpp"
 #include "common/ducklake_snapshot.hpp"
 #include "storage/ducklake_partition_data.hpp"
 #include "storage/ducklake_stats.hpp"
@@ -37,7 +38,6 @@ class DuckLakeTransaction;
 struct DuckLakeRetryConfig;
 struct TransactionChangeInformation;
 class BoundAtClause;
-class QueryResult;
 class SQLStatement;
 class FileSystem;
 
@@ -237,8 +237,6 @@ public:
 	virtual idx_t MaxIdentifierLength() const {
 		return NumericLimits<idx_t>::Maximum();
 	}
-	//! Check if columns (stored as DuckLakeColumnInfo) support inlining, recursing into children
-	bool SupportsInliningColumns(const vector<DuckLakeColumnInfo> &columns);
 
 	//! Check whether a table with the given columns can be inlined
 	bool CanInlineColumns(const ColumnList &columns);
@@ -280,8 +278,7 @@ public:
 
 	//! Rvalue sugar so call sites can pass `R"(...)"` and `StringUtil::Format(...)` directly.
 	//! Named-rvalue decays to an lvalue inside, so the virtual dispatch still picks up the
-	//! string-ref overrides without derived classes needing to add anything. Defined out-of-line
-	//! since QueryResult is only forward-declared here.
+	//! string-ref overrides without derived classes needing to add anything.
 	unique_ptr<QueryResult> Execute(DuckLakeSnapshot snapshot, string &&query);
 	unique_ptr<QueryResult> Execute(string &&query);
 	unique_ptr<QueryResult> Query(DuckLakeSnapshot snapshot, string &&query);
@@ -582,7 +579,9 @@ public:
 
 protected:
 	string GetInlinedTableQuery(const DuckLakeTableInfo &table, const string &table_name);
+	bool CanInlineColumn(const string &name, const LogicalType &type);
 	string GetColumnType(const DuckLakeColumnInfo &col);
+	string GetColumnDefinitions(const vector<DuckLakeColumnInfo> &columns);
 	string GetKnownFilesForCleanupQuery(const string &separator) const;
 
 	//! Optimized data file writing using DuckDB Appender API (only for DuckDB metadata manager)
@@ -613,10 +612,10 @@ protected:
 private:
 	template <class T>
 	static string FlushDrop(const string &metadata_table_name, const string &id_name, const set<T> &dropped_entries);
-	template <class T>
-	DuckLakeFileData ReadDataFile(DuckLakeTableEntry &table, T &row, idx_t &col_idx, bool is_encrypted);
-	template <class T>
-	DuckLakeFileData ReadDeleteFile(DuckLakeTableEntry &table, T &row, idx_t &col_idx, bool is_encrypted);
+	DuckLakeFileData ReadDataFile(DuckLakeTableEntry &table, const QueryResultRow &row, idx_t &col_idx,
+	                              bool is_encrypted);
+	DuckLakeFileData ReadDeleteFile(DuckLakeTableEntry &table, const QueryResultRow &row, idx_t &col_idx,
+	                                bool is_encrypted);
 
 	bool IsEncrypted() const;
 
@@ -641,6 +640,7 @@ protected:
 	                                          const FileColumnStatsCTEBodyGenerator &generate_body);
 	//! Join each column's stats CTE once. Leading newline per join, empty when there are none.
 	static string GenerateStatsJoinList(const map<idx_t, CTERequirement> &requirements);
+	virtual bool ValueIsFinite(const Value &val);
 	//! Unknown bounds must keep the file
 	static string BoundOrInfinity(const string &bound, const string &type_name, StatsCastType cast_type);
 
@@ -649,7 +649,6 @@ private:
 	                                                  TableIndex table_id);
 	virtual string GenerateFilterFromExpression(const Expression &expr, const LogicalType *type,
 	                                            unordered_set<string> &referenced_stats, const string &stats_alias);
-	virtual bool ValueIsFinite(const Value &val);
 	virtual string CastValueToTarget(const Value &val, const LogicalType &type);
 	virtual string CastStatsToTarget(const string &stats, const LogicalType &type,
 	                                 StatsCastType cast_type = StatsCastType::ORDERING);

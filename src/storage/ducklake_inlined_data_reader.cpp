@@ -226,26 +226,20 @@ AsyncResult DuckLakeInlinedDataReader::Scan(ClientContext &context, GlobalTableF
 			}
 			case InlinedVirtualColumn::COLUMN_ROW_ID: {
 				Vector ordinal_vector(LogicalType::BIGINT);
-				auto ordinal_data = FlatVector::GetDataMutable<int64_t>(ordinal_vector);
 				if (data->HasPreservedRowIds()) {
 					// use preserved row_ids from update inlining
+					auto ordinal_data = FlatVector::GetDataMutable<int64_t>(ordinal_vector);
 					for (idx_t r = 0; r < scan_chunk.size(); r++) {
 						ordinal_data[r] = data->row_ids[file_row_number + r];
 					}
+					FlatVector::SetSize(ordinal_vector, scan_chunk.size());
 				} else {
-					// use general ordinal row id
-					for (idx_t r = 0; r < scan_chunk.size(); r++) {
-						ordinal_data[r] = NumericCast<int64_t>(file_row_number + r);
-					}
+					VectorOperations::GenerateSequence(ordinal_vector, scan_chunk.size(), file_row_number);
 				}
-				FlatVector::SetSize(ordinal_vector, scan_chunk.size());
 				if (TryEvaluateExpression(context, c, ordinal_vector, LogicalType::BIGINT, chunk.data[c])) {
 					continue;
 				}
-				auto row_id_data = FlatVector::GetDataMutable<int64_t>(chunk.data[c]);
-				for (idx_t r = 0; r < scan_chunk.size(); r++) {
-					row_id_data[r] = ordinal_data[r];
-				}
+				VectorOperations::Copy(ordinal_vector, chunk.data[c], scan_chunk.size(), 0, 0);
 				continue;
 			}
 			case InlinedVirtualColumn::COLUMN_EMPTY:
@@ -273,14 +267,8 @@ AsyncResult DuckLakeInlinedDataReader::Scan(ClientContext &context, GlobalTableF
 					continue;
 				}
 				auto column_id = entry.GetIndex().GetIndex();
-				auto &vec = chunk.data[column_id];
-
-				UnifiedVectorFormat vdata;
-				vec.ToUnifiedFormat(vdata);
-
 				auto filter_state = TableFilterState::Initialize(context, filter);
-
-				approved_tuple_count = ColumnSegment::FilterSelection(sel, vec, vdata, filter, *filter_state,
+				approved_tuple_count = ColumnSegment::FilterSelection(sel, chunk.data[column_id], *filter_state,
 				                                                      chunk.size(), approved_tuple_count);
 			}
 		}

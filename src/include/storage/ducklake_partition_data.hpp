@@ -59,6 +59,9 @@ struct DuckLakePartition {
 };
 
 struct DuckLakePartitionUtils {
+	static string GetTransformName(DuckLakeTransformType transform_type);
+	static bool TryGetTransformType(const string &name, DuckLakeTransformType &result);
+
 	//! Get the hive partition key name for a partition field, while also resolving name collisions e.g., year_dt
 	static string GetPartitionKeyName(DuckLakeTransformType transform_type, const string &field_name,
 	                                  case_insensitive_set_t &used_names);

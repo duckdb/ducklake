@@ -12,7 +12,7 @@
 #include "duckdb/catalog/catalog_entry/schema_catalog_entry.hpp"
 #include "duckdb/planner/parsed_data/bound_create_table_info.hpp"
 #include "duckdb/execution/physical_plan_generator.hpp"
-#include "duckdb/planner/logical_operator.hpp"
+#include "duckdb/planner/operator/logical_copy_to_file.hpp"
 
 #include "duckdb/execution/physical_operator.hpp"
 #include "duckdb/common/index_vector.hpp"
@@ -116,8 +116,6 @@ public:
 
 	static DuckLakeColumnStats ParseColumnStats(const LogicalType &type, const vector<Value> &stats);
 	static DuckLakeCopyOptions GetCopyOptions(ClientContext &context, DuckLakeCopyInput &copy_input);
-	//! Row group size (batch size) configured for a copy, defaulting to DEFAULT_ROW_GROUP_SIZE.
-	static idx_t GetCopyBatchSize(const DuckLakeCopyOptions &copy_options);
 	static PhysicalOperator &PlanCopyForInsert(ClientContext &context, PhysicalPlanGenerator &planner,
 	                                           DuckLakeCopyInput &copy_input, optional_ptr<PhysicalOperator> plan);
 	static PhysicalOperator &PlanInsert(ClientContext &context, PhysicalPlanGenerator &planner,
@@ -149,30 +147,7 @@ public:
 };
 
 struct DuckLakeCopyOptions {
-	DuckLakeCopyOptions(unique_ptr<CopyInfo> info, CopyFunction copy_function);
-
-	unique_ptr<CopyInfo> info;
-	CopyFunction copy_function;
-	unique_ptr<FunctionData> bind_data;
-
-	string file_path;
-	bool use_tmp_file;
-	FilenamePattern filename_pattern;
-	string file_extension;
-	CopyOverwriteMode overwrite_mode;
-	bool per_thread_output;
-	optional_idx file_size_bytes;
-	bool rotate;
-	CopyFunctionReturnType return_type;
-	bool hive_file_pattern;
-
-	bool partition_output;
-	bool write_partition_columns;
-	bool write_empty_file = true;
-	vector<idx_t> partition_columns;
-	vector<Identifier> names;
-	vector<LogicalType> expected_types;
-
+	unique_ptr<LogicalCopyToFile> copy;
 	//! Set of projection columns to execute prior to inserting (if any)
 	vector<unique_ptr<Expression>> projection_list;
 };

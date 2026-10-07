@@ -1,4 +1,3 @@
-#include "common/ducklake_util.hpp"
 #include "functions/ducklake_table_functions.hpp"
 #include "duckdb/catalog/catalog.hpp"
 #include "duckdb/catalog/catalog_entry/schema_catalog_entry.hpp"
@@ -15,7 +14,6 @@
 #include "duckdb/planner/operator/logical_get.hpp"
 #include "duckdb/planner/operator/logical_copy_to_file.hpp"
 #include "duckdb/planner/operator/logical_extension_operator.hpp"
-#include "duckdb/planner/operator/logical_set_operation.hpp"
 #include "storage/ducklake_compaction.hpp"
 #include "duckdb/common/multi_file/multi_file_function.hpp"
 #include "storage/ducklake_multi_file_list.hpp"
@@ -27,12 +25,12 @@
 #include "duckdb/planner/operator/logical_filter.hpp"
 #include "duckdb/planner/expression/bound_comparison_expression.hpp"
 #include "duckdb/planner/expression/bound_constant_expression.hpp"
-#include "duckdb/catalog/catalog_entry/aggregate_function_catalog_entry.hpp"
+#include "duckdb/function/builtin_function_lookup.hpp"
 #include "duckdb/function/function_binder.hpp"
 #include "duckdb/planner/expression/bound_aggregate_expression.hpp"
 #include "storage/ducklake_delete.hpp"
 #include "storage/ducklake_delete_filter.hpp"
-#include "duckdb/common/types/blob.hpp"
+#include "common/ducklake_row_helpers.hpp"
 #include "functions/ducklake_compaction_functions.hpp"
 #include "storage/ducklake_sort_data.hpp"
 
@@ -67,32 +65,12 @@ DuckLakeFlushData::DuckLakeFlushData(PhysicalPlan &physical_plan, const vector<L
 }
 
 //===--------------------------------------------------------------------===//
-// Source State
-//===--------------------------------------------------------------------===//
-class DuckLakeFlushDataSourceState : public GlobalSourceState {
-public:
-	DuckLakeFlushDataSourceState() : returned_result(false) {
-	}
-	bool returned_result;
-};
-
-unique_ptr<GlobalSourceState> DuckLakeFlushData::GetGlobalSourceState(ClientContext &context) const {
-	return make_uniq<DuckLakeFlushDataSourceState>();
-}
-
-//===--------------------------------------------------------------------===//
 // GetData
 //===--------------------------------------------------------------------===//
 SourceResultType DuckLakeFlushData::GetDataInternal(ExecutionContext &context, DataChunk &chunk,
                                                     OperatorSourceInput &input) const {
-	auto &source_state = input.global_state.Cast<DuckLakeFlushDataSourceState>();
-	if (source_state.returned_result) {
-		return SourceResultType::FINISHED;
-	}
-	source_state.returned_result = true;
-
 	auto &gstate = this->sink_state->Cast<DuckLakeInsertGlobalState>();
-	chunk.data[0].Append(Value(DuckLakeUtil::SchemaPathToDisplay(table.schema.GetSchemaPath())));
+	chunk.data[0].Append(Value(table.schema.GetSchemaName()));
 	chunk.data[1].Append(Value(table.name.GetIdentifierName()));
 	chunk.data[2].Append(Value::BIGINT(static_cast<int64_t>(gstate.rows_flushed)));
 	chunk.SetChildCardinality(1);
@@ -252,11 +230,7 @@ public:
 		return "ducklake";
 	}
 	vector<ColumnBinding> GetColumnBindings() override {
-		vector<ColumnBinding> result;
-		result.emplace_back(table_index, ProjectionIndex(0));
-		result.emplace_back(table_index, ProjectionIndex(1));
-		result.emplace_back(table_index, ProjectionIndex(2));
-		return result;
+		return GenerateColumnBindings(table_index, 3);
 	}
 
 	void ResolveTypes() override {
@@ -359,13 +333,13 @@ unique_ptr<LogicalOperator> DuckLakeDataFlusher::GenerateFlushCommand() {
 	copy_input.get_table_index = table_idx.index;
 	copy_input.virtual_columns = InsertVirtualColumns::WRITE_ROW_ID_AND_SNAPSHOT_ID;
 
-	bool is_encrypted = !copy_input.encryption_key.empty();
 	auto copy_options = DuckLakeInsert::GetCopyOptions(context, copy_input);
+	auto copy = std::move(copy_options.copy);
 
 	auto virtual_columns = table.GetVirtualColumns();
 	auto ducklake_scan =
-	    make_uniq<LogicalGet>(table_idx, std::move(scan_function), std::move(bind_data), copy_options.expected_types,
-	                          copy_options.names, std::move(virtual_columns));
+	    make_uniq<LogicalGet>(table_idx, BoundTableFunction(std::move(scan_function)), std::move(bind_data),
+	                          copy->expected_types, copy->names, std::move(virtual_columns));
 	auto &column_ids = ducklake_scan->GetMutableColumnIds();
 	for (idx_t i = 0; i < columns.PhysicalColumnCount(); i++) {
 		column_ids.emplace_back(i);
@@ -388,32 +362,8 @@ unique_ptr<LogicalOperator> DuckLakeDataFlusher::GenerateFlushCommand() {
 		root = DuckLakeInsert::InsertCasts(binder, root);
 	}
 
-	// generate the LogicalCopyToFile
-	auto copy = make_uniq<LogicalCopyToFile>(std::move(copy_options.copy_function), std::move(copy_options.bind_data),
-	                                         std::move(copy_options.info), binder.GenerateTableIndex());
-
-	copy->file_path = std::move(copy_options.file_path);
-	copy->use_tmp_file = copy_options.use_tmp_file;
-	copy->filename_pattern = std::move(copy_options.filename_pattern);
-	copy->file_extension = std::move(copy_options.file_extension);
-	copy->overwrite_mode = copy_options.overwrite_mode;
-	copy->per_thread_output = copy_options.per_thread_output;
-	copy->file_size_bytes = copy_options.file_size_bytes;
-	copy->rotate = copy_options.rotate;
-	copy->return_type = copy_options.return_type;
-
+	copy->table_index = binder.GenerateTableIndex();
 	copy->batch_size = DEFAULT_ROW_GROUP_SIZE;
-
-	copy->partition_output = copy_options.partition_output;
-	copy->write_partition_columns = copy_options.write_partition_columns;
-	copy->write_empty_file = copy_options.write_empty_file;
-	copy->partition_columns = std::move(copy_options.partition_columns);
-	copy->names = copy_options.names;
-	copy->expected_types = std::move(copy_options.expected_types);
-
-	copy->hive_file_pattern = copy_input.catalog.UseHiveFilePattern(!is_encrypted, copy_input.schema_id,
-	                                                                copy_input.table_id, &copy_input.table_options);
-
 	copy->children.push_back(std::move(root));
 
 	// followed by the compaction operator (that writes the results back to the
@@ -472,59 +422,42 @@ LEFT JOIN {METADATA_CATALOG}.ducklake_delete_file existing_del
 WHERE del.begin_snapshot <= {SNAPSHOT_ID}
 	)",
 	                                                                            inlined_table_name, table_id.index));
-	if (deletions_result->HasError()) {
-		deletions_result->GetErrorObject().Throw("Failed to query inlined file deletions for flush: ");
-	}
+	deletions_result->ThrowIfError("Failed to query inlined file deletions for flush: ");
 
 	unordered_map<idx_t, FileDeleteInfo> files_to_flush;
 
-	while (true) {
-		auto chunk = deletions_result->Fetch();
-		if (!chunk || chunk->size() == 0) {
-			break;
-		}
-		for (idx_t row_idx = 0; row_idx < chunk->size(); row_idx++) {
-			auto file_id = chunk->GetValue(0, row_idx).GetValue<idx_t>();
-			auto row_id = chunk->GetValue(3, row_idx).GetValue<int64_t>();
-			auto begin_snapshot = chunk->GetValue(4, row_idx).GetValue<idx_t>();
+	for (auto &row : *deletions_result) {
+		auto file_id = row.GetValue<idx_t>(0);
+		auto row_id = row.GetValue<int64_t>(3);
+		auto begin_snapshot = row.GetValue<idx_t>(4);
 
-			// Get or create the file entry
-			auto &file_info = files_to_flush[file_id];
+		auto &file_info = files_to_flush[file_id];
 
-			// Initialize file info on first encounter
-			if (file_info.file_path.empty()) {
-				auto path = chunk->GetValue(1, row_idx).GetValue<string>();
-				auto path_is_relative = chunk->GetValue(2, row_idx).GetValue<bool>();
-				file_info.file_path = path_is_relative ? table.DataPath() + path : path;
-				file_info.max_snapshot = begin_snapshot;
-
-				// Check for existing delete file
-				if (!chunk->GetValue(5, row_idx).IsNull()) {
-					file_info.has_existing_delete_file = true;
-					file_info.existing_delete_file_id = DataFileIndex(chunk->GetValue(5, row_idx).GetValue<idx_t>());
-					file_info.existing_delete_path = chunk->GetValue(6, row_idx).GetValue<string>();
-					file_info.existing_delete_path_is_relative = chunk->GetValue(7, row_idx).GetValue<bool>();
-					file_info.existing_delete_begin_snapshot = chunk->GetValue(8, row_idx).GetValue<idx_t>();
-					if (!chunk->GetValue(9, row_idx).IsNull()) {
-						file_info.existing_delete_encryption_key =
-						    Blob::FromBase64(chunk->GetValue(9, row_idx).GetValue<string>());
-					}
-					if (!chunk->GetValue(10, row_idx).IsNull()) {
-						file_info.existing_delete_format =
-						    DeleteFileFormatFromString(chunk->GetValue(10, row_idx).GetValue<string>());
-					}
+		// Initialize file info on first encounter
+		if (file_info.file_path.empty()) {
+			auto path = row.GetValue<string>(1);
+			auto path_is_relative = row.GetValue<bool>(2);
+			file_info.file_path = path_is_relative ? table.DataPath() + path : path;
+			file_info.max_snapshot = begin_snapshot;
+			if (!row.IsNull(5)) {
+				file_info.has_existing_delete_file = true;
+				file_info.existing_delete_file_id = DataFileIndex(row.GetValue<idx_t>(5));
+				file_info.existing_delete_path = row.GetValue<string>(6);
+				file_info.existing_delete_path_is_relative = row.GetValue<bool>(7);
+				file_info.existing_delete_begin_snapshot = row.GetValue<idx_t>(8);
+				ReadEncryptionKey(row, 9, file_info.existing_delete_encryption_key);
+				if (!row.IsNull(10)) {
+					file_info.existing_delete_format = DeleteFileFormatFromString(row.GetValue<string>(10));
 				}
-			} else {
-				// Update max_snapshot for subsequent rows
-				file_info.max_snapshot = MaxValue(file_info.max_snapshot, begin_snapshot);
 			}
-
-			// Add the deletion
-			PositionWithSnapshot pos_with_snap;
-			pos_with_snap.position = row_id;
-			pos_with_snap.snapshot_id = static_cast<int64_t>(begin_snapshot);
-			file_info.deletions.insert(pos_with_snap);
+		} else {
+			file_info.max_snapshot = MaxValue(file_info.max_snapshot, begin_snapshot);
 		}
+
+		PositionWithSnapshot pos_with_snap;
+		pos_with_snap.position = row_id;
+		pos_with_snap.snapshot_id = static_cast<int64_t>(begin_snapshot);
+		file_info.deletions.insert(pos_with_snap);
 	}
 
 	if (files_to_flush.empty()) {
@@ -641,7 +574,7 @@ static unique_ptr<LogicalOperator> FlushInlinedDataBind(ClientContext &context, 
 			schemas = ducklake_catalog.GetSchemas(context);
 		} else {
 			// specific schema - fetch it
-			schemas.push_back(DuckLakeUtil::GetSchema(context, ducklake_catalog, schema));
+			schemas.push_back(ducklake_catalog.ResolveSchema(context, schema));
 		}
 
 		// - scan all tables from the relevant schemas
@@ -656,8 +589,7 @@ static unique_ptr<LogicalOperator> FlushInlinedDataBind(ClientContext &context, 
 	} else {
 		// specific table - fetch the table
 		auto table_catalog_entry = ducklake_catalog.GetEntry<TableCatalogEntry>(
-		    context, DuckLakeUtil::QualifiedEntryName(context, ducklake_catalog, schema, table),
-		    OnEntryNotFound::THROW_EXCEPTION);
+		    context, ducklake_catalog.ResolveEntryName(context, schema, table), OnEntryNotFound::THROW_EXCEPTION);
 		auto &dl_schema = table_catalog_entry->schema.Cast<DuckLakeSchemaEntry>();
 		schema_table_map[dl_schema.Cast<DuckLakeSchemaEntry>().GetSchemaId().index].push_back(
 		    table_catalog_entry.get()->Cast<DuckLakeTableEntry>());
@@ -686,28 +618,15 @@ static unique_ptr<LogicalOperator> FlushInlinedDataBind(ClientContext &context, 
 	return_names.push_back("rows_flushed");
 	if (flushes.empty()) {
 		// nothing to write - generate empty result
-		vector<ColumnBinding> bindings;
 		vector<LogicalType> return_types;
-		bindings.emplace_back(bind_index, ProjectionIndex(0));
-		bindings.emplace_back(bind_index, ProjectionIndex(1));
-		bindings.emplace_back(bind_index, ProjectionIndex(2));
 		return_types.emplace_back(LogicalType::VARCHAR);
 		return_types.emplace_back(LogicalType::VARCHAR);
 		return_types.emplace_back(LogicalType::BIGINT);
+		auto bindings = LogicalOperator::GenerateColumnBindings(bind_index, return_types.size());
 		return make_uniq<LogicalEmptyResult>(std::move(return_types), std::move(bindings));
 	}
 
-	// Get the child operator (either single flush or union of flushes)
-	unique_ptr<LogicalOperator> child;
-	if (flushes.size() == 1) {
-		child = std::move(flushes[0]);
-	} else {
-		child = input.binder->UnionOperators(std::move(flushes));
-		// Manually set column_count - this is normally derived during optimization
-		// but we need it at bind time for column binding resolution
-		auto &set_op = child->Cast<LogicalSetOperation>();
-		set_op.column_count = 3;
-	}
+	auto child = input.binder->UnionOperators(std::move(flushes), 3);
 	// We want to construct the query tree equivalent to the SQL query below.
 	// That way we can return the number of rows that were flushed for each table
 	//
@@ -729,22 +648,11 @@ static unique_ptr<LogicalOperator> FlushInlinedDataBind(ClientContext &context, 
 	groups.push_back(make_uniq<BoundColumnRefExpression>(child->types[1], child_bindings[1]));
 
 	// Create SUM(rows_flushed) aggregate
-	auto &system_catalog = Catalog::GetSystemCatalog(context);
-	auto &sum_entry = system_catalog.GetEntry<AggregateFunctionCatalogEntry>(
-	    context, QualifiedName(system_catalog.GetName(), Identifier::DefaultSchema(), "sum"));
-
 	vector<unique_ptr<Expression>> sum_args;
 	sum_args.push_back(make_uniq<BoundColumnRefExpression>(child->types[2], child_bindings[2]));
-
-	// Pick the right sum overload
-	auto sum_func = sum_entry.functions.GetFunctionByArguments(context, {sum_args[0]->GetReturnType()});
+	auto sum_func = GetBuiltinAggregateFunction(context, "sum", {sum_args[0]->GetReturnType()});
 	FunctionBinder function_binder(context);
-	auto sum_aggregate =
-	    function_binder.BindAggregateFunction(sum_func,            // The SUM(BIGINT) -> HUGEINT function
-	                                          std::move(sum_args), // Arguments: [rows_flushed column ref]
-	                                          nullptr,             // No FILTER clause (e.g., SUM(x) FILTER (WHERE ...))
-	                                          AggregateType::NON_DISTINCT // Not SUM(DISTINCT ...)
-	    );
+	auto sum_aggregate = function_binder.BindAggregateFunction(std::move(sum_func), std::move(sum_args));
 
 	// Create LogicalAggregate with GROUP BY schema_name, table_name and SUM(rows_flushed)
 	auto group_index = input.binder->GenerateTableIndex();
@@ -769,25 +677,17 @@ static unique_ptr<LogicalOperator> FlushInlinedDataBind(ClientContext &context, 
 
 	auto filter = make_uniq<LogicalFilter>(std::move(filter_expr));
 	filter->children.push_back(std::move(aggregate));
-	// Resolved columns are passed through from child: [0] schema_name, [1] table_name, [2] SUM(rows_flushed)
-	filter->ResolveOperatorTypes();
 
 	// Need a projection to set the correct table index for column binding resolution
-	vector<unique_ptr<Expression>> proj_exprs;
-	auto filter_bindings = filter->GetColumnBindings();
-	for (idx_t i = 0; i < filter->types.size(); i++) {
-		proj_exprs.push_back(make_uniq<BoundColumnRefExpression>(filter->types[i], filter_bindings[i]));
-	}
-	auto projection = make_uniq<LogicalProjection>(bind_index, std::move(proj_exprs));
-	projection->children.push_back(std::move(filter));
-
-	return std::move(projection);
+	return LogicalProjection::CreateIdentity(bind_index, std::move(filter));
 }
 
 DuckLakeFlushInlinedDataFunction::DuckLakeFlushInlinedDataFunction()
-    : TableFunction("ducklake_flush_inlined_data", {LogicalType::VARCHAR}, nullptr, nullptr, nullptr) {
-	named_parameters["schema_name"] = LogicalType::VARCHAR;
-	named_parameters["table_name"] = LogicalType::VARCHAR;
+    : TableFunction("ducklake_flush_inlined_data",
+                    FunctionSignature().AddPositionalOnly("catalog", LogicalType::VARCHAR), nullptr, nullptr, nullptr) {
+	GetSignature().WithTypedKwargs("options", [&](TypedKwargs &options) {
+		options.Add("schema_name", LogicalType::VARCHAR).Add("table_name", LogicalType::VARCHAR);
+	});
 	bind_operator = FlushInlinedDataBind;
 }
 

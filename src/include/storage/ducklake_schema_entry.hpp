@@ -30,15 +30,12 @@ public:
 	SchemaIndex GetSchemaId() const {
 		return schema_id;
 	}
-	optional_ptr<SchemaCatalogEntry> GetParentSchema() const override;
 	optional_ptr<DuckLakeSchemaEntry> ParentDuckLakeSchema() const {
-		return parent_schema;
+		auto parent = GetParentSchema();
+		return parent ? &parent->Cast<DuckLakeSchemaEntry>() : nullptr;
 	}
 	void SetParentSchema(DuckLakeSchemaEntry &parent);
 	const string &PathKey() const;
-	idx_t SchemaDepth() const {
-		return schema_depth;
-	}
 	static string ChildPathKey(optional_ptr<const DuckLakeSchemaEntry> parent, const string &name);
 	const string &GetSchemaUUID() const {
 		return schema_uuid;
@@ -63,25 +60,15 @@ public:
 	                                       TableCatalogEntry &table) override;
 	optional_ptr<CatalogEntry> CreateView(CatalogTransaction transaction, CreateViewInfo &info) override;
 	optional_ptr<CatalogEntry> CreateSequence(CatalogTransaction transaction, CreateSequenceInfo &info) override;
-	optional_ptr<CatalogEntry> CreateTableFunction(CatalogTransaction transaction,
-	                                               CreateTableFunctionInfo &info) override;
-	optional_ptr<CatalogEntry> CreateCopyFunction(CatalogTransaction transaction,
-	                                              CreateCopyFunctionInfo &info) override;
-	optional_ptr<CatalogEntry> CreatePragmaFunction(CatalogTransaction transaction,
-	                                                CreatePragmaFunctionInfo &info) override;
-	optional_ptr<CatalogEntry> CreateCollation(CatalogTransaction transaction, CreateCollationInfo &info) override;
 	optional_ptr<CatalogEntry> CreateType(CatalogTransaction transaction, CreateTypeInfo &info) override;
 	void Alter(CatalogTransaction transaction, AlterInfo &info) override;
 	void Scan(ClientContext &context, CatalogType type, const std::function<void(CatalogEntry &)> &callback) override;
 	void Scan(CatalogType type, const std::function<void(CatalogEntry &)> &callback) override;
-	void Scan(CatalogType type, const std::function<void(const CatalogEntry &)> &callback) const;
 	void DropEntry(ClientContext &context, DropInfo &info) override;
 	optional_ptr<CatalogEntry> LookupEntry(CatalogTransaction transaction, const EntryLookupInfo &lookup_info) override;
-	SimilarCatalogEntry GetSimilarEntry(CatalogTransaction transaction, const EntryLookupInfo &lookup_info) override;
 
 	void AddEntry(CatalogType type, unique_ptr<CatalogEntry> entry);
-	void TryDropSchema(DuckLakeTransaction &transaction, bool cascade);
-	vector<reference<DuckLakeSchemaEntry>> GetChildSchemas(DuckLakeTransaction &transaction);
+	void TryDropSchema(CatalogTransaction transaction, bool cascade);
 
 	static bool CatalogTypeIsSupported(CatalogType type);
 
@@ -90,10 +77,6 @@ private:
 	const DuckLakeCatalogSet &GetCatalogSet(CatalogType type) const;
 	bool HandleCreateConflict(CatalogTransaction transaction, CatalogType type, const string &name,
 	                          OnCreateConflict on_conflict);
-	void Scan(DuckLakeTransaction &transaction, CatalogType type, const std::function<void(CatalogEntry &)> &callback);
-	void RefreshPathKey();
-	void DropSchemaDependents(DuckLakeTransaction &transaction);
-	void DropSchemaContents(DuckLakeTransaction &transaction);
 
 	optional_ptr<CatalogEntry> TryLoadBuiltInFunction(const string &entry_name);
 	optional_ptr<CatalogEntry> LoadBuiltInFunction(DefaultTableMacro macro);
@@ -102,9 +85,7 @@ private:
 	SchemaIndex schema_id;
 	string schema_uuid;
 	string data_path;
-	optional_ptr<DuckLakeSchemaEntry> parent_schema;
 	string path_key;
-	idx_t schema_depth;
 	DuckLakeCatalogSet child_schemas;
 	DuckLakeCatalogSet tables;
 	DuckLakeCatalogSet scalar_macros;

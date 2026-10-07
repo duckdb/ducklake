@@ -263,10 +263,8 @@ shared_ptr<DuckLakeFunctionInfo>
 DuckLakeFunctionInfo::Create(DuckLakeTableEntry &table, DuckLakeTransaction &transaction, DuckLakeSnapshot snapshot) {
 	auto result = make_shared_ptr<DuckLakeFunctionInfo>(table, transaction, snapshot);
 	result->table_name = table.name.GetIdentifierName();
-	for (auto &col : table.GetColumns().Logical()) {
-		result->column_names.push_back(col.Name().GetIdentifierName());
-		result->column_types.push_back(col.Type());
-	}
+	result->column_names = table.GetColumns().GetColumnNames();
+	result->column_types = table.GetColumns().GetColumnTypes();
 	result->table_id = table.GetTableId();
 	return result;
 }
@@ -290,39 +288,36 @@ bool DuckLakeFunctionInfo::CanUseGlobalStats() {
 }
 
 void DuckLakeScanSerialize(Serializer &serializer, const optional_ptr<FunctionData> bind_data,
-                           const TableFunction &function) {
+                           const BoundTableFunction &function) {
 	auto &func_info = function.function_info->Cast<DuckLakeFunctionInfo>();
 	auto &catalog = func_info.table.ParentCatalog();
 	serializer.WriteProperty(100, "catalog_name", catalog.GetName());
 	serializer.WriteProperty(101, "schema_name", func_info.table.ParentSchema().name);
 	serializer.WriteProperty(102, "table_name", func_info.table_name);
-	serializer.WriteObject(103, "snapshot", [&](Serializer &obj) { func_info.snapshot.Serialize(obj); });
+	serializer.WriteProperty(103, "snapshot", func_info.snapshot);
 	serializer.WriteProperty(104, "scan_type", static_cast<uint8_t>(func_info.scan_type));
 	bool has_start_snapshot = func_info.start_snapshot != nullptr;
 	serializer.WriteProperty(105, "has_start_snapshot", has_start_snapshot);
 	if (has_start_snapshot) {
-		serializer.WriteObject(106, "start_snapshot",
-		                       [&](Serializer &obj) { func_info.start_snapshot->Serialize(obj); });
+		serializer.WriteProperty(106, "start_snapshot", *func_info.start_snapshot);
 	}
 	serializer.WriteProperty(107, "qualified_name",
 	                         func_info.table.ParentSchema().GetQualifiedName(Identifier(func_info.table_name)));
 }
 
-unique_ptr<FunctionData> DuckLakeScanDeserialize(Deserializer &deserializer, TableFunction &function) {
+unique_ptr<FunctionData> DuckLakeScanDeserialize(Deserializer &deserializer, BoundTableFunction &function) {
 	auto &context = deserializer.Get<ClientContext &>();
 	auto catalog_name = deserializer.ReadProperty<string>(100, "catalog_name");
 	auto schema_name = deserializer.ReadProperty<string>(101, "schema_name");
 	auto table_name = deserializer.ReadProperty<string>(102, "table_name");
-	DuckLakeSnapshot snapshot;
-	deserializer.ReadObject(103, "snapshot", [&](Deserializer &obj) { snapshot = DuckLakeSnapshot::Deserialize(obj); });
+	auto snapshot = deserializer.ReadProperty<DuckLakeSnapshot>(103, "snapshot");
 	auto scan_type = static_cast<DuckLakeScanType>(deserializer.ReadPropertyWithExplicitDefault<uint8_t>(
 	    104, "scan_type", static_cast<uint8_t>(DuckLakeScanType::SCAN_TABLE)));
 	bool has_start_snapshot = deserializer.ReadPropertyWithExplicitDefault<bool>(105, "has_start_snapshot", false);
 	unique_ptr<DuckLakeSnapshot> start_snapshot;
 	if (has_start_snapshot) {
 		start_snapshot = make_uniq<DuckLakeSnapshot>();
-		deserializer.ReadObject(106, "start_snapshot",
-		                        [&](Deserializer &obj) { *start_snapshot = DuckLakeSnapshot::Deserialize(obj); });
+		deserializer.ReadProperty(106, "start_snapshot", *start_snapshot);
 	}
 	auto qualified_name =
 	    deserializer.ReadPropertyWithExplicitDefault<QualifiedName>(107, "qualified_name", QualifiedName());
@@ -332,7 +327,7 @@ unique_ptr<FunctionData> DuckLakeScanDeserialize(Deserializer &deserializer, Tab
 
 	// If ducklake_scan was registered before parquet was loaded, we set it now
 	if (!function.bind) {
-		function = DuckLakeFunctions::GetDuckLakeScanFunction(*context.db);
+		function = BoundTableFunction(DuckLakeFunctions::GetDuckLakeScanFunction(*context.db));
 		if (!function.bind) {
 			throw InvalidInputException("ducklake_scan requires the parquet extension to be loaded");
 		}

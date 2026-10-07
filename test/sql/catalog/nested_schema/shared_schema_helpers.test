@@ -1,0 +1,97 @@
+# name: test/sql/catalog/nested_schema/shared_schema_helpers.test
+# description: Shared catalog helpers preserve nested schema visibility and suggestions
+# group: [nested_schema]
+
+require ducklake
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DUCKLAKE_VERSION '1.1-dev1', DATA_PATH '{DATA_PATH}/shared_schema_helpers');
+
+statement ok
+CREATE SCHEMA dl.s;
+
+statement ok
+CREATE SCHEMA dl.s."quoted.child";
+
+statement ok
+CREATE TABLE dl.s."quoted.child".measurements(i INTEGER);
+
+statement error
+SELECT * FROM dl.s."quoted.child".measuremnts;
+----
+Did you mean "measurements"
+
+statement ok
+BEGIN;
+
+statement ok
+ALTER TABLE dl.s."quoted.child".measurements RENAME TO observations;
+
+statement error
+SELECT * FROM dl.s."quoted.child".observatons;
+----
+Did you mean "observations"
+
+statement ok
+ROLLBACK;
+
+statement ok
+BEGIN;
+
+statement ok
+CREATE SCHEMA dl.s."quoted.child".local;
+
+query I
+SELECT count(*) FROM duckdb_schemas() WHERE database_name = 'dl' AND schema_name = 'local';
+----
+1
+
+statement error
+DROP SCHEMA dl.s."quoted.child";
+----
+schema "local" depends on schema "quoted.child"
+
+statement ok
+ROLLBACK;
+
+statement ok
+BEGIN;
+
+statement ok
+CREATE SCHEMA dl.s."quoted.child".local;
+
+statement ok
+DROP SCHEMA dl.s."quoted.child" CASCADE;
+
+query I
+SELECT count(*) FROM duckdb_schemas() WHERE database_name = 'dl' AND schema_name IN ('quoted.child', 'local');
+----
+0
+
+statement ok
+ROLLBACK;
+
+query I
+SELECT count(*) FROM duckdb_schemas() WHERE database_name = 'dl' AND schema_name IN ('quoted.child', 'local');
+----
+1
+
+statement error
+SELECT * FROM dl.s."quoted.child".measuremnts;
+----
+Did you mean "measurements"
+
+statement ok
+CREATE SCHEMA IF NOT EXISTS dl.s."quoted.child";
+
+statement error
+CREATE OR REPLACE SCHEMA dl.s."quoted.child";
+----
+table "measurements" depends on schema "quoted.child"
+
+statement ok
+DROP SCHEMA dl.s CASCADE;

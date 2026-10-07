@@ -8,18 +8,17 @@
 #include "duckdb/common/string_util.hpp"
 #include "duckdb/common/sql_identifier.hpp"
 #include "duckdb/common/types/blob.hpp"
+#include "duckdb/common/encryption_state.hpp"
 #include "duckdb/parser/keyword_helper.hpp"
 #include "duckdb/parser/parser.hpp"
 #include "duckdb/common/file_system.hpp"
 #include "storage/ducklake_metadata_manager.hpp"
 #include "duckdb/planner/expression/bound_constant_expression.hpp"
 #include "duckdb/planner/expression/bound_function_expression.hpp"
-#include "duckdb/planner/expression/bound_reference_expression.hpp"
 #include "duckdb/planner/expression/bound_conjunction_expression.hpp"
 #include "duckdb/planner/expression_iterator.hpp"
 #include "duckdb/planner/operator/logical_filter.hpp"
 #include "duckdb/planner/filter/expression_filter.hpp"
-#include "duckdb/planner/filter/table_filter_functions.hpp"
 #include "duckdb/function/scalar/struct_utils.hpp"
 #include "duckdb/main/client_context.hpp"
 #include "duckdb/common/type_visitor.hpp"
@@ -28,14 +27,6 @@
 #include "duckdb/main/config.hpp"
 #include "duckdb/common/types/interval.hpp"
 #include "duckdb/common/unordered_map.hpp"
-
-#include "duckdb/catalog/catalog_entry/schema_catalog_entry.hpp"
-#include "duckdb/common/algorithm.hpp"
-#include "duckdb/common/exception/parser_exception.hpp"
-#include "duckdb/catalog/catalog.hpp"
-#include "duckdb/catalog/catalog_entry_retriever.hpp"
-#include "duckdb/catalog/entry_lookup_info.hpp"
-#include "duckdb/planner/tableref/bound_at_clause.hpp"
 
 #include <cmath>
 
@@ -46,21 +37,10 @@ string DuckLakeUtil::ParseQuotedValue(const string &input, idx_t &pos) {
 		throw InvalidInputException("Failed to parse quoted value - expected a quote");
 	}
 	string result;
-	pos++;
-	for (; pos < input.size(); pos++) {
-		if (input[pos] == '"') {
-			pos++;
-			// check if this is an escaped quote
-			if (pos < input.size() && input[pos] == '"') {
-				// escaped quote
-				result += '"';
-				continue;
-			}
-			return result;
-		}
-		result += input[pos];
+	if (!StringUtil::TryParseQuotedString(input, pos, result)) {
+		throw InvalidInputException("Failed to parse quoted value - unterminated quote");
 	}
-	throw InvalidInputException("Failed to parse quoted value - unterminated quote");
+	return result;
 }
 
 string DuckLakeUtil::ToQuotedList(const vector<string> &input, char list_separator) {
@@ -91,104 +71,6 @@ string ParsedCatalogEntry::SchemaKey() const {
 	return DuckLakeUtil::ToQuotedList(schema_path, '.');
 }
 
-static bool TryParseSchemaPath(const string &schema_arg, vector<Identifier> &result) {
-	try {
-		result = QualifiedName::ParseComponents(schema_arg);
-	} catch (ParserException &) {
-		return false;
-	}
-	if (schema_arg.empty() || schema_arg.back() == '.') {
-		result.emplace_back();
-	}
-	return true;
-}
-
-static string EmptyComponentError(const string &schema_arg) {
-	return StringUtil::Format(
-	    "Failed to parse schema path \"%s\" - schema paths cannot contain empty components. Schema names that "
-	    "contain a '.' or a '\"' must be double-quoted (e.g. '\"my.schema\"')",
-	    schema_arg);
-}
-
-struct SchemaPathCandidateList {
-	vector<vector<Identifier>> candidates;
-	string parse_error;
-};
-
-static SchemaPathCandidateList SchemaPathCandidates(Catalog &catalog, const string &schema_arg) {
-	SchemaPathCandidateList result;
-	vector<Identifier> literal_path;
-	literal_path.emplace_back(schema_arg);
-	vector<Identifier> nested_path;
-	if (!catalog.Cast<DuckLakeCatalog>().SupportsV1_1Metadata() || !TryParseSchemaPath(schema_arg, nested_path)) {
-		result.candidates.push_back(std::move(literal_path));
-		return result;
-	}
-	if (std::any_of(nested_path.begin(), nested_path.end(), [](const Identifier &part) { return part.empty(); })) {
-		result.parse_error = EmptyComponentError(schema_arg);
-		result.candidates.push_back(std::move(literal_path));
-		return result;
-	}
-	bool is_literal = nested_path.size() == 1 && nested_path[0].GetIdentifierName() == schema_arg;
-	result.candidates.push_back(std::move(nested_path));
-	if (!is_literal) {
-		result.candidates.push_back(std::move(literal_path));
-	}
-	return result;
-}
-
-static QualifiedName QualifiedPath(Catalog &catalog, const vector<Identifier> &schema_path,
-                                   const Identifier &entry_name) {
-	auto path = schema_path;
-	path.insert(path.begin(), catalog.GetName());
-	return QualifiedName(std::move(path), entry_name);
-}
-
-QualifiedName DuckLakeUtil::QualifiedEntryName(ClientContext &context, Catalog &catalog, const string &schema_arg,
-                                               const string &entry_name, CatalogType entry_type,
-                                               optional_ptr<BoundAtClause> at_clause) {
-	Identifier name(entry_name);
-	if (schema_arg.empty()) {
-		return QualifiedName(catalog.GetName(), Identifier(), std::move(name));
-	}
-	auto candidates = SchemaPathCandidates(catalog, schema_arg);
-	if (candidates.candidates.size() > 1 || !candidates.parse_error.empty()) {
-		for (auto &candidate : candidates.candidates) {
-			auto qualified_name = QualifiedPath(catalog, candidate, name);
-			EntryLookupInfo lookup(entry_type, qualified_name, at_clause, QueryErrorContext());
-			CatalogEntryRetriever retriever(context);
-			if (catalog.LookupEntry(retriever, lookup, OnEntryNotFound::RETURN_NULL).entry) {
-				return qualified_name;
-			}
-		}
-		if (!candidates.parse_error.empty()) {
-			throw InvalidInputException("%s", candidates.parse_error);
-		}
-	}
-	return QualifiedPath(catalog, candidates.candidates[0], name);
-}
-
-SchemaCatalogEntry &DuckLakeUtil::GetSchema(ClientContext &context, Catalog &catalog, const string &schema_arg) {
-	auto candidates = SchemaPathCandidates(catalog, schema_arg);
-	if (candidates.candidates.size() > 1 || !candidates.parse_error.empty()) {
-		for (auto &candidate : candidates.candidates) {
-			auto entry = Catalog::GetSchema(context, catalog.GetName(), candidate, OnEntryNotFound::RETURN_NULL);
-			if (entry) {
-				return *entry;
-			}
-		}
-		if (!candidates.parse_error.empty()) {
-			throw InvalidInputException("%s", candidates.parse_error);
-		}
-	}
-	return *Catalog::GetSchema(context, catalog.GetName(), candidates.candidates[0], OnEntryNotFound::THROW_EXCEPTION);
-}
-
-string DuckLakeUtil::SchemaPathToDisplay(const vector<Identifier> &schema_path) {
-	return StringUtil::Join(schema_path, schema_path.size(), ".",
-	                        [](const Identifier &component) { return SQLIdentifier::ToString(component); });
-}
-
 ParsedCatalogEntry DuckLakeUtil::ParseCatalogEntry(const string &input) {
 	auto parts = ParseQuotedList(input, '.');
 	if (parts.size() < 2) {
@@ -201,25 +83,13 @@ ParsedCatalogEntry DuckLakeUtil::ParseCatalogEntry(const string &input) {
 	return result_data;
 }
 
-string DuckLakeUtil::SQLIdentifierToString(const string &text) {
-	return SQLQuotedIdentifier::ToString(text);
-}
-
-string DuckLakeUtil::SQLIdentifierToString(const Identifier &identifier) {
-	return SQLQuotedIdentifier::ToString(identifier);
-}
-
-string DuckLakeUtil::SQLLiteralToString(const string &text) {
-	return SQLString::ToString(text);
-}
-
 string DuckLakeUtil::StatsToString(const string &text) {
 	for (auto c : text) {
 		if (c == '\0') {
 			return "NULL";
 		}
 	}
-	return DuckLakeUtil::SQLLiteralToString(text);
+	return SQLString::ToString(text);
 }
 
 static string EscapeVarcharForSQL(const string &str_val) {
@@ -290,34 +160,6 @@ string ToSQLString(DuckLakeMetadataManager &metadata_manager, const Value &value
 		}
 		return value.ToSQLString();
 	}
-	case LogicalTypeId::STRUCT: {
-		if (!metadata_manager.TypeIsNativelySupported(value.type())) {
-			// Stored as VARCHAR text - use ToString() which produces parseable format
-			return value.ToString();
-		}
-		auto &child_types = StructType::GetChildTypes(value.type());
-		auto &struct_values = StructValue::GetChildren(value);
-		if (struct_values.empty()) {
-			return "NULL";
-		}
-		bool is_unnamed = StructType::IsUnnamed(value.type());
-		string ret = is_unnamed ? "(" : "{";
-		for (idx_t i = 0; i < struct_values.size(); i++) {
-			auto &name = child_types[i].first;
-			auto &child = struct_values[i];
-			if (is_unnamed) {
-				ret += ToSQLString(metadata_manager, child);
-			} else {
-				ret += "'" + StringUtil::Replace(name.GetIdentifierName(), "'", "''") +
-				       "': " + ToSQLString(metadata_manager, child);
-			}
-			if (i < struct_values.size() - 1) {
-				ret += ", ";
-			}
-		}
-		ret += is_unnamed ? ")" : "}";
-		return ret;
-	}
 	case LogicalTypeId::FLOAT: {
 		float fval = FloatValue::Get(value);
 		if (!Value::FloatIsFinite(fval) || (fval == 0.0f && std::signbit(fval))) {
@@ -332,23 +174,14 @@ string ToSQLString(DuckLakeMetadataManager &metadata_manager, const Value &value
 		}
 		return value.ToString();
 	}
+	case LogicalTypeId::STRUCT:
 	case LogicalTypeId::LIST:
 	case LogicalTypeId::ARRAY: {
-		if (!metadata_manager.TypeIsNativelySupported(value.type())) {
-			// Stored as VARCHAR text - use ToString() which produces parseable format
+		if (!use_native_type) {
 			return value.ToString();
 		}
-		auto &children =
-		    value.type().id() == LogicalTypeId::LIST ? ListValue::GetChildren(value) : ArrayValue::GetChildren(value);
-		string ret = "[";
-		for (idx_t i = 0; i < children.size(); i++) {
-			ret += ToSQLString(metadata_manager, children[i]);
-			if (i < children.size() - 1) {
-				ret += ", ";
-			}
-		}
-		ret += "]";
-		return ret;
+		return Value::NestedToSQLString(value,
+		                                [&](const Value &child) { return ToSQLString(metadata_manager, child); });
 	}
 	case LogicalTypeId::MAP: {
 		if (!metadata_manager.TypeIsNativelySupported(value.type())) {
@@ -390,10 +223,8 @@ string ToSQLString(DuckLakeMetadataManager &metadata_manager, const Value &value
 }
 
 string ToByteaHexLiteral(const string &raw_bytes) {
-	string hex;
-	for (unsigned char c : raw_bytes) {
-		hex += StringUtil::Format("%02x", static_cast<int>(c));
-	}
+	string hex(raw_bytes.size() * 2, '\0');
+	CryptoHash::ToHex(const_data_ptr_cast(raw_bytes.data()), raw_bytes.size(), &hex[0]);
 	return "'\\x" + hex + "'";
 }
 
@@ -450,31 +281,6 @@ string DuckLakeUtil::JoinPath(FileSystem &fs, const string &a, const string &b) 
 	}
 }
 
-shared_ptr<DynamicFilterData> DuckLakeUtil::GetOptionalDynamicFilterData(const TableFilter &filter) {
-	auto dynamic_filter_data = ExpressionFilter::GetRootOptionalDynamicFilterData(filter);
-	if (dynamic_filter_data) {
-		return dynamic_filter_data;
-	}
-
-	auto &expression_filter =
-	    ExpressionFilter::GetExpressionFilter(filter, "DuckLakeUtil::GetOptionalDynamicFilterData");
-	if (expression_filter.expr->GetExpressionClass() != ExpressionClass::BOUND_CONJUNCTION) {
-		return nullptr;
-	}
-	auto &conjunction = expression_filter.expr->Cast<BoundConjunctionExpression>();
-	if (conjunction.GetExpressionType() != ExpressionType::CONJUNCTION_AND) {
-		return nullptr;
-	}
-	for (auto &child : conjunction.GetChildren()) {
-		ExpressionFilter child_filter(child->Copy());
-		dynamic_filter_data = GetOptionalDynamicFilterData(child_filter);
-		if (dynamic_filter_data) {
-			return dynamic_filter_data;
-		}
-	}
-	return nullptr;
-}
-
 unique_ptr<Expression> DuckLakeUtil::MergeFilterExpressions(unique_ptr<Expression> left, unique_ptr<Expression> right) {
 	vector<unique_ptr<Expression>> conjuncts;
 	conjuncts.push_back(std::move(left));
@@ -494,18 +300,10 @@ unique_ptr<Expression> DuckLakeUtil::MergeFilterExpressions(unique_ptr<Expressio
 			merged.push_back(std::move(conjunct));
 		}
 	}
-	if (merged.size() == 1) {
-		return std::move(merged[0]);
-	}
-	auto result = make_uniq<BoundConjunctionExpression>(ExpressionType::CONJUNCTION_AND);
-	for (auto &conjunct : merged) {
-		result->GetChildrenMutable().push_back(std::move(conjunct));
-	}
-	return std::move(result);
+	return BoundConjunctionExpression::Create(ExpressionType::CONJUNCTION_AND, std::move(merged));
 }
 
-//! Resolve which child of the input struct a struct_extract reads, rejecting a position the type cannot hold
-static bool TryResolveStructExtractChild(const Expression &expr, idx_t &position) {
+bool DuckLakeUtil::IsStructExtract(const Expression &expr) {
 	if (expr.GetExpressionClass() != ExpressionClass::BOUND_FUNCTION) {
 		return false;
 	}
@@ -518,15 +316,8 @@ static bool TryResolveStructExtractChild(const Expression &expr, idx_t &position
 	if (input_type.id() != LogicalTypeId::STRUCT) {
 		return false;
 	}
-	if (!TryGetStructExtractChildIndex(func, position)) {
-		return false;
-	}
-	return position < StructType::GetChildCount(input_type);
-}
-
-bool DuckLakeUtil::IsStructExtract(const Expression &expr) {
 	idx_t position;
-	return TryResolveStructExtractChild(expr, position);
+	return TryGetStructExtractChildIndex(func, position) && position < StructType::GetChildCount(input_type);
 }
 
 //! Walk to the sub-expressions a filter reads a column through, without descending into them
@@ -534,8 +325,7 @@ static void FindFilterSubject(const Expression &expr, optional_ptr<const Express
 	if (conflict) {
 		return;
 	}
-	if (expr.GetExpressionClass() == ExpressionClass::BOUND_COLUMN_REF ||
-	    expr.GetExpressionClass() == ExpressionClass::BOUND_REF || DuckLakeUtil::IsStructExtract(expr)) {
+	if (ExpressionFilter::IsSimpleFilterColumnRef(expr) || DuckLakeUtil::IsStructExtract(expr)) {
 		if (subject && !subject->Equals(expr)) {
 			conflict = true;
 		} else {
@@ -552,32 +342,6 @@ optional_ptr<const Expression> DuckLakeUtil::GetFilterSubject(const Expression &
 	bool conflict = false;
 	FindFilterSubject(expr, subject, conflict);
 	return conflict ? nullptr : subject;
-}
-
-const Expression &DuckLakeUtil::GetFilterSubjectPath(const Expression &subject, vector<string> &path) {
-	reference<const Expression> current = subject;
-	idx_t position;
-	while (TryResolveStructExtractChild(current.get(), position)) {
-		auto &func = current.get().Cast<BoundFunctionExpression>();
-		auto &input_type = func.GetChildren()[0]->GetReturnType();
-		// the key is matched case-insensitively at bind time, so take the name from the struct type
-		path.push_back(StructType::GetChildName(input_type, position).GetIdentifierName());
-		current = *func.GetChildren()[0];
-	}
-	return current.get();
-}
-
-//! Rewrite the subject to the column placeholder an ExpressionFilter is evaluated against
-unique_ptr<Expression> DuckLakeUtil::ReplaceFilterSubject(const Expression &expr, const Expression &subject,
-                                                          const LogicalType &type) {
-	if (expr.Equals(subject)) {
-		return make_uniq<BoundReferenceExpression>(type, 0U);
-	}
-	auto result = expr.Copy();
-	ExpressionIterator::EnumerateChildren(*result, [&](unique_ptr<Expression> &child) {
-		child = DuckLakeUtil::ReplaceFilterSubject(*child, subject, type);
-	});
-	return result;
 }
 
 bool DuckLakeUtil::IsInlinedSystemColumn(const string &name, bool prefixed_inlined_columns) {
@@ -717,7 +481,7 @@ const char *DuckLakeUtil::BoolLiteral(bool v) {
 }
 
 string DuckLakeUtil::PartitionValueLiteral(const Value &v) {
-	return v.IsNull() ? string("NULL") : SQLLiteralToString(v.ToString());
+	return v.IsNull() ? string("NULL") : SQLString::ToString(v.ToString());
 }
 
 static string ChunkRowToSQL(DuckLakeMetadataManager &metadata_manager, ClientContext &context, DataChunk &chunk,
@@ -766,7 +530,7 @@ string DuckLakeUtil::InlinedVariantExpression(const string &expression, const Lo
 		for (idx_t i = 0; i < children.size(); i++) {
 			auto &child = children[i];
 			auto name =
-			    StructType::IsUnnamed(type) ? to_string(i + 1) : SQLLiteralToString(child.first.GetIdentifierName());
+			    StructType::IsUnnamed(type) ? to_string(i + 1) : SQLString::ToString(child.first.GetIdentifierName());
 			auto field = InlinedVariantExpression("struct_extract(" + expression + ", " + name + ")", child.second,
 			                                      encode, depth);
 			fields.push_back(StructType::IsUnnamed(type) ? field : name + ": " + field);
@@ -828,10 +592,8 @@ void DuckLakeUtil::CopyExtensionSettings(ClientContext &from, ClientContext &to)
 			continue;
 		}
 		Value value;
-		if (!from.TryGetCurrentSetting(entry.first, value)) {
-			continue;
-		}
-		to.config.user_settings.SetUserSetting(setting_index, value);
+		from.TryGetCurrentUserSetting(setting_index, value);
+		to.config.user_settings.SetUserSetting(setting_index, std::move(value));
 	}
 }
 

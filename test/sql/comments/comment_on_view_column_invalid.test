@@ -6,7 +6,7 @@ require ducklake
 
 require parquet
 
-test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{BASE_TEST_NAME}.db
 
 test-env DATA_PATH {TEST_DIR}
 
@@ -21,3 +21,26 @@ statement error
 COMMENT ON COLUMN ducklake.vbad.nope IS 'x'
 ----
 Binder Error
+
+statement ok
+CREATE TABLE ducklake.vt(i INTEGER)
+
+statement ok
+CREATE VIEW ducklake.vdrop(a) AS SELECT i FROM ducklake.vt
+
+statement ok
+USE memory
+
+statement ok
+DETACH ducklake
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/ducklake_view_col_comment_bad/')
+
+statement ok
+DROP TABLE ducklake.vt
+
+statement error
+COMMENT ON COLUMN ducklake.vdrop.a IS 'x'
+----
+View "vdrop" does not have a column with name "a"

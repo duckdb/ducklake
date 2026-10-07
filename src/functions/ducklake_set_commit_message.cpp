@@ -33,16 +33,19 @@ static unique_ptr<FunctionData> DuckLakeSetCommitMessageBind(ClientContext &cont
 }
 
 void DuckLakeSetCommitMessageExecute(ClientContext &context, TableFunctionInput &data_p, DataChunk &output) {
-	auto &state = data_p.global_state->Cast<DuckLakeRunOnceState>();
 	auto &bind_data = data_p.bind_data->Cast<DuckLakeSetCommitMessageData>();
 	auto &transaction = DuckLakeTransaction::Get(context, bind_data.catalog);
 	transaction.SetCommitMessage(bind_data.snapshot_commit_info);
-	state.finished = true;
 }
 
 DuckLakeSetCommitMessage::DuckLakeSetCommitMessage()
-    : TableFunction("ducklake_set_commit_message", {LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::VARCHAR},
-                    DuckLakeSetCommitMessageExecute, DuckLakeSetCommitMessageBind, DuckLakeRunOnceState::Init) {
-	named_parameters["extra_info"] = LogicalType::VARCHAR;
+    : TableFunction("ducklake_set_commit_message",
+                    FunctionSignature()
+                        .AddPositionalOnly("catalog", LogicalType::VARCHAR)
+                        .AddPositionalOnly("author", LogicalType::VARCHAR)
+                        .AddPositionalOnly("commit_message", LogicalType::VARCHAR),
+                    DuckLakeSetCommitMessageExecute, DuckLakeSetCommitMessageBind) {
+	GetSignature().WithTypedKwargs("options",
+	                               [&](TypedKwargs &options) { options.Add("extra_info", LogicalType::VARCHAR); });
 }
 } // namespace duckdb
