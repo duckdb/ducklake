@@ -1,4 +1,5 @@
 #include "duckdb/main/attached_database.hpp"
+#include "duckdb/common/thread.hpp"
 #include "duckdb/catalog/catalog.hpp"
 #include "duckdb/common/file_system.hpp"
 #include "duckdb/transaction/meta_transaction.hpp"
@@ -109,25 +110,17 @@ void DuckLakeInitializer::Initialize() {
 	}
 }
 
-//! Whether the load can succeed when it is tried again
-static bool LoadCanBeRetried(const ErrorData &error) {
-	switch (error.Type()) {
-	case ExceptionType::INVALID_INPUT:
-	case ExceptionType::INVALID_CONFIGURATION:
-	case ExceptionType::NOT_IMPLEMENTED:
-	case ExceptionType::BINDER:
-		return false;
-	default:
-		return true;
-	}
+//! Whether the statements of a migration failed, which another attach of the same DuckLake can cause
+static bool MigrationFailed(const ErrorData &error) {
+	return StringUtil::Contains(error.RawMessage(), "Failed to migrate DuckLake from");
 }
 
 void DuckLakeInitializer::LoadExistingDuckLakeWithRetries(DuckLakeTransaction &transaction,
                                                           const string &attach_query) {
-	// a migration of another attach of the same DuckLake can make this one fail, so it waits for that one
 	auto retry_config = DuckLakeRetryConfig::FromContext(context);
 	ErrorData first_error;
-	for (idx_t attempt = 0;; attempt++) {
+	idx_t attempt = 0;
+	while (true) {
 		try {
 			LoadExistingDuckLake(transaction);
 			return;
@@ -136,16 +129,20 @@ void DuckLakeInitializer::LoadExistingDuckLakeWithRetries(DuckLakeTransaction &t
 			if (attempt == 0) {
 				first_error = error;
 			}
-			if (attempt >= retry_config.max_retry_count || !LoadCanBeRetried(error)) {
+			if (!MigrationFailed(error)) {
+				// only the statements of a migration can fail because another attach migrates the same DuckLake
 				first_error.Throw();
 			}
-			transaction.Rollback();
-			AttachMetadata(transaction, attach_query);
 		}
-#ifndef DUCKDB_NO_THREADS
+		if (attempt >= retry_config.max_retry_count) {
+			first_error.Throw();
+		}
+		// wait for the migration of the other attach to finish, then read the catalog again
 		auto wait_ms = (double)retry_config.retry_wait_ms * pow(retry_config.retry_backoff, (double)attempt);
-		std::this_thread::sleep_for(std::chrono::milliseconds((uint64_t)wait_ms));
-#endif
+		ThreadUtil::SleepMs((idx_t)wait_ms, context);
+		attempt++;
+		transaction.Rollback();
+		AttachMetadata(transaction, attach_query);
 	}
 }
 
