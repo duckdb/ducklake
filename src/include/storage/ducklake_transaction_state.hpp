@@ -51,6 +51,8 @@ struct DuckLakeCommitContext {
 	//! Resets per-attempt state before a retry.
 	std::function<void()> prepare_retry = []() {
 	};
+	//! Serializes the commit attempts of one catalog, held per attempt
+	mutex *commit_lock = nullptr;
 	//! Runs a metadata-DB query during post-commit cleanup.
 	std::function<unique_ptr<QueryResult>(string)> query_metadata;
 	//! Runs cleanup statements atomically.
@@ -145,8 +147,7 @@ public:
 	~DuckLakeTransactionState();
 
 	void Commit(DuckLakeSnapshot transaction_snapshot, const TransactionChangeInformation &transaction_changes,
-	            const DuckLakeRetryConfig &retry_config, const DuckLakeCommitContext &context,
-	            bool check_conflicts_first = false);
+	            const DuckLakeRetryConfig &retry_config, const DuckLakeCommitContext &context);
 
 	SnapshotAndStats CheckForConflicts(DuckLakeSnapshot transaction_snapshot,
 	                                   const TransactionChangeInformation &changes,

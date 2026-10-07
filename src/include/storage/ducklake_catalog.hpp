@@ -329,14 +329,9 @@ public:
 		retrials_server_side = value;
 	}
 
-	//! Serializes the client-side commits of this process, so they do not collide on the snapshot id
+	//! Serializes the client commits of this catalog, so they do not collide on the snapshot id
 	mutex &GetClientCommitLock() {
 		return client_commit_lock;
-	}
-
-	optional_idx LastCommittedSnapshotId() const {
-		lock_guard<mutex> guard(commit_lock);
-		return last_committed_snapshot;
 	}
 
 	Value GetLastCommittedSnapshotId() const {

@@ -1309,8 +1309,6 @@ void DuckLakeTransaction::ReportPostCommitError(const string &message) {
 void DuckLakeTransaction::RunCommitLoop(DuckLakeSnapshot transaction_snapshot,
                                         const TransactionChangeInformation &transaction_changes,
                                         const DuckLakeRetryConfig &retry_config) {
-	// the client commits of this catalog take turns instead of racing for the next snapshot id
-	lock_guard<mutex> commit_guard(ducklake_catalog.GetClientCommitLock());
 	vector<unique_ptr<SQLStatement>> inlined_inserts;
 	DuckLakeCommitContext context;
 	context.conflict_query_executor = [&](string q) -> unique_ptr<QueryResult> {
@@ -1472,11 +1470,13 @@ void DuckLakeTransaction::RunCommitLoop(DuckLakeSnapshot transaction_snapshot,
 	};
 	context.commit_info = state->commit_info;
 	context.supports_v1_1_metadata = ducklake_catalog.SupportsV1_1Metadata();
-	// a commit that landed while we waited would collide on the snapshot id
-	auto last_committed = ducklake_catalog.LastCommittedSnapshotId();
-	bool check_conflicts_first =
-	    last_committed.IsValid() && last_committed.GetIndex() > transaction_snapshot.snapshot_id;
-	state->Commit(transaction_snapshot, transaction_changes, retry_config, context, check_conflicts_first);
+	auto &metadata_type = ducklake_catalog.MetadataType();
+	if (metadata_type.empty() || metadata_type == "duckdb") {
+		// the commits of a DuckDB metadata catalog take turns instead of racing for the next snapshot id
+		// other catalogs can be written by other processes, where a lock of this one does not help
+		context.commit_lock = &ducklake_catalog.GetClientCommitLock();
+	}
+	state->Commit(transaction_snapshot, transaction_changes, retry_config, context);
 }
 
 void DuckLakeTransaction::SetConfigOption(const DuckLakeConfigOption &option) {

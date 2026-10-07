@@ -2127,8 +2127,7 @@ SnapshotAndStats DuckLakeTransactionState::CheckForConflicts(DuckLakeSnapshot tr
 
 void DuckLakeTransactionState::Commit(DuckLakeSnapshot transaction_snapshot,
                                       const TransactionChangeInformation &transaction_changes,
-                                      const DuckLakeRetryConfig &retry_config, const DuckLakeCommitContext &context,
-                                      bool check_conflicts_first) {
+                                      const DuckLakeRetryConfig &retry_config, const DuckLakeCommitContext &context) {
 	SnapshotAndStats commit_stats_snapshot;
 	auto &commit_snapshot = commit_stats_snapshot.snapshot;
 	optional_ptr<vector<DuckLakeGlobalStatsInfo>> stats;
@@ -2138,15 +2137,15 @@ void DuckLakeTransactionState::Commit(DuckLakeSnapshot transaction_snapshot,
 		bool retryable_metadata_error = false;
 		auto attempt_changes = transaction_changes;
 		auto attempt_dropped_file_stats = dropped_file_stats;
+		unique_lock<mutex> commit_guard;
+		if (context.commit_lock) {
+			commit_guard = unique_lock<mutex>(*context.commit_lock);
+		}
 		try {
 			can_retry = false;
-			if (i == 0 && check_conflicts_first) {
-				// our metadata transaction still reads the state from before the commit we waited for
-				context.try_rollback();
-				context.prepare_retry();
-			}
-			if (i > 0 || check_conflicts_first) {
-				// another transaction committed, so the snapshot of this one is not the latest
+			if (i > 0) {
+				// we failed our first commit due to another transaction committing
+				// retry - but first check for conflicts
 				commit_stats_snapshot = CheckForConflicts(transaction_snapshot, attempt_changes, context);
 				stats = &commit_stats_snapshot.stats;
 			} else {
@@ -2198,6 +2197,10 @@ void DuckLakeTransactionState::Commit(DuckLakeSnapshot transaction_snapshot,
 				error.Throw(error_message);
 			}
 
+			if (commit_guard.owns_lock()) {
+				// another commit may take its turn while this one waits
+				commit_guard.unlock();
+			}
 #ifndef DUCKDB_NO_THREADS
 			RandomEngine random;
 			// random multiplier between 0.5 - 1.0
