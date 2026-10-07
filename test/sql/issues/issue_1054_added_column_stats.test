@@ -250,6 +250,29 @@ SELECT count(*) FROM dl.fw WHERE b = 3.14
 ----
 1
 
+# widening a struct keeps the default of a field added to it
+statement ok
+CREATE TABLE dl.sw (s STRUCT(x INTEGER))
+
+statement ok
+INSERT INTO dl.sw VALUES ({'x': 1})
+
+statement ok
+ALTER TABLE dl.sw ADD COLUMN s.y INTEGER DEFAULT 42
+
+statement ok
+ALTER TABLE dl.sw ALTER s TYPE STRUCT(x INTEGER, y BIGINT)
+
+query I
+SELECT s.y FROM dl.sw
+----
+42
+
+query I
+SELECT count(*) FROM dl.sw WHERE s.y = 42
+----
+1
+
 # a column added while every row is deleted does not keep the default of the deleted rows
 statement ok
 CREATE TABLE dl.e (a INTEGER)

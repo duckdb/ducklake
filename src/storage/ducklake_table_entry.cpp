@@ -952,6 +952,23 @@ unique_ptr<CatalogEntry> DuckLakeTableEntry::AlterTable(DuckLakeTransaction &tra
 	return std::move(new_entry);
 }
 
+static void ExtractDefaultValue(const DuckLakeColumnData &col_data, DuckLakeColumnInfo &info) {
+	info.initial_default = col_data.initial_default;
+	if (col_data.default_value) {
+		Value literal_value;
+		if (DuckLakeUtil::TryGetLiteralValue(*col_data.default_value, literal_value)) {
+			info.default_value = std::move(literal_value);
+			info.default_value_type = "literal";
+		} else {
+			info.default_value = col_data.default_value->ToString();
+			info.default_value_type = "expression";
+		}
+	} else {
+		info.default_value = Value(LogicalTypeId::VARCHAR);
+		info.default_value_type = "literal";
+	}
+}
+
 bool TypePromotionIsAllowed(const LogicalType &source, const LogicalType &target) {
 	if (source == target) {
 		return false;
@@ -1074,6 +1091,7 @@ unique_ptr<DuckLakeFieldId> DuckLakeTableEntry::TypePromotion(const DuckLakeFiel
 		// nested column - generate the info here
 		new_col.column_info.id = column_data.id;
 		new_col.column_info.name = source_id.Name();
+		ExtractDefaultValue(column_data, new_col.column_info);
 	}
 	new_col.column_info.type = DuckLakeTypes::ToString(target);
 	new_col.parent_idx = parent_idx;
@@ -1117,23 +1135,6 @@ unique_ptr<CatalogEntry> DuckLakeTableEntry::AlterTable(DuckLakeTransaction &tra
 	auto new_entry = make_uniq<DuckLakeTableEntry>(*this, table_info, LocalChangeType::CHANGE_COLUMN_TYPE,
 	                                               std::move(change_info), std::move(new_field_ids));
 	return std::move(new_entry);
-}
-
-static void ExtractDefaultValue(const DuckLakeColumnData &col_data, DuckLakeColumnInfo &info) {
-	info.initial_default = col_data.initial_default;
-	if (col_data.default_value) {
-		Value literal_value;
-		if (DuckLakeUtil::TryGetLiteralValue(*col_data.default_value, literal_value)) {
-			info.default_value = std::move(literal_value);
-			info.default_value_type = "literal";
-		} else {
-			info.default_value = col_data.default_value->ToString();
-			info.default_value_type = "expression";
-		}
-	} else {
-		info.default_value = Value(LogicalTypeId::VARCHAR);
-		info.default_value_type = "literal";
-	}
 }
 
 void AddNewColumns(const DuckLakeFieldId &field_id, vector<DuckLakeNewColumn> &new_fields, FieldIndex parent_idx) {
