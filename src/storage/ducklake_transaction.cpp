@@ -249,6 +249,10 @@ void LocalTableChanges::AppendInlinedData(ClientContext &context, TableIndex tab
 			if (stats_entry == existing_data.column_stats.end()) {
 				throw InternalException("Missing stats when merging inlined data");
 			}
+			if (entry.second.type.id() == LogicalTypeId::DOUBLE) {
+				// the rows inserted as FLOAT were cast to DOUBLE above
+				stats_entry->second.WidenFloatBounds();
+			}
 			stats_entry->second.MergeStats(entry.second);
 		}
 	} else {

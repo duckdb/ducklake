@@ -127,6 +127,38 @@ SELECT count(*), max(v) FROM dl.i WHERE v > 0.1
 ----
 10	0.10000000149011612
 
+# inlined rows inserted before and after the retype in one transaction
+statement ok
+CREATE TABLE dl.j (v FLOAT)
+
+statement ok
+CALL dl.set_option('data_inlining_row_limit', 100, table_name => 'j')
+
+statement ok
+BEGIN
+
+statement ok
+INSERT INTO dl.j VALUES (0.1), (-0.1)
+
+statement ok
+ALTER TABLE dl.j ALTER COLUMN v TYPE DOUBLE
+
+statement ok
+INSERT INTO dl.j VALUES (0.05)
+
+statement ok
+COMMIT
+
+query II
+SELECT s.min_value::DOUBLE, s.max_value::DOUBLE FROM __ducklake_metadata_dl.ducklake_table_column_stats s JOIN __ducklake_metadata_dl.ducklake_table t USING (table_id) WHERE t.table_name = 'j' AND t.end_snapshot IS NULL
+----
+-0.10000000149011612	0.10000000149011612
+
+query I
+SELECT count(*) FROM dl.j WHERE v > 0.1
+----
+1
+
 # queries in the retyping transaction
 statement ok
 CREATE TABLE dl.x (v FLOAT)
