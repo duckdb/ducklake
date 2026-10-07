@@ -260,7 +260,7 @@ void DuckLakeInitializer::LoadExistingDuckLake(DuckLakeTransaction &transaction)
 		options.table_options[entry.table_id][entry.tag.key] = entry.tag.value;
 	}
 	if (migrated) {
-		// and can create new ones
+		// migrations can create metadata tables
 		metadata_manager.SetReplicaIdentity();
 	}
 	// set correct version metadata manager
