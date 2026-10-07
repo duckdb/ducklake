@@ -28,6 +28,7 @@ private:
 	void LoadExistingDuckLake(DuckLakeTransaction &transaction);
 	//! Loads an existing DuckLake, retrying when another attach migrates it at the same time
 	void LoadExistingDuckLakeWithRetries(DuckLakeTransaction &transaction, const string &attach_query);
+	void AttachMetadata(DuckLakeTransaction &transaction, const string &attach_query);
 	void InitializeDataPath();
 	string GetAttachOptions();
 	void SetVersionedMetadataManager(DuckLakeTransaction &transaction, DuckLakeVersion version);

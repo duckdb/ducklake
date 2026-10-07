@@ -64,9 +64,7 @@ void DuckLakeInitializer::Initialize() {
 	// attach the metadata database
 	const string attach_query =
 	    "ATTACH OR REPLACE {METADATA_PATH} AS {METADATA_CATALOG_NAME_IDENTIFIER}" + GetAttachOptions();
-	auto result = metadata_manager.AttachMetadata(attach_query);
-	result->ThrowIfError("Failed to attach DuckLake MetaData \"" + catalog.MetadataDatabaseName() + "\" at path + \"" +
-	                     catalog.MetadataPath() + "\"");
+	AttachMetadata(transaction, attach_query);
 	// explicitly load all secrets - work-around to secret initialization bug
 	transaction.Query("FROM duckdb_secrets()");
 
@@ -111,12 +109,25 @@ void DuckLakeInitializer::Initialize() {
 	}
 }
 
+//! Whether the load can succeed when it is tried again
+static bool LoadCanBeRetried(const ErrorData &error) {
+	switch (error.Type()) {
+	case ExceptionType::INVALID_INPUT:
+	case ExceptionType::INVALID_CONFIGURATION:
+	case ExceptionType::NOT_IMPLEMENTED:
+	case ExceptionType::BINDER:
+		return false;
+	default:
+		return true;
+	}
+}
+
 void DuckLakeInitializer::LoadExistingDuckLakeWithRetries(DuckLakeTransaction &transaction,
                                                           const string &attach_query) {
 	// a migration of another attach of the same DuckLake can make this one fail, so it waits for that one
-	static constexpr idx_t MAX_ATTEMPTS = 5;
+	auto retry_config = DuckLakeRetryConfig::FromContext(context);
 	ErrorData first_error;
-	for (idx_t attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
+	for (idx_t attempt = 0;; attempt++) {
 		try {
 			LoadExistingDuckLake(transaction);
 			return;
@@ -125,19 +136,24 @@ void DuckLakeInitializer::LoadExistingDuckLakeWithRetries(DuckLakeTransaction &t
 			if (attempt == 0) {
 				first_error = error;
 			}
-			if (attempt + 1 == MAX_ATTEMPTS) {
+			if (attempt >= retry_config.max_retry_count || !LoadCanBeRetried(error)) {
 				first_error.Throw();
 			}
 			transaction.Rollback();
-			// the rollback dropped the metadata attach with the transaction that made it
-			auto reattach = transaction.GetMetadataManager().AttachMetadata(attach_query);
-			reattach->ThrowIfError("Failed to attach DuckLake MetaData \"" + catalog.MetadataDatabaseName() +
-			                       "\" at path + \"" + catalog.MetadataPath() + "\"");
+			AttachMetadata(transaction, attach_query);
 		}
 #ifndef DUCKDB_NO_THREADS
-		std::this_thread::sleep_for(std::chrono::milliseconds(100 * (attempt + 1)));
+		auto wait_ms = (double)retry_config.retry_wait_ms * pow(retry_config.retry_backoff, (double)attempt);
+		std::this_thread::sleep_for(std::chrono::milliseconds((uint64_t)wait_ms));
 #endif
 	}
+}
+
+void DuckLakeInitializer::AttachMetadata(DuckLakeTransaction &transaction, const string &attach_query) {
+	// the rollback of a failed load dropped the metadata attach with the transaction that made it
+	auto result = transaction.GetMetadataManager().AttachMetadata(attach_query);
+	result->ThrowIfError("Failed to attach DuckLake MetaData \"" + catalog.MetadataDatabaseName() + "\" at path + \"" +
+	                     catalog.MetadataPath() + "\"");
 }
 
 void DuckLakeInitializer::InitializeDataPath() {
