@@ -65,6 +65,8 @@ struct DuckLakeCommitState {
 	//! The widened columns that had another type before FLOAT, whose files read as DOUBLE without FLOAT rounding
 	map<TableIndex, set<FieldIndex>> float_bounds_to_clear;
 
+	//! Whether this commit widens a column of the given table from FLOAT to DOUBLE
+	bool WidensFloatColumns(TableIndex table_id) const;
 	//! Widen the FLOAT bounds of a widened column, or clear them when they cannot be widened
 	void PrepareFloatBounds(TableIndex table_id, map<FieldIndex, DuckLakeColumnStats> &column_stats) const;
 

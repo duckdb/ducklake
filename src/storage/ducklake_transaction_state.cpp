@@ -27,6 +27,10 @@
 
 namespace duckdb {
 
+bool DuckLakeCommitState::WidensFloatColumns(TableIndex table_id) const {
+	return float_widened_columns.find(table_id) != float_widened_columns.end();
+}
+
 void DuckLakeCommitState::PrepareFloatBounds(TableIndex table_id,
                                              map<FieldIndex, DuckLakeColumnStats> &column_stats) const {
 	auto entry = float_widened_columns.find(table_id);
@@ -1192,10 +1196,14 @@ NewDataInfo DuckLakeTransactionState::GetNewDataFiles(
 			new_inlined_data.table_id = table_id;
 			new_inlined_data.row_id_start = new_stats.next_row_id;
 
-			// merge column stats
-			auto inlined_stats = inlined_data.column_stats;
-			commit_state.PrepareFloatBounds(table_id, inlined_stats);
-			for (auto &entry : inlined_stats) {
+			// merge column stats, widening a copy so the data kept for a commit retry is unchanged
+			bool widen_bounds = commit_state.WidensFloatColumns(table_id);
+			map<FieldIndex, DuckLakeColumnStats> widened_stats;
+			if (widen_bounds) {
+				widened_stats = inlined_data.column_stats;
+				commit_state.PrepareFloatBounds(table_id, widened_stats);
+			}
+			for (auto &entry : widen_bounds ? widened_stats : inlined_data.column_stats) {
 				new_stats.MergeStats(entry.first, entry.second);
 			}
 
