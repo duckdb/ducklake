@@ -1,0 +1,59 @@
+# name: test/sql/migration/postgres_concurrent_migration.test
+# description: concurrent attaches that migrate the same Postgres catalog all succeed
+# group: [migration]
+
+require ducklake
+
+require parquet
+
+require postgres_scanner
+
+require-env DUCKLAKE_CI
+
+test-env DATA_PATH {TEST_DIR}
+
+unzip data/old_ducklake/v01.db.gz {TEST_DIR}/concurrent_migration_v01.db
+
+statement ok
+ATTACH '{TEST_DIR}/concurrent_migration_v01.db' AS old_metadata (READ_ONLY)
+
+statement ok
+ATTACH 'dbname=ducklakedb' AS pg (TYPE postgres)
+
+statement ok
+CALL postgres_execute('pg', 'DROP SCHEMA IF EXISTS concurrent_migration CASCADE')
+
+statement ok
+CALL postgres_execute('pg', 'CREATE SCHEMA concurrent_migration')
+
+foreach table column column_tag data_file delete_file file_column_statistics file_partition_value files_scheduled_for_deletion inlined_data_tables metadata partition_column partition_info schema snapshot snapshot_changes table table_column_stats table_stats tag view
+
+statement ok
+CREATE TABLE pg.concurrent_migration.ducklake_${table} AS FROM old_metadata.ducklake_${table}
+
+endloop
+
+statement ok
+DETACH old_metadata
+
+# every attach migrates the catalog from v0.1
+concurrentloop i 0 4
+
+statement ok
+ATTACH 'ducklake:postgres:dbname=ducklakedb' AS dl_${i}
+(DATA_PATH '{DATA_PATH}/concurrent_migration', METADATA_SCHEMA 'concurrent_migration', OVERRIDE_DATA_PATH TRUE,
+AUTOMATIC_MIGRATION TRUE)
+
+statement ok
+SELECT count(*) FROM duckdb_tables() WHERE database_name = 'dl_${i}'
+
+endloop
+
+query I
+SELECT count(*) FROM postgres_query('pg', 'SELECT value FROM concurrent_migration.ducklake_metadata
+WHERE key = ''version'' AND value <> ''0.1''')
+----
+1
+
+statement ok
+CALL postgres_execute('pg', 'DROP SCHEMA concurrent_migration CASCADE')

@@ -89,7 +89,7 @@ void DuckLakeInitializer::Initialize() {
 	// this prevents a corrupted ducklake catalog from blocking initialization of unrelated ducklake databases
 	// FIXME: verify that all ducklake tables are in the correct format
 	if (transaction.GetMetadataManager().MetadataExists()) {
-		LoadExistingDuckLake(transaction);
+		LoadExistingDuckLakeWithRetries(transaction, attach_query);
 	} else {
 		if (!options.create_if_not_exists) {
 			throw InvalidInputException("Existing DuckLake at metadata catalog \"%s\" does not exist - and creating a "
@@ -108,6 +108,35 @@ void DuckLakeInitializer::Initialize() {
 	if (options.at_clause) {
 		// if the user specified a snapshot try to load it to trigger an error if it does not exist
 		transaction.GetSnapshot();
+	}
+}
+
+void DuckLakeInitializer::LoadExistingDuckLakeWithRetries(DuckLakeTransaction &transaction,
+                                                          const string &attach_query) {
+	// a migration of another attach of the same DuckLake can make this one fail, so it waits for that one
+	static constexpr idx_t MAX_ATTEMPTS = 5;
+	ErrorData first_error;
+	for (idx_t attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
+		try {
+			LoadExistingDuckLake(transaction);
+			return;
+		} catch (std::exception &ex) {
+			ErrorData error(ex);
+			if (attempt == 0) {
+				first_error = error;
+			}
+			if (attempt + 1 == MAX_ATTEMPTS) {
+				first_error.Throw();
+			}
+			transaction.Rollback();
+			// the rollback dropped the metadata attach with the transaction that made it
+			auto reattach = transaction.GetMetadataManager().AttachMetadata(attach_query);
+			reattach->ThrowIfError("Failed to attach DuckLake MetaData \"" + catalog.MetadataDatabaseName() +
+			                       "\" at path + \"" + catalog.MetadataPath() + "\"");
+		}
+#ifndef DUCKDB_NO_THREADS
+		std::this_thread::sleep_for(std::chrono::milliseconds(100 * (attempt + 1)));
+#endif
 	}
 }
 
