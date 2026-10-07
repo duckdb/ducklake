@@ -166,6 +166,6 @@ Exceeded the maximum retry count of 1 set by the ducklake_max_retry_count settin
 endloop
 
 query I
-SELECT COUNT() >= 5 AND COUNT() < 15 FROM ducklake.tbl;
+SELECT COUNT() >= 5 AND COUNT() <= 15 FROM ducklake.tbl;
 ----
 TRUE

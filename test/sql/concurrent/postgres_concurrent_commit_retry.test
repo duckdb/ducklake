@@ -34,7 +34,7 @@ CREATE TABLE dl.src AS SELECT range AS id FROM range(100)
 concurrentloop i 0 32
 
 statement ok
-CREATE TABLE dl.t_${i} AS SELECT * FROM dl.src
+CREATE TABLE dl.t_{i} AS SELECT * FROM dl.src
 
 endloop
 
