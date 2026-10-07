@@ -11,7 +11,7 @@ test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
 test-env DATA_PATH {TEST_DIR}
 
 statement ok
-ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/ducklake_add_files_variant')
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/afv', DATA_INLINING_ROW_LIMIT 0)
 
 statement ok
 COPY (SELECT 1::BIGINT AS id, {'host': 'h1', 'n': 1}::VARIANT AS attrs) TO '{DATA_PATH}/variant.parquet'
@@ -47,3 +47,33 @@ query I
 SELECT attrs.value FROM ducklake.test_struct
 ----
 \x0C\x01
+
+# the table stats of the VARIANT column cover the values of an added file
+statement ok
+CREATE TABLE ducklake.test_stats (v VARIANT)
+
+statement ok
+INSERT INTO ducklake.test_stats VALUES ({'n': 1}::VARIANT)
+
+statement ok
+COPY (SELECT {'n': 100}::VARIANT AS v) TO '{DATA_PATH}/variant_stats.parquet'
+
+statement ok
+CALL ducklake_add_data_files('ducklake', 'test_stats', '{DATA_PATH}/variant_stats.parquet')
+
+query I
+SELECT count(*) FROM ducklake.test_stats WHERE v.n::INTEGER = 100
+----
+1
+
+# NULL values are checked against a NOT NULL constraint
+statement ok
+COPY (SELECT * FROM (VALUES (NULL::VARIANT), (42::VARIANT)) t(v)) TO '{DATA_PATH}/variant_null.parquet'
+
+statement ok
+CREATE TABLE ducklake.test_not_null (v VARIANT NOT NULL)
+
+statement error
+CALL ducklake_add_data_files('ducklake', 'test_not_null', '{DATA_PATH}/variant_null.parquet')
+----
+NOT NULL constraint failed

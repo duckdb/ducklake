@@ -151,6 +151,8 @@ struct ParquetFileMetadata {
 	vector<HivePartition> hive_partition_values;
 	// Columns absent from the file and the value they read as
 	vector<MissingColumn> missing_columns;
+	// VARIANT root columns, by field index
+	vector<pair<FieldIndex, reference<ParquetColumn>>> variant_columns;
 };
 
 struct DuckLakeFileProcessor {
@@ -815,6 +817,9 @@ unique_ptr<DuckLakeNameMapEntry> DuckLakeFileProcessor::MapColumn(ParquetFileMet
 	// Store the mapping from column to field for later statistics processing
 	file_metadata.column_id_to_field_map.emplace(column.column_id,
 	                                             make_pair(field_id.GetFieldIndex(), field_id.Type()));
+	if (column.is_variant) {
+		file_metadata.variant_columns.emplace_back(field_id.GetFieldIndex(), column);
+	}
 	column.skip_bounds = skipped_fields.count(field_id.GetFieldIndex().index) > 0;
 
 	// recursively remap children (if any)
@@ -945,6 +950,12 @@ void DuckLakeFileProcessor::MapColumnStats(ParquetFileMetadata &file_metadata, D
 			}
 			result.column_stats.emplace(field_index, std::move(aggregated));
 		}
+	}
+
+	for (auto &entry : file_metadata.variant_columns) {
+		CheckNotNullValues(file_metadata, entry.second.get(), entry.first);
+		// the shredded statistics of the file are not read, so the table loses its VARIANT bounds
+		result.column_stats.emplace(entry.first, DuckLakeColumnStats(LogicalType::VARIANT()));
 	}
 
 	// Process statistics for hive partition columns
@@ -1138,10 +1149,10 @@ void DuckLakeFileProcessor::MapPartitionColumns(ParquetFileMetadata &file) {
 
 void DuckLakeFileProcessor::MarkVariantColumns(ParquetFileMetadata &file, const string &filepath) {
 	// the schema of the file does not show the VARIANT annotation, so ask the reader for its types
-	auto result = transaction.ExecuteRaw(
-	    StringUtil::Format("SELECT * FROM read_parquet(%s, hive_partitioning = false) LIMIT 0", SQLString(filepath)));
-	result->ThrowIfError("Failed to read the column types of a file added to DuckLake: ");
-	auto &types = result->GetTypes();
+	DuckLakeFileData file_data;
+	file_data.path = filepath;
+	ParquetFileScanner scanner(context, file_data);
+	auto &types = scanner.GetTypes();
 	for (idx_t i = 0; i < types.size() && i < file.columns.size(); i++) {
 		file.columns[i]->is_variant = types[i].id() == LogicalTypeId::VARIANT;
 	}
