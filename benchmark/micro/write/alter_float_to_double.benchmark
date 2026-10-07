@@ -10,8 +10,6 @@ require ducklake
 
 require parquet
 
-argument lake float_files
-
 argument work float_files_work
 
 include benchmark/micro/fixtures/float_files.benchmark.in
