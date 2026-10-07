@@ -109,7 +109,7 @@ AND NOT EXISTS (SELECT 1 FROM pg_index i WHERE i.indrelid = c.oid AND i.indispri
 statement ok
 DETACH dl
 
-# a v1.0 catalog migrated to v1.1 gets new metadata tables
+# a catalog migrated from an older version to v1.1 gets new metadata tables
 statement ok
 ATTACH 'ducklake:postgres:dbname=ducklakedb' AS dl10
 (DATA_PATH '{DATA_PATH}/pub_replica_identity_v10', METADATA_SCHEMA 'pub_replica_identity_v10', DUCKLAKE_VERSION '1.0')
@@ -120,7 +120,10 @@ CREATE VIEW dl10.v AS SELECT 1 AS a
 statement ok
 DETACH dl10
 
-# drop the replica identities, as in a catalog created by an older DuckLake
+# make it look like a v0.4 catalog created by an older DuckLake, without replica identities
+statement ok
+CALL postgres_execute('pg', 'UPDATE pub_replica_identity_v10.ducklake_metadata SET value = ''0.4'' WHERE key = ''version''')
+
 statement ok
 CALL postgres_execute('pg', 'DO $$DECLARE tbl regclass; BEGIN
 FOR tbl IN SELECT c.oid FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace

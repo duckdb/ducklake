@@ -246,18 +246,6 @@ void PostgresMetadataManager::SetReplicaIdentity() {
 	result->ThrowIfError("Failed to set the replica identity of the DuckLake metadata tables: ");
 }
 
-void PostgresMetadataManager::InitializeDuckLake(bool has_explicit_schema, DuckLakeEncryption encryption) {
-	DuckLakeMetadataManager::InitializeDuckLake(has_explicit_schema, encryption);
-	SetReplicaIdentity();
-}
-
-void PostgresMetadataManager::MigrateV10(bool allow_failures) {
-	// the migration updates existing tables and creates new ones
-	SetReplicaIdentity();
-	DuckLakeMetadataManager::MigrateV10(allow_failures);
-	SetReplicaIdentity();
-}
-
 string PostgresMetadataManager::ReplicaIdentitySql(const vector<string> &table_names) {
 	if (table_names.empty()) {
 		return string();

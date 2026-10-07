@@ -157,6 +157,7 @@ void DuckLakeInitializer::LoadExistingDuckLake(DuckLakeTransaction &transaction)
 	auto &metadata_manager = transaction.GetMetadataManager();
 	auto metadata = metadata_manager.LoadDuckLake();
 	DuckLakeVersion resolved_version = DuckLakeVersion::UNSET;
+	bool migrated = false;
 	for (auto &tag : metadata.tags) {
 		if (tag.key == "version") {
 			auto catalog_version = DuckLakeVersionFromString(tag.value);
@@ -173,6 +174,11 @@ void DuckLakeInitializer::LoadExistingDuckLake(DuckLakeTransaction &transaction)
 				    "DuckLake catalog version mismatch: catalog version is %s, but the extension requires version "
 				    "%s. To automatically migrate, set AUTOMATIC_MIGRATION to TRUE when attaching.",
 				    tag.value, DuckLakeVersionToString(target_version));
+			}
+			if (catalog_version < target_version) {
+				// migrations update the metadata tables
+				metadata_manager.SetReplicaIdentity();
+				migrated = true;
 			}
 			if (catalog_version == DuckLakeVersion::V0_1) {
 				metadata_manager.MigrateV01();
@@ -252,6 +258,10 @@ void DuckLakeInitializer::LoadExistingDuckLake(DuckLakeTransaction &transaction)
 	}
 	for (auto &entry : metadata.table_settings) {
 		options.table_options[entry.table_id][entry.tag.key] = entry.tag.value;
+	}
+	if (migrated) {
+		// and can create new ones
+		metadata_manager.SetReplicaIdentity();
 	}
 	// set correct version metadata manager
 	if (resolved_version != DuckLakeVersion::UNSET) {

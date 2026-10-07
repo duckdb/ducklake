@@ -259,6 +259,9 @@ public:
 
 	//! Initialize a new DuckLake
 	virtual void InitializeDuckLake(bool has_explicit_schema, DuckLakeEncryption encryption);
+	//! Gives the metadata tables without a primary key a replica identity, if the metadata database needs one
+	virtual void SetReplicaIdentity() {
+	}
 	//! Get the CREATE TABLE statements for all metadata tables
 	virtual string GetCreateTableStatements();
 	virtual string GetSchemaTableStatement();

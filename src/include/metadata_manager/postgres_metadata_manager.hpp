@@ -29,10 +29,9 @@ public:
 	}
 
 	string GetColumnTypeInternal(const LogicalType &type) override;
-	void InitializeDuckLake(bool has_explicit_schema, DuckLakeEncryption encryption) override;
+	void SetReplicaIdentity() override;
 	bool InlinedDeletionTableExists(const string &table_name) override;
 	string ReplicaIdentitySql(const vector<string> &table_names) override;
-	void MigrateV10(bool allow_failures) override;
 	void MigrateInlinedDataTypes() override;
 
 	unique_ptr<QueryResult> Execute(DuckLakeSnapshot snapshot, string &query) override;
@@ -51,7 +50,6 @@ protected:
 private:
 	//! Sets a full replica identity on the matching metadata tables without a primary key
 	string ReplicaIdentityFullSql(const string &table_name_filter) const;
-	void SetReplicaIdentity();
 };
 
 } // namespace duckdb

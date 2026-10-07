@@ -215,6 +215,7 @@ INSERT INTO {METADATA_CATALOG}.ducklake_schema (schema_id, schema_uuid, begin_sn
 	                                       initial_schema_uuid);
 	auto result = Execute(initialize_query);
 	result->ThrowIfError("Failed to initialize DuckLake: ");
+	SetReplicaIdentity();
 }
 
 string DuckLakeMetadataManager::GetSchemaTableStatement() {
