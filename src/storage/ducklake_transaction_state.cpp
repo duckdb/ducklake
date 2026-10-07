@@ -2141,11 +2141,14 @@ void DuckLakeTransactionState::Commit(DuckLakeSnapshot transaction_snapshot,
 		if (context.commit_lock) {
 			commit_guard = unique_lock<mutex>(*context.commit_lock);
 		}
+		if (i > 0) {
+			// the metadata transaction of a retry starts while the lock is held, so it reads the latest state
+			context.prepare_retry();
+		}
 		try {
 			can_retry = false;
 			if (i > 0) {
-				// we failed our first commit due to another transaction committing
-				// retry - but first check for conflicts
+				// check for conflicts before retrying
 				commit_stats_snapshot = CheckForConflicts(transaction_snapshot, attempt_changes, context);
 				stats = &commit_stats_snapshot.stats;
 			} else {
@@ -2198,7 +2201,6 @@ void DuckLakeTransactionState::Commit(DuckLakeSnapshot transaction_snapshot,
 			}
 
 			if (commit_guard.owns_lock()) {
-				// another commit may take its turn while this one waits
 				commit_guard.unlock();
 			}
 #ifndef DUCKDB_NO_THREADS
@@ -2209,10 +2211,6 @@ void DuckLakeTransactionState::Commit(DuckLakeSnapshot transaction_snapshot,
 			                                   pow(retry_config.retry_backoff, static_cast<double>(i)));
 			std::this_thread::sleep_for(std::chrono::milliseconds(sleep_amount));
 #endif
-
-			// retry the transaction (with a new snapshot id)
-			// clear the inlined table caches - the rollback undid any table creation from the previous attempt
-			context.prepare_retry();
 		}
 	}
 	// If we got here, this snapshot was successful

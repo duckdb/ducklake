@@ -61,6 +61,7 @@
     {
       "reason": "Tests only for DuckDB as a catalog",
       "paths": [
+        "test/sql/concurrent/concurrent_commits_one_process.test",
         "test/sql/general/missing_parquet.test",
         "test/sql/general/paths.test",
         "test/sql/issues/corrupted_catalog_fault_isolation.test",

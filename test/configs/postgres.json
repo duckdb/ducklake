@@ -19,6 +19,12 @@
   ],
   "skip_tests": [
     {
+      "reason": "Test needs a DuckDB metadata catalog, the commits of other catalogs are not serialized",
+      "paths": [
+        "test/sql/concurrent/concurrent_commits_one_process.test"
+      ]
+    },
+    {
       "reason": "Test requires a Quack metadata catalog",
       "paths": [
         "test/sql/quack/inlined_superseded_drop_failure.test"
