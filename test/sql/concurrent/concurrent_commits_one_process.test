@@ -1,0 +1,48 @@
+# name: test/sql/concurrent/concurrent_commits_one_process.test
+# description: commits of several connections to one catalog do not use up the retries of each other
+# group: [concurrent]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{BASE_TEST_NAME}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/concurrent_commits_one_process')
+
+statement ok
+CREATE TABLE dl.writer (i BIGINT)
+
+statement ok
+SET GLOBAL ducklake_max_retry_count = 1
+
+# every connection writes to the shared table and creates and alters its own table
+concurrentloop k 0 8
+
+loop i 0 3
+
+statement ok
+INSERT INTO dl.writer VALUES ({k} * 100 + {i})
+
+endloop
+
+statement ok
+CREATE TABLE dl.own_{k} (i INTEGER, part DATE)
+
+statement ok
+ALTER TABLE dl.own_{k} SET PARTITIONED BY (part)
+
+endloop
+
+query II
+SELECT count(*), count(DISTINCT i) FROM dl.writer
+----
+24	24
+
+query I
+SELECT count(*) FROM duckdb_tables() WHERE database_name = 'dl' AND table_name LIKE 'own%'
+----
+8

@@ -145,7 +145,8 @@ public:
 	~DuckLakeTransactionState();
 
 	void Commit(DuckLakeSnapshot transaction_snapshot, const TransactionChangeInformation &transaction_changes,
-	            const DuckLakeRetryConfig &retry_config, const DuckLakeCommitContext &context);
+	            const DuckLakeRetryConfig &retry_config, const DuckLakeCommitContext &context,
+	            bool check_conflicts_first = false);
 
 	SnapshotAndStats CheckForConflicts(DuckLakeSnapshot transaction_snapshot,
 	                                   const TransactionChangeInformation &changes,

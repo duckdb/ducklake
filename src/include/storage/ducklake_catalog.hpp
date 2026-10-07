@@ -329,6 +329,16 @@ public:
 		retrials_server_side = value;
 	}
 
+	//! Serializes the client-side commits of this process, so they do not collide on the snapshot id
+	mutex &GetClientCommitLock() {
+		return client_commit_lock;
+	}
+
+	optional_idx LastCommittedSnapshotId() const {
+		lock_guard<mutex> guard(commit_lock);
+		return last_committed_snapshot;
+	}
+
 	Value GetLastCommittedSnapshotId() const {
 		lock_guard<mutex> guard(commit_lock);
 		if (last_committed_snapshot.IsValid()) {
@@ -435,6 +445,7 @@ private:
 	//! The id of the last committed snapshot, set at FlushChanges on a successful commit
 	mutable mutex commit_lock;
 	optional_idx last_committed_snapshot;
+	mutex client_commit_lock;
 	//! Serializes metadata statements on the shared metadata connection
 	std::recursive_mutex metadata_query_lock;
 	//! Optional callback for instrumenting metadata queries
