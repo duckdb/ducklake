@@ -328,8 +328,9 @@ public:
 	virtual idx_t GetBeginSnapshotForTable(TableIndex table_id);
 	virtual idx_t GetBeginSnapshotForSchemaVersion(TableIndex table_id, idx_t schema_version);
 	virtual idx_t GetNetDataFileRowCount(TableIndex table_id, DuckLakeSnapshot snapshot);
+	//! Without read_delete_files, gives up when the count would need to read delete files
 	optional_idx GetNetDataFileRowCountForStats(ClientContext &context, DuckLakeTableEntry &table,
-	                                            DuckLakeSnapshot snapshot);
+	                                            DuckLakeSnapshot snapshot, bool read_delete_files);
 	virtual idx_t GetNetInlinedRowCount(const string &inlined_table_name, DuckLakeSnapshot snapshot);
 	//! SQL builders for stats-refresh metadata lookups; caller substitutes placeholders + executes.
 	//! With require_exact, the count is NULL if any visible file is only partially visible to the snapshot.

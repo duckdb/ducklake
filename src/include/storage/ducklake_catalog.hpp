@@ -426,7 +426,7 @@ private:
 	//! Valid as long as current snapshot.snapshot_id <= cached snapshot_id
 	unordered_map<idx_t, idx_t> inlined_deletion_not_exists;
 	mutex rows_deleted_twice_lock;
-	//! Table id -> (snapshot id, rows deleted twice) of the last count, snapshots never change what they hold
+	//! Table id -> (snapshot id, rows deleted twice) of the latest count
 	unordered_map<idx_t, pair<idx_t, idx_t>> rows_deleted_twice;
 	//! Cache of (table_id, schema_version) -> begin_snapshot. The backing row is written once when the schema
 	//! version is created and is never updated, so entries are permanent (only committed rows are cached)

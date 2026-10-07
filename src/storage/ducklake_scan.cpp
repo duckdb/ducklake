@@ -198,8 +198,10 @@ vector<PartitionStatistics> DuckLakeGetPartitionStats(ClientContext &context, Ge
 		return result;
 	}
 
-	auto file_count =
-	    transaction->GetMetadataManager().GetNetDataFileRowCountForStats(context, table, transaction->GetSnapshot());
+	// a filtered scan may skip files, so their delete files are not read for the stats either
+	bool read_delete_files = !file_list.GetFilterInfo();
+	auto file_count = transaction->GetMetadataManager().GetNetDataFileRowCountForStats(
+	    context, table, transaction->GetSnapshot(), read_delete_files);
 	if (!file_count.IsValid()) {
 		return result;
 	}

@@ -823,7 +823,7 @@ idx_t DuckLakeMetadataManager::GetNetDataFileRowCount(TableIndex table_id, DuckL
 idx_t DuckLakeMetadataManager::CountRowsDeletedTwice(ClientContext &context, DuckLakeTableEntry &table,
                                                      DuckLakeSnapshot snapshot, const string &inlined_deletion_table) {
 	auto query = StringUtil::Format(R"(
-SELECT del.data_file_id, %s, inlined.row_id
+SELECT del.data_file_id, inlined.row_id, %s
 FROM {METADATA_CATALOG}.ducklake_delete_file del
 JOIN {METADATA_CATALOG}.ducklake_data_file data ON del.data_file_id = data.data_file_id
 JOIN {METADATA_CATALOG}.%s inlined ON inlined.file_id = del.data_file_id
@@ -843,13 +843,14 @@ ORDER BY del.data_file_id)",
 	optional_idx data_file_id;
 	vector<idx_t> deleted_rows;
 	for (auto &row : *result) {
-		idx_t col_idx = 1;
-		auto delete_file = ReadDeleteFile(table, row, col_idx, IsEncrypted());
-		if (!data_file_id.IsValid() || data_file_id.GetIndex() != row.GetValue<idx_t>(0)) {
+		auto file_id = row.GetValue<idx_t>(0);
+		if (!data_file_id.IsValid() || data_file_id.GetIndex() != file_id) {
+			idx_t col_idx = 2;
+			auto delete_file = ReadDeleteFile(table, row, col_idx, IsEncrypted());
 			deleted_rows = DuckLakeDeleteFilter::ScanDeleteFile(context, delete_file).deleted_rows;
-			data_file_id = row.GetValue<idx_t>(0);
+			data_file_id = file_id;
 		}
-		if (std::binary_search(deleted_rows.begin(), deleted_rows.end(), row.GetValue<idx_t>(col_idx))) {
+		if (std::binary_search(deleted_rows.begin(), deleted_rows.end(), row.GetValue<idx_t>(1))) {
 			count++;
 		}
 	}
@@ -857,7 +858,8 @@ ORDER BY del.data_file_id)",
 }
 
 optional_idx DuckLakeMetadataManager::GetNetDataFileRowCountForStats(ClientContext &context, DuckLakeTableEntry &table,
-                                                                     DuckLakeSnapshot snapshot) {
+                                                                     DuckLakeSnapshot snapshot,
+                                                                     bool read_delete_files) {
 	auto table_id = table.GetTableId();
 	auto inlined_deletion_table = GetInlinedDeletionTableName(table_id, snapshot);
 	auto query = "SELECT" + NetDataFileRowCountParts(table_id, inlined_deletion_table, true, ",");
@@ -873,10 +875,12 @@ optional_idx DuckLakeMetadataManager::GetNetDataFileRowCountForStats(ClientConte
 		auto inlined_deletions = row.GetValue<int64_t>(2);
 		auto count = row.GetValue<int64_t>(0) - deleted_rows - inlined_deletions;
 		if (deleted_rows > 0 && inlined_deletions > 0) {
-			// a row deleted in both a delete file and the inlined deletes was subtracted twice
 			auto &catalog = transaction.GetCatalog();
 			auto rows_deleted_twice = catalog.TryGetRowsDeletedTwice(table_id, snapshot);
 			if (!rows_deleted_twice.IsValid()) {
+				if (!read_delete_files) {
+					return optional_idx();
+				}
 				rows_deleted_twice = CountRowsDeletedTwice(context, table, snapshot, inlined_deletion_table);
 				catalog.CacheRowsDeletedTwice(table_id, snapshot, rows_deleted_twice.GetIndex());
 			}
