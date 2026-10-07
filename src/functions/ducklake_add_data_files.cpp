@@ -84,6 +84,8 @@ struct ParquetColumn {
 	string logical_type;
 	//! Set when the field mapping is made - see the skip_stats_columns option
 	bool skip_bounds = false;
+	//! A root group that the Parquet reader reads as VARIANT
+	bool is_variant = false;
 	vector<DuckLakeColumnStats> column_stats;
 
 	vector<unique_ptr<ParquetColumn>> child_columns;
@@ -164,6 +166,7 @@ public:
 			if (not_null_fields.count(field_id->Name())) {
 				not_null_columns.emplace(field_id->GetFieldIndex().index, field_id->Name());
 			}
+			has_variant_columns |= field_id->Type().id() == LogicalTypeId::VARIANT;
 		}
 	}
 
@@ -193,6 +196,7 @@ private:
 	                      vector<unique_ptr<DuckLakeNameMapEntry>> &column_maps);
 	void DetermineMapping(ParquetFileMetadata &file);
 	void MapPartitionColumns(ParquetFileMetadata &file);
+	void MarkVariantColumns(ParquetFileMetadata &file, const string &filepath);
 
 	void CheckMatchingType(const LogicalType &type, ParquetColumn &column);
 
@@ -208,6 +212,7 @@ private:
 	unordered_set<idx_t> skipped_fields;
 	//! The root columns of the table that do not allow NULL values, by field index
 	unordered_map<idx_t, string> not_null_columns;
+	bool has_variant_columns = false;
 };
 
 static string GetStringOrEmpty(const VectorIterator<string_t>::ValueEntry &entry) {
@@ -368,6 +373,9 @@ FROM parquet_full_metadata(%s)
 			}
 		}
 
+		if (has_variant_columns) {
+			MarkVariantColumns(file, filepath);
+		}
 		DetermineMapping(file);
 
 		for (auto stats_entry : stats_iter[row_idx].GetChildValues()) {
@@ -489,6 +497,9 @@ private:
 LogicalType DuckLakeParquetTypeChecker::DeriveLogicalType(const ParquetColumn &s_ele) {
 	// FIXME: this is more or less copied from DeriveLogicalType in DuckDB's Parquet reader
 	//  we should just emit DuckDB's type in parquet_schema and remove this method
+	if (s_ele.is_variant) {
+		return LogicalType::VARIANT();
+	}
 	if (!s_ele.child_columns.empty()) {
 		// nested types
 		if (s_ele.converted_type == "LIST") {
@@ -1122,6 +1133,17 @@ void DuckLakeFileProcessor::MapPartitionColumns(ParquetFileMetadata &file) {
 		file.hive_partition_values.emplace_back(HivePartition {partition_field.field_id, partition_key_type, hive_value,
 		                                                       partition_field.transform,
 		                                                       optional_idx(partition_field.partition_key_index)});
+	}
+}
+
+void DuckLakeFileProcessor::MarkVariantColumns(ParquetFileMetadata &file, const string &filepath) {
+	// the schema of the file does not show the VARIANT annotation, so ask the reader for its types
+	auto result = transaction.ExecuteRaw(
+	    StringUtil::Format("SELECT * FROM read_parquet(%s, hive_partitioning = false) LIMIT 0", SQLString(filepath)));
+	result->ThrowIfError("Failed to read the column types of a file added to DuckLake: ");
+	auto &types = result->GetTypes();
+	for (idx_t i = 0; i < types.size() && i < file.columns.size(); i++) {
+		file.columns[i]->is_variant = types[i].id() == LogicalTypeId::VARIANT;
 	}
 }
 

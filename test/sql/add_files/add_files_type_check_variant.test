@@ -1,0 +1,49 @@
+# name: test/sql/add_files/add_files_type_check_variant.test
+# description: test ducklake adding files with VARIANT columns
+# group: [add_files]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/ducklake_add_files_variant')
+
+statement ok
+COPY (SELECT 1::BIGINT AS id, {'host': 'h1', 'n': 1}::VARIANT AS attrs) TO '{DATA_PATH}/variant.parquet'
+
+statement ok
+CREATE TABLE ducklake.test (id BIGINT, attrs VARIANT)
+
+statement ok
+CALL ducklake_add_data_files('ducklake', 'test', '{DATA_PATH}/variant.parquet')
+
+query IIII
+SELECT id, attrs.host::VARCHAR, attrs.n::INTEGER, typeof(attrs) FROM ducklake.test
+----
+1	h1	1	VARIANT
+
+# a struct with the same fields is not a VARIANT
+statement ok
+COPY (SELECT {'metadata': '\x01\x00\x00'::BLOB, 'value': '\x0c\x01'::BLOB} AS attrs)
+TO '{DATA_PATH}/variant_shape.parquet'
+
+statement error
+CALL ducklake_add_data_files('ducklake', 'test', '{DATA_PATH}/variant_shape.parquet', allow_missing => true)
+----
+Expected VARIANT, found type STRUCT
+
+statement ok
+CREATE TABLE ducklake.test_struct (attrs STRUCT(metadata BLOB, value BLOB))
+
+statement ok
+CALL ducklake_add_data_files('ducklake', 'test_struct', '{DATA_PATH}/variant_shape.parquet')
+
+query I
+SELECT attrs.value FROM ducklake.test_struct
+----
+\x0C\x01
