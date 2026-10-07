@@ -1,0 +1,20 @@
+# name: benchmark/micro/read/count_star_shared_deletes.benchmark
+# description: Run 50 count(*) queries on a table whose files have both a delete file and inlined deletes
+# group: [read]
+
+name Count Star Shared Deletes
+group micro
+subgroup read
+
+require ducklake
+
+require parquet
+
+include benchmark/micro/fixtures/shared_deletes.benchmark.in
+
+run benchmark/micro/queries/count_star_deletes.sql
+
+result_query I
+SELECT * FROM __answer
+----
+521600

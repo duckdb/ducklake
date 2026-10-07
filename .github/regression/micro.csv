@@ -16,3 +16,4 @@ benchmark/micro/write/merge_into_upsert.benchmark
 benchmark/ingest/add_files_small_files.benchmark
 benchmark/tpch/q09.benchmark
 benchmark/micro/read/count_star_deletes.benchmark
+benchmark/micro/read/count_star_shared_deletes.benchmark
