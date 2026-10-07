@@ -1371,6 +1371,9 @@ void DuckLakeTransaction::RunCommitLoop(DuckLakeSnapshot transaction_snapshot,
 		}
 		return schema;
 	};
+	context.cast_inlined_column = [&](const string &column, const LogicalType &type) {
+		return metadata_manager->CastColumnToTarget(column, type);
+	};
 	context.get_inlined_table_names = [&](TableIndex table_id) {
 		vector<string> names;
 		auto table = get_table_entry(table_id);

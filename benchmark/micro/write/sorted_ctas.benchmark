@@ -1,0 +1,32 @@
+# name: benchmark/micro/write/sorted_ctas.benchmark
+# description: CREATE TABLE AS with SORTED BY of 2M permuted keys into 4MB target files, including the commit
+# group: [write]
+
+name Sorted CTAS
+group micro
+subgroup write
+
+require ducklake
+
+require parquet
+
+argument work sorted_ctas_work
+
+include benchmark/micro/fixtures/sorted.benchmark.in
+
+include benchmark/micro/fixtures/restore_cleanup.benchmark.in
+
+# The new table has no options yet, so the session setting picks its file size
+run
+SET ducklake_target_file_size = '4MB';
+CREATE TABLE lake.ctas SORTED BY (k) AS
+SELECT (i * 7919) % 2000000 AS k, 'v' || i AS v, i * 0.5 AS x FROM range(2000000) t(i);
+RESET ducklake_target_file_size;
+
+# A missed reset makes the CTAS fail because lake.ctas already exists
+result_query III
+WITH ranges AS (SELECT min(k) AS lo, max(k) AS hi FROM lake.ctas GROUP BY filename),
+ordered AS (SELECT lo, lag(hi) OVER (ORDER BY lo) AS prev FROM ranges)
+SELECT (SELECT count(*) FROM lake.ctas), count(*) > 1, count(*) FILTER (WHERE lo <= prev) FROM ordered
+----
+2000000	true	0

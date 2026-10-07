@@ -236,8 +236,6 @@ void DuckLakeTransactionState::CheckForConflicts(const TransactionChangeInformat
 	for (auto &table_id : changes.tables_deleted_from) {
 		ConflictCheck(table_id, other_changes.dropped_tables, "delete from table", "dropped it");
 		ConflictCheck(table_id, other_changes.altered_tables, "delete from table", "altered it");
-		ConflictCheck(table_id, other_changes.tables_merge_adjacent, "delete from table", "compacted it");
-		ConflictCheck(table_id, other_changes.tables_rewrite_delete, "delete from table", "compacted it");
 		ConflictCheck(table_id, other_changes.inserted_tables, "delete from table", "inserted into it");
 		ConflictCheck(table_id, other_changes.tables_inserted_inlined, "delete from table", "inserted into it");
 	}
@@ -246,7 +244,7 @@ void DuckLakeTransactionState::CheckForConflicts(const TransactionChangeInformat
 		ConflictCheck(table_id, other_changes.inserted_tables, "delete from table", "inserted into it");
 		ConflictCheck(table_id, other_changes.tables_inserted_inlined, "delete from table", "inserted into it");
 	}
-	CheckDeletedFileConflicts(changes, other_changes, context);
+	CheckFileConflicts(changes, other_changes, context);
 	for (auto &table_id : changes.tables_deleted_inlined) {
 		ConflictCheck(table_id, other_changes.dropped_tables, "delete from table", "dropped it");
 		ConflictCheck(table_id, other_changes.altered_tables, "delete from table", "altered it");
@@ -262,15 +260,9 @@ void DuckLakeTransactionState::CheckForConflicts(const TransactionChangeInformat
 	}
 	for (auto &table_id : changes.tables_merge_adjacent) {
 		ConflictCheck(table_id, other_changes.dropped_tables, "compact table", "dropped it");
-		ConflictCheck(table_id, other_changes.tables_deleted_from, "compact table", "deleted from it");
-		ConflictCheck(table_id, other_changes.tables_merge_adjacent, "compact table", "compacted it");
-		ConflictCheck(table_id, other_changes.tables_rewrite_delete, "compact table", "compacted it");
 	}
 	for (auto &table_id : changes.tables_rewrite_delete) {
 		ConflictCheck(table_id, other_changes.dropped_tables, "compact table", "dropped it");
-		ConflictCheck(table_id, other_changes.tables_deleted_from, "compact table", "deleted from it");
-		ConflictCheck(table_id, other_changes.tables_merge_adjacent, "compact table", "compacted it");
-		ConflictCheck(table_id, other_changes.tables_rewrite_delete, "compact table", "compacted it");
 	}
 	for (auto &table_id : changes.altered_tables) {
 		ConflictCheck(table_id, other_changes.dropped_tables, "alter table", "dropped it");
@@ -718,27 +710,73 @@ static bool IsFoldableScalarType(const LogicalType &type) {
 	return id == LogicalTypeId::VARCHAR || id == LogicalTypeId::BOOLEAN;
 }
 
-bool DuckLakeTransactionState::TryMergeInlinedStats(const vector<DuckLakeColumnSchemaEntry> &columns,
+static unordered_set<string> ReadInlinedTablesBeforeSchemaChange(TableIndex table_id, DuckLakeSnapshot snapshot,
+                                                                 const DuckLakeCommitContext &context) {
+	unordered_set<string> result;
+	auto tables = context.query_metadata_with_snapshot(
+	    snapshot, DuckLakeMetadataManager::GetInlinedTablesBeforeSchemaChangeSql(table_id));
+	tables->ThrowIfError("Failed to read the inlined data tables from DuckLake: ");
+	for (auto &row : *tables) {
+		result.insert(row.GetValue<string>(0));
+	}
+	return result;
+}
+
+//! The top-level columns of each inlined table of `table_id` at the schema version it was written with
+static map<string, map<FieldIndex, DuckLakeColumnSchemaEntry>>
+ReadInlinedTableColumns(TableIndex table_id, const DuckLakeCommitContext &context) {
+	map<string, map<FieldIndex, DuckLakeColumnSchemaEntry>> result;
+	auto columns = context.query_metadata(DuckLakeMetadataManager::GetInlinedTableColumnsSql(table_id.index));
+	columns->ThrowIfError("Failed to read the columns of the inlined data tables from DuckLake: ");
+	for (auto &row : *columns) {
+		FieldIndex field_index(static_cast<idx_t>(row.GetValue<int64_t>(3)));
+		DuckLakeColumnSchemaEntry column {field_index, row.GetValue<string>(1),
+		                                  DuckLakeTypes::FromString(row.GetValue<string>(2)), true};
+		result[row.GetValue<string>(0)].emplace(field_index, std::move(column));
+	}
+	return result;
+}
+
+bool DuckLakeTransactionState::TryMergeInlinedStats(TableIndex table_id,
+                                                    const vector<DuckLakeColumnSchemaEntry> &columns,
                                                     const vector<string> &inlined_table_names,
                                                     DuckLakeSnapshot snapshot, DuckLakeTableStats &target,
                                                     const DuckLakeCommitContext &context) {
-	// We can only compute exact inlined min/max for top-level foldable scalar columns. If any column is a
-	// non-scalar type we cannot account for the inlined rows exactly - bail (caller keeps the scan fallback).
+	// exact inlined bounds are only computed for top-level foldable scalar columns
 	for (auto &col : columns) {
 		if (!IsFoldableScalarType(col.column_type)) {
 			return false;
 		}
 	}
+	auto older_tables = ReadInlinedTablesBeforeSchemaChange(table_id, snapshot, context);
+	map<string, map<FieldIndex, DuckLakeColumnSchemaEntry>> older_columns;
+	if (!older_tables.empty()) {
+		older_columns = ReadInlinedTableColumns(table_id, context);
+	}
 	for (auto &inlined_table_name : inlined_table_names) {
-		// Build one aggregate query: COUNT(*) followed by (MIN, MAX, COUNT(col), nan-flag) per column.
+		vector<reference<const DuckLakeColumnSchemaEntry>> sources(columns.begin(), columns.end());
+		if (older_tables.find(inlined_table_name) != older_tables.end()) {
+			// an older inlined table has the names and types of its own schema, and lacks columns added later
+			auto &table_columns = older_columns[inlined_table_name];
+			for (idx_t col_idx = 0; col_idx < columns.size(); col_idx++) {
+				auto source = table_columns.find(columns[col_idx].field_index);
+				if (source == table_columns.end() || !IsFoldableScalarType(source->second.column_type)) {
+					return false;
+				}
+				sources[col_idx] = source->second;
+			}
+		}
+		// one aggregate query with the row count and the bounds, count and NaN flag of every column
 		string select_list = "COUNT(*)";
-		for (auto &col : columns) {
-			auto col_ident = SQLQuotedIdentifier::ToString(col.column_name);
-			bool is_float = col.column_type.IsFloating();
+		for (auto &source : sources) {
+			auto &source_type = source.get().column_type;
+			auto col_expr =
+			    context.cast_inlined_column(SQLQuotedIdentifier::ToString(source.get().column_name), source_type);
+			bool is_float = source_type.IsFloating();
 			string nan_expr =
-			    is_float ? StringUtil::Format("COALESCE(BOOL_OR(isnan(%s)), false)", col_ident) : string("false");
-			select_list += StringUtil::Format(", MIN(%s)::VARCHAR, MAX(%s)::VARCHAR, COUNT(%s), %s", col_ident,
-			                                  col_ident, col_ident, nan_expr);
+			    is_float ? StringUtil::Format("COALESCE(BOOL_OR(isnan(%s)), false)", col_expr) : string("false");
+			select_list += StringUtil::Format(", MIN(%s)::VARCHAR, MAX(%s)::VARCHAR, COUNT(%s), %s", col_expr, col_expr,
+			                                  col_expr, nan_expr);
 		}
 		auto sql = DuckLakeMetadataManager::ReadInlinedDataAggregatesSql(
 		    SQLQuotedIdentifier::ToString(inlined_table_name), select_list, context.InlinedColNames());
@@ -750,8 +788,10 @@ bool DuckLakeTransactionState::TryMergeInlinedStats(const vector<DuckLakeColumnS
 				break;
 			}
 			idx_t col_offset = 1;
-			for (auto &col : columns) {
-				bool is_float = col.column_type.IsFloating();
+			for (idx_t col_idx = 0; col_idx < columns.size(); col_idx++) {
+				auto &col = columns[col_idx];
+				auto &source_type = sources[col_idx].get().column_type;
+				bool is_float = source_type.IsFloating();
 				bool contains_nan = !row.IsNull(col_offset + 3) && row.GetValue<bool>(col_offset + 3);
 				DuckLakeColumnStats col_stats(col.column_type);
 				auto non_null = static_cast<idx_t>(row.GetValue<int64_t>(col_offset + 2));
@@ -763,8 +803,11 @@ bool DuckLakeTransactionState::TryMergeInlinedStats(const vector<DuckLakeColumnS
 					col_stats.has_contains_nan = true;
 					col_stats.contains_nan = contains_nan;
 				}
+				// bounds of an older type are only kept when they read back exactly as the current type
+				bool keep_bounds = source_type == col.column_type ||
+				                   DuckLakeColumnStats::BoundsSurviveTypePromotion(source_type, col.column_type);
 				// do not record float min/max if NaN is present (matches the parquet stats behaviour)
-				if (!(is_float && contains_nan)) {
+				if (keep_bounds && !(is_float && contains_nan)) {
 					if (!row.IsNull(col_offset + 0)) {
 						col_stats.has_min = true;
 						col_stats.min = row.GetValue<string>(col_offset + 0);
@@ -814,6 +857,9 @@ void DuckLakeTransactionState::RecomputeGlobalStatsAfterRewrite(string &batch_qu
                                                                 const CompactionInformation &rewrite_changes,
                                                                 const set<DataFileIndex> &removed_source_ids,
                                                                 const DuckLakeCommitContext &context) {
+	if (tables_changed_by_others.find(table_id) != tables_changed_by_others.end()) {
+		return; // the stats below are read at the transaction snapshot, which misses the other commits
+	}
 	auto columns = context.get_table_column_schema(table_id);
 	if (columns.empty()) {
 		return; // no schema visible at the commit snapshot
@@ -926,7 +972,7 @@ void DuckLakeTransactionState::RecomputeGlobalStatsAfterRewrite(string &batch_qu
 			}
 		}
 		auto inlined_table_names = context.get_inlined_table_names(table_id);
-		if (!TryMergeInlinedStats(root_columns, inlined_table_names, snapshot, new_stats, context)) {
+		if (!TryMergeInlinedStats(table_id, root_columns, inlined_table_names, snapshot, new_stats, context)) {
 			return; // cannot account for inlined data exactly - keep the existing stats and the scan fallback
 		}
 		new_stats.record_count += net_inlined;
@@ -1639,13 +1685,33 @@ string DuckLakeTransactionState::CommitChanges(DuckLakeCommitState &commit_state
 	// write new tables
 	vector<DuckLakeTableInfo> new_tables_result;
 	vector<DuckLakeTableInfo> new_inlined_data_tables_result;
+	// the paths of the schemas and tables of the commit, resolved once each
+	unordered_map<idx_t, string> schema_paths;
+	auto get_schema_path = [&](SchemaIndex schema_id) -> const string & {
+		auto entry = schema_paths.find(schema_id.index);
+		if (entry == schema_paths.end()) {
+			auto path = DuckLakeMetadataManager::GetPathForSchema(schema_id, new_schemas_result, context.query_metadata,
+			                                                      data_path, separator);
+			entry = schema_paths.emplace(schema_id.index, std::move(path)).first;
+		}
+		return entry->second;
+	};
+	unordered_map<idx_t, string> table_paths;
+	auto get_table_path = [&](TableIndex table_id) -> const string & {
+		auto entry = table_paths.find(table_id.index);
+		if (entry == table_paths.end()) {
+			auto path = DuckLakeMetadataManager::GetPathForTable(table_id, new_tables_result, context.query_metadata,
+			                                                     data_path, separator);
+			entry = table_paths.emplace(table_id.index, std::move(path)).first;
+		}
+		return entry->second;
+	};
 	auto table_relative_paths = [&](const auto &files, auto path_member) {
 		vector<DuckLakePath> result;
 		result.reserve(files.size());
 		for (auto &file : files) {
-			result.push_back(DuckLakeMetadataManager::GetRelativePath(file.table_id, file.*path_member,
-			                                                          new_tables_result, new_schemas_result,
-			                                                          context.query_metadata, data_path, separator));
+			result.push_back(
+			    DuckLakeMetadataManager::GetRelativePath(file.*path_member, get_table_path(file.table_id), separator));
 		}
 		return result;
 	};
@@ -1654,8 +1720,8 @@ string DuckLakeTransactionState::CommitChanges(DuckLakeCommitState &commit_state
 		vector<DuckLakePath> resolved_table_paths;
 		resolved_table_paths.reserve(result.new_tables.size());
 		for (auto &table : result.new_tables) {
-			resolved_table_paths.push_back(DuckLakeMetadataManager::GetRelativePath(
-			    table.schema_id, table.path, new_schemas_result, context.query_metadata, data_path, separator));
+			resolved_table_paths.push_back(
+			    DuckLakeMetadataManager::GetRelativePath(table.path, get_schema_path(table.schema_id), separator));
 		}
 		batch_queries += DuckLakeMetadataManager::WriteNewTables(result.new_tables, resolved_table_paths);
 		batch_queries += DuckLakeMetadataManager::WriteNewTableOptions(result.new_table_options);
@@ -1852,13 +1918,40 @@ static set<DataFileIndex> GetFilesWithInlinedDeletesAfterSnapshot(TableIndex tab
 	return result;
 }
 
-void DuckLakeTransactionState::CheckDeletedFileConflicts(const TransactionChangeInformation &changes,
-                                                         const SnapshotChangeInformation &other_changes,
-                                                         const DuckLakeCommitContext &context) const {
+//! The given data files that a merge removed from the metadata
+static set<DataFileIndex> GetMergedDataFiles(const set<DataFileIndex> &files, const DuckLakeCommitContext &context) {
+	set<DataFileIndex> result = files;
+	if (files.empty()) {
+		return result;
+	}
+	auto query_result = context.conflict_query_executor(DuckLakeMetadataManager::GetExistingDataFilesSql(files));
+	query_result->ThrowIfError("Failed to commit DuckLake transaction - failed to get merged files for conflict "
+	                           "resolution:");
+	for (auto &row : *query_result) {
+		result.erase(DataFileIndex(row.GetValue<idx_t>(0)));
+	}
+	return result;
+}
+
+//! Whether other transactions deleted from or compacted one of the tables
+static void GetOtherFileChanges(const set<TableIndex> &tables, const SnapshotChangeInformation &other_changes,
+                                bool &deleted, bool &compacted) {
+	for (auto &table_id : tables) {
+		deleted |= other_changes.tables_deleted_from.find(table_id) != other_changes.tables_deleted_from.end();
+		compacted |= other_changes.tables_merge_adjacent.find(table_id) != other_changes.tables_merge_adjacent.end() ||
+		             other_changes.tables_rewrite_delete.find(table_id) != other_changes.tables_rewrite_delete.end();
+	}
+}
+
+void DuckLakeTransactionState::CheckFileConflicts(const TransactionChangeInformation &changes,
+                                                  const SnapshotChangeInformation &other_changes,
+                                                  const DuckLakeCommitContext &context) const {
 	// deletes of the same data file conflict, whether they are written to a delete file or inlined
 	set<DataFileIndex> deleted_from_files;
 	// a flush only moves inlined deletes committed before it, so its delete files allow later inlined deletes
 	set<DataFileIndex> files_against_inlined_deletes;
+	// a compaction only conflicts with changes to the files it rewrites
+	set<DataFileIndex> compacted_files;
 	for (auto &entry : local_changes.Changes()) {
 		auto &table_changes = entry.second;
 		for (auto &file_entry : table_changes.new_delete_files) {
@@ -1875,28 +1968,63 @@ void DuckLakeTransactionState::CheckDeletedFileConflicts(const TransactionChange
 				files_against_inlined_deletes.insert(DataFileIndex(file_entry.first));
 			}
 		}
+		for (auto &compaction : table_changes.compactions) {
+			for (auto &source : compaction.source_files) {
+				compacted_files.insert(source.file.id);
+			}
+		}
 	}
 	for (auto &file : dropped_files) {
 		deleted_from_files.insert(file.second);
 		files_against_inlined_deletes.insert(file.second);
 	}
-	if (deleted_from_files.empty()) {
+	if (deleted_from_files.empty() && compacted_files.empty()) {
 		return;
 	}
-	set<TableIndex> tables(changes.tables_deleted_from.begin(), changes.tables_deleted_from.end());
-	tables.insert(changes.tables_deleted_inlined.begin(), changes.tables_deleted_inlined.end());
-	for (auto &table_id : tables) {
-		if (other_changes.tables_deleted_from.find(table_id) != other_changes.tables_deleted_from.end()) {
-			auto other_files = GetFilesDeletedOrDroppedAfterSnapshot(context.conflict_query_executor);
-			for (auto &file : deleted_from_files) {
-				ConflictCheck(file, other_files.deleted_from_files, "delete from file", "deleted from it");
-			}
-			break;
+	set<TableIndex> deleted_tables;
+	if (!deleted_from_files.empty()) {
+		deleted_tables.insert(changes.tables_deleted_from.begin(), changes.tables_deleted_from.end());
+		deleted_tables.insert(changes.tables_deleted_inlined.begin(), changes.tables_deleted_inlined.end());
+	}
+	set<TableIndex> compacted_tables;
+	if (!compacted_files.empty()) {
+		compacted_tables.insert(changes.tables_merge_adjacent.begin(), changes.tables_merge_adjacent.end());
+		compacted_tables.insert(changes.tables_rewrite_delete.begin(), changes.tables_rewrite_delete.end());
+	}
+	bool deleted_by_other = false;
+	bool compacted_by_other = false;
+	GetOtherFileChanges(deleted_tables, other_changes, deleted_by_other, compacted_by_other);
+	bool compaction_deleted_by_other = false;
+	bool compaction_compacted_by_other = false;
+	GetOtherFileChanges(compacted_tables, other_changes, compaction_deleted_by_other, compaction_compacted_by_other);
+	if (deleted_by_other || compacted_by_other || compaction_deleted_by_other || compaction_compacted_by_other) {
+		auto other_files = GetFilesDeletedOrDroppedAfterSnapshot(context.conflict_query_executor);
+		for (auto &file : deleted_from_files) {
+			ConflictCheck(file, other_files.deleted_from_files, "delete from file",
+			              deleted_by_other ? "deleted from it" : "compacted it");
+		}
+		for (auto &file : compacted_files) {
+			ConflictCheck(file, other_files.deleted_from_files, "compact file",
+			              compaction_deleted_by_other ? "deleted from it" : "compacted it");
 		}
 	}
-	if (files_against_inlined_deletes.empty()) {
+	if (compacted_by_other || compaction_compacted_by_other) {
+		// a merge removes its source files from the metadata
+		set<DataFileIndex> own_files = deleted_from_files;
+		own_files.insert(compacted_files.begin(), compacted_files.end());
+		auto merged_files = GetMergedDataFiles(own_files, context);
+		for (auto &file : deleted_from_files) {
+			ConflictCheck(file, merged_files, "delete from file", "compacted it");
+		}
+		for (auto &file : compacted_files) {
+			ConflictCheck(file, merged_files, "compact file", "compacted it");
+		}
+	}
+	if (files_against_inlined_deletes.empty() && compacted_files.empty()) {
 		return;
 	}
+	set<TableIndex> tables = deleted_tables;
+	tables.insert(compacted_tables.begin(), compacted_tables.end());
 	for (auto &table_id : tables) {
 		if (other_changes.tables_deleted_inlined.find(table_id) == other_changes.tables_deleted_inlined.end()) {
 			continue;
@@ -1904,6 +2032,9 @@ void DuckLakeTransactionState::CheckDeletedFileConflicts(const TransactionChange
 		auto other_files = GetFilesWithInlinedDeletesAfterSnapshot(table_id, context);
 		for (auto &file : files_against_inlined_deletes) {
 			ConflictCheck(file, other_files, "delete from file", "deleted from it");
+		}
+		for (auto &file : compacted_files) {
+			ConflictCheck(file, other_files, "compact file", "deleted from it");
 		}
 	}
 }
@@ -1973,6 +2104,14 @@ SnapshotAndStats DuckLakeTransactionState::CheckForConflicts(DuckLakeSnapshot tr
 
 	// now check for conflicts
 	CheckForConflicts(changes, other_changes, transaction_snapshot, context);
+
+	tables_changed_by_others.clear();
+	for (auto tables : {&other_changes.altered_tables, &other_changes.inserted_tables,
+	                    &other_changes.tables_deleted_from, &other_changes.tables_inserted_inlined,
+	                    &other_changes.tables_deleted_inlined, &other_changes.tables_flushed_inlined,
+	                    &other_changes.tables_merge_adjacent, &other_changes.tables_rewrite_delete}) {
+		tables_changed_by_others.insert(tables->begin(), tables->end());
+	}
 
 	return snapshot_and_stats;
 }

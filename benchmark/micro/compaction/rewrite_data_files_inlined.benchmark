@@ -1,0 +1,30 @@
+# name: benchmark/micro/compaction/rewrite_data_files_inlined.benchmark
+# description: Rewrite one file with deletes in each of 50 tables that also hold inlined rows, with the commit
+# group: [compaction]
+
+name Rewrite Data Files Inlined
+group micro
+subgroup compaction
+
+require ducklake
+
+require parquet
+
+argument work rewrite_inlined_work
+
+include benchmark/micro/fixtures/rewrite_inlined.benchmark.in
+
+include benchmark/micro/fixtures/restore_cleanup.benchmark.in
+
+run
+SELECT count(*) AS tables, sum(files_processed) AS processed, sum(files_created) AS created
+FROM ducklake_rewrite_data_files('lake', delete_threshold => 0.5);
+
+# The recompute drops the deleted minimum and keeps the inlined maximum
+result_query IIIII
+SELECT tables, processed, created, stats.min_value, stats.max_value
+FROM __answer, __ducklake_metadata_lake.ducklake_table_column_stats stats
+JOIN __ducklake_metadata_lake.ducklake_table tbl USING (table_id)
+WHERE tbl.table_name = 'r0' AND tbl.end_snapshot IS NULL AND stats.column_id = 1
+----
+50	50	50	60	100064

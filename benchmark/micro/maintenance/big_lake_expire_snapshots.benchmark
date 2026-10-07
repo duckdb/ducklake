@@ -1,0 +1,28 @@
+# name: benchmark/micro/maintenance/big_lake_expire_snapshots.benchmark
+# description: Expire 355 of 356 snapshots of a 2110-table lake with ducklake_expire_snapshots, rolled back each run
+# group: [maintenance]
+
+name Big Lake Expire Snapshots
+group micro
+subgroup maintenance
+
+require ducklake
+
+require parquet
+
+argument work big_lake_expire_work
+
+include benchmark/micro/fixtures/big_lake.benchmark.in
+
+run
+BEGIN;
+SELECT count(*) AS expired FROM ducklake_expire_snapshots('lake', older_than => TIMESTAMPTZ '2999-01-01');
+
+# The rollback keeps every snapshot, so a missed reset leaves nothing to expire in the next run
+cleanup
+@rollback ${lake}_pristine TO ${work}
+
+result_query I
+SELECT expired FROM __answer
+----
+355
