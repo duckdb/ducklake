@@ -159,6 +159,69 @@ SELECT count(*) FROM dl.j WHERE v > 0.1
 ----
 1
 
+# inlined rows written before the retype keep matching their own value
+statement ok
+CREATE TABLE dl.k (v FLOAT)
+
+statement ok
+CALL dl.set_option('data_inlining_row_limit', 100, table_name => 'k')
+
+statement ok
+BEGIN
+
+statement ok
+INSERT INTO dl.k VALUES (0.1)
+
+statement ok
+ALTER TABLE dl.k ALTER COLUMN v TYPE DOUBLE
+
+statement ok
+COMMIT
+
+query I
+SELECT count(*) FROM dl.k WHERE v = (SELECT max(v) FROM dl.k)
+----
+1
+
+query I
+SELECT count(*) FROM dl.k WHERE v > (SELECT max(v) FROM dl.k)
+----
+0
+
+query II
+SELECT s.min_value, s.max_value FROM __ducklake_metadata_dl.ducklake_table_column_stats s JOIN __ducklake_metadata_dl.ducklake_table t USING (table_id) WHERE t.table_name = 'k' AND t.end_snapshot IS NULL
+----
+NULL	NULL
+
+# an inlined map value, whose literal carries the type it was written with
+statement ok
+CREATE TABLE dl.p (m MAP(INTEGER, FLOAT))
+
+statement ok
+CALL dl.set_option('data_inlining_row_limit', 100, table_name => 'p')
+
+statement ok
+BEGIN
+
+statement ok
+INSERT INTO dl.p VALUES (MAP {1: 0.1})
+
+statement ok
+ALTER TABLE dl.p ALTER COLUMN m TYPE MAP(INTEGER, DOUBLE)
+
+statement ok
+COMMIT
+
+query I
+SELECT map_extract_value(m, 1) FROM dl.p
+----
+0.10000000149011612
+
+query II
+SELECT s.min_value, s.max_value FROM __ducklake_metadata_dl.ducklake_table_column_stats s JOIN __ducklake_metadata_dl.ducklake_table t USING (table_id) WHERE t.table_name = 'p' AND t.end_snapshot IS NULL AND s.column_id = 3
+----
+NULL	NULL
+
 # queries in the retyping transaction
 statement ok
 CREATE TABLE dl.x (v FLOAT)

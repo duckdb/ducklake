@@ -31,8 +31,8 @@ bool DuckLakeCommitState::WidensFloatColumns(TableIndex table_id) const {
 	return float_widened_columns.find(table_id) != float_widened_columns.end();
 }
 
-void DuckLakeCommitState::PrepareFloatBounds(TableIndex table_id,
-                                             map<FieldIndex, DuckLakeColumnStats> &column_stats) const {
+void DuckLakeCommitState::PrepareFloatBounds(TableIndex table_id, map<FieldIndex, DuckLakeColumnStats> &column_stats,
+                                             bool can_widen) const {
 	auto entry = float_widened_columns.find(table_id);
 	if (entry == float_widened_columns.end()) {
 		return;
@@ -40,14 +40,21 @@ void DuckLakeCommitState::PrepareFloatBounds(TableIndex table_id,
 	auto clear_entry = float_bounds_to_clear.find(table_id);
 	for (const auto &field_index : entry->second) {
 		auto column_entry = column_stats.find(field_index);
-		if (column_entry != column_stats.end()) {
-			auto &stats = column_entry->second;
-			if (clear_entry != float_bounds_to_clear.end() && clear_entry->second.count(field_index)) {
-				stats.ClearBounds();
-				stats.bounds_unknown = true;
-			} else {
-				stats.WidenFloatBounds();
-			}
+		if (column_entry == column_stats.end()) {
+			continue;
+		}
+		auto &stats = column_entry->second;
+		if (stats.type.id() != LogicalTypeId::FLOAT) {
+			// written with the new type already
+			continue;
+		}
+		bool keep_bounds =
+		    can_widen && (clear_entry == float_bounds_to_clear.end() || !clear_entry->second.count(field_index));
+		if (keep_bounds) {
+			stats.WidenFloatBounds();
+		} else {
+			stats.ClearBounds();
+			stats.bounds_unknown = true;
 		}
 	}
 }
@@ -1196,14 +1203,14 @@ NewDataInfo DuckLakeTransactionState::GetNewDataFiles(
 			new_inlined_data.table_id = table_id;
 			new_inlined_data.row_id_start = new_stats.next_row_id;
 
-			// merge column stats, widening a copy so the data kept for a commit retry is unchanged
-			bool widen_bounds = commit_state.WidensFloatColumns(table_id);
-			map<FieldIndex, DuckLakeColumnStats> widened_stats;
-			if (widen_bounds) {
-				widened_stats = inlined_data.column_stats;
-				commit_state.PrepareFloatBounds(table_id, widened_stats);
+			// each writer decides how the buffered FLOAT values of a retyped column are stored as DOUBLE
+			bool retyped = commit_state.WidensFloatColumns(table_id);
+			map<FieldIndex, DuckLakeColumnStats> retyped_stats;
+			if (retyped) {
+				retyped_stats = inlined_data.column_stats;
+				commit_state.PrepareFloatBounds(table_id, retyped_stats, false);
 			}
-			for (auto &entry : widen_bounds ? widened_stats : inlined_data.column_stats) {
+			for (auto &entry : retyped ? retyped_stats : inlined_data.column_stats) {
 				new_stats.MergeStats(entry.first, entry.second);
 			}
 

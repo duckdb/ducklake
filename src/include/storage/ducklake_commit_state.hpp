@@ -68,7 +68,8 @@ struct DuckLakeCommitState {
 	//! Whether this commit widens a column of the given table from FLOAT to DOUBLE
 	bool WidensFloatColumns(TableIndex table_id) const;
 	//! Widen the FLOAT bounds of a widened column, or clear them when they cannot be widened
-	void PrepareFloatBounds(TableIndex table_id, map<FieldIndex, DuckLakeColumnStats> &column_stats) const;
+	void PrepareFloatBounds(TableIndex table_id, map<FieldIndex, DuckLakeColumnStats> &column_stats,
+	                        bool can_widen = true) const;
 
 	void RemapIdentifier(SchemaIndex &schema_id) const {
 		auto entry = committed_schemas.find(schema_id);
