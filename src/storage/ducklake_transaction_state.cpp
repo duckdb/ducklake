@@ -1767,6 +1767,23 @@ vector<DuckLakeSchemaInfo> DuckLakeTransactionState::GetNewSchemas(DuckLakeCommi
 	return schemas;
 }
 
+map<TableIndex, set<FieldIndex>>
+DuckLakeTransactionState::GetWidenedColumnsWithNewData(const DuckLakeCommitState &commit_state) const {
+	map<TableIndex, set<FieldIndex>> result;
+	for (auto &entry : local_changes.Changes()) {
+		auto &table_changes = entry.GetTableChanges();
+		if (table_changes.new_data_files.empty() && !table_changes.new_inlined_data &&
+		    table_changes.compactions.empty()) {
+			continue;
+		}
+		auto widened = commit_state.float_widened_columns.find(commit_state.GetTableId(entry.GetTableIndex()));
+		if (widened != commit_state.float_widened_columns.end()) {
+			result.insert(*widened);
+		}
+	}
+	return result;
+}
+
 static map<TableIndex, set<FieldIndex>> GetFloatBoundsToClear(const map<TableIndex, set<FieldIndex>> &columns,
                                                               const DuckLakeCommitContext &context) {
 	map<TableIndex, set<FieldIndex>> result;
@@ -1858,7 +1875,7 @@ string DuckLakeTransactionState::CommitChanges(DuckLakeCommitState &commit_state
 	vector<DuckLakeTableInfo> new_inlined_data_tables_result;
 	if (!new_tables.empty()) {
 		auto result = GetNewTables(commit_state, transaction_changes);
-		commit_state.float_bounds_to_clear = GetFloatBoundsToClear(commit_state.float_widened_columns, context);
+		commit_state.float_bounds_to_clear = GetFloatBoundsToClear(GetWidenedColumnsWithNewData(commit_state), context);
 		vector<DuckLakePath> resolved_table_paths;
 		resolved_table_paths.reserve(result.new_tables.size());
 		for (auto &table : result.new_tables) {
@@ -1879,8 +1896,8 @@ string DuckLakeTransactionState::CommitChanges(DuckLakeCommitState &commit_state
 		if (context.supports_v1_1_metadata) {
 			batch_queries += DuckLakeMetadataManager::WriteNewViewColumnTags(result.new_view_column_tags);
 		}
-		batch_queries += DuckLakeMetadataManager::WriteFloatWidenedStats(
-		    commit_state.float_widened_columns, commit_state.float_bounds_to_clear, commit_snapshot.next_file_id);
+		batch_queries += DuckLakeMetadataManager::WriteFloatWidenedStats(commit_state.float_widened_columns,
+		                                                                 commit_snapshot.next_file_id);
 		batch_queries += DuckLakeMetadataManager::WriteDroppedColumns(result.dropped_columns);
 		// Truly dropped columns - i.e. not re-added under the same field id in this commit, as
 		// happens for RENAME/ALTER - also expire their committed column tags (GH #1310).

@@ -368,8 +368,7 @@ public:
 	                               const vector<DuckLakeSortInfo> &new_sorts);
 	static string WriteDroppedColumns(const vector<DuckLakeDroppedColumn> &dropped_columns);
 	//! Rewrite the bounds of committed files and tables written while a widened column was FLOAT
-	static string WriteFloatWidenedStats(const map<TableIndex, set<FieldIndex>> &columns,
-	                                     const map<TableIndex, set<FieldIndex>> &bounds_to_clear, idx_t next_file_id);
+	static string WriteFloatWidenedStats(const map<TableIndex, set<FieldIndex>> &columns, idx_t next_file_id);
 	static string WriteExpiredColumnTags(const vector<DuckLakeDroppedColumn> &dropped_columns);
 	static string WriteNewColumns(const vector<DuckLakeNewColumn> &new_columns);
 	static string WriteNewTags(const vector<DuckLakeTagInfo> &new_tags);
