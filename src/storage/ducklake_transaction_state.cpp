@@ -1264,6 +1264,7 @@ NewDataInfo DuckLakeTransactionState::GetNewDataFiles(
 		}
 		bool clear_column_stats = ApplyDroppedFileStats(table_id, new_globals, attempt_dropped_file_stats);
 		auto &new_stats = new_globals.stats;
+		commit_state.PrepareFloatBounds(table_id, new_stats.column_stats);
 		vector<DuckLakeDeleteFile> delete_files;
 		for (auto &file : table_changes.new_data_files) {
 			// flushed files (with max_partial_file_snapshot) have embedded row_ids, we gotta use the original
@@ -1279,7 +1280,7 @@ NewDataInfo DuckLakeTransactionState::GetNewDataFiles(
 			}
 
 			// merge the stats into the new global state
-			new_stats.MergeFileStats(file);
+			new_stats.MergeFileStats(file, data_file.column_stats);
 			result.new_files.push_back(std::move(data_file));
 		}
 		// add any delete files that were made on top of these transaction-local files
@@ -1295,7 +1296,9 @@ NewDataInfo DuckLakeTransactionState::GetNewDataFiles(
 			new_inlined_data.row_id_start = new_stats.next_row_id;
 
 			// merge column stats
-			for (auto &entry : inlined_data.column_stats) {
+			auto inlined_stats = inlined_data.column_stats;
+			commit_state.PrepareFloatBounds(table_id, inlined_stats);
+			for (auto &entry : inlined_stats) {
 				new_stats.MergeStats(entry.first, entry.second);
 			}
 
@@ -1325,7 +1328,6 @@ NewDataInfo DuckLakeTransactionState::GetNewDataFiles(
 			// the rows are deleted below - drop them from the update so we do not write values we then delete
 			new_stats.column_stats.clear();
 		}
-		commit_state.PrepareFloatBounds(table_id, new_stats.column_stats);
 		// update the global stats for this table based on the newly written data
 		batch_query += DuckLakeMetadataManager::UpdateGlobalTableStatsSql(
 		    DuckLakeTransaction::ConvertNewGlobalStats(table_id, new_globals), context.supports_v1_1_metadata);

@@ -94,7 +94,8 @@ struct DuckLakeTableStats {
 
 	void MergeStats(FieldIndex col_id, const DuckLakeColumnStats &file_stats);
 
-	void MergeFileStats(const DuckLakeDataFile &file);
+	//! Merges a file with the given column stats, which can differ from the file's own
+	void MergeFileStats(const DuckLakeDataFile &file, const map<FieldIndex, DuckLakeColumnStats> &column_stats);
 };
 
 struct DuckLakeStats {

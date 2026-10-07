@@ -285,13 +285,14 @@ void DuckLakeTableStats::MergeStats(FieldIndex col_id, const DuckLakeColumnStats
 	current_stats.MergeStats(file_stats);
 }
 
-void DuckLakeTableStats::MergeFileStats(const DuckLakeDataFile &file) {
+void DuckLakeTableStats::MergeFileStats(const DuckLakeDataFile &file,
+                                        const map<FieldIndex, DuckLakeColumnStats> &column_stats) {
 	if (!file.max_partial_file_snapshot.IsValid()) {
 		record_count += file.row_count;
 		next_row_id += file.row_count;
 	}
 	table_size_bytes += file.file_size_bytes;
-	for (auto &entry : file.column_stats) {
+	for (auto &entry : column_stats) {
 		MergeStats(entry.first, entry.second);
 	}
 }
