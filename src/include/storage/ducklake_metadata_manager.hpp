@@ -259,7 +259,7 @@ public:
 
 	//! Initialize a new DuckLake
 	virtual void InitializeDuckLake(bool has_explicit_schema, DuckLakeEncryption encryption);
-	//! Gives the metadata tables without a primary key a replica identity, if the metadata database needs one
+	//! Set replica identity where the metadata backend requires it
 	virtual void SetReplicaIdentity() {
 	}
 	//! Get the CREATE TABLE statements for all metadata tables
@@ -426,7 +426,7 @@ public:
 	                                           bool create_if_not_exists = false);
 	//! Probe for the physical inlined-deletion table without aborting the active metadata transaction.
 	virtual bool InlinedDeletionTableExists(const string &table_name);
-	//! SQL that gives new metadata tables a replica identity, if the metadata database needs one
+	//! Replica identity SQL for new metadata tables
 	virtual string ReplicaIdentitySql(const vector<string> &table_names) {
 		return string();
 	}

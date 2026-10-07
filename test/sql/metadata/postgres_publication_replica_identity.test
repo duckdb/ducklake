@@ -155,6 +155,97 @@ AND NOT EXISTS (SELECT 1 FROM pg_index i WHERE i.indrelid = c.oid AND i.indispri
 statement ok
 DETACH dl10
 
+# Migrate tables created by an earlier step in the chain
+unzip data/old_ducklake/v02.db.gz {TEST_DIR}/replica_v02.db
+
+statement ok
+ATTACH '{TEST_DIR}/replica_v02.db' AS old_metadata
+
+statement ok
+CALL postgres_execute('pg', 'DROP SCHEMA IF EXISTS pub_replica_identity_v02 CASCADE')
+
+statement ok
+CALL postgres_execute('pg', 'CREATE SCHEMA pub_replica_identity_v02')
+
+foreach table column column_mapping column_tag data_file delete_file file_column_statistics file_partition_value files_scheduled_for_deletion inlined_data_tables metadata name_mapping partition_column partition_info schema snapshot snapshot_changes table table_column_stats table_stats tag view
+
+statement ok
+CREATE TABLE pg.pub_replica_identity_v02.ducklake_{table} AS FROM old_metadata.ducklake_{table}
+
+endloop
+
+statement ok
+DETACH old_metadata
+
+statement ok
+CALL postgres_execute('pg', 'ALTER PUBLICATION pub_replica_identity ADD TABLES IN SCHEMA pub_replica_identity_v02')
+
+statement ok
+ATTACH 'ducklake:postgres:dbname=ducklakedb' AS dl02
+(DATA_PATH '{DATA_PATH}/pub_replica_identity_v02', METADATA_SCHEMA 'pub_replica_identity_v02',
+OVERRIDE_DATA_PATH TRUE, DUCKLAKE_VERSION '1.1-dev1', AUTOMATIC_MIGRATION TRUE)
+
+statement ok
+INSERT INTO dl02.test VALUES (42)
+
+query I
+FROM dl02.test
+----
+42
+
+statement ok
+DETACH dl02
+
+statement ok
+CALL postgres_execute('pg', 'DROP SCHEMA pub_replica_identity_v02 CASCADE')
+
+# Dev catalogs can migrate without changing their version
+foreach automatic false true
+
+statement ok
+CALL postgres_execute('pg', 'DROP SCHEMA IF EXISTS pub_replica_identity_dev CASCADE')
+
+statement ok
+ATTACH 'ducklake:postgres:dbname=ducklakedb' AS dev
+(DATA_PATH '{DATA_PATH}/pub_replica_identity_dev_{automatic}', METADATA_SCHEMA 'pub_replica_identity_dev',
+DUCKLAKE_VERSION '1.0')
+
+statement ok
+CREATE VIEW dev.v AS SELECT 1 AS a
+
+statement ok
+DETACH dev
+
+statement ok
+CALL postgres_execute('pg', 'UPDATE pub_replica_identity_dev.ducklake_metadata SET value = ''1.1-dev1'' WHERE key = ''version''')
+
+statement ok
+CALL postgres_execute('pg', 'ALTER TABLE pub_replica_identity_dev.ducklake_metadata REPLICA IDENTITY DEFAULT')
+
+statement ok
+CALL postgres_execute('pg', 'ALTER PUBLICATION pub_replica_identity ADD TABLES IN SCHEMA pub_replica_identity_dev')
+
+statement ok
+ATTACH 'ducklake:postgres:dbname=ducklakedb' AS dev
+(METADATA_SCHEMA 'pub_replica_identity_dev', DUCKLAKE_VERSION '1.1-dev1', AUTOMATIC_MIGRATION {automatic})
+
+statement ok
+COMMENT ON COLUMN dev.v.a IS 'first'
+
+statement ok
+COMMENT ON COLUMN dev.v.a IS 'second'
+
+statement ok
+DROP VIEW dev.v
+
+statement ok
+DETACH dev
+
+statement ok
+CALL postgres_execute('pg', 'DROP SCHEMA pub_replica_identity_dev CASCADE')
+
+endloop
+
 statement ok
 CALL postgres_execute('pg', 'DROP PUBLICATION pub_replica_identity')
 
@@ -163,3 +254,50 @@ CALL postgres_execute('pg', 'DROP SCHEMA pub_replica_identity CASCADE')
 
 statement ok
 CALL postgres_execute('pg', 'DROP SCHEMA pub_replica_identity_v10 CASCADE')
+
+# Quoted names and existing identity settings survive initialization
+
+statement ok
+CALL postgres_execute('pg', 'DROP SCHEMA IF EXISTS "pub_replica_identity''$$" CASCADE')
+
+statement ok
+CALL postgres_execute('pg', 'CREATE SCHEMA "pub_replica_identity''$$"')
+
+statement ok
+CALL postgres_execute('pg', 'CREATE TABLE "pub_replica_identity''$$".ducklake_identity_pk (id INT PRIMARY KEY)')
+
+statement ok
+CALL postgres_execute('pg', 'CREATE TABLE "pub_replica_identity''$$".ducklake_identity_index (id INT NOT NULL UNIQUE)')
+
+statement ok
+CALL postgres_execute('pg', 'ALTER TABLE "pub_replica_identity''$$".ducklake_identity_index REPLICA IDENTITY USING INDEX ducklake_identity_index_id_key')
+
+statement ok
+CALL postgres_execute('pg', 'CREATE TABLE "pub_replica_identity''$$".ducklake_identity_nothing (id INT)')
+
+statement ok
+CALL postgres_execute('pg', 'ALTER TABLE "pub_replica_identity''$$".ducklake_identity_nothing REPLICA IDENTITY NOTHING')
+
+statement ok
+CALL postgres_execute('pg', 'CREATE TABLE "pub_replica_identity''$$".ducklakeXunrelated (id INT)')
+
+statement ok
+ATTACH 'ducklake:postgres:dbname=ducklakedb' AS quoted
+(DATA_PATH '{DATA_PATH}/pub_replica_identity_quoted', METADATA_SCHEMA 'pub_replica_identity''$$', DUCKLAKE_VERSION '1.0')
+
+query TT
+SELECT * FROM postgres_query('pg', 'SELECT c.relname::VARCHAR, c.relreplident::VARCHAR FROM pg_class c
+JOIN pg_namespace n ON n.oid = c.relnamespace
+WHERE n.nspname = ''pub_replica_identity''''$$'' AND c.relkind = ''r''
+AND (c.relname LIKE ''ducklake_identity_%'' OR c.relname = ''ducklakexunrelated'')') ORDER BY ALL
+----
+ducklake_identity_index	i
+ducklake_identity_nothing	n
+ducklake_identity_pk	d
+ducklakexunrelated	d
+
+statement ok
+DETACH quoted
+
+statement ok
+CALL postgres_execute('pg', 'DROP SCHEMA "pub_replica_identity''$$" CASCADE')

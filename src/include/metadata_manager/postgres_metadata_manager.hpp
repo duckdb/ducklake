@@ -48,7 +48,6 @@ protected:
 	string CastStatsToTarget(const string &stats, const LogicalType &type, StatsCastType cast_type) override;
 
 private:
-	//! Sets a full replica identity on the matching metadata tables without a primary key
 	string ReplicaIdentityFullSql(const string &table_name_filter) const;
 };
 

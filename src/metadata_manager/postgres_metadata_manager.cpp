@@ -235,7 +235,6 @@ BEGIN
 	END LOOP;
 END)",
 	                               schema_literal, table_name_filter);
-	// a quoted body cannot be ended by a name in it
 	return "DO " + SQLString::ToString(body) + ";\n";
 }
 
@@ -250,8 +249,7 @@ string PostgresMetadataManager::ReplicaIdentitySql(const vector<string> &table_n
 	if (table_names.empty()) {
 		return string();
 	}
-	auto table_list = StringUtil::Join(table_names, table_names.size(), ", ",
-	                                   [](const string &name) { return SQLString::ToString(name); });
+	auto table_list = StringUtil::Join(table_names, table_names.size(), ", ", SQLString::ToString);
 	return ReplicaIdentityFullSql("IN (" + table_list + ")");
 }
 

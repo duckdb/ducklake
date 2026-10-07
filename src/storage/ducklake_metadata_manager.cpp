@@ -332,8 +332,7 @@ CREATE TABLE {METADATA_CATALOG}.ducklake_name_mapping(mapping_id BIGINT, column_
 UPDATE {METADATA_CATALOG}.ducklake_partition_column SET column_id = (SELECT LIST(column_id ORDER BY column_order) FROM {METADATA_CATALOG}.ducklake_column WHERE table_id = ducklake_partition_column.table_id AND parent_column IS NULL AND end_snapshot IS NULL)[ducklake_partition_column.column_id + 1];
 UPDATE {METADATA_CATALOG}.ducklake_metadata SET value = '0.2' WHERE key = 'version';
 	)";
-	auto result = Execute(migrate_query);
-	result->ThrowIfError("Failed to migrate DuckLake from v0.1 to v0.2: ");
+	ExecuteMigration(migrate_query, false, "0.1", "0.2");
 }
 
 void DuckLakeMetadataManager::ExecuteMigration(string migrate_query, bool allow_failures, const string &from_version,
@@ -350,8 +349,10 @@ void DuckLakeMetadataManager::ExecuteMigration(string migrate_query, bool allow_
 		migrate_query = StringUtil::Replace(migrate_query, "{IF_EXISTS}", "");
 		migrate_query = StringUtil::Replace(migrate_query, "{WHERE_EMPTY}", "");
 	}
+	SetReplicaIdentity();
 	auto result = Execute(migrate_query);
 	result->ThrowIfError("Failed to migrate DuckLake from v" + from_version + " to v" + to_version + ":");
+	SetReplicaIdentity();
 }
 
 void DuckLakeMetadataManager::MigrateV02(bool allow_failures) {
@@ -420,10 +421,10 @@ DELETE FROM {METADATA_CATALOG}.ducklake_schema_versions WHERE table_id IS NULL;
 }
 
 void DuckLakeMetadataManager::MigrateV04() {
-	auto result = Execute(R"(
+	ExecuteMigration(R"(
 UPDATE {METADATA_CATALOG}.ducklake_metadata SET value = '1.0' WHERE key = 'version';
-	)");
-	result->ThrowIfError("Failed to migrate DuckLake from v0.4 to v1.0: ");
+	)",
+	                 false, "0.4", "1.0");
 }
 
 static constexpr const char *V1_1_DEV1_MIGRATION_QUERY = R"(
