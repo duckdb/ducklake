@@ -3,49 +3,9 @@
 #include "duckdb/common/bswap.hpp"
 #include "duckdb/common/operator/numeric_cast.hpp"
 
-#include <array>
+#include "miniz.hpp"
 
 namespace duckdb {
-
-namespace {
-
-class CRC32 {
-public:
-	CRC32() : crc(0xFFFFFFFF) {
-	}
-
-public:
-	void Update(const data_t *data, idx_t length) {
-		auto table = GetTable();
-		for (idx_t i = 0; i < length; i++) {
-			crc = table[(crc ^ data[i]) & 0xFF] ^ (crc >> 8);
-		}
-	}
-
-	uint32_t GetValue() const {
-		return crc ^ 0xFFFFFFFF;
-	}
-
-private:
-	static const uint32_t *GetTable() {
-		static const auto table = []() {
-			std::array<uint32_t, 256> t {};
-			for (uint32_t i = 0; i < 256; i++) {
-				uint32_t c = i;
-				for (int j = 0; j < 8; j++) {
-					c = (c & 1) ? (0xEDB88320 ^ (c >> 1)) : (c >> 1);
-				}
-				t[i] = c;
-			}
-			return t;
-		}();
-		return table.data();
-	}
-
-	uint32_t crc;
-};
-
-} // namespace
 
 unique_ptr<DuckLakeDeletionVectorData> DuckLakeDeletionVectorData::FromBlob(data_ptr_t blob_start, idx_t blob_length) {
 	//! https://iceberg.apache.org/puffin-spec/#deletion-vector-v1-blob-type
@@ -129,9 +89,8 @@ unique_ptr<DuckLakeDeletionVectorData> DuckLakeDeletionVectorData::FromBlob(data
 		                            NumericCast<int64_t>(blob_end - blob_start));
 	}
 
-	CRC32 crc;
-	crc.Update(checksummed_data_start, checksummed_data_length);
-	uint32_t checksum = crc.GetValue();
+	auto checksum =
+	    static_cast<uint32_t>(duckdb_miniz::mz_crc32(MZ_CRC32_INIT, checksummed_data_start, checksummed_data_length));
 	if (checksum != stored_checksum) {
 		throw InvalidInputException(
 		    "Stored checksum (%d) does not match computed checksum (%d), the DeletionVector is corrupted",
@@ -192,9 +151,8 @@ vector<data_t> DuckLakeDeletionVectorData::ToBlob(const set<idx_t> &positions) {
 
 	// Compute and write CRC checksum
 	auto checksummed_data_length = blob_ptr - checksummed_data_start;
-	CRC32 crc;
-	crc.Update(checksummed_data_start, checksummed_data_length);
-	uint32_t checksum = crc.GetValue();
+	auto checksum =
+	    static_cast<uint32_t>(duckdb_miniz::mz_crc32(MZ_CRC32_INIT, checksummed_data_start, checksummed_data_length));
 
 	Store<uint32_t>(BSwap(checksum), blob_ptr);
 	return blob_output;

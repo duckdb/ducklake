@@ -1,0 +1,10 @@
+# name: test/sql/partitioning/murmur3_vector_types.test
+# description: murmur3_32 on nested values of every vector type
+# group: [partitioning]
+
+require ducklake
+
+query I
+SELECT count(*) FROM test_vector_types(NULL::INT[]) t(v) WHERE murmur3_32(v) IS DISTINCT FROM murmur3_32(v::VARCHAR)
+----
+0

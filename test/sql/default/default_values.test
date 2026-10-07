@@ -41,7 +41,7 @@ CREATE TABLE ducklake.test_special_values(i INTEGER, s1 VARCHAR DEFAULT '', s2 V
 statement ok
 INSERT INTO ducklake.test_special_values (i) VALUES (100)
 
-query III
-SELECT * FROM ducklake.test_special_values WHERE s2 IS NULL
+query IIII
+SELECT i, s1, s2, s2 IS NULL FROM ducklake.test_special_values
 ----
-100	(empty)	NULL
+100	(empty)	NULL	false

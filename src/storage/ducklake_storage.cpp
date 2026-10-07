@@ -108,6 +108,7 @@ static unique_ptr<Catalog> DuckLakeAttach(optional_ptr<StorageExtensionInfo> sto
 		}
 	}
 	options.access_mode = attach_options.access_mode;
+	options.on_conflict = info.on_conflict;
 	bool is_create_if_not_exists_set = false;
 	for (auto &entry : attach_options.options) {
 		if (StringUtil::Lower(entry.first) == "create_if_not_exists") {

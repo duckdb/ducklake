@@ -1,0 +1,34 @@
+# name: benchmark/micro/fixtures/wide_table.benchmark.in
+# description: Lake with an empty Parquet-backed table of 120 BIGINT, DOUBLE and VARCHAR columns, and an 8-row source
+# group: [fixtures]
+
+argument lake wide_table_v1
+
+cache_file ${lake}_ready.marker
+
+init
+SET VARIABLE wide_source_sql = (SELECT 'SELECT ' || string_agg('CAST(i + ' || j || ' AS ' ||
+['BIGINT', 'DOUBLE', 'VARCHAR'][j % 3 + 1] || ') AS c' || j, ', ' ORDER BY j) || ' FROM range(8) t(i)'
+FROM range(120) t(j));
+CREATE TEMP TABLE wide_source AS FROM query(getvariable('wide_source_sql'));
+
+load
+@create ${lake}_pristine
+@attach ${lake}_pristine AS lake (DATA_PATH '${BENCHMARK_DIR}/${lake}_files')
+CALL lake.set_option('data_inlining_row_limit', 0);
+CREATE TABLE lake.wide AS SELECT * FROM wide_source WHERE false;
+CALL ducklake_delete_orphaned_files('lake', cleanup_all => true);
+DETACH lake;
+COPY (SELECT count(*) FROM glob('${BENCHMARK_DIR}/${lake}_files/**'))
+TO '${BENCHMARK_DIR}/${lake}_filecount.csv' (FORMAT CSV, HEADER false);
+@seal ${lake}_pristine
+COPY (SELECT 1) TO '${BENCHMARK_DIR}/${lake}_ready.marker' (FORMAT CSV);
+DETACH DATABASE IF EXISTS lake;
+@copy ${lake}_pristine TO ${work}
+@attach ${work} AS lake
+CALL ducklake_delete_orphaned_files('lake', cleanup_all => true);
+SELECT CASE WHEN (SELECT count(*) FROM glob('${BENCHMARK_DIR}/${lake}_files/**'))
+<> (SELECT column0 FROM read_csv('${BENCHMARK_DIR}/${lake}_filecount.csv', header = false))
+THEN error('the fixture files were not restored') END;
+
+include benchmark/micro/fixtures/restore_reload.benchmark.in

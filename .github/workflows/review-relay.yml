@@ -17,4 +17,7 @@ jobs:
   emit-workflow-run:
     runs-on: ubuntu-latest
     steps:
-      - run: echo "review submitted on PR ${{ github.event.pull_request.number }} - relaying via workflow_run"
+      # Never let this stub fail — its only job is to complete so the base repo
+      # gets a workflow_run event for review-forward.yml to react to.
+      - continue-on-error: true
+        run: echo "review submitted on PR ${{ github.event.pull_request.number }} - relaying via workflow_run"

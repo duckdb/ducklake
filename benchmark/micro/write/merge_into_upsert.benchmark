@@ -1,0 +1,69 @@
+# name: benchmark/micro/write/merge_into_upsert.benchmark
+# description: MERGE 150k updates and 150k inserts into a freshly attached 1M-row Parquet-backed table, with commit
+# group: [write]
+
+name Merge Into Upsert
+group micro
+subgroup write
+
+require ducklake
+
+require parquet
+
+argument lake merge_upsert_v1
+
+argument work merge_upsert_work
+
+cache_file ${lake}_ready.marker
+
+init
+CREATE TABLE merge_source AS
+SELECT i AS id, i * 3 + 1 AS v, 'upsert_' || i AS payload
+FROM (SELECT range AS i FROM range(150000) UNION ALL SELECT range FROM range(1000000, 1150000));
+
+load
+@create ${lake}_pristine
+@attach ${lake}_pristine AS lake (DATA_PATH '${BENCHMARK_DIR}/${lake}_files')
+CALL lake.set_option('data_inlining_row_limit', 0);
+CREATE TABLE lake.target AS SELECT i AS id, i * 2 AS v, 'base_' || i AS payload FROM range(1000000) t(i);
+CALL ducklake_delete_orphaned_files('lake', cleanup_all => true);
+DETACH lake;
+COPY (SELECT count(*) FROM glob('${BENCHMARK_DIR}/${lake}_files/**'))
+TO '${BENCHMARK_DIR}/${lake}_filecount.csv' (FORMAT CSV, HEADER false);
+@seal ${lake}_pristine
+COPY (SELECT 1) TO '${BENCHMARK_DIR}/${lake}_ready.marker' (FORMAT CSV);
+DETACH DATABASE IF EXISTS lake;
+@copy ${lake}_pristine TO ${work}
+@attach ${work} AS lake
+CALL ducklake_delete_orphaned_files('lake', cleanup_all => true);
+SELECT CASE WHEN (SELECT count(*) FROM glob('${BENCHMARK_DIR}/${lake}_files/**'))
+<> (SELECT column0 FROM read_csv('${BENCHMARK_DIR}/${lake}_filecount.csv', header = false))
+THEN error('the fixture files were not restored') END;
+
+include benchmark/micro/fixtures/restore_reload.benchmark.in
+
+include benchmark/micro/fixtures/restore_cleanup.benchmark.in
+
+# The MERGE reads only the row groups holding source keys, so the timing depends on this one-file layout
+assert III
+SELECT (SELECT count(*) FROM lake.target),
+(SELECT count(*) FROM ducklake_list_files('lake', 'target')),
+(SELECT count(*) FROM lake.snapshots())
+----
+1000000	1	2
+
+run
+MERGE INTO lake.target AS t USING merge_source AS s ON t.id = s.id
+WHEN MATCHED THEN UPDATE SET v = s.v, payload = s.payload
+WHEN NOT MATCHED THEN INSERT (id, v, payload) VALUES (s.id, s.v, s.payload);
+
+# A missed reset still merges 300000 rows and leaves the same contents, but commits snapshot 3 instead of 2
+result_query IIIIIII
+SELECT (SELECT Count FROM __answer), count(*), count(DISTINCT id), sum(id), sum(v),
+count(*) FILTER (WHERE CASE WHEN id < 150000 OR id >= 1000000
+THEN v IS DISTINCT FROM id * 3 + 1 OR payload IS DISTINCT FROM 'upsert_' || id
+ELSE v IS DISTINCT FROM id * 2 OR payload IS DISTINCT FROM 'base_' || id END),
+(SELECT max(snapshot_id) FROM lake.snapshots())
+FROM lake.target
+----
+300000	1150000	1150000	661249425000	1494999000000	0	2

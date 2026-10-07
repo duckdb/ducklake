@@ -1,0 +1,66 @@
+# name: test/sql/issues/issue_843_postgres_legacy_inlined_types.test
+# description: Postgres inlined tables created with the column types of DuckLake 0.3 are usable after a migration
+# group: [issues]
+
+require ducklake
+
+require parquet
+
+require json
+
+require postgres_scanner
+
+require-env DUCKLAKE_CI
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/issue_843', DATA_INLINING_ROW_LIMIT 10, DUCKLAKE_VERSION '1.0')
+
+statement ok
+CREATE TABLE dl.t (id INTEGER, s VARCHAR, j JSON, d DATE, ts TIMESTAMP, tz TIMESTAMPTZ, f FLOAT)
+
+statement ok
+INSERT INTO dl.t VALUES (1, 'back\slash \x62 é漢', '{"a": "line\nbreak"}', DATE '2026-03-17', TIMESTAMP '2026-03-17 08:25:46.123456', TIMESTAMPTZ '2026-03-17 08:25:46+00', 1.5), (2, '', NULL, NULL, NULL, NULL, NULL)
+
+statement ok
+ALTER TABLE dl.t RENAME COLUMN s TO s2
+
+statement ok
+INSERT INTO dl.t VALUES (3, 'renamed', '[1]', DATE '2026-03-18', NULL, NULL, -2.5)
+
+# DuckLake 0.3 created these columns with their native Postgres types
+statement ok
+CALL postgres_execute('__ducklake_metadata_dl', 'ALTER TABLE ducklake_inlined_data_1_1 ALTER COLUMN s TYPE VARCHAR USING convert_from(s, ''UTF8''), ALTER COLUMN j TYPE JSON USING convert_from(j, ''UTF8'')::JSON, ALTER COLUMN d TYPE DATE USING d::DATE, ALTER COLUMN ts TYPE TIMESTAMP USING ts::TIMESTAMP, ALTER COLUMN tz TYPE TIMESTAMPTZ USING tz::TIMESTAMPTZ, ALTER COLUMN f TYPE DOUBLE PRECISION USING f::DOUBLE PRECISION')
+
+statement ok
+CALL postgres_execute('__ducklake_metadata_dl', 'ALTER TABLE ducklake_inlined_data_1_2 ALTER COLUMN s2 TYPE VARCHAR USING convert_from(s2, ''UTF8''), ALTER COLUMN j TYPE JSON USING convert_from(j, ''UTF8'')::JSON, ALTER COLUMN d TYPE DATE USING d::DATE, ALTER COLUMN ts TYPE TIMESTAMP USING ts::TIMESTAMP, ALTER COLUMN tz TYPE TIMESTAMPTZ USING tz::TIMESTAMPTZ, ALTER COLUMN f TYPE DOUBLE PRECISION USING f::DOUBLE PRECISION')
+
+statement ok
+DETACH dl
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/issue_843', DATA_INLINING_ROW_LIMIT 10, AUTOMATIC_MIGRATION TRUE)
+
+query IIIIIII
+SELECT id, s2, j, d, ts, tz = TIMESTAMPTZ '2026-03-17 08:25:46+00', f FROM dl.t ORDER BY id
+----
+1	back\slash \x62 é漢	{"a": "line\nbreak"}	2026-03-17	2026-03-17 08:25:46.123456	true	1.5
+2	(empty)	NULL	NULL	NULL	NULL	NULL
+3	renamed	[1]	2026-03-18	NULL	NULL	-2.5
+
+statement ok
+INSERT INTO dl.t VALUES (4, 'b', '{}', DATE '2026-03-19', TIMESTAMP '2026-03-19 01:02:03', TIMESTAMPTZ '2026-03-19 01:02:03+00', 0.25)
+
+statement ok
+CALL ducklake_flush_inlined_data('dl')
+
+query IIIIIII
+SELECT id, s2, j, d, ts, tz = TIMESTAMPTZ '2026-03-19 01:02:03+00', f FROM dl.t ORDER BY id
+----
+1	back\slash \x62 é漢	{"a": "line\nbreak"}	2026-03-17	2026-03-17 08:25:46.123456	false	1.5
+2	(empty)	NULL	NULL	NULL	NULL	NULL
+3	renamed	[1]	2026-03-18	NULL	NULL	-2.5
+4	b	{}	2026-03-19	2026-03-19 01:02:03	true	0.25

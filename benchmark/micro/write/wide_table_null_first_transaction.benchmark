@@ -1,0 +1,30 @@
+# name: benchmark/micro/write/wide_table_null_first_transaction.benchmark
+# description: One transaction of 64 single-file INSERTs into a table of 120 columns whose first file holds only NULLs
+# group: [write]
+
+name Wide Table Null First Transaction
+group micro
+subgroup write
+
+require ducklake
+
+require parquet
+
+argument work wide_null_first_work
+
+include benchmark/micro/fixtures/wide_table.benchmark.in
+
+include benchmark/micro/fixtures/restore_cleanup.benchmark.in
+
+# The commit merges the stats of every file into each column, starting from the stats of the NULL row
+run benchmark/micro/queries/wide_table_null_first_transaction.sql
+
+# A missed reset doubles the rows and files, and the NULL row shows up in the stats of every column
+result_query IIIIII
+SELECT (SELECT count(*) FROM lake.wide), (SELECT count(c0) FROM lake.wide),
+(SELECT count(*) FROM (FROM lake.wide WHERE c0 IS NOT NULL
+EXCEPT ALL SELECT wide_source.* FROM wide_source, range(63))),
+(SELECT count(*) FROM ducklake_list_files('lake', 'wide')), (SELECT max(snapshot_id) FROM lake.snapshots()),
+(SELECT count(*) FILTER (WHERE contains_null) FROM __ducklake_metadata_lake.ducklake_table_column_stats)
+----
+505	504	0	64	2	120

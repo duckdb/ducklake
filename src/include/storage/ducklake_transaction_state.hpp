@@ -26,6 +26,8 @@ struct DuckLakeColumnSchemaEntry {
 struct DuckLakeCommitContext {
 	//! Runs a metadata-DB query during conflict resolution.
 	std::function<unique_ptr<QueryResult>(string)> conflict_query_executor;
+	//! Whether the inlined file deletion table of a table exists, it is created lazily
+	std::function<bool(TableIndex)> inlined_file_deletion_table_exists;
 	//! Returns the latest snapshot for the first commit attempt.
 	std::function<DuckLakeSnapshot()> get_snapshot;
 	//! Executes the batched snapshot/changes SQL against the metadata DB.
@@ -138,11 +140,12 @@ public:
 
 	SnapshotAndStats CheckForConflicts(DuckLakeSnapshot transaction_snapshot,
 	                                   const TransactionChangeInformation &changes,
-	                                   const std::function<unique_ptr<QueryResult>(string)> &executor,
-	                                   bool supports_v1_1_metadata);
+	                                   const DuckLakeCommitContext &context);
 	void CheckForConflicts(const TransactionChangeInformation &changes, const SnapshotChangeInformation &other_changes,
-	                       DuckLakeSnapshot transaction_snapshot,
-	                       const std::function<unique_ptr<QueryResult>(string)> &executor) const;
+	                       DuckLakeSnapshot transaction_snapshot, const DuckLakeCommitContext &context) const;
+	void CheckDeletedFileConflicts(const TransactionChangeInformation &changes,
+	                               const SnapshotChangeInformation &other_changes,
+	                               const DuckLakeCommitContext &context) const;
 
 	static SnapshotDeletedFromFiles
 	GetFilesDeletedOrDroppedAfterSnapshot(const std::function<unique_ptr<QueryResult>(string)> &executor);
@@ -206,6 +209,7 @@ public:
 	DuckLakePath GetRelativePath(const string &path) const;
 
 	bool SchemaChangesMade() const;
+	bool InlinedTableFlushed(const string &table_name) const;
 
 public:
 	DatabaseInstance &db;
@@ -234,6 +238,8 @@ public:
 	map<SchemaIndex, reference<DuckLakeSchemaEntry>> dropped_schemas;
 	LocalTableChanges local_changes;
 	vector<FlushedInlinedTableInfo> flushed_inlined_tables;
+	//! The tables whose inlined file deletions were flushed, with the snapshot of the flush
+	map<TableIndex, idx_t> flushed_inlined_file_deletions;
 	vector<DuckLakeConfigOption> committed_table_options;
 };
 

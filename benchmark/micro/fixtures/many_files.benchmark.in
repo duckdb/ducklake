@@ -6,7 +6,8 @@ cache_file many_files_ready.marker
 
 # events holds disjoint id/ts/s ranges per 2048-row file
 load
-ATTACH 'ducklake:${BENCHMARK_DIR}/many_files.db' AS lake (DATA_PATH '${BENCHMARK_DIR}/many_files_data');
+@create many_files
+@attach many_files AS lake (DATA_PATH '${BENCHMARK_DIR}/many_files_data')
 CREATE TABLE lake.events (id BIGINT, ts TIMESTAMP, grp INTEGER, val DOUBLE, s VARCHAR);
 CALL lake.set_option('parquet_row_group_size', 2048, table_name => 'events');
 SET ducklake_target_file_size = '4KB';
@@ -16,9 +17,11 @@ FROM range(4096 * 2048) t(i);
 RESET ducklake_target_file_size;
 SELECT CASE WHEN (SELECT count(*) FROM ducklake_list_files('lake', 'events')) < 4000
 THEN error('events must consist of ~4096 small files') END;
+CALL ducklake_delete_orphaned_files('lake', cleanup_all => true);
 DETACH lake;
+@seal many_files
 COPY (SELECT 1) TO '${BENCHMARK_DIR}/many_files_ready.marker' (FORMAT CSV);
-ATTACH 'ducklake:${BENCHMARK_DIR}/many_files.db' AS lake (READ_ONLY);
+@attach many_files AS lake (READ_ONLY)
 
 reload
-ATTACH 'ducklake:${BENCHMARK_DIR}/many_files.db' AS lake (READ_ONLY);
+@attach many_files AS lake (READ_ONLY)

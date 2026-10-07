@@ -31,7 +31,7 @@ UNION ALL SELECT 'cur', count(*), sum(x) FROM lake.events
 # Re-attaching gives every run cold schema, stats and snapshot caches; ts_a and ts_b survive the re-attach
 cleanup
 DETACH lake;
-ATTACH 'ducklake:${BENCHMARK_DIR}/history300.db' AS lake (READ_ONLY);
+@attach history300 AS lake (READ_ONLY)
 
 result III
 cur	1000000	281792425975.0

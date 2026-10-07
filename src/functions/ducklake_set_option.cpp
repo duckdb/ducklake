@@ -12,8 +12,7 @@ namespace duckdb {
 static void ValidateTableScope(ClientContext &context, Catalog &catalog, const string &schema_name,
                                const string &table_name) {
 	auto table_catalog_entry = catalog.GetEntry<TableCatalogEntry>(
-	    context, DuckLakeUtil::QualifiedEntryName(context, catalog, schema_name, table_name),
-	    OnEntryNotFound::THROW_EXCEPTION);
+	    context, catalog.ResolveEntryName(context, schema_name, table_name), OnEntryNotFound::THROW_EXCEPTION);
 	auto &ducklake_table = table_catalog_entry->Cast<DuckLakeTableEntry>();
 	DuckLakeUtil::ValidateCanEnableInlining(ducklake_table.GetColumns(),
 	                                        catalog.Cast<DuckLakeCatalog>().SupportsV1_1Metadata(),
@@ -37,7 +36,7 @@ static void ValidateTablesInSchema(ClientContext &context, DuckLakeCatalog &duck
 
 static void ValidateSchemaScope(ClientContext &context, Catalog &catalog, const string &schema_name) {
 	auto &duck_catalog = catalog.Cast<DuckLakeCatalog>();
-	auto &schema_catalog_entry = DuckLakeUtil::GetSchema(context, catalog, schema_name);
+	auto &schema_catalog_entry = catalog.ResolveSchema(context, schema_name);
 	ValidateTablesInSchema(context, duck_catalog, schema_catalog_entry.Cast<DuckLakeSchemaEntry>(), SchemaIndex());
 }
 
@@ -76,7 +75,7 @@ struct DuckLakeSetOptionData : public TableFunctionData {
 
 static unique_ptr<FunctionData> DuckLakeSetOptionBind(ClientContext &context, TableFunctionBindInput &input,
                                                       vector<LogicalType> &return_types, vector<Identifier> &names) {
-	auto &catalog = DuckLakeBaseMetadataFunction::GetCatalog(context, input.inputs[0]);
+	auto &catalog = DuckLakeBaseMetadataFunction::GetCatalog(context, input);
 	DuckLakeConfigOption config_option;
 	auto &option = config_option.option.key;
 	auto &value = config_option.option.value;
@@ -102,8 +101,7 @@ static unique_ptr<FunctionData> DuckLakeSetOptionBind(ClientContext &context, Ta
 	DuckLakeUtil::ValidateConfigOptionScope(option, !schema.empty(), !table.empty());
 	if (!table.empty()) {
 		auto table_catalog_entry = catalog.GetEntry<TableCatalogEntry>(
-		    context, DuckLakeUtil::QualifiedEntryName(context, catalog, schema, table),
-		    OnEntryNotFound::THROW_EXCEPTION);
+		    context, catalog.ResolveEntryName(context, schema, table), OnEntryNotFound::THROW_EXCEPTION);
 		auto &ducklake_table = table_catalog_entry->Cast<DuckLakeTableEntry>();
 		config_option.table_id = ducklake_table.GetTableId();
 		if (IsTransactionLocal(config_option.table_id)) {
@@ -113,7 +111,7 @@ static unique_ptr<FunctionData> DuckLakeSetOptionBind(ClientContext &context, Ta
 			value = DuckLakeTableEntry::ResolveSkippedStatsColumns(ducklake_table, val);
 		}
 	} else if (!schema.empty()) {
-		auto &schema_catalog_entry = DuckLakeUtil::GetSchema(context, catalog, schema);
+		auto &schema_catalog_entry = catalog.ResolveSchema(context, schema);
 		auto &ducklake_schema = schema_catalog_entry.Cast<DuckLakeSchemaEntry>();
 		config_option.schema_id = ducklake_schema.GetSchemaId();
 		if (config_option.schema_id.IsTransactionLocal()) {
@@ -126,30 +124,22 @@ static unique_ptr<FunctionData> DuckLakeSetOptionBind(ClientContext &context, Ta
 	return make_uniq<DuckLakeSetOptionData>(catalog, std::move(config_option));
 }
 
-struct DuckLakeSetOptionState : public GlobalTableFunctionState {
-	DuckLakeSetOptionState() {
-	}
-
-	bool finished = false;
-};
-
-unique_ptr<GlobalTableFunctionState> DuckLakeSetOptionInit(ClientContext &context, TableFunctionInitInput &input) {
-	return make_uniq<DuckLakeSetOptionState>();
-}
-
 void DuckLakeSetOptionExecute(ClientContext &context, TableFunctionInput &data_p, DataChunk &output) {
-	auto &state = data_p.global_state->Cast<DuckLakeSetOptionState>();
 	auto &bind_data = data_p.bind_data->Cast<DuckLakeSetOptionData>();
 	auto &transaction = DuckLakeTransaction::Get(context, bind_data.catalog);
 	transaction.SetConfigOption(bind_data.option);
-	state.finished = true;
 }
 
 DuckLakeSetOptionFunction::DuckLakeSetOptionFunction()
-    : TableFunction("ducklake_set_option", {LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::ANY},
-                    DuckLakeSetOptionExecute, DuckLakeSetOptionBind, DuckLakeSetOptionInit) {
-	named_parameters["table_name"] = LogicalType::VARCHAR;
-	named_parameters["schema"] = LogicalType::VARCHAR;
+    : TableFunction("ducklake_set_option",
+                    FunctionSignature()
+                        .AddPositionalOnly("catalog", LogicalType::VARCHAR)
+                        .AddPositionalOnly("option", LogicalType::VARCHAR)
+                        .AddPositionalOnly("value", LogicalType::ANY),
+                    DuckLakeSetOptionExecute, DuckLakeSetOptionBind) {
+	GetSignature().WithTypedKwargs("options", [&](TypedKwargs &options) {
+		options.Add("table_name", LogicalType::VARCHAR).Add("schema", LogicalType::VARCHAR);
+	});
 }
 
 } // namespace duckdb

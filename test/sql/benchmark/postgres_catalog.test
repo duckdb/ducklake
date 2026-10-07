@@ -1,0 +1,199 @@
+# name: test/sql/benchmark/postgres_catalog.test
+# description: The regression benchmarks seal a PostgreSQL metadata schema and restore independent copies of it
+# group: [benchmark]
+
+require ducklake
+
+require parquet
+
+require postgres_scanner
+
+statement ok
+SET VARIABLE catalog_sql = (SELECT content FROM read_text('.github/regression/postgres_catalog.sql'))
+
+statement ok
+SET VARIABLE seal_sql = getvariable('catalog_sql') || ' SELECT pg_temp.ducklake_regression_seal(''regression_seed'')'
+
+statement ok
+SET VARIABLE copy_sql = getvariable('catalog_sql')
+|| ' SELECT pg_temp.ducklake_regression_copy(''regression_seed'', ''regression_work'')'
+
+statement ok
+ATTACH 'postgres:dbname=ducklakedb' AS pg
+
+statement ok
+CALL postgres_execute('pg',
+'DROP SCHEMA IF EXISTS regression_seed CASCADE; DROP SCHEMA IF EXISTS regression_work CASCADE', prepare = false)
+
+# The seed holds inlined rows, a Parquet file and a delete file
+statement ok
+ATTACH 'ducklake:postgres:dbname=ducklakedb' AS lake
+(METADATA_SCHEMA 'regression_seed', DATA_PATH '{TEST_DIR}/regression_catalog_files')
+
+statement ok
+CREATE TABLE lake.inlined AS SELECT i AS id FROM range(5) t(i)
+
+statement ok
+CREATE TABLE lake.files AS SELECT i AS id FROM range(1000) t(i)
+
+statement ok
+DELETE FROM lake.files WHERE id < 100
+
+statement ok
+DETACH lake
+
+statement ok
+CALL postgres_execute('pg', getvariable('seal_sql'), prepare = false)
+
+# Sealing collects statistics and keeps autovacuum from changing the seed during a measurement
+query II
+SELECT bool_and(reltuples >= 0), bool_and(reloptions = '{autovacuum_enabled=false}') FROM postgres_query('pg',
+'SELECT reltuples, reloptions::TEXT AS reloptions FROM pg_class
+WHERE relnamespace = ''regression_seed''::regnamespace AND relkind = ''r''')
+----
+true	true
+
+# Each copy has every table and storage option of the seed, and discards the commits made to the previous copy
+loop iteration 0 2
+
+statement ok
+CALL postgres_execute('pg', getvariable('copy_sql'), prepare = false)
+
+query I
+SELECT count(*) FROM postgres_query('pg',
+'SELECT relname, reloptions::TEXT AS reloptions FROM pg_class
+WHERE relnamespace = ''regression_seed''::regnamespace AND relkind = ''r''
+EXCEPT SELECT relname, reloptions::TEXT FROM pg_class
+WHERE relnamespace = ''regression_work''::regnamespace AND relkind = ''r''')
+----
+0
+
+statement ok
+ATTACH 'ducklake:postgres:dbname=ducklakedb' AS lake (METADATA_SCHEMA 'regression_work')
+
+query IIII
+SELECT (SELECT sum(id) FROM lake.inlined), (SELECT count(*) FROM lake.files),
+(SELECT count(*) FROM ducklake_list_files('lake', 'files') WHERE delete_file IS NOT NULL),
+(SELECT max(snapshot_id) FROM lake.snapshots())
+----
+10	900	1	3
+
+statement ok
+INSERT INTO lake.inlined VALUES (100)
+
+statement ok
+DELETE FROM lake.files WHERE id < 500
+
+statement ok
+DETACH lake
+
+endloop
+
+statement ok
+ATTACH 'ducklake:postgres:dbname=ducklakedb' AS seed (METADATA_SCHEMA 'regression_seed', READ_ONLY)
+
+query III
+SELECT (SELECT sum(id) FROM seed.inlined), (SELECT count(*) FROM seed.files),
+(SELECT max(snapshot_id) FROM seed.snapshots())
+----
+10	900	3
+
+statement ok
+DETACH seed
+
+# A rolled-back mutation is discarded physically too, while the lake stays attached
+statement ok
+ATTACH 'ducklake:postgres:dbname=ducklakedb' AS lake (METADATA_SCHEMA 'regression_work')
+
+statement ok
+BEGIN
+
+statement ok
+DELETE FROM lake.files
+
+statement ok
+ROLLBACK
+
+statement ok
+CALL postgres_execute('pg', getvariable('copy_sql'), prepare = false)
+
+query II
+SELECT (SELECT count(*) FROM lake.files), (SELECT max(snapshot_id) FROM lake.snapshots())
+----
+900	3
+
+statement ok
+DETACH lake
+
+# A copy keeps unchanged tables with fresh storage, and recreates or drops the tables a run added, altered or dropped
+statement ok
+SET VARIABLE snapshot_table = (SELECT oid FROM postgres_query('pg',
+'SELECT ''regression_work.ducklake_snapshot''::regclass::oid::BIGINT AS oid'))
+
+statement ok
+SET VARIABLE snapshot_storage = (SELECT node FROM postgres_query('pg',
+'SELECT pg_relation_filenode(''regression_work.ducklake_snapshot'')::BIGINT AS node'))
+
+statement ok
+CALL postgres_execute('pg', 'CREATE TABLE regression_work.extra (i INTEGER);
+ALTER TABLE regression_work.ducklake_tag ADD COLUMN junk INTEGER; DROP TABLE regression_work.ducklake_view',
+prepare = false)
+
+statement ok
+CALL postgres_execute('pg', getvariable('copy_sql'), prepare = false)
+
+query IIIII
+SELECT extra_dropped, altered_recreated, dropped_recreated, snapshot_oid = getvariable('snapshot_table'),
+snapshot_node <> getvariable('snapshot_storage') FROM postgres_query('pg',
+'SELECT to_regclass(''regression_work.extra'') IS NULL AS extra_dropped,
+NOT EXISTS (SELECT 1 FROM pg_attribute WHERE attrelid = ''regression_work.ducklake_tag''::regclass
+AND attname = ''junk'') AS altered_recreated,
+to_regclass(''regression_work.ducklake_view'') IS NOT NULL AS dropped_recreated,
+''regression_work.ducklake_snapshot''::regclass::oid::BIGINT AS snapshot_oid,
+pg_relation_filenode(''regression_work.ducklake_snapshot'')::BIGINT AS snapshot_node')
+----
+true	true	true	true	true
+
+# A work schema holding objects other than tables is rebuilt from scratch
+statement ok
+CALL postgres_execute('pg', 'CREATE VIEW regression_work.extra_view AS SELECT 1 AS i', prepare = false)
+
+statement ok
+CALL postgres_execute('pg', getvariable('copy_sql'), prepare = false)
+
+query II
+SELECT view_dropped, snapshot_oid <> getvariable('snapshot_table') FROM postgres_query('pg',
+'SELECT to_regclass(''regression_work.extra_view'') IS NULL AS view_dropped,
+''regression_work.ducklake_snapshot''::regclass::oid::BIGINT AS snapshot_oid')
+----
+true	true
+
+statement ok
+ATTACH 'ducklake:postgres:dbname=ducklakedb' AS lake (METADATA_SCHEMA 'regression_work')
+
+query III
+SELECT (SELECT sum(id) FROM lake.inlined), (SELECT count(*) FROM lake.files),
+(SELECT max(snapshot_id) FROM lake.snapshots())
+----
+10	900	3
+
+# A copy that would lose objects is rejected and leaves the previous copy in place
+statement ok
+CALL postgres_execute('pg',
+'CREATE VIEW regression_seed.extra AS SELECT 1 AS i; CREATE SEQUENCE regression_seed.counter', prepare = false)
+
+statement error
+CALL postgres_execute('pg', getvariable('copy_sql'), prepare = false)
+----
+unsupported relation counter of kind S, relation extra of kind v
+
+query I
+SELECT count(*) FROM lake.files
+----
+900
+
+statement ok
+DETACH lake
+
+statement ok
+CALL postgres_execute('pg', 'DROP SCHEMA regression_seed CASCADE; DROP SCHEMA regression_work CASCADE', prepare = false)

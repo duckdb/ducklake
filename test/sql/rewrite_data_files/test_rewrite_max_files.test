@@ -104,7 +104,7 @@ SELECT count(*) FROM example2
 statement error
 CALL ducklake_rewrite_data_files('ducklake', max_compacted_files=>-1);
 ----
-Type INT32 with value -1 can't be cast
+The max_compacted_files option must be greater than zero.
 
 statement error
 CALL ducklake_rewrite_data_files('ducklake', max_compacted_files=>NULL);

@@ -1,0 +1,40 @@
+# name: benchmark/micro/fixtures/partitioned_compaction.benchmark.in
+# description: Lake with 100 identity partitions and three 2048-row files per partition
+# group: [fixtures]
+
+argument lake partitioned_compaction_v1
+
+cache_file ${lake}_ready.marker
+
+load
+@create ${lake}_pristine
+@attach ${lake}_pristine AS lake (DATA_PATH '${BENCHMARK_DIR}/${lake}_files')
+CALL lake.set_option('data_inlining_row_limit', 0);
+CREATE TABLE lake.events (part INTEGER, id BIGINT, v BIGINT);
+ALTER TABLE lake.events SET PARTITIONED BY (part);
+INSERT INTO lake.events
+SELECT p, p * 6144 + r AS id, id * 3 + 7 FROM range(100) parts(p), range(2048) rows(r);
+INSERT INTO lake.events
+SELECT p, p * 6144 + r AS id, id * 3 + 7 FROM range(100) parts(p), range(2048, 4096) rows(r);
+INSERT INTO lake.events
+SELECT p, p * 6144 + r AS id, id * 3 + 7 FROM range(100) parts(p), range(4096, 6144) rows(r);
+SELECT CASE WHEN (SELECT count(*) <> 300 OR NOT bool_and(n = 2048) FROM (
+SELECT part, filename, count(*) AS n FROM lake.events GROUP BY ALL))
+OR (SELECT count(DISTINCT part) <> 100 FROM lake.events)
+OR (SELECT max(snapshot_id) <> 5 FROM lake.snapshots())
+THEN error('expected three 2048-row files in each of 100 partitions') END;
+CALL ducklake_delete_orphaned_files('lake', cleanup_all => true);
+DETACH lake;
+COPY (SELECT count(*) FROM glob('${BENCHMARK_DIR}/${lake}_files/**'))
+TO '${BENCHMARK_DIR}/${lake}_filecount.csv' (FORMAT CSV, HEADER false);
+@seal ${lake}_pristine
+COPY (SELECT 1) TO '${BENCHMARK_DIR}/${lake}_ready.marker' (FORMAT CSV);
+DETACH DATABASE IF EXISTS lake;
+@copy ${lake}_pristine TO ${work}
+@attach ${work} AS lake
+CALL ducklake_delete_orphaned_files('lake', cleanup_all => true);
+SELECT CASE WHEN (SELECT count(*) FROM glob('${BENCHMARK_DIR}/${lake}_files/**'))
+<> (SELECT column0 FROM read_csv('${BENCHMARK_DIR}/${lake}_filecount.csv', header = false))
+THEN error('the fixture files were not restored') END;
+
+include benchmark/micro/fixtures/restore_reload.benchmark.in

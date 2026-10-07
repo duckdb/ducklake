@@ -1,0 +1,110 @@
+# name: test/sql/add_files/add_files_allow_missing_stats.test
+# description: a column missing from an added file does not leave the table statistics too narrow
+# group: [add_files]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/add_files_allow_missing_stats', DATA_INLINING_ROW_LIMIT 0)
+
+# missing columns without a default read as NULL
+statement ok
+CREATE TABLE ducklake.t(id INTEGER, name VARCHAR, s STRUCT(a INTEGER));
+
+statement ok
+INSERT INTO ducklake.t VALUES (1, 'a', {'a': 1});
+
+statement ok
+COPY (SELECT 100::INTEGER AS id) TO '{DATA_PATH}/add_files_allow_missing_stats/id_only.parquet';
+
+statement ok
+CALL ducklake_add_data_files('ducklake', 't', '{DATA_PATH}/add_files_allow_missing_stats/id_only.parquet', allow_missing => true);
+
+query I
+SELECT count(*) FROM ducklake.t WHERE name IS NULL
+----
+1
+
+query I
+SELECT count(*) FROM ducklake.t WHERE s.a IS NULL
+----
+1
+
+# a missing column reads as its default
+statement ok
+CREATE TABLE ducklake.d(id INTEGER);
+
+statement ok
+ALTER TABLE ducklake.d ADD COLUMN c INTEGER DEFAULT 5;
+
+statement ok
+INSERT INTO ducklake.d VALUES (2, 10);
+
+statement ok
+CALL ducklake_add_data_files('ducklake', 'd', '{DATA_PATH}/add_files_allow_missing_stats/id_only.parquet', allow_missing => true);
+
+query I
+SELECT count(*) FROM ducklake.d WHERE c < 8
+----
+1
+
+# a missing struct field reads as NULL where the struct is NULL
+statement ok
+CREATE TABLE ducklake.s(id INTEGER, s STRUCT(a INTEGER));
+
+statement ok
+INSERT INTO ducklake.s VALUES (1, {'a': 1});
+
+statement ok
+ALTER TABLE ducklake.s ADD COLUMN s.b INTEGER DEFAULT 7;
+
+statement ok
+COPY (SELECT * FROM (VALUES (2, {'a': 2}), (3, NULL)) t(id, s)) TO '{DATA_PATH}/add_files_allow_missing_stats/no_b.parquet';
+
+statement ok
+CALL ducklake_add_data_files('ducklake', 's', '{DATA_PATH}/add_files_allow_missing_stats/no_b.parquet', allow_missing => true);
+
+query I
+SELECT count(*) FROM ducklake.s WHERE s.b IS NULL
+----
+1
+
+# geometry statistics of a missing column with a default stay unknown
+statement ok
+CREATE TABLE ducklake.g(id INTEGER);
+
+statement ok
+ALTER TABLE ducklake.g ADD COLUMN geom GEOMETRY DEFAULT 'POINT(1 2)'::GEOMETRY;
+
+statement ok
+CALL ducklake_add_data_files('ducklake', 'g', '{DATA_PATH}/add_files_allow_missing_stats/id_only.parquet', allow_missing => true);
+
+query I
+SELECT vertex_extract(geom, 'x') FROM ducklake.g
+----
+1.0
+
+# a missing field inside a list does not have one value per row
+statement ok
+CREATE TABLE ducklake.l(l STRUCT(a INTEGER, b INTEGER)[]);
+
+statement ok
+COPY (SELECT [{'a': 1}, {'a': 2}, {'a': 3}]::STRUCT(a INTEGER)[] AS l) TO '{DATA_PATH}/add_files_allow_missing_stats/no_list_b.parquet';
+
+statement ok
+CALL ducklake_add_data_files('ducklake', 'l', '{DATA_PATH}/add_files_allow_missing_stats/no_list_b.parquet', allow_missing => true);
+
+query II
+SELECT s.value_count, s.null_count
+FROM __ducklake_metadata_ducklake.ducklake_file_column_stats s
+JOIN __ducklake_metadata_ducklake.ducklake_column c USING (table_id, column_id)
+JOIN __ducklake_metadata_ducklake.ducklake_table t USING (table_id)
+WHERE t.table_name = 'l' AND c.column_name = 'b'
+----
+NULL	NULL

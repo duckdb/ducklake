@@ -90,6 +90,7 @@ private:
 	vector<string> LookupInlinedTableNames(TableIndex table_id);
 	//! Replace {METADATA_CATALOG}, {SNAPSHOT_ID}, etc. in SQL.
 	string SubstitutePlaceholders(string sql, const DuckLakeSnapshot &snapshot) const;
+	bool InlinedFileDeletionTableExists(TableIndex table_id);
 	//! Execute a query on the fresh connection; throw on error.
 	unique_ptr<QueryResult> RunQuery(const string &query, const char *what);
 	//! Scan a temporary staging table via the catalog API (no SQL, no lock).

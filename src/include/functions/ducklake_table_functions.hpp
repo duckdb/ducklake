@@ -35,11 +35,19 @@ struct MetadataBindData : public TableFunctionData {
 	vector<vector<Value>> rows;
 };
 
+//! Global state of table functions that do all their work in a single call
+struct DuckLakeRunOnceState : public GlobalTableFunctionState {
+	bool finished = false;
+
+	static unique_ptr<GlobalTableFunctionState> Init(ClientContext &context, TableFunctionInitInput &input);
+};
+
 class DuckLakeBaseMetadataFunction : public TableFunction {
 public:
 	DuckLakeBaseMetadataFunction(Identifier name, table_function_bind_t bind);
 
-	static Catalog &GetCatalog(ClientContext &context, const Value &input);
+	static Catalog &GetCatalog(ClientContext &context, TableFunctionBindInput &input);
+	static void ScanRows(const vector<vector<Value>> &rows, idx_t &offset, DataChunk &output);
 };
 
 class DuckLakeSnapshotsFunction : public DuckLakeBaseMetadataFunction {

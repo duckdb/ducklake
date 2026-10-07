@@ -19,9 +19,24 @@ defaults:
 
 jobs:
   regression:
-    name: Regression benchmarks
+    name: ${{ matrix.name }}
     runs-on: ubuntu-latest
     timeout-minutes: 150
+    # PostgreSQL results are informational until repeated same-binary comparisons on Linux calibrate their noise
+    continue-on-error: ${{ matrix.catalog == 'postgres' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Regression benchmarks
+            catalog: duckdb
+            ccache: ''
+            vcpkg: a42af01b72c28a8e1d7b48107b33e4f286a55ef6
+          - name: Regression benchmarks (PostgreSQL)
+            catalog: postgres
+            ccache: -postgres
+            vcpkg: cd61e1e26a038e82d6550a3ebbe0fbbfe7da78e3 # Release 2026.06.24
+            postgres_scanner: 1
     env:
       VCPKG_TARGET_TRIPLET: x64-linux
       GEN: ninja
@@ -29,11 +44,24 @@ jobs:
       VCPKG_TOOLCHAIN_PATH: ${{ github.workspace }}/vcpkg/scripts/buildsystems/vcpkg.cmake
       CCACHE_BASEDIR: ${{ github.workspace }}
       CCACHE_NOHASHDIR: true
+      ENABLE_POSTGRES_SCANNER: ${{ matrix.postgres_scanner }}
+      USE_MERGED_VCPKG_MANIFEST: ${{ matrix.postgres_scanner }}
     steps:
       - name: Install required ubuntu packages
         run: |
           sudo apt-get update -y -qq
           sudo apt-get install -y -qq build-essential cmake ninja-build ccache python3 mold
+
+      - name: Setup PostgreSQL
+        if: matrix.catalog == 'postgres'
+        uses: ikalnytskyi/action-setup-postgres@v7
+        with:
+          postgres-version: '15'
+          username: 'postgres'
+          password: 'postgres'
+          database: 'postgres'
+          port: '5432'
+          ssl: true
 
       - name: Checkout PR
         uses: actions/checkout@v4
@@ -52,6 +80,10 @@ jobs:
           submodules: 'true'
           persist-credentials: false
 
+      - name: Test the regression scripts
+        working-directory: pr/.github/regression
+        run: python3 -m unittest -v
+
       - name: Checkout DuckDB to version
         run: |
           for checkout in pr base; do
@@ -61,13 +93,13 @@ jobs:
       - name: Setup Ccache
         uses: hendrikmuhs/ccache-action@main
         with:
-          key: ${{ github.job }}
+          key: ${{ github.job }}${{ matrix.ccache }}
           save: ${{ github.ref == 'refs/heads/main' || github.repository != 'duckdb/ducklake' }}
 
       - name: Setup vcpkg
         uses: lukka/run-vcpkg@v11.1
         with:
-          vcpkgGitCommitId: a42af01b72c28a8e1d7b48107b33e4f286a55ef6
+          vcpkgGitCommitId: ${{ matrix.vcpkg }}
           vcpkgDirectory: ${{ github.workspace }}/vcpkg
 
       - name: Build base
@@ -80,8 +112,11 @@ jobs:
 
       - name: Run regression benchmarks
         working-directory: pr
+        env:
+          PGSERVICE: ${{ matrix.catalog == 'postgres' && 'postgres' || '' }}
         run: |
           python3 .github/regression/run.py \
+            --catalog ${{ matrix.catalog }} \
             --old ../base/build/release/benchmark/benchmark_runner \
             --new build/release/benchmark/benchmark_runner \
             --benchmarks .github/regression/micro.csv \

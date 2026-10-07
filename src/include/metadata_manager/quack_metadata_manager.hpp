@@ -23,6 +23,9 @@ public:
 	bool SupportsAppender() const override {
 		return false;
 	}
+	bool CommitsEachStatement() const override {
+		return true;
+	}
 	void ProbeServerCapabilities() override;
 	bool CanSkipSnapshotFetch(const TransactionChangeInformation &changes) const override;
 	void FlushChangesServerSide(DuckLakeTransaction &transaction, DuckLakeSnapshot transaction_snapshot,

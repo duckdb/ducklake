@@ -23,11 +23,14 @@ BEGIN;
 DELETE FROM lake.lineitem WHERE l_orderkey % 2 = 0;
 
 cleanup
-ROLLBACK;
+@rollback ${lake}_pristine TO ${work}
 
 # A committed delete leaves nothing to delete in the next run
-result_query II
+result_query III
 SELECT Count = (SELECT count(*) FROM src.lineitem WHERE l_orderkey % 2 = 0),
-(SELECT count(*) FROM lake.lineitem) = (SELECT count(*) FROM src.lineitem WHERE l_orderkey % 2 = 1) FROM __answer
+(SELECT count(*) FROM lake.lineitem) = (SELECT count(*) FROM src.lineitem WHERE l_orderkey % 2 = 1),
+(SELECT sum(hash(*COLUMNS(*))) FROM lake.lineitem)
+= (SELECT sum(hash(*COLUMNS(*))) FROM src.lineitem WHERE l_orderkey % 2 = 1)
+FROM __answer
 ----
-true	true
+true	true	true

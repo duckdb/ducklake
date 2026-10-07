@@ -1,0 +1,111 @@
+# name: test/sql/table_changes/table_changes_delete_rest_of_file.test
+# description: a transaction that deletes part of a data file and then the rest reports every deleted row once
+# group: [table_changes]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/table_changes_delete_rest_of_file', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE dl.t AS SELECT * FROM (VALUES (1, 'a'), (2, 'b')) v(id, name)
+
+statement ok
+SET VARIABLE s1 = (SELECT max(snapshot_id) FROM dl.snapshots())
+
+statement ok
+BEGIN
+
+statement ok
+DELETE FROM dl.t WHERE id = 1
+
+statement ok
+DELETE FROM dl.t WHERE id = 2
+
+statement ok
+COMMIT
+
+query IIII
+SELECT rowid, change_type, id, name FROM ducklake_table_changes('dl', 'main', 't', getvariable('s1') + 1, getvariable('s1') + 1) ORDER BY rowid, change_type
+----
+0	delete	1	a
+1	delete	2	b
+
+statement ok
+CREATE TABLE dl.m AS SELECT * FROM (VALUES (1, 'a'), (2, 'b')) v(id, name)
+
+statement ok
+CREATE TABLE src AS SELECT * FROM (VALUES (1, 'A'), (3, 'c')) v(id, name)
+
+statement ok
+SET VARIABLE s2 = (SELECT max(snapshot_id) FROM dl.snapshots())
+
+statement ok
+BEGIN
+
+statement ok
+MERGE INTO dl.m AS t USING src AS s ON t.id = s.id WHEN MATCHED THEN UPDATE SET name = s.name WHEN NOT MATCHED THEN INSERT VALUES (s.id, s.name)
+
+statement ok
+MERGE INTO dl.m AS t USING src AS s ON t.id = s.id WHEN NOT MATCHED BY SOURCE THEN DELETE
+
+statement ok
+COMMIT
+
+query IIII
+SELECT rowid, change_type, id, name FROM ducklake_table_changes('dl', 'main', 'm', getvariable('s2') + 1, getvariable('s2') + 1) ORDER BY rowid, change_type
+----
+0	update_postimage	1	A
+0	update_preimage	1	a
+1	delete	2	b
+3	insert	3	c
+
+query II
+SELECT * FROM dl.m ORDER BY id
+----
+1	A
+3	c
+
+statement ok
+CREATE TABLE dl.c AS SELECT i AS id FROM range(4) t(i)
+
+statement ok
+DELETE FROM dl.c WHERE id = 0
+
+statement ok
+SET VARIABLE s3 = (SELECT max(snapshot_id) FROM dl.snapshots())
+
+statement ok
+BEGIN
+
+statement ok
+DELETE FROM dl.c WHERE id = 1
+
+statement ok
+DELETE FROM dl.c WHERE id >= 2
+
+statement ok
+COMMIT
+
+query II
+SELECT rowid, change_type FROM ducklake_table_changes('dl', 'main', 'c', getvariable('s3'), getvariable('s3')) ORDER BY rowid
+----
+0	delete
+
+query II
+SELECT rowid, change_type FROM ducklake_table_changes('dl', 'main', 'c', getvariable('s3') + 1, getvariable('s3') + 1) ORDER BY rowid
+----
+1	delete
+2	delete
+3	delete
+
+query I
+SELECT count(*) FROM dl.c
+----
+0

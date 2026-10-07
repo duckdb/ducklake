@@ -9,20 +9,25 @@ group micro
 
 require ducklake
 
-cache_file ducklake_show_all_tables_${tables}.db
+cache_file show_all_tables_${tables}_ready.marker
 
 load
-EXPORT DATABASE '${BENCHMARK_DIR}/ducklake_show_all_tables_${tables}_ddl';
-COPY (SELECT 'CREATE TABLE ducklake.tbl_' || i || ' (id INTEGER, random_data VARCHAR);' FROM range(${tables}) t(i)) TO '${BENCHMARK_DIR}/ducklake_show_all_tables_${tables}_ddl/schema.sql' (HEADER false, QUOTE '');
-ATTACH 'ducklake:${BENCHMARK_DIR}/ducklake_show_all_tables_${tables}.db' AS ducklake (DATA_PATH '${BENCHMARK_DIR}/ducklake_show_all_tables_${tables}_files');
+EXPORT DATABASE '${BENCHMARK_DIR}/show_all_tables_${tables}_ddl';
+COPY (SELECT 'CREATE TABLE ducklake.tbl_' || i || ' (id INTEGER, random_data VARCHAR);' FROM range(${tables}) t(i))
+TO '${BENCHMARK_DIR}/show_all_tables_${tables}_ddl/schema.sql' (HEADER false, QUOTE '');
+@create show_all_tables_${tables}
+@attach show_all_tables_${tables} AS ducklake (DATA_PATH '${BENCHMARK_DIR}/show_all_tables_${tables}_files')
 BEGIN;
-IMPORT DATABASE '${BENCHMARK_DIR}/ducklake_show_all_tables_${tables}_ddl';
+IMPORT DATABASE '${BENCHMARK_DIR}/show_all_tables_${tables}_ddl';
 COMMIT;
+CALL ducklake_delete_orphaned_files('ducklake', cleanup_all => true);
 DETACH ducklake;
-ATTACH 'ducklake:${BENCHMARK_DIR}/ducklake_show_all_tables_${tables}.db' AS ducklake;
+@seal show_all_tables_${tables}
+COPY (SELECT 1) TO '${BENCHMARK_DIR}/show_all_tables_${tables}_ready.marker' (FORMAT CSV);
+@attach show_all_tables_${tables} AS ducklake
 
 reload
-ATTACH 'ducklake:${BENCHMARK_DIR}/ducklake_show_all_tables_${tables}.db' AS ducklake;
+@attach show_all_tables_${tables} AS ducklake
 
 run
 SHOW ALL TABLES;
@@ -30,7 +35,7 @@ SHOW ALL TABLES;
 # Reattaching clears the catalog cache
 cleanup
 DETACH ducklake;
-ATTACH 'ducklake:${BENCHMARK_DIR}/ducklake_show_all_tables_${tables}.db' AS ducklake;
+@attach show_all_tables_${tables} AS ducklake
 
 result_query I
 SELECT count(*) FROM __answer WHERE database = 'ducklake'

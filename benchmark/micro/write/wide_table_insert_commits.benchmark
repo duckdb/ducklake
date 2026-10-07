@@ -1,0 +1,38 @@
+# name: benchmark/micro/write/wide_table_insert_commits.benchmark
+# description: Eight single-row Parquet commits into a freshly attached table of 120 BIGINT, DOUBLE and VARCHAR columns
+# group: [write]
+
+name Wide Table Insert Commits
+group micro
+subgroup write
+
+require ducklake
+
+require parquet
+
+argument work wide_commit_work
+
+include benchmark/micro/fixtures/wide_table.benchmark.in
+
+include benchmark/micro/fixtures/restore_cleanup.benchmark.in
+
+# Each restore reattaches the target; the first INSERT includes loading its schema
+run
+INSERT INTO lake.wide SELECT * FROM wide_source WHERE c0 = 0;
+INSERT INTO lake.wide SELECT * FROM wide_source WHERE c0 = 1;
+INSERT INTO lake.wide SELECT * FROM wide_source WHERE c0 = 2;
+INSERT INTO lake.wide SELECT * FROM wide_source WHERE c0 = 3;
+INSERT INTO lake.wide SELECT * FROM wide_source WHERE c0 = 4;
+INSERT INTO lake.wide SELECT * FROM wide_source WHERE c0 = 5;
+INSERT INTO lake.wide SELECT * FROM wide_source WHERE c0 = 6;
+INSERT INTO lake.wide SELECT * FROM wide_source WHERE c0 = 7;
+
+# The rows must equal the source in every column; one file and snapshot per INSERT show the reset worked
+result_query IIIIII
+SELECT (SELECT count(*) FROM lake.wide),
+(SELECT count(*) FROM (FROM lake.wide EXCEPT ALL FROM wide_source)),
+(SELECT count(*) FROM duckdb_columns() WHERE database_name = 'lake' AND table_name = 'wide'),
+(SELECT count(*) FROM ducklake_list_files('lake', 'wide')),
+(SELECT count(*) FROM lake.snapshots()), (SELECT max(snapshot_id) FROM lake.snapshots())
+----
+8	0	120	8	10	9

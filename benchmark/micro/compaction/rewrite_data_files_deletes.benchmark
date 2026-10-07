@@ -14,7 +14,7 @@ argument work rewrite_work
 
 include benchmark/micro/fixtures/compaction.benchmark.in
 
-include benchmark/micro/fixtures/rblob_cleanup.benchmark.in
+include benchmark/micro/fixtures/restore_cleanup.benchmark.in
 
 # The default rewrite_delete_threshold of 0.95 would skip every file
 run

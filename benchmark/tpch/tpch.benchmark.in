@@ -14,19 +14,26 @@ require parquet
 
 require tpch
 
-cache_file tpch_sf${sf}_ducklake.db
+cache_file tpch_sf${sf}_ducklake_ready.marker
 
 load
 ATTACH ':memory:' AS mem;
 USE mem;
 CALL dbgen(sf=${sf});
-ATTACH 'ducklake:${BENCHMARK_DIR}/tpch_sf${sf}_ducklake.db' AS ducklake (DATA_PATH '${BENCHMARK_DIR}/tpch_sf${sf}_ducklake_files');
+@create tpch_sf${sf}_ducklake
+@attach tpch_sf${sf}_ducklake AS ducklake (DATA_PATH '${BENCHMARK_DIR}/tpch_sf${sf}_ducklake_files')
 COPY FROM DATABASE mem TO ducklake;
-USE ducklake;
+USE memory;
 DETACH mem;
+CALL ducklake_delete_orphaned_files('ducklake', cleanup_all => true);
+DETACH ducklake;
+@seal tpch_sf${sf}_ducklake
+COPY (SELECT 1) TO '${BENCHMARK_DIR}/tpch_sf${sf}_ducklake_ready.marker' (FORMAT CSV);
+@attach tpch_sf${sf}_ducklake AS ducklake
+USE ducklake;
 
 reload
-ATTACH 'ducklake:${BENCHMARK_DIR}/tpch_sf${sf}_ducklake.db' AS ducklake;
+@attach tpch_sf${sf}_ducklake AS ducklake
 USE ducklake;
 
 run duckdb/extension/tpch/dbgen/queries/q${QUERY_NUMBER_PADDED}.sql

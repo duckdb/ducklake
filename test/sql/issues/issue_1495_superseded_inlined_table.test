@@ -1,0 +1,123 @@
+# name: test/sql/issues/issue_1495_superseded_inlined_table.test
+# description: Another attach of the lake keeps working after a flush drops a superseded inlined table (#1495)
+# group: [issues]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/issue_1495.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS writer (DATA_PATH '{DATA_PATH}/issue_1495', DATA_INLINING_ROW_LIMIT 100, METADATA_CATALOG 'issue_1495_meta')
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS maintainer (DATA_PATH '{DATA_PATH}/issue_1495', DATA_INLINING_ROW_LIMIT 100, METADATA_CATALOG 'issue_1495_meta')
+
+statement ok
+CREATE TABLE writer.events (id INTEGER, part INTEGER)
+
+statement ok
+ALTER TABLE writer.events SET PARTITIONED BY (part)
+
+query I
+SELECT count(*) FROM issue_1495_meta.ducklake_inlined_data_tables
+----
+2
+
+# the maintainer caches both inlined tables
+query I
+SELECT count(*) FROM maintainer.events
+----
+0
+
+statement ok
+INSERT INTO writer.events SELECT i, i % 2 FROM range(10) t(i)
+
+statement ok
+CALL ducklake_flush_inlined_data('writer')
+
+query I
+SELECT count(*) FROM issue_1495_meta.ducklake_inlined_data_tables
+----
+1
+
+query I
+DELETE FROM maintainer.events WHERE id < 4
+----
+4
+
+query II
+SELECT count(*), sum(id) FROM maintainer.events
+----
+6	39
+
+statement ok
+INSERT INTO maintainer.events VALUES (10, 0)
+
+query I
+SELECT rows_flushed FROM ducklake_flush_inlined_data('maintainer')
+----
+1
+
+query II
+SELECT count(*), sum(id) FROM writer.events
+----
+7	49
+
+# time travel reads through an entry cached before its only inlined table was superseded
+statement ok
+CREATE TABLE writer.t (id INTEGER)
+
+statement ok
+INSERT INTO writer.t VALUES (1), (2)
+
+statement ok
+SET VARIABLE insert_snapshot = (SELECT max(snapshot_id) FROM writer.snapshots())
+
+query I
+SELECT count(*) FROM maintainer.t AT (VERSION => getvariable('insert_snapshot'))
+----
+2
+
+statement ok
+ALTER TABLE writer.t ADD COLUMN v INTEGER
+
+statement ok
+CALL ducklake_flush_inlined_data('writer', table_name => 't')
+
+query II
+SELECT count(*), sum(id) FROM maintainer.t AT (VERSION => getvariable('insert_snapshot'))
+----
+2	3
+
+# an attach pinned to a snapshot reads through the same kind of entry
+statement ok
+CREATE TABLE writer.p (id INTEGER)
+
+statement ok
+INSERT INTO writer.p VALUES (1), (2)
+
+statement ok
+SET VARIABLE pinned_snapshot = (SELECT max(snapshot_id) FROM writer.snapshots())
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS pinned (DATA_PATH '{DATA_PATH}/issue_1495', METADATA_CATALOG 'issue_1495_meta', SNAPSHOT_VERSION getvariable('pinned_snapshot'))
+
+query I
+SELECT count(*) FROM pinned.p
+----
+2
+
+statement ok
+ALTER TABLE writer.p ADD COLUMN v INTEGER
+
+statement ok
+CALL ducklake_flush_inlined_data('writer', table_name => 'p')
+
+query II
+SELECT count(*), sum(id) FROM pinned.p
+----
+2	3

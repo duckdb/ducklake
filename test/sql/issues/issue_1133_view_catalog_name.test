@@ -1,0 +1,109 @@
+# name: test/sql/issues/issue_1133_view_catalog_name.test
+# description: A view keeps working when the lake is attached under another name (#1133)
+# group: [issues]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/issue_1133.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/issue_1133', METADATA_CATALOG 'issue_1133_meta')
+
+statement ok
+CREATE TABLE dl.t (x INTEGER)
+
+statement ok
+INSERT INTO dl.t VALUES (42)
+
+# an alias or a column qualifier that happens to be the name of the catalog is not a catalog reference
+statement ok
+CREATE VIEW dl.aliased AS SELECT dl.x FROM dl.t AS dl
+
+# the same for an identifier that merely ends with the name of the catalog
+statement ok
+CREATE VIEW dl.suffixed AS SELECT tbdl.x FROM dl.t AS tbdl
+
+statement ok
+CREATE VIEW dl.plain AS SELECT x FROM dl.t
+
+query III
+SELECT (SELECT x FROM dl.aliased), (SELECT x FROM dl.suffixed), (SELECT x FROM dl.plain)
+----
+42	42	42
+
+# the table references of a view are stored without the name of its catalog
+query I
+SELECT count(*) FROM issue_1133_meta.ducklake_view WHERE sql LIKE '%dl.t%'
+----
+0
+
+# the source of a pivot is stored that way as well
+statement ok
+CREATE VIEW dl.pivoted AS PIVOT dl.t ON x IN (42) USING count(*)
+
+statement ok
+CREATE VIEW dl.unpivoted AS UNPIVOT dl.t ON x INTO NAME n VALUE val
+
+statement ok
+CREATE VIEW dl.joined AS SELECT * FROM (UNPIVOT dl.t ON x INTO NAME n VALUE val) q, dl.t
+
+statement ok
+CREATE VIEW dl.in_subquery AS SELECT (SELECT count(*) FROM (UNPIVOT dl.t ON x INTO NAME n VALUE val)) AS c
+
+statement ok
+CREATE VIEW dl.in_cte AS WITH RECURSIVE r AS (SELECT * FROM (UNPIVOT dl.t ON x INTO NAME n VALUE val)) SELECT count(*) AS c FROM r
+
+statement ok
+CREATE VIEW dl.wrapped AS SELECT coalesce((SELECT count(*) FROM (UNPIVOT dl.t ON x INTO NAME n VALUE val)), 0) AS c
+
+statement ok
+CREATE MACRO dl.identity(v) AS v
+
+statement ok
+CREATE VIEW dl.pivot_entry AS UNPIVOT dl.t ON (dl.main.identity(x)) INTO NAME n VALUE val
+
+query I
+SELECT count(*) FROM issue_1133_meta.ducklake_view WHERE sql LIKE '%dl.t%'
+----
+0
+
+statement ok
+DETACH dl
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS other (DATA_PATH '{DATA_PATH}/issue_1133')
+
+query III
+SELECT (SELECT x FROM other.aliased), (SELECT x FROM other.suffixed), (SELECT x FROM other.plain)
+----
+42	42	42
+
+query III
+SELECT (SELECT count(*) FROM other.pivoted), (SELECT count(*) FROM other.unpivoted), (SELECT count(*) FROM other.joined)
+----
+1	1	1
+
+query IIII
+SELECT (SELECT c FROM other.in_subquery), (SELECT c FROM other.in_cte), (SELECT c FROM other.wrapped),
+       (SELECT count(*) FROM other.pivot_entry)
+----
+1	1	1	1
+
+# a view of a table of another catalog keeps that name
+statement ok
+CREATE TABLE elsewhere (z INTEGER)
+
+statement ok
+INSERT INTO elsewhere VALUES (7)
+
+statement ok
+CREATE VIEW other.cross_catalog AS SELECT z FROM memory.main.elsewhere
+
+query I
+SELECT z FROM other.cross_catalog
+----
+7

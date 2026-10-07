@@ -8,53 +8,10 @@
 #include "duckdb/common/map.hpp"
 #include "duckdb/planner/filter/constant_filter.hpp"
 #include "duckdb/planner/table_filter.hpp"
-#include "duckdb/common/multi_file/multi_file_list.hpp"
-#include "duckdb/common/multi_file/multi_file_reader.hpp"
 #include "duckdb/common/string_util.hpp"
 #include "duckdb/planner/filter/expression_filter.hpp"
-#include "duckdb/planner/expression/bound_comparison_expression.hpp"
-#include "duckdb/planner/expression/bound_constant_expression.hpp"
-#include "duckdb/planner/expression/bound_reference_expression.hpp"
 
 namespace duckdb {
-
-//! FunctionInfo to pass delete file metadata to the MultiFileReader
-struct DeleteFileFunctionInfo : public TableFunctionInfo {
-	DuckLakeFileData file_data;
-};
-
-//! Custom MultiFileReader that creates a SimpleMultiFileList with extended info.
-//! This avoids HEAD requests by providing file metadata (size, etag, last_modified) upfront
-struct DeleteFileMultiFileReader : public MultiFileReader {
-	static unique_ptr<MultiFileReader> CreateInstance(const TableFunction &table_function) {
-		auto &info = table_function.function_info->Cast<DeleteFileFunctionInfo>();
-		return make_uniq<DeleteFileMultiFileReader>(info.file_data);
-	}
-
-	explicit DeleteFileMultiFileReader(const DuckLakeFileData &delete_file) {
-		OpenFileInfo file_info(delete_file.path);
-		auto extended_info = make_shared_ptr<ExtendedOpenFileInfo>();
-		extended_info->options["file_size"] = Value::UBIGINT(delete_file.file_size_bytes);
-		extended_info->options["etag"] = Value("");
-		extended_info->options["last_modified"] = Value::TIMESTAMP(timestamp_t(0));
-		if (!delete_file.encryption_key.empty()) {
-			extended_info->options["encryption_key"] = Value::BLOB_RAW(delete_file.encryption_key);
-		}
-		file_info.extended_info = std::move(extended_info);
-
-		vector<OpenFileInfo> files;
-		files.push_back(std::move(file_info));
-		file_list = make_shared_ptr<SimpleMultiFileList>(std::move(files));
-	}
-
-	shared_ptr<MultiFileList> CreateFileList(ClientContext &context, const vector<string> &paths,
-	                                         const FileGlobInput &options) override {
-		return file_list;
-	}
-
-private:
-	shared_ptr<MultiFileList> file_list;
-};
 
 DuckLakeDeleteFilter::DuckLakeDeleteFilter() : delete_data(make_shared_ptr<DuckLakeDeleteData>()) {
 }
@@ -190,13 +147,6 @@ DeleteFileScanResult DuckLakeDeleteFilter::ScanDeletionVectorFile(ClientContext 
 	return result;
 }
 
-unique_ptr<ExpressionFilter> MakeComparisonFilter(ExpressionType comparison_type, Value constant) {
-	auto col_ref = make_uniq<BoundReferenceExpression>(LogicalType::BIGINT, storage_t(0));
-	auto bound_constant = make_uniq<BoundConstantExpression>(std::move(constant));
-	auto comparison = BoundComparisonExpression::Create(comparison_type, std::move(col_ref), std::move(bound_constant));
-	return make_uniq<ExpressionFilter>(std::move(comparison));
-}
-
 DeleteFileScanResult DuckLakeDeleteFilter::ScanDeleteFile(ClientContext &context, const DuckLakeFileData &delete_file,
                                                           optional_idx snapshot_filter_min,
                                                           optional_idx snapshot_filter_max) {
@@ -205,11 +155,7 @@ DeleteFileScanResult DuckLakeDeleteFilter::ScanDeleteFile(ClientContext &context
 		return ScanDeletionVectorFile(context, delete_file, snapshot_filter_min, snapshot_filter_max);
 	}
 
-	// Set up custom MultiFileReader to avoid HEAD requests
-	auto function_info = make_shared_ptr<DeleteFileFunctionInfo>();
-	function_info->file_data = delete_file;
-	ParquetFileScanner scanner(context, delete_file, DeleteFileMultiFileReader::CreateInstance,
-	                           std::move(function_info));
+	ParquetFileScanner scanner(context, delete_file, true);
 
 	auto &return_types = scanner.GetTypes();
 	auto &return_names = scanner.GetNames();
@@ -246,13 +192,15 @@ DeleteFileScanResult DuckLakeDeleteFilter::ScanDeleteFile(ClientContext &context
 
 		if (snapshot_filter_min.IsValid()) {
 			auto min_constant = Value::BIGINT(NumericCast<int64_t>(snapshot_filter_min.GetIndex()));
-			filters->PushFilter(snapshot_col_idx, MakeComparisonFilter(ExpressionType::COMPARE_GREATERTHANOREQUALTO,
-			                                                           std::move(min_constant)));
+			filters->PushFilter(snapshot_col_idx,
+			                    ExpressionFilter::CreateComparisonFilter(ExpressionType::COMPARE_GREATERTHANOREQUALTO,
+			                                                             std::move(min_constant)));
 		}
 		if (snapshot_filter_max.IsValid()) {
 			auto max_constant = Value::BIGINT(NumericCast<int64_t>(snapshot_filter_max.GetIndex()));
-			filters->PushFilter(snapshot_col_idx, MakeComparisonFilter(ExpressionType::COMPARE_LESSTHANOREQUALTO,
-			                                                           std::move(max_constant)));
+			filters->PushFilter(snapshot_col_idx,
+			                    ExpressionFilter::CreateComparisonFilter(ExpressionType::COMPARE_LESSTHANOREQUALTO,
+			                                                             std::move(max_constant)));
 		}
 		scanner.SetFilters(std::move(filters));
 	}
@@ -318,6 +266,9 @@ void DuckLakeDeleteFilter::Initialize(const DuckLakeInlinedDataDeletes &inlined_
 		}
 		std::inplace_merge(delete_data->deleted_rows.begin(), delete_data->deleted_rows.begin() + mid_idx,
 		                   delete_data->deleted_rows.end());
+		// a row can be deleted in both stores
+		delete_data->deleted_rows.erase(std::unique(delete_data->deleted_rows.begin(), delete_data->deleted_rows.end()),
+		                                delete_data->deleted_rows.end());
 		return;
 	}
 
@@ -339,6 +290,11 @@ void DuckLakeDeleteFilter::Initialize(const DuckLakeInlinedDataDeletes &inlined_
 			lhs_row_it++;
 			lhs_snapshot_it++;
 		} else {
+			if (lhs_row_it != delete_data->deleted_rows.end() && *lhs_row_it == *rhs_row_it) {
+				// the inlined delete is visible, so it replaces the delete of the same row
+				lhs_row_it++;
+				lhs_snapshot_it++;
+			}
 			merged_rows.push_back(*rhs_row_it);
 			merged_snapshot_ids.push_back(0);
 			rhs_row_it++;

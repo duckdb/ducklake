@@ -1,44 +1,27 @@
 name: Forward PR events to pr-tracker
 
+# Thin caller. All forwarding logic lives in the shared composite action
+# (duckdb/duckdb-ci/pr-tracker/forward), so changes there reach every tracked repo
+# with no per-repo edit. Only the triggers below and the token are per-repo — keep
+# the trigger list a generous superset so this file rarely needs to change.
+
 on:
   pull_request_target:
     types: [opened, reopened, ready_for_review, converted_to_draft, closed, labeled, unlabeled, review_requested]
   issue_comment:
     types: [created]
+  check_suite:
+    types: [completed]
+  status:
 
 permissions:
   contents: read
 
 jobs:
   forward:
-    # issue_comment fires for issues too — only forward comments on PRs. Other
-    # event kinds carry no issue payload, so this guard passes them through.
     if: ${{ github.event_name != 'issue_comment' || github.event.issue.pull_request != null }}
     runs-on: ubuntu-latest
     steps:
-      - name: Dispatch to pr-tracker
-        env:
-          GH_TOKEN: ${{ secrets.PR_DISPATCH_TOKEN }}
-          EVENT_KIND: ${{ github.event_name }}
-          EVENT_ACTION: ${{ github.event.action }}
-          REPO: ${{ github.repository }}
-          # PR events carry pull_request.number; an issue_comment on a PR carries
-          # it as issue.number.
-          PR_NUMBER: ${{ github.event.pull_request.number || github.event.issue.number }}
-          # Present only on labeled/unlabeled; empty otherwise.
-          LABEL: ${{ github.event.label.name }}
-          # Present only on issue_comment; empty otherwise.
-          COMMENTER: ${{ github.event.comment.user.login }}
-        run: |
-          jq -n \
-            --arg event "$EVENT_KIND" \
-            --arg action "$EVENT_ACTION" \
-            --arg repo "$REPO" \
-            --argjson number "$PR_NUMBER" \
-            --arg label "$LABEL" \
-            --arg commenter "$COMMENTER" \
-            '{event_type: "pr-event", client_payload: {
-               event: $event, action: $action, repo: $repo, number: $number,
-               label: $label, commenter: $commenter
-             }}' \
-          | gh api -X POST /repos/duckdblabs/pr-tracker/dispatches --input -
+      - uses: duckdb/duckdb-ci/pr-tracker/forward@main
+        with:
+          token: ${{ secrets.PR_DISPATCH_TOKEN }}

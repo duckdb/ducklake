@@ -1,5 +1,6 @@
 #include "storage/ducklake_inline_data.hpp"
 #include "storage/ducklake_stats.hpp"
+#include "common/ducklake_types.hpp"
 
 #include "duckdb/common/type_visitor.hpp"
 #include "storage/ducklake_insert.hpp"
@@ -55,11 +56,7 @@ public:
 			target = std::move(source);
 			return;
 		}
-		ColumnDataAppendState append_state;
-		target->InitializeAppend(append_state);
-		for (auto &chunk : source->Chunks()) {
-			target->Append(append_state, chunk);
-		}
+		target->Append(*source);
 	}
 
 	const DuckLakeInlineData &op;
@@ -272,7 +269,7 @@ void UpdateStats(vector<DuckLakeBaseColumnStats> &stats, idx_t c, Vector &data, 
 	}
 	auto &column_stats = stats[c];
 	auto &type = data.GetType();
-	if (type.IsNested() && type.id() != LogicalTypeId::VARIANT) {
+	if (DuckLakeTypes::IsNested(type)) {
 		// nested - recurse into children
 		switch (data.GetType().id()) {
 		case LogicalTypeId::STRUCT: {
@@ -371,8 +368,7 @@ OperatorFinalResultType DuckLakeInlineData::OperatorFinalize(Pipeline &pipeline,
 		if (column_stats.stats.null_count > 0) {
 			auto column_name = table.GetColumn(LogicalIndex(c)).GetName();
 			if (not_null_fields.count(column_name.GetIdentifierName())) {
-				throw ConstraintException("NOT NULL constraint failed: %s.%s", SQLIdentifier(table.name),
-				                          SQLIdentifier(column_name));
+				table.ThrowNotNullViolation(column_name.GetIdentifierName());
 			}
 		}
 	}
@@ -384,14 +380,8 @@ OperatorFinalResultType DuckLakeInlineData::OperatorFinalize(Pipeline &pipeline,
 		ColumnDataAppendState append_state;
 		phys_data->InitializeAppend(append_state);
 		for (auto &chunk : inlined_data.Chunks()) {
-			// extract row_ids from the row_id column
-			auto &row_id_vec = chunk.data[physical_col_count];
-			UnifiedVectorFormat row_id_format;
-			row_id_vec.ToUnifiedFormat(row_id_format);
-			auto row_id_data = UnifiedVectorFormat::GetData<int64_t>(row_id_format);
-			for (idx_t r = 0; r < chunk.size(); r++) {
-				auto idx = row_id_format.sel->get_index(r);
-				result->row_ids.push_back(row_id_data[idx]);
+			for (auto row_id : chunk.data[physical_col_count].Values<int64_t>()) {
+				result->row_ids.push_back(row_id.GetValueUnsafe());
 			}
 			DataChunk phys_chunk;
 			phys_chunk.InitializeEmpty(phys_types);

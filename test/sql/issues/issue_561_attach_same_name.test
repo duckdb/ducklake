@@ -1,0 +1,108 @@
+# name: test/sql/issues/issue_561_attach_same_name.test
+# description: A rejected or concurrent attach under the name of an attached DuckLake leaves it usable
+# group: [issues]
+
+require ducklake
+
+require parquet
+
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/issue_561_x.db' AS dl (DATA_PATH '{TEST_DIR}/issue_561_x')
+
+statement ok
+CREATE TABLE dl.t AS SELECT 42 AS i
+
+# another DuckLake under the same name is rejected without touching the attached one
+statement error
+ATTACH 'ducklake:{TEST_DIR}/issue_561_y.db' AS dl (DATA_PATH '{TEST_DIR}/issue_561_y')
+----
+already exists
+
+query I
+SELECT i FROM dl.t
+----
+42
+
+# a DuckLake replacing another one under the same name keeps its own metadata catalog
+statement ok
+ATTACH OR REPLACE 'ducklake:{TEST_DIR}/issue_561_y.db' AS dl (DATA_PATH '{TEST_DIR}/issue_561_y')
+
+statement ok
+CREATE TABLE dl.u AS SELECT 7 AS j
+
+query I
+SELECT j FROM dl.u
+----
+7
+
+# a second name for the same DuckLake shares its metadata catalog, detaching it keeps the catalog attached
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/issue_561_y.db' AS dl2 (METADATA_CATALOG '__ducklake_metadata_dl')
+
+statement ok
+DETACH dl2
+
+query I
+SELECT j FROM dl.u
+----
+7
+
+statement ok
+DETACH dl
+
+# concurrent attaches of the same DuckLake leave one usable attach
+concurrentloop i 0 8
+
+statement maybe
+ATTACH IF NOT EXISTS 'ducklake:{TEST_DIR}/issue_561_x.db' AS dl (DATA_PATH '{TEST_DIR}/issue_561_x')
+----
+already exists
+
+endloop
+
+statement ok
+INSERT INTO dl.t VALUES (43)
+
+query I
+SELECT sum(i) FROM dl.t
+----
+85
+
+# a replacement that fails keeps the attached DuckLake registered
+statement error
+ATTACH OR REPLACE 'ducklake:{TEST_DIR}/issue_561_missing/z.db' AS dl (DATA_PATH '{TEST_DIR}/issue_561_z')
+----
+Failed to attach DuckLake MetaData
+
+statement error
+ATTACH 'ducklake:{TEST_DIR}/issue_561_z.db' AS dl (DATA_PATH '{TEST_DIR}/issue_561_z')
+----
+already exists
+
+query I
+SELECT sum(i) FROM dl.t
+----
+85
+
+# a renamed DuckLake keeps its metadata catalog
+statement ok
+ALTER DATABASE dl SET ALIAS TO dl_renamed
+
+statement error
+ATTACH 'ducklake:{TEST_DIR}/issue_561_z.db' AS dl (DATA_PATH '{TEST_DIR}/issue_561_z')
+----
+is already used by database "dl_renamed"
+
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/issue_561_z.db' AS dl (DATA_PATH '{TEST_DIR}/issue_561_z', METADATA_CATALOG 'issue_561_z_meta')
+
+# another DuckLake cannot use the same metadata catalog
+statement error
+ATTACH 'ducklake:{TEST_DIR}/issue_561_w.db' AS w (DATA_PATH '{TEST_DIR}/issue_561_w', METADATA_CATALOG 'issue_561_z_meta')
+----
+is already used by database "dl"
+
+query I
+SELECT sum(i) FROM dl_renamed.t
+----
+85

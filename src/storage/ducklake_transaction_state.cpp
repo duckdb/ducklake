@@ -1,5 +1,6 @@
 #include "storage/ducklake_transaction_state.hpp"
 #include "duckdb/common/operator/cast_operators.hpp"
+#include "duckdb/common/type_visitor.hpp"
 
 #include "common/ducklake_types.hpp"
 #include "common/ducklake_util.hpp"
@@ -70,6 +71,15 @@ bool DuckLakeTransactionState::SchemaChangesMade() const {
 	return !new_tables.empty() || !dropped_tables.empty() || new_schemas || !dropped_schemas.empty() ||
 	       !dropped_views.empty() || !renamed_views.empty() || !new_scalar_macros.empty() ||
 	       !new_table_macros.empty() || !dropped_scalar_macros.empty() || !dropped_table_macros.empty();
+}
+
+bool DuckLakeTransactionState::InlinedTableFlushed(const string &table_name) const {
+	for (auto &flushed_table : flushed_inlined_tables) {
+		if (flushed_table.inlined_table.table_name == table_name) {
+			return true;
+		}
+	}
+	return false;
 }
 
 namespace {
@@ -177,7 +187,7 @@ void ConflictCheck(const case_insensitive_map_t<reference_set_t<CatalogEntry>> &
 void DuckLakeTransactionState::CheckForConflicts(const TransactionChangeInformation &changes,
                                                  const SnapshotChangeInformation &other_changes,
                                                  DuckLakeSnapshot transaction_snapshot,
-                                                 const std::function<unique_ptr<QueryResult>(string)> &executor) const {
+                                                 const DuckLakeCommitContext &context) const {
 	// check if we are dropping the same table as another transaction
 	for (auto &dropped_idx : changes.dropped_tables) {
 		ConflictCheck(dropped_idx, other_changes.dropped_tables, "drop table", "dropped it already");
@@ -280,31 +290,7 @@ void DuckLakeTransactionState::CheckForConflicts(const TransactionChangeInformat
 		ConflictCheck(table_id, other_changes.inserted_tables, "delete from table", "inserted into it");
 		ConflictCheck(table_id, other_changes.tables_inserted_inlined, "delete from table", "inserted into it");
 	}
-	if (!changes.tables_deleted_from.empty()) {
-		bool check_for_matches = false;
-		for (auto &table_id : changes.tables_deleted_from) {
-			if (other_changes.tables_deleted_from.find(table_id) != other_changes.tables_deleted_from.end()) {
-				check_for_matches = true;
-				break;
-			}
-		}
-		if (check_for_matches) {
-			// If we have deletes on the tables, check for files being deleted
-			const auto deleted_files = GetFilesDeletedOrDroppedAfterSnapshot(executor);
-			for (auto &entry : local_changes.Changes()) {
-				auto &table_changes = entry.GetTableChanges();
-				for (auto &file_entry : table_changes.new_delete_files) {
-					for (auto &file : file_entry.second) {
-						ConflictCheck(file.data_file_id, deleted_files.deleted_from_files, "delete from file",
-						              "deleted from it");
-					}
-				}
-			}
-			for (auto &file : dropped_files) {
-				ConflictCheck(file.second, deleted_files.deleted_from_files, "delete from file", "deleted from it");
-			}
-		}
-	}
+	CheckDeletedFileConflicts(changes, other_changes, context);
 	for (auto &table_id : changes.tables_deleted_inlined) {
 		ConflictCheck(table_id, other_changes.dropped_tables, "delete from table", "dropped it");
 		ConflictCheck(table_id, other_changes.altered_tables, "delete from table", "altered it");
@@ -351,16 +337,23 @@ void DuckLakeTransactionState::CheckForConflicts(const TransactionChangeInformat
 namespace {
 
 template <class T>
-void AddChangeInfo(DuckLakeCommitState &commit_state, SnapshotChangeInfo &change_info, const set<T> &changes,
-                   const char *change_type) {
+void AddChangeInfo(DuckLakeCommitState &commit_state, vector<string> &changes_made, const set<T> &changes,
+                   const string &change_type) {
 	for (auto &entry : changes) {
-		if (!change_info.changes_made.empty()) {
-			change_info.changes_made += ",";
+		changes_made.push_back(change_type + ":" + to_string(commit_state.GetTableId(entry).index));
+	}
+}
+
+void AddCreatedChangeInfo(vector<string> &changes_made,
+                          const case_insensitive_map_t<reference_set_t<CatalogEntry>> &created_entries,
+                          const string &change_type) {
+	for (auto &entry : created_entries) {
+		for (auto &created_entry : entry.second) {
+			auto &catalog_entry = created_entry.get();
+			auto entry_type = catalog_entry.type == CatalogType::VIEW_ENTRY ? "created_view" : change_type;
+			changes_made.push_back(entry_type + ":" + entry.first + "." +
+			                       SQLQuotedIdentifier::ToString(catalog_entry.name.GetIdentifierName()));
 		}
-		auto id = commit_state.GetTableId(entry);
-		change_info.changes_made += change_type;
-		change_info.changes_made += ":";
-		change_info.changes_made += to_string(id.index);
 	}
 }
 
@@ -369,97 +362,44 @@ void AddChangeInfo(DuckLakeCommitState &commit_state, SnapshotChangeInfo &change
 string DuckLakeTransactionState::WriteSnapshotChanges(DuckLakeCommitState &commit_state,
                                                       TransactionChangeInformation &changes,
                                                       const DuckLakeSnapshotCommit &commit_info) const {
-	SnapshotChangeInfo change_info;
-
 	// re-add all inserted tables - transaction-local table identifiers should have been converted at this stage
 	changes.tables_deleted_from = tables_deleted_from;
 	for (auto &entry : local_changes.Changes()) {
-		auto table_id = commit_state.GetTableId(entry.GetTableIndex());
-		auto &table_changes = entry.GetTableChanges();
-		DuckLakeTransaction::AddTableChanges(table_id, table_changes, changes);
+		DuckLakeTransaction::AddTableChanges(commit_state.GetTableId(entry.first), entry.second, changes);
 	}
+	vector<string> changes_made;
 	for (auto &entry : changes.dropped_schemas) {
-		if (!change_info.changes_made.empty()) {
-			change_info.changes_made += ",";
-		}
-		auto schema_id = entry.first.index;
-		change_info.changes_made += "dropped_schema:";
-		change_info.changes_made += to_string(schema_id);
+		changes_made.push_back("dropped_schema:" + to_string(entry.first.index));
 	}
-	AddChangeInfo(commit_state, change_info, changes.dropped_tables, "dropped_table");
-	AddChangeInfo(commit_state, change_info, changes.dropped_views, "dropped_view");
+	AddChangeInfo(commit_state, changes_made, changes.dropped_tables, "dropped_table");
+	AddChangeInfo(commit_state, changes_made, changes.dropped_views, "dropped_view");
 	for (auto &created_schema : changes.created_schemas) {
-		if (!change_info.changes_made.empty()) {
-			change_info.changes_made += ",";
-		}
-		change_info.changes_made += "created_schema:";
-		change_info.changes_made += created_schema.first;
+		changes_made.push_back("created_schema:" + created_schema.first);
 	}
-	for (auto &entry : changes.created_tables) {
-		auto schema_prefix = entry.first + ".";
-		for (auto &created_table : entry.second) {
-			if (!change_info.changes_made.empty()) {
-				change_info.changes_made += ",";
-			}
-			auto is_view = created_table.get().type == CatalogType::VIEW_ENTRY;
-			change_info.changes_made += is_view ? "created_view:" : "created_table:";
-			change_info.changes_made +=
-			    schema_prefix + DuckLakeUtil::SQLIdentifierToString(created_table.get().name.GetIdentifierName());
-		}
-	}
-
-	for (auto &entry : changes.created_scalar_macros) {
-		auto schema_prefix = entry.first + ".";
-		for (auto &created_macro : entry.second) {
-			if (!change_info.changes_made.empty()) {
-				change_info.changes_made += ",";
-			}
-			change_info.changes_made += "created_scalar_macro:";
-			change_info.changes_made +=
-			    schema_prefix + DuckLakeUtil::SQLIdentifierToString(created_macro.get().name.GetIdentifierName());
-		}
-	}
-	for (auto &entry : changes.created_table_macros) {
-		auto schema_prefix = entry.first + ".";
-		for (auto &created_macro : entry.second) {
-			if (!change_info.changes_made.empty()) {
-				change_info.changes_made += ",";
-			}
-			change_info.changes_made += "created_table_macro:";
-			change_info.changes_made +=
-			    schema_prefix + DuckLakeUtil::SQLIdentifierToString(created_macro.get().name.GetIdentifierName());
-		}
-	}
-
+	AddCreatedChangeInfo(changes_made, changes.created_tables, "created_table");
+	AddCreatedChangeInfo(changes_made, changes.created_scalar_macros, "created_scalar_macro");
+	AddCreatedChangeInfo(changes_made, changes.created_table_macros, "created_table_macro");
 	for (auto &entry : changes.dropped_scalar_macros) {
-		if (!change_info.changes_made.empty()) {
-			change_info.changes_made += ",";
-		}
-		change_info.changes_made += "dropped_scalar_macro:";
-		change_info.changes_made += to_string(entry.index);
+		changes_made.push_back("dropped_scalar_macro:" + to_string(entry.index));
 	}
-
 	for (auto &entry : changes.dropped_table_macros) {
-		if (!change_info.changes_made.empty()) {
-			change_info.changes_made += ",";
-		}
-		change_info.changes_made += "dropped_table_macro:";
-		change_info.changes_made += to_string(entry.index);
+		changes_made.push_back("dropped_table_macro:" + to_string(entry.index));
 	}
-
-	AddChangeInfo(commit_state, change_info, changes.tables_inserted_into, "inserted_into_table");
-	AddChangeInfo(commit_state, change_info, changes.tables_deleted_from, "deleted_from_table");
-	AddChangeInfo(commit_state, change_info, changes.altered_tables, "altered_table");
-	AddChangeInfo(commit_state, change_info, changes.altered_views, "altered_view");
-	AddChangeInfo(commit_state, change_info, changes.tables_inserted_inlined, "inlined_insert");
-	AddChangeInfo(commit_state, change_info, changes.tables_deleted_inlined, "inlined_delete");
-	AddChangeInfo(commit_state, change_info, changes.tables_flushed_inlined, "inline_flush");
+	AddChangeInfo(commit_state, changes_made, changes.tables_inserted_into, "inserted_into_table");
+	AddChangeInfo(commit_state, changes_made, changes.tables_deleted_from, "deleted_from_table");
+	AddChangeInfo(commit_state, changes_made, changes.altered_tables, "altered_table");
+	AddChangeInfo(commit_state, changes_made, changes.altered_views, "altered_view");
+	AddChangeInfo(commit_state, changes_made, changes.tables_inserted_inlined, "inlined_insert");
+	AddChangeInfo(commit_state, changes_made, changes.tables_deleted_inlined, "inlined_delete");
+	AddChangeInfo(commit_state, changes_made, changes.tables_flushed_inlined, "inline_flush");
 	bool has_compaction = !changes.tables_merge_adjacent.empty() || !changes.tables_rewrite_delete.empty();
-	if (has_compaction && !change_info.changes_made.empty()) {
+	if (has_compaction && !changes_made.empty()) {
 		throw InvalidInputException("Transactions can either make changes OR perform compaction - not both");
 	}
-	AddChangeInfo(commit_state, change_info, changes.tables_merge_adjacent, "merge_adjacent");
-	AddChangeInfo(commit_state, change_info, changes.tables_rewrite_delete, "rewrite_delete");
+	AddChangeInfo(commit_state, changes_made, changes.tables_merge_adjacent, "merge_adjacent");
+	AddChangeInfo(commit_state, changes_made, changes.tables_rewrite_delete, "rewrite_delete");
+	SnapshotChangeInfo change_info;
+	change_info.changes_made = StringUtil::Join(changes_made, ",");
 	return DuckLakeMetadataManager::WriteSnapshotChangesSql(change_info, commit_info);
 }
 
@@ -531,6 +471,18 @@ void HandleChangedFields(TableIndex table_id, const ColumnChangeInfo &change_inf
 	}
 }
 
+//! DuckLake types carry no child types, so nested types are stored as types of the macro dialect
+static string MacroParameterTypeToString(const LogicalType &type) {
+	if (!DuckLakeTypes::IsNested(type)) {
+		return DuckLakeTypes::ToString(type);
+	}
+	// child types are stored as DuckLake types so they can be bound without a connection
+	auto ducklake_type = TypeVisitor::VisitReplace(type, [](const LogicalType &child) {
+		return DuckLakeTypes::IsNested(child) ? child : DuckLakeTypes::FromString(DuckLakeTypes::ToString(child));
+	});
+	return ducklake_type.ToString();
+}
+
 void GetNewMacroInfo(DuckLakeCommitState &commit_state, reference<CatalogEntry> entry, NewMacroInfo &result) {
 	DuckLakeMacroInfo new_macro_info;
 	auto &macro_entry = entry.get().Cast<MacroCatalogEntry>();
@@ -563,21 +515,17 @@ void GetNewMacroInfo(DuckLakeCommitState &commit_state, reference<CatalogEntry> 
 		for (idx_t i = 0; i < impl->parameters.size(); i++) {
 			DuckLakeMacroParameters parameter;
 			parameter.parameter_name = impl->parameters[i]->GetName().GetIdentifierName();
-			parameter.parameter_type = DuckLakeTypes::ToString(impl->types[i]);
+			parameter.parameter_type = MacroParameterTypeToString(impl->types[i]);
 			auto default_it = impl->default_parameters.find(Identifier(parameter.parameter_name));
 			if (default_it != impl->default_parameters.end()) {
 				Value default_value;
-				if (!DuckLakeUtil::TryGetLiteralValue(*default_it->second, default_value)) {
-					throw NotImplementedException("Non-constant default value for macro parameter \"%s\"",
-					                              parameter.parameter_name);
+				if (DuckLakeUtil::TryGetMacroDefaultLiteral(*default_it->second, default_value)) {
+					parameter.default_value = default_value.ToString();
+					parameter.default_value_type = DuckLakeTypes::ToString(default_value.type());
+				} else {
+					parameter.default_value = default_it->second->ToString();
+					parameter.default_value_type = "expression";
 				}
-				auto default_type = default_value.type();
-				if (default_value.IsNull() && (DuckLakeTypes::IsStringType(default_type) || default_type.IsNested())) {
-					// the text NULL is a valid string and nested types are stored without their children
-					default_type = LogicalType::SQLNULL;
-				}
-				parameter.default_value = default_value.ToString();
-				parameter.default_value_type = DuckLakeTypes::ToString(default_type);
 			} else {
 				parameter.default_value_type = "unknown";
 			}
@@ -655,8 +603,8 @@ DuckLakeTransactionState::GetNewDeleteFiles(const DuckLakeCommitState &commit_st
 	vector<DuckLakeDeleteFileInfo> result;
 	// handle delete files made to existing files
 	for (auto &entry : local_changes.Changes()) {
-		auto table_id = commit_state.GetTableId(entry.GetTableIndex());
-		auto &table_changes = entry.GetTableChanges();
+		auto table_id = commit_state.GetTableId(entry.first);
+		auto &table_changes = entry.second;
 		for (auto &file_entry : table_changes.new_delete_files) {
 			for (auto &file : file_entry.second) {
 				if (file.overwritten_delete_file.delete_file_id.IsValid()) {
@@ -688,8 +636,8 @@ vector<DuckLakeDeletedInlinedDataInfo>
 DuckLakeTransactionState::GetNewInlinedDeletes(DuckLakeCommitState &commit_state) const {
 	vector<DuckLakeDeletedInlinedDataInfo> result;
 	for (auto &entry : local_changes.Changes()) {
-		auto table_id = commit_state.GetTableId(entry.GetTableIndex());
-		auto &table_changes = entry.GetTableChanges();
+		auto table_id = commit_state.GetTableId(entry.first);
+		auto &table_changes = entry.second;
 		for (auto &delete_entry : table_changes.new_inlined_data_deletes) {
 			DuckLakeDeletedInlinedDataInfo info;
 			info.table_id = table_id;
@@ -707,8 +655,8 @@ vector<DuckLakeInlinedFileDeletionInfo>
 DuckLakeTransactionState::GetNewInlinedFileDeletes(DuckLakeCommitState &commit_state) {
 	vector<DuckLakeInlinedFileDeletionInfo> result;
 	for (auto &entry : local_changes.Changes()) {
-		auto table_id = commit_state.GetTableId(entry.GetTableIndex());
-		auto &table_changes = entry.GetTableChanges();
+		auto table_id = commit_state.GetTableId(entry.first);
+		auto &table_changes = entry.second;
 		if (!table_changes.new_inlined_file_deletes) {
 			continue;
 		}
@@ -729,8 +677,8 @@ CompactionInformation DuckLakeTransactionState::GetCompactionChanges(DuckLakeCom
 	auto &commit_snapshot = commit_state.commit_snapshot;
 	CompactionInformation result;
 	for (auto &entry : local_changes.Changes()) {
-		auto table_id = entry.GetTableIndex();
-		auto &table_changes = entry.GetTableChanges();
+		auto table_id = entry.first;
+		auto &table_changes = entry.second;
 		for (auto &compaction : table_changes.compactions) {
 			if (type != compaction.type) {
 				continue;
@@ -801,7 +749,7 @@ CompactionInformation DuckLakeTransactionState::GetCompactionChanges(DuckLakeCom
 				DuckLakeCompactedFileInfo file_info;
 				file_info.path = compacted_file.file.data.path;
 				file_info.source_id = compacted_file.file.id;
-				file_info.table_index = entry.GetTableIndex();
+				file_info.table_index = table_id;
 				file_info.rewrite_snapshot = commit_snapshot.snapshot_id;
 				if (has_new_files) {
 					file_info.new_id = DataFileIndex(first_new_id.GetIndex());
@@ -856,32 +804,28 @@ bool DuckLakeTransactionState::TryMergeInlinedStats(const vector<DuckLakeColumnS
 		// Build one aggregate query: COUNT(*) followed by (MIN, MAX, COUNT(col), nan-flag) per column.
 		string select_list = "COUNT(*)";
 		for (auto &col : columns) {
-			auto col_ident = DuckLakeUtil::SQLIdentifierToString(col.column_name);
-			bool is_float =
-			    col.column_type.id() == LogicalTypeId::FLOAT || col.column_type.id() == LogicalTypeId::DOUBLE;
+			auto col_ident = SQLQuotedIdentifier::ToString(col.column_name);
+			bool is_float = col.column_type.IsFloating();
 			string nan_expr =
 			    is_float ? StringUtil::Format("COALESCE(BOOL_OR(isnan(%s)), false)", col_ident) : string("false");
 			select_list += StringUtil::Format(", MIN(%s)::VARCHAR, MAX(%s)::VARCHAR, COUNT(%s), %s", col_ident,
 			                                  col_ident, col_ident, nan_expr);
 		}
 		auto sql = DuckLakeMetadataManager::ReadInlinedDataAggregatesSql(
-		    DuckLakeUtil::SQLIdentifierToString(inlined_table_name), select_list, context.InlinedColNames());
+		    SQLQuotedIdentifier::ToString(inlined_table_name), select_list, context.InlinedColNames());
 		auto result = context.query_metadata_with_snapshot(snapshot, sql);
-		if (result->HasError()) {
-			result->GetErrorObject().Throw("Failed to read inlined-data aggregates from DuckLake: ");
-		}
+		result->ThrowIfError("Failed to read inlined-data aggregates from DuckLake: ");
 		for (auto &row : *result) {
-			auto total = static_cast<idx_t>(row.template GetValue<int64_t>(0));
+			auto total = static_cast<idx_t>(row.GetValue<int64_t>(0));
 			if (total == 0) {
 				break;
 			}
 			idx_t col_offset = 1;
 			for (auto &col : columns) {
-				bool is_float =
-				    col.column_type.id() == LogicalTypeId::FLOAT || col.column_type.id() == LogicalTypeId::DOUBLE;
-				bool contains_nan = !row.IsNull(col_offset + 3) && row.template GetValue<bool>(col_offset + 3);
+				bool is_float = col.column_type.IsFloating();
+				bool contains_nan = !row.IsNull(col_offset + 3) && row.GetValue<bool>(col_offset + 3);
 				DuckLakeColumnStats col_stats(col.column_type);
-				auto non_null = static_cast<idx_t>(row.template GetValue<int64_t>(col_offset + 2));
+				auto non_null = static_cast<idx_t>(row.GetValue<int64_t>(col_offset + 2));
 				col_stats.has_num_values = true;
 				col_stats.num_values = total;
 				col_stats.has_null_count = true;
@@ -894,12 +838,12 @@ bool DuckLakeTransactionState::TryMergeInlinedStats(const vector<DuckLakeColumnS
 				if (!(is_float && contains_nan)) {
 					if (!row.IsNull(col_offset + 0)) {
 						col_stats.has_min = true;
-						col_stats.min = row.template GetValue<string>(col_offset + 0);
+						col_stats.min = row.GetValue<string>(col_offset + 0);
 						col_stats.min_is_exact = true;
 					}
 					if (!row.IsNull(col_offset + 1)) {
 						col_stats.has_max = true;
-						col_stats.max = row.template GetValue<string>(col_offset + 1);
+						col_stats.max = row.GetValue<string>(col_offset + 1);
 						col_stats.max_is_exact = true;
 					}
 				}
@@ -921,9 +865,7 @@ static set<FieldIndex> ReadSkippedStatsFields(TableIndex table_id, const DuckLak
 	                                "WHERE key='skip_stats_columns' AND scope='table' AND scope_id=%d;",
 	                                table_id.index);
 	auto stats_option = context.query_metadata(query);
-	if (stats_option->HasError()) {
-		stats_option->GetErrorObject().Throw("Failed to read the skip_stats_columns option from DuckLake: ");
-	}
+	stats_option->ThrowIfError("Failed to read the skip_stats_columns option from DuckLake: ");
 	for (auto &row : *stats_option) {
 		if (row.IsNull(0)) {
 			continue;
@@ -968,9 +910,7 @@ void DuckLakeTransactionState::RecomputeGlobalStatsAfterRewrite(string &batch_qu
 	// 1. Merge the per-file stats of the post-rewrite parquet files = (pre-commit visible files - removed) + new files.
 	auto result = context.query_metadata_with_snapshot(
 	    snapshot, DuckLakeMetadataManager::ReadFileColumnStatsForTableSql(table_id, context.supports_v1_1_metadata));
-	if (result->HasError()) {
-		result->GetErrorObject().Throw("Failed to read per-file column stats for rewrite from DuckLake: ");
-	}
+	result->ThrowIfError("Failed to read per-file column stats for rewrite from DuckLake: ");
 	bool has_exactness = DuckLakeMetadataManager::ResultHasColumn(*result, "min_is_exact");
 	bool have_file = false;
 	idx_t last_file_id = 0;
@@ -1113,8 +1053,10 @@ bool DuckLakeTransactionState::ApplyDroppedFileStats(
 	}
 	auto &stats = new_stats.stats;
 	auto dropped_stats = entry->second;
-	stats.record_count = SubtractDroppedFileStat(stats.record_count, dropped_stats.row_count);
-	bool live_rows_remain = stats.record_count > 0;
+	if (!stats.record_count_unknown) {
+		stats.record_count = SubtractDroppedFileStat(stats.record_count, dropped_stats.row_count);
+	}
+	bool live_rows_remain = stats.record_count_unknown || stats.record_count > 0;
 	if (live_rows_remain) {
 		stats.table_size_bytes = SubtractDroppedFileStat(stats.table_size_bytes, dropped_stats.file_size_bytes);
 	} else {
@@ -1195,11 +1137,11 @@ NewDataInfo DuckLakeTransactionState::GetNewDataFiles(
 		dl_stats = context.build_stats_map(*stats);
 	}
 	for (auto &entry : local_changes.Changes()) {
-		auto table_id = commit_state.GetTableId(entry.GetTableIndex());
+		auto table_id = commit_state.GetTableId(entry.first);
 		if (IsTransactionLocal(table_id)) {
 			throw InternalException("Cannot commit transaction local files - these should have been cleaned up before");
 		}
-		auto &table_changes = entry.GetTableChanges();
+		auto &table_changes = entry.second;
 		if (table_changes.new_data_files.empty() && !table_changes.new_inlined_data) {
 			// no new data - skip this entry
 			continue;
@@ -1420,6 +1362,10 @@ void DuckLakeTransactionState::GetNewTableInfo(DuckLakeCommitState &commit_state
 		case LocalChangeType::DROP_NULL:
 		case LocalChangeType::RENAME_COLUMN:
 		case LocalChangeType::SET_DEFAULT: {
+			if (local_change.type == LocalChangeType::DROP_NULL) {
+				// rows that are NULL in this column may only be inlined under the new schema version
+				column_schema_change = true;
+			}
 			auto &remaining = field_alter_remaining[local_change.field_index];
 			remaining--;
 			// This is an older thus superseded entry for a field that is altered for multiple times in this
@@ -1689,9 +1635,10 @@ vector<DuckLakeSchemaInfo> DuckLakeTransactionState::GetNewSchemas(DuckLakeCommi
 	for (auto &entry : new_schemas->GetEntries()) {
 		ordered_schemas.push_back(entry.second->Cast<DuckLakeSchemaEntry>());
 	}
+	// a child's path key extends its parent's, so shorter keys sort parents first
 	std::stable_sort(ordered_schemas.begin(), ordered_schemas.end(),
 	                 [](const reference<DuckLakeSchemaEntry> &a, const reference<DuckLakeSchemaEntry> &b) {
-		                 return a.get().SchemaDepth() < b.get().SchemaDepth();
+		                 return a.get().PathKey().size() < b.get().PathKey().size();
 	                 });
 	for (auto &schema_ref : ordered_schemas) {
 		auto &schema_entry = schema_ref.get();
@@ -1860,12 +1807,6 @@ string DuckLakeTransactionState::CommitChanges(DuckLakeCommitState &commit_state
 		                                            new_inlined_data_tables_result);
 	}
 
-	// in case of a retry, we generate the deletion of inlined data from the tables
-	if (!flushed_inlined_tables.empty()) {
-		batch_queries += DuckLakeMetadataManager::GenerateDeleteFlushedInlinedData(flushed_inlined_tables,
-		                                                                           context.InlinedColNames());
-	}
-
 	// drop data files
 	if (!dropped_files.empty()) {
 		set<DataFileIndex> dropped_indexes;
@@ -1940,6 +1881,10 @@ string DuckLakeTransactionState::CommitChanges(DuckLakeCommitState &commit_state
 		}
 	}
 
+	// delete the flushed inlined rows and inlined file deletions after the deletes of the transaction
+	batch_queries += DuckLakeMetadataManager::GenerateDeleteFlushedInlinedData(
+	    flushed_inlined_tables, flushed_inlined_file_deletions, context.InlinedColNames());
+
 	// Tracking for tables that had schema changes
 	set<TableIndex> tables_with_schema_changes;
 	for (auto &table_id : transaction_changes.altered_tables) {
@@ -1961,27 +1906,106 @@ string DuckLakeTransactionState::CommitChanges(DuckLakeCommitState &commit_state
 
 SnapshotDeletedFromFiles DuckLakeTransactionState::GetFilesDeletedOrDroppedAfterSnapshot(
     const std::function<unique_ptr<QueryResult>(string)> &executor) {
-	// get all changes made to the system after the snapshot was started
+	// replacement delete files keep an older begin_snapshot, so also match on new file ids
+	// each filter gets its own scan, so it is pushed into the metadata database
 	string sql = R"(
 	SELECT data_file_id
 	FROM {METADATA_CATALOG}.ducklake_delete_file
 	WHERE begin_snapshot > {SNAPSHOT_ID}
 	UNION ALL
 	SELECT data_file_id
+	FROM {METADATA_CATALOG}.ducklake_delete_file
+	WHERE delete_file_id >= {NEXT_FILE_ID}
+	UNION ALL
+	SELECT data_file_id
 	FROM {METADATA_CATALOG}.ducklake_data_file
 	WHERE end_snapshot IS NOT NULL AND end_snapshot > {SNAPSHOT_ID}
 	)";
 	auto result = executor(sql);
-	if (result->HasError()) {
-		result->GetErrorObject().Throw(
-		    "Failed to commit DuckLake transaction - failed to get files with deletions for conflict resolution:");
-	}
+	result->ThrowIfError(
+	    "Failed to commit DuckLake transaction - failed to get files with deletions for conflict resolution:");
 	// parse changes made by other transactions
 	SnapshotDeletedFromFiles change_info;
 	for (auto &row : *result) {
 		change_info.deleted_from_files.insert(DataFileIndex(row.GetValue<idx_t>(0)));
 	}
 	return change_info;
+}
+
+static set<DataFileIndex> GetFilesWithInlinedDeletesAfterSnapshot(TableIndex table_id,
+                                                                  const DuckLakeCommitContext &context) {
+	set<DataFileIndex> result;
+	if (!context.inlined_file_deletion_table_exists(table_id)) {
+		return result;
+	}
+	auto query =
+	    StringUtil::Format("SELECT DISTINCT file_id FROM {METADATA_CATALOG}.%s WHERE begin_snapshot > {SNAPSHOT_ID};",
+	                       DuckLakeMetadataManager::InlinedFileDeletionTableName(table_id));
+	auto query_result = context.conflict_query_executor(query);
+	if (query_result->HasError()) {
+		query_result->GetErrorObject().Throw("Failed to commit DuckLake transaction - failed to get files with "
+		                                     "inlined deletions for conflict resolution:");
+	}
+	for (auto &row : *query_result) {
+		result.insert(DataFileIndex(row.GetValue<idx_t>(0)));
+	}
+	return result;
+}
+
+void DuckLakeTransactionState::CheckDeletedFileConflicts(const TransactionChangeInformation &changes,
+                                                         const SnapshotChangeInformation &other_changes,
+                                                         const DuckLakeCommitContext &context) const {
+	// deletes of the same data file conflict, whether they are written to a delete file or inlined
+	set<DataFileIndex> deleted_from_files;
+	// a flush only moves inlined deletes committed before it, so its delete files allow later inlined deletes
+	set<DataFileIndex> files_against_inlined_deletes;
+	for (auto &entry : local_changes.Changes()) {
+		auto &table_changes = entry.second;
+		for (auto &file_entry : table_changes.new_delete_files) {
+			for (auto &file : file_entry.second) {
+				deleted_from_files.insert(file.data_file_id);
+				if (file.source != DeleteFileSource::FLUSH) {
+					files_against_inlined_deletes.insert(file.data_file_id);
+				}
+			}
+		}
+		if (table_changes.new_inlined_file_deletes) {
+			for (auto &file_entry : table_changes.new_inlined_file_deletes->file_deletes) {
+				deleted_from_files.insert(DataFileIndex(file_entry.first));
+				files_against_inlined_deletes.insert(DataFileIndex(file_entry.first));
+			}
+		}
+	}
+	for (auto &file : dropped_files) {
+		deleted_from_files.insert(file.second);
+		files_against_inlined_deletes.insert(file.second);
+	}
+	if (deleted_from_files.empty()) {
+		return;
+	}
+	set<TableIndex> tables(changes.tables_deleted_from.begin(), changes.tables_deleted_from.end());
+	tables.insert(changes.tables_deleted_inlined.begin(), changes.tables_deleted_inlined.end());
+	for (auto &table_id : tables) {
+		if (other_changes.tables_deleted_from.find(table_id) != other_changes.tables_deleted_from.end()) {
+			auto other_files = GetFilesDeletedOrDroppedAfterSnapshot(context.conflict_query_executor);
+			for (auto &file : deleted_from_files) {
+				ConflictCheck(file, other_files.deleted_from_files, "delete from file", "deleted from it");
+			}
+			break;
+		}
+	}
+	if (files_against_inlined_deletes.empty()) {
+		return;
+	}
+	for (auto &table_id : tables) {
+		if (other_changes.tables_deleted_inlined.find(table_id) == other_changes.tables_deleted_inlined.end()) {
+			continue;
+		}
+		auto other_files = GetFilesWithInlinedDeletesAfterSnapshot(table_id, context);
+		for (auto &file : files_against_inlined_deletes) {
+			ConflictCheck(file, other_files, "delete from file", "deleted from it");
+		}
+	}
 }
 
 void DuckLakeTransactionState::DropEmptySupersededInlinedTables(const DuckLakeCommitContext &context) {
@@ -1995,9 +2019,7 @@ WHERE idt.schema_version < (
     WHERE idt2.table_id = idt.table_id
 );)";
 	auto targets = context.query_metadata(find_targets_sql);
-	if (targets->HasError()) {
-		targets->GetErrorObject().Throw("Failed to identify superseded inlined-data tables in DuckLake: ");
-	}
+	targets->ThrowIfError("Failed to identify superseded inlined-data tables in DuckLake: ");
 	// Collect candidates before issuing the per-table emptiness queries on the same connection.
 	struct SupersededInlinedTable {
 		idx_t table_id;
@@ -2012,10 +2034,7 @@ WHERE idt.schema_version < (
 	for (auto &candidate : candidates) {
 		auto count_result = context.query_metadata(
 		    StringUtil::Format("SELECT COUNT(*) FROM {METADATA_CATALOG}.%s;", SQLIdentifier(candidate.table_name)));
-		if (count_result->HasError()) {
-			count_result->GetErrorObject().Throw(
-			    "Failed to check emptiness of superseded inlined-data table in DuckLake: ");
-		}
+		count_result->ThrowIfError("Failed to check emptiness of superseded inlined-data table in DuckLake: ");
 		idx_t row_count = 0;
 		for (auto &row : *count_result) {
 			row_count = row.GetValue<idx_t>(0);
@@ -2032,32 +2051,28 @@ WHERE idt.schema_version < (
 		return;
 	}
 	auto res = context.query_metadata(drops_sql);
-	if (res->HasError()) {
-		res->GetErrorObject().Throw("Failed to drop superseded inlined-data tables in DuckLake: ");
-	}
+	res->ThrowIfError("Failed to drop superseded inlined-data tables in DuckLake: ");
 	// We also need to invalidate the existing schema versions in our catalog
 	string snapshot_versions_sql = "SELECT DISTINCT schema_version FROM {METADATA_CATALOG}.ducklake_snapshot;";
 	auto snapshot_versions = context.query_metadata(snapshot_versions_sql);
-	if (snapshot_versions->HasError()) {
-		snapshot_versions->GetErrorObject().Throw("Failed to list schema versions for cache invalidation: ");
-	}
+	snapshot_versions->ThrowIfError("Failed to list schema versions for cache invalidation: ");
 	for (auto &row : *snapshot_versions) {
 		context.invalidate_schema_cache(row.GetValue<idx_t>(0));
 	}
 }
 
-SnapshotAndStats DuckLakeTransactionState::CheckForConflicts(
-    DuckLakeSnapshot transaction_snapshot, const TransactionChangeInformation &changes,
-    const std::function<unique_ptr<QueryResult>(string)> &executor, bool supports_v1_1_metadata) {
+SnapshotAndStats DuckLakeTransactionState::CheckForConflicts(DuckLakeSnapshot transaction_snapshot,
+                                                             const TransactionChangeInformation &changes,
+                                                             const DuckLakeCommitContext &context) {
 	SnapshotAndStats snapshot_and_stats;
 	// get all changes made to the system after the current snapshot was started
-	auto changes_made =
-	    DuckLakeMetadataManager::GetSnapshotAndStatsAndChanges(snapshot_and_stats, executor, supports_v1_1_metadata);
+	auto changes_made = DuckLakeMetadataManager::GetSnapshotAndStatsAndChanges(
+	    snapshot_and_stats, context.conflict_query_executor, context.supports_v1_1_metadata);
 	// parse changes made by other transactions
 	auto other_changes = SnapshotChangeInformation::ParseChangesMade(changes_made.changes_made);
 
 	// now check for conflicts
-	CheckForConflicts(changes, other_changes, transaction_snapshot, executor);
+	CheckForConflicts(changes, other_changes, transaction_snapshot, context);
 
 	return snapshot_and_stats;
 }
@@ -2079,9 +2094,7 @@ void DuckLakeTransactionState::Commit(DuckLakeSnapshot transaction_snapshot,
 			if (i > 0) {
 				// we failed our first commit due to another transaction committing
 				// retry - but first check for conflicts
-				commit_stats_snapshot =
-				    CheckForConflicts(transaction_snapshot, attempt_changes, context.conflict_query_executor,
-				                      context.supports_v1_1_metadata);
+				commit_stats_snapshot = CheckForConflicts(transaction_snapshot, attempt_changes, context);
 				stats = &commit_stats_snapshot.stats;
 			} else {
 				commit_stats_snapshot.snapshot = context.get_snapshot();

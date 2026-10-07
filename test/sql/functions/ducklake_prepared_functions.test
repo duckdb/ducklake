@@ -1,0 +1,149 @@
+# name: test/sql/functions/ducklake_prepared_functions.test
+# description: Prepared DuckLake table functions are rebound on every execution
+# group: [functions]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/prepared_functions', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE dl.t (i INTEGER)
+
+statement ok
+INSERT INTO dl.t VALUES (1)
+
+statement ok
+PREPARE snapshots AS SELECT count(*) FROM ducklake_snapshots('dl')
+
+statement ok
+PREPARE current_snapshot AS SELECT id FROM ducklake_current_snapshot('dl')
+
+statement ok
+PREPARE last_committed_snapshot AS SELECT id FROM ducklake_last_committed_snapshot('dl')
+
+statement ok
+PREPARE table_info AS SELECT file_count FROM ducklake_table_info('dl')
+
+statement ok
+PREPARE list_files AS SELECT count(*) FROM ducklake_list_files('dl', 't')
+
+statement ok
+PREPARE expire_snapshots AS SELECT count(*) FROM ducklake_expire_snapshots('dl', older_than => '2099-01-01'::TIMESTAMPTZ, dry_run => true)
+
+statement ok
+PREPARE cleanup_old_files AS SELECT count(*) FROM ducklake_cleanup_old_files('dl', cleanup_all => true, dry_run => true)
+
+statement ok
+INSERT INTO dl.t VALUES (2)
+
+query I
+EXECUTE snapshots
+----
+4
+
+query I
+EXECUTE current_snapshot
+----
+3
+
+query I
+EXECUTE last_committed_snapshot
+----
+3
+
+query I
+EXECUTE table_info
+----
+2
+
+query I
+EXECUTE list_files
+----
+2
+
+query I
+EXECUTE expire_snapshots
+----
+3
+
+statement ok
+CALL ducklake_merge_adjacent_files('dl')
+
+query I
+EXECUTE list_files
+----
+1
+
+query I
+EXECUTE cleanup_old_files
+----
+2
+
+statement ok
+COPY (SELECT 42 AS i) TO '{DATA_PATH}/prepared_functions/main/t/added.parquet'
+
+statement ok
+PREPARE delete_orphaned_files AS SELECT count(*) FROM ducklake_delete_orphaned_files('dl', cleanup_all => true)
+
+statement ok
+CALL ducklake_add_data_files('dl', 't', '{DATA_PATH}/prepared_functions/main/t/added.parquet')
+
+query I
+EXECUTE delete_orphaned_files
+----
+0
+
+statement ok
+COPY (SELECT 7 AS i) TO '{DATA_PATH}/prepared_functions_s.parquet'
+
+statement ok
+CREATE TABLE dl.s (i INTEGER)
+
+statement ok
+PREPARE set_option AS SELECT * FROM ducklake_set_option('dl', 'parquet_compression', 'zstd', table_name => 's')
+
+statement ok
+PREPARE add_data_files AS SELECT * FROM ducklake_add_data_files('dl', 's', '{DATA_PATH}/prepared_functions_s.parquet')
+
+statement ok
+DROP TABLE dl.s
+
+statement ok
+CREATE TABLE dl.s (i INTEGER)
+
+statement ok
+EXECUTE set_option
+
+query I
+SELECT scope_entry FROM ducklake_options('dl') WHERE option_name = 'parquet_compression'
+----
+main.s
+
+statement ok
+EXECUTE add_data_files
+
+query I
+SELECT i FROM dl.s
+----
+7
+
+statement ok
+PREPARE settings AS SELECT data_path LIKE '%prepared_functions_other%' FROM ducklake_settings('dl')
+
+statement ok
+DETACH dl
+
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/prepared_functions_other.db' AS dl (DATA_PATH '{DATA_PATH}/prepared_functions_other')
+
+query I
+EXECUTE settings
+----
+true

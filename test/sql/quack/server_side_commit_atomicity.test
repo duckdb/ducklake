@@ -47,3 +47,18 @@ query I
 SELECT * FROM ducklake.test ORDER BY i;
 ----
 1
+
+# a commit that changes the schema runs its batch on the client and fails without leaving anything behind
+statement error
+CREATE TABLE ducklake.test2(j INTEGER);
+----
+
+query I
+SELECT count(*) FROM __ducklake_metadata_ducklake.ducklake_snapshot WHERE snapshot_id > 2;
+----
+0
+
+query I
+SELECT count(*) FROM __ducklake_metadata_ducklake.ducklake_table WHERE table_name = 'test2';
+----
+0

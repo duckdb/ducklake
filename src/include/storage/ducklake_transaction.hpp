@@ -45,7 +45,6 @@ struct DuckLakeCommitState;
 struct DuckLakeSchemaCacheEntry;
 class DuckLakeSchemaPinState;
 class DuckLakeFieldId;
-class LocalTableChangeIterationHelper;
 class DuckLakeTransactionState;
 
 //! Marks connections DuckLake opens internally
@@ -72,6 +71,24 @@ struct LocalTableDataChanges {
 	unique_ptr<DuckLakeInlinedFileDeletes> new_inlined_file_deletes;
 	vector<DuckLakeCompactionEntry> compactions;
 	bool IsEmpty() const;
+};
+
+class LocalTableChangeIterationHelper {
+public:
+	LocalTableChangeIterationHelper(mutex &changes_lock, const map<TableIndex, LocalTableDataChanges> &changes_p)
+	    : lock(changes_lock), changes(changes_p) {
+	}
+
+	map<TableIndex, LocalTableDataChanges>::const_iterator begin() const { // NOLINT
+		return changes.begin();
+	}
+	map<TableIndex, LocalTableDataChanges>::const_iterator end() const { // NOLINT
+		return changes.end();
+	}
+
+private:
+	unique_lock<mutex> lock;
+	const map<TableIndex, LocalTableDataChanges> &changes;
 };
 
 struct DuckLakeNewGlobalStats {
@@ -121,50 +138,6 @@ public:
 private:
 	mutable mutex lock;
 	map<TableIndex, LocalTableDataChanges> changes;
-};
-
-class LocalTableChangeIterationHelper {
-public:
-	LocalTableChangeIterationHelper(mutex &local_changes_lock, const map<TableIndex, LocalTableDataChanges> &changes);
-
-private:
-	unique_lock<mutex> lock;
-	const map<TableIndex, LocalTableDataChanges> &changes;
-
-private:
-	struct LocalTableChangeIteratorEntry {
-		friend class LocalTableChangeIterationHelper;
-
-	public:
-		LocalTableChangeIteratorEntry();
-		TableIndex GetTableIndex() const;
-		const LocalTableDataChanges &GetTableChanges() const;
-
-	private:
-		TableIndex table_id;
-		optional_ptr<const LocalTableDataChanges> changes;
-	};
-	class LocalTableChangeIterator {
-	public:
-		explicit LocalTableChangeIterator(map<TableIndex, LocalTableDataChanges>::const_iterator it,
-		                                  map<TableIndex, LocalTableDataChanges>::const_iterator end_it);
-		map<TableIndex, LocalTableDataChanges>::const_iterator it;
-		map<TableIndex, LocalTableDataChanges>::const_iterator end_it;
-		LocalTableChangeIteratorEntry entry;
-
-	public:
-		LocalTableChangeIterator &operator++();
-		bool operator!=(const LocalTableChangeIterator &other) const;
-		const LocalTableChangeIteratorEntry &operator*() const;
-	};
-
-public:
-	LocalTableChangeIterator begin() { // NOLINT: match stl API
-		return LocalTableChangeIterator(changes.begin(), changes.end());
-	}
-	LocalTableChangeIterator end() { // NOLINT: match stl API
-		return LocalTableChangeIterator(changes.end(), changes.end());
-	}
 };
 
 struct SnapshotAndStats {
@@ -278,10 +251,12 @@ public:
 
 	void DeleteSnapshots(const vector<DuckLakeSnapshotInfo> &snapshots);
 	void DeleteInlinedData(const DuckLakeInlinedTableInfo &inlined_table);
-	//! Delete inlined data rows with begin_snapshot <= flush_snapshot_id
-	void DeleteFlushedInlinedData(const DuckLakeInlinedTableInfo &inlined_table, idx_t flush_snapshot_id);
-	//! Marks that inlined data have been deleted in a flush if retries are necessary
+	//! Marks the inlined data flushed up to the snapshot, the commit deletes its rows
 	void MarkInlinedDataForDeletion(DuckLakeInlinedTableInfo inlined_table, idx_t flush_snapshot_id);
+	bool InlinedTableFlushed(const string &table_name);
+	//! Marks the inlined file deletions of the table flushed up to the snapshot, the commit deletes them
+	void MarkInlinedFileDeletionsFlushed(TableIndex table_id, idx_t flush_snapshot_id);
+	bool InlinedFileDeletionsFlushed(TableIndex table_id);
 
 	bool ChangesMade() const;
 	idx_t GetLocalCatalogId();
@@ -308,6 +283,7 @@ public:
 	const set<TableIndex> &GetTablesDeletedFrom() const;
 	const set<TableIndex> &GetTablesDeleteAttempted() const;
 	const vector<FlushedInlinedTableInfo> &GetFlushedInlinedTables() const;
+	const map<TableIndex, idx_t> &GetFlushedInlinedFileDeletions() const;
 	const DuckLakeNameMapSet &GetNewNameMaps() const {
 		return new_name_maps;
 	}
@@ -378,6 +354,10 @@ private:
 	unique_ptr<DuckLakeMetadataManager> metadata_manager;
 	mutex connection_lock;
 	unique_ptr<Connection> connection;
+	//! Flushes of several tables finalize in parallel while scans check the flushed tables
+	mutex flushed_inlined_lock;
+	//! The snapshots expired by this transaction, deleted when it commits
+	vector<DuckLakeSnapshotInfo> expired_snapshots;
 	//! The snapshot of the transaction (latest snapshot in DuckLake)
 	mutex snapshot_lock;
 	unique_ptr<DuckLakeSnapshot> snapshot;

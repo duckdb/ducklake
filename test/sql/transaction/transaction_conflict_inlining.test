@@ -31,16 +31,21 @@ BEGIN
 statement ok con1
 CALL ducklake_flush_inlined_data('ducklake')
 
-statement error con2
+statement ok con2
 CALL ducklake_flush_inlined_data('ducklake')
-----
-Conflict
 
 statement ok con1
 COMMIT
 
-statement ok con2
+statement error con2
 COMMIT
+----
+conflict
+
+query I
+SELECT count(*) FROM ducklake.test
+----
+1000
 
 statement ok
 DROP TABLE ducklake.test

@@ -36,7 +36,8 @@
         "test/sql/delete/delete_ignore_extra_columns.test",
         "test/sql/add_files/add_file_with_three_level_list.test",
         "test/sql/migration/test_compaction.test",
-        "test/sql/remove_orphans/metadata_in_data_path.test"
+        "test/sql/remove_orphans/metadata_in_data_path.test",
+        "test/sql/issues/issue_1295_add_files_no_null_count.test"
       ]
     },
     {

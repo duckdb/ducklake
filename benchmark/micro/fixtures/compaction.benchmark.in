@@ -4,11 +4,12 @@
 
 argument lake compaction
 
-cache_file compaction_ready.marker
+cache_file ${lake}_ready.marker
 
 # Row group size 2048 and a 16KB target give one file per 2048 rows
 load
-ATTACH 'ducklake:${BENCHMARK_DIR}/compaction_pristine.db' AS lake (DATA_PATH '${BENCHMARK_DIR}/compaction_files');
+@create ${lake}_pristine
+@attach ${lake}_pristine AS lake (DATA_PATH '${BENCHMARK_DIR}/${lake}_files')
 CALL lake.set_option('data_inlining_row_limit', 0);
 CREATE TABLE lake.frag (id BIGINT, k INTEGER, s VARCHAR);
 CREATE TABLE lake.rw (id BIGINT, k INTEGER, s VARCHAR);
@@ -21,14 +22,18 @@ RESET ducklake_target_file_size;
 DELETE FROM lake.rw WHERE id % 100 < 60;
 CALL lake.set_option('parquet_row_group_size', 122880, table_name => 'frag');
 CALL lake.set_option('parquet_row_group_size', 122880, table_name => 'rw');
-DETACH lake;
-COPY (SELECT count(*) FROM glob('${BENCHMARK_DIR}/compaction_files/**'))
-TO '${BENCHMARK_DIR}/compaction_filecount.csv' (FORMAT CSV, HEADER false);
-COPY (SELECT 1) TO '${BENCHMARK_DIR}/compaction_ready.marker' (FORMAT CSV);
-DETACH DATABASE IF EXISTS lake;
-COPY (SELECT content FROM read_blob('${BENCHMARK_DIR}/${lake}_pristine.db')) TO '${BENCHMARK_DIR}/${work}.db' (FORMAT blob);
-ATTACH 'ducklake:${BENCHMARK_DIR}/${work}.db' AS lake;
 CALL ducklake_delete_orphaned_files('lake', cleanup_all => true);
-SELECT CASE WHEN (SELECT count(*) FROM glob('${BENCHMARK_DIR}/${lake}_files/**')) <> (SELECT column0 FROM read_csv('${BENCHMARK_DIR}/${lake}_filecount.csv', header = false)) THEN error('the fixture files were not restored') END;
+DETACH lake;
+COPY (SELECT count(*) FROM glob('${BENCHMARK_DIR}/${lake}_files/**'))
+TO '${BENCHMARK_DIR}/${lake}_filecount.csv' (FORMAT CSV, HEADER false);
+@seal ${lake}_pristine
+COPY (SELECT 1) TO '${BENCHMARK_DIR}/${lake}_ready.marker' (FORMAT CSV);
+DETACH DATABASE IF EXISTS lake;
+@copy ${lake}_pristine TO ${work}
+@attach ${work} AS lake
+CALL ducklake_delete_orphaned_files('lake', cleanup_all => true);
+SELECT CASE WHEN (SELECT count(*) FROM glob('${BENCHMARK_DIR}/${lake}_files/**'))
+<> (SELECT column0 FROM read_csv('${BENCHMARK_DIR}/${lake}_filecount.csv', header = false))
+THEN error('the fixture files were not restored') END;
 
-include benchmark/micro/fixtures/rblob_reload.benchmark.in
+include benchmark/micro/fixtures/restore_reload.benchmark.in

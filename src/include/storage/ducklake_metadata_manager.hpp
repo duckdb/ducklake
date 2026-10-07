@@ -15,6 +15,7 @@
 #include "duckdb/common/optional_idx.hpp"
 #include "duckdb/common/reference_map.hpp"
 #include "duckdb/common/types/value.hpp"
+#include "common/ducklake_row_helpers.hpp"
 #include "common/ducklake_snapshot.hpp"
 #include "storage/ducklake_partition_data.hpp"
 #include "storage/ducklake_stats.hpp"
@@ -37,7 +38,6 @@ class DuckLakeTransaction;
 struct DuckLakeRetryConfig;
 struct TransactionChangeInformation;
 class BoundAtClause;
-class QueryResult;
 class SQLStatement;
 class FileSystem;
 
@@ -202,6 +202,10 @@ public:
 		return true;
 	}
 
+	//! Whether the metadata catalog commits each statement on its own, so a rollback cannot undo them
+	virtual bool CommitsEachStatement() const {
+		return false;
+	}
 	//! Probe the metadata server for optional capabilities, for now we only check for server-side retries
 	virtual void ProbeServerCapabilities() {
 	}
@@ -233,8 +237,6 @@ public:
 	virtual idx_t MaxIdentifierLength() const {
 		return NumericLimits<idx_t>::Maximum();
 	}
-	//! Check if columns (stored as DuckLakeColumnInfo) support inlining, recursing into children
-	bool SupportsInliningColumns(const vector<DuckLakeColumnInfo> &columns);
 
 	//! Check whether a table with the given columns can be inlined
 	bool CanInlineColumns(const ColumnList &columns);
@@ -242,6 +244,10 @@ public:
 
 	virtual string GetColumnTypeInternal(const LogicalType &column_type);
 	string CastColumnToTarget(const string &column, const LogicalType &type);
+	//! The inlined rows to flush with typed columns, without those this transaction deleted
+	string InlinedFlushSource(const string &inlined_table_name, const DuckLakeTableEntry &table);
+	//! The order of the rows in a flushed file
+	string InlinedFlushOrder(const string &sort_order_sql) const;
 
 	DuckLakeMetadataManager &Get(DuckLakeTransaction &transaction);
 
@@ -272,8 +278,7 @@ public:
 
 	//! Rvalue sugar so call sites can pass `R"(...)"` and `StringUtil::Format(...)` directly.
 	//! Named-rvalue decays to an lvalue inside, so the virtual dispatch still picks up the
-	//! string-ref overrides without derived classes needing to add anything. Defined out-of-line
-	//! since QueryResult is only forward-declared here.
+	//! string-ref overrides without derived classes needing to add anything.
 	unique_ptr<QueryResult> Execute(DuckLakeSnapshot snapshot, string &&query);
 	unique_ptr<QueryResult> Execute(string &&query);
 	unique_ptr<QueryResult> Query(DuckLakeSnapshot snapshot, string &&query);
@@ -293,6 +298,9 @@ public:
 	static unique_ptr<DuckLakeSnapshot> ParseSnapshot(QueryResult &result,
 	                                                  optional_ptr<string> catalog_version = nullptr);
 	static vector<DuckLakeGlobalStatsInfo> ParseGlobalTableStats(QueryResult &result);
+	//! Take the table sizes that stats rows lack from the live data files
+	static void FillMissingTableSizes(vector<DuckLakeGlobalStatsInfo> &stats,
+	                                  const std::function<unique_ptr<QueryResult>(string)> &executor);
 	//! Whether the result contains a column with the given name
 	static bool ResultHasColumn(QueryResult &result, const string &name);
 
@@ -305,7 +313,8 @@ public:
 	BuildCatalogForSnapshot(DuckLakeSnapshot snapshot,
 	                        const std::function<unique_ptr<QueryResult>(DuckLakeSnapshot, string)> &query_executor,
 	                        const string &base_data_path, const string &separator, bool supports_v1_1_metadata = false);
-	virtual vector<DuckLakeGlobalStatsInfo> GetGlobalTableStats(DuckLakeSnapshot snapshot, TableIndex table_id);
+	//! The global stats of every table of the snapshot
+	virtual vector<DuckLakeGlobalStatsInfo> GetGlobalTableStats(DuckLakeSnapshot snapshot);
 	//! Get the record count of every table that has global stats
 	virtual map<TableIndex, idx_t> GetTableRecordCounts(DuckLakeSnapshot snapshot);
 	virtual vector<DuckLakeFileListEntry> GetFilesForTable(DuckLakeTableEntry &table, DuckLakeSnapshot snapshot,
@@ -333,6 +342,9 @@ public:
 	static string GetNetInlinedRowCountSql(const string &inlined_table_name, const DuckLakeInlinedColNames &col_names);
 	static string GetTableColumnSchemaSql(TableIndex table_id);
 	static string GetInlinedTableNamesSql(TableIndex table_id);
+	//! The inserts of the given rows, in batches
+	static string InsertValuesSql(const string &table_name, const vector<string> &values);
+	unordered_set<string> GetInlinedTableNames(TableIndex table_id);
 	virtual vector<DuckLakeFileForCleanup> GetOldFilesForCleanup(const string &filter);
 	virtual vector<DuckLakeFileForCleanup> GetOrphanFilesForCleanup(const string &filter, const string &separator);
 	virtual vector<DuckLakeFileForCleanup> GetFilesForCleanup(const string &filter, CleanupType type,
@@ -464,6 +476,8 @@ public:
 	                                                         const vector<string> &columns_to_read);
 	virtual unique_ptr<QueryResult> ReadAllInlinedDataForFlush(DuckLakeSnapshot snapshot,
 	                                                           const string &inlined_table_name,
+	                                                           const DuckLakeTableEntry &table,
+	                                                           const string &sort_order_sql,
 	                                                           const vector<string> &columns_to_read);
 	//! SQL builders for the stats-refresh queries used by DuckLakeTransactionState::RecomputeGlobalStatsAfterRewrite.
 	//! Caller substitutes `{METADATA_CATALOG}` / `{SNAPSHOT_ID}` and executes via the commit context's executor.
@@ -476,10 +490,9 @@ public:
 	                                                     const string &inlined_table_name);
 
 	virtual void DeleteInlinedData(const DuckLakeInlinedTableInfo &inlined_table);
-	//! We delete at the flush
-	virtual void DeleteFlushedInlinedData(const DuckLakeInlinedTableInfo &inlined_table, idx_t flush_snapshot_id);
-	//! If it conflicts we batch everything at the retry
+	//! The statements deleting the inlined rows and inlined file deletions that the transaction flushed
 	static string GenerateDeleteFlushedInlinedData(const vector<FlushedInlinedTableInfo> &flushed_tables,
+	                                               const map<TableIndex, idx_t> &flushed_file_deletions,
 	                                               const DuckLakeInlinedColNames &col_names);
 	static string InsertNewSchema(const DuckLakeSnapshot &snapshot, const set<TableIndex> &table_ids);
 
@@ -506,6 +519,9 @@ public:
 	virtual void MigrateV10Dev();
 	//! Renames inlined metadata columns to the prefixed variants, skipping already renamed tables
 	virtual void MigrateInlinedColumnNames(bool probe_renamed);
+	//! Rewrites inlined tables whose columns were created with the storage types of an older DuckLake version
+	virtual void MigrateInlinedDataTypes() {
+	}
 	virtual void ExecuteMigration(string migrate_query, bool allow_failures, const string &from_version,
 	                              const string &to_version);
 
@@ -562,7 +578,9 @@ public:
 
 protected:
 	string GetInlinedTableQuery(const DuckLakeTableInfo &table, const string &table_name);
+	bool CanInlineColumn(const string &name, const LogicalType &type);
 	string GetColumnType(const DuckLakeColumnInfo &col);
+	string GetColumnDefinitions(const vector<DuckLakeColumnInfo> &columns);
 	string GetKnownFilesForCleanupQuery(const string &separator) const;
 
 	//! Optimized data file writing using DuckDB Appender API (only for DuckDB metadata manager)
@@ -593,10 +611,10 @@ protected:
 private:
 	template <class T>
 	static string FlushDrop(const string &metadata_table_name, const string &id_name, const set<T> &dropped_entries);
-	template <class T>
-	DuckLakeFileData ReadDataFile(DuckLakeTableEntry &table, T &row, idx_t &col_idx, bool is_encrypted);
-	template <class T>
-	DuckLakeFileData ReadDeleteFile(DuckLakeTableEntry &table, T &row, idx_t &col_idx, bool is_encrypted);
+	DuckLakeFileData ReadDataFile(DuckLakeTableEntry &table, const QueryResultRow &row, idx_t &col_idx,
+	                              bool is_encrypted);
+	DuckLakeFileData ReadDeleteFile(DuckLakeTableEntry &table, const QueryResultRow &row, idx_t &col_idx,
+	                                bool is_encrypted);
 
 	bool IsEncrypted() const;
 
@@ -621,13 +639,15 @@ protected:
 	                                          const FileColumnStatsCTEBodyGenerator &generate_body);
 	//! Join each column's stats CTE once. Leading newline per join, empty when there are none.
 	static string GenerateStatsJoinList(const map<idx_t, CTERequirement> &requirements);
+	virtual bool ValueIsFinite(const Value &val);
+	//! Unknown bounds must keep the file
+	static string BoundOrInfinity(const string &bound, const string &type_name, StatsCastType cast_type);
 
 private:
 	virtual string GenerateCTESectionFromRequirements(const map<idx_t, CTERequirement> &requirements,
 	                                                  TableIndex table_id);
 	virtual string GenerateFilterFromExpression(const Expression &expr, const LogicalType *type,
 	                                            unordered_set<string> &referenced_stats, const string &stats_alias);
-	virtual bool ValueIsFinite(const Value &val);
 	virtual string CastValueToTarget(const Value &val, const LogicalType &type);
 	virtual string CastStatsToTarget(const string &stats, const LogicalType &type,
 	                                 StatsCastType cast_type = StatsCastType::ORDERING);

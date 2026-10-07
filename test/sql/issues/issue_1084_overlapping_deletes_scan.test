@@ -1,0 +1,28 @@
+# name: test/sql/issues/issue_1084_overlapping_deletes_scan.test
+# description: a scan skips rows that are deleted both in a delete file and in the inlined deletes
+# group: [issues]
+
+require ducklake
+
+require parquet
+
+# written by DuckDB 1.5.6, where two concurrent deletes of the same rows both commit
+unzip data/old_ducklake/overlapping_deletes.db.gz {TEST_DIR}/issue_1084.db
+
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/issue_1084.db' AS dl (DATA_PATH 'data/old_ducklake/overlapping_deletes/', OVERRIDE_DATA_PATH TRUE, READ_ONLY)
+
+query III
+SELECT count(DISTINCT i), sum(i), count(*) FILTER (WHERE i >= 50 AND i < 80) FROM dl.t
+----
+70	3015	0
+
+query III
+SELECT count(DISTINCT i), sum(i), count(*) FILTER (WHERE i < 15) FROM dl.n
+----
+5	85	0
+
+query III
+SELECT count(DISTINCT i), sum(i), count(*) FILTER (WHERE i < 20 OR (i >= 50 AND i < 80)) FROM dl.s
+----
+50	2825	0

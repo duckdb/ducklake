@@ -1,0 +1,74 @@
+# name: test/sql/issues/issue_1298_transform_partition_stats.test
+# description: Transformed hive partition values are not recorded as statistics of the source column
+# group: [issues]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/issue_1298', DATA_INLINING_ROW_LIMIT 0)
+
+# the source column of a year partition is missing from the file
+statement ok
+CREATE TABLE dl.t (id INTEGER, dt DATE)
+
+statement ok
+ALTER TABLE dl.t SET PARTITIONED BY (year(dt))
+
+statement ok
+COPY (SELECT 1 AS id, 2024 AS year) TO '{DATA_PATH}/issue_1298_t' (FORMAT parquet, PARTITION_BY ('year'))
+
+statement ok
+CALL ducklake_add_data_files('dl', 't', '{DATA_PATH}/issue_1298_t/year=2024/*.parquet', allow_missing => true)
+
+query I
+SELECT count(*) FROM dl.t WHERE dt IS NULL
+----
+1
+
+statement ok
+INSERT INTO dl.t VALUES (2, DATE '2024-05-05')
+
+# the source column is both an identity and a year partition
+statement ok
+CREATE TABLE dl.p (id INTEGER, dt DATE)
+
+statement ok
+ALTER TABLE dl.p SET PARTITIONED BY (dt, year(dt))
+
+statement ok
+COPY (SELECT 1 AS id, DATE '2024-06-15' AS dt, 2024 AS year) TO '{DATA_PATH}/issue_1298_p' (FORMAT parquet, PARTITION_BY ('dt', 'year'))
+
+statement ok
+CALL ducklake_add_data_files('dl', 'p', '{DATA_PATH}/issue_1298_p/dt=2024-06-15/year=2024/*.parquet')
+
+query I
+SELECT count(*) FROM dl.p WHERE dt = DATE '2024-06-15'
+----
+1
+
+# a missing source column reads as its default
+statement ok
+CREATE TABLE dl.d (id INTEGER)
+
+statement ok
+ALTER TABLE dl.d ADD COLUMN dt DATE DEFAULT DATE '2024-02-02'
+
+statement ok
+ALTER TABLE dl.d SET PARTITIONED BY (year(dt))
+
+statement ok
+COPY (SELECT 1 AS id, 2024 AS year) TO '{DATA_PATH}/issue_1298_d' (FORMAT parquet, PARTITION_BY ('year'))
+
+statement ok
+CALL ducklake_add_data_files('dl', 'd', '{DATA_PATH}/issue_1298_d/year=2024/*.parquet', allow_missing => true)
+
+query I
+SELECT count(*) FROM dl.d WHERE dt = DATE '2024-02-02'
+----
+1

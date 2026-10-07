@@ -11,6 +11,7 @@
 #include "duckdb/common/common.hpp"
 #include "duckdb/common/types.hpp"
 #include "duckdb/common/enums/access_mode.hpp"
+#include "duckdb/common/enums/on_create_conflict.hpp"
 #include "common/ducklake_encryption.hpp"
 #include "common/ducklake_version.hpp"
 #include "duckdb/planner/tableref/bound_at_clause.hpp"
@@ -28,6 +29,7 @@ struct DuckLakeOptions {
 	string data_path;
 	bool override_data_path = false;
 	AccessMode access_mode = AccessMode::AUTOMATIC;
+	OnCreateConflict on_conflict = OnCreateConflict::ERROR_ON_CONFLICT;
 	DuckLakeEncryption encryption = DuckLakeEncryption::AUTOMATIC;
 	bool create_if_not_exists = true;
 	bool automatic_migration = false;

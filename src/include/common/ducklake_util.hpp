@@ -12,19 +12,13 @@
 
 #include "common/index.hpp"
 #include "duckdb/common/common.hpp"
-#include "duckdb/common/enums/catalog_type.hpp"
 #include "duckdb/common/file_system.hpp"
 #include "duckdb/common/map.hpp"
 #include "duckdb/common/optional_idx.hpp"
-#include "duckdb/common/optional_ptr.hpp"
 #include "duckdb/common/unordered_set.hpp"
 #include "duckdb/common/types/value.hpp"
-#include "duckdb/parser/qualified_name.hpp"
 
 namespace duckdb {
-class BoundAtClause;
-class Catalog;
-class SchemaCatalogEntry;
 class ClientContext;
 class ColumnDataCollection;
 class DataChunk;
@@ -35,8 +29,6 @@ class DuckLakeTransaction;
 class FileSystem;
 class Expression;
 class LogicalType;
-class TableFilter;
-struct DynamicFilterData;
 
 struct ParsedCatalogEntry {
 	vector<string> schema_path;
@@ -49,24 +41,16 @@ class DuckLakeUtil {
 public:
 	//! Extracts the value of a literal, or of a cast over a literal, as written in a DEFAULT or parameter default
 	static bool TryGetLiteralValue(const ParsedExpression &expr, Value &result);
+	//! Extracts a macro parameter default that can be stored as a literal of its DuckLake type
+	static bool TryGetMacroDefaultLiteral(const ParsedExpression &expr, Value &result);
 	static string ParseQuotedValue(const string &input, idx_t &pos);
 	static string ToQuotedList(const vector<string> &input, char list_separator = ',');
 	static vector<string> ParseQuotedList(const string &input, char list_separator = ',');
-	static string SQLIdentifierToString(const string &text);
-	static string SQLIdentifierToString(const Identifier &identifier);
-	static string SQLLiteralToString(const string &text);
 	static string StatsToString(const string &text);
 	static string ValueToSQL(DuckLakeMetadataManager &metadata_manager, ClientContext &context, const Value &val);
 
 	static ParsedCatalogEntry ParseCatalogEntry(const string &input);
-	static QualifiedName QualifiedEntryName(ClientContext &context, Catalog &catalog, const string &schema_arg,
-	                                        const string &entry_name, CatalogType entry_type = CatalogType::TABLE_ENTRY,
-	                                        optional_ptr<BoundAtClause> at_clause = nullptr);
-	static SchemaCatalogEntry &GetSchema(ClientContext &context, Catalog &catalog, const string &schema_arg);
-	static string SchemaPathToDisplay(const vector<Identifier> &schema_path);
 	static string JoinPath(FileSystem &fs, const string &a, const string &b);
-
-	static shared_ptr<DynamicFilterData> GetOptionalDynamicFilterData(const TableFilter &filter);
 
 	//! Combine two filter expressions - both must hold, so AND their conjuncts and drop duplicates
 	static unique_ptr<Expression> MergeFilterExpressions(unique_ptr<Expression> left, unique_ptr<Expression> right);
@@ -75,11 +59,6 @@ public:
 	//! A leaf filter is evaluated against a single column's stats, so it may only read one column. Returns
 	//! that sub-expression, or nullptr when the filter reads none or several.
 	static optional_ptr<const Expression> GetFilterSubject(const Expression &expr);
-	//! Peel the struct fields a subject reads through, outermost first, and return the reference underneath
-	static const Expression &GetFilterSubjectPath(const Expression &subject, vector<string> &path);
-	//! Rewrite the subject to the column placeholder an ExpressionFilter is evaluated against
-	static unique_ptr<Expression> ReplaceFilterSubject(const Expression &expr, const Expression &subject,
-	                                                   const LogicalType &type);
 
 	//! Create the data path directory if it does not yet exist
 	static void EnsureDirectoryExists(FileSystem &fs, const string &data_path);
@@ -125,6 +104,9 @@ public:
 	//! SQL expression encoding or decoding VARIANT leaves in an inlined column
 	static string InlinedVariantExpression(const string &expression, const LogicalType &type, bool encode,
 	                                       idx_t depth = 0);
+	//! SQL expression converting a value of the given type to the representation stored in an inlined column
+	static string InlinedStorageExpression(DuckLakeMetadataManager &metadata_manager, string expression,
+	                                       const LogicalType &type);
 	//! Formats inlined rows as comma separated cell literals in storage types
 	static vector<string> InlinedDataToSQL(DuckLakeTransaction &transaction, ColumnDataCollection &data);
 };

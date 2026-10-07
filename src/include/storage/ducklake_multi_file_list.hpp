@@ -36,7 +36,6 @@ public:
 	                                                MultiFilePushdownInfo &info,
 	                                                vector<unique_ptr<Expression>> &filters) const override;
 
-	vector<OpenFileInfo> GetAllFiles() const override;
 	FileExpandResult GetExpandResult() const override;
 	idx_t GetTotalFileCount() const override;
 	unique_ptr<NodeStatistics> GetCardinality(ClientContext &context) const override;

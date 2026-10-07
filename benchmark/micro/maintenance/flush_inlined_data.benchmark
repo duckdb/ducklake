@@ -1,0 +1,37 @@
+# name: benchmark/micro/maintenance/flush_inlined_data.benchmark
+# description: Flush 40 inlined tables and inlined deletions of 10 tables on a freshly attached lake, with commit
+# group: [maintenance]
+
+name Flush Inlined Data
+group micro
+subgroup maintenance
+
+require ducklake
+
+require parquet
+
+argument work flush_inlined_work
+
+include benchmark/micro/fixtures/flush_inlined.benchmark.in
+
+include benchmark/micro/fixtures/restore_cleanup.benchmark.in
+
+run
+SELECT count(*) FILTER (WHERE rows_flushed > 0) AS tables_flushed, sum(rows_flushed) AS rows_flushed
+FROM ducklake_flush_inlined_data('lake');
+
+# Deletion-only flushes report no rows, so also check the metadata transition and per-table history
+result_query IIIIIII
+SET VARIABLE flush_delete_tables = (SELECT list('__ducklake_metadata_lake.ducklake_inlined_delete_' || table_id)
+FROM __ducklake_metadata_lake.ducklake_table WHERE table_name LIKE 'f%');
+SELECT tables_flushed, rows_flushed,
+(SELECT bool_and(valid IS TRUE) FROM query(getvariable('flush_checks'))),
+(SELECT count(*) = 0 FROM query_table(getvariable('flush_delete_tables'))),
+(SELECT count(*) = 50 AND sum(record_count) = 14000
+FROM __ducklake_metadata_lake.ducklake_data_file WHERE end_snapshot IS NULL),
+(SELECT count(*) = 10 AND sum(delete_count) = 1640
+FROM __ducklake_metadata_lake.ducklake_delete_file WHERE end_snapshot IS NULL),
+(SELECT count(*) = 5 AND max(snapshot_id) = 4 FROM lake.snapshots())
+FROM __answer
+----
+40	4000	true	true	true	true	true

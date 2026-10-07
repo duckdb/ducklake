@@ -1,0 +1,132 @@
+# name: test/sql/issues/issue_1116_nested_macro_parameters.test
+# description: Macros with nested parameter types or defaults stay callable after a reload
+# group: [issues]
+
+require ducklake
+
+require parquet
+
+require json
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/issue_1116.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/issue_1116')
+
+statement ok
+USE ducklake
+
+statement ok
+CREATE MACRO list_len(l VARCHAR[]) AS len(l)
+
+statement ok
+CREATE MACRO struct_get(s STRUCT(i INTEGER)) AS s.i
+
+statement ok
+CREATE MACRO map_get(m MAP(VARCHAR, INTEGER)) AS m['a']
+
+statement ok
+CREATE MACRO list_default(l := ['x', 'y']) AS len(l)
+
+statement ok
+CREATE MACRO null_default(p := NULL::VARCHAR) AS typeof(p)
+
+statement ok
+CREATE MACRO list_rows(l INTEGER[]) AS TABLE SELECT unnest(l) AS v
+
+statement ok
+CREATE MACRO json_len(l JSON[]) AS len(l)
+
+statement ok
+CREATE MACRO variant_type(v VARIANT) AS typeof(v)
+
+statement ok
+CREATE MACRO geometry_len(g GEOMETRY('OGC:CRS84')[]) AS len(g)
+
+query IIIIII
+SELECT list_len(['a', 'b']), struct_get({'i': 3}), map_get(MAP {'a': 1}), list_default(), null_default(), json_len(['{}']::JSON[])
+----
+2	3	1	2	VARCHAR	1
+
+query I
+SELECT v FROM list_rows([1, 2]) ORDER BY v
+----
+1
+2
+
+query II
+SELECT variant_type(NULL), geometry_len(['POINT (1 2)'::GEOMETRY])
+----
+VARIANT	1
+
+statement ok
+USE memory
+
+statement ok
+DETACH ducklake
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/issue_1116')
+
+statement ok
+USE ducklake
+
+query IIIIII
+SELECT list_len(['a', 'b']), struct_get({'i': 3}), map_get(MAP {'a': 1}), list_default(), null_default(), json_len(['{}']::JSON[])
+----
+2	3	1	2	VARCHAR	1
+
+query I
+SELECT v FROM list_rows([1, 2]) ORDER BY v
+----
+1
+2
+
+query II
+SELECT variant_type(NULL), geometry_len(['POINT (1 2)'::GEOMETRY])
+----
+VARIANT	1
+
+# DuckLake 1.0 cannot store them
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/issue_1116_v10.db' AS v10 (DATA_PATH '{DATA_PATH}/issue_1116_v10', DUCKLAKE_VERSION '1.0')
+
+statement error
+CREATE MACRO v10.list_len(l VARCHAR[]) AS len(l)
+----
+DuckLake 1.0 does not support nested macro parameter types
+
+statement error
+CREATE MACRO v10.list_default(l := ['x', 'y']) AS len(l)
+----
+DuckLake 1.0 does not support macro parameter defaults that are not scalar constants
+
+statement ok
+CREATE MACRO v10.variant_type(v VARIANT) AS typeof(v)
+
+query I
+SELECT v10.variant_type(NULL)
+----
+VARIANT
+
+# parameters that older versions stored without their child types are loaded untyped
+unzip data/old_ducklake/v04_nested_macro.db.gz {TEST_DIR}/v04_nested_macro.db
+
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/v04_nested_macro.db' AS legacy (DATA_PATH '{TEST_DIR}/v04_nested_macro_data', OVERRIDE_DATA_PATH TRUE, AUTOMATIC_MIGRATION TRUE)
+
+statement ok
+USE legacy
+
+query II
+SELECT list_len(['a', 'b']), struct_get({'i': 3})
+----
+2	3
+
+query I
+SELECT v FROM list_rows([1, 2]) ORDER BY v
+----
+1
+2

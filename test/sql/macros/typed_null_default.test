@@ -32,13 +32,13 @@ query II
 SELECT default_value, default_value_type FROM ducklake_meta.ducklake_macro_parameters ORDER BY macro_id
 ----
 NULL	date
-NULL	null
+CAST(NULL AS VARCHAR)	expression
 NULL	varchar
-NULL	null
+CAST(NULL AS INTEGER[])	expression
 
 # DuckLake 1.0 stored nested typed NULL defaults with their type name
 query I
-UPDATE ducklake_meta.ducklake_macro_parameters SET default_value_type = 'list' WHERE macro_id = (SELECT macro_id FROM ducklake_meta.ducklake_macro WHERE macro_name = 'list_default')
+UPDATE ducklake_meta.ducklake_macro_parameters SET default_value = 'NULL', default_value_type = 'list' WHERE macro_id = (SELECT macro_id FROM ducklake_meta.ducklake_macro WHERE macro_name = 'list_default')
 ----
 1
 

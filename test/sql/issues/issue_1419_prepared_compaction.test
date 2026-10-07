@@ -1,0 +1,69 @@
+# name: test/sql/issues/issue_1419_prepared_compaction.test
+# description: Prepared compaction functions are rebound on every execution
+# group: [issues]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/issue_1419', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE dl.t (i INTEGER)
+
+statement ok
+COPY (SELECT 1 AS i) TO '{DATA_PATH}/issue_1419_f1.parquet'
+
+statement ok
+COPY (SELECT 2 AS i) TO '{DATA_PATH}/issue_1419_f2.parquet'
+
+statement ok
+CALL ducklake_add_data_files('dl', 't', '{DATA_PATH}/issue_1419_f*.parquet')
+
+statement ok
+PREPARE merge AS SELECT * FROM ducklake_merge_adjacent_files('dl', 't')
+
+statement ok
+PREPARE rewrite AS SELECT * FROM ducklake_rewrite_data_files('dl', delete_threshold => 0)
+
+query IIII
+EXECUTE merge
+----
+main	t	2	1
+
+statement ok
+COPY (SELECT 3 AS i) TO '{DATA_PATH}/issue_1419_f3.parquet'
+
+statement ok
+CALL ducklake_add_data_files('dl', 't', '{DATA_PATH}/issue_1419_f3.parquet')
+
+query IIII
+EXECUTE merge
+----
+main	t	2	1
+
+statement ok
+DELETE FROM dl.t WHERE i = 2
+
+query IIII
+EXECUTE rewrite
+----
+main	t	1	1
+
+statement ok
+DELETE FROM dl.t WHERE i = 3
+
+query IIII
+EXECUTE rewrite
+----
+main	t	1	1
+
+query II
+SELECT i, (SELECT count(*) FROM ducklake_list_files('dl', 't')) FROM dl.t
+----
+1	1

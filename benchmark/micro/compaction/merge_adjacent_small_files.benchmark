@@ -14,7 +14,7 @@ argument work merge_small_work
 
 include benchmark/micro/fixtures/compaction.benchmark.in
 
-include benchmark/micro/fixtures/rblob_cleanup.benchmark.in
+include benchmark/micro/fixtures/restore_cleanup.benchmark.in
 
 run
 SELECT sum(files_processed) AS processed, sum(files_created) AS created

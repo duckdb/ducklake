@@ -5,6 +5,7 @@
 #include "storage/ducklake_metadata_manager.hpp"
 
 #include "duckdb/common/local_file_system.hpp"
+#include "duckdb/function/scalar/struct_utils.hpp"
 #include "duckdb/function/table_function.hpp"
 #include "duckdb/main/client_data.hpp"
 #include "duckdb/main/extension_helper.hpp"
@@ -17,7 +18,6 @@
 #include "duckdb/planner/expression/bound_function_expression.hpp"
 #include "duckdb/planner/expression/bound_reference_expression.hpp"
 #include "duckdb/planner/expression_iterator.hpp"
-#include "duckdb/planner/operator/logical_filter.hpp"
 #include "duckdb/planner/table_filter.hpp"
 #include "storage/ducklake_table_entry.hpp"
 
@@ -52,16 +52,17 @@ optional_ptr<const DuckLakeFieldId> DuckLakeMultiFileList::ResolveFilterField(co
 	if (IsVirtualColumn(column_id)) {
 		return nullptr;
 	}
-	vector<string> path;
-	auto &root = DuckLakeUtil::GetFilterSubjectPath(subject, path);
-	if (root.GetExpressionClass() != ExpressionClass::BOUND_COLUMN_REF &&
-	    root.GetExpressionClass() != ExpressionClass::BOUND_REF) {
+	vector<StructExtractPathEntry> path;
+	auto &root = PeelStructExtractPath(subject, path);
+	if (!ExpressionFilter::IsSimpleFilterColumnRef(root)) {
 		return nullptr;
 	}
-	// the path was collected from the outside in, so walk it backwards from the containing column
 	optional_ptr<const DuckLakeFieldId> field_id = read_info.table.GetFieldId(PhysicalIndex(column_id));
-	for (auto it = path.rbegin(); it != path.rend(); it++) {
-		field_id = field_id->GetChildByName(*it);
+	for (auto &entry : path) {
+		if (entry.child_name.empty()) {
+			return nullptr;
+		}
+		field_id = field_id->GetChildByName(entry.child_name.GetIdentifierName());
 		if (!field_id) {
 			return nullptr;
 		}
@@ -83,7 +84,8 @@ unique_ptr<DuckLakeFilterNode> DuckLakeMultiFileList::GetColumnFilterNode(column
 		if (!field_id) {
 			return nullptr;
 		}
-		auto rewritten = DuckLakeUtil::ReplaceFilterSubject(expr, *subject, field_id->Type());
+		auto rewritten =
+		    ExpressionIterator::ReplaceExpression(expr, *subject, BoundReferenceExpression(field_id->Type(), 0U));
 		return make_uniq<DuckLakeFilterNode>(ColumnFilterInfo(field_id->GetFieldIndex().index, field_id->Type(),
 		                                                      make_uniq<ExpressionFilter>(std::move(rewritten))));
 	}
@@ -126,8 +128,8 @@ unique_ptr<DuckLakeFilterNode> DuckLakeMultiFileList::GetExpressionFilterNode(Mu
 		return nullptr;
 	}
 	// the reference underneath identifies the column, in the same projection space the filter set uses
-	vector<string> path;
-	auto &root = DuckLakeUtil::GetFilterSubjectPath(*subject, path);
+	vector<StructExtractPathEntry> path;
+	auto &root = PeelStructExtractPath(*subject, path);
 	if (root.GetExpressionClass() != ExpressionClass::BOUND_COLUMN_REF) {
 		return nullptr;
 	}
@@ -145,7 +147,8 @@ unique_ptr<DuckLakeFilterNode> DuckLakeMultiFileList::GetExpressionFilterNode(Mu
 	if (!field_id) {
 		return nullptr;
 	}
-	auto rewritten = DuckLakeUtil::ReplaceFilterSubject(expr, *subject, field_id->Type());
+	auto rewritten =
+	    ExpressionIterator::ReplaceExpression(expr, *subject, BoundReferenceExpression(field_id->Type(), 0U));
 	return make_uniq<DuckLakeFilterNode>(ColumnFilterInfo(field_id->GetFieldIndex().index, field_id->Type(),
 	                                                      make_uniq<ExpressionFilter>(std::move(rewritten))));
 }
@@ -260,16 +263,9 @@ bool DuckLakeMultiFileList::FilterTreeState::AddLeaves(const DuckLakeFilterNode 
 unique_ptr<DuckLakeFilterNode> DuckLakeMultiFileList::CombineFilterNode(ClientContext &context,
                                                                         MultiFilePushdownInfo &info,
                                                                         const Expression &expr) const {
-	// the optimizer splits the conjuncts it hands us, but an OR branch reached by recursion arrives whole
-	vector<unique_ptr<Expression>> conjuncts;
-	conjuncts.push_back(expr.Copy());
-	LogicalFilter::SplitPredicates(conjuncts);
-
 	FilterCombiner combiner(context);
-	for (auto &conjunct : conjuncts) {
-		if (combiner.AddFilter(std::move(conjunct)) == FilterResult::UNSATISFIABLE) {
-			return make_uniq<DuckLakeFilterNode>(DuckLakeFilterNodeType::MATCH_NONE);
-		}
+	if (combiner.AddConjuncts(expr.Copy()) == FilterResult::UNSATISFIABLE) {
+		return make_uniq<DuckLakeFilterNode>(DuckLakeFilterNodeType::MATCH_NONE);
 	}
 	vector<FilterPushdownResult> pushdown_results;
 	auto table_filter_set = combiner.GenerateTableScanFilters(info.column_indexes, pushdown_results);
@@ -432,14 +428,6 @@ unique_ptr<MultiFileList> DuckLakeMultiFileList::ComplexFilterPushdown(ClientCon
 	                                        std::move(pushdown_info));
 }
 
-vector<OpenFileInfo> DuckLakeMultiFileList::GetAllFiles() const {
-	vector<OpenFileInfo> file_list;
-	for (idx_t i = 0; i < GetTotalFileCount(); i++) {
-		file_list.push_back(GetFile(i));
-	}
-	return file_list;
-}
-
 FileExpandResult DuckLakeMultiFileList::GetExpandResult() const {
 	return FileExpandResult::MULTIPLE_FILES;
 }
@@ -450,7 +438,7 @@ idx_t DuckLakeMultiFileList::GetTotalFileCount() const {
 
 unique_ptr<NodeStatistics> DuckLakeMultiFileList::GetCardinality(ClientContext &context) const {
 	auto stats = read_info.table.GetTableStats(context);
-	if (!stats) {
+	if (!stats || stats->record_count_unknown) {
 		return nullptr;
 	}
 	return make_uniq<NodeStatistics>(stats->record_count);
@@ -605,7 +593,7 @@ vector<DuckLakeFileListExtendedEntry> DuckLakeMultiFileList::GetFilesExtended() 
 		transaction_row_start += file.row_count;
 		result.push_back(std::move(file_entry));
 	}
-	inlined_data_tables = read_info.table.GetInlinedDataTables();
+	inlined_data_tables = read_info.table.GetInlinedDataTables(transaction, read_info.snapshot);
 	for (auto &table : inlined_data_tables) {
 		DuckLakeFileListExtendedEntry file_entry;
 		file_entry.file.path = table.table_name;
@@ -671,7 +659,7 @@ void DuckLakeMultiFileList::GetFilesForTable() const {
 		transaction_row_start += file.row_count;
 		files.emplace_back(std::move(file_entry));
 	}
-	inlined_data_tables = read_info.table.GetInlinedDataTables();
+	inlined_data_tables = read_info.table.GetInlinedDataTables(transaction, read_info.snapshot);
 	for (auto &table : inlined_data_tables) {
 		DuckLakeFileListEntry file_entry;
 		file_entry.file.path = table.table_name;
@@ -698,7 +686,7 @@ void DuckLakeMultiFileList::GetTableInsertions() const {
 	auto &metadata_manager = transaction.GetMetadataManager();
 	files = metadata_manager.GetTableInsertions(read_info.table, *read_info.start_snapshot, read_info.snapshot);
 	// add inlined data tables as sources (if any)
-	inlined_data_tables = read_info.table.GetInlinedDataTables();
+	inlined_data_tables = read_info.table.GetInlinedDataTables(transaction, read_info.snapshot);
 	for (auto &table : inlined_data_tables) {
 		DuckLakeFileListEntry file_entry;
 		file_entry.file.path = table.table_name;
@@ -725,7 +713,7 @@ void DuckLakeMultiFileList::GetTableDeletions() const {
 		files.emplace_back(std::move(file_entry));
 	}
 	// add inlined data tables as sources (if any)
-	inlined_data_tables = read_info.table.GetInlinedDataTables();
+	inlined_data_tables = read_info.table.GetInlinedDataTables(transaction, read_info.snapshot);
 	for (auto &table : inlined_data_tables) {
 		DuckLakeFileListEntry file_entry;
 		file_entry.file.path = table.table_name;

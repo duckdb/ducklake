@@ -41,6 +41,12 @@
       ]
     },
     {
+      "reason": "Nested macro parameter types and defaults were added in 1.1-dev1 and are not available when ducklake_default_version is pinned to 1.0",
+      "paths": [
+        "test/sql/issues/issue_1116_nested_macro_parameters.test"
+      ]
+    },
+    {
       "reason": "View column comments (ducklake_view_column_tag) were added in 1.1-dev1 and are not available when ducklake_default_version is pinned to 1.0",
       "paths": [
         "test/sql/comments/comment_on_view_column.test",

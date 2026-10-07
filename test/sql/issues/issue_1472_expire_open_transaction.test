@@ -1,0 +1,127 @@
+# name: test/sql/issues/issue_1472_expire_open_transaction.test
+# description: Expiring snapshots newer than an open transaction keeps the conflicts of its commit
+# group: [issues]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/issue_1472', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE ducklake.t (id INTEGER)
+
+statement ok
+CREATE TABLE ducklake.other (i INTEGER)
+
+statement ok
+INSERT INTO ducklake.t VALUES (1), (2)
+
+# a delete from a file that was compacted and expired meanwhile
+statement ok con1
+BEGIN
+
+query I con1
+SELECT count(*) FROM ducklake.t
+----
+2
+
+statement ok
+INSERT INTO ducklake.t VALUES (3)
+
+statement ok
+CALL ducklake_merge_adjacent_files('ducklake')
+
+statement ok
+INSERT INTO ducklake.other VALUES (1)
+
+statement ok
+CALL ducklake_expire_snapshots('ducklake', older_than => now())
+
+statement ok con1
+DELETE FROM ducklake.t WHERE id = 1
+
+statement error con1
+COMMIT
+----
+conflict
+
+# a delete of a whole file that was compacted and expired meanwhile
+statement ok
+INSERT INTO ducklake.t VALUES (4)
+
+statement ok con1
+BEGIN
+
+query I con1
+SELECT count(*) FROM ducklake.t
+----
+4
+
+statement ok
+INSERT INTO ducklake.t VALUES (5)
+
+statement ok
+CALL ducklake_merge_adjacent_files('ducklake')
+
+statement ok
+INSERT INTO ducklake.other VALUES (2)
+
+statement ok
+CALL ducklake_expire_snapshots('ducklake', older_than => now())
+
+statement ok con1
+DELETE FROM ducklake.t WHERE id = 4
+
+statement error con1
+COMMIT
+----
+conflict
+
+query I
+SELECT id FROM ducklake.t ORDER BY id
+----
+1
+2
+3
+4
+5
+
+# tables created concurrently get distinct ids
+statement ok con1
+BEGIN
+
+query I con1
+SELECT count(*) FROM ducklake.t
+----
+5
+
+statement ok
+CREATE TABLE ducklake.created (i INTEGER)
+
+statement ok
+INSERT INTO ducklake.created VALUES (7)
+
+statement ok
+CALL ducklake_expire_snapshots('ducklake', older_than => now())
+
+statement ok con1
+CREATE TABLE ducklake.y (s VARCHAR)
+
+statement ok con1
+COMMIT
+
+query I
+SELECT i FROM ducklake.created
+----
+7
+
+query I
+SELECT count(*) FROM ducklake.y
+----
+0

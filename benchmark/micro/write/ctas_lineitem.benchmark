@@ -18,13 +18,15 @@ argument work ctas_work
 
 include benchmark/micro/fixtures/tpch05.benchmark.in
 
-include benchmark/micro/fixtures/rblob_cleanup.benchmark.in
+include benchmark/micro/fixtures/restore_cleanup.benchmark.in
 
 run
 CREATE TABLE lake.lineitem AS FROM src.lineitem;
 
 # A missed reset makes the CTAS fail because lake.lineitem already exists
-result_query II
-SELECT Count = (SELECT count(*) FROM src.lineitem), (SELECT count(*) FROM lake.lineitem) = Count FROM __answer
+result_query III
+SELECT Count = (SELECT count(*) FROM src.lineitem), (SELECT count(*) FROM lake.lineitem) = Count,
+(SELECT sum(hash(*COLUMNS(*))) FROM lake.lineitem) = (SELECT sum(hash(*COLUMNS(*))) FROM src.lineitem)
+FROM __answer
 ----
-true	true
+true	true	true

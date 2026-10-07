@@ -1,0 +1,45 @@
+# name: benchmark/micro/compaction/merge_adjacent_partitioned.benchmark
+# description: Merge 300 files across 100 identity partitions into 100 files on a freshly attached lake, with commit
+# group: [compaction]
+
+name Merge Adjacent Partitioned
+group micro
+subgroup compaction
+
+require ducklake
+
+require parquet
+
+argument work partitioned_merge_work
+
+include benchmark/micro/fixtures/partitioned_compaction.benchmark.in
+
+include benchmark/micro/fixtures/restore_cleanup.benchmark.in
+
+run
+SELECT sum(files_processed) AS processed, sum(files_created) AS created
+FROM ducklake_merge_adjacent_files('lake', 'events');
+
+# Merged rows keep the row ids of the seed lake, which still reads the original files
+result_query IIIIIII
+@attach IF NOT EXISTS ${lake}_pristine AS seed (READ_ONLY)
+WITH current_rows AS (
+SELECT part, count(*) AS n, sum(id) AS ids, sum(v) AS vals, count(DISTINCT filename) AS files
+FROM lake.events GROUP BY part
+), historical_rows AS (
+SELECT part, count(*) AS n, sum(id) AS ids, sum(v) AS vals FROM lake.events AT (VERSION => 3) GROUP BY part
+)
+SELECT processed, created,
+(SELECT count(*) = 100 AND bool_and((part BETWEEN 0 AND 99 AND n = 6144 AND files = 1
+AND ids = 6144::BIGINT * part * 6144 + 6144::BIGINT * 6143 // 2 AND vals = ids * 3 + n * 7) IS TRUE)
+FROM current_rows),
+(SELECT count(*) = 100 AND bool_and((part BETWEEN 0 AND 99 AND n = 2048
+AND ids = 2048::BIGINT * part * 6144 + 2048::BIGINT * 2047 // 2 AND vals = ids * 3 + n * 7) IS TRUE)
+FROM historical_rows),
+(SELECT count(*) = 0 FROM (SELECT rowid, id, v FROM lake.events EXCEPT ALL SELECT rowid, id, v FROM seed.events)),
+(SELECT count(*) FROM ducklake_list_files('lake', 'events')),
+(SELECT max(snapshot_id) FROM lake.snapshots())
+FROM __answer;
+DETACH seed;
+----
+300	100	true	true	true	100	6
