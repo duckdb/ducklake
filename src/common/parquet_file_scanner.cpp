@@ -36,9 +36,7 @@ ParquetFileScanner::ParquetFileScanner(ClientContext &context, const DuckLakeFil
 	named_params["hive_partitioning"] = Value::BOOLEAN(false);
 
 	if (!file.encryption_key.empty()) {
-		child_list_t<Value> encryption_values;
-		encryption_values.emplace_back("footer_key_value", Value::BLOB_RAW(file.encryption_key));
-		named_params["encryption_config"] = Value::STRUCT(std::move(encryption_values));
+		named_params["encryption_config"] = EncryptionConfig(file.encryption_key);
 	}
 
 	TableFunctionRef empty;
@@ -53,6 +51,12 @@ ParquetFileScanner::ParquetFileScanner(ClientContext &context, const DuckLakeFil
 	bind_data = parquet_scan.bind(context, bind_input, return_types, return_names);
 }
 
+Value ParquetFileScanner::EncryptionConfig(const string &encryption_key) {
+	child_list_t<Value> values;
+	values.emplace_back("footer_key_value", Value::BLOB_RAW(encryption_key));
+	return Value::STRUCT(std::move(values));
+}
+
 const vector<LogicalType> &ParquetFileScanner::GetTypes() const {
 	return return_types;
 }
@@ -62,12 +66,8 @@ const vector<Identifier> &ParquetFileScanner::GetNames() const {
 }
 
 optional_idx ParquetFileScanner::FindColumn(const string &name) const {
-	for (idx_t i = 0; i < return_names.size(); i++) {
-		if (return_names[i] == name) {
-			return i;
-		}
-	}
-	return optional_idx();
+	auto index = StringUtil::CIFind(return_names, Identifier(name));
+	return index == DConstants::INVALID_INDEX ? optional_idx() : optional_idx(index);
 }
 
 void ParquetFileScanner::SetFilters(unique_ptr<TableFilterSet> filters_p) {

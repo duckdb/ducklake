@@ -62,7 +62,6 @@ public:
 	const DuckLakeInlineData &op;
 	mutex lock;
 	idx_t total_inlined_rows = 0;
-	InlinePhase global_phase = InlinePhase::INLINING_ROWS;
 	unique_ptr<ColumnDataCollection> global_inlined_data;
 };
 

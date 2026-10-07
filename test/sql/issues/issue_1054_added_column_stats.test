@@ -323,11 +323,11 @@ statement ok
 INSERT INTO dl.lg VALUES ([{'x': 3, 'g': 'POINT(100 200)'::GEOMETRY}])
 
 query I
-SELECT count(*) FROM issue_1054_meta.ducklake_table_column_stats s
+SELECT s.extra_stats FROM issue_1054_meta.ducklake_table_column_stats s
 JOIN issue_1054_meta.ducklake_table t USING (table_id)
-WHERE t.table_name = 'lg' AND s.extra_stats LIKE '%"xmin": 10.0%'
+WHERE t.table_name = 'lg' AND s.extra_stats IS NOT NULL
 ----
-1
+{"bbox":{"xmin":10.0,"xmax":100.0,"ymin":20.0,"ymax":200.0,"zmin":null,"zmax":null,"mmin":null,"mmax":null},"types":["point"]}
 
 # a column added to a table whose record count is unknown keeps the default of the older rows
 statement ok

@@ -27,6 +27,7 @@ class DuckLakeCatalog;
 class DuckLakeSchemaEntry;
 class DuckLakeTableEntry;
 class DuckLakeFieldData;
+class DuckLakeInlineData;
 struct DuckLakeCopyOptions;
 struct DuckLakeCopyInput;
 
@@ -67,6 +68,14 @@ public:
 		return true;
 	}
 	string GetName() const override;
+};
+
+struct DuckLakeInsertPipeline {
+	reference<PhysicalOperator> root;
+	optional_ptr<DuckLakeInlineData> inline_data;
+	bool sorted = false;
+
+	PhysicalOperator &AttachInsert(PhysicalOperator &insert, PhysicalOperator &copy);
 };
 
 class DuckLakeInsert : public PhysicalOperator {
@@ -110,12 +119,14 @@ public:
 		return true;
 	}
 
-	static void InsertCasts(const vector<LogicalType> &types, ClientContext &context, PhysicalPlanGenerator &planner,
-	                        optional_ptr<PhysicalOperator> &plan);
-	static unique_ptr<LogicalOperator> InsertCasts(Binder &binder, unique_ptr<LogicalOperator> &plan);
-
 	static DuckLakeColumnStats ParseColumnStats(const LogicalType &type, const vector<Value> &stats);
+	static unique_ptr<CopyInfo> GetParquetCopyInfo(const string &file_path, Value field_ids,
+	                                               const string &encryption_key);
 	static DuckLakeCopyOptions GetCopyOptions(ClientContext &context, DuckLakeCopyInput &copy_input);
+	static DuckLakeInsertPipeline PlanInsertPipeline(ClientContext &context, PhysicalPlanGenerator &planner,
+	                                                 PhysicalOperator &plan, const ColumnList &columns,
+	                                                 const Identifier &table_name, optional_ptr<DuckLakeSort> sort_data,
+	                                                 bool sort_on_insert, idx_t data_inlining_row_limit);
 	static PhysicalOperator &PlanCopyForInsert(ClientContext &context, PhysicalPlanGenerator &planner,
 	                                           DuckLakeCopyInput &copy_input, optional_ptr<PhysicalOperator> plan);
 	static PhysicalOperator &PlanInsert(ClientContext &context, PhysicalPlanGenerator &planner,

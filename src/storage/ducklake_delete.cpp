@@ -1,5 +1,6 @@
 #include "storage/ducklake_catalog.hpp"
 #include "storage/ducklake_puffin.hpp"
+#include "duckdb/common/algorithm.hpp"
 #include "duckdb/common/map.hpp"
 #include "duckdb/execution/physical_plan_generator.hpp"
 #include "duckdb/common/file_system.hpp"
@@ -40,11 +41,6 @@ static DuckLakeDeleteFile WriteDeleteFileInternal(ClientContext &context, InputT
 	auto delete_file_uuid = "ducklake-" + input.transaction.GenerateUUID() + "-delete.parquet";
 	string delete_file_path = DuckLakeUtil::JoinPath(input.fs, input.data_path, delete_file_uuid);
 
-	auto info = make_uniq<CopyInfo>();
-	info->file_path = delete_file_path;
-	info->format = "parquet";
-	info->is_from = false;
-
 	// generate the field ids to be written by the parquet writer
 	// these field ids follow icebergs' ids and names for the delete files
 	child_list_t<Value> values;
@@ -55,18 +51,8 @@ static DuckLakeDeleteFile WriteDeleteFileInternal(ClientContext &context, InputT
 		values.emplace_back("_ducklake_internal_snapshot_id",
 		                    Value::INTEGER(MultiFileReader::LAST_UPDATED_SEQUENCE_NUMBER_ID));
 	}
-	auto field_ids = Value::STRUCT(std::move(values));
-	vector<Value> field_input;
-	field_input.push_back(std::move(field_ids));
-	info->options["field_ids"] = std::move(field_input);
-
-	if (!input.encryption_key.empty()) {
-		child_list_t<Value> enc_values;
-		enc_values.emplace_back("footer_key_value", Value::BLOB_RAW(input.encryption_key));
-		vector<Value> encryption_input;
-		encryption_input.push_back(Value::STRUCT(std::move(enc_values)));
-		info->options["encryption_config"] = std::move(encryption_input);
-	}
+	auto info =
+	    DuckLakeInsert::GetParquetCopyInfo(delete_file_path, Value::STRUCT(std::move(values)), input.encryption_key);
 
 	// get the actual copy function and bind it
 	auto &copy_fun = DuckLakeFunctions::GetCopyFunction(input.context, "parquet");
@@ -255,15 +241,6 @@ DuckLakeDelete::DuckLakeDelete(PhysicalPlan &physical_plan, DuckLakeTableEntry &
 //===--------------------------------------------------------------------===//
 // States
 //===--------------------------------------------------------------------===//
-struct WrittenColumnInfo {
-	WrittenColumnInfo() = default;
-	WrittenColumnInfo(LogicalType type_p, int32_t field_id) : type(std::move(type_p)), field_id(field_id) {
-	}
-
-	LogicalType type;
-	int32_t field_id;
-};
-
 class DuckLakeDeleteLocalState : public LocalSinkState {
 public:
 	optional_idx current_file_index;
@@ -273,15 +250,8 @@ public:
 
 class DuckLakeDeleteGlobalState : public GlobalSinkState {
 public:
-	explicit DuckLakeDeleteGlobalState() {
-		written_columns["file_path"] =
-		    WrittenColumnInfo(LogicalType::VARCHAR, MultiFileReader::DELETE_FILE_PATH_FIELD_ID);
-		written_columns["pos"] = WrittenColumnInfo(LogicalType::BIGINT, MultiFileReader::DELETE_POS_FIELD_ID);
-	}
-
 	mutex lock;
 	unordered_map<string, DuckLakeDeleteFile> written_files;
-	unordered_map<string, WrittenColumnInfo> written_columns;
 	idx_t total_deleted_count = 0;
 	unordered_map<uint64_t, unique_ptr<ColumnDataCollection>> deleted_rows;
 	unordered_map<idx_t, string> filenames;
@@ -294,9 +264,7 @@ public:
 		lock_guard<mutex> guard(lock);
 		auto deleted_row_idx = local_state.current_file_index.GetIndex();
 		auto global_entry = deleted_rows.find(deleted_row_idx);
-		DataChunk file_row_id_chunk;
 		vector<LogicalType> row_id_types {LogicalType::UBIGINT};
-		file_row_id_chunk.Initialize(context, row_id_types);
 
 		optional_ptr<ColumnDataCollection> deleted_row_collection;
 		if (global_entry == deleted_rows.end()) {
@@ -308,20 +276,14 @@ public:
 		}
 		ColumnDataAppendState append_state;
 		deleted_row_collection->InitializeAppend(append_state);
-		auto data = FlatVector::GetDataMutable<uint64_t>(file_row_id_chunk.data[0]);
-		idx_t chunk_size = 0;
-		for (idx_t r = 0; r < local_entry.size(); ++r) {
-			data[chunk_size++] = local_entry[r];
-			if (chunk_size == STANDARD_VECTOR_SIZE) {
-				file_row_id_chunk.SetChildCardinality(chunk_size);
-				deleted_row_collection->Append(append_state, file_row_id_chunk);
-				chunk_size = 0;
-			}
-		}
-		if (chunk_size > 0) {
-			file_row_id_chunk.SetChildCardinality(chunk_size);
+		DataChunk file_row_id_chunk;
+		file_row_id_chunk.InitializeEmpty(row_id_types);
+		for (idx_t offset = 0; offset < local_entry.size(); offset += STANDARD_VECTOR_SIZE) {
+			auto count = MinValue<idx_t>(STANDARD_VECTOR_SIZE, local_entry.size() - offset);
+			file_row_id_chunk.data[0].Reference(
+			    Vector(LogicalType::UBIGINT, data_ptr_cast(local_entry.data() + offset), count));
+			file_row_id_chunk.SetChildCardinality(count);
 			deleted_row_collection->Append(append_state, file_row_id_chunk);
-			chunk_size = 0;
 		}
 		total_deleted_count += local_entry.size();
 		local_entry.clear();
@@ -454,10 +416,7 @@ void DuckLakeDelete::FlushDeleteWithSnapshots(DuckLakeTransaction &transaction, 
 	                                         sorted_deletes_with_snapshots,
 	                                         DeleteFileSource::REGULAR};
 	auto &catalog = table.catalog.Cast<DuckLakeCatalog>();
-	auto &schema = table.ParentSchema().Cast<DuckLakeSchemaEntry>();
-	bool use_deletion_vectors =
-	    catalog.WriteDeletionVectors(schema.GetSchemaId(), table.GetTableId(), &table.GetTableOptions());
-	auto written_file = DuckLakeDeleteFileWriter::Write(context, input, use_deletion_vectors);
+	auto written_file = DuckLakeDeleteFileWriter::Write(context, input, catalog.WriteDeletionVectors(table));
 
 	written_file.data_file_id = delete_file.data_file_id;
 	written_file.overwrites_existing_delete = delete_file.overwrites_existing_delete;
@@ -465,11 +424,7 @@ void DuckLakeDelete::FlushDeleteWithSnapshots(DuckLakeTransaction &transaction, 
 	written_file.overwritten_delete_file.delete_file_id = data_file_info.delete_file_id;
 	written_file.overwritten_delete_file.path = data_file_info.delete_file.path;
 
-	idx_t max_snapshot = 0;
-	for (auto &entry : sorted_deletes_with_snapshots) {
-		max_snapshot = MaxValue(max_snapshot, static_cast<idx_t>(entry.snapshot_id));
-	}
-	written_file.max_snapshot = max_snapshot;
+	written_file.max_snapshot = MaxSnapshotId(sorted_deletes_with_snapshots);
 
 	global_state.written_files.emplace(filename, std::move(written_file));
 }
@@ -517,9 +472,7 @@ void DuckLakeDelete::FlushDelete(DuckLakeTransaction &transaction, ClientContext
 	// check if we should use inlined file deletions instead of creating a delete file
 	if (data_file_info.file_id.IsValid()) {
 		auto &catalog = table.catalog.Cast<DuckLakeCatalog>();
-		auto &schema = table.ParentSchema().Cast<DuckLakeSchemaEntry>();
-		auto threshold =
-		    catalog.DataInliningRowLimit(context, schema.GetSchemaId(), table.GetTableId(), &table.GetTableOptions());
+		auto threshold = catalog.DataInliningRowLimit(context, table);
 		if (threshold > 0 && sorted_deletes.size() <= threshold) {
 			// use inlined file deletions
 			if (catalog.CheckInlinedDeletionTableCache(table.GetTableId(), transaction.GetSnapshot()) !=
@@ -564,9 +517,7 @@ void DuckLakeDelete::FlushDelete(DuckLakeTransaction &transaction, ClientContext
 
 	auto &fs = FileSystem::GetFileSystem(context);
 	auto &catalog = table.catalog.Cast<DuckLakeCatalog>();
-	auto &schema = table.ParentSchema().Cast<DuckLakeSchemaEntry>();
-	bool use_deletion_vectors =
-	    catalog.WriteDeletionVectors(schema.GetSchemaId(), table.GetTableId(), &table.GetTableOptions());
+	bool use_deletion_vectors = catalog.WriteDeletionVectors(table);
 
 	WriteDeleteFileInput input {context,
 	                            transaction,
@@ -643,7 +594,7 @@ InsertionOrderPreservingMap<string> DuckLakeDelete::ParamsToString() const {
 	return result;
 }
 
-optional_ptr<PhysicalTableScan> FindDeleteSource(PhysicalOperator &plan) {
+static optional_ptr<PhysicalTableScan> FindDeleteSource(PhysicalOperator &plan) {
 	if (plan.type == PhysicalOperatorType::MERGE_ACTION_SOURCE) {
 		// the rows of a merge action are pushed into the source by the merge into - look for the scan in the plan
 		// that the merge into reads from
@@ -653,13 +604,9 @@ optional_ptr<PhysicalTableScan> FindDeleteSource(PhysicalOperator &plan) {
 	if (plan.type == PhysicalOperatorType::TABLE_SCAN) {
 		// does this emit the virtual columns?
 		auto &scan = plan.Cast<PhysicalTableScan>();
-		bool found = false;
-		for (auto &col : scan.column_ids) {
-			if (col.GetPrimaryIndex() == MultiFileReader::COLUMN_IDENTIFIER_FILE_ROW_NUMBER) {
-				found = true;
-				break;
-			}
-		}
+		bool found = std::any_of(scan.column_ids.begin(), scan.column_ids.end(), [](const ColumnIndex &col) {
+			return col.GetPrimaryIndex() == MultiFileReader::COLUMN_IDENTIFIER_FILE_ROW_NUMBER;
+		});
 		if (!found) {
 			return nullptr;
 		}

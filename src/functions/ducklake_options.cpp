@@ -44,10 +44,10 @@ static constexpr DuckLakeOptionMetadata DUCKLAKE_OPTIONS[] = {
 };
 
 struct DuckLakeOptionsData : public TableFunctionData {
-	explicit DuckLakeOptionsData(Catalog &catalog) : catalog(catalog) {
+	explicit DuckLakeOptionsData(DuckLakeCatalog &catalog) : catalog(catalog) {
 	}
 
-	Catalog &catalog;
+	DuckLakeCatalog &catalog;
 };
 
 struct DuckLakeOptionsState : public GlobalTableFunctionState {
@@ -93,8 +93,8 @@ static vector<Value> GetOptionRow(const DuckLakeTag &tag, const string &scope, c
 
 unique_ptr<GlobalTableFunctionState> DuckLakeOptionsInit(ClientContext &context, TableFunctionInitInput &input) {
 	auto &bind_data = input.bind_data->Cast<DuckLakeOptionsData>();
-	auto &transaction = DuckLakeTransaction::Get(context, bind_data.catalog);
-	auto &ducklake_catalog = bind_data.catalog.Cast<DuckLakeCatalog>();
+	auto &ducklake_catalog = bind_data.catalog;
+	auto &transaction = DuckLakeTransaction::Get(context, ducklake_catalog);
 	auto &metadata_manager = transaction.GetMetadataManager();
 
 	auto result = make_uniq<DuckLakeOptionsState>();

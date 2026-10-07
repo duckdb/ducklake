@@ -44,11 +44,11 @@ static unique_ptr<FunctionData> DuckLakeCommitBind(ClientContext &, TableFunctio
 static void DuckLakeCommitExecute(ClientContext &context, TableFunctionInput &data_p, DataChunk &output) {
 	auto &state = data_p.global_state->Cast<DuckLakeRunOnceState>();
 	auto &data = data_p.bind_data->Cast<DuckLakeCommitBindData>();
-	if (state.finished) {
+	if (state.executed) {
 		output.SetChildCardinality(0);
 		return;
 	}
-	state.finished = true;
+	state.executed = true;
 
 	DuckLakeServerSideCommit commit(context, data.metadata_schema_name, data.schema_version);
 	commit.SetRetryConfigOverride(data.retry_config);

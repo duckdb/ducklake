@@ -164,6 +164,14 @@ string DuckLakeStagedTable::TruncateAllSql() {
 	return sql;
 }
 
+const char *DuckLakeStagedTable::DeleteFileSourceToString(DeleteFileSource source) {
+	return source == DeleteFileSource::FLUSH ? "FLUSH" : "REGULAR";
+}
+
+DeleteFileSource DuckLakeStagedTable::DeleteFileSourceFromString(const string &source) {
+	return source == "FLUSH" ? DeleteFileSource::FLUSH : DeleteFileSource::REGULAR;
+}
+
 void DuckLakeStagedCommit::EmitDataFileRow(string &sql, const DuckLakeDataFile &file, idx_t local_file_id,
                                            TableIndex table_id, idx_t file_order,
                                            const string &compaction_id_literal) const {
@@ -191,37 +199,34 @@ void DuckLakeStagedCommit::EmitDataFileRow(string &sql, const DuckLakeDataFile &
 }
 
 void DuckLakeStagedCommit::EmitDeleteFileRow(string &sql, const DuckLakeDeleteFile &file, TableIndex table_id,
-                                             const string &data_file_path) const {
-	string overwrite_id = file.overwritten_delete_file.delete_file_id.IsValid()
-	                          ? std::to_string(file.overwritten_delete_file.delete_file_id.index)
-	                          : string("NULL");
-	string overwrite_path = file.overwritten_delete_file.path.empty()
-	                            ? string("NULL")
-	                            : SQLString::ToString(file.overwritten_delete_file.path);
-	sql += StringUtil::Format("INSERT INTO %s VALUES "
-	                          "(%llu, %s, %llu, %s, %s, %llu, %llu, %llu, %s, %s, %s, %s, %s, %s, %s, NULL, %s);",
-	                          DuckLakeStagedTable::BaseName(DuckLakeStagedTableType::DELETE_FILE), table_id.index,
-	                          SQLString(data_file_path), file.data_file_id.index, SQLString(file.file_name),
-	                          SQLString(DeleteFileFormatToString(file.format)), file.delete_count, file.file_size_bytes,
-	                          file.footer_size, DuckLakeUtil::EncryptionKeyLiteral(file.encryption_key),
-	                          DuckLakeUtil::OptionalIdxOrNull(file.begin_snapshot),
-	                          DuckLakeUtil::OptionalIdxOrNull(file.max_snapshot),
-	                          SQLString(file.source == DeleteFileSource::FLUSH ? "FLUSH" : "REGULAR"),
-	                          file.overwrites_existing_delete ? "true" : "false", overwrite_id, overwrite_path,
-	                          DuckLakeUtil::OptionalIdxOrNull(file.row_group_count));
-}
-
-void DuckLakeStagedCommit::EmitAttachedDeleteRow(string &sql, const DuckLakeDeleteFile &del, TableIndex table_id,
-                                                 idx_t local_file_id) const {
+                                             optional_ptr<const string> data_file_path,
+                                             optional_idx attached_local_file_id) const {
+	string data_file_path_literal = "NULL";
+	string data_file_id = "NULL";
+	bool overwrites_existing_delete = false;
+	string overwrite_id = "NULL";
+	string overwrite_path = "NULL";
+	if (data_file_path) {
+		data_file_path_literal = SQLString::ToString(*data_file_path);
+		data_file_id = std::to_string(file.data_file_id.index);
+		overwrites_existing_delete = file.overwrites_existing_delete;
+		auto &overwritten = file.overwritten_delete_file;
+		if (overwritten.delete_file_id.IsValid()) {
+			overwrite_id = std::to_string(overwritten.delete_file_id.index);
+		}
+		if (!overwritten.path.empty()) {
+			overwrite_path = SQLString::ToString(overwritten.path);
+		}
+	}
 	sql += StringUtil::Format(
-	    "INSERT INTO %s VALUES "
-	    "(%llu, NULL, NULL, %s, %s, %llu, %llu, %llu, %s, %s, %s, %s, false, NULL, NULL, %llu, %s);",
-	    DuckLakeStagedTable::BaseName(DuckLakeStagedTableType::DELETE_FILE), table_id.index, SQLString(del.file_name),
-	    SQLString(DeleteFileFormatToString(del.format)), del.delete_count, del.file_size_bytes, del.footer_size,
-	    DuckLakeUtil::EncryptionKeyLiteral(del.encryption_key), DuckLakeUtil::OptionalIdxOrNull(del.begin_snapshot),
-	    DuckLakeUtil::OptionalIdxOrNull(del.max_snapshot),
-	    SQLString(del.source == DeleteFileSource::FLUSH ? "FLUSH" : "REGULAR"), local_file_id,
-	    DuckLakeUtil::OptionalIdxOrNull(del.row_group_count));
+	    "INSERT INTO %s VALUES (%llu, %s, %s, %s, %s, %llu, %llu, %llu, %s, %s, %s, %s, %s, %s, %s, %s, %s);",
+	    DuckLakeStagedTable::BaseName(DuckLakeStagedTableType::DELETE_FILE), table_id.index, data_file_path_literal,
+	    data_file_id, SQLString(file.file_name), SQLString(DeleteFileFormatToString(file.format)), file.delete_count,
+	    file.file_size_bytes, file.footer_size, DuckLakeUtil::EncryptionKeyLiteral(file.encryption_key),
+	    DuckLakeUtil::OptionalIdxOrNull(file.begin_snapshot), DuckLakeUtil::OptionalIdxOrNull(file.max_snapshot),
+	    SQLString(DuckLakeStagedTable::DeleteFileSourceToString(file.source)),
+	    DuckLakeUtil::BoolLiteral(overwrites_existing_delete), overwrite_id, overwrite_path,
+	    DuckLakeUtil::OptionalIdxOrNull(attached_local_file_id), DuckLakeUtil::OptionalIdxOrNull(file.row_group_count));
 }
 
 string DuckLakeStagedCommit::EmitColumnStatsValues(const DuckLakeColumnStats &s) {
@@ -231,7 +236,7 @@ string DuckLakeStagedCommit::EmitColumnStatsValues(const DuckLakeColumnStats &s)
 	string max_val = s.has_max ? DuckLakeUtil::StatsToString(s.max) : "NULL";
 	bool has_min_emit = s.has_min && min_val != "NULL";
 	bool has_max_emit = s.has_max && max_val != "NULL";
-	string contains_nan = s.has_contains_nan ? (s.contains_nan ? "true" : "false") : "NULL";
+	string contains_nan = s.has_contains_nan ? DuckLakeUtil::BoolLiteral(s.contains_nan) : "NULL";
 	string extra_stats = "NULL";
 	if (s.extra_stats) {
 		string serialized;
@@ -253,19 +258,6 @@ void DuckLakeStagedCommit::EmitInlinedColumnStatsRow(string &sql, TableIndex tab
 	sql += StringUtil::Format("INSERT INTO %s VALUES (%llu, %llu, %s);",
 	                          DuckLakeStagedTable::BaseName(DuckLakeStagedTableType::INLINED_COLUMN_STATS),
 	                          table_id.index, column_id.index, EmitColumnStatsValues(s));
-}
-
-void DuckLakeStagedCommit::FlattenNameMapEntry(const DuckLakeNameMapEntry &entry, idx_t map_id, idx_t parent_id,
-                                               idx_t &next_entry_id, string &sql) const {
-	idx_t entry_id = next_entry_id++;
-	string parent_literal = parent_id == NumericLimits<idx_t>::Maximum() ? string("NULL") : std::to_string(parent_id);
-	sql += StringUtil::Format("INSERT INTO %s VALUES (%llu, %llu, %s, %s, %llu, %s);",
-	                          DuckLakeStagedTable::BaseName(DuckLakeStagedTableType::NAME_MAP_ENTRY), map_id, entry_id,
-	                          parent_literal, SQLString(entry.source_name), entry.target_field_id.index,
-	                          entry.hive_partition ? "true" : "false");
-	for (auto &child : entry.child_entries) {
-		FlattenNameMapEntry(*child, map_id, entry_id, next_entry_id, sql);
-	}
 }
 
 string DuckLakeStagedCommit::EmitCommitHeader(const DuckLakeSnapshotCommit &h, const DuckLakeSnapshot &snap,
@@ -290,7 +282,7 @@ string DuckLakeStagedCommit::EmitDataFiles(const LocalTableChanges &local_change
 		for (auto &file : table_changes.new_data_files) {
 			EmitDataFileRow(sql, file, local_file_id, table_id, file_order, "NULL");
 			for (auto &del : file.delete_files) {
-				EmitAttachedDeleteRow(sql, del, table_id, local_file_id);
+				EmitDeleteFileRow(sql, del, table_id, nullptr, local_file_id);
 			}
 			local_file_id++;
 			file_order++;
@@ -381,7 +373,7 @@ string DuckLakeStagedCommit::EmitDeleteFiles(const LocalTableChanges &local_chan
 		for (auto &delete_entry : table_changes.new_delete_files) {
 			auto &data_file_path = delete_entry.first;
 			for (auto &file : delete_entry.second) {
-				EmitDeleteFileRow(sql, file, table_id, data_file_path);
+				EmitDeleteFileRow(sql, file, table_id, data_file_path, optional_idx());
 			}
 		}
 	}
@@ -444,9 +436,12 @@ string DuckLakeStagedCommit::EmitNameMaps(const DuckLakeNameMapSet &name_maps) c
 		sql += StringUtil::Format("INSERT INTO %s VALUES (%llu, %llu);",
 		                          DuckLakeStagedTable::BaseName(DuckLakeStagedTableType::NAME_MAP), map.id.index,
 		                          map.table_id.index);
-		idx_t next_entry_id = 0;
-		for (auto &col : map.column_maps) {
-			FlattenNameMapEntry(*col, map.id.index, NumericLimits<idx_t>::Maximum(), next_entry_id, sql);
+		for (auto &col : map.FlattenColumns()) {
+			auto parent = col.parent_column.IsValid() ? std::to_string(col.parent_column.GetIndex()) : "NULL";
+			sql += StringUtil::Format("INSERT INTO %s VALUES (%llu, %llu, %s, %s, %llu, %s);",
+			                          DuckLakeStagedTable::BaseName(DuckLakeStagedTableType::NAME_MAP_ENTRY),
+			                          map.id.index, col.column_id, parent, SQLString(col.source_name),
+			                          col.target_field_id.index, DuckLakeUtil::BoolLiteral(col.hive_partition));
 		}
 	}
 	return sql;

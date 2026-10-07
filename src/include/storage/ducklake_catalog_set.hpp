@@ -37,14 +37,6 @@ public:
 	void AddEntry(DuckLakeSchemaEntry &schema, TableIndex id, unique_ptr<CatalogEntry> entry);
 	void AddEntry(DuckLakeSchemaEntry &schema, MacroIndex id, unique_ptr<CatalogEntry> entry);
 	void MoveEntriesTo(vector<unique_ptr<CatalogEntry>> &result);
-	template <class T>
-	optional_ptr<T> GetEntry(const string &name) {
-		auto entry = GetEntry(name);
-		if (!entry) {
-			return nullptr;
-		}
-		return entry->Cast<T>();
-	}
 
 	const ducklake_entries_map_t &GetEntries() const {
 		return catalog_entries;

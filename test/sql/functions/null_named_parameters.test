@@ -1,0 +1,116 @@
+# name: test/sql/functions/null_named_parameters.test
+# description: NULL arguments of DuckLake table functions raise a clean error
+# group: [functions]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/null_named_parameters')
+
+statement ok
+CREATE TABLE dl.t (i INTEGER)
+
+statement error
+CALL ducklake_merge_adjacent_files('dl', 't', schema => NULL)
+----
+The schema option must be a non-null string
+
+statement error
+CALL ducklake_merge_adjacent_files('dl', NULL)
+----
+Table cannot be NULL
+
+statement error
+CALL ducklake_rewrite_data_files('dl', 't', schema => NULL)
+----
+The schema option must be a non-null string
+
+statement error
+CALL ducklake_rewrite_data_files('dl', 't', delete_threshold => NULL)
+----
+The delete_threshold option must be a non-null double
+
+statement error
+FROM ducklake_list_files('dl', 't', schema => NULL)
+----
+The schema option must be a non-null string
+
+statement error
+FROM ducklake_list_files('dl', 't', snapshot_version => NULL)
+----
+The snapshot_version option must be a non-null integer
+
+statement error
+FROM ducklake_list_files('dl', 't', snapshot_time => NULL)
+----
+The snapshot_time option must be a non-null timestamp
+
+statement error
+FROM ducklake_list_files('dl', NULL)
+----
+Table cannot be NULL
+
+statement error
+CALL ducklake_flush_inlined_data('dl', schema_name => NULL)
+----
+The schema_name option must be a non-null string
+
+statement error
+CALL ducklake_flush_inlined_data('dl', table_name => NULL)
+----
+The table_name option must be a non-null string
+
+statement error
+CALL ducklake_add_data_files('dl', 't', '{DATA_PATH}/null_named_parameters/missing.parquet', schema => NULL)
+----
+The schema option must be a non-null string
+
+statement error
+CALL ducklake_add_data_files('dl', 't', '{DATA_PATH}/null_named_parameters/missing.parquet', allow_missing => NULL)
+----
+The allow_missing option must be a non-null boolean
+
+statement error
+CALL ducklake_add_data_files('dl', 't', '{DATA_PATH}/null_named_parameters/missing.parquet', ignore_extra_columns => NULL)
+----
+The ignore_extra_columns option must be a non-null boolean
+
+statement error
+CALL ducklake_add_data_files('dl', 't', '{DATA_PATH}/null_named_parameters/missing.parquet', hive_partitioning => NULL)
+----
+The hive_partitioning option must be a non-null boolean
+
+statement error
+CALL ducklake_cleanup_old_files('dl', dry_run => NULL)
+----
+The dry_run option must be a non-null boolean
+
+statement error
+CALL ducklake_cleanup_old_files('dl', cleanup_all => NULL)
+----
+The cleanup_all option must be a non-null boolean
+
+statement error
+CALL ducklake_cleanup_old_files('dl', older_than => NULL)
+----
+The older_than option must be a non-null timestamp
+
+statement error
+CALL ducklake_delete_orphaned_files('dl', dry_run => NULL)
+----
+The dry_run option must be a non-null boolean
+
+statement error
+CALL ducklake_set_option('dl', NULL, 'zstd')
+----
+Option name cannot be NULL
+
+# the catalog is still usable
+statement ok
+CALL ducklake_merge_adjacent_files('dl', 't')

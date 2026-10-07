@@ -8,7 +8,6 @@
 #include "duckdb/planner/expression.hpp"
 #include "duckdb/planner/expression/bound_reference_expression.hpp"
 #include "storage/ducklake_delete.hpp"
-#include "storage/ducklake_inline_data.hpp"
 #include "storage/ducklake_table_entry.hpp"
 #include "storage/ducklake_catalog.hpp"
 #include "storage/ducklake_schema_entry.hpp"
@@ -38,10 +37,8 @@ DuckLakeUpdate::DuckLakeUpdate(PhysicalPlan &physical_plan, DuckLakeTableEntry &
 class DuckLakeUpdateGlobalState : public GlobalOperatorState {
 public:
 	explicit DuckLakeUpdateGlobalState(ClientContext &context)
-	    : total_updated_count(0), seen_rows(context, {LogicalType::UBIGINT, LogicalType::BIGINT}) {
+	    : seen_rows(context, {LogicalType::UBIGINT, LogicalType::BIGINT}) {
 	}
-
-	atomic<idx_t> total_updated_count;
 
 	//! Duplicate row detection (first-write-wins)
 	mutex seen_rows_lock;
@@ -56,7 +53,6 @@ public:
 	DataChunk update_expression_chunk;
 	DataChunk insert_chunk;
 	DataChunk delete_chunk;
-	idx_t updated_count = 0;
 };
 
 unique_ptr<GlobalOperatorState> DuckLakeUpdate::GetGlobalOperatorState(ClientContext &context) const {
@@ -140,14 +136,11 @@ OperatorResultType DuckLakeUpdate::Execute(ExecutionContext &context, DataChunk 
 	InterruptState interrupt_state;
 	OperatorSinkInput delete_input {*delete_op.sink_state, *lstate.delete_local_state, interrupt_state};
 	delete_op.Sink(context, delete_chunk, delete_input);
-
-	lstate.updated_count += input.size();
 	return OperatorResultType::NEED_MORE_INPUT;
 }
 
 OperatorFinalizeResultType DuckLakeUpdate::FinalExecute(ExecutionContext &context, DataChunk &chunk,
                                                         GlobalOperatorState &gstate_p, OperatorState &state_p) const {
-	auto &gstate = gstate_p.Cast<DuckLakeUpdateGlobalState>();
 	auto &lstate = state_p.Cast<DuckLakeUpdateLocalState>();
 
 	InterruptState interrupt_state;
@@ -156,7 +149,6 @@ OperatorFinalizeResultType DuckLakeUpdate::FinalExecute(ExecutionContext &contex
 	if (result != SinkCombineResultType::FINISHED) {
 		throw InternalException("DuckLakeUpdate::FinalExecute does not support async child operators");
 	}
-	gstate.total_updated_count += lstate.updated_count;
 	return OperatorFinalizeResultType::FINISHED;
 }
 
@@ -201,13 +193,9 @@ DuckLakeUpdate &DuckLakeUpdate::PlanUpdateOperator(ClientContext &context, Physi
 	                                             copy_input.encryption_key, false);
 
 	// build update expressions (physical columns only, no partition cols, no casts)
-	vector<unique_ptr<Expression>> expressions;
-	unordered_map<idx_t, idx_t> expression_map;
+	vector<unique_ptr<Expression>> expressions(op.columns.size());
 	for (idx_t i = 0; i < op.columns.size(); i++) {
-		expression_map[op.columns[i].index] = i;
-	}
-	for (idx_t i = 0; i < op.columns.size(); i++) {
-		expressions.push_back(op.expressions[expression_map[i]]->Copy());
+		expressions[op.columns[i].index] = op.expressions[i]->Copy();
 	}
 
 	auto &update_op =
@@ -235,22 +223,12 @@ PhysicalOperator &DuckLakeCatalog::PlanUpdate(ClientContext &context, PhysicalPl
 	auto &update_op = DuckLakeUpdate::PlanUpdateOperator(context, planner, op, child_plan, copy_input);
 
 	// follow the insert path for inlining
-	optional_ptr<PhysicalOperator> plan = DuckLakeVerifyNotNull::Plan(planner, table, update_op);
-	optional_ptr<DuckLakeInlineData> inline_data;
-
-	idx_t data_inlining_row_limit = GetInliningLimit(context, table);
-	if (data_inlining_row_limit > 0) {
-		plan = planner.Make<DuckLakeInlineData>(*plan, data_inlining_row_limit);
-		inline_data = plan->Cast<DuckLakeInlineData>();
-	}
-
-	auto &physical_copy = DuckLakeInsert::PlanCopyForInsert(context, planner, copy_input, plan);
+	auto &verified_plan = DuckLakeVerifyNotNull::Plan(planner, table, update_op);
+	auto pipeline = DuckLakeInsert::PlanInsertPipeline(context, planner, verified_plan, table.GetColumns(), table.name,
+	                                                   nullptr, false, GetInliningLimit(context, table));
+	auto &physical_copy = DuckLakeInsert::PlanCopyForInsert(context, planner, copy_input, pipeline.root.get());
 	auto &insert_op = DuckLakeInsert::PlanInsert(context, planner, table, std::move(copy_input.encryption_key));
-	if (inline_data) {
-		inline_data->insert = insert_op.Cast<DuckLakeInsert>();
-	}
-	insert_op.children.push_back(physical_copy);
-	return insert_op;
+	return pipeline.AttachInsert(insert_op, physical_copy);
 }
 
 void DuckLakeTableEntry::BindUpdateConstraints(Binder &binder, LogicalGet &get, LogicalProjection &proj,

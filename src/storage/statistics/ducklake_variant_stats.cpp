@@ -49,9 +49,7 @@ void DuckLakeColumnVariantStats::Merge(const DuckLakeColumnExtraStats &new_stats
 }
 
 unique_ptr<DuckLakeColumnExtraStats> DuckLakeColumnVariantStats::Copy() const {
-	auto result = make_uniq<DuckLakeColumnVariantStats>();
-	result->shredded_field_stats = shredded_field_stats;
-	return std::move(result);
+	return make_uniq<DuckLakeColumnVariantStats>(*this);
 }
 
 void DuckLakeColumnVariantStats::Serialize(DuckLakeColumnStatsInfo &column_stats) const {

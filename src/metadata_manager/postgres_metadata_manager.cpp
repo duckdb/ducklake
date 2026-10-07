@@ -154,17 +154,6 @@ string PostgresMetadataManager::CastStatsToTarget(const string &stats, const Log
 	return string();
 }
 
-static string GeneratePostgresNativeFileColumnStatsCTEBody(const CTERequirement &requirement, TableIndex table_id) {
-	string select_list = "data_file_id";
-	for (const auto &stat : requirement.referenced_stats) {
-		select_list += ", " + stat;
-	}
-	return StringUtil::Format("  SELECT %s\n"
-	                          "  FROM {METADATA_SCHEMA_ESCAPED}.ducklake_file_column_stats\n"
-	                          "  WHERE column_id = %d AND table_id = %d\n",
-	                          select_list, requirement.column_field_index, table_id.index);
-}
-
 PostgresMetadataManager::PostgresMetadataManager(DuckLakeTransaction &transaction)
     : DuckLakeMetadataManager(transaction) {
 }
@@ -261,9 +250,7 @@ FROM inlined
 JOIN {METADATA_CATALOG}.ducklake_column col ON col.table_id = inlined.table_id AND col.parent_column IS NULL
 WHERE col.begin_snapshot <= inlined.snapshot_id AND (col.end_snapshot IS NULL OR col.end_snapshot > inlined.snapshot_id)
 )");
-	if (columns->HasError()) {
-		columns->GetErrorObject().Throw("Failed to read the columns of inlined-data tables while migrating: ");
-	}
+	columns->ThrowIfError("Failed to read the columns of inlined-data tables while migrating: ");
 	map<string, case_insensitive_map_t<string>> inlined_tables;
 	for (auto &row : *columns) {
 		inlined_tables[row.GetValue<string>(0)][row.GetValue<string>(1)] = row.GetValue<string>(2);
@@ -322,53 +309,19 @@ WHERE col.begin_snapshot <= inlined.snapshot_id AND (col.end_snapshot IS NULL OR
 		migrate_query += StringUtil::Format("ALTER TABLE {METADATA_CATALOG}.%s RENAME TO %s;",
 		                                    SQLIdentifier(migrated_name), SQLIdentifier(table_name));
 		auto result = DuckLakeMetadataManager::Execute(migrate_query);
-		if (result->HasError()) {
-			result->GetErrorObject().Throw(
-			    StringUtil::Format("Failed to migrate the column types of inlined-data table \"%s\": ", table_name));
-		}
+		result->ThrowIfError(
+		    StringUtil::Format("Failed to migrate the column types of inlined-data table \"%s\": ", table_name));
 	}
 }
 
-unique_ptr<QueryResult> PostgresMetadataManager::ExecuteQuery(DuckLakeSnapshot snapshot, string &query,
-                                                              string command) {
-	auto &commit_info = transaction.GetCommitInfo();
-
-	query = StringUtil::Replace(query, "{SNAPSHOT_ID}", to_string(snapshot.snapshot_id));
-	query = StringUtil::Replace(query, "{SCHEMA_VERSION}", to_string(snapshot.schema_version));
-	query = StringUtil::Replace(query, "{NEXT_CATALOG_ID}", to_string(snapshot.next_catalog_id));
-	query = StringUtil::Replace(query, "{NEXT_FILE_ID}", to_string(snapshot.next_file_id));
-	query = StringUtil::Replace(query, "{AUTHOR}", commit_info.author.ToSQLString());
-	query = StringUtil::Replace(query, "{COMMIT_MESSAGE}", commit_info.commit_message.ToSQLString());
-	query = StringUtil::Replace(query, "{COMMIT_EXTRA_INFO}", commit_info.commit_extra_info.ToSQLString());
-
-	auto &connection = transaction.GetConnection();
-	auto &ducklake_catalog = transaction.GetCatalog();
-	auto catalog_identifier = SQLQuotedIdentifier::ToString(ducklake_catalog.MetadataDatabaseName());
-	auto catalog_literal = SQLString::ToString(ducklake_catalog.MetadataDatabaseName());
-	auto schema_identifier = SQLQuotedIdentifier::ToString(ducklake_catalog.MetadataSchemaName());
-	auto schema_identifier_escaped = StringUtil::Replace(schema_identifier, "'", "''");
-	auto schema_literal = SQLString::ToString(ducklake_catalog.MetadataSchemaName().GetIdentifierName());
-	auto metadata_path = SQLString::ToString(ducklake_catalog.MetadataPath());
-	auto data_path = SQLString::ToString(ducklake_catalog.DataPath());
-
-	query = StringUtil::Replace(query, "{METADATA_CATALOG_NAME_LITERAL}", catalog_literal);
-	query = StringUtil::Replace(query, "{METADATA_CATALOG_NAME_IDENTIFIER}", catalog_identifier);
-	query = StringUtil::Replace(query, "{METADATA_SCHEMA_NAME_LITERAL}", schema_literal);
-	query = StringUtil::Replace(query, "{METADATA_CATALOG}", schema_identifier);
-	query = StringUtil::Replace(query, "{METADATA_SCHEMA_ESCAPED}", schema_identifier_escaped);
-	query = StringUtil::Replace(query, "{METADATA_PATH}", metadata_path);
-	query = StringUtil::Replace(query, "{DATA_PATH}", data_path);
-
-	auto result = connection.Query(
-	    StringUtil::Format("CALL %s(%s, %s, prepare=FALSE)", command, catalog_literal, SQLString(query)));
-	return std::move(result);
-}
 unique_ptr<QueryResult> PostgresMetadataManager::Execute(DuckLakeSnapshot snapshot, string &query) {
-	return ExecuteQuery(snapshot, query, "postgres_execute");
-}
-
-unique_ptr<QueryResult> PostgresMetadataManager::Query(DuckLakeSnapshot snapshot, string &query) {
-	return DuckLakeMetadataManager::Query(snapshot, query);
+	SubstituteTransactionPlaceholders(snapshot, query);
+	auto &ducklake_catalog = transaction.GetCatalog();
+	SubstituteCatalogPlaceholders(query, SQLQuotedIdentifier::ToString(ducklake_catalog.MetadataSchemaName()));
+	auto catalog_literal = SQLString::ToString(ducklake_catalog.MetadataDatabaseName());
+	auto result = transaction.GetConnection().Query(
+	    StringUtil::Format("CALL postgres_execute(%s, %s, prepare=FALSE)", catalog_literal, SQLString(query)));
+	return std::move(result);
 }
 
 void PostgresMetadataManager::ClearCache() {
@@ -387,21 +340,12 @@ string PostgresMetadataManager::GetLatestSnapshotQuery() const {
 	)";
 }
 
-string PostgresMetadataManager::GenerateFileColumnStatsCTEBody(const CTERequirement &req, TableIndex table_id) {
-	auto native_query = GeneratePostgresNativeFileColumnStatsCTEBody(req, table_id);
-	return StringUtil::Format("  SELECT * FROM postgres_query({METADATA_CATALOG_NAME_LITERAL},\n"
-	                          "    %s)\n",
-	                          SQLString(native_query));
-}
-
 string PostgresMetadataManager::GenerateFileListQuery(DuckLakeTableEntry &table, const FilterPushdownInfo *filter_info,
                                                       const vector<DuckLakeFileListDynamicFilter> &dynamic_filters,
                                                       const vector<idx_t> &runtime_filter_stats_columns,
-                                                      FileListType file_list_type, const string &,
-                                                      const FileColumnStatsCTEBodyGenerator &) {
+                                                      FileListType file_list_type, const string &) {
 	auto remote_query = DuckLakeMetadataManager::GenerateFileListQuery(
-	    table, filter_info, dynamic_filters, runtime_filter_stats_columns, file_list_type, "{METADATA_SCHEMA_ESCAPED}",
-	    GeneratePostgresNativeFileColumnStatsCTEBody);
+	    table, filter_info, dynamic_filters, runtime_filter_stats_columns, file_list_type, "{METADATA_SCHEMA_ESCAPED}");
 
 	return StringUtil::Format("SELECT * FROM postgres_query({METADATA_CATALOG_NAME_LITERAL}, %s)",
 	                          SQLString(remote_query));

@@ -1,6 +1,7 @@
 #include "storage/ducklake_inlined_data.hpp"
 
 #include <algorithm>
+#include <numeric>
 
 namespace duckdb {
 
@@ -38,10 +39,9 @@ void DuckLakeInlinedData::MergeRowIds(const DuckLakeInlinedData &new_data, idx_t
 		// transaction local id
 		idx_t existing_count = data->Count() - new_data_count;
 		row_ids.reserve(existing_count + new_data.row_ids.size());
-		auto next_id = NumericCast<int64_t>(DuckLakeConstants::TRANSACTION_LOCAL_ROW_ID_START);
-		for (idx_t i = 0; i < existing_count; i++) {
-			row_ids.push_back(next_id + NumericCast<int64_t>(i));
-		}
+		row_ids.resize(existing_count);
+		std::iota(row_ids.begin(), row_ids.end(),
+		          NumericCast<int64_t>(DuckLakeConstants::TRANSACTION_LOCAL_ROW_ID_START));
 	}
 	if (new_data.HasPreservedRowIds()) {
 		// if this is already preserved we can just insert it
@@ -56,9 +56,9 @@ void DuckLakeInlinedData::MergeRowIds(const DuckLakeInlinedData &new_data, idx_t
 				next_id = max_id + 1;
 			}
 		}
-		for (idx_t i = 0; i < new_data_count; i++) {
-			row_ids.push_back(next_id + NumericCast<int64_t>(i));
-		}
+		auto new_start = row_ids.size();
+		row_ids.resize(new_start + new_data_count);
+		std::iota(row_ids.begin() + NumericCast<int64_t>(new_start), row_ids.end(), next_id);
 	}
 }
 

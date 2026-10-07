@@ -214,8 +214,6 @@ public:
 
 	void EnsureCommitInfoProvided(const DuckLakeSnapshotCommit &commit_info) const;
 
-	DuckLakePath GetRelativePath(const string &path) const;
-
 	bool SchemaChangesMade() const;
 	bool InlinedTableFlushed(const string &table_name) const;
 

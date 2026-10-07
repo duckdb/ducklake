@@ -50,11 +50,6 @@ unique_ptr<QueryResult> QuackMetadataManager::AttachMetadata(const string &attac
 	return std::move(result);
 }
 
-unique_ptr<QueryResult> QuackMetadataManager::Query(DuckLakeSnapshot snapshot, string &query) {
-	SubstituteSnapshotPlaceholders(snapshot, query);
-	return Query(query);
-}
-
 unique_ptr<QueryResult> QuackMetadataManager::Execute(DuckLakeSnapshot snapshot, string &query) {
 	lock_guard<std::recursive_mutex> guard(transaction.GetCatalog().GetMetadataQueryLock());
 	// the server commits each statement on its own, so the statements run in a server transaction

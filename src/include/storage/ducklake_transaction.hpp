@@ -138,6 +138,10 @@ public:
 	                            unordered_map<string, vector<DuckLakeDeleteFile>> &delete_file_map);
 
 private:
+	optional_ptr<LocalTableDataChanges> Find(TableIndex table_id);
+	optional_ptr<const LocalTableDataChanges> Find(TableIndex table_id) const;
+
+private:
 	mutable mutex lock;
 	map<TableIndex, LocalTableDataChanges> changes;
 };
@@ -297,12 +301,9 @@ public:
 	static string GenerateUUIDv7();
 
 	const LocalTableChanges &GetLocalChanges() const;
-	const set<TableIndex> &GetDroppedTables();
 	const set<TableIndex> &GetDroppedViews();
 	const set<MacroIndex> &GetDroppedScalarMacros();
 	const set<MacroIndex> &GetDroppedTableMacros();
-	const set<TableIndex> &GetRenamedTables();
-	const map<SchemaIndex, unique_ptr<DuckLakeCatalogSet>> &GetNewTables() const;
 	//! Returns the current version of the catalog:
 	//! If there are no uncommitted changes, this is the schema version of the snapshot.
 	//! Otherwise, it is an id that is incremented whenever the schema changes (not stored between restarts)
@@ -346,6 +347,7 @@ private:
 	void AlterEntryInternal(DuckLakeTableEntry &old_entry, unique_ptr<CatalogEntry> new_entry);
 	void AlterEntryInternal(DuckLakeViewEntry &old_entry, unique_ptr<CatalogEntry> new_entry);
 	map<SchemaIndex, unique_ptr<DuckLakeCatalogSet>> &GetNewMacroMap(CatalogType type) const;
+	optional_ptr<map<SchemaIndex, unique_ptr<DuckLakeCatalogSet>>> GetLocalEntryMap(CatalogType type) const;
 
 	// Invoked at transaction completion, invalidates all schema cache entries referenced by this transaction.
 	void ClearSchemaCachePins();
