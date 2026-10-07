@@ -3067,30 +3067,30 @@ INSERT INTO {METADATA_CATALOG}.ducklake_macro_parameters values(%llu,%llu,%llu,%
 string DuckLakeMetadataManager::WriteFloatWidenedStats(const map<TableIndex, set<FieldIndex>> &columns,
                                                        idx_t next_file_id) {
 	auto float_type = DuckLakeTypes::ToString(LogicalType::FLOAT);
+	string bounds;
+	for (auto bound : {"min_value", "max_value"}) {
+		bounds += bounds.empty() ? "" : ", ";
+		bounds += StringUtil::Format(
+		    "%s = CASE WHEN older_type THEN NULL ELSE CAST(CAST(CAST(%s AS REAL) AS DOUBLE PRECISION) AS VARCHAR) END",
+		    bound, bound);
+	}
 	string result;
 	for (auto &table_entry : columns) {
 		for (auto &field_index : table_entry.second) {
 			auto column =
 			    StringUtil::Format("table_id = %d AND column_id = %d", table_entry.first.index, field_index.index);
 			// files written before FLOAT read their original type as DOUBLE without FLOAT rounding
-			auto older_type = StringUtil::Format(R"(EXISTS (SELECT 1 FROM {METADATA_CATALOG}.ducklake_column
-	WHERE %s AND column_type <> '%s' AND begin_snapshot < {SNAPSHOT_ID}))",
-			                                     column, float_type);
-			string bounds;
-			for (auto bound : {"min_value", "max_value"}) {
-				bounds += bounds.empty() ? "" : ", ";
-				bounds += StringUtil::Format(
-				    "%s = CASE WHEN %s THEN NULL ELSE CAST(CAST(CAST(%s AS REAL) AS DOUBLE PRECISION) AS VARCHAR) END",
-				    bound, older_type, bound);
-			}
-			auto float_column = StringUtil::Format(R"(%s AND EXISTS (SELECT 1 FROM {METADATA_CATALOG}.ducklake_column
-	WHERE %s AND end_snapshot IS NULL AND column_type = '%s'))",
-			                                       column, column, float_type);
+			auto float_column = StringUtil::Format(R"(FROM (
+	SELECT bool_or(column_type <> '%s' AND begin_snapshot < {SNAPSHOT_ID}) AS older_type
+	FROM {METADATA_CATALOG}.ducklake_column WHERE %s
+	HAVING bool_or(end_snapshot IS NULL AND column_type = '%s')) float_column
+WHERE %s)",
+			                                       float_type, column, float_type, column);
 			result += StringUtil::Format(
-			    "UPDATE {METADATA_CATALOG}.ducklake_file_column_stats SET %s WHERE %s AND data_file_id < %d;", bounds,
+			    "UPDATE {METADATA_CATALOG}.ducklake_file_column_stats SET %s %s AND data_file_id < %d;", bounds,
 			    float_column, next_file_id);
-			result += StringUtil::Format("UPDATE {METADATA_CATALOG}.ducklake_table_column_stats SET %s WHERE %s;",
-			                             bounds, float_column);
+			result += StringUtil::Format("UPDATE {METADATA_CATALOG}.ducklake_table_column_stats SET %s %s;", bounds,
+			                             float_column);
 		}
 	}
 	return result;
