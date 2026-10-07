@@ -19,6 +19,12 @@
   ],
   "skip_tests": [
     {
+      "reason": "Test requires a Quack metadata catalog",
+      "paths": [
+        "test/sql/quack/inlined_superseded_drop_failure.test"
+      ]
+    },
+    {
       "reason": "Secret storage resolution is independent of the catalog backend and is covered under the default config",
       "paths": [
         "test/sql/secrets/ducklake_secret_storages.test"

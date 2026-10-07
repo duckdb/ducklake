@@ -272,6 +272,8 @@ public:
 
 	virtual unique_ptr<QueryResult> Execute(DuckLakeSnapshot snapshot, string &query);
 	virtual unique_ptr<QueryResult> Execute(string &query);
+	//! Runs the statements in a transaction of their own, rolled back when one of them fails
+	virtual unique_ptr<QueryResult> ExecuteInTransaction(string &query);
 
 	virtual unique_ptr<QueryResult> Query(DuckLakeSnapshot snapshot, string &query);
 	virtual unique_ptr<QueryResult> Query(string &query);

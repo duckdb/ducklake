@@ -1,0 +1,28 @@
+# name: benchmark/micro/maintenance/flush_inlined_superseded.benchmark
+# description: Flush 20 tables with inlined rows under two schemas, which drops the 20 superseded inlined tables
+# group: [maintenance]
+
+name Flush Inlined Superseded
+group micro
+subgroup maintenance
+
+require ducklake
+
+require parquet
+
+argument work flush_superseded_work
+
+include benchmark/micro/fixtures/flush_superseded.benchmark.in
+
+include benchmark/micro/fixtures/restore_cleanup.benchmark.in
+
+run
+SELECT count(*) AS tables_flushed, sum(rows_flushed) AS rows_flushed FROM ducklake_flush_inlined_data('lake');
+
+# The superseded inlined tables are gone from the registry
+result_query III
+SELECT tables_flushed, rows_flushed,
+(SELECT count(*) FROM __ducklake_metadata_lake.ducklake_inlined_data_tables)
+FROM __answer
+----
+20	2000	20

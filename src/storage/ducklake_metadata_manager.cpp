@@ -2714,6 +2714,16 @@ unique_ptr<QueryResult> DuckLakeMetadataManager::Execute(string &query) {
 	return Query(query);
 }
 
+unique_ptr<QueryResult> DuckLakeMetadataManager::ExecuteInTransaction(string &query) {
+	auto batch = "BEGIN TRANSACTION;\n" + query + "\nCOMMIT;";
+	auto result = Query(batch);
+	if (result->HasError()) {
+		// a failed statement keeps the transaction open until it is rolled back
+		Query("ROLLBACK;");
+	}
+	return result;
+}
+
 unique_ptr<QueryResult> DuckLakeMetadataManager::Query(DuckLakeSnapshot snapshot, string &query) {
 	SubstituteTransactionPlaceholders(snapshot, query);
 	return Query(query);
