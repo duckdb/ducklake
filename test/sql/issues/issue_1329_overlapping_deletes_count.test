@@ -53,6 +53,43 @@ SELECT count(*) FROM dl.t WHERE i < 60
 ----
 49
 
+# a filtered count does not read the delete files of the files its scan skips
+statement ok
+CREATE TABLE dl.p (p INT, i INT)
+
+statement ok
+ALTER TABLE dl.p SET PARTITIONED BY (p)
+
+statement ok
+INSERT INTO dl.p SELECT i % 2, i FROM range(200) s(i)
+
+statement ok
+DELETE FROM dl.p WHERE p = 1 AND i < 100
+
+statement ok
+DELETE FROM dl.p WHERE i = 151
+
+statement ok
+CALL enable_logging('FileSystem', storage => 'memory')
+
+query I
+SELECT count(*) FROM dl.p WHERE p = 0
+----
+100
+
+statement ok
+CALL disable_logging()
+
+query II
+SELECT count(*) FILTER (message LIKE '%-delete.%'), count(*) FILTER (message LIKE '%.parquet%') > 0 FROM duckdb_logs WHERE type = 'FileSystem'
+----
+0	true
+
+query I
+SELECT count(*) FROM dl.p
+----
+149
+
 query I
 SELECT count(*) FROM dl.t
 ----
