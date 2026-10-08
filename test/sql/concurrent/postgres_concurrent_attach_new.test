@@ -1,0 +1,52 @@
+# name: test/sql/concurrent/postgres_concurrent_attach_new.test
+# description: concurrent attaches that create the same new Postgres catalog all succeed
+# group: [concurrent]
+
+require ducklake
+
+require parquet
+
+require postgres_scanner
+
+require-env DUCKLAKE_CI
+
+test-env DATA_PATH {TEST_DIR}
+
+# the catalog does not exist yet, so an attach may have to create it
+concurrentloop i 0 4
+
+statement ok
+ATTACH 'ducklake:postgres:dbname=ducklakedb' AS dl_{i}
+(DATA_PATH '{DATA_PATH}/concurrent_attach_new', METADATA_SCHEMA 'concurrent_attach_new')
+
+statement ok
+CREATE TABLE dl_{i}.t_{i} (i INTEGER)
+
+statement ok
+INSERT INTO dl_{i}.t_{i} VALUES ({i})
+
+endloop
+
+statement ok
+ATTACH 'ducklake:postgres:dbname=ducklakedb' AS dl
+(DATA_PATH '{DATA_PATH}/concurrent_attach_new', METADATA_SCHEMA 'concurrent_attach_new')
+
+query I
+SELECT count(*) FROM duckdb_tables() WHERE database_name = 'dl'
+----
+4
+
+query I
+SELECT sum(i) FROM (SELECT * FROM dl.t_0 UNION ALL SELECT * FROM dl.t_1
+UNION ALL SELECT * FROM dl.t_2 UNION ALL SELECT * FROM dl.t_3)
+----
+6
+
+statement ok
+DETACH dl
+
+statement ok
+ATTACH 'dbname=ducklakedb' AS pg (TYPE postgres)
+
+statement ok
+CALL postgres_execute('pg', 'DROP SCHEMA concurrent_attach_new CASCADE')
