@@ -101,7 +101,7 @@ void DuckLakeInitializer::Initialize() {
 			if (!DuckLakeIsInitialized(transaction)) {
 				error.Throw();
 			}
-			LoadExistingDuckLake(transaction);
+			LoadExistingDuckLakeWithRetries(transaction);
 		}
 	}
 	auto &current_metadata_manager = transaction.GetMetadataManager();
