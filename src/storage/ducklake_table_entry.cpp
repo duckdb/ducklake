@@ -138,9 +138,13 @@ const ColumnList &DuckLakeTableEntry::GetColumns() const {
 	return columns;
 }
 
+bool DuckLakeTableEntry::IsCurrentInlinedDataTable(idx_t schema_version) const {
+	return !schema_change_version.IsValid() || schema_version >= schema_change_version.GetIndex();
+}
+
 bool DuckLakeTableEntry::HasCurrentInlinedDataTable() const {
 	for (auto &inlined_table : inlined_data_tables) {
-		if (!schema_change_version.IsValid() || inlined_table.schema_version >= schema_change_version.GetIndex()) {
+		if (IsCurrentInlinedDataTable(inlined_table.schema_version)) {
 			return true;
 		}
 	}

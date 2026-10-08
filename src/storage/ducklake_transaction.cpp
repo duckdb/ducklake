@@ -779,6 +779,10 @@ bool DuckLakeTransaction::ChangesMade() const {
 	       !new_name_maps.name_maps.empty();
 }
 
+bool DuckLakeTransaction::SchemaChangesMade() const {
+	return state->SchemaChangesMade();
+}
+
 void DuckLakeTransaction::DeferNameMapCacheInvalidation(MappingIndex mapping_id) {
 	pending_name_map_cache_invalidations.push_back(mapping_id);
 }

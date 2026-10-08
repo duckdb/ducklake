@@ -2950,18 +2950,11 @@ string DuckLakeMetadataManager::InlinedTableRegistrationTuple(idx_t table_id, co
 }
 
 string DuckLakeMetadataManager::LatestInlinedTableQuery(idx_t table_id) {
-	// skip inlined tables older than the last schema change of the table
-	return StringUtil::Format(R"(
-SELECT (
-	SELECT table_name FROM {METADATA_CATALOG}.ducklake_inlined_data_tables
-	WHERE table_id = %d AND schema_version >= COALESCE(schema_change.schema_version, 0)
-	ORDER BY schema_version DESC
-	LIMIT 1
-), schema_change.schema_version
-FROM (
-	SELECT MAX(schema_version) AS schema_version FROM {METADATA_CATALOG}.ducklake_schema_versions WHERE table_id = %d
-) schema_change)",
-	                          table_id, table_id);
+	return StringUtil::Format(
+	    "SELECT table_name, schema_version FROM {METADATA_CATALOG}.ducklake_inlined_data_tables "
+	    "WHERE table_id = %d AND schema_version = ("
+	    "  SELECT MAX(schema_version) FROM {METADATA_CATALOG}.ducklake_inlined_data_tables WHERE table_id = %d)",
+	    table_id, table_id);
 }
 
 string DuckLakeMetadataManager::GetColumnDefinitions(const vector<DuckLakeColumnInfo> &columns) {
@@ -3219,7 +3212,7 @@ string DuckLakeMetadataManager::WriteNewInlinedData(DuckLakeSnapshot &commit_sna
 	}
 
 	// a commit takes one new schema version, so the inlined tables of its schema changes keep the version of its rows
-	bool new_schema_version = !new_inlined_data_tables_result.empty();
+	bool new_schema_version = transaction.SchemaChangesMade();
 	for (auto &entry : new_data) {
 		string inlined_table_name;
 		optional_ptr<const DuckLakeTableInfo> new_inlined_table;
@@ -3233,16 +3226,23 @@ string DuckLakeMetadataManager::WriteNewInlinedData(DuckLakeSnapshot &commit_sna
 		if (it != insert_inlined_table_name_cache.end()) {
 			inlined_table_name = it->second;
 		}
-		optional_idx schema_change_version;
+		optional_ptr<DuckLakeTableEntry> table;
+		if (!new_inlined_table) {
+			auto table_entry =
+			    transaction.GetCatalog().GetEntryById(transaction, transaction.GetSnapshot(), entry.table_id);
+			if (table_entry) {
+				table = table_entry->Cast<DuckLakeTableEntry>();
+			}
+		}
 		if (inlined_table_name.empty() && !new_inlined_table) {
 			auto query = LatestInlinedTableQuery(entry.table_id.index) + ";";
 			auto result = Query(commit_snapshot, query);
 			for (auto &row : *result) {
-				if (!row.IsNull(0)) {
-					inlined_table_name = row.GetValue<string>(0);
-					insert_inlined_table_name_cache[entry.table_id.index] = inlined_table_name;
+				if (table && !table->IsCurrentInlinedDataTable(row.GetValue<idx_t>(1))) {
+					continue;
 				}
-				schema_change_version = OptIdx(row, 1);
+				inlined_table_name = row.GetValue<string>(0);
+				insert_inlined_table_name_cache[entry.table_id.index] = inlined_table_name;
 			}
 		}
 
@@ -3252,12 +3252,9 @@ string DuckLakeMetadataManager::WriteNewInlinedData(DuckLakeSnapshot &commit_sna
 			if (new_inlined_table) {
 				table_info = *new_inlined_table;
 			} else {
-				auto current_snapshot = transaction.GetSnapshot();
-				auto table_entry = transaction.GetCatalog().GetEntryById(transaction, current_snapshot, entry.table_id);
-				if (table_entry) {
-					auto &table = table_entry->Cast<DuckLakeTableEntry>();
-					table_info = table.GetTableInfo();
-					table_info.columns = table.GetTableColumns();
+				if (table) {
+					table_info = table->GetTableInfo();
+					table_info.columns = table->GetTableColumns();
 				} else {
 					// We try from our added tables
 					bool found = false;
@@ -3281,8 +3278,8 @@ string DuckLakeMetadataManager::WriteNewInlinedData(DuckLakeSnapshot &commit_sna
 			}
 			// registered at the last schema change of its table, whose schema_versions row gives its columns
 			auto inlined_table_snapshot = commit_snapshot;
-			if (schema_change_version.IsValid()) {
-				inlined_table_snapshot.schema_version = schema_change_version.GetIndex();
+			if (table && table->GetSchemaChangeVersion().IsValid()) {
+				inlined_table_snapshot.schema_version = table->GetSchemaChangeVersion().GetIndex();
 			}
 			inlined_table_name =
 			    GetInlinedTableQueries(inlined_table_snapshot, table_info, inlined_tables, inlined_table_queries);
