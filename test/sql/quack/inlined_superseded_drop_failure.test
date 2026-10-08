@@ -1,0 +1,78 @@
+# name: test/sql/quack/inlined_superseded_drop_failure.test
+# description: Failed Quack drops roll back registration and allow later commits and cleanup
+# group: [quack]
+
+require ducklake
+
+require parquet
+
+require-env DUCKLAKE_CONNECTION
+
+require quack
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/quack_superseded_drop', DATA_INLINING_ROW_LIMIT 10)
+
+statement ok
+CREATE TABLE dl.t (x INT)
+
+statement ok
+INSERT INTO dl.t VALUES (1), (2)
+
+statement ok
+ALTER TABLE dl.t ADD COLUMN y INT
+
+statement ok
+INSERT INTO dl.t VALUES (3, 3)
+
+# Create the dependency on the server
+statement ok
+CALL quack_query_by_name('__ducklake_metadata_dl', 'ALTER TABLE ducklake_inlined_data_1_1 ADD PRIMARY KEY (x); CREATE TABLE drop_blocker (r INT REFERENCES ducklake_inlined_data_1_1 (x))')
+
+query I
+SELECT rows_flushed FROM ducklake_flush_inlined_data('dl')
+----
+3
+
+statement ok
+CALL ducklake_flush_inlined_data('dl')
+
+query I
+SELECT table_name FROM __ducklake_metadata_dl.ducklake_inlined_data_tables ORDER BY ALL
+----
+ducklake_inlined_data_1_1
+ducklake_inlined_data_1_2
+
+statement ok
+CALL quack_query_by_name('__ducklake_metadata_dl', 'DROP TABLE drop_blocker')
+
+statement ok
+CALL ducklake_flush_inlined_data('dl')
+
+query I
+SELECT table_name FROM __ducklake_metadata_dl.ducklake_inlined_data_tables ORDER BY ALL
+----
+ducklake_inlined_data_1_2
+
+statement error
+CALL quack_query_by_name('__ducklake_metadata_dl', 'SELECT count(*) FROM ducklake_inlined_data_1_1')
+----
+does not exist
+
+statement ok
+INSERT INTO dl.t VALUES (4, 4)
+
+query I
+SELECT rows_flushed FROM ducklake_flush_inlined_data('dl')
+----
+1
+
+query II
+SELECT * FROM dl.t ORDER BY x
+----
+1	NULL
+2	NULL
+3	3
+4	4

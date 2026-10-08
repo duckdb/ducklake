@@ -1,8 +1,7 @@
 # name: test/sql/compaction/repro_merge_adjacent_zero_output.test
-# description: reproduce DuckLakeCompaction "expected a single output file" assertion
+# description: empty inserts leave no data files to compact
 # group: [compaction]
 
-#              when merge_adjacent_files merges several empty parquet files.
 #              See https://github.com/duckdb/ducklake/issues/525
 
 require ducklake
@@ -43,13 +42,17 @@ SELECT count(*), COALESCE(sum(record_count), 0)
 FROM __ducklake_metadata_lake.ducklake_data_file
 WHERE end_snapshot IS NULL;
 ----
-4	0
+0	0
 
-# merge_adjacent_files should consume empty files without creating a replacement file.
-query IIII
-SELECT schema_name, table_name, files_processed, files_created FROM ducklake_merge_adjacent_files('lake');
+query I
+SELECT count(*) FROM glob('{DATA_PATH}/repro_merge_zero/**/*.parquet')
 ----
-main	t	4	0
+0
+
+query I
+SELECT count(*) FROM ducklake_merge_adjacent_files('lake');
+----
+0
 
 query II
 SELECT count(*), COALESCE(sum(record_count), 0)

@@ -40,3 +40,6 @@ benchmark/micro/time_travel/at_version_cte_copy.benchmark
 benchmark/micro/read/scan_shared_deletes.benchmark
 benchmark/micro/write/insert_not_null_struct.benchmark
 benchmark/micro/compaction/rewrite_data_files_inlined.benchmark
+benchmark/micro/maintenance/flush_inlined_superseded.benchmark
+benchmark/micro/write/delete_commits_rewrite.benchmark
+benchmark/micro/write/delete_commits_rewrite_retry.benchmark

@@ -29,6 +29,9 @@ struct DuckLakeCommitContext {
 	std::function<bool(TableIndex)> inlined_file_deletion_table_exists;
 	//! Returns the latest snapshot for the first commit attempt.
 	std::function<DuckLakeSnapshot()> get_snapshot;
+	//! Rewrites the delete files whose new deletes are not dated to the commit snapshot.
+	std::function<void(idx_t)> set_delete_commit_snapshot = [](idx_t) {
+	};
 	//! Executes the batched snapshot/changes SQL against the metadata DB.
 	std::function<unique_ptr<QueryResult>(DuckLakeSnapshot, string &)> execute_commit_batch;
 	//! Classifies metadata-catalog errors that are safe to retry.
@@ -50,6 +53,8 @@ struct DuckLakeCommitContext {
 	};
 	//! Runs a metadata-DB query during post-commit cleanup.
 	std::function<unique_ptr<QueryResult>(string)> query_metadata;
+	//! Runs cleanup statements atomically.
+	std::function<unique_ptr<QueryResult>(string)> execute_in_transaction;
 	//! Runs a snapshot-templated metadata-DB query (handles {SNAPSHOT_ID} substitution).
 	std::function<unique_ptr<QueryResult>(DuckLakeSnapshot, string)> query_metadata_with_snapshot;
 	//! Optional Appender fast-path.

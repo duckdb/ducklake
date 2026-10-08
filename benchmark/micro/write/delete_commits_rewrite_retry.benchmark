@@ -1,0 +1,58 @@
+# name: benchmark/micro/write/delete_commits_rewrite_retry.benchmark
+# description: Commit 20 deletes that rewrite a delete file after a concurrent flush, in a lake with 4096 delete files
+# group: [write]
+
+name Delete Commits Rewrite Retry
+group micro
+subgroup write
+
+require ducklake
+
+require parquet
+
+argument work delete_rewrite_retry_work
+
+include benchmark/micro/fixtures/delete_files.benchmark.in
+
+include benchmark/micro/fixtures/restore_cleanup.benchmark.in
+
+# Retries do not sleep, so the timing has no random backoff
+init
+SET ducklake_retry_wait_ms = 0;
+
+# lake2 shares the metadata catalog of lake and commits first, so each delete retries and rewrites its delete file
+run
+@attach ${work} AS lake2 (METADATA_CATALOG '__ducklake_metadata_lake')
+BEGIN; DELETE FROM lake.bg WHERE id BETWEEN 1 AND 20; CALL ducklake_flush_inlined_data('lake2', table_name => 't_0'); COMMIT;
+BEGIN; DELETE FROM lake.bg WHERE id BETWEEN 2049 AND 2068; CALL ducklake_flush_inlined_data('lake2', table_name => 't_1'); COMMIT;
+BEGIN; DELETE FROM lake.bg WHERE id BETWEEN 4097 AND 4116; CALL ducklake_flush_inlined_data('lake2', table_name => 't_2'); COMMIT;
+BEGIN; DELETE FROM lake.bg WHERE id BETWEEN 6145 AND 6164; CALL ducklake_flush_inlined_data('lake2', table_name => 't_3'); COMMIT;
+BEGIN; DELETE FROM lake.bg WHERE id BETWEEN 8193 AND 8212; CALL ducklake_flush_inlined_data('lake2', table_name => 't_4'); COMMIT;
+BEGIN; DELETE FROM lake.bg WHERE id BETWEEN 10241 AND 10260; CALL ducklake_flush_inlined_data('lake2', table_name => 't_5'); COMMIT;
+BEGIN; DELETE FROM lake.bg WHERE id BETWEEN 12289 AND 12308; CALL ducklake_flush_inlined_data('lake2', table_name => 't_6'); COMMIT;
+BEGIN; DELETE FROM lake.bg WHERE id BETWEEN 14337 AND 14356; CALL ducklake_flush_inlined_data('lake2', table_name => 't_7'); COMMIT;
+BEGIN; DELETE FROM lake.bg WHERE id BETWEEN 16385 AND 16404; CALL ducklake_flush_inlined_data('lake2', table_name => 't_8'); COMMIT;
+BEGIN; DELETE FROM lake.bg WHERE id BETWEEN 18433 AND 18452; CALL ducklake_flush_inlined_data('lake2', table_name => 't_9'); COMMIT;
+BEGIN; DELETE FROM lake.bg WHERE id BETWEEN 20481 AND 20500; CALL ducklake_flush_inlined_data('lake2', table_name => 't_10'); COMMIT;
+BEGIN; DELETE FROM lake.bg WHERE id BETWEEN 22529 AND 22548; CALL ducklake_flush_inlined_data('lake2', table_name => 't_11'); COMMIT;
+BEGIN; DELETE FROM lake.bg WHERE id BETWEEN 24577 AND 24596; CALL ducklake_flush_inlined_data('lake2', table_name => 't_12'); COMMIT;
+BEGIN; DELETE FROM lake.bg WHERE id BETWEEN 26625 AND 26644; CALL ducklake_flush_inlined_data('lake2', table_name => 't_13'); COMMIT;
+BEGIN; DELETE FROM lake.bg WHERE id BETWEEN 28673 AND 28692; CALL ducklake_flush_inlined_data('lake2', table_name => 't_14'); COMMIT;
+BEGIN; DELETE FROM lake.bg WHERE id BETWEEN 30721 AND 30740; CALL ducklake_flush_inlined_data('lake2', table_name => 't_15'); COMMIT;
+BEGIN; DELETE FROM lake.bg WHERE id BETWEEN 32769 AND 32788; CALL ducklake_flush_inlined_data('lake2', table_name => 't_16'); COMMIT;
+BEGIN; DELETE FROM lake.bg WHERE id BETWEEN 34817 AND 34836; CALL ducklake_flush_inlined_data('lake2', table_name => 't_17'); COMMIT;
+BEGIN; DELETE FROM lake.bg WHERE id BETWEEN 36865 AND 36884; CALL ducklake_flush_inlined_data('lake2', table_name => 't_18'); COMMIT;
+BEGIN; DELETE FROM lake.bg WHERE id BETWEEN 38913 AND 38932; CALL ducklake_flush_inlined_data('lake2', table_name => 't_19'); COMMIT;
+DETACH lake2;
+
+# A missed reset leaves nothing to flush, so the flushed delete files would be missing
+result_query IIIIII
+SET VARIABLE flush_targets = (SELECT list('lake.t_' || k) FROM range(20) t(k));
+SELECT (SELECT count(*) FROM lake.snapshots()), (SELECT count(*) FROM lake.bg), count(*),
+(SELECT count(*) FROM __ducklake_metadata_lake.ducklake_delete_file WHERE end_snapshot IS NULL),
+(SELECT sum(delete_count) FROM __ducklake_metadata_lake.ducklake_delete_file WHERE end_snapshot IS NULL),
+(SELECT count(*) FROM __ducklake_metadata_lake.ducklake_delete_file
+WHERE end_snapshot IS NULL AND delete_count = 21 AND partial_max IS NOT NULL)
+FROM query_table(getvariable('flush_targets'))
+----
+45	8384112	81900	4116	4516	20
