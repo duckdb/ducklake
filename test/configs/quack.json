@@ -38,6 +38,7 @@
         "test/sql/metadata/ducklake_settings_postgres.test",
         "test/sql/metadata/metadata_schema_scoped_attach.test",
         "test/sql/migration/postgres_concurrent_migration.test",
+        "test/sql/retry/postgres_commit_connection_loss.test",
         "test/sql/concurrent/postgres_concurrent_attach_new.test",
         "test/sql/migration/postgres_dev_migration_failure.test",
         "test/sql/benchmark/postgres_catalog.test",
