@@ -1,4 +1,5 @@
 #include "storage/ducklake_inline_data.hpp"
+#include "storage/ducklake_catalog.hpp"
 #include "storage/ducklake_stats.hpp"
 #include "common/ducklake_types.hpp"
 
@@ -398,7 +399,10 @@ OperatorFinalResultType DuckLakeInlineData::OperatorFinalize(Pipeline &pipeline,
 
 	// push the inlined data into the transaction
 	auto &transaction = DuckLakeTransaction::Get(context, table.ParentCatalog());
-	if (!table.HasCurrentInlinedDataTable()) {
+	auto &inlined_tables = table.GetInlinedDataTables();
+	if (inlined_tables.empty() ||
+	    !table.HasCurrentInlinedDataTable(
+	        table.ParentCatalog().Cast<DuckLakeCatalog>().GetSchemaChangeVersion(transaction, table.GetTableId()))) {
 		transaction.SetRequiresNewInlinedTable(true);
 	}
 	transaction.AppendInlinedData(table.GetTableId(), std::move(result));

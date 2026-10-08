@@ -138,13 +138,13 @@ const ColumnList &DuckLakeTableEntry::GetColumns() const {
 	return columns;
 }
 
-bool DuckLakeTableEntry::IsCurrentInlinedDataTable(idx_t schema_version) const {
+bool DuckLakeTableEntry::IsCurrentInlinedDataTable(idx_t schema_version, optional_idx schema_change_version) {
 	return !schema_change_version.IsValid() || schema_version >= schema_change_version.GetIndex();
 }
 
-bool DuckLakeTableEntry::HasCurrentInlinedDataTable() const {
+bool DuckLakeTableEntry::HasCurrentInlinedDataTable(optional_idx schema_change_version) const {
 	for (auto &inlined_table : inlined_data_tables) {
-		if (IsCurrentInlinedDataTable(inlined_table.schema_version)) {
+		if (IsCurrentInlinedDataTable(inlined_table.schema_version, schema_change_version)) {
 			return true;
 		}
 	}
@@ -156,7 +156,6 @@ DuckLakeTableEntry::DuckLakeTableEntry(DuckLakeTableEntry &parent, CreateTableIn
     : DuckLakeTableEntry(parent.ParentCatalog(), parent.ParentSchema(), info, parent.GetTableId(),
                          parent.GetTableUUID(), parent.DataPath(), parent.field_data, parent.next_column_id,
                          parent.inlined_data_tables, local_change) {
-	schema_change_version = parent.schema_change_version;
 	if (parent.partition_data) {
 		partition_data = make_uniq<DuckLakePartition>(*parent.partition_data);
 	}

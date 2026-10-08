@@ -697,6 +697,18 @@ WHERE table_id = {TABLE_ID})";
 	throw InternalException("Table %llu does not exist", table_id.index);
 }
 
+optional_idx DuckLakeMetadataManager::GetSchemaChangeVersion(TableIndex table_id, DuckLakeSnapshot snapshot) {
+	auto query = StringUtil::Format("SELECT MAX(schema_version) FROM {METADATA_CATALOG}.ducklake_schema_versions "
+	                                "WHERE table_id = %d AND begin_snapshot <= {SNAPSHOT_ID}",
+	                                table_id.index);
+	auto result = Query(snapshot, query);
+	result->ThrowIfError("Failed to get the last schema change of a table from DuckLake: ");
+	for (auto &row : *result) {
+		return OptIdx(row, 0);
+	}
+	return optional_idx();
+}
+
 idx_t DuckLakeMetadataManager::GetBeginSnapshotForSchemaVersion(TableIndex table_id, idx_t schema_version) {
 	auto &catalog = transaction.GetCatalog();
 	auto cached_snapshot = catalog.TryGetSchemaVersionBeginSnapshot(table_id, schema_version);
@@ -951,12 +963,7 @@ SELECT schema_id, tbl.table_id, table_uuid::VARCHAR, table_name,
 		FROM {METADATA_CATALOG}.ducklake_column_tag col_tag
 		WHERE col_tag.table_id=tbl.table_id AND col_tag.column_id=col.column_id AND
 		      {SNAPSHOT_ID} >= col_tag.begin_snapshot AND ({SNAPSHOT_ID} < col_tag.end_snapshot OR col_tag.end_snapshot IS NULL)
-	) AS column_tags, default_value_type,
-	(
-		SELECT MAX(sv.schema_version)
-		FROM {METADATA_CATALOG}.ducklake_schema_versions sv
-		WHERE sv.table_id = tbl.table_id AND sv.begin_snapshot <= {SNAPSHOT_ID}
-	) AS schema_change_version
+	) AS column_tags, default_value_type
 FROM {METADATA_CATALOG}.ducklake_table tbl
 LEFT JOIN {METADATA_CATALOG}.ducklake_column col USING (table_id)
 WHERE {SNAPSHOT_ID} >= tbl.begin_snapshot AND ({SNAPSHOT_ID} < tbl.end_snapshot OR tbl.end_snapshot IS NULL)
@@ -987,7 +994,6 @@ ORDER BY table_id, parent_column NULLS FIRST, column_order
 				auto inlined_data_tables = row.GetValue<Value>(5);
 				table_info.inlined_data_tables = LoadInlinedDataTables(inlined_data_tables);
 			}
-			table_info.schema_change_version = OptIdx(row, COLUMN_INDEX_START + 9);
 			// find the schema
 			auto schema_entry = schema_map.find(table_info.schema_id);
 			if (schema_entry == schema_map.end()) {
@@ -3226,19 +3232,15 @@ string DuckLakeMetadataManager::WriteNewInlinedData(DuckLakeSnapshot &commit_sna
 		if (it != insert_inlined_table_name_cache.end()) {
 			inlined_table_name = it->second;
 		}
-		optional_ptr<DuckLakeTableEntry> table;
+		optional_idx schema_change_version;
 		if (!new_inlined_table) {
-			auto table_entry =
-			    transaction.GetCatalog().GetEntryById(transaction, transaction.GetSnapshot(), entry.table_id);
-			if (table_entry) {
-				table = table_entry->Cast<DuckLakeTableEntry>();
-			}
+			schema_change_version = transaction.GetCatalog().GetSchemaChangeVersion(transaction, entry.table_id);
 		}
 		if (inlined_table_name.empty() && !new_inlined_table) {
 			auto query = LatestInlinedTableQuery(entry.table_id.index) + ";";
 			auto result = Query(commit_snapshot, query);
 			for (auto &row : *result) {
-				if (table && !table->IsCurrentInlinedDataTable(row.GetValue<idx_t>(1))) {
+				if (!DuckLakeTableEntry::IsCurrentInlinedDataTable(row.GetValue<idx_t>(1), schema_change_version)) {
 					continue;
 				}
 				inlined_table_name = row.GetValue<string>(0);
@@ -3252,9 +3254,12 @@ string DuckLakeMetadataManager::WriteNewInlinedData(DuckLakeSnapshot &commit_sna
 			if (new_inlined_table) {
 				table_info = *new_inlined_table;
 			} else {
-				if (table) {
-					table_info = table->GetTableInfo();
-					table_info.columns = table->GetTableColumns();
+				auto current_snapshot = transaction.GetSnapshot();
+				auto table_entry = transaction.GetCatalog().GetEntryById(transaction, current_snapshot, entry.table_id);
+				if (table_entry) {
+					auto &table = table_entry->Cast<DuckLakeTableEntry>();
+					table_info = table.GetTableInfo();
+					table_info.columns = table.GetTableColumns();
 				} else {
 					// We try from our added tables
 					bool found = false;
@@ -3278,8 +3283,8 @@ string DuckLakeMetadataManager::WriteNewInlinedData(DuckLakeSnapshot &commit_sna
 			}
 			// registered at the last schema change of its table, whose schema_versions row gives its columns
 			auto inlined_table_snapshot = commit_snapshot;
-			if (table && table->GetSchemaChangeVersion().IsValid()) {
-				inlined_table_snapshot.schema_version = table->GetSchemaChangeVersion().GetIndex();
+			if (schema_change_version.IsValid()) {
+				inlined_table_snapshot.schema_version = schema_change_version.GetIndex();
 			}
 			inlined_table_name =
 			    GetInlinedTableQueries(inlined_table_snapshot, table_info, inlined_tables, inlined_table_queries);

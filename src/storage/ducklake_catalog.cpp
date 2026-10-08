@@ -769,7 +769,6 @@ unique_ptr<DuckLakeCatalogSet> DuckLakeCatalog::LoadSchemaForSnapshot(DuckLakeTr
 		auto table_entry = make_uniq<DuckLakeTableEntry>(
 		    *this, schema_entry, *create_table_info, table.id, std::move(table.uuid), std::move(table.path),
 		    std::move(field_data), optional_idx(), std::move(table.inlined_data_tables), LocalChangeType::NONE);
-		table_entry->SetSchemaChangeVersion(table.schema_change_version);
 		schema_set->AddEntry(schema_entry, table.id, std::move(table_entry));
 	}
 
@@ -1332,6 +1331,22 @@ void DuckLakeCatalog::CacheInlinedDeletionTableResult(TableIndex table_id, DuckL
 	} else {
 		inlined_deletion_not_exists[table_id.index] = snapshot.snapshot_id;
 	}
+}
+
+optional_idx DuckLakeCatalog::GetSchemaChangeVersion(DuckLakeTransaction &transaction, TableIndex table_id) {
+	auto snapshot = transaction.GetSnapshot();
+	auto key = make_pair(table_id.index, snapshot.schema_version);
+	{
+		lock_guard<mutex> guard(schema_version_snapshot_lock);
+		auto entry = schema_change_versions.find(key);
+		if (entry != schema_change_versions.end()) {
+			return entry->second;
+		}
+	}
+	auto schema_change_version = transaction.GetMetadataManager().GetSchemaChangeVersion(table_id, snapshot);
+	lock_guard<mutex> guard(schema_version_snapshot_lock);
+	schema_change_versions[key] = schema_change_version;
+	return schema_change_version;
 }
 
 optional_idx DuckLakeCatalog::TryGetSchemaVersionBeginSnapshot(TableIndex table_id, idx_t schema_version) {

@@ -368,6 +368,8 @@ public:
 	//! Cache the result of an inlined deletion table existence check
 	void CacheInlinedDeletionTableResult(TableIndex table_id, DuckLakeSnapshot snapshot, bool exists);
 
+	//! The schema version of the last schema change of the table at the snapshot of the transaction
+	optional_idx GetSchemaChangeVersion(DuckLakeTransaction &transaction, TableIndex table_id);
 	//! Look up the cached begin snapshot of a (table, schema version) pair, if it has been resolved before
 	optional_idx TryGetSchemaVersionBeginSnapshot(TableIndex table_id, idx_t schema_version);
 	//! Cache the begin snapshot of a committed (table, schema version) pair. The row that backs it is written
@@ -432,6 +434,8 @@ private:
 	//! version is created and is never updated, so entries are permanent (only committed rows are cached)
 	mutex schema_version_snapshot_lock;
 	map<pair<idx_t, idx_t>, idx_t> schema_version_begin_snapshots;
+	//! Cache of (table_id, schema_version) -> the last schema change of the table, guarded by the same lock
+	map<pair<idx_t, idx_t>, optional_idx> schema_change_versions;
 	//! The id of the last committed snapshot, set at FlushChanges on a successful commit
 	mutable mutex commit_lock;
 	optional_idx last_committed_snapshot;
