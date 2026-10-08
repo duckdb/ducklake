@@ -1,0 +1,73 @@
+# name: test/sql/retry/postgres_commit_connection_loss.test
+# description: a commit that loses its Postgres connection reports that and leaves no data file behind
+# group: [retry]
+
+require ducklake
+
+require parquet
+
+require postgres_scanner
+
+require-env DUCKLAKE_CI
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'dbname=ducklakedb' AS pg (TYPE postgres)
+
+statement ok
+CALL postgres_execute('pg', 'DROP SCHEMA IF EXISTS commit_connection_loss CASCADE')
+
+statement ok
+ATTACH 'ducklake:postgres:dbname=ducklakedb application_name=commit_connection_loss' AS dl
+(DATA_PATH '{DATA_PATH}/commit_connection_loss', METADATA_SCHEMA 'commit_connection_loss',
+DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE dl.t (i INTEGER)
+
+statement ok
+BEGIN
+
+statement ok
+INSERT INTO dl.t VALUES (1)
+
+# the commit wrote its data file
+query I
+SELECT count(*) FROM glob('{DATA_PATH}/commit_connection_loss/**/*.parquet')
+----
+1
+
+# the metadata connections of the lake are gone before the commit
+query I
+SELECT count(*) > 0 AND bool_and(terminated) FROM postgres_query('pg',
+'SELECT pg_terminate_backend(pid, 5000) AS terminated FROM pg_stat_activity
+WHERE datname = current_database() AND application_name = ''commit_connection_loss''')
+----
+true
+
+# the commit reports the lost connection, not the rollback that failed with it
+statement error
+COMMIT
+----
+<REGEX>:.*Failed to commit DuckLake transaction.*(connection|server closed).*
+
+# the file the failed commit wrote is not left in the data path
+query I
+SELECT count(*) FROM glob('{DATA_PATH}/commit_connection_loss/**/*.parquet')
+----
+0
+
+statement ok
+INSERT INTO dl.t VALUES (2)
+
+query I
+SELECT * FROM dl.t
+----
+2
+
+statement ok
+DETACH dl
+
+statement ok
+CALL postgres_execute('pg', 'DROP SCHEMA commit_connection_loss CASCADE')

@@ -39,6 +39,7 @@ public:
 
 	DuckLakeTableEntry &table;
 	vector<DuckLakeDataFile> written_files;
+	vector<string> empty_files;
 	idx_t total_insert_count;
 	case_insensitive_set_t not_null_fields;
 	//! Total rows flushed (used by flush_inlined_data)
@@ -131,6 +132,7 @@ public:
 	                                           DuckLakeCopyInput &copy_input, optional_ptr<PhysicalOperator> plan);
 	static PhysicalOperator &PlanInsert(ClientContext &context, PhysicalPlanGenerator &planner,
 	                                    DuckLakeTableEntry &table, string encryption_key);
+	static void RemoveEmptyFiles(ClientContext &context, DuckLakeInsertGlobalState &gstate);
 	static void AddWrittenFiles(DuckLakeInsertGlobalState &gstate, DataChunk &chunk, const string &encryption_key,
 	                            optional_idx partition_id, bool set_snapshot_id = false);
 
