@@ -1,0 +1,63 @@
+# name: test/sql/migration/load_retry_backoff.test
+# description: a retried load keeps a backoff below one
+# group: [migration]
+
+require ducklake
+
+require parquet
+
+test-env DATA_PATH {TEST_DIR}
+
+unzip data/old_ducklake/v01.db.gz {TEST_DIR}/load_retry_backoff.db
+
+# the migration of the catalog fails every time
+statement ok
+ATTACH '{TEST_DIR}/load_retry_backoff.db' AS old_metadata
+
+statement ok
+ALTER TABLE old_metadata.ducklake_schema ADD COLUMN path VARCHAR
+
+statement ok
+DETACH old_metadata
+
+statement ok
+CREATE TABLE metadata_reads(retries INTEGER, reads BIGINT)
+
+statement ok
+SET ducklake_retry_wait_ms = 1000
+
+statement ok
+SET ducklake_retry_backoff = 0
+
+foreach retries 0 1 8
+
+statement ok
+SET ducklake_max_retry_count = {retries}
+
+statement ok
+CALL enable_logging('DuckLakeMetadata')
+
+statement error
+ATTACH 'ducklake:{TEST_DIR}/load_retry_backoff.db' AS dl
+(DATA_PATH '{DATA_PATH}/load_retry_backoff', AUTOMATIC_MIGRATION TRUE)
+----
+Failed to migrate DuckLake from v0.1 to v0.2
+
+statement ok
+CALL disable_logging()
+
+statement ok
+INSERT INTO metadata_reads SELECT {retries}, count(*) FROM duckdb_logs_parsed('DuckLakeMetadata')
+
+statement ok
+CALL truncate_duckdb_logs()
+
+endloop
+
+# only the first retry waits, so all eight fit in the wait of a load
+query I
+SELECT max(reads) FILTER (retries = 8) - max(reads) FILTER (retries = 0) =
+       8 * (max(reads) FILTER (retries = 1) - max(reads) FILTER (retries = 0))
+FROM metadata_reads
+----
+true

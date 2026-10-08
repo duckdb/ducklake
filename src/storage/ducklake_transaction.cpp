@@ -1255,7 +1255,7 @@ DuckLakeRetryConfig DuckLakeRetryConfig::FromContext(ClientContext &context) {
 
 idx_t DuckLakeRetryConfig::WaitMs(idx_t attempt, idx_t remaining_ms, double multiplier) const {
 	static constexpr idx_t MAX_WAIT_MS = 60000;
-	auto wait_ms = (double)retry_wait_ms * multiplier * pow(MaxValue<double>(retry_backoff, 1.0), (double)attempt);
+	auto wait_ms = (double)retry_wait_ms * multiplier * pow(retry_backoff, (double)attempt);
 	return (idx_t)ClampValue<double>(wait_ms, 0.0, (double)MinValue(remaining_ms, MAX_WAIT_MS));
 }
 
