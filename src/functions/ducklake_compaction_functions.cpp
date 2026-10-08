@@ -600,7 +600,7 @@ DuckLakeCompactor::GenerateCompactionCommand(vector<DuckLakeCompactionFileEntry>
 		root = DuckLakeCompactor::InsertSort(binder, root, latest_table, sort_data);
 	}
 
-	// adjacent files are merged into a single file in scan order that continues their row id range
+	// adjacent files are merged into one file that starts at the first file's row_id_start
 	bool merge_in_order = type == CompactionType::MERGE_ADJACENT_TABLES && files_are_adjacent;
 	copy->table_index = binder.GenerateTableIndex();
 	if (!merge_in_order) {
