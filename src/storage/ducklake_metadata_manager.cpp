@@ -3222,7 +3222,7 @@ string DuckLakeMetadataManager::WriteNewInlinedData(DuckLakeSnapshot &commit_sna
 		return batch_query;
 	}
 
-	// advance the schema version at most once per commit
+	// a commit with schema changes already has a new schema version
 	bool new_schema_version = transaction.SchemaChangesMade();
 	for (auto &entry : new_data) {
 		string inlined_table_name;
@@ -3282,11 +3282,11 @@ string DuckLakeMetadataManager::WriteNewInlinedData(DuckLakeSnapshot &commit_sna
 			// write the new inlined table
 			vector<string> inlined_tables;
 			string inlined_table_queries;
-			if (!new_schema_version) {
+			// an unchanged table takes a version of its own, a changed one registers at its last change
+			if (!new_inlined_table && (!schema_change_version.IsValid() || !new_schema_version)) {
 				commit_snapshot.schema_version++;
 				new_schema_version = true;
 			}
-			// registered at the last schema change of its table, whose schema_versions row gives its columns
 			auto inlined_table_snapshot = commit_snapshot;
 			if (schema_change_version.IsValid()) {
 				inlined_table_snapshot.schema_version = schema_change_version.GetIndex();

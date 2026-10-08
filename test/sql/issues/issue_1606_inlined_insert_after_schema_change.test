@@ -228,3 +228,47 @@ query II
 SELECT a, b FROM lake.e
 ----
 3	42
+
+# the first inlined inserts into two unchanged tables in one commit
+statement ok
+CALL lake.set_option('data_inlining_row_limit', 0)
+
+statement ok
+CREATE TABLE lake.x (a INTEGER)
+
+statement ok
+CREATE TABLE lake.y (a INTEGER, b INTEGER)
+
+statement ok
+CALL lake.set_option('data_inlining_row_limit', 10)
+
+statement ok
+BEGIN
+
+statement ok
+INSERT INTO lake.x VALUES (1)
+
+statement ok
+INSERT INTO lake.y VALUES (2, 3)
+
+statement ok
+COMMIT
+
+statement ok
+CREATE VIEW lake.z AS SELECT 1 AS one
+
+statement ok
+DETACH lake
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS lake (DATA_PATH '{DATA_PATH}/issue_1606')
+
+query I
+SELECT a FROM lake.x
+----
+1
+
+query II
+SELECT a, b FROM lake.y
+----
+2	3
