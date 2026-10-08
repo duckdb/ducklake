@@ -121,8 +121,7 @@ static bool PermanentLoadError(const ErrorData &error) {
 
 void DuckLakeInitializer::LoadExistingDuckLakeWithRetries(DuckLakeTransaction &transaction,
                                                           const string &attach_query) {
-	// a migration by another attach of the same DuckLake fails this one in ways we cannot tell from a real failure,
-	// so the load is retried while it waits for that migration
+	// a migration by another attach fails this one in ways we cannot tell from a real failure, so it waits for it
 	static constexpr idx_t MAX_WAIT_MS = 3000;
 	auto retry_config = DuckLakeRetryConfig::FromContext(context);
 	ErrorData first_error;
@@ -154,7 +153,6 @@ void DuckLakeInitializer::LoadExistingDuckLakeWithRetries(DuckLakeTransaction &t
 }
 
 void DuckLakeInitializer::AttachMetadata(DuckLakeTransaction &transaction, const string &attach_query) {
-	// the rollback of a failed load dropped the metadata attach with the transaction that made it
 	auto result = transaction.GetMetadataManager().AttachMetadata(attach_query);
 	result->ThrowIfError("Failed to attach DuckLake MetaData \"" + catalog.MetadataDatabaseName() + "\" at path + \"" +
 	                     catalog.MetadataPath() + "\"");

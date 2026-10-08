@@ -36,7 +36,7 @@ endloop
 statement ok
 DETACH old_metadata
 
-# every attach migrates the catalog from v0.1
+# the attach that loses the migration loads the catalog the other one migrated
 concurrentloop i 0 4
 
 statement ok

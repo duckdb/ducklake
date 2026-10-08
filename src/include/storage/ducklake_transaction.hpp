@@ -158,7 +158,7 @@ struct DuckLakeRetryConfig {
 
 	static DuckLakeRetryConfig FromContext(ClientContext &context);
 	//! The wait of an attempt, never longer than the milliseconds left
-	idx_t WaitMs(idx_t attempt, idx_t remaining_ms) const;
+	idx_t WaitMs(idx_t attempt, idx_t remaining_ms, double multiplier = 1.0) const;
 };
 
 class DuckLakeTransaction : public Transaction, public enable_shared_from_this<DuckLakeTransaction> {
