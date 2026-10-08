@@ -54,10 +54,10 @@ CALL truncate_duckdb_logs()
 
 endloop
 
-# only the first retry waits, so all eight fit in the wait of a load
+# every retry reads the catalog again and only the first waits, so all eight fit in the wait of a load
 query I
-SELECT max(reads) FILTER (retries = 8) - max(reads) FILTER (retries = 0) =
-       8 * (max(reads) FILTER (retries = 1) - max(reads) FILTER (retries = 0))
-FROM metadata_reads
+SELECT r1 > r0 AND r8 - r0 = 8 * (r1 - r0)
+FROM (SELECT max(reads) FILTER (retries = 0) AS r0, max(reads) FILTER (retries = 1) AS r1,
+             max(reads) FILTER (retries = 8) AS r8 FROM metadata_reads)
 ----
 true
