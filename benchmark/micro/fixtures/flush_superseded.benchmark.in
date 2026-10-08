@@ -1,0 +1,45 @@
+# name: benchmark/micro/fixtures/flush_superseded.benchmark.in
+# description: Twenty tables whose inlined rows are split over two inlined tables by an added column
+# group: [fixtures]
+
+argument lake flush_superseded
+
+cache_file ${lake}_ready.marker
+
+# Three import transactions create the tables with inlined rows, add a column, then inline more rows
+load
+EXPORT DATABASE '${BENCHMARK_DIR}/${lake}_gen';
+COPY (SELECT stmt FROM (
+SELECT 0 AS o, k, 'CREATE TABLE lake.s' || k
+|| ' AS SELECT r AS id, r * 3 + ' || k || ' AS v FROM range(50) t(r);' AS stmt FROM range(20) t(k)
+UNION ALL
+SELECT 1, 0, 'COMMIT; BEGIN;'
+UNION ALL
+SELECT 2, k, 'ALTER TABLE lake.s' || k || ' ADD COLUMN w INTEGER;' FROM range(20) t(k)
+UNION ALL
+SELECT 3, 0, 'COMMIT; BEGIN;'
+UNION ALL
+SELECT 4, k, 'INSERT INTO lake.s' || k || ' SELECT r, r, r FROM range(50, 100) t(r);' FROM range(20) t(k)
+) ORDER BY o, k) TO '${BENCHMARK_DIR}/${lake}_gen/schema.sql' (HEADER false, QUOTE '');
+@create ${lake}_pristine
+@attach ${lake}_pristine AS lake (DATA_PATH '${BENCHMARK_DIR}/${lake}_files')
+CALL lake.set_option('data_inlining_row_limit', 100);
+IMPORT DATABASE '${BENCHMARK_DIR}/${lake}_gen';
+SELECT CASE WHEN (SELECT count(*) <> 40 FROM __ducklake_metadata_lake.ducklake_inlined_data_tables)
+OR (SELECT count(*) <> 100 FROM lake.s19)
+THEN error('unexpected flush superseded fixture') END;
+CALL ducklake_delete_orphaned_files('lake', cleanup_all => true);
+DETACH lake;
+COPY (SELECT count(*) FROM glob('${BENCHMARK_DIR}/${lake}_files/**'))
+TO '${BENCHMARK_DIR}/${lake}_filecount.csv' (FORMAT CSV, HEADER false);
+@seal ${lake}_pristine
+COPY (SELECT 1) TO '${BENCHMARK_DIR}/${lake}_ready.marker' (FORMAT CSV);
+DETACH DATABASE IF EXISTS lake;
+@copy ${lake}_pristine TO ${work}
+@attach ${work} AS lake
+CALL ducklake_delete_orphaned_files('lake', cleanup_all => true);
+SELECT CASE WHEN (SELECT count(*) FROM glob('${BENCHMARK_DIR}/${lake}_files/**'))
+<> (SELECT column0 FROM read_csv('${BENCHMARK_DIR}/${lake}_filecount.csv', header = false))
+THEN error('the fixture files were not restored') END;
+
+include benchmark/micro/fixtures/restore_reload.benchmark.in

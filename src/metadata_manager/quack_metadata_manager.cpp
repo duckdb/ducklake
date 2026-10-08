@@ -51,16 +51,15 @@ unique_ptr<QueryResult> QuackMetadataManager::AttachMetadata(const string &attac
 }
 
 unique_ptr<QueryResult> QuackMetadataManager::Execute(DuckLakeSnapshot snapshot, string &query) {
-	lock_guard<std::recursive_mutex> guard(transaction.GetCatalog().GetMetadataQueryLock());
 	// the server commits each statement on its own, so the statements run in a server transaction
-	auto batch = "BEGIN TRANSACTION;\n" + query + "\nCOMMIT;";
-	auto result = Query(snapshot, batch);
-	if (result->HasError()) {
-		// a failed statement keeps the server transaction open until it is rolled back
-		string rollback = "ROLLBACK;";
-		Query(rollback);
-	}
-	return result;
+	SubstituteTransactionPlaceholders(snapshot, query);
+	return ExecuteInTransaction(query);
+}
+
+unique_ptr<QueryResult> QuackMetadataManager::ExecuteInTransaction(string &query) {
+	// hold the lock through the rollback
+	lock_guard<std::recursive_mutex> guard(transaction.GetCatalog().GetMetadataQueryLock());
+	return DuckLakeMetadataManager::ExecuteInTransaction(query);
 }
 
 string QuackMetadataManager::MetadataExistsQuery() const {
@@ -106,9 +105,9 @@ static bool IsDataOnlyCommit(const TransactionChangeInformation &c) {
 
 //! Whether the commit has to take the client-side path
 static bool RequiresClientSideCommit(DuckLakeTransaction &transaction) {
-	// the server-side commit cannot create the inlined-data table or delete the inlined data this transaction flushed
+	// the server-side commit cannot create inlined-data tables, delete flushed inlined data or rewrite delete files
 	return transaction.GetRequiresNewInlinedTable() || !transaction.GetFlushedInlinedTables().empty() ||
-	       !transaction.GetFlushedInlinedFileDeletions().empty();
+	       !transaction.GetFlushedInlinedFileDeletions().empty() || transaction.GetLocalChanges().HasDatedNewDeletes();
 }
 
 bool QuackMetadataManager::CanSkipSnapshotFetch(const TransactionChangeInformation &changes) const {

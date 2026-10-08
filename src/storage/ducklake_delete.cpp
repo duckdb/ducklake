@@ -68,6 +68,18 @@ static DuckLakeDeleteFile WriteDeleteFileInternal(ClientContext &context, InputT
 	DuckLakeUtil::EnsureDirectoryExists(input.fs, input.data_path);
 
 	auto function_data = copy_fun.function.copy_to_bind(input.context, bind_input, names_to_write, types_to_write);
+	// the delete file columns never hold NULL, so they are written as required
+	vector<BaseStatistics> not_null_stats;
+	vector<optional_ptr<BaseStatistics>> column_stats;
+	for (const auto &type : types_to_write) {
+		not_null_stats.push_back(BaseStatistics::CreateEmpty(type));
+		not_null_stats.back().SetHasNoNull();
+	}
+	for (auto &stats : not_null_stats) {
+		column_stats.push_back(&stats);
+	}
+	CopyToPropagateStatsInput stats_input {input.context, *function_data, column_stats};
+	copy_fun.function.copy_to_propagate_statistics(stats_input);
 	auto copy_global_state = copy_fun.function.copy_to_initialize_global(context, *function_data, delete_file_path);
 
 	// set up stats to get them from function
@@ -226,6 +238,41 @@ DuckLakeDeleteFile DuckLakeDeleteFileWriter::Write(ClientContext &context, Write
 	                            : WriteDeleteFileWithSnapshots(context, input);
 }
 
+void DuckLakeDeleteFileWriter::SetCommitSnapshot(ClientContext &context, DuckLakeTransaction &transaction,
+                                                 DuckLakeDeleteFile &delete_file, idx_t commit_snapshot) {
+	// earlier deletes are dated to snapshots before the transaction started
+	auto new_delete_snapshot = delete_file.max_snapshot.GetIndex();
+	if (new_delete_snapshot == commit_snapshot) {
+		return;
+	}
+	auto deletes = DuckLakeDeleteFilter::ScanDeleteFile(context, DuckLakeMultiFileList::GetDeleteData(delete_file),
+	                                                    optional_idx(), optional_idx());
+	for (auto &snapshot_id : deletes.snapshot_ids) {
+		if (snapshot_id == new_delete_snapshot) {
+			snapshot_id = commit_snapshot;
+		}
+	}
+	auto &fs = FileSystem::GetFileSystem(context);
+	auto &file_name = delete_file.file_name;
+	WriteDeleteFileWithSnapshotsInput input {context,
+	                                         transaction,
+	                                         fs,
+	                                         StringUtil::GetFilePath(file_name),
+	                                         delete_file.encryption_key,
+	                                         delete_file.data_file_path,
+	                                         {},
+	                                         delete_file.source};
+	MergeDeletesWithSnapshots(deletes, 0, input.positions);
+	auto written_file = Write(context, input, delete_file.format == DeleteFileFormat::PUFFIN);
+	fs.TryRemoveFile(file_name);
+
+	written_file.data_file_id = delete_file.data_file_id;
+	written_file.overwrites_existing_delete = delete_file.overwrites_existing_delete;
+	written_file.overwritten_delete_file = delete_file.overwritten_delete_file;
+	written_file.max_snapshot = commit_snapshot;
+	delete_file = std::move(written_file);
+}
+
 //===--------------------------------------------------------------------===//
 // DuckLakeDelete
 //===--------------------------------------------------------------------===//
@@ -376,7 +423,7 @@ void DuckLakeDelete::FlushDeleteWithSnapshots(DuckLakeTransaction &transaction, 
                                               const DuckLakeFileListExtendedEntry &data_file_info,
                                               DuckLakeDeleteData &existing_delete_data,
                                               const set<idx_t> &sorted_deletes, DuckLakeDeleteFile &delete_file) const {
-	// the commit snapshot for new deletes is current_snapshot + 1
+	// new deletes are dated to the expected commit snapshot, the commit rewrites the file if it differs
 	const auto current_snapshot = transaction.GetSnapshot();
 	const idx_t new_delete_snapshot = current_snapshot.snapshot_id + 1;
 

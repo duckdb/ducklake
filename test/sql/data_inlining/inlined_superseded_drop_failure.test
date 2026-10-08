@@ -1,0 +1,88 @@
+# name: test/sql/data_inlining/inlined_superseded_drop_failure.test
+# description: a superseded inlined table that fails to drop after a flush stays registered and is dropped later
+# group: [data_inlining]
+
+require ducklake
+
+require parquet
+
+test-env DATA_PATH {TEST_DIR}
+
+# a foreign key on the metadata table makes the drop fail
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/inlined_superseded_drop.db' AS dl (DATA_PATH '{DATA_PATH}/isd', DATA_INLINING_ROW_LIMIT 10)
+
+statement ok
+CREATE TABLE dl.t (x INT)
+
+statement ok
+INSERT INTO dl.t VALUES (1), (2)
+
+statement ok
+ALTER TABLE dl.t ADD COLUMN y INT
+
+statement ok
+INSERT INTO dl.t VALUES (3, 3)
+
+statement ok
+ALTER TABLE __ducklake_metadata_dl.ducklake_inlined_data_1_1 ADD PRIMARY KEY (x)
+
+statement ok
+USE __ducklake_metadata_dl
+
+statement ok
+CREATE TABLE drop_blocker (r INT REFERENCES ducklake_inlined_data_1_1 (x))
+
+statement ok
+USE memory
+
+query I
+SELECT rows_flushed FROM ducklake_flush_inlined_data('dl')
+----
+3
+
+query II
+SELECT * FROM dl.t ORDER BY x
+----
+1	NULL
+2	NULL
+3	3
+
+# a flush with nothing to flush tries the drop again and still commits
+statement ok
+CALL ducklake_flush_inlined_data('dl')
+
+query I
+SELECT table_name FROM __ducklake_metadata_dl.ducklake_inlined_data_tables ORDER BY ALL
+----
+ducklake_inlined_data_1_1
+ducklake_inlined_data_1_2
+
+statement ok
+DROP TABLE __ducklake_metadata_dl.drop_blocker
+
+statement ok
+INSERT INTO dl.t VALUES (4, 4)
+
+query I
+SELECT rows_flushed FROM ducklake_flush_inlined_data('dl')
+----
+1
+
+query I
+SELECT table_name FROM __ducklake_metadata_dl.ducklake_inlined_data_tables ORDER BY ALL
+----
+ducklake_inlined_data_1_2
+
+statement error
+SELECT count(*) FROM __ducklake_metadata_dl.ducklake_inlined_data_1_1
+----
+does not exist
+
+query II
+SELECT * FROM dl.t ORDER BY x
+----
+1	NULL
+2	NULL
+3	3
+4	4

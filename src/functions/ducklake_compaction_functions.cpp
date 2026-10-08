@@ -114,6 +114,7 @@ SinkFinalizeType DuckLakeCompaction::Finalize(Pipeline &pipeline, Event &event, 
                                               OperatorSinkFinalizeInput &input) const {
 	auto &global_state = input.global_state.Cast<DuckLakeInsertGlobalState>();
 
+	DuckLakeInsert::RemoveEmptyFiles(context, global_state);
 	if (global_state.written_files.empty()) {
 		idx_t rows_to_write = 0;
 		for (auto &source : source_files) {

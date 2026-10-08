@@ -132,6 +132,8 @@ public:
 	void TransactionLocalDelete(ClientContext &context, TableIndex table_id, const string &data_file_path,
 	                            DuckLakeDeleteFile delete_file);
 	void AddDeletes(ClientContext &context, TableIndex table_id, vector<DuckLakeDeleteFile> files);
+	bool HasDatedNewDeletes() const;
+	void SetDeleteCommitSnapshot(ClientContext &context, DuckLakeTransaction &transaction, idx_t commit_snapshot);
 	static void AddDeletesToMap(ClientContext &context, vector<DuckLakeDeleteFile> new_deletes,
 	                            unordered_map<string, vector<DuckLakeDeleteFile>> &delete_file_map);
 
@@ -318,6 +320,7 @@ public:
 	void ApplyServerSideCommit(idx_t schema_version);
 	//! Post-commit cleanup of empty inlined-data tables superseded by later schema versions.
 	void DropEmptySupersededInlinedTablesClientSide();
+	void ReportPostCommitError(const string &message);
 
 	static DuckLakeGlobalStatsInfo ConvertNewGlobalStats(TableIndex table_id,
 	                                                     const DuckLakeNewGlobalStats &new_global_stats);
