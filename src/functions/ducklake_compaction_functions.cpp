@@ -569,8 +569,8 @@ DuckLakeCompactor::GenerateCompactionCommand(vector<DuckLakeCompactionFileEntry>
 	bool write_snapshot_id = false;
 	switch (type) {
 	case CompactionType::MERGE_ADJACENT_TABLES: {
-		// if files are adjacent, we don't need to write the row-id to the file
-		write_row_id = !files_are_adjacent;
+		// a sort reorders the rows, and a file written by an UPDATE has rowids outside its row_id_start range
+		write_row_id = true;
 		write_snapshot_id = true;
 		break;
 	}
@@ -600,8 +600,10 @@ DuckLakeCompactor::GenerateCompactionCommand(vector<DuckLakeCompactionFileEntry>
 		root = DuckLakeCompactor::InsertSort(binder, root, latest_table, sort_data);
 	}
 
+	// adjacent files are merged into a single file in scan order that continues their row id range
+	bool merge_in_order = type == CompactionType::MERGE_ADJACENT_TABLES && files_are_adjacent;
 	copy->table_index = binder.GenerateTableIndex();
-	if (write_row_id) {
+	if (!merge_in_order) {
 		copy->preserve_order = PreserveOrderType::DONT_PRESERVE_ORDER;
 	} else {
 		auto &fs = FileSystem::GetFileSystem(context);
@@ -615,7 +617,7 @@ DuckLakeCompactor::GenerateCompactionCommand(vector<DuckLakeCompactionFileEntry>
 	copy->children.push_back(std::move(root));
 
 	optional_idx target_row_id_start;
-	if (!write_row_id) {
+	if (merge_in_order) {
 		target_row_id_start = source_files[0].file.row_id_start;
 	}
 
