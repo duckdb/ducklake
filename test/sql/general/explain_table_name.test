@@ -1,0 +1,55 @@
+# name: test/sql/general/explain_table_name.test
+# description: EXPLAIN names DuckLake scans by catalog, schema and table like DuckDB table scans
+# group: [general]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DUCKLAKE_VERSION '1.1-dev1', DATA_PATH '{DATA_PATH}/explain_table_name_files')
+
+statement ok
+CREATE SCHEMA ducklake.sales;
+
+statement ok
+CREATE SCHEMA ducklake.sales.eu;
+
+statement ok
+CREATE SCHEMA ducklake."sales.eu";
+
+statement ok
+CREATE TABLE ducklake.orders(i INTEGER);
+
+statement ok
+CREATE TABLE ducklake.sales.orders(i INTEGER);
+
+statement ok
+CREATE TABLE ducklake.sales.eu.orders(i INTEGER);
+
+statement ok
+CREATE TABLE ducklake."sales.eu".orders(i INTEGER);
+
+query II
+EXPLAIN SELECT * FROM ducklake.orders
+----
+physical_plan	<REGEX>:.*Table: ducklake\.main\.orders\s.*
+
+query II
+EXPLAIN SELECT * FROM ducklake.sales.orders
+----
+physical_plan	<REGEX>:.*Table: ducklake\.sales\.orders\s.*
+
+query II
+EXPLAIN SELECT * FROM ducklake.sales.eu.orders
+----
+physical_plan	<REGEX>:.*Table: ducklake\.sales\.eu\.orders\s.*
+
+query II
+EXPLAIN SELECT * FROM ducklake."sales.eu".orders
+----
+physical_plan	<REGEX>:.*Table: ducklake\."sales\.eu"\.orders\s.*
