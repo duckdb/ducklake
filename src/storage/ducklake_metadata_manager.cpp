@@ -698,13 +698,18 @@ WHERE table_id = {TABLE_ID})";
 }
 
 optional_idx DuckLakeMetadataManager::GetSchemaChangeVersion(TableIndex table_id, DuckLakeSnapshot snapshot) {
-	auto query = StringUtil::Format("SELECT MAX(schema_version) FROM {METADATA_CATALOG}.ducklake_schema_versions "
+	auto query = StringUtil::Format("SELECT MIN(schema_version), MAX(schema_version) FROM "
+	                                "{METADATA_CATALOG}.ducklake_schema_versions "
 	                                "WHERE table_id = %d AND begin_snapshot <= {SNAPSHOT_ID}",
 	                                table_id.index);
 	auto result = Query(snapshot, query);
 	result->ThrowIfError("Failed to get the last schema change of a table from DuckLake: ");
 	for (auto &row : *result) {
-		return OptIdx(row, 0);
+		auto creation_version = OptIdx(row, 0);
+		auto last_version = OptIdx(row, 1);
+		if (last_version.IsValid() && last_version.GetIndex() != creation_version.GetIndex()) {
+			return last_version;
+		}
 	}
 	return optional_idx();
 }

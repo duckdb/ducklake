@@ -1335,17 +1335,16 @@ void DuckLakeCatalog::CacheInlinedDeletionTableResult(TableIndex table_id, DuckL
 
 optional_idx DuckLakeCatalog::GetSchemaChangeVersion(DuckLakeTransaction &transaction, TableIndex table_id) {
 	auto snapshot = transaction.GetSnapshot();
-	auto key = make_pair(table_id.index, snapshot.schema_version);
 	{
 		lock_guard<mutex> guard(schema_version_snapshot_lock);
-		auto entry = schema_change_versions.find(key);
-		if (entry != schema_change_versions.end()) {
-			return entry->second;
+		auto entry = schema_change_versions.find(table_id.index);
+		if (entry != schema_change_versions.end() && entry->second.first == snapshot.schema_version) {
+			return entry->second.second;
 		}
 	}
 	auto schema_change_version = transaction.GetMetadataManager().GetSchemaChangeVersion(table_id, snapshot);
 	lock_guard<mutex> guard(schema_version_snapshot_lock);
-	schema_change_versions[key] = schema_change_version;
+	schema_change_versions[table_id.index] = make_pair(snapshot.schema_version, schema_change_version);
 	return schema_change_version;
 }
 
