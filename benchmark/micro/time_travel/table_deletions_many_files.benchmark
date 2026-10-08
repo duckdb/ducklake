@@ -1,0 +1,23 @@
+# name: benchmark/micro/time_travel/table_deletions_many_files.benchmark
+# description: table_deletions over the first deletes of 4096 data files, each in a delete file of its own
+# group: [time_travel]
+
+name Table Deletions Many Files
+group micro
+subgroup time_travel
+
+require ducklake
+
+require parquet
+
+argument work table_deletions_many_files_work
+
+include benchmark/micro/fixtures/delete_files.benchmark.in
+
+# The run is read-only, so the work copy needs no reset between runs
+run
+SELECT snapshot_id, count(*) AS cnt, sum(id) AS sum_id FROM ducklake_table_deletions('lake', 'main', 'bg', 0, 4)
+GROUP BY ALL ORDER BY ALL;
+
+result III
+2	4096	17175674880

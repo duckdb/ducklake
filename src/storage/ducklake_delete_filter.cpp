@@ -59,7 +59,7 @@ optional_idx DuckLakeDeleteData::GetSnapshotForRow(idx_t row_id) const {
 	if (it != scan_snapshot_map.end()) {
 		return it->second;
 	}
-	return optional_idx();
+	return scan_snapshot;
 }
 
 idx_t DuckLakeDeleteFilter::Filter(row_t start_row_index, idx_t count, SelectionVector &result_sel) {
@@ -365,6 +365,7 @@ void DuckLakeDeleteFilter::Initialize(ClientContext &context, const DuckLakeDele
 	// Scanning deletes - we need to scan the opposite (i.e. only the rows that were deleted)
 	// rows_to_scan[i] = true means row i was deleted and should be returned
 	auto rows_to_scan = make_unsafe_uniq_array<bool>(delete_scan.row_count);
+	delete_data->scan_snapshot = delete_scan.snapshot_id;
 	bool has_embedded_snapshots = false;
 
 	unordered_map<idx_t, idx_t> all_position_to_snapshot;

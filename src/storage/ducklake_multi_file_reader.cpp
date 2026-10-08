@@ -654,8 +654,13 @@ void DuckLakeMultiFileReader::GatherDeletionScanSnapshots(BaseFileReader &reader
                                                           const Vector &rowid_vector, Vector &snapshot_vector,
                                                           idx_t count) const {
 	auto &delete_filter = static_cast<DuckLakeDeleteFilter &>(*reader.deletion_filter);
-	if (delete_filter.delete_data->scan_snapshot_map.empty()) {
-		// We don't have anything to gather
+	auto &delete_data = *delete_filter.delete_data;
+	if (delete_data.scan_snapshot_map.empty()) {
+		// the embedded snapshot of a data file is the insert snapshot of a row, not its deleting snapshot
+		if (delete_data.scan_snapshot.IsValid()) {
+			snapshot_vector.Reference(Value::BIGINT(NumericCast<int64_t>(delete_data.scan_snapshot.GetIndex())),
+			                          count_t(count));
+		}
 		return;
 	}
 
@@ -675,14 +680,14 @@ void DuckLakeMultiFileReader::GatherDeletionScanSnapshots(BaseFileReader &reader
 		auto row_id = row_ids.GetValueUnsafe(i);
 
 		idx_t lookup_key;
-		if (delete_filter.delete_data->uses_row_id) {
+		if (delete_data.uses_row_id) {
 			// File has embedded row_ids - use global row_id directly
 			lookup_key = static_cast<idx_t>(row_id);
 		} else {
 			lookup_key = NumericCast<idx_t>(row_id) - row_id_start;
 		}
 
-		auto snapshot = delete_filter.delete_data->GetSnapshotForRow(lookup_key);
+		auto snapshot = delete_data.GetSnapshotForRow(lookup_key);
 		if (snapshot.IsValid()) {
 			snapshot_data[i] = snapshot.GetIndex();
 		}

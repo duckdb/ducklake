@@ -1,0 +1,81 @@
+# name: test/sql/issues/issue_1603_merged_file_delete_snapshot.test
+# description: A delete from a data file with rows of several snapshots is dated to the snapshot of the delete
+# group: [issues]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/issue_1603', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE ducklake.t (id INTEGER)
+
+statement ok
+INSERT INTO ducklake.t VALUES (1)
+
+statement ok
+INSERT INTO ducklake.t VALUES (2)
+
+# snapshot 4 merges both inserts into one file that stores the insert snapshot of each row
+statement ok
+CALL ducklake_merge_adjacent_files('ducklake')
+
+statement ok
+DELETE FROM ducklake.t WHERE id = 1
+
+query III
+SELECT snapshot_id, rowid, id FROM ducklake_table_deletions('ducklake', 'main', 't', 5, 5)
+----
+5	0	1
+
+query IIII
+FROM ducklake_table_changes('ducklake', 'main', 't', 0, 5) ORDER BY ALL
+----
+2	0	insert	1
+3	1	insert	2
+5	0	delete	1
+
+# an update of a merged file
+statement ok
+UPDATE ducklake.t SET id = 20 WHERE id = 2
+
+query IIII
+FROM ducklake_table_changes('ducklake', 'main', 't', 6, 6) ORDER BY ALL
+----
+6	1	update_postimage	20
+6	1	update_preimage	2
+
+# a delete from a file flushed from inlined data
+statement ok
+CREATE TABLE ducklake.f (id INTEGER)
+
+statement ok
+CALL ducklake.set_option('data_inlining_row_limit', 10, table_name => 'f')
+
+statement ok
+INSERT INTO ducklake.f VALUES (1)
+
+statement ok
+INSERT INTO ducklake.f VALUES (2)
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake', table_name => 'f')
+
+statement ok
+CALL ducklake.set_option('data_inlining_row_limit', 0, table_name => 'f')
+
+statement ok
+DELETE FROM ducklake.f WHERE id = 2
+
+query IIII
+FROM ducklake_table_changes('ducklake', 'main', 'f', 7, 11) ORDER BY ALL
+----
+8	0	insert	1
+9	1	insert	2
+11	1	delete	2
