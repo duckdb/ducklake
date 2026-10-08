@@ -102,7 +102,6 @@ public:
 	}
 	//! Whether an inlined data table of the schema version has the columns of the last schema change
 	bool IsCurrentInlinedDataTable(idx_t schema_version) const;
-	//! Whether an inlined data table has the columns of the last schema change, so new rows can go to it
 	bool HasCurrentInlinedDataTable() const;
 	//! The inlined data tables to read at the snapshot, skipping the flushed and dropped ones
 	vector<DuckLakeInlinedTableInfo> GetInlinedDataTables(DuckLakeTransaction &transaction,

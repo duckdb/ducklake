@@ -3211,7 +3211,7 @@ string DuckLakeMetadataManager::WriteNewInlinedData(DuckLakeSnapshot &commit_sna
 		return batch_query;
 	}
 
-	// a commit takes one new schema version, so the inlined tables of its schema changes keep the version of its rows
+	// advance the schema version at most once per commit
 	bool new_schema_version = transaction.SchemaChangesMade();
 	for (auto &entry : new_data) {
 		string inlined_table_name;
