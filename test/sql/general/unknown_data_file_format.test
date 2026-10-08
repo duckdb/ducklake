@@ -1,0 +1,57 @@
+# name: test/sql/general/unknown_data_file_format.test
+# description: a data file of a format this DuckLake cannot read is refused instead of being read as Parquet
+# group: [general]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{BASE_TEST_NAME}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl
+(DATA_PATH '{DATA_PATH}/unknown_data_file_format', METADATA_CATALOG 'meta', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE dl.t (id INTEGER)
+
+statement ok
+INSERT INTO dl.t VALUES (1), (2)
+
+statement ok
+UPDATE meta.ducklake_data_file SET file_format = 'foo'
+
+statement ok
+DETACH dl
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl
+(DATA_PATH '{DATA_PATH}/unknown_data_file_format', METADATA_CATALOG 'meta')
+
+statement error
+SELECT * FROM dl.t
+----
+Unsupported data file format: foo
+
+statement error
+SELECT * FROM ducklake_table_insertions('dl', 'main', 't', 0, 2)
+----
+Unsupported data file format: foo
+
+statement ok
+UPDATE meta.ducklake_data_file SET file_format = 'PARQUET'
+
+statement ok
+DETACH dl
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl
+(DATA_PATH '{DATA_PATH}/unknown_data_file_format', METADATA_CATALOG 'meta')
+
+query I
+SELECT * FROM dl.t ORDER BY ALL
+----
+1
+2
