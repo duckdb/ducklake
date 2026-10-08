@@ -33,6 +33,7 @@ public:
 	bool InlinedDeletionTableExists(const string &table_name) override;
 	string ReplicaIdentitySql(const vector<string> &table_names) override;
 	void MigrateInlinedDataTypes() override;
+	bool IsRetryableCommitError(const string &message) const override;
 
 	unique_ptr<QueryResult> Execute(DuckLakeSnapshot snapshot, string &query) override;
 

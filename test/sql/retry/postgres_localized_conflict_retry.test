@@ -1,0 +1,104 @@
+# name: test/sql/retry/postgres_localized_conflict_retry.test
+# description: a primary key conflict on Postgres is retried when the server reports errors in another language
+# group: [retry]
+
+require ducklake
+
+require parquet
+
+require postgres_scanner
+
+require-env DUCKLAKE_CI
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'dbname=ducklakedb' AS pg (TYPE postgres)
+
+statement ok
+CALL postgres_execute('pg', 'DROP SCHEMA IF EXISTS localized_retry CASCADE')
+
+statement ok
+ATTACH 'ducklake:postgres:dbname=ducklakedb' AS dl
+(DATA_PATH '{DATA_PATH}/localized_retry', METADATA_SCHEMA 'localized_retry')
+
+statement ok
+SET ducklake_retry_wait_ms = 1
+
+statement ok
+CREATE TABLE dl.t (i INT)
+
+# the next snapshot insert fails once with the Polish message for a duplicate key
+statement ok
+CALL postgres_execute('pg', 'CREATE SEQUENCE localized_retry.attempts;
+CREATE FUNCTION localized_retry.fail_once() RETURNS trigger AS $$
+BEGIN
+	IF nextval(''localized_retry.attempts'') = 1 THEN
+		RAISE unique_violation USING MESSAGE =
+			''podwójna wartość klucza narusza ograniczenie unikalności "ducklake_snapshot_pkey"'';
+	END IF;
+	RETURN NEW;
+END $$ LANGUAGE plpgsql;
+CREATE TRIGGER fail_once BEFORE INSERT ON localized_retry.ducklake_snapshot
+FOR EACH ROW EXECUTE FUNCTION localized_retry.fail_once()', prepare = false)
+
+statement ok
+INSERT INTO dl.t VALUES (1)
+
+query I
+SELECT * FROM dl.t
+----
+1
+
+# an error that names no DuckLake primary key is still not retried
+statement ok
+CALL postgres_execute('pg', 'CREATE OR REPLACE FUNCTION localized_retry.fail_once() RETURNS trigger AS $$
+BEGIN
+	PERFORM nextval(''localized_retry.attempts'');
+	RAISE unique_violation USING MESSAGE =
+		''podwójna wartość klucza narusza ograniczenie unikalności "inny_klucz"'';
+END $$ LANGUAGE plpgsql')
+
+statement error
+INSERT INTO dl.t VALUES (2)
+----
+inny_klucz
+
+# nor when the failed query mentions one
+statement ok
+BEGIN
+
+statement ok
+CALL dl.set_commit_message('author', 'ducklake_snapshot_pkey')
+
+statement ok
+INSERT INTO dl.t VALUES (2)
+
+statement error
+COMMIT
+----
+inny_klucz
+
+# one attempt for each of these inserts after two for the first one
+query I
+SELECT last_value FROM postgres_query('pg', 'SELECT last_value FROM localized_retry.attempts')
+----
+4
+
+statement ok
+CALL postgres_execute('pg', 'DROP TRIGGER fail_once ON localized_retry.ducklake_snapshot')
+
+statement ok
+INSERT INTO dl.t VALUES (3)
+
+query I
+SELECT * FROM dl.t ORDER BY ALL
+----
+1
+3
+
+statement ok
+DETACH dl
+
+statement ok
+CALL postgres_execute('pg', 'DROP SCHEMA localized_retry CASCADE')
