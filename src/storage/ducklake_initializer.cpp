@@ -61,7 +61,6 @@ string DuckLakeInitializer::GetAttachOptions() {
 
 void DuckLakeInitializer::Initialize() {
 	auto &transaction = DuckLakeTransaction::Get(context, catalog);
-	auto &metadata_manager = transaction.GetMetadataManager();
 	// attach the metadata database
 	const string attach_query =
 	    "ATTACH OR REPLACE {METADATA_PATH} AS {METADATA_CATALOG_NAME_IDENTIFIER}" + GetAttachOptions();
@@ -97,9 +96,7 @@ void DuckLakeInitializer::Initialize() {
 		}
 		InitializeNewDuckLake(transaction, has_explicit_schema);
 	}
-	// note: re-fetch the metadata manager here - InitializeNewDuckLake/LoadExistingDuckLake may have
-	// swapped it out via SetVersionedMetadataManager, so the `metadata_manager` reference taken at the
-	// top of Initialize() would now dangle.
+	// InitializeNewDuckLake and LoadExistingDuckLake can swap the metadata manager out
 	auto &current_metadata_manager = transaction.GetMetadataManager();
 	// probe the metadata server for optional capabilities (e.g. server-side commit retries) once per attach
 	current_metadata_manager.ProbeServerCapabilities();
@@ -110,7 +107,6 @@ void DuckLakeInitializer::Initialize() {
 	}
 }
 
-//! Whether a load cannot succeed when it is tried again
 static bool PermanentLoadError(const ErrorData &error) {
 	switch (error.Type()) {
 	case ExceptionType::INVALID_INPUT:
@@ -147,9 +143,8 @@ void DuckLakeInitializer::LoadExistingDuckLakeWithRetries(DuckLakeTransaction &t
 		if (waited_ms >= MAX_WAIT_MS || attempt >= retry_config.max_retry_count) {
 			first_error.Throw();
 		}
-		// wait for the migration of the other attach to finish, then read the catalog again
-		auto wait_ms = (idx_t)((double)retry_config.retry_wait_ms * pow(retry_config.retry_backoff, (double)attempt));
-		wait_ms = MinValue(wait_ms, MAX_WAIT_MS - waited_ms);
+		auto backoff_ms = (double)retry_config.retry_wait_ms * pow(retry_config.retry_backoff, (double)attempt);
+		auto wait_ms = (idx_t)MinValue<double>(backoff_ms, (double)(MAX_WAIT_MS - waited_ms));
 		ThreadUtil::SleepMs(wait_ms, context);
 		waited_ms += wait_ms;
 		transaction.Rollback();
