@@ -1,4 +1,5 @@
 #include "common/ducklake_util.hpp"
+#include "duckdb/execution/operator/helper/physical_set.hpp"
 #include "common/ducklake_types.hpp"
 #include "duckdb/common/types/column/column_data_collection.hpp"
 #include "storage/ducklake_transaction.hpp"
@@ -557,13 +558,12 @@ void DuckLakeUtil::CopyExtensionSettings(ClientContext &from, ClientContext &to)
 	}
 }
 
-void DuckLakeUtil::SetExtensionSetting(ClientContext &context, const string &name, Value value) {
+void DuckLakeUtil::SetExtensionSetting(ClientContext &context, const string &name, const Value &value) {
 	ExtensionOption option;
-	if (!DBConfig::GetConfig(context).TryGetExtensionOption(Identifier(name), option) ||
-	    !option.setting_index.IsValid()) {
+	if (!DBConfig::GetConfig(context).TryGetExtensionOption(Identifier(name), option)) {
 		return;
 	}
-	context.config.user_settings.SetUserSetting(option.setting_index.GetIndex(), std::move(value));
+	PhysicalSet::SetExtensionVariable(context, option, SetScope::SESSION, value);
 }
 
 using config_option_parser_t = string (*)(ClientContext &context, const string &option, const Value &val);
