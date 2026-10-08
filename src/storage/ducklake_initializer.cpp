@@ -110,6 +110,19 @@ void DuckLakeInitializer::Initialize() {
 	}
 }
 
+//! Whether a load cannot succeed when it is tried again
+static bool PermanentLoadError(const ErrorData &error) {
+	switch (error.Type()) {
+	case ExceptionType::INVALID_INPUT:
+	case ExceptionType::INVALID_CONFIGURATION:
+	case ExceptionType::NOT_IMPLEMENTED:
+	case ExceptionType::BINDER:
+		return true;
+	default:
+		return false;
+	}
+}
+
 void DuckLakeInitializer::LoadExistingDuckLakeWithRetries(DuckLakeTransaction &transaction,
                                                           const string &attach_query) {
 	// a migration by another attach of the same DuckLake fails this one in ways we cannot tell from a real failure,
@@ -123,8 +136,12 @@ void DuckLakeInitializer::LoadExistingDuckLakeWithRetries(DuckLakeTransaction &t
 			LoadExistingDuckLake(transaction);
 			return;
 		} catch (std::exception &ex) {
+			ErrorData error(ex);
+			if (PermanentLoadError(error)) {
+				error.Throw();
+			}
 			if (attempt == 0) {
-				first_error = ErrorData(ex);
+				first_error = error;
 			}
 		}
 		if (waited_ms >= MAX_WAIT_MS || attempt >= retry_config.max_retry_count) {
@@ -132,6 +149,7 @@ void DuckLakeInitializer::LoadExistingDuckLakeWithRetries(DuckLakeTransaction &t
 		}
 		// wait for the migration of the other attach to finish, then read the catalog again
 		auto wait_ms = (idx_t)((double)retry_config.retry_wait_ms * pow(retry_config.retry_backoff, (double)attempt));
+		wait_ms = MinValue(wait_ms, MAX_WAIT_MS - waited_ms);
 		ThreadUtil::SleepMs(wait_ms, context);
 		waited_ms += wait_ms;
 		transaction.Rollback();
