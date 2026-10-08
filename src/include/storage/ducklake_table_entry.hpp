@@ -94,6 +94,11 @@ public:
 	const vector<DuckLakeInlinedTableInfo> &GetInlinedDataTables() const {
 		return inlined_data_tables;
 	}
+	void SetSchemaChangeVersion(optional_idx schema_change_version_p) {
+		schema_change_version = schema_change_version_p;
+	}
+	//! Whether an inlined data table has the columns of the last schema change, so new rows can go to it
+	bool HasCurrentInlinedDataTable() const;
 	//! The inlined data tables to read at the snapshot, skipping the flushed and dropped ones
 	vector<DuckLakeInlinedTableInfo> GetInlinedDataTables(DuckLakeTransaction &transaction,
 	                                                      DuckLakeSnapshot snapshot) const;
@@ -242,6 +247,8 @@ private:
 	shared_ptr<DuckLakeFieldData> field_data;
 	optional_idx next_column_id;
 	vector<DuckLakeInlinedTableInfo> inlined_data_tables;
+	//! The schema version of the last schema change of the table, when loaded from the catalog
+	optional_idx schema_change_version;
 	LocalChange local_change;
 	unique_ptr<DuckLakePartition> partition_data;
 	unique_ptr<DuckLakeSort> sort_data;

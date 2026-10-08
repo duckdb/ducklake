@@ -103,6 +103,8 @@ struct DuckLakeTableInfo {
 	vector<DuckLakeColumnInfo> columns;
 	vector<DuckLakeTag> tags;
 	vector<DuckLakeInlinedTableInfo> inlined_data_tables;
+	//! The schema version of the last schema change of the table
+	optional_idx schema_change_version;
 };
 
 //! Stores the information on macro parameters

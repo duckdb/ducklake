@@ -1,0 +1,223 @@
+# name: test/sql/issues/issue_1606_inlined_insert_after_schema_change.test
+# description: Inlined inserts after a schema change made with inlining off use an inlined table with the new columns
+# group: [issues]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/issue_1606.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS lake (DATA_PATH '{DATA_PATH}/issue_1606')
+
+statement ok
+CREATE TABLE lake.t (a INTEGER)
+
+statement ok
+INSERT INTO lake.t VALUES (0)
+
+# an added column
+statement ok
+CALL lake.set_option('data_inlining_row_limit', 0)
+
+statement ok
+ALTER TABLE lake.t ADD COLUMN b INTEGER
+
+statement ok
+CALL lake.set_option('data_inlining_row_limit', 10)
+
+statement ok
+INSERT INTO lake.t VALUES (1, 2)
+
+statement ok
+SET VARIABLE inserted = (SELECT max(snapshot_id) FROM lake.snapshots())
+
+statement ok
+INSERT INTO lake.t VALUES (3, 4)
+
+query II
+SELECT a, b FROM lake.t ORDER BY a
+----
+0	NULL
+1	2
+3	4
+
+# a dropped and an added column, so the old inlined table has as many columns
+statement ok
+CREATE TABLE lake.s (a INTEGER, b INTEGER)
+
+statement ok
+INSERT INTO lake.s VALUES (0, 0)
+
+statement ok
+CALL lake.set_option('data_inlining_row_limit', 0)
+
+statement ok
+ALTER TABLE lake.s DROP COLUMN b
+
+statement ok
+ALTER TABLE lake.s ADD COLUMN c INTEGER
+
+statement ok
+CALL lake.set_option('data_inlining_row_limit', 10)
+
+statement ok
+INSERT INTO lake.s VALUES (1, 42)
+
+query II
+SELECT a, c FROM lake.s ORDER BY a
+----
+0	NULL
+1	42
+
+# a wider type, with an empty inlined table of the old type
+statement ok
+CREATE TABLE lake.u (a INTEGER)
+
+statement ok
+CALL lake.set_option('data_inlining_row_limit', 0)
+
+statement ok
+ALTER TABLE lake.u ALTER COLUMN a SET DATA TYPE BIGINT
+
+statement ok
+CALL lake.set_option('data_inlining_row_limit', 10)
+
+statement ok
+INSERT INTO lake.u VALUES (5000000000)
+
+query I
+SELECT a FROM lake.u
+----
+5000000000
+
+# an update writes the new rows inlined too
+statement ok
+CREATE TABLE lake.v AS SELECT range AS a FROM range(3)
+
+statement ok
+CALL lake.set_option('data_inlining_row_limit', 0)
+
+statement ok
+ALTER TABLE lake.v ADD COLUMN c INTEGER
+
+statement ok
+CALL lake.set_option('data_inlining_row_limit', 10)
+
+statement ok
+UPDATE lake.v SET c = 7 WHERE a = 1
+
+query II
+SELECT a, c FROM lake.v ORDER BY a
+----
+0	NULL
+1	7
+2	NULL
+
+statement ok
+DETACH lake
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS lake (DATA_PATH '{DATA_PATH}/issue_1606')
+
+query II
+SELECT a, b FROM lake.t AT (VERSION => getvariable('inserted')) ORDER BY a
+----
+0	NULL
+1	2
+
+query II
+SELECT a, b FROM lake.t ORDER BY a
+----
+0	NULL
+1	2
+3	4
+
+query II
+SELECT a, c FROM lake.s ORDER BY a
+----
+0	NULL
+1	42
+
+statement ok
+CALL ducklake_flush_inlined_data('lake')
+
+statement ok
+DETACH lake
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS lake (DATA_PATH '{DATA_PATH}/issue_1606')
+
+query II
+SELECT a, b FROM lake.t ORDER BY a
+----
+0	NULL
+1	2
+3	4
+
+query II
+SELECT a, c FROM lake.s ORDER BY a
+----
+0	NULL
+1	42
+
+query I
+SELECT a FROM lake.u
+----
+5000000000
+
+query II
+SELECT a, c FROM lake.v ORDER BY a
+----
+0	NULL
+1	7
+2	NULL
+
+# the flushed file of s holds the added column
+statement ok
+SET VARIABLE s_files = (SELECT list(data_file) FROM ducklake_list_files('lake', 's'))
+
+query I
+SELECT list(c ORDER BY a) FROM read_parquet(getvariable('s_files'), union_by_name => true)
+----
+[NULL, 42]
+
+# two transactions that insert into the same table, the second one finds the inlined table of the first
+statement ok
+CREATE TABLE lake.k (a INTEGER)
+
+statement ok
+CALL lake.set_option('data_inlining_row_limit', 0)
+
+statement ok
+ALTER TABLE lake.k ADD COLUMN b INTEGER
+
+statement ok
+CALL lake.set_option('data_inlining_row_limit', 10)
+
+statement ok con1
+BEGIN
+
+statement ok con1
+INSERT INTO lake.k VALUES (1, 2)
+
+statement ok con2
+BEGIN
+
+statement ok con2
+INSERT INTO lake.k VALUES (3, 4)
+
+statement ok con1
+COMMIT
+
+statement ok con2
+COMMIT
+
+query II
+SELECT a, b FROM lake.k ORDER BY a
+----
+1	2
+3	4

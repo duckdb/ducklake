@@ -588,7 +588,9 @@ const string &DuckLakeServerSideCommit::ResolveInlinedTableName(TableIndex table
 	auto result = RunQuery(lookup, "lookup inlined table name");
 	string name;
 	for (auto &row : *result) {
-		name = row.GetValue<string>(0);
+		if (!row.IsNull(0)) {
+			name = row.GetValue<string>(0);
+		}
 	}
 	return inlined_table_name_cache.emplace(table_id.index, std::move(name)).first->second;
 }

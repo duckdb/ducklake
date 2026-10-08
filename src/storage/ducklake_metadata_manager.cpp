@@ -951,7 +951,12 @@ SELECT schema_id, tbl.table_id, table_uuid::VARCHAR, table_name,
 		FROM {METADATA_CATALOG}.ducklake_column_tag col_tag
 		WHERE col_tag.table_id=tbl.table_id AND col_tag.column_id=col.column_id AND
 		      {SNAPSHOT_ID} >= col_tag.begin_snapshot AND ({SNAPSHOT_ID} < col_tag.end_snapshot OR col_tag.end_snapshot IS NULL)
-	) AS column_tags, default_value_type
+	) AS column_tags, default_value_type,
+	(
+		SELECT MAX(sv.schema_version)
+		FROM {METADATA_CATALOG}.ducklake_schema_versions sv
+		WHERE sv.table_id = tbl.table_id AND sv.begin_snapshot <= {SNAPSHOT_ID}
+	) AS schema_change_version
 FROM {METADATA_CATALOG}.ducklake_table tbl
 LEFT JOIN {METADATA_CATALOG}.ducklake_column col USING (table_id)
 WHERE {SNAPSHOT_ID} >= tbl.begin_snapshot AND ({SNAPSHOT_ID} < tbl.end_snapshot OR tbl.end_snapshot IS NULL)
@@ -981,6 +986,9 @@ ORDER BY table_id, parent_column NULLS FIRST, column_order
 			if (!row.IsNull(5)) {
 				auto inlined_data_tables = row.GetValue<Value>(5);
 				table_info.inlined_data_tables = LoadInlinedDataTables(inlined_data_tables);
+			}
+			if (!row.IsNull(COLUMN_INDEX_START + 9)) {
+				table_info.schema_change_version = row.GetValue<idx_t>(COLUMN_INDEX_START + 9);
 			}
 			// find the schema
 			auto schema_entry = schema_map.find(table_info.schema_id);
@@ -2944,11 +2952,18 @@ string DuckLakeMetadataManager::InlinedTableRegistrationTuple(idx_t table_id, co
 }
 
 string DuckLakeMetadataManager::LatestInlinedTableQuery(idx_t table_id) {
-	return StringUtil::Format(
-	    "SELECT table_name, schema_version FROM {METADATA_CATALOG}.ducklake_inlined_data_tables "
-	    "WHERE table_id = %d AND schema_version = ("
-	    "  SELECT MAX(schema_version) FROM {METADATA_CATALOG}.ducklake_inlined_data_tables WHERE table_id = %d)",
-	    table_id, table_id);
+	// an inlined table older than the last schema change of its table has other columns, so new rows skip it
+	return StringUtil::Format(R"(
+SELECT (
+	SELECT table_name FROM {METADATA_CATALOG}.ducklake_inlined_data_tables
+	WHERE table_id = %d AND schema_version >= COALESCE(schema_change.schema_version, 0)
+	ORDER BY schema_version DESC
+	LIMIT 1
+), schema_change.schema_version
+FROM (
+	SELECT MAX(schema_version) AS schema_version FROM {METADATA_CATALOG}.ducklake_schema_versions WHERE table_id = %d
+) schema_change)",
+	                          table_id, table_id);
 }
 
 string DuckLakeMetadataManager::GetColumnDefinitions(const vector<DuckLakeColumnInfo> &columns) {
@@ -3218,12 +3233,18 @@ string DuckLakeMetadataManager::WriteNewInlinedData(DuckLakeSnapshot &commit_sna
 		if (it != insert_inlined_table_name_cache.end()) {
 			inlined_table_name = it->second;
 		}
+		optional_idx schema_change_version;
 		if (inlined_table_name.empty() && !new_inlined_table) {
 			auto query = LatestInlinedTableQuery(entry.table_id.index) + ";";
 			auto result = Query(commit_snapshot, query);
 			for (auto &row : *result) {
-				inlined_table_name = row.GetValue<string>(0);
-				insert_inlined_table_name_cache[entry.table_id.index] = inlined_table_name;
+				if (!row.IsNull(0)) {
+					inlined_table_name = row.GetValue<string>(0);
+					insert_inlined_table_name_cache[entry.table_id.index] = inlined_table_name;
+				}
+				if (!row.IsNull(1)) {
+					schema_change_version = row.GetValue<idx_t>(1);
+				}
 			}
 		}
 
@@ -3259,8 +3280,13 @@ string DuckLakeMetadataManager::WriteNewInlinedData(DuckLakeSnapshot &commit_sna
 			if (!new_inlined_table) {
 				commit_snapshot.schema_version++;
 			}
+			// the new inlined table holds the columns of the last schema change of its table
+			auto inlined_table_snapshot = commit_snapshot;
+			if (schema_change_version.IsValid()) {
+				inlined_table_snapshot.schema_version = schema_change_version.GetIndex();
+			}
 			inlined_table_name =
-			    GetInlinedTableQueries(commit_snapshot, table_info, inlined_tables, inlined_table_queries);
+			    GetInlinedTableQueries(inlined_table_snapshot, table_info, inlined_tables, inlined_table_queries);
 			batch_query += InsertValuesSql("ducklake_inlined_data_tables", inlined_tables);
 			batch_query += inlined_table_queries;
 		}
