@@ -426,6 +426,8 @@ struct DuckLakeDeleteScanEntry {
 	optional_idx row_id_start;
 	MappingIndex mapping_id;
 	optional_idx snapshot_id;
+	//! Whether the data file itself was deleted at snapshot_id
+	bool file_deleted = false;
 	//! The start of the snapshot range for filtering
 	optional_idx start_snapshot;
 	//! The end of the snapshot range for filtering
