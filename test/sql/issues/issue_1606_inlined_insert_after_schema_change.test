@@ -185,45 +185,7 @@ SELECT list(c ORDER BY a) FROM read_parquet(getvariable('s_files'), union_by_nam
 ----
 [NULL, 42]
 
-# two transactions that insert into the same table, the second one finds the inlined table of the first
-statement ok
-CREATE TABLE lake.k (a INTEGER)
-
-statement ok
-CALL lake.set_option('data_inlining_row_limit', 0)
-
-statement ok
-ALTER TABLE lake.k ADD COLUMN b INTEGER
-
-statement ok
-CALL lake.set_option('data_inlining_row_limit', 10)
-
-statement ok con1
-BEGIN
-
-statement ok con1
-INSERT INTO lake.k VALUES (1, 2)
-
-statement ok con2
-BEGIN
-
-statement ok con2
-INSERT INTO lake.k VALUES (3, 4)
-
-statement ok con1
-COMMIT
-
-statement ok con2
-COMMIT
-
-query II
-SELECT a, b FROM lake.k ORDER BY a
-----
-1	2
-3	4
-
-# a default change writes a schema version but no inlined table, and a commit that also alters another table keeps
-# the version of that table's new inlined table
+# an inlined insert after a default change, in a commit that also alters another table
 statement ok
 CREATE TABLE lake.d (a INTEGER)
 

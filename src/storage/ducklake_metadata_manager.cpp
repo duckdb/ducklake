@@ -2950,7 +2950,7 @@ string DuckLakeMetadataManager::InlinedTableRegistrationTuple(idx_t table_id, co
 }
 
 string DuckLakeMetadataManager::LatestInlinedTableQuery(idx_t table_id) {
-	// an inlined table older than the last schema change of its table has other columns, so new rows skip it
+	// skip inlined tables older than the last schema change of the table
 	return StringUtil::Format(R"(
 SELECT (
 	SELECT table_name FROM {METADATA_CATALOG}.ducklake_inlined_data_tables

@@ -10,16 +10,16 @@ require ducklake
 
 argument work altered_commit_work
 
-argument warm_table lake.main.alt_0
+argument warm_table lake.main.ins_0
 
 include benchmark/micro/fixtures/altered_commit.benchmark.in
 
-run benchmark/micro/queries/insert_commits_altered_inlined.sql
+run benchmark/micro/queries/insert_commits_inlined.sql
 
 include benchmark/micro/fixtures/restore_cleanup_warm.benchmark.in
 
-# A missed reset doubles the rows of alt_9, and a data file means the INSERTs were not inlined
+# A missed reset doubles the rows of ins_9, and a data file means the INSERTs were not inlined
 result_query II
-SELECT (SELECT count(*) FROM lake.main.alt_9), (SELECT count(*) FROM glob('${BENCHMARK_DIR}/${lake}_files/**'))
+SELECT (SELECT count(*) FROM lake.main.ins_9), (SELECT count(*) FROM glob('${BENCHMARK_DIR}/${lake}_files/**'))
 ----
 5	0
