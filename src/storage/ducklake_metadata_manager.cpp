@@ -987,9 +987,7 @@ ORDER BY table_id, parent_column NULLS FIRST, column_order
 				auto inlined_data_tables = row.GetValue<Value>(5);
 				table_info.inlined_data_tables = LoadInlinedDataTables(inlined_data_tables);
 			}
-			if (!row.IsNull(COLUMN_INDEX_START + 9)) {
-				table_info.schema_change_version = row.GetValue<idx_t>(COLUMN_INDEX_START + 9);
-			}
+			table_info.schema_change_version = OptIdx(row, COLUMN_INDEX_START + 9);
 			// find the schema
 			auto schema_entry = schema_map.find(table_info.schema_id);
 			if (schema_entry == schema_map.end()) {
@@ -3220,6 +3218,8 @@ string DuckLakeMetadataManager::WriteNewInlinedData(DuckLakeSnapshot &commit_sna
 		return batch_query;
 	}
 
+	// a commit takes one new schema version, so the inlined tables of its schema changes keep the version of its rows
+	bool new_schema_version = !new_inlined_data_tables_result.empty();
 	for (auto &entry : new_data) {
 		string inlined_table_name;
 		optional_ptr<const DuckLakeTableInfo> new_inlined_table;
@@ -3242,9 +3242,7 @@ string DuckLakeMetadataManager::WriteNewInlinedData(DuckLakeSnapshot &commit_sna
 					inlined_table_name = row.GetValue<string>(0);
 					insert_inlined_table_name_cache[entry.table_id.index] = inlined_table_name;
 				}
-				if (!row.IsNull(1)) {
-					schema_change_version = row.GetValue<idx_t>(1);
-				}
+				schema_change_version = OptIdx(row, 1);
 			}
 		}
 
@@ -3277,10 +3275,11 @@ string DuckLakeMetadataManager::WriteNewInlinedData(DuckLakeSnapshot &commit_sna
 			// write the new inlined table
 			vector<string> inlined_tables;
 			string inlined_table_queries;
-			if (!new_inlined_table) {
+			if (!new_schema_version) {
 				commit_snapshot.schema_version++;
+				new_schema_version = true;
 			}
-			// the new inlined table holds the columns of the last schema change of its table
+			// registered at the last schema change of its table, whose schema_versions row gives its columns
 			auto inlined_table_snapshot = commit_snapshot;
 			if (schema_change_version.IsValid()) {
 				inlined_table_snapshot.schema_version = schema_change_version.GetIndex();

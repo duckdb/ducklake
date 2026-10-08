@@ -221,3 +221,48 @@ SELECT a, b FROM lake.k ORDER BY a
 ----
 1	2
 3	4
+
+# a default change writes a schema version but no inlined table, and a commit that also alters another table keeps
+# the version of that table's new inlined table
+statement ok
+CREATE TABLE lake.d (a INTEGER)
+
+statement ok
+CREATE TABLE lake.e (a INTEGER)
+
+statement ok
+ALTER TABLE lake.d ALTER COLUMN a SET DEFAULT 1
+
+statement ok
+BEGIN
+
+statement ok
+ALTER TABLE lake.e ADD COLUMN b INTEGER
+
+statement ok
+INSERT INTO lake.d VALUES (2)
+
+statement ok
+INSERT INTO lake.e VALUES (3, 42)
+
+statement ok
+COMMIT
+
+statement ok
+CREATE VIEW lake.w AS SELECT 1 AS one
+
+statement ok
+DETACH lake
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS lake (DATA_PATH '{DATA_PATH}/issue_1606')
+
+query I
+SELECT a FROM lake.d
+----
+2
+
+query II
+SELECT a, b FROM lake.e
+----
+3	42
