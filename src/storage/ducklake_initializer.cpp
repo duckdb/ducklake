@@ -110,37 +110,30 @@ void DuckLakeInitializer::Initialize() {
 	}
 }
 
-//! Whether the statements of a migration failed, which another attach of the same DuckLake can cause
-static bool MigrationFailed(const ErrorData &error) {
-	return StringUtil::Contains(error.RawMessage(), "Failed to migrate DuckLake from");
-}
-
 void DuckLakeInitializer::LoadExistingDuckLakeWithRetries(DuckLakeTransaction &transaction,
                                                           const string &attach_query) {
+	// a migration by another attach of the same DuckLake fails this one in ways we cannot tell from a real failure,
+	// so the load is retried while it waits for that migration
+	static constexpr idx_t MAX_WAIT_MS = 3000;
 	auto retry_config = DuckLakeRetryConfig::FromContext(context);
 	ErrorData first_error;
-	idx_t attempt = 0;
-	while (true) {
+	idx_t waited_ms = 0;
+	for (idx_t attempt = 0;; attempt++) {
 		try {
 			LoadExistingDuckLake(transaction);
 			return;
 		} catch (std::exception &ex) {
-			ErrorData error(ex);
 			if (attempt == 0) {
-				first_error = error;
-			}
-			if (!MigrationFailed(error)) {
-				// only the statements of a migration can fail because another attach migrates the same DuckLake
-				error.Throw();
+				first_error = ErrorData(ex);
 			}
 		}
-		if (attempt >= retry_config.max_retry_count) {
+		if (waited_ms >= MAX_WAIT_MS || attempt >= retry_config.max_retry_count) {
 			first_error.Throw();
 		}
 		// wait for the migration of the other attach to finish, then read the catalog again
-		auto wait_ms = (double)retry_config.retry_wait_ms * pow(retry_config.retry_backoff, (double)attempt);
-		ThreadUtil::SleepMs((idx_t)wait_ms, context);
-		attempt++;
+		auto wait_ms = (idx_t)((double)retry_config.retry_wait_ms * pow(retry_config.retry_backoff, (double)attempt));
+		ThreadUtil::SleepMs(wait_ms, context);
+		waited_ms += wait_ms;
 		transaction.Rollback();
 		AttachMetadata(transaction, attach_query);
 	}
