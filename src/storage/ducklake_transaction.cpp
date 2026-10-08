@@ -1475,6 +1475,10 @@ void DuckLakeTransaction::RunCommitLoop(DuckLakeSnapshot transaction_snapshot,
 	if (metadata_catalog.IsDuckCatalog()) {
 		// the commits of a DuckDB metadata catalog take turns, other catalogs have writers in other processes
 		context.commit_lock = &ducklake_catalog.GetClientCommitLock();
+		context.committed_after = [&](idx_t snapshot_id) {
+			auto last = ducklake_catalog.GetLastCommittedSnapshotId();
+			return !last.IsNull() && last.GetValue<idx_t>() > snapshot_id;
+		};
 	}
 	state->Commit(transaction_snapshot, transaction_changes, retry_config, context);
 }

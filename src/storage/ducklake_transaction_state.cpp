@@ -2141,6 +2141,12 @@ void DuckLakeTransactionState::Commit(DuckLakeSnapshot transaction_snapshot,
 		if (context.commit_lock) {
 			commit_guard = unique_lock<mutex>(*context.commit_lock);
 		}
+		if (i == 0 && retry_config.max_retry_count > 0 && commit_guard.owns_lock() &&
+		    context.committed_after(transaction_snapshot.snapshot_id)) {
+			// another commit landed while this one waited, so its first attempt would fail
+			context.try_rollback();
+			i++;
+		}
 		if (i > 0) {
 			// the metadata transaction of a retry starts while the lock is held, so it reads the latest state
 			context.prepare_retry();
@@ -2174,6 +2180,7 @@ void DuckLakeTransactionState::Commit(DuckLakeSnapshot transaction_snapshot,
 			flushed_inlined = !flushed_inlined_tables.empty();
 			context.flush_cache_if_pending();
 			context.commit_connection();
+			context.set_committed_snapshot_id(commit_snapshot.snapshot_id);
 			break;
 		} catch (std::exception &ex) {
 			ErrorData error(ex);
@@ -2213,7 +2220,6 @@ void DuckLakeTransactionState::Commit(DuckLakeSnapshot transaction_snapshot,
 		}
 	}
 	// If we got here, this snapshot was successful
-	context.set_committed_snapshot_id(commit_snapshot.snapshot_id);
 	context.set_table_options(committed_table_options);
 	for (auto &entry : dropped_file_stats) {
 		context.invalidate_table_stats_cache(commit_snapshot.next_file_id, entry.first);

@@ -53,6 +53,10 @@ struct DuckLakeCommitContext {
 	};
 	//! Serializes the commit attempts of one catalog, held per attempt
 	mutex *commit_lock = nullptr;
+	//! Whether a commit of this catalog landed after the given snapshot
+	std::function<bool(idx_t)> committed_after = [](idx_t) {
+		return false;
+	};
 	//! Runs a metadata-DB query during post-commit cleanup.
 	std::function<unique_ptr<QueryResult>(string)> query_metadata;
 	//! Runs cleanup statements atomically.

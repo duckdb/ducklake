@@ -47,3 +47,24 @@ query I
 SELECT count(*) FROM duckdb_tables() WHERE database_name = 'dl' AND table_name LIKE 'own%'
 ----
 8
+
+# a commit whose snapshot is no longer the latest goes straight to its retry
+statement ok
+CALL enable_logging('DuckLakeMetadata')
+
+statement ok con1
+BEGIN
+
+statement ok con1
+INSERT INTO dl.writer VALUES (1000)
+
+statement ok con2
+INSERT INTO dl.writer VALUES (1001)
+
+statement ok con1
+COMMIT
+
+query I
+SELECT count(*) FROM duckdb_logs_parsed('DuckLakeMetadata') WHERE query ILIKE 'INSERT INTO %.ducklake_snapshot VALUES%'
+----
+2
