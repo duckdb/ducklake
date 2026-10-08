@@ -1433,6 +1433,10 @@ bool DuckLakeMetadataManager::ValueIsFinite(const Value &val) {
 string DuckLakeMetadataManager::CastValueToTarget(const Value &val, const LogicalType &type) {
 	if (type.IsNumeric() && ValueIsFinite(val)) {
 		// for (finite) numerics we directly emit the number
+		if (type.id() == LogicalTypeId::FLOAT) {
+			// a bare number parses as DECIMAL or DOUBLE, which compare differently with FLOAT bounds
+			return "CAST(" + val.ToString() + " AS FLOAT)";
+		}
 		return val.ToString();
 	}
 	// convert to a string
