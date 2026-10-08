@@ -557,6 +557,15 @@ void DuckLakeUtil::CopyExtensionSettings(ClientContext &from, ClientContext &to)
 	}
 }
 
+void DuckLakeUtil::SetExtensionSetting(ClientContext &context, const string &name, Value value) {
+	ExtensionOption option;
+	if (!DBConfig::GetConfig(context).TryGetExtensionOption(Identifier(name), option) ||
+	    !option.setting_index.IsValid()) {
+		return;
+	}
+	context.config.user_settings.SetUserSetting(option.setting_index.GetIndex(), std::move(value));
+}
+
 using config_option_parser_t = string (*)(ClientContext &context, const string &option, const Value &val);
 
 static string ParseParquetCompression(ClientContext &, const string &, const Value &val) {
