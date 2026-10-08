@@ -1253,6 +1253,11 @@ DuckLakeRetryConfig DuckLakeRetryConfig::FromContext(ClientContext &context) {
 	return config;
 }
 
+idx_t DuckLakeRetryConfig::WaitMs(idx_t attempt, idx_t remaining_ms) const {
+	auto wait_ms = (double)retry_wait_ms * pow(MaxValue<double>(retry_backoff, 1.0), (double)attempt);
+	return (idx_t)MinValue<double>(MaxValue<double>(wait_ms, 0.0), (double)remaining_ms);
+}
+
 void DuckLakeTransaction::FlushChanges() {
 	if (!ChangesMade()) {
 		return;

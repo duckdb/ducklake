@@ -143,9 +143,10 @@ void DuckLakeInitializer::LoadExistingDuckLakeWithRetries(DuckLakeTransaction &t
 		if (waited_ms >= MAX_WAIT_MS || attempt >= retry_config.max_retry_count) {
 			first_error.Throw();
 		}
-		auto backoff_ms = (double)retry_config.retry_wait_ms * pow(retry_config.retry_backoff, (double)attempt);
-		auto wait_ms = (idx_t)MinValue<double>(backoff_ms, (double)(MAX_WAIT_MS - waited_ms));
+		auto wait_ms = retry_config.WaitMs(attempt, MAX_WAIT_MS - waited_ms);
+#ifndef DUCKDB_NO_THREADS
 		ThreadUtil::SleepMs(wait_ms, context);
+#endif
 		waited_ms += wait_ms;
 		transaction.Rollback();
 		AttachMetadata(transaction, attach_query);
