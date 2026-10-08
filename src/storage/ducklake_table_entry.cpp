@@ -138,13 +138,13 @@ const ColumnList &DuckLakeTableEntry::GetColumns() const {
 	return columns;
 }
 
-bool DuckLakeTableEntry::IsCurrentInlinedDataTable(idx_t schema_version, optional_idx schema_change_version) {
-	return !schema_change_version.IsValid() || schema_version >= schema_change_version.GetIndex();
+bool DuckLakeTableEntry::IsCurrentInlinedDataTable(idx_t schema_version, optional_idx last_schema_change) {
+	return !last_schema_change.IsValid() || schema_version >= last_schema_change.GetIndex();
 }
 
-bool DuckLakeTableEntry::HasCurrentInlinedDataTable(optional_idx schema_change_version) const {
+bool DuckLakeTableEntry::HasCurrentInlinedDataTable(optional_idx last_schema_change) const {
 	for (auto &inlined_table : inlined_data_tables) {
-		if (IsCurrentInlinedDataTable(inlined_table.schema_version, schema_change_version)) {
+		if (IsCurrentInlinedDataTable(inlined_table.schema_version, last_schema_change)) {
 			return true;
 		}
 	}

@@ -697,21 +697,20 @@ WHERE table_id = {TABLE_ID})";
 	throw InternalException("Table %llu does not exist", table_id.index);
 }
 
-optional_idx DuckLakeMetadataManager::GetSchemaChangeVersion(TableIndex table_id, DuckLakeSnapshot snapshot) {
+DuckLakeTableSchemaVersions DuckLakeMetadataManager::GetTableSchemaVersions(TableIndex table_id,
+                                                                            DuckLakeSnapshot snapshot) {
 	auto query = StringUtil::Format("SELECT MIN(schema_version), MAX(schema_version) FROM "
 	                                "{METADATA_CATALOG}.ducklake_schema_versions "
 	                                "WHERE table_id = %d AND begin_snapshot <= {SNAPSHOT_ID}",
 	                                table_id.index);
 	auto result = Query(snapshot, query);
-	result->ThrowIfError("Failed to get the last schema change of a table from DuckLake: ");
+	result->ThrowIfError("Failed to get the schema versions of a table from DuckLake: ");
+	DuckLakeTableSchemaVersions schema_versions;
 	for (auto &row : *result) {
-		auto creation_version = OptIdx(row, 0);
-		auto last_version = OptIdx(row, 1);
-		if (last_version.IsValid() && last_version.GetIndex() != creation_version.GetIndex()) {
-			return last_version;
-		}
+		schema_versions.creation = OptIdx(row, 0);
+		schema_versions.last_change = OptIdx(row, 1);
 	}
-	return optional_idx();
+	return schema_versions;
 }
 
 idx_t DuckLakeMetadataManager::GetBeginSnapshotForSchemaVersion(TableIndex table_id, idx_t schema_version) {
@@ -3222,8 +3221,9 @@ string DuckLakeMetadataManager::WriteNewInlinedData(DuckLakeSnapshot &commit_sna
 		return batch_query;
 	}
 
+	auto schema_changes = transaction.SchemaChangesMade();
 	// a commit with schema changes already has a new schema version
-	bool new_schema_version = transaction.SchemaChangesMade();
+	bool new_schema_version = schema_changes;
 	for (auto &entry : new_data) {
 		string inlined_table_name;
 		optional_ptr<const DuckLakeTableInfo> new_inlined_table;
@@ -3237,15 +3237,16 @@ string DuckLakeMetadataManager::WriteNewInlinedData(DuckLakeSnapshot &commit_sna
 		if (it != insert_inlined_table_name_cache.end()) {
 			inlined_table_name = it->second;
 		}
-		optional_idx schema_change_version;
+		DuckLakeTableSchemaVersions schema_versions;
 		if (!new_inlined_table) {
-			schema_change_version = transaction.GetCatalog().GetSchemaChangeVersion(transaction, entry.table_id);
+			schema_versions = transaction.GetCatalog().GetTableSchemaVersions(transaction, entry.table_id);
 		}
 		if (inlined_table_name.empty() && !new_inlined_table) {
 			auto query = LatestInlinedTableQuery(entry.table_id.index) + ";";
 			auto result = Query(commit_snapshot, query);
 			for (auto &row : *result) {
-				if (!DuckLakeTableEntry::IsCurrentInlinedDataTable(row.GetValue<idx_t>(1), schema_change_version)) {
+				if (!DuckLakeTableEntry::IsCurrentInlinedDataTable(row.GetValue<idx_t>(1),
+				                                                   schema_versions.last_change)) {
 					continue;
 				}
 				inlined_table_name = row.GetValue<string>(0);
@@ -3282,14 +3283,21 @@ string DuckLakeMetadataManager::WriteNewInlinedData(DuckLakeSnapshot &commit_sna
 			// write the new inlined table
 			vector<string> inlined_tables;
 			string inlined_table_queries;
-			// an unchanged table takes a version of its own, a changed one registers at its last change
-			if (!new_inlined_table && (!schema_change_version.IsValid() || !new_schema_version)) {
+			optional_idx registered_version;
+			if (schema_versions.ChangedSinceCreation()) {
+				// the schema_versions row of the last change gives the columns of the new inlined table
+				registered_version = schema_versions.last_change;
+			} else if (schema_changes) {
+				// a version of its own would raise the version of this commit above its other inlined tables
+				registered_version = schema_versions.creation;
+			}
+			if (!new_inlined_table && (!registered_version.IsValid() || !new_schema_version)) {
 				commit_snapshot.schema_version++;
 				new_schema_version = true;
 			}
 			auto inlined_table_snapshot = commit_snapshot;
-			if (schema_change_version.IsValid()) {
-				inlined_table_snapshot.schema_version = schema_change_version.GetIndex();
+			if (registered_version.IsValid()) {
+				inlined_table_snapshot.schema_version = registered_version.GetIndex();
 			}
 			inlined_table_name =
 			    GetInlinedTableQueries(inlined_table_snapshot, table_info, inlined_tables, inlined_table_queries);

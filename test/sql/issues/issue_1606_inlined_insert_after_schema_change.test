@@ -272,3 +272,50 @@ query II
 SELECT a, b FROM lake.y
 ----
 2	3
+
+# the first inlined insert into an unchanged table, in a commit that also alters another table
+statement ok
+CALL lake.set_option('data_inlining_row_limit', 0)
+
+statement ok
+CREATE TABLE lake.mx (a INTEGER)
+
+statement ok
+CALL lake.set_option('data_inlining_row_limit', 10)
+
+statement ok
+CREATE TABLE lake.my (a INTEGER)
+
+statement ok
+BEGIN
+
+statement ok
+ALTER TABLE lake.my ADD COLUMN b INTEGER
+
+statement ok
+INSERT INTO lake.mx VALUES (1)
+
+statement ok
+INSERT INTO lake.my VALUES (2, 3)
+
+statement ok
+COMMIT
+
+statement ok
+CREATE VIEW lake.mw AS SELECT 1 AS one
+
+statement ok
+DETACH lake
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS lake (DATA_PATH '{DATA_PATH}/issue_1606')
+
+query I
+SELECT a FROM lake.mx
+----
+1
+
+query II
+SELECT a, b FROM lake.my
+----
+2	3

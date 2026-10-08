@@ -399,10 +399,10 @@ OperatorFinalResultType DuckLakeInlineData::OperatorFinalize(Pipeline &pipeline,
 
 	// push the inlined data into the transaction
 	auto &transaction = DuckLakeTransaction::Get(context, table.ParentCatalog());
-	auto &inlined_tables = table.GetInlinedDataTables();
-	if (inlined_tables.empty() ||
+	auto &catalog = table.ParentCatalog().Cast<DuckLakeCatalog>();
+	if (table.GetInlinedDataTables().empty() ||
 	    !table.HasCurrentInlinedDataTable(
-	        table.ParentCatalog().Cast<DuckLakeCatalog>().GetSchemaChangeVersion(transaction, table.GetTableId()))) {
+	        catalog.GetTableSchemaVersions(transaction, table.GetTableId()).last_change)) {
 		transaction.SetRequiresNewInlinedTable(true);
 	}
 	transaction.AppendInlinedData(table.GetTableId(), std::move(result));
