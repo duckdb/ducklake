@@ -565,20 +565,15 @@ DuckLakeCompactor::GenerateCompactionCommand(vector<DuckLakeCompactionFileEntry>
 		}
 	}
 
-	bool write_row_id = false;
+	// rowids are always written, since a sort reorders rows, deletes leave gaps and UPDATE files embed their own
+	bool write_row_id = true;
 	bool write_snapshot_id = false;
 	switch (type) {
-	case CompactionType::MERGE_ADJACENT_TABLES: {
-		// a sort reorders the rows, and a file written by an UPDATE has rowids outside its row_id_start range
-		write_row_id = true;
+	case CompactionType::MERGE_ADJACENT_TABLES:
 		write_snapshot_id = true;
 		break;
-	}
-	case CompactionType::REWRITE_DELETES: {
-		// when there are delete files, we always need to write row-ids because deleted rows create gaps
-		write_row_id = true;
+	case CompactionType::REWRITE_DELETES:
 		break;
-	}
 	default:
 		throw InternalException("Invalid Compaction Type");
 	}
