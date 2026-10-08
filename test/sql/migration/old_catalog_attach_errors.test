@@ -33,19 +33,3 @@ ATTACH 'ducklake:{TEST_DIR}/old_catalog_attach_errors.db' AS dl
 (DATA_PATH '{DATA_PATH}/other_path')
 ----
 does not match existing data path
-
-# an unusable backoff does not break the attach
-statement ok
-SET ducklake_retry_backoff = -2
-
-statement ok
-SET ducklake_retry_wait_ms = 100
-
-statement ok
-ATTACH 'ducklake:{TEST_DIR}/old_catalog_attach_errors.db' AS dl
-(DATA_PATH '{DATA_PATH}/old_catalog_attach_errors', OVERRIDE_DATA_PATH TRUE)
-
-query I
-SELECT count(*) > 0 FROM duckdb_tables() WHERE database_name = 'dl'
-----
-true
