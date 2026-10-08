@@ -34,6 +34,12 @@ SELECT snapshot_id, rowid, id FROM ducklake_table_deletions('ducklake', 'main', 
 ----
 5	0	1
 
+# a filter on the snapshot sees the snapshot of the delete as well
+query III
+SELECT snapshot_id, rowid, id FROM ducklake_table_deletions('ducklake', 'main', 't', 0, 5) WHERE snapshot_id > 3
+----
+5	0	1
+
 query IIII
 FROM ducklake_table_changes('ducklake', 'main', 't', 0, 5) ORDER BY ALL
 ----

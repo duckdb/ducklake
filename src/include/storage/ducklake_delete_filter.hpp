@@ -22,8 +22,6 @@ struct DuckLakeDeleteData {
 	unordered_map<idx_t, idx_t> scan_snapshot_map;
 	//! Whether scan_snapshot_map is indexed by global row_id (true) or file position (false)
 	bool uses_row_id = false;
-	//! The deleting snapshot of the rows that scan_snapshot_map does not hold, used in deletion scans
-	optional_idx scan_snapshot;
 
 	idx_t Filter(row_t start_row_index, idx_t count, SelectionVector &result_sel,
 	             optional_idx snapshot_filter = optional_idx()) const;
