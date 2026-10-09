@@ -203,6 +203,10 @@ DuckLakeDeleteFileWriter::WriteDeletionVectorFileWithSnapshots(ClientContext &co
 	for (auto &entry : input.positions) {
 		deltas[NumericCast<idx_t>(entry.snapshot_id)].insert(NumericCast<idx_t>(entry.position));
 	}
+	if (deltas.size() > 1 && !input.transaction.GetCatalog().SupportsV1_1Metadata()) {
+		// DuckLake 1.0 reads one deletion vector per file, so the snapshots go into a parquet delete file
+		return WriteDeleteFileInternal(context, input);
+	}
 	// one cumulative deletion vector per snapshot
 	vector<set<idx_t>> cumulative;
 	cumulative.reserve(deltas.size());
