@@ -1,0 +1,389 @@
+# name: test/sql/stats/float_to_double_retype_stats.test
+# description: min and max stats written for a FLOAT column keep covering its values after a retype to DOUBLE
+# group: [stats]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/float_to_double_retype_stats', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE dl.t (v FLOAT)
+
+statement ok
+INSERT INTO dl.t SELECT 0.1::FLOAT FROM range(2048)
+
+statement ok
+ALTER TABLE dl.t ALTER COLUMN v TYPE DOUBLE
+
+query II
+SELECT count(*), max(v) FROM dl.t WHERE v > 0.1
+----
+2048	0.10000000149011612
+
+query I
+SELECT max(v) FROM dl.t
+----
+0.10000000149011612
+
+statement ok
+INSERT INTO dl.t VALUES (0.05), (0.3)
+
+query I
+SELECT count(*) FROM dl.t WHERE v > 0.1 AND v < 0.2
+----
+2048
+
+query II
+SELECT min(v), max(v) FROM dl.t
+----
+0.05	0.3
+
+# insert before and after the retype in one transaction
+statement ok
+CREATE TABLE dl.u (v FLOAT)
+
+statement ok
+BEGIN
+
+statement ok
+INSERT INTO dl.u SELECT 0.1::FLOAT FROM range(10)
+
+statement ok
+ALTER TABLE dl.u ALTER COLUMN v TYPE DOUBLE
+
+statement ok
+INSERT INTO dl.u VALUES (0.05)
+
+statement ok
+COMMIT
+
+query I
+SELECT count(*) FROM dl.u WHERE v > 0.1 AND v < 0.2
+----
+10
+
+query I
+SELECT max(v) FROM dl.u
+----
+0.10000000149011612
+
+statement ok
+CREATE TABLE dl.w (v FLOAT)
+
+statement ok
+BEGIN
+
+statement ok
+INSERT INTO dl.w SELECT 0.1::FLOAT FROM range(10)
+
+statement ok
+ALTER TABLE dl.w ALTER COLUMN v TYPE DOUBLE
+
+statement ok
+COMMIT
+
+query II
+SELECT count(*), max(v) FROM dl.w WHERE v > 0.1
+----
+10	0.10000000149011612
+
+# a field of a struct
+statement ok
+CREATE TABLE dl.s (s STRUCT(a FLOAT))
+
+statement ok
+INSERT INTO dl.s SELECT {'a': 0.1::FLOAT} FROM range(10)
+
+statement ok
+ALTER TABLE dl.s ALTER COLUMN s TYPE STRUCT(a DOUBLE)
+
+query I
+SELECT count(*) FROM dl.s WHERE s.a > 0.1
+----
+10
+
+# inlined rows
+statement ok
+CREATE TABLE dl.i (v FLOAT)
+
+statement ok
+CALL dl.set_option('data_inlining_row_limit', 100, table_name => 'i')
+
+statement ok
+INSERT INTO dl.i SELECT 0.1::FLOAT FROM range(10)
+
+statement ok
+ALTER TABLE dl.i ALTER COLUMN v TYPE DOUBLE
+
+query II
+SELECT count(*), max(v) FROM dl.i WHERE v > 0.1
+----
+10	0.10000000149011612
+
+# inlined rows inserted before and after the retype in one transaction
+statement ok
+CREATE TABLE dl.j (v FLOAT)
+
+statement ok
+CALL dl.set_option('data_inlining_row_limit', 100, table_name => 'j')
+
+statement ok
+BEGIN
+
+statement ok
+INSERT INTO dl.j VALUES (0.1), (-0.1)
+
+statement ok
+ALTER TABLE dl.j ALTER COLUMN v TYPE DOUBLE
+
+statement ok
+INSERT INTO dl.j VALUES (0.05)
+
+statement ok
+COMMIT
+
+query II
+SELECT s.min_value::DOUBLE, s.max_value::DOUBLE FROM __ducklake_metadata_dl.ducklake_table_column_stats s JOIN __ducklake_metadata_dl.ducklake_table t USING (table_id) WHERE t.table_name = 'j' AND t.end_snapshot IS NULL
+----
+-0.10000000149011612	0.10000000149011612
+
+query I
+SELECT count(*) FROM dl.j WHERE v > 0.1
+----
+1
+
+# inlined rows written before the retype keep matching their own value
+statement ok
+CREATE TABLE dl.k (v FLOAT)
+
+statement ok
+CALL dl.set_option('data_inlining_row_limit', 100, table_name => 'k')
+
+statement ok
+BEGIN
+
+statement ok
+INSERT INTO dl.k VALUES (0.1)
+
+statement ok
+ALTER TABLE dl.k ALTER COLUMN v TYPE DOUBLE
+
+statement ok
+COMMIT
+
+query I
+SELECT count(*) FROM dl.k WHERE v = (SELECT max(v) FROM dl.k)
+----
+1
+
+query I
+SELECT count(*) FROM dl.k WHERE v > (SELECT max(v) FROM dl.k)
+----
+0
+
+query II
+SELECT s.min_value, s.max_value FROM __ducklake_metadata_dl.ducklake_table_column_stats s JOIN __ducklake_metadata_dl.ducklake_table t USING (table_id) WHERE t.table_name = 'k' AND t.end_snapshot IS NULL
+----
+NULL	NULL
+
+# an inlined map value, whose literal carries the type it was written with
+statement ok
+CREATE TABLE dl.p (m MAP(INTEGER, FLOAT))
+
+statement ok
+CALL dl.set_option('data_inlining_row_limit', 100, table_name => 'p')
+
+statement ok
+BEGIN
+
+statement ok
+INSERT INTO dl.p VALUES (MAP {1: 0.1})
+
+statement ok
+ALTER TABLE dl.p ALTER COLUMN m TYPE MAP(INTEGER, DOUBLE)
+
+statement ok
+COMMIT
+
+query I
+SELECT map_extract_value(m, 1) FROM dl.p
+----
+0.10000000149011612
+
+query II
+SELECT s.min_value, s.max_value FROM __ducklake_metadata_dl.ducklake_table_column_stats s JOIN __ducklake_metadata_dl.ducklake_table t USING (table_id) WHERE t.table_name = 'p' AND t.end_snapshot IS NULL AND s.column_id = 3
+----
+NULL	NULL
+
+# queries in the retyping transaction
+statement ok
+CREATE TABLE dl.x (v FLOAT)
+
+statement ok
+INSERT INTO dl.x SELECT 0.1::FLOAT FROM range(10)
+
+statement ok
+INSERT INTO dl.x VALUES (0.05), (0.3)
+
+statement ok
+BEGIN
+
+statement ok
+ALTER TABLE dl.x ALTER COLUMN v TYPE DOUBLE
+
+query I
+SELECT count(*) FROM dl.x WHERE v > 0.1 AND v < 0.2
+----
+10
+
+statement ok
+COMMIT
+
+# other alters in the transaction keep pruning files by their stats
+statement ok
+BEGIN
+
+statement ok
+ALTER TABLE dl.x RENAME TO x2
+
+statement ok
+CALL enable_logging('FileSystem', storage => 'memory')
+
+query I
+SELECT count(*) FROM dl.x2 WHERE v > 0.2
+----
+1
+
+statement ok
+CALL disable_logging()
+
+query I
+SELECT count(DISTINCT regexp_extract(message, '"path":"([^"]*)"', 1)) FROM duckdb_logs WHERE message LIKE '%.parquet%'
+----
+1
+
+statement ok
+ROLLBACK
+
+# files written before the column was FLOAT read as DOUBLE without FLOAT rounding
+statement ok
+CREATE TABLE dl.n (v INTEGER)
+
+statement ok
+INSERT INTO dl.n VALUES (16777219)
+
+statement ok
+ALTER TABLE dl.n ALTER COLUMN v TYPE FLOAT
+
+statement ok
+INSERT INTO dl.n VALUES (0.5)
+
+statement ok
+ALTER TABLE dl.n ALTER COLUMN v TYPE DOUBLE
+
+query I
+SELECT count(*) FROM dl.n WHERE v < 16777219.5
+----
+2
+
+query II
+SELECT min(v), max(v) FROM dl.n
+----
+0.5	16777219.0
+
+# several fields widened in one commit
+statement ok
+CREATE TABLE dl.m (s STRUCT(a FLOAT, b FLOAT, c INTEGER))
+
+statement ok
+INSERT INTO dl.m SELECT {'a': 0.1::FLOAT, 'b': -0.1::FLOAT, 'c': 1} FROM range(10)
+
+statement ok
+ALTER TABLE dl.m ALTER COLUMN s TYPE STRUCT(a DOUBLE, b DOUBLE, c INTEGER)
+
+query II
+SELECT count(*), max(s.a) FROM dl.m WHERE s.a > 0.1
+----
+10	0.10000000149011612
+
+query II
+SELECT count(*), min(s.b) FROM dl.m WHERE s.b < -0.1
+----
+10	-0.10000000149011612
+
+query I
+SELECT count(*) FROM dl.m WHERE s.c = 1
+----
+10
+
+# rows that read the default of an added column read it as DOUBLE without FLOAT rounding
+statement ok
+CREATE TABLE dl.d (a INTEGER)
+
+statement ok
+INSERT INTO dl.d VALUES (0)
+
+statement ok
+BEGIN
+
+statement ok
+INSERT INTO dl.d VALUES (1)
+
+statement ok
+ALTER TABLE dl.d ADD COLUMN b FLOAT DEFAULT 3.14
+
+statement ok
+ALTER TABLE dl.d ADD COLUMN c FLOAT DEFAULT 0.5
+
+statement ok
+COMMIT
+
+statement ok
+ALTER TABLE dl.d ALTER COLUMN b TYPE DOUBLE
+
+statement ok
+ALTER TABLE dl.d ALTER COLUMN c TYPE DOUBLE
+
+query I
+SELECT count(*) FROM dl.d WHERE b = 3.14
+----
+2
+
+query III
+SELECT s.column_id, s.min_value::DOUBLE, s.max_value::DOUBLE FROM __ducklake_metadata_dl.ducklake_table_column_stats s JOIN __ducklake_metadata_dl.ducklake_table t USING (table_id) WHERE t.table_name = 'd' AND t.end_snapshot IS NULL AND s.column_id > 1 ORDER BY s.column_id
+----
+2	NULL	NULL
+3	0.5	0.5
+
+statement ok
+CREATE TABLE dl.e (a INTEGER)
+
+statement ok
+INSERT INTO dl.e VALUES (0)
+
+statement ok
+BEGIN
+
+statement ok
+INSERT INTO dl.e VALUES (1)
+
+statement ok
+ALTER TABLE dl.e ADD COLUMN b FLOAT DEFAULT 3.14
+
+statement ok
+ALTER TABLE dl.e ALTER COLUMN b TYPE DOUBLE
+
+statement ok
+COMMIT
+
+query I
+SELECT count(*) FROM dl.e WHERE b = 3.14
+----
+2

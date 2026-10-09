@@ -3151,6 +3151,43 @@ INSERT INTO {METADATA_CATALOG}.ducklake_macro_parameters values(%llu,%llu,%llu,%
 	return batch_query;
 }
 
+string DuckLakeMetadataManager::WriteColumnIdPairs(const map<TableIndex, set<FieldIndex>> &columns) {
+	vector<string> pairs;
+	for (auto &table_entry : columns) {
+		for (auto &field_index : table_entry.second) {
+			pairs.push_back(StringUtil::Format("(%d, %d)", table_entry.first.index, field_index.index));
+		}
+	}
+	return StringUtil::Join(pairs, ", ");
+}
+
+static string RewriteColumnStatsBoundsSql(const map<TableIndex, set<FieldIndex>> &columns, const string &bounds,
+                                          idx_t next_file_id) {
+	auto column_pairs = DuckLakeMetadataManager::WriteColumnIdPairs(columns);
+	if (column_pairs.empty()) {
+		return string();
+	}
+	return StringUtil::Format("UPDATE {METADATA_CATALOG}.ducklake_file_column_stats SET %s "
+	                          "WHERE (table_id, column_id) IN (%s) AND data_file_id < %d;",
+	                          bounds, column_pairs, next_file_id) +
+	       StringUtil::Format("UPDATE {METADATA_CATALOG}.ducklake_table_column_stats SET %s "
+	                          "WHERE (table_id, column_id) IN (%s);",
+	                          bounds, column_pairs);
+}
+
+string DuckLakeMetadataManager::WriteFloatWidenedStats(const map<TableIndex, set<FieldIndex>> &widened_columns,
+                                                       const map<TableIndex, set<FieldIndex>> &cleared_columns,
+                                                       idx_t next_file_id) {
+	string widened_bounds;
+	for (auto bound : {"min_value", "max_value"}) {
+		widened_bounds += widened_bounds.empty() ? "" : ", ";
+		widened_bounds +=
+		    StringUtil::Format("%s = CAST(CAST(CAST(%s AS REAL) AS DOUBLE PRECISION) AS VARCHAR)", bound, bound);
+	}
+	return RewriteColumnStatsBoundsSql(widened_columns, widened_bounds, next_file_id) +
+	       RewriteColumnStatsBoundsSql(cleared_columns, "min_value = NULL, max_value = NULL", next_file_id);
+}
+
 static string ExpireDroppedColumns(const vector<DuckLakeDroppedColumn> &dropped_columns, const string &metadata_table) {
 	if (dropped_columns.empty()) {
 		return {};

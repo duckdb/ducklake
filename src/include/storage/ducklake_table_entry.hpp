@@ -64,6 +64,8 @@ public:
 	LocalChange GetLocalChange() const {
 		return local_change;
 	}
+	//! Whether the transaction changed the type of a column of this table
+	bool ChangedColumnType();
 	optional_ptr<DuckLakePartition> GetPartitionData() {
 		return partition_data.get();
 	}
