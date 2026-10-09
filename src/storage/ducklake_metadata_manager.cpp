@@ -2115,7 +2115,8 @@ WHERE data.table_id=%d AND {SNAPSHOT_ID} >= data.begin_snapshot AND ({SNAPSHOT_I
 
 vector<DuckLakeFileListEntry> DuckLakeMetadataManager::GetFilesForTable(DuckLakeTableEntry &table,
                                                                         DuckLakeSnapshot snapshot,
-                                                                        const FilterPushdownInfo *filter_info) {
+                                                                        const FilterPushdownInfo *filter_info,
+                                                                        bool include_local_changes) {
 	auto table_id = table.GetTableId();
 
 	// Runtime filters are evaluated against file-level min/max stats before opening the file.
@@ -2147,7 +2148,7 @@ vector<DuckLakeFileListEntry> DuckLakeMetadataManager::GetFilesForTable(DuckLake
 	result->ThrowIfError("Failed to get data file list from DuckLake: ");
 
 	// Query inlined file deletions for this table
-	auto inlined_deletions = ReadInlinedFileDeletions(table_id, snapshot);
+	auto inlined_deletions = ReadInlinedFileDeletions(table_id, snapshot, include_local_changes);
 
 	vector<DuckLakeFileListEntry> files;
 	for (auto &row : *result) {
@@ -2236,14 +2237,15 @@ WHERE data.table_id=%d AND data.begin_snapshot <= {SNAPSHOT_ID} AND (
 
 vector<DuckLakeDeleteScanEntry> DuckLakeMetadataManager::GetTableDeletions(DuckLakeTableEntry &table,
                                                                            DuckLakeSnapshot start_snapshot,
-                                                                           DuckLakeSnapshot end_snapshot) {
+                                                                           DuckLakeSnapshot end_snapshot,
+                                                                           bool include_local_changes) {
 	auto table_id = table.GetTableId();
 	string select_list = "data.data_file_id, " + GetDataFileSelectList("data") +
 	                     ", data.row_id_start, data.record_count, data.mapping_id, " +
 	                     GetDeleteFileSelectList("current_delete") + ", " + GetDeleteFileSelectList("previous_delete");
 
 	// Check if we have an inlined deletion table for this table (usually cached, no DB hit)
-	auto inlined_table_name = GetInlinedDeletionTableName(table_id, end_snapshot);
+	auto inlined_table_name = GetInlinedDeletionTableName(table_id, end_snapshot, false, include_local_changes);
 	bool has_inlined_table = !inlined_table_name.empty();
 
 	// Build the query with optional CTE for inlined deletions
@@ -3514,10 +3516,10 @@ void DuckLakeMetadataManager::ClearInlinedTableCaches() {
 	delete_inlined_table_cache.clear();
 }
 
-map<idx_t, set<idx_t>> DuckLakeMetadataManager::ReadInlinedFileDeletions(TableIndex table_id,
-                                                                         DuckLakeSnapshot snapshot) {
+map<idx_t, set<idx_t>> DuckLakeMetadataManager::ReadInlinedFileDeletions(TableIndex table_id, DuckLakeSnapshot snapshot,
+                                                                         bool include_local_changes) {
 	map<idx_t, set<idx_t>> result;
-	auto inlined_table_name = GetInlinedDeletionTableName(table_id, snapshot);
+	auto inlined_table_name = GetInlinedDeletionTableName(table_id, snapshot, false, include_local_changes);
 	if (inlined_table_name.empty()) {
 		return result;
 	}
@@ -3566,12 +3568,12 @@ bool DuckLakeMetadataManager::InlinedDeletionTableExists(const string &table_nam
 }
 
 string DuckLakeMetadataManager::GetInlinedDeletionTableName(TableIndex table_id, DuckLakeSnapshot snapshot,
-                                                            bool create_if_not_exists) {
+                                                            bool create_if_not_exists, bool include_local_changes) {
 	// The table name is always deterministic
 	string table_name = InlinedFileDeletionTableName(table_id);
 
-	// this transaction reads the deletions it flushed from its delete files
-	if (!create_if_not_exists && transaction.InlinedFileDeletionsFlushed(table_id)) {
+	// a reader of local changes reads the flushed deletions from local delete files
+	if (!create_if_not_exists && include_local_changes && transaction.InlinedFileDeletionsFlushed(table_id)) {
 		return string();
 	}
 

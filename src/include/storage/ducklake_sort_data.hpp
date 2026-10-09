@@ -15,7 +15,8 @@
 namespace duckdb {
 
 class DuckLakeTableEntry;
-struct OrderByNode;
+class ClientContext;
+struct BoundOrderByNode;
 
 struct DuckLakeSortField {
 	idx_t sort_key_index = 0;
@@ -29,9 +30,9 @@ struct DuckLakeSort {
 	idx_t sort_id = 0;
 	vector<DuckLakeSortField> fields;
 
-	//! Build a SQL ORDER BY clause from the parsed sort orders, mapping inlined columns
-	static string BuildSortOrderSQL(const vector<OrderByNode> &orders, const DuckLakeTableEntry &current_table,
-	                                const DuckLakeTableEntry &inlined_table);
+	//! Build a SQL ORDER BY clause from the bound sort orders, mapping inlined columns
+	static string BuildSortOrderSQL(ClientContext &context, const vector<BoundOrderByNode> &orders,
+	                                const DuckLakeTableEntry &current_table, const DuckLakeTableEntry &inlined_table);
 };
 
 } // namespace duckdb

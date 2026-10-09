@@ -61,6 +61,7 @@ protected:
 	OpenFileInfo GetFile(idx_t i) const override;
 
 private:
+	void ApplyLocalChanges(DuckLakeTransaction &transaction) const;
 	void GetFilesForTable() const;
 	void GetTableInsertions() const;
 	void GetTableDeletions() const;
