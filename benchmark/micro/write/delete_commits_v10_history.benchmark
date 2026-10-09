@@ -1,0 +1,47 @@
+# name: benchmark/micro/write/delete_commits_v10_history.benchmark
+# description: Three committed DELETEs from the 500 files of a DuckLake 1.0 lake that already have deletion vectors
+# group: [write]
+
+name Delete Commits V10 History
+group micro
+subgroup write
+
+require ducklake
+
+require parquet
+
+argument lake compaction_v10
+
+argument work delete_v10_history_work
+
+# Init runs before the fixture load, so the lake is created as DuckLake 1.0 with deletion vectors
+init
+SET ducklake_default_version = '1.0';
+SET ducklake_write_deletion_vectors = true;
+
+include benchmark/micro/fixtures/compaction.benchmark.in
+
+include benchmark/micro/fixtures/restore_cleanup.benchmark.in
+
+# Every rw file has a deletion vector, so each DELETE keeps the snapshots of the earlier deletes
+run
+DELETE FROM lake.rw WHERE id % 100 = 60;
+DELETE FROM lake.rw WHERE id % 100 = 61;
+DELETE FROM lake.rw WHERE id % 100 = 62;
+
+# A missed reset leaves nothing for the last DELETE, and lost history changes the earlier versions
+result_query IIIIIIIII
+SET VARIABLE last = (SELECT max(snapshot_id) FROM lake.snapshots());
+SET VARIABLE d2 = getvariable('last') - 1;
+SET VARIABLE d1 = getvariable('last') - 2;
+SET VARIABLE base = getvariable('last') - 3;
+SELECT Count, (SELECT value FROM __ducklake_metadata_lake.ducklake_metadata WHERE key = 'version'),
+(SELECT count(*) FROM lake.rw), (SELECT count(*) FROM lake.rw AT (VERSION => getvariable('d2'))),
+(SELECT count(*) FROM lake.rw AT (VERSION => getvariable('d1'))),
+(SELECT count(*) FROM lake.rw AT (VERSION => getvariable('base'))),
+(SELECT count(*) FROM __ducklake_metadata_lake.ducklake_delete_file WHERE end_snapshot IS NULL),
+(SELECT sum(delete_count) FROM __ducklake_metadata_lake.ducklake_delete_file WHERE end_snapshot IS NULL),
+(SELECT count(*) >= 500 FROM glob('${BENCHMARK_DIR}/${lake}_files/**/*.puffin'))
+FROM __answer
+----
+10240	1.0	378880	389120	399360	409600	500	645120	true
