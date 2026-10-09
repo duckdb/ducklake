@@ -1,0 +1,109 @@
+# name: test/sql/issues/issue_1571_rewritten_inlined_delete_changes.test
+# description: Rewriting a data file with inlined deletes keeps the deletions and changes of every snapshot range
+# group: [issues]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/issue_1571', DATA_INLINING_ROW_LIMIT 5)
+
+statement ok
+CREATE TABLE ducklake.t (id INTEGER)
+
+statement ok
+INSERT INTO ducklake.t SELECT range FROM range(20)
+
+# snapshot 3 is an inlined delete and snapshot 4 rewrites the data file
+statement ok
+DELETE FROM ducklake.t WHERE id = 0
+
+statement ok
+CALL ducklake_rewrite_data_files('ducklake', 't', delete_threshold => 0)
+
+query IIII
+SELECT snapshot_id, count(*), min(id), max(id) FROM ducklake_table_deletions('ducklake', 'main', 't', 4, 4)
+GROUP BY ALL ORDER BY ALL
+----
+4	19	1	19
+
+query IIII
+SELECT snapshot_id, count(*), min(id), max(id) FROM ducklake_table_deletions('ducklake', 'main', 't', 3, 4)
+GROUP BY ALL ORDER BY ALL
+----
+3	1	0	0
+4	19	1	19
+
+query III
+SELECT snapshot_id, change_type, count(*) FROM ducklake_table_changes('ducklake', 'main', 't', 3, 4)
+GROUP BY ALL ORDER BY ALL
+----
+3	delete	1
+4	update_postimage	19
+4	update_preimage	19
+
+query III
+SELECT snapshot_id, change_type, count(*) FROM ducklake_table_changes('ducklake', 'main', 't', 4, 4)
+GROUP BY ALL ORDER BY ALL
+----
+4	update_postimage	19
+4	update_preimage	19
+
+# a rewritten data file with a delete file and inlined deletes before and inside the range
+statement ok
+CREATE TABLE ducklake.u (id INTEGER)
+
+statement ok
+INSERT INTO ducklake.u SELECT range FROM range(20)
+
+statement ok
+DELETE FROM ducklake.u WHERE id < 12
+
+statement ok
+DELETE FROM ducklake.u WHERE id = 12
+
+statement ok
+DELETE FROM ducklake.u WHERE id = 13
+
+statement ok
+CALL ducklake_rewrite_data_files('ducklake', 'u', delete_threshold => 0)
+
+query IIII
+SELECT snapshot_id, count(*), min(id), max(id) FROM ducklake_table_deletions('ducklake', 'main', 'u', 7, 10)
+GROUP BY ALL ORDER BY ALL
+----
+7	12	0	11
+8	1	12	12
+9	1	13	13
+10	6	14	19
+
+query IIII
+SELECT snapshot_id, count(*), min(id), max(id) FROM ducklake_table_deletions('ducklake', 'main', 'u', 9, 10)
+GROUP BY ALL ORDER BY ALL
+----
+9	1	13	13
+10	6	14	19
+
+query III
+SELECT snapshot_id, change_type, count(*) FROM ducklake_table_changes('ducklake', 'main', 'u', 0, 10)
+GROUP BY ALL ORDER BY ALL
+----
+6	insert	20
+7	delete	12
+8	delete	1
+9	delete	1
+10	update_postimage	6
+10	update_preimage	6
+
+# applying the whole change feed gives the current rows
+query II
+SELECT sum(CASE WHEN change_type IN ('insert', 'update_postimage') THEN 1 ELSE -1 END),
+    (SELECT count(*) FROM ducklake.u)
+FROM ducklake_table_changes('ducklake', 'main', 'u', 0, 10)
+----
+6	6

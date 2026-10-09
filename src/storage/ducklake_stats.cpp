@@ -1,5 +1,6 @@
 #include "storage/ducklake_stats.hpp"
 #include "common/ducklake_data_file.hpp"
+#include "storage/ducklake_field_data.hpp"
 #include "storage/ducklake_geo_stats.hpp"
 #include "storage/ducklake_metadata_info.hpp"
 #include "storage/ducklake_variant_stats.hpp"
@@ -129,6 +130,37 @@ void DuckLakeColumnStats::CopyMaxFrom(const DuckLakeColumnStats &other) {
 	max_is_exact = other.max_is_exact;
 }
 
+void DuckLakeMissingField::Collect(const DuckLakeFieldId &field_id, bool reads_null, bool repeated,
+                                   vector<DuckLakeMissingField> &result) {
+	if (!field_id.HasChildren()) {
+		result.push_back(DuckLakeMissingField {field_id.GetFieldIndex(), field_id.Type(), reads_null, repeated});
+		return;
+	}
+	// the fields of a missing parent read as NULL
+	for (auto &child : field_id.Children()) {
+		Collect(*child, true, repeated, result);
+	}
+}
+
+void DuckLakeMissingField::AddStats(idx_t count, map<FieldIndex, DuckLakeColumnStats> &result) const {
+	if (reads_null) {
+		auto stats = DuckLakeColumnStats::FromConstant(field_type, Value(field_type), count);
+		if (repeated) {
+			stats.has_num_values = false;
+			stats.has_null_count = false;
+		}
+		result.emplace(field_index, std::move(stats));
+		return;
+	}
+	// the statistics of a non NULL default are left unknown
+	DuckLakeColumnStats unknown_stats(field_type);
+	if (unknown_stats.extra_stats) {
+		// extra statistics cannot be unknown, so the column gets no statistics
+		return;
+	}
+	result.emplace(field_index, std::move(unknown_stats));
+}
+
 void DuckLakeColumnStats::ClearBounds() {
 	min.clear();
 	max.clear();
@@ -172,7 +204,7 @@ static int32_t CompareBounds(const LogicalType &type, const string &left, const 
 	return left_value < right_value ? -1 : (left_value == right_value ? 0 : 1);
 }
 
-void DuckLakeColumnStats::MergeBound(const DuckLakeColumnStats &new_stats, bool is_min, bool adopt_bounds) {
+void DuckLakeColumnStats::MergeBound(const DuckLakeColumnStats &new_stats, bool is_min) {
 	auto &has_bound = is_min ? has_min : has_max;
 	auto &bound = is_min ? min : max;
 	auto &bound_is_exact = is_min ? min_is_exact : max_is_exact;
@@ -184,11 +216,6 @@ void DuckLakeColumnStats::MergeBound(const DuckLakeColumnStats &new_stats, bool 
 		return;
 	}
 	if (!has_bound) {
-		if (adopt_bounds) {
-			bound = new_bound;
-			has_bound = true;
-			bound_is_exact = new_bound_is_exact;
-		}
 		return;
 	}
 	auto comparison = CompareBounds(type, new_bound, bound);
@@ -250,7 +277,7 @@ void DuckLakeColumnStats::MergeStats(const DuckLakeColumnStats &new_stats) {
 		}
 		return;
 	}
-	if (!AnyValid()) {
+	if (adopt_bounds || !AnyValid()) {
 		if (bounds_unknown) {
 			// invalidated bounds
 			return;
@@ -259,17 +286,14 @@ void DuckLakeColumnStats::MergeStats(const DuckLakeColumnStats &new_stats) {
 		CopyMinFrom(new_stats);
 		CopyMaxFrom(new_stats);
 		any_valid = true;
-		MergeExtraStats(extra_stats, new_stats);
-		return;
-	}
-	if (!bounds_survive) {
+	} else if (!bounds_survive) {
 		// bounds do not survive this retype
 		has_min = false;
 		has_max = false;
 		bounds_unknown = true;
 	} else {
-		MergeBound(new_stats, true, adopt_bounds);
-		MergeBound(new_stats, false, adopt_bounds);
+		MergeBound(new_stats, true);
+		MergeBound(new_stats, false);
 	}
 	MergeExtraStats(extra_stats, new_stats);
 }
