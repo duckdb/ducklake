@@ -164,7 +164,7 @@ SELECT id FROM lake.k
 3
 1
 
-# a field of the struct the table is sorted by was renamed
+# the fields of a nested sort column changed, the files are merged without the sort
 statement ok
 CREATE TABLE lake.s (id BIGINT, st STRUCT(a BIGINT))
 
@@ -175,22 +175,22 @@ statement ok
 INSERT INTO lake.s VALUES (3, {'a': 20})
 
 statement ok
-ALTER TABLE lake.s RENAME COLUMN st.a TO z
+ALTER TABLE lake.s ADD COLUMN st.c BIGINT
 
 statement ok
-ALTER TABLE lake.s SET SORTED BY (struct_extract(st, 'z'))
+ALTER TABLE lake.s SET SORTED BY (struct_extract(st, 'c'), struct_extract(st, 'a'))
 
 query II
 SELECT files_processed, files_created FROM ducklake_merge_adjacent_files('lake', 's')
 ----
 2	1
 
-query I
-SELECT id FROM lake.s
+query II
+SELECT id, st FROM lake.s ORDER BY id
 ----
-2
-3
-1
+1	{'a': 30, 'c': NULL}
+2	{'a': 10, 'c': NULL}
+3	{'a': 20, 'c': NULL}
 
 # a lambda parameter named like a promoted column is not a column
 statement ok
