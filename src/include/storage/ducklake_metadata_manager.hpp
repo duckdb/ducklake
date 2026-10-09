@@ -201,6 +201,9 @@ public:
 	virtual bool SupportsAppender() const {
 		return true;
 	}
+	virtual bool SupportsQueryAppender() const {
+		return false;
+	}
 
 	//! Whether the metadata catalog commits each statement on its own, so a rollback cannot undo them
 	virtual bool CommitsEachStatement() const {
