@@ -37,6 +37,10 @@ static unique_ptr<FunctionData> DuckLakeTableChangesBind(ClientContext &context,
 	function_info.start_snapshot =
 	    make_uniq<DuckLakeSnapshot>(transaction.GetSnapshot(start_at_clause, SnapshotBound::LOWER_BOUND));
 	function_info.scan_type = scan_type;
+	if (scan_type == DuckLakeScanType::SCAN_DELETIONS) {
+		// Per-row deletion snapshots are populated after the file reader applies pushed filters.
+		input.table_function.filter_pushdown = false;
+	}
 	return bind_data;
 }
 
