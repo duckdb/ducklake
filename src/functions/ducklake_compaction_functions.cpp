@@ -565,20 +565,15 @@ DuckLakeCompactor::GenerateCompactionCommand(vector<DuckLakeCompactionFileEntry>
 		}
 	}
 
-	bool write_row_id = false;
+	// rowids are always written, since a sort reorders rows, deletes leave gaps and UPDATE files embed their own
+	bool write_row_id = true;
 	bool write_snapshot_id = false;
 	switch (type) {
-	case CompactionType::MERGE_ADJACENT_TABLES: {
-		// if files are adjacent, we don't need to write the row-id to the file
-		write_row_id = !files_are_adjacent;
+	case CompactionType::MERGE_ADJACENT_TABLES:
 		write_snapshot_id = true;
 		break;
-	}
-	case CompactionType::REWRITE_DELETES: {
-		// when there are delete files, we always need to write row-ids because deleted rows create gaps
-		write_row_id = true;
+	case CompactionType::REWRITE_DELETES:
 		break;
-	}
 	default:
 		throw InternalException("Invalid Compaction Type");
 	}
@@ -600,8 +595,10 @@ DuckLakeCompactor::GenerateCompactionCommand(vector<DuckLakeCompactionFileEntry>
 		root = DuckLakeCompactor::InsertSort(binder, root, latest_table, sort_data);
 	}
 
+	// adjacent files are merged into one file that starts at the first file's row_id_start
+	bool merge_in_order = type == CompactionType::MERGE_ADJACENT_TABLES && files_are_adjacent;
 	copy->table_index = binder.GenerateTableIndex();
-	if (write_row_id) {
+	if (!merge_in_order) {
 		copy->preserve_order = PreserveOrderType::DONT_PRESERVE_ORDER;
 	} else {
 		auto &fs = FileSystem::GetFileSystem(context);
@@ -615,7 +612,7 @@ DuckLakeCompactor::GenerateCompactionCommand(vector<DuckLakeCompactionFileEntry>
 	copy->children.push_back(std::move(root));
 
 	optional_idx target_row_id_start;
-	if (!write_row_id) {
+	if (merge_in_order) {
 		target_row_id_start = source_files[0].file.row_id_start;
 	}
 
