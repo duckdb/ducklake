@@ -1,0 +1,48 @@
+# name: benchmark/micro/read/float_pruning_many_files.benchmark
+# description: Run 26 selective FLOAT queries that each prune all but a few of ~1024 files through the stats
+# group: [read]
+
+name Float Pruning Many Files
+group micro
+subgroup read
+
+require ducklake
+
+require parquet
+
+include benchmark/micro/fixtures/float_pruning.benchmark.in
+
+# Point lookups, ranges and an IN list on a FLOAT column
+run
+SELECT sum(cnt) AS cnt, sum(sid) AS sid FROM (
+SELECT count(*) AS cnt, sum(id) AS sid FROM lake.f WHERE c = 26182.25::FLOAT
+UNION ALL SELECT count(*) AS cnt, sum(id) AS sid FROM lake.f WHERE c = 52364.5::FLOAT
+UNION ALL SELECT count(*) AS cnt, sum(id) AS sid FROM lake.f WHERE c = 78546.75::FLOAT
+UNION ALL SELECT count(*) AS cnt, sum(id) AS sid FROM lake.f WHERE c = 104729.0::FLOAT
+UNION ALL SELECT count(*) AS cnt, sum(id) AS sid FROM lake.f WHERE c = 130911.25::FLOAT
+UNION ALL SELECT count(*) AS cnt, sum(id) AS sid FROM lake.f WHERE c = 157093.5::FLOAT
+UNION ALL SELECT count(*) AS cnt, sum(id) AS sid FROM lake.f WHERE c = 183275.75::FLOAT
+UNION ALL SELECT count(*) AS cnt, sum(id) AS sid FROM lake.f WHERE c = 209458.0::FLOAT
+UNION ALL SELECT count(*) AS cnt, sum(id) AS sid FROM lake.f WHERE c = 235640.25::FLOAT
+UNION ALL SELECT count(*) AS cnt, sum(id) AS sid FROM lake.f WHERE c = 261822.5::FLOAT
+UNION ALL SELECT count(*) AS cnt, sum(id) AS sid FROM lake.f WHERE c = 288004.75::FLOAT
+UNION ALL SELECT count(*) AS cnt, sum(id) AS sid FROM lake.f WHERE c = 314187.0::FLOAT
+UNION ALL SELECT count(*) AS cnt, sum(id) AS sid FROM lake.f WHERE c = 340369.25::FLOAT
+UNION ALL SELECT count(*) AS cnt, sum(id) AS sid FROM lake.f WHERE c = 366551.5::FLOAT
+UNION ALL SELECT count(*) AS cnt, sum(id) AS sid FROM lake.f WHERE c = 392733.75::FLOAT
+UNION ALL SELECT count(*) AS cnt, sum(id) AS sid FROM lake.f WHERE c = 418916.0::FLOAT
+UNION ALL SELECT count(*) AS cnt, sum(id) AS sid FROM lake.f WHERE c = 445098.25::FLOAT
+UNION ALL SELECT count(*) AS cnt, sum(id) AS sid FROM lake.f WHERE c = 471280.5::FLOAT
+UNION ALL SELECT count(*) AS cnt, sum(id) AS sid FROM lake.f WHERE c = 497462.75::FLOAT
+UNION ALL SELECT count(*) AS cnt, sum(id) AS sid FROM lake.f WHERE c = 523645.0::FLOAT
+UNION ALL SELECT count(*) AS cnt, sum(id) AS sid FROM lake.f WHERE c BETWEEN 24691.25::FLOAT AND 25441.25::FLOAT
+UNION ALL SELECT count(*) AS cnt, sum(id) AS sid FROM lake.f WHERE c BETWEEN 49382.5::FLOAT AND 50132.5::FLOAT
+UNION ALL SELECT count(*) AS cnt, sum(id) AS sid FROM lake.f WHERE c BETWEEN 74073.75::FLOAT AND 74823.75::FLOAT
+UNION ALL SELECT count(*) AS cnt, sum(id) AS sid FROM lake.f WHERE c BETWEEN 98765.0::FLOAT AND 99515.0::FLOAT
+UNION ALL SELECT count(*) AS cnt, sum(id) AS sid FROM lake.f WHERE c BETWEEN 123456.25::FLOAT AND 124206.25::FLOAT
+UNION ALL SELECT count(*) AS cnt, sum(id) AS sid FROM lake.f
+WHERE c IN (26182.25::FLOAT, 157093.5::FLOAT, 261822.5::FLOAT)
+);
+
+result II
+15028	4492187458

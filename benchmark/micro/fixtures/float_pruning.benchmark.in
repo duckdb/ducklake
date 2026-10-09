@@ -1,0 +1,25 @@
+# name: benchmark/micro/fixtures/float_pruning.benchmark.in
+# description: Read-only lake with 1024 small files with disjoint FLOAT ranges
+# group: [fixtures]
+
+cache_file float_pruning_ready.marker
+
+# Quarter values are exact as FLOAT, so every constant of the queries matches the stored values
+load
+@create float_pruning
+@attach float_pruning AS lake (DATA_PATH '${BENCHMARK_DIR}/float_pruning_data')
+CREATE TABLE lake.f (id BIGINT, c FLOAT);
+CALL lake.set_option('parquet_row_group_size', 2048, table_name => 'f');
+SET ducklake_target_file_size = '4KB';
+INSERT INTO lake.f SELECT i, (i * 0.25)::FLOAT FROM range(1024 * 2048) t(i);
+RESET ducklake_target_file_size;
+SELECT CASE WHEN (SELECT count(*) FROM ducklake_list_files('lake', 'f')) < 1000
+THEN error('f must consist of ~1024 small files') END;
+CALL ducklake_delete_orphaned_files('lake', cleanup_all => true);
+DETACH lake;
+@seal float_pruning
+COPY (SELECT 1) TO '${BENCHMARK_DIR}/float_pruning_ready.marker' (FORMAT CSV);
+@attach float_pruning AS lake (READ_ONLY)
+
+reload
+@attach float_pruning AS lake (READ_ONLY)
