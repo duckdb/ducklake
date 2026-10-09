@@ -157,6 +157,8 @@ struct DuckLakeRetryConfig {
 	double retry_backoff = 1.5;
 
 	static DuckLakeRetryConfig FromContext(ClientContext &context);
+	//! The wait of an attempt, never longer than the milliseconds left
+	idx_t WaitMs(idx_t attempt, idx_t remaining_ms, double multiplier = 1.0) const;
 };
 
 class DuckLakeTransaction : public Transaction, public enable_shared_from_this<DuckLakeTransaction> {
@@ -265,6 +267,7 @@ public:
 	bool InlinedFileDeletionsFlushed(TableIndex table_id);
 
 	bool ChangesMade() const;
+	bool SchemaChangesMade() const;
 	idx_t GetLocalCatalogId();
 	static bool IsTransactionLocal(idx_t id) {
 		return id >= DuckLakeConstants::TRANSACTION_LOCAL_ID_START;

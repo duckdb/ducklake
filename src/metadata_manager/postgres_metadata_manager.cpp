@@ -95,6 +95,10 @@ string PostgresMetadataManager::CastValueToTarget(const Value &value, const Logi
 	if (IsPostgresTemporalStatsType(type) && !CanCastPostgresTemporalValue(value, type)) {
 		return string();
 	}
+	if (type.id() == LogicalTypeId::FLOAT) {
+		// a bare number is NUMERIC, which compares with REAL bounds as DOUBLE PRECISION
+		return "CAST(" + value.ToString() + " AS " + GetPostgresStatsType(type) + ")";
+	}
 	if (type.IsNumeric()) {
 		return value.ToString();
 	}

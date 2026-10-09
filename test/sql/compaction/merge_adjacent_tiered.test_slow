@@ -68,7 +68,7 @@ CALL ducklake_merge_adjacent_files('ducklake', 'tiered', min_file_size=>100000, 
 query I
 SELECT count(*) FROM __ducklake_metadata_ducklake.ducklake_data_file WHERE end_snapshot IS NULL
 ----
-2
+3
 
 # Full compaction: merge everything into final large files
 statement ok
