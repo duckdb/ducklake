@@ -1,0 +1,53 @@
+# name: test/sql/migration/old_catalog_attach_errors.test
+# description: an attach of an old catalog that cannot be loaded reports its error without waiting
+# group: [migration]
+
+require ducklake
+
+require parquet
+
+test-env DATA_PATH {TEST_DIR}
+
+unzip data/old_ducklake/v01.db.gz {TEST_DIR}/old_catalog_attach_errors.db
+
+statement ok
+CREATE MACRO metadata_queries() AS (SELECT count(*) FROM duckdb_logs_parsed('DuckLakeMetadata'))
+
+# a retry cannot add the automatic migration
+statement ok
+SET ducklake_retry_wait_ms = 30000
+
+statement ok
+CALL enable_logging('DuckLakeMetadata')
+
+statement error
+ATTACH 'ducklake:{TEST_DIR}/old_catalog_attach_errors.db' AS dl
+(DATA_PATH '{DATA_PATH}/old_catalog_attach_errors')
+----
+DuckLake catalog version mismatch
+
+statement ok
+CALL disable_logging()
+
+# the attach read the metadata once, so it did not try again
+query I
+SELECT metadata_queries() <= 6
+----
+true
+
+statement ok
+CALL truncate_duckdb_logs()
+
+# nor fix a data path that does not match
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/old_catalog_attach_errors.db' AS dl
+(DATA_PATH '{DATA_PATH}/old_catalog_attach_errors', AUTOMATIC_MIGRATION TRUE, OVERRIDE_DATA_PATH TRUE)
+
+statement ok
+DETACH dl
+
+statement error
+ATTACH 'ducklake:{TEST_DIR}/old_catalog_attach_errors.db' AS dl
+(DATA_PATH '{DATA_PATH}/other_path')
+----
+does not match existing data path

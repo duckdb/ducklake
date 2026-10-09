@@ -1,4 +1,5 @@
 #include "duckdb/main/attached_database.hpp"
+#include "duckdb/common/thread.hpp"
 #include "duckdb/catalog/catalog.hpp"
 #include "duckdb/common/file_system.hpp"
 #include "duckdb/transaction/meta_transaction.hpp"
@@ -84,7 +85,7 @@ void DuckLakeInitializer::Initialize() {
 	// this prevents a corrupted ducklake catalog from blocking initialization of unrelated ducklake databases
 	// FIXME: verify that all ducklake tables are in the correct format
 	if (transaction.GetMetadataManager().MetadataExists()) {
-		LoadExistingDuckLake(transaction);
+		LoadExistingDuckLakeWithRetries(transaction);
 	} else {
 		if (!options.create_if_not_exists) {
 			throw InvalidInputException("Existing DuckLake at metadata catalog \"%s\" does not exist - and creating a "
@@ -100,7 +101,7 @@ void DuckLakeInitializer::Initialize() {
 			if (!DuckLakeIsInitialized(transaction)) {
 				error.Throw();
 			}
-			LoadExistingDuckLake(transaction);
+			LoadExistingDuckLakeWithRetries(transaction);
 		}
 	}
 	auto &current_metadata_manager = transaction.GetMetadataManager();
@@ -110,6 +111,49 @@ void DuckLakeInitializer::Initialize() {
 	if (options.at_clause) {
 		// if the user specified a snapshot try to load it to trigger an error if it does not exist
 		transaction.GetSnapshot();
+	}
+}
+
+static bool PermanentLoadError(const ErrorData &error) {
+	switch (error.Type()) {
+	case ExceptionType::INVALID_INPUT:
+	case ExceptionType::INVALID_CONFIGURATION:
+	case ExceptionType::NOT_IMPLEMENTED:
+	case ExceptionType::BINDER:
+		return true;
+	default:
+		return false;
+	}
+}
+
+void DuckLakeInitializer::LoadExistingDuckLakeWithRetries(DuckLakeTransaction &transaction) {
+	// wait for a migration of another attach, whose errors we cannot tell from a real failure
+	static constexpr idx_t MAX_WAIT_MS = 3000;
+	auto retry_config = DuckLakeRetryConfig::FromContext(context);
+	ErrorData first_error;
+	idx_t waited_ms = 0;
+	for (idx_t attempt = 0;; attempt++) {
+		try {
+			LoadExistingDuckLake(transaction);
+			return;
+		} catch (std::exception &ex) {
+			ErrorData error(ex);
+			if (PermanentLoadError(error)) {
+				error.Throw();
+			}
+			if (attempt == 0) {
+				first_error = error;
+			}
+		}
+		if (waited_ms >= MAX_WAIT_MS || attempt >= retry_config.max_retry_count) {
+			first_error.Throw();
+		}
+		auto wait_ms = retry_config.WaitMs(attempt, MAX_WAIT_MS - waited_ms);
+#ifndef DUCKDB_NO_THREADS
+		ThreadUtil::SleepMs(wait_ms, context);
+#endif
+		waited_ms += wait_ms;
+		RestartMetadataTransaction(transaction);
 	}
 }
 

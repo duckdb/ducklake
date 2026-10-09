@@ -2200,8 +2200,7 @@ void DuckLakeTransactionState::Commit(DuckLakeSnapshot transaction_snapshot,
 			RandomEngine random;
 			// random multiplier between 0.5 - 1.0
 			double random_multiplier = (random.NextRandom() + 1.0) / 2.0;
-			uint64_t sleep_amount = (uint64_t)((double)retry_config.retry_wait_ms * random_multiplier *
-			                                   pow(retry_config.retry_backoff, static_cast<double>(i)));
+			auto sleep_amount = retry_config.WaitMs(i, NumericLimits<idx_t>::Maximum(), random_multiplier);
 			std::this_thread::sleep_for(std::chrono::milliseconds(sleep_amount));
 #endif
 
