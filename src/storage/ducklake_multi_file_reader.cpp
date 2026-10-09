@@ -6,7 +6,6 @@
 
 #include "duckdb/common/local_file_system.hpp"
 #include "duckdb/common/types/data_chunk.hpp"
-#include "duckdb/common/types/timestamp.hpp"
 #include "duckdb/execution/expression_executor.hpp"
 #include "duckdb/function/table_function.hpp"
 #include "duckdb/main/client_data.hpp"
@@ -75,20 +74,6 @@ static void NormalizeListChildNames(vector<MultiFileColumnDefinition> &columns, 
 			NormalizeListChildNames(col.children, is_list);
 		}
 	}
-}
-
-static optional<Value> TryCastStatsBound(const string &bound, const LogicalType &type) {
-	if (StatsBoundsRequireOffset(type)) {
-		timestamp_t result;
-		bool has_offset;
-		string_t time_zone;
-		auto cast_result =
-		    Timestamp::TryConvertTimestampTZ(bound.c_str(), bound.size(), result, true, has_offset, time_zone);
-		if (cast_result != TimestampCastResult::SUCCESS || (!has_offset && result.IsFinite())) {
-			return nullopt;
-		}
-	}
-	return Value(bound).DefaultTryCastAs(type);
 }
 
 static bool CanSkipFileByTopNDynamicFilter(const DuckLakeFileColumnStats &column_stats,
