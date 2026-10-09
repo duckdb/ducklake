@@ -1,0 +1,47 @@
+# name: test/sql/data_inlining/data_inlining_flush_partitioned_deletes_encrypted.test
+# description: Flushing partitioned inlined data with deleted row versions into encrypted files
+# group: [data_inlining]
+
+require ducklake
+
+require parquet
+
+require httpfs
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS lake (DATA_PATH '{DATA_PATH}/data_inlining_flush_partitioned_deletes_encrypted', ENCRYPTED, DATA_INLINING_ROW_LIMIT 1000)
+
+statement ok
+CREATE TABLE lake.u (id BIGINT, dt DATE, v VARCHAR)
+
+statement ok
+ALTER TABLE lake.u SET PARTITIONED BY (dt)
+
+statement ok
+INSERT INTO lake.u SELECT i, DATE '2028-01-01' + (i % 200)::INTEGER, 'v' || (i * 7919 % 1000) FROM range(400) t(i)
+
+statement ok
+UPDATE lake.u SET v = 'u' || v WHERE id % 13 = 0
+
+statement ok
+DELETE FROM lake.u WHERE id % 17 = 0
+
+statement ok
+CREATE TEMP TABLE u_before AS FROM lake.u
+
+statement ok
+CALL ducklake_flush_inlined_data('lake')
+
+query II
+SELECT (SELECT COUNT(*) FROM (FROM u_before EXCEPT ALL FROM lake.u)), (SELECT COUNT(*) FROM (FROM lake.u EXCEPT ALL FROM u_before))
+----
+0	0
+
+query I
+SELECT COUNT(*) > 0 FROM __ducklake_metadata_lake.ducklake_delete_file WHERE encryption_key IS NOT NULL
+----
+true
