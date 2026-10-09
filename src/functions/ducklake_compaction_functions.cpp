@@ -58,9 +58,12 @@ vector<BoundOrderByNode> DuckLakeCompactor::BindSortOrders(Binder &binder, Schem
 	for (auto &order : pre_bound_orders) {
 		orders.emplace_back(order.type, order.null_order, order.expression->Copy());
 	}
-	// names in the sort expressions resolve in the schema of the table first, as in a view
 	auto sort_binder = Binder::CreateBinder(binder.context, &binder);
-	sort_binder->SetSearchPath(schema.ParentCatalog(), schema.name);
+	// a search path cannot name a nested schema
+	if (!schema.GetParentSchema()) {
+		// names in the sort expressions resolve in the schema of the table first, as in a view
+		sort_binder->SetSearchPath(schema.ParentCatalog(), schema.name);
+	}
 	return BindOrderByNodes(*sort_binder, table_index, table_name, StringsToIdentifiers(columns.GetColumnNames()),
 	                        columns.GetColumnTypes(), orders);
 }
