@@ -31,7 +31,9 @@ static InsertionOrderPreservingMap<string> DuckLakeFunctionToString(TableFunctio
 
 	if (input.table_function.function_info) {
 		auto &table_info = input.table_function.function_info->Cast<DuckLakeFunctionInfo>();
-		result["Table"] = table_info.table_name;
+		result["Table"] = table_info.table.ParentSchema()
+		                      .GetQualifiedName(Identifier(table_info.table_name))
+		                      .ToString(QualifiedNameToStringMode::HIDE_DEFAULT_SCHEMA);
 	}
 
 	return result;
