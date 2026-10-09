@@ -97,26 +97,6 @@ struct HivePartition {
 	optional_idx partition_key_index;
 };
 
-struct MissingColumn {
-	FieldIndex field_index;
-	LogicalType field_type;
-	bool reads_null;
-	//! Whether the column is inside a list or map element, so it does not have one value per row
-	bool repeated;
-};
-
-static void CollectMissingColumns(const DuckLakeFieldId &field_id, bool reads_null, bool repeated,
-                                  vector<MissingColumn> &result) {
-	if (!field_id.HasChildren()) {
-		result.push_back(MissingColumn {field_id.GetFieldIndex(), field_id.Type(), reads_null, repeated});
-		return;
-	}
-	// the fields of a missing parent read as NULL
-	for (auto &child : field_id.Children()) {
-		CollectMissingColumns(*child, true, repeated, result);
-	}
-}
-
 static bool IsValidTransformedHivePartitionValue(const HivePartition &hive_partition,
                                                  const DuckLakePartitionField &partition_field) {
 	if (partition_field.transform.type != DuckLakeTransformType::BUCKET) {
@@ -148,7 +128,7 @@ struct ParquetFileMetadata {
 	// Map from field ID to hive partition statistics (for partition columns)
 	vector<HivePartition> hive_partition_values;
 	// Columns absent from the file and the value they read as
-	vector<MissingColumn> missing_columns;
+	vector<DuckLakeMissingField> missing_columns;
 };
 
 struct DuckLakeFileProcessor {
@@ -949,24 +929,11 @@ void DuckLakeFileProcessor::MapColumnStats(ParquetFileMetadata &file_metadata, D
 	}
 
 	for (auto &missing : file_metadata.missing_columns) {
-		if (missing.reads_null) {
-			auto column_stats =
-			    ConstantColumnStats(file_metadata, missing.field_index, missing.field_type, Value(missing.field_type));
-			CheckNotNullStats(missing.field_index, column_stats);
-			if (missing.repeated) {
-				column_stats.has_num_values = false;
-				column_stats.has_null_count = false;
-			}
-			result.column_stats.emplace(missing.field_index, std::move(column_stats));
-			continue;
+		missing.AddStats(file_metadata.row_count.GetIndex(), result.column_stats);
+		auto missing_stats = result.column_stats.find(missing.field_index);
+		if (missing_stats != result.column_stats.end()) {
+			CheckNotNullStats(missing.field_index, missing_stats->second);
 		}
-		// the statistics of a non NULL default are left unknown
-		DuckLakeColumnStats unknown_stats(missing.field_type);
-		if (unknown_stats.extra_stats) {
-			// extra statistics cannot be unknown, so the column gets no statistics
-			continue;
-		}
-		result.column_stats.emplace(missing.field_index, std::move(unknown_stats));
 	}
 }
 
@@ -1056,8 +1023,8 @@ vector<unique_ptr<DuckLakeNameMapEntry>> DuckLakeFileProcessor::MapColumns(
 			    prefix.empty() ? prefix : prefix + ".", entry.second.get().Name(), table.name.GetIdentifierName(),
 			    file_metadata.filepath);
 		}
-		CollectMissingColumns(field_id, field_id.GetColumnData().initial_default.IsNull(), repeated,
-		                      file_metadata.missing_columns);
+		DuckLakeMissingField::Collect(field_id, field_id.GetColumnData().initial_default.IsNull(), repeated,
+		                              file_metadata.missing_columns);
 	}
 	return column_maps;
 }

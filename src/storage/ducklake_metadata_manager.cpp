@@ -4703,27 +4703,32 @@ struct ColumnStatsSQL {
 	}
 };
 
+string DuckLakeMetadataManager::InsertTableColumnStatsSql(const DuckLakeGlobalStatsInfo &stats,
+                                                          bool write_stats_exactness) {
+	vector<string> column_stats_values;
+	for (auto &col_stats : stats.column_stats) {
+		auto sql = ColumnStatsSQL::FromColumnStats(col_stats);
+		auto column_stats_value =
+		    StringUtil::Format("(%d, %d, %s, %s, %s, %s, %s", stats.table_id.index, col_stats.column_id.index,
+		                       sql.contains_null, sql.contains_nan, sql.min_val, sql.max_val, sql.extra_stats);
+		if (write_stats_exactness) {
+			column_stats_value += StringUtil::Format(", %s, %s", sql.min_is_exact, sql.max_is_exact);
+		}
+		column_stats_values.push_back(column_stats_value + ")");
+	}
+	return InsertValuesSql("ducklake_table_column_stats", column_stats_values);
+}
+
 string DuckLakeMetadataManager::UpdateGlobalTableStatsSql(const DuckLakeGlobalStatsInfo &stats,
                                                           bool write_stats_exactness) {
 	string batch_query;
 	auto record_count = stats.record_count_unknown ? string("NULL") : to_string(stats.record_count);
 
 	if (!stats.initialized) {
-		vector<string> column_stats_values;
-		for (auto &col_stats : stats.column_stats) {
-			auto sql = ColumnStatsSQL::FromColumnStats(col_stats);
-			auto column_stats_value =
-			    StringUtil::Format("(%d, %d, %s, %s, %s, %s, %s", stats.table_id.index, col_stats.column_id.index,
-			                       sql.contains_null, sql.contains_nan, sql.min_val, sql.max_val, sql.extra_stats);
-			if (write_stats_exactness) {
-				column_stats_value += StringUtil::Format(", %s, %s", sql.min_is_exact, sql.max_is_exact);
-			}
-			column_stats_values.push_back(column_stats_value + ")");
-		}
 		batch_query +=
 		    StringUtil::Format("INSERT INTO {METADATA_CATALOG}.ducklake_table_stats VALUES (%d, %s, %d, %d);",
 		                       stats.table_id.index, record_count, stats.next_row_id, stats.table_size_bytes);
-		batch_query += InsertValuesSql("ducklake_table_column_stats", column_stats_values);
+		batch_query += InsertTableColumnStatsSql(stats, write_stats_exactness);
 	} else {
 		// stats have been initialized - update them
 		batch_query += StringUtil::Format(

@@ -1,0 +1,505 @@
+# name: test/sql/issues/issue_1054_added_column_stats.test
+# description: A column added to a table with statistics gets statistics that cover the older rows (#1054, #625)
+# group: [issues]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/issue_1054_added_column_stats.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/issue_1054', METADATA_CATALOG 'issue_1054_meta')
+
+statement ok
+CREATE TABLE dl.tbl (a INT)
+
+statement ok
+INSERT INTO dl.tbl VALUES (1), (2), (3)
+
+statement ok
+ALTER TABLE dl.tbl ADD COLUMN b INT DEFAULT 42
+
+statement ok
+INSERT INTO dl.tbl VALUES (4, 10)
+
+statement ok
+INSERT INTO dl.tbl VALUES (5, 100)
+
+# the older rows read the default, so it lies within the bounds
+query III
+SELECT CAST(contains_null AS BOOLEAN), min_value, max_value FROM issue_1054_meta.ducklake_table_column_stats
+WHERE table_id = 1 AND column_id = 2
+----
+false	10	100
+
+query II
+SELECT count(*) FILTER (b = 42), count(*) FILTER (b > 50) FROM dl.tbl
+----
+3	1
+
+query I
+SELECT count(*) FROM dl.tbl WHERE b = 42
+----
+3
+
+# a column added without a default reads NULL in the older rows
+statement ok
+CREATE TABLE dl.t (a INTEGER)
+
+statement ok
+INSERT INTO dl.t VALUES (1)
+
+statement ok
+ALTER TABLE dl.t ADD COLUMN b INTEGER
+
+statement ok
+INSERT INTO dl.t VALUES (2, 10)
+
+query I
+SELECT CAST(s.contains_null AS BOOLEAN) FROM issue_1054_meta.ducklake_table_column_stats s
+JOIN issue_1054_meta.ducklake_table t USING (table_id)
+WHERE t.table_name = 't' AND s.column_id = 2
+----
+true
+
+query II
+SELECT (SELECT count(*) FROM dl.t WHERE b IS NULL), (SELECT count(*) FROM dl.t WHERE b = 10)
+----
+1	1
+
+# files written in the transaction before a column is added read its default
+statement ok
+CALL dl.set_option('data_inlining_row_limit', 0)
+
+statement ok
+CREATE TABLE dl.f (a INTEGER)
+
+statement ok
+BEGIN
+
+statement ok
+INSERT INTO dl.f SELECT range FROM range(3)
+
+statement ok
+ALTER TABLE dl.f ADD COLUMN b INTEGER DEFAULT 1000
+
+statement ok
+INSERT INTO dl.f VALUES (4, 10)
+
+statement ok
+COMMIT
+
+query I
+SELECT count(*) FROM dl.f WHERE b > 500
+----
+3
+
+# a column added without a default takes the bounds of a file and of the inlined rows after it
+statement ok
+CREATE TABLE dl.n (a INTEGER)
+
+statement ok
+CALL dl.set_option('data_inlining_row_limit', 5, table_name => 'n')
+
+statement ok
+INSERT INTO dl.n VALUES (1)
+
+statement ok
+BEGIN
+
+statement ok
+ALTER TABLE dl.n ADD COLUMN b INTEGER
+
+statement ok
+INSERT INTO dl.n SELECT range, range + 10 FROM range(11)
+
+statement ok
+INSERT INTO dl.n VALUES (100, 1)
+
+statement ok
+COMMIT
+
+query III
+SELECT CAST(s.contains_null AS BOOLEAN), s.min_value, s.max_value FROM issue_1054_meta.ducklake_table_column_stats s
+JOIN issue_1054_meta.ducklake_table t USING (table_id)
+WHERE t.table_name = 'n' AND s.column_id = 2
+----
+true	1	20
+
+query I
+SELECT count(*) FROM dl.n WHERE b > 5
+----
+11
+
+# the same for a field added to a struct, which reads NULL where the struct is NULL
+statement ok
+CREATE TABLE dl.s (a INTEGER, s STRUCT(x INTEGER))
+
+statement ok
+BEGIN
+
+statement ok
+INSERT INTO dl.s VALUES (1, {'x': 1}), (2, NULL)
+
+statement ok
+ALTER TABLE dl.s ADD COLUMN s.y INTEGER DEFAULT 7
+
+statement ok
+INSERT INTO dl.s VALUES (3, {'x': 3, 'y': 100})
+
+statement ok
+COMMIT
+
+query III
+SELECT (SELECT count(*) FROM dl.s WHERE s.y = 7), (SELECT count(*) FROM dl.s WHERE s.y IS NULL),
+       (SELECT count(*) FROM dl.s WHERE s.y > 50)
+----
+1	1	1
+
+# a column added and renamed in one transaction starts from its default
+statement ok
+CREATE TABLE dl.r (a INTEGER)
+
+statement ok
+INSERT INTO dl.r VALUES (1)
+
+statement ok
+BEGIN
+
+statement ok
+ALTER TABLE dl.r ADD COLUMN b INTEGER DEFAULT 5
+
+statement ok
+ALTER TABLE dl.r RENAME COLUMN b TO c
+
+statement ok
+COMMIT
+
+statement ok
+INSERT INTO dl.r VALUES (2, 50)
+
+query II
+SELECT s.min_value, s.max_value FROM issue_1054_meta.ducklake_table_column_stats s
+JOIN issue_1054_meta.ducklake_table t USING (table_id)
+WHERE t.table_name = 'r' AND s.column_id = 2
+----
+5	50
+
+query I
+SELECT count(*) FROM dl.r WHERE c = 5
+----
+1
+
+# widening an added column keeps the default that the older rows read
+statement ok
+CREATE TABLE dl.w (a INTEGER)
+
+statement ok
+INSERT INTO dl.w VALUES (1)
+
+statement ok
+BEGIN
+
+statement ok
+ALTER TABLE dl.w ADD COLUMN b INTEGER DEFAULT 1000
+
+statement ok
+ALTER TABLE dl.w ALTER b TYPE BIGINT
+
+statement ok
+INSERT INTO dl.w VALUES (2, 10)
+
+query II
+SELECT a, b FROM dl.w ORDER BY a
+----
+1	1000
+2	10
+
+statement ok
+COMMIT
+
+query I
+SELECT count(*) FROM dl.w WHERE b > 500
+----
+1
+
+# a widened default keeps the value that the catalog reads back
+statement ok
+CREATE TABLE dl.fw (a INTEGER)
+
+statement ok
+INSERT INTO dl.fw VALUES (1)
+
+statement ok
+BEGIN
+
+statement ok
+ALTER TABLE dl.fw ADD COLUMN b FLOAT DEFAULT 3.14
+
+statement ok
+ALTER TABLE dl.fw ALTER b TYPE DOUBLE
+
+statement ok
+COMMIT
+
+query I
+SELECT count(*) FROM dl.fw WHERE b = 3.14
+----
+1
+
+# widening a struct keeps the default of a field added to it
+statement ok
+CREATE TABLE dl.sw (s STRUCT(x INTEGER))
+
+statement ok
+INSERT INTO dl.sw VALUES ({'x': 1})
+
+statement ok
+ALTER TABLE dl.sw ADD COLUMN s.y INTEGER DEFAULT 42
+
+statement ok
+ALTER TABLE dl.sw ALTER s TYPE STRUCT(x INTEGER, y BIGINT)
+
+query I
+SELECT s.y FROM dl.sw
+----
+42
+
+query I
+SELECT count(*) FROM dl.sw WHERE s.y = 42
+----
+1
+
+# a column added while every row is deleted does not keep the default of the deleted rows
+statement ok
+CREATE TABLE dl.e (a INTEGER)
+
+statement ok
+INSERT INTO dl.e VALUES (1)
+
+statement ok
+BEGIN
+
+statement ok
+DELETE FROM dl.e
+
+statement ok
+ALTER TABLE dl.e ADD COLUMN b INTEGER DEFAULT 1000
+
+statement ok
+COMMIT
+
+statement ok
+INSERT INTO dl.e VALUES (2, 10)
+
+query I
+SELECT max(b) FROM dl.e
+----
+10
+
+# the bounding box of a geometry field added inside a list covers the points written with it
+statement ok
+CREATE TABLE dl.lg (s STRUCT(x INTEGER)[])
+
+statement ok
+INSERT INTO dl.lg VALUES ([{'x': 1}])
+
+statement ok
+BEGIN
+
+statement ok
+ALTER TABLE dl.lg ALTER s TYPE STRUCT(x INTEGER, g GEOMETRY)[]
+
+statement ok
+INSERT INTO dl.lg VALUES ([{'x': 2, 'g': 'POINT(10 20)'::GEOMETRY}])
+
+statement ok
+COMMIT
+
+statement ok
+INSERT INTO dl.lg VALUES ([{'x': 3, 'g': 'POINT(100 200)'::GEOMETRY}])
+
+query I
+SELECT s.extra_stats FROM issue_1054_meta.ducklake_table_column_stats s
+JOIN issue_1054_meta.ducklake_table t USING (table_id)
+WHERE t.table_name = 'lg' AND s.extra_stats IS NOT NULL
+----
+{"bbox":{"xmin":10.0,"xmax":100.0,"ymin":20.0,"ymax":200.0,"zmin":null,"zmax":null,"mmin":null,"mmax":null},"types":["point"]}
+
+# a column added to a table whose record count is unknown keeps the default of the older rows
+statement ok
+CREATE TABLE dl.uc (a INTEGER)
+
+statement ok
+INSERT INTO dl.uc VALUES (1), (2)
+
+statement ok
+UPDATE issue_1054_meta.ducklake_table_stats SET record_count = NULL
+WHERE table_id IN (SELECT table_id FROM issue_1054_meta.ducklake_table WHERE table_name = 'uc')
+
+statement ok
+DETACH dl
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/issue_1054', METADATA_CATALOG 'issue_1054_meta')
+
+statement ok
+BEGIN
+
+statement ok
+ALTER TABLE dl.uc ADD COLUMN b INTEGER DEFAULT 42
+
+statement ok
+INSERT INTO dl.uc VALUES (3, 10)
+
+statement ok
+COMMIT
+
+query I
+SELECT count(*) FROM dl.uc WHERE b = 42
+----
+2
+
+# a rewrite keeps the statistics of a column that the older files do not hold
+statement ok
+CREATE TABLE dl.rw (a INTEGER)
+
+statement ok
+INSERT INTO dl.rw SELECT range FROM range(10)
+
+statement ok
+ALTER TABLE dl.rw ADD COLUMN b INTEGER DEFAULT 42
+
+statement ok
+INSERT INTO dl.rw SELECT range + 100, range + 10 FROM range(11)
+
+statement ok
+DELETE FROM dl.rw WHERE a = 100
+
+query I
+SELECT files_processed FROM ducklake_rewrite_data_files('dl', 'rw', delete_threshold => 0)
+----
+1
+
+query II
+SELECT (SELECT count(*) FROM dl.rw WHERE b = 42), (SELECT max(b) FROM dl.rw)
+----
+10	42
+
+# and of a column that the older inlined rows do not hold
+statement ok
+CREATE TABLE dl.ri (a INTEGER)
+
+statement ok
+CALL dl.set_option('data_inlining_row_limit', 5, table_name => 'ri')
+
+statement ok
+INSERT INTO dl.ri VALUES (1), (2)
+
+statement ok
+ALTER TABLE dl.ri ADD COLUMN b INTEGER DEFAULT 42
+
+statement ok
+INSERT INTO dl.ri SELECT range + 100, range + 10 FROM range(11)
+
+statement ok
+DELETE FROM dl.ri WHERE a = 100
+
+query I
+SELECT files_processed FROM ducklake_rewrite_data_files('dl', 'ri', delete_threshold => 0)
+----
+1
+
+query II
+SELECT (SELECT count(*) FROM dl.ri WHERE b = 42), (SELECT max(b) FROM dl.ri)
+----
+2	42
+
+# and of a column that only the newer inlined rows hold, when the rewrite creates no file
+statement ok
+CREATE TABLE dl.rn (a INTEGER)
+
+statement ok
+INSERT INTO dl.rn SELECT range FROM range(10)
+
+statement ok
+ALTER TABLE dl.rn ADD COLUMN b INTEGER DEFAULT 42
+
+statement ok
+CALL dl.set_option('data_inlining_row_limit', 5, table_name => 'rn')
+
+statement ok
+INSERT INTO dl.rn VALUES (100, 1), (101, 1)
+
+statement ok
+DELETE FROM dl.rn WHERE a >= 100
+
+statement ok
+CALL ducklake_flush_inlined_data('dl', table_name => 'rn')
+
+statement ok
+INSERT INTO dl.rn VALUES (200, 7)
+
+query II
+SELECT files_processed, files_created FROM ducklake_rewrite_data_files('dl', 'rn', delete_threshold => 0)
+----
+1	0
+
+statement ok
+DETACH dl
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/issue_1054', METADATA_CATALOG 'issue_1054_meta')
+
+query II
+SELECT (SELECT count(*) FROM dl.rn WHERE b = 42), (SELECT max(b) FROM dl.rn)
+----
+10	42
+
+# a column added while a rewrite of the table is in flight keeps its statistics
+statement ok
+CREATE TABLE dl.cr (a INTEGER)
+
+statement ok
+INSERT INTO dl.cr SELECT range FROM range(10)
+
+statement ok
+DELETE FROM dl.cr WHERE a = 0
+
+statement ok con1
+BEGIN
+
+query I con1
+SELECT files_processed FROM ducklake_rewrite_data_files('dl', 'cr', delete_threshold => 0)
+----
+1
+
+statement ok con2
+BEGIN
+
+statement ok con2
+ALTER TABLE dl.cr ADD COLUMN b INTEGER DEFAULT 42
+
+statement ok con2
+INSERT INTO dl.cr VALUES (100, 7)
+
+statement ok con2
+COMMIT
+
+statement ok con1
+COMMIT
+
+query III
+SELECT CAST(s.contains_null AS BOOLEAN), s.min_value, s.max_value FROM issue_1054_meta.ducklake_table_column_stats s
+JOIN issue_1054_meta.ducklake_table t USING (table_id)
+WHERE t.table_name = 'cr' AND s.column_id = 2
+----
+false	7	42
+
+query III
+SELECT (SELECT count(*) FROM dl.cr WHERE b = 42), (SELECT count(*) FROM dl.cr WHERE a = 100), (SELECT max(b) FROM dl.cr)
+----
+9	1	42

@@ -911,6 +911,23 @@ unique_ptr<CatalogEntry> DuckLakeTableEntry::AlterTable(DuckLakeTransaction &tra
 	                                     std::move(change_info));
 }
 
+static void ExtractDefaultValue(const DuckLakeColumnData &col_data, DuckLakeColumnInfo &info) {
+	info.initial_default = col_data.initial_default;
+	if (col_data.default_value) {
+		Value literal_value;
+		if (DuckLakeUtil::TryGetLiteralValue(*col_data.default_value, literal_value)) {
+			info.default_value = std::move(literal_value);
+			info.default_value_type = "literal";
+		} else {
+			info.default_value = col_data.default_value->ToString();
+			info.default_value_type = "expression";
+		}
+	} else {
+		info.default_value = Value(LogicalTypeId::VARCHAR);
+		info.default_value_type = "literal";
+	}
+}
+
 bool TypePromotionIsAllowed(const LogicalType &source, const LogicalType &target) {
 	if (source == target) {
 		return false;
@@ -1018,8 +1035,13 @@ unique_ptr<DuckLakeFieldId> DuckLakeTableEntry::TypePromotion(const DuckLakeFiel
 	result.DropField(source_id);
 
 	// re-create with the new type
-	DuckLakeColumnData column_data;
-	column_data.id = source_id.GetFieldIndex();
+	auto column_data = source_id.GetColumnData().Copy();
+	if (column_data.initial_default.IsNull()) {
+		column_data.initial_default = Value(target);
+	} else {
+		// the catalog stores the default as text and casts it to the type of the column
+		column_data.initial_default = Value(column_data.initial_default.ToString()).DefaultCastAs(target);
+	}
 	DuckLakeNewColumn new_col;
 	if (!parent_idx.IsValid()) {
 		// root column - get the info from the table directly
@@ -1028,6 +1050,7 @@ unique_ptr<DuckLakeFieldId> DuckLakeTableEntry::TypePromotion(const DuckLakeFiel
 		// nested column - generate the info here
 		new_col.column_info.id = column_data.id;
 		new_col.column_info.name = source_id.Name();
+		ExtractDefaultValue(column_data, new_col.column_info);
 	}
 	new_col.column_info.type = DuckLakeTypes::ToString(target);
 	new_col.parent_idx = parent_idx;
@@ -1059,23 +1082,6 @@ unique_ptr<CatalogEntry> DuckLakeTableEntry::AlterTable(DuckLakeTransaction &tra
 	auto new_field_ids = DuckLakeFieldData::ReplaceRootField(*field_data, col.Physical(), std::move(new_field_id));
 	return make_uniq<DuckLakeTableEntry>(*this, table_info, LocalChangeType::CHANGE_COLUMN_TYPE, std::move(change_info),
 	                                     std::move(new_field_ids));
-}
-
-static void ExtractDefaultValue(const DuckLakeColumnData &col_data, DuckLakeColumnInfo &info) {
-	info.initial_default = col_data.initial_default;
-	if (col_data.default_value) {
-		Value literal_value;
-		if (DuckLakeUtil::TryGetLiteralValue(*col_data.default_value, literal_value)) {
-			info.default_value = std::move(literal_value);
-			info.default_value_type = "literal";
-		} else {
-			info.default_value = col_data.default_value->ToString();
-			info.default_value_type = "expression";
-		}
-	} else {
-		info.default_value = Value(LogicalTypeId::VARCHAR);
-		info.default_value_type = "literal";
-	}
 }
 
 void AddNewColumns(const DuckLakeFieldId &field_id, vector<DuckLakeNewColumn> &new_fields, FieldIndex parent_idx) {
@@ -1520,6 +1526,66 @@ void DuckLakeTableEntry::ValidateAddedFieldsCanSkipStats(const DuckLakeFieldId &
 	throw NotImplementedException("Cannot give column \"%s\" a %s field (\"%s\") - it is listed in the "
 	                              "'skip_stats_columns' option, and statistics cannot be skipped for that type",
 	                              parent_id.Name(), unsupported->Type().ToString(), unsupported->Name());
+}
+
+static void CollectNewFields(const DuckLakeFieldId &field_id, const DuckLakeFieldData &previous,
+                             set<FieldIndex> &result) {
+	if (!previous.GetByFieldIndex(field_id.GetFieldIndex())) {
+		result.insert(field_id.GetFieldIndex());
+		return;
+	}
+	for (auto &child : field_id.Children()) {
+		CollectNewFields(*child, previous, result);
+	}
+}
+
+set<FieldIndex> DuckLakeTableEntry::GetNewFields(const DuckLakeTableEntry &previous) const {
+	duckdb::set<FieldIndex> result;
+	for (auto &field_id : field_data->GetFieldIds()) {
+		CollectNewFields(*field_id, previous.GetFieldData(), result);
+	}
+	return result;
+}
+
+static void CollectAddedFieldStats(const DuckLakeFieldId &field_id, bool top_level, bool repeated,
+                                   const set<FieldIndex> &added_fields, idx_t count,
+                                   map<FieldIndex, DuckLakeColumnStats> &result) {
+	if (!added_fields.count(field_id.GetFieldIndex())) {
+		// the elements of a list, array or map do not have one value per row
+		bool child_repeated = repeated || field_id.Type().id() != LogicalTypeId::STRUCT;
+		for (auto &child : field_id.Children()) {
+			CollectAddedFieldStats(*child, false, child_repeated, added_fields, count, result);
+		}
+		return;
+	}
+	auto &initial_default = field_id.GetColumnData().initial_default;
+	if (top_level && !initial_default.IsNull() && !DuckLakeColumnStats(field_id.Type()).extra_stats) {
+		// every older row reads the default of an added column
+		result.emplace(field_id.GetFieldIndex(),
+		               DuckLakeColumnStats::FromConstant(field_id.Type(), initial_default, count));
+		return;
+	}
+	// older rows read NULL, or a default whose statistics are left unknown
+	vector<DuckLakeMissingField> missing_fields;
+	DuckLakeMissingField::Collect(field_id, initial_default.IsNull(), repeated, missing_fields);
+	for (auto &missing : missing_fields) {
+		missing.AddStats(count, result);
+	}
+}
+
+map<FieldIndex, DuckLakeColumnStats> DuckLakeTableEntry::GetAddedFieldStats(const duckdb::set<FieldIndex> &added_fields,
+                                                                            idx_t count) const {
+	map<FieldIndex, DuckLakeColumnStats> result;
+	for (auto &field_id : field_data->GetFieldIds()) {
+		CollectAddedFieldStats(*field_id, true, false, added_fields, count, result);
+	}
+	auto skipped_fields = GetSkippedStatsFields();
+	for (auto &entry : result) {
+		if (skipped_fields.count(entry.first.index)) {
+			entry.second.ClearBounds();
+		}
+	}
+	return result;
 }
 
 unordered_set<idx_t> DuckLakeTableEntry::GetSkippedStatsFields() const {

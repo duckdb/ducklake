@@ -35,6 +35,7 @@ benchmark/micro/write/big_lake_create_tables.benchmark
 benchmark/ingest/add_files_small_files.benchmark
 benchmark/micro/ingest/add_files_not_null.benchmark
 benchmark/tpch/q09.benchmark
+benchmark/micro/read/added_column_pruning.benchmark
 benchmark/micro/read/tz_pruning_many_files.benchmark
 benchmark/micro/time_travel/at_version_cte_copy.benchmark
 benchmark/micro/read/scan_shared_deletes.benchmark
