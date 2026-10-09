@@ -45,6 +45,23 @@ EXPLAIN ANALYZE SELECT count(*) FROM dl.t WHERE x >= 22
 ----
 analyzed_plan	<REGEX>:(?s).*Total Files Read: 3\s.*
 
+# a file of NULLs holds no NaN either
+statement ok
+COPY (SELECT NULL::DOUBLE AS x) TO '{DATA_PATH}/issue_1442_null.parquet'
+
+statement ok
+CALL ducklake_add_data_files('dl', 't', '{DATA_PATH}/issue_1442_null.parquet')
+
+query II
+EXPLAIN ANALYZE SELECT count(*) FROM dl.t WHERE x IS NOT NULL
+----
+analyzed_plan	<REGEX>:(?s).*Total Files Read: 3\s.*
+
+query I
+SELECT count(*) FROM dl.t WHERE x IS NOT NULL
+----
+30
+
 foreach type DOUBLE FLOAT
 
 statement ok

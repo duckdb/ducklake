@@ -1703,7 +1703,8 @@ string DuckLakeMetadataManager::GenerateColumnFilterCondition(const ColumnFilter
 	// min/max are absent - only a purely value-based filter may use the guard
 	const bool matches_null_rows = referenced_stats.count("null_count") > 0;
 	const bool needs_value_count_guard =
-	    !matches_null_rows && (referenced_stats.count("min_value") > 0 || referenced_stats.count("max_value") > 0);
+	    !matches_null_rows && (referenced_stats.count("min_value") > 0 || referenced_stats.count("max_value") > 0 ||
+	                           referenced_stats.count("contains_nan") > 0);
 	if (needs_value_count_guard) {
 		referenced_stats.insert("value_count");
 	}
