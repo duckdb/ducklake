@@ -10,6 +10,7 @@
 
 #include "storage/ducklake_extra_stats.hpp"
 #include "duckdb/common/optional_ptr.hpp"
+#include "duckdb/common/types/value.hpp"
 
 #include <functional>
 
@@ -27,6 +28,9 @@ inline bool RequiresValueComparison(const LogicalType &type) {
 inline bool StatsBoundsRequireOffset(const LogicalType &type) {
 	return type.id() == LogicalTypeId::TIMESTAMP_TZ || type.id() == LogicalTypeId::TIMESTAMP_TZ_NS;
 }
+
+//! Bounds that cannot be cast are unknown
+optional<Value> TryCastStatsBound(const string &bound, const LogicalType &type);
 
 struct DuckLakeColumnStats;
 struct DuckLakeGlobalColumnStatsInfo;
@@ -81,6 +85,8 @@ public:
 	static DuckLakeColumnStats FromConstant(const LogicalType &type, const Value &value, idx_t count);
 	//! Discards the min/max bounds, leaving the counts intact
 	void ClearBounds();
+	//! Rewrite FLOAT bounds as the DOUBLE values they widen to
+	void WidenFloatBounds();
 	void CopyMinFrom(const DuckLakeColumnStats &other);
 	void CopyMaxFrom(const DuckLakeColumnStats &other);
 	static bool BoundsSurviveTypePromotion(const LogicalType &source, const LogicalType &target);
@@ -88,12 +94,29 @@ public:
 	void MergeStats(const DuckLakeColumnStats &new_stats);
 
 private:
-	void MergeBound(const DuckLakeColumnStats &new_stats, bool is_min, bool adopt_bounds);
+	void MergeBound(const DuckLakeColumnStats &new_stats, bool is_min);
 	void SetValidity(BaseStatistics &stats) const;
 	unique_ptr<BaseStatistics> CreateNumericStats() const;
 	unique_ptr<BaseStatistics> CreateStringStats() const;
 	unique_ptr<BaseStatistics> CreateVariantStats() const;
 	unique_ptr<BaseStatistics> CreateGeometryStats() const;
+};
+
+class DuckLakeFieldId;
+
+//! A leaf field that rows written without it read as NULL or as its default
+struct DuckLakeMissingField {
+	FieldIndex field_index;
+	LogicalType field_type;
+	bool reads_null;
+	//! Whether the column is inside a list or map element, so it does not have one value per row
+	bool repeated;
+
+	//! Collects the leaf fields of a missing field, whose own value reads as NULL if reads_null is set
+	static void Collect(const DuckLakeFieldId &field_id, bool reads_null, bool repeated,
+	                    vector<DuckLakeMissingField> &result);
+	//! Adds the statistics of count rows without the field, which are unknown unless it reads as NULL
+	void AddStats(idx_t count, map<FieldIndex, DuckLakeColumnStats> &result) const;
 };
 
 //! These are the global, table-wide stats
@@ -106,7 +129,8 @@ struct DuckLakeTableStats {
 
 	void MergeStats(FieldIndex col_id, const DuckLakeColumnStats &file_stats);
 
-	void MergeFileStats(const DuckLakeDataFile &file);
+	//! Merges a file with the given column stats, which can differ from the file's own
+	void MergeFileStats(const DuckLakeDataFile &file, const map<FieldIndex, DuckLakeColumnStats> &column_stats);
 
 	//! Skips columns whose type lookup returns nullptr
 	static unique_ptr<DuckLakeTableStats>

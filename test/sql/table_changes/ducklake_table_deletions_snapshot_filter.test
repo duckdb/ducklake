@@ -1,0 +1,57 @@
+# name: test/sql/table_changes/ducklake_table_deletions_snapshot_filter.test
+# description: Apply deletion snapshot filters after per-row snapshot materialization
+# group: [table_changes]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS lake (DATA_PATH '{DATA_PATH}/deletion_snapshot_filter', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE lake.t(i BIGINT, v BIGINT)
+
+statement ok
+INSERT INTO lake.t SELECT i, i * 10 FROM range(1000) t(i)
+
+statement ok
+UPDATE lake.t SET v = v + 1 WHERE i % 100 = 2
+
+statement ok
+UPDATE lake.t SET v = v + 1 WHERE i % 100 = 5
+
+# Each deleted row must be filtered using its own snapshot, including when rowid is unprojected.
+query II
+SELECT snapshot_id, count(*) FROM ducklake_table_deletions('lake', 'main', 't', 3, 4) WHERE snapshot_id = 4 GROUP BY ALL
+----
+4	10
+
+query II
+SELECT rowid, i FROM ducklake_table_deletions('lake', 'main', 't', 3, 4) WHERE snapshot_id = 4 AND i < 200 ORDER BY ALL
+----
+5	5
+105	105
+
+# Keep the small build side on the right so its runtime join filters target the deletion scan.
+statement ok
+SET disabled_optimizers = 'build_side_probe_side'
+
+query III
+SELECT d.snapshot_id, d.rowid, d.i FROM ducklake_table_deletions('lake', 'main', 't', 3, 4) d JOIN (VALUES (4, 5), (4, 105)) v(snapshot_id, rowid) USING (snapshot_id, rowid) ORDER BY ALL
+----
+4	5	5
+4	105	105
+
+statement ok
+SET disabled_optimizers = ''
+
+query II
+SELECT change_type, count(*) FROM lake.table_changes('t', 3, 4) GROUP BY ALL ORDER BY ALL
+----
+update_postimage	20
+update_preimage	20

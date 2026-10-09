@@ -70,7 +70,7 @@ SELECT min(c), max(c) FROM ducklake.t;
 ----
 1000	6099
 
-# float widening drops bounds and never reseeds
+# float widening keeps the widened bounds
 statement ok
 CREATE TABLE ducklake.t_float(c FLOAT);
 
@@ -95,7 +95,7 @@ INSERT INTO ducklake.t_float SELECT range + 6000 FROM range(100);
 query II
 SELECT min_value, max_value FROM ducklake_meta.ducklake_table_column_stats s JOIN ducklake_meta.ducklake_table t USING (table_id) WHERE t.table_name = 't_float' AND t.end_snapshot IS NULL;
 ----
-NULL	NULL
+1000.0	6099.0
 
 query I
 SELECT count(*) FROM ducklake.t_float WHERE c < 1500;
@@ -104,6 +104,43 @@ SELECT count(*) FROM ducklake.t_float WHERE c < 1500;
 
 query II
 SELECT min(c), max(c) FROM ducklake.t_float;
+----
+1000.0	6099.0
+
+# integer to double widening drops bounds and never reseeds
+statement ok
+CREATE TABLE ducklake.t_int_double(c INTEGER);
+
+statement ok
+INSERT INTO ducklake.t_int_double SELECT range + 1000 FROM range(1000);
+
+statement ok
+BEGIN
+
+statement ok
+ALTER TABLE ducklake.t_int_double ALTER COLUMN c TYPE DOUBLE;
+
+statement ok
+INSERT INTO ducklake.t_int_double SELECT range + 4000 FROM range(100);
+
+statement ok
+COMMIT
+
+statement ok
+INSERT INTO ducklake.t_int_double SELECT range + 6000 FROM range(100);
+
+query II
+SELECT min_value, max_value FROM ducklake_meta.ducklake_table_column_stats s JOIN ducklake_meta.ducklake_table t USING (table_id) WHERE t.table_name = 't_int_double' AND t.end_snapshot IS NULL;
+----
+NULL	NULL
+
+query I
+SELECT count(*) FROM ducklake.t_int_double WHERE c < 1500;
+----
+500
+
+query II
+SELECT min(c), max(c) FROM ducklake.t_int_double;
 ----
 1000.0	6099.0
 

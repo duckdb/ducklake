@@ -1,0 +1,37 @@
+# name: test/sql/stats/float_to_double_retype_stats_concurrent.test
+# description: a FLOAT to DOUBLE retype rewrites the stats of a file that another transaction commits in between
+# group: [stats]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/float_to_double_retype_stats_concurrent', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE dl.c (v FLOAT)
+
+statement ok
+INSERT INTO dl.c VALUES (0.5)
+
+statement ok con1
+BEGIN
+
+statement ok con1
+ALTER TABLE dl.c ALTER COLUMN v TYPE DOUBLE
+
+statement ok con2
+INSERT INTO dl.c SELECT 0.1::FLOAT FROM range(10)
+
+statement ok con1
+COMMIT
+
+query I
+SELECT count(*) FROM dl.c WHERE v > 0.1 AND v < 0.2
+----
+10

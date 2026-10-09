@@ -18,7 +18,15 @@
 
 namespace duckdb {
 
+//! The fields a commit adds to a table
+struct DuckLakeAddedFields {
+	TableIndex table_id;
+	reference<const DuckLakeTableEntry> table;
+	set<FieldIndex> fields;
+};
+
 struct NewTableInfo {
+	vector<DuckLakeAddedFields> added_fields;
 	vector<DuckLakeTableInfo> new_tables;
 	vector<DuckLakeViewInfo> new_views;
 	vector<DuckLakePartitionInfo> new_partition_keys;
@@ -60,6 +68,16 @@ struct DuckLakeCommitState {
 	map<idx_t, idx_t> committed_partition_ids;
 	map<MappingIndex, MappingIndex> committed_mapping_indexes;
 	map<TableIndex, vector<DuckLakeDeleteFile>> local_delete_files;
+	//! The columns this commit widens from FLOAT to DOUBLE
+	map<TableIndex, set<FieldIndex>> float_widened_columns;
+	//! The widened columns with values that read as DOUBLE without FLOAT rounding
+	map<TableIndex, set<FieldIndex>> float_bounds_to_clear;
+
+	//! Whether this commit widens a column of the given table from FLOAT to DOUBLE
+	bool WidensFloatColumns(TableIndex table_id) const;
+	//! Widen the FLOAT bounds of a widened column, or clear them when they cannot be widened
+	void PrepareFloatBounds(TableIndex table_id, map<FieldIndex, DuckLakeColumnStats> &column_stats,
+	                        bool can_widen = true) const;
 
 	void RemapIdentifier(SchemaIndex &schema_id) const {
 		auto entry = committed_schemas.find(schema_id);

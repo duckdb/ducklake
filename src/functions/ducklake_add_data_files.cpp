@@ -84,6 +84,8 @@ struct ParquetColumn {
 	string logical_type;
 	//! Set when the field mapping is made - see the skip_stats_columns option
 	bool skip_bounds = false;
+	//! A root group that the Parquet reader reads as VARIANT
+	bool is_variant = false;
 	vector<DuckLakeColumnStats> column_stats;
 
 	vector<unique_ptr<ParquetColumn>> child_columns;
@@ -96,26 +98,6 @@ struct HivePartition {
 	DuckLakeTransform transform;
 	optional_idx partition_key_index;
 };
-
-struct MissingColumn {
-	FieldIndex field_index;
-	LogicalType field_type;
-	bool reads_null;
-	//! Whether the column is inside a list or map element, so it does not have one value per row
-	bool repeated;
-};
-
-static void CollectMissingColumns(const DuckLakeFieldId &field_id, bool reads_null, bool repeated,
-                                  vector<MissingColumn> &result) {
-	if (!field_id.HasChildren()) {
-		result.push_back(MissingColumn {field_id.GetFieldIndex(), field_id.Type(), reads_null, repeated});
-		return;
-	}
-	// the fields of a missing parent read as NULL
-	for (auto &child : field_id.Children()) {
-		CollectMissingColumns(*child, true, repeated, result);
-	}
-}
 
 static bool IsValidTransformedHivePartitionValue(const HivePartition &hive_partition,
                                                  const DuckLakePartitionField &partition_field) {
@@ -148,7 +130,9 @@ struct ParquetFileMetadata {
 	// Map from field ID to hive partition statistics (for partition columns)
 	vector<HivePartition> hive_partition_values;
 	// Columns absent from the file and the value they read as
-	vector<MissingColumn> missing_columns;
+	vector<DuckLakeMissingField> missing_columns;
+	// VARIANT root columns, by field index
+	vector<pair<FieldIndex, reference<ParquetColumn>>> variant_columns;
 };
 
 struct DuckLakeFileProcessor {
@@ -164,6 +148,7 @@ public:
 			if (not_null_fields.count(field_id->Name())) {
 				not_null_columns.emplace(field_id->GetFieldIndex().index, field_id->Name());
 			}
+			has_variant_columns |= field_id->Type().id() == LogicalTypeId::VARIANT;
 		}
 	}
 
@@ -193,6 +178,7 @@ private:
 	                      vector<unique_ptr<DuckLakeNameMapEntry>> &column_maps);
 	void DetermineMapping(ParquetFileMetadata &file);
 	void MapPartitionColumns(ParquetFileMetadata &file);
+	void MarkVariantColumns(ParquetFileMetadata &file, const string &filepath);
 
 	void CheckMatchingType(const LogicalType &type, ParquetColumn &column);
 
@@ -208,6 +194,7 @@ private:
 	unordered_set<idx_t> skipped_fields;
 	//! The root columns of the table that do not allow NULL values, by field index
 	unordered_map<idx_t, string> not_null_columns;
+	bool has_variant_columns = false;
 };
 
 static string GetStringOrEmpty(const VectorIterator<string_t>::ValueEntry &entry) {
@@ -368,6 +355,9 @@ FROM parquet_full_metadata(%s)
 			}
 		}
 
+		if (has_variant_columns) {
+			MarkVariantColumns(file, filepath);
+		}
 		DetermineMapping(file);
 
 		for (auto stats_entry : stats_iter[row_idx].GetChildValues()) {
@@ -489,6 +479,9 @@ private:
 LogicalType DuckLakeParquetTypeChecker::DeriveLogicalType(const ParquetColumn &s_ele) {
 	// FIXME: this is more or less copied from DeriveLogicalType in DuckDB's Parquet reader
 	//  we should just emit DuckDB's type in parquet_schema and remove this method
+	if (s_ele.is_variant) {
+		return LogicalType::VARIANT();
+	}
 	if (!s_ele.child_columns.empty()) {
 		// nested types
 		if (s_ele.converted_type == "LIST") {
@@ -804,6 +797,9 @@ unique_ptr<DuckLakeNameMapEntry> DuckLakeFileProcessor::MapColumn(ParquetFileMet
 	// Store the mapping from column to field for later statistics processing
 	file_metadata.column_id_to_field_map.emplace(column.column_id,
 	                                             make_pair(field_id.GetFieldIndex(), field_id.Type()));
+	if (column.is_variant) {
+		file_metadata.variant_columns.emplace_back(field_id.GetFieldIndex(), column);
+	}
 	column.skip_bounds = skipped_fields.count(field_id.GetFieldIndex().index) > 0;
 
 	// recursively remap children (if any)
@@ -936,6 +932,12 @@ void DuckLakeFileProcessor::MapColumnStats(ParquetFileMetadata &file_metadata, D
 		}
 	}
 
+	for (auto &entry : file_metadata.variant_columns) {
+		CheckNotNullValues(file_metadata, entry.second.get(), entry.first);
+		// the shredded statistics of the file are not read, so the table loses its VARIANT bounds
+		result.column_stats.emplace(entry.first, DuckLakeColumnStats(LogicalType::VARIANT()));
+	}
+
 	// Process statistics for hive partition columns
 	for (auto &entry : file_metadata.hive_partition_values) {
 		if (entry.transform.type != DuckLakeTransformType::IDENTITY) {
@@ -949,24 +951,11 @@ void DuckLakeFileProcessor::MapColumnStats(ParquetFileMetadata &file_metadata, D
 	}
 
 	for (auto &missing : file_metadata.missing_columns) {
-		if (missing.reads_null) {
-			auto column_stats =
-			    ConstantColumnStats(file_metadata, missing.field_index, missing.field_type, Value(missing.field_type));
-			CheckNotNullStats(missing.field_index, column_stats);
-			if (missing.repeated) {
-				column_stats.has_num_values = false;
-				column_stats.has_null_count = false;
-			}
-			result.column_stats.emplace(missing.field_index, std::move(column_stats));
-			continue;
+		missing.AddStats(file_metadata.row_count.GetIndex(), result.column_stats);
+		auto missing_stats = result.column_stats.find(missing.field_index);
+		if (missing_stats != result.column_stats.end()) {
+			CheckNotNullStats(missing.field_index, missing_stats->second);
 		}
-		// the statistics of a non NULL default are left unknown
-		DuckLakeColumnStats unknown_stats(missing.field_type);
-		if (unknown_stats.extra_stats) {
-			// extra statistics cannot be unknown, so the column gets no statistics
-			continue;
-		}
-		result.column_stats.emplace(missing.field_index, std::move(unknown_stats));
 	}
 }
 
@@ -1056,8 +1045,8 @@ vector<unique_ptr<DuckLakeNameMapEntry>> DuckLakeFileProcessor::MapColumns(
 			    prefix.empty() ? prefix : prefix + ".", entry.second.get().Name(), table.name.GetIdentifierName(),
 			    file_metadata.filepath);
 		}
-		CollectMissingColumns(field_id, field_id.GetColumnData().initial_default.IsNull(), repeated,
-		                      file_metadata.missing_columns);
+		DuckLakeMissingField::Collect(field_id, field_id.GetColumnData().initial_default.IsNull(), repeated,
+		                              file_metadata.missing_columns);
 	}
 	return column_maps;
 }
@@ -1122,6 +1111,17 @@ void DuckLakeFileProcessor::MapPartitionColumns(ParquetFileMetadata &file) {
 		file.hive_partition_values.emplace_back(HivePartition {partition_field.field_id, partition_key_type, hive_value,
 		                                                       partition_field.transform,
 		                                                       optional_idx(partition_field.partition_key_index)});
+	}
+}
+
+void DuckLakeFileProcessor::MarkVariantColumns(ParquetFileMetadata &file, const string &filepath) {
+	// the schema of the file does not show the VARIANT annotation, so ask the reader for its types
+	DuckLakeFileData file_data;
+	file_data.path = filepath;
+	ParquetFileScanner scanner(context, file_data);
+	auto &types = scanner.GetTypes();
+	for (idx_t i = 0; i < types.size() && i < file.columns.size(); i++) {
+		file.columns[i]->is_variant = types[i].id() == LogicalTypeId::VARIANT;
 	}
 }
 

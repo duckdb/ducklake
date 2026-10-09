@@ -1,0 +1,32 @@
+# name: benchmark/micro/fixtures/inlined_deletes_history.benchmark.in
+# description: A 200K-row table in 100 files with 100 commits of inlined deletions, attached read-only
+# group: [fixtures]
+
+cache_file inlined_deletes_history_ready.marker
+
+# Snapshots 2 to 101 insert one file each, and 102 to 201 delete 10 rows of 10 files each, which are inlined
+load
+EXPORT DATABASE '${BENCHMARK_DIR}/inlined_deletes_history_gen';
+COPY (SELECT CASE
+WHEN k < 100 THEN 'INSERT INTO lake.events SELECT i, i * 0.5 FROM range(' || (k * 2000) || ', ' || ((k + 1) * 2000)
+|| ') t(i);'
+ELSE 'DELETE FROM lake.events WHERE id % 20000 = ' || ((k - 100) * 7) || ';'
+END || ' COMMIT; BEGIN;' FROM range(200) t(k))
+TO '${BENCHMARK_DIR}/inlined_deletes_history_gen/schema.sql' (HEADER false, QUOTE '');
+@create inlined_deletes_history
+@attach inlined_deletes_history AS lake (DATA_PATH '${BENCHMARK_DIR}/inlined_deletes_files', DATA_INLINING_ROW_LIMIT 10)
+CREATE TABLE lake.events (id BIGINT, x DOUBLE);
+IMPORT DATABASE '${BENCHMARK_DIR}/inlined_deletes_history_gen';
+SELECT CASE WHEN (SELECT count(*) <> 202 FROM lake.snapshots())
+OR (SELECT count(*) <> 100 FROM __ducklake_metadata_lake.ducklake_data_file WHERE end_snapshot IS NULL)
+OR (SELECT count(*) <> 0 FROM __ducklake_metadata_lake.ducklake_delete_file)
+OR (SELECT count(*) <> 199000 FROM lake.events)
+THEN error('inlined_deletes_history: expected 100 files and 1000 inlined deletions') END;
+CALL ducklake_delete_orphaned_files('lake', cleanup_all => true);
+DETACH lake;
+@seal inlined_deletes_history
+COPY (SELECT 1) TO '${BENCHMARK_DIR}/inlined_deletes_history_ready.marker' (FORMAT CSV);
+@attach inlined_deletes_history AS lake (READ_ONLY)
+
+reload
+@attach inlined_deletes_history AS lake (READ_ONLY)

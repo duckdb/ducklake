@@ -64,6 +64,8 @@ public:
 	LocalChange GetLocalChange() const {
 		return local_change;
 	}
+	//! Whether the transaction changed the type of a column of this table
+	bool ChangedColumnType();
 	optional_ptr<DuckLakePartition> GetPartitionData() {
 		return partition_data.get();
 	}
@@ -88,6 +90,11 @@ public:
 	unordered_set<idx_t> GetSkippedStatsFields() const;
 	//! Refuses a field added below a skipped column whose statistics cannot be skipped
 	void ValidateAddedFieldsCanSkipStats(const DuckLakeFieldId &parent_id, const DuckLakeFieldId &new_field_id) const;
+	//! The topmost fields of this entry that the previous entry does not have
+	duckdb::set<FieldIndex> GetNewFields(const DuckLakeTableEntry &previous) const;
+	//! The statistics of count rows that were written before the given fields were added
+	map<FieldIndex, DuckLakeColumnStats> GetAddedFieldStats(const duckdb::set<FieldIndex> &added_fields,
+	                                                        idx_t count) const;
 	const ColumnChangeInfo &GetChangedFields() const {
 		return *changed_fields;
 	}
@@ -97,9 +104,9 @@ public:
 	//! Whether an inlined data table of the schema version has the columns of the last schema change
 	static bool IsCurrentInlinedDataTable(idx_t schema_version, optional_idx last_schema_change);
 	bool HasCurrentInlinedDataTable(optional_idx last_schema_change) const;
-	//! The inlined data tables to read at the snapshot, skipping the flushed and dropped ones
-	vector<DuckLakeInlinedTableInfo> GetInlinedDataTables(DuckLakeTransaction &transaction,
-	                                                      DuckLakeSnapshot snapshot) const;
+	//! The inlined data tables at the snapshot, without the flushed ones when local changes are included
+	vector<DuckLakeInlinedTableInfo> GetInlinedDataTables(DuckLakeTransaction &transaction, DuckLakeSnapshot snapshot,
+	                                                      bool include_local_changes = true) const;
 	const ColumnDefinition &GetColumnByFieldId(FieldIndex field_index) const;
 	//! Returns the root field id of a column
 	const DuckLakeFieldId &GetFieldId(PhysicalIndex column_index) const;
