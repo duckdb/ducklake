@@ -431,7 +431,6 @@ struct DuckLakeAddedColumn {
 	const char *type;
 };
 
-//! The metadata columns that v1.1-dev1 adds to a v1.0 catalog
 static constexpr const DuckLakeAddedColumn V1_1_DEV1_ADDED_COLUMNS[] = {
     {"ducklake_data_file", "row_group_count", "BIGINT"},
     {"ducklake_delete_file", "row_group_count", "BIGINT"},
