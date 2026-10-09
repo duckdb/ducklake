@@ -750,13 +750,16 @@ Connection &DuckLakeTransaction::GetConnection() {
 		// it does not support all filter types DuckDB may push down (e.g. EXPRESSION_FILTER)
 		auto &metadata_type = ducklake_catalog.MetadataType();
 		if (metadata_type == "postgres" || metadata_type == "postgres_scanner") {
-			connection->Query("SET pg_experimental_filter_pushdown=false");
+			DuckLakeUtil::SetExtensionSetting(*connection->context, "pg_experimental_filter_pushdown",
+			                                  Value::BOOLEAN(false));
 		} else if (metadata_type == "sqlite" || metadata_type == "sqlite_scanner") {
 			// FIXME: sqlite_scanner's per-scan read connections deadlock against concurrent writers
-			connection->Query("SET sqlite_disable_multithreaded_scans=true");
+			DuckLakeUtil::SetExtensionSetting(*connection->context, "sqlite_disable_multithreaded_scans",
+			                                  Value::BOOLEAN(true));
 		}
 		connection->BeginTransaction();
-		connection->Query("SET current_transaction_invalidation_policy='SYNTACTIC_ERRORS_DO_NOT_INVALIDATE'");
+		connection->context->transaction.SetInvalidationPolicy(
+		    TransactionInvalidationPolicy::SYNTACTIC_ERRORS_DO_NOT_INVALIDATE);
 	}
 	return *connection;
 }
