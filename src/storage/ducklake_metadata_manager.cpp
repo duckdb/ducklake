@@ -457,8 +457,12 @@ UPDATE {METADATA_CATALOG}.ducklake_metadata SET value = '1.1-dev1' WHERE key = '
 
 bool DuckLakeMetadataManager::HasV1_1Dev1Additions() {
 	string probe = "SELECT 1 FROM (SELECT * FROM {METADATA_CATALOG}.ducklake_view_column_tag LIMIT 0)";
+	idx_t alias_index = 0;
 	for (auto &added : V1_1_DEV1_ADDED_COLUMNS) {
-		probe += StringUtil::Format(", (SELECT %s FROM {METADATA_CATALOG}.%s LIMIT 0)", added.column, added.table);
+		// a qualified column cannot resolve to the same column of an earlier subquery
+		auto alias = "added_" + to_string(alias_index++);
+		probe += StringUtil::Format(", (SELECT %s.%s FROM {METADATA_CATALOG}.%s %s LIMIT 0)", alias, added.column,
+		                            added.table, alias);
 	}
 	return !Query(probe)->HasError();
 }
@@ -474,7 +478,7 @@ void DuckLakeMetadataManager::MigrateV10Dev() {
 	auto &db = transaction.GetCatalog().GetDatabase();
 	// Try the schema and column migrations independently
 	try {
-		// the DDL locks the metadata tables exclusively on Postgres, so a catalog that has every addition runs none
+		// DDL locks the metadata tables exclusively on Postgres, a catalog with every addition runs none
 		if (!HasV1_1Dev1Additions()) {
 			ExecuteMigration(V1_1Dev1MigrationQuery(), true, "1.0", "1.1-dev1");
 		}
