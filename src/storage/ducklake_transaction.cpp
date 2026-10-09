@@ -474,6 +474,16 @@ bool LocalTableChanges::HasAnyLocalChanges(TableIndex table_id) const {
 	return table_changes && !table_changes->IsEmpty();
 }
 
+static optional_ptr<const DuckLakeDataFile> FindNewDataFile(const LocalTableDataChanges &table_changes,
+                                                            const string &path) {
+	for (auto &file : table_changes.new_data_files) {
+		if (file.file_name == path) {
+			return file;
+		}
+	}
+	return nullptr;
+}
+
 bool LocalTableChanges::HasLocalDeleteForFile(TableIndex table_id, const string &path) const {
 	lock_guard<mutex> guard(lock);
 	auto table_changes = Find(table_id);
@@ -481,7 +491,11 @@ bool LocalTableChanges::HasLocalDeleteForFile(TableIndex table_id, const string 
 		return false;
 	}
 	auto file_entry = table_changes->new_delete_files.find(path);
-	return file_entry != table_changes->new_delete_files.end() && !file_entry->second.empty();
+	if (file_entry != table_changes->new_delete_files.end() && !file_entry->second.empty()) {
+		return true;
+	}
+	auto local_file = FindNewDataFile(*table_changes, path);
+	return local_file && !local_file->delete_files.empty();
 }
 
 bool LocalTableChanges::IsFlushedFile(TableIndex table_id, const string &path) const {
@@ -490,12 +504,8 @@ bool LocalTableChanges::IsFlushedFile(TableIndex table_id, const string &path) c
 	if (!table_changes) {
 		return false;
 	}
-	for (auto &file : table_changes->new_data_files) {
-		if (file.file_name == path) {
-			return file.begin_snapshot.IsValid();
-		}
-	}
-	return false;
+	auto local_file = FindNewDataFile(*table_changes, path);
+	return local_file && local_file->begin_snapshot.IsValid();
 }
 
 void LocalTableChanges::GetLocalDeleteForFile(TableIndex table_id, const string &path, DuckLakeFileData &result) const {

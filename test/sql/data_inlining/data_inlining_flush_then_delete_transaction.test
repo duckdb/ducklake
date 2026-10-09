@@ -131,3 +131,58 @@ SELECT id, p FROM lake.p AT (VERSION => getvariable('p_before')) ORDER BY id
 1	1
 2	1
 3	2
+
+# the flushed file already has a delete file, the transaction sees its own deletes
+statement ok
+CREATE TABLE lake.e (id BIGINT, v INTEGER)
+
+statement ok
+INSERT INTO lake.e VALUES (1, 10), (2, 20), (3, 30), (4, 40)
+
+statement ok
+SET VARIABLE e_before = (SELECT max(snapshot_id) FROM ducklake_snapshots('lake'))
+
+statement ok
+DELETE FROM lake.e WHERE id = 1
+
+statement ok
+BEGIN
+
+statement ok
+CALL ducklake_flush_inlined_data('lake', table_name => 'e')
+
+query I
+DELETE FROM lake.e WHERE id = 2
+----
+1
+
+query I
+SELECT COUNT(*) FROM lake.e
+----
+2
+
+query I
+DELETE FROM lake.e WHERE v > 0
+----
+2
+
+query I
+SELECT COUNT(*) FROM lake.e
+----
+0
+
+statement ok
+COMMIT
+
+query I
+SELECT COUNT(*) FROM lake.e
+----
+0
+
+query II
+SELECT id, v FROM lake.e AT (VERSION => getvariable('e_before')) ORDER BY id
+----
+1	10
+2	20
+3	30
+4	40

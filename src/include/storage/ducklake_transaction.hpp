@@ -124,7 +124,6 @@ public:
 	void AddCompaction(TableIndex table_id, DuckLakeCompactionEntry entry);
 	bool HasLocalDeletes(TableIndex table_id) const;
 	bool HasLocalDeleteForFile(TableIndex table_id, const string &path) const;
-	//! Whether the transaction-local file holds rows that a flush moved from earlier snapshots
 	bool IsFlushedFile(TableIndex table_id, const string &path) const;
 	bool HasAnyLocalChanges(TableIndex table_id) const;
 
@@ -287,7 +286,6 @@ public:
 
 	bool HasLocalDeletes(TableIndex table_id) const;
 	bool HasLocalDeleteForFile(TableIndex table_id, const string &path) const;
-	//! Whether the transaction-local file holds rows that a flush moved from earlier snapshots
 	bool IsFlushedFile(TableIndex table_id, const string &path) const;
 	void GetLocalDeleteForFile(TableIndex table_id, const string &path, DuckLakeFileData &delete_file) const;
 	void TransactionLocalDelete(TableIndex table_id, const string &data_path, DuckLakeDeleteFile delete_file);

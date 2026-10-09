@@ -410,7 +410,7 @@ bool DuckLakeDelete::TryDropFullyDeletedFile(DuckLakeTransaction &transaction, c
 	}
 	if (!delete_file.data_file_id.IsValid() &&
 	    transaction.IsFlushedFile(table.GetTableId(), data_file_info.file.path)) {
-		// the flushed rows are visible in earlier snapshots, so their deletes are written
+		// a flushed file keeps the rows that earlier snapshots read
 		return false;
 	}
 	// ALL rows in this file are deleted - drop the file
