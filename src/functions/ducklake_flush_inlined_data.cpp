@@ -94,7 +94,7 @@ SinkResultType DuckLakeFlushData::Sink(ExecutionContext &context, DataChunk &chu
 // Finalize
 //===--------------------------------------------------------------------===//
 using DeletesPerFile = unordered_map<string, set<PositionWithSnapshot>>;
-//! The end snapshot of each deleted row version, by its row id and begin snapshot
+//! End snapshots of the deleted row versions, keyed by row id and begin snapshot
 using DeletedRowVersions = map<pair<int64_t, int64_t>, int64_t>;
 
 static DeletedRowVersions GetDeletedRowVersions(DuckLakeMetadataManager &metadata_manager, DuckLakeSnapshot snapshot,
@@ -114,7 +114,7 @@ static DeletedRowVersions GetDeletedRowVersions(DuckLakeMetadataManager &metadat
 	return deleted_rows;
 }
 
-//! The partitioned write does not keep the scan order, so positions come from the embedded ids of the written file
+//! Partitioned writes can reorder rows, so positions come from the written file
 static set<PositionWithSnapshot> GetWrittenFileDeletes(ClientContext &context, const DuckLakeDataFile &file,
                                                        const string &encryption_key,
                                                        const DeletedRowVersions &deleted_rows) {
