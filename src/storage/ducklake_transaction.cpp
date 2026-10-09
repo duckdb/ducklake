@@ -1606,7 +1606,7 @@ unique_ptr<QueryResult> DuckLakeTransaction::Query(DuckLakeSnapshot snapshot, st
 }
 
 Identifier DuckLakeTransaction::GetDefaultSchemaName() {
-	auto &metadata_context = *connection->context;
+	auto &metadata_context = *GetConnection().context;
 	auto &db_manager = DatabaseManager::Get(metadata_context);
 	auto metadb = db_manager.GetDatabase(metadata_context, Identifier(ducklake_catalog.MetadataDatabaseName()));
 	auto default_schema = metadb->GetCatalog().GetDefaultSchema();
