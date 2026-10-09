@@ -697,6 +697,9 @@ void DuckLakeTransaction::UndoConfigOptions() {
 }
 
 void DuckLakeTransaction::Commit() {
+	if (connection) {
+		GetConnection();
+	}
 	if (!expired_snapshots.empty()) {
 		try {
 			GetMetadataManager().DeleteSnapshots(expired_snapshots);
@@ -732,7 +735,9 @@ void DuckLakeTransaction::Rollback() {
 	UndoConfigOptions();
 	if (connection) {
 		// rollback any changes made to the metadata catalog
-		connection->Rollback();
+		if (connection->HasActiveTransaction()) {
+			connection->Rollback();
+		}
 		connection.reset();
 	}
 	state->CleanupFiles();
@@ -775,11 +780,26 @@ Connection &DuckLakeTransaction::GetConnection() {
 			DuckLakeUtil::SetExtensionSetting(*connection->context, "sqlite_disable_multithreaded_scans",
 			                                  Value::BOOLEAN(true));
 		}
-		connection->BeginTransaction();
-		connection->context->transaction.SetInvalidationPolicy(
-		    TransactionInvalidationPolicy::SYNTACTIC_ERRORS_DO_NOT_INVALIDATE);
+		BeginMetadataTransaction();
+	} else if (metadata_transaction_released) {
+		BeginMetadataTransaction();
 	}
 	return *connection;
+}
+
+void DuckLakeTransaction::BeginMetadataTransaction() {
+	connection->BeginTransaction();
+	connection->context->transaction.SetInvalidationPolicy(
+	    TransactionInvalidationPolicy::SYNTACTIC_ERRORS_DO_NOT_INVALIDATE);
+	metadata_transaction_released = false;
+}
+
+void DuckLakeTransaction::ReleaseMetadataTransaction() {
+	lock_guard<mutex> lock(connection_lock);
+	if (connection && connection->HasActiveTransaction()) {
+		connection->Commit();
+		metadata_transaction_released = true;
+	}
 }
 
 map<SchemaIndex, unique_ptr<DuckLakeCatalogSet>> &DuckLakeTransaction::GetNewMacroMap(const CatalogType type) const {
