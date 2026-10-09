@@ -49,15 +49,19 @@ vector<OrderByNode> DuckLakeCompactor::ParseSortOrders(const DuckLakeSort &sort_
 	return pre_bound_orders;
 }
 
-vector<BoundOrderByNode> DuckLakeCompactor::BindSortOrders(Binder &binder, const ColumnList &columns,
-                                                           const Identifier &table_name, TableIndex table_index,
+vector<BoundOrderByNode> DuckLakeCompactor::BindSortOrders(Binder &binder, SchemaCatalogEntry &schema,
+                                                           const ColumnList &columns, const Identifier &table_name,
+                                                           TableIndex table_index,
                                                            const vector<OrderByNode> &pre_bound_orders) {
 	DuckLakeTableEntry::ValidateSortExpressionColumns(columns, pre_bound_orders);
 	vector<OrderByNode> orders;
 	for (auto &order : pre_bound_orders) {
 		orders.emplace_back(order.type, order.null_order, order.expression->Copy());
 	}
-	return BindOrderByNodes(binder, table_index, table_name, StringsToIdentifiers(columns.GetColumnNames()),
+	// names in the sort expressions resolve in the schema of the table first, as in a view
+	auto sort_binder = Binder::CreateBinder(binder.context, &binder);
+	sort_binder->SetSearchPath(schema.ParentCatalog(), schema.name);
+	return BindOrderByNodes(*sort_binder, table_index, table_name, StringsToIdentifiers(columns.GetColumnNames()),
 	                        columns.GetColumnTypes(), orders);
 }
 
@@ -372,8 +376,8 @@ unique_ptr<LogicalOperator> DuckLakeCompactor::InsertSort(Binder &binder, unique
                                                           optional_ptr<DuckLakeSort> sort_data) {
 	auto bindings = plan->GetColumnBindings();
 	D_ASSERT(!bindings.empty());
-	auto orders =
-	    BindSortOrders(binder, table.GetColumns(), table.name, bindings[0].table_index, ParseSortOrders(*sort_data));
+	auto orders = BindSortOrders(binder, table.schema, table.GetColumns(), table.name, bindings[0].table_index,
+	                             ParseSortOrders(*sort_data));
 	if (orders.empty()) {
 		// Then the sorts were not in the DuckDB dialect and we return the original plan
 		return std::move(plan);

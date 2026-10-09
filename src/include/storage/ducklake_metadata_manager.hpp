@@ -244,6 +244,8 @@ public:
 
 	virtual string GetColumnTypeInternal(const LogicalType &column_type);
 	string CastColumnToTarget(const string &column, const LogicalType &type);
+	//! The alias of the inlined flush source, which qualifies the columns of the flush sort order
+	static constexpr const char *INLINED_FLUSH_ALIAS = "inlined_data";
 	//! The inlined rows to flush with typed columns, without those this transaction deleted
 	string InlinedFlushSource(const string &inlined_table_name, const DuckLakeTableEntry &table);
 	//! The order of the rows in a flushed file

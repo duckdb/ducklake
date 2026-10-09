@@ -2951,10 +2951,10 @@ string DuckLakeMetadataManager::InlinedFlushSource(const string &inlined_table_n
 		                            col_names.end_snapshot);
 	}
 	auto source = "{METADATA_CATALOG}." + inlined_table_name;
-	if (!has_casts && filter.empty()) {
-		return source;
+	if (has_casts || !filter.empty()) {
+		source = StringUtil::Format("(SELECT %s FROM %s%s)", StringUtil::Join(projection, ", "), source, filter);
 	}
-	return StringUtil::Format("(SELECT %s FROM %s%s)", StringUtil::Join(projection, ", "), source, filter);
+	return source + " " + INLINED_FLUSH_ALIAS;
 }
 
 string DuckLakeMetadataManager::InlinedFlushOrder(const string &sort_order_sql) const {
@@ -3697,7 +3697,7 @@ unique_ptr<QueryResult> DuckLakeMetadataManager::ReadAllInlinedDataForFlush(Duck
 	}
 	auto result = Query(snapshot, StringUtil::Format(R"(
 SELECT %s
-FROM %s inlined_data
+FROM %s
 WHERE {SNAPSHOT_ID} >= %s
 ORDER BY %s;)",
 	                                                 projection, source, col_names.begin_snapshot, order));
