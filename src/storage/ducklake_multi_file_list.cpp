@@ -593,6 +593,9 @@ vector<DuckLakeFileListExtendedEntry> DuckLakeMultiFileList::GetFilesExtended() 
 		file_entry.row_count = file.row_count;
 		file_entry.file = GetFileData(file);
 		file_entry.delete_file = GetDeleteData(file);
+		if (!file.delete_files.empty()) {
+			file_entry.delete_file_begin_snapshot = file.delete_files.back().begin_snapshot;
+		}
 		file_entry.row_id_start = transaction_row_start;
 		transaction_row_start += file.row_count;
 		result.push_back(std::move(file_entry));
