@@ -488,7 +488,7 @@ bool LocalTableChanges::HasLocalDeleteForFile(TableIndex table_id, const string 
 	if (file_entry != table_changes->new_delete_files.end() && !file_entry->second.empty()) {
 		return true;
 	}
-	// the deletes of a transaction-local file are kept with the file
+	// local file deletes are stored with the file
 	for (auto &file : table_changes->new_data_files) {
 		if (file.file_name == path) {
 			return !file.delete_files.empty();
@@ -500,13 +500,12 @@ bool LocalTableChanges::HasLocalDeleteForFile(TableIndex table_id, const string 
 bool LocalTableChanges::GetLocalDeleteForFile(TableIndex table_id, const string &path, DuckLakeFileData &result,
                                               optional_idx &begin_snapshot) const {
 	lock_guard<mutex> guard(lock);
-	auto entry = changes.find(table_id);
-	if (entry == changes.end()) {
+	auto table_changes = Find(table_id);
+	if (!table_changes) {
 		return false;
 	}
-	auto &table_changes = entry->second;
-	auto file_entry = table_changes.new_delete_files.find(path);
-	if (file_entry == table_changes.new_delete_files.end() || file_entry->second.empty()) {
+	auto file_entry = table_changes->new_delete_files.find(path);
+	if (file_entry == table_changes->new_delete_files.end() || file_entry->second.empty()) {
 		return false;
 	}
 	auto &delete_file = file_entry->second.back();
