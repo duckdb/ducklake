@@ -18,7 +18,15 @@
 
 namespace duckdb {
 
+//! The fields a commit adds to a table
+struct DuckLakeAddedFields {
+	TableIndex table_id;
+	reference<const DuckLakeTableEntry> table;
+	set<FieldIndex> fields;
+};
+
 struct NewTableInfo {
+	vector<DuckLakeAddedFields> added_fields;
 	vector<DuckLakeTableInfo> new_tables;
 	vector<DuckLakeViewInfo> new_views;
 	vector<DuckLakePartitionInfo> new_partition_keys;

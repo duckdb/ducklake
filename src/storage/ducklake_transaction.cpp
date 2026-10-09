@@ -370,6 +370,20 @@ void LocalTableChanges::AddColumnToLocalInlinedData(ClientContext &context, Tabl
 	table_changes.new_inlined_data->data = std::move(new_data);
 }
 
+void LocalTableChanges::AddFieldsToLocalFiles(TableIndex table_id, const DuckLakeTableEntry &table,
+                                              const set<FieldIndex> &fields) {
+	lock_guard<mutex> guard(lock);
+	auto entry = Find(table_id);
+	if (!entry) {
+		return;
+	}
+	for (auto &file : entry->new_data_files) {
+		for (auto &field_stats : table.GetAddedFieldStats(fields, file.row_count)) {
+			file.column_stats.insert(std::move(field_stats));
+		}
+	}
+}
+
 void LocalTableChanges::RemoveColumnFromLocalInlinedData(ClientContext &context, TableIndex table_id,
                                                          LogicalIndex removed_column_index,
                                                          const DuckLakeFieldId &field_id) {
@@ -2003,6 +2017,13 @@ void DuckLakeTransaction::AlterEntryInternal(DuckLakeTableEntry &table, unique_p
 		break;
 	}
 	case LocalChangeType::ADD_COLUMN:
+	case LocalChangeType::CHANGE_COLUMN_TYPE: {
+		auto new_fields = new_table.GetNewFields(table);
+		if (!new_fields.empty()) {
+			state->local_changes.AddFieldsToLocalFiles(table.GetTableId(), new_table, new_fields);
+		}
+		break;
+	}
 	case LocalChangeType::SET_PARTITION_KEY:
 	case LocalChangeType::SET_COMMENT:
 	case LocalChangeType::SET_COLUMN_COMMENT:
@@ -2010,7 +2031,6 @@ void DuckLakeTransaction::AlterEntryInternal(DuckLakeTableEntry &table, unique_p
 	case LocalChangeType::DROP_NULL:
 	case LocalChangeType::RENAME_COLUMN:
 	case LocalChangeType::REMOVE_COLUMN:
-	case LocalChangeType::CHANGE_COLUMN_TYPE:
 	case LocalChangeType::SET_DEFAULT:
 	case LocalChangeType::SET_SORT_KEY:
 		break;

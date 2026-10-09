@@ -117,6 +117,8 @@ public:
 	                                 FieldIndex new_field_index, const Value &default_value);
 	void RemoveColumnFromLocalInlinedData(ClientContext &context, TableIndex table_id,
 	                                      LogicalIndex removed_column_index, const DuckLakeFieldId &field_id);
+	//! Records what the files written before the fields were added read for them
+	void AddFieldsToLocalFiles(TableIndex table_id, const DuckLakeTableEntry &table, const set<FieldIndex> &fields);
 	optional_ptr<DuckLakeInlinedDataDeletes> GetInlinedDeletes(TableIndex table_id, const string &table_name) const;
 	void AddNewInlinedFileDeletes(TableIndex table_id, idx_t file_id, set<idx_t> new_deletes);
 	void AddCompaction(TableIndex table_id, DuckLakeCompactionEntry entry);

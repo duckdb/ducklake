@@ -325,7 +325,7 @@ void DuckLakeDeleteFilter::Initialize(ClientContext &context, const DuckLakeDele
 				position_to_snapshot[delete_idx] = current_deletes.snapshot_ids[i];
 			}
 		}
-	} else if (delete_scan.snapshot_id.IsValid() && delete_scan.inlined_file_deletions.empty()) {
+	} else if (delete_scan.file_deleted) {
 		// Full file delete, all rows are being scanned
 		memset(rows_to_scan.get(), 1, sizeof(bool) * delete_scan.row_count);
 		auto snapshot_id = delete_scan.snapshot_id.GetIndex();
@@ -340,6 +340,10 @@ void DuckLakeDeleteFilter::Initialize(ClientContext &context, const DuckLakeDele
 	// Add inlined file deletions to the combined map
 	if (!delete_scan.inlined_file_deletions.empty()) {
 		for (auto &inlined_delete : delete_scan.inlined_file_deletions) {
+			if (inlined_delete.second < delete_scan.start_snapshot.GetIndex()) {
+				rows_to_scan[inlined_delete.first] = false;
+				continue;
+			}
 			rows_to_scan[inlined_delete.first] = true;
 			// Add to combined map (inlined deletions may override or add to existing)
 			position_to_snapshot[inlined_delete.first] = inlined_delete.second;
