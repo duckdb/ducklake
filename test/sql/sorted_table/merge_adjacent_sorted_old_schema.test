@@ -223,24 +223,24 @@ SELECT id, st FROM lake.s ORDER BY id
 2	{'a': 10, 'c': NULL}
 3	{'a': 20, 'c': NULL}
 
-# a nested field was dropped and added again with the same name and type
+# a nested field was dropped and added again with the same name, type and position
 statement ok
-CREATE TABLE lake.rf (id BIGINT, st STRUCT(a VARCHAR, b BIGINT))
+CREATE TABLE lake.rf (id BIGINT, st STRUCT(a BIGINT, b VARCHAR))
 
 statement ok
-INSERT INTO lake.rf VALUES (1, {'a': 'x', 'b': 30}), (2, {'a': 'x', 'b': 10})
+INSERT INTO lake.rf VALUES (1, {'a': 30, 'b': 'x'}), (2, {'a': 10, 'b': 'x'})
 
 statement ok
-INSERT INTO lake.rf VALUES (3, {'a': 'x', 'b': 20})
+INSERT INTO lake.rf VALUES (3, {'a': 20, 'b': 'x'})
 
 statement ok
-ALTER TABLE lake.rf DROP COLUMN st.a
+ALTER TABLE lake.rf DROP COLUMN st.b
 
 statement ok
-ALTER TABLE lake.rf ADD COLUMN st.a VARCHAR
+ALTER TABLE lake.rf ADD COLUMN st.b VARCHAR
 
 statement ok
-ALTER TABLE lake.rf SET SORTED BY (CAST(struct_extract(st, 'a') AS INTEGER), struct_extract(st, 'b'))
+ALTER TABLE lake.rf SET SORTED BY (CAST(struct_extract(st, 'b') AS INTEGER), struct_extract(st, 'a'))
 
 query II
 SELECT files_processed, files_created FROM ducklake_merge_adjacent_files('lake', 'rf')
@@ -250,9 +250,9 @@ SELECT files_processed, files_created FROM ducklake_merge_adjacent_files('lake',
 query II
 SELECT id, st FROM lake.rf ORDER BY id
 ----
-1	{'b': 30, 'a': NULL}
-2	{'b': 10, 'a': NULL}
-3	{'b': 20, 'a': NULL}
+1	{'a': 30, 'b': NULL}
+2	{'a': 10, 'b': NULL}
+3	{'a': 20, 'b': NULL}
 
 # a lambda parameter named like a promoted column is not a column
 statement ok
@@ -361,6 +361,54 @@ SELECT files_processed, files_created FROM ducklake_merge_adjacent_files('lake',
 
 query I
 SELECT id FROM lake.sq
+----
+2
+3
+1
+
+# subqueries next to a promoted and a moved column
+statement ok
+CREATE TABLE lake.nq (id BIGINT, v INTEGER)
+
+statement ok
+INSERT INTO lake.nq VALUES (1, 30), (2, 10)
+
+statement ok
+INSERT INTO lake.nq VALUES (3, 20)
+
+statement ok
+ALTER TABLE lake.nq ALTER COLUMN v TYPE BIGINT
+
+statement ok
+ALTER TABLE lake.nq SET SORTED BY (((SELECT v) = ANY (SELECT 10)), id)
+
+query II
+SELECT files_processed, files_created FROM ducklake_merge_adjacent_files('lake', 'nq')
+----
+2	1
+
+statement ok
+CREATE TABLE lake.uq (a BIGINT, id BIGINT, v BIGINT)
+
+statement ok
+INSERT INTO lake.uq VALUES (0, 1, 30), (0, 2, 10)
+
+statement ok
+INSERT INTO lake.uq VALUES (0, 3, 20)
+
+statement ok
+ALTER TABLE lake.uq DROP COLUMN a
+
+statement ok
+ALTER TABLE lake.uq SET SORTED BY (v + (SELECT 0))
+
+query II
+SELECT files_processed, files_created FROM ducklake_merge_adjacent_files('lake', 'uq')
+----
+2	1
+
+query I
+SELECT id FROM lake.uq
 ----
 2
 3

@@ -373,21 +373,23 @@ void DuckLakeCompactor::GenerateCompactions(DuckLakeTableEntry &table,
 
 //! Whether the scan returns the columns a sort of the latest table refers to as the latest table has them
 static bool ScanHasSortColumns(const DuckLakeTableEntry &latest_table, const DuckLakeTableEntry &table,
-                               const vector<BoundOrderByNode> &orders, TableIndex latest_index) {
+                               vector<BoundOrderByNode> &orders, TableIndex latest_index) {
 	unordered_set<idx_t> column_indexes;
 	for (auto &order : orders) {
-		ExpressionIterator::VisitExpression<BoundColumnRefExpression>(
-		    *order.expression, [&](const BoundColumnRefExpression &column_ref) {
-			    column_indexes.insert(column_ref.Binding().column_index.GetIndex());
-		    });
-		ExpressionIterator::VisitExpressionClass(
-		    *order.expression, ExpressionClass::BOUND_SUBQUERY, [&](const Expression &subquery) {
-			    for (auto &correlated : subquery.Cast<BoundSubqueryExpression>().GetBinder()->correlated_columns) {
-				    if (correlated.binding.table_index == latest_index) {
-					    column_indexes.insert(correlated.binding.column_index.GetIndex());
-				    }
-			    }
-		    });
+		ExpressionIterator::EnumerateExpression(order.expression, [&](Expression &child) {
+			if (child.GetExpressionClass() == ExpressionClass::BOUND_COLUMN_REF) {
+				column_indexes.insert(child.Cast<BoundColumnRefExpression>().Binding().column_index.GetIndex());
+				return;
+			}
+			if (child.GetExpressionClass() != ExpressionClass::BOUND_SUBQUERY) {
+				return;
+			}
+			for (auto &correlated : child.Cast<BoundSubqueryExpression>().GetBinder()->correlated_columns) {
+				if (correlated.binding.table_index == latest_index) {
+					column_indexes.insert(correlated.binding.column_index.GetIndex());
+				}
+			}
+		});
 	}
 	for (auto column_index : column_indexes) {
 		auto &column = latest_table.GetColumns().GetColumn(LogicalIndex(column_index));
@@ -455,8 +457,13 @@ unique_ptr<LogicalOperator> DuckLakeCompactor::InsertSort(Binder &binder, unique
 		orders = BindSortOrders(binder, latest_table.GetColumns(), latest_table.name, scan_index, sort_orders);
 	} else {
 		for (auto &order : orders) {
-			// the columns a subquery correlates with cannot be remapped
-			if (order.expression->HasSubquery() ||
+			bool correlated = false;
+			ExpressionIterator::EnumerateExpression(order.expression, [&](Expression &child) {
+				correlated = correlated || (child.GetExpressionClass() == ExpressionClass::BOUND_SUBQUERY &&
+				                            child.Cast<BoundSubqueryExpression>().IsCorrelated());
+			});
+			// a correlated subquery keeps the bindings of the latest table
+			if (correlated ||
 			    !MapSortToSchemaVersion(binder.context, order.expression, latest_table, table, scan_index)) {
 				// the sort cannot be evaluated on the columns the files were written with
 				return std::move(plan);
