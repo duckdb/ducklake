@@ -64,6 +64,8 @@ public:
 	LocalChange GetLocalChange() const {
 		return local_change;
 	}
+	//! Whether the transaction changed the type of a column of this table
+	bool ChangedColumnType();
 	optional_ptr<DuckLakePartition> GetPartitionData() {
 		return partition_data.get();
 	}
@@ -102,9 +104,9 @@ public:
 	//! Whether an inlined data table of the schema version has the columns of the last schema change
 	static bool IsCurrentInlinedDataTable(idx_t schema_version, optional_idx last_schema_change);
 	bool HasCurrentInlinedDataTable(optional_idx last_schema_change) const;
-	//! The inlined data tables to read at the snapshot, skipping the flushed and dropped ones
-	vector<DuckLakeInlinedTableInfo> GetInlinedDataTables(DuckLakeTransaction &transaction,
-	                                                      DuckLakeSnapshot snapshot) const;
+	//! The inlined data tables at the snapshot, without the flushed ones when local changes are included
+	vector<DuckLakeInlinedTableInfo> GetInlinedDataTables(DuckLakeTransaction &transaction, DuckLakeSnapshot snapshot,
+	                                                      bool include_local_changes = true) const;
 	const ColumnDefinition &GetColumnByFieldId(FieldIndex field_index) const;
 	//! Returns the root field id of a column
 	const DuckLakeFieldId &GetFieldId(PhysicalIndex column_index) const;

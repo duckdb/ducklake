@@ -61,6 +61,22 @@ vector<BoundOrderByNode> DuckLakeCompactor::BindSortOrders(Binder &binder, const
 	                        columns.GetColumnTypes(), orders);
 }
 
+PhysicalOperator &DuckLakeLogicalCompaction::CreatePlan(ClientContext &context, PhysicalPlanGenerator &planner) {
+	auto &child = planner.CreatePlan(*children[0]);
+	auto &transaction = DuckLakeTransaction::Get(context, table.catalog);
+	if (context.transaction.IsAutoCommit() && !transaction.ChangesMade()) {
+		// load the name maps the scans read before releasing the metadata transaction
+		for (auto &source : source_files) {
+			if (source.file.mapping_id.IsValid()) {
+				transaction.GetMappingById(source.file.mapping_id);
+			}
+		}
+		transaction.ReleaseMetadataTransaction();
+	}
+	return planner.Make<DuckLakeCompaction>(types, table, std::move(source_files), std::move(encryption_key),
+	                                        partition_id, std::move(partition_values), row_id_start, child, type);
+}
+
 //===--------------------------------------------------------------------===//
 // Compaction Operator
 //===--------------------------------------------------------------------===//
