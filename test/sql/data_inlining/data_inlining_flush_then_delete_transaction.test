@@ -1,0 +1,133 @@
+# name: test/sql/data_inlining/data_inlining_flush_then_delete_transaction.test
+# description: Deleting every row a flush wrote earlier in the same transaction keeps the delete and the history
+# group: [data_inlining]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS lake (DATA_PATH '{DATA_PATH}/flush_then_delete_transaction', DATA_INLINING_ROW_LIMIT 500)
+
+# a DELETE of every flushed row
+statement ok
+CREATE TABLE lake.d (id BIGINT, v INTEGER)
+
+statement ok
+INSERT INTO lake.d VALUES (1, 10), (2, 20), (3, 30)
+
+statement ok
+SET VARIABLE d_before = (SELECT max(snapshot_id) FROM ducklake_snapshots('lake'))
+
+statement ok
+BEGIN
+
+statement ok
+CALL ducklake_flush_inlined_data('lake', table_name => 'd')
+
+query I
+DELETE FROM lake.d WHERE v > 0
+----
+3
+
+statement ok
+COMMIT
+
+query I
+SELECT COUNT(*) FROM lake.d
+----
+0
+
+query II
+SELECT id, v FROM lake.d AT (VERSION => getvariable('d_before')) ORDER BY id
+----
+1	10
+2	20
+3	30
+
+query II
+SELECT change_type, id FROM ducklake_table_changes('lake', 'main', 'd', getvariable('d_before') + 1, getvariable('d_before') + 1) ORDER BY id
+----
+delete	1
+delete	2
+delete	3
+
+# an UPDATE of every flushed row
+statement ok
+CREATE TABLE lake.u (id BIGINT, v INTEGER)
+
+statement ok
+INSERT INTO lake.u VALUES (1, 10), (2, 20), (3, 30)
+
+statement ok
+SET VARIABLE u_before = (SELECT max(snapshot_id) FROM ducklake_snapshots('lake'))
+
+statement ok
+BEGIN
+
+statement ok
+CALL ducklake_flush_inlined_data('lake', table_name => 'u')
+
+statement ok
+UPDATE lake.u SET v = v + 1
+
+statement ok
+COMMIT
+
+query II
+SELECT id, v FROM lake.u ORDER BY id
+----
+1	11
+2	21
+3	31
+
+query II
+SELECT id, v FROM lake.u AT (VERSION => getvariable('u_before')) ORDER BY id
+----
+1	10
+2	20
+3	30
+
+# a DELETE of every row of one partition file
+statement ok
+CREATE TABLE lake.p (id BIGINT, p INTEGER)
+
+statement ok
+ALTER TABLE lake.p SET PARTITIONED BY (p)
+
+statement ok
+INSERT INTO lake.p VALUES (1, 1), (2, 1), (3, 2)
+
+statement ok
+SET VARIABLE p_before = (SELECT max(snapshot_id) FROM ducklake_snapshots('lake'))
+
+statement ok
+BEGIN
+
+statement ok
+CALL ducklake_flush_inlined_data('lake', table_name => 'p')
+
+query I
+DELETE FROM lake.p WHERE id = 3
+----
+1
+
+statement ok
+COMMIT
+
+query II
+SELECT id, p FROM lake.p ORDER BY id
+----
+1	1
+2	1
+
+query II
+SELECT id, p FROM lake.p AT (VERSION => getvariable('p_before')) ORDER BY id
+----
+1	1
+2	1
+3	2

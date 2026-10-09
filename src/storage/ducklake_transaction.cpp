@@ -484,6 +484,20 @@ bool LocalTableChanges::HasLocalDeleteForFile(TableIndex table_id, const string 
 	return file_entry != table_changes->new_delete_files.end() && !file_entry->second.empty();
 }
 
+bool LocalTableChanges::IsFlushedFile(TableIndex table_id, const string &path) const {
+	lock_guard<mutex> guard(lock);
+	auto table_changes = Find(table_id);
+	if (!table_changes) {
+		return false;
+	}
+	for (auto &file : table_changes->new_data_files) {
+		if (file.file_name == path) {
+			return file.begin_snapshot.IsValid();
+		}
+	}
+	return false;
+}
+
 void LocalTableChanges::GetLocalDeleteForFile(TableIndex table_id, const string &path, DuckLakeFileData &result) const {
 	lock_guard<mutex> guard(lock);
 	auto entry = changes.find(table_id);
@@ -1750,6 +1764,10 @@ bool DuckLakeTransaction::HasLocalDeletes(TableIndex table_id) const {
 
 bool DuckLakeTransaction::HasLocalDeleteForFile(TableIndex table_id, const string &path) const {
 	return state->local_changes.HasLocalDeleteForFile(table_id, path);
+}
+
+bool DuckLakeTransaction::IsFlushedFile(TableIndex table_id, const string &path) const {
+	return state->local_changes.IsFlushedFile(table_id, path);
 }
 
 bool DuckLakeTransaction::HasAnyLocalChanges(TableIndex table_id) const {
