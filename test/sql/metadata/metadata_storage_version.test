@@ -109,3 +109,50 @@ query II
 SELECT (SELECT id FROM lake.t), tags['storage_version'] FROM duckdb_databases() WHERE database_name = 'storage_meta_ro'
 ----
 1	v1.2.0+
+
+statement ok
+DETACH lake
+
+# an option that needs a newer storage version falls back to the latest
+statement ok
+ATTACH '{TEST_DIR}/storage_row_group.db' AS init (STORAGE_VERSION 'v1.0.0')
+
+statement ok
+DETACH init
+
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/storage_row_group.db' AS lake (DATA_PATH '{DATA_PATH}/storage_row_group',
+    META_ROW_GROUP_SIZE 245760)
+
+statement ok
+CREATE TABLE lake.t AS SELECT 1 AS id
+
+query I
+FROM lake.t
+----
+1
+
+statement ok
+DETACH lake
+
+# an encrypted file newer than v1.5.0 opens again
+statement ok
+SET force_mbedtls_unsafe = true
+
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/storage_encrypted.db' AS lake (DATA_PATH '{DATA_PATH}/storage_encrypted',
+    META_ENCRYPTION_KEY 'storage_key', META_STORAGE_VERSION 'v2.0.0')
+
+statement ok
+CREATE TABLE lake.t AS SELECT 1 AS id
+
+statement ok
+DETACH lake
+
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/storage_encrypted.db' AS lake (META_ENCRYPTION_KEY 'storage_key')
+
+query I
+FROM lake.t
+----
+1

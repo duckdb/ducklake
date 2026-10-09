@@ -38,9 +38,6 @@ string DuckLakeInitializer::GetAttachOptions() {
 		attach_options.push_back(option.first + " " + option.second.ToSQLString());
 	}
 	const string metadata_type = catalog.MetadataType();
-	if (!metadata_storage_version.empty()) {
-		attach_options.push_back(StringUtil::Format("STORAGE_VERSION '%s'", metadata_storage_version));
-	}
 	// scope the underlying Postgres attach to the metadata schema - otherwise the postgres extension reflects
 	// every schema in the database on attach, which is very slow on large or multi-tenant catalogs.
 	// only done when the user explicitly set METADATA_SCHEMA - the default schema is not known until after attach.
@@ -165,15 +162,32 @@ void DuckLakeInitializer::RestartMetadataTransaction(DuckLakeTransaction &transa
 }
 
 void DuckLakeInitializer::AttachMetadata(DuckLakeTransaction &transaction) {
-	const string attach_query =
-	    "ATTACH OR REPLACE {METADATA_PATH} AS {METADATA_CATALOG_NAME_IDENTIFIER}" + GetAttachOptions();
-	auto result = transaction.GetMetadataManager().AttachMetadata(attach_query);
+	auto attach = [&]() {
+		return transaction.GetMetadataManager().AttachMetadata(
+		    "ATTACH OR REPLACE {METADATA_PATH} AS {METADATA_CATALOG_NAME_IDENTIFIER}" + GetAttachOptions());
+	};
+	auto result = attach();
+	if (result->HasError() && result->GetErrorObject().Type() == ExceptionType::INVALID_INPUT &&
+	    ChoosesMetadataStorageVersion()) {
+		// options such as ENCRYPTION_KEY or ROW_GROUP_SIZE may not work with the storage version of the file
+		options.metadata_parameters["storage_version"] = Value("latest");
+		transaction.Rollback();
+		result = attach();
+	}
 	result->ThrowIfError("Failed to attach DuckLake MetaData \"" + catalog.MetadataDatabaseName() + "\" at path + \"" +
 	                     catalog.MetadataPath() + "\"");
 }
 
+bool DuckLakeInitializer::ChoosesMetadataStorageVersion() {
+	auto &metadata_type = catalog.MetadataType();
+	if (!metadata_type.empty() && metadata_type != "duckdb") {
+		return false;
+	}
+	return options.metadata_parameters.find("storage_version") == options.metadata_parameters.end();
+}
+
 void DuckLakeInitializer::RaiseMetadataStorageVersion(DuckLakeTransaction &transaction) {
-	if (options.metadata_parameters.find("storage_version") != options.metadata_parameters.end()) {
+	if (!ChoosesMetadataStorageVersion()) {
 		return;
 	}
 	auto &metadata_catalog =
@@ -186,7 +200,7 @@ void DuckLakeInitializer::RaiseMetadataStorageVersion(DuckLakeTransaction &trans
 	if (metadata_db.IsReadOnly() || metadata_db.GetStorageManager().GetStorageVersion() >= Variant::VERSION_ADDED) {
 		return;
 	}
-	metadata_storage_version = GetStorageVersionName(Variant::VERSION_ADDED, false);
+	options.metadata_parameters["storage_version"] = Value(GetStorageVersionName(Variant::VERSION_ADDED, false));
 	RestartMetadataTransaction(transaction);
 }
 
