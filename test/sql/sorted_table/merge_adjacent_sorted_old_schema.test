@@ -136,18 +136,18 @@ SELECT id, v FROM lake.p
 3	20
 1	1500000000
 
-# a field was dropped from the struct the table is sorted by
+# a field of the struct the table is sorted by was renamed
 statement ok
-CREATE TABLE lake.s (id BIGINT, st STRUCT(a BIGINT, b BIGINT))
+CREATE TABLE lake.s (id BIGINT, st STRUCT(a BIGINT))
 
 statement ok
-INSERT INTO lake.s VALUES (1, {'a': 1, 'b': 30}), (2, {'a': 2, 'b': 10})
+INSERT INTO lake.s VALUES (1, {'a': 30}), (2, {'a': 10})
 
 statement ok
-INSERT INTO lake.s VALUES (3, {'a': 3, 'b': 20})
+INSERT INTO lake.s VALUES (3, {'a': 20})
 
 statement ok
-ALTER TABLE lake.s DROP COLUMN st.a
+ALTER TABLE lake.s RENAME COLUMN st.a TO z
 
 statement ok
 ALTER TABLE lake.s SET SORTED BY (st)
@@ -212,13 +212,13 @@ SELECT id FROM lake.fp
 1
 
 statement ok
-CREATE TABLE lake.fs (id BIGINT, st STRUCT(a BIGINT, b BIGINT))
+CREATE TABLE lake.fs (id BIGINT, st STRUCT(a BIGINT))
 
 statement ok
-INSERT INTO lake.fs VALUES (1, {'a': 1, 'b': 30}), (2, {'a': 2, 'b': 10}), (3, {'a': 3, 'b': 20})
+INSERT INTO lake.fs VALUES (1, {'a': 30}), (2, {'a': 10}), (3, {'a': 20})
 
 statement ok
-ALTER TABLE lake.fs DROP COLUMN st.a
+ALTER TABLE lake.fs RENAME COLUMN st.a TO z
 
 statement ok
 ALTER TABLE lake.fs SET SORTED BY (st)

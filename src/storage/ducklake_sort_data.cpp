@@ -27,8 +27,8 @@ void DuckLakeSort::MapToSchemaVersion(unique_ptr<ParsedExpression> &expr, const 
 	auto version_field_id = table.GetFieldId(field_id.GetFieldIndex());
 	if (version_field_id) {
 		expr = make_uniq<ColumnRefExpression>(Identifier(version_field_id->Name()));
-		if (version_field_id->Type() != column.Type()) {
-			// the rows hold the type they were written with
+		if (version_field_id->Type() != column.Type() && !column.Type().IsNested()) {
+			// a promoted column is compared in its latest type, nested columns keep the order of their fields
 			expr = make_uniq<CastExpression>(column.Type(), std::move(expr), true);
 		}
 	} else {
