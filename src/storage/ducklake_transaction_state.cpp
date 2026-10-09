@@ -1927,12 +1927,8 @@ string DuckLakeTransactionState::CommitChanges(DuckLakeCommitState &commit_state
 		}
 
 		// compacted files differ in size from their sources
-		for (auto &compacted : merge_compacted_files) {
-			refreshed_table_sizes.insert(compacted.table_index);
-		}
-		for (auto &compacted : compaction_rewrite_delete_changes.compacted_files) {
-			refreshed_table_sizes.insert(compacted.table_index);
-		}
+		auto compacted_tables = local_changes.GetCompactedTables();
+		refreshed_table_sizes.insert(compacted_tables.begin(), compacted_tables.end());
 	}
 	batch_queries += DuckLakeMetadataManager::RefreshTableSizesSql(refreshed_table_sizes);
 
