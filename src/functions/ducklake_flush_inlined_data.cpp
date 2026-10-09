@@ -121,7 +121,8 @@ static set<PositionWithSnapshot> GetWrittenFileDeletes(ClientContext &context, c
 	DuckLakeFileData file_data;
 	file_data.path = file.file_name;
 	file_data.encryption_key = encryption_key;
-	ParquetFileScanner scanner(context, file_data);
+	file_data.file_size_bytes = file.file_size_bytes;
+	ParquetFileScanner scanner(context, file_data, true);
 	auto row_id_column = scanner.FindColumn("_ducklake_internal_row_id");
 	auto snapshot_column = scanner.FindColumn("_ducklake_internal_snapshot_id");
 	if (!row_id_column.IsValid() || !snapshot_column.IsValid()) {
@@ -286,7 +287,7 @@ string DuckLakeDataFlusher::GetFlushSortOrderSQL(const DuckLakeTableEntry &table
 	                                                      binder.GenerateTableIndex(), orders);
 	for (auto &order : bound_orders) {
 		if (order.expression->IsVolatile()) {
-			// a volatile key cannot give the file and its delete positions the same order
+			// a volatile key has no stable order to sort the flushed rows by
 			return string();
 		}
 	}
