@@ -5,6 +5,7 @@
 #include "duckdb/common/exception_format_value.hpp"
 #include "duckdb/parser/result_modifier.hpp"
 #include "duckdb/parser/parsed_expression_iterator.hpp"
+#include "duckdb/parser/expression/cast_expression.hpp"
 #include "duckdb/parser/expression/columnref_expression.hpp"
 #include "duckdb/parser/expression/positional_reference_expression.hpp"
 
@@ -26,6 +27,10 @@ void DuckLakeSort::MapToSchemaVersion(unique_ptr<ParsedExpression> &expr, const 
 	auto version_field_id = table.GetFieldId(field_id.GetFieldIndex());
 	if (version_field_id) {
 		expr = make_uniq<ColumnRefExpression>(Identifier(version_field_id->Name()));
+		if (version_field_id->Type() != column.Type()) {
+			// the rows hold the type they were written with
+			expr = make_uniq<CastExpression>(column.Type(), std::move(expr), true);
+		}
 	} else {
 		// the rows were written before this column existed
 		expr = field_id.GetInitialDefault();

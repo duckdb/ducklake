@@ -1,5 +1,5 @@
 # name: test/sql/sorted_table/merge_adjacent_sorted_old_schema.test
-# description: Merging files written before columns were dropped, added or retyped sorts by the latest sort key
+# description: Files and inlined rows of an older schema version are sorted by the latest sort key
 # group: [sorted_table]
 
 require ducklake
@@ -108,12 +108,12 @@ SELECT id FROM lake.q
 3
 1
 
-# the sort column was promoted to a wider type
+# the sort column was promoted to a wider type, the key overflows in the old type
 statement ok
 CREATE TABLE lake.p (id BIGINT, v INTEGER)
 
 statement ok
-INSERT INTO lake.p VALUES (1, 30), (2, 10)
+INSERT INTO lake.p VALUES (1, 1500000000), (2, 10)
 
 statement ok
 INSERT INTO lake.p VALUES (3, 20)
@@ -134,4 +134,101 @@ SELECT id, v FROM lake.p
 ----
 2	10
 3	20
-1	30
+1	1500000000
+
+# a field was dropped from the struct the table is sorted by
+statement ok
+CREATE TABLE lake.s (id BIGINT, st STRUCT(a BIGINT, b BIGINT))
+
+statement ok
+INSERT INTO lake.s VALUES (1, {'a': 1, 'b': 30}), (2, {'a': 2, 'b': 10})
+
+statement ok
+INSERT INTO lake.s VALUES (3, {'a': 3, 'b': 20})
+
+statement ok
+ALTER TABLE lake.s DROP COLUMN st.a
+
+statement ok
+ALTER TABLE lake.s SET SORTED BY (st)
+
+query II
+SELECT files_processed, files_created FROM ducklake_merge_adjacent_files('lake', 's')
+----
+2	1
+
+query I
+SELECT id FROM lake.s
+----
+2
+3
+1
+
+# a positional sort key whose column was dropped reports the error of the latest table
+statement ok
+CREATE TABLE lake.o (id BIGINT, v BIGINT)
+
+statement ok
+INSERT INTO lake.o VALUES (1, 30), (2, 10)
+
+statement ok
+INSERT INTO lake.o VALUES (3, 20)
+
+statement ok
+ALTER TABLE lake.o SET SORTED BY (#2)
+
+statement ok
+ALTER TABLE lake.o DROP COLUMN v
+
+statement error
+SELECT files_processed, files_created FROM ducklake_merge_adjacent_files('lake', 'o')
+----
+Positional reference 2 out of range
+
+# inlined rows of an older schema version flush in the order of the latest sort key
+statement ok
+CALL lake.set_option('data_inlining_row_limit', 10)
+
+statement ok
+CREATE TABLE lake.fp (id BIGINT, v INTEGER)
+
+statement ok
+INSERT INTO lake.fp VALUES (1, 1500000000), (2, 10), (3, 20)
+
+statement ok
+ALTER TABLE lake.fp ALTER COLUMN v TYPE BIGINT
+
+statement ok
+ALTER TABLE lake.fp SET SORTED BY (v * 2)
+
+statement ok
+CALL ducklake_flush_inlined_data('lake', table_name => 'fp')
+
+query I
+SELECT id FROM lake.fp
+----
+2
+3
+1
+
+statement ok
+CREATE TABLE lake.fs (id BIGINT, st STRUCT(a BIGINT, b BIGINT))
+
+statement ok
+INSERT INTO lake.fs VALUES (1, {'a': 1, 'b': 30}), (2, {'a': 2, 'b': 10}), (3, {'a': 3, 'b': 20})
+
+statement ok
+ALTER TABLE lake.fs DROP COLUMN st.a
+
+statement ok
+ALTER TABLE lake.fs SET SORTED BY (st)
+
+statement ok
+CALL ducklake_flush_inlined_data('lake', table_name => 'fs')
+
+query I
+SELECT id FROM lake.fs
+----
+2
+3
+1

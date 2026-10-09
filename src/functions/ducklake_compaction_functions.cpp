@@ -374,7 +374,8 @@ unique_ptr<LogicalOperator> DuckLakeCompactor::InsertSort(Binder &binder, unique
 	auto bindings = plan->GetColumnBindings();
 	D_ASSERT(!bindings.empty());
 	auto sort_orders = ParseSortOrders(*sort_data);
-	DuckLakeTableEntry::ValidateSortExpressionColumns(latest_table.GetColumns(), sort_orders);
+	// an invalid sort reports the same error as an insert into the latest table
+	BindSortOrders(binder, latest_table.GetColumns(), latest_table.name, binder.GenerateTableIndex(), sort_orders);
 	// the scan returns the columns of the schema version the files were written with
 	for (auto &order : sort_orders) {
 		DuckLakeSort::MapToSchemaVersion(order.expression, latest_table, table);
