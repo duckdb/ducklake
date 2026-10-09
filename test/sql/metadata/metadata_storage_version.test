@@ -1,0 +1,111 @@
+# name: test/sql/metadata/metadata_storage_version.test
+# description: a DuckDB metadata file keeps its storage version unless it is too old for inlined VARIANT
+# group: [metadata]
+
+require ducklake
+
+require parquet
+
+test-env DATA_PATH {TEST_DIR}
+
+# a v1.5.0 file stays readable by the v1.5 release after a write
+statement ok
+ATTACH '{TEST_DIR}/storage_v150.db' AS init (STORAGE_VERSION 'v1.5.0')
+
+statement ok
+DETACH init
+
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/storage_v150.db' AS lake (DATA_PATH '{DATA_PATH}/storage_v150', DUCKLAKE_VERSION '1.0')
+
+statement ok
+CREATE TABLE lake.t (id INTEGER)
+
+statement ok
+INSERT INTO lake.t VALUES (1)
+
+statement ok
+DETACH lake
+
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/storage_v150.db' AS lake
+
+statement ok
+INSERT INTO lake.t VALUES (2)
+
+statement ok
+DETACH lake
+
+statement ok
+ATTACH '{TEST_DIR}/storage_v150.db' AS check_db (READ_ONLY)
+
+query I
+SELECT tags['storage_version'] FROM duckdb_databases() WHERE database_name = 'check_db'
+----
+v1.5.0+
+
+statement ok
+DETACH check_db
+
+# a catalog of an older release is raised to v1.5.0, so VARIANT columns can be inlined
+unzip data/old_ducklake/v01.db.gz {TEST_DIR}/storage_v01.db
+
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/storage_v01.db' AS lake (DATA_PATH '{DATA_PATH}/storage_v01', OVERRIDE_DATA_PATH TRUE,
+    AUTOMATIC_MIGRATION TRUE, DATA_INLINING_ROW_LIMIT 10)
+
+statement ok
+CREATE TABLE lake.v (v VARIANT)
+
+statement ok
+INSERT INTO lake.v VALUES (42::VARIANT)
+
+query II
+SELECT v::INTEGER, (SELECT count(*) FROM ducklake_list_files('lake', 'v')) FROM lake.v
+----
+42	0
+
+statement ok
+DETACH lake
+
+statement ok
+ATTACH '{TEST_DIR}/storage_v01.db' AS check_db (READ_ONLY)
+
+query I
+SELECT tags['storage_version'] FROM duckdb_databases() WHERE database_name = 'check_db'
+----
+v1.5.0+
+
+statement ok
+DETACH check_db
+
+# an explicit storage version is kept
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/storage_meta.db' AS lake (DATA_PATH '{DATA_PATH}/storage_meta',
+    META_STORAGE_VERSION 'v1.2.0')
+
+statement ok
+CREATE TABLE lake.t AS SELECT 1 AS id
+
+statement ok
+DETACH lake
+
+statement ok
+ATTACH '{TEST_DIR}/storage_meta.db' AS check_db (READ_ONLY)
+
+query I
+SELECT tags['storage_version'] FROM duckdb_databases() WHERE database_name = 'check_db'
+----
+v1.2.0+
+
+statement ok
+DETACH check_db
+
+# a read only attach does not raise the storage version
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/storage_meta.db' AS lake (READ_ONLY, METADATA_CATALOG 'storage_meta_ro')
+
+query II
+SELECT (SELECT id FROM lake.t), tags['storage_version'] FROM duckdb_databases() WHERE database_name = 'storage_meta_ro'
+----
+1	v1.2.0+

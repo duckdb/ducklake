@@ -30,6 +30,8 @@ private:
 	void LoadExistingDuckLakeWithRetries(DuckLakeTransaction &transaction);
 	void AttachMetadata(DuckLakeTransaction &transaction);
 	void RestartMetadataTransaction(DuckLakeTransaction &transaction);
+	//! Attaches a writable DuckDB metadata file again when its storage version is too old for DuckLake
+	void RaiseMetadataStorageVersion(DuckLakeTransaction &transaction);
 	bool DuckLakeIsInitialized(DuckLakeTransaction &transaction);
 	void InitializeDataPath();
 	string GetAttachOptions();
@@ -40,6 +42,8 @@ private:
 	ClientContext &context;
 	DuckLakeCatalog &catalog;
 	DuckLakeOptions &options;
+	//! Storage version requested when attaching a DuckDB metadata file
+	string metadata_storage_version;
 };
 
 } // namespace duckdb
