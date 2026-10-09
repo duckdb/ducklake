@@ -1,0 +1,80 @@
+# name: test/sql/issues/issue_1442_nan_bounded_pruning.test
+# description: Float filters that no NaN satisfies prune files whether or not they hold NaN
+# group: [issues]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/issue_1442', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE dl.t (x DOUBLE)
+
+statement ok
+COPY (SELECT range::DOUBLE AS x FROM range(0, 10)) TO '{DATA_PATH}/issue_1442_f0.parquet'
+
+statement ok
+COPY (SELECT range::DOUBLE AS x FROM range(10, 20)) TO '{DATA_PATH}/issue_1442_f1.parquet'
+
+statement ok
+COPY (SELECT range::DOUBLE AS x FROM range(20, 30)) TO '{DATA_PATH}/issue_1442_f2.parquet'
+
+statement ok
+CALL ducklake_add_data_files('dl', 't', '{DATA_PATH}/issue_1442_f*.parquet')
+
+# the NaN status of added files is unknown, but the upper bound excludes NaN
+query II
+EXPLAIN ANALYZE SELECT count(*) FROM dl.t WHERE x BETWEEN 12 AND 14
+----
+analyzed_plan	<REGEX>:(?s).*Total Files Read: 1\s.*
+
+query I
+SELECT count(*) FROM dl.t WHERE x BETWEEN 12 AND 14
+----
+3
+
+# a NaN would match, so files with unknown NaN status are kept
+query II
+EXPLAIN ANALYZE SELECT count(*) FROM dl.t WHERE x >= 22
+----
+analyzed_plan	<REGEX>:(?s).*Total Files Read: 3\s.*
+
+foreach type DOUBLE FLOAT
+
+statement ok
+CREATE OR REPLACE TABLE dl.n (x ${type})
+
+statement ok
+INSERT INTO dl.n VALUES (1), (2), ('NaN')
+
+statement ok
+INSERT INTO dl.n VALUES (10), (11)
+
+# the first file holds NaN, but no NaN satisfies the filter
+query II
+EXPLAIN ANALYZE SELECT count(*) FROM dl.n WHERE x > 5 AND x <= 15
+----
+analyzed_plan	<REGEX>:(?s).*Total Files Read: 1\s.*
+
+query I
+SELECT count(*) FROM dl.n WHERE x > 5 AND x <= 15
+----
+2
+
+query I
+SELECT count(*) FROM dl.n WHERE x > 5
+----
+3
+
+query I
+SELECT count(*) FROM dl.n WHERE x = 'NaN'::${type}
+----
+1
+
+endloop
