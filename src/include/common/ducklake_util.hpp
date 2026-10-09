@@ -94,6 +94,8 @@ public:
 	//! Copy extension-registered settings from one context onto another. Core engine settings
 	//! are not copied.
 	static void CopyExtensionSettings(ClientContext &from, ClientContext &to);
+	//! Sets a session extension setting without checking the configuration lock
+	static void SetExtensionSetting(ClientContext &context, const string &name, const Value &value);
 
 	static string ParseConfigOptionValue(ClientContext &context, const string &option, const Value &val);
 	static void ValidateConfigOptionScope(const string &option, bool has_schema, bool has_table);
