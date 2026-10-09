@@ -1,0 +1,44 @@
+# name: benchmark/micro/time_travel/at_version_local_changes.benchmark
+# description: Nineteen AT (VERSION) scans in a transaction that inserted and deleted rows, rolled back after each run
+# group: [time_travel]
+
+name At Version Local Changes
+group micro
+subgroup time_travel
+
+require ducklake
+
+require parquet
+
+argument work at_local_work
+
+include benchmark/micro/fixtures/snap1000.benchmark.in
+
+# The local rows of m are deleted again, so the AT scans give the same results whether they read them or not
+run benchmark/micro/queries/at_version_local_changes.sql
+
+# The rollback discards the local rows of t, so a missed reset doubles them in the next run
+cleanup
+@rollback ${lake}_pristine TO ${work}
+
+result III
+cur	5000	200344750.0
+v0100	98000	2400975500.0
+v0150	148000	5475963000.0
+v0200	198000	9800950500.0
+v0250	248000	15375938000.0
+v0300	298000	22200925500.0
+v0350	348000	30275913000.0
+v0400	398000	39600900500.0
+v0450	448000	50175888000.0
+v0500	498000	62000875500.0
+v0550	548000	75075863000.0
+v0600	598000	89400850500.0
+v0650	648000	104975838000.0
+v0700	698000	121800825500.0
+v0750	748000	139875813000.0
+v0800	798000	159200800500.0
+v0850	848000	179775788000.0
+v0900	898000	201600775500.0
+v0950	948000	224675763000.0
+v1000	998000	249000750500.0
