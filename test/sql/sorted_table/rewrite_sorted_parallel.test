@@ -1,0 +1,56 @@
+# name: test/sql/sorted_table/rewrite_sorted_parallel.test
+# description: A parallel rewrite of a sorted table writes its rows in sorted order
+# group: [sorted_table]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/rewrite_sorted_parallel', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+PRAGMA verify_parallelism
+
+statement ok
+SET threads = 8
+
+statement ok
+CALL ducklake.set_option('parquet_row_group_size', 2048)
+
+statement ok
+CREATE TABLE ducklake.t (id INTEGER, k BIGINT)
+
+statement ok
+ALTER TABLE ducklake.t SET SORTED BY (k)
+
+statement ok
+INSERT INTO ducklake.t SELECT i, (i * 7919) % 100003 FROM range(100000) t(i)
+
+statement ok
+DELETE FROM ducklake.t WHERE id % 10 = 3
+
+statement ok
+CALL ducklake_rewrite_data_files('ducklake', 't', delete_threshold => 0)
+
+statement ok
+CREATE TEMPORARY TABLE rewritten AS
+SELECT filename, file_row_number, k
+FROM read_parquet('{DATA_PATH}/rewrite_sorted_parallel/**/*.parquet', filename => true, file_row_number => true)
+WHERE filename IN (SELECT data_file FROM ducklake_list_files('ducklake', 't'))
+
+query II
+SELECT count(*), count(DISTINCT filename) FROM rewritten
+----
+90000	1
+
+# the rewritten file must be in sorted order
+query I
+SELECT count(*) FROM (SELECT k < lag(k) OVER (ORDER BY file_row_number) AS out_of_order FROM rewritten)
+WHERE out_of_order
+----
+0

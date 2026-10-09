@@ -595,8 +595,12 @@ DuckLakeCompactor::GenerateCompactionCommand(vector<DuckLakeCompactionFileEntry>
 
 	auto &latest_table = GetLatestTableEntry(catalog, transaction, table);
 	auto sort_data = latest_table.GetSortData();
+	bool sort_applied = false;
 	if (sort_data) {
+		auto unsorted_root = root.get();
 		root = DuckLakeCompactor::InsertSort(binder, root, latest_table, sort_data);
+		// InsertSort returns root if the sort isn't in DuckDB dialect.
+		sort_applied = root.get() != unsorted_root;
 	}
 
 	copy->table_index = binder.GenerateTableIndex();
@@ -622,6 +626,7 @@ DuckLakeCompactor::GenerateCompactionCommand(vector<DuckLakeCompactionFileEntry>
 	auto compaction = make_uniq<DuckLakeLogicalCompaction>(
 	    binder.GenerateTableIndex(), table, std::move(actionable_source_files), std::move(copy_input.encryption_key),
 	    partition_id, std::move(partition_values), target_row_id_start, type);
+	compaction->ordered_input = sort_applied && write_row_id;
 	compaction->children.push_back(std::move(copy));
 	return std::move(compaction);
 }

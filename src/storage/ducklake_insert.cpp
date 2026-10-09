@@ -612,12 +612,19 @@ PhysicalOperator &DuckLakeInsert::PlanCopyForInsert(ClientContext &context, Phys
 	copy.SetEstimatedCardinality(1);
 	copy.ResolveOperatorTypes();
 	auto &physical_copy = planner.CreatePlan(copy, *plan).Cast<PhysicalCopyToFile>();
-	if (copy_input.ordered_input && copy.function.execution_mode) {
-		// the rows are sorted and the batch copy operator does not rotate files by size
-		auto execution_mode = copy.function.execution_mode(true, false);
-		physical_copy.parallel = execution_mode == CopyFunctionExecutionMode::PARALLEL_COPY_TO_FILE;
+	if (copy_input.ordered_input) {
+		PreserveSortedOrder(physical_copy);
 	}
 	return physical_copy;
+}
+
+void DuckLakeInsert::PreserveSortedOrder(PhysicalCopyToFile &physical_copy) {
+	if (!physical_copy.function.execution_mode) {
+		return;
+	}
+	// the rows are sorted and the batch copy operator does not rotate files by size
+	auto execution_mode = physical_copy.function.execution_mode(true, false);
+	physical_copy.parallel = execution_mode == CopyFunctionExecutionMode::PARALLEL_COPY_TO_FILE;
 }
 
 PhysicalOperator &DuckLakeInsert::PlanInsert(ClientContext &context, PhysicalPlanGenerator &planner,
