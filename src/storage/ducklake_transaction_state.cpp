@@ -245,10 +245,19 @@ void DuckLakeTransactionState::CheckForConflicts(const TransactionChangeInformat
 		ConflictCheck(table_id, other_changes.tables_inserted_inlined, "delete from table", "inserted into it");
 	}
 	CheckFileConflicts(changes, other_changes, context);
+	// inlined deletes of data file rows conflict per file in CheckFileConflicts
+	set<TableIndex> tables_deleted_inlined_rows;
+	for (auto &entry : local_changes.Changes()) {
+		if (!entry.second.new_inlined_data_deletes.empty()) {
+			tables_deleted_inlined_rows.insert(entry.first);
+		}
+	}
 	for (auto &table_id : changes.tables_deleted_inlined) {
 		ConflictCheck(table_id, other_changes.dropped_tables, "delete from table", "dropped it");
 		ConflictCheck(table_id, other_changes.altered_tables, "delete from table", "altered it");
-		ConflictCheck(table_id, other_changes.tables_deleted_inlined, "delete from table", "deleted from it");
+		if (tables_deleted_inlined_rows.find(table_id) != tables_deleted_inlined_rows.end()) {
+			ConflictCheck(table_id, other_changes.tables_deleted_inlined, "delete from table", "deleted from it");
+		}
 		ConflictCheck(table_id, other_changes.tables_flushed_inlined, "delete from table", "flushed the inlined data");
 		ConflictCheck(table_id, other_changes.inserted_tables, "delete from table", "inserted into it");
 		ConflictCheck(table_id, other_changes.tables_inserted_inlined, "delete from table", "inserted into it");
