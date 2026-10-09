@@ -754,8 +754,8 @@ WHERE table_id = {TABLE_ID} AND schema_version = {SCHEMA_VERSION})";
 		}
 		return begin_snapshot;
 	}
-	// the table has no row for this schema version - an inlined-data table created without one is keyed to the
-	// lake's schema version at the time, so take the first snapshot that carries it
+	// lakes written before inlined tables recorded their schema version have no row for it - take the first
+	// snapshot that carries the version instead
 	query = R"(
 SELECT MIN(snapshot_id)
 FROM {METADATA_CATALOG}.ducklake_snapshot
@@ -3456,7 +3456,10 @@ string DuckLakeMetadataManager::WriteNewInlinedData(DuckLakeSnapshot &commit_sna
 			string inlined_tables;
 			string inlined_table_queries;
 			if (!new_inlined_table) {
+				// the inlined table is keyed to this schema version - record it for the table, as CREATE and
+				// ALTER do, so readers can resolve it after the snapshots carrying it are expired
 				commit_snapshot.schema_version++;
+				batch_query += InsertNewSchema(commit_snapshot, {entry.table_id});
 			}
 			inlined_table_name =
 			    GetInlinedTableQueries(commit_snapshot, table_info, inlined_tables, inlined_table_queries);

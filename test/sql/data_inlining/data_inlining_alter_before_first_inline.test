@@ -1,5 +1,5 @@
 # name: test/sql/data_inlining/data_inlining_alter_before_first_inline.test
-# description: inlined rows written after an ALTER that happened with inlining disabled keep their added columns
+# description: inlined rows written after an ALTER that happened with inlining disabled keep their added columns, also after snapshot expiry
 # group: [data_inlining]
 
 require ducklake
@@ -32,6 +32,10 @@ INSERT INTO lake.t VALUES ('x', 'B');
 # any later schema change
 statement ok
 CREATE VIEW lake.v AS SELECT 1 AS one;
+
+# the inlined table must stay readable after the snapshots that carried its schema version are gone
+statement ok
+CALL ducklake_expire_snapshots('lake', older_than => now());
 
 statement ok
 DETACH lake;
