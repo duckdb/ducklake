@@ -1483,7 +1483,13 @@ string DuckLakeMetadataManager::BoundOrInfinity(const string &bound, const strin
 string DuckLakeMetadataManager::GenerateConstantFilter(ExpressionType comparison_type, const Value &constant,
                                                        const LogicalType &type, unordered_set<string> &referenced_stats,
                                                        const string &stats_alias) {
-	auto constant_str = CastValueToTarget(constant, type);
+	string constant_str;
+	try {
+		constant_str = CastValueToTarget(constant, type);
+	} catch (ConversionException &) {
+		// a timestamp outside the range its type can print
+		return string();
+	}
 	auto min_value = CastStatsToTarget(StatsColumn(stats_alias, "min_value"), type, StatsCastType::MIN);
 	auto max_value = CastStatsToTarget(StatsColumn(stats_alias, "max_value"), type, StatsCastType::MAX);
 	if (constant_str.empty() || min_value.empty() || max_value.empty() || constant_str.find('\0') != string::npos) {
@@ -1592,24 +1598,10 @@ string DuckLakeMetadataManager::GenerateConstantFilterDouble(ExpressionType comp
 	}
 }
 
-//! Whether the constant can be written into the filter SQL
-static bool CanRenderConstant(const Value &constant) {
-	try {
-		constant.ToString();
-		return true;
-	} catch (ConversionException &) {
-		// a timestamp outside the range its type can print
-		return false;
-	}
-}
-
 string DuckLakeMetadataManager::GenerateFilterFromExpression(const Expression &expr, const LogicalType *type,
                                                              unordered_set<string> &referenced_stats,
                                                              const string &stats_alias) {
 	auto constant_filter = [&](ExpressionType comparison_type, const Value &constant) {
-		if (!CanRenderConstant(constant)) {
-			return string();
-		}
 		const auto &target_type = type ? *type : constant.type();
 		switch (target_type.id()) {
 		case LogicalTypeId::BLOB:
