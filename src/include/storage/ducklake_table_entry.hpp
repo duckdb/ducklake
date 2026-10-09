@@ -88,12 +88,20 @@ public:
 	unordered_set<idx_t> GetSkippedStatsFields() const;
 	//! Refuses a field added below a skipped column whose statistics cannot be skipped
 	void ValidateAddedFieldsCanSkipStats(const DuckLakeFieldId &parent_id, const DuckLakeFieldId &new_field_id) const;
+	//! The topmost fields of this entry that the previous entry does not have
+	duckdb::set<FieldIndex> GetNewFields(const DuckLakeTableEntry &previous) const;
+	//! The statistics of count rows that were written before the given fields were added
+	map<FieldIndex, DuckLakeColumnStats> GetAddedFieldStats(const duckdb::set<FieldIndex> &added_fields,
+	                                                        idx_t count) const;
 	const ColumnChangeInfo &GetChangedFields() const {
 		return *changed_fields;
 	}
 	const vector<DuckLakeInlinedTableInfo> &GetInlinedDataTables() const {
 		return inlined_data_tables;
 	}
+	//! Whether an inlined data table of the schema version has the columns of the last schema change
+	static bool IsCurrentInlinedDataTable(idx_t schema_version, optional_idx last_schema_change);
+	bool HasCurrentInlinedDataTable(optional_idx last_schema_change) const;
 	//! The inlined data tables to read at the snapshot, skipping the flushed and dropped ones
 	vector<DuckLakeInlinedTableInfo> GetInlinedDataTables(DuckLakeTransaction &transaction,
 	                                                      DuckLakeSnapshot snapshot) const;

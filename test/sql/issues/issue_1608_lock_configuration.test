@@ -1,0 +1,67 @@
+# name: test/sql/issues/issue_1608_lock_configuration.test
+# description: A DuckLake keeps working after SET lock_configuration (#1608)
+# group: [issues]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/issue_1608')
+
+statement ok
+CREATE TABLE dl.items AS SELECT range AS i FROM range(10)
+
+statement ok
+SET lock_configuration = true
+
+query I
+SELECT count(*) FROM dl.items
+----
+10
+
+statement ok
+INSERT INTO dl.items VALUES (10)
+
+statement ok
+UPDATE dl.items SET i = i + 100 WHERE i = 0
+
+statement ok
+DELETE FROM dl.items WHERE i = 1
+
+statement ok
+BEGIN
+
+statement ok
+INSERT INTO dl.items VALUES (11)
+
+statement ok
+COMMIT
+
+query II
+SELECT count(*), max(i) FROM dl.items
+----
+11	100
+
+statement ok
+CHECKPOINT dl
+
+query I
+SELECT count(*) FROM dl.items
+----
+11
+
+# the metadata connection leaves the settings of the session alone
+query I
+SELECT current_setting('current_transaction_invalidation_policy')
+----
+STANDARD_POLICY
+
+statement error
+SET threads = 2
+----
+the configuration has been locked

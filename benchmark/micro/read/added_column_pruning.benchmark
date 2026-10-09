@@ -1,0 +1,34 @@
+# name: benchmark/micro/read/added_column_pruning.benchmark
+# description: Add a column with a default to a table of 1000 small files, then run filters outside its values
+# group: [read]
+
+name Added Column Pruning
+group micro
+subgroup read
+
+require ducklake
+
+require parquet
+
+argument work added_column_work
+
+include benchmark/micro/fixtures/compaction.benchmark.in
+
+include benchmark/micro/fixtures/restore_cleanup.benchmark.in
+
+# The older files do not hold the column, so only its table statistics can skip them
+run
+ALTER TABLE lake.frag ADD COLUMN flag INTEGER DEFAULT 0;
+INSERT INTO lake.frag SELECT i, 0, 'new', i % 10 FROM range(2048000, 2049000) t(i);
+SELECT (SELECT count(*) FROM lake.frag WHERE flag > 9) + (SELECT count(*) FROM lake.frag WHERE flag < 0)
++ (SELECT count(*) FROM lake.frag WHERE flag = 10) + (SELECT count(*) FROM lake.frag WHERE flag >= 100)
++ (SELECT count(*) FROM lake.frag WHERE flag BETWEEN 20 AND 30) + (SELECT count(*) FROM lake.frag WHERE flag = -1)
++ (SELECT count(*) FROM lake.frag WHERE flag IN (11, 12)) + (SELECT count(*) FROM lake.frag WHERE flag > 1000)
++ (SELECT count(*) FROM lake.frag WHERE flag <= -5) + (SELECT count(*) FROM lake.frag WHERE flag = 99) AS outside,
+(SELECT count(*) FROM lake.frag) AS total;
+
+# A missed reset fails the ALTER because flag already exists
+result_query II
+SELECT outside, total FROM __answer
+----
+0	2049000

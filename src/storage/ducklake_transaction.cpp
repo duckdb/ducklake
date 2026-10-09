@@ -370,6 +370,20 @@ void LocalTableChanges::AddColumnToLocalInlinedData(ClientContext &context, Tabl
 	table_changes.new_inlined_data->data = std::move(new_data);
 }
 
+void LocalTableChanges::AddFieldsToLocalFiles(TableIndex table_id, const DuckLakeTableEntry &table,
+                                              const set<FieldIndex> &fields) {
+	lock_guard<mutex> guard(lock);
+	auto entry = Find(table_id);
+	if (!entry) {
+		return;
+	}
+	for (auto &file : entry->new_data_files) {
+		for (auto &field_stats : table.GetAddedFieldStats(fields, file.row_count)) {
+			file.column_stats.insert(std::move(field_stats));
+		}
+	}
+}
+
 void LocalTableChanges::RemoveColumnFromLocalInlinedData(ClientContext &context, TableIndex table_id,
                                                          LogicalIndex removed_column_index,
                                                          const DuckLakeFieldId &field_id) {
@@ -750,13 +764,16 @@ Connection &DuckLakeTransaction::GetConnection() {
 		// it does not support all filter types DuckDB may push down (e.g. EXPRESSION_FILTER)
 		auto &metadata_type = ducklake_catalog.MetadataType();
 		if (metadata_type == "postgres" || metadata_type == "postgres_scanner") {
-			connection->Query("SET pg_experimental_filter_pushdown=false");
+			DuckLakeUtil::SetExtensionSetting(*connection->context, "pg_experimental_filter_pushdown",
+			                                  Value::BOOLEAN(false));
 		} else if (metadata_type == "sqlite" || metadata_type == "sqlite_scanner") {
 			// FIXME: sqlite_scanner's per-scan read connections deadlock against concurrent writers
-			connection->Query("SET sqlite_disable_multithreaded_scans=true");
+			DuckLakeUtil::SetExtensionSetting(*connection->context, "sqlite_disable_multithreaded_scans",
+			                                  Value::BOOLEAN(true));
 		}
 		connection->BeginTransaction();
-		connection->Query("SET current_transaction_invalidation_policy='SYNTACTIC_ERRORS_DO_NOT_INVALIDATE'");
+		connection->context->transaction.SetInvalidationPolicy(
+		    TransactionInvalidationPolicy::SYNTACTIC_ERRORS_DO_NOT_INVALIDATE);
 	}
 	return *connection;
 }
@@ -777,6 +794,10 @@ map<SchemaIndex, unique_ptr<DuckLakeCatalogSet>> &DuckLakeTransaction::GetNewMac
 bool DuckLakeTransaction::ChangesMade() const {
 	return state->SchemaChangesMade() || state->local_changes.HasChanges() || !state->dropped_files.empty() ||
 	       !new_name_maps.name_maps.empty();
+}
+
+bool DuckLakeTransaction::SchemaChangesMade() const {
+	return state->SchemaChangesMade();
 }
 
 void DuckLakeTransaction::DeferNameMapCacheInvalidation(MappingIndex mapping_id) {
@@ -1251,6 +1272,12 @@ DuckLakeRetryConfig DuckLakeRetryConfig::FromContext(ClientContext &context) {
 	context.TryGetCurrentSetting("ducklake_retry_wait_ms", config.retry_wait_ms);
 	context.TryGetCurrentSetting("ducklake_retry_backoff", config.retry_backoff);
 	return config;
+}
+
+idx_t DuckLakeRetryConfig::WaitMs(idx_t attempt, idx_t remaining_ms, double multiplier) const {
+	static constexpr idx_t MAX_WAIT_MS = 60000;
+	auto wait_ms = (double)retry_wait_ms * multiplier * pow(retry_backoff, (double)attempt);
+	return (idx_t)ClampValue<double>(wait_ms, 0.0, (double)MinValue(remaining_ms, MAX_WAIT_MS));
 }
 
 void DuckLakeTransaction::FlushChanges() {
@@ -1990,6 +2017,13 @@ void DuckLakeTransaction::AlterEntryInternal(DuckLakeTableEntry &table, unique_p
 		break;
 	}
 	case LocalChangeType::ADD_COLUMN:
+	case LocalChangeType::CHANGE_COLUMN_TYPE: {
+		auto new_fields = new_table.GetNewFields(table);
+		if (!new_fields.empty()) {
+			state->local_changes.AddFieldsToLocalFiles(table.GetTableId(), new_table, new_fields);
+		}
+		break;
+	}
 	case LocalChangeType::SET_PARTITION_KEY:
 	case LocalChangeType::SET_COMMENT:
 	case LocalChangeType::SET_COLUMN_COMMENT:
@@ -1997,7 +2031,6 @@ void DuckLakeTransaction::AlterEntryInternal(DuckLakeTableEntry &table, unique_p
 	case LocalChangeType::DROP_NULL:
 	case LocalChangeType::RENAME_COLUMN:
 	case LocalChangeType::REMOVE_COLUMN:
-	case LocalChangeType::CHANGE_COLUMN_TYPE:
 	case LocalChangeType::SET_DEFAULT:
 	case LocalChangeType::SET_SORT_KEY:
 		break;

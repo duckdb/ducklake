@@ -117,6 +117,8 @@ public:
 	                                 FieldIndex new_field_index, const Value &default_value);
 	void RemoveColumnFromLocalInlinedData(ClientContext &context, TableIndex table_id,
 	                                      LogicalIndex removed_column_index, const DuckLakeFieldId &field_id);
+	//! Records what the files written before the fields were added read for them
+	void AddFieldsToLocalFiles(TableIndex table_id, const DuckLakeTableEntry &table, const set<FieldIndex> &fields);
 	optional_ptr<DuckLakeInlinedDataDeletes> GetInlinedDeletes(TableIndex table_id, const string &table_name) const;
 	void AddNewInlinedFileDeletes(TableIndex table_id, idx_t file_id, set<idx_t> new_deletes);
 	void AddCompaction(TableIndex table_id, DuckLakeCompactionEntry entry);
@@ -157,6 +159,8 @@ struct DuckLakeRetryConfig {
 	double retry_backoff = 1.5;
 
 	static DuckLakeRetryConfig FromContext(ClientContext &context);
+	//! The wait of an attempt, never longer than the milliseconds left
+	idx_t WaitMs(idx_t attempt, idx_t remaining_ms, double multiplier = 1.0) const;
 };
 
 class DuckLakeTransaction : public Transaction, public enable_shared_from_this<DuckLakeTransaction> {
@@ -265,6 +269,7 @@ public:
 	bool InlinedFileDeletionsFlushed(TableIndex table_id);
 
 	bool ChangesMade() const;
+	bool SchemaChangesMade() const;
 	idx_t GetLocalCatalogId();
 	static bool IsTransactionLocal(idx_t id) {
 		return id >= DuckLakeConstants::TRANSACTION_LOCAL_ID_START;
