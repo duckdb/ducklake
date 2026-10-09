@@ -369,11 +369,17 @@ void DuckLakeCompactor::GenerateCompactions(DuckLakeTableEntry &table,
 
 unique_ptr<LogicalOperator> DuckLakeCompactor::InsertSort(Binder &binder, unique_ptr<LogicalOperator> &plan,
                                                           DuckLakeTableEntry &table,
+                                                          const DuckLakeTableEntry &latest_table,
                                                           optional_ptr<DuckLakeSort> sort_data) {
 	auto bindings = plan->GetColumnBindings();
 	D_ASSERT(!bindings.empty());
-	auto orders =
-	    BindSortOrders(binder, table.GetColumns(), table.name, bindings[0].table_index, ParseSortOrders(*sort_data));
+	auto sort_orders = ParseSortOrders(*sort_data);
+	DuckLakeTableEntry::ValidateSortExpressionColumns(latest_table.GetColumns(), sort_orders);
+	// the scan returns the columns of the schema version the files were written with
+	for (auto &order : sort_orders) {
+		DuckLakeSort::MapToSchemaVersion(order.expression, latest_table, table);
+	}
+	auto orders = BindSortOrders(binder, table.GetColumns(), table.name, bindings[0].table_index, sort_orders);
 	if (orders.empty()) {
 		// Then the sorts were not in the DuckDB dialect and we return the original plan
 		return std::move(plan);
@@ -592,7 +598,7 @@ DuckLakeCompactor::GenerateCompactionCommand(vector<DuckLakeCompactionFileEntry>
 	auto &latest_table = GetLatestTableEntry(catalog, transaction, table);
 	auto sort_data = latest_table.GetSortData();
 	if (sort_data) {
-		root = DuckLakeCompactor::InsertSort(binder, root, latest_table, sort_data);
+		root = DuckLakeCompactor::InsertSort(binder, root, table, latest_table, sort_data);
 	}
 
 	// adjacent files are merged into one file that starts at the first file's row_id_start

@@ -10,14 +10,12 @@
 
 namespace duckdb {
 
-//! Replace the column references of a sort expression with the inlined column of the same field
-static void MapToInlinedColumns(unique_ptr<ParsedExpression> &expr, const DuckLakeTableEntry &current_table,
-                                const DuckLakeTableEntry &inlined_table) {
+void DuckLakeSort::MapToSchemaVersion(unique_ptr<ParsedExpression> &expr, const DuckLakeTableEntry &current_table,
+                                      const DuckLakeTableEntry &table) {
 	auto expression_class = expr->GetExpressionClass();
 	if (expression_class != ExpressionClass::POSITIONAL_REFERENCE && expression_class != ExpressionClass::COLUMN_REF) {
-		ParsedExpressionIterator::EnumerateChildren(*expr, [&](unique_ptr<ParsedExpression> &child) {
-			MapToInlinedColumns(child, current_table, inlined_table);
-		});
+		ParsedExpressionIterator::EnumerateChildren(
+		    *expr, [&](unique_ptr<ParsedExpression> &child) { MapToSchemaVersion(child, current_table, table); });
 		return;
 	}
 	auto &columns = current_table.GetColumns();
@@ -25,11 +23,11 @@ static void MapToInlinedColumns(unique_ptr<ParsedExpression> &expr, const DuckLa
 	                   ? columns.GetColumn(LogicalIndex(expr->Cast<PositionalReferenceExpression>().Index() - 1))
 	                   : columns.GetColumn(expr->Cast<ColumnRefExpression>().GetColumnName());
 	auto &field_id = current_table.GetFieldId(column.Physical());
-	auto inlined_field_id = inlined_table.GetFieldId(field_id.GetFieldIndex());
-	if (inlined_field_id) {
-		expr = make_uniq<ColumnRefExpression>(Identifier(inlined_field_id->Name()));
+	auto version_field_id = table.GetFieldId(field_id.GetFieldIndex());
+	if (version_field_id) {
+		expr = make_uniq<ColumnRefExpression>(Identifier(version_field_id->Name()));
 	} else {
-		// the inlined rows were written before this column existed
+		// the rows were written before this column existed
 		expr = field_id.GetInitialDefault();
 	}
 }
@@ -43,7 +41,7 @@ string DuckLakeSort::BuildSortOrderSQL(const vector<OrderByNode> &orders, const 
 			result += ", ";
 		}
 		auto expression = order.expression->Copy();
-		MapToInlinedColumns(expression, current_table, inlined_table);
+		MapToSchemaVersion(expression, current_table, inlined_table);
 		result += expression->ToString();
 		result += (order.type == OrderType::ASCENDING) ? " ASC" : " DESC";
 		result += (order.null_order == OrderByNullType::NULLS_FIRST) ? " NULLS FIRST" : " NULLS LAST";

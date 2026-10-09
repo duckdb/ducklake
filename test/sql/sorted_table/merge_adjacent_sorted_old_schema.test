@@ -1,0 +1,137 @@
+# name: test/sql/sorted_table/merge_adjacent_sorted_old_schema.test
+# description: Merging files written before columns were dropped, added or retyped sorts by the latest sort key
+# group: [sorted_table]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS lake (DATA_PATH '{DATA_PATH}/merge_sorted_old_schema', DATA_INLINING_ROW_LIMIT 0)
+
+# the added sort column has another type than the dropped column in its position
+statement ok
+CREATE TABLE lake.t (id BIGINT, d DOUBLE, x2 BIGINT)
+
+statement ok
+INSERT INTO lake.t VALUES (1, 1.5, 10), (2, 2.5, 20), (3, 3.5, 30)
+
+statement ok
+INSERT INTO lake.t VALUES (4, 4.5, 40), (5, 5.5, 50)
+
+statement ok
+UPDATE lake.t SET d = d + 1 WHERE id >= 4
+
+statement ok
+ALTER TABLE lake.t DROP COLUMN x2
+
+statement ok
+ALTER TABLE lake.t ADD COLUMN x3 DOUBLE
+
+statement ok
+ALTER TABLE lake.t SET SORTED BY (x3 DESC)
+
+query II
+SELECT files_processed, files_created FROM ducklake_merge_adjacent_files('lake', 't')
+----
+2	1
+
+query III
+SELECT * FROM lake.t ORDER BY id
+----
+1	1.5	NULL
+2	2.5	NULL
+3	3.5	NULL
+4	5.5	NULL
+5	6.5	NULL
+
+# the added sort column has the type of the dropped column in its position
+statement ok
+CREATE TABLE lake.b (id BIGINT, x2 BIGINT)
+
+statement ok
+INSERT INTO lake.b VALUES (1, 30), (2, 10)
+
+statement ok
+INSERT INTO lake.b VALUES (3, 20)
+
+statement ok
+ALTER TABLE lake.b DROP COLUMN x2
+
+statement ok
+ALTER TABLE lake.b ADD COLUMN x3 BIGINT
+
+statement ok
+ALTER TABLE lake.b SET SORTED BY (x3, id)
+
+query II
+SELECT files_processed, files_created FROM ducklake_merge_adjacent_files('lake', 'b')
+----
+2	1
+
+query I
+SELECT id FROM lake.b
+----
+1
+2
+3
+
+# a dropped column moves the sort column to another position
+statement ok
+CREATE TABLE lake.q (a BIGINT, id BIGINT, v BIGINT)
+
+statement ok
+INSERT INTO lake.q VALUES (0, 1, 30), (0, 2, 10)
+
+statement ok
+INSERT INTO lake.q VALUES (0, 3, 20)
+
+statement ok
+ALTER TABLE lake.q DROP COLUMN a
+
+statement ok
+ALTER TABLE lake.q SET SORTED BY (v)
+
+query II
+SELECT files_processed, files_created FROM ducklake_merge_adjacent_files('lake', 'q')
+----
+2	1
+
+query I
+SELECT id FROM lake.q
+----
+2
+3
+1
+
+# the sort column was promoted to a wider type
+statement ok
+CREATE TABLE lake.p (id BIGINT, v INTEGER)
+
+statement ok
+INSERT INTO lake.p VALUES (1, 30), (2, 10)
+
+statement ok
+INSERT INTO lake.p VALUES (3, 20)
+
+statement ok
+ALTER TABLE lake.p ALTER COLUMN v TYPE BIGINT
+
+statement ok
+ALTER TABLE lake.p SET SORTED BY (v * 2)
+
+query II
+SELECT files_processed, files_created FROM ducklake_merge_adjacent_files('lake', 'p')
+----
+2	1
+
+query II
+SELECT id, v FROM lake.p
+----
+2	10
+3	20
+1	30
