@@ -27,6 +27,8 @@
 #include "duckdb/planner/expression_binder/order_binder.hpp"
 #include "duckdb/planner/expression_binder/select_bind_state.hpp"
 #include "duckdb/parser/expression/columnref_expression.hpp"
+#include "duckdb/parser/expression/positional_reference_expression.hpp"
+#include "duckdb/parser/expression/cast_expression.hpp"
 #include "duckdb/planner/expression/bound_constant_expression.hpp"
 #include "duckdb/parser/parsed_expression_iterator.hpp"
 
@@ -367,6 +369,44 @@ void DuckLakeCompactor::GenerateCompactions(DuckLakeTableEntry &table,
 	}
 }
 
+//! Point a sort key column of the latest table at the scan of an older schema version, false when it cannot be
+static bool MapSortToSchemaVersion(unique_ptr<ParsedExpression> &expr, const DuckLakeTableEntry &latest_table,
+                                   const DuckLakeTableEntry &table) {
+	auto expression_class = expr->GetExpressionClass();
+	if (expression_class != ExpressionClass::POSITIONAL_REFERENCE && expression_class != ExpressionClass::COLUMN_REF) {
+		bool mapped = true;
+		ParsedExpressionIterator::EnumerateChildren(*expr, [&](unique_ptr<ParsedExpression> &child) {
+			mapped = MapSortToSchemaVersion(child, latest_table, table) && mapped;
+		});
+		return mapped;
+	}
+	auto &columns = latest_table.GetColumns();
+	auto &column = expression_class == ExpressionClass::POSITIONAL_REFERENCE
+	                   ? columns.GetColumn(LogicalIndex(expr->Cast<PositionalReferenceExpression>().Index() - 1))
+	                   : columns.GetColumn(expr->Cast<ColumnRefExpression>().GetColumnName());
+	auto &field_id = latest_table.GetFieldId(column.Physical());
+	auto version_field_id = table.GetFieldId(field_id.GetFieldIndex());
+	if (!version_field_id) {
+		// the files were written before this column existed
+		expr = field_id.GetInitialDefault();
+		expr->SetAlias(column.Name());
+		return true;
+	}
+	if (expression_class == ExpressionClass::POSITIONAL_REFERENCE) {
+		expr = make_uniq<ColumnRefExpression>(column.Name());
+	}
+	if (version_field_id->Type() == column.Type()) {
+		return true;
+	}
+	if (column.Type().IsNested()) {
+		return false;
+	}
+	// a promoted column is compared in its latest type
+	expr = make_uniq<CastExpression>(column.Type(), std::move(expr));
+	expr->SetAlias(column.Name());
+	return true;
+}
+
 unique_ptr<LogicalOperator> DuckLakeCompactor::InsertSort(Binder &binder, unique_ptr<LogicalOperator> &plan,
                                                           DuckLakeTableEntry &table,
                                                           const DuckLakeTableEntry &latest_table,
@@ -375,15 +415,29 @@ unique_ptr<LogicalOperator> DuckLakeCompactor::InsertSort(Binder &binder, unique
 	D_ASSERT(!bindings.empty());
 	auto sort_orders = ParseSortOrders(*sort_data);
 	// an invalid sort reports the same error as an insert into the latest table
-	BindSortOrders(binder, latest_table.GetColumns(), latest_table.name, binder.GenerateTableIndex(), sort_orders);
-	// the scan returns the columns of the schema version the files were written with
-	for (auto &order : sort_orders) {
-		DuckLakeSort::MapToSchemaVersion(order.expression, latest_table, table);
-	}
-	auto orders = BindSortOrders(binder, table.GetColumns(), table.name, bindings[0].table_index, sort_orders);
+	auto orders =
+	    BindSortOrders(binder, latest_table.GetColumns(), latest_table.name, bindings[0].table_index, sort_orders);
 	if (orders.empty()) {
 		// Then the sorts were not in the DuckDB dialect and we return the original plan
 		return std::move(plan);
+	}
+	if (&table != &latest_table) {
+		for (auto &order : sort_orders) {
+			if (!MapSortToSchemaVersion(order.expression, latest_table, table)) {
+				// the fields of a nested sort column changed since the files were written
+				return std::move(plan);
+			}
+		}
+		// the scanned columns are named after their fields in the latest table
+		vector<Identifier> names;
+		for (auto &column : table.GetColumns().Logical()) {
+			auto &field_id = table.GetFieldId(column.Physical());
+			auto latest_field_id = latest_table.GetFieldId(field_id.GetFieldIndex());
+			names.push_back(latest_field_id ? Identifier(latest_field_id->Name())
+			                                : Identifier(DuckLakeInlinedColNames::PREFIX + to_string(names.size())));
+		}
+		orders = BindOrderByNodes(binder, bindings[0].table_index, table.name, names,
+		                          table.GetColumns().GetColumnTypes(), sort_orders);
 	}
 
 	// Resolve types for the input plan (could be LogicalGet or LogicalProjection)

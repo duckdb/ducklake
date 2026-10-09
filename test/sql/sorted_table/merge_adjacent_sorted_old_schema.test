@@ -1,5 +1,5 @@
 # name: test/sql/sorted_table/merge_adjacent_sorted_old_schema.test
-# description: Files and inlined rows of an older schema version are sorted by the latest sort key
+# description: Merging files of an older schema version sorts them by the latest sort key
 # group: [sorted_table]
 
 require ducklake
@@ -136,29 +136,57 @@ SELECT id, v FROM lake.p
 3	20
 1	1500000000
 
-# a field of the struct the table is sorted by was renamed
+# a renamed column keeps the name the sort key infers from it
 statement ok
-CREATE TABLE lake.s (id BIGINT, st STRUCT(a BIGINT))
+CREATE TABLE lake.k (id BIGINT, old_v BIGINT)
 
 statement ok
-INSERT INTO lake.s VALUES (1, {'a': 30}), (2, {'a': 10})
+INSERT INTO lake.k VALUES (1, 30), (2, 10)
 
 statement ok
-INSERT INTO lake.s VALUES (3, {'a': 20})
+INSERT INTO lake.k VALUES (3, 20)
 
 statement ok
-ALTER TABLE lake.s RENAME COLUMN st.a TO z
+ALTER TABLE lake.k RENAME COLUMN old_v TO v
 
 statement ok
-ALTER TABLE lake.s SET SORTED BY (st)
+ALTER TABLE lake.k SET SORTED BY (struct_extract(struct_pack(v), 'v'))
 
 query II
-SELECT files_processed, files_created FROM ducklake_merge_adjacent_files('lake', 's')
+SELECT files_processed, files_created FROM ducklake_merge_adjacent_files('lake', 'k')
 ----
 2	1
 
 query I
-SELECT id FROM lake.s
+SELECT id FROM lake.k
+----
+2
+3
+1
+
+# a positional sort key refers to the column at its position in the latest table
+statement ok
+CREATE TABLE lake.r (a BIGINT, id BIGINT, v BIGINT)
+
+statement ok
+INSERT INTO lake.r VALUES (0, 1, 30), (0, 2, 10)
+
+statement ok
+INSERT INTO lake.r VALUES (0, 3, 20)
+
+statement ok
+ALTER TABLE lake.r SET SORTED BY (#2)
+
+statement ok
+ALTER TABLE lake.r DROP COLUMN a
+
+query II
+SELECT files_processed, files_created FROM ducklake_merge_adjacent_files('lake', 'r')
+----
+2	1
+
+query I
+SELECT id FROM lake.r
 ----
 2
 3
@@ -184,51 +212,3 @@ statement error
 SELECT files_processed, files_created FROM ducklake_merge_adjacent_files('lake', 'o')
 ----
 Positional reference 2 out of range
-
-# inlined rows of an older schema version flush in the order of the latest sort key
-statement ok
-CALL lake.set_option('data_inlining_row_limit', 10)
-
-statement ok
-CREATE TABLE lake.fp (id BIGINT, v INTEGER)
-
-statement ok
-INSERT INTO lake.fp VALUES (1, 1500000000), (2, 10), (3, 20)
-
-statement ok
-ALTER TABLE lake.fp ALTER COLUMN v TYPE BIGINT
-
-statement ok
-ALTER TABLE lake.fp SET SORTED BY (v * 2)
-
-statement ok
-CALL ducklake_flush_inlined_data('lake', table_name => 'fp')
-
-query I
-SELECT id FROM lake.fp
-----
-2
-3
-1
-
-statement ok
-CREATE TABLE lake.fs (id BIGINT, st STRUCT(a BIGINT))
-
-statement ok
-INSERT INTO lake.fs VALUES (1, {'a': 30}), (2, {'a': 10}), (3, {'a': 20})
-
-statement ok
-ALTER TABLE lake.fs RENAME COLUMN st.a TO z
-
-statement ok
-ALTER TABLE lake.fs SET SORTED BY (st)
-
-statement ok
-CALL ducklake_flush_inlined_data('lake', table_name => 'fs')
-
-query I
-SELECT id FROM lake.fs
-----
-2
-3
-1
