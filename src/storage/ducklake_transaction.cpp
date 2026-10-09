@@ -149,12 +149,12 @@ shared_ptr<DuckLakeInlinedData> LocalTableChanges::GetTransactionLocalInlinedDat
 	return result;
 }
 
-void LocalTableChanges::DropTransactionLocalFile(ClientContext &context, TableIndex table_id, const string &path) {
+bool LocalTableChanges::TryDropTransactionLocalFile(ClientContext &context, TableIndex table_id, const string &path) {
 	lock_guard<mutex> guard(lock);
 	auto entry = Find(table_id);
 	if (!entry) {
 		throw InternalException(
-		    "DropTransactionLocalFile called for a table for which no transaction-local files exist");
+		    "TryDropTransactionLocalFile called for a table for which no transaction-local files exist");
 	}
 	auto &table_changes = *entry;
 	auto &table_files = table_changes.new_data_files;
@@ -162,6 +162,10 @@ void LocalTableChanges::DropTransactionLocalFile(ClientContext &context, TableIn
 	for (idx_t i = 0; i < table_files.size(); i++) {
 		auto &file = table_files[i];
 		if (file.file_name == path) {
+			if (file.max_partial_file_snapshot.IsValid()) {
+				// rows flushed from earlier snapshots keep their history
+				return false;
+			}
 			auto created_by_ducklake = file.created_by_ducklake;
 			for (auto &del_file : file.delete_files) {
 				fs.RemoveFile(del_file.file_name);
@@ -176,10 +180,10 @@ void LocalTableChanges::DropTransactionLocalFile(ClientContext &context, TableIn
 				// no more files remaining
 				changes.erase(table_id);
 			}
-			return;
+			return true;
 		}
 	}
-	throw InternalException("Failed to find matching transaction-local file for DropTransactionLocalFile");
+	throw InternalException("Failed to find matching transaction-local file for TryDropTransactionLocalFile");
 }
 
 void LocalTableChanges::AppendFiles(TableIndex table_id, vector<DuckLakeDataFile> files) {
@@ -978,11 +982,16 @@ void DuckLakeTransaction::AddTableChanges(TableIndex table_id, const LocalTableD
                                           TransactionChangeInformation &changes) {
 	bool inserted_data = false;
 	bool flushed_inline_data = false;
+	bool deleted_data = !table_changes.new_delete_files.empty();
 	for (auto &file : table_changes.new_data_files) {
-		if (file.begin_snapshot.IsValid()) {
-			flushed_inline_data = true;
-		} else {
+		if (!file.begin_snapshot.IsValid()) {
 			inserted_data = true;
+			continue;
+		}
+		flushed_inline_data = true;
+		for (auto &delete_file : file.delete_files) {
+			// the rows of a flushed file were committed before this transaction deleted them
+			deleted_data |= delete_file.source == DeleteFileSource::REGULAR;
 		}
 	}
 
@@ -995,7 +1004,7 @@ void DuckLakeTransaction::AddTableChanges(TableIndex table_id, const LocalTableD
 	if (table_changes.new_inlined_data) {
 		changes.tables_inserted_inlined.insert(table_id);
 	}
-	if (!table_changes.new_delete_files.empty()) {
+	if (deleted_data) {
 		changes.tables_deleted_from.insert(table_id);
 	}
 	if (!table_changes.new_inlined_data_deletes.empty() || table_changes.new_inlined_file_deletes) {
@@ -1676,9 +1685,9 @@ shared_ptr<DuckLakeInlinedData> DuckLakeTransaction::GetTransactionLocalInlinedD
 	return state->local_changes.GetTransactionLocalInlinedData(*context_ref, table_id);
 }
 
-void DuckLakeTransaction::DropTransactionLocalFile(TableIndex table_id, const string &path) {
+bool DuckLakeTransaction::TryDropTransactionLocalFile(TableIndex table_id, const string &path) {
 	auto context_ref = context.lock();
-	state->local_changes.DropTransactionLocalFile(*context_ref, table_id, path);
+	return state->local_changes.TryDropTransactionLocalFile(*context_ref, table_id, path);
 }
 
 void DuckLakeTransaction::AppendFiles(TableIndex table_id, vector<DuckLakeDataFile> files) {
