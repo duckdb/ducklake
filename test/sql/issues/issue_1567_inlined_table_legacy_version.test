@@ -14,17 +14,17 @@ ATTACH 'ducklake:{TEST_DIR}/issue_1567_legacy.db' AS lake (DATA_PATH '{TEST_DIR}
 
 # t got its first inlined rows after its ALTER, m and r in the commit of their ALTER
 query III
-SELECT tbl.table_name, idt.schema_version, max(sv.schema_version)
+SELECT tbl.table_name, idt.schema_version, list(sv.schema_version ORDER BY sv.schema_version)
 FROM meta.ducklake_inlined_data_tables idt
 JOIN meta.ducklake_table tbl USING (table_id)
 JOIN meta.ducklake_schema_versions sv USING (table_id)
 GROUP BY ALL
 ORDER BY ALL
 ----
-m	7	8
-n	8	5
-r	7	8
-t	6	2
+m	7	[3, 8]
+n	8	[5]
+r	7	[4, 8]
+t	6	[1, 2]
 
 query II
 SELECT a, b FROM lake.t
