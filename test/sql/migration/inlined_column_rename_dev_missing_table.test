@@ -37,9 +37,25 @@ ATTACH 'ducklake:{TEST_DIR}/dev1_missing.db' AS dl (DATA_PATH '{TEST_DIR}/dev1_m
 ----
 Failed to read inlined-data table
 
-# a plain attach still works
+# Schema additions survive a failed column rename
 statement ok
 ATTACH 'ducklake:{TEST_DIR}/dev1_missing.db' AS dl (DATA_PATH '{TEST_DIR}/dev1_missing_files')
 
+query I
+SELECT table_name FROM duckdb_tables() WHERE database_name = 'dl'
+----
+t
+
 statement ok
 DETACH dl
+
+statement ok
+ATTACH '{TEST_DIR}/dev1_missing.db' AS meta
+
+query I
+SELECT count(*) FROM duckdb_columns() WHERE database_name = 'meta' AND table_name = 'ducklake_schema' AND column_name = 'parent_schema_id'
+----
+1
+
+statement ok
+DETACH meta

@@ -138,6 +138,19 @@ const ColumnList &DuckLakeTableEntry::GetColumns() const {
 	return columns;
 }
 
+bool DuckLakeTableEntry::IsCurrentInlinedDataTable(idx_t schema_version, optional_idx last_schema_change) {
+	return !last_schema_change.IsValid() || schema_version >= last_schema_change.GetIndex();
+}
+
+bool DuckLakeTableEntry::HasCurrentInlinedDataTable(optional_idx last_schema_change) const {
+	for (auto &inlined_table : inlined_data_tables) {
+		if (IsCurrentInlinedDataTable(inlined_table.schema_version, last_schema_change)) {
+			return true;
+		}
+	}
+	return false;
+}
+
 // ALTER TABLE RENAME/SET COMMENT/ADD COLUMN/DROP COLUMN
 DuckLakeTableEntry::DuckLakeTableEntry(DuckLakeTableEntry &parent, CreateTableInfo &info, LocalChange local_change)
     : DuckLakeTableEntry(parent.ParentCatalog(), parent.ParentSchema(), info, parent.GetTableId(),

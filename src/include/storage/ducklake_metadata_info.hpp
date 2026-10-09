@@ -94,6 +94,16 @@ struct DuckLakeInlinedTableInfo {
 	idx_t schema_version;
 };
 
+//! The schema versions of the creation and the last schema change of a table
+struct DuckLakeTableSchemaVersions {
+	optional_idx creation;
+	optional_idx last_change;
+
+	bool ChangedSinceCreation() const {
+		return creation.IsValid() && last_change.IsValid() && creation.GetIndex() != last_change.GetIndex();
+	}
+};
+
 struct DuckLakeTableInfo {
 	TableIndex id;
 	SchemaIndex schema_id;

@@ -18,6 +18,9 @@ statement ok
 USE ducklake;
 
 statement ok
+CALL ducklake.set_option('per_thread_output', true);
+
+statement ok
 CREATE TABLE t (id INTEGER);
 
 statement ok
@@ -86,6 +89,12 @@ query II
 SELECT COUNT(*), SUM(files_created) FROM ducklake_rewrite_data_files('ducklake', 't', delete_threshold => 0);
 ----
 1	0
+
+query I
+SELECT count(*) FROM parquet_file_metadata('{DATA_PATH}/rewrite_deletes_full_file_delete_after_flush/**/*.parquet')
+WHERE num_rows = 0;
+----
+0
 
 query I
 SELECT COUNT(*) FROM t AT (VERSION => getvariable('v_after_insert'))

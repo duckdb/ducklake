@@ -1,0 +1,122 @@
+# name: test/sql/compaction/merge_adjacent_keeps_row_ids.test
+# description: merge_adjacent_files and CHECKPOINT keep the rowids of sorted rows and of rows written by an UPDATE
+# group: [compaction]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/merge_adjacent_keeps_row_ids', DATA_INLINING_ROW_LIMIT 0)
+
+# a sort reorders the rows of adjacent files
+statement ok
+CREATE TABLE dl.s (id INTEGER)
+
+statement ok
+ALTER TABLE dl.s SET SORTED BY (id)
+
+statement ok
+INSERT INTO dl.s VALUES (1)
+
+statement ok
+SET VARIABLE s1 = (SELECT max(snapshot_id) FROM dl.snapshots())
+
+statement ok
+INSERT INTO dl.s VALUES (0)
+
+statement ok
+CALL ducklake_merge_adjacent_files('dl', 's')
+
+query II
+SELECT rowid, id FROM dl.s ORDER BY id
+----
+1	0
+0	1
+
+query II
+SELECT rowid, id FROM dl.s AT (VERSION => getvariable('s1'))
+----
+0	1
+
+query III
+SELECT snapshot_id - getvariable('s1'), rowid, id FROM ducklake_table_changes('dl', 'main', 's', 0, getvariable('s1') + 1) ORDER BY ALL
+----
+0	0	1
+1	1	0
+
+# an UPDATE writes its rows with their rowids, not at its row_id_start
+statement ok
+CREATE TABLE dl.u (id INTEGER, v INTEGER)
+
+statement ok
+INSERT INTO dl.u VALUES (1, NULL)
+
+statement ok
+UPDATE dl.u SET v = 10 WHERE id = 1
+
+statement ok
+SET VARIABLE u1 = (SELECT max(snapshot_id) FROM dl.snapshots())
+
+statement ok
+INSERT INTO dl.u VALUES (2, NULL)
+
+statement ok
+CALL ducklake_merge_adjacent_files('dl', 'u')
+
+query III
+SELECT rowid, id, v FROM dl.u ORDER BY id
+----
+0	1	10
+2	2	NULL
+
+query III
+SELECT rowid, id, v FROM dl.u AT (VERSION => getvariable('u1'))
+----
+0	1	10
+
+query III
+SELECT rowid, change_type, v FROM ducklake_table_changes('dl', 'main', 'u', getvariable('u1'), getvariable('u1')) ORDER BY ALL
+----
+0	update_postimage	10
+0	update_preimage	NULL
+
+# merging the merged file again keeps them
+statement ok
+INSERT INTO dl.u VALUES (3, NULL)
+
+statement ok
+CALL ducklake_merge_adjacent_files('dl', 'u')
+
+query II
+SELECT rowid, id FROM dl.u ORDER BY id
+----
+0	1
+2	2
+3	3
+
+# CHECKPOINT runs the same merge
+statement ok
+CREATE TABLE dl.c (id INTEGER)
+
+statement ok
+ALTER TABLE dl.c SET SORTED BY (id)
+
+statement ok
+INSERT INTO dl.c VALUES (1)
+
+statement ok
+INSERT INTO dl.c VALUES (0)
+
+statement ok
+CHECKPOINT dl
+
+query II
+SELECT rowid, id FROM dl.c ORDER BY id
+----
+1	0
+0	1

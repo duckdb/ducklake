@@ -255,10 +255,11 @@ void DuckLakeInsert::AddWrittenFiles(DuckLakeInsertGlobalState &global_state, Da
 				data_file.partition_values.push_back(std::move(file_partition_info));
 			}
 		}
+		if (data_file.row_count == 0) {
+			global_state.empty_files.push_back(std::move(data_file.file_name));
+			continue;
+		}
 		if (set_snapshot_id && !data_file.begin_snapshot.IsValid()) {
-			if (data_file.row_count == 0) {
-				continue;
-			}
 			throw InvalidInputException("Did not find written snapshot id - but operation requires it to be set");
 		}
 
@@ -286,10 +287,20 @@ SourceResultType DuckLakeInsert::GetDataInternal(ExecutionContext &context, Data
 //===--------------------------------------------------------------------===//
 // Finalize
 //===--------------------------------------------------------------------===//
+void DuckLakeInsert::RemoveEmptyFiles(ClientContext &context, DuckLakeInsertGlobalState &gstate) {
+	if (gstate.empty_files.empty()) {
+		return;
+	}
+	auto &fs = FileSystem::GetFileSystem(context);
+	fs.RemoveFiles(gstate.empty_files);
+	gstate.empty_files.clear();
+}
+
 SinkFinalizeType DuckLakeInsert::Finalize(Pipeline &pipeline, Event &event, ClientContext &context,
                                           OperatorSinkFinalizeInput &input) const {
 	auto &global_state = input.global_state.Cast<DuckLakeInsertGlobalState>();
 
+	RemoveEmptyFiles(context, global_state);
 	for (auto &data_file : global_state.written_files) {
 		global_state.total_insert_count += data_file.row_count;
 	}
