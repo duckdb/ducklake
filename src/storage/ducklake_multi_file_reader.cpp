@@ -57,10 +57,22 @@ static optional_idx FindColumnByFieldId(const vector<MultiFileColumnDefinition> 
 
 //! Add a snapshot filter to the reader's filter set
 static void AddSnapshotFilter(BaseFileReader &reader, const ColumnIndex &col_idx, const LogicalType &col_type,
-                              idx_t snapshot_value, ExpressionType comparison_type) {
+                              idx_t snapshot_value, ExpressionType comparison_type,
+                              MultiFileGlobalIndex filter_identity) {
 	auto constant = Value::UBIGINT(snapshot_value).DefaultCastAs(col_type);
 	auto filter = ExpressionFilter::CreateComparisonFilter(comparison_type, std::move(constant));
-	reader.filters->PushFilter(ProjectionIndex(col_idx.GetPrimaryIndex()), std::move(filter));
+	ProjectionIndex filter_idx(col_idx.GetPrimaryIndex());
+	if (!reader.filters->HasFilter(filter_idx)) {
+		// the adaptive filter cache expects one global index per filter, in column order
+		idx_t filter_pos = 0;
+		for (auto &entry : *reader.filters) {
+			if (entry.GetIndex() < filter_idx) {
+				filter_pos++;
+			}
+		}
+		reader.filter_global_indices.insert(reader.filter_global_indices.begin() + filter_pos, filter_identity);
+	}
+	reader.filters->PushFilter(filter_idx, std::move(filter));
 }
 
 // recursively normalize LIST child names from legacy formats blame legacy Avro/Parquet formats
@@ -385,17 +397,19 @@ ReaderInitializeType DuckLakeMultiFileReader::InitializeReader(MultiFileReaderDa
 			reader.filters = make_uniq<TableFilterSet>();
 		}
 		ColumnIndex snapshot_col_idx(snapshot_local_id.GetIndex());
+		// no global column has this index
+		MultiFileGlobalIndex snapshot_filter_identity(global_column_ids.size());
 
 		// Add _ducklake_internal_snapshot_id <= snapshot_filter_max
 		if (file_entry.snapshot_filter_max.IsValid()) {
 			AddSnapshotFilter(reader, snapshot_col_idx, snapshot_col_type, file_entry.snapshot_filter_max.GetIndex(),
-			                  ExpressionType::COMPARE_LESSTHANOREQUALTO);
+			                  ExpressionType::COMPARE_LESSTHANOREQUALTO, snapshot_filter_identity);
 		}
 
 		// Add _ducklake_internal_snapshot_id >= snapshot_filter_min
 		if (file_entry.snapshot_filter_min.IsValid()) {
 			AddSnapshotFilter(reader, snapshot_col_idx, snapshot_col_type, file_entry.snapshot_filter_min.GetIndex(),
-			                  ExpressionType::COMPARE_GREATERTHANOREQUALTO);
+			                  ExpressionType::COMPARE_GREATERTHANOREQUALTO, snapshot_filter_identity);
 		}
 	}
 	return result;
