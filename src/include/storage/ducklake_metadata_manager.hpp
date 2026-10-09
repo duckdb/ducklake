@@ -8,6 +8,8 @@
 
 #pragma once
 
+#include "common/ducklake_key_wrap.hpp"
+
 #include "duckdb/common/common.hpp"
 #include "duckdb/common/file_system.hpp"
 #include "duckdb/common/unordered_set.hpp"
@@ -187,6 +189,9 @@ class DuckLakeMetadataManager {
 public:
 	explicit DuckLakeMetadataManager(DuckLakeTransaction &transaction);
 	virtual ~DuckLakeMetadataManager();
+
+	//! Key codec for the attached catalog (wraps DEKs when it was attached with KEY_ENCRYPTION_KEY)
+	DuckLakeKeyCodec KeyCodec() const;
 
 	typedef unique_ptr<DuckLakeMetadataManager> (*create_t)(DuckLakeTransaction &transaction);
 	static void Register(const string &name, create_t);
@@ -394,7 +399,8 @@ public:
 	//! {METADATA_CATALOG} / {SNAPSHOT_ID} placeholders. Caller supplies resolved paths (one per file,
 	//! same order) since path policy differs across callers (schema-relative vs. always-absolute).
 	static string WriteNewDataFilesSqlBatch(const vector<DuckLakeFileInfo> &new_files,
-	                                        const vector<DuckLakePath> &resolved_paths, bool supports_v1_1_metadata);
+	                                        const vector<DuckLakePath> &resolved_paths, bool supports_v1_1_metadata,
+	                                        const DuckLakeKeyCodec &key_codec);
 	//! Opt-in fast-path: if this backend supports the DuckDB Appender API, write the files directly
 	bool TryAppendDataFiles(DuckLakeSnapshot &commit_snapshot, const vector<DuckLakeFileInfo> &new_files,
 	                        const vector<DuckLakeTableInfo> &new_tables,
@@ -443,7 +449,8 @@ public:
 	                                           const vector<DuckLakePath> &resolved_paths);
 	//! Caller supplies one resolved path per new delete file, in the same order.
 	static string WriteNewDeleteFiles(const vector<DuckLakeDeleteFileInfo> &new_delete_files,
-	                                  const vector<DuckLakePath> &resolved_paths, bool write_row_group_count);
+	                                  const vector<DuckLakePath> &resolved_paths, bool write_row_group_count,
+	                                  const DuckLakeKeyCodec &key_codec);
 	static string WriteNewMacros(const vector<DuckLakeMacroInfo> &new_macros);
 
 	virtual vector<DuckLakeColumnMappingInfo> GetColumnMappings(optional_idx start_from);
@@ -672,6 +679,7 @@ private:
 
 protected:
 	DuckLakeTransaction &transaction;
+
 	mutex paths_lock;
 	map<SchemaIndex, string> schema_paths;
 	map<TableIndex, string> table_paths;

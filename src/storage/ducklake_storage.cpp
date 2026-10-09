@@ -7,6 +7,7 @@
 #include "storage/ducklake_catalog.hpp"
 #include "storage/ducklake_transaction_manager.hpp"
 #include "storage/ducklake_secret.hpp"
+#include "common/ducklake_key_wrap.hpp"
 
 namespace duckdb {
 
@@ -35,6 +36,8 @@ static void HandleDuckLakeOption(DuckLakeOptions &options, const string &option,
 		} else {
 			options.encryption = DuckLakeEncryption::UNENCRYPTED;
 		}
+	} else if (lcase == "key_encryption_key") {
+		options.key_encryption_key = DuckLakeKeyWrap::DeriveKEK(value.ToString());
 	} else if (lcase == "data_inlining_row_limit") {
 		options.config_options["data_inlining_row_limit"] = value.DefaultCastAs(LogicalType::UBIGINT).ToString();
 	} else if (lcase == "snapshot_version") {

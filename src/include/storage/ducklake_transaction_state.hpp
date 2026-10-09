@@ -9,6 +9,7 @@
 #pragma once
 
 #include "storage/ducklake_stats.hpp"
+#include "common/ducklake_key_wrap.hpp"
 #include "storage/ducklake_transaction.hpp"
 
 namespace duckdb {
@@ -24,6 +25,8 @@ struct DuckLakeColumnSchemaEntry {
 };
 
 struct DuckLakeCommitContext {
+	//! Encodes data/delete file keys for the catalog (wraps them when a KEK is present)
+	DuckLakeKeyCodec key_codec;
 	//! Runs a metadata-DB query during conflict resolution.
 	std::function<unique_ptr<QueryResult>(string)> conflict_query_executor;
 	//! Whether the inlined file deletion table of a table exists, it is created lazily

@@ -1,0 +1,109 @@
+# name: test/sql/encryption/key_encryption_key.test
+# description: Wrap per-file encryption keys in the catalog with a key-encryption key (KEY_ENCRYPTION_KEY)
+# group: [encryption]
+
+require ducklake
+
+require parquet
+
+require httpfs
+
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/ducklake_kek.db' AS ducklake (DATA_PATH '{TEST_DIR}/ducklake_kek_files', ENCRYPTED, KEY_ENCRYPTION_KEY 'my-kek')
+
+statement ok
+CREATE TABLE ducklake.test AS SELECT i id FROM range(1000) t(i);
+
+statement ok
+INSERT INTO ducklake.test SELECT i FROM range(1000, 1500) t(i);
+
+# a delete large enough not to be inlined, so a delete file (with its own key) is written
+statement ok
+DELETE FROM ducklake.test WHERE id < 200
+
+query II
+SELECT COUNT(*), SUM(id) FROM ducklake.test
+----
+1300	1104350
+
+# the catalog only holds wrapped keys, for data files and delete files alike
+query I
+SELECT COUNT(*) = COUNT(*) FILTER (WHERE encryption_key LIKE 'kek1:%') AND COUNT(*) > 0 FROM __ducklake_metadata_ducklake.ducklake_data_file
+----
+true
+
+query I
+SELECT COUNT(*) = COUNT(*) FILTER (WHERE encryption_key LIKE 'kek1:%') AND COUNT(*) > 0 FROM __ducklake_metadata_ducklake.ducklake_delete_file
+----
+true
+
+# the files themselves are still parquet-encrypted
+statement error
+SELECT * FROM '{TEST_DIR}/ducklake_kek_files/**/*.parquet'
+----
+encrypted
+
+statement ok
+DETACH ducklake
+
+# without the KEK the keys cannot be unwrapped
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/ducklake_kek.db' AS ducklake (DATA_PATH '{TEST_DIR}/ducklake_kek_files')
+
+# COUNT(*) is answered from table stats, so force a file read
+statement error
+SELECT SUM(id) FROM ducklake.test
+----
+KEY_ENCRYPTION_KEY
+
+statement ok
+DETACH ducklake
+
+# a wrong KEK fails the authentication tag
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/ducklake_kek.db' AS ducklake (DATA_PATH '{TEST_DIR}/ducklake_kek_files', KEY_ENCRYPTION_KEY 'not-my-kek')
+
+statement error
+SELECT SUM(id) FROM ducklake.test
+----
+wrong KEY_ENCRYPTION_KEY
+
+statement ok
+DETACH ducklake
+
+# the right KEK reads and keeps writing
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/ducklake_kek.db' AS ducklake (DATA_PATH '{TEST_DIR}/ducklake_kek_files', KEY_ENCRYPTION_KEY 'my-kek')
+
+statement ok
+INSERT INTO ducklake.test SELECT i FROM range(10) t(i);
+
+query II
+SELECT COUNT(*), SUM(id) FROM ducklake.test
+----
+1310	1104395
+
+query I
+SELECT COUNT(*) FROM ducklake.test AT (VERSION => 1)
+----
+1000
+
+# a 64-hex-char value is taken as a raw 256-bit key
+statement ok
+DETACH ducklake
+
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/ducklake_kek_hex.db' AS hexlake (DATA_PATH '{TEST_DIR}/ducklake_kek_hex_files', ENCRYPTED, KEY_ENCRYPTION_KEY '000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f')
+
+statement ok
+CREATE TABLE hexlake.t AS SELECT 42 AS x
+
+query I
+SELECT x FROM hexlake.t
+----
+42
+
+statement error
+ATTACH 'ducklake:{TEST_DIR}/ducklake_kek_empty.db' AS emptylake (DATA_PATH '{TEST_DIR}/ducklake_kek_empty_files', ENCRYPTED, KEY_ENCRYPTION_KEY '')
+----
+must not be empty

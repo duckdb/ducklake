@@ -1339,6 +1339,7 @@ void DuckLakeTransaction::RunCommitLoop(DuckLakeSnapshot transaction_snapshot,
                                         const DuckLakeRetryConfig &retry_config) {
 	vector<unique_ptr<SQLStatement>> inlined_inserts;
 	DuckLakeCommitContext context;
+	context.key_codec = metadata_manager->KeyCodec();
 	context.conflict_query_executor = [&](string q) -> unique_ptr<QueryResult> {
 		auto result = metadata_manager->Query(transaction_snapshot, q);
 		result->ThrowIfError("Failed to commit DuckLake transaction - failed to get snapshot and "

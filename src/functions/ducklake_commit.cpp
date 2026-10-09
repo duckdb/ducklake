@@ -8,6 +8,7 @@ struct DuckLakeCommitBindData : public TableFunctionData {
 	string metadata_schema_name;
 	int64_t schema_version = 0;
 	DuckLakeRetryConfig retry_config;
+	string key_encryption_key;
 };
 
 static unique_ptr<FunctionData> DuckLakeCommitBind(ClientContext &, TableFunctionBindInput &input,
@@ -30,6 +31,8 @@ static unique_ptr<FunctionData> DuckLakeCommitBind(ClientContext &, TableFunctio
 			result->retry_config.retry_wait_ms = static_cast<idx_t>(entry.second.GetValue<int64_t>());
 		} else if (entry.first == "retry_backoff") {
 			result->retry_config.retry_backoff = entry.second.GetValue<double>();
+		} else if (entry.first == "key_encryption_key") {
+			result->key_encryption_key = StringValue::Get(entry.second);
 		}
 	}
 	names.emplace_back("committed_snapshot_id");
@@ -52,6 +55,9 @@ static void DuckLakeCommitExecute(ClientContext &context, TableFunctionInput &da
 
 	DuckLakeServerSideCommit commit(context, data.metadata_schema_name, data.schema_version);
 	commit.SetRetryConfigOverride(data.retry_config);
+	if (!data.key_encryption_key.empty()) {
+		commit.SetKeyEncryptionKey(data.key_encryption_key);
+	}
 	auto result = commit.Run();
 
 	output.data[0].Append(Value::BIGINT(result.committed_snapshot_id));
@@ -69,7 +75,8 @@ DuckLakeCommitFunction::DuckLakeCommitFunction()
 	GetSignature().WithTypedKwargs("options", [&](TypedKwargs &options) {
 		options.Add("max_retry_count", LogicalType::BIGINT)
 		    .Add("retry_wait_ms", LogicalType::BIGINT)
-		    .Add("retry_backoff", LogicalType::DOUBLE);
+		    .Add("retry_backoff", LogicalType::DOUBLE)
+		    .Add("key_encryption_key", LogicalType::VARCHAR);
 	});
 }
 
