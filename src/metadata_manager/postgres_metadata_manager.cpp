@@ -95,6 +95,10 @@ string PostgresMetadataManager::CastValueToTarget(const Value &value, const Logi
 	if (IsPostgresTemporalStatsType(type) && !CanCastPostgresTemporalValue(value, type)) {
 		return string();
 	}
+	if (type.id() == LogicalTypeId::FLOAT) {
+		// a bare number is NUMERIC, which compares with REAL bounds as DOUBLE PRECISION
+		return "CAST(" + value.ToString() + " AS " + GetPostgresStatsType(type) + ")";
+	}
 	if (type.IsNumeric()) {
 		return value.ToString();
 	}
@@ -219,6 +223,24 @@ string PostgresMetadataManager::GetColumnTypeInternal(const LogicalType &column_
 	default:
 		return column_type.ToString();
 	}
+}
+
+bool PostgresMetadataManager::IsRetryableCommitError(const string &message) const {
+	// the server error follows the failed query, which can contain any text
+	auto server_error_start = message.rfind("\": ");
+	auto server_error = server_error_start == string::npos ? message : message.substr(server_error_start);
+	// constraint names are not translated, so a conflict on a metadata primary key is found in any language
+	for (auto end = server_error.find("_pkey"); end != string::npos; end = server_error.find("_pkey", end + 1)) {
+		auto start = end;
+		while (start > 0 &&
+		       (StringUtil::CharacterIsAlphaNumeric(server_error[start - 1]) || server_error[start - 1] == '_')) {
+			start--;
+		}
+		if (StringUtil::StartsWith(server_error.substr(start, end - start), "ducklake_")) {
+			return true;
+		}
+	}
+	return false;
 }
 
 bool PostgresMetadataManager::InlinedDeletionTableExists(const string &table_name) {

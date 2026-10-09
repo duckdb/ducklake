@@ -1,0 +1,73 @@
+# name: test/sql/data_inlining/per_thread_output_no_empty_files.test
+# description: inlined inserts leave no empty data files
+# group: [data_inlining]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{BASE_TEST_NAME}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl
+(DATA_PATH '{DATA_PATH}/per_thread_output_no_empty_files', METADATA_CATALOG 'meta', DATA_INLINING_ROW_LIMIT 10)
+
+statement ok
+CALL dl.set_option('per_thread_output', true)
+
+statement ok
+CREATE TABLE dl.t AS SELECT i AS part_id, i * 10 AS v FROM range(4) tt(i)
+
+statement ok
+INSERT INTO dl.t BY NAME SELECT 1 AS part_id, 99 AS v
+
+query I
+SELECT count(*) FROM meta.ducklake_data_file
+----
+0
+
+query I
+SELECT count(*) FROM glob('{DATA_PATH}/per_thread_output_no_empty_files/**/*.parquet')
+----
+0
+
+query II
+SELECT part_id, v FROM dl.t ORDER BY ALL
+----
+0	0
+1	10
+1	99
+2	20
+3	30
+
+statement ok
+FROM ducklake_flush_inlined_data('dl')
+
+query III
+SELECT count(*), min(record_count) > 0, sum(record_count) FROM meta.ducklake_data_file
+----
+1	true	5
+
+query II
+SELECT part_id, v FROM dl.t ORDER BY ALL
+----
+0	0
+1	10
+1	99
+2	20
+3	30
+
+statement ok
+INSERT INTO dl.t SELECT 7, r FROM range(11) _(r)
+
+query II
+SELECT count(*) > 1, sum(record_count) FROM meta.ducklake_data_file
+----
+true	16
+
+query I
+SELECT count(*) FROM dl.t
+----
+16
