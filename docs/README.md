@@ -101,11 +101,13 @@ See the [Usage](https://ducklake.select/docs/stable/duckdb/introduction) guide f
 To build, type
 ```
 git submodule init
-git submodule update
+git submodule update --recursive
 # to build with multiple cores, use `make GEN=ninja release`
-make pull
 make
 ```
+
+The submodules are pinned to the DuckDB version in `.github/duckdb-version`, which is what CI builds against. `make pull`
+moves them to the tip of their branch instead, where the build can fail.
 
 To run, run the bundled `duckdb` shell:
 ```

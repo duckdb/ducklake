@@ -20,6 +20,7 @@
 #include "duckdb/main/client_context_state.hpp"
 #include "duckdb/storage/object_cache.hpp"
 #include "storage/ducklake_catalog_set.hpp"
+#include "storage/ducklake_metadata_info.hpp"
 #include "storage/ducklake_partition_data.hpp"
 #include "storage/ducklake_stats.hpp"
 
@@ -371,6 +372,8 @@ public:
 	optional_idx TryGetRowsDeletedTwice(TableIndex table_id, DuckLakeSnapshot snapshot);
 	void CacheRowsDeletedTwice(TableIndex table_id, DuckLakeSnapshot snapshot, idx_t count);
 
+	//! The schema versions of the table at the snapshot of the transaction
+	DuckLakeTableSchemaVersions GetTableSchemaVersions(DuckLakeTransaction &transaction, TableIndex table_id);
 	//! Look up the cached begin snapshot of a (table, schema version) pair, if it has been resolved before
 	optional_idx TryGetSchemaVersionBeginSnapshot(TableIndex table_id, idx_t schema_version);
 	//! Cache the begin snapshot of a committed (table, schema version) pair. The row that backs it is written
@@ -438,6 +441,8 @@ private:
 	//! version is created and is never updated, so entries are permanent (only committed rows are cached)
 	mutex schema_version_snapshot_lock;
 	map<pair<idx_t, idx_t>, idx_t> schema_version_begin_snapshots;
+	//! The schema versions of each table at the schema version they were looked up at, guarded by the same lock
+	unordered_map<idx_t, pair<idx_t, DuckLakeTableSchemaVersions>> table_schema_versions;
 	//! The id of the last committed snapshot, set at FlushChanges on a successful commit
 	mutable mutex commit_lock;
 	optional_idx last_committed_snapshot;

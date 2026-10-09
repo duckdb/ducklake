@@ -42,3 +42,9 @@ benchmark/micro/write/insert_not_null_struct.benchmark
 benchmark/micro/read/count_star_deletes.benchmark
 benchmark/micro/read/count_star_shared_deletes.benchmark
 benchmark/micro/compaction/rewrite_data_files_inlined.benchmark
+benchmark/micro/maintenance/flush_inlined_superseded.benchmark
+benchmark/micro/write/delete_commits_rewrite.benchmark
+benchmark/micro/write/delete_commits_rewrite_retry.benchmark
+benchmark/micro/time_travel/table_deletions_many_files.benchmark
+benchmark/micro/read/float_pruning_many_files.benchmark
+benchmark/micro/write/insert_commits_altered_inlined.benchmark

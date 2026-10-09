@@ -83,6 +83,9 @@ struct DuckLakeDeleteFileWriter {
 	static DuckLakeDeleteFile Write(ClientContext &context, WriteDeleteFileInput &input, bool use_deletion_vectors);
 	static DuckLakeDeleteFile Write(ClientContext &context, WriteDeleteFileWithSnapshotsInput &input,
 	                                bool use_deletion_vectors);
+	//! Rewrite the file if its new deletes are not dated to the commit snapshot
+	static void SetCommitSnapshot(ClientContext &context, DuckLakeTransaction &transaction,
+	                              DuckLakeDeleteFile &delete_file, idx_t commit_snapshot);
 };
 
 struct DuckLakeDeleteMap {

@@ -19,6 +19,12 @@
   ],
   "skip_tests": [
     {
+      "reason": "Test requires a Quack metadata catalog",
+      "paths": [
+        "test/sql/quack/inlined_superseded_drop_failure.test"
+      ]
+    },
+    {
       "reason": "Secret storage resolution is independent of the catalog backend and is covered under the default config",
       "paths": [
         "test/sql/secrets/ducklake_secret_storages.test"
@@ -65,12 +71,6 @@
       "reason": "Postgres 63-byte identifier limit disables inlining for long column names",
       "paths": [
         "test/sql/data_inlining/long_column_name_inlining.test"
-      ]
-    },
-    {
-      "reason": "Postgres Locking (Not a bug, rather PG behavior)",
-      "paths": [
-        "test/sql/transaction/transaction_conflict_inlining.test"
       ]
     },
     {

@@ -1,0 +1,86 @@
+# name: test/sql/issues/issue_1604_float_constant_pruning.test
+# description: File pruning compares a FLOAT constant as FLOAT, like the bounds of the file
+# group: [issues]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/issue_1604', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE ducklake.t (c FLOAT)
+
+# one value per file, so every value is the min and max of its file
+statement ok
+INSERT INTO ducklake.t VALUES (1)
+
+statement ok
+INSERT INTO ducklake.t VALUES (1e20)
+
+statement ok
+INSERT INTO ducklake.t VALUES (1e-7)
+
+statement ok
+INSERT INTO ducklake.t VALUES (3.4028235e38)
+
+statement ok
+INSERT INTO ducklake.t VALUES (0.1)
+
+statement ok
+INSERT INTO ducklake.t VALUES (3.3)
+
+query I
+SELECT count(*) FROM ducklake.t WHERE c = 1e20::FLOAT
+----
+1
+
+query I
+SELECT count(*) FROM ducklake.t WHERE c = 1e-7::FLOAT
+----
+1
+
+query I
+SELECT count(*) FROM ducklake.t WHERE c <= 1e-7::FLOAT
+----
+1
+
+query I
+SELECT count(*) FROM ducklake.t WHERE c = CAST('3.4028235e38' AS FLOAT)
+----
+1
+
+query I
+SELECT count(*) FROM ducklake.t WHERE c >= CAST('3.4028235e38' AS FLOAT)
+----
+1
+
+query I
+SELECT count(*) FROM ducklake.t WHERE c IN (1e20::FLOAT, 5::FLOAT)
+----
+1
+
+query I
+SELECT count(*) FROM ducklake.t WHERE c = 0.1::FLOAT
+----
+1
+
+query I
+SELECT count(*) FROM ducklake.t WHERE c = 3.3::FLOAT
+----
+1
+
+query I
+SELECT count(*) FROM ducklake.t WHERE c <= 0.1::FLOAT
+----
+2
+
+query I
+SELECT count(*) FROM ducklake.t WHERE c >= 3.3::FLOAT
+----
+3

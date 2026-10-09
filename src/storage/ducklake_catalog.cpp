@@ -1347,6 +1347,22 @@ void DuckLakeCatalog::CacheRowsDeletedTwice(TableIndex table_id, DuckLakeSnapsho
 	rows_deleted_twice[table_id.index] = make_pair(snapshot.snapshot_id, count);
 }
 
+DuckLakeTableSchemaVersions DuckLakeCatalog::GetTableSchemaVersions(DuckLakeTransaction &transaction,
+                                                                    TableIndex table_id) {
+	auto snapshot = transaction.GetSnapshot();
+	{
+		lock_guard<mutex> guard(schema_version_snapshot_lock);
+		auto entry = table_schema_versions.find(table_id.index);
+		if (entry != table_schema_versions.end() && entry->second.first == snapshot.schema_version) {
+			return entry->second.second;
+		}
+	}
+	auto schema_versions = transaction.GetMetadataManager().GetTableSchemaVersions(table_id, snapshot);
+	lock_guard<mutex> guard(schema_version_snapshot_lock);
+	table_schema_versions[table_id.index] = make_pair(snapshot.schema_version, schema_versions);
+	return schema_versions;
+}
+
 optional_idx DuckLakeCatalog::TryGetSchemaVersionBeginSnapshot(TableIndex table_id, idx_t schema_version) {
 	lock_guard<mutex> guard(schema_version_snapshot_lock);
 	auto entry = schema_version_begin_snapshots.find(make_pair(table_id.index, schema_version));
