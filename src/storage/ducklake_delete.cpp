@@ -408,7 +408,6 @@ bool DuckLakeDelete::TryDropFullyDeletedFile(DuckLakeTransaction &transaction, c
 	if (delete_count != data_file_info.row_count) {
 		return false;
 	}
-	// ALL rows in this file are deleted - drop the file
 	if (!delete_file.data_file_id.IsValid()) {
 		return transaction.TryDropTransactionLocalFile(table.GetTableId(), data_file_info.file.path);
 	}

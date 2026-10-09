@@ -142,6 +142,11 @@ CALL ducklake_flush_inlined_data('lake', table_name => 'd')
 statement ok
 DELETE FROM lake.d
 
+query I
+SELECT count(*) FROM lake.d
+----
+0
+
 statement ok
 COMMIT
 
@@ -186,4 +191,36 @@ query II
 SELECT * FROM lake.e ORDER BY id
 ----
 2	20
+3	30
+
+# the transaction sees its own deletes of a flushed file
+statement ok
+CREATE TABLE lake.f (id BIGINT, v INTEGER)
+
+statement ok
+INSERT INTO lake.f VALUES (1, 10), (2, 20), (3, 30)
+
+statement ok
+DELETE FROM lake.f WHERE id = 1
+
+statement ok
+BEGIN
+
+statement ok
+CALL ducklake_flush_inlined_data('lake', table_name => 'f')
+
+statement ok
+DELETE FROM lake.f WHERE id = 2
+
+query II
+SELECT * FROM lake.f ORDER BY id
+----
+3	30
+
+statement ok
+COMMIT
+
+query II
+SELECT * FROM lake.f ORDER BY id
+----
 3	30
