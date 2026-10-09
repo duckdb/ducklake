@@ -43,6 +43,7 @@
         "test/sql/concurrent/postgres_concurrent_attach_new.test",
         "test/sql/concurrent/postgres_concurrent_attach_new_migrate.test",
         "test/sql/migration/postgres_dev_migration_failure.test",
+        "test/sql/migration/postgres_concurrent_dev_attach.test",
         "test/sql/benchmark/postgres_catalog.test",
         "test/sql/issues/issue_843_postgres_legacy_inlined_types.test",
         "test/sql/data_inlining/inlined_superseded_drop_failure_postgres.test",

@@ -425,32 +425,59 @@ UPDATE {METADATA_CATALOG}.ducklake_metadata SET value = '1.0' WHERE key = 'versi
 	result->ThrowIfError("Failed to migrate DuckLake from v0.4 to v1.0: ");
 }
 
-static constexpr const char *V1_1_DEV1_MIGRATION_QUERY = R"(
-ALTER TABLE {METADATA_CATALOG}.ducklake_data_file ADD COLUMN {IF_NOT_EXISTS} row_group_count BIGINT;
-ALTER TABLE {METADATA_CATALOG}.ducklake_delete_file ADD COLUMN {IF_NOT_EXISTS} row_group_count BIGINT;
-ALTER TABLE {METADATA_CATALOG}.ducklake_file_column_stats ADD COLUMN {IF_NOT_EXISTS} min_is_exact BOOLEAN DEFAULT NULL;
-ALTER TABLE {METADATA_CATALOG}.ducklake_file_column_stats ADD COLUMN {IF_NOT_EXISTS} max_is_exact BOOLEAN DEFAULT NULL;
-ALTER TABLE {METADATA_CATALOG}.ducklake_table_column_stats ADD COLUMN {IF_NOT_EXISTS} min_is_exact BOOLEAN DEFAULT NULL;
-ALTER TABLE {METADATA_CATALOG}.ducklake_table_column_stats ADD COLUMN {IF_NOT_EXISTS} max_is_exact BOOLEAN DEFAULT NULL;
-CREATE TABLE {IF_NOT_EXISTS} {METADATA_CATALOG}.ducklake_view_column_tag(
+struct DuckLakeAddedColumn {
+	const char *table;
+	const char *column;
+	const char *type;
+};
+
+//! The metadata columns that v1.1-dev1 adds to a v1.0 catalog
+static constexpr const DuckLakeAddedColumn V1_1_DEV1_ADDED_COLUMNS[] = {
+    {"ducklake_data_file", "row_group_count", "BIGINT"},
+    {"ducklake_delete_file", "row_group_count", "BIGINT"},
+    {"ducklake_file_column_stats", "min_is_exact", "BOOLEAN DEFAULT NULL"},
+    {"ducklake_file_column_stats", "max_is_exact", "BOOLEAN DEFAULT NULL"},
+    {"ducklake_table_column_stats", "min_is_exact", "BOOLEAN DEFAULT NULL"},
+    {"ducklake_table_column_stats", "max_is_exact", "BOOLEAN DEFAULT NULL"},
+    {"ducklake_schema", "parent_schema_id", "BIGINT"}};
+
+static string V1_1Dev1MigrationQuery() {
+	string query;
+	for (auto &added : V1_1_DEV1_ADDED_COLUMNS) {
+		query += StringUtil::Format("ALTER TABLE {METADATA_CATALOG}.%s ADD COLUMN {IF_NOT_EXISTS} %s %s;\n",
+		                            added.table, added.column, added.type);
+	}
+	query += R"(CREATE TABLE {IF_NOT_EXISTS} {METADATA_CATALOG}.ducklake_view_column_tag(
 	view_id BIGINT, column_name VARCHAR, begin_snapshot BIGINT, end_snapshot BIGINT, key VARCHAR, value VARCHAR
 );
-ALTER TABLE {METADATA_CATALOG}.ducklake_schema ADD COLUMN {IF_NOT_EXISTS} parent_schema_id BIGINT;
 UPDATE {METADATA_CATALOG}.ducklake_metadata SET value = '1.1-dev1' WHERE key = 'version';
-	)";
+)";
+	return query;
+}
+
+bool DuckLakeMetadataManager::HasV1_1Dev1Additions() {
+	string probe = "SELECT 1 FROM (SELECT * FROM {METADATA_CATALOG}.ducklake_view_column_tag LIMIT 0)";
+	for (auto &added : V1_1_DEV1_ADDED_COLUMNS) {
+		probe += StringUtil::Format(", (SELECT %s FROM {METADATA_CATALOG}.%s LIMIT 0)", added.column, added.table);
+	}
+	return !Query(probe)->HasError();
+}
 
 void DuckLakeMetadataManager::MigrateV10(bool allow_failures) {
 	// rename first so a conflict aborts while the catalog is still at v1.0
 	MigrateInlinedColumnNames(allow_failures);
 	MigrateInlinedDataTypes();
-	ExecuteMigration(V1_1_DEV1_MIGRATION_QUERY, allow_failures, "1.0", "1.1-dev1");
+	ExecuteMigration(V1_1Dev1MigrationQuery(), allow_failures, "1.0", "1.1-dev1");
 }
 
 void DuckLakeMetadataManager::MigrateV10Dev() {
 	auto &db = transaction.GetCatalog().GetDatabase();
 	// Try the schema and column migrations independently
 	try {
-		ExecuteMigration(V1_1_DEV1_MIGRATION_QUERY, true, "1.0", "1.1-dev1");
+		// the DDL locks the metadata tables exclusively on Postgres, so a catalog that has every addition runs none
+		if (!HasV1_1Dev1Additions()) {
+			ExecuteMigration(V1_1Dev1MigrationQuery(), true, "1.0", "1.1-dev1");
+		}
 	} catch (std::exception &ex) {
 		ErrorData error(ex);
 		DUCKDB_LOG_WARNING(db, StringUtil::Format("DuckLake could not apply the v1.1-dev1 schema additions on "
