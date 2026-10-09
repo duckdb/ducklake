@@ -1,0 +1,95 @@
+# name: test/sql/data_inlining/data_inlining_flush_partitioned_deletes.test
+# description: Flushing partitioned inlined data deletes the row versions that were deleted, in any written row order
+# group: [data_inlining]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS lake (DATA_PATH '{DATA_PATH}/data_inlining_flush_partitioned_deletes', DATA_INLINING_ROW_LIMIT 1000)
+
+# a transform partition with a sort order set after the update
+statement ok
+CREATE TABLE lake.t (id BIGINT, dt DATE, ts TIMESTAMP, b BOOLEAN)
+
+statement ok
+ALTER TABLE lake.t SET PARTITIONED BY (month(dt))
+
+statement ok
+INSERT INTO lake.t SELECT i, DATE '2028-04-04' + ((i - 2903) * 3)::INTEGER, TIMESTAMP '2009-11-04', i % 3 = 0 FROM range(2903, 2933) t(i)
+
+statement ok
+UPDATE lake.t SET ts = TIMESTAMP '2010-02-26' WHERE id % 7 = 0 OR id % 11 = 0
+
+statement ok
+SET VARIABLE update_snapshot = (SELECT max(snapshot_id) FROM ducklake_snapshots('lake'))
+
+statement ok
+ALTER TABLE lake.t SET SORTED BY (b DESC)
+
+statement ok
+INSERT INTO lake.t SELECT i, DATE '2011-09-01', TIMESTAMP '2009-12-25', i % 2 = 0 FROM range(30, 60) t(i)
+
+statement ok
+CREATE TEMP TABLE t_before AS FROM lake.t
+
+statement ok
+CREATE TEMP TABLE t_update AS FROM lake.t AT (VERSION => getvariable('update_snapshot'))
+
+statement ok
+CALL ducklake_flush_inlined_data('lake', table_name => 't')
+
+query II
+SELECT (SELECT COUNT(*) FROM (FROM t_before EXCEPT ALL FROM lake.t)), (SELECT COUNT(*) FROM (FROM lake.t EXCEPT ALL FROM t_before))
+----
+0	0
+
+query II
+SELECT id, ts FROM lake.t WHERE id IN (2912, 2915, 2917, 2921) ORDER BY id
+----
+2912	2010-02-26 00:00:00
+2915	2010-02-26 00:00:00
+2917	2009-11-04 00:00:00
+2921	2009-11-04 00:00:00
+
+query II
+SELECT (SELECT COUNT(*) FROM (FROM t_update EXCEPT ALL FROM lake.t AT (VERSION => getvariable('update_snapshot')))), (SELECT COUNT(*) FROM (FROM lake.t AT (VERSION => getvariable('update_snapshot')) EXCEPT ALL FROM t_update))
+----
+0	0
+
+# an identity partition without a sort order
+statement ok
+CREATE TABLE lake.u (id BIGINT, dt DATE, v VARCHAR)
+
+statement ok
+ALTER TABLE lake.u SET PARTITIONED BY (dt)
+
+statement ok
+INSERT INTO lake.u SELECT i, DATE '2028-01-01' + (i % 200)::INTEGER, 'v' || (i * 7919 % 1000) FROM range(400) t(i)
+
+statement ok
+UPDATE lake.u SET v = 'u' || v WHERE id % 13 = 0
+
+statement ok
+DELETE FROM lake.u WHERE id % 17 = 0
+
+statement ok
+CREATE TEMP TABLE u_before AS FROM lake.u
+
+statement ok
+CALL ducklake_flush_inlined_data('lake', table_name => 'u')
+
+query II
+SELECT (SELECT COUNT(*) FROM (FROM u_before EXCEPT ALL FROM lake.u)), (SELECT COUNT(*) FROM (FROM lake.u EXCEPT ALL FROM u_before))
+----
+0	0
+
+query III
+SELECT COUNT(*), COUNT(*) FILTER (WHERE v LIKE 'u%'), SUM(id) FROM lake.u
+----
+376	29	75108

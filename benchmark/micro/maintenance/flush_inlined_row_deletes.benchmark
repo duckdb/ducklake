@@ -1,0 +1,31 @@
+# name: benchmark/micro/maintenance/flush_inlined_row_deletes.benchmark
+# description: Flush 200k inlined rows with updated and deleted row versions, partitioned and unpartitioned, with commit
+# group: [maintenance]
+
+name Flush Inlined Row Deletes
+group micro
+subgroup maintenance
+
+require ducklake
+
+require parquet
+
+argument work flush_row_deletes_work
+
+include benchmark/micro/fixtures/inlined_row_deletes.benchmark.in
+
+include benchmark/micro/fixtures/restore_cleanup.benchmark.in
+
+run
+SELECT sum(rows_flushed) AS flushed FROM ducklake_flush_inlined_data('lake');
+
+# Every flushed file gets its deleted row versions and both tables keep their row counts
+result_query IIIII
+SELECT flushed,
+(SELECT count(*) FROM ducklake_list_files('lake', 'part')),
+(SELECT sum(delete_count) FROM __ducklake_metadata_lake.ducklake_delete_file WHERE end_snapshot IS NULL),
+(SELECT count(*) FROM lake.part),
+(SELECT count(*) || ' ' || sum(id) FROM lake.flat)
+FROM __answer
+----
+215386	12	27152	94117	94117 4705817649
