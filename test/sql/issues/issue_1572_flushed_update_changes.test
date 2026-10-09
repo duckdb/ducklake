@@ -1,0 +1,95 @@
+# name: test/sql/issues/issue_1572_flushed_update_changes.test
+# description: Flushing inlined updates does not change the deletions and changes of past snapshots
+# group: [issues]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/issue_1572', DATA_INLINING_ROW_LIMIT 5)
+
+statement ok
+CREATE TABLE ducklake.t (id INTEGER, v VARCHAR)
+
+statement ok
+INSERT INTO ducklake.t VALUES (1, 'a')
+
+statement ok
+UPDATE ducklake.t SET v = 'b'
+
+statement ok
+UPDATE ducklake.t SET v = 'c'
+
+query IIIII
+FROM ducklake_table_changes('ducklake', 'main', 't', 3, 4) ORDER BY ALL
+----
+3	0	update_postimage	1	b
+3	0	update_preimage	1	a
+4	0	update_postimage	1	c
+4	0	update_preimage	1	b
+
+# the flushed file holds every version of row 0
+statement ok
+CALL ducklake_flush_inlined_data('ducklake', table_name => 't')
+
+query III
+SELECT snapshot_id, rowid, v FROM ducklake_table_deletions('ducklake', 'main', 't', 3, 4) ORDER BY ALL
+----
+3	0	a
+4	0	b
+
+query IIIII
+FROM ducklake_table_changes('ducklake', 'main', 't', 3, 4) ORDER BY ALL
+----
+3	0	update_postimage	1	b
+3	0	update_preimage	1	a
+4	0	update_postimage	1	c
+4	0	update_preimage	1	b
+
+query I
+SELECT list(v) FROM ducklake.t
+----
+[c]
+
+# updates of two rows and a delete of an updated row
+statement ok
+CREATE TABLE ducklake.u (id INTEGER, v VARCHAR)
+
+statement ok
+INSERT INTO ducklake.u VALUES (1, 'a'), (2, 'x')
+
+statement ok
+UPDATE ducklake.u SET v = 'b' WHERE id = 1
+
+statement ok
+UPDATE ducklake.u SET v = 'y' WHERE id = 2
+
+statement ok
+UPDATE ducklake.u SET v = 'c' WHERE id = 1
+
+statement ok
+DELETE FROM ducklake.u WHERE id = 1
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake', table_name => 'u')
+
+query IIIII
+FROM ducklake_table_changes('ducklake', 'main', 'u', 8, 11) ORDER BY ALL
+----
+8	0	update_postimage	1	b
+8	0	update_preimage	1	a
+9	1	update_postimage	2	y
+9	1	update_preimage	2	x
+10	0	update_postimage	1	c
+10	0	update_preimage	1	b
+11	0	delete	1	c
+
+query II
+SELECT id, v FROM ducklake.u
+----
+2	y
