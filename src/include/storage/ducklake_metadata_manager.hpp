@@ -335,7 +335,7 @@ public:
 	                                                                  DuckLakeSnapshot snapshot,
 	                                                                  DuckLakeFileSizeOptions options);
 	virtual idx_t GetBeginSnapshotForTable(TableIndex table_id);
-	virtual idx_t GetBeginSnapshotForSchemaVersion(TableIndex table_id, idx_t schema_version);
+	virtual DuckLakeSnapshot GetSchemaVersionSnapshot(TableIndex table_id, idx_t schema_version);
 	virtual idx_t GetNetDataFileRowCount(TableIndex table_id, DuckLakeSnapshot snapshot);
 	optional_idx GetNetDataFileRowCountForStats(TableIndex table_id, DuckLakeSnapshot snapshot);
 	virtual idx_t GetNetInlinedRowCount(const string &inlined_table_name, DuckLakeSnapshot snapshot);
@@ -348,7 +348,12 @@ public:
 	static string GetInlinedTableNamesSql(TableIndex table_id);
 	static string GetInlinedTablesBeforeSchemaChangeSql(TableIndex table_id);
 	//! The top-level columns of each inlined data table at the schema version of that table
-	static string GetInlinedTableColumnsSql(optional_idx table_id = optional_idx());
+	static unique_ptr<QueryResult>
+	QueryInlinedTableColumns(optional_idx table_id, const std::function<unique_ptr<QueryResult>(string)> &executor);
+	//! The last schema change of each table at its schema version, invalid when the table has none
+	static vector<DuckLakeSnapshot>
+	GetSchemaVersionChanges(const vector<pair<TableIndex, idx_t>> &versions,
+	                        const std::function<unique_ptr<QueryResult>(string)> &executor);
 	//! The inserts of the given rows, in batches
 	static string InsertValuesSql(const string &table_name, const vector<string> &values);
 	unordered_set<string> GetInlinedTableNames(TableIndex table_id);

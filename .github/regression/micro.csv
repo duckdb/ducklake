@@ -43,3 +43,4 @@ benchmark/micro/compaction/rewrite_data_files_inlined.benchmark
 benchmark/micro/maintenance/flush_inlined_superseded.benchmark
 benchmark/micro/write/delete_commits_rewrite.benchmark
 benchmark/micro/write/delete_commits_rewrite_retry.benchmark
+benchmark/micro/read/inlined_late_tables.benchmark

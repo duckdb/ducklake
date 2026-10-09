@@ -344,7 +344,8 @@ public:
 	shared_ptr<const DuckLakeNameMap> TryGetMappingById(DuckLakeTransaction &transaction, MappingIndex mapping_id);
 	MappingIndex TryGetCompatibleNameMap(DuckLakeTransaction &transaction, const DuckLakeNameMap &name_map);
 	idx_t GetBeginSnapshotForTable(TableIndex table_id, DuckLakeTransaction &transaction);
-	idx_t GetBeginSnapshotForSchemaVersion(TableIndex table_id, idx_t schema_version, DuckLakeTransaction &transaction);
+	DuckLakeSnapshot GetSchemaVersionSnapshot(TableIndex table_id, idx_t schema_version,
+	                                          DuckLakeTransaction &transaction);
 	optional_ptr<DuckLakeTableEntry> GetTableAtSchemaVersion(DuckLakeTransaction &transaction, TableIndex table_id,
 	                                                         idx_t schema_version);
 
@@ -368,11 +369,10 @@ public:
 	//! Cache the result of an inlined deletion table existence check
 	void CacheInlinedDeletionTableResult(TableIndex table_id, DuckLakeSnapshot snapshot, bool exists);
 
-	//! Look up the cached begin snapshot of a (table, schema version) pair, if it has been resolved before
-	optional_idx TryGetSchemaVersionBeginSnapshot(TableIndex table_id, idx_t schema_version);
-	//! Cache the begin snapshot of a committed (table, schema version) pair. The row that backs it is written
-	//! once when the schema version is created and never updated, so the mapping is permanent.
-	void CacheSchemaVersionBeginSnapshot(TableIndex table_id, idx_t schema_version, idx_t begin_snapshot);
+	//! Look up the cached snapshot of a (table, schema version) pair, if it has been resolved before
+	bool TryGetSchemaVersionSnapshot(TableIndex table_id, idx_t schema_version, DuckLakeSnapshot &result);
+	//! Cache the snapshot of a committed (table, schema version) pair
+	void CacheSchemaVersionSnapshot(TableIndex table_id, idx_t schema_version, DuckLakeSnapshot snapshot);
 
 	//! Invalidate the cached table stats entry for a given stats cache key.
 	void InvalidateTableStatsCache(idx_t next_file_id, TableIndex table_id);
@@ -428,10 +428,9 @@ private:
 	//! Table IDs where the inlined deletion table is known to NOT exist, with the snapshot_id at which we checked
 	//! Valid as long as current snapshot.snapshot_id <= cached snapshot_id
 	unordered_map<idx_t, idx_t> inlined_deletion_not_exists;
-	//! Cache of (table_id, schema_version) -> begin_snapshot. The backing row is written once when the schema
-	//! version is created and is never updated, so entries are permanent (only committed rows are cached)
+	//! The snapshot each committed (table_id, schema_version) pair resolves to, which later commits do not change
 	mutex schema_version_snapshot_lock;
-	map<pair<idx_t, idx_t>, idx_t> schema_version_begin_snapshots;
+	map<pair<idx_t, idx_t>, DuckLakeSnapshot> schema_version_snapshots;
 	//! The id of the last committed snapshot, set at FlushChanges on a successful commit
 	mutable mutex commit_lock;
 	optional_idx last_committed_snapshot;

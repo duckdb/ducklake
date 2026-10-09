@@ -235,7 +235,8 @@ bool PostgresMetadataManager::InlinedDeletionTableExists(const string &table_nam
 }
 
 void PostgresMetadataManager::MigrateInlinedDataTypes() {
-	auto columns = DuckLakeMetadataManager::Query(GetInlinedTableColumnsSql());
+	auto columns =
+	    QueryInlinedTableColumns(optional_idx(), [&](string query) { return DuckLakeMetadataManager::Query(query); });
 	columns->ThrowIfError("Failed to read the columns of inlined-data tables while migrating: ");
 	map<string, case_insensitive_map_t<string>> inlined_tables;
 	for (auto &row : *columns) {

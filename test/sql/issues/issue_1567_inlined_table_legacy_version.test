@@ -1,0 +1,125 @@
+# name: test/sql/issues/issue_1567_inlined_table_legacy_version.test
+# description: An inlined table that an older catalog gave a lower schema version than the ALTER of its commit
+# group: [issues]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/issue_1567_legacy.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS lake (DATA_PATH '{DATA_PATH}/issue_1567_legacy', METADATA_CATALOG 'meta')
+
+statement ok
+CALL lake.set_option('data_inlining_row_limit', 0)
+
+statement ok
+CREATE TABLE lake.m (a INTEGER)
+
+statement ok
+CREATE TABLE lake.n (a INTEGER)
+
+statement ok
+CREATE TABLE lake.r (a INTEGER)
+
+statement ok
+CALL lake.set_option('data_inlining_row_limit', 10)
+
+statement ok
+BEGIN
+
+statement ok
+ALTER TABLE lake.m ADD COLUMN b INTEGER
+
+statement ok
+INSERT INTO lake.m VALUES (100, 5)
+
+statement ok
+ALTER TABLE lake.r RENAME COLUMN a TO b
+
+statement ok
+INSERT INTO lake.r VALUES (5)
+
+statement ok
+INSERT INTO lake.n VALUES (1)
+
+statement ok
+COMMIT
+
+# an older catalog gave the inlined table created last in a commit, its snapshot and its rows the next version
+statement ok
+SET VARIABLE altered = (SELECT max(snapshot_id) FROM lake.snapshots())
+
+statement ok
+UPDATE meta.ducklake_snapshot SET schema_version = schema_version + 1 WHERE snapshot_id = getvariable('altered')
+
+statement ok
+UPDATE meta.ducklake_schema_versions SET schema_version = schema_version + 1
+WHERE begin_snapshot = getvariable('altered')
+
+statement ok
+UPDATE meta.ducklake_inlined_data_tables SET schema_version = schema_version + 1
+WHERE table_id = (SELECT table_id FROM meta.ducklake_table WHERE table_name = 'n')
+
+# a later ALTER of m does not apply to its inlined table
+statement ok
+ALTER TABLE lake.m ADD COLUMN c INTEGER
+
+statement ok
+DETACH lake
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS lake (DATA_PATH '{DATA_PATH}/issue_1567_legacy', METADATA_CATALOG 'meta')
+
+query III
+SELECT a, b, c FROM lake.m
+----
+100	5	NULL
+
+query I
+SELECT a FROM lake.n
+----
+1
+
+# the rewrite merges the bounds of the inlined table, which needs its columns
+statement ok
+CALL lake.set_option('data_inlining_row_limit', 0)
+
+statement ok
+INSERT INTO lake.r SELECT i FROM range(20) t(i)
+
+statement ok
+DELETE FROM lake.r WHERE b = 19
+
+statement ok
+CALL ducklake_rewrite_data_files('lake', 'r', delete_threshold => 0)
+
+query II
+SELECT min_value, max_value FROM meta.ducklake_table_column_stats
+WHERE table_id = (SELECT table_id FROM meta.ducklake_table WHERE table_name = 'r')
+----
+0	18
+
+query II
+SELECT count(*), max(b) FROM lake.r
+----
+20	18
+
+statement ok
+CALL ducklake_flush_inlined_data('lake')
+
+query III
+SELECT a, b, c FROM lake.m
+----
+100	5	NULL
+
+statement ok
+SET VARIABLE m_files = (SELECT list(data_file) FROM ducklake_list_files('lake', 'm'))
+
+query II
+SELECT a, b FROM read_parquet(getvariable('m_files'))
+----
+100	5
