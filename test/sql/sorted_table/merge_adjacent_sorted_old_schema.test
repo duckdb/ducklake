@@ -251,6 +251,62 @@ SELECT id FROM lake.l
 3
 1
 
+# a positional reference inside a lambda refers to a promoted column
+statement ok
+CREATE TABLE lake.pl (id BIGINT, v INTEGER)
+
+statement ok
+INSERT INTO lake.pl VALUES (1, 30), (2, 10)
+
+statement ok
+INSERT INTO lake.pl VALUES (3, 20)
+
+statement ok
+ALTER TABLE lake.pl ALTER COLUMN v TYPE BIGINT
+
+statement ok
+ALTER TABLE lake.pl SET SORTED BY (list_transform([0], lambda v: #2)[1])
+
+query II
+SELECT files_processed, files_created FROM ducklake_merge_adjacent_files('lake', 'pl')
+----
+2	1
+
+query I
+SELECT id FROM lake.pl
+----
+2
+3
+1
+
+# a method call on a promoted column
+statement ok
+CREATE TABLE lake.mc (id BIGINT, v INTEGER)
+
+statement ok
+INSERT INTO lake.mc VALUES (1, 1500000000), (2, 10)
+
+statement ok
+INSERT INTO lake.mc VALUES (3, 20)
+
+statement ok
+ALTER TABLE lake.mc ALTER COLUMN v TYPE BIGINT
+
+statement ok
+ALTER TABLE lake.mc SET SORTED BY (v.multiply(2))
+
+query II
+SELECT files_processed, files_created FROM ducklake_merge_adjacent_files('lake', 'mc')
+----
+2	1
+
+query I
+SELECT id FROM lake.mc
+----
+2
+3
+1
+
 # a positional sort key refers to the column at its position in the latest table
 statement ok
 CREATE TABLE lake.r (a BIGINT, id BIGINT, v BIGINT)
