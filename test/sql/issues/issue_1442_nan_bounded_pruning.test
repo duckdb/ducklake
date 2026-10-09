@@ -65,7 +65,7 @@ SELECT count(*) FROM dl.t WHERE x IS NOT NULL
 foreach type DOUBLE FLOAT
 
 statement ok
-CREATE OR REPLACE TABLE dl.n (x ${type})
+CREATE OR REPLACE TABLE dl.n (x {type})
 
 statement ok
 INSERT INTO dl.n VALUES (1), (2), ('NaN')
@@ -90,7 +90,7 @@ SELECT count(*) FROM dl.n WHERE x > 5
 3
 
 query I
-SELECT count(*) FROM dl.n WHERE x = 'NaN'::${type}
+SELECT count(*) FROM dl.n WHERE x = 'NaN'::{type}
 ----
 1
 
