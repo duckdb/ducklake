@@ -1,6 +1,7 @@
 #include "storage/ducklake_metadata_manager.hpp"
 #include "duckdb/common/file_system.hpp"
 #include "duckdb/common/path.hpp"
+#include "duckdb/common/exception/conversion_exception.hpp"
 #include "functions/ducklake_table_functions.hpp"
 #include "storage/ducklake_transaction.hpp"
 #include "storage/ducklake_variant_stats.hpp"
@@ -1591,10 +1592,24 @@ string DuckLakeMetadataManager::GenerateConstantFilterDouble(ExpressionType comp
 	}
 }
 
+//! Whether the constant can be written into the filter SQL
+static bool CanRenderConstant(const Value &constant) {
+	try {
+		constant.ToString();
+		return true;
+	} catch (ConversionException &) {
+		// a timestamp outside the range its type can print
+		return false;
+	}
+}
+
 string DuckLakeMetadataManager::GenerateFilterFromExpression(const Expression &expr, const LogicalType *type,
                                                              unordered_set<string> &referenced_stats,
                                                              const string &stats_alias) {
 	auto constant_filter = [&](ExpressionType comparison_type, const Value &constant) {
+		if (!CanRenderConstant(constant)) {
+			return string();
+		}
 		const auto &target_type = type ? *type : constant.type();
 		switch (target_type.id()) {
 		case LogicalTypeId::BLOB:
