@@ -371,9 +371,9 @@ void DuckLakeCompactor::GenerateCompactions(DuckLakeTableEntry &table,
 	}
 }
 
-//! Whether the scan returns the columns a sort of the latest table refers to as the latest table has them
+//! Whether the scan returns the sort columns as the latest table has them
 static bool ScanHasSortColumns(const DuckLakeTableEntry &latest_table, const DuckLakeTableEntry &table,
-                               vector<BoundOrderByNode> &orders, TableIndex latest_index) {
+                               vector<BoundOrderByNode> &orders, TableIndex scan_index) {
 	unordered_set<idx_t> column_indexes;
 	for (auto &order : orders) {
 		ExpressionIterator::EnumerateExpression(order.expression, [&](Expression &child) {
@@ -385,7 +385,7 @@ static bool ScanHasSortColumns(const DuckLakeTableEntry &latest_table, const Duc
 				return;
 			}
 			for (auto &correlated : child.Cast<BoundSubqueryExpression>().GetBinder()->correlated_columns) {
-				if (correlated.binding.table_index == latest_index) {
+				if (correlated.binding.table_index == scan_index) {
 					column_indexes.insert(correlated.binding.column_index.GetIndex());
 				}
 			}
@@ -407,7 +407,7 @@ static bool ScanHasSortColumns(const DuckLakeTableEntry &latest_table, const Duc
 	return true;
 }
 
-//! Point a sort bound to the latest table at the scan of an older schema version, false when it cannot be
+//! Map a sort bound to the latest table onto the scan, false when it cannot be
 static bool MapSortToSchemaVersion(ClientContext &context, unique_ptr<Expression> &expr,
                                    const DuckLakeTableEntry &latest_table, const DuckLakeTableEntry &table,
                                    TableIndex scan_index) {
@@ -447,15 +447,12 @@ unique_ptr<LogicalOperator> DuckLakeCompactor::InsertSort(Binder &binder, unique
 	auto scan_index = bindings[0].table_index;
 	auto sort_orders = ParseSortOrders(*sort_data);
 	// the sort refers to the latest table, an invalid one reports the same error as an insert
-	auto latest_index = binder.GenerateTableIndex();
-	auto orders = BindSortOrders(binder, latest_table.GetColumns(), latest_table.name, latest_index, sort_orders);
+	auto orders = BindSortOrders(binder, latest_table.GetColumns(), latest_table.name, scan_index, sort_orders);
 	if (orders.empty()) {
 		// Then the sorts were not in the DuckDB dialect and we return the original plan
 		return std::move(plan);
 	}
-	if (ScanHasSortColumns(latest_table, table, orders, latest_index)) {
-		orders = BindSortOrders(binder, latest_table.GetColumns(), latest_table.name, scan_index, sort_orders);
-	} else {
+	if (!ScanHasSortColumns(latest_table, table, orders, scan_index)) {
 		for (auto &order : orders) {
 			bool correlated = false;
 			ExpressionIterator::EnumerateExpression(order.expression, [&](Expression &child) {
