@@ -1,0 +1,100 @@
+# name: test/sql/deletion_inlining/concurrent_inlined_deletes_different_files.test
+# description: concurrent inlined deletes conflict only when they delete from the same data file or inlined rows
+# group: [deletion_inlining]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{BASE_TEST_NAME}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl
+(DATA_PATH '{DATA_PATH}/concurrent_inlined_deletes_different_files', DATA_INLINING_ROW_LIMIT 10)
+
+statement ok
+CREATE TABLE dl.t AS SELECT r AS i FROM range(100) _(r)
+
+statement ok
+INSERT INTO dl.t SELECT r FROM range(100, 200) _(r)
+
+query I
+SELECT count(*) FROM ducklake_list_files('dl', 't')
+----
+2
+
+# inlined deletes from different data files commit
+statement ok con1
+BEGIN
+
+statement ok con2
+BEGIN
+
+statement ok con1
+DELETE FROM dl.t WHERE i = 5
+
+statement ok con2
+DELETE FROM dl.t WHERE i = 150
+
+statement ok con1
+COMMIT
+
+statement ok con2
+COMMIT
+
+query II
+SELECT count(*), sum(i) FROM dl.t
+----
+198	19745
+
+# inlined deletes from the same data file conflict
+statement ok con1
+BEGIN
+
+statement ok con2
+BEGIN
+
+statement ok con1
+DELETE FROM dl.t WHERE i = 6
+
+statement ok con2
+DELETE FROM dl.t WHERE i = 7
+
+statement ok con1
+COMMIT
+
+statement error con2
+COMMIT
+----
+<REGEX>:.*Transaction conflict.*
+
+# deletes of inlined rows of the same table still conflict
+statement ok
+INSERT INTO dl.t VALUES (1000), (1001)
+
+statement ok con1
+BEGIN
+
+statement ok con2
+BEGIN
+
+statement ok con1
+DELETE FROM dl.t WHERE i = 1000
+
+statement ok con2
+DELETE FROM dl.t WHERE i = 1001
+
+statement ok con1
+COMMIT
+
+statement error con2
+COMMIT
+----
+<REGEX>:.*Transaction conflict.*
+
+query II
+SELECT count(*), sum(i) FROM dl.t
+----
+198	20740
