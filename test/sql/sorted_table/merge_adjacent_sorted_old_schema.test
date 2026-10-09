@@ -307,6 +307,34 @@ SELECT id FROM lake.mc
 3
 1
 
+# a subquery in the sort key after an unrelated column was renamed
+statement ok
+CREATE TABLE lake.sq (id BIGINT, v BIGINT, other BIGINT)
+
+statement ok
+INSERT INTO lake.sq VALUES (1, 30, 0), (2, 10, 0)
+
+statement ok
+INSERT INTO lake.sq VALUES (3, 20, 0)
+
+statement ok
+ALTER TABLE lake.sq RENAME COLUMN other TO other2
+
+statement ok
+ALTER TABLE lake.sq SET SORTED BY ((SELECT v))
+
+query II
+SELECT files_processed, files_created FROM ducklake_merge_adjacent_files('lake', 'sq')
+----
+2	1
+
+query I
+SELECT id FROM lake.sq
+----
+2
+3
+1
+
 # a positional sort key refers to the column at its position in the latest table
 statement ok
 CREATE TABLE lake.r (a BIGINT, id BIGINT, v BIGINT)
