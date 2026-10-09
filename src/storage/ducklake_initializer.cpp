@@ -62,8 +62,6 @@ void DuckLakeInitializer::Initialize() {
 	// attach the metadata database
 	AttachMetadata(transaction);
 	RaiseMetadataStorageVersion(transaction);
-	// explicitly load all secrets - work-around to secret initialization bug
-	transaction.Query("FROM duckdb_secrets()");
 
 	bool has_explicit_schema = !options.metadata_schema.empty();
 	if (options.metadata_schema.empty()) {

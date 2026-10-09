@@ -58,6 +58,8 @@ struct DuckLakeFunctionInfo : public TableFunctionInfo {
 	unique_ptr<DuckLakeSnapshot> start_snapshot;
 	//! Sort order of the flushed file, only set for flush scans
 	string flush_sort_order_sql;
+	//! Whether the scan sees the uncommitted changes of its transaction, which an AT clause excludes
+	bool include_local_changes = true;
 
 	shared_ptr<DuckLakeTransaction> GetTransaction();
 	bool CanUseGlobalStats();

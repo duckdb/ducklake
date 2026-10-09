@@ -1,0 +1,158 @@
+# name: test/sql/sorted_table/data_inlining_flush_sorted_macro.test
+# description: Flush sort macros in the transaction that creates them
+# group: [sorted_table]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{TEST_DIR}/flush_sorted_macro/', DATA_INLINING_ROW_LIMIT 10)
+
+statement ok
+USE ducklake
+
+statement ok
+CREATE TABLE t (i INTEGER)
+
+statement ok
+INSERT INTO t VALUES (3), (1), (2), (NULL)
+
+statement ok
+DELETE FROM t WHERE i = 2
+
+statement ok
+BEGIN
+
+statement ok
+CREATE MACRO sort_key(x, offset_value := 0) AS -x + offset_value
+
+statement ok
+CREATE MACRO nested_key(x) AS sort_key(x, offset_value := 1)
+
+query I
+SELECT nested_key(3)
+----
+-2
+
+statement ok
+ALTER TABLE t SET SORTED BY (nested_key(i) ASC NULLS LAST)
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake', table_name => 't')
+
+query I
+SELECT i FROM t
+----
+3
+1
+NULL
+
+statement ok
+COMMIT
+
+query I
+SELECT i FROM t
+----
+3
+1
+NULL
+
+# The macro remains usable after it is committed.
+statement ok
+INSERT INTO t VALUES (4), (5)
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake', table_name => 't')
+
+query I rowsort
+SELECT i FROM t
+----
+1
+3
+4
+5
+NULL
+
+# A lambda parameter must not shadow an inlined column after a rename.
+statement ok
+CREATE TABLE lambda_sort (i INTEGER)
+
+statement ok
+INSERT INTO lambda_sort VALUES (3), (1), (2)
+
+statement ok
+ALTER TABLE lambda_sort RENAME COLUMN i TO value
+
+statement ok
+BEGIN
+
+statement ok
+CREATE MACRO lambda_key(x) AS list_transform([1], lambda i: i - x)[1]
+
+statement ok
+ALTER TABLE lambda_sort SET SORTED BY (lambda_key(value))
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake', table_name => 'lambda_sort')
+
+query I
+SELECT value FROM lambda_sort
+----
+3
+2
+1
+
+statement ok
+ROLLBACK
+
+query I rowsort
+SELECT value FROM lambda_sort
+----
+1
+2
+3
+
+# Sort columns are mapped to the schema of the inlined rows.
+statement ok
+CREATE TABLE renamed_sort (i INTEGER)
+
+statement ok
+INSERT INTO renamed_sort VALUES (3), (1), (2)
+
+statement ok
+ALTER TABLE renamed_sort RENAME COLUMN i TO renamed
+
+statement ok
+ALTER TABLE renamed_sort ADD COLUMN added INTEGER DEFAULT 10
+
+statement ok
+BEGIN
+
+statement ok
+CREATE MACRO schema_key(x, y) AS y - x
+
+statement ok
+ALTER TABLE renamed_sort SET SORTED BY (schema_key(renamed, added))
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake', table_name => 'renamed_sort')
+
+query II
+SELECT * FROM renamed_sort
+----
+3	10
+2	10
+1	10
+
+statement ok
+COMMIT
+
+query II
+SELECT * FROM renamed_sort
+----
+3	10
+2	10
+1	10

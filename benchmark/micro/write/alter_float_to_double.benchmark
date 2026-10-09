@@ -1,0 +1,33 @@
+# name: benchmark/micro/write/alter_float_to_double.benchmark
+# description: Retype a FLOAT column stored in ~1024 files to DOUBLE, including the commit
+# group: [write]
+
+name Alter Float To Double
+group micro
+subgroup write
+
+require ducklake
+
+require parquet
+
+argument work float_files_work
+
+include benchmark/micro/fixtures/float_files.benchmark.in
+
+include benchmark/micro/fixtures/restore_cleanup.benchmark.in
+
+# Every run starts from the pristine FLOAT column
+assert III
+SELECT (SELECT data_type FROM duckdb_columns() WHERE database_name = 'lake' AND column_name = 'v'),
+(SELECT count(*) FROM lake.events), (SELECT max(snapshot_id) FROM lake.snapshots())
+----
+FLOAT	2097152	2
+
+run
+ALTER TABLE lake.events ALTER COLUMN v TYPE DOUBLE;
+
+result_query III
+SELECT (SELECT data_type FROM duckdb_columns() WHERE database_name = 'lake' AND column_name = 'v'),
+(SELECT count(*) FROM lake.events), (SELECT max(snapshot_id) FROM lake.snapshots())
+----
+DOUBLE	2097152	3
