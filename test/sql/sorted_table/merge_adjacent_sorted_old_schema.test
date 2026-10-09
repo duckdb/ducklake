@@ -223,6 +223,37 @@ SELECT id, st FROM lake.s ORDER BY id
 2	{'a': 10, 'c': NULL}
 3	{'a': 20, 'c': NULL}
 
+# a nested field was dropped and added again with the same name and type
+statement ok
+CREATE TABLE lake.rf (id BIGINT, st STRUCT(a VARCHAR, b BIGINT))
+
+statement ok
+INSERT INTO lake.rf VALUES (1, {'a': 'x', 'b': 30}), (2, {'a': 'x', 'b': 10})
+
+statement ok
+INSERT INTO lake.rf VALUES (3, {'a': 'x', 'b': 20})
+
+statement ok
+ALTER TABLE lake.rf DROP COLUMN st.a
+
+statement ok
+ALTER TABLE lake.rf ADD COLUMN st.a VARCHAR
+
+statement ok
+ALTER TABLE lake.rf SET SORTED BY (CAST(struct_extract(st, 'a') AS INTEGER), struct_extract(st, 'b'))
+
+query II
+SELECT files_processed, files_created FROM ducklake_merge_adjacent_files('lake', 'rf')
+----
+2	1
+
+query II
+SELECT id, st FROM lake.rf ORDER BY id
+----
+1	{'b': 30, 'a': NULL}
+2	{'b': 10, 'a': NULL}
+3	{'b': 20, 'a': NULL}
+
 # a lambda parameter named like a promoted column is not a column
 statement ok
 CREATE TABLE lake.l (id BIGINT, v INTEGER)

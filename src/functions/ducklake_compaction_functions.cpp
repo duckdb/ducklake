@@ -28,6 +28,7 @@
 #include "duckdb/planner/expression_binder/select_bind_state.hpp"
 #include "duckdb/parser/expression/columnref_expression.hpp"
 #include "duckdb/planner/expression/bound_constant_expression.hpp"
+#include "duckdb/planner/expression/bound_subquery_expression.hpp"
 #include "duckdb/planner/expression_iterator.hpp"
 #include "duckdb/planner/expression/bound_cast_expression.hpp"
 #include "duckdb/planner/expression/bound_columnref_expression.hpp"
@@ -370,15 +371,34 @@ void DuckLakeCompactor::GenerateCompactions(DuckLakeTableEntry &table,
 	}
 }
 
-//! Whether the scan returns every column of the latest table at its position and with its type
-static bool ScanHasLatestColumns(const DuckLakeTableEntry &latest_table, const DuckLakeTableEntry &table) {
-	for (auto &column : latest_table.GetColumns().Logical()) {
+//! Whether the scan returns the columns a sort of the latest table refers to as the latest table has them
+static bool ScanHasSortColumns(const DuckLakeTableEntry &latest_table, const DuckLakeTableEntry &table,
+                               const vector<BoundOrderByNode> &orders, TableIndex latest_index) {
+	unordered_set<idx_t> column_indexes;
+	for (auto &order : orders) {
+		ExpressionIterator::VisitExpression<BoundColumnRefExpression>(
+		    *order.expression, [&](const BoundColumnRefExpression &column_ref) {
+			    column_indexes.insert(column_ref.Binding().column_index.GetIndex());
+		    });
+		ExpressionIterator::VisitExpressionClass(
+		    *order.expression, ExpressionClass::BOUND_SUBQUERY, [&](const Expression &subquery) {
+			    for (auto &correlated : subquery.Cast<BoundSubqueryExpression>().GetBinder()->correlated_columns) {
+				    if (correlated.binding.table_index == latest_index) {
+					    column_indexes.insert(correlated.binding.column_index.GetIndex());
+				    }
+			    }
+		    });
+	}
+	for (auto column_index : column_indexes) {
+		auto &column = latest_table.GetColumns().GetColumn(LogicalIndex(column_index));
 		auto field_index = latest_table.GetFieldId(column.Physical()).GetFieldIndex();
-		if (!table.GetFieldId(field_index)) {
+		auto version_field_id = table.GetFieldId(field_index);
+		if (!version_field_id) {
 			return false;
 		}
 		auto &version_column = table.GetColumnByFieldId(field_index);
-		if (version_column.Logical() != column.Logical() || version_column.Type() != column.Type()) {
+		if (version_column.Logical() != column.Logical() || version_column.Type() != column.Type() ||
+		    !FieldsPreservedInLatest(version_field_id->Children(), latest_table.GetFieldData())) {
 			return false;
 		}
 	}
@@ -390,9 +410,6 @@ static bool MapSortToSchemaVersion(ClientContext &context, unique_ptr<Expression
                                    const DuckLakeTableEntry &latest_table, const DuckLakeTableEntry &table,
                                    TableIndex scan_index) {
 	bool mapped = true;
-	// the columns a subquery correlates with are not visited
-	ExpressionIterator::VisitExpressionClass(*expr, ExpressionClass::BOUND_SUBQUERY,
-	                                         [&](const Expression &) { mapped = false; });
 	ExpressionIterator::VisitExpressionMutable<BoundColumnRefExpression>(expr, [&](BoundColumnRefExpression &column_ref,
 	                                                                               unique_ptr<Expression> &child) {
 		auto &column = latest_table.GetColumns().GetColumn(LogicalIndex(column_ref.Binding().column_index.GetIndex()));
@@ -426,18 +443,21 @@ unique_ptr<LogicalOperator> DuckLakeCompactor::InsertSort(Binder &binder, unique
 	auto bindings = plan->GetColumnBindings();
 	D_ASSERT(!bindings.empty());
 	auto scan_index = bindings[0].table_index;
-	bool scan_has_latest_columns = ScanHasLatestColumns(latest_table, table);
+	auto sort_orders = ParseSortOrders(*sort_data);
 	// the sort refers to the latest table, an invalid one reports the same error as an insert
-	auto orders =
-	    BindSortOrders(binder, latest_table.GetColumns(), latest_table.name,
-	                   scan_has_latest_columns ? scan_index : binder.GenerateTableIndex(), ParseSortOrders(*sort_data));
+	auto latest_index = binder.GenerateTableIndex();
+	auto orders = BindSortOrders(binder, latest_table.GetColumns(), latest_table.name, latest_index, sort_orders);
 	if (orders.empty()) {
 		// Then the sorts were not in the DuckDB dialect and we return the original plan
 		return std::move(plan);
 	}
-	if (!scan_has_latest_columns) {
+	if (ScanHasSortColumns(latest_table, table, orders, latest_index)) {
+		orders = BindSortOrders(binder, latest_table.GetColumns(), latest_table.name, scan_index, sort_orders);
+	} else {
 		for (auto &order : orders) {
-			if (!MapSortToSchemaVersion(binder.context, order.expression, latest_table, table, scan_index)) {
+			// the columns a subquery correlates with cannot be remapped
+			if (order.expression->HasSubquery() ||
+			    !MapSortToSchemaVersion(binder.context, order.expression, latest_table, table, scan_index)) {
 				// the sort cannot be evaluated on the columns the files were written with
 				return std::move(plan);
 			}
