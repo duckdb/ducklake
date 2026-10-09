@@ -1,0 +1,27 @@
+# name: benchmark/micro/time_travel/table_changes_flushed.benchmark
+# description: Three table_changes windows over inlined updates and deletes that were flushed into one data file
+# group: [time_travel]
+
+name Table Changes Flushed
+group micro
+subgroup time_travel
+
+require ducklake
+
+include benchmark/micro/fixtures/flushed_history.benchmark.in
+
+# The run is read-only, so the catalog stays attached and warm between runs
+run
+SELECT w, change_type, count(*) AS cnt, sum(v) AS sum_v FROM (
+SELECT 'all' AS w, change_type, v FROM lake.table_changes('t', 12, 41)
+UNION ALL SELECT 'updates', change_type, v FROM lake.table_changes('t', 12, 31)
+UNION ALL SELECT 'deletes', change_type, v FROM lake.table_changes('t', 32, 41)
+) GROUP BY ALL ORDER BY ALL;
+
+result IIII
+all	delete	10000	500045000
+all	update_postimage	20000	999210000
+all	update_preimage	20000	999190000
+deletes	delete	10000	500045000
+updates	update_postimage	20000	999210000
+updates	update_preimage	20000	999190000

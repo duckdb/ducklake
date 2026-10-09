@@ -31,7 +31,9 @@ static InsertionOrderPreservingMap<string> DuckLakeFunctionToString(TableFunctio
 
 	if (input.table_function.function_info) {
 		auto &table_info = input.table_function.function_info->Cast<DuckLakeFunctionInfo>();
-		result["Table"] = table_info.table_name;
+		result["Table"] = table_info.table.ParentSchema()
+		                      .GetQualifiedName(Identifier(table_info.table_name))
+		                      .ToString(QualifiedNameToStringMode::HIDE_DEFAULT_SCHEMA);
 	}
 
 	return result;
@@ -303,6 +305,7 @@ void DuckLakeScanSerialize(Serializer &serializer, const optional_ptr<FunctionDa
 	}
 	serializer.WriteProperty(107, "qualified_name",
 	                         func_info.table.ParentSchema().GetQualifiedName(Identifier(func_info.table_name)));
+	serializer.WritePropertyWithDefault<bool>(108, "include_local_changes", func_info.include_local_changes, true);
 }
 
 unique_ptr<FunctionData> DuckLakeScanDeserialize(Deserializer &deserializer, BoundTableFunction &function) {
@@ -324,6 +327,7 @@ unique_ptr<FunctionData> DuckLakeScanDeserialize(Deserializer &deserializer, Bou
 	if (qualified_name.Path().empty()) {
 		qualified_name = QualifiedName(Identifier(catalog_name), Identifier(schema_name), Identifier(table_name));
 	}
+	auto include_local_changes = deserializer.ReadPropertyWithExplicitDefault<bool>(108, "include_local_changes", true);
 
 	// If ducklake_scan was registered before parquet was loaded, we set it now
 	if (!function.bind) {
@@ -339,7 +343,7 @@ unique_ptr<FunctionData> DuckLakeScanDeserialize(Deserializer &deserializer, Bou
 
 	// a time travel scan finds its table at the serialized snapshot
 	unique_ptr<BoundAtClause> at_clause;
-	if (snapshot.snapshot_id != transaction.GetSnapshot().snapshot_id) {
+	if (!include_local_changes) {
 		at_clause = make_uniq<BoundAtClause>("version", Value::UBIGINT(snapshot.snapshot_id));
 	}
 	EntryLookupInfo table_lookup(CatalogType::TABLE_ENTRY, qualified_name, at_clause.get(), QueryErrorContext());
@@ -349,6 +353,7 @@ unique_ptr<FunctionData> DuckLakeScanDeserialize(Deserializer &deserializer, Bou
 	auto &func_info = function.function_info->Cast<DuckLakeFunctionInfo>();
 	func_info.scan_type = scan_type;
 	func_info.start_snapshot = std::move(start_snapshot);
+	func_info.include_local_changes = include_local_changes;
 
 	return DuckLakeFunctions::BindDuckLakeScan(context, function);
 }

@@ -5,6 +5,7 @@
 #include "storage/ducklake_metadata_info.hpp"
 #include "storage/ducklake_variant_stats.hpp"
 #include "duckdb/common/types/string.hpp"
+#include "duckdb/common/types/timestamp.hpp"
 #include "duckdb/common/types/value.hpp"
 #include "duckdb/storage/statistics/base_statistics.hpp"
 #include "duckdb/common/helper.hpp"
@@ -172,6 +173,19 @@ void DuckLakeColumnStats::ClearBounds() {
 	has_contains_nan = false;
 }
 
+void DuckLakeColumnStats::WidenFloatBounds() {
+	if (type.id() != LogicalTypeId::FLOAT) {
+		return;
+	}
+	if (has_min) {
+		min = Value(min).DefaultCastAs(type).DefaultCastAs(LogicalType::DOUBLE).ToString();
+	}
+	if (has_max) {
+		max = Value(max).DefaultCastAs(type).DefaultCastAs(LogicalType::DOUBLE).ToString();
+	}
+	type = LogicalType::DOUBLE;
+}
+
 bool DuckLakeColumnStats::BoundsSurviveTypePromotion(const LogicalType &source, const LogicalType &target) {
 	// bound strings reread exactly at wider types
 	if (source.IsIntegral() && target.IsIntegral()) {
@@ -180,15 +194,35 @@ bool DuckLakeColumnStats::BoundsSurviveTypePromotion(const LogicalType &source, 
 	return source.id() == LogicalTypeId::DECIMAL && target.id() == LogicalTypeId::DECIMAL;
 }
 
-static int32_t CompareBounds(const LogicalType &type, const string &left, const string &right) {
+optional<Value> TryCastStatsBound(const string &bound, const LogicalType &type) {
+	if (StatsBoundsRequireOffset(type)) {
+		timestamp_t result;
+		bool has_offset;
+		string_t time_zone;
+		auto cast_result =
+		    Timestamp::TryConvertTimestampTZ(bound.c_str(), bound.size(), result, true, has_offset, time_zone);
+		if (cast_result != TimestampCastResult::SUCCESS || (!has_offset && result.IsFinite())) {
+			return nullopt;
+		}
+	}
+	return Value(bound).DefaultTryCastAs(type);
+}
+
+//! Returns false when either bound is unknown
+static bool TryCompareBounds(const LogicalType &type, const string &left, const string &right, int32_t &result) {
 	if (!RequiresValueComparison(type)) {
 		// for other types we can compare the strings directly
-		return left < right ? -1 : (left == right ? 0 : 1);
+		result = left < right ? -1 : (left == right ? 0 : 1);
+		return true;
 	}
 	// for numerics/temporals we need to parse the stats
-	auto left_value = Value(left).DefaultCastAs(type);
-	auto right_value = Value(right).DefaultCastAs(type);
-	return left_value < right_value ? -1 : (left_value == right_value ? 0 : 1);
+	auto left_value = TryCastStatsBound(left, type);
+	auto right_value = TryCastStatsBound(right, type);
+	if (!left_value || !right_value) {
+		return false;
+	}
+	result = *left_value < *right_value ? -1 : (*left_value == *right_value ? 0 : 1);
+	return true;
 }
 
 void DuckLakeColumnStats::MergeBound(const DuckLakeColumnStats &new_stats, bool is_min) {
@@ -205,7 +239,11 @@ void DuckLakeColumnStats::MergeBound(const DuckLakeColumnStats &new_stats, bool 
 	if (!has_bound) {
 		return;
 	}
-	auto comparison = CompareBounds(type, new_bound, bound);
+	int32_t comparison;
+	if (!TryCompareBounds(type, new_bound, bound, comparison)) {
+		has_bound = false;
+		return;
+	}
 	if (comparison == 0) {
 		bound_is_exact = bound_is_exact && new_bound_is_exact;
 	} else if ((comparison < 0) == is_min) {
@@ -296,13 +334,14 @@ void DuckLakeTableStats::MergeStats(FieldIndex col_id, const DuckLakeColumnStats
 	current_stats.MergeStats(file_stats);
 }
 
-void DuckLakeTableStats::MergeFileStats(const DuckLakeDataFile &file) {
+void DuckLakeTableStats::MergeFileStats(const DuckLakeDataFile &file,
+                                        const map<FieldIndex, DuckLakeColumnStats> &column_stats) {
 	if (!file.max_partial_file_snapshot.IsValid()) {
 		record_count += file.row_count;
 		next_row_id += file.row_count;
 	}
 	table_size_bytes += file.file_size_bytes;
-	for (auto &entry : file.column_stats) {
+	for (auto &entry : column_stats) {
 		MergeStats(entry.first, entry.second);
 	}
 }
@@ -323,14 +362,14 @@ unique_ptr<BaseStatistics> DuckLakeColumnStats::CreateNumericStats() const {
 	}
 	auto stats = NumericStats::CreateEmpty(type);
 	if (has_min) {
-		auto min_value = Value(min).DefaultTryCastAs(type);
+		auto min_value = TryCastStatsBound(min, type);
 		if (!min_value) {
 			return nullptr;
 		}
 		NumericStats::SetMin(stats, *min_value);
 	}
 	if (has_max) {
-		auto max_value = Value(max).DefaultTryCastAs(type);
+		auto max_value = TryCastStatsBound(max, type);
 		if (!max_value) {
 			return nullptr;
 		}

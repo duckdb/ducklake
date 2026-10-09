@@ -18,26 +18,20 @@ struct DuckLakeDeleteMap;
 class DuckLakeFieldData;
 
 struct DuckLakeMultiFileReaderGlobalState : public MultiFileReaderGlobalState {
-	DuckLakeMultiFileReaderGlobalState(const MultiFileList &file_list_p, bool internally_projected_rowid_p,
-	                                   optional_idx deletion_scan_rowid_col_p,
-	                                   optional_idx deletion_scan_snapshot_col_p,
-	                                   optional_idx deletion_scan_internal_rowid_col_p)
-	    : MultiFileReaderGlobalState(internally_projected_rowid_p ? vector<LogicalType> {LogicalType::BIGINT}
-	                                                              : vector<LogicalType> {},
+	DuckLakeMultiFileReaderGlobalState(const MultiFileList &file_list_p, optional_idx deletion_scan_snapshot_col_p,
+	                                   optional_idx deletion_scan_file_row_number_col_p)
+	    : MultiFileReaderGlobalState(deletion_scan_file_row_number_col_p.IsValid()
+	                                     ? vector<LogicalType> {LogicalType::BIGINT}
+	                                     : vector<LogicalType> {},
 	                                 file_list_p),
-	      internally_projected_rowid(internally_projected_rowid_p), deletion_scan_rowid_col(deletion_scan_rowid_col_p),
 	      deletion_scan_snapshot_col(deletion_scan_snapshot_col_p),
-	      deletion_scan_internal_rowid_col(deletion_scan_internal_rowid_col_p) {
+	      deletion_scan_file_row_number_col(deletion_scan_file_row_number_col_p) {
 	}
 
-	//! Whether row_id was internally projected (not in user's query)
-	//! This is necessary for DCF queries over inlined deletions
-	const bool internally_projected_rowid;
-	//! Output positions in global_column_ids order
-	const optional_idx deletion_scan_rowid_col;
+	//! Output position of the snapshot_id of a deletion scan in global_column_ids order
 	const optional_idx deletion_scan_snapshot_col;
-	//! Position of the appended rowid expression
-	const optional_idx deletion_scan_internal_rowid_col;
+	//! Position of the appended file_row_number expression, which looks up the snapshot of each deleted row
+	const optional_idx deletion_scan_file_row_number_col;
 };
 
 struct DuckLakeMultiFileReader : public MultiFileReader {
@@ -114,9 +108,9 @@ public:
 
 private:
 	shared_ptr<BaseFileReader> TryCreateInlinedDataReader(const OpenFileInfo &file);
-	//! Gather per-row snapshot_id values using the rowid values produced by the scan
-	void GatherDeletionScanSnapshots(BaseFileReader &reader, const MultiFileReaderData &reader_data,
-	                                 const Vector &rowid_vector, Vector &snapshot_vector, idx_t count) const;
+	//! Gather per-row snapshot_id values using the file positions of the scanned rows
+	void GatherDeletionScanSnapshots(BaseFileReader &reader, const Vector &file_row_numbers, Vector &snapshot_vector,
+	                                 idx_t count) const;
 
 private:
 	unique_ptr<MultiFileColumnDefinition> row_id_column;

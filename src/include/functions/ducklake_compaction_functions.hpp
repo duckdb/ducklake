@@ -51,11 +51,7 @@ public:
 	CompactionType type;
 
 public:
-	PhysicalOperator &CreatePlan(ClientContext &context, PhysicalPlanGenerator &planner) override {
-		auto &child = planner.CreatePlan(*children[0]);
-		return planner.Make<DuckLakeCompaction>(types, table, std::move(source_files), std::move(encryption_key),
-		                                        partition_id, std::move(partition_values), row_id_start, child, type);
-	}
+	PhysicalOperator &CreatePlan(ClientContext &context, PhysicalPlanGenerator &planner) override;
 
 	string GetName() const override {
 		return "DUCKLAKE_COMPACTION";
