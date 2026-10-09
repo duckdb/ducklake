@@ -164,6 +164,62 @@ SELECT id FROM lake.k
 3
 1
 
+# a field of the struct the table is sorted by was renamed
+statement ok
+CREATE TABLE lake.s (id BIGINT, st STRUCT(a BIGINT))
+
+statement ok
+INSERT INTO lake.s VALUES (1, {'a': 30}), (2, {'a': 10})
+
+statement ok
+INSERT INTO lake.s VALUES (3, {'a': 20})
+
+statement ok
+ALTER TABLE lake.s RENAME COLUMN st.a TO z
+
+statement ok
+ALTER TABLE lake.s SET SORTED BY (struct_extract(st, 'z'))
+
+query II
+SELECT files_processed, files_created FROM ducklake_merge_adjacent_files('lake', 's')
+----
+2	1
+
+query I
+SELECT id FROM lake.s
+----
+2
+3
+1
+
+# a lambda parameter named like a promoted column is not a column
+statement ok
+CREATE TABLE lake.l (id BIGINT, v INTEGER)
+
+statement ok
+INSERT INTO lake.l VALUES (1, 30), (2, 10)
+
+statement ok
+INSERT INTO lake.l VALUES (3, 20)
+
+statement ok
+ALTER TABLE lake.l ALTER COLUMN v TYPE BIGINT
+
+statement ok
+ALTER TABLE lake.l SET SORTED BY (list_transform([v], lambda v: v + 0)[1])
+
+query II
+SELECT files_processed, files_created FROM ducklake_merge_adjacent_files('lake', 'l')
+----
+2	1
+
+query I
+SELECT id FROM lake.l
+----
+2
+3
+1
+
 # a positional sort key refers to the column at its position in the latest table
 statement ok
 CREATE TABLE lake.r (a BIGINT, id BIGINT, v BIGINT)
