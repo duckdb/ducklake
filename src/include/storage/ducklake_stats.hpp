@@ -10,6 +10,7 @@
 
 #include "storage/ducklake_extra_stats.hpp"
 #include "duckdb/common/optional_ptr.hpp"
+#include "duckdb/common/types/value.hpp"
 
 #include <functional>
 
@@ -27,6 +28,9 @@ inline bool RequiresValueComparison(const LogicalType &type) {
 inline bool StatsBoundsRequireOffset(const LogicalType &type) {
 	return type.id() == LogicalTypeId::TIMESTAMP_TZ || type.id() == LogicalTypeId::TIMESTAMP_TZ_NS;
 }
+
+//! Bounds that cannot be cast are unknown
+optional<Value> TryCastStatsBound(const string &bound, const LogicalType &type);
 
 struct DuckLakeColumnStats;
 struct DuckLakeGlobalColumnStatsInfo;
@@ -81,6 +85,8 @@ public:
 	static DuckLakeColumnStats FromConstant(const LogicalType &type, const Value &value, idx_t count);
 	//! Discards the min/max bounds, leaving the counts intact
 	void ClearBounds();
+	//! Rewrite FLOAT bounds as the DOUBLE values they widen to
+	void WidenFloatBounds();
 	void CopyMinFrom(const DuckLakeColumnStats &other);
 	void CopyMaxFrom(const DuckLakeColumnStats &other);
 	static bool BoundsSurviveTypePromotion(const LogicalType &source, const LogicalType &target);
@@ -123,7 +129,8 @@ struct DuckLakeTableStats {
 
 	void MergeStats(FieldIndex col_id, const DuckLakeColumnStats &file_stats);
 
-	void MergeFileStats(const DuckLakeDataFile &file);
+	//! Merges a file with the given column stats, which can differ from the file's own
+	void MergeFileStats(const DuckLakeDataFile &file, const map<FieldIndex, DuckLakeColumnStats> &column_stats);
 
 	//! Skips columns whose type lookup returns nullptr
 	static unique_ptr<DuckLakeTableStats>

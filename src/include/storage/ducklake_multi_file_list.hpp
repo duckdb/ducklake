@@ -49,6 +49,8 @@ public:
 	}
 
 	bool CanUseGlobalStats() const;
+	//! Whether filters can prune files by their stats
+	bool SupportsFilterPushdown() const;
 	bool IsDeleteScan() const;
 	const DuckLakeDeleteScanEntry &GetDeleteScanEntry(idx_t file_idx);
 	static DuckLakeFileData GetDeleteData(const DuckLakeDataFile &file);
@@ -59,6 +61,7 @@ protected:
 	OpenFileInfo GetFile(idx_t i) const override;
 
 private:
+	void ApplyLocalChanges(DuckLakeTransaction &transaction) const;
 	void GetFilesForTable() const;
 	void GetTableInsertions() const;
 	void GetTableDeletions() const;
