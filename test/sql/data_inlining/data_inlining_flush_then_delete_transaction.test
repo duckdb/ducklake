@@ -34,6 +34,11 @@ DELETE FROM lake.d WHERE v > 0
 ----
 3
 
+query I
+SELECT COUNT(*) FROM lake.d
+----
+0
+
 statement ok
 COMMIT
 
@@ -75,6 +80,13 @@ CALL ducklake_flush_inlined_data('lake', table_name => 'u')
 statement ok
 UPDATE lake.u SET v = v + 1
 
+query II
+SELECT id, v FROM lake.u ORDER BY id
+----
+1	11
+2	21
+3	31
+
 statement ok
 COMMIT
 
@@ -115,6 +127,12 @@ query I
 DELETE FROM lake.p WHERE id = 3
 ----
 1
+
+query II
+SELECT id, p FROM lake.p ORDER BY id
+----
+1	1
+2	1
 
 statement ok
 COMMIT
@@ -186,3 +204,35 @@ SELECT id, v FROM lake.e AT (VERSION => getvariable('e_before')) ORDER BY id
 2	20
 3	30
 4	40
+
+# a rollback keeps the inlined rows and removes the flushed files
+statement ok
+CREATE TABLE lake.r (id INTEGER)
+
+statement ok
+INSERT INTO lake.r VALUES (1), (2)
+
+statement ok
+BEGIN
+
+statement ok
+CALL ducklake_flush_inlined_data('lake', table_name => 'r')
+
+query I
+DELETE FROM lake.r WHERE id > 0
+----
+2
+
+statement ok
+ROLLBACK
+
+query I
+SELECT id FROM lake.r ORDER BY id
+----
+1
+2
+
+query I
+SELECT COUNT(*) FROM glob('{DATA_PATH}/flush_then_delete_transaction/main/r/**/*')
+----
+0
