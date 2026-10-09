@@ -135,7 +135,7 @@ SinkFinalizeType DuckLakeFlushData::Finalize(Pipeline &pipeline, Event &event, C
 			    snapshot, StringUtil::Format(R"(
 				WITH all_rows AS (
 					SELECT %s AS end_snapshot, ROW_NUMBER() OVER (ORDER BY %s) - 1 AS output_position
-					FROM %s
+					FROM %s inlined_data
 					WHERE {SNAPSHOT_ID} >= %s%s
 				)
 				SELECT end_snapshot, output_position
@@ -282,7 +282,7 @@ string DuckLakeDataFlusher::GetFlushSortOrderSQL(const DuckLakeTableEntry &table
 			return string();
 		}
 	}
-	return DuckLakeSort::BuildSortOrderSQL(orders, latest_table, table);
+	return DuckLakeSort::BuildSortOrderSQL(context, bound_orders, latest_table, table);
 }
 
 unique_ptr<LogicalOperator> DuckLakeDataFlusher::GenerateFlushCommand() {

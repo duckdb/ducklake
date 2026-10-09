@@ -51,6 +51,12 @@
       ]
     },
     {
+      "reason": "SQLite cannot commit a concurrent insert while the retyping transaction is open",
+      "paths": [
+        "test/sql/stats/float_to_double_retype_stats_concurrent.test"
+      ]
+    },
+    {
       "reason": "High retry counts can stall under SQLite metadata contention",
       "paths": [
         "test/sql/issues/issue_1248_concurrent_commit_schema_id.test",
@@ -111,7 +117,8 @@
         "test/sql/data_inlining/postgres_identifier_limit.test",
         "test/sql/benchmark/postgres_catalog.test",
         "test/sql/issues/issue_843_postgres_legacy_inlined_types.test",
-        "test/sql/data_inlining/inlined_superseded_drop_failure_postgres.test"
+        "test/sql/data_inlining/inlined_superseded_drop_failure_postgres.test",
+        "test/sql/compaction/compaction_idle_metadata_transaction.test"
       ]
     },
     {

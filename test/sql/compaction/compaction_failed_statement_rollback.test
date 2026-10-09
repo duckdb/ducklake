@@ -1,0 +1,48 @@
+# name: test/sql/compaction/compaction_failed_statement_rollback.test
+# description: a statement that runs a compaction and fails rolls back the metadata writes of its other functions
+# group: [compaction]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/cfsr', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE ducklake.t (i INTEGER)
+
+statement ok
+INSERT INTO ducklake.t VALUES (1)
+
+statement ok
+INSERT INTO ducklake.t VALUES (2)
+
+statement error
+SELECT CAST(Success AS BIGINT) FROM ducklake_set_option('ducklake', 'target_file_size', '1MB')
+UNION ALL
+SELECT CAST(error(table_name) AS BIGINT) FROM ducklake_merge_adjacent_files('ducklake', 't')
+----
+t
+
+query I
+SELECT count(*) FROM ducklake.options() WHERE option_name = 'target_file_size'
+----
+0
+
+statement error
+SELECT snapshot_id FROM ducklake_expire_snapshots('ducklake', versions => [0])
+UNION ALL
+SELECT CAST(error(table_name) AS BIGINT) FROM ducklake_merge_adjacent_files('ducklake', 't')
+----
+t
+
+query II
+SELECT count(*) FILTER (WHERE snapshot_id = 0), (SELECT count(*) FROM ducklake_list_files('ducklake', 't'))
+FROM ducklake.snapshots()
+----
+1	2

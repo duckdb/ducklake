@@ -192,6 +192,8 @@ public:
 	//! Execute SQL on the metadata connection without placeholder substitution or metadata-manager wrapping.
 	unique_ptr<QueryResult> ExecuteRaw(string query);
 	Connection &GetConnection();
+	//! Releases the metadata transaction until the next metadata access
+	void ReleaseMetadataTransaction();
 
 	//! Keep a schema cache entry alive for as long as this transaction lives. Transaction-local catalog entries hold
 	//! bare references into the cached catalog set, and those references are read again at commit time, so the entry
@@ -345,6 +347,7 @@ public:
 
 private:
 	void FlushChanges();
+	void BeginMetadataTransaction();
 	void FlushNameMapCacheInvalidations();
 	//! Puts back the config options this transaction replaced in the catalog, or drops its deferred changes
 	void UndoConfigOptions();
@@ -371,6 +374,7 @@ private:
 	DatabaseInstance &db;
 	unique_ptr<DuckLakeMetadataManager> metadata_manager;
 	mutex connection_lock;
+	bool metadata_transaction_released = false;
 	unique_ptr<Connection> connection;
 	//! Flushes of several tables finalize in parallel while scans check the flushed tables
 	mutex flushed_inlined_lock;

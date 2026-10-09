@@ -172,6 +172,19 @@ void DuckLakeColumnStats::ClearBounds() {
 	has_contains_nan = false;
 }
 
+void DuckLakeColumnStats::WidenFloatBounds() {
+	if (type.id() != LogicalTypeId::FLOAT) {
+		return;
+	}
+	if (has_min) {
+		min = Value(min).DefaultCastAs(type).DefaultCastAs(LogicalType::DOUBLE).ToString();
+	}
+	if (has_max) {
+		max = Value(max).DefaultCastAs(type).DefaultCastAs(LogicalType::DOUBLE).ToString();
+	}
+	type = LogicalType::DOUBLE;
+}
+
 bool DuckLakeColumnStats::BoundsSurviveTypePromotion(const LogicalType &source, const LogicalType &target) {
 	// bound strings reread exactly at wider types
 	if (source.IsIntegral() && target.IsIntegral()) {
@@ -296,13 +309,14 @@ void DuckLakeTableStats::MergeStats(FieldIndex col_id, const DuckLakeColumnStats
 	current_stats.MergeStats(file_stats);
 }
 
-void DuckLakeTableStats::MergeFileStats(const DuckLakeDataFile &file) {
+void DuckLakeTableStats::MergeFileStats(const DuckLakeDataFile &file,
+                                        const map<FieldIndex, DuckLakeColumnStats> &column_stats) {
 	if (!file.max_partial_file_snapshot.IsValid()) {
 		record_count += file.row_count;
 		next_row_id += file.row_count;
 	}
 	table_size_bytes += file.file_size_bytes;
-	for (auto &entry : file.column_stats) {
+	for (auto &entry : column_stats) {
 		MergeStats(entry.first, entry.second);
 	}
 }
