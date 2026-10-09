@@ -1,68 +1,40 @@
 # name: test/sql/issues/issue_1567_inlined_table_legacy_version.test
-# description: An inlined table that an older catalog gave a lower schema version than the ALTER of its commit
+# description: Inlined tables that DuckDB 1.5.6 registered at a schema version without a schema row of their table
 # group: [issues]
 
 require ducklake
 
 require parquet
 
-test-env DUCKLAKE_CONNECTION {TEST_DIR}/issue_1567_legacy.db
-
-test-env DATA_PATH {TEST_DIR}
-
-statement ok
-ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS lake (DATA_PATH '{DATA_PATH}/issue_1567_legacy', METADATA_CATALOG 'meta')
+# written by DuckDB 1.5.6
+unzip data/old_ducklake/inlined_schema_versions.db.gz {TEST_DIR}/issue_1567_legacy.db
 
 statement ok
-CALL lake.set_option('data_inlining_row_limit', 0)
+ATTACH 'ducklake:{TEST_DIR}/issue_1567_legacy.db' AS lake (DATA_PATH '{TEST_DIR}/issue_1567_legacy', OVERRIDE_DATA_PATH TRUE, METADATA_CATALOG 'meta')
 
-statement ok
-CREATE TABLE lake.m (a INTEGER)
+# t got its first inlined rows after its ALTER, m and r in the commit of their ALTER
+query III
+SELECT tbl.table_name, idt.schema_version, max(sv.schema_version)
+FROM meta.ducklake_inlined_data_tables idt
+JOIN meta.ducklake_table tbl USING (table_id)
+JOIN meta.ducklake_schema_versions sv USING (table_id)
+GROUP BY ALL
+ORDER BY ALL
+----
+m	7	8
+n	8	5
+r	7	8
+t	6	2
 
-statement ok
-CREATE TABLE lake.n (a INTEGER)
+query II
+SELECT a, b FROM lake.t
+----
+x	B
 
-statement ok
-CREATE TABLE lake.r (a INTEGER)
-
-statement ok
-CALL lake.set_option('data_inlining_row_limit', 10)
-
-statement ok
-BEGIN
-
-statement ok
-ALTER TABLE lake.m ADD COLUMN b INTEGER
-
-statement ok
-INSERT INTO lake.m VALUES (100, 5)
-
-statement ok
-ALTER TABLE lake.r RENAME COLUMN a TO b
-
-statement ok
-INSERT INTO lake.r VALUES (5)
-
-statement ok
-INSERT INTO lake.n VALUES (1)
-
-statement ok
-COMMIT
-
-# an older catalog gave the inlined table created last in a commit, its snapshot and its rows the next version
-statement ok
-SET VARIABLE altered = (SELECT max(snapshot_id) FROM lake.snapshots())
-
-statement ok
-UPDATE meta.ducklake_snapshot SET schema_version = schema_version + 1 WHERE snapshot_id = getvariable('altered')
-
-statement ok
-UPDATE meta.ducklake_schema_versions SET schema_version = schema_version + 1
-WHERE begin_snapshot = getvariable('altered')
-
-statement ok
-UPDATE meta.ducklake_inlined_data_tables SET schema_version = schema_version + 1
-WHERE table_id = (SELECT table_id FROM meta.ducklake_table WHERE table_name = 'n')
+query II
+SELECT a, b FROM lake.t AT (VERSION => 6)
+----
+x	B
 
 # a later ALTER of m does not apply to its inlined table
 statement ok
@@ -72,12 +44,17 @@ statement ok
 DETACH lake
 
 statement ok
-ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS lake (DATA_PATH '{DATA_PATH}/issue_1567_legacy', METADATA_CATALOG 'meta')
+ATTACH 'ducklake:{TEST_DIR}/issue_1567_legacy.db' AS lake (DATA_PATH '{TEST_DIR}/issue_1567_legacy', OVERRIDE_DATA_PATH TRUE, METADATA_CATALOG 'meta')
 
 query III
 SELECT a, b, c FROM lake.m
 ----
 100	5	NULL
+
+query I
+SELECT b FROM lake.r
+----
+5
 
 query I
 SELECT a FROM lake.n
@@ -116,6 +93,11 @@ SELECT a, b, c FROM lake.m
 ----
 100	5	NULL
 
+query II
+SELECT a, b FROM lake.t
+----
+x	B
+
 statement ok
 SET VARIABLE m_files = (SELECT list(data_file) FROM ducklake_list_files('lake', 'm'))
 
@@ -123,3 +105,11 @@ query II
 SELECT a, b FROM read_parquet(getvariable('m_files'))
 ----
 100	5
+
+statement ok
+SET VARIABLE t_files = (SELECT list(data_file) FROM ducklake_list_files('lake', 't'))
+
+query II
+SELECT a, b FROM read_parquet(getvariable('t_files'))
+----
+x	B
