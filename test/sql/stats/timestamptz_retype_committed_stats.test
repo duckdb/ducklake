@@ -1,0 +1,103 @@
+# name: test/sql/stats/timestamptz_retype_committed_stats.test
+# description: table stats written before a committed retype to TIMESTAMPTZ do not prune matching rows
+# group: [stats]
+
+require ducklake
+
+require parquet
+
+require icu
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+SET TimeZone = 'America/New_York'
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/timestamptz_retype_committed_stats')
+
+statement ok
+CREATE TABLE dl.files (id INTEGER, v TIMESTAMP)
+
+statement ok
+INSERT INTO dl.files SELECT i, TIMESTAMP '2020-06-15 12:00:00' + INTERVAL (i) SECOND FROM range(4096) t(i)
+
+statement ok
+CREATE TABLE dl.inlined (v TIMESTAMP)
+
+statement ok
+INSERT INTO dl.inlined VALUES (TIMESTAMP '2020-06-15 12:00:00')
+
+statement ok
+CREATE TABLE dl.dates (v DATE)
+
+statement ok
+INSERT INTO dl.dates SELECT DATE '2020-06-15' FROM range(4096)
+
+statement ok
+ALTER TABLE dl.files ALTER COLUMN v TYPE TIMESTAMPTZ
+
+statement ok
+ALTER TABLE dl.inlined ALTER COLUMN v TYPE TIMESTAMPTZ
+
+statement ok
+ALTER TABLE dl.dates ALTER COLUMN v TYPE TIMESTAMPTZ
+
+query I
+SELECT count(*) FROM dl.files WHERE v > TIMESTAMPTZ '2020-06-15 13:08:15+00'
+----
+4096
+
+query II
+SELECT min(v), max(v) FROM dl.files
+----
+2020-06-15 12:00:00-04	2020-06-15 13:08:15-04
+
+query I
+SELECT count(*) FROM dl.inlined WHERE v = TIMESTAMPTZ '2020-06-15 12:00:00-04'
+----
+1
+
+query I
+SELECT max(v) FROM dl.inlined
+----
+2020-06-15 12:00:00-04
+
+query I
+SELECT count(*) FROM dl.dates WHERE v > TIMESTAMPTZ '2020-06-15 02:00:00+00'
+----
+4096
+
+query II
+SELECT min(v), max(v) FROM dl.dates
+----
+2020-06-15 00:00:00-04	2020-06-15 00:00:00-04
+
+# bounds with an offset that enclose the old bounds read as UTC
+statement ok
+INSERT INTO dl.files VALUES (0, TIMESTAMPTZ '2020-06-15 11:00:00+00'), (0, TIMESTAMPTZ '2020-06-15 14:00:00+00')
+
+query I
+SELECT count(*) FROM dl.files WHERE v > TIMESTAMPTZ '2020-06-15 15:00:00+00'
+----
+4096
+
+query II
+SELECT min(v), max(v) FROM dl.files
+----
+2020-06-15 07:00:00-04	2020-06-15 13:08:15-04
+
+statement ok
+INSERT INTO dl.inlined VALUES (TIMESTAMPTZ '2020-06-15 11:00:00+00'), (TIMESTAMPTZ '2020-06-15 14:00:00+00')
+
+query I
+SELECT count(*) FROM dl.inlined WHERE v > TIMESTAMPTZ '2020-06-15 15:00:00+00'
+----
+1
+
+query I
+SELECT max(v) FROM dl.inlined
+----
+2020-06-15 12:00:00-04
