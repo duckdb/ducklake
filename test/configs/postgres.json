@@ -74,12 +74,6 @@
       ]
     },
     {
-      "reason": "Postgres Locking (Not a bug, rather PG behavior)",
-      "paths": [
-        "test/sql/transaction/transaction_conflict_inlining.test"
-      ]
-    },
-    {
       "reason": "Current transaction is aborted",
       "paths": [
         "test/sql/deletion_inlining/test_deletion_inlining_concurrent.test"

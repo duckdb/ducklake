@@ -113,9 +113,9 @@ SELECT count(*) FROM __ducklake_metadata_ducklake.ducklake_data_file WHERE end_s
 ----
 3
 
-# Medium files should still be there (files >= 1000 bytes)
+# Medium files should still be there
 query I
-SELECT count(*) FROM __ducklake_metadata_ducklake.ducklake_data_file WHERE end_snapshot IS NULL AND file_size_bytes >= 1000
+SELECT count(*) FROM __ducklake_metadata_ducklake.ducklake_data_file WHERE end_snapshot IS NULL AND record_count = 100
 ----
 2
 

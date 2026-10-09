@@ -96,6 +96,9 @@ public:
 	const vector<DuckLakeInlinedTableInfo> &GetInlinedDataTables() const {
 		return inlined_data_tables;
 	}
+	//! Whether an inlined data table of the schema version has the columns of the last schema change
+	static bool IsCurrentInlinedDataTable(idx_t schema_version, optional_idx last_schema_change);
+	bool HasCurrentInlinedDataTable(optional_idx last_schema_change) const;
 	//! The inlined data tables to read at the snapshot, skipping the flushed and dropped ones
 	vector<DuckLakeInlinedTableInfo> GetInlinedDataTables(DuckLakeTransaction &transaction,
 	                                                      DuckLakeSnapshot snapshot) const;

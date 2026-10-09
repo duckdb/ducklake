@@ -448,7 +448,7 @@ void DuckLakeMetadataManager::MigrateV10(bool allow_failures) {
 
 void DuckLakeMetadataManager::MigrateV10Dev() {
 	auto &db = transaction.GetCatalog().GetDatabase();
-	// the schema additions and the inlined column rename are independent so a failure of one must not skip the other
+	// Try the schema and column migrations independently
 	try {
 		ExecuteMigration(V1_1_DEV1_MIGRATION_QUERY, true, "1.0", "1.1-dev1");
 	} catch (std::exception &ex) {
@@ -695,6 +695,22 @@ WHERE table_id = {TABLE_ID})";
 		return row.GetValue<idx_t>(0);
 	}
 	throw InternalException("Table %llu does not exist", table_id.index);
+}
+
+DuckLakeTableSchemaVersions DuckLakeMetadataManager::GetTableSchemaVersions(TableIndex table_id,
+                                                                            DuckLakeSnapshot snapshot) {
+	auto query = StringUtil::Format("SELECT MIN(schema_version), MAX(schema_version) FROM "
+	                                "{METADATA_CATALOG}.ducklake_schema_versions "
+	                                "WHERE table_id = %d AND begin_snapshot <= {SNAPSHOT_ID}",
+	                                table_id.index);
+	auto result = Query(snapshot, query);
+	result->ThrowIfError("Failed to get the schema versions of a table from DuckLake: ");
+	DuckLakeTableSchemaVersions schema_versions;
+	for (auto &row : *result) {
+		schema_versions.creation = OptIdx(row, 0);
+		schema_versions.last_change = OptIdx(row, 1);
+	}
+	return schema_versions;
 }
 
 idx_t DuckLakeMetadataManager::GetBeginSnapshotForSchemaVersion(TableIndex table_id, idx_t schema_version) {
@@ -1343,12 +1359,20 @@ string DuckLakeMetadataManager::GetFileSelectList(const string &prefix) {
 	return result;
 }
 
+string DuckLakeMetadataManager::GetDataFileSelectList(const string &prefix) {
+	// the format DuckLake writes is returned as NULL, so the common case transfers no string
+	return GetFileSelectList(prefix) +
+	       StringUtil::Format(", CASE WHEN %s.file_format = 'parquet' THEN NULL ELSE %s.file_format END AS "
+	                          "%s_unsupported_format",
+	                          prefix, prefix, prefix);
+}
+
 string DuckLakeMetadataManager::GetDeleteFileSelectList(const string &prefix) {
 	return GetFileSelectList(prefix) + ", " + prefix + ".format AS " + prefix + "_format";
 }
 
-DuckLakeFileData DuckLakeMetadataManager::ReadDataFile(DuckLakeTableEntry &table, const QueryResultRow &row,
-                                                       idx_t &col_idx, bool is_encrypted) {
+DuckLakeFileData DuckLakeMetadataManager::ReadFile(DuckLakeTableEntry &table, const QueryResultRow &row, idx_t &col_idx,
+                                                   bool is_encrypted) {
 	DuckLakeFileData data;
 	if (row.IsNull(col_idx)) {
 		// file is not there
@@ -1372,9 +1396,22 @@ DuckLakeFileData DuckLakeMetadataManager::ReadDataFile(DuckLakeTableEntry &table
 	return data;
 }
 
+DuckLakeFileData DuckLakeMetadataManager::ReadDataFile(DuckLakeTableEntry &table, const QueryResultRow &row,
+                                                       idx_t &col_idx, bool is_encrypted) {
+	auto data = ReadFile(table, row, col_idx, is_encrypted);
+	if (!row.IsNull(col_idx)) {
+		auto file_format = row.GetValue<string>(col_idx);
+		if (!StringUtil::CIEquals(file_format, "parquet")) {
+			throw NotImplementedException("Unsupported data file format: %s", file_format);
+		}
+	}
+	col_idx++;
+	return data;
+}
+
 DuckLakeFileData DuckLakeMetadataManager::ReadDeleteFile(DuckLakeTableEntry &table, const QueryResultRow &row,
                                                          idx_t &col_idx, bool is_encrypted) {
-	auto data = ReadDataFile(table, row, col_idx, is_encrypted);
+	auto data = ReadFile(table, row, col_idx, is_encrypted);
 	if (!row.IsNull(col_idx)) {
 		data.format = DeleteFileFormatFromString(row.GetValue<string>(col_idx));
 	}
@@ -1411,7 +1448,10 @@ bool DuckLakeMetadataManager::ValueIsFinite(const Value &val) {
 
 string DuckLakeMetadataManager::CastValueToTarget(const Value &val, const LogicalType &type) {
 	if (type.IsNumeric() && ValueIsFinite(val)) {
-		// for (finite) numerics we directly emit the number
+		if (type.id() == LogicalTypeId::FLOAT) {
+			// a bare number parses as DECIMAL or DOUBLE, which compare differently with FLOAT bounds
+			return "CAST(" + val.ToString() + " AS FLOAT)";
+		}
 		return val.ToString();
 	}
 	// convert to a string
@@ -2042,11 +2082,11 @@ string DuckLakeMetadataManager::GenerateFileListQuery(DuckLakeTableEntry &table,
 
 	string select_list;
 	if (file_list_type == FileListType::EXTENDED) {
-		select_list = "data.data_file_id, del.delete_file_id, data.record_count, " + GetFileSelectList("data") +
+		select_list = "data.data_file_id, del.delete_file_id, data.record_count, " + GetDataFileSelectList("data") +
 		              ", data.row_id_start, data.mapping_id, " + GetDeleteFileSelectList("del") +
 		              ", del.begin_snapshot";
 	} else {
-		select_list = "data.data_file_id, " + GetFileSelectList("data") +
+		select_list = "data.data_file_id, " + GetDataFileSelectList("data") +
 		              ", data.row_id_start, data.begin_snapshot, data.partial_max, data.mapping_id, " +
 		              GetDeleteFileSelectList("del") + stats_select_list;
 	}
@@ -2150,7 +2190,7 @@ vector<DuckLakeFileListEntry> DuckLakeMetadataManager::GetTableInsertions(DuckLa
                                                                           DuckLakeSnapshot end_snapshot) {
 	auto table_id = table.GetTableId();
 	string select_list =
-	    GetFileSelectList("data") + ", data.row_id_start, data.begin_snapshot, data.partial_max, data.mapping_id";
+	    GetDataFileSelectList("data") + ", data.row_id_start, data.begin_snapshot, data.partial_max, data.mapping_id";
 	// Files either match the exact snapshot range
 	// Or they have partial_max set, which means they are a file with many snapshot ids, and might contain
 	// the snapshot we need
@@ -2198,7 +2238,7 @@ vector<DuckLakeDeleteScanEntry> DuckLakeMetadataManager::GetTableDeletions(DuckL
                                                                            DuckLakeSnapshot start_snapshot,
                                                                            DuckLakeSnapshot end_snapshot) {
 	auto table_id = table.GetTableId();
-	string select_list = "data.data_file_id, " + GetFileSelectList("data") +
+	string select_list = "data.data_file_id, " + GetDataFileSelectList("data") +
 	                     ", data.row_id_start, data.record_count, data.mapping_id, " +
 	                     GetDeleteFileSelectList("current_delete") + ", " + GetDeleteFileSelectList("previous_delete");
 
@@ -2315,7 +2355,7 @@ WHERE data.table_id = %d
   )
   AND (data.end_snapshot IS NULL OR data.end_snapshot < %d OR data.end_snapshot > {SNAPSHOT_ID})
 )",
-		                            GetFileSelectList("data"), null_file_cols, null_file_cols, table_id.index,
+		                            GetDataFileSelectList("data"), null_file_cols, null_file_cols, table_id.index,
 		                            table_id.index, start_snapshot.snapshot_id);
 	}
 
@@ -2418,7 +2458,7 @@ vector<DuckLakeCompactionFileEntry> DuckLakeMetadataManager::GetFilesForCompacti
 	    "data.data_file_id, data.record_count, data.row_id_start, data.begin_snapshot, "
 	    "data.end_snapshot, data.mapping_id, sr.schema_version , data.partial_max, "
 	    "data.partition_id, partition_sr.schema_version AS partition_schema_version, partition_info.keys, " +
-	    GetFileSelectList("data");
+	    GetDataFileSelectList("data");
 	string delete_select_list = "del.data_file_id AS del_data_file_id,"
 	                            "del.delete_file_id AS del_delete_file_id, "
 	                            "del.delete_count, "
@@ -3221,6 +3261,9 @@ string DuckLakeMetadataManager::WriteNewInlinedData(DuckLakeSnapshot &commit_sna
 		return batch_query;
 	}
 
+	auto schema_changes = transaction.SchemaChangesMade();
+	// a commit with schema changes already has a new schema version
+	bool new_schema_version = schema_changes;
 	for (auto &entry : new_data) {
 		string inlined_table_name;
 		optional_ptr<const DuckLakeTableInfo> new_inlined_table;
@@ -3234,10 +3277,18 @@ string DuckLakeMetadataManager::WriteNewInlinedData(DuckLakeSnapshot &commit_sna
 		if (it != insert_inlined_table_name_cache.end()) {
 			inlined_table_name = it->second;
 		}
+		DuckLakeTableSchemaVersions schema_versions;
+		if (!new_inlined_table) {
+			schema_versions = transaction.GetCatalog().GetTableSchemaVersions(transaction, entry.table_id);
+		}
 		if (inlined_table_name.empty() && !new_inlined_table) {
 			auto query = LatestInlinedTableQuery(entry.table_id.index) + ";";
 			auto result = Query(commit_snapshot, query);
 			for (auto &row : *result) {
+				if (!DuckLakeTableEntry::IsCurrentInlinedDataTable(row.GetValue<idx_t>(1),
+				                                                   schema_versions.last_change)) {
+					continue;
+				}
 				inlined_table_name = row.GetValue<string>(0);
 				insert_inlined_table_name_cache[entry.table_id.index] = inlined_table_name;
 			}
@@ -3272,11 +3323,24 @@ string DuckLakeMetadataManager::WriteNewInlinedData(DuckLakeSnapshot &commit_sna
 			// write the new inlined table
 			vector<string> inlined_tables;
 			string inlined_table_queries;
-			if (!new_inlined_table) {
+			optional_idx registered_version;
+			if (schema_versions.ChangedSinceCreation()) {
+				// the schema_versions row of the last change gives the columns of the new inlined table
+				registered_version = schema_versions.last_change;
+			} else if (schema_changes) {
+				// a version of its own would raise the version of this commit above its other inlined tables
+				registered_version = schema_versions.creation;
+			}
+			if (!new_inlined_table && (!registered_version.IsValid() || !new_schema_version)) {
 				commit_snapshot.schema_version++;
+				new_schema_version = true;
+			}
+			auto inlined_table_snapshot = commit_snapshot;
+			if (registered_version.IsValid()) {
+				inlined_table_snapshot.schema_version = registered_version.GetIndex();
 			}
 			inlined_table_name =
-			    GetInlinedTableQueries(commit_snapshot, table_info, inlined_tables, inlined_table_queries);
+			    GetInlinedTableQueries(inlined_table_snapshot, table_info, inlined_tables, inlined_table_queries);
 			batch_query += InsertValuesSql("ducklake_inlined_data_tables", inlined_tables);
 			batch_query += inlined_table_queries;
 		}
