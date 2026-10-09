@@ -412,11 +412,13 @@ static bool MapSortToSchemaVersion(unique_ptr<ParsedExpression> &expr, const Duc
 	}
 	// the scanned columns are bound by their latest names
 	expr = make_uniq<ColumnRefExpression>(column.Name());
+	if (column.Type().IsNested()) {
+		// a nested column is compared as written, so none of its fields may have changed
+		return version_field_id->Type() == column.Type() &&
+		       FieldsPreservedInLatest(version_field_id->Children(), latest_table.GetFieldData());
+	}
 	if (version_field_id->Type() == column.Type()) {
 		return true;
-	}
-	if (column.Type().IsNested()) {
-		return false;
 	}
 	// a promoted column is compared in its latest type
 	expr = make_uniq<CastExpression>(column.Type(), std::move(expr));
@@ -450,9 +452,17 @@ unique_ptr<LogicalOperator> DuckLakeCompactor::InsertSort(Binder &binder, unique
 		for (auto &column : table.GetColumns().Logical()) {
 			auto &field_id = table.GetFieldId(column.Physical());
 			auto latest_field_id = latest_table.GetFieldId(field_id.GetFieldIndex());
-			// the sort cannot refer to a dropped column
-			names.push_back(latest_field_id ? Identifier(latest_field_id->Name())
-			                                : Identifier(DuckLakeInlinedColNames::PREFIX + to_string(names.size())));
+			if (latest_field_id) {
+				names.emplace_back(latest_field_id->Name());
+				continue;
+			}
+			// a dropped column gets a name the sort cannot refer to
+			auto name = column.Name().GetIdentifierName();
+			while (latest_table.GetColumns().ColumnExists(Identifier(name)) ||
+			       std::find(names.begin(), names.end(), Identifier(name)) != names.end()) {
+				name += "_";
+			}
+			names.emplace_back(name);
 		}
 		orders = BindOrderByNodes(binder, bindings[0].table_index, table.name, names,
 		                          table.GetColumns().GetColumnTypes(), sort_orders);

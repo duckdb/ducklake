@@ -164,6 +164,37 @@ SELECT id FROM lake.k
 3
 1
 
+# a column takes the name of a dropped column
+statement ok
+CREATE TABLE lake.w (a BIGINT, b BIGINT, id BIGINT)
+
+statement ok
+INSERT INTO lake.w VALUES (5, 30, 1), (6, 10, 2)
+
+statement ok
+INSERT INTO lake.w VALUES (7, 20, 3)
+
+statement ok
+ALTER TABLE lake.w DROP COLUMN a
+
+statement ok
+ALTER TABLE lake.w RENAME COLUMN b TO a
+
+statement ok
+ALTER TABLE lake.w SET SORTED BY (a)
+
+query II
+SELECT files_processed, files_created FROM ducklake_merge_adjacent_files('lake', 'w')
+----
+2	1
+
+query I
+SELECT id FROM lake.w
+----
+2
+3
+1
+
 # the fields of a nested sort column changed, the files are merged without the sort
 statement ok
 CREATE TABLE lake.s (id BIGINT, st STRUCT(a BIGINT))
