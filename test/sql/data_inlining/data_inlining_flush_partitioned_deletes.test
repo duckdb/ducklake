@@ -93,3 +93,26 @@ query III
 SELECT COUNT(*), COUNT(*) FILTER (WHERE v LIKE 'u%'), SUM(id) FROM lake.u
 ----
 376	29	75108
+
+# eight partitions and a NULL partition, deletes only
+statement ok
+CREATE TABLE lake.p (part INTEGER, i INTEGER)
+
+statement ok
+ALTER TABLE lake.p SET PARTITIONED BY (part)
+
+statement ok
+INSERT INTO lake.p SELECT CASE WHEN i % 9 = 8 THEN NULL ELSE i % 9 END, i FROM range(0, 400) t(i)
+
+query I
+DELETE FROM lake.p WHERE i % 5 = 0
+----
+80
+
+statement ok
+CALL ducklake_flush_inlined_data('lake', table_name => 'p')
+
+query III
+SELECT COUNT(*), SUM(i), COUNT(*) FILTER (WHERE i % 5 = 0) FROM lake.p
+----
+320	64000	0
