@@ -428,15 +428,23 @@ PartialVariantStats::PartialVariantStats() : result(LogicalTypeId::VARIANT) {
 
 void PartialVariantStats::ParseVariantStats(const vector<string> &path, idx_t variant_field_start,
                                             const vector<Value> &col_stats) {
+	if (path.size() == variant_field_start) {
+		auto root_stats = DuckLakeInsert::ParseColumnStats(LogicalTypeId::VARIANT, col_stats);
+		result.has_null_count = root_stats.has_null_count;
+		result.null_count = root_stats.null_count;
+		result.has_num_values = root_stats.has_num_values;
+		result.num_values = root_stats.num_values;
+		return;
+	}
 	if (path.size() == variant_field_start + 1 && path.back() == "metadata") {
 		// metadata provides the top-level metadata, together with the shredding types
 		auto metadata_stats = DuckLakeInsert::ParseColumnStats(LogicalTypeId::VARIANT, col_stats);
 		// propagate the top-level stats
-		if (metadata_stats.has_null_count) {
+		if (!result.has_null_count && metadata_stats.has_null_count) {
 			result.has_null_count = true;
 			result.null_count = metadata_stats.null_count;
 		}
-		if (metadata_stats.has_num_values) {
+		if (!result.has_num_values && metadata_stats.has_num_values) {
 			result.has_num_values = true;
 			result.num_values = metadata_stats.num_values;
 		}

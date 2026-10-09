@@ -1,0 +1,53 @@
+# name: test/sql/stats/return_stats_containers.test
+# description: Accept container statistics alongside Parquet leaf statistics
+# group: [stats]
+
+require ducklake
+
+require parquet
+
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/container_stats.db' AS lake
+(DATA_PATH '{TEST_DIR}/container_data', METADATA_CATALOG 'meta', DATA_INLINING_ROW_LIMIT 0);
+
+# Reserved Parquet field names are ordinary names inside the shredded value.
+statement ok
+CREATE TABLE lake.variants AS
+SELECT v FROM (VALUES
+    ({'typed_value': [1, 2], 'value': {'a.b': 42}}::VARIANT),
+    ({'typed_value': []::INTEGER[], 'value': {'a.b': 84}}::VARIANT),
+    (NULL::VARIANT)
+) t(v);
+
+query II
+SELECT value_count, null_count FROM meta.ducklake_file_column_stats;
+----
+2	1
+
+query I
+SELECT count(*) FROM lake.variants WHERE v IS NULL;
+----
+1
+
+query IIII rowsort
+SELECT variant_path, min_value, max_value, value_count
+FROM meta.ducklake_file_variant_stats;
+----
+"typed_value".element	1	2	2
+"value"."a.b"	42	84	2
+
+# Container-only entries must not add rows to the existing leaf statistics tables.
+statement ok
+CREATE TABLE lake.nested AS SELECT {'g': 'POINT(1 2)'::GEOMETRY, 'l': [42]} s;
+
+query III
+SELECT count(*), count(extra_stats), sum(column_size_bytes) > 0
+FROM meta.ducklake_file_column_stats
+WHERE table_id = (SELECT table_id FROM meta.ducklake_table WHERE table_name = 'nested');
+----
+2	1	true
+
+query I
+SELECT s.l FROM lake.nested;
+----
+[42]
