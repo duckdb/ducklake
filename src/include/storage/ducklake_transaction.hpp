@@ -127,7 +127,8 @@ public:
 	bool HasLocalDeleteForFile(TableIndex table_id, const string &path) const;
 	bool HasAnyLocalChanges(TableIndex table_id) const;
 
-	void GetLocalDeleteForFile(TableIndex table_id, const string &path, DuckLakeFileData &result) const;
+	bool GetLocalDeleteForFile(TableIndex table_id, const string &path, DuckLakeFileData &result,
+	                           optional_idx &begin_snapshot) const;
 	bool HasLocalInlinedFileDeletes(TableIndex table_id) const;
 
 	void GetLocalInlinedFileDeletesForFile(TableIndex table_id, idx_t file_id, set<idx_t> &result) const;
@@ -286,7 +287,8 @@ public:
 
 	bool HasLocalDeletes(TableIndex table_id) const;
 	bool HasLocalDeleteForFile(TableIndex table_id, const string &path) const;
-	void GetLocalDeleteForFile(TableIndex table_id, const string &path, DuckLakeFileData &delete_file) const;
+	bool GetLocalDeleteForFile(TableIndex table_id, const string &path, DuckLakeFileData &delete_file,
+	                           optional_idx &begin_snapshot) const;
 	void TransactionLocalDelete(TableIndex table_id, const string &data_path, DuckLakeDeleteFile delete_file);
 
 	bool HasLocalInlinedFileDeletes(TableIndex table_id) const;

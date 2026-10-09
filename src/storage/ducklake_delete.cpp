@@ -535,10 +535,7 @@ void DuckLakeDelete::FlushDelete(DuckLakeTransaction &transaction, ClientContext
 		// deletes already exist for this file
 		auto &existing_deletes = existing_delete_data->deleted_rows;
 
-		// we check if we need to write the snapshot information into our deletion file
-		// that basically happens if the file already has embedded snapshots
-		// or if it's a delete file from a different transaction (committed delete file)
-		// or a delete file dated to its snapshot, like the one a flush writes
+		// existing deletes keep their snapshots when they are embedded, committed or dated
 		bool write_with_snapshots = existing_delete_data->HasEmbeddedSnapshots() ||
 		                            data_file_info.delete_file_id.IsValid() ||
 		                            data_file_info.delete_file_begin_snapshot.IsValid();

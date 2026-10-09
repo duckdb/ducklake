@@ -553,6 +553,13 @@ DuckLakeFileData DuckLakeMultiFileList::GetDeleteData(const DuckLakeDeleteFile &
 	return result;
 }
 
+static void SetDeleteBeginSnapshot(DuckLakeFileListEntry &entry, optional_idx begin_snapshot) {
+}
+
+static void SetDeleteBeginSnapshot(DuckLakeFileListExtendedEntry &entry, optional_idx begin_snapshot) {
+	entry.delete_file_begin_snapshot = begin_snapshot;
+}
+
 template <class ENTRY>
 static void ApplyLocalFileChanges(DuckLakeTransaction &transaction, TableIndex table_id, vector<ENTRY> &entries) {
 	if (transaction.HasDroppedFiles()) {
@@ -563,7 +570,11 @@ static void ApplyLocalFileChanges(DuckLakeTransaction &transaction, TableIndex t
 	// if the transaction has any local deletes - apply them to the file list
 	if (transaction.HasLocalDeletes(table_id)) {
 		for (auto &file_entry : entries) {
-			transaction.GetLocalDeleteForFile(table_id, file_entry.file.path, file_entry.delete_file);
+			optional_idx begin_snapshot;
+			if (transaction.GetLocalDeleteForFile(table_id, file_entry.file.path, file_entry.delete_file,
+			                                      begin_snapshot)) {
+				SetDeleteBeginSnapshot(file_entry, begin_snapshot);
+			}
 		}
 	}
 }

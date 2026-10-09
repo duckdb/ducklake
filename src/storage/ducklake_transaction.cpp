@@ -497,18 +497,22 @@ bool LocalTableChanges::HasLocalDeleteForFile(TableIndex table_id, const string 
 	return false;
 }
 
-void LocalTableChanges::GetLocalDeleteForFile(TableIndex table_id, const string &path, DuckLakeFileData &result) const {
+bool LocalTableChanges::GetLocalDeleteForFile(TableIndex table_id, const string &path, DuckLakeFileData &result,
+                                              optional_idx &begin_snapshot) const {
 	lock_guard<mutex> guard(lock);
 	auto entry = changes.find(table_id);
 	if (entry == changes.end()) {
-		return;
+		return false;
 	}
 	auto &table_changes = entry->second;
 	auto file_entry = table_changes.new_delete_files.find(path);
 	if (file_entry == table_changes.new_delete_files.end() || file_entry->second.empty()) {
-		return;
+		return false;
 	}
-	result = DuckLakeMultiFileList::GetDeleteData(file_entry->second.back());
+	auto &delete_file = file_entry->second.back();
+	result = DuckLakeMultiFileList::GetDeleteData(delete_file);
+	begin_snapshot = delete_file.begin_snapshot;
+	return true;
 }
 
 bool LocalTableChanges::HasLocalInlinedFileDeletes(TableIndex table_id) const {
@@ -999,7 +1003,7 @@ void DuckLakeTransaction::AddTableChanges(TableIndex table_id, const LocalTableD
 		}
 		flushed_inline_data = true;
 		for (auto &delete_file : file.delete_files) {
-			// the rows of a flushed file were committed before this transaction deleted them
+			// deleting flushed rows deletes committed rows
 			deleted_data |= delete_file.source == DeleteFileSource::REGULAR;
 		}
 	}
@@ -1777,9 +1781,9 @@ bool DuckLakeTransaction::HasAnyLocalChanges(TableIndex table_id) const {
 	return state->tables_deleted_from.find(table_id) != state->tables_deleted_from.end();
 }
 
-void DuckLakeTransaction::GetLocalDeleteForFile(TableIndex table_id, const string &path,
-                                                DuckLakeFileData &result) const {
-	state->local_changes.GetLocalDeleteForFile(table_id, path, result);
+bool DuckLakeTransaction::GetLocalDeleteForFile(TableIndex table_id, const string &path, DuckLakeFileData &result,
+                                                optional_idx &begin_snapshot) const {
+	return state->local_changes.GetLocalDeleteForFile(table_id, path, result, begin_snapshot);
 }
 
 bool DuckLakeTransaction::HasLocalInlinedFileDeletes(TableIndex table_id) const {
