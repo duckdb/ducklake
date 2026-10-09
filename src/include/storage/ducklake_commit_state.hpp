@@ -70,7 +70,7 @@ struct DuckLakeCommitState {
 	map<TableIndex, vector<DuckLakeDeleteFile>> local_delete_files;
 	//! The columns this commit widens from FLOAT to DOUBLE
 	map<TableIndex, set<FieldIndex>> float_widened_columns;
-	//! The widened columns that had another type before FLOAT, whose files read as DOUBLE without FLOAT rounding
+	//! The widened columns with values that read as DOUBLE without FLOAT rounding
 	map<TableIndex, set<FieldIndex>> float_bounds_to_clear;
 
 	//! Whether this commit widens a column of the given table from FLOAT to DOUBLE

@@ -322,3 +322,68 @@ query I
 SELECT count(*) FROM dl.m WHERE s.c = 1
 ----
 10
+
+# rows that read the default of an added column read it as DOUBLE without FLOAT rounding
+statement ok
+CREATE TABLE dl.d (a INTEGER)
+
+statement ok
+INSERT INTO dl.d VALUES (0)
+
+statement ok
+BEGIN
+
+statement ok
+INSERT INTO dl.d VALUES (1)
+
+statement ok
+ALTER TABLE dl.d ADD COLUMN b FLOAT DEFAULT 3.14
+
+statement ok
+ALTER TABLE dl.d ADD COLUMN c FLOAT DEFAULT 0.5
+
+statement ok
+COMMIT
+
+statement ok
+ALTER TABLE dl.d ALTER COLUMN b TYPE DOUBLE
+
+statement ok
+ALTER TABLE dl.d ALTER COLUMN c TYPE DOUBLE
+
+query I
+SELECT count(*) FROM dl.d WHERE b = 3.14
+----
+2
+
+query III
+SELECT s.column_id, s.min_value::DOUBLE, s.max_value::DOUBLE FROM __ducklake_metadata_dl.ducklake_table_column_stats s JOIN __ducklake_metadata_dl.ducklake_table t USING (table_id) WHERE t.table_name = 'd' AND t.end_snapshot IS NULL AND s.column_id > 1 ORDER BY s.column_id
+----
+2	NULL	NULL
+3	0.5	0.5
+
+statement ok
+CREATE TABLE dl.e (a INTEGER)
+
+statement ok
+INSERT INTO dl.e VALUES (0)
+
+statement ok
+BEGIN
+
+statement ok
+INSERT INTO dl.e VALUES (1)
+
+statement ok
+ALTER TABLE dl.e ADD COLUMN b FLOAT DEFAULT 3.14
+
+statement ok
+ALTER TABLE dl.e ALTER COLUMN b TYPE DOUBLE
+
+statement ok
+COMMIT
+
+query I
+SELECT count(*) FROM dl.e WHERE b = 3.14
+----
+2
