@@ -282,7 +282,8 @@ string DuckLakeDataFlusher::GetFlushSortOrderSQL(const DuckLakeTableEntry &table
 			return string();
 		}
 	}
-	return DuckLakeSort::BuildSortOrderSQL(context, orders, bound_orders, latest_table, table);
+	// a key without a SQL form leaves the flushed file unsorted, like a volatile key
+	return DuckLakeSort::BuildSortOrderSQL(context, bound_orders, latest_table, table);
 }
 
 unique_ptr<LogicalOperator> DuckLakeDataFlusher::GenerateFlushCommand() {

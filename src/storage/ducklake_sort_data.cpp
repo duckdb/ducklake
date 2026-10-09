@@ -7,31 +7,26 @@
 #include "duckdb/parser/result_modifier.hpp"
 #include "duckdb/parser/parsed_expression_iterator.hpp"
 #include "duckdb/parser/expression/columnref_expression.hpp"
-#include "duckdb/parser/expression/positional_reference_expression.hpp"
 #include "duckdb/planner/bound_expression_sql_exporter.hpp"
 #include "duckdb/planner/bound_result_modifier.hpp"
 
 namespace duckdb {
 
-//! Replace the column references of a sort expression with the inlined column of the same field
+//! Replace the column references of an exported sort expression with the inlined column of the same field
 static void MapToInlinedColumns(unique_ptr<ParsedExpression> &expr, const DuckLakeTableEntry &current_table,
-                                const DuckLakeTableEntry &inlined_table, bool exported) {
-	auto expression_class = expr->GetExpressionClass();
-	if (expression_class != ExpressionClass::POSITIONAL_REFERENCE && expression_class != ExpressionClass::COLUMN_REF) {
+                                const DuckLakeTableEntry &inlined_table) {
+	if (expr->GetExpressionClass() != ExpressionClass::COLUMN_REF) {
 		ParsedExpressionIterator::EnumerateChildren(*expr, [&](unique_ptr<ParsedExpression> &child) {
-			MapToInlinedColumns(child, current_table, inlined_table, exported);
+			MapToInlinedColumns(child, current_table, inlined_table);
 		});
 		return;
 	}
-	if (exported && expression_class == ExpressionClass::COLUMN_REF &&
-	    !expr->Cast<ColumnRefExpression>().IsQualified()) {
-		// an exported expression qualifies its columns, so this is a lambda parameter
+	auto &column_ref = expr->Cast<ColumnRefExpression>();
+	if (!column_ref.IsQualified()) {
+		// the exported columns are qualified, so this is a lambda parameter
 		return;
 	}
-	auto &columns = current_table.GetColumns();
-	auto &column = expression_class == ExpressionClass::POSITIONAL_REFERENCE
-	                   ? columns.GetColumn(LogicalIndex(expr->Cast<PositionalReferenceExpression>().Index() - 1))
-	                   : columns.GetColumn(expr->Cast<ColumnRefExpression>().GetColumnName());
+	auto &column = current_table.GetColumns().GetColumn(column_ref.GetColumnName());
 	auto &field_id = current_table.GetFieldId(column.Physical());
 	auto inlined_field_id = inlined_table.GetFieldId(field_id.GetFieldIndex());
 	if (inlined_field_id) {
@@ -60,28 +55,22 @@ static unique_ptr<ParsedExpression> ExportSortExpression(ClientContext &context,
 	return std::move(exported.GetValue());
 }
 
-string DuckLakeSort::BuildSortOrderSQL(ClientContext &context, const vector<OrderByNode> &orders,
-                                       const vector<BoundOrderByNode> &bound_orders,
+string DuckLakeSort::BuildSortOrderSQL(ClientContext &context, const vector<BoundOrderByNode> &orders,
                                        const DuckLakeTableEntry &current_table,
                                        const DuckLakeTableEntry &inlined_table) {
-	D_ASSERT(orders.size() == bound_orders.size());
-	string result;
-	for (idx_t i = 0; i < orders.size(); i++) {
-		if (!result.empty()) {
-			result += ", ";
-		}
+	vector<string> result;
+	for (auto &order : orders) {
 		// the metadata connection cannot see the macros of the table, so they are expanded here
-		auto expression = ExportSortExpression(context, *bound_orders[i].expression, current_table);
-		bool exported = expression != nullptr;
-		if (!exported) {
-			expression = orders[i].expression->Copy();
+		auto expression = ExportSortExpression(context, *order.expression, current_table);
+		if (!expression) {
+			return string();
 		}
-		MapToInlinedColumns(expression, current_table, inlined_table, exported);
-		result += expression->ToString();
-		result += (orders[i].type == OrderType::ASCENDING) ? " ASC" : " DESC";
-		result += (orders[i].null_order == OrderByNullType::NULLS_FIRST) ? " NULLS FIRST" : " NULLS LAST";
+		MapToInlinedColumns(expression, current_table, inlined_table);
+		auto null_order = order.null_order == OrderByNullType::NULLS_FIRST ? OrderByNullType::NULLS_FIRST
+		                                                                   : OrderByNullType::NULLS_LAST;
+		result.push_back(OrderByNode(order.type, null_order, std::move(expression)).ToString());
 	}
-	return result;
+	return StringUtil::Join(result, ", ");
 }
 
 } // namespace duckdb

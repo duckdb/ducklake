@@ -146,3 +146,28 @@ SELECT v, k FROM r
 3	10
 2	10
 1	10
+
+# a key without a SQL form flushes unsorted instead of calling the builtin the macro shadows
+statement ok
+CREATE TABLE u (i INTEGER)
+
+statement ok
+INSERT INTO u VALUES (2), (3), (1)
+
+statement ok
+CREATE MACRO abs(x) AS union_value(v := -x)
+
+statement ok
+ALTER TABLE u SET SORTED BY (abs(i))
+
+query I
+SELECT rows_flushed FROM ducklake_flush_inlined_data('dl', table_name => 'u')
+----
+3
+
+query I
+SELECT i FROM u
+----
+2
+3
+1

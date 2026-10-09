@@ -16,7 +16,6 @@ namespace duckdb {
 
 class ClientContext;
 class DuckLakeTableEntry;
-struct OrderByNode;
 struct BoundOrderByNode;
 
 struct DuckLakeSortField {
@@ -31,9 +30,8 @@ struct DuckLakeSort {
 	idx_t sort_id = 0;
 	vector<DuckLakeSortField> fields;
 
-	//! Build a SQL ORDER BY clause over the inlined flush source from the sort orders, mapping inlined columns
-	static string BuildSortOrderSQL(ClientContext &context, const vector<OrderByNode> &orders,
-	                                const vector<BoundOrderByNode> &bound_orders,
+	//! Build a SQL ORDER BY clause over the inlined flush source, or nothing when a sort key has no SQL form
+	static string BuildSortOrderSQL(ClientContext &context, const vector<BoundOrderByNode> &orders,
 	                                const DuckLakeTableEntry &current_table, const DuckLakeTableEntry &inlined_table);
 };
 
