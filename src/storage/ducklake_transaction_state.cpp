@@ -1079,7 +1079,7 @@ bool DuckLakeTransactionState::ApplyDroppedFileStats(
 	bool live_rows_remain = stats.record_count_unknown || stats.record_count > 0;
 	if (live_rows_remain) {
 		if (dropped_stats.file_size_bytes > stats.table_size_bytes) {
-			// the stored size missed the compactions of earlier versions
+			// a stale stored size is read back from the live data files
 			refreshed_table_sizes.insert(table_id);
 		} else {
 			stats.table_size_bytes -= dropped_stats.file_size_bytes;
@@ -2301,6 +2301,10 @@ void DuckLakeTransactionState::Commit(DuckLakeSnapshot transaction_snapshot,
 	context.set_table_options(committed_table_options);
 	for (auto &entry : dropped_file_stats) {
 		context.invalidate_table_stats_cache(commit_snapshot.next_file_id, entry.first);
+	}
+	// a compaction without new files keeps the next file id of the cached stats
+	for (auto &table_id : local_changes.GetCompactedTables()) {
+		context.invalidate_table_stats_cache(commit_snapshot.next_file_id, table_id);
 	}
 	if (flushed_inlined && !context.skip_drop_empty_inlined) {
 		try {
