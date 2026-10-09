@@ -1,0 +1,51 @@
+# name: test/sql/concurrent/postgres_concurrent_attach_new_migrate.test
+# description: attaches that lose the creation of an older Postgres catalog migrate it
+# group: [concurrent]
+
+require ducklake
+
+require parquet
+
+require postgres_scanner
+
+require-env DUCKLAKE_CI
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'dbname=ducklakedb' AS pg (TYPE postgres)
+
+loop round 0 6
+
+statement ok
+CALL postgres_execute('pg', 'DROP SCHEMA IF EXISTS concurrent_attach_new_migrate CASCADE')
+
+# when the 1.0 attach creates the catalog the others migrate it at the same time
+concurrentforeach i,version 0,1.0 1,1.1-dev1 2,1.1-dev1 3,1.1-dev1
+
+statement maybe
+ATTACH 'ducklake:postgres:dbname=ducklakedb' AS dl_{i}
+(DATA_PATH '{DATA_PATH}/concurrent_attach_new_migrate', METADATA_SCHEMA 'concurrent_attach_new_migrate',
+DUCKLAKE_VERSION '{version}', AUTOMATIC_MIGRATION TRUE)
+----
+Cannot downgrade a DuckLake catalog
+
+endloop
+
+query I
+SELECT * FROM postgres_query('pg', 'SELECT value FROM concurrent_attach_new_migrate.ducklake_metadata
+WHERE key = ''version''')
+----
+1.1-dev1
+
+loop i 0 4
+
+statement ok
+DETACH DATABASE IF EXISTS dl_{i}
+
+endloop
+
+endloop
+
+statement ok
+CALL postgres_execute('pg', 'DROP SCHEMA concurrent_attach_new_migrate CASCADE')
