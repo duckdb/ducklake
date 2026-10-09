@@ -1,0 +1,25 @@
+# name: benchmark/micro/write/insert_commits_altered_inlined.benchmark
+# description: Commit latency of 50 single-row autocommit INSERTs into inlined tables with 31 schema versions each
+# group: [write]
+
+name Insert Commits Altered Inlined
+group micro
+subgroup write
+
+require ducklake
+
+argument work altered_commit_work
+
+argument warm_table lake.main.ins_0
+
+include benchmark/micro/fixtures/altered_commit.benchmark.in
+
+run benchmark/micro/queries/insert_commits_inlined.sql
+
+include benchmark/micro/fixtures/restore_cleanup_warm.benchmark.in
+
+# A missed reset doubles the rows of ins_9, and a data file means the INSERTs were not inlined
+result_query II
+SELECT (SELECT count(*) FROM lake.main.ins_9), (SELECT count(*) FROM glob('${BENCHMARK_DIR}/${lake}_files/**'))
+----
+5	0

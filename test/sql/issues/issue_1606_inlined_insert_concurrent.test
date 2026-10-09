@@ -1,0 +1,51 @@
+# name: test/sql/issues/issue_1606_inlined_insert_concurrent.test
+# description: Concurrent inlined inserts after a schema change made with inlining off share one new inlined table
+# group: [issues]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/issue_1606_concurrent.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS lake (DATA_PATH '{DATA_PATH}/issue_1606_concurrent')
+
+# two transactions that insert into the same table, the second one finds the inlined table of the first
+statement ok
+CREATE TABLE lake.k (a INTEGER)
+
+statement ok
+CALL lake.set_option('data_inlining_row_limit', 0)
+
+statement ok
+ALTER TABLE lake.k ADD COLUMN b INTEGER
+
+statement ok
+CALL lake.set_option('data_inlining_row_limit', 10)
+
+statement ok con1
+BEGIN
+
+statement ok con1
+INSERT INTO lake.k VALUES (1, 2)
+
+statement ok con2
+BEGIN
+
+statement ok con2
+INSERT INTO lake.k VALUES (3, 4)
+
+statement ok con1
+COMMIT
+
+statement ok con2
+COMMIT
+
+query II
+SELECT a, b FROM lake.k ORDER BY a
+----
+1	2
+3	4
