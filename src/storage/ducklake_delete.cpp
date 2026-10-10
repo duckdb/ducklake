@@ -408,6 +408,11 @@ bool DuckLakeDelete::TryDropFullyDeletedFile(DuckLakeTransaction &transaction, c
 	if (delete_count != data_file_info.row_count) {
 		return false;
 	}
+	if (!delete_file.data_file_id.IsValid() &&
+	    transaction.IsFlushedFile(table.GetTableId(), data_file_info.file.path)) {
+		// a flushed file keeps the rows that earlier snapshots read
+		return false;
+	}
 	// ALL rows in this file are deleted - drop the file
 	if (delete_file.data_file_id.IsValid()) {
 		transaction.DropFile(table.GetTableId(), delete_file.data_file_id, data_file_info.file.path,

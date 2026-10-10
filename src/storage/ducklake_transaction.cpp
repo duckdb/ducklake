@@ -2,6 +2,7 @@
 #include "duckdb/catalog/catalog.hpp"
 #include "duckdb/main/database.hpp"
 #include "duckdb/common/file_system.hpp"
+#include "duckdb/common/algorithm.hpp"
 
 #include "storage/ducklake_commit_state.hpp"
 #include "storage/ducklake_delete.hpp"
@@ -149,6 +150,12 @@ shared_ptr<DuckLakeInlinedData> LocalTableChanges::GetTransactionLocalInlinedDat
 	return result;
 }
 
+template <class FILES>
+static auto FindNewDataFile(FILES &files, const string &path) -> decltype(files.begin()) {
+	return std::find_if(files.begin(), files.end(),
+	                    [&](const DuckLakeDataFile &file) { return file.file_name == path; });
+}
+
 void LocalTableChanges::DropTransactionLocalFile(ClientContext &context, TableIndex table_id, const string &path) {
 	lock_guard<mutex> guard(lock);
 	auto entry = Find(table_id);
@@ -158,28 +165,22 @@ void LocalTableChanges::DropTransactionLocalFile(ClientContext &context, TableIn
 	}
 	auto &table_changes = *entry;
 	auto &table_files = table_changes.new_data_files;
-	auto &fs = FileSystem::GetFileSystem(context);
-	for (idx_t i = 0; i < table_files.size(); i++) {
-		auto &file = table_files[i];
-		if (file.file_name == path) {
-			auto created_by_ducklake = file.created_by_ducklake;
-			for (auto &del_file : file.delete_files) {
-				fs.RemoveFile(del_file.file_name);
-			}
-			file.delete_files.clear();
-			// found the file - delete it from the table list and from disk if DuckLake owns it
-			table_files.erase_at(i);
-			if (created_by_ducklake) {
-				fs.RemoveFile(path);
-			}
-			if (table_changes.IsEmpty()) {
-				// no more files remaining
-				changes.erase(table_id);
-			}
-			return;
-		}
+	auto file = FindNewDataFile(table_files, path);
+	if (file == table_files.end()) {
+		throw InternalException("Failed to find matching transaction-local file for DropTransactionLocalFile");
 	}
-	throw InternalException("Failed to find matching transaction-local file for DropTransactionLocalFile");
+	auto &fs = FileSystem::GetFileSystem(context);
+	auto created_by_ducklake = file->created_by_ducklake;
+	for (auto &del_file : file->delete_files) {
+		fs.RemoveFile(del_file.file_name);
+	}
+	table_files.erase(file);
+	if (created_by_ducklake) {
+		fs.RemoveFile(path);
+	}
+	if (table_changes.IsEmpty()) {
+		changes.erase(table_id);
+	}
 }
 
 void LocalTableChanges::AppendFiles(TableIndex table_id, vector<DuckLakeDataFile> files) {
@@ -481,7 +482,23 @@ bool LocalTableChanges::HasLocalDeleteForFile(TableIndex table_id, const string 
 		return false;
 	}
 	auto file_entry = table_changes->new_delete_files.find(path);
-	return file_entry != table_changes->new_delete_files.end() && !file_entry->second.empty();
+	if (file_entry != table_changes->new_delete_files.end() && !file_entry->second.empty()) {
+		return true;
+	}
+	auto &files = table_changes->new_data_files;
+	auto local_file = FindNewDataFile(files, path);
+	return local_file != files.end() && !local_file->delete_files.empty();
+}
+
+bool LocalTableChanges::IsFlushedFile(TableIndex table_id, const string &path) const {
+	lock_guard<mutex> guard(lock);
+	auto table_changes = Find(table_id);
+	if (!table_changes) {
+		return false;
+	}
+	auto &files = table_changes->new_data_files;
+	auto local_file = FindNewDataFile(files, path);
+	return local_file != files.end() && local_file->begin_snapshot.IsValid();
 }
 
 void LocalTableChanges::GetLocalDeleteForFile(TableIndex table_id, const string &path, DuckLakeFileData &result) const {
@@ -528,23 +545,22 @@ void LocalTableChanges::TransactionLocalDelete(ClientContext &context, TableInde
 		throw InternalException(
 		    "Transaction local delete called for table which does not have transaction local insertions");
 	}
-	for (auto &file : table_changes->new_data_files) {
-		if (file.file_name == data_file_path) {
-			if (!file.delete_files.empty()) {
-				auto &fs = FileSystem::GetFileSystem(context);
-				vector<string> files_to_delete;
-				files_to_delete.reserve(file.delete_files.size());
-				for (auto &old_file : file.delete_files) {
-					files_to_delete.push_back(old_file.file_name);
-				}
-				fs.RemoveFiles(files_to_delete);
-				file.delete_files.clear();
-			}
-			file.delete_files.push_back(std::move(delete_file));
-			return;
-		}
+	auto &files = table_changes->new_data_files;
+	auto file = FindNewDataFile(files, data_file_path);
+	if (file == files.end()) {
+		throw InternalException("Failed to find matching transaction-local file for written delete file");
 	}
-	throw InternalException("Failed to find matching transaction-local file for written delete file");
+	if (!file->delete_files.empty()) {
+		auto &fs = FileSystem::GetFileSystem(context);
+		vector<string> files_to_delete;
+		files_to_delete.reserve(file->delete_files.size());
+		for (auto &old_file : file->delete_files) {
+			files_to_delete.push_back(old_file.file_name);
+		}
+		fs.RemoveFiles(files_to_delete);
+		file->delete_files.clear();
+	}
+	file->delete_files.push_back(std::move(delete_file));
 }
 
 void LocalTableChanges::CleanupFiles(ClientContext &context, TableIndex table_id) {
@@ -1750,6 +1766,10 @@ bool DuckLakeTransaction::HasLocalDeletes(TableIndex table_id) const {
 
 bool DuckLakeTransaction::HasLocalDeleteForFile(TableIndex table_id, const string &path) const {
 	return state->local_changes.HasLocalDeleteForFile(table_id, path);
+}
+
+bool DuckLakeTransaction::IsFlushedFile(TableIndex table_id, const string &path) const {
+	return state->local_changes.IsFlushedFile(table_id, path);
 }
 
 bool DuckLakeTransaction::HasAnyLocalChanges(TableIndex table_id) const {
