@@ -1,0 +1,49 @@
+# name: test/sql/quack/server_side_commit_internal_error.test
+# description: An internal error in a server-side commit fails only that commit, the server keeps serving other catalogs
+# group: [quack]
+
+require ducklake
+
+require parquet
+
+require-env DUCKLAKE_CONNECTION quack:localhost:19999
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS lake (DATA_PATH '{DATA_PATH}/server_side_commit_internal_error_a', METADATA_SCHEMA 'lake_a', DATA_INLINING_ROW_LIMIT 10)
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS other (DATA_PATH '{DATA_PATH}/server_side_commit_internal_error_b', METADATA_SCHEMA 'lake_b')
+
+statement ok
+CREATE TABLE lake.t (id BIGINT)
+
+statement ok
+INSERT INTO lake.t VALUES (1)
+
+statement ok
+CREATE TABLE other.u (id BIGINT)
+
+# without its inlined data table the server-side commit of the next inlined insert fails with an internal error
+statement ok
+DELETE FROM __ducklake_metadata_lake.lake_a.ducklake_inlined_data_tables
+
+statement error
+INSERT INTO lake.t VALUES (2)
+----
+internal error
+
+statement ok
+INSERT INTO other.u VALUES (1)
+
+statement ok
+DETACH other
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS other (DATA_PATH '{DATA_PATH}/server_side_commit_internal_error_b', METADATA_SCHEMA 'lake_b')
+
+query I
+SELECT count(*) FROM other.u
+----
+1

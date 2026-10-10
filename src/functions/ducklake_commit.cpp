@@ -1,6 +1,7 @@
 #include "functions/ducklake_table_functions.hpp"
 
 #include "storage/ducklake_server_side_commit.hpp"
+#include "duckdb/common/error_data.hpp"
 
 namespace duckdb {
 
@@ -52,7 +53,17 @@ static void DuckLakeCommitExecute(ClientContext &context, TableFunctionInput &da
 
 	DuckLakeServerSideCommit commit(context, data.metadata_schema_name, data.schema_version);
 	commit.SetRetryConfigOverride(data.retry_config);
-	auto result = commit.Run();
+	DuckLakeServerSideCommitResult result;
+	try {
+		result = commit.Run();
+	} catch (std::exception &ex) {
+		ErrorData error(ex);
+		if (error.Type() != ExceptionType::INTERNAL) {
+			throw;
+		}
+		// an internal error would invalidate the server database, which hosts the catalogs of other clients too
+		throw TransactionException("Server-side ducklake_commit failed with an internal error: %s", error.RawMessage());
+	}
 
 	output.data[0].Append(Value::BIGINT(result.committed_snapshot_id));
 	output.data[1].Append(Value::BIGINT(result.committed_schema_version));
