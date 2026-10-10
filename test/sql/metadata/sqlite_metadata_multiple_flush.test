@@ -1,0 +1,160 @@
+# name: test/sql/metadata/sqlite_metadata_multiple_flush.test
+# description: SQLite metadata batches can flush during a commit and still roll back together
+# group: [metadata]
+
+require ducklake
+
+require parquet
+
+require sqlite_scanner
+
+statement ok
+ATTACH 'ducklake:sqlite:{TEST_DIR}/sqlite_multiple_flush.db' AS lake (DATA_PATH '{TEST_DIR}/sqlite_multiple_flush_files', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE lake.w (
+    p BIGINT,
+    c0 BIGINT, c1 BIGINT, c2 BIGINT, c3 BIGINT, c4 BIGINT,
+    c5 BIGINT, c6 BIGINT, c7 BIGINT, c8 BIGINT, c9 BIGINT,
+    c10 BIGINT, c11 BIGINT, c12 BIGINT, c13 BIGINT, c14 BIGINT,
+    c15 BIGINT, c16 BIGINT, c17 BIGINT, c18 BIGINT, c19 BIGINT,
+    c20 BIGINT, c21 BIGINT, c22 BIGINT, c23 BIGINT, c24 BIGINT,
+    c25 BIGINT, c26 BIGINT, c27 BIGINT, c28 BIGINT, c29 BIGINT,
+    c30 BIGINT, c31 BIGINT, c32 BIGINT, c33 BIGINT, c34 BIGINT,
+    c35 BIGINT, c36 BIGINT, c37 BIGINT, c38 BIGINT, c39 BIGINT,
+    c40 BIGINT, c41 BIGINT, c42 BIGINT, c43 BIGINT, c44 BIGINT,
+    c45 BIGINT, c46 BIGINT, c47 BIGINT, c48 BIGINT, c49 BIGINT,
+    c50 BIGINT, c51 BIGINT, c52 BIGINT, c53 BIGINT, c54 BIGINT,
+    c55 BIGINT, c56 BIGINT, c57 BIGINT, c58 BIGINT, c59 BIGINT,
+    c60 BIGINT, c61 BIGINT, c62 BIGINT, c63 BIGINT, c64 BIGINT,
+    c65 BIGINT, c66 BIGINT, c67 BIGINT, c68 BIGINT, c69 BIGINT,
+    c70 BIGINT, c71 BIGINT, c72 BIGINT, c73 BIGINT, c74 BIGINT,
+    c75 BIGINT, c76 BIGINT, c77 BIGINT, c78 BIGINT, c79 BIGINT,
+    c80 BIGINT, c81 BIGINT, c82 BIGINT, c83 BIGINT, c84 BIGINT,
+    c85 BIGINT, c86 BIGINT, c87 BIGINT, c88 BIGINT, c89 BIGINT,
+    c90 BIGINT, c91 BIGINT, c92 BIGINT, c93 BIGINT, c94 BIGINT,
+    c95 BIGINT, c96 BIGINT, c97 BIGINT, c98 BIGINT, c99 BIGINT,
+    c100 BIGINT, c101 BIGINT, c102 BIGINT, c103 BIGINT, c104 BIGINT,
+    c105 BIGINT, c106 BIGINT, c107 BIGINT, c108 BIGINT, c109 BIGINT,
+    c110 BIGINT, c111 BIGINT, c112 BIGINT, c113 BIGINT, c114 BIGINT,
+    c115 BIGINT, c116 BIGINT, c117 BIGINT, c118 BIGINT, c119 BIGINT,
+    c120 BIGINT, c121 BIGINT, c122 BIGINT, c123 BIGINT, c124 BIGINT,
+    c125 BIGINT, c126 BIGINT, c127 BIGINT, c128 BIGINT, c129 BIGINT,
+    c130 BIGINT, c131 BIGINT, c132 BIGINT, c133 BIGINT, c134 BIGINT,
+    c135 BIGINT, c136 BIGINT, c137 BIGINT, c138 BIGINT, c139 BIGINT
+);
+
+statement ok
+ALTER TABLE lake.w SET PARTITIONED BY (p);
+
+statement ok
+CALL enable_logging('QueryLog', storage = 'memory');
+
+# 1,500 files with 141 columns exceed the appender's 204,800-row flush count.
+statement ok
+INSERT INTO lake.w
+SELECT
+    i % 1500,
+    i + 0, i + 1, i + 2, i + 3, i + 4,
+    i + 5, i + 6, i + 7, i + 8, i + 9,
+    i + 10, i + 11, i + 12, i + 13, i + 14,
+    i + 15, i + 16, i + 17, i + 18, i + 19,
+    i + 20, i + 21, i + 22, i + 23, i + 24,
+    i + 25, i + 26, i + 27, i + 28, i + 29,
+    i + 30, i + 31, i + 32, i + 33, i + 34,
+    i + 35, i + 36, i + 37, i + 38, i + 39,
+    i + 40, i + 41, i + 42, i + 43, i + 44,
+    i + 45, i + 46, i + 47, i + 48, i + 49,
+    i + 50, i + 51, i + 52, i + 53, i + 54,
+    i + 55, i + 56, i + 57, i + 58, i + 59,
+    i + 60, i + 61, i + 62, i + 63, i + 64,
+    i + 65, i + 66, i + 67, i + 68, i + 69,
+    i + 70, i + 71, i + 72, i + 73, i + 74,
+    i + 75, i + 76, i + 77, i + 78, i + 79,
+    i + 80, i + 81, i + 82, i + 83, i + 84,
+    i + 85, i + 86, i + 87, i + 88, i + 89,
+    i + 90, i + 91, i + 92, i + 93, i + 94,
+    i + 95, i + 96, i + 97, i + 98, i + 99,
+    i + 100, i + 101, i + 102, i + 103, i + 104,
+    i + 105, i + 106, i + 107, i + 108, i + 109,
+    i + 110, i + 111, i + 112, i + 113, i + 114,
+    i + 115, i + 116, i + 117, i + 118, i + 119,
+    i + 120, i + 121, i + 122, i + 123, i + 124,
+    i + 125, i + 126, i + 127, i + 128, i + 129,
+    i + 130, i + 131, i + 132, i + 133, i + 134,
+    i + 135, i + 136, i + 137, i + 138, i + 139
+FROM range(3000) t(i);
+
+query I
+SELECT count(*) > 1 FROM duckdb_logs
+WHERE type = 'QueryLog' AND message ILIKE '%ducklake_file_column_stats SELECT * FROM appended_data'
+----
+1
+
+query III
+SELECT
+  (SELECT count(*) FROM __ducklake_metadata_lake.ducklake_data_file),
+  (SELECT count(*) FROM __ducklake_metadata_lake.ducklake_file_column_stats),
+  (SELECT count(*) FROM lake.w)
+----
+1500	211500	3000
+
+statement ok
+CALL disable_logging();
+
+statement ok
+INSERT INTO __ducklake_metadata_lake.ducklake_snapshot_changes (snapshot_id)
+SELECT max(snapshot_id) + 1 FROM __ducklake_metadata_lake.ducklake_snapshot;
+
+statement ok
+CALL enable_logging('QueryLog', storage = 'memory');
+
+statement error
+INSERT INTO lake.w
+SELECT
+    i % 1500,
+    i + 0, i + 1, i + 2, i + 3, i + 4,
+    i + 5, i + 6, i + 7, i + 8, i + 9,
+    i + 10, i + 11, i + 12, i + 13, i + 14,
+    i + 15, i + 16, i + 17, i + 18, i + 19,
+    i + 20, i + 21, i + 22, i + 23, i + 24,
+    i + 25, i + 26, i + 27, i + 28, i + 29,
+    i + 30, i + 31, i + 32, i + 33, i + 34,
+    i + 35, i + 36, i + 37, i + 38, i + 39,
+    i + 40, i + 41, i + 42, i + 43, i + 44,
+    i + 45, i + 46, i + 47, i + 48, i + 49,
+    i + 50, i + 51, i + 52, i + 53, i + 54,
+    i + 55, i + 56, i + 57, i + 58, i + 59,
+    i + 60, i + 61, i + 62, i + 63, i + 64,
+    i + 65, i + 66, i + 67, i + 68, i + 69,
+    i + 70, i + 71, i + 72, i + 73, i + 74,
+    i + 75, i + 76, i + 77, i + 78, i + 79,
+    i + 80, i + 81, i + 82, i + 83, i + 84,
+    i + 85, i + 86, i + 87, i + 88, i + 89,
+    i + 90, i + 91, i + 92, i + 93, i + 94,
+    i + 95, i + 96, i + 97, i + 98, i + 99,
+    i + 100, i + 101, i + 102, i + 103, i + 104,
+    i + 105, i + 106, i + 107, i + 108, i + 109,
+    i + 110, i + 111, i + 112, i + 113, i + 114,
+    i + 115, i + 116, i + 117, i + 118, i + 119,
+    i + 120, i + 121, i + 122, i + 123, i + 124,
+    i + 125, i + 126, i + 127, i + 128, i + 129,
+    i + 130, i + 131, i + 132, i + 133, i + 134,
+    i + 135, i + 136, i + 137, i + 138, i + 139
+FROM range(3000) t(i);
+----
+<REGEX>:.*(PRIMARY KEY|UNIQUE|constraint).*
+
+query I
+SELECT count(*) > 1 FROM duckdb_logs
+WHERE type = 'QueryLog' AND message ILIKE '%ducklake_file_column_stats SELECT * FROM appended_data'
+----
+1
+
+query III
+SELECT
+  (SELECT count(*) FROM __ducklake_metadata_lake.ducklake_data_file),
+  (SELECT count(*) FROM __ducklake_metadata_lake.ducklake_file_column_stats),
+  (SELECT count(*) FROM lake.w)
+----
+1500	211500	3000

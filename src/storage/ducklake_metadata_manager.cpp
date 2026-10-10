@@ -3939,7 +3939,7 @@ WHERE table_id = %d;)",
 	                            table_id.index);
 }
 
-static void AppendBigintOrNull(Appender &appender, optional_idx value) {
+static void AppendBigintOrNull(BaseAppender &appender, optional_idx value) {
 	if (value.IsValid()) {
 		appender.Append<int64_t>(static_cast<int64_t>(value.GetIndex()));
 	} else {
@@ -3947,7 +3947,7 @@ static void AppendBigintOrNull(Appender &appender, optional_idx value) {
 	}
 }
 
-static void AppendStringOrNull(Appender &appender, bool is_valid, const string &value) {
+static void AppendStringOrNull(BaseAppender &appender, bool is_valid, const string &value) {
 	if (is_valid) {
 		appender.Append<string_t>(string_t(value));
 	} else {
@@ -3964,7 +3964,7 @@ static string UnquoteSQLString(const string &str) {
 	return str;
 }
 
-static void AppendFileStats(Appender &appender, const DuckLakeColumnStats &stats) {
+static void AppendFileStats(BaseAppender &appender, const DuckLakeColumnStats &stats) {
 	appender.Append<int64_t>(static_cast<int64_t>(stats.column_size_bytes));
 	if (stats.has_null_count && stats.has_num_values && stats.null_count <= stats.num_values) {
 		appender.Append<int64_t>(static_cast<int64_t>(stats.num_values - stats.null_count));
@@ -3999,13 +3999,30 @@ string DuckLakeMetadataManager::WriteNewDataFilesWithAppender(DuckLakeSnapshot &
 	}
 
 	// Create appenders for each table
-	Appender data_file_appender(connection, Identifier(db_name), schema_name, Identifier("ducklake_data_file"));
-	Appender column_stats_appender(connection, Identifier(db_name), schema_name,
-	                               Identifier("ducklake_file_column_stats"));
-	Appender partition_value_appender(connection, Identifier(db_name), schema_name,
-	                                  Identifier("ducklake_file_partition_value"));
-	Appender variant_stats_appender(connection, Identifier(db_name), schema_name,
-	                                Identifier("ducklake_file_variant_stats"));
+	auto make_appender = [&](const char *table) -> unique_ptr<BaseAppender> {
+		if (!SupportsQueryAppender()) {
+			return make_uniq<Appender>(connection, Identifier(db_name), schema_name, Identifier(table));
+		}
+		auto info = connection.TableInfo(Identifier(db_name), schema_name, Identifier(table));
+		if (!info) {
+			throw InternalException("DuckLake metadata table %s not found", table);
+		}
+		vector<LogicalType> types;
+		for (auto &column : info->columns) {
+			types.push_back(column.Type());
+		}
+		auto query = StringUtil::Format("INSERT INTO {METADATA_CATALOG}.%s SELECT * FROM appended_data", table);
+		SubstituteCatalogPlaceholders(query);
+		return make_uniq<QueryAppender>(connection, std::move(query), std::move(types));
+	};
+	auto data_files = make_appender("ducklake_data_file");
+	auto column_stats = make_appender("ducklake_file_column_stats");
+	auto partition_values = make_appender("ducklake_file_partition_value");
+	auto variant_stats = make_appender("ducklake_file_variant_stats");
+	auto &data_file_appender = *data_files;
+	auto &column_stats_appender = *column_stats;
+	auto &partition_value_appender = *partition_values;
+	auto &variant_stats_appender = *variant_stats;
 
 	bool supports_v1_1_metadata = catalog.SupportsV1_1Metadata();
 	for (auto &file : new_files) {
@@ -4129,7 +4146,7 @@ bool DuckLakeMetadataManager::TryAppendDataFiles(DuckLakeSnapshot &commit_snapsh
                                                  const vector<DuckLakeFileInfo> &new_files,
                                                  const vector<DuckLakeTableInfo> &new_tables,
                                                  vector<DuckLakeSchemaInfo> &new_schemas_result) {
-	if (!SupportsAppender() || new_files.empty()) {
+	if ((!SupportsAppender() && !SupportsQueryAppender()) || new_files.empty()) {
 		return false;
 	}
 	WriteNewDataFilesWithAppender(commit_snapshot, new_files, new_tables, new_schemas_result);
@@ -4143,8 +4160,8 @@ string DuckLakeMetadataManager::WriteNewDataFiles(DuckLakeSnapshot &commit_snaps
 	if (new_files.empty()) {
 		return string();
 	}
-	// Use optimized appender path for DuckDB metadata (much faster for large inserts)
-	if (SupportsAppender()) {
+	// Insert typed metadata through the catalog connection.
+	if (SupportsAppender() || SupportsQueryAppender()) {
 		return WriteNewDataFilesWithAppender(commit_snapshot, new_files, new_tables, new_schemas_result);
 	}
 	vector<DuckLakePath> resolved_paths;
