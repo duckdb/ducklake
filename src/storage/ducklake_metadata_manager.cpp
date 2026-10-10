@@ -38,6 +38,7 @@
 #include "duckdb/planner/expression/bound_constant_expression.hpp"
 #include "duckdb/planner/expression/bound_function_expression.hpp"
 #include "duckdb/planner/expression/bound_operator_expression.hpp"
+#include "duckdb/storage/statistics/base_statistics.hpp"
 
 namespace duckdb {
 
@@ -121,7 +122,14 @@ bool DuckLakeMetadataManager::CanInlineColumn(const string &name, const LogicalT
 	return !TypeVisitor::Contains(type, [&](const LogicalType &t) { return !SupportsInlining(t); });
 }
 
+bool DuckLakeMetadataManager::InlinedTableFits(idx_t column_count) const {
+	return column_count + DuckLakeInlinedColNames::COLUMN_COUNT <= MaxColumnCount();
+}
+
 bool DuckLakeMetadataManager::CanInlineColumns(const ColumnList &columns) {
+	if (!InlinedTableFits(columns.LogicalColumnCount())) {
+		return false;
+	}
 	for (auto &col : columns.Logical()) {
 		if (!CanInlineColumn(col.Name().GetIdentifierName(), col.Type())) {
 			return false;
@@ -131,6 +139,9 @@ bool DuckLakeMetadataManager::CanInlineColumns(const ColumnList &columns) {
 }
 
 bool DuckLakeMetadataManager::CanInlineColumns(const vector<DuckLakeColumnInfo> &columns) {
+	if (!InlinedTableFits(columns.size())) {
+		return false;
+	}
 	for (auto &col : columns) {
 		if (!CanInlineColumn(col.name, DuckLakeTypes::FromColumnInfo(col))) {
 			return false;
@@ -425,32 +436,62 @@ UPDATE {METADATA_CATALOG}.ducklake_metadata SET value = '1.0' WHERE key = 'versi
 	result->ThrowIfError("Failed to migrate DuckLake from v0.4 to v1.0: ");
 }
 
-static constexpr const char *V1_1_DEV1_MIGRATION_QUERY = R"(
-ALTER TABLE {METADATA_CATALOG}.ducklake_data_file ADD COLUMN {IF_NOT_EXISTS} row_group_count BIGINT;
-ALTER TABLE {METADATA_CATALOG}.ducklake_delete_file ADD COLUMN {IF_NOT_EXISTS} row_group_count BIGINT;
-ALTER TABLE {METADATA_CATALOG}.ducklake_file_column_stats ADD COLUMN {IF_NOT_EXISTS} min_is_exact BOOLEAN DEFAULT NULL;
-ALTER TABLE {METADATA_CATALOG}.ducklake_file_column_stats ADD COLUMN {IF_NOT_EXISTS} max_is_exact BOOLEAN DEFAULT NULL;
-ALTER TABLE {METADATA_CATALOG}.ducklake_table_column_stats ADD COLUMN {IF_NOT_EXISTS} min_is_exact BOOLEAN DEFAULT NULL;
-ALTER TABLE {METADATA_CATALOG}.ducklake_table_column_stats ADD COLUMN {IF_NOT_EXISTS} max_is_exact BOOLEAN DEFAULT NULL;
-CREATE TABLE {IF_NOT_EXISTS} {METADATA_CATALOG}.ducklake_view_column_tag(
+struct DuckLakeAddedColumn {
+	const char *table;
+	const char *column;
+	const char *type;
+};
+
+static constexpr const DuckLakeAddedColumn V1_1_DEV1_ADDED_COLUMNS[] = {
+    {"ducklake_data_file", "row_group_count", "BIGINT"},
+    {"ducklake_delete_file", "row_group_count", "BIGINT"},
+    {"ducklake_file_column_stats", "min_is_exact", "BOOLEAN DEFAULT NULL"},
+    {"ducklake_file_column_stats", "max_is_exact", "BOOLEAN DEFAULT NULL"},
+    {"ducklake_table_column_stats", "min_is_exact", "BOOLEAN DEFAULT NULL"},
+    {"ducklake_table_column_stats", "max_is_exact", "BOOLEAN DEFAULT NULL"},
+    {"ducklake_schema", "parent_schema_id", "BIGINT"}};
+
+static string V1_1Dev1MigrationQuery() {
+	string query;
+	for (auto &added : V1_1_DEV1_ADDED_COLUMNS) {
+		query += StringUtil::Format("ALTER TABLE {METADATA_CATALOG}.%s ADD COLUMN {IF_NOT_EXISTS} %s %s;\n",
+		                            added.table, added.column, added.type);
+	}
+	query += R"(CREATE TABLE {IF_NOT_EXISTS} {METADATA_CATALOG}.ducklake_view_column_tag(
 	view_id BIGINT, column_name VARCHAR, begin_snapshot BIGINT, end_snapshot BIGINT, key VARCHAR, value VARCHAR
 );
-ALTER TABLE {METADATA_CATALOG}.ducklake_schema ADD COLUMN {IF_NOT_EXISTS} parent_schema_id BIGINT;
 UPDATE {METADATA_CATALOG}.ducklake_metadata SET value = '1.1-dev1' WHERE key = 'version';
-	)";
+)";
+	return query;
+}
+
+bool DuckLakeMetadataManager::HasV1_1Dev1Additions() {
+	string probe = "SELECT 1 FROM (SELECT * FROM {METADATA_CATALOG}.ducklake_view_column_tag LIMIT 0)";
+	idx_t alias_index = 0;
+	for (auto &added : V1_1_DEV1_ADDED_COLUMNS) {
+		// a qualified column cannot resolve to the same column of an earlier subquery
+		auto alias = "added_" + to_string(alias_index++);
+		probe += StringUtil::Format(", (SELECT %s.%s FROM {METADATA_CATALOG}.%s %s LIMIT 0)", alias, added.column,
+		                            added.table, alias);
+	}
+	return !Query(probe)->HasError();
+}
 
 void DuckLakeMetadataManager::MigrateV10(bool allow_failures) {
 	// rename first so a conflict aborts while the catalog is still at v1.0
 	MigrateInlinedColumnNames(allow_failures);
 	MigrateInlinedDataTypes();
-	ExecuteMigration(V1_1_DEV1_MIGRATION_QUERY, allow_failures, "1.0", "1.1-dev1");
+	ExecuteMigration(V1_1Dev1MigrationQuery(), allow_failures, "1.0", "1.1-dev1");
 }
 
 void DuckLakeMetadataManager::MigrateV10Dev() {
 	auto &db = transaction.GetCatalog().GetDatabase();
 	// Try the schema and column migrations independently
 	try {
-		ExecuteMigration(V1_1_DEV1_MIGRATION_QUERY, true, "1.0", "1.1-dev1");
+		// DDL locks the metadata tables exclusively on Postgres, a catalog with every addition runs none
+		if (!HasV1_1Dev1Additions()) {
+			ExecuteMigration(V1_1Dev1MigrationQuery(), true, "1.0", "1.1-dev1");
+		}
 	} catch (std::exception &ex) {
 		ErrorData error(ex);
 		DUCKDB_LOG_WARNING(db, StringUtil::Format("DuckLake could not apply the v1.1-dev1 schema additions on "
@@ -1438,6 +1479,14 @@ static string StatsColumn(const string &stats_alias, const string &stat) {
 	return stats_alias + "." + stat;
 }
 
+//! Whether a NaN can satisfy the filter, checked without evaluating it on one particular NaN
+static bool FilterMayMatchNaN(const ExpressionFilter &filter, const LogicalType &type) {
+	auto nan = Value::DOUBLE(std::numeric_limits<double>::quiet_NaN()).DefaultCastAs(type);
+	auto result = filter.CheckStatistics(BaseStatistics::FromConstant(nan));
+	return result != FilterPropagateResult::FILTER_ALWAYS_FALSE &&
+	       result != FilterPropagateResult::FILTER_FALSE_OR_NULL;
+}
+
 bool DuckLakeMetadataManager::ValueIsFinite(const Value &val) {
 	if (!val.type().IsFloating()) {
 		return true;
@@ -1531,64 +1580,11 @@ string DuckLakeMetadataManager::GenerateConstantFilterDouble(ExpressionType comp
                                                              const LogicalType &type,
                                                              unordered_set<string> &referenced_stats,
                                                              const string &stats_alias) {
-	double constant_val = constant.GetValue<double>();
-	bool constant_is_nan = Value::IsNan(constant_val);
-	switch (comparison_type) {
-	case ExpressionType::COMPARE_EQUAL:
-		// x = constant
-		if (constant_is_nan) {
-			// x = NAN - check for `contains_nan`
-			referenced_stats.insert("contains_nan");
-			return StatsColumn(stats_alias, "contains_nan");
-		}
-		// else check as if this is a numeric
-		return GenerateConstantFilter(comparison_type, constant, type, referenced_stats, stats_alias);
-	case ExpressionType::COMPARE_GREATERTHANOREQUALTO:
-	case ExpressionType::COMPARE_GREATERTHAN: {
-		if (constant_is_nan) {
-			// skip these filters if the constant is nan
-			// note that > and >= we can actually handle since nan is the biggest value
-			// (>= is equal to =, > is always false)
-			return string();
-		}
-		// generate the numeric filter
-		string filter = GenerateConstantFilter(comparison_type, constant, type, referenced_stats, stats_alias);
-		if (filter.empty()) {
-			return string();
-		}
-		// since NaN is bigger than anything - we also need to check for contains_nan
-		referenced_stats.insert("contains_nan");
-		return filter + " OR " + StatsColumn(stats_alias, "contains_nan");
+	// min and max bound the values that are not NaN, files with NaN are kept for the whole column filter
+	if (Value::IsNan(constant.GetValue<double>())) {
+		return comparison_type == ExpressionType::COMPARE_EQUAL ? "false" : string();
 	}
-	case ExpressionType::COMPARE_LESSTHANOREQUALTO:
-	case ExpressionType::COMPARE_LESSTHAN:
-		if (constant_is_nan) {
-			// skip these filters if the constant is nan
-			return string();
-		}
-		// these are equivalent to the numeric filter
-		return GenerateConstantFilter(comparison_type, constant, type, referenced_stats, stats_alias);
-	case ExpressionType::COMPARE_NOTEQUAL: {
-		// x <> constant
-		if (constant_is_nan) {
-			// x <> NaN is true for every non-NaN value and false only for NaN.
-			// proving a file can be pruned would require knowing all its values are NaN, which min/max
-			// cannot express - so never prune.
-			return string();
-		}
-		// generate the numeric filter
-		string filter = GenerateConstantFilter(comparison_type, constant, type, referenced_stats, stats_alias);
-		if (filter.empty()) {
-			return string();
-		}
-		// NaN <> constant is always true, so we must also keep files that contain NaN
-		referenced_stats.insert("contains_nan");
-		return filter + " OR " + StatsColumn(stats_alias, "contains_nan");
-	}
-	default:
-		// unsupported
-		return string();
-	}
+	return GenerateConstantFilter(comparison_type, constant, type, referenced_stats, stats_alias);
 }
 
 string DuckLakeMetadataManager::GenerateFilterFromExpression(const Expression &expr, const LogicalType *type,
@@ -1735,12 +1731,20 @@ string DuckLakeMetadataManager::GenerateColumnFilterCondition(const ColumnFilter
 	for (const auto &stat : referenced_stats) {
 		null_checks += StatsColumn(cte_name, stat) + " IS NULL OR ";
 	}
+	string nan_check;
+	if (column_filter.column_type.IsFloating() &&
+	    FilterMayMatchNaN(*column_filter.table_filter, column_filter.column_type)) {
+		auto contains_nan = StatsColumn(cte_name, "contains_nan");
+		nan_check = " OR " + contains_nan + " IS NULL OR " + contains_nan;
+		referenced_stats.insert("contains_nan");
+	}
 
 	// a filter that a NULL row can satisfy must not prune files that only hold NULLs, even though their
 	// min/max are absent - only a purely value-based filter may use the guard
 	const bool matches_null_rows = referenced_stats.count("null_count") > 0;
 	const bool needs_value_count_guard =
-	    !matches_null_rows && (referenced_stats.count("min_value") > 0 || referenced_stats.count("max_value") > 0);
+	    !matches_null_rows && (referenced_stats.count("min_value") > 0 || referenced_stats.count("max_value") > 0 ||
+	                           referenced_stats.count("contains_nan") > 0);
 	if (needs_value_count_guard) {
 		referenced_stats.insert("value_count");
 	}
@@ -1750,12 +1754,12 @@ string DuckLakeMetadataManager::GenerateColumnFilterCondition(const ColumnFilter
 	// NULL and must NOT be pruned, we cannot determine filter satisfaction without stats.
 	if (needs_value_count_guard) {
 		auto value_count = StatsColumn(cte_name, "value_count");
-		condition =
-		    StringUtil::Format("(%s.data_file_id IS NULL OR ((%s IS NULL OR %s > 0) AND (%s(%s))))", cte_name.c_str(),
-		                       value_count.c_str(), value_count.c_str(), null_checks.c_str(), filter_condition.c_str());
+		condition = StringUtil::Format("(%s.data_file_id IS NULL OR ((%s IS NULL OR %s > 0) AND (%s(%s)%s)))",
+		                               cte_name.c_str(), value_count.c_str(), value_count.c_str(), null_checks.c_str(),
+		                               filter_condition.c_str(), nan_check.c_str());
 	} else {
-		condition = StringUtil::Format("(%s.data_file_id IS NULL OR (%s(%s)))", cte_name.c_str(), null_checks.c_str(),
-		                               filter_condition.c_str());
+		condition = StringUtil::Format("(%s.data_file_id IS NULL OR (%s(%s)%s))", cte_name.c_str(), null_checks.c_str(),
+		                               filter_condition.c_str(), nan_check.c_str());
 	}
 
 	AddCTERequirement(result.required_ctes, column_filter.column_field_index, referenced_stats);

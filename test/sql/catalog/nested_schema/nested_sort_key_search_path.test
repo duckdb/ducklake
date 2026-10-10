@@ -1,0 +1,42 @@
+# name: test/sql/catalog/nested_schema/nested_sort_key_search_path.test
+# description: The sort key of a table in a nested schema does not resolve in a top level schema of the same name
+# group: [nested_schema]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{BASE_TEST_NAME}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/nested_sort_key', DATA_INLINING_ROW_LIMIT 0, DUCKLAKE_VERSION '1.1-dev1')
+
+statement ok
+CREATE SCHEMA dl.parent
+
+statement ok
+CREATE SCHEMA dl.parent.child
+
+statement ok
+CREATE SCHEMA dl.child
+
+statement ok
+CREATE MACRO dl.child.abs(x) AS -x
+
+statement ok
+CREATE TABLE dl.parent.child.t (i INTEGER)
+
+statement ok
+ALTER TABLE dl.parent.child.t SET SORTED BY (abs(i))
+
+statement ok
+INSERT INTO dl.parent.child.t VALUES (2), (3), (1)
+
+query I
+SELECT i FROM dl.parent.child.t
+----
+1
+2
+3

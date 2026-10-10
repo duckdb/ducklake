@@ -53,15 +53,22 @@ vector<OrderByNode> DuckLakeCompactor::ParseSortOrders(const DuckLakeSort &sort_
 	return pre_bound_orders;
 }
 
-vector<BoundOrderByNode> DuckLakeCompactor::BindSortOrders(Binder &binder, const ColumnList &columns,
-                                                           const Identifier &table_name, TableIndex table_index,
+vector<BoundOrderByNode> DuckLakeCompactor::BindSortOrders(Binder &binder, SchemaCatalogEntry &schema,
+                                                           const ColumnList &columns, const Identifier &table_name,
+                                                           TableIndex table_index,
                                                            const vector<OrderByNode> &pre_bound_orders) {
 	DuckLakeTableEntry::ValidateSortExpressionColumns(columns, pre_bound_orders);
 	vector<OrderByNode> orders;
 	for (auto &order : pre_bound_orders) {
 		orders.emplace_back(order.type, order.null_order, order.expression->Copy());
 	}
-	return BindOrderByNodes(binder, table_index, table_name, StringsToIdentifiers(columns.GetColumnNames()),
+	auto sort_binder = Binder::CreateBinder(binder.context, &binder);
+	// a search path cannot name a nested schema
+	if (!schema.GetParentSchema()) {
+		// names in the sort expressions resolve in the schema of the table first, as in a view
+		sort_binder->SetSearchPath(schema.ParentCatalog(), schema.name);
+	}
+	return BindOrderByNodes(*sort_binder, table_index, table_name, StringsToIdentifiers(columns.GetColumnNames()),
 	                        columns.GetColumnTypes(), orders);
 }
 
@@ -463,7 +470,8 @@ unique_ptr<LogicalOperator> DuckLakeCompactor::InsertSort(Binder &binder, unique
 	auto scan_index = bindings[0].table_index;
 	auto sort_orders = ParseSortOrders(*sort_data);
 	// the sort refers to the latest table, an invalid one reports the same error as an insert
-	auto orders = BindSortOrders(binder, latest_table.GetColumns(), latest_table.name, scan_index, sort_orders);
+	auto orders = BindSortOrders(binder, latest_table.schema, latest_table.GetColumns(), latest_table.name, scan_index,
+	                             sort_orders);
 	if (orders.empty()) {
 		// Then the sorts were not in the DuckDB dialect and we return the original plan
 		return std::move(plan);

@@ -91,9 +91,9 @@ public:
 	                                              optional_ptr<DuckLakeSort> sort_data);
 	static vector<OrderByNode> ParseSortOrders(const DuckLakeSort &sort_data);
 	//! Bind ORDER BY expressions against a column list + table name (works before a table entry exists).
-	static vector<BoundOrderByNode> BindSortOrders(Binder &binder, const ColumnList &columns,
-	                                               const Identifier &table_name, TableIndex table_index,
-	                                               const vector<OrderByNode> &pre_bound_orders);
+	static vector<BoundOrderByNode> BindSortOrders(Binder &binder, SchemaCatalogEntry &schema,
+	                                               const ColumnList &columns, const Identifier &table_name,
+	                                               TableIndex table_index, const vector<OrderByNode> &pre_bound_orders);
 	static DuckLakeTableEntry &GetLatestTableEntry(DuckLakeCatalog &catalog, DuckLakeTransaction &transaction,
 	                                               const DuckLakeTableEntry &table);
 	static unique_ptr<LogicalOperator>
