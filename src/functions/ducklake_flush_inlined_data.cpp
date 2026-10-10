@@ -25,6 +25,7 @@
 #include "duckdb/planner/operator/logical_filter.hpp"
 #include "duckdb/planner/expression/bound_comparison_expression.hpp"
 #include "duckdb/planner/expression/bound_constant_expression.hpp"
+#include "duckdb/planner/expression/bound_reference_expression.hpp"
 #include "duckdb/function/builtin_function_lookup.hpp"
 #include "duckdb/function/function_binder.hpp"
 #include "duckdb/planner/expression/bound_aggregate_expression.hpp"
@@ -312,6 +313,14 @@ unique_ptr<LogicalOperator> DuckLakeDataFlusher::GenerateFlushCommand() {
 
 	copy->table_index = binder.GenerateTableIndex();
 	copy->batch_size = DEFAULT_ROW_GROUP_SIZE;
+	if (copy->partition_output && sort_order_sql.empty()) {
+		auto row_id_idx = columns.PhysicalColumnCount();
+		auto snapshot_id_idx = row_id_idx + 1;
+		copy->order_columns.emplace_back(OrderType::ASCENDING, OrderByNullType::NULLS_LAST,
+		                                 make_uniq<BoundReferenceExpression>(LogicalType::BIGINT, row_id_idx));
+		copy->order_columns.emplace_back(OrderType::ASCENDING, OrderByNullType::NULLS_LAST,
+		                                 make_uniq<BoundReferenceExpression>(LogicalType::BIGINT, snapshot_id_idx));
+	}
 	copy->children.push_back(std::move(root));
 
 	// followed by the compaction operator (that writes the results back to the

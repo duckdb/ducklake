@@ -1,0 +1,65 @@
+# name: test/sql/issues/issue_1266.test
+# description: Flushing inlined deletes for a partitioned table must preserve visible rows
+# group: [issues]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+SET threads=4;
+
+statement ok
+SET preserve_insertion_order=true;
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/issue_1266', DATA_INLINING_ROW_LIMIT 1000000);
+
+statement ok
+USE ducklake;
+
+statement ok
+CREATE TABLE t(part INT, i INT);
+
+statement ok
+ALTER TABLE t SET PARTITIONED BY (part);
+
+statement ok
+INSERT INTO t SELECT i % 16, i FROM range(0, 40000) tbl(i);
+
+statement ok
+DELETE FROM t WHERE i % 5 = 0;
+
+query II
+SELECT count(), sum(i) FROM t;
+----
+32000	640000000
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake');
+
+query II
+SELECT count(), sum(i) FROM t;
+----
+32000	640000000
+
+query I
+SELECT count(*) FROM t WHERE i % 5 = 0;
+----
+0
+
+query I
+WITH expected AS (
+	SELECT i % 16 AS part, i FROM range(0, 40000) tbl(i) WHERE i % 5 <> 0
+), deleted_rows AS (
+	SELECT part, i FROM t EXCEPT ALL SELECT part, i FROM expected
+), missing_rows AS (
+	SELECT part, i FROM expected EXCEPT ALL SELECT part, i FROM t
+)
+SELECT (SELECT count(*) FROM deleted_rows) + (SELECT count(*) FROM missing_rows);
+----
+0
