@@ -85,8 +85,10 @@ public:
 	void GenerateCompactions(DuckLakeTableEntry &table, vector<unique_ptr<LogicalOperator>> &compactions);
 	unique_ptr<LogicalOperator> GenerateCompactionCommand(vector<DuckLakeCompactionFileEntry> source_files,
 	                                                      bool bind_to_latest_schema = false);
+	//! Sort the scan of a schema version of the table by the sort of its latest version
 	static unique_ptr<LogicalOperator> InsertSort(Binder &binder, unique_ptr<LogicalOperator> &plan,
-	                                              DuckLakeTableEntry &table, optional_ptr<DuckLakeSort> sort_data);
+	                                              DuckLakeTableEntry &table, const DuckLakeTableEntry &latest_table,
+	                                              optional_ptr<DuckLakeSort> sort_data);
 	static vector<OrderByNode> ParseSortOrders(const DuckLakeSort &sort_data);
 	//! Bind ORDER BY expressions against a column list + table name (works before a table entry exists).
 	static vector<BoundOrderByNode> BindSortOrders(Binder &binder, SchemaCatalogEntry &schema,
