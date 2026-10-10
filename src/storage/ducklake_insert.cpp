@@ -654,11 +654,12 @@ string DuckLakeCatalog::GenerateEncryptionKey(ClientContext &context) const {
 
 //! Wrap the plan in an ORDER BY on the sort keys, usable before the table entry exists (CTAS)
 static optional_ptr<PhysicalOperator> PlanInsertSort(ClientContext &context, PhysicalPlanGenerator &planner,
-                                                     PhysicalOperator &plan, const ColumnList &columns,
-                                                     const Identifier &table_name, const DuckLakeSort &sort_data) {
+                                                     PhysicalOperator &plan, SchemaCatalogEntry &schema,
+                                                     const ColumnList &columns, const Identifier &table_name,
+                                                     const DuckLakeSort &sort_data) {
 	auto binder = Binder::CreateBinder(context);
 	TableIndex table_index(0);
-	auto orders = DuckLakeCompactor::BindSortOrders(*binder, columns, table_name, table_index,
+	auto orders = DuckLakeCompactor::BindSortOrders(*binder, schema, columns, table_name, table_index,
 	                                                DuckLakeCompactor::ParseSortOrders(sort_data));
 	if (orders.empty()) {
 		return nullptr;
@@ -679,13 +680,13 @@ static optional_ptr<PhysicalOperator> PlanInsertSort(ClientContext &context, Phy
 }
 
 DuckLakeInsertPipeline DuckLakeInsert::PlanInsertPipeline(ClientContext &context, PhysicalPlanGenerator &planner,
-                                                          PhysicalOperator &plan, const ColumnList &columns,
-                                                          const Identifier &table_name,
+                                                          PhysicalOperator &plan, SchemaCatalogEntry &schema,
+                                                          const ColumnList &columns, const Identifier &table_name,
                                                           optional_ptr<DuckLakeSort> sort_data, bool sort_on_insert,
                                                           idx_t data_inlining_row_limit) {
 	DuckLakeInsertPipeline result {plan, nullptr, false};
 	if (sort_data && sort_on_insert) {
-		auto sorted_plan = PlanInsertSort(context, planner, result.root.get(), columns, table_name, *sort_data);
+		auto sorted_plan = PlanInsertSort(context, planner, result.root.get(), schema, columns, table_name, *sort_data);
 		if (sorted_plan) {
 			result.root = *sorted_plan;
 			result.sorted = true;
@@ -697,7 +698,8 @@ DuckLakeInsertPipeline DuckLakeInsert::PlanInsertPipeline(ClientContext &context
 		result.root = inline_data;
 		// with sort_on_insert off only the Parquet bound overflow rows are sorted, after inlining
 		if (sort_data && !sort_on_insert) {
-			auto sorted_plan = PlanInsertSort(context, planner, result.root.get(), columns, table_name, *sort_data);
+			auto sorted_plan =
+			    PlanInsertSort(context, planner, result.root.get(), schema, columns, table_name, *sort_data);
 			if (sorted_plan) {
 				result.root = *sorted_plan;
 				result.sorted = true;
@@ -768,8 +770,8 @@ PhysicalOperator &DuckLakeCatalog::PlanInsert(ClientContext &context, PhysicalPl
 	auto &ducklake_table = op.table.Cast<DuckLakeTableEntry>();
 	auto &verified_plan = DuckLakeVerifyNotNull::Plan(planner, ducklake_table, *plan);
 	auto pipeline = DuckLakeInsert::PlanInsertPipeline(
-	    context, planner, verified_plan, ducklake_table.GetColumns(), ducklake_table.name, ducklake_table.GetSortData(),
-	    SortOnInsert(ducklake_table), GetInliningLimit(context, ducklake_table));
+	    context, planner, verified_plan, ducklake_table.schema, ducklake_table.GetColumns(), ducklake_table.name,
+	    ducklake_table.GetSortData(), SortOnInsert(ducklake_table), GetInliningLimit(context, ducklake_table));
 
 	DuckLakeCopyInput copy_input(context, ducklake_table);
 	copy_input.ordered_input = pipeline.sorted;
@@ -804,7 +806,7 @@ PhysicalOperator &DuckLakeCatalog::PlanCreateTableAs(ClientContext &context, Phy
 
 	// No table id yet, so the WITH options stand in for the table scope
 	auto pipeline = DuckLakeInsert::PlanInsertPipeline(
-	    context, planner, plan, columns, create_info.GetTableName(), sort_data.get(),
+	    context, planner, plan, op.schema, columns, create_info.GetTableName(), sort_data.get(),
 	    SortOnInsert(duck_schema.GetSchemaId(), TableIndex(), &table_options),
 	    GetInliningLimit(context, duck_schema.GetSchemaId(), TableIndex(), columns, &table_options));
 
