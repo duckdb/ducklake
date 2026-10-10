@@ -534,6 +534,8 @@ public:
 	virtual void MigrateV10(bool allow_failures = false);
 	//! Logs development migration failures during attach
 	virtual void MigrateV10Dev();
+	//! Whether the catalog already has every metadata table and column of v1.1-dev1
+	bool HasV1_1Dev1Additions();
 	//! Renames inlined metadata columns to the prefixed variants, skipping already renamed tables
 	virtual void MigrateInlinedColumnNames(bool probe_renamed);
 	//! Rewrites inlined tables whose columns were created with the storage types of an older DuckLake version
