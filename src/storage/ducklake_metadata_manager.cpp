@@ -122,7 +122,14 @@ bool DuckLakeMetadataManager::CanInlineColumn(const string &name, const LogicalT
 	return !TypeVisitor::Contains(type, [&](const LogicalType &t) { return !SupportsInlining(t); });
 }
 
+bool DuckLakeMetadataManager::InlinedTableFits(idx_t column_count) const {
+	return column_count + DuckLakeInlinedColNames::COLUMN_COUNT <= MaxColumnCount();
+}
+
 bool DuckLakeMetadataManager::CanInlineColumns(const ColumnList &columns) {
+	if (!InlinedTableFits(columns.LogicalColumnCount())) {
+		return false;
+	}
 	for (auto &col : columns.Logical()) {
 		if (!CanInlineColumn(col.Name().GetIdentifierName(), col.Type())) {
 			return false;
@@ -132,6 +139,9 @@ bool DuckLakeMetadataManager::CanInlineColumns(const ColumnList &columns) {
 }
 
 bool DuckLakeMetadataManager::CanInlineColumns(const vector<DuckLakeColumnInfo> &columns) {
+	if (!InlinedTableFits(columns.size())) {
+		return false;
+	}
 	for (auto &col : columns) {
 		if (!CanInlineColumn(col.name, DuckLakeTypes::FromColumnInfo(col))) {
 			return false;
