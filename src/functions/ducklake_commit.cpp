@@ -62,7 +62,8 @@ static void DuckLakeCommitExecute(ClientContext &context, TableFunctionInput &da
 			throw;
 		}
 		// an internal error would invalidate the server database, which hosts the catalogs of other clients too
-		throw TransactionException("Server-side ducklake_commit failed with an internal error: %s", error.RawMessage());
+		auto message = "Server-side ducklake_commit failed with an internal error: " + error.RawMessage();
+		throw Exception(error.ExtraInfo(), ExceptionType::TRANSACTION, message);
 	}
 
 	output.data[0].Append(Value::BIGINT(result.committed_snapshot_id));
