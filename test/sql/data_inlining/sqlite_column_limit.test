@@ -59,3 +59,28 @@ query IIII
 SELECT count(*), sum(c0), sum(extra), (SELECT count(*) FROM ducklake_list_files('dl', 'fits')) FROM dl.fits
 ----
 2	1	2	2
+
+# rows inlined in this transaction cannot follow the table past the limit
+statement ok
+CREATE TABLE dl.local AS
+SELECT * FROM (PIVOT (SELECT 'c' || i AS k, 1 AS v FROM range(1997) r(i)) ON k USING first(v)) LIMIT 0
+
+statement ok
+BEGIN
+
+statement ok
+INSERT INTO dl.local (c0) VALUES (1)
+
+statement error
+ALTER TABLE dl.local ADD COLUMN extra INTEGER
+----
+would exceed the column limit of the metadata catalog
+
+statement ok
+ROLLBACK
+
+query II
+SELECT count(*), (SELECT count(*) FROM duckdb_columns() WHERE table_name = 'local' AND database_name = 'dl')
+FROM dl.local
+----
+0	1997
