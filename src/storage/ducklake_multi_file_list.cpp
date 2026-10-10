@@ -553,6 +553,13 @@ DuckLakeFileData DuckLakeMultiFileList::GetDeleteData(const DuckLakeDeleteFile &
 	return result;
 }
 
+static void SetDeleteBeginSnapshot(DuckLakeFileListEntry &entry, optional_idx begin_snapshot) {
+}
+
+static void SetDeleteBeginSnapshot(DuckLakeFileListExtendedEntry &entry, optional_idx begin_snapshot) {
+	entry.delete_file_begin_snapshot = begin_snapshot;
+}
+
 template <class ENTRY>
 static void ApplyLocalFileChanges(DuckLakeTransaction &transaction, TableIndex table_id, vector<ENTRY> &entries) {
 	if (transaction.HasDroppedFiles()) {
@@ -563,7 +570,11 @@ static void ApplyLocalFileChanges(DuckLakeTransaction &transaction, TableIndex t
 	// if the transaction has any local deletes - apply them to the file list
 	if (transaction.HasLocalDeletes(table_id)) {
 		for (auto &file_entry : entries) {
-			transaction.GetLocalDeleteForFile(table_id, file_entry.file.path, file_entry.delete_file);
+			optional_idx begin_snapshot;
+			if (transaction.GetLocalDeleteForFile(table_id, file_entry.file.path, file_entry.delete_file,
+			                                      begin_snapshot)) {
+				SetDeleteBeginSnapshot(file_entry, begin_snapshot);
+			}
 		}
 	}
 }
@@ -593,6 +604,9 @@ vector<DuckLakeFileListExtendedEntry> DuckLakeMultiFileList::GetFilesExtended() 
 		file_entry.row_count = file.row_count;
 		file_entry.file = GetFileData(file);
 		file_entry.delete_file = GetDeleteData(file);
+		if (!file.delete_files.empty()) {
+			file_entry.delete_file_begin_snapshot = file.delete_files.back().begin_snapshot;
+		}
 		file_entry.row_id_start = transaction_row_start;
 		transaction_row_start += file.row_count;
 		result.push_back(std::move(file_entry));

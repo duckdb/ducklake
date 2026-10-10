@@ -1,0 +1,264 @@
+# name: test/sql/data_inlining/data_inlining_flush_then_delete_all.test
+# description: Deleting every row a transaction flushed keeps the delete and the history of the rows
+# group: [data_inlining]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS lake (DATA_PATH '{DATA_PATH}/flush_delete_all', DATA_INLINING_ROW_LIMIT 500)
+
+statement ok
+CREATE TABLE lake.a (id BIGINT, v INTEGER)
+
+statement ok
+INSERT INTO lake.a VALUES (1, 10), (2, 20), (3, 30)
+
+statement ok
+BEGIN
+
+statement ok
+CALL ducklake_flush_inlined_data('lake', table_name => 'a')
+
+statement ok
+DELETE FROM lake.a WHERE v > 0
+
+statement ok
+COMMIT
+
+query I
+SELECT count(*) FROM lake.a
+----
+0
+
+query II
+SELECT * FROM lake.a AT (VERSION => 2) ORDER BY id
+----
+1	10
+2	20
+3	30
+
+query III
+SELECT snapshot_id, change_type, id FROM ducklake_table_changes('lake', 'main', 'a', 3, 3) ORDER BY id
+----
+3	delete	1
+3	delete	2
+3	delete	3
+
+query I
+SELECT changes['tables_deleted_from'] = changes['flushed_inlined'] FROM ducklake_snapshots('lake') WHERE snapshot_id = 3
+----
+true
+
+# an update deletes every flushed row too
+statement ok
+CREATE TABLE lake.b (id BIGINT, v INTEGER)
+
+statement ok
+INSERT INTO lake.b VALUES (1, 10), (2, 20), (3, 30)
+
+statement ok
+BEGIN
+
+statement ok
+CALL ducklake_flush_inlined_data('lake', table_name => 'b')
+
+statement ok
+UPDATE lake.b SET v = v + 1
+
+statement ok
+COMMIT
+
+query II
+SELECT * FROM lake.b ORDER BY id
+----
+1	11
+2	21
+3	31
+
+query II
+SELECT * FROM lake.b AT (VERSION => 5) ORDER BY id
+----
+1	10
+2	20
+3	30
+
+# the flush writes a file per partition
+statement ok
+CREATE TABLE lake.c (id BIGINT, p INTEGER)
+
+statement ok
+ALTER TABLE lake.c SET PARTITIONED BY (p)
+
+statement ok
+INSERT INTO lake.c VALUES (1, 1), (2, 1), (3, 2)
+
+statement ok
+BEGIN
+
+statement ok
+CALL ducklake_flush_inlined_data('lake', table_name => 'c')
+
+statement ok
+DELETE FROM lake.c WHERE id = 3
+
+statement ok
+COMMIT
+
+query II
+SELECT * FROM lake.c ORDER BY id
+----
+1	1
+2	1
+
+query II
+SELECT * FROM lake.c AT (VERSION => 9) ORDER BY id
+----
+1	1
+2	1
+3	2
+
+# the flushed file already has the deletes of earlier snapshots
+statement ok
+CREATE TABLE lake.d (id BIGINT, v INTEGER)
+
+statement ok
+INSERT INTO lake.d VALUES (1, 10), (2, 20), (3, 30)
+
+statement ok
+DELETE FROM lake.d WHERE id = 1
+
+statement ok
+BEGIN
+
+statement ok
+CALL ducklake_flush_inlined_data('lake', table_name => 'd')
+
+statement ok
+DELETE FROM lake.d
+
+query I
+SELECT count(*) FROM lake.d
+----
+0
+
+statement ok
+COMMIT
+
+query I
+SELECT count(*) FROM lake.d
+----
+0
+
+query II
+SELECT * FROM lake.d AT (VERSION => 12) ORDER BY id
+----
+1	10
+2	20
+3	30
+
+query II
+SELECT * FROM lake.d AT (VERSION => 13) ORDER BY id
+----
+2	20
+3	30
+
+# the deletes a flush carries over from earlier snapshots are not deletes of the flushing transaction
+statement ok
+CREATE TABLE lake.e (id BIGINT, v INTEGER)
+
+statement ok
+INSERT INTO lake.e VALUES (1, 10), (2, 20), (3, 30)
+
+statement ok
+DELETE FROM lake.e WHERE id = 1
+
+statement ok
+CALL ducklake_flush_inlined_data('lake', table_name => 'e')
+
+query II
+SELECT changes['tables_deleted_from'] IS NULL, len(changes['flushed_inlined']) FROM ducklake_snapshots('lake')
+WHERE snapshot_id = 18
+----
+true	1
+
+query II
+SELECT * FROM lake.e ORDER BY id
+----
+2	20
+3	30
+
+# the transaction sees its own deletes of a flushed file
+statement ok
+CREATE TABLE lake.f (id BIGINT, v INTEGER)
+
+statement ok
+INSERT INTO lake.f VALUES (1, 10), (2, 20), (3, 30)
+
+statement ok
+DELETE FROM lake.f WHERE id = 1
+
+statement ok
+BEGIN
+
+statement ok
+CALL ducklake_flush_inlined_data('lake', table_name => 'f')
+
+statement ok
+DELETE FROM lake.f WHERE id = 2
+
+query II
+SELECT * FROM lake.f ORDER BY id
+----
+3	30
+
+statement ok
+COMMIT
+
+query II
+SELECT * FROM lake.f ORDER BY id
+----
+3	30
+
+# a deletion vector with deletes of a single snapshot keeps that snapshot in the metadata only
+statement ok
+CREATE TABLE lake.g (id BIGINT, v INTEGER) WITH (write_deletion_vectors = true)
+
+statement ok
+INSERT INTO lake.g VALUES (1, 10), (2, 20), (3, 30)
+
+statement ok
+DELETE FROM lake.g WHERE id = 1
+
+statement ok
+BEGIN
+
+statement ok
+CALL ducklake_flush_inlined_data('lake', table_name => 'g')
+
+statement ok
+DELETE FROM lake.g WHERE id = 2
+
+query II
+SELECT * FROM lake.g ORDER BY id
+----
+3	30
+
+statement ok
+COMMIT
+
+query II
+SELECT * FROM lake.g AT (VERSION => 25) ORDER BY id
+----
+2	20
+3	30
+
+query II
+SELECT * FROM lake.g ORDER BY id
+----
+3	30
