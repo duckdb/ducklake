@@ -478,16 +478,20 @@ idx_t DuckLakeCatalog::GetBeginSnapshotForTable(TableIndex table_id, DuckLakeTra
 	return metadata_manager.GetBeginSnapshotForTable(table_id);
 }
 
-idx_t DuckLakeCatalog::GetBeginSnapshotForSchemaVersion(TableIndex table_id, idx_t schema_version,
-                                                        DuckLakeTransaction &transaction) {
+DuckLakeSnapshot DuckLakeCatalog::GetSchemaVersionSnapshot(TableIndex table_id, idx_t schema_version,
+                                                           DuckLakeTransaction &transaction) {
 	auto &metadata_manager = transaction.GetMetadataManager();
-	return metadata_manager.GetBeginSnapshotForSchemaVersion(table_id, schema_version);
+	return metadata_manager.GetSchemaVersionSnapshot(table_id, schema_version);
 }
 
 optional_ptr<DuckLakeTableEntry> DuckLakeCatalog::GetTableAtSchemaVersion(DuckLakeTransaction &transaction,
                                                                           TableIndex table_id, idx_t schema_version) {
-	DuckLakeSnapshot snapshot(GetBeginSnapshotForSchemaVersion(table_id, schema_version, transaction), schema_version,
-	                          0, 0);
+	auto snapshot = GetSchemaVersionSnapshot(table_id, schema_version, transaction);
+	auto transaction_snapshot = transaction.GetSnapshot();
+	if (snapshot.schema_version <= schema_version && transaction_snapshot.schema_version == schema_version) {
+		// the catalog of the transaction is at that schema version, so it has the same table
+		snapshot = transaction_snapshot;
+	}
 	auto entry = GetEntryById(transaction, snapshot, table_id);
 	if (!entry) {
 		return nullptr;
@@ -1349,18 +1353,19 @@ DuckLakeTableSchemaVersions DuckLakeCatalog::GetTableSchemaVersions(DuckLakeTran
 	return schema_versions;
 }
 
-optional_idx DuckLakeCatalog::TryGetSchemaVersionBeginSnapshot(TableIndex table_id, idx_t schema_version) {
+bool DuckLakeCatalog::TryGetSchemaVersionSnapshot(TableIndex table_id, idx_t schema_version, DuckLakeSnapshot &result) {
 	lock_guard<mutex> guard(schema_version_snapshot_lock);
-	auto entry = schema_version_begin_snapshots.find(make_pair(table_id.index, schema_version));
-	if (entry == schema_version_begin_snapshots.end()) {
-		return optional_idx();
+	auto entry = schema_version_snapshots.find(make_pair(table_id.index, schema_version));
+	if (entry == schema_version_snapshots.end()) {
+		return false;
 	}
-	return entry->second;
+	result = entry->second;
+	return true;
 }
 
-void DuckLakeCatalog::CacheSchemaVersionBeginSnapshot(TableIndex table_id, idx_t schema_version, idx_t begin_snapshot) {
+void DuckLakeCatalog::CacheSchemaVersionSnapshot(TableIndex table_id, idx_t schema_version, DuckLakeSnapshot snapshot) {
 	lock_guard<mutex> guard(schema_version_snapshot_lock);
-	schema_version_begin_snapshots[make_pair(table_id.index, schema_version)] = begin_snapshot;
+	schema_version_snapshots[make_pair(table_id.index, schema_version)] = snapshot;
 }
 
 string DuckLakeCatalog::StatsCacheKey(idx_t next_file_id, TableIndex table_id) const {

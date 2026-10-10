@@ -51,5 +51,6 @@ benchmark/micro/write/delete_commits_rewrite_retry.benchmark
 benchmark/micro/time_travel/table_deletions_many_files.benchmark
 benchmark/micro/read/float_pruning_many_files.benchmark
 benchmark/micro/write/insert_commits_altered_inlined.benchmark
+benchmark/micro/read/inlined_late_tables.benchmark
 benchmark/micro/read/float_bounded_pruning_added_files.benchmark
 benchmark/micro/compaction/rewrite_data_files_timestamptz.benchmark

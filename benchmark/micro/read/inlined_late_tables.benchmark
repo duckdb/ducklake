@@ -1,0 +1,45 @@
+# name: benchmark/micro/read/inlined_late_tables.benchmark
+# description: Run 120 small autocommit scans of 40 tables whose inlined data tables were created after them, warm
+# group: [read]
+
+name Inlined Late Tables
+group micro
+subgroup read
+
+require ducklake
+
+cache_file inlined_late_ready.marker
+
+# The tables are created without inlining, so one later commit creates all 40 inlined data tables
+load
+EXPORT DATABASE '${BENCHMARK_DIR}/inlined_late_create';
+COPY (SELECT 'CREATE TABLE lake.late_' || k || ' (id INTEGER, v VARCHAR);' FROM range(40) t(k))
+TO '${BENCHMARK_DIR}/inlined_late_create/schema.sql' (HEADER false, QUOTE '');
+EXPORT DATABASE '${BENCHMARK_DIR}/inlined_late_insert';
+COPY (SELECT 'INSERT INTO lake.late_' || k || ' SELECT r, ''v'' || (r + ' || k || ') FROM range(5) t(r);'
+FROM range(40) t(k)) TO '${BENCHMARK_DIR}/inlined_late_insert/schema.sql' (HEADER false, QUOTE '');
+@create inlined_late
+@attach inlined_late AS lake (DATA_PATH '${BENCHMARK_DIR}/inlined_late_files', DATA_INLINING_ROW_LIMIT 0)
+IMPORT DATABASE '${BENCHMARK_DIR}/inlined_late_create';
+CALL lake.set_option('data_inlining_row_limit', 10);
+IMPORT DATABASE '${BENCHMARK_DIR}/inlined_late_insert';
+SELECT CASE WHEN (SELECT count(*) <> 40 FROM __ducklake_metadata_lake.ducklake_inlined_data_tables)
+OR (SELECT count(*) <> 0 FROM __ducklake_metadata_lake.ducklake_inlined_data_tables
+JOIN __ducklake_metadata_lake.ducklake_schema_versions USING (table_id, schema_version))
+OR (SELECT count(*) <> 0 FROM glob('${BENCHMARK_DIR}/inlined_late_files/**'))
+THEN error('every table must have one inlined data table without a schema version of its own') END;
+DETACH lake;
+@seal inlined_late
+COPY (SELECT 1) TO '${BENCHMARK_DIR}/inlined_late_ready.marker' (FORMAT CSV);
+@attach inlined_late AS lake (READ_ONLY)
+
+reload
+@attach inlined_late AS lake (READ_ONLY)
+
+# The run only reads, and its discarded warmup run fills the caches
+run benchmark/micro/queries/inlined_late_tables.sql
+
+result_query I
+SELECT * FROM __answer
+----
+v1

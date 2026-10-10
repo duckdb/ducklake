@@ -779,7 +779,7 @@ static unordered_set<string> ReadInlinedTablesBeforeSchemaChange(TableIndex tabl
 static map<string, map<FieldIndex, DuckLakeColumnSchemaEntry>>
 ReadInlinedTableColumns(TableIndex table_id, const DuckLakeCommitContext &context) {
 	map<string, map<FieldIndex, DuckLakeColumnSchemaEntry>> result;
-	auto columns = context.query_metadata(DuckLakeMetadataManager::GetInlinedTableColumnsSql(table_id.index));
+	auto columns = DuckLakeMetadataManager::QueryInlinedTableColumns(table_id.index, context.query_metadata);
 	columns->ThrowIfError("Failed to read the columns of the inlined data tables from DuckLake: ");
 	for (auto &row : *columns) {
 		FieldIndex field_index(static_cast<idx_t>(row.GetValue<int64_t>(3)));
