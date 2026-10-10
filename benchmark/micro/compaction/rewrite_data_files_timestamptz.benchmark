@@ -1,0 +1,62 @@
+# name: benchmark/micro/compaction/rewrite_data_files_timestamptz.benchmark
+# description: Rewrite the one file with deletes of a 1000 file TIMESTAMPTZ table, which merges the stats of every file
+# group: [compaction]
+
+name Rewrite Data Files TIMESTAMPTZ
+group micro
+subgroup compaction
+
+require ducklake
+
+require parquet
+
+require icu
+
+argument lake rewrite_tz
+
+argument work rewrite_tz_work
+
+cache_file ${lake}_ready.marker
+
+# Row group size 2048 and a 4KB target give one file per 2048 rows
+load
+@create ${lake}_pristine
+@attach ${lake}_pristine AS lake (DATA_PATH '${BENCHMARK_DIR}/${lake}_files')
+CALL lake.set_option('data_inlining_row_limit', 0);
+CREATE TABLE lake.events (id BIGINT, t0 TIMESTAMPTZ, t1 TIMESTAMPTZ, t2 TIMESTAMPTZ, t3 TIMESTAMPTZ);
+CALL lake.set_option('parquet_row_group_size', 2048, table_name => 'events');
+SET ducklake_target_file_size = '4KB';
+INSERT INTO lake.events SELECT i, TIMESTAMPTZ '2024-01-01 00:00:00+00' + INTERVAL (i) SECOND,
+TIMESTAMPTZ '2024-01-01 00:00:00+00' + INTERVAL (i) MINUTE, TIMESTAMPTZ '2024-01-01 00:00:00+00' + INTERVAL (i) HOUR,
+TIMESTAMPTZ '2024-01-01 00:00:00+00' - INTERVAL (i) SECOND FROM range(1000 * 2048) t(i);
+RESET ducklake_target_file_size;
+DELETE FROM lake.events WHERE id < 1024;
+SELECT CASE WHEN (SELECT count(*) FROM ducklake_list_files('lake', 'events')) < 1000
+THEN error('events must consist of ~1000 small files') END;
+CALL ducklake_delete_orphaned_files('lake', cleanup_all => true);
+DETACH lake;
+COPY (SELECT count(*) FROM glob('${BENCHMARK_DIR}/${lake}_files/**'))
+TO '${BENCHMARK_DIR}/${lake}_filecount.csv' (FORMAT CSV, HEADER false);
+@seal ${lake}_pristine
+COPY (SELECT 1) TO '${BENCHMARK_DIR}/${lake}_ready.marker' (FORMAT CSV);
+DETACH DATABASE IF EXISTS lake;
+@copy ${lake}_pristine TO ${work}
+@attach ${work} AS lake
+CALL ducklake_delete_orphaned_files('lake', cleanup_all => true);
+SELECT CASE WHEN (SELECT count(*) FROM glob('${BENCHMARK_DIR}/${lake}_files/**'))
+<> (SELECT column0 FROM read_csv('${BENCHMARK_DIR}/${lake}_filecount.csv', header = false))
+THEN error('the fixture files were not restored') END;
+
+include benchmark/micro/fixtures/restore_reload.benchmark.in
+
+include benchmark/micro/fixtures/restore_cleanup.benchmark.in
+
+run
+SELECT sum(files_processed) AS processed, sum(files_created) AS created
+FROM ducklake_rewrite_data_files('lake', 'events', delete_threshold => 0.1);
+
+# A missed reset leaves no file with deletes to rewrite
+result_query II
+SELECT processed, created FROM __answer
+----
+1	1
