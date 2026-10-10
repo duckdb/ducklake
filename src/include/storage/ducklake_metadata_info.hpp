@@ -575,6 +575,10 @@ struct DuckLakeConfigOption {
 	SchemaIndex schema_id;
 	//! table_id, if scoped to a table
 	TableIndex table_id;
+
+	bool IsOption(SchemaIndex scope_schema_id, TableIndex scope_table_id, const string &key) const {
+		return schema_id == scope_schema_id && table_id == scope_table_id && option.key == key;
+	}
 };
 
 //! What a config option held before a transaction set it, so a rollback can put it back

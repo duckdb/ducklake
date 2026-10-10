@@ -74,3 +74,38 @@ JOIN ducklake_meta.ducklake_table tbl ON tbl.table_id=t.table_id AND tbl.end_sna
 WHERE tbl.table_name='kept'
 ----
 new	new
+
+# the option also holds when it is set in the transaction of the rewrite
+statement ok
+CREATE TABLE ducklake.skipped_in_rewrite(s VARCHAR)
+
+statement ok
+INSERT INTO ducklake.skipped_in_rewrite VALUES ('old')
+
+statement ok
+DELETE FROM ducklake.skipped_in_rewrite
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake')
+
+statement ok
+INSERT INTO ducklake.skipped_in_rewrite VALUES ('new')
+
+statement ok
+BEGIN
+
+statement ok
+CALL ducklake.set_option('skip_stats_columns', ['s'], table_name => 'skipped_in_rewrite')
+
+statement ok
+CALL ducklake_rewrite_data_files('ducklake', 'skipped_in_rewrite', delete_threshold => 0)
+
+statement ok
+COMMIT
+
+query II
+SELECT min_value, max_value FROM ducklake_meta.ducklake_table_column_stats t
+JOIN ducklake_meta.ducklake_table tbl ON tbl.table_id=t.table_id AND tbl.end_snapshot IS NULL
+WHERE tbl.table_name='skipped_in_rewrite'
+----
+NULL	NULL

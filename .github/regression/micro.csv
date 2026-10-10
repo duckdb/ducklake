@@ -18,6 +18,7 @@ benchmark/micro/read/big_lake_cold_listing.benchmark
 benchmark/micro/read/big_lake_cold_inlined_reads.benchmark
 benchmark/micro/read/sorted_probes.benchmark
 benchmark/micro/write/insert_commits_inlined.benchmark
+benchmark/micro/write/option_commits.benchmark
 benchmark/micro/write/insert_commits_table_stats.benchmark
 benchmark/micro/write/wide_table_insert_commits.benchmark
 benchmark/micro/write/wide_table_null_first_transaction.benchmark

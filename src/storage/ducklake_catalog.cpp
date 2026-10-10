@@ -1127,20 +1127,27 @@ static DuckLakeConfigOptionUndo GetConfigOptionUndo(const option_map_t &scope, c
 	return undo;
 }
 
+static void ApplyConfigOptionChange(DuckLakeOptions &options, const DuckLakeConfigOptionUndo &change) {
+	auto &scope = GetOptionScope(options, change.option);
+	if (change.reset) {
+		scope.erase(change.option.option.key);
+	} else {
+		scope[change.option.option.key] = change.option.option.value;
+	}
+}
+
 DuckLakeConfigOptionUndo DuckLakeCatalog::SetConfigOption(const DuckLakeConfigOption &option) {
 	lock_guard<mutex> guard(config_lock);
-	auto &scope = GetOptionScope(options, option);
-	auto undo = GetConfigOptionUndo(scope, option);
-	scope[option.option.key] = option.option.value;
+	auto undo = GetConfigOptionUndo(GetOptionScope(options, option), option);
+	ApplyConfigOptionChange(options, undo);
 	return undo;
 }
 
 DuckLakeConfigOptionUndo DuckLakeCatalog::ResetConfigOption(const DuckLakeConfigOption &option) {
 	lock_guard<mutex> guard(config_lock);
-	auto &scope = GetOptionScope(options, option);
-	auto undo = GetConfigOptionUndo(scope, option);
+	auto undo = GetConfigOptionUndo(GetOptionScope(options, option), option);
 	undo.reset = true;
-	scope.erase(option.option.key);
+	ApplyConfigOptionChange(options, undo);
 	return undo;
 }
 
@@ -1165,11 +1172,46 @@ void DuckLakeCatalog::UndoConfigOption(const DuckLakeConfigOptionUndo &undo) {
 	}
 }
 
+void DuckLakeCatalog::AddDeferredConfigOption(const DuckLakeTransaction &transaction,
+                                              const DuckLakeConfigOptionUndo &change) {
+	lock_guard<mutex> guard(config_lock);
+	deferred_config_options.push_back(DeferredConfigOption {&transaction, change});
+}
+
+void DuckLakeCatalog::EndDeferredConfigOptions(const DuckLakeTransaction &transaction, bool committed) {
+	lock_guard<mutex> guard(config_lock);
+	vector<DeferredConfigOption> changes;
+	for (auto &deferred : deferred_config_options) {
+		if (deferred.transaction.get() == &transaction) {
+			if (!committed) {
+				continue;
+			}
+			ApplyConfigOptionChange(options, deferred.change);
+			deferred.transaction = nullptr;
+		}
+		changes.push_back(std::move(deferred));
+	}
+	// the newest change shows first, so a committed one stays while its option has pending changes
+	auto option_key = [](const DeferredConfigOption &deferred) {
+		auto &option = deferred.change.option;
+		return std::make_tuple(option.schema_id, option.table_id, option.option.key);
+	};
+	set<std::tuple<SchemaIndex, TableIndex, string>> pending_options;
+	for (auto &deferred : changes) {
+		if (deferred.transaction) {
+			pending_options.insert(option_key(deferred));
+		}
+	}
+	deferred_config_options.clear();
+	for (auto &deferred : changes) {
+		if (pending_options.count(option_key(deferred))) {
+			deferred_config_options.push_back(std::move(deferred));
+		}
+	}
+}
+
 template <class SCOPE_MAP, class SCOPE_ID>
 static bool TryGetOptionInScope(const SCOPE_MAP &scope_map, SCOPE_ID scope_id, const string &option, string &result) {
-	if (!scope_id.IsValid()) {
-		return false;
-	}
 	auto scope_entry = scope_map.find(scope_id);
 	if (scope_entry == scope_map.end()) {
 		return false;
@@ -1182,9 +1224,35 @@ static bool TryGetOptionInScope(const SCOPE_MAP &scope_map, SCOPE_ID scope_id, c
 	return true;
 }
 
+bool DuckLakeCatalog::TryGetConfigOptionInScope(SchemaIndex schema_id, TableIndex table_id, const string &option,
+                                                string &result) const {
+	for (auto it = deferred_config_options.rbegin(); it != deferred_config_options.rend(); ++it) {
+		auto &change = it->change;
+		if (change.option.IsOption(schema_id, table_id, option)) {
+			if (change.reset) {
+				return false;
+			}
+			result = change.option.option.value;
+			return true;
+		}
+	}
+	if (table_id.IsValid()) {
+		return TryGetOptionInScope(options.table_options, table_id, option, result);
+	}
+	if (schema_id.IsValid()) {
+		return TryGetOptionInScope(options.schema_options, schema_id, option, result);
+	}
+	auto entry = options.config_options.find(option);
+	if (entry == options.config_options.end()) {
+		return false;
+	}
+	result = entry->second;
+	return true;
+}
+
 bool DuckLakeCatalog::TryGetTableConfigOption(const string &option, string &result, TableIndex table_id) const {
 	lock_guard<mutex> guard(config_lock);
-	return TryGetOptionInScope(options.table_options, table_id, option, result);
+	return table_id.IsValid() && TryGetConfigOptionInScope(SchemaIndex(), table_id, option, result);
 }
 
 bool DuckLakeCatalog::TryGetScopedConfigOption(const string &option, string &result, SchemaIndex schema_id,
@@ -1199,8 +1267,8 @@ bool DuckLakeCatalog::TryGetScopedConfigOption(const string &option, string &res
 	}
 	lock_guard<mutex> guard(config_lock);
 	// search options in-order: table scope, then schema scope
-	return TryGetOptionInScope(options.table_options, table_id, option, result) ||
-	       TryGetOptionInScope(options.schema_options, schema_id, option, result);
+	return (table_id.IsValid() && TryGetConfigOptionInScope(SchemaIndex(), table_id, option, result)) ||
+	       (schema_id.IsValid() && TryGetConfigOptionInScope(schema_id, TableIndex(), option, result));
 }
 
 bool DuckLakeCatalog::TryGetConfigOption(const string &option, string &result, SchemaIndex schema_id,
@@ -1211,12 +1279,7 @@ bool DuckLakeCatalog::TryGetConfigOption(const string &option, string &result, S
 		return true;
 	}
 	lock_guard<mutex> guard(config_lock);
-	auto entry = options.config_options.find(option);
-	if (entry == options.config_options.end()) {
-		return false;
-	}
-	result = entry->second;
-	return true;
+	return TryGetConfigOptionInScope(SchemaIndex(), TableIndex(), option, result);
 }
 
 bool DuckLakeCatalog::TryGetConfigOption(const string &option, string &result, DuckLakeTableEntry &table) const {

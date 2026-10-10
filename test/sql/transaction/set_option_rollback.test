@@ -1,0 +1,117 @@
+# name: test/sql/transaction/set_option_rollback.test
+# description: A rolled back option change leaves the stored options as they were
+# group: [transaction]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/set_option_rollback.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/set_option_rollback')
+
+statement ok
+CREATE TABLE ducklake.t(i INTEGER)
+
+statement ok
+BEGIN
+
+statement ok
+CALL ducklake.set_option('parquet_compression', 'zstd')
+
+statement ok
+ALTER TABLE ducklake.t SET (parquet_row_group_size = 1000)
+
+# the transaction sees its own changes
+query III
+SELECT option_name, value, scope FROM ducklake.options()
+WHERE option_name IN ('parquet_compression', 'parquet_row_group_size') ORDER BY ALL
+----
+parquet_compression	zstd	GLOBAL
+parquet_row_group_size	1000	TABLE
+
+statement ok
+ROLLBACK
+
+query I
+SELECT count(*) FROM ducklake.options() WHERE option_name IN ('parquet_compression', 'parquet_row_group_size')
+----
+0
+
+statement ok
+ALTER TABLE ducklake.t SET (parquet_compression = 'gzip')
+
+statement ok
+BEGIN
+
+statement ok
+ALTER TABLE ducklake.t RESET (parquet_compression)
+
+query I
+SELECT count(*) FROM ducklake.options() WHERE scope = 'TABLE'
+----
+0
+
+statement ok
+ROLLBACK
+
+query II
+SELECT option_name, value FROM ducklake.options() WHERE scope = 'TABLE'
+----
+parquet_compression	gzip
+
+# changes that commit with data are stored in order
+statement ok
+BEGIN
+
+statement ok
+INSERT INTO ducklake.t VALUES (0)
+
+statement ok
+CALL ducklake.set_option('parquet_compression', 'zstd')
+
+statement ok
+ALTER TABLE ducklake.t RESET (parquet_compression)
+
+statement ok
+CALL ducklake.set_option('parquet_compression', 'snappy')
+
+statement ok
+COMMIT
+
+statement ok
+DETACH ducklake
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/set_option_rollback')
+
+query III
+SELECT option_name, value, scope FROM ducklake.options() WHERE option_name = 'parquet_compression' ORDER BY scope
+----
+parquet_compression	snappy	GLOBAL
+
+# a commit that fails leaves the stored options as they were
+statement ok
+CALL ducklake.set_option('require_commit_message', true)
+
+statement ok
+BEGIN
+
+statement ok
+CALL ducklake.set_option('parquet_row_group_size', 2000)
+
+statement ok
+INSERT INTO ducklake.t VALUES (1)
+
+statement error
+COMMIT
+----
+Commit Information for the snapshot is required
+
+query I
+SELECT count(*) FROM ducklake.options() WHERE option_name = 'parquet_row_group_size'
+----
+0

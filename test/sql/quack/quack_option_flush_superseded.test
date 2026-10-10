@@ -1,0 +1,70 @@
+# name: test/sql/quack/quack_option_flush_superseded.test
+# description: A transaction that changes an option still drops the inlined tables its flush superseded
+# group: [quack]
+
+require ducklake
+
+require parquet
+
+require-env DUCKLAKE_CONNECTION
+
+require quack
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/quack_option_flush_superseded', DATA_INLINING_ROW_LIMIT 10)
+
+statement ok
+CREATE TABLE dl.t (x INT)
+
+statement ok
+INSERT INTO dl.t VALUES (1), (2)
+
+statement ok
+ALTER TABLE dl.t ADD COLUMN y INT
+
+statement ok
+INSERT INTO dl.t VALUES (3, 3)
+
+# the dependency keeps the superseded inlined table registered after the flush
+statement ok
+CALL quack_query_by_name('__ducklake_metadata_dl', 'ALTER TABLE ducklake_inlined_data_1_1 ADD PRIMARY KEY (x); CREATE TABLE drop_blocker (r INT REFERENCES ducklake_inlined_data_1_1 (x))')
+
+query I
+SELECT rows_flushed FROM ducklake_flush_inlined_data('dl')
+----
+3
+
+statement ok
+CALL quack_query_by_name('__ducklake_metadata_dl', 'DROP TABLE drop_blocker')
+
+query I
+SELECT table_name FROM __ducklake_metadata_dl.ducklake_inlined_data_tables ORDER BY ALL
+----
+ducklake_inlined_data_1_1
+ducklake_inlined_data_1_2
+
+statement ok
+BEGIN
+
+statement ok
+ALTER TABLE dl.t SET (parquet_compression = 'zstd')
+
+statement ok
+CALL ducklake_flush_inlined_data('dl')
+
+statement ok
+COMMIT
+
+query I
+SELECT table_name FROM __ducklake_metadata_dl.ducklake_inlined_data_tables ORDER BY ALL
+----
+ducklake_inlined_data_1_2
+
+query II
+SELECT * FROM dl.t ORDER BY x
+----
+1	NULL
+2	NULL
+3	3

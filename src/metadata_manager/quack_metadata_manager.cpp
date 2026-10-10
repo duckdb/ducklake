@@ -105,9 +105,10 @@ static bool IsDataOnlyCommit(const TransactionChangeInformation &c) {
 
 //! Whether the commit has to take the client-side path
 static bool RequiresClientSideCommit(DuckLakeTransaction &transaction) {
-	// the server-side commit cannot create inlined-data tables, delete flushed inlined data or rewrite delete files
+	// the server-side commit cannot create inlined tables, delete flushed data, rewrite delete files or write options
 	return transaction.GetRequiresNewInlinedTable() || !transaction.GetFlushedInlinedTables().empty() ||
-	       !transaction.GetFlushedInlinedFileDeletions().empty() || transaction.GetLocalChanges().HasDatedNewDeletes();
+	       !transaction.GetFlushedInlinedFileDeletions().empty() ||
+	       transaction.GetLocalChanges().HasDatedNewDeletes() || transaction.HasDeferredConfigOptions();
 }
 
 bool QuackMetadataManager::CanSkipSnapshotFetch(const TransactionChangeInformation &changes) const {

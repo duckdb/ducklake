@@ -99,6 +99,7 @@ unique_ptr<GlobalTableFunctionState> DuckLakeOptionsInit(ClientContext &context,
 
 	auto result = make_uniq<DuckLakeOptionsState>();
 	auto metadata = metadata_manager.LoadDuckLake();
+	transaction.ApplyDeferredConfigOptions(metadata);
 
 	// Global options
 	for (auto &tag : metadata.tags) {

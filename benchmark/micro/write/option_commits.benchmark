@@ -1,0 +1,28 @@
+# name: benchmark/micro/write/option_commits.benchmark
+# description: Commit latency of 50 autocommit option changes at table, schema and global scope of a 510-table lake
+# group: [write]
+
+name Option Commits
+group micro
+subgroup write
+
+require ducklake
+
+argument work option_commit_work
+
+argument warm_table lake.main.ins_0
+
+include benchmark/micro/fixtures/commit.benchmark.in
+
+run benchmark/micro/queries/option_commits.sql
+
+include benchmark/micro/fixtures/restore_cleanup_warm.benchmark.in
+
+# Each table keeps only its row group size, and the last schema and global levels are stored
+result_query III
+SELECT count(*) FILTER (scope = 'TABLE'),
+sum(TRY_CAST(value AS BIGINT)) FILTER (scope = 'TABLE' AND option_name = 'parquet_row_group_size'),
+string_agg(scope || ' ' || value, ', ' ORDER BY scope) FILTER (option_name = 'parquet_compression_level')
+FROM lake.options()
+----
+10	10045	GLOBAL 10, SCHEMA 9
