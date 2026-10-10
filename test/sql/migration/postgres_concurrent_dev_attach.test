@@ -1,0 +1,46 @@
+# name: test/sql/migration/postgres_concurrent_dev_attach.test
+# description: concurrent read-write attaches of a Postgres catalog that has every v1.1-dev1 addition run no DDL
+# group: [migration]
+
+require ducklake
+
+require parquet
+
+require postgres_scanner
+
+require-env DUCKLAKE_CI
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'dbname=ducklakedb' AS pg (TYPE postgres)
+
+statement ok
+CALL postgres_execute('pg', 'DROP SCHEMA IF EXISTS concurrent_dev_attach CASCADE')
+
+statement ok
+ATTACH 'ducklake:postgres:dbname=ducklakedb' AS dl
+(DATA_PATH '{DATA_PATH}/concurrent_dev_attach', METADATA_SCHEMA 'concurrent_dev_attach', DUCKLAKE_VERSION '1.1-dev1')
+
+statement ok
+CREATE TABLE dl.t AS SELECT range AS id FROM range(1000)
+
+statement ok
+DETACH dl
+
+# each attach reads the metadata tables, an exclusive lock taken by another attach would deadlock them
+concurrentloop i 0 6
+
+statement ok
+ATTACH 'ducklake:postgres:dbname=ducklakedb' AS dl_${i}
+(METADATA_SCHEMA 'concurrent_dev_attach', DUCKLAKE_VERSION '1.1-dev1')
+
+query I
+SELECT count(*) FROM dl_${i}.t
+----
+1000
+
+endloop
+
+statement ok
+CALL postgres_execute('pg', 'DROP SCHEMA concurrent_dev_attach CASCADE')

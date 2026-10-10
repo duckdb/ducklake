@@ -274,8 +274,8 @@ string DuckLakeDataFlusher::GetFlushSortOrderSQL(const DuckLakeTableEntry &table
 	}
 	auto orders = DuckLakeCompactor::ParseSortOrders(*sort_data);
 	// bind in the user context so an invalid sort reports the same error as an insert
-	auto bound_orders = DuckLakeCompactor::BindSortOrders(binder, latest_table.GetColumns(), latest_table.name,
-	                                                      binder.GenerateTableIndex(), orders);
+	auto bound_orders = DuckLakeCompactor::BindSortOrders(binder, latest_table.schema, latest_table.GetColumns(),
+	                                                      latest_table.name, binder.GenerateTableIndex(), orders);
 	for (auto &order : bound_orders) {
 		if (order.expression->IsVolatile()) {
 			// a volatile key cannot give the file and its delete positions the same order

@@ -1,0 +1,52 @@
+# name: test/sql/migration/dev1_missing_addition.test
+# description: a plain attach of a 1.1-dev1 catalog adds a column that only one metadata table lacks
+# group: [migration]
+
+require ducklake
+
+require parquet
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/dev1_missing_addition.db' AS dl (DATA_PATH '{DATA_PATH}/dev1_missing_addition', DUCKLAKE_VERSION '1.1-dev1')
+
+statement ok
+CREATE TABLE dl.t AS SELECT 1 AS i
+
+statement ok
+DETACH dl
+
+# another metadata table has a column of the same name
+foreach table,column ducklake_delete_file,row_group_count ducklake_table_column_stats,min_is_exact ducklake_table_column_stats,max_is_exact
+
+statement ok
+ATTACH '{TEST_DIR}/dev1_missing_addition.db' AS meta
+
+statement ok
+ALTER TABLE meta.{table} DROP COLUMN {column}
+
+statement ok
+DETACH meta
+
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/dev1_missing_addition.db' AS dl (DUCKLAKE_VERSION '1.1-dev1')
+
+statement ok
+INSERT INTO dl.t VALUES (2)
+
+statement ok
+DETACH dl
+
+statement ok
+ATTACH '{TEST_DIR}/dev1_missing_addition.db' AS meta
+
+query I
+SELECT count(*) FROM duckdb_columns() WHERE database_name = 'meta' AND table_name = '{table}' AND column_name = '{column}'
+----
+1
+
+statement ok
+DETACH meta
+
+endloop
