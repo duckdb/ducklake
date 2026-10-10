@@ -180,8 +180,8 @@ public:
 	                            const DuckLakeCommitContext &context,
 	                            map<TableIndex, DroppedDataFileStats> &attempt_dropped_file_stats);
 	//! Decrement table-level stats for files dropped this commit; returns true if live rows remain.
-	static bool ApplyDroppedFileStats(TableIndex table_id, DuckLakeNewGlobalStats &new_stats,
-	                                  map<TableIndex, DroppedDataFileStats> &attempt_dropped_file_stats);
+	bool ApplyDroppedFileStats(TableIndex table_id, DuckLakeNewGlobalStats &new_stats,
+	                           map<TableIndex, DroppedDataFileStats> &attempt_dropped_file_stats);
 	string UpdateStatsForDroppedFiles(optional_ptr<vector<DuckLakeGlobalStatsInfo>> stats,
 	                                  const DuckLakeCommitContext &context,
 	                                  map<TableIndex, DroppedDataFileStats> &attempt_dropped_file_stats);
@@ -257,6 +257,8 @@ public:
 	vector<DuckLakeConfigOption> committed_table_options;
 	//! The statistics written for the fields that this commit adds to existing tables
 	map<TableIndex, map<FieldIndex, DuckLakeColumnStats>> added_field_stats;
+	//! The tables whose stored size this commit reads back from their live data files
+	set<TableIndex> refreshed_table_sizes;
 	//! The tables other transactions changed after the snapshot of a retried commit
 	set<TableIndex> tables_changed_by_others;
 };

@@ -4803,6 +4803,20 @@ string DuckLakeMetadataManager::UpdateGlobalTableStatsSql(const DuckLakeGlobalSt
 	return batch_query;
 }
 
+string DuckLakeMetadataManager::RefreshTableSizesSql(const set<TableIndex> &table_ids) {
+	string batch_query;
+	for (auto &table_id : table_ids) {
+		batch_query += StringUtil::Format(R"(
+UPDATE {METADATA_CATALOG}.ducklake_table_stats SET file_size_bytes = (
+	SELECT COALESCE(SUM(data.file_size_bytes), 0)
+	FROM {METADATA_CATALOG}.ducklake_data_file data
+	WHERE data.table_id = %d AND data.end_snapshot IS NULL
+) WHERE table_id = %d;)",
+		                                  table_id.index, table_id.index);
+	}
+	return batch_query;
+}
+
 vector<DuckLakeSnapshotInfo> DuckLakeMetadataManager::GetAllSnapshots(const string &filter) {
 	auto res = Query(StringUtil::Format(R"(
 SELECT snapshot_id, snapshot_time, schema_version, next_file_id, changes_made, author, commit_message, commit_extra_info

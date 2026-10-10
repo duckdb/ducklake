@@ -1122,7 +1122,12 @@ bool DuckLakeTransactionState::ApplyDroppedFileStats(
 	}
 	bool live_rows_remain = stats.record_count_unknown || stats.record_count > 0;
 	if (live_rows_remain) {
-		stats.table_size_bytes = SubtractDroppedFileStat(stats.table_size_bytes, dropped_stats.file_size_bytes);
+		if (dropped_stats.file_size_bytes > stats.table_size_bytes) {
+			// a stale stored size is read back from the live data files
+			refreshed_table_sizes.insert(table_id);
+		} else {
+			stats.table_size_bytes -= dropped_stats.file_size_bytes;
+		}
 	} else {
 		stats.table_size_bytes = 0;
 		for (auto &column_stats : stats.column_stats) {
@@ -1811,6 +1816,7 @@ string DuckLakeTransactionState::CommitChanges(DuckLakeCommitState &commit_state
                                                map<TableIndex, DroppedDataFileStats> &attempt_dropped_file_stats) {
 	committed_table_options.clear();
 	added_field_stats.clear();
+	refreshed_table_sizes.clear();
 	auto &commit_snapshot = commit_state.commit_snapshot;
 
 	EnsureCommitInfoProvided(commit_info);
@@ -2032,7 +2038,12 @@ string DuckLakeTransactionState::CommitChanges(DuckLakeCommitState &commit_state
 				                                 compaction_rewrite_delete_changes, table_entry.second, context);
 			}
 		}
+
+		// compacted files differ in size from their sources
+		auto compacted_tables = local_changes.GetCompactedTables();
+		refreshed_table_sizes.insert(compacted_tables.begin(), compacted_tables.end());
 	}
+	batch_queries += DuckLakeMetadataManager::RefreshTableSizesSql(refreshed_table_sizes);
 
 	// delete the flushed inlined rows and inlined file deletions after the deletes of the transaction
 	batch_queries += DuckLakeMetadataManager::GenerateDeleteFlushedInlinedData(
@@ -2399,6 +2410,10 @@ void DuckLakeTransactionState::Commit(DuckLakeSnapshot transaction_snapshot,
 	context.set_table_options(committed_table_options);
 	for (auto &entry : dropped_file_stats) {
 		context.invalidate_table_stats_cache(commit_snapshot.next_file_id, entry.first);
+	}
+	// a compaction without new files keeps the next file id of the cached stats
+	for (auto &table_id : local_changes.GetCompactedTables()) {
+		context.invalidate_table_stats_cache(commit_snapshot.next_file_id, table_id);
 	}
 	if (flushed_inlined && !context.skip_drop_empty_inlined) {
 		try {

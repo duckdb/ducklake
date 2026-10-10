@@ -462,6 +462,17 @@ void LocalTableChanges::AddCompaction(TableIndex table_id, DuckLakeCompactionEnt
 	table_changes.compactions.push_back(std::move(entry));
 }
 
+set<TableIndex> LocalTableChanges::GetCompactedTables() const {
+	lock_guard<mutex> guard(lock);
+	set<TableIndex> result;
+	for (auto &entry : changes) {
+		if (!entry.second.compactions.empty()) {
+			result.insert(entry.first);
+		}
+	}
+	return result;
+}
+
 bool LocalTableChanges::HasLocalDeletes(TableIndex table_id) const {
 	lock_guard<mutex> guard(lock);
 	auto table_changes = Find(table_id);
@@ -1328,6 +1339,9 @@ void DuckLakeTransaction::ApplyServerSideCommit(idx_t schema_version) {
 	if (snapshot) {
 		for (auto &entry : state->dropped_file_stats) {
 			ducklake_catalog.InvalidateTableStatsCache(snapshot->next_file_id, entry.first);
+		}
+		for (auto &table_id : state->local_changes.GetCompactedTables()) {
+			ducklake_catalog.InvalidateTableStatsCache(snapshot->next_file_id, table_id);
 		}
 	}
 	catalog_version = schema_version;
