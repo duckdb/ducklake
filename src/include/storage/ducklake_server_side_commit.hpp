@@ -32,6 +32,8 @@ public:
 	DuckLakeServerSideCommitResult Run();
 	//! Override the retry configuration
 	void SetRetryConfigOverride(const DuckLakeRetryConfig &retry_config);
+	//! Wrap data/delete file keys under this KEK (same semantics as the KEY_ENCRYPTION_KEY ATTACH option)
+	void SetKeyEncryptionKey(const string &key_encryption_key);
 
 private:
 	//! Read commit metadata (author, message, snapshot ids).
@@ -92,6 +94,7 @@ private:
 	const int64_t schema_version;
 	Connection fresh_conn;
 	DuckLakeRetryConfig retry_config;
+	string key_encryption_key;
 
 	DuckLakeNameMapSet new_name_maps;
 	unique_ptr<DuckLakeTransactionState> state;

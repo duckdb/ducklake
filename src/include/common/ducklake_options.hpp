@@ -31,6 +31,8 @@ struct DuckLakeOptions {
 	AccessMode access_mode = AccessMode::AUTOMATIC;
 	OnCreateConflict on_conflict = OnCreateConflict::ERROR_ON_CONFLICT;
 	DuckLakeEncryption encryption = DuckLakeEncryption::AUTOMATIC;
+	//! 32-byte key-encryption key; when set, per-file DEKs are stored wrapped in the catalog
+	string key_encryption_key;
 	bool create_if_not_exists = true;
 	bool automatic_migration = false;
 	bool hide_metadata_catalog = true;

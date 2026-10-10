@@ -1,4 +1,5 @@
 #include "storage/ducklake_server_side_commit.hpp"
+#include "common/ducklake_key_wrap.hpp"
 
 #include "common/ducklake_row_helpers.hpp"
 #include "common/ducklake_types.hpp"
@@ -92,6 +93,10 @@ DuckLakeServerSideCommit::DuckLakeServerSideCommit(ClientContext &context_p, str
 
 void DuckLakeServerSideCommit::SetRetryConfigOverride(const DuckLakeRetryConfig &retry_config_p) {
 	retry_config = retry_config_p;
+}
+
+void DuckLakeServerSideCommit::SetKeyEncryptionKey(const string &key_encryption_key_p) {
+	key_encryption_key = DuckLakeKeyWrap::DeriveKEK(key_encryption_key_p);
 }
 
 DuckLakeServerSideCommitResult DuckLakeServerSideCommit::Run() {
@@ -627,6 +632,10 @@ string DuckLakeServerSideCommit::BuildInlinedDataInserts(const vector<DuckLakeIn
 DuckLakeCommitContext DuckLakeServerSideCommit::BuildContext(idx_t &committed_snapshot_id,
                                                              idx_t &committed_schema_version) {
 	DuckLakeCommitContext ctx;
+	ctx.key_codec.kek = key_encryption_key;
+	if (ctx.key_codec.HasKEK()) {
+		ctx.key_codec.util = context.db->GetEncryptionUtil();
+	}
 	ctx.commit_info = state->commit_info;
 	ctx.skip_drop_empty_inlined = true;
 	ctx.supports_v1_1_metadata = supports_v1_1_metadata;

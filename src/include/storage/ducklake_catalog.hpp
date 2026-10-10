@@ -291,6 +291,9 @@ public:
 	bool WriteDeletionVectors(DuckLakeTableEntry &table) const;
 
 	void SetEncryption(DuckLakeEncryption encryption);
+	const string &KeyEncryptionKey() const {
+		return options.key_encryption_key;
+	}
 	//! Generate an encryption key for writing (or empty if encryption is disabled)
 	string GenerateEncryptionKey(ClientContext &context) const;
 

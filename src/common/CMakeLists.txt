@@ -5,6 +5,7 @@ add_library(
   ducklake_snapshot.cpp
   ducklake_types.cpp
   ducklake_util.cpp
+  ducklake_key_wrap.cpp
   ducklake_version.cpp
   parquet_file_scanner.cpp)
 set(ALL_OBJECT_FILES
