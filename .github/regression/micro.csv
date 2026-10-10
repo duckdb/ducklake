@@ -53,3 +53,4 @@ benchmark/micro/read/float_pruning_many_files.benchmark
 benchmark/micro/write/insert_commits_altered_inlined.benchmark
 benchmark/micro/read/float_bounded_pruning_added_files.benchmark
 benchmark/micro/compaction/rewrite_data_files_timestamptz.benchmark
+benchmark/micro/write/delete_commits_v10_history.benchmark

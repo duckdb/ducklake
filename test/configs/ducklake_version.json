@@ -93,6 +93,16 @@
         "test/sql/partitioning/epoch_transforms.test",
         "test/sql/partitioning/update_partition_epoch.test"
       ]
+    },
+    {
+      "reason": "Deletion vectors of several snapshots in one puffin file were added in 1.1-dev1, a catalog pinned to 1.0 writes such deletes to parquet delete files",
+      "paths": [
+        "test/sql/delete/delete_mixed_formats.test",
+        "test/sql/delete/deletion_vector.test",
+        "test/sql/delete/deletion_vector_inlined_flush.test",
+        "test/sql/delete/deletion_vector_multi_snapshot.test",
+        "test/sql/rewrite_data_files/rewrite_deletion_vectors.test"
+      ]
     }
   ]
 }
