@@ -72,8 +72,6 @@ public:
 	optional_ptr<const DuckLakePartition> GetPartitionData() const {
 		return partition_data.get();
 	}
-	//! Returns SQL expressions for each partition field (e.g., "region", "year(ts)")
-	vector<string> GetPartitionSQLExpressions() const;
 	optional_ptr<DuckLakeSort> GetSortData() {
 		return sort_data.get();
 	}

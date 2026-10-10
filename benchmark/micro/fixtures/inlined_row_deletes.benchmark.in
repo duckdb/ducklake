@@ -1,0 +1,41 @@
+# name: benchmark/micro/fixtures/inlined_row_deletes.benchmark.in
+# description: A partitioned and an unpartitioned table of 100k inlined rows each, with updated and deleted rows
+# group: [fixtures]
+
+argument lake inlined_row_deletes_v1
+
+cache_file ${lake}_ready.marker
+
+# The update and the delete leave 7.7k updated and 5.9k deleted row versions in the inlined data of each table
+load
+@create ${lake}_pristine
+@attach ${lake}_pristine AS lake (DATA_PATH '${BENCHMARK_DIR}/${lake}_files')
+CALL lake.set_option('data_inlining_row_limit', 1000000);
+CREATE TABLE lake.part (id BIGINT, dt DATE, v VARCHAR);
+CREATE TABLE lake.flat (id BIGINT, dt DATE, v VARCHAR);
+ALTER TABLE lake.part SET PARTITIONED BY (month(dt));
+INSERT INTO lake.part SELECT i, DATE '2028-01-01' + (i % 365)::INTEGER, 'v' || (i * 7919 % 100000) FROM range(100000) t(i);
+INSERT INTO lake.flat SELECT i, DATE '2028-01-01' + (i % 365)::INTEGER, 'v' || (i * 7919 % 100000) FROM range(100000) t(i);
+UPDATE lake.part SET v = 'u' || v WHERE id % 13 = 0;
+UPDATE lake.flat SET v = 'u' || v WHERE id % 13 = 0;
+DELETE FROM lake.part WHERE id % 17 = 0;
+DELETE FROM lake.flat WHERE id % 17 = 0;
+SELECT CASE WHEN (SELECT count(*) FROM ducklake_list_files('lake', 'part')) <> 0
+OR (SELECT count(*) FROM ducklake_list_files('lake', 'flat')) <> 0
+OR (SELECT count(*) FROM lake.part) <> 94117 OR (SELECT count(*) FROM lake.flat) <> 94117
+THEN error('unexpected inlined row deletes fixture') END;
+CALL ducklake_delete_orphaned_files('lake', cleanup_all => true);
+DETACH lake;
+COPY (SELECT count(*) FROM glob('${BENCHMARK_DIR}/${lake}_files/**'))
+TO '${BENCHMARK_DIR}/${lake}_filecount.csv' (FORMAT CSV, HEADER false);
+@seal ${lake}_pristine
+COPY (SELECT 1) TO '${BENCHMARK_DIR}/${lake}_ready.marker' (FORMAT CSV);
+DETACH DATABASE IF EXISTS lake;
+@copy ${lake}_pristine TO ${work}
+@attach ${work} AS lake
+CALL ducklake_delete_orphaned_files('lake', cleanup_all => true);
+SELECT CASE WHEN (SELECT count(*) FROM glob('${BENCHMARK_DIR}/${lake}_files/**'))
+<> (SELECT column0 FROM read_csv('${BENCHMARK_DIR}/${lake}_filecount.csv', header = false))
+THEN error('the fixture files were not restored') END;
+
+include benchmark/micro/fixtures/restore_reload.benchmark.in
