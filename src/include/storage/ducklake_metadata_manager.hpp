@@ -50,6 +50,8 @@ enum class SnapshotBound { LOWER_BOUND, UPPER_BOUND };
 struct DuckLakeInlinedColNames {
 	//! Column name prefix reserved for DuckLake internal use
 	static constexpr const char *PREFIX = "_ducklake_";
+	//! Number of metadata columns an inlined data table adds
+	static constexpr idx_t COLUMN_COUNT = 3;
 
 	explicit DuckLakeInlinedColNames(bool prefixed_inlined_columns) {
 		if (prefixed_inlined_columns) {
@@ -235,6 +237,10 @@ public:
 	}
 	//! Maximum identifier length in bytes supported by this backend
 	virtual idx_t MaxIdentifierLength() const {
+		return NumericLimits<idx_t>::Maximum();
+	}
+	//! Maximum number of columns of a table supported by this backend
+	virtual idx_t MaxColumnCount() const {
 		return NumericLimits<idx_t>::Maximum();
 	}
 
@@ -588,6 +594,8 @@ public:
 protected:
 	string GetInlinedTableQuery(const DuckLakeTableInfo &table, const string &table_name);
 	bool CanInlineColumn(const string &name, const LogicalType &type);
+	//! Whether the inlined data table of a table with this many columns fits the backend
+	bool InlinedTableFits(idx_t column_count) const;
 	string GetColumnType(const DuckLakeColumnInfo &col);
 	string GetColumnDefinitions(const vector<DuckLakeColumnInfo> &columns);
 	string GetKnownFilesForCleanupQuery() const;

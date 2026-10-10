@@ -24,6 +24,10 @@ public:
 	bool SupportsAppender() const override {
 		return false;
 	}
+	idx_t MaxColumnCount() const override {
+		// the default SQLITE_MAX_COLUMN
+		return 2000;
+	}
 	bool IsRetryableCommitError(const string &message) const override;
 
 	string GetColumnTypeInternal(const LogicalType &type) override;
