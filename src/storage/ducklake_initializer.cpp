@@ -9,6 +9,8 @@
 #include "duckdb/main/connection.hpp"
 #include "duckdb/main/extension_helper.hpp"
 #include "duckdb/storage/storage_manager.hpp"
+#include "duckdb/storage/storage_info.hpp"
+#include "duckdb/common/types/variant.hpp"
 
 #include "storage/ducklake_initializer.hpp"
 #include "storage/ducklake_catalog.hpp"
@@ -36,10 +38,6 @@ string DuckLakeInitializer::GetAttachOptions() {
 		attach_options.push_back(option.first + " " + option.second.ToSQLString());
 	}
 	const string metadata_type = catalog.MetadataType();
-	if (metadata_type.empty() || metadata_type == "duckdb") {
-		// this is duckdb, we always do latest storage
-		attach_options.push_back(StringUtil::Format("STORAGE_VERSION '%s'", "latest"));
-	}
 	// scope the underlying Postgres attach to the metadata schema - otherwise the postgres extension reflects
 	// every schema in the database on attach, which is very slow on large or multi-tenant catalogs.
 	// only done when the user explicitly set METADATA_SCHEMA - the default schema is not known until after attach.
@@ -63,6 +61,7 @@ void DuckLakeInitializer::Initialize() {
 	auto &transaction = DuckLakeTransaction::Get(context, catalog);
 	// attach the metadata database
 	AttachMetadata(transaction);
+	RaiseMetadataStorageVersion(transaction);
 
 	bool has_explicit_schema = !options.metadata_schema.empty();
 	if (options.metadata_schema.empty()) {
@@ -161,11 +160,46 @@ void DuckLakeInitializer::RestartMetadataTransaction(DuckLakeTransaction &transa
 }
 
 void DuckLakeInitializer::AttachMetadata(DuckLakeTransaction &transaction) {
-	const string attach_query =
-	    "ATTACH OR REPLACE {METADATA_PATH} AS {METADATA_CATALOG_NAME_IDENTIFIER}" + GetAttachOptions();
-	auto result = transaction.GetMetadataManager().AttachMetadata(attach_query);
+	auto attach = [&]() {
+		return transaction.GetMetadataManager().AttachMetadata(
+		    "ATTACH OR REPLACE {METADATA_PATH} AS {METADATA_CATALOG_NAME_IDENTIFIER}" + GetAttachOptions());
+	};
+	auto result = attach();
+	if (result->HasError() && result->GetErrorObject().Type() == ExceptionType::INVALID_INPUT &&
+	    ChoosesMetadataStorageVersion()) {
+		// options such as ENCRYPTION_KEY or ROW_GROUP_SIZE may not work with the storage version of the file
+		options.metadata_parameters["storage_version"] = Value("latest");
+		transaction.Rollback();
+		result = attach();
+	}
 	result->ThrowIfError("Failed to attach DuckLake MetaData \"" + catalog.MetadataDatabaseName() + "\" at path + \"" +
 	                     catalog.MetadataPath() + "\"");
+}
+
+bool DuckLakeInitializer::ChoosesMetadataStorageVersion() {
+	auto &metadata_type = catalog.MetadataType();
+	if (!metadata_type.empty() && metadata_type != "duckdb") {
+		return false;
+	}
+	return options.metadata_parameters.find("storage_version") == options.metadata_parameters.end();
+}
+
+void DuckLakeInitializer::RaiseMetadataStorageVersion(DuckLakeTransaction &transaction) {
+	if (!ChoosesMetadataStorageVersion()) {
+		return;
+	}
+	auto &metadata_catalog =
+	    Catalog::GetCatalog(*transaction.GetConnection().context, Identifier(options.metadata_database));
+	if (!metadata_catalog.IsDuckCatalog()) {
+		return;
+	}
+	// inlined VARIANT columns need this version, otherwise the file keeps its own so older releases can read it
+	auto &metadata_db = metadata_catalog.GetAttached();
+	if (metadata_db.IsReadOnly() || metadata_db.GetStorageManager().GetStorageVersion() >= Variant::VERSION_ADDED) {
+		return;
+	}
+	options.metadata_parameters["storage_version"] = Value(GetStorageVersionName(Variant::VERSION_ADDED, false));
+	RestartMetadataTransaction(transaction);
 }
 
 bool DuckLakeInitializer::DuckLakeIsInitialized(DuckLakeTransaction &transaction) {
