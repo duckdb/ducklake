@@ -484,11 +484,13 @@ DuckLakeTableSchemaVersions DuckLakeMetadataManager::GetTableSchemaVersions(Tabl
 	                                "WHERE table_id = %d AND begin_snapshot <= {SNAPSHOT_ID}",
 	                                table_id.index);
 	auto result = Query(snapshot, query);
-	result->ThrowIfError("Failed to get the schema versions of a table from DuckLake: ");
+	if (result->HasError()) {
+		result->GetErrorObject().Throw("Failed to get the schema versions of a table from DuckLake: ");
+	}
 	DuckLakeTableSchemaVersions schema_versions;
 	for (auto &row : *result) {
-		schema_versions.creation = OptIdx(row, 0);
-		schema_versions.last_change = OptIdx(row, 1);
+		schema_versions.creation = row.IsNull(0) ? optional_idx() : optional_idx(row.GetValue<idx_t>(0));
+		schema_versions.last_change = row.IsNull(1) ? optional_idx() : optional_idx(row.GetValue<idx_t>(1));
 	}
 	return schema_versions;
 }
