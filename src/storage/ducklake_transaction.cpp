@@ -810,6 +810,10 @@ bool DuckLakeTransaction::ChangesMade() const {
 	       !new_name_maps.name_maps.empty();
 }
 
+bool DuckLakeTransaction::SchemaChangesMade() const {
+	return state->SchemaChangesMade();
+}
+
 void GetTransactionTableChanges(reference<CatalogEntry> table_entry, TransactionChangeInformation &changes) {
 	while (true) {
 		auto &table = table_entry.get().Cast<DuckLakeTableEntry>();
