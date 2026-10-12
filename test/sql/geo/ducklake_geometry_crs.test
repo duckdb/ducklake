@@ -65,6 +65,13 @@ ALTER TABLE ducklake.t ALTER g TYPE GEOMETRY;
 ----
 only widening type promotions are allowed
 
+# macro parameters keep the CRS, also as a nested type
+statement ok
+CREATE MACRO ducklake.crs_type(g GEOMETRY('OGC:CRS84')) AS typeof(g);
+
+statement ok
+CREATE MACRO ducklake.crs_list_type(l GEOMETRY('OGC:CRS84')[]) AS typeof(l);
+
 # a CRS definition with quotes is stored as a string literal
 statement ok
 CREATE TABLE ducklake.p (g GEOMETRY('{"type": "GeographicCRS", "name": "O''Brien grid"}'));
@@ -119,6 +126,11 @@ statement error
 INSERT INTO ducklake.t SELECT * FROM ducklake.t2;
 ----
 Cannot cast GEOMETRY with CRS 'OGC:CRS83' to GEOMETRY with different CRS 'OGC:CRS84'
+
+query II
+SELECT ducklake.crs_type('POINT(1 2)'::GEOMETRY('OGC:CRS84')), ducklake.crs_list_type(['POINT(1 2)'::GEOMETRY('OGC:CRS84')])
+----
+GEOMETRY('OGC:CRS84')	GEOMETRY('OGC:CRS84')[]
 
 # added files must hold the CRS of the column or none
 statement ok

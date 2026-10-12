@@ -38,6 +38,11 @@ ALTER TABLE ducklake.t ADD COLUMN h GEOMETRY('OGC:CRS84');
 ----
 DuckLake 1.0 does not support GEOMETRY types with a CRS
 
+statement error
+CREATE MACRO ducklake.crs_type(g GEOMETRY('OGC:CRS84')) AS typeof(g);
+----
+DuckLake 1.0 does not support GEOMETRY types with a CRS
+
 query I
 SELECT COUNT(*) FROM ducklake_geometry_crs_gate_meta.ducklake_column WHERE column_type LIKE 'geometry(%'
 ----

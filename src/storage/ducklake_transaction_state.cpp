@@ -18,6 +18,7 @@
 #include "common/ducklake_snapshot.hpp"
 #include "duckdb/common/exception.hpp"
 #include "duckdb/common/random_engine.hpp"
+#include "duckdb/parser/expression/type_expression.hpp"
 #include "duckdb/common/string_util.hpp"
 
 #include <algorithm>
@@ -496,7 +497,15 @@ static string MacroParameterTypeToString(const LogicalType &type) {
 	}
 	// child types are stored as DuckLake types so they can be bound without a connection
 	auto ducklake_type = TypeVisitor::VisitReplace(type, [](const LogicalType &child) {
-		return DuckLakeTypes::IsNested(child) ? child : DuckLakeTypes::FromString(DuckLakeTypes::ToString(child));
+		if (DuckLakeTypes::IsNested(child)) {
+			return child;
+		}
+		if (child.id() == LogicalTypeId::GEOMETRY && GeoType::HasCRS(child)) {
+			// a CRS needs a connection to bind, so it is stored as the name of its DuckLake type
+			return LogicalType::UNBOUND(
+			    make_uniq<TypeExpression>(DuckLakeTypes::ToString(child), vector<unique_ptr<ParsedExpression>>()));
+		}
+		return DuckLakeTypes::FromString(DuckLakeTypes::ToString(child));
 	});
 	return ducklake_type.ToString();
 }
