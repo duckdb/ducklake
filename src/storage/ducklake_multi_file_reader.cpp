@@ -1,5 +1,6 @@
 #include "storage/ducklake_multi_file_list.hpp"
 #include "storage/ducklake_multi_file_reader.hpp"
+#include "common/ducklake_timetz.hpp"
 #include "storage/ducklake_table_entry.hpp"
 #include "storage/ducklake_catalog.hpp"
 #include "storage/ducklake_delete_filter.hpp"
@@ -541,6 +542,20 @@ ReaderInitializeType DuckLakeMultiFileReader::CreateMapping(
 	throw InternalException("DuckLakeMultiFileReader::CreateMapping is unreachable");
 }
 
+//! Rebuilds the TIMETZ values of the files that store them as a struct
+static ReaderInitializeType DecodeTimeTZColumns(ClientContext &context, MultiFileReaderData &reader_data,
+                                                ReaderInitializeType result) {
+	for (auto &expr : reader_data.expressions) {
+		if (expr) {
+			DuckLakeTimeTZ::ReplaceStorageCasts(context, expr);
+		}
+	}
+	for (auto &entry : reader_data.reader->expression_map) {
+		DuckLakeTimeTZ::ReplaceStorageCasts(context, entry.second.expression);
+	}
+	return result;
+}
+
 ReaderInitializeType DuckLakeMultiFileReader::CreateMappingWithGlobalState(
     ClientContext &context, MultiFileReaderData &reader_data, const vector<MultiFileColumnDefinition> &global_columns,
     const vector<ColumnIndex> &global_column_ids, optional_ptr<TableFilterSet> filters, MultiFileList &multi_file_list,
@@ -565,9 +580,11 @@ ReaderInitializeType DuckLakeMultiFileReader::CreateMappingWithGlobalState(
 		auto mapping = transaction->GetMappingById(MappingIndex(mapping_id));
 		// use the mapping to generate a new set of global columns for this file
 		auto mapped_columns = CreateNewMapping(context, reader_data, global_columns, *mapping);
-		return MultiFileReader::CreateMapping(context, reader_data, mapped_columns, column_ids_to_use, filters,
-		                                      multi_file_list, bind_data, virtual_columns,
-		                                      MultiFileColumnMappingMode::BY_NAME);
+		return DecodeTimeTZColumns(context, reader_data,
+		                           MultiFileReader::CreateMapping(context, reader_data, mapped_columns,
+		                                                          column_ids_to_use, filters, multi_file_list,
+		                                                          bind_data, virtual_columns,
+		                                                          MultiFileColumnMappingMode::BY_NAME));
 	}
 	// Check if file columns have field_id identifiers
 	if (!ColumnsHaveFieldIds(reader_data.reader->columns)) {
@@ -581,12 +598,15 @@ ReaderInitializeType DuckLakeMultiFileReader::CreateMappingWithGlobalState(
 		}
 		auto positional_map = DuckLakeNameMap::CreatePositionalMapping(source_names, target_field_ids);
 		auto mapped_columns = MapColumns(context, reader_data, global_columns, positional_map);
-		return MultiFileReader::CreateMapping(context, reader_data, mapped_columns, column_ids_to_use, filters,
-		                                      multi_file_list, bind_data, virtual_columns,
-		                                      MultiFileColumnMappingMode::BY_NAME);
+		return DecodeTimeTZColumns(context, reader_data,
+		                           MultiFileReader::CreateMapping(context, reader_data, mapped_columns,
+		                                                          column_ids_to_use, filters, multi_file_list,
+		                                                          bind_data, virtual_columns,
+		                                                          MultiFileColumnMappingMode::BY_NAME));
 	}
-	return MultiFileReader::CreateMapping(context, reader_data, global_columns, column_ids_to_use, filters,
-	                                      multi_file_list, bind_data, virtual_columns);
+	return DecodeTimeTZColumns(context, reader_data,
+	                           MultiFileReader::CreateMapping(context, reader_data, global_columns, column_ids_to_use,
+	                                                          filters, multi_file_list, bind_data, virtual_columns));
 }
 
 MultiFileReaderVirtualColumnBinding DuckLakeMultiFileReader::GetVirtualColumnExpression(

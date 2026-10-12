@@ -574,9 +574,11 @@ unique_ptr<LogicalOperator> DuckLakeCompactor::PlanRewriteScan(
 	auto copy_options = DuckLakeInsert::GetCopyOptions(context, copy_input);
 	copy = std::move(copy_options.copy);
 
-	auto ducklake_scan =
-	    make_uniq<LogicalGet>(table_idx, BoundTableFunction(std::move(scan_function)), std::move(bind_data),
-	                          copy->expected_types, copy->names, table.GetVirtualColumns());
+	// the scan returns the types of the table, which the copy can write differently
+	auto &table_columns = table.GetColumns();
+	auto ducklake_scan = make_uniq<LogicalGet>(
+	    table_idx, BoundTableFunction(std::move(scan_function)), std::move(bind_data), table_columns.GetColumnTypes(),
+	    StringsToIdentifiers(table_columns.GetColumnNames()), table.GetVirtualColumns());
 	auto &column_ids = ducklake_scan->GetMutableColumnIds();
 	for (idx_t i = 0; i < table.GetColumns().PhysicalColumnCount(); i++) {
 		column_ids.emplace_back(i);

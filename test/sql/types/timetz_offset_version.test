@@ -1,0 +1,91 @@
+# name: test/sql/types/timetz_offset_version.test
+# description: DuckLake 1.0 catalogs keep writing TIMETZ files without offsets, and migrated catalogs read both layouts
+# group: [types]
+
+require ducklake
+
+require parquet
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/timetz_offset_version.db' AS ducklake (DATA_PATH '{DATA_PATH}/timetz_offset_version', METADATA_CATALOG 'timetz_meta', DATA_INLINING_ROW_LIMIT 0, DUCKLAKE_VERSION '1.0')
+
+statement ok
+CREATE TABLE ducklake.t (id INTEGER, x TIMETZ);
+
+# 1.0 readers expect the Parquet TIME of a TIMETZ, which has no offset
+statement ok
+INSERT INTO ducklake.t VALUES (1, TIMETZ '00:00:00+05');
+
+query II
+SELECT id, x::VARCHAR FROM ducklake.t
+----
+1	19:00:00+00
+
+statement ok
+DETACH ducklake
+
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/timetz_offset_version.db' AS ducklake (DATA_PATH '{DATA_PATH}/timetz_offset_version', METADATA_CATALOG 'timetz_meta', DATA_INLINING_ROW_LIMIT 0, AUTOMATIC_MIGRATION TRUE)
+
+statement ok
+INSERT INTO ducklake.t VALUES (2, TIMETZ '12:34:56+02');
+
+query II
+SELECT id, x::VARCHAR FROM ducklake.t ORDER BY id
+----
+1	19:00:00+00
+2	12:34:56+02
+
+query I
+SELECT id FROM ducklake.t WHERE x = TIMETZ '12:34:56+02'
+----
+2
+
+statement ok
+CALL ducklake_merge_adjacent_files('ducklake', 't')
+
+query II
+SELECT id, x::VARCHAR FROM ducklake.t ORDER BY id
+----
+1	19:00:00+00
+2	12:34:56+02
+
+statement ok
+DETACH ducklake
+
+# a 1.0 catalog written by DuckDB 1.5.6 reads as before, also next to new offsets once migrated
+unzip data/old_ducklake/v10_timetz.db.gz {TEST_DIR}/v10_timetz.db
+
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/v10_timetz.db' AS legacy (DATA_PATH 'data/old_ducklake/v10_timetz/', OVERRIDE_DATA_PATH TRUE, METADATA_CATALOG 'legacy_timetz_meta')
+
+query II
+SELECT id, x::VARCHAR FROM legacy.t ORDER BY id
+----
+1	19:00:00+00
+2	10:34:56+00
+3	NULL
+
+statement ok
+DETACH legacy
+
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/v10_timetz.db' AS legacy (DATA_PATH 'data/old_ducklake/v10_timetz/', OVERRIDE_DATA_PATH TRUE, METADATA_CATALOG 'legacy_timetz_meta', AUTOMATIC_MIGRATION TRUE, DATA_INLINING_ROW_LIMIT 10)
+
+statement ok
+INSERT INTO legacy.t VALUES (4, TIMETZ '23:00:00-05');
+
+query II
+SELECT id, x::VARCHAR FROM legacy.t ORDER BY id
+----
+1	19:00:00+00
+2	10:34:56+00
+3	NULL
+4	23:00:00-05
+
+query I
+SELECT id FROM legacy.t WHERE x > TIMETZ '23:59:00+00'
+----
+4

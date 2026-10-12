@@ -1,0 +1,160 @@
+# name: test/sql/types/timetz_offset.test
+# description: TIMETZ values keep their offset in the data files of DuckLake 1.1 catalogs
+# group: [types]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/timetz_offset.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/timetz_offset', DATA_INLINING_ROW_LIMIT 0)
+
+# a flush keeps the offsets of inlined values, also for time travel
+statement ok
+CREATE TABLE ducklake.i (x TIMETZ) WITH (data_inlining_row_limit = 10);
+
+statement ok
+INSERT INTO ducklake.i VALUES (TIMETZ '00:00:00+05'), (TIMETZ '12:34:56+02');
+
+statement ok
+SET VARIABLE insert_snapshot = (SELECT max(snapshot_id) FROM ducklake_snapshots('ducklake'));
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake', table_name => 'i')
+
+query I
+SELECT x::VARCHAR FROM ducklake.i ORDER BY 1
+----
+00:00:00+05
+12:34:56+02
+
+query I
+SELECT x::VARCHAR FROM ducklake.i AT (VERSION => getvariable('insert_snapshot')) ORDER BY 1
+----
+00:00:00+05
+12:34:56+02
+
+query I
+SELECT count(*) FROM ducklake.i WHERE x = TIMETZ '00:00:00+05'
+----
+1
+
+# values written to files, whose local times wrap around midnight in UTC
+statement ok
+CREATE TABLE ducklake.f (id INTEGER, x TIMETZ);
+
+statement ok
+INSERT INTO ducklake.f VALUES (1, TIMETZ '01:00:00+05');
+
+statement ok
+INSERT INTO ducklake.f VALUES (2, TIMETZ '23:00:00-05');
+
+statement ok
+INSERT INTO ducklake.f VALUES (3, TIMETZ '12:00:00+00'), (4, NULL);
+
+query II
+SELECT id, x::VARCHAR FROM ducklake.f ORDER BY id
+----
+1	01:00:00+05
+2	23:00:00-05
+3	12:00:00+00
+4	NULL
+
+# the bounds of a file hold the instants of its values
+query I
+SELECT id FROM ducklake.f WHERE x < TIMETZ '00:00:00+00'
+----
+1
+
+query I
+SELECT id FROM ducklake.f WHERE x > TIMETZ '23:59:00+00'
+----
+2
+
+query I
+SELECT id FROM ducklake.f WHERE x = TIMETZ '23:00:00-05'
+----
+2
+
+query II
+SELECT min(x)::VARCHAR, max(x)::VARCHAR FROM ducklake.f
+----
+01:00:00+05	23:00:00-05
+
+statement ok
+CREATE TABLE ducklake.b (x TIMETZ);
+
+statement ok
+INSERT INTO ducklake.b VALUES (TIMETZ '01:00:00+05'), (TIMETZ '23:00:00-05'), (TIMETZ '12:00:00+00');
+
+query I
+SELECT bool_and(b.x BETWEEN s.min_value::TIMETZ AND s.max_value::TIMETZ) FROM ducklake.b, __ducklake_metadata_ducklake.ducklake_file_column_stats s JOIN __ducklake_metadata_ducklake.ducklake_table t USING (table_id) WHERE t.table_name = 'b'
+----
+true
+
+# a file stores the UTC time and the offset in seconds
+statement ok
+SET VARIABLE data_file = (SELECT data_file FROM ducklake_list_files('ducklake', 'f') ORDER BY data_file LIMIT 1);
+
+query III
+SELECT name, type, logical_type LIKE 'TimeType(isAdjustedToUTC=1%' FROM parquet_schema(getvariable('data_file')) WHERE name IN ('x', 'time', 'offset') ORDER BY name
+----
+offset	INT32	NULL
+time	INT64	true
+x	NULL	NULL
+
+statement ok
+UPDATE ducklake.f SET x = TIMETZ '06:00:00+03' WHERE id = 3;
+
+statement ok
+DELETE FROM ducklake.f WHERE id = 1;
+
+statement ok
+CALL ducklake_merge_adjacent_files('ducklake', 'f')
+
+query II
+SELECT id, x::VARCHAR FROM ducklake.f ORDER BY id
+----
+2	23:00:00-05
+3	06:00:00+03
+4	NULL
+
+# a partition on a TIMETZ column keeps the offsets of its values
+statement ok
+CREATE TABLE ducklake.p (id INTEGER, x TIMETZ);
+
+statement ok
+ALTER TABLE ducklake.p SET PARTITIONED BY (x);
+
+statement ok
+INSERT INTO ducklake.p VALUES (1, TIMETZ '01:00:00+05'), (2, TIMETZ '13:00:00-01');
+
+query II
+SELECT id, x::VARCHAR FROM ducklake.p ORDER BY id
+----
+1	01:00:00+05
+2	13:00:00-01
+
+statement ok
+CREATE TABLE ducklake.nn (x TIMETZ NOT NULL);
+
+statement error
+INSERT INTO ducklake.nn VALUES (NULL);
+----
+NOT NULL constraint failed
+
+statement ok
+DETACH ducklake
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/timetz_offset')
+
+query II
+SELECT id, x::VARCHAR FROM ducklake.f WHERE x >= TIMETZ '06:00:00+03' ORDER BY id
+----
+2	23:00:00-05
+3	06:00:00+03

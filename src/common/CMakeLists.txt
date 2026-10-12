@@ -3,6 +3,7 @@ add_library(
   ducklake_data_file.cpp
   ducklake_name_map.cpp
   ducklake_snapshot.cpp
+  ducklake_timetz.cpp
   ducklake_types.cpp
   ducklake_util.cpp
   ducklake_version.cpp
