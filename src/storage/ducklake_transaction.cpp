@@ -1739,6 +1739,10 @@ bool DuckLakeTransaction::HasTransactionInlinedData(TableIndex table_id) const {
 	return state->local_changes.HasTransactionInlinedData(table_id);
 }
 
+bool DuckLakeTransaction::CommitOutcomeUnknown() const {
+	return state->commit_outcome_unknown;
+}
+
 void DuckLakeTransaction::GetWrittenFiles(vector<string> &result) const {
 	state->local_changes.GetWrittenFiles(result);
 }

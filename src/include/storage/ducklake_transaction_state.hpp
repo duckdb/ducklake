@@ -152,6 +152,9 @@ public:
 	                         string data_path, string separator);
 	~DuckLakeTransactionState();
 
+	//! Set when the commit failed after the catalog may have committed it
+	bool commit_outcome_unknown = false;
+
 	void Commit(DuckLakeSnapshot transaction_snapshot, const TransactionChangeInformation &transaction_changes,
 	            const DuckLakeRetryConfig &retry_config, const DuckLakeCommitContext &context);
 

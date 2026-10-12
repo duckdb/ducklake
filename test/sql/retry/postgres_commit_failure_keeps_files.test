@@ -53,11 +53,11 @@ SELECT count(*) FROM glob('{DATA_PATH}/commit_failure_keeps_files/**/*.parquet')
 ----
 1
 
-# the failed transaction is over, so orphan cleanup no longer protects its file
+# orphan cleanup keeps the file while the catalog is attached, the snapshot can still become visible
 query I
-SELECT count(*) FROM ducklake_delete_orphaned_files('dl', cleanup_all => true, dry_run => true)
+SELECT count(*) FROM ducklake_delete_orphaned_files('dl', cleanup_all => true)
 ----
-1
+0
 
 statement ok
 CALL postgres_execute('pg', 'DROP TRIGGER refuse_commit ON commit_failure_keeps_files.ducklake_data_file')
@@ -74,6 +74,19 @@ query I
 SELECT * FROM dl.t
 ----
 2
+
+# after attaching again the file of the commit that did not happen is an orphan
+statement ok
+DETACH dl
+
+statement ok
+ATTACH 'ducklake:postgres:dbname=ducklakedb' AS dl
+(DATA_PATH '{DATA_PATH}/commit_failure_keeps_files', METADATA_SCHEMA 'commit_failure_keeps_files')
+
+query I
+SELECT count(*) FROM ducklake_delete_orphaned_files('dl', cleanup_all => true)
+----
+1
 
 statement ok
 DETACH dl

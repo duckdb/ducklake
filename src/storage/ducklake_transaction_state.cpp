@@ -2397,6 +2397,7 @@ void DuckLakeTransactionState::Commit(DuckLakeSnapshot transaction_snapshot,
 			}
 			if (committing && context.commit_can_fail_after_committing()) {
 				// the catalog can have committed before the error, so the snapshot may reference the files
+				commit_outcome_unknown = true;
 				error.Throw(
 				    "Failed to commit DuckLake transaction, it may have been committed and its files are kept.\n");
 			}

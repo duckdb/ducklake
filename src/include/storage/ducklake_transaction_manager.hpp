@@ -30,6 +30,8 @@ private:
 	DuckLakeCatalog &ducklake_catalog;
 	mutex transaction_lock;
 	reference_map_t<Transaction, shared_ptr<DuckLakeTransaction>> transactions;
+	//! The files of commits that failed after the catalog may have committed them
+	vector<string> in_doubt_files;
 	bool get_snapshot = true;
 };
 

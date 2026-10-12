@@ -35,12 +35,16 @@ ErrorData DuckLakeTransactionManager::CommitTransaction(ClientContext &context, 
 	}
 	// a transaction whose commit failed is not rolled back afterwards, so it is done either way
 	lock_guard<mutex> l(transaction_lock);
+	if (error.HasError() && ducklake_transaction.CommitOutcomeUnknown()) {
+		ducklake_transaction.GetWrittenFiles(in_doubt_files);
+	}
 	transactions.erase(transaction);
 	return error;
 }
 
 void DuckLakeTransactionManager::GetWrittenFiles(vector<string> &result) {
 	lock_guard<mutex> l(transaction_lock);
+	result.insert(result.end(), in_doubt_files.begin(), in_doubt_files.end());
 	for (auto &entry : transactions) {
 		entry.second->GetWrittenFiles(result);
 	}

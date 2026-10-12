@@ -234,6 +234,7 @@ public:
 	optional_ptr<DuckLakeCatalogSet> GetTransactionLocalEntries(CatalogType type, SchemaIndex schema_id);
 	optional_ptr<CatalogEntry> GetTransactionLocalEntry(CatalogType catalog_type, SchemaIndex schema_id,
 	                                                    const string &entry_name);
+	bool CommitOutcomeUnknown() const;
 	void GetWrittenFiles(vector<string> &result) const;
 	vector<DuckLakeDataFile> GetTransactionLocalFiles(TableIndex table_id) const;
 	shared_ptr<DuckLakeInlinedData> GetTransactionLocalInlinedData(TableIndex table_id) const;
