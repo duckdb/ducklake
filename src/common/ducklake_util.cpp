@@ -246,7 +246,7 @@ string DuckLakeUtil::CanonicalFilePath(FileSystem &fs, const string &path) {
 	auto path_end = query_start == string::npos ? normalized.size() : query_start;
 	auto result = normalized.substr(path_start, path_end - path_start);
 	// the Azure extension lists abfs[s]://<container>@<host>/<path> as abfs[s]://<host>/<container>/<path>
-	auto scheme = StringUtil::Lower(parsed.GetScheme());
+	auto &scheme = parsed.GetScheme();
 	auto &authority = parsed.GetAuthority();
 	auto at_pos = authority.find('@');
 	if ((scheme == "abfs://" || scheme == "abfss://") && at_pos != string::npos &&
