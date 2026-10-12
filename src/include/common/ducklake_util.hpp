@@ -64,6 +64,8 @@ public:
 
 	//! Create the data path directory if it does not yet exist
 	static void EnsureDirectoryExists(FileSystem &fs, const string &data_path);
+	//! A key under which differently spelled paths to the same file are equal
+	static string CanonicalFilePath(FileSystem &fs, const string &path);
 
 	//! Replace occurrences of `from` with `to`, skipping content inside
 	//! single-quoted string literals and double-quoted identifiers.

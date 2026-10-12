@@ -1,0 +1,39 @@
+# name: test/sql/remove_orphans/azure_container_at_account_path.test
+# description: orphan cleanup keeps the live files of a data path in the abfss://<container>@<account> form
+# group: [remove_orphans]
+
+require ducklake
+
+require parquet
+
+require azure
+
+require-env AZURE_STORAGE_CONNECTION_STRING
+
+# abfss://<container>@<account>.dfs.core.windows.net/<prefix> on a storage account with a hierarchical namespace
+require-env DUCKLAKE_AZURE_DFS_CONTAINER_PATH
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+statement ok
+CREATE SECRET ducklake_azure_container_path (TYPE AZURE, CONNECTION_STRING '{AZURE_STORAGE_CONNECTION_STRING}')
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DUCKLAKE_AZURE_DFS_CONTAINER_PATH}/container_at_account_{UUID}/', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE ducklake.t AS SELECT i FROM range(100) t(i)
+
+statement ok
+COPY (SELECT 1 AS i) TO '{DUCKLAKE_AZURE_DFS_CONTAINER_PATH}/container_at_account_{UUID}/orphan.parquet'
+
+# the azure extension lists the files as abfss://<account>.dfs.core.windows.net/<container>/<path>
+query I
+SELECT parse_filename(path) FROM ducklake_delete_orphaned_files('ducklake', cleanup_all => true)
+----
+orphan.parquet
+
+query I
+SELECT count(*) FROM ducklake.t
+----
+100

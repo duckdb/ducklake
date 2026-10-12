@@ -13,6 +13,7 @@
 #include "duckdb/parser/keyword_helper.hpp"
 #include "duckdb/parser/parser.hpp"
 #include "duckdb/common/file_system.hpp"
+#include "duckdb/common/path.hpp"
 #include "storage/ducklake_metadata_manager.hpp"
 #include "duckdb/planner/expression/bound_constant_expression.hpp"
 #include "duckdb/planner/expression/bound_function_expression.hpp"
@@ -231,6 +232,28 @@ void DuckLakeUtil::EnsureDirectoryExists(FileSystem &fs, const string &data_path
 		} catch (...) {
 		}
 	}
+}
+
+string DuckLakeUtil::CanonicalFilePath(FileSystem &fs, const string &path) {
+	auto normalized = StringUtil::Replace(path, "\\", "/");
+	auto parsed = Path::FromString(normalized);
+	if (parsed.IsLocal()) {
+		return fs.CanonicalizePath(normalized);
+	}
+	// key remote paths by authority and path so scheme aliases and query strings match
+	auto path_start = parsed.GetScheme().size();
+	auto query_start = normalized.find('?', path_start);
+	auto path_end = query_start == string::npos ? normalized.size() : query_start;
+	auto result = normalized.substr(path_start, path_end - path_start);
+	// the Azure extension lists abfs[s]://<container>@<host>/<path> as abfs[s]://<host>/<container>/<path>
+	auto scheme = StringUtil::Lower(parsed.GetScheme());
+	auto &authority = parsed.GetAuthority();
+	auto at_pos = authority.find('@');
+	if ((scheme == "abfs://" || scheme == "abfss://") && at_pos != string::npos &&
+	    StringUtil::StartsWith(result, authority)) {
+		result = authority.substr(at_pos + 1) + "/" + authority.substr(0, at_pos) + result.substr(authority.size());
+	}
+	return result;
 }
 
 string DuckLakeUtil::JoinPath(FileSystem &fs, const string &a, const string &b) {
