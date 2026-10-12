@@ -1,0 +1,99 @@
+# name: test/sql/geo/ducklake_geometry_crs_version_gate.test
+# description: GEOMETRY types with a CRS are rejected on DuckLake 1.0 catalogs and kept once a catalog is migrated
+# group: [geo]
+
+require ducklake
+
+require parquet
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/ducklake_geometry_crs_gate.db' AS ducklake (DATA_PATH '{DATA_PATH}/ducklake_geometry_crs_gate', METADATA_CATALOG 'ducklake_geometry_crs_gate_meta', DUCKLAKE_VERSION '1.0')
+
+statement ok
+CREATE TABLE ducklake.t (id INTEGER, g GEOMETRY);
+
+statement ok
+CREATE TABLE ducklake.src AS SELECT 'POINT(1 2)'::GEOMETRY AS g;
+
+# 1.0 readers would read the CRS as part of an unknown type
+statement error
+CREATE TABLE ducklake.t2 (g GEOMETRY('OGC:CRS84'));
+----
+DuckLake 1.0 does not support GEOMETRY types with a CRS
+
+statement error
+CREATE TABLE ducklake.t2 AS SELECT 'POINT(1 2)'::GEOMETRY('OGC:CRS84') AS g;
+----
+DuckLake 1.0 does not support GEOMETRY types with a CRS
+
+statement error
+CREATE TABLE ducklake.t2 (s STRUCT(g GEOMETRY('OGC:CRS84')));
+----
+DuckLake 1.0 does not support GEOMETRY types with a CRS
+
+statement error
+ALTER TABLE ducklake.t ADD COLUMN h GEOMETRY('OGC:CRS84');
+----
+DuckLake 1.0 does not support GEOMETRY types with a CRS
+
+query I
+SELECT COUNT(*) FROM ducklake_geometry_crs_gate_meta.ducklake_column WHERE column_type LIKE 'geometry(%'
+----
+0
+
+statement ok
+DETACH ducklake
+
+# a 1.0 catalog written by DuckDB 1.5.6 stored a CRS column as plain geometry
+unzip data/old_ducklake/v10_geometry.db.gz {TEST_DIR}/v10_geometry.db
+
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/v10_geometry.db' AS legacy (DATA_PATH 'data/old_ducklake/v10_geometry/', OVERRIDE_DATA_PATH TRUE, METADATA_CATALOG 'legacy_meta')
+
+query IIII
+SELECT id, g, c, typeof(c) FROM legacy.geo ORDER BY id
+----
+1	POINT (1 2)	POINT (3 4)	GEOMETRY
+2	NULL	POINT (5 6)	GEOMETRY
+
+statement error
+ALTER TABLE legacy.geo ADD COLUMN d GEOMETRY('OGC:CRS84');
+----
+DuckLake 1.0 does not support GEOMETRY types with a CRS
+
+statement ok
+DETACH legacy
+
+# the migrated catalog keeps the CRS of new columns, without writing to the data path
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/v10_geometry.db' AS legacy (DATA_PATH 'data/old_ducklake/v10_geometry/', OVERRIDE_DATA_PATH TRUE, METADATA_CATALOG 'legacy_meta', AUTOMATIC_MIGRATION TRUE)
+
+statement ok
+ALTER TABLE legacy.geo ADD COLUMN d GEOMETRY('OGC:CRS84');
+
+statement ok
+CREATE TABLE legacy.crs (g GEOMETRY('OGC:CRS84'));
+
+statement ok
+DETACH legacy
+
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/v10_geometry.db' AS legacy (DATA_PATH 'data/old_ducklake/v10_geometry/', OVERRIDE_DATA_PATH TRUE, METADATA_CATALOG 'legacy_meta')
+
+query IIIII
+SELECT id, g, c, typeof(c), typeof(d) FROM legacy.geo ORDER BY id
+----
+1	POINT (1 2)	POINT (3 4)	GEOMETRY	GEOMETRY('OGC:CRS84')
+2	NULL	POINT (5 6)	GEOMETRY	GEOMETRY('OGC:CRS84')
+
+query I
+SELECT data_type FROM duckdb_columns() WHERE database_name = 'legacy' AND table_name = 'crs'
+----
+GEOMETRY('OGC:CRS84')
+
+statement error
+INSERT INTO legacy.crs SELECT 'POINT(7 8)'::GEOMETRY('OGC:CRS83');
+----
+Cannot cast GEOMETRY with CRS 'OGC:CRS83' to GEOMETRY with different CRS 'OGC:CRS84'

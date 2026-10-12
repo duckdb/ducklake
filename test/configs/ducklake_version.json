@@ -25,7 +25,14 @@
         "test/sql/partitioning/epoch_version_gate.test",
         "test/sql/stats/stats_exactness_inlined.test",
         "test/sql/types/null_type_version_gate.test",
-        "test/sql/macros/null_default_version_gate.test"
+        "test/sql/macros/null_default_version_gate.test",
+        "test/sql/geo/ducklake_geometry_crs_version_gate.test"
+      ]
+    },
+    {
+      "reason": "GEOMETRY types with a CRS were added in 1.1-dev1 and are rejected when ducklake_default_version is pinned to 1.0",
+      "paths": [
+        "test/sql/geo/ducklake_geometry_crs.test"
       ]
     },
     {

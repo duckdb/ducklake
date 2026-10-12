@@ -14,6 +14,7 @@
 #include "duckdb/common/operator/cast_operators.hpp"
 #include "duckdb/common/types/vector.hpp"
 #include "storage/ducklake_geo_stats.hpp"
+#include "duckdb/common/types/geometry_crs.hpp"
 #include <unordered_set>
 
 namespace duckdb {
@@ -439,12 +440,13 @@ FROM parquet_full_metadata(%s)
 
 class DuckLakeParquetTypeChecker {
 public:
-	DuckLakeParquetTypeChecker(DuckLakeTableEntry &table, ParquetFileMetadata &file_metadata, const LogicalType &type,
-	                           ParquetColumn &column_p, const string &prefix_p)
-	    : table(table), file_metadata(file_metadata), source_type(DeriveLogicalType(column_p)), type(type),
-	      column(column_p), prefix(prefix_p) {
+	DuckLakeParquetTypeChecker(ClientContext &context, DuckLakeTableEntry &table, ParquetFileMetadata &file_metadata,
+	                           const LogicalType &type, ParquetColumn &column_p, const string &prefix_p)
+	    : context(context), table(table), file_metadata(file_metadata), source_type(DeriveLogicalType(column_p)),
+	      type(type), column(column_p), prefix(prefix_p) {
 	}
 
+	ClientContext &context;
 	DuckLakeTableEntry &table;
 	ParquetFileMetadata &file_metadata;
 	LogicalType source_type;
@@ -510,6 +512,11 @@ LogicalType DuckLakeParquetTypeChecker::DeriveLogicalType(const ParquetColumn &s
 			return LogicalType::UUID;
 		} else if (StringUtil::StartsWith(s_ele.logical_type, "NullType()")) {
 			return LogicalType::SQLNULL;
+		} else if (StringUtil::StartsWith(s_ele.logical_type, "GeometryType(crs=") &&
+		           StringUtil::EndsWith(s_ele.logical_type, ")") && s_ele.logical_type != "GeometryType(crs=<null>)") {
+			auto crs_start = string("GeometryType(crs=").size();
+			return LogicalType::GEOMETRY(
+			    s_ele.logical_type.substr(crs_start, s_ele.logical_type.size() - crs_start - 1));
 		} else if (StringUtil::StartsWith(s_ele.logical_type, "Geometry")) {
 			return LogicalType::GEOMETRY();
 		}
@@ -723,6 +730,15 @@ void DuckLakeParquetTypeChecker::CheckMatchingType() {
 			    "supports GEOMETRY types stored in native Parquet(V3) format, not GeoParquet(v1.*.*)",
 			    source_type));
 			Fail();
+		} else if (GeoType::HasCRS(type) && GeoType::HasCRS(source_type)) {
+			// the file holds the full definition of its CRS, the values of another CRS cannot be read as the column
+			auto file_crs =
+			    CoordinateReferenceSystem::TryIdentify(context, GeoType::GetCRS(source_type).GetDefinition());
+			auto file_type = file_crs ? LogicalType::GEOMETRY(*file_crs) : source_type;
+			if (!GeoType::GetCRS(file_type).Equals(GeoType::GetCRS(type))) {
+				failures.push_back(StringUtil::Format("Expected type \"%s\" but found type \"%s\"", type, file_type));
+				Fail();
+			}
 		}
 		return;
 	}
@@ -782,7 +798,7 @@ unique_ptr<DuckLakeNameMapEntry> DuckLakeFileProcessor::MapColumn(ParquetFileMet
                                                                   const DuckLakeFieldId &field_id, string prefix,
                                                                   bool repeated) {
 	// check if types of the columns are compatible
-	DuckLakeParquetTypeChecker type_checker(table, file_metadata, field_id.Type(), column, prefix);
+	DuckLakeParquetTypeChecker type_checker(context, table, file_metadata, field_id.Type(), column, prefix);
 	type_checker.CheckMatchingType();
 
 	if (!prefix.empty()) {

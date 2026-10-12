@@ -1,0 +1,149 @@
+# name: test/sql/geo/ducklake_geometry_crs.test
+# description: GEOMETRY columns keep their CRS on DuckLake 1.1 catalogs
+# group: [geo]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/ducklake_geometry_crs.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/ducklake_geometry_crs', METADATA_CATALOG 'ducklake_meta', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE ducklake.t (g GEOMETRY('OGC:CRS84'));
+
+statement ok
+CREATE TABLE ducklake.t2 (g GEOMETRY('OGC:CRS83'));
+
+statement ok
+INSERT INTO ducklake.t2 VALUES ('POINT(0 1)');
+
+statement error
+INSERT INTO ducklake.t SELECT * FROM ducklake.t2;
+----
+Cannot cast GEOMETRY with CRS 'OGC:CRS83' to GEOMETRY with different CRS 'OGC:CRS84'
+
+statement ok
+INSERT INTO ducklake.t VALUES ('POINT(1 2)');
+
+statement ok
+CREATE TABLE ducklake.i (id INTEGER, g GEOMETRY('OGC:CRS83'));
+
+statement ok
+INSERT INTO ducklake.i VALUES (1, 'POINT(3 4)');
+
+query II
+SELECT st_crs(g), g FROM ducklake.i
+----
+OGC:CRS83	POINT (3 4)
+
+# the CRS of a source, an added column and nested fields are kept as well
+statement ok
+CREATE TABLE ducklake.c AS SELECT * FROM ducklake.t;
+
+statement ok
+ALTER TABLE ducklake.i ADD COLUMN h GEOMETRY('OGC:CRS84');
+
+statement ok
+CREATE TABLE ducklake.n (s STRUCT(g GEOMETRY('OGC:CRS84')), l GEOMETRY('OGC:CRS84')[]);
+
+statement ok
+INSERT INTO ducklake.n VALUES ({'g': 'POINT(5 6)'}, ['POINT(7 8)']);
+
+# the CRS of a column cannot be changed
+statement error
+ALTER TABLE ducklake.t ALTER g TYPE GEOMETRY('OGC:CRS83');
+----
+only widening type promotions are allowed
+
+statement error
+ALTER TABLE ducklake.t ALTER g TYPE GEOMETRY;
+----
+only widening type promotions are allowed
+
+# a CRS definition with quotes is stored as a string literal
+statement ok
+CREATE TABLE ducklake.p (g GEOMETRY('{"type": "GeographicCRS", "name": "O''Brien grid"}'));
+
+statement ok
+INSERT INTO ducklake.p VALUES ('POINT(9 10)');
+
+query II
+SELECT column_name, column_type FROM ducklake_meta.ducklake_column WHERE column_type LIKE 'geometry%' AND end_snapshot IS NULL ORDER BY table_id, column_id
+----
+g	geometry('OGC:CRS84')
+g	geometry('OGC:CRS83')
+g	geometry('OGC:CRS83')
+h	geometry('OGC:CRS84')
+g	geometry('OGC:CRS84')
+g	geometry('OGC:CRS84')
+element	geometry('OGC:CRS84')
+g	geometry('{"type":"GeographicCRS","name":"O''Brien grid"}')
+
+statement ok
+DETACH ducklake
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/ducklake_geometry_crs', METADATA_CATALOG 'ducklake_meta')
+
+query III
+SELECT st_crs(g), typeof(g), g FROM ducklake.t
+----
+OGC:CRS84	GEOMETRY('OGC:CRS84')	POINT (1 2)
+
+query IIII
+SELECT id, st_crs(g), typeof(h), g FROM ducklake.i
+----
+1	OGC:CRS83	GEOMETRY('OGC:CRS84')	POINT (3 4)
+
+query II
+SELECT typeof(g), g FROM ducklake.c
+----
+GEOMETRY('OGC:CRS84')	POINT (1 2)
+
+query IIII
+SELECT typeof(s.g), typeof(l), s.g, l[1] FROM ducklake.n
+----
+GEOMETRY('OGC:CRS84')	GEOMETRY('OGC:CRS84')[]	POINT (5 6)	POINT (7 8)
+
+query II
+SELECT st_crs(g), g FROM ducklake.p
+----
+{"type":"GeographicCRS","name":"O'Brien grid"}	POINT (9 10)
+
+statement error
+INSERT INTO ducklake.t SELECT * FROM ducklake.t2;
+----
+Cannot cast GEOMETRY with CRS 'OGC:CRS83' to GEOMETRY with different CRS 'OGC:CRS84'
+
+# added files must hold the CRS of the column or none
+statement ok
+COPY (SELECT 'POINT(11 12)'::GEOMETRY('OGC:CRS83') AS g) TO '{DATA_PATH}/ducklake_geometry_crs83.parquet' (FORMAT PARQUET, GEOPARQUET_VERSION NONE);
+
+statement ok
+COPY (SELECT 'POINT(13 14)'::GEOMETRY('OGC:CRS84') AS g) TO '{DATA_PATH}/ducklake_geometry_crs84.parquet' (FORMAT PARQUET, GEOPARQUET_VERSION NONE);
+
+statement ok
+COPY (SELECT 'POINT(15 16)'::GEOMETRY AS g) TO '{DATA_PATH}/ducklake_geometry_no_crs.parquet' (FORMAT PARQUET, GEOPARQUET_VERSION NONE);
+
+statement error
+CALL ducklake_add_data_files('ducklake', 't', '{DATA_PATH}/ducklake_geometry_crs83.parquet');
+----
+Expected type "GEOMETRY('OGC:CRS84')" but found type "GEOMETRY('OGC:CRS83')"
+
+statement ok
+CALL ducklake_add_data_files('ducklake', 't', '{DATA_PATH}/ducklake_geometry_crs84.parquet');
+
+statement ok
+CALL ducklake_add_data_files('ducklake', 't', '{DATA_PATH}/ducklake_geometry_no_crs.parquet');
+
+query II
+SELECT typeof(g), g FROM ducklake.t ORDER BY g::VARCHAR
+----
+GEOMETRY('OGC:CRS84')	POINT (1 2)
+GEOMETRY('OGC:CRS84')	POINT (13 14)
+GEOMETRY('OGC:CRS84')	POINT (15 16)

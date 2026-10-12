@@ -4,6 +4,8 @@
 #include "duckdb/common/array.hpp"
 #include "duckdb/common/optional_idx.hpp"
 #include "duckdb/common/type_visitor.hpp"
+#include "duckdb/common/types/geometry_crs.hpp"
+#include "duckdb/common/sql_identifier.hpp"
 #include "storage/ducklake_metadata_info.hpp"
 
 namespace duckdb {
@@ -99,6 +101,14 @@ LogicalType DuckLakeTypes::FromString(const string &type) {
 		auto scale = std::stoull(decimal_members_vect[1]);
 		return LogicalType::DECIMAL(width, scale);
 	}
+	if (StringUtil::StartsWith(type, "geometry(") && StringUtil::EndsWith(type, ")")) {
+		// geometry with a CRS, written as a string literal
+		auto crs = type.substr(9, type.size() - 10);
+		if (crs.size() < 2 || crs.front() != '\'' || crs.back() != '\'') {
+			throw InvalidInputException("Invalid GEOMETRY type - expected a quoted CRS");
+		}
+		return LogicalType::GEOMETRY(StringUtil::Replace(crs.substr(1, crs.size() - 2), "''", "'"));
+	}
 	return ParseBaseType(type);
 }
 
@@ -152,6 +162,9 @@ string DuckLakeTypes::ToString(const LogicalType &type) {
 	case LogicalTypeId::VARIANT:
 		return "variant";
 	case LogicalTypeId::GEOMETRY:
+		if (GeoType::HasCRS(type)) {
+			return "geometry(" + SQLString::ToString(GeoType::GetCRS(type).GetDefinition()) + ")";
+		}
 		return "geometry";
 	case LogicalTypeId::LIST:
 		return "list";
@@ -173,6 +186,9 @@ void DuckLakeTypes::CheckSupportedType(const LogicalType &type, DuckLakeVersion 
 	TypeVisitor::VisitReplace(type, [version](const LogicalType &type) {
 		if (type.id() == LogicalTypeId::SQLNULL && version < DuckLakeVersion::V1_1_DEV_1) {
 			ThrowUnsupportedByVersion(version, "the NULL type");
+		}
+		if (type.id() == LogicalTypeId::GEOMETRY && GeoType::HasCRS(type) && version < DuckLakeVersion::V1_1_DEV_1) {
+			ThrowUnsupportedByVersion(version, "GEOMETRY types with a CRS");
 		}
 		DuckLakeTypes::ToString(type);
 		return type;

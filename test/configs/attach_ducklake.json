@@ -571,12 +571,6 @@
       ]
     },
     {
-      "reason": "FIXME: GEOMETRY limitations (stats are different in DuckLake, shredding is not supported)",
-      "paths": [
-        "test/sql/types/geo/geometry_crs.test"
-      ]
-    },
-    {
       "reason": "Multiple require storage sections create same-named tables, causing conflicts in DuckLake",
       "paths": [
         "test/sql/pivot/pivot_star.test",

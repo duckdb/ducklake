@@ -25,7 +25,7 @@ struct DuckLakeColumnGeoStats final : public DuckLakeColumnExtraStats {
 	void Serialize(DuckLakeColumnStatsInfo &column_stats) const override;
 	void Deserialize(const string &stats) override;
 
-	unique_ptr<BaseStatistics> ToStats() const;
+	unique_ptr<BaseStatistics> ToStats(const LogicalType &type) const;
 
 public:
 	GeometryExtent extent = GeometryExtent::Empty();

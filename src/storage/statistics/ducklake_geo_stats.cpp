@@ -105,8 +105,8 @@ bool DuckLakeColumnGeoStats::ParseStats(const string &stats_name, const vector<V
 	return false;
 }
 
-unique_ptr<BaseStatistics> DuckLakeColumnGeoStats::ToStats() const {
-	auto stats = GeometryStats::CreateEmpty(LogicalType::GEOMETRY());
+unique_ptr<BaseStatistics> DuckLakeColumnGeoStats::ToStats(const LogicalType &type) const {
+	auto stats = GeometryStats::CreateEmpty(type);
 
 	GeometryStats::GetExtent(stats) = extent;
 
